@@ -2,6 +2,12 @@
 
 ## 2026-08-31
 
+### fix
+
+- 骨架3坑修复(双方言 SQLite/PG 兼容 + 缺初始化脚本): ①`src/web/database.py` `init_db()` 延迟 `import src.web.models`(避循环依赖, 触发 ORM 注册到 Base.metadata, 否则 `create_all` 不建 users 表 → ALTER users ADD COLUMN nickname 失败); ②`src/web/migrations.py` `_m111_strategy_layer` 10 处 PG 方言 `ec.strategy_tags::text` → `CAST(ec.strategy_tags AS TEXT)`(SQLite 不识别 `::` 转换); ③`_m111` 两段 `INSERT...ON CONFLICT DO NOTHING` 加 `_dialect_is_pg` 分支(PG 保留, SQLite 改 `INSERT OR IGNORE INTO`); ④新增 `scripts/init_db.py` 一键初始化(create_all + 跑全部 m101..m125 迁移, 双方言, 幂等)。实测 SQLite 路径 56 表全建/迁移 apply
+
+## 2026-08-31
+
 ### feature
 
 - 通达信 TQ formula 引擎接入 + `_TQ_URL` 修复: `vendors/tq.py` 新增 `formula_mul`(formula_process_mul_zb 批量指标公式) + `formula_zb_single`(单只, 依赖客户端打开数据); `core/marketdata_client.py` 新增 `md_formula_mul` + `md_main_flow_zljc`(ZLJC 主力进出三档 jcl/jcm/jcs)。周期参数须 stock_period+periodstr 同传(缺 periodstr 报 periodstr error)。内置公式: MACD/ZLJC/ZJL。L2_AMO 是公式函数非独立公式, 需客户端公式管理器自定义后按名调。同时修复 `_TQ_URL` 硬编码旧 frps 地址 `172.18.0.1:5100`(已不通) → 改读 `TDX_QUANT_URL` 环境变量(生产容器注入 `172.27.16.1:17709` 直连), 兜底旧地址

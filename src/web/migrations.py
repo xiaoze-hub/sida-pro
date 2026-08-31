@@ -654,6 +654,12 @@ CREATE TABLE IF NOT EXISTS entry_candidate_outcomes (
 
 
 def _m111_strategy_layer(conn: Connection) -> None:
+    # 双方言兼容 (2026-08-31 SIDA-Pro 骨架验证):
+    #   - PG: ON CONFLICT DO NOTHING (SELECT INTO INSERT 末尾)
+    #   - SQLite: 不支持 ON CONFLICT, 改 OR IGNORE 放在 INSERT 头部
+    is_pg = _dialect_is_pg(conn)
+    conflict_clause = "ON CONFLICT DO NOTHING" if is_pg else ""
+    insert_prefix = "" if is_pg else "OR IGNORE "  # OR IGNORE 紧跟 INSERT INTO
     conn.execute(
         text(
             """
@@ -935,8 +941,8 @@ VALUES(
     if _has_table(conn, "entry_candidates"):
         conn.execute(
             text(
-                """
-INSERT INTO strategy_signal_runs (
+                f"""
+INSERT {insert_prefix}INTO strategy_signal_runs (
   snapshot_date, stock_symbol, stock_market, stock_name,
   strategy_code, strategy_name, strategy_version, risk_level, source_pool,
   score, rank_score, confidence, status, action, action_label, signal, reason,
@@ -950,20 +956,20 @@ SELECT
   ec.stock_market,
   ec.stock_name,
   CASE
-    WHEN ec.strategy_tags::text LIKE '%trend_follow%' THEN 'trend_follow'
-    WHEN ec.strategy_tags::text LIKE '%macd_golden%' THEN 'macd_golden'
-    WHEN ec.strategy_tags::text LIKE '%volume_breakout%' THEN 'volume_breakout'
-    WHEN ec.strategy_tags::text LIKE '%pullback%' THEN 'pullback'
-    WHEN ec.strategy_tags::text LIKE '%rebound%' THEN 'rebound'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%trend_follow%' THEN 'trend_follow'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%macd_golden%' THEN 'macd_golden'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%volume_breakout%' THEN 'volume_breakout'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%pullback%' THEN 'pullback'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%rebound%' THEN 'rebound'
     WHEN ec.candidate_source = 'market_scan' THEN 'market_scan'
     ELSE 'watchlist_agent'
   END AS strategy_code,
   CASE
-    WHEN ec.strategy_tags::text LIKE '%trend_follow%' THEN '趋势延续'
-    WHEN ec.strategy_tags::text LIKE '%macd_golden%' THEN 'MACD金叉'
-    WHEN ec.strategy_tags::text LIKE '%volume_breakout%' THEN '放量突破'
-    WHEN ec.strategy_tags::text LIKE '%pullback%' THEN '回踩确认'
-    WHEN ec.strategy_tags::text LIKE '%rebound%' THEN '超跌反弹'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%trend_follow%' THEN '趋势延续'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%macd_golden%' THEN 'MACD金叉'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%volume_breakout%' THEN '放量突破'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%pullback%' THEN '回踩确认'
+    WHEN CAST(ec.strategy_tags AS TEXT) LIKE '%rebound%' THEN '超跌反弹'
     WHEN ec.candidate_source = 'market_scan' THEN '市场扫描'
     ELSE 'Agent建议'
   END AS strategy_name,
@@ -995,10 +1001,10 @@ SELECT
   ec.id,
   COALESCE(ec.source_trace_id, ''),
   COALESCE(ec.is_holding_snapshot, FALSE),
-  COALESCE(ec.meta, '{}'),
+  COALESCE(ec.meta, '{{}}'),
   ec.created_at,
   ec.updated_at
-FROM entry_candidates ec ON CONFLICT DO NOTHING
+FROM entry_candidates ec {conflict_clause}
 """
             )
         )
@@ -1007,7 +1013,7 @@ FROM entry_candidates ec ON CONFLICT DO NOTHING
     if _has_table(conn, "entry_candidate_outcomes"):
         conn.execute(
             text(
-                """
+                f"""
 INSERT INTO strategy_outcomes (
   signal_run_id, strategy_code, snapshot_date, stock_symbol, stock_market, source_pool,
   horizon_days, target_date, base_price, outcome_price, outcome_return_pct,
@@ -1028,11 +1034,11 @@ SELECT
   eco.hit_target,
   eco.hit_stop,
   eco.outcome_status,
-  COALESCE(eco.meta, '{}'),
+  COALESCE(eco.meta, '{{}}'),
   eco.evaluated_at,
   eco.created_at
 FROM entry_candidate_outcomes eco
-JOIN strategy_signal_runs sr ON sr.source_candidate_id = eco.candidate_id ON CONFLICT DO NOTHING
+JOIN strategy_signal_runs sr ON sr.source_candidate_id = eco.candidate_id {conflict_clause}
 """
             )
         )

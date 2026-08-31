@@ -8,6 +8,8 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from src.web.migrations import has_pending_migrations, run_versioned_migrations
+# src.web.models 在 init_db() 里延迟 import 以避开循环依赖
+# (models 顶部 from src.web.database import Base)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,11 @@ def get_db():
 
 
 def init_db():
+    # 延迟 import: 触发所有 ORM 类注册到 Base.metadata (User/AuditLog/Account/...)
+    # 否则 Base.metadata.create_all() 不知有这些表, 跑 ALTER users ADD COLUMN nickname 会失败。
+    # (2026-08-31 SIDA-Pro 骨架验证发现; 顶部 import 会撞循环依赖: models 顶部 from src.web.database import Base)
+    from src.web import models as _models  # noqa: F401, E402
+
     Base.metadata.create_all(bind=engine)
     _migrate(engine)
     _migrate_old_providers(engine)
