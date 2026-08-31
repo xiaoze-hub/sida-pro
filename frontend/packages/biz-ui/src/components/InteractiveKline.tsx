@@ -1002,7 +1002,7 @@ export default function InteractiveKline(props: {
     : null
   const mainIntentLegend = mi ? (
     <div className="mt-3 rounded-lg bg-rose-500/5 border border-rose-500/15 px-2.5 py-2 text-[11px] text-foreground/80">
-      <span className="font-medium text-rose-400 mr-2">主力意图</span>
+      <span className="font-medium text-rose-700 dark:text-rose-400 mr-2">主力意图</span>
       {intentLabel && <span className={intentLabel.cls}>{intentLabel.text}</span>}
       {typeof mi.main_net === 'number' && (
         <span className="ml-2 font-mono">
