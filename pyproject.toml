@@ -1,0 +1,25 @@
+# pytest 配置
+# 运行全部单测：        python -m pytest tests/ -v
+# 运行单个文件：        python -m pytest tests/test_notify_policy.py -v
+# 实际发送通知：        python -m pytest tests/ -v --notify （默认不发通知）
+# 安装 pre-push hook： bash scripts/install-hooks.sh
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# 2026-08-22: async 测试(test_premarket_catalyst/test_chat_l2_tools/test_chat_ai_layer_tools
+# 等用 pytest.mark.asyncio)需显式 asyncio_mode=auto, 否则 CI(未装/旧版 pytest-asyncio
+# strict 模式)下 async def 测试报 "not natively supported"。本地 venv 被误降级到
+# pytest-asyncio 1.4.0(auto 默认)故本地能过 CI 不能 —— 根治靠这里显式声明。
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+# 2026-08-23 Q3: CI 门禁只卡"真 bug"类 — 语法(E9)/未定义名(F821)/重复键(F601)/
+# 重定义(F811), 不引入风格噪声。本地全量 F 级另议。
+select = ["E9", "F821", "F601", "F811"]

@@ -1,0 +1,169 @@
+# build-and-push-image.yml · PanWatch Docker 镜像构建+推送到 GHCR
+#
+# 触发: 推 git tag(v*.*.*)或手动 dispatch
+# 产出: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest(及对应版本号)
+# 用途: 同事部署 `docker pull ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest`
+#
+# 门禁(2026-08-09 加入,对齐研究 P0「任何一步失败都不推送」):
+#   test job = 前端 tsc typecheck + 后端 pytest,任一失败 → build job 不执行。
+
+name: build-and-push-image
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'           # 推 v0.1.0 这种 tag 触发
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '镜像 tag(留空用 latest)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write          # 推 GHCR 需要
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend typecheck (门禁 · tsc -b)
+        working-directory: frontend
+        run: npx tsc -b
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system libs for WeasyPrint (PDF export tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
+            libcairo2 libcairo-gobject2 libgdk-pixbuf-2.0-0 \
+            libffi-dev libfontconfig1 fonts-noto-cjk
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Lint (门禁 · ruff 真 bug 类)
+        run: |
+          pip install ruff
+          ruff check src/ server.py forecast_server.py scripts/ packages/marketdata/src \
+            --select E9,F821,F601,F811
+
+      - name: Backend tests (门禁 · pytest)
+        env:
+          # 2026-08-23 Q2: 测试用默认 admin 登录(仅 CI 虚拟库)
+          AUTH_ALLOW_DEFAULT_ADMIN: "1"
+        run: |
+          # CI(海外机房)无法访问国内行情源, 排除联网测试文件(本地全量跑已验证)。
+          # 联网文件清单维护: 新增联网测试时加入此排除表。
+          python -m pytest tests/ -x -q \
+            --ignore=tests/test_dark_flow.py \
+            --ignore=tests/test_dark_l2_engine.py \
+            --ignore=tests/test_thsdk_api.py \
+            --ignore=tests/test_thsdk_board.py \
+            --ignore=tests/test_thsdk_extended.py \
+            --ignore=tests/test_thsdk_ext.py \
+            --ignore=tests/test_main_flow_hengsheng.py \
+            --ignore=tests/test_main_flow_compare.py \
+            --ignore=tests/test_chat_thsdk_tools.py \
+            --ignore=tests/test_auction_pool.py \
+            --ignore=tests/test_events_routing.py \
+            --ignore=tests/test_context_enrichments.py \
+            --ignore=tests/test_datasource_admin_api.py \
+            --ignore=tests/test_datasource_reconcile.py \
+            --ignore=tests/test_datasources_health.py \
+            --ignore=tests/test_selfcheck.py \
+            --ignore=tests/test_shadow_account.py \
+            --ignore=tests/test_ta_us_news_passthrough.py
+          python -m pytest packages/marketdata/tests -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: xiaoze-hub
+          # GITHUB_TOKEN 在仓库公开后推 ghcr 偶发 write_package 拒绝,改用经典 PAT(write:packages)
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Determine image tag
+        id: meta
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ -n "${{ github.ref_name }}" ] && [ "${{ github.ref_name }}" != "main" ]; then
+            # tag 触发: 保留 v 前缀(与 ghcr 现有 v0.2.x tag 一致)
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="latest"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "image=ghcr.io/xiaoze-hub/stock-intelligent-data-analytics" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+          tags: |
+            ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
+            ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          labels: |
+            org.opencontainers.image.title=数智分析 SIDA
+            org.opencontainers.image.description=数智分析 · 自托管 AI 盯盘助手
+            org.opencontainers.image.source=https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics
+            org.opencontainers.image.licenses=AGPL-3.0
+
+      - name: Debug failure
+        if: failure()
+        run: |
+          echo "### ❌ Build failed - 常见原因:"
+          echo "1. GHCR token 权限不足: Settings → Actions → General → Workflow permissions → Read and write permissions"
+          echo "2. 仓库 Packages 权限未开启: Settings → General → Enable 'Packages'"
+          echo "3. 镜像 base image 拉不到(网络限制)"
+          echo "4. Dockerfile 语法错误"
+          echo ""
+          echo "请查看 workflow run 详情获取完整日志"

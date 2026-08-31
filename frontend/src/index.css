@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* 反AI模板 P1: 中性色色相 220→240 统一向锚点色收敛(消除 AI 灰);卡片不再纯白 */
+    --background: 240 20% 95.5%;
+    /* P0-1: 涨跌色 CSS 变量 — 供 ECharts 主题双态引用 */
+    --stock-up: #E53935;
+    --stock-down: #43A047;
+    /* ECharts 主题 token */
+    --echarts-text: #18181b;
+    --echarts-axis-label: #52525b;
+    --echarts-tooltip-bg: rgba(255,255,255,.95);
+    --echarts-tooltip-border: rgba(120,120,130,.3);
+    --echarts-tooltip-text: #18181b;
+    --echarts-split-line: rgba(120,120,130,.15);
+    --echarts-crosshair: rgba(120,120,130,.4);
+    --foreground: 240 20% 10%;
+    --card: 240 25% 99%; /* 纸面白(极低色度),替代纯白卡 */
+    --card-foreground: 240 20% 10%;
+    --popover: 240 25% 99%; /* 纸面白(极低色度),替代纯白 */
+    --popover-foreground: 240 20% 10%;
+    /* 锚点色: A股数据感深青钢蓝,替代 shadcn 默认 234 蓝(AI模板特征) */
+    --primary: 240 70% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 15% 94%;
+    --secondary-foreground: 240 15% 40%;
+    --muted: 240 15% 94%;
+    --muted-foreground: 240 10% 48%; /* make-interfaces: 次级文字对比度余量(4.9:1) */
+    --accent: 240 15% 92%;
+    --accent-foreground: 240 20% 10%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 42%;
+    --success-foreground: 0 0% 100%;
+    --border: 240 15% 90%;
+    --input: 240 15% 90%;
+    --ring: 240 70% 45%; /* 跟随锚点色 */
+    --radius: 0.75rem;
+
+    /* 数字专用字体栈(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用 */
+    --font-num: "SF Mono", "Cascadia Code", ui-monospace, "DIN Alternate", "Roboto Mono", monospace;
+
+    /* 界面密度体系:normal(默认)= 4px 基准。
+       compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
+       后续页面间距请用 --density-* 派生变量,例如:
+         style={{ gap: 'var(--density-2)' }}  ≈ Tailwind gap-2(8px),随档位自动缩放 */
+    --density-unit: 4px;
+    --density-1: var(--density-unit);
+    --density-2: calc(var(--density-unit) * 2);
+    --density-3: calc(var(--density-unit) * 3);
+    --density-4: calc(var(--density-unit) * 4);
+    --density-6: calc(var(--density-unit) * 6);
+  }
+
+  .dark {
+    /* 反AI模板 P1: 暗色统一色相 240,锚点色提亮为 240 70% 60%。
+       层级说明(oklch L 实测): bg 15.0 → card 19.8(Δ4.8)→ hover 23.1(Δ3.3)→ muted 25.1 → accent 27.9,
+       背景明度下调一档拉大与 card 的层级差(暗色层级靠明度不用阴影),卡片/悬浮保持不动。 */
+    /* P0-1: 暗色涨跌色 — 同色保持, 暗背景上更醒目 */
+    --stock-up: #E53935;
+    --stock-down: #43A047;
+    /* ECharts 暗色 token */
+    --echarts-text: #c4c4cb;
+    --echarts-axis-label: #8e8e96;
+    --echarts-tooltip-bg: rgba(24,24,27,.95);
+    --echarts-tooltip-border: rgba(120,120,130,.3);
+    --echarts-tooltip-text: #fafafa;
+    --echarts-split-line: rgba(120,120,130,.12);
+    --echarts-crosshair: rgba(120,120,130,.4);
+    --background: 240 20% 5%;
+    --foreground: 240 15% 90%;
+    --card: 240 20% 10%;
+    --card-foreground: 240 15% 90%;
+    --popover: 240 20% 10%;
+    --popover-foreground: 240 15% 90%;
+    --primary: 240 70% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 15% 15%;
+    --secondary-foreground: 240 15% 70%;
+    --muted: 240 15% 15%;
+    --muted-foreground: 240 10% 58%; /* make-interfaces: 暗色次级文字对比度(≈5.6:1) */
+    --accent: 240 15% 18%;
+    --accent-foreground: 240 15% 90%;
+    --destructive: 0 60% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 50% 38%;
+    --success-foreground: 0 0% 100%;
+    /* 边框降档 16%→14%: 原 16%(oklch 26.0)高于 muted 填充、比 card 亮 6.2,全局 150 处 border-border
+       全浓度描边过亮显脏;降至 14%(oklch≈24.5)落在 card(19.8)与 hover(23.1)之间,结构清晰不抢眼。 */
+    --border: 240 15% 14%;
+    /* 输入框描边 18%→15%: 原与 accent 同亮(27.9)层级越位;降至 15%,略亮于 --border 保持输入可交互性。 */
+    --input: 240 15% 15%;
+    --ring: 240 70% 60%; /* 跟随锚点色 */
+  }
+
+  /* 密度档位覆盖(normal 为默认,不加选择器即保持原样):
+     compact   = 3px 基准(信息更密集,类 IDE 紧凑模式)
+     comfortable = 6px 基准(更宽松,适合大屏阅读) */
+  :root[data-density='compact'] {
+    --density-unit: 3px;
+  }
+  :root[data-density='comfortable'] {
+    --density-unit: 6px;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply text-foreground antialiased bg-background;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    min-height: 100vh;
+  }
+  code, .font-mono {
+    font-family: "SF Mono", "Cascadia Code", "Source Code Pro", ui-monospace, monospace;
+  }
+  /* 数字专用字体(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用 */
+  .font-num {
+    font-family: var(--font-num);
+  }
+}
+
+@layer components {
+.page-container {
+    @apply pb-10;
+  }
+
+  .card {
+    @apply bg-card rounded-xl border border-border/60 shadow-[0_1px_2px_hsl(240_15%_40%/0.05),0_1px_0_hsl(var(--border)/0.35)];
+  }
+  .card-hover {
+    @apply bg-card rounded-xl border border-border/60 transition-[background-color,border-color,box-shadow];
+  }
+  /* 反AI模板④: hover 层级 = 表面亮度抬升 + 中性边框变化,去掉 primary 彩色光晕。
+     亮色: 纸面微提白 + 轻中性阴影(无彩色);暗色: 背景提亮一档 + 边框中性提亮,不用阴影。 */
+  .card-hover:hover {
+    background-color: hsl(240 25% 100%); /* 亮色: 比 --card(99%) 提亮一档的纸面白 */
+    border-color: hsl(var(--border));
+    box-shadow: 0 1px 0 hsl(var(--border) / 0.4), 0 4px 14px -6px hsl(240 15% 40% / 0.16); /* 轻中性阴影,无 primary 色 */
+  }
+  .dark .card-hover:hover {
+    background-color: hsl(240 20% 13.5%); /* 暗色: 表面亮度抬升(比 --card 的 10% 亮一档) */
+    border-color: hsl(240 15% 20%);       /* hover 边框提亮: 原 24% 按旧 --border 16% 校准,现随 14% 基准下调,保持相对提亮梯度 */
+    box-shadow: none;                     /* 暗色层级靠亮度,不用阴影 */
+  }
+  .card-subtle {
+    @apply rounded-xl border border-border/40 bg-accent/20;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-[13px] font-semibold hover:bg-primary/90 active:scale-[0.96] transition-[background-color,transform];
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-secondary text-secondary-foreground border border-border rounded-lg text-[13px] font-medium hover:bg-secondary/80 active:scale-[0.96] transition-[background-color,transform];
+  }
+  .input-field {
+    @apply w-full h-10 px-3 rounded-lg border border-border bg-background text-[13px] placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors;
+  }
+}
+
+/* Scrollbar (opt-in via className="scrollbar") */
+@layer base {
+  .scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+
+  .scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.22);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  .scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.38);
+  }
+
+  .scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* v0.4.7: 图表骨架扫光 */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

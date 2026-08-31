@@ -1,0 +1,171 @@
+# 数智分析 (PanWatch fork) 一键部署编排
+#
+# 用途: 朋友在新服务器上 fork 仓库 + 拉公开镜像后,一条命令启主后端 + 预测引擎
+# 镜像源: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics(主) + -forecast(预测)
+# 公开: 匿名可拉,无需 PAT
+#
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 日志: docker compose logs -f
+#
+# 数据持久化:
+#   - 命名卷 panwatch_data(主后端 DB + Playwright 浏览器)
+#   - 命名卷 panwatch_forecast_data(预测引擎 SQLite + 回测报告)
+#   - 可选 bind 挂载 ~/.hermes(cron 输出只读, 报告中心数据源)
+
+services:
+  # ============== 基础设施层 (Phase 1, 2026-08-17) ==============
+  # 默认不启动(可显式 `docker compose --profile infra up -d` 启动)
+  # - Redis 7: 缓存 + 限流 + Redis Streams
+  # - Prometheus: 抓 /metrics 指标
+  # - Loki: 收日志(配 Promtail)
+  # - Promtail: 收 panwatch logs 送到 Loki
+  # - Grafana: 大盘 (预置 Prometheus + Loki 数据源)
+  redis:
+    image: redis:7-alpine
+    container_name: panwatch-redis
+    restart: unless-stopped
+    profiles: ["infra"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    # P1-3 (2026-08-23 审计): 6379 绑主机 127.0.0.1 而非 0.0.0.0, 防未授权访问;
+    # 若主机有公网入口仍可达公网, 旧端口映射直接暴露所有 redis 数据。
+    # compose 内其它服务通过 panwatch-redis:6379 网络访问, 主机仅 localhost 可达。
+    # (未加密码避免打断现有容器; 加强方案: 加 --requirepass + bind 0.0.0.0 + 反代)
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: panwatch-prometheus
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: panwatch-loki
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./deploy/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: panwatch-promtail
+    restart: unless-stopped
+    profiles: ["infra"]
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: panwatch-grafana
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "35099:3000"
+    environment:
+      # P1-2 (2026-08-23 审计): 不再硬编码 admin 密码, 从 env_file 必读;
+      # ${VAR:?err} 语法使缺失时 compose up 直接报错而不是用危险默认值。
+      # 在 .env (或 compose env_file) 里设 GF_SECURITY_ADMIN_PASSWORD=<强密码>。
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?err GF_SECURITY_ADMIN_PASSWORD not set in .env}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - loki
+
+  # ============== 主后端 8000 (FastAPI) ==============
+  panwatch:
+    image: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
+    container_name: panwatch
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 指向同 compose 网络内的 forecast 服务(Docker DNS 自动解析)
+      - FORECAST_ENGINE_URL=http://forecast:8010
+      # Hermes cron 输出根目录(可选,挂载 ~/.hermes 后自动可用)
+      - HERMES_HOME=/hermes
+      # 数据源 key 在「设置 → 接口Key」UI 维护;此处只传 Hermes 必需的环境变量
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - DOCKER=1
+    volumes:
+      - panwatch_data:/app/data
+      # 可选: Hermes cron 输出(报告中心读取 cron 报告用)
+      # ⚠️ 朋友请改成自己的路径,不存在会自动创建空目录不影响服务启动
+      - ~/.hermes:/hermes:ro
+    depends_on:
+      forecast:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ============== 预测引擎 8010 (Kronos/XGBoost/Lag-Llama/LinearReg) ==============
+  forecast:
+    image: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics-forecast:latest
+    container_name: panwatch-forecast
+    restart: unless-stopped
+    expose:
+      - "8010"   # 不暴露给主机,仅 compose 网络内访问
+    environment:
+      # 预测引擎经 8000 拿资金面/龙虎榜数据(fork 镜像里 /api/market-data/* 已就绪)
+      - PANWATCH_URL=http://panwatch:8000
+      # 直接读取设置页的 forecast_llm_* 配置，保存后无需脚本或重启
+      - PANWATCH_DB=/app/panwatch-data/panwatch.db
+      # 预测历史必须落到 panwatch_forecast_data 命名卷
+      - FORECAST_DB_PATH=/app/data/panwatch_forecast.db
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # 预测历史 SQLite(回测报告/预测记录/资金面 LLM 情绪记录)
+      - panwatch_forecast_data:/app/data
+      # 预测引擎只读查询 PanWatch 设置；SQLite 需要目录可写以维护锁文件
+      - panwatch_data:/app/panwatch-data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s   # Kronos 模型加载 ~25s
+      retries: 3
+
+volumes:
+  panwatch_data:
+    name: panwatch_data
+  panwatch_forecast_data:
+    name: panwatch_forecast_data
+  redis_data:
+    name: panwatch_redis_data
+  prometheus_data:
+    name: panwatch_prometheus_data
+  loki_data:
+    name: panwatch_loki_data
+  grafana_data:
+    name: panwatch_grafana_data

@@ -1,0 +1,42 @@
+# Promtail 配置 (2026-08-17 v0.2.65 — Phase 1)
+#
+# 收 panwatch 容器的 stdout 日志(已经是 JSON 结构化 — middleware.RequestLoggerMiddleware 输出)
+# 送到 Loki
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker 容器日志 (通过 docker.sock 拿所有容器日志, 过滤 panwatch)
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.service=panwatch"]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+    pipeline_stages:
+      # 把 RequestLoggerMiddleware 输出的 JSON 解析成 label
+      - json:
+          expressions:
+            method: method
+            path: path
+            status: status
+            duration_ms: duration_ms
+      - labels:
+          method:
+          path:
+          status:

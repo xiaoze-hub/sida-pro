@@ -1,0 +1,72 @@
+# 数智分析 · 预测引擎 Dockerfile
+#
+# 用途: A 股四模型融合预测引擎(Kronos/XGBoost/LinearRegression/Lag-Llama)
+#       + 回测调度 + 报告生成(企微/dashboard 双格式)
+# 端口: 8010
+#
+# 自包含: 不依赖 panwatch-kronos:base 私有镜像,
+#         完全从 dockerhub python:3.11-slim 构建,自带 torch cpu + Kronos 源码。
+# 构建: sudo docker build -f Dockerfile.forecast \
+#       -t ghcr.io/xiaoze-hub/stock-intelligent-data-analytics-forecast:0.1.4 .
+
+ARG PYTHON_IMAGE=python:3.11-slim
+
+# ============== Stage 1: 装全部依赖 ==============
+FROM ${PYTHON_IMAGE} AS builder
+
+WORKDIR /install
+
+# 编译工具(部分 wheel 需要)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc git && \
+    rm -rf /var/lib/apt/lists/*
+
+# torch cpu-only(默认装 cuda 多 2GB,纯推理用不上)
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch || pip install --no-cache-dir torch
+
+# Kronos 其余依赖
+RUN pip install --no-cache-dir \
+    einops==0.8.1 huggingface_hub==0.33.1 safetensors==0.6.2 tqdm==4.67.1
+
+# 预测引擎依赖(含 baostock,fetch_kline 拉日 K)
+COPY forecast_requirements.txt /install/
+RUN pip install --no-cache-dir --timeout 300 --retries 8 \
+    -r /install/forecast_requirements.txt
+
+
+# ============== Stage 2: 运行时 ==============
+FROM ${PYTHON_IMAGE}
+
+WORKDIR /app
+
+ENV TZ=Asia/Shanghai
+ENV PYTHONPATH=/app/Kronos
+
+# 复制 Kronos 源码(MIT 版权, github.com/shiyu-coder/Kronos)
+COPY kronos_src/ /app/Kronos/
+
+# 复制预测引擎代码(forecast_server.py 入口 + forecast_lib/ 模块)
+COPY forecast_server.py /app/
+COPY forecast_lib/ /app/forecast_lib/
+
+# 从 builder 复制预装好的 site-packages
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 数据/模型持久化目录(挂载卷用)
+RUN mkdir -p /app/data /app/models
+
+# 健康检查(预测引擎慢启动,Kronos 加载 ~25s,放宽超时)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; \
+urllib.request.urlopen('http://localhost:8010/health', timeout=5).read()" || exit 1
+
+EXPOSE 8010
+
+# 默认 4G 内存限制(Kronos/Lag-Llama ~1GB,留足缓冲)
+# docker run --memory=4g 或 docker-compose deploy.resources.limits.memory: 4g
+
+# CMD: uvicorn 起 fastapi,workers=1(模型全局单例,不允许多 worker)
+CMD ["python", "forecast_server.py"]

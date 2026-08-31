@@ -1,0 +1,50 @@
+# Local source overlay for backend and forecast-engine development.
+#
+# Start:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Persisted UI configuration remains in the existing panwatch_data volume.
+# Source mounts intentionally do not replace /app/data.
+
+name: panwatch-dev
+
+services:
+  panwatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: public.ecr.aws/docker/library/node:20-alpine
+        PYTHON_IMAGE: public.ecr.aws/docker/library/python:3.11-slim
+        VERSION: dev-0.2.0
+    image: panwatch:dev-0.2.0
+    environment:
+      DEV_RELOAD: "1"
+    volumes:
+      - ./src:/app/src
+      - ./server.py:/app/server.py
+      - ./prompts:/app/prompts
+      - ./strategies:/app/strategies
+
+  forecast:
+    build:
+      context: .
+      dockerfile: Dockerfile.forecast
+      args:
+        PYTHON_IMAGE: public.ecr.aws/docker/library/python:3.11-slim
+    image: panwatch-forecast:dev-0.2.0
+    # P1-5 (2026-08-23 审计): dev overlay 也用 expose, 不绑主机网卡;
+    # 误用 dev 部署生产也不会把 8010 公开到主机网络。
+    expose:
+      - "8010"
+    volumes:
+      - ./forecast_server.py:/app/forecast_server.py
+      - ./forecast_lib:/app/forecast_lib
+      - ./kronos_src:/app/Kronos
+
+volumes:
+  panwatch_data:
+    external: true
+    name: panwatch_data
+  panwatch_forecast_data:
+    name: panwatch_forecast_data

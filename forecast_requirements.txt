@@ -1,0 +1,27 @@
+# 预测引擎 8010 依赖(fork from forecast_server.py + forecast_lib/)
+# 与主 requirements.txt 分离,因为:
+#   - 主后端是 FastAPI + SQLAlchemy + APScheduler(轻量)
+#   - 预测引擎需要 torch + xgboost(大模型,~1GB 安装体积)
+#   - 合并会让主镜像膨胀 ~3 倍,不必要
+
+# Web 框架
+fastapi>=0.110,<0.140
+uvicorn[standard]>=0.27
+
+# 数据处理
+numpy>=1.26,<3.0
+pandas>=1.5,<3.0
+
+# 模型
+torch>=2.0,<3.0             # Kronos / Chronos-Bolt 推理依赖
+xgboost>=2.0,<4.0           # XGBoost 短期预测
+scikit-learn>=1.3           # 线性回归 + 评估指标
+chronos-forecasting>=2.3,<3.0   # Chronos-Bolt-small 时序基础模型(替代 Lag-Llama)
+transformers>=4.45,<4.58    # Chronos-Bolt 兼容版本(4.57.6 实测可用, 4.58+ 破坏 bolt 加载)
+
+# HTTP 客户端(forecast_lib/panwatch_bridge.py 经 8000 tdx ask 拿资金流)
+requests>=2.30
+
+# K 线数据源
+baostock>=0.8.8          # 预测引擎 fetch_kline 拉日 K(不复权)
+timesfm>=1.0          # Google TimesFM 时序基础模型(替代Lag-Llama,最轻量)

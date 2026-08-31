@@ -1,0 +1,54 @@
+# SIDA 基础告警规则 (2026-08-23 Q4)
+#
+# 指标已由 /api/metrics 采集(REQUEST_COUNT/DURATION/AI_CALLS/DATASOURCE_FAILURES 等),
+# 此处补齐"指标采了但没人叫"的缺口。Grafana 统一告警也可用, 这里给 Prometheus 原生规则兜底。
+
+groups:
+  - name: sida-availability
+    rules:
+      # 5xx 率过高(滑动 5 分钟)
+      - alert: SidaHigh5xxRate
+        expr: |
+          (
+            sum by (service) (rate(request_count_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum by (service) (rate(request_count_total[5m])), 0.001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIDA 5xx 率超过 5% ({{ $labels.service }})"
+          description: "过去 5 分钟 5xx 占比 {{ $value | humanizePercentage }}"
+
+      # 实例无指标(心跳丢失)
+      - alert: SidaInstanceDown
+        expr: up{job="sida-panwatch"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIDA 后端 /metrics 心跳丢失"
+          description: "{{ $labels.instance }} 无指标输出 2 分钟以上"
+
+  - name: sida-quality
+    rules:
+      # 数据源失败激增(15 分钟窗口)
+      - alert: SidaDatasourceFailures
+        expr: increase(datasource_failures_total[15m]) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "数据源失败次数激增(15 分钟 > 50)"
+          description: "{{ $labels.vendor }} 失败 {{ $value }} 次, 检查上游行情源"
+
+      # Redis 业务缓存降级(health 组件状态)
+      - alert: SidaRedisDown
+        expr: sida_health_redis_status == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SIDA Redis 不可用(biz_cache 降级回内存)"
+          description: "Redis 连接失败, 缓存/限流/Streams 已降级, 检查 panwatch-redis"

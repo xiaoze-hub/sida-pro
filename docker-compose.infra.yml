@@ -1,0 +1,107 @@
+# 生产 infra-only 编排(2026-08-18)
+# 仅启动 Redis / Prom / Loki / Promtail / Grafana 5 容器
+# 主后端 panwatch + 预测引擎 forecast 仍由手工 docker run 管理
+#
+# 网络: 全部加入外部网络 panwatch-net,这样:
+#   - Prometheus 可解析 panwatch:8000 抓 /metrics
+#   - Loki 可接收 Promtail 日志
+#   - panwatch 容器未来可通过 REDIS_URL=redis://panwatch-redis:6379 连 Redis
+#
+# 用法: sudo docker compose -f docker-compose.infra.yml up -d
+# 停:   sudo docker compose -f docker-compose.infra.yml down
+# 日志: sudo docker compose -f docker-compose.infra.yml logs -f
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: panwatch-redis
+    restart: unless-stopped
+    profiles: ["infra"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - panwatch-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: panwatch-prometheus
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "127.0.0.1:9090:9090"   # 只本机,经 SSH 访问
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    networks:
+      - panwatch-net
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: panwatch-loki
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./deploy/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - panwatch-net
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: panwatch-promtail
+    restart: unless-stopped
+    profiles: ["infra"]
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - panwatch-net
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: panwatch-grafana
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "127.0.0.1:35099:3000"
+    environment:
+      # 2026-08-23 Q2: 真实密码不再入仓, 部署时用 env 覆盖(默认 admin 仅本机绑定)
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - loki
+    networks:
+      - panwatch-net
+
+volumes:
+  redis_data:
+    name: panwatch_redis_data
+  prometheus_data:
+    name: panwatch_prometheus_data
+  loki_data:
+    name: panwatch_loki_data
+  grafana_data:
+    name: panwatch_grafana_data
+
+networks:
+  panwatch-net:
+    external: true
+    name: panwatch-net

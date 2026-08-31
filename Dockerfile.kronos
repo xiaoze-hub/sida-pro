@@ -1,0 +1,57 @@
+# 数智分析 · Kronos 基础镜像
+#
+# 用途: 预装 Kronos 模型源代码(github.com/shiyu-coder/Kronos, MIT)
+#       + 模型推理所需的 torch/einops/huggingface_hub/safetensors 依赖
+#       作为 Dockerfile.forecast 的基础镜像,避免重复下载 torch (~1GB)
+#
+# 构建: sudo docker build -f Dockerfile.kronos \
+#       -t ghcr.io/xiaoze-hub/panwatch-kronos:base .
+# 不需要推送(私有 fork 内部依赖),但用户需要本地 build 才能用 forecast 镜像。
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /install
+
+# 装编译工具(torch 编译 wheel 可能需要)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc git && \
+    rm -rf /var/lib/apt/lists/*
+
+# 复制 Kronos 完整代码(版权:MIT, github.com/shiyu-coder/Kronos)
+# 注意: 本 Dockerfile 假定 shiyu-coder/Kronos 仓库已克隆到 ./kronos_src/
+#       或在 build context 下手动放置。
+#       部署用户: git clone https://github.com/shiyu-coder/Kronos.git kronos_src
+COPY kronos_src/requirements.txt /install/kronos_reqs.txt
+
+# torch cpu-only(默认装 cuda 多 2GB,纯推理用不上)
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch || pip install --no-cache-dir torch
+
+# Kronos 其余依赖(含 numpy/pandas,Kronos 必需)
+RUN pip install --no-cache-dir \
+    einops==0.8.1 huggingface_hub==0.33.1 safetensors==0.6.2 tqdm==4.67.1 \
+    numpy pandas
+
+
+# ============== Stage 2: 运行时 ==============
+FROM python:3.11-slim
+
+# 复制预装的 site-packages
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 复制 Kronos 源代码(26MB,examples/webui/figures 已剔除)
+COPY kronos_src/model /app/Kronos/model/
+COPY kronos_src/LICENSE /app/Kronos/LICENSE
+COPY kronos_src/README.md /app/Kronos/README.md
+COPY kronos_src/requirements.txt /app/Kronos/requirements.txt
+
+# 让 Python 能 import model(KronosPredictor/KronosTokenizer/Kronos 在 /app/Kronos/model/)
+ENV PYTHONPATH="/app/Kronos:/app"
+
+# 健康检查: 验证 Kronos 模块能 import
+RUN python -c "from model import KronosPredictor, KronosTokenizer, Kronos; print('Kronos OK')"
+
+# 这个镜像只装环境,不启动服务。CMD 由 forecast Dockerfile 覆盖。
+CMD ["python", "-c", "from model import KronosPredictor; print('panwatch-kronos:base ready')"]
