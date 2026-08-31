@@ -133,7 +133,18 @@ interface KlineSummaryResponse {
   summary: KlineSummary
   /** 2026-08-12 预热优化: 主力意图结构化(逐笔口径), 供 K线 tab 的 InteractiveKline 秒显图例卡 */
   main_intent_structured?: MainIntentStructured | null
+  // ============== SIDA Pro 设计稿 v2.0: K线图层标注数据 (2026-09-01) ==============
+  /** L2 GS 买卖点序列 (.tck 盘后/日线算法). 后端 P2 阶段输出 */
+  gs_signals?: GsSignalLike[]
+  /** L3 资金柱 (明盘+暗盘). 后端 P2 阶段输出 */
+  fund_flow?: FundFlowBarLike[]
+  /** L4 事件标注. 后端 P2 阶段输出 */
+  events?: KlineEventLike[]
 }
+// 镜像 InteractiveKline 的新图层类型, 避免循环 import (组件已 export 同名 type)
+type GsSignalLike = { date: string; side: 'G' | 'S'; confirmed: boolean; price: number }
+type FundFlowBarLike = { date: string; open_net?: number | null; dark_net?: number | null }
+type KlineEventLike = { date: string; kind: string; label?: string }
 
 interface MiniKlineResponse {
   symbol: string
@@ -729,6 +740,10 @@ export default function StockInsightModal(props: {
   const [klineSummary, setKlineSummary] = useState<KlineSummary | null>(null)
   /** 2026-08-12 预热优化: 弹窗打开即拉主力意图, 切到 K线 tab 秒显图例卡 */
   const [mainIntent, setMainIntent] = useState<MainIntentStructured | null>(null)
+  // ============== SIDA Pro: K线图层标注数据 state (P1+ P2) (2026-09-01) ==============
+  const [gsSignals, setGsSignals] = useState<GsSignalLike[]>([])
+  const [fundFlow, setFundFlow] = useState<FundFlowBarLike[]>([])
+  const [klineEvents, setKlineEvents] = useState<KlineEventLike[]>([])
   const [miniKlines, setMiniKlines] = useState<MiniKlineResponse['klines']>([])
   const [miniKlineLoading, setMiniKlineLoading] = useState(false)
   const [miniHoverIdx, setMiniHoverIdx] = useState<number | null>(null)
@@ -829,6 +844,11 @@ export default function StockInsightModal(props: {
     setKlineSummary(data?.summary || null)
     // 2026-08-12 预热优化: 顺手存主力意图, 传给 K线 tab 秒显(免组件二次请求)
     if (data?.main_intent_structured) setMainIntent(data.main_intent_structured)
+    // ============== SIDA Pro: K线图层标注数据 (P1+ P2 入口) (2026-09-01) ==============
+    // 后端 P2 阶段输出这些字段, 未就绪时为 undefined → K线组件按 layers 默认开关静默跳过
+    if (data?.gs_signals) setGsSignals(data.gs_signals)
+    if (data?.fund_flow) setFundFlow(data.fund_flow)
+    if (data?.events) setKlineEvents(data.events)
   }, [symbol, market])
 
   const loadMiniKline = useCallback(async (opts?: { silent?: boolean }) => {
@@ -2186,6 +2206,10 @@ export default function StockInsightModal(props: {
                   market={market}
                   initialInterval={klineInterval}
                   mainIntent={mainIntent}
+                  // ============== SIDA Pro: K线图层标注 (P1+ P2) (2026-09-01) ==============
+                  gsSignals={gsSignals as any}
+                  fundFlow={fundFlow as any}
+                  events={klineEvents as any}
                 />
               </div>
             )}

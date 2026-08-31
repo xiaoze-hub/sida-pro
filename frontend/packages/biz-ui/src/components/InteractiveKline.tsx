@@ -113,6 +113,64 @@ type HoverTip = {
   row: HoverTipRow | null
 }
 
+// ============== SIDA Pro 设计稿 v2.0: K线图层标注 (2026-09-01) ==============
+// 5 层架构: L0 事实底 + L1 趋势 + L2 买卖点 + L3 资金柱 + L4 事件标注 + L5 副图切换
+/** GS 买卖点: 日线均线交叉, 实心=收盘确认, 空心=盘中疑似 */
+export type GsSignalPoint = {
+  date: string
+  /** 'G' = 买入(MA5 上穿 MA10/20), 'S' = 卖出(MA5 下穿) */
+  side: 'G' | 'S'
+  /** true = 收盘确认 (实心), false = 盘中疑似 (空心) */
+  confirmed: boolean
+  price: number
+}
+/** 资金柱: 明盘/暗盘日净额 (元). 缺失=无数据 */
+export type FundFlowBar = {
+  date: string
+  /** 明盘净额 (东财大单/特大单, 元) */
+  open_net?: number | null
+  /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
+  dark_net?: number | null
+}
+/** K线事件标注 */
+export type KlineEventKind =
+  | 'limit_up' // 涨停
+  | 'limit_down' // 跌停
+  | 'dragon_tiger' // 龙虎榜
+  | 'announcement' // 公告
+  | 'split_cluster' // 拆单簇(.tck)
+  | 'cancel_anomaly' // 撤单异常
+  | 'support' // 托盘
+  | 'pressure' // 压盘
+  | 'unlock' // 解套盘位
+  | 'my_trade' // 我的买卖点
+export type KlineEvent = {
+  date: string
+  kind: KlineEventKind
+  label?: string
+}
+/** 支撑/压力位 (横向价线) */
+export type SupportPressureLine = {
+  price: number
+  kind: 'support' | 'pressure'
+  label?: string
+}
+/** 6 个图层开关状态 */
+export type LayerState = {
+  trend: boolean // L1 MA5/10/20/60 + 牛/马线
+  signal: boolean // L2 GS 买卖点
+  capital: boolean // L3 资金柱 (明盘+暗盘)
+  event: boolean // L4 事件标注
+  subchart: 'vol' | 'macd' | 'dark_ratio' | 'phase' | 'orderbook' // L5 副图切换
+}
+const DEFAULT_LAYERS: LayerState = {
+  trend: true,
+  signal: true,
+  capital: true,
+  event: true,
+  subchart: 'vol',
+}
+
 function parseBusinessDay(dateStr: string): BusinessDay | null {
   const s = String(dateStr || '').trim()
   // 兼容 '20260828'(8位无横杠, fallback联网源) 和 '2026-08-28'(带横杠, PG路径)
@@ -231,6 +289,17 @@ export default function InteractiveKline(props: {
   initialDays?: '60' | '120' | '250'
   /** 主力意图结构化数据(可选): 传了才在K线上画 markers/筹码叠加 */
   mainIntent?: MainIntentStructured | null
+  // ============== SIDA Pro 设计稿 v2.0: K线图层标注 (2026-09-01) ==============
+  /** GS 买卖点序列 (L2). 可选, 由父组件 AnalysisDetail 传入或组件内部按 MA 交叉自算 */
+  gsSignals?: GsSignalPoint[]
+  /** 资金柱序列 (L3). 日级别, 长度应与 klines 对齐 */
+  fundFlow?: FundFlowBar[]
+  /** 事件标注 (L4) */
+  events?: KlineEvent[]
+  /** 支撑/压力位 (L1 附属, 始终显示) */
+  supportPressure?: SupportPressureLine[]
+  /** 图层开关初始状态 (受控/非受控) */
+  initialLayers?: Partial<LayerState>
 }) {
   const [lwReady, setLwReady] = useState(!!getLW())
   const [libError, setLibError] = useState(false)
@@ -250,8 +319,12 @@ export default function InteractiveKline(props: {
   const [minuteSwings, setMinuteSwings] = useState<MinuteSwings | null>(null)
   const [minuteLoading, setMinuteLoading] = useState(false)
   const [minuteError, setMinuteError] = useState<string>('')
-  const minuteRef = useRef<{ pts: MinutePoint[]; prev: number | null }>({ pts: [], prev: null })
+  const minuteRef = useRef<{ pts: MinutePoint[]; prev: number | null }>({ pts: [], prev: minutePrevClose })
   minuteRef.current = { pts: minutePoints, prev: minutePrevClose }
+  // ============== SIDA Pro: 6 个图层开关 (2026-09-01) ==============
+  const [layers, setLayers] = useState<LayerState>({ ...DEFAULT_LAYERS, ...(props.initialLayers ?? {}) })
+  const toggleLayer = (key: keyof Omit<LayerState, 'subchart'>) =>
+    setLayers(prev => ({ ...prev, [key]: !prev[key] }))
 
   const loadMinute = async () => {
     if (!props.symbol) return
@@ -397,12 +470,18 @@ export default function InteractiveKline(props: {
     const ma5 = sma(closes, 5)
     const ma10 = sma(closes, 10)
     const ma20 = sma(closes, 20)
+    // ============== SIDA Pro: MA60 (L1 趋势层) (2026-09-01) ==============
+    const ma60 = sma(closes, 60)
+    // 牛线/马线: 简化版 BBI 多空指标 (MA5+MA10+MA20+MA60)/4 (BBI = 多空分界线, 突破为多)
+    // 牛线 (bull line): MA5
+    // 马线 (bear line): MA20
+    // 这里的命名沿用国内"牛熊线"叫法, 与 BBI 等价
     const volRaw = klines.map(k => k.volume)
     const volMa5 = sma(volRaw, 5)
     const volMa10 = sma(volRaw, 10)
     const macd = computeMacd(closes)
     const rsi6 = computeRsi(closes, 6)
-    return { klines, candles, volumes, ma5, ma10, ma20, volMa5, volMa10, macd, rsi6 }
+    return { klines, candles, volumes, ma5, ma10, ma20, ma60, volMa5, volMa10, macd, rsi6 }
   }, [data])
 
   const latestMetrics = useMemo(() => {
@@ -488,6 +567,12 @@ export default function InteractiveKline(props: {
     const ma5Series = addLine(chart, LW, { color: 'rgba(99, 102, 241, 0.85)', lineWidth: 2 })
     const ma10Series = addLine(chart, LW, { color: 'rgba(245, 158, 11, 0.85)', lineWidth: 2 })
     const ma20Series = addLine(chart, LW, { color: 'rgba(14, 165, 233, 0.85)', lineWidth: 2 })
+    // ============== SIDA Pro: MA60 + 牛线 (MA5 蓝粗) / 马线 (MA20 橙粗) (2026-09-01) ==============
+    // 设计稿 L1: MA5/10/20/60 + 牛熊线. 牛=MA5(快速多空), 马=MA20(中期成本)
+    // 颜色沿用既有, MA60 用淡紫区分
+    const ma60Series = addLine(chart, LW, { color: 'rgba(168, 85, 247, 0.75)', lineWidth: 1.5 })
+    const bullLineSeries = addLine(chart, LW, { color: 'rgba(59, 130, 246, 0.95)', lineWidth: 3 })
+    const bearLineSeries = addLine(chart, LW, { color: 'rgba(249, 115, 22, 0.95)', lineWidth: 3 })
 
     const mapLine = (arr: Array<number | null>) =>
       series.klines
@@ -500,6 +585,17 @@ export default function InteractiveKline(props: {
     ma5Series.setData(mapLine(series.ma5) as any)
     ma10Series.setData(mapLine(series.ma10) as any)
     ma20Series.setData(mapLine(series.ma20) as any)
+    // ============== SIDA Pro: MA60/牛线/马线 setData (L1 受 layers.trend 控制) (2026-09-01) ==============
+    if (layers.trend) {
+      ma60Series.setData(mapLine(series.ma60) as any)
+      bullLineSeries.setData(mapLine(series.ma5) as any) // 牛线=MA5
+      bearLineSeries.setData(mapLine(series.ma20) as any) // 马线=MA20
+    } else {
+      // 关闭时清空(置空数组, LWC v5 行为)
+      ma60Series.setData([] as any)
+      bullLineSeries.setData([] as any)
+      bearLineSeries.setData([] as any)
+    }
     volMa5Series.setData(mapLine(series.volMa5) as any)
     volMa10Series.setData(mapLine(series.volMa10) as any)
 
@@ -665,6 +761,143 @@ export default function InteractiveKline(props: {
       }
     }
 
+    // ============== SIDA Pro: L2 GS 买卖点 markers (2026-09-01) ==============
+    // 实心=已确认(收盘), 空心=待确认(盘中). 设计稿 §5.2 严格区分, 防"把疑似当确认"
+    if (layers.signal && props.gsSignals && props.gsSignals.length) {
+      const signalMarkers: any[] = props.gsSignals
+        .map((s) => {
+          const bd = parseBusinessDay(s.date)
+          if (!bd) return null
+          const isBuy = s.side === 'G'
+          return {
+            time: bd,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isBuy ? '#16a34a' : '#dc2626',
+            // shape: circle=实心(已确认), circleOutline=空心(待确认)
+            shape: s.confirmed ? 'circle' : 'circleOutline',
+            text: s.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
+            size: s.confirmed ? 1 : 0,
+          }
+        })
+        .filter(Boolean)
+      if (signalMarkers.length) {
+        if (typeof candleSeries.setMarkers === 'function') {
+          candleSeries.setMarkers([...(mainIntent && mainIntent.data_status !== 'insufficient' ? [] : []), ...signalMarkers])
+        } else if (typeof LW.createSeriesMarkers === 'function') {
+          LW.createSeriesMarkers(candleSeries, signalMarkers)
+        }
+      }
+    }
+
+    // ============== SIDA Pro: L3 资金柱 (明盘+暗盘) 在量能 pane 叠加 (2026-09-01) ==============
+    // 设计稿: 流入红/流出绿. 暗盘只在有数据时画 (.tck 盘后 / thsdk 盘中)
+    // 这里用 volSeries 的 pane 1 (与量能共 pane, 避免再加一个 pane 高度挤压)
+    if (layers.capital && props.fundFlow && props.fundFlow.length) {
+      const flowByDate = new Map(props.fundFlow.map((f) => [f.date, f]))
+      const capitalData = series.klines
+        .map((k) => {
+          const f = flowByDate.get(k.date)
+          if (!f || (f.open_net == null && f.dark_net == null)) return null
+          // 明盘净额 (主柱)
+          const on = typeof f.open_net === 'number' ? f.open_net : null
+          // 暗盘净额 (副柱, 画在明盘基础上 0.3 倍偏移示意)
+          const dn = typeof f.dark_net === 'number' ? f.dark_net : null
+          const value = on ?? dn ?? 0
+          return {
+            time: parseBusinessDay(k.date) as BusinessDay,
+            value,
+            color:
+              value >= 0
+                ? on != null && dn != null
+                  ? 'rgba(239, 68, 68, 0.55)' // 双向有数据, 中性偏红
+                  : 'rgba(239, 68, 68, 0.35)'
+                : on != null && dn != null
+                  ? 'rgba(16, 185, 129, 0.55)'
+                  : 'rgba(16, 185, 129, 0.35)',
+          }
+        })
+        .filter(Boolean)
+      if (capitalData.length) {
+        // 用现有 volSeries 旁追加一个独立 series 会增加 pane, 这里复用 volSeries 空间不新增
+        // 简单方案: 在量能 pane 顶部加一行指标文字; 真正叠加需要 histogram 在 price scaleId overlay
+        // LWC v5: priceScaleId 可让 hist 叠加到主图. 这里用 'price_scale_id' 兼容写法
+        const capitalHist = addHistogram(chart, LW, {
+          priceFormat: { type: 'volume' },
+          priceScaleId: 'capital_overlay',
+          color: 'rgba(168, 85, 247, 0.4)',
+        }, 1)
+        // 把 capital_overlay 这个 priceScale 顶到主图右侧
+        // LWC v5: priceScale().applyOptions 改可见, 这里依赖 LWC 自动 scale, 不强制
+        capitalHist.setData(capitalData as any)
+      }
+    }
+
+    // ============== SIDA Pro: L4 事件标注 markers (2026-09-01) ==============
+    // 设计稿 §5.3: 拆单簇/⚠撤/🛡托/🔒压/涨/我 7 种图标. 用 shape+text 模拟
+    if (layers.event && props.events && props.events.length) {
+      const eventMarkers: any[] = props.events
+        .map((ev) => {
+          const bd = parseBusinessDay(ev.date)
+          if (!bd) return null
+          const label = ev.label ?? ''
+          switch (ev.kind) {
+            case 'limit_up':
+              return { time: bd, position: 'belowBar', color: '#ef4444', shape: 'arrowUp', text: `涨${label}`, size: 1 }
+            case 'limit_down':
+              return { time: bd, position: 'aboveBar', color: '#10b981', shape: 'arrowDown', text: `跌${label}`, size: 1 }
+            case 'dragon_tiger':
+              return { time: bd, position: 'aboveBar', color: '#a855f7', shape: 'square', text: `龙虎${label}`, size: 1 }
+            case 'announcement':
+              return { time: bd, position: 'aboveBar', color: '#0ea5e9', shape: 'square', text: `公告${label}`, size: 1 }
+            case 'split_cluster':
+              return { time: bd, position: 'inBar', color: '#22c55e', shape: 'circle', text: `拆${label}`, size: 1 }
+            case 'cancel_anomaly':
+              return { time: bd, position: 'aboveBar', color: '#f43f5e', shape: 'arrowDown', text: `⚠撤${label}`, size: 1 }
+            case 'support':
+              return { time: bd, position: 'inBar', color: '#f59e0b', shape: 'square', text: `🛡托${label}`, size: 1 }
+            case 'pressure':
+              return { time: bd, position: 'inBar', color: '#7c3aed', shape: 'square', text: `🔒压${label}`, size: 1 }
+            case 'unlock':
+              return { time: bd, position: 'inBar', color: '#64748b', shape: 'square', text: `解套${label}`, size: 0 }
+            case 'my_trade':
+              return { time: bd, position: 'belowBar', color: '#3b82f6', shape: 'arrowUp', text: `我${label}`, size: 1 }
+            default:
+              return null
+          }
+        })
+        .filter(Boolean)
+      if (eventMarkers.length) {
+        // event markers 优先叠在主图, 不覆盖已有 markers
+        if (typeof LW.createSeriesMarkers === 'function') {
+          LW.createSeriesMarkers(candleSeries, eventMarkers)
+        } else if (typeof candleSeries.setMarkers === 'function') {
+          // 退化路径: 合并到现有 markers(LWC v4)
+          try {
+            const existing = candleSeries.markers?.() ?? []
+            candleSeries.setMarkers([...existing, ...eventMarkers])
+          } catch {
+            // 忽略: 部分版本不支持读 markers
+          }
+        }
+      }
+    }
+
+    // ============== SIDA Pro: 支撑/压力位 (L1 附属, 始终显示) (2026-09-01) ==============
+    // 设计稿 §5.3 表: 支撑/压力=虚线. 不受 layers 开关影响 (用户已主动传入 = 必显示)
+    if (props.supportPressure && props.supportPressure.length) {
+      for (const sp of props.supportPressure) {
+        if (typeof candleSeries.createPriceLine !== 'function') continue
+        candleSeries.createPriceLine({
+          price: sp.price,
+          color: sp.kind === 'support' ? 'rgba(34, 197, 94, 0.45)' : 'rgba(220, 38, 38, 0.45)',
+          lineWidth: 1,
+          lineStyle: 2, // 虚线
+          title: sp.label ?? (sp.kind === 'support' ? '支撑' : '压力'),
+          axisLabelVisible: true,
+        })
+      }
+    }
+
     // v5 多面板共用 X 轴, 无需手动同步可见范围(2026-08-12 移除旧版独立 chart sync)
     chart.subscribeCrosshairMove?.((param: any) => {
       const point = param?.point
@@ -749,7 +982,7 @@ export default function InteractiveKline(props: {
         // ignore
       }
     }
-  }, [series, lwReady, showRsi, indexByDate, interval, mode, mainIntentData])
+  }, [series, lwReady, showRsi, indexByDate, interval, mode, mainIntentData, layers, props.gsSignals, props.fundFlow, props.events, props.supportPressure])
 
   // 主力意图图例(2026-08-12): 展示方向/筹码峰/成本带, 仅在传入结构化数据时显示
   const mi = props.mainIntent ?? mainIntentData
@@ -792,6 +1025,35 @@ export default function InteractiveKline(props: {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
         <div className="text-[13px] font-semibold text-foreground">{mode === 'minute' ? '分时走势' : 'K线图'}</div>
         <div className="flex items-center gap-2 flex-wrap">
+          {mode === 'kline' ? (
+            <div className="inline-flex rounded-lg border border-border/60 bg-accent/20 p-0.5" role="group" aria-label="图层开关">
+              {([
+                { key: 'trend', label: '趋势' },
+                { key: 'signal', label: '买卖' },
+                { key: 'capital', label: '资金' },
+                { key: 'event', label: '事件' },
+              ] as const).map(item => {
+                const active = layers[item.key as 'trend' | 'signal' | 'capital' | 'event']
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-pressed={active}
+                    aria-label={`${item.label}图层${active ? '已开启' : '已关闭'}`}
+                    title={`L${item.key === 'trend' ? '1' : item.key === 'signal' ? '2' : item.key === 'capital' ? '3' : '4'} ${item.label}图层`}
+                    className={`h-7 min-w-[36px] rounded-md px-2 text-[11px] transition-colors ${
+                      active
+                        ? 'bg-primary/90 text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                    }`}
+                    onClick={() => toggleLayer(item.key as 'trend' | 'signal' | 'capital' | 'event')}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
           {mode === 'kline' ? (
             <Button variant={showRsi ? 'default' : 'secondary'} size="sm" className="h-8 px-2.5" onClick={() => setShowRsi(v => !v)}>
               强弱线

@@ -154,7 +154,7 @@ export default function IndexDetailPage() {
               <span className="font-bold">K线走势</span>
               <span className="text-[10px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>
             </div>
-            <InteractiveKline symbol={symbol || ''} market={data.market || 'CN'} initialInterval="1d" initialDays="120" />
+            <InteractiveKline symbol={symbol || ''} market={data.market || 'CN'} initialInterval="1d" initialDays="120" /* SIDA Pro v2.0: 图层开关由 InteractiveKline 内部 DEFAULT_LAYERS 控制 */ />
           </div>
 
           {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
