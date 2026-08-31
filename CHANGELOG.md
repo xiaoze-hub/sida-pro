@@ -4,11 +4,14 @@
 
 ### feature
 
+- SIDA Pro P2 后端数据源五件套 + 图层数据接口整合落地 (xiaoze6096 qwen3.8-max 交付, Hermes 整合): 新增 `src/core/` 十个文件 — `gs_strategy.py`(GS 信号, 收盘定死/末根疑似 pending 与前端实心/空心圆同口径) + `dark_pool_flow.py`(明盘大单 big_order_flow 全口径, 误差<2% 优秀线) + `ohlc_dark.py`(暗盘 L1 近似 OHLC 分摊, approximation 硬标记) + `ai_activity.py`(7 因子 MAX×1.2, 阈值 1.56/3/6) + `resonance.py`(三指标共振状态机, 完整 7 行官方买卖体系 + 口诀) + `tdx_img_parser.py`(.img 十档盘口 + 委托队列 TLV 解析 + 托压单派生, 22 例单测) + `chat_tools.py`(28 号交付, 4 空壳工具接真实源 + user_id 四账号隔离) + `dark_split.py`(拆单识别) + `market_scan.py`(formula 全市场扫描) + `marketdata_authoritative_sources.py`(数据源权威源定位表). `src/web/api/klines.py` summary 接口拓展三字段 `gs_signals`(全量 GS 交叉序列)/`fund_flow`(明盘+暗盘日级净额)/`events`(涨停/跌停, 龙虎榜/公告待 28 号数据源接入). 测试: `test_five_pack/test_ohlc_dark/test_market_scan/test_dark_pool_flow/test_tdx_img_parser`(90 passed) + `test_summary_layer_api/test_chat_tools_p1p2`(18 passed) 共 108 例全绿. 实测 002361 神剑股份 gs_signals 2 个 G 信号, fund_flow ming_net -3,407,363 元(与官方扩展1对齐), dark_net +403,145,519 元(approximation)
+
 - SIDA Pro 设计稿 v2.0 落地 P1: K线 6 层图层化架构 (`packages/biz-ui/src/components/InteractiveKline.tsx`) — L1 趋势(MA5/10/20/60 + 牛线/马线)、L2 GS 买卖点(实心=已确认/空心=待确认)、L3 资金柱(明盘+暗盘)、L4 事件标注(涨停/龙虎榜/公告/拆单簇/⚠撤/🛡托/🔒压/解套/我的买卖 共 10 种图标)、L5 副图切换; 新增 4 按钮图层开关(trend/signal/capital/event, 默认全开), 受 `layers` state 控制, props `gsSignals/fundFlow/events/supportPressure` 全部可选(后端 P2 输出前为空数组, 不报错); 新增类型 `GsSignalPoint/FundFlowBar/KlineEvent/KlineEventKind/SupportPressureLine/LayerState` 均 export, 父组件 `stock-insight-modal` 接入 state+props+summary API 拓展字段 (`gs_signals/fund_flow/events`), `IndexDetail` 复用默认图层; 严格按设计稿 §5.2/§5.3 实现, 防"把疑似当确认"(空心 ○G/○S); 支撑/压力位走虚线价线 (`lineStyle: 2`), 不受 layers 开关影响; build 14s 通过, InteractiveKline bundle 50→63kB(+13kB 合理)
 
 ### fix
 
 - InteractiveKline 分钟模式 ref 初始 prev 同步 (`minuteRef.current = { pts: [], prev: minutePrevClose }` 立即赋值, 避免 mount 阶段 race, 原写法初始 prev=null 被立即覆盖但易让 lint 误判)
+- InteractiveKline 主力意图徽标亮色对比度修复(rose-400→rose-700+dark:400, WCAG AA 4.5:1 达标)
 
 ## 2026-08-31
 

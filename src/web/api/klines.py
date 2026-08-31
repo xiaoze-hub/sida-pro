@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
 import time as _time
@@ -6,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -308,6 +312,102 @@ def get_klines_batch(payload: KlineBatchRequest):
     return results
 
 
+def _tencent_code(code: str) -> str | None:
+    """6 位 A 股代码 → 腾讯风格代码(sz/sh 前缀), 无法识别返回 None。
+    与 src/core/dark_pool_flow._tencent_code 同口径, 本地实现避免跨模块引用私有函数。"""
+    code = (code or "").strip()
+    if code[:2].lower() in ("sz", "sh", "bj"):
+        return code.lower()
+    if code.isdigit() and len(code) == 6:
+        if code[0] in ("6", "9") or code.startswith("688"):
+            return f"sh{code}"
+        if code[0] in ("0", "2", "3"):
+            return f"sz{code}"
+    return None
+
+
+def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
+    """P1 图层数据(2026-09-01): gs_signals / fund_flow / events。
+
+    - gs_signals: 全量 GS 交叉序列(收盘定死=confirmed, 末根疑似=待确认)
+    - fund_flow: 日级, 长度对齐 klines; dark_net=OHLC 分摊(L1 近似对照项),
+      ming_net=当日 big_order_flow 全口径(历史逐日明盘无数据, 显式 null)
+    - events: 涨停/跌停(K线自算); 龙虎榜/公告事件待 28 号数据源接入后补
+
+    仅 A 股; 任一字段计算失败独立降级为 None, 不拖垮整体, 不编造。
+    """
+    out: dict = {"gs_signals": None, "fund_flow": None, "events": None}
+    if market_code.value != "CN":
+        return out
+    try:
+        from src.core.decision_pioneer import fetch_bars
+
+        bars = fetch_bars(symbol, "CN", days=120)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("layer_data fetch_bars %s failed: %s", symbol, e)
+        return out
+    if not bars:
+        return out
+
+    # ① gs_signals
+    try:
+        from src.core.gs_strategy import compute_gs_signals
+
+        out["gs_signals"] = compute_gs_signals(bars)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("gs_signals %s failed: %s", symbol, e)
+
+    # ② fund_flow(日级)
+    try:
+        from src.core.ohlc_dark import allocate_bar
+
+        fund_flow = []
+        for b in bars:
+            a = allocate_bar(
+                o=b.get("open"), h=b.get("high"), l=b.get("low"),
+                c=b.get("close"), volume=b.get("volume"),
+                date=str(b.get("date", "")),
+            )
+            fund_flow.append({
+                "date": str(b.get("date", "")),
+                "ming_net": None,  # 历史逐日明盘: 无数据(big_order_flow 仅当日)
+                "dark_net": round(a.net, 2) if a else None,
+            })
+        # 当日明盘(big_order_flow 全口径, 与官方扩展1一致; 失败保持 null)
+        try:
+            from src.core import dark_l2, dark_split
+
+            tc = _tencent_code(symbol)
+            if tc:
+                ticks = dark_l2.fetch_l2_ticks(tc, "thsdk_big_order")
+                ming = dark_split.ming_net_from_big_orders(ticks)
+                if ming["count"] > 0 and fund_flow:
+                    fund_flow[-1]["ming_net"] = ming["ming_net"]
+        except Exception:  # noqa: BLE001
+            pass
+        out["fund_flow"] = fund_flow
+    except Exception as e:  # noqa: BLE001
+        logger.debug("fund_flow %s failed: %s", symbol, e)
+
+    # ③ events(涨停/跌停, K线自算, 与前端 InteractiveKline 同阈值)
+    try:
+        events = []
+        from_idx = max(0, len(bars) - 60)
+        for i in range(from_idx, len(bars)):
+            prev = bars[i - 1] if i > 0 else None
+            if not prev or not prev.get("close"):
+                continue
+            chg = (bars[i]["close"] - prev["close"]) / prev["close"] * 100
+            if chg >= 9.8:
+                events.append({"date": str(bars[i].get("date", "")), "kind": "limit_up", "label": "涨停"})
+            elif chg <= -9.8:
+                events.append({"date": str(bars[i].get("date", "")), "kind": "limit_down", "label": "跌停"})
+        out["events"] = events
+    except Exception as e:  # noqa: BLE001
+        logger.debug("events %s failed: %s", symbol, e)
+    return out
+
+
 @router.get("/{symbol}/summary")
 def get_kline_summary(symbol: str, market: str = "CN"):
     """获取单只股票K线摘要
@@ -349,6 +449,8 @@ def get_kline_summary(symbol: str, market: str = "CN"):
         "summary": summary,
         "main_intent": main_intent,
         "main_intent_structured": main_intent_structured,
+        # P1 图层数据(2026-09-01): gs_signals / fund_flow / events
+        **_build_layer_data(symbol, market_code),
     }
     _SUMMARY_CACHE[cache_key] = (now, result)
     return result
