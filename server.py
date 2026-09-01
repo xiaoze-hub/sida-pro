@@ -267,10 +267,20 @@ def setup_playwright():
     logger.info("首次启动，正在安装 Playwright 浏览器（可能需要几分钟）...")
     os.makedirs(browser_dir, exist_ok=True)
 
+    # v0.4.47 fix (2026-09-01): 默认从国外 CDN 下载 109MB chromium 实测 4-7MB/分钟
+    # (一次 15 分钟), 加上容器层 /app/.cache 不持久会死循环。优先用国内镜像。
+    # 镜像源用阿里云镜像(国内可达, 速度稳定): https://registry.npmmirror.com/-/binary/playwright
+    install_env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir}
+    if not os.environ.get("PLAYWRIGHT_DOWNLOAD_HOST"):
+        install_env["PLAYWRIGHT_DOWNLOAD_HOST"] = (
+            "https://registry.npmmirror.com/-/binary/playwright"
+        )
+        logger.info("使用国内镜像下载 Playwright (registry.npmmirror.com)")
+
     try:
         result = subprocess.run(
             ["playwright", "install", "chromium"],
-            env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browser_dir},
+            env=install_env,
             capture_output=True,
             text=True,
             timeout=600,  # 10 分钟超时

@@ -113,6 +113,10 @@ services:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
       - DOCKER=1
+      # v0.4.47 fix (2026-09-01): server.py 默认监听 127.0.0.1, Docker `-p 8000:8000`
+      # 必须显式 0.0.0.0, 否则 docker-proxy 转发到容器 IP 172.19.0.x 时 connection reset,
+      # 外部全 502。下次 WSL/Docker 重启一定要带上,否则复发。
+      - WEB_HOST=0.0.0.0
     volumes:
       - panwatch_data:/app/data
       # 可选: Hermes cron 输出(报告中心读取 cron 报告用)

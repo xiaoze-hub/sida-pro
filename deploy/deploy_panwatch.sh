@@ -163,6 +163,9 @@ rebuild_container() {
     -e AUTH_PASSWORD="$AUTH_PASSWORD" \
     ${env_args[@]+"${env_args[@]}"} \
     -e TZ="Asia/Shanghai" \
+    # v0.4.47 fix (2026-09-01): server.py 默认 127.0.0.1, Docker `-p 8000:8000`
+    # 必须显式 0.0.0.0, 否则外部 connection reset 全 502。下次重建必带。
+    -e WEB_HOST=0.0.0.0 \
     --memory=1g \
     --restart=unless-stopped \
     "$IMAGE"
