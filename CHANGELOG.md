@@ -4,6 +4,8 @@
 
 ### feature
 
+- SIDA Pro 设计稿 v2.0 §4.2 可折叠侧边栏落地: `frontend/src/App.tsx` 桌面端从顶部横排导航改为左侧可折叠侧边栏(6 项主导航竖排, 交易线顶/研究线中/系统沉底), 折叠态持久化 localStorage(`sida_sidebar_collapsed`), 折叠按钮 PanelLeftClose/Open, 展开 `w-60`/折叠 `w-16`(仅图标), 主内容区 `md:pl-64`/`md:pl-20` 自适应, GitHub/日志/通知/头像收纳到侧边栏底部; 移除未用的 `Fragment` 导入. typecheck + build 全绿(13.8s)
+
 - SIDA Pro 设计稿 v2.0 §4.2/§4.3/§4.4 信息架构重构第一步: `frontend/src/App.tsx` 桌面导航从 21 项扁平三组重构为 **6 项主导航**(驾驶舱/行情/机会/投研/我的/系统, 组标签可见), 补齐 `/notifications`(通知)/`/profile`(个人中心)进导航; 新增 `frontend/src/components/CommandPalette.tsx` 全局搜索命令面板(Ctrl+K 打开, 股票模糊搜索 `/stocks/search` 跳 `/analysis/:symbol/:date`, 功能搜索跳页面, ↑↓选择/↵打开/esc关闭, 200ms 防抖). 原 Ctrl+K 占位(打开日志弹窗)替换为真实搜索. typecheck + build 全绿(14.5s)
 
 - SIDA Pro P2 后端数据源五件套 + 图层数据接口整合落地 (xiaoze6096 qwen3.8-max 交付, Hermes 整合): 新增 `src/core/` 十个文件 — `gs_strategy.py`(GS 信号, 收盘定死/末根疑似 pending 与前端实心/空心圆同口径) + `dark_pool_flow.py`(明盘大单 big_order_flow 全口径, 误差<2% 优秀线) + `ohlc_dark.py`(暗盘 L1 近似 OHLC 分摊, approximation 硬标记) + `ai_activity.py`(7 因子 MAX×1.2, 阈值 1.56/3/6) + `resonance.py`(三指标共振状态机, 完整 7 行官方买卖体系 + 口诀) + `tdx_img_parser.py`(.img 十档盘口 + 委托队列 TLV 解析 + 托压单派生, 22 例单测) + `chat_tools.py`(28 号交付, 4 空壳工具接真实源 + user_id 四账号隔离) + `dark_split.py`(拆单识别) + `market_scan.py`(formula 全市场扫描) + `marketdata_authoritative_sources.py`(数据源权威源定位表). `src/web/api/klines.py` summary 接口拓展三字段 `gs_signals`(全量 GS 交叉序列)/`fund_flow`(明盘+暗盘日级净额)/`events`(涨停/跌停, 龙虎榜/公告待 28 号数据源接入). 测试: `test_five_pack/test_ohlc_dark/test_market_scan/test_dark_pool_flow/test_tdx_img_parser`(90 passed) + `test_summary_layer_api/test_chat_tools_p1p2`(18 passed) 共 108 例全绿. 实测 002361 神剑股份 gs_signals 2 个 G 信号, fund_flow ming_net -3,407,363 元(与官方扩展1对齐), dark_net +403,145,519 元(approximation)

@@ -1,6 +1,6 @@
-import { Fragment, useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, Navigate } from 'react-router-dom'
-import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, HelpCircle, ShieldCheck, User, Bell } from 'lucide-react'
+import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, HelpCircle, ShieldCheck, User, Bell, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -189,6 +189,14 @@ function App() {
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  // 设计稿 v2.0 §4.2 可折叠侧边栏: 折叠态持久化到 localStorage
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sida_sidebar_collapsed') === '1' } catch { return false }
+  })
+  const toggleSidebar = () => setSidebarCollapsed((c) => {
+    try { localStorage.setItem('sida_sidebar_collapsed', c ? '0' : '1') } catch {}
+    return !c
+  })
   const [selfCheckOpen, setSelfCheckOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
@@ -267,94 +275,96 @@ function App() {
     <div className="min-h-screen pb-16 md:pb-0 relative overflow-x-clip bg-background">
       <BrowserNotificationBridge />
       <AmbientBackground />
-      {/* Desktop Floating Nav */}
-      <div className="sticky top-0 z-50 px-4 md:px-6 pt-3 md:pt-4 pb-2 hidden md:block">
-        <header className="card px-4 md:px-5">
-          <div className="h-14 flex items-center justify-between">
-            {/* Logo */}
-            <NavLink to="/" className="flex items-center gap-2.5 group shrink-0">
-              <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
-                <TrendingUp className="w-4 h-4 text-white" />
-              </div>
-              <span className="text-[15px] font-bold text-foreground">数智分析</span>
-              {version && <span className="text-[11px] text-muted-foreground/60 font-normal">v{version}</span>}
-              {isDemoUser() && (
-                <span className="ml-1 shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">
-                  演示模式 · 只读
-                </span>
-              )}
-            </NavLink>
+      {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
+      <aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
+        {/* Logo + 折叠按钮 */}
+        <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
+          <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
+              <TrendingUp className="w-4 h-4 text-white" />
+            </div>
+            {!sidebarCollapsed && (
+              <>
+                <span className="text-[15px] font-bold text-foreground truncate">数智分析</span>
+                {version && <span className="text-[11px] text-muted-foreground/60 font-normal shrink-0">v{version}</span>}
+                {isDemoUser() && (
+                  <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
+                )}
+              </>
+            )}
+          </NavLink>
+          <button
+            onClick={toggleSidebar}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
+        </div>
 
-            {/* Nav Links — 桌面端三组全平铺(行情/交易/系统), 组间 1px 分隔线, 不再 slice(0,5) */}
-            <nav className="flex items-center gap-1 min-w-0 flex-1 justify-center overflow-x-auto">
-              {desktopNavGroups.map((group, gi) => {
-                // guest(demo): 隐藏管理/个人页面导航; 模块权限: 未授权模块隐藏入口
-                const items = group.items.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))
-                if (items.length === 0) return null
-                return (
-                <Fragment key={group.key}>
-                  {gi > 0 && <div className="w-px h-5 bg-border/50 mx-1 shrink-0" aria-hidden="true" />}
-                  <span className="text-[10px] font-medium text-muted-foreground/45 px-0.5 select-none shrink-0" title={group.label}>{group.label}</span>
+        {/* 6 项主导航 */}
+        <nav className="flex-1 overflow-y-auto px-2 py-2">
+          {desktopNavGroups.map((group) => {
+            // guest(demo): 隐藏管理/个人页面导航; 模块权限: 未授权模块隐藏入口
+            const items = group.items.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))
+            if (items.length === 0) return null
+            return (
+              <div key={group.key} className="mb-3 last:mb-0">
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{group.label}</div>}
+                <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, label }) => {
                     const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
                     return (
                       <NavLink
                         key={to}
                         to={to}
-                        className="relative shrink-0"
+                        title={sidebarCollapsed ? label : undefined}
+                        className={`flex items-center gap-2.5 rounded-xl text-[13px] font-medium transition-colors ${
+                          sidebarCollapsed ? 'justify-center px-0 py-2' : 'px-2.5 py-2'
+                        } ${
+                          isActive
+                            ? 'bg-[linear-gradient(135deg,hsl(var(--primary)/0.14),hsl(var(--primary)/0.04))] ring-1 ring-primary/20 text-foreground'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                        }`}
                       >
-                        <span
-                          className={`absolute inset-0 rounded-xl transition-shadow ${
-                            isActive
-                              ? 'bg-[linear-gradient(135deg,hsl(var(--primary)/0.14),hsl(var(--primary)/0.04),hsl(var(--success)/0.06))] ring-1 ring-primary/20 shadow-[0_8px_24px_-18px_hsl(var(--primary)/0.55)]'
-                              : 'bg-transparent'
-                          }`}
-                        />
-                        <span
-                          className={`relative px-2.5 py-2 rounded-xl text-[13px] font-medium transition-colors flex items-center gap-1.5 ${
-                            isActive
-                              ? 'text-foreground'
-                              : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                          }`}
-                        >
-                          <Icon className={`w-4 h-4 ${isActive ? 'text-primary' : ''}`} />
-                          {label}
-                        </span>
+                        <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-primary' : ''}`} />
+                        {!sidebarCollapsed && <span className="truncate">{label}</span>}
                       </NavLink>
                     )
                   })}
-                </Fragment>
-                )
-              })}
-            </nav>
+                </div>
+              </div>
+            )
+          })}
+        </nav>
 
-            {/* action wrapper:GitHub + 日志 + 头像(桌面端头像下拉仅含主题/自检/退出, 导航已平铺) */}
-            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-2xl bg-accent/20 border border-border/40 shrink-0">
-              <button
-                onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
-                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
-                title="GitHub 项目"
-              >
-                <Github className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setLogsOpen(true)}
-                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
-                title="查看日志"
-              >
-                <ScrollText className="w-4 h-4" />
-              </button>
-              <NotificationBell />
-              <AccountMenu
-                navItems={[]}
-                mode={mode}
-                onSetMode={setMode}
-                onOpenSelfCheck={() => setSelfCheckOpen(true)}
-              />
-            </div>
+        {/* 底部: GitHub + 日志 + 通知 + 头像 */}
+        <div className={`border-t border-border p-2 shrink-0 flex ${sidebarCollapsed ? 'flex-col items-center gap-1' : 'flex-row items-center justify-between'}`}>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="GitHub 项目"
+            >
+              <Github className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setLogsOpen(true)}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="查看日志"
+            >
+              <ScrollText className="w-4 h-4" />
+            </button>
+            <NotificationBell size="sm" />
           </div>
-        </header>
-      </div>
+          <AccountMenu
+            navItems={[]}
+            mode={mode}
+            onSetMode={setMode}
+            onOpenSelfCheck={() => setSelfCheckOpen(true)}
+          />
+        </div>
+      </aside>
 
       {/* Mobile Top Bar */}
       <div className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2 md:hidden">
@@ -419,7 +429,7 @@ function App() {
       </nav>
 
       {/* Content */}
-      <main className="px-4 md:px-6 py-4 md:py-6 w-full">
+      <main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary>
             <Routes>
