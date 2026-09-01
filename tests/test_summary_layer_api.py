@@ -72,7 +72,8 @@ def _patch_bars(monkeypatch, bars):
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: bars)
 
 
-_ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None, "orderbook": None}
+_ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None,
+             "orderbook": None, "unlock_levels": None, "chips": None}
 
 
 def test_build_layer_data_non_cn_returns_none():

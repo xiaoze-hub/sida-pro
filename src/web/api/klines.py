@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
 
+# L4 事件里 wencai 查询的硬超时秒数(两条查询串行, 行情服务不通时不拖垮 summary)
+WENCAI_TIMEOUT_S = 10.0
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -340,7 +343,8 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
 
     仅 A 股; 任一字段计算失败独立降级为 None, 不拖垮整体, 不编造。
     """
-    out: dict = {"gs_signals": None, "fund_flow": None, "events": None, "orderbook": None}
+    out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
+                 "orderbook": None, "unlock_levels": None, "chips": None}
     if market_code.value != "CN":
         return out
     try:
@@ -422,23 +426,111 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.debug("fund_flow %s failed: %s", symbol, e)
 
-    # ③ events(涨停/跌停, K线自算, 与前端 InteractiveKline 同阈值)
+    # ③ events(L4 事件标注): 涨停/跌停(K线自算) + 五类真实数据源
+    #    kind 取值与前端 InteractiveKline 的 KlineEventKind 一一对应。
+    #    任一数据源不可用 → 该类事件为空, 不编造(§5 诚实口径)。
     try:
-        events = []
-        from_idx = max(0, len(bars) - 60)
-        for i in range(from_idx, len(bars)):
-            prev = bars[i - 1] if i > 0 else None
-            if not prev or not prev.get("close"):
-                continue
-            chg = (bars[i]["close"] - prev["close"]) / prev["close"] * 100
-            if chg >= 9.8:
-                events.append({"date": str(bars[i].get("date", "")), "kind": "limit_up", "label": "涨停"})
-            elif chg <= -9.8:
-                events.append({"date": str(bars[i].get("date", "")), "kind": "limit_down", "label": "跌停"})
+        events = _build_events(symbol, bars)
         out["events"] = events
     except Exception as e:  # noqa: BLE001
         logger.debug("events %s failed: %s", symbol, e)
+
+    # ④ 解套盘位 + 筹码结构: 复用**标准筹码接口** chip_distribution, 不自算
+    #    腾讯当日分价表优先 / 新浪历史分价兜底; 取不到 → None(显式无数据)。
+    try:
+        from src.core.l4_events import chip_levels, unlock_levels_from_chips
+
+        chips = _to_tencent(symbol)
+        out["chips"] = chips
+        out["unlock_levels"] = unlock_levels_from_chips(chips) or None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chips %s failed: %s", symbol, e)
     return out
+
+
+def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
+    """汇总 L4 事件: 涨停/跌停(K线自算) + 四类真实数据源.
+
+    数据源与缺数处理(全部"缺即空", 不编造):
+      - 涨停/跌停  : bars 自算, 阈值 ±9.8%(与前端 InteractiveKline 同口径)
+      - 拆单簇/撤单: .tck 文件(需 PANWATCH_TCK_DIR), 无文件 → 空
+      - 龙虎榜/公告: wencai(thsdk), 不可用 → 空
+      - 我的买卖点: paper_trading 交割单(DB), 无记录 → 空
+
+    ⚠️ wencai 走 thsdk, 行情服务不通时会卡住(实测单次 30s)。
+    summary 接口有 5 分钟缓存, 但仍加硬超时护栏避免拖垮反代。
+    """
+    events: list[dict] = []
+
+    # (1) 涨停 / 跌停(K线自算)
+    from_idx = max(0, len(bars) - 60)
+    for i in range(from_idx, len(bars)):
+        prev = bars[i - 1] if i > 0 else None
+        if not prev or not prev.get("close"):
+            continue
+        chg = (bars[i]["close"] - prev["close"]) / prev["close"] * 100
+        if chg >= 9.8:
+            events.append({"date": str(bars[i].get("date", "")), "kind": "limit_up", "label": "涨停"})
+        elif chg <= -9.8:
+            events.append({"date": str(bars[i].get("date", "")), "kind": "limit_down", "label": "跌停"})
+
+    from src.core import l4_events
+
+    # (2) 拆单簇 / 撤单异常(.tck)
+    try:
+        from src.core.tdx_tick_parser import parse_tck
+
+        tck_date = str(bars[-1].get("date", "")) if bars else ""
+        tck_path = l4_events.find_tck_file(symbol, tck_date) or l4_events.find_tck_file(symbol)
+        if tck_path:
+            trades, _orders, cancels = parse_tck(tck_path)
+            events.extend(l4_events.split_clusters(trades, tck_date))
+            events.extend(l4_events.cancel_anomalies(cancels, tck_date))
+    except Exception as e:  # noqa: BLE001
+        logger.debug(".tck 事件 %s failed: %s", symbol, e)
+
+    # (3) 龙虎榜 / 公告(wencai)—— 加硬超时, 行情服务不通时不拖垮接口
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_wencai_event_pairs, symbol, today)
+            try:
+                events.extend(fut.result(timeout=WENCAI_TIMEOUT_S))
+            except Exception:  # noqa: BLE001  # 含 TimeoutError / thsdk 异常
+                pass
+    except Exception as e:  # noqa: BLE001
+        logger.debug("wencai 事件 %s failed: %s", symbol, e)
+
+    # (4) 我的买卖点: 按用户要求**先不做**(2026-09-01)
+    #     交割单是账户级数据, summary 接口不区分 user_id, 多用户会串号;
+    #     等接口透传 user_id 后再接。暂不产出 my_trade 事件。
+
+    # 过滤掉日期为空的事件(数据库脏数据不该污染前端)
+    return [e for e in events if e.get("date")]
+
+
+def _wencai_event_pairs(symbol: str, date_: str) -> list[dict]:
+    """一次线程里跑完龙虎榜 + 公告两条 wencai 查询(供超时护栏包裹)."""
+    from src.core import l4_events
+
+    out: list[dict] = []
+    out.extend(l4_events.dragon_tiger_events(symbol, date_))
+    out.extend(l4_events.announcement_events(symbol, date_))
+    return out
+
+
+def _to_tencent(symbol: str) -> str:
+    """A 股 symbol → 腾讯代码(sh/sz 前缀). 已在 main 项目内, 简单实现即可."""
+    s = (symbol or "").strip().lower()
+    if not s:
+        return s
+    if s.startswith(("sh", "sz")):
+        return s
+    if s.startswith("6"):
+        return "sh" + s
+    if s.startswith(("0", "3")):
+        return "sz" + s
+    return s
 
 
 @router.get("/{symbol}/summary")
