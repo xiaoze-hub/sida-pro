@@ -55,6 +55,7 @@ from src.web.api import (
     export as export_data,
     audit,
     market_mainline,
+    market_scan,
 )
 from src.web.api import factors
 from src.web.api import notifications
@@ -614,6 +615,13 @@ app.include_router(
     market_phase.router,
     prefix="/api/market",
     tags=["market-phase"],
+    dependencies=protected,
+)
+# 全市场三榜扫描(2026-09-01, §6.1): 读快照 + 手动触发
+app.include_router(
+    market_scan.router,
+    prefix="/api/market-scan",
+    tags=["market-scan"],
     dependencies=protected,
 )
 

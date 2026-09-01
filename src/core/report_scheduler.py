@@ -38,6 +38,20 @@ class ReportScheduler:
             return
         self._running.add(report_type)
         try:
+            # 盘后报告前先跑全市场三榜扫描落库(设计稿 §6.1, 2026-09-01 接线)。
+            # 独立 try 包裹: 三榜扫描失败不影响报告生成本身。
+            if report_type == "postmarket":
+                try:
+                    from src.web.api.market_scan import run_market_scan_job
+
+                    scan_res = await asyncio.to_thread(run_market_scan_job)
+                    logger.info(
+                        "[报告] 盘后三榜扫描: %s",
+                        scan_res if scan_res.get("ok") else scan_res.get("error", "跳过"),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("[报告] 盘后三榜扫描异常: %s", e)
+
             result = await asyncio.to_thread(
                 _generate_once_in_worker, report_type
             )

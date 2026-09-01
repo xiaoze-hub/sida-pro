@@ -1405,3 +1405,24 @@ class MarketPhaseDaily(Base):
     sh_index_pct = Column(Float, nullable=True)      # 上证当日涨跌幅 %
     phase = Column(String(32), default="", nullable=False)  # ice/ignite/rally/climax/ebb/repair/accumulating
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MarketScanRank(Base):
+    """全市场三榜扫描快照 (2026-09-01, §6.1)。
+
+    存三榜 JSON (new_g_points / dark_top / activity_top / zljc)。
+    与 MarketScanSnapshot 区分：后者是机会候选种子，前者是三榜排名结果。
+    """
+    __tablename__ = "market_scan_ranks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)  # YYYY-MM-DD
+    stock_market = Column(String(8), nullable=False, default="CN")
+    payload = Column(JSON, nullable=False)  # 三榜完整 JSON
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "stock_market", name="uq_market_scan_rank_date_market"),
+        Index("ix_market_scan_rank_date", "snapshot_date"),
+    )
