@@ -6,7 +6,12 @@ import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { insightApi } from '@panwatch/api'
 import PageTabs, { type PageTabItem } from '@/components/PageTabs'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
-import ContextCard, { isContextSource } from '@/components/ContextCard'
+import {
+  normalizeKlineEvents,
+  normalizePriceLines,
+  type KlineEventPoint,
+  type KlinePriceLine,
+} from '@panwatch/biz-ui/klineEvents'
 
 /**
  * 行情三合一(设计稿 §4.3): 个股 + 指数 + 板块 合成行情页, /forecast 作为入口。
@@ -52,75 +57,11 @@ interface FundFlowRow {
   dark_net: number | null
 }
 
-interface KlineEventItem {
-  date: string
-  kind: string
-  label?: string
-  // 各类事件的附加度量(后端按事件类型给出, 缺失即不显示, 不补 0)
-  price?: number | null
-  shares?: number | null
-  amount?: number | null
-  count?: number | null
-  time?: string | null
-}
-
-/**
- * kind → 对应的 L4 事件图标(设计稿 §5.3)。
- * 解套盘位 / 支撑压力 按规范**缺位时不显示**(不是灰显), 故不在表里。
- */
-const KIND_ICON: Record<string, string> = {
-  dragon_tiger: '涨',
-  split_cluster: '拆',
-  cancel_anomaly: '⚠撤',
-  support: '🛡托',
-  pressure: '🔒压',
-  my_trade: '我',
-}
-
-/** kind → 中文名(后端已给 label, 这里兜底用) */
-const KIND_LABEL: Record<string, string> = {
-  limit_up: '涨停',
-  limit_down: '跌停',
-  dragon_tiger: '龙虎榜',
-  announcement: '公告',
-  split_cluster: '拆单簇',
-  cancel_anomaly: '撤单异常',
-  support: '托盘',
-  pressure: '压盘',
-  unlock: '解套盘位',
-  my_trade: '我的买卖点',
-}
-
-/** kind → 配色(红=利多/买入, 绿=利空/卖出, 其余中性) */
-const KIND_TONE: Record<string, string> = {
-  limit_up: 'text-rose-500',
-  dragon_tiger: 'text-rose-500',
-  split_cluster: 'text-rose-500',
-  limit_down: 'text-emerald-500',
-  cancel_anomaly: 'text-emerald-500',
-  announcement: 'text-sky-500',
-  my_trade: 'text-violet-500',
-  unlock: 'text-amber-500',
-}
-
-interface OrderbookInfo {
-  available?: boolean
-  shape?: string | null
-  best_bid?: number | null
-  best_ask?: number | null
-  spread?: number | null
-  bid_pressure?: number | null
-  queue_shares?: number | null
-  note?: string | null
-}
+/** 页面内事件行(= 标准化事件点, 保持字段同构以便事件面板直接渲染度量) */
+type KlineEventItem = KlineEventPoint
 
 /** 解套盘位价位线 —— 由后端标准筹码接口 chip_distribution 算出, 前端不再自算 */
-interface UnlockLevel {
-  price: number
-  kind?: 'support' | 'pressure'
-  label?: string
-  ratio?: number | null
-}
+type UnlockLevel = KlinePriceLine
 
 /** 标准筹码结构(chip_distribution.compute_near_term_chips 原样输出) */
 interface ChipsInfo {
@@ -137,45 +78,47 @@ interface ChipsInfo {
   window_days?: number | null
 }
 
+interface OrderbookInfo {
+  available?: boolean
+  shape?: string | null
+  best_bid?: number | null
+  best_ask?: number | null
+  spread?: number | null
+  bid_pressure?: number | null
+  queue_shares?: number | null
+  note?: string | null
+}
+
 interface SummaryResp {
   symbol?: string
   market?: string
   fund_flow?: FundFlowRow[]
-  events?: KlineEventItem[]
+  events?: Array<{
+    date?: string | null
+    kind?: string | null
+    label?: string | null
+    price?: number | null
+    shares?: number | null
+    amount?: number | null
+    count?: number | null
+    time?: string | null
+  }>
   orderbook?: OrderbookInfo | null
   main_intent?: string | null
-  unlock_levels?: UnlockLevel[] | null
+  unlock_levels?: Array<{
+    price?: number | null
+    kind?: string | null
+    label?: string | null
+    ratio?: number | null
+  }> | null
   chips?: ChipsInfo | null
 }
 
-/** 后端 events → InteractiveKline 的 KlineEvent(只保留组件认得的 kind) */
-const VALID_KINDS = new Set([
-  'limit_up', 'limit_down', 'dragon_tiger', 'announcement',
-  'split_cluster', 'cancel_anomaly', 'support', 'pressure', 'unlock', 'my_trade',
-])
-
-function toKlineEvents(events?: KlineEventItem[]) {
-  if (!events || events.length === 0) return undefined
-  const out = events
-    .filter((e) => e.date && VALID_KINDS.has(e.kind))
-    .map((e) => ({
-      date: fmtDate(e.date),
-      kind: e.kind as never, // 已用 VALID_KINDS 收窄
-      label: e.label || KIND_LABEL[e.kind] || e.kind,
-    }))
-  return out.length > 0 ? out : undefined
-}
-
-/** 后端解套盘位 → InteractiveKline 的支撑压力线 */
-function toSupportPressure(levels?: UnlockLevel[] | null) {
-  if (!levels || levels.length === 0) return undefined
-  return levels
-    .filter((l) => typeof l.price === 'number' && Number.isFinite(l.price))
-    .map((l) => ({
-      price: l.price,
-      kind: (l.kind === 'support' ? 'support' : 'pressure') as 'support' | 'pressure',
-      label: l.label,
-    }))
+/** tone 语义 → Tailwind 类名(消费方映射, 数据层不绑具体 UI) */
+const TONE_CLASS: Record<string, string> = {
+  up: 'text-rose-500',
+  down: 'text-emerald-500',
+  neutral: 'text-foreground',
 }
 
 /** 元 → 万元; 空值一律 '--'(不把 null 当 0) */
@@ -186,27 +129,16 @@ function toWan(v: number | null | undefined): string {
   return `${sign}${wan.toFixed(2)}`
 }
 
-function fmtDate(d: string): string {
-  const s = String(d || '').trim()
-  if (s.length === 8 && /^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}`
-  return s.slice(0, 10) || '--'
-}
-
 export default function QuotePage() {
   const [params, setParams] = useSearchParams()
   const symbol = (params.get('symbol') || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
   const tab = params.get('tab') || 'chart'
-  // §13: 持仓/自选/机会跳转来源 → 资金面板顶部显示对应上下文卡
-  const sourceParam = params.get('source')
-  const contextSource = isContextSource(sourceParam) ? sourceParam : null
 
   const [input, setInput] = useState(symbol)
   const [summary, setSummary] = useState<SummaryResp | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState('')
-  // §12: 数据源健康状态(60s 轮询) → 决定 L4 事件图标灰显
-  const { isReady, reasonOf } = useSourceHealth()
 
   useEffect(() => { setInput(symbol) }, [symbol])
 
@@ -241,6 +173,10 @@ export default function QuotePage() {
   }
 
   const activeTab = QUOTE_TABS.some((t) => t.key === tab) ? tab : 'chart'
+
+  // 标准化数据层: 后端原始 events/unlock_levels → 图表消费的标准结构
+  const normEvents = normalizeKlineEvents(summary?.events)
+  const normPriceLines = normalizePriceLines(summary?.unlock_levels)
 
   return (
     <div className="w-full space-y-4">
@@ -343,8 +279,8 @@ export default function QuotePage() {
               initialInterval="1d"
               initialDays="120"
               // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
-              events={toKlineEvents(summary?.events)}
-              supportPressure={toSupportPressure(summary?.unlock_levels)}
+              events={normEvents}
+              supportPressure={normPriceLines}
             />
           )
         )}
@@ -360,25 +296,17 @@ export default function QuotePage() {
         )}
 
         {activeTab === 'fund' && (
-          <div className="space-y-3">
-            {/* §13 持仓上下文卡: 按 ?source= 显示, 搜索进入(无 source)不显示 */}
-            {contextSource && (
-              <ContextCard source={contextSource} symbol={symbol} market="CN" />
-            )}
-            <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} />
-          </div>
+          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} />
         )}
 
         {activeTab === 'events' && (
           <EventsPanel
             loading={summaryLoading}
             error={summaryError}
-            events={summary?.events}
+            events={normEvents}
             orderbook={summary?.orderbook}
-            unlockLevels={summary?.unlock_levels}
+            unlockLevels={normPriceLines}
             chips={summary?.chips}
-            isReady={isReady}
-            reasonOf={reasonOf}
           />
         )}
       </div>
@@ -421,7 +349,7 @@ function FundPanel({
             <tbody className="divide-y divide-border/40">
               {recent.map((r) => (
                 <tr key={r.date} className="hover:bg-accent/20">
-                  <td className="px-3 py-2 font-mono text-muted-foreground">{fmtDate(r.date)}</td>
+                  <td className="px-3 py-2 font-mono text-muted-foreground">{r.date.slice(0, 10)}</td>
                   <td className={`px-3 py-2 text-right font-mono ${(r.ming_net ?? 0) > 0 ? 'text-rose-500' : (r.ming_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
                     {toWan(r.ming_net)}
                   </td>
@@ -526,24 +454,26 @@ function EventMetrics({ e }: { e: KlineEventItem }) {
   if (typeof e.count === 'number') parts.push(`${e.count} 笔`)
   if (typeof e.amount === 'number') parts.push(`${toWan(e.amount)} 万元`)
   if (parts.length === 0) return null
-  return <span className="font-mono text-[11px] text-muted-foreground">{parts.join(' · ')}</span>
+  return <span className="ml-auto font-mono text-[11px] text-muted-foreground">{parts.join(' · ')}</span>
 }
 
-/** 事件 Tab: L4 事件标注 + 盘口托压单 + 解套盘位 */
+/**
+ * 事件面板: 标准化事件点列表 + 盘口/筹码信息
+ *
+ * 数据来源状态通过 useSourceHealth 探测, 图标灰显提示数据源可用性。
+ */
 function EventsPanel({
-  loading, error, events, orderbook, unlockLevels, chips, isReady, reasonOf,
+  loading, error, events, orderbook, unlockLevels, chips,
 }: {
   loading: boolean
   error: string
-  events?: KlineEventItem[]
+  events?: KlineEventPoint[]
   orderbook?: OrderbookInfo | null
   unlockLevels?: UnlockLevel[] | null
   chips?: ChipsInfo | null
-  /** §12: 图标是否可用(数据源健康) */
-  isReady: (icon: string) => boolean
-  /** §12: 灰显 tooltip 文案 */
-  reasonOf: (icon: string) => string
 }) {
+  const { isReady, reasonOf } = useSourceHealth()
+
   if (loading) return <PanelLoading text="加载事件…" />
   if (error) return <PanelError text={error} />
 
@@ -574,13 +504,13 @@ function EventsPanel({
         {events && events.length > 0 ? (
           <ul className="divide-y divide-border/40">
             {events.slice().reverse().map((e, i) => {
-              const icon = KIND_ICON[e.kind]
+              const icon = e.icon
               // §12 缺位兜底: 图标对应数据源不可用 → 灰显 + tooltip
               const ready = icon ? isReady(icon) : true
               const why = icon ? reasonOf(icon) : ''
               return (
                 <li key={`${e.date}-${e.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[12px]">
-                  <span className="font-mono text-[11px] text-muted-foreground">{fmtDate(e.date)}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">{e.date}</span>
                   {icon && (
                     <span
                       className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] ${
@@ -591,8 +521,8 @@ function EventsPanel({
                       {icon}
                     </span>
                   )}
-                  <span className={`text-[12px] font-medium ${ready ? (KIND_TONE[e.kind] || 'text-foreground') : 'text-muted-foreground/60'}`}>
-                    {e.label || KIND_LABEL[e.kind] || e.kind}
+                  <span className={`text-[12px] font-medium ${ready ? (TONE_CLASS[e.tone] || 'text-foreground') : 'text-muted-foreground/60'}`}>
+                    {e.label}
                   </span>
                   <EventMetrics e={e} />
                 </li>
