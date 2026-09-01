@@ -71,7 +71,7 @@ def client(monkeypatch):
     # 统一替换 AI 客户端工厂 + 工具执行(不触网/不触数据源)
     monkeypatch.setattr(chat_api, "_get_ai_client", lambda db, model_id=None, user=None: _FakeAIClient())
 
-    async def _fake_execute_tool(db, name, args):
+    async def _fake_execute_tool(db, name, args, user=None):
         return f"工具 {name} 返回: 主力净流入 +1.2亿"
 
     monkeypatch.setattr(chat_api, "_execute_tool", _fake_execute_tool)
