@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, Navigate } from 'react-router-dom'
-import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, HelpCircle, ShieldCheck } from 'lucide-react'
+import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, HelpCircle, ShieldCheck, User, Bell } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -33,31 +33,38 @@ import ChatWidget from '@/components/ChatWidget'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
 import SelfCheckModal from '@/components/SelfCheckModal'
+import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
-  { to: '/portfolio', icon: List, label: '持仓', perm: 'edit_portfolio' },
-  { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   { to: '/forecast', icon: LineChart, label: '预测', perm: 'view_forecast' },
-  { to: '/paper-trading', icon: Activity, label: '模拟盘', perm: 'manage_paper_trading' },
-  { to: '/alerts', icon: BellRing, label: '提醒' },
-  { to: '/agents', icon: Bot, label: 'Agent', perm: 'manage_agents' },
+  { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   { to: '/reports', icon: FileText, label: '报告', perm: 'view_reports' },
-  { to: '/shadow', icon: Shield, label: '影子账户', perm: 'manage_shadow' },
   { to: '/history', icon: Clock, label: '历史' },
+  { to: '/portfolio', icon: List, label: '持仓', perm: 'edit_portfolio' },
+  { to: '/shadow', icon: Shield, label: '影子账户', perm: 'manage_shadow' },
+  { to: '/paper-trading', icon: Activity, label: '模拟盘', perm: 'manage_paper_trading' },
+  { to: '/profile', icon: User, label: '个人中心' },
+  { to: '/agents', icon: Bot, label: 'Agent', perm: 'manage_agents' },
   { to: '/datasources', icon: Database, label: '数据源', perm: 'manage_datasources' },
+  { to: '/notifications', icon: Bell, label: '通知' },
+  { to: '/alerts', icon: BellRing, label: '提醒' },
   { to: '/settings', icon: Settings, label: '设置' },
-  { to: '/help', icon: HelpCircle, label: '帮助' },
   { to: '/audit', icon: ShieldCheck, label: '审计', ownerOnly: true },
+  { to: '/help', icon: HelpCircle, label: '帮助' },
 ]
-// 桌面端导航按业务分组(2026-08-12): 行情 / 交易 / 系统, 13 项全部平铺显示, 不再 slice 截断
+// 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
+// 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
 const desktopNavGroups = [
-  { key: 'market', items: navItems.filter(n => ['/', '/portfolio', '/opportunities', '/forecast'].includes(n.to)) },
-  { key: 'trading', items: navItems.filter(n => ['/paper-trading', '/alerts', '/shadow'].includes(n.to)) },
-  { key: 'system', items: navItems.filter(n => ['/agents', '/reports', '/history', '/datasources', '/settings', '/help', '/audit'].includes(n.to)) },
+  { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
+  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast'].includes(n.to)) },
+  { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities'].includes(n.to)) },
+  { key: 'research', label: '投研', items: navItems.filter(n => ['/reports', '/history'].includes(n.to)) },
+  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/paper-trading', '/profile'].includes(n.to)) },
+  { key: 'system', label: '系统', items: navItems.filter(n => ['/agents', '/datasources', '/notifications', '/alerts', '/settings', '/audit', '/help'].includes(n.to)) },
 ]
 // 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/提醒(2026-08-13, 模拟盘移入"更多"下拉,
 // 不再用 slice(0,5) 依赖 navItems 顺序); navItems 数组顺序保持不动, 桌面端平铺分组完全不变
@@ -181,6 +188,7 @@ function App() {
   const location = useLocation()
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [selfCheckOpen, setSelfCheckOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [upgradeInfo, setUpgradeInfo] = useState<{ latest: string; url: string } | null>(null)
@@ -235,18 +243,7 @@ function App() {
   useHotkeys([
     {
       combo: 'mod+k',
-      handler: runOnDesktop(() => {
-        // 优先聚焦搜索框;当前无全局搜索框,先打开日志弹窗 LogsModal 作为占位,后续接搜索
-        const searchInput = document.querySelector<HTMLInputElement>(
-          'input[type="search"], input[data-search-input], input[placeholder*="搜索" i]',
-        )
-        if (searchInput) {
-          searchInput.focus()
-          searchInput.scrollIntoView({ block: 'center', behavior: 'smooth' })
-          return
-        }
-        setLogsOpen(true)
-      }),
+      handler: runOnDesktop(() => setSearchOpen(true)),
     },
     { combo: 'mod+,', handler: runOnDesktop(() => navigate('/settings')) },
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },
@@ -297,6 +294,7 @@ function App() {
                 return (
                 <Fragment key={group.key}>
                   {gi > 0 && <div className="w-px h-5 bg-border/50 mx-1 shrink-0" aria-hidden="true" />}
+                  <span className="text-[10px] font-medium text-muted-foreground/45 px-0.5 select-none shrink-0" title={group.label}>{group.label}</span>
                   {items.map(({ to, icon: Icon, label }) => {
                     const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
                     return (
@@ -453,6 +451,7 @@ function App() {
         </Suspense>
       </main>
       <ChatWidget />
+      <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
       <SelfCheckModal open={selfCheckOpen} onClose={() => setSelfCheckOpen(false)} />
       <Dialog open={upgradeOpen} onOpenChange={setUpgradeOpen}>
