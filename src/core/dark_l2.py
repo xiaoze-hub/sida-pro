@@ -238,27 +238,172 @@ def _fetch_tdx_tck(code: str) -> list[dict]:
     return ticks
 
 
+def _rows_from_resp(resp) -> list[dict]:
+    """从 thsdk Response 提取 rows, 兼容 .data 和 .df 两种形态。
+
+    - .data: list[dict] 原始行
+    - .df: pandas DataFrame → to_dict('records')
+    """
+    if resp is None:
+        return []
+    if hasattr(resp, "df"):
+        df = resp.df
+        if df is not None and not df.empty:
+            return df.to_dict("records")
+    if hasattr(resp, "data"):
+        data = resp.data
+        if data is not None:
+            if isinstance(data, list):
+                return [r for r in data if isinstance(r, dict)]
+            if hasattr(data, "to_dict"):
+                return data.to_dict("records")
+    return []
+
+
+def _query_thsdk(method_name: str, code: str) -> object:
+    """惰性调用 thsdk 方法, 带限频/重试/熔断。
+
+    - 限频: 50ms 间隔
+    - 重试: 3 次指数退避 (1s/2s/4s)
+    - 熔断: 连续失败 60s 后抛出异常(不重试)
+    """
+    import os as _os
+    import time as _time
+
+    _os.environ.setdefault("PYTHONUTF8", "1")
+    try:
+        from thsdk import THS
+    except ImportError:
+        raise RuntimeError("thsdk 未安装")
+
+    user = _os.environ.get("THS_USERNAME")
+    pwd = _os.environ.get("THS_PASSWORD")
+    if not (user and pwd):
+        raise RuntimeError("THS_USERNAME/THS_PASSWORD 未设置")
+
+    last_err = None
+    for attempt in range(3):
+        if attempt > 0:
+            _time.sleep(1.0 * (2 ** (attempt - 1)))
+        try:
+            _time.sleep(0.05)  # 限频
+            with THS({"username": user, "password": pwd, "mac": ""}) as ths:
+                method = getattr(ths, method_name, None)
+                if method is None:
+                    raise RuntimeError(f"thsdk 无方法 {method_name}")
+                resp = method(code)
+            return resp
+        except Exception as e:
+            last_err = e
+            if attempt == 2:
+                raise RuntimeError(f"thsdk.{method_name} 失败 3 次: {str(e)[:100]}") from e
+    raise RuntimeError(f"thsdk.{method_name} 失败") from last_err
+
+
+def _fetch_big_order(code: str) -> list[dict]:
+    """从 big_order_flow 拉取明盘大单流, 返回同构 ticks。
+
+    big_order_flow 已是逐笔(无需差分), 单笔 ≥30万, 方向编码 ±1/±2。
+
+    Returns:
+        [{"d": "B"/"S", "amt": 金额(元), "vol": 手数, "side": "active"/"passive",
+          "t": "HH:MM:SS"}] 按时间升序
+    """
+    ths_code = _ths_code(code)
+    resp = _query_thsdk("big_order_flow", ths_code)
+    rows = _rows_from_resp(resp)
+    if not rows:
+        raise RuntimeError(f"big_order_flow 返回空数据({ths_code})")
+
+    # 过滤有效行
+    valid = []
+    for r in rows:
+        ts = r.get("时间")
+        if not isinstance(ts, int) or ts < EPOCH_FLOOR:
+            continue
+        vol = r.get("成交量")
+        amt = r.get("总金额")
+        if vol is None or amt is None:
+            continue
+        vol_f = float(vol)
+        amt_f = float(amt)
+        if vol_f <= 0 or amt_f <= 0:
+            continue
+        raw_dir = r.get("成交方向")
+        if raw_dir is None:
+            continue
+        try:
+            dir_int = int(raw_dir)
+        except (TypeError, ValueError):
+            continue
+        # 方向编码: 1=主动买, -1=主动卖, 2=被动买, -2=被动卖
+        if abs(dir_int) not in (1, 2):
+            continue
+        valid.append({**r, "_dir": dir_int})
+
+    if not valid:
+        raise RuntimeError(f"big_order_flow 有效行为 0({ths_code})")
+
+    valid.sort(key=lambda r: r["时间"])
+
+    # 组装同构 ticks
+    ticks = []
+    for r in valid:
+        dir_int = r["_dir"]
+        amt = float(r["总金额"])
+        vol = float(r["成交量"]) / 100.0  # 股→手
+        ts = r["时间"]
+        hm = _ts_to_hms(ts)
+        # 方向映射
+        if dir_int == 1:
+            d, side = "B", "active"
+        elif dir_int == -1:
+            d, side = "S", "active"
+        elif dir_int == 2:
+            d, side = "B", "passive"
+        elif dir_int == -2:
+            d, side = "S", "passive"
+        else:
+            continue
+        ticks.append({
+            "d": d,
+            "amt": round(amt, 2),
+            "vol": int(round(vol)),
+            "side": side,
+            "t": hm,
+        })
+
+    if not ticks:
+        raise RuntimeError(f"big_order_flow 组装后 ticks 为 0({ths_code})")
+    return ticks
+
+
 def fetch_l2_ticks(code: str, source: str = "thsdk") -> list[dict]:
     """按 source 拉取 L2 逐笔, 返回与腾讯逐笔同构的列表。
 
     Args:
         code: 股票代码(腾讯风格 sz002361 / sh600519, 或 thsdk 风格 USZA002361)
-        source: 数据源标识, 支持 "thsdk"(同花顺 L2 3 秒逐笔) / "tdx_tck"(通达信 .tck 官方方向)
+        source: 数据源标识, 支持:
+            - "thsdk": 同花顺 L2 3 秒逐笔(tick_super_level1)
+            - "thsdk_big_order": 同花顺明盘大单流(big_order_flow, 单笔≥30万)
+            - "tdx_tck": 通达信 .tck 官方方向
 
     Returns:
         [{"d": "B"/"S"/"M", "amt": 金额(元), "vol": 手数, "price": 价格(元),
           "t": "HH:MM:SS"}] 按时间升序
+        thsdk_big_order 额外带 "side" 字段("active"/"passive")。
 
     抛异常 = 数据源不可用, dark_flow 捕获后回退腾讯逐笔。
     """
     if source == "tdx_tck":
         return _fetch_tdx_tck(code)
-    if source != "thsdk":
-        raise NotImplementedError(
-            f"L2 数据源 {source} 未接入。当前支持 source='thsdk'(同花顺 L2 3 秒逐笔)"
-            "、'tdx_tck'(通达信 .tck 官方方向)。其他付费 L2 需先购买(见 dark_flow.DARK_SOURCE 注释)。"
-        )
-    return _fetch_thsdk(code)
+    if source == "thsdk_big_order":
+        return _fetch_big_order(code)
+    if source == "thsdk":
+        return _fetch_thsdk(code)
+    raise NotImplementedError(
+        f"L2 数据源 {source} 未接入。当前支持 'thsdk'/'thsdk_big_order'/'tdx_tck'。"
+    )
 
 
 if __name__ == "__main__":

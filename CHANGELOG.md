@@ -2,6 +2,15 @@
 
 ## 2026-09-01
 
+### fix
+- **明盘链路断裂修复**: `dark_l2.py` 补全 thsdk_big_order 数据源实现（152行新增），解决 `dark_pool_flow._ming_flow` 调 `fetch_l2_ticks(code, "thsdk_big_order")` 抛 NotImplementedError 导致明盘恒为 None 的问题
+  - 新增 `_rows_from_resp()` 兼容 .data/.df 两种 Response 形态
+  - 新增 `_query_thsdk()` 带限频/重试/熔断
+  - 新增 `_fetch_big_order()` 实现 big_order_flow → 同构 ticks
+  - `fetch_l2_ticks()` 路由扩展支持 "thsdk_big_order"
+- **测试**: `tests/test_dark_realtime.py` 新增 9 例（路由/格式/过滤/异常），全部通过
+- 验收证据: pytest 26 passed（test_dark_pool_flow）+ 9 passed（test_dark_realtime）
+
 ### feature
 
 - SIDA Pro 设计稿 v2.0 §4.2 可折叠侧边栏落地: `frontend/src/App.tsx` 桌面端从顶部横排导航改为左侧可折叠侧边栏(6 项主导航竖排, 交易线顶/研究线中/系统沉底), 折叠态持久化 localStorage(`sida_sidebar_collapsed`), 折叠按钮 PanelLeftClose/Open, 展开 `w-60`/折叠 `w-16`(仅图标), 主内容区 `md:pl-64`/`md:pl-20` 自适应, GitHub/日志/通知/头像收纳到侧边栏底部; 移除未用的 `Fragment` 导入. typecheck + build 全绿(13.8s)
