@@ -1426,3 +1426,29 @@ class MarketScanRank(Base):
         UniqueConstraint("snapshot_date", "stock_market", name="uq_market_scan_rank_date_market"),
         Index("ix_market_scan_rank_date", "snapshot_date"),
     )
+
+
+class SignalSummaryDaily(Base):
+    """今日系统信号摘要快照(设计稿 §7.3, 2026-09-01)。
+
+    盘后 cron 预生成, 对话热路径只读 text 纯文本注入 system message(毫秒级)。
+      - blocks: 5 块结构化数据(情绪周期/市场主线/三榜/涨停复盘/指数资金),
+                每块带 data_status: ok | missing | partial
+      - text:   渲染后的纯文本摘要(≤800 字), 直接 append 进 _build_ai_messages
+    """
+
+    __tablename__ = "signal_summary_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_date", "stock_market", name="uq_signal_summary_day_market"
+        ),
+        Index("ix_signal_summary_day", "snapshot_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
+    stock_market = Column(String, nullable=False, default="CN")
+    blocks = Column(JSON, default={})  # 5 块结构化数据(含 data_status)
+    text = Column(Text, default="")    # 渲染后纯文本摘要(≤800 字)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -52,6 +52,19 @@ class ReportScheduler:
                 except Exception as e:  # noqa: BLE001
                     logger.exception("[报告] 盘后三榜扫描异常: %s", e)
 
+                # 三榜落库后, 聚合 5 块信号 → 渲染 text → 落库 signal_summary_daily
+                # (设计稿 §7.3「被动注入」, 2026-09-01 接线)。依赖三榜快照, 故在其后。
+                try:
+                    from src.core.signal_summary import run_signal_summary_job
+
+                    summary_res = await asyncio.to_thread(run_signal_summary_job)
+                    logger.info(
+                        "[报告] 系统信号摘要: %s",
+                        summary_res if summary_res.get("ok") else summary_res.get("error", "跳过"),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("[报告] 系统信号摘要异常: %s", e)
+
             result = await asyncio.to_thread(
                 _generate_once_in_worker, report_type
             )

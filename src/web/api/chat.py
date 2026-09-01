@@ -1897,6 +1897,17 @@ async def _build_ai_messages(
     if shadow_profile_block:
         system_content += "\n\n--- 用户交易风格画像 ---\n" + shadow_profile_block
 
+    # 今日系统信号摘要(设计稿 §7.3「被动注入」, 盘后 cron 预生成, 读快照纯文本)
+    # 无快照(早盘/未生成) → 不注入, 完全向后兼容; 数据缺失由块内 data_status 表达
+    try:
+        from src.core.signal_summary import read_latest_summary_text
+
+        summary_text = read_latest_summary_text(db)
+        if summary_text:
+            system_content += "\n\n" + summary_text
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[chat] 系统信号摘要注入失败(静默降级): %s", e)
+
     # 前端页面快照（对话创建时传入）
     if conv.initial_context:
         system_content += "\n\n--- 用户页面快照（对话创建时） ---\n" + conv.initial_context
