@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   createChart,
   CandlestickSeries,
+  HistogramSeries,
   createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
@@ -28,9 +29,19 @@ import { fetchAPI } from '@panwatch/api'
 import {
   KIND_ICON,
   KIND_LABEL,
+  type KlineEventKind,
   type KlineEventPoint,
   type KlinePriceLine,
 } from '../klineEvents'
+
+/** 资金柱数据(对接后端 fund_flow 字段). 红涨绿跌 + 主净分色. */
+export interface FundFlowBar {
+  date: string
+  /** 明盘净额 (东财大单/特大单, 元) */
+  open_net?: number | null
+  /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
+  dark_net?: number | null
+}
 
 // 与 InteractiveKline.tsx 顶层类型对齐, 暂时不耦合 (改 one-side 即可)
 export interface KlineItem {
@@ -76,11 +87,18 @@ export default function KlineChart(props: {
   events?: KlineEventPoint[]
   /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
   supportPressure?: KlinePriceLine[]
+  /** 资金柱 (阶段三: 红涨绿跌 + 主净分色) */
+  fundFlow?: FundFlowBar[]
+  /** 阶段三: 事件种类显隐过滤 (默认全部 true). 设 false 该 kind 不渲染 marker */
+  kindsVisible?: Partial<Record<KlineEventKind, boolean>>
+  /** 阶段三: 支撑/压力位显隐过滤 */
+  priceLinesVisible?: { support?: boolean; pressure?: boolean }
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markerPluginsRef = useRef<ReturnType<typeof createSeriesMarkers<Time>>[]>([])
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
@@ -124,8 +142,17 @@ export default function KlineChart(props: {
       wickUpColor: '#ef4444',
       wickDownColor: '#22c55e',
     })
+    // 资金柱(阶段三): 与 K 线同 scale，叠加在K线下方 30% 高度
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+    })
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.7, bottom: 0 },
+    })
     chartRef.current = chart
     seriesRef.current = series
+    volumeSeriesRef.current = volumeSeries
 
     // 容器尺寸自适应
     const observer = new ResizeObserver((entries) => {
@@ -182,28 +209,33 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, interval, props.initialDays])
 
-  // ── L4 事件 markers + 支撑压力位 price lines (阶段二: 接标准化层) ──
+  // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
     const chart = chartRef.current
     const series = seriesRef.current
     if (!chart || !series) return
 
-    // 1) L4 事件 markers (v5 用 createSeriesMarkers plugin)
-    const markers = (props.events || []).map((ev) => ({
-      time: toChartTime(ev.date, interval),
-      position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
-      color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
-      shape: 'circle' as const,
-      text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
-    }))
+    // 1) L4 事件 markers (v5 用 createSeriesMarkers plugin + kindsVisible 过滤)
+    const visible = props.kindsVisible || {}
+    const markers = (props.events || [])
+      .filter((ev) => visible[ev.kind] !== false)
+      .map((ev) => ({
+        time: toChartTime(ev.date, interval),
+        position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
+        color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
+        shape: 'circle' as const,
+        text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
+      }))
     if (markers.length) {
       const markersPlugin = createSeriesMarkers(series, markers)
-      // 存储引用以便清理
       markerPluginsRef.current.push(markersPlugin)
     }
 
-    // 2) 支撑压力位 (水平线)
+    // 2) 支撑压力位 (水平虚线 + priceLinesVisible 过滤)
+    const plv = props.priceLinesVisible || {}
     for (const line of props.supportPressure || []) {
+      if (line.kind === 'support' && plv.support === false) continue
+      if (line.kind === 'pressure' && plv.pressure === false) continue
       series.createPriceLine({
         price: line.price,
         color: line.kind === 'pressure' ? '#ef4444' : '#22c55e',
@@ -213,7 +245,26 @@ export default function KlineChart(props: {
         title: line.label || line.kind,
       })
     }
-  }, [props.events, props.supportPressure, interval])
+
+    // 3) 资金柱 (阶段三): 红涨绿跌 + 主净分色叠加在 K 线下方
+    const volSeries = volumeSeriesRef.current
+    if (volSeries && props.fundFlow && props.fundFlow.length > 0) {
+      const histData = props.fundFlow.map((bar) => {
+        const open = bar.open_net ?? 0
+        const dark = bar.dark_net ?? 0
+        const net = open + dark
+        // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色
+        let color = '#475569' // 无数据: 灰
+        if (dark !== null && dark !== undefined && dark !== 0) {
+          color = dark > 0 ? '#dc2626' : '#16a34a' // 主净正红/主净负绿(更深, 突出主力意图)
+        } else if (open !== null && open !== undefined && open !== 0) {
+          color = open > 0 ? '#f87171' : '#4ade80' // 仅明盘: 浅红/浅绿
+        }
+        return { time: toChartTime(bar.date, interval), value: net, color }
+      })
+      volSeries.setData(histData)
+    }
+  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time
