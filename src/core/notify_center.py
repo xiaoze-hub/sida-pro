@@ -1,15 +1,20 @@
-"""站内消息中心 + 外发推送联动。
+"""通知中心 + 外发推送联动。
 
 设计要点(踩坑固化):
 - 站内写入永远不能因为外发失败而丢失 → 先落库, 再推送, 推送结果回写 push_status。
 - 后台线程调用 → 自带 session 生命周期, 不复用请求 session。
 - 无渠道不是错误, 是 push_status='skipped'(站内仍可见), 避免"沉默失败"。
+
+v0.4.36 (P0 派活 1):
+- 落库后通过 WS Hub 实时推送 (push_notification → _after_push_hook → broadcast_notification + incr_unread)
+- 多用户隔离: WS 按 user_id 分发; 未读计数按 user_id 隔离
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time as _time_module
 
 from src.web.database import SessionLocal
 from src.web.models import Notification, NotifyChannel, User
@@ -100,7 +105,7 @@ def push_notification(
         db.add(n)
         db.commit()
         db.refresh(n)
-        nid = n.id
+        nid = int(n.id)  # type: ignore[arg-type]
     except Exception as e:
         logger.exception("[通知中心] 站内写入失败: %s", e)
         db.rollback()
@@ -115,6 +120,7 @@ def push_notification(
     do_push = also_push if also_push is not None else (level in _PUSH_LEVELS)
     if not do_push:
         _set_push_status(nid, "skipped", "级别不外发")
+        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
         return nid
 
     mgr, channel_records = _build_notifier(user_id=user_id)
@@ -130,6 +136,7 @@ def push_notification(
         else:
             # 显式状态, 不静默 —— 前端能看到"站内已记录, 未配置外发渠道"
             _set_push_status(nid, "skipped", "未配置通知渠道", channels=[])
+        _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
         return nid
 
     try:
@@ -148,7 +155,51 @@ def push_notification(
     except Exception as e:
         logger.warning("[通知中心] 外发失败: %s", e)
         _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))
+    _after_push_hook(user_id, category, level, title, body, link, source, trace_id, nid)
     return nid
+
+
+def _after_push_hook(
+    user_id: str | None,
+    category: str,
+    level: str,
+    title: str,
+    body: str,
+    link: str,
+    source: str,
+    trace_id: str,
+    nid: int | None,
+) -> None:
+    """v0.4.36: 落库后通过 WS Hub 实时推送 + 累加未读.
+
+    WS Hub 不可用时静默, 通知中心仍可走轮询拉取 (api/notifications).
+    """
+    if nid is None:
+        return
+    try:
+        from src.web.notifications.ws_hub import (
+            broadcast_notification,
+            incr_unread,
+        )
+        payload = {
+            "type": "event",
+            "id": int(nid),
+            "category": category,
+            "level": level,
+            "title": title[:200],
+            "body": (body or "")[:4000],
+            "link": link,
+            "source": source,
+            "trace_id": trace_id,
+            "ts": int(_time_module.time()),
+        }
+        # 广播给该用户的 WS 连接 (按 category 订阅过滤)
+        broadcast_notification(user_id, payload, category=category)
+        # 累加未读 (站内公告不入未读)
+        if user_id:
+            incr_unread(user_id, 1)
+    except Exception as e:
+        logger.debug("[通知中心] WS Hub 钩子失败 (不影响主流程): %s", e)
 
 
 async def push_notification_async(title: str, body: str = "", **kw) -> int | None:
@@ -156,7 +207,7 @@ async def push_notification_async(title: str, body: str = "", **kw) -> int | Non
     return await asyncio.to_thread(push_notification, title, body, **kw)
 
 
-async def _async_push(nid: int, mgr, title: str, body: str, channel_records: list[dict]) -> None:
+async def _async_push(nid: int | None, mgr, title: str, body: str, channel_records: list[dict]) -> None:
     try:
         result = await mgr.notify_with_result(title, body)
         final_channels = _finalize_channel_records(channel_records, result)
@@ -219,7 +270,7 @@ def _push_result_status(result: dict, channels: list[dict]) -> tuple[str, str]:
     return "failed", error[:400]
 
 
-def _set_push_status(nid: int, status: str, err: str = "", *, channels: list[dict] | None = None) -> None:
+def _set_push_status(nid: int | None, status: str, err: str = "", *, channels: list[dict] | None = None) -> None:
     if not nid:
         return
     db = SessionLocal()

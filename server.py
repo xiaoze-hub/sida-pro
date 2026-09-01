@@ -1802,6 +1802,13 @@ async def lifespan(app):
     if _leader_ok:
         global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, kline_backfill_scheduler, _kline_oneoff_loop
         _kline_oneoff_loop = asyncio.get_running_loop()  # 跨线程调度用
+        # v0.4.36 P0 派活 1: WS Hub 绑定到 running loop (broadcast 跨线程投递用)
+        try:
+            from src.web.notifications.ws_hub import attach_event_loop, install_pubsub_listener
+            attach_event_loop(_kline_oneoff_loop)
+            install_pubsub_listener()
+        except Exception as e:
+            logger.warning(f"[WS-Hub] 启动绑定失败(降级运行): {e}")
         scheduler = build_scheduler()
         scheduler.start()
         logger.info("Agent 调度器已启动")
@@ -1921,6 +1928,12 @@ async def lifespan(app):
         logger.info("SIDA 报告调度器已关闭")
     if kline_backfill_scheduler:
         kline_backfill_scheduler.shutdown()
+    # v0.4.36 P0 派活 1: WS Hub 解绑 loop
+    try:
+        from src.web.notifications.ws_hub import attach_event_loop
+        attach_event_loop(None)
+    except Exception:
+        pass
 
 
 # 模块级 app 实例，供 uvicorn reload 使用

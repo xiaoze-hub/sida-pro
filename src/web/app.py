@@ -293,6 +293,10 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 from src.web.api.ws_quotes import router as ws_quotes_router
 
 app.include_router(ws_quotes_router, prefix="/api", tags=["quotes-ws"])
+# 通知 WebSocket (v0.4.36 P0 派活 1): 实时推送 + 未读小红点
+from src.web.api.ws_notifications import router as ws_notif_router
+
+app.include_router(ws_notif_router, prefix="/api", tags=["notif-ws"])
 # 市场指数（公共数据，无需登录）
 app.include_router(market.router, prefix="/api/market", tags=["market"])
 # TradingView Alert Webhook(2026-08-12): 免登录, secret 鉴权
