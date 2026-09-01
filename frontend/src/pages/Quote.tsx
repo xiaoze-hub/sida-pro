@@ -145,6 +145,13 @@ export default function QuotePage() {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState('')
 
+  // v2.1 §10: K线大图 → 右栏资金面板的双向联动状态
+  // - selectedRange: 用户在 K 线上拖拽选段(从 to 拖到 from) → 反查该时间窗内资金聚合
+  // - hoveredDate:   十字光标移到某天 → 高亮该日 row
+  // 两者都 null 表示"未交互, 用全量数据"。
+  const [selectedRange, setSelectedRange] = useState<{ from: string; to: string } | null>(null)
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null)
+
   useEffect(() => { setInput(symbol) }, [symbol])
 
   // summary 一次拉取供三个 Tab 复用: 资金(fund_flow) / 事件(events) /
@@ -286,6 +293,9 @@ export default function QuotePage() {
               // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
               events={normEvents}
               supportPressure={normPriceLines}
+              // v2.1 §10: K线选段 + 十字光标 → 右栏资金面板联动
+              onRangeSelect={setSelectedRange}
+              onCrosshairMove={(p) => setHoveredDate(p?.time ? p.time.slice(0, 10) : null)}
             />
           )
         )}
@@ -301,7 +311,7 @@ export default function QuotePage() {
         )}
 
         {activeTab === 'fund' && (
-          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" />
+          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" selectedRange={selectedRange} hoveredDate={hoveredDate} />
         )}
 
         {activeTab === 'events' && (
@@ -321,7 +331,7 @@ export default function QuotePage() {
 
 /** 资金 Tab: 明盘/暗盘净额(万元) + 主力意图 */
 function FundPanel({
-  loading, error, rows, intent, source, symbol, market,
+  loading, error, rows, intent, source, symbol, market, selectedRange, hoveredDate,
 }: {
   loading: boolean
   error: string
@@ -331,12 +341,28 @@ function FundPanel({
   source?: 'holdings' | 'watchlist' | 'opportunities' | null
   symbol: string
   market: string
+  // v2.1 §10: 联动状态(K线选段 / 十字光标)
+  selectedRange?: { from: string; to: string } | null
+  hoveredDate?: string | null
 }) {
   if (loading) return <PanelLoading text="加载资金流…" />
   if (error) return <PanelError text={error} />
   if (!rows || rows.length === 0) return <PanelEmpty text="暂无资金流数据(接口无数据, 不编造)" />
 
-  const recent = rows.slice(-20).reverse()
+  // v2.1 §10: 区间聚合 / 十字光标行高亮
+  // 注意: FundFlowRow.date 是 YYYY-MM-DD, KlineChart 给的 from/to 也是 YYYY-MM-DD(由 onCrosshairMove/.slice(0,10) 保证)
+  // 两者字符序可直接字典序比较, 不用 Date 解析。
+  const inRange = (date: string) => {
+    if (!selectedRange) return true
+    return date >= selectedRange.from && date <= selectedRange.to
+  }
+  const rangeRows = rows.filter((r) => inRange(r.date))
+  const rangeMing = rangeRows.reduce((s, r) => s + (r.ming_net ?? 0), 0)
+  const rangeDark = rangeRows.reduce((s, r) => s + (r.dark_net ?? 0), 0)
+  // 不空就标 range 摘要("区间: 明盘 +x.x万, 暗盘 -y.y万")
+  const showRangeSummary = !!selectedRange && rangeRows.length > 0
+
+  const recent = rangeRows.slice(-20).reverse()
   return (
     <div className="space-y-3">
       {/* v2.1 §13 持仓上下文卡: 持仓/自选/机会跳过来时显示, 无 source → 不渲染. */}
@@ -350,6 +376,24 @@ function FundPanel({
         </div>
       )}
       <div className="card overflow-hidden">
+        {/* v2.1 §10: K线选段时间窗 → 资金面板区间聚合摘要 */}
+        {showRangeSummary && (
+          <div
+            data-testid="fund-range-summary"
+            className="border-b border-border/40 bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground"
+          >
+            区间 <span className="font-mono">{selectedRange!.from}</span> ~{' '}
+            <span className="font-mono">{selectedRange!.to}</span> ({rangeRows.length} 条):
+            明盘净额{' '}
+            <span className={rangeMing > 0 ? 'text-rose-500' : rangeMing < 0 ? 'text-emerald-500' : ''}>
+              {toWan(rangeMing)}
+            </span>
+            {' · '}暗盘净额{' '}
+            <span className={rangeDark > 0 ? 'text-rose-500' : rangeDark < 0 ? 'text-emerald-500' : ''}>
+              {toWan(rangeDark)}
+            </span>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-[12px]">
             <thead>
@@ -360,17 +404,24 @@ function FundPanel({
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {recent.map((r) => (
-                <tr key={r.date} className="hover:bg-accent/20">
-                  <td className="px-3 py-2 font-mono text-muted-foreground">{r.date.slice(0, 10)}</td>
-                  <td className={`px-3 py-2 text-right font-mono ${(r.ming_net ?? 0) > 0 ? 'text-rose-500' : (r.ming_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
-                    {toWan(r.ming_net)}
-                  </td>
-                  <td className={`px-3 py-2 text-right font-mono ${(r.dark_net ?? 0) > 0 ? 'text-rose-500' : (r.dark_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
-                    {toWan(r.dark_net)}
-                  </td>
-                </tr>
-              ))}
+              {recent.map((r) => {
+                // v2.1 §10: 十字光标移到该日 → 行加亮
+                const isHover = hoveredDate != null && r.date.slice(0, 10) === hoveredDate
+                return (
+                  <tr
+                    key={r.date}
+                    className={`hover:bg-accent/20 ${isHover ? 'bg-accent/40 ring-1 ring-inset ring-primary/40' : ''}`}
+                  >
+                    <td className="px-3 py-2 font-mono text-muted-foreground">{r.date.slice(0, 10)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${(r.ming_net ?? 0) > 0 ? 'text-rose-500' : (r.ming_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
+                      {toWan(r.ming_net)}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-mono ${(r.dark_net ?? 0) > 0 ? 'text-rose-500' : (r.dark_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
+                      {toWan(r.dark_net)}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

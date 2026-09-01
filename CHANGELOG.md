@@ -5,6 +5,7 @@
 ### feature
 
 - **v2.1 §11.5 通知送达回执**(端点 + 时间戳落库 + 测试)。`src/core/notifier.py` 每渠道独立记录 `delivered_at`(成功)/`failed_at`(失败) ISO 时间戳。`src/web/api/notifications.py` 新增 `GET /api/notifications/{nid}/status` 端点: 返回 `push_status`(pending/sent/failed/skipped)+ `channels[]` 每渠道独立状态 + `delivered_at`(首个成功渠道时间)+ `created_at`。`tests/test_notification_status.py` 5 例 (单通知状态、404、未授权用户 404、delivered_at 取首个成功、无成功渠道时 None)。验收硬约束: 409/500 防账号探测;返回字段不含 payload;S5 归属校验 (user_id 隔离, 仅看本人 nid)。
+- **v2.1 §10 K线大图 → 右栏资金面板联动**（完成 §10 半成品）。`frontend/src/pages/Quote.tsx` 接 KlineChart 两个 props：`onRangeSelect` → 选段时间窗 `selectedRange: {from,to}` → FundPanel 过滤 rows + 区间聚合摘要（明盘/暗盘净额累计）+ 表格只显区间内 row；`onCrosshairMove` → `hoveredDate` → FundPanel 行高亮（背景色 + 蓝色 ring）。日期维度都是 YYYY-MM-DD 字符串可直接字典序比较，无需 Date 解析。Quote.tsx 不需要新依赖（无新 npm）。`pnpm tsc -b` 0 错 + `pnpm build` 15.01s 全绿。
 
 ### fix
 
