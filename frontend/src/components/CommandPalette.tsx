@@ -36,7 +36,8 @@ const PAGE_COMMANDS: PageCommand[] = [
   // §4.3: 指向收纳后的新地址(带 ?tab= 直达对应页签)
   { to: '/system?tab=agents', label: 'Agent 管理', group: '系统' },
   { to: '/system?tab=datasources', label: '数据源', group: '系统' },
-  { to: '/notifications', label: '通知中心', group: '系统' },
+  { to: '/notifications?tab=notifications', label: '通知中心', group: '系统' },
+  { to: '/notifications?tab=alerts', label: '价格提醒', group: '系统' },
   { to: '/settings?tab=settings', label: '设置', group: '系统' },
   { to: '/settings?tab=audit', label: '日志审计', group: '系统' },
   { to: '/settings?tab=help', label: '帮助 · 快捷键', group: '系统' },
