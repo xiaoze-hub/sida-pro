@@ -2,6 +2,10 @@
 
 ## 2026-09-01
 
+### feature
+
+- **v0.4.35 生产部署同步**: 同步 git HEAD `2199f07` + `f50c40a` + `45b2914` 到生产小主机(本轮完整覆盖 v2.1 设计稿 4 个补丁章前的全部交付), 含: 设计稿 v2.0 §4.2 可折叠侧边栏(6项主导航) / §4.4 Ctrl+K 全局搜索 / §4.3 行情三合一(Quote.tsx)/ §4.3 设置/审计/帮助 Tab 收纳 / §4.3 系统 Agent/数据源 Tab 收纳 / 设计稿 v2.0 第三章 .img 链路接通(orderbook_engine 五函数)/ 设计稿 v2.0 第七章 2 工具补实(get_dark_flow_precise/get_order_book_queue). 前端 typecheck 0 error + pnpm build 13.7s 全绿; 后端 1342 passed + 57 例新增单测全绿; 推 tag v0.4.35 触发 GitHub Actions ACR 重建
+
 ### fix
 - **明盘链路断裂修复**: `dark_l2.py` 补全 thsdk_big_order 数据源实现（152行新增），解决 `dark_pool_flow._ming_flow` 调 `fetch_l2_ticks(code, "thsdk_big_order")` 抛 NotImplementedError 导致明盘恒为 None 的问题
   - 新增 `_rows_from_resp()` 兼容 .data/.df 两种 Response 形态
