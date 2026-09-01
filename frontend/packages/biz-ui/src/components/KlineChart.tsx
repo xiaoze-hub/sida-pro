@@ -1,0 +1,219 @@
+/**
+ * KlineChart.tsx (v0.4.40 P1 派活) — Lightweight Charts v5 渲染 K 线.
+ *
+ * 阶段一 (本版本): 蜡烛 + 十字光标 + 滚轮缩放 + 时间区间切换 (1d/1m/1w/5m/15m/30m/60m/d/w/m).
+ * 阶段二 (v0.4.41): 接 MA60/牛马线/GS 买卖点.
+ * 阶段三 (v0.4.42): 接资金柱 + L4 事件标注 + 4 开关.
+ *
+ * 设计要点:
+ *   - 旧 InteractiveKline.tsx (自研 SVG) **保留兼容路径**, Quote.tsx 不切换, 等阶段二/三验证完再切.
+ *   - 不 import 任何图表组件以外的具体实现; 仅消费: KlineItem + KlinesResponse + initialLayers 状态.
+ *   - 时间格式: lightweight-charts 要求 YYYY-MM-DD 字符串 (日 K) 或 unix timestamp (分钟级).
+ *     按 interval 切换: 日/周/月用 YYYY-MM-DD, 分钟级用 unix time.
+ *   - 缺失数据: KlineItem 为空数组时显示"无数据"占位 (业务硬约束: 禁止编造数字).
+ */
+
+import { useEffect, useRef, useState } from 'react'
+import {
+  createChart,
+  CandlestickSeries,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from 'lightweight-charts'
+
+import { fetchAPI } from '@panwatch/api'
+
+// 与 InteractiveKline.tsx 顶层类型对齐, 暂时不耦合 (改 one-side 即可)
+export interface KlineItem {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume?: number
+  turnover?: number
+}
+
+export interface KlinesResponse {
+  klines: KlineItem[]
+  source?: string
+}
+
+export type KlineInterval = '1m' | '5m' | '15m' | '30m' | '60m' | '1d' | '1w' | '1mth'
+
+const INTERVAL_OPTIONS: Array<{ key: KlineInterval; label: string }> = [
+  { key: '1m', label: '1分' },
+  { key: '5m', label: '5分' },
+  { key: '15m', label: '15分' },
+  { key: '30m', label: '30分' },
+  { key: '60m', label: '60分' },
+  { key: '1d', label: '日K' },
+  { key: '1w', label: '周K' },
+  { key: '1mth', label: '月K' },
+]
+
+const DAY_BUCKETS: KlineInterval[] = ['1d', '1w', '1mth']
+
+export default function KlineChart(props: {
+  symbol: string
+  market: string
+  /** 初始周期; 切换后写回 (留给父组件保存 URL 用) */
+  initialInterval?: KlineInterval
+  /** 初始回看天数; 默认 120 */
+  initialDays?: number
+  /** 容器高度; 默认 360 */
+  height?: number
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>('')
+  const [dataLen, setDataLen] = useState(0)
+
+  // ── Lightweight Charts 实例化 ─────────────────────────────
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const chart = createChart(container, {
+      layout: {
+        background: { color: '#0f172a' },
+        textColor: '#cbd5e1',
+      },
+      width: container.clientWidth,
+      height: props.height ?? 360,
+      grid: {
+        vertLines: { color: '#1e293b' },
+        horzLines: { color: '#1e293b' },
+      },
+      timeScale: {
+        timeVisible: !DAY_BUCKETS.includes(interval),
+        secondsVisible: false,
+        borderColor: '#334155',
+      },
+      rightPriceScale: {
+        borderColor: '#334155',
+      },
+      crosshair: {
+        mode: 1, // magnet
+        vertLine: { color: '#64748b', width: 1, style: 3, labelBackgroundColor: '#1e293b' },
+        horzLine: { color: '#64748b', width: 1, style: 3, labelBackgroundColor: '#1e293b' },
+      },
+    })
+
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#ef4444',
+      downColor: '#22c55e',
+      borderVisible: false,
+      wickUpColor: '#ef4444',
+      wickDownColor: '#22c55e',
+    })
+    chartRef.current = chart
+    seriesRef.current = series
+
+    // 容器尺寸自适应
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry && chart) {
+        chart.applyOptions({ width: entry.contentRect.width })
+      }
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+      chart.remove()
+      chartRef.current = null
+      seriesRef.current = null
+    }
+  }, [props.height])
+
+  // ── 拉数据并 setData ──────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const days = props.initialDays ?? 120
+        const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}`
+        const res = await fetchAPI<KlinesResponse>(query)
+        if (cancelled) return
+        const kl = res.klines || []
+        const data = kl.map((it: KlineItem) => ({
+          time: toChartTime(it.date, interval),
+          open: it.open,
+          high: it.high,
+          low: it.low,
+          close: it.close,
+        }))
+        seriesRef.current?.setData(data)
+        chartRef.current?.timeScale().fitContent()
+        setDataLen(kl.length)
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : '加载K线失败')
+          setDataLen(0)
+          seriesRef.current?.setData([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [props.symbol, props.market, interval, props.initialDays])
+
+  // ── 时间格式转换 ──────────────────────────────────────────
+  // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time
+  function toChartTime(date: string, intv: KlineInterval): Time {
+    if (DAY_BUCKETS.includes(intv)) {
+      // 兼容 "2026-09-01" / "2026-09-01T00:00:00" → 截断到日
+      return date.substring(0, 10) as Time
+    }
+    // 分钟级: 兼容 ISO 时间或 YYYY-MM-DD HH:MM:SS
+    const t = new Date(date.replace(' ', 'T')).getTime() / 1000
+    return (Number.isFinite(t) ? t : 0) as Time
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* 周期切换器 */}
+      <div className="flex items-center gap-1 flex-wrap">
+        {INTERVAL_OPTIONS.map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => setInterval(opt.key)}
+            className={`pxpx-2 py-1 text-xs rounded ${
+              interval === opt.key
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+        <span className="ml-2 text-[11px] text-muted-foreground">
+          {loading
+            ? '加载中…'
+            : error
+              ? `错误: ${error}`
+              : dataLen > 0
+                ? `${dataLen} 根K线`
+                : '无数据'}
+        </span>
+      </div>
+      {/* 图表容器 */}
+      <div
+        ref={containerRef}
+        className="w-full rounded border border-border/30"
+        style={{ minHeight: props.height ?? 360 }}
+      />
+    </div>
+  )
+}
