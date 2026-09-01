@@ -270,6 +270,9 @@ def get_datasource(source_id: int, db: Session = Depends(get_db)):
 @router.post("")
 def create_datasource(data: DataSourceCreate, db: Session = Depends(get_db)):
     """创建数据源"""
+    # v2.1 §11 补丁(2026-09-01): P0-B 自愈一致性 — update/delete/create 也补列防御,
+    # 老库即使缺 5 健康列, 任何 ORM 操作也绝不 500(归 get 操作之后, 留作一致性兜底)
+    _ensure_health_columns(db)
     source = DataSource(
         name=data.name,
         type=data.type,
@@ -292,6 +295,7 @@ def update_datasource(
     source_id: int, data: DataSourceUpdate, db: Session = Depends(get_db)
 ):
     """更新数据源"""
+    _ensure_health_columns(db)
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -308,6 +312,7 @@ def update_datasource(
 @router.delete("/{source_id}")
 def delete_datasource(source_id: int, db: Session = Depends(get_db)):
     """删除数据源"""
+    _ensure_health_columns(db)
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
