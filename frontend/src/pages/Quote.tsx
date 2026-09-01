@@ -106,6 +106,26 @@ interface SummaryResp {
   }>
   orderbook?: OrderbookInfo | null
   main_intent?: string | null
+  // v2.0 §6.2 + A4 派活(2026-09-01 接入 summary): 委托号级拆单簇暗盘
+  // available=false 时不渲染区块(§12 兜底规范,不编造)
+  dark_clusters?: {
+    available: boolean
+    note?: string
+    /** 拆单簇暗盘净额(元) */
+    dark_net?: number | null
+    dark_buy?: number | null
+    dark_sell?: number | null
+    /** 拆单簇识别出的簇数量 */
+    cluster_count?: number
+    /** 明盘(单笔>30万)净额(元) */
+    ming_net?: number | null
+    /** 明+暗主力净额(元) */
+    main_net?: number | null
+    /** 撤单率(0~1) */
+    cancel_rate?: number | null
+    /** 主笔级 active/passive 比 */
+    active_passive_ratio?: number | null
+  } | null
   unlock_levels?: Array<{
     price?: number | null
     kind?: string | null
@@ -311,7 +331,7 @@ export default function QuotePage() {
         )}
 
         {activeTab === 'fund' && (
-          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" selectedRange={selectedRange} hoveredDate={hoveredDate} />
+          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" selectedRange={selectedRange} hoveredDate={hoveredDate} darkClusters={summary?.dark_clusters} />
         )}
 
         {activeTab === 'events' && (
@@ -331,7 +351,7 @@ export default function QuotePage() {
 
 /** 资金 Tab: 明盘/暗盘净额(万元) + 主力意图 */
 function FundPanel({
-  loading, error, rows, intent, source, symbol, market, selectedRange, hoveredDate,
+  loading, error, rows, intent, source, symbol, market, selectedRange, hoveredDate, darkClusters,
 }: {
   loading: boolean
   error: string
@@ -344,6 +364,19 @@ function FundPanel({
   // v2.1 §10: 联动状态(K线选段 / 十字光标)
   selectedRange?: { from: string; to: string } | null
   hoveredDate?: string | null
+  // v2.0 §6.2 + A4 派活(2026-09-01): 委托号级暗盘拆单簇(暗盘为主/还原为辅 双口径)
+  darkClusters?: {
+    available: boolean
+    note?: string
+    dark_net?: number | null
+    dark_buy?: number | null
+    dark_sell?: number | null
+    cluster_count?: number
+    ming_net?: number | null
+    main_net?: number | null
+    cancel_rate?: number | null
+    active_passive_ratio?: number | null
+  } | null
 }) {
   if (loading) return <PanelLoading text="加载资金流…" />
   if (error) return <PanelError text={error} />
@@ -373,6 +406,56 @@ function FundPanel({
         <div className="card p-4">
           <div className="text-[12px] font-medium text-foreground">主力意图</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed text-muted-foreground">{intent}</p>
+        </div>
+      )}
+      {/* v2.0 §6.2 + A4 派活(2026-09-01): 委托号级拆单簇暗盘 — 暗盘为主/还原为辅 双口径
+          (用户拍板口径: 主显 dark_clusters.main_net = 明+暗合并; 副显主笔级 active/passive)
+          available=false → 不渲染区块(§12 兜底规范,不编造) */}
+      {darkClusters?.available && (
+        <div className="card p-4" data-testid="fund-dark-clusters">
+          <div className="flex items-center justify-between">
+            <div className="text-[12px] font-medium text-foreground">暗盘拆单簇(委托号级)</div>
+            <span className="rounded bg-accent/50 px-2 py-0.5 text-[10px] text-muted-foreground">
+              {darkClusters.cluster_count ?? 0} 个簇
+            </span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
+            <div>
+              <div className="text-muted-foreground">主力资金(明+暗)</div>
+              <div className={`mt-0.5 font-mono ${(darkClusters.main_net ?? 0) > 0 ? 'text-rose-500' : (darkClusters.main_net ?? 0) < 0 ? 'text-emerald-500' : 'text-foreground'}`}>
+                {toWan(darkClusters.main_net)}
+              </div>
+              <div className="mt-1 text-[10px] text-muted-foreground/80">主显口径 · 主笔级 + 拆单簇合并</div>
+            </div>
+            <div>
+              <div className="text-muted-foreground">暗盘净额(拆单簇)</div>
+              <div className={`mt-0.5 font-mono ${(darkClusters.dark_net ?? 0) > 0 ? 'text-rose-500' : (darkClusters.dark_net ?? 0) < 0 ? 'text-emerald-500' : 'text-foreground'}`}>
+                {toWan(darkClusters.dark_net)}
+              </div>
+              <div className="mt-1 text-[10px] text-muted-foreground/80">拆买 {toWan(darkClusters.dark_buy)} · 拆卖 {toWan(darkClusters.dark_sell)}</div>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border/40 pt-2 text-[11px]">
+            <div>
+              <span className="text-muted-foreground">明盘净额</span>
+              <span className="ml-1 font-mono">{toWan(darkClusters.ming_net)}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">撤单率</span>
+              <span className="ml-1 font-mono">
+                {darkClusters.cancel_rate != null ? `${(darkClusters.cancel_rate * 100).toFixed(1)}%` : '-'}
+              </span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">主笔/被动</span>
+              <span className="ml-1 font-mono">
+                {darkClusters.active_passive_ratio != null ? darkClusters.active_passive_ratio.toFixed(2) : '-'}
+              </span>
+            </div>
+          </div>
+          {darkClusters.note && (
+            <div className="mt-2 text-[10px] text-muted-foreground/80">{darkClusters.note}</div>
+          )}
         </div>
       )}
       <div className="card overflow-hidden">

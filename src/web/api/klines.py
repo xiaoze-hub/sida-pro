@@ -568,6 +568,33 @@ def get_kline_summary(symbol: str, market: str = "CN"):
                 main_intent_structured = _main_intent_structured(symbol)
             except Exception:
                 main_intent_structured = None
+
+    # v2.0 §6.2 + A4 派活: A4 dark_clusters 暗盘资金(委托号级拆单簇)纳入 summary 接口,
+    # 让前端资金面板的「暗盘为主/还原为辅」双口径可落地。
+    # 独立 try/except: 数据源不可用 → available:false 走 §12 兜底规范,不编造。
+    dark_clusters: dict = {"available": False, "note": "未接入"}
+    try:
+        from src.core.postmarket_review import dark_review_from_tck
+
+        review = dark_review_from_tck(symbol)
+        dark_ = review.get("dark") or {}
+        ming_ = review.get("ming") or {}
+        dark_clusters = {
+            "available": bool(review.get("available")),
+            "dark_net": dark_.get("net"),        # 拆单簇暗盘净额(元)
+            "dark_buy": dark_.get("buy"),
+            "dark_sell": dark_.get("sell"),
+            "cluster_count": len(review.get("clusters") or []),
+            "ming_net": ming_.get("net"),        # 明盘(单笔>30万)净额(元)
+            "main_net": review.get("main_net"),  # 明+暗主力净额(元)
+            "cancel_rate": review.get("cancel_rate"),
+            "active_passive_ratio": review.get("active_passive_ratio"),
+        }
+        if review.get("note"):
+            dark_clusters["note"] = review.get("note")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("dark_clusters summary 失败 %s: %s", symbol, e)
+
     result = {
         "symbol": symbol,
         "market": market_code.value,
@@ -576,6 +603,8 @@ def get_kline_summary(symbol: str, market: str = "CN"):
         "main_intent_structured": main_intent_structured,
         # P1 图层数据(2026-09-01): gs_signals / fund_flow / events
         **_build_layer_data(symbol, market_code),
+        # A4 拆单簇暗盘(2026-09-01 接入 summary,前端资金面板双口径展示)
+        "dark_clusters": dark_clusters,
     }
     _SUMMARY_CACHE[cache_key] = (now, result)
     return result
