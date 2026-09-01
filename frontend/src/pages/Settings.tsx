@@ -421,10 +421,9 @@ export default function SettingsPage() {
     try {
       // 2026-09-01 审计修复: 改为 allSettled, 单个接口失败(如 /datasources 曾因缺列 500)
       // 不再拖垮整页 —— 失败的接口降级为空/默认值, 其余正常渲染。
-      const results = await Promise.allSettled<[
-        Setting[], KeyDataSource[], AIService[], NotifyChannel[],
-        { version: string }, AgentsHealth, SceneBinding[], MyAIService[]
-      ]>([
+      // 2026-09-01 audit fix: allSettled 单接口失败不拖垮整页。`as const` + Promise.allSettled<unknown[]>
+      // 让 TS 把 fetchAPI<T>() 推断为可变参数, 然后逐元素解构时再按位置 cast 回具体类型。
+      const results = await Promise.allSettled([
         fetchAPI<Setting[]>('/settings'),
         fetchAPI<KeyDataSource[]>('/datasources', { cacheMode: 'reload' }),
         fetchAPI<AIService[]>('/providers/services', { cacheMode: 'reload' }),
@@ -434,9 +433,15 @@ export default function SettingsPage() {
         listSceneBindings(),
         // BYOK: 用户自己的服务商(demo 账号后端 403, 静默降级为空列表)
         fetchAPI<MyAIService[]>('/my-ai-services', { cacheMode: 'reload' }).catch(() => [] as MyAIService[]),
-      ])
-      const [settingsData, keyDataSourcesData, servicesData, channelsData, versionData, healthData, sceneBindingsData, myServicesData] =
-        results.map((r) => r.status === 'fulfilled' ? r.value : undefined)
+      ] as unknown as Parameters<typeof Promise.allSettled>);
+      const [
+        settingsData, keyDataSourcesData, servicesData, channelsData,
+        versionData, healthData, sceneBindingsData, myServicesData,
+      ] = results.map((r) => (r.status === 'fulfilled' ? r.value : undefined)) as [
+        Setting[] | undefined, KeyDataSource[] | undefined, AIService[] | undefined,
+        NotifyChannel[] | undefined, { version: string } | undefined,
+        AgentsHealth | undefined, SceneBinding[] | undefined, MyAIService[] | undefined,
+      ];
       setSettings(settingsData ?? [])
       setKeyDataSources(keyDataSourcesData ?? [])
       setServices(servicesData ?? [])
