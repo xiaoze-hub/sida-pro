@@ -5,6 +5,8 @@ import { CandlestickChart, Flag, LineChart, Search, Wallet, Loader2 } from 'luci
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { insightApi } from '@panwatch/api'
 import PageTabs, { type PageTabItem } from '@/components/PageTabs'
+import { useSourceHealth } from '@/hooks/useSourceHealth'
+import ContextCard, { isContextSource } from '@/components/ContextCard'
 
 /**
  * 行情三合一(设计稿 §4.3): 个股 + 指数 + 板块 合成行情页, /forecast 作为入口。
@@ -53,7 +55,52 @@ interface FundFlowRow {
 interface KlineEventItem {
   date: string
   kind: string
-  label: string
+  label?: string
+  // 各类事件的附加度量(后端按事件类型给出, 缺失即不显示, 不补 0)
+  price?: number | null
+  shares?: number | null
+  amount?: number | null
+  count?: number | null
+  time?: string | null
+}
+
+/**
+ * kind → 对应的 L4 事件图标(设计稿 §5.3)。
+ * 解套盘位 / 支撑压力 按规范**缺位时不显示**(不是灰显), 故不在表里。
+ */
+const KIND_ICON: Record<string, string> = {
+  dragon_tiger: '涨',
+  split_cluster: '拆',
+  cancel_anomaly: '⚠撤',
+  support: '🛡托',
+  pressure: '🔒压',
+  my_trade: '我',
+}
+
+/** kind → 中文名(后端已给 label, 这里兜底用) */
+const KIND_LABEL: Record<string, string> = {
+  limit_up: '涨停',
+  limit_down: '跌停',
+  dragon_tiger: '龙虎榜',
+  announcement: '公告',
+  split_cluster: '拆单簇',
+  cancel_anomaly: '撤单异常',
+  support: '托盘',
+  pressure: '压盘',
+  unlock: '解套盘位',
+  my_trade: '我的买卖点',
+}
+
+/** kind → 配色(红=利多/买入, 绿=利空/卖出, 其余中性) */
+const KIND_TONE: Record<string, string> = {
+  limit_up: 'text-rose-500',
+  dragon_tiger: 'text-rose-500',
+  split_cluster: 'text-rose-500',
+  limit_down: 'text-emerald-500',
+  cancel_anomaly: 'text-emerald-500',
+  announcement: 'text-sky-500',
+  my_trade: 'text-violet-500',
+  unlock: 'text-amber-500',
 }
 
 interface OrderbookInfo {
@@ -67,6 +114,29 @@ interface OrderbookInfo {
   note?: string | null
 }
 
+/** 解套盘位价位线 —— 由后端标准筹码接口 chip_distribution 算出, 前端不再自算 */
+interface UnlockLevel {
+  price: number
+  kind?: 'support' | 'pressure'
+  label?: string
+  ratio?: number | null
+}
+
+/** 标准筹码结构(chip_distribution.compute_near_term_chips 原样输出) */
+interface ChipsInfo {
+  peak_price?: number | null
+  peak_ratio?: number | null
+  cost_10?: number | null
+  cost_50?: number | null
+  cost_90?: number | null
+  profit_ratio?: number | null
+  concentration?: number | null
+  cost_band?: { low?: number | null; high?: number | null; ratio?: number | null } | null
+  last_close?: number | null
+  source?: string | null
+  window_days?: number | null
+}
+
 interface SummaryResp {
   symbol?: string
   market?: string
@@ -74,6 +144,38 @@ interface SummaryResp {
   events?: KlineEventItem[]
   orderbook?: OrderbookInfo | null
   main_intent?: string | null
+  unlock_levels?: UnlockLevel[] | null
+  chips?: ChipsInfo | null
+}
+
+/** 后端 events → InteractiveKline 的 KlineEvent(只保留组件认得的 kind) */
+const VALID_KINDS = new Set([
+  'limit_up', 'limit_down', 'dragon_tiger', 'announcement',
+  'split_cluster', 'cancel_anomaly', 'support', 'pressure', 'unlock', 'my_trade',
+])
+
+function toKlineEvents(events?: KlineEventItem[]) {
+  if (!events || events.length === 0) return undefined
+  const out = events
+    .filter((e) => e.date && VALID_KINDS.has(e.kind))
+    .map((e) => ({
+      date: fmtDate(e.date),
+      kind: e.kind as never, // 已用 VALID_KINDS 收窄
+      label: e.label || KIND_LABEL[e.kind] || e.kind,
+    }))
+  return out.length > 0 ? out : undefined
+}
+
+/** 后端解套盘位 → InteractiveKline 的支撑压力线 */
+function toSupportPressure(levels?: UnlockLevel[] | null) {
+  if (!levels || levels.length === 0) return undefined
+  return levels
+    .filter((l) => typeof l.price === 'number' && Number.isFinite(l.price))
+    .map((l) => ({
+      price: l.price,
+      kind: (l.kind === 'support' ? 'support' : 'pressure') as 'support' | 'pressure',
+      label: l.label,
+    }))
 }
 
 /** 元 → 万元; 空值一律 '--'(不把 null 当 0) */
@@ -95,17 +197,22 @@ export default function QuotePage() {
   const symbol = (params.get('symbol') || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
   const tab = params.get('tab') || 'chart'
+  // §13: 持仓/自选/机会跳转来源 → 资金面板顶部显示对应上下文卡
+  const sourceParam = params.get('source')
+  const contextSource = isContextSource(sourceParam) ? sourceParam : null
 
   const [input, setInput] = useState(symbol)
   const [summary, setSummary] = useState<SummaryResp | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryError, setSummaryError] = useState('')
+  // §12: 数据源健康状态(60s 轮询) → 决定 L4 事件图标灰显
+  const { isReady, reasonOf } = useSourceHealth()
 
   useEffect(() => { setInput(symbol) }, [symbol])
 
-  // 资金 / 事件两个 Tab 共用同一份 summary(接口 5 分钟缓存, 不必各拉一次)
+  // summary 一次拉取供三个 Tab 复用: 资金(fund_flow) / 事件(events) /
+  // 分时日K(L4 事件标注 + 解套盘位)。接口有 5 分钟缓存, 切 Tab 不重复请求。
   useEffect(() => {
-    if (tab !== 'fund' && tab !== 'events') return
     if (!symbol || type === 'board') return
     let alive = true
     setSummaryLoading(true)
@@ -118,7 +225,7 @@ export default function QuotePage() {
       })
       .finally(() => { if (alive) setSummaryLoading(false) })
     return () => { alive = false }
-  }, [symbol, type, tab])
+  }, [symbol, type])
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params)
@@ -235,6 +342,9 @@ export default function QuotePage() {
               market="CN"
               initialInterval="1d"
               initialDays="120"
+              // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
+              events={toKlineEvents(summary?.events)}
+              supportPressure={toSupportPressure(summary?.unlock_levels)}
             />
           )
         )}
@@ -250,11 +360,26 @@ export default function QuotePage() {
         )}
 
         {activeTab === 'fund' && (
-          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} />
+          <div className="space-y-3">
+            {/* §13 持仓上下文卡: 按 ?source= 显示, 搜索进入(无 source)不显示 */}
+            {contextSource && (
+              <ContextCard source={contextSource} symbol={symbol} market="CN" />
+            )}
+            <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} />
+          </div>
         )}
 
         {activeTab === 'events' && (
-          <EventsPanel loading={summaryLoading} error={summaryError} events={summary?.events} orderbook={summary?.orderbook} />
+          <EventsPanel
+            loading={summaryLoading}
+            error={summaryError}
+            events={summary?.events}
+            orderbook={summary?.orderbook}
+            unlockLevels={summary?.unlock_levels}
+            chips={summary?.chips}
+            isReady={isReady}
+            reasonOf={reasonOf}
+          />
         )}
       </div>
     </div>
@@ -316,14 +441,108 @@ function FundPanel({
   )
 }
 
-/** 事件 Tab: L4 事件标注 + 盘口托压单 */
+/**
+ * 筹码结构 + 解套盘位。
+ *
+ * ⚠️ 2026-09-01 修正: 初版前端按"历史成交量分价位累加"自算套牢区, 那是近似值;
+ * 现改为直接消费后端标准筹码接口 chip_distribution(腾讯当日分价表优先 / 新浪历史分价兜底),
+ * 取不到就显式"无数据", 不做任何估算。
+ */
+function ChipsPanel({ chips, unlockLevels }: { chips?: ChipsInfo | null; unlockLevels?: UnlockLevel[] | null }) {
+  if (!chips) {
+    return (
+      <div className="card overflow-hidden">
+        <div className="border-b border-border/60 px-3 py-2 text-[12px] font-medium text-foreground">
+          筹码结构 / 解套盘位
+        </div>
+        <div className="p-6 text-center text-[12px] text-muted-foreground">
+          暂无筹码数据(标准筹码接口未取到, 不做估算)
+        </div>
+      </div>
+    )
+  }
+
+  const pct = (v: number | null | undefined) =>
+    typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '--'
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        <span className="text-[12px] font-medium text-foreground">筹码结构 / 解套盘位</span>
+        {chips.source && (
+          <span className="ml-auto rounded-md bg-accent/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {chips.source}
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 px-3 py-3 text-[12px] sm:grid-cols-4">
+        <Field label="筹码峰" value={chips.peak_price ?? '--'} />
+        <Field label="峰占比" value={chips.peak_ratio === null || chips.peak_ratio === undefined ? '--' : `${chips.peak_ratio.toFixed(1)}%`} />
+        <Field label="获利盘" value={pct(chips.profit_ratio)} />
+        <Field label="集中度" value={chips.concentration ?? '--'} />
+        <Field label="成本10%" value={chips.cost_10 ?? '--'} />
+        <Field label="成本50%" value={chips.cost_50 ?? '--'} />
+        <Field label="成本90%" value={chips.cost_90 ?? '--'} />
+        <Field label="现价" value={chips.last_close ?? '--'} />
+      </div>
+
+      {unlockLevels && unlockLevels.length > 0 ? (
+        <ul className="divide-y divide-border/40 border-t border-border/50">
+          {unlockLevels.map((l, i) => (
+            <li key={`${l.price}-${i}`} className="flex items-center gap-3 px-3 py-2 text-[12px]">
+              <span className={`font-mono ${l.kind === 'support' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                {l.price}
+              </span>
+              <span className="text-[11px] text-muted-foreground">{l.label || ''}</span>
+              {typeof l.ratio === 'number' && (
+                <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+                  占比 {l.ratio.toFixed(1)}%
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="border-t border-border/50 p-4 text-center text-[12px] text-muted-foreground">
+          暂无解套盘位价位线
+        </div>
+      )}
+
+      <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+        数据源: 标准筹码接口(腾讯当日分价表优先 / 新浪历史分价兜底), 窗口
+        {chips.window_days ?? 10} 个交易日 · 绿色支撑 / 琥珀色压力
+      </div>
+    </div>
+  )
+}
+
+/** 事件明细: 按事件类型给出度量, 缺字段就不显示(不补 0) */
+function EventMetrics({ e }: { e: KlineEventItem }) {
+  const parts: string[] = []
+  if (e.time) parts.push(e.time)
+  if (typeof e.price === 'number') parts.push(`${e.price}`)
+  if (typeof e.shares === 'number') parts.push(`${e.shares.toLocaleString('zh-CN')} 股`)
+  if (typeof e.count === 'number') parts.push(`${e.count} 笔`)
+  if (typeof e.amount === 'number') parts.push(`${toWan(e.amount)} 万元`)
+  if (parts.length === 0) return null
+  return <span className="font-mono text-[11px] text-muted-foreground">{parts.join(' · ')}</span>
+}
+
+/** 事件 Tab: L4 事件标注 + 盘口托压单 + 解套盘位 */
 function EventsPanel({
-  loading, error, events, orderbook,
+  loading, error, events, orderbook, unlockLevels, chips, isReady, reasonOf,
 }: {
   loading: boolean
   error: string
   events?: KlineEventItem[]
   orderbook?: OrderbookInfo | null
+  unlockLevels?: UnlockLevel[] | null
+  chips?: ChipsInfo | null
+  /** §12: 图标是否可用(数据源健康) */
+  isReady: (icon: string) => boolean
+  /** §12: 灰显 tooltip 文案 */
+  reasonOf: (icon: string) => string
 }) {
   if (loading) return <PanelLoading text="加载事件…" />
   if (error) return <PanelError text={error} />
@@ -346,23 +565,44 @@ function EventsPanel({
         )}
       </div>
 
+      <ChipsPanel chips={chips} unlockLevels={unlockLevels} />
+
       <div className="card overflow-hidden">
         <div className="border-b border-border/60 px-3 py-2 text-[12px] font-medium text-foreground">
           事件标注(L4)
         </div>
         {events && events.length > 0 ? (
           <ul className="divide-y divide-border/40">
-            {events.slice().reverse().map((e, i) => (
-              <li key={`${e.date}-${e.kind}-${i}`} className="flex items-center gap-3 px-3 py-2 text-[12px]">
-                <span className="font-mono text-[11px] text-muted-foreground">{fmtDate(e.date)}</span>
-                <span className="rounded-md bg-accent/50 px-1.5 py-0.5 text-[11px] text-foreground">{e.label}</span>
-                <span className="text-[11px] text-muted-foreground">{e.kind}</span>
-              </li>
-            ))}
+            {events.slice().reverse().map((e, i) => {
+              const icon = KIND_ICON[e.kind]
+              // §12 缺位兜底: 图标对应数据源不可用 → 灰显 + tooltip
+              const ready = icon ? isReady(icon) : true
+              const why = icon ? reasonOf(icon) : ''
+              return (
+                <li key={`${e.date}-${e.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[12px]">
+                  <span className="font-mono text-[11px] text-muted-foreground">{fmtDate(e.date)}</span>
+                  {icon && (
+                    <span
+                      className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] ${
+                        ready ? 'bg-accent/50 text-foreground' : 'bg-muted text-muted-foreground/50 grayscale'
+                      }`}
+                      title={ready ? undefined : why || '数据源不可用'}
+                    >
+                      {icon}
+                    </span>
+                  )}
+                  <span className={`text-[12px] font-medium ${ready ? (KIND_TONE[e.kind] || 'text-foreground') : 'text-muted-foreground/60'}`}>
+                    {e.label || KIND_LABEL[e.kind] || e.kind}
+                  </span>
+                  <EventMetrics e={e} />
+                </li>
+              )
+            })}
           </ul>
         ) : (
           <div className="p-6 text-center text-[12px] text-muted-foreground">
-            暂无事件标注(拆单簇 / 撤单 / 龙虎榜 / 公告 待第 4 块接入, 不编造)
+            暂无事件标注(拆单簇 / 撤单异常需 .tck 文件, 龙虎榜 / 公告需 wencai, 我的买卖点需交割单;
+            数据源缺失时不编造)
           </div>
         )}
       </div>

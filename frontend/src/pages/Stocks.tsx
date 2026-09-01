@@ -967,6 +967,12 @@ export default function StocksPage() {
     navigate('/paper-trading')
   }, [navigate])
 
+  // 设计稿 v2.1 §13.2: 持仓/自选列表右键 → 行情页 + source 上下文(顶部显示持仓上下文卡)
+  const openQuoteFromMenu = useCallback((stock: StockContextTarget) => {
+    const source = stock.hasPosition ? 'holdings' : 'watchlist'
+    navigate(`/forecast?type=stock&symbol=${encodeURIComponent(stock.symbol)}&tab=fund&source=${source}`)
+  }, [navigate])
+
   const formatPreviewTime = (iso: string, tz?: string): string => {
     try {
       const d = parseServerTime(iso)
@@ -3095,7 +3101,7 @@ export default function StocksPage() {
                     {isAssigned && isBatchMode && (
                       <div className="px-3.5 pb-3.5 pt-0">
                         <p className="text-[11px] text-muted-foreground">
-                          调度、AI模型、通知渠道请在 <a href="/agents" className="text-primary hover:underline">Agent 配置</a> 页面统一设置
+                          调度、AI模型、通知渠道请在 <a href="/system?tab=agents" className="text-primary hover:underline">Agent 配置</a> 页面统一设置
                         </p>
                       </div>
                     )}
@@ -3415,6 +3421,7 @@ export default function StocksPage() {
         onAddWatchlist={addToWatchlistFromMenu}
         onViewDetail={viewDetailFromMenu}
         onPaperTrade={paperTradeFromMenu}
+        onOpenQuote={openQuoteFromMenu}
       />
     </div>
   )

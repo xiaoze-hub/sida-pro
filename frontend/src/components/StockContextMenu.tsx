@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
-import { Plus, Eye, Copy, TrendingUp } from 'lucide-react'
+import { Plus, Eye, Copy, TrendingUp, LineChart } from 'lucide-react'
 
 export interface StockContextTarget {
   symbol: string
@@ -20,10 +20,12 @@ interface StockContextMenuProps {
   onAddWatchlist: (stock: StockContextTarget) => void
   onViewDetail: (stock: StockContextTarget) => void
   onPaperTrade: (stock: StockContextTarget) => void
+  /** 设计稿 v2.1 §13: 行情页打开(带 source 上下文), 未传则不显示该项 */
+  onOpenQuote?: (stock: StockContextTarget) => void
 }
 
 const MENU_WIDTH = 150
-const MENU_HEIGHT = 150
+const MENU_HEIGHT = 190
 
 /**
  * PC 右键菜单:在股票行上 onContextMenu 打开,点击外部 / Esc 关闭。
@@ -35,6 +37,7 @@ export default function StockContextMenu({
   onAddWatchlist,
   onViewDetail,
   onPaperTrade,
+  onOpenQuote,
 }: StockContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null)
 
@@ -66,6 +69,8 @@ export default function StockContextMenu({
   }
 
   const items = [
+    // §13.2: 持仓/自选列表点股票 → 行情页 + source 上下文(资金面板顶部显示持仓上下文卡)
+    ...(onOpenQuote ? [{ label: '行情页打开', icon: LineChart, run: () => onOpenQuote(stock) }] : []),
     { label: '加入自选', icon: Plus, run: () => onAddWatchlist(stock) },
     { label: '查看详情', icon: Eye, run: () => onViewDetail(stock) },
     {
