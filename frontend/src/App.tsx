@@ -274,8 +274,15 @@ function App() {
       handler: runOnDesktop(() => setSearchOpen(true)),
     },
     { combo: 'mod+,', handler: runOnDesktop(() => navigate('/settings')) },
-    { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },
-    { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) },
+    // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
+    { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
+    { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
+    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/forecast')) },  // 行情 Market (合并预测)
+    { sequence: ['g', 'o'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/opportunities')) }, // 机会 Opportunities
+    { sequence: ['g', 'r'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/reports')) },   // 投研 Reports (合并历史)
+    { sequence: ['g', 'u'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/settings')) },  // 系统 User settings
+    { sequence: ['g', 'n'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/notifications')) }, // 通知 Notifications
+    { sequence: ['g', 's'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/shadow')) },    // 我的 shadow account
     { combo: '?', preventDefault: true, handler: runOnDesktop(() => setHotkeysOpen(true)) },
   ])
 

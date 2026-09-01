@@ -6,6 +6,7 @@ import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { insightApi } from '@panwatch/api'
 import PageTabs, { type PageTabItem } from '@/components/PageTabs'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
+import ContextCard, { isContextSource } from '@/components/ContextCard'
 import {
   normalizeKlineEvents,
   normalizePriceLines,
@@ -134,6 +135,10 @@ export default function QuotePage() {
   const symbol = (params.get('symbol') || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
   const tab = params.get('tab') || 'chart'
+  // v2.1 §13: 持仓详情跳路由 (?source=holdings|watchlist|opportunities),
+  // 用于在资金面板顶部显示对应上下文卡. 设计稿默认: 无 source → 不显示.
+  const sourceParam = params.get('source')
+  const source = isContextSource(sourceParam) ? sourceParam : null
 
   const [input, setInput] = useState(symbol)
   const [summary, setSummary] = useState<SummaryResp | null>(null)
@@ -296,7 +301,7 @@ export default function QuotePage() {
         )}
 
         {activeTab === 'fund' && (
-          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} />
+          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" />
         )}
 
         {activeTab === 'events' && (
@@ -316,12 +321,16 @@ export default function QuotePage() {
 
 /** 资金 Tab: 明盘/暗盘净额(万元) + 主力意图 */
 function FundPanel({
-  loading, error, rows, intent,
+  loading, error, rows, intent, source, symbol, market,
 }: {
   loading: boolean
   error: string
   rows?: FundFlowRow[]
   intent?: string | null
+  // v2.1 §13: 持仓上下文卡, 仅当 URL 带 ?source= 才显示.
+  source?: 'holdings' | 'watchlist' | 'opportunities' | null
+  symbol: string
+  market: string
 }) {
   if (loading) return <PanelLoading text="加载资金流…" />
   if (error) return <PanelError text={error} />
@@ -330,6 +339,10 @@ function FundPanel({
   const recent = rows.slice(-20).reverse()
   return (
     <div className="space-y-3">
+      {/* v2.1 §13 持仓上下文卡: 持仓/自选/机会跳过来时显示, 无 source → 不渲染. */}
+      {source && symbol && (
+        <ContextCard source={source} symbol={symbol} market={market || 'CN'} />
+      )}
       {intent && (
         <div className="card p-4">
           <div className="text-[12px] font-medium text-foreground">主力意图</div>
