@@ -22,6 +22,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type Time,
+  type SeriesMarker,
 } from 'lightweight-charts'
 
 import { fetchAPI } from '@panwatch/api'
@@ -91,6 +92,12 @@ export default function KlineChart(props: {
   fundFlow?: FundFlowBar[]
   /** 阶段三: 事件种类显隐过滤 (默认全部 true). 设 false 该 kind 不渲染 marker */
   kindsVisible?: Partial<Record<KlineEventKind, boolean>>
+  /**
+   * 设计稿 v2.0 §5 + v2.1 §12: 4 开关(图层总控: L1 趋势 / L2 买卖点 / L3 资金柱 / L4 事件)。
+   * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
+   * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
+   */
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -101,7 +108,8 @@ export default function KlineChart(props: {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const markerPluginsRef = useRef<ReturnType<typeof createSeriesMarkers<Time>>[]>([])
+  const markerPluginRef = useRef<ReturnType<typeof createSeriesMarkers<Time>> | null>(null)
+  const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
   const [loading, setLoading] = useState(false)
@@ -204,6 +212,12 @@ export default function KlineChart(props: {
 
     return () => {
       observer.disconnect()
+      markerPluginRef.current?.setMarkers([])
+      markerPluginRef.current = null
+      if (seriesRef.current) {
+        for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
+      }
+      priceLinesRef.current = []
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
@@ -254,56 +268,82 @@ export default function KlineChart(props: {
     const series = seriesRef.current
     if (!chart || !series) return
 
-    // 1) L4 事件 markers (v5 用 createSeriesMarkers plugin + kindsVisible 过滤)
-    const visible = props.kindsVisible || {}
-    const markers = (props.events || [])
-      .filter((ev) => visible[ev.kind] !== false)
-      .map((ev) => ({
-        time: toChartTime(ev.date, interval),
-        position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
-        color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
-        shape: 'circle' as const,
-        text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
-      }))
-    if (markers.length) {
-      const markersPlugin = createSeriesMarkers(series, markers)
-      markerPluginsRef.current.push(markersPlugin)
-    }
+    // 设计稿 v2.0 §5: 4 开关(图层总控) — 整层关掉 → 该层所有标注全部隐藏。
+    // 未传 = 默认全开。开关语义:
+    //   layer.trend   (L1 趋势)   → K线均线/趋势辅助(当前图无独立趋势序列, 预留)
+    //   layer.signal  (L2 买卖点) → 支撑/压力价位线(解套盘位)
+    //   layer.capital (L3 资金柱) → fundFlow 资金柱
+    //   layer.event   (L4 事件)   → events markers
+    const lv = props.layersVisible || {}
+    const showEvent = lv.event !== false
+    const showCapital = lv.capital !== false
+    const showSignal = lv.signal !== false
 
-    // 2) 支撑压力位 (水平虚线 + priceLinesVisible 过滤)
+    // 1) L4 事件 markers (整层 event 开关 + per-kind kindsVisible 双重过滤)。
+    //    复用单一 plugin, 用 setMarkers 整体替换 — 开关切换时旧 marker 不残留。
+    const markers: SeriesMarker<Time>[] = []
+    if (showEvent) {
+      const visible = props.kindsVisible || {}
+      for (const ev of props.events || []) {
+        if (visible[ev.kind] === false) continue
+        markers.push({
+          time: toChartTime(ev.date, interval),
+          position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
+          color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
+          shape: 'circle' as const,
+          text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
+        })
+      }
+    }
+    if (!markerPluginRef.current) markerPluginRef.current = createSeriesMarkers(series, markers)
+    markerPluginRef.current.setMarkers(markers)
+
+    // 2) 支撑压力位 (L2 买卖点/价位线, showSignal 开关 + priceLinesVisible 过滤)。
+    //    先清掉上一轮的价位线, 再按当前开关重建 — 避免切开关导致虚线累积。
+    for (const line of priceLinesRef.current) series.removePriceLine(line)
+    priceLinesRef.current = []
     const plv = props.priceLinesVisible || {}
-    for (const line of props.supportPressure || []) {
-      if (line.kind === 'support' && plv.support === false) continue
-      if (line.kind === 'pressure' && plv.pressure === false) continue
-      series.createPriceLine({
-        price: line.price,
-        color: line.kind === 'pressure' ? '#ef4444' : '#22c55e',
-        lineWidth: 1,
-        lineStyle: 2, // dashed
-        axisLabelVisible: true,
-        title: line.label || line.kind,
-      })
+    if (showSignal) {
+      for (const line of props.supportPressure || []) {
+        if (line.kind === 'support' && plv.support === false) continue
+        if (line.kind === 'pressure' && plv.pressure === false) continue
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: line.price,
+            color: line.kind === 'pressure' ? '#ef4444' : '#22c55e',
+            lineWidth: 1,
+            lineStyle: 2, // dashed
+            axisLabelVisible: true,
+            title: line.label || line.kind,
+          }),
+        )
+      }
     }
 
-    // 3) 资金柱 (阶段三): 红涨绿跌 + 主净分色叠加在 K 线下方
+    // 3) 资金柱 (L3 资金柱, showCapital 开关): 红涨绿跌 + 主净分色叠加在 K 线下方。
+    //    关掉时 setData([]) 清空 — 否则上一轮的柱会残留。
     const volSeries = volumeSeriesRef.current
-    if (volSeries && props.fundFlow && props.fundFlow.length > 0) {
-      const histData = props.fundFlow.map((bar) => {
-        const open = bar.open_net ?? 0
-        const dark = bar.dark_net ?? 0
-        const net = open + dark
-        // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色
-        let color = '#475569' // 无数据: 灰
-        if (dark !== null && dark !== undefined && dark !== 0) {
-          color = dark > 0 ? '#dc2626' : '#16a34a' // 主净正红/主净负绿(更深, 突出主力意图)
-        } else if (open !== null && open !== undefined && open !== 0) {
-          color = open > 0 ? '#f87171' : '#4ade80' // 仅明盘: 浅红/浅绿
-        }
-        return { time: toChartTime(bar.date, interval), value: net, color }
-      })
-      volSeries.setData(histData)
+    if (volSeries) {
+      if (showCapital && props.fundFlow && props.fundFlow.length > 0) {
+        const histData = props.fundFlow.map((bar) => {
+          const open = bar.open_net ?? 0
+          const dark = bar.dark_net ?? 0
+          const net = open + dark
+          // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色
+          let color = '#475569' // 无数据: 灰
+          if (dark !== null && dark !== undefined && dark !== 0) {
+            color = dark > 0 ? '#dc2626' : '#16a34a' // 主净正红/主净负绿(更深, 突出主力意图)
+          } else if (open !== null && open !== undefined && open !== 0) {
+            color = open > 0 ? '#f87171' : '#4ade80' // 仅明盘: 浅红/浅绿
+          }
+          return { time: toChartTime(bar.date, interval), value: net, color }
+        })
+        volSeries.setData(histData)
+      } else {
+        volSeries.setData([])
+      }
     }
-  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, interval])
+  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, props.layersVisible, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time

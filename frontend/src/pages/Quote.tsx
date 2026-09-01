@@ -170,7 +170,19 @@ export default function QuotePage() {
   // - hoveredDate:   十字光标移到某天 → 高亮该日 row
   // 两者都 null 表示"未交互, 用全量数据"。
   const [selectedRange, setSelectedRange] = useState<{ from: string; to: string } | null>(null)
-  const [hoveredDate, setHoveredDate] = useState<string | null>(null)
+    const [hoveredDate, setHoveredDate] = useState<string | null>(null)
+
+    // 设计稿 v2.0 §5: K线 4 图层开关(L1趋势 / L2买卖点 / L3资金柱 / L4事件)。
+    // Trend 当前图无独立趋势序列, 默认开但无渲染物; 其余 3 层默认全开。
+    const [layers, setLayers] = useState({
+      trend: true,
+      signal: true,
+      capital: true,
+      event: true,
+    })
+
+    const layerToggle = (key: keyof typeof layers) =>
+      setLayers((s) => ({ ...s, [key]: !s[key] }))
 
   useEffect(() => { setInput(symbol) }, [symbol])
 
@@ -304,21 +316,54 @@ export default function QuotePage() {
               </p>
             </div>
           ) : (
-            <KlineChart
-              key={`${type}:${symbol}`}
-              symbol={symbol}
-              market="CN"
-              initialInterval="1d"
-              initialDays={120}
-              // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
-              events={normEvents}
-              supportPressure={normPriceLines}
-              // v2.1 §10: K线选段 + 十字光标 → 右栏资金面板联动
-              onRangeSelect={setSelectedRange}
-              onCrosshairMove={(p) => setHoveredDate(p?.time ? p.time.slice(0, 10) : null)}
-            />
-          )
-        )}
+                      <>
+                        {/* 设计稿 v2.0 §5: K线 4 图层开关 UI */}
+                        <div className="mb-2 flex flex-wrap items-center gap-3">
+                          <span className="text-[11px] text-muted-foreground">图层:</span>
+                          {(
+                            [
+                              ['trend', 'L1 趋势'],
+                              ['signal', 'L2 买卖点'],
+                              ['capital', 'L3 资金柱'],
+                              ['event', 'L4 事件'],
+                            ] as const
+                          ).map(([k, label]) => (
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => layerToggle(k)}
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+                                layers[k]
+                                  ? 'border-primary/40 bg-primary/10 text-foreground'
+                                  : 'border-border/40 bg-background text-muted-foreground line-through opacity-60'
+                              }`}
+                            >
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full ${layers[k] ? 'bg-primary' : 'bg-muted'}`}
+                              />
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <KlineChart
+                          key={`${type}:${symbol}`}
+                          symbol={symbol}
+                          market="CN"
+                          initialInterval="1d"
+                          initialDays={120}
+                          // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
+                          events={normEvents}
+                          supportPressure={normPriceLines}
+                          fundFlow={summary?.fund_flow?.map((r) => ({ date: r.date, open_net: r.ming_net, dark_net: r.dark_net }))}
+                          // 设计稿 v2.0 §5: 4 图层总控开关 (L1趋势 / L2买卖点 / L3资金柱 / L4事件)
+                          layersVisible={layers}
+                          // v2.1 §10: K线选段 + 十字光标 → 右栏资金面板联动
+                          onRangeSelect={setSelectedRange}
+                          onCrosshairMove={(p) => setHoveredDate(p?.time ? p.time.slice(0, 10) : null)}
+                        />
+                      </>
+                    )
+                  )}
 
         {activeTab === 'forecast' && (
           <Suspense fallback={
