@@ -1735,6 +1735,11 @@ async def lifespan(app):
     except Exception:
         pass
     init_db()
+    # 2026-09-01 审计修复: 确保 report_scheduler 局部变量始终绑定(默认 None),
+    # 否则当 _leader_ok 为 False 或 ReportScheduler 构造抛异常(被 except 吞)时,
+    # 下方 shutdown 的 `if report_scheduler:` 会触发 UnboundLocalError, 且报告
+    # 调度器可能静默未启动。初始化后即可安全引用(未启动则为 None, 不进入 shutdown)。
+    report_scheduler = None
     # 启动配置自检(2026-08-21): fail-fast 告警, 不阻断启动
     try:
         from src.core.startup_check import run_startup_checks

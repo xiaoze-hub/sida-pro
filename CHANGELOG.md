@@ -2,9 +2,13 @@
 
 ## 2026-09-01
 
+### fix
+
+- **生产 500 事故修复（audit fixes + redeploy）**。xiaoze6096 审计发现 `/api/datasources` 报 `UndefinedColumn: last_used_at does not exist` → 设置页整页空白（数据源+AI服务商卡片全不显示），三层根因：①`data_sources` 模型新增 5 个健康列（`last_used_at/last_error_at/success_count/error_count/last_status`）但 `migrations.py` 漏了补列迁移；②`server.py` lifespan 里 `report_scheduler` 变量在 `_leader_ok=False` 或构造异常时未绑定，shutdown 时 `UnboundLocalError`，报告调度器静默未启动；③`Settings.tsx` 用 `Promise.all` 拼单接口，一挂拖垮整页。**集成变更**：①新增 `Migration(126, "datasource_health_columns", _m126_datasource_health_columns)` 幂等补齐 5 列；②`datasources.py` 加 `_ensure_health_columns()` 全局一次自愈，list/get/health 三处调用；③`server.py` lifespan 在 `init_db()` 后加 `report_scheduler = None` 兜底绑定；④`providers.py` AI 服务商 `name` 去首尾空格（线上 `" Agnes 2.5 Flash"` 带前导空格展示错位）；⑤`Settings.tsx` 改 `Promise.allSettled` + 逐接口降级（单接口失败不拖垮整页）。**集成注意**：xiaoze6096 `server.py` 删了 v0.4.47 Playwright 国内镜像兜底 + v0.4.36 WS Hub 绑定/解绑逻辑，整文件覆盖会丢，**仅采纳其新增的 `report_scheduler = None` 一行**，其余保留我仓库版本。xiaoze6096 已临时热补线上 5 列（直接改库），源码修复+正式部署后即固化。
+
 ### feature
 
-- **v0.4.50 Phase Y 四块收尾整合 (A1+A4+A5+A6, xiaoze6096 交付)**: 全市场暗盘资金真实 TOP 榜(A6) + 委托号级拆单簇暗盘(A4) + .img 十档盘口链路补测(A1+A5).
+- **v0.4.50 Phase Y 四块收尾整合 (A6 暗盘资金TOP + A4 拆单簇暗盘 + A1/A5 十档盘口补测)**:
   - **A6 暗盘资金 TOP 全市场扫描**: 新增 `src/core/dark_fund_scan.py` (`scan_dark_fund_top` + `attach_tck_dark`). 用 thsdk DDE **批量**接口(200只/批, 全市场 5223 只约 16s)拿同花顺官方主力净流入, 替代 old `market_scan.scan()` 的 OHLC 分摊对照项. 老实过滤 int32 溢出哨兵值(盘后无真实资金流的次新股返回 2^31-1/2^31 → 剔除不编造成 0). `source="thsdk_dde"` 显式标注不冒充暗盘; .tck 融合对持仓股并列 `tck_dark_net_wan`(委托号级精确暗盘)供对照. `src/web/models.py` 新表 `DarkFundTopSnapshot`(`dark_fund_top_snapshots`). `src/web/api/market_scan.py` 加 GET/POST `/dark-fund-top` + `run_dark_fund_top_job()`. `src/core/report_scheduler.py` 盘后 15:30 cron 三榜+信号摘要后追加暗盘资金 TOP 扫描(独立 try 失败不抛).
   - **A4 get_dark_flow_precise 拆单簇暗盘增强**: `src/core/chat_tools.py` 在原有主笔级还原(active/passive)基础上 hook `postmarket_review.dark_review_from_tck` 的委托号级**五条件拆单簇**识别, 新增 `dark_clusters` 字段(available/dark_net/ming_net/main_net/cancel_rate/active_passive_ratio/cluster_count). 这才是「暗盘资金=对倒拆单/大单拆小单」的正确定义(旧 dark_basis="small_orders" 只是小单口径). 独立 try, 拆单簇失败不影响主笔级.
   - **A1+A5 .img 十档盘口补测**: `tests/test_orderbook_a1.py` 10 例(ImgSnapshot 派生指标 best_bid/spread/bid_pressure/queue_imbalance, img_frame_to_snapshot 同构转换, order_book_queue 托压单形态, 三算法合成数据: evolution/imbalance/ghost_order, get_order_book_queue 工具链路 .img+thsdk 回退+无源降级). thsdk 真实盘口实测: 神剑股份 USZA002361 buy1 10.61/sell1 10.62, bid_pressure 0.482 shape=均衡(盘后静态快照属正常).

@@ -419,7 +419,9 @@ export default function SettingsPage() {
 
   const load = async () => {
     try {
-      const [settingsData, keyDataSourcesData, servicesData, channelsData, versionData, healthData, sceneBindingsData, myServicesData] = await Promise.all([
+      // 2026-09-01 审计修复: 改为 allSettled, 单个接口失败(如 /datasources 曾因缺列 500)
+      // 不再拖垮整页 —— 失败的接口降级为空/默认值, 其余正常渲染。
+      const results = await Promise.allSettled([
         fetchAPI<Setting[]>('/settings'),
         fetchAPI<KeyDataSource[]>('/datasources', { cacheMode: 'reload' }),
         fetchAPI<AIService[]>('/providers/services', { cacheMode: 'reload' }),
@@ -430,15 +432,17 @@ export default function SettingsPage() {
         // BYOK: 用户自己的服务商(demo 账号后端 403, 静默降级为空列表)
         fetchAPI<MyAIService[]>('/my-ai-services', { cacheMode: 'reload' }).catch(() => [] as MyAIService[]),
       ])
-      setSettings(settingsData)
-      setKeyDataSources(keyDataSourcesData)
-      setServices(servicesData)
-      setChannels(channelsData)
-      setVersion(versionData.version)
-      setHealth(healthData)
-      setSceneBindings(sceneBindingsData)
+      const [settingsData, keyDataSourcesData, servicesData, channelsData, versionData, healthData, sceneBindingsData, myServicesData] =
+        results.map((r) => (r.status === 'fulfilled' ? r.value : undefined))
+      setSettings(settingsData ?? [])
+      setKeyDataSources(keyDataSourcesData ?? [])
+      setServices(servicesData ?? [])
+      setChannels(channelsData ?? [])
+      setVersion(versionData?.version ?? '')
+      setHealth(healthData ?? null)
+      setSceneBindings(sceneBindingsData ?? [])
       setSceneBindingsLoading(false)
-      setMyServices(myServicesData)
+      setMyServices(myServicesData ?? [])
       setMyServicesLoading(false)
       // 同花顺登录态(静默加载,失败不阻塞)
       try {

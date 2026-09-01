@@ -2121,6 +2121,22 @@ CREATE TABLE IF NOT EXISTS klines (
     )
 
 
+def _m126_datasource_health_columns(conn: Connection) -> None:
+    """data_sources 健康累计列(2026-09-01 新增于 DataSource 模型, 但 PostgreSQL 下
+    create_all 不会给已存在的表自动加列, 老库缺列会导致 /api/datasources SELECT *
+    报 UndefinedColumn → 500)。幂等补齐 5 个健康列(last_used_at/last_error_at/
+    success_count/error_count/last_status)。"""
+    from src.core.source_health import HEALTH_COLUMNS
+
+    for col, dtype in HEALTH_COLUMNS.items():
+        _add_column_if_missing(
+            conn,
+            "data_sources",
+            col,
+            f"ALTER TABLE data_sources ADD COLUMN {col} {dtype}",
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2155,6 +2171,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         _m124_analysis_history_user_id_unique,
     ),
     Migration(125, "klines_table", _m125_klines_table),
+    Migration(126, "datasource_health_columns", _m126_datasource_health_columns),
 )
 
 

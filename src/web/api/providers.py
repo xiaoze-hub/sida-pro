@@ -193,7 +193,7 @@ def _service_to_response(service: AIService) -> dict:
         api_key = "********"
     return {
         "id": service.id,
-        "name": service.name,
+        "name": (service.name or "").strip(),
         "base_url": service.base_url,
         "api_key": api_key,
         "models": [
