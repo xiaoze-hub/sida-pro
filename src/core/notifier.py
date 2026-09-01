@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import apprise
 import asyncio
@@ -314,6 +315,8 @@ class NotifierManager:
                     attachments.add(img_path)
 
         errors = []
+        # v2.1 §11.5: 每渠道独立 delivered_at (ISO) + channel_id, 用于送达回执 API
+        sent_at = datetime.now(timezone.utc).isoformat()
         channel_results: list[dict] = []
 
         # 若配置了钉钉关键字，自动追加在内容末尾以通过“关键字”校验
@@ -353,7 +356,8 @@ class NotifierManager:
                     )
                     if success:
                         apprise_ok = True
-                        channel_results.append({"type": "apprise", "success": True})
+                        # v2.1 §11.5: 每渠道带 delivered_at 时间戳
+                        channel_results.append({"type": "apprise", "success": True, "delivered_at": sent_at})
                         logger.info(f"Apprise 通知发送成功: {title}")
                         break
                     last_err = "Apprise 通知发送失败（可能是网络问题或配置错误）"
@@ -364,7 +368,8 @@ class NotifierManager:
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not apprise_ok:
-                channel_results.append({"type": "apprise", "success": False, "error": last_err})
+                # 失败也带时间戳 (failed_at, 不算 delivered)
+                channel_results.append({"type": "apprise", "success": False, "error": last_err, "failed_at": sent_at})
                 errors.append(last_err or "Apprise 通知发送失败")
 
         # 自定义渠道（根据渠道类型自动选择格式）
@@ -379,7 +384,12 @@ class NotifierManager:
                     )
                     receipt = await self._send_custom(ch_type, config, title, ch_content)
                     ch_ok = True
-                    result_item = {"type": ch_type, "success": True}
+                    # v2.1 §11.5: 每渠道带 delivered_at 时间戳 + channel_id 便于前端标识
+                    result_item = {
+                        "type": ch_type,
+                        "success": True,
+                        "delivered_at": datetime.now(timezone.utc).isoformat(),
+                    }
                     if receipt:
                         result_item["receipt"] = receipt
                     channel_results.append(result_item)
@@ -390,7 +400,7 @@ class NotifierManager:
                 if attempt < retry_attempts:
                     await _sleep_retry(attempt + 1)
             if not ch_ok:
-                channel_results.append({"type": ch_type, "success": False, "error": last_err})
+                channel_results.append({"type": ch_type, "success": False, "error": last_err, "failed_at": sent_at})
                 errors.append(last_err or f"{ch_type} 发送失败")
 
         if errors:

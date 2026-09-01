@@ -199,6 +199,42 @@ def get_notification_detail(
     return payload
 
 
+@router.get("/{nid}/status")
+def get_notification_status(
+    nid: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """v2.1 §11.5: 5 渠道送达回执查询 (轻量端点, 不含完整 payload).
+
+    返回 push_status (pending/sent/failed/skipped) + push_channels[] 每渠道独立状态.
+    """
+    notification = (
+        db.query(Notification)
+        .filter(Notification.id == nid, Notification.user_id == user.id)
+        .first()
+    )
+    if not notification:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    return {
+        "id": notification.id,
+        "push_status": notification.push_status or "",
+        "push_error": notification.push_error or "",
+        # 每渠道独立状态 (含 delivered_at/failed_at/receipt)
+        "channels": notification.push_channels or [],
+        # 整次推送的汇总时间 (用第一个成功渠道, 或失败时间)
+        "delivered_at": next(
+            (
+                c.get("delivered_at")
+                for c in (notification.push_channels or [])
+                if c.get("success") and c.get("delivered_at")
+            ),
+            None,
+        ),
+        "created_at": notification.created_at.isoformat() if notification.created_at else "",
+    }
+
+
 @router.post("/{nid}/read")
 def mark_read(
     nid: int,

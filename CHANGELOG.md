@@ -2,6 +2,10 @@
 
 ## 2026-09-01
 
+### feature
+
+- **v2.1 §11.5 通知送达回执**(端点 + 时间戳落库 + 测试)。`src/core/notifier.py` 每渠道独立记录 `delivered_at`(成功)/`failed_at`(失败) ISO 时间戳。`src/web/api/notifications.py` 新增 `GET /api/notifications/{nid}/status` 端点: 返回 `push_status`(pending/sent/failed/skipped)+ `channels[]` 每渠道独立状态 + `delivered_at`(首个成功渠道时间)+ `created_at`。`tests/test_notification_status.py` 5 例 (单通知状态、404、未授权用户 404、delivered_at 取首个成功、无成功渠道时 None)。验收硬约束: 409/500 防账号探测;返回字段不含 payload;S5 归属校验 (user_id 隔离, 仅看本人 nid)。
+
 ### fix
 
 - **生产 500 事故修复（audit fixes + redeploy）**。xiaoze6096 审计发现 `/api/datasources` 报 `UndefinedColumn: last_used_at does not exist` → 设置页整页空白（数据源+AI服务商卡片全不显示），三层根因：①`data_sources` 模型新增 5 个健康列（`last_used_at/last_error_at/success_count/error_count/last_status`）但 `migrations.py` 漏了补列迁移；②`server.py` lifespan 里 `report_scheduler` 变量在 `_leader_ok=False` 或构造异常时未绑定，shutdown 时 `UnboundLocalError`，报告调度器静默未启动；③`Settings.tsx` 用 `Promise.all` 拼单接口，一挂拖垮整页。**集成变更**：①新增 `Migration(126, "datasource_health_columns", _m126_datasource_health_columns)` 幂等补齐 5 列；②`datasources.py` 加 `_ensure_health_columns()` 全局一次自愈，list/get/health 三处调用；③`server.py` lifespan 在 `init_db()` 后加 `report_scheduler = None` 兜底绑定；④`providers.py` AI 服务商 `name` 去首尾空格（线上 `" Agnes 2.5 Flash"` 带前导空格展示错位）；⑤`Settings.tsx` 改 `Promise.allSettled` + 逐接口降级（单接口失败不拖垮整页）。**集成注意**：xiaoze6096 `server.py` 删了 v0.4.47 Playwright 国内镜像兜底 + v0.4.36 WS Hub 绑定/解绑逻辑，整文件覆盖会丢，**仅采纳其新增的 `report_scheduler = None` 一行**，其余保留我仓库版本。xiaoze6096 已临时热补线上 5 列（直接改库），源码修复+正式部署后即固化。
