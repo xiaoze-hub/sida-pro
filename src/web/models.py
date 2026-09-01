@@ -365,6 +365,12 @@ class DataSource(Base):
     supports_batch = Column(Boolean, default=False)  # 是否支持批量查询
     test_symbols = Column(JSON, default=[])  # 测试用股票代码列表
     created_at = Column(DateTime, server_default=func.now())
+    # v0.4.36 P0 派活 2 (整合 xiaoze6096): data_sources 健康累计列
+    last_used_at = Column(DateTime, nullable=True)    # 最近一次成功调用时间
+    last_error_at = Column(DateTime, nullable=True)   # 最近一次失败时间
+    success_count = Column(Integer, default=0)        # 累计成功次数
+    error_count = Column(Integer, default=0)          # 累计失败次数
+    last_status = Column(String, nullable=True)       # 最近一次结果: 'ok' / 'error'
 
 
 class NewsCache(Base):

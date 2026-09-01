@@ -4,6 +4,7 @@
 
 ### feature
 
+- **v0.4.36 P0 派活 2: §12 数据源健康检查** (整合 xiaoze6096 派活包). 新增 `src/core/source_health.py` (4 逻辑源探测: tck/img/wencai/shadow, 30s 缓存) + `/api/datasources/health` (4 源) + `/api/datasources/health/data-sources` (通用 data_sources 表累计统计) + `/api/datasources/health/{id}` (单源). data_sources 表加 5 列 (last_used_at/last_error_at/success_count/error_count/last_status). 路由顺序锁定: `/health` → `/health/data-sources` → `/health/{source_id}` → `/{source_id}` (避免 "health" 被 source_id 捕获成 422). 状态四值: connected/degraded/down/unknown. 前端 `useSourceHealth.ts` (60s 轮询) + Quote.tsx 图标灰显对接. 37 例单测 + 验证全量 234 passed.
 - **v0.4.36 P0 派活 1: 通知中心 WebSocket Hub** (`src/web/notifications/ws_hub.py` + `src/web/api/ws_notifications.py`). 多用户分发 (按 user_id 隔离) + Redis PubSub 跨进程兜底 + 未读计数 (HINCRBY) + 30s 服务端心跳 + 客户端 subscribe/reset_unread/ack 协议. 端点: `ws://host/api/notifications/ws` (鉴权复用 ws_quotes: Sec-WebSocket-Protocol 优先 + ?token= 兜底). 与 `push_notification` 集成: 落库后 `_after_push_hook` 自动 broadcast + incr_unread (user_id=None 跳过未读). 21 例单测覆盖 7 层 (模块/订阅/广播/未读/端点/集成/PubSub), 全绿 (19 passed, 2 skipped).
 - **v0.4.35 生产部署同步**: 同步 git HEAD `2199f07` + `f50c40a` + `45b2914` 到生产小主机(本轮完整覆盖 v2.1 设计稿 4 个补丁章前的全部交付), 含: 设计稿 v2.0 §4.2 可折叠侧边栏(6项主导航) / §4.4 Ctrl+K 全局搜索 / §4.3 行情三合一(Quote.tsx)/ §4.3 设置/审计/帮助 Tab 收纳 / §4.3 系统 Agent/数据源 Tab 收纳 / 设计稿 v2.0 第三章 .img 链路接通(orderbook_engine 五函数)/ 设计稿 v2.0 第七章 2 工具补实(get_dark_flow_precise/get_order_book_queue). 前端 typecheck 0 error + pnpm build 13.7s 全绿; 后端 1342 passed + 57 例新增单测全绿; 推 tag v0.4.35 触发 GitHub Actions ACR 重建
 

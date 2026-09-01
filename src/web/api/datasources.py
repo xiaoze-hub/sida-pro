@@ -1,6 +1,7 @@
 """数据源管理 API"""
 
 import logging
+import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -145,6 +146,94 @@ def list_datasources(type: str | None = None, db: Session = Depends(get_db)):
 def get_datasource_types():
     """获取数据源类型列表"""
     return [{"type": k, "label": v} for k, v in TYPE_LABELS.items()]
+
+
+# ---------------------------------------------------------------------------
+# 设计稿 v2.1 §12: 数据源健康检查(L4 事件图标灰显依据)
+# ---------------------------------------------------------------------------
+# ⚠️ 路由顺序: /health 与 /health/{id} 必须注册在 /{source_id} **之前**,
+#    否则 "health" 会被 /{source_id} 捕获成 id 导致 422。
+@router.get("/health")
+def get_datasources_health(ids: str | None = None, refresh: bool = False):
+    """L4 事件数据源健康状态(前端每 60s 轮询一次)。
+
+    设计稿 §5.3 的 5 个事件图标缺位时灰显, 依据来自这里:
+
+        拆 / ⚠撤   → .tck
+        🛡托/🔒压   → .img
+        涨         → wencai(thsdk)
+        我         → shadow(交割单)
+
+    Args:
+        ids:     逗号分隔的逻辑源 id(tck/img/wencai/shadow); 不传 → 全部
+        refresh: True 跳过 30s 缓存强制重查
+
+    Returns:
+        {checked_at, items: [{id, name, status, last_check_at, detail, icons}]}
+        status ∈ connected / degraded / down / unknown
+    """
+    from src.core.source_health import check_all
+
+    wanted = None
+    if ids:
+        wanted = [s.strip() for s in ids.split(",") if s.strip()]
+    try:
+        items = check_all(wanted, use_cache=not refresh)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("数据源健康检查失败: %s", e)
+        return {"checked_at": time.time(), "items": []}
+    return {"checked_at": time.time(), "items": items}
+
+
+@router.get("/health/data-sources")
+def get_configured_sources_health(db: Session = Depends(get_db)):
+    """通用 data_sources 表的健康状态(按累计成功/失败推断), 与 4 个逻辑源互补。
+
+    分工:
+      - `/health`               → 4 个 L4 逻辑源(**探测式**, 决定事件图标灰显)
+      - `/health/data-sources`  → 配置源(**累计统计式**, 看源本身好没好)
+
+    ⚠️ 从未调用过的源 → `unknown`, 不冒充 connected(详见 source_health.infer_status_from_stats)。
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    from src.core.source_health import HEALTH_COLUMNS, summarize_source
+
+    # 老库可能没有这 5 列(2026-09-01 新增) → 补列后再查, 避免查询直接炸
+    try:
+        existing = {c["name"] for c in sa_inspect(db.bind).get_columns("data_sources")}
+        missing = [c for c in HEALTH_COLUMNS if c not in existing]
+        if missing:
+            for col in missing:
+                db.execute(text(f"ALTER TABLE data_sources ADD COLUMN {col} {HEALTH_COLUMNS[col]}"))
+            db.commit()
+    except Exception as e:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001  # FakeDB / 无 bind 的场景
+            pass
+        logger.warning("data_sources 健康列补齐失败: %s", e)
+
+    try:
+        rows = db.query(DataSource).all()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("查询 data_sources 失败: %s", e)
+        return {"checked_at": time.time(), "items": []}
+
+    return {"checked_at": time.time(), "items": [summarize_source(r) for r in rows]}
+
+
+@router.get("/health/{source_id}")
+def get_datasource_health(source_id: str, refresh: bool = False):
+    """单个逻辑源的健康状态; 未知 id 返回 status=unknown(不抛 404, 前端按灰显处理)。
+
+    ⚠️ 必须排在 `/health/data-sources` **之后**: 否则 "data-sources" 会被当成
+    逻辑源 id 匹配到这里(返回单源结构, 前端拿不到 items)。
+    """
+    from src.core.source_health import check_source
+
+    return check_source(source_id, use_cache=not refresh)
 
 
 @router.post("/reset-to-seed")
