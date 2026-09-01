@@ -93,6 +93,10 @@ export default function KlineChart(props: {
   kindsVisible?: Partial<Record<KlineEventKind, boolean>>
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
+  /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
+  onRangeSelect?: (range: { from: string; to: string } | null) => void
+  /** v2.1 §10.2: 十字光标联动回调 (副图/资金面板同步高亮) */
+  onCrosshairMove?: (param: { time: string; price: number | null } | null) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -162,6 +166,41 @@ export default function KlineChart(props: {
       }
     })
     observer.observe(container)
+
+    // ── v2.1 §10.2 K线大图交互规范 ──
+    // (1) 双击还原: fitContent() 全局视角
+    chart.subscribeDblClick(() => {
+      chart.timeScale().fitContent()
+    })
+
+    // (2) 选段时间: v5 lightweight-charts 用 subscribeVisibleTimeRangeChange
+    // (subscribeSelection 是 v4 API, v5 已移除). 推给父组件 → Quote.tsx 反查资金面板.
+    chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+      const r =
+        range && range.from !== undefined && range.to !== undefined
+          ? {
+              from: String(
+                typeof range.from === 'number' ? range.from : (range.from as { timestamp?: number })?.timestamp ?? range.from
+              ),
+              to: String(
+                typeof range.to === 'number' ? range.to : (range.to as { timestamp?: number })?.timestamp ?? range.to
+              ),
+            }
+          : null
+      props.onRangeSelect?.(r)
+    })
+
+    // (3) 十字光标联动: 推 { time, price } 给副图/资金面板
+    chart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time || param.point === undefined) {
+        props.onCrosshairMove?.(null)
+        return
+      }
+      const price = series.coordinateToPrice(param.point.y)
+      const time =
+        typeof param.time === 'number' ? String(param.time) : String(param.time)
+      props.onCrosshairMove?.({ time, price: price ?? null })
+    })
 
     return () => {
       observer.disconnect()
