@@ -8,6 +8,8 @@ import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/a
 // 点任意路由都要下载/解析整个应用。改为 React.lazy 按需加载, 首屏只下载登录页+当前页。
 const DashboardPage = lazy(() => import('@/pages/Dashboard'))
 const OpportunitiesPage = lazy(() => import('@/pages/Opportunities'))
+// v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
+const DarkFundTopPage = lazy(() => import('@/pages/DarkFundTop'))
 const StocksPage = lazy(() => import('@/pages/Stocks'))
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
 // 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
@@ -45,6 +47,8 @@ const navItems = [
   // §4.3 行情三合一: /forecast 由「预测」升为「行情」入口
   { to: '/forecast', icon: LineChart, label: '行情', perm: 'view_forecast' },
   { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
+  // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
+  { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_opportunities' },
   { to: '/reports', icon: FileText, label: '报告', perm: 'view_reports' },
   { to: '/history', icon: Clock, label: '历史' },
   { to: '/portfolio', icon: List, label: '持仓', perm: 'edit_portfolio' },
@@ -63,7 +67,7 @@ const navItems = [
 const desktopNavGroups = [
   { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
   { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast'].includes(n.to)) },
-  { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities'].includes(n.to)) },
+  { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
   { key: 'research', label: '投研', items: navItems.filter(n => ['/reports'].includes(n.to)) },
@@ -463,6 +467,8 @@ function App() {
 
               <Route path="/" element={<DashboardPage />} />
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
+              {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流;复用 view_opportunities 权限) */}
+              <Route path="/dark-fund-top" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               {/* §4.3 行情三合一: /forecast 作为行情入口(内部分时日K/预测/资金/事件 四 Tab) */}
               <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />

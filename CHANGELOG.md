@@ -7,6 +7,11 @@
 - **v2.1 §11.5 通知送达回执**(端点 + 时间戳落库 + 测试)。`src/core/notifier.py` 每渠道独立记录 `delivered_at`(成功)/`failed_at`(失败) ISO 时间戳。`src/web/api/notifications.py` 新增 `GET /api/notifications/{nid}/status` 端点: 返回 `push_status`(pending/sent/failed/skipped)+ `channels[]` 每渠道独立状态 + `delivered_at`(首个成功渠道时间)+ `created_at`。`tests/test_notification_status.py` 5 例 (单通知状态、404、未授权用户 404、delivered_at 取首个成功、无成功渠道时 None)。验收硬约束: 409/500 防账号探测;返回字段不含 payload;S5 归属校验 (user_id 隔离, 仅看本人 nid)。
 - **v2.1 §10 K线大图 → 右栏资金面板联动**（完成 §10 半成品）。`frontend/src/pages/Quote.tsx` 接 KlineChart 两个 props：`onRangeSelect` → 选段时间窗 `selectedRange: {from,to}` → FundPanel 过滤 rows + 区间聚合摘要（明盘/暗盘净额累计）+ 表格只显区间内 row；`onCrosshairMove` → `hoveredDate` → FundPanel 行高亮（背景色 + 蓝色 ring）。日期维度都是 YYYY-MM-DD 字符串可直接字典序比较，无需 Date 解析。Quote.tsx 不需要新依赖（无新 npm）。`pnpm tsc -b` 0 错 + `pnpm build` 15.01s 全绿。
 - **v2.1 §11 P0-B 一致性补丁(2026-09-01)**: `src/web/api/datasources.py` create/update/delete 三处路由也加 `_ensure_health_columns(db)` 自愈(xiaoze6096 上封信建议 + 我认可的防御一致性;原本只有 list/get/health/data-sources 三处, v0.4.51 已全绿但 update/delete 在老库上仍可能因缺列崩 500)。`pytest tests/test_datasource_admin_api.py tests/test_datasource_reconcile.py tests/test_datasource_test_path.py` 7 passed。
+- **v0.4.52 P1-B 前端暗盘资金 TOP 榜页面**(v0.4.50 后端已接入,前端补齐):
+  - `frontend/packages/api/src/marketScan.ts` 新增: `marketScanApi.darkFundTop()` + `refreshDarkFundTop()` + `DarkFundTopSnapshot` / `DarkFundTopUnavailable` / `DarkFundTopRow` 类型(联合类型区分 available:true/false,无快照时显示 note + 手动刷新按钮,不编造榜单)。
+  - `frontend/src/pages/DarkFundTop.tsx` 新增: 头部摘要卡(快照日 + universe + computed + TOP + thsdk_dde 来源标识)+ 7 列表格(代码/名称/主力净流入/占比/总成交/.tck 暗盘对照/数据源)+ 链接跳转 quote?type=stock&symbol=。无快照态显示警告 + 立即扫描按钮。代码-单元格用 `<a href="/quote?type=stock&symbol=X">` 直跳行情页。
+  - `App.tsx` 加 lazy import + Route `/dark-fund-top` + navItems 「暗盘 TOP」侧栏入口(归「机会」组,复用 `view_opportunities` 权限)。
+  - `pnpm tsc -b` 0 错 + `pnpm build` 15.16s 全绿。
 
 ### fix
 
