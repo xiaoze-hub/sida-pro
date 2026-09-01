@@ -1,5 +1,6 @@
 import logging
 
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
 import time as _time
@@ -12,6 +13,9 @@ from src.models.market import MarketCode
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 盘口(thsdk 实时快照)硬超时秒数: 行情服务不通时单次可卡 30s, 超时即放弃并显式"无数据"
+ORDERBOOK_TIMEOUT_S = 8.0
 
 # 2026-08-20: summary 接口开盘后 20-30s(主力意图逐笔翻页), 与前端并发请求叠加
 # 撞 Caddy 30s 反代超时 → 502 Bad Gateway。加 30s 进程内缓存, 单次冷启动后秒回。
@@ -336,7 +340,7 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
 
     仅 A 股; 任一字段计算失败独立降级为 None, 不拖垮整体, 不编造。
     """
-    out: dict = {"gs_signals": None, "fund_flow": None, "events": None}
+    out: dict = {"gs_signals": None, "fund_flow": None, "events": None, "orderbook": None}
     if market_code.value != "CN":
         return out
     try:
@@ -348,6 +352,35 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         return out
     if not bars:
         return out
+
+    # ⓪ orderbook: 盘口队列 + 托压单(设计稿 §3.1)
+    #    优先 .img 离线文件(完整委托队列); 无 .img 时退回 thsdk 实时快照;
+    #    都拿不到 → None(显式无数据, 不编造)。
+    try:
+        from src.core import orderbook_engine as obe
+
+        snap = None
+        img_path = obe.find_img_file(symbol, "CN")
+        if img_path:
+            snaps = obe.load_snapshots_from_img(img_path)
+            if snaps:
+                snap = snaps[-1]  # 最新一帧
+                out["orderbook"] = {**obe.order_book_queue(snap), "img_path": img_path}
+        if out["orderbook"] is None:
+            # thsdk 实时快照带重试退避, 行情服务不通时单次可卡 30s(实测 -6 超时),
+            # 三轮退避就是 90s, 会把 summary 接口拖到反代超时。加硬超时护栏:
+            # 超时即放弃并显式"无数据", 绝不阻塞主链路。
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                # fetch_snapshot 需 thsdk 代码(USZA/USHA), 不是腾讯 sz/sh 风格
+                fut = ex.submit(obe.fetch_snapshot, obe.to_ths_code(symbol) or "")
+                try:
+                    snap = fut.result(timeout=ORDERBOOK_TIMEOUT_S)
+                except Exception:  # noqa: BLE001  # 含 TimeoutError / thsdk 异常
+                    snap = None
+            out["orderbook"] = obe.order_book_queue(snap)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("orderbook %s failed: %s", symbol, e)
+        out["orderbook"] = None
 
     # ① gs_signals
     try:

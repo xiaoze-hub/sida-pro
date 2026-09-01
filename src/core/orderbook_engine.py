@@ -25,11 +25,24 @@
 非交易时段盘口通常为收盘静态快照(实测 2026-08-19 21:14 神剑股份 USZA002361:
 买一 11.27/297笔/266492手, 三次采样完全一致) → 事件检测为空, 属正常现象, 如实上报。
 
+## 2026-09-01: .img 离线数据源接入(设计稿 §3.1)
+
+除 thsdk 实时盘口外, 本模块新增**通达信 .img 离线数据源**(解析见 `tdx_img_parser`):
+`load_snapshots_from_img()` 把 .img 的十档帧序列转换成与 `fetch_snapshot()` **同构**的
+快照 dict, 因此 `order_book_evolution` / `order_book_imbalance` / `ghost_order`
+三个算法无需任何改动即可跑离线数据。
+
+单位换算(硬约束: 本仓库金额=元 / 成交量=股):
+  - `tdx_img_parser` 输出量单位为**股**
+  - 本引擎 `ordersque` 约定单位为**手**(1 手 = 100 股, A 股整数换算)
+  - 因此 ordersque 元素 = round(股 / 100); 金额口径仍按 `price × 手 × 100` 还原成元
+
 限频: 每次调用后 sleep 50ms(仓库统一规则); 失败重试 3 次退避 0.5s。
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -40,6 +53,8 @@ try:
     from thsdk import THS  # 模块级软依赖: 无 thsdk 环境(如纯导入分析)不报错
 except Exception:  # pragma: no cover
     THS = None
+
+SHARES_PER_HAND = 100  # A股: 1 手 = 100 股
 
 # 合约常量
 RATE_LIMIT_S = 0.05      # 限频: 每次行情调用后 sleep 50ms
@@ -125,6 +140,176 @@ def fetch_snapshot(ths_code: str) -> dict[str, Any]:
             last_err = e
             time.sleep(RETRY_BACKOFF_S * attempt)
     raise RuntimeError(f"连续 {MAX_RETRY} 次采集失败: {last_err}")
+
+
+# ---------------------------------------------------------------------------
+# .img 离线数据源(2026-09-01, 设计稿 §3.1)
+# ---------------------------------------------------------------------------
+def img_frame_to_snapshot(fr: Any, ts: float, dt_iso: str | None = None) -> dict[str, Any]:
+    """.img 单帧(ImgSnapshot) → 与 fetch_snapshot 同构的快照 dict。
+
+    Args:
+        fr: `tdx_img_parser.ImgSnapshot`(十档价格/量单位: 元 / 股)
+        ts: 快照时间戳(epoch 秒); 离线帧按调用方给定的时间轴传入
+        dt_iso: 可选的时间字符串, 仅用于展示
+
+    Returns:
+        与 `fetch_snapshot()` 同构: {ts, dt, bid_levels, ask_levels, bid, ask}
+        另附 `queue`(委托队列, 单位手) 与 `queue_shares`(原始股), 供托压单识别。
+    """
+    def _levels(prices: list, vols: list) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for i, (p, v) in enumerate(zip(prices or [], vols or [])):
+            if p is None or v is None:
+                continue
+            hands = int(round(v / SHARES_PER_HAND))
+            out.append({"orderlevel": i + 1, "price": float(p), "ordersque": [hands]})
+        return out
+
+    bid_levels = _levels(fr.bid_prices, fr.bid_vols)
+    ask_levels = _levels(fr.ask_prices, fr.ask_vols)
+    queue_shares = list(fr.queue) if getattr(fr, "queue", None) else None
+    return {
+        "ts": ts,
+        "dt": dt_iso or getattr(fr, "t", None),
+        "bid_levels": bid_levels,
+        "ask_levels": ask_levels,
+        "bid": {float(lv["price"]): int(sum(lv["ordersque"])) for lv in bid_levels},
+        "ask": {float(lv["price"]): int(sum(lv["ordersque"])) for lv in ask_levels},
+        # 委托队列: 手(引擎口径) + 原始股(不丢信息)
+        "queue": [int(round(v / SHARES_PER_HAND)) for v in queue_shares] if queue_shares else None,
+        "queue_shares": queue_shares,
+        "source": "img",
+    }
+
+
+def load_snapshots_from_img(img_path: str, limit: int | None = None) -> list[dict[str, Any]]:
+    """从 .img 文件加载盘口快照序列(离线), 输出与实时采集同构。
+
+    Args:
+        img_path: .img 文件路径
+        limit:   最多取前 N 帧; None = 全部
+
+    Returns:
+        list[快照dict]; 文件不存在/解析失败/无帧 → [] (调用方显式标"无数据", 不编造)。
+
+    注: .img 帧无日期只有 "HH:MM:SS", ts 按帧序合成(相邻 1 秒),
+    仅供演变算法的相对时序判定, 不代表绝对时间。
+    """
+    try:
+        from src.core.tdx_img_parser import frames_from_img
+    except Exception as e:  # pragma: no cover
+        logger.warning("tdx_img_parser 不可用: %s", e)
+        return []
+    try:
+        frames = frames_from_img(img_path)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("解析 .img 失败 %s: %s", img_path, e)
+        return []
+    if not frames:
+        return []
+    if limit:
+        frames = frames[:limit]
+    return [img_frame_to_snapshot(fr, ts=float(i), dt_iso=getattr(fr, "t", None))
+            for i, fr in enumerate(frames)]
+
+
+def order_book_queue(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """单快照的盘口队列 + 托压单形态识别(设计稿 §3.1 / §5.3)。
+
+    形态判定(与 ImgSnapshot 派生指标同口径, 缺失一律 None 不编造):
+      - 托单(bid 侧): 买盘力量占比 >= 0.6
+      - 压单(ask 侧): 买盘力量占比 <= 0.4
+      - 队列失衡: 委托队列总量 - 卖一量(股); 队列巨大而卖一很小 → 疑似压单
+
+    Returns:
+        {available, best_bid, best_ask, spread, bid_pressure, queue_shares,
+         queue_imbalance, shape: '托盘'|'压盘'|'均衡'|None, source}
+    """
+    if not snapshot:
+        return {"available": False, "shape": None, "note": "无数据"}
+    bid = snapshot.get("bid") or {}
+    ask = snapshot.get("ask") or {}
+    best_bid = max(bid) if bid else None
+    best_ask = min(ask) if ask else None
+    bid_amt_hands = sum(bid.values()) if bid else 0
+    ask_amt_hands = sum(ask.values()) if ask else 0
+    total = bid_amt_hands + ask_amt_hands
+    pressure = round(bid_amt_hands / total, 6) if total > 0 else None
+
+    queue_shares = snapshot.get("queue_shares")
+    queue_total = int(sum(queue_shares)) if queue_shares else None
+    ask1_shares = None
+    if snapshot.get("ask_levels"):
+        v = snapshot["ask_levels"][0].get("ordersque") or []
+        ask1_shares = int(sum(v)) * SHARES_PER_HAND if v else None
+    imbalance = None
+    if queue_total is not None and ask1_shares is not None:
+        imbalance = queue_total - ask1_shares
+
+    shape: str | None = None
+    if pressure is not None:
+        if pressure >= 0.6:
+            shape = "托盘"
+        elif pressure <= 0.4:
+            shape = "压盘"
+        else:
+            shape = "均衡"
+    return {
+        "available": True,
+        "source": snapshot.get("source", "thsdk"),
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread": round(best_ask - best_bid, 6) if (best_bid and best_ask) else None,
+        "bid_pressure": pressure,
+        "queue_shares": queue_total,
+        "queue_imbalance": imbalance,
+        "shape": shape,
+    }
+
+
+def to_ths_code(symbol: str) -> str | None:
+    """6 位 A 股代码 → thsdk 代码(USZA / USHA / USBJ 前缀)。
+
+    thsdk 的 `order_book_bid/ask` 用 USZA/USHA 前缀(实测 神剑股份 USZA002361),
+    与 `dark_l2` 用的 sz/sh 腾讯风格**不是同一套**, 混用会取不到数。
+    已是 thsdk 格式的(USZA/USHA/USBJ 前缀 6 位)原样返回; 无法识别返回 None。
+    """
+    s = (symbol or "").strip().upper()
+    for prefix in ("USZA", "USHA", "USBJ", "USTM"):
+        if s.startswith(prefix) and s[len(prefix):].isdigit():
+            return s
+    if s.isdigit() and len(s) == 6:
+        if s[0] in ("6", "9") or s.startswith("688"):
+            return f"USHA{s}"
+        if s[0] in ("0", "2", "3"):
+            return f"USZA{s}"
+        if s[0] in ("4", "8"):
+            return f"USBJ{s}"
+    return None
+
+
+def find_img_file(symbol: str, market: str = "CN") -> str | None:
+    """按代码在 PANWATCH_IMG_DIR 下找对应 .img 文件。
+
+    约定文件名包含 6 位代码(如 `sz000977*.img` / `000977*.img`)。
+    目录未配置或文件不存在 → None(调用方显式标"无数据")。
+    """
+    base = (os.environ.get("PANWATCH_IMG_DIR") or "").strip()
+    if not base or not os.path.isdir(base):
+        return None
+    code = (symbol or "").strip()
+    if not code:
+        return None
+    try:
+        for name in os.listdir(base):
+            if not name.lower().endswith(".img"):
+                continue
+            if code in name:
+                return os.path.join(base, name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("扫描 .img 目录失败 %s: %s", base, e)
+    return None
 
 
 # ---------------------------------------------------------------------------

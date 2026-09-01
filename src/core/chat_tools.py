@@ -490,9 +490,28 @@ def get_dark_flow_precise(code: str, date_: str = None, user_id: str = "admin") 
     """
     params = {"code": code, "date": date_, "user_id": user_id}
     try:
+        from src.core.dark_split import dark_flow_from_tck, find_tck_file
         from src.core.tdx_tick_parser import parse_tck
-        # TODO: 用 parse_tck 重算暗盘 (Hermes 0831 口径: 逐笔成交分档 = 净+898 万)
-        return _err("get_dark_flow_precise", params, ".tck 解析已就绪, 主笔级暗盘复算待 P0-3 真实接入", note="无数据")
+
+        path = find_tck_file(code, date_)
+        if not path:
+            return _err(
+                "get_dark_flow_precise", params,
+                "无 .tck 文件(需配置 PANWATCH_TCK_DIR 且文件名含 6 位代码/日期)",
+                note="无数据",
+            )
+        trades, orders, _cancels = parse_tck(path)
+        if not trades:
+            return _err("get_dark_flow_precise", params, f".tck 无成交记录: {path}", note="无数据")
+        data = dark_flow_from_tck(trades, orders)
+        data["tck_path"] = path
+        data["cancel_count"] = len(_cancels or [])
+        return _ok(
+            "get_dark_flow_precise", params, data,
+            units={"net": "元", "active_net": "元", "passive_net": "元",
+                   "ming_net": "元", "small_net": "元"},
+            note="被动侧 maker 未落盘, 仅主笔级还原",
+        )
     except Exception as e:
         return _err("get_dark_flow_precise", params, str(e))
 
@@ -501,8 +520,40 @@ def get_order_book_queue(code: str, user_id: str = "admin") -> ToolResult:
     """(7) .img 盘口队列 / 托压单 (字段 64 仅每笔挂单量, 无委托号 → 仅形态识别, 手册 §4.2 §5.2)。"""
     params = {"code": code, "user_id": user_id}
     try:
-        from src.core.tdx_img_parser import parse_img  # noqa: F401  (Hermes 审码修正: parse_img 在 tdx_img_parser)
-        return _err("get_order_book_queue", params, ".img 解析已就绪, 托压单形态识别待 P3 真实实现", note="无数据")
+        from src.core import orderbook_engine as obe
+
+        snap = None
+        source = None
+        img_path = obe.find_img_file(code, "CN")
+        if img_path:
+            snaps = obe.load_snapshots_from_img(img_path)
+            if snaps:
+                snap, source = snaps[-1], "img"
+        if snap is None:
+            # 无 .img → 回退 thsdk 实时快照(带硬超时, 行情服务不通时不拖垮调用)
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                # fetch_snapshot 需 thsdk 代码(USZA/USHA), 不是腾讯 sz/sh 风格
+                fut = ex.submit(obe.fetch_snapshot, obe.to_ths_code(code) or "")
+                try:
+                    snap, source = fut.result(timeout=8.0), "thsdk"
+                except Exception:  # noqa: BLE001
+                    snap, source = None, None
+        if snap is None:
+            return _err(
+                "get_order_book_queue", params,
+                "无 .img 文件(需配置 PANWATCH_IMG_DIR)且 thsdk 实时快照不可用",
+                note="无数据",
+            )
+        data = obe.order_book_queue(snap)
+        if source == "img":
+            data["img_path"] = img_path
+        return _ok(
+            "get_order_book_queue", params, data,
+            units={"best_bid": "元", "best_ask": "元", "spread": "元", "queue_shares": "股"},
+            note="字段 64 仅每笔挂单量、无委托号 → 仅形态识别",
+        )
     except Exception as e:
         return _err("get_order_book_queue", params, str(e))
 

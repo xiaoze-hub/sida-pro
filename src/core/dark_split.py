@@ -63,8 +63,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from typing import Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 # --- big_order_flow 方向编码 ---
 BIG_ORDER_ACTIVE_BUY = 1      # 主动买(吃卖盘)
@@ -297,4 +301,119 @@ def ming_net_from_big_orders(ticks: Iterable[dict]) -> dict:
         "count": count,
         "skipped": skipped,
         "source": "big_order_flow",
+    }
+
+
+# ---------------------------------------------------------------------------
+# .tck 委托号级暗盘还原(2026-09-01, Hermes 0831 口径)
+# ---------------------------------------------------------------------------
+def find_tck_file(symbol: str, date_: str | None = None) -> str | None:
+    """在 PANWATCH_TCK_DIR 下按代码(可选日期)找 .tck 文件。
+
+    约定文件名包含 6 位代码; 传了 date_ 则再要求包含该日期(支持 `2026-08-31`
+    与 `20260831` 两种写法)。目录未配置或文件不存在 → None(调用方显式"无数据")。
+    """
+    base = (os.environ.get("PANWATCH_TCK_DIR") or "").strip()
+    if not base or not os.path.isdir(base):
+        return None
+    code = (symbol or "").strip()
+    if not code:
+        return None
+    date_keys = []
+    if date_:
+        d = str(date_).strip()
+        date_keys.append(d.replace("-", ""))
+        date_keys.append(d)
+    try:
+        hits = []
+        for name in os.listdir(base):
+            if not name.lower().endswith(".tck"):
+                continue
+            if code not in name:
+                continue
+            if date_keys and not any(k in name for k in date_keys):
+                continue
+            hits.append(name)
+        if not hits:
+            return None
+        hits.sort()
+        return os.path.join(base, hits[-1])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("扫描 .tck 目录失败 %s: %s", base, e)
+        return None
+
+
+def dark_flow_from_tck(trades: Iterable[dict], orders: Iterable[dict] | None = None,
+                       threshold_yuan: float = MING_THRESHOLD_30W) -> dict:
+    """.tck 主笔级暗盘还原(Hermes 0831 口径)。
+
+    口径说明(严格按实测事实, 不编造):
+      - **主动侧**: `trades` 的 tag 为 `2B`(主买) / `2S`(主卖), 与委托的 a28/a32
+        是 1:1 对应关系 → 主动买/卖净额可直接精确汇总。
+      - **被动侧**: 委托单(tag `00`)的 `a28`(→主动买成交) / `a32`(→主动卖成交)
+        指向吃掉它的那笔主动成交。若 a28 非空说明这笔委托**被主动买吃掉**
+        → 该委托是挂卖单(被动卖); a32 非空 → 挂买单(被动买)。
+        ⚠️ maker(挂单方)在 .tck 里**未完整落盘**, 因此被动侧只能做到
+        **主笔级还原**, 不是逐笔委托号级完整还原, 结果带 `partial=True` 标记。
+
+    明盘/暗盘分档: 复用 `split_ming_dark`(单笔 > threshold_yuan 归明盘, 其余归小单),
+    暗盘 ⊂ 小单中被识别为拆单的部分, 此处未做拆单识别 → 返回的是**小单口径**,
+    以 `dark_basis: "small_orders"` 明示, 不做等价冒充。
+
+    单位: 金额 = 元, 量 = 股(项目硬约束)。
+
+    Returns:
+        {active_buy, active_sell, active_net, passive_buy, passive_sell, passive_net,
+         net, ming_net, small_net, trade_count, order_count, partial, dark_basis}
+        无 trades → net 等为 None 且 note="无数据"。
+    """
+    trades = list(trades or [])
+    orders = list(orders or [])
+    if not trades:
+        return {
+            "active_buy": None, "active_sell": None, "active_net": None,
+            "passive_buy": None, "passive_sell": None, "passive_net": None,
+            "net": None, "ming_net": None, "small_net": None,
+            "trade_count": 0, "order_count": 0,
+            "partial": True, "dark_basis": "small_orders", "note": "无数据",
+        }
+
+    active_buy = active_sell = 0.0
+    for t in trades:
+        amt = float(t.get("amt") or 0.0)
+        if (t.get("dir") or "").upper().startswith("B"):
+            active_buy += amt
+        elif (t.get("dir") or "").upper().startswith("S"):
+            active_sell += amt
+
+    passive_buy = passive_sell = 0.0
+    for o in orders:
+        amt = float(o.get("amt") or 0.0)
+        if o.get("a32"):        # 被主动卖吃掉 → 挂买单(被动买)
+            passive_buy += amt
+        elif o.get("a28"):      # 被主动买吃掉 → 挂卖单(被动卖)
+            passive_sell += amt
+
+    # 适配: parse_tck 的成交用 `dir`("B"/"S"), split_ming_dark 约定用 `d`。
+    # 在边界转换, 不改两侧接口; 方向无法识别的笔交给 split_ming_dark 计入 skipped。
+    fs = split_ming_dark(
+        [{"amt": t.get("amt"), "d": (t.get("dir") or "").upper()[:1]} for t in trades],
+        threshold_yuan=threshold_yuan,
+    )
+    return {
+        "active_buy": round(active_buy, 2),
+        "active_sell": round(active_sell, 2),
+        "active_net": round(active_buy - active_sell, 2),
+        "passive_buy": round(passive_buy, 2),
+        "passive_sell": round(passive_sell, 2),
+        "passive_net": round(passive_buy - passive_sell, 2),
+        "net": round((active_buy + passive_buy) - (active_sell + passive_sell), 2),
+        "ming_net": round(fs.ming_net, 2),
+        "small_net": round(fs.dark_net, 2),
+        "trade_count": len(trades),
+        "order_count": len(orders),
+        # maker 未落盘 → 被动侧仅是主笔级还原, 非委托号级完整还原
+        "partial": True,
+        "dark_basis": "small_orders",
+        "note": "被动侧 maker 未落盘, 仅主笔级还原; 暗盘为小单口径(未做拆单识别)",
     }

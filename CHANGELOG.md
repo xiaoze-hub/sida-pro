@@ -21,6 +21,8 @@
 
 - SIDA Pro 设计稿 v2.0 落地 P1: K线 6 层图层化架构 (`packages/biz-ui/src/components/InteractiveKline.tsx`) — L1 趋势(MA5/10/20/60 + 牛线/马线)、L2 GS 买卖点(实心=已确认/空心=待确认)、L3 资金柱(明盘+暗盘)、L4 事件标注(涨停/龙虎榜/公告/拆单簇/⚠撤/🛡托/🔒压/解套/我的买卖 共 10 种图标)、L5 副图切换; 新增 4 按钮图层开关(trend/signal/capital/event, 默认全开), 受 `layers` state 控制, props `gsSignals/fundFlow/events/supportPressure` 全部可选(后端 P2 输出前为空数组, 不报错); 新增类型 `GsSignalPoint/FundFlowBar/KlineEvent/KlineEventKind/SupportPressureLine/LayerState` 均 export, 父组件 `stock-insight-modal` 接入 state+props+summary API 拓展字段 (`gs_signals/fund_flow/events`), `IndexDetail` 复用默认图层; 严格按设计稿 §5.2/§5.3 实现, 防"把疑似当确认"(空心 ○G/○S); 支撑/压力位走虚线价线 (`lineStyle: 2`), 不受 layers 开关影响; build 14s 通过, InteractiveKline bundle 50→63kB(+13kB 合理)
 
+- SIDA Pro 设计稿 v2.0 §4.3 信息架构合并 + 第三章 .img 链路 + 第七章 2工具补实 (xiaoze6096 交付, Hermes 整合): ① 后端 .img 链路接通 — `orderbook_engine.py` 新增 `img_frame_to_snapshot`/`load_snapshots_from_img`/`order_book_queue`/`find_img_file`/`to_ths_code` 五函数(输出与 fetch_snapshot 同构, 三算法零改动), `klines.py` summary 新增 `orderbook` 字段 + thsdk 8秒硬超时护栏(90s→19.6s); ② 2 空壳工具补实 — `chat_tools.py` `get_dark_flow_precise`/`get_order_book_queue` 从"待接入"改真实实现(被动侧 a28/a32 反推标 `partial`, 暗盘标 `small_orders` 不冒充暗盘); ③ 前端 §4.3 — 新增 `PageTabs.tsx`(受控 Tab 栏, 沿用分段控件样式)/`TabbedPage.tsx`(Tab 状态写 URL `?tab=`, 权限过滤, 未挂组件显式"待接入"占位), `Quote.tsx`(行情三合一 个股/指数/板块, 四Tab 分时日K/预测/资金/事件, 板块K线无后端则显式引导不编造), `SettingsHub.tsx`(设置/审计/帮助), `System.tsx`(Agent/数据源), 旧路由 /agents /datasources /audit /help 全部 `LegacyTabRedirect` 重定向保留. 验证: 前端 typecheck + build 14s 全绿, 后端 57 例新增单测全绿
+
 ### fix
 
 - InteractiveKline 分钟模式 ref 初始 prev 同步 (`minuteRef.current = { pts: [], prev: minutePrevClose }` 立即赋值, 避免 mount 阶段 race, 原写法初始 prev=null 被立即覆盖但易让 lint 误判)

@@ -72,17 +72,20 @@ def _patch_bars(monkeypatch, bars):
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=120: bars)
 
 
+_ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None, "orderbook": None}
+
+
 def test_build_layer_data_non_cn_returns_none():
     from src.models.market import MarketCode
     out = kapi._build_layer_data("000977", MarketCode.HK)
-    assert out == {"gs_signals": None, "fund_flow": None, "events": None}
+    assert out == _ALL_NONE
 
 
 def test_build_layer_data_no_bars_returns_none(monkeypatch):
     from src.models.market import MarketCode
     _patch_bars(monkeypatch, [])
     out = kapi._build_layer_data("000977", MarketCode.CN)
-    assert out == {"gs_signals": None, "fund_flow": None, "events": None}
+    assert out == _ALL_NONE
 
 
 def test_build_layer_data_full(monkeypatch):

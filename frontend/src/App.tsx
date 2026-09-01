@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, Navigate } from 'react-router-dom'
-import { TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, HelpCircle, ShieldCheck, User, Bell, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -9,23 +9,23 @@ import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/a
 const DashboardPage = lazy(() => import('@/pages/Dashboard'))
 const OpportunitiesPage = lazy(() => import('@/pages/Opportunities'))
 const StocksPage = lazy(() => import('@/pages/Stocks'))
-const AgentsPage = lazy(() => import('@/pages/Agents'))
-const SettingsPage = lazy(() => import('@/pages/Settings'))
-const DataSourcesPage = lazy(() => import('@/pages/DataSources'))
+// §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
+// 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
 const HistoryPage = lazy(() => import('@/pages/History'))
 const ReportsPage = lazy(() => import('@/pages/Reports'))
 const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
 const PriceAlertsPage = lazy(() => import('@/pages/PriceAlerts'))
 const PaperTradingPage = lazy(() => import('@/pages/PaperTrading'))
 const LoginPage = lazy(() => import('@/pages/Login'))
-const ForecastPage = lazy(() => import('@/pages/Forecast'))
 const IndexDetailPage = lazy(() => import('@/pages/IndexDetail'))
 const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
 const ShadowAccountPage = lazy(() => import('@/pages/ShadowAccount'))
 const NotificationsPage = lazy(() => import('@/pages/Notifications'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
-const HelpPage = lazy(() => import('@/pages/Help'))
-const AuditPage = lazy(() => import('@/pages/Audit'))
+// 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
+const QuotePage = lazy(() => import('@/pages/Quote'))
+const SystemPage = lazy(() => import('@/pages/System'))
+const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
@@ -40,7 +40,8 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
-  { to: '/forecast', icon: LineChart, label: '预测', perm: 'view_forecast' },
+  // §4.3 行情三合一: /forecast 由「预测」升为「行情」入口
+  { to: '/forecast', icon: LineChart, label: '行情', perm: 'view_forecast' },
   { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   { to: '/reports', icon: FileText, label: '报告', perm: 'view_reports' },
   { to: '/history', icon: Clock, label: '历史' },
@@ -48,13 +49,12 @@ const navItems = [
   { to: '/shadow', icon: Shield, label: '影子账户', perm: 'manage_shadow' },
   { to: '/paper-trading', icon: Activity, label: '模拟盘', perm: 'manage_paper_trading' },
   { to: '/profile', icon: User, label: '个人中心' },
-  { to: '/agents', icon: Bot, label: 'Agent', perm: 'manage_agents' },
-  { to: '/datasources', icon: Database, label: '数据源', perm: 'manage_datasources' },
+  // §4.3: Agent + 数据源 收纳进「系统」二级页(/agents /datasources 保留为重定向)
+  { to: '/system', icon: ServerCog, label: '系统' },
   { to: '/notifications', icon: Bell, label: '通知' },
   { to: '/alerts', icon: BellRing, label: '提醒' },
+  // §4.3: 审计 + 帮助 收纳进「设置」页签(/audit /help 保留为重定向)
   { to: '/settings', icon: Settings, label: '设置' },
-  { to: '/audit', icon: ShieldCheck, label: '审计', ownerOnly: true },
-  { to: '/help', icon: HelpCircle, label: '帮助' },
 ]
 // 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
@@ -64,7 +64,8 @@ const desktopNavGroups = [
   { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities'].includes(n.to)) },
   { key: 'research', label: '投研', items: navItems.filter(n => ['/reports', '/history'].includes(n.to)) },
   { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/paper-trading', '/profile'].includes(n.to)) },
-  { key: 'system', label: '系统', items: navItems.filter(n => ['/agents', '/datasources', '/notifications', '/alerts', '/settings', '/audit', '/help'].includes(n.to)) },
+  // §4.3: 系统域从 7 项瘦身到 4 项(Agent/数据源→系统页, 审计/帮助→设置页签)
+  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/alerts', '/settings'].includes(n.to)) },
 ]
 // 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/提醒(2026-08-13, 模拟盘移入"更多"下拉,
 // 不再用 slice(0,5) 依赖 navItems 顺序); navItems 数组顺序保持不动, 桌面端平铺分组完全不变
@@ -109,7 +110,7 @@ const isDemoUser = (): boolean => getJwtUsername() === 'demo'
 const isGuestUser = (): boolean => getJwtRole() === 'guest' || isDemoUser()
 // 角色化隐藏导航: owner/member 全部显示(现状不变); guest(demo) 隐藏管理/个人页面
 // (数据源/AI配置/Agent/策略等核心内容; 设置/持仓/自选可浏览但只读)
-const GUEST_HIDDEN_PATHS = ['/paper-trading', '/alerts', '/shadow', '/agents', '/datasources']
+const GUEST_HIDDEN_PATHS = ['/paper-trading', '/alerts', '/shadow', '/system']
 const isNavHiddenForGuest = (to: string): boolean =>
   GUEST_HIDDEN_PATHS.includes(to) || to.startsWith('/manage')
 // owner 专属导航(审计页): 非 owner 一律隐藏(2026-08-15)
@@ -129,6 +130,19 @@ const mobileMoreNavItems = navItems.filter(n => !MOBILE_PRIMARY_TO.includes(n.to
 function LegacyStocksRedirect() {
   const location = useLocation()
   return <Navigate to={`/portfolio${location.search}`} replace />
+}
+
+/**
+ * §4.3 旧路由重定向: 页面被合并进 Tab 后, 老路由统一跳到新地址的对应页签。
+ * 保留旧路径 = 不破坏既有书签 / 推送链接 / 用户习惯(设计稿要求"别回退")。
+ */
+function LegacyTabRedirect({ to }: { to: string }) {
+  const location = useLocation()
+  // 老链接可能自带 query, 合并进去(新地址的 ?tab= 由调用方给出, 优先级更高)
+  const merged = new URLSearchParams(location.search)
+  const target = new URLSearchParams(to.split('?')[1] || '')
+  target.forEach((v, k) => merged.set(k, v))
+  return <Navigate to={`${to.split('?')[0]}?${merged.toString()}`} replace />
 }
 
 // 认证守卫组件
@@ -436,12 +450,15 @@ function App() {
 
               <Route path="/" element={<DashboardPage />} />
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
-              <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><ForecastPage /></PermGuard>} />
+              {/* §4.3 行情三合一: /forecast 作为行情入口(内部分时日K/预测/资金/事件 四 Tab) */}
+              <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
-              <Route path="/agents" element={<PermGuard perm="manage_agents" myPerms={myPerms}><AgentsPage /></PermGuard>} />
+              {/* §4.3: Agent + 数据源 → /system 二级页 */}
+              <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/agents" element={<LegacyTabRedirect to="/system?tab=agents" />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/reports" element={<PermGuard perm="view_reports" myPerms={myPerms}><ReportsPage /></PermGuard>} />
               <Route path="/shadow" element={<PermGuard perm="manage_shadow" myPerms={myPerms}><ShadowAccountPage /></PermGuard>} />
@@ -449,10 +466,11 @@ function App() {
               <Route path="/alerts" element={<PriceAlertsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/profile" element={<ProfilePage />} />
-              <Route path="/help" element={<HelpPage />} />
-              <Route path="/audit" element={getJwtRole() === 'owner' ? <AuditPage /> : <Navigate to="/" replace />} />
-              <Route path="/datasources" element={<PermGuard perm="manage_datasources" myPerms={myPerms}><DataSourcesPage /></PermGuard>} />
-              <Route path="/settings" element={<SettingsPage />} />
+              {/* §4.3: 审计 + 帮助 → /settings 页签 */}
+              <Route path="/settings" element={<SettingsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/audit" element={<LegacyTabRedirect to="/settings?tab=audit" />} />
+              <Route path="/help" element={<LegacyTabRedirect to="/settings?tab=help" />} />
+              <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
               <Route path="/analysis/:symbol/:date" element={<AnalysisDetailPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
