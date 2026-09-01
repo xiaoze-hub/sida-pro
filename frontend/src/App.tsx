@@ -11,21 +11,23 @@ const OpportunitiesPage = lazy(() => import('@/pages/Opportunities'))
 const StocksPage = lazy(() => import('@/pages/Stocks'))
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
 // 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
-const HistoryPage = lazy(() => import('@/pages/History'))
-const ReportsPage = lazy(() => import('@/pages/Reports'))
+// §4.3 补齐(2026-09-01): History/Reports/PaperTrading/PriceAlerts/Notifications/
+// ShadowAccount 已由各枢纽页(ReportsHub/ShadowHub/NotificationsHub)内部懒加载,
+// App.tsx 不再直接挂载, 避免首屏多拉 6 个 chunk。
 const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
-const PriceAlertsPage = lazy(() => import('@/pages/PriceAlerts'))
-const PaperTradingPage = lazy(() => import('@/pages/PaperTrading'))
 const LoginPage = lazy(() => import('@/pages/Login'))
 const IndexDetailPage = lazy(() => import('@/pages/IndexDetail'))
 const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
-const ShadowAccountPage = lazy(() => import('@/pages/ShadowAccount'))
-const NotificationsPage = lazy(() => import('@/pages/Notifications'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
 const QuotePage = lazy(() => import('@/pages/Quote'))
 const SystemPage = lazy(() => import('@/pages/System'))
 const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
+// §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
+// 这三项属第 1 块, 产物被同步事故冲掉后重建时派活清单漏列, 对照设计稿补做。
+const ReportsHubPage = lazy(() => import('@/pages/ReportsHub'))
+const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
+const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
@@ -62,14 +64,18 @@ const desktopNavGroups = [
   { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
   { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast'].includes(n.to)) },
   { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities'].includes(n.to)) },
-  { key: 'research', label: '投研', items: navItems.filter(n => ['/reports', '/history'].includes(n.to)) },
-  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/paper-trading', '/profile'].includes(n.to)) },
-  // §4.3: 系统域从 7 项瘦身到 4 项(Agent/数据源→系统页, 审计/帮助→设置页签)
-  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/alerts', '/settings'].includes(n.to)) },
+  // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
+  // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
+  { key: 'research', label: '投研', items: navItems.filter(n => ['/reports'].includes(n.to)) },
+  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile'].includes(n.to)) },
+  // §4.3: 系统域从 7 项瘦身到 3 项(Agent/数据源→系统页, 审计/帮助→设置页签, 提醒→通知页签)
+  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/settings'].includes(n.to)) },
 ]
-// 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/提醒(2026-08-13, 模拟盘移入"更多"下拉,
-// 不再用 slice(0,5) 依赖 navItems 顺序); navItems 数组顺序保持不动, 桌面端平铺分组完全不变
-const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/forecast', '/alerts']
+// 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/通知(2026-09-01 §4.3 补齐:
+// 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
+// 老书签 /alerts 仍经 LegacyTabRedirect 跳到 /notifications?tab=alerts)。
+// navItems 数组顺序保持不动, 桌面端平铺分组完全不变。
+const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/forecast', '/notifications']
 
 // ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
 // 修复(M-2, 2026-08-23): atob 解 JWT payload 必须容错:
@@ -459,12 +465,19 @@ function App() {
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/agents" element={<LegacyTabRedirect to="/system?tab=agents" />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/reports" element={<PermGuard perm="view_reports" myPerms={myPerms}><ReportsPage /></PermGuard>} />
-              <Route path="/shadow" element={<PermGuard perm="manage_shadow" myPerms={myPerms}><ShadowAccountPage /></PermGuard>} />
-              <Route path="/paper-trading" element={<PermGuard perm="manage_paper_trading" myPerms={myPerms}><PaperTradingPage /></PermGuard>} />
-              <Route path="/alerts" element={<PriceAlertsPage />} />
-              <Route path="/notifications" element={<NotificationsPage />} />
+              {/* §4.3 补齐: 历史并入报告(投研内"历史Tab"), 都是研究产出。
+                  权限粒度对齐原路由: reports Tab=view_reports(Tab级过滤), history 原本无守卫。
+                  路由级不再套 PermGuard, 避免只有 history 权限的用户被整页拦住。 */}
+              <Route path="/reports" element={<ReportsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/history" element={<LegacyTabRedirect to="/reports?tab=history" />} />
+              {/* §4.3 补齐: 模拟盘并入影子(我的内"模拟Tab"), 都是模拟资金。
+                  权限粒度对齐原路由: shadow=manage_shadow / paper=manage_paper_trading,
+                  均为 Tab 级过滤 —— 只有模拟盘权限的用户仍能从 /paper-trading 进入。 */}
+              <Route path="/shadow" element={<ShadowHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/paper-trading" element={<LegacyTabRedirect to="/shadow?tab=paper" />} />
+              {/* §4.3 补齐: 提醒并入通知(通知内"提醒Tab"), 提醒是通知一种 */}
+              <Route path="/notifications" element={<NotificationsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
+              <Route path="/alerts" element={<LegacyTabRedirect to="/notifications?tab=alerts" />} />
               <Route path="/profile" element={<ProfilePage />} />
               {/* §4.3: 审计 + 帮助 → /settings 页签 */}
               <Route path="/settings" element={<SettingsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />

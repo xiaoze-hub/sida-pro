@@ -367,7 +367,8 @@ export default function DashboardPage() {
   }, [openStock])
 
   const paperTradeFromMenu = useCallback(() => {
-    navigate('/paper-trading')
+    // §4.3 补齐(2026-09-01): 模拟盘并入影子, 指向 /shadow?tab=paper
+    navigate('/shadow?tab=paper')
   }, [navigate])
 
   const runAiReview = async () => {

@@ -964,7 +964,8 @@ export default function StocksPage() {
   }, [openStockDetail])
 
   const paperTradeFromMenu = useCallback(() => {
-    navigate('/paper-trading')
+    // §4.3 补齐(2026-09-01): 模拟盘并入影子, 指向 /shadow?tab=paper
+    navigate('/shadow?tab=paper')
   }, [navigate])
 
   // 设计稿 v2.1 §13.2: 持仓/自选列表右键 → 行情页 + source 上下文(顶部显示持仓上下文卡)
