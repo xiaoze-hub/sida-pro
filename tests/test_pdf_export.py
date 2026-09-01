@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from unittest.mock import MagicMock
 
 
 def _weasyprint_renders() -> bool:
@@ -106,7 +107,8 @@ def test_pdf_endpoint_returns_full_detail_content():
         ))
         db.commit()
         resp = agents.export_tradingagents_analysis_pdf(
-            stock_symbol="601238", analysis_date="2026-06-20", db=db)
+            stock_symbol="601238", analysis_date="2026-06-20", db=db,
+            user=MagicMock(id=1))
         assert resp.media_type == "application/pdf"
         assert bytes(resp.body[:4]) == b"%PDF"
         assert "attachment" in resp.headers["content-disposition"]
@@ -136,7 +138,8 @@ def test_pdf_endpoint_404_when_missing():
     try:
         with pytest.raises(HTTPException) as ei:
             agents.export_tradingagents_analysis_pdf(
-                stock_symbol="000000", analysis_date="2026-06-20", db=db)
+                stock_symbol="000000", analysis_date="2026-06-20", db=db,
+                user=MagicMock(id=1))
         assert ei.value.status_code == 404
     finally:
         db.close()

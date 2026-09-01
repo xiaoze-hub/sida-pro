@@ -76,5 +76,6 @@ def test_fetch_l2_ticks_miss_raises(monkeypatch):
 
 
 def test_fetch_l2_ticks_unknown_source():
-    with pytest.raises(ValueError):
+    # 2026-09-01: dark_l2.fetch_l2_ticks 不支持未知 source 时抛 NotImplementedError(非 ValueError)
+    with pytest.raises(NotImplementedError):
         dark_l2.fetch_l2_ticks("sz002361", "l2_xxx")
