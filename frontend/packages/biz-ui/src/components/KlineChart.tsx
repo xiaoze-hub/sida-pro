@@ -17,12 +17,20 @@ import { useEffect, useRef, useState } from 'react'
 import {
   createChart,
   CandlestickSeries,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
   type Time,
 } from 'lightweight-charts'
 
 import { fetchAPI } from '@panwatch/api'
+
+import {
+  KIND_ICON,
+  KIND_LABEL,
+  type KlineEventPoint,
+  type KlinePriceLine,
+} from '../klineEvents'
 
 // 与 InteractiveKline.tsx 顶层类型对齐, 暂时不耦合 (改 one-side 即可)
 export interface KlineItem {
@@ -64,10 +72,15 @@ export default function KlineChart(props: {
   initialDays?: number
   /** 容器高度; 默认 360 */
   height?: number
+  /** L4 事件标注 (阶段二: 接 events 标准化层, marker 标在K线上) */
+  events?: KlineEventPoint[]
+  /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
+  supportPressure?: KlinePriceLine[]
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const markerPluginsRef = useRef<ReturnType<typeof createSeriesMarkers<Time>>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
@@ -168,6 +181,39 @@ export default function KlineChart(props: {
       cancelled = true
     }
   }, [props.symbol, props.market, interval, props.initialDays])
+
+  // ── L4 事件 markers + 支撑压力位 price lines (阶段二: 接标准化层) ──
+  useEffect(() => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series) return
+
+    // 1) L4 事件 markers (v5 用 createSeriesMarkers plugin)
+    const markers = (props.events || []).map((ev) => ({
+      time: toChartTime(ev.date, interval),
+      position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
+      color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
+      shape: 'circle' as const,
+      text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
+    }))
+    if (markers.length) {
+      const markersPlugin = createSeriesMarkers(series, markers)
+      // 存储引用以便清理
+      markerPluginsRef.current.push(markersPlugin)
+    }
+
+    // 2) 支撑压力位 (水平线)
+    for (const line of props.supportPressure || []) {
+      series.createPriceLine({
+        price: line.price,
+        color: line.kind === 'pressure' ? '#ef4444' : '#22c55e',
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        axisLabelVisible: true,
+        title: line.label || line.kind,
+      })
+    }
+  }, [props.events, props.supportPressure, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time

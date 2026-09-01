@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { CandlestickChart, Flag, LineChart, Search, Wallet, Loader2 } from 'lucide-react'
 
-import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { insightApi } from '@panwatch/api'
 import PageTabs, { type PageTabItem } from '@/components/PageTabs'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
@@ -272,12 +272,12 @@ export default function QuotePage() {
               </p>
             </div>
           ) : (
-            <InteractiveKline
+            <KlineChart
               key={`${type}:${symbol}`}
               symbol={symbol}
               market="CN"
               initialInterval="1d"
-              initialDays="120"
+              initialDays={120}
               // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
               events={normEvents}
               supportPressure={normPriceLines}
