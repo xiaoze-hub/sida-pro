@@ -421,19 +421,22 @@ export default function SettingsPage() {
     try {
       // 2026-09-01 审计修复: 改为 allSettled, 单个接口失败(如 /datasources 曾因缺列 500)
       // 不再拖垮整页 —— 失败的接口降级为空/默认值, 其余正常渲染。
-      const results = await Promise.allSettled([
+      const results = await Promise.allSettled<[
+        Setting[], KeyDataSource[], AIService[], NotifyChannel[],
+        { version: string }, AgentsHealth, SceneBinding[], MyAIService[]
+      ]>([
         fetchAPI<Setting[]>('/settings'),
         fetchAPI<KeyDataSource[]>('/datasources', { cacheMode: 'reload' }),
         fetchAPI<AIService[]>('/providers/services', { cacheMode: 'reload' }),
-        fetchAPI<NotifyChannel[]>('/channels', { cacheMode: 'reload' }),
-        fetchAPI<{ version: string }>('/settings/version'),
+        fetchAPI<NotifyChannel[]>('/notify/channels', { cacheMode: 'reload' }),
+        fetchAPI<{ version: string }>('/version'),
         fetchAPI<AgentsHealth>('/agents/health'),
         listSceneBindings(),
         // BYOK: 用户自己的服务商(demo 账号后端 403, 静默降级为空列表)
         fetchAPI<MyAIService[]>('/my-ai-services', { cacheMode: 'reload' }).catch(() => [] as MyAIService[]),
       ])
       const [settingsData, keyDataSourcesData, servicesData, channelsData, versionData, healthData, sceneBindingsData, myServicesData] =
-        results.map((r) => (r.status === 'fulfilled' ? r.value : undefined))
+        results.map((r) => r.status === 'fulfilled' ? r.value : undefined)
       setSettings(settingsData ?? [])
       setKeyDataSources(keyDataSourcesData ?? [])
       setServices(servicesData ?? [])
