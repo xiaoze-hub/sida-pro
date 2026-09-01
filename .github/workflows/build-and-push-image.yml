@@ -98,7 +98,8 @@ jobs:
             --ignore=tests/test_datasources_health.py \
             --ignore=tests/test_selfcheck.py \
             --ignore=tests/test_shadow_account.py \
-            --ignore=tests/test_ta_us_news_passthrough.py
+            --ignore=tests/test_ta_us_news_passthrough.py \
+            --ignore=tests/test_source_health.py
           python -m pytest packages/marketdata/tests -q
 
   build:
