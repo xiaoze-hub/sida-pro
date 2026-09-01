@@ -487,6 +487,12 @@ def get_dragon_tiger(date_: str = None, code: str = None, user_id: str = "admin"
 def get_dark_flow_precise(code: str, date_: str = None, user_id: str = "admin") -> ToolResult:
     """(6) .tck 委托号级暗盘还原 (Hermes 0831 口径: 主动侧 a28/a32 1:1; 被动侧 maker 未落盘 → 仅做主笔级还原)。
     单位: 净额=元 (手册 §10)。
+
+    2026-09-01 A4 增强: 在原有主笔级还原(active/passive)基础上, hook 进
+    postmarket_review.dark_review_from_tck 的**委托号级拆单簇**暗盘, 存入
+    `dark_clusters` 字段 —— 这才是决策先锋「暗盘资金 = 对倒拆单/大单拆小单」
+    的正确定义(旧 dark_basis="small_orders" 只是小单口径, 未做拆单识别)。
+
     """
     params = {"code": code, "date": date_, "user_id": user_id}
     try:
@@ -506,11 +512,35 @@ def get_dark_flow_precise(code: str, date_: str = None, user_id: str = "admin") 
         data = dark_flow_from_tck(trades, orders)
         data["tck_path"] = path
         data["cancel_count"] = len(_cancels or [])
+
+        # A4: hook 委托号级拆单簇暗盘(独立 try, 失败不影响主笔级还原)
+        try:
+            from src.core.postmarket_review import dark_review_from_tck
+
+            review = dark_review_from_tck(code, date_, tck_path=path)
+            dark = review.get("dark") or {}
+            ming = review.get("ming") or {}
+            data["dark_clusters"] = {
+                "available": bool(review.get("available")),
+                "dark_net": dark.get("net"),        # 拆单簇暗盘净额(真正的暗盘)
+                "dark_buy": dark.get("buy"),
+                "dark_sell": dark.get("sell"),
+                "cluster_count": len(review.get("clusters") or []),
+                "ming_net": ming.get("net"),        # 明盘(单笔>30万)
+                "main_net": review.get("main_net"),  # 明+暗主力净额
+                "cancel_rate": review.get("cancel_rate"),
+                "active_passive_ratio": review.get("active_passive_ratio"),
+            }
+            if review.get("note"):
+                data["dark_clusters"]["note"] = review.get("note")
+        except Exception as e:  # noqa: BLE001
+            data["dark_clusters"] = {"available": False, "note": f"拆单簇暗盘失败: {e}"}
+
         return _ok(
             "get_dark_flow_precise", params, data,
             units={"net": "元", "active_net": "元", "passive_net": "元",
                    "ming_net": "元", "small_net": "元"},
-            note="被动侧 maker 未落盘, 仅主笔级还原",
+            note="被动侧 maker 未落盘, 仅主笔级还原; dark_clusters 为委托号级拆单簇暗盘",
         )
     except Exception as e:
         return _err("get_dark_flow_precise", params, str(e))

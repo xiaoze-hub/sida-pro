@@ -1452,3 +1452,27 @@ class SignalSummaryDaily(Base):
     text = Column(Text, default="")    # 渲染后纯文本摘要(≤800 字)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class DarkFundTopSnapshot(Base):
+    """全市场暗盘资金 TOP 扫描快照(设计稿 §6.1, A6, 2026-09-01)。
+
+    存 `dark_fund_scan.scan_dark_fund_top()` 的榜单结果(JSON), 盘后 cron 落库, 前端读快照。
+    与 MarketScanRank 的 dark_top 区分: 后者是 OHLC 分摊**对照项**(approximation=True),
+    这是 thsdk DDE **真实主力资金流**(source=thsdk_dde)。
+    """
+
+    __tablename__ = "dark_fund_top_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_date", "stock_market", name="uq_dark_fund_top_day_market"
+        ),
+        Index("ix_dark_fund_top_day", "snapshot_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
+    stock_market = Column(String, nullable=False, default="CN")
+    payload = Column(JSON, default={})  # scan_dark_fund_top() 的完整返回
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

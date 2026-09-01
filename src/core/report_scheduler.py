@@ -65,6 +65,19 @@ class ReportScheduler:
                 except Exception as e:  # noqa: BLE001
                     logger.exception("[报告] 系统信号摘要异常: %s", e)
 
+                # 全市场暗盘资金 TOP 扫描(设计稿 §6.1 A6, 2026-09-01 接线)。
+                # thsdk DDE 批量主力资金流, 全市场约 16s; 依赖 thsdk 登录态。
+                try:
+                    from src.web.api.market_scan import run_dark_fund_top_job
+
+                    dft_res = await asyncio.to_thread(run_dark_fund_top_job)
+                    logger.info(
+                        "[报告] 暗盘资金TOP: %s",
+                        dft_res if dft_res.get("ok") else dft_res.get("error", "跳过"),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("[报告] 暗盘资金TOP异常: %s", e)
+
             result = await asyncio.to_thread(
                 _generate_once_in_worker, report_type
             )
