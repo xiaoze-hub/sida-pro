@@ -77,6 +77,17 @@ interface ChipsInfo {
   cost_90?: number | null
 }
 
+/** 决策先锋三指标共振状态(后端 summary.resonance, 全部可选以容错) */
+interface ResonanceInfo {
+  available?: boolean
+  row?: number | null
+  phase?: string | null
+  action_label?: string | null
+  action_text?: string | null
+  tone?: string | null
+  bad_count?: number | null
+}
+
 interface SummaryResp {
   symbol?: string
   market?: string
@@ -97,6 +108,7 @@ interface SummaryResp {
     side?: string | null
     confirmed?: boolean
   }> | null
+  resonance?: ResonanceInfo | null
 }
 
 /** 元 → 带单位的紧凑显示(自动万/亿).
@@ -128,6 +140,16 @@ const GS_COLOR = (side: 'G' | 'S', confirmed: boolean) => {
   const filled = confirmed ? '' : 'opacity-60 ring-1 ring-current'
   return side === 'G' ? `text-rose-500 ${filled}` : `text-emerald-500 ${filled}`
 }
+
+/** 决策共振 tone 上色 — 与红涨绿跌一致: bull→红(涨色) / bear→绿(跌色) / warn→琥珀 / neutral→灰 */
+const RESONANCE_TONE_CLASS = (tone: string | null | undefined) =>
+  tone === 'bull'
+    ? 'text-rose-500'
+    : tone === 'bear'
+      ? 'text-emerald-500'
+      : tone === 'warn'
+        ? 'text-amber-500'
+        : 'text-muted-foreground'
 
 export default function QuotePage() {
   const [params, setParams] = useSearchParams()
@@ -512,19 +534,43 @@ export default function QuotePage() {
               </div>
             )}
 
-            {/* 操作建议(纯提示一行, 不是卡片) */}
-            {normGsSignals.length > 0 && (
+            {/* 决策先锋共振(三指标共振状态, 替换原写死操作建议; 无卡片, hairline 分隔) */}
+            <div className="border-b border-border/40 pb-2">
               <div className="text-[11px] text-muted-foreground">
-                操作建议:
-                <span className="ml-1 text-foreground">
-                  {normGsSignals[normGsSignals.length - 1].confirmed
-                    ? normGsSignals[normGsSignals.length - 1].side === 'G'
-                      ? '按信号可关注（仅供参考）'
-                    : '按信号可谨慎（仅供参考）'
-                    : '等收盘验证（盘中信号仅供参考）'}
-                </span>
+                决策先锋共振
+                {summary?.resonance?.available && summary.resonance.row != null && (
+                  <span className="ml-1 font-mono text-[10px] opacity-70">第 {summary.resonance.row} 档</span>
+                )}
               </div>
-            )}
+              {summary?.resonance?.available ? (
+                <>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className={`font-mono text-[13px] font-semibold ${RESONANCE_TONE_CLASS(summary.resonance.tone)}`}>
+                      {summary.resonance.action_label ?? '--'}
+                    </span>
+                    {summary.resonance.phase && summary.resonance.phase !== '无' && (
+                      <span className={`text-[11px] ${RESONANCE_TONE_CLASS(summary.resonance.tone)}`}>
+                        {summary.resonance.phase}
+                      </span>
+                    )}
+                    {(summary.resonance.bad_count ?? 0) > 0 && (
+                      <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                        {summary.resonance.bad_count} 项转坏
+                      </span>
+                    )}
+                  </div>
+                  {summary.resonance.action_text && (
+                    <div className="mt-0.5 leading-snug text-foreground">{summary.resonance.action_text}</div>
+                  )}
+                  <div className="mt-0.5 text-[10px] text-muted-foreground/70">三指标共振 · 仅供参考</div>
+                </>
+              ) : (
+                <div className="mt-1">
+                  <span className="font-mono text-[13px] text-muted-foreground">观望</span>
+                  <span className="ml-1.5 text-[10px] text-muted-foreground/70">共振数据缺失 · 不编造</span>
+                </div>
+              )}
+            </div>
             {summary?.chips && (
               <div className="border-b border-border/40 pb-2">
                 <div className="text-[11px] text-muted-foreground">筹码</div>

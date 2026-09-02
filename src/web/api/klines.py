@@ -333,6 +333,95 @@ def _tencent_code(code: str) -> str | None:
     return None
 
 
+def _resonance_default() -> dict:
+    """resonance 字段安全默认(三指标不可得/计算失败时, 不编造)。
+
+    与字段契约一致: row=0 / phase="无" / action_label="观望",
+    action_text/tone 取 state_action_label(0) 的文案与色彩语义。
+    """
+    return {
+        "available": False,
+        "row": 0,
+        "phase": "无",
+        "action_label": "观望",
+        "action_text": "趋势不明, 建议观望",
+        "tone": "neutral",
+        "bad_count": 0,
+    }
+
+
+def _build_resonance(symbol: str, bars: list[dict]) -> dict:
+    """决策先锋三指标共振状态(2026-09-02 暴露到 summary, 字段契约见前端消费方)。
+
+    三指标当日最新值, 全部复用已有能力, 不重写算法:
+      - 趋势  : gs_strategy.eval_gs(bars) + trend_label(复用 layer 已拉的 bars, 纯计算)
+      - 活跃度: ai_activity.eval_activity(bars); activity_prev = eval_activity(bars[:-1])
+                (砍末根重算, 纯计算无网络; 拿不到 → None, "较前日翻倍"按不满足处理)
+      - 资金  : dark_pool_flow.compute_pool_flow(symbol).main_net(明+暗主力净额);
+                fund_net_prev 历史明盘不可得 → 恒 None(官方口径, 不编造)
+
+    任一指标缺失 → available=False + 安全默认, 不编造。
+    全程 try/except 兜底: 任何异常都不允许拖垮 summary 接口。
+    """
+    out = _resonance_default()
+    try:
+        if not bars:
+            return out
+
+        from src.core.gs_strategy import eval_gs, trend_label
+        from src.core.ai_activity import eval_activity
+        from src.core.dark_pool_flow import compute_pool_flow
+        from src.core.resonance import evaluate_state, state_action_label
+
+        # ① 趋势(GS): 复用 layer 已拉的 bars
+        trend = trend_label(eval_gs(bars))
+
+        # ② 活跃度: 当日 + 前一日(砍末根, 纯计算)
+        act = eval_activity(bars)
+        activity = act.get("activity") if isinstance(act, dict) else None
+        activity_prev = None
+        if len(bars) > 1:
+            try:
+                prev = eval_activity(bars[:-1])
+                activity_prev = prev.get("activity") if isinstance(prev, dict) else None
+            except Exception:  # noqa: BLE001
+                activity_prev = None
+
+        # ③ 资金(主力净额 = 明+暗): 独立兜底, 失败只缺资金不拖垮整体
+        fund_net = None
+        try:
+            pf = compute_pool_flow(symbol)
+            if isinstance(pf, dict):
+                fund_net = pf.get("main_net")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("resonance compute_pool_flow %s failed: %s", symbol, e)
+
+        # 三指标必须**全部可得**才算 available(缺任一 → 安全默认, 不编造)
+        available = (
+            trend not in (None, "", "无数据")
+            and isinstance(activity, (int, float))
+            and isinstance(fund_net, (int, float))
+        )
+        if not available:
+            return out
+
+        st = evaluate_state(trend, activity, activity_prev, fund_net, None)
+        al = state_action_label(st.get("row"))
+        out.update({
+            "available": True,
+            "row": int(st.get("row") or 0),
+            "phase": st.get("phase") or "无",
+            "action_label": al.get("label"),
+            "action_text": al.get("text"),
+            "tone": al.get("tone"),
+            "bad_count": int(st.get("bad_count") or 0),
+        })
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.debug("resonance %s failed: %s", symbol, e)
+        return _resonance_default()
+
+
 def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     """P1 图层数据(2026-09-01): gs_signals / fund_flow / events。
 
@@ -340,11 +429,13 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     - fund_flow: 日级, 长度对齐 klines; dark_net=OHLC 分摊(L1 近似对照项),
       ming_net=当日 big_order_flow 全口径(历史逐日明盘无数据, 显式 null)
     - events: 涨停/跌停(K线自算); 龙虎榜/公告事件待 28 号数据源接入后补
+    - resonance: 三指标共振状态(2026-09-02), 复用本函数已拉的 bars, 见 _build_resonance
 
-    仅 A 股; 任一字段计算失败独立降级为 None, 不拖垮整体, 不编造。
+    仅 A 股; 任一字段计算失败独立降级为 None/默认, 不拖垮整体, 不编造。
     """
     out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
-                 "orderbook": None, "unlock_levels": None, "chips": None}
+                 "orderbook": None, "unlock_levels": None, "chips": None,
+                 "resonance": _resonance_default()}
     if market_code.value != "CN":
         return out
     try:
@@ -451,6 +542,15 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         out["unlock_levels"] = unlock_levels_from_chips(chips) or None
     except Exception as e:  # noqa: BLE001
         logger.debug("chips %s failed: %s", symbol, e)
+
+    # ⑤ 三指标共振(依赖 bars: 趋势/活跃度纯计算复用已拉 bars; 资金走 compute_pool_flow)
+    #    独立兜底在 _build_resonance 内部, 失败 → available:False 安全默认, 不拖垮整体。
+    if bars:
+        try:
+            out["resonance"] = _build_resonance(symbol, bars)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("resonance %s failed: %s", symbol, e)
+            out["resonance"] = _resonance_default()
     return out
 
 

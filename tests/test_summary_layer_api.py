@@ -73,7 +73,11 @@ def _patch_bars(monkeypatch, bars):
 
 
 _ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None,
-             "orderbook": None, "unlock_levels": None, "chips": None}
+             "orderbook": None, "unlock_levels": None, "chips": None,
+             # resonance(2026-09-02): 非 A 股 → 安全默认(available=False, 不编造)
+             "resonance": {"available": False, "row": 0, "phase": "无",
+                            "action_label": "观望", "action_text": "趋势不明, 建议观望",
+                            "tone": "neutral", "bad_count": 0}}
 
 
 def test_build_layer_data_non_cn_returns_none():

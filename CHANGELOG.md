@@ -47,6 +47,10 @@
 
 - **v0.4.68 ws_hub 测试 AsyncMock 修复** (28号, 修 CI 飘红). `tests/test_ws_hub.py::test_l5_03_too_many_connections_close_4402`: 用 `MagicMock()` 模拟 websocket, 但 `ws_notifications_handler` 在鉴权通过后先 `await websocket.accept()`(ws_hub.py:356), `MagicMock.accept()` 返回不可 await 的 MagicMock → `TypeError: object MagicMock can't be used in 'await' expression`. l5_01/l5_02 因在鉴权阶段(4401)先被拒、没走到 accept 才没暴露. **修复**: import `AsyncMock` + 给该测例 `ws.accept = AsyncMock()`。纯测试 mock 修复, 不动生产代码(生产 accept/close 均为真 awaitable). 该测试由 commit 78774cf(xiaoze 通知中心 P0)引入, 非本次改动引入; 此前被 v0.4.66 的 lint 门禁失败掩盖, v0.4.67 lint 通过后才暴露.
 
+### feature
+
+- **v0.4.69 决策先锋三指标共振接入个股行情页** (28号, 并行子智能体协作). **后端** `src/web/api/klines.py`: summary API 新增 `resonance` 字段 `{available, row, phase, action_label, action_text, tone, bad_count}` — 组装既有三指标(`gs_strategy.trend_label` + `ai_activity` + `dark_pool_flow.compute_pool_flow`)经 `resonance.evaluate_state` + `state_action_label` 得 7 行状态 + GO/STOP 实战文案; 三指标全可得才 `available:True`, 缺任一返安全默认不编造; 双层 try/except 兜底不拖垮 summary。复用已拉 bars, 唯一联网项 compute_pool_flow 受 5min summary 缓存摊销。注: 行2"拐点"因历史明盘不可得(fund_net_prev 恒 None)此路径不可达, 属数据固有约束非 bug。**前端** `frontend/src/pages/Quote.tsx`: 新增 `ResonanceInfo` interface + 窄栏「决策先锋共振」区块(替换原写死操作建议), GO/STOP 主标签按 tone 上色(bull红涨/bear绿跌/warn琥珀/neutral灰, 中国市场红涨绿跌), 无卡片 hairline 分隔终端风。测试 `tests/test_summary_resonance.py` 16 例 + 回归 68 全过, 前端 typecheck 零错误。
+
 ## 2026-09-01
 
 ### feature
