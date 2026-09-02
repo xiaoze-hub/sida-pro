@@ -63,13 +63,17 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
         tag = "净流入" if main_net > 500e4 else ("净流出" if main_net < -500e4 else "平衡")
-        parts.append(f"主力{tag}{main_net / 1e4:+.0f}万(超大单{big_net / 1e4:+.0f}/大单{mid_net / 1e4:+.0f})")
+        def _fmt_amount(n):
+    """v0.4.61: 自动万/亿单位"""
+    if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
+    return f"{n/1e4:+.0f}万"
+parts.append(f"主力{tag}{_fmt_amount(main_net)}(超大单{_fmt_amount(big_net)}/大单{_fmt_amount(mid_net)})")
         if dark.get("main_intensity") is not None:
             parts.append(f"参与度{dark['main_intensity']:.0f}%买占{dark.get('main_buy_ratio') or 0:.0f}%")
         if dark.get("phase"):
             parts.append(f"阶段[{dark['phase']}]")
         if dark.get("auction_amt"):
-            parts.append(f"竞价{dark['auction_amt'] / 1e4:.0f}万")
+            parts.append(f"竞价{_fmt_amount(dark['auction_amt'])}")
         chips = None
         try:
             from src.core.chip_distribution import compute_near_term_chips
@@ -158,13 +162,17 @@ def _main_intent_summary(symbol: str) -> str:
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
         tag = "净流入" if main_net > 500e4 else ("净流出" if main_net < -500e4 else "平衡")
-        parts.append(f"主力{tag}{main_net / 1e4:+.0f}万(超大单{big_net / 1e4:+.0f}/大单{mid_net / 1e4:+.0f})")
+        def _fmt_amount(n):
+    """v0.4.61: 自动万/亿单位"""
+    if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
+    return f"{n/1e4:+.0f}万"
+parts.append(f"主力{tag}{_fmt_amount(main_net)}(超大单{_fmt_amount(big_net)}/大单{_fmt_amount(mid_net)})")
         if dark.get("main_intensity") is not None:
             parts.append(f"参与度{dark['main_intensity']:.0f}%买占{dark.get('main_buy_ratio') or 0:.0f}%")
         if dark.get("phase"):
             parts.append(f"阶段[{dark['phase']}]")
         if dark.get("auction_amt"):
-            parts.append(f"竞价{dark['auction_amt'] / 1e4:.0f}万")
+            parts.append(f"竞价{_fmt_amount(dark['auction_amt'])}")
         # 筹码(新浪真实分布优先)
         try:
             from src.core.chip_distribution import compute_near_term_chips
@@ -513,8 +521,8 @@ def _ai_counter_check(symbol: str, dark: dict, db=None) -> dict | None:
             buy_ratio = dark.get("buy_ratio")
         feat = [
             f"方向={_derive_direction(dark)}",
-            f"主力净额={main_net / 1e4:+.0f}万(超大单{big_net / 1e4:+.0f}万/"
-            f"大单{mid_net / 1e4:+.0f}万)",
+            f"主力净额={_fmt_amount(main_net)}(超大单{_fmt_amount(big_net)}/"
+            f"大单{_fmt_amount(mid_net)})",
         ]
         if intensity is not None:
             feat.append(f"参与度={intensity:.0f}%")
@@ -610,29 +618,29 @@ def _append_main_intent(lines: list, symbol: str) -> None:
         mid_net = dark.get("mid_net", 0) or 0
         small_net = dark.get("small_net", 0) or 0
         main_tag = "主力净流入" if main_net > 500e4 else ("主力净流出" if main_net < -500e4 else "主力平衡")
-        line = (f"- 主力方向：{main_tag}(主力{main_net / 1e4:+.0f}万="
-                f"超大单{big_net / 1e4:+.0f}+大单{mid_net / 1e4:+.0f}，"
-                f"散户{small_net / 1e4:+.0f}万)")
+        line = (f"- 主力方向：{main_tag}(主力{_fmt_amount(main_net)}="
+                f"超大单{_fmt_amount(big_net)}+大单{_fmt_amount(mid_net)}，"
+                f"散户{_fmt_amount(small_net)})")
         if dark.get("main_intensity") is not None:
             line += (f"，参与度{dark['main_intensity']:.0f}%"
                      f"/买占{dark.get('main_buy_ratio') or 0:.0f}%")
         if dark.get("phase"):
             line += f"，阶段[{dark['phase']}]"
         if dark.get("auction_amt"):
-            line += f"，竞价{dark['auction_amt'] / 1e4:.0f}万"
+            line += f"，竞价{_fmt_amount(dark['auction_amt'])}"
         tail = dark.get("segments", {}).get("tail", 0) or 0
         if abs(tail) > 300e4:
-            line += f"，尾盘{tail / 1e4:+.0f}万"
+            line += f"，尾盘{_fmt_amount(tail)}"
         lines.append(line)
         zones = dark.get("absorb_zones") or []
         if zones:
-            zs = "、".join(f"{z['price']:.2f}(大单{z['big_net'] / 1e4:+.0f}万)" for z in zones[:3])
+            zs = "、".join(f"{z['price']:.2f}(大单{_fmt_amount(z['big_net'])})" for z in zones[:3])
             lines.append(f"- 主力吸筹位：{zs}")
         split = dark.get("split_order") or {}
         if split.get("net") is not None and abs(split["net"]) >= 200e4:
             dir_s = "买入" if split["net"] > 0 else "卖出"
             lines.append(
-                f"- 拆单识别：疑似主力{dir_s}{abs(split['net']) / 1e4:.0f}万"
+                f"- 拆单识别：疑似主力{dir_s}{_fmt_amount(split['net'])}"
                 f"(逆势{len([g for g in split.get('groups', []) if g.get('contrarian')])}组，"
                 f"散户顺势{abs(split.get('herd_sell', 0) - split.get('herd_buy', 0)) / 1e4:.0f}万)"
             )
