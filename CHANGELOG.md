@@ -31,6 +31,10 @@
 
 - **v0.4.64 wencai 三指标共振选股 3 模板** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-1). `src/core/chat_tools.py` `WENCAI_TEMPLATES` 追加 `三指标买共振`/`三指标卖共振`/`三指标选股共振` 3 模板, 供 AI 助手 `get_stock_screen`/`get_market_scan` 调用同花顺一句话选股. **口径以官方《决策先锋8问8答》为准** (§3.4 七行状态表 / §5 三步战法 / §6 选股条件), **非桌面 5_GZZH.txt 公式** — 甄别发现该公式 2 处与官方不一致: ① 卖共振公式用"活跃度较前日下降", 官方要求"跌破强势线(<3)", 已按官方修正; ② 选股共振公式用"活跃度>6(大牛线)+暗盘单日>0", 官方是"活跃度连续多日强势线上(>3)+暗盘持续买", 已按官方修正. 差异写入各模板 `note` 字段供后续校准. 模板总数 22→25. py_compile 通过 + 模块 import 验证 3 模板结构 (src/q/note) 全对.
 
+### feature
+
+- **v0.4.65 resonance 实战文案 API 字段化** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-3). `src/core/resonance.py` 新增 `state_action_label(row)` — 行号→决策先锋 GO/STOP 风格实战文案 (8问8答 §3.1: G信号→"GO: 趋势有望启动, 建议逢低建仓"; S信号→"STOP: 趋势暂或结束, 建议减仓避险"). 返回 `{label, text, tone}`: row1/2→GO(bull), row3→持有(bull), row4/5/6→警惕(warn), row7→STOP(bear), row0/非法→观望(neutral). 纯增量(不动 evaluate_state), 与既有 "action"(7行表操作思路长句) 互补: action=完整思路, label=前端可直渲的短标签+色彩语义. 验证: 8 行映射 + 边界(None/"x"/-1/99→观望) + row1→GO/row7→STOP 联动全过. 前端 K线/机会页可直接用 `tone` 映射红涨绿跌色彩.
+
 ## 2026-09-01
 
 ### feature

@@ -156,3 +156,39 @@ def fund_flow_label(ming_net: Optional[float], dark_net: Optional[float]) -> dic
         "direction": "流入" if net > 0 else ("流出" if net < 0 else "平衡"),
         "color": "red" if net > 0 else ("green" if net < 0 else "gray"),
     }
+
+
+# ===== 实战文案 (决策先锋 GO/STOP 风格, 8问8答 §3.1) =====
+# 供前端直接渲染的简洁行动标签; 与 evaluate_state 的 "action"(7行表操作思路) 互补:
+#   action = 完整操作思路(长句); label = GO/STOP 风格短标签 + 色彩语义。
+# 官方: G信号→"GO: 趋势有望启动, 建议逢低建仓"; S信号→"STOP: 趋势暂或结束, 建议减仓避险"。
+_STATE_ACTION_LABEL = {
+    # row: (短标签, 完整文案, 色彩语义)
+    0: ("观望", "趋势不明, 建议观望", "neutral"),
+    1: ("GO", "趋势有望启动, 建议逢低建仓", "bull"),
+    2: ("GO", "三指标再次共振, 持续关注机会", "bull"),
+    3: ("持有", "三指标平稳, 关注指标动态", "bull"),
+    4: ("警惕", "警惕主力出货, 多注意风险", "warn"),
+    5: ("警惕", "主力还没出, 持续关注", "warn"),
+    6: ("警惕", "两指标走坏, 根据行情减仓", "warn"),
+    7: ("STOP", "趋势暂或结束, 建议减仓避险", "bear"),
+}
+
+
+def state_action_label(row) -> dict:
+    """行号 → 实战文案 (决策先锋 GO/STOP 风格)。
+
+    Args:
+        row: evaluate_state 返回的 "row" (0-7); 非法/缺失 → 观望。
+
+    Returns:
+        {"label": "GO"/"STOP"/"持有"/"警惕"/"观望",
+         "text": 完整文案,
+         "tone": "bull"/"bear"/"warn"/"neutral"}   # tone 供前端色彩映射
+    """
+    try:
+        r = int(row)
+    except (TypeError, ValueError):
+        r = 0
+    label, text, tone = _STATE_ACTION_LABEL.get(r, _STATE_ACTION_LABEL[0])
+    return {"label": label, "text": text, "tone": tone}
