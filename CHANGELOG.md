@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-02
+
+### fix
+
+- **v0.4.53.2 orderbook available 假阳性修复** (xiaoze 复核发现). `orderbook_engine.order_book_queue` 之前只要 snapshot 非空就 `available: True`, 但 thsdk degraded 时返回空 bid/ask 快照 → 前端拿到 available=true 就走不到 §12 灰显兜底, 却没有任何真实盘口数据(假阳性). 改为 `available = bool(bid) or bool(ask)`(有真实盘口价才算), 空快照(thsdk degraded)正确置 False 走灰显. 后端 orderbook 单测: 空快照 False / 无盘口价 False / 有价 True 全合预期. `pytest -k "orderbook or a1"` 44 passed.
+
 ## 2026-09-01
 
 ### feature

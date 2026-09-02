@@ -255,8 +255,11 @@ def order_book_queue(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             shape = "压盘"
         else:
             shape = "均衡"
+    # 2026-09-02 xiaoze 复核: available 必须"有真实盘口价"才算, 空快照(thsdk degraded)不置 True,
+    # 否则前端拿 available=true 就不走 §12 灰显兜底, 却没有任何真实数据(假阳性)。
+    has_price = bool(bid) or bool(ask)
     return {
-        "available": True,
+        "available": has_price,
         "source": snapshot.get("source", "thsdk"),
         "best_bid": best_bid,
         "best_ask": best_ask,
