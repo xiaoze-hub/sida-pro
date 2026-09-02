@@ -289,8 +289,8 @@ export function KlineSummaryDialog({
                   <div className="mt-2 space-y-1">
                     {suggestion.items.map((it, idx) => {
                       const color =
-                        it.delta > 0 ? 'text-rose-500' :
-                        it.delta < 0 ? 'text-emerald-500' :
+                        it.delta > 0 ? 'text-stock-up' :
+                        it.delta < 0 ? 'text-stock-down' :
                         'text-muted-foreground'
                       return (
                         <div key={`${it.text}-${idx}`} className="flex items-center justify-between gap-3 text-[11px]">
@@ -736,7 +736,7 @@ export function KlineSummaryDialog({
                     trigger={
                       <span className="cursor-help hover:text-foreground">
                         5日{' '}
-                        <span className={effectiveSummary.change_5d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
+                        <span className={effectiveSummary.change_5d >= 0 ? 'text-stock-up' : 'text-stock-down'}>
                           {effectiveSummary.change_5d >= 0 ? '+' : ''}{effectiveSummary.change_5d.toFixed(2)}%
                         </span>
                       </span>
@@ -772,7 +772,7 @@ export function KlineSummaryDialog({
                     trigger={
                       <span className="cursor-help hover:text-foreground">
                         20日{' '}
-                        <span className={effectiveSummary.change_20d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
+                        <span className={effectiveSummary.change_20d >= 0 ? 'text-stock-up' : 'text-stock-down'}>
                           {effectiveSummary.change_20d >= 0 ? '+' : ''}{effectiveSummary.change_20d.toFixed(2)}%
                         </span>
                       </span>

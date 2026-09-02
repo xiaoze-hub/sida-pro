@@ -124,7 +124,7 @@ export default function DarkFundTopPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-rose-500" />
+                <TrendingUp className="h-4 w-4 text-stock-up" />
                 <h2 className="text-[14px] font-medium text-foreground">暗盘资金 TOP 榜(全市场)</h2>
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
@@ -176,7 +176,7 @@ export default function DarkFundTopPage() {
                       <td className="px-3 py-2 text-muted-foreground">{r.name ?? '-'}</td>
                       <td
                         className={`px-3 py-2 text-right font-mono ${
-                          positive ? 'text-rose-500' : negative ? 'text-emerald-500' : 'text-muted-foreground'
+                          positive ? 'text-stock-up' : negative ? 'text-stock-down' : 'text-muted-foreground'
                         }`}
                       >
                         {toWan(r.main_net_wan)}
@@ -192,9 +192,9 @@ export default function DarkFundTopPage() {
                           <span
                             className={
                               r.tck_dark_net_wan > 0
-                                ? 'text-rose-500'
+                                ? 'text-stock-up'
                                 : r.tck_dark_net_wan < 0
-                                ? 'text-emerald-500'
+                                ? 'text-stock-down'
                                 : ''
                             }
                           >

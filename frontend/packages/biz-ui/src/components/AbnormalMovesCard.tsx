@@ -209,9 +209,9 @@ function Row({ row, onOpen }: RowProps) {
         <div className="flex items-baseline gap-1 text-[11px] font-mono">
           <span className={
             dir === 'down'
-              ? 'text-emerald-700 dark:text-emerald-400'
+              ? 'text-stock-down'
               : dir === 'up'
-                ? 'text-rose-700 dark:text-rose-400'
+                ? 'text-stock-up'
                 : 'text-muted-foreground'
           }>
             {fmtSignedZero(deviation)}

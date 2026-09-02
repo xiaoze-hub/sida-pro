@@ -85,7 +85,8 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
   const buyPct = total > 0 ? (bidAmt / total) * 100 : 50
   const sellPct = total > 0 ? (askAmt / total) * 100 : 50
   const tag = ob >= 0.3 ? '买压' : ob <= -0.3 ? '卖压' : '中性'
-  const tagClass = ob >= 0.3 ? 'text-rose-400' : ob <= -0.3 ? 'text-emerald-400' : 'text-muted-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  const tagClass = ob >= 0.3 ? 'text-stock-up' : ob <= -0.3 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
     <div className="rounded-xl border border-border/50 bg-card p-3">
@@ -109,12 +110,12 @@ export default function OrderBookObBar({ symbol }: { symbol: string }) {
 
       {/* 买|卖比例横条: 买(红)左 / 卖(绿)右 */}
       <div className="flex items-center gap-2 text-[11px] mb-1.5">
-        <span className="text-rose-400 font-mono shrink-0">买 {buyPct.toFixed(1)}%</span>
+        <span className="text-stock-up font-mono shrink-0">买 {buyPct.toFixed(1)}%</span>
         <div className="flex-1 h-2 rounded-full bg-accent/40 overflow-hidden flex">
-          <div className="h-full bg-rose-400/80 transition-all" style={{ width: `${buyPct}%` }} />
-          <div className="h-full bg-emerald-400/80 transition-all" style={{ width: `${sellPct}%` }} />
+          <div className="h-full bg-stock-up/80 transition-all" style={{ width: `${buyPct}%` }} />
+          <div className="h-full bg-stock-down/80 transition-all" style={{ width: `${sellPct}%` }} />
         </div>
-        <span className="text-emerald-400 font-mono shrink-0">卖 {sellPct.toFixed(1)}%</span>
+        <span className="text-stock-down font-mono shrink-0">卖 {sellPct.toFixed(1)}%</span>
       </div>
 
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">

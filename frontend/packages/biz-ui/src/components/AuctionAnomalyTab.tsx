@@ -61,14 +61,15 @@ function fmtNum(v: number | null | undefined, suffix = ''): string {
 
 function gapRowClass(gap: number | null | undefined): string {
   if (gap == null || !Number.isFinite(gap)) return ''
-  if (gap >= 3) return 'bg-[rgba(239,68,68,0.08)]'
-  if (gap <= -3) return 'bg-emerald-500/10'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  if (gap >= 3) return 'bg-stock-up/[0.08]'
+  if (gap <= -3) return 'bg-stock-down/10'
   return ''
 }
 
 function gapColor(gap: number | null | undefined): string {
   if (gap == null || !Number.isFinite(gap)) return 'text-muted-foreground'
-  return gap > 0 ? 'text-rose-600 dark:text-rose-400' : gap < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
+  return gap > 0 ? 'text-stock-up' : gap < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
 export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: AuctionAnomalyTabProps) {

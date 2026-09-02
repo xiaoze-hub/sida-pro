@@ -214,11 +214,11 @@ function HoldingsCard({ symbol }: { symbol: string; market: string }) {
             {!editing && (
               <>
                 <button type="button" onClick={() => { setEditing('add'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-rose-500 hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-stock-up hover:bg-accent">
                   <Plus className="h-3 w-3" /> 加仓
                 </button>
                 <button type="button" onClick={() => { setEditing('reduce'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-emerald-500 hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-stock-down hover:bg-accent">
                   <Minus className="h-3 w-3" /> 减仓
                 </button>
               </>
@@ -464,7 +464,7 @@ function Field({ label, value, tone, hint }: {
     <div className="min-w-0" title={hint}>
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className={`truncate font-mono ${
-        tone === 'up' ? 'text-rose-500' : tone === 'down' ? 'text-emerald-500' : 'text-foreground'
+        tone === 'up' ? 'text-stock-up' : tone === 'down' ? 'text-stock-down' : 'text-foreground'
       }`}>{value}</div>
     </div>
   )

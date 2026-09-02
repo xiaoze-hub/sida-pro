@@ -7,8 +7,9 @@ export type TechnicalBadgeTone = 'neutral' | 'bullish' | 'bearish' | 'warning' |
 
 const toneClassMap: Record<TechnicalBadgeTone, string> = {
   neutral: 'bg-accent/50 text-muted-foreground',
-  bullish: 'bg-rose-500/10 text-rose-600',
-  bearish: 'bg-emerald-500/10 text-emerald-600',
+  // 多空(方向)语义统一走涨跌令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  bullish: 'bg-stock-up/10 text-stock-up',
+  bearish: 'bg-stock-down/10 text-stock-down',
   warning: 'bg-amber-500/10 text-amber-600',
   info: 'bg-blue-500/10 text-blue-600',
   buy: 'bg-rose-500 text-white',

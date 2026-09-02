@@ -34,8 +34,9 @@ function fmtWanAmt(vol: number | null | undefined, price: number | null | undefi
 }
 
 function gapColor(direction: string): string {
-  if (direction === '高开') return 'text-rose-400'
-  if (direction === '低开') return 'text-emerald-400'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  if (direction === '高开') return 'text-stock-up'
+  if (direction === '低开') return 'text-stock-down'
   return 'text-muted-foreground'
 }
 

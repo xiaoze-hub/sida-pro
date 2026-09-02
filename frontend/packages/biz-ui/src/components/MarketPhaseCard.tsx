@@ -125,8 +125,9 @@ function fmtInt(v: number | null | undefined): string {
 
 function pctColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'text-muted-foreground'
-  if (v > 0) return 'text-rose-600 dark:text-rose-400'
-  if (v < 0) return 'text-emerald-600 dark:text-emerald-400'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  if (v > 0) return 'text-stock-up'
+  if (v < 0) return 'text-stock-down'
   return 'text-muted-foreground'
 }
 

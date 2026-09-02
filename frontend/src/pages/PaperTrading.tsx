@@ -16,6 +16,7 @@ import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import ErrorBanner from '@/components/ErrorBanner'
+import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
 
 const EXIT_REASON_MAP: Record<string, string> = {
   stop_loss: '止损',
@@ -70,8 +71,10 @@ function EquityChart({ data }: { data: EquityCurvePoint[] }) {
   const areaD = pathD + ` L${points[points.length - 1].x},${pad.top + h} L${points[0].x},${pad.top + h} Z`
 
   const isPositive = values[values.length - 1] >= values[0]
-  const strokeColor = isPositive ? '#f43f5e' : '#10b981'
-  const fillColor = isPositive ? 'rgba(244,63,94,0.1)' : 'rgba(16,185,129,0.1)'
+  // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+  const sc = readStockColors()
+  const strokeColor = isPositive ? sc.up : sc.down
+  const fillColor = isPositive ? withAlpha(sc.up, 0.1) : withAlpha(sc.down, 0.1)
 
   // Y axis ticks
   const yTicks = 4

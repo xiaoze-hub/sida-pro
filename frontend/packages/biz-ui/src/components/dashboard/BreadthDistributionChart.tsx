@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
+import { readStockColors, type StockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import { fetchAPI } from '@panwatch/api'
 
 /**
@@ -18,11 +19,11 @@ interface BreadthResp {
   note?: string
 }
 
-/** 桶 → 颜色: 负向绿 / 正向红 / 平盘灰(A股惯例) */
-function bucketColor(bucket: string): string {
+/** 桶 → 颜色: 负向绿 / 正向红 / 平盘灰(A股惯例), 色值取 --stock-up/--stock-down 令牌 */
+function bucketColor(bucket: string, sc: StockColors): string {
   if (bucket === '-1~1%') return '#6b7280'
   const neg = ['跌停', '<-5%', '-5~-3%', '-3~-1%']
-  return neg.includes(bucket) ? '#10b981' : '#ef4444'
+  return neg.includes(bucket) ? sc.down : sc.up
 }
 
 export default function BreadthDistributionChart() {
@@ -53,6 +54,7 @@ export default function BreadthDistributionChart() {
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !items || items.length === 0) return
+    const sc = readStockColors()
     const ordered = [...items].reverse()
     chart.setOption({
       grid: { left: 64, right: 40, top: 4, bottom: 4 },
@@ -69,7 +71,7 @@ export default function BreadthDistributionChart() {
           type: 'bar',
           data: ordered.map((i) => ({
             value: i.count,
-            itemStyle: { color: bucketColor(i.bucket), borderRadius: 2 },
+            itemStyle: { color: bucketColor(i.bucket, sc), borderRadius: 2 },
           })),
           barWidth: '55%',
           label: {

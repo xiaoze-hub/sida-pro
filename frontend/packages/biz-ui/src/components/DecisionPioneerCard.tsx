@@ -51,7 +51,8 @@ function fmtWan(v: number | null | undefined, digits = 0): string {
 
 function upColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'text-muted-foreground'
-  return v > 0 ? 'text-rose-700 dark:text-rose-400' : v < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
 function activityColor(level: string): string {

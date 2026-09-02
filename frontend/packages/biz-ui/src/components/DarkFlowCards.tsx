@@ -89,7 +89,8 @@ function fmtSigned(v: number | null | undefined, digits = 2): string {
 
 function upColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'text-muted-foreground'
-  return v > 0 ? 'text-rose-700 dark:text-rose-400' : v < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
 export default function DarkFlowCards({ symbol, market }: { symbol: string; market: string }) {
@@ -232,7 +233,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
               {darkOrder.groups.slice(0, 5).map((g, i) => (
                 <div key={i} className="flex items-center justify-between text-[11px]">
-                  <span className={`font-mono ${g.d === 'B' ? 'text-rose-700 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'}`}>
+                  <span className={`font-mono ${g.d === 'B' ? 'text-stock-up' : 'text-stock-down'}`}>
                     {g.d === 'B' ? '买' : '卖'} {g.n}笔 {fmtWan(g.amt)}
                   </span>
                   <span className={g.contrarian ? 'text-amber-700 dark:text-amber-400 font-medium' : 'text-muted-foreground'}>
@@ -253,18 +254,18 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
           <>
             {/* 内外盘占比进度条: 外盘(买)红 / 内盘(卖)绿 */}
             <div className="flex items-center gap-2 text-[11px] mb-1">
-              <span className="text-rose-700 dark:text-rose-400 font-mono">外盘 {fmtPct(io.buy_pct)}</span>
+              <span className="text-stock-up font-mono">外盘 {fmtPct(io.buy_pct)}</span>
               <div className="flex-1 h-1.5 rounded-full bg-accent/40 overflow-hidden flex">
                 <div
-                  className="h-full bg-rose-400/80"
+                  className="h-full bg-stock-up/80"
                   style={{ width: `${Math.min(100, Math.max(0, io.buy_pct ?? 0))}%` }}
                 />
                 <div
-                  className="h-full bg-emerald-400/80"
+                  className="h-full bg-stock-down/80"
                   style={{ width: `${Math.min(100, Math.max(0, io.sell_pct ?? 0))}%` }}
                 />
               </div>
-              <span className="text-emerald-700 dark:text-emerald-400 font-mono">内盘 {fmtPct(io.sell_pct)}</span>
+              <span className="text-stock-down font-mono">内盘 {fmtPct(io.sell_pct)}</span>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px] mt-2">
               <Stat label="量比" value={io.volume_ratio != null ? io.volume_ratio.toFixed(2) : '--'} />

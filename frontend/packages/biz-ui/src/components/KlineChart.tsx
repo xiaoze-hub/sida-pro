@@ -28,6 +28,8 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
+import { readStockColors, withAlpha } from '../lib/stock-colors'
+
 import {
   KIND_ICON,
   KIND_LABEL,
@@ -197,6 +199,7 @@ export default function KlineChart(props: {
     const container = containerRef.current
     if (!container) return
 
+    const sc = readStockColors()
     const chart = createChart(container, {
       layout: {
         background: { color: '#0f172a' },
@@ -224,11 +227,11 @@ export default function KlineChart(props: {
     })
 
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#ef4444',
-      downColor: '#22c55e',
+      upColor: sc.up,
+      downColor: sc.down,
       borderVisible: false,
-      wickUpColor: '#ef4444',
-      wickDownColor: '#22c55e',
+      wickUpColor: sc.up,
+      wickDownColor: sc.down,
     })
     // 资金柱(阶段三): 与 K 线同 scale，叠加在K线下方 30% 高度
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -349,6 +352,7 @@ export default function KlineChart(props: {
     const chart = chartRef.current
     const series = seriesRef.current
     if (!chart || !series) return
+    const sc = readStockColors()
 
     // 设计稿 v2.0 §5: 4 开关(图层总控) — 整层关掉 → 该层所有标注全部隐藏。
     // 未传 = 默认全开。开关语义:
@@ -371,7 +375,7 @@ export default function KlineChart(props: {
         markers.push({
           time: toChartTime(ev.date, interval),
           position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
-          color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
+          color: ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : '#64748b',
           shape: 'circle' as const,
           text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
         })
@@ -407,7 +411,7 @@ export default function KlineChart(props: {
         priceLinesRef.current.push(
           series.createPriceLine({
             price: line.price,
-            color: line.kind === 'pressure' ? '#ef4444' : '#22c55e',
+            color: line.kind === 'pressure' ? sc.up : sc.down,
             lineWidth: 1,
             lineStyle: 2, // dashed
             axisLabelVisible: true,
@@ -426,12 +430,13 @@ export default function KlineChart(props: {
           const open = bar.open_net ?? 0
           const dark = bar.dark_net ?? 0
           const net = open + dark
-          // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色
+          // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色。
+          // 色值统一取 --stock-up/--stock-down 令牌: 暗盘=原色(突出主力), 明盘=55% 透明度次级色
           let color = '#475569' // 无数据: 灰
           if (dark !== null && dark !== undefined && dark !== 0) {
-            color = dark > 0 ? '#dc2626' : '#16a34a' // 主净正红/主净负绿(更深, 突出主力意图)
+            color = dark > 0 ? sc.up : sc.down
           } else if (open !== null && open !== undefined && open !== 0) {
-            color = open > 0 ? '#f87171' : '#4ade80' // 仅明盘: 浅红/浅绿
+            color = open > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
           }
           return { time: toChartTime(bar.date, interval), value: net, color }
         })

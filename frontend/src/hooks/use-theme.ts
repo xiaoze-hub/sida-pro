@@ -13,7 +13,8 @@ const DENSITY_STORAGE_KEY = 'panwatch-density'
 function readMode(): ThemeMode {
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored === 'light' || stored === 'dark' || stored === 'system') return stored
-  return 'system'
+  // 初始默认暗色(金融行情终端风格);用户显式设置过的 light/dark/system 原样尊重
+  return 'dark'
 }
 
 function readDensity(): Density {

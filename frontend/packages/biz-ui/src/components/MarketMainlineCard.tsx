@@ -119,7 +119,7 @@ function MainlineRow({
         </div>
         {/* 关键指标: 涨停数 / 最高板 */}
         <div className="flex items-center gap-2.5 shrink-0 text-[10px] tabular-nums">
-          <span className="text-rose-600 dark:text-rose-400 font-mono" title="涨停家数">
+          <span className="text-stock-up font-mono" title="涨停家数">
             {g.limit_up_count}家
           </span>
           <span className="text-amber-600 dark:text-amber-400 font-mono" title="最高板">
@@ -163,7 +163,7 @@ function MainlineRow({
                 >
                   <span className="font-medium truncate max-w-[64px]">{c.name}</span>
                   {c.days > 1 ? (
-                    <span className="text-[9px] font-mono text-rose-600 dark:text-rose-400 shrink-0">
+                    <span className="text-[9px] font-mono text-stock-up shrink-0">
                       {c.days}B
                     </span>
                   ) : null}
@@ -349,7 +349,7 @@ export default function MarketMainlineCard() {
                 title={`${g.name} ${g.limit_up_count}家 最高${g.max_boards}板`}
               >
                 <span>{g.name}</span>
-                <span className="text-rose-600 dark:text-rose-400 font-mono">{g.limit_up_count}家</span>
+                <span className="text-stock-up font-mono">{g.limit_up_count}家</span>
                 <span className="text-muted-foreground/60">/</span>
                 <span className="text-amber-600 dark:text-amber-400 font-mono">{g.max_boards}B</span>
               </span>

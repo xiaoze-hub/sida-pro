@@ -5,6 +5,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
+import { readStockColors, withAlpha } from '../lib/stock-colors'
 
 type BusinessDay = { year: number; month: number; day: number }
 
@@ -461,10 +462,12 @@ export default function InteractiveKline(props: {
       low: k.low,
       close: k.close,
     }))
+    // 量能柱跟随K线涨跌方向, 色值取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+    const sc = readStockColors()
     const volumes = klines.map(k => ({
       time: parseBusinessDay(k.date) as BusinessDay,
       value: k.volume,
-      color: k.close >= k.open ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+      color: k.close >= k.open ? withAlpha(sc.up, 0.35) : withAlpha(sc.down, 0.35),
     }))
     const closes = klines.map(k => k.close)
     const ma5 = sma(closes, 5)
@@ -518,6 +521,8 @@ export default function InteractiveKline(props: {
     const rootStyle = getComputedStyle(document.documentElement)
     const bg = rootStyle.getPropertyValue('--card').trim()
     const fg = rootStyle.getPropertyValue('--foreground').trim()
+    // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+    const sc = readStockColors()
 
     const defaultBars = interval === '1d' ? 100 : interval === '1w' ? 78 : 72
     const defaultSpacing = interval === '1d' ? 8.5 : interval === '1w' ? 10 : 10
@@ -547,12 +552,12 @@ export default function InteractiveKline(props: {
     })
 
     const candleSeries = addCandles(chart, LW, {
-      upColor: '#ef4444',
-      downColor: '#10b981',
-      borderUpColor: '#ef4444',
-      borderDownColor: '#10b981',
-      wickUpColor: '#ef4444',
-      wickDownColor: '#10b981',
+      upColor: sc.up,
+      downColor: sc.down,
+      borderUpColor: sc.up,
+      borderDownColor: sc.down,
+      wickUpColor: sc.up,
+      wickDownColor: sc.down,
     })
     candleSeries.setData(series.candles)
 
@@ -625,7 +630,7 @@ export default function InteractiveKline(props: {
         return {
           time: parseBusinessDay(k.date) as BusinessDay,
           value: v,
-          color: v >= 0 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+          color: v >= 0 ? withAlpha(sc.up, 0.35) : withAlpha(sc.down, 0.35),
         }
       })
       .filter(Boolean)
@@ -644,8 +649,8 @@ export default function InteractiveKline(props: {
         })
         .filter(Boolean)
       rsiLine.setData(rsiData as any)
-      rsiLine.createPriceLine?.({ price: 70, color: 'rgba(239,68,68,0.45)', lineWidth: 1, lineStyle: 2, title: '70' })
-      rsiLine.createPriceLine?.({ price: 30, color: 'rgba(16,185,129,0.45)', lineWidth: 1, lineStyle: 2, title: '30' })
+      rsiLine.createPriceLine?.({ price: 70, color: withAlpha(sc.up, 0.45), lineWidth: 1, lineStyle: 2, title: '70' })
+      rsiLine.createPriceLine?.({ price: 30, color: withAlpha(sc.down, 0.45), lineWidth: 1, lineStyle: 2, title: '30' })
     }
 
     // 主力意图 markers + 筹码叠加 (2026-08-12)
@@ -660,7 +665,7 @@ export default function InteractiveKline(props: {
           markers.push({
             time: parseBusinessDay(lastK.date) as BusinessDay,
             position: 'belowBar',
-            color: '#ef4444',
+            color: sc.up,
             shape: 'arrowUp',
             text: '主力吸筹',
             size: 1,
@@ -688,7 +693,7 @@ export default function InteractiveKline(props: {
           markers.push({
             time: parseBusinessDay(lastK.date) as BusinessDay,
             position: 'aboveBar',
-            color: '#10b981',
+            color: sc.down,
             shape: 'arrowDown',
             text: '主力派发',
             size: 1,
@@ -705,7 +710,7 @@ export default function InteractiveKline(props: {
             markers.push({
               time: parseBusinessDay(k.date) as BusinessDay,
               position: 'belowBar',
-              color: 'rgba(239, 68, 68, 0.9)',
+              color: withAlpha(sc.up, 0.9),
               shape: 'arrowUp',
               text: '涨停',
               size: 0,
@@ -714,7 +719,7 @@ export default function InteractiveKline(props: {
             markers.push({
               time: parseBusinessDay(k.date) as BusinessDay,
               position: 'aboveBar',
-              color: 'rgba(16, 185, 129, 0.9)',
+              color: withAlpha(sc.down, 0.9),
               shape: 'arrowDown',
               text: '跌停',
               size: 0,
@@ -809,11 +814,11 @@ export default function InteractiveKline(props: {
             color:
               value >= 0
                 ? on != null && dn != null
-                  ? 'rgba(239, 68, 68, 0.55)' // 双向有数据, 中性偏红
-                  : 'rgba(239, 68, 68, 0.35)'
+                  ? withAlpha(sc.up, 0.55) // 双向有数据, 中性偏红
+                  : withAlpha(sc.up, 0.35)
                 : on != null && dn != null
-                  ? 'rgba(16, 185, 129, 0.55)'
-                  : 'rgba(16, 185, 129, 0.35)',
+                  ? withAlpha(sc.down, 0.55)
+                  : withAlpha(sc.down, 0.35),
           }
         })
         .filter(Boolean)
@@ -842,9 +847,9 @@ export default function InteractiveKline(props: {
           const label = ev.label ?? ''
           switch (ev.kind) {
             case 'limit_up':
-              return { time: bd, position: 'belowBar', color: '#ef4444', shape: 'arrowUp', text: `涨${label}`, size: 1 }
+              return { time: bd, position: 'belowBar', color: sc.up, shape: 'arrowUp', text: `涨${label}`, size: 1 }
             case 'limit_down':
-              return { time: bd, position: 'aboveBar', color: '#10b981', shape: 'arrowDown', text: `跌${label}`, size: 1 }
+              return { time: bd, position: 'aboveBar', color: sc.down, shape: 'arrowDown', text: `跌${label}`, size: 1 }
             case 'dragon_tiger':
               return { time: bd, position: 'aboveBar', color: '#a855f7', shape: 'square', text: `龙虎${label}`, size: 1 }
             case 'announcement':
@@ -991,13 +996,13 @@ export default function InteractiveKline(props: {
     ? mi.data_status === 'insufficient'
       ? { text: `数据不足(${mi.tick_count ?? 0}笔)`, cls: 'text-muted-foreground font-medium' }
       : mi.direction === 'buy'
-        ? { text: '吸筹↑', cls: 'text-rose-500 font-medium' }
+        ? { text: '吸筹↑', cls: 'text-stock-up font-medium' }
         : mi.direction === 'wash'
           ? { text: '洗盘吸筹↑', cls: 'text-orange-500 font-medium' }
           : mi.direction === 'absorb'
             ? { text: '疑似吸筹↑', cls: 'text-amber-500 font-medium' }
             : mi.direction === 'sell'
-              ? { text: '派发↓', cls: 'text-emerald-500 font-medium' }
+              ? { text: '派发↓', cls: 'text-stock-down font-medium' }
               : { text: '平衡→', cls: 'text-muted-foreground font-medium' }
     : null
   const mainIntentLegend = mi ? (
@@ -1121,13 +1126,13 @@ export default function InteractiveKline(props: {
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
                 <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]">
                   <span className="text-muted-foreground">现价</span>{' '}
-                  <span className={`font-mono ml-1 ${minutePoints[minutePoints.length - 1]?.price >= (minutePrevClose ?? 0) ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  <span className={`font-mono ml-1 ${minutePoints[minutePoints.length - 1]?.price >= (minutePrevClose ?? 0) ? 'text-stock-up' : 'text-stock-down'}`}>
                     {minutePoints[minutePoints.length - 1]?.price.toFixed(2)}
                   </span>
                 </div>
                 <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]">
                   <span className="text-muted-foreground">较昨收</span>{' '}
-                  <span className={`font-mono ml-1 ${minutePoints[minutePoints.length - 1]?.price >= (minutePrevClose ?? 0) ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  <span className={`font-mono ml-1 ${minutePoints[minutePoints.length - 1]?.price >= (minutePrevClose ?? 0) ? 'text-stock-up' : 'text-stock-down'}`}>
                     {minutePrevClose && minutePoints.length
                       ? `${((minutePoints[minutePoints.length - 1].price - minutePrevClose) / minutePrevClose * 100) >= 0 ? '+' : ''}${((minutePoints[minutePoints.length - 1].price - minutePrevClose) / minutePrevClose * 100).toFixed(2)}%`
                       : '--'}
@@ -1149,7 +1154,7 @@ export default function InteractiveKline(props: {
                 <MinuteLwcChart points={minutePoints} prevClose={minutePrevClose} isIndex={minuteIsIndex} swings={minuteSwings} />
               </div>
               <div className="mt-2 flex gap-4 text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-rose-400" /> 价格</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-stock-up" /> 价格</span>
                 {!minuteIsIndex && (
                   <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> 均价</span>
                 )}
@@ -1189,7 +1194,7 @@ export default function InteractiveKline(props: {
       ) : latestMetrics ? (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">最新价</span> <span className="font-mono ml-1">{latestMetrics.last.close.toFixed(2)}</span></div>
-          <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">涨跌</span> <span className={`font-mono ml-1 ${latestMetrics.changePct >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{latestMetrics.changePct >= 0 ? '+' : ''}{latestMetrics.changePct.toFixed(2)}%</span></div>
+          <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">涨跌</span> <span className={`font-mono ml-1 ${latestMetrics.changePct >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{latestMetrics.changePct >= 0 ? '+' : ''}{latestMetrics.changePct.toFixed(2)}%</span></div>
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">振幅</span> <span className="font-mono ml-1">{latestMetrics.ampPct.toFixed(2)}%</span></div>
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">区间高低</span> <span className="font-mono ml-1">{latestMetrics.maxHigh.toFixed(2)}/{latestMetrics.minLow.toFixed(2)}</span></div>
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">均量</span> <span className="font-mono ml-1">{(latestMetrics.avgVol / 10000).toFixed(1)}万</span></div>

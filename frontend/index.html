@@ -7,7 +7,7 @@
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#4f46e5" />
+    <meta name="theme-color" content="#0a0a0f" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="数智分析" />
@@ -44,6 +44,21 @@
     " />
     <meta http-equiv="X-Content-Type-Options" content="nosniff" />
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
+
+    <!-- 暗色优先:首帧绘制前应用主题,避免暗色默认下先闪一帧亮色。
+         与 src/hooks/use-theme.ts readMode 逻辑一致:已持久化的选择原样尊重,无任何设置时默认 dark。 -->
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem('panwatch-theme');
+          if (m !== 'light' && m !== 'dark' && m !== 'system') m = 'dark';
+          var dark = m === 'dark' || (m === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.add(dark ? 'dark' : 'light');
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
 
     <!-- Lightweight Charts (CDN) -->
     <script defer src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"

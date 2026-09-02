@@ -1891,13 +1891,13 @@ export default function StocksPage() {
           <div className="card p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               {portfolio.total.total_pnl >= 0 ? (
-                <ArrowUpRight className="w-4 h-4 text-rose-600" />
+                <ArrowUpRight className="w-4 h-4 text-stock-up" />
               ) : (
-                <ArrowDownRight className="w-4 h-4 text-emerald-700" />
+                <ArrowDownRight className="w-4 h-4 text-stock-down" />
               )}
               <span className="text-[12px]">总盈亏</span>
             </div>
-            <div className={`text-[20px] font-bold font-num tabular-nums ${portfolio.total.total_pnl >= 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+            <div className={`text-[20px] font-bold font-num tabular-nums ${portfolio.total.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
               {portfolio.total.total_pnl >= 0 ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
               <span className="text-[13px] ml-1.5">
                 ({safeNum(portfolio.total.total_pnl_pct) === null ? '--' : `${portfolio.total.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(portfolio.total.total_pnl_pct)}%`})
@@ -1915,9 +1915,9 @@ export default function StocksPage() {
               <div className="card p-4">
                 <div className="flex flex-wrap items-center gap-2 text-muted-foreground mb-1">
                   {isUp ? (
-                    <ArrowUpRight className="w-4 h-4 text-rose-600" />
+                    <ArrowUpRight className="w-4 h-4 text-stock-up" />
                   ) : (
-                    <ArrowDownRight className="w-4 h-4 text-emerald-700" />
+                    <ArrowDownRight className="w-4 h-4 text-stock-down" />
                   )}
                   <span className="text-[12px]">{dailyPnlDisplayLabel(portfolio.total)}</span>
                   {portfolioMarketStatusLabel && (
@@ -1926,7 +1926,7 @@ export default function StocksPage() {
                     </span>
                   )}
                 </div>
-                <div className={`text-[20px] font-bold font-mono tabular-nums ${isUp ? 'text-rose-600' : 'text-emerald-700'}`}>
+                <div className={`text-[20px] font-bold font-mono tabular-nums ${isUp ? 'text-stock-up' : 'text-stock-down'}`}>
                   {isUp ? '+' : ''}{formatMoney(dayPnl)}
                   <span className="text-[13px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
                 </div>
@@ -2126,7 +2126,7 @@ export default function StocksPage() {
                     </div>
                     <div className="text-left md:text-right">
                       <div className="text-[10px] md:text-[11px] text-muted-foreground">盈亏</div>
-                      <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                      <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                         {account.total_pnl >= 0 ? '+' : ''}{formatMoney(account.total_pnl)}
                         <span className="text-[10px] md:text-[11px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
                       </div>
@@ -2138,7 +2138,7 @@ export default function StocksPage() {
                       >
                         {dailyPnlDisplayLabel(account, true)}
                       </div>
-                      <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                      <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                         {account.total_daily_pnl >= 0 ? '+' : ''}{formatMoney(account.total_daily_pnl)}
                       </div>
                     </div>
@@ -2197,10 +2197,10 @@ export default function StocksPage() {
                               const badge = marketBadge(pos.market)
                               const isForeign = pos.market === 'HK' || pos.market === 'US'
                               const changeColor = pos.change_pct != null
-                                ? (pos.change_pct > 0 ? 'text-rose-600' : pos.change_pct < 0 ? 'text-emerald-700' : 'text-muted-foreground')
+                                ? (pos.change_pct > 0 ? 'text-stock-up' : pos.change_pct < 0 ? 'text-stock-down' : 'text-muted-foreground')
                                 : 'text-muted-foreground'
                               const pnlColor = pos.pnl != null
-                                ? (pos.pnl > 0 ? 'text-rose-600' : pos.pnl < 0 ? 'text-emerald-700' : 'text-muted-foreground')
+                                ? (pos.pnl > 0 ? 'text-stock-up' : pos.pnl < 0 ? 'text-stock-down' : 'text-muted-foreground')
                                 : 'text-muted-foreground'
                               return (
                                 <tr
@@ -2292,7 +2292,7 @@ export default function StocksPage() {
                                     ) : '—'}
                                   </td>
                                   <td
-                                    className={`px-4 py-2.5 text-right font-mono tabular-nums text-[12px] ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-rose-600' : 'text-emerald-700') : ''}`}
+                                    className={`px-4 py-2.5 text-right font-mono tabular-nums text-[12px] ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}
                                     title={pos.quote_time ? `行情时间：${pos.quote_time}` : undefined}
                                   >
                                     {pos.daily_pnl != null ? (
@@ -2375,10 +2375,10 @@ export default function StocksPage() {
                           const stock = stocks.find(s => s.id === pos.stock_id)
                           const badge = marketBadge(pos.market)
                           const changeColor = pos.change_pct != null
-                            ? (pos.change_pct > 0 ? 'text-rose-600' : pos.change_pct < 0 ? 'text-emerald-700' : 'text-muted-foreground')
+                            ? (pos.change_pct > 0 ? 'text-stock-up' : pos.change_pct < 0 ? 'text-stock-down' : 'text-muted-foreground')
                             : 'text-muted-foreground'
                           const pnlColor = pos.pnl != null
-                            ? (pos.pnl > 0 ? 'text-rose-600' : pos.pnl < 0 ? 'text-emerald-700' : 'text-muted-foreground')
+                            ? (pos.pnl > 0 ? 'text-stock-up' : pos.pnl < 0 ? 'text-stock-down' : 'text-muted-foreground')
                             : 'text-muted-foreground'
                           return (
                             <div
@@ -2481,7 +2481,7 @@ export default function StocksPage() {
                                       { period: pos.daily_pnl_period, date: pos.quote_date },
                                     ]), true)}
                                   </div>
-                                  <div className={`font-mono whitespace-nowrap tabular-nums ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-rose-600' : 'text-emerald-700') : 'text-muted-foreground'}`}>
+                                  <div className={`font-mono whitespace-nowrap tabular-nums ${pos.daily_pnl != null ? (pos.daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down') : 'text-muted-foreground'}`}>
                                     {pos.daily_pnl != null ? `${pos.daily_pnl >= 0 ? '+' : ''}${formatMoney(pos.daily_pnl)}` : '—'}
                                   </div>
                                 </div>
@@ -2613,7 +2613,7 @@ export default function StocksPage() {
                 .map((stock) => {
                 const quote = getStockQuote(`${stock.market}:${stock.symbol}`)
                 const changeColor = quote?.change_pct != null
-                  ? (quote.change_pct > 0 ? 'text-rose-600' : quote.change_pct < 0 ? 'text-emerald-700' : 'text-muted-foreground')
+                  ? (quote.change_pct > 0 ? 'text-stock-up' : quote.change_pct < 0 ? 'text-stock-down' : 'text-muted-foreground')
                   : 'text-muted-foreground'
                 const { suggestion, kline } = getSuggestionForStock(stock.symbol, stock.market, false)
                 return (

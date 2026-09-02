@@ -515,7 +515,7 @@ export default function ForecastPage() {
   }
 
   const dirColor = (dir: string) =>
-    dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-700' : 'text-gray-500'
+    dir === 'up' ? 'text-stock-up' : dir === 'down' ? 'text-stock-down' : 'text-gray-500'
 
   // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem 的 TODO)
   const historyHasOutcome = history.some(
@@ -738,7 +738,7 @@ export default function ForecastPage() {
                   {/* 反AI模板⑤: 目标价/预期均为模型输出,标签带"模型"限定 */}
                   <span>模型目标价：<span className="font-num font-bold text-foreground tabular-nums">{result.recommendation.target_price}</span></span>
                   <span>止损参考：<span className="font-num font-bold text-foreground tabular-nums">{result.recommendation.stop_loss}</span></span>
-                  <span>模型预期：<span className={`font-num font-bold tabular-nums ${result.expected_pct >= 0 ? 'text-red-600' : 'text-green-700'}`}>{result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%</span></span>
+                  <span>模型预期：<span className={`font-num font-bold tabular-nums ${result.expected_pct >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%</span></span>
                   {result.recommendation.risk_note && <span className="text-amber-500">{result.recommendation.risk_note}</span>}
                 </div>
               </div>
@@ -752,7 +752,7 @@ export default function ForecastPage() {
                 {result.prediction.map((p, i) => (
                   <div key={i} className="bg-muted rounded-lg px-3 py-2 text-center">
                     <div className="text-xs text-muted-foreground">T+{i + 1}</div>
-                    <div className={`font-num font-bold tabular-nums ${p > result.last_close ? 'text-red-600' : 'text-green-700'}`}>
+                    <div className={`font-num font-bold tabular-nums ${p > result.last_close ? 'text-stock-up' : 'text-stock-down'}`}>
                       {safeFixed(p)}
                     </div>
                     <div className="text-xs text-muted-foreground">
@@ -804,7 +804,7 @@ export default function ForecastPage() {
             {result.sentiment && (
               <div>
                 <div className="text-sm font-medium mb-2">消息情绪面</div>
-                <div className={`rounded px-3 py-2 text-sm mb-2 ${result.sentiment.adjustment_pct >= 0 ? 'bg-red-500/10 text-red-600' : 'bg-green-500/10 text-green-700'}`}>
+                <div className={`rounded px-3 py-2 text-sm mb-2 ${result.sentiment.adjustment_pct >= 0 ? 'bg-stock-up/10 text-stock-up' : 'bg-stock-down/10 text-stock-down'}`}>
                   情绪修正系数：{result.sentiment.adjustment_pct > 0 ? '+' : ''}{result.sentiment.adjustment_pct}%
                   {result.sentiment.notes?.length > 0 && (
                     <span className="text-muted-foreground ml-2 text-xs">
@@ -1015,10 +1015,10 @@ export default function ForecastPage() {
                     <td className="py-2 font-mono">{h.symbol}{h.stock_name ? ` ${h.stock_name}` : ''}</td>
                     <td>{h.last_date}</td>
                     <td className="font-mono">{h.target_date || '-'}</td>
-                    <td className={`text-right font-bold ${h.direction === 'up' ? 'text-red-600' : h.direction === 'down' ? 'text-green-700' : ''}`}>
+                    <td className={`text-right font-bold ${h.direction === 'up' ? 'text-stock-up' : h.direction === 'down' ? 'text-stock-down' : ''}`}>
                       {h.direction === 'up' ? '↑' : h.direction === 'down' ? '↓' : '→'}
                     </td>
-                    <td className={`text-right font-mono ${h.expected_pct >= 0 ? 'text-red-600' : 'text-green-700'}`}>
+                    <td className={`text-right font-mono ${h.expected_pct >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {h.expected_pct > 0 ? '+' : ''}{h.expected_pct}%
                     </td>
                     <td className="text-right font-mono">{h.target_price ?? '-'}</td>
@@ -1085,7 +1085,7 @@ export default function ForecastPage() {
                 </div>
                 <div className="bg-muted/40 rounded px-2 py-1.5">
                   <div className="text-muted-foreground">情绪修正</div>
-                  <div className={`font-mono font-bold ${(detail.sentiment_adj || 0) >= 0 ? 'text-red-600' : 'text-green-700'}`}>
+                  <div className={`font-mono font-bold ${(detail.sentiment_adj || 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                     {(detail.sentiment_adj || 0) > 0 ? '+' : ''}{detail.sentiment_adj || 0}%
                   </div>
                 </div>
@@ -1098,7 +1098,7 @@ export default function ForecastPage() {
                     {detail.prediction.map((p, i) => (
                       <div key={i} className="bg-muted/40 rounded px-2 py-1 text-center">
                         <div className="text-[10px] text-muted-foreground">T+{i + 1}</div>
-                        <div className={`font-mono font-bold text-xs ${p >= detail.last_close ? 'text-red-600' : 'text-green-700'}`}>{p}</div>
+                        <div className={`font-mono font-bold text-xs ${p >= detail.last_close ? 'text-stock-up' : 'text-stock-down'}`}>{p}</div>
                       </div>
                     ))}
                   </div>

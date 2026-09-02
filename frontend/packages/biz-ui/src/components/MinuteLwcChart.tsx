@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MinuteSwings } from './InteractiveKline'
+import { readStockColors, withAlpha } from '../lib/stock-colors'
 
 export interface MinutePoint {
   t: string
@@ -88,8 +89,8 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
     const bg = rootStyle.getPropertyValue('--card').trim()
     const fg = rootStyle.getPropertyValue('--foreground').trim()
 
-    const colorUp = '#f43f5e'
-    const colorDown = '#10b981'
+    // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+    const { up: colorUp, down: colorDown } = readStockColors()
     const prevC = prevClose ?? points[0]?.price ?? 0
 
     const chart = LW.createChart(el, {
@@ -244,7 +245,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
         const confirmed = isRally
           ? (m.verdict.includes('放量上涨') || m.verdict.includes('疑似真拉升'))
           : (m.verdict.includes('放量下杀') || m.verdict.includes('疑似出货'))
-        const base = isRally ? '#f43f5e' : '#10b981'
+        const base = isRally ? colorUp : colorDown
         return {
           time: m.time,
           position: isRally ? 'belowBar' : 'aboveBar',
@@ -334,7 +335,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
       points.map(p => ({
         time: hhmmToTs(p.t),
         value: p.volume,
-        color: p.price >= prevC ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)',
+        color: p.price >= prevC ? withAlpha(colorUp, 0.4) : withAlpha(colorDown, 0.4),
       }))
     )
     // 2026-08-12 用户反馈: 分时默认显示全天完整K线(9:30-15:00 全在框内),
@@ -363,12 +364,12 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
       {!isIndex && swingMarks.length > 0 && showLegend && (
         <div className="absolute left-2 top-1 z-10 flex flex-col gap-0.5 rounded-md bg-background/85 backdrop-blur px-2 py-1.5 text-[10px] leading-tight shadow-sm border border-border/60">
           <div className="flex items-center gap-1.5">
-            <span className="inline-block w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent border-b-rose-500" />
+            <span className="inline-block w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent border-b-stock-up" />
             <span>主力净买(拉升)</span>
             <span className="text-muted-foreground">· 实色=确认</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="inline-block w-0 h-0 border-l-[5px] border-r-[5px] border-t-[8px] border-l-transparent border-r-transparent border-t-emerald-500" />
+            <span className="inline-block w-0 h-0 border-l-[5px] border-r-[5px] border-t-[8px] border-l-transparent border-r-transparent border-t-stock-down" />
             <span>主力净卖(下探)</span>
             <span className="text-muted-foreground">· 半透明=存疑</span>
           </div>

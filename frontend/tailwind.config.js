@@ -47,6 +47,10 @@ export default {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+        /* 大圆角同样从 --radius 派生:.card/.card-hover/.card-subtle 等用 rounded-xl,
+           此前吃 Tailwind 默认 12px/16px 不随 --radius 收紧,现统一收敛 */
+        xl: 'calc(var(--radius) + 2px)',
+        '2xl': 'calc(var(--radius) + 4px)',
       },
     },
   },

@@ -594,7 +594,7 @@ export default function DataSourcesPage() {
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{quoteItem.price?.toFixed(2)}</span>
                           <span className={`text-[11px] font-medium ${
-                            (quoteItem.change_pct ?? 0) > 0 ? 'text-red-600' : (quoteItem.change_pct ?? 0) < 0 ? 'text-green-700' : 'text-muted-foreground'
+                            (quoteItem.change_pct ?? 0) > 0 ? 'text-stock-up' : (quoteItem.change_pct ?? 0) < 0 ? 'text-stock-down' : 'text-muted-foreground'
                           }`}>
                             {(quoteItem.change_pct ?? 0) > 0 ? '+' : ''}{quoteItem.change_pct?.toFixed(2)}%
                           </span>
@@ -656,7 +656,7 @@ export default function DataSourcesPage() {
                         <span className="text-[12px] font-medium text-foreground">{flowItem.name || flowItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${
-                            (flowItem.main_net ?? 0) > 0 ? 'text-red-600' : 'text-green-700'
+                            (flowItem.main_net ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                           }`}>
                             {(flowItem.main_net ?? 0) > 0 ? '+' : ''}{((flowItem.main_net ?? 0) / 10000).toFixed(2)}万
                           </span>
@@ -675,7 +675,7 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{dtItem.name || dtItem.symbol}</span>
                         <span className={`text-[12px] font-mono ${
-                          (dtItem.net_buy ?? 0) > 0 ? 'text-red-600' : 'text-green-700'
+                          (dtItem.net_buy ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                         }`}>
                           {(dtItem.net_buy ?? 0) > 0 ? '+' : ''}{((dtItem.net_buy ?? 0) / 10000).toFixed(2)}万
                         </span>
@@ -733,7 +733,7 @@ export default function DataSourcesPage() {
                         <span className="text-[12px] font-medium text-foreground">{nbItem.date}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${
-                            (nbItem.total_net ?? 0) > 0 ? 'text-red-600' : 'text-green-700'
+                            (nbItem.total_net ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                           }`}>
                             {(nbItem.total_net ?? 0) > 0 ? '+' : ''}{((nbItem.total_net ?? 0) / 10000).toFixed(2)}万
                           </span>

@@ -38,10 +38,14 @@
     --border: 240 15% 90%;
     --input: 240 15% 90%;
     --ring: 240 70% 45%; /* 跟随锚点色 */
-    --radius: 0.75rem;
+    /* 行情终端风格:微圆角。所有圆角档位由 tailwind.config.js 从此值派生
+       (sm=-4px / md=-2px / lg=基准 / xl=+2px / 2xl=+4px),进一步收紧只需调小此值 */
+    --radius: 0.375rem;
 
-    /* 数字专用字体栈(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用 */
-    --font-num: "SF Mono", "Cascadia Code", ui-monospace, "DIN Alternate", "Roboto Mono", monospace;
+    /* 数字专用字体栈(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用。
+       DIN Alternate(macOS)/Bahnschrift(Win10+,DIN 风格系统字体)置顶,优先呈现
+       金融终端式数字;无 DIN 时回落到等宽数字字体。 */
+    --font-num: "DIN Alternate", "Bahnschrift", "SF Mono", "Cascadia Code", ui-monospace, "Roboto Mono", Consolas, monospace;
 
     /* 界面密度体系:normal(默认)= 4px 基准。
        compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
@@ -119,9 +123,11 @@
   code, .font-mono {
     font-family: "SF Mono", "Cascadia Code", "Source Code Pro", ui-monospace, monospace;
   }
-  /* 数字专用字体(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用 */
+  /* 数字专用字体(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用。
+     tabular-nums: 表格/行情列表中数字等宽对齐(字体不支持该特性时自动无副作用) */
   .font-num {
     font-family: var(--font-num);
+    font-variant-numeric: tabular-nums;
   }
 }
 

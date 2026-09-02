@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Layers, RefreshCw } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 
 /**
  * 板块详情页(2026-08-20, v0.3.0) 路由 /boards/:blockCode。
@@ -88,7 +89,8 @@ function fmtPct(v: number | null | undefined, plus = true): string {
 
 function pctColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'text-muted-foreground'
-  return v > 0 ? 'text-rose-600 dark:text-rose-400' : v < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
 export default function BoardDetailPage() {
@@ -145,7 +147,9 @@ export default function BoardDetailPage() {
   const rotBarColor = (r: RotationItem): string => {
     const c = r.change_5d
     if (c == null || !Number.isFinite(c)) return '#60a5fa'
-    return c > 0 ? '#ef4444' : c < 0 ? '#10b981' : '#94a3b8'
+    // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+    const sc = readStockColors()
+    return c > 0 ? sc.up : c < 0 ? sc.down : '#94a3b8'
   }
 
   return (

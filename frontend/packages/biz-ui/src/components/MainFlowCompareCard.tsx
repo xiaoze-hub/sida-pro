@@ -55,7 +55,8 @@ function fmtSignedPct(v: number | null | undefined): string {
 
 function upColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'text-muted-foreground'
-  return v > 0 ? 'text-rose-600 dark:text-rose-400' : v < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
 /** 一致性分段配色: >90 绿 / 60-90 蓝 / <60 黄 */

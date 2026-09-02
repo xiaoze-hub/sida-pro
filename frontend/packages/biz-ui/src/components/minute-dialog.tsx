@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
+import { readStockColors } from '../lib/stock-colors'
 
 interface MinutePoint {
   t: string
@@ -73,6 +74,8 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
 
   const last = points[points.length - 1]
   const up = last && last.price >= (points[0]?.price ?? last.price)
+  // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
+  const stockColors = readStockColors()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -93,7 +96,7 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
         {!loading && !error && points.length > 1 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-sm">
-              <span className={up ? 'text-rose-700 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'}>
+              <span className={up ? 'text-stock-up' : 'text-stock-down'}>
                 现价 {last?.price?.toFixed(2)} {up ? '↑' : '↓'}
               </span>
               <span className="text-muted-foreground">均价 {last?.avg?.toFixed(2)}</span>
@@ -111,12 +114,12 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
               {/* 均价线 */}
               <path d={avgPath} fill="none" stroke="#f59e0b" strokeWidth={1} opacity={0.8} />
               {/* 价格线 */}
-              <path d={pricePath} fill="none" stroke={up ? '#f43f5e' : '#10b981'} strokeWidth={1.5} />
+              <path d={pricePath} fill="none" stroke={up ? stockColors.up : stockColors.down} strokeWidth={1.5} />
             </svg>
 
             <div className="flex gap-4 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-0.5 bg-rose-400" /> 价格
+                <span className="inline-block w-3 h-0.5 bg-stock-up" /> 价格
               </span>
               <span className="flex items-center gap-1">
                 <span className="inline-block w-3 h-0.5 bg-amber-400" /> 均价

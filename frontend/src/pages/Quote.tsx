@@ -131,9 +131,9 @@ function toAmount(v: number | null | undefined, digits = 2): string {
 // 旧名 toWan 保留兼容(代码里别处调用)
 const toWan = toAmount
 
-/** 红涨绿跌(国内 A 股惯例, 按用户 override 设计稿 §5.2) */
+/** 红涨绿跌(国内 A 股惯例, 按用户 override 设计稿 §5.2) — 统一走 --stock-up/--stock-down 令牌 */
 const NET_INFLOW_CLASS = (v: number | null | undefined) =>
-  v == null ? 'text-muted-foreground' : v > 0 ? 'text-rose-500' : v < 0 ? 'text-emerald-500' : 'text-foreground'
+  v == null ? 'text-muted-foreground' : v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-foreground'
 
 /** GS 信号(已确认/待确认) — 买红卖绿 */
 const GS_COLOR = (side: 'G' | 'S', confirmed: boolean) => {
@@ -144,9 +144,9 @@ const GS_COLOR = (side: 'G' | 'S', confirmed: boolean) => {
 /** 决策共振 tone 上色 — 与红涨绿跌一致: bull→红(涨色) / bear→绿(跌色) / warn→琥珀 / neutral→灰 */
 const RESONANCE_TONE_CLASS = (tone: string | null | undefined) =>
   tone === 'bull'
-    ? 'text-rose-500'
+    ? 'text-stock-up'
     : tone === 'bear'
-      ? 'text-emerald-500'
+      ? 'text-stock-down'
       : tone === 'warn'
         ? 'text-amber-500'
         : 'text-muted-foreground'

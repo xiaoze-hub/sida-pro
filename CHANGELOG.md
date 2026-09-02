@@ -51,6 +51,10 @@
 
 - **v0.4.69 决策先锋三指标共振接入个股行情页** (28号, 并行子智能体协作). **后端** `src/web/api/klines.py`: summary API 新增 `resonance` 字段 `{available, row, phase, action_label, action_text, tone, bad_count}` — 组装既有三指标(`gs_strategy.trend_label` + `ai_activity` + `dark_pool_flow.compute_pool_flow`)经 `resonance.evaluate_state` + `state_action_label` 得 7 行状态 + GO/STOP 实战文案; 三指标全可得才 `available:True`, 缺任一返安全默认不编造; 双层 try/except 兜底不拖垮 summary。复用已拉 bars, 唯一联网项 compute_pool_flow 受 5min summary 缓存摊销。注: 行2"拐点"因历史明盘不可得(fund_net_prev 恒 None)此路径不可达, 属数据固有约束非 bug。**前端** `frontend/src/pages/Quote.tsx`: 新增 `ResonanceInfo` interface + 窄栏「决策先锋共振」区块(替换原写死操作建议), GO/STOP 主标签按 tone 上色(bull红涨/bear绿跌/warn琥珀/neutral灰, 中国市场红涨绿跌), 无卡片 hairline 分隔终端风。测试 `tests/test_summary_resonance.py` 16 例 + 回归 68 全过, 前端 typecheck 零错误。
 
+### update
+
+- **v0.4.70 前端终端化 P0: 涨跌色令牌统一 + 暗色优先 + 圆角收紧 + 金融数字字体** (28号, 并行子智能体协作, 响应老板"像专业行情终端"诉求). **① 涨跌色统一**: 全站 ~120 处硬编码涨跌色(#ef4444/#22c55e/#10b981/text-rose-*/text-emerald-*)收敛到 `--stock-up:#E53935`/`--stock-down:#43A047` 令牌; Tailwind 层用 `text-stock-up/text-stock-down`, 图表 JS 层新增 `packages/biz-ui/src/lib/stock-colors.ts` 运行时 `getComputedStyle` 读 CSS 变量(`readStockColors`/`withAlpha`)。覆盖 K线/分时/资金柱/盈亏/涨跌家数等(27 文件); 残留 59 处均为非涨跌语义(状态/错误/命中/买卖动作徽章)有意保留。**② 暗色优先**: `use-theme.ts` 默认 system→dark(仅影响未设置过的新用户, 尊重已选手动选择), index.html 加首帧防闪脚本; theme-color #4f46e5→#0a0a0f。**③ 圆角收紧**: `--radius` 0.75rem→0.375rem, tailwind 补派生 xl/2xl(卡片 12→8px)。**④ 金融数字字体**: `--font-num` 字体栈置顶 DIN Alternate/Bahnschrift(Windows 不再落代码字体)+`tabular-nums` 等宽, 保守不加 CDN webfont(CSP 限制)。前端 typecheck 零错误。⚠️ 遗留待产品决策: GS 信号配色 Quote(买红卖绿) 与 K线图(G绿S红) 相反, 本次未擅动。
+
 ## 2026-09-01
 
 ### feature

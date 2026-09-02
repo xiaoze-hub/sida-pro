@@ -25,6 +25,7 @@ import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
 import { TechnicalBadge } from '@panwatch/biz-ui/components/technical-badge'
 import AddPositionCalculator from '@panwatch/biz-ui/components/add-position-calculator'
+import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 
 interface QuoteResponse {
   symbol: string
@@ -556,7 +557,7 @@ function FundamentalsPanel(props: {
                 {dtList.map((item, i) => (
                   <tr key={`dt-${item.trade_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.trade_date || '--'}</td>
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${(item.net_buy ?? 0) >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${(item.net_buy ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {signedMoney(item.net_buy)}
                     </td>
                     <td className="px-1 py-1 text-foreground/80">{item.reason || '--'}</td>
@@ -619,10 +620,10 @@ function FundamentalsPanel(props: {
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.report_date || '--'}</td>
                     <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{money(item.holder_num)}</td>
                     {/* 户数减少=筹码集中, 按 A 股习惯红涨绿跌配色 */}
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_num == null ? 'text-foreground/80' : item.change_num < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_num == null ? 'text-foreground/80' : item.change_num < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {signedMoney(item.change_num)}
                     </td>
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_ratio == null ? 'text-foreground/80' : item.change_ratio < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_ratio == null ? 'text-foreground/80' : item.change_ratio < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {signedPct(item.change_ratio)}
                     </td>
                   </tr>
@@ -1330,14 +1331,17 @@ export default function StockInsightModal(props: {
 
   const quoteUp = (quote?.change_pct || 0) > 0
   const quoteDown = (quote?.change_pct || 0) < 0
-  const changeColor = quoteUp ? 'text-rose-500' : quoteDown ? 'text-emerald-500' : 'text-foreground'
-  const priceColor = quoteUp ? 'text-rose-500' : quoteDown ? 'text-emerald-500' : 'text-foreground'
+  // 涨跌色统一走设计令牌 --stock-up/--stock-down (红涨绿跌, A股口径)
+  const changeColor = quoteUp ? 'text-stock-up' : quoteDown ? 'text-stock-down' : 'text-foreground'
+  const priceColor = quoteUp ? 'text-stock-up' : quoteDown ? 'text-stock-down' : 'text-foreground'
   const levelColor = (value: number | null | undefined) => {
     if (value == null || quote?.prev_close == null) return 'text-foreground'
-    if (value > quote.prev_close) return 'text-rose-500'
-    if (value < quote.prev_close) return 'text-emerald-500'
+    if (value > quote.prev_close) return 'text-stock-up'
+    if (value < quote.prev_close) return 'text-stock-down'
     return 'text-foreground'
   }
+  // 图表/分享图用的运行时色值 (ECharts/SVG 无法消费 Tailwind 类)
+  const stockColors = readStockColors()
   const badge = getMarketBadge(market)
   const amplitudePct = useMemo(() => {
     const hi = quote?.high_price
@@ -1471,7 +1475,7 @@ export default function StockInsightModal(props: {
     try {
       const { marketLabel, price, chg, action, signal, reason, risks, technicalBrief, levelsBrief, source, ts } = shareCardPayload
       const up = (quote?.change_pct || 0) >= 0
-      const changeColor = up ? '#ef4444' : '#10b981'
+      const changeColor = up ? stockColors.up : stockColors.down
       const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
@@ -1924,9 +1928,9 @@ export default function StockInsightModal(props: {
                               className={`font-mono ${
                                 quote?.current_price != null
                                   ? quote.current_price > holdingAgg.unitCost
-                                    ? 'text-rose-500'
+                                    ? 'text-stock-up'
                                     : quote.current_price < holdingAgg.unitCost
-                                      ? 'text-emerald-500'
+                                      ? 'text-stock-down'
                                       : 'text-foreground'
                                   : 'text-foreground'
                               }`}
@@ -1940,7 +1944,7 @@ export default function StockInsightModal(props: {
                           </div>
                           <div className="rounded bg-emerald-500/10 px-2 py-1.5">
                             <div className="text-[10px] text-muted-foreground">总盈亏</div>
-                            <div className={`font-mono ${holdingAgg.pnl >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                            <div className={`font-mono ${holdingAgg.pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                               {holdingAgg.pnl >= 0 ? '+' : ''}{formatCompactNumber(holdingAgg.pnl)}
                             </div>
                           </div>
@@ -1991,7 +1995,7 @@ export default function StockInsightModal(props: {
                               const yHigh = toY(Number(k.high))
                               const yLow = toY(Number(k.low))
                               const up = Number(k.close) >= Number(k.open)
-                              const color = up ? '#ef4444' : '#10b981'
+                              const color = up ? stockColors.up : stockColors.down
                               const bodyTop = Math.min(yOpen, yClose)
                               const bodyH = Math.max(1.4, Math.abs(yOpen - yClose))
                               const active = miniHoverIdx === idx
@@ -2039,9 +2043,9 @@ export default function StockInsightModal(props: {
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">竞价涨停买<InfoTip k="open_limit_buy" /></div><div className="font-mono">{moreInfo.open_limit_buy != null && moreInfo.open_limit_buy !== 0 ? `${(moreInfo.open_limit_buy/10000).toFixed(2)}亿` : '--'}</div></div>
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">连板天<InfoTip k="consecutive_limit_days" /></div><div className="font-mono">{moreInfo.consecutive_limit_days ?? '--'}</div></div>
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">连涨天<InfoTip k="consecutive_up_days" /></div><div className="font-mono">{moreInfo.consecutive_up_days ?? '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">5日涨幅<InfoTip k="change_pct_5d" /></div><div className={`font-mono ${moreInfo.change_pct_5d != null && moreInfo.change_pct_5d>0 ? 'text-rose-500' : moreInfo.change_pct_5d!=null&&moreInfo.change_pct_5d<0 ? 'text-emerald-500' : ''}`}>{moreInfo.change_pct_5d != null ? `${moreInfo.change_pct_5d>0?'+':''}${moreInfo.change_pct_5d.toFixed(2)}%` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">20日涨幅<InfoTip k="change_pct_20d" /></div><div className={`font-mono ${moreInfo.change_pct_20d != null && moreInfo.change_pct_20d>0 ? 'text-rose-500' : moreInfo.change_pct_20d!=null&&moreInfo.change_pct_20d<0 ? 'text-emerald-500' : ''}`}>{moreInfo.change_pct_20d != null ? `${moreInfo.change_pct_20d>0?'+':''}${moreInfo.change_pct_20d.toFixed(2)}%` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">年初至今<InfoTip k="change_pct_ytd" /></div><div className={`font-mono ${moreInfo.change_pct_ytd != null && moreInfo.change_pct_ytd>0 ? 'text-rose-500' : moreInfo.change_pct_ytd!=null&&moreInfo.change_pct_ytd<0 ? 'text-emerald-500' : ''}`}>{moreInfo.change_pct_ytd != null ? `${moreInfo.change_pct_ytd>0?'+':''}${moreInfo.change_pct_ytd.toFixed(2)}%` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">5日涨幅<InfoTip k="change_pct_5d" /></div><div className={`font-mono ${moreInfo.change_pct_5d != null && moreInfo.change_pct_5d>0 ? 'text-stock-up' : moreInfo.change_pct_5d!=null&&moreInfo.change_pct_5d<0 ? 'text-stock-down' : ''}`}>{moreInfo.change_pct_5d != null ? `${moreInfo.change_pct_5d>0?'+':''}${moreInfo.change_pct_5d.toFixed(2)}%` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">20日涨幅<InfoTip k="change_pct_20d" /></div><div className={`font-mono ${moreInfo.change_pct_20d != null && moreInfo.change_pct_20d>0 ? 'text-stock-up' : moreInfo.change_pct_20d!=null&&moreInfo.change_pct_20d<0 ? 'text-stock-down' : ''}`}>{moreInfo.change_pct_20d != null ? `${moreInfo.change_pct_20d>0?'+':''}${moreInfo.change_pct_20d.toFixed(2)}%` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">年初至今<InfoTip k="change_pct_ytd" /></div><div className={`font-mono ${moreInfo.change_pct_ytd != null && moreInfo.change_pct_ytd>0 ? 'text-stock-up' : moreInfo.change_pct_ytd!=null&&moreInfo.change_pct_ytd<0 ? 'text-stock-down' : ''}`}>{moreInfo.change_pct_ytd != null ? `${moreInfo.change_pct_ytd>0?'+':''}${moreInfo.change_pct_ytd.toFixed(2)}%` : '--'}</div></div>
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">动态PE<InfoTip k="pe_dynamic" /></div><div className="font-mono">{moreInfo.pe_dynamic != null ? Number(moreInfo.pe_dynamic).toFixed(2) : '--'}</div></div>
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">市净率<InfoTip k="pb" /></div><div className="font-mono">{moreInfo.pb != null ? Number(moreInfo.pb).toFixed(2) : '--'}</div></div>
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">股息率<InfoTip k="dividend_yield" /></div><div className="font-mono">{moreInfo.dividend_yield != null ? `${Number(moreInfo.dividend_yield).toFixed(2)}%` : '--'}</div></div>
@@ -2057,8 +2061,8 @@ export default function StockInsightModal(props: {
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">总卖量<InfoTip k="total_sell_vol" /></div><div className="font-mono">{moreInfo.total_sell_vol != null ? `${(moreInfo.total_sell_vol/100).toFixed(0)}手` : '--'}</div></div>
                       <div className="rounded bg-rose-500/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">撤买<InfoTip k="cancel_buy" /></div><div className="font-mono">{moreInfo.cancel_buy != null ? `${(moreInfo.cancel_buy).toFixed(0)}` : '--'}</div></div>
                       <div className="rounded bg-emerald-500/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">撤卖<InfoTip k="cancel_sell" /></div><div className="font-mono">{moreInfo.cancel_sell != null ? `${(moreInfo.cancel_sell).toFixed(0)}` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">主力净流入<InfoTip k="zjl_hb" /></div><div className={`font-mono ${moreInfo.zjl_hb != null ? (moreInfo.zjl_hb >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{moreInfo.zjl_hb != null ? `${(moreInfo.zjl_hb).toFixed(0)}万` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">主买净额<InfoTip k="zjl" /></div><div className={`font-mono ${moreInfo.zjl != null ? (moreInfo.zjl >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{moreInfo.zjl != null ? `${(moreInfo.zjl).toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">主力净流入<InfoTip k="zjl_hb" /></div><div className={`font-mono ${moreInfo.zjl_hb != null ? (moreInfo.zjl_hb >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{moreInfo.zjl_hb != null ? `${(moreInfo.zjl_hb).toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground flex items-center">主买净额<InfoTip k="zjl" /></div><div className={`font-mono ${moreInfo.zjl != null ? (moreInfo.zjl >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{moreInfo.zjl != null ? `${(moreInfo.zjl).toFixed(0)}万` : '--'}</div></div>
                     </div>
                     {moreInfo.total_buy_vol != null && moreInfo.total_sell_vol != null && (moreInfo.total_buy_vol + moreInfo.total_sell_vol) > 0 && (
                       <div className="mt-2 h-1.5 w-full flex rounded overflow-hidden bg-muted">
@@ -2077,10 +2081,10 @@ export default function StockInsightModal(props: {
                       <div className="text-[10px] text-muted-foreground">{darkFlowTq.date ? `盘后 ${darkFlowTq.date}` : '盘后'}</div>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
-                      <div className="rounded bg-violet-500/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">超大单净额</div><div className={`font-mono ${darkFlowTq.xl_net != null ? (darkFlowTq.xl_net >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{darkFlowTq.xl_net != null ? `${darkFlowTq.xl_net.toFixed(0)}万` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">大单净额</div><div className={`font-mono ${darkFlowTq.large_net != null ? (darkFlowTq.large_net >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{darkFlowTq.large_net != null ? `${darkFlowTq.large_net.toFixed(0)}万` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">中单净额</div><div className={`font-mono ${darkFlowTq.mid_net != null ? (darkFlowTq.mid_net >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{darkFlowTq.mid_net != null ? `${darkFlowTq.mid_net.toFixed(0)}万` : '--'}</div></div>
-                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">小单净额</div><div className={`font-mono ${darkFlowTq.small_net != null ? (darkFlowTq.small_net >= 0 ? 'text-red-600' : 'text-green-700') : ''}`}>{darkFlowTq.small_net != null ? `${darkFlowTq.small_net.toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-violet-500/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">超大单净额</div><div className={`font-mono ${darkFlowTq.xl_net != null ? (darkFlowTq.xl_net >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{darkFlowTq.xl_net != null ? `${darkFlowTq.xl_net.toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">大单净额</div><div className={`font-mono ${darkFlowTq.large_net != null ? (darkFlowTq.large_net >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{darkFlowTq.large_net != null ? `${darkFlowTq.large_net.toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">中单净额</div><div className={`font-mono ${darkFlowTq.mid_net != null ? (darkFlowTq.mid_net >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{darkFlowTq.mid_net != null ? `${darkFlowTq.mid_net.toFixed(0)}万` : '--'}</div></div>
+                      <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">小单净额</div><div className={`font-mono ${darkFlowTq.small_net != null ? (darkFlowTq.small_net >= 0 ? 'text-stock-up' : 'text-stock-down') : ''}`}>{darkFlowTq.small_net != null ? `${darkFlowTq.small_net.toFixed(0)}万` : '--'}</div></div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-border/40 grid grid-cols-3 md:grid-cols-5 gap-2 text-[11px]">
                       <div className="rounded bg-accent/10 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">拆单委托</div><div className="font-mono">{darkFlowTq.split_order_count != null ? darkFlowTq.split_order_count.toLocaleString() : '--'}</div></div>

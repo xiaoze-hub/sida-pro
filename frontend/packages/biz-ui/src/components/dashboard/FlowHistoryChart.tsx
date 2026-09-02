@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import echarts from '@panwatch/biz-ui/lib/echarts-core'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
+import { readStockColors, withAlpha } from '@panwatch/biz-ui/lib/stock-colors'
 import { fetchAPI } from '@panwatch/api'
 
 /**
@@ -47,6 +48,8 @@ export default function FlowHistoryChart() {
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !rows || rows.length === 0) return
+    // 主力净流入=资金流入语义, 统一取 --stock-up 令牌 (红, A股口径)
+    const sc = readStockColors()
     const times = rows.map((r) => fmtTime(r.ts))
     const vals = rows.map((r) => +(r.total_main_flow / 1e8).toFixed(2))
     chart.setOption({
@@ -69,11 +72,11 @@ export default function FlowHistoryChart() {
           data: vals,
           showSymbol: false,
           smooth: true,
-          lineStyle: { width: 1.5, color: '#ef4444' },
+          lineStyle: { width: 1.5, color: sc.up },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(239,68,68,.30)' },
-              { offset: 1, color: 'rgba(239,68,68,.02)' },
+              { offset: 0, color: withAlpha(sc.up, 0.3) },
+              { offset: 1, color: withAlpha(sc.up, 0.02) },
             ]),
           },
           markLine: {
