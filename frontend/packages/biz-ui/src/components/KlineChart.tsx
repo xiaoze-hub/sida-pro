@@ -18,6 +18,7 @@ import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
+  LineSeries,
   createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
@@ -75,6 +76,67 @@ const INTERVAL_OPTIONS: Array<{ key: KlineInterval; label: string }> = [
 
 const DAY_BUCKETS: KlineInterval[] = ['1d', '1w', '1mth']
 
+// ── L1 趋势 / L2 买卖点 / L5 副图 · 前端自算辅助 (移植自 InteractiveKline v0.4.34) ──
+
+/** L2 GS 买卖点: 日线均线交叉. G=买入(MA5 上穿), S=卖出(MA5 下穿). 实心已确认/空心待确认 */
+export interface GsSignalPoint {
+  date: string
+  side: 'G' | 'S'
+  /** 收盘确认=实心(true), 盘中疑似=空心(false). 防"把疑似当确认" */
+  confirmed?: boolean
+}
+
+/** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 */
+export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase'
+
+function sma(values: number[], period: number): Array<number | null> {
+  if (period <= 1) return values.map((v) => v)
+  const out: Array<number | null> = new Array(values.length).fill(null)
+  let sum = 0
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i]
+    if (i >= period) sum -= values[i - period]
+    if (i >= period - 1) out[i] = sum / period
+  }
+  return out
+}
+
+function ema(values: number[], period: number): Array<number | null> {
+  const out: Array<number | null> = new Array(values.length).fill(null)
+  if (values.length === 0) return out
+  const k = 2 / (period + 1)
+  let prev: number | null = null
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]
+    if (prev == null) {
+      prev = v
+      out[i] = v
+      continue
+    }
+    prev = v * k + prev * (1 - k)
+    out[i] = prev
+  }
+  return out
+}
+
+function computeMacd(closes: number[]) {
+  const e12 = ema(closes, 12)
+  const e26 = ema(closes, 26)
+  const macd: Array<number | null> = closes.map((_, i) => {
+    const a = e12[i]
+    const b = e26[i]
+    if (a == null || b == null) return null
+    return a - b
+  })
+  const macdVals = macd.map((v) => (v == null ? 0 : v))
+  const signal = ema(macdVals, 9)
+  const hist: Array<number | null> = macd.map((v, i) => {
+    if (v == null || signal[i] == null) return null
+    return v - (signal[i] as number)
+  })
+  return { macd, signal, hist }
+}
+
 export default function KlineChart(props: {
   symbol: string
   market: string
@@ -86,6 +148,12 @@ export default function KlineChart(props: {
   height?: number
   /** L4 事件标注 (阶段二: 接 events 标准化层, marker 标在K线上) */
   events?: KlineEventPoint[]
+  /** L2 GS 买卖点 (设计稿 §5.2): 日线均线交叉, 实心已确认/空心待确认 */
+  gsSignals?: GsSignalPoint[]
+  /** L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */
+  subchart?: KlineSubchart
+  /** L5 副图切换回调 (父组件持久化到 URL) */
+  onSubchartChange?: (s: KlineSubchart) => void
   /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
   supportPressure?: KlinePriceLine[]
   /** 资金柱 (阶段三: 红涨绿跌 + 主净分色) */
@@ -115,6 +183,14 @@ export default function KlineChart(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
+  // L5 副图: 受控(父传入)或内部自管
+  const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
+  // L1 趋势均线 series (受 layers.trend 控制)
+  const maSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  // 原始K线(供 L1 均线 / L5 副图 计算)
+  const rawKlinesRef = useRef<Array<{ time: Time; close: number; volume: number }>>([])
+  // L5 MACD 副图 series (subchart==='macd' 时渲染)
+  const macdSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
 
   // ── Lightweight Charts 实例化 ─────────────────────────────
   useEffect(() => {
@@ -244,6 +320,12 @@ export default function KlineChart(props: {
           close: it.close,
         }))
         seriesRef.current?.setData(data)
+        // L1 均线 / L5 副图 计算源
+        rawKlinesRef.current = kl.map((it: KlineItem) => ({
+          time: toChartTime(it.date, interval),
+          close: it.close,
+          volume: it.volume || 0,
+        }))
         chartRef.current?.timeScale().fitContent()
         setDataLen(kl.length)
       } catch (e) {
@@ -279,7 +361,7 @@ export default function KlineChart(props: {
     const showCapital = lv.capital !== false
     const showSignal = lv.signal !== false
 
-    // 1) L4 事件 markers (整层 event 开关 + per-kind kindsVisible 双重过滤)。
+    // 1) L4 事件 markers (整层 event 开关 + per-kind kindsVisible 双重过滤) + L2 GS 买卖点 markers。
     //    复用单一 plugin, 用 setMarkers 整体替换 — 开关切换时旧 marker 不残留。
     const markers: SeriesMarker<Time>[] = []
     if (showEvent) {
@@ -292,6 +374,21 @@ export default function KlineChart(props: {
           color: ev.tone === 'down' ? '#22c55e' : ev.tone === 'up' ? '#ef4444' : '#64748b',
           shape: 'circle' as const,
           text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
+        })
+      }
+    }
+    // L2 GS 买卖点 (设计稿 §5.2): G=买入(绿)/S=卖出(红); 实心=已确认, 空心=待确认(防疑似当确认)。
+    // LC v5 无 circleOutline 形状, 用 size 区分: 实心 size=2(大), 空心 size=0(小) + 文字 ○ 前缀。
+    if (showSignal) {
+      for (const g of props.gsSignals || []) {
+        const isBuy = g.side === 'G'
+        markers.push({
+          time: toChartTime(g.date, interval),
+          position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
+          color: isBuy ? '#16a34a' : '#dc2626',
+          shape: 'circle' as const,
+          size: g.confirmed ? 2 : 0,
+          text: g.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
         })
       }
     }
@@ -343,7 +440,70 @@ export default function KlineChart(props: {
         volSeries.setData([])
       }
     }
-  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, props.layersVisible, interval])
+  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
+
+  // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
+  // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    // ---- L1 均线: 复用单一 ref 数组, 切换时先清后建 ----
+    for (const s of maSeriesRef.current) {
+      try { chart.removeSeries(s as unknown as ISeriesApi<'Line'>) } catch { /* noop */ }
+    }
+    maSeriesRef.current = []
+    const showTrend = (props.layersVisible?.trend ?? true) !== false
+    if (showTrend && rawKlinesRef.current.length) {
+      const closes = rawKlinesRef.current.map((k) => k.close)
+      const ma5 = sma(closes, 5)
+      const ma10 = sma(closes, 10)
+      const ma20 = sma(closes, 20)
+      const ma60 = sma(closes, 60)
+      const defs: Array<{ v: Array<number | null>; color: string; w: 1 | 2 | 3; title: string }> = [
+        { v: ma5, color: 'rgba(148, 163, 184, 0.9)', w: 1, title: 'MA5' },
+        { v: ma10, color: 'rgba(148, 163, 184, 0.75)', w: 1, title: 'MA10' },
+        { v: ma20, color: 'rgba(148, 163, 184, 0.6)', w: 1, title: 'MA20' },
+        { v: ma60, color: 'rgba(148, 163, 184, 0.45)', w: 1, title: 'MA60' },
+        // 牛线=MA5 蓝 / 马线=MA20 橙 (BBI 简化)
+        { v: ma5, color: 'rgba(59, 130, 246, 0.95)', w: 3, title: '牛' },
+        { v: ma20, color: 'rgba(249, 115, 22, 0.95)', w: 3, title: '马' },
+      ]
+      for (const d of defs) {
+        const line = chart.addSeries(LineSeries, { color: d.color, lineWidth: d.w, priceLineVisible: false, lastValueVisible: false })
+        const pts = rawKlinesRef.current
+          .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
+          .filter((p): p is { time: Time; value: number } => p != null)
+        line.setData(pts as never)
+        maSeriesRef.current.push(line)
+      }
+    }
+
+    // ---- L5 副图: MACD (vol 由 volumeSeries 承接; macd 用独立 LineSeries 3 条, 叠加到与资金柱同一 pane) ----
+    // 设计稿 §5.1: L5 副图 成交量/MACD/主动买卖比/情绪周期. 成交量已有(volumeSeries)。
+    // MACD: DIF=sig线(蓝)/DEA=信号线(橙)/柱=hist(CL专用 hist 用 line 简化为差线)
+    for (const s of macdSeriesRef.current) {
+      try { chart.removeSeries(s as unknown as ISeriesApi<'Line'>) } catch { /* noop */ }
+    }
+    macdSeriesRef.current = []
+    if (subchart === 'macd' && rawKlinesRef.current.length) {
+      const closes = rawKlinesRef.current.map((k) => k.close)
+      const { macd, signal } = computeMacd(closes)
+      const defs: Array<{ v: Array<number | null>; color: string; w: 1 | 2 }> = [
+        { v: macd, color: 'rgba(96, 165, 250, 0.95)', w: 1 },   // DIF
+        { v: signal, color: 'rgba(251, 146, 60, 0.95)', w: 1 }, // DEA
+      ]
+      for (const d of defs) {
+        const line = chart.addSeries(LineSeries, { color: d.color, lineWidth: d.w, priceLineVisible: false, lastValueVisible: false })
+        const pts = rawKlinesRef.current
+          .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
+          .filter((p): p is { time: Time; value: number } => p != null)
+        line.setData(pts as never)
+        macdSeriesRef.current.push(line)
+      }
+    }
+    // 主动买卖比 / 情绪周期 : 需后端 realtime 数据, Klines 接口无 → 不做假实现, 留给调 UI 切换(灰显"副图数据待接")。
+  }, [props.layersVisible?.trend, rawKlinesRef.current.length, props.subchart, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time
@@ -383,6 +543,33 @@ export default function KlineChart(props: {
                 ? `${dataLen} 根K线`
                 : '无数据'}
         </span>
+        {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */}
+        {(
+          [
+            ['vol', '成交量'],
+            ['macd', 'MACD'],
+            ['active_ratio', '买卖比'],
+            ['phase', '情绪'],
+          ] as const
+        ).map(([k, label]) => {
+          const active = subchart === k
+          const disabled = (k === 'active_ratio' || k === 'phase')
+          return (
+            <button
+              key={k}
+              onClick={() => {
+                setSubchart(k)
+                props.onSubchartChange?.(k)
+              }}
+              title={disabled ? '副图数据待接入(需实时行情)' : undefined}
+              className={`px-2 py-1 text-xs rounded disabled:opacity-40 disabled:cursor-not-allowed ${
+                active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          )
+        })}
       </div>
       {/* 图表容器 */}
       <div

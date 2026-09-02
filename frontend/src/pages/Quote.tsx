@@ -133,7 +133,13 @@ interface SummaryResp {
     ratio?: number | null
   }> | null
   chips?: ChipsInfo | null
-}
+    // L2 GS 买卖点 (设计稿 §5.2): 后端 gs_strategy.compute_gs_signals 产出
+    gs_signals?: Array<{
+      date?: string | null
+      side?: string | null
+      confirmed?: boolean
+    }> | null
+  }
 
 /** tone 语义 → Tailwind 类名(消费方映射, 数据层不绑具体 UI) */
 const TONE_CLASS: Record<string, string> = {
@@ -219,12 +225,16 @@ export default function QuotePage() {
   const activeTab = QUOTE_TABS.some((t) => t.key === tab) ? tab : 'chart'
 
   // 标准化数据层: 后端原始 events/unlock_levels → 图表消费的标准结构
-  const normEvents = normalizeKlineEvents(summary?.events)
-  const normPriceLines = normalizePriceLines(summary?.unlock_levels)
+    const normEvents = normalizeKlineEvents(summary?.events)
+    const normPriceLines = normalizePriceLines(summary?.unlock_levels)
+    // L2 GS 买卖点: 后端 gs_signals → KlineChart 的 GsSignalPoint[]
+    const normGsSignals = (summary?.gs_signals || [])
+      .filter((g) => g && g.date && (g.side === 'G' || g.side === 'S'))
+      .map((g) => ({ date: g.date as string, side: g.side as 'G' | 'S', confirmed: !!g.confirmed }))
 
-  return (
-    <div className="w-full space-y-4">
-      {/* 页头 + 标的选择(个股/指数/板块 三合一) */}
+    return (
+      <div className="w-full space-y-4">
+        {/* 页头 + 标的选择(个股/指数/板块 三合一) */}
       <div className="card p-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
@@ -353,8 +363,9 @@ export default function QuotePage() {
                           initialDays={120}
                           // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
                           events={normEvents}
-                          supportPressure={normPriceLines}
-                          fundFlow={summary?.fund_flow?.map((r) => ({ date: r.date, open_net: r.ming_net, dark_net: r.dark_net }))}
+                                          supportPressure={normPriceLines}
+                                          gsSignals={normGsSignals}
+                                          fundFlow={summary?.fund_flow?.map((r) => ({ date: r.date, open_net: r.ming_net, dark_net: r.dark_net }))}
                           // 设计稿 v2.0 §5: 4 图层总控开关 (L1趋势 / L2买卖点 / L3资金柱 / L4事件)
                           layersVisible={layers}
                           // v2.1 §10: K线选段 + 十字光标 → 右栏资金面板联动

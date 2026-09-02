@@ -4,6 +4,15 @@
 
 ### feature
 
+- **v0.4.53 设计稿 §5 补全: KlineChart 补 L1/L2/L5 三层 + 清死代码** (Hermes 自接). 行情主视图(/forecast) KlineChart 之前只实现了 L3 资金柱 + L4 事件 + 价位线, 比二级页 InteractiveKline 弱. 现:
+  - **L1 趋势**: MA5/10/20/60 灰阶 + 牛线(MA5 蓝粗)/马线(MA20 橙粗), 受 `layers.trend` 开关, 关整层清空 series.
+  - **L2 GS 买卖点**: 接后端 `summary.gs_signals`(gs_strategy.compute_gs_signals 产出), G=买绿(下方)/S=卖红(上方); 实心=已确认(收盘)/空心=待确认(LC v5 无 circleOutline 形状 → size 区分 + 文字 ○G/○S 前缀).
+  - **L5 副图切换 UI**: 成交量(已有 volumeSeries)/MACD(DIF 蓝 + DEA 橙, 前端 computeMacd 自算)/主动买卖比/情绪周期(后两者需实时行情, 真数据待接 → disabled 灰显 tooltip). `subchart` prop + `onSubchartChange` 回调供父组件写 URL.
+  - 新增 `LineSeries` import + sma/ema/computeMacd 辅助函数 + `GsSignalPoint`/`KlineSubchart` 类型.
+  - `Quote.tsx`: summary 类型加 `gs_signals` + 归一化 → 传 `gsSignals` prop 给 KlineChart. K线图层标注 L0-L5 全链路在行情主视图打通.
+  - **死代码清理**: 删除无引用的 `MinuteEChart.tsx`(187 行 ECharts 版分时, 已被 MinuteLwcChart 取代). ECharts 依赖保留(Dashboard 3 个非K线图 SentimentGauge/BreadthDistribution/FlowHistoryChart 在用).
+  - 前端 typecheck 0 error + pnpm build 14.42s 全绿; 后端 test_l4_events 26 passed(纯前端改动, 后端未动).
+
 - **v2.1 §11.5 通知送达回执**(端点 + 时间戳落库 + 测试)。`src/core/notifier.py` 每渠道独立记录 `delivered_at`(成功)/`failed_at`(失败) ISO 时间戳。`src/web/api/notifications.py` 新增 `GET /api/notifications/{nid}/status` 端点: 返回 `push_status`(pending/sent/failed/skipped)+ `channels[]` 每渠道独立状态 + `delivered_at`(首个成功渠道时间)+ `created_at`。`tests/test_notification_status.py` 5 例 (单通知状态、404、未授权用户 404、delivered_at 取首个成功、无成功渠道时 None)。验收硬约束: 409/500 防账号探测;返回字段不含 payload;S5 归属校验 (user_id 隔离, 仅看本人 nid)。
 - **v2.1 §10 K线大图 → 右栏资金面板联动**（完成 §10 半成品）。`frontend/src/pages/Quote.tsx` 接 KlineChart 两个 props：`onRangeSelect` → 选段时间窗 `selectedRange: {from,to}` → FundPanel 过滤 rows + 区间聚合摘要（明盘/暗盘净额累计）+ 表格只显区间内 row；`onCrosshairMove` → `hoveredDate` → FundPanel 行高亮（背景色 + 蓝色 ring）。日期维度都是 YYYY-MM-DD 字符串可直接字典序比较，无需 Date 解析。Quote.tsx 不需要新依赖（无新 npm）。`pnpm tsc -b` 0 错 + `pnpm build` 15.01s 全绿。
 - **v2.1 §11 P0-B 一致性补丁(2026-09-01)**: `src/web/api/datasources.py` create/update/delete 三处路由也加 `_ensure_health_columns(db)` 自愈(xiaoze6096 上封信建议 + 我认可的防御一致性;原本只有 list/get/health/data-sources 三处, v0.4.51 已全绿但 update/delete 在老库上仍可能因缺列崩 500)。`pytest tests/test_datasource_admin_api.py tests/test_datasource_reconcile.py tests/test_datasource_test_path.py` 7 passed。
