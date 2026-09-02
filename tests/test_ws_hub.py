@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -252,6 +252,7 @@ async def test_l5_03_too_many_connections_close_4402():
         ws_hub._register(user_id, MagicMock(), set())
 
     ws = MagicMock()
+    ws.accept = AsyncMock()
     ws.headers = {}
     ws.query_params = {"token": token}
 
