@@ -412,7 +412,7 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
                     date=str(b.get("date", "")),
                 )
                 fund_flow.append({
-                    "date": str(b.get("date", "")),
+                    "date": _norm_date(b.get("date")),
                     "ming_net": None,  # 历史逐日明盘: 无数据(big_order_flow 仅当日)
                     "dark_net": round(a.net, 2) if a else None,
                 })
@@ -454,6 +454,24 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     return out
 
 
+def _norm_date(d) -> str | None:
+    """日期统一规范化为 'YYYY-MM-DD'。
+
+    2026-09-02 v0.4.55 生产实测: 同一 date 字段在不同数据源下**格式不一致** ——
+      - 通达信 TQ 日K  → `20260827`
+      - 东财 / 新浪日K → `2026-08-27`
+      - .tck 文件名    → `20260827`(由 `_date_from_tck_name` 提取)
+    混用会让前端做日期匹配/排序时错乱, 且主源从 TQ 降级到东财时**日期样式会突然变化**。
+    故统一在此规范化; 无法识别的输入原样返回(不猜、不补假日期)。
+    """
+    s = str(d or "").strip()
+    if not s:
+        return None
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s[:10]
+
+
 def _date_from_tck_name(path: str) -> str | None:
     """.tck 文件名里的交易日(YYYYMMDD) → 'YYYY-MM-DD'; 文件名无日期返回 None。
 
@@ -493,9 +511,9 @@ def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
             continue
         chg = (bars[i]["close"] - prev["close"]) / prev["close"] * 100
         if chg >= 9.8:
-            events.append({"date": str(bars[i].get("date", "")), "kind": "limit_up", "label": "涨停"})
+            events.append({"date": _norm_date(bars[i].get("date")), "kind": "limit_up", "label": "涨停"})
         elif chg <= -9.8:
-            events.append({"date": str(bars[i].get("date", "")), "kind": "limit_down", "label": "跌停"})
+            events.append({"date": _norm_date(bars[i].get("date")), "kind": "limit_down", "label": "跌停"})
 
     from src.core import l4_events
 
