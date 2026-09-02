@@ -353,9 +353,13 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         bars = fetch_bars(symbol, "CN", days=120)
     except Exception as e:  # noqa: BLE001
         logger.debug("layer_data fetch_bars %s failed: %s", symbol, e)
-        return out
+        bars = []
     if not bars:
-        return out
+        # 2026-09-02 修: bars 为空(多 vendor 全挂)时**不再整体早退**。
+        # orderbook / .tck 拆单撤单 / wencai 龙虎榜公告 / 筹码解套盘位 都不依赖 bars,
+        # 早退会把它们一起拖成 None → 前端"整页无数据"(2026-09-02 生产实测)。
+        # 仅 gs_signals / fund_flow 依赖 bars, 下面各自用 `if bars:` 门控跳过。
+        logger.warning("layer_data %s bars 为空: gs_signals/fund_flow 跳过, 其余仍计算", symbol)
 
     # ⓪ orderbook: 盘口队列 + 托压单(设计稿 §3.1)
     #    优先 .img 离线文件(完整委托队列); 无 .img 时退回 thsdk 实时快照;
@@ -386,45 +390,47 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         logger.debug("orderbook %s failed: %s", symbol, e)
         out["orderbook"] = None
 
-    # ① gs_signals
-    try:
-        from src.core.gs_strategy import compute_gs_signals
-
-        out["gs_signals"] = compute_gs_signals(bars)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("gs_signals %s failed: %s", symbol, e)
-
-    # ② fund_flow(日级)
-    try:
-        from src.core.ohlc_dark import allocate_bar
-
-        fund_flow = []
-        for b in bars:
-            a = allocate_bar(
-                o=b.get("open"), h=b.get("high"), l=b.get("low"),
-                c=b.get("close"), volume=b.get("volume"),
-                date=str(b.get("date", "")),
-            )
-            fund_flow.append({
-                "date": str(b.get("date", "")),
-                "ming_net": None,  # 历史逐日明盘: 无数据(big_order_flow 仅当日)
-                "dark_net": round(a.net, 2) if a else None,
-            })
-        # 当日明盘(big_order_flow 全口径, 与官方扩展1一致; 失败保持 null)
+    # ① gs_signals(依赖 bars: bars 空时跳过, 保持 None 由前端显式"无数据")
+    if bars:
         try:
-            from src.core import dark_l2, dark_split
+            from src.core.gs_strategy import compute_gs_signals
 
-            tc = _tencent_code(symbol)
-            if tc:
-                ticks = dark_l2.fetch_l2_ticks(tc, "thsdk_big_order")
-                ming = dark_split.ming_net_from_big_orders(ticks)
-                if ming["count"] > 0 and fund_flow:
-                    fund_flow[-1]["ming_net"] = ming["ming_net"]
-        except Exception:  # noqa: BLE001
-            pass
-        out["fund_flow"] = fund_flow
-    except Exception as e:  # noqa: BLE001
-        logger.debug("fund_flow %s failed: %s", symbol, e)
+            out["gs_signals"] = compute_gs_signals(bars)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("gs_signals %s failed: %s", symbol, e)
+
+    # ② fund_flow(日级, 依赖 bars)
+    if bars:
+        try:
+            from src.core.ohlc_dark import allocate_bar
+
+            fund_flow = []
+            for b in bars:
+                a = allocate_bar(
+                    o=b.get("open"), h=b.get("high"), l=b.get("low"),
+                    c=b.get("close"), volume=b.get("volume"),
+                    date=str(b.get("date", "")),
+                )
+                fund_flow.append({
+                    "date": str(b.get("date", "")),
+                    "ming_net": None,  # 历史逐日明盘: 无数据(big_order_flow 仅当日)
+                    "dark_net": round(a.net, 2) if a else None,
+                })
+            # 当日明盘(big_order_flow 全口径, 与官方扩展1一致; 失败保持 null)
+            try:
+                from src.core import dark_l2, dark_split
+
+                tc = _tencent_code(symbol)
+                if tc:
+                    ticks = dark_l2.fetch_l2_ticks(tc, "thsdk_big_order")
+                    ming = dark_split.ming_net_from_big_orders(ticks)
+                    if ming["count"] > 0 and fund_flow:
+                        fund_flow[-1]["ming_net"] = ming["ming_net"]
+            except Exception:  # noqa: BLE001
+                pass
+            out["fund_flow"] = fund_flow
+        except Exception as e:  # noqa: BLE001
+            logger.debug("fund_flow %s failed: %s", symbol, e)
 
     # ③ events(L4 事件标注): 涨停/跌停(K线自算) + 五类真实数据源
     #    kind 取值与前端 InteractiveKline 的 KlineEventKind 一一对应。
@@ -446,6 +452,23 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.debug("chips %s failed: %s", symbol, e)
     return out
+
+
+def _date_from_tck_name(path: str) -> str | None:
+    """.tck 文件名里的交易日(YYYYMMDD) → 'YYYY-MM-DD'; 文件名无日期返回 None。
+
+    .tck 是盘后落盘文件(如 `sz002361_20260827.tck`), 文件名带交易日。
+    事件日期必须以它为准: 否则沿用 bars 末根日期(今日)会把 8-27 的拆单/撤单
+    标成今天, 前端把历史事件画到今日 K 线上(日期错位)。
+    """
+    import os
+    import re
+
+    m = re.search(r"(\d{8})", os.path.basename(path or ""))
+    if not m:
+        return None
+    d = m.group(1)
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
 
 
 def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
@@ -476,16 +499,17 @@ def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
 
     from src.core import l4_events
 
-    # (2) 拆单簇 / 撤单异常(.tck)
+    # (2) 拆单簇 / 撤单异常(.tck)—— 不依赖 bars, bars 为空时按最新 .tck 文件照算
     try:
         from src.core.tdx_tick_parser import parse_tck
 
         tck_date = str(bars[-1].get("date", "")) if bars else ""
         tck_path = l4_events.find_tck_file(symbol, tck_date) or l4_events.find_tck_file(symbol)
         if tck_path:
+            ev_date = _date_from_tck_name(tck_path) or tck_date
             trades, _orders, cancels = parse_tck(tck_path)
-            events.extend(l4_events.split_clusters(trades, tck_date))
-            events.extend(l4_events.cancel_anomalies(cancels, tck_date))
+            events.extend(l4_events.split_clusters(trades, ev_date))
+            events.extend(l4_events.cancel_anomalies(cancels, ev_date))
     except Exception as e:  # noqa: BLE001
         logger.debug(".tck 事件 %s failed: %s", symbol, e)
 

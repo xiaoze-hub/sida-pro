@@ -82,11 +82,23 @@ def test_build_layer_data_non_cn_returns_none():
     assert out == _ALL_NONE
 
 
-def test_build_layer_data_no_bars_returns_none(monkeypatch):
+def test_build_layer_data_no_bars_only_bars_dependent_none(monkeypatch):
+    """2026-09-02 行为变更: bars 为空(多 vendor 全挂)时**不再整体早退**。
+
+    依赖 bars 的 gs_signals / fund_flow 保持 None(显式"无数据", 不编造);
+    不依赖 bars 的 orderbook / events(.tck 拆单撤单 + wencai 龙虎榜公告) / chips
+    **仍要计算** —— 否则生产上腾讯 WAF 501 打空 bars, 会把这些本可独立产出的
+    数据一起拖成 None, 前端出现"整页无数据"(2026-09-02 实测)。
+    """
     from src.models.market import MarketCode
     _patch_bars(monkeypatch, [])
     out = kapi._build_layer_data("000977", MarketCode.CN)
-    assert out == _ALL_NONE
+    assert out["gs_signals"] is None
+    assert out["fund_flow"] is None
+    # 不依赖 bars 的项必须"尝试过": events 至少是 list(空源=空列表), 不得是 None
+    assert out["events"] is not None, "bars 空时 events 仍应计算(.tck/wencai 不依赖 bars)"
+    assert out["chips"] is not None, "bars 空时 chips 仍应计算(标准筹码接口, 不依赖 bars)"
+    assert isinstance(out["orderbook"], (dict, type(None)))
 
 
 def test_build_layer_data_full(monkeypatch):
@@ -114,6 +126,40 @@ def test_build_layer_data_events_limit_down(monkeypatch):
     _patch_bars(monkeypatch, bars)
     out = kapi._build_layer_data("000977", MarketCode.CN)
     assert any(e["kind"] == "limit_down" for e in out["events"])
+
+
+def test_date_from_tck_name():
+    """.tck 文件名里的交易日 → YYYY-MM-DD; 文件名无日期 → None。"""
+    assert kapi._date_from_tck_name("/app/data/tck/sz002361_20260827.tck") == "2026-08-27"
+    assert kapi._date_from_tck_name("sz002361_20260827.tck") == "2026-08-27"
+    assert kapi._date_from_tck_name("/app/data/tck/sz002361.tck") is None
+    assert kapi._date_from_tck_name("") is None
+
+
+def test_build_events_tck_independent_of_bars(monkeypatch):
+    """bars 为空时 .tck 拆单/撤单事件仍独立产出, 且日期取**文件名里的交易日**。
+
+    2026-09-02 生产: bars 因多 vendor 全挂为空, 若 events 跟着早退, .tck 里已有的
+    拆单/撤单会一起丢失; 且日期不能沿用 bars 末根(今日), 否则 8-27 的事件被画到
+    今日 K 线上(日期错位)。
+    """
+    from src.core import l4_events as l4
+    from src.core import tdx_tick_parser as ttp
+
+    monkeypatch.setattr(l4, "find_tck_file",
+                        lambda symbol, date_=None: "/app/data/tck/sz002361_20260827.tck")
+    # 5 笔 × 10 万(单笔 < 30 万伪装小单), 相邻 1s(< 30s 窗口), 同价 → 簇总额 50 万 >= 30 万
+    trades = [{"t": 90_000 + i * 1_000, "price": 10.00, "vol": 10_000,
+               "dir": "B", "amt": 100_000.0} for i in range(5)]
+    cancels = [{"t": 91_000, "vol": 60_000, "target": 1}]  # 单笔撤单 >= 5 万股
+    monkeypatch.setattr(ttp, "parse_tck", lambda path: (trades, [], cancels))
+    monkeypatch.setattr(kapi, "_wencai_event_pairs", lambda s, d: [])
+
+    evs = kapi._build_events("002361", [])  # bars 空
+    kinds = {e["kind"] for e in evs}
+    assert "split_cluster" in kinds, evs
+    assert "cancel_anomaly" in kinds, evs
+    assert evs and all(e["date"] == "2026-08-27" for e in evs), evs
 
 
 def test_tencent_code_normalizes():

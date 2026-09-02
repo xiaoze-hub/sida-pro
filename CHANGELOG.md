@@ -16,6 +16,7 @@
   - 新增 `decision_backtest.py`: 三指标共振回测 (带官方基准对照).
   - `market_scan.py`: 新增 `resonance_pick()` 三指标 AND 联合选股.
   - `test_dark_pool_flow.py` / `test_decision_enhance.py`: 13+13 新单测. **测试**: pytest 176 passed (相关) + marketdata 190 passed + test_l4_events 26 passed. **未合并待重发**: `klines.py` `if not bars` 不整体早退 + `decision_pioneer.py` `_fallback_bars` 兜底 — xiaoze 在 02:50 邮件正文描述修复 diff 但附件 attachment_count=0 (可能漏附), 已发邮件让重发.
+- **v0.4.56 fetch_bars 兜底 + bars 不整体早退 (xiaoze 重发)**. `src/core/decision_pioneer.py`: 新增 `_tencent_symbol()` + `_fallback_bars()`, `fetch_bars` 改为两级取数(主链路 marketdata Engine 优先 → 空则直连兜底东财→新浪→腾讯, 复用包内既有 `fetch_eastmoney_kline`/`fetch_sina_index_kline`/`fetch_tencent_kline_raw`). `src/web/api/klines.py`: `_build_layer_data` `if not bars: return out` 改为不整体早退 — bars 空时仍尝试计算 orderbook/events/chips(`.tck`/wencai/筹码 不依赖 bars). `tests/test_summary_layer_api.py` 10 例. 配合 v0.4.55 的 TQ 自动发现 + 暗盘融合, P4 主线拼图齐了. pytest 81 passed (含新增 10). xiaoze 提示 **这台机器就是部署环境**, 后续部署完它自己 docker exec 验证, 我无需截图/贴日志.
 
 ## 2026-09-01
 

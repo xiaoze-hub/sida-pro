@@ -208,16 +208,82 @@ def _bars_to_dicts(bars) -> list[dict]:
     return out
 
 
+def _tencent_symbol(symbol: str) -> str | None:
+    """6 位 A 股代码 → 腾讯/新浪风格(sz002361 / sh600519); 无法识别返回 None。"""
+    s = (symbol or "").strip().lower()
+    if s.startswith(("sz", "sh", "bj")):
+        return s
+    if s.isdigit() and len(s) == 6:
+        if s[0] in ("6", "9") or s.startswith("688"):
+            return "sh" + s
+        if s[0] in ("0", "2", "3"):
+            return "sz" + s
+    return None
+
+
+def _fallback_bars(symbol: str, market: str, days: int) -> list[dict]:
+    """主链路(Engine)全挂时的**直连兜底**: 东财 → 新浪 → 腾讯, 任一源有数即返回。
+
+    2026-09-02 生产实测(多 vendor 同时不可达):
+      - 腾讯 web.ifzq.gtimg.cn 对生产出口 IP 返回 **WAF 501 拦截页**(重定向到
+        waf.tencent.com/501page.html), 带 UA/Referer 同样被拦 → 是 IP 级风控, 非接口变更
+      - 东财 push2his 部分时段 RemoteDisconnected
+      - 新浪 money.finance.sina.com.cn 稳定 200(个股/指数同接口)
+    故兜底按"东财 → 新浪 → 腾讯"顺序, 任一源出数即用; 全空才返回 [](调用方显式"无数据")。
+
+    仅 CN 个股走兜底(腾讯/新浪/东财的港美符号规则不同, 不在此 blanket 套用)。
+    """
+    if (market or "").upper() != "CN":
+        return []
+    try:
+        from marketdata.vendors.kline import (
+            fetch_eastmoney_kline,
+            fetch_sina_index_kline,
+            fetch_tencent_kline_raw,
+        )
+    except Exception as e:  # noqa: BLE001  # marketdata 包不可用则无从兜底
+        logger.debug("fetch_bars 兜底不可用(marketdata 未安装): %s", e)
+        return []
+
+    tsym = _tencent_symbol(symbol)
+    if not tsym:
+        return []
+    secid = ("1." if tsym.startswith("sh") else "0.") + tsym[2:]  # 东财: 1.=沪 / 0.=深
+    for name, fn, arg in (
+        ("东财", fetch_eastmoney_kline, secid),
+        ("新浪", fetch_sina_index_kline, tsym),
+        ("腾讯", fetch_tencent_kline_raw, tsym),
+    ):
+        try:
+            bars = _bars_to_dicts(fn(arg, days))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("fetch_bars %s 兜底源 %s 失败: %s", symbol, name, e)
+            continue
+        if bars:
+            logger.info("fetch_bars %s 兜底命中 %s(%d 根)", symbol, name, len(bars))
+            return bars
+    return []
+
+
 def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
-    """盘中实时日K(走 marketdata Engine, TQ 优先, 含当日)。失败返回 []。"""
+    """盘中实时日K(走 marketdata Engine, TQ 优先, 含当日)。
+
+    两级取数(2026-09-02 修):
+      1. marketdata Engine: 按 DB 配置的 priority 主备取数(尊重线上数据源编排)
+      2. Engine 返回空/异常 → `_fallback_bars()` 直连 东财 → 新浪 → 腾讯
+
+    仍全挂才返回 [](调用方按"无数据"显式处理, 禁止编造)。
+    """
     from src.core.marketdata_client import get_market_data
 
     try:
-        bars = get_market_data().klines(symbol, market=market, days=days)
-        return _bars_to_dicts(bars)
+        bars = _bars_to_dicts(get_market_data().klines(symbol, market=market, days=days))
+        if bars:
+            return bars
+        logger.warning("fetch_bars %s 主链路返回空, 转直连兜底", symbol)
     except Exception as e:  # noqa: BLE001
-        logger.warning("decision_pioneer fetch_bars %s failed: %s", symbol, e)
-        return []
+        logger.warning("decision_pioneer fetch_bars %s 主链路失败: %s, 转直连兜底", symbol, e)
+    return _fallback_bars(symbol, market, days)
 
 
 def fetch_tq_l2(symbol: str, market: str = "CN") -> dict | None:
