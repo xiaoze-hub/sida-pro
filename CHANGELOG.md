@@ -35,6 +35,10 @@
 
 - **v0.4.65 resonance 实战文案 API 字段化** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-3). `src/core/resonance.py` 新增 `state_action_label(row)` — 行号→决策先锋 GO/STOP 风格实战文案 (8问8答 §3.1: G信号→"GO: 趋势有望启动, 建议逢低建仓"; S信号→"STOP: 趋势暂或结束, 建议减仓避险"). 返回 `{label, text, tone}`: row1/2→GO(bull), row3→持有(bull), row4/5/6→警惕(warn), row7→STOP(bear), row0/非法→观望(neutral). 纯增量(不动 evaluate_state), 与既有 "action"(7行表操作思路长句) 互补: action=完整思路, label=前端可直渲的短标签+色彩语义. 验证: 8 行映射 + 边界(None/"x"/-1/99→观望) + row1→GO/row7→STOP 联动全过. 前端 K线/机会页可直接用 `tone` 映射红涨绿跌色彩.
 
+### feature
+
+- **v0.4.66 主力资金 N 日序列 + 0 轴 CROSS** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-2). `src/core/dark_pool_flow.py` 新增 `compute_pool_flow_series(symbol, days, today_overlay)` + `fund_flow_cross(series)` — 决策先锋 1/3/5 日主力资金 + "由绿转红上穿0轴=资金看多"(8问8答 §3.2). **数据约束诚实声明**: thsdk 明盘仅当日可回溯, 历史日明盘不可得 → 历史日序列用暗盘 OHLC 分摊近似(对照项, 方向可靠/幅度有偏差), 全标 `approximation=True` 不冒充完整主力口径(不编造红线); 当日(最后一根)经 `today_overlay=True` 叠加权威 ming+dark(`compute_pool_flow`). `fund_flow_cross`: prev<=0且cur>0→cross_up / prev>=0且cur<0→cross_down, None 跳过不补0, 输出 `{cross_up, cross_down, last_direction(多/空/平), points_used}`. 纯增量不动既有函数. 验证: fund_flow_cross 6 场景(上穿/下穿/等号边界/None跳过/空/多次穿越) + compute_pool_flow_series 3 场景(当日叠加权威/全近似/total汇总) + 空bars→无数据 全过. 注: `market_scan.dark_top` 接真实值留作后续(避免本次动扫描链路).
+
 ## 2026-09-01
 
 ### feature

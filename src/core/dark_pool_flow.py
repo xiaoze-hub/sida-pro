@@ -245,3 +245,103 @@ def compute_pool_flow(symbol: str) -> Optional[dict]:
         "retail_net": retail_net,
         "coverage": coverage,
     }
+
+
+# ===== 主力资金 N 日序列 + 0 轴 CROSS (决策先锋 1/3/5 日, 8问8答 §3.2) =====
+# 数据约束(诚实声明): thsdk big_order_flow 明盘**仅当日可回溯**, 历史日明盘不可得。
+#   故历史日序列基于暗盘 OHLC 分摊近似(对照项, 方向/符号可靠, 幅度有偏差),
+#   全部显式标 approximation=True, 不冒充完整主力口径(不编造红线)。
+#   当日(最后一根)可经 today_overlay 叠加权威 ming+dark(compute_pool_flow)。
+
+def compute_pool_flow_series(symbol: str, days: int = 5, today_overlay: bool = True) -> Optional[dict]:
+    """主力资金 N 日序列(1/3/5 日) + 置信度标注。
+
+    Args:
+        symbol: A 股代码("002361" / "sz002361")
+        days: 序列长度(1/3/5)
+        today_overlay: True 时, 最后一根(当日)用权威 ming+dark 叠加(若可得)
+
+    Returns:
+        {
+          "symbol", "days",
+          "series": [{date, main_net, approximation, source, coverage?}...] 升序,
+          "total_net": float|None,          # Σ(main_net), 任一缺失项跳过
+          "today_authoritative": float|None,# 当日权威 ming+dark(叠加成功才有)
+          "note": str,
+        }
+        bars 为空 → series=[] + note="无数据"(不返回 0 冒充)。
+    """
+    from src.core.decision_pioneer import fetch_bars
+    from src.core.ohlc_dark import ohlc_dark_net
+
+    code = (symbol or "").strip()
+    if days < 1:
+        days = 1
+    # 多取几根, 防当日未收盘/脏数据被跳过后不足 days 根
+    bars = fetch_bars(code, days=days + 5)
+    if not bars:
+        logger.warning("compute_pool_flow_series %s 无 K 线", code)
+        return {"symbol": code, "days": days, "series": [], "total_net": None,
+                "today_authoritative": None, "note": "无数据"}
+
+    window = list(bars)[-days:]
+    alloc = ohlc_dark_net(window)
+    per_bar = alloc.get("per_bar") or []
+
+    series = []
+    for a in per_bar:
+        series.append({
+            "date": getattr(a, "date", None),
+            "main_net": round(getattr(a, "net", 0.0), 2),
+            "approximation": True,
+            "source": "ohlc_dark_alloc",
+        })
+
+    today_authoritative = None
+    if today_overlay and series:
+        pf = compute_pool_flow(code)
+        if pf is not None and pf.get("main_net") is not None:
+            series[-1]["main_net"] = pf["main_net"]
+            series[-1]["approximation"] = False
+            series[-1]["source"] = "ming+dark_authoritative"
+            series[-1]["coverage"] = pf.get("coverage")
+            today_authoritative = pf["main_net"]
+
+    nets = [p["main_net"] for p in series if p.get("main_net") is not None]
+    total_net = round(sum(nets), 2) if nets else None
+
+    note = ("历史日=暗盘OHLC近似(方向可靠/幅度有偏差); 当日已叠加权威ming+dark"
+            if today_authoritative is not None else
+            ("全序列=暗盘OHLC近似(当日权威值不可得, 未叠加)" if today_overlay
+             else "全序列=暗盘OHLC近似"))
+    return {"symbol": code, "days": days, "series": series, "total_net": total_net,
+            "today_authoritative": today_authoritative, "note": note}
+
+
+def fund_flow_cross(series) -> dict:
+    """0 轴上穿/下穿检测(决策先锋: 由绿转红上穿0轴=资金看多 / 由红转绿下穿=看空)。
+
+    Args:
+        series: [{date, main_net}...] 升序; main_net 为 None 的点跳过不参与判定(不补0)。
+
+    Returns:
+        {"cross_up": [date...], "cross_down": [date...],
+         "last_direction": "多"/"空"/"平"/None, "points_used": int}
+    边界: prev<=0 且 cur>0 → cross_up; prev>=0 且 cur<0 → cross_down。
+    """
+    pts = [(p.get("date"), p.get("main_net"))
+           for p in (series or []) if p.get("main_net") is not None]
+    cross_up, cross_down = [], []
+    for i in range(1, len(pts)):
+        _, prev = pts[i - 1]
+        cur_date, cur = pts[i]
+        if prev <= 0 and cur > 0:
+            cross_up.append(cur_date)
+        elif prev >= 0 and cur < 0:
+            cross_down.append(cur_date)
+    last_direction = None
+    if pts:
+        last = pts[-1][1]
+        last_direction = "多" if last > 0 else ("空" if last < 0 else "平")
+    return {"cross_up": cross_up, "cross_down": cross_down,
+            "last_direction": last_direction, "points_used": len(pts)}
