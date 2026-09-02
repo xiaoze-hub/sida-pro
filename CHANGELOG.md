@@ -55,6 +55,10 @@
 
 - **v0.4.70 前端终端化 P0: 涨跌色令牌统一 + 暗色优先 + 圆角收紧 + 金融数字字体** (28号, 并行子智能体协作, 响应老板"像专业行情终端"诉求). **① 涨跌色统一**: 全站 ~120 处硬编码涨跌色(#ef4444/#22c55e/#10b981/text-rose-*/text-emerald-*)收敛到 `--stock-up:#E53935`/`--stock-down:#43A047` 令牌; Tailwind 层用 `text-stock-up/text-stock-down`, 图表 JS 层新增 `packages/biz-ui/src/lib/stock-colors.ts` 运行时 `getComputedStyle` 读 CSS 变量(`readStockColors`/`withAlpha`)。覆盖 K线/分时/资金柱/盈亏/涨跌家数等(27 文件); 残留 59 处均为非涨跌语义(状态/错误/命中/买卖动作徽章)有意保留。**② 暗色优先**: `use-theme.ts` 默认 system→dark(仅影响未设置过的新用户, 尊重已选手动选择), index.html 加首帧防闪脚本; theme-color #4f46e5→#0a0a0f。**③ 圆角收紧**: `--radius` 0.75rem→0.375rem, tailwind 补派生 xl/2xl(卡片 12→8px)。**④ 金融数字字体**: `--font-num` 字体栈置顶 DIN Alternate/Bahnschrift(Windows 不再落代码字体)+`tabular-nums` 等宽, 保守不加 CDN webfont(CSP 限制)。前端 typecheck 零错误。⚠️ 遗留待产品决策: GS 信号配色 Quote(买红卖绿) 与 K线图(G绿S红) 相反, 本次未擅动。
 
+### fix
+
+- **v0.4.71 GS 信号配色统一为 G红/S绿** (28号, 修前端配色矛盾). 此前个股页 `Quote.tsx` GS 是「买红卖绿」(G红/S绿), 但 K 线图 `KlineChart.tsx`/`InteractiveKline.tsx` 的 GS 买卖点标记却是 G绿(#16a34a)/S红(#dc2626), 两者相反, 且违背 A 股红涨绿跌惯例。**统一为 G=红(买入/趋势启动)、S=绿(卖出/趋势结束)**: 两处 markers 改用 `readStockColors()` 的 `sc.up`(红)/`sc.down`(绿), 随亮/暗主题自动切换, 不再硬编码; 实心/空心(已确认/待确认)逻辑保留只换色相; `Quote.tsx` GS_COLOR 本就 G红/S绿 无需改。决策先锋口径: G=GO 趋势启动(红), S=STOP 趋势结束(绿)。前端 typecheck 零错误。
+
 ## 2026-09-01
 
 ### feature

@@ -381,7 +381,8 @@ export default function KlineChart(props: {
         })
       }
     }
-    // L2 GS 买卖点 (设计稿 §5.2): G=买入(绿)/S=卖出(红); 实心=已确认, 空心=待确认(防疑似当确认)。
+    // L2 GS 买卖点 (设计稿 §5.2): G=买入(红)/S=卖出(绿) — 红涨绿跌, 与个股页 Quote 口径一致;
+    // 实心=已确认, 空心=待确认(防疑似当确认)。
     // LC v5 无 circleOutline 形状, 用 size 区分: 实心 size=2(大), 空心 size=0(小) + 文字 ○ 前缀。
     if (showSignal) {
       for (const g of props.gsSignals || []) {
@@ -389,7 +390,7 @@ export default function KlineChart(props: {
         markers.push({
           time: toChartTime(g.date, interval),
           position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
-          color: isBuy ? '#16a34a' : '#dc2626',
+          color: isBuy ? sc.up : sc.down,
           shape: 'circle' as const,
           size: g.confirmed ? 2 : 0,
           text: g.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),

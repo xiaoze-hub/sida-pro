@@ -768,6 +768,7 @@ export default function InteractiveKline(props: {
 
     // ============== SIDA Pro: L2 GS 买卖点 markers (2026-09-01) ==============
     // 实心=已确认(收盘), 空心=待确认(盘中). 设计稿 §5.2 严格区分, 防"把疑似当确认"
+    // 配色: G=买入→红(--stock-up), S=卖出→绿(--stock-down) — 红涨绿跌, 与个股页 Quote 口径一致
     if (layers.signal && props.gsSignals && props.gsSignals.length) {
       const signalMarkers: any[] = props.gsSignals
         .map((s) => {
@@ -777,7 +778,7 @@ export default function InteractiveKline(props: {
           return {
             time: bd,
             position: isBuy ? 'belowBar' : 'aboveBar',
-            color: isBuy ? '#16a34a' : '#dc2626',
+            color: isBuy ? sc.up : sc.down,
             // shape: circle=实心(已确认), circleOutline=空心(待确认)
             shape: s.confirmed ? 'circle' : 'circleOutline',
             text: s.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
