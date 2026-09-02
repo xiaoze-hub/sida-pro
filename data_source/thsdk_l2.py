@@ -127,6 +127,11 @@ THS_CONNECT_TIMEOUT = 5
 THS_MAX_RETRIES = 3
 THS_RETRY_BACKOFF_SEC = 1.0
 
+# v0.4.59: tick_super_level1 等"全天累计数据"接口的响应常 > 2MB (thsdk 默认 socket 接收
+# 缓冲区), 触发服务端返 "缓冲区大小不足,当前大小: 2.00 MB" —— 数据直接丢失,
+# 暗盘融合只能拿到主动侧 (.tck), 缺口 17 倍. 8MB 覆盖全天全量逐笔.
+THS_BUFFER_SIZE = 8 * 1024 * 1024
+
 # 失败统计(供高级用户做熔断)
 _failure_count = 0
 _failure_window_start = 0
@@ -269,6 +274,15 @@ class THSDKL2:
         last_err = None
         for attempt in range(THS_MAX_RETRIES):
             try:
+                with THS(config) if config else THS() as ths:
+                    method = getattr(ths, func_name)
+                    # v0.4.59: 注入 buffer_size, 避免 tick_super_level1 等全天累计接口
+                    # 触发"缓冲区大小不足"错误 (默认 2MB 不够装, 默认 8MB 覆盖全天).
+                    result = method(*args, buffer_size=THS_BUFFER_SIZE, **kwargs)
+                    self._record_success()
+                    return result
+            except TypeError:
+                # 兼容旧版 thsdk (不支持 buffer_size 参数): 不带传重试一次
                 with THS(config) if config else THS() as ths:
                     method = getattr(ths, func_name)
                     result = method(*args, **kwargs)
