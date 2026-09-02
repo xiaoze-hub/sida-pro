@@ -92,6 +92,27 @@ def eval_gs(bars: Sequence[dict]) -> dict:
     }
 
 
+def _norm_date(d) -> Optional[str]:
+    """日期统一规范化为 'YYYY-MM-DD'。
+
+    2026-09-02(v0.4.58): 与 `src/web/api/klines.py` 的日期修复**同口径**, 但这里是
+    **本地实现** —— core 层不反向依赖 api 层。
+
+    不同数据源给的日K date 样式不同:
+      - 通达信 TQ 日K  → `20260902`
+      - 东财 / 新浪日K → `2026-08-27`
+    主源在 TQ 与东财之间切换时(TQ 不通会降级), **日期样式会突变**; 前端按日期把
+    GS 标记匹配到 K 线上会错位。故在这里统一。
+    无法识别的输入原样返回(不猜、不补假日期)。
+    """
+    s = str(d or "").strip()
+    if not s:
+        return None
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s[:10]
+
+
 def compute_gs_signals(bars: Sequence[dict]) -> list[dict]:
     """全量 GS 交叉信号序列(summary API / 前端 L2 图层用)。
 
@@ -115,7 +136,7 @@ def compute_gs_signals(bars: Sequence[dict]) -> list[dict]:
     closes: list[float] = []
     a0: list[float] = []
     bb0: list[Optional[float]] = []
-    dates: list[str] = []
+    dates: list[Optional[str]] = []
     for b in bars:
         c, o, h, l = _bar_close_open_high_low(b)
         closes.append(c)
@@ -128,7 +149,8 @@ def compute_gs_signals(bars: Sequence[dict]) -> list[dict]:
                 break
             bb0s.append(m)
         bb0.append(sum(bb0s) / 4 if bb0s else None)  # type: ignore[arg-type]
-        dates.append(str(getattr(b, "date", None) or (b.get("date") if isinstance(b, dict) else "")))
+        raw_date = getattr(b, "date", None) or (b.get("date") if isinstance(b, dict) else "")
+        dates.append(_norm_date(raw_date))
 
     for i in range(1, n):
         if bb0[i] is None or bb0[i - 1] is None:

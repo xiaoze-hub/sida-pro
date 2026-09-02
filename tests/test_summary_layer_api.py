@@ -169,3 +169,44 @@ def test_tencent_code_normalizes():
     assert kapi._tencent_code("688981") == "sh688981"
     assert kapi._tencent_code("sz000977") == "sz000977"
     assert kapi._tencent_code("abc") is None
+
+
+# ---------------------------------------------------------------------------
+# gs_signals 日期规范化(v0.4.58)
+# ---------------------------------------------------------------------------
+
+
+def test_gs_norm_date_basic():
+    """`_norm_date`: 8 位纯数字 → YYYY-MM-DD; 已是规范格式原样; 空 → None。"""
+    from src.core.gs_strategy import _norm_date
+
+    assert _norm_date("20260902") == "2026-09-02"
+    assert _norm_date("2026-09-02") == "2026-09-02"
+    assert _norm_date("") is None
+    assert _norm_date(None) is None
+
+
+def test_gs_signals_date_normalized_from_tq_format():
+    """TQ 日K date 为 `20260902` → gs_signals 输出必须规范化为 `2026-09-02`。
+
+    否则同一接口里 events/fund_flow 是 `2026-08-27`、gs_signals 却是 `20260902`,
+    前端按日期把 GS 标记匹配到 K 线会错位; 且主源 TQ→东财降级时样式会突变。
+    """
+    from src.core import gs_strategy
+
+    bars = _mk_bars(n=40, trend=-0.05, final_surge=True)
+    for b in bars:
+        b["date"] = b["date"].replace("-", "")   # 模拟通达信 TQ 样式
+    sigs = gs_strategy.compute_gs_signals(bars)
+    assert sigs, "应有 GS 信号"
+    assert all(len(s["date"]) == 10 and s["date"][4] == "-" for s in sigs), sigs
+
+
+def test_gs_signals_date_keeps_eastmoney_format():
+    """东财/新浪 date 已是 `2026-08-31`(规范格式) → 原样返回, 不被破坏。"""
+    from src.core import gs_strategy
+
+    bars = _mk_bars(n=40, trend=-0.05, final_surge=True)
+    sigs = gs_strategy.compute_gs_signals(bars)
+    assert sigs, "应有 GS 信号"
+    assert all(len(s["date"]) == 10 and s["date"][4] == "-" for s in sigs), sigs
