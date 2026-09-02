@@ -1,33 +1,31 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { CandlestickChart, Flag, LineChart, Search, Wallet, Loader2 } from 'lucide-react'
+import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { insightApi } from '@panwatch/api'
-import PageTabs, { type PageTabItem } from '@/components/PageTabs'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
-import ContextCard, { isContextSource } from '@/components/ContextCard'
 import {
   normalizeKlineEvents,
   normalizePriceLines,
   type KlineEventPoint,
   type KlinePriceLine,
 } from '@panwatch/biz-ui/klineEvents'
+import { isContextSource } from '@/components/ContextCard'
 
 /**
- * 行情三合一(设计稿 §4.3): 个股 + 指数 + 板块 合成行情页, /forecast 作为入口。
+ * 行情终端（v0.4.60 重构 — 去卡片化）
  *
- * 内部 4 个 Tab: 分时/日K | 预测 | 资金 | 事件。
- * Tab 与标的都写进 URL(?tab= / ?symbol= / ?type=), 可分享可刷新可后退。
+ * 核心原则(设计稿 §1):
+ * - K线大图是绝对主角(≥80% 屏宽, 无卡片包)
+ * - 信息密度按"决策需要"分层, 不是堆卡片
+ * - "决策三问" 在顶部一行紧凑文字
+ * - 主力意图 / 暗盘簇 / 事件按窄栏紧凑列表呈现
+ * - 数据明细(fund_flow 120 行 / events 472 条) 默认折叠
  *
- * 数据:
- *   - 分时/日K → InteractiveKline(组件内含 分时/日周月 切换 + L1~L4 图层)
- *   - 预测     → 复用既有 ForecastPage(懒加载)
- *   - 资金     → /klines/{symbol}/summary 的 fund_flow / main_intent
- *   - 事件     → /klines/{symbol}/summary 的 events + orderbook(托压单)
- *
- * 缺失一律显式"无数据", 不编造(板块 K 线后端未提供, 明确引导去板块详情页)。
+ * URL 参数: ?symbol=002361&type=stock&source=holdings(可选 context 卡)
  */
+
 const ForecastPage = lazy(() => import('@/pages/Forecast'))
 
 type QuoteType = 'stock' | 'index' | 'board'
@@ -38,18 +36,10 @@ const TYPE_OPTIONS: Array<{ key: QuoteType; label: string }> = [
   { key: 'board', label: '板块' },
 ]
 
-/** 常用指数快捷入口(与后端 MARKET_INDICES 保持一致) */
 const QUICK_INDICES = [
   { symbol: '000001', name: '上证指数' },
   { symbol: '399001', name: '深证成指' },
   { symbol: '399006', name: '创业板指' },
-]
-
-const QUOTE_TABS: PageTabItem[] = [
-  { key: 'chart', label: '分时/日K', icon: CandlestickChart },
-  { key: 'forecast', label: '预测', icon: LineChart },
-  { key: 'fund', label: '资金', icon: Wallet },
-  { key: 'events', label: '事件', icon: Flag },
 ]
 
 interface FundFlowRow {
@@ -58,25 +48,17 @@ interface FundFlowRow {
   dark_net: number | null
 }
 
-/** 页面内事件行(= 标准化事件点, 保持字段同构以便事件面板直接渲染度量) */
-type KlineEventItem = KlineEventPoint
-
-/** 解套盘位价位线 —— 由后端标准筹码接口 chip_distribution 算出, 前端不再自算 */
-type UnlockLevel = KlinePriceLine
-
-/** 标准筹码结构(chip_distribution.compute_near_term_chips 原样输出) */
-interface ChipsInfo {
-  peak_price?: number | null
-  peak_ratio?: number | null
-  cost_10?: number | null
-  cost_50?: number | null
-  cost_90?: number | null
-  profit_ratio?: number | null
-  concentration?: number | null
-  cost_band?: { low?: number | null; high?: number | null; ratio?: number | null } | null
-  last_close?: number | null
-  source?: string | null
-  window_days?: number | null
+interface DarkClustersInfo {
+  available: boolean
+  note?: string
+  dark_net?: number | null
+  dark_buy?: number | null
+  dark_sell?: number | null
+  cluster_count?: number
+  ming_net?: number | null
+  main_net?: number | null
+  cancel_rate?: number | null
+  active_passive_ratio?: number | null
 }
 
 interface OrderbookInfo {
@@ -86,8 +68,13 @@ interface OrderbookInfo {
   best_ask?: number | null
   spread?: number | null
   bid_pressure?: number | null
-  queue_shares?: number | null
-  note?: string | null
+}
+
+interface ChipsInfo {
+  peak_price?: number | null
+  cost_10?: number | null
+  cost_50?: number | null
+  cost_90?: number | null
 }
 
 interface SummaryResp {
@@ -99,87 +86,56 @@ interface SummaryResp {
     kind?: string | null
     label?: string | null
     price?: number | null
-    shares?: number | null
-    amount?: number | null
-    count?: number | null
-    time?: string | null
   }>
   orderbook?: OrderbookInfo | null
   main_intent?: string | null
-  // v2.0 §6.2 + A4 派活(2026-09-01 接入 summary): 委托号级拆单簇暗盘
-  // available=false 时不渲染区块(§12 兜底规范,不编造)
-  dark_clusters?: {
-    available: boolean
-    note?: string
-    /** 拆单簇暗盘净额(元) */
-    dark_net?: number | null
-    dark_buy?: number | null
-    dark_sell?: number | null
-    /** 拆单簇识别出的簇数量 */
-    cluster_count?: number
-    /** 明盘(单笔>30万)净额(元) */
-    ming_net?: number | null
-    /** 明+暗主力净额(元) */
-    main_net?: number | null
-    /** 撤单率(0~1) */
-    cancel_rate?: number | null
-    /** 主笔级 active/passive 比 */
-    active_passive_ratio?: number | null
-  } | null
-  unlock_levels?: Array<{
-    price?: number | null
-    kind?: string | null
-    label?: string | null
-    ratio?: number | null
-  }> | null
+  dark_clusters?: DarkClustersInfo | null
+  unlock_levels?: KlinePriceLine[] | null
   chips?: ChipsInfo | null
-    // L2 GS 买卖点 (设计稿 §5.2): 后端 gs_strategy.compute_gs_signals 产出
-    gs_signals?: Array<{
-      date?: string | null
-      side?: string | null
-      confirmed?: boolean
-    }> | null
-  }
-
-/** tone 语义 → Tailwind 类名(消费方映射, 数据层不绑具体 UI) */
-const TONE_CLASS: Record<string, string> = {
-  up: 'text-rose-500',
-  down: 'text-emerald-500',
-  neutral: 'text-foreground',
+  gs_signals?: Array<{
+    date?: string | null
+    side?: string | null
+    confirmed?: boolean
+  }> | null
 }
 
-/** 元 → 万元; 空值一律 '--'(不把 null 当 0) */
-function toWan(v: number | null | undefined): string {
+/** 元 → 万元; null/undefined → '--' */
+function toWan(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined) return '--'
   const wan = v / 10000
   const sign = wan > 0 ? '+' : ''
-  return `${sign}${wan.toFixed(2)}`
+  return `${sign}${wan.toFixed(digits)}`
+}
+
+/** 红涨绿跌(国内 A 股惯例, 按用户 override 设计稿 §5.2) */
+const NET_INFLOW_CLASS = (v: number | null | undefined) =>
+  v == null ? 'text-muted-foreground' : v > 0 ? 'text-rose-500' : v < 0 ? 'text-emerald-500' : 'text-foreground'
+
+/** GS 信号(已确认/待确认) — 买红卖绿 */
+const GS_COLOR = (side: 'G' | 'S', confirmed: boolean) => {
+  const filled = confirmed ? '' : 'opacity-60 ring-1 ring-current'
+  return side === 'G' ? `text-rose-500 ${filled}` : `text-emerald-500 ${filled}`
 }
 
 export default function QuotePage() {
   const [params, setParams] = useSearchParams()
   const symbol = (params.get('symbol') || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
-  const tab = params.get('tab') || 'chart'
-  // v2.1 §13: 持仓详情跳路由 (?source=holdings|watchlist|opportunities),
-  // 用于在资金面板顶部显示对应上下文卡. 设计稿默认: 无 source → 不显示.
   const sourceParam = params.get('source')
-  const source = isContextSource(sourceParam) ? sourceParam : null
+  // v0.4.60 暂不显示 ContextCard(占位): 改用持仓成本线画 K 线(v0.4.61)
+  const _sourceCtx = isContextSource(sourceParam) ? sourceParam : null
+  void _sourceCtx
 
   const [input, setInput] = useState(symbol)
   const [summary, setSummary] = useState<SummaryResp | null>(null)
-  const [summaryLoading, setSummaryLoading] = useState(false)
-  const [summaryError, setSummaryError] = useState('')
+  const [, setSummaryLoading] = useState(false)
+  const [, setSummaryError] = useState('')
 
-  // v2.1 §10: K线大图 → 右栏资金面板的双向联动状态
-  // - selectedRange: 用户在 K 线上拖拽选段(从 to 拖到 from) → 反查该时间窗内资金聚合
-  // - hoveredDate:   十字光标移到某天 → 高亮该日 row
-  // 两者都 null 表示"未交互, 用全量数据"。
+  // v0.4.60: 联动状态全页共享, 不止 Fund Tab
   const [selectedRange, setSelectedRange] = useState<{ from: string; to: string } | null>(null)
   const [hoveredDate, setHoveredDate] = useState<string | null>(null)
 
-  // 设计稿 v2.0 §5: K线 4 图层开关(L1趋势 / L2买卖点 / L3资金柱 / L4事件)。
-  // Trend 当前图无独立趋势序列, 默认开但无渲染物; 其余 3 层默认全开。
+  // 4 图层开关
   const [layers, setLayers] = useState({
     trend: true,
     signal: true,
@@ -187,13 +143,15 @@ export default function QuotePage() {
     event: true,
   })
 
-  const layerToggle = (key: keyof typeof layers) =>
-    setLayers((s) => ({ ...s, [key]: !s[key] }))
+  // 数据明细折叠
+  const [detailOpen, setDetailOpen] = useState(false)
 
+  // 副图切换(成交量/MACD)
+  const [subchart, setSubchart] = useState<'vol' | 'macd'>('vol')
+
+  const sourceHealth = useSourceHealth()
   useEffect(() => { setInput(symbol) }, [symbol])
 
-  // summary 一次拉取供三个 Tab 复用: 资金(fund_flow) / 事件(events) /
-  // 分时日K(L4 事件标注 + 解套盘位)。接口有 5 分钟缓存, 切 Tab 不重复请求。
   useEffect(() => {
     if (!symbol || type === 'board') return
     let alive = true
@@ -222,81 +180,120 @@ export default function QuotePage() {
     setParam('symbol', v)
   }
 
-  const activeTab = QUOTE_TABS.some((t) => t.key === tab) ? tab : 'chart'
+  const layerToggle = (key: keyof typeof layers) =>
+    setLayers((s) => ({ ...s, [key]: !s[key] }))
 
-  // 标准化数据层: 后端原始 events/unlock_levels → 图表消费的标准结构
-  const normEvents = normalizeKlineEvents(summary?.events)
-  const normPriceLines = normalizePriceLines(summary?.unlock_levels)
-  // L2 GS 买卖点: 后端 gs_signals → KlineChart 的 GsSignalPoint[]
-  const normGsSignals = (summary?.gs_signals || [])
-    .filter((g) => g && g.date && (g.side === 'G' || g.side === 'S'))
-    .map((g) => ({ date: g.date as string, side: g.side as 'G' | 'S', confirmed: !!g.confirmed }))
+  // 标准化数据
+  const normEvents = useMemo(
+    () => normalizeKlineEvents(summary?.events ?? null),
+    [summary?.events],
+  )
+  const normPriceLines = useMemo(
+    () => normalizePriceLines(summary?.unlock_levels ?? null),
+    [summary?.unlock_levels],
+  )
+  const normGsSignals = useMemo(
+    () =>
+      (summary?.gs_signals ?? [])
+        .filter((g) => g && g.date && (g.side === 'G' || g.side === 'S'))
+        .map((g) => ({
+          date: g.date as string,
+          side: g.side as 'G' | 'S',
+          confirmed: !!g.confirmed,
+        })),
+    [summary?.gs_signals],
+  )
+
+  // 决策三问的快速判断(基于现有数据, 不编造)
+  const decision = useMemo(() => {
+    const dc = summary?.dark_clusters
+    const ob = summary?.orderbook
+    const lastFund = summary?.fund_flow?.slice(-1)?.[0]
+    const lastGs = summary?.gs_signals?.slice(-1)?.[0]
+    // 该不该动: GS末条 + 暗盘净额
+    const action =
+      lastGs && !lastGs.confirmed
+        ? '观望（盘中信号未收盘确认）'
+        : lastGs?.side === 'G'
+          ? '可关注（GS 买）'
+          : lastGs?.side === 'S'
+            ? '谨慎（GS 卖）'
+            : '无明确信号'
+    // 主力在干嘛: 暗盘 main_net
+    const main = dc?.available ? (dc.main_net ?? 0) : (lastFund?.ming_net ?? 0)
+    const mainDesc = main > 0 ? `净流入 ${toWan(main)} 万` : main < 0 ? `净流出 ${toWan(main)} 万` : '数据中性'
+    // 风险在哪: 撤单率 + 涨跌停事件
+    const cancelRate = dc?.cancel_rate
+    const limits = (summary?.events ?? []).filter((e) => e.kind === 'limit_up' || e.kind === 'limit_down').length
+    const riskDesc =
+      limits > 0 ? `近期有 ${limits} 次涨跌停（高波动）` :
+      cancelRate != null && cancelRate > 0.3 ? `撤单率 ${(cancelRate * 100).toFixed(1)}%（主力试探）` :
+      cancelRate != null ? `撤单率 ${(cancelRate * 100).toFixed(1)}%` :
+      '正常波动'
+    return { action, mainDesc, riskDesc, lastSide: lastGs?.side, lastConfirmed: lastGs?.confirmed, obShape: ob?.shape }
+  }, [summary])
+
+  // 区间聚合(联动 K线选段)
+  const rangeAgg = useMemo(() => {
+    if (!selectedRange || !summary?.fund_flow) return null
+    const rows = summary.fund_flow.filter(
+      (r) => r.date >= selectedRange.from && r.date <= selectedRange.to,
+    )
+    if (rows.length === 0) return null
+    return {
+      count: rows.length,
+      ming: rows.reduce((s, r) => s + (r.ming_net ?? 0), 0),
+      dark: rows.reduce((s, r) => s + (r.dark_net ?? 0), 0),
+    }
+  }, [selectedRange, summary?.fund_flow])
 
   return (
-    <div className="w-full space-y-4">
-      {/* 页头 + 标的选择(个股/指数/板块 三合一) */}
-      <div className="card p-4">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <h1 className="text-lg font-bold text-foreground">行情</h1>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">
-              个股 / 指数 / 板块 合成行情页 — 分时日K、预测、资金、事件
-            </p>
-          </div>
-          <span className="rounded-md bg-accent/40 px-2 py-1 font-mono text-[11px] text-muted-foreground">
-            {symbol}
-            <span className="ml-1.5 opacity-70">
-              {TYPE_OPTIONS.find((t) => t.key === type)?.label ?? type}
-            </span>
-          </span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-1 rounded-xl border border-border/50 bg-accent/40 p-1">
-            {TYPE_OPTIONS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setParam('type', t.key)}
-                className={`rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors ${
-                  type === t.key
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex min-w-[220px] flex-1 items-center gap-1.5">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') submitSymbol() }}
-              placeholder={type === 'board' ? '板块代码' : '代码, 如 000977'}
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border/50 bg-background px-2.5 text-[12px] text-foreground outline-none focus:border-primary/50"
-            />
+    <div className="w-full space-y-3">
+      {/* === 顶部数据条(不是卡片, 是 flex 数据条) === */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
+        <h1 className="text-base font-semibold text-foreground">行情</h1>
+        <div className="inline-flex items-center gap-1 rounded-lg border border-border/50 p-0.5 text-[11px]">
+          {TYPE_OPTIONS.map((t) => (
             <button
+              key={t.key}
               type="button"
-              onClick={submitSymbol}
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg border border-border/50 bg-background px-2.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => setParam('type', t.key)}
+              className={`rounded-md px-2 py-0.5 transition-colors ${
+                type === t.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
             >
-              <Search className="h-3.5 w-3.5" />
-              查询
+              {t.label}
             </button>
-          </div>
+          ))}
         </div>
-
+        <div className="flex flex-1 items-center gap-1 min-w-[200px]">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submitSymbol() }}
+            placeholder="代码, 如 002361"
+            className="h-7 min-w-0 flex-1 rounded-md border border-border/50 bg-background px-2 text-[12px] outline-none focus:border-primary/50"
+          />
+          <button
+            type="button"
+            onClick={submitSymbol}
+            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/50 bg-background px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <Search className="h-3 w-3" />
+            查询
+          </button>
+        </div>
         {type === 'index' && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">常用指数</span>
+          <div className="flex items-center gap-1 text-[11px]">
+            <span className="text-muted-foreground">指数:</span>
             {QUICK_INDICES.map((i) => (
               <button
                 key={i.symbol}
                 type="button"
                 onClick={() => setParam('symbol', i.symbol)}
-                className={`rounded-lg border px-2 py-0.5 text-[11px] transition-colors ${
+                className={`rounded-md border px-1.5 py-0.5 transition-colors ${
                   symbol === i.symbol
                     ? 'border-primary/40 bg-primary/10 text-foreground'
                     : 'border-border/50 text-muted-foreground hover:text-foreground'
@@ -309,461 +306,333 @@ export default function QuotePage() {
         )}
       </div>
 
-      {/* 4 个 Tab */}
-      <PageTabs
-        tabs={QUOTE_TABS}
-        value={activeTab}
-        onChange={(k) => setParam('tab', k)}
-      />
-
-      <div className="min-w-0">
-        {activeTab === 'chart' && (
-          type === 'board' ? (
-            <div className="card p-8 text-center">
-              <div className="text-[13px] font-medium text-foreground">板块 K 线待接入</div>
-              <p className="mt-1 text-[12px] text-muted-foreground">
-                板块行情数据在板块详情页, 请前往 /boards/{symbol} 查看(不编造图表)
-              </p>
-            </div>
-          ) : (
-                      <>
-                        {/* 设计稿 v2.0 §5: K线 4 图层开关 UI */}
-                        <div className="mb-2 flex flex-wrap items-center gap-3">
-                          <span className="text-[11px] text-muted-foreground">图层:</span>
-                          {(
-                            [
-                              ['trend', 'L1 趋势'],
-                              ['signal', 'L2 买卖点'],
-                              ['capital', 'L3 资金柱'],
-                              ['event', 'L4 事件'],
-                            ] as const
-                          ).map(([k, label]) => (
-                            <button
-                              key={k}
-                              type="button"
-                              onClick={() => layerToggle(k)}
-                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
-                                layers[k]
-                                  ? 'border-primary/40 bg-primary/10 text-foreground'
-                                  : 'border-border/40 bg-background text-muted-foreground line-through opacity-60'
-                              }`}
-                            >
-                              <span
-                                className={`h-1.5 w-1.5 rounded-full ${layers[k] ? 'bg-primary' : 'bg-muted'}`}
-                              />
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                        <KlineChart
-                          key={`${type}:${symbol}`}
-                          symbol={symbol}
-                          market="CN"
-                          initialInterval="1d"
-                          initialDays={120}
-                          // L4 事件标注 + 解套盘位(套牢区) 叠加到 K 线
-                          events={normEvents}
-                                          supportPressure={normPriceLines}
-                                          gsSignals={normGsSignals}
-                                          fundFlow={summary?.fund_flow?.map((r) => ({ date: r.date, open_net: r.ming_net, dark_net: r.dark_net }))}
-                          // 设计稿 v2.0 §5: 4 图层总控开关 (L1趋势 / L2买卖点 / L3资金柱 / L4事件)
-                          layersVisible={layers}
-                          // v2.1 §10: K线选段 + 十字光标 → 右栏资金面板联动
-                          onRangeSelect={setSelectedRange}
-                          onCrosshairMove={(p) => setHoveredDate(p?.time ? p.time.slice(0, 10) : null)}
-                        />
-                      </>
-                    )
-                  )}
-
-        {activeTab === 'forecast' && (
-          <Suspense fallback={
-            <div className="flex h-[40vh] items-center justify-center text-[12px] text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载预测页…
-            </div>
-          }>
-            <ForecastPage />
-          </Suspense>
-        )}
-
-        {activeTab === 'fund' && (
-          <FundPanel loading={summaryLoading} error={summaryError} rows={summary?.fund_flow} intent={summary?.main_intent} source={source} symbol={symbol} market="CN" selectedRange={selectedRange} hoveredDate={hoveredDate} darkClusters={summary?.dark_clusters} />
-        )}
-
-        {activeTab === 'events' && (
-          <EventsPanel
-            loading={summaryLoading}
-            error={summaryError}
-            events={normEvents}
-            orderbook={summary?.orderbook}
-            unlockLevels={normPriceLines}
-            chips={summary?.chips}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** 资金 Tab: 明盘/暗盘净额(万元) + 主力意图 */
-function FundPanel({
-  loading, error, rows, intent, source, symbol, market, selectedRange, hoveredDate, darkClusters,
-}: {
-  loading: boolean
-  error: string
-  rows?: FundFlowRow[]
-  intent?: string | null
-  // v2.1 §13: 持仓上下文卡, 仅当 URL 带 ?source= 才显示.
-  source?: 'holdings' | 'watchlist' | 'opportunities' | null
-  symbol: string
-  market: string
-  // v2.1 §10: 联动状态(K线选段 / 十字光标)
-  selectedRange?: { from: string; to: string } | null
-  hoveredDate?: string | null
-  // v2.0 §6.2 + A4 派活(2026-09-01): 委托号级暗盘拆单簇(暗盘为主/还原为辅 双口径)
-  darkClusters?: {
-    available: boolean
-    note?: string
-    dark_net?: number | null
-    dark_buy?: number | null
-    dark_sell?: number | null
-    cluster_count?: number
-    ming_net?: number | null
-    main_net?: number | null
-    cancel_rate?: number | null
-    active_passive_ratio?: number | null
-  } | null
-}) {
-  if (loading) return <PanelLoading text="加载资金流…" />
-  if (error) return <PanelError text={error} />
-  if (!rows || rows.length === 0) return <PanelEmpty text="暂无资金流数据(接口无数据, 不编造)" />
-
-  // v2.1 §10: 区间聚合 / 十字光标行高亮
-  // 注意: FundFlowRow.date 是 YYYY-MM-DD, KlineChart 给的 from/to 也是 YYYY-MM-DD(由 onCrosshairMove/.slice(0,10) 保证)
-  // 两者字符序可直接字典序比较, 不用 Date 解析。
-  const inRange = (date: string) => {
-    if (!selectedRange) return true
-    return date >= selectedRange.from && date <= selectedRange.to
-  }
-  const rangeRows = rows.filter((r) => inRange(r.date))
-  const rangeMing = rangeRows.reduce((s, r) => s + (r.ming_net ?? 0), 0)
-  const rangeDark = rangeRows.reduce((s, r) => s + (r.dark_net ?? 0), 0)
-  // 不空就标 range 摘要("区间: 明盘 +x.x万, 暗盘 -y.y万")
-  const showRangeSummary = !!selectedRange && rangeRows.length > 0
-
-  const recent = rangeRows.slice(-20).reverse()
-  return (
-    <div className="space-y-3">
-      {/* v2.1 §13 持仓上下文卡: 持仓/自选/机会跳过来时显示, 无 source → 不渲染. */}
-      {source && symbol && (
-        <ContextCard source={source} symbol={symbol} market={market || 'CN'} />
-      )}
-      {intent && (
-        <div className="card p-4">
-          <div className="text-[12px] font-medium text-foreground">主力意图</div>
-          <p className="mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed text-muted-foreground">{intent}</p>
-        </div>
-      )}
-      {/* v2.0 §6.2 + A4 派活(2026-09-01): 委托号级拆单簇暗盘 — 暗盘为主/还原为辅 双口径
-          (用户拍板口径: 主显 dark_clusters.main_net = 明+暗合并; 副显主笔级 active/passive)
-          available=false → 不渲染区块(§12 兜底规范,不编造) */}
-      {darkClusters?.available && (
-        <div className="card p-4" data-testid="fund-dark-clusters">
-          <div className="flex items-center justify-between">
-            <div className="text-[12px] font-medium text-foreground">暗盘拆单簇(委托号级)</div>
-            <span className="rounded bg-accent/50 px-2 py-0.5 text-[10px] text-muted-foreground">
-              {darkClusters.cluster_count ?? 0} 个簇
-            </span>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
-            <div>
-              <div className="text-muted-foreground">主力资金(明+暗)</div>
-              <div className={`mt-0.5 font-mono ${(darkClusters.main_net ?? 0) > 0 ? 'text-rose-500' : (darkClusters.main_net ?? 0) < 0 ? 'text-emerald-500' : 'text-foreground'}`}>
-                {toWan(darkClusters.main_net)}
-              </div>
-              <div className="mt-1 text-[10px] text-muted-foreground/80">主显口径 · 主笔级 + 拆单簇合并</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground">暗盘净额(拆单簇)</div>
-              <div className={`mt-0.5 font-mono ${(darkClusters.dark_net ?? 0) > 0 ? 'text-rose-500' : (darkClusters.dark_net ?? 0) < 0 ? 'text-emerald-500' : 'text-foreground'}`}>
-                {toWan(darkClusters.dark_net)}
-              </div>
-              <div className="mt-1 text-[10px] text-muted-foreground/80">拆买 {toWan(darkClusters.dark_buy)} · 拆卖 {toWan(darkClusters.dark_sell)}</div>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border/40 pt-2 text-[11px]">
-            <div>
-              <span className="text-muted-foreground">明盘净额</span>
-              <span className="ml-1 font-mono">{toWan(darkClusters.ming_net)}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">撤单率</span>
-              <span className="ml-1 font-mono">
-                {darkClusters.cancel_rate != null ? `${(darkClusters.cancel_rate * 100).toFixed(1)}%` : '-'}
-              </span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">主笔/被动</span>
-              <span className="ml-1 font-mono">
-                {darkClusters.active_passive_ratio != null ? darkClusters.active_passive_ratio.toFixed(2) : '-'}
-              </span>
-            </div>
-          </div>
-          {darkClusters.note && (
-            <div className="mt-2 text-[10px] text-muted-foreground/80">{darkClusters.note}</div>
-          )}
-        </div>
-      )}
-      <div className="card overflow-hidden">
-        {/* v2.1 §10: K线选段时间窗 → 资金面板区间聚合摘要 */}
-        {showRangeSummary && (
-          <div
-            data-testid="fund-range-summary"
-            className="border-b border-border/40 bg-accent/30 px-3 py-2 text-[11px] text-muted-foreground"
-          >
-            区间 <span className="font-mono">{selectedRange!.from}</span> ~{' '}
-            <span className="font-mono">{selectedRange!.to}</span> ({rangeRows.length} 条):
-            明盘净额{' '}
-            <span className={rangeMing > 0 ? 'text-rose-500' : rangeMing < 0 ? 'text-emerald-500' : ''}>
-              {toWan(rangeMing)}
-            </span>
-            {' · '}暗盘净额{' '}
-            <span className={rangeDark > 0 ? 'text-rose-500' : rangeDark < 0 ? 'text-emerald-500' : ''}>
-              {toWan(rangeDark)}
-            </span>
-          </div>
-        )}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[12px]">
-            <thead>
-              <tr className="border-b border-border/60 bg-accent/20 text-[11px] text-muted-foreground">
-                <th className="px-3 py-2 font-medium">日期</th>
-                <th className="px-3 py-2 text-right font-medium">明盘净额(万)</th>
-                <th className="px-3 py-2 text-right font-medium">暗盘净额(万)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {recent.map((r) => {
-                // v2.1 §10: 十字光标移到该日 → 行加亮
-                const isHover = hoveredDate != null && r.date.slice(0, 10) === hoveredDate
-                return (
-                  <tr
-                    key={r.date}
-                    className={`hover:bg-accent/20 ${isHover ? 'bg-accent/40 ring-1 ring-inset ring-primary/40' : ''}`}
-                  >
-                    <td className="px-3 py-2 font-mono text-muted-foreground">{r.date.slice(0, 10)}</td>
-                    <td className={`px-3 py-2 text-right font-mono ${(r.ming_net ?? 0) > 0 ? 'text-rose-500' : (r.ming_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
-                      {toWan(r.ming_net)}
-                    </td>
-                    <td className={`px-3 py-2 text-right font-mono ${(r.dark_net ?? 0) > 0 ? 'text-rose-500' : (r.dark_net ?? 0) < 0 ? 'text-emerald-500' : 'text-muted-foreground'}`}>
-                      {toWan(r.dark_net)}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
-          单位: 万元(接口原始单位为元) · 红色净流入 / 绿色净流出 · 仅显示最近 {recent.length} 个交易日
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * 筹码结构 + 解套盘位。
- *
- * ⚠️ 2026-09-01 修正: 初版前端按"历史成交量分价位累加"自算套牢区, 那是近似值;
- * 现改为直接消费后端标准筹码接口 chip_distribution(腾讯当日分价表优先 / 新浪历史分价兜底),
- * 取不到就显式"无数据", 不做任何估算。
- */
-function ChipsPanel({ chips, unlockLevels }: { chips?: ChipsInfo | null; unlockLevels?: UnlockLevel[] | null }) {
-  if (!chips) {
-    return (
-      <div className="card overflow-hidden">
-        <div className="border-b border-border/60 px-3 py-2 text-[12px] font-medium text-foreground">
-          筹码结构 / 解套盘位
-        </div>
-        <div className="p-6 text-center text-[12px] text-muted-foreground">
-          暂无筹码数据(标准筹码接口未取到, 不做估算)
-        </div>
-      </div>
-    )
-  }
-
-  const pct = (v: number | null | undefined) =>
-    typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '--'
-
-  return (
-    <div className="card overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-        <span className="text-[12px] font-medium text-foreground">筹码结构 / 解套盘位</span>
-        {chips.source && (
-          <span className="ml-auto rounded-md bg-accent/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {chips.source}
-          </span>
+      {/* === 决策三问(顶部条带, 不是卡片) === */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px]">
+        <span className="text-muted-foreground">该不该动:</span>
+        <span className="font-medium text-foreground">{decision.action}</span>
+        <span className="text-border/60">|</span>
+        <span className="text-muted-foreground">主力:</span>
+        <span className="font-mono">{decision.mainDesc}</span>
+        <span className="text-border/60">|</span>
+        <span className="text-muted-foreground">风险:</span>
+        <span className="font-medium text-foreground">{decision.riskDesc}</span>
+        {summary?.orderbook?.shape && (
+          <>
+            <span className="text-border/60">|</span>
+            <span className="text-muted-foreground">盘口:</span>
+            <span className="font-medium text-foreground">{summary.orderbook.shape}</span>
+          </>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 px-3 py-3 text-[12px] sm:grid-cols-4">
-        <Field label="筹码峰" value={chips.peak_price ?? '--'} />
-        <Field label="峰占比" value={chips.peak_ratio === null || chips.peak_ratio === undefined ? '--' : `${chips.peak_ratio.toFixed(1)}%`} />
-        <Field label="获利盘" value={pct(chips.profit_ratio)} />
-        <Field label="集中度" value={chips.concentration ?? '--'} />
-        <Field label="成本10%" value={chips.cost_10 ?? '--'} />
-        <Field label="成本50%" value={chips.cost_50 ?? '--'} />
-        <Field label="成本90%" value={chips.cost_90 ?? '--'} />
-        <Field label="现价" value={chips.last_close ?? '--'} />
-      </div>
-
-      {unlockLevels && unlockLevels.length > 0 ? (
-        <ul className="divide-y divide-border/40 border-t border-border/50">
-          {unlockLevels.map((l, i) => (
-            <li key={`${l.price}-${i}`} className="flex items-center gap-3 px-3 py-2 text-[12px]">
-              <span className={`font-mono ${l.kind === 'support' ? 'text-emerald-500' : 'text-amber-500'}`}>
-                {l.price}
-              </span>
-              <span className="text-[11px] text-muted-foreground">{l.label || ''}</span>
-              {typeof l.ratio === 'number' && (
-                <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-                  占比 {l.ratio.toFixed(1)}%
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
+      {/* === 两栏布局: K线主图(≥80%屏宽) + 窄栏(决策依据/事件) === */}
+      {type === 'board' ? (
+        <div className="border-l-2 border-border/40 pl-4 py-8 text-center text-[13px] text-muted-foreground">
+          板块 K 线待接入 · 请前往 /boards/{symbol}
+        </div>
       ) : (
-        <div className="border-t border-border/50 p-4 text-center text-[12px] text-muted-foreground">
-          暂无解套盘位价位线
+        <div className="grid grid-cols-12 gap-3">
+          {/* === K线主图栏 === */}
+          <div className="col-span-12 lg:col-span-9 space-y-2">
+            {/* 图层开关条 */}
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="text-muted-foreground">图层:</span>
+              {(
+                [
+                  ['trend', 'L1 趋势'],
+                  ['signal', 'L2 买卖点'],
+                  ['capital', 'L3 资金柱'],
+                  ['event', 'L4 事件'],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => layerToggle(k)}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors ${
+                    layers[k]
+                      ? 'border-primary/40 bg-primary/10 text-foreground'
+                      : 'border-border/40 bg-background text-muted-foreground line-through opacity-60'
+                  }`}
+                >
+                  <span className={`h-1 w-1 rounded-full ${layers[k] ? 'bg-primary' : 'bg-muted'}`} />
+                  {label}
+                </button>
+              ))}
+              <span className="text-border/60 mx-1">副图:</span>
+              {(['vol', 'macd'] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSubchart(s)}
+                  className={`rounded-md border px-1.5 py-0.5 ${
+                    subchart === s
+                      ? 'border-primary/40 bg-primary/10 text-foreground'
+                      : 'border-border/40 text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {s === 'vol' ? '成交量' : 'MACD'}
+                </button>
+              ))}
+            </div>
+            {/* K线大图(无卡片包) */}
+            <KlineChart
+              key={`${type}:${symbol}`}
+              symbol={symbol}
+              market="CN"
+              initialInterval="1d"
+              initialDays={120}
+              events={normEvents}
+              supportPressure={normPriceLines}
+              gsSignals={normGsSignals}
+              fundFlow={summary?.fund_flow?.map((r) => ({
+                date: r.date,
+                open_net: r.ming_net,
+                dark_net: r.dark_net,
+              }))}
+              layersVisible={layers}
+              subchart={subchart}
+              onRangeSelect={setSelectedRange}
+              onCrosshairMove={(p) => setHoveredDate(p?.time ? p.time.slice(0, 10) : null)}
+            />
+          </div>
+
+          {/* === 窄栏: 主力意图/暗盘簇/事件(紧凑列表, 无卡片) === */}
+          <div className="col-span-12 lg:col-span-3 space-y-3 border-l border-border/40 pl-3 text-[12px]">
+            {/* 区间联动摘要 */}
+            {rangeAgg && (
+              <div className="border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
+                <div>区间 {selectedRange!.from} ~ {selectedRange!.to}</div>
+                <div className="mt-0.5">
+                  明盘 <span className={`font-mono ${NET_INFLOW_CLASS(rangeAgg.ming)}`}>{toWan(rangeAgg.ming)}</span>
+                  {' · '}暗盘 <span className={`font-mono ${NET_INFLOW_CLASS(rangeAgg.dark)}`}>{toWan(rangeAgg.dark)}</span>
+                </div>
+                <div className="text-[10px] opacity-70">{rangeAgg.count} 个交易日</div>
+              </div>
+            )}
+
+            {/* 主力意图(短描述) */}
+            {summary?.main_intent && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">主力意图</div>
+                <div className="mt-0.5 text-foreground whitespace-pre-wrap leading-snug">
+                  {summary.main_intent.split('\n').slice(0, 3).join(' · ')}
+                </div>
+              </div>
+            )}
+
+            {/* 暗盘拆单簇(数字流) */}
+            {summary?.dark_clusters?.available && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">
+                  暗盘拆单簇
+                  <span className="ml-1 text-[10px] opacity-70">{summary.dark_clusters.cluster_count ?? 0} 个簇</span>
+                </div>
+                <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5">
+                  <div className="text-muted-foreground">主净额</div>
+                  <div className={`text-right font-mono ${NET_INFLOW_CLASS(summary.dark_clusters.main_net)}`}>
+                    {toWan(summary.dark_clusters.main_net)}
+                  </div>
+                  <div className="text-muted-foreground">暗盘</div>
+                  <div className={`text-right font-mono ${NET_INFLOW_CLASS(summary.dark_clusters.dark_net)}`}>
+                    {toWan(summary.dark_clusters.dark_net)}
+                  </div>
+                  <div className="text-muted-foreground">明盘</div>
+                  <div className={`text-right font-mono ${NET_INFLOW_CLASS(summary.dark_clusters.ming_net)}`}>
+                    {toWan(summary.dark_clusters.ming_net)}
+                  </div>
+                  <div className="text-muted-foreground">撤单率</div>
+                  <div className="text-right font-mono">
+                    {summary.dark_clusters.cancel_rate != null
+                      ? `${(summary.dark_clusters.cancel_rate * 100).toFixed(1)}%`
+                      : '-'}
+                  </div>
+                </div>
+                {summary.dark_clusters.note && (
+                  <div className="mt-1 text-[10px] text-muted-foreground/70">{summary.dark_clusters.note}</div>
+                )}
+              </div>
+            )}
+
+            {/* 关键事件(紧凑列表) */}
+            {normEvents.length > 0 && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">关键事件</div>
+                <ul className="mt-1 space-y-0.5">
+                  {normEvents.slice(0, 6).map((e: KlineEventPoint, idx) => (
+                    <li
+                      key={`${e.time}-${idx}`}
+                      className={`flex items-center gap-1.5 ${
+                        hoveredDate && e.date.slice(0, 10) === hoveredDate
+                          ? 'bg-primary/10 -mx-1 px-1 rounded'
+                          : ''
+                      }`}
+                    >
+                      <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
+                        {e.date.slice(0, 10)}
+                      </span>
+                      <span className="text-foreground truncate flex-1" title={e.label}>
+                        {e.icon ?? e.kind} {e.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* GS 末条信号(突出展示) */}
+            {normGsSignals.length > 0 && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">GS 信号(末条)</div>
+                <div
+                  className={`mt-1 font-mono text-[13px] ${GS_COLOR(
+                    normGsSignals[normGsSignals.length - 1].side,
+                    normGsSignals[normGsSignals.length - 1].confirmed,
+                  )}`}
+                >
+                  {normGsSignals[normGsSignals.length - 1].side === 'G' ? '● 买' : '○ 卖'}
+                  {' '}
+                  {normGsSignals[normGsSignals.length - 1].confirmed ? '已确认' : '待确认'}
+                  <span className="ml-1.5 text-[10px] opacity-70 font-normal">
+                    {normGsSignals[normGsSignals.length - 1].date}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* 操作建议(纯提示一行, 不是卡片) */}
+            {normGsSignals.length > 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                操作建议:
+                <span className="ml-1 text-foreground">
+                  {normGsSignals[normGsSignals.length - 1].confirmed
+                    ? normGsSignals[normGsSignals.length - 1].side === 'G'
+                      ? '按信号可关注（仅供参考）'
+                    : '按信号可谨慎（仅供参考）'
+                    : '等收盘验证（盘中信号仅供参考）'}
+                </span>
+              </div>
+            )}
+            {summary?.chips && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">筹码</div>
+                <div className="mt-0.5 grid grid-cols-2 gap-x-2 font-mono">
+                  <span className="text-muted-foreground">主力</span>
+                  <span className="text-right">{summary.chips.cost_10?.toFixed(2) ?? '--'}</span>
+                  <span className="text-muted-foreground">峰价</span>
+                  <span className="text-right">{summary.chips.peak_price?.toFixed(2) ?? '--'}</span>
+                </div>
+              </div>
+            )}
+            {sourceHealth && typeof sourceHealth === "object" && Object.values(sourceHealth).some((s: any) => s === 'down') && (
+              <div className="text-[10px] text-amber-500">
+                ⚠ 部分数据源未连接（兜底数据可能缺失）
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
-        数据源: 标准筹码接口(腾讯当日分价表优先 / 新浪历史分价兜底), 窗口
-        {chips.window_days ?? 10} 个交易日 · 绿色支撑 / 琥珀色压力
-      </div>
-    </div>
-  )
-}
-
-/** 事件明细: 按事件类型给出度量, 缺字段就不显示(不补 0) */
-function EventMetrics({ e }: { e: KlineEventItem }) {
-  const parts: string[] = []
-  if (e.time) parts.push(e.time)
-  if (typeof e.price === 'number') parts.push(`${e.price}`)
-  if (typeof e.shares === 'number') parts.push(`${e.shares.toLocaleString('zh-CN')} 股`)
-  if (typeof e.count === 'number') parts.push(`${e.count} 笔`)
-  if (typeof e.amount === 'number') parts.push(`${toWan(e.amount)} 万元`)
-  if (parts.length === 0) return null
-  return <span className="ml-auto font-mono text-[11px] text-muted-foreground">{parts.join(' · ')}</span>
-}
-
-/**
- * 事件面板: 标准化事件点列表 + 盘口/筹码信息
- *
- * 数据来源状态通过 useSourceHealth 探测, 图标灰显提示数据源可用性。
- */
-function EventsPanel({
-  loading, error, events, orderbook, unlockLevels, chips,
-}: {
-  loading: boolean
-  error: string
-  events?: KlineEventPoint[]
-  orderbook?: OrderbookInfo | null
-  unlockLevels?: UnlockLevel[] | null
-  chips?: ChipsInfo | null
-}) {
-  const { isReady, reasonOf } = useSourceHealth()
-
-  if (loading) return <PanelLoading text="加载事件…" />
-  if (error) return <PanelError text={error} />
-
-  return (
-    <div className="space-y-3">
-      <div className="card p-4">
-        <div className="text-[12px] font-medium text-foreground">盘口 / 托压单</div>
-        {orderbook?.available ? (
-          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12px] sm:grid-cols-4">
-            <Field label="形态" value={orderbook.shape ?? '--'} />
-            <Field label="买一" value={orderbook.best_bid ?? '--'} />
-            <Field label="卖一" value={orderbook.best_ask ?? '--'} />
-            <Field label="买盘占比" value={orderbook.bid_pressure === null || orderbook.bid_pressure === undefined ? '--' : `${(orderbook.bid_pressure * 100).toFixed(1)}%`} />
+      {/* === 数据明细(默认折叠) === */}
+      <div className="border-t border-border/40 pt-2">
+        <button
+          type="button"
+          onClick={() => setDetailOpen(!detailOpen)}
+          className="flex w-full items-center gap-1 text-left text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          <span>{detailOpen ? '▾' : '▸'}</span>
+          <span>数据明细</span>
+          {summary && (
+            <span className="font-mono">
+              · 资金 {summary.fund_flow?.length ?? 0} 行
+              · 事件 {summary.events?.length ?? 0} 条
+              {summary.dark_clusters?.available && ` · 暗盘簇 ${summary.dark_clusters.cluster_count ?? 0}`}
+            </span>
+          )}
+        </button>
+        {detailOpen && summary && (
+          <div className="mt-2">
+            <FundDetail
+              rows={summary.fund_flow ?? []}
+              hoveredDate={hoveredDate}
+              selectedRange={selectedRange}
+            />
           </div>
-        ) : (
-          <p className="mt-1.5 text-[12px] text-muted-foreground">
-            {orderbook?.note || '暂无盘口数据(需 .img 数据源或 thsdk 实时快照, 不编造)'}
-          </p>
         )}
       </div>
 
-      <ChipsPanel chips={chips} unlockLevels={unlockLevels} />
-
-      <div className="card overflow-hidden">
-        <div className="border-b border-border/60 px-3 py-2 text-[12px] font-medium text-foreground">
-          事件标注(L4)
+      {/* === 预测(原 forecast Tab, 折叠入口) === */}
+      {type === 'stock' && (
+        <div className="border-t border-border/40 pt-2">
+          <details>
+            <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">
+              预测(AI 4 模型)
+            </summary>
+            <div className="mt-2">
+              <Suspense fallback={
+                <div className="flex h-[20vh] items-center justify-center text-[12px] text-muted-foreground">
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" /> 加载预测…
+                </div>
+              }>
+                <ForecastPage />
+              </Suspense>
+            </div>
+          </details>
         </div>
-        {events && events.length > 0 ? (
-          <ul className="divide-y divide-border/40">
-            {events.slice().reverse().map((e, i) => {
-              const icon = e.icon
-              // §12 缺位兜底: 图标对应数据源不可用 → 灰显 + tooltip
-              const ready = icon ? isReady(icon) : true
-              const why = icon ? reasonOf(icon) : ''
-              return (
-                <li key={`${e.date}-${e.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[12px]">
-                  <span className="font-mono text-[11px] text-muted-foreground">{e.date}</span>
-                  {icon && (
-                    <span
-                      className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] ${
-                        ready ? 'bg-accent/50 text-foreground' : 'bg-muted text-muted-foreground/50 grayscale'
-                      }`}
-                      title={ready ? undefined : why || '数据源不可用'}
-                    >
-                      {icon}
-                    </span>
-                  )}
-                  <span className={`text-[12px] font-medium ${ready ? (TONE_CLASS[e.tone] || 'text-foreground') : 'text-muted-foreground/60'}`}>
-                    {e.label}
-                  </span>
-                  <EventMetrics e={e} />
-                </li>
-              )
-            })}
-          </ul>
-        ) : (
-          <div className="p-6 text-center text-[12px] text-muted-foreground">
-            暂无事件标注(拆单簇 / 撤单异常需 .tck 文件, 龙虎榜 / 公告需 wencai, 我的买卖点需交割单;
-            数据源缺失时不编造)
-          </div>
-        )}
+      )}
+    </div>
+  )
+}
+
+/** 数据明细折叠面板 — 资金流水表 */
+function FundDetail({
+  rows,
+  hoveredDate,
+  selectedRange,
+}: {
+  rows: FundFlowRow[]
+  hoveredDate: string | null
+  selectedRange: { from: string; to: string } | null
+}) {
+  const filtered = useMemo(() => {
+    if (!selectedRange) return rows
+    return rows.filter((r) => r.date >= selectedRange.from && r.date <= selectedRange.to)
+  }, [rows, selectedRange])
+
+  const recent = filtered.slice(-30).reverse()
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-[11px]">
+        <thead>
+          <tr className="border-b border-border/40 text-muted-foreground">
+            <th className="px-2 py-1 font-medium">日期</th>
+            <th className="px-2 py-1 text-right font-medium">明盘净额(万)</th>
+            <th className="px-2 py-1 text-right font-medium">暗盘净额(万)</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/40">
+          {recent.map((r) => {
+            const isHover = hoveredDate != null && r.date.slice(0, 10) === hoveredDate
+            return (
+              <tr
+                key={r.date}
+                className={`hover:bg-accent/20 ${isHover ? 'bg-accent/30' : ''}`}
+              >
+                <td className="px-2 py-1 font-mono text-muted-foreground">{r.date.slice(0, 10)}</td>
+                <td className={`px-2 py-1 text-right font-mono ${NET_INFLOW_CLASS(r.ming_net)}`}>
+                  {toWan(r.ming_net)}
+                </td>
+                <td className={`px-2 py-1 text-right font-mono ${NET_INFLOW_CLASS(r.dark_net)}`}>
+                  {toWan(r.dark_net)}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <div className="mt-1 text-[10px] text-muted-foreground/70">
+        显示最近 30 个交易日 · 红涨绿跌 · 区间由 K 线选段控制
       </div>
     </div>
   )
-}
-
-function Field({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="truncate font-mono text-foreground">{value}</div>
-    </div>
-  )
-}
-
-function PanelLoading({ text }: { text: string }) {
-  return (
-    <div className="card flex h-[30vh] items-center justify-center text-[12px] text-muted-foreground">
-      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {text}
-    </div>
-  )
-}
-
-function PanelError({ text }: { text: string }) {
-  return <div className="card p-6 text-center text-[12px] text-rose-500">{text}</div>
-}
-
-function PanelEmpty({ text }: { text: string }) {
-  return <div className="card p-6 text-center text-[12px] text-muted-foreground">{text}</div>
 }
