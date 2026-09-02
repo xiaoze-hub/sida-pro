@@ -176,19 +176,19 @@ export default function QuotePage() {
   // - hoveredDate:   十字光标移到某天 → 高亮该日 row
   // 两者都 null 表示"未交互, 用全量数据"。
   const [selectedRange, setSelectedRange] = useState<{ from: string; to: string } | null>(null)
-    const [hoveredDate, setHoveredDate] = useState<string | null>(null)
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null)
 
-    // 设计稿 v2.0 §5: K线 4 图层开关(L1趋势 / L2买卖点 / L3资金柱 / L4事件)。
-    // Trend 当前图无独立趋势序列, 默认开但无渲染物; 其余 3 层默认全开。
-    const [layers, setLayers] = useState({
-      trend: true,
-      signal: true,
-      capital: true,
-      event: true,
-    })
+  // 设计稿 v2.0 §5: K线 4 图层开关(L1趋势 / L2买卖点 / L3资金柱 / L4事件)。
+  // Trend 当前图无独立趋势序列, 默认开但无渲染物; 其余 3 层默认全开。
+  const [layers, setLayers] = useState({
+    trend: true,
+    signal: true,
+    capital: true,
+    event: true,
+  })
 
-    const layerToggle = (key: keyof typeof layers) =>
-      setLayers((s) => ({ ...s, [key]: !s[key] }))
+  const layerToggle = (key: keyof typeof layers) =>
+    setLayers((s) => ({ ...s, [key]: !s[key] }))
 
   useEffect(() => { setInput(symbol) }, [symbol])
 
@@ -225,16 +225,16 @@ export default function QuotePage() {
   const activeTab = QUOTE_TABS.some((t) => t.key === tab) ? tab : 'chart'
 
   // 标准化数据层: 后端原始 events/unlock_levels → 图表消费的标准结构
-    const normEvents = normalizeKlineEvents(summary?.events)
-    const normPriceLines = normalizePriceLines(summary?.unlock_levels)
-    // L2 GS 买卖点: 后端 gs_signals → KlineChart 的 GsSignalPoint[]
-    const normGsSignals = (summary?.gs_signals || [])
-      .filter((g) => g && g.date && (g.side === 'G' || g.side === 'S'))
-      .map((g) => ({ date: g.date as string, side: g.side as 'G' | 'S', confirmed: !!g.confirmed }))
+  const normEvents = normalizeKlineEvents(summary?.events)
+  const normPriceLines = normalizePriceLines(summary?.unlock_levels)
+  // L2 GS 买卖点: 后端 gs_signals → KlineChart 的 GsSignalPoint[]
+  const normGsSignals = (summary?.gs_signals || [])
+    .filter((g) => g && g.date && (g.side === 'G' || g.side === 'S'))
+    .map((g) => ({ date: g.date as string, side: g.side as 'G' | 'S', confirmed: !!g.confirmed }))
 
-    return (
-      <div className="w-full space-y-4">
-        {/* 页头 + 标的选择(个股/指数/板块 三合一) */}
+  return (
+    <div className="w-full space-y-4">
+      {/* 页头 + 标的选择(个股/指数/板块 三合一) */}
       <div className="card p-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
