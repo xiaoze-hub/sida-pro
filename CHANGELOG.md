@@ -27,6 +27,10 @@
   - 验证: tsc 0 error + pnpm build 15.72s. pytest 86 passed (未受影响).
 - **v0.4.59 thsdk buffer_size 扩容 (xiaoze 自验 v0.4.58 发现新问题)**. **根因**: `thsdk.tick_super_level1` 当日累计数据 > 2MB, thsdk 默认 socket 接收缓冲区 2MB 不够装, 服务端返 `缓冲区大小不足,当前大小: 2.00 MB,需要调整扩大 buffer_size 接收返回数据` (data=None) —— 暗盘融合被迫降到 tck_only, dark_net 缺口 **17 倍** (1.63 亿 → 939 万). **排除项**: ❌ 配额限制 (无401/429) / ❌ 时段限制 (11:0x 正常 14:1x 故障) / ❌ 个股维度 (002361/600519/000001 三只同错) / ✅ **thsdk 客户端接收缓冲区配置问题**. **修复**: `data_source/thsdk_l2.py` 新增 `THS_BUFFER_SIZE = 8*1024*1024`, `_query` 注入 `buffer_size=THS_BUFFER_SIZE` 到 method 调用; TypeError fallback 兼容旧版 thsdk. **实测**: 8MB → ok data=4877 rows / 16MB → ok 同; 2MB → 失败. **降级机制真扛过**: `coverage: tck_only + fusion_note: thsdk 不可得: 只有通达信主动侧, 被动侧(maker)未落盘, 暗盘不完整` + `main_net` 仍出数不编造. `tests/test_thsdk_buffer_size.py` 2 例 (mock thsdk, 验证 buffer_size 注入正确). pytest 86 passed. xiaoze 提的前端 coverage 角标建议 (fusion/tck_only/thsdk_only 三态) **记入 v0.4.60 候选**, P4 暗盘展示阶段处理.
 
+### feature
+
+- **v0.4.64 wencai 三指标共振选股 3 模板** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-1). `src/core/chat_tools.py` `WENCAI_TEMPLATES` 追加 `三指标买共振`/`三指标卖共振`/`三指标选股共振` 3 模板, 供 AI 助手 `get_stock_screen`/`get_market_scan` 调用同花顺一句话选股. **口径以官方《决策先锋8问8答》为准** (§3.4 七行状态表 / §5 三步战法 / §6 选股条件), **非桌面 5_GZZH.txt 公式** — 甄别发现该公式 2 处与官方不一致: ① 卖共振公式用"活跃度较前日下降", 官方要求"跌破强势线(<3)", 已按官方修正; ② 选股共振公式用"活跃度>6(大牛线)+暗盘单日>0", 官方是"活跃度连续多日强势线上(>3)+暗盘持续买", 已按官方修正. 差异写入各模板 `note` 字段供后续校准. 模板总数 22→25. py_compile 通过 + 模块 import 验证 3 模板结构 (src/q/note) 全对.
+
 ## 2026-09-01
 
 ### feature
