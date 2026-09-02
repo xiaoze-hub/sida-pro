@@ -24,15 +24,92 @@ from marketdata.vendors.base import KlineVendor, MoreInfoVendor, QuoteVendor
 
 logger = logging.getLogger(__name__)
 
-_TQ_URL = (os.environ.get("TDX_QUANT_URL") or "http://172.18.0.1:5100/").rstrip("/") + "/"  # 生产容器 env 注入直连地址; 兜底旧 frps 网关
 _TIMEOUT_S = 4.0  # 正常 <100ms; 隧道断开时快速失败交给降级链
+
+# ---------------------------------------------------------------------------
+# TQ 网关地址**自动发现**(2026-09-02)
+#
+# 背景: 长期以来生产 TQ 一直报 Connection refused, 实际是地址没配对 ——
+#   代码默认 `http://172.18.0.1:5100/`(容器网桥 / 旧 frps 隧道),
+#   而本机部署(Win11 + WSL2 docker)通的是 **宿主 WSL 网卡 172.27.16.1:17709**
+#   (通达信 TdxW.exe 监听, 实测容器内可达, p50 19ms)。
+# 运维很难记住配 TDX_QUANT_URL, 故改为**按环境自适应探测**:
+#   1) 显式环境变量 TDX_QUANT_URL 优先(保持既有部署兼容)
+#   2) 否则按候选列表探测(默认网关 → WSL/Docker 常见网段 → 回环), 命中即缓存
+# 探测只在进程内做一次(成本 ~几十 ms), 失败保持旧默认, 行为不变。
+# ---------------------------------------------------------------------------
+_TQ_URL_CACHE: str | None = None
+_FALLBACK_URL = "http://172.18.0.1:5100/"
+
+
+def _host_gateway() -> str | None:
+    """读 /proc/net/route 取默认网关(容器内即宿主地址)。失败返回 None。"""
+    try:
+        with open("/proc/net/route", encoding="utf-8") as f:
+            for line in f.read().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] == "00000000":  # 目的地址全 0 = 默认路由
+                    ip = int(parts[2], 16)
+                    return "%d.%d.%d.%d" % (ip & 255, (ip >> 8) & 255,
+                                            (ip >> 16) & 255, (ip >> 24) & 255)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _probe_tq(url: str, timeout: float = 1.5) -> bool:
+    """最轻探测: get_stock_list 能回 result 即视为可用。"""
+    body = json.dumps(
+        {"id": 1, "method": "get_stock_list", "params": {"market": "5", "list_type": 0}}
+    ).encode("utf-8")
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, content=body,
+                               headers={"Content-Type": "application/json; charset=utf-8"})
+            if resp.status_code != 200:
+                return False
+            data = json.loads(resp.content.decode("utf-8"))
+        return bool((data.get("result") or {}).get("Value")) or "result" in data
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_tq_url() -> str:
+    """解析可用的 TQ 网关地址(一次探测, 结果缓存)。"""
+    global _TQ_URL_CACHE
+    if _TQ_URL_CACHE:
+        return _TQ_URL_CACHE
+
+    env_url = (os.environ.get("TDX_QUANT_URL") or "").strip()
+    gw = _host_gateway()
+    candidates: list[str] = []
+    if env_url:
+        candidates.append(env_url.rstrip("/") + "/")
+    for host in [gw, "172.27.16.1", "172.28.0.1", "172.17.0.1", "172.18.0.1", "127.0.0.1"]:
+        if not host:
+            continue
+        for port in (17709, 5100):
+            u = f"http://{host}:{port}/"
+            if u not in candidates:
+                candidates.append(u)
+
+    for u in candidates:
+        if _probe_tq(u):
+            _TQ_URL_CACHE = u
+            logger.info("TQ 网关自动命中: %s", u)
+            return u
+
+    _TQ_URL_CACHE = candidates[0] if candidates else _FALLBACK_URL
+    logger.warning("TQ 网关探测全部失败, 沿用默认 %s(将降级其他数据源)", _TQ_URL_CACHE)
+    return _TQ_URL_CACHE
 
 
 def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
     """发 JSON-RPC; 返回 result.Value 或抛异常(Engine 捕获后转下一源)。"""
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
     with httpx.Client(timeout=timeout) as client:
-        resp = client.post(_TQ_URL, content=body, headers={"Content-Type": "application/json; charset=utf-8"})
+        resp = client.post(_resolve_tq_url(), content=body,
+                          headers={"Content-Type": "application/json; charset=utf-8"})
         resp.raise_for_status()
         data = json.loads(resp.content.decode("utf-8"))
     if "error" in data:

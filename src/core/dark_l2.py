@@ -47,6 +47,10 @@ THS_INVALID_DIR = 4294967295
 # 非 epoch 时间标记下限: 真实 epoch 秒约 1.7e9(2023-12 起), 8 位整数的纯日期标记(如 20260819)必然小于 1.6e9
 EPOCH_FLOOR = 1_600_000_000
 
+# thsdk 单次调用硬超时(秒)。行情服务不可达时 thsdk 自带超时是 30s, 3 轮退避 = 90s,
+# 会把上层 summary 接口拖到反代超时(502), 故在这里先掐断(2026-09-02)。
+THS_CALL_TIMEOUT_S = 12.0
+
 # 腾讯代码前缀 → thsdk 前缀映射
 _PREFIX_MAP = {
     "sz": "USZA",  # 深 A
@@ -222,7 +226,13 @@ def _fetch_tdx_tck(code: str) -> list[dict]:
     """
     from src.core.tdx_tick_parser import parse_tck, ticks_from_tck
 
-    tck_dir = os.environ.get("TDX_TCK_DIR", "/app/data/tdx_tck")
+    # 2026-09-02 修: 生产实际注入的是 **PANWATCH_TCK_DIR**(与 l4_events / dark_split
+    # 同一套约定, 文件如 /app/data/tck/sz002361_20260827.tck)。此前这里只读 TDX_TCK_DIR,
+    # 两边目录不一致 → 事件侧(.tck 拆单/撤单)能找到文件、暗盘侧却找不到, "通达信 + 同花顺
+    # 互补" 会断在这一环。统一以 PANWATCH_TCK_DIR 为主, TDX_TCK_DIR 仅作历史兼容。
+    tck_dir = (os.environ.get("PANWATCH_TCK_DIR")
+               or os.environ.get("TDX_TCK_DIR")
+               or "/app/data/tck")
     base = Path(tck_dir)
     if not base.is_dir():
         raise FileNotFoundError(f"TDX_TCK_DIR 不存在: {tck_dir}")
@@ -260,15 +270,22 @@ def _rows_from_resp(resp) -> list[dict]:
     return []
 
 
-def _query_thsdk(method_name: str, code: str) -> object:
-    """惰性调用 thsdk 方法, 带限频/重试/熔断。
+def _query_thsdk(method_name: str, code: str, timeout_s: float = THS_CALL_TIMEOUT_S) -> object:
+    """惰性调用 thsdk 方法, 带限频/重试 + **单次硬超时**。
 
     - 限频: 50ms 间隔
     - 重试: 3 次指数退避 (1s/2s/4s)
-    - 熔断: 连续失败 60s 后抛出异常(不重试)
+    - 硬超时(2026-09-02 新增): 单次调用超过 timeout_s 即判本轮失败
+
+    硬超时的由头: thsdk 的 depth / 行情类接口在行情服务不可达时**单次可卡满 30s**
+    (生产实测报错 "[thsdk]请求超时，超过 30 秒"), 3 轮退避就是 ~90s, 足以把
+    summary 接口拖到反代超时(502)。故每次调用都套护栏: 超时即弃, 走退避重试;
+    三轮全超时则抛错, 由调用方按"无数据"显式处理, 绝不阻塞主链路。
     """
     import os as _os
     import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
     _os.environ.setdefault("PYTHONUTF8", "1")
     try:
@@ -281,23 +298,31 @@ def _query_thsdk(method_name: str, code: str) -> object:
     if not (user and pwd):
         raise RuntimeError("THS_USERNAME/THS_PASSWORD 未设置")
 
-    last_err = None
+    def _call_once() -> object:
+        _time.sleep(0.05)  # 限频
+        with THS({"username": user, "password": pwd, "mac": ""}) as ths:
+            method = getattr(ths, method_name, None)
+            if method is None:
+                raise RuntimeError(f"thsdk 无方法 {method_name}")
+            return method(code)
+
+    last_err: Exception | None = None
     for attempt in range(3):
         if attempt > 0:
             _time.sleep(1.0 * (2 ** (attempt - 1)))
         try:
-            _time.sleep(0.05)  # 限频
-            with THS({"username": user, "password": pwd, "mac": ""}) as ths:
-                method = getattr(ths, method_name, None)
-                if method is None:
-                    raise RuntimeError(f"thsdk 无方法 {method_name}")
-                resp = method(code)
-            return resp
-        except Exception as e:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_call_once)
+                try:
+                    return fut.result(timeout=timeout_s)
+                except FuturesTimeout:
+                    last_err = TimeoutError(
+                        f"thsdk.{method_name}({code}) 单次调用超时 {timeout_s}s")
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+        except Exception as e:  # noqa: BLE001
             last_err = e
-            if attempt == 2:
-                raise RuntimeError(f"thsdk.{method_name} 失败 3 次: {str(e)[:100]}") from e
-    raise RuntimeError(f"thsdk.{method_name} 失败") from last_err
+    raise RuntimeError(f"thsdk.{method_name}({code}) 失败/超时 3 次: {str(last_err)[:100]}")
 
 
 def _fetch_big_order(code: str) -> list[dict]:
@@ -310,10 +335,24 @@ def _fetch_big_order(code: str) -> list[dict]:
           "t": "HH:MM:SS"}] 按时间升序
     """
     ths_code = _ths_code(code)
-    resp = _query_thsdk("big_order_flow", ths_code)
-    rows = _rows_from_resp(resp)
+    # 2026-09-02: 代码风格回退。thsdk 部分接口只认 "002361.SZ" 风格, 传 USZA002361 会报
+    # "证券代码必须为A股市场代码 + 6位数字代码"; 先用 USZA 风格, 失败再回退带后缀风格。
+    candidates = [ths_code]
+    if ths_code[:4] in ("USZA", "USHA"):
+        candidates.append(ths_code[4:] + (".SZ" if ths_code.startswith("USZA") else ".SH"))
+    rows: list[dict] = []
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            rows = _rows_from_resp(_query_thsdk("big_order_flow", cand))
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            continue
+        if rows:
+            break
     if not rows:
-        raise RuntimeError(f"big_order_flow 返回空数据({ths_code})")
+        detail = f": {str(last_err)[:100]}" if last_err else ""
+        raise RuntimeError(f"big_order_flow 返回空数据({ths_code}){detail}")
 
     # 过滤有效行
     valid = []

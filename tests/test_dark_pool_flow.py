@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""主力资金聚合(明盘权威 + 暗盘 L1 近似) 单测。
+"""主力资金聚合(明盘权威 + 暗盘 L2 主线 / 腾讯回退) 单测。
 
 重点验证:
   1) 官方口径: 主力净额 = 明盘 + 暗盘, 散户 = -主力
-  2) 置信度标注: 明盘=official, 暗盘=L1_approx, 二者永不混用
+  2) 置信度标注: 明盘=official, 暗盘=l2_thsdk(主线) / L1_approx(回退), 二者永不混用
   3) 缺失处理: 任一侧失败互不拖垮, main_net 只在双侧可得时输出(不编造)
   4) 代码归一: 002361 / sz002361 / 非法输入
+
+2026-09-02 起暗盘**主线改为 L2 逐笔**(`dark_flow_l2`), 腾讯逐笔降为回退路径
+(confidence 随之从 l2_thsdk 降级为 L1_approx)。因此下面标注 `_dark_flow` 真实路径的
+用例统一挂 `no_l2` fixture 关掉主线, 才能稳定测到**回退分支**;
+主线分支本身由 `test_decision_enhance.py` 覆盖。
 """
 import sys
 from pathlib import Path
@@ -168,7 +173,18 @@ def test_ming_flow_swallows_source_failure(monkeypatch):
     assert dpf._ming_flow("sz002361") is None
 
 
-def test_dark_flow_reads_split_order(monkeypatch):
+@pytest.fixture
+def no_l2(monkeypatch):
+    """关掉**融合 + L2** 两条主线, 让 `_dark_flow` 走腾讯逐笔**回退分支**。
+
+    否则本机 thsdk 可用(游客账户也能出数)会命中主线, 测不到回退路径。
+    """
+    monkeypatch.setattr("src.core.dark_flow_fusion.compute_dark_fusion", lambda s: None)
+    monkeypatch.setattr("src.core.dark_flow_l2.compute_dark_flow_l2",
+                        lambda s, source="thsdk": None)
+
+
+def test_dark_flow_reads_split_order(no_l2, monkeypatch):
     """暗盘取自 compute_dark_flow 的 split_order 字段(拆单识别 v4)。"""
     import src.core.dark_flow as df
 
@@ -183,21 +199,21 @@ def test_dark_flow_reads_split_order(monkeypatch):
     assert r["confidence"] == "L1_approx"
 
 
-def test_dark_flow_returns_none_without_split(monkeypatch):
+def test_dark_flow_returns_none_without_split(no_l2, monkeypatch):
     import src.core.dark_flow as df
 
     monkeypatch.setattr(df, "compute_dark_flow", lambda sym: {"data_status": "ok"})
     assert dpf._dark_flow("002361") is None
 
 
-def test_dark_flow_returns_none_when_compute_fails(monkeypatch):
+def test_dark_flow_returns_none_when_compute_fails(no_l2, monkeypatch):
     import src.core.dark_flow as df
 
     monkeypatch.setattr(df, "compute_dark_flow", lambda sym: None)
     assert dpf._dark_flow("002361") is None
 
 
-def test_dark_flow_swallows_exception(monkeypatch):
+def test_dark_flow_swallows_exception(no_l2, monkeypatch):
     import src.core.dark_flow as df
 
     def _boom(sym):

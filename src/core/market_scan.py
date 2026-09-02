@@ -92,6 +92,189 @@ def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optio
     }
 
 
+def _fund_net_of(symbol: str, bars: Sequence[dict], source: str) -> tuple[Optional[float], bool]:
+    """按口径取"资金"维净额(元)。返回 (净额, 是否近似对照项)。
+
+    | source | 口径 | 速度 | 精度 |
+    |--------|------|------|------|
+    | "ohlc" | 逐日 OHLC 分摊暗盘(对照项) | 快(纯计算) | 低(已知大振幅日 23 倍误差) |
+    | "l2"   | thsdk L2 逐笔拆单暗盘(主线) | 中(~1s/只) | 高 |
+    | "full" | 明盘 + 暗盘 = 主力净额(官方口径) | 慢(需 thsdk 两次调用) | 最高 |
+
+    ⚠️ 全市场 5000+ 只逐只调 thsdk 不现实(单只 ~1s ≈ 83 分钟),
+    故推荐 **ohlc 粗筛 → 小候选池用 l2/full 复核**的两段式。
+    """
+    from src.core.ohlc_dark import ohlc_dark_net
+
+    if source == "ohlc":
+        d = ohlc_dark_net(list(bars), days=1)
+        return d.get("dark_net"), True
+    if source == "l2":
+        try:
+            from src.core.dark_flow_l2 import compute_dark_flow_l2
+
+            r = compute_dark_flow_l2(symbol)
+            return ((r or {}).get("net"), False) if r else (None, False)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("L2 暗盘失败 %s: %s", symbol, e)
+            return None, False
+    if source == "full":
+        try:
+            from src.core.dark_pool_flow import compute_pool_flow
+
+            pool = compute_pool_flow(symbol) or {}
+            # main_net 仅在明盘+暗盘**同时可得**时才有值(coverage 机制, 不编造)
+            return pool.get("main_net"), False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("主力净额失败 %s: %s", symbol, e)
+            return None, False
+    raise ValueError(f"未知资金口径 {source!r}(支持 ohlc/l2/full)")
+
+
+def resonance_pick(
+    symbols: Optional[Sequence[str]] = None,
+    top_n: int = DEFAULT_TOP_N,
+    bars_days: int = DEFAULT_BARS_DAYS,
+    activity_line: float = 3.0,
+    fund_source: str = "ohlc",
+    require_new_g: bool = False,
+    with_prev: bool = False,
+) -> dict:
+    """**三指标共振选股**(官方问题六「策略选股」): 三条件 **AND** 联合筛选。
+
+    与 `scan()` 的区别: `scan()` 出的是三张**独立榜**(各自排序、互不约束);
+    本函数是官方意义上的"策略选股" —— 三个条件**同时满足**才入选:
+
+        ① 趋势: GS 出现 G 信号(或处于 G 区间)
+        ② 活跃度: AI 机构活跃度站上强势线(3.00)或大牛线(6.00)
+        ③ 资金  : 主力资金净额 > 0(流入)
+
+    官方原文(问题六): "在 5000 多只股票中快速筛选……此类股票位置低且有足够的
+    资金关注, 后市上涨概率较大"。
+
+    Args:
+        symbols: 股票池; None = 全市场(⚠️ 5000+ 只, 建议后台跑或用 ohlc 口径)
+        top_n: 最多返回条数
+        bars_days: 每股 K 线根数(GS 需 ≥28)
+        activity_line: 活跃度门槛, 3.0 = 强势线(三步战法) / 6.0 = 大牛线(官方选股示例)
+        fund_source: 资金口径 "ohlc" / "l2" / "full"(见 `_fund_net_of`)
+        require_new_g: True = 只要**今日新出** G 信号(当日交叉), False = G 区间也算
+        with_prev: 是否多算一日前值以判定"较前一日翻倍"(拐点态); 会翻倍计算量
+
+    Returns:
+        {
+          "generated_at", "universe", "computed", "skipped",
+          "filters": {...},                 # 本次实际使用的筛选条件(便于复盘)
+          "picks": [ {symbol, trend, activity, fund_net, state, phase,
+                      action, backtest, approximation} ... ],
+          "note": 口径说明
+        }
+    """
+    from src.core import ai_activity, gs_strategy, resonance
+
+    if symbols is None:
+        from src.web.stock_list import get_stock_list
+
+        raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
+        symbols = _valid_symbols(raw)
+    else:
+        symbols = _valid_symbols(symbols)
+
+    picks: list[dict] = []
+    skipped = 0
+    computed = 0
+    for sym in symbols:
+        try:
+            from src.core.decision_pioneer import fetch_bars
+
+            bars = fetch_bars(sym, "CN", days=bars_days)
+            if not bars:
+                skipped += 1
+                continue
+
+            gs_eval = gs_strategy.eval_gs(bars)
+            trend = gs_strategy.trend_label(gs_eval)
+            if trend in ("无数据",):
+                skipped += 1
+                continue
+            if require_new_g and trend != "G信号":
+                computed += 1
+                continue
+            if not require_new_g and trend not in ("G信号", "G区间"):
+                computed += 1
+                continue
+
+            act_eval = ai_activity.eval_activity(bars)
+            activity = act_eval.get("activity")
+            if not isinstance(activity, (int, float)) or activity < activity_line:
+                computed += 1
+                continue
+
+            fund_net, approx = _fund_net_of(sym, bars, fund_source)
+            if not isinstance(fund_net, (int, float)):
+                computed += 1
+                continue
+
+            # 前一日值(判"较前一日翻倍" → 拐点态); 关掉时传 None, 按不满足处理
+            act_prev = None
+            fund_prev = None
+            if with_prev and len(bars) >= 2:
+                try:
+                    act_prev = (ai_activity.eval_activity(bars[:-1]) or {}).get("activity")
+                    fund_prev, _ = _fund_net_of(sym, bars[:-1], fund_source)
+                except Exception:  # noqa: BLE001
+                    act_prev = fund_prev = None
+
+            st = resonance.evaluate_state(trend, activity, act_prev, fund_net, fund_prev)
+            if st.get("phase") not in ("向好", "拐点"):
+                computed += 1
+                continue
+
+            computed += 1
+            picks.append({
+                "symbol": sym,
+                "close": bars[-1].get("close"),
+                "trend": trend,
+                "activity": round(activity, 2),
+                "activity_line": activity_line,
+                "fund_net": round(fund_net, 2),
+                "fund_net_wan": round(fund_net / 1e4, 2),
+                "state": st.get("state"),
+                "phase": st.get("phase"),
+                "action": st.get("action"),
+                "backtest": st.get("backtest"),
+                "approximation": approx,   # True = 资金维用的是 OHLC 对照项(非真值)
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("resonance_pick %s failed: %s", sym, e)
+            skipped += 1
+            continue
+
+    # 排序: 资金净额降序(同等共振下, 资金更强的靠前)
+    picks.sort(key=lambda r: -r["fund_net"])
+
+    note = None
+    if fund_source == "ohlc":
+        note = ("资金维用 OHLC 分摊暗盘**对照项**(已知大振幅日 23 倍误差), "
+                "仅作粗筛; 入选后建议用 fund_source='l2'/'full' 复核")
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "universe": len(symbols),
+        "computed": computed,
+        "skipped": skipped,
+        "filters": {
+            "trend": "G信号" if require_new_g else "G信号/G区间",
+            "activity_line": activity_line,
+            "fund": "净额 > 0(流入)",
+            "fund_source": fund_source,
+            "phase": "向好/拐点",
+        },
+        "picks": picks[:top_n],
+        "note": note,
+    }
+
+
 def scan(
     symbols: Optional[Sequence[str]] = None,
     top_n: int = DEFAULT_TOP_N,

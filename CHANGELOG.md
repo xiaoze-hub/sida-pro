@@ -5,6 +5,17 @@
 ### fix
 
 - **v0.4.53.2 orderbook available 假阳性修复** (xiaoze 复核发现). `orderbook_engine.order_book_queue` 之前只要 snapshot 非空就 `available: True`, 但 thsdk degraded 时返回空 bid/ask 快照 → 前端拿到 available=true 就走不到 §12 灰显兜底, 却没有任何真实盘口数据(假阳性). 改为 `available = bool(bid) or bool(ask)`(有真实盘口价才算), 空快照(thsdk degraded)正确置 False 走灰显. 后端 orderbook 单测: 空快照 False / 无盘口价 False / 有价 True 全合预期. `pytest -k "orderbook or a1"` 44 passed.
+- **v0.4.55 TQ 网关自动发现 + 暗盘融合 + WAF 识别 (整合 xiaoze 11 文件附件, P4 主线)**. **根因**: 生产 TQ 一直连不上 — `packages/marketdata/src/marketdata/vendors/tq.py` 默认地址 `172.18.0.1:5100` 是容器网桥/旧 frps, 本机 WSL2 实际是宿主网卡 `172.27.16.1:17709` (TdxW.exe 监听, p50 19ms, 比东财快 50 倍). `dark_l2._fetch_tdx_tck` 读 `TDX_TCK_DIR`, 与生产注入的 `PANWATCH_TCK_DIR` 不一致 → 暗盘侧互补断链. **修复**:
+  - `marketdata_tq.py`: 加 `_resolve_tq_url()` 自动发现(默认网关→WSL/Docker 常见网段→回环, 一探测缓存); `_host_gateway()` 读 /proc/net/route; `_probe_tq()` 1.5s 探测. 备 `_FALLBACK_URL` 沿用旧默认, 行为不变.
+  - `marketdata_kline.py`: 腾讯 WAF 501 显式识别 + 日志(以前静默返空无从定位).
+  - `dark_l2.py`: ① `.tck` 目录改读 `PANWATCH_TCK_DIR` 优先 (兼容 `TDX_TCK_DIR`); ② thsdk 调用加 12s 硬超时 + 线程池, 避免 30s×3 = 90s 拖垮 summary 接口; ③ big_order_flow 代码风格回退 (USZA002361 不通时再试 `002361.SZ`).
+  - `dark_pool_flow.py`: 暗盘三级降级 融合→L2→腾讯; 返回带 `active_net`/`split_net`/`passive_est` 分口径明细; 两源都无返 None 不编造.
+  - 新增 `dark_flow_fusion.py`: 暗盘融合核心. 主动净额 (.tck 官方方向) + 委托级拆单簇 + 被动侧估计; 被动占比越界 (经验 5%~60%) 标 `suspect`; coverage: fusion / thsdk_only / tck_only / None.
+  - 新增 `dark_flow_l2.py`: thsdk L2 逐笔暗盘次选主线.
+  - 新增 `fund_flow_nd.py`: 主力资金 1/3/5 日 + 0 轴上穿/下穿.
+  - 新增 `decision_backtest.py`: 三指标共振回测 (带官方基准对照).
+  - `market_scan.py`: 新增 `resonance_pick()` 三指标 AND 联合选股.
+  - `test_dark_pool_flow.py` / `test_decision_enhance.py`: 13+13 新单测. **测试**: pytest 176 passed (相关) + marketdata 190 passed + test_l4_events 26 passed. **未合并待重发**: `klines.py` `if not bars` 不整体早退 + `decision_pioneer.py` `_fallback_bars` 兜底 — xiaoze 在 02:50 邮件正文描述修复 diff 但附件 attachment_count=0 (可能漏附), 已发邮件让重发.
 
 ## 2026-09-01
 

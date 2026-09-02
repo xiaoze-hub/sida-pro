@@ -78,7 +78,15 @@ def fetch_tencent_kline_raw(tsym: str, days: int) -> list[Bar]:
         params={"param": f"{tsym},day,,,{days},qfq", "_var": "kline_dayqfq"},
         timeout=10, retries=2, parse="text", log_label="腾讯K线", symbol=tsym,
     )
-    if not text or "=" not in text:
+    if not text:
+        return []
+    if "waf.tencent.com" in text:
+        # 2026-09-02 生产实测: 腾讯对高频出口 IP 返回 HTTP 501 + WAF 拦截页
+        # (重定向到 waf.tencent.com/501page.html), 带 UA/Referer 同样被拦 → 是 **IP 级风控**,
+        # 不是接口变更。显式记日志, 免得只看到"K线为空"而无从定位(应换兜底源)。
+        logger.warning("[腾讯K线] %s 被 WAF 风控拦截(501), 转兜底源", tsym)
+        return []
+    if "=" not in text:
         return []
     js = text.split("=", 1)[1].strip().rstrip(";")
     try:

@@ -94,7 +94,76 @@ def _ming_flow(tencent_code: str) -> Optional[dict]:
 
 
 def _dark_flow(symbol_str: str) -> Optional[dict]:
-    """暗盘净额(L1 近似): 复用 dark_flow 拆单识别(已对齐同花顺暗盘口径)。失败返回 None。"""
+    """暗盘净额: **主线 = thsdk L2 逐笔**, 失败回退腾讯逐笔(L1 近似)。
+
+    2026-09-02 切换依据:
+      官方暗盘 = 拆单 / 对倒 / 大单拆小单的识别结果。这类"暗"资金**不在大单流里**
+      (big_order_flow 只有 ≥30 万的单, 恰恰是拆单要躲开的口径), 只能从**逐笔**认。
+      thsdk tick_super_level1 盘中实测 1683 条、委托买入价/卖出价字段完整,
+      满足 `dark_flow.py` 注释写明的切换前提, 故由对照项升为**主线**。
+      L2 不可达(非交易时段 / 未登录 / 超时)时自动回退腾讯逐笔, confidence 随之降级。
+    """
+    # ① 主线: **通达信 .tck + 同花顺 thsdk 融合**(互补闭环, 唯一能覆盖被动侧的方案)
+    #    .tck 给官方方向(2B/2S 精确)但缺被动 maker; thsdk 逐笔全量含被动但方向是推断。
+    #    两者融合 = 主动精确 + 被动覆盖, 单链路在原理上都无法闭环(详见 dark_flow_fusion)。
+    try:
+        from src.core.dark_flow_fusion import compute_dark_fusion
+
+        f = compute_dark_fusion(symbol_str)
+        if f is not None:
+            total = f.get("total")
+            active = f.get("active")
+            split = f.get("split") or {}
+            if total:
+                # 有全量逐笔 → 用它作净额(含被动侧, 最完整), 精确分量附在明细里
+                return {
+                    "net": total["net"],
+                    "inflow": total["buy"],
+                    "outflow": total["sell"],
+                    "groups": split.get("count", 0),
+                    "source": "fusion_tdx_tck+thsdk",
+                    "confidence": "fusion",
+                    "tick_count": total.get("count"),
+                    # --- 融合明细(新增字段, 供前端分口径展示) ---
+                    "active_net": (active or {}).get("net"),
+                    "active_confidence": (active or {}).get("confidence"),
+                    "split_net": split.get("net"),
+                    "passive_est": f.get("passive_est"),
+                    "passive_flag": f.get("passive_flag"),
+                    "coverage": f.get("coverage"),
+                    "fusion_note": f.get("note"),
+                }
+            if active:
+                # 只有 .tck(thsdk 不可达): 主动侧精确但被动缺失 → 显式标注不完整
+                return {
+                    "net": active["net"],
+                    "inflow": active["buy"],
+                    "outflow": active["sell"],
+                    "groups": split.get("count", 0),
+                    "source": "tdx_tck_active_only",
+                    "confidence": "official_exact_partial",
+                    "tick_count": active.get("count"),
+                    "active_net": active["net"],
+                    "split_net": split.get("net"),
+                    "passive_est": None,
+                    "passive_flag": None,
+                    "coverage": "tck_only",
+                    "fusion_note": f.get("note"),
+                }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("暗盘融合失败(%s): %s, 降级 L2 逐笔", symbol_str, str(e)[:120])
+
+    # ② 次选: 纯 thsdk L2 逐笔(委托买卖价自判断方向)
+    try:
+        from src.core.dark_flow_l2 import compute_dark_flow_l2
+
+        r = compute_dark_flow_l2(symbol_str)
+        if r is not None:
+            return r
+    except Exception as e:  # noqa: BLE001
+        logger.warning("暗盘 L2 主线失败(%s): %s, 回退腾讯逐笔", symbol_str, str(e)[:120])
+
+    # ② 回退: 腾讯逐笔(L1 近似)
     try:
         from marketdata.symbol import Symbol as MDSymbol
         from src.core.dark_flow import compute_dark_flow
