@@ -508,9 +508,11 @@ export default function KlineChart(props: {
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time
   function toChartTime(date: string, intv: KlineInterval): Time {
+    // v0.4.61: LC v5 markers / series 必须用 UTCTimestamp(秒数字), 字符串 "YYYY-MM-DD"
+    //   会导致 markers 全部静默不渲染。统一转秒。
     if (DAY_BUCKETS.includes(intv)) {
-      // 兼容 "2026-09-01" / "2026-09-01T00:00:00" → 截断到日
-      return date.substring(0, 10) as Time
+      const t = new Date(date.substring(0, 10) + 'T00:00:00Z').getTime() / 1000
+      return (Number.isFinite(t) ? t : 0) as Time
     }
     // 分钟级: 兼容 ISO 时间或 YYYY-MM-DD HH:MM:SS
     const t = new Date(date.replace(' ', 'T')).getTime() / 1000

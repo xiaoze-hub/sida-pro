@@ -99,13 +99,25 @@ interface SummaryResp {
   }> | null
 }
 
-/** 元 → 万元; null/undefined → '--' */
-function toWan(v: number | null | undefined, digits = 2): string {
+/** 元 → 带单位的紧凑显示(自动万/亿).
+ *  - |v| < 1 亿    → "+X.XX万"
+ *  - |v| >= 1 亿   → "+X.XX亿"
+ *  - null/undefined → '--'
+ */
+function toAmount(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined) return '--'
-  const wan = v / 10000
+  const abs = Math.abs(v)
+  if (abs >= 1e8) {
+    const yi = v / 1e8
+    const sign = yi > 0 ? '+' : ''
+    return `${sign}${yi.toFixed(digits)}亿`
+  }
+  const wan = v / 1e4
   const sign = wan > 0 ? '+' : ''
-  return `${sign}${wan.toFixed(digits)}`
+  return `${sign}${wan.toFixed(digits)}万`
 }
+// 旧名 toWan 保留兼容(代码里别处调用)
+const toWan = toAmount
 
 /** 红涨绿跌(国内 A 股惯例, 按用户 override 设计稿 §5.2) */
 const NET_INFLOW_CLASS = (v: number | null | undefined) =>
@@ -221,7 +233,7 @@ export default function QuotePage() {
             : '无明确信号'
     // 主力在干嘛: 暗盘 main_net
     const main = dc?.available ? (dc.main_net ?? 0) : (lastFund?.ming_net ?? 0)
-    const mainDesc = main > 0 ? `净流入 ${toWan(main)} 万` : main < 0 ? `净流出 ${toWan(main)} 万` : '数据中性'
+    const mainDesc = main > 0 ? `${toAmount(main).replace(/^\+?/, '+')}` : main < 0 ? `${toAmount(main).replace(/^\+?/, '')}` : '数据中性'
     // 风险在哪: 撤单率 + 涨跌停事件
     const cancelRate = dc?.cancel_rate
     const limits = (summary?.events ?? []).filter((e) => e.kind === 'limit_up' || e.kind === 'limit_down').length
@@ -606,8 +618,8 @@ function FundDetail({
         <thead>
           <tr className="border-b border-border/40 text-muted-foreground">
             <th className="px-2 py-1 font-medium">日期</th>
-            <th className="px-2 py-1 text-right font-medium">明盘净额(万)</th>
-            <th className="px-2 py-1 text-right font-medium">暗盘净额(万)</th>
+            <th className="px-2 py-1 text-right font-medium">净额(万/亿)</th>
+            <th className="px-2 py-1 text-right font-medium">净额(万/亿)</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/40">

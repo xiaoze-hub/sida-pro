@@ -24,13 +24,18 @@ import {
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 
-const toWan = (n: number | null | undefined): string => {
-  if (n == null) return '-'
-  const abs = Math.abs(n)
-  // 大于 1 亿 显示为 "X.XX亿", 大于 1 万显示为 "X.XX万", 否则 "X"
-  if (abs >= 1e4) return `${(n / 1e4).toFixed(2)}万`
-  return n.toFixed(2)
+/** 输入: 万元; 输出: 万元 或 亿 自动选.
+ *  - < 1.5 亿 → "X.XX万"
+ *  - >= 1.5 亿 → "X.XX亿"
+ */
+const toAmountFromWan = (wan: number | null | undefined): string => {
+  if (wan == null) return '-'
+  // wan 已是万元. 换算: 1 亿 = 1e4 万
+  if (Math.abs(wan) >= 1.5e4) return `${(wan / 1e4).toFixed(2)}亿`
+  return `${wan.toFixed(2)}万`
 }
+// 旧名 toWan 保留(代码里调用点多, 改为兼容)
+const toWan = toAmountFromWan
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true
@@ -146,9 +151,9 @@ export default function DarkFundTopPage() {
                   <th className="px-3 py-2 font-medium">#</th>
                   <th className="px-3 py-2 font-medium">代码</th>
                   <th className="px-3 py-2 font-medium">名称</th>
-                  <th className="px-3 py-2 text-right font-medium">主力净流入(万元)</th>
-                  <th className="px-3 py-2 text-right font-medium">主力占比</th>
-                  <th className="px-3 py-2 text-right font-medium">总成交额(万元)</th>
+                  <th className="px-3 py-2 text-right font-medium">主力净流入(万/亿)</th>
+                  <th className="px-3 py-2 text-right font-medium">主力净量</th>
+                  <th className="px-3 py-2 text-right font-medium">总成交额(万/亿)</th>
                   <th className="px-3 py-2 text-right font-medium">.tck 暗盘对照</th>
                   <th className="px-3 py-2 font-medium">数据源</th>
                 </tr>
@@ -177,7 +182,7 @@ export default function DarkFundTopPage() {
                         {toWan(r.main_net_wan)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {r.main_net_ratio != null ? `${(r.main_net_ratio * 100).toFixed(1)}%` : '-'}
+                        {r.main_net_ratio != null ? `${r.main_net_ratio.toFixed(0)}` : '-'}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                         {toWan(r.total_amount_wan)}
