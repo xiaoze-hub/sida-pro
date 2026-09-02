@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 # 腾讯实时量比缓存: {symbol -> (ts, volume_ratio)}。盘中 TTL 30s, 避免每轮重复请求。
 _realtime_volume_ratio_cache: dict[str, tuple[float, float | None]] = {}
 
+def _fmt_amount(n):
+    """金额自动万/亿单位 (模块级)。
+
+    v0.4.62 引入时误作嵌套函数, 致 _main_intent_report 等外层函数调用处 F821
+    (运行时 NameError 隐患, ruff 门禁拦下)。v0.4.66 提升为模块级修复。
+    非数值兜底 0, 不抛错 (展示格式化, 非数据正确性)。
+    """
+    if not isinstance(n, (int, float)):
+        n = 0
+    if abs(n) >= 1e8:
+        return f"{n/1e8:+.2f}亿"
+    return f"{n/1e4:+.0f}万"
+
+
 
 def _main_intent_both(symbol: str) -> tuple[str, dict | None]:
     """主力意图字符串+结构化一次计算(2026-08-12 性能优化)。

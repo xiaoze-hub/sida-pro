@@ -39,6 +39,10 @@
 
 - **v0.4.66 主力资金 N 日序列 + 0 轴 CROSS** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-2). `src/core/dark_pool_flow.py` 新增 `compute_pool_flow_series(symbol, days, today_overlay)` + `fund_flow_cross(series)` — 决策先锋 1/3/5 日主力资金 + "由绿转红上穿0轴=资金看多"(8问8答 §3.2). **数据约束诚实声明**: thsdk 明盘仅当日可回溯, 历史日明盘不可得 → 历史日序列用暗盘 OHLC 分摊近似(对照项, 方向可靠/幅度有偏差), 全标 `approximation=True` 不冒充完整主力口径(不编造红线); 当日(最后一根)经 `today_overlay=True` 叠加权威 ming+dark(`compute_pool_flow`). `fund_flow_cross`: prev<=0且cur>0→cross_up / prev>=0且cur<0→cross_down, None 跳过不补0, 输出 `{cross_up, cross_down, last_direction(多/空/平), points_used}`. 纯增量不动既有函数. 验证: fund_flow_cross 6 场景(上穿/下穿/等号边界/None跳过/空/多次穿越) + compute_pool_flow_series 3 场景(当日叠加权威/全近似/total汇总) + 空bars→无数据 全过. 注: `market_scan.dark_top` 接真实值留作后续(避免本次动扫描链路).
 
+### fix
+
+- **v0.4.67 _fmt_amount 提升模块级修复 F821 NameError 隐患** (28号, v0.4.62 事件残留真 bug). `src/agents/intraday_monitor.py`: `_fmt_amount` 原为两处**嵌套函数**(line 80/179, 各自在 `_main_intent_both_inner` 等内部), 但 line 524/621/622/623/630/633/637/643 等**其它函数**也调用它 → 那些作用域未定义, 运行时触发即 `NameError`(生产 v0.4.63 也带着, 只是未命中那些代码路径). CI `build-and-push-image` test job ruff 门禁(--select E9,F821,F601,F811)拦下, 报 11 处 F821. **修复**: 提升为模块级 `_fmt_amount`(line 27), 加非数值兜底; 原两处嵌套定义保留(等价影子, 最小改动). py_compile + AST 验证模块级定义就位. 注: 此修复与三件套同发, 故 v0.4.66 tag(ee2d8b9, 含 bug)不部署, 直接发 v0.4.67.
+
 ## 2026-09-01
 
 ### feature
