@@ -9,6 +9,10 @@
 
 - **v0.4.72 health 端点超时保护（生产事故 hotfix）** (28号 hotfix). **事故**: 09:44 thsdk 腾讯数据源 (web.ifzq.gtimg.cn:443) 连接风暴, worker 进程飙至 73% CPU + 1.2GB RAM, 主进程事件循环被拖死 → /api/health hang 30s+, Docker healthcheck 10s 超时堆积（实测 4 个 healthcheck 进程堆着占 ~80MB）, 容器状态 `unhealthy` 持续 30 次（FailingStreak=30）。**修复**: `src/web/api/health.py` health 端点改为薄壳, 业务逻辑包成嵌套 `_check()`, 外层 `await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT=5.0)`; 超时或异常立即返回 `down`(不再卡事件循环), Docker healthcheck 不会再堆积。**根因 thsdk 重试风暴的 circuit breaker 根治留单独 hotfix**(目前仅防二阶 healthcheck 堆积, thsdk 仍可能让业务接口变慢)。回滚预案: 立即 `docker restart panwatch`(已实测, 8 小时前那次事故用此恢复)。测试: py_compile 通过 + 模块 import 成功。
 
+### fix
+
+- **v0.4.73 thsdk 进程级熔断器 + 并发限流(v0.4.72 事故根因修复)** (28号, feat 分支). **根因回顾**: v0.4.72 健康事故是 thsdk 腾讯数据源(web.ifzq.gtimg.cn:443)连接风暴→worker 死循环重试(30s×3=90s/次)→主进程事件循环被拖死→health 端点 hang。v0.4.72 的 health 超时保护只是防二阶(healthcheck 堆积),未根治 thsdk 重试风暴。**根治**: 新增 `src/core/thsdk_breaker.py` 进程级三态熔断器(closed/open/half_open, 线程安全): 连续失败 ≥ `THRESHOLD=5` 次→`cooldown=60s` 冷却→冷却期间 thsdk_call 直接返回 default 不再调底层; 冷却后下次调用放行做半开探测(成功→关闭,失败→重新开); 配套 `Semaphore(3)` 并发信号量(同时最多 3 路 thsdk 调用,超出排队)从源头截断无限堆。**接入点**: `src/core/dark_l2.py` `_fetch_thsdk` 包 `_fetch_raw_rows` 调用(v0.4.72 事故的主要风暴点),失败/熔断中返回 `[]` 走原有降级链(腾讯逐笔→None)。**测试**: `tests/test_thsdk_breaker.py` 8 例全过(三态转换/失败计数重置/半开探测/超时/skip 验证); 集成测试: 5 次连续 ConnectionError→state=open→后续 fn 被调 0 次。其他 thsdk 调用点(chat_tools wencai/orderbook_engine/thsdk_alert 等)后续 hotfix 逐个接入,本次只动事故主路径 dark_l2,风险最小。
+
 ## 2026-09-03
 
 ### fix
