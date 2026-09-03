@@ -147,7 +147,7 @@ export default function DarkFundTopPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/60 bg-accent/20 text-[11px] text-muted-foreground">
+                <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
                   <th className="px-3 py-2 font-medium">#</th>
                   <th className="px-3 py-2 font-medium">代码</th>
                   <th className="px-3 py-2 font-medium">名称</th>

@@ -215,11 +215,11 @@ export default function MarketMainlineCard() {
 
   if (loading && !data) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3 animate-pulse">
-        <div className="h-[20px] w-1/3 bg-accent/30 rounded mb-2" />
+      <div className="animate-pulse">
+        <div className="h-[20px] w-1/3 bg-muted/40 rounded mb-2" />
         <div className="space-y-1.5">
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-[36px] bg-accent/20 rounded" />
+            <div key={i} className="h-[36px] bg-muted/40 rounded" />
           ))}
         </div>
       </div>
@@ -234,7 +234,7 @@ export default function MarketMainlineCard() {
 
   if (ranked.length === 0) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="border-t border-border/60 pt-2.5">
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="text-[13px] font-semibold text-foreground">🎯 市场主线</div>
           {updatedAt && (
@@ -256,7 +256,7 @@ export default function MarketMainlineCard() {
   const rest = ranked.slice(10)
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="border-t border-border/60 pt-2.5">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <div className="text-[13px] font-semibold text-foreground">🎯 市场主线</div>

@@ -25,6 +25,7 @@ import {
   type HistoryComparisonResponse,
 } from '@panwatch/api'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
+import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { buildAnalysisSections } from '@panwatch/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
 
@@ -342,6 +343,11 @@ export default function AnalysisDetailPage() {
                 </>
               )}
             </div>
+          </div>
+
+          {/* K线主图(P1-7 终端化: 主图 + 副图在上, 长文在下; 与 IndexDetail 同款组件, 非 Quote/KlineChart scope) */}
+          <div className="mb-10 border-b border-border/40 pb-4">
+            <InteractiveKline symbol={symbol} market={inferMarket(symbol)} initialInterval="1d" initialDays="120" />
           </div>
 
           {/* 各部分长文 */}

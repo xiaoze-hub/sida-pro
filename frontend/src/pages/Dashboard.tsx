@@ -562,6 +562,156 @@ export default function DashboardPage() {
         sealRate={phaseKpi.sealRate}
       />
 
+      {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
+      {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
+      <div id="market-phase-anchor" className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
+        <MarketPhaseCard />
+        <MarketMainlineCard />
+        {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
+        <PhaseGaugeCard />
+      </div>
+
+      {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
+      {/* 反AI模板 P2:次要列表区去卡片化 — 去掉盒子, 顶部 1px hairline + 留白, 标题/指标直排 */}
+      {marketFlow && (
+        <div className="mt-5 border-t border-border/60 pt-3">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[13px] font-semibold">大盘资金流</span>
+            <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+              <span className="text-muted-foreground">主力净流入
+                <b className={`font-mono text-[15px] font-semibold ${(marketFlow.total_main_flow ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                  <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
+                </b>
+              </span>
+              <span className="text-muted-foreground">成交额 <b className="font-mono">{safeFixed(marketFlow.total_amount, 0, '0')}亿</b></span>
+              <span className="text-muted-foreground">涨 <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
+                <span className="mx-1">/</span>跌 <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
+              <span className="text-muted-foreground">沪 <b className="font-mono">{safeFixed(marketFlow.sh_flow, 1)}亿</b>
+                <span className="mx-1">/</span>深 <b className="font-mono">{safeFixed(marketFlow.sz_flow, 1)}亿</b></span>
+            </div>
+
+          {/* v0.4.7: 日内主力净流入面积图(30s 快照序列) */}
+          <FlowHistoryChart />
+
+          {/* 板块资金明细: 流入榜 / 流出榜 */}
+          {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {marketFlow.inflow_boards?.length ? (
+                <div>
+                  <div className="mb-1 text-[11px] font-semibold text-stock-up">资金流入板块</div>
+                  <div className="space-y-0.5">
+                    {(() => {
+                      const maxIn = Math.max(...(marketFlow.inflow_boards?.map(x => x.net_inflow) || [1]), 0.01)
+                      return marketFlow.inflow_boards.map((b, bi) => (
+                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
+                          <div className="absolute inset-y-0 left-0 bg-stock-up/10 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
+                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 font-mono text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                </div>
+              ) : null}
+              {marketFlow.outflow_boards?.length ? (
+                <div>
+                  <div className="mb-1 text-[11px] font-semibold text-stock-down">资金流出板块</div>
+                  <div className="space-y-0.5">
+                    {(() => {
+                      const maxOut = Math.max(...(marketFlow.outflow_boards?.map(x => Math.abs(x.net_inflow)) || [1]), 0.01)
+                      return marketFlow.outflow_boards.map((b, bi) => (
+                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
+                          <div className="absolute inset-y-0 left-0 bg-stock-down/10 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
+                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 font-mono text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* 异动池(东财) | 热榜(同花顺):并排双列,移动端堆叠;独立加载,任一失败静默不影响首页 */}
+      {/* 反AI模板 P2:异动/热榜同为列表感区块, 去卡片化 — 与大盘资金流一致 hairline 分隔 */}
+      <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
+        {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
+        <div className="border-t border-border/60 pt-2.5">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h2 className="text-[13px] font-semibold">异动池</h2>
+            <span className="text-[10px] text-muted-foreground">东财异动</span>
+            {anomaliesLoading && anomalies.length === 0 && (
+              <RefreshCw className="ml-auto h-3 w-3 animate-spin self-center text-muted-foreground" />
+            )}
+          </div>
+          {anomaliesLoading && anomalies.length === 0 ? (
+            <div className="space-y-2 py-1">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : anomalies.length === 0 ? (
+            <div className="py-6 text-center text-[12px] text-muted-foreground">暂无异动数据</div>
+          ) : (
+            <div className="divide-y divide-border/40">
+              {anomalies.map((a, i) => {
+                const sym = a.symbol || a.code || ''
+                const dev = a.deviation ?? a.deviation_pct ?? null
+                const days = a.deviation_days ?? a.days
+                const rule = a.rule || a.reason || ''
+                return (
+                  <button
+                    key={`${sym}-${i}`}
+                    type="button"
+                    onClick={() => sym && openStock(sym, a.market || 'CN', a.name || '')}
+                    onContextMenu={(e) => {
+                      if (!sym) return
+                      openStockContextMenu(e, { symbol: sym, name: a.name || sym, market: a.market || 'CN', hasPosition: false })
+                    }}
+                    className="flex w-full items-center gap-2.5 py-1.5 text-left transition-colors hover:bg-accent/30"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
+                        {a.is_today && (
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">当日</span>
+                        )}
+                      </div>
+                      {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
+                    </div>
+                    {dev != null && (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        偏离 {pct(dev)}
+                        {days ? ` · ${days}天` : ''}
+                      </span>
+                    )}
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(a.change_pct)}`}>
+                      {a.change_pct != null ? pct(a.change_pct) : '--'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* v0.4.7: 全市场涨跌分布(双向柱) */}
+        <div className="border-t border-border/60 pt-2.5">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h2 className="text-[13px] font-semibold">涨跌分布</h2>
+            <span className="text-[10px] text-muted-foreground">全A · 9档</span>
+          </div>
+          <BreadthDistributionChart />
+        </div>
+      </div>
+      {/* 热榜已移除(v0.4.7): 与发现页重复 */}
+
       {/* 主体:PC 工作台 3 列(要紧事3 | 体检6 | 机会3);次级 2 列(简报6 | 机会发现6)。1280px 以下回退 7/5-5/7 两行布局 */}
       {/* 反AI模板 P2:上方列表区已去卡片化, 工作台卡片区补 mt-3 维持呼吸感 */}
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
@@ -913,154 +1063,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
-      <div id="market-phase-anchor" className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
-        <MarketPhaseCard />
-        <MarketMainlineCard />
-        {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
-        <PhaseGaugeCard />
-      </div>
 
-      {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
-      {/* 反AI模板 P2:次要列表区去卡片化 — 去掉盒子, 顶部 1px hairline + 留白, 标题/指标直排 */}
-      {marketFlow && (
-        <div className="mt-5 border-t border-border/60 pt-3">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-semibold">大盘资金流</span>
-            <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
-          </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-              <span className="text-muted-foreground">主力净流入
-                <b className={`font-mono text-[15px] font-semibold ${(marketFlow.total_main_flow ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-                  <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
-                </b>
-              </span>
-              <span className="text-muted-foreground">成交额 <b className="font-mono">{safeFixed(marketFlow.total_amount, 0, '0')}亿</b></span>
-              <span className="text-muted-foreground">涨 <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
-                <span className="mx-1">/</span>跌 <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
-              <span className="text-muted-foreground">沪 <b className="font-mono">{safeFixed(marketFlow.sh_flow, 1)}亿</b>
-                <span className="mx-1">/</span>深 <b className="font-mono">{safeFixed(marketFlow.sz_flow, 1)}亿</b></span>
-            </div>
-
-          {/* v0.4.7: 日内主力净流入面积图(30s 快照序列) */}
-          <FlowHistoryChart />
-
-          {/* 板块资金明细: 流入榜 / 流出榜 */}
-          {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
-            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {marketFlow.inflow_boards?.length ? (
-                <div>
-                  <div className="mb-1 text-[11px] font-semibold text-stock-up">资金流入板块</div>
-                  <div className="space-y-0.5">
-                    {(() => {
-                      const maxIn = Math.max(...(marketFlow.inflow_boards?.map(x => x.net_inflow) || [1]), 0.01)
-                      return marketFlow.inflow_boards.map((b, bi) => (
-                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
-                          <div className="absolute inset-y-0 left-0 bg-stock-up/10 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
-                          <span className="relative z-10 font-mono text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
-                        </div>
-                      ))
-                    })()}
-                  </div>
-                </div>
-              ) : null}
-              {marketFlow.outflow_boards?.length ? (
-                <div>
-                  <div className="mb-1 text-[11px] font-semibold text-stock-down">资金流出板块</div>
-                  <div className="space-y-0.5">
-                    {(() => {
-                      const maxOut = Math.max(...(marketFlow.outflow_boards?.map(x => Math.abs(x.net_inflow)) || [1]), 0.01)
-                      return marketFlow.outflow_boards.map((b, bi) => (
-                        <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
-                          <div className="absolute inset-y-0 left-0 bg-stock-down/10 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
-                          <span className="relative z-10 font-mono text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
-                        </div>
-                      ))
-                    })()}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      {/* 异动池(东财) | 热榜(同花顺):并排双列,移动端堆叠;独立加载,任一失败静默不影响首页 */}
-      {/* 反AI模板 P2:异动/热榜同为列表感区块, 去卡片化 — 与大盘资金流一致 hairline 分隔 */}
-      <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
-        {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
-        <div className="border-t border-border/60 pt-2.5">
-          <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">异动池</h2>
-            <span className="text-[10px] text-muted-foreground">东财异动</span>
-            {anomaliesLoading && anomalies.length === 0 && (
-              <RefreshCw className="ml-auto h-3 w-3 animate-spin self-center text-muted-foreground" />
-            )}
-          </div>
-          {anomaliesLoading && anomalies.length === 0 ? (
-            <div className="space-y-2 py-1">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : anomalies.length === 0 ? (
-            <div className="py-6 text-center text-[12px] text-muted-foreground">暂无异动数据</div>
-          ) : (
-            <div className="divide-y divide-border/40">
-              {anomalies.map((a, i) => {
-                const sym = a.symbol || a.code || ''
-                const dev = a.deviation ?? a.deviation_pct ?? null
-                const days = a.deviation_days ?? a.days
-                const rule = a.rule || a.reason || ''
-                return (
-                  <button
-                    key={`${sym}-${i}`}
-                    type="button"
-                    onClick={() => sym && openStock(sym, a.market || 'CN', a.name || '')}
-                    onContextMenu={(e) => {
-                      if (!sym) return
-                      openStockContextMenu(e, { symbol: sym, name: a.name || sym, market: a.market || 'CN', hasPosition: false })
-                    }}
-                    className="flex w-full items-center gap-2.5 py-1.5 text-left transition-colors hover:bg-accent/30"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
-                        {a.is_today && (
-                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">当日</span>
-                        )}
-                      </div>
-                      {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
-                    </div>
-                    {dev != null && (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        偏离 {pct(dev)}
-                        {days ? ` · ${days}天` : ''}
-                      </span>
-                    )}
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(a.change_pct)}`}>
-                      {a.change_pct != null ? pct(a.change_pct) : '--'}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* v0.4.7: 全市场涨跌分布(双向柱) */}
-        <div className="border-t border-border/60 pt-2.5">
-          <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">涨跌分布</h2>
-            <span className="text-[10px] text-muted-foreground">全A · 9档</span>
-          </div>
-          <BreadthDistributionChart />
-        </div>
-      </div>
-      {/* 热榜已移除(v0.4.7): 与发现页重复 */}
 
       <StockInsightModal
         open={modal.open}
@@ -1132,7 +1135,7 @@ function PhaseGaugeCard() {
     return () => { alive = false; window.clearInterval(t) }
   }, [])
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
         <span className="text-[13px] font-semibold">市场温度</span>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45</span>
