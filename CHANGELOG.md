@@ -19,6 +19,16 @@
 
 - **撤大额撤单重叠显示修复** (用户截图: 神剑 002361 K线弹窗右上 7 个"撤大额撤单"摞成一摞). 根因 `l4_events.cancel_anomalies` 同一日每笔大撤单各产一条事件(最多 20 条), 前端按事件画 marker, 同 date 下 N 个 marker 全叠在同一根 K 线上完全重合. **修复**: 后端按日聚合成一条(label `大额撤单(N笔)`, shares 合计, count 笔数, time 取最晚一笔, 新增 `_safe_vol`/`_t_sort_key` 安全取值); 前端 `InteractiveKline` + `KlineChart` 同 date+kind marker 合并为一个(文案缀 `×N`), 防以后其他多事件同日再叠. 测试: `test_l4_events.py` 27 passed (含新增聚合用例) + 前端 tsc 0 error. [commit 2bf0033]
 
+### feature
+
+- **终端化 P1-1 小三页去卡片** (研究文档 §5 P1 地基层: IndexDetail/DarkFundTop/AnalysisDetail). card 边框底 → hairline 分隔 + 颜色收敛 stock 令牌, 零逻辑改动. tsc 0 error. [commit f0078db]
+- **终端化 P1-2 Dashboard 去卡片** (4 大区 hairline + 指数 pill 去底 + FEED_BADGE/amber 暗色收敛 + 基准占位虚线框). 数字层零改动(单位亿/万口径已核对). tsc 0 error. [commit 65adfdb]
+- **终端化 P1-3 Forecast 去卡片** (输入侧栏/进度/结果/报告/回测/历史 6 区 hairline + 方向色 stock 令牌 + hit/miss emerald/rose 暗色修复 + T+N chips/report 框去底). tsc 0 error. [commit 4119780]
+- **终端化 P1-4 Opportunities 候选卡瘦身 + 共振可视** (研究文档 §5: OpportunityCard 堆叠 → 紧凑列表行; 15 行元数据压成入场/止损/目标/策略/来源徽章 2 行 + 因子 1 行; 顶部统计/因子/状态条去卡片; 🔥共振徽章保留前置; 修 tdx 行 dark 下 emerald-700 隐形 bug). tsc 0 error. [commit 475d05f]
+- **终端化 P1-5 Forecast 预测锥图** (研究文档 §5: 预测结果卡 → K线+预测曲线叠加). 新建 `ForecastConeChart.tsx`: ECharts 历史收盘 60 日(灰线, `/klines` 接口) + 预测中线延伸(方向着色) + Kronos P5-P95 置信带(堆叠面积); 未来横轴只标 T+1..n 不编造日期; 历史拉不到降级纯预测段. tsc 0 error + vite build 通过. [commit 542dec4]
+- **终端化 P1-6 Dashboard 首屏重排 + 情绪三卡去卡片** (研究文档 §5: 总览卡片 → 模块化大屏). 首屏改先市场后个人: 情绪周期/市场主线/市场温度/大盘资金流/异动+分布整体前置到 KpiBand 之后, 个人工作台(要紧事/体检/机会)后置; MarketPhaseCard/MarketMainlineCard(仅 Dashboard 引用, 源头去卡片)/本地 PhaseGaugeCard 根容器去 card 底. tsc 0 error + vite build 通过. [commit 0a63aae]
+- **终端化 P1-7 AnalysisDetail 嵌 K线主图 + P1-8 收尾** (研究文档 §5: 详情页 → 主图+副图+文字). 正文顶部嵌入 InteractiveKline(与 IndexDetail 同款, 未碰 28号 Quote/KlineChart scope); DarkFundTop thead 去底色; IndexDetail 经核对已达标(主图裸放+副图)零改动. tsc 0 error + vite build 通过. [commit 0a63aae]
+
 ## 2026-09-02
 
 ### fix

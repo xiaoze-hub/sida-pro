@@ -1112,7 +1112,7 @@ export default function OpportunitiesPage() {
 
       {/* 后台刷新任务进行中提示条:让用户知道任务在跑、预期多久 */}
       {refreshing && (
-        <div className="card p-3 mb-4 flex items-center gap-2 text-[12px] text-primary">
+        <div className="border-b border-border/60 px-1 py-2 mb-4 flex items-center gap-2 text-[12px] text-primary">
           <span className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0" />
           <div className="flex-1">
             <span className="font-medium">后台刷新中…</span>
@@ -1123,28 +1123,28 @@ export default function OpportunitiesPage() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div className="card relative overflow-hidden p-3 border-l-2 border-l-primary">
+        <div className="border-l-2 border-l-primary pl-3 py-1">
           <div className="text-[11px] font-semibold text-foreground/80">当前候选(全局)</div>
           <div className="text-[24px] font-bold mt-1 font-num tabular-nums">{globalCoverage?.total_signals ?? '--'}</div>
           <div className="text-[10px] text-muted-foreground mt-1">
             可执行: {globalCoverage?.active_signals ?? '--'}，观察: {(globalCoverage?.total_signals != null && globalCoverage?.active_signals != null) ? Math.max(0, globalCoverage.total_signals - globalCoverage.active_signals) : '--'}
           </div>
         </div>
-        <div className="card p-3">
+        <div className="border-l border-border/40 pl-3 py-1">
           <div className="text-[11px] text-muted-foreground">市场池占比</div>
           <div className="text-[18px] font-bold mt-1">{globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}</div>
           <div className="text-[10px] text-muted-foreground mt-1">
             市场池: {globalCoverage?.market_scan_signals ?? '--'}，关注池: {globalCoverage?.watchlist_signals ?? '--'}，融合: {globalCoverage?.mixed_signals ?? '--'}
           </div>
         </div>
-        <div className="card p-3">
+        <div className="border-l border-border/40 pl-3 py-1">
           <div className="text-[11px] text-muted-foreground">本次筛选结果</div>
           <div className="text-[18px] font-bold mt-1">{filteredSummary.total}</div>
           <div className="text-[10px] text-muted-foreground mt-1">
             未持仓: {filteredSummary.unheld}，市场池: {filteredSummary.marketPool}
           </div>
         </div>
-        <div className="card p-3">
+        <div className="border-l border-border/40 pl-3 py-1">
           <div className="text-[11px] text-muted-foreground">3日胜率(自动评估)</div>
           <div className="text-[18px] font-bold mt-1">{outcome3d ? `${outcome3d.win_rate.toFixed(1)}%` : '--'}</div>
           <div className="text-[10px] text-muted-foreground mt-1">
@@ -1344,7 +1344,7 @@ export default function OpportunitiesPage() {
         </button>
       </div>
       {/* ── 选股工具: 共振查询 / 策略选股 / 问小达 / 问财, 主动查询, 结果并入下方候选池 ── */}
-      <div className="card p-4 mb-4">
+      <div className="border-y border-border/60 py-3 mb-4">
         <Tabs value={toolTab} onValueChange={(v) => setToolTab(v as ToolTab)}>
           <TabsList>
             <TabsTrigger value="resonance">共振查询</TabsTrigger>
@@ -1733,7 +1733,7 @@ export default function OpportunitiesPage() {
                               <span
                                 className={
                                   String(chg).startsWith('-')
-                                    ? 'text-emerald-700 dark:text-emerald-700'
+                                    ? 'text-emerald-700 dark:text-emerald-400'
                                     : 'text-rose-700 dark:text-rose-400'
                                 }
                               >
@@ -1860,26 +1860,26 @@ export default function OpportunitiesPage() {
 
       {(factorStats || constraintStats) && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均Alpha因子</div>
             <div className="text-[18px] font-bold mt-1">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
             <div className="text-[10px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均事件催化</div>
             <div className="text-[18px] font-bold mt-1">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
             <div className="text-[10px] text-muted-foreground mt-1">
               拥挤惩罚 {factorStats ? factorStats.avg_crowd_penalty.toFixed(1) : '--'}
             </div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均质量/风险</div>
             <div className="text-[18px] font-bold mt-1">
               {factorStats ? `${factorStats.avg_quality_score.toFixed(1)} / ${factorStats.avg_risk_penalty.toFixed(1)}` : '--'}
             </div>
             <div className="text-[10px] text-muted-foreground mt-1">质量分越高越好</div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">组合约束降级</div>
             <div className="text-[18px] font-bold mt-1">{constraintStats?.constrained_top20 ?? 0}</div>
             <div className="text-[10px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
@@ -1888,7 +1888,7 @@ export default function OpportunitiesPage() {
       )}
 
       {(regimeSummary.length > 0 || riskSummary.length > 0) && (
-        <div className="card p-3 mb-4">
+        <div className="border-y border-border/60 py-2.5 mb-4">
           <div className="text-[11px] text-muted-foreground mb-2">市场状态与组合风险</div>
           <div className="flex flex-wrap gap-2">
             {regimeSummary.map((r) => (
@@ -1907,13 +1907,13 @@ export default function OpportunitiesPage() {
 
 
       {error && (
-        <div className="card p-3 mb-4 text-[12px] text-amber-700 dark:text-amber-500 flex items-center gap-2">
+        <div className="px-1 py-2 mb-4 text-[12px] text-amber-700 dark:text-amber-500 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="border-t border-border/60">
         {visibleItems.map((group) => {
           const item = group.primary
           const payload = item.payload && typeof item.payload === 'object' ? item.payload as Record<string, unknown> : {}
@@ -1948,7 +1948,7 @@ export default function OpportunitiesPage() {
             ? (group.members.some((x) => x.source_pool === 'mixed') ? '市场+关注' : '市场池')
             : (item.source_pool_label || '关注池')
           return (
-            <div key={stateKey} className={`card p-3 sm:p-4 transition-colors ${toneClass(item)}`}>
+            <div key={stateKey} className={`border-b border-border/40 py-2.5 transition-colors hover:bg-accent/30 ${toneClass(item)}`}>
               <button className="w-full text-left" onClick={() => openInsight(item)}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
@@ -1986,44 +1986,32 @@ export default function OpportunitiesPage() {
                   </div>
                 </div>
                 <div className="mt-1.5 text-[12px] leading-5 text-foreground line-clamp-2">{item.signal || item.reason || '--'}</div>
-                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] leading-4 text-muted-foreground">
-                  <div className="font-medium text-foreground/90">入场: {formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
-                  <div>止损: {formatPlanPrice(stopLoss)}</div>
-                  <div>目标: {formatPlanPrice(targetPrice)}</div>
-                  <div>失效: {item.invalidation || '--'}</div>
-                  <div>
-                    策略: {strategyHead}
-                    {strategyTailCount > 0 ? ` +${strategyTailCount}` : ''}
-                  </div>
-                  {/* P1 多源整合: 来源徽章(命中来源全部展示) */}
-                  <div className="flex items-center gap-1 flex-wrap col-span-2">
-                    <span>来源:</span>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
+                  <span className="font-medium text-foreground/90">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
+                  <span>止损 {formatPlanPrice(stopLoss)}</span>
+                  <span>目标 {formatPlanPrice(targetPrice)}</span>
+                  <span>失效 {item.invalidation || '--'}</span>
+                  <span>策略 {strategyHead}{strategyTailCount > 0 ? ` +${strategyTailCount}` : ''}</span>
+                  {/* P1 多源整合: 来源徽章(命中来源全部展示, 共振可视) */}
+                  <span className="inline-flex items-center gap-1">
                     {badgeSources.map((s) => (
                       <span
                         key={s}
-                        className="inline-flex items-center px-1.5 py-0 rounded text-[10px] rounded-full bg-primary/10 text-primary"
+                        className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[10px]"
                       >
                         {sourceCn(s) || s}
                       </span>
                     ))}
-                  </div>
-                  <div>来源池: {sourcePoolLabel}</div>
-                  <div>
-                    来源Agent: {sourceAgentHead}
-                    {sourceAgentTailCount > 0 ? ` +${sourceAgentTailCount}` : ''}
-                  </div>
-                  <div>风险: {item.risk_level_label || item.risk_level || '--'}</div>
-                  <div>市场状态: {marketRegime.regime_label || marketRegime.regime || '--'}</div>
-                  <div>持仓: {item.is_holding_snapshot ? '持仓中' : '未持仓'}</div>
-                  <div>市场: {marketLabel(item.stock_market)}</div>
+                  </span>
+                  <span>{sourcePoolLabel} · {sourceAgentHead}{sourceAgentTailCount > 0 ? ` +${sourceAgentTailCount}` : ''} · {item.risk_level_label || item.risk_level || '--'} · {marketRegime.regime_label || marketRegime.regime || '--'} · {item.is_holding_snapshot ? '持仓中' : '未持仓'}</span>
                 </div>
-                <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-4 text-muted-foreground">
-                  <div>Alpha: {formatMetric(breakdown.alpha_score)}</div>
-                  <div>催化: {formatMetric(breakdown.catalyst_score)}</div>
-                  <div>质量: {formatMetric(breakdown.quality_score)}</div>
-                  <div>风险惩罚: {formatMetric(breakdown.risk_penalty)}</div>
-                  <div>相对强弱: {crossFeature.relative_strength_pct != null ? `${Number(crossFeature.relative_strength_pct).toFixed(0)}分位` : '--'}</div>
-                  <div className="font-medium text-foreground/90">事件催化: {eventScore != null ? eventScore.toFixed(1) : '--'}{eventCount > 0 ? `（${eventCount}条）` : '（无命中）'}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] leading-4 text-muted-foreground/80">
+                  <span>α {formatMetric(breakdown.alpha_score)}</span>
+                  <span>催化 {formatMetric(breakdown.catalyst_score)}</span>
+                  <span>质量 {formatMetric(breakdown.quality_score)}</span>
+                  <span>风控罚 {formatMetric(breakdown.risk_penalty)}</span>
+                  <span>RS {crossFeature.relative_strength_pct != null ? `${Number(crossFeature.relative_strength_pct).toFixed(0)}分位` : '--'}</span>
+                  <span>事件 {eventScore != null ? eventScore.toFixed(1) : '--'}{eventCount > 0 ? `（${eventCount}条）` : ''}</span>
                 </div>
                 {item.factor_explain && (((item.factor_explain.positive?.length ?? 0) > 0) || ((item.factor_explain.negative?.length ?? 0) > 0)) && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
@@ -2099,7 +2087,7 @@ export default function OpportunitiesPage() {
       </div>
 
       {!loading && groupedItems.length === 0 && (
-        <div className="card p-8 text-center text-[12px] text-muted-foreground mt-4">暂无满足条件的机会</div>
+        <div className="py-8 text-center text-[12px] text-muted-foreground mt-4">暂无满足条件的机会</div>
       )}
 
       <details className="mt-6 group">

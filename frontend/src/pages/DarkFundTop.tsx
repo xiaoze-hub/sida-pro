@@ -47,13 +47,13 @@ function isUnavailable(r: DarkFundTopResp): r is DarkFundTopUnavailable {
 
 // 简约 loading / error / empty panel (与 Quote.tsx 同款, 不引入新组件)
 function SimpleLoading({ text }: { text: string }) {
-  return <div className="card p-8 text-center text-[12px] text-muted-foreground">{text}</div>
+  return <div className="p-8 text-center text-[12px] text-muted-foreground">{text}</div>
 }
 function SimpleError({ text }: { text: string }) {
-  return <div className="card p-8 text-center text-[12px] text-rose-500">{text}</div>
+  return <div className="p-8 text-center text-[12px] text-rose-500">{text}</div>
 }
 function SimpleEmpty({ text }: { text: string }) {
-  return <div className="card p-8 text-center text-[12px] text-muted-foreground">{text}</div>
+  return <div className="p-8 text-center text-[12px] text-muted-foreground">{text}</div>
 }
 
 export default function DarkFundTopPage() {
@@ -100,7 +100,7 @@ export default function DarkFundTopPage() {
   if (isUnavailable(data)) {
     return (
       <div className="space-y-4">
-        <div className="card p-6 text-center">
+        <div className="p-6 text-center border-b border-border/40">
           <AlertTriangle className="mx-auto h-8 w-8 text-amber-500" />
           <div className="mt-3 text-[14px] font-medium text-foreground">暂无暗盘资金 TOP 快照</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{data.note}</p>
@@ -120,7 +120,7 @@ export default function DarkFundTopPage() {
     return (
       <div className="space-y-4">
         {/* 顶部摘要 + 操作栏 */}
-        <div className="card p-4">
+        <div className="border-b border-border/40 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
@@ -143,11 +143,11 @@ export default function DarkFundTopPage() {
           </div>
         </div>
 
-        <div className="card overflow-hidden">
+        <div className="overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/60 bg-accent/20 text-[11px] text-muted-foreground">
+                <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
                   <th className="px-3 py-2 font-medium">#</th>
                   <th className="px-3 py-2 font-medium">代码</th>
                   <th className="px-3 py-2 font-medium">名称</th>
