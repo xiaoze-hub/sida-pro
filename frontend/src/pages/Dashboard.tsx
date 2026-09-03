@@ -135,10 +135,10 @@ const ALERT_LABEL: Record<string, string> = {
 }
 
 const FEED_BADGE: Record<string, { label: string; cls: string }> = {
-  alert: { label: '提醒命中', cls: 'bg-rose-500/15 text-red-600' },
-  holding: { label: '持仓', cls: 'bg-emerald-500/15 text-green-700' },
+  alert: { label: '提醒命中', cls: 'bg-stock-up/15 text-stock-up' },
+  holding: { label: '持仓', cls: 'bg-stock-down/15 text-stock-down' },
   watch: { label: '自选', cls: 'bg-accent text-muted-foreground' },
-  risk: { label: '风险', cls: 'bg-amber-500/15 text-amber-600' },
+  risk: { label: '风险', cls: 'bg-amber-500/15 text-amber-500' },
   opportunity: { label: '机会', cls: 'bg-primary/10 text-primary' },
 }
 
@@ -515,7 +515,7 @@ export default function DashboardPage() {
       <div className="mb-3 grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
         {loading && indices.length === 0
           ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="card p-2.5">
+              <div key={i} className="p-2.5">
                 <Skeleton className="h-2.5 w-16" />
                 <Skeleton className="mt-1.5 h-4 w-14" />
                 <Skeleton className="mt-2 h-6 w-full" />
@@ -525,7 +525,7 @@ export default function DashboardPage() {
           <button
             key={`${ix.market}:${ix.symbol}`}
             onClick={() => navigate(`/index/${ix.symbol}`)}
-            className="card relative p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer"
+            className="relative rounded-md border border-border/40 p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer"
           >
             <div className="flex items-start justify-between gap-1">
               <div className="min-w-0">
@@ -566,7 +566,7 @@ export default function DashboardPage() {
       {/* 反AI模板 P2:上方列表区已去卡片化, 工作台卡片区补 mt-3 维持呼吸感 */}
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* 今日要紧事(左列,窄) */}
-        <div className="card p-4 lg:col-span-7 xl:col-span-3">
+        <div className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
           <div className="mb-2 flex items-center gap-2">
             <Activity className="h-4 w-4 text-primary" />
             <h2 className="text-sm font-semibold">今日要紧事</h2>
@@ -600,7 +600,7 @@ export default function DashboardPage() {
                       openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
                     }}
                   >
-                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-600">
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
                     <span className="truncate">{t.message}</span>
@@ -645,7 +645,7 @@ export default function DashboardPage() {
         </div>
 
         {/* 组合体检(中列,宽) */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-6">
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
           <div className="mb-2 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-primary" />
             <h2 className="text-sm font-semibold">组合体检</h2>
@@ -718,7 +718,7 @@ export default function DashboardPage() {
               {benchState === 'ready' && bench?.curve && bench.curve.length >= 2 ? (
                 <BenchChart curve={bench.curve} />
               ) : (
-                <div className="flex h-[150px] flex-col items-center justify-center gap-2 rounded-lg bg-accent/10 text-[11px] text-muted-foreground">
+                <div className="flex h-[150px] flex-col items-center justify-center gap-2 border border-dashed border-border/50 text-[11px] text-muted-foreground">
                   {benchState === 'loading' && <span>基准对比计算中…(需拉全部持仓 K 线,约 1 分钟)</span>}
                   {benchState === 'empty' && <span>{bench?.reason || '数据不足,暂无法计算基准对比'}</span>}
                   {benchState === 'error' && (
@@ -738,7 +738,7 @@ export default function DashboardPage() {
 
               <div className="flex justify-between">
                 <span className="text-muted-foreground">持仓 {diag!.position_count} 只 · 最大单仓</span>
-                <span className={`font-mono ${diag!.max_weight >= 0.4 ? 'text-amber-600' : ''}`}>
+                <span className={`font-mono ${diag!.max_weight >= 0.4 ? 'text-amber-500' : ''}`}>
                   {(diag!.max_weight * 100).toFixed(0)}%
                 </span>
               </div>
@@ -793,14 +793,14 @@ export default function DashboardPage() {
               {diag!.alerts.length > 0 ? (
                 <div className="space-y-1 pt-1">
                   {diag!.alerts.map((a, i) => (
-                    <div key={i} className="flex items-start gap-1 text-[11px] text-amber-600">
+                    <div key={i} className="flex items-start gap-1 text-[11px] text-amber-500">
                       <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                       <span>{a}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="pt-1 text-[11px] text-green-700">✓ 集中度/分布未见明显风险</div>
+                <div className="pt-1 text-[11px] text-stock-up">✓ 集中度/分布未见明显风险</div>
               )}
               <button
                 type="button"
@@ -820,7 +820,7 @@ export default function DashboardPage() {
         </div>
 
         {/* 机会精选(右列,窄) */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-3">
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描图标 */}
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold">机会精选</h2>
@@ -867,7 +867,7 @@ export default function DashboardPage() {
         </div>
 
 {/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-3">
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           <div className="mb-1.5 flex items-baseline gap-2">
             <h2 className="text-[13px] font-semibold">最新报告</h2>
             <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
@@ -1030,7 +1030,7 @@ export default function DashboardPage() {
                         <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
-                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-600">当日</span>
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">当日</span>
                         )}
                       </div>
                       {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
