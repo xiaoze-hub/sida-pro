@@ -339,7 +339,7 @@ export const dashboardApi = {
     }),
 
   history: (params: Record<string, QueryValue>) =>
-    fetchAPI<DashboardHistoryItem[]>(withQuery('/history', params)),
+    fetchAPI<DashboardHistoryItem[]>(withQuery('/history', { ...params, summary_only: true })),
 
   intradayScan: (params?: { analyze?: boolean }) =>
     fetchAPI<DashboardIntradayScanResponse>(

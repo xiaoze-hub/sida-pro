@@ -21,9 +21,17 @@ router = APIRouter()
 ORDERBOOK_TIMEOUT_S = 8.0
 
 # 2026-08-20: summary 接口开盘后 20-30s(主力意图逐笔翻页), 与前端并发请求叠加
-# 撞 Caddy 30s 反代超时 → 502 Bad Gateway。加 30s 进程内缓存, 单次冷启动后秒回。
+# 撞 Caddy 30s 反代超时 → 502 Bad Gateway。加 5min 进程内缓存 + PG 落库,
+# 单次冷启动后秒回; 进程重启/容器迁移靠 summary_cache 表兜底(v0.4.77)。
+from src.core.summary_cache import (  # noqa: E402
+    get_cached_summary,
+    put_cached_summary,
+    clear_summary_cache as _clear_summary_cache,
+)
+
 _SUMMARY_CACHE: dict = {}
 _SUMMARY_TTL = 300.0  # v0.4.8.1: 30s→5min, 冷启动重算20-30s太贵; 技术指标分钟级刷新足够
+_SUMMARY_PG_TTL = 300  # PG 落库 TTL 同进程内缓存, 双层一致
 
 
 class KlineItem(BaseModel):
@@ -698,11 +706,17 @@ def _to_tencent(symbol: str) -> str:
 
 
 @router.get("/{symbol}/l2-ticks")
-def get_l2_ticks_history(symbol: str, market: str = "CN", days: int = 5, fetch: int = 1):
-    """L2 逐笔落库回查(09-03)。
+def get_l2_ticks_history(
+    symbol: str,
+    market: str = "CN",
+    days: int = 5,
+    fetch: int = 0,  # v0.4.77: 默认 0(只读库), 实时拉走后台 cron(5min);
+                    #       前端按 1=触发主动抓取, 不再默认每请求实时拉
+):
+    """L2 逐笔落库回查(v0.4.77 fetch 默认 0, 只读库)。
 
-    fetch=1(默认): 先实时拉一份落库再返回库里序列(回测攒数据);
-    fetch=0: 只读库(纯回查, 不触发外部拉取)。
+    fetch=1: 先实时拉一份落库再返回库里序列(主动抓取, 前端"刷新"按钮用)。
+    fetch=0(默认): 只读库, 不触发外部拉取(纯回查, 防每请求都拉 thsdk 撞 30s 超时)。
     空=尚无落库, 不编造。
     """
     from src.core.history_store import persist_l2_ticks, query_l2_ticks
@@ -728,14 +742,21 @@ def get_kline_summary(symbol: str, market: str = "CN"):
     """获取单只股票K线摘要
 
     2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
-    盘中 30s 内同标的请求命中缓存, 直接秒回。
+    2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
+       进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
     """
     market_code = _parse_market(market)
     cache_key = f"summary:{market_code.value}:{symbol}"
     now = _time.time()
+    # L1: 进程内缓存
     cached = _SUMMARY_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _SUMMARY_TTL:
         return cached[1]
+    # L2: PG 落库缓存(进程重启/容器迁移兜底)
+    pg_hit = get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
+    if pg_hit:
+        _SUMMARY_CACHE[cache_key] = (now, pg_hit)
+        return pg_hit
     collector = KlineCollector(market_code)
     summary = collector.get_kline_summary(symbol)
     # 主力意图+筹码(2026-08-11): A股附加, 供前端个股窗口独立展示
@@ -797,6 +818,11 @@ def get_kline_summary(symbol: str, market: str = "CN"):
         "dark_clusters": dark_clusters,
     }
     _SUMMARY_CACHE[cache_key] = (now, result)
+    # L2 落库(进程重启/容器迁移兜底, 失败永不抛)
+    try:
+        put_cached_summary(symbol, market_code.value, result, ttl_s=_SUMMARY_PG_TTL)
+    except Exception:  # noqa: BLE001
+        pass
     return result
 
 

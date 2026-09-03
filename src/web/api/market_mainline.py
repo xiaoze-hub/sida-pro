@@ -200,7 +200,8 @@ _ensure_mainline_rank_table()
 # ──────────── 60s 进程内缓存(per spec) ────────────
 # key 固定为 "mainline:top20", 共享一份 Top20 排名(全市场视角)。
 # 拉涨停池耗 5-15s, 60s 缓存压住前端 30s 轮询的并发翻页成本。
-_CACHE_TTL_S = 60.0
+_CACHE_TTL_S = 30.0  # v0.4.77: 60s→30s, 涨停池冷启动 5-20s 太贵,
+                  # 但页面 30s 内轮询会撞一次; 30s 命中率足够高
 _cache_lock = threading.Lock()
 _cache: dict[str, tuple[float, dict]] = {}
 

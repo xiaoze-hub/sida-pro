@@ -77,6 +77,7 @@ def list_history(
     stock_symbol: str | None = None,
     kind: str = Query(default=AGENT_KIND_WORKFLOW),
     limit: int = Query(default=30, le=100),
+    summary_only: bool = Query(default=False, description="v0.4.77: True=只返摘要(content/prompt/raw_data 全部省, 列表秒开)"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[HistoryResponse]:
@@ -85,6 +86,10 @@ def list_history(
     S1(2026-08-23): 仅返回当前用户的历史; 历史遗留的 user_id=NULL 行也归当前用户可见
     (迁移 v122 已把存量行归属给 owner, 跨账号 NULL 不会出现)。接口始终 404 而非 403,
     防止账号探测。
+
+    v0.4.77 优化: summary_only=true 时只返 id/agent/stock/date/title/created_at,
+    content/prompt/raw_data/news/quality 全省, 单接口从 ~100KB 降到 ~1KB,
+    Dashboard 首页打开不再被 history 阻塞。详情走 GET /history/{id}。
     """
     query = db.query(AnalysisHistory).filter(AnalysisHistory.user_id == user.id)
 
@@ -138,15 +143,16 @@ def list_history(
             stock_symbol=r.stock_symbol,
             analysis_date=r.analysis_date,
             title=r.title or "",
-            content=r.content,
-            suggestions=r.raw_data.get("suggestions") if r.raw_data else None,
-            news=r.raw_data.get("news") if r.raw_data else None,
-            quality_overview=r.raw_data.get("quality_overview") if r.raw_data else None,
-            context_summary=r.raw_data.get("context_summary") if r.raw_data else None,
-            context_payload=r.raw_data.get("context_payload") if r.raw_data else None,
-            prompt_context=r.raw_data.get("prompt_context") if r.raw_data else None,
-            prompt_stats=r.raw_data.get("prompt_stats") if r.raw_data else None,
-            news_debug=r.raw_data.get("news_debug") if r.raw_data else None,
+            # v0.4.77: summary_only 列表省 content/raw_data 全部重字段
+            content="" if summary_only else r.content,
+            suggestions=None if summary_only else (r.raw_data.get("suggestions") if r.raw_data else None),
+            news=None if summary_only else (r.raw_data.get("news") if r.raw_data else None),
+            quality_overview=None if summary_only else (r.raw_data.get("quality_overview") if r.raw_data else None),
+            context_summary=None if summary_only else (r.raw_data.get("context_summary") if r.raw_data else None),
+            context_payload=None if summary_only else (r.raw_data.get("context_payload") if r.raw_data else None),
+            prompt_context=None if summary_only else (r.raw_data.get("prompt_context") if r.raw_data else None),
+            prompt_stats=None if summary_only else (r.raw_data.get("prompt_stats") if r.raw_data else None),
+            news_debug=None if summary_only else (r.raw_data.get("news_debug") if r.raw_data else None),
             created_at=_format_datetime(r.created_at),
             updated_at=_format_datetime(r.updated_at),
         )

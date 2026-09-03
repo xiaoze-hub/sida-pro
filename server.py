@@ -1910,6 +1910,17 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"K线入库调度器启动失败: {e}")
 
+        # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
+        # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
+        try:
+            from src.core.l2_ticks_scheduler import L2TicksScheduler
+            settings = Settings()
+            _l2_sched = L2TicksScheduler(timezone=settings.app_timezone)
+            _l2_sched.start()
+            logger.info("L2 逐笔 5min cron 已启动")
+        except Exception as e:
+            logger.error(f"L2 逐笔 cron 启动失败: {e}")
+
         # 微信数智分析BOT worker: 长轮询 getupdates, 微信消息 → AI 回复 → 回微信
         try:
             from src.core.wechat_bot_worker import wechat_bot_worker
