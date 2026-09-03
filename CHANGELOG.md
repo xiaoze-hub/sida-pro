@@ -15,6 +15,20 @@
 
 ## 2026-09-03
 
+### feature v0.4.77 性能大修（5 项缓存落库 + 慢查询根治）
+
+**问题**：实测生产页面 12.5s 并发加载（14 个接口），`/api/klines/{symbol}/l2-ticks` 30s 超时撞 502、`/api/market/mainline` 5-20s 冷启动、`/api/market-data/fundamentals-detail` 12-17s 冷启动、`/api/abnormal-moves` 30s DB 池超时、`/api/history?limit=20` 3.1s 拉 2.1MB 全文。根因：l2-ticks 默认 fetch=1 每请求实时拉 thsdk，summary/fundamentals 只走 30s 进程内缓存进程重启失效，history 列表无 content 截断。
+
+**修复**：
+
+1. **P0 新增 summary_cache 表 + L1/L2 双层缓存**（`src/core/summary_cache.py` + migration `_m129`）。`/api/klines/{symbol}/summary` 进程内 5min → 命中 PG summary_cache → 计算。`fetch_l2_ticks` 端点 fetch 默认 1→0（只读库），新加 `src/core/l2_ticks_scheduler.py` 5min cron 盘中自动落库自选+候选池。L2 冷启动从 30s 撞 502 → 秒级返回。
+2. **P1 `/api/history?summary_only=true`** 列表省 content/raw_data 全部重字段（2.1MB → ~1KB），Dashboard history 列表秒开；详情走 `GET /history/{id}`。前端 `dashboard.history()` 默认加 `summary_only: true`。
+3. **P1 `/api/market-data/fundamentals-detail/{symbol}` 24h PG 缓存**（复用 summary_cache 表），冷启动 12-17s → <300ms；新增 `_refresh=1` 强刷参数。
+4. **P2 `/api/market/mainline` 缓存 TTL 60s→30s**，涨停池冷启动 5-20s 太贵但页面 30s 内轮询会撞一次，30s 命中率足够。
+5. **测试**：`tests/test_summary_cache.py` 5 例全过（roundtrip/expired/overwrite/market 隔离/clear），现有 summary_layer/summary_resonance/history_store 测试 32 例全过。前端 tsc 0 error。
+
+生产部署：v0.4.77 镜像构建后需 `sudo docker exec panwatch python scripts/init_db.py` 跑 migration 129 建 summary_cache 表（生产 PG 已 init_db 但需补 m129）。
+
 ### release v0.4.75（终端化§4.3清零 + GS降噪 + 活跃度副图载体）
 
 - 自 v0.4.74 起 4 个 feature 合并: GS抖动合并P2 [commit e3c79da] + 终端化token落地(bg-kline/字体) [commit 2908684] + §4.3剩余色板(flat/threshold/accent/tint) [commit 7c00f5f] + GS色收敛+活跃度三色载体 [commit d081a24].

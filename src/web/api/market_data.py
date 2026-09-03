@@ -563,17 +563,37 @@ async def fundamentals_detail_proxy(
     symbol: str,
     market: str = Query("CN", description="市场"),
     dt_days: int = Query(10, ge=1, le=30, description="龙虎榜回溯天数(自然日)"),
+    _refresh: int = Query(0, description="v0.4.77: 1=跳过缓存强刷; 0=命中 24h 缓存"),
 ):
     """个股基本面明细合并端点: 龙虎榜/融资融券/股东户数/分红/事件日历。
 
     每类独立容错, 无数据返回空数组; 单类 vendor 失败不影响其余四类。
     key 来自「设置→接口Key」配置的 data_sources(type=dragon_tiger/margin/...), 实时生效。
+
+    v0.4.77: 加 24h 进程内缓存 + PG 落库(small_data_cache 通用小数据缓存);
+       龙虎榜/融资融券日终不变, 24h TTL 足够, 单接口冷启动从 12-17s 降到 <300ms。
+       _refresh=1 强刷, 用于管理/调试。
     """
+    if not _refresh:
+        # 尝试命中缓存(summary_cache 复用: payload <50KB)
+        from src.core.summary_cache import get_cached_summary, put_cached_summary
+        cache_key_symbol = f"fundamentals:{market}:{symbol}:{dt_days}"
+        cached = get_cached_summary(cache_key_symbol, market, ttl_s=86400)  # 24h
+        if cached:
+            return cached
     try:
-        return fetch_fundamentals_detail(symbol, market=market, dt_days=dt_days)
+        result = fetch_fundamentals_detail(symbol, market=market, dt_days=dt_days)
     except Exception as e:
         logger.warning(f"基本面明细代理失败 [{symbol}]: {e}")
         raise HTTPException(502, f"数据源调用失败: {e}")
+    if not _refresh:
+        try:
+            from src.core.summary_cache import put_cached_summary
+            cache_key_symbol = f"fundamentals:{market}:{symbol}:{dt_days}"
+            put_cached_summary(cache_key_symbol, market, result, ttl_s=86400)
+        except Exception:  # noqa: BLE001
+            pass
+    return result
 
 
 # ──────────────── 首页 Dashboard: 东财异动池 + 同花顺热榜 ────────────────

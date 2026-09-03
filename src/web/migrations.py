@@ -2197,6 +2197,52 @@ def _m126_datasource_health_columns(conn: Connection) -> None:
         )
 
 
+def _m129_summary_cache_table(conn: Connection) -> None:
+    """summary_cache 表(v0.4.77): summary / fundamentals 通用小数据 PG 落库缓存。
+
+    summary 冷启动 20-30s 撞 502, 进程内 5min 缓存进程重启失效; 加 PG 落库,
+    进程重启/容器迁移也能命中。fundamentals-detail 24h 缓存复用此表。
+
+    字段:
+      symbol TEXT NOT NULL  (用 'fundamentals:{mkt}:{sym}:{dt}' 当 fundamentals key)
+      market TEXT NOT NULL  (用于隔离不同市场)
+      computed_at TIMESTAMP NOT NULL
+      ttl_s INTEGER NOT NULL
+      payload TEXT NOT NULL  (JSON, 上限 50KB)
+      PRIMARY KEY (symbol, market)
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS summary_cache (
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    computed_at TIMESTAMP NOT NULL,
+                    ttl_s INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (symbol, market)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS summary_cache (
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    computed_at TIMESTAMP NOT NULL,
+                    ttl_s INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (symbol, market)
+                )
+                """
+            )
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2234,6 +2280,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(126, "datasource_health_columns", _m126_datasource_health_columns),
     Migration(127, "dp_history_table", _m127_dp_history_table),
     Migration(128, "l2_ticks_table", _m128_l2_ticks_table),
+    Migration(129, "summary_cache_table", _m129_summary_cache_table),
 )
 
 
