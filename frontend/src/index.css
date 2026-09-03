@@ -46,6 +46,11 @@
        DIN Alternate(macOS)/Bahnschrift(Win10+,DIN 风格系统字体)置顶,优先呈现
        金融终端式数字;无 DIN 时回落到等宽数字字体。 */
     --font-num: "DIN Alternate", "Bahnschrift", "SF Mono", "Cascadia Code", ui-monospace, "Roboto Mono", Consolas, monospace;
+    /* 研究报告 §4.3: 中文/UI 字体栈(终端化残留落地) */
+    --font-cn: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans CN", "Noto Sans CJK SC", sans-serif;
+    --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* 研究报告 §4.3: K 线图背景(亮色纸面白; 暗色接近黑, 与终端调性一致) */
+    --bg-kline: 240 25% 99%;
 
     /* 界面密度体系:normal(默认)= 4px 基准。
        compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
@@ -88,6 +93,8 @@
     --muted-foreground: 240 10% 58%; /* make-interfaces: 暗色次级文字对比度(≈5.6:1) */
     --accent: 240 15% 18%;
     --accent-foreground: 240 15% 90%;
+    /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
+    --bg-kline: 222 47% 6%;
     --destructive: 0 60% 45%;
     --destructive-foreground: 0 0% 100%;
     --success: 152 50% 38%;
@@ -117,7 +124,7 @@
   }
   body {
     @apply text-foreground antialiased bg-background;
-    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: var(--font-ui), var(--font-cn);
     min-height: 100vh;
   }
   code, .font-mono {

@@ -72,7 +72,7 @@ export interface ChartTheme {
 /** Lightweight Charts 主题跟随: 全从 CSS 变量读, light/dark 自动切换, 禁止硬编码 slate。 */
 export function readChartTheme(): ChartTheme {
   return {
-    bg: hslaVar('--background', '240 20% 95.5%'),
+    bg: hslaVar('--bg-kline', '240 25% 99%'),
     text: hslaVar('--muted-foreground', '240 10% 48%'),
     grid: hslaVar('--border', '240 15% 90%'),
     border: hslaVar('--border', '240 15% 90%'),
