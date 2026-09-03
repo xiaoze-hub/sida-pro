@@ -84,3 +84,29 @@ def activity_of_value(value: Optional[float]) -> dict:
         "above_strong": value >= STRONG_LINE,
         "above_bull": value >= BULL_LINE,
     }
+
+
+def activity_series(bars: Sequence[dict]) -> list[dict]:
+    """活跃度日级序列(副图柱载体用, 与 klines 日期对齐)。
+
+    逐前缀调 decision_pioneer.compute_institution_activity, 公式零分叉;
+    n≈120 时 O(n²)≈7200 步简单运算, 可忽略, 故不碰已有函数。
+    每点 {date, activity, level}; 第 0 根/算不出 → activity/level 为 None(断裂不断造)。
+    """
+    from src.core.decision_pioneer import compute_institution_activity
+
+    out: list[dict] = []
+    for i, b in enumerate(bars or []):
+        date = b.get("date") if isinstance(b, dict) else None
+        if i == 0:
+            out.append({"date": date, "activity": None, "level": None})
+            continue
+        try:
+            r = compute_institution_activity(list(bars[: i + 1]))
+        except Exception:  # noqa: BLE001
+            r = None
+        if not r:
+            out.append({"date": date, "activity": None, "level": None})
+        else:
+            out.append({"date": date, "activity": r.get("activity"), "level": r.get("level")})
+    return out

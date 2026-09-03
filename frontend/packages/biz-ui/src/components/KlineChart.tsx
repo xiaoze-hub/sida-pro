@@ -28,7 +28,7 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
-import { readStockColors, withAlpha, readChartTheme, maShade } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine } from '../lib/stock-colors'
 
 import {
   KIND_ICON,
@@ -88,8 +88,16 @@ export interface GsSignalPoint {
   confirmed?: boolean
 }
 
-/** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 */
-export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase'
+/** 活跃度序列点 (后端 klines.layer_data.activity_series, 日级, 与 klines 对齐) */
+export interface ActivityPoint {
+  date: string
+  activity: number | null
+  /** 大牛/强势/生命/弱 (后端判定, 前端只配色不重判) */
+  level?: string | null
+}
+
+/** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 / 活跃度(09-03 三色柱载体) */
+export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
 
 function sma(values: number[], period: number): Array<number | null> {
   if (period <= 1) return values.map((v) => v)
@@ -160,6 +168,8 @@ export default function KlineChart(props: {
   supportPressure?: KlinePriceLine[]
   /** 资金柱 (阶段三: 红涨绿跌 + 主净分色) */
   fundFlow?: FundFlowBar[]
+  /** 活跃度副图序列 (09-03: 三色柱载体, subchart==='activity' 时渲染) */
+  activitySeries?: ActivityPoint[]
   /** 阶段三: 事件种类显隐过滤 (默认全部 true). 设 false 该 kind 不渲染 marker */
   kindsVisible?: Partial<Record<KlineEventKind, boolean>>
   /**
@@ -181,6 +191,8 @@ export default function KlineChart(props: {
   const markerPluginRef = useRef<ReturnType<typeof createSeriesMarkers<Time>> | null>(null)
   const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
+  const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
@@ -410,16 +422,18 @@ export default function KlineChart(props: {
         })
       }
     }
-    // L2 GS 买卖点 (设计稿 §5.2): G=买入(红)/S=卖出(绿) — 红涨绿跌, 与个股页 Quote 口径一致;
+    // L2 GS 买卖点 (设计稿 §5.2 + 09-03 色收敛): G=买入(--gs-go 红)/S=卖出(--gs-stop 绿),
+    // 与 --stock-up/down 同源(同值不同名); 原版 G绿S红, SIDA 按A股惯例 G红S绿, 验收以位置为准。
     // 实心=已确认, 空心=待确认(防疑似当确认)。
     // LC v5 无 circleOutline 形状, 用 size 区分: 实心 size=2(大), 空心 size=0(小) + 文字 ○ 前缀。
     if (showSignal) {
+      const gs = readGsColors()
       for (const g of props.gsSignals || []) {
         const isBuy = g.side === 'G'
         markers.push({
           time: toChartTime(g.date, interval),
           position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
-          color: isBuy ? sc.up : sc.down,
+          color: isBuy ? gs.go : gs.stop,
           shape: 'circle' as const,
           size: g.confirmed ? 2 : 0,
           text: g.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
@@ -453,9 +467,42 @@ export default function KlineChart(props: {
 
     // 3) 资金柱 (L3 资金柱, showCapital 开关): 红涨绿跌 + 主净分色叠加在 K 线下方。
     //    关掉时 setData([]) 清空 — 否则上一轮的柱会残留。
+    //    09-03: subchart==='activity' 时 volumeSeries 改画活跃度三色柱 (与资金柱互斥, 同 pane)。
     const volSeries = volumeSeriesRef.current
     if (volSeries) {
-      if (showCapital && props.fundFlow && props.fundFlow.length > 0) {
+      // 先清活跃度阈值线 (切走档位不残留)
+      for (const line of activityLinesRef.current) {
+        try { volSeries.removePriceLine(line) } catch { /* noop */ }
+      }
+      activityLinesRef.current = []
+      if (subchart === 'activity' && props.activitySeries && props.activitySeries.length > 0) {
+        const histData = props.activitySeries
+          .filter((p) => p.activity != null && Number.isFinite(p.activity))
+          .map((p) => ({
+            time: toChartTime(p.date, interval),
+            value: p.activity as number,
+            // 档位后端已判, 前端只配色: 大牛紫/强势红/生命绿/弱灰
+            color: activityLevelColor(p.level),
+          }))
+        volSeries.setData(histData)
+        // 阈值线 生命1.56/强势3/大牛6 (后端 ai_activity 同值, 前端只画线不重判)
+        const thColor = thresholdLine(0.5)
+        for (const [price, title] of [[1.56, '生命1.56'], [3, '强势3'], [6, '大牛6']] as const) {
+          activityLinesRef.current.push(
+            volSeries.createPriceLine({
+              price,
+              color: thColor,
+              lineWidth: 1,
+              lineStyle: 2, // dashed
+              axisLabelVisible: true,
+              title,
+            }),
+          )
+        }
+      } else if (subchart === 'activity') {
+        // 有档位无序列: 显式清空, 不画阈值线 (不编造)
+        volSeries.setData([])
+      } else if (showCapital && props.fundFlow && props.fundFlow.length > 0) {
         const histData = props.fundFlow.map((bar) => {
           const open = bar.open_net ?? 0
           const dark = bar.dark_net ?? 0
@@ -475,7 +522,7 @@ export default function KlineChart(props: {
         volSeries.setData([])
       }
     }
-  }, [props.events, props.supportPressure, props.fundFlow, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
+  }, [props.events, props.supportPressure, props.fundFlow, props.activitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -580,13 +627,14 @@ export default function KlineChart(props: {
                 ? `${dataLen} 根K线`
                 : '无数据'}
         </span>
-        {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */}
+        {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
         {(
           [
             ['vol', '成交量'],
             ['macd', 'MACD'],
             ['active_ratio', '买卖比'],
             ['phase', '情绪'],
+            ['activity', '活跃度'],
           ] as const
         ).map(([k, label]) => {
           const active = subchart === k

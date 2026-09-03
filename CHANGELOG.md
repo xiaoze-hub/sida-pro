@@ -42,6 +42,7 @@
 - **GS抖动合并P2** (校准报告跟进). 新增`merge_whipsaw`(纯函数, 窗口`WHIPSAW_MERGE_DAYS=3`): 相邻反向信号间隔≤3天成对丢弃, 日期缺失不猜保留; `compute_gs_signals`默认`denoise=True`(传`False`取裸序列, 公式零改动). 上证501根实测63→37, ≤3天残留0/36; 单元(成对丢/超窗保留/日期缺保留)全过. 现有`test_decision_pioneer`+`test_summary_resonance` 22 passed. `eval_gs`区间语义不动.
 - **终端化残留token落地 §4.3** (研究报告跟进, feat分支). `index.css`新增`--bg-kline`(亮纸面白/暗接近黑hsl(222,47%,6%)) + `--font-cn`/`--font-ui`; body字体改走变量; `readChartTheme().bg`改读`--bg-kline`(K线底与页面底分离, 暗色K线更沉). tsc 0 + vite build 20s通过. 未做: 活跃度三色(无副图柱载体不硬套) + GS琥珀/紫(与A股红绿惯例冲突, 维持G红S绿).
 - **终端化§4.3剩余色板** (awesome-design-html Robinhood tint手法校准, feat分支). `index.css`亮/暗新增`--flat-color`/`--threshold-line`(平盘灰#94A3B8基, 阈值线使用处alpha .5) + `--accent-primary`(强调橙#F59E0B) + `--stock-up/down-tint`(涨跌淡底, 涨停行/强势标记背景); `stock-colors.ts`新增`readFlatColor`/`thresholdLine`/`readAccentPrimary`/`readStockTints`读取函数. stock-up/down已有(#E53935/#43A047)不动, K线与文字涨跌同源. tsc 0 + vite build 15s通过.
+- **GS色收敛+活跃度三色载体** (09-03, feat分支). GS: `index.css`新增`--gs-go/--gs-stop`(var引用stock-up/down同源) + `readGsColors()`(注释原版G绿S红→SIDA G红S绿映射, 验收以位置为准); KlineChart/InteractiveKline GS marker改走gs语义色(值不变). 活跃度: `--activity-bull/strong/weak`(大牛紫#8B5CF6/强势红#EF4444/生命绿#22C55E, 暗色提亮; 弱档走flat灰) + `activityLevelColor(level)`; 后端`ai_activity.activity_series()`(逐前缀复用内核, 公式零分叉, 30根实测末点与单算一致) + klines layer_data `activity_series`字段(同fund_flow门控/降级); 前端L5副图新增`活跃度`档(Histogram三色柱 + 生命1.56/强势3/大牛6阈值线, 无序列不画线) + Quote接线 + DecisionPioneerCard配色收敛(fuchsia/rose/orange→三色token). tsc 0 + build 15s + 后端13 passed(含更新2处activity断言).
 
 ## 2026-09-02
 

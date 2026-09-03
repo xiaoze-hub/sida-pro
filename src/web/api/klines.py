@@ -430,11 +430,13 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
       ming_net=当日 big_order_flow 全口径(历史逐日明盘无数据, 显式 null)
     - events: 涨停/跌停(K线自算); 龙虎榜/公告事件待 28 号数据源接入后补
     - resonance: 三指标共振状态(2026-09-02), 复用本函数已拉的 bars, 见 _build_resonance
+    - activity_series: 活跃度日级序列(2026-09-03, 活跃度副图柱载体), 每点 {date, activity, level}
 
     仅 A 股; 任一字段计算失败独立降级为 None/默认, 不拖垮整体, 不编造。
     """
     out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
                  "orderbook": None, "unlock_levels": None, "chips": None,
+                 "activity_series": None,
                  "resonance": _resonance_default()}
     if market_code.value != "CN":
         return out
@@ -522,6 +524,19 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
             out["fund_flow"] = fund_flow
         except Exception as e:  # noqa: BLE001
             logger.debug("fund_flow %s failed: %s", symbol, e)
+
+    # ②b activity_series(活跃度副图柱载体, 日级, 依赖 bars; 与 fund_flow 同门控/同降级)
+    if bars:
+        try:
+            from src.core.ai_activity import activity_series as _activity_series
+
+            out["activity_series"] = [
+                {"date": _norm_date(p.get("date")),
+                 "activity": p.get("activity"), "level": p.get("level")}
+                for p in _activity_series(bars)
+            ]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("activity_series %s failed: %s", symbol, e)
 
     # ③ events(L4 事件标注): 涨停/跌停(K线自算) + 五类真实数据源
     #    kind 取值与前端 InteractiveKline 的 KlineEventKind 一一对应。

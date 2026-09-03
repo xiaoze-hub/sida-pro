@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import { activityLevelColor } from '../lib/stock-colors'
 
 /**
  * 决策先锋三指标卡片(2026-08-30)
@@ -55,11 +56,9 @@ function upColor(v: number | null | undefined): string {
   return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
+/** 活跃度档位色 (09-03 收敛): 走三色 token, 不再硬编码 fuchsia/rose/orange */
 function activityColor(level: string): string {
-  if (level === '大牛') return 'text-fuchsia-700 dark:text-fuchsia-400'
-  if (level === '强势') return 'text-rose-700 dark:text-rose-400'
-  if (level === '生命') return 'text-orange-600 dark:text-orange-400'
-  return 'text-muted-foreground'
+  return activityLevelColor(level)
 }
 
 export default function DecisionPioneerCard({ symbol, market }: { symbol: string; market: string }) {
@@ -140,7 +139,7 @@ export default function DecisionPioneerCard({ symbol, market }: { symbol: string
           <div className="text-muted-foreground mb-0.5">AI机构活跃度</div>
           {act ? (
             <>
-              <div className={`font-mono text-[15px] font-semibold ${activityColor(act.level)}`}>
+              <div className="font-mono text-[15px] font-semibold" style={{ color: activityColor(act.level) }}>
                 {act.activity != null ? act.activity.toFixed(2) : '--'}
                 <span className="text-[10px] ml-1">{act.level}</span>
               </div>
