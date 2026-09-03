@@ -105,8 +105,8 @@ export default function LoginPage() {
           <p className="text-sm text-muted-foreground mt-1">A股智能分析 · AI 全链路打通</p>
         </div>
 
-        {/* Form */}
-        <div className="card p-6">
+        {/* Form(P2 轻量化: card 底 → hairline, 零逻辑改动) */}
+        <div className="border-t border-border/40 pt-6">
           <div className="flex items-center gap-2 mb-6">
             <Lock className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold">

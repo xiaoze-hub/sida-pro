@@ -33,7 +33,7 @@ function ruleLabel(r: any): string {
 
 function StatCard({ icon: Icon, label, value, sub, color }: { icon: any; label: string; value: string; sub?: string; color: string }) {
   return (
-    <div className="rounded-xl bg-accent/30 p-3.5">
+    <div className="border-l border-border/40 pl-3">
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${color}`} />
         <span className="text-[11px] text-muted-foreground">{label}</span>
@@ -173,7 +173,7 @@ iframe{width:100%;height:100%;border:0}
       </div>
 
       {/* 我的画像: 进页面自动加载已存画像(users.shadow_profile_json 落库版), 不用重新上传 */}
-      <div className="rounded-xl bg-card border border-border p-4">
+      <div className="border-b border-border/40 pb-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
             <UserRound className="w-4 h-4 text-primary" /> 我的画像
@@ -196,7 +196,7 @@ iframe{width:100%;height:100%;border:0}
             <div className="h-3 w-3/4 animate-pulse rounded bg-accent/20" />
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-1">
               {[0, 1, 2, 3, 4].map(i => (
-                <div key={i} className="h-16 animate-pulse rounded-xl bg-accent/20" />
+                <div key={i} className="h-16 animate-pulse bg-accent/20" />
               ))}
             </div>
           </div>

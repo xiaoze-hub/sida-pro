@@ -142,7 +142,7 @@ export default function ReportsPage() {
           onDismiss={() => setLoadError(null)}
         />
       ) : grouped.size === 0 ? (
-        <div className="card-subtle p-8 text-center text-sm text-muted-foreground">
+        <div className="py-8 text-center text-sm text-muted-foreground">
           暂无报告
           {search || jobFilter ? ' (匹配为空)' : ''}
         </div>
@@ -152,7 +152,7 @@ export default function ReportsPage() {
             const jobName = files[0]?.job_name || jobId
             const latest = files[0] // 已 mtime 倒序
             return (
-              <div key={jobId} className="card-subtle p-4">
+              <div key={jobId} className="border-b border-border/40 pb-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <div className="min-w-0">
                     <h3 className="font-medium text-sm truncate">{jobName}</h3>

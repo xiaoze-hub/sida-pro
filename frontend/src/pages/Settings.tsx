@@ -1267,7 +1267,7 @@ export default function SettingsPage() {
   return (
     <div>
       {/* Hero */}
-      <div className="card relative overflow-hidden p-5 md:p-7">
+      <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-accent/30" />
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div className="min-w-0">
@@ -1386,7 +1386,7 @@ export default function SettingsPage() {
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 2026-08-17 全局搜索空态: 有搜索但 0 命中(闭环修正 P0-1) */}
         {hasGlobalQuery && matchCount === 0 && (
-          <div className="col-span-full card p-8 md:p-10 text-center">
+          <div className="col-span-full p-8 md:p-10 text-center">
             <Search className="mx-auto h-7 w-7 text-muted-foreground/50 mb-3" />
             <p className="text-[13px] text-muted-foreground">
               未找到匹配 &ldquo;<span className="text-foreground font-medium">{globalQuery}</span>&rdquo; 的设置项
@@ -1405,7 +1405,7 @@ export default function SettingsPage() {
         )}
         {/* AI Services + Models Section */}
         {isOwner && (
-        <section id="sec-ai" className="card p-4 md:p-6 lg:col-span-7" style={{ display: sectionMatches('sec-ai') ? undefined : 'none' }}>
+        <section id="sec-ai" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-ai') ? undefined : 'none' }}>
           <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">AI 服务商 & 模型</h3>
@@ -1421,7 +1421,7 @@ export default function SettingsPage() {
           ) : (
             <div className="space-y-2">
               {services.map(svc => (
-                <div key={svc.id} className="flex items-center justify-between gap-3 rounded-lg bg-accent/30 px-3 py-2.5 hover:bg-accent/50 transition-colors">
+                <div key={svc.id} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2.5">
                   <div className="min-w-0 flex items-center gap-2.5">
                     <Cpu className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                     <div className="min-w-0">
@@ -1468,7 +1468,7 @@ export default function SettingsPage() {
             ) : (
               <div className="space-y-2">
                 {sceneBindings.map(b => (
-                  <div key={b.scene} className="flex items-center justify-between gap-3 rounded-lg bg-accent/30 px-3 py-2">
+                  <div key={b.scene} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2">
                     <div className="min-w-0">
                       <span className="text-[12px] font-semibold text-foreground">{b.display_name}</span>
                       <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{b.description}</p>
@@ -1507,7 +1507,7 @@ export default function SettingsPage() {
         )}
 
         {/* Notify Channel Section */}
-        <section id="sec-notify" className="card p-4 md:p-6 lg:col-span-5" style={{ display: sectionMatches('sec-notify') ? undefined : 'none' }}>
+        <section id="sec-notify" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5" style={{ display: sectionMatches('sec-notify') ? undefined : 'none' }}>
           <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">通知渠道</h3>
@@ -1634,7 +1634,7 @@ export default function SettingsPage() {
         </section>
 
         {/* 我的服务商(BYOK): 用户自定义 LLM 服务商, 用自己的 API Key(2026-08-15) */}
-        <section id="sec-my-services" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-my-services') ? undefined : 'none' }}>
+        <section id="sec-my-services" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-my-services') ? undefined : 'none' }}>
           <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">我的服务商 (BYOK)</h3>
@@ -1661,7 +1661,7 @@ export default function SettingsPage() {
           ) : (
             <div className="space-y-2">
               {myServices.map(svc => (
-                <div key={svc.id} className="flex items-center justify-between gap-3 rounded-lg bg-accent/30 px-3 py-2.5 hover:bg-accent/50 transition-colors">
+                <div key={svc.id} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2.5">
                   <div className="min-w-0 flex items-center gap-2.5">
                     <Cpu className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                     <div className="min-w-0">
@@ -1691,7 +1691,7 @@ export default function SettingsPage() {
         </section>
 
         {/* 多用户: 定时报告订阅 + 用户管理(2026-08-10 阶段5) */}
-        <section id="sec-subscriptions" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-subscriptions') ? undefined : 'none' }}>
+        <section id="sec-subscriptions" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-subscriptions') ? undefined : 'none' }}>
           <div className="mb-3 flex items-center gap-2">
             <h2 className="flex items-center gap-2 text-sm font-semibold">
               <MailCheck className="h-4 w-4 text-primary" />
@@ -1725,7 +1725,7 @@ export default function SettingsPage() {
         </section>
 
         {currentUser?.role === 'owner' && (
-          <section id="sec-users" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-users') ? undefined : 'none' }}>
+          <section id="sec-users" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-users') ? undefined : 'none' }}>
             <UserManagement currentUser={currentUser} />
           </section>
         )}
@@ -1737,7 +1737,7 @@ export default function SettingsPage() {
         {isOwner && settings.length > 0 && (
           <>
           {/* 接口 Key 区块(数据源凭证维护) */}
-          <section id="sec-keys" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-keys') ? undefined : 'none' }}>
+          <section id="sec-keys" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-keys') ? undefined : 'none' }}>
             <div className="flex items-start justify-between mb-4 gap-3">
               <div>
                 <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">接口 Key</h3>
@@ -1759,7 +1759,7 @@ export default function SettingsPage() {
                 const setting = settings.find(s => s.key === item.key)
                 const configured = !!setting && setting.value === SECRET_MASK
                 return (
-                  <div key={item.key} className="flex items-center justify-between gap-3 rounded-lg bg-accent/30 px-3 py-2.5 hover:bg-accent/50 transition-colors">
+                  <div key={item.key} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2.5">
                     <div className="min-w-0 flex items-center gap-2.5">
                       <KeyRound className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                       <div className="min-w-0">
@@ -1785,7 +1785,7 @@ export default function SettingsPage() {
             </div>
           </section>
           {/* 同花顺登录区块 */}
-          <section id="sec-ths" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-ths') ? undefined : 'none' }}>
+          <section id="sec-ths" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-ths') ? undefined : 'none' }}>
             <div className="flex items-start justify-between mb-4 gap-3">
               <div>
                 <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">同花顺登录</h3>
@@ -1824,7 +1824,7 @@ export default function SettingsPage() {
               )}
             </div>
           </section>
-          <section id="sec-system" className="card p-4 md:p-6 lg:col-span-12" style={{ display: sectionMatches('sec-system') ? undefined : 'none' }}>
+          <section id="sec-system" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-system') ? undefined : 'none' }}>
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4 md:mb-5">
               <div>
                 <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">系统</h3>
@@ -1853,7 +1853,7 @@ export default function SettingsPage() {
                   ? (STOCK_LINK_OPTIONS[currentValue] ?? currentValue) || '未设置'
                   : currentValue || '未设置'
                 return (
-                  <div key={setting.key} className="flex items-center justify-between gap-3 rounded-lg bg-accent/30 px-3 py-2.5 hover:bg-accent/50 transition-colors">
+                  <div key={setting.key} className="flex items-center justify-between gap-3 border-b border-border/40 px-1 py-2.5">
                     <div className="min-w-0">
                       <span className="text-[12px] font-medium text-foreground">{setting.description || setting.key}</span>
                       <p className="text-[10px] text-muted-foreground truncate font-mono">{summary}</p>
@@ -1874,7 +1874,7 @@ export default function SettingsPage() {
 
         {/* Config Pack (Templates) */}
         {isOwner && (
-        <section id="sec-pack" className="card p-4 md:p-6 lg:col-span-7" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
+        <section id="sec-pack" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7" style={{ display: sectionMatches('sec-pack') ? undefined : 'none' }}>
           <div className="flex items-start justify-between mb-4 gap-3">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">配置包</h3>
@@ -1958,7 +1958,7 @@ export default function SettingsPage() {
         )}
 
         {/* Feedback Stats */}
-        <section id="sec-feedback" className="card p-4 md:p-6 lg:col-span-5" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
+        <section id="sec-feedback" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5" style={{ display: sectionMatches('sec-feedback') ? undefined : 'none' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">建议反馈</h3>
@@ -2703,7 +2703,7 @@ function LlmUsageSection() {
   const fmtCost = (n: number) => `¥${(n ?? 0).toFixed(2)}`
 
   return (
-    <section id="sec-llm-usage" className="card p-4 md:p-6 lg:col-span-12">
+    <section id="sec-llm-usage" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Activity className="h-4 w-4 text-primary" />
