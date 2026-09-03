@@ -135,10 +135,10 @@ const ALERT_LABEL: Record<string, string> = {
 }
 
 const FEED_BADGE: Record<string, { label: string; cls: string }> = {
-  alert: { label: '提醒命中', cls: 'bg-rose-500/15 text-red-600' },
-  holding: { label: '持仓', cls: 'bg-emerald-500/15 text-green-700' },
+  alert: { label: '提醒命中', cls: 'bg-stock-up/15 text-stock-up' },
+  holding: { label: '持仓', cls: 'bg-stock-down/15 text-stock-down' },
   watch: { label: '自选', cls: 'bg-accent text-muted-foreground' },
-  risk: { label: '风险', cls: 'bg-amber-500/15 text-amber-600' },
+  risk: { label: '风险', cls: 'bg-amber-500/15 text-amber-500' },
   opportunity: { label: '机会', cls: 'bg-primary/10 text-primary' },
 }
 
@@ -515,7 +515,7 @@ export default function DashboardPage() {
       <div className="mb-3 grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
         {loading && indices.length === 0
           ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="card p-2.5">
+              <div key={i} className="p-2.5">
                 <Skeleton className="h-2.5 w-16" />
                 <Skeleton className="mt-1.5 h-4 w-14" />
                 <Skeleton className="mt-2 h-6 w-full" />
@@ -525,7 +525,7 @@ export default function DashboardPage() {
           <button
             key={`${ix.market}:${ix.symbol}`}
             onClick={() => navigate(`/index/${ix.symbol}`)}
-            className="card relative p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer"
+            className="relative rounded-md border border-border/40 p-2.5 text-left hover:border-primary/40 transition-colors cursor-pointer"
           >
             <div className="flex items-start justify-between gap-1">
               <div className="min-w-0">
@@ -562,357 +562,7 @@ export default function DashboardPage() {
         sealRate={phaseKpi.sealRate}
       />
 
-      {/* 主体:PC 工作台 3 列(要紧事3 | 体检6 | 机会3);次级 2 列(简报6 | 机会发现6)。1280px 以下回退 7/5-5/7 两行布局 */}
-      {/* 反AI模板 P2:上方列表区已去卡片化, 工作台卡片区补 mt-3 维持呼吸感 */}
-      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
-        {/* 今日要紧事(左列,窄) */}
-        <div className="card p-4 lg:col-span-7 xl:col-span-3">
-          <div className="mb-2 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">今日要紧事</h2>
-            <span className="text-[11px] text-muted-foreground">你的持仓/自选里今天该关注的</span>
-            {feed.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShareDigest(true)}
-                className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
-                title="生成今日盯盘分享图"
-              >
-                <Share2 className="h-3.5 w-3.5" />
-                分享图
-              </button>
-            )}
-          </div>
-          {loading && candidates.length === 0 ? (
-            /* 首次加载骨架(扫描完成后替换为真实列表) */
-            <SkeletonRows rows={6} />
-          ) : candidates.length === 0 ? (
-            todos.length > 0 ? (
-              <div className="space-y-1.5 py-1">
-                <div className="text-[11px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
-                {todos.map((t, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-center gap-2 py-1 text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
-                    onClick={() => t.symbol && openStock(t.symbol, t.market || 'CN', '')}
-                    onContextMenu={(e) => {
-                      if (!t.symbol) return
-                      openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
-                    }}
-                  >
-                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-600">
-                      {t.type === 'no_alert' ? '加提醒' : '将到期'}
-                    </span>
-                    <span className="truncate">{t.message}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-6 text-center text-[12px] text-muted-foreground">今日暂无明显异动或触发信号 ✓</div>
-            )
-          ) : (
-            <div className="divide-y divide-border/40">
-              {feed.map((it, i) => {
-                const badge = FEED_BADGE[it.type] || { label: it.type, cls: 'bg-accent text-muted-foreground' }
-                return (
-                  <div
-                    key={i}
-                    className={`flex items-center gap-3 py-2 ${it.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
-                    onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
-                    onContextMenu={(e) => {
-                      if (!it.symbol) return
-                      openStockContextMenu(e, {
-                        symbol: it.symbol,
-                        name: it.name || it.symbol,
-                        market: it.market || 'CN',
-                        hasPosition: it.type === 'holding',
-                      })
-                    }}
-                  >
-                    <span className={`shrink-0 rounded px-1 text-[9px] ${badge.cls}`}>{badge.label}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
-                      {it.why && <div className="truncate text-[11px] text-muted-foreground">{it.why}</div>}
-                    </div>
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
-                      {it.change_pct != null ? pct(it.change_pct) : '--'}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* 组合体检(中列,宽) */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-6">
-          <div className="mb-2 flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">组合体检</h2>
-            {(benchReady || hasHoldings) && (
-              /* v0.4.7: 两个分享入口合并为一个下拉, 减少头部按钮拥挤 */
-              <details className="relative ml-auto">
-                <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary">
-                  <Share2 className="h-3.5 w-3.5" />
-                  分享 ▾
-                </summary>
-                <div className="absolute right-0 z-20 mt-1 w-28 rounded-lg border border-border/60 bg-card py-1 shadow-lg">
-                  {benchReady && (
-                    <button
-                      type="button"
-                      onClick={(e) => { setShareBench(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
-                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
-                    >
-                      成绩单图
-                    </button>
-                  )}
-                  {hasHoldings && (
-                    <button
-                      type="button"
-                      onClick={(e) => { setShareDiag(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
-                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
-                    >
-                      体检图
-                    </button>
-                  )}
-                </div>
-              </details>
-            )}
-          </div>
-          {loading && !diag ? (
-            /* 首次加载骨架 */
-            <SkeletonRows rows={4} />
-          ) : !hasHoldings ? (
-            <div className="flex flex-col items-center gap-2 py-5 text-center">
-              <div className="text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无持仓'}</div>
-              {!loading && (
-                <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={() => navigate('/portfolio')}>
-                  去添加持仓
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-3 text-[12px]">
-              {/* 图例行:色块 + 我的组合/基准收益 + 超额 chip */}
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-[3px] w-3.5 rounded-full bg-primary" />
-                    <span className="text-muted-foreground">我的组合 {benchReady ? pct(bench!.portfolio_return) : ''}</span>
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-0 w-3.5 border-t-[1.5px] border-dashed border-muted-foreground/70" />
-                    <span className="text-muted-foreground">
-                      {bench?.benchmark_label || '沪深300'} {benchReady ? pct(bench!.benchmark_return) : ''}
-                    </span>
-                  </span>
-                </div>
-                {benchReady && (
-                  <span className={`rounded px-1.5 py-0.5 font-mono ${pctChipCls(bench!.excess_return)}`}>
-                    超额 {pct(bench!.excess_return)}
-                  </span>
-                )}
-              </div>
-
-              {/* 净值 vs 基准双线图:loading/ready/empty/error 四态,不再永远"计算中" */}
-              {benchState === 'ready' && bench?.curve && bench.curve.length >= 2 ? (
-                <BenchChart curve={bench.curve} />
-              ) : (
-                <div className="flex h-[150px] flex-col items-center justify-center gap-2 rounded-lg bg-accent/10 text-[11px] text-muted-foreground">
-                  {benchState === 'loading' && <span>基准对比计算中…(需拉全部持仓 K 线,约 1 分钟)</span>}
-                  {benchState === 'empty' && <span>{bench?.reason || '数据不足,暂无法计算基准对比'}</span>}
-                  {benchState === 'error' && (
-                    <>
-                      <span>基准对比加载失败(超时或网络异常)</span>
-                      <button
-                        type="button"
-                        onClick={loadBench}
-                        className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary hover:bg-accent/30"
-                      >
-                        重试
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">持仓 {diag!.position_count} 只 · 最大单仓</span>
-                <span className={`font-mono ${diag!.max_weight >= 0.4 ? 'text-amber-600' : ''}`}>
-                  {(diag!.max_weight * 100).toFixed(0)}%
-                </span>
-              </div>
-
-              {/* 市场分布:stacked 单条 */}
-              {marketSegs.length > 0 && (
-                <div>
-                  <div className="flex h-2 overflow-hidden rounded-full bg-accent/30">
-                    {marketSegs.map((seg, i) => (
-                      <div
-                        key={seg.market}
-                        className={`h-full ${MARKET_BAR_CLS[seg.market] || 'bg-muted-foreground/50'}`}
-                        style={{ width: `${seg.pct}%`, marginRight: i < marketSegs.length - 1 ? 2 : 0 }}
-                      />
-                    ))}
-                  </div>
-                  <div className="mt-1 text-[10.5px] text-muted-foreground">
-                    {marketSegs.map((seg) => `${seg.market} ${seg.pct.toFixed(0)}%`).join(' · ')}
-                  </div>
-                </div>
-              )}
-
-              {/* 领涨/拖累:双向条 */}
-              {attribution.length > 1 &&
-                [
-                  { label: '领涨', item: attribution[0] },
-                  { label: '拖累', item: attribution[attribution.length - 1] },
-                ].map(({ label, item }) => {
-                  const w = Math.min(50, (Math.abs(item.contribution_pct) / attributionMaxAbs) * 50)
-                  const positive = item.contribution_pct >= 0
-                  return (
-                    <div key={label} className="flex items-center gap-2">
-                      <span className="w-8 shrink-0 text-[10px] text-muted-foreground">{label}</span>
-                      <div className="relative h-1.5 flex-1 rounded-full bg-accent/30">
-                        <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
-                        <div
-                          className={`absolute inset-y-0 rounded-full ${positive ? 'bg-stock-up' : 'bg-stock-down'}`}
-                          style={
-                            positive
-                              ? { left: '50%', width: `${w}%` }
-                              : { right: '50%', width: `${w}%` }
-                          }
-                        />
-                      </div>
-                      <span className="w-28 shrink-0 truncate text-right text-[11px]">
-                        {item.name} <span className={`font-mono ${moveColor(item.contribution_pct)}`}>{pct(item.contribution_pct)}</span>
-                      </span>
-                    </div>
-                  )
-                })}
-
-              {diag!.alerts.length > 0 ? (
-                <div className="space-y-1 pt-1">
-                  {diag!.alerts.map((a, i) => (
-                    <div key={i} className="flex items-start gap-1 text-[11px] text-amber-600">
-                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                      <span>{a}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="pt-1 text-[11px] text-green-700">✓ 集中度/分布未见明显风险</div>
-              )}
-              <button
-                type="button"
-                onClick={runAiReview}
-                disabled={aiReviewLoading}
-                className="mt-1 w-full rounded border border-border/60 py-1 text-[11px] text-primary hover:bg-accent/30 disabled:opacity-60"
-              >
-                {aiReviewLoading ? 'AI 体检中…' : 'AI 体检报告'}
-              </button>
-              {aiReview?.content && (
-                <div className="prose prose-sm dark:prose-invert mt-1 max-w-none break-words text-[12px] [&_p]:my-1 [&_ul]:my-1">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiReview.content}</ReactMarkdown>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* 机会精选(右列,窄) */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-3">
-          {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描图标 */}
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">机会精选</h2>
-            <button
-              type="button"
-              className="text-[11px] text-muted-foreground hover:text-foreground"
-              onClick={() => navigate('/opportunities')}
-            >
-              进入机会页
-            </button>
-          </div>
-          {opportunities.length === 0 ? (
-            <div className="py-6 text-center text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无活跃机会信号'}</div>
-          ) : (
-            <div className="divide-y divide-border/40">
-              {opportunities.slice(0, 3).map((o) => {
-                return (
-                  <div
-                    key={`${o.stock_market}:${o.stock_symbol}`}
-                    className="flex cursor-pointer items-center gap-2 py-2 hover:bg-accent/30"
-                    onClick={() => openStock(o.stock_symbol, o.stock_market, o.stock_name || o.stock_symbol)}
-                    onContextMenu={(e) =>
-                      openStockContextMenu(e, {
-                        symbol: o.stock_symbol,
-                        name: o.stock_name || o.stock_symbol,
-                        market: o.stock_market || 'CN',
-                        hasPosition: false,
-                      })
-                    }
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
-                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">{o.action_label}</span>}
-                      </div>
-                      {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground">{o.signal || o.reason}</div>}
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-{/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
-        <div className="card p-4 lg:col-span-5 xl:col-span-3">
-          <div className="mb-1.5 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">最新报告</h2>
-            <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
-            <button
-              type="button"
-              onClick={() => navigate('/reports')}
-              className="ml-auto shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
-            >
-              全部 →
-            </button>
-          </div>
-          {reportsLoading && reports.length === 0 ? (
-            <SkeletonRows rows={3} />
-          ) : reports.length === 0 ? (
-            <div className="py-4 text-center text-[12px] text-muted-foreground">
-              报告生成后自动出现
-            </div>
-          ) : (
-            <div className="divide-y divide-border/40">
-              {reports.slice(0, 4).map((r) => (
-                <button
-                  key={`${r.job_id}:${r.file}`}
-                  type="button"
-                  onClick={() => navigate('/reports')}
-                  className="flex w-full items-center gap-2 py-1.5 text-left transition-colors hover:bg-accent/30"
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium">{r.title_preview || r.file}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">{formatReportTime(r.mtime_iso)}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-                {/* 简报已移除(v0.4.7): 与报告中心重复, 入口保留在最新报告卡 */}
-
-{/* 机会发现(次级,右;1280px 以下整行) */}
-        <div className="lg:col-span-12 xl:col-span-6">
-          <DiscoveryPanel monitorStocks={scan} onOpenStock={openStock} />
-        </div>
-      </div>
-
+      {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
       {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
       <div id="market-phase-anchor" className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
         <MarketPhaseCard />
@@ -1030,7 +680,7 @@ export default function DashboardPage() {
                         <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
-                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-600">当日</span>
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">当日</span>
                         )}
                       </div>
                       {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
@@ -1061,6 +711,359 @@ export default function DashboardPage() {
         </div>
       </div>
       {/* 热榜已移除(v0.4.7): 与发现页重复 */}
+
+      {/* 主体:PC 工作台 3 列(要紧事3 | 体检6 | 机会3);次级 2 列(简报6 | 机会发现6)。1280px 以下回退 7/5-5/7 两行布局 */}
+      {/* 反AI模板 P2:上方列表区已去卡片化, 工作台卡片区补 mt-3 维持呼吸感 */}
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
+        {/* 今日要紧事(左列,窄) */}
+        <div className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">今日要紧事</h2>
+            <span className="text-[11px] text-muted-foreground">你的持仓/自选里今天该关注的</span>
+            {feed.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShareDigest(true)}
+                className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                title="生成今日盯盘分享图"
+              >
+                <Share2 className="h-3.5 w-3.5" />
+                分享图
+              </button>
+            )}
+          </div>
+          {loading && candidates.length === 0 ? (
+            /* 首次加载骨架(扫描完成后替换为真实列表) */
+            <SkeletonRows rows={6} />
+          ) : candidates.length === 0 ? (
+            todos.length > 0 ? (
+              <div className="space-y-1.5 py-1">
+                <div className="text-[11px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
+                {todos.map((t, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-2 py-1 text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
+                    onClick={() => t.symbol && openStock(t.symbol, t.market || 'CN', '')}
+                    onContextMenu={(e) => {
+                      if (!t.symbol) return
+                      openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
+                    }}
+                  >
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">
+                      {t.type === 'no_alert' ? '加提醒' : '将到期'}
+                    </span>
+                    <span className="truncate">{t.message}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-6 text-center text-[12px] text-muted-foreground">今日暂无明显异动或触发信号 ✓</div>
+            )
+          ) : (
+            <div className="divide-y divide-border/40">
+              {feed.map((it, i) => {
+                const badge = FEED_BADGE[it.type] || { label: it.type, cls: 'bg-accent text-muted-foreground' }
+                return (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-3 py-2 ${it.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
+                    onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
+                    onContextMenu={(e) => {
+                      if (!it.symbol) return
+                      openStockContextMenu(e, {
+                        symbol: it.symbol,
+                        name: it.name || it.symbol,
+                        market: it.market || 'CN',
+                        hasPosition: it.type === 'holding',
+                      })
+                    }}
+                  >
+                    <span className={`shrink-0 rounded px-1 text-[9px] ${badge.cls}`}>{badge.label}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
+                      {it.why && <div className="truncate text-[11px] text-muted-foreground">{it.why}</div>}
+                    </div>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
+                      {it.change_pct != null ? pct(it.change_pct) : '--'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 组合体检(中列,宽) */}
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
+          <div className="mb-2 flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">组合体检</h2>
+            {(benchReady || hasHoldings) && (
+              /* v0.4.7: 两个分享入口合并为一个下拉, 减少头部按钮拥挤 */
+              <details className="relative ml-auto">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary">
+                  <Share2 className="h-3.5 w-3.5" />
+                  分享 ▾
+                </summary>
+                <div className="absolute right-0 z-20 mt-1 w-28 rounded-lg border border-border/60 bg-card py-1 shadow-lg">
+                  {benchReady && (
+                    <button
+                      type="button"
+                      onClick={(e) => { setShareBench(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
+                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
+                    >
+                      成绩单图
+                    </button>
+                  )}
+                  {hasHoldings && (
+                    <button
+                      type="button"
+                      onClick={(e) => { setShareDiag(true); (e.currentTarget.closest('details') as HTMLDetailsElement).open = false }}
+                      className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-accent/30"
+                    >
+                      体检图
+                    </button>
+                  )}
+                </div>
+              </details>
+            )}
+          </div>
+          {loading && !diag ? (
+            /* 首次加载骨架 */
+            <SkeletonRows rows={4} />
+          ) : !hasHoldings ? (
+            <div className="flex flex-col items-center gap-2 py-5 text-center">
+              <div className="text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无持仓'}</div>
+              {!loading && (
+                <Button variant="outline" size="sm" className="h-7 text-[12px]" onClick={() => navigate('/portfolio')}>
+                  去添加持仓
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3 text-[12px]">
+              {/* 图例行:色块 + 我的组合/基准收益 + 超额 chip */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-[3px] w-3.5 rounded-full bg-primary" />
+                    <span className="text-muted-foreground">我的组合 {benchReady ? pct(bench!.portfolio_return) : ''}</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-0 w-3.5 border-t-[1.5px] border-dashed border-muted-foreground/70" />
+                    <span className="text-muted-foreground">
+                      {bench?.benchmark_label || '沪深300'} {benchReady ? pct(bench!.benchmark_return) : ''}
+                    </span>
+                  </span>
+                </div>
+                {benchReady && (
+                  <span className={`rounded px-1.5 py-0.5 font-mono ${pctChipCls(bench!.excess_return)}`}>
+                    超额 {pct(bench!.excess_return)}
+                  </span>
+                )}
+              </div>
+
+              {/* 净值 vs 基准双线图:loading/ready/empty/error 四态,不再永远"计算中" */}
+              {benchState === 'ready' && bench?.curve && bench.curve.length >= 2 ? (
+                <BenchChart curve={bench.curve} />
+              ) : (
+                <div className="flex h-[150px] flex-col items-center justify-center gap-2 border border-dashed border-border/50 text-[11px] text-muted-foreground">
+                  {benchState === 'loading' && <span>基准对比计算中…(需拉全部持仓 K 线,约 1 分钟)</span>}
+                  {benchState === 'empty' && <span>{bench?.reason || '数据不足,暂无法计算基准对比'}</span>}
+                  {benchState === 'error' && (
+                    <>
+                      <span>基准对比加载失败(超时或网络异常)</span>
+                      <button
+                        type="button"
+                        onClick={loadBench}
+                        className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary hover:bg-accent/30"
+                      >
+                        重试
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">持仓 {diag!.position_count} 只 · 最大单仓</span>
+                <span className={`font-mono ${diag!.max_weight >= 0.4 ? 'text-amber-500' : ''}`}>
+                  {(diag!.max_weight * 100).toFixed(0)}%
+                </span>
+              </div>
+
+              {/* 市场分布:stacked 单条 */}
+              {marketSegs.length > 0 && (
+                <div>
+                  <div className="flex h-2 overflow-hidden rounded-full bg-accent/30">
+                    {marketSegs.map((seg, i) => (
+                      <div
+                        key={seg.market}
+                        className={`h-full ${MARKET_BAR_CLS[seg.market] || 'bg-muted-foreground/50'}`}
+                        style={{ width: `${seg.pct}%`, marginRight: i < marketSegs.length - 1 ? 2 : 0 }}
+                      />
+                    ))}
+                  </div>
+                  <div className="mt-1 text-[10.5px] text-muted-foreground">
+                    {marketSegs.map((seg) => `${seg.market} ${seg.pct.toFixed(0)}%`).join(' · ')}
+                  </div>
+                </div>
+              )}
+
+              {/* 领涨/拖累:双向条 */}
+              {attribution.length > 1 &&
+                [
+                  { label: '领涨', item: attribution[0] },
+                  { label: '拖累', item: attribution[attribution.length - 1] },
+                ].map(({ label, item }) => {
+                  const w = Math.min(50, (Math.abs(item.contribution_pct) / attributionMaxAbs) * 50)
+                  const positive = item.contribution_pct >= 0
+                  return (
+                    <div key={label} className="flex items-center gap-2">
+                      <span className="w-8 shrink-0 text-[10px] text-muted-foreground">{label}</span>
+                      <div className="relative h-1.5 flex-1 rounded-full bg-accent/30">
+                        <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
+                        <div
+                          className={`absolute inset-y-0 rounded-full ${positive ? 'bg-stock-up' : 'bg-stock-down'}`}
+                          style={
+                            positive
+                              ? { left: '50%', width: `${w}%` }
+                              : { right: '50%', width: `${w}%` }
+                          }
+                        />
+                      </div>
+                      <span className="w-28 shrink-0 truncate text-right text-[11px]">
+                        {item.name} <span className={`font-mono ${moveColor(item.contribution_pct)}`}>{pct(item.contribution_pct)}</span>
+                      </span>
+                    </div>
+                  )
+                })}
+
+              {diag!.alerts.length > 0 ? (
+                <div className="space-y-1 pt-1">
+                  {diag!.alerts.map((a, i) => (
+                    <div key={i} className="flex items-start gap-1 text-[11px] text-amber-500">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      <span>{a}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="pt-1 text-[11px] text-stock-up">✓ 集中度/分布未见明显风险</div>
+              )}
+              <button
+                type="button"
+                onClick={runAiReview}
+                disabled={aiReviewLoading}
+                className="mt-1 w-full rounded border border-border/60 py-1 text-[11px] text-primary hover:bg-accent/30 disabled:opacity-60"
+              >
+                {aiReviewLoading ? 'AI 体检中…' : 'AI 体检报告'}
+              </button>
+              {aiReview?.content && (
+                <div className="prose prose-sm dark:prose-invert mt-1 max-w-none break-words text-[12px] [&_p]:my-1 [&_ul]:my-1">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiReview.content}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 机会精选(右列,窄) */}
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+          {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描图标 */}
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">机会精选</h2>
+            <button
+              type="button"
+              className="text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={() => navigate('/opportunities')}
+            >
+              进入机会页
+            </button>
+          </div>
+          {opportunities.length === 0 ? (
+            <div className="py-6 text-center text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无活跃机会信号'}</div>
+          ) : (
+            <div className="divide-y divide-border/40">
+              {opportunities.slice(0, 3).map((o) => {
+                return (
+                  <div
+                    key={`${o.stock_market}:${o.stock_symbol}`}
+                    className="flex cursor-pointer items-center gap-2 py-2 hover:bg-accent/30"
+                    onClick={() => openStock(o.stock_symbol, o.stock_market, o.stock_name || o.stock_symbol)}
+                    onContextMenu={(e) =>
+                      openStockContextMenu(e, {
+                        symbol: o.stock_symbol,
+                        name: o.stock_name || o.stock_symbol,
+                        market: o.stock_market || 'CN',
+                        hasPosition: false,
+                      })
+                    }
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
+                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">{o.action_label}</span>}
+                      </div>
+                      {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground">{o.signal || o.reason}</div>}
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+{/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
+        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+          <div className="mb-1.5 flex items-baseline gap-2">
+            <h2 className="text-[13px] font-semibold">最新报告</h2>
+            <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
+            <button
+              type="button"
+              onClick={() => navigate('/reports')}
+              className="ml-auto shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+            >
+              全部 →
+            </button>
+          </div>
+          {reportsLoading && reports.length === 0 ? (
+            <SkeletonRows rows={3} />
+          ) : reports.length === 0 ? (
+            <div className="py-4 text-center text-[12px] text-muted-foreground">
+              报告生成后自动出现
+            </div>
+          ) : (
+            <div className="divide-y divide-border/40">
+              {reports.slice(0, 4).map((r) => (
+                <button
+                  key={`${r.job_id}:${r.file}`}
+                  type="button"
+                  onClick={() => navigate('/reports')}
+                  className="flex w-full items-center gap-2 py-1.5 text-left transition-colors hover:bg-accent/30"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px] font-medium">{r.title_preview || r.file}</div>
+                    <div className="truncate text-[10px] text-muted-foreground">{formatReportTime(r.mtime_iso)}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+                {/* 简报已移除(v0.4.7): 与报告中心重复, 入口保留在最新报告卡 */}
+
+{/* 机会发现(次级,右;1280px 以下整行) */}
+        <div className="lg:col-span-12 xl:col-span-6">
+          <DiscoveryPanel monitorStocks={scan} onOpenStock={openStock} />
+        </div>
+      </div>
+
+
 
       <StockInsightModal
         open={modal.open}
@@ -1132,7 +1135,7 @@ function PhaseGaugeCard() {
     return () => { alive = false; window.clearInterval(t) }
   }, [])
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
         <span className="text-[13px] font-semibold">市场温度</span>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45</span>

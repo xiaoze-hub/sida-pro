@@ -170,15 +170,15 @@ export default function MarketPhaseCard() {
 
   if (loading && !data) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card animate-pulse">
-        <div className="h-[200px] bg-accent/20 rounded-xl" />
+      <div className="animate-pulse">
+        <div className="h-[200px] bg-muted/40" />
       </div>
     )
   }
 
   if (error && !data) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="border-t border-border/60 pt-2.5">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <ShieldAlert className="w-3.5 h-3.5" />
           <span>市场阶段数据暂不可用({error})</span>
@@ -197,7 +197,7 @@ export default function MarketPhaseCard() {
   const style = phaseStyle(phaseKey)
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="border-t border-border/60 pt-2.5">
       {/* 标题 + 时间戳 */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
