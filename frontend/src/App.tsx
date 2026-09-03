@@ -473,6 +473,8 @@ function App() {
               <Route path="/dark-fund-top" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               {/* §4.3 行情三合一: /forecast 作为行情入口(内部分时日K/预测/资金/事件 四 Tab) */}
               <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
+              {/* Phase 4 走查补: /quote 别名(站内多处仍链 /quote?type=...&symbol=..., 无路由会落空跳首页) */}
+              <Route path="/quote" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
               <Route path="/l2" element={<PermGuard perm="view_forecast" myPerms={myPerms}><L2OrderbookPage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />

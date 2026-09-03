@@ -52,7 +52,8 @@
 - **Phase 0 Quote收尾** (09-03, [88a056b]). KlineChart新增`costLines`(强调橙实线, 与支撑压力虚线区分, 独立管理+卸载清理); Quote拉`portfolioSummary`全账户持仓按代码归一匹配、有持仓才画成本线(无持仓不画不编造), ContextCard死代码删除; 板块占位换成可点`/boards/{symbol}`跳转; Quote内rounded-lg/xl清零. tsc 0 + build 18s.
 - **Phase 1 Dashboard去卡片化** (09-03, [f693ed4]). MarketPhaseCard大字盒→左色条+文字(阶段色只留border/text)、Stat小格→hairline左刻线; MarketMainlineCard行盒→border-b分隔; Dashboard分享下拉rounded-lg→md. Dashboard页其余区(资金流/异动/工作台)此前已是hairline, 本次动三处卡片残留. tsc 0 + build 15s.
 - **Phase 2 Opportunities去卡片化** (09-03, [c2e5112]). DiscoveryPanel热门板块/股票/弹窗三处`rounded-xl bg-accent/20`盒→border-b行(含骨架); AbnormalMovesCard容器盒→border-t区、行hover边框盒→hover底色、告警盒rounded-lg→md; Opportunities页Tab/共振开关rounded-lg→md. tsc 0 + build 15s.
-- **Phase 3 长尾13页批量** (09-03, feat分支). 圆角收敛: `rounded-lg`→md 55处、`rounded-xl`→md 36处(图标砖5处保留); 交互列表行展平: DataSources数据源行/Settings通道行/Stocks智能体行与新闻行`bg-accent`盒→border-b行. 13页无base-ui Card引用. 静态表单区盒仅收圆角未改结构(未读不重构). tsc 0 + build 15s.
+- **Phase 3 长尾13页批量** (09-03, [f1f6f17]). 圆角收敛: `rounded-lg`→md 55处、`rounded-xl`→md 36处(图标砖5处保留); 交互列表行展平: DataSources数据源行/Settings通道行/Stocks智能体行与新闻行`bg-accent`盒→border-b行. 13页无base-ui Card引用. 静态表单区盒仅收圆角未改结构(未读不重构). tsc 0 + build 15s.
+- **Phase 4 走查修** (09-03, feat分支). ①`/quote`无路由(站内多处链`/quote?type=...`, §4.3只留了`/forecast`, 落空跳首页)——加同守卫别名路由; ②通知页主从双"暂无通知"——有列表无选中右栏改选择提示、空列表右栏留白. 实机走查6页: Quote真K线+成本线可见、Dashboard/Opportunities/Settings扁平无堆叠. tsc 0 + build 36s.
 
 ## 2026-09-02
 

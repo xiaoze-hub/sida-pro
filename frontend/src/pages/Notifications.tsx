@@ -462,7 +462,15 @@ export default function NotificationsPage() {
 
         <section className="min-w-0">
           {!selected ? (
-            <EmptyState filtered={false} />
+            filtered.length > 0 ? (
+              /* Phase 4 走查修: 有列表无选中 ≠ 无数据, 右栏给选择提示而非第二个"暂无通知" */
+              <div className="flex min-h-[280px] flex-col items-center justify-center px-6 text-center">
+                <div className="text-[13px] text-muted-foreground">从左侧选择一条通知查看详情</div>
+              </div>
+            ) : (
+              /* 空列表时右栏留白(左栏 EmptyState 已传达空态, 不重复第二个) */
+              <div aria-hidden className="hidden min-h-[280px] lg:block" />
+            )
           ) : (
             <div className="p-5 md:p-6">
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/40 pb-5">
