@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
@@ -355,6 +355,7 @@ export default function QuotePage() {
             <span className="text-border/60">|</span>
             <span className="text-muted-foreground">盘口:</span>
             <span className="font-medium text-foreground">{summary.orderbook.shape}</span>
+            <Link to={`/l2?symbol=${encodeURIComponent(symbol)}`} className="text-[11px] text-primary hover:underline">明细›</Link>
           </>
         )}
       </div>

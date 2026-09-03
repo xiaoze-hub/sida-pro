@@ -37,6 +37,7 @@
 - **终端化 A-4 五页去卡片** (Help/Profile hero+section; Agents 调度条+空态+agent行; BoardDetail 指标格+成分股/轮动区, error语义盒保留; PriceAlerts 工具条+空态+规则行; 顺手修启用徽章 dark 下 emerald-700 隐形, 与 P1-4 同类). tsc 0 error. [commit a2f6b19]
 - **终端化 A-5 三页去卡片** (DataSources section; History 空态/移动切换/目录+正文窗格; Notifications 过滤条+主从网格去框, 内部分隔保留). tsc 0 error + vite build 通过. [commit 8aa6071]
 - **P2 推断页核实结论 (B线, 只读未动代码)**: 共振扫描/L2盘口/主题设置/持仓成本线均无独立路由. 共振后端(wencai/decision_pioneer)就绪且前端已有徽章+窄栏展示 → 不新建页; L2 orderbook 后端就绪(盘口队列+托压)但前端仅 shape 文字 → 十档明细页列后续候选; 主题切换无入口 + klines 无持仓成本字段 → 两页不做等后端.
+- **L2 盘口资金页立项交付** (Phase1 核实: /api/orderbook-ob+summary.orderbook+more-info 三端点现成, 后端零新增; 十档买卖"额"有, 十档明细/逐笔无 — 页面诚实口径五档+L2成品). Phase2: `insightApi.orderbookOb` + 新建 `L2Orderbook.tsx`(/l2: 十档双向条+OB事件+幽灵单+L2成品6字段+raw主力净额容错, 30s轮询, hairline无卡片) + 行情组导航/路由. Phase3: Quote 盘口 shape 旁链入明细页. tsc 0 error + vite build 通过. [commit 5fafdf5/fa0612e]
 
 ## 2026-09-02
 

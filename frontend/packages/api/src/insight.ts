@@ -30,6 +30,10 @@ export const insightApi = {
   klineSummary: <T>(symbol: string, market: string) =>
     fetchAPI<T>(`/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`),
 
+  /** L2 盘口 OB 失衡(thsdk 20档, 含十档买卖额/ob_series/事件/幽灵单; 不可用时 available=false) */
+  orderbookOb: <T>(symbol: string) =>
+    fetchAPI<T>(`/orderbook-ob?symbol=${encodeURIComponent(symbol)}`),
+
   klines: <T>(symbol: string, params: { market: string; days?: number; interval?: string }) =>
     fetchAPI<T>(
       withQuery(`/klines/${encodeURIComponent(symbol)}`, {
