@@ -31,9 +31,15 @@ if IS_PG:
         # 修复 2026-08-21: 调大连接池, 实测 size=5 + overflow=10 在 26 并发下被打满,
         # 触发 sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached
         # 调为 10 + 20 (30 总上限) 应对 Dashboard 一次刷新 26 API 并发
-        pool_size=10,
-        max_overflow=20,
-        pool_timeout=30,
+        # 2026-09-03 v0.4.78: 10+20(30)/30s 还是不够, abnormal_moves 单接口扫自选+候选池
+        # 每只股 analyze_for_symbols 内调 K线 → 多并发 30s 内打满 → QueuePool TimeoutError
+        # → 接口 30s 超时撞 502。提到 20+40(60 总) + 超时 30→10s, 让失败快速暴露
+        # 而不阻塞 30s; 同时 GET 路径 summary_cache 缓存已落库(v0.4.77), 不会因缓存
+        # 失败就全堆在 DB 上。
+        pool_size=20,
+        max_overflow=40,
+        pool_timeout=10,  # v0.4.78: 30→10s, 失败快速失败
+        pool_recycle=1800,  # 30min 回收, 防止 PG 端 idle in transaction
     )
 else:
     engine = create_engine(
@@ -51,7 +57,7 @@ else:
 def _set_db_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     if IS_PG:
-        cursor.execute("SET statement_timeout = 30000")  # 30s 语句超时
+        cursor.execute("SET statement_timeout = 8000")  # v0.4.78: 30s→8s, 配合 pool_timeout=10s 让慢查询快速失败
     else:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=60000")

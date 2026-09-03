@@ -15,6 +15,19 @@
 
 ## 2026-09-03
 
+### feature v0.4.78 abnormal_moves DB 超时根治
+
+**问题**：v0.4.77 部署后 `/api/abnormal-moves` 仍 30s 超时撞 502。根因：
+- `analyze_for_symbols` 串行遍历 30+ 只股，每只股内调 K线 API（~1s），串行=30s
+- 后端 `pool_size=10 + max_overflow=20 + pool_timeout=30` 撞池时直接等 30s
+- PG `statement_timeout=30s` 让慢查询也等满
+
+**修复**：
+1. `analyze_for_symbols` 改 ThreadPoolExecutor 并发 4 路 + `wait(FIRST_COMPLETED)` 循环 + 全局 deadline 强制退出 + `executor.shutdown(wait=False)` 让接口立即返回。30+ 只股 30s → ~8s（并发 4 路 + 8s 单股兜底）
+2. `database.py` PG 引擎 `pool_size=20 + max_overflow=40 = 60 总`，`pool_timeout=30s→10s`（失败快速失败），`pool_recycle=1800s`，`statement_timeout=30s→8s`
+3. 测试 `tests/test_abnormal_moves_concurrent.py` 5 例全过（并发加速 / 单股超时 / 空列表 / 全过滤 / 异常隔离），现有 `test_abnormal_moves.py` 67 例 + `test_summary_cache` 5 例 + summary/history 32 例 共 109 passed
+4. 前端 tsc 0 error
+
 ### feature v0.4.77 性能大修（5 项缓存落库 + 慢查询根治）
 
 **问题**：实测生产页面 12.5s 并发加载（14 个接口），`/api/klines/{symbol}/l2-ticks` 30s 超时撞 502、`/api/market/mainline` 5-20s 冷启动、`/api/market-data/fundamentals-detail` 12-17s 冷启动、`/api/abnormal-moves` 30s DB 池超时、`/api/history?limit=20` 3.1s 拉 2.1MB 全文。根因：l2-ticks 默认 fetch=1 每请求实时拉 thsdk，summary/fundamentals 只走 30s 进程内缓存进程重启失效，history 列表无 content 截断。

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Iterable
 
@@ -379,22 +380,75 @@ def analyze_for_symbols(
     *,
     min_proximity: float = 0.5,
     analyzer: Callable[[str], dict] | None = None,
+    max_workers: int = 4,  # v0.4.78: 并发 4 路 K线请求, 替代串行(30 只×1s=30s 超时)
+    per_symbol_timeout_s: float = 8.0,  # v0.4.78: 单只 8s 兜底超时
 ) -> list[dict]:
-    """批量 symbol 跑异常监控, proximity 倒序, 过滤掉 <min_proximity / 无数据."""
+    """批量 symbol 跑异常监控, proximity 倒序, 过滤掉 <min_proximity / 无数据。
+
+    v0.4.78 修复: 改为 ThreadPoolExecutor 并发执行, max_workers=4 防 K线源被压垮;
+    每只股 8s 兜底超时(防单只股慢查询阻塞全局); 自选股+候选池 30+ 只也 <30s 完成。
+    """
+    import concurrent.futures as _cf
+
     analyze = analyzer or analyze_abnormal_moves
-    results = []
-    for sym in symbols:
+    results: list[dict] = []
+
+    def _one(sym: str) -> dict | None:
         try:
             r = analyze(sym)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("[abnormal_moves] 单只分析失败 %s: %r", sym, e)
-            continue
+            return None
         if not r or not r.get("available"):
-            continue
+            return None
         prox = r.get("proximity")
         if prox is None or prox < min_proximity:
-            continue
-        results.append(r)
+            return None
+        return r
+
+    syms = list(symbols)
+    if not syms:
+        return []
+    # v0.4.78 修复点: 在外层收集 future + 手动 wait(timeout), 不要在 _one 内套
+    # ThreadPoolExecutor(那个嵌套层即使 result 超时, worker 仍占线程)。
+    # 用 wait(FIRST_COMPLETED) 循环 + 未完成 future 标超时, 整体仍能在
+    # ceil(N/max_workers) × per_symbol_timeout 内返回。
+    finished_results: list[dict] = []
+    executor = _cf.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        future_to_sym = {executor.submit(_one, sym): sym for sym in syms}
+        pending: set = set(future_to_sym.keys())
+        # 整体超时 = ceil(N/max_workers) × per_symbol_timeout, 最多再加 2 轮容差
+        max_total_s = (len(syms) + max_workers - 1) // max_workers * per_symbol_timeout_s + 2
+        deadline = time.monotonic() + max_total_s
+        while pending:
+            remaining = max(0.05, deadline - time.monotonic())
+            done, pending = _cf.wait(pending, timeout=min(remaining, per_symbol_timeout_s),
+                                    return_when=_cf.FIRST_COMPLETED)
+            for fut in done:
+                sym = future_to_sym[fut]
+                try:
+                    r = fut.result(timeout=0.1)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("[abnormal_moves] 单只 future 失败 %s: %r", sym, e)
+                    continue
+                if r is not None:
+                    finished_results.append(r)
+            # 全局 deadline 到, 强制退出 + 关线程池(不 wait, 让 worker 线程被
+            # 立即释放, Python 不会真杀线程但 executor 标记 shutdown, 后续 submit
+            # 会被拒; 当前 worker 跑完慢 sleep 后线程自然回收)。
+            if time.monotonic() >= deadline:
+                if pending:
+                    logger.warning(
+                        "[abnormal_moves] 整体超时(>%ss), %d 股未完成, 强制返回部分结果",
+                        max_total_s, len(pending),
+                    )
+                break
+    finally:
+        # shutdown(wait=False): 不等 worker 结束, 让接口立即返回
+        # (worker 后续跑完慢函数会被回收)
+        executor.shutdown(wait=False)
+    results = finished_results
     results.sort(
         key=lambda r: (
             -(r.get("proximity") or 0.0),
