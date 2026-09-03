@@ -28,9 +28,8 @@ import { fetchAPI } from '@panwatch/api'
  * 进度条 [0~100%] 直接展示 proximity*100, 截断 0~100. 主要给 "看一眼就抓到
  * 最接近阈值的标的" 用的, >100% 表示已经超过阈值.
  *
- * 样式对齐: 复用 DarkFlowCards / OrderBookObBar 的 "rounded-xl border
- * border-border/50 bg-card p-3" 卡片风 + "text-[13px] font-semibold
- * text-foreground" 标题 + "font-mono" 数值, 严格跟现有 token。
+ * 样式对齐: hairline 分隔 + 紧凑(Phase 2 去卡片化, 不用 rounded 盒子)。
+ * 标题 "text-[13px] font-semibold text-foreground" + "font-mono" 数值, 严格跟现有 token。
  */
 
 export type AbnormalStatus = 'triggered' | 'edge' | 'watch' | 'normal' | 'unknown'
@@ -182,7 +181,7 @@ function Row({ row, onOpen }: RowProps) {
     <button
       type="button"
       onClick={() => onOpen(row.symbol, row)}
-      className={`grid grid-cols-[68px_1fr_70px_auto_88px_64px] items-center gap-2 px-2 py-2 rounded-lg border border-transparent hover:border-border/60 hover:${style.rowHover} text-left transition-colors w-full`}
+      className={`grid grid-cols-[68px_1fr_70px_auto_88px_64px] items-center gap-2 px-2 py-2 hover:bg-accent/20 text-left transition-colors w-full`}
       title={`${row.symbol} ${row.name ?? ''} · 基准 ${row.benchmark?.name ?? '—'}`}
     >
       {/* 代码 */}
@@ -308,14 +307,14 @@ export default function AbnormalMovesCard({
   // 加载占位
   if (loading && !data) {
     return (
-      <div className="rounded-xl border border-border/50 bg-card p-3">
+      <div className="border-t border-border/60 pt-2.5">
         <div className="flex items-center gap-1.5 mb-2">
           <Zap className="w-3.5 h-3.5 text-muted-foreground" />
           <span className="text-[13px] font-semibold text-foreground">异动接近度</span>
         </div>
         <div className="space-y-1.5">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-10 rounded-lg bg-accent/30 animate-pulse" />
+            <div key={i} className="h-10 border-b border-border/40 animate-pulse" />
           ))}
         </div>
       </div>
@@ -326,7 +325,7 @@ export default function AbnormalMovesCard({
   const showError = !!error && !data
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-3">
+    <div className="border-t border-border/60 pt-2.5">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5">
           <Zap className="w-3.5 h-3.5 text-amber-500" />
@@ -354,7 +353,7 @@ export default function AbnormalMovesCard({
       </div>
 
       {showError ? (
-        <div className="flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+        <div className="flex items-center gap-2 text-[12px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
           <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
           <span>异动监控暂不可用({error})</span>
         </div>

@@ -261,7 +261,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
           {discoverLoading ? (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
               {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="animate-pulse rounded-xl bg-accent/20 p-3">
+                <div key={i} className="animate-pulse border-b border-border/40 py-2">
                   <div className="mb-2 h-3 w-24 rounded bg-accent/60" />
                   <div className="h-3 w-16 rounded bg-accent/50" />
                 </div>
@@ -290,7 +290,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     <button
                       key={b.code}
                       onClick={() => openBoard(b)}
-                      className="flex items-center justify-between gap-3 rounded-xl bg-accent/20 p-3 text-left transition-colors hover:bg-accent/35"
+                      className="flex items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
                       title="查看板块成分股"
                     >
                       <div className="min-w-0">
@@ -319,7 +319,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     <div
                       key={`${s.market || discoverMarket}:${s.symbol}`}
                       onClick={() => onOpenStock(s.symbol, s.market || discoverMarket, s.name, false)}
-                      className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-accent/20 p-3 text-left transition-colors hover:bg-accent/35"
+                      className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
                       title="打开股票详情弹窗"
                     >
                       <div className="min-w-0">
@@ -364,7 +364,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                       setBoardDialogOpen(false)
                       onOpenStock(s.symbol, s.market || 'CN', s.name, false)
                     }}
-                    className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-accent/20 p-3 text-left transition-colors hover:bg-accent/35"
+                    className="flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 py-2 text-left transition-colors hover:bg-accent/20"
                   >
                     <div className="min-w-0">
                       <div className="truncate text-[13px] font-medium text-foreground">{s.name}</div>
