@@ -202,7 +202,7 @@ iframe{width:100%;height:100%;border:0}
           </div>
         ) : profileFailed ? null : !myProfile ? (
           /* 空态: 无画像, 引导上传 */
-          <div className="flex items-center gap-3 rounded-xl bg-accent/20 border border-dashed border-border px-4 py-3">
+          <div className="flex items-center gap-3 rounded-md bg-accent/20 border border-dashed border-border px-4 py-3">
             <UserRound className="w-4 h-4 text-muted-foreground shrink-0" />
             <p className="text-[12px] text-muted-foreground">
               还没有交易画像。上传交割单后自动生成你的行为画像，下次进来直接查看。
@@ -297,7 +297,7 @@ iframe{width:100%;height:100%;border:0}
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-[12px] text-red-600">
+        <div className="flex items-center gap-2 rounded-md bg-red-500/10 border border-red-500/20 p-3 text-[12px] text-red-600">
           <AlertTriangle className="w-4 h-4" /> {error}
         </div>
       )}

@@ -127,7 +127,7 @@ function normalizeInternalLink(link: string): string {
 
 function MarkdownBlock({ content }: { content: string }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-border/40 bg-background/40 p-4 text-[13px] leading-6 text-foreground">
+    <div className="overflow-x-auto rounded-md border border-border/40 bg-background/40 p-4 text-[13px] leading-6 text-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -339,7 +339,7 @@ export default function NotificationsPage() {
       <ErrorBanner errors={error ? [{ source: '通知', message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
-        <div className="flex shrink-0 items-center gap-1 rounded-lg bg-background/45 p-1">
+        <div className="flex shrink-0 items-center gap-1 rounded-md bg-background/45 p-1">
           {([
             ['all', '全部', items.length],
             ['unread', '未读', unread],
@@ -388,7 +388,7 @@ export default function NotificationsPage() {
 
         <span className="hidden h-5 w-px bg-border/60 sm:block" />
 
-        <label className="relative flex h-8 shrink-0 items-center rounded-lg border border-border/50 bg-background/45 pl-7 text-muted-foreground transition-colors focus-within:border-primary/40 focus-within:text-primary">
+        <label className="relative flex h-8 shrink-0 items-center rounded-md border border-border/50 bg-background/45 pl-7 text-muted-foreground transition-colors focus-within:border-primary/40 focus-within:text-primary">
           <Send className="pointer-events-none absolute left-2.5 h-3 w-3" />
           <select
             aria-label="按推送渠道筛选"
@@ -488,11 +488,11 @@ export default function NotificationsPage() {
               </div>
 
               <div className="grid gap-3 border-b border-border/40 py-5 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl bg-accent/30 p-3">
+                <div className="rounded-md bg-accent/30 p-3">
                   <div className="text-[10px] text-muted-foreground">站内状态</div>
                   <div className="mt-1 flex items-center gap-1.5 text-[12px] font-medium text-foreground"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-700" />已送达消息中心</div>
                 </div>
-                <div className="rounded-xl bg-accent/30 p-3">
+                <div className="rounded-md bg-accent/30 p-3">
                   <div className="text-[10px] text-muted-foreground">推送渠道</div>
                   {(selected.push_channels || []).length > 0 ? (
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -528,18 +528,18 @@ export default function NotificationsPage() {
                     </div>
                   )}
                 </div>
-                <div className="rounded-xl bg-accent/30 p-3">
+                <div className="rounded-md bg-accent/30 p-3">
                   <div className="text-[10px] text-muted-foreground">来源</div>
                   <div className="mt-1 truncate text-[12px] font-medium text-foreground" title={selected.source}>{selected.source || '系统'}</div>
                 </div>
-                <div className="rounded-xl bg-accent/30 p-3">
+                <div className="rounded-md bg-accent/30 p-3">
                   <div className="text-[10px] text-muted-foreground">级别</div>
                   <div className="mt-1 text-[12px] font-medium text-foreground">{selectedLevel.label}</div>
                 </div>
               </div>
 
               {selected.push_error && (
-                <div className="mt-5 rounded-xl border border-rose-500/25 bg-rose-500/8 p-4">
+                <div className="mt-5 rounded-md border border-rose-500/25 bg-rose-500/8 p-4">
                   <div className="flex items-center gap-2 text-[12px] font-medium text-rose-600 dark:text-rose-600"><AlertCircle className="h-4 w-4" />推送失败详情</div>
                   <div className="mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-rose-700 dark:text-rose-400">{selected.push_error}</div>
                 </div>
@@ -565,19 +565,19 @@ export default function NotificationsPage() {
                   )}
                 </div>
                 {detailLoading ? (
-                  <div className="flex min-h-28 items-center justify-center rounded-xl border border-border/40 bg-background/30 text-[12px] text-muted-foreground">
+                  <div className="flex min-h-28 items-center justify-center rounded-md border border-border/40 bg-background/30 text-[12px] text-muted-foreground">
                     <RefreshCw className="mr-2 h-4 w-4 animate-spin" />正在读取本次任务结果…
                   </div>
                 ) : detailError ? (
-                  <div className="rounded-xl border border-rose-500/25 bg-rose-500/8 p-4 text-[12px] text-rose-600 dark:text-rose-600">{detailError}</div>
+                  <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-4 text-[12px] text-rose-600 dark:text-rose-600">{detailError}</div>
                 ) : task?.error ? (
-                  <div className="rounded-xl border border-rose-500/25 bg-rose-500/8 p-4 font-mono text-[12px] leading-6 text-rose-700 dark:text-rose-400 whitespace-pre-wrap break-words">{task.error}</div>
+                  <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-4 font-mono text-[12px] leading-6 text-rose-700 dark:text-rose-400 whitespace-pre-wrap break-words">{task.error}</div>
                 ) : task?.result ? (
                   <MarkdownBlock content={task.result} />
                 ) : selected.trace_id ? (
-                  <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
+                  <div className="rounded-md border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">已有任务追踪编号，但未找到对应的执行结果。</div>
                 ) : (
-                  <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
+                  <div className="rounded-md border border-dashed border-border/60 px-4 py-6 text-center text-[12px] text-muted-foreground">该类通知没有关联 Agent 执行记录。</div>
                 )}
               </div>
 
@@ -586,12 +586,12 @@ export default function NotificationsPage() {
                 {selected.body ? (
                   <MarkdownBlock content={selected.body} />
                 ) : (
-                  <div className="rounded-xl border border-dashed border-border/60 px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
+                  <div className="rounded-md border border-dashed border-border/60 px-4 py-8 text-center text-[12px] text-muted-foreground">该通知没有正文。</div>
                 )}
               </div>
 
               {(selected.trace_id || linkedPage) && (
-                <details className="mt-5 rounded-xl border border-border/40 bg-accent/20 px-4 py-3">
+                <details className="mt-5 rounded-md border border-border/40 bg-accent/20 px-4 py-3">
                   <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">技术详情</summary>
                   <dl className="mt-3 grid gap-2 text-[11px] sm:grid-cols-[88px_1fr]">
                     {selected.trace_id && <><dt className="text-muted-foreground">Trace ID</dt><dd className="break-all font-mono text-foreground">{selected.trace_id}</dd></>}

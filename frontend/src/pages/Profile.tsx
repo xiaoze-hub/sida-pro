@@ -51,7 +51,7 @@ function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: str
 
 function StatTile({ icon: Icon, label, value, sub, accent }: { icon: any; label: string; value: string; sub?: string; accent: string }) {
   return (
-    <div className="rounded-xl border border-border/40 bg-accent/25 p-3.5">
+    <div className="rounded-md border border-border/40 bg-accent/25 p-3.5">
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${accent}`} />
         <span className="text-[11px] text-muted-foreground">{label}</span>
@@ -250,7 +250,7 @@ export function Profile() {
 
             <div className="flex-1 min-w-0 space-y-4">
               {pasteOpen && (
-                <div className="rounded-xl border border-border/40 bg-accent/20 p-3 space-y-2">
+                <div className="rounded-md border border-border/40 bg-accent/20 p-3 space-y-2">
                   <Label className="text-[11px]">粘贴图片 data URL(200KB 以内)</Label>
                   <div className="flex gap-2">
                     <Input
@@ -299,7 +299,7 @@ export function Profile() {
           </div>
 
           {/* 当前账号 */}
-          <div className="mb-5 rounded-xl border border-border/40 bg-accent/20 p-3.5 space-y-2">
+          <div className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2">
             {[
               { k: '账号', v: profile?.username || '--' },
               { k: '角色', v: ROLE_LABEL[profile?.role || ''] || profile?.role || '--' },

@@ -1518,7 +1518,7 @@ export default function SettingsPage() {
               <span className="hidden sm:inline">添加</span>
             </Button>
           </div>
-          <div className="mb-3 rounded-xl border border-border/50 bg-accent/20 p-3.5">
+          <div className="mb-3 rounded-md border border-border/50 bg-accent/20 p-3.5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-start gap-2.5">
                 <MonitorUp className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
@@ -1547,7 +1547,7 @@ export default function SettingsPage() {
             )}
           </div>
           {/* 个人微信(iLink): 扫码绑定 */}
-          <div className="mb-3 rounded-xl border border-border/50 bg-accent/20 p-3.5">
+          <div className="mb-3 rounded-md border border-border/50 bg-accent/20 p-3.5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-start gap-2.5">
                 <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
@@ -1593,7 +1593,7 @@ export default function SettingsPage() {
           ) : (
             <div className="space-y-3">
               {channels.map(ch => (
-                <div key={ch.id} className="flex items-center justify-between p-3.5 rounded-xl bg-accent/30 hover:bg-accent/50 transition-colors">
+                <div key={ch.id} className="flex items-center justify-between gap-3 border-b border-border/40 py-2.5 transition-colors hover:bg-accent/20">
                   <div className="flex items-center gap-3 min-w-0">
                     {ch.is_default && <Star className="w-3.5 h-3.5 text-amber-700 dark:text-amber-500 flex-shrink-0" />}
                     <div className="min-w-0">
@@ -1651,7 +1651,7 @@ export default function SettingsPage() {
           </div>
 
           {isDemo ? (
-            <div className="rounded-xl border border-border/50 bg-accent/20 p-3.5 text-[12px] text-muted-foreground">
+            <div className="rounded-md border border-border/50 bg-accent/20 p-3.5 text-[12px] text-muted-foreground">
               演示账号为只读浏览模式，不可配置自己的服务商。
             </div>
           ) : myServicesLoading ? (
@@ -1704,7 +1704,7 @@ export default function SettingsPage() {
           ) : (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {subscriptions.map(s => (
-                <div key={s.report_type} className="flex items-center justify-between rounded-lg border border-border/40 bg-accent/20 px-3 py-2.5">
+                <div key={s.report_type} className="flex items-center justify-between rounded-md border border-border/40 bg-accent/20 px-3 py-2.5">
                   <div>
                     <div className="text-[12px] font-medium">{s.label}</div>
                     <div className="text-[10px] text-muted-foreground">{s.report_type}</div>
@@ -1802,7 +1802,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
             </div>
-            <div className="rounded-xl bg-accent/30 p-3.5">
+            <div className="rounded-md bg-accent/30 p-3.5">
               {thsSession?.logged_in ? (
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px]">
                   <div><span className="text-muted-foreground">账号:</span> <span className="font-mono">{thsSession.account}</span></div>
@@ -1815,7 +1815,7 @@ export default function SettingsPage() {
               )}
               {thsQr && (
                 <div className="mt-3 flex items-center gap-4">
-                  <img src={`data:image/png;base64,${thsQr}`} alt="同花顺扫码登录" className="w-40 h-40 rounded-lg border border-border/50" />
+                  <img src={`data:image/png;base64,${thsQr}`} alt="同花顺扫码登录" className="w-40 h-40 rounded-md border border-border/50" />
                   <div className="text-[11px] text-muted-foreground">
                     <p>用手机同花顺 APP 扫描二维码</p>
                     <p className="mt-1">有效期约 3 分钟,扫码后自动登录</p>
@@ -1838,7 +1838,7 @@ export default function SettingsPage() {
                   className="h-9 w-full md:w-[320px]"
                  aria-label="搜索设置项（描述 / key）"/>
                 {health?.timezone ? (
-                  <div className="hidden md:flex px-2.5 h-9 items-center rounded-lg border border-border/50 bg-accent/20 text-[11px] text-muted-foreground">
+                  <div className="hidden md:flex px-2.5 h-9 items-center rounded-md border border-border/50 bg-accent/20 text-[11px] text-muted-foreground">
                     TZ <span className="ml-1 font-mono text-foreground/90">{health.timezone}</span>
                   </div>
                 ) : null}
@@ -1930,14 +1930,14 @@ export default function SettingsPage() {
             }}
           />
 
-          <div className="rounded-xl border border-border/40 bg-accent/20 p-3">
+          <div className="rounded-md border border-border/40 bg-accent/20 p-3">
             <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
               <FileJson className="w-4 h-4 text-muted-foreground" />
               官方模板
             </div>
             <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
               {builtinTemplates.map(t => (
-                <div key={t.name} className="rounded-lg border border-border/40 bg-background/30 p-3">
+                <div key={t.name} className="rounded-md border border-border/40 bg-background/30 p-3">
                   <div className="flex items-center justify-between">
                     <div className="text-[12px] font-semibold text-foreground">{t.name}</div>
                     <Button
@@ -1985,7 +1985,7 @@ export default function SettingsPage() {
               </div>
 
               {fbStats.by_agent?.length ? (
-                <div className="rounded-xl border border-border/40 bg-accent/20 p-3">
+                <div className="rounded-md border border-border/40 bg-accent/20 p-3">
                   <div className="text-[12px] font-semibold text-foreground">按 Agent</div>
                   <div className="mt-2 space-y-1">
                     {fbStats.by_agent.slice(0, 6).map(a => (
@@ -2107,7 +2107,7 @@ export default function SettingsPage() {
                 </Button>
               </div>
             </div>
-            <div className="rounded-xl border border-border/50 bg-accent/20 p-3 space-y-3">
+            <div className="rounded-md border border-border/50 bg-accent/20 p-3 space-y-3">
               <p className="text-[11px] font-medium text-foreground">模型（单模型简化配置，可留空稍后补充）</p>
               <div>
                 <Label>模型标识</Label>
@@ -2304,7 +2304,7 @@ export default function SettingsPage() {
               ) : (
                 <div className="max-h-[55vh] space-y-1.5 overflow-y-auto scrollbar pr-1">
                   {modelsSvc.models.map(m => (
-                    <div key={m.id} className="flex items-center justify-between gap-2 rounded-lg border border-border/50 bg-background/60 px-3 py-2">
+                    <div key={m.id} className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           {m.is_default && <Star className="w-3 h-3 text-amber-700 dark:text-amber-500 flex-shrink-0" />}
@@ -2379,7 +2379,7 @@ export default function SettingsPage() {
                     else next.add(id)
                     setBatchChecked(next)
                   }}
-                  className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
+                  className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition-colors ${
                     checked ? 'border-primary/60 bg-primary/10' : 'border-border/50 hover:border-border hover:bg-muted/40'
                   }`}
                 >
@@ -2431,7 +2431,7 @@ export default function SettingsPage() {
           <div className="mt-2 flex flex-col items-center gap-3">
             {wechatQr && (
               <>
-                <div className="rounded-xl border border-border/50 bg-white p-3">
+                <div className="rounded-md border border-border/50 bg-white p-3">
                   <QRCodeSVG value={wechatQr.qrcode_url} size={200} />
                 </div>
                 <p className="text-[11px] text-muted-foreground text-center">
@@ -2440,7 +2440,7 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={() => void copyWechatLink(wechatQr.qrcode_url)}
-                  className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border/50 bg-accent/30 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/50 bg-accent/30 px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
                   title="点击复制链接"
                 >
                   <Copy className="h-3 w-3 flex-shrink-0" />
@@ -2499,7 +2499,7 @@ export default function SettingsPage() {
               </Select>
             </div>
             {channelForm.type === 'wechat_ilink' ? (
-              <div className="rounded-xl border border-border/50 bg-accent/20 p-4">
+              <div className="rounded-md border border-border/50 bg-accent/20 p-4">
                 <div className="flex items-start gap-2.5">
                   <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
                   <div>
@@ -2762,7 +2762,7 @@ function LlmUsageSection() {
               ['区间 Token', fmtNum(data.summary.tokens), ''],
               ['区间费用', fmtCost(data.summary.cost), '估算'],
             ].map(([label, val, suffix]) => (
-              <div key={label} className="rounded-lg border border-border/40 bg-accent/20 px-3 py-2.5">
+              <div key={label} className="rounded-md border border-border/40 bg-accent/20 px-3 py-2.5">
                 <div className="text-[10px] text-muted-foreground">{label}</div>
                 <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
                   {val}
@@ -2776,7 +2776,7 @@ function LlmUsageSection() {
               ['本月调用', fmtNum(data.summary.month_calls), '次'],
               ['本月费用', fmtCost(data.summary.month_cost), '估算'],
             ].map(([label, val, suffix]) => (
-              <div key={label} className="rounded-lg border border-border/40 bg-accent/20 px-3 py-2.5">
+              <div key={label} className="rounded-md border border-border/40 bg-accent/20 px-3 py-2.5">
                 <div className="text-[10px] text-muted-foreground">{label}</div>
                 <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
                   {val}

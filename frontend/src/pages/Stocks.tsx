@@ -1724,7 +1724,7 @@ export default function StocksPage() {
           {/* Desktop buttons + controls */}
           <div className="hidden md:flex items-center gap-3">
             {/* Controls */}
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-accent/30">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-accent/30">
               <div className="flex items-center gap-1.5">
                 <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} className="scale-90" />
                 <span className="text-[11px] text-muted-foreground">自动刷新</span>
@@ -1970,7 +1970,7 @@ export default function StocksPage() {
 
       {/* Tabs: Positions / Watchlist */}
       <div className="mb-4">
-        <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-accent/30">
+        <div className="inline-flex items-center gap-1 p-1 rounded-md bg-accent/30">
           <button
             onClick={() => setViewTab('positions')}
             className={`px-3 py-1.5 rounded-md text-[12px] transition-colors ${
@@ -2646,7 +2646,7 @@ export default function StocksPage() {
                       setDraggingWatchStockId(null)
                       watchDragSnapshotRef.current = null
                     }}
-                    className={`group rounded-xl border border-border/40 bg-background/30 hover:bg-accent/20 transition-colors px-3 py-2.5 cursor-pointer ${draggingWatchStockId === stock.id ? 'opacity-60' : ''}`}
+                    className={`group rounded-md border border-border/40 bg-background/30 hover:bg-accent/20 transition-colors px-3 py-2.5 cursor-pointer ${draggingWatchStockId === stock.id ? 'opacity-60' : ''}`}
                     onClick={() => {
                       if (isSuppressCardClick()) return
                       setAgentDialogStock(stock)
@@ -2828,7 +2828,7 @@ export default function StocksPage() {
           </DialogHeader>
           {removeWatchStock && (
             <div className="space-y-4 mt-2">
-              <div className="rounded-lg border border-border/40 bg-accent/20 p-3">
+              <div className="rounded-md border border-border/40 bg-accent/20 p-3">
                 <div className="text-[13px] font-semibold text-foreground">
                   {removeWatchStock.name}
                   <span className="ml-2 font-mono text-[12px] text-muted-foreground">{removeWatchStock.symbol}</span>
@@ -2913,7 +2913,7 @@ export default function StocksPage() {
           </DialogHeader>
           <div className="space-y-4 mt-2">
             {editPositionId ? (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/30">
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-accent/30">
                 <span className={`text-[9px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
                   {marketBadge(positionForm.stock_market).label}
                 </span>
@@ -3079,7 +3079,7 @@ export default function StocksPage() {
                 const isAssigned = !!stockAgent
                 const isBatchMode = agent.execution_mode === 'batch'
                 return (
-                  <div key={agent.name} className="rounded-xl bg-accent/30 hover:bg-accent/50 transition-colors overflow-hidden">
+                  <div key={agent.name} className="border-b border-border/40 hover:bg-accent/20 transition-colors overflow-hidden">
                     <div className="flex items-center justify-between p-3.5">
                       <div className="flex items-center gap-3">
                         <div className={`w-2 h-2 rounded-full ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
@@ -3139,7 +3139,7 @@ export default function StocksPage() {
                           const isLoading = eff ? !!schedulePreviewLoading[eff] : false
                           if (!eff) return null
                           return (
-                            <div className="ml-[22px] rounded-lg border border-border/40 bg-background/30 px-2.5 py-2">
+                            <div className="ml-[22px] rounded-md border border-border/40 bg-background/30 px-2.5 py-2">
                               <div className="flex items-center justify-between">
                                 <div className="text-[11px] text-muted-foreground">
                                   未来触发时间预览{isFollowingGlobal ? <span className="ml-1 opacity-70">(跟随全局)</span> : null}
@@ -3260,7 +3260,7 @@ export default function StocksPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-2 p-3 bg-accent/30 rounded-lg">
+          <div className="mt-2 p-3 bg-accent/30 rounded-md">
             <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed">
               {agentResultDialog?.content}
             </pre>
@@ -3336,7 +3336,7 @@ export default function StocksPage() {
                 {news.map((item, idx) => (
                   <div
                     key={`${item.source}-${item.external_id}-${idx}`}
-                    className="p-3 rounded-lg bg-accent/30 hover:bg-accent/50 transition-colors"
+                    className="border-b border-border/40 py-2.5 hover:bg-accent/20 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">

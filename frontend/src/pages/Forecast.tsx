@@ -593,7 +593,7 @@ export default function ForecastPage() {
                 disabled={loading}
               />
               {searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 w-56 max-h-56 overflow-y-auto bg-popover border rounded-lg shadow-lg">
+                <div className="absolute z-20 mt-1 w-56 max-h-56 overflow-y-auto bg-popover border rounded-md shadow-lg">
                   {searchResults.map((s, i) => (
                     <button
                       key={i}
@@ -728,7 +728,7 @@ export default function ForecastPage() {
 
             {/* 操作建议 */}
             {result.recommendation && (
-              <div className={`rounded-lg border px-4 py-3 ${result.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : result.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : 'border-gray-500/30 bg-gray-500/5'}`}>
+              <div className={`rounded-md border px-4 py-3 ${result.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : result.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : 'border-gray-500/30 bg-gray-500/5'}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-bold text-lg">操作建议：{result.recommendation.action}</span>
                   <span className={`text-xs px-2 py-0.5 rounded-full ${result.recommendation.confidence === '高' ? 'bg-emerald-500/15 text-emerald-500' : result.recommendation.confidence === '中' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>
@@ -879,7 +879,7 @@ export default function ForecastPage() {
           </div>
           {/* Detail 完整版（可折叠） */}
           {showDetail && (
-            <div className="rounded-lg border border-border/50 p-4">
+            <div className="rounded-md border border-border/50 p-4">
               <div className="text-xs text-muted-foreground mb-2">完整版（Detail）</div>
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                 <ReactMarkdown>{report.detail_md}</ReactMarkdown>
@@ -970,7 +970,7 @@ export default function ForecastPage() {
                   <ReactMarkdown>{backtestReport.dashboard_md}</ReactMarkdown>
                 </div>
               </div>
-              <details className="rounded-lg border border-border/50 p-4">
+              <details className="rounded-md border border-border/50 p-4">
                 <summary className="cursor-pointer text-sm text-muted-foreground">查看完整版回测报告</summary>
                 <div className="mt-3 prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
                   <ReactMarkdown>{backtestReport.detail_md}</ReactMarkdown>
@@ -1053,7 +1053,7 @@ export default function ForecastPage() {
       {/* 历史预测详情弹窗 */}
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDetail(null)}>
-          <div className="bg-background border rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+          <div className="bg-background border rounded-md shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <div className="text-lg font-bold">
                 {detail.symbol} {detail.stock_name || ''}
@@ -1062,7 +1062,7 @@ export default function ForecastPage() {
             </div>
 
             <div className="space-y-3 text-sm">
-              <div className={`rounded-lg border px-3 py-2 ${detail.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : detail.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : ''}`}>
+              <div className={`rounded-md border px-3 py-2 ${detail.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : detail.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : ''}`}>
                 <div className="font-bold">
                   {/* 反AI模板⑤: 历史详情弹窗的方向/幅度同样标"模型预测" */}
                   <span className="mr-1 text-xs font-medium text-muted-foreground">模型预测</span>

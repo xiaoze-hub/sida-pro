@@ -396,7 +396,7 @@ export default function PaperTradingPage() {
                 <button
                   key={m}
                   onClick={() => setMarketView(m)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] ${
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-[background-color,color,box-shadow] ${
                     active
                       ? 'bg-primary text-primary-foreground'
                       : isOff
@@ -655,7 +655,7 @@ export default function PaperTradingPage() {
                 type="number"
                 value={cfgTotal}
                 onChange={e => setCfgTotal(e.target.value)}
-                className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm"
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm"
                 placeholder="如 1000000"
               />
             </div>
@@ -680,7 +680,7 @@ export default function PaperTradingPage() {
                       max={100}
                       value={cfgRatios[m]}
                       onChange={e => setCfgRatios(prev => ({ ...prev, [m]: e.target.value }))}
-                      className="w-20 h-9 px-2 rounded-lg border border-border bg-background text-sm text-right"
+                      className="w-20 h-9 px-2 rounded-md border border-border bg-background text-sm text-right"
                     />
                     <span className="text-sm text-muted-foreground">%</span>
                     <span className="text-xs text-muted-foreground ml-auto">≈ {formatCurrency(amount)}</span>
@@ -730,7 +730,7 @@ export default function PaperTradingPage() {
                         <button
                           key={ch.id}
                           onClick={() => toggleChannel(ch.id)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] ${
+                          className={`px-2.5 py-1 rounded-md text-xs font-medium transition-[background-color,color,box-shadow] ${
                             selectedChannelIds.has(ch.id)
                               ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
                               : 'bg-muted/50 text-muted-foreground'
