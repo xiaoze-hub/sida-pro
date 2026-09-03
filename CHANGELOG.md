@@ -1,10 +1,15 @@
 # Changelog
 
+> **给 AI 协作者的读法**: 本文件是"别人改了什么"的唯一入口。接手前先读最近 3 个 `## 日期` 段。
+> 每条 entry 末尾 `[commit <hash>]` 可直接 `git show <hash>` 看完整 diff。
+> 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
+> 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
+
 ## 2026-09-03
 
 ### fix
 
-- **撤大额撤单重叠显示修复** (用户截图: 神剑 002361 K线弹窗右上 7 个"撤大额撤单"摞成一摞). 根因 `l4_events.cancel_anomalies` 同一日每笔大撤单各产一条事件(最多 20 条), 前端按事件画 marker, 同 date 下 N 个 marker 全叠在同一根 K 线上完全重合. **修复**: 后端按日聚合成一条(label `大额撤单(N笔)`, shares 合计, count 笔数, time 取最晚一笔, 新增 `_safe_vol`/`_t_sort_key` 安全取值); 前端 `InteractiveKline` + `KlineChart` 同 date+kind marker 合并为一个(文案缀 `×N`), 防以后其他多事件同日再叠. 测试: `test_l4_events.py` 27 passed (含新增聚合用例) + 前端 tsc 0 error.
+- **撤大额撤单重叠显示修复** (用户截图: 神剑 002361 K线弹窗右上 7 个"撤大额撤单"摞成一摞). 根因 `l4_events.cancel_anomalies` 同一日每笔大撤单各产一条事件(最多 20 条), 前端按事件画 marker, 同 date 下 N 个 marker 全叠在同一根 K 线上完全重合. **修复**: 后端按日聚合成一条(label `大额撤单(N笔)`, shares 合计, count 笔数, time 取最晚一笔, 新增 `_safe_vol`/`_t_sort_key` 安全取值); 前端 `InteractiveKline` + `KlineChart` 同 date+kind marker 合并为一个(文案缀 `×N`), 防以后其他多事件同日再叠. 测试: `test_l4_events.py` 27 passed (含新增聚合用例) + 前端 tsc 0 error. [commit 2bf0033]
 
 ## 2026-09-02
 
@@ -35,35 +40,35 @@
 
 ### feature
 
-- **v0.4.64 wencai 三指标共振选股 3 模板** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-1). `src/core/chat_tools.py` `WENCAI_TEMPLATES` 追加 `三指标买共振`/`三指标卖共振`/`三指标选股共振` 3 模板, 供 AI 助手 `get_stock_screen`/`get_market_scan` 调用同花顺一句话选股. **口径以官方《决策先锋8问8答》为准** (§3.4 七行状态表 / §5 三步战法 / §6 选股条件), **非桌面 5_GZZH.txt 公式** — 甄别发现该公式 2 处与官方不一致: ① 卖共振公式用"活跃度较前日下降", 官方要求"跌破强势线(<3)", 已按官方修正; ② 选股共振公式用"活跃度>6(大牛线)+暗盘单日>0", 官方是"活跃度连续多日强势线上(>3)+暗盘持续买", 已按官方修正. 差异写入各模板 `note` 字段供后续校准. 模板总数 22→25. py_compile 通过 + 模块 import 验证 3 模板结构 (src/q/note) 全对.
+- **v0.4.64 wencai 三指标共振选股 3 模板** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-1). `src/core/chat_tools.py` `WENCAI_TEMPLATES` 追加 `三指标买共振`/`三指标卖共振`/`三指标选股共振` 3 模板, 供 AI 助手 `get_stock_screen`/`get_market_scan` 调用同花顺一句话选股. **口径以官方《决策先锋8问8答》为准** (§3.4 七行状态表 / §5 三步战法 / §6 选股条件), **非桌面 5_GZZH.txt 公式** — 甄别发现该公式 2 处与官方不一致: ① 卖共振公式用"活跃度较前日下降", 官方要求"跌破强势线(<3)", 已按官方修正; ② 选股共振公式用"活跃度>6(大牛线)+暗盘单日>0", 官方是"活跃度连续多日强势线上(>3)+暗盘持续买", 已按官方修正. 差异写入各模板 `note` 字段供后续校准. 模板总数 22→25. py_compile 通过 + 模块 import 验证 3 模板结构 (src/q/note) 全对. [commit 42cdf7a]
 
 ### feature
 
-- **v0.4.65 resonance 实战文案 API 字段化** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-3). `src/core/resonance.py` 新增 `state_action_label(row)` — 行号→决策先锋 GO/STOP 风格实战文案 (8问8答 §3.1: G信号→"GO: 趋势有望启动, 建议逢低建仓"; S信号→"STOP: 趋势暂或结束, 建议减仓避险"). 返回 `{label, text, tone}`: row1/2→GO(bull), row3→持有(bull), row4/5/6→警惕(warn), row7→STOP(bear), row0/非法→观望(neutral). 纯增量(不动 evaluate_state), 与既有 "action"(7行表操作思路长句) 互补: action=完整思路, label=前端可直渲的短标签+色彩语义. 验证: 8 行映射 + 边界(None/"x"/-1/99→观望) + row1→GO/row7→STOP 联动全过. 前端 K线/机会页可直接用 `tone` 映射红涨绿跌色彩.
+- **v0.4.65 resonance 实战文案 API 字段化** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-3). `src/core/resonance.py` 新增 `state_action_label(row)` — 行号→决策先锋 GO/STOP 风格实战文案 (8问8答 §3.1: G信号→"GO: 趋势有望启动, 建议逢低建仓"; S信号→"STOP: 趋势暂或结束, 建议减仓避险"). 返回 `{label, text, tone}`: row1/2→GO(bull), row3→持有(bull), row4/5/6→警惕(warn), row7→STOP(bear), row0/非法→观望(neutral). 纯增量(不动 evaluate_state), 与既有 "action"(7行表操作思路长句) 互补: action=完整思路, label=前端可直渲的短标签+色彩语义. 验证: 8 行映射 + 边界(None/"x"/-1/99→观望) + row1→GO/row7→STOP 联动全过. 前端 K线/机会页可直接用 `tone` 映射红涨绿跌色彩. [commit 090e1f3]
 
 ### feature
 
-- **v0.4.66 主力资金 N 日序列 + 0 轴 CROSS** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-2). `src/core/dark_pool_flow.py` 新增 `compute_pool_flow_series(symbol, days, today_overlay)` + `fund_flow_cross(series)` — 决策先锋 1/3/5 日主力资金 + "由绿转红上穿0轴=资金看多"(8问8答 §3.2). **数据约束诚实声明**: thsdk 明盘仅当日可回溯, 历史日明盘不可得 → 历史日序列用暗盘 OHLC 分摊近似(对照项, 方向可靠/幅度有偏差), 全标 `approximation=True` 不冒充完整主力口径(不编造红线); 当日(最后一根)经 `today_overlay=True` 叠加权威 ming+dark(`compute_pool_flow`). `fund_flow_cross`: prev<=0且cur>0→cross_up / prev>=0且cur<0→cross_down, None 跳过不补0, 输出 `{cross_up, cross_down, last_direction(多/空/平), points_used}`. 纯增量不动既有函数. 验证: fund_flow_cross 6 场景(上穿/下穿/等号边界/None跳过/空/多次穿越) + compute_pool_flow_series 3 场景(当日叠加权威/全近似/total汇总) + 空bars→无数据 全过. 注: `market_scan.dark_top` 接真实值留作后续(避免本次动扫描链路).
+- **v0.4.66 主力资金 N 日序列 + 0 轴 CROSS** (28号, Phase 2 入口#1 后端 P0 三件套之 PR-2). `src/core/dark_pool_flow.py` 新增 `compute_pool_flow_series(symbol, days, today_overlay)` + `fund_flow_cross(series)` — 决策先锋 1/3/5 日主力资金 + "由绿转红上穿0轴=资金看多"(8问8答 §3.2). **数据约束诚实声明**: thsdk 明盘仅当日可回溯, 历史日明盘不可得 → 历史日序列用暗盘 OHLC 分摊近似(对照项, 方向可靠/幅度有偏差), 全标 `approximation=True` 不冒充完整主力口径(不编造红线); 当日(最后一根)经 `today_overlay=True` 叠加权威 ming+dark(`compute_pool_flow`). `fund_flow_cross`: prev<=0且cur>0→cross_up / prev>=0且cur<0→cross_down, None 跳过不补0, 输出 `{cross_up, cross_down, last_direction(多/空/平), points_used}`. 纯增量不动既有函数. 验证: fund_flow_cross 6 场景(上穿/下穿/等号边界/None跳过/空/多次穿越) + compute_pool_flow_series 3 场景(当日叠加权威/全近似/total汇总) + 空bars→无数据 全过. 注: `market_scan.dark_top` 接真实值留作后续(避免本次动扫描链路). [commit ee2d8b9]
 
 ### fix
 
-- **v0.4.67 _fmt_amount 提升模块级修复 F821 NameError 隐患** (28号, v0.4.62 事件残留真 bug). `src/agents/intraday_monitor.py`: `_fmt_amount` 原为两处**嵌套函数**(line 80/179, 各自在 `_main_intent_both_inner` 等内部), 但 line 524/621/622/623/630/633/637/643 等**其它函数**也调用它 → 那些作用域未定义, 运行时触发即 `NameError`(生产 v0.4.63 也带着, 只是未命中那些代码路径). CI `build-and-push-image` test job ruff 门禁(--select E9,F821,F601,F811)拦下, 报 11 处 F821. **修复**: 提升为模块级 `_fmt_amount`(line 27), 加非数值兜底; 原两处嵌套定义保留(等价影子, 最小改动). py_compile + AST 验证模块级定义就位. 注: 此修复与三件套同发, 故 v0.4.66 tag(ee2d8b9, 含 bug)不部署, 直接发 v0.4.67.
+- **v0.4.67 _fmt_amount 提升模块级修复 F821 NameError 隐患** (28号, v0.4.62 事件残留真 bug). `src/agents/intraday_monitor.py`: `_fmt_amount` 原为两处**嵌套函数**(line 80/179, 各自在 `_main_intent_both_inner` 等内部), 但 line 524/621/622/623/630/633/637/643 等**其它函数**也调用它 → 那些作用域未定义, 运行时触发即 `NameError`(生产 v0.4.63 也带着, 只是未命中那些代码路径). CI `build-and-push-image` test job ruff 门禁(--select E9,F821,F601,F811)拦下, 报 11 处 F821. **修复**: 提升为模块级 `_fmt_amount`(line 27), 加非数值兜底; 原两处嵌套定义保留(等价影子, 最小改动). py_compile + AST 验证模块级定义就位. 注: 此修复与三件套同发, 故 v0.4.66 tag(ee2d8b9, 含 bug)不部署, 直接发 v0.4.67. [commit 559b9fd]
 
 ### fix
 
-- **v0.4.68 ws_hub 测试 AsyncMock 修复** (28号, 修 CI 飘红). `tests/test_ws_hub.py::test_l5_03_too_many_connections_close_4402`: 用 `MagicMock()` 模拟 websocket, 但 `ws_notifications_handler` 在鉴权通过后先 `await websocket.accept()`(ws_hub.py:356), `MagicMock.accept()` 返回不可 await 的 MagicMock → `TypeError: object MagicMock can't be used in 'await' expression`. l5_01/l5_02 因在鉴权阶段(4401)先被拒、没走到 accept 才没暴露. **修复**: import `AsyncMock` + 给该测例 `ws.accept = AsyncMock()`。纯测试 mock 修复, 不动生产代码(生产 accept/close 均为真 awaitable). 该测试由 commit 78774cf(xiaoze 通知中心 P0)引入, 非本次改动引入; 此前被 v0.4.66 的 lint 门禁失败掩盖, v0.4.67 lint 通过后才暴露.
+- **v0.4.68 ws_hub 测试 AsyncMock 修复** (28号, 修 CI 飘红). `tests/test_ws_hub.py::test_l5_03_too_many_connections_close_4402`: 用 `MagicMock()` 模拟 websocket, 但 `ws_notifications_handler` 在鉴权通过后先 `await websocket.accept()`(ws_hub.py:356), `MagicMock.accept()` 返回不可 await 的 MagicMock → `TypeError: object MagicMock can't be used in 'await' expression`. l5_01/l5_02 因在鉴权阶段(4401)先被拒、没走到 accept 才没暴露. **修复**: import `AsyncMock` + 给该测例 `ws.accept = AsyncMock()`。纯测试 mock 修复, 不动生产代码(生产 accept/close 均为真 awaitable). 该测试由 commit 78774cf(xiaoze 通知中心 P0)引入, 非本次改动引入; 此前被 v0.4.66 的 lint 门禁失败掩盖, v0.4.67 lint 通过后才暴露. [commit b67b6c6]
 
 ### feature
 
-- **v0.4.69 决策先锋三指标共振接入个股行情页** (28号, 并行子智能体协作). **后端** `src/web/api/klines.py`: summary API 新增 `resonance` 字段 `{available, row, phase, action_label, action_text, tone, bad_count}` — 组装既有三指标(`gs_strategy.trend_label` + `ai_activity` + `dark_pool_flow.compute_pool_flow`)经 `resonance.evaluate_state` + `state_action_label` 得 7 行状态 + GO/STOP 实战文案; 三指标全可得才 `available:True`, 缺任一返安全默认不编造; 双层 try/except 兜底不拖垮 summary。复用已拉 bars, 唯一联网项 compute_pool_flow 受 5min summary 缓存摊销。注: 行2"拐点"因历史明盘不可得(fund_net_prev 恒 None)此路径不可达, 属数据固有约束非 bug。**前端** `frontend/src/pages/Quote.tsx`: 新增 `ResonanceInfo` interface + 窄栏「决策先锋共振」区块(替换原写死操作建议), GO/STOP 主标签按 tone 上色(bull红涨/bear绿跌/warn琥珀/neutral灰, 中国市场红涨绿跌), 无卡片 hairline 分隔终端风。测试 `tests/test_summary_resonance.py` 16 例 + 回归 68 全过, 前端 typecheck 零错误。
+- **v0.4.69 决策先锋三指标共振接入个股行情页** (28号, 并行子智能体协作). **后端** `src/web/api/klines.py`: summary API 新增 `resonance` 字段 `{available, row, phase, action_label, action_text, tone, bad_count}` — 组装既有三指标(`gs_strategy.trend_label` + `ai_activity` + `dark_pool_flow.compute_pool_flow`)经 `resonance.evaluate_state` + `state_action_label` 得 7 行状态 + GO/STOP 实战文案; 三指标全可得才 `available:True`, 缺任一返安全默认不编造; 双层 try/except 兜底不拖垮 summary。复用已拉 bars, 唯一联网项 compute_pool_flow 受 5min summary 缓存摊销。注: 行2"拐点"因历史明盘不可得(fund_net_prev 恒 None)此路径不可达, 属数据固有约束非 bug。**前端** `frontend/src/pages/Quote.tsx`: 新增 `ResonanceInfo` interface + 窄栏「决策先锋共振」区块(替换原写死操作建议), GO/STOP 主标签按 tone 上色(bull红涨/bear绿跌/warn琥珀/neutral灰, 中国市场红涨绿跌), 无卡片 hairline 分隔终端风。测试 `tests/test_summary_resonance.py` 16 例 + 回归 68 全过, 前端 typecheck 零错误。 [commit 99c05fb]
 
 ### update
 
-- **v0.4.70 前端终端化 P0: 涨跌色令牌统一 + 暗色优先 + 圆角收紧 + 金融数字字体** (28号, 并行子智能体协作, 响应老板"像专业行情终端"诉求). **① 涨跌色统一**: 全站 ~120 处硬编码涨跌色(#ef4444/#22c55e/#10b981/text-rose-*/text-emerald-*)收敛到 `--stock-up:#E53935`/`--stock-down:#43A047` 令牌; Tailwind 层用 `text-stock-up/text-stock-down`, 图表 JS 层新增 `packages/biz-ui/src/lib/stock-colors.ts` 运行时 `getComputedStyle` 读 CSS 变量(`readStockColors`/`withAlpha`)。覆盖 K线/分时/资金柱/盈亏/涨跌家数等(27 文件); 残留 59 处均为非涨跌语义(状态/错误/命中/买卖动作徽章)有意保留。**② 暗色优先**: `use-theme.ts` 默认 system→dark(仅影响未设置过的新用户, 尊重已选手动选择), index.html 加首帧防闪脚本; theme-color #4f46e5→#0a0a0f。**③ 圆角收紧**: `--radius` 0.75rem→0.375rem, tailwind 补派生 xl/2xl(卡片 12→8px)。**④ 金融数字字体**: `--font-num` 字体栈置顶 DIN Alternate/Bahnschrift(Windows 不再落代码字体)+`tabular-nums` 等宽, 保守不加 CDN webfont(CSP 限制)。前端 typecheck 零错误。⚠️ 遗留待产品决策: GS 信号配色 Quote(买红卖绿) 与 K线图(G绿S红) 相反, 本次未擅动。
+- **v0.4.70 前端终端化 P0: 涨跌色令牌统一 + 暗色优先 + 圆角收紧 + 金融数字字体** (28号, 并行子智能体协作, 响应老板"像专业行情终端"诉求). **① 涨跌色统一**: 全站 ~120 处硬编码涨跌色(#ef4444/#22c55e/#10b981/text-rose-*/text-emerald-*)收敛到 `--stock-up:#E53935`/`--stock-down:#43A047` 令牌; Tailwind 层用 `text-stock-up/text-stock-down`, 图表 JS 层新增 `packages/biz-ui/src/lib/stock-colors.ts` 运行时 `getComputedStyle` 读 CSS 变量(`readStockColors`/`withAlpha`)。覆盖 K线/分时/资金柱/盈亏/涨跌家数等(27 文件); 残留 59 处均为非涨跌语义(状态/错误/命中/买卖动作徽章)有意保留。**② 暗色优先**: `use-theme.ts` 默认 system→dark(仅影响未设置过的新用户, 尊重已选手动选择), index.html 加首帧防闪脚本; theme-color #4f46e5→#0a0a0f。**③ 圆角收紧**: `--radius` 0.75rem→0.375rem, tailwind 补派生 xl/2xl(卡片 12→8px)。**④ 金融数字字体**: `--font-num` 字体栈置顶 DIN Alternate/Bahnschrift(Windows 不再落代码字体)+`tabular-nums` 等宽, 保守不加 CDN webfont(CSP 限制)。前端 typecheck 零错误。⚠️ 遗留待产品决策: GS 信号配色 Quote(买红卖绿) 与 K线图(G绿S红) 相反, 本次未擅动。 [commit af8521d]
 
 ### fix
 
-- **v0.4.71 GS 信号配色统一为 G红/S绿** (28号, 修前端配色矛盾). 此前个股页 `Quote.tsx` GS 是「买红卖绿」(G红/S绿), 但 K 线图 `KlineChart.tsx`/`InteractiveKline.tsx` 的 GS 买卖点标记却是 G绿(#16a34a)/S红(#dc2626), 两者相反, 且违背 A 股红涨绿跌惯例。**统一为 G=红(买入/趋势启动)、S=绿(卖出/趋势结束)**: 两处 markers 改用 `readStockColors()` 的 `sc.up`(红)/`sc.down`(绿), 随亮/暗主题自动切换, 不再硬编码; 实心/空心(已确认/待确认)逻辑保留只换色相; `Quote.tsx` GS_COLOR 本就 G红/S绿 无需改。决策先锋口径: G=GO 趋势启动(红), S=STOP 趋势结束(绿)。前端 typecheck 零错误。
+- **v0.4.71 GS 信号配色统一为 G红/S绿** (28号, 修前端配色矛盾). 此前个股页 `Quote.tsx` GS 是「买红卖绿」(G红/S绿), 但 K 线图 `KlineChart.tsx`/`InteractiveKline.tsx` 的 GS 买卖点标记却是 G绿(#16a34a)/S红(#dc2626), 两者相反, 且违背 A 股红涨绿跌惯例。**统一为 G=红(买入/趋势启动)、S=绿(卖出/趋势结束)**: 两处 markers 改用 `readStockColors()` 的 `sc.up`(红)/`sc.down`(绿), 随亮/暗主题自动切换, 不再硬编码; 实心/空心(已确认/待确认)逻辑保留只换色相; `Quote.tsx` GS_COLOR 本就 G红/S绿 无需改。决策先锋口径: G=GO 趋势启动(红), S=STOP 趋势结束(绿)。前端 typecheck 零错误。 [commit 316211b]
 
 ## 2026-09-01
 

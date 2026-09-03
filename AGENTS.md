@@ -48,6 +48,15 @@
 - Pull Requests: include a clear description, linked issues, and screenshots/GIFs for UI changes. Update docs/prompts when applicable.
 - CI hygiene: ensure backend runs (`python server.py`) and frontend builds (`pnpm build`). No secrets in commits; use `.env` or UI settings.
 
+## 分支工作流（多人+多 AI 协作必读）
+- `main` 是唯一长期分支, 永远保持可发版。**禁止直接 push main 做功能开发**。
+- 新活从 main 拉分支: `git checkout -b feat/<事>-<日期> main`(功能) / `fix/<事>`(修 bug) / `hotfix/<事>`(生产急修)。
+- 在分支上 commit(每个 commit 照旧带 CHANGELOG entry), push 分支, 自测通过后合回 main:
+  `git checkout main && git pull --rebase origin main && git merge --no-ff feat/xxx -m "merge: ..."` 然后 `git push origin main`, 删分支。
+- 合并前必做: `git log origin/main..HEAD` 确认只含自己的活; 有冲突先在分支上解, 不污染 main。
+- 发版(tag)只从 main 打。生产急修走 `hotfix/*`, 合 main 后立即打 tag 发版。
+- 接手别人的活: 先读 `CHANGELOG.md` 最近 3 个日期段 + `git log --oneline -10`, 再 `git show <hash>` 看细节, 不要猜。
+
 ## Security & Configuration Tips
 - Secrets: do not commit API keys; configure via UI or env vars (`.env`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `JWT_SECRET`, `DATA_DIR`).
 - Network/SSL: optional corporate CA via `data/ca-bundle.pem` is auto-managed; respect `HTTP(S)_PROXY`/app proxy settings.
