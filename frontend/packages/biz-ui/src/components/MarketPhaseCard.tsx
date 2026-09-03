@@ -17,7 +17,7 @@ import { fetchAPI } from '@panwatch/api'
  *   - 段长分布 chip(各阶段累计天数)
  *
  * 样式对齐 DarkFlowCards / MainFlowCompareCard / MarketMainlineCard:
- *   rounded-xl + border-border/50 + bg-card + text-[11px] 紧凑密度。
+ *   hairline 分隔 + 紧凑密度(Phase 1 去卡片化, 不用 rounded 盒子)。
  */
 
 export interface MarketPhaseDay {
@@ -227,8 +227,8 @@ export default function MarketPhaseCard() {
         </div>
       </div>
 
-      {/* 当前阶段大字 */}
-      <div className={`rounded-lg border ${style.border} ${style.bg} px-3 py-3 mb-3`}>
+      {/* 当前阶段大字(Phase 1 去卡片化: 左色条+文字, 阶段色只保留在 border/text 上) */}
+      <div className={`border-l-2 ${style.border} pl-3 py-1 mb-3`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className={`text-[26px] md:text-[30px] font-bold ${style.text} leading-none tracking-tight truncate`}>
@@ -353,7 +353,7 @@ function Stat({
   icon?: React.ReactNode
 }) {
   return (
-    <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
+    <div className="border-l border-border/40 pl-2 py-0.5">
       <div className="text-muted-foreground text-[9.5px] flex items-center gap-0.5">
         {icon}
         {label}

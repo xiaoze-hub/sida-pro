@@ -11,7 +11,7 @@ import { fetchAPI } from '@panwatch/api'
  *     / 涨停家数 / 最高板 / 龙头股名。
  *   - 点击行展开该主线成分股(小标签流式排列; 标签上叠 days chip 表示连板数)。
  *   - 30s 轮询刷新(前端节奏, 后端自带 60s 进程内缓存)。
- *   - 数据风格对齐 DarkFlowCards / MainFlowCompareCard: rounded-xl + border-border/50 + 紧凑。
+ *   - 数据风格对齐 DarkFlowCards / MainFlowCompareCard: hairline 分隔 + 紧凑(Phase 1 去卡片化)。
  *
  * 颜色:
  *   - 涨停数 ≥5 → 主线条染玫瑰色; ≥3 → 青色; <3 不入榜(走单独底部 chip)。
@@ -92,7 +92,7 @@ function MainlineRow({
   const leaderDays = g.leader?.days ?? 0
 
   return (
-    <div className="rounded-lg border border-border/40 bg-accent/10 overflow-hidden">
+    <div className="border-b border-border/40 overflow-hidden">
       {/* 主行: 可点击展开 */}
       <button
         type="button"
