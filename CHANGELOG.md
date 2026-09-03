@@ -7,6 +7,22 @@
 
 ## 2026-09-04
 
+### update P2-A 部署流程防护 3 条(tar 备份/迁移校验/cron 暂停开关)
+
+- **① tar 备份**: `~/sync_sida_to_host.sh` (repo 外运维脚本, 原文件已备份
+  `sync_sida_to_host.sh.bak-20260904`) 远端 `rm -rf` 前先打时间戳 tar 包到
+  `/root/sida-backup/sida-pro-YYYYMMDD-HHMMSS.tar.gz`(排除 data/.env/
+  node_modules/dist), 只留最近 5 个。防同步误清小主机未合入改动。
+- **② 迁移校验**: 新增 `scripts/check_migrations.py` (29 个迁移 v101-v129
+  连续性 + HEALTH_COLUMNS⊆模型列 + 计数列 server_default 防回归 +
+  dtype DEFAULT 0 一致性, 任意 cwd 可跑); 同步脚本打包前必跑, 失败中止;
+  ghcr CI `build-and-push-image.yml` 新增 `Migration consistency check`
+  步骤 (v0.4.51 缺列 500 教训)。
+- **③ 暂停开关**: 同步脚本顶部检查 `/home/ubuntu/.sida_sync_paused`
+  存在即退出(与 cron `45d3592196a4` pause 双保险, 28号改代码期间 touch 即可)。
+- **测试**: `bash -n` 过; 暂停开关实测 exit 0; check 脚本 repo 根/`/tmp`
+  双路径 `29 个迁移通过`; workflow YAML 解析 OK [commit 6fd467d]。
+
 ### fix P2-C data_sources 健康计数列加 server_default(防御新鲜 create_all 建库)
 
 - **改动**: `src/web/models.py::DataSource.success_count/error_count` 加

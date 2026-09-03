@@ -73,6 +73,11 @@ jobs:
           ruff check src/ server.py forecast_server.py scripts/ packages/marketdata/src \
             --select E9,F821,F601,F811
 
+      - name: Migration consistency check (门禁 · P2-A 迁移校验)
+        # 不连 DB 的纯静态检查: 版本号连续/模型列与 HEALTH_COLUMNS 一致/
+        # 计数列 server_default 防回归。失败即拦构建 (v0.4.51 缺列 500 教训)。
+        run: python scripts/check_migrations.py
+
       - name: Backend tests (门禁 · pytest)
         env:
           # 2026-08-23 Q2: 测试用默认 admin 登录(仅 CI 虚拟库)
