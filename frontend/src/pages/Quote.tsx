@@ -30,6 +30,30 @@ const ForecastPage = lazy(() => import('@/pages/Forecast'))
 
 type QuoteType = 'stock' | 'index' | 'board'
 
+/** 上次查看的股票(09-03: 打开行情页默认回到上次, 仅首次无记录时 fallback 上证) */
+const LAST_SYMBOL_KEY = 'quote:lastSymbol'
+function readLastSymbol(): string | null {
+  try {
+    const v = localStorage.getItem(LAST_SYMBOL_KEY)?.trim()
+    return v || null
+  } catch {
+    return null
+  }
+}
+function writeLastSymbol(s: string) {
+  try {
+    if (s.trim()) localStorage.setItem(LAST_SYMBOL_KEY, s.trim())
+  } catch {
+    /* 无痕模式等写失败不抛 */
+  }
+}
+
+interface StockSuggest {
+  symbol: string
+  name: string
+  market?: string
+}
+
 const TYPE_OPTIONS: Array<{ key: QuoteType; label: string }> = [
   { key: 'stock', label: '个股' },
   { key: 'index', label: '指数' },
@@ -158,7 +182,8 @@ const RESONANCE_TONE_CLASS = (tone: string | null | undefined) =>
 
 export default function QuotePage() {
   const [params, setParams] = useSearchParams()
-  const symbol = (params.get('symbol') || '000001').trim()
+  // 默认股票: URL > 上次查看(localStorage) > 上证指数(仅首次)
+  const symbol = (params.get('symbol') || readLastSymbol() || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
   const sourceParam = params.get('source')
   // v0.4.60 暂不显示 ContextCard(占位): 改用持仓成本线画 K 线(v0.4.61)
@@ -166,6 +191,32 @@ export default function QuotePage() {
   void _sourceCtx
 
   const [input, setInput] = useState(symbol)
+  const [suggests, setSuggests] = useState<StockSuggest[]>([])
+  const [suggestOpen, setSuggestOpen] = useState(false)
+
+  // 09-03: symbol 落定即记住为"上次查看"
+  useEffect(() => {
+    writeLastSymbol(symbol)
+  }, [symbol])
+
+  // 09-03: 名称/代码联想(300ms debounce, 后端 /api/stocks/search)
+  useEffect(() => {
+    const q = input.trim()
+    if (q.length < 1 || q === symbol) {
+      setSuggests([])
+      return
+    }
+    const t = window.setTimeout(() => {
+      insightApi
+        .searchStocks<StockSuggest[]>(q)
+        .then((d) => {
+          setSuggests(Array.isArray(d) ? d.slice(0, 8) : [])
+          setSuggestOpen(true)
+        })
+        .catch(() => setSuggests([]))
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [input, symbol])
   const [summary, setSummary] = useState<SummaryResp | null>(null)
   const [, setSummaryLoading] = useState(false)
   const [, setSummaryError] = useState('')
@@ -216,7 +267,12 @@ export default function QuotePage() {
   const submitSymbol = () => {
     const v = input.trim()
     if (!v) return
-    setParam('symbol', v)
+    setSuggestOpen(false)
+    // 名称直输回车: 优先精确命中候选, 否则非代码串取首个联想; 代码直通过
+    const hit =
+      suggests.find((s) => s.symbol === v || s.name === v) ??
+      (/^\d{6}$/.test(v) ? null : suggests[0])
+    setParam('symbol', hit ? hit.symbol : v)
   }
 
   const layerToggle = (key: keyof typeof layers) =>
@@ -308,13 +364,45 @@ export default function QuotePage() {
           ))}
         </div>
         <div className="flex flex-1 items-center gap-1 min-w-[200px]">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') submitSymbol() }}
-            placeholder="代码, 如 002361"
-            className="h-7 min-w-0 flex-1 rounded-md border border-border/50 bg-background px-2 text-[12px] outline-none focus:border-primary/50"
-          />
+          <div className="relative min-w-0 flex-1">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitSymbol()
+                if (e.key === 'Escape') setSuggestOpen(false)
+              }}
+              onFocus={() => {
+                if (suggests.length > 0) setSuggestOpen(true)
+              }}
+              onBlur={() => {
+                // 延迟关闭, 让候选项 onMouseDown 先触发
+                window.setTimeout(() => setSuggestOpen(false), 120)
+              }}
+              placeholder="代码/名称, 如 002361 或 神剑"
+              className="h-7 w-full min-w-0 rounded-md border border-border/50 bg-background px-2 text-[12px] outline-none focus:border-primary/50"
+            />
+            {suggestOpen && suggests.length > 0 && (
+              <div className="absolute left-0 right-0 top-8 z-30 overflow-hidden rounded-md border border-border/60 bg-popover shadow-lg">
+                {suggests.map((s) => (
+                  <button
+                    key={`${s.market ?? 'CN'}:${s.symbol}`}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      setInput(s.symbol)
+                      setSuggestOpen(false)
+                      setParam('symbol', s.symbol)
+                    }}
+                    className="flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-accent"
+                  >
+                    <span className="font-medium text-foreground">{s.name}</span>
+                    <span className="font-mono text-muted-foreground">{s.symbol}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={submitSymbol}
