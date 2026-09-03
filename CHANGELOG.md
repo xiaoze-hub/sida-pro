@@ -38,7 +38,7 @@
 - **终端化 A-5 三页去卡片** (DataSources section; History 空态/移动切换/目录+正文窗格; Notifications 过滤条+主从网格去框, 内部分隔保留). tsc 0 error + vite build 通过. [commit 8aa6071]
 - **P2 推断页核实结论 (B线, 只读未动代码)**: 共振扫描/L2盘口/主题设置/持仓成本线均无独立路由. 共振后端(wencai/decision_pioneer)就绪且前端已有徽章+窄栏展示 → 不新建页; L2 orderbook 后端就绪(盘口队列+托压)但前端仅 shape 文字 → 十档明细页列后续候选; 主题切换无入口 + klines 无持仓成本字段 → 两页不做等后端.
 - **L2 盘口资金页立项交付** (Phase1 核实: /api/orderbook-ob+summary.orderbook+more-info 三端点现成, 后端零新增; 十档买卖"额"有, 十档明细/逐笔无 — 页面诚实口径五档+L2成品). Phase2: `insightApi.orderbookOb` + 新建 `L2Orderbook.tsx`(/l2: 十档双向条+OB事件+幽灵单+L2成品6字段+raw主力净额容错, 30s轮询, hairline无卡片) + 行情组导航/路由. Phase3: Quote 盘口 shape 旁链入明细页. tsc 0 error + vite build 通过. [commit 5fafdf5/fa0612e]
-- **v0.4.74 L2盘口资金页上线 + P1 thsdk盘中验证 + GS校准**. 前端`/l2`随版上线(生产盘中验证十档/形态/主力净额). P1: 09-03 11:08盘中实测神剑002361 — tick_super_level1游客1962笔实时(B1045/S882/M35, 8.76亿) + big_order_flow账号512笔(B215/S297, active296/passive216, 2.92亿), 云端L2通, 注释落`dark_l2.py`. GS校准: 上证501根实测非重绘60/60一致, G/S位置滞后(中位0.53/0.37)+抖动16/62, 维持趋势过滤定位, 报告`docs/GS校准报告_原版视频口径.md`. 另: 生产v0.4.73 thsdk重连风暴致unhealthy一次, `docker restart`恢复(风暴源未定位, 待观察).
+- **v0.4.74 L2盘口资金页上线 + P1 thsdk盘中验证 + GS校准**. 前端`/l2`随版上线(生产盘中验证十档/形态/主力净额). P1: 09-03 11:08盘中实测神剑002361 — tick_super_level1游客1962笔实时(B1045/S882/M35, 8.76亿) + big_order_flow账号512笔(B215/S297, active296/passive216, 2.92亿), 云端L2通, 注释落`dark_l2.py`. GS校准: 上证501根实测非重绘60/60一致, G/S位置滞后(中位0.53/0.37)+抖动16/62, 维持趋势过滤定位, 报告`docs/GS校准报告_原版视频口径.md`. 另: 生产v0.4.73 thsdk重连风暴致unhealthy一次, `docker restart`恢复(风暴源未定位, 待观察). [commit 731685c]
 
 ## 2026-09-02
 
