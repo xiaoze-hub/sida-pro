@@ -113,7 +113,46 @@ def _norm_date(d) -> Optional[str]:
     return s[:10]
 
 
-def compute_gs_signals(bars: Sequence[dict]) -> list[dict]:
+# 抖动合并窗口(天): 相邻反向信号间隔 ≤ 该值视为震荡 whipsaw, 成对丢弃。
+# 校准依据: docs/GS校准报告_原版视频口径.md(上证 501 根 16/62 间隔≤3 天)。
+WHIPSAW_MERGE_DAYS = 3
+
+
+def merge_whipsaw(
+    signals: Sequence[dict], window_days: int = WHIPSAW_MERGE_DAYS
+) -> list[dict]:
+    """合并震荡抖动(纯函数,不改公式)。
+
+    按时间升序扫描: 若某信号与上一个保留信号方向相反、且日期间隔
+    ≤ window_days 天, 则成对丢弃(假翻转还原)。日期缺失/无法解析时
+    不猜, 两个都保留。末根 pending 信号参与合并(盘中价同样会抖)。
+    """
+    from datetime import date as _date
+
+    def _parse(d) -> Optional[_date]:
+        try:
+            return _date.fromisoformat(str(d)[:10])
+        except (ValueError, TypeError):
+            return None
+
+    kept: list[dict] = []
+    for s in signals or []:
+        prev = kept[-1] if kept else None
+        if (
+            prev is not None
+            and s.get("side") != prev.get("side")
+            and s.get("side") in ("G", "S")
+            and prev.get("side") in ("G", "S")
+        ):
+            d1, d2 = _parse(prev.get("date")), _parse(s.get("date"))
+            if d1 is not None and d2 is not None and 0 <= (d2 - d1).days <= window_days:
+                kept.pop()  # 成对丢弃
+                continue
+        kept.append(s)
+    return kept
+
+
+def compute_gs_signals(bars: Sequence[dict], denoise: bool = True) -> list[dict]:
     """全量 GS 交叉信号序列(summary API / 前端 L2 图层用)。
 
     公式与 `compute_gs_signal` 完全一致(BB0/A0 交叉, 前后端等价已实测验证),
@@ -170,7 +209,7 @@ def compute_gs_signals(bars: Sequence[dict]) -> list[dict]:
             "confirmed": i < n - 1,   # 末根 = 待确认
             "price": closes[i],
         })
-    return out
+    return merge_whipsaw(out) if denoise else out
 
 
 def trend_label(gs_eval: dict) -> str:
