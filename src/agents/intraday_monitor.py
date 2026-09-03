@@ -14,6 +14,7 @@ from src.core.context_store import (
     save_agent_context_run,
     save_agent_prediction_outcome,
 )
+from src.core.dark_flow import MAIN_NET_LIMIT, ABSORB_INTENSITY, ABSORB_BUY_RATIO  # v0.4.79: 统一主力意图判据常量
 from src.core.suggestion_pool import save_suggestion
 from src.core.signals import SignalPackBuilder
 from src.core.signals.structured_output import try_parse_action_json
@@ -76,7 +77,7 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
         main_net = dark.get("main_net", 0) or 0
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
-        tag = "净流入" if main_net > 500e4 else ("净流出" if main_net < -500e4 else "平衡")
+        tag = "净流入" if main_net > MAIN_NET_LIMIT else ("净流出" if main_net < -MAIN_NET_LIMIT else "平衡")
         def _fmt_amount(n):
             """v0.4.62: 自动万/亿单位"""
             if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
@@ -124,10 +125,10 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
                 "board": _board_snapshot(symbol),
             }
         else:
-            strong_absorb = (intensity or 0) >= 35 and (buy_ratio or 0) >= 48
-            if main_net > 500e4:
+            strong_absorb = (intensity or 0) >= ABSORB_INTENSITY and (buy_ratio or 0) >= ABSORB_BUY_RATIO
+            if main_net > MAIN_NET_LIMIT:
                 direction = "buy"
-            elif main_net < -500e4:
+            elif main_net < -MAIN_NET_LIMIT:
                 direction = "wash" if strong_absorb else "sell"
             else:
                 direction = "absorb" if strong_absorb else "neutral"
@@ -175,7 +176,7 @@ def _main_intent_summary(symbol: str) -> str:
         main_net = dark.get("main_net", 0) or 0
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
-        tag = "净流入" if main_net > 500e4 else ("净流出" if main_net < -500e4 else "平衡")
+        tag = "净流入" if main_net > MAIN_NET_LIMIT else ("净流出" if main_net < -MAIN_NET_LIMIT else "平衡")
         def _fmt_amount(n):
             """v0.4.62: 自动万/亿单位"""
             if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
@@ -263,10 +264,10 @@ def _main_intent_structured(symbol: str) -> dict | None:
                 "board": _board_snapshot(symbol),
             }
         # v14 判据(与 _judge_signal 对齐): 参与度≥35% 且 买占≥48% = 强吸筹力度
-        strong_absorb = (intensity or 0) >= 35 and (buy_ratio or 0) >= 48
-        if main_net > 500e4:
+        strong_absorb = (intensity or 0) >= ABSORB_INTENSITY and (buy_ratio or 0) >= ABSORB_BUY_RATIO
+        if main_net > MAIN_NET_LIMIT:
             direction = "buy"
-        elif main_net < -500e4:
+        elif main_net < -MAIN_NET_LIMIT:
             direction = "wash" if strong_absorb else "sell"
         else:
             direction = "absorb" if strong_absorb else "neutral"
@@ -477,10 +478,10 @@ def _derive_direction(dark: dict) -> str:
         buy_ratio = dark.get("buy_ratio")
     if dark.get("data_status") in ("insufficient", "suspect"):
         return "neutral"
-    strong_absorb = (intensity or 0) >= 35 and (buy_ratio or 0) >= 48
-    if main_net > 500e4:
+    strong_absorb = (intensity or 0) >= ABSORB_INTENSITY and (buy_ratio or 0) >= ABSORB_BUY_RATIO
+    if main_net > MAIN_NET_LIMIT:
         return "buy"
-    if main_net < -500e4:
+    if main_net < -MAIN_NET_LIMIT:
         return "wash" if strong_absorb else "sell"
     return "absorb" if strong_absorb else "neutral"
 
@@ -631,7 +632,7 @@ def _append_main_intent(lines: list, symbol: str) -> None:
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
         small_net = dark.get("small_net", 0) or 0
-        main_tag = "主力净流入" if main_net > 500e4 else ("主力净流出" if main_net < -500e4 else "主力平衡")
+        main_tag = "主力净流入" if main_net > MAIN_NET_LIMIT else ("主力净流出" if main_net < -MAIN_NET_LIMIT else "主力平衡")
         line = (f"- 主力方向：{main_tag}(主力{_fmt_amount(main_net)}="
                 f"超大单{_fmt_amount(big_net)}+大单{_fmt_amount(mid_net)}，"
                 f"散户{_fmt_amount(small_net)})")

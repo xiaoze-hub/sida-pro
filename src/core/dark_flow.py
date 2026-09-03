@@ -483,6 +483,9 @@ _MNEMONIC_VOL_RATIO = 1.5     # ① ② 放量: 量比 > 1.5
 _MNEMONIC_MOVE = 0.5          # 有效涨跌: |涨跌%| > 0.5 才算涨/跌(剔除噪音)
 _MNEMONIC_FLAT = 1.0          # ⑦ 价格不动: |涨跌%| <= 1.0
 _MNEMONIC_OSCILLATE = 3.0     # ⑥ 震荡: 0.5 < |涨跌%| <= 3%(有波动无单边)
+# v0.4.79 口诀活代码化阈值(tck 主动率口径, 仅当 tck_active_ratio 入参有效时触发)
+_MNEMONIC_TCK_DUAL_SMALL = 30.0   # ⑥ 双小单: 大单占比 < 30%(市场冷清, 主力未参与)
+_MNEMONIC_TCK_DUAL_LARGE = 85.0   # ⑦ 双大单: 大单占比 > 85%(主力频繁进出, 疑似对倒)
 
 # 2026-08-25 腾讯数据源适配(审计修复, 见 docs/audit_main_intent_20260825.md):
 # 腾讯口径 volume≈外盘+内盘(active_ratio≈100%), 原 ⑥ active_ratio<30% 永不触发、
@@ -564,12 +567,22 @@ def _signal_direction(signal: str) -> int:
     return 0
 
 
-def _judge_mnemonic(dark: dict, quote: dict | None = None) -> dict | None:
+def _judge_mnemonic(
+    dark: dict,
+    quote: dict | None = None,
+    tck_active_ratio: float | None = None,
+) -> dict | None:
     """内盘外盘 7 口诀判定(规则预判, 只提示不改结论)。
 
     输入: compute_dark_flow 结果 dark + 腾讯 Quote 字段 dict(volume_outer/
     volume_inner/change_pct/volume_ratio/high_price/low_price/current_price/volume)。
     buy_pct = 外盘/(外盘+内盘)*100, sell_pct 反向; 涨跌/放量/位置按阈值判定。
+
+    v0.4.79 口诀活代码化新增参数 tck_active_ratio(0-100):
+      - 有 .tck 数据时(tck_active_ratio 非 None), ⑥⑦ 用原始「主动率」口诀
+        (大单占比 < 30% = 双小单 / > 85% = 双大单, 主力意图最准)
+      - 无 .tck 数据时(tck_active_ratio=None), 走腾讯兜底: ⑥「缩量+震荡」/ ⑦「内外失衡+不动+放量」
+    优先级: tck 路径 > 兜底路径(因为 .tck 是交易所级委托, 比腾讯方向自解析更准)。
 
     命中返回 {mnemonic: 口诀名, direction: 看涨/看跌/观望/警惕/关注/中性,
     divergence: bool(口诀方向与主力意图 signal 方向是否背离), detail: 解析文本};
@@ -622,8 +635,25 @@ def _judge_mnemonic(dark: dict, quote: dict | None = None) -> dict | None:
         f"量比{volume_ratio:.2f}, 位置:{position}, 主动盘占比{active_ratio:.0f}%"
     )
 
+    # v0.4.79 口诀活代码化: 有 .tck 主动率时, ⑥⑦ 走原始「主动率」口诀(优先级最高, 因为 .tck
+    # 是交易所级委托记录, 比腾讯方向自解析更准)。无效值(None/NaN/越界)走兜底, 不破坏现有行为。
+    tck_active = (
+        tck_active_ratio
+        if isinstance(tck_active_ratio, (int, float)) and 0 <= tck_active_ratio <= 100
+        else None
+    )
+
     # (条件, 口诀名, 方向, 解析文本) —— 按优先级排列
+    # 注意: tck 路径的 detail 用函数延迟格式化(避免 tck_active=None 时 f-string 立即炸)
     rules = [
+        # ===== v0.4.79 tck 优先路径(主动率口径, 交易所级数据) =====
+        # ⑦ 双大单(对倒): 大单占比 > 85%(主力频繁进出, 疑似对倒)
+        (tck_active is not None and tck_active > _MNEMONIC_TCK_DUAL_LARGE, "双大单对倒", "警惕",
+         lambda: f"大单主动率{tck_active:.0f}%>85%, 主力频繁进出, 疑似对倒(警惕)"),
+        # ⑥ 双小单: 大单占比 < 30%(市场冷清, 主力未参与)
+        (tck_active is not None and tck_active < _MNEMONIC_TCK_DUAL_SMALL, "双小单", "观望",
+         lambda: f"大单主动率{tck_active:.0f}%<30%, 市场冷清主力未参与(观望)"),
+        # ===== 兜底路径(腾讯口径) =====
         # ⑥ 控盘洗盘: 缩量(量比<0.8)+震荡(0.5<|涨跌|<=3%) → 关注
         (volume_shrink and oscillate, "控盘洗盘", "关注",
          "缩量(量比<0.8)且窄幅震荡 → 交投清淡, 疑似主力高度控盘后的洗盘(关注)"),
@@ -649,6 +679,9 @@ def _judge_mnemonic(dark: dict, quote: dict | None = None) -> dict | None:
     for cond, name, direction, text in rules:
         if not cond:
             continue
+        # v0.4.79: tck 路径用 lambda 延迟格式化(避免 tck_active=None 时 f-string 炸)
+        if callable(text):
+            text = text()
         # 背离: 口诀方向与主力意图 signal 方向相反(仅数据充分且信号方向明确时判定)
         divergence = False
         if dark.get("data_status") == "ok":
@@ -1087,3 +1120,46 @@ def _judge_signal(dark_net: float, main_net: float, big_net: float, mid_net: flo
     if strong_absorb:
         return f"主力平衡但参与度高({main_buy_ratio:.0f}%买占)疑吸筹|{auction_note}"
     return f"主力平衡(买卖接近)|{auction_note}"
+
+
+# v0.4.79 口诀活代码化: .tck 主动率计算 helper
+def compute_tck_active_ratio(symbol: str, tck_dir: str | None = None) -> float | None:
+    """从 .tck 文件计算「主动率」(大单笔数占比)。
+
+    路径: PANWATCH_TCK_DIR/{sh|sz}{code}_{yyyymmdd}.tck(盘后超盘回放落盘)。
+    算法: orders(主动委托, tag=00 申报)中 amt>=30万 的笔数 / orders 总笔数 × 100。
+    注: 30 万 = 1 手 = 100 股 × 3000 元(对齐神剑股份 002361 主力 1 手单位)。
+
+    返回:
+      - float 0-100: 主动率(可用)
+      - None: 无 .tck 文件 / orders 为空 / 文件解析失败(调用方走兜底)
+
+    集成路径: chat_tools.dark_review_from_tck 已用 parse_tck, 此函数复用其结果。
+    性能: parse_tck 是 9ms 级(36字节定长 + zlib, 见 tdx_tick_parser 注释), 每次调用
+    解析一次 OK, 不需要缓存(盘后场景调用频次低)。
+    """
+    import os
+    from datetime import datetime
+    try:
+        from src.core.tdx_tick_parser import parse_tck
+    except ImportError:
+        return None
+    if not tck_dir:
+        tck_dir = os.environ.get("PANWATCH_TCK_DIR", "/app/data/tck")
+    # 文件名规则: {sh|sz}{code}_{yyyymmdd}.tck
+    today = datetime.now().strftime("%Y%m%d")
+    # 判断市场: 6 开头 sh, 其他 sz
+    market_prefix = "sh" if str(symbol).startswith("6") else "sz"
+    fname = f"{market_prefix}{symbol}_{today}.tck"
+    path = os.path.join(tck_dir, fname)
+    if not os.path.exists(path):
+        return None
+    try:
+        _, orders, _cancels = parse_tck(path)
+    except Exception:
+        return None
+    if not orders:
+        return None
+    BIG_AMT = 30e4  # 30 万元 = 1 手大单阈值(神剑 002361 经验值)
+    big = sum(1 for o in orders if (o.get("amt") or 0) >= BIG_AMT)
+    return big / len(orders) * 100

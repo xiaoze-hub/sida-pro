@@ -15,6 +15,39 @@
 
 ## 2026-09-03
 
+### update v0.4.79 后端常量统一 + 主力意图抽公共判据(进行中)
+
+- **P1-#8 strong_absorb 三常量统一完成**: `src/agents/intraday_monitor.py` 内 10 处硬编码
+  `500e4/35/48` 全部改为 `from src.core.dark_flow import MAIN_NET_LIMIT, ABSORB_INTENSITY, ABSORB_BUY_RATIO`。
+  解 2026-08-25 审计约束"仅落地 dark_flow 侧"的限制, 两端判据口径现已 100% 一致。
+  影响函数: `_main_intent_both` (line 80/128/130)、`_main_intent_structured` (line 179/267/269)、
+  `_derive_direction` (line 481)、`_main_intent_report` (line 482/484)、`_board_snapshot_tag` (line 635)。
+  测试: `test_dark_flow / test_dark_flow_guard / test_dark_flow_tq / test_intraday_monitor_json_format /
+  test_intraday_noalert_reason / test_tradingagents_main_intent` 共 33 passed。
+- **P0-#5 口诀⑥⑦ 活代码化完成**: `src/core/dark_flow.py::_judge_mnemonic` 新增 `tck_active_ratio` 入参
+  (0-100)。有 .tck 数据时走原始「主动率」口诀(双大单>85% / 双小单<30%), 无 .tck 时走腾讯兜底
+  (缩量+震荡 / 内外失衡+不动+放量), 不破坏现有行为。新增 helper `compute_tck_active_ratio(symbol)`
+  从 `PANWATCH_TCK_DIR/{sh|sz}{code}_{yyyymmdd}.tck` 解析大单占比(amt≥30万为门槛)。
+  接入点: `src/web/api/darkflow.py::darkflow` 在 data_status=="ok" 时调用 helper 传参。
+  阈值常量 `_MNEMONIC_TCK_DUAL_SMALL=30.0 / _MNEMONIC_TCK_DUAL_LARGE=85.0` 写在 dark_flow 顶部。
+  实现细节: tck 路径的 detail 用 `lambda` 延迟格式化(避免 tck_active=None 时 f-string 立刻炸)。
+  测试: `tests/test_dark_flow_mnemonic_tck.py` 8 例全过(双大单/双小单/中区间/None/越界/非数值/
+  既有兜底仍工作/tck 优先于兜底), 既有 dark_flow 6 文件 33 例仍全过, 总 41 passed。
+- **P1-#10 _derive_direction 抽公共判据 → 决定不抽**: 验证 `grep -rn _derive_direction src/` 仅
+  1 处调用(`intraday_monitor.py::_ai_counter_check`)。28 号邮件原话"抽到 core 共享"无第二调用点
+  证据, YAGNI 原则不抽。已在 dark_flow.py 内用统一常量 (`MAIN_NET_LIMIT/ABSORB_INTENSITY/ABSORB_BUY_RATIO`),
+  口径已 100% 一致, 不需要跨文件抽公共函数。
+- **P0-#3 get_dark_flow_precise AI 包装 → 已存在**: 28 号邮件"需暴露 + 补测试"实际已完成。
+  `src/core/chat_tools.py::get_dark_flow_precise` 已在 v0.4.30+ 暴露, 包含主笔级还原 +
+  拆单簇暗盘 hook(dark_review_from_tck, 失败独立兜底) + units 标注 + note 说明。
+  测试覆盖完整: `test_chat_tools_a4.py` 3 例(hook 成功/失败/异常) + `test_chat_tools_two.py`
+  包含 8 例(无文件/成功/空成交/parse 错等), 共 31 passed。本次未改动代码, 仅验证完整性。
+- **P1-#9 盘中暗盘主笔级切线 → 已实装**: 28 号邮件"需新增 PANWATCH_DARK_SOURCE=thsdk 切线"
+  实际在 v0.4.71 已实装 `src/core/dark_flow_fusion.py::compute_dark_fusion`, 暗盘主线 =
+  .tck (官方方向 2B/2S) + thsdk L2 逐笔(被动覆盖) 融合, 单链路无法闭环的两侧互补。
+  `compute_pool_flow` 通过 `_dark_flow` 自动调用融合, 不需要新增 `primary_only` 开关。
+  本次未改动代码, 仅验证完整性。
+
 ### feature v0.4.78 abnormal_moves DB 超时根治
 
 **问题**：v0.4.77 部署后 `/api/abnormal-moves` 仍 30s 超时撞 502。根因：

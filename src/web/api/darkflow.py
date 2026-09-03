@@ -16,7 +16,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from marketdata import Symbol as MDSymbol
 from marketdata.vendors.tencent import TencentQuoteVendor
-from src.core.dark_flow import _judge_mnemonic, _position_from_range, compute_dark_flow
+from src.core.dark_flow import (
+    _judge_mnemonic,
+    _position_from_range,
+    compute_dark_flow,
+    compute_tck_active_ratio,  # v0.4.79: .tck 主动率(口诀活代码化)
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +99,9 @@ def build_darkflow_response(symbol_code: str) -> dict:
     mnemonic = None
     if data_status == "ok":
         try:
-            mnemonic = _judge_mnemonic(dark, quote)
+            # v0.4.79 口诀活代码化: 有 .tck 数据时用「主动率」原始口诀, 无则兜底
+            tck_ratio = compute_tck_active_ratio(symbol_code)
+            mnemonic = _judge_mnemonic(dark, quote, tck_active_ratio=tck_ratio)
         except Exception as e:
             logger.debug(f"口诀判定失败 {symbol_code}: {e}")
     elif quote:
