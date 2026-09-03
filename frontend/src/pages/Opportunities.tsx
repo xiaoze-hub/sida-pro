@@ -1158,7 +1158,7 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => setViewMode('candidates')}
-          className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
             viewMode === 'candidates' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
@@ -1167,7 +1167,7 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => setViewMode('auction')}
-          className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
             viewMode === 'auction' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
@@ -1176,7 +1176,7 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => setViewMode('abnormal')}
-          className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
             viewMode === 'abnormal' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
@@ -1333,7 +1333,7 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => setResonanceOnly(!resonanceOnly)}
-          className={`h-8 rounded-lg px-3 text-[12px] font-medium transition-colors border ${
+          className={`h-8 rounded-md px-3 text-[12px] font-medium transition-colors border ${
             resonanceOnly
               ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/40'
               : 'bg-accent/50 text-muted-foreground hover:bg-accent border-transparent'
@@ -1419,7 +1419,7 @@ export default function OpportunitiesPage() {
                 <button
                   type="button"
                   onClick={() => setResOnly(!resOnly)}
-                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors border ${
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors border ${
                     resOnly
                       ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/40'
                       : 'bg-accent/50 text-muted-foreground hover:bg-accent border-transparent'
