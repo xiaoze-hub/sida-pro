@@ -28,7 +28,7 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
-import { readStockColors, withAlpha } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readChartTheme, maShade } from '../lib/stock-colors'
 
 import {
   KIND_ICON,
@@ -200,29 +200,31 @@ export default function KlineChart(props: {
     if (!container) return
 
     const sc = readStockColors()
+    // 终端化: 图表主题跟随 light/dark(原硬编码深 slate, light 下突兀)
+    const th = readChartTheme()
     const chart = createChart(container, {
       layout: {
-        background: { color: '#0f172a' },
-        textColor: '#cbd5e1',
+        background: { color: th.bg },
+        textColor: th.text,
       },
       width: container.clientWidth,
       height: props.height ?? 360,
       grid: {
-        vertLines: { color: '#1e293b' },
-        horzLines: { color: '#1e293b' },
+        vertLines: { color: th.grid },
+        horzLines: { color: th.grid },
       },
       timeScale: {
         timeVisible: !DAY_BUCKETS.includes(interval),
         secondsVisible: false,
-        borderColor: '#334155',
+        borderColor: th.border,
       },
       rightPriceScale: {
-        borderColor: '#334155',
+        borderColor: th.border,
       },
       crosshair: {
         mode: 1, // magnet
-        vertLine: { color: '#64748b', width: 1, style: 3, labelBackgroundColor: '#1e293b' },
-        horzLine: { color: '#64748b', width: 1, style: 3, labelBackgroundColor: '#1e293b' },
+        vertLine: { color: th.crosshair, width: 1, style: 3, labelBackgroundColor: th.labelBg },
+        horzLine: { color: th.crosshair, width: 1, style: 3, labelBackgroundColor: th.labelBg },
       },
     })
 
@@ -253,6 +255,22 @@ export default function KlineChart(props: {
       }
     })
     observer.observe(container)
+
+    // 主题跟随: <html> class 变化(dark 切换) → 重读 token 并 applyOptions, 不重建图表
+    const themeObserver = new MutationObserver(() => {
+      const t = readChartTheme()
+      chart.applyOptions({
+        layout: { background: { color: t.bg }, textColor: t.text },
+        grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+        timeScale: { borderColor: t.border },
+        rightPriceScale: { borderColor: t.border },
+        crosshair: {
+          vertLine: { color: t.crosshair, labelBackgroundColor: t.labelBg },
+          horzLine: { color: t.crosshair, labelBackgroundColor: t.labelBg },
+        },
+      })
+    })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
 
     // ── v2.1 §10.2 K线大图交互规范 ──
     // (1) 双击还原: fitContent() 全局视角
@@ -291,6 +309,7 @@ export default function KlineChart(props: {
 
     return () => {
       observer.disconnect()
+      themeObserver.disconnect()
       markerPluginRef.current?.setMarkers([])
       markerPluginRef.current = null
       if (seriesRef.current) {
@@ -385,7 +404,7 @@ export default function KlineChart(props: {
         markers.push({
           time: toChartTime(ev.date, interval),
           position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
-          color: ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : '#64748b',
+          color: ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : readChartTheme().neutral,
           shape: 'circle' as const,
           text: n > 1 ? `${base}×${n}` : base,
         })
@@ -443,7 +462,7 @@ export default function KlineChart(props: {
           const net = open + dark
           // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色。
           // 色值统一取 --stock-up/--stock-down 令牌: 暗盘=原色(突出主力), 明盘=55% 透明度次级色
-          let color = '#475569' // 无数据: 灰
+          let color = readChartTheme().nodata // 无数据: 灰
           if (dark !== null && dark !== undefined && dark !== 0) {
             color = dark > 0 ? sc.up : sc.down
           } else if (open !== null && open !== undefined && open !== 0) {
@@ -477,11 +496,11 @@ export default function KlineChart(props: {
       const ma20 = sma(closes, 20)
       const ma60 = sma(closes, 60)
       const defs: Array<{ v: Array<number | null>; color: string; w: 1 | 2 | 3; title: string }> = [
-        { v: ma5, color: 'rgba(148, 163, 184, 0.9)', w: 1, title: 'MA5' },
-        { v: ma10, color: 'rgba(148, 163, 184, 0.75)', w: 1, title: 'MA10' },
-        { v: ma20, color: 'rgba(148, 163, 184, 0.6)', w: 1, title: 'MA20' },
-        { v: ma60, color: 'rgba(148, 163, 184, 0.45)', w: 1, title: 'MA60' },
-        // 牛线=MA5 蓝 / 马线=MA20 橙 (BBI 简化)
+        { v: ma5, color: maShade(0.9), w: 1, title: 'MA5' },
+        { v: ma10, color: maShade(0.75), w: 1, title: 'MA10' },
+        { v: ma20, color: maShade(0.6), w: 1, title: 'MA20' },
+        { v: ma60, color: maShade(0.45), w: 1, title: 'MA60' },
+        // 牛线=MA5 蓝 / 马线=MA20 橙 (BBI 简化; 专业图表语义色, 跨主题保留)
         { v: ma5, color: 'rgba(59, 130, 246, 0.95)', w: 3, title: '牛' },
         { v: ma20, color: 'rgba(249, 115, 22, 0.95)', w: 3, title: '马' },
       ]
@@ -543,10 +562,10 @@ export default function KlineChart(props: {
           <button
             key={opt.key}
             onClick={() => setInterval(opt.key)}
-            className={`pxpx-2 py-1 text-xs rounded ${
+            className={`px-2 py-1 text-xs rounded ${
               interval === opt.key
                 ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary text-secondary-foreground hover:bg-secondary/'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
             }`}
           >
             {opt.label}
@@ -589,10 +608,10 @@ export default function KlineChart(props: {
           )
         })}
       </div>
-      {/* 图表容器 */}
+      {/* 图表容器(终端化: 主图裸放, 无框) */}
       <div
         ref={containerRef}
-        className="w-full rounded border border-border/30"
+        className="w-full"
         style={{ minHeight: props.height ?? 360 }}
       />
     </div>

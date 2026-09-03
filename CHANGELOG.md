@@ -30,6 +30,7 @@
 - **终端化 P1-7 AnalysisDetail 嵌 K线主图 + P1-8 收尾** (研究文档 §5: 详情页 → 主图+副图+文字). 正文顶部嵌入 InteractiveKline(与 IndexDetail 同款, 未碰 28号 Quote/KlineChart scope); DarkFundTop thead 去底色; IndexDetail 经核对已达标(主图裸放+副图)零改动. tsc 0 error + vite build 通过. [commit 0a63aae]
 - **终端化 P2-1 Reports/Login/ShadowAccount 去卡片** (研究文档 §5 P2 辅助页). Reports 分组 card-subtle → hairline 分组 + 空态去盒; Login 表单 card → hairline(轻量化); ShadowAccount StatCard 背底 → 左 hairline 格 + 画像区去 card 底; 上传虚线框/语义 error 盒保留(功能性). tsc 0 error. [commit fd2e129]
 - **终端化 P2-2 Settings 表单统一** (研究文档 §5 P2: 设置 → 表单统一). Hero/搜索空态去 card 底(hero 渐变保留); 11 个表单 section `card` → border-t hairline(网格布局保留); 5 处 `rounded-lg bg-accent/30` 列表行 → hairline 行(hover 底去掉). 零逻辑改动. tsc 0 error + vite build 通过. [commit 0deade6]
+- **终端化 Quote/K线主题跟随** (原 28号 scope, 用户移交). KlineChart 图表底/网格/轴/十字线硬编码深 slate → 全走 CSS token(`readChartTheme`, MutationObserver 跟随 dark 切换, 不重建图); 中性 marker/无数据灰收敛 muted; L1 均线灰阶收敛 muted(牛蓝/马橙专业语义色保留); 主图容器去框裸放; 修周期按钮 `pxpx-2` 笔误 + 无效 hover 类. Quote GS 色 rose/emerald → stock-up/down 令牌(与 P0 一致). tsc 0 error + vite build 通过. [commit 7ab2c08]
 
 ## 2026-09-02
 

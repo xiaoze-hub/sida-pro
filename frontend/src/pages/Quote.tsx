@@ -135,10 +135,10 @@ const toWan = toAmount
 const NET_INFLOW_CLASS = (v: number | null | undefined) =>
   v == null ? 'text-muted-foreground' : v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-foreground'
 
-/** GS 信号(已确认/待确认) — 买红卖绿 */
+/** GS 信号(已确认/待确认) — 买红卖绿, 收敛 P0 stock 令牌(原 rose/emerald 硬编码) */
 const GS_COLOR = (side: 'G' | 'S', confirmed: boolean) => {
   const filled = confirmed ? '' : 'opacity-60 ring-1 ring-current'
-  return side === 'G' ? `text-rose-500 ${filled}` : `text-emerald-500 ${filled}`
+  return side === 'G' ? `text-stock-up ${filled}` : `text-stock-down ${filled}`
 }
 
 /** 决策共振 tone 上色 — 与红涨绿跌一致: bull→红(涨色) / bear→绿(跌色) / warn→琥珀 / neutral→灰 */
