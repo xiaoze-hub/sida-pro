@@ -7,6 +7,23 @@
 
 ## 2026-09-04
 
+### fix P2-B ghcr CI test 门禁根因修(ruff F811 拦构建)
+
+- **根因**: `src/core/l2_ticks_scheduler.py:101` (v0.4.77 新文件)
+  `__init__` 形参名 `timezone` 遮蔽了 `from datetime import ... timezone`
+  (line 18), CI `Lint (ruff --select E9,F821,F601,F811)` 报 F811,
+  ghcr run 48-51 四连 fail → build job 全 skip。注: 任务原标题的
+  "test_ws_hub AsyncMock" 是 v0.4.51 时代的失败, 当前 pytest 子集本地
+  1377 passed + marketdata 190 passed, 测试本身没问题, 真凶是 Lint。
+- **改动**: 形参改名 `timezone` → `tz_name`
+  (`AsyncIOScheduler(timezone=tz_name)` 保持 APScheduler 原语义);
+  未使用的 `timezone` 导入一并删除; 唯一调用点
+  `server.py:1918` 同步改 `tz_name=settings.app_timezone`。
+  全仓 grep 确认无其他 `L2TicksScheduler(timezone=` 调用。
+- **测试**: 本地 ruff 0.16.6 (与 CI 同版) `All checks passed`;
+  构造器 kwarg + 默认值双路径实测 OK; `py_compile` 过;
+  marketdata 190 passed; tests CI 子集 1377 passed + 2 skipped(修前已验证) [commit f59f7cf]。
+
 ### update P2-A 部署流程防护 3 条(tar 备份/迁移校验/cron 暂停开关)
 
 - **① tar 备份**: `~/sync_sida_to_host.sh` (repo 外运维脚本, 原文件已备份
