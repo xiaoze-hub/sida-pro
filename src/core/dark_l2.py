@@ -157,8 +157,9 @@ def _fetch_thsdk(code: str) -> list[dict]:
     """
     ths_code = _ths_code(code)
 
-    # 1) 拉取原始行并按时间升序
-    rows = _fetch_raw_rows(ths_code)
+    # 1) 拉取原始行(包熔断: 失败/熔断中返回 [] 走降级, 不堆 thsdk 重试风暴)
+    from src.core.thsdk_breaker import thsdk_call
+    rows = thsdk_call(lambda: _fetch_raw_rows(ths_code), default=[])
     if not rows:
         raise RuntimeError(f"thsdk.tick_super_level1 返回空数据({ths_code})")
 
