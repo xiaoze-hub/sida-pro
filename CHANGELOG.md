@@ -5,6 +5,10 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+### fix
+
+- **v0.4.72 health 端点超时保护（生产事故 hotfix）** (28号 hotfix). **事故**: 09:44 thsdk 腾讯数据源 (web.ifzq.gtimg.cn:443) 连接风暴, worker 进程飙至 73% CPU + 1.2GB RAM, 主进程事件循环被拖死 → /api/health hang 30s+, Docker healthcheck 10s 超时堆积（实测 4 个 healthcheck 进程堆着占 ~80MB）, 容器状态 `unhealthy` 持续 30 次（FailingStreak=30）。**修复**: `src/web/api/health.py` health 端点改为薄壳, 业务逻辑包成嵌套 `_check()`, 外层 `await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT=5.0)`; 超时或异常立即返回 `down`(不再卡事件循环), Docker healthcheck 不会再堆积。**根因 thsdk 重试风暴的 circuit breaker 根治留单独 hotfix**(目前仅防二阶 healthcheck 堆积, thsdk 仍可能让业务接口变慢)。回滚预案: 立即 `docker restart panwatch`(已实测, 8 小时前那次事故用此恢复)。测试: py_compile 通过 + 模块 import 成功。
+
 ## 2026-09-03
 
 ### fix
