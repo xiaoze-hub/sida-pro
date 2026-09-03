@@ -87,3 +87,36 @@ export function readChartTheme(): ChartTheme {
 export function maShade(alpha: number): string {
   return hslaVar('--muted-foreground', '240 10% 48%', alpha)
 }
+
+/**
+ * 研究报告 §4.3 剩余色板读取 (awesome-design-html Robinhood tint 手法校准)。
+ * flat = 平盘灰; threshold = 活跃度阈值线 (生命1.56/强势3/大牛6, 默认 alpha .5);
+ * accent = Bloomberg 风强调橙; tints = 涨跌淡底 (涨停行/强势标记背景)。
+ */
+export function readFlatColor(): string {
+  return hslaVar('--flat-color', '215 16% 57%')
+}
+
+/** 阈值线色: 同 flat 基, 默认半透明, 不抢 K 线主色。 */
+export function thresholdLine(alpha = 0.5): string {
+  return hslaVar('--threshold-line', '215 16% 57%', alpha)
+}
+
+export function readAccentPrimary(): string {
+  return hslaVar('--accent-primary', '38 92% 50%')
+}
+
+export interface StockTints {
+  /** 涨淡底 (--stock-up-tint) */
+  up: string
+  /** 跌淡底 (--stock-down-tint) */
+  down: string
+}
+
+/** 涨跌淡底: 行背景/强势标记用, 禁止替代主涨跌色。 */
+export function readStockTints(): StockTints {
+  return {
+    up: hslaVar('--stock-up-tint', '0 85% 96%'),
+    down: hslaVar('--stock-down-tint', '140 45% 94%'),
+  }
+}

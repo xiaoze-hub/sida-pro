@@ -41,6 +41,7 @@
 - **v0.4.74 L2盘口资金页上线 + P1 thsdk盘中验证 + GS校准**. 前端`/l2`随版上线(生产盘中验证十档/形态/主力净额). P1: 09-03 11:08盘中实测神剑002361 — tick_super_level1游客1962笔实时(B1045/S882/M35, 8.76亿) + big_order_flow账号512笔(B215/S297, active296/passive216, 2.92亿), 云端L2通, 注释落`dark_l2.py`. GS校准: 上证501根实测非重绘60/60一致, G/S位置滞后(中位0.53/0.37)+抖动16/62, 维持趋势过滤定位, 报告`docs/GS校准报告_原版视频口径.md`. 另: 生产v0.4.73 thsdk重连风暴致unhealthy一次, `docker restart`恢复(风暴源未定位, 待观察). [commit 731685c]
 - **GS抖动合并P2** (校准报告跟进). 新增`merge_whipsaw`(纯函数, 窗口`WHIPSAW_MERGE_DAYS=3`): 相邻反向信号间隔≤3天成对丢弃, 日期缺失不猜保留; `compute_gs_signals`默认`denoise=True`(传`False`取裸序列, 公式零改动). 上证501根实测63→37, ≤3天残留0/36; 单元(成对丢/超窗保留/日期缺保留)全过. 现有`test_decision_pioneer`+`test_summary_resonance` 22 passed. `eval_gs`区间语义不动.
 - **终端化残留token落地 §4.3** (研究报告跟进, feat分支). `index.css`新增`--bg-kline`(亮纸面白/暗接近黑hsl(222,47%,6%)) + `--font-cn`/`--font-ui`; body字体改走变量; `readChartTheme().bg`改读`--bg-kline`(K线底与页面底分离, 暗色K线更沉). tsc 0 + vite build 20s通过. 未做: 活跃度三色(无副图柱载体不硬套) + GS琥珀/紫(与A股红绿惯例冲突, 维持G红S绿).
+- **终端化§4.3剩余色板** (awesome-design-html Robinhood tint手法校准, feat分支). `index.css`亮/暗新增`--flat-color`/`--threshold-line`(平盘灰#94A3B8基, 阈值线使用处alpha .5) + `--accent-primary`(强调橙#F59E0B) + `--stock-up/down-tint`(涨跌淡底, 涨停行/强势标记背景); `stock-colors.ts`新增`readFlatColor`/`thresholdLine`/`readAccentPrimary`/`readStockTints`读取函数. stock-up/down已有(#E53935/#43A047)不动, K线与文字涨跌同源. tsc 0 + vite build 15s通过.
 
 ## 2026-09-02
 
