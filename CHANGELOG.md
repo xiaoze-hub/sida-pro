@@ -24,6 +24,19 @@
   `_derive_direction` (line 481)、`_main_intent_report` (line 482/484)、`_board_snapshot_tag` (line 635)。
   测试: `test_dark_flow / test_dark_flow_guard / test_dark_flow_tq / test_intraday_monitor_json_format /
   test_intraday_noalert_reason / test_tradingagents_main_intent` 共 33 passed。
+- **P0-#5 口诀⑥⑦ 活代码化完成**: `src/core/dark_flow.py::_judge_mnemonic` 新增 `tck_active_ratio` 入参
+  (0-100)。有 .tck 数据时走原始「主动率」口诀(双大单>85% / 双小单<30%), 无 .tck 时走腾讯兜底
+  (缩量+震荡 / 内外失衡+不动+放量), 不破坏现有行为。新增 helper `compute_tck_active_ratio(symbol)`
+  从 `PANWATCH_TCK_DIR/{sh|sz}{code}_{yyyymmdd}.tck` 解析大单占比(amt≥30万为门槛)。
+  接入点: `src/web/api/darkflow.py::darkflow` 在 data_status=="ok" 时调用 helper 传参。
+  阈值常量 `_MNEMONIC_TCK_DUAL_SMALL=30.0 / _MNEMONIC_TCK_DUAL_LARGE=85.0` 写在 dark_flow 顶部。
+  实现细节: tck 路径的 detail 用 `lambda` 延迟格式化(避免 tck_active=None 时 f-string 立刻炸)。
+  测试: `tests/test_dark_flow_mnemonic_tck.py` 8 例全过(双大单/双小单/中区间/None/越界/非数值/
+  既有兜底仍工作/tck 优先于兜底), 既有 dark_flow 6 文件 33 例仍全过, 总 41 passed。
+- **P1-#10 _derive_direction 抽公共判据 → 决定不抽**: 验证 `grep -rn _derive_direction src/` 仅
+  1 处调用(`intraday_monitor.py::_ai_counter_check`)。28 号邮件原话"抽到 core 共享"无第二调用点
+  证据, YAGNI 原则不抽。已在 dark_flow.py 内用统一常量 (`MAIN_NET_LIMIT/ABSORB_INTENSITY/ABSORB_BUY_RATIO`),
+  口径已 100% 一致, 不需要跨文件抽公共函数。
 
 ### feature v0.4.78 abnormal_moves DB 超时根治
 
