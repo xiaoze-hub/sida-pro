@@ -120,3 +120,30 @@ export function readStockTints(): StockTints {
     down: hslaVar('--stock-down-tint', '140 45% 94%'),
   }
 }
+
+export interface GsColors {
+  /** G=买入 (--gs-go, A股惯例红) */
+  go: string
+  /** S=卖出 (--gs-stop, A股惯例绿) */
+  stop: string
+}
+
+/**
+ * GS买卖点色收敛 (2026-09-03):
+ * 原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿 (与 --stock-up/down 同源, 同值不同名)。
+ * 功能等价, 校准验收以信号位置为准不以颜色为准。
+ */
+export function readGsColors(): GsColors {
+  return {
+    go: cssVar('--gs-go', cssVar('--stock-up', '#E53935')),
+    stop: cssVar('--gs-stop', cssVar('--stock-down', '#43A047')),
+  }
+}
+
+/** 活跃度档位 → 三色 (研究报告 §4.3): 大牛紫 / 强势红 / 生命绿 / 弱·未知灰(flat, 不编造)。 */
+export function activityLevelColor(level: string | null | undefined): string {
+  if (level === '大牛') return cssVar('--activity-bull', '#8B5CF6')
+  if (level === '强势') return cssVar('--activity-strong', '#EF4444')
+  if (level === '生命') return cssVar('--activity-weak', '#22C55E')
+  return hslaVar('--flat-color', '215 16% 57%')
+}

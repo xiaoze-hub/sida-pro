@@ -92,6 +92,11 @@ interface SummaryResp {
   symbol?: string
   market?: string
   fund_flow?: FundFlowRow[]
+  activity_series?: Array<{
+    date?: string | null
+    activity?: number | null
+    level?: string | null
+  }> | null
   events?: Array<{
     date?: string | null
     kind?: string | null
@@ -181,7 +186,7 @@ export default function QuotePage() {
   const [detailOpen, setDetailOpen] = useState(false)
 
   // 副图切换(成交量/MACD)
-  const [subchart, setSubchart] = useState<'vol' | 'macd'>('vol')
+  const [subchart, setSubchart] = useState<'vol' | 'macd' | 'activity'>('vol')
 
   const sourceHealth = useSourceHealth()
   useEffect(() => { setInput(symbol) }, [symbol])
@@ -395,7 +400,7 @@ export default function QuotePage() {
                 </button>
               ))}
               <span className="text-border/60 mx-1">副图:</span>
-              {(['vol', 'macd'] as const).map((s) => (
+              {(['vol', 'macd', 'activity'] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
@@ -406,7 +411,7 @@ export default function QuotePage() {
                       : 'border-border/40 text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {s === 'vol' ? '成交量' : 'MACD'}
+                  {s === 'vol' ? '成交量' : s === 'macd' ? 'MACD' : '活跃度'}
                 </button>
               ))}
             </div>
@@ -425,6 +430,13 @@ export default function QuotePage() {
                 open_net: r.ming_net,
                 dark_net: r.dark_net,
               }))}
+              activitySeries={(summary?.activity_series ?? [])
+                .filter((r) => r.date != null)
+                .map((r) => ({
+                  date: r.date as string,
+                  activity: r.activity ?? null,
+                  level: r.level ?? null,
+                }))}
               layersVisible={layers}
               subchart={subchart}
               onRangeSelect={setSelectedRange}

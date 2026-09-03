@@ -74,6 +74,7 @@ def _patch_bars(monkeypatch, bars):
 
 _ALL_NONE = {"gs_signals": None, "fund_flow": None, "events": None,
              "orderbook": None, "unlock_levels": None, "chips": None,
+             "activity_series": None,
              # resonance(2026-09-02): 非 A 股 → 安全默认(available=False, 不编造)
              "resonance": {"available": False, "row": 0, "phase": "无",
                             "action_label": "观望", "action_text": "趋势不明, 建议观望",
@@ -99,6 +100,7 @@ def test_build_layer_data_no_bars_only_bars_dependent_none(monkeypatch):
     out = kapi._build_layer_data("000977", MarketCode.CN)
     assert out["gs_signals"] is None
     assert out["fund_flow"] is None
+    assert out["activity_series"] is None, "bars 空时 activity_series 保持 None(依赖 bars, 不编造)"
     # 不依赖 bars 的项必须"尝试过": events 至少是 list(空源=空列表), 不得是 None
     assert out["events"] is not None, "bars 空时 events 仍应计算(.tck/wencai 不依赖 bars)"
     assert out["chips"] is not None, "bars 空时 chips 仍应计算(标准筹码接口, 不依赖 bars)"

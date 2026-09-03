@@ -5,7 +5,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
-import { readStockColors, withAlpha } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
 
 type BusinessDay = { year: number; month: number; day: number }
 
@@ -768,8 +768,9 @@ export default function InteractiveKline(props: {
 
     // ============== SIDA Pro: L2 GS 买卖点 markers (2026-09-01) ==============
     // 实心=已确认(收盘), 空心=待确认(盘中). 设计稿 §5.2 严格区分, 防"把疑似当确认"
-    // 配色: G=买入→红(--stock-up), S=卖出→绿(--stock-down) — 红涨绿跌, 与个股页 Quote 口径一致
+    // 配色(09-03 收敛): G(--gs-go 红)/S(--gs-stop 绿), 与 --stock-up/down 同源; 原版 G绿S红, 验收以位置为准
     if (layers.signal && props.gsSignals && props.gsSignals.length) {
+      const gs = readGsColors()
       const signalMarkers: any[] = props.gsSignals
         .map((s) => {
           const bd = parseBusinessDay(s.date)
@@ -778,7 +779,7 @@ export default function InteractiveKline(props: {
           return {
             time: bd,
             position: isBuy ? 'belowBar' : 'aboveBar',
-            color: isBuy ? sc.up : sc.down,
+            color: isBuy ? gs.go : gs.stop,
             // shape: circle=实心(已确认), circleOutline=空心(待确认)
             shape: s.confirmed ? 'circle' : 'circleOutline',
             text: s.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),

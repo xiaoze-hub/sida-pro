@@ -61,6 +61,14 @@
     --accent-primary: 38 92% 50%;
     --stock-up-tint: 0 85% 96%;
     --stock-down-tint: 140 45% 94%;
+    /* GS买卖点(09-03收敛): G买入红/S卖出绿, 与 --stock-up/down 同源(同值不同名, 语义归属GS)。
+       原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿, 功能等价, 验收以信号位置为准不以颜色为准。 */
+    --gs-go: var(--stock-up);
+    --gs-stop: var(--stock-down);
+    /* 活跃度三色(研究报告§4.3): 大牛紫/强势红/生命绿; 弱档走 --flat-color(灰, 不编造第四色) */
+    --activity-bull: #8B5CF6;
+    --activity-strong: #EF4444;
+    --activity-weak: #22C55E;
 
     /* 界面密度体系:normal(默认)= 4px 基准。
        compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
@@ -111,6 +119,12 @@
     --accent-primary: 38 92% 55%;
     --stock-up-tint: 0 50% 14%;
     --stock-down-tint: 140 40% 12%;
+    /* GS/活跃度三色暗色值: 绿系提亮保暗底可读(weak #22C55E→#4ADE80 等) */
+    --gs-go: var(--stock-up);
+    --gs-stop: var(--stock-down);
+    --activity-bull: #A78BFA;
+    --activity-strong: #F87171;
+    --activity-weak: #4ADE80;
     --destructive: 0 60% 45%;
     --destructive-foreground: 0 0% 100%;
     --success: 152 50% 38%;
