@@ -1663,7 +1663,7 @@ export default function StocksPage() {
         {/* Summary Cards Skeleton */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="card p-4">
+            <div key={i}>
               <Skeleton className="h-4 w-16 mb-2" />
               <Skeleton className="h-6 w-24" />
             </div>
@@ -1672,7 +1672,7 @@ export default function StocksPage() {
         {/* Account List Skeleton */}
         <div className="space-y-4">
           {[...Array(2)].map((_, i) => (
-            <div key={i} className="card">
+            <div key={i}>
               <div className="px-4 py-3 border-b border-border/50">
                 <Skeleton className="h-5 w-32" />
               </div>
@@ -1868,7 +1868,7 @@ export default function StocksPage() {
         // 首次加载时显示骨架屏
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="card p-4">
+            <div key={i}>
               <div className="flex items-center gap-2 mb-2">
                 <Skeleton className="h-4 w-4 rounded" />
                 <Skeleton className="h-3 w-12" />
@@ -1879,7 +1879,7 @@ export default function StocksPage() {
         </div>
       ) : portfolio ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4 mb-6">
-          <div className="card p-4">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <TrendingUp className="w-4 h-4" />
               <span className="text-[12px]">总市值</span>
@@ -1888,7 +1888,7 @@ export default function StocksPage() {
               {formatMoney(portfolio.total.total_market_value)}
             </div>
           </div>
-          <div className="card p-4">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               {portfolio.total.total_pnl >= 0 ? (
                 <ArrowUpRight className="w-4 h-4 text-stock-up" />
@@ -1912,7 +1912,7 @@ export default function StocksPage() {
             const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
             const isUp = dayPnl >= 0
             return (
-              <div className="card p-4">
+              <div className="border-l border-border/40 pl-3">
                 <div className="flex flex-wrap items-center gap-2 text-muted-foreground mb-1">
                   {isUp ? (
                     <ArrowUpRight className="w-4 h-4 text-stock-up" />
@@ -1934,7 +1934,7 @@ export default function StocksPage() {
             )
           })()}
 
-          <div className="card p-4">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <Wallet className="w-4 h-4" />
               <span className="text-[12px]">可用资金</span>
@@ -1943,7 +1943,7 @@ export default function StocksPage() {
               {formatMoney(portfolio.total.available_funds)}
             </div>
           </div>
-          <div className="card p-4">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <PiggyBank className="w-4 h-4" />
               <span className="text-[12px]">总资产</span>
@@ -1953,7 +1953,7 @@ export default function StocksPage() {
             </div>
           </div>
 
-          <div className="card p-4">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
               <Bell className="w-4 h-4" />
               <span className="text-[12px]">仓位占比</span>
@@ -2090,7 +2090,7 @@ export default function StocksPage() {
       {/* Accounts & Positions */}
       {viewTab === 'positions' && (
         portfolio && portfolio.accounts.length === 0 ? (
-          <div className="card flex flex-col items-center justify-center py-20">
+          <div className="flex flex-col items-center justify-center py-20">
             <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
               <Building2 className="w-6 h-6 text-primary" />
             </div>
@@ -2100,7 +2100,7 @@ export default function StocksPage() {
         ) : (
           <div className="space-y-4">
             {portfolio?.accounts.map(account => (
-              <div key={account.id} className="card overflow-hidden">
+              <div key={account.id} className="border-b border-border/40">
               {/* Account Header */}
               <div
                 className="flex flex-col md:flex-row md:items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-accent/30 transition-colors gap-2"
@@ -2552,7 +2552,7 @@ export default function StocksPage() {
 
       {/* Watchlist */}
       {viewTab === 'watchlist' && (
-        <div className="card p-4">
+        <div className="border-b border-border/40 pb-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[13px] font-semibold text-foreground">关注列表</h3>
             <div className="flex items-center gap-1">
