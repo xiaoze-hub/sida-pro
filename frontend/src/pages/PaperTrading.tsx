@@ -419,21 +419,21 @@ export default function PaperTradingPage() {
       {/* Summary Cards */}
       {account && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <div className="card relative overflow-hidden p-3 border-l-2 border-l-primary">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
               <Wallet className="w-3.5 h-3.5" />
               总资产
             </div>
             <div className="text-xl font-bold font-num tabular-nums">{formatCurrency(account.total_equity)}</div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
               {account.total_pnl >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               总收益
             </div>
             <div className="text-lg font-bold"><PnlText value={account.total_pnl} /></div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
               <Trophy className="w-3.5 h-3.5" />
               胜率
@@ -441,14 +441,14 @@ export default function PaperTradingPage() {
             <div className="text-lg font-bold">{safeFixed(account.win_rate, 1)}%</div>
             <div className="text-xs text-muted-foreground">{account.winning_trades}/{account.total_trades} 笔</div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
               <BarChart3 className="w-3.5 h-3.5" />
               最大回撤
             </div>
             <div className="text-lg font-bold text-emerald-500">{safeFixed(account.max_drawdown_pct)}%</div>
           </div>
-          <div className="card p-3">
+          <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
               <Wallet className="w-3.5 h-3.5" />
               可用资金
@@ -459,14 +459,14 @@ export default function PaperTradingPage() {
       )}
 
       {/* Equity Curve */}
-      <div className="card p-4">
+      <div className="border-b border-border/40 pb-4">
         <h2 className="text-sm font-semibold mb-3">收益曲线</h2>
         <EquityChart data={equityCurve} />
       </div>
 
       {/* Strategy Performance */}
       {strategyPerf.length > 0 && (
-        <div className="card p-4">
+        <div className="border-b border-border/40 pb-4">
           <h2 className="text-sm font-semibold mb-3">策略绩效</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -510,7 +510,7 @@ export default function PaperTradingPage() {
       )}
 
       {/* Open Positions */}
-      <div className="card p-4">
+      <div className="border-b border-border/40 pb-4">
         <h2 className="text-sm font-semibold mb-3">当前持仓 ({positions.length})</h2>
         {positions.length === 0 ? (
           <div className="text-center text-muted-foreground text-sm py-8">暂无持仓</div>

@@ -283,7 +283,7 @@ export default function PriceAlertsPage() {
         <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">到价/量能触发，支持冷却、每日上限与交易时段门禁</p>
       </div>
 
-      <div className="card p-4 mb-4 flex items-center justify-between gap-2">
+      <div className="mb-4 flex items-center justify-between gap-2">
         <div className="text-[12px] text-muted-foreground">规则数：{rules.length}</div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" className="h-8" onClick={runScan} disabled={scanRunning}>
@@ -300,7 +300,7 @@ export default function PriceAlertsPage() {
       {loading ? (
         <div className="flex items-center justify-center py-20"><span className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
       ) : rules.length === 0 ? (
-        <div className="card p-8 text-center">
+        <div className="p-8 text-center">
           <BellRing className="w-6 h-6 mx-auto text-muted-foreground" />
           <div className="mt-2 text-[14px] text-foreground">暂无价格提醒规则</div>
           <div className="mt-1 text-[12px] text-muted-foreground">创建规则后，系统会每分钟自动扫描并触发通知</div>
@@ -308,13 +308,13 @@ export default function PriceAlertsPage() {
       ) : (
         <div className="space-y-3">
           {rules.map(r => (
-            <div key={r.id} className="card p-4">
+            <div key={r.id} className="border-b border-border/40 pb-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[14px] font-semibold">{r.name || `${r.stock_name} 提醒`}</span>
                     <span className="text-[12px] px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">{r.market}:{r.stock_symbol}</span>
-                    <span className={`text-[12px] px-2 py-0.5 rounded ${r.enabled ? 'bg-emerald-500/15 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>{r.enabled ? '启用' : '暂停'}</span>
+                    <span className={`text-[12px] px-2 py-0.5 rounded ${r.enabled ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-500' : 'bg-muted text-muted-foreground'}`}>{r.enabled ? '启用' : '暂停'}</span>
                   </div>
                   <div className="mt-2 text-[12px] text-muted-foreground">
                     {(r.condition_group?.items || []).map(conditionText).join(r.condition_group?.op === 'or' ? ' 或 ' : ' 且 ')}

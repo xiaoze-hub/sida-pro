@@ -31,6 +31,12 @@
 - **终端化 P2-1 Reports/Login/ShadowAccount 去卡片** (研究文档 §5 P2 辅助页). Reports 分组 card-subtle → hairline 分组 + 空态去盒; Login 表单 card → hairline(轻量化); ShadowAccount StatCard 背底 → 左 hairline 格 + 画像区去 card 底; 上传虚线框/语义 error 盒保留(功能性). tsc 0 error. [commit fd2e129]
 - **终端化 P2-2 Settings 表单统一** (研究文档 §5 P2: 设置 → 表单统一). Hero/搜索空态去 card 底(hero 渐变保留); 11 个表单 section `card` → border-t hairline(网格布局保留); 5 处 `rounded-lg bg-accent/30` 列表行 → hairline 行(hover 底去掉). 零逻辑改动. tsc 0 error + vite build 通过. [commit 0deade6]
 - **终端化 Quote/K线主题跟随** (原 28号 scope, 用户移交). KlineChart 图表底/网格/轴/十字线硬编码深 slate → 全走 CSS token(`readChartTheme`, MutationObserver 跟随 dark 切换, 不重建图); 中性 marker/无数据灰收敛 muted; L1 均线灰阶收敛 muted(牛蓝/马橙专业语义色保留); 主图容器去框裸放; 修周期按钮 `pxpx-2` 笔误 + 无效 hover 类. Quote GS 色 rose/emerald → stock-up/down 令牌(与 P0 一致). tsc 0 error + vite build 通过. [commit 7ab2c08]
+- **终端化 A-1 公共组件去卡片** (TabbedPage 两处空态 + ContextCard CardShell → hairline; 图标 chip/loading/empty 保留). tsc 0 error. [commit 62aea73]
+- **终端化 A-2 Stocks 持仓页去卡片** (6 统计卡 → 左 hairline 格; 账户卡 → hairline 分隔; 骨架/空态去盒; 下拉浮层/分段控件保留功能性). tsc 0 error. [commit 55f6436]
+- **终端化 A-3 PaperTrading 去卡片** (5 统计卡 → hairline 格; 收益曲线/策略绩效/持仓三区 → hairline; 回撤 emerald/胜率 rose 语义色不动). tsc 0 error. [commit 92fc4f4]
+- **终端化 A-4 五页去卡片** (Help/Profile hero+section; Agents 调度条+空态+agent行; BoardDetail 指标格+成分股/轮动区, error语义盒保留; PriceAlerts 工具条+空态+规则行; 顺手修启用徽章 dark 下 emerald-700 隐形, 与 P1-4 同类). tsc 0 error. [commit a2f6b19]
+- **终端化 A-5 三页去卡片** (DataSources section; History 空态/移动切换/目录+正文窗格; Notifications 过滤条+主从网格去框, 内部分隔保留). tsc 0 error + vite build 通过. [commit 8aa6071]
+- **P2 推断页核实结论 (B线, 只读未动代码)**: 共振扫描/L2盘口/主题设置/持仓成本线均无独立路由. 共振后端(wencai/decision_pioneer)就绪且前端已有徽章+窄栏展示 → 不新建页; L2 orderbook 后端就绪(盘口队列+托压)但前端仅 shape 文字 → 十档明细页列后续候选; 主题切换无入口 + klines 无持仓成本字段 → 两页不做等后端.
 
 ## 2026-09-02
 

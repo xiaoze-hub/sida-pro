@@ -246,7 +246,7 @@ export default function DataSourcesPage() {
     if (!meta) return null
     const { label, icon: Icon, color } = meta
     return (
-      <section key={type} className="card p-4 md:p-6">
+      <section key={type} className="border-t border-border/40 pt-4 md:pt-5">
         <div className="flex items-center gap-2 mb-4">
           <Icon className={`w-4 h-4 ${color}`} />
           <h3 className="text-[13px] font-semibold text-foreground">{label}</h3>

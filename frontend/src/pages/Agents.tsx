@@ -508,7 +508,7 @@ export default function AgentsPage() {
       </div>
 
       {/* Scheduler Health */}
-      <div className="card p-4 mb-4">
+      <div className="border-b border-border/40 pb-4 mb-4">
         <div className="flex items-center justify-between">
           <div className="text-[13px] font-semibold text-foreground">调度健康</div>
           <Button variant="secondary" size="sm" className="h-8" onClick={loadHealth} disabled={healthLoading}>
@@ -533,7 +533,7 @@ export default function AgentsPage() {
       </div>
 
       {loadError ? (
-        <div className="card flex flex-col items-center justify-center py-20">
+        <div className="flex flex-col items-center justify-center py-20">
           <p className="text-[13px] text-muted-foreground">加载失败{loadError ? `: ${loadError}` : ''}</p>
           <button
             type="button"
@@ -544,7 +544,7 @@ export default function AgentsPage() {
           </button>
         </div>
       ) : agents.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-20">
+        <div className="flex flex-col items-center justify-center py-20">
           <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
             <Bot className="w-6 h-6 text-primary" />
           </div>
@@ -561,7 +561,7 @@ export default function AgentsPage() {
               ? `${boundStocks.slice(0, 3).map(s => s.name || s.symbol).join('、')}${boundStocks.length > 3 ? '、...更多' : ''}`
               : '未绑定股票'
             return (
-              <div key={agent.name} className="card-hover p-4 md:p-6">
+              <div key={agent.name} className="border-b border-border/40 pb-4 md:pb-5">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-6">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">

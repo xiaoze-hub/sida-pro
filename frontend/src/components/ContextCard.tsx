@@ -103,7 +103,7 @@ function CardShell({ icon: Icon, title, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="card p-4">
+    <div className="border-b border-border/40 pb-3">
       <div className="mb-2 flex items-center gap-2">
         <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
           <Icon className="h-3.5 w-3.5" />
