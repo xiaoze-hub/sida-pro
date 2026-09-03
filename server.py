@@ -1915,7 +1915,7 @@ async def lifespan(app):
         try:
             from src.core.l2_ticks_scheduler import L2TicksScheduler
             settings = Settings()
-            _l2_sched = L2TicksScheduler(timezone=settings.app_timezone)
+            _l2_sched = L2TicksScheduler(tz_name=settings.app_timezone)
             _l2_sched.start()
             logger.info("L2 逐笔 5min cron 已启动")
         except Exception as e:

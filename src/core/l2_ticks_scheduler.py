@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import text
@@ -98,8 +98,8 @@ def _run_l2_cron() -> dict:
 class L2TicksScheduler:
     """L2 逐笔 5 分钟定期落库调度器。"""
 
-    def __init__(self, timezone: str = "Asia/Shanghai"):
-        self.scheduler = AsyncIOScheduler(timezone=timezone)
+    def __init__(self, tz_name: str = "Asia/Shanghai"):
+        self.scheduler = AsyncIOScheduler(timezone=tz_name)
         self._running = False
 
     async def _cron_job(self):
