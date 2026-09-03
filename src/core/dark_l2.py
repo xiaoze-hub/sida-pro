@@ -190,7 +190,7 @@ def _fetch_thsdk(code: str) -> list[dict]:
     prev_vol, prev_amt = 0.0, 0.0
     for r in valid_rows:
         vol, amt = float(r["成交量"]), float(r["总金额"])
-        d_vol = vol - prev_vol   # 股
+        d_vol = vol - prev_vol   # 股(thsdk逐笔成交量=股, 见文件头; 腾讯分时是手, 别混)
         d_amt = amt - prev_amt   # 元
         prev_vol, prev_amt = vol, amt
         if d_vol <= 0 and d_amt <= 0:

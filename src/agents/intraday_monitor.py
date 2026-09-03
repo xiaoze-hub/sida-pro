@@ -78,10 +78,6 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
         tag = "净流入" if main_net > MAIN_NET_LIMIT else ("净流出" if main_net < -MAIN_NET_LIMIT else "平衡")
-        def _fmt_amount(n):
-            """v0.4.62: 自动万/亿单位"""
-            if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
-            return f"{n/1e4:+.0f}万"
         parts.append(f"主力{tag}{_fmt_amount(main_net)}(超大单{_fmt_amount(big_net)}/大单{_fmt_amount(mid_net)})")
         if dark.get("main_intensity") is not None:
             parts.append(f"参与度{dark['main_intensity']:.0f}%买占{dark.get('main_buy_ratio') or 0:.0f}%")
@@ -177,10 +173,6 @@ def _main_intent_summary(symbol: str) -> str:
         big_net = dark.get("big_net", 0) or 0
         mid_net = dark.get("mid_net", 0) or 0
         tag = "净流入" if main_net > MAIN_NET_LIMIT else ("净流出" if main_net < -MAIN_NET_LIMIT else "平衡")
-        def _fmt_amount(n):
-            """v0.4.62: 自动万/亿单位"""
-            if abs(n) >= 1e8: return f"{n/1e8:+.2f}亿"
-            return f"{n/1e4:+.0f}万"
         parts.append(f"主力{tag}{_fmt_amount(main_net)}(超大单{_fmt_amount(big_net)}/大单{_fmt_amount(mid_net)})")
         if dark.get("main_intensity") is not None:
             parts.append(f"参与度{dark['main_intensity']:.0f}%买占{dark.get('main_buy_ratio') or 0:.0f}%")

@@ -8,11 +8,12 @@ import { datasourcesApi } from '@panwatch/api'
  * 前端每 60s 轮询一次 `/api/datasources/health`, 结果按逻辑源 id 索引,
  * 供 L4 事件图标决定**亮显 / 灰显 + tooltip**。
  *
- * 四个逻辑源(对应 §5.3 的 5 个图标):
- *   tck    → 拆 / ⚠撤
- *   img    → 🛡托 / 🔒压
- *   wencai → 涨
- *   shadow → 我
+ * 五个逻辑源(对应 §5.3 的 6 个图标):
+ *   tck         → 拆 / ⚠撤
+ *   img         → 🛡托 / 🔒压
+ *   wencai      → 涨
+ *   shadow      → 我
+ *   tq_moreinfo → 明盘(TQ 扩展指标/决策先锋链路)
  *
  * ⚠️ 诚实口径: 请求失败 / 状态未知时一律按 **不可用** 处理(灰显),
  * 不假设"接口挂了但数据应该还在"。
@@ -36,6 +37,7 @@ export const ICON_SOURCE: Record<string, string> = {
   '🔒压': 'img',
   涨: 'wencai',
   我: 'shadow',
+  '明盘': 'tq_moreinfo',
 }
 
 const POLL_MS = 60_000
