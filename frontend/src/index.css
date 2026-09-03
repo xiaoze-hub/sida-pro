@@ -51,6 +51,16 @@
     --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
     /* 研究报告 §4.3: K 线图背景(亮色纸面白; 暗色接近黑, 与终端调性一致) */
     --bg-kline: 240 25% 99%;
+    /* 研究报告 §4.3 剩余色板(awesome-design-html Robinhood tint 手法校准):
+       flat 平盘灰 #94A3B8; threshold 阈值线同基(使用处 alpha .5);
+       accent-primary Bloomberg 风强调橙 #F59E0B;
+       up/down-tint 涨跌淡底(涨停行/强势标记背景, 不抢 K 线主色)。
+       stock-up/down 已有(#E53935/#43A047)不动, K 线与文字涨跌同源。 */
+    --flat-color: 215 16% 57%;
+    --threshold-line: 215 16% 57%;
+    --accent-primary: 38 92% 50%;
+    --stock-up-tint: 0 85% 96%;
+    --stock-down-tint: 140 45% 94%;
 
     /* 界面密度体系:normal(默认)= 4px 基准。
        compact=3px / comfortable=6px 由 <html data-density> 属性覆盖(见下方)。
@@ -95,6 +105,12 @@
     --accent-foreground: 240 15% 90%;
     /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
     --bg-kline: 222 47% 6%;
+    /* §4.3 剩余色板暗色值: flat/threshold 提亮保可读; tint 落深底 */
+    --flat-color: 215 16% 65%;
+    --threshold-line: 215 16% 65%;
+    --accent-primary: 38 92% 55%;
+    --stock-up-tint: 0 50% 14%;
+    --stock-down-tint: 140 40% 12%;
     --destructive: 0 60% 45%;
     --destructive-foreground: 0 0% 100%;
     --success: 152 50% 38%;
