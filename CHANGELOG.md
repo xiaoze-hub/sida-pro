@@ -18,8 +18,8 @@
 - **终端化 P1-3 Forecast 去卡片** (输入侧栏/进度/结果/报告/回测/历史 6 区 hairline + 方向色 stock 令牌 + hit/miss emerald/rose 暗色修复 + T+N chips/report 框去底). tsc 0 error. [commit 4119780]
 - **终端化 P1-4 Opportunities 候选卡瘦身 + 共振可视** (研究文档 §5: OpportunityCard 堆叠 → 紧凑列表行; 15 行元数据压成入场/止损/目标/策略/来源徽章 2 行 + 因子 1 行; 顶部统计/因子/状态条去卡片; 🔥共振徽章保留前置; 修 tdx 行 dark 下 emerald-700 隐形 bug). tsc 0 error. [commit 475d05f]
 - **终端化 P1-5 Forecast 预测锥图** (研究文档 §5: 预测结果卡 → K线+预测曲线叠加). 新建 `ForecastConeChart.tsx`: ECharts 历史收盘 60 日(灰线, `/klines` 接口) + 预测中线延伸(方向着色) + Kronos P5-P95 置信带(堆叠面积); 未来横轴只标 T+1..n 不编造日期; 历史拉不到降级纯预测段. tsc 0 error + vite build 通过. [commit 542dec4]
-- **终端化 P1-6 Dashboard 首屏重排 + 情绪三卡去卡片** (研究文档 §5: 总览卡片 → 模块化大屏). 首屏改先市场后个人: 情绪周期/市场主线/市场温度/大盘资金流/异动+分布整体前置到 KpiBand 之后, 个人工作台(要紧事/体检/机会)后置; MarketPhaseCard/MarketMainlineCard(仅 Dashboard 引用, 源头去卡片)/本地 PhaseGaugeCard 根容器去 card 底. tsc 0 error + vite build 通过. [commit TBD]
-- **终端化 P1-7 AnalysisDetail 嵌 K线主图 + P1-8 收尾** (研究文档 §5: 详情页 → 主图+副图+文字). 正文顶部嵌入 InteractiveKline(与 IndexDetail 同款, 未碰 28号 Quote/KlineChart scope); DarkFundTop thead 去底色; IndexDetail 经核对已达标(主图裸放+副图)零改动. tsc 0 error + vite build 通过. [commit TBD]
+- **终端化 P1-6 Dashboard 首屏重排 + 情绪三卡去卡片** (研究文档 §5: 总览卡片 → 模块化大屏). 首屏改先市场后个人: 情绪周期/市场主线/市场温度/大盘资金流/异动+分布整体前置到 KpiBand 之后, 个人工作台(要紧事/体检/机会)后置; MarketPhaseCard/MarketMainlineCard(仅 Dashboard 引用, 源头去卡片)/本地 PhaseGaugeCard 根容器去 card 底. tsc 0 error + vite build 通过. [commit 0a63aae]
+- **终端化 P1-7 AnalysisDetail 嵌 K线主图 + P1-8 收尾** (研究文档 §5: 详情页 → 主图+副图+文字). 正文顶部嵌入 InteractiveKline(与 IndexDetail 同款, 未碰 28号 Quote/KlineChart scope); DarkFundTop thead 去底色; IndexDetail 经核对已达标(主图裸放+副图)零改动. tsc 0 error + vite build 通过. [commit 0a63aae]
 
 ## 2026-09-02
 
