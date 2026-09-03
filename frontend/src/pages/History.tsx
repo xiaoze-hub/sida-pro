@@ -202,18 +202,18 @@ export default function HistoryPage() {
       </div>
 
       {loading ? (
-        <div className="card p-12 text-center">
+        <div className="p-12 text-center">
           <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin mx-auto" />
         </div>
       ) : records.length === 0 ? (
-        <div className="card p-12 text-center">
+        <div className="p-12 text-center">
           <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
           <p className="text-muted-foreground">暂无分析记录</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
           {/* Mobile view switch */}
-          <div className="md:hidden card p-2">
+          <div className="md:hidden">
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setMobileView('list')}
@@ -232,8 +232,8 @@ export default function HistoryPage() {
           </div>
 
           {/* List */}
-          <div className={`md:col-span-5 card overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
-            <div className="px-4 py-3 bg-accent/20 border-b border-border/50 text-[12px] text-muted-foreground">
+          <div className={`md:col-span-5 overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
+            <div className="px-4 py-3 border-b border-border/50 text-[12px] text-muted-foreground">
               目录（点击查看）
             </div>
             <div className="max-h-[70vh] md:max-h-[70vh] overflow-y-auto scrollbar divide-y divide-border/50">
@@ -262,7 +262,7 @@ export default function HistoryPage() {
           </div>
 
           {/* Reader */}
-          <div className={`md:col-span-7 card p-4 md:p-6 ${mobileView === 'list' ? 'hidden md:block' : ''}`}>
+          <div className={`md:col-span-7 p-4 md:p-6 ${mobileView === 'list' ? 'hidden md:block' : ''}`}>
             {selectedRecord ? (
               <div>
                 <div className="flex items-start justify-between gap-3">

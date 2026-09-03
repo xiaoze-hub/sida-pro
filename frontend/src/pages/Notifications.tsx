@@ -338,7 +338,7 @@ export default function NotificationsPage() {
 
       <ErrorBanner errors={error ? [{ source: '通知', message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/50 bg-card/70 p-1.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
         <div className="flex shrink-0 items-center gap-1 rounded-lg bg-background/45 p-1">
           {([
             ['all', '全部', items.length],
@@ -406,7 +406,7 @@ export default function NotificationsPage() {
         </label>
       </div>
 
-      <div className="grid min-h-[560px] overflow-hidden rounded-2xl border border-border/50 bg-card lg:grid-cols-[minmax(320px,0.82fr)_minmax(0,1.45fr)]">
+      <div className="grid min-h-[560px] lg:grid-cols-[minmax(320px,0.82fr)_minmax(0,1.45fr)]">
         <section className="border-b border-border/50 lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
             <span className="text-[12px] font-medium text-foreground">通知列表</span>
