@@ -152,7 +152,7 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
               {r.label}
               {r.sub && <span className="ml-0.5 text-[10px] opacity-70">({r.sub})</span>}
             </span>
-            <div className="relative h-5 min-w-0 flex-1 rounded bg-accent/30">
+            <div className="relative h-5 min-w-0 flex-1 rounded bg-muted/50">
               {/* Kronos P5-P95 不确定性阴影带 */}
               {r.band && (
                 <div
@@ -162,7 +162,7 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
               )}
               {/* median 起点→终点条(红涨绿跌) */}
               <div
-                className={`absolute inset-y-1 rounded ${up ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                className={`absolute inset-y-1 rounded ${up ? 'bg-stock-up' : 'bg-stock-down'}`}
                 style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: 2 }}
               />
               {/* 基准价锚点竖线 */}
@@ -515,7 +515,7 @@ export default function ForecastPage() {
   }
 
   const dirColor = (dir: string) =>
-    dir === 'up' ? 'text-stock-up' : dir === 'down' ? 'text-stock-down' : 'text-gray-500'
+    dir === 'up' ? 'text-stock-up' : dir === 'down' ? 'text-stock-down' : 'text-muted-foreground'
 
   // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem 的 TODO)
   const historyHasOutcome = history.some(
@@ -533,7 +533,7 @@ export default function ForecastPage() {
     const hit = h.outcome_status === 'hit' || (!h.outcome_status && h.direction === actualDir && actualDir !== 'flat')
     const pct = h.outcome_return_pct
     return (
-      <span className={hit ? 'text-green-700' : 'text-red-600'}>
+      <span className={hit ? 'text-emerald-500' : 'text-rose-500'}>
         {hit ? '✓' : '✗'}{' '}
         <span className="font-mono text-xs">
           预测{typeof h.expected_pct === 'number' ? `${h.expected_pct > 0 ? '+' : ''}${h.expected_pct}%` : '-'}
@@ -575,7 +575,7 @@ export default function ForecastPage() {
       {/* 三列工作台(设计蓝本): 输入(窄) | 结果/模型对比(宽); 移动端堆叠 */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
       {/* 输入区 */}
-      <div className="card p-4 xl:col-span-3">
+      <div className="border-b border-border/60 pb-4 xl:col-span-3 xl:border-b-0 xl:border-r xl:pb-0 xl:pr-4">
         <div className="mb-3">
           <div className="text-lg font-bold">发起预测</div>
         </div>
@@ -660,7 +660,7 @@ export default function ForecastPage() {
 
       {/* 预测进度日志 */}
       {(loading || taskLogs.length > 0) && (
-        <div className="card p-4 xl:col-span-9">
+        <div className="border-t border-border/60 pt-3 xl:col-span-9">
           <div className="flex items-center gap-2 mb-2">
             <span className={`h-2.5 w-2.5 rounded-full ${taskStatus === 'done' ? 'bg-green-500' : taskStatus === 'error' ? 'bg-red-500' : 'bg-blue-500 animate-pulse'}`} />
             <span className="font-medium">
@@ -682,7 +682,7 @@ export default function ForecastPage() {
 
       {/* 预测结果 */}
       {result && (
-        <div className="card p-4 xl:col-span-9">
+        <div className="border-t border-border/60 pt-3 xl:col-span-9">
           <div className="mb-3">
             <div className="flex items-center justify-between">
               <span>预测结果：{result.symbol}{result.stock_name ? ` ${result.stock_name}` : ''}</span>
@@ -727,10 +727,10 @@ export default function ForecastPage() {
 
             {/* 操作建议 */}
             {result.recommendation && (
-              <div className={`rounded-lg border px-4 py-3 ${result.direction === 'up' ? 'border-red-500/30 bg-red-500/5' : result.direction === 'down' ? 'border-green-500/30 bg-green-500/5' : 'border-gray-500/30 bg-gray-500/5'}`}>
+              <div className={`rounded-lg border px-4 py-3 ${result.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : result.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : 'border-gray-500/30 bg-gray-500/5'}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-bold text-lg">操作建议：{result.recommendation.action}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${result.recommendation.confidence === '高' ? 'bg-green-500/20 text-green-700' : result.recommendation.confidence === '中' ? 'bg-yellow-500/20 text-yellow-500' : 'bg-red-500/20 text-red-600'}`}>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${result.recommendation.confidence === '高' ? 'bg-emerald-500/15 text-emerald-500' : result.recommendation.confidence === '中' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>
                     置信度{result.recommendation.confidence}
                   </span>
                 </div>
@@ -750,7 +750,7 @@ export default function ForecastPage() {
               <div className="text-sm font-medium mb-2">预测价格（综合投票）</div>
               <div className="flex flex-wrap gap-2">
                 {result.prediction.map((p, i) => (
-                  <div key={i} className="bg-muted rounded-lg px-3 py-2 text-center">
+                  <div key={i} className="border border-border/50 rounded px-3 py-2 text-center">
                     <div className="text-xs text-muted-foreground">T+{i + 1}</div>
                     <div className={`font-num font-bold tabular-nums ${p > result.last_close ? 'text-stock-up' : 'text-stock-down'}`}>
                       {safeFixed(p)}
@@ -837,7 +837,7 @@ export default function ForecastPage() {
 
       {/* 预测报告（双格式） */}
       {report && (
-        <div className="card p-4 space-y-3">
+        <div className="border-t border-border/60 pt-3 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileText className="h-4 w-4" />
@@ -859,7 +859,7 @@ export default function ForecastPage() {
             </div>
           </div>
           {/* Dashboard 短版 */}
-          <div className="rounded-lg border border-border/50 bg-accent/20 p-4">
+          <div className="border border-border/50 p-4">
             <div className="text-xs text-muted-foreground mb-2">精简版（Dashboard）</div>
             <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
               <ReactMarkdown>{report.dashboard_md}</ReactMarkdown>
@@ -879,7 +879,7 @@ export default function ForecastPage() {
 
       {/* 回测结果 */}
       {backtest && (
-        <div className="card p-4">
+        <div className="border-t border-border/60 pt-3">
           <div className="mb-3">
             <div className="flex items-center justify-between">
               <div className="text-lg font-bold">回测结果：{backtest.symbol}</div>
@@ -926,7 +926,7 @@ export default function ForecastPage() {
                         <td className="py-1.5">{s.date}</td>
                         <td className="text-right font-mono">{safeFixed(s.pred_close)}</td>
                         <td className="text-right font-mono">{safeFixed(s.actual_close)}</td>
-                        <td className={`text-right ${s.hit ? 'text-green-700' : 'text-red-600'}`}>
+                        <td className={`text-right ${s.hit ? 'text-emerald-500' : 'text-rose-500'}`}>
                           {s.hit ? '✓' : '✗'}
                         </td>
                       </tr>
@@ -953,7 +953,7 @@ export default function ForecastPage() {
                   <Send className="mr-1 h-3.5 w-3.5" /> 推送企微
                 </Button>
               </div>
-              <div className="rounded-lg border border-border/50 bg-accent/20 p-4">
+              <div className="border border-border/50 p-4">
                 <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
                   <ReactMarkdown>{backtestReport.dashboard_md}</ReactMarkdown>
                 </div>
@@ -970,7 +970,7 @@ export default function ForecastPage() {
       )}
 
       {/* 历史预测列表 */}
-      <div className="card p-4">
+      <div className="border-t border-border/60 pt-3">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4" />
@@ -1050,7 +1050,7 @@ export default function ForecastPage() {
             </div>
 
             <div className="space-y-3 text-sm">
-              <div className={`rounded-lg border px-3 py-2 ${detail.direction === 'up' ? 'border-red-500/30 bg-red-500/5' : detail.direction === 'down' ? 'border-green-500/30 bg-green-500/5' : ''}`}>
+              <div className={`rounded-lg border px-3 py-2 ${detail.direction === 'up' ? 'border-stock-up/30 bg-stock-up/5' : detail.direction === 'down' ? 'border-stock-down/30 bg-stock-down/5' : ''}`}>
                 <div className="font-bold">
                   {/* 反AI模板⑤: 历史详情弹窗的方向/幅度同样标"模型预测" */}
                   <span className="mr-1 text-xs font-medium text-muted-foreground">模型预测</span>
