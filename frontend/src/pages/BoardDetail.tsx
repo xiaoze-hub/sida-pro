@@ -180,8 +180,8 @@ export default function BoardDetailPage() {
       {error && <div className="card p-3 mb-4 text-[12px] text-amber-700 dark:text-amber-500">{error}</div>}
       {loading && !detail ? (
         <div className="grid gap-3">
-          <div className="h-[92px] rounded-xl border border-border/50 animate-pulse bg-accent/20" />
-          <div className="h-[220px] rounded-xl border border-border/50 animate-pulse bg-accent/20" />
+          <div className="h-[92px] rounded-md border border-border/50 animate-pulse bg-accent/20" />
+          <div className="h-[220px] rounded-md border border-border/50 animate-pulse bg-accent/20" />
         </div>
       ) : (
         <>

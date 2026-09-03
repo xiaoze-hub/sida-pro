@@ -262,7 +262,7 @@ export default function DataSourcesPage() {
             {groupedSources[type].map(source => (
                 <div
                   key={source.id}
-                  className="flex items-center justify-between p-3.5 rounded-xl bg-accent/30 hover:bg-accent/50 transition-colors"
+                  className="flex items-center justify-between gap-3 border-b border-border/40 py-2.5 transition-colors hover:bg-accent/20"
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
@@ -502,7 +502,7 @@ export default function DataSourcesPage() {
 
           <div className="space-y-4 mt-2 pr-1">
             {/* Summary */}
-            <div className="flex items-center gap-4 p-3 rounded-lg bg-accent/30">
+            <div className="flex items-center gap-4 p-3 rounded-md bg-accent/30">
               <div className="flex-1">
                 <div className="text-[11px] text-muted-foreground">状态</div>
                 <div className={`text-[13px] font-medium ${testResult?.test_passed ? 'text-emerald-600 dark:text-emerald-700' : 'text-red-600'}`}>
@@ -521,7 +521,7 @@ export default function DataSourcesPage() {
 
             {/* Error message */}
             {testResult?.error && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+              <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20">
                 <div className="text-[11px] text-red-600 font-medium mb-1">错误信息</div>
                 <div className="text-[12px] text-red-600 dark:text-red-400 break-words whitespace-pre-wrap">{testResult.error}</div>
               </div>
@@ -536,7 +536,7 @@ export default function DataSourcesPage() {
                 </div>
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {testResult.logs.map((log, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30 text-[11px]">
+                    <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30 text-[11px]">
                       <span className="text-muted-foreground font-mono flex-shrink-0">{log.timestamp}</span>
                       <span className={`px-1 py-0.5 rounded text-[10px] flex-shrink-0 ${
                         log.action === 'start' ? 'bg-blue-500/10 text-blue-600' :
@@ -566,7 +566,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'news' && testResult.items.map((item, i) => {
                     const newsItem = item as { title?: string; time?: string }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] text-foreground flex-1">{newsItem.title}</span>
                         <span className="text-[11px] text-muted-foreground flex-shrink-0">{newsItem.time}</span>
                       </div>
@@ -577,7 +577,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'events' && testResult.items.map((item, i) => {
                     const ev = item as { title?: string; time?: string; event_type?: string }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
                         <span className="text-[11px] font-mono text-muted-foreground/80 flex-shrink-0">{ev.event_type || 'notice'}</span>
                         <span className="text-[12px] text-foreground flex-1">{ev.title}</span>
                         <span className="text-[11px] text-muted-foreground flex-shrink-0">{ev.time}</span>
@@ -589,7 +589,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'quote' && testResult.items.map((item, i) => {
                     const quoteItem = item as { symbol?: string; name?: string; price?: number; change_pct?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{quoteItem.name || quoteItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{quoteItem.price?.toFixed(2)}</span>
@@ -607,7 +607,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'kline' && testResult.items.map((item, i) => {
                     const klineItem = item as { symbol?: string; last_close?: number; trend?: string }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{klineItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{klineItem.last_close?.toFixed(2)}</span>
@@ -621,7 +621,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'flash_news' && testResult.items.map((item, i) => {
                     const flashItem = item as { title?: string; time?: string; symbols?: string[] }
                     return (
-                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] text-foreground flex-1">
                           {flashItem.title}
                           {flashItem.symbols && flashItem.symbols.length > 0 && (
@@ -637,7 +637,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'fundamentals' && testResult.items.map((item, i) => {
                     const fundItem = item as { symbol?: string; name?: string; pe_ttm?: number; pb?: number; roe?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{fundItem.name || fundItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[11px] text-muted-foreground">PE {fundItem.pe_ttm?.toFixed(2) ?? '-'}</span>
@@ -652,7 +652,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'capital_flow' && testResult.items.map((item, i) => {
                     const flowItem = item as { symbol?: string; name?: string; main_net?: number; main_pct?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{flowItem.name || flowItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${
@@ -672,7 +672,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'dragon_tiger' && testResult.items.map((item, i) => {
                     const dtItem = item as { symbol?: string; name?: string; net_buy?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{dtItem.name || dtItem.symbol}</span>
                         <span className={`text-[12px] font-mono ${
                           (dtItem.net_buy ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
@@ -687,7 +687,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'margin' && testResult.items.map((item, i) => {
                     const marginItem = item as { symbol?: string; date?: string; total_balance?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{marginItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{((marginItem.total_balance ?? 0) / 10000).toFixed(2)}万</span>
@@ -701,7 +701,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'shareholders' && testResult.items.map((item, i) => {
                     const shItem = item as { symbol?: string; report_date?: string; holder_num?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{shItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{shItem.holder_num?.toLocaleString() ?? '-'}</span>
@@ -715,7 +715,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'dividend' && testResult.items.map((item, i) => {
                     const divItem = item as { symbol?: string; ex_date?: string; dividend_per_share?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{divItem.symbol}</span>
                         <div className="flex items-center gap-3">
                           <span className="text-[12px] font-mono">{divItem.dividend_per_share?.toFixed(4) ?? '-'} 元/股</span>
@@ -729,7 +729,7 @@ export default function DataSourcesPage() {
                   {testResult.source_type === 'northbound' && testResult.items.map((item, i) => {
                     const nbItem = item as { date?: string; hgt_net?: number; total_net?: number }
                     return (
-                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                      <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{nbItem.date}</span>
                         <div className="flex items-center gap-3">
                           <span className={`text-[12px] font-mono ${

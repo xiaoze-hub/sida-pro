@@ -277,7 +277,7 @@ export default function AnalysisDetailPage() {
           <div className="border-b border-border/40 pb-3 mb-4 flex items-center gap-3">
             <button
               onClick={() => navigate(-1)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+              className="w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
               aria-label="返回"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -286,7 +286,7 @@ export default function AnalysisDetailPage() {
             <span className="text-[12px] text-muted-foreground shrink-0">{date}</span>
             <button
               onClick={() => setShareOpen(true)}
-              className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title="生成可分享的结论卡片图"
             >
               <ImageDown className="w-3.5 h-3.5" />
@@ -295,7 +295,7 @@ export default function AnalysisDetailPage() {
             <button
               onClick={handleExportPdf}
               disabled={pdfBusy}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border/50 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
               title="导出 PDF 文件"
             >
               <FileDown className="w-3.5 h-3.5" />
@@ -325,7 +325,7 @@ export default function AnalysisDetailPage() {
             <div className="relative">
               <button
                 onClick={() => setTocOpen((o) => !o)}
-                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-border/50 bg-card/95 backdrop-blur text-[13px] font-medium shadow-sm"
+                className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-md border border-border/50 bg-card/95 backdrop-blur text-[13px] font-medium shadow-sm"
               >
                 <List className="w-4 h-4 shrink-0" />
                 <span className="truncate">{currentTitle || '目录'}</span>
@@ -336,7 +336,7 @@ export default function AnalysisDetailPage() {
               {tocOpen && (
                 <>
                   <div className="fixed inset-0 z-0" onClick={() => setTocOpen(false)} />
-                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-xl border border-border/50 bg-card/95 backdrop-blur shadow-lg max-h-[60vh] overflow-y-auto scrollbar p-2">
+                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-md border border-border/50 bg-card/95 backdrop-blur shadow-lg max-h-[60vh] overflow-y-auto scrollbar p-2">
                     {tocHeader}
                     {tocNav(() => setTocOpen(false))}
                   </div>

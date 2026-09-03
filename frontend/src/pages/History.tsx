@@ -217,13 +217,13 @@ export default function HistoryPage() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => setMobileView('list')}
-                className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
               >
                 目录
               </button>
               <button
                 onClick={() => setMobileView('reader')}
-                className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+                className={`h-9 rounded-md text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
                 disabled={!selectedRecord}
               >
                 正文
@@ -311,7 +311,7 @@ export default function HistoryPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 p-4 bg-accent/20 rounded-xl prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
+                <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
                   <ReactMarkdown>{selectedRecord.content}</ReactMarkdown>
                 </div>
               </div>
@@ -335,29 +335,29 @@ export default function HistoryPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-4 p-4 bg-accent/20 rounded-lg prose prose-sm dark:prose-invert max-w-none">
+          <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none">
             {detailRecord && <ReactMarkdown>{detailRecord.content}</ReactMarkdown>}
           </div>
           {detailRecord?.prompt_stats ? (
-            <div className="mt-3 rounded-lg border border-border/50 p-3">
+            <div className="mt-3 rounded-md border border-border/50 p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 统计</div>
               <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.prompt_stats, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.context_payload ? (
-            <div className="mt-3 rounded-lg border border-border/50 p-3">
+            <div className="mt-3 rounded-md border border-border/50 p-3">
               <div className="text-[12px] font-medium mb-1">上下文快照</div>
               <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{JSON.stringify(detailRecord.context_payload, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.news_debug ? (
-            <div className="mt-3 rounded-lg border border-border/50 p-3">
+            <div className="mt-3 rounded-md border border-border/50 p-3">
               <div className="text-[12px] font-medium mb-1">新闻注入明细</div>
               <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">{JSON.stringify(detailRecord.news_debug, null, 2)}</pre>
             </div>
           ) : null}
           {detailRecord?.prompt_context ? (
-            <div className="mt-3 rounded-lg border border-border/50 p-3">
+            <div className="mt-3 rounded-md border border-border/50 p-3">
               <div className="text-[12px] font-medium mb-1">Prompt 原文</div>
               <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto max-h-[280px] overflow-y-auto">{detailRecord.prompt_context}</pre>
             </div>

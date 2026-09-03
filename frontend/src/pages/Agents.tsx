@@ -718,7 +718,7 @@ export default function AgentsPage() {
                 </div>
 
                 {runsOpen[agent.name] && (
-                  <div className="mt-4 ml-[22px] sm:ml-0 rounded-lg border border-border/40 bg-accent/20 p-3">
+                  <div className="mt-4 ml-[22px] sm:ml-0 rounded-md border border-border/40 bg-accent/20 p-3">
                     <div className="flex items-center justify-between">
                       <div className="text-[12px] font-medium text-foreground">最近 5 次运行</div>
                       {runsLoading[agent.name] && (
@@ -841,7 +841,7 @@ export default function AgentsPage() {
             )}
 
             {/* Preview */}
-            <div className="rounded-lg border border-border/50 bg-accent/20 p-3">
+            <div className="rounded-md border border-border/50 bg-accent/20 p-3">
               <div className="flex items-center justify-between">
                 <div className="text-[12px] font-medium text-foreground">未来触发时间预览</div>
                 {schedulePreviewLoading && (
