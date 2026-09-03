@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, ArrowLeftRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -23,6 +23,7 @@ const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
 const QuotePage = lazy(() => import('@/pages/Quote'))
+const L2OrderbookPage = lazy(() => import('@/pages/L2Orderbook'))
 const SystemPage = lazy(() => import('@/pages/System'))
 const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
@@ -46,6 +47,7 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
   // §4.3 行情三合一: /forecast 由「预测」升为「行情」入口
   { to: '/forecast', icon: LineChart, label: '行情', perm: 'view_forecast' },
+  { to: '/l2', icon: ArrowLeftRight, label: '盘口', perm: 'view_forecast' },
   { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_opportunities' },
@@ -66,7 +68,7 @@ const navItems = [
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
 const desktopNavGroups = [
   { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
-  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast'].includes(n.to)) },
+  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast', '/l2'].includes(n.to)) },
   { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
@@ -471,6 +473,7 @@ function App() {
               <Route path="/dark-fund-top" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               {/* §4.3 行情三合一: /forecast 作为行情入口(内部分时日K/预测/资金/事件 四 Tab) */}
               <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
+              <Route path="/l2" element={<PermGuard perm="view_forecast" myPerms={myPerms}><L2OrderbookPage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
