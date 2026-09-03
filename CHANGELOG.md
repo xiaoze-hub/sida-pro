@@ -37,6 +37,16 @@
   1 处调用(`intraday_monitor.py::_ai_counter_check`)。28 号邮件原话"抽到 core 共享"无第二调用点
   证据, YAGNI 原则不抽。已在 dark_flow.py 内用统一常量 (`MAIN_NET_LIMIT/ABSORB_INTENSITY/ABSORB_BUY_RATIO`),
   口径已 100% 一致, 不需要跨文件抽公共函数。
+- **P0-#3 get_dark_flow_precise AI 包装 → 已存在**: 28 号邮件"需暴露 + 补测试"实际已完成。
+  `src/core/chat_tools.py::get_dark_flow_precise` 已在 v0.4.30+ 暴露, 包含主笔级还原 +
+  拆单簇暗盘 hook(dark_review_from_tck, 失败独立兜底) + units 标注 + note 说明。
+  测试覆盖完整: `test_chat_tools_a4.py` 3 例(hook 成功/失败/异常) + `test_chat_tools_two.py`
+  包含 8 例(无文件/成功/空成交/parse 错等), 共 31 passed。本次未改动代码, 仅验证完整性。
+- **P1-#9 盘中暗盘主笔级切线 → 已实装**: 28 号邮件"需新增 PANWATCH_DARK_SOURCE=thsdk 切线"
+  实际在 v0.4.71 已实装 `src/core/dark_flow_fusion.py::compute_dark_fusion`, 暗盘主线 =
+  .tck (官方方向 2B/2S) + thsdk L2 逐笔(被动覆盖) 融合, 单链路无法闭环的两侧互补。
+  `compute_pool_flow` 通过 `_dark_flow` 自动调用融合, 不需要新增 `primary_only` 开关。
+  本次未改动代码, 仅验证完整性。
 
 ### feature v0.4.78 abnormal_moves DB 超时根治
 
