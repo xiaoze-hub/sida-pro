@@ -127,6 +127,22 @@ def test_cancel_time_robust_to_garbage():
     assert ev[0]["time"] == "--"
 
 
+def test_cancel_multi_big_aggregated_to_one():
+    """2026-09-03 撤单重叠修复: 同日多笔大撤单聚合成一条(带笔数+合计股数+最晚时间)。"""
+    cancels = [
+        {"t": 141000000, "vol": 60000, "target": 1},
+        {"t": 142000000, "vol": 80000, "target": 2},
+        {"t": 143000000, "vol": 100000, "target": 3},
+    ]
+    ev = le.cancel_anomalies(cancels, "2026-09-01")
+    big = [e for e in ev if e["kind"] == "cancel_anomaly" and "大额撤单" in e["label"]]
+    assert len(big) == 1
+    assert big[0]["label"] == "大额撤单(3笔)"
+    assert big[0]["shares"] == 240000
+    assert big[0]["count"] == 3
+    assert big[0]["time"] == "14:30:00"
+
+
 def test_ms_to_hms_edge_cases():
     assert le._ms_to_hms(93015000) == "09:30:15"  # 含毫秒
     assert le._ms_to_hms(0) == "--"

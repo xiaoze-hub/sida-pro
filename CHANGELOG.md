@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03
+
+### fix
+
+- **撤大额撤单重叠显示修复** (用户截图: 神剑 002361 K线弹窗右上 7 个"撤大额撤单"摞成一摞). 根因 `l4_events.cancel_anomalies` 同一日每笔大撤单各产一条事件(最多 20 条), 前端按事件画 marker, 同 date 下 N 个 marker 全叠在同一根 K 线上完全重合. **修复**: 后端按日聚合成一条(label `大额撤单(N笔)`, shares 合计, count 笔数, time 取最晚一笔, 新增 `_safe_vol`/`_t_sort_key` 安全取值); 前端 `InteractiveKline` + `KlineChart` 同 date+kind marker 合并为一个(文案缀 `×N`), 防以后其他多事件同日再叠. 测试: `test_l4_events.py` 27 passed (含新增聚合用例) + 前端 tsc 0 error.
+
 ## 2026-09-02
 
 ### fix

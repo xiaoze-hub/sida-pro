@@ -144,15 +144,22 @@ def cancel_anomalies(cancels: Iterable[dict], date_: str) -> list[dict]:
 
     events: list[dict] = []
 
-    # (1) 单笔大撤单
-    big = [c for c in rows if int(c.get("vol") or 0) >= CANCEL_BIG_VOL_SHARES]
-    for c in big[:20]:  # 最多 20 条, 避免刷屏
+    # (1) 单笔大撤单 → 按日聚合成一条事件
+    # 2026-09-03 撤单重叠修复: 同一日多笔大撤单以前各产一条事件(最多 20 条),
+    # 前端按事件画 marker, 同 date 下 N 个 marker 叠在同一根 K 线上完全重合
+    # (神剑 002361 出现 7 个"撤大额撤单"摞成一摞)。改为按日聚合一条,
+    # label 带笔数, shares 为合计, time 取最晚一笔。
+    big = [c for c in rows if _safe_vol(c) >= CANCEL_BIG_VOL_SHARES]
+    if big:
+        total_shares = sum(_safe_vol(c) for c in big)
+        latest = max(big, key=_t_sort_key)
         events.append({
             "date": date_,
             "kind": "cancel_anomaly",
-            "label": "大额撤单",
-            "shares": int(c.get("vol") or 0),
-            "time": _ms_to_hms(c.get("t")),
+            "label": f"大额撤单({len(big)}笔)" if len(big) > 1 else "大额撤单",
+            "shares": total_shares,
+            "count": len(big),
+            "time": _ms_to_hms(latest.get("t")),
         })
 
     # (2) 集中撤单(按分钟分桶)
@@ -171,6 +178,22 @@ def cancel_anomalies(cancels: Iterable[dict], date_: str) -> list[dict]:
                 "count": cnt,
             })
     return events
+
+
+def _safe_vol(c: Any) -> int:
+    """撤单股数安全取值: 非法/缺失 → 0(不抛异常, 调用方按阈值过滤)。"""
+    try:
+        return int((c or {}).get("vol") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _t_sort_key(c: Any) -> int:
+    """撤单时间排序键: 非法时间 → -1(排最前, 不影响取最晚一笔)。"""
+    try:
+        return int((c or {}).get("t") or 0)
+    except (TypeError, ValueError):
+        return -1
 
 
 def _ms_to_hms(t: Any) -> str:

@@ -841,11 +841,21 @@ export default function InteractiveKline(props: {
     // ============== SIDA Pro: L4 事件标注 markers (2026-09-01) ==============
     // 设计稿 §5.3: 拆单簇/⚠撤/🛡托/🔒压/涨/我 7 种图标. 用 shape+text 模拟
     if (layers.event && props.events && props.events.length) {
-      const eventMarkers: any[] = props.events
-        .map((ev) => {
+      // 2026-09-03 撤单重叠修复: 同 date+kind 的多条事件(如一日多笔大额撤单)
+      // 以前各画一个 marker, 全部叠在同一根 K 线上完全重合。先按 date|kind 聚合,
+      // 多条合并为一个 marker, 笔数缀在文案后(×N), 信息不丢且不再重叠。
+      const grouped = new Map<string, { ev: (typeof props.events)[number]; n: number }>()
+      for (const ev of props.events) {
+        const k = `${ev.date}|${ev.kind}`
+        const g = grouped.get(k)
+        if (g) g.n += 1
+        else grouped.set(k, { ev, n: 1 })
+      }
+      const eventMarkers: any[] = [...grouped.values()]
+        .map(({ ev, n }) => {
           const bd = parseBusinessDay(ev.date)
           if (!bd) return null
-          const label = ev.label ?? ''
+          const label = n > 1 ? `${ev.label ?? ''}×${n}` : (ev.label ?? '')
           switch (ev.kind) {
             case 'limit_up':
               return { time: bd, position: 'belowBar', color: sc.up, shape: 'arrowUp', text: `涨${label}`, size: 1 }

@@ -370,14 +370,24 @@ export default function KlineChart(props: {
     const markers: SeriesMarker<Time>[] = []
     if (showEvent) {
       const visible = props.kindsVisible || {}
+      // 2026-09-03 撤单重叠修复: 同 date+kind 多条事件聚合为一个 marker(×N),
+      // 避免同一根 K 线上 N 个 marker 完全重合(与 InteractiveKline 同策略)。
+      const grouped = new Map<string, { ev: KlineEventPoint; n: number }>()
       for (const ev of props.events || []) {
         if (visible[ev.kind] === false) continue
+        const k = `${ev.date}|${ev.kind}`
+        const g = grouped.get(k)
+        if (g) g.n += 1
+        else grouped.set(k, { ev, n: 1 })
+      }
+      for (const { ev, n } of grouped.values()) {
+        const base = KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind
         markers.push({
           time: toChartTime(ev.date, interval),
           position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
           color: ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : '#64748b',
           shape: 'circle' as const,
-          text: KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind,
+          text: n > 1 ? `${base}×${n}` : base,
         })
       }
     }
