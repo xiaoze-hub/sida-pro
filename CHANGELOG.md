@@ -7,6 +7,15 @@
 
 ## 2026-09-04
 
+### fix P2-C data_sources 健康计数列加 server_default(防御新鲜 create_all 建库)
+
+- **改动**: `src/web/models.py::DataSource.success_count/error_count` 加
+  `server_default=text("0")`(python 侧 `default=0` 保留), 与 `_m126` 的
+  `INTEGER DEFAULT 0` 同口径。此前仅 python-default, 裸 SQL/新库 create_all
+  建表无 DB 级默认值, 与老库迁移后语义不一致。
+- **测试**: sqlite `:memory:` create_all + 裸 INSERT(不带计数列)回读
+  `(0, 0, None)` [commit 8e0d9f5]; 既有 `test_datasource_{reconcile,test_path,admin_api}` 7 passed。
+
 ### fix v0.4.80 三路并行审计P0 batch(后端盘点/前端接线/稳定性)
 
 - **P0-1 _fmt_amount 嵌套重复定义清理**: `src/agents/intraday_monitor.py` 模块级(28行)已存在,
