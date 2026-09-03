@@ -15,6 +15,16 @@
 
 ## 2026-09-03
 
+### update v0.4.79 后端常量统一 + 主力意图抽公共判据(进行中)
+
+- **P1-#8 strong_absorb 三常量统一完成**: `src/agents/intraday_monitor.py` 内 10 处硬编码
+  `500e4/35/48` 全部改为 `from src.core.dark_flow import MAIN_NET_LIMIT, ABSORB_INTENSITY, ABSORB_BUY_RATIO`。
+  解 2026-08-25 审计约束"仅落地 dark_flow 侧"的限制, 两端判据口径现已 100% 一致。
+  影响函数: `_main_intent_both` (line 80/128/130)、`_main_intent_structured` (line 179/267/269)、
+  `_derive_direction` (line 481)、`_main_intent_report` (line 482/484)、`_board_snapshot_tag` (line 635)。
+  测试: `test_dark_flow / test_dark_flow_guard / test_dark_flow_tq / test_intraday_monitor_json_format /
+  test_intraday_noalert_reason / test_tradingagents_main_intent` 共 33 passed。
+
 ### feature v0.4.78 abnormal_moves DB 超时根治
 
 **问题**：v0.4.77 部署后 `/api/abnormal-moves` 仍 30s 超时撞 502。根因：
