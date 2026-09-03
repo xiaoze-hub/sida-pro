@@ -38,7 +38,25 @@ def _get(symbol: str, market: str) -> dict:
         return hit[1]
     data = fetch_decision_pioneer(symbol, market)
     _CACHE[key] = (now, data)
+    # 09-03: 新鲜快照落库(历史回查用; best-effort, 失败不影响读链路)
+    try:
+        from src.core.history_store import record_dp_snapshot
+
+        record_dp_snapshot(symbol, market, data)
+    except Exception:  # noqa: BLE001
+        pass
     return data
+
+
+@router.get("/{symbol}/history")
+def get_decision_pioneer_history(symbol: str, market: str = "CN", days: int = 30):
+    """决策先锋历史快照(09-03 落库回查; 空=该股尚无落库, 不编造)。"""
+    code = _valid_symbol(symbol)
+    if market.upper() not in ("CN",):
+        raise HTTPException(400, "decision-pioneer 仅支持 CN 市场")
+    from src.core.history_store import query_dp_history
+
+    return {"symbol": code, "market": market.upper(), "rows": query_dp_history(code, market.upper(), days)}
 
 
 @router.get("/{symbol}")

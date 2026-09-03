@@ -2121,6 +2121,66 @@ CREATE TABLE IF NOT EXISTS klines (
     )
 
 
+def _m127_dp_history_table(conn: Connection) -> None:
+    """决策先锋快照历史(09-03: 快照落库, 回查/回测用; PG/SQLite 通用类型)。"""
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS decision_pioneer_history (
+  ts TIMESTAMPTZ NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL,
+  activity DOUBLE PRECISION,
+  level TEXT,
+  gs_side TEXT,
+  fund_net DOUBLE PRECISION,
+  main_net DOUBLE PRECISION,
+  payload TEXT
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_dp_history_symbol_ts "
+            "ON decision_pioneer_history(symbol, market, ts)"
+        )
+    )
+
+
+def _m128_l2_ticks_table(conn: Connection) -> None:
+    """L2 逐笔落库(09-03: 回测回查用; 唯一索引天然去重, 重复拉取幂等)。"""
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS l2_ticks (
+  ts TIMESTAMPTZ NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL,
+  source TEXT NOT NULL,
+  direction TEXT,
+  price DOUBLE PRECISION,
+  vol DOUBLE PRECISION,
+  amt DOUBLE PRECISION,
+  tick_time TEXT
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_l2_ticks_dedupe "
+            "ON l2_ticks(symbol, market, source, tick_time, direction, price, vol, amt)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_l2_ticks_symbol_ts "
+            "ON l2_ticks(symbol, market, ts)"
+        )
+    )
+
+
 def _m126_datasource_health_columns(conn: Connection) -> None:
     """data_sources 健康累计列(2026-09-01 新增于 DataSource 模型, 但 PostgreSQL 下
     create_all 不会给已存在的表自动加列, 老库缺列会导致 /api/datasources SELECT *
@@ -2172,6 +2232,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     Migration(125, "klines_table", _m125_klines_table),
     Migration(126, "datasource_health_columns", _m126_datasource_health_columns),
+    Migration(127, "dp_history_table", _m127_dp_history_table),
+    Migration(128, "l2_ticks_table", _m128_l2_ticks_table),
 )
 
 

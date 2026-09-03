@@ -516,6 +516,13 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
                 tc = _tencent_code(symbol)
                 if tc:
                     ticks = dark_l2.fetch_l2_ticks(tc, "thsdk_big_order")
+                    # 09-03: 明盘大单顺手落库(回测回查; best-effort, 唯一索引去重)
+                    try:
+                        from src.core.history_store import persist_l2_ticks
+
+                        persist_l2_ticks(symbol, market_code.value, "thsdk_big_order", ticks)
+                    except Exception:  # noqa: BLE001
+                        pass
                     ming = dark_split.ming_net_from_big_orders(ticks)
                     if ming["count"] > 0 and fund_flow:
                         fund_flow[-1]["ming_net"] = ming["ming_net"]
@@ -688,6 +695,32 @@ def _to_tencent(symbol: str) -> str:
     if s.startswith(("0", "3")):
         return "sz" + s
     return s
+
+
+@router.get("/{symbol}/l2-ticks")
+def get_l2_ticks_history(symbol: str, market: str = "CN", days: int = 5, fetch: int = 1):
+    """L2 逐笔落库回查(09-03)。
+
+    fetch=1(默认): 先实时拉一份落库再返回库里序列(回测攒数据);
+    fetch=0: 只读库(纯回查, 不触发外部拉取)。
+    空=尚无落库, 不编造。
+    """
+    from src.core.history_store import persist_l2_ticks, query_l2_ticks
+
+    market_code = _parse_market(market)
+    stored = []
+    if fetch:
+        try:
+            from src.core import dark_l2
+
+            tc = _tencent_code(symbol)
+            if tc:
+                ticks = dark_l2.fetch_l2_ticks(tc, "thsdk_big_order")
+                persist_l2_ticks(symbol, market_code.value, "thsdk_big_order", ticks)
+        except Exception:  # noqa: BLE001
+            pass
+    stored = query_l2_ticks(symbol, market_code.value, days)
+    return {"symbol": symbol, "market": market_code.value, "count": len(stored), "rows": stored}
 
 
 @router.get("/{symbol}/summary")

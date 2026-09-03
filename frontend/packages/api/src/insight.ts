@@ -34,6 +34,10 @@ export const insightApi = {
   orderbookOb: <T>(symbol: string) =>
     fetchAPI<T>(`/orderbook-ob?symbol=${encodeURIComponent(symbol)}`),
 
+  /** 股票检索(代码/名称模糊, 后端 /api/stocks/search) */
+  searchStocks: <T>(q: string) =>
+    fetchAPI<T>(`/stocks/search?q=${encodeURIComponent(q)}`),
+
   klines: <T>(symbol: string, params: { market: string; days?: number; interval?: string }) =>
     fetchAPI<T>(
       withQuery(`/klines/${encodeURIComponent(symbol)}`, {
