@@ -51,14 +51,14 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   const W = 720, H = 90
   const bw = W / trend.length
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 100 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-muted-foreground" style={{ maxHeight: 100 }}>
       {trend.map((t, i) => {
         const h = (t.amount / maxA) * (H - 16)
         return (
           <g key={t.date}>
-            <rect x={i * bw + bw * 0.2} y={H - 8 - h} width={bw * 0.6} height={h} fill="#58a6ff" opacity={0.7} rx={1} />
+            <rect x={i * bw + bw * 0.2} y={H - 8 - h} width={bw * 0.6} height={h} fill="var(--primary)" opacity={0.7} rx={1} />
             {i % 5 === 0 && (
-              <text x={i * bw + bw / 2} y={H - 2} fontSize={8} fill="#8b949e" textAnchor="middle">
+              <text x={i * bw + bw / 2} y={H - 2} fontSize={8} fill="currentColor" textAnchor="middle">
                 {t.date.slice(5)}
               </text>
             )}
@@ -101,7 +101,7 @@ export default function IndexDetailPage() {
   const up = (q?.change_pct || 0) >= 0
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" className="h-8" onClick={() => navigate(-1)}>
           <ArrowLeft className="h-4 w-4" />
@@ -128,8 +128,8 @@ export default function IndexDetailPage() {
         />
       ) : data ? (
         <>
-          {/* 实时行情卡片(同个股详情风格) */}
-          <div className="card p-4">
+          {/* 实时行情条(去卡片: hairline 下分隔) */}
+          <div className="border-b border-border/40 pb-3">
             <div className="flex items-end gap-4 flex-wrap">
               <div>
                 <div className="text-3xl font-num font-bold tabular-nums">{safeFixed(q?.current_price)}</div>
@@ -147,8 +147,8 @@ export default function IndexDetailPage() {
             </div>
           </div>
 
-          {/* K线走势(复用个股同款 InteractiveKline: MA/成交量/MACD/RSI + 日周月) */}
-          <div className="card p-4">
+          {/* K线走势(主图裸放, 无卡片包) */}
+          <div className="space-y-1">
             <div className="flex items-center gap-2 mb-2">
               <Activity className="h-4 w-4" />
               <span className="font-bold">K线走势</span>
@@ -159,7 +159,7 @@ export default function IndexDetailPage() {
 
           {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
           {marketFlow && (
-            <div className="card-subtle p-3 mb-3">
+            <div className="border-b border-border/40 pb-2 mb-3">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                 <div className="flex items-center gap-2">
                   <TrendingUp className="h-4 w-4 text-primary" />
@@ -184,7 +184,7 @@ export default function IndexDetailPage() {
               {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
                   {marketFlow.inflow_boards?.length ? (
-                    <div className="card-subtle p-2.5">
+                    <div className="border-t border-border/40 pt-2">
                       <div className="text-[11px] font-semibold text-stock-up mb-1 flex items-center gap-1"><Flame className="w-3 h-3" />资金流入板块</div>
                       <div className="space-y-0.5">
                         {marketFlow.inflow_boards.map(b => (
@@ -197,7 +197,7 @@ export default function IndexDetailPage() {
                     </div>
                   ) : null}
                   {marketFlow.outflow_boards?.length ? (
-                    <div className="card-subtle p-2.5">
+                    <div className="border-t border-border/40 pt-2">
                       <div className="text-[11px] font-semibold text-stock-down mb-1 flex items-center gap-1"><Droplets className="w-3 h-3" />资金流出板块</div>
                       <div className="space-y-0.5">
                         {marketFlow.outflow_boards.map(b => (
@@ -214,8 +214,8 @@ export default function IndexDetailPage() {
             </div>
           )}
 
-          {/* 成交额趋势(大盘资金流替代) */}
-          <div className="card p-4">
+          {/* 成交额趋势 */}
+          <div className="space-y-1">
             <div className="flex items-center gap-2 mb-2">
               <BarChart3 className="h-4 w-4" />
               <span className="font-bold">成交额趋势(近20日)</span>

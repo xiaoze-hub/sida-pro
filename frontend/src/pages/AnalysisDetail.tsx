@@ -306,7 +306,7 @@ export default function AnalysisDetailPage() {
           <article>
           {/* 决策摘要(移动端在正文顶部;桌面端移到右侧目录区,见下方 aside) */}
           {sug && (
-            <div className="lg:hidden rounded-xl bg-accent/30 p-4 mb-6 flex items-center gap-3 flex-wrap">
+            <div className="lg:hidden border-b border-border/40 pb-3 mb-6 flex items-center gap-3 flex-wrap">
               <span className={`text-[24px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
                 {sug.action_label}
               </span>
@@ -370,19 +370,19 @@ export default function AnalysisDetailPage() {
             </h2>
             {stats && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-[13px]">
-                <div className="rounded-lg bg-accent/30 p-3">
+                <div className="border-t border-border/40 pt-2">
                   <div className="text-[11px] text-muted-foreground mb-1">总命中率</div>
                   <div className="font-bold">{safeNum(stats.overall_hit_rate) !== null ? `${(Number(stats.overall_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="rounded-lg bg-accent/30 p-3">
+                <div className="border-t border-border/40 pt-2">
                   <div className="text-[11px] text-muted-foreground mb-1">买入命中</div>
                   <div className="font-bold">{safeNum(stats.buy_hit_rate) !== null ? `${(Number(stats.buy_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="rounded-lg bg-accent/30 p-3">
+                <div className="border-t border-border/40 pt-2">
                   <div className="text-[11px] text-muted-foreground mb-1">卖出命中</div>
                   <div className="font-bold">{safeNum(stats.sell_hit_rate) !== null ? `${(Number(stats.sell_hit_rate) * 100).toFixed(0)}%` : '-'}</div>
                 </div>
-                <div className="rounded-lg bg-accent/30 p-3">
+                <div className="border-t border-border/40 pt-2">
                   <div className="text-[11px] text-muted-foreground mb-1">平均 20 日收益</div>
                   <div className={`font-bold ${pctClass(stats.avg_return_20d_pct)}`}>{fmtPct(stats.avg_return_20d_pct)}</div>
                 </div>
@@ -431,10 +431,10 @@ export default function AnalysisDetailPage() {
 
         {/* 右列:最终决策 + 目录合并到同一张卡片(与标题同高起始,不被标题压住;主题 token 适配日/夜) */}
         <aside className="hidden lg:block w-52 shrink-0">
-          <div className="sticky top-24 rounded-xl border border-border bg-card overflow-hidden">
+          <div className="sticky top-24 border-l border-border/40 pl-4">
             {/* 最终决策摘要 */}
             {sug && (
-              <div className="p-3.5 border-b border-border">
+              <div className="pb-3 border-b border-border/40">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className={`text-[22px] font-bold leading-none ${DECISION_COLOR[sug.action] || ''}`}>
                     {sug.action_label}
@@ -466,7 +466,7 @@ export default function AnalysisDetailPage() {
               </div>
             )}
             {/* 目录 */}
-            <div className="p-2">
+            <div className="py-2">
               {tocHeader}
               <div className="max-h-[calc(100vh-19rem)] overflow-y-auto scrollbar">{tocNav()}</div>
             </div>
