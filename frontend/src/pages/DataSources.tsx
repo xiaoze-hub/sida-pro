@@ -8,6 +8,14 @@ import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { useSourceHealth } from '@/hooks/useSourceHealth'
+
+const HEALTH_DOT: Record<string, string> = {
+  connected: 'bg-emerald-500',
+  degraded: 'bg-amber-500',
+  down: 'bg-red-500',
+  unknown: 'bg-gray-400',
+}
 
 interface TestLogItem {
   timestamp: string
@@ -115,6 +123,7 @@ export default function DataSourcesPage() {
   const toggleCategory = (key: string) => setCollapsedCategories(prev => ({ ...prev, [key]: !prev[key] }))
 
   const { toast } = useToast()
+  const { health: logicHealth, loading: logicLoading } = useSourceHealth()
 
   const load = async () => {
     try {
@@ -363,6 +372,18 @@ export default function DataSourcesPage() {
       </div>
 
       <div className="space-y-6">
+        {!logicLoading && Object.keys(logicHealth).length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px] text-muted-foreground">
+            <span>实时链路</span>
+            {Object.values(logicHealth).map(s => (
+              <span key={s.id} className="flex items-center gap-1.5" title={s.detail || s.status}>
+                <span className={`w-1.5 h-1.5 rounded-full ${HEALTH_DOT[s.status] || HEALTH_DOT.unknown}`} />
+                {s.name || s.id}
+                <span className="text-[11px]">({s.status})</span>
+              </span>
+            ))}
+          </div>
+        )}
         {ALL_DATASOURCE_CATEGORIES.map(category => {
           const categoryCount = category.types.reduce((sum, t) => sum + (groupedSources[t]?.length || 0), 0)
           const isOpen = collapsedCategories[category.key] !== true

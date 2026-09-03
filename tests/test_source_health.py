@@ -185,11 +185,12 @@ def test_check_source_returns_required_fields(monkeypatch):
     assert r["last_check_at"] > 0
 
 
-def test_check_all_defaults_to_four_sources(monkeypatch):
+def test_check_all_defaults_to_five_sources(monkeypatch):
     monkeypatch.delenv(sh.TCK_DIR_ENV, raising=False)
     monkeypatch.delenv(sh.IMG_DIR_ENV, raising=False)
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
     items = sh.check_all()
-    assert {i["id"] for i in items} == {"tck", "img", "wencai", "shadow"}
+    assert {i["id"] for i in items} == {"tck", "img", "wencai", "shadow", "tq_moreinfo"}
     assert all(i["status"] in VALID_STATUS for i in items)
 
 
@@ -250,7 +251,7 @@ def test_api_health_returns_items(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert "checked_at" in body
-    assert {i["id"] for i in body["items"]} == {"tck", "img", "wencai", "shadow"}
+    assert {i["id"] for i in body["items"]} == {"tck", "img", "wencai", "shadow", "tq_moreinfo"}
 
 
 def test_api_health_not_captured_by_source_id_route(monkeypatch):
@@ -390,3 +391,26 @@ def test_api_health_data_sources_endpoint():
     assert items[0]["id"] == 3
     assert items[0]["status"] == "connected"
     assert items[0]["last_check_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# tq_moreinfo: TQ 扩展指标网关(只探单个地址, 无网络下也可测)
+# ---------------------------------------------------------------------------
+
+
+def test_tq_moreinfo_never_discovered_is_degraded(monkeypatch):
+    """未配 TDX_QUANT_URL 且 vendor 无缓存 → degraded(诚实, 不编造)。"""
+    monkeypatch.delenv("TDX_QUANT_URL", raising=False)
+    import marketdata.vendors.tq as tqmod
+    monkeypatch.setattr(tqmod, "_TQ_URL_CACHE", None, raising=False)
+    r = sh.check_source("tq_moreinfo", use_cache=False)
+    assert r["id"] == "tq_moreinfo"
+    assert r["status"] == "degraded"
+    assert r["status"] in VALID_STATUS
+
+
+def test_tq_moreinfo_unreachable_is_degraded(monkeypatch):
+    """地址配了但探不通 → degraded(配了但当前拿不到数据)。"""
+    monkeypatch.setenv("TDX_QUANT_URL", "http://127.0.0.1:9/")
+    r = sh.check_source("tq_moreinfo", use_cache=False)
+    assert r["status"] in {"degraded", "unknown"}

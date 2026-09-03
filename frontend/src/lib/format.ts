@@ -70,12 +70,13 @@ export function safeMoney(v: unknown, fallback = '--'): string {
   const n = safeNum(v)
   if (n === null) return fallback
   const abs = Math.abs(n)
-  if (abs >= 1e8) return `${(n / 1e8).toFixed(2)}亿`
-  if (abs >= 1e4) return `${(n / 1e4).toFixed(2)}万`
+  const sign = n > 0 ? '+' : n < 0 ? '-' : ''
+  if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(2)}亿`
+  if (abs >= 1e4) return `${sign}${(abs / 1e4).toFixed(2)}万`
   // 小金额按精度自适应：1 元以内保 4 位小数、否则 2 位
   const digits = abs < 1 ? 4 : 2
   // 去掉末尾的 0（如 100.20 → "100.20"、100.00 → "100"）
-  return Number(n.toFixed(digits)).toString()
+  return `${sign}${Number(abs.toFixed(digits)).toString()}`
 }
 
 /**

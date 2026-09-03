@@ -5,6 +5,37 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-04
+
+### fix v0.4.80 三路并行审计P0 batch(后端盘点/前端接线/稳定性)
+
+- **P0-1 _fmt_amount 嵌套重复定义清理**: `src/agents/intraday_monitor.py` 模块级(28行)已存在,
+  `_main_intent_both_inner`(81行)与`_main_intent_summary`(180行)内两处同名嵌套def删除,
+  统一走模块级(含非数值兜底, 更健壮)。测试: test_dark_flow系33例仍过。
+- **P0-2 DarkFundTop亿阈值统一**: `frontend/src/pages/DarkFundTop.tsx::toAmountFromWan`
+  `>=1.5e4万`改为`>=1e4万`, 与Quote/L2Orderbook/safeMoney/后端_1e8同口径(1亿切亿)。
+- **P0-3 金额符号统一**: `lib/format.ts::safeMoney`与`toAmountFromWan`补恒显符号(+/-),
+  与后端`_fmt_amount`一致。注: 审计原文"Quote负数不带号"误报, Quote/L2靠toFixed自带负号,
+  实际缺号的是safeMoney/DarkFundTop两处, 已修。验证: tsc 0 + pnpm build过。
+- **P0-4 thsdk成交量口径定案(非bug)**: 查清`dark_l2.py`thsdk逐笔单位=股(文件头18行契约+
+  399行`/100`股→手实证), `quotes.py:318`是腾讯分时(单位=手, ×100正确)。两边都对,
+  只在178行注释加注防后人重踩, 零行为改动。
+- **P0-5 数据源健康加tq_moreinfo第5源**: `src/core/source_health.py`新增`check_tq_moreinfo`
+  (只探`TDX_QUANT_URL`或vendor已缓存地址, 2s超时; 从未发现→degraded不编造;
+  不跑全候选扫描防health卡15s)。`SOURCE_DEFS`+5, 单测2例新增。
+  前端: `useSourceHealth.ts`加`明盘→tq_moreinfo`映射, `DataSources.tsx`顶加"实时链路"
+  状态条(hairline分隔, 无卡片), Quote图标灰显逻辑自动生效。
+- **RISK-2 auction日期洗白**: `auction.py`endpoint不收不返date(YYYYMMDD只进thsdk),
+  无白屏路径, 不改。
+- **全量唯一失败根治**: `tests/test_thsdk_buffer_size.py`真thsdk已装时全量必挂
+  (模块级`from thsdk import THS`绑定时机问题)。改法: import M前换假模块、绑完恢复
+  sys.modules。验证: 与test_thsdk_api.py同跑55 passed。
+- **接线审计结论**: 前端57路径×后端228端点全对照, 真断线0条(12条疑点全为参数名/
+  查询串/自注册归一化误报, 逐条实锤); 后端未接线183条中用户价值高的
+  (决策先锋/情绪周期/策略信号/预测报告/影子/龙虎榜等)列入下批接线。
+  测试: source_health 39 passed; 全量1587例 1582 passed+4 skipped(本修之前),
+  唯一失败即上述thsdk用例, 已根治(待合main后全量复核)。[commit 5680f75]
+
 ### fix
 
 - **v0.4.72 health 端点超时保护（生产事故 hotfix）** (28号 hotfix). **事故**: 09:44 thsdk 腾讯数据源 (web.ifzq.gtimg.cn:443) 连接风暴, worker 进程飙至 73% CPU + 1.2GB RAM, 主进程事件循环被拖死 → /api/health hang 30s+, Docker healthcheck 10s 超时堆积（实测 4 个 healthcheck 进程堆着占 ~80MB）, 容器状态 `unhealthy` 持续 30 次（FailingStreak=30）。**修复**: `src/web/api/health.py` health 端点改为薄壳, 业务逻辑包成嵌套 `_check()`, 外层 `await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT=5.0)`; 超时或异常立即返回 `down`(不再卡事件循环), Docker healthcheck 不会再堆积。**根因 thsdk 重试风暴的 circuit breaker 根治留单独 hotfix**(目前仅防二阶 healthcheck 堆积, thsdk 仍可能让业务接口变慢)。回滚预案: 立即 `docker restart panwatch`(已实测, 8 小时前那次事故用此恢复)。测试: py_compile 通过 + 模块 import 成功。

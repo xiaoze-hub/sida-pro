@@ -12,9 +12,10 @@
       '🛡托/🔒压'  : await checkSource('.img'),
       '涨'        : await checkSource('wencai'),
       '我'        : await checkSource('shadow'),
+      '明盘'      : await checkSource('tq_moreinfo'),
     }
 
-即 5 个图标 → 4 个**逻辑数据源**: `tck` / `img` / `wencai` / `shadow`。
+即 6 个图标 → 5 个**逻辑数据源**: `tck` / `img` / `wencai` / `shadow` / `tq_moreinfo`。
 本模块就是 `checkSource()` 的后端实现, 由 `/api/datasources/health` 暴露。
 
 ## ⚠️ 诚实口径(红线)
@@ -33,6 +34,8 @@
 | img    | `PANWATCH_IMG_DIR` 已配且目录内有 `.img` 文件                     |
 | wencai | thsdk 可 import 且 `THS_USERNAME`/`THS_PASSWORD` 均已注入          |
 | shadow | 数据库可连且 `paper_trading_trades` 表可查                        |
+| tq_moreinfo | TQ 网关(已解析地址或 `TDX_QUANT_URL`)轻探测 `get_stock_list` 可达 |
+  (只探单个地址, 不跑全候选扫描; 从未解析过 → degraded, 等首次行情查询触发自动发现)
 """
 from __future__ import annotations
 
@@ -146,12 +149,44 @@ def check_shadow() -> dict[str, Any]:
     return {"status": STATUS_CONNECTED, "detail": "交割单表可查询"}
 
 
+def check_tq_moreinfo() -> dict[str, Any]:
+    """TQ 扩展指标网关(more_info/明盘资金/决策先锋共用链路)。
+
+    只做轻探测, 不发起真实行情查询:
+      - `TDX_QUANT_URL` 已配 → 探该地址
+      - 否则用 vendor 已缓存的解析地址(首次行情查询时自动发现)
+      - 两者都没有 → degraded(诚实: 尚未发现, 不编造 connected)
+    超时 2s, 失败 → degraded(配了但当前不通), 异常 → unknown。
+    """
+    try:
+        from marketdata.vendors import tq as _tqmod  # type: ignore
+    except Exception as e:  # pragma: no cover
+        return {"status": STATUS_DOWN, "detail": f"TQ vendor 不可用: {e}"}
+    try:
+        env_url = (os.environ.get("TDX_QUANT_URL") or "").strip().rstrip("/") + "/"
+        cached = getattr(_tqmod, "_TQ_URL_CACHE", None)
+        target = env_url if len(env_url) > 1 else (cached or "")
+        if not target:
+            return {"status": STATUS_DEGRADED,
+                    "detail": "未配置 TDX_QUANT_URL 且尚未自动发现, 等首次行情查询"}
+        probe = getattr(_tqmod, "_probe_tq", None)
+        if probe is None:  # pragma: no cover
+            return {"status": STATUS_UNKNOWN, "detail": "vendor 无探测入口"}
+        ok = probe(target, timeout=2.0)
+        if ok:
+            return {"status": STATUS_CONNECTED, "detail": f"TQ 网关可达: {target}"}
+        return {"status": STATUS_DEGRADED, "detail": f"TQ 网关当前不通: {target}"}
+    except Exception as e:  # noqa: BLE001
+        return {"status": STATUS_UNKNOWN, "detail": f"TQ 探测异常: {e}"}
+
+
 # 逻辑源定义: id → (展示名, 检查函数, 关联的事件图标)
 SOURCE_DEFS: dict[str, dict[str, Any]] = {
     "tck":    {"name": ".tck 逐笔",    "check": check_tck,    "icons": ["拆", "⚠撤"]},
     "img":    {"name": ".img 盘口队列", "check": check_img,    "icons": ["🛡托/🔒压"]},
     "wencai": {"name": "wencai/thsdk", "check": check_wencai, "icons": ["涨"]},
     "shadow": {"name": "shadow 交割单", "check": check_shadow, "icons": ["我"]},
+    "tq_moreinfo": {"name": "TQ 扩展指标(明盘/决策先锋)", "check": check_tq_moreinfo, "icons": ["明盘"]},
 }
 
 
@@ -194,7 +229,7 @@ def check_source(source_id: str, use_cache: bool = True) -> dict[str, Any]:
 
 
 def check_all(source_ids: list[str] | None = None, use_cache: bool = True) -> list[dict[str, Any]]:
-    """批量检查。source_ids 为空 → 检查全部 4 个逻辑源。"""
+    """批量检查。source_ids 为空 → 检查全部 5 个逻辑源。"""
     ids = source_ids or list(SOURCE_DEFS.keys())
     return [check_source(sid, use_cache=use_cache) for sid in ids]
 
