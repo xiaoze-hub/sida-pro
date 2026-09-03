@@ -8,6 +8,7 @@ import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { safeFixed, safeNum } from '@/lib/format'
+import ForecastConeChart from '@/components/ForecastConeChart'
 
 interface KronosResult {
   median: number[]
@@ -743,6 +744,17 @@ export default function ForecastPage() {
                 </div>
               </div>
             )}
+
+            {/* 预测锥图(P1-5): 历史收盘 + 预测延伸 + P5-P95 带 */}
+            <ForecastConeChart
+              symbol={result.symbol}
+              lastClose={result.last_close}
+              lastDate={result.last_date}
+              prediction={result.prediction}
+              direction={result.direction}
+              p5={result.models.kronos.p5}
+              p95={result.models.kronos.p95}
+            />
 
             {/* 预测价格序列 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
