@@ -3,7 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom'
 import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
-import { insightApi } from '@panwatch/api'
+import { insightApi, dashboardApi, type DashboardPosition } from '@panwatch/api'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import {
   normalizeKlineEvents,
@@ -11,7 +11,6 @@ import {
   type KlineEventPoint,
   type KlinePriceLine,
 } from '@panwatch/biz-ui/klineEvents'
-import { isContextSource } from '@/components/ContextCard'
 
 /**
  * 行情终端（v0.4.60 重构 — 去卡片化）
@@ -185,10 +184,6 @@ export default function QuotePage() {
   // 默认股票: URL > 上次查看(localStorage) > 上证指数(仅首次)
   const symbol = (params.get('symbol') || readLastSymbol() || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
-  const sourceParam = params.get('source')
-  // v0.4.60 暂不显示 ContextCard(占位): 改用持仓成本线画 K 线(v0.4.61)
-  const _sourceCtx = isContextSource(sourceParam) ? sourceParam : null
-  void _sourceCtx
 
   const [input, setInput] = useState(symbol)
   const [suggests, setSuggests] = useState<StockSuggest[]>([])
@@ -256,6 +251,30 @@ export default function QuotePage() {
       .finally(() => { if (alive) setSummaryLoading(false) })
     return () => { alive = false }
   }, [symbol, type])
+
+  // Phase 0: 持仓成本(全账户 positions 按代码匹配, 无持仓不画线不编造)
+  const [positions, setPositions] = useState<DashboardPosition[]>([])
+  useEffect(() => {
+    let alive = true
+    dashboardApi
+      .portfolioSummary()
+      .then((d) => {
+        if (!alive) return
+        const all = (d?.accounts ?? []).flatMap((a) => a.positions ?? [])
+        setPositions(all)
+      })
+      .catch(() => { if (alive) setPositions([]) })
+    return () => { alive = false }
+  }, [])
+  /** 代码归一(去后缀/取后6位数字): 002361.SZ 与 002361 视为同一标的 */
+  const normCode = (s: string) => (s.replace(/\D/g, '').slice(-6) || s.trim())
+  const costLines = useMemo(() => {
+    if (type !== 'stock') return undefined
+    const hit = positions.find((p) => normCode(p.symbol) === normCode(symbol))
+    if (!hit || !Number.isFinite(hit.cost_price)) return undefined
+    const qty = hit.quantity > 0 ? `·${hit.quantity}股` : ''
+    return [{ price: hit.cost_price, title: `成本${hit.cost_price}${qty}` }]
+  }, [positions, symbol, type])
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params)
@@ -347,7 +366,7 @@ export default function QuotePage() {
       {/* === 顶部数据条(不是卡片, 是 flex 数据条) === */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
         <h1 className="text-base font-semibold text-foreground">行情</h1>
-        <div className="inline-flex items-center gap-1 rounded-lg border border-border/50 p-0.5 text-[11px]">
+        <div className="inline-flex items-center gap-1 rounded-md border border-border/50 p-0.5 text-[11px]">
           {TYPE_OPTIONS.map((t) => (
             <button
               key={t.key}
@@ -456,7 +475,10 @@ export default function QuotePage() {
       {/* === 两栏布局: K线主图(≥80%屏宽) + 窄栏(决策依据/事件) === */}
       {type === 'board' ? (
         <div className="border-l-2 border-border/40 pl-4 py-8 text-center text-[13px] text-muted-foreground">
-          板块 K 线待接入 · 请前往 /boards/{symbol}
+          板块行情请前往{' '}
+          <Link to={`/boards/${encodeURIComponent(symbol)}`} className="text-primary hover:underline">
+            板块详情 /boards/{symbol} ›
+          </Link>
         </div>
       ) : (
         <div className="grid grid-cols-12 gap-3">
@@ -512,6 +534,7 @@ export default function QuotePage() {
               initialDays={120}
               events={normEvents}
               supportPressure={normPriceLines}
+              costLines={costLines}
               gsSignals={normGsSignals}
               fundFlow={summary?.fund_flow?.map((r) => ({
                 date: r.date,

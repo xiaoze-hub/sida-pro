@@ -28,7 +28,7 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
-import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
 
 import {
   KIND_ICON,
@@ -166,6 +166,8 @@ export default function KlineChart(props: {
   onSubchartChange?: (s: KlineSubchart) => void
   /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
   supportPressure?: KlinePriceLine[]
+  /** 持仓成本线 (Phase 0: portfolio 持仓成本画进 K 线, 替代 ContextCard 占位; 无持仓不传) */
+  costLines?: Array<{ price: number; title: string }>
   /** 资金柱 (阶段三: 红涨绿跌 + 主净分色) */
   fundFlow?: FundFlowBar[]
   /** 活跃度副图序列 (09-03: 三色柱载体, subchart==='activity' 时渲染) */
@@ -190,6 +192,8 @@ export default function KlineChart(props: {
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markerPluginRef = useRef<ReturnType<typeof createSeriesMarkers<Time>> | null>(null)
   const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
+  // 持仓成本线 (Phase 0: 与支撑压力线独立管理, 同一切换开关重建逻辑)
+  const costLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
@@ -326,8 +330,10 @@ export default function KlineChart(props: {
       markerPluginRef.current = null
       if (seriesRef.current) {
         for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
+        for (const line of costLinesRef.current) seriesRef.current.removePriceLine(line)
       }
       priceLinesRef.current = []
+      costLinesRef.current = []
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
@@ -465,6 +471,25 @@ export default function KlineChart(props: {
       }
     }
 
+    // 2b) 持仓成本线 (Phase 0: 强调橙实线, hover 轴标签显示成本/数量; 无持仓不画)
+    for (const line of costLinesRef.current) series.removePriceLine(line)
+    costLinesRef.current = []
+    if (showSignal) {
+      for (const line of props.costLines || []) {
+        if (!Number.isFinite(line.price)) continue
+        costLinesRef.current.push(
+          series.createPriceLine({
+            price: line.price,
+            color: readAccentPrimary(),
+            lineWidth: 1,
+            lineStyle: 0, // solid(与支撑压力虚线区分)
+            axisLabelVisible: true,
+            title: line.title,
+          }),
+        )
+      }
+    }
+
     // 3) 资金柱 (L3 资金柱, showCapital 开关): 红涨绿跌 + 主净分色叠加在 K 线下方。
     //    关掉时 setData([]) 清空 — 否则上一轮的柱会残留。
     //    09-03: subchart==='activity' 时 volumeSeries 改画活跃度三色柱 (与资金柱互斥, 同 pane)。
@@ -522,7 +547,7 @@ export default function KlineChart(props: {
         volSeries.setData([])
       }
     }
-  }, [props.events, props.supportPressure, props.fundFlow, props.activitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
+  }, [props.events, props.supportPressure, props.costLines, props.fundFlow, props.activitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
