@@ -70,7 +70,7 @@ export default function HelpPage() {
   return (
     <div className="page-container pb-10">
       {/* Hero */}
-      <div className="card p-5 md:p-7">
+      <div className="border-b border-border/40 p-5 md:p-7">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
             <HelpCircle className="h-4.5 w-4.5" />
@@ -87,7 +87,7 @@ export default function HelpPage() {
       {/* 功能说明卡片 */}
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {FEATURES.map(f => (
-          <section key={f.title} className="card p-4 md:p-5">
+          <section key={f.title} className="border-t border-border/40 pt-4 md:pt-5">
             <div className="flex items-center gap-2.5 mb-2.5">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
                 <f.icon className="h-4 w-4" />
@@ -107,7 +107,7 @@ export default function HelpPage() {
         ))}
 
         {/* 数据导出 */}
-        <section className="card p-4 md:p-5">
+        <section className="border-t border-border/40 pt-4 md:pt-5">
           <div className="flex items-center gap-2.5 mb-2.5">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
               <Download className="h-4 w-4" />
@@ -133,7 +133,7 @@ export default function HelpPage() {
       </div>
 
       {/* 快捷键 */}
-      <section className="card p-4 md:p-5 mt-4">
+      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
         <div className="flex items-center gap-2.5 mb-3">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
             <Keyboard className="h-4 w-4" />

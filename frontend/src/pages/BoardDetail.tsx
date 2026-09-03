@@ -188,7 +188,7 @@ export default function BoardDetailPage() {
           {/* 关键指标 */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             {metrics.map((m) => (
-              <div key={m.label} className="card p-3">
+              <div key={m.label} className="border-l border-border/40 pl-3">
                 <div className="text-[11px] text-muted-foreground">{m.label}</div>
                 <div className={`text-[20px] font-bold mt-1 font-mono tabular-nums ${m.cls}`}>{m.value}</div>
                 <div className="text-[10px] text-muted-foreground mt-1">{m.note}</div>
@@ -198,7 +198,7 @@ export default function BoardDetailPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             {/* 成分股表 */}
-            <div className="lg:col-span-2 card p-3 md:p-4">
+            <div className="lg:col-span-2 border-b border-border/40 pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-[14px] font-semibold text-foreground">成分股</h2>
                 <span className="text-[11px] text-muted-foreground">
@@ -249,7 +249,7 @@ export default function BoardDetailPage() {
             </div>
 
             {/* 板块轮动 Top5 横条 */}
-            <div className="card p-3 md:p-4">
+            <div className="border-b border-border/40 pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-[14px] font-semibold text-foreground">板块轮动 Top 5</h2>
                 <span className="text-[10px] text-muted-foreground">近{rotation?.days ?? 5}日 · click进入详情</span>

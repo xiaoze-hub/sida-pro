@@ -213,7 +213,7 @@ export function Profile() {
   return (
     <div>
       {/* 页头 */}
-      <div className="card relative overflow-hidden p-5 md:p-7">
+      <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-[16px] md:text-[18px] font-bold text-foreground">个人中心</h1>
@@ -224,7 +224,7 @@ export function Profile() {
 
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* ① 个人资料 */}
-        <section className="card p-4 md:p-6 lg:col-span-7">
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7">
           <div className="flex items-center gap-2 mb-4">
             <UserCog className="w-4 h-4 text-primary" />
             <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">个人资料</h3>
@@ -292,7 +292,7 @@ export function Profile() {
         </section>
 
         {/* ② 安全中心 */}
-        <section className="card p-4 md:p-6 lg:col-span-5">
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5">
           <div className="flex items-center gap-2 mb-4">
             <ShieldCheck className="w-4 h-4 text-primary" />
             <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">安全中心</h3>
@@ -335,7 +335,7 @@ export function Profile() {
         </section>
 
         {/* ③ 我的数据 */}
-        <section className="card p-4 md:p-6 lg:col-span-12">
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
           <div className="flex items-center gap-2 mb-4">
             <Target className="w-4 h-4 text-primary" />
             <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">我的数据</h3>
