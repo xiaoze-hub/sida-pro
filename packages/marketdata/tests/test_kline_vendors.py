@@ -8,7 +8,15 @@ def test_tencent_kline_parses(monkeypatch):
     monkeypatch.setattr(kv, "market_get", lambda *a, **k: js)
     out = kv.TencentKlineVendor().fetch([Symbol.parse("600519")], {"days": 60})
     assert len(out) == 2 and isinstance(out[0], Bar)
-    assert out[0].date == "2026-07-01" and out[0].close == 3.0 and out[1].volume == 200.0
+    assert out[0].date == "2026-07-01" and out[0].close == 3.0 and out[1].volume == 200.0 * 100
+
+
+def test_tencent_kline_volume_unit_shares(monkeypatch):
+    """2026-09-04: 腾讯 fqkline volume=手 → Bar 归一为股(002361 实测 1719711手=171971136股)。"""
+    js = 'kline_dayqfq={"data":{"sz002361":{"qfqday":[["2026-09-02","10.45","11.04","11.32","10.40","1719711"]]}}};'
+    monkeypatch.setattr(kv, "market_get", lambda *a, **k: js)
+    out = kv.fetch_tencent_kline_raw("sz002361", 5)
+    assert len(out) == 1 and out[0].volume == 171971100.0
 
 
 def test_eastmoney_kline_parses(monkeypatch):
@@ -16,6 +24,18 @@ def test_eastmoney_kline_parses(monkeypatch):
     monkeypatch.setattr(kv, "market_get", lambda *a, **k: payload)
     out = kv.EastmoneyKlineVendor().fetch([Symbol.parse("600519")], {"days": 60})
     assert len(out) == 2 and out[1].high == 6.0
+
+
+def test_eastmoney_kline_cn_volume_unit_shares(monkeypatch):
+    """2026-09-04: 东财 A股(secid 0./1.)volume=手 → 股; 港股(116.)不动。"""
+    payload = {"data": {"klines": ["2026-09-02,10.45,11.04,11.32,10.40,1719711"]}}
+    monkeypatch.setattr(kv, "market_get", lambda *a, **k: payload)
+    out = kv.fetch_eastmoney_kline("0.002361", 5)
+    assert len(out) == 1 and out[0].volume == 171971100.0
+    out_hk = kv.fetch_eastmoney_kline("116.00700", 5)
+    assert len(out_hk) == 1 and out_hk[0].volume == 1719711.0
+    assert kv._is_cn_secid("0.002361") and kv._is_cn_secid("1.600519")
+    assert not kv._is_cn_secid("116.00700")
 
 
 def test_stooq_kline_parses(monkeypatch):

@@ -105,12 +105,19 @@ def fetch_tencent_kline_raw(tsym: str, days: int) -> list[Bar]:
     for it in day or []:
         if len(it) >= 5:
             try:
+                # 2026-09-04: 腾讯 fqkline volume 单位=手, Engine 约定=股(PG/口径铁律),
+                # 此处 ×100 归一(东财同为手, sina/TQ 原生股)。否则跨源合并/暗盘分摊差 100 倍。
                 out.append(Bar(date=it[0], open=float(it[1]), close=float(it[2]),
                                high=float(it[3]), low=float(it[4]),
-                               volume=float(it[5]) if len(it) > 5 else 0.0))
+                               volume=float(it[5]) * 100 if len(it) > 5 else 0.0))
             except Exception:
                 continue
     return out
+
+
+def _is_cn_secid(secid: str) -> bool:
+    """东财 secid: 0./1. 开头为 A股(沪深), 116. 为港股。仅 A股 volume=手需×100。"""
+    return str(secid).split(".")[0] in ("0", "1")
 
 
 # 腾讯美股日K必须带交易所后缀(usTSLA.OQ=纳斯达克 / usBABA.N=纽交所);裸 us{CODE}
@@ -211,13 +218,14 @@ def fetch_eastmoney_kline(secid: str, days: int) -> list[Bar]:
     )
     raw = (payload or {}).get("data", {}).get("klines", []) if isinstance(payload, dict) else []
     out: list[Bar] = []
+    to_shares = 100.0 if _is_cn_secid(secid) else 1.0  # 2026-09-04: A股 volume=手→股
     for row in raw or []:
         p = str(row).split(",")
         if len(p) < 6:
             continue
         try:
             out.append(Bar(date=p[0], open=float(p[1]), close=float(p[2]),
-                           high=float(p[3]), low=float(p[4]), volume=float(p[5])))
+                           high=float(p[3]), low=float(p[4]), volume=float(p[5]) * to_shares))
         except Exception:
             continue
     return out
