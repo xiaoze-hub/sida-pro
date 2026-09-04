@@ -27,7 +27,11 @@ def test_eastmoney_kline_parses(monkeypatch):
 
 
 def test_eastmoney_kline_cn_volume_unit_shares(monkeypatch):
-    """2026-09-04: 东财 A股(secid 0./1.)volume=手 → 股; 港股(116.)不动。"""
+    """2026-09-04: 东财 A股(secid 0./1.)volume=手 → 股; 港股(116.)不动。
+
+    港股实测(2026-09-04 14:4x): 00700 K线量 16557646 vs Quote 15980655(股),
+    同量级 → 116. 不 ×100 正确。
+    """
     payload = {"data": {"klines": ["2026-09-02,10.45,11.04,11.32,10.40,1719711"]}}
     monkeypatch.setattr(kv, "market_get", lambda *a, **k: payload)
     out = kv.fetch_eastmoney_kline("0.002361", 5)

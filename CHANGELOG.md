@@ -32,6 +32,15 @@
   清缓存→重算一次返回 before/after/dedup_removed/verdict_changed。
 - **测试**: ops 11 例全绿; ruff 全绿。
 
+### P2 收尾:港股volume实测+P0-3降级结论
+
+- **港股实测**(P2-6): 00700 东财 K 线量 16557646 vs 腾讯 Quote
+  15980655(股), 同量级 → `116.` 不 ×100 闸门正确, 用例缀实测证据。
+  K 线归一矩阵齐了(腾讯 CN×100/东财 CN×100/东财 HK×1)。
+- **P0-3 降级结论**: 查了 TQ L2(成品净额, 非逐笔)+sina(仅 Quote),
+  无 tick 级备用源可接。腾讯全挂时已有 `insufficient` 标记 +
+  L2 明盘照常 + diag.tick_pages==0 即"源挂"信号, 不硬编 fallback。
+
 ### ops dark-flow 运维杠杆:diag 可见性+清缓存接口(main_net 钉死治本)
 
 - **背景**: v0.4.83 上线后 main_net=-125035724 一字不动;
