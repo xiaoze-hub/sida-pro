@@ -171,3 +171,19 @@ def test_refetch_diff_math(monkeypatch):
     assert out["after"]["tick_count"] == 3958
     assert out["dedup_removed"] == 759
     assert out["verdict_changed"] is True
+
+
+def test_alert_throttle_once_per_day():
+    """同股同日同类只报一次; 换类/换日重报。"""
+    from src.core import darkflow_alerts as al
+
+    class _Mem:
+        def __init__(self): self.d = {}
+        def get(self, k): return self.d.get(k)
+        def set(self, k, v): self.d[k] = v
+
+    m = _Mem()
+    assert al.should_alert("sz002361", "2026-09-04", "suspect", cache=m) is True
+    assert al.should_alert("sz002361", "2026-09-04", "suspect", cache=m) is False
+    assert al.should_alert("sz002361", "2026-09-04", "stale", cache=m) is True
+    assert al.should_alert("sz002361", "2026-09-05", "suspect", cache=m) is True

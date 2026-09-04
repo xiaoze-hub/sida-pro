@@ -151,6 +151,17 @@ def build_darkflow_response(symbol_code: str) -> dict:
 
     # 2026-09-04 P1-5: stale 只标停滞(data_status 不动, 不断口诀链路)。
     _stale = _tick_staleness(dark.get("last_tick_t"), trade_date)
+    # 2026-09-04 #5: suspect/stale 推通知(全局渠道, 同股同类每日一次, 失败静默)。
+    try:
+        from src.core.darkflow_alerts import maybe_alert_anomaly
+        if data_status == "suspect":
+            maybe_alert_anomaly(symbol_code, symbol_code, trade_date or "",
+                                "suspect", f"{symbol_code} 主力成交额超总成交额(疑重复计数), 本轮不判意图")
+        elif _stale["stale"]:
+            maybe_alert_anomaly(symbol_code, symbol_code, trade_date or "",
+                                "stale", f"{symbol_code} 逐笔停滞(末笔 {dark.get('last_tick_t')})")
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "main_intent": main_intent,
         "inner_outer": inner_outer,
