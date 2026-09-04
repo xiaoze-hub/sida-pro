@@ -183,6 +183,22 @@ class TestFlatMislabel:
         ticks = [{"d": "S", "amt": 10e4, "price": 10.5, "t": "10:00:00"}] * 5
         assert df_module._neutralize_flat_mislabel(ticks) == ticks
 
+    def test_off_session_passthrough(self):
+        """2026-09-05 周末/盘后复盘放行: 非交易时段不过滤。"""
+        import datetime as _dt
+        ticks = [{"d": "B", "amt": 10e4, "price": 10.5, "t": "15:00:00"}]
+        sat = _dt.datetime(2026, 9, 5, 2, 11)  # 周六凌晨
+        assert df_module._drop_future_ticks(ticks, now=sat) == ticks
+        evening = _dt.datetime(2026, 9, 4, 20, 0)  # 周五晚盘后
+        assert df_module._drop_future_ticks(ticks, now=evening) == ticks
+
+    def test_in_session_drops_future(self):
+        """盘中仍严格丢未来。"""
+        import datetime as _dt
+        ticks = [{"d": "B", "amt": 10e4, "price": 10.5, "t": "15:15:45"}]
+        mid = _dt.datetime(2026, 9, 4, 14, 19)  # 周五盘中
+        assert df_module._drop_future_ticks(ticks, now=mid) == []
+
     def test_m_skipped_not_breaking_cluster(self):
         """M跳过不断簇: B-M-B-B(间隔<10s)应成同一簇(n=3); 若M切断则两簇n<3=0组。"""
         ticks = [
