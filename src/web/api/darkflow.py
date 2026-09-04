@@ -184,12 +184,19 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
                                 "stale", f"{symbol_code} 逐笔停滞(末笔 {dark.get('last_tick_t')})")
     except Exception:  # noqa: BLE001
         pass
+    # 2026-09-05 P1: 明盘三源交叉验证(腾讯四档+thSdk DDE+TQ Zjl_HB), 失败不挡主链路。
+    try:
+        from src.core.mainflow_tri import triangulate
+        mainflow_tri = triangulate(symbol_code)
+    except Exception:  # noqa: BLE001
+        mainflow_tri = {"agree": None, "consensus_wan": None, "spread_pct": None, "n_ok": 0, "sources": {}}
     return {
         "main_intent": main_intent,
         "inner_outer": inner_outer,
         "mnemonic": mnemonic,
         "l2": l2,
         "dark_order": dark_order,
+        "mainflow_tri": mainflow_tri,
         # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日/拉到页数。
         "diag": {
             "tick_count": dark.get("tick_count"),
