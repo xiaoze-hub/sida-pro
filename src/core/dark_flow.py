@@ -139,12 +139,14 @@ def clear_ticks_cache(code: str | None = None) -> int:
     return n
 
 
-def _drop_future_ticks(ticks: list[dict]) -> list[dict]:
+def _drop_future_ticks(ticks: list[dict], now=None) -> list[dict]:
     """丢未来时刻 tick(2026-09-04 P0-1: 未来 tick 根治)。
 
     实证: 14:19 拉到末笔 15:15:45(比钟还晚)—— 腾讯翻页漂移/跨日残留会带未来
     时刻, tick 又只有 HH:MM:SS 无日期, 混入后 main_net 全歪。超 now+60s(容差)
     的直接丢弃。空列表原样返回; 解析失败的单笔保留(宁可多算不断链)。
+    2026-09-05 周末/盘后复盘放行: 非工作日交易时段不过滤(看最近完整交易日，
+    前端 trade_date 标注基准日); 盘中才严格丢未来。now 可注入单测。
     """
     import datetime as _dt
     if not ticks:
@@ -155,8 +157,18 @@ def _drop_future_ticks(ticks: list[dict]) -> list[dict]:
         return int(h) * 3600 + int(m) * 60 + int(s)
 
     try:
-        limit = _s(_dt.datetime.now().strftime("%H:%M:%S")) + 60
+        _now = now if now is not None else _dt.datetime.now()
+        now_s = _s(_now.strftime("%H:%M:%S"))
+        limit = now_s + 60
     except Exception:  # noqa: BLE001
+        return ticks
+    # 周末/盘后复盘放行: 非工作日交易时段(周末/09:25前/15:05后)不过滤，
+    # 直接看最近完整交易日(前端 trade_date 标注基准日)。盘中才严格丢未来。
+    try:
+        in_session = _now.weekday() < 5 and _s("09:25:00") <= now_s <= _s("15:05:00")
+    except Exception:  # noqa: BLE001
+        in_session = True
+    if not in_session:
         return ticks
     out = []
     for t in ticks:
