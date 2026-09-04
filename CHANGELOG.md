@@ -7,6 +7,14 @@
 
 ## 2026-09-04
 
+### 整体优化③#6构建分层+#7离线单测
+
+- **构建分层**(#6): 第三方与本地包分开装, 改 marketdata 不再触发
+  全量 pip 重装(httpx 由主 requirements 提供, --no-deps 秒装)。
+- **离线单测**(#7): 跨日残留→全量重拉转 urlopen mock(210 笔, 时刻/价格
+  双轨防指纹碰撞+午夜边角), 不再依赖腾讯可达。
+- **测试**: dark_flow.py 18 passed + ops/archive/guard/dedup 26 passed; ruff 全绿。
+
 ### 整体优化②异常告警+#2灰度切源
 
 - **异常告警**(#5): `darkflow_alerts`(suspect/stale 推全局默认渠道,
@@ -17,6 +25,8 @@
   (零残留可回滚); 非法 source 400; diag 透出本次实际 `source`;
   默认源不动, 等验证数据再定。
 - **测试**: ops 18 例(灰度隔离/400/ctx)+archive 3 例; ruff 全绿。
+
+### 整体优化①前端展示+#3存档+#4序列
 
 - **前端展示**(①): `DarkFlowCards` 接 `verdict_note`(翻转蓝条, 有值才显)、
   `diag.stale`(停滞徽标+落后分钟 tooltip)、数据行(逐笔 N 笔·末笔·N 页);

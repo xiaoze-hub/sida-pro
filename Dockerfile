@@ -120,12 +120,13 @@ RUN set -eux; \
 # 复制依赖文件
 COPY requirements.txt ./
 
-# 复制本仓内本地包(requirements.txt 里 -e ./packages/marketdata 需要它先在)
-COPY packages/ ./packages/
-
-# 安装 Python 依赖(阿里云 pypi 镜像, 国内 ACR 构建加速; 海外亦可达)
-RUN pip install --no-cache-dir --timeout 300 --retries 8 -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt && \
-    python -c "from sqlalchemy import create_engine; from marketdata.vendors.tencent_panel import fetch_price_distribution; assert create_engine and fetch_price_distribution"
+# 分层优化(2026-09-04 #6): 第三方依赖与本地包分开装。
+# 此前 requirements.txt 里 `-e ./packages/marketdata` 要求 COPY packages/ 在 pip 之前,
+# 改一行 marketdata 代码就整层 pip 重装(数分钟)。现在第三方先装(只随 requirements.txt 变),
+# 本地包放到代码层之后 --no-deps 秒装(httpx 由主 requirements.txt 提供)。
+RUN grep -v "^[[:space:]]*-e[[:space:]]" requirements.txt > /tmp/requirements3.txt && \
+    pip install --no-cache-dir --timeout 300 --retries 8 -i https://mirrors.aliyun.com/pypi/simple/ -r /tmp/requirements3.txt && \
+    python -c "from sqlalchemy import create_engine; assert create_engine"
 
 # 注意: Playwright 浏览器将在首次启动时自动安装到 data 目录
 # 这样可以减小镜像体积，并支持跨版本持久化
@@ -138,6 +139,9 @@ COPY prompts/ ./prompts/
 COPY strategies/ ./strategies/
 COPY src/ ./src/
 COPY data_source/ ./data_source/
+COPY packages/ ./packages/
+RUN pip install --no-deps --no-cache-dir -e ./packages/marketdata && \
+    python -c "from marketdata.vendors.tencent_panel import fetch_price_distribution; assert fetch_price_distribution"
 
 # thsdk L2 SDK(从 vendor 阶段复制; arm64 上 .so 加载失败时各端点懒加载降级)
 # 独立成层且放在业务代码后: vendor 镜像 tag 变化只失效这一层及之后的层
