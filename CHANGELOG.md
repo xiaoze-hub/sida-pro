@@ -5,6 +5,17 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-05
+
+### P1-明盘三源交叉验证
+
+- 新模块`mainflow_tri`: 腾讯四档(元→万元)+thSdk DDE官方(万元)+TQ Zjl_HB(万元)，
+  并发8s兜底，n≥2同号且离散≤50%判一致，否则分歧标记（不断主链路）。
+- darkflow API加`mainflow_tri`字段；主力意图卡加一行一致绿/分歧amber（hover看三源明细）。
+- 附带发现：腾讯单位是元（3498万），thSdk是万元（3795万），方向一致差8%。
+- **测试**: test_mainflow_tri 6过；test_dark_flow合跑5挂系周六环境（stash原代码同挂5个，未来过滤杀光跨日tick），与改动无关。
+- P2状态：撤单率待TQ网关恢复（小主机WSL未起TdxW）；5日趋势数已随tri回传（net_5d_wan），选股功能另排。
+
 ## 2026-09-04
 
 ### v6-平盘误标修正(涨停股破局)

@@ -66,11 +66,25 @@ export interface DarkOrder {
   groups: DarkOrderGroup[]
 }
 
+export interface MainflowTri {
+  agree: boolean | null
+  consensus_wan: number | null
+  spread_pct: number | null
+  n_ok: number
+  sources: {
+    tencent?: { net_wan: number | null } | null
+    thsdk?: { net_wan: number | null } | null
+    tq?: { net_wan: number | null } | null
+  }
+}
+
 export interface DarkFlowResp {
   main_intent: DarkFlowMainIntent | null
   inner_outer: DarkFlowInnerOuter | null
   mnemonic: DarkFlowMnemonic | null
   dark_order: DarkOrder | null
+  /** 2026-09-05 P1: 明盘三源交叉验证 */
+  mainflow_tri?: MainflowTri | null
   /** 2026-09-04: 运维可见性(逐笔总数/末笔时刻/页数/停滞标记) */
   diag?: {
     tick_count?: number | null
@@ -243,6 +257,21 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
               <div className="mt-2 text-[10px] text-muted-foreground font-mono">
                 逐笔 {diag.tick_count} 笔{diag.last_tick_t ? ` · 末笔 ${diag.last_tick_t}` : ''}
                 {diag.tick_pages != null ? ` · ${diag.tick_pages} 页` : ''}
+              </div>
+            ) : null}
+            {/* 2026-09-05 P1: 明盘三源交叉(腾讯+thSdk+TQ), 一致绿/分歧 amber */}
+            {data?.mainflow_tri && data.mainflow_tri.n_ok >= 2 ? (
+              <div
+                className={`mt-2 rounded px-2 py-1 text-[10px] leading-4 ${
+                  data.mainflow_tri.agree
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                }`}
+                title={`腾讯 ${fmtWan((data.mainflow_tri.sources?.tencent?.net_wan ?? NaN) * 10000)} / 同花顺 ${fmtWan((data.mainflow_tri.sources?.thsdk?.net_wan ?? NaN) * 10000)} / 通达信 ${fmtWan((data.mainflow_tri.sources?.tq?.net_wan ?? NaN) * 10000)}`}
+              >
+                {data.mainflow_tri.agree
+                  ? `✓ 三源一致 ${fmtWan((data.mainflow_tri.consensus_wan ?? 0) * 10000)}`
+                  : `⚠️ 三源分歧(离散 ${data.mainflow_tri.spread_pct ?? '--'}%)，方向仅供参考`}
               </div>
             ) : null}
           </>
