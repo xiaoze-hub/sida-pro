@@ -258,6 +258,13 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             <div className="text-[13px] font-semibold text-foreground">🕵️ 暗盘资金(拆单识别)</div>
             <span className="text-[10px] text-muted-foreground">主力伪装的中小单·逆势+位置确认</span>
           </div>
+          {/* 2026-09-04 C计划定论: 涨停日散户获利了结潮与主力拆单在L1逐笔不可区分,
+              涨停股暗盘方向可能反, 降权提示(非涨停股对账1.01/0.76可信)。 */}
+          {data?.inner_outer?.change_pct != null && data.inner_outer.change_pct >= 9.5 && (
+            <div className="mb-2 rounded bg-amber-500/10 px-2 py-1 text-[10px] leading-4 text-amber-700 dark:text-amber-400">
+              涨停日散户潮污染：获利了结盘与主力拆单无法区分，方向仅供参考
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-2 text-[11px]">
             <Stat label="暗盘净额" value={fmtWan(darkOrder.net)} valueClass={upColor(darkOrder.net)} />
             <Stat label="疑似主力买" value={fmtWan(darkOrder.main_buy ?? darkOrder.buy_amt)} valueClass={upColor(darkOrder.main_buy ?? darkOrder.buy_amt)} />
