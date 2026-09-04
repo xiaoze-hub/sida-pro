@@ -7,6 +7,19 @@
 
 ## 2026-09-04
 
+### doc P3-A 四账号生产验收报告(v0.4.81, 21/21 PASS)
+
+- **部署**: tag v0.4.81 → ACR 构建成功 → 小主机 `panwatch` 重建
+  (env 原样复用 `--env-file`, 卷/网络不变, 数据零动), 健康 `ok`,
+  旧镜像 v0.4.75-80 已删 + prune。
+- **验收** (`scripts/p3a_accept.py` 已入仓, 下次发版可重跑):
+  admin 登录/读四项/datasources 44 项无 500/health 累计 5 列齐 (P2-C 生产验证);
+  临时 member 建号→登录→自建账户→看不见 admin 持仓(0 vs 1)→自选独立→
+  自写自选/持仓 ok→用户列表 403→删号→登录被拒; 4 账号存在+active。
+  临时号已删, 级联清理无残留。
+- **缺口**: 黄磊/娟姐/demo 密码未知, 三账号直接登录未测(仅存在性),
+  需用户提供密码或授权 admin 重置后补测。
+
 ### release v0.4.81(P2 部署防护 + CI 门禁根因 + 健康列 server_default)
 
 - 自 v0.4.80 起 3 个 fix 合并: P2-C 健康计数列 server_default [commit edd7abc] + P2-A 部署防护3条(tar备份/迁移校验/暂停开关) [commit 3a50e36] + P2-B ghcr CI ruff F811 根因修 [commit e9e0613].
