@@ -334,6 +334,33 @@ def _l2_summary(l2: dict | None) -> dict:
     cancel_total = None
     if isinstance(cancel_buy, (int, float)) and isinstance(cancel_sell, (int, float)):
         cancel_total = cancel_buy + cancel_sell
+    # P2 撤单率(2026-09-05): 撤单/(买卖+撤单)，>80%=假挂单多；
+    # bias>0买方撤多(托单虚,偏空)，<0卖方撤多(压单虚,偏多)。阈值初版，实盘再调。
+    cancel_rate = None
+    cancel_bias = None
+    cancel_signal = None
+    tb = l2.get("total_buy_vol")
+    ts = l2.get("total_sell_vol")
+    if (
+        isinstance(cancel_total, (int, float))
+        and isinstance(tb, (int, float))
+        and isinstance(ts, (int, float))
+        and (tb + ts + cancel_total) > 0
+    ):
+        cancel_rate = round(cancel_total / (tb + ts + cancel_total) * 100, 1)
+    if (
+        isinstance(cancel_total, (int, float))
+        and isinstance(cancel_buy, (int, float))
+        and isinstance(cancel_sell, (int, float))
+        and cancel_total > 0
+    ):
+        cancel_bias = round((cancel_buy - cancel_sell) / cancel_total * 100, 1)
+    if cancel_rate is not None and cancel_rate >= 80:
+        cancel_signal = "撤单频繁(假挂单多)"
+    elif cancel_bias is not None and cancel_bias >= 20:
+        cancel_signal = "买方撤单多(托单虚)"
+    elif cancel_bias is not None and cancel_bias <= -20:
+        cancel_signal = "卖方撤单多(压单虚)"
     return {
         "available": True,
         # Zjl_HB 单位=万元(通达信 get_more_info 约定, 与成交额 Amount 同量纲)。
@@ -343,6 +370,9 @@ def _l2_summary(l2: dict | None) -> dict:
         "cancel_buy": cancel_buy,
         "cancel_sell": cancel_sell,
         "cancel_total": cancel_total,
+        "cancel_rate": cancel_rate,
+        "cancel_bias": cancel_bias,
+        "cancel_signal": cancel_signal,
         "l2_tick_num": l2.get("l2_tick_num"),
         "l2_order_num": l2.get("l2_order_num"),
     }

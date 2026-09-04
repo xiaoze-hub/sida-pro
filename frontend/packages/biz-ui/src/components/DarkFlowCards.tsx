@@ -66,6 +66,13 @@ export interface DarkOrder {
   groups: DarkOrderGroup[]
 }
 
+export interface L2Summary {
+  available: boolean
+  cancel_rate?: number | null
+  cancel_bias?: number | null
+  cancel_signal?: string | null
+}
+
 export interface MainflowTri {
   agree: boolean | null
   consensus_wan: number | null
@@ -85,6 +92,8 @@ export interface DarkFlowResp {
   dark_order: DarkOrder | null
   /** 2026-09-05 P1: 明盘三源交叉验证 */
   mainflow_tri?: MainflowTri | null
+  /** 2026-09-05 P2: L2撤单率(TQ独家) */
+  l2?: L2Summary | null
   /** 2026-09-04: 运维可见性(逐笔总数/末笔时刻/页数/停滞标记) */
   diag?: {
     tick_count?: number | null
@@ -272,6 +281,15 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
                 {data.mainflow_tri.agree
                   ? `✓ 三源一致 ${fmtWan((data.mainflow_tri.consensus_wan ?? 0) * 10000)}`
                   : `⚠️ 三源分歧(离散 ${data.mainflow_tri.spread_pct ?? '--'}%)，方向仅供参考`}
+              </div>
+            ) : null}
+            {/* 2026-09-05 P2: 撤单率(TQ独家), 有信号才展示 */}
+            {data?.l2?.cancel_signal ? (
+              <div
+                className="mt-2 rounded bg-violet-500/10 px-2 py-1 text-[10px] leading-4 text-violet-700 dark:text-violet-400"
+                title={`撤单率 ${data.l2.cancel_rate ?? '--'}% · 撤单偏向 ${data.l2.cancel_bias ?? '--'}%(+买方撤多/-卖方撤多)`}
+              >
+                🔄 {data.l2.cancel_signal}({data.l2.cancel_rate ?? '--'}%)
               </div>
             ) : null}
           </>
