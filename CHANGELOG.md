@@ -7,6 +7,18 @@
 
 ## 2026-09-04
 
+### 整体优化①前端展示+#3存档+#4序列
+
+- **前端展示**(①): `DarkFlowCards` 接 `verdict_note`(翻转蓝条, 有值才显)、
+  `diag.stale`(停滞徽标+落后分钟 tooltip)、数据行(逐笔 N 笔·末笔·N 页);
+  tsc 全绿。
+- **逐笔日存档**(#3): 迁移 m130 `tick_archive`(code,trade_date 唯一,
+  全天逐笔 JSON+结论); 收盘后(≥15:05)自动快照一次(只存被查过的股),
+  `POST /api/dark-flow/archive` 可手动补; 失败永不影响主链路。
+- **跨日序列**(#4): `GET /api/dark-flow/series`(新→旧, "连续流入 N 天"底座),
+  与存档同表。
+- **测试**: tick_archive 3 例(sqlite 内存全链路)+ops 11 例, 14 passed; ruff 全绿。
+
 ### P0 拉取层根治:未来tick过滤+按日快照+并发丢数修复
 
 - **未来 tick 根治**(P0-1): `_drop_future_ticks`(超 now+60s 丢弃),

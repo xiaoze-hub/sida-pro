@@ -256,6 +256,42 @@ def refetch_darkflow(
     }
 
 
+@router.post("/archive")
+def archive_darkflow_day(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    owner=Depends(require_owner),
+):
+    """手动存档当日逐笔+结论(仅管理员, #3 回测底座)。
+
+    自动存档只在收盘后触发; 盘中手动调用返回 archived=False(不存半截,
+    除非确认要)。返回行数供核对。
+    """
+    from src.core import tick_archive as _ta
+    from src.core.dark_flow import _fetch_all_ticks, _tencent_code, compute_dark_flow
+
+    sym = _validate_symbol(symbol)
+    tcode = _tencent_code(sym)
+    if not tcode:
+        raise HTTPException(400, f"无法映射腾讯代码: {symbol}")
+    dark = compute_dark_flow(sym)
+    if not dark:
+        raise HTTPException(502, "逐笔拉取失败, 无可存档数据")
+    ticks = _fetch_all_ticks(tcode)  # TTL 命中走缓存, 不重复翻页
+    ok = _ta.maybe_archive_day(tcode, symbol, ticks, dark)
+    return {"archived": ok, "symbol": symbol, "tick_count": dark.get("tick_count")}
+
+
+@router.get("/series")
+def darkflow_series(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    limit: int = Query(60, ge=1, le=500, description="最近 N 天"),
+):
+    """跨日结论序列(#4, 新→旧): 支撑"主力连续流入 N 天"类信号。"""
+    from src.core import tick_archive as _ta
+    _validate_symbol(symbol)
+    return {"symbol": symbol, "series": _ta.read_series(symbol, limit)}
+
+
 @router.get("")
 def dark_flow(symbol: str = Query(..., description="6位A股代码, 如 002361")):
     """内盘外盘口诀 + 主力意图(轻接口, 分时卡片用)。"""

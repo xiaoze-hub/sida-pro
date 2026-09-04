@@ -1163,6 +1163,13 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
         pass
 
     # ---- 主力意图增强算法(2026-08-14): 超大单/大单背离 + 量价背离 + 时段节奏 ----
+    # 2026-09-04 #3/#4: 收盘后快照存档(全天逐笔+结论)。白天不写; 同日一次;
+    # 失败不影响主链路(函数内吞异常)。
+    try:
+        from src.core.tick_archive import maybe_archive_day
+        maybe_archive_day(code, symbol.code, ticks, result)
+    except Exception:  # noqa: BLE001
+        pass
     # 三个独立纯函数(可单测), 注入 result 新字段, 不破坏现有字段。
     # change_pct 从腾讯 Quote 取(可能 None, 函数内部容错为不触发); seg 为已算出的四段净额。
     _change_pct = _num((quote_dict or {}).get("change_pct"))
