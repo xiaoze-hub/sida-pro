@@ -107,6 +107,26 @@ def _cache_stale(code: str, cached: tuple) -> bool:
     return cached[4] != _cache_day()
 
 
+def clear_ticks_cache(code: str | None = None) -> int:
+    """清逐笔缓存(2026-09-04 运维杠杆)。
+
+    背景: main_net 钉死(-125035724 一字不动)时, 内存+磁盘双层快照都保留旧
+    tick, 增量续拉"无新增"分支原样返回, 去重修复够不着。手动清后下次全量重拉。
+    code=None 清全部(返回清除的 code 数), 否则只清单个腾讯 code(如 sz002361,
+    返回 1/0)。同步落盘, 避免重启从磁盘回血。
+    """
+    if code is None:
+        n = len(_TICKS_CACHE)
+        _TICKS_CACHE.clear()
+    else:
+        n = 1 if _TICKS_CACHE.pop(code, None) is not None else 0
+    try:
+        _ticks_persist()
+    except Exception:  # noqa: BLE001
+        pass
+    return n
+
+
 def _dedup_ticks(ticks: list[dict]) -> list[dict]:
     """(时间t, 价格price, 成交额amt)三元组指纹去重(2026-08-21)。
 
@@ -961,6 +981,9 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
         },
         "segments": {k: round(v) for k, v in seg.items()},
         "tick_count": len(ticks),
+        # 2026-09-04: 末笔时刻(运维可见性: tick 冻结时一眼看出, 配合 diag 暴露)。
+        # 时刻为 "HH:MM:SS" 字符串, 字典序 max 即最晚。
+        "last_tick_t": max((t.get("t", "") for t in ticks), default="") or None,
         # 2026-08-12: 盘中数据量门槛 —— 竞价/开盘初期(非竞价成交<30笔)不算主力意图,
         # 直接给"数据不足"标记, 避免把竞价单/零星成交误判成吸筹派发
         # 2026-08-23 P4: suspect = 主力成交额超总成交额 130%(物理不可能, 疑重复计数),
