@@ -7,6 +7,24 @@
 
 ## 2026-09-04
 
+### update 海外K线补数通道 + 行情主备热切(09-03 漏数事故)
+
+- **事故**: 持仓页停在 09-02。根因三层: ①小主机 WSL 内 DNS 被劫到
+  198.18.x(透明代理), 容器出口 HTTPS GET 被掐(腾讯/东财/新浪全挂),
+  09-03 18:00 容器内 backfill 0 行, 全市场漏 09-03;
+  ②TQ 网关吐 09-02 陈旧快照却报成功, 挡住正常腾讯(quote 链 tq prio 0);
+  ③engine 三源标签名不副实(同一合并列表), 误导排查。
+- **止血**: 海外直抓腾讯 fqkline(口径 vol×100=股, 与 PG 现存行核对一致),
+  49 股×3 源 147 行幂等灌入, API 已验 09-03 10.55;
+  `/api/datasources/46` tq priority 0→4 热切, quotes 切到腾讯实时
+  (10.55/-4.44%, quote_time 09-03 16:14), tencent 抖动仍回落 tq。
+- **durable**: 新增 `scripts/offsite_kline_backfill.py` (Hermes 宿主机跑,
+  当日无行跳过不编造, 501 退避+1.2s 间隔), 配 Hermes cron 每交易日
+  18:35 兜底 [commit 05c4a05]。
+- **待治本**: TdxW.exe 需重启/重登录(09-03 数据都没拉, 28号此前已预警
+  RPC 假死); WSL 出口代理掐 HTTPS 需查 Clash/Tailscale DNS(198.18.0.2);
+  `publish_kline_backfill` 跨 loop 发布报错另起任务修。
+
 ### doc P3-A 四账号生产验收报告(v0.4.81, 21/21 PASS)
 
 - **部署**: tag v0.4.81 → ACR 构建成功 → 小主机 `panwatch` 重建
