@@ -83,6 +83,8 @@ def build_darkflow_response(symbol_code: str) -> dict:
         "main_buy_ratio": dark.get("main_buy_ratio"),
         "signal": dark.get("signal"),
         "data_status": data_status,
+        # 2026-09-04 P1-4: 结论翻转注记(无翻转则 None, 前端有值才展示)。
+        "verdict_note": dark.get("verdict_note"),
     }
 
     # 内盘外盘: compute_dark_flow 已算好金额/占比; 量比/涨跌/位置用本接口自拉的 Quote 兜底刷新
@@ -147,19 +149,54 @@ def build_darkflow_response(symbol_code: str) -> dict:
         except Exception:  # noqa: BLE001
             pass
 
+    # 2026-09-04 P1-5: stale 只标停滞(data_status 不动, 不断口诀链路)。
+    _stale = _tick_staleness(dark.get("last_tick_t"), trade_date)
     return {
         "main_intent": main_intent,
         "inner_outer": inner_outer,
         "mnemonic": mnemonic,
         "l2": l2,
         "dark_order": dark_order,
-        # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日。
+        # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日/拉到页数。
         "diag": {
             "tick_count": dark.get("tick_count"),
             "last_tick_t": dark.get("last_tick_t"),
             "trade_date": trade_date,
+            "tick_pages": dark.get("tick_pages"),
+            "stale": _stale["stale"],
+            "tick_lag_sec": _stale["lag_sec"],
         },
     }
+
+
+def _tick_staleness(
+    last_tick_t: str | None,
+    trade_date: str | None,
+    now=None,
+) -> dict:
+    """P1-5 停滞检测(纯函数, now 可注入单测)。
+
+    仅工作日 09:25-15:05 内判定: 末笔落后超 10 分钟 → stale=True。
+    非交易时段/跨日/无数据 → stale=False(不误报)。data_status 不动,
+    只是 diag 里标, 口诀链路不断。
+    """
+    import datetime as _dt
+    now = now or _dt.datetime.now()
+    info: dict = {"stale": False, "lag_sec": None}
+    try:
+        if not last_tick_t or trade_date != now.date().isoformat():
+            return info
+        if now.weekday() >= 5:
+            return info
+        if not ("09:25:00" <= now.strftime("%H:%M:%S") <= "15:05:00"):
+            return info
+        h, m, s = (int(x) for x in last_tick_t.split(":"))
+        lag = (now.hour * 3600 + now.minute * 60 + now.second) - (h * 3600 + m * 60 + s)
+        info["lag_sec"] = lag
+        info["stale"] = lag > 600
+    except Exception:  # noqa: BLE001
+        pass
+    return info
 
 
 @router.post("/cache/clear")
@@ -180,6 +217,43 @@ def clear_darkflow_ticks_cache(
         return {"cleared": n, "symbol": symbol, "tcode": tcode, "refetch_next": True}
     n = clear_ticks_cache(None)
     return {"cleared": n, "symbol": None, "tcode": None, "refetch_next": True}
+
+
+@router.post("/refetch")
+def refetch_darkflow(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    owner=Depends(require_owner),
+):
+    """强制全量重拉并返回 diff(运维杠杆 P2-7, 仅管理员)。
+
+    清缓存→重算, 一次看清: 去重删了多少笔、结论变没变。
+    before 走缓存(秒回), after 全量重拉(数秒)。生产验证例:
+    002361 before 4717笔/-1.25亿 → after 3958笔/+3490万。
+    """
+    from src.core.dark_flow import _tencent_code
+
+    before = build_darkflow_response(symbol)
+    tcode = _tencent_code(_validate_symbol(symbol))
+    cleared = clear_ticks_cache(tcode) if tcode else 0
+    after = build_darkflow_response(symbol)
+    b, a = before.get("diag") or {}, after.get("diag") or {}
+    b_net = (before.get("main_intent") or {}).get("main_net")
+    a_net = (after.get("main_intent") or {}).get("main_net")
+    return {
+        "symbol": symbol,
+        "cleared": cleared,
+        "before": {"tick_count": b.get("tick_count"), "main_net": b_net},
+        "after": {
+            "tick_count": a.get("tick_count"),
+            "main_net": a_net,
+            "data_status": (after.get("main_intent") or {}).get("data_status"),
+        },
+        "dedup_removed": (b.get("tick_count") or 0) - (a.get("tick_count") or 0),
+        "verdict_changed": bool(
+            b_net is not None and a_net is not None and ((b_net < 0) != (a_net < 0))
+        ),
+        "verdict_note": (after.get("main_intent") or {}).get("verdict_note"),
+    }
 
 
 @router.get("")

@@ -127,6 +127,35 @@ def clear_ticks_cache(code: str | None = None) -> int:
     return n
 
 
+def _drop_future_ticks(ticks: list[dict]) -> list[dict]:
+    """丢未来时刻 tick(2026-09-04 P0-1: 未来 tick 根治)。
+
+    实证: 14:19 拉到末笔 15:15:45(比钟还晚)—— 腾讯翻页漂移/跨日残留会带未来
+    时刻, tick 又只有 HH:MM:SS 无日期, 混入后 main_net 全歪。超 now+60s(容差)
+    的直接丢弃。空列表原样返回; 解析失败的单笔保留(宁可多算不断链)。
+    """
+    import datetime as _dt
+    if not ticks:
+        return ticks
+
+    def _s(t: str) -> int:
+        h, m, s = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + int(s)
+
+    try:
+        limit = _s(_dt.datetime.now().strftime("%H:%M:%S")) + 60
+    except Exception:  # noqa: BLE001
+        return ticks
+    out = []
+    for t in ticks:
+        try:
+            if _s(t.get("t", "00:00:00")) <= limit:
+                out.append(t)
+        except Exception:  # noqa: BLE001
+            out.append(t)
+    return out
+
+
 def _dedup_ticks(ticks: list[dict]) -> list[dict]:
     """(时间t, 价格price, 成交额amt)三元组指纹去重(2026-08-21)。
 
@@ -146,8 +175,14 @@ def _dedup_ticks(ticks: list[dict]) -> list[dict]:
 
 # 2026-08-12 磁盘持久化: 逐笔快照落盘(/app/data/cache), 重启后同交易日
 # 直接从 last_page 增量续拉, 免全量翻页(冷启动 3.7s → ~0.5s)。
+# 2026-09-04 P0-1: key 按日分(all:YYYY-MM-DD), 只读今天。旧 "all" key 曾跨版本
+# 携带脏快照(含未来时刻 tick), 改为 orphan(TTL 86400 自然过期) + 首次 delete。
 _TICKS_DISK = None
 _TICKS_DISK_FLUSH_TTL = 60.0  # 写盘节流: 缓存 30s 一更新, 每 60s 刷一次即可
+
+
+def _ticks_disk_key(day: str | None = None) -> str:
+    return f"all:{day or _cache_day()}"
 
 
 def _ticks_persist(load_only: bool = False):
@@ -160,12 +195,18 @@ def _ticks_persist(load_only: bool = False):
         if _TICKS_DISK is None:
             from src.core.disk_cache import DiskCache, register
             _TICKS_DISK = DiskCache("dark_flow_ticks", ttl=86400.0, flush_interval=_TICKS_DISK_FLUSH_TTL)
-            snap = _TICKS_DISK.get("all")
+            snap = _TICKS_DISK.get(_ticks_disk_key())
             if isinstance(snap, dict) and snap:
                 _TICKS_CACHE.update(snap)
+            else:
+                # 脏 key 迁移: 删掉无日期旧 key, 避免未来某天被误读
+                try:
+                    _TICKS_DISK.delete("all")
+                except Exception:  # noqa: BLE001
+                    pass
             register(_TICKS_DISK)
         if not load_only:
-            _TICKS_DISK.set("all", dict(_TICKS_CACHE))
+            _TICKS_DISK.set(_ticks_disk_key(), dict(_TICKS_CACHE))
     except Exception:
         pass
 
@@ -174,7 +215,37 @@ def _ticks_persist(load_only: bool = False):
 _ticks_persist(load_only=True)
 
 
-def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
+# 2026-09-04 P0-2: 拉取观测(运维 sanity 用): {tcode: {pages(拉到页数), ticks}}。
+# wrapper 每次从缓存元组回填, 全量/增量/TTL命中路径统一有数。
+_LAST_FETCH: dict[str, dict] = {}
+
+# 2026-09-04 P1-4: 上次结论缓存(结论翻转注记用)。单例常驻, 随进程落盘。
+_VERDICT_DISK = None
+
+
+def _verdict_cache():
+    global _VERDICT_DISK
+    if _VERDICT_DISK is None:
+        from src.core.disk_cache import DiskCache, register
+        _VERDICT_DISK = DiskCache("dark_flow_verdict", ttl=86400.0)
+        register(_VERDICT_DISK)
+    return _VERDICT_DISK
+
+
+def _in_trading_hours() -> bool:
+    """是否在交易时段(工作日 09:25-15:05)。空拉取此时段才值得重试+告警。"""
+    import datetime as _dt
+    try:
+        now = _dt.datetime.now()
+        if now.weekday() >= 5:
+            return False
+        t = now.strftime("%H:%M:%S")
+        return "09:25:00" <= t <= "15:05:00"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
     """翻页拉取全天全量逐笔(增量续拉), 返回 [{direction, amount, volume, time}]。
 
     2026-08-11 打磨: 加 30s 缓存(盘中每轮监控复用) + 单页重试(腾讯偶发限流)。
@@ -250,28 +321,33 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
         return p, out
 
     def _drain_pages(start: int, max_pages: int, ticks: list[dict], batch: int = 10) -> tuple[list[dict], int, int]:
-        """分批并发拉页: 每批 batch 页, 连续2空页即停。避免一次性提交 200 个 future
-        (ThreadPool with 退出会等待未运行任务, 空页判定后仍慢)。"""
+        """分批并发拉页: 每批 batch 页, 尾部连续2空页即停。避免一次性提交 200 个 future
+        (ThreadPool with 退出会等待未运行任务, 空页判定后仍慢)。
+
+        2026-09-04 P0-2: 同批结果先收齐再按页码顺序处理。此前 as_completed 乱序
+        计数 empty_run, 空页先回来会直接 return, 丢掉同批还没回来的数据页。
+        现在只有"批尾连续空页"才停, 批中空洞不再误杀后续页。
+        """
         import concurrent.futures as _cf
         last_page = -1
         last_seq = -1
-        empty_run = 0
         p = start
         while p < max_pages:
             hi = min(p + batch, max_pages)
             with _cf.ThreadPoolExecutor(max_workers=5) as ex:
                 futs = {ex.submit(_fetch_page, i): i for i in range(p, hi)}
-                for fut in _cf.as_completed(futs):
-                    pg, page_ticks = fut.result()
-                    if page_ticks:
-                        ticks.extend(page_ticks)
-                        last_page = max(last_page, pg)
-                        last_seq = max(last_seq, max((t.get("_seq", -1) for t in page_ticks), default=-1))
-                        empty_run = 0
-                    else:
-                        empty_run += 1
-                    if empty_run >= 2:
-                        return ticks, last_page, last_seq
+                results = [fut.result() for fut in _cf.as_completed(futs)]
+            trailing_empty = 0
+            for pg, page_ticks in sorted(results, key=lambda r: r[0]):
+                if page_ticks:
+                    ticks.extend(page_ticks)
+                    last_page = max(last_page, pg)
+                    last_seq = max(last_seq, max((t.get("_seq", -1) for t in page_ticks), default=-1))
+                    trailing_empty = 0
+                else:
+                    trailing_empty += 1
+            if trailing_empty >= 2:
+                return ticks, last_page, last_seq
             p = hi
         return ticks, last_page, last_seq
 
@@ -291,7 +367,8 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
             new_first_seq = min(t.get("_seq", -1) for t in _new_ticks)
             if new_first_seq <= 0 or old_last_seq <= 0 or new_first_seq >= old_last_seq:
                 # 序号连续/推进(新 seq ≥ 旧末条 seq) → 合并去重(旧最后一页可能被新完整版覆盖)
-                merged = _dedup_ticks(old_ticks + _new_ticks)
+                # 2026-09-04 P0-1: 合并前双方先丢未来 tick(旧快照残留洗白主入口)。
+                merged = _dedup_ticks(_drop_future_ticks(old_ticks) + _drop_future_ticks(_new_ticks))
                 # 总量守恒校验: 合并后总成交额不得超过旧数据+新增量的合理上界。
                 # 若仍超(指纹也撞不出的极端重复), 放弃合并 → 全量重拉。
                 old_amt = sum(x.get("amt", 0) for x in old_ticks)
@@ -354,7 +431,7 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
         else:
             consecutive_empty += 1
             if consecutive_empty >= 2:
-                ticks = _dedup_ticks(ticks)
+                ticks = _dedup_ticks(_drop_future_ticks(ticks))
                 _cache_put(code, now, ticks, last_full, max((t.get("_seq", -1) for t in ticks), default=-1))
                 _ticks_persist()  # 2026-08-12: 快照落盘
                 return ticks
@@ -364,18 +441,40 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
         ticks, last_page, last_seq = _drain_pages(probe_pages, max_pages, ticks)
         # 2026-09-04: 全量路径同样指纹去重(并发翻页页内容漂移会拉重, 此前缺失
         # 导致主力买卖 10.54亿 vs 成交 6.05亿熔断)。注意 _dedup 前先留 seq 供排序。
-        ticks = _dedup_ticks(ticks)
+        # 2026-09-04 P0-1: 先丢未来 tick 再去重(未来 tick 指纹正常, 去重洗不掉)。
+        ticks = _dedup_ticks(_drop_future_ticks(ticks))
         for t in ticks:
             t.pop("_seq", None)
         _cache_put(code, now, ticks, last_page, last_seq)
         _ticks_persist()  # 2026-08-12: 快照落盘
         return ticks
 
-    ticks = _dedup_ticks(ticks)
+    ticks = _dedup_ticks(_drop_future_ticks(ticks))
     for t in ticks:
         t.pop("_seq", None)
     _cache_put(code, now, ticks, last_full, max((t.get("_seq", -1) for t in ticks), default=-1))
     _ticks_persist()  # 2026-08-12: 快照落盘
+    return ticks
+
+
+def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
+    """对外入口(签名不变): 拉取 + 回填观测 + 交易时段空拉取重试一次。
+
+    2026-09-04 P0-2 sanity: 盘中拉空(0 笔)极可能是腾讯抖动而非真没成交,
+    重试一次仍空才认(下游走 insufficient)。页数/笔数记 _LAST_FETCH 供 diag。
+    """
+    ticks = _fetch_all_ticks_inner(code, max_pages)
+    if not ticks and _in_trading_hours():
+        logger.warning(f"[dark_flow] {code} 盘中拉空, 重试一次")
+        ticks = _fetch_all_ticks_inner(code, max_pages)
+    try:
+        cached = _TICKS_CACHE.get(code)
+        _LAST_FETCH[code] = {
+            "pages": (cached[2] + 1) if cached and len(cached) > 2 and cached[2] >= 0 else 0,
+            "ticks": len(ticks),
+        }
+    except Exception:  # noqa: BLE001
+        pass
     return ticks
 
 
@@ -984,6 +1083,8 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
         # 2026-09-04: 末笔时刻(运维可见性: tick 冻结时一眼看出, 配合 diag 暴露)。
         # 时刻为 "HH:MM:SS" 字符串, 字典序 max 即最晚。
         "last_tick_t": max((t.get("t", "") for t in ticks), default="") or None,
+        # 2026-09-04 P0-2: 拉到页数(页码从0起, +1 为页数; 0=没拉到)。
+        "tick_pages": _LAST_FETCH.get(code, {}).get("pages"),
         # 2026-08-12: 盘中数据量门槛 —— 竞价/开盘初期(非竞价成交<30笔)不算主力意图,
         # 直接给"数据不足"标记, 避免把竞价单/零星成交误判成吸筹派发
         # 2026-08-23 P4: suspect = 主力成交额超总成交额 130%(物理不可能, 疑重复计数),
@@ -1042,6 +1143,24 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
             auction_amt, auction_vol,
             result.get("main_intensity"), result.get("main_buy_ratio"),
         )
+
+    # 2026-09-04 P1-4: 结论翻转注记(同日上次结论 vs 本次)。变号或差超 5 千万
+    # 则注记, 否则用户只看到数字变了会先怀疑系统坏了(如 -1.25亿→+3490万事故)。
+    result["verdict_note"] = None
+    try:
+        _vd = _verdict_cache()
+        _prev = _vd.get(code) or {}
+        _cur = main_net or 0
+        if _prev.get("day") == _cache_day() and isinstance(_prev.get("main_net"), (int, float)):
+            _p = _prev["main_net"]
+            if ((_p < 0) != (_cur < 0)) or abs(_cur - _p) > 5e7:
+                result["verdict_note"] = (
+                    f"结论更新: 上次净{('流出' if _p < 0 else '流入')}{abs(_p) / 1e8:.2f}亿 → "
+                    f"本次净{('流出' if _cur < 0 else '流入')}{abs(_cur) / 1e8:.2f}亿(全量重拉/去重后)"
+                )
+        _vd.set(code, {"day": _cache_day(), "main_net": main_net})
+    except Exception:  # noqa: BLE001
+        pass
 
     # ---- 主力意图增强算法(2026-08-14): 超大单/大单背离 + 量价背离 + 时段节奏 ----
     # 三个独立纯函数(可单测), 注入 result 新字段, 不破坏现有字段。

@@ -7,6 +7,40 @@
 
 ## 2026-09-04
 
+### P0 拉取层根治:未来tick过滤+按日快照+并发丢数修复
+
+- **未来 tick 根治**(P0-1): `_drop_future_ticks`(超 now+60s 丢弃),
+  全量三路径+增量合并统一前置(去重洗不掉未来 tick);
+  磁盘快照 key 按日分(`all:YYYY-MM-DD`, 只读今天, 旧 `all` 脏 key
+  首次 delete+TTL 自然过期)。
+- **并发丢数修复**(P0-2): `_drain_pages` 同批收齐按页码排序后处理,
+  只有批尾连续空页才停(此前 as_completed 乱序计数误杀同批数据页);
+  新增 `_LAST_FETCH{pages,ticks}` 观测 + 交易时段拉空重试一次;
+  `compute_dark_flow` 出 `tick_pages`, diag 透出。
+- **测试**: ops 7 例全绿(含冻结时钟的未来 tick 用例);
+  dark_flow 回归 25 passed; ruff 全绿。
+
+### P1 结论可信度:翻转注记+停滞检测+P2-7 diff重拉
+
+- **翻转注记**(P1-4): `compute_dark_flow` 出 `verdict_note`,
+  同日上次结论变号或差超 5 千万则注记("上次净流出X→本次净流入Y"),
+  main_intent 透出, 前端有值才展示。
+- **停滞检测**(P1-5): `_tick_staleness` 纯函数(工作日 09:25-15:05 内
+  末笔落后超 10 分钟 → stale), 只进 diag, data_status/口诀链路不动,
+  盘后/跨日/无数据不误报。
+- **diff 重拉**(P2-7): `POST /api/dark-flow/refetch`(仅管理员),
+  清缓存→重算一次返回 before/after/dedup_removed/verdict_changed。
+- **测试**: ops 11 例全绿; ruff 全绿。
+
+### P2 收尾:港股volume实测+P0-3降级结论
+
+- **港股实测**(P2-6): 00700 东财 K 线量 16557646 vs 腾讯 Quote
+  15980655(股), 同量级 → `116.` 不 ×100 闸门正确, 用例缀实测证据。
+  K 线归一矩阵齐了(腾讯 CN×100/东财 CN×100/东财 HK×1)。
+- **P0-3 降级结论**: 查了 TQ L2(成品净额, 非逐笔)+sina(仅 Quote),
+  无 tick 级备用源可接。腾讯全挂时已有 `insufficient` 标记 +
+  L2 明盘照常 + diag.tick_pages==0 即"源挂"信号, 不硬编 fallback。
+
 ### ops dark-flow 运维杠杆:diag 可见性+清缓存接口(main_net 钉死治本)
 
 - **背景**: v0.4.83 上线后 main_net=-125035724 一字不动;
