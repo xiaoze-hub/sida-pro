@@ -161,6 +161,40 @@ class TestClassifySplit:
         assert g2["reason"] == "散户追涨"
 
 
+class TestFlatMislabel:
+    """2026-09-04 v6 平盘误标修正(P0d实锤: 涨停股98%平盘且几乎全标S)。"""
+
+    def _t(self, d, chg=0.0, amt=10e4):
+        return {"d": d, "amt": amt, "price": 10.5, "t": "10:00:00", "chg": chg}
+
+    def test_skewed_flat_s_neutralized(self):
+        ticks = [self._t("S")] * 9 + [self._t("B")]
+        out = df_module._neutralize_flat_mislabel(ticks)
+        assert sum(1 for t in out if t["d"] == "S") == 0
+        assert sum(1 for t in out if t["d"] == "M") == 9
+        assert sum(1 for t in out if t["d"] == "B") == 1
+
+    def test_balanced_flat_kept(self):
+        ticks = [self._t("S")] * 4 + [self._t("B")] * 4
+        out = df_module._neutralize_flat_mislabel(ticks)
+        assert sum(1 for t in out if t["d"] == "S") == 4
+
+    def test_no_chg_field_unchanged(self):
+        ticks = [{"d": "S", "amt": 10e4, "price": 10.5, "t": "10:00:00"}] * 5
+        assert df_module._neutralize_flat_mislabel(ticks) == ticks
+
+    def test_m_skipped_not_breaking_cluster(self):
+        """M跳过不断簇: B-M-B-B(间隔<10s)应成同一簇(n=3); 若M切断则两簇n<3=0组。"""
+        ticks = [
+            {"d": "B", "amt": 60e4, "price": 10.5, "t": "10:00:00", "chg": 0.01},
+            {"d": "M", "amt": 60e4, "price": 10.5, "t": "10:00:05", "chg": 0.0},
+            {"d": "B", "amt": 60e4, "price": 10.5, "t": "10:00:08", "chg": 0.01},
+            {"d": "B", "amt": 60e4, "price": 10.5, "t": "10:00:12", "chg": 0.01},
+        ]
+        r = df_module._detect_split_orders(ticks, prev_close=10.4)
+        assert len(r["groups"]) == 1 and r["groups"][0]["n"] == 3
+
+
 class TestJudgeSignal:
     def test_inflow_tail(self):
         assert "吸筹" in _judge_signal(8000e4, 8000e4, 3000e4, 5000e4, -5000e4,
