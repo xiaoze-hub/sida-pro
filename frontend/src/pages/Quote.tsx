@@ -570,14 +570,14 @@ export default function QuotePage() {
             )}
 
             {/* 主力意图(短描述) */}
-            {summary?.main_intent && (
+            {typeof summary?.main_intent === 'string' && summary.main_intent ? (
               <div className="border-b border-border/40 pb-2">
                 <div className="text-[11px] text-muted-foreground">主力意图</div>
                 <div className="mt-0.5 text-foreground whitespace-pre-wrap leading-snug">
                   {summary.main_intent.split('\n').slice(0, 3).join(' · ')}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* 暗盘拆单簇(数字流) */}
             {summary?.dark_clusters?.available && (
@@ -695,17 +695,26 @@ export default function QuotePage() {
                 </div>
               )}
             </div>
-            {summary?.chips && (
+            {/* 2026-09-04 去空占位: 两项全空就不渲染整块(此前挂两个"--") */}
+            {summary?.chips && (summary.chips.cost_10 != null || summary.chips.peak_price != null) ? (
               <div className="border-b border-border/40 pb-2">
                 <div className="text-[11px] text-muted-foreground">筹码</div>
                 <div className="mt-0.5 grid grid-cols-2 gap-x-2 font-mono">
-                  <span className="text-muted-foreground">主力</span>
-                  <span className="text-right">{summary.chips.cost_10?.toFixed(2) ?? '--'}</span>
-                  <span className="text-muted-foreground">峰价</span>
-                  <span className="text-right">{summary.chips.peak_price?.toFixed(2) ?? '--'}</span>
+                  {summary.chips.cost_10 != null && (
+                    <>
+                      <span className="text-muted-foreground">主力</span>
+                      <span className="text-right">{summary.chips.cost_10.toFixed(2)}</span>
+                    </>
+                  )}
+                  {summary.chips.peak_price != null && (
+                    <>
+                      <span className="text-muted-foreground">峰价</span>
+                      <span className="text-right">{summary.chips.peak_price.toFixed(2)}</span>
+                    </>
+                  )}
                 </div>
               </div>
-            )}
+            ) : null}
             {sourceHealth && typeof sourceHealth === "object" && Object.values(sourceHealth).some((s: any) => s === 'down') && (
               <div className="text-[10px] text-amber-500">
                 ⚠ 部分数据源未连接（兜底数据可能缺失）

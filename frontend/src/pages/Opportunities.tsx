@@ -1972,7 +1972,8 @@ export default function OpportunitiesPage() {
                         {displayActionLabel(item)}
                       </span>
                     </div>
-                    <div className={`text-[13px] font-bold font-mono mt-1.5 ${Number(item.rank_score || item.score || 0) >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>
+                    {/* 2026-09-04 去抢戏: 评分降为次级(此前13px加粗压过交易价) */}
+                    <div className={`text-[11px] font-medium font-mono mt-1 ${Number(item.rank_score || item.score || 0) >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>
                       评分 {Math.round(item.rank_score || item.score || 0)}
                     </div>
                     {item.ai_score != null && (
@@ -1986,10 +1987,13 @@ export default function OpportunitiesPage() {
                   </div>
                 </div>
                 <div className="mt-1.5 text-[12px] leading-5 text-foreground line-clamp-2">{item.signal || item.reason || '--'}</div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
-                  <span className="font-medium text-foreground/90">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
-                  <span>止损 {formatPlanPrice(stopLoss)}</span>
-                  <span>目标 {formatPlanPrice(targetPrice)}</span>
+                {/* 2026-09-04 交易三要素独立一行提权(入场/止损/目标是决策核心, 此前埋在11px杂烩里) */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[12px] font-semibold">
+                  <span className="text-foreground">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
+                  <span className="text-stock-down">止损 {formatPlanPrice(stopLoss)}</span>
+                  <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
                   <span>失效 {item.invalidation || '--'}</span>
                   <span>策略 {strategyHead}{strategyTailCount > 0 ? ` +${strategyTailCount}` : ''}</span>
                   {/* P1 多源整合: 来源徽章(命中来源全部展示, 共振可视) */}

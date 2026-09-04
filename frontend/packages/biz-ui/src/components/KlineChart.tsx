@@ -99,6 +99,15 @@ export interface ActivityPoint {
 /** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 / 活跃度(09-03 三色柱载体) */
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
 
+/** 副图选项(2026-09-04: 抽模块常量, 受控隐藏时不用嵌套括号包 map) */
+const SUBCHART_OPTS = [
+  ['vol', '成交量'],
+  ['macd', 'MACD'],
+  ['active_ratio', '买卖比'],
+  ['phase', '情绪'],
+  ['activity', '活跃度'],
+] as const
+
 function sma(values: number[], period: number): Array<number | null> {
   if (period <= 1) return values.map((v) => v)
   const out: Array<number | null> = new Array(values.length).fill(null)
@@ -195,6 +204,8 @@ export default function KlineChart(props: {
   // 持仓成本线 (Phase 0: 与支撑压力线独立管理, 同一切换开关重建逻辑)
   const costLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  // 2026-09-04 P0-3: L3 资金柱独立序列('fund' 轴, 单位元; 成交量是股, 不再共轴)
+  const fundSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
@@ -259,9 +270,26 @@ export default function KlineChart(props: {
     volumeSeries.priceScale().applyOptions({
       scaleMargins: { top: 0.7, bottom: 0 },
     })
+    // 2026-09-04 P0-3 双单位共轴修复: 资金柱(元) 独立 'fund' 左轴,
+    // 此前与成交量(股) 共用 volume 轴 → 轴被撑到 5 亿、量柱压扁(506.43M)。
+    const fundSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'fund',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    })
+    fundSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.7, bottom: 0 },
+      visible: false,
+    } as never)
+    try {
+      // overlay 轴放左侧(不支持的版本静默忽略, 则与 volume 并列右侧, 不抛)
+      fundSeries.priceScale().applyOptions({ position: 'left' } as never)
+    } catch { /* noop */ }
     chartRef.current = chart
     seriesRef.current = series
     volumeSeriesRef.current = volumeSeries
+    fundSeriesRef.current = fundSeries
 
     // 容器尺寸自适应
     const observer = new ResizeObserver((entries) => {
@@ -527,24 +555,43 @@ export default function KlineChart(props: {
       } else if (subchart === 'activity') {
         // 有档位无序列: 显式清空, 不画阈值线 (不编造)
         volSeries.setData([])
-      } else if (showCapital && props.fundFlow && props.fundFlow.length > 0) {
-        const histData = props.fundFlow.map((bar) => {
-          const open = bar.open_net ?? 0
-          const dark = bar.dark_net ?? 0
-          const net = open + dark
-          // 颜色优先级: 主净(明+暗)正红(主力进攻)/负绿(主力撤退); 仅看明盘(无暗盘)用次级色。
-          // 色值统一取 --stock-up/--stock-down 令牌: 暗盘=原色(突出主力), 明盘=55% 透明度次级色
-          let color = readChartTheme().nodata // 无数据: 灰
-          if (dark !== null && dark !== undefined && dark !== 0) {
-            color = dark > 0 ? sc.up : sc.down
-          } else if (open !== null && open !== undefined && open !== 0) {
-            color = open > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
-          }
-          return { time: toChartTime(bar.date, interval), value: net, color }
-        })
-        volSeries.setData(histData)
       } else {
-        volSeries.setData([])
+        // 2026-09-04 P0-3: 默认档画真正的成交量 bars(股, volume 轴)。
+        // 此前缺失: subchart==='vol' + L3 关 = 空白 pane; L3 开 = 资金柱冒充成交量。
+        const kl = rawKlinesRef.current
+        volSeries.setData(
+          kl.map((k, i) => ({
+            time: k.time,
+            value: k.volume || 0,
+            color: (i === 0 ? true : k.close >= kl[i - 1].close) ? sc.up : sc.down,
+          })),
+        )
+      }
+      // 2026-09-04 P0-3: L3 资金柱走独立 fund 轴(单位元), 与成交量(股)同显但轴独立。
+      // 仅成交量档叠加(活跃度/MACD 档保持独占, 与之前互斥语义一致)。
+      // 关 L3 / 无数据 / 非成交量档 → 清空 + 藏轴, 不留残柱。
+      const fs = fundSeriesRef.current
+      if (fs) {
+        if (showCapital && subchart === 'vol' && props.fundFlow && props.fundFlow.length > 0) {
+          fs.setData(
+            props.fundFlow.map((bar) => {
+              const open = bar.open_net ?? 0
+              const dark = bar.dark_net ?? 0
+              const net = open + dark
+              let color = readChartTheme().nodata
+              if (dark !== null && dark !== undefined && dark !== 0) {
+                color = dark > 0 ? sc.up : sc.down
+              } else if (open !== null && open !== undefined && open !== 0) {
+                color = open > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
+              }
+              return { time: toChartTime(bar.date, interval), value: net, color }
+            }),
+          )
+          fs.priceScale().applyOptions({ visible: true } as never)
+        } else {
+          fs.setData([])
+          fs.priceScale().applyOptions({ visible: false } as never)
+        }
       }
     }
   }, [props.events, props.supportPressure, props.costLines, props.fundFlow, props.activitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
@@ -653,15 +700,10 @@ export default function KlineChart(props: {
                 : '无数据'}
         </span>
         {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
-        {(
-          [
-            ['vol', '成交量'],
-            ['macd', 'MACD'],
-            ['active_ratio', '买卖比'],
-            ['phase', '情绪'],
-            ['activity', '活跃度'],
-          ] as const
-        ).map(([k, label]) => {
+        {/* 2026-09-04 去重: 父组件受控(props.subchart)时隐藏本行, 以父为准
+            (此前两套副图控件互不同步, Quote 还没传 onSubchartChange)。 */}
+        {props.subchart === undefined &&
+          SUBCHART_OPTS.map(([k, label]) => {
           const active = subchart === k
           const disabled = (k === 'active_ratio' || k === 'phase')
           return (
