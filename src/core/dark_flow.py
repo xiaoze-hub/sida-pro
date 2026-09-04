@@ -335,7 +335,9 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
             except (ValueError, IndexError):
                 continue
             if amt > 0:
-                out.append({"d": direction, "amt": amt, "vol": vol, "price": price, "t": t, "_seq": seq})
+                out.append({"d": direction, "amt": amt, "vol": vol, "price": price, "t": t, "_seq": seq,
+                            # v6 平盘误标修正用: chg==0=相对前笔持平(涨停封板时腾讯几乎全标S)
+                            "chg": float(parts[3]) if len(parts) > 3 else 1.0})
         return p, out
 
     def _drain_pages(start: int, max_pages: int, ticks: list[dict], batch: int = 10) -> tuple[list[dict], int, int]:
@@ -501,6 +503,25 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
 _MAIN_CLUSTER_AMT = 5_000_000.0
 
 
+# v6 平盘误标修正阈值: 平盘笔中S占比超此线 → 方向不可信(涨停封板), 平盘S转M。
+_FLAT_S_SKEW = 0.80
+
+
+def _neutralize_flat_mislabel(ticks: list[dict]) -> list[dict]:
+    """平盘误标修正(纯函数): chg==0笔中S占比>80% → 平盘S全转M。
+
+    无chg字段的老tick(.get缺省非零)→原样返回，零 regression。
+    M笔聚类时跳过不断簇(见循环内v6分支)，故转M=不参与方向统计。
+    """
+    flats = [t for t in ticks if t.get("chg", 1.0) == 0]
+    if len(flats) < 3:
+        return ticks
+    s_ratio = sum(1 for t in flats if t.get("d") == "S") / len(flats)
+    if s_ratio <= _FLAT_S_SKEW:
+        return ticks
+    return [{**t, "d": "M"} if (t.get("chg", 1.0) == 0 and t.get("d") == "S") else t for t in ticks]
+
+
 def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int = 90,
                          min_consec: int = 3, lo: float = 5e4, hi: float | None = None,
                          prev_close: float | None = None) -> dict:
@@ -524,6 +545,10 @@ def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int =
 
     Returns: {buy_amt(暗盘流入), sell_amt(暗盘流出), net, groups}
     """
+    # v6 平盘误标修正(2026-09-04 P0d实锤: 涨停股98%成交价持平, 腾讯chg=0几乎全标S,
+    # 龙版2147:3/亚盛3040:30, 卖出端爆仓致方向反; 非涨停股平盘B/S均衡则保留):
+    # 平盘笔中S占比>80% → 平盘S全转M(方向不可信, 不参与聚类); 否则原样。
+    ticks = _neutralize_flat_mislabel(ticks)
     def _t2s(t: str) -> int:
         h, m, s = t.split(":")
         return int(h) * 3600 + int(m) * 60 + int(s)
@@ -538,6 +563,9 @@ def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int =
     for tk in sorted(ticks, key=lambda x: x["t"]):
         d = tk["d"]
         amt = tk["amt"]
+        # v6: M(中性/平盘修正)跳过不断簇——涨停板满屏M时不断开B/S簇的时间连续性。
+        if d == "M":
+            continue
         if d not in ("B", "S") or amt < lo or (hi is not None and amt > hi):
             _flush()
             cur = None
