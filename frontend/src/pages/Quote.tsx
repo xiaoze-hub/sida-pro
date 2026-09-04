@@ -570,14 +570,14 @@ export default function QuotePage() {
             )}
 
             {/* 主力意图(短描述) */}
-            {summary?.main_intent && (
+            {typeof summary?.main_intent === 'string' && summary.main_intent ? (
               <div className="border-b border-border/40 pb-2">
                 <div className="text-[11px] text-muted-foreground">主力意图</div>
                 <div className="mt-0.5 text-foreground whitespace-pre-wrap leading-snug">
                   {summary.main_intent.split('\n').slice(0, 3).join(' · ')}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* 暗盘拆单簇(数字流) */}
             {summary?.dark_clusters?.available && (

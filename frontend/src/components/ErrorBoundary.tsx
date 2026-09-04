@@ -61,13 +61,32 @@ export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundar
             <p className="text-sm text-muted-foreground mt-1.5">
               渲染时发生了一个意外错误, 已阻止整页崩溃。
             </p>
-            {import.meta.env.DEV && (
-              <pre className="mt-3 text-left text-[11px] bg-muted p-3 rounded-lg overflow-auto max-h-40">
-                {error.message}
-                {'\n'}
-                {error.stack?.split('\n').slice(1, 6).join('\n')}
+            {/* 2026-09-04: 生产也显示错误摘要 + 一键复制(此前只在 DEV 显示,
+                偶发白屏抓不到堆栈)。敏感信息不进正文, 只复制到剪贴板发开发者。 */}
+            <p className="mt-2 text-[12px] font-mono text-amber-700 dark:text-amber-400 break-all">
+              {error.message || String(error)}
+            </p>
+            <details className="mt-2 text-left">
+              <summary className="text-[12px] text-muted-foreground cursor-pointer hover:text-foreground">
+                错误详情(发开发者)
+              </summary>
+              <pre className="mt-2 text-left text-[11px] bg-muted p-3 rounded-lg overflow-auto max-h-40">
+                {error.stack || '无堆栈'}
               </pre>
-            )}
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    void navigator.clipboard.writeText(
+                      `${error.message}\n${error.stack || ''}\nurl=${window.location.href}\ntime=${new Date().toISOString()}`,
+                    )
+                  } catch { /* 剪贴板不可用不抛 */ }
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 border border-border text-[12px] hover:bg-accent transition-colors"
+              >
+                复制错误信息
+              </button>
+            </details>
           </div>
           <div className="flex items-center justify-center gap-2">
             <button
