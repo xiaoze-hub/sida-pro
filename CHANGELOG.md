@@ -7,6 +7,22 @@
 
 ## 2026-09-04
 
+### fix 三问题:逐笔去重补齐+volume归一+口诀文案(决策先锋算法对账)
+
+- **① 全量路径指纹去重**: `_fetch_all_ticks` 全量三处 return 此前无去重
+  (仅增量合并有), 并发翻页内容漂移致重复计数 → 主力买卖 10.54亿 vs
+  成交 6.05亿熔断。抽取 `_dedup_ticks()` (t,price,amt 三元组) 三处统一。
+- **② volume 归一为股**: 腾讯 fqkline/东财为手, sina/TQ 原生股, Engine
+  透传致跨源差 100 倍。`fetch_tencent_kline_raw` ×100, `fetch_eastmoney_kline`
+  仅 A股 secid(0./1.)×100(港股 116. 不动, 未实测)。
+- **③ 口诀 suspect 文案**: 熔断时误套"不足30笔"模板(实际 5 万笔)。
+  suspect →"数据异常…口诀暂停", insufficient 保留原模板;
+  `dark_order` 加 `trade_date` 标注(簇只有日内时刻)。
+- **测试**: `test_dark_flow_dedup` 5 例 + kline volume 2 例新增/1 例同步;
+  dark_flow 系 25 passed; marketdata 196 passed; ruff 全绿。
+- **未修**(证据不足): clusters 混入昨日 14:51 簇单次观测; 翻页实测为
+  朝前(p=0 开盘)无跨日泄漏口, 先观察, 复现再修。
+
 ### fix TQ 陈旧快照门禁 + summary 强刷(09-03 漏数事故治本)
 
 - **根因**: TdxW 未更新时 TQ 网关返 09-02 快照却报成功, Engine 视为成功

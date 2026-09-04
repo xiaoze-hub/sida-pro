@@ -106,6 +106,24 @@ def _cache_stale(code: str, cached: tuple) -> bool:
         return True
     return cached[4] != _cache_day()
 
+
+def _dedup_ticks(ticks: list[dict]) -> list[dict]:
+    """(时间t, 价格price, 成交额amt)三元组指纹去重(2026-08-21)。
+
+    背景: 盘后腾讯重排页码/seq, 盘中并发翻页页内容漂移, 同一笔成交会被拉
+    到两次(不同 seq/不同页)。同一笔无论 seq 怎么变三元组不变; 同指纹保留
+    后出现的。2026-09-04 事故: 全量路径缺去重, 主力买卖 10.54亿 vs 成交
+    6.05亿(174% 熔断)—— 全量/增量统一走本函数。
+    """
+    dedup: dict[tuple, dict] = {}
+    for t in ticks:
+        fp = (t.get("t", ""), t.get("price"), round(t.get("amt", 0), 2))
+        dedup[fp] = t
+    return sorted(
+        dedup.values(),
+        key=lambda t: (t.get("t", ""), t.get("_seq", 0)),
+    )
+
 # 2026-08-12 磁盘持久化: 逐笔快照落盘(/app/data/cache), 重启后同交易日
 # 直接从 last_page 增量续拉, 免全量翻页(冷启动 3.7s → ~0.5s)。
 _TICKS_DISK = None
@@ -253,20 +271,7 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
             new_first_seq = min(t.get("_seq", -1) for t in _new_ticks)
             if new_first_seq <= 0 or old_last_seq <= 0 or new_first_seq >= old_last_seq:
                 # 序号连续/推进(新 seq ≥ 旧末条 seq) → 合并去重(旧最后一页可能被新完整版覆盖)
-                merged = old_ticks + _new_ticks
-                # 修复 2026-08-21(国内生产): 盘后腾讯会重排页码/seq, 增量续拉把同一批
-                # 成交以**不同 seq** 再拉一遍 → 仅按 seq 去重失效, 净额翻倍(神剑实测
-                # -15733万 vs 真实 +11853万, 总额超实际成交额 47%)。改用
-                # (时间t, 价格price, 成交额amt) 三元组指纹去重 —— 同一笔成交无论 seq
-                # 怎么变, 三元组不变; 再加总量守恒校验兜底。
-                dedup: dict[tuple, dict] = {}
-                for t in merged:
-                    fp = (t.get("t", ""), t.get("price"), round(t.get("amt", 0), 2))
-                    dedup[fp] = t          # 同指纹保留后出现的(带新 seq)
-                merged = sorted(
-                    dedup.values(),
-                    key=lambda t: (t.get("t", ""), t.get("_seq", 0)),
-                )
+                merged = _dedup_ticks(old_ticks + _new_ticks)
                 # 总量守恒校验: 合并后总成交额不得超过旧数据+新增量的合理上界。
                 # 若仍超(指纹也撞不出的极端重复), 放弃合并 → 全量重拉。
                 old_amt = sum(x.get("amt", 0) for x in old_ticks)
@@ -329,6 +334,7 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
         else:
             consecutive_empty += 1
             if consecutive_empty >= 2:
+                ticks = _dedup_ticks(ticks)
                 _cache_put(code, now, ticks, last_full, max((t.get("_seq", -1) for t in ticks), default=-1))
                 _ticks_persist()  # 2026-08-12: 快照落盘
                 return ticks
@@ -336,13 +342,16 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
     # 阶段2: 并发拉剩余页(每页70条, 全天通常 10-200 页)
     if last_full >= 0 and consecutive_empty < 2:
         ticks, last_page, last_seq = _drain_pages(probe_pages, max_pages, ticks)
-        ticks.sort(key=lambda t: t.get("_seq", 0))
+        # 2026-09-04: 全量路径同样指纹去重(并发翻页页内容漂移会拉重, 此前缺失
+        # 导致主力买卖 10.54亿 vs 成交 6.05亿熔断)。注意 _dedup 前先留 seq 供排序。
+        ticks = _dedup_ticks(ticks)
         for t in ticks:
             t.pop("_seq", None)
         _cache_put(code, now, ticks, last_page, last_seq)
         _ticks_persist()  # 2026-08-12: 快照落盘
         return ticks
 
+    ticks = _dedup_ticks(ticks)
     for t in ticks:
         t.pop("_seq", None)
     _cache_put(code, now, ticks, last_full, max((t.get("_seq", -1) for t in ticks), default=-1))

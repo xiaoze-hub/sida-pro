@@ -105,12 +105,22 @@ def build_darkflow_response(symbol_code: str) -> dict:
         except Exception as e:
             logger.debug(f"口诀判定失败 {symbol_code}: {e}")
     elif quote:
-        mnemonic = {
-            "mnemonic": "数据不足",
-            "direction": "中性",
-            "divergence": False,
-            "detail": "逐笔成交不足30笔, 内盘外盘口诀暂不判定(数据不足)",
-        }
+        # 2026-09-04: suspect(熔断)与 insufficient(真不足)分开文案。
+        # 此前 suspect 也套用"不足30笔"模板, 实际逐笔 5 万+却显示数据不足, 误导。
+        if data_status == "suspect":
+            mnemonic = {
+                "mnemonic": "数据异常",
+                "direction": "中性",
+                "divergence": False,
+                "detail": "主力成交额超总成交额(疑逐笔重复计数), 本轮不判意图, 口诀暂停",
+            }
+        else:
+            mnemonic = {
+                "mnemonic": "数据不足",
+                "direction": "中性",
+                "divergence": False,
+                "detail": "逐笔成交不足30笔, 内盘外盘口诀暂不判定(数据不足)",
+            }
 
     # L2 主力净流入(TQ get_more_info 盘中实时, 明盘口径: 同花顺"主力净额", 非暗盘)
     l2 = None
@@ -124,6 +134,14 @@ def build_darkflow_response(symbol_code: str) -> dict:
     # split_order = {buy_amt(疑似主力买), sell_amt(疑似主力卖), net(暗盘净额),
     #                herd_buy/herd_sell(散户顺势/解套), groups(拆单组明细top10)}
     dark_order = dark.get("split_order")
+    # 2026-09-04: 簇只有日内时刻(t0/t1), 跨日时(如昨日尾盘簇)无日期会误导。
+    # 逐笔按自然日重置, 簇日期恒为当日, 此处显式标注。
+    if isinstance(dark_order, dict):
+        try:
+            from src.core.dark_flow import _cache_day
+            dark_order = {**dark_order, "trade_date": _cache_day()}
+        except Exception:  # noqa: BLE001
+            pass
 
     return {
         "main_intent": main_intent,
