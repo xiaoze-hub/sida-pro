@@ -7,6 +7,37 @@
 
 ## 2026-09-04
 
+### 整体优化③#6构建分层+#7离线单测
+
+- **构建分层**(#6): 第三方与本地包分开装, 改 marketdata 不再触发
+  全量 pip 重装(httpx 由主 requirements 提供, --no-deps 秒装)。
+- **离线单测**(#7): 跨日残留→全量重拉转 urlopen mock(210 笔, 时刻/价格
+  双轨防指纹碰撞+午夜边角), 不再依赖腾讯可达。
+- **测试**: dark_flow.py 18 passed + ops/archive/guard/dedup 26 passed; ruff 全绿。
+
+### 整体优化②异常告警+#2灰度切源
+
+- **异常告警**(#5): `darkflow_alerts`(suspect/stale 推全局默认渠道,
+  同股同类每日一次, 无渠道/失败静默); 主链路钩子失败不影响计算。
+  WeCom corp 权限(850003/853006)仍需用户在管理页授权+购买, 修好前走其他渠道。
+- **灰度切源**(#2): `_DARK_SOURCE_CTX` per-request 覆盖,
+  `GET /api/dark-flow?source=thsdk` 单股验证, 灰度不读写共享缓存
+  (零残留可回滚); 非法 source 400; diag 透出本次实际 `source`;
+  默认源不动, 等验证数据再定。
+- **测试**: ops 18 例(灰度隔离/400/ctx)+archive 3 例; ruff 全绿。
+
+### 整体优化①前端展示+#3存档+#4序列
+
+- **前端展示**(①): `DarkFlowCards` 接 `verdict_note`(翻转蓝条, 有值才显)、
+  `diag.stale`(停滞徽标+落后分钟 tooltip)、数据行(逐笔 N 笔·末笔·N 页);
+  tsc 全绿。
+- **逐笔日存档**(#3): 迁移 m130 `tick_archive`(code,trade_date 唯一,
+  全天逐笔 JSON+结论); 收盘后(≥15:05)自动快照一次(只存被查过的股),
+  `POST /api/dark-flow/archive` 可手动补; 失败永不影响主链路。
+- **跨日序列**(#4): `GET /api/dark-flow/series`(新→旧, "连续流入 N 天"底座),
+  与存档同表。
+- **测试**: tick_archive 3 例(sqlite 内存全链路)+ops 11 例, 14 passed; ruff 全绿。
+
 ### P0 拉取层根治:未来tick过滤+按日快照+并发丢数修复
 
 - **未来 tick 根治**(P0-1): `_drop_future_ticks`(超 now+60s 丢弃),

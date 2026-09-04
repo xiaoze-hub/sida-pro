@@ -21,6 +21,8 @@ export interface DarkFlowMainIntent {
   main_buy_ratio: number | null
   signal?: string | null
   data_status?: 'ok' | 'insufficient' | string | null
+  /** 2026-09-04 P1-4: 结论翻转注记, 无翻转则 null(有值才展示) */
+  verdict_note?: string | null
 }
 
 export interface DarkFlowInnerOuter {
@@ -67,6 +69,15 @@ export interface DarkFlowResp {
   inner_outer: DarkFlowInnerOuter | null
   mnemonic: DarkFlowMnemonic | null
   dark_order: DarkOrder | null
+  /** 2026-09-04: 运维可见性(逐笔总数/末笔时刻/页数/停滞标记) */
+  diag?: {
+    tick_count?: number | null
+    last_tick_t?: string | null
+    trade_date?: string | null
+    tick_pages?: number | null
+    stale?: boolean | null
+    tick_lag_sec?: number | null
+  } | null
 }
 
 /** 元 -> 万, 带符号, 无数据返回 '--' */
@@ -153,6 +164,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
   const io = data?.inner_outer ?? null
   const mn = data?.mnemonic ?? null
   const darkOrder = data?.dark_order ?? null
+  const diag = data?.diag ?? null
   const insufficient = mi?.data_status === 'insufficient'
 
   const askAi = () => {
@@ -178,6 +190,15 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
                 {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
               </span>
             )}
+            {/* 2026-09-04 P1-5: 停滞徽标, stale 才出现 */}
+            {diag?.stale ? (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                title={diag?.tick_lag_sec != null ? `末笔落后 ${Math.round(diag.tick_lag_sec / 60)} 分钟` : '逐笔数据停滞'}
+              >
+                ⚠️ 数据停滞
+              </span>
+            ) : null}
           </div>
           <button
             type="button"
@@ -201,6 +222,12 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             {mi.signal ? (
               <div className="text-[12px] text-muted-foreground mb-2">{mi.signal}</div>
             ) : null}
+            {/* 2026-09-04 P1-4: 结论翻转注记, 有值才展示 */}
+            {mi.verdict_note ? (
+              <div className="text-[12px] text-sky-700 dark:text-sky-400 bg-sky-500/10 border border-sky-500/20 rounded-lg px-3 py-2 mb-2">
+                📢 {mi.verdict_note}
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
               <Stat label="主力净额" value={fmtWan(mi.main_net)} valueClass={upColor(mi.main_net)} />
               <Stat label="超大单净额" value={fmtWan(mi.big_net)} valueClass={upColor(mi.big_net)} />
@@ -209,6 +236,13 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
               <Stat label="主力参与度" value={fmtPct(mi.main_intensity)} />
               <Stat label="主力买占比" value={fmtPct(mi.main_buy_ratio)} />
             </div>
+            {/* 2026-09-04: 数据行(逐笔总数/末笔/页数), 小字不抢戏 */}
+            {diag?.tick_count != null ? (
+              <div className="mt-2 text-[10px] text-muted-foreground font-mono">
+                逐笔 {diag.tick_count} 笔{diag.last_tick_t ? ` · 末笔 ${diag.last_tick_t}` : ''}
+                {diag.tick_pages != null ? ` · ${diag.tick_pages} 页` : ''}
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="text-[12px] text-muted-foreground">暂无主力意图数据(非A股/未开盘/数据源不可用)</div>

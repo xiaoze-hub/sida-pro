@@ -72,6 +72,7 @@ def test_diag_forwarded(monkeypatch):
         "tick_pages": 18,
         "stale": False,
         "tick_lag_sec": 5,
+        "source": "tencent_ticks",
     }
     assert resp["dark_order"]["trade_date"] == datetime.date.today().isoformat()
 
@@ -171,3 +172,57 @@ def test_refetch_diff_math(monkeypatch):
     assert out["after"]["tick_count"] == 3958
     assert out["dedup_removed"] == 759
     assert out["verdict_changed"] is True
+
+
+def test_alert_throttle_once_per_day():
+    """同股同日同类只报一次; 换类/换日重报。"""
+    from src.core import darkflow_alerts as al
+
+    class _Mem:
+        def __init__(self): self.d = {}
+        def get(self, k): return self.d.get(k)
+        def set(self, k, v): self.d[k] = v
+
+    m = _Mem()
+    assert al.should_alert("sz002361", "2026-09-04", "suspect", cache=m) is True
+    assert al.should_alert("sz002361", "2026-09-04", "suspect", cache=m) is False
+    assert al.should_alert("sz002361", "2026-09-04", "stale", cache=m) is True
+    assert al.should_alert("sz002361", "2026-09-05", "suspect", cache=m) is True
+
+
+def test_source_ctx_default_and_override():
+    """默认走环境变量源; ctx 覆盖隔离可重置。"""
+    from src.core import dark_flow as _df
+    assert _df._active_source() == _df.DARK_SOURCE
+    tok = _df._DARK_SOURCE_CTX.set("thsdk")
+    try:
+        assert _df._active_source() == "thsdk"
+    finally:
+        _df._DARK_SOURCE_CTX.reset(tok)
+    assert _df._active_source() == _df.DARK_SOURCE
+
+
+def test_gray_bypasses_shared_cache(monkeypatch):
+    """灰度源直拉直返, 不写共享缓存(零残留可回滚)。"""
+    from src.core import dark_flow as _df
+
+    canned = [{"d": "B", "amt": 5.0, "vol": 1.0, "price": 10.0, "t": "10:00:00"}]
+    import src.core.dark_l2 as _l2
+    monkeypatch.setattr(_l2, "fetch_l2_ticks", lambda code, src: list(canned))
+    tok = _df._DARK_SOURCE_CTX.set("thsdk")
+    try:
+        assert "sz000002" not in _df._TICKS_CACHE
+        out = _df._fetch_all_ticks("sz000002")
+        assert out == canned
+        assert "sz000002" not in _df._TICKS_CACHE
+    finally:
+        _df._DARK_SOURCE_CTX.reset(tok)
+
+
+def test_build_rejects_bad_source():
+    import pytest as _pt
+    from fastapi import HTTPException as _HE
+    import src.web.api.darkflow as api
+    with _pt.raises(_HE) as e:
+        api.build_darkflow_response("002361", source="nope")
+    assert e.value.status_code == 400

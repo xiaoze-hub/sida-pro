@@ -2243,6 +2243,46 @@ def _m129_summary_cache_table(conn: Connection) -> None:
         )
 
 
+def _m130_tick_archive_table(conn: Connection) -> None:
+    """逐笔日存档 tick_archive(#3 回测底座 + #4 跨日结论序列, 2026-09-04)。
+
+    收盘后快照一行(code, trade_date): 全天逐笔(JSON TEXT, ~5000 笔) + 当日结论
+    (main_net/big_net/mid_net/retail_net/signal/data_status)。只存被查过的股,
+    全市场不扫。一行一日, UNIQUE(code, trade_date) 幂等 upsert。
+    序列查询 SELECT trade_date, main_net ... ORDER BY trade_date DESC 即
+    "主力连续流入 N 天"的数据底座。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS tick_archive (
+                trade_date TEXT NOT NULL,
+                code TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                tick_count INTEGER,
+                last_tick_t TEXT,
+                tick_pages INTEGER,
+                main_net DOUBLE PRECISION,
+                big_net DOUBLE PRECISION,
+                mid_net DOUBLE PRECISION,
+                retail_net DOUBLE PRECISION,
+                data_status TEXT,
+                signal TEXT,
+                ticks_json TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (code, trade_date)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_tick_archive_symbol_date "
+            "ON tick_archive(symbol, trade_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2281,6 +2321,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(127, "dp_history_table", _m127_dp_history_table),
     Migration(128, "l2_ticks_table", _m128_l2_ticks_table),
     Migration(129, "summary_cache_table", _m129_summary_cache_table),
+    Migration(130, "tick_archive_table", _m130_tick_archive_table),
 )
 
 

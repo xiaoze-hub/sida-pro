@@ -57,15 +57,36 @@ def _validate_symbol(raw: str) -> MDSymbol:
     return MDSymbol.parse(code, "CN")
 
 
-def build_darkflow_response(symbol_code: str) -> dict:
-    """核心组装(供 endpoint 与测试直接调用): 主力意图 + 内盘外盘 + 口诀。"""
+_SOURCE_ALLOW = ("tencent_ticks", "thsdk", "thsdk_big_order", "tdx_tck")
+
+
+def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict:
+    """核心组装(供 endpoint 与测试直接调用): 主力意图 + 内盘外盘 + 口诀。
+
+    2026-09-04 #2: source per-request 灰度(默认走环境变量源)。
+    非法 source 直接 400, 不进计算。
+    """
+    if source is not None and source not in _SOURCE_ALLOW:
+        raise HTTPException(400, f"非法 source: {source!r}(允许 {_SOURCE_ALLOW})")
+    from src.core.dark_flow import _active_source
+    used_source = source or _active_source()  # 进 ctx 前取值, 此时必为默认源
     symbol = _validate_symbol(symbol_code)
     dark = None
+    _token = None
     try:
+        if source is not None:
+            from src.core.dark_flow import _DARK_SOURCE_CTX
+            _token = _DARK_SOURCE_CTX.set(source)
         dark = compute_dark_flow(symbol)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"dark-flow compute 异常 {symbol_code}: {e}")
         dark = None
+    finally:
+        if _token is not None:
+            from src.core.dark_flow import _DARK_SOURCE_CTX
+            _DARK_SOURCE_CTX.reset(_token)
     if not dark:
         raise HTTPException(502, "暗盘/逐笔数据获取失败, 请稍后重试(可能非交易时段或无成交)")
 
@@ -151,6 +172,17 @@ def build_darkflow_response(symbol_code: str) -> dict:
 
     # 2026-09-04 P1-5: stale 只标停滞(data_status 不动, 不断口诀链路)。
     _stale = _tick_staleness(dark.get("last_tick_t"), trade_date)
+    # 2026-09-04 #5: suspect/stale 推通知(全局渠道, 同股同类每日一次, 失败静默)。
+    try:
+        from src.core.darkflow_alerts import maybe_alert_anomaly
+        if data_status == "suspect":
+            maybe_alert_anomaly(symbol_code, symbol_code, trade_date or "",
+                                "suspect", f"{symbol_code} 主力成交额超总成交额(疑重复计数), 本轮不判意图")
+        elif _stale["stale"]:
+            maybe_alert_anomaly(symbol_code, symbol_code, trade_date or "",
+                                "stale", f"{symbol_code} 逐笔停滞(末笔 {dark.get('last_tick_t')})")
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "main_intent": main_intent,
         "inner_outer": inner_outer,
@@ -165,6 +197,7 @@ def build_darkflow_response(symbol_code: str) -> dict:
             "tick_pages": dark.get("tick_pages"),
             "stale": _stale["stale"],
             "tick_lag_sec": _stale["lag_sec"],
+            "source": used_source,  # 2026-09-04 #2: 本次实际数据源
         },
     }
 
@@ -256,13 +289,52 @@ def refetch_darkflow(
     }
 
 
+@router.post("/archive")
+def archive_darkflow_day(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    owner=Depends(require_owner),
+):
+    """手动存档当日逐笔+结论(仅管理员, #3 回测底座)。
+
+    自动存档只在收盘后触发; 盘中手动调用返回 archived=False(不存半截,
+    除非确认要)。返回行数供核对。
+    """
+    from src.core import tick_archive as _ta
+    from src.core.dark_flow import _fetch_all_ticks, _tencent_code, compute_dark_flow
+
+    sym = _validate_symbol(symbol)
+    tcode = _tencent_code(sym)
+    if not tcode:
+        raise HTTPException(400, f"无法映射腾讯代码: {symbol}")
+    dark = compute_dark_flow(sym)
+    if not dark:
+        raise HTTPException(502, "逐笔拉取失败, 无可存档数据")
+    ticks = _fetch_all_ticks(tcode)  # TTL 命中走缓存, 不重复翻页
+    ok = _ta.maybe_archive_day(tcode, symbol, ticks, dark)
+    return {"archived": ok, "symbol": symbol, "tick_count": dark.get("tick_count")}
+
+
+@router.get("/series")
+def darkflow_series(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    limit: int = Query(60, ge=1, le=500, description="最近 N 天"),
+):
+    """跨日结论序列(#4, 新→旧): 支撑"主力连续流入 N 天"类信号。"""
+    from src.core import tick_archive as _ta
+    _validate_symbol(symbol)
+    return {"symbol": symbol, "series": _ta.read_series(symbol, limit)}
+
+
 @router.get("")
-def dark_flow(symbol: str = Query(..., description="6位A股代码, 如 002361")):
+def dark_flow(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    source: str | None = Query(default=None, description="灰度数据源: thsdk/tdx_tck/thsdk_big_order, 默认走环境变量源"),
+):
     """内盘外盘口诀 + 主力意图(轻接口, 分时卡片用)。"""
-    return build_darkflow_response(symbol)
+    return build_darkflow_response(symbol, source=source)
 
 
 @router.get("/{symbol}")
-def dark_flow_path(symbol: str):
+def dark_flow_path(symbol: str, source: str | None = Query(default=None, description="灰度数据源")):
     """路径式别名: /api/dark-flow/002361。"""
-    return build_darkflow_response(symbol)
+    return build_darkflow_response(symbol, source=source)

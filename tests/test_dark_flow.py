@@ -155,3 +155,57 @@ class TestJudgeSignal:
     def test_watch(self):
         assert "平衡" in _judge_signal(100e4, 100e4, 50e4, 50e4, 0,
                                        {"tail": 0, "morning": 0, "mid": 0, "afternoon": 0}, 0.3, [], [])
+
+
+def test_fetch_after_stale_cache_offline(monkeypatch):
+    """2026-09-04 #7: 跨日残留→全量重拉, 离线版(urlopen mock, 不再依赖腾讯可达)。
+
+    p<3 每页 70 笔, p>=3 空页 → 探针 3 页数据+2 空页停, 共 210 笔。
+    时刻取 now-2min(跨午夜钳到 00:00:01), 任何时段跑都不被未来过滤误杀。
+    """
+    import datetime as _dt
+    import re as _re
+    import urllib.request
+
+    code = _tencent_code(Symbol.parse("002361", "CN"))
+    now = _dt.datetime.now()
+    base = now - _dt.timedelta(seconds=120)
+    # 午夜边角(now<00:05半, 倒推跨日): 时刻固定 00:00:00(恒早于 now),
+    # 用价格区分指纹; 正常时段用递减时刻区分。
+    midnight = (base - _dt.timedelta(seconds=209)).date() != now.date()
+
+    def _row(p: int, i: int) -> str:
+        n = p * 70 + i
+        if midnight:
+            return f"{n}/00:00:00/{10.0 + n * 0.01}/0/100/1000.0/B"
+        t = (base - _dt.timedelta(seconds=n)).strftime("%H:%M:%S")
+        return f"{n}/{t}/10.0/0/100/1000.0/B"
+
+    class _Resp:
+        def __init__(self, body):
+            self._b = body.encode("gbk")
+        def read(self):
+            return self._b
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def _fake_open(req, timeout=8):
+        m = _re.search(r"[?&]p=(\d+)", req.full_url)
+        p = int(m.group(1)) if m else 0
+        if p < 3:
+            rows = "|".join(_row(p, i) for i in range(70))
+            body = f'[{1000 + p},"{rows}"]'
+        else:
+            body = f'[{1000 + p},""]'
+        return _Resp(body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_open)
+    yesterday = (now.date() - _dt.timedelta(days=1)).isoformat()
+    df_module._TICKS_CACHE[code] = (
+        now.timestamp() - 100, [{"d": "B", "amt": 100, "t": "15:18:00"}], 68, 4760, yesterday,
+    )
+    ticks = _fetch_all_ticks(code)
+    assert len(ticks) == 210  # 全天数据, 而非 1 条残留
+    assert df_module._TICKS_CACHE[code][4] == df_module._cache_day()
