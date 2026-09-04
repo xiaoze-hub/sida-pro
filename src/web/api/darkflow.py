@@ -153,11 +153,12 @@ def build_darkflow_response(symbol_code: str) -> dict:
         "mnemonic": mnemonic,
         "l2": l2,
         "dark_order": dark_order,
-        # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日。
+        # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日/拉到页数。
         "diag": {
             "tick_count": dark.get("tick_count"),
             "last_tick_t": dark.get("last_tick_t"),
             "trade_date": trade_date,
+            "tick_pages": dark.get("tick_pages"),
         },
     }
 

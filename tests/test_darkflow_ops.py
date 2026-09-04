@@ -50,7 +50,7 @@ def test_diag_forwarded(monkeypatch):
         "main_intensity": 80.0, "main_buy_ratio": 44.0, "signal": "s",
         "data_status": "ok", "inner_outer": {},
         "split_order": {"buy_amt": 1, "sell_amt": 0, "net": 1, "groups": []},
-        "tick_count": 1234, "last_tick_t": "10:30:00",
+        "tick_count": 1234, "last_tick_t": "10:30:00", "tick_pages": 18,
     }
     monkeypatch.setattr(api, "compute_dark_flow", lambda symbol: fake)
     monkeypatch.setattr(api, "_fetch_quote_dict", lambda symbol: None)
@@ -67,6 +67,7 @@ def test_diag_forwarded(monkeypatch):
         "tick_count": 1234,
         "last_tick_t": "10:30:00",
         "trade_date": datetime.date.today().isoformat(),
+        "tick_pages": 18,
     }
     assert resp["dark_order"]["trade_date"] == datetime.date.today().isoformat()
 
@@ -79,3 +80,41 @@ def test_clear_endpoint_single(monkeypatch):
     assert out["cleared"] == 1
     assert out["tcode"] == "sz002361"
     assert out["refetch_next"] is True
+
+
+def test_drop_future_ticks(monkeypatch):
+    """未来 tick 被丢, 正常保留, 空列表原样(冻结时钟, 跑在任何时段都稳)。"""
+    import datetime as _dt_module
+
+    real_dt = _dt_module.datetime
+
+    class _Frozen(real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return real_dt(2026, 9, 4, 12, 0, 0)
+
+    monkeypatch.setattr(_dt_module, "datetime", _Frozen)
+    ticks = [
+        {"d": "B", "amt": 1.0, "t": "09:25:00"},
+        {"d": "B", "amt": 1.0, "t": "12:00:00"},
+        {"d": "S", "amt": 1.0, "t": "15:00:00"},  # 未来 → 丢
+    ]
+    out = df._drop_future_ticks(ticks)
+    assert [t["t"] for t in out] == ["09:25:00", "12:00:00"]
+    assert df._drop_future_ticks([]) == []
+
+
+def test_disk_key_per_day():
+    assert df._ticks_disk_key() == f"all:{df._cache_day()}"
+    assert df._ticks_disk_key("2026-01-01") == "all:2026-01-01"
+
+
+def test_last_fetch_filled_on_ttl_hit():
+    """TTL 命中(不联网)时 wrapper 照样回填 _LAST_FETCH。"""
+    import time
+    df._TICKS_CACHE["sz000001"] = (
+        time.time(), [{"d": "B", "amt": 1.0, "t": "09:25:00"}], 5, 100, df._cache_day(),
+    )
+    ticks = df._fetch_all_ticks("sz000001")
+    assert len(ticks) == 1
+    assert df._LAST_FETCH["sz000001"] == {"pages": 6, "ticks": 1}

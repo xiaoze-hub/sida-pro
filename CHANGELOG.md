@@ -7,6 +7,19 @@
 
 ## 2026-09-04
 
+### P0 拉取层根治:未来tick过滤+按日快照+并发丢数修复
+
+- **未来 tick 根治**(P0-1): `_drop_future_ticks`(超 now+60s 丢弃),
+  全量三路径+增量合并统一前置(去重洗不掉未来 tick);
+  磁盘快照 key 按日分(`all:YYYY-MM-DD`, 只读今天, 旧 `all` 脏 key
+  首次 delete+TTL 自然过期)。
+- **并发丢数修复**(P0-2): `_drain_pages` 同批收齐按页码排序后处理,
+  只有批尾连续空页才停(此前 as_completed 乱序计数误杀同批数据页);
+  新增 `_LAST_FETCH{pages,ticks}` 观测 + 交易时段拉空重试一次;
+  `compute_dark_flow` 出 `tick_pages`, diag 透出。
+- **测试**: ops 7 例全绿(含冻结时钟的未来 tick 用例);
+  dark_flow 回归 25 passed; ruff 全绿。
+
 ### ops dark-flow 运维杠杆:diag 可见性+清缓存接口(main_net 钉死治本)
 
 - **背景**: v0.4.83 上线后 main_net=-125035724 一字不动;
