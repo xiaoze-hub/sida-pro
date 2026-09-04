@@ -59,6 +59,8 @@ export interface DarkOrder {
   buy_amt: number
   sell_amt: number
   net: number
+  main_buy?: number
+  main_sell?: number
   herd_buy: number
   herd_sell: number
   groups: DarkOrderGroup[]
@@ -258,8 +260,8 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
           </div>
           <div className="grid grid-cols-3 gap-2 text-[11px]">
             <Stat label="暗盘净额" value={fmtWan(darkOrder.net)} valueClass={upColor(darkOrder.net)} />
-            <Stat label="疑似主力买" value={fmtWan(darkOrder.buy_amt)} valueClass={upColor(darkOrder.buy_amt)} />
-            <Stat label="疑似主力卖" value={fmtWan(darkOrder.sell_amt)} valueClass={upColor(darkOrder.sell_amt)} />
+            <Stat label="疑似主力买" value={fmtWan(darkOrder.main_buy ?? darkOrder.buy_amt)} valueClass={upColor(darkOrder.main_buy ?? darkOrder.buy_amt)} />
+            <Stat label="疑似主力卖" value={fmtWan(darkOrder.main_sell ?? darkOrder.sell_amt)} valueClass={upColor(darkOrder.main_sell ?? darkOrder.sell_amt)} />
             <Stat label="散户买(顺势)" value={fmtWan(darkOrder.herd_buy)} valueClass={upColor(darkOrder.herd_buy)} />
             <Stat label="散户卖(解套)" value={fmtWan(darkOrder.herd_sell)} valueClass={upColor(darkOrder.herd_sell)} />
           </div>

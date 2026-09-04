@@ -496,6 +496,11 @@ def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
     return ticks
 
 
+# 2026-09-04 金额兜底: 簇总金额>=500万直接判主力(散户90秒内无此量级,
+# 同花顺超大单单笔100万+, 簇总额500万即使拆10笔也有50万/笔)。
+_MAIN_CLUSTER_AMT = 5_000_000.0
+
+
 def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int = 90,
                          min_consec: int = 3, lo: float = 5e4, hi: float | None = None,
                          prev_close: float | None = None) -> dict:
@@ -554,6 +559,7 @@ def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int =
     _flush()
 
     buy_total = sell_total = 0.0
+    main_buy = main_sell = herd_buy = herd_sell = 0.0
     groups: list[dict] = []
     for c in clusters:
         seq = [
@@ -570,14 +576,27 @@ def _detect_split_orders(ticks: list[dict], gap_sec: int = 10, window_sec: int =
         groups.append(g)
         if c["d"] == "B":
             buy_total += c["amt"]
+            if g["contrarian"]:
+                main_buy += c["amt"]
+            else:
+                herd_buy += c["amt"]
         else:
             sell_total += c["amt"]
+            if g["contrarian"]:
+                main_sell += c["amt"]
+            else:
+                herd_sell += c["amt"]
 
     groups.sort(key=lambda g: -g["amt"])
     return {
         "buy_amt": round(buy_total),
         "sell_amt": round(sell_total),
         "net": round(buy_total - sell_total),
+        # 2026-09-04: 主力/散户分项(全簇按 contrarian 归集, 暗盘净额口径不变)
+        "main_buy": round(main_buy),
+        "main_sell": round(main_sell),
+        "herd_buy": round(herd_buy),
+        "herd_sell": round(herd_sell),
         "groups": groups[:10],
     }
 
@@ -588,6 +607,9 @@ def _classify_split(seq: list[dict], prev_close: float | None) -> dict:
     2026-08-31: _detect_split_orders 改为全簇累计暗盘流入/流出后, 本函数的 contrarian
     不再决定是否计入暗盘, 仅用于前端展示"逆势(疑似主力) vs 顺势(散户)"的标记。
     判据: 位置(套牢/获利)为主 + 价格方向辅助。
+    2026-09-04: 加金额兜底(用户反馈: 5笔3629万买入簇被标"散户追涨",
+    散户90秒内不可能同向连吃数百万)。组总金额>=500万直接判主力,
+    位置/方向只决定是抄底/派发还是顺势买入/卖出。
     """
     direction = seq[0]["d"]
     amt_sum = sum(x["amt"] for x in seq)
@@ -595,12 +617,17 @@ def _classify_split(seq: list[dict], prev_close: float | None) -> dict:
     price_dir = "up" if p1 > p0 else ("down" if p1 < p0 else "flat")
     # 相对昨收位置(套牢区 vs 获利区)
     below_prev = prev_close is not None and p0 < prev_close
+    # 金额兜底: 簇总额>=500万=主力(散户无此量级), 覆盖顺势/逆势
+    is_whale = amt_sum >= _MAIN_CLUSTER_AMT
     contrarian = False
     reason = ""
     if direction == "B":
         if below_prev:
             contrarian = True
             reason = "主力抄底"          # 套牢区(价格<昨收)买入 = 主力抄底吸筹
+        elif is_whale:
+            contrarian = True
+            reason = "主力买入"          # 获利区大金额买入 = 主力顺势吃货, 非散户追涨
         else:
             contrarian = False
             reason = "回落承接" if price_dir == "down" else "散户追涨"
@@ -608,6 +635,9 @@ def _classify_split(seq: list[dict], prev_close: float | None) -> dict:
         if not below_prev:
             contrarian = True
             reason = "主力派发"          # 获利区(价格>昨收)卖出 = 主力高位出货
+        elif is_whale:
+            contrarian = True
+            reason = "主力卖出"          # 套牢区大金额卖出 = 主力砸盘, 非散户割肉
         else:
             contrarian = False
             reason = "散户解套" if price_dir == "up" else "散户割肉"
