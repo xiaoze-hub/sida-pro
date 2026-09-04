@@ -540,7 +540,8 @@ export default function DashboardPage() {
             </div>
             {ix.spark && ix.spark.length >= 2 && (
               <div className="mt-1.5">
-                <Sparkline data={ix.spark} height={26} className={moveColor(ix.change_pct)} />
+                {/* 2026-09-04 存在感: 面积渐变(此前纯1.5px细线深色底看不清趋势) */}
+                <Sparkline data={ix.spark} height={26} className={moveColor(ix.change_pct)} fill="currentColor" />
               </div>
             )}
           </button>
