@@ -138,6 +138,28 @@ class TestClassifySplit:
         assert g["contrarian"] is False
         assert g["reason"] == "散户追涨"
 
+    def test_whale_buy_overrides_chase(self):
+        """2026-09-04 金额兜底: 获利区600万买入簇=主力买入, 非散户追涨
+        (用户反馈: 5笔3629万买入簇被标散户追涨, 散户无此量级)。"""
+        g = df_module._classify_split(self._seq("B", 10.52, 10.53, amt=300e4), 10.45)
+        assert g["contrarian"] is True
+        assert g["reason"] == "主力买入"
+
+    def test_whale_sell_overrides_cut(self):
+        """套牢区800万卖出簇=主力卖出, 非散户割肉。"""
+        g = df_module._classify_split(self._seq("S", 10.40, 10.39, amt=400e4), 10.45)
+        assert g["contrarian"] is True
+        assert g["reason"] == "主力卖出"
+
+    def test_whale_threshold_boundary(self):
+        """500万整=主力线(含), 499万=散户。"""
+        g = df_module._classify_split(self._seq("B", 10.52, 10.53, amt=250e4), 10.45)
+        assert g["reason"] == "主力买入"
+        g2 = df_module._classify_split(
+            [{"d": "B", "amt": 499e4, "price": 10.52, "t": "10:00:00"},
+             {"d": "B", "amt": 0.0, "price": 10.53, "t": "10:00:03"}], 10.45)
+        assert g2["reason"] == "散户追涨"
+
 
 class TestJudgeSignal:
     def test_inflow_tail(self):

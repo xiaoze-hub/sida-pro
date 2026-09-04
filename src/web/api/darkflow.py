@@ -155,9 +155,10 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
     except Exception as e:  # noqa: BLE001
         logger.debug(f"dark-flow L2 获取失败 {symbol_code}: {e}")
 
-    # 暗盘资金(拆单识别 v3): 主力伪装的中小单(逆势+位置确认), 同花顺"暗盘资金"口径。
-    # split_order = {buy_amt(疑似主力买), sell_amt(疑似主力卖), net(暗盘净额),
-    #                herd_buy/herd_sell(散户顺势/解套), groups(拆单组明细top10)}
+    # 暗盘资金(拆单识别 v3): 主力伪装的中小单(逆势+位置确认+金额兜底), 同花顺"暗盘资金"口径。
+    # split_order = {buy_amt(暗盘流入=全买入簇), sell_amt(暗盘流出=全卖出簇), net(暗盘净额),
+    #                main_buy/main_sell(主力分项), herd_buy/herd_sell(散户分项),
+    #                groups(拆单组明细top10)}
     dark_order = dark.get("split_order")
     # 2026-09-04: 簇只有日内时刻(t0/t1), 跨日时(如昨日尾盘簇)无日期会误导。
     # 逐笔按自然日重置, 簇日期恒为当日, 此处显式标注。
