@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -25,6 +25,30 @@ from marketdata.vendors.base import KlineVendor, MoreInfoVendor, QuoteVendor
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 4.0  # 正常 <100ms; 隧道断开时快速失败交给降级链
+
+# ---------------------------------------------------------------------------
+# TQ 陈旧快照防护 (2026-09-04, 09-03 漏数事故)
+#
+# 事故: TdxW.exe 未更新时, TQ 网关返回 09-02 快照却报成功 → Engine 视为
+# 成功不再 failover, 全站停在前天。快照(get_market_snapshot)无日期字段,
+# 无法自判; 但 K线(get_market_data)带日期, 在此做新鲜度门禁:
+# 最新 bar 日期 < (今天-1天) → 视为陈旧, 返回 [] 触发 Engine 降级下一源。
+# 阈值取 today-1(而非 today): 盘前/周末/节假日允许差一天, 误杀只会多走
+# 一次腾讯(正确数据), 不会丢数; 陈旧 TQ 排后仍可当最后兜底(由 DB priority 定)。
+# ---------------------------------------------------------------------------
+
+def _norm_day(s: object) -> str:
+    return str(s).replace("-", "")[:8]
+
+
+def tq_bars_fresh(dates: list | None) -> bool:
+    """TQ K线日期是否新鲜(纯函数, 可单测)。空列表视为不新鲜。"""
+    norm = [_norm_day(d) for d in (dates or []) if str(d).strip()]
+    if not norm:
+        return False
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    floor = (today - timedelta(days=1)).strftime("%Y%m%d")
+    return max(norm) >= floor
 
 # ---------------------------------------------------------------------------
 # TQ 网关地址**自动发现**(2026-09-02)
@@ -340,6 +364,10 @@ class TqKlineVendor(KlineVendor):
                 )
             except Exception:  # noqa: BLE001
                 continue
+        if out and not tq_bars_fresh([b.date for b in out]):
+            # 陈旧快照(见模块头注释): 当失败处理, Engine 自动降级下一源
+            logger.warning("[tq] K线陈旧(最新 %s), 触发降级", out[-1].date)
+            return []
         return out
 
 
