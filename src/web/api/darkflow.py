@@ -57,15 +57,36 @@ def _validate_symbol(raw: str) -> MDSymbol:
     return MDSymbol.parse(code, "CN")
 
 
-def build_darkflow_response(symbol_code: str) -> dict:
-    """核心组装(供 endpoint 与测试直接调用): 主力意图 + 内盘外盘 + 口诀。"""
+_SOURCE_ALLOW = ("tencent_ticks", "thsdk", "thsdk_big_order", "tdx_tck")
+
+
+def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict:
+    """核心组装(供 endpoint 与测试直接调用): 主力意图 + 内盘外盘 + 口诀。
+
+    2026-09-04 #2: source per-request 灰度(默认走环境变量源)。
+    非法 source 直接 400, 不进计算。
+    """
+    if source is not None and source not in _SOURCE_ALLOW:
+        raise HTTPException(400, f"非法 source: {source!r}(允许 {_SOURCE_ALLOW})")
+    from src.core.dark_flow import _active_source
+    used_source = source or _active_source()  # 进 ctx 前取值, 此时必为默认源
     symbol = _validate_symbol(symbol_code)
     dark = None
+    _token = None
     try:
+        if source is not None:
+            from src.core.dark_flow import _DARK_SOURCE_CTX
+            _token = _DARK_SOURCE_CTX.set(source)
         dark = compute_dark_flow(symbol)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"dark-flow compute 异常 {symbol_code}: {e}")
         dark = None
+    finally:
+        if _token is not None:
+            from src.core.dark_flow import _DARK_SOURCE_CTX
+            _DARK_SOURCE_CTX.reset(_token)
     if not dark:
         raise HTTPException(502, "暗盘/逐笔数据获取失败, 请稍后重试(可能非交易时段或无成交)")
 
@@ -176,6 +197,7 @@ def build_darkflow_response(symbol_code: str) -> dict:
             "tick_pages": dark.get("tick_pages"),
             "stale": _stale["stale"],
             "tick_lag_sec": _stale["lag_sec"],
+            "source": used_source,  # 2026-09-04 #2: 本次实际数据源
         },
     }
 
@@ -304,12 +326,15 @@ def darkflow_series(
 
 
 @router.get("")
-def dark_flow(symbol: str = Query(..., description="6位A股代码, 如 002361")):
+def dark_flow(
+    symbol: str = Query(..., description="6位A股代码, 如 002361"),
+    source: str | None = Query(default=None, description="灰度数据源: thsdk/tdx_tck/thsdk_big_order, 默认走环境变量源"),
+):
     """内盘外盘口诀 + 主力意图(轻接口, 分时卡片用)。"""
-    return build_darkflow_response(symbol)
+    return build_darkflow_response(symbol, source=source)
 
 
 @router.get("/{symbol}")
-def dark_flow_path(symbol: str):
+def dark_flow_path(symbol: str, source: str | None = Query(default=None, description="灰度数据源")):
     """路径式别名: /api/dark-flow/002361。"""
-    return build_darkflow_response(symbol)
+    return build_darkflow_response(symbol, source=source)

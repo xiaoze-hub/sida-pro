@@ -7,7 +7,16 @@
 
 ## 2026-09-04
 
-### 整体优化①前端展示+#3存档+#4序列
+### 整体优化②异常告警+#2灰度切源
+
+- **异常告警**(#5): `darkflow_alerts`(suspect/stale 推全局默认渠道,
+  同股同类每日一次, 无渠道/失败静默); 主链路钩子失败不影响计算。
+  WeCom corp 权限(850003/853006)仍需用户在管理页授权+购买, 修好前走其他渠道。
+- **灰度切源**(#2): `_DARK_SOURCE_CTX` per-request 覆盖,
+  `GET /api/dark-flow?source=thsdk` 单股验证, 灰度不读写共享缓存
+  (零残留可回滚); 非法 source 400; diag 透出本次实际 `source`;
+  默认源不动, 等验证数据再定。
+- **测试**: ops 18 例(灰度隔离/400/ctx)+archive 3 例; ruff 全绿。
 
 - **前端展示**(①): `DarkFlowCards` 接 `verdict_note`(翻转蓝条, 有值才显)、
   `diag.stale`(停滞徽标+落后分钟 tooltip)、数据行(逐笔 N 笔·末笔·N 页);

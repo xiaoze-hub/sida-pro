@@ -65,6 +65,18 @@ ABSORB_BUY_RATIO = 48.0   # 强吸筹: 主力买占比(买占主力成交) ≥ 4
 # 未来接入付费L2时, 在 _fetch_all_ticks 处按 source 分发即可。
 DARK_SOURCE = __import__("os").environ.get("PANWATCH_DARK_SOURCE", "tencent_ticks")
 
+# 2026-09-04 #2: per-request 源覆盖(ContextVar, 线程/协程安全)。
+# API ?source=thsdk 单股灰度验证, 默认源不动, 验证ok再切。
+import contextvars as _ctxvars
+
+_DARK_SOURCE_CTX: _ctxvars.ContextVar[str | None] = _ctxvars.ContextVar(
+    "panwatch_dark_source", default=None)
+
+
+def _active_source() -> str:
+    """当前生效数据源: 请求级覆盖优先, 否则环境变量默认值。"""
+    return _DARK_SOURCE_CTX.get() or DARK_SOURCE
+
 
 def _tencent_code(symbol: Symbol) -> str | None:
     code = (symbol.code or "").strip()
@@ -255,7 +267,10 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
     """
     import time as _time
     now = _time.time()
-    cached = _TICKS_CACHE.get(code)
+    # 2026-09-04 #2: 灰度请求(source 覆盖且≠默认)不读写共享缓存, 直拉直返,
+    # 避免 L2 tick 污染默认源快照(回滚零残留)。
+    _gray = _active_source() != DARK_SOURCE
+    cached = None if _gray else _TICKS_CACHE.get(code)
 
     # 2026-08-12: TTL 内直接返回(盘中 30s 窗口零请求; 重构时勿丢此分支)
     if cached and now - cached[0] < _TICKS_TTL:
@@ -267,13 +282,16 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
         _TICKS_CACHE.pop(code, None)
         cached = None
 
-    # L2 数据源分发(预留): 接入后返回 {d, amt, vol, price, t} 同构列表即可无缝替换
-    if DARK_SOURCE != "tencent_ticks":
+    # L2 数据源分发(2026-09-04 #2: _active_source 支持 per-request 覆盖灰度)。
+    # 预留模块, 接入L2时实现
+    _src = _active_source()
+    if _src != "tencent_ticks":
         try:
             from src.core.dark_l2 import fetch_l2_ticks  # 预留模块, 接入L2时实现
-            ticks = fetch_l2_ticks(code, DARK_SOURCE)
-            _cache_put(code, now, ticks, 0, 0)
-            _ticks_persist()  # 2026-08-12: 快照落盘
+            ticks = fetch_l2_ticks(code, _src)
+            if not _gray:
+                _cache_put(code, now, ticks, 0, 0)
+                _ticks_persist()  # 2026-08-12: 快照落盘
             return ticks
         except Exception:
             pass  # L2 未接入/异常, 回退腾讯逐笔
