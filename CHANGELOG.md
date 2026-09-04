@@ -7,6 +7,12 @@
 
 ## 2026-09-04
 
+### release v0.4.81(P2 部署防护 + CI 门禁根因 + 健康列 server_default)
+
+- 自 v0.4.80 起 3 个 fix 合并: P2-C 健康计数列 server_default [commit edd7abc] + P2-A 部署防护3条(tar备份/迁移校验/暂停开关) [commit 3a50e36] + P2-B ghcr CI ruff F811 根因修 [commit e9e0613].
+- 验证: ghcr run 52 test+build 双绿(终结 run 48-51 四连 fail), GHCR latest 已重推; CI 子集 1377 passed + marketdata 190 passed; ruff 全绿.
+- 发版后做 P3-A 四账号生产验收(验收报告见部署回复) [commit be1925d]。
+
 ### fix P2-B ghcr CI test 门禁根因修(ruff F811 拦构建)
 
 - **根因**: `src/core/l2_ticks_scheduler.py:101` (v0.4.77 新文件)
