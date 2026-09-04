@@ -7,6 +7,22 @@
 
 ## 2026-09-04
 
+### fix TQ 陈旧快照门禁 + summary 强刷(09-03 漏数事故治本)
+
+- **根因**: TdxW 未更新时 TQ 网关返 09-02 快照却报成功, Engine 视为成功
+  不再 failover(quote/K线双链全压住); summary 无强刷手段, 热切后只能干等
+  5min 缓存过期。
+- **改动**: `packages/marketdata/.../vendors/tq.py` 新增 `tq_bars_fresh()`
+  (最新 bar < today-1 视为陈旧, `TqKlineVendor.fetch` 返回 [] 触发降级;
+  阈取 today-1: 盘前/周末/节假日不误杀); `GET /api/klines/{s}/summary`
+  新增 `refresh` 参数跳过 L1+L2 强制重算。
+- **测试**: `test_tq_stale_guard.py` 6 例(当日/昨天边界/两天前陈旧/空/
+  横线格式/today floor); marketdata 全量 196 passed; test_decision_pioneer
+  + test_summary_layer_api 19 passed; ruff 真 bug 类全绿。注: 本机
+  marketdata editable 指向旧 clone sida-src, 本地验证须
+  `PYTHONPATH=sida-pro/packages/marketdata/src` 覆盖(CI/Docker 用仓内
+  相对路径不受影响) [commit 7e13c4d]。
+
 ### update 海外K线补数通道 + 行情主备热切(09-03 漏数事故)
 
 - **事故**: 持仓页停在 09-02。根因三层: ①小主机 WSL 内 DNS 被劫到

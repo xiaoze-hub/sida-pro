@@ -738,22 +738,23 @@ def get_l2_ticks_history(
 
 
 @router.get("/{symbol}/summary")
-def get_kline_summary(symbol: str, market: str = "CN"):
+def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
     """获取单只股票K线摘要
 
     2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
     2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
        进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
+    2026-09-04: refresh=1 跳过 L1+L2 强制重算(数据源热切/补数后立即验证用)。
     """
     market_code = _parse_market(market)
     cache_key = f"summary:{market_code.value}:{symbol}"
     now = _time.time()
-    # L1: 进程内缓存
-    cached = _SUMMARY_CACHE.get(cache_key)
+    # L1: 进程内缓存(refresh 跳过)
+    cached = None if refresh else _SUMMARY_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _SUMMARY_TTL:
         return cached[1]
-    # L2: PG 落库缓存(进程重启/容器迁移兜底)
-    pg_hit = get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
+    # L2: PG 落库缓存(进程重启/容器迁移兜底, refresh 跳过)
+    pg_hit = None if refresh else get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
     if pg_hit:
         _SUMMARY_CACHE[cache_key] = (now, pg_hit)
         return pg_hit
