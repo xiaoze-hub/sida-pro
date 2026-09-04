@@ -13,7 +13,8 @@
  *   GET  /api/market-scan/dark-fund-top → DarkFundTopResp
  *   POST /api/market-scan/dark-fund-top/refresh → 手动触发扫描(同步 ~16s)
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw, TrendingUp } from 'lucide-react'
 import {
   marketScanApi,
@@ -59,10 +60,30 @@ function SimpleEmpty({ text }: { text: string }) {
 }
 
 export default function DarkFundTopPage() {
+  const navigate = useNavigate()
   const [data, setData] = useState<DarkFundTopResp | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  // 2026-09-04: 列头排序(默认榜单顺序; 点同一列切方向)
+  const [sort, setSort] = useState<{ key: 'main' | 'amount' | 'ratio' | null; dir: 1 | -1 }>({
+    key: null,
+    dir: -1,
+  })
+  const toggleSort = (key: 'main' | 'amount' | 'ratio') =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === -1 ? 1 : -1 } : { key, dir: -1 }))
+  const sortedTop = useMemo(() => {
+    if (!data || !isSnapshot(data)) return []
+    const rows = [...(data.top || [])]
+    if (!sort.key) return rows
+    const val = (r: DarkFundTopRow) =>
+      sort.key === 'main' ? r.main_net_wan ?? 0
+      : sort.key === 'amount' ? r.total_amount_wan ?? 0
+      : r.main_net_ratio ?? 0
+    return rows.sort((a, b) => (val(a) - val(b)) * (sort.dir === -1 ? -1 : 1))
+  }, [data, sort])
+  const sortMark = (key: 'main' | 'amount' | 'ratio') =>
+    sort.key === key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -148,24 +169,47 @@ export default function DarkFundTopPage() {
         <div className="overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
-              <thead>
+              <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                 <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
                   <th className="px-3 py-2 font-medium">#</th>
                   <th className="px-3 py-2 font-medium">代码</th>
                   <th className="px-3 py-2 font-medium">名称</th>
-                  <th className="px-3 py-2 text-right font-medium">主力净流入(万/亿)</th>
-                  <th className="px-3 py-2 text-right font-medium">主力净量</th>
-                  <th className="px-3 py-2 text-right font-medium">总成交额(万/亿)</th>
+                  <th
+                    className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort('main')}
+                    title="按主力净流入排序"
+                  >
+                    主力净流入(万/亿){sortMark('main')}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort('ratio')}
+                    title="同花顺主力净量(股数口径, 非百分比)"
+                  >
+                    主力净量{sortMark('ratio')}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort('amount')}
+                    title="按总成交额排序"
+                  >
+                    总成交额(万/亿){sortMark('amount')}
+                  </th>
                   <th className="px-3 py-2 text-right font-medium">.tck 暗盘对照</th>
                   <th className="px-3 py-2 font-medium">数据源</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
-                {(data.top || []).map((r: DarkFundTopRow, i: number) => {
+                {sortedTop.map((r: DarkFundTopRow, i: number) => {
                   const positive = (r.main_net_wan ?? 0) > 0
                   const negative = (r.main_net_wan ?? 0) < 0
                   return (
-                    <tr key={`${r.symbol}-${i}`} className="hover:bg-accent/20">
+                    <tr
+                      key={`${r.symbol}-${i}`}
+                      className="hover:bg-accent/20 cursor-pointer"
+                      onClick={() => navigate(`/quote?type=stock&symbol=${r.symbol}`)}
+                      title={`${r.symbol} → 行情`}
+                    >
                       <td className="px-3 py-2 font-mono text-muted-foreground">{i + 1}</td>
                       <td className="px-3 py-2 font-mono">
                         <a
@@ -203,7 +247,7 @@ export default function DarkFundTopPage() {
                             {toWan(r.tck_dark_net_wan)}
                           </span>
                         ) : (
-                          <span className="text-[10px] text-muted-foreground/70">仅持仓股</span>
+                          <span className="text-muted-foreground/50">-</span>
                         )}
                       </td>
                       <td className="px-3 py-2 font-mono text-[10px] text-muted-foreground">
