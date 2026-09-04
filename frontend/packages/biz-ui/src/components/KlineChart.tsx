@@ -99,6 +99,15 @@ export interface ActivityPoint {
 /** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 / 活跃度(09-03 三色柱载体) */
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
 
+/** 副图选项(2026-09-04: 抽模块常量, 受控隐藏时不用嵌套括号包 map) */
+const SUBCHART_OPTS = [
+  ['vol', '成交量'],
+  ['macd', 'MACD'],
+  ['active_ratio', '买卖比'],
+  ['phase', '情绪'],
+  ['activity', '活跃度'],
+] as const
+
 function sma(values: number[], period: number): Array<number | null> {
   if (period <= 1) return values.map((v) => v)
   const out: Array<number | null> = new Array(values.length).fill(null)
@@ -691,15 +700,10 @@ export default function KlineChart(props: {
                 : '无数据'}
         </span>
         {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
-        {(
-          [
-            ['vol', '成交量'],
-            ['macd', 'MACD'],
-            ['active_ratio', '买卖比'],
-            ['phase', '情绪'],
-            ['activity', '活跃度'],
-          ] as const
-        ).map(([k, label]) => {
+        {/* 2026-09-04 去重: 父组件受控(props.subchart)时隐藏本行, 以父为准
+            (此前两套副图控件互不同步, Quote 还没传 onSubchartChange)。 */}
+        {props.subchart === undefined &&
+          SUBCHART_OPTS.map(([k, label]) => {
           const active = subchart === k
           const disabled = (k === 'active_ratio' || k === 'phase')
           return (
