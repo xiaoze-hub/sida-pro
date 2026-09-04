@@ -219,6 +219,18 @@ _ticks_persist(load_only=True)
 # wrapper 每次从缓存元组回填, 全量/增量/TTL命中路径统一有数。
 _LAST_FETCH: dict[str, dict] = {}
 
+# 2026-09-04 P1-4: 上次结论缓存(结论翻转注记用)。单例常驻, 随进程落盘。
+_VERDICT_DISK = None
+
+
+def _verdict_cache():
+    global _VERDICT_DISK
+    if _VERDICT_DISK is None:
+        from src.core.disk_cache import DiskCache, register
+        _VERDICT_DISK = DiskCache("dark_flow_verdict", ttl=86400.0)
+        register(_VERDICT_DISK)
+    return _VERDICT_DISK
+
 
 def _in_trading_hours() -> bool:
     """是否在交易时段(工作日 09:25-15:05)。空拉取此时段才值得重试+告警。"""
@@ -1131,6 +1143,24 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
             auction_amt, auction_vol,
             result.get("main_intensity"), result.get("main_buy_ratio"),
         )
+
+    # 2026-09-04 P1-4: 结论翻转注记(同日上次结论 vs 本次)。变号或差超 5 千万
+    # 则注记, 否则用户只看到数字变了会先怀疑系统坏了(如 -1.25亿→+3490万事故)。
+    result["verdict_note"] = None
+    try:
+        _vd = _verdict_cache()
+        _prev = _vd.get(code) or {}
+        _cur = main_net or 0
+        if _prev.get("day") == _cache_day() and isinstance(_prev.get("main_net"), (int, float)):
+            _p = _prev["main_net"]
+            if ((_p < 0) != (_cur < 0)) or abs(_cur - _p) > 5e7:
+                result["verdict_note"] = (
+                    f"结论更新: 上次净{('流出' if _p < 0 else '流入')}{abs(_p) / 1e8:.2f}亿 → "
+                    f"本次净{('流出' if _cur < 0 else '流入')}{abs(_cur) / 1e8:.2f}亿(全量重拉/去重后)"
+                )
+        _vd.set(code, {"day": _cache_day(), "main_net": main_net})
+    except Exception:  # noqa: BLE001
+        pass
 
     # ---- 主力意图增强算法(2026-08-14): 超大单/大单背离 + 量价背离 + 时段节奏 ----
     # 三个独立纯函数(可单测), 注入 result 新字段, 不破坏现有字段。

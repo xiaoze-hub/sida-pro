@@ -20,6 +20,18 @@
 - **测试**: ops 7 例全绿(含冻结时钟的未来 tick 用例);
   dark_flow 回归 25 passed; ruff 全绿。
 
+### P1 结论可信度:翻转注记+停滞检测+P2-7 diff重拉
+
+- **翻转注记**(P1-4): `compute_dark_flow` 出 `verdict_note`,
+  同日上次结论变号或差超 5 千万则注记("上次净流出X→本次净流入Y"),
+  main_intent 透出, 前端有值才展示。
+- **停滞检测**(P1-5): `_tick_staleness` 纯函数(工作日 09:25-15:05 内
+  末笔落后超 10 分钟 → stale), 只进 diag, data_status/口诀链路不动,
+  盘后/跨日/无数据不误报。
+- **diff 重拉**(P2-7): `POST /api/dark-flow/refetch`(仅管理员),
+  清缓存→重算一次返回 before/after/dedup_removed/verdict_changed。
+- **测试**: ops 11 例全绿; ruff 全绿。
+
 ### ops dark-flow 运维杠杆:diag 可见性+清缓存接口(main_net 钉死治本)
 
 - **背景**: v0.4.83 上线后 main_net=-125035724 一字不动;
