@@ -12,16 +12,18 @@ GET /api/dark-flow/002361
 """
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from marketdata import Symbol as MDSymbol
 from marketdata.vendors.tencent import TencentQuoteVendor
 from src.core.dark_flow import (
     _judge_mnemonic,
     _position_from_range,
+    clear_ticks_cache,
     compute_dark_flow,
     compute_tck_active_ratio,  # v0.4.79: .tck 主动率(口诀活代码化)
 )
+from src.web.api.auth import require_owner
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +138,12 @@ def build_darkflow_response(symbol_code: str) -> dict:
     dark_order = dark.get("split_order")
     # 2026-09-04: 簇只有日内时刻(t0/t1), 跨日时(如昨日尾盘簇)无日期会误导。
     # 逐笔按自然日重置, 簇日期恒为当日, 此处显式标注。
+    trade_date = None
     if isinstance(dark_order, dict):
         try:
             from src.core.dark_flow import _cache_day
-            dark_order = {**dark_order, "trade_date": _cache_day()}
+            trade_date = _cache_day()
+            dark_order = {**dark_order, "trade_date": trade_date}
         except Exception:  # noqa: BLE001
             pass
 
@@ -149,7 +153,33 @@ def build_darkflow_response(symbol_code: str) -> dict:
         "mnemonic": mnemonic,
         "l2": l2,
         "dark_order": dark_order,
+        # 2026-09-04: 运维可见性(冻住了一眼可见): 逐笔总数/末笔时刻/交易日。
+        "diag": {
+            "tick_count": dark.get("tick_count"),
+            "last_tick_t": dark.get("last_tick_t"),
+            "trade_date": trade_date,
+        },
     }
+
+
+@router.post("/cache/clear")
+def clear_darkflow_ticks_cache(
+    symbol: str | None = Query(default=None, description="6位A股代码, 如 002361; 不传=清全部"),
+    owner=Depends(require_owner),
+):
+    """清逐笔缓存(运维杠杆, 仅管理员)。
+
+    main_net 长时间钉死不动时手动清, 下次请求全量重拉(去重修复在重拉路径生效)。
+    同步落盘, 重启不回血。返回清除的缓存数 + 下次是否重拉。
+    """
+    from src.core.dark_flow import _tencent_code
+
+    if symbol:
+        tcode = _tencent_code(_validate_symbol(symbol))
+        n = clear_ticks_cache(tcode) if tcode else 0
+        return {"cleared": n, "symbol": symbol, "tcode": tcode, "refetch_next": True}
+    n = clear_ticks_cache(None)
+    return {"cleared": n, "symbol": None, "tcode": None, "refetch_next": True}
 
 
 @router.get("")

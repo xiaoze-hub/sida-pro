@@ -7,6 +7,18 @@
 
 ## 2026-09-04
 
+### ops dark-flow 运维杠杆:diag 可见性+清缓存接口(main_net 钉死治本)
+
+- **背景**: v0.4.83 上线后 main_net=-125035724 一字不动;
+  去重修复只在"拉到新页/合并"时生效, 内存+磁盘双层快照+增量"无新增"
+  原样返回够不着, 且接口不暴露 tick 数/末笔时刻, 冻住了也看不见。
+- **改动**: `compute_dark_flow` 新增 `last_tick_t`(末笔时刻);
+  `/api/dark-flow/*` 返回新增 `diag{tick_count,last_tick_t,trade_date}`;
+  新增 `POST /api/dark-flow/cache/clear`(仅管理员, 不传 symbol=清全部,
+  同步落盘防重启回血), 下次请求全量重拉。
+- **测试**: `test_darkflow_ops` 4 例(清单/清全/diag 转发/清接口);
+  回归 dark_flow 系 25 passed; ruff 全绿。
+
 ### fix 三问题:逐笔去重补齐+volume归一+口诀文案(决策先锋算法对账)
 
 - **① 全量路径指纹去重**: `_fetch_all_ticks` 全量三处 return 此前无去重
