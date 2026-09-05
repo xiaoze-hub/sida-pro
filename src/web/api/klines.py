@@ -837,12 +837,30 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
     except Exception as e:  # noqa: BLE001
         logger.debug("dark_clusters summary 失败 %s: %s", symbol, e)
 
+    # A4 置信度徽章(2026-09-06 28号, 批次A): 明盘三源交叉验证 → A/B/C, 随 summary 双层缓存
+    mainflow_tri: dict = {"agree": None, "consensus_wan": None, "spread_pct": None, "n_ok": 0, "sources": {}}
+    if market_code.value == "CN":
+        try:
+            from src.core.mainflow_tri import triangulate
+
+            mainflow_tri = triangulate(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("mainflow_tri summary 失败 %s: %s", symbol, e)
+        try:
+            from src.core.confidence import payload as _confidence_payload
+
+            mainflow_tri = {**mainflow_tri, **_confidence_payload(mainflow_tri)}
+        except Exception:  # noqa: BLE001
+            pass
+
     result = {
         "symbol": symbol,
         "market": market_code.value,
         "summary": summary,
         "main_intent": main_intent,
         "main_intent_structured": main_intent_structured,
+        # A4 置信度徽章(批次A)
+        "mainflow_tri": mainflow_tri,
         # P1 图层数据(2026-09-01): gs_signals / fund_flow / events
         **_build_layer_data(symbol, market_code),
         # A4 拆单簇暗盘(2026-09-01 接入 summary,前端资金面板双口径展示)

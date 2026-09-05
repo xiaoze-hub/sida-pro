@@ -138,6 +138,40 @@ interface SummaryResp {
     confirmed?: boolean
   }> | null
   resonance?: ResonanceInfo | null
+  /** A4 置信度徽章(批次A): mainflow_tri + confidence 载荷 */
+  mainflow_tri?: {
+    confidence_level?: string | null
+    sources_agree?: boolean | null
+    spread_pct?: number | null
+    n_ok?: number | null
+    consensus_wan?: number | null
+  } | null
+}
+
+/** A3 封单成色(批次A): /api/seal-quality 响应 */
+interface SealQualityMetrics {
+  available?: boolean
+  reason?: string | null
+  window_min?: number | null
+  cancel_rate_5m?: number | null
+  seal_quality?: number | null
+  cancel_bias_5m?: number | null
+  cancel_zscore?: number | null
+  seal_success_rate?: number | null
+  is_sealed?: boolean | null
+  seal_amount?: number | null
+}
+interface SealQualityResp {
+  symbol?: string
+  n_samples?: number
+  metrics?: SealQualityMetrics | null
+}
+
+/** 置信度徽章配色: A=可信(主色)/B=单源(灰)/C=分歧(琥珀, 非涨跌语义) */
+const CONFIDENCE_CLASS: Record<string, string> = {
+  A: 'bg-primary/10 text-foreground',
+  B: 'bg-muted text-muted-foreground',
+  C: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
 }
 
 /** 元 → 带单位的紧凑显示(自动万/亿).
@@ -216,6 +250,18 @@ export default function QuotePage() {
   const [summary, setSummary] = useState<SummaryResp | null>(null)
   const [, setSummaryLoading] = useState(false)
   const [, setSummaryError] = useState('')
+
+  // A3 封单成色(批次A, 2026-09-06): 只在指标可用时渲染, 无数据不占位(缺失不编造)
+  const [seal, setSeal] = useState<SealQualityResp | null>(null)
+  useEffect(() => {
+    if (!symbol || type !== 'stock') return
+    let alive = true
+    insightApi
+      .sealQuality<SealQualityResp>(symbol)
+      .then((d) => { if (alive) setSeal(d ?? null) })
+      .catch(() => { if (alive) setSeal(null) })
+    return () => { alive = false }
+  }, [symbol, type])
 
   // v0.4.60: 联动状态全页共享, 不止 Fund Tab
   const [selectedRange, setSelectedRange] = useState<{ from: string; to: string } | null>(null)
@@ -571,15 +617,70 @@ export default function QuotePage() {
               </div>
             )}
 
-            {/* 主力意图(短描述) */}
+            {/* 主力意图(短描述) + A4 置信度徽章 */}
             {typeof summary?.main_intent === 'string' && summary.main_intent ? (
               <div className="border-b border-border/40 pb-2">
-                <div className="text-[11px] text-muted-foreground">主力意图</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] text-muted-foreground">主力意图</div>
+                  {summary.mainflow_tri?.confidence_level && (
+                    <span
+                      className={`rounded px-1 text-[10px] ${CONFIDENCE_CLASS[summary.mainflow_tri.confidence_level] ?? ''}`}
+                      title={`明盘三源交叉: ${summary.mainflow_tri.n_ok ?? 0} 源有数, 离散 ${summary.mainflow_tri.spread_pct ?? '--'}%`}
+                    >
+                      置信 {summary.mainflow_tri.confidence_level}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-0.5 text-foreground whitespace-pre-wrap leading-snug">
                   {summary.main_intent.split('\n').slice(0, 3).join(' · ')}
                 </div>
               </div>
             ) : null}
+
+            {/* A3 封单成色(批次A): 涨停股盘中采样, 撤单率异动比炸板早几分钟 */}
+            {seal?.metrics?.available && (
+              <div className="border-b border-border/40 pb-2">
+                <div className="text-[11px] text-muted-foreground">
+                  封单成色
+                  <span className="ml-1 text-[10px] opacity-70">
+                    近{Math.round(seal.metrics.window_min ?? 0)}分钟 · 盘中60s采样
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5">
+                  <div className="text-muted-foreground">成色</div>
+                  <div
+                    className={`text-right font-mono ${
+                      (seal.metrics.seal_quality ?? 1) < 0.6 || (seal.metrics.cancel_zscore ?? 0) >= 2
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-foreground'
+                    }`}
+                  >
+                    {seal.metrics.seal_quality != null
+                      ? `${(seal.metrics.seal_quality * 100).toFixed(0)}%`
+                      : '-'}
+                  </div>
+                  <div className="text-muted-foreground">撤单率</div>
+                  <div className="text-right font-mono">
+                    {seal.metrics.cancel_rate_5m != null
+                      ? `${(seal.metrics.cancel_rate_5m * 100).toFixed(1)}%`
+                      : '-'}
+                  </div>
+                  <div className="text-muted-foreground">撤单异动</div>
+                  <div className="text-right font-mono">
+                    {seal.metrics.cancel_zscore != null ? seal.metrics.cancel_zscore : '-'}
+                  </div>
+                  <div className="text-muted-foreground">封板成功率</div>
+                  <div className="text-right font-mono">
+                    {seal.metrics.seal_success_rate != null
+                      ? `${(seal.metrics.seal_success_rate * 100).toFixed(0)}%`
+                      : '-'}
+                  </div>
+                </div>
+                {seal.metrics.is_sealed === false && (
+                  <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">当前未封住</div>
+                )}
+              </div>
+            )}
 
             {/* 暗盘拆单簇(数字流) */}
             {summary?.dark_clusters?.available && (
