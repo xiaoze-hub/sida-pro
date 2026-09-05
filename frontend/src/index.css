@@ -250,3 +250,31 @@
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* v0.5.0 UI 全量改造 Wave1: 涨跌闪 + 页面进场 */
+@keyframes sida-flash-up {
+  0% { background-color: hsl(var(--stock-up) / 0.22); }
+  100% { background-color: transparent; }
+}
+@keyframes sida-flash-down {
+  0% { background-color: hsl(var(--stock-down) / 0.22); }
+  100% { background-color: transparent; }
+}
+.sida-flash {
+  border-radius: 4px;
+  animation-duration: 0.65s;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+.sida-flash-up { animation-name: sida-flash-up; }
+.sida-flash-down { animation-name: sida-flash-down; }
+@keyframes sida-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.sida-page-enter {
+  animation: sida-fade-up 0.3s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sida-flash, .sida-page-enter { animation: none; }
+}

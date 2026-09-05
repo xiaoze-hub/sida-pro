@@ -7,6 +7,15 @@
 
 ## 2026-09-05
 
+### feature-UI全量改造 Wave1(v0.5.0): primitives + 首页迁移
+
+- 新增 biz-ui 共享组件: AnimatedNumber(数字滚动)/FlashValue(涨跌闪)/
+  SectionHeader(hairline分区标题)/Stat(三档字体锁死)。
+- index.css: sida-flash-up/down + sida-page-enter(0.3s) + reduced-motion 全禁。
+- Dashboard: 指数点位滚动+涨跌闪、3 处标题迁 SectionHeader、整页进场动画。
+- KpiBand 已有 count-up, 不动。
+- **测试**: tsc/build 全绿, 自截验收通过。
+
 ### feature-双L2深研落地 v0.4.98(全线上实测)
 
 - DDE 定稿: 装机 thsdk 无 `dde` 方法, 但 `query_data` 官方通道通

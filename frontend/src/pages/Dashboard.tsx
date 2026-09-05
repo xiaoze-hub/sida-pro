@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
-import { RefreshCw, AlertTriangle, Activity, ShieldAlert, Share2, FileText, ChevronRight } from 'lucide-react'
+import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight } from 'lucide-react'
 import {
   dashboardApi,
   portfolioApi,
@@ -42,6 +42,9 @@ import FlowHistoryChart from '@panwatch/biz-ui/components/dashboard/FlowHistoryC
 import DiscoveryPanel from '@/components/DiscoveryPanel'
 import SkeletonRows from '@/components/SkeletonRows'
 import Sparkline from '@/components/Sparkline'
+import AnimatedNumber from '@panwatch/biz-ui/components/AnimatedNumber'
+import FlashValue from '@panwatch/biz-ui/components/FlashValue'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import BenchChart from '@/components/BenchChart'
 import BenchmarkShareCard from '@/components/BenchmarkShareCard'
@@ -477,7 +480,7 @@ export default function DashboardPage() {
 
 
   return (
-    <div className="page-container pb-10">
+    <div className="page-container sida-page-enter pb-10">
       {/* 顶部:标题 + 刷新 + 日期/市场状态 pills */}
       <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-2">
@@ -531,12 +534,14 @@ export default function DashboardPage() {
               <div className="min-w-0">
                 <div className="truncate text-[11px] text-muted-foreground">{ix.name}</div>
                 <div className="font-num text-[17px] font-semibold text-foreground tabular-nums">
-                  {safeFixed(ix.current_price, 2)}
+                  <AnimatedNumber value={ix.current_price} format={(v) => safeFixed(v, 2)} />
                 </div>
               </div>
-              <span className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[10px] ${pctChipCls(ix.change_pct)}`}>
-                {ix.change_pct != null ? pct(ix.change_pct) : '--'}
-              </span>
+              <FlashValue value={ix.change_pct}>
+                <span className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[10px] ${pctChipCls(ix.change_pct)}`}>
+                  {ix.change_pct != null ? pct(ix.change_pct) : '--'}
+                </span>
+              </FlashValue>
             </div>
             {ix.spark && ix.spark.length >= 2 && (
               <div className="mt-1.5">
@@ -644,13 +649,17 @@ export default function DashboardPage() {
       <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
         {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
         <div className="border-t border-border/60 pt-2.5">
-          <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">异动池</h2>
-            <span className="text-[10px] text-muted-foreground">东财异动</span>
-            {anomaliesLoading && anomalies.length === 0 && (
-              <RefreshCw className="ml-auto h-3 w-3 animate-spin self-center text-muted-foreground" />
-            )}
-          </div>
+          <SectionHeader
+            title="异动池"
+            action={
+              <>
+                <span className="text-[10px] text-muted-foreground">东财异动</span>
+                {anomaliesLoading && anomalies.length === 0 && (
+                  <RefreshCw className="h-3 w-3 animate-spin self-center text-muted-foreground" />
+                )}
+              </>
+            }
+          />
           {anomaliesLoading && anomalies.length === 0 ? (
             <div className="space-y-2 py-1">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -705,10 +714,7 @@ export default function DashboardPage() {
 
         {/* v0.4.7: 全市场涨跌分布(双向柱) */}
         <div className="border-t border-border/60 pt-2.5">
-          <div className="mb-2 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">涨跌分布</h2>
-            <span className="text-[10px] text-muted-foreground">全A · 9档</span>
-          </div>
+          <SectionHeader title="涨跌分布" action={<span className="text-[10px] text-muted-foreground">全A · 9档</span>} />
           <BreadthDistributionChart />
         </div>
       </div>
@@ -719,22 +725,25 @@ export default function DashboardPage() {
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* 今日要紧事(左列,窄) */}
         <div className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
-          <div className="mb-2 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">今日要紧事</h2>
-            <span className="text-[11px] text-muted-foreground">你的持仓/自选里今天该关注的</span>
-            {feed.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShareDigest(true)}
-                className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
-                title="生成今日盯盘分享图"
-              >
-                <Share2 className="h-3.5 w-3.5" />
-                分享图
-              </button>
-            )}
-          </div>
+          <SectionHeader
+            title="今日要紧事"
+            action={
+              <>
+                <span className="hidden text-[11px] text-muted-foreground xl:inline">你的持仓/自选里今天该关注的</span>
+                {feed.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShareDigest(true)}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                    title="生成今日盯盘分享图"
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                    分享图
+                  </button>
+                )}
+              </>
+            }
+          />
           {loading && candidates.length === 0 ? (
             /* 首次加载骨架(扫描完成后替换为真实列表) */
             <SkeletonRows rows={6} />
