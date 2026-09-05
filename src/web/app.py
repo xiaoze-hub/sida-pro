@@ -240,9 +240,10 @@ async def demo_isolation_middleware(request: Request, call_next):
 
     from src.core.permissions import get_role_permissions
 
-    # role 优先级: JWT payload.role → DB users.role → "member"(向后兼容老 token)
+    # role 优先级(P2-2 2026-09-05 28号审计): DB users.role → JWT payload → "member"。
+    # 降权后旧 token 不再保持高权限(老 token 无 DB 行时才回落 payload)。
     db_role, extra_perms = _resolve_user_auth(username)
-    role = (payload.get("role") if payload else None) or db_role or "member"
+    role = db_role or (payload.get("role") if payload else None) or "member"
 
     # ── guest(demo) 隔离: 行为保持现状 ──────────────────────────────
     if username == "demo" or role == "guest":

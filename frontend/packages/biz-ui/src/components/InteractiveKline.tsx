@@ -321,6 +321,8 @@ export default function InteractiveKline(props: {
   const [minuteLoading, setMinuteLoading] = useState(false)
   const [minuteError, setMinuteError] = useState<string>('')
   const minuteRef = useRef<{ pts: MinutePoint[]; prev: number | null }>({ pts: [], prev: minutePrevClose })
+  // P1-9: 跨 loadMinute/load 的请求序号(切股时旧响应丢弃)
+  const seqRef = useRef(0)
   minuteRef.current = { pts: minutePoints, prev: minutePrevClose }
   // ============== SIDA Pro: 6 个图层开关 (2026-09-01) ==============
   const [layers, setLayers] = useState<LayerState>({ ...DEFAULT_LAYERS, ...(props.initialLayers ?? {}) })
@@ -329,6 +331,8 @@ export default function InteractiveKline(props: {
 
   const loadMinute = async () => {
     if (!props.symbol) return
+    // P1-9 (2026-09-05 28号审计): 请求序号守卫, 旧响应晚到直接丢(防切股数据错位)
+    const seq = ++seqRef.current
     setMinuteLoading(true)
     setMinuteError('')
     try {
@@ -338,18 +342,20 @@ export default function InteractiveKline(props: {
         `/quotes/minute/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}`,
         { cacheMode: 'reload', timeoutMs: 60000 }  // 分时 30s 轮询需实时, 跳过前端缓存
       )
+      if (seq !== seqRef.current) return
       setMinutePoints(res.points || [])
       setMinutePrevClose(res.prev_close ?? null)
       setMinuteIsIndex(!!res.is_index)
       setMinuteSwings(res.swings || null)
     } catch (e) {
+      if (seq !== seqRef.current) return
       setMinuteError(e instanceof Error ? e.message : '加载分时失败')
       setMinutePoints([])
       setMinutePrevClose(null)
       setMinuteIsIndex(false)
       setMinuteSwings(null)
     } finally {
-      setMinuteLoading(false)
+      if (seq === seqRef.current) setMinuteLoading(false)
     }
   }
 
@@ -393,6 +399,7 @@ export default function InteractiveKline(props: {
 
   const load = async () => {
     if (!props.symbol) return
+    const seq = ++seqRef.current
     setLoading(true)
     setError('')
     setHoverTip(prev => (prev.visible ? { visible: false, x: 0, y: 0, row: null } : prev))
@@ -405,6 +412,7 @@ export default function InteractiveKline(props: {
       for (const d of attempts) {
         try {
           const res = await fetchAPI<KlinesResponse>(query(d))
+          if (seq !== seqRef.current) return
           const kl = res.klines || []
           if (kl.length > best.length) best = kl
           if (d === fixedDays && kl.length > 0) break
@@ -413,12 +421,14 @@ export default function InteractiveKline(props: {
         }
       }
       if (!best.length && lastError) throw lastError
+      if (seq !== seqRef.current) return
       setData(best)
     } catch (e) {
+      if (seq !== seqRef.current) return
       setError(e instanceof Error ? e.message : '加载K线失败')
       setData([])
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current) setLoading(false)
     }
   }
 

@@ -220,7 +220,7 @@ function CapBadges({ caps }: { caps?: string[] }) {
 }
 
 // 敏感设置 key:值不回显(后端已掩码为 ********),输入框用密码态,掩码值不参与编辑
-const SECRET_SETTING_KEYS = new Set(['wudao_mcp_token', 'zhitu_token', 'tdx_api_key'])
+const SECRET_SETTING_KEYS = new Set(['wudao_mcp_token', 'zhitu_token', 'tdx_api_key', 'ths_sdk_password'])
 const SECRET_MASK = '********'
 
 // 数据源接口 Key 元信息(与后端 SETTING_DESCRIPTIONS 对齐)
@@ -421,10 +421,10 @@ export default function SettingsPage() {
       // 2026-09-01 audit fix: allSettled 单接口失败不拖垮整页。`as const` + Promise.allSettled<unknown[]>
       // 让 TS 把 fetchAPI<T>() 推断为可变参数, 然后逐元素解构时再按位置 cast 回具体类型。
       const results = await Promise.allSettled([
-        fetchAPI<Setting[]>('/settings'),
+        fetchAPI<Setting[]>('/settings', { cacheMode: 'reload' }),
         fetchAPI<KeyDataSource[]>('/datasources', { cacheMode: 'reload' }),
         fetchAPI<AIService[]>('/providers/services', { cacheMode: 'reload' }),
-        fetchAPI<NotifyChannel[]>('/notify/channels', { cacheMode: 'reload' }),
+        fetchAPI<NotifyChannel[]>('/channels', { cacheMode: 'reload' }),
         fetchAPI<{ version: string }>('/version'),
         fetchAPI<AgentsHealth>('/agents/health'),
         listSceneBindings(),

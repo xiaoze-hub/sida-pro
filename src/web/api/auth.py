@@ -562,7 +562,8 @@ async def update_user_api(
             raise HTTPException(400, "密码长度至少 8 位")
         target.password_hash = hash_password(data.password)
         target.token_version += 1  # 踢掉该用户旧 token
-    if data.role and data.role in ("owner", "member"):
+    if data.role and data.role in ("owner", "member", "guest"):
+        # P2-10 (2026-09-05 28号审计): 与 create 三值校验对齐, owner 可设 guest
         target.role = data.role
     if data.is_active is not None:
         target.is_active = data.is_active

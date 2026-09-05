@@ -160,6 +160,15 @@ _WENCAI_TTL = 30.0
 # 30s TTL 把高频轮询合并, 行情延迟可接受)。key=symbol。
 _SNAPSHOT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _SNAPSHOT_TTL = 30.0
+# P2-24 (2026-09-05 28号审计): 三个进程内缓存上限 500, 超了挤最老
+_CACHE_MAX = 500
+
+
+def _cache_put_capped(d: dict, key: str, value) -> None:
+    d[key] = value
+    if len(d) > _CACHE_MAX:
+        for k in list(d)[: len(d) - _CACHE_MAX]:
+            del d[k]
 
 # 同花顺 SDK 凭证解析: 显式参数 > 设置页 DB(ths_username/ths_sdk_password) > env。
 # (2026-09-05: 设置页可自助填账号密码, DB 优先, 改完即时生效, 无需重建容器)
@@ -345,12 +354,27 @@ class THSDKL2:
                     self._record_success()
                     return result
             except TypeError:
-                # 兼容旧版 thsdk (不支持 buffer_size 参数): 不带传重试一次
-                with THS(config) if config else THS() as ths:
-                    method = getattr(ths, func_name)
-                    result = method(*args, **kwargs)
-                    self._record_success()
-                    return result
+                # 兼容旧版 thsdk (不支持 buffer_size 参数): 不带参直调一次,
+                # 成功则返; 失败抛给外层统一重试/熔断(P2-21: 旧代码在 except
+                # 内裸调, 再抛会绕过重试计数/熔断/统一包装)。
+                try:
+                    with THS(config) if config else THS() as ths:
+                        method = getattr(ths, func_name)
+                        result = method(*args, **kwargs)
+                        self._record_success()
+                        return result
+                except TypeError:
+                    raise
+                except Exception as e:
+                    last_err = e
+                    self._record_failure()
+                    if attempt < THS_MAX_RETRIES - 1:
+                        backoff = THS_RETRY_BACKOFF_SEC * (2 ** attempt)
+                        logger.warning(
+                            f"thsdk.{func_name} 第 {attempt+1}/{THS_MAX_RETRIES} 次失败:"
+                            f"{str(e)[:60]}, {backoff:.1f}s 后重试"
+                        )
+                        time.sleep(backoff)
             except Exception as e:
                 last_err = e
                 self._record_failure()
@@ -984,7 +1008,7 @@ class THSDKL2:
                 return cached[1]
         df = self._to_dataframe(self._query("wencai_nlp", q))
         if use_cache:
-            _WENCAI_CACHE[q] = (time.time(), df)
+            _cache_put_capped(_WENCAI_CACHE, q, (time.time(), df))
         return df
 
     # ========================================================================
@@ -1122,7 +1146,7 @@ class THSDKL2:
             "main_flow": self.compute_main_flow(symbol),
             "cached": False,
         }
-        _SNAPSHOT_CACHE[symbol] = (now, out)
+        _cache_put_capped(_SNAPSHOT_CACHE, symbol, (now, out))
         return out
 
     # ========================================================================
@@ -1289,13 +1313,24 @@ class THSDKL2:
 # ========================================================================
 
 _default_client: Optional[THSDKL2] = None
+_default_client_fingerprint: tuple = ("", "")
 
 
 def _get_default_client() -> THSDKL2:
-    """获取默认客户端(单例)"""
-    global _default_client
-    if _default_client is None:
-        _default_client = THSDKL2()
+    """获取默认客户端(单例, 按凭据指纹缓存)。
+
+    P1-11 (2026-09-05 28号审计): 设置页换凭证后指纹变化即重建,
+    否则游客态冷启动的单例会冻结旧凭据到重启。
+    """
+    global _default_client, _default_client_fingerprint
+    try:
+        u, p, _src = resolve_ths_creds()
+    except Exception:
+        u, p = "", ""
+    fp = (u or "", p or "")
+    if _default_client is None or fp != _default_client_fingerprint:
+        _default_client = THSDKL2(username=u or None, password=p or None)
+        _default_client_fingerprint = fp
     return _default_client
 
 

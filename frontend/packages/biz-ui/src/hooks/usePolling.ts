@@ -38,6 +38,8 @@ export function usePolling<T>({
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
 
   const timerRef = useRef<number | null>(null)
+  // P1-9 (2026-09-05 28号审计): 请求序号, 旧响应晚到丢弃(防切股数据错位)
+  const seqRef = useRef(0)
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -47,16 +49,19 @@ export function usePolling<T>({
   }, [])
 
   const load = useCallback(async () => {
+    const seq = ++seqRef.current
     try {
       const res = await loader()
+      if (seq !== seqRef.current) return
       setData(res)
       setError(null)
       setUpdatedAt(new Date())
     } catch (e) {
+      if (seq !== seqRef.current) return
       // 保留上次成功数据(error 与 data 并存)
       setError(e)
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current) setLoading(false)
     }
   }, [loader])
 

@@ -32,6 +32,15 @@ from src.core.summary_cache import (  # noqa: E402
 _SUMMARY_CACHE: dict = {}
 _SUMMARY_TTL = 300.0  # v0.4.8.1: 30s→5min, 冷启动重算20-30s太贵; 技术指标分钟级刷新足够
 _SUMMARY_PG_TTL = 300  # PG 落库 TTL 同进程内缓存, 双层一致
+# P2-7 (2026-09-05 28号审计): _SUMMARY_CACHE 上限 500, 超了挤最老
+_SUMMARY_MAX = 500
+
+
+def _summary_cache_set(key: str, value) -> None:
+    _SUMMARY_CACHE[key] = (_time.time(), value)
+    if len(_SUMMARY_CACHE) > _SUMMARY_MAX:
+        for k in list(_SUMMARY_CACHE)[: len(_SUMMARY_CACHE) - _SUMMARY_MAX]:
+            del _SUMMARY_CACHE[k]
 
 
 class KlineItem(BaseModel):
@@ -240,52 +249,17 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             raise HTTPException(503, f"指数K线不可用({symbol}): {e}")
 
     # 1. 优先查 PG klines hypertable(快, ~70ms)
-    from datetime import datetime, timedelta, timezone
-    from sqlalchemy import create_engine, text
-    try:
-        from src.web.database import DB_URL as _DB_URL
-        engine = create_engine(_DB_URL, pool_pre_ping=True)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT ts, open, high, low, close, volume "
-                    "FROM klines "
-                    "WHERE symbol=:s AND market=:m AND period='1d' AND source='tencent' "
-                    "  AND ts >= :c "
-                    "ORDER BY ts ASC"
-                ),
-                {"s": symbol, "m": market_code.value, "c": cutoff},
-            ).fetchall()
-        engine.dispose()
-        if rows:
-            from src.collectors.kline_collector import KlineData
-            klines = [
-                KlineData(
-                    date=str(r[0])[:10],
-                    open=float(r[1]),
-                    high=float(r[2]),
-                    low=float(r[3]),
-                    close=float(r[4]),
-                    volume=float(r[5] or 0),
-                )
-                for r in rows
-            ]
-            # v0.4.9.2: PG 命中但数据过薄(<30根)视为无效 — 新加股回填失败时只有
-            # 几天增量, 必须继续走联网源(含新浪兜底)拿完整历史
-            if len(klines) >= min(30, days):
-                klines = _aggregate_klines(klines, interval)
-                return {
-                    "symbol": symbol,
-                    "market": market_code.value,
-                    "days": days,
-                    "interval": interval,
-                    "klines": _serialize_klines(klines),
-                    "source": "pg_klines_hypertable",
-                }
-    except Exception:
-        # 库表可能不存在(SQLite/老库)或查询失败 → fallback 联网
-        pass
+    pg_klines = _pg_klines(symbol, market_code, days)
+    if pg_klines is not None:
+        klines = _aggregate_klines(pg_klines, interval)
+        return {
+            "symbol": symbol,
+            "market": market_code.value,
+            "days": days,
+            "interval": interval,
+            "klines": _serialize_klines(klines),
+            "source": "pg_klines_hypertable",
+        }
 
     # 2. Fallback: 联网拉 KlineCollector
     collector = KlineCollector(market_code)
@@ -300,29 +274,85 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
     }
 
 
+def _pg_klines(symbol: str, market_code, days: int):
+    """PG klines hypertable 直读(单股/batch 共用, P2-5/P2-6)。
+
+    命中且厚度足够(≥min(30,days))返回 KlineData 列表, 否则 None → 联网。
+    库表不存在/查询失败一律 None(静默 fallback)。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    try:
+        from src.web.database import engine as _engine
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        with _engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT ts, open, high, low, close, volume "
+                    "FROM klines "
+                    "WHERE symbol=:s AND market=:m AND period='1d' AND source='tencent' "
+                    "  AND ts >= :c "
+                    "ORDER BY ts ASC"
+                ),
+                {"s": symbol, "m": market_code.value, "c": cutoff},
+            ).fetchall()
+        if not rows:
+            return None
+        from src.collectors.kline_collector import KlineData
+
+        klines = [
+            KlineData(
+                date=str(r[0])[:10],
+                open=float(r[1]),
+                high=float(r[2]),
+                low=float(r[3]),
+                close=float(r[4]),
+                volume=float(r[5] or 0),
+            )
+            for r in rows
+        ]
+        # v0.4.9.2: PG 命中但数据过薄视为无效 → 联网拿完整历史
+        if len(klines) >= min(30, days):
+            return klines
+        return None
+    except Exception:
+        return None
+
+
 @router.post("/batch")
 def get_klines_batch(payload: KlineBatchRequest):
-    """批量获取K线数据"""
+    """批量获取K线数据(P2-6: 与单股同口径, PG 优先再联网)"""
     if not payload.items:
         return []
 
     results = []
     for item in payload.items:
         market_code = _parse_market(item.market)
-        collector = KlineCollector(market_code)
         days = item.days or 60
         interval = item.interval or "1d"
-        klines = collector.get_klines(item.symbol, days=days)
+        # P2-6 (2026-09-05 28号审计): batch 与单股同口径, 先 PG 再联网
+        pg_klines = _pg_klines(item.symbol, market_code, days)
+        source = None
+        if pg_klines is not None:
+            klines = pg_klines
+            source = "pg_klines_hypertable"
+        else:
+            collector = KlineCollector(market_code)
+            klines = collector.get_klines(item.symbol, days=days)
         klines = _aggregate_klines(klines, interval)
-        results.append(
-            {
-                "symbol": item.symbol,
-                "market": market_code.value,
-                "days": days,
-                "interval": interval,
-                "klines": _serialize_klines(klines),
-            }
-        )
+        row = {
+            "symbol": item.symbol,
+            "market": market_code.value,
+            "days": days,
+            "interval": interval,
+            "klines": _serialize_klines(klines),
+        }
+        if source:
+            row["source"] = source
+        results.append(row)
 
     return results
 
@@ -756,7 +786,7 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
     # L2: PG 落库缓存(进程重启/容器迁移兜底, refresh 跳过)
     pg_hit = None if refresh else get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
     if pg_hit:
-        _SUMMARY_CACHE[cache_key] = (now, pg_hit)
+        _summary_cache_set(cache_key, pg_hit)
         return pg_hit
     collector = KlineCollector(market_code)
     summary = collector.get_kline_summary(symbol)
@@ -818,7 +848,7 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
         # A4 拆单簇暗盘(2026-09-01 接入 summary,前端资金面板双口径展示)
         "dark_clusters": dark_clusters,
     }
-    _SUMMARY_CACHE[cache_key] = (now, result)
+    _summary_cache_set(cache_key, result)
     # L2 落库(进程重启/容器迁移兜底, 失败永不抛)
     try:
         put_cached_summary(symbol, market_code.value, result, ttl_s=_SUMMARY_PG_TTL)

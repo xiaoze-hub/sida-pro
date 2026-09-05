@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Search, Loader2 } from 'lucide-react'
 import { insightApi } from '@panwatch/api'
@@ -85,8 +85,11 @@ export default function L2OrderbookPage() {
   const [mi, setMi] = useState<MoreInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<string>('')
+  // P1-9 (2026-09-05 28号审计): 请求序号守卫, 防切股旧响应覆盖
+  const seqRef = useRef(0)
 
   const load = useCallback(async (sym: string) => {
+    const seq = ++seqRef.current
     setLoading(true)
     try {
       const [o, s, m] = await Promise.all([
@@ -94,12 +97,13 @@ export default function L2OrderbookPage() {
         insightApi.klineSummary<{ orderbook?: SummaryOb }>(sym, 'CN').catch(() => null),
         insightApi.moreInfo<MoreInfo>(sym, 'CN').catch(() => null),
       ])
+      if (seq !== seqRef.current) return
       if (o) setOb(o)
       if (s) setSumOb(s.orderbook ?? null)
       if (m) setMi(m)
       setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current) setLoading(false)
     }
   }, [])
 

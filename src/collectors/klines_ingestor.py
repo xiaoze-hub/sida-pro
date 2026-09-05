@@ -70,33 +70,41 @@ async def ingest_symbol(
     period: str,
     days: int,
 ) -> dict:
-    """拉 1 只股的 K线,3 源各一份入库。返回入库统计。"""
+    """拉 1 只股的 K线,3 源各一份入库。返回入库统计。
+
+    P2-19 (2026-09-05 28号审计): 三路同链(engine 按优先级自动选源,
+    fetch_source 只是日志标记), 拉一次复用三份 — 与旧行为输出一致,
+    省 2/3 外网请求。真·分源直拉待 engine 暴露源选择后再做。
+    """
     rows_by_source: dict[str, list[dict]] = {s: [] for s in [SOURCE_TENCENT, SOURCE_EASTMONEY, SOURCE_SINA]}
 
-    # 3 个源并发拉
-    tasks = [
-        asyncio.to_thread(_fetch_from_source, src, symbol, market, days)
-        for src in rows_by_source.keys()
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # 单链拉一次(三路同链, 结果相同)
+    try:
+        klines = await asyncio.to_thread(_fetch_from_source, "mixed", symbol, market, days)
+    except Exception as e:
+        return {"symbol": symbol, "market": market.value, "period": period,
+                "ingested": 0, "by_source": {},
+                "fail_details": [{"source": "mixed", "error": f"{type(e).__name__}: {e}"}]}
 
     # 2026-08-23 修复(M-11): 收集失败明细, 便于上游聚合日志。
     fail_details: list[dict] = []
-    for src_name, klines in zip(rows_by_source.keys(), results):
-        if isinstance(klines, Exception):
-            # asyncio.gather(return_exceptions=True) 抛出的异常
-            fail_details.append({"source": src_name, "error": f"{type(klines).__name__}: {klines}"})
-            continue
-        if not isinstance(klines, list) or not klines:
-            fail_details.append({"source": src_name, "error": "empty/no klines"})
-            continue
-        for k in klines:
-            # KlineData.date 是 'YYYY-MM-DD', 转为 ts (带时区)
-            try:
-                ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
-            except Exception:
-                ts = datetime.now(timezone.utc)
-            rows_by_source[src_name].append(_to_db_row(symbol, market.value, period, src_name, k, ts))
+    if not isinstance(klines, list) or not klines:
+        fail_details.append({"source": "mixed", "error": "empty/no klines"})
+    else:
+        for src_name in rows_by_source.keys():
+            for k in klines:
+                # KlineData.date 是 'YYYY-MM-DD'(CST 交易日) → 当天 00:00 CST 转 UTC
+                # P2-19: 旧代码 .replace(tzinfo=utc) 把北京时间午夜标成 UTC 午夜, 差 8h
+                try:
+                    from zoneinfo import ZoneInfo
+
+                    ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                except Exception:
+                    try:
+                        ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
+                    except Exception:
+                        ts = datetime.now(timezone.utc)
+                rows_by_source[src_name].append(_to_db_row(symbol, market.value, period, src_name, k, ts))
 
     # 入库
     total = 0

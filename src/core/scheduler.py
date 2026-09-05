@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from functools import partial
 import time
 from typing import Callable
 
@@ -123,7 +124,10 @@ class AgentScheduler:
                         f"[调度] Agent 单只模式执行完成: {agent.display_name}（执行{processed}，跳过{skipped}，共{len(context.watchlist)}）"
                     )
                     duration_ms = int((time.monotonic() - start) * 1000)
-                    record_agent_run(
+                    # P2-9: 同步 DB 写放线程池, 不卡调度 loop
+                    await asyncio.to_thread(
+                        partial(
+                        record_agent_run,
                         agent_name=agent_name,
                         status="failed" if errors else "success",
                         result=f"single mode executed {processed}, skipped {skipped}, total {len(context.watchlist)}",
@@ -132,7 +136,7 @@ class AgentScheduler:
                         trace_id=trace_id,
                         trigger_source="schedule",
                         model_label=context.model_label,
-                    )
+                    ))
                 else:
                     with kline_source(f"agent:{agent_name}"):
                         result = await agent.run(context)
@@ -143,7 +147,10 @@ class AgentScheduler:
                     except Exception:
                         notify_error = ""
                     raw = result.raw_data or {}
-                    record_agent_run(
+                    # P2-9: 同步 DB 写放线程池
+                    await asyncio.to_thread(
+                        partial(
+                        record_agent_run,
                         agent_name=agent_name,
                         status="failed" if notify_error else "success",
                         result=(result.content or "")[:2000],
@@ -158,7 +165,7 @@ class AgentScheduler:
                         ),
                         notify_sent=bool(raw.get("notified", False)),
                         model_label=context.model_label,
-                    )
+                    ))
                     # 多用户定时报告推送(2026-08-10 阶段4):
                     # agent 已通过全局渠道推送(owner), 再按订阅用户逐个推其个人渠道
                     # ⚠️ 用 to_thread 异步执行: 同步DB写+webhook推送不能阻塞事件循环
@@ -170,14 +177,17 @@ class AgentScheduler:
         except Exception as e:
             logger.error(f"Agent [{agent_name}] 调度执行异常: {e}", exc_info=True)
             duration_ms = int((time.monotonic() - start) * 1000)
-            record_agent_run(
+            # P2-9: 同步 DB 写放线程池
+            await asyncio.to_thread(
+                partial(
+                record_agent_run,
                 agent_name=agent_name,
                 status="failed",
                 error=str(e),
                 duration_ms=duration_ms,
                 trace_id=trace_id,
                 trigger_source="schedule",
-            )
+            ))
 
     async def trigger_now(self, agent_name: str):
         """立即执行某个 Agent（手动触发）"""

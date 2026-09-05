@@ -139,16 +139,18 @@ class RedisClient:
             return 0
 
     async def incr(self, key: str, ttl_seconds: Optional[int] = None) -> Optional[int]:
-        """原子递增 — 用于限流计数器"""
+        """原子递增 — 用于限流计数器。
+
+        P1-1 (2026-09-05 28号审计): TTL 只在 count==1 时设, 否则每次请求
+        重刷 TTL 会导致 key 永不过期、count 无限累加误锁用户。
+        """
         if not self.enabled:
             return None
         try:
-            pipe = self._client.pipeline()
-            pipe.incr(key)
-            if ttl_seconds:
-                pipe.expire(key, ttl_seconds)
-            results = await pipe.execute()
-            return int(results[0]) if results else None
+            count = await self._client.incr(key)
+            if ttl_seconds and int(count) == 1:
+                await self._client.expire(key, ttl_seconds)
+            return int(count)
         except Exception as e:
             logger.warning(f"[Redis] incr({key}) failed: {e}")
             return None

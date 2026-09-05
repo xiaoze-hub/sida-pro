@@ -2561,9 +2561,10 @@ export default function StockInsightModal(props: {
 }
 
 const DEEP_DECISION_COLOR: Record<string, string> = {
-  buy: 'text-emerald-600 dark:text-emerald-400',
+  // P1-10 (2026-09-05 28号审计): A股买红卖绿
+  buy: 'text-stock-up',
   hold: 'text-amber-600 dark:text-amber-400',
-  sell: 'text-rose-600 dark:text-rose-400',
+  sell: 'text-stock-down',
 }
 
 const DEEP_STAGE_LABEL: Record<string, string> = {
@@ -2738,7 +2739,8 @@ function DeepHistoryComparison({
   const fmtPct = (v: number | null): string => (v == null ? '-' : `${(v * 100).toFixed(0)}%`)
   const fmtRet = (v: number | null): string => (v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
   const retCls = (v: number | null): string =>
-    v == null ? 'text-muted-foreground' : v > 0 ? 'text-emerald-600 dark:text-emerald-400' : v < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground'
+    // P1-10: 正收益红/负绿(买红卖绿), 与 Opportunities 一致
+    v == null ? 'text-muted-foreground' : v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 
   return (
     <div className="rounded-lg border border-border/50 p-3 space-y-2">
@@ -2753,11 +2755,11 @@ function DeepHistoryComparison({
         </div>
         <div className="rounded bg-accent/30 px-2 py-1.5">
           <div className="text-muted-foreground">买入 ({stats.buy_count})</div>
-          <div className="font-semibold text-emerald-600 dark:text-emerald-400">{fmtPct(stats.buy_hit_rate)}</div>
+          <div className="font-semibold text-stock-up">{fmtPct(stats.buy_hit_rate)}</div>
         </div>
         <div className="rounded bg-accent/30 px-2 py-1.5">
           <div className="text-muted-foreground">卖出 ({stats.sell_count})</div>
-          <div className="font-semibold text-rose-600 dark:text-rose-400">{fmtPct(stats.sell_hit_rate)}</div>
+          <div className="font-semibold text-stock-down">{fmtPct(stats.sell_hit_rate)}</div>
         </div>
         <div className="rounded bg-accent/30 px-2 py-1.5">
           <div className="text-muted-foreground">平均 20 日收益</div>

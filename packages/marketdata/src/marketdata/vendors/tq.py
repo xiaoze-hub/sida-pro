@@ -63,6 +63,10 @@ def tq_bars_fresh(dates: list | None) -> bool:
 # 探测只在进程内做一次(成本 ~几十 ms), 失败保持旧默认, 行为不变。
 # ---------------------------------------------------------------------------
 _TQ_URL_CACHE: str | None = None
+# P2-18: 失败缓存 5min 后重探(网关重启可恢复); 成功缓存永久
+_TQ_URL_CACHE_OK = False
+_TQ_URL_CACHE_TS = 0.0
+_TQ_FAIL_TTL = 300.0
 _FALLBACK_URL = "http://172.18.0.1:5100/"
 
 
@@ -99,9 +103,11 @@ def _probe_tq(url: str, timeout: float = 1.5) -> bool:
 
 
 def _resolve_tq_url() -> str:
-    """解析可用的 TQ 网关地址(一次探测, 结果缓存)。"""
-    global _TQ_URL_CACHE
-    if _TQ_URL_CACHE:
+    """解析可用的 TQ 网关地址(成功缓存永久, 失败缓存 5min 后重探)。"""
+    import time as _time
+
+    global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS
+    if _TQ_URL_CACHE and (_TQ_URL_CACHE_OK or _time.time() - _TQ_URL_CACHE_TS < _TQ_FAIL_TTL):
         return _TQ_URL_CACHE
 
     env_url = (os.environ.get("TDX_QUANT_URL") or "").strip()
@@ -120,10 +126,14 @@ def _resolve_tq_url() -> str:
     for u in candidates:
         if _probe_tq(u):
             _TQ_URL_CACHE = u
+            _TQ_URL_CACHE_OK = True
+            _TQ_URL_CACHE_TS = _time.time()
             logger.info("TQ 网关自动命中: %s", u)
             return u
 
     _TQ_URL_CACHE = candidates[0] if candidates else _FALLBACK_URL
+    _TQ_URL_CACHE_OK = False
+    _TQ_URL_CACHE_TS = _time.time()
     logger.warning("TQ 网关探测全部失败, 沿用默认 %s(将降级其他数据源)", _TQ_URL_CACHE)
     return _TQ_URL_CACHE
 
@@ -166,10 +176,11 @@ def to_tq_code(sym: Symbol) -> str | None:
     code = sym.code.strip()
     if sym.market != Market.CN or len(code) != 6 or not code.isdigit():
         return None
+    # P2-17 (2026-09-05 28号审计): 92 前缀优先判 BJ(920xxx 会先命中下面的 "9"→SH)
+    if code.startswith(("92", "4", "8")):
+        return f"{code}.BJ"
     if code.startswith(("6", "9", "5")):
         return f"{code}.SH"
-    if code.startswith(("4", "8", "92")):
-        return f"{code}.BJ"
     return f"{code}.SZ"
 
 
@@ -299,7 +310,11 @@ class TqMoreInfoVendor(MoreInfoVendor):
             except Exception as e:  # noqa: BLE001
                 logger.warning("TQ get_more_info %s failed: %s", tqc, e)
                 continue
-            if not isinstance(raw, dict) or raw.get("ErrorId") not in ("0", None, ""):
+            # P2-18: 非 dict 直接跳过(旧代码会掉进 _parse_more_info 炸批)
+            if not isinstance(raw, dict):
+                logger.warning("TQ get_more_info %s 非 dict 响应, 跳过", tqc)
+                continue
+            if raw.get("ErrorId") not in ("0", None, "", 0):
                 # TQ 返回 ErrorId 非0 时 raw 可能含 Error 字段，直接跳过
                 if isinstance(raw, dict) and raw.get("ErrorId") not in ("0", None, "", 0):
                     logger.warning("TQ get_more_info %s ErrorId=%s", tqc, raw.get("ErrorId"))

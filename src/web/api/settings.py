@@ -210,6 +210,20 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
 
 @router.put("/{key}", response_model=SettingResponse)
 def update_setting(key: str, update: SettingUpdate, db: Session = Depends(get_db)):
+    # P2-1 (2026-09-05 28号审计): key 白名单, 系统保留键拒绝直写
+    if key not in SETTING_KEYS:
+        from fastapi import HTTPException
+
+        raise HTTPException(400, f"未知设置键: {key}")
+    if key in ("jwt_secret", "allow_register"):
+        from fastapi import HTTPException
+
+        raise HTTPException(403, "系统保留键, 拒绝直写")
+    # P1-7: 掩码值拒收兜底, 防前端把 "********" 写回毁凭证
+    if key in SECRET_SETTING_KEYS and (update.value or "") == SECRET_MASK:
+        from fastapi import HTTPException
+
+        raise HTTPException(400, "敏感值未变更(掩码占位), 拒绝写入")
     setting = db.query(AppSettings).filter(AppSettings.key == key).first()
     if not setting:
         desc = SETTING_DESCRIPTIONS.get(key, "")

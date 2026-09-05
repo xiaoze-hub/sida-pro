@@ -72,7 +72,7 @@ class CapitalFlow:
     symbol: str
     name: str
     main_net_inflow: float | None = None      # 主力净流入
-    main_net_inflow_pct: float | None = None   # 主力净流入占比
+    main_net_inflow_pct: float | None = None   # 主力净流入占比(百分点口径: 12.34 表示 12.34%)
     super_net_inflow: float | None = None      # 超大单净流入
     big_net_inflow: float | None = None        # 大单净流入
     mid_net_inflow: float | None = None        # 中单净流入

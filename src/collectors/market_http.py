@@ -53,13 +53,20 @@ _last_call: dict[str, float] = {}
 
 
 def throttle(host_key: str, min_interval_s: float) -> None:
-    """保证对同一 host 的请求间隔 ≥ min_interval_s,平滑顺序/并发突发。"""
+    """保证对同一 host 的请求间隔 ≥ min_interval_s,平滑顺序/并发突发。
+
+    P2-20 (2026-09-05 28号审计): sleep 移出全局锁 — 锁内只算等待时长,
+    否则跨 host 请求在锁内串行, 多线程采集退化成单线程。
+    """
     if min_interval_s <= 0:
         return
     with _THROTTLE_LOCK:
         wait = min_interval_s - (time.time() - _last_call.get(host_key, 0.0))
-        if wait > 0:
-            time.sleep(wait)
+        if wait <= 0:
+            _last_call[host_key] = time.time()
+            return
+    time.sleep(wait)
+    with _THROTTLE_LOCK:
         _last_call[host_key] = time.time()
 
 

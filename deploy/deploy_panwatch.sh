@@ -18,7 +18,9 @@ set -euo pipefail
 
 REPO_DIR="${PANWATCH_REPO:-/tmp/PanWatch}"
 CONTAINER="panwatch"
-IMAGE="ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest"
+# P1-14: 与 CI 保持一致, 拉 ACR 版本镜像(默认 latest, 发版传 PANWATCH_VERSION=vX.Y.Z)
+ACR="crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz"
+IMAGE="${ACR}:${PANWATCH_VERSION:-latest}"
 TOKEN="${WUDAO_MCP_TOKEN:-}"
 DOCKER="${SUDO:-sudo} docker"
 
@@ -82,6 +84,8 @@ FILES=(
   "src/core/strategy_engine.py"
   "src/core/entry_candidates.py"
   "src/core/sector_filter.py"
+  # P2-26 (2026-09-05 28号审计): 热补丁清单补 data_source/(thsdk 凭据链常改)
+  "data_source/thsdk_l2.py"
   "forecast_lib/forecast_sentiment.py"
   "deploy/sync_forecast_llm.sh"
   "src/agents/stock_attribution.py"
@@ -145,14 +149,19 @@ rebuild_container() {
   if [ -n "$TDX_API_KEY" ]; then
     env_args+=(-e "TDX_API_KEY=$TDX_API_KEY")
   fi
-  ALPHAVANTAGE_KEYS="${ALPHAVANTAGE_KEYS:-UMUYI8V9RY6G01YK,SWRYBMSODCF79F93,F03QKC81DCPXQQEF}"
+  # P1-15 (2026-09-05): 真实 key 禁止进仓库, 空值 = 不注入(走设置页/环境)
+  ALPHAVANTAGE_KEYS="${ALPHAVANTAGE_KEYS:-}"
   if [ -n "$ALPHAVANTAGE_KEYS" ]; then
     env_args+=(-e "ALPHAVANTAGE_KEYS=$ALPHAVANTAGE_KEYS")
   fi
-  TWELVEDATA_KEYS="${TWELVEDATA_KEYS:-1fe165e6ff3e482bbc17184e9e71403e,69d5afc65f9d49569648c07d389fcd13}"
+  TWELVEDATA_KEYS="${TWELVEDATA_KEYS:-}"
   if [ -n "$TWELVEDATA_KEYS" ]; then
     env_args+=(-e "TWELVEDATA_KEYS=$TWELVEDATA_KEYS")
   fi
+  # P1-14: 生产三链路透传(与小主机现运行容器对齐, 缺失则不注入)
+  for _k in REDIS_URL SIDA_DB_URL THS_USERNAME THS_PASSWORD THS_MAC TDX_API_KEY ZHITU_TOKEN AUTH_USERNAME; do
+    if [ -n "${!_k:-}" ]; then env_args+=(-e "$_k=${!_k}"); fi
+  done
   $DOCKER run -d \
     --name "$CONTAINER" \
     -p 8000:8000 \

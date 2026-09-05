@@ -5,7 +5,7 @@ L2 逐笔数据源(thsdk 同花顺 + 通达信 .tck, 双实现)
 
 把 dark_flow.py 预留的 `fetch_l2_ticks(code, source)` 占位替换为真实实现:
 - `thsdk`   : 同花顺 thsdk tick_super_level1(约 3 秒累计条), 差分还原。
-  2026-09-05 扶正: 生产跑**正式账户**(mx_8lj4le6qd, 200ms 限频), 非游客;
+  2026-09-05 扶正: 生产跑**正式账户**(见容器 env THS_USERNAME, 200ms 限频), 非游客;
   旧文写游客是因 2026-08-19 在 101 服务器用游客测的, 口径(单位/差分/方向码)不变。
 - `tdx_tck` : 通达信 .tck 超盘回放落盘(36字节委托号级, 官方方向 2B/2S, 2026-08-31 接入)
 
@@ -37,7 +37,7 @@ L2 逐笔数据源(thsdk 同花顺 + 通达信 .tck, 双实现)
 
 **盘中验证(2026-09-03 11:08, 神剑002361, 已通过)**:
 - thsdk tick_super_level1 游客模式: 1962 笔实时(09:25→11:08), B1045/S882/M35, 累计 8.76 亿。
-- thsdk big_order_flow 账号模式(mx_8lj4le6qd, 云端L2通): 512 笔大单, B215/S297,
+- thsdk big_order_flow 账号模式(正式账户, 云端L2通): 512 笔大单, B215/S297,
   active296/passive216, 累计 2.92 亿。凭据走环境变量当次传入, 不落盘不提交。
 """
 
@@ -130,13 +130,15 @@ def _fetch_raw_rows(code: str) -> list[dict]:
         raw = l2._query("tick_super_level1", code)
     except ImportError:
         # 仓库主环境无 pandas/thsdk 时降级为裸 THS 上下文(仅限频)
+        # P2-25 (2026-09-05 28号审计): config 键名与 THSDKL2._build_config 对齐
+        # (username/password/mac), 旧 ths_username 键 THS() 不认会静默变游客
         import time as _t
         from thsdk import THS
         config = {}
-        for k in ("THS_USERNAME", "THS_PASSWORD", "THS_MAC"):
+        for k, ck in (("THS_USERNAME", "username"), ("THS_PASSWORD", "password"), ("THS_MAC", "mac")):
             import os
             if os.environ.get(k):
-                config[k.lower() if k != "THS_MAC" else "mac"] = os.environ.get(k)
+                config[ck] = os.environ.get(k)
         _t.sleep(0.05)
         for attempt in range(3):
             try:
@@ -301,10 +303,16 @@ def _query_thsdk(method_name: str, code: str, timeout_s: float = THS_CALL_TIMEOU
     except ImportError:
         raise RuntimeError("thsdk 未安装")
 
-    user = _os.environ.get("THS_USERNAME")
-    pwd = _os.environ.get("THS_PASSWORD")
+    # P1-12 (2026-09-05 28号审计): 走 resolve_ths_creds(设置页 DB > env),
+    # 与 THSDKL2 同口径, 不再 env-only
+    try:
+        from data_source.thsdk_l2 import resolve_ths_creds
+
+        user, pwd, _src = resolve_ths_creds()
+    except Exception:
+        user, pwd = _os.environ.get("THS_USERNAME"), _os.environ.get("THS_PASSWORD")
     if not (user and pwd):
-        raise RuntimeError("THS_USERNAME/THS_PASSWORD 未设置")
+        raise RuntimeError("同花顺凭证未设置(设置页 ths_username/ths_sdk_password 或 env THS_USERNAME/THS_PASSWORD)")
 
     def _call_once() -> object:
         _time.sleep(0.05)  # 限频

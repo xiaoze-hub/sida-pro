@@ -5,6 +5,7 @@ forecast_server.py(:8010),避免前端直连内部端口。
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -345,7 +346,10 @@ async def forecast_report_push(payload: dict):
             try:
                 from src.collectors.capital_flow_collector import CapitalFlowCollector
                 from src.models.market import MarketCode
-                cf = CapitalFlowCollector(MarketCode.CN).get_capital_flow(symbol)
+                # P1-3 (2026-09-05 28号审计): 同步外网采集放线程池, 不阻塞事件循环
+                cf = await asyncio.to_thread(
+                    CapitalFlowCollector(MarketCode.CN).get_capital_flow, symbol
+                )
                 if cf is not None:
                     payload["capital_flow"] = {
                         "main_net_inflow": cf.main_net_inflow,

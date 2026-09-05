@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, TrendingUp, RefreshCw, Activity, BarChart3, Flame, Droplets } from 'lucide-react'
+import { ArrowLeft, TrendingUp, RefreshCw, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import { describeApiError } from '@/lib/api-error'
 import { safeFixed, safeNum, safeNetInflow } from '@/lib/format'
@@ -142,18 +143,18 @@ export default function IndexDetailPage() {
                 <div><span className="block text-[10px]">今开</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.open)}</span></div>
                 <div><span className="block text-[10px]">最高</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.high)}</span></div>
                 <div><span className="block text-[10px]">最低</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.low)}</span></div>
-                <div><span className="block text-[10px]">成交量</span><span className="font-mono text-foreground tabular-nums">{q?.volume != null && Number.isFinite(Number(q.volume)) ? safeFixed(Number(q.volume) / 1e8) + '亿' : '--'}</span></div>
+                <div><span className="block text-[10px]">成交量</span><span className="font-mono text-foreground tabular-nums">{q?.volume != null && Number.isFinite(Number(q.volume)) ? safeFixed(Number(q.volume) / 1e8) + '亿股' : '--'}</span></div>
               </div>
             </div>
           </div>
 
           {/* K线走势(主图裸放, 无卡片包) */}
           <div className="space-y-1">
-            <div className="flex items-center gap-2 mb-2">
-              <Activity className="h-4 w-4" />
-              <span className="font-bold">K线走势</span>
-              <span className="text-[10px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>
-            </div>
+            {/* P2-15: 收敛 SectionHeader(v0.5.2 收尾) */}
+            <SectionHeader
+              title="K线走势"
+              action={<span className="text-[10px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>}
+            />
             <InteractiveKline symbol={symbol || ''} market={data.market || 'CN'} initialInterval="1d" initialDays="120" /* SIDA Pro v2.0: 图层开关由 InteractiveKline 内部 DEFAULT_LAYERS 控制 */ />
           </div>
 

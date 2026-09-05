@@ -92,8 +92,10 @@ class DBLogHandler(logging.Handler):
                         del self._buffer[:overflow]
                         self._dropped_entries += overflow
                 self._buffer.append(entry)
+                # P2-8 (2026-09-05 28号审计): ERROR 也不在调用线程同步落库,
+                # 只起后台线程刷(调用线程可能是事件循环, 同步 DB 写会卡全站)
                 if record.levelno >= logging.ERROR or len(self._buffer) >= BUFFER_SIZE:
-                    self._flush_unlocked()
+                    threading.Thread(target=self._threaded_flush, daemon=True).start()
         except Exception:
             # Avoid recursion if logging path fails
             pass
@@ -107,6 +109,11 @@ class DBLogHandler(logging.Handler):
         with self._lock:
             self._flush_unlocked()
         self._start_flush_timer()
+
+    def _threaded_flush(self):
+        """后台线程刷库(调用方不等待)。"""
+        with self._lock:
+            self._flush_unlocked()
 
     def _flush_unlocked(self):
         if not self._buffer:
