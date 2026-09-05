@@ -277,7 +277,7 @@ export default function PriceAlertsPage() {
   }
 
   return (
-    <div>
+    <div className="sida-page-enter">
       <div className="mb-4 md:mb-8">
         <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">价格提醒</h1>
         <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">到价/量能触发，支持冷却、每日上限与交易时段门禁</p>

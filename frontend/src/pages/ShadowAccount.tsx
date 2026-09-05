@@ -160,7 +160,7 @@ iframe{width:100%;height:100%;border:0}
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+    <div className="sida-page-enter max-w-5xl mx-auto px-4 py-6 space-y-6">
       {/* 页头 */}
       <div>
         <h1 className="text-[17px] font-semibold text-foreground flex items-center gap-2">

@@ -362,7 +362,7 @@ export default function QuotePage() {
   }, [selectedRange, summary?.fund_flow])
 
   return (
-    <div className="w-full space-y-3">
+    <div className="sida-page-enter w-full space-y-3">
       {/* === 顶部数据条(不是卡片, 是 flex 数据条) === */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
         <h1 className="text-base font-semibold text-foreground">行情</h1>

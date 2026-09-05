@@ -128,7 +128,7 @@ export default function L2OrderbookPage() {
   const zjl = rawPick(mi?.raw, 'Zjl', 'zjl', 'ZJL')
 
   return (
-    <div className="w-full space-y-3">
+    <div className="sida-page-enter w-full space-y-3">
       {/* === 顶部条 === */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
         <h1 className="text-base font-semibold text-foreground">盘口资金</h1>

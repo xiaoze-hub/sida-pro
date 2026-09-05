@@ -101,7 +101,7 @@ export default function IndexDetailPage() {
   const up = (q?.change_pct || 0) >= 0
 
   return (
-    <div className="space-y-4">
+    <div className="sida-page-enter space-y-4">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" className="h-8" onClick={() => navigate(-1)}>
           <ArrowLeft className="h-4 w-4" />

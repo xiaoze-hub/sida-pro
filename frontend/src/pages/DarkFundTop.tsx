@@ -141,7 +141,7 @@ export default function DarkFundTopPage() {
   // 场景 2: 有快照
   if (isSnapshot(data)) {
     return (
-      <div className="space-y-4">
+      <div className="sida-page-enter space-y-4">
         {/* 顶部摘要 + 操作栏 */}
         <div className="border-b border-border/40 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">

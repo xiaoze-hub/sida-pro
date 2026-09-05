@@ -269,7 +269,7 @@ export default function AnalysisDetailPage() {
   )
 
   return (
-    <div className="min-h-screen">
+    <div className="sida-page-enter min-h-screen">
       <div className="max-w-5xl mx-auto px-4 pb-12 flex gap-8">
         {/* 左列:标题栏 + 正文(标题栏只占左列宽度,不压到右侧目录) */}
         <div className="flex-1 min-w-0 max-w-3xl">

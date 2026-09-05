@@ -331,7 +331,7 @@ export default function PaperTradingPage() {
   const ratioSum = (Number(cfgRatios.CN) || 0) + (Number(cfgRatios.HK) || 0) + (Number(cfgRatios.US) || 0)
 
   return (
-    <div className="space-y-5">
+    <div className="sida-page-enter space-y-5">
       {/* 2026-08-17 闭环修正(B 报告 P0-3):错误态系统统一 */}
       <ErrorBanner
         errors={loadError ? [{ source: '模拟盘', message: loadError, retry: () => void loadData() }] : []}

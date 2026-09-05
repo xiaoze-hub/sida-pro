@@ -496,7 +496,7 @@ export default function AgentsPage() {
   }
 
   return (
-    <div>
+    <div className="sida-page-enter">
       {/* 2026-08-17 闭环修正:错误态系统统一(B 报告 P0-3) */}
       <ErrorBanner
         errors={loadError ? [{ source: 'Agent 配置', message: loadError, retry: () => void load() }] : []}

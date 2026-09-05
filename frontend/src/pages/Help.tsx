@@ -68,7 +68,7 @@ const HOTKEYS = [
 
 export default function HelpPage() {
   return (
-    <div className="page-container pb-10">
+    <div className="page-container sida-page-enter pb-10">
       {/* Hero */}
       <div className="border-b border-border/40 p-5 md:p-7">
         <div className="flex items-start gap-3">

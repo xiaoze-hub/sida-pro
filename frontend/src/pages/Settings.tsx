@@ -1265,7 +1265,7 @@ export default function SettingsPage() {
   // 2026-08-17: 全局搜索过滤 section(不匹配的 section 直接隐藏) —
 
   return (
-    <div>
+    <div className="sida-page-enter">
       {/* Hero */}
       <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-accent/30" />

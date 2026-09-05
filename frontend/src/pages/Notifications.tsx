@@ -311,7 +311,7 @@ export default function NotificationsPage() {
   const selectedPush = selected ? (PUSH_META[selected.push_status] || null) : null
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] space-y-4">
+    <div className="sida-page-enter mx-auto w-full max-w-[1480px] space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight text-foreground md:text-[22px]">
