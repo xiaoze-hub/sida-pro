@@ -51,6 +51,8 @@ class BizCache:
 
     def __init__(self) -> None:
         self._l1: dict[str, tuple[float, Any]] = {}  # key -> (expires_at, value)
+        # P2-7 (2026-09-05 28号审计): L1 上限 2000, 超了按 FIFO 挤掉最老的
+        self._l1_max = 2000
         self._lock = threading.Lock()
         self._redis: Any = None
         self._redis_attempted = False
@@ -138,6 +140,10 @@ class BizCache:
         expires_at = now + (ttl if ttl and ttl > 0 else 60.0)
         with self._lock:
             self._l1[key] = (expires_at, value)
+            # P2-7: 超上限挤掉最老一批(按插入序, dict 保序)
+            if len(self._l1) > self._l1_max:
+                for k in list(self._l1)[: len(self._l1) - self._l1_max]:
+                    del self._l1[k]
 
         r = self._ensure_redis()
         if r is None:

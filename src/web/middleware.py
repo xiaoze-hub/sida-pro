@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import os
+import asyncio
 from collections import defaultdict
 from typing import Tuple
 
@@ -23,6 +24,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
+
+# P2-3: 审计后台 task 持有集合, 防 GC 回收
+_AUDIT_TASKS: set = set()
 
 
 # ─── 全局开关 ───
@@ -330,7 +334,14 @@ class AuditMiddleware(BaseHTTPMiddleware):
             resource = parts[2] if len(parts) > 2 and parts[2] else path
             action = f"{method} /{resource}"
 
+            # P2-3 (2026-09-05 28号审计): DB 写放线程池 + task 持有防 GC
             async def _write():
+                try:
+                    await asyncio.to_thread(_write_sync)
+                except Exception:
+                    pass
+
+            def _write_sync():
                 try:
                     db = SessionLocal()
                     try:
@@ -347,7 +358,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 except Exception as e:
                     logger.warning(f"审计写入失败: {e}")
 
-            asyncio.create_task(_write())
+            _task = asyncio.create_task(_write())
+            _AUDIT_TASKS.add(_task)
+            _task.add_done_callback(_AUDIT_TASKS.discard)
         except Exception:
             pass  # 审计失败绝不影响主请求
         return response

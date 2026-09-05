@@ -36,9 +36,10 @@ const STAGE_LABEL: Record<string, string> = {
 }
 
 const DECISION_COLOR: Record<string, string> = {
-  buy: 'text-emerald-600 dark:text-emerald-400',
+  // P1-10 (2026-09-05 28号审计): A股买红卖绿, 禁买绿卖红
+  buy: 'text-stock-up',
   hold: 'text-amber-600 dark:text-amber-400',
-  sell: 'text-rose-600 dark:text-rose-400',
+  sell: 'text-stock-down',
 }
 
 const POLL_INTERVAL_MS = 2000

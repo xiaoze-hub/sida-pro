@@ -686,8 +686,8 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "dividend",
             "provider": "zhitu",
             "config": {
-                "api_keys": ["E0E16C43-9272-4DAB-800C-178694F2D4B1", "33E70FEB-9966-48D8-A748-C7B8265AB494"],
-                "description": "智兔数服分红送配备源(双 key 池化 = 400次/天)。东财断供时自动降级。",
+                "api_keys": [],
+                "description": "智兔数服分红送配备源(设置页 zhitu_token 或容器 env ZHITU_TOKEN 维护, 不进仓库)。",
             },
             "enabled": True,
             "priority": 5,
@@ -699,7 +699,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "kline",
             "provider": "zhitu",
             "config": {
-                "api_keys": ["E0E16C43-9272-4DAB-800C-178694F2D4B1", "33E70FEB-9966-48D8-A748-C7B8265AB494"],
+                "api_keys": [],  # P1-15: 真实 key 不进仓库, 走设置页/容器 env
                 "description": "智兔数服日线(双 key 池化)。东财在云服务器不稳定,智兔作优先稳定源。",
             },
             "enabled": True,
@@ -713,7 +713,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "shareholders",
             "provider": "zhitu",
             "config": {
-                "api_keys": ["E0E16C43-9272-4DAB-800C-178694F2D4B1", "33E70FEB-9966-48D8-A748-C7B8265AB494"],
+                "api_keys": [],  # P1-15: 真实 key 不进仓库, 走设置页/容器 env
                 "description": "智兔数服十大股东/股东变化(双 key 池化)。东财股东接口不稳定,智兔优先。",
             },
             "enabled": True,
@@ -726,7 +726,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "type": "fundamentals",
             "provider": "zhitu",
             "config": {
-                "api_keys": ["E0E16C43-9272-4DAB-800C-178694F2D4B1", "33E70FEB-9966-48D8-A748-C7B8265AB494"],
+                "api_keys": [],  # P1-15: 真实 key 不进仓库, 走设置页/容器 env
                 "description": "智兔数服财务主要(PE/PB/市值,双 key 池化)。东财财务接口不稳定,智兔优先。",
             },
             "enabled": True,
@@ -1934,6 +1934,14 @@ async def lifespan(app):
     try:
         from src.web.cache.redis_client import redis_client as _redis_close
         await _redis_close.close()
+    except Exception:
+        pass
+    # P2-4 (2026-09-05 28号审计): 微信 BOT worker shutdown 时 cancel, 防重启残留
+    try:
+        _bot_task = getattr(app.state, "wechat_bot_task", None)
+        if _bot_task is not None and not _bot_task.done():
+            _bot_task.cancel()
+            logger.info("微信数智分析BOT worker 已取消")
     except Exception:
         pass
 

@@ -120,7 +120,8 @@ def _fetch_direct_flow(symbol: str) -> CapitalFlow | None:
             symbol=symbol,
             name=it.get("f14") or "",
             main_net_inflow=float(f62 or 0),
-            main_net_inflow_pct=float(f184 or 0) / 100.0,  # ×100 → %
+            # P1-13 (2026-09-05): 百分点口径(f184 已是百分数, 不除100), 与腾讯源/消费端阈值对齐
+            main_net_inflow_pct=float(f184 or 0),
             super_net_inflow=float(f66 or 0),
             big_net_inflow=float(f72 or 0),
             mid_net_inflow=float(it.get("f78") or 0),
@@ -155,7 +156,8 @@ def _fetch_cn_gateway_flow(symbol: str) -> CapitalFlow | None:
             symbol=symbol,
             name=d.get("name") or "",
             main_net_inflow=float(d.get("main_net_inflow") or 0),
-            main_net_inflow_pct=float(d.get("main_net_pct") or 0) / 100.0,  # ×100 → %
+            # P1-13 (2026-09-05): 百分点口径(网关 main_net_pct 已是百分数), 与消费端阈值对齐
+            main_net_inflow_pct=float(d.get("main_net_pct") or 0),
             super_net_inflow=float(d.get("super_net_inflow") or 0),
             big_net_inflow=float(d.get("big_net_inflow") or 0),
             mid_net_inflow=float(d.get("mid_net_inflow") or 0),
@@ -168,8 +170,10 @@ def _fetch_cn_gateway_flow(symbol: str) -> CapitalFlow | None:
 
 
 def _today_cn() -> str:
+    # P2-23 (2026-09-05 28号审计): 用 CST 日期(UTC 宿主 0-8 点会错一天)
     import datetime
-    return datetime.date.today().strftime("%Y-%m-%d")
+    from zoneinfo import ZoneInfo
+    return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
 
 
 class CapitalFlowCollector:
@@ -256,7 +260,8 @@ class CapitalFlowCollector:
                     date=md_cf.date,
                 )
             else:
-                # 悟道实时净额优先, 四档用 Engine
+                # P2-23: Engine 四档实时补全(注释更新: 悟道 intraday_main_flow 已移除,
+                # 这里是 marketdata Engine 的腾讯/东财四档, 非悟道分支)
                 capital_flow.super_net_inflow = md_cf.super_net_inflow
                 capital_flow.big_net_inflow = md_cf.big_net_inflow
                 capital_flow.mid_net_inflow = md_cf.mid_net_inflow

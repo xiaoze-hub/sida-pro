@@ -7,6 +7,19 @@
 
 ## 2026-09-05
 
+### fix-28号审计全量修复(v0.5.8, P0在v0.5.7)
+
+- P1: 限流TTL误锁/自选跨用户写/forecast阻塞/通知task丢失/渠道接口404/
+  设置缓存30s/掩码回写毁凭证+后端兜底/WS无限重连/切股竞态×4/买绿卖红×2/
+  单例凭据冻结/dark_l2无视设置页凭证/资金流单位差100倍/部署三链路对齐/密钥清仓。
+- P2: 设置白名单/JWT角色DB优先/审计to_thread/微信worker取消/klines复用engine+
+  batch同口径/LRU上限×3/日志后台刷/调度to_thread/owner可设guest/Quote无数据+
+  DECIMAL防崩/机会守卫/亿股/Login8位/SectionHeader收尾/明暗盘列名/TQ920前缀+
+  网关重探+非dict跳过/补数单链+CST日期/节流锁外睡/重试熔断/P2-22已修复确认/
+  缓存上限/注释修正/config键名/热补丁清单/CI门禁+tag判定。
+- P2-22(主买主卖diff)核过现代码已全量先差分, 未改动。
+- **测试**: 95 passed(审计回归4+相关91) + tsc/build 全绿。
+
 ### hotfix-SPA路径穿越(v0.5.7)
 
 - P0-1(28号审计): `server.py serve_spa` 加 realpath 越界校验, 越界 404。

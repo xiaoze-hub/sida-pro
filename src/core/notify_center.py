@@ -21,6 +21,9 @@ from src.web.models import Notification, NotifyChannel, User
 
 logger = logging.getLogger(__name__)
 
+# P1-4 (2026-09-05 28号审计): 后台推送 task 持有集合, 防 GC 中途回收致推送丢失
+_BACKGROUND_TASKS: set = set()
+
 # 已启用外发渠道时，站内通知同步外发，避免 info 只出现在右上角。
 _PUSH_LEVELS = {"info", "success", "warning", "error"}
 
@@ -147,8 +150,10 @@ def push_notification(
     except RuntimeError:
         # 已在事件循环里(异步上下文) → 交给调用方的 loop
         try:
-            loop = asyncio.get_event_loop()
-            loop.create_task(_async_push(nid, mgr, title, body or title, channel_records))
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(_async_push(nid, mgr, title, body or title, channel_records))
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
             _set_push_status(nid, "pending", "异步发送中", channels=channel_records)
         except Exception as e:
             _set_push_status(nid, "failed", str(e)[:400], channels=_finalize_channel_records(channel_records, {"success": False, "error": str(e)}))

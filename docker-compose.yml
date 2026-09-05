@@ -99,7 +99,8 @@ services:
 
   # ============== 主后端 8000 (FastAPI) ==============
   panwatch:
-    image: ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
+    # P1-14: 与 CI 一致拉 ACR(发版号替换 latest); forecast 镜像仍走 ghcr(独立构建链)
+    image: crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
     container_name: panwatch
     restart: unless-stopped
     ports:
@@ -107,6 +108,10 @@ services:
     environment:
       # 指向同 compose 网络内的 forecast 服务(Docker DNS 自动解析)
       - FORECAST_ENGINE_URL=http://forecast:8010
+      # P1-14: Redis L2/限流/调度选主走 compose 内 redis(与小主机生产对齐)
+      - REDIS_URL=redis://panwatch-redis:6379/0
+      # PG 切库(默认 SQLite, 切 PG 前先做 SQLite→PG 数据迁移, 见 P1-14):
+      # - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:-sida_dev_only}@panwatch-postgres:5432/sida
       # Hermes cron 输出根目录(可选,挂载 ~/.hermes 后自动可用)
       - HERMES_HOME=/hermes
       # 数据源 key 在「设置 → 接口Key」UI 维护;此处只传 Hermes 必需的环境变量
@@ -124,6 +129,8 @@ services:
       - ~/.hermes:/hermes:ro
     depends_on:
       forecast:
+        condition: service_healthy
+      panwatch-redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()"]
@@ -160,7 +167,28 @@ services:
       start_period: 60s   # Kronos 模型加载 ~25s
       retries: 3
 
+  # ============== PG 主库(可选, P1-14: 默认 SQLite; 切库前先迁移数据再解开 SIDA_DB_URL) ==============
+  panwatch-postgres:
+    image: postgres:16-alpine
+    container_name: panwatch-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=sida
+      # P1-15: 仅本地开发默认值; 生产/小主机用独立强密码(见容器 env, 不进仓库)
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-sida_dev_only}
+      - POSTGRES_DB=sida
+      - TZ=Asia/Shanghai
+    volumes:
+      - panwatch_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sida -d sida"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
 volumes:
+  panwatch_pg_data:
+    name: panwatch_pg_data
   panwatch_data:
     name: panwatch_data
   panwatch_forecast_data:

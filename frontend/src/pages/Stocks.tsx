@@ -782,9 +782,11 @@ export default function StocksPage() {
     const token = getToken()
     let ws: WebSocket | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    // P1-8 (2026-09-05 28号审计): 卸载守卫, 防离开页面后无限重连
+    let closed = false
 
     const connect = () => {
-      if (!token) return
+      if (!token || closed) return
       ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/quotes/ws?token=${encodeURIComponent(token)}`)
       ws.onmessage = (ev) => {
         try {
@@ -811,6 +813,7 @@ export default function StocksPage() {
         } catch { /* 忽略坏帧 */ }
       }
       ws.onclose = () => {
+        if (closed) return
         // 断线 5s 后重连(EventSource 原生有重连, WebSocket 需手动)
         retryTimer = setTimeout(connect, 5000)
       }
@@ -818,6 +821,7 @@ export default function StocksPage() {
 
     connect()
     return () => {
+      closed = true
       if (retryTimer) clearTimeout(retryTimer)
       ws?.close()
     }

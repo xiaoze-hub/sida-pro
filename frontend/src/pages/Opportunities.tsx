@@ -337,6 +337,15 @@ export default function OpportunitiesPage() {
   const [refreshing, setRefreshing] = useState(false)
   // 防重复提交锁:提交/轮询期间置 true,轮询结束或同步失败后复位
   const refreshingRef = useRef(false)
+  // P2-12: 请求序号 + 挂载守卫
+  const oppSeqRef = useRef(0)
+  const oppMountedRef = useRef(true)
+  useEffect(() => {
+    oppMountedRef.current = true
+    return () => {
+      oppMountedRef.current = false
+    }
+  }, [])
   const [error, setError] = useState('')
   const [items, setItems] = useState<StrategySignalItem[]>([])
   const [stats, setStats] = useState<StrategyStatsResponse | null>(null)
@@ -588,6 +597,8 @@ export default function OpportunitiesPage() {
   // 触发的 load() 若只读 state 会拿到旧值, 所以允许调用方直接传入新筛选值
   const load = useCallback(async (override?: Partial<OpportunityFilters>) => {
     const f: OpportunityFilters = { market, source, holding, strategy, risk, minScore, sector, ...override }
+    // P2-12 (2026-09-05 28号审计): 序号守卫 + 卸载守卫(2分钟轮询后台跑问题同修)
+    const seq = ++oppSeqRef.current
     setLoading(true)
     setError('')
     try {
@@ -650,6 +661,7 @@ export default function OpportunitiesPage() {
           data = fallback
         }
       }
+      if (seq !== oppSeqRef.current || !oppMountedRef.current) return
       setItems(data.items || [])
       setSnapshotDate(data.snapshot_date || '')
       void loadFeedback(data.snapshot_date || '', data.items || [])
@@ -657,10 +669,11 @@ export default function OpportunitiesPage() {
         setError('暂无机会快照，请点击“刷新”生成一次')
       }
     } catch (e) {
+      if (seq !== oppSeqRef.current || !oppMountedRef.current) return
       setError(e instanceof Error ? e.message : '加载失败')
       setItems([])
     } finally {
-      setLoading(false)
+      if (seq === oppSeqRef.current && oppMountedRef.current) setLoading(false)
     }
   }, [holding, loadFeedback, market, minScore, risk, sector, source, strategy])
 

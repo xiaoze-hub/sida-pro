@@ -283,7 +283,7 @@ def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User =
 
 
 @router.put("/reorder")
-def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db)):
+def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if not body.items:
         return {"updated": 0}
     ids = [int(x.id) for x in body.items]
@@ -294,6 +294,11 @@ def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db)):
         row = row_map.get(int(item.id))
         if not row:
             continue
+        # 归属校验(P1-2 2026-09-05 28号审计): 只能排自己的; 共享默认项仅 owner
+        if row.user_id is not None and row.user_id != user.id:
+            continue
+        if row.user_id is None and user.role != "owner":
+            continue
         row.sort_order = int(item.sort_order)
         updated += 1
     db.commit()
@@ -301,10 +306,16 @@ def reorder_stocks(body: StockReorderRequest, db: Session = Depends(get_db)):
 
 
 @router.put("/{stock_id}", response_model=StockResponse)
-def update_stock(stock_id: int, stock: StockUpdate, db: Session = Depends(get_db)):
+def update_stock(stock_id: int, stock: StockUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not db_stock:
         raise HTTPException(404, "股票不存在")
+
+    # 归属校验(P1-2 2026-09-05 28号审计, 对齐 delete_stock)
+    if db_stock.user_id is not None and db_stock.user_id != user.id:
+        raise HTTPException(403, "无权修改该自选(非本人创建)")
+    if db_stock.user_id is None and user.role != "owner":
+        raise HTTPException(403, "无权修改共享默认自选")
 
     for key, value in stock.model_dump(exclude_unset=True).items():
         setattr(db_stock, key, value)
@@ -358,11 +369,17 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db), user: User = Depe
 
 
 @router.put("/{stock_id}/agents", response_model=StockResponse)
-def update_stock_agents(stock_id: int, body: StockAgentUpdate, db: Session = Depends(get_db)):
+def update_stock_agents(stock_id: int, body: StockAgentUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """更新股票关联的 Agent 列表（含调度配置和 AI/通知覆盖）"""
     db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not db_stock:
         raise HTTPException(404, "股票不存在")
+
+    # 归属校验(P1-2 2026-09-05 28号审计, 对齐 delete_stock)
+    if db_stock.user_id is not None and db_stock.user_id != user.id:
+        raise HTTPException(403, "无权修改该自选(非本人创建)")
+    if db_stock.user_id is None and user.role != "owner":
+        raise HTTPException(403, "无权修改共享默认自选")
 
     for item in body.agents:
         agent = db.query(AgentConfig).filter(AgentConfig.name == item.agent_name).first()

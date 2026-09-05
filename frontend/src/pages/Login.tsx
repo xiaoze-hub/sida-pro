@@ -48,8 +48,8 @@ export default function LoginPage() {
         toast('两次密码不一致', 'error')
         return
       }
-      if (password.length < 6) {
-        toast('密码长度至少 6 位', 'error')
+      if (password.length < 8) {
+        toast('密码长度至少 8 位', 'error')
         return
       }
     }

@@ -9,8 +9,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # P2-27 (2026-09-05 28号审计): 生产镜像构建前门禁 — tsc/pytest 任一红灯, 坏 tag 推不上生产
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Backend pytest
+        run: |
+          python3 -m pip install -q -r requirements.txt pytest-timeout 2>/dev/null || true
+          # 单测禁联网: 超 60s 的用例直接失败(防网络挂起拖死构建)
+          python3 -m pytest tests/ -q --timeout=60 2>&1 | tail -3
+      - name: Frontend typecheck
+        run: |
+          cd frontend
+          npm install -g pnpm --silent 2>/dev/null || true
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+
   build:
     runs-on: ubuntu-latest
+    needs: gates
     permissions:
       contents: read
       packages: read   # 拉取私有 ghcr.io/xiaoze-hub/thsdk-vendor(L2 私有 SDK)
@@ -23,11 +42,13 @@ jobs:
       - name: Read VERSION
         id: ver
         run: |
-          # 2026-08-20 修复: 优先用 git ref (tag push 时 = "v0.3.2"), 避免 VERSION 文件滞后
+          # 2026-08-20 修复: 优先用 git ref (tag push 时 GITHUB_REF_NAME="v0.3.2"), 避免 VERSION 文件滞后
+          # P2-27 (2026-09-05 28号审计): 用 GITHUB_REF_TYPE=='tag' 判定(旧 refs/tags/ 前缀永不匹配)
           # 导致 push 用错 tag (例如 tag=v0.3.2 但推 v0.3.0)。回退到 VERSION 文件兜底。
+          REF_TYPE="${GITHUB_REF_TYPE:-}"
           REF_NAME="${GITHUB_REF_NAME:-}"
-          if [[ "$REF_NAME" == refs/tags/v* ]]; then
-            V="${REF_NAME#refs/tags/}"
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            V="$REF_NAME"
           elif [[ "$REF_NAME" == v* ]]; then
             V="$REF_NAME"
           else

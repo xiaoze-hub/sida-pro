@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom'
 import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import { insightApi, dashboardApi, type DashboardPosition } from '@panwatch/api'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import {
@@ -333,9 +334,10 @@ export default function QuotePage() {
           : lastGs?.side === 'S'
             ? '谨慎（GS 卖）'
             : '无明确信号'
-    // 主力在干嘛: 暗盘 main_net
-    const main = dc?.available ? (dc.main_net ?? 0) : (lastFund?.ming_net ?? 0)
-    const mainDesc = main > 0 ? `${toAmount(main).replace(/^\+?/, '+')}` : main < 0 ? `${toAmount(main).replace(/^\+?/, '')}` : '数据中性'
+    // 主力在干嘛: 暗盘 main_net(P2-11: null/NaN 显式无数据, 不按 0 算中性)
+    const mainRaw = dc?.available ? dc.main_net : lastFund?.ming_net
+    const mainNum = mainRaw == null ? NaN : Number(mainRaw)
+    const mainDesc = !Number.isFinite(mainNum) ? '无数据' : mainNum > 0 ? `${toAmount(mainNum).replace(/^\+?/, '+')}` : mainNum < 0 ? `${toAmount(mainNum).replace(/^\+?/, '')}` : '数据中性'
     // 风险在哪: 撤单率 + 涨跌停事件
     const cancelRate = dc?.cancel_rate
     const limits = (summary?.events ?? []).filter((e) => e.kind === 'limit_up' || e.kind === 'limit_down').length
@@ -612,10 +614,10 @@ export default function QuotePage() {
               </div>
             )}
 
-            {/* 关键事件(紧凑列表) */}
+            {/* 关键事件(紧凑列表, P2-15: 收敛 SectionHeader) */}
             {normEvents.length > 0 && (
               <div className="border-b border-border/40 pb-2">
-                <div className="text-[11px] text-muted-foreground">关键事件</div>
+                <SectionHeader title="关键事件" />
                 <ul className="mt-1 space-y-0.5">
                   {normEvents.slice(0, 6).map((e: KlineEventPoint, idx) => (
                     <li
@@ -703,13 +705,14 @@ export default function QuotePage() {
                   {summary.chips.cost_10 != null && (
                     <>
                       <span className="text-muted-foreground">主力</span>
-                      <span className="text-right">{summary.chips.cost_10.toFixed(2)}</span>
+                      {/* P2-11: PG DECIMAL 序列化成字符串, Number() 防整页崩 */}
+                      <span className="text-right">{Number(summary.chips.cost_10).toFixed(2)}</span>
                     </>
                   )}
                   {summary.chips.peak_price != null && (
                     <>
                       <span className="text-muted-foreground">峰价</span>
-                      <span className="text-right">{summary.chips.peak_price.toFixed(2)}</span>
+                      <span className="text-right">{Number(summary.chips.peak_price).toFixed(2)}</span>
                     </>
                   )}
                 </div>
@@ -797,8 +800,9 @@ function FundDetail({
         <thead>
           <tr className="border-b border-border/40 text-muted-foreground">
             <th className="px-2 py-1 font-medium">日期</th>
-            <th className="px-2 py-1 text-right font-medium">净额(万/亿)</th>
-            <th className="px-2 py-1 text-right font-medium">净额(万/亿)</th>
+            {/* P2-16: 两列区分明盘/暗盘净额 */}
+            <th className="px-2 py-1 text-right font-medium">明盘净额(万/亿)</th>
+            <th className="px-2 py-1 text-right font-medium">暗盘净额(万/亿)</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/40">
