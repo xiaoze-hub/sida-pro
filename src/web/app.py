@@ -58,6 +58,7 @@ from src.web.api import (
     market_scan,
     seal_quality,
     demon_pool,
+    signals_review,
 )
 from src.web.api import factors
 from src.web.api import notifications
@@ -616,6 +617,13 @@ app.include_router(
     demon_pool.router,
     prefix="/api/demon-pool",
     tags=["demon-pool"],
+    dependencies=protected,
+)
+# 信号→复盘闭环(批次D, 2026-09-06): 命中率统计+对账触发
+app.include_router(
+    signals_review.router,
+    prefix="/api/signals",
+    tags=["signals-review"],
     dependencies=protected,
 )
 # 竞价异动池(阶段1.2, 2026-08-20): 异动池 + 历史 + 同步

@@ -7,6 +7,19 @@
 
 ## 2026-09-06
 
+### feature-信号→复盘闭环(批次D, feat/signal-review)
+
+- `src/web/migrations.py`: Migration 133 signal_snapshots(emit_ts/emit_date/signal_type/symbol/
+  direction/strength/payload + outcome_t1/t5 + checked 标记; (type,symbol,emit_date) 唯一首条口径)。
+- `src/core/signal_review.py`: record_signal(信号 emit 快照, 幂等)/nightly_review(每晚对账,
+  T+h=事件日后第 h 个**交易日**收盘, 日K走 Engine 主备链; 事件日无 K 线显式 checked+None 不编造)/
+  hit_rate(按类型聚合 T+1/T+5 胜率+均值, direction=short 反号归一; resonance 类对照官方
+  75.42%/3.45 基准并注明口径差异, n≥20 才显示)。
+- `src/web/api/signals_review.py` + app.py 注册 /api/signals(protected): GET /hit-rate、POST /review。
+- server.py lifespan: 信号对账 cron(交易日 18:30)。
+- `src/agents/premarket_outlook.py`: 埋伏候选 emit 时快照落库(禁推候选不入库)。
+- **测试**: test_signal_review 4 项(交易日顺延/幂等/方向归一/基准) passed; 全部新功能测试 50 passed。
+
 ### feature-盘前埋伏Agent补全(批次C, feat/ambush-mvp)
 
 - `src/core/mood_cycle.py`: C1 情绪周期→题材容许度映射(不重复造轮子, 直接复用
