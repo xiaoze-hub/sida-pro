@@ -7,6 +7,13 @@
 
 ## 2026-09-05
 
+### remove-同花顺扫码登录下线(v0.5.4)
+
+- 删 `src/core/ths_auth.py` + `tests/test_ths_auth.py` +
+  `/ths/qrcode*` `/ths/session` `/ths/logout`(扫码 session 无数据链路消费)。
+- `/ths/account` 仅留 SDK 模式 + 能力一览; 卡片去扫码/登出/登录态展示。
+- **测试**: tsc/build 全绿 + 相关 pytest。
+
 ### feature-同花顺账号维护模块(v0.5.3)
 
 - 后端: `POST /ths/logout`(清凭证, docstring 早写了但没实现) +
