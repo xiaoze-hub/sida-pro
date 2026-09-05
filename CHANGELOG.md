@@ -7,6 +7,19 @@
 
 ## 2026-09-06
 
+### feature-L2事件流推送+预警(批次F核心, feat/alert-rules)
+
+- `src/core/l2_event_stream.py`: 两类独家粒度事件 → 全局渠道推送(同股同日同类一次,
+  复用 darkflow_alerts 节流+渠道模式) —
+  ①dark_cluster: 暗盘净流入聚簇 ≥100万元(逐笔拆单识别口径, 金额=元红线);
+  ②seal_anomaly: 涨停封单成色异常(撤单率 z≥2 或 成色<0.6 且封住; 炸板后不推)。
+  eval_tick() 由 seal_sampler 60s 盘中任务顺带调用, 失败静默不拖垮采样。
+- `src/core/seal_sampler.py`: sample_tick 接入 L2 事件流评估。
+- **范围说明(诚实)**: F1 价格类用户级预警已存在(PriceAlertScheduler+price_alerts API),
+  不重复造; F3 大盘温度页前端部分并入 UI pass; G1 CI 门禁 v0.5.8 已落地(gates job +
+  GITHUB_REF_TYPE 判定), 本批未动 CI。
+- **测试**: test_l2_event_stream 6 项 passed。
+
 ### feature-信号→复盘闭环(批次D, feat/signal-review)
 
 - `src/web/migrations.py`: Migration 133 signal_snapshots(emit_ts/emit_date/signal_type/symbol/

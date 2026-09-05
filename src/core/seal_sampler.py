@@ -189,6 +189,13 @@ def sample_tick(symbols: list[str] | None = None) -> dict:
     out["stored"] = store_samples(rows)
     if rows:
         logger.info("封单成色采样: %s/%s 写入", out["stored"], len(items))
+    # F2 L2 事件流(2026-09-06): 暗盘聚簇≥100万 / 封单成色异常 → 全局渠道推送(节流一次/日)
+    try:
+        from src.core.l2_event_stream import eval_tick
+
+        out["events"] = eval_tick([r["symbol"] for r in rows] or [it.get("symbol") for it in items])
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"L2 事件流评估失败(不影响采样): {e}")
     return out
 
 
