@@ -74,7 +74,7 @@ class TestComputeDailyMetrics:
         assert m.ge5_count == 2
         assert m.max_height == 7
         assert m.promo_rate is None  # 无 prev_pool
-        assert m.seal_rate == 1.0    # 有 pool, 默认 1.0
+        assert m.seal_rate is None  # 2026-09-05: 数据源无炸板分母, 算不出真封板率, 落 None(前端“--”)
 
     def test_empty_pool_returns_zero_metrics(self):
         """空池 → 全 0, seal_rate=None, promo_rate=None."""
@@ -633,3 +633,22 @@ class TestMarketPhaseApi:
             assert resp["phase"] == today_row.phase
         finally:
             db.close()
+
+
+class TestLegacySealRateSanitize:
+    """2026-09-05: 库里旧行 seal_rate=1.0 是硬编码假值, 读接口必须转 None(前端“--”)。"""
+
+    def test_row_to_dict_maps_legacy_1_to_none(self):
+        from types import SimpleNamespace
+
+        from src.web.api.market_phase import _row_to_dict
+
+        base = dict(
+            date="2026-09-04", phase="repair", first_board=10,
+            ge2_count=4, ge3_count=2, ge5_count=1, max_height=5,
+            promo_rate=0.2, sh_index_pct=-0.3,
+        )
+        assert _row_to_dict(SimpleNamespace(seal_rate=1.0, **base))["seal_rate"] is None
+        assert _row_to_dict(SimpleNamespace(seal_rate=None, **base))["seal_rate"] is None
+        # 非 1.0 数值原样透传(不误伤)
+        assert _row_to_dict(SimpleNamespace(seal_rate=0.7, **base))["seal_rate"] == 0.7
