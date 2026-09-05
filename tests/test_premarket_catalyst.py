@@ -210,3 +210,44 @@ async def test_collect_skips_non_cn_symbols():
         await agent.collect(ctx)
 
     assert calls == ["002361"]  # 只调了 A 股
+
+
+# 3. build_prompt 渲染埋伏榜 + 本地日历段(v0.5.6)
+def test_build_prompt_renders_ambush_and_local_calendar():
+    from src.agents.premarket_outlook import PremarketOutlookAgent
+
+    agent = PremarketOutlookAgent()
+    ctx = _make_context([_cn_stock()])
+    data = {
+        "event_stream": [], "catalyst": {}, "catalyst_analysis": {},
+        "catalyst_local": [
+            {"date": "2026-09-08", "type": "解禁", "symbol": "002361",
+             "title": "神剑股份解禁", "detail": "解禁日期2026-09-08"},
+        ],
+        "ambush_list": [
+            {"symbol": "002361", "catalyst_date": "2026-09-08",
+             "catalyst_type": "解禁", "gap": "高", "reason": "近端解禁位置低",
+             "catalyst": "解禁", "codes": [
+                 {"symbol": "002361", "via": "exact", "confidence": "高"}]},
+        ],
+        "tdx_wenda": {}, "market_sentiment": {}, "news": [],
+    }
+    _, user = agent.build_prompt(data, ctx)
+    assert "## 埋伏榜(未来催化+预期差, 观察池优先从这里选)" in user
+    assert "[002361]" in user and "落代码: 002361(exact)" in user
+    assert "## 本地未来催化日历(未来30天, 埋伏用)" in user
+
+
+# 4. ambush_list 为空不出埋伏段(回归)
+def test_build_prompt_no_ambush_section_when_empty():
+    from src.agents.premarket_outlook import PremarketOutlookAgent
+
+    agent = PremarketOutlookAgent()
+    ctx = _make_context([_cn_stock()])
+    data = {
+        "event_stream": [], "catalyst": {}, "catalyst_analysis": {},
+        "catalyst_local": [], "ambush_list": [],
+        "tdx_wenda": {}, "market_sentiment": {}, "news": [],
+    }
+    _, user = agent.build_prompt(data, ctx)
+    assert "埋伏榜" not in user

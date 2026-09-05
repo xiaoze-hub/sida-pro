@@ -1,5 +1,6 @@
 """盘前分析 Agent - 开盘前展望今日走势"""
 
+import asyncio
 import logging
 import re
 import time
@@ -324,6 +325,28 @@ class PremarketOutlookAgent(BaseAgent):
             logger.warning("[%s] 个股事件催化预期差失败: %s", trace_id, e)
             catalyst_analysis = {}
 
+        # 6.6 本地未来催化日历(解禁/宏观窗口30天, CKPT1, 失败降级空列表)
+        catalyst_local: list = []
+        try:
+            from src.core.catalyst_calendar import get_calendar
+
+            catalyst_local = get_calendar(30)
+            logger.info("[%s] 本地催化日历完成: %s 条", trace_id, len(catalyst_local))
+        except Exception as e:
+            logger.warning("[%s] 本地催化日历失败: %s", trace_id, e)
+            catalyst_local = []
+
+        # 6.7 埋伏榜(规则漏斗 Top8 → LLM 预期差 → 受益落代码, CKPT3+4)
+        ambush_list: list = []
+        try:
+            from src.core.catalyst_screener import build_ambush_list
+
+            ambush_list = await asyncio.to_thread(build_ambush_list, catalyst_local, None, 8)
+            logger.info("[%s] 埋伏榜完成: %s 条", trace_id, len(ambush_list))
+        except Exception as e:
+            logger.warning("[%s] 埋伏榜失败: %s", trace_id, e)
+            ambush_list = []
+
         # 4.5 通达信问小达投研查询(盘前: 主力净流入/题材资金流向/强势板块)
         tdx_wenda: dict = {}
         try:
@@ -359,6 +382,8 @@ class PremarketOutlookAgent(BaseAgent):
             "market_sentiment": market_sentiment,
             "event_stream": event_stream,
             "catalyst": catalyst,
+            "catalyst_local": catalyst_local,
+            "ambush_list": ambush_list,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
             "timestamp": datetime.now().isoformat(),
@@ -514,6 +539,7 @@ class PremarketOutlookAgent(BaseAgent):
 
         # 个股事件催化预期差(DeepSeek 推理: 当日公告→催化信号+受益链+预期差)
         # 仅自选/持仓 A 股标的, 有当日公告才出现; 预期差高 = 潜伏价值大
+        # 埋伏榜(LLM 已审+落代码, 规则漏斗 Top8, 观察池直接用, 勿重复论证)
         ca = data.get("catalyst_analysis", {}) or {}
         if ca:
             lines.append("## 个股事件催化与预期差(当日公告 AI 推理)")
@@ -533,6 +559,23 @@ class PremarketOutlookAgent(BaseAgent):
                 if r.get("reason"):
                     lines.append(f"  理由: {r['reason']}")
             lines.append("> 预期差高 = 利好/利空尚未充分反映在股价, 是提前潜伏/规避的核心信号; 预期差低 = 已兑现, 追高需谨慎。")
+            lines.append("")
+
+        # 埋伏榜(漏斗 Top8: 规则过滤+LLM 已审+受益已落代码, 观察池第一输入)
+        ab = data.get("ambush_list", []) or []
+        if ab:
+            lines.append("## 埋伏榜(未来催化+预期差, 观察池优先从这里选)")
+            for a in ab[:8]:
+                codes = ", ".join(f"{c.get('symbol')}({c.get('via')})" for c in (a.get("codes") or [])[:5])
+                lines.append(
+                    f"- [{a.get('symbol')}] {a.get('catalyst')} | "
+                    f"催化日:{a.get('catalyst_date')}({a.get('catalyst_type')}) | 预期差:{a.get('gap')}"
+                )
+                if a.get("reason"):
+                    lines.append(f"  理由: {a['reason']}")
+                if codes:
+                    lines.append(f"  落代码: {codes}")
+            lines.append("> 观察池必须优先从埋伏榜选(预期差高+催化临近+未大涨); 榜外标的进观察池需单独给理由。")
             lines.append("")
 
         # 大宗商品轮动前瞻(联动涨价题材: 能源→金属→农产品→黄金)
@@ -560,6 +603,20 @@ class PremarketOutlookAgent(BaseAgent):
                 lines.append(
                     f"- {c.get('date') or c.get('time') or ''}: {c.get('title') or c.get('event') or c.get('name') or ''}"
                 )
+            lines.append("")
+
+        # 本地未来催化日历(未来30天: 解禁/宏观窗口, catalyst_calendar, CKPT1)
+        # 埋伏雷达核心输入: 有明确日期的未来催化 > 当日事件, 观察池优先从这里出
+        cl = data.get("catalyst_local", []) or []
+        if cl:
+            lines.append("## 本地未来催化日历(未来30天, 埋伏用)")
+            for c in cl[:20]:
+                sym = f"[{c.get('symbol')}]" if c.get("symbol") else ""
+                lines.append(f"- {c.get('date')}: {c.get('type')}{sym} {c.get('title')} | {c.get('detail')}")
+            lines.append(
+                "> 埋伏规则: 观察池优先选'未来7天内有催化、现价未大涨'的标的; "
+                "解禁类只做'预期差高+位置低'的, 纯解禁无其他催化不进观察池。"
+            )
             lines.append("")
 
         # 通达信问小达投研扫描(盘前: 主力净流入/题材资金流向/强势板块)

@@ -65,6 +65,7 @@ from src.web.api import wechat_bind
 from src.web.api import thsdk_snapshot, thsdk_alert as thsdk_alert_router
 from src.web.api import thsdk_extended as thsdk_extended_router
 from src.web.api import thsdk_ext as thsdk_ext_router
+from src.web.api import catalyst as catalyst_router
 from src.web.api.auth import get_current_user
 from src.web.api.settings import get_app_version
 from src.web.response import ResponseWrapperMiddleware
@@ -333,7 +334,13 @@ app.include_router(
 app.include_router(
     thsdk_alert_router.router, prefix="/api/thsdk/alert", tags=["thsdk-alert"], dependencies=protected
 )
-# v0.3.1 选项B: DDE 官方主力资金 + 代码补齐 + 市场代码表
+# v0.5.6 埋伏雷达: 未来催化日历 + 埋伏榜(手动触发); 需登录
+app.include_router(
+    catalyst_router.router,
+    prefix="/api/catalyst",
+    tags=["catalyst"],
+    dependencies=protected,
+)
 app.include_router(
     thsdk_ext_router.router,
     prefix="/api/thsdk/ext",
