@@ -166,14 +166,20 @@ def demon_score_from_events(
         total += w * s / 100.0
 
     adjustment = 0.0
-    participation = "可参与"
-    if circ_mv is not None and 20e8 <= circ_mv <= 120e8:
-        adjustment += 5
-        flags.append("流通市值 20-120 亿(妖股温床) +5")
+    participation = "换手板可参与"
+    if circ_mv is not None:
+        # Hermes 复批(2026-09-06): 市值加分拆两档, 小盘弹性更大加权更高; 回测校准
+        if 20e8 <= circ_mv < 50e8:
+            adjustment += 8
+            flags.append("小盘 20-50 亿(弹性最大) +8")
+        elif 50e8 <= circ_mv <= 120e8:
+            adjustment += 5
+            flags.append("中盘 50-120 亿 +5")
     latest = events[-1]
     if latest.get("one_way"):
-        participation = "一字板不可参与"
-        flags.append("最新事件为一字板, 追板不可参与")
+        # Hermes 复批: 龙头战法正是一字板买入, 不宜写死"不可参与" → 改参与方式标注
+        participation = "一字板：排板可参与，非低吸埋伏标的"
+        flags.append("最新事件为一字板(打板/排板口径可参与; 埋伏低吸口径不适配)")
 
     total = round(total + adjustment, 1)
     grade = "极妖" if n_freq >= 20 else ("妖" if n_freq >= 10 else ("活跃" if n_freq >= 5 else "普通"))

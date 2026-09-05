@@ -72,15 +72,18 @@ def test_demon_score_demon_stock():
 def test_demon_score_one_way_flag():
     evs = [_ev("20260901"), _ev("20260902"), _ev("20260903", one_way=1)]
     r = demon_score_from_events(evs)
-    assert r["participation"] == "一字板不可参与"
+    # Hermes 复批: 一字板改参与方式标注(排板可参与), 不写死"不可参与"
+    assert r["participation"] == "一字板：排板可参与，非低吸埋伏标的"
 
 
 def test_demon_score_mv_adjustment():
     evs = [_ev("20260901"), _ev("20260902"), _ev("20260903")]
-    r = demon_score_from_events(evs, circ_mv=60e8)
-    assert any("妖股温床" in f for f in r["flags"])
-    r2 = demon_score_from_events(evs, circ_mv=500e8)
-    assert not any("妖股温床" in f for f in r2["flags"])
+    r = demon_score_from_events(evs, circ_mv=30e8)
+    assert any("小盘 20-50 亿" in f for f in r["flags"])  # +8
+    r2 = demon_score_from_events(evs, circ_mv=80e8)
+    assert any("中盘 50-120 亿" in f for f in r2["flags"])  # +5
+    r3 = demon_score_from_events(evs, circ_mv=500e8)
+    assert not any("亿" in f for f in r3["flags"])
 
 
 def test_demon_score_no_events():
