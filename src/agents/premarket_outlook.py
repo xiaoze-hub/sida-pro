@@ -347,6 +347,55 @@ class PremarketOutlookAgent(BaseAgent):
             logger.warning("[%s] 埋伏榜失败: %s", trace_id, e)
             ambush_list = []
 
+        # 6.8 情绪周期 + 四维埋伏评分(批次C C1/C2/C3, 2026-09-06 28号)
+        mood: dict = {}
+        ambush_scored: list = []
+        try:
+            from src.core.ambush_score import enrich_ambush_list
+            from src.core.mood_cycle import current_mood
+
+            mood = current_mood()
+            demon_symbols: set = set()
+            try:
+                from src.web.api.demon_pool import top_demon_symbols
+
+                demon_symbols = top_demon_symbols(20)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[%s] 先锋组不可用: %s", trace_id, e)
+            ambush_scored = await asyncio.to_thread(
+                enrich_ambush_list,
+                ambush_list,
+                mood,
+                catalyst_local,
+                demon_symbols,
+            )
+            logger.info(
+                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s",
+                trace_id,
+                len(ambush_scored),
+                (mood or {}).get("label", "无数据"),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] 四维埋伏评分失败: %s", trace_id, e)
+            ambush_scored = []
+
+        # 6.9 期货价格证据(批次C C5, 2026-09-06): 新浪公开接口, 失败降级事件文本版;
+        #     nf_ 字段口径未实测 → 解析失败 available=False 绝不编造轮动信号
+        futures_snapshot: dict = {}
+        try:
+            from src.core.commodity_quotes import fetch_snapshot
+
+            futures_snapshot = await asyncio.to_thread(fetch_snapshot)
+            logger.info(
+                "[%s] 期货快照: available=%s items=%s",
+                trace_id,
+                futures_snapshot.get("available"),
+                len(futures_snapshot.get("items") or []),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] 期货快照失败: %s", trace_id, e)
+            futures_snapshot = {}
+
         # 4.5 通达信问小达投研查询(盘前: 主力净流入/题材资金流向/强势板块)
         tdx_wenda: dict = {}
         try:
@@ -384,6 +433,9 @@ class PremarketOutlookAgent(BaseAgent):
             "catalyst": catalyst,
             "catalyst_local": catalyst_local,
             "ambush_list": ambush_list,
+            "ambush_scored": ambush_scored,
+            "mood": mood,
+            "futures_snapshot": futures_snapshot,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
             "timestamp": datetime.now().isoformat(),
@@ -561,29 +613,49 @@ class PremarketOutlookAgent(BaseAgent):
             lines.append("> 预期差高 = 利好/利空尚未充分反映在股价, 是提前潜伏/规避的核心信号; 预期差低 = 已兑现, 追高需谨慎。")
             lines.append("")
 
-        # 埋伏榜(漏斗 Top8: 规则过滤+LLM 已审+受益已落代码, 观察池第一输入)
-        ab = data.get("ambush_list", []) or []
+        # 情绪周期定位(批次C C1, market_phase 七阶段 → 容许度)
+        mood = data.get("mood") or {}
+        if mood:
+            lines.append("## 今日情绪定位")
+            if mood.get("available"):
+                lines.append(f"- 阶段: {mood.get('label')} | 题材容许度: {mood.get('allowance')}/10")
+                lines.append(f"- {mood.get('hint')}")
+                if mood.get("veto"):
+                    lines.append("- ⛔ 情绪硬否决: 高潮期埋伏候选全部禁推, 只考虑兑现/减仓")
+            else:
+                lines.append(f"- 无数据: {mood.get('reason')}")
+            lines.append("")
+
+        # 埋伏榜: 优先四维评分增强版(批次C C2/C3), 回落原始榜
+        ab = data.get("ambush_scored") or data.get("ambush_list") or []
         if ab:
-            lines.append("## 埋伏榜(未来催化+预期差, 观察池优先从这里选)")
+            scored = "ambush_total" in (ab[0] if ab else {})
+            lines.append("## 埋伏榜(未来催化+预期差, 观察池优先从这里选)" + ("【四维评分: 事件×传导×情绪×信号】" if scored else ""))
             for a in ab[:8]:
                 codes = ", ".join(f"{c.get('symbol')}({c.get('via')})" for c in (a.get("codes") or [])[:5])
+                score_part = f" | 埋伏分:{a.get('ambush_total')}" if a.get("ambush_total") is not None else ""
+                action_part = f" | {a.get('action')}" if a.get("action") else ""
                 lines.append(
                     f"- [{a.get('symbol')}] {a.get('catalyst')} | "
-                    f"催化日:{a.get('catalyst_date')}({a.get('catalyst_type')}) | 预期差:{a.get('gap')}"
+                    f"催化日:{a.get('catalyst_date')}({a.get('catalyst_type')}) | 预期差:{a.get('gap')}{score_part}{action_part}"
                 )
                 if a.get("reason"):
                     lines.append(f"  理由: {a['reason']}")
                 if codes:
                     lines.append(f"  落代码: {codes}")
-            lines.append("> 观察池必须优先从埋伏榜选(预期差高+催化临近+未大涨); 榜外标的进观察池需单独给理由。")
+                if a.get("flags"):
+                    lines.append(f"  ⚠️ {'; '.join(a['flags'][:3])}")
+                if a.get("invalidations"):
+                    lines.append(f"  证伪条件: {'; '.join(a['invalidations'][:2])}")
+            lines.append("> 观察池必须优先从埋伏榜选(预期差高+催化临近+未大涨); 每条候选带证伪条件; 情绪高潮期禁推候选不进观察池。")
             lines.append("")
 
-        # 大宗商品轮动前瞻(联动涨价题材: 能源→金属→农产品→黄金)
+        # 大宗商品轮动前瞻(批次C C5 升级: 期货价格证据+事件流合判, 降级=纯事件版)
         try:
             from src.core.commodity_rotation import detect_rotation_stage, format_rotation
 
             ev_texts = [e.get("content", "") for e in ev]
-            rotation = detect_rotation_stage(ev_texts)
+            rotation = detect_rotation_stage(ev_texts, data.get("futures_snapshot") or None)
             if "未检测" not in rotation.get("stage", ""):
                 lines.append("## 大宗商品轮动(联动涨价题材)")
                 lines.append(format_rotation(rotation))
@@ -1297,10 +1369,45 @@ class PremarketOutlookAgent(BaseAgent):
                 "[%s] 盘前分析已保存到历史记录: suggestions=%s prompt_chars=%s",
                 trace_id,
                 len(suggestions),
-                len(user_content or ""),
+                len(user_content),
             )
         else:
             logger.error("[%s] 盘前分析保存历史记录失败", trace_id)
+
+        # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程
+        try:
+            from src.core.notify_center import push_notification
+
+            _mood = data.get("mood") or {}
+            _ab = data.get("ambush_scored") or data.get("ambush_list") or []
+            _top = [
+                f"[{a.get('symbol')}] {a.get('catalyst')} 埋伏分{a.get('ambush_total')}({a.get('action', '')})"
+                for a in _ab[:3]
+                if isinstance(a, dict)
+            ]
+            _mood_line = (
+                f"{_mood.get('label')} 容许度{_mood.get('allowance')}/10"
+                if _mood.get("available")
+                else "无数据"
+            )
+            _body = (
+                f"情绪: {_mood_line}\n"
+                f"埋伏候选 Top{len(_top)}:\n" + ("\n".join(_top) if _top else "今日无候选(漏斗过滤后为空)")
+                + f"\n催化日历(30天): {len(data.get('catalyst_local') or [])} 条"
+            )
+            await asyncio.to_thread(
+                push_notification,
+                f"盘前埋伏简报 {analysis_date}",
+                _body,
+                category="report",
+                level="info",
+                source="premarket_outlook",
+                trace_id=trace_id,
+            )
+            logger.info("[%s] 盘前埋伏简报已推送", trace_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] 盘前简报推送失败(不影响主流程): %s", trace_id, e)
+
         logger.info(
             "[%s] 盘前分析完成: elapsed_ms=%s",
             trace_id,

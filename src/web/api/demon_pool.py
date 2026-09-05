@@ -68,6 +68,19 @@ def _year_ago() -> str:
     return (now - timedelta(days=365)).strftime("%Y%m%d")
 
 
+def top_demon_symbols(n: int = 20, min_events: int = 5) -> set[str]:
+    """妖股先锋组: 评分 TopN 的代码集合(埋伏评分传导维加成用)。
+
+    独立于路由缓存(直接查), 失败返回空集合(不阻塞盘前主链路)。
+    """
+    try:
+        pool = _pool_from_db(topn=max(n, 1), min_events=min_events)
+        return {p["symbol"] for p in pool if p.get("symbol")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("先锋组查询失败: %s", e)
+        return set()
+
+
 @router.get("")
 def demon_pool(topn: int = 50, refresh: int = 0):
     """妖股池 TopN。min_events=3 起评(近一年≥3 次涨停才有统计意义)。"""
