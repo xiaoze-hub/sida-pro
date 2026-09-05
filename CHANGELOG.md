@@ -7,6 +7,25 @@
 
 ## 2026-09-06
 
+### feature-妖股池/股性雷达(批次B, feat/demon-pool)
+
+- `src/web/migrations.py`: Migration 132 limit_up_events(涨停事件表, symbol+trade_date 唯一,
+  touched/sealed/one_way 判定, open_count 留空待逐笔)。
+- `src/core/limit_up_backfill.py`: 每日盘后回填(交易日 15:30 cron 已挂 lifespan) — 全市场
+  ~5562 只日K(Engine 主备链路) → limit_rules 涨停价判定 → 涨停事件入库, 重跑幂等;
+  backfill_all/backfill_symbol/get_events_window。
+- `src/core/demon_score.py`: 六维评分纯函数 — freq30(封板次数分档 ≥20 极妖/10-19 妖/5-9 活跃)
+  /lianban20(最高连板+反复激活加成, 跨周末≤5天近似连续)/seal15(封板成功率)/theme15(wencai
+  未接入→flags 标缺数据)/lhb10(同)/stamina10(近60日触及); 调整项: 市值带 20-120亿 +5、
+  一字板"不可参与"。MVP 满分 75+5, 全权重制缺维计 0 并标注, 不编造。
+- `src/web/api/demon_pool.py` + app.py 注册 /api/demon-pool(protected): TopN 池(300s 缓存,
+  min_events=3 起评)/单股明细/手动回填。
+- `scripts/backtest_demon_leading.py`: 妖股领先效应回测 — 事件日代理=全市场涨停家数>1.5×
+  前5日均值(板块口径待传导链), 妖股组 vs 其余涨停股 T+1/T+5 均值/胜率/超额; 待数据回填后
+  跑真值校准权重, 结果入 docs。
+- **诚实项**: 六维权重为初版经验值; open_count/封单额历史留空; T+1 一字板买入偏差未剔除。
+- **测试**: test_demon_score 10 项 + 批次A 28 项 + 审计回归共 34 passed; py_compile 全过。
+
 ### feature-封单成色检测器+双源置信度(批次A, feat/seal-quality)
 
 - `src/core/limit_rules.py`: A股涨停价规则纯函数(主板10%/创科20%/ST5%/北交30%, 四舍五入到分,

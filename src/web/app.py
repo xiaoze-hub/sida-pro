@@ -57,6 +57,7 @@ from src.web.api import (
     market_mainline,
     market_scan,
     seal_quality,
+    demon_pool,
 )
 from src.web.api import factors
 from src.web.api import notifications
@@ -608,6 +609,13 @@ app.include_router(
     seal_quality.router,
     prefix="/api/seal-quality",
     tags=["seal-quality"],
+    dependencies=protected,
+)
+# 妖股池/股性雷达(批次B, 2026-09-06): 六维妖股评分, 题材轮动先锋名单
+app.include_router(
+    demon_pool.router,
+    prefix="/api/demon-pool",
+    tags=["demon-pool"],
     dependencies=protected,
 )
 # 竞价异动池(阶段1.2, 2026-08-20): 异动池 + 历史 + 同步

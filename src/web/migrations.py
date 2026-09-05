@@ -2327,6 +2327,56 @@ CREATE TABLE IF NOT EXISTS seal_quality_samples (
     )
 
 
+def _m132_limit_up_events(conn: Connection) -> None:
+    """涨停事件表(批次B 妖股池, 2026-09-06 28号)。
+
+    每日盘后回填全市场涨停(触及/封住)事件, 供 demon_score 六维评分与
+    妖股领先效应回测。trade_date 用 YYYYMMDD 文本(双方言安全)。
+    open_count(开板次数)需盘中逐笔, MVP 留空由后续逐笔补充; 一字板
+    用 open==limit 近似判定(开盘即封且最低价未离开涨停价)。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS limit_up_events (
+  trade_date TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  name TEXT,
+  prev_close DOUBLE PRECISION,
+  limit_price DOUBLE PRECISION,
+  open_price DOUBLE PRECISION,
+  high_price DOUBLE PRECISION,
+  low_price DOUBLE PRECISION,
+  close_price DOUBLE PRECISION,
+  touched INTEGER,
+  is_sealed_close INTEGER,
+  one_way INTEGER,
+  open_count INTEGER,
+  first_time TEXT,
+  max_seal_amount DOUBLE PRECISION,
+  limit_days INTEGER,
+  circ_mv DOUBLE PRECISION,
+  source TEXT,
+  extra TEXT
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_limit_up_events_sym_date "
+            "ON limit_up_events(symbol, trade_date)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_limit_up_events_date "
+            "ON limit_up_events(trade_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2367,6 +2417,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(129, "summary_cache_table", _m129_summary_cache_table),
     Migration(130, "tick_archive_table", _m130_tick_archive_table),
     Migration(131, "seal_quality_samples_table", _m131_seal_quality_samples),
+    Migration(132, "limit_up_events_table", _m132_limit_up_events),
 )
 
 
