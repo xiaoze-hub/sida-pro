@@ -38,6 +38,10 @@ export const insightApi = {
   searchStocks: <T>(q: string) =>
     fetchAPI<T>(`/stocks/search?q=${encodeURIComponent(q)}`),
 
+  /** 封单成色(批次A, 2026-09-06: 涨停封单撤单率/成色, 盘中60s采样; 无数据 available=false) */
+  sealQuality: <T>(symbol: string) =>
+    fetchAPI<T>(`/seal-quality/${encodeURIComponent(symbol)}`),
+
   klines: <T>(symbol: string, params: { market: string; days?: number; interval?: string }) =>
     fetchAPI<T>(
       withQuery(`/klines/${encodeURIComponent(symbol)}`, {
