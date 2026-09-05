@@ -7,6 +7,11 @@
 
 ## 2026-09-05
 
+### hotfix-SPA路径穿越(v0.5.7)
+
+- P0-1(28号审计): `server.py serve_spa` 加 realpath 越界校验, 越界 404。
+- **测试**: 穿越用例拦截验证 + py_compile。
+
 ### feature-埋伏雷达进盘前(v0.5.6)
 
 - CKPT1 未来催化日历(`catalyst_calendar`: 解禁分层降级+静态宏观窗口+30天API位) →
