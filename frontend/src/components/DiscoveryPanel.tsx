@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Layers, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import {
   dashboardApi,
   discoveryApi,
@@ -14,6 +14,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useLocalStorage } from '@/lib/utils'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 
 interface Props {
   monitorStocks: DashboardMonitorStock[]
@@ -176,15 +177,13 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
   return (
     <>
       <div className="mt-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Layers className="h-4 w-4 text-primary" />
-            机会发现
-          </h2>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate('/opportunities')} className="h-7 text-[12px]">
-              进入机会页
-            </Button>
+          <SectionHeader
+            title="机会发现"
+            action={
+              <>
+                <Button variant="outline" size="sm" onClick={() => navigate('/opportunities')} className="h-7 text-[12px]">
+                  进入机会页
+                </Button>
             <Select value={discoverMarket} onValueChange={(v) => setDiscoverMarket(v as 'CN' | 'HK' | 'US')}>
               <SelectTrigger className="h-7 w-[90px] text-[12px]">
                 <SelectValue />
@@ -209,8 +208,9 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                 <RefreshCw className="h-3.5 w-3.5" />
               )}
             </Button>
-          </div>
-        </div>
+              </>
+            }
+          />
 
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-1.5">

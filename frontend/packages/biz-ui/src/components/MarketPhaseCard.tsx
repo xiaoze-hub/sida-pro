@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, RefreshCw, ShieldAlert, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { RefreshCw, ShieldAlert, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 
 /**
  * 市场情绪周期 6 阶段卡(2026-08-24, 任务 A)。
@@ -199,33 +200,32 @@ export default function MarketPhaseCard() {
   return (
     <div className="border-t border-border/60 pt-2.5">
       {/* 标题 + 时间戳 */}
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2">
-          <Activity className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-[13px] font-semibold text-foreground">情绪周期阶段</span>
-          {updatedAt && (
-            <span className="text-[10px] text-muted-foreground font-mono">
-              {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {data?.available ? (
-            <span className="text-[10px] text-muted-foreground font-mono">近 {totalDays}d</span>
-          ) : null}
-          <button
-            type="button"
-            title="刷新"
-            onClick={() => {
-              setLoading(true)
-              void load()
-            }}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
+      <SectionHeader
+        title="情绪周期阶段"
+        action={
+          <>
+            {updatedAt && (
+              <span className="text-[10px] text-muted-foreground font-mono">
+                {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+              </span>
+            )}
+            {data?.available ? (
+              <span className="text-[10px] text-muted-foreground font-mono">近 {totalDays}d</span>
+            ) : null}
+            <button
+              type="button"
+              title="刷新"
+              onClick={() => {
+                setLoading(true)
+                void load()
+              }}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </>
+        }
+      />
 
       {/* 当前阶段大字(Phase 1 去卡片化: 左色条+文字, 阶段色只保留在 border/text 上) */}
       <div className={`border-l-2 ${style.border} pl-3 py-1 mb-3`}>
