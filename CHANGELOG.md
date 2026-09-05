@@ -7,6 +7,20 @@
 
 ## 2026-09-06
 
+### feature-前端徽章UI pass(批次A3+E3 MVP, feat/ui-badges)
+
+- `src/web/api/klines.py`: /klines/{symbol}/summary 挂 mainflow_tri+A/B/C 置信度载荷
+  (随 summary 双层缓存, 不增加请求成本)。
+- `frontend/packages/api/src/insight.ts`: sealQuality(symbol) API 方法。
+- `frontend/src/pages/Quote.tsx`:
+  * 主力意图块加"置信 A/B/C"徽章(A=主色/B=单源灰/C=分歧琥珀, title 带三源明细;
+    非 A/B/C 无徽章不占位)。
+  * 新增"封单成色"窄栏块(仅 metrics.available 渲染): 成色(异常琥珀色)/撤单率/
+    撤单异动 z/封板成功率 + "未封住"提示; 无数据不占位不编造。
+- **范围说明**: E3 新鲜度徽章 MVP 先覆盖封单成色块(盘中60s采样标注); 全站新鲜度/
+  E2 WS 通道统一/G2 锥图分层/G3 ⌘K 留下一轮 UI pass。
+- **测试**: pnpm typecheck(tsc -b) 全绿; 后端回归 25 passed。
+
 ### feature-L2事件流推送+预警(批次F核心, feat/alert-rules)
 
 - `src/core/l2_event_stream.py`: 两类独家粒度事件 → 全局渠道推送(同股同日同类一次,
