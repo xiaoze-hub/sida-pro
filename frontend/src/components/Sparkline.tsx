@@ -77,11 +77,13 @@ export default function Sparkline({
         points={pointsAttr}
         fill="none"
         stroke={stroke}
-        strokeWidth={1.5}
+        strokeWidth={2}
         strokeLinejoin="round"
         strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
       />
+      {/* 2026-09-05 质感: 尾端点光晕(小实心+外圈半透明)，一眼定位最新价 */}
+      <circle cx={lastX} cy={lastY} r={4.5} fill={stroke} opacity={0.22} />
       <circle cx={lastX} cy={lastY} r={2.2} fill={stroke} />
     </svg>
   )

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
-import { readStockColors, type StockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import { fetchAPI } from '@panwatch/api'
 
 /**
@@ -19,11 +19,11 @@ interface BreadthResp {
   note?: string
 }
 
-/** 桶 → 颜色: 负向绿 / 正向红 / 平盘灰(A股惯例), 色值取 --stock-up/--stock-down 令牌 */
-function bucketColor(bucket: string, sc: StockColors): string {
-  if (bucket === '-1~1%') return '#6b7280'
+/** 桶 → 是否下跌侧(A股惯例): 含“跌”或负区间为跌侧，其余(含平盘)为涨侧。 */
+function isDownBucket(bucket: string): boolean {
+  if (bucket === '-1~1%') return false
   const neg = ['跌停', '<-5%', '-5~-3%', '-3~-1%']
-  return neg.includes(bucket) ? sc.down : sc.up
+  return neg.includes(bucket) || bucket.startsWith('-') || bucket.startsWith('<')
 }
 
 export default function BreadthDistributionChart() {
@@ -55,13 +55,17 @@ export default function BreadthDistributionChart() {
     const chart = chartRef.current
     if (!chart || !items || items.length === 0) return
     const sc = readStockColors()
+    // 2026-09-05 交易所大屏式双向镜像柱: 左绿(跌)/右红(涨)，中央0轴，渐变+圆角。
     const ordered = [...items].reverse()
+    const downs = ordered.filter((i) => isDownBucket(i.bucket))
+    const ups = ordered.filter((i) => !isDownBucket(i.bucket))
+    const cats = [...downs.map((i) => i.bucket)].reverse().concat(ups.map((i) => i.bucket))
     chart.setOption({
-      grid: { left: 64, right: 40, top: 4, bottom: 4 },
+      grid: { left: 56, right: 56, top: 4, bottom: 4 },
       xAxis: { type: 'value', show: false },
       yAxis: {
         type: 'category',
-        data: ordered.map((i) => i.bucket),
+        data: cats,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { fontSize: 10, color: '#8e8e96' },
@@ -69,10 +73,44 @@ export default function BreadthDistributionChart() {
       series: [
         {
           type: 'bar',
-          data: ordered.map((i) => ({
-            value: i.count,
-            itemStyle: { color: bucketColor(i.bucket, sc), borderRadius: 2 },
-          })),
+          name: '跌',
+          data: cats.map((c) => {
+            const f = downs.find((i) => i.bucket === c)
+            return f
+              ? {
+                  value: -f.count,
+                  itemStyle: {
+                    color: { type: 'linear', x: 1, y: 0, x2: 0, y2: 0, colorStops: [{ offset: 0, color: sc.down }, { offset: 1, color: sc.down + '55' }] },
+                    borderRadius: [2, 0, 0, 2],
+                  },
+                }
+              : null;
+          }),
+          barWidth: '55%',
+          label: {
+            show: true,
+            position: 'left',
+            fontSize: 10,
+            fontFamily: 'monospace',
+            color: '#c4c4cb',
+            formatter: (p: { value: number | null }) => (p.value == null ? '' : String(Math.abs(p.value))),
+          },
+        },
+        {
+          type: 'bar',
+          name: '涨',
+          data: cats.map((c) => {
+            const f = ups.find((i) => i.bucket === c)
+            return f
+              ? {
+                  value: f.count,
+                  itemStyle: {
+                    color: { type: 'linear', x: 0, y: 0, x2: 1, y2: 0, colorStops: [{ offset: 0, color: sc.up }, { offset: 1, color: sc.up + '55' }] },
+                    borderRadius: [0, 2, 2, 0],
+                  },
+                }
+              : null;
+          }),
           barWidth: '55%',
           label: {
             show: true,

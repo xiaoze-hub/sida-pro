@@ -75,10 +75,31 @@ export default function SentimentGauge({
               ],
             },
           },
+          // 2026-09-05 质感: 进度弧渐变覆盖 + 指针阴影，交易所大屏感。
+          progress: {
+            show: true,
+            width: 10,
+            itemStyle: {
+              color: {
+                type: 'linear',
+                x: 0,
+                y: 0,
+                x2: 1,
+                y2: 0,
+                colorStops: [
+                  { offset: 0, color: '#3b82f6' },
+                  { offset: 0.5, color: pointerColor },
+                  { offset: 1, color: pointerColor },
+                ],
+              },
+              shadowColor: pointerColor,
+              shadowBlur: 8,
+            },
+          },
           pointer: {
             length: '62%',
             width: 4,
-            itemStyle: { color: pointerColor },
+            itemStyle: { color: pointerColor, shadowColor: pointerColor, shadowBlur: 6 },
           },
           axisTick: { show: false },
           splitLine: { show: false },
