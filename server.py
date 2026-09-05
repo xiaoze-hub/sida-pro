@@ -1939,6 +1939,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"封单成色采样任务注册失败: {e}")
 
+        # 涨停事件盘后回填(批次B 妖股池, 2026-09-06): 交易日 15:30
+        try:
+            from src.core.limit_up_backfill import backfill_all
+
+            scheduler.scheduler.add_job(
+                backfill_all,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=30,
+                id="limit-up-backfill",
+                name="涨停事件回填",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("涨停事件回填任务已注册(交易日 15:30)")
+        except Exception as e:
+            logger.error(f"涨停事件回填任务注册失败: {e}")
+
         # 微信数智分析BOT worker: 长轮询 getupdates, 微信消息 → AI 回复 → 回微信
         try:
             from src.core.wechat_bot_worker import wechat_bot_worker
