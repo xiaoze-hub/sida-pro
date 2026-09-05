@@ -59,11 +59,11 @@ SETTING_DESCRIPTIONS = {
     "wudao_mcp_token": "悟道(wudao) MCP 接口 Token(竞价/题材数据源)",
     "zhitu_token": "智兔(zhitu) 数据接口 Token(分红/股东数据源,200次/天)",
     "tdx_api_key": "通达信问小达 MCP 接口 Token(TDX 自然语言投研/选股数据源)",
-    # ---- 同花顺登录态(扫码登录维护,ths_auth.py 自动续期) ----
-    "ths_account": "同花顺账号(扫码登录自动写入,勿手改)",
-    "ths_password": "同花顺登录凭证(扫码返回,非用户密码,自动续期用)",
-    "ths_userid": "同花顺用户ID(登录后自动写入)",
-    "ths_expires": "同花顺 session 过期时间(自动续期后更新)",
+    # ---- 同花顺扫码凭证(2026-09-05 已下线, 遗留键仅兼容旧 DB 行, 无写入方) ----
+    "ths_account": "同花顺账号(遗留键,扫码已下线,勿手改)",
+    "ths_password": "同花顺登录凭证(遗留键,扫码已下线)",
+    "ths_userid": "同花顺用户ID(遗留键,扫码已下线)",
+    "ths_expires": "同花顺 session 过期时间(遗留键,扫码已下线)",
 }
 
 # 敏感 key:列表接口不回显完整值,只返回是否已配置
