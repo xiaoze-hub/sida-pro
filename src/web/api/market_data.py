@@ -287,6 +287,15 @@ async def market_capital_flow_proxy():
         ).json()
         if ov.get("error"):
             return {"error": ov["error"]}
+        # 2026-09-05 口径修正: 上游网关 point/change_pct 放大了100倍
+        # (point=393012实际3930.12, change_pct=-30实际-0.3%), 此处归一化。
+        for _k in ("sh", "sz", "cyb"):
+            _d = ov.get(_k)
+            if isinstance(_d, dict):
+                if isinstance(_d.get("point"), (int, float)):
+                    _d["point"] = round(_d["point"] / 100, 2)
+                if isinstance(_d.get("change_pct"), (int, float)):
+                    _d["change_pct"] = round(_d["change_pct"] / 100, 2)
         # 2. 板块资金明细(同花顺 hyzjl 行业, 流入/流出榜)
         from src.core.marketdata_client import get_market_data
         md = get_market_data()

@@ -1139,7 +1139,7 @@ function PhaseGaugeCard() {
     <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
         <span className="text-[13px] font-semibold">市场温度</span>
-        <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45</span>
+        <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
       {phaseData ? (
         <SentimentGauge
