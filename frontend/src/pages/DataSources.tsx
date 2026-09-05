@@ -355,7 +355,7 @@ export default function DataSourcesPage() {
   }
 
   return (
-    <div>
+    <div className="sida-page-enter">
       <div className="mb-4 md:mb-8 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">数据源</h1>

@@ -7,6 +7,15 @@
 
 ## 2026-09-05
 
+### feature-UI全量改造 Wave2+3(v0.5.1): 全站进场动画(22页)
+
+- Quote/Opportunities/DarkFundTop/IndexDetail/L2Orderbook/BoardDetail/Help/
+  Audit/History/Reports/PaperTrading/Forecast/Notifications/ShadowAccount/
+  PriceAlerts/Stocks/Profile/Agents/DataSources/Settings/AnalysisDetail
+  根容器统一加 `sida-page-enter`(0.3s fade-up, reduced-motion 全禁)。
+- Hub 系/登录页为框架壳, 不加。
+- **测试**: tsc/build 全绿。
+
 ### feature-UI全量改造 Wave1(v0.5.0): primitives + 首页迁移
 
 - 新增 biz-ui 共享组件: AnimatedNumber(数字滚动)/FlashValue(涨跌闪)/

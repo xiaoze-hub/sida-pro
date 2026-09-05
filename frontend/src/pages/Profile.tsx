@@ -211,7 +211,7 @@ export function Profile() {
   const displayName = profile?.nickname || profile?.username || ''
 
   return (
-    <div>
+    <div className="sida-page-enter">
       {/* 页头 */}
       <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">

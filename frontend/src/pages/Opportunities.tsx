@@ -1057,7 +1057,7 @@ export default function OpportunitiesPage() {
   }, [stats])
 
   return (
-    <div className="page-container pb-10">
+    <div className="page-container sida-page-enter pb-10">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
         <div>
           <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight flex items-center gap-2">

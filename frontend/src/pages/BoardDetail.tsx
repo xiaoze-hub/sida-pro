@@ -153,7 +153,7 @@ export default function BoardDetailPage() {
   }
 
   return (
-    <div className="page-container pb-10">
+    <div className="page-container sida-page-enter pb-10">
       {/* 页头 */}
       <div className="flex items-center gap-3 mb-4">
         <Button variant="ghost" size="sm" className="h-8" onClick={() => navigate(-1)}>
