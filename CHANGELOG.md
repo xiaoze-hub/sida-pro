@@ -7,6 +7,20 @@
 
 ## 2026-09-05
 
+### feature-双L2深研落地 v0.4.98(全线上实测)
+
+- DDE 定稿: 装机 thsdk 无 `dde` 方法, 但 `query_data` 官方通道通
+  (主动/被动×特大/大单8列+主力净流入, 生产已验)。`get_dde` 改走官方,
+  异常回退 big_orders 四档。两条 `/dde` 路由本就调官方通道, 不用改。
+- `get_hs300_constituents`: `hs300` 方法同样不存在, 改走 TQ
+  `get_stock_list(market=23)` 回退, 空表兜底。
+- 性能: thsdk 每查一次 TCP 登录一次, `get_comprehensive_snapshot` 加 30s
+  进程缓存(一次快照 6 次登录→1 次)。
+- `dark_l2.py` 注释"游客模式"扶正为正式账户。
+- 纠正: `get_market_data_cn_extended`(扩展1)正式可用, 未坏, 不动。
+- **测试**: 新增 8 单测全绿 (四档分桶/官方透传/回退/TQ 成功失败/快照缓存)。
+- 待用户: 盘后专业包(GP/SC)仍 ErrorId=10, 真封板率改走 wudao 备用。
+
 ### fix-首页UI第二轮(截图验收)
 
 - 市场温度字表重叠：ECharts gauge detail 富文本 `\n` 不换行

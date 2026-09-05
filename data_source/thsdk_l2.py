@@ -113,6 +113,18 @@ DDE_DATATYPE_SUMMARY = "6,7,8,9,10,13,19,592888,592890"
 # 分档明细:在汇总基础上追加 主动/被动 × 特大单/大单 × 买入/卖出 金额
 DDE_DATATYPE_DETAIL = "6,7,8,9,10,13,19,223,224,225,226,227,228,229,230"
 
+# DDE 金额四档(万元, 同花顺常规分档口径; 2026-09-05):
+# 小单<4万 / 中单4~20万 / 大单20~100万 / 特大单≥100万。阈值置顶, 校准只改这里。
+DDE_BUCKET_SMALL_MAX = 4.0
+DDE_BUCKET_MID_MAX = 20.0
+DDE_BUCKET_BIG_MAX = 100.0
+
+# big_order_flow 官方方向码(2026-09-05 生产实测 755 行):
+# 1=主买 / 5=主卖(已用)/ 0=中性 / 15·17·21=大额但方向待验证(单列,不计入买卖)。
+DDE_DIR_BUY = {1}
+DDE_DIR_SELL = {5}
+DDE_DIR_NEUTRAL = {0}
+
 # 限频保护(实测:游客模式 50ms 不触发封号,正式账户可能更严)
 # 保护策略:
 #   - 游客模式:最小 50ms(实测安全)
@@ -143,6 +155,11 @@ _circuit_open_until = 0
 # 问财增强版缓存(30s 进程内,避免重复拉 thsdk)
 _WENCAI_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _WENCAI_TTL = 30.0
+
+# 综合快照缓存(2026-09-05: thsdk 每次查询都 TCP 建连, 一次快照=6 次登录;
+# 30s TTL 把高频轮询合并, 行情延迟可接受)。key=symbol。
+_SNAPSHOT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_SNAPSHOT_TTL = 30.0
 
 # 默认游客模式提示
 GUEST_MODE_WARNING = """
@@ -749,24 +766,124 @@ class THSDKL2:
         resp = self._query("corporate_action", symbol)
         return self._to_dataframe(resp)
 
-    def get_dde(self, symbol: str = "USZA002361") -> pd.DataFrame:
-        """
-        DDE 大单动向(同花顺 Level-2 DDE 指标)
+    @staticmethod
+    def bucket_dde_orders(df: pd.DataFrame) -> pd.DataFrame:
+        """big_orders → DDE 金额四档汇总(纯函数, 可单测)。
 
-        :param symbol: thsdk 股票代码
-        :return: DataFrame,含 DDE 大单净量、DDX/DDY/DDZ 等大单动向指标
+        :param df: get_big_orders 返回(含 成交方向/金额_万元 列)
+        :return: DataFrame[分档, 买入笔数, 卖出笔数, 买入万元, 卖出万元, 净额万元,
+            未知方向大额万元]。15/17/21 方向待验证, 金额单列不断言方向。
         """
-        resp = self._query("dde", symbol)
-        return self._to_dataframe(resp)
+        cols = ["分档", "买入笔数", "卖出笔数", "买入万元", "卖出万元", "净额万元", "未知方向大额万元"]
+        if df is None or len(df) == 0:
+            return pd.DataFrame(columns=cols)
+
+        def _num(s: pd.Series) -> pd.Series:
+            return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+        amt = _num(df["金额_万元"]) if "金额_万元" in df.columns else _num(df["总金额"]) / 1e4
+        direction = _num(df["成交方向"]) if "成交方向" in df.columns else pd.Series([0] * len(df))
+
+        def _bucket(a: float) -> str:
+            if a >= DDE_BUCKET_BIG_MAX:
+                return "特大单"
+            if a >= DDE_BUCKET_MID_MAX:
+                return "大单"
+            if a >= DDE_BUCKET_SMALL_MAX:
+                return "中单"
+            return "小单"
+
+        rows = []
+        for name in ("特大单", "大单", "中单", "小单"):
+            mask = amt.apply(_bucket) == name
+            buy_m = mask & direction.isin(DDE_DIR_BUY)
+            sell_m = mask & direction.isin(DDE_DIR_SELL)
+            buy_wan = round(float(amt[buy_m].sum()), 2)
+            sell_wan = round(float(amt[sell_m].sum()), 2)
+            rows.append({
+                "分档": name,
+                "买入笔数": int(buy_m.sum()),
+                "卖出笔数": int(sell_m.sum()),
+                "买入万元": buy_wan,
+                "卖出万元": sell_wan,
+                "净额万元": round(buy_wan - sell_wan, 2),
+                "未知方向大额万元": 0.0,
+            })
+        unknown_m = ~direction.isin(DDE_DIR_BUY | DDE_DIR_SELL | DDE_DIR_NEUTRAL)
+        rows.append({
+            "分档": "未知方向",
+            "买入笔数": 0,
+            "卖出笔数": 0,
+            "买入万元": 0.0,
+            "卖出万元": 0.0,
+            "净额万元": 0.0,
+            "未知方向大额万元": round(float(amt[unknown_m].sum()), 2),
+        })
+        return pd.DataFrame(rows, columns=cols)
+
+    @staticmethod
+    def _split_symbol(symbol: str) -> tuple[str, str]:
+        """THS 代码 → (6位代码, 市场前缀)。未知前缀按代码段猜: 60→USHA, 00/30→USZA, 43/92→USTM。
+        """
+        s = (symbol or "").strip().upper()
+        for p in ("USHA", "USZA", "USTM", "UNQQ", "UHKG"):
+            if s.startswith(p):
+                return s[4:], p
+        if s.startswith("60") or s.startswith("68"):
+            return s, "USHA"
+        if s.startswith("00") or s.startswith("30"):
+            return s, "USZA"
+        if s.startswith("43") or s.startswith("92"):
+            return s, "USTM"
+        return s, "USHA"
+
+    def get_dde(self, symbol: str = "USZA002361") -> pd.DataFrame:
+        """DDE 大单动向(同花顺 Level-2 DDE 指标)。
+
+        2026-09-05 定稿: 走官方 `query_data` 通道(get_dde_flow, 主动/被动 ×
+        特大单/大单 × 买入/卖出 8列 + 主力净流入汇总, 生产已验证)。
+        官方通道异常时回退 big_order_flow 金额四档(bucket_dde_orders)。
+        与客户端 DDE 排名页同源, 显示效果对标它。
+        主动+被动合并即各档买卖总额; DDX/DDY 需流通盘归一, 此处不造。
+
+        :param symbol: thsdk 股票代码(带 USHA/USZA 前缀或裸代码)
+        :return: DataFrame(官方 detail 列; 回退时为 bucket 四档列)
+        """
+        six, market = self._split_symbol(symbol)
+        try:
+            df = self.get_dde_flow(six, market=market, detail=True)
+            if df is not None and len(df) > 0:
+                return df
+            logger.warning("get_dde 官方通道空表, 回退 big_orders 分档: %s", symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("get_dde 官方通道失败回退分档 %s: %s", symbol, str(e)[:100])
+        return self.bucket_dde_orders(self.get_big_orders(symbol))
 
     def get_hs300_constituents(self) -> pd.DataFrame:
-        """
-        沪深 300 成分股列表
+        """沪深 300 成分股列表。
 
-        :return: DataFrame,沪深 300 全部成分股代码 + 名称
+        2026-09-05: 装机版 thsdk 无 `hs300` 方法, 改走通达信 TQ
+        `get_stock_list(market=23)` 回退, 列对齐为 [代码, 名称]。
+        TQ 不可用时返回空表(调用方 _safe_call 处理)。
+
+        :return: DataFrame[代码, 名称]
         """
-        resp = self._query("hs300")
-        return self._to_dataframe(resp)
+        try:
+            from marketdata.vendors.tq import _rpc  # 延迟导入, 避免循环依赖
+
+            val = _rpc("get_stock_list", {"market": "23", "list_type": 1})
+            rows = val if isinstance(val, list) else []
+            df = pd.DataFrame(rows)
+            if len(df) == 0:
+                return pd.DataFrame(columns=["代码", "名称"])
+            code_col = "Code" if "Code" in df.columns else df.columns[0]
+            name_col = "Name" if "Name" in df.columns else (df.columns[1] if len(df.columns) > 1 else code_col)
+            out = pd.DataFrame({"代码": df[code_col].astype(str), "名称": df[name_col].astype(str)})
+            logger.info("hs300 成分股经 TQ 回退拿到 %d 只", len(out))
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.warning("hs300 成分股 TQ 回退失败: %s", str(e)[:100])
+            return pd.DataFrame(columns=["代码", "名称"])
 
     def get_market_data_cn_extended(
         self, symbol: str = "USZA002361", extended: str = "扩展1"
@@ -942,7 +1059,14 @@ class THSDKL2:
         """
         import datetime
 
-        return {
+        now = datetime.datetime.now().timestamp()
+        hit = _SNAPSHOT_CACHE.get(symbol)
+        if hit is not None and now - hit[0] < _SNAPSHOT_TTL:
+            out = dict(hit[1])
+            out["cached"] = True
+            return out
+
+        out = {
             "symbol": symbol,
             "timestamp": datetime.datetime.now().isoformat(),
             "quote": self.get_quote(symbol),
@@ -950,7 +1074,10 @@ class THSDKL2:
             "order_book_20_rows": len(self.get_order_book_20(symbol)[0]),
             "intraday_rows": len(self.get_intraday(symbol)),
             "main_flow": self.compute_main_flow(symbol),
+            "cached": False,
         }
+        _SNAPSHOT_CACHE[symbol] = (now, out)
+        return out
 
     # ========================================================================
     # 第九类:DDE 主力资金 + 代码补齐 + 市场代码表(v0.3.1 选项B 新增)
