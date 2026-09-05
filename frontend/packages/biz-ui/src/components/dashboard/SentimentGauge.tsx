@@ -42,16 +42,19 @@ export default function SentimentGauge({
 }) {
   const { ref, chartRef } = useECharts()
 
+  // 2026-09-05 中文两行标签改由 HTML 叠加层渲染:
+  // ECharts gauge detail 富文本 `\n` 在该版本下不换行(渲染成 `60n市场温度·修复` 挤出一行掉到表外)，
+  // HTML 定位完全可控，不依赖图表库换行语义。
+  const h = metrics?.max_height ?? 0
+  const promo = metrics?.promo_rate ?? 0
+  const seal = metrics?.seal_rate ?? 0
+  const score = Math.min(100, Math.round(h * 15 + promo * 40 + seal * 45))
+  const pointerColor = PHASE_COLOR[phase ?? 'accumulating'] ?? '#64748b'
+  const label = phase ? (PHASE_LABEL[phase] ?? phase) : '--'
+
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-
-    const h = metrics?.max_height ?? 0
-    const promo = metrics?.promo_rate ?? 0
-    const seal = metrics?.seal_rate ?? 0
-    const score = Math.min(100, Math.round(h * 15 + promo * 40 + seal * 45))
-    const pointerColor = PHASE_COLOR[phase ?? 'accumulating'] ?? '#64748b'
-    const label = phase ? (PHASE_LABEL[phase] ?? phase) : '--'
 
     chart.setOption({
       series: [
@@ -104,22 +107,31 @@ export default function SentimentGauge({
           axisTick: { show: false },
           splitLine: { show: false },
           axisLabel: { show: false },
-          detail: {
-            offsetCenter: [0, '-18%'],
-            fontSize: 20,
-            fontFamily: 'monospace',
-            fontWeight: 'bold',
-            formatter: `{v|${score}}\\n{n|市场温度 · ${label}}`,
-            rich: {
-              v: { fontSize: 22, fontWeight: 'bold', color: pointerColor },
-              n: { fontSize: 9, color: '#8e8e96', padding: [4, 0, 0, 0] },
-            },
-          },
+          // 2026-09-05 detail 交给 HTML 叠加层渲染，此处置空避免双写。
+          detail: { show: false },
           data: [{ value: score }],
         },
       ],
     })
   }, [phase, metrics, chartRef])
 
-  return <div ref={ref} className="h-[140px] w-full" />
+  return (
+    // 2026-09-05 容器加高到 154px: 圆心在 78%(120px)，下方 34px 正好放下两行字，
+    // 指针只扫上半圆 → 文字与表盘零重叠。
+    <div className="relative h-[154px] w-full">
+      <div ref={ref} className="absolute inset-0" />
+      {/* 表盘内两行标签: 分数 + 市场温度·阶段，定位圆心之下，指针扫不到 */}
+      <div className="pointer-events-none absolute inset-x-0 text-center" style={{ top: 'calc(78% + 6px)' }}>
+        <div
+          className="font-mono text-[20px] font-bold leading-none tabular-nums"
+          style={{ color: pointerColor }}
+        >
+          {score}
+        </div>
+        <div className="mt-1 text-[10px] leading-none text-[#8e8e96]">
+          市场温度 · {label}
+        </div>
+      </div>
+    </div>
+  )
 }

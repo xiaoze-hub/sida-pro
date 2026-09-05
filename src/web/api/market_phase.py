@@ -73,6 +73,12 @@ def _sh_index_pct_today() -> float | None:
 
 
 def _row_to_dict(r: MarketPhaseDaily) -> dict:
+    # 2026-09-05 历史包袱: seal_rate 曾长期硬编码 1.0(假 100%), 之后才落 None。
+    # 真实封板率从未被算出来过, 库里任何 1.0 都是旧代码写的假值, 读时转 None
+    # (前端显“--”), 不用等下次 sync 覆盖。其它数值(测试行)原样透传。
+    seal = r.seal_rate
+    if seal == 1.0:
+        seal = None
     return {
         "date": r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date),
         "phase": r.phase or "",
@@ -83,7 +89,7 @@ def _row_to_dict(r: MarketPhaseDaily) -> dict:
         "ge5_count": r.ge5_count,
         "max_height": r.max_height,
         "promo_rate": r.promo_rate,
-        "seal_rate": r.seal_rate,
+        "seal_rate": seal,
         "sh_index_pct": r.sh_index_pct,
     }
 

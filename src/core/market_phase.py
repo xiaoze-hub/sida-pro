@@ -10,7 +10,7 @@
 - ge2_count / ge3_count / ge5_count: N 板及以上家数(梯队宽度)
 - max_height: 当日最高连板数(高度)
 - promo_rate: 晋级率 — 昨日连板池中今日续封的比例(昨日池 < PROMO_MIN_POOL 记 None)
-- seal_rate: 封板率 — 当前数据源只给已封板池, 落 1.0(数据源不可得时 None)
+- seal_rate: 封板率 — 数据源只给已封板池、无炸板分母, 算不出真值, 落 None(前端“--”)
 - sh_index_pct: 上证指数当日涨跌幅, 用于弱档否决
 
 阈值(集中本模块顶部常量, 调整只改这里, 标定自全 A 股历史分位数):
@@ -172,7 +172,7 @@ def compute_daily_metrics(
     - ge2/3/5_count: days >= N 的家数
     - max_height: max(days) — 当日最高板数, 池空时 0
     - promo_rate: 昨日连板池(>=2 板)中今日续封的比例, 池不足 PROMO_MIN_POOL 时 None
-    - seal_rate: 当前数据源只给已封板池, 落 1.0(数据源不可得时 None)
+    - seal_rate: 数据源只给已封板池、无炸板分母, 算不出真值, 落 None(前端“--”)
     """
     first_board = sum(1 for p in pool if int(p.get("days") or 1) == 1)
     ge2_count = sum(1 for p in pool if int(p.get("days") or 1) >= 2)
