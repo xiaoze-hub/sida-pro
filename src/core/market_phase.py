@@ -197,8 +197,9 @@ def compute_daily_metrics(
             continued = sum(1 for c in prev_ge2_codes if c in today_codes)
             promo_rate = round(continued / len(prev_ge2_codes), 4)
 
-    # 封板率 — 数据源只给已封板池, 默认 1.0(数据源不可得时 None)
-    seal_rate: float | None = 1.0 if pool else None
+    # 封板率 — 数据源只给已封板池、无炸板分母，算不出真封板率。
+    # 2026-09-05: 落 None（前端显“--”），此前硬编码 1.0 会误导成“100%封板”。
+    seal_rate: float | None = None
 
     return DailyMetrics(
         first_board=first_board,
