@@ -607,9 +607,10 @@ export default function DashboardPage() {
                       const maxIn = Math.max(...(marketFlow.inflow_boards?.map(x => x.net_inflow) || [1]), 0.01)
                       return marketFlow.inflow_boards.map((b, bi) => (
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
-                          <div className="absolute inset-y-0 left-0 bg-stock-up/10 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
+                          {/* 2026-09-05 质感: 纯色10% → 左实右虚渐变，有“水位感” */}
+                          <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-up/25 to-stock-up/5 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
                           <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
-                          <span className="relative z-10 font-mono text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
+                          <span className="relative z-10 font-mono tabular-nums text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
                     })()}
@@ -624,9 +625,9 @@ export default function DashboardPage() {
                       const maxOut = Math.max(...(marketFlow.outflow_boards?.map(x => Math.abs(x.net_inflow)) || [1]), 0.01)
                       return marketFlow.outflow_boards.map((b, bi) => (
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
-                          <div className="absolute inset-y-0 left-0 bg-stock-down/10 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
+                          <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-down/25 to-stock-down/5 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
                           <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
-                          <span className="relative z-10 font-mono text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
+                          <span className="relative z-10 font-mono tabular-nums text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
                     })()}
