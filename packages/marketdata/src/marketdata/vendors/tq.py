@@ -156,6 +156,15 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
     return result.get("Value", result)
 
 
+def tq_rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
+    """公开 TQ JSON-RPC 入口(封单成色采样/妖股池等核心模块复用)。
+
+    核心模块要调 get_stock_info/get_zdt_data 等未封装方法, 之前只能 import
+    私有 _rpc; 这里给一个稳定公开入口, 参数语义与 _rpc 一致。
+    """
+    return _rpc(method, params, timeout=timeout)
+
+
 def _to_float(v) -> float | None:
     try:
         f = float(str(v).strip())

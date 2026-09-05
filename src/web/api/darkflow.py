@@ -190,6 +190,12 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
         mainflow_tri = triangulate(symbol_code)
     except Exception:  # noqa: BLE001
         mainflow_tri = {"agree": None, "consensus_wan": None, "spread_pct": None, "n_ok": 0, "sources": {}}
+    # A4(2026-09-06 28号): A/B/C 置信度徽章(双源一致=A/单源=B/分歧=C) —— "不编造"可视化。
+    try:
+        from src.core.confidence import payload as _confidence_payload
+        mainflow_tri = {**mainflow_tri, **_confidence_payload(mainflow_tri)}
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "main_intent": main_intent,
         "inner_outer": inner_outer,

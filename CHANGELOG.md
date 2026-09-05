@@ -5,6 +5,31 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-06
+
+### feature-封单成色检测器+双源置信度(批次A, feat/seal-quality)
+
+- `src/core/limit_rules.py`: A股涨停价规则纯函数(主板10%/创科20%/ST5%/北交30%, 四舍五入到分,
+  拒绝银行家舍入; ST 由名称判断, 新股首日 prev_close 缺失 → None 显式无数据)。
+- `src/core/seal_quality.py`: 封单成色纯函数 — cancel_rate_5m=Δ撤/(Δ买+Δ卖+Δ撤)(口径对齐
+  decision_pioneer P2 撤单率, 但做在窗口差分上)、seal_quality=1-cancel_rate、撤单方向 bias
+  (买撤多>0 托单虚)、撤单率 z-score(基线=窗口起点前历史对, 不被暴增自身污染)、封板成功率。
+  数据不足/累计字段回退(跨日重置) → available=false+reason, 绝不编造。
+- `src/core/seal_sampler.py`: 盘中 60s 采样任务 — 涨停池(get_limit_up_pool, wudao 带 name 判
+  ST+封单额) → fetch_tq_l2 累计字段(BCancel/SCancel, TQ9 实测当日累计→差分口径) + TQ 快照
+  Now/LastClose → seal_quality_samples 表(symbol+ts 唯一, 先查后插幂等)。
+- `packages/marketdata .../tq.py`: 新增公开 `tq_rpc()` 入口(get_stock_info/get_zdt_data 等
+  未封装方法复用, 免 import 私有 _rpc)。
+- `src/web/migrations.py`: Migration 131 seal_quality_samples(ts ISO 文本, 双方言安全)。
+- `src/web/api/seal_quality.py` + app.py 注册 /api/seal-quality(protected): /{symbol} 指标、
+  /{symbol}/raw 原始序列、/sample-now 手动采样。
+- `src/web/api/darkflow.py`: dark-flow 响应的 mainflow_tri 挂 A/B/C 置信度徽章
+  (`src/core/confidence.py`: 双源一致=A/单源=B/分歧=C, 永不抛异常)。
+- **诚实项**: FCAmo 封单额字段语义、BCancel/SCancel 差分口径, 周一盘中实测校准
+  (docs/innov-dev-plan.md 风险清单); 前端徽章与 E3 新鲜度徽章合并一次 UI pass。
+- **测试**: test_seal_quality(12)+test_confidence(6) 18 passed; 审计回归+埋伏相关 9 passed;
+  TestClient 冒烟: 3 端点 401(protected) vs 未注册 404。
+
 ## 2026-09-05
 
 ### fix-28号审计全量修复(v0.5.8, P0在v0.5.7)

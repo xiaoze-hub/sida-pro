@@ -2283,6 +2283,50 @@ def _m130_tick_archive_table(conn: Connection) -> None:
     )
 
 
+def _m131_seal_quality_samples(conn: Connection) -> None:
+    """封单成色采样表(批次A, 2026-09-06 28号)。
+
+    seal_sampler 盘中 60s 写入涨停股的累计字段快照, seal_quality 纯函数
+    消费窗口差分。ts 用 ISO 文本(双方言安全, 定长 ISO 排序=时间排序),
+    唯一键 symbol+ts 幂等(先查后插, 重复写跳过)。
+    """
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS seal_quality_samples (
+  ts TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  price DOUBLE PRECISION,
+  last_close DOUBLE PRECISION,
+  limit_price DOUBLE PRECISION,
+  is_sealed INTEGER,
+  cancel_buy DOUBLE PRECISION,
+  cancel_sell DOUBLE PRECISION,
+  total_buy_vol DOUBLE PRECISION,
+  total_sell_vol DOUBLE PRECISION,
+  l2_tick_num DOUBLE PRECISION,
+  l2_order_num DOUBLE PRECISION,
+  seal_amount DOUBLE PRECISION,
+  extra TEXT
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_seal_samples_symbol_ts "
+            "ON seal_quality_samples(symbol, ts)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_seal_samples_symbol_ts "
+            "ON seal_quality_samples(symbol, market, ts)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2322,6 +2366,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(128, "l2_ticks_table", _m128_l2_ticks_table),
     Migration(129, "summary_cache_table", _m129_summary_cache_table),
     Migration(130, "tick_archive_table", _m130_tick_archive_table),
+    Migration(131, "seal_quality_samples_table", _m131_seal_quality_samples),
 )
 
 
