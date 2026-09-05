@@ -1959,6 +1959,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"涨停事件回填任务注册失败: {e}")
 
+        # 信号对账(批次D 复盘闭环, 2026-09-06): 交易日 18:30 回填 T+1/T+5 收益
+        try:
+            from src.core.signal_review import nightly_review
+
+            scheduler.scheduler.add_job(
+                nightly_review,
+                "cron",
+                day_of_week="mon-fri",
+                hour=18,
+                minute=30,
+                id="signal-nightly-review",
+                name="信号复盘对账",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("信号对账任务已注册(交易日 18:30)")
+        except Exception as e:
+            logger.error(f"信号对账任务注册失败: {e}")
+
         # 微信数智分析BOT worker: 长轮询 getupdates, 微信消息 → AI 回复 → 回微信
         try:
             from src.core.wechat_bot_worker import wechat_bot_worker
