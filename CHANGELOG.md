@@ -7,6 +7,12 @@
 
 ## 2026-09-05
 
+### feature-UI标题统一(v0.5.2): SectionHeader 全站收敛
+
+- 机会精选/最新报告/机会发现/情绪周期/市场主线×2 全部迁 SectionHeader。
+- 全站分区标题只剩一种样式(色条+13px semibold+右侧action)。
+- **测试**: tsc/build 全绿。
+
 ### feature-UI全量改造 Wave2+3(v0.5.1): 全站进场动画(22页)
 
 - Quote/Opportunities/DarkFundTop/IndexDetail/L2Orderbook/BoardDetail/Help/

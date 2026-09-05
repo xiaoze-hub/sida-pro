@@ -982,17 +982,19 @@ export default function DashboardPage() {
 
         {/* 机会精选(右列,窄) */}
         <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
-          {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描图标 */}
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">机会精选</h2>
-            <button
-              type="button"
-              className="text-[11px] text-muted-foreground hover:text-foreground"
-              onClick={() => navigate('/opportunities')}
-            >
-              进入机会页
-            </button>
-          </div>
+          {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描区的图标 */}
+          <SectionHeader
+            title="机会精选"
+            action={
+              <button
+                type="button"
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={() => navigate('/opportunities')}
+              >
+                进入机会页
+              </button>
+            }
+          />
           {opportunities.length === 0 ? (
             <div className="py-6 text-center text-[12px] text-muted-foreground">{loading ? '加载中…' : '暂无活跃机会信号'}</div>
           ) : (
@@ -1029,17 +1031,21 @@ export default function DashboardPage() {
 
 {/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
         <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
-          <div className="mb-1.5 flex items-baseline gap-2">
-            <h2 className="text-[13px] font-semibold">最新报告</h2>
-            <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
-            <button
-              type="button"
-              onClick={() => navigate('/reports')}
-              className="ml-auto shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
-            >
-              全部 →
-            </button>
-          </div>
+          <SectionHeader
+            title="最新报告"
+            action={
+              <>
+                <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
+                <button
+                  type="button"
+                  onClick={() => navigate('/reports')}
+                  className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                >
+                  全部 →
+                </button>
+              </>
+            }
+          />
           {reportsLoading && reports.length === 0 ? (
             <SkeletonRows rows={3} />
           ) : reports.length === 0 ? (

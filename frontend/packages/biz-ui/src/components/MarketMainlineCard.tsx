@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Layers, Crown } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 
 /**
  * 市场主线识别卡片 (2026-08-24, v0.3.0)
@@ -235,14 +236,16 @@ export default function MarketMainlineCard() {
   if (ranked.length === 0) {
     return (
       <div className="border-t border-border/60 pt-2.5">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <div className="text-[13px] font-semibold text-foreground">🎯 市场主线</div>
-          {updatedAt && (
-            <span className="text-[10px] text-muted-foreground font-mono">
-              {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
-            </span>
-          )}
-        </div>
+        <SectionHeader
+          title="市场主线"
+          action={
+            updatedAt ? (
+              <span className="text-[10px] text-muted-foreground font-mono">
+                {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+              </span>
+            ) : undefined
+          }
+        />
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <AlertTriangle className="w-3.5 h-3.5" />
           <span>{error || note || '暂无主线数据(非交易日/涨停池为空)'}</span>
@@ -257,38 +260,36 @@ export default function MarketMainlineCard() {
 
   return (
     <div className="border-t border-border/60 pt-2.5">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2">
-          <div className="text-[13px] font-semibold text-foreground">🎯 市场主线</div>
-          <span className="text-[10px] text-muted-foreground">
-            Top {top.length}
-            {rest.length > 0 ? ` / ${ranked.length}` : ''}
-            {stats ? (
-              <span className="ml-1.5 text-muted-foreground/70">
-                (过滤 {stats.broad_filtered} 宽基 / 未入榜 {stats.below_min} / 共 {totalGroups} 题材)
-              </span>
-            ) : null}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {updatedAt && (
-            <span className="text-[10px] text-muted-foreground font-mono">
-              {updatedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+      <SectionHeader
+        title="市场主线"
+        action={
+          <>
+            <span className="text-[10px] text-muted-foreground">
+              Top {top.length}
+              {rest.length > 0 ? ` / ${ranked.length}` : ''}
+              {stats ? (
+                <span className="ml-1.5 text-muted-foreground/70">
+                  (过滤 {stats.broad_filtered} 宽基 / 未入榜 {stats.below_min} / 共 {totalGroups} 题材)
+                </span>
+              ) : null}
             </span>
-          )}
-          <button
-            type="button"
-            title="刷新"
-            onClick={() => {
-              setLoading(true)
-              void load()
-            }}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {updatedAt ? updatedAt.toLocaleTimeString('zh-CN', { hour12: false }) : ''}
+            </span>
+            <button
+              type="button"
+              title="刷新"
+              onClick={() => {
+                setLoading(true)
+                void load()
+              }}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </>
+        }
+      />
 
       {/* 错误细条: 与 data 并存(上次成功数据不丢) */}
       {error ? (
