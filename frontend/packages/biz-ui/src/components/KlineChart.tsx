@@ -380,7 +380,16 @@ export default function KlineChart(props: {
         const res = await fetchAPI<KlinesResponse>(query)
         if (cancelled) return
         const kl = res.klines || []
-        const data = kl.map((it: KlineItem) => ({
+        // 2026-09-05: 过滤 OHLC 含 null/NaN 的行(周末/预测拼接数据常有空值，
+        // lightweight-charts setData 遇 null 直接抛 Value is null 全页崩)。
+        const valid = kl.filter(
+          (it: KlineItem) =>
+            Number.isFinite(it.open) &&
+            Number.isFinite(it.high) &&
+            Number.isFinite(it.low) &&
+            Number.isFinite(it.close),
+        )
+        const data = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
           open: it.open,
           high: it.high,
@@ -389,13 +398,13 @@ export default function KlineChart(props: {
         }))
         seriesRef.current?.setData(data)
         // L1 均线 / L5 副图 计算源
-        rawKlinesRef.current = kl.map((it: KlineItem) => ({
+        rawKlinesRef.current = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
           close: it.close,
           volume: it.volume || 0,
         }))
         chartRef.current?.timeScale().fitContent()
-        setDataLen(kl.length)
+        setDataLen(valid.length)
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : '加载K线失败')

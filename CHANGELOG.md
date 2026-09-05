@@ -7,6 +7,13 @@
 
 ## 2026-09-05
 
+### fix-K线null防崩
+
+- 问题：forecast页`Value is null`全页崩——klines含null OHLC行（周末/预测拼接），
+  lightweight-charts setData遇null直接抛。
+- KlineChart主series提前过滤非有限OHLC行（均线/副图数据源同步）；空数据只空图不崩。
+- **测试**: tsc/build 全绿。
+
 ### fix-周末复盘放行
 
 - 问题：周六/盘后 dark-flow 502无数据——未来过滤把跨日tick杀光。
