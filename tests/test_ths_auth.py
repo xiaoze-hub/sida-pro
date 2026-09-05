@@ -52,3 +52,55 @@ def test_session_status_unlogged():
     st = m.session_status()
     assert st["logged_in"] is False
     assert st["need_scan"] is True
+
+
+class TestClearSession:
+    """clear_session: 删凭证四键, 幂等(2026-09-05, v0.5.3)。"""
+
+    def _patch_db(self, monkeypatch, store):
+        import src.core.ths_auth as M
+        import src.web.database as DB
+
+        class _Q:
+            def filter(self, *a):
+                return self
+
+            def delete(self, synchronize_session=False):
+                n = 0
+                for k in [M.K_ACCOUNT, M.K_PASSWORD, M.K_EXPIRES, M.K_USERID]:
+                    if k in store:
+                        del store[k]
+                        n += 1
+                return n
+
+        class _FakeDB:
+            def query(self, *a):
+                return _Q()
+
+            def commit(self):
+                pass
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(DB, "SessionLocal", lambda: _FakeDB())
+
+    def test_clear_removes_keys(self, monkeypatch):
+        import src.core.ths_auth as M
+
+        store = {
+            M.K_ACCOUNT: "mx_x", M.K_PASSWORD: "p",
+            M.K_USERID: "u", M.K_EXPIRES: "2026-09-05T00:00:00",
+            "other_key": "keep",
+        }
+        self._patch_db(monkeypatch, store)
+        M.clear_session()
+        assert "ths_account" not in store
+        assert "ths_password" not in store
+        assert store["other_key"] == "keep"
+
+    def test_clear_idempotent_empty_db(self, monkeypatch):
+        import src.core.ths_auth as M
+
+        self._patch_db(monkeypatch, {})
+        M.clear_session()  # 空库不抛

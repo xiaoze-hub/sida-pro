@@ -238,6 +238,20 @@ def save_session(sess: ThsSession) -> None:
     })
 
 
+def clear_session() -> None:
+    """清除持久化登录态(登出)。删凭证四键,不存在也不报错。"""
+    from src.web.database import SessionLocal
+    from src.web.models import AppSettings
+
+    db = SessionLocal()
+    try:
+        db.query(AppSettings).filter(AppSettings.key.in_(
+            [K_ACCOUNT, K_PASSWORD, K_EXPIRES, K_USERID])).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
 def get_session(force: bool = False) -> ThsSession:
     """读取持久化 session;过期或缺失则尝试用凭证重新登录(自动续期)。
 
