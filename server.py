@@ -1921,6 +1921,24 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"L2 逐笔 cron 启动失败: {e}")
 
+        # 封单成色盘中采样(批次A, 2026-09-06): 60s 一次, 交易时段判断在任务内
+        try:
+            from src.core.seal_sampler import sample_tick
+
+            scheduler.scheduler.add_job(
+                sample_tick,
+                "interval",
+                seconds=60,
+                id="seal-quality-sampler",
+                name="封单成色采样",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("封单成色采样任务已注册(60s)")
+        except Exception as e:
+            logger.error(f"封单成色采样任务注册失败: {e}")
+
         # 微信数智分析BOT worker: 长轮询 getupdates, 微信消息 → AI 回复 → 回微信
         try:
             from src.core.wechat_bot_worker import wechat_bot_worker

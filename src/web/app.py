@@ -56,6 +56,7 @@ from src.web.api import (
     audit,
     market_mainline,
     market_scan,
+    seal_quality,
 )
 from src.web.api import factors
 from src.web.api import notifications
@@ -600,6 +601,13 @@ app.include_router(
     main_flow.router,
     prefix="/api/main-flow",
     tags=["main-flow"],
+    dependencies=protected,
+)
+# 封单成色检测(批次A, 2026-09-06): 涨停封单撤单率/成色指标, 采样任务盘中 60s
+app.include_router(
+    seal_quality.router,
+    prefix="/api/seal-quality",
+    tags=["seal-quality"],
     dependencies=protected,
 )
 # 竞价异动池(阶段1.2, 2026-08-20): 异动池 + 历史 + 同步
