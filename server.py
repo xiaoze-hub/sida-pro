@@ -1984,6 +1984,12 @@ if os.path.exists(static_dir):
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"code": 404, "success": False, "data": None, "message": f"API endpoint not found: /{path}"})
         file_path = os.path.join(static_dir, path)
+        # P0 (2026-09-05 28号审计): 路径穿越校验, 越界一律 404(未鉴权路由)
+        real = os.path.realpath(file_path)
+        if real != os.path.realpath(static_dir) and not real.startswith(os.path.realpath(static_dir) + os.sep):
+            from fastapi.responses import Response as _Resp
+
+            return _Resp(status_code=404)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
         # 资源类路径不存在 → 404(绝不回退 index.html)
