@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Check, Eye, EyeOff, Plus, Pencil, Trash2, Star, Send, Cpu, Play, Download, Upload, FileJson, BarChart3, User, Radar, RefreshCw, QrCode, MonitorUp, MailCheck, Copy, KeyRound, Activity, Search } from 'lucide-react'
+import { Check, Eye, EyeOff, Plus, Pencil, Trash2, Star, Send, Cpu, Play, Download, Upload, FileJson, BarChart3, User, Radar, QrCode, MonitorUp, MailCheck, Copy, KeyRound, Activity, Search } from 'lucide-react'
 import { fetchAPI, listSceneBindings, setSceneBinding, wechatBindStart, wechatBindStatus, wechatBindUnbind, wechatBindGet, type AIService, type AIModel, type NotifyChannel, type SceneBinding, type UserInfo, type SubscriptionItem, type WechatBindStartResult, type WechatBindInfo, authApi } from '@panwatch/api'
 import { QRCodeSVG } from 'qrcode.react'
 import UserManagement from '@/components/UserManagement'
+import ThsAccountCard from '@panwatch/biz-ui/components/ThsAccountCard'
 import { useAvatar, saveAvatar, fileToAvatarDataUrl } from '@/hooks/use-avatar'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
@@ -260,10 +261,6 @@ export default function SettingsPage() {
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [subscriptions, setSubscriptions] = useState<SubscriptionItem[]>([])
   const [subLoading, setSubLoading] = useState(false)
-  // 同花顺登录态
-  const [thsSession, setThsSession] = useState<any>(null)
-  const [thsQr, setThsQr] = useState<string>('')
-  const [thsLoading, setThsLoading] = useState(false)
 
   const [systemQuery, setSystemQuery] = useState('')
   // 2026-08-17: 全局搜索(覆盖所有 section)
@@ -452,11 +449,6 @@ export default function SettingsPage() {
       setSceneBindingsLoading(false)
       setMyServices(myServicesData ?? [])
       setMyServicesLoading(false)
-      // 同花顺登录态(静默加载,失败不阻塞)
-      try {
-        const ths = await fetchAPI<any>('/ths/session')
-        setThsSession(ths?.data ?? ths)
-      } catch { /* 静默 */ }
       // 个人微信绑定状态(静默加载,失败不阻塞)
       void loadWechatBind()
     } catch (e) {
@@ -509,48 +501,6 @@ export default function SettingsPage() {
       toast(e instanceof Error ? e.message : '导出失败', 'error')
     } finally {
       setExporting(false)
-    }
-  }
-
-  // 同花顺扫码登录
-  const thsGetQrcode = async () => {
-    setThsLoading(true)
-    setThsQr('')
-    try {
-      const d = await fetchAPI<any>('/ths/qrcode', { method: 'POST' })
-      const data = d?.data ?? d
-      setThsQr(data?.img_base64 ?? '')
-      // 轮询扫码结果(每 3 秒,最多 2 分钟)
-      const qrid = data?.qrid
-      if (!qrid) { toast('未获取到二维码', 'error'); return }
-      for (let i = 0; i < 40; i++) {
-        await new Promise(r => setTimeout(r, 3000))
-        try {
-          const r = await fetchAPI<any>(`/ths/qrcode/${qrid}`)
-          const rd = r?.data ?? r
-          if (rd?.logged_in) {
-            setThsSession(rd)
-            setThsQr('')
-            toast('同花顺登录成功', 'success')
-            return
-          }
-        } catch { /* 继续轮询 */ }
-      }
-      toast('扫码超时,请重新生成', 'error')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '生成二维码失败', 'error')
-    } finally {
-      setThsLoading(false)
-    }
-  }
-
-  const thsRefresh = async () => {
-    try {
-      const d = await fetchAPI<any>('/ths/session')
-      setThsSession(d?.data ?? d)
-      toast('已刷新登录态', 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '刷新失败', 'error')
     }
   }
 
@@ -1784,45 +1734,9 @@ export default function SettingsPage() {
               })}
             </div>
           </section>
-          {/* 同花顺登录区块 */}
+          {/* 同花顺账号维护(v0.5.3): 自包含卡片(模式/登录态/登出/能力一览) */}
           <section id="sec-ths" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-ths') ? undefined : 'none' }}>
-            <div className="flex items-start justify-between mb-4 gap-3">
-              <div>
-                <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">同花顺登录</h3>
-                <p className="text-[11px] text-muted-foreground mt-1">扫码登录获取登录态,自动续期,用于解锁同花顺数据源。</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="secondary" className="h-8 text-[12px]" onClick={thsRefresh} disabled={thsLoading}>
-                  <RefreshCw className="w-3.5 h-3.5 mr-1" />
-                  刷新
-                </Button>
-                <Button size="sm" className="h-8 text-[12px]" onClick={thsGetQrcode} disabled={thsLoading}>
-                  <QrCode className="w-3.5 h-3.5 mr-1" />
-                  {thsLoading ? '等待扫码...' : (thsSession?.logged_in ? '重新扫码' : '扫码登录')}
-                </Button>
-              </div>
-            </div>
-            <div className="rounded-md bg-accent/30 p-3.5">
-              {thsSession?.logged_in ? (
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px]">
-                  <div><span className="text-muted-foreground">账号:</span> <span className="font-mono">{thsSession.account}</span></div>
-                  <div><span className="text-muted-foreground">UserID:</span> <span className="font-mono">{thsSession.userid}</span></div>
-                  <div><span className="text-muted-foreground">过期:</span> <span className="font-mono">{thsSession.expires?.replace('T', ' ').slice(0, 19)}</span></div>
-                  <div><span className="text-emerald-700 dark:text-emerald-500">✓ 已登录 · 自动续期</span></div>
-                </div>
-              ) : (
-                <div className="text-[12px] text-muted-foreground">未登录。点击「扫码登录」后用手机同花顺 APP 扫描二维码。</div>
-              )}
-              {thsQr && (
-                <div className="mt-3 flex items-center gap-4">
-                  <img src={`data:image/png;base64,${thsQr}`} alt="同花顺扫码登录" className="w-40 h-40 rounded-md border border-border/50" />
-                  <div className="text-[11px] text-muted-foreground">
-                    <p>用手机同花顺 APP 扫描二维码</p>
-                    <p className="mt-1">有效期约 3 分钟,扫码后自动登录</p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <ThsAccountCard />
           </section>
           <section id="sec-system" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-system') ? undefined : 'none' }}>
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4 md:mb-5">

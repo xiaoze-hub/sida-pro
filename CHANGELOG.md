@@ -7,6 +7,14 @@
 
 ## 2026-09-05
 
+### feature-同花顺账号维护模块(v0.5.3)
+
+- 后端: `POST /ths/logout`(清凭证, docstring 早写了但没实现) +
+  `GET /ths/account`(SDK 正式/游客模式 + 扫码态 + 已验证能力一览)。
+- 前端: biz-ui `ThsAccountCard` 自包含卡片(模式徽标/扫码/登出/能力勾选),
+  设置页 sec-ths 旧逻辑整体替换(删 60+ 行)。
+- **测试**: pytest 5 passed + tsc/build 全绿。
+
 ### feature-UI标题统一(v0.5.2): SectionHeader 全站收敛
 
 - 机会精选/最新报告/机会发现/情绪周期/市场主线×2 全部迁 SectionHeader。
