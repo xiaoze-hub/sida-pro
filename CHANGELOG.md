@@ -7,6 +7,14 @@
 
 ## 2026-09-05
 
+### feature-同花顺账号密码设置页自助维护(v0.5.5)
+
+- 新增 `ths_username`/`ths_sdk_password` 设置键(DB 优先于 env, 30s 生效,
+  密码掩码); `THSDKL2` 经 `resolve_ths_creds()` 读取, 显式参数仍最高。
+- `/ths/account` 模式判定同口径 + 返回 source(db/env); 卡片显示当前凭证来源。
+- fix: 设置项描述以代码为准(DB 旧描述不再盖住代码新文案)。
+- **测试**: 新增 test_ths_creds 5 passed + tsc/build 全绿。
+
 ### remove-同花顺扫码登录下线(v0.5.4)
 
 - 删 `src/core/ths_auth.py` + `tests/test_ths_auth.py` +

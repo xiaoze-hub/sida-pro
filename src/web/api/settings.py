@@ -59,6 +59,9 @@ SETTING_DESCRIPTIONS = {
     "wudao_mcp_token": "悟道(wudao) MCP 接口 Token(竞价/题材数据源)",
     "zhitu_token": "智兔(zhitu) 数据接口 Token(分红/股东数据源,200次/天)",
     "tdx_api_key": "通达信问小达 MCP 接口 Token(TDX 自然语言投研/选股数据源)",
+    # ---- 同花顺 SDK 凭证(设置页维护, DB 优先于环境变量, 改完即时生效) ----
+    "ths_username": "同花顺SDK账号(正式账户,留空则读容器 env THS_USERNAME)",
+    "ths_sdk_password": "同花顺SDK密码(留空则读容器 env THS_PASSWORD)",
     # ---- 同花顺扫码凭证(2026-09-05 已下线, 遗留键仅兼容旧 DB 行, 无写入方) ----
     "ths_account": "同花顺账号(遗留键,扫码已下线,勿手改)",
     "ths_password": "同花顺登录凭证(遗留键,扫码已下线)",
@@ -67,7 +70,7 @@ SETTING_DESCRIPTIONS = {
 }
 
 # 敏感 key:列表接口不回显完整值,只返回是否已配置
-SECRET_SETTING_KEYS = {"wudao_mcp_token", "zhitu_token", "tdx_api_key", "ths_password"}
+SECRET_SETTING_KEYS = {"wudao_mcp_token", "zhitu_token", "tdx_api_key", "ths_password", "ths_sdk_password"}
 SECRET_MASK = "********"
 
 SETTING_KEYS = list(SETTING_DESCRIPTIONS.keys())
@@ -109,7 +112,8 @@ def list_settings(db: Session = Depends(get_db)):
             result.append(s)
         else:
             s = existing_map[key]
-            if not s.description:
+            # 描述以代码为准(2026-09-05: DB 旧描述不覆盖代码新描述, 否则改了文案生产不生效)
+            if s.description != desc:
                 s.description = desc
             result.append(s)
     db.commit()
