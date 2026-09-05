@@ -59,11 +59,15 @@ def _next_stage(stage: str) -> str:
         return STAGE_METAL
 
 
-def detect_rotation_stage(events: list[str]) -> dict:
-    """根据盘前事件流(涨价/异动关键词)判断当前轮动阶段。
+def detect_rotation_stage(events: list[str], price_evidence: dict | None = None) -> dict:
+    """根据盘前事件流 + 期货价格证据判断当前轮动阶段(批次C C5 升级)。
 
     events: 如 ["原油期货大涨3%", "铜价创年内新高", ...]
-    返回: {stage, sectors, next_stage, next_sectors, hints}
+    price_evidence: commodity_quotes.fetch_snapshot() 输出(期货当日涨跌);
+      可用时期货命中权重×2 合入幕判定, 黄金不参与四幕排队(拆出并行风险温度计,
+      2.9 修正: 2024-2026 金股同涨, 黄金是风险事件信号不是轮动末章);
+      不可用(None/available=False) → 回落纯事件文本版(降级路径, 保留)。
+    返回: {stage, sectors, next_stage, next_sectors, hints, gold_thermometer, price_used}
     """
     if not events:
         return {
@@ -110,13 +114,42 @@ def detect_rotation_stage(events: list[str]) -> dict:
             "conflict": True,
         }
 
-    # 统计各阶段命中次数
+    # 统计各阶段命中次数(事件流)
     stage_hits: dict[str, int] = {}
     for ev in events:
         for kw, stage in COMMODITY_KEYWORDS.items():
             if kw in ev:
                 stage_hits[stage] = stage_hits.get(stage, 0) + 1
                 break
+
+    # 期货价格证据合入(权重×2; 黄金拆出单列风险温度计)
+    gold_thermo = {"active": False, "items": [], "hint": "黄金温度计不可用(期货接口降级, 走事件流)"}
+    price_used = False
+    if price_evidence and price_evidence.get("available"):
+        price_used = True
+        try:
+            from src.core.commodity_quotes import FUTURES_POOL
+
+            for it in price_evidence.get("items") or []:
+                code = it.get("code")
+                group = FUTURES_POOL.get(code, ("", ""))[1]
+                chg = it.get("chg_pct")
+                if chg is None:
+                    continue
+                if group == "gold":
+                    if chg >= 0.8:
+                        gold_thermo = {
+                            "active": True,
+                            "items": [it],
+                            "hint": f"黄金 {it.get('name')} 当日 {chg:+.1f}% → 避险升温(并行风险信号, 不占轮动幕位)",
+                        }
+                elif chg >= 0.8:
+                    stage = {"energy": STAGE_ENERGY, "metal": STAGE_METAL, "agri": STAGE_AGRI}.get(group)
+                    if stage:
+                        stage_hits[stage] = stage_hits.get(stage, 0) + 2
+        except Exception as e:  # noqa: BLE001
+            logger.warning("期货价格证据合入失败(回落事件版): %s", e)
+            price_used = False
 
     if not stage_hits:
         return {
@@ -125,6 +158,8 @@ def detect_rotation_stage(events: list[str]) -> dict:
             "next_stage": STAGE_METAL,
             "next_sectors": STAGE_SECTORS[STAGE_METAL],
             "hints": [],
+            "gold_thermometer": gold_thermo,
+            "price_used": price_used,
         }
 
     # 最高命中阶段 = 当前阶段
@@ -148,6 +183,8 @@ def detect_rotation_stage(events: list[str]) -> dict:
         "next_stage": next_stage,
         "next_sectors": STAGE_SECTORS[next_stage],
         "hints": hints,
+        "gold_thermometer": gold_thermo,
+        "price_used": price_used,
     }
 
 

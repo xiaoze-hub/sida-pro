@@ -7,6 +7,30 @@
 
 ## 2026-09-06
 
+### feature-盘前埋伏Agent补全(批次C, feat/ambush-mvp)
+
+- `src/core/mood_cycle.py`: C1 情绪周期→题材容许度映射(不重复造轮子, 直接复用
+  market_phase 七阶段判定: 冰点5/启动10/主升8/高潮0/退潮1/修复4/积累3;
+  current_mood() 读 market_phase_daily 最新行, veto=高潮硬否决, demon_veto=退潮+高潮)。
+- `src/core/ambush_score.py`: C2 四维评分合成 — 事件(预期差+临近度, 解禁类不加分)×
+  传导(高置信落代码面+妖股先锋组+2封顶)×情绪(容许度直通, 缺数据中性5)×信号
+  (TQ zjl_hb 主力净额, 缺数据三维归一+flags 不编造); 风险日历 15 日内解禁扣 3;
+  证伪条件规则生成(推演与实测显式分离, 每候选必带); 高潮期 action=禁推。
+- `src/agents/premarket_outlook.py`: C2/C3/C4 接入 — collect 新增 6.8 四维评分
+  (mood+先锋组∩埋伏榜)+6.9 期货价格证据; build_prompt 情绪定位段+四维埋伏榜
+  (分项/flags/证伪条件进 LLM prompt); analyze 末尾盘前简报推送 notify_center
+  (asyncio.to_thread, 失败静默)。
+- `src/core/commodity_quotes.py`: C5 期货主力连续(新浪公开接口, 无账户) — SC/CU/AL/RB/
+  M/CF/C/AU/AG; 最新价[7]/昨结算[9] 社区口径**未实测**, 解析失败整源 available=False
+  降级, 绝不用可疑字段编造轮动信号; momentum_score 动量纯函数。
+- `src/core/commodity_rotation.py`: C5 升级 detect_rotation_stage(events, price_evidence) —
+  期货当日涨跌(≥0.8%) 权重×2 合入幕判定; **黄金拆出并行风险温度计**(金股同涨期
+  不占轮动幕位, 2.9 修正); 接口失败回落纯事件版(降级路径保留)。
+- `src/web/api/demon_pool.py`: top_demon_symbols(n) 先锋组查询辅助。
+- **诚实项**: 新浪 nf_ 字段口径周一盘中实测校准; 20/60 日动量走 InnerFuturesNewService
+  日K(同样待实测); 先锋组加成依赖 limit_up_events 回填完成度。
+- **测试**: test_ambush_score 12 项 + 盘前/催化/埋伏既有 24 项 = 36 passed(无回归)。
+
 ### feature-妖股池/股性雷达(批次B, feat/demon-pool)
 
 - `src/web/migrations.py`: Migration 132 limit_up_events(涨停事件表, symbol+trade_date 唯一,
