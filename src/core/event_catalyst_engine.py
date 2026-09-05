@@ -45,6 +45,8 @@ _CATALYST_SYSTEM_PROMPT = (
     "   - 利空但主力逆势承接(恐慌中有人接盘) → 预期差\"高\", 借恐慌低吸机会;\n"
     "   - 中性或影响微小 → 预期差\"低\"。\n"
     "5. 只输出 JSON, 不要任何其他文字。\n"
+    "6. 有行情快照时, expectation_gap.note 必须引用快照数字(如涨跌幅/量比); "
+    "无快照时 level 只许给中或低, 不许断言尚未反应。\n"
     "输出格式(严格 JSON):\n"
     '{"catalyst": "催化题材名", "direction": "利好"|"利空"|"中性", '
     '"confidence": "高"|"中"|"低", '
@@ -54,15 +56,25 @@ _CATALYST_SYSTEM_PROMPT = (
 )
 
 
-def build_catalyst_prompt(symbol: str, events: list[str]) -> tuple[str, str]:
+def build_catalyst_prompt(
+    symbol: str, events: list[str], market: dict | None = None
+) -> tuple[str, str]:
     """构造催化推理提示词, 返回 (system_prompt, user_content)。
 
     system 要求 LLM 做因果链推理(停产→涨价→受益链), 输出严格 JSON, 不得编造
     事件、不得从 ticker 反查公司(事件列表里已有标题), 并按预期差逻辑给 level。
+    market 为行情快照(现价/涨跌幅/量比/换手, 可 None)→ 拼进 user_content,
+    预期差必须引用快照数据, 无快照不得断言"尚未反应"。
     """
     lines = [f"股票代码: {symbol}", "当日事件(标题列表, 最多3条):"]
     for i, ev in enumerate(events, 1):
         lines.append(f"{i}. {ev}")
+    if market:
+        lines.append("")
+        lines.append("最新行情快照(事实, 预期差判断必须引用):")
+        for k in ("current_price", "change_pct", "volume_ratio", "turnover_rate", "quote_date"):
+            if market.get(k) is not None:
+                lines.append(f"- {k}: {market[k]}")
     lines.append("")
     lines.append("请基于以上事件做因果链推理, 输出催化信号 JSON。")
     user_content = "\n".join(lines)
@@ -241,17 +253,53 @@ def _fetch_today_events(symbol: str) -> list[str]:
         return []
 
 
-def analyze_event_catalyst(symbol: str, db=None) -> dict | None:
-    """事件驱动预期差主入口: 拉当日事件 → 构造提示词 → LLM 推理 → 解析。
+def _fetch_market_snapshot(symbol: str) -> dict | None:
+    """单股行情快照(现价/涨跌幅/量比/换手/日期)。失败 → None(老 prompt 照跑)。
 
+    数据源: md_quote_rows(多源聚合, 与 /quotes 同口径)。
+    """
+    try:
+        from src.core.marketdata_client import md_quote_rows
+
+        rows = md_quote_rows([symbol], "CN") or []
+        q = next((r for r in rows if r.get("symbol") == symbol), None)
+        if not q:
+            return None
+        return {
+            "current_price": q.get("current_price"),
+            "change_pct": q.get("change_pct"),
+            "volume_ratio": q.get("volume_ratio"),
+            "turnover_rate": q.get("turnover_rate"),
+            "quote_date": q.get("quote_date"),
+        }
+    except Exception as e:
+        logger.debug(f"行情快照获取失败(降级无快照): {symbol}: {e}")
+        return None
+
+
+def analyze_event_catalyst(
+    symbol: str, db=None, market: dict | None = None, extra_events: list[str] | None = None
+) -> dict | None:
+    """事件驱动预期差主入口: 拉当日事件(+真实日历条目) → 拉行情快照 → 推理 → 解析。
+
+    market 为调用方自带快照(可 None, None 则内部拉, 拉不到就无快照跑)。
+    extra_events 为已验证的真实未来催化文本(如解禁/会议日历条目), 与当日
+    公告合并输入; 严禁传入推测性文本。
     空事件直接返回 None(不调 LLM); 任何异常/超时/非法 JSON/非法字段一律
     静默降级返回 None, 不影响主流程。
     """
     events = _fetch_today_events(symbol)
+    for e in extra_events or []:
+        e = (e or "").strip()
+        if e and e not in events:
+            events.append(e[:80])
+    events = events[:5]
     if not events:
         return None
+    if market is None:
+        market = _fetch_market_snapshot(symbol)
     try:
-        system_prompt, user_content = build_catalyst_prompt(symbol, events)
+        system_prompt, user_content = build_catalyst_prompt(symbol, events, market)
         raw = _run_coro(_catalyst_llm_chat(system_prompt, user_content, db))
         if not raw or not raw.strip():
             return None

@@ -7,6 +7,17 @@
 
 ## 2026-09-05
 
+### feature-埋伏雷达进盘前(v0.5.6)
+
+- CKPT1 未来催化日历(`catalyst_calendar`: 解禁分层降级+静态宏观窗口+30天API位) →
+  盘前 6.6 步 + prompt 日历段。
+- CKPT2 行情快照进 prompt(`_fetch_market_snapshot` via md_quote_rows;
+  无快照时预期差禁断言"尚未反应")。
+- CKPT3 埋伏漏斗(`catalyst_screener`: 规则打分→Top8 LLM→排序) → 盘前 6.7 步。
+- CKPT4 受益落代码(`beneficiary_resolver`: exact/sector/fuzzy, 低置信不进榜)。
+- prompt 新增埋伏榜段(观察池第一输入)。
+- **测试**: 33 passed(日历3+落地/prompt3+漏斗3+引擎/盘前回归)。
+
 ### feature-同花顺账号密码设置页自助维护(v0.5.5)
 
 - 新增 `ths_username`/`ths_sdk_password` 设置键(DB 优先于 env, 30s 生效,
