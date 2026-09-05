@@ -7,6 +7,15 @@
 
 ## 2026-09-05
 
+### fix-首页三修(截图验收)
+
+- 涨跌分布永久空白：useECharts init只在mount跑，但图表容器数据到了才挂载，
+  chart永为null。ref改callback ref（挂载瞬间init），4个用量全受益。
+- ST豆神重复两条：东财同股同规则下多条（days 9/10），按(symbol, rule_code)
+  只留days最大。
+- 封板率100%误导：见v0.4.95（待部署验证）。
+- **测试**: tsc/build 全绿。
+
 ### fix-首页数据口径
 
 - 大盘资金流：上游网关 sh/sz/cyb 的 point/change_pct 放大100倍
