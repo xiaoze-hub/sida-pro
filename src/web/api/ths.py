@@ -26,10 +26,18 @@ async def ths_account():
     mode 判定与 THSDKL2 一致: THS_USERNAME/PASSWORD 有无。
     capabilities 为 2026-09-05 生产实测结论(非实时探测, 实时探测走 /datasources)。
     """
-    formal = bool(os.environ.get("THS_USERNAME") and os.environ.get("THS_PASSWORD"))
+    try:
+        from data_source.thsdk_l2 import resolve_ths_creds
+
+        _u, _p, src = resolve_ths_creds()
+        formal = bool(_u and _p)
+    except Exception:
+        src = "env"
+        formal = bool(os.environ.get("THS_USERNAME") and os.environ.get("THS_PASSWORD"))
     return {
         "mode": "formal" if formal else "guest",
         "mode_label": "正式账户" if formal else "游客模式",
+        "source": src,
         "capabilities": [
             {"key": "dde_official", "label": "DDE官方分档(query_data)", "ok": True},
             {"key": "ext1", "label": "扩展1主力净流入", "ok": formal},

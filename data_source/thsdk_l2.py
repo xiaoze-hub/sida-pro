@@ -161,6 +161,48 @@ _WENCAI_TTL = 30.0
 _SNAPSHOT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _SNAPSHOT_TTL = 30.0
 
+# 同花顺 SDK 凭证解析: 显式参数 > 设置页 DB(ths_username/ths_sdk_password) > env。
+# (2026-09-05: 设置页可自助填账号密码, DB 优先, 改完即时生效, 无需重建容器)
+_CRED_CACHE: Dict[str, Any] = {"ts": 0.0, "username": "", "password": ""}
+_CRED_TTL = 30.0
+
+
+def _db_ths_creds() -> Tuple[str, str]:
+    """读设置页 DB 的同花顺 SDK 凭证。失败/缺键返回 ('','')。"""
+    try:
+        from src.web.database import SessionLocal
+        from src.web.models import AppSettings
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(AppSettings)
+                .filter(AppSettings.key.in_(["ths_username", "ths_sdk_password"]))
+                .all()
+            )
+            m = {r.key: (r.value or "").strip() for r in rows}
+            return m.get("ths_username", ""), m.get("ths_sdk_password", "")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"读设置页同花顺凭证失败(回落 env): {e}")
+        return "", ""
+
+
+def resolve_ths_creds() -> Tuple[str, str, str]:
+    """解析生效凭证, 返回 (username, password, source)。
+    source ∈ {"db", "env", "none"}。30s 缓存, 设置页改完最多 30s 生效。"""
+    now = time.time()
+    if now - _CRED_CACHE["ts"] >= _CRED_TTL:
+        u, p = _db_ths_creds()
+        _CRED_CACHE.update(ts=now, username=u, password=p)
+    u, p = _CRED_CACHE["username"], _CRED_CACHE["password"]
+    if u or p:
+        return u or os.environ.get("THS_USERNAME", ""), p or os.environ.get("THS_PASSWORD", ""), "db"
+    eu, ep = os.environ.get("THS_USERNAME", ""), os.environ.get("THS_PASSWORD", "")
+    return eu, ep, ("env" if (eu and ep) else "none")
+
+
 # 默认游客模式提示
 GUEST_MODE_WARNING = """
 ⚠️ 当前使用临时游客账户(仅供测试)
@@ -194,14 +236,18 @@ class THSDKL2:
         """
         初始化 thsdk 数据源
 
-        :param username: 同花顺账号(留空读 env THS_USERNAME)
-        :param password: 同花顺密码(留空读 env THS_PASSWORD)
+        :param username: 同花顺账号(留空走 resolve_ths_creds: 设置页 DB > env)
+        :param password: 同花顺密码(留空走 resolve_ths_creds: 设置页 DB > env)
         :param mac: MAC 地址(留空读 env THS_MAC)
 
         重要:不在 __init__ 里自动连接,thsdk 必须用 with 模式,
         长连接对象在 with 外调用会返回空数据。本封装在每个查询方法
         内部都用 with 上下文,确保连接正确建立/释放。
         """
+        if username is None or password is None:
+            db_u, db_p, _src = resolve_ths_creds()
+            username = username if username is not None else db_u
+            password = password if password is not None else db_p
         self.username = username or os.environ.get("THS_USERNAME")
         self.password = password or os.environ.get("THS_PASSWORD")
         self.mac = mac or os.environ.get("THS_MAC")

@@ -18,6 +18,7 @@ interface ThsCapability {
 interface ThsAccount {
   mode: 'formal' | 'guest'
   mode_label: string
+  source?: 'db' | 'env' | 'none'
   capabilities: ThsCapability[]
   note?: string
 }
@@ -75,7 +76,10 @@ export default function ThsAccountCard() {
                 {acct?.mode_label ?? '--'}
               </span>
             </div>
-            <div className="text-muted-foreground">账号密码维护走服务端环境变量(THS_USERNAME/PASSWORD)</div>
+            <div className="text-muted-foreground">
+              账号密码在设置页维护(ths_username/ths_sdk_password, DB 优先
+              {acct?.source === 'db' ? ', 当前用设置页的值' : acct?.source === 'env' ? ', 当前用容器环境变量' : ''})
+            </div>
           </div>
           {acct?.capabilities?.length ? (
             <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 pt-2.5 text-[11px]">
