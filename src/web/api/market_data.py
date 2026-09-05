@@ -624,6 +624,15 @@ async def anomalies_proxy(
 
         vendor = EmAnomalyVendor()
         items = await asyncio.to_thread(vendor.fetch, [], {"page_size": limit})
+        # 2026-09-05 去重: 东财同股同规则可下多条(days 9/10各一),
+        # 按(symbol, rule_code)只留 days 最大的一条。
+        best: dict = {}
+        for it in (items or []):
+            key = (getattr(it, "symbol", ""), getattr(it, "rule_code", 0))
+            prev = best.get(key)
+            if prev is None or (getattr(it, "days", 0) or 0) > (getattr(prev, "days", 0) or 0):
+                best[key] = it
+        items = list(best.values())
         return [
             {
                 "symbol": getattr(it, "symbol", ""),
