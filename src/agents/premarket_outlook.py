@@ -369,6 +369,28 @@ class PremarketOutlookAgent(BaseAgent):
                 catalyst_local,
                 demon_symbols,
             )
+            # D 批次复盘闭环: 埋伏候选 emit 时快照(禁推候选不入库)
+            try:
+                from src.core.signal_review import record_signal
+
+                for a in ambush_scored:
+                    if a.get("action", "").startswith("禁推"):
+                        continue
+                    record_signal(
+                        "ambush_candidate",
+                        a.get("symbol", ""),
+                        direction="long",
+                        strength=a.get("ambush_total"),
+                        payload={
+                            "catalyst": a.get("catalyst"),
+                            "catalyst_type": a.get("catalyst_type"),
+                            "catalyst_date": a.get("catalyst_date"),
+                            "gap": a.get("gap"),
+                            "dims": a.get("dims"),
+                        },
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[%s] 候选快照落库失败: %s", trace_id, e)
             logger.info(
                 "[%s] 四维埋伏评分完成: %s 条, 情绪=%s",
                 trace_id,

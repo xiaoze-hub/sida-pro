@@ -2377,6 +2377,47 @@ CREATE TABLE IF NOT EXISTS limit_up_events (
     )
 
 
+def _m133_signal_snapshots(conn: Connection) -> None:
+    """信号快照表(批次D 信号→复盘闭环, 2026-09-06 28号)。
+
+    信号 emit 时落库, 每晚对账 job 回填 T+1/T+5 收盘收益。
+    emit_ts ISO 文本(双方言安全); 同一 (signal_type, symbol, emit_date)
+    只记首条(首条口径, 避免盘中重复信号刷库)。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS signal_snapshots (
+  emit_ts TEXT NOT NULL,
+  emit_date TEXT NOT NULL,
+  signal_type TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  direction TEXT,
+  strength DOUBLE PRECISION,
+  payload TEXT,
+  outcome_t1 DOUBLE PRECISION,
+  outcome_t5 DOUBLE PRECISION,
+  checked_t1 INTEGER,
+  checked_t5 INTEGER
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_signal_snapshots_dedupe "
+            "ON signal_snapshots(signal_type, symbol, emit_date)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_signal_snapshots_date "
+            "ON signal_snapshots(emit_date, signal_type)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2418,6 +2459,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(130, "tick_archive_table", _m130_tick_archive_table),
     Migration(131, "seal_quality_samples_table", _m131_seal_quality_samples),
     Migration(132, "limit_up_events_table", _m132_limit_up_events),
+    Migration(133, "signal_snapshots_table", _m133_signal_snapshots),
 )
 
 
