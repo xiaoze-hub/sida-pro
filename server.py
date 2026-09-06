@@ -1939,25 +1939,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"封单成色采样任务注册失败: {e}")
 
-        # 涨停事件盘后回填(批次B 妖股池, 2026-09-06): 交易日 15:30
+        # 妖股因子增量管线(批次B 存档化, 2026-09-06): 交易日 15:35
+        # 增量回填(只拉近15根K线,只补新日期) → 新事件股票因子重算 → demon_factors 落档
         try:
-            from src.core.limit_up_backfill import backfill_all
+            from src.core.demon_factors import update_pipeline
 
             scheduler.scheduler.add_job(
-                backfill_all,
+                update_pipeline,
                 "cron",
                 day_of_week="mon-fri",
                 hour=15,
-                minute=30,
-                id="limit-up-backfill",
-                name="涨停事件回填",
+                minute=35,
+                id="demon-factor-pipeline",
+                name="妖股因子增量管线",
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
             )
-            logger.info("涨停事件回填任务已注册(交易日 15:30)")
+            logger.info("妖股因子增量管线已注册(交易日 15:35)")
         except Exception as e:
-            logger.error(f"涨停事件回填任务注册失败: {e}")
+            logger.error(f"妖股因子增量管线注册失败: {e}")
 
         # 信号对账(批次D 复盘闭环, 2026-09-06): 交易日 18:30 回填 T+1/T+5 收益
         try:
