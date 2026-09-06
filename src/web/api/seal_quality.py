@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("")
+def seal_quality_usage():
+    """裸路径自说明(Hermes 验收 2026-09-06 反馈: 裸前缀 404 易误判为未注册)。"""
+    return {
+        "endpoint": "/api/seal-quality",
+        "usage": {
+            "GET /{symbol}": "当日封单成色指标(metrics.available=false 时 reason 说明)",
+            "GET /{symbol}/raw": "原始采样序列(?limit=120)",
+            "POST /sample-now": "手动触发一轮采样 body={symbols:[..] 可选}",
+        },
+        "note": "采样任务盘中每 60s 对涨停池股票自动执行; 非涨停股/无样本时无数据",
+    }
+
+
 @router.get("/{symbol}")
 def seal_quality_metrics(symbol: str):
     """当日封单成色指标。available=false 时 reason 说明原因。"""
