@@ -83,7 +83,25 @@ def top_demon_symbols(n: int = 20, min_events: int = 5) -> set[str]:
 
 @router.get("")
 def demon_pool(topn: int = 50, refresh: int = 0):
-    """妖股池 TopN。min_events=3 起评(近一年≥3 次涨停才有统计意义)。"""
+    """妖股池 TopN——直读因子表(demon_factors, 15:30 增量管线落档)。
+
+    因子表为空(首次部署/未跑管线)时回退现算; 现算结果 300s 缓存。
+    """
+    try:
+        from src.core.demon_factors import load_factor_pool
+
+        factors = load_factor_pool(topn=max(min(topn, 200), 1))
+        if factors:
+            return {
+                "source": "factors",
+                "count": len(factors),
+                "factor_date": factors[0].get("factor_date"),
+                "note": "MVP 满分 75+5(题材/龙虎榜维度 wencai 未接入, flags 标注); 权重由回测校准",
+                "items": factors,
+            }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("因子表直读失败, 回退现算: %s", e)
+
     now = time.monotonic()
     if refresh or _CACHE["data"] is None or now - _CACHE["ts"] > _CACHE_TTL:
         try:
@@ -93,6 +111,7 @@ def demon_pool(topn: int = 50, refresh: int = 0):
             logger.warning("妖股池计算失败: %s", e)
             raise HTTPException(status_code=500, detail=f"demon-pool failed: {e}")
     return {
+        "source": "computed",
         "count": len(_CACHE["data"]),
         "note": "MVP 满分 75+5(题材/龙虎榜维度 wencai 未接入, flags 标注); 权重由回测校准",
         "items": _CACHE["data"][: max(min(topn, 200), 1)],
@@ -113,12 +132,22 @@ def demon_detail(symbol: str):
 
 
 @router.post("/backfill")
-def trigger_backfill(symbols: list[str] | None = None, max_stocks: int = 0):
-    """手动触发回填(全市场约 3-5 分钟, 走 Engine 主备链路)。"""
+def trigger_backfill(symbols: list[str] | None = None, mode: str = "incremental", max_stocks: int = 0):
+    """回填+因子管线。mode=incremental(默认, 每日增量+因子重算) / full(TQ直连全量重建, 存档层重建用)。"""
     try:
-        from src.core.limit_up_backfill import backfill_all
+        if mode == "full":
+            from src.core.demon_factors import backfill_direct_tq, recompute_factors, _stock_names
 
-        return backfill_all(symbols=symbols, max_stocks=max_stocks)
+            names = _stock_names()
+            syms = symbols or list(names.keys())
+            if max_stocks > 0:
+                syms = syms[:max_stocks]
+            stats = backfill_direct_tq(syms, names)
+            rec = recompute_factors(syms)
+            return {"backfill": stats, "factors": rec}
+        from src.core.demon_factors import update_pipeline
+
+        return update_pipeline(symbols=symbols)
     except Exception as e:  # noqa: BLE001
         logger.warning("妖股池回填触发失败: %s", e)
         raise HTTPException(status_code=500, detail=f"backfill failed: {e}")

@@ -7,6 +7,23 @@
 
 ## 2026-09-06
 
+### feature-妖股因子存档+增量管线(批次B 存档化, 老板要求: 不从头重算/新日期走增量)
+
+- `src/web/migrations.py`: Migration 134 demon_factors(每股最新六维因子快照,
+  unique(symbol), total 索引; 原始 limit_up_events 是存档层, 因子可全量重算)。
+- `src/core/demon_factors.py`: 因子层+回填双通道 —
+  * backfill_direct_tq: TQ 直连批量回填(本机网关 ~30ms/股, 4 线程; 存档重建用)。
+    Engine 多源链是盘中兜底用的, 批量陪长尾失败链熬没有意义(实测周日每股 10-15s);
+  * backfill_incremental: 每日增量——只拉近 15 根 K 线, 只补库内没有的新日期,
+    只对当日有新事件的股票重算因子(增量后每天分钟级);
+  * recompute_factors / load_factor_pool / update_pipeline(15:35 cron, 替换原 15:30 回填)。
+- `src/web/api/demon_pool.py`: GET /api/demon-pool 直读因子表(空表回退现算);
+  POST /backfill 支持 mode=incremental(默认)/full。
+- `src/core/demon_factors.py` 内嵌于管线; server.py cron 切换 update_pipeline。
+- **实测发现并修复**: TQ 新鲜度门禁周末误杀(floor today-1→today-3, tq.py;
+  周日跑批周五数据被拒→TQ 主链全灭+长尾备选源全挂每股 10-15s→首次回填半途停滞)。
+- **测试**: test_demon_factors roundtrip 2 项 + demon_score 10 项 passed。
+
 ### feature-前端徽章UI pass(批次A3+E3 MVP, feat/ui-badges)
 
 - `src/web/api/klines.py`: /klines/{symbol}/summary 挂 mainflow_tri+A/B/C 置信度载荷
