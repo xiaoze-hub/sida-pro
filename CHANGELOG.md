@@ -7,6 +7,18 @@
 
 ## 2026-09-06
 
+### feature-妖股因子接入盘前埋伏(批次C×B 集成, 老板指令)
+
+- `src/core/demon_factors.py`: top_demon_factors(n) 先锋组因子映射 + DEMON_BOOST_BY_GRADE
+  (极妖+3/妖+2/活跃+1)。
+- `src/core/ambush_score.py`: demon_boost() — 埋伏候选落代码命中先锋组按等级加成;
+  **退潮/高潮期反向禁推**(demon_veto, 妖股退潮期跌最狠); enrich_ambush_list 签名扩展
+  demon_factors 参数, 输出 demon_hit 标记, action 新增"禁推(先锋组退潮期)"。
+- `src/agents/premarket_outlook.py`: collect 换 top_demon_factors(30) 因子映射;
+  build_prompt 新增"妖股先锋组"段(股性分/等级/封板次数/连板/参与方式 + 情绪禁推提示),
+  盘前简报含先锋组名单; 简报推送不变。
+- **测试**: test_ambush_score +14(demon_boost/端到端) 共 26 passed。
+
 ### feature-妖股因子存档+增量管线(批次B 存档化, 老板要求: 不从头重算/新日期走增量)
 
 - `src/web/migrations.py`: Migration 134 demon_factors(每股最新六维因子快照,

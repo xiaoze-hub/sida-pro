@@ -111,6 +111,34 @@ def test_enrich_risk_deduction_applied():
 # 新浪期货解析(口径待周一实测; 测试按社区已知格式)
 # ---------------------------------------------------------------------------
 
+def test_demon_boost_and_veto():
+    """妖股因子先锋组: 等级加成 + 退潮/高潮反向禁推。"""
+    from src.core.ambush_score import demon_boost
+
+    factors = {"600000": {"symbol": "600000", "name": "测试", "grade": "极妖", "total": 70.0,
+                          "n_sealed": 32, "max_streak": 9, "participation": "换手板可参与"}}
+    codes = [{"symbol": "600000", "via": "exact", "confidence": "高"}]
+    boost, flags, hit = demon_boost(codes, factors, mood_from_phase("ignite"))
+    assert hit is True and boost == 3.0
+    assert any("先锋组" in f for f in flags)
+    boost2, flags2, _ = demon_boost(codes, factors, mood_from_phase("ebb"))
+    assert boost2 == -3.0
+    assert any("禁推" in f for f in flags2)
+
+
+def test_enrich_demon_factors_end_to_end():
+    """妖股因子映射走完整 enrich: 传导加成+先锋组标注。"""
+    today = datetime(2026, 9, 6)
+    mood = mood_from_phase("ignite")
+    factors = {"600000": {"symbol": "600000", "grade": "极妖", "total": 70.0,
+                          "n_sealed": 32, "max_streak": 9, "participation": "换手板可参与"}}
+    out = enrich_ambush_list([_cand()], mood=mood, calendar=[], demon_symbols=None,
+                             signal_lookup=lambda s: None, today=today, demon_factors=factors)
+    o = out[0]
+    assert o["demon_hit"] is True
+    assert any("先锋组" in f for f in o["flags"])
+
+
 SINA_SAMPLE = (
     'var hq_str_nf_SC0="原油连续,500.0,510.0,495.0,499.0,505.0,506.0,505.0,504.2,498.0,'
     '10,20,12345,原油连续,2026-09-06 09:00:00,0";'
