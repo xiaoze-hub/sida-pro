@@ -30,14 +30,10 @@ def load_events() -> list[dict]:
 
     db = SessionLocal()
     try:
+        # 表内本身只有近一年数据(增量管线/回填窗口 _WINDOW_DAYS 决定), 全量加载
         rows = db.execute(
-            text(
-                "SELECT trade_date, symbol, is_sealed_close FROM limit_up_events"
-                " WHERE trade_date >= (SELECT MAX(trade_date) FROM limit_up_events)"
-                " ORDER BY trade_date"
-            )
+            text("SELECT trade_date, symbol, is_sealed_close FROM limit_up_events ORDER BY trade_date")
         ).fetchall()
-        # MAX(trade_date) 只取最近一年窗口: 表内若有更老数据按日期字符串比较近似
         return [dict(r._mapping) for r in rows]
     finally:
         db.close()
@@ -88,14 +84,14 @@ def main() -> None:
         print("窗口内无满足阈值的事件日, 放宽 1.5 系数或先回填更多历史。")
         return
 
-    from src.core.decision_pioneer import fetch_bars
+    from src.core.demon_factors import _tq_bars_direct
 
     close_cache: dict[str, dict[str, float]] = {}
 
     def closes(symbol: str) -> dict[str, float]:
         if symbol not in close_cache:
-            bars = fetch_bars(symbol, "CN", days=300)
-            close_cache[symbol] = {str(b.get("date")).replace("-", ""): float(b["close"]) for b in bars if b.get("close")}
+            bars = _tq_bars_direct(symbol, 300)
+            close_cache[symbol] = {str(b.get("date")): float(b["close"]) for b in bars if b.get("close") and b.get("date")}
         return close_cache[symbol]
 
     stat: dict[int, dict[str, list[float]]] = {1: {"demon": [], "other": []}, 5: {"demon": [], "other": []}}
