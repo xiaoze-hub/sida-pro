@@ -2418,6 +2418,47 @@ CREATE TABLE IF NOT EXISTS signal_snapshots (
     )
 
 
+def _m134_demon_factors(conn: Connection) -> None:
+    """妖股因子表(批次B 存档化, 2026-09-06 28号)。
+
+    六维因子每日增量落库(每股最新快照, unique(symbol)), 妖股池 API 直读
+    不再从原始事件现算。原始 limit_up_events 是存档层, 因子可随时全量重算。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS demon_factors (
+  factor_date TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  name TEXT,
+  total DOUBLE PRECISION,
+  grade TEXT,
+  n_events INTEGER,
+  n_sealed INTEGER,
+  max_streak INTEGER,
+  participation TEXT,
+  dims TEXT,
+  flags TEXT,
+  updated_at TEXT
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_demon_factors_symbol "
+            "ON demon_factors(symbol)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_demon_factors_total "
+            "ON demon_factors(total)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2460,6 +2501,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(131, "seal_quality_samples_table", _m131_seal_quality_samples),
     Migration(132, "limit_up_events_table", _m132_limit_up_events),
     Migration(133, "signal_snapshots_table", _m133_signal_snapshots),
+    Migration(134, "demon_factors_table", _m134_demon_factors),
 )
 
 
