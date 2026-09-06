@@ -42,12 +42,17 @@ def _norm_day(s: object) -> str:
 
 
 def tq_bars_fresh(dates: list | None) -> bool:
-    """TQ K线日期是否新鲜(纯函数, 可单测)。空列表视为不新鲜。"""
+    """TQ K线日期是否新鲜(纯函数, 可单测)。空列表视为不新鲜。
+
+    2026-09-06 28号: floor 由 today-1 放宽到 today-3 —— 周日跑批时 Friday
+    数据距 today-1(周六) 还差一天, 会被误判陈旧导致全量降级(实测: 妖股池
+    回填全市场时 TQ 主链路全灭)。3 天覆盖周末+1天假期; 更长假期靠备选源。
+    """
     norm = [_norm_day(d) for d in (dates or []) if str(d).strip()]
     if not norm:
         return False
     today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-    floor = (today - timedelta(days=1)).strftime("%Y%m%d")
+    floor = (today - timedelta(days=3)).strftime("%Y%m%d")
     return max(norm) >= floor
 
 # ---------------------------------------------------------------------------
