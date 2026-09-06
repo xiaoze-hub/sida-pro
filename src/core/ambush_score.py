@@ -59,6 +59,33 @@ def score_transmission(codes: list[dict], demon_symbols: set[str] | None) -> int
     return max(0, min(10, score))
 
 
+def demon_boost(
+    codes: list[dict], demon_factors: dict[str, dict], mood: dict | None
+) -> tuple[float, list[str], bool]:
+    """妖股因子加成(批次C×B 集成, 2026-09-06): 落代码命中先锋组 → 按等级加分。
+
+    返回 (boost, flags, demon_hit)。退潮/高潮期(demon_veto)先锋组反向禁推。
+    """
+    flags: list[str] = []
+    if not codes or not demon_factors:
+        return 0.0, flags, False
+    hits = [demon_factors[c["symbol"]] for c in codes if c.get("symbol") in demon_factors]
+    if not hits:
+        return 0.0, flags, False
+    best = max(hits, key=lambda f: f.get("total") or 0)
+    grade = best.get("grade") or ""
+    boost = float({"极妖": 3, "妖": 2, "活跃": 1}.get(grade, 1))
+    flags.append(
+        f"妖股先锋组: {best.get('name') or best.get('symbol')} {grade}"
+        f"(股性分 {best.get('total')}, 近一年封板 {best.get('n_sealed')} 次, "
+        f"最高 {best.get('max_streak')} 连板) +{boost}"
+    )
+    if mood and mood.get("demon_veto"):
+        flags.append("⛔ 情绪退潮/高潮档位, 先锋组禁推(妖股退潮期跌最狠)")
+        return -boost, flags, True
+    return boost, flags, True
+
+
 def score_mood(mood: dict) -> int:
     """情绪维: 容许度直通。缺数据 → 中性 5(不奖不罚) + 由调用方标注。"""
     if not mood.get("available"):
@@ -114,14 +141,19 @@ def enrich_ambush_list(
     demon_symbols: set[str] | None = None,
     signal_lookup=None,
     today: datetime | None = None,
+    demon_factors: dict[str, dict] | None = None,
 ) -> list[dict]:
     """埋伏榜 → 四维评分增强榜(主入口, 永不抛异常)。
 
     signal_lookup(symbol) -> dict|None: 注入 L2 信号(默认 fetch_tq_l2), 测试可替。
+    demon_factors: {symbol: factor} 先锋组因子映射(批次C×B)——命中按等级加成,
+      退潮/高潮期反向禁推。demon_symbols 为旧参数(仅 +2 兼容)。
     高潮期(veto) → 全部 action=禁推, total 保留但标 veto。
     """
     today = today or datetime.now(_CST)
     mood = mood or {}
+    demon_factors = demon_factors or {}
+    demon_set = set(demon_factors.keys()) if demon_factors else (demon_symbols or set())
     out = []
     for item in ambush_list or []:
         if not isinstance(item, dict) or not item.get("symbol"):
@@ -129,7 +161,7 @@ def enrich_ambush_list(
         try:
             flags: list[str] = []
             s_event = score_event(item.get("catalyst_type", ""), item.get("gap", ""), item.get("catalyst_date", ""), today)
-            s_trans = score_transmission(item.get("codes") or [], demon_symbols)
+            s_trans = score_transmission(item.get("codes") or [], demon_set)
             s_mood = score_mood(mood)
             if not mood.get("available"):
                 flags.append("情绪维缺数据(market_phase 未 sync), 按中性 5 计")
@@ -140,18 +172,28 @@ def enrich_ambush_list(
                 total = (s_event + s_trans + s_mood) / 3.0
             else:
                 total = (s_event + s_trans + s_mood + s_signal) / 4.0
+            boost, bflags, demon_hit = demon_boost(item.get("codes") or [], demon_factors, mood)
+            total += boost
+            flags.extend(bflags)
             ded, rflags = risk_deduction(item["symbol"], calendar, today)
             flags.extend(rflags)
             total = max(0.0, min(10.0, total + ded))
 
-            veto = bool(mood.get("veto"))
+            veto = bool(mood.get("veto")) or (demon_hit and bool(mood.get("demon_veto")))
+            action = (
+                "禁推(情绪高潮)" if mood.get("veto")
+                else "禁推(先锋组退潮期)" if demon_hit and mood.get("demon_veto")
+                else "观察" if total >= 5
+                else "仅跟踪"
+            )
             out.append({
                 **item,
                 "ambush_total": round(total, 1),
                 "dims": {"event": s_event, "transmission": s_trans, "mood": s_mood, "signal": s_signal},
+                "demon_hit": demon_hit,
                 "flags": flags,
                 "invalidations": build_invalidations(item.get("catalyst_type", ""), item.get("catalyst_date", ""), item.get("reason", "")),
-                "action": "禁推(情绪高潮)" if veto else ("观察" if total >= 5 else "仅跟踪"),
+                "action": action,
             })
         except Exception as e:  # noqa: BLE001
             logger.warning("ambush score %s 失败: %s", item.get("symbol"), e)

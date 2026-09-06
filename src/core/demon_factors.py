@@ -300,3 +300,24 @@ def load_factor_pool(topn: int = 50, min_total: float = 0) -> list[dict]:
             d["flags"] = []
         out.append(d)
     return out
+
+
+# 妖股等级 → 盘前埋伏传导维加成(批次C×B 集成, 2026-09-06)
+DEMON_BOOST_BY_GRADE = {"极妖": 3, "妖": 2, "活跃": 1}
+
+
+def top_demon_factors(n: int = 30, min_events: int = 5) -> dict[str, dict]:
+    """先锋组因子映射: {symbol: factor}——盘前埋伏评分/简报直接消费。
+
+    独立于 API 缓存, 失败返回空映射(不阻塞盘前主链路)。
+    """
+    try:
+        pool = load_factor_pool(topn=max(n, 1), min_total=0)
+        return {
+            p["symbol"]: p
+            for p in pool
+            if p.get("symbol") and (p.get("n_events") or 0) >= min_events
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("先锋组因子查询失败: %s", e)
+        return {}

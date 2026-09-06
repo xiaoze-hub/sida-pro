@@ -347,27 +347,30 @@ class PremarketOutlookAgent(BaseAgent):
             logger.warning("[%s] 埋伏榜失败: %s", trace_id, e)
             ambush_list = []
 
-        # 6.8 情绪周期 + 四维埋伏评分(批次C C1/C2/C3, 2026-09-06 28号)
+        # 6.8 情绪周期 + 四维埋伏评分(批次C C1/C2/C3) + 妖股因子先锋组(批次C×B 集成)
         mood: dict = {}
         ambush_scored: list = []
+        demon_factors: dict = {}
         try:
             from src.core.ambush_score import enrich_ambush_list
             from src.core.mood_cycle import current_mood
 
             mood = current_mood()
-            demon_symbols: set = set()
             try:
-                from src.web.api.demon_pool import top_demon_symbols
+                from src.core.demon_factors import top_demon_factors
 
-                demon_symbols = top_demon_symbols(20)
+                demon_factors = top_demon_factors(30)
             except Exception as e:  # noqa: BLE001
-                logger.debug("[%s] 先锋组不可用: %s", trace_id, e)
+                logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
                 enrich_ambush_list,
                 ambush_list,
                 mood,
                 catalyst_local,
-                demon_symbols,
+                None,
+                None,
+                None,
+                demon_factors,
             )
             # D 批次复盘闭环: 埋伏候选 emit 时快照(禁推候选不入库)
             try:
@@ -392,10 +395,11 @@ class PremarketOutlookAgent(BaseAgent):
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 候选快照落库失败: %s", trace_id, e)
             logger.info(
-                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s",
+                "[%s] 四维埋伏评分完成: %s 条, 情绪=%s, 先锋组=%s",
                 trace_id,
                 len(ambush_scored),
                 (mood or {}).get("label", "无数据"),
+                len(demon_factors),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] 四维埋伏评分失败: %s", trace_id, e)
@@ -457,6 +461,7 @@ class PremarketOutlookAgent(BaseAgent):
             "ambush_list": ambush_list,
             "ambush_scored": ambush_scored,
             "mood": mood,
+            "demon_factors": demon_factors,
             "futures_snapshot": futures_snapshot,
             "catalyst_analysis": catalyst_analysis,
             "tdx_wenda": tdx_wenda,
@@ -646,6 +651,21 @@ class PremarketOutlookAgent(BaseAgent):
                     lines.append("- ⛔ 情绪硬否决: 高潮期埋伏候选全部禁推, 只考虑兑现/减仓")
             else:
                 lines.append(f"- 无数据: {mood.get('reason')}")
+            lines.append("")
+
+        # 妖股先锋组(批次C×B 集成): 题材轮到时先锋名单, 情绪退潮/高潮禁推
+        df_map = data.get("demon_factors") or {}
+        if df_map:
+            lines.append("## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)")
+            for sym, f in list(df_map.items())[:10]:
+                lines.append(
+                    f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
+                    f"近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | {f.get('participation')}"
+                )
+            if mood.get("demon_veto"):
+                lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
+            else:
+                lines.append("> 题材事件命中先锋组成员时, 该标的传导分按等级加成(极妖+3/妖+2/活跃+1); 一字板标的按排板口径自行判断")
             lines.append("")
 
         # 埋伏榜: 优先四维评分增强版(批次C C2/C3), 回落原始榜
