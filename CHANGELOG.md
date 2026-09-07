@@ -17,6 +17,15 @@
 - **未做**: errors的UI页(接口先行,投研/系统页接展示留待);Loki/promtail不变。
 - [branch feat/syslog-0908, `git show HEAD`]
 
+### feature-来源透传+vendor质量分(方向1: 存活检查→质量记分)
+- 包内: `Quote`加`source/latency_ms`字段;`client.quotes()`把胜出vendor打到每条Quote(之前Response带但到Quote就丢了)。
+- 宿主:`md_quote_rows`→`_quote_to_response`透传`source/source_latency_ms`(空=未知源,不编造;空quote分支同形)。
+- 新增`GET /api/datasources/trust`:Engine近100次/源滚动窗口→score(成功率−延迟档,未调用过null不冒充,高分在前)。
+- 测试:包内`test_quotes_stamps_winning_vendor`(PYTHONPATH指正树跑,4 passed);宿主2 passed。
+- **大发现(未修,需定)**:marketdata双树分叉 — 本地venv editable装的是`sida-src`旧拷贝,Docker按requirements装`sida-pro`包内拷贝,5文件已分歧(client/http/types/kline/tq)。本地包测试测的不是发版代码,改哪棵、删哪棵你定。
+- **未做**:前端来源徽标(接口先行);与PG收盘价偏离记分(第二阶段)。
+- [branch feat/source-trust-0908, `git show HEAD`]
+
 ## 2026-09-07
 
 ### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)

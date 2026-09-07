@@ -60,6 +60,8 @@ def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> d
             "quote_time": None,
             "quote_date": None,
             "daily_pnl_period": "unknown",
+            "source": "",
+            "source_latency_ms": 0,
         }
 
     quote_date = quote.get("quote_date")
@@ -85,6 +87,9 @@ def _quote_to_response(symbol: str, market: MarketCode, quote: dict | None) -> d
         "quote_time": quote.get("quote_time"),
         "quote_date": quote_date,
         "daily_pnl_period": classify_quote_period(quote_date, market.value),
+        # 2026-09-08 来源透传: 空字符串=未知源(前端显式标, 不编造)
+        "source": quote.get("source") or "",
+        "source_latency_ms": quote.get("source_latency_ms") or 0,
     }
 
 

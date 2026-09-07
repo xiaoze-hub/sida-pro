@@ -184,6 +184,13 @@ class MarketData:
             req = Request(symbols=tuple(s.code for s in syms), market=mkt)
             resp = self._quote_engine.fetch(req)
             if resp.ok and resp.data:
+                # 2026-09-08 来源透传: 胜出 vendor 打到每条 Quote, 下游可展示/记分
+                for q in resp.data:
+                    try:
+                        q.source = resp.vendor
+                        q.latency_ms = resp.latency_ms
+                    except Exception:
+                        pass
                 out.extend(resp.data)
         return out
 

@@ -36,3 +36,8 @@ def test_health_after_fetch():
     md = _md()
     md.quotes(["600519"], market="CN")
     assert md.health()["fake"]["success_rate"] == 1.0
+
+
+def test_quotes_stamps_winning_vendor():
+    out = _md().quotes(["600519"], market="CN")
+    assert out[0].source == "fake" and isinstance(out[0].latency_ms, int)

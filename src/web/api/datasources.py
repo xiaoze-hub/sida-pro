@@ -211,6 +211,52 @@ def get_datasources_health(ids: str | None = None, refresh: bool = False):
     return {"checked_at": time.time(), "items": items}
 
 
+@router.get("/trust")
+def get_vendor_trust():
+    """各行情源质量分(2026-09-08 方向1: 存活检查→质量记分)。
+
+    数据源: marketdata Engine 内存滚动窗口(近100次/源, 成功率+p50延迟+最近错误)。
+    score: 100*成功率 - 延迟档(≤800ms扣0/≤2s扣10/≤5s扣25/更大扣45/未知延迟扣15),
+    下限0; 从未调用过 → score=null(不冒充, 前端标"无数据")。
+    与 PG 收盘价偏离记分是第二阶段(需逐笔对账, 另开)。
+    """
+    from src.core.marketdata_client import get_market_data
+
+    def _score(sr, p50):
+        if sr is None:
+            return None
+        if p50 is None:
+            grade = 15
+        elif p50 <= 800:
+            grade = 0
+        elif p50 <= 2000:
+            grade = 10
+        elif p50 <= 5000:
+            grade = 25
+        else:
+            grade = 45
+        return max(0, round(sr * 100 - grade))
+
+    try:
+        snap = get_market_data().health()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vendor trust 快照失败: %s", e)
+        return {"checked_at": time.time(), "items": []}
+    items = [
+        {
+            "vendor": vendor,
+            "score": _score(s.get("success_rate"), s.get("p50_latency_ms")),
+            "success_rate": s.get("success_rate"),
+            "p50_latency_ms": s.get("p50_latency_ms"),
+            "samples": s.get("count", 0),
+            "last_error": s.get("last_error") or "",
+        }
+        for vendor, s in snap.items()
+    ]
+    items.sort(key=lambda i: (i["score"] is None, -(i["score"] or 0)))
+    return {"checked_at": time.time(), "items": items}
+
+
 @router.get("/health/data-sources")
 def get_configured_sources_health(db: Session = Depends(get_db)):
     """通用 data_sources 表的健康状态(按累计成功/失败推断), 与 4 个逻辑源互补。
