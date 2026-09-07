@@ -7,6 +7,15 @@
 
 ## 2026-09-07
 
+### feature-P1认证双轨+契约快照(服务token只读行情口/291 paths冻结)
+- `src/web/api/auth.py` — 新增服务token双轨: `get_service_token()`(env SIDA_SERVICE_TOKEN优先,否则AppSettings自动生成持久化,同jwt_secret模式) + `get_user_or_service()`(先试Bearer用户JWT,再试X-Service-Token) + `ServicePrincipal`。写链路不动,服务token进require_owner永远403。
+- `src/web/app.py` — quotes/klines挂载从`protected`切`data_read`(双轨),其余66模块保持用户JWT。终结监控/回填拿服务token调行情口401。
+- 新增`scripts/export_openapi.py` — 进程内导出`docs/_frozen/openapi.p1.json`(291 paths),P3 orval codegen命令已写进脚本头注释。
+- 新增`tests/test_p1_service_token.py` — 7用例:无凭证401/服务token放行/错token401/写口拒服务token/owner口拒服务token/用户JWT行为不变,7 passed。
+- **回归**: test_audit_p1_regression + test_ambush_events_input共6 passed; `import src.web.app` OK。
+- **未做**: Alembic(已有自研versioned migrations,不重复造轮子); audit独立Session(08-21已修,有回归测试); 全量orval迁移(留P3随前端终端化一起做)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### doc-P0成熟化基线冻结(路由15组/68API模块/9Agent/PG50表)
 - 新增`docs/_frozen/routes.md` — 15路由组: /驾驶舱/机会/暗盘/行情forecast+quote别名+L2/指数/板块/持仓portfolio/研报详情/system+reports+shadow+notifications+settings五Hub/profile/login。CRLF 8文件记入P3修。
 - 新增`docs/_frozen/ai-tools.md` — 9 Agents + 68 API模块计数(paper_trading16/recommendations20为核心, 单路由模块列P1合并候选, ws_*抽Hub)。
