@@ -93,6 +93,9 @@ def _quote_to_row(q: Quote) -> dict:
         "total_market_value": q.total_market_value,
         "quote_time": q.quote_time.isoformat() if q.quote_time else None,
         "quote_date": q.quote_time.date().isoformat() if q.quote_time else None,
+        # 2026-09-08 来源透传: 实际命中的 vendor(空=未知, 前端按"未知源"标, 不编造)
+        "source": getattr(q, "source", "") or "",
+        "source_latency_ms": getattr(q, "latency_ms", 0) or 0,
     }
 
 

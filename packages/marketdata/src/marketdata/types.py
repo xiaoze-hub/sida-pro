@@ -51,6 +51,9 @@ class Quote:
     # 行情源提供的实际报价时间；无法确认时保持 None，不能用抓取时间冒充。
     quote_time: datetime | None = None
     timestamp: datetime = field(default_factory=datetime.now)
+    # 2026-09-08 来源透传: 实际命中的 vendor + 该次延迟(Engine Response 落到每条 Quote)。
+    source: str = ""
+    latency_ms: int = 0
 
 
 @dataclass
