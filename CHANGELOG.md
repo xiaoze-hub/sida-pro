@@ -5,6 +5,15 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-08
+
+### feature-决策合成(方向2: 三信号→动手/看看/别碰+一行理由)
+- 新增`src/core/decision.py` — `synthesize()`纯函数(复用gs/ai_activity/dark_pool/resonance,不重写算法)+`decide()`IO入口(PG/K线→三信号,失败永不抛只看看)。
+- 新增`GET /api/decision/{symbol}`(protected,app.py挂载) — verdict映射(向好动手/拐点分歧看看/走坏别碰,缺数表外一律看看+理由)。
+- 新增`tests/test_decision.py` — 3用例(verdict域/缺数看看/端点行为),3 passed。
+- **未做**:前端决策卡片(接口先行);与命中榜联动(方向3数据回灌,另开)。
+- [branch feat/decision-synthesis-0908, `git show HEAD`]
+
 ## 2026-09-07
 
 ### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)
