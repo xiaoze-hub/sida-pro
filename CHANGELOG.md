@@ -5,6 +5,18 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-08
+
+### feature-系统日志闭环(scheduler监听/前端上报/errors接口/JSONL轮转)
+- `src/core/error_tracker.py` — JSONL超2000行丢最老一半(之前无界增长);新增`install_scheduler_error_tracking()`(APScheduler EVENT_JOB_ERROR/MISSED→capture_exception,一个监听盖住该实例所有任务)。
+- 三处`start()`接入:context/kline_backfill/report scheduler(失败不阻断启动)。
+- `src/web/api/logs.py` — `GET /errors`(owner, recent_errors终于有接口);`POST /frontend`(登录用户,字段截断,进统一去重+聚合告警,user记context)。
+- 前端 — 新增`src/lib/error-report.ts`(同message 60s去重,fetch+keepalive,未登录丢弃);`main.tsx`装window.onerror/unhandledrejection;`App.tsx`给ErrorBoundary接onError上报。
+- 新增`tests/test_syslog.py` — 4用例(job异常/missed/前端上报/轮转),4 passed。
+- **回归**: tsc 0错; UI门禁OK; P1/P2/P4共15 passed。
+- **未做**: errors的UI页(接口先行,投研/系统页接展示留待);Loki/promtail不变。
+- [branch feat/syslog-0908, `git show HEAD`]
+
 ## 2026-09-07
 
 ### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)

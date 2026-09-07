@@ -41,6 +41,7 @@ NOTIFY_COOLDOWN_SECONDS = 3600  # 同指纹告警防轰炸: 每小时最多 1 �
 
 TRACEBACK_LIMIT = 2000        # traceback 截断长度
 SAMPLE_TRACEBACK_LIMIT = 300  # 告警 body 里样例 traceback 长度
+MAX_JSONL_LINES = 2000        # JSONL 上限: 超了丢最老一半(无界增长会吃光 DATA_DIR)
 
 _lock = threading.Lock()
 # fp -> 最近一次 JSONL 落盘 time.monotonic() (去重用)
@@ -81,12 +82,29 @@ def _log_file() -> str:
 
 
 def _write_event(record: dict) -> bool:
-    """JSONL 追加写入。任何失败都吞掉, 不影响主流程。"""
+    """JSONL 追加写入。任何失败都吞掉, 不影响主流程。
+
+    2026-09-08: 轮转 — 行数超 MAX_JSONL_LINES 时丢最老一半, 文件永不无界增长。
+    """
     try:
         path = Path(_log_file())
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with _lock:
+            if path.exists():
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                except Exception:
+                    lines = []
+                if len(lines) >= MAX_JSONL_LINES:
+                    lines = lines[len(lines) // 2:]
+                    try:
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.writelines(lines)
+                    except Exception:
+                        pass
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
         return True
     except Exception:
         logger.warning("[error_tracker] JSONL 写入失败", exc_info=True)
@@ -232,6 +250,44 @@ def _clear_state() -> None:
         _last_jsonl_write.clear()
         _recent_occurrences.clear()
         _last_notify.clear()
+
+
+def install_scheduler_error_tracking(scheduler) -> bool:
+    """给 APScheduler 装错误监听: job 抛异常/超时错过 → capture_exception。
+
+    一个监听盖住该 scheduler 上所有任务(cron/哨兵/回填/报告), 后台异常不再隐身。
+    scheduler=None 或无 add_listener 时返回 False(调用方 log warning 即可,
+    不阻断启动)。apscheduler 未安装时静默 False。
+    """
+    if scheduler is None or not hasattr(scheduler, "add_listener"):
+        return False
+    try:
+        from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
+    except ImportError:
+        return False
+
+    def _on_event(event) -> None:
+        try:
+            job_id = getattr(event, "job_id", "?")
+            if getattr(event, "exception", None) is not None:
+                exc = event.exception
+                if not isinstance(exc, BaseException):
+                    exc = RuntimeError(f"scheduler job failed: {exc}")
+                capture_exception(exc, {"source": "scheduler", "job_id": str(job_id)})
+            else:
+                capture_exception(
+                    RuntimeError(f"scheduler job missed: {job_id}"),
+                    {"source": "scheduler", "job_id": str(job_id)},
+                )
+        except Exception:
+            pass
+
+    try:
+        scheduler.add_listener(_on_event, EVENT_JOB_ERROR | EVENT_JOB_MISSED)
+        return True
+    except Exception:
+        logger.warning("[error_tracker] scheduler 监听安装失败", exc_info=True)
+        return False
 
 
 def configure(
