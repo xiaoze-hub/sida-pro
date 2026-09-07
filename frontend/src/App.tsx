@@ -42,6 +42,7 @@ import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
+import { reportFrontendError } from '@/lib/error-report'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
@@ -464,7 +465,11 @@ function App() {
       {/* Content */}
       <main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         <Suspense fallback={<PageFallback />}>
-          <AppErrorBoundary>
+          <AppErrorBoundary
+            onError={(error) =>
+              reportFrontendError(`ErrorBoundary: ${error.name}`, error.message, error.stack)
+            }
+          >
             <Routes>
 
               <Route path="/" element={<DashboardPage />} />

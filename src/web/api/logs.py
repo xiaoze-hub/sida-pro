@@ -3,13 +3,14 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.web.database import get_db
 from src.web.models import LogEntry
 from src.web.log_handler import get_log_handler_stats
 from src.core.timezone import format_app_tz
+from src.web.api.auth import get_current_user, require_owner
 
 
 def _format_datetime(dt) -> str:
@@ -283,3 +284,49 @@ def logs_health(db: Session = Depends(get_db)):
         },
         "writer": get_log_handler_stats(),
     }
+
+
+class FrontendErrorReport(BaseModel):
+    """前端报错上报体(字段全截断, 防超大 payload 打爆 JSONL)。"""
+
+    type: str = Field(default="Error", max_length=120)
+    message: str = Field(default="", max_length=500)
+    stack: str = Field(default="", max_length=2000)
+    url: str = Field(default="", max_length=300)
+
+
+@router.get("/errors", dependencies=[Depends(require_owner)])
+def list_error_events(limit: int = Query(50, ge=1, le=200)):
+    """错误追踪事件(后端未处理异常 + scheduler + 前端上报, owner 可见)。
+
+    2026-09-08 系统日志: recent_errors 一直没接口, 报错只能翻服务器文件。
+    """
+    from src.core.error_tracker import recent_errors
+
+    return {"items": recent_errors(limit)}
+
+
+@router.post("/frontend")
+def report_frontend_error(
+    body: FrontendErrorReport,
+    user=Depends(get_current_user),
+):
+    """前端报错入口(登录用户): window.onerror / ErrorBoundary 上报。
+
+    进 capture_exception 统一通道(source=frontend, 享去重+聚合告警)。
+    user_id 记入 context, 多用户下可定位是谁的端出的问题。
+    """
+    from src.core.error_tracker import capture_exception
+
+    msg = (body.message or "").strip()[:500] or "(empty message)"
+    exc = RuntimeError(f"[frontend] {body.type}: {msg}")
+    capture_exception(
+        exc,
+        {
+            "source": "frontend",
+            "url": body.url[:300],
+            "user": getattr(user, "username", "?"),
+            "stack": body.stack[:2000],
+        },
+    )
+    return {"ok": True}

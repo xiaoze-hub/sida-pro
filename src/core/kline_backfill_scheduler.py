@@ -137,6 +137,12 @@ class KlineBackfillScheduler:
         from src.core.scheduler_registry import register
 
         register("kline_backfill", self.scheduler)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception:
+            pass
         logger.info(
             f"K线入库调度器已启动: 每日 {BACKFILL_CRON['hour']:02d}:"
             f"{BACKFILL_CRON['minute']:02d} (周一至五, "

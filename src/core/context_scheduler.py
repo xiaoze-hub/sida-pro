@@ -283,6 +283,12 @@ class ContextMaintenanceScheduler:
         self.scheduler.start()
         from src.core.scheduler_registry import register
         register("context", self.scheduler)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception:
+            pass
         logger.info(
             "上下文维护调度器已启动（后验评估间隔 %sh，快照保留 %s 天，后验保留 %s 天，机会自动刷新 01:15/05:30/14:00 UTC）",
             self.eval_interval_hours,

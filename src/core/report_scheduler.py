@@ -121,6 +121,12 @@ class ReportScheduler:
         from src.core.scheduler_registry import register
 
         register("report", self.scheduler)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception:
+            pass
         logger.info(
             "SIDA 报告调度器已启动: 盘前 %02d:%02d / 盘后 %02d:%02d (周一至五, %s)",
             PREMARKET_CRON["hour"], PREMARKET_CRON["minute"],
