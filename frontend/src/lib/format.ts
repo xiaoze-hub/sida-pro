@@ -130,3 +130,30 @@ export function safeNetInflow(
   const sign = n > 0 ? '+' : ''
   return `${sign}${n.toFixed(digits)}${unit}`
 }
+
+/**
+ * 元 → 万/亿紧凑显示(2026-09-07 P3 收敛: Quote/L2/DarkFundTop 三处手抄已分叉,
+ * 以本实现为准 — Quote 旧版缺 isFinite 守卫, 字符串脏数会渲染出 NaN万)。
+ *  - |v| >= 1 亿 → "+X.XX亿"  else "+X.XX万"
+ *  - null/undefined/NaN → '--'
+ */
+export function toAmount(v: number | null | undefined, digits = 2): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '--'
+  const abs = Math.abs(v)
+  if (abs >= 1e8) return `${v > 0 ? '+' : ''}${(v / 1e8).toFixed(digits)}亿`
+  return `${v > 0 ? '+' : ''}${(v / 1e4).toFixed(digits)}万`
+}
+
+/** 旧名 toWan 保留兼容。 */
+export const toWan = toAmount
+
+/**
+ * 输入已是万元 → 万元/亿自动选(2026-09-07 P3 收敛自 DarkFundTop 手抄版)。
+ * 与 toAmount(元口径)同口径, 符号恒显(同后端 _fmt_amount)。
+ */
+export function toAmountFromWan(wan: number | null | undefined, digits = 2): string {
+  if (wan === null || wan === undefined || !Number.isFinite(wan)) return '--'
+  const sign = wan > 0 ? '+' : wan < 0 ? '-' : ''
+  if (Math.abs(wan) >= 1e4) return `${sign}${(Math.abs(wan) / 1e4).toFixed(digits)}亿`
+  return `${sign}${Math.abs(wan).toFixed(digits)}万`
+}

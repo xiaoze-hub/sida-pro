@@ -24,21 +24,9 @@ import {
   type DarkFundTopUnavailable,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { toWan } from '@/lib/format'
 
-/** 输入: 万元; 输出: 万元 或 亿 自动选.
- *  - |wan| < 1e4 万(1亿) → "+X.XX万"
- *  - |wan| >= 1e4 万     → "+X.XX亿"
- *  与 Quote/L2Orderbook.toAmount(元口径, 1e8 阈值)同口径, 符号恒显(同后端 _fmt_amount)。
- */
-const toAmountFromWan = (wan: number | null | undefined): string => {
-  if (wan == null) return '-'
-  // wan 已是万元. 换算: 1 亿 = 1e4 万
-  const sign = wan > 0 ? '+' : wan < 0 ? '-' : ''
-  if (Math.abs(wan) >= 1e4) return `${sign}${(Math.abs(wan) / 1e4).toFixed(2)}亿`
-  return `${sign}${Math.abs(wan).toFixed(2)}万`
-}
-// 旧名 toWan 保留(代码里调用点多, 改为兼容)
-const toWan = toAmountFromWan
+/* toWan 统一走 @/lib/format(P3 收敛, 旧手抄版删除) */
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true

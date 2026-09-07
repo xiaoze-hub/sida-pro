@@ -7,6 +7,15 @@
 
 ## 2026-09-07
 
+### feature-P3前端收敛(toAmount归一/CRLF清零/UI门禁/envelope客户端)
+- `frontend/src/lib/format.ts` — 新增`toAmount`(元→万/亿)+`toAmountFromWan`(万元口径)+`toWan`别名;Quote/L2/DarkFundTop三处手抄删除改import。实测已分叉:Quote旧版缺isFinite守卫(脏数渲染NaN万),DarkFundTop空值符'-'与全站'--'不一致,本次一并收敛。
+- 换行:8文件CRLF→LF(P0清单)+漏网`useSourceHealth.ts`,新增`.gitattributes`锁`eol=lf`,防Windows检出回潮。
+- 新增`scripts/check_ui_rules.mjs`(零依赖,CI可直接`node`跑) — R1图层禁卡片/R2禁手抄toAmount/R3禁CRLF/R4禁GS色硬编码,首跑11违规已定级:R1两Card是分时图下方堆叠面板(白名单留档,挪位置重审)、R4拆股marker绿是事件色板(按`拆${`豁免)、stock-colors令牌定义豁免。现`UI-RULES OK`。
+- 新增`frontend/src/realtime/envelope.ts` — P2信封的客户端:parseFrame(新envelope/旧裸帧兼容)/reconnectUrl拼last_seq/maxSeq取最大seq。WS接线页改留待(当前前端无WS消费,全轮询)。
+- **验过**: `tsc -b` 0错; `vite build` EXIT 0(15s, 仅chunk-size旧警告); 门禁OK。
+- **未做**: KlineChart/InteractiveKline大重构(2001行,风险高,留待终端化专项); orval全量codegen(等后端契约稳定)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### feature-P2实时envelope+K线陈旧failover(ring重放/12天线/asof)
 - 新增`src/web/realtime/envelope.py` — 统一下行帧`{seq,ts,topic,user_id,payload}`,seq走Redis INCR `biz:ws:seq`(无Redis退进程内),本进程deque(200)供`?last_seq=`断线重放。quotes广播包`quote.tick`、快照包`quote.snapshot`、通知广播包`notif.push`;两handler在accept/hello后按`last_seq(+user_id过滤)`补发missed帧。PubSub通道原文格式不变,消费侧漏斗到发送点只包一次。
 - `src/web/api/klines.py` — `_pg_klines`改返`(bars, asof)`:最新bar超12天(覆盖春节级长假)视为陈旧网关快照→`(None,None)`回落联网,不再静默服务旧数;单股/batch响应加`asof`字段。另两处调用方已同步。

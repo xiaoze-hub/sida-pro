@@ -12,6 +12,7 @@ import {
   type KlineEventPoint,
   type KlinePriceLine,
 } from '@panwatch/biz-ui/klineEvents'
+import { toAmount, toWan } from '@/lib/format'
 
 /**
  * 行情终端（v0.4.60 重构 — 去卡片化）
@@ -174,25 +175,7 @@ const CONFIDENCE_CLASS: Record<string, string> = {
   C: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
 }
 
-/** 元 → 带单位的紧凑显示(自动万/亿).
- *  - |v| < 1 亿    → "+X.XX万"
- *  - |v| >= 1 亿   → "+X.XX亿"
- *  - null/undefined → '--'
- */
-function toAmount(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined) return '--'
-  const abs = Math.abs(v)
-  if (abs >= 1e8) {
-    const yi = v / 1e8
-    const sign = yi > 0 ? '+' : ''
-    return `${sign}${yi.toFixed(digits)}亿`
-  }
-  const wan = v / 1e4
-  const sign = wan > 0 ? '+' : ''
-  return `${sign}${wan.toFixed(digits)}万`
-}
-// 旧名 toWan 保留兼容(代码里别处调用)
-const toWan = toAmount
+/* toAmount/toWan 统一走 @/lib/format(P3 收敛, 旧手抄版删除) */
 
 /** 红涨绿跌(国内 A 股惯例, 按用户 override 设计稿 §5.2) — 统一走 --stock-up/--stock-down 令牌 */
 const NET_INFLOW_CLASS = (v: number | null | undefined) =>

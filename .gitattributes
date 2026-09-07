@@ -1,0 +1,8 @@
+# 2026-09-07 P3: 锁死换行与编码, 杜绝 CRLF 回潮(Windows 检出也强制 LF)。
+* text=auto eol=lf
+*.tsx text eol=lf
+*.ts text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.sh text eol=lf
