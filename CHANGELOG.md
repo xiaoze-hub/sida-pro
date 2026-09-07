@@ -7,6 +7,13 @@
 
 ## 2026-09-07
 
+### doc-P0成熟化基线冻结(路由15组/68API模块/9Agent/PG50表)
+- 新增`docs/_frozen/routes.md` — 15路由组: /驾驶舱/机会/暗盘/行情forecast+quote别名+L2/指数/板块/持仓portfolio/研报详情/system+reports+shadow+notifications+settings五Hub/profile/login。CRLF 8文件记入P3修。
+- 新增`docs/_frozen/ai-tools.md` — 9 Agents + 68 API模块计数(paper_trading16/recommendations20为核心, 单路由模块列P1合并候选, ws_*抽Hub)。
+- 新增`docs/_frozen/data.md` — PG50表 + klines hypertable三源幂等 + Redis biz:TTL规范 + 生产铁律(network-alias postgres)。
+- **测了**: 基线只读统计未改业务, `git status`仅新增3文件。P1从此分支起。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### fix-盘前埋伏空榜+报告落盘失败(09-07 早盘实测: 埋伏榜 0 条)
 
 - `src/core/catalyst_screener.py`: 新增 events_to_calendar() — 事件流 subjects 经
