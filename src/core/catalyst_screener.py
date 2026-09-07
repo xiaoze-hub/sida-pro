@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 
 logger = logging.getLogger(__name__)
@@ -129,3 +130,44 @@ def build_ambush_list(
         })
     out.sort(key=lambda x: (_GAP_RANK.get(x["gap"], 9), x["catalyst_date"]))
     return out
+
+
+_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def events_to_calendar(events: list[dict] | None, today: str | None = None) -> list[dict]:
+    """事件流 → 日历项(有 symbol 才留, 零 LLM)。
+
+    2026-09-07 hotfix: 埋伏漏斗此前只吃本地日历, 无 symbol 的宏观项多时直接空榜。
+    subjects 经受益解析落代码, confidence=低 丢掉; 同 symbol 只留日期最近的一条。
+    """
+    from datetime import date as _d
+
+    from src.core.beneficiary_resolver import resolve_beneficiaries
+
+    today = today or _d.today().isoformat()
+    out: dict[str, dict] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        content = (ev.get("content") or "").strip()
+        if not content:
+            continue
+        m = _DATE_RE.search(ev.get("time") or "")
+        edate = m.group(1) if m else today
+        level = (ev.get("level") or "").strip()
+        etype = f"事件/{level}" if level else "事件"
+        title = content[:80]
+        try:
+            resolved = resolve_beneficiaries(ev.get("subjects") or [])
+        except Exception as e:
+            logger.debug(f"事件 subjects 解析失败: {e}")
+            continue
+        for r in resolved:
+            if r.get("confidence") == "低" or not r.get("symbol"):
+                continue
+            sym = r["symbol"]
+            prev = out.get(sym)
+            if prev is None or edate < prev["date"]:
+                out[sym] = {"symbol": sym, "date": edate, "type": etype, "title": title}
+    return list(out.values())

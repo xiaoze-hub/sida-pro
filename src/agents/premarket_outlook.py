@@ -337,12 +337,23 @@ class PremarketOutlookAgent(BaseAgent):
             catalyst_local = []
 
         # 6.7 埋伏榜(规则漏斗 Top8 → LLM 预期差 → 受益落代码, CKPT3+4)
+        #     2026-09-07 hotfix: 事件流 subjects 落代码后并入漏斗(事件优先,
+        #     同 symbol 去重时事件项在前)。此前只吃本地日历, 无 symbol 的
+        #     宏观项多时直接空榜(如 2026-09-07 早盘: 日历 3 条全无 symbol)。
         ambush_list: list = []
         try:
-            from src.core.catalyst_screener import build_ambush_list
+            from src.core.catalyst_screener import build_ambush_list, events_to_calendar
 
-            ambush_list = await asyncio.to_thread(build_ambush_list, catalyst_local, None, 8)
-            logger.info("[%s] 埋伏榜完成: %s 条", trace_id, len(ambush_list))
+            event_cal = events_to_calendar(event_stream)
+            merged_cal = event_cal + (catalyst_local or [])
+            ambush_list = await asyncio.to_thread(build_ambush_list, merged_cal, None, 8)
+            logger.info(
+                "[%s] 埋伏榜完成: %s 条(日历=%s 事件=%s)",
+                trace_id,
+                len(ambush_list),
+                len(catalyst_local),
+                len(event_cal),
+            )
         except Exception as e:
             logger.warning("[%s] 埋伏榜失败: %s", trace_id, e)
             ambush_list = []

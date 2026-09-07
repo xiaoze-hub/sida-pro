@@ -5,6 +5,23 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-07
+
+### fix-盘前埋伏空榜+报告落盘失败(09-07 早盘实测: 埋伏榜 0 条)
+
+- `src/core/catalyst_screener.py`: 新增 events_to_calendar() — 事件流 subjects 经
+  受益解析落代码(低 confidence 丢掉), 转日历项; 同 symbol 留日期最近一条。
+  此前漏斗只吃本地日历, 无 symbol 的宏观项多时直接空榜。
+- `src/agents/premarket_outlook.py`: 6.7 合并 `event_cal + catalyst_local`(事件优先,
+  去重时事件项在前), 日志加 日历/事件计数。事件流 37 条不再被丢弃。
+- `src/web/api/reports.py`: 报告根目录不可写(/hermes 未挂载)时退到
+  DATA_DIR/cron/output(容器持久卷); 两处都不可写时保持原行为不崩 import。
+  修 08:30 盘前报告 `Permission denied: '/hermes'` 落盘失败。
+- **测试**: tests/test_ambush_events_input.py +3, ambush 相关共 20 passed。
+- **未修**: wudao 连续 401 是生产没配 key(DB/env 双空, 非过期), 需补 key
+  (设置页 app_settings.wudao_mcp_token, 改完立即生效无需重建)。
+  [commit b847945]
+
 ## 2026-09-06
 
 ### feature-妖股因子接入盘前埋伏(批次C×B 集成, 老板指令)
