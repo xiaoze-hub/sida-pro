@@ -37,6 +37,13 @@ cp -r frontend/dist/* static/
 echo -e "${GREEN}🐳 构建 Docker 镜像 (linux/amd64)...${NC}"
 FULL_IMAGE="${IMAGE_NAME}:${VERSION}"
 
+# P4 (2026-09-07): 磁盘门禁 — / 根分区占用超 85% 直接中断发版(云盘打满比发版失败更贵)。
+DISK_USE=$(df -h / | awk 'NR==2 {print $5}' | tr -d '%')
+if [ "${DISK_USE}" -ge 85 ]; then
+    echo -e "❌ 磁盘占用 ${DISK_USE}% ≥ 85%, 中断发版。先清盘: docker image prune -f + 删旧版镜像" >&2
+    exit 1
+fi
+
 docker build --platform linux/amd64 --build-arg VERSION="${VERSION}" -t "${FULL_IMAGE}" .
 
 # 如果版本不是 latest，也打 latest 标签
@@ -49,6 +56,14 @@ fi
 
 # 清理
 rm -rf static
+
+# P4 (2026-09-07): 每次 build 后必清悬空层 + 同名旧版镜像(用户交付铁律: 发版不清盘等于慢性自杀)。
+# 只删本仓库的旧 tag 与 dangling, 不碰运行中容器与数据卷, 不加 --all 广普扫。
+docker image prune -f >/dev/null 2>&1 || true
+docker images "${IMAGE_NAME}" --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
+  | awk -v keep="${FULL_IMAGE}" '$1 != keep {print $2}' \
+  | xargs -r docker rmi >/dev/null 2>&1 || true
+echo -e "磁盘现状: $(df -h / | awk 'NR==2 {print $5}') 已用"
 
 echo ""
 echo -e "${GREEN}🎉 构建完成！${NC}"

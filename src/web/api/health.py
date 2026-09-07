@@ -44,12 +44,14 @@ class _Metrics:
     PREDICT_REQUESTS: Any = None
     NOTIFICATIONS_SENT: Any = None
     DATASOURCE_FAILURES: Any = None
+    COMPONENT_STATUS: Any = None  # P4: 组件健康(1=ok, 0=down), 供 Prometheus 告警用
 
 _metrics = _Metrics()
 
 def _init_metrics():
     if not _PROMETHEUS_AVAILABLE or _metrics.REQUEST_COUNT is not None:
         return
+    assert Counter is not None and Histogram is not None and Gauge is not None
     _metrics.REQUEST_COUNT = Counter(
         "sida_http_requests_total",
         "Total HTTP requests",
@@ -86,6 +88,29 @@ def _init_metrics():
         "Datasource failures by provider and kind",
         ["provider", "kind"],
     )
+    # P4 (2026-09-07): 组件健康 gauge, /health 每次检查刷新。
+    # 注意: deploy/prometheus-rules.yml 里三条数据告警曾引用不存在的指标名
+    # (request_count_total/datasource_failures_total/sida_health_redis_status),
+    # 一条都没响过。此 gauge 名与规则文件双向锁定, 改名必须同步改规则 + 跑
+    # tests/test_p4_alerts.py。
+    _metrics.COMPONENT_STATUS = Gauge(
+        "sida_health_component_status",
+        "Component health from /health checks (1=ok, 0=down)",
+        ["component"],
+    )
+
+
+def record_component_status(component: str, ok: bool) -> None:
+    """刷新组件健康(供 /health 检查路径调用)。失败静默, 绝不影响业务。"""
+    try:
+        if not _PROMETHEUS_AVAILABLE:
+            return
+        _init_metrics()
+        if _metrics.COMPONENT_STATUS is None:
+            return
+        _metrics.COMPONENT_STATUS.labels(component=component).set(1 if ok else 0)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def record_request_metrics(method: str, path: str, status: int, duration_ms: float) -> None:
@@ -190,8 +215,10 @@ async def health() -> dict[str, Any]:
                 "latency_ms": latency_ms,
                 "url": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "sqlite",
             }
+            record_component_status("database", True)  # P4: 喂 Prometheus 告警
         except Exception as e:
             components["database"] = {"status": "down", "error": str(e)[:100]}
+            record_component_status("database", False)  # P4: 喂 Prometheus 告警
             overall_ok = False
 
         # ─── Redis 检查 ───
@@ -199,14 +226,18 @@ async def health() -> dict[str, Any]:
             from src.web.cache.redis_client import redis_client
             if not redis_client._enabled:
                 components["redis"] = {"status": "disabled"}
+                record_component_status("redis", True)  # P4: disabled 是预期降级, 不告警
             elif await redis_client.ping():
                 from src.web.cache.redis_client import REDIS_URL
                 components["redis"] = {"status": "ok", "url": REDIS_URL}
+                record_component_status("redis", True)  # P4
             else:
                 components["redis"] = {"status": "down", "url": "n/a"}
+                record_component_status("redis", False)  # P4
                 # Redis 降级 OK — 不影响 overall
         except Exception as e:
             components["redis"] = {"status": "down", "error": str(e)[:100]}
+            record_component_status("redis", False)  # P4
 
         # ─── 业务缓存层(biz_cache: L1 内存 + L2 Redis)检查 ───
         try:

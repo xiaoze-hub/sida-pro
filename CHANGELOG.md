@@ -7,6 +7,17 @@
 
 ## 2026-09-07
 
+### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)
+- **死规则实锤**:`deploy/prometheus-rules.yml`三条数据告警引用的指标名全不存在(`request_count_total`实为`sida_http_requests_total`、`datasource_failures_total`实为`sida_datasource_failures_total`、`sida_health_redis_status`从未emit),上线以来一条没响过;无relabel可救。
+- `src/web/api/health.py` — 新增`sida_health_component_status{component}` gauge + `record_component_status()`,/health的DB/Redis检查每次刷新(redis disabled按预期降级记1不告警)。
+- 规则文件 — 三条expr对齐真实指标名;新增`SidaPostgresDown`(critical, database==0/2m);`SidaRedisDown`改走新gauge;文件头写死双向锁定(改名必改规则+跑测试)。
+- `build.sh` — /分区≥85%中断发版;build后清dangling+本仓库旧tag(不碰运行容器/数据卷);末尾打印磁盘占用。
+- `scripts/backup_pg.sh` — 追加恢复演练四步(演练库pg_restore+三表行数对账+删库+异地份)。
+- 新增`tests/test_p4_alerts.py` — 3用例(规则指标全emit/四指标存在/gauge真写值),3 passed。
+- **回归**: P1+P2+audit共15 passed; app import OK; rules YAML合法; build.sh语法OK。
+- **未做**: Gateway CLOSE-WAIT自愈(hermes-gateway是另一个仓库,不在本分支动);Hub抽独立进程(见P2未做)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### feature-P3前端收敛(toAmount归一/CRLF清零/UI门禁/envelope客户端)
 - `frontend/src/lib/format.ts` — 新增`toAmount`(元→万/亿)+`toAmountFromWan`(万元口径)+`toWan`别名;Quote/L2/DarkFundTop三处手抄删除改import。实测已分叉:Quote旧版缺isFinite守卫(脏数渲染NaN万),DarkFundTop空值符'-'与全站'--'不一致,本次一并收敛。
 - 换行:8文件CRLF→LF(P0清单)+漏网`useSourceHealth.ts`,新增`.gitattributes`锁`eol=lf`,防Windows检出回潮。
