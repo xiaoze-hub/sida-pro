@@ -7,6 +7,14 @@
 
 ## 2026-09-07
 
+### feature-P2实时envelope+K线陈旧failover(ring重放/12天线/asof)
+- 新增`src/web/realtime/envelope.py` — 统一下行帧`{seq,ts,topic,user_id,payload}`,seq走Redis INCR `biz:ws:seq`(无Redis退进程内),本进程deque(200)供`?last_seq=`断线重放。quotes广播包`quote.tick`、快照包`quote.snapshot`、通知广播包`notif.push`;两handler在accept/hello后按`last_seq(+user_id过滤)`补发missed帧。PubSub通道原文格式不变,消费侧漏斗到发送点只包一次。
+- `src/web/api/klines.py` — `_pg_klines`改返`(bars, asof)`:最新bar超12天(覆盖春节级长假)视为陈旧网关快照→`(None,None)`回落联网,不再静默服务旧数;单股/batch响应加`asof`字段。另两处调用方已同步。
+- 新增`tests/test_p2_realtime.py` — 5用例(seq单调/重放过滤/新鲜返asof/陈旧穿透/过薄穿透),5 passed。
+- **回归**: P1双轨7 + audit回归共10 passed; app/quote_stream/ws_hub/envelope import OK。
+- **未做**: Hub抽独立进程(部署拓扑变更,留P4随自愈一起做;envelope/seq/ring已把代码前置条件铺好);前端WS消费envelope解析(留P3);顺带发现ws_hub PubSub自回显疑似循环,未动,需单开issue验证。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### feature-P1认证双轨+契约快照(服务token只读行情口/291 paths冻结)
 - `src/web/api/auth.py` — 新增服务token双轨: `get_service_token()`(env SIDA_SERVICE_TOKEN优先,否则AppSettings自动生成持久化,同jwt_secret模式) + `get_user_or_service()`(先试Bearer用户JWT,再试X-Service-Token) + `ServicePrincipal`。写链路不动,服务token进require_owner永远403。
 - `src/web/app.py` — quotes/klines挂载从`protected`切`data_read`(双轨),其余66模块保持用户JWT。终结监控/回填拿服务token调行情口401。
