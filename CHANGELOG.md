@@ -7,6 +7,11 @@
 
 ## 2026-09-08
 
+### chore-双树 verdict 落定(TQ 件已在主树, 切 venv 指向)
+- 核查结论:所谓"待合三件套"(formula引擎/_TQ_URL/dark_l2/.tck)早已在 `sida-pro` 主树且是超集;sida-src 是 08-31  snapshot 的 TQ 试验田,缺 09-02 以来全部线上修复(WAF/volume×100/陈旧门禁/限流/BJ前缀)。无代码可合,不碰 sida-src(28 号试验田, 另行归档)。
+- 环境修复:本地 venv 的 marketdata editable 重装指向 `sida-pro/packages`(之前指 sida-src 旧拷贝,本地包测试测的不是发版代码, volume 差 100 倍)。验证:包+宿主 9 passed, 无需 PYTHONPATH。
+- [branch feat/tq-merge-0908, `git show HEAD`]
+
 ### feature-系统日志闭环(scheduler监听/前端上报/errors接口/JSONL轮转)
 - `src/core/error_tracker.py` — JSONL超2000行丢最老一半(之前无界增长);新增`install_scheduler_error_tracking()`(APScheduler EVENT_JOB_ERROR/MISSED→capture_exception,一个监听盖住该实例所有任务)。
 - 三处`start()`接入:context/kline_backfill/report scheduler(失败不阻断启动)。
