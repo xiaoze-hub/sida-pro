@@ -25,6 +25,11 @@
 - **大发现(未修,需定)**:marketdata双树分叉 — 本地venv editable装的是`sida-src`旧拷贝,Docker按requirements装`sida-pro`包内拷贝,5文件已分歧(client/http/types/kline/tq)。本地包测试测的不是发版代码,改哪棵、删哪棵你定。
 - **未做**:前端来源徽标(接口先行);与PG收盘价偏离记分(第二阶段)。
 - [branch feat/source-trust-0908, `git show HEAD`]
+### feature-分Agent命中榜(方向3上半场: 先看见谁准)
+- `src/web/api/profile.py` — 旧全局命中率收敛为`_accuracy_board()`的overall(口径不变,`/stats`只多`avg_return_pct`,旧前端不崩);新增`GET /stats/accuracy?days=30&min_n=5`(分agent命中/平均收益/qualified小样本保护,高分在前)。
+- 新增`tests/test_accuracy_board.py` — 2用例(分agent切分+中性/窗外排除+小样本不参评+旧形保持),2 passed。
+- **未做**:下半场因子自动降权(需定权重策略,另开);UI榜单页(接口先行)。
+- [branch feat/prediction-grading-0908, `git show HEAD`]
 
 ## 2026-09-07
 
