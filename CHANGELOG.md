@@ -30,6 +30,12 @@
 - 新增`tests/test_accuracy_board.py` — 2用例(分agent切分+中性/窗外排除+小样本不参评+旧形保持),2 passed。
 - **未做**:下半场因子自动降权(需定权重策略,另开);UI榜单页(接口先行)。
 - [branch feat/prediction-grading-0908, `git show HEAD`]
+### feature-决策合成(方向2: 三信号→动手/看看/别碰+一行理由)
+- 新增`src/core/decision.py` — `synthesize()`纯函数(复用gs/ai_activity/dark_pool/resonance,不重写算法)+`decide()`IO入口(PG/K线→三信号,失败永不抛只看看)。
+- 新增`GET /api/decision/{symbol}`(protected,app.py挂载) — verdict映射(向好动手/拐点分歧看看/走坏别碰,缺数表外一律看看+理由)。
+- 新增`tests/test_decision.py` — 3用例(verdict域/缺数看看/端点行为),3 passed。
+- **未做**:前端决策卡片(接口先行);与命中榜联动(方向3数据回灌,另开)。
+- [branch feat/decision-synthesis-0908, `git show HEAD`]
 
 ## 2026-09-07
 

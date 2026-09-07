@@ -41,6 +41,7 @@ from src.web.api import (
     ths,
     darkflow,
     decision_pioneer,
+    decision,
     stock_pool,
     boards,
     main_flow,
@@ -587,6 +588,13 @@ app.include_router(
     decision_pioneer.router,
     prefix="/api/decision-pioneer",
     tags=["decision-pioneer"],
+    dependencies=protected,
+)
+# 决策合成(2026-09-08 方向2): 三信号 → 动手/看看/别碰 + 一行理由
+app.include_router(
+    decision.router,
+    prefix="/api/decision",
+    tags=["decision"],
     dependencies=protected,
 )
 # 决策先锋选股池(三指标共振扫描, 盘中实时, 2026-08-30)
