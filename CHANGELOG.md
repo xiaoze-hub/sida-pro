@@ -7,6 +7,50 @@
 
 ## 2026-09-07
 
+### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)
+- **死规则实锤**:`deploy/prometheus-rules.yml`三条数据告警引用的指标名全不存在(`request_count_total`实为`sida_http_requests_total`、`datasource_failures_total`实为`sida_datasource_failures_total`、`sida_health_redis_status`从未emit),上线以来一条没响过;无relabel可救。
+- `src/web/api/health.py` — 新增`sida_health_component_status{component}` gauge + `record_component_status()`,/health的DB/Redis检查每次刷新(redis disabled按预期降级记1不告警)。
+- 规则文件 — 三条expr对齐真实指标名;新增`SidaPostgresDown`(critical, database==0/2m);`SidaRedisDown`改走新gauge;文件头写死双向锁定(改名必改规则+跑测试)。
+- `build.sh` — /分区≥85%中断发版;build后清dangling+本仓库旧tag(不碰运行容器/数据卷);末尾打印磁盘占用。
+- `scripts/backup_pg.sh` — 追加恢复演练四步(演练库pg_restore+三表行数对账+删库+异地份)。
+- 新增`tests/test_p4_alerts.py` — 3用例(规则指标全emit/四指标存在/gauge真写值),3 passed。
+- **回归**: P1+P2+audit共15 passed; app import OK; rules YAML合法; build.sh语法OK。
+- **未做**: Gateway CLOSE-WAIT自愈(hermes-gateway是另一个仓库,不在本分支动);Hub抽独立进程(见P2未做)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
+### feature-P3前端收敛(toAmount归一/CRLF清零/UI门禁/envelope客户端)
+- `frontend/src/lib/format.ts` — 新增`toAmount`(元→万/亿)+`toAmountFromWan`(万元口径)+`toWan`别名;Quote/L2/DarkFundTop三处手抄删除改import。实测已分叉:Quote旧版缺isFinite守卫(脏数渲染NaN万),DarkFundTop空值符'-'与全站'--'不一致,本次一并收敛。
+- 换行:8文件CRLF→LF(P0清单)+漏网`useSourceHealth.ts`,新增`.gitattributes`锁`eol=lf`,防Windows检出回潮。
+- 新增`scripts/check_ui_rules.mjs`(零依赖,CI可直接`node`跑) — R1图层禁卡片/R2禁手抄toAmount/R3禁CRLF/R4禁GS色硬编码,首跑11违规已定级:R1两Card是分时图下方堆叠面板(白名单留档,挪位置重审)、R4拆股marker绿是事件色板(按`拆${`豁免)、stock-colors令牌定义豁免。现`UI-RULES OK`。
+- 新增`frontend/src/realtime/envelope.ts` — P2信封的客户端:parseFrame(新envelope/旧裸帧兼容)/reconnectUrl拼last_seq/maxSeq取最大seq。WS接线页改留待(当前前端无WS消费,全轮询)。
+- **验过**: `tsc -b` 0错; `vite build` EXIT 0(15s, 仅chunk-size旧警告); 门禁OK。
+- **未做**: KlineChart/InteractiveKline大重构(2001行,风险高,留待终端化专项); orval全量codegen(等后端契约稳定)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
+### feature-P2实时envelope+K线陈旧failover(ring重放/12天线/asof)
+- 新增`src/web/realtime/envelope.py` — 统一下行帧`{seq,ts,topic,user_id,payload}`,seq走Redis INCR `biz:ws:seq`(无Redis退进程内),本进程deque(200)供`?last_seq=`断线重放。quotes广播包`quote.tick`、快照包`quote.snapshot`、通知广播包`notif.push`;两handler在accept/hello后按`last_seq(+user_id过滤)`补发missed帧。PubSub通道原文格式不变,消费侧漏斗到发送点只包一次。
+- `src/web/api/klines.py` — `_pg_klines`改返`(bars, asof)`:最新bar超12天(覆盖春节级长假)视为陈旧网关快照→`(None,None)`回落联网,不再静默服务旧数;单股/batch响应加`asof`字段。另两处调用方已同步。
+- 新增`tests/test_p2_realtime.py` — 5用例(seq单调/重放过滤/新鲜返asof/陈旧穿透/过薄穿透),5 passed。
+- **回归**: P1双轨7 + audit回归共10 passed; app/quote_stream/ws_hub/envelope import OK。
+- **未做**: Hub抽独立进程(部署拓扑变更,留P4随自愈一起做;envelope/seq/ring已把代码前置条件铺好);前端WS消费envelope解析(留P3);顺带发现ws_hub PubSub自回显疑似循环,未动,需单开issue验证。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
+### feature-P1认证双轨+契约快照(服务token只读行情口/291 paths冻结)
+- `src/web/api/auth.py` — 新增服务token双轨: `get_service_token()`(env SIDA_SERVICE_TOKEN优先,否则AppSettings自动生成持久化,同jwt_secret模式) + `get_user_or_service()`(先试Bearer用户JWT,再试X-Service-Token) + `ServicePrincipal`。写链路不动,服务token进require_owner永远403。
+- `src/web/app.py` — quotes/klines挂载从`protected`切`data_read`(双轨),其余66模块保持用户JWT。终结监控/回填拿服务token调行情口401。
+- 新增`scripts/export_openapi.py` — 进程内导出`docs/_frozen/openapi.p1.json`(291 paths),P3 orval codegen命令已写进脚本头注释。
+- 新增`tests/test_p1_service_token.py` — 7用例:无凭证401/服务token放行/错token401/写口拒服务token/owner口拒服务token/用户JWT行为不变,7 passed。
+- **回归**: test_audit_p1_regression + test_ambush_events_input共6 passed; `import src.web.app` OK。
+- **未做**: Alembic(已有自研versioned migrations,不重复造轮子); audit独立Session(08-21已修,有回归测试); 全量orval迁移(留P3随前端终端化一起做)。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
+### doc-P0成熟化基线冻结(路由15组/68API模块/9Agent/PG50表)
+- 新增`docs/_frozen/routes.md` — 15路由组: /驾驶舱/机会/暗盘/行情forecast+quote别名+L2/指数/板块/持仓portfolio/研报详情/system+reports+shadow+notifications+settings五Hub/profile/login。CRLF 8文件记入P3修。
+- 新增`docs/_frozen/ai-tools.md` — 9 Agents + 68 API模块计数(paper_trading16/recommendations20为核心, 单路由模块列P1合并候选, ws_*抽Hub)。
+- 新增`docs/_frozen/data.md` — PG50表 + klines hypertable三源幂等 + Redis biz:TTL规范 + 生产铁律(network-alias postgres)。
+- **测了**: 基线只读统计未改业务, `git status`仅新增3文件。P1从此分支起。
+- [branch feat/mature-baseline-0907, `git show HEAD`]
+
 ### fix-盘前埋伏空榜+报告落盘失败(09-07 早盘实测: 埋伏榜 0 条)
 
 - `src/core/catalyst_screener.py`: 新增 events_to_calendar() — 事件流 subjects 经

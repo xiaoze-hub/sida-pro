@@ -312,6 +312,11 @@ app.include_router(tradingview_webhook.router, prefix="/api/webhooks", tags=["we
 
 # 需要登录的路由
 protected = [Depends(get_current_user)]
+# 纯读行情口(2026-09-07 P1): 用户 JWT 或服务 token 双轨, 供监控/回填/Hub回调。
+# 写链路一律保持 protected; 服务 token 进 require_owner 永远 403。
+from src.web.api.auth import get_user_or_service  # noqa: E402
+
+data_read = [Depends(get_user_or_service)]
 # 市场主线识别(2026-08-24, v0.3.0): Top20 主线 + 成分股; 60s 进程内缓存; 需登录
 app.include_router(
     market_mainline.router,
@@ -323,10 +328,10 @@ app.include_router(
     stocks.router, prefix="/api/stocks", tags=["stocks"], dependencies=protected
 )
 app.include_router(
-    quotes.router, prefix="/api/quotes", tags=["quotes"], dependencies=protected
+    quotes.router, prefix="/api/quotes", tags=["quotes"], dependencies=data_read
 )
 app.include_router(
-    klines.router, prefix="/api/klines", tags=["klines"], dependencies=protected
+    klines.router, prefix="/api/klines", tags=["klines"], dependencies=data_read
 )
 app.include_router(
     insights.router, prefix="/api/insights", tags=["insights"], dependencies=protected

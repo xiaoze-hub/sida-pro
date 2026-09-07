@@ -168,13 +168,20 @@ async def _send_one(ws: WebSocket, payload: dict, fail_counter: dict[WebSocket, 
 
 
 async def _broadcast_async(user_id: str, payload: dict, category: str | None) -> int:
-    """在同一 loop 内广播. 返回成功送达连接数."""
+    """在同一 loop 内广播. 返回成功送达连接数.
+
+    2026-09-07 P2: 下行统一 envelope(notif.push)。PubSub 消费侧经
+    broadcast_notification 漏斗到此, 只包一次, 通道原文格式不变。
+    """
+    from src.web.realtime.envelope import pack
+
+    frame = pack("notif.push", user_id, payload)
     targets = _list_targets(user_id, category)
     if not targets:
         return 0
     fail_counter: dict[WebSocket, int] = {}
     results = await asyncio.gather(
-        *[_send_one(ws, payload, fail_counter) for ws, _ in targets],
+        *[_send_one(ws, frame, fail_counter) for ws, _ in targets],
         return_exceptions=True,
     )
     ok = sum(1 for r in results if r is True)
@@ -375,6 +382,15 @@ async def ws_notifications_handler(websocket: WebSocket) -> None:
     except Exception:
         _unregister(user_id, websocket)
         return
+
+    # P2: 断线重放 (?last_seq=, 只补本 user 本进程 ring 内 missed 帧)
+    try:
+        from src.web.realtime.envelope import replay_since
+
+        for frame in replay_since(websocket.query_params.get("last_seq"), user_id=user_id):
+            await websocket.send_text(json.dumps(frame, ensure_ascii=False))
+    except Exception:
+        pass
 
     fail_counter: dict[WebSocket, int] = {}
     try:

@@ -370,6 +370,82 @@ async def require_owner(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# ── 服务 token(2026-09-07 P1 成熟化: 用户 JWT / 服务 token 双轨) ──────
+# 背景: klines/quotes 等纯读行情口挂了用户 JWT, 监控/回填等服务方拿 dashboard
+# token 调直接 401。写链路一律保持 get_current_user, 服务 token 永远走不进
+# require_owner(role=service ≠ owner → 403), 所以提权面为零。
+
+SERVICE_TOKEN_KEY = "service_token"
+SERVICE_TOKEN_HEADER = "X-Service-Token"
+
+_service_token: str | None = None
+
+
+def get_service_token() -> str:
+    """获取服务 token(环境变量优先, 否则 DB 持久化自动生成, 同 jwt_secret 模式)。"""
+    global _service_token
+    if _service_token:
+        return _service_token
+
+    if os.getenv("SIDA_SERVICE_TOKEN"):
+        _service_token = os.getenv("SIDA_SERVICE_TOKEN") or ""
+        return _service_token
+
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettings).filter(AppSettings.key == SERVICE_TOKEN_KEY).first()
+        if setting and setting.value:
+            tok: str = setting.value
+        else:
+            tok = secrets.token_hex(32)
+            db.add(AppSettings(key=SERVICE_TOKEN_KEY, value=tok, description="服务间只读token(监控/回填/Hub回调, 自动生成)"))
+            db.commit()
+        _service_token = tok
+        return tok
+    finally:
+        db.close()
+
+
+class ServicePrincipal:
+    """服务调用方身份。注意: 不是 User 行, 只用于只读口的依赖放行。
+
+    router 级 dependencies 的返回值会被丢弃, 故形状无需兼容 User;
+    若将来有端点函数直接取它, 按鸭子类型提供 username/role/is_service 即可。
+    """
+
+    id = "service"
+    username = "service"
+    role = "service"
+    is_active = True
+    is_service = True
+
+
+async def get_user_or_service(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """用户 JWT 或服务 token 任一通过即可(仅挂给纯读行情口)。
+
+    顺序: 先试 Bearer 用户 JWT(保持现有行为), 再试 X-Service-Token。
+    服务 token 对 require_owner 永远 403, 写链路不受影响。
+    """
+    if credentials:
+        try:
+            user = await get_current_user(credentials, db)
+            return user
+        except HTTPException:
+            pass  # Bearer 无效 → 落到服务 token 再试一次, 避免误杀
+    svc = (request.headers.get(SERVICE_TOKEN_HEADER) or "").strip()
+    if svc and hmac.compare_digest(svc, get_service_token()):
+        return ServicePrincipal()
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="未登录",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def user_to_dict(user: User) -> dict:
     return {
         "id": user.id,

@@ -1,7 +1,10 @@
-# SIDA 基础告警规则 (2026-08-23 Q4)
+# SIDA 基础告警规则 (2026-08-23 Q4, 2026-09-07 P4 修死规则)
 #
-# 指标已由 /api/metrics 采集(REQUEST_COUNT/DURATION/AI_CALLS/DATASOURCE_FAILURES 等),
-# 此处补齐"指标采了但没人叫"的缺口。Grafana 统一告警也可用, 这里给 Prometheus 原生规则兜底。
+# P4 实测: 本文件三条数据告警曾引用不存在的指标名, 一条都没响过。
+# 实际指标名见 src/web/api/health.py (_init_metrics):
+#   sida_http_requests_total{method,path,status} / sida_datasource_failures_total{provider,kind}
+#   sida_health_component_status{component} (component=database|redis, 1=ok, 0=down)
+# 改任一指标名必须同步改此处 + 跑 tests/test_p4_alerts.py (双向锁定)。
 
 groups:
   - name: sida-availability
@@ -10,9 +13,9 @@ groups:
       - alert: SidaHigh5xxRate
         expr: |
           (
-            sum by (service) (rate(request_count_total{status=~"5.."}[5m]))
+            sum by (service) (rate(sida_http_requests_total{status=~"5.."}[5m]))
             /
-            clamp_min(sum by (service) (rate(request_count_total[5m])), 0.001)
+            clamp_min(sum by (service) (rate(sida_http_requests_total[5m])), 0.001)
           ) > 0.05
         for: 5m
         labels:
@@ -31,21 +34,31 @@ groups:
           summary: "SIDA 后端 /metrics 心跳丢失"
           description: "{{ $labels.instance }} 无指标输出 2 分钟以上"
 
+      # PG 不可用(/health 数据库检查 down; hypertable 读/写全挂, P4 新增)
+      - alert: SidaPostgresDown
+        expr: sida_health_component_status{component="database"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIDA PG 不可用(/health database=down)"
+          description: "PG 连接失败, K线/持仓/审计全挂, 检查 panwatch-postgres(--network-alias postgres 是否在)"
+
   - name: sida-quality
     rules:
       # 数据源失败激增(15 分钟窗口)
       - alert: SidaDatasourceFailures
-        expr: increase(datasource_failures_total[15m]) > 50
+        expr: increase(sida_datasource_failures_total[15m]) > 50
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "数据源失败次数激增(15 分钟 > 50)"
-          description: "{{ $labels.vendor }} 失败 {{ $value }} 次, 检查上游行情源"
+          description: "{{ $labels.provider }} {{ $labels.kind }} 失败 {{ $value }} 次, 检查上游行情源"
 
       # Redis 业务缓存降级(health 组件状态)
       - alert: SidaRedisDown
-        expr: sida_health_redis_status == 0
+        expr: sida_health_component_status{component="redis"} == 0
         for: 3m
         labels:
           severity: warning

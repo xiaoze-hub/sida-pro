@@ -39,10 +39,12 @@ def subscribe() -> tuple[int, asyncio.Queue]:
         sid = _next_id
         _subscribers[sid] = q
     _ensure_aggregator()
-    # 新订阅者立即收到当前快照
+    # 新订阅者立即收到当前快照(P2: 同样走 envelope, topic=quote.snapshot)
     if _last_snapshot:
         try:
-            q.put_nowait({"type": "snapshot", "data": _last_snapshot})
+            from src.web.realtime.envelope import pack
+
+            q.put_nowait(pack("quote.snapshot", None, {"type": "snapshot", "data": _last_snapshot}))
         except Exception:
             pass
     return sid, q
@@ -54,7 +56,13 @@ def unsubscribe(sid: int):
 
 
 def _broadcast(payload: dict):
-    """广播给所有订阅者(跨线程: 聚合器线程 → 订阅者队列)。"""
+    """广播给所有订阅者(跨线程: 聚合器线程 → 订阅者队列)。
+
+    2026-09-07 P2: 下行统一 envelope(quote.tick), 断线重放靠 ?last_seq=。
+    """
+    from src.web.realtime.envelope import pack
+
+    frame = pack("quote.tick", None, payload)
     with _subscribers_lock:
         subs = list(_subscribers.items())
     for sid, q in subs:
@@ -64,7 +72,7 @@ def _broadcast(payload: dict):
                     q.get_nowait()
                 except Exception:
                     pass
-            q.put_nowait(payload)  # asyncio.Queue put_nowait 底层原子, 跨线程可用
+            q.put_nowait(frame)  # asyncio.Queue put_nowait 底层原子, 跨线程可用
         except Exception:
             pass
 
@@ -203,6 +211,14 @@ async def websocket_quote_handler(websocket):
     else:
         await websocket.accept()
     sid, q = subscribe()
+    # P2: 断线重放 (?last_seq=上次最大seq, 只补本进程 ring 内 missed 帧)
+    try:
+        from src.web.realtime.envelope import replay_since
+
+        for frame in replay_since(websocket.query_params.get("last_seq")):
+            await websocket.send_text(json.dumps(frame, ensure_ascii=False))
+    except Exception:
+        pass
     try:
         while True:
             payload = await q.get()

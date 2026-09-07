@@ -249,7 +249,7 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             raise HTTPException(503, f"指数K线不可用({symbol}): {e}")
 
     # 1. 优先查 PG klines hypertable(快, ~70ms)
-    pg_klines = _pg_klines(symbol, market_code, days)
+    pg_klines, pg_asof = _pg_klines(symbol, market_code, days)
     if pg_klines is not None:
         klines = _aggregate_klines(pg_klines, interval)
         return {
@@ -259,6 +259,7 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             "interval": interval,
             "klines": _serialize_klines(klines),
             "source": "pg_klines_hypertable",
+            "asof": pg_asof,
         }
 
     # 2. Fallback: 联网拉 KlineCollector
@@ -277,8 +278,12 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
 def _pg_klines(symbol: str, market_code, days: int):
     """PG klines hypertable 直读(单股/batch 共用, P2-5/P2-6)。
 
-    命中且厚度足够(≥min(30,days))返回 KlineData 列表, 否则 None → 联网。
-    库表不存在/查询失败一律 None(静默 fallback)。
+    命中且厚度足够(≥min(30,days))且新鲜返回 (KlineData 列表, asof日期串),
+    否则 (None, None) → 联网。
+
+    2026-09-07 P2 陈旧快照 failover: 最新 bar 早于今天-12天(覆盖春节级长假)
+    视为陈旧网关快照, 不再静默服务, 直接回落联网拿数。库表不存在/查询失败
+    一律 (None, None)(静默 fallback)。
     """
     from datetime import datetime, timedelta, timezone
 
@@ -300,7 +305,7 @@ def _pg_klines(symbol: str, market_code, days: int):
                 {"s": symbol, "m": market_code.value, "c": cutoff},
             ).fetchall()
         if not rows:
-            return None
+            return None, None
         from src.collectors.kline_collector import KlineData
 
         klines = [
@@ -316,10 +321,20 @@ def _pg_klines(symbol: str, market_code, days: int):
         ]
         # v0.4.9.2: PG 命中但数据过薄视为无效 → 联网拿完整历史
         if len(klines) >= min(30, days):
-            return klines
-        return None
+            asof = max(k.date for k in klines)
+            today = datetime.now(timezone.utc).date().isoformat()
+            from datetime import date as _date
+
+            try:
+                lag = (_date.fromisoformat(today) - _date.fromisoformat(asof[:10])).days
+            except ValueError:
+                return None, None
+            if lag > 12:
+                return None, None  # 陈旧快照 → 联网(与 TQ 陈旧快照同策略)
+            return klines, asof
+        return None, None
     except Exception:
-        return None
+        return None, None
 
 
 @router.post("/batch")
@@ -334,11 +349,13 @@ def get_klines_batch(payload: KlineBatchRequest):
         days = item.days or 60
         interval = item.interval or "1d"
         # P2-6 (2026-09-05 28号审计): batch 与单股同口径, 先 PG 再联网
-        pg_klines = _pg_klines(item.symbol, market_code, days)
+        pg_klines, pg_asof = _pg_klines(item.symbol, market_code, days)
         source = None
+        asof = None
         if pg_klines is not None:
             klines = pg_klines
             source = "pg_klines_hypertable"
+            asof = pg_asof
         else:
             collector = KlineCollector(market_code)
             klines = collector.get_klines(item.symbol, days=days)
@@ -352,6 +369,8 @@ def get_klines_batch(payload: KlineBatchRequest):
         }
         if source:
             row["source"] = source
+        if asof:
+            row["asof"] = asof
         results.append(row)
 
     return results

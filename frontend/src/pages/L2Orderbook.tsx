@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Search, Loader2 } from 'lucide-react'
 import { insightApi } from '@panwatch/api'
+import { toAmount } from '@/lib/format'
 
 /**
  * L2 盘口资金页（立项: 诚实口径五档+L2成品，不叫十档）。
@@ -53,13 +54,7 @@ interface MoreInfo {
   raw?: Record<string, any> | null
 }
 
-/** 万/亿口径（与 Quote.toAmount 同口径） */
-function toAmount(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined || !Number.isFinite(v)) return '--'
-  const abs = Math.abs(v)
-  if (abs >= 1e8) return `${v > 0 ? '+' : ''}${(v / 1e8).toFixed(digits)}亿`
-  return `${v > 0 ? '+' : ''}${(v / 1e4).toFixed(digits)}万`
-}
+/* toAmount 统一走 @/lib/format(P3 收敛, 旧手抄版删除) */
 
 function num(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return '--'
