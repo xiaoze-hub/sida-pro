@@ -17,7 +17,7 @@ scope=global。命中定义: outcome_status='evaluated' 且有收益的记录中
 import base64
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -116,8 +116,19 @@ def _profile_to_dict(user: User) -> dict:
 
 def _prediction_hit_stats(db: Session) -> dict:
     """预测命中率(agent_prediction_outcomes 无 user_id → 全平台统计, 标注 scope=global)。"""
-    rows = (
+    return _accuracy_board(db, since="")["overall"]
+
+
+def _accuracy_board(db: Session, since: str = "", min_n: int = 1) -> dict:
+    """分 Agent 命中榜(2026-09-08 方向3: 回测闭环的上半场 — 先看见谁准)。
+
+    同 _prediction_hit_stats 口径: buy/add 涨>0 命中、reduce/sell/avoid 跌<0 命中,
+    中性动作不计分母。since=YYYY-MM-DD 过滤 prediction_date(字符串比较)。
+    样本 <min_n 的 agent 标 qualified=false(不参与排名, 防 1 中 1 刷榜)。
+    """
+    q = (
         db.query(
+            AgentPredictionOutcome.agent_name,
             AgentPredictionOutcome.action,
             AgentPredictionOutcome.outcome_return_pct,
         )
@@ -125,27 +136,57 @@ def _prediction_hit_stats(db: Session) -> dict:
             AgentPredictionOutcome.outcome_status == "evaluated",
             AgentPredictionOutcome.outcome_return_pct.isnot(None),
         )
-        .all()
     )
-    hit = 0
-    total = 0
-    for action, ret in rows:
+    if since:
+        q = q.filter(AgentPredictionOutcome.prediction_date >= since)
+    rows = q.all()
+
+    per: dict[str, dict] = {}
+    ohit = otot = 0
+    oret_sum = 0.0
+    oret_n = 0
+    for agent, action, ret in rows:
         action = (action or "").lower()
         if action in _BULLISH_ACTIONS:
-            total += 1
-            if ret > 0:
-                hit += 1
+            good = ret > 0
         elif action in _BEARISH_ACTIONS:
-            total += 1
-            if ret < 0:
-                hit += 1
-        # 中性动作(watch/hold/alert/未知)不计入
+            good = ret < 0
+        else:
+            continue
+        otot += 1
+        oret_sum += ret
+        oret_n += 1
+        cell = per.setdefault(agent or "unknown", {"hit": 0, "total": 0, "ret_sum": 0.0})
+        cell["total"] += 1
+        cell["ret_sum"] += ret
+        if good:
+            ohit += 1
+            cell["hit"] += 1
+
+    agents = []
+    for agent, cell in per.items():
+        n = cell["total"]
+        agents.append({
+            "agent": agent,
+            "hit": cell["hit"],
+            "total": n,
+            "hit_rate": round(cell["hit"] / n * 100, 1) if n else None,
+            "avg_return_pct": round(cell["ret_sum"] / n, 2) if n else None,
+            "qualified": n >= min_n,
+        })
+    agents.sort(key=lambda a: (not a["qualified"], -(a["hit_rate"] or -1)))
     return {
-        "hit_count": hit,
-        "total": total,
-        "hit_rate": round(hit / total * 100, 1) if total else None,
+        "since": since or None,
         "scope": "global",
         "note": "预测记录无用户维度, 按全平台统计",
+        "overall": {
+            "hit_count": ohit,
+            "total": otot,
+            "hit_rate": round(ohit / otot * 100, 1) if otot else None,
+            "avg_return_pct": round(oret_sum / oret_n, 2) if oret_n else None,
+            "scope": "global",
+        },
+        "agents": agents,
     }
 
 
@@ -195,6 +236,24 @@ def update_profile(
     except Exception:
         pass
     return _profile_to_dict(user)
+
+
+@router.get("/stats/accuracy")
+def prediction_accuracy_board(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+    min_n: int = Query(5, ge=1, le=100),
+):
+    """分 Agent 命中榜(2026-09-08 方向3): 谁准谁不准, 一眼见。
+
+    days=回看窗口(默认30天); min_n=参评最低样本(默认5, 防小样本刷榜)。
+    下半场(因子自动降权)另开, 先把"看见"做实。
+    """
+    from datetime import date, timedelta
+
+    since = (date.today() - timedelta(days=days)).isoformat()
+    return _accuracy_board(db, since=since, min_n=min_n)
 
 
 @router.get("/stats")

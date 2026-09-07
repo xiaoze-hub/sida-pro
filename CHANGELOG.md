@@ -5,6 +5,14 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-08
+
+### feature-分Agent命中榜(方向3上半场: 先看见谁准)
+- `src/web/api/profile.py` — 旧全局命中率收敛为`_accuracy_board()`的overall(口径不变,`/stats`只多`avg_return_pct`,旧前端不崩);新增`GET /stats/accuracy?days=30&min_n=5`(分agent命中/平均收益/qualified小样本保护,高分在前)。
+- 新增`tests/test_accuracy_board.py` — 2用例(分agent切分+中性/窗外排除+小样本不参评+旧形保持),2 passed。
+- **未做**:下半场因子自动降权(需定权重策略,另开);UI榜单页(接口先行)。
+- [branch feat/prediction-grading-0908, `git show HEAD`]
+
 ## 2026-09-07
 
 ### feature-P4可观测修死告警(指标对齐/PG告警/磁盘门禁/演练)
