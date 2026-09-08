@@ -125,6 +125,7 @@ class L2TicksScheduler:
             replace_existing=True,
             coalesce=True,  # 错过的多次合并成一次
             max_instances=1,
+            misfire_grace_time=300,
         )
         self.scheduler.start()
         try:
@@ -132,6 +133,12 @@ class L2TicksScheduler:
             register("l2_ticks_cron", self.scheduler)
         except Exception:  # noqa: BLE001
             pass
+        # 风险方案1.3/A3: job 异常/错过进可观测面(与其余调度器同机制)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[l2_ticks] 错误监听安装失败: {e}")
         logger.info(f"L2 逐笔落库调度器已启动: 每 {INTERVAL_MINUTES} 分钟")
 
     def shutdown(self):

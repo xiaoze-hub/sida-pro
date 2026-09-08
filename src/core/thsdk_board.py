@@ -599,6 +599,7 @@ def register_board_sync_job(scheduler) -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+        misfire_grace_time=300,
     )
     logger.info(
         "板块数据同步任务已注册: 工作日 %02d:%02d (job_id=%s)",

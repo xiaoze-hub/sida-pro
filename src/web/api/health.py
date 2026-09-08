@@ -346,20 +346,32 @@ async def health() -> dict[str, Any]:
                 "schedulers": schedulers,
                 **schedulers_status,
             }
+            if schedulers_status["running"] >= 2:
+                record_component_status("scheduler_leader", True)  # A3
             if schedulers_status["running"] < 2:
-                # 2026-08-23 Q1: 非 leader worker 的调度器数为 0 是预期(调度器由 leader
-                # 进程运行), 不应把整体健康打成 down。只有 leader 自身调度器 <2 才算故障。
-                from src.core.scheduler_leader import is_leader
-                if schedulers_status["running"] == 0 and not is_leader():
+                # 2026-08-23 Q1; 2026-09-08 A3: leader_state() 三态区分
+                # "合法让位(standby)"与"fail-closed 没敢当(failed)"。
+                from src.core.scheduler_leader import leader_state
+                state = leader_state()
+                if schedulers_status["running"] == 0 and state == "standby":
                     components["scheduler"] = {
                         "status": "ok",
                         "schedulers": [],
                         "running": 0,
                         "shutdown": 0,
+                        "leader_state": state,
                         "note": "non-leader worker(调度器由 leader 进程运行)",
                     }
                 else:
                     overall_ok = False
+                    # failed = 选主失败/Redis 不可用, 无任何实例在跑调度 → 告警。
+                    # (standby 不记 0: 合法让位不该响 SidaSchedulerLeaderDown)
+                    record_component_status("scheduler_leader", False)  # A3
+                    components["scheduler"]["leader_state"] = state
+                    components["scheduler"]["note"] = (
+                        "选主失败(fail-closed: Redis 不可用, 无实例在跑调度)"
+                        if state == "failed" else f"leader 调度器不足 2 个(state={state})"
+                    )
         except Exception as e:
             components["scheduler"] = {"status": "down", "error": str(e)[:100]}
             overall_ok = False

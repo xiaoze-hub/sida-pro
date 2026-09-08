@@ -7,6 +7,18 @@
 
 ## 2026-09-08
 
+### fix-调度器选主fail-closed+租约丢失真停+调度可观测性(风险方案1.3/A3)
+- 背景: WEB_WORKERS=2 时旧选主在 Redis 不可用时"回退为本 worker 启动"——每个 worker 都自认 leader, 定时 Agent 双跑(LLM 费用翻倍/通知重复/撮合双触发); 租约被抢/续期失败仅打日志, 调度器一直跑到进程重启, 选主形同虚设; 调度执行无 context 规模观测、异常不上报 error_tracker; 多数 add_job 站点缺防并发参数。
+- **fail-closed 选主**(src/core/scheduler_leader.py): Redis 不可用**绝不自认 leader** —— 指数退避(2s→30s 封顶)探测至 40s deadline, 仍不可用则放弃并置 `_state="failed"`; 锁在别人手里到期让位置 `_state="standby"`(合法状态); Redis 恢复由探测自动选主。显式口子: `SIDA_ENABLE_SCHEDULERS=1` 强制启动(兼容旧部署)、`SIDA_SCHEDULER_SINGLE_INSTANCE=1` 单实例部署跳过选主(开发)。`is_leader()` 删除, 改 `leader_state()` 三态(leader/standby/failed/init), 区分"合法没当上"与"没敢当"。裸连 Redis 不走 biz_cache 的红线例外已在模块 docstring 声明(分布式锁 NX/EX 语义, 非业务缓存)。
+- **租约丢失真停**: 续期线程每 10s 探测; 租约被抢/过期/续期异常 → `scheduler_registry` 全部 `.pause()`(旧逻辑只打日志), 同时立即 NX 尝试抢回, 重新取得后 `.resume()`; 续期线程永不退出。循环体抽成 `_renewal_once(r, wid, paused) -> bool` 供测试(免 10s 线程等待)。
+- **/health 三态探针 + 告警**(src/web/api/health.py, deploy/prometheus-rules.yml): scheduler 探针改用 `leader_state()` —— running≥2 记 `scheduler_leader` gauge=1; running=0 且 standby → ok 注明 non-leader(不记 0, 不误报); 其余(含 failed)→ gauge=0 + overall down, failed 注明"选主失败(fail-closed)"; 新增 `SidaSchedulerLeaderDown` 告警(`sida_health_component_status{component="scheduler_leader"} == 0` 持续 5m, critical, 与 database/redis 同 gauge 机制, tests/test_p4_alerts.py 双向锁不破)。
+- **调度可观测性**(src/core/scheduler.py): 每轮 agent 执行记录 `context_chars`(watchlist+portfolio 序列化长度)入 agent_runs; 单只模式 error 拼接截断 2000; 外层异常接 `capture_exception`(source=scheduler); `start()` 装 `install_scheduler_error_tracking` 监听 APScheduler 执行错误(report/context 调度器已有, 补齐 paper_trading/price_alert/l2_ticks 三处)。
+- **add_job 防并发参数统一**: 11 文件 17 站点全部补齐 `max_instances=1 + coalesce=True + misfire_grace_time=300` —— 此前 report/context/paper_trading/price_alert/l2_ticks 的 10 处缺 misfire, kline_backfill 每日 cron 缺 misfire(one-off date job 缺三件套), data_quality_sentinel 每小时哨兵全缺, auction_pool/kline_precache/thsdk_board 三个辅助 cron 缺 misfire。
+- 测试: `tests/test_scheduler_leader_failclosed.py` 25 用例 —— try_acquire 六态(Redis 异常→False+failed / 锁在他人→standby / SINGLE_INSTANCE 口子 / 强制 0 / 选主成功起续期 / reload 重入续期接管), `_renewal_once` 五态(仍持有续期 / 被抢真停且不重复 pause / 过期抢回 resume / Redis 异常真停 / 恢复 resume), 11 文件 add_job 参数 grep 一致性, health 探针接线锁 + scheduler_leader gauge 记录, 告警规则锁; `tests/test_scheduler_leader.py` 旧用例 `test_redis_unavailable_falls_back` 断言的正是本次要消灭的 bug, 改为 fail-closed 断言。
+- 测试隔离修复: `tests/test_ws_auth_guard.py` 两个广播用例偶发 queue.Empty(全量 suite 实测) —— `subscribe()` 会拉起真实聚合器线程, 其 5s tick 用 DB 重建 `_user_symbols_cache`, 清掉用例预置的 per-user 集合(T8 用例固有竞态, 与本次改动无关); patch `_ensure_aggregator`/`_collect_watchlist_symbols` 断开两条 mutation 路径, 修后文件 6 passed。
+- 验证: 新批(scheduler_leader×2 + scheduler_guard + p4_alerts + health_metrics_guard) 38 passed; 邻域(test_thsdk_board/data_quality_sentinel/auction_pool/auction_gap) 58 passed 1 skipped; 全量套件(排除 5 个环境损坏文件) 1854 passed / 2 failed —— test_thsdk_buffer_size 已知 flaky, test_ws_auth_guard 即上述隔离竞态(修后复跑通过)。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
 ### fix-K线复权维度入列+PG优先读取+入库DO UPDATE自愈(风险方案1.2/B1)
 - 背景: 0.7 勘查实证 klines 表 qfq 与不复权无列区分(全靠 source 隐含口径)、P2-19 单链复写 tencent/eastmoney/sina 三份假标签(69,154 个 (symbol,date) 三源逐格相等)、DO NOTHING 把前复权基准永久冻结在首次写入日。按 0.7 §4 结论落地「加列 + 全量重刷」的加列半场(重刷在发版后另行执行)。
 - **迁移 `_m137_klines_adjust_dimension`**(src/web/migrations.py): klines 加 `adjust VARCHAR(4) NOT NULL DEFAULT 'none'`(存量行回填 none, 待重刷), 唯一索引 `uq_klines_symbol_period_ts` 让位于 `uq_klines_symbol_period_ts_adjust(symbol, market, period, ts, source, adjust)`, qfq 与 none 互不覆盖; 幂等可重跑。
@@ -14,7 +26,7 @@
 - **入库单链单标签**(src/collectors/klines_ingestor.py): `ingest_symbol` 重写 —— 废除 P2-19 三份假标签复写, 改用 `klines_with_vendor()`(packages/marketdata/src/marketdata/client.py 新增 facade, klines() 委托之) 返回真实胜出 vendor, 只写一份 source=真源(vendor 空则诚实标 'unknown'); adjust='qfq'; **DO NOTHING → DO UPDATE**(同键重跑覆盖, 除权后 qfq 基准变化自愈, 冻结机制根除); **单一 source 不变量**: 写入前 DELETE 该股 qfq 分区中非本轮胜出 vendor 的旧行, 防 vendor 切换日新旧两源并存成同日双柱; ingestor 直连 engine 不走 KlineCollector(那会"PG 旧数据抄回 PG"永远刷不新); ts 口径不变(交易日 00:00 Asia/Shanghai)。5m 盘中路径维持原状并在 docstring 标注弃用(实际写日K柱, 无读取方)。
 - **读取方加 adjust='qfq' 过滤**: `src/web/api/klines.py` `_pg_klines` 与 `src/core/backtest/data_adapter.py` `load_price_history` —— 前端图表与回测序列必须吃前复权, 严禁混入 none 原始价; 旧库无 adjust 列时查询异常 → 静默回落联网(fail-soft)。
 - 测试: `tests/test_kline_adjust_dimension.py` 18 用例(迁移加列/回填/索引互换/幂等/DO UPDATE 不产生第二行且不误伤 none 分区; 缓存键含 adjust 互不串用; PG 厚而新不发 HTTP / 陈旧或过薄回落 engine / qfq 空+engine 空宁空不落新浪 / none 走新浪不走 engine; `_pg_usable` 厚度与 12 天新鲜度边界; ingestor 单标签/unknown 诚实标签/重跑覆盖不双行/vendor 切换清理旧 source 分区/空结果 fail_details; `_persist_bars` 落 none 分区 + 库不可达 fail-soft), 另 test_kline_routing/coalesce/cache/flagon 四文件的假包层补 `klines_with_vendor` 方法、两处 `_pg_fallback` patch 改 `_pg_read`。
-- 验证: 目标批 57 passed + 邻域回归(test_backtest/abnormal_moves/auction/chip/entry_outcomes/index_klines 等消费方) 201 passed 1 skipped; 全量套件见下条补记。
+- 验证: 目标批 57 passed + 邻域回归(test_backtest/abnormal_moves/auction/chip/entry_outcomes/index_klines 等消费方) 201 passed 1 skipped; 全量套件(排除 5 个环境损坏文件) 1828 passed / 2 failed —— test_p2_realtime 当轮修于下条 entry, test_thsdk_buffer_size 已知 flaky。
 - [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
 
 ### fix-vendor缺失字段None化+status完整性标记(风险方案1.1/B2)

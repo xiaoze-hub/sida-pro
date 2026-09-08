@@ -255,6 +255,7 @@ class ContextMaintenanceScheduler:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=300,
         )
         self.scheduler.add_job(
             self._cleanup_job,
@@ -266,6 +267,7 @@ class ContextMaintenanceScheduler:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=300,
         )
         # 机会自动刷新（北京时间 09:15 / 13:30 / 22:00）
         for job_hour, job_minute in ((1, 15), (5, 30), (14, 0)):
@@ -279,6 +281,7 @@ class ContextMaintenanceScheduler:
                 replace_existing=True,
                 coalesce=True,
                 max_instances=1,
+                misfire_grace_time=300,
             )
         self.scheduler.start()
         from src.core.scheduler_registry import register

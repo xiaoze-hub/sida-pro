@@ -357,6 +357,7 @@ def register_cron(scheduler) -> bool:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=300,
         )
         logger.info("[auction] 竞价异动 job 已注册: 工作日 09:25 (%s)", scheduler.timezone)
         return True
