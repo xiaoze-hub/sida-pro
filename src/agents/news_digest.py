@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
+from src.core.ai_client import LLMDegradedError
 
 
 def _resolve_user_id(context: AgentContext) -> str | None:
@@ -460,6 +461,9 @@ class NewsDigestAgent(BaseAgent):
 
     async def should_notify(self, result: AnalysisResult) -> bool:
         """有自选股相关新闻或重要市场新闻时通知"""
+        if result.status != "success":
+            return False
+
         related_news = result.raw_data.get("related_news", [])
         important_news = result.raw_data.get("important_news", [])
 
@@ -476,7 +480,26 @@ class NewsDigestAgent(BaseAgent):
         system_prompt, user_content = self.build_prompt(data, context)
         # 统一 LLM 配置中心: reports 场景模型绑定 + 画像注入(无 db/绑定失败则原样)
         system_prompt = apply_scene_binding(context, "reports", system_prompt)
-        content = await context.ai_client.chat(system_prompt, user_content)
+        try:
+            content = await context.ai_client.chat(system_prompt, user_content)
+        except LLMDegradedError as e:
+            # 0.3: 降级显式失败, 历史留 degraded 记录, 不再解析/推送
+            result = self._degraded_result(e)
+            save_analysis(
+                agent_name=self.name,
+                stock_symbol="*",
+                content=result.content,
+                title=result.title,
+                user_id=_resolve_user_id(context),
+                raw_data={
+                    "status": "degraded",
+                    "error": result.error,
+                    "timestamp": data.get("timestamp"),
+                },
+                status="degraded",
+                error=result.error,
+            )
+            return result
 
         if context.model_label:
             idx = content.rfind(TAG_START)

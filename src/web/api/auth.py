@@ -32,9 +32,13 @@ security = HTTPBearer(auto_error=False)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
 
-# 环境变量配置（Docker 部署用）
-ENV_AUTH_USERNAME = os.getenv("AUTH_USERNAME")
-ENV_AUTH_PASSWORD = os.getenv("AUTH_PASSWORD")
+# 环境变量配置（Docker 部署用）— 惰性读取: 允许测试/调用方在 import 后注入 env
+ENV_AUTH_USERNAME_KEY = "AUTH_USERNAME"
+ENV_AUTH_PASSWORD_KEY = "AUTH_PASSWORD"
+
+
+def _env_credentials() -> tuple[str | None, str | None]:
+    return os.getenv(ENV_AUTH_USERNAME_KEY), os.getenv(ENV_AUTH_PASSWORD_KEY)
 
 # 设置项 key(旧单用户兼容)
 AUTH_USERNAME_KEY = "auth_username"
@@ -104,10 +108,6 @@ class TokenResponse(BaseModel):
 #   升级到 n=2^15, 增量迁移不强制用户改密。
 SCRYPT_N_NEW = 2**15
 SCRYPT_N_OLD = 2**14  # 兼容已存在的旧 scrypt$ 哈希 (不要随意提高, 登录会校验失败)
-
-# P2-5 (2026-08-23 审计): 兜底默认 owner 密码(确定性非弱密码)。
-# 仅在没有 AUTH_PASSWORD 环境变量、也没有旧 AppSettings 的裸启动时使用。
-DEFAULT_ADMIN_PASSWORD = "xz.170530"
 
 
 def hash_password(password: str) -> str:
@@ -209,17 +209,18 @@ def get_or_create_owner(db: Session) -> User:
         return owner
 
     # 1. 环境变量优先
-    if ENV_AUTH_USERNAME and ENV_AUTH_PASSWORD:
+    env_user, env_pass = _env_credentials()
+    if env_user and env_pass:
         user = User(
             id=str(uuid.uuid4()),
-            username=ENV_AUTH_USERNAME,
-            password_hash=hash_password(ENV_AUTH_PASSWORD),
+            username=env_user,
+            password_hash=hash_password(env_pass),
             role="owner",
         )
         db.add(user)
         db.commit()
         # P2-4: 首次启动 owner 初始化留痕
-        _audit_owner_init("init_owner_from_env", "env", ENV_AUTH_USERNAME)
+        _audit_owner_init("init_owner_from_env", "env", env_user)
         return user
 
     # 2. 旧单用户迁移(AppSettings)
@@ -238,43 +239,36 @@ def get_or_create_owner(db: Session) -> User:
         _audit_owner_init("init_owner_from_appsettings", "appsettings_migration", setting_username.value)
         return user
 
-    # 3. 兜底默认账号(首次部署) — 2026-08-23 Q2: 公开仓库场景默认账号是失守入口,
-    # 需显式 AUTH_ALLOW_DEFAULT_ADMIN=1(本地开发)才创建; 生产应配置 AUTH_USERNAME/PASSWORD
+    # 3. 兜底首启(裸库无 env 无旧数据): 2026-09-08 0.6 删除固定默认密码与其开关 ——
+    #    公开仓库里源码内固定密码=失守入口。
+    #    改为随机强密码, 与 JWT secret 缺失时自动生成的既有做法一致, 仅在启动日志打印一次。
     import logging as _logging
 
     _log = _logging.getLogger(__name__)
-    if (os.getenv("AUTH_ALLOW_DEFAULT_ADMIN", "").strip().lower() or "0") not in ("1", "true", "yes"):
-        _log.critical(
-            "[安全] 无 owner 且未配置 AUTH_USERNAME/AUTH_PASSWORD, 且未设置 "
-            "AUTH_ALLOW_DEFAULT_ADMIN=1 — 不再创建默认账号。"
-            "请在环境变量配置管理员账号后重启。"
-        )
-        raise RuntimeError(
-            "拒绝创建默认账号: 请配置 AUTH_USERNAME/AUTH_PASSWORD, "
-            "或本地开发时设置 AUTH_ALLOW_DEFAULT_ADMIN=1"
-        )
-    _log.warning("[安全] 已创建默认账号 admin(仅限本地开发, AUTH_ALLOW_DEFAULT_ADMIN=1)")
+    generated_password = secrets.token_urlsafe(12)
     user = User(
         id=str(uuid.uuid4()),
         username="admin",
-        password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+        password_hash=hash_password(generated_password),
         role="owner",
     )
     db.add(user)
     db.commit()
-    _audit_owner_init("init_owner_default", "fallback_default", "admin")
-    # P2-5: 弱默认密码警告 (stderr, Docker logs 可见), 不 echo 真实密码。
+    _audit_owner_init("init_owner_generated", "fallback_generated", "admin")
+    # 随机密码只在启动日志出现一次(Docker logs 可见), 首登后请立即改密。
     import sys as _sys
     _banner = "=" * 70
     print(
         f"\n{_banner}\n"
-        "[首次启动] 已创建默认 owner 账号 (admin)。\n"
-        "[首次启动] 当前使用默认密码, 仅用于本地/dev; 生产请用 AUTH_PASSWORD 环境变量\n"
-        "[首次启动] 注入强密码, 或在登录后前往 '设置 → 修改密码' 立即改密。\n"
+        "[首次启动] 已创建 owner 账号 (admin), 本次启动随机生成的密码:\n"
+        f"[首次启动]   {generated_password}\n"
+        "[首次启动] 仅此一次打印, 请立即登录并前往 '设置 → 修改密码' 改密。\n"
+        "[首次启动] 生产环境推荐用 AUTH_USERNAME/AUTH_PASSWORD 环境变量注入。\n"
         f"{_banner}",
         file=_sys.stderr,
         flush=True,
     )
+    _log.warning("[安全] 已创建随机密码 owner 账号 admin(密码见启动日志, 仅打印一次)")
     return user
 
 
@@ -326,6 +320,21 @@ def decode_token(token: str) -> dict | None:
         return None
     except jwt.InvalidTokenError:
         return None
+
+
+def principal_from_payload(payload: dict | None) -> dict:
+    """JWT payload → request.state.user 的统一形状。
+
+    用户 id 在 sub 字段(create_token); 历史上限流/审计两处中间件各写各的
+    取法, 限流处取了不存在的 user_id claim → 分桶恒按 IP, 已登录互拖。
+    """
+    if not payload:
+        return {}
+    return {
+        "user_id": payload.get("sub") or payload.get("user_id"),
+        "username": payload.get("username") or "",
+        "role": payload.get("role") or "",
+    }
 
 
 # ── 权限依赖 ──────────────────────────────────────────────────────────
@@ -463,6 +472,19 @@ async def get_user_or_service(
         detail="未登录",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def get_service_principal(request: Request) -> ServicePrincipal:
+    """仅服务令牌可通过(2026-09-08 风险方案 0.0)。
+
+    用于会返回密钥/内部配置的端点(如 /api/service/forecast-config 下发明文
+    api_key)。与 get_user_or_service 的区别: 那个为了兼容旧行为也接受用户 JWT,
+    本依赖不接受 —— 明文 api_key 绝不能因为"某人登录了"就下发。
+    """
+    svc = (request.headers.get(SERVICE_TOKEN_HEADER) or "").strip()
+    if svc and hmac.compare_digest(svc, get_service_token()):
+        return ServicePrincipal()
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅限服务令牌可通过")
 
 
 def user_to_dict(user: User) -> dict:

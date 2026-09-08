@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -55,7 +57,9 @@ def analyze_journal(
         raise HTTPException(400, f"不支持的文件类型 {suffix or '(无扩展名)'},仅支持 {sorted(_ALLOWED_SUFFIX)}")
 
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    dest = _UPLOAD_DIR / f"{file.filename or 'journal'}{suffix}"
+    # 2026-09-08 C1: 落盘名用 uuid 与用户输入彻底解耦(原实现 file.filename 直接拼
+    # 路径, "../../" 可写出上传目录); 后缀保留供解析器识别格式。
+    dest = _UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -125,19 +129,35 @@ def get_my_profile(user: User = Depends(get_current_user)):
     return {"profile": user.shadow_profile_json, "saved": True}
 
 
-@router.get("/report/{shadow_id}", response_class=HTMLResponse)
-def get_report(shadow_id: str):
-    """取 HTML 报告。"""
-    path = _REPORT_DIR / f"{shadow_id}.html"
+def _resolve_report(shadow_id: str, ext: str, user: User) -> Path:
+    """报告路径解析三重校验(2026-09-08 C1)。
+
+    原实现 `_REPORT_DIR / f"{shadow_id}.html"` 无格式校验/无路径包含校验/无归属
+    校验, 任意登录者可枚举读他人报告。现: ID 格式白名单 → resolve 后必须仍在
+    报告目录内 → 落库画像的 shadow_id 必须与请求者匹配。三关统一 404(不泄露存在性)。
+    """
+    if not re.fullmatch(r"shadow_[0-9a-f]{8}", shadow_id or ""):
+        raise HTTPException(404, "报告不存在")
+    path = (_REPORT_DIR / f"{shadow_id}{ext}").resolve()
+    if not path.is_relative_to(_REPORT_DIR.resolve()):
+        raise HTTPException(404, "报告不存在")
     if not path.exists():
-        raise HTTPException(404, f"报告不存在: {shadow_id}")
+        raise HTTPException(404, "报告不存在")
+    stored = (user.shadow_profile_json or {}).get("shadow_id")
+    if stored != shadow_id:
+        raise HTTPException(404, "报告不存在")
+    return path
+
+
+@router.get("/report/{shadow_id}", response_class=HTMLResponse)
+def get_report(shadow_id: str, user: User = Depends(get_current_user)):
+    """取 HTML 报告(仅本人)。"""
+    path = _resolve_report(shadow_id, ".html", user)
     return HTMLResponse(path.read_text(encoding="utf-8"))
 
 
 @router.get("/report/{shadow_id}/pdf")
-def get_report_pdf(shadow_id: str):
-    """取 PDF 报告。"""
-    path = _REPORT_DIR / f"{shadow_id}.pdf"
-    if not path.exists():
-        raise HTTPException(404, f"PDF 报告不存在: {shadow_id}")
+def get_report_pdf(shadow_id: str, user: User = Depends(get_current_user)):
+    """取 PDF 报告(仅本人)。"""
+    path = _resolve_report(shadow_id, ".pdf", user)
     return FileResponse(path, media_type="application/pdf", filename=f"{shadow_id}.pdf")

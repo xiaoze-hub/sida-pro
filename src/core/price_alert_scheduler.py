@@ -60,10 +60,17 @@ class PriceAlertScheduler:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=300,
         )
         self.scheduler.start()
         from src.core.scheduler_registry import register
         register("price_alert", self.scheduler)
+        # 风险方案1.3/A3: job 异常/错过进可观测面(与其余调度器同机制)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[price_alert] 错误监听安装失败: {e}")
         logger.info(f"价格提醒调度器已启动，扫描间隔 {self.interval_seconds}s")
 
     def shutdown(self):

@@ -1,12 +1,16 @@
-"""K线后台入库 worker (2026-08-17)
-- 拉腾讯/东财/新浪 3 个数据源,写入 PG klines hypertable
-- 盘后收盘作业跑一次(主),盘中盘中 5m 跑一次(可选)
-- 入库用 ON CONFLICT DO NOTHING 幂等
-- 主源 = tencent,备源 = eastmoney + sina
+"""K线后台入库 worker (2026-08-17, 2026-09-08 风险方案1.2/B1 重写)
+- 走 marketdata engine 单链取数(腾讯/东财, 均前复权口径), 写入 PG klines hypertable
+- 盘后收盘作业跑一次(主), 盘中 5m 跑一次(可选; 注: 5m 路径为历史遗留, 实际写入的是
+  日K柱且无读取方, 已弃用未删除)
+- 入库用 ON CONFLICT DO UPDATE 幂等 —— 同键重跑覆盖旧值, 除权后前复权基准变化可自愈
+  (旧 DO NOTHING 会把 qfq 基准永久冻结在首次写入日, 即 0.7 勘查的 B1 污染机制)
+- source = engine 实际胜出 vendor(真源标签)。P2-19 的"单链复写
+  tencent/eastmoney/sina 三份假标签"已废 —— 0.7 勘查: 69,154 个 (symbol,date)
+  三源逐格相等, source 列毫无区分度
+- adjust='qfq' 常驻列(迁移 _m137), 读方按复权维度分区取数, 永不混维度
 
 调用:
 - 收盘后跑日K:     python -m src.collectors.klines_ingestor --period 1d --backfill 800
-- 盘中跑5m K:       python -m src.collectors.klines_ingestor --period 5m --intraday
 """
 from __future__ import annotations
 
@@ -19,8 +23,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, text
 
-from src.collectors.market_http import fetch_source
-from src.collectors.kline_collector import KlineCollector, KlineData
+from src.collectors.kline_collector import KlineData
 from src.models.market import MarketCode
 from src.web.database import DB_URL  # 复用应用 DB 连接
 
@@ -28,13 +31,8 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 
-# 数据源 → 友好名(写入 source 列)
-SOURCE_TENCENT = "tencent"
-SOURCE_EASTMONEY = "eastmoney"
-SOURCE_SINA = "sina"
-
-
-def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData, ts) -> dict:
+def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData, ts,
+               adjust: str = "qfq") -> dict:
     """KlineData → klines 表字典。"""
     return {
         "ts": ts,
@@ -42,6 +40,7 @@ def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData,
         "market": market,
         "period": period,
         "source": source,
+        "adjust": adjust,
         "open": float(k.open),
         "high": float(k.high),
         "low": float(k.low),
@@ -51,16 +50,19 @@ def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData,
     }
 
 
-def _fetch_from_source(source: str, symbol: str, market: MarketCode, days: int) -> list[KlineData]:
-    """从指定 source 拉 K线。失败返回空 list。"""
-    try:
-        with fetch_source(source):
-            kc = KlineCollector(market)
-            klines = kc.get_klines(symbol, days=days)
-            return klines
-    except Exception as e:
-        logger.warning(f"[{source}] {symbol}.{market.value} 拉取失败: {e}")
-        return []
+def _fetch_klines_with_vendor(symbol: str, market: MarketCode, days: int) -> tuple[list, str]:
+    """marketdata engine 单链取数, 返回 (bars, 实际胜出 vendor)。
+
+    必须直连 engine, 不得走 KlineCollector.get_klines —— 那是 PG 优先的读取
+    路径, 入库 worker 走它会把 PG 旧数据再抄回 PG, qfq 基准永远刷不新。
+    """
+    from src.core.marketdata_client import get_market_data
+
+    need = (max(10, min(days, 30)) if market == MarketCode.US
+            else (max(120, int(days * 0.6)) if market in (MarketCode.CN, MarketCode.HK) else 1))
+    want = min(max(days, 3000), 20000) if market in (MarketCode.CN, MarketCode.HK) else days
+    return get_market_data().klines_with_vendor(
+        symbol, market=market.value, days=want, min_count=need)
 
 
 async def ingest_symbol(
@@ -70,58 +72,63 @@ async def ingest_symbol(
     period: str,
     days: int,
 ) -> dict:
-    """拉 1 只股的 K线,3 源各一份入库。返回入库统计。
+    """拉 1 只股的 K线, 单链单标签入库。返回入库统计。
 
-    P2-19 (2026-09-05 28号审计): 三路同链(engine 按优先级自动选源,
-    fetch_source 只是日志标记), 拉一次复用三份 — 与旧行为输出一致,
-    省 2/3 外网请求。真·分源直拉待 engine 暴露源选择后再做。
+    2026-09-08 风险方案1.2/B1: klines_with_vendor() 返回真实胜出 vendor,
+    只写一份、source=真源(vendor 为空时诚实标 'unknown', 不编造)。
+    adjust='qfq'; ON CONFLICT DO UPDATE 使重跑自愈。
     """
-    rows_by_source: dict[str, list[dict]] = {s: [] for s in [SOURCE_TENCENT, SOURCE_EASTMONEY, SOURCE_SINA]}
-
-    # 单链拉一次(三路同链, 结果相同)
     try:
-        klines = await asyncio.to_thread(_fetch_from_source, "mixed", symbol, market, days)
+        klines, vendor = await asyncio.to_thread(_fetch_klines_with_vendor, symbol, market, days)
     except Exception as e:
         return {"symbol": symbol, "market": market.value, "period": period,
                 "ingested": 0, "by_source": {},
                 "fail_details": [{"source": "mixed", "error": f"{type(e).__name__}: {e}"}]}
 
+    source = vendor or "unknown"
     # 2026-08-23 修复(M-11): 收集失败明细, 便于上游聚合日志。
     fail_details: list[dict] = []
+    rows: list[dict] = []
     if not isinstance(klines, list) or not klines:
-        fail_details.append({"source": "mixed", "error": "empty/no klines"})
+        fail_details.append({"source": source, "error": "empty/no klines"})
     else:
-        for src_name in rows_by_source.keys():
-            for k in klines:
-                # KlineData.date 是 'YYYY-MM-DD'(CST 交易日) → 当天 00:00 CST 转 UTC
-                # P2-19: 旧代码 .replace(tzinfo=utc) 把北京时间午夜标成 UTC 午夜, 差 8h
+        for k in klines:
+            # KlineData.date 是 'YYYY-MM-DD'(CST 交易日) → 当天 00:00 CST 转 UTC
+            # P2-19: 旧代码 .replace(tzinfo=utc) 把北京时间午夜标成 UTC 午夜, 差 8h
+            try:
+                ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            except Exception:
                 try:
-                    from zoneinfo import ZoneInfo
-
-                    ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                    ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
                 except Exception:
-                    try:
-                        ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
-                    except Exception:
-                        ts = datetime.now(timezone.utc)
-                rows_by_source[src_name].append(_to_db_row(symbol, market.value, period, src_name, k, ts))
+                    ts = datetime.now(timezone.utc)
+            rows.append(_to_db_row(symbol, market.value, period, source, k, ts, adjust="qfq"))
 
-    # 入库
+    # 入库: DO UPDATE 同键覆盖(自愈复权基准), 一次 1 行确保 ON CONFLICT 走对路径
     total = 0
-    with db_engine.begin() as conn:
-        for src, rows in rows_by_source.items():
-            if not rows:
-                continue
-            # 用 raw SQL 配合 execute + ON CONFLICT DO NOTHING
-            # 一次 1 行,确保 ON CONFLICT 走对路径
+    if rows:
+        with db_engine.begin() as conn:
+            # 单一 source 不变量: 该股 qfq 分区只保留本轮胜出 vendor 的行。
+            # 否则 vendor 切换日(如腾讯风控回落东财)新旧两源并存 → 同日双柱,
+            # 正是 0.7 勘查的污染形态之一。
+            conn.execute(
+                text(
+                    "DELETE FROM klines WHERE symbol=:s AND market=:m AND period=:p "
+                    "AND adjust='qfq' AND source <> :src"
+                ),
+                {"s": symbol, "m": market.value, "p": period, "src": source},
+            )
             for row in rows:
                 result = conn.execute(
                     text(
-                        "INSERT INTO klines (ts, symbol, market, period, source, "
+                        "INSERT INTO klines (ts, symbol, market, period, source, adjust, "
                         "open, high, low, close, volume, quality_flag) "
-                        "VALUES (:ts, :symbol, :market, :period, :source, "
+                        "VALUES (:ts, :symbol, :market, :period, :source, :adjust, "
                         ":open, :high, :low, :close, :volume, :quality_flag) "
-                        "ON CONFLICT (symbol, market, period, ts, source) DO NOTHING"
+                        "ON CONFLICT (symbol, market, period, ts, source, adjust) "
+                        "DO UPDATE SET open=EXCLUDED.open, high=EXCLUDED.high, "
+                        "low=EXCLUDED.low, close=EXCLUDED.close, "
+                        "volume=EXCLUDED.volume, quality_flag=EXCLUDED.quality_flag"
                     ),
                     row,
                 )
@@ -131,7 +138,7 @@ async def ingest_symbol(
         "market": market.value,
         "period": period,
         "ingested": total,
-        "by_source": {s: len(r) for s, r in rows_by_source.items()},
+        "by_source": {source: len(rows)} if rows else {},
         "fail_details": fail_details,
     }
 

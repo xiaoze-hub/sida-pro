@@ -66,6 +66,21 @@ class _FakeAIClient:
 
 @pytest.fixture()
 def client(monkeypatch):
+    # 登录限流(敏感路径 20/min/IP)在测试进程内跨文件累计 → 合跑 429, 单测关闭
+    monkeypatch.setattr("src.web.middleware.RATE_LIMIT_ENABLED", False)
+    # 0.6 删除固定默认密码后: 用 env 确定性引导 owner(bootstrap 在请求期惰性执行)
+    monkeypatch.setenv("AUTH_USERNAME", "admin")
+    monkeypatch.setenv("AUTH_PASSWORD", "chat-stream-0606")
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    db = SessionLocal()
+    try:
+        db.query(User).filter(User.username == "admin").delete()
+        db.commit()
+    finally:
+        db.close()
+
     from src.web.app import app
 
     # 统一替换 AI 客户端工厂 + 工具执行(不触网/不触数据源)
@@ -94,7 +109,7 @@ def _cleanup_test_conversations():
 
 
 def _login(client) -> str:
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "xz.170530"})
+    r = client.post("/api/auth/login", json={"username": "admin", "password": "chat-stream-0606"})
     assert r.status_code == 200, r.text
     return r.json()["data"]["token"]
 

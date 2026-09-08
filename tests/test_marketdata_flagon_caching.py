@@ -37,6 +37,13 @@ class _FakeMarketData:
         self.calls += 1
         return list(self.bars)
 
+    def klines_with_vendor(self, symbol, *, market, days, min_count=1):
+        """1.2 起取数链走真源标签接口; 假包层同步提供(返回 vendor='tencent')。"""
+        return (
+            self.klines(symbol, market=market, days=days, min_count=min_count),
+            "tencent",
+        )
+
 
 def test_flagon_kline_cache_within_ttl(monkeypatch):
     """走 marketdata 包下,TTL 内第二次取数仍应命中 _KLINE_CACHE,不重复调用包。"""

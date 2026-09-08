@@ -137,14 +137,10 @@ class JWTDecodeMiddleware(BaseHTTPMiddleware):
         if auth.lower().startswith("bearer "):
             try:
                 # 使用 auth 模块的解码函数(共享配置 + 异常处理)
-                from src.web.api.auth import decode_token as _decode_token
+                from src.web.api.auth import decode_token as _decode_token, principal_from_payload
                 payload = _decode_token(auth[7:])
                 if payload:
-                    request.state.user = {
-                        "user_id": payload.get("user_id"),
-                        "username": payload.get("username"),
-                        "role": payload.get("role"),
-                    }
+                    request.state.user = principal_from_payload(payload)
             except Exception:
                 pass  # 鉴权失败路由自己返回 401
         return await call_next(request)
@@ -311,14 +307,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
             auth = request.headers.get("authorization", "")
             if auth.lower().startswith("bearer "):
                 try:
-                    from src.web.api.auth import decode_token as _decode_token
+                    from src.web.api.auth import decode_token as _decode_token, principal_from_payload
                     payload = _decode_token(auth[7:])
                     if payload:
-                        # JWT payload: user_id 在 sub 字段, username 平级
-                        user = {
-                            "user_id": payload.get("sub") or payload.get("user_id"),
-                            "username": payload.get("username") or "",
-                        }
+                        user = principal_from_payload(payload)
                 except Exception:
                     pass
             if not user or not user.get("user_id"):

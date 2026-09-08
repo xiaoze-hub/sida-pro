@@ -3,7 +3,7 @@
 # P4 实测: 本文件三条数据告警曾引用不存在的指标名, 一条都没响过。
 # 实际指标名见 src/web/api/health.py (_init_metrics):
 #   sida_http_requests_total{method,path,status} / sida_datasource_failures_total{provider,kind}
-#   sida_health_component_status{component} (component=database|redis, 1=ok, 0=down)
+#   sida_health_component_status{component} (component=database|redis|scheduler_leader, 1=ok, 0=down)
 # 改任一指标名必须同步改此处 + 跑 tests/test_p4_alerts.py (双向锁定)。
 
 groups:
@@ -43,6 +43,17 @@ groups:
         annotations:
           summary: "SIDA PG 不可用(/health database=down)"
           description: "PG 连接失败, K线/持仓/审计全挂, 检查 panwatch-postgres(--network-alias postgres 是否在)"
+
+      # 调度器选主失效(A3, 2026-09-08): fail-closed 下 Redis 不可用则无实例跑调度
+      # (standby 合法让位不记 0, 不误报; 只有无实例在跑才响)
+      - alert: SidaSchedulerLeaderDown
+        expr: sida_health_component_status{component="scheduler_leader"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIDA 调度器选主失效(/health scheduler_leader=down)"
+          description: "无任何实例在跑调度(Redis 不可用 fail-closed 或 leader 调度器停摆), 定时 Agent/报告全停, 检查 panwatch-redis 与选主日志"
 
   - name: sida-quality
     rules:

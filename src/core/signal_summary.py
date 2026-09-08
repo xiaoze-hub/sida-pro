@@ -310,16 +310,5 @@ def read_latest_summary_text(db) -> str | None:
 
 
 # ──────────── 存量库兜底建表 ────────────
-# 生产启动会 create_all, 但老库升级/测试环境可能没有该表。
-# 用 __table__.create(checkfirst=True) 跨 SQLite/PG 通用(与 market_scan.py 同款)。
-def _ensure_summary_table() -> None:
-    try:
-        from src.web.database import engine
-        from src.web.models import SignalSummaryDaily
-
-        SignalSummaryDaily.__table__.create(bind=engine, checkfirst=True)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("signal_summary_daily 兜底建表失败(可能已由 create_all 建): %s", e)
-
-
-_ensure_summary_table()
+# 已收编进 B 层版本化迁移(W1.5/A5 2026-09-08): signal_summary_daily →
+# src/web/migrations.py _m141; schema 变更唯一入口是迁移。

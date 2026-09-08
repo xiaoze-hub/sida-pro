@@ -76,6 +76,11 @@ def test_verify_ws_rejects_malformed_ver(db_session):
 
 def test_broadcast_filtered_per_user(monkeypatch):
     """A 的订阅收不到仅属于 B 的标的行情。"""
+    # 测试隔离: subscribe() 会拉起真实聚合器线程, 其 5s tick 会用 DB 重建
+    # _user_symbols_cache, 清掉本测试预置的 per-user 集合(全量 suite 实测偶发
+    # queue.Empty)。禁掉线程启动 + 缓存刷新两条 mutation 路径。
+    monkeypatch.setattr(qs, "_ensure_aggregator", lambda: None)
+    monkeypatch.setattr(qs, "_collect_watchlist_symbols", lambda: {})
     qs._last_snapshot.clear()
     with qs._subscribers_lock:
         qs._subscribers.clear()
@@ -111,6 +116,7 @@ def test_broadcast_filtered_per_user(monkeypatch):
 
 def test_broadcast_skips_user_with_no_watchlist(monkeypatch):
     """无关注标的的用户不收任何行情帧(不泄露他人集合)。"""
+    monkeypatch.setattr(qs, "_ensure_aggregator", lambda: None)
     monkeypatch.setattr(qs, "_collect_watchlist_symbols", lambda: {})
     qs._last_snapshot.clear()
     with qs._subscribers_lock:

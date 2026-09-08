@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from functools import partial
 import time
@@ -93,6 +94,14 @@ class AgentScheduler:
             ):
                 # 每次执行时动态构建 context（获取最新配置）
                 context = self.context_builder(agent_name)
+                # 风险方案1.3/A3 观测面: 记录本次运行上下文规模(自选+持仓序列化估算)
+                try:
+                    context_chars = len(json.dumps(
+                        {"watchlist": [getattr(s, "symbol", str(s)) for s in context.watchlist],
+                         "portfolio": str(context.portfolio)},
+                        ensure_ascii=False, default=str))
+                except Exception:
+                    context_chars = 0
                 logger.info(f"[调度] 开始执行 Agent: {agent.display_name}")
                 mode = self.execution_modes.get(agent_name, "batch")
                 if mode == "single" and hasattr(agent, "run_single"):
@@ -138,10 +147,11 @@ class AgentScheduler:
                         agent_name=agent_name,
                         status="failed" if errors else "success",
                         result=f"single mode executed {processed}, skipped {skipped}, total {len(context.watchlist)}",
-                        error="; ".join(errors),
+                        error="; ".join(errors)[:2000],
                         duration_ms=duration_ms,
                         trace_id=trace_id,
                         trigger_source="schedule",
+                        context_chars=context_chars,
                         model_label=context.model_label,
                     ))
                 else:
@@ -165,6 +175,7 @@ class AgentScheduler:
                         duration_ms=duration_ms,
                         trace_id=trace_id,
                         trigger_source="schedule",
+                        context_chars=context_chars,
                         notify_attempted=(
                             "notified" in raw
                             or "notify_error" in raw
@@ -183,6 +194,12 @@ class AgentScheduler:
                 logger.info(f"[调度] Agent 执行完成: {agent.display_name}")
         except Exception as e:
             logger.error(f"Agent [{agent_name}] 调度执行异常: {e}", exc_info=True)
+            # 风险方案1.3/A3: 调度器异常进可观测面(error_tracker JSONL + 聚合告警)
+            try:
+                from src.core.error_tracker import capture_exception
+                capture_exception(e, {"source": "scheduler", "agent": agent_name})
+            except Exception:
+                pass
             duration_ms = int((time.monotonic() - start) * 1000)
             # P2-9: 同步 DB 写放线程池
             await asyncio.to_thread(
@@ -254,6 +271,12 @@ class AgentScheduler:
         self.scheduler.start()
         from src.core.scheduler_registry import register
         register("agent", self.scheduler)
+        # 风险方案1.3/A3: job 异常/错过进可观测面(与其余调度器同机制)
+        try:
+            from src.core.error_tracker import install_scheduler_error_tracking
+            install_scheduler_error_tracking(self.scheduler)
+        except Exception as e:
+            logger.warning(f"[调度] 错误监听安装失败: {e}")
         logger.info(f"调度器已启动，已注册 {len(self.agents)} 个 Agent")
 
         # 打印所有已注册的任务

@@ -415,6 +415,9 @@ def register_hourly_job(scheduler=None):
         id="data_quality_sentinel",
         name="数据质量哨兵",
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
     logger.info("[dq] 已注册每小时数据质量哨兵 job")
     return sched

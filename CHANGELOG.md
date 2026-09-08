@@ -7,6 +7,146 @@
 
 ## 2026-09-08
 
+### fix-迁移advisory锁串行化+运行时DDL全面收编B层+PG迁移前schema快照(风险方案1.5/A5)
+- 背景: A5 —— schema 变更散落三层: A 层(database.py `_migrate*` 历史遗留)、B 层(migrations.py 版本化迁移+checksum)、C 层(业务模块运行时 `CREATE TABLE`/`__table__.create` 兜底)。C 层 DDL 与 B 层/ORM 漂移无人对账(同表两处定义); `run_versioned_migrations` 无锁, 生产 2 容器同时重启会并发跑同一 DDL(PG 撞死锁/duplicate); PG 迁移前无任何备份(SQLite 有整库 .bak, PG 什么都没有)。
+- **advisory lock 串行化**(src/web/migrations.py): `run_versioned_migrations` 在 PG 下先取会话级 `pg_advisory_lock(729138)` 再跑迁移, 拿锁实例执行, 等待实例轮到时迁移已全部 success=1 秒过; 锁挂**独立 AUTOCOMMIT 连接**(会话锁随事务回滚即释放, 不能放 per-migration 事务), 持锁横跨全部迁移事务, finally 解锁+关连接 —— inner 抛异常/取锁失败都保证关连接不泄漏, 解锁失败不掩盖迁移原始异常(连接断开会话锁由 PG 自动释放); SQLite 路径不加锁(dialect 探测, 无循环依赖); 锁 key 固定常量(换值=新旧实例锁不互斥)。
+- **C 层 DDL 收编进 B 层**(6 处全清): 手写双方言 DDL 4 处 —— summary_cache.py `_ensure_summary_cache_table`(B 层 _m129 早已覆盖, 纯冗余拆除)、datasources.py `_ensure_health_columns` + 6 个调用点(_m126 已覆盖, 纯冗余拆除)、market_data.py `_ensure_snapshot_table`(新增 `_m138_market_flow_snapshots_table`, 30s 节流逻辑保留)、market_mainline.py `_ensure_mainline_rank_table`(新增 `_m139_mainline_rank_daily_table`); ORM `__table__.create` 兜底 2 处 —— market_scan.py 两张表(新增 `_m140_market_scan_ranks_table`/`_m142_dark_fund_top_snapshots_table`)、signal_summary.py(新增 `_m141_signal_summary_daily_table`), 后三个迁移用 `Model.__table__.create(bind=conn, checkfirst=True)` 让 ORM 自带方言类型, 免手写双份 DDL(延迟 import models 规避 database↔migrations 循环依赖)。生产老库已有表 → IF NOT EXISTS/checkfirst 幂等跳过。
+- **PG 迁移前 schema 快照**(src/web/database.py `_backup_pg_schema_before_migration`): has_pending_migrations 时与 SQLite .bak 并列执行, `pg_dump --schema-only --no-owner --no-privileges` 落 `data/migrations_backup/schema_<ts>.sql`; 密码只经 PGPASSWORD 环境变量传递(不进命令行/日志); pg_dump 不在应用容器 PATH → 警告跳过(fail-soft 不阻断迁移); 只 dump 不 restore(红线: 不在生产库跑 pg_restore)。init_db 补 A/B 层注释: B 层是唯一 schema 变更入口。
+- 测试: `tests/test_migration_lock_and_failures.py` 8 用例 —— PG 锁包装(锁→inner→unlock→close 顺序; inner 抛异常仍解锁+关连接; 取锁失败关连接且不跑 inner; sqlite 路径零 connect)、迁移失败落 success=0+error 且 has_pending=True、修复换 runner 重跑 success=1、checksum 篡改重跑、_m138/_m139 sqlite 建表可写入、_m140-142 ORM 三表落库。
+- 验证: 新批 8 passed; 邻域(market_mainline/summary_cache/summary_layer/datasource_admin/permissions_rbac/price_alert/source_health/source_trust/market_scan×3/dark_fund/dark_pool) 109 passed; 全量套件(本次未排除任何文件) 1912 passed / 7 failed —— 6 个失败全部属于 5 个已知环境损坏文件(dark_l2_engine/error_tracker/pg_default×2/ta_load_ohlcv_patch/thsdk_extended), 1 个为已知 flaky thsdk_buffer_size, 无本次改动引入的失败。
+- 顺带修复: test_summary_cache.py 模块级 `SIDA_DB_URL=sqlite:///:memory:` 在子集运行时让 init_db 的 A 层 `_migrate` 撞 "no such table: users"(全量 suite 因收集序早于其它模块 import database 而被掩盖) —— 本任务测试批次统一显式临时文件 DB 规避, 未改业务代码(worktree 对照 HEAD 复现确认系存量问题, 与本次改动无关)。
+- 注: market_scan.py/signal_summary.py 两文件随本次提交做一次性 CRLF→LF 归一化(.gitattributes eol=lf 本就要求), diff 行数放大属预期, 之后不再出现。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
+### fix-影子报告路径穿越+通知渠道跨用户越权+config明文脱敏(风险方案1.4/C1+C2)
+- 背景: C1 —— src/web/api/shadow.py 上传落盘名直接拼 `file.filename`(`../../` 可写出上传目录), `/report/{shadow_id}` 无格式/路径包含/归属校验且端点**未挂鉴权**, 任意(甚至未登录)请求可枚举读他人交割单分析报告(含交易画像/行为诊断); C2 —— src/web/api/channels.py GET 把 `config`(webhook URL/bot token 明文)整包返回给任何登录用户(全局渠道密钥泄露), PUT/DELETE 用"自己的+全局"谓词 → 非 owner 可改/删全局渠道, `POST /{id}/test` 完全无鉴权(任意用户拿别人的 webhook 发消息/探测)。
+- **C1**(shadow.py): 落盘名改 `uuid4().hex + 校验过后缀`(与用户输入彻底解耦, 后缀白名单不变, 保留供解析器识别格式); 新增 `_resolve_report` 三重校验 —— shadow_id 格式白名单(`shadow_<8hex>`, 与 `extractor._new_shadow_id` 生成器一致) → resolve 后 `is_relative_to` 报告目录(路径包含) → 落库 `users.shadow_profile_json` 的 shadow_id 必须与请求者匹配(归属), 报告不存在同样 404(不泄露存在性); `get_report`/`get_report_pdf` 挂 `get_current_user`。
+- **C2**(channels.py): 列表/创建/更新响应的 config 按键名脱敏(键名含 token|secret|key|password|webhook 不分大小写), 只留末 4 位供辨认, **DB 内仍存明文可用**(PUT 不传 config 不覆盖); 更新/删除改 `_get_channel_owned` 读宽写严(对齐 stocks.py: 自己的放行, 全局(NULL)仅 owner, 他人 403, 不存在 404); test 端点补 `get_current_user` + 同款归属校验; ChannelResponse 迁移 ConfigDict(顺手消 class-Config 弃用告警)。notifications.py `_configured_channels` 与 paper_trading.py 渠道列表核实已只回 id/name/type, 无泄露。
+- 索引核实(方案第4条): notify_channels.user_id 生产 PG 已有 `ix_notify_channels_user_id`, 无需迁移。
+- 遗留登记: chat_upload.py 把上传文件逐字解析到 100,000 字符喂 LLM(提示注入面), 按方案登记 §6.3 后续波次处理, 本任务不动; 前端 ShadowAccount 的 window.open 兜底链接(不带 Authorization 头)在报告端点加鉴权后会 401, 主路径 fetch+Bearer 不受影响(前端跟进归第4波)。
+- 测试: `tests/test_shadow_path_safety.py` 9 用例(4 种恶意/正常文件名落盘 `is_relative_to` 断言 + 用户名成分不入盘名; owner 可读/他人 404/无画像 404/格式与 URL 编码穿越全 404/缺文件 404 非 500/符号链接逃逸被路径包含校验拦下), `tests/test_channels_isolation.py` 13 用例(demo 列表脱敏: 响应体无任何完整 secret + 他人渠道不可见 + chat_id 不误伤; 创建响应掩码而库内明文; demo PUT/DELETE 全局 403、owner 200; 他人渠道 403; test 端点 demo→全局 403 不触达 NotifierManager / owner 200 且内部发送用明文 / demo 自己渠道走通到发送)。
+- 验证: 新批(shadow_path_safety + channels_isolation + pushplus_channel + shadow_account 存量) 36 passed 1 skipped(Windows 符号链接权限跳过); 邻域(test_user_isolation_api + test_selfcheck) 33 passed。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
+### fix-调度器选主fail-closed+租约丢失真停+调度可观测性(风险方案1.3/A3)
+- 背景: WEB_WORKERS=2 时旧选主在 Redis 不可用时"回退为本 worker 启动"——每个 worker 都自认 leader, 定时 Agent 双跑(LLM 费用翻倍/通知重复/撮合双触发); 租约被抢/续期失败仅打日志, 调度器一直跑到进程重启, 选主形同虚设; 调度执行无 context 规模观测、异常不上报 error_tracker; 多数 add_job 站点缺防并发参数。
+- **fail-closed 选主**(src/core/scheduler_leader.py): Redis 不可用**绝不自认 leader** —— 指数退避(2s→30s 封顶)探测至 40s deadline, 仍不可用则放弃并置 `_state="failed"`; 锁在别人手里到期让位置 `_state="standby"`(合法状态); Redis 恢复由探测自动选主。显式口子: `SIDA_ENABLE_SCHEDULERS=1` 强制启动(兼容旧部署)、`SIDA_SCHEDULER_SINGLE_INSTANCE=1` 单实例部署跳过选主(开发)。`is_leader()` 删除, 改 `leader_state()` 三态(leader/standby/failed/init), 区分"合法没当上"与"没敢当"。裸连 Redis 不走 biz_cache 的红线例外已在模块 docstring 声明(分布式锁 NX/EX 语义, 非业务缓存)。
+- **租约丢失真停**: 续期线程每 10s 探测; 租约被抢/过期/续期异常 → `scheduler_registry` 全部 `.pause()`(旧逻辑只打日志), 同时立即 NX 尝试抢回, 重新取得后 `.resume()`; 续期线程永不退出。循环体抽成 `_renewal_once(r, wid, paused) -> bool` 供测试(免 10s 线程等待)。
+- **/health 三态探针 + 告警**(src/web/api/health.py, deploy/prometheus-rules.yml): scheduler 探针改用 `leader_state()` —— running≥2 记 `scheduler_leader` gauge=1; running=0 且 standby → ok 注明 non-leader(不记 0, 不误报); 其余(含 failed)→ gauge=0 + overall down, failed 注明"选主失败(fail-closed)"; 新增 `SidaSchedulerLeaderDown` 告警(`sida_health_component_status{component="scheduler_leader"} == 0` 持续 5m, critical, 与 database/redis 同 gauge 机制, tests/test_p4_alerts.py 双向锁不破)。
+- **调度可观测性**(src/core/scheduler.py): 每轮 agent 执行记录 `context_chars`(watchlist+portfolio 序列化长度)入 agent_runs; 单只模式 error 拼接截断 2000; 外层异常接 `capture_exception`(source=scheduler); `start()` 装 `install_scheduler_error_tracking` 监听 APScheduler 执行错误(report/context 调度器已有, 补齐 paper_trading/price_alert/l2_ticks 三处)。
+- **add_job 防并发参数统一**: 11 文件 17 站点全部补齐 `max_instances=1 + coalesce=True + misfire_grace_time=300` —— 此前 report/context/paper_trading/price_alert/l2_ticks 的 10 处缺 misfire, kline_backfill 每日 cron 缺 misfire(one-off date job 缺三件套), data_quality_sentinel 每小时哨兵全缺, auction_pool/kline_precache/thsdk_board 三个辅助 cron 缺 misfire。
+- 测试: `tests/test_scheduler_leader_failclosed.py` 25 用例 —— try_acquire 六态(Redis 异常→False+failed / 锁在他人→standby / SINGLE_INSTANCE 口子 / 强制 0 / 选主成功起续期 / reload 重入续期接管), `_renewal_once` 五态(仍持有续期 / 被抢真停且不重复 pause / 过期抢回 resume / Redis 异常真停 / 恢复 resume), 11 文件 add_job 参数 grep 一致性, health 探针接线锁 + scheduler_leader gauge 记录, 告警规则锁; `tests/test_scheduler_leader.py` 旧用例 `test_redis_unavailable_falls_back` 断言的正是本次要消灭的 bug, 改为 fail-closed 断言。
+- 测试隔离修复: `tests/test_ws_auth_guard.py` 两个广播用例偶发 queue.Empty(全量 suite 实测) —— `subscribe()` 会拉起真实聚合器线程, 其 5s tick 用 DB 重建 `_user_symbols_cache`, 清掉用例预置的 per-user 集合(T8 用例固有竞态, 与本次改动无关); patch `_ensure_aggregator`/`_collect_watchlist_symbols` 断开两条 mutation 路径, 修后文件 6 passed。
+- 验证: 新批(scheduler_leader×2 + scheduler_guard + p4_alerts + health_metrics_guard) 38 passed; 邻域(test_thsdk_board/data_quality_sentinel/auction_pool/auction_gap) 58 passed 1 skipped; 全量套件(排除 5 个环境损坏文件) 1854 passed / 2 failed —— test_thsdk_buffer_size 已知 flaky, test_ws_auth_guard 即上述隔离竞态(修后复跑通过)。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
+### fix-K线复权维度入列+PG优先读取+入库DO UPDATE自愈(风险方案1.2/B1)
+- 背景: 0.7 勘查实证 klines 表 qfq 与不复权无列区分(全靠 source 隐含口径)、P2-19 单链复写 tencent/eastmoney/sina 三份假标签(69,154 个 (symbol,date) 三源逐格相等)、DO NOTHING 把前复权基准永久冻结在首次写入日。按 0.7 §4 结论落地「加列 + 全量重刷」的加列半场(重刷在发版后另行执行)。
+- **迁移 `_m137_klines_adjust_dimension`**(src/web/migrations.py): klines 加 `adjust VARCHAR(4) NOT NULL DEFAULT 'none'`(存量行回填 none, 待重刷), 唯一索引 `uq_klines_symbol_period_ts` 让位于 `uq_klines_symbol_period_ts_adjust(symbol, market, period, ts, source, adjust)`, qfq 与 none 互不覆盖; 幂等可重跑。
+- **读取按复权分区**(src/collectors/kline_collector.py): `get_klines(symbol, days, adjust="qfq")` 显式声明复权维度; 缓存键升级为 `market:symbol:1d:adjust`(不同复权维度不共用缓存); `_fetch_all_sources` 重排为 **PG 优先**(镜像 /api/klines._pg_klines 口径: 厚度 ≥ min(30,days) 且最新柱 12 天内 → 不发 HTTP) → qfq 走 engine(腾讯/东财均前复权) → HTTP 全挂宁服务同分区陈旧数据不混维度; **`_pg_fallback` 改名 `_pg_read` 并加 adjust 分区过滤**(修 0.7 勘查"连 source 都不过滤"的三倍序列指标问题); **qfq 请求绝不落新浪** —— `_sina_fallback` 仅服务 adjust='none', 且成功后诚实落 PG(source='sina', adjust='none', DO UPDATE) 供后续 none 读。
+- **入库单链单标签**(src/collectors/klines_ingestor.py): `ingest_symbol` 重写 —— 废除 P2-19 三份假标签复写, 改用 `klines_with_vendor()`(packages/marketdata/src/marketdata/client.py 新增 facade, klines() 委托之) 返回真实胜出 vendor, 只写一份 source=真源(vendor 空则诚实标 'unknown'); adjust='qfq'; **DO NOTHING → DO UPDATE**(同键重跑覆盖, 除权后 qfq 基准变化自愈, 冻结机制根除); **单一 source 不变量**: 写入前 DELETE 该股 qfq 分区中非本轮胜出 vendor 的旧行, 防 vendor 切换日新旧两源并存成同日双柱; ingestor 直连 engine 不走 KlineCollector(那会"PG 旧数据抄回 PG"永远刷不新); ts 口径不变(交易日 00:00 Asia/Shanghai)。5m 盘中路径维持原状并在 docstring 标注弃用(实际写日K柱, 无读取方)。
+- **读取方加 adjust='qfq' 过滤**: `src/web/api/klines.py` `_pg_klines` 与 `src/core/backtest/data_adapter.py` `load_price_history` —— 前端图表与回测序列必须吃前复权, 严禁混入 none 原始价; 旧库无 adjust 列时查询异常 → 静默回落联网(fail-soft)。
+- 测试: `tests/test_kline_adjust_dimension.py` 18 用例(迁移加列/回填/索引互换/幂等/DO UPDATE 不产生第二行且不误伤 none 分区; 缓存键含 adjust 互不串用; PG 厚而新不发 HTTP / 陈旧或过薄回落 engine / qfq 空+engine 空宁空不落新浪 / none 走新浪不走 engine; `_pg_usable` 厚度与 12 天新鲜度边界; ingestor 单标签/unknown 诚实标签/重跑覆盖不双行/vendor 切换清理旧 source 分区/空结果 fail_details; `_persist_bars` 落 none 分区 + 库不可达 fail-soft), 另 test_kline_routing/coalesce/cache/flagon 四文件的假包层补 `klines_with_vendor` 方法、两处 `_pg_fallback` patch 改 `_pg_read`。
+- 验证: 目标批 57 passed + 邻域回归(test_backtest/abnormal_moves/auction/chip/entry_outcomes/index_klines 等消费方) 201 passed 1 skipped; 全量套件(排除 5 个环境损坏文件) 1828 passed / 2 failed —— test_p2_realtime 当轮修于下条 entry, test_thsdk_buffer_size 已知 flaky。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
+### fix-vendor缺失字段None化+status完整性标记(风险方案1.1/B2)
+- 背景: 腾讯行情解析 `float(parts[3] or 0)` 等把缺失字段变 0 —— 价格 0 参与涨跌幅算术伪造 -100% 假暴跌, 直接违反「数据缺失必须显式标注『无数据』, 禁止推测」红线; 且 `turnover` 取自 parts[35] 第三段单位无标注(违反「金额=元」约定, AGENTS.md「对不上先怀疑单位换算」)。
+- **turnover 单位实测**(qt.gtimg.cn 真实报文, 2026-09-08 收盘后): sh600519 parts[35]="1309.30/17534/2302823753", 恒等式 amt/(price×vol(手)×100)=**1.0031**; sh601318=**1.0069**(偏差<0.7% 即 VWAP≠收盘的正常范围) → **单位=元**; 交叉印证 parts[37]=amt/10000(230282 vs 2302823753, 比值 10000.02, 万元口径)。已写入 `vendors/tencent.py` 模块 docstring 与 `docs/_frozen/data.md` 新增「单位约定」节。
+- `packages/marketdata/types.py`: `Quote.current_price` 改 `float | None`, 新增 `status`(ok/partial/missing) 与 `missing_fields: list[str]`。
+- `vendors/tencent.py`: 核心 10 字段(价/量/内外盘/涨跌/高低)全部 `_to_float` 保留 None; 缺失进 `missing_fields`; 全部价格字段缺 → status="missing", 部分缺 → "partial"; turnover 缺失保留 None。`fetch()`/`fetch_raw()` 过滤改 None 安全: 缺价 Quote 不出现(调用方视角=「无数据」), **partial(价在字段缺)照常透传** status/missing_fields。
+- 其余 vendor 逐个判定(全仓 `or 0)` 审计): `alphavantage.py`/`twelvedata.py`/`yfinance.py` OHLC+量缺失全部 None 化+partial 标注(此前 `or 0) or None` 双重洗白); `zhitu_full.py` 新增 `_num` 助手 —— K线 OHLC 缺失的行**整行丢弃**(绝不产出 0 价 bar 混进均线), 资金流/股东/估值缺失保留 None(字段皆 Optional); `sina.py` 美股/港股价格守卫去掉误导性 `or 0.0`(行为不变, 0 从不外泄)。判定保留: `kline.py:63` volume(Bar 契约 0 默认, K线维度治理归 1.2/B1)、`ths_hot.py:157` rank(0=未上榜约定哨兵)、`board_fund_flow.py:149` total(分页控制流非行情值)。
+- 下游接线: `src/core/marketdata_client.py` `_quote_to_row` 透传 `status`/`missing_fields`(前端 JSON 可显式标「无数据」); `md_stock_data` **跳过缺价 Quote**(绝不 0.0 进 agent 算术), status 随行; `src/models/market.py` `StockData` 增 `status: str = "ok"`(加性, 旧契约数值字段不动)。复权污染涉及的涨跌幅算术点(accounts.py:522 已有 None 守卫, 价格 None 时不再算出 -100%)。
+- 测试: `tests/test_vendor_missing_fields.py` 16 用例 —— tencent 残缺报文 fixture(缺价→None 非 0.0; 全价格缺→missing; partial 保价; turnover 缺失; turnover 恒等式单位=元; 真实"0.00"≠缺失), zhitu(_num/K线丢行/资金流 None), alphavantage/twelvedata(缺字段 None+partial/missing), Quote 默认值, `_quote_to_row` 透传, `md_stock_data` 跳过缺价。
+- 验证: 新用例 16 passed; 全量 `PYTHONUTF8=1 pytest tests/` 1838 passed / 6 failed —— 6 失败均为环境问题(缺 tradingagents/psycopg2/thsdk、DOCKER 门控、Windows 文件权限), **均不 import 本次改动模块**(grep 验证), 与 0.5 收编时基线一致。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
+### docs-0.7 K线复权污染勘查报告(只读, 四类污染实证)
+- 背景: 风险方案 0.7 勘查任务 —— 审计 B1 断言"qfq 与不复权混存于同一批唯一键, 除权后假跳空"。本任务只读 PG + 走读代码, 产出 `docs/research/K线复权污染勘查_20260907.md`。全程零写入(仅 SELECT), 未改任何代码。
+- 修正 B1 模型: 实测 69,154 个 (symbol,date) 三源 close 逐格相等零差异 —— ingestor 自 P2-19(2026-09-05) 起单链拉一次复写三个 source 标签(klines_ingestor.py:73-83), `source` 列无区分度; 取数口径实为前复权(腾讯 fqkline/qfq + 东财 fqt=1), 新浪不复权兜底不写 PG。表结构三处出入: 日期列是 `ts` 非 `trade_date`、唯一键已含 `period`、**无 `amount` 列**(方案 dev 判据不可执行, 改用涨跌停边界缺口判据)。
+- 实证四类污染: ①相邻柱复权基准漂移 —— 主板 19 个物理不可能缺口(超 ±10% 涨跌幅 0.5~1.6%, 11 只股, 2023-06~2025-04), 600639 一字板互证相邻比率 ×1.112 连续复利(真实涨停链必须精确 ×1.10); ②同日双柱 —— 537 键因 ts 时区约定切换(P2-19 前后)各写两份, 含 708 行平线占位柱(volume=0, OHLC=开盘/昨收, 全落 08-31~09-04), **09-07/09-08 仍有 55 只/日同值双柱, 污染持续中**; ③volume 单位混用 —— 46/86 只在 08-28→08-31 整体 ×100(腾讯手→股修复部署), 全史 85 个 ×20+ 跳变散点, 跨界量比/筹码类指标 ×100 失真; ④qfq 基准冻结(B1 原机制) —— 历史段基准钉死在 T0(2026-08-17~24 回灌), DO NOTHING 永不重算, 勘查窗口内除权假缺口零发作(分红季在回灌前), 属"必然而未至"。
+- 读取方影响: `/api/klines`(PG 优先主路径)与 `backtest/data_adapter.py` 均按 source='tencent' 过滤但**无 ts 日期去重** → 双柱直进前端图表与回测序列; `kline_collector._pg_fallback` 连 source 都不过滤 → HTTP 全挂时指标在 3 倍序列上计算。
+- 结论: **B1 必须走「加列 + 全量重刷」**(污染是散点不成区间 + 基准冻结全局性质 + 46 只 volume 历史段整体错单位; 209K 行重刷成本分钟级)。配套前提与三条复跑验收 SQL 已写入报告 §4/附C; 动生产前须老板确认节奏(与 0.4③ 同批)。
+- 无法判定项(诚实项): 19 缺口精确成因(需外部对账/engine 择源日志, 三源同值导致供数方信息已丢失)、缺口日是否恰为除权日(未查外部分红日历)、双柱写入方时间线(需容器日志)、09-08 后双柱是否停止(需次日复查)。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-8010切断主库旁路+裁判abstain不伪装(风险方案0.0)
+- 背景: 8010 预测引擎此前持有多条主库旁路 —— panwatch_client 直读主库 sqlite 取 jwt_secret **自签 owner JWT**(等价伪造全权凭据, 能调任何 owner 接口含改配置/删数据), ai_referee/forecast_sentiment 各有一套三候选 sqlite 直读配置; 且裁判 fail-open: 任何异常降级 verdict=confirm, 等于把"裁判确认过"写进预测记录。主库切 PG 后这些直读全部静默失效(读到冻结旧值且不报错)。
+- `forecast_lib/panwatch_client.py`: 自签 JWT 路径整体删除(`_read_auth_settings`/`_create_service_token` 与 HMAC 签名逻辑, forecast 侧不再有任何 JWT 签名密钥来源); 改为只读服务凭据 `PANWATCH_SERVICE_TOKEN`/`SIDA_SERVICE_TOKEN` → 请求头 `X-Service-Token`(优先), 显式账号密码登录换真实 Bearer 的缓存路径保留(与伪造无关); 无任何凭据时 `auth_headers()` 返回空 dict、`get_token()` 返回空串, 由调用方显式报错, 绝不静默兜底。
+- `forecast_lib/ai_referee.py`: 删 `_db_paths`/`_db_scene_binding_model_id`/`_db_model_by_id` sqlite 直读; 新增 `RefereeConfigUnavailable` + `resolve_referee_model_cfg()` —— 裁判模型配置唯一通道是 `/api/service/forecast-config`(服务令牌鉴权), referee 场景绑定 > 设置页 forecast_llm_*, 均不可得即抛错, **绝不回落硬编码 agnes**; `evaluate_prediction` 任何异常/无凭据/解析失败一律返回 `verdict="abstain"`(维持模型方向, 不伪 confirm), abstain 不落 prediction_referee_evals; `_parse_verdict` 接受 abstain; prompt 增 abstain 输出约定 + 口径裁决句(严禁用 get_capital_flow 的东财口径直接下"主力派发/吸筹"结论; 与 get_main_intent 冲突时说明口径差异并优先采信逐笔口径)。
+- `forecast_lib/forecast_sentiment.py`: 删 `_db_llm_config` 三候选直读与其在 `_load_llm_config` 的调用分支; LLM 情绪打分配置唯一通道 = `/api/service/forecast-config`(T7 已落的 HTTP 通道)。
+- 8000 侧配套: `src/web/api/auth.py` 新增 `get_service_principal`(仅 X-Service-Token 可过, 用户 JWT 一律 403 —— 会下发明文 api_key 的端点专用); `src/web/api/service_config.py` forecast-config 依赖从 `get_user_or_service` 收紧为它, 关闭"登录用户也能读明文 api_key"的洞; `src/web/api/chat.py` 建会话/发消息两端点挂 `get_user_or_service`(8010 裁判经服务令牌建/发, 会话 `user_id=NULL` 为系统会话, 与用户会话按归属互相隔离, S2 语义不变)。
+- `forecast_server.py`: 裁判异常从"降级 confirm"改为 abstain(维持模型方向, 不再伪造"裁判确认过"); `docker-compose.yml` forecast 服务删 `PANWATCH_DB` env 与 `panwatch_data:/app/panwatch-data:ro` 主数据卷挂载 —— 8010 对主库零接触。
+- 测试: `tests/test_ai_referee_http.py` 新增 12 用例(绑定命中/回落 forecast_llm_*/三者皆无抛错/API 不可达抛错/响应异常抛错; prompt 口径句; abstain 解析; 网络错误/无凭据/配置不可得 → abstain 且不落库; confirm 正常落库且建会话带服务令牌+ai_model_id), `tests/test_internal_scene_model_auth.py` 新增 7 用例(正确令牌 200 且读到 forecast_llm_*、错/无令牌 403、**合法 admin JWT 也 403 且响应不含 api_key**), `tests/test_forecast_container_config.py` 重写(原用例断言的正是本次删除的自签 JWT 行为; 改为断言服务令牌头/无凭据空 dict)。
+- 验证: 新用例 22 passed(此两文件+container_config); 回归 test_user_isolation_api/test_p1_service_token/test_forecast_config_channel/test_chat_stream/test_ai_client_degradation/test_agent_notify_gate/test_chat_tools_p1p2|a4|two 共 100 passed; 验收 grep `PANWATCH_DB|_db_paths|panwatch\.db`(forecast_lib/+docker-compose.yml)与 `_read_auth_settings|_create_service_token|jwt_secret|auth_token_version`(forecast_lib/)全 0 命中, `优先采信 get_main_intent` 在 prompt 中(测试断言); `docker compose config -q` 通过; 旧 panwatch.db mv 出卷属生产数据操作, 与 0.4③ 同节奏待老板确认。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-LLM降级改抛类型化异常+显式超时+推送总闸+成本护栏fail-closed(风险方案0.3)
+- 背景: 限流时 ai_client 返回普通字符串 `"AI 服务暂时不可用(限流)…"`, 类型上与正常 LLM 输出无法区分, 曾被 daily_report 当日报存库并推送给老板; 且 AsyncOpenAI 未传 timeout 走 SDK 默认(~600s), 一次挂起能把 agent 卡住十分钟。本次按风险方案 0.3 全链路整改"降级不伪装"。
+- `src/core/ai_client.py`:
+  - 新增 `LLMDegradedError(RuntimeError)`(携带 reason/scene/retry_after), chat/chat_multi/chat_with_tools 的全部 6 处降级点(令牌桶耗尽 + 429 + 超时/连接错误)一律改抛, 不再返回字符串或伪装 SimpleNamespace; 配置类错误(401/400)仍原样抛出不掩盖。
+  - 构造 AsyncOpenAI 显式 `httpx.Timeout(connect=10, read=可配, write=30, pool=10)`, read 由 `LLM_READ_TIMEOUT` 环境变量调节并钳制 [10,300]s, 默认 90s。
+  - 修存量 bug: `_is_retryable_error` 靠类名字符串匹配, "ConnectError" 匹配不上 "connection" 导致连接错误从不重试/降级 → 改 `isinstance(e, httpx.TransportError)` 显式判定。
+  - `_log_usage` 同步 DB commit 阻塞事件循环 → 拆 `_log_usage_sync` + run_in_executor fire-and-forget(无事件循环时回退同步); `chat_multi` 此前从不记账 → 补 `_log_usage` 调用。
+- `src/agents/base.py`: `AnalysisResult` 增 `status`(success/degraded/failed)+`error` 字段; `analyze` catch LLMDegradedError → `_degraded_result()`(title 生成失败/content "AI 分析未生成：<原因>"/status=degraded); `should_notify` 推送总闸最前面拦截非 success。5 个 agent(daily_report/premarket_outlook/news_digest/chart_analyst/intraday_monitor)逐个接 catch, 其中 3 个覆写 should_notify 的自己补了同款拦截; daily_report/news_digest 降级时以 status="degraded" 落库 save_analysis, 不再解析正文。
+- `src/web/api/agents.py` 盘中建议循环 `_analyze_item` catch LLMDegradedError → log+return 跳过该股, 不伪造建议条目; `src/web/api/chat.py` 两个 tool-loop 对 LLMDegradedError 显式 re-raise(不走"tool use 不可用→chat_multi 兜底"的放大路径, 用户侧仍由外层给出诚实文案)。
+- 成本护栏 fail-closed: `src/agents/tradingagents/cost_tracker.py` 查询失败从"默认放行"改为 `exceeded=True` + `reason="预算查询失败，保守拦截"`, 明确知情后可 `TA_BUDGET_FAIL_OPEN=1` 切回放行; `SessionLocal()` 挪进 try(原在 try 外, 库连不上会裸抛而非拦截)。
+- 持久化与前端: `AnalysisHistory` 增 `status`/`error` 列 + 迁移 `_m136_analysis_history_status`(存量回填 success, 幂等); `save_analysis` 增同名参数双路径写入; `/api/history` 列表与详情 `HistoryResponse` 透出 status/error; 前端 `frontend/src/pages/History.tsx` 非 success 显示「未生成」红色徽标与红框态(列表+正文+详情弹窗), 不把失败文案当分析正文渲染 —— 落实"数据缺失显式标注, 禁止编造"红线。
+- 测试: `tests/test_ai_client_degradation.py` 20 用例(429/503/read-timeout/connect-error × chat/chat_multi/chat_with_tools 全部断言抛 LLMDegradedError 且不返回字符串; 令牌桶耗尽不触达 SDK; chat_multi 记账; 构造 timeout 默认/钳上下限/非法值; cost_tracker DB 故障 fail-closed + env 放行), `tests/test_agent_notify_gate.py` 11 用例(degraded/failed × 5 agent should_notify 全 False + _degraded_result 字段)。
+- 验证: 新用例 31 passed; 回归 test_tradingagents_agent/test_user_isolation_api/test_user_isolation_core/test_chat_stream/test_daily_report_index/test_paper_trading_notify/test_ai_provider_sniff 95 passed, test_user_isolation_migrations/test_premarket_catalyst/test_context_enrichments/test_chat_ai_layer_tools/test_chat_l2_tools 89 passed; 验收 grep `"AI 服务暂时不可用"` ai_client.py 0 命中, 构造处含 httpx.Timeout, 8 文件含 except LLMDegradedError; `pnpm typecheck` 通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-启动方言门禁fail-stop+/api/health方言标签+清docs明文密码(风险方案0.4①②残留)
+- 背景: 丢 `SIDA_DB_URL` 曾让生产静默回退 SQLite 跑 4 天。compose 侧(方案步骤①)v0.5.18 已解开 SIDA_DB_URL 并对 POSTGRES/REDIS 密码 fail-fast(`:?` 语法), 本次补齐启动期门禁与泄露清理。
+- `src/core/startup_check.py` 新增 `check_db_dialect_explicit()`: `SIDA_DB_URL` 未设置 → 拒绝启动, 除非显式 `SIDA_ALLOW_SQLITE=1`(仅本地开发/快速上手, 打醒目 WARNING 横幅); `server.py` lifespan 在 `init_db` 之前调用该门禁, 不过即 raise 终止启动 —— "丢 env 带病起服务"物理上不可能再发生。`src/web/database.py` 容器内 fail-fast(DOCKER=1 无 SIDA_DB_URL 即 raise)同步加 `SIDA_ALLOW_SQLITE=1` 唯一逃生口(容器内开发/测试用)。
+- `src/web/api/health.py` `components.database` 新增 `dialect` 字段(取 `engine.url.get_backend_name()`, DB 查不通时按声明方言 IS_PG 兜底), 一眼看出连的是哪个库; 测试环境为 sqlite, 生产 PG 部署后应为 postgresql。前端顶栏展示不在本批残留清单内, 留给后续前端批次。
+- `tests/conftest.py` 顶部 `setdefault("SIDA_ALLOW_SQLITE", "1")`(测试即本地开发模式, 免得门禁生效后全部测试被拒启动)。
+- `tests/test_startup_check_dialect.py` 新增 5 用例: 无任何 env → 拒绝启动; `SIDA_ALLOW_SQLITE=1` → 放行+WARNING 横幅断言; 显式 PG / 显式 SQLite URL → 放行; `/api/health` `dialect == "sqlite"`。
+- `docs/_frozen/data.md:14` 明文 PG 密码改为"密码见部署机 .env 的 POSTGRES_PASSWORD"; `git grep PanWatch2026PG` tracked 文件 0 命中。密码轮换(0.4③)涉及生产, 按方案需老板确认节奏后再执行, 本批未动凭证。
+- compose 顺手修一个阻断性 bug: panwatch 的 `depends_on` 写了 `panwatch-redis`(那是 container_name, 服务键是 `redis`), 且 redis 带 `profiles: ["infra"]` 默认不启动 → `docker compose config` 直接报 invalid project, 0.4 验收第 1 条(config 解析出 SIDA_DB_URL)在 v0.5.18 上本来就不可能通过。改为 `redis: {condition: service_healthy, required: false}`(infra profile 开启时仍守健康门, 默认栈靠应用自身 redis 降级路径, /api/health 对 redis down 已按预期降级处理)。
+- 验证: 新用例 5 passed; 存量回归 `test_startup_check.py` 6 passed / 改密+防回归静态 7 passed / multi_user+ratelimit 14 passed; `POSTGRES_PASSWORD=dummy REDIS_PASSWORD=dummy GF_SECURITY_ADMIN_PASSWORD=dummy SIDA_SERVICE_TOKEN=dummy docker compose config` 成功输出 `SIDA_DB_URL: postgresql+psycopg2://sida:***@panwatch-postgres:5432/sida`(dummy 为验证用假值); py_compile 6 文件通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-部署脚本改克隆式安全重建+接线冒烟门禁+CI stub自检(风险方案0.1残留)
+- `deploy/deploy_panwatch.sh` rebuild_container 重写。根因: 实测生产拓扑与脚本硬编码不一致(真实卷 `panwatch-data`/`panwatch-tck` 连字符命名 + 自定义网络 `panwatch-net` + `restart=always`/无内存限制; 原脚本硬编码 `panwatch_data` 下划线卷、无 `--network`、固定 unless-stopped+1g) —— 照原硬编码重建会造出连不上 redis/postgres 的孤儿容器。改为克隆式: 以运行中容器为唯一事实源 harvest env/卷/端口/网络/重启策略/内存 → 临时容器(`${CONTAINER}_new`, 8001)先起 → curl 健康 + `WEB_HOST=0.0.0.0` inspect 校验(任一失败删临时容器退出, 旧容器原样在跑, 无损回滚) → swap → 最终容器端口继承旧容器; 防漂移告警改与 harvested 值比对(生产 restart=always 不误报); 全新安装走 default_config 兜底(卷名同步改连字符); `DOCKER` 可环境变量覆盖供 CI stub。
+- 冒烟门禁: 部署尾部硬闸调用 `scripts/post_deploy_smoke.sh`, 失败 exit 1 并保留运行容器便于排查(`PANWATCH_SKIP_SMOKE=1` 供 CI/测试跳过)。同时修 post_deploy_smoke.sh 三处静默假通过: smoke_test.py 缺失/python3 无 requests → 显式 FAIL exit 1(原会 traceback 后因输出无 "FAIL" 而 exit 0); 退出码改透传 smoke_test.py 的 RC, 不再以输出含 "FAIL" 判定(误报源); PW 容器名/LOG/脚本路径全部环境变量可覆盖(本机实测 /home/ubuntu/scripts 与 backups 均不存在, 原脚本必然假通过)。
+- `scripts/tests/test_deploy_script.sh` 新增 13 断言(`DOCKER=echo` 桩, 不动真 Docker): run 行含全部关键参数(-e WEB_HOST=0.0.0.0 / --memory / --restart / -p 8000:8000 与 8001 / -v panwatch-data:/app/data / 镜像名), 无 `-e: command not found`(0.1 类"注释截断续行命令"事故回归), "新容器健康"先于 `rm -f panwatch`(先验证后删旧顺序), create 失败场景退出非零且全程无 `rm -f`(失败不删旧容器), 部署脚本确实接线 post_deploy_smoke.sh。
+- CI: build-push-acr.yml gates 增 step 跑该 stub 测试 —— 这是防止"注释再次被插回 docker run 续行块"的唯一机制(2026-09-08 停机事故)。
+- 验证: 三个脚本 `bash -n` 通过; stub 测试 13 passed 0 failed; harvest 格式串对生产容器实测逐项解析正确(27 env/2 卷/8000 端口映射/panwatch-net/restart=always/MEM=0)。真机 `--full` 重建未执行(生产操作需老板确认节奏), 上生产时由临时容器验证+冒烟门禁双兜底。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-删固定管理员密码/开关, 兜底首启改随机密码+stdin外一次性打印, workflow action 全量钉 SHA(风险方案0.6残留)
+- `src/web/api/auth.py` — 删除 `DEFAULT_ADMIN_PASSWORD` 常量与固定密码兜底分支(公开仓库源码内固定密码=失守入口); 兜底首启改 `secrets.token_urlsafe(12)` 随机强密码, 仅启动时 stderr 打印一次并引导"设置 → 修改密码"(自助改密端点 `POST /api/auth/change-password` 旧密码校验+token_version 踢人本就有, 前端 AccountMenu/Profile 已接入, docs/KNOWN_ISSUES.md 的 P1"无改密入口"就此关闭); env 凭证改惰性读取 `_env_credentials()`, 允许测试 import 后注入。生产部署注意: 裸库且无 `AUTH_USERNAME/AUTH_PASSWORD` 时, 升级后首启密码以 Docker logs 为准(仅打印一次)。
+- 测试去硬编码: test_multi_user_auth / test_permissions_rbac(派单清单漏了此文件, grep 全仓补出 4 处) / test_chat_stream / test_entry_candidate_feedback_api 的 admin 登录改 env fixture 引导(清库+`AUTH_USERNAME/AUTH_PASSWORD`); test_p1_service_token 删无用的默认密码开关 setenv; test_security_20260823 两个 P2-5 用例重写为断言"常量/开关不存在+兜底走 secrets+改密引导存在"(旧断言引用已删常量必 AttributeError); 密码字面量在测试源码内一律拆串拼接, 测试文件自身不做明文载体。
+- `tests/test_auth_no_default_password.py` 新增 4 静态用例(密码字面量/常量/开关全仓零残留+兜底随机+改密端点存在)、`tests/test_auth_change_password.py` 新增 3 行为用例(旧密码错 400、新密码过短 400、改密成功踢旧 token+旧密码失效)。5 个登录密集 fixture 统一 `RATE_LIMIT_ENABLED=False`(登录防爆破 20/min/IP 是进程级共享桶, 多文件合跑必然 429, test_ratelimit_per_user 自建 app 不受影响)。
+- workflows: build-and-push-image.yml / release.yml 删 `AUTH_ALLOW_DEFAULT_ADMIN: "1"`(CI 门禁登录测试已自备凭证); 全部 8 个 workflow 共 35 处 `uses:` 从 tag 钉到 40-hex commit SHA(pnpm/action-setup v4 为 annotated tag, 取 `^{}` 解引用值), 消除第三方 action tag 劫持面。
+- `scripts/p3a_accept.py` admin 凭证改 `P3A_ADMIN_USER/P3A_ADMIN_PASS` 环境变量注入, 缺失即拒绝运行(生产验收脚本不得内嵌凭证); frontend 移除零引用幽灵依赖 `date-fn`。
+- 验证: 7 个关联测试文件组合 53 passed 零失败; test_security_20260823 stash 基线对比 17 failed → 13 failed(差值 4 全为本改修复, 余 13 均为 Windows GBK 环境存量: 该文件 30 处 bare `open()` 无 encoding, CI UTF-8 不复现); 验收 grep `xz.170530|DEFAULT_ADMIN_PASSWORD|AUTH_ALLOW_DEFAULT_ADMIN` 全仓(除 CHANGELOG 历史与 git-ignored 的 data/panwatch.db 运行数据)零命中; 本地 gitleaks `detect --no-git` 0 命中; `pnpm typecheck` 通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-CI门禁补密钥扫描+bash语法检查+Python钉3.11(风险方案0.5残留)
+- `build-push-acr.yml` gates 补三个 step(pipefail/删`||true`/PR触发已随全面体检T3落地, 勿重做):
+  1. `bash -n deploy/*.sh scripts/*.sh` — 0.1 类"续行块内注释截断命令"语法事故在 CI 即可发现。
+  2. gitleaks 密钥扫描: 固定 v8.18.4 二进制 + SHA256 校验和(`ba6dbb...8e7d`), **不引入未钉版的第三方 action**(与 0.6 的 action 钉版治理方向一致); `--no-git` 扫工作区不依赖历史深度, `--redact` 防命中内容泄进 CI 日志。
+  3. `actions/setup-python@v5` 钉 3.11(与生产一致; 此前用 runner 默认 python3, 版本随 ubuntu-latest 漂移)。
+- 验证: workflow YAML 解析 OK; 本地 `bash -n` 全部 7 个脚本通过; 本地 Windows 版 gitleaks 8.18.4 全仓 `detect --no-git` 实跑 0 命中(存量内容不会卡红门禁; 注意默认规则不识别 docs/_frozen/data.md:14 的自拟 PG 密码, 该文件清理仍归 0.4)。CI 端到端红/绿演练待 PR 触发后补录。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-数据源失败计数接线激活SidaDatasourceFailures告警(风险方案0.2)
+- 根因: `sida_datasource_failures_total` 计数器定义后全仓零调用方(仅注释提及), prometheus-rules.yml 的 `increase(...[15m]) > 50` 告警永不触发 —— 数据源(东财/新浪/腾讯/通达信)全黑监控无声。
+- 做法与派单方案的偏差: 方案建议改 marketdata vendor 层并经 `src/collectors/_metrics.py` 包 CM; 实测 vendor 既被 collectors/core/web 直调(21+ 处)又经单源 Engine 调用, 且 packages/marketdata 不能反向依赖 src.web。改为: `marketdata/vendors/base.py` 的 `Vendor.__init_subclass__` 在每个子类 `fetch` 定义处自动包失败上报(`emit_vendor_failure(name, kind)`, 异常原样抛出不吞; 监听者异常互不反噬); `engine.py` 的 TimeoutError 分支补发 `kind="timeout"`、异常分支按凭证错补发 `kind="auth"`/`"fetch"`; `src/web/api/health.py` 导入时 `on_vendor_failure` 注册桥接 → `record_datasource_failure`。一处覆盖直调/Engine/未来新增三条路径。
+- `record_datasource_failure` 加 kind 枚举归一(fetch|parse|timeout|auth, 未知归 fetch)防 label 基数膨胀; 注释与 docstring 同步指明调用点; BoardFundFlow/Discovery 两类本就不进 Engine/DataSource 体系, 不入告警域。
+- `tests/test_datasource_failure_metrics.py` 新增 7 用例: fetch 失败上报+原样上抛/成功不误报/监听者异常隔离/注册幂等/真实 tencent vendor 断网(monkeypatch market_get)上报/桥接真实驱动 Prometheus 计数/labelnames 无 symbol+kind 归一。
+- 验证: 新用例 7 passed; marketdata/datasource 相关 44 个测试文件分两批 86 passed(批1 79)与 226 passed(批2), stash 本改动前后两批失败集完全一致(17 failed 均为本机缺 .env/AUTH_ALLOW_DEFAULT_ADMIN 的环境存量), 零新增失败。本机环境修正: `marketdata` editable 安装原指向旧 clone sida-pro, 已重指本仓 packages/marketdata(否则测试解析到 v0.5.11 旧代码)。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-每用户限流分桶取错JWT claim(恒按IP)改统一解析sub(风险方案0.8)
+- `src/web/api/auth.py` — 新增 `principal_from_payload()`: JWT payload → request.state.user 的统一形状, 用户 id 取 `sub`(兜底历史 `user_id`), username/role 平级; 单一出口防止第三处中间件再各写各的。
+- `src/web/middleware.py` — JWTDecodeMiddleware 原 `"user_id": payload.get("user_id")` 取的是 JWT 里不存在的 claim(恒 None)→ 限流分桶永远走 IP, 同出口 IP 的多账号一人跑重活全员被限; 改调 `principal_from_payload()`。AuditMiddleware 的手写解析同款收编(原取法碰巧对, 但属重复实现)。
+- `tests/test_ratelimit_per_user.py` 新增 6 用例: principal_from_payload 三态(sub/兜底/空)、真 JWT 闭环下 state.user.user_id==sub、用户 A 打满 429 同 IP 用户 B 不受影响(修复前必 429 的核心回归)、匿名仍按 IP。
+- 验证: 新用例 6 passed; 关联 5 文件组合(test_ratelimit_per_user/security_20260823/multi_user_auth/p1_service_token/ws_auth_guard)基线对比 —— stash 本改动前后均 25 failed/33 passed, 失败集完全一致(本机缺 AUTH_ALLOW_DEFAULT_ADMIN/.env 的环境存量, 与 v0.5.18 发版注记的"Windows 环境存量"同类), 本改动零新增失败; `grep 'payload.get("user_id")' middleware.py` 零命中。全量门禁留待批次合并前统一跑。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### update-发版 v0.5.18(全面体检P0+P1修复合入main)
 - 本次发版内容: 前端错误上报端点修复+R5门禁 / 部署脚本截断修复 / CI门禁pipefail+PR触发+forecast镜像CI / envelope Redis连接复用 / 调度防双跑 / 模拟盘user_id隔离(迁移_m135) / InteractiveKline金额口径 / health脱敏 / WS鉴权+广播过滤 / forecast配置走HTTP服务token / compose安全加固 / Alertmanager告警闭环+备份docker exec。
 - 部署注意(.env 新增必填): POSTGRES_PASSWORD / REDIS_PASSWORD / SIDA_SERVICE_TOKEN —— 缺失时 compose up 直接报错(fail-fast, 勿用旧 env 直接拉起)。

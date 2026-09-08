@@ -284,6 +284,10 @@ def _pg_klines(symbol: str, market_code, days: int):
     2026-09-07 P2 陈旧快照 failover: 最新 bar 早于今天-12天(覆盖春节级长假)
     视为陈旧网关快照, 不再静默服务, 直接回落联网拿数。库表不存在/查询失败
     一律 (None, None)(静默 fallback)。
+
+    2026-09-08 风险方案1.2/B1: 复权维度入列 —— 只读 adjust='qfq' 分区,
+    前端图表/下游指标必须吃前复权序列, 严禁混入 none 原始价(0.7 勘查的
+    混存污染形态)。旧库无 adjust 列时查询异常 → (None, None) → 联网。
     """
     from datetime import datetime, timedelta, timezone
 
@@ -299,7 +303,7 @@ def _pg_klines(symbol: str, market_code, days: int):
                     "SELECT ts, open, high, low, close, volume "
                     "FROM klines "
                     "WHERE symbol=:s AND market=:m AND period='1d' AND source='tencent' "
-                    "  AND ts >= :c "
+                    "  AND adjust='qfq' AND ts >= :c "
                     "ORDER BY ts ASC"
                 ),
                 {"s": symbol, "m": market_code.value, "c": cutoff},

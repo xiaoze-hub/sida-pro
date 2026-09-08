@@ -26,11 +26,17 @@ class Request:
 
 @dataclass
 class Quote:
-    """标准化实时报价。字段对齐 _parse_tencent_line 的产出。"""
+    """标准化实时报价。字段对齐 _parse_tencent_line 的产出。
+
+    红线: 数据缺失的字段一律 None, 禁止用 0 冒充(0 价会算出 -100% 假暴跌)。
+    status/missing_fields 描述本次解析的完整性, 供下游显式标注「无数据」。
+    """
 
     symbol: str
     market: str
-    current_price: float
+    # 2026-09-08 (风险方案1.1): current_price 改 Optional。缺价 → None + status 标注,
+    # 绝不回退 0.0。下游算术(涨跌幅/市值/评分)遇到 None 必须短路为 None。
+    current_price: float | None = None
     name: str = ""
     prev_close: float | None = None
     open_price: float | None = None
@@ -39,7 +45,7 @@ class Quote:
     change_amount: float | None = None
     change_pct: float | None = None
     volume: float | None = None
-    turnover: float | None = None
+    turnover: float | None = None            # 成交额(元); 单位实测证据见 vendors/tencent.py docstring
     turnover_rate: float | None = None
     volume_ratio: float | None = None
     volume_outer: float | None = None   # 外盘(主动买成交量, 手)
@@ -54,6 +60,9 @@ class Quote:
     # 2026-09-08 来源透传: 实际命中的 vendor + 该次延迟(Engine Response 落到每条 Quote)。
     source: str = ""
     latency_ms: int = 0
+    # 2026-09-08 (风险方案1.1) 完整性标记: ok=字段齐 / partial=部分缺失 / missing=无有效价格。
+    status: str = "ok"
+    missing_fields: list[str] = field(default_factory=list)
 
 
 @dataclass

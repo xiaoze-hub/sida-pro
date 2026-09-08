@@ -83,7 +83,7 @@ def _init_metrics():
         "Notifications sent by channel and result",
         ["channel", "result"],
     )
-    # 数据源失败计数(2026-08-21): 哨兵/采集器可调用 record_datasource_failure
+    # 数据源失败计数: marketdata vendor 层失败自动上报(见本模块底部桥接), 包外自建源手工调用 record_datasource_failure
     _metrics.DATASOURCE_FAILURES = Counter(
         "sida_datasource_failures_total",
         "Datasource failures by provider and kind",
@@ -159,15 +159,38 @@ def record_request_metrics(method: str, path: str, status: int, duration_ms: flo
         pass
 
 
+_DATASOURCE_KINDS = ("fetch", "parse", "timeout", "auth")
+
+
 def record_datasource_failure(provider: str, kind: str = "fetch") -> None:
-    """数据源失败计数(哨兵/采集器调用)。"""
+    """数据源失败计数(供 Prometheus SidaDatasourceFailures 告警)。
+
+    调用点: marketdata vendors/base 的 fetch 包装与 Engine 的 timeout/auth
+    分支经 on_vendor_failure 桥接自动上报; 包外自建源可手工调用。
+    kind 固定枚举(未知值归一为 fetch, 防 label 基数膨胀);
+    禁止把 symbol 等高基数值放进 provider。"""
     try:
         if not _PROMETHEUS_AVAILABLE:
             return
+        if kind not in _DATASOURCE_KINDS:
+            kind = "fetch"
         _init_metrics()
         _metrics.DATASOURCE_FAILURES.labels(provider=provider, kind=kind).inc()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _on_vendor_failure(provider: str, kind: str = "fetch") -> None:
+    """marketdata vendor 层失败 → 本模块计数的桥。"""
+    record_datasource_failure(provider, kind=kind)
+
+
+try:
+    from marketdata.vendors.base import on_vendor_failure as _md_on_vendor_failure
+
+    _md_on_vendor_failure(_on_vendor_failure)
+except Exception:  # noqa: BLE001 - 桥接失败不影响业务
+    pass
 
 
 @router.get("/metrics")
@@ -218,7 +241,7 @@ async def health() -> dict[str, Any]:
       "version": "v0.2.65",
       "uptime_seconds": 1234,
       "components": {
-        "database": {"status": "ok", "pool_size": 5},
+        "database": {"status": "ok", "dialect": "postgresql", "pool_size": 5},
         "redis": {"status": "ok", "url": "redis://..."},
         "scheduler": {"status": "ok", "schedulers": ["agent", "price_alert", "paper_trading"]},
         "rate_limit": {"enabled": true, "buckets": 12},
@@ -244,11 +267,23 @@ async def health() -> dict[str, Any]:
             components["database"] = {
                 "status": "ok",
                 "latency_ms": latency_ms,
+                # 0.4② (2026-09-08): 方言标签, 一眼看出连的是哪个库(sqlite/postgresql)
+                "dialect": engine.url.get_backend_name(),
                 "url": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "sqlite",
             }
             record_component_status("database", True)  # P4: 喂 Prometheus 告警
         except Exception as e:
-            components["database"] = {"status": "down", "error": str(e)[:100]}
+            try:
+                from src.web.database import IS_PG
+
+                _declared = "postgresql" if IS_PG else "sqlite"
+            except Exception:
+                _declared = "unknown"
+            components["database"] = {
+                "status": "down",
+                "dialect": _declared,
+                "error": str(e)[:100],
+            }
             record_component_status("database", False)  # P4: 喂 Prometheus 告警
             overall_ok = False
 
@@ -311,20 +346,32 @@ async def health() -> dict[str, Any]:
                 "schedulers": schedulers,
                 **schedulers_status,
             }
+            if schedulers_status["running"] >= 2:
+                record_component_status("scheduler_leader", True)  # A3
             if schedulers_status["running"] < 2:
-                # 2026-08-23 Q1: 非 leader worker 的调度器数为 0 是预期(调度器由 leader
-                # 进程运行), 不应把整体健康打成 down。只有 leader 自身调度器 <2 才算故障。
-                from src.core.scheduler_leader import is_leader
-                if schedulers_status["running"] == 0 and not is_leader():
+                # 2026-08-23 Q1; 2026-09-08 A3: leader_state() 三态区分
+                # "合法让位(standby)"与"fail-closed 没敢当(failed)"。
+                from src.core.scheduler_leader import leader_state
+                state = leader_state()
+                if schedulers_status["running"] == 0 and state == "standby":
                     components["scheduler"] = {
                         "status": "ok",
                         "schedulers": [],
                         "running": 0,
                         "shutdown": 0,
+                        "leader_state": state,
                         "note": "non-leader worker(调度器由 leader 进程运行)",
                     }
                 else:
                     overall_ok = False
+                    # failed = 选主失败/Redis 不可用, 无任何实例在跑调度 → 告警。
+                    # (standby 不记 0: 合法让位不该响 SidaSchedulerLeaderDown)
+                    record_component_status("scheduler_leader", False)  # A3
+                    components["scheduler"]["leader_state"] = state
+                    components["scheduler"]["note"] = (
+                        "选主失败(fail-closed: Redis 不可用, 无实例在跑调度)"
+                        if state == "failed" else f"leader 调度器不足 2 个(state={state})"
+                    )
         except Exception as e:
             components["scheduler"] = {"status": "down", "error": str(e)[:100]}
             overall_ok = False

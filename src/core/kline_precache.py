@@ -66,6 +66,7 @@ def register_precache_cron(scheduler) -> bool:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=300,
         )
         logger.info("[kline-precache] 盘前预缓存 cron 已注册: 工作日 09:20")
         return True

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from src.core.ai_client import AIClient
+from src.core.ai_client import AIClient, LLMDegradedError
 from src.core.notifier import NotifierManager
 from src.config import AppConfig, StockConfig
 from src.models.market import MarketCode
@@ -267,6 +267,9 @@ class AnalysisResult:
     raw_data: dict = field(default_factory=dict)
     images: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.now)
+    # 0.3(2026-09-08): 显式状态。降级/失败绝不允许伪装成正常内容推给用户。
+    status: str = "success"          # success | degraded | failed
+    error: str | None = None         # 非 success 时必填, 供 UI 与告警使用
 
 
 class BaseAgent(ABC):
@@ -296,7 +299,11 @@ class BaseAgent(ABC):
         system_prompt, user_content = self.build_prompt(data, context)
         # 统一 LLM 配置中心: reports 场景模型绑定 + 画像注入(无 db/绑定失败则原样)
         system_prompt = apply_scene_binding(context, "reports", system_prompt)
-        content = await context.ai_client.chat(system_prompt, user_content)
+        try:
+            content = await context.ai_client.chat(system_prompt, user_content)
+        except LLMDegradedError as e:
+            # 0.3: 降级显式失败, 绝不把降级文案当分析正文
+            return self._degraded_result(e)
 
         # 标题含股票信息
         stock_names = "、".join(s.name for s in context.watchlist[:5])
@@ -315,8 +322,25 @@ class BaseAgent(ABC):
             raw_data=data,
         )
 
+    def _degraded_result(self, error: LLMDegradedError) -> AnalysisResult:
+        """LLM 降级时构造显式失败的 AnalysisResult(status=degraded)。"""
+        return AnalysisResult(
+            agent_name=self.name,
+            title=f"【{self.display_name}】生成失败",
+            content=f"AI 分析未生成：{error.reason}",
+            raw_data={"status": "degraded", "error": str(error)},
+            status="degraded",
+            error=str(error),
+        )
+
     async def should_notify(self, result: AnalysisResult) -> bool:
-        """是否需要通知，子类可重写"""
+        """是否需要通知，子类可重写。非 success 一律不推(0.3 推送总闸)。"""
+        if result.status != "success":
+            logger.warning(
+                "[%s] 分析未成功(status=%s), 跳过推送: %s",
+                self.name, result.status, result.error,
+            )
+            return False
         return True
 
     def _notify_dedupe_ttl_minutes(self, context: AgentContext) -> int:

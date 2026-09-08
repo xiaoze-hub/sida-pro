@@ -1,10 +1,11 @@
 from datetime import datetime
+import re
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from src.web.database import get_db
 from src.web.api.auth import get_current_user
@@ -19,6 +20,38 @@ def _user_channels_query(db: Session, user: User):
     return db.query(NotifyChannel).filter(
         or_(NotifyChannel.user_id == user.id, NotifyChannel.user_id.is_(None))
     )
+
+
+# C2(2026-09-08): config 值是 webhook URL/bot token 等明文凭据, 任何登录用户
+# 都能 GET /api/channels 看到全局渠道的完整密钥。按键名脱敏, 只留末 4 位供辨认;
+# 编辑时 PUT 整体替换 config 重填即可。
+_MASK_KEY_RE = re.compile(r"token|secret|key|password|webhook", re.IGNORECASE)
+
+
+def _mask_config(config: dict | None) -> dict:
+    out: dict = {}
+    for k, v in (config or {}).items():
+        if isinstance(v, str) and v and _MASK_KEY_RE.search(k):
+            out[k] = f"***{v[-4:]}" if len(v) > 8 else "***"
+        else:
+            out[k] = v
+    return out
+
+
+def _get_channel_owned(db: Session, channel_id: int, user: User) -> NotifyChannel:
+    """写路径归属校验(C2, 对齐 stocks.py 读宽写严)。
+
+    原实现更新/删除用"自己的+全局"查询谓词 → 非 owner 可改/删全局渠道。
+    现: 自己的渠道放行; 全局(NULL)仅 owner 可改; 他人的渠道 403。
+    """
+    channel = db.query(NotifyChannel).filter(NotifyChannel.id == channel_id).first()
+    if not channel:
+        raise HTTPException(404, "通知渠道不存在")
+    if channel.user_id is not None and channel.user_id != user.id:
+        raise HTTPException(403, "无权操作他人通知渠道")
+    if channel.user_id is None and user.role != "owner":
+        raise HTTPException(403, "全局共享渠道仅 owner 可修改")
+    return channel
 
 
 def _channel_test_content() -> str:
@@ -64,13 +97,23 @@ class ChannelResponse(BaseModel):
     enabled: bool
     is_default: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+def _to_response(channel: NotifyChannel) -> ChannelResponse:
+    return ChannelResponse(
+        id=channel.id,
+        name=channel.name,
+        type=channel.type,
+        config=_mask_config(channel.config),
+        enabled=channel.enabled,
+        is_default=channel.is_default,
+    )
 
 
 @router.get("", response_model=list[ChannelResponse])
 def list_channels(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    return _user_channels_query(db, user).order_by(NotifyChannel.id).all()
+    return [_to_response(ch) for ch in _user_channels_query(db, user).order_by(NotifyChannel.id).all()]
 
 
 @router.get("/types")
@@ -90,14 +133,12 @@ def create_channel(body: ChannelCreate, db: Session = Depends(get_db), user: Use
     db.add(channel)
     db.commit()
     db.refresh(channel)
-    return channel
+    return _to_response(channel)
 
 
 @router.put("/{channel_id}", response_model=ChannelResponse)
 def update_channel(channel_id: int, body: ChannelUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    channel = _user_channels_query(db, user).filter(NotifyChannel.id == channel_id).first()
-    if not channel:
-        raise HTTPException(404, "通知渠道不存在")
+    channel = _get_channel_owned(db, channel_id, user)
 
     data = body.model_dump(exclude_unset=True)
     next_type = data.get("type", channel.type)
@@ -111,25 +152,21 @@ def update_channel(channel_id: int, body: ChannelUpdate, db: Session = Depends(g
 
     db.commit()
     db.refresh(channel)
-    return channel
+    return _to_response(channel)
 
 
 @router.delete("/{channel_id}")
 def delete_channel(channel_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    channel = _user_channels_query(db, user).filter(NotifyChannel.id == channel_id).first()
-    if not channel:
-        raise HTTPException(404, "通知渠道不存在")
+    channel = _get_channel_owned(db, channel_id, user)
     db.delete(channel)
     db.commit()
     return {"ok": True}
 
 
 @router.post("/{channel_id}/test")
-async def test_channel(channel_id: int, db: Session = Depends(get_db)):
-    """发送测试通知"""
-    channel = db.query(NotifyChannel).filter(NotifyChannel.id == channel_id).first()
-    if not channel:
-        raise HTTPException(404, "通知渠道不存在")
+async def test_channel(channel_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """发送测试通知(仅自己的渠道; 全局渠道仅 owner 可测)"""
+    channel = _get_channel_owned(db, channel_id, user)
 
     notifier = NotifierManager()
     try:

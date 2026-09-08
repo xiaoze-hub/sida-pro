@@ -61,8 +61,31 @@ def _check_db_url_explicit() -> CheckResult:
     return CheckResult(
         "database.url",
         "warning",
-        "\u26a0\ufe0f 未检测到 SIDA_DB_URL, 正在使用 SQLite 回退。"
-        "部署时请务必显式设置 SIDA_DB_URL, 否则会静默丢失 PG 数据。",
+        "\u26a0\ufe0f 未检测到 SIDA_DB_URL, SIDA_ALLOW_SQLITE=1 开发模式运行 SQLite。"
+        "该模式仅限本地开发/快速上手, 生产禁用(数据不进 PG)。",
+    )
+
+
+def check_db_dialect_explicit() -> tuple[bool, str]:
+    """方言门禁(fail-stop, 2026-09-08 0.4②): 生产必须显式声明数据库方言。
+
+    丢 SIDA_DB_URL 曾导致静默回退 SQLite 跑 4 天(src/web/database.py 事故注记)。
+    SIDA_DB_URL 未设置时拒绝启动, 除非显式设 SIDA_ALLOW_SQLITE=1(仅限本地开发/快速上手)。
+    返回 (是否放行, 说明); server.py lifespan 在 init_db 之前调用, False 即终止启动。
+    """
+    if os.environ.get("SIDA_DB_URL"):
+        return True, f"数据库方言: {'PostgreSQL' if IS_PG else 'SQLite'}"
+    if os.environ.get("SIDA_ALLOW_SQLITE") == "1":
+        logger.warning(
+            "\n%s\n[启动门禁] SIDA_DB_URL 未设置, 已按 SIDA_ALLOW_SQLITE=1 回退 SQLite\n"
+            "该模式仅限本地开发/快速上手, 生产禁用\n%s",
+            _BANNER,
+            _BANNER,
+        )
+        return True, "数据库方言: SQLite (开发模式, SIDA_ALLOW_SQLITE=1)"
+    return False, (
+        "SIDA_DB_URL 未设置且未声明 SIDA_ALLOW_SQLITE=1 —— 拒绝启动。"
+        "生产请显式注入 PostgreSQL 连接串; 本地开发/快速上手设 SIDA_ALLOW_SQLITE=1。"
     )
 
 

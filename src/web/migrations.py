@@ -16,6 +16,10 @@ from sqlalchemy.engine import Connection, Engine
 
 logger = logging.getLogger(__name__)
 
+# W1.5(A5) 2026-09-08: PG 多实例并发启动时用会话级 advisory lock 串行化迁移。
+# 固定常量 —— 换值会导致新旧实例之间锁不互斥。
+_MIGRATION_LOCK_KEY = 729138
+
 
 @dataclass(frozen=True)
 class Migration:
@@ -2495,6 +2499,164 @@ def _m135_paper_trading_user_id(conn: Connection) -> None:
             )
 
 
+def _m136_analysis_history_status(conn: Connection) -> None:
+    """0.3(2026-09-08): analysis_history 增加降级状态列 —— 降级报告显式落库。
+
+    - status: success / degraded / failed, 存量行回填 'success'(历史数据视为正常)
+    - error: 降级原因, nullable
+    - 幂等可重跑
+    """
+    if not _has_table(conn, "analysis_history"):
+        return
+    _add_column_if_missing(
+        conn,
+        "analysis_history",
+        "status",
+        "ALTER TABLE analysis_history ADD COLUMN status TEXT DEFAULT 'success'",
+    )
+    _add_column_if_missing(
+        conn,
+        "analysis_history",
+        "error",
+        "ALTER TABLE analysis_history ADD COLUMN error TEXT",
+    )
+    conn.execute(
+        text("UPDATE analysis_history SET status = 'success' WHERE status IS NULL")
+    )
+
+
+def _m137_klines_adjust_dimension(conn: Connection) -> None:
+    """风险方案1.2/B1(2026-09-08): klines 增加复权维度 adjust, 并纳入唯一索引。
+
+    0.7 勘查(docs/research/K线复权污染勘查_20260907.md)实证: 此前 qfq 与不复权
+    无列区分, DO NOTHING 令复权基准漂移/双柱污染不可自愈。加 adjust 列后:
+    - 取值 'qfq'(前复权, 主源) / 'none'(不复权, 新浪兜底) / 'hfq'(预留)
+    - 唯一索引升为 (symbol, market, period, ts, source, adjust), qfq 与 none 互不覆盖
+    - 存量行回填 'none'(待全量重刷后由 ingestor 以 'qfq' 重写)
+    幂等可重跑。
+    """
+    if not _has_table(conn, "klines"):
+        return
+    _add_column_if_missing(
+        conn,
+        "klines",
+        "adjust",
+        "ALTER TABLE klines ADD COLUMN adjust VARCHAR(4) NOT NULL DEFAULT 'none'",
+    )
+    # 旧唯一索引让位: 新索引含 adjust, 满足 hypertable 分区键(ts)在约束内的要求
+    conn.execute(text("DROP INDEX IF EXISTS uq_klines_symbol_period_ts"))
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_klines_symbol_period_ts_adjust "
+            "ON klines(symbol, market, period, ts, source, adjust)"
+        )
+    )
+
+
+def _m138_market_flow_snapshots_table(conn: Connection) -> None:
+    """大盘资金快照表(W1.5/A5 收编: 原 market_data.py 运行时建表)。
+
+    market-capital-flow 接口成功返回后异步写一条快照(30s 节流在应用层)。
+    字段口径与接口返回一致: total_main_flow 两市主力净流入(亿元, 可负),
+    up/down/flat_count 涨跌平家数(同花顺APP盘面口径), sh/sz_flow 沪深市主力净流入。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS market_flow_snapshots (
+                    id SERIAL PRIMARY KEY,
+                    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    total_main_flow DOUBLE PRECISION,
+                    up_count INTEGER,
+                    down_count INTEGER,
+                    flat_count INTEGER,
+                    sh_flow DOUBLE PRECISION,
+                    sz_flow DOUBLE PRECISION
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS market_flow_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    total_main_flow REAL,
+                    up_count INTEGER,
+                    down_count INTEGER,
+                    flat_count INTEGER,
+                    sh_flow REAL,
+                    sz_flow REAL
+                )
+                """
+            )
+        )
+
+
+def _m139_mainline_rank_daily_table(conn: Connection) -> None:
+    """主线排行日快照表(W1.5/A5 收编: 原 market_mainline.py 运行时建表)。
+
+    字段: date(DATE) / name(TEXT) / rank(int) / score(float8);
+    主键 (date, name) 保证同日同线只有一条最新快照。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_rank_daily (
+                    date DATE NOT NULL,
+                    name TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    score DOUBLE PRECISION,
+                    PRIMARY KEY (date, name)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_rank_daily (
+                    date TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    score REAL,
+                    PRIMARY KEY (date, name)
+                )
+                """
+            )
+        )
+
+
+def _m140_market_scan_ranks_table(conn: Connection) -> None:
+    """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
+
+    ORM 模型建表: 方言类型由模型自带, 无需手写双份 DDL。延迟 import 规避
+    database ↔ migrations 循环依赖。老库已由 create_all/兜底建过 → checkfirst 跳过。
+    """
+    from src.web.models import MarketScanRank
+
+    MarketScanRank.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m141_signal_summary_daily_table(conn: Connection) -> None:
+    """信号摘要日快照表 signal_summary_daily(W1.5/A5 收编: 原 signal_summary.py 运行时兜底建表)。"""
+    from src.web.models import SignalSummaryDaily
+
+    SignalSummaryDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m142_dark_fund_top_snapshots_table(conn: Connection) -> None:
+    """暗盘资金 TOP 快照表 dark_fund_top_snapshots(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。"""
+    from src.web.models import DarkFundTopSnapshot
+
+    DarkFundTopSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2539,6 +2701,37 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(133, "signal_snapshots_table", _m133_signal_snapshots),
     Migration(134, "demon_factors_table", _m134_demon_factors),
     Migration(135, "paper_trading_user_id", _m135_paper_trading_user_id),
+    Migration(136, "analysis_history_status", _m136_analysis_history_status),
+    Migration(
+        137,
+        "klines_adjust_dimension",
+        _m137_klines_adjust_dimension,
+    ),
+    Migration(
+        138,
+        "market_flow_snapshots_table",
+        _m138_market_flow_snapshots_table,
+    ),
+    Migration(
+        139,
+        "mainline_rank_daily_table",
+        _m139_mainline_rank_daily_table,
+    ),
+    Migration(
+        140,
+        "market_scan_ranks_table",
+        _m140_market_scan_ranks_table,
+    ),
+    Migration(
+        141,
+        "signal_summary_daily_table",
+        _m141_signal_summary_daily_table,
+    ),
+    Migration(
+        142,
+        "dark_fund_top_snapshots_table",
+        _m142_dark_fund_top_snapshots_table,
+    ),
 )
 
 
@@ -2570,6 +2763,35 @@ def has_pending_migrations(engine: Engine) -> bool:
 
 
 def run_versioned_migrations(engine: Engine) -> None:
+    # W1.5(A5) 2026-09-08: PG 下多实例(生产 2 容器)同时启动会并发跑迁移,
+    # 同一 DDL 并发执行可能撞死锁/duplicate。用会话级 advisory lock 串行化:
+    # 拿锁的实例跑迁移, 等待实例轮到时迁移已全部 success=1, 循环秒过。
+    # 锁必须挂在独立 AUTOCOMMIT 连接上(会话锁随事务回滚即释放, 不能放进
+    # per-migration 事务), 持锁横跨全部迁移事务, finally 中解锁+关连接。
+    if engine.dialect.name == "postgresql":
+        lock_conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        try:
+            lock_conn.execute(
+                text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+            )
+        except Exception:
+            lock_conn.close()
+            raise
+        try:
+            _run_migrations_inner(engine)
+        finally:
+            try:
+                lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+                )
+            except Exception:  # noqa: BLE001 — 解锁失败不掩盖迁移原始异常; 连接断开会话锁自动释放
+                logger.warning("pg_advisory_unlock 失败(连接断开时会话锁自动释放)")
+            lock_conn.close()
+    else:
+        _run_migrations_inner(engine)
+
+
+def _run_migrations_inner(engine: Engine) -> None:
     with engine.begin() as conn:
         _ensure_schema_table(conn)
 

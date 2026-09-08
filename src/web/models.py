@@ -438,6 +438,9 @@ class AnalysisHistory(Base):
     content = Column(String, nullable=False)  # AI 分析结果
     raw_data = Column(JSON, default={})  # 原始数据快照
     agent_kind_snapshot = Column(String, default="workflow")
+    # 0.3(2026-09-08): 降级记录显式落库, 前端据此显示「未生成」而非伪装成分析
+    status = Column(String, default="success")  # success / degraded / failed
+    error = Column(String, nullable=True)  # 降级/失败原因
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

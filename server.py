@@ -1727,6 +1727,14 @@ async def trigger_agent_for_stock(
 @asynccontextmanager
 async def lifespan(app):
     """应用生命周期: 初始化 + 启动调度器"""
+    # 0.4② (2026-09-08) 方言门禁 fail-stop: 丢 SIDA_DB_URL 曾静默回退 SQLite 跑 4 天。
+    # 必须在 init_db 之前把关 —— 配置不明确直接终止启动, 而不是带病起服务。
+    from src.core.startup_check import check_db_dialect_explicit
+
+    _gate_ok, _gate_msg = check_db_dialect_explicit()
+    if not _gate_ok:
+        logger.error("[启动门禁] %s", _gate_msg)
+        raise RuntimeError(f"启动门禁未通过: {_gate_msg}")
     # 热修 2026-08-14: SIGCHLD 置 SIG_IGN, 让内核自动回收子进程(healthcheck 超时 fork 的 python
     # 子进程变僵尸堆积 87+ 个的根因; 容器 PID1 默认不 reap)。
     import signal

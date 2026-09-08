@@ -621,13 +621,26 @@ class KlineCollector:
     def __init__(self, market: MarketCode):
         self.market = market
 
-    def get_klines(self, symbol: str, days: int = 60) -> list[KlineData]:
+    def get_klines(self, symbol: str, days: int = 60, adjust: str = "qfq") -> list[KlineData]:
         """获取日K线数据。
+
+        adjust(风险方案1.2/B1, 2026-09-08): 复权维度, 默认 "qfq"(前复权, 与主源口径一致,
+        显式声明不允许调用方猜); "none"=不复权。PG 中 qfq 与 none 按
+        (symbol, market, period, ts, source, adjust) 分区, 互不覆盖。
+
+        读取顺序(AGENTS.md 红线「K线读取走 PG hypertable 优先」):
+          1. PG qfq/none 分区(厚度 ≥ min(30,days) 且最新柱 12 天内)→ 直接服务, 不发 HTTP;
+          2. adjust='qfq' → 联网 engine(腾讯/东财, 均前复权); PG 无数据时宁空不混;
+          3. adjust='none' → 新浪日K兜底(不复权), 同时写 PG source='sina', adjust='none'。
+        qfq 请求绝不落到新浪原始数据(0.7 勘查: 那正是复权混存污染的来源)。
 
         正缓存(按市场状态 TTL)+ 同标的并发合并(只联网一次)+ 失败负缓存
         (源短暂故障时冷却窗口内不再联网),避免多消费者并发把数据源打爆。
+        缓存键含 interval 与 adjust, 不同复权维度不共用缓存。
         """
-        cache_key = f"{self.market.value}:{symbol}"
+        adjust = adjust or "qfq"
+        interval = "1d"
+        cache_key = f"{self.market.value}:{symbol}:{interval}:{adjust}"
         need = max(1, int(days or 1))
 
         # 1) 快路径:命中新鲜正缓存,无需加锁
@@ -648,7 +661,7 @@ class KlineCollector:
                 bars = stale[2] if stale else []
                 return bars[-need:] if len(bars) > need else bars
 
-            klines = self._fetch_all_sources(symbol, days)
+            klines = self._fetch_all_sources(symbol, days, adjust=adjust)
             if klines and len(klines) >= need:
                 # 成功且条数足够:固化正缓存并清除冷却标记
                 _KLINE_CACHE[cache_key] = (now, len(klines), list(klines))
@@ -674,27 +687,56 @@ class KlineCollector:
             return bars[-need:] if len(bars) > need else bars
         return None
 
-    def _fetch_all_sources(self, symbol: str, days: int) -> list[KlineData]:
-        """走 marketdata 包取数(不含缓存/合并逻辑):Engine 按 DataSource 优先级 +
-        min_count 取数(条数不足则换源/取最长,tencent → stooq(US) / eastmoney(CN/HK))。
-        v0.4.6.3: 腾讯风控+东财被掐+智兔429 全挂时, 回落 PG klines hypertable
-        (800天缓存, 与 /api/klines 的 PG 优先路径同源)。
+    def _fetch_all_sources(self, symbol: str, days: int, adjust: str = "qfq") -> list[KlineData]:
+        """取数链(不含缓存/合并逻辑, 风险方案1.2/B1 重排为 PG 优先):
+
+        1. PG adjust 分区(厚度 ≥ min(30,days) 且最新柱 12 天内)→ 直接服务, 不发 HTTP
+           (AGENTS.md 红线「K线读取走 PG hypertable 优先」);
+        2. adjust='qfq' → marketdata engine(腾讯/东财, 均前复权);
+           adjust='none' → 新浪原始日K(不复权, 成功后诚实落 PG source='sina');
+        3. HTTP 全挂 → 服务同复权维度的陈旧 PG 数据(宁陈旧, 不混维度), 再不行才空。
         """
-        need = (max(10, min(days, 30)) if self.market == MarketCode.US
-                else (max(120, int(days * 0.6)) if self.market in (MarketCode.CN, MarketCode.HK) else 1))
-        want = min(max(days, 3000), 20000) if self.market in (MarketCode.CN, MarketCode.HK) else days
-        bars = get_market_data().klines(symbol, market=self.market.value, days=want, min_count=need)
-        if bars:
-            return [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
-                              low=b.low, volume=b.volume) for b in bars]
-        pg = self._pg_fallback(symbol, days)
-        if pg:
+        pg = self._pg_read(symbol, days, adjust)
+        if pg and self._pg_usable(pg, days):
             return pg
-        # v0.4.9.1: 新浪日K直拉兜底(容器内实测可达; 腾讯风控+东财断连时的最后防线)
-        return self._sina_fallback(symbol, days)
+
+        if adjust == "qfq":
+            need = (max(10, min(days, 30)) if self.market == MarketCode.US
+                    else (max(120, int(days * 0.6)) if self.market in (MarketCode.CN, MarketCode.HK) else 1))
+            want = min(max(days, 3000), 20000) if self.market in (MarketCode.CN, MarketCode.HK) else days
+            bars, _vendor = get_market_data().klines_with_vendor(
+                symbol, market=self.market.value, days=want, min_count=need)
+            if bars:
+                return [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
+                                  low=b.low, volume=b.volume) for b in bars]
+        else:
+            # v0.4.9.1 引入的新浪直拉兜底; 1.2 起仅服务不复权请求
+            sina = self._sina_fallback(symbol, days)
+            if sina:
+                return sina
+
+        return pg or []
+
+    def _pg_usable(self, bars: list[KlineData], days: int) -> bool:
+        """PG 分区可用判定(镜像 /api/klines._pg_klines 口径):
+        厚度 ≥ min(30,days) 且最新柱距今天 ≤ 12 天(覆盖春节级长假)。"""
+        if len(bars) < min(30, days):
+            return False
+        from datetime import date as _date, datetime, timezone
+        try:
+            asof = _date.fromisoformat(max(b.date for b in bars)[:10])
+            today = datetime.now(timezone.utc).date()
+            return (today - asof).days <= 12
+        except ValueError:
+            return False
 
     def _sina_fallback(self, symbol: str, days: int) -> list[KlineData]:
-        """新浪 CN_MarketData.getKLineData 日K兜底(v0.4.9.1)。fail-soft。"""
+        """新浪 CN_MarketData.getKLineData 日K兜底(不复权原始数据)。
+
+        风险方案1.2/B1: 仅 adjust='none' 请求可达此处; 成功后诚实落 PG
+        (source='sina', adjust='none'), 后续 none 读走 PG 分区。qfq 请求绝不
+        消费该数据 —— 不复权价混进前复权序列正是 0.7 勘查的污染形态。fail-soft。
+        """
         try:
             from marketdata.http import market_get
 
@@ -720,13 +762,53 @@ class KlineCollector:
             ]
             if out:
                 logger.info(f"[kline-sina-fallback] {self.market.value}:{symbol} 新浪兜底 {len(out)} 根")
+                self._persist_bars(symbol, out, source="sina", adjust="none")
             return out[-days:] if len(out) > days else out
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[kline-sina-fallback] {symbol}: {e!r}")
             return []
 
-    def _pg_fallback(self, symbol: str, days: int) -> list[KlineData]:
-        """PG klines hypertable 兜底(v0.4.6.3): 联网源全挂时读本地缓存。fail-soft。"""
+    def _persist_bars(self, symbol: str, bars: list[KlineData], *, source: str, adjust: str) -> None:
+        """K线按 (source, adjust) 诚实落 PG(幂等 DO UPDATE, 自愈复权基准)。fail-soft。"""
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            from sqlalchemy import create_engine, text as _text
+            from src.web.database import DB_URL
+            engine = create_engine(DB_URL, pool_pre_ping=True)
+            with engine.begin() as conn:
+                for b in bars:
+                    try:
+                        ts = datetime.fromisoformat(str(b.date)).replace(
+                            tzinfo=ZoneInfo("Asia/Shanghai"))
+                    except Exception:
+                        continue
+                    conn.execute(
+                        _text(
+                            "INSERT INTO klines (ts, symbol, market, period, source, adjust, "
+                            "open, high, low, close, volume, quality_flag) "
+                            "VALUES (:ts, :symbol, :market, :period, :source, :adjust, "
+                            ":open, :high, :low, :close, :volume, 1) "
+                            "ON CONFLICT (symbol, market, period, ts, source, adjust) "
+                            "DO UPDATE SET open=EXCLUDED.open, high=EXCLUDED.high, "
+                            "low=EXCLUDED.low, close=EXCLUDED.close, volume=EXCLUDED.volume"
+                        ),
+                        {"ts": ts, "symbol": symbol, "market": self.market.value,
+                         "period": "1d", "source": source, "adjust": adjust,
+                         "open": float(b.open), "high": float(b.high), "low": float(b.low),
+                         "close": float(b.close), "volume": int(b.volume or 0)},
+                    )
+            engine.dispose()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[kline-persist] {self.market.value}:{symbol}: {e!r}")
+
+    def _pg_read(self, symbol: str, days: int, adjust: str = "qfq") -> list[KlineData]:
+        """PG klines hypertable 按 adjust 分区读取(风险方案1.2/B1)。
+
+        严格限定 (symbol, market, period='1d', adjust) 单分区, 不跨复权维度混取
+        (0.7 勘查: 三源混读/双柱正是污染形态)。fail-soft: 库不可达/表不存在/
+        旧库无 adjust 列(迁移 _m137 前)一律返回空, 由调用方走联网。
+        """
         try:
             from datetime import datetime, timedelta, timezone
             from sqlalchemy import create_engine, text
@@ -738,10 +820,11 @@ class KlineCollector:
                     text(
                         "SELECT ts, open, high, low, close, volume "
                         "FROM klines "
-                        "WHERE symbol=:s AND market=:m AND period='1d' AND ts >= :c "
+                        "WHERE symbol=:s AND market=:m AND period='1d' AND adjust=:adj "
+                        "  AND ts >= :c "
                         "ORDER BY ts ASC"
                     ),
-                    {"s": symbol, "m": self.market.value, "c": cutoff},
+                    {"s": symbol, "m": self.market.value, "adj": adjust, "c": cutoff},
                 ).fetchall()
             engine.dispose()
             out = [
@@ -750,10 +833,10 @@ class KlineCollector:
                 for r in rows
             ]
             if out:
-                logger.info(f"[kline-pg-fallback] {self.market.value}:{symbol} PG 兜底 {len(out)} 根")
+                logger.info(f"[kline-pg-read] {self.market.value}:{symbol} adjust={adjust} PG {len(out)} 根")
             return out
         except Exception as e:  # noqa: BLE001
-            logger.debug(f"[kline-pg-fallback] {symbol}: {e!r}")
+            logger.debug(f"[kline-pg-read] {self.market.value}:{symbol}: {e!r}")
             return []
 
     def get_technical_indicators(

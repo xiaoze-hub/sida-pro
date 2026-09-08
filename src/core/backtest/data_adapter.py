@@ -55,7 +55,8 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
     from sqlalchemy import create_engine, text
     from src.web.database import DB_URL
 
-    # 1. 查 PG klines 表(主源 tencent)
+    # 1. 查 PG klines 表(qfq 分区; 2026-09-08 风险方案1.2/B1: 复权维度入列,
+    #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
     try:
         mc_str = market.value if hasattr(market, "value") else str(market).upper()
         mc_str = "CN" if mc_str in ("SH", "SZ", "BJ") else mc_str
@@ -69,7 +70,7 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
                     "SELECT ts, open, high, low, close, volume "
                     "FROM klines "
                     "WHERE symbol=:s AND market=:m AND period='1d' "
-                    "  AND source='tencent' AND ts >= :c "
+                    "  AND source='tencent' AND adjust='qfq' AND ts >= :c "
                     "ORDER BY ts ASC"
                 ),
                 {"s": symbol, "m": mc_str, "c": cutoff},

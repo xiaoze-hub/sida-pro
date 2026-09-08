@@ -86,16 +86,20 @@ def _pg_engine(dates):
         "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     with eng.begin() as c:
+        # 风险方案1.2/B1: klines 加 adjust 列, 读方只吃 qfq 分区
         c.execute(
             text(
                 "CREATE TABLE klines (symbol TEXT, market TEXT, period TEXT, source TEXT,"
-                " ts TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)"
+                " adjust TEXT DEFAULT 'qfq', ts TEXT, open REAL, high REAL, low REAL,"
+                " close REAL, volume REAL)"
             )
         )
         for d in dates:
             c.execute(
                 text(
-                    "INSERT INTO klines VALUES ('600519','CN','1d','tencent',"
+                    "INSERT INTO klines (symbol, market, period, source, adjust, ts,"
+                    " open, high, low, close, volume) VALUES"
+                    " ('600519','CN','1d','tencent','qfq',"
                     f" '{d}', 1500, 1510, 1490, 1505, 100000)"
                 )
             )
@@ -123,6 +127,18 @@ def test_pg_stale_falls_through(monkeypatch):
     monkeypatch.setattr(db_mod, "engine", eng)
     bars, asof = _pg_klines("600519", MarketCode("CN"), 60)
     assert (bars, asof) == (None, None)
+
+
+def test_pg_none_partition_not_served(monkeypatch):
+    """风险方案1.2/B1: adjust='none'(不复权)分区不得混入 qfq 读取路径。"""
+    import src.web.database as db_mod
+    from src.web.api.klines import _pg_klines
+
+    eng = _pg_engine(_fresh_bars(40))
+    with eng.begin() as c:
+        c.execute(text("UPDATE klines SET adjust='none'"))
+    monkeypatch.setattr(db_mod, "engine", eng)
+    assert _pg_klines("600519", MarketCode("CN"), 60) == (None, None)
 
 
 def test_pg_thin_or_empty_falls_through(monkeypatch):

@@ -2,14 +2,30 @@ import base64
 import json
 import logging
 import asyncio
+import os
 import random
 import threading
 import time
 from pathlib import Path
 
+import httpx
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
+
+
+class LLMDegradedError(RuntimeError):
+    """LLM 不可用(限流/超时/熔断)。
+
+    调用方必须显式处理, 不能当正常内容用 —— 历史教训: 降级字符串曾与正常
+    LLM 输出无法区分, 被当日报存库并推送给老板(风险方案 0.3)。
+    """
+
+    def __init__(self, reason: str, scene: str, retry_after: float | None = None):
+        super().__init__(f"LLM 降级({scene}): {reason}")
+        self.reason = reason
+        self.scene = scene
+        self.retry_after = retry_after
 
 
 # ── 全局 LLM 熔断器 (2026-08-25, P0 AI 审计整改) ──
@@ -98,7 +114,13 @@ def _is_rate_limit_error(e: Exception) -> bool:
 
 
 def _is_retryable_error(e: Exception) -> bool:
-    """判断是否为可重试的临时错误(超时/连接/500 系)。"""
+    """判断是否为可重试的临时错误(超时/连接/500 系)。
+
+    0.3: httpx.TransportError 全家桶(ConnectError/ReadError/各超时)显式 isinstance,
+    之前只靠类名字符串匹配, "ConnectError" 匹配不上 "connection" 导致连接错误被漏判。
+    """
+    if isinstance(e, httpx.TransportError):
+        return True
     if hasattr(e, "status_code"):
         return e.status_code in (500, 502, 503)
     if hasattr(e, "response") and hasattr(e.response, "status_code"):
@@ -120,6 +142,17 @@ class AIClient:
             kwargs["http_client"] = None  # TODO: 如需代理，用 httpx 配置
         # v0.4.9: 关闭 SDK 自动重试 — 429 时由上层限速/冷却控制, 避免 retry 放大风暴
         kwargs.setdefault("max_retries", 0)
+        # 0.3(2026-09-08): 显式超时, 杜绝走 SDK 默认(~600s)把 agent 卡死十分钟。
+        # read 可用 LLM_READ_TIMEOUT 环境变量调(长报告类场景可调大), 但强制有上限。
+        try:
+            _read = float(os.environ.get("LLM_READ_TIMEOUT") or 90.0)
+        except ValueError:
+            _read = 90.0
+        _read = min(max(_read, 10.0), 300.0)
+        kwargs.setdefault(
+            "timeout",
+            httpx.Timeout(connect=10.0, read=_read, write=30.0, pool=10.0),
+        )
         self.client = AsyncOpenAI(**kwargs)
         # 保留原始配置作为实例属性,供需要桥接到第三方 LLM 框架的 agent 使用
         # (e.g. TradingAgents 需要 base_url+api_key 重新构造 langchain 的 LLM)
@@ -132,8 +165,21 @@ class AIClient:
         self._cb = GlobalLLMCircuitBreaker.get_or_create(scene)
 
     # ── LLM 调用日志(2026-08-15): 轻量记录 token/耗时/场景, 失败静默 ──
+    # 0.3(2026-09-08): 同步 DB commit 不得阻塞事件循环 —— 实际落库挪到线程池,
+    # fire-and-forget, 记录失败绝不阻塞主流程。
     def _log_usage(self, scene: str | None, model_name: str,
                    usage, latency_ms: int) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._log_usage_sync(scene, model_name, usage, latency_ms)
+            return
+        loop.run_in_executor(
+            None, self._log_usage_sync, scene, model_name, usage, latency_ms,
+        )
+
+    def _log_usage_sync(self, scene: str | None, model_name: str,
+                        usage, latency_ms: int) -> None:
         try:
             from src.web.models import LLMUsage
             from src.web.database import SessionLocal
@@ -216,10 +262,10 @@ class AIClient:
             images: 图片路径列表（用于多模态，可选）
             temperature: 生成温度
         """
-        # ── 限流检查: 令牌桶耗尽 → 优雅降级 ──
+        # ── 限流检查: 令牌桶耗尽 → 类型化降级(0.3: 不再返回伪装成内容的字符串) ──
         if not self._cb.acquire():
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
-            return "AI 服务暂时不可用（限流），请稍后重试"
+            raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -259,9 +305,14 @@ class AIClient:
             return response.choices[0].message.content or ""
 
         except Exception as e:
-            # 429 已被 _call_with_retry 标记冷却, 在这里优雅降级
+            # 429 已被 _call_with_retry 标记冷却, 在这里类型化降级
             if _is_rate_limit_error(e):
-                return "AI 服务暂时不可用（429 限流），请稍后重试"
+                raise LLMDegradedError("429 限流", self.scene) from e
+            if _is_retryable_error(e):
+                # 0.3: 超时/连接错误同样降级, 不许把原始异常漏给消费端
+                raise LLMDegradedError(
+                    f"网络/服务不可用: {type(e).__name__}", self.scene
+                ) from e
             logger.error(f"AI 调用失败: {e}")
             raise
 
@@ -277,10 +328,10 @@ class AIClient:
             messages: [{"role": "system"/"user"/"assistant", "content": "..."}]
             temperature: 生成温度
         """
-        # ── 限流检查: 令牌桶耗尽 → 优雅降级 ──
+        # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
         if not self._cb.acquire():
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
-            return "AI 服务暂时不可用（限流），请稍后重试"
+            raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
         create_kwargs = {
             "model": self.model,
@@ -298,10 +349,16 @@ class AIClient:
                     f"Token usage: {response.usage.prompt_tokens} + "
                     f"{response.usage.completion_tokens} = {response.usage.total_tokens}"
                 )
+                # 0.3: chat_multi 此前从不记账, 多轮对话 token 成本漏记
+                self._log_usage(None, self.model, response.usage, int(_latency_ms))
             return response.choices[0].message.content or ""
         except Exception as e:
             if _is_rate_limit_error(e):
-                return "AI 服务暂时不可用（429 限流），请稍后重试"
+                raise LLMDegradedError("429 限流", self.scene) from e
+            if _is_retryable_error(e):
+                raise LLMDegradedError(
+                    f"网络/服务不可用: {type(e).__name__}", self.scene
+                ) from e
             logger.error(f"AI 多轮对话调用失败: {e}")
             raise
 
@@ -312,14 +369,10 @@ class AIClient:
         temperature: float = 0.4,
     ):
         """带 tool use 的对话调用，返回原始 message 对象。"""
-        # ── 限流检查: 令牌桶耗尽 → 优雅降级 ──
+        # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
         if not self._cb.acquire():
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
-            from types import SimpleNamespace
-            return SimpleNamespace(
-                content="AI 服务暂时不可用（限流），请稍后重试",
-                tool_calls=None,
-            )
+            raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
         create_kwargs = {
             "model": self.model,
@@ -338,11 +391,11 @@ class AIClient:
             return response.choices[0].message
         except Exception as e:
             if _is_rate_limit_error(e):
-                from types import SimpleNamespace
-                return SimpleNamespace(
-                    content="AI 服务暂时不可用（429 限流），请稍后重试",
-                    tool_calls=None,
-                )
+                raise LLMDegradedError("429 限流", self.scene) from e
+            if _is_retryable_error(e):
+                raise LLMDegradedError(
+                    f"网络/服务不可用: {type(e).__name__}", self.scene
+                ) from e
             logger.error(f"AI tool use 调用失败: {e}")
             raise
 

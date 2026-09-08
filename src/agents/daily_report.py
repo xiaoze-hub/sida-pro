@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
+from src.core.ai_client import LLMDegradedError
 
 
 def _resolve_user_id(context: AgentContext) -> str | None:
@@ -694,7 +695,27 @@ class DailyReportAgent(BaseAgent):
         system_prompt, user_content = self.build_prompt(data, context)
         # 统一 LLM 配置中心: reports 场景模型绑定 + 画像注入(无 db/绑定失败则原样)
         system_prompt = apply_scene_binding(context, "reports", system_prompt)
-        content = await context.ai_client.chat(system_prompt, user_content)
+        try:
+            content = await context.ai_client.chat(system_prompt, user_content)
+        except LLMDegradedError as e:
+            # 0.3: LLM 降级显式失败 —— 历史里留 status=degraded 记录, 但不再
+            # 解析建议/构造"正常"结果, 更不会把降级文案推送出去。
+            result = self._degraded_result(e)
+            save_analysis(
+                agent_name=self.name,
+                stock_symbol="*",
+                content=result.content,
+                title=result.title,
+                user_id=_resolve_user_id(context),
+                raw_data={
+                    "status": "degraded",
+                    "error": result.error,
+                    "timestamp": data.get("timestamp"),
+                },
+                status="degraded",
+                error=result.error,
+            )
+            return result
 
         # Keep structured JSON block at the very end.
         if context.model_label:

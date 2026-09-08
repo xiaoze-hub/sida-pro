@@ -1,6 +1,11 @@
 """pytest 全局 conftest — 确保 import data_source 路径"""
+import os
 import sys
 from pathlib import Path
+
+# 0.4② (2026-09-08) 方言门禁: 测试即本地开发, 显式声明 SQLite, 免得任何测试
+# 在启动门禁生效后因缺 SIDA_DB_URL 被拒。个别测试用 monkeypatch.delenv 覆盖。
+os.environ.setdefault("SIDA_ALLOW_SQLITE", "1")
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent

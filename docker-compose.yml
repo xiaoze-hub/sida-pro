@@ -214,8 +214,9 @@ services:
     depends_on:
       forecast:
         condition: service_healthy
-      panwatch-redis:
+      redis:
         condition: service_healthy
+        required: false
       panwatch-postgres:
         condition: service_healthy
     healthcheck:
@@ -235,12 +236,11 @@ services:
     environment:
       # 预测引擎经 8000 拿资金面/龙虎榜数据(fork 镜像里 /api/market-data/* 已就绪)
       - PANWATCH_URL=http://panwatch:8000
-      # T7(2026-09-08): 配置通道改走 HTTP —— 服务 token(与主服务 SIDA_SERVICE_TOKEN
+      # T7(2026-09-08): 配置通道走 HTTP —— 服务 token(与主服务 SIDA_SERVICE_TOKEN
       # 同值, 在 .env 设置)鉴权读 /api/service/forecast-config, 下发 forecast_llm_* +
-      # 裁判场景绑定。主库已切 PG, 下面 PANWATCH_DB 指向的文件不存在, 仅留作本地
-      # sqlite 直读的遗留兜底; 未设 SIDA_SERVICE_TOKEN 时引擎回落硬编码兜底并打告警。
+      # 裁判场景绑定。2026-09-08 风险方案 0.0: 原 sqlite 直读主库的环境变量与主数据
+      # 卷只读挂载已整体删除, 8010 对主库零接触; 配置不可得时裁判按 abstain 处理。
       - PANWATCH_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}
-      - PANWATCH_DB=/app/panwatch-data/panwatch.db
       # 预测历史必须落到 panwatch_forecast_data 命名卷
       - FORECAST_DB_PATH=/app/data/panwatch_forecast.db
       - TZ=Asia/Shanghai
@@ -248,9 +248,6 @@ services:
     volumes:
       # 预测历史 SQLite(回测报告/预测记录/资金面 LLM 情绪记录)
       - panwatch_forecast_data:/app/data
-      # T10: 改只读挂载(原 :rw 使 root 容器可写主数据卷, 放大误写半径;
-      # T7 后配置走 HTTP, 该卷仅遗留 sqlite 直读兜底用)
-      - panwatch_data:/app/panwatch-data:ro
     mem_limit: 4g
     logging:
       driver: json-file

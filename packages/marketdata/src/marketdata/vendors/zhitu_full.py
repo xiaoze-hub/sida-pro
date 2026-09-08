@@ -24,6 +24,19 @@ from marketdata.vendors.zhitu_api import (
 logger = logging.getLogger("marketdata.zhitu_full")
 
 
+def _num(r: dict, *keys) -> float | None:
+    """按序取第一个非空可转数值的 key; 全缺返回 None(不回退 0, 风险方案1.1)。"""
+    for k in keys:
+        v = r.get(k)
+        if v is None or str(v).strip() == "":
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _to_zhitu_code(sym: Symbol) -> str:
     """Symbol → 智兔代码格式 000001.SZ / 600519.SH / 00700.HK。"""
     if sym.market.value == "CN":
@@ -47,13 +60,23 @@ class ZhituKlineVendor(KlineVendor):
                 continue
             for r in rows:
                 try:
+                    # 2026-09-08 (风险方案1.1): OHLC 缺失的行不是一根 K 线, 直接丢弃,
+                    # 绝不产出 0 价格 bar 混进均线; volume 缺失按 Bar 契约落 0(停牌日合法值,
+                    # K 线维度治理统一在 1.2/B1 全量重刷处理)。
+                    open_ = _num(r, "open", "o")
+                    close = _num(r, "close", "c")
+                    high = _num(r, "high", "h")
+                    low = _num(r, "low", "l")
+                    if open_ is None or close is None or high is None or low is None:
+                        logger.debug("zhitu K线 %s 缺 OHLC, 丢弃行: %s", code, r)
+                        continue
                     out.append(Bar(
                         date=str(r.get("date") or r.get("t") or r.get("time"))[:10],
-                        open=float(r.get("open") or r.get("o") or 0),
-                        high=float(r.get("high") or r.get("h") or 0),
-                        low=float(r.get("low") or r.get("l") or 0),
-                        close=float(r.get("close") or r.get("c") or 0),
-                        volume=float(r.get("volume") or r.get("v") or 0),
+                        open=open_,
+                        high=high,
+                        low=low,
+                        close=close,
+                        volume=_num(r, "volume", "v") or 0.0,
                     ))
                 except (TypeError, ValueError):
                     continue
@@ -73,14 +96,16 @@ class ZhituCapitalFlowVendor(CapitalFlowVendor):
                 continue
             r = rows[0]
             try:
+                # 2026-09-08 (风险方案1.1): 资金流缺失保留 None(CapitalFlow 字段皆 Optional),
+                # 净流入 0 与"无数据"是两回事, 不许混。
                 out.append(CapitalFlow(
                     symbol=sym.code,
                     name="",
-                    main_net_inflow=float(r.get("main_net") or r.get("zljlr") or 0),
-                    super_net_inflow=float(r.get("特大") or 0),
-                    big_net_inflow=float(r.get("大") or 0),
-                    mid_net_inflow=float(r.get("中") or 0),
-                    small_net_inflow=float(r.get("小") or 0),
+                    main_net_inflow=_num(r, "main_net", "zljlr"),
+                    super_net_inflow=_num(r, "特大"),
+                    big_net_inflow=_num(r, "大"),
+                    mid_net_inflow=_num(r, "中"),
+                    small_net_inflow=_num(r, "小"),
                 ))
             except (TypeError, ValueError):
                 continue
@@ -103,12 +128,16 @@ class ZhituShareholdersVendor(ShareholdersVendor):
             holders = d.get("holders") or d.get("data") or []
             for h in holders[:10]:
                 try:
+                    # 2026-09-08 (风险方案1.1): 缺失保留 None, 不伪造 0 户/0 变化。
+                    shares = _num(h, "shares")
+                    change = _num(h, "change")
+                    ratio = _num(h, "ratio")
                     out.append(ShareholderItem(
                         report_date=rep_date,
                         symbol=sym.code,
-                        holder_num=int(float(h.get("shares") or 0)),
-                        change_num=int(float(h.get("change") or 0)),
-                        change_ratio=float(h.get("ratio") or 0),
+                        holder_num=int(shares) if shares is not None else None,
+                        change_num=int(change) if change is not None else None,
+                        change_ratio=ratio,
                     ))
                 except (TypeError, ValueError):
                     continue
@@ -127,13 +156,14 @@ class ZhituFundamentalsVendor(FundamentalsVendor):
             if not d:
                 continue
             try:
+                # 2026-09-08 (风险方案1.1): 估值缺失保留 None, 不伪造 PE=0。
                 out.append(Fundamentals(
                     symbol=sym.code,
                     market=sym.market.value,
                     name="",
-                    pe_ttm=float(d.get("pe") or d.get("syl") or 0),
-                    pb=float(d.get("pb") or d.get("scl") or 0),
-                    total_market_value=float(d.get("total_mv") or d.get("zgz") or 0),
+                    pe_ttm=_num(d, "pe", "syl"),
+                    pb=_num(d, "pb", "scl"),
+                    total_market_value=_num(d, "total_mv", "zgz"),
                 ))
             except (TypeError, ValueError):
                 continue

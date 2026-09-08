@@ -132,6 +132,7 @@ class KlineBackfillScheduler:
             replace_existing=True,
             coalesce=True,  # 错过的多次合并成一次
             max_instances=1,
+            misfire_grace_time=300,
         )
         self.scheduler.start()
         from src.core.scheduler_registry import register
@@ -211,6 +212,8 @@ class KlineBackfillScheduler:
                 run_date=run_date,
                 id=job_id,
                 replace_existing=True,
+                max_instances=1,
+                coalesce=True,
                 misfire_grace_time=300,
             )
             logger.info(

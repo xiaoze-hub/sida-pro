@@ -19,7 +19,7 @@ from marketdata.keypool import KeyPool
 from marketdata.ports import ConfigProvider, MetricsSink
 from marketdata.symbol import Market, Symbol
 from marketdata.types import Request, Response
-from marketdata.vendors.base import Vendor
+from marketdata.vendors.base import Vendor, emit_vendor_failure
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ class Engine:
                     last_err = err
                     logger.warning(f"[marketdata/{self.datatype}] vendor={src.vendor} TIMEOUT {err}")
                     record_error(f"{src.vendor}: {err}")
+                    emit_vendor_failure(src.vendor, "timeout")
                     break
                 except Exception as e:
                     latency = int((time.monotonic() - t0) * 1000)
@@ -125,6 +126,8 @@ class Engine:
                     last_err = err
                     logger.warning(f"[marketdata/{self.datatype}] vendor={src.vendor} key={api_key[:8] if api_key else '-'} raised: {e}")
                     record_error(f"{src.vendor}: {type(e).__name__}: {e}")
+                    kind = "auth" if rl and ("401" in err or "403" in err or "unauthorized" in err.lower()) else "fetch"
+                    emit_vendor_failure(src.vendor, kind)
                     if kp and rl:
                         continue  # 限流: 换下一个 key 重试
                     break  # 其他异常: 跳到下一个源

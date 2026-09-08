@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
+from src.core.ai_client import LLMDegradedError
 from src.core.analysis_history import get_latest_analysis, get_analysis
 from src.core.context_builder import ContextBuilder
 from src.core.context_store import (
@@ -1891,7 +1892,22 @@ class IntradayMonitorAgent(BaseAgent):
         # 打印完整 prompt 用于调试
         logger.info(f"=== Prompt for {stock.symbol} ===\n{user_content}")
 
-        raw_content = await context.ai_client.chat(system_prompt, user_content)
+        try:
+            raw_content = await context.ai_client.chat(system_prompt, user_content)
+        except LLMDegradedError as e:
+            # 0.3: 降级显式失败 —— 不把降级文案当个股建议解析, 也不推送
+            return AnalysisResult(
+                agent_name=self.name,
+                title=f"【{self.display_name}】{stock.symbol} 生成失败",
+                content=f"AI 分析未生成：{e.reason}",
+                raw_data={
+                    "status": "degraded",
+                    "error": str(e),
+                    "stock": {"symbol": stock.symbol, "name": stock.name},
+                },
+                status="degraded",
+                error=str(e),
+            )
 
         # 打印 AI 返回结果
         logger.info(f"=== AI Response for {stock.symbol} ===\n{raw_content}")
@@ -2025,6 +2041,10 @@ class IntradayMonitorAgent(BaseAgent):
 
     async def should_notify(self, result: AnalysisResult) -> bool:
         """检查是否需要通知"""
+        # 0.3: 降级/失败结果不推送
+        if result.status != "success":
+            return False
+
         # 跳过的结果不通知
         if result.raw_data.get("skipped"):
             return False

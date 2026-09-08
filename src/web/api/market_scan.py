@@ -34,27 +34,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 存量库兜底建表(生产启动会 create_all, 但老库升级/测试环境可能没有该表)。
-# 用 ORM 的 __table__.create(checkfirst=True) 跨 SQLite/PG 通用, 无需手写 DDL。
-_rank_table_ready = False
-
-
-def _ensure_rank_table() -> None:
-    global _rank_table_ready
-    if _rank_table_ready:
-        return
-    try:
-        from src.web.database import engine
-
-        MarketScanRank.__table__.create(bind=engine, checkfirst=True)
-        _rank_table_ready = True
-    except Exception as e:  # noqa: BLE001
-        logger.debug("market_scan_ranks 兜底建表失败(可能已由 create_all 建): %s", e)
-
-
-_ensure_rank_table()
-
-
+# 存量库兜底建表已收编进 B 层版本化迁移(W1.5/A5 2026-09-08):
+# market_scan_ranks → src/web/migrations.py _m140; schema 变更唯一入口是迁移。
 class RefreshRequest(BaseModel):
     symbols: list[str] | None = None   # 限池扫描(逗号或列表); None=全市场
     top_n: int = 20
@@ -186,27 +167,7 @@ def run_market_scan_job() -> dict:
 
 # ──────────────────────────── 暗盘资金 TOP(A6) ────────────────────────────
 # 全市场暗盘资金 TOP 扫描(thsdk DDE 真实主力资金流), 独立于三榜的 OHLC 对照项。
-# 复用 market-scan 前缀, 独立表 dark_fund_top_snapshots。
-
-_dft_table_ready = False
-
-
-def _ensure_dft_table() -> None:
-    global _dft_table_ready
-    if _dft_table_ready:
-        return
-    try:
-        from src.web.database import engine
-
-        DarkFundTopSnapshot.__table__.create(bind=engine, checkfirst=True)
-        _dft_table_ready = True
-    except Exception as e:  # noqa: BLE001
-        logger.debug("dark_fund_top_snapshots 兜底建表失败(可能已由 create_all 建): %s", e)
-
-
-_ensure_dft_table()
-
-
+# 复用 market-scan 前缀, 独立表 dark_fund_top_snapshots(建表在 B 层 _m142, W1.5/A5 收编)。
 class DarkFundTopRequest(BaseModel):
     top_n: int = 20
     with_tck: bool = False           # 是否对持仓股附加 .tck 委托号级精确暗盘

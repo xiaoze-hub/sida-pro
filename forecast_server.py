@@ -384,14 +384,17 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
 
     # --- AI 裁判层(2026-08-12, B方案): 预测交给 PanWatch 对话助手(8000)评估, 可改最终方向 ---
     # 裁判用对话助手的工具(主力意图/资金流/技术面/K线形态)核实盘面后给 verdict;
-    # verdict=adjust 且给出方向时强势覆盖 direction; 任何异常降级 confirm, 不阻断主流程。
+    # verdict=adjust 且给出方向时强势覆盖 direction; 任何异常按 abstain 处理
+    # (维持模型方向, 绝不伪造成"裁判确认过", 2026-09-08 风险方案 0.0), 不阻断主流程。
     # 用户影子画像(B方案, 2026-08-13): 经 8000 GET /api/shadow/profile 拉 owner 画像,
     # 注入裁判 prompt 只影响建议贴合度(短线/潜伏等表达), 不改 verdict/direction。
     try:
         from ai_referee import evaluate_prediction, resolve_referee_model_cfg
         user_profile = _get_owner_shadow_profile()  # 失败返回 None, 裁判照常跑
-        # 统一 LLM 配置中心(2026-08-13): referee 场景绑定 > 旧 forecast_llm_* > 默认 agnes。
-        # 场景绑定解析出 ai_model_id 时, 建会话时传给对话助手(chat.py 优先用它)。
+        # 统一 LLM 配置中心(2026-08-13): referee 场景绑定 > 旧 forecast_llm_*。
+        # 0.0: 配置均不可得时 resolve 抛 RefereeConfigUnavailable → 按 abstain 处理,
+        # 绝不回落硬编码 agnes。场景绑定解析出 ai_model_id 时,
+        # 建会话时传给对话助手(chat.py 优先用它)。
         referee_model_cfg = resolve_referee_model_cfg()
         if referee_model_cfg.get("ai_model_id"):
             _log(tid, f"AI 裁判模型: referee 场景绑定 ai_model_id={referee_model_cfg['ai_model_id']} ({referee_model_cfg.get('model', '')})")
@@ -410,8 +413,10 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
             model_cfg=referee_model_cfg,
         )
     except Exception as e:
-        _log(tid, f"AI 裁判调用异常(降级 confirm): {e}")
-        ai_verdict = {"verdict": "confirm", "direction": None, "reason": f"裁判不可用: {e}"}
+        # 0.0 fail-open→abstain: 裁判不可用绝不伪造成"裁判确认过"(confirm),
+        # 维持模型方向并显式标注 abstain。
+        _log(tid, f"AI 裁判不可用(按 abstain 处理, 维持模型方向): {e}")
+        ai_verdict = {"verdict": "abstain", "direction": None, "reason": f"裁判不可用: {e}"}
 
     if ai_verdict.get("verdict") == "adjust" and ai_verdict.get("direction") in ("up", "down"):
         old_dir = direction

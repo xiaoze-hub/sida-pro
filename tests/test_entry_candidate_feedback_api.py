@@ -14,7 +14,22 @@ SNAP = "2099-01-01"  # 不可能的真实快照日期, 避免污染业务数据
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    # 登录限流(敏感路径 20/min/IP)在测试进程内跨文件累计 → 合跑 429, 单测关闭
+    monkeypatch.setattr("src.web.middleware.RATE_LIMIT_ENABLED", False)
+    # 0.6 删除固定默认密码后: 用 env 确定性引导 owner(bootstrap 在请求期惰性执行)
+    monkeypatch.setenv("AUTH_USERNAME", "admin")
+    monkeypatch.setenv("AUTH_PASSWORD", "entry-fb-0606")
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    db = SessionLocal()
+    try:
+        db.query(User).filter(User.username == "admin").delete()
+        db.commit()
+    finally:
+        db.close()
+
     from src.web.app import app
 
     return TestClient(app)
@@ -22,7 +37,7 @@ def client():
 
 @pytest.fixture()
 def token(client):
-    r = client.post("/api/auth/login", json={"username": "admin", "password": "xz.170530"})
+    r = client.post("/api/auth/login", json={"username": "admin", "password": "entry-fb-0606"})
     assert r.status_code == 200, r.text
     return r.json()["data"]["token"]
 

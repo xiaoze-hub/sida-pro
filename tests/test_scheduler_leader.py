@@ -60,11 +60,14 @@ def test_reentry_after_reload(monkeypatch):
     assert ok2 and "续期" in why2
 
 
-def test_redis_unavailable_falls_back(monkeypatch):
+def test_redis_unavailable_fail_closed(monkeypatch):
+    """A3(2026-09-08): Redis 不可用不再"回退全员启动", 改 fail-closed 放弃 leader。"""
     def boom():
         raise ConnectionError("down")
 
     monkeypatch.delenv("SIDA_ENABLE_SCHEDULERS", raising=False)
     monkeypatch.setattr(sl, "_client", boom)
+    monkeypatch.setattr(sl, "ACQUIRE_RETRY_SECONDS", 0)
     ok, why = sl.try_acquire()
-    assert ok and "回退" in why
+    assert not ok and "fail-closed" in why
+    assert sl.leader_state() == "failed"
