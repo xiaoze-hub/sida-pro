@@ -241,9 +241,13 @@ def get_dashboard_overview(
     risk_items = risk_items[: int(risk_limit)]
 
     # Portfolio quick stats (DB-only, no实时行情请求).
+    # C3(2026-09-09): 持仓/自选计数按归属过滤(本人 + 全局), 此前聚合全库所有用户.
     positions = (
         db.query(Position, Stock)
         .join(Stock, Position.stock_id == Stock.id)
+        .filter(
+            or_(Position.user_id == user.id, Position.user_id.is_(None)),
+        )
         .all()
     )
     by_market: dict[str, dict] = {}
@@ -263,7 +267,14 @@ def get_dashboard_overview(
         )
         bucket["positions"] += 1
         bucket["invested_cost"] += cost
-    watchlist_count = int((db.query(func.count(Stock.id)).scalar() or 0))
+    watchlist_count = int(
+        (
+            db.query(func.count(Stock.id))
+            .filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
+            .scalar()
+            or 0
+        )
+    )
     from src.web.models import Account  # local import to avoid circular import at module import time
 
     total_available = float(

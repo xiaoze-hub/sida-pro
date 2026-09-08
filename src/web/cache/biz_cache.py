@@ -244,3 +244,15 @@ class BizCache:
 
 # 全局单例
 biz_cache = BizCache.instance()
+
+
+def user_scoped_key(prefix: str, user: Any, **parts: Any) -> str:
+    """C3(2026-09-09): 凡按用户算出来的结果必须用它做缓存键, 防跨用户串缓存。
+
+    键形: {prefix}:u:{user_id}[:k=v...]。user 缺失(id=None)退化为 anon 段,
+    不与任何真实用户共享键。
+    """
+    uid = str(getattr(user, "id", None) or "anon")
+    extra = ":".join(f"{k}={v}" for k, v in sorted(parts.items()))
+    base = f"{prefix}:u:{uid}"
+    return f"{base}:{extra}" if extra else base

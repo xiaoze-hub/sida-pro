@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.models import (
     Stock,
@@ -432,7 +433,8 @@ async def trigger_stock_agent(
     suppress_notify = stock_id <= 0
 
     if stock_id > 0:
-        db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
+        # C3(2026-09-09): 股票按归属过滤 —— 不能借 stock_id 触发他人自选股的 Agent
+        db_stock = scoped(db.query(Stock), user).filter(Stock.id == stock_id).first()
         if not db_stock:
             raise HTTPException(404, "股票不存在")
 
@@ -456,7 +458,9 @@ async def trigger_stock_agent(
 
         market = (market or "CN").strip().upper() or "CN"
         name = (name or "").strip() or symbol
-        db_stock = db.query(Stock).filter(
+        # C3(2026-09-09): 同上按归属过滤; 非本人自选 → 走不落库的一次性分析,
+        # 不再复用他人 Stock 行/其 Agent 绑定。
+        db_stock = scoped(db.query(Stock), user).filter(
             Stock.symbol == symbol, Stock.market == market
         ).first()
         if db_stock:

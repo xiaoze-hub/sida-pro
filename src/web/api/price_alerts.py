@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from src.config import Settings
 from src.core.price_alert_engine import ENGINE
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import PriceAlertHit, PriceAlertRule, Stock, User
@@ -135,8 +136,11 @@ def create_alert_rule(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """S3(2026-08-23): 新建规则写入 user_id。"""
-    stock = db.query(Stock).filter(Stock.id == body.stock_id).first()
+    """S3(2026-08-23): 新建规则写入 user_id。
+
+    C3(2026-09-09): 股票按归属过滤 —— 不能借 stock_id 在他人自选上建提醒。
+    """
+    stock = scoped(db.query(Stock), user).filter(Stock.id == body.stock_id).first()
     if not stock:
         raise HTTPException(404, "股票不存在")
     _validate_condition_group(body.condition_group)
@@ -254,8 +258,17 @@ def delete_alert_rule(
 
 
 @router.get("/hits/today")
-def list_today_hits(limit: int = 50, db: Session = Depends(get_db)):
-    """今日(本地时区)全部命中,跨规则聚合 —— 供首页"今日要紧事"。"""
+def list_today_hits(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """今日(本地时区)当前用户的命中, 跨规则聚合 —— 供首页"今日要紧事"。
+
+    C3(2026-09-09): 此前完全无 user 过滤(全表 PriceAlertHit + 全表规则),
+    命中历史跨用户可见。price_alert_hits 无 user_id 列, 经 rule_id 关联
+    PriceAlertRule.user_id 过滤。
+    """
     tz_name = Settings().app_timezone or "UTC"
     try:
         tzinfo = ZoneInfo(tz_name)
@@ -266,14 +279,24 @@ def list_today_hits(limit: int = 50, db: Session = Depends(get_db)):
 
     hits = (
         db.query(PriceAlertHit)
-        .filter(PriceAlertHit.trigger_time >= start_utc)
+        .join(PriceAlertRule, PriceAlertHit.rule_id == PriceAlertRule.id)
+        .filter(
+            PriceAlertRule.user_id == user.id,
+            PriceAlertHit.trigger_time >= start_utc,
+        )
         .order_by(PriceAlertHit.trigger_time.desc(), PriceAlertHit.id.desc())
         .limit(max(1, min(int(limit), 200)))
         .all()
     )
     if not hits:
         return []
-    rule_map = {r.id: r for r in db.query(PriceAlertRule).all()}
+    rule_ids = {h.rule_id for h in hits}
+    rule_map = {
+        r.id: r
+        for r in db.query(PriceAlertRule)
+        .filter(PriceAlertRule.user_id == user.id, PriceAlertRule.id.in_(rule_ids))
+        .all()
+    }
     stock_ids = {h.stock_id for h in hits}
     stock_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()}
     out = []
@@ -351,7 +374,17 @@ async def test_alert_rule(
 
 
 @router.post("/scan")
-async def scan_alert_rules(dry_run: bool = False, bypass_market_hours: bool = True):
+async def scan_alert_rules(
+    dry_run: bool = False,
+    bypass_market_hours: bool = True,
+    user: User = Depends(get_current_user),
+):
+    """手动触发提醒扫描。
+
+    C3(2026-09-09): 此前完全无鉴权, 未登录也能触发全量扫描(会真发通知)。
+    扫描仍覆盖全部用户的规则(引擎语义如此), 但触发权收回到已登录用户。
+    """
+    _ = user  # 鉴权即目的
     try:
         from server import price_alert_scheduler
 

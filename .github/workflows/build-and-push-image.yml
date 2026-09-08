@@ -82,6 +82,11 @@ jobs:
         # 计数列 server_default 防回归。失败即拦构建 (v0.4.51 缺列 500 教训)。
         run: python scripts/check_migrations.py
 
+      - name: Multi-tenant scope check (门禁 · C3 越权静态扫描)
+        # W2.1/C3(2026-09-09): src/web/api 下 db.query(带 user_id 的模型)必须走
+        # scoped()/owned_or_404()/writable() 或显式 @allow_cross_user 豁免。
+        run: python scripts/check_scoped_queries.py
+
       - name: Backend tests (门禁 · pytest)
         # 2026-09-08 0.6: 固定默认密码与其开关已删除,
         # 需要登录的测试文件自备 AUTH_USERNAME/AUTH_PASSWORD(见各测试 fixture)。
