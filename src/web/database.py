@@ -615,9 +615,14 @@ def _migrate_settings_to_models(engine):
                 )
                 conn.execute(
                     text(
-                        "INSERT INTO ai_models (name, service_id, model, is_default) VALUES (:name, :service_id, :model, 1)"
+                        "INSERT INTO ai_models (name, service_id, model, is_default) VALUES (:name, :service_id, :model, :is_default)"
                     ),
-                    {"name": ai_model, "service_id": service_id, "model": ai_model},
+                    {
+                        "name": ai_model,
+                        "service_id": service_id,
+                        "model": ai_model,
+                        "is_default": True,
+                    },
                 )
                 logger.info(f"已迁移 AI 配置: {ai_model}")
 
@@ -633,9 +638,15 @@ def _migrate_settings_to_models(engine):
                 config_json = json.dumps({"bot_token": bot_token, "chat_id": chat_id})
                 conn.execute(
                     text(
-                        "INSERT INTO notify_channels (name, type, config, enabled, is_default) VALUES (:name, :type, :config, 1, 1)"
+                        "INSERT INTO notify_channels (name, type, config, enabled, is_default) VALUES (:name, :type, :config, :enabled, :is_default)"
                     ),
-                    {"name": "Telegram", "type": "telegram", "config": config_json},
+                    {
+                        "name": "Telegram",
+                        "type": "telegram",
+                        "config": config_json,
+                        "enabled": True,
+                        "is_default": True,
+                    },
                 )
                 logger.info("已迁移 Telegram 配置为 NotifyChannel")
 
@@ -683,10 +694,14 @@ def _migrate_positions_to_accounts(engine):
 
         if not stocks_with_position:
             # 没有持仓数据，创建一个空的默认账户
+            # Boolean 列不吃整型字面量: PG 直接 DatatypeMismatch 崩, SQLite 宽容。
+            # 绑定参数传 True 两方言通用(与 _migrate_remove_stock_enabled 的
+            # 方言字面量教训同源)。全新 PG 库首启必走这里, 不修则装不起来。
             conn.execute(
                 text(
-                    "INSERT INTO accounts (name, available_funds, enabled) VALUES ('默认账户', 0, 1)"
-                )
+                    "INSERT INTO accounts (name, available_funds, enabled) VALUES ('默认账户', 0, :enabled)"
+                ),
+                {"enabled": True},
             )
             conn.commit()
             logger.info("已创建默认账户")
@@ -701,8 +716,8 @@ def _migrate_positions_to_accounts(engine):
 
         account_id = _insert_returning_id(
             conn,
-            "INSERT INTO accounts (name, available_funds, enabled) VALUES (:name, :funds, 1)",
-            {"name": "默认账户", "funds": available_funds},
+            "INSERT INTO accounts (name, available_funds, enabled) VALUES (:name, :funds, :enabled)",
+            {"name": "默认账户", "funds": available_funds, "enabled": True},
         )
 
         # 迁移持仓数据

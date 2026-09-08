@@ -131,9 +131,15 @@ def test_high_frequency_throttle_one_per_hour(tracker_env):
     assert len(rows2) == len(before) + 1
 
 
-def test_file_write_failure_is_silent():
-    """落盘/通知失败绝不影响主流程(capture_exception 永不抛)。"""
-    error_tracker.configure(file_path="/nonexistent_dir_xyz/err.jsonl", reset_state=True)
+def test_file_write_failure_is_silent(tmp_path):
+    """落盘/通知失败绝不影响主流程(capture_exception 永不抛)。
+
+    父路径指向一个已存在的文件 → mkdir 必然 ENOTDIR: 不依赖目录权限,
+    root 容器 / CI runner / Windows 行为一致。
+    """
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    error_tracker.configure(file_path=str(blocker / "sub" / "err.jsonl"), reset_state=True)
     result = error_tracker.capture_exception(ValueError("x"))
     # 返回 False(未落盘), 但不抛异常
     assert result is False

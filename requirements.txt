@@ -13,6 +13,9 @@ tenacity>=8.2.0
 fastapi>=0.104.0
 uvicorn>=0.24.0
 sqlalchemy>=2.0.0
+# zoneinfo 时区库(Windows/精简容器无系统 tzdata 时补位): _today_cn 等用
+# Asia/Shanghai 定日期口径, 缺 tzdata 会让资金流日期直接缺失(2026-09-09)
+tzdata>=2024.1
 # PostgreSQL adapter(SQLite→PG 切换需要,2026-08-17)
 psycopg2-binary>=2.9.9
 

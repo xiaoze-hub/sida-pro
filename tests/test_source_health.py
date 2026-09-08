@@ -118,12 +118,20 @@ def test_wencai_without_credentials_is_degraded(monkeypatch):
 
 
 def test_wencai_with_credentials(monkeypatch):
-    """注入了账号密码, 且 thsdk 可用 → connected。"""
+    """注入了账号密码, 且 thsdk 可用 → connected。
+
+    thsdk 不进 requirements(CI 无真包): check 只看"可 import + 凭据已注入",
+    注入假模块即满足前提, 不发真实查询。
+    """
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "thsdk", types.ModuleType("thsdk"))
     monkeypatch.setenv("THS_USERNAME", "u")
     monkeypatch.setenv("THS_PASSWORD", "p")
     r = sh.check_wencai()
     assert r["status"] in VALID_STATUS
-    assert r["status"] != "down"
+    assert r["status"] == "connected"
 
 
 # ---------------------------------------------------------------------------

@@ -2,19 +2,32 @@
 
 2026-09-08: 历史教训 — env 丢失时生产曾静默落在容器内 sqlite
 (database is locked + 重建丢数据)。以后 DOCKER=1 无连接串直接崩启动。
+
+2026-09-09: conftest 给全部测试 setdefault 了 SIDA_ALLOW_SQLITE=1(0.4② 的
+逃生口), 会把 fail-fast 门整个豁免 — _reload_database 必须把它一起摘掉再
+reload, 结束后原样恢复(否则 CI 门禁永远红)。
 """
 
 import importlib
 import os
 
+_RELOAD_KEYS = ("DOCKER", "SIDA_DB_URL", "SIDA_ALLOW_SQLITE")
+
 
 def _reload_database(env: dict):
-    for k in ("DOCKER", "SIDA_DB_URL"):
+    saved = {k: os.environ.get(k) for k in _RELOAD_KEYS}
+    for k in _RELOAD_KEYS:
         os.environ.pop(k, None)
     os.environ.update(env)
     import src.web.database as db
 
-    return importlib.reload(db)
+    try:
+        return importlib.reload(db)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_docker_without_db_url_fails_fast():
@@ -24,24 +37,16 @@ def test_docker_without_db_url_fails_fast():
         assert "SIDA_DB_URL" in str(e)
     else:
         raise AssertionError("DOCKER=1 无 SIDA_DB_URL 应该 RuntimeError, 实际静默启动了")
-    finally:
-        _reload_database({})
 
 
 def test_docker_with_pg_url_ok():
     db = _reload_database(
         {"DOCKER": "1", "SIDA_DB_URL": "postgresql+psycopg2://sida:x@pg:5432/sida"}
     )
-    try:
-        assert db.IS_PG is True
-    finally:
-        _reload_database({})
+    assert db.IS_PG is True
 
 
 def test_local_default_still_sqlite():
     db = _reload_database({})
-    try:
-        assert db.IS_PG is False
-        assert db.DB_URL.startswith("sqlite")
-    finally:
-        _reload_database({})
+    assert db.IS_PG is False
+    assert db.DB_URL.startswith("sqlite")

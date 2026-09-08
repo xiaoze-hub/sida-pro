@@ -5,6 +5,21 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-09
+
+### fix-CI pytest门禁4红修复+全新PG库首启崩溃修复(v0.5.19发版门禁收敛)
+- 背景: v0.5.18 起 4 个发版工作流(release/build-and-push-image/build-push-acr/build-push-acr-forecast)的 pytest 门禁首次端到端跑即红(此前从未全绿), ACR 镜像又因 gitleaks generic-api-key 误报未产出(另修, 见 `fix: 渠道脱敏测试fixture变量名SECRET→FAKE_PK`), 生产一直停在 v0.5.14 底座+热修覆盖。本机用 python:3.11 容器跑与 CI 完全一致的命令(18 个 --ignore 相同)复现 4 failed/1737 passed, 逐个定位修复。
+- **门禁 4 红逐个修**:
+  1. `tests/test_pg_default.py::test_docker_without_db_url_fails_fast` —— conftest 给全部测试 setdefault `SIDA_ALLOW_SQLITE=1`(0.4② 逃生口), 把 `DOCKER=1` 无连接串的 fail-fast 门整个豁免, RuntimeError 永不触发。`_reload_database` 改为: 摘 DOCKER/SIDA_DB_URL/SIDA_ALLOW_SQLITE 三键 → reload → finally 原样恢复(保住 conftest 基线), 三个用例去掉冗余 try/finally。
+  2. `tests/test_source_health.py::test_wencai_with_credentials` —— thsdk 不进 requirements(CI 无真包), `check_wencai` 诚实地判 down。测试注入假 thsdk 模块(检查只看"可 import + 凭据已注入", 不发真实查询), 断言升格 `== connected`。
+  3. `tests/test_collectors_robust_20260823.py::test_today_cn_format_is_iso` —— `_today_cn()`(Asia/Shanghai) 与 naive `datetime.now()`(UTC 宿主) 比日期, UTC 16:00-24:00 必差一天(容器 18:14 UTC 实复现: 09-09 vs 09-08), 测试随运行时间随机红。改比 `ZoneInfo("Asia/Shanghai")` 的今天, 口径与被测函数一致。
+  4. `tests/test_error_tracker.py::test_file_write_failure_is_silent` —— 原 fixture 用 `/nonexistent_dir_xyz` 制造失败(权限性), root 容器 mkdir 反而成功(result=True); CI 非 root 其实会过, 但该写法不鲁棒, 且曾在 Windows `C:\` 根留过同名垃圾目录(已清理)。改 tmp_path 内"父路径=文件"制造 ENOTDIR, 任何用户/平台必失败。
+- **requirements.txt 补 `tzdata>=2024.1`**: Windows/精简容器 zoneinfo 无系统库时 `_today_cn` 直接缺日期 —— 资金流日期口径属数据正确性依赖, 显式声明不再搭系统环境便车。
+- **全新 PG 库首启崩溃(生产级真 bug, throwaway timescaledb:latest-pg16 复现)**: A 层迁移向 Boolean 列插整型字面量 —— `_migrate_positions_to_accounts` 两处 accounts INSERT(`'默认账户', 0, 1` / `:funds, 1`)、`_migrate_ai_and_notify` 的 ai_models `is_default`/notify_channels `enabled,is_default` 字面量, 共 4 处 → `psycopg2.errors.DatatypeMismatch: column "enabled" is of type boolean but expression is of type integer`, 全新 PG 首启直接崩(SQLite 宽容整数掩盖至今)。全部改绑定参数传 `True`, 双方言通用(与 `_migrate_remove_stock_enabled` 的方言字面量教训同源)。存量生产库因已有 accounts/ai_models/notify_channels 不走这些 INSERT, 不受影响; 但新装/重建必须能起来。
+- 验证: 本地(Windows) 5 个相关测试文件 76 passed; python:3.11 root 容器跑 CI 全量命令 **1741 passed / 4 skipped / 0 failed**(修复前同环境 4 failed); 全新 PG16 `init_db` 端到端 OK —— schema_migrations 42 行, _m137~_m142 全 success=1, klines 唯一索引 `uq_klines_symbol_period_ts_adjust` 就位, `adjust VARCHAR DEFAULT 'none'` 就位。
+- 注: test_source_health.py/test_collectors_robust_20260823.py 随本次提交一次性 CRLF→LF 归一化(.gitattributes eol=lf 本就要求), diff 行数放大属预期。
+- [tag v0.5.19]
+
 ## 2026-09-08
 
 ### update-发版 v0.5.19(数据正确性第1波合入main)

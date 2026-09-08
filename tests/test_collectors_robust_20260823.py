@@ -278,15 +278,19 @@ class TestCapitalFlowCollector:
         assert capital_flow_collector._DIRECT_FLOW_MAX_RETRY >= 1
 
     def test_today_cn_format_is_iso(self):
-        """L-1: date 字段统一 YYYY-MM-DD。"""
+        """L-1: date 字段统一 YYYY-MM-DD(口径 = 上海时区的"今天")。"""
+        from zoneinfo import ZoneInfo
+
         from src.collectors.capital_flow_collector import _today_cn
+
         s = _today_cn()
         assert isinstance(s, str)
         # 格式校验: 10 字符串, 4-2-2
         assert len(s) == 10
         dt = datetime.strptime(s, "%Y-%m-%d")
-        # 一致性: 应该是今天
-        assert dt.date() == datetime.now().date()
+        # 一致性: 上海时区的今天。不能拿本地 naive now 比 —
+        # UTC 宿主 16:00-24:00 两个日期会差一天, 测试随运行时间随机红
+        assert dt.date() == datetime.now(ZoneInfo("Asia/Shanghai")).date()
 
 
 # ────────────────────────────────────────────────────────────────────
