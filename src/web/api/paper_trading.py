@@ -18,6 +18,7 @@ from src.core.paper_trading_engine import (
 )
 from src.core.portfolio_diagnostics import diagnose_paper_portfolio
 from src.core.quant_adapters import available_backends
+from src.web.api.auth import get_current_user, require_owner
 from src.web.database import get_db
 from src.web.models import (
     AppSettings,
@@ -25,6 +26,7 @@ from src.web.models import (
     PaperTradingAccount,
     PaperTradingPosition,
     PaperTradingTrade,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,20 @@ class UpdateSettingsBody(BaseModel):
     excluded_markets: list[str] | None = None  # 兼容旧字段
     market_allocations: dict[str, float] | None = None  # {"CN":0.5,...}，合计 ≤ 1
     initial_capital: float | None = None  # 总资金（>0 时按差额增/减资）
+
+
+def _user_scope_pos(acc: PaperTradingAccount) -> tuple:
+    """账户归属过滤条件(持仓)。"""
+    if acc.user_id is None:
+        return (PaperTradingPosition.user_id.is_(None),)
+    return (PaperTradingPosition.user_id == acc.user_id,)
+
+
+def _user_scope_trade(acc: PaperTradingAccount) -> tuple:
+    """账户归属过滤条件(交易)。"""
+    if acc.user_id is None:
+        return (PaperTradingTrade.user_id.is_(None),)
+    return (PaperTradingTrade.user_id == acc.user_id,)
 
 
 def _serialize_account_dict(
@@ -233,14 +249,20 @@ def _account_summary(db: Session, acc: PaperTradingAccount, market: str | None) 
     )
 
 
-def _strategy_performance(db: Session, market: str | None) -> list[dict]:
-    """按策略聚合绩效（已平仓 + 持仓中），可按市场过滤。"""
-    tq = db.query(PaperTradingTrade)
+def _strategy_performance(db: Session, market: str | None, acc: PaperTradingAccount) -> list[dict]:
+    """按策略聚合绩效（已平仓 + 持仓中），可按市场过滤。2026-09-08 T6: 按账户归属过滤。"""
+    tq = db.query(PaperTradingTrade).filter(*_user_scope_trade(acc))
     if market:
         tq = tq.filter(PaperTradingTrade.stock_market == market)
     all_trades = tq.all()
 
-    pq = db.query(PaperTradingPosition).filter(PaperTradingPosition.status == "open")
+    pq = (
+        db.query(PaperTradingPosition)
+        .filter(
+            PaperTradingPosition.status == "open",
+            *_user_scope_pos(acc),
+        )
+    )
     if market:
         pq = pq.filter(PaperTradingPosition.stock_market == market)
     open_positions = pq.all()
@@ -350,23 +372,26 @@ def _trade_response(t: PaperTradingTrade) -> dict:
 
 
 @router.get("/account")
-def get_account(market: str | None = None, db: Session = Depends(get_db)):
-    acc = db.query(PaperTradingAccount).first()
-    if not acc:
-        acc = PaperTradingAccount(
-            initial_capital=1000000.0,
-            current_capital=1000000.0,
-            peak_capital=1000000.0,
-        )
-        db.add(acc)
-        db.commit()
-        db.refresh(acc)
+def get_account(
+    market: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """当前用户的模拟盘账户(2026-09-08 T6: 每用户一份, 互不可见)。"""
+    acc = ENGINE._get_or_create_account(db, user.id)
     return _account_summary(db, acc, market if market in ALL_MARKETS else None)
 
 
 @router.get("/positions")
-def list_positions(status: str = "open", market: str | None = None, db: Session = Depends(get_db)):
-    query = db.query(PaperTradingPosition)
+def list_positions(
+    status: str = "open",
+    market: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    query = db.query(PaperTradingPosition).filter(
+        PaperTradingPosition.user_id == user.id
+    )
     if status != "all":
         query = query.filter(PaperTradingPosition.status == status)
     if market in ALL_MARKETS:
@@ -376,8 +401,14 @@ def list_positions(status: str = "open", market: str | None = None, db: Session 
 
 
 @router.get("/trades")
-def list_trades(limit: int = 50, offset: int = 0, market: str | None = None, db: Session = Depends(get_db)):
-    base = db.query(PaperTradingTrade)
+def list_trades(
+    limit: int = 50,
+    offset: int = 0,
+    market: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    base = db.query(PaperTradingTrade).filter(PaperTradingTrade.user_id == user.id)
     if market in ALL_MARKETS:
         base = base.filter(PaperTradingTrade.stock_market == market)
     total = base.count()
@@ -394,14 +425,21 @@ def list_trades(limit: int = 50, offset: int = 0, market: str | None = None, db:
 
 
 @router.get("/metrics")
-def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
-    acc = db.query(PaperTradingAccount).first()
-    if not acc:
-        return {"account": None, "equity_curve": [], "open_positions": 0, "strategy_performance": []}
-
+def get_metrics(
+    market: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    acc = ENGINE._get_or_create_account(db, user.id)
     mkt = market if market in ALL_MARKETS else None
 
-    pq = db.query(PaperTradingPosition).filter(PaperTradingPosition.status == "open")
+    pq = (
+        db.query(PaperTradingPosition)
+        .filter(
+            PaperTradingPosition.status == "open",
+            PaperTradingPosition.user_id == user.id,
+        )
+    )
     if mkt:
         pq = pq.filter(PaperTradingPosition.stock_market == mkt)
     open_count = pq.count()
@@ -412,14 +450,14 @@ def get_metrics(market: str | None = None, db: Session = Depends(get_db)):
         "account": _account_summary(db, acc, mkt),
         "equity_curve": equity_curve,
         "open_positions": open_count,
-        "strategy_performance": _strategy_performance(db, mkt),
+        "strategy_performance": _strategy_performance(db, mkt, acc),
     }
 
 
 @router.get("/diagnostics")
-def get_diagnostics():
-    """组合诊断(只读):集中度/市场与策略分布/风险提示。"""
-    return diagnose_paper_portfolio()
+def get_diagnostics(user: User = Depends(get_current_user)):
+    """组合诊断(只读):集中度/市场与策略分布/风险提示。仅当前用户持仓。"""
+    return diagnose_paper_portfolio(user_id=user.id)
 
 
 @router.get("/backends")
@@ -429,10 +467,12 @@ def get_backends():
 
 
 @router.post("/account/toggle")
-def toggle_account(body: ToggleBody, db: Session = Depends(get_db)):
-    acc = db.query(PaperTradingAccount).first()
-    if not acc:
-        raise HTTPException(404, "模拟盘账户不存在")
+def toggle_account(
+    body: ToggleBody,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    acc = ENGINE._get_or_create_account(db, user.id)
     acc.enabled = body.enabled
     db.commit()
     db.refresh(acc)
@@ -440,24 +480,28 @@ def toggle_account(body: ToggleBody, db: Session = Depends(get_db)):
 
 
 @router.post("/account/reset")
-def reset_account():
-    result = ENGINE.reset_account()
+def reset_account(user: User = Depends(get_current_user)):
+    result = ENGINE.reset_account(user.id)
     if not result.get("ok"):
         raise HTTPException(500, "重置失败")
     return {"ok": True}
 
 
 @router.post("/positions/{position_id}/close")
-async def close_position(position_id: int):
-    result = await ENGINE.close_position_manual_async(position_id)
+async def close_position(position_id: int, user: User = Depends(get_current_user)):
+    result = await ENGINE.close_position_manual_async(position_id, user.id)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "平仓失败"))
     return {"ok": True}
 
 
 @router.post("/account/settings")
-def update_settings(body: UpdateSettingsBody, db: Session = Depends(get_db)):
-    acc = db.query(PaperTradingAccount).first()
+def update_settings(
+    body: UpdateSettingsBody,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    acc = ENGINE._get_or_create_account(db, user.id)
     if not acc:
         raise HTTPException(404, "模拟盘账户不存在")
 
@@ -539,8 +583,12 @@ class NotifySettingsBody(BaseModel):
 
 
 @router.post("/notify-settings")
-def update_notify_settings(body: NotifySettingsBody, db: Session = Depends(get_db)):
-    """更新通知配置。"""
+def update_notify_settings(
+    body: NotifySettingsBody,
+    db: Session = Depends(get_db),
+    _owner: User = Depends(require_owner),
+):
+    """更新通知配置(全局配置, 仅 owner)。"""
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     for key, value in updates.items():
         row = db.query(AppSettings).filter(AppSettings.key == key).first()

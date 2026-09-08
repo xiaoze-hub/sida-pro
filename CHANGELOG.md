@@ -7,6 +7,17 @@
 
 ## 2026-09-08
 
+### fix-模拟盘跨账号越权(三表补user_id/引擎多账户扫描/API全链路归属过滤/全局动作收敛owner)
+- `src/web/migrations.py` — 新增 `_m135_paper_trading_user_id`(v135): paper_trading_account/positions/trades 三表补 `user_id TEXT` + 索引, 存量行回填最早 owner(与 _m122 同口径, 幂等)。修复: 三表原设计即"单例", 任一登录用户可查看并操作其他账号的模拟盘。
+- `src/web/models.py` — 三个模拟盘模型补 `user_id = Column(String(36), nullable=True, index=True)`。
+- `src/core/paper_trading_engine.py` — 引擎多账户化: `_get_or_create_account(db, user_id)`(None=owner 调度路径); `_scan_sync` 遍历全部账户逐一建仓/平仓(各扣各的资金); `_check_entries/_check_exits/_update_account_metrics/market_realized_open` 全部按 `account.user_id` 过滤(`_user_scope` 助手, NULL 行=冷启动遗留); 建仓/平仓落 trade 均带归属; `close_position_manual(position_id, user_id)` 跨账号平仓拒绝; `reset_account(user_id)` 只清本人数据。
+- `src/web/api/paper_trading.py` — 数据端点(account/positions/trades/metrics/diagnostics/toggle/reset/close/settings)全部 `Depends(get_current_user)` + 归属过滤; 系统级动作(scan/notify-settings 写/notify-test/premarket-plan/daily-summary)收敛 `require_owner`(通知配置是全局 AppSettings 非按用户隔离)。
+- `src/core/portfolio_diagnostics.py` — `diagnose_paper_portfolio(user_id)` 按用户过滤。
+- `src/web/api/chat.py` — 删除 `hasattr(PaperTradingPosition, "user_id")` 防御式判断(列已真实存在)。
+- 新增 `tests/test_paper_trading_isolation.py` — 5 用例: 账户按用户隔离/调度路径归 owner/跨账号平仓拒绝+本人平仓落账/reset 只清本人/组合诊断按用户过滤。fixture 同时替换 database/engine/diagnostics 三处 SessionLocal 引用(引擎是 `from x import` 持独立引用, 只 patch 源模块会误写真实库——首跑已误建 2 行假账户, 已清理)。
+- 验证: pytest isolation+notify 23 passed; `scripts/check_migrations.py` ✅ 35 个迁移(v101-v135) 列与模型一致; `from src.web.app import app` OK。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-envelope每帧WS推送新建Redis连接→单例复用(连接风暴)+自愈
 - `src/web/realtime/envelope.py` — `_next_seq()` 原在函数体内每次 `redis_sync.from_url()` 新建连接，每帧 WS 推送/每条通知都建连，高频推送下连接风暴。改模块级单例 `_get_seq_client()`（对齐 ws_hub.py 既有写法），建连后 ping 校验；连接异常置空标记、下次取 seq 重建（简单自愈）；`reset_for_tests()` 同步清单例。
 - `tests/test_p2_realtime.py` — 新增 `test_seq_client_reused`：mock redis.from_url 计次，三次取 seq 断言 INCR 单调且建连仅 1 次。
