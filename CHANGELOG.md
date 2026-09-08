@@ -7,6 +7,17 @@
 
 ## 2026-09-08
 
+### fix-前端错误上报端点双前缀(API_BASE已含/api再拼/api致404全链路失效)+门禁新增R5禁双前缀
+- `frontend/src/lib/error-report.ts` — ENDPOINT 由 `${API_BASE}/api/logs/frontend` 改 `${API_BASE}/logs/frontend`：API_BASE 已含 `/api`，原路径实际 POST `/api/api/logs/frontend` 404 且被 `.catch(()=>{})` 吞掉，9-08 建的系统日志闭环前端上报(window.onerror/unhandledrejection/ErrorBoundary)全部静默丢失。顺手把吞错改 `console.debug` 留痕。
+- `scripts/check_ui_rules.mjs` — 新增 R5：源码禁出现 `'/api/api/` 双前缀字面量，防同类死链回潮。
+- 验证：`node scripts/check_ui_rules.mjs` → UI-RULES OK；`pnpm typecheck`(tsc -b) 0 错。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-UI门禁脚本Windows路径兼容(URL.pathname中文编码/盘符双写/反斜杠致R4豁免失效)
+- `scripts/check_ui_rules.mjs` — ROOT 改 `fileURLToPath(new URL(...))`（原 `.pathname` 在 Windows + 中文路径下产生 `E:\E:\user\%E6%96%87...` 直接 ENOENT）；R4 stock-colors 豁免匹配前路径分隔符归一化（Windows `join` 反斜杠致 `/lib\/stock-colors\.ts$/` 永不命中，误报 7 条）。
+- 验证：Windows 本地 `node scripts/check_ui_rules.mjs` → UI-RULES OK。
+- [branch fix/audit-p0-0908, `git show HEAD~1`]
+
 ### fix-PG唯一生产口径(容器无连接串fail-fast/SQLite仅本地/compose默认接PG/布尔迁移按方言)
 - `src/web/database.py` — DOCKER=1 无 SIDA_DB_URL 直接 RuntimeError(历史教训:env丢失静默落容器内sqlite→database is locked+重建丢数据);本地(DOCKER未设)默认仍是 data/panwatch.db。
 - `src/web/database.py::_migrate_remove_stock_enabled` — `enabled` 布尔字面量按方言(FALSE/TRUE vs 0/1,PG上`=0`直接operator崩);PRAGMA重建分支仅SQLite可进(PG DROP COLUMN必成功,失败直接raise)。
