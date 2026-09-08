@@ -39,6 +39,13 @@ class _FakeMarketData:
         self.calls += 1
         return list(self.bars)
 
+    def klines_with_vendor(self, symbol, *, market, days, min_count=1):
+        """1.2 起取数链走真源标签接口; 假包层同步提供(返回 vendor='tencent')。"""
+        return (
+            self.klines(symbol, market=market, days=days, min_count=min_count),
+            "tencent",
+        )
+
 
 def test_get_klines_caches_within_ttl(monkeypatch):
     """同一只 K线在 TTL 内应命中内存缓存,不重复联网(避免批量突发触发限流)。"""
@@ -71,7 +78,7 @@ def test_empty_result_negative_cached_then_retries(monkeypatch):
     fake = _FakeMarketData([])
     monkeypatch.setattr(kline_collector, "get_market_data", lambda: fake)
     # PG/新浪兜底也会注水，测试时屏蔽以验证“空结果负缓存”本身
-    monkeypatch.setattr(kline_collector.KlineCollector, "_pg_fallback", lambda self, symbol, days: [])
+    monkeypatch.setattr(kline_collector.KlineCollector, "_pg_read", lambda self, symbol, days, adjust="qfq": [])
     monkeypatch.setattr(kline_collector.KlineCollector, "_sina_fallback", lambda self, symbol, days: [])
 
     c = kline_collector.KlineCollector(MarketCode.CN)

@@ -2521,6 +2521,34 @@ def _m136_analysis_history_status(conn: Connection) -> None:
     )
 
 
+def _m137_klines_adjust_dimension(conn: Connection) -> None:
+    """风险方案1.2/B1(2026-09-08): klines 增加复权维度 adjust, 并纳入唯一索引。
+
+    0.7 勘查(docs/research/K线复权污染勘查_20260907.md)实证: 此前 qfq 与不复权
+    无列区分, DO NOTHING 令复权基准漂移/双柱污染不可自愈。加 adjust 列后:
+    - 取值 'qfq'(前复权, 主源) / 'none'(不复权, 新浪兜底) / 'hfq'(预留)
+    - 唯一索引升为 (symbol, market, period, ts, source, adjust), qfq 与 none 互不覆盖
+    - 存量行回填 'none'(待全量重刷后由 ingestor 以 'qfq' 重写)
+    幂等可重跑。
+    """
+    if not _has_table(conn, "klines"):
+        return
+    _add_column_if_missing(
+        conn,
+        "klines",
+        "adjust",
+        "ALTER TABLE klines ADD COLUMN adjust VARCHAR(4) NOT NULL DEFAULT 'none'",
+    )
+    # 旧唯一索引让位: 新索引含 adjust, 满足 hypertable 分区键(ts)在约束内的要求
+    conn.execute(text("DROP INDEX IF EXISTS uq_klines_symbol_period_ts"))
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_klines_symbol_period_ts_adjust "
+            "ON klines(symbol, market, period, ts, source, adjust)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2566,6 +2594,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(134, "demon_factors_table", _m134_demon_factors),
     Migration(135, "paper_trading_user_id", _m135_paper_trading_user_id),
     Migration(136, "analysis_history_status", _m136_analysis_history_status),
+    Migration(
+        137,
+        "klines_adjust_dimension",
+        _m137_klines_adjust_dimension,
+    ),
 )
 
 

@@ -46,12 +46,19 @@ class _FakeMarketData:
             self.calls += 1
         return self._fetch(symbol, market, days)
 
+    def klines_with_vendor(self, symbol, *, market, days, min_count=1):
+        """1.2 起取数链走真源标签接口; 假包层同步提供(返回 vendor='tencent')。"""
+        return (
+            self.klines(symbol, market=market, days=days, min_count=min_count),
+            "tencent",
+        )
+
 
 def test_failed_fetch_is_negative_cached(monkeypatch):
     """同一标的取数失败后,冷却窗口内再次调用不再联网(负缓存)。"""
     fake = _FakeMarketData(lambda symbol, market, days: [])
     monkeypatch.setattr(kc, "get_market_data", lambda: fake)
-    monkeypatch.setattr(kc.KlineCollector, "_pg_fallback", lambda self, symbol, days: [])
+    monkeypatch.setattr(kc.KlineCollector, "_pg_read", lambda self, symbol, days, adjust="qfq": [])
     monkeypatch.setattr(kc.KlineCollector, "_sina_fallback", lambda self, symbol, days: [])
 
     col = kc.KlineCollector(MarketCode.CN)

@@ -7,6 +7,16 @@
 
 ## 2026-09-08
 
+### fix-K线复权维度入列+PG优先读取+入库DO UPDATE自愈(风险方案1.2/B1)
+- 背景: 0.7 勘查实证 klines 表 qfq 与不复权无列区分(全靠 source 隐含口径)、P2-19 单链复写 tencent/eastmoney/sina 三份假标签(69,154 个 (symbol,date) 三源逐格相等)、DO NOTHING 把前复权基准永久冻结在首次写入日。按 0.7 §4 结论落地「加列 + 全量重刷」的加列半场(重刷在发版后另行执行)。
+- **迁移 `_m137_klines_adjust_dimension`**(src/web/migrations.py): klines 加 `adjust VARCHAR(4) NOT NULL DEFAULT 'none'`(存量行回填 none, 待重刷), 唯一索引 `uq_klines_symbol_period_ts` 让位于 `uq_klines_symbol_period_ts_adjust(symbol, market, period, ts, source, adjust)`, qfq 与 none 互不覆盖; 幂等可重跑。
+- **读取按复权分区**(src/collectors/kline_collector.py): `get_klines(symbol, days, adjust="qfq")` 显式声明复权维度; 缓存键升级为 `market:symbol:1d:adjust`(不同复权维度不共用缓存); `_fetch_all_sources` 重排为 **PG 优先**(镜像 /api/klines._pg_klines 口径: 厚度 ≥ min(30,days) 且最新柱 12 天内 → 不发 HTTP) → qfq 走 engine(腾讯/东财均前复权) → HTTP 全挂宁服务同分区陈旧数据不混维度; **`_pg_fallback` 改名 `_pg_read` 并加 adjust 分区过滤**(修 0.7 勘查"连 source 都不过滤"的三倍序列指标问题); **qfq 请求绝不落新浪** —— `_sina_fallback` 仅服务 adjust='none', 且成功后诚实落 PG(source='sina', adjust='none', DO UPDATE) 供后续 none 读。
+- **入库单链单标签**(src/collectors/klines_ingestor.py): `ingest_symbol` 重写 —— 废除 P2-19 三份假标签复写, 改用 `klines_with_vendor()`(packages/marketdata/src/marketdata/client.py 新增 facade, klines() 委托之) 返回真实胜出 vendor, 只写一份 source=真源(vendor 空则诚实标 'unknown'); adjust='qfq'; **DO NOTHING → DO UPDATE**(同键重跑覆盖, 除权后 qfq 基准变化自愈, 冻结机制根除); **单一 source 不变量**: 写入前 DELETE 该股 qfq 分区中非本轮胜出 vendor 的旧行, 防 vendor 切换日新旧两源并存成同日双柱; ingestor 直连 engine 不走 KlineCollector(那会"PG 旧数据抄回 PG"永远刷不新); ts 口径不变(交易日 00:00 Asia/Shanghai)。5m 盘中路径维持原状并在 docstring 标注弃用(实际写日K柱, 无读取方)。
+- **读取方加 adjust='qfq' 过滤**: `src/web/api/klines.py` `_pg_klines` 与 `src/core/backtest/data_adapter.py` `load_price_history` —— 前端图表与回测序列必须吃前复权, 严禁混入 none 原始价; 旧库无 adjust 列时查询异常 → 静默回落联网(fail-soft)。
+- 测试: `tests/test_kline_adjust_dimension.py` 18 用例(迁移加列/回填/索引互换/幂等/DO UPDATE 不产生第二行且不误伤 none 分区; 缓存键含 adjust 互不串用; PG 厚而新不发 HTTP / 陈旧或过薄回落 engine / qfq 空+engine 空宁空不落新浪 / none 走新浪不走 engine; `_pg_usable` 厚度与 12 天新鲜度边界; ingestor 单标签/unknown 诚实标签/重跑覆盖不双行/vendor 切换清理旧 source 分区/空结果 fail_details; `_persist_bars` 落 none 分区 + 库不可达 fail-soft), 另 test_kline_routing/coalesce/cache/flagon 四文件的假包层补 `klines_with_vendor` 方法、两处 `_pg_fallback` patch 改 `_pg_read`。
+- 验证: 目标批 57 passed + 邻域回归(test_backtest/abnormal_moves/auction/chip/entry_outcomes/index_klines 等消费方) 201 passed 1 skipped; 全量套件见下条补记。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
 ### fix-vendor缺失字段None化+status完整性标记(风险方案1.1/B2)
 - 背景: 腾讯行情解析 `float(parts[3] or 0)` 等把缺失字段变 0 —— 价格 0 参与涨跌幅算术伪造 -100% 假暴跌, 直接违反「数据缺失必须显式标注『无数据』, 禁止推测」红线; 且 `turnover` 取自 parts[35] 第三段单位无标注(违反「金额=元」约定, AGENTS.md「对不上先怀疑单位换算」)。
 - **turnover 单位实测**(qt.gtimg.cn 真实报文, 2026-09-08 收盘后): sh600519 parts[35]="1309.30/17534/2302823753", 恒等式 amt/(price×vol(手)×100)=**1.0031**; sh601318=**1.0069**(偏差<0.7% 即 VWAP≠收盘的正常范围) → **单位=元**; 交叉印证 parts[37]=amt/10000(230282 vs 2302823753, 比值 10000.02, 万元口径)。已写入 `vendors/tencent.py` 模块 docstring 与 `docs/_frozen/data.md` 新增「单位约定」节。
