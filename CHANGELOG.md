@@ -7,6 +7,13 @@
 
 ## 2026-09-08
 
+### feature-SIDA直调skill(Hermes可取生产数据)
+- 新增`skills/sida-pro-data/` — SKILL.md(端点表/两级认证/单位铁律)+`scripts/sida.py`(thin-client,只拼URL带头打印JSON,零密钥落仓)。
+- 已装进 Hermes:`~/.hermes/skills/sida-pro-data`软链指向仓内, 仓内改即时生效。
+- **实测生产**: health ok(v0.5.14/PG); quote 002361 现价10.27(-0.87%); decision verdict 看看(缺资金信号); trust tencent 100分(p50 154ms)。
+- 认证说明: svc口(quotes/klines)服务token可进, 用户JWT同样可进(data_read双轨); user口(decision/trust/accuracy/darkflow)需用户JWT(`/api/auth/login`拿, 字段是`data.token`)。
+- [branch feat/sida-skill-0908, `git show HEAD`]
+
 ### fix-PG唯一生产口径(容器无连接串fail-fast/SQLite仅本地/compose默认接PG/布尔迁移按方言)
 - `src/web/database.py` — DOCKER=1 无 SIDA_DB_URL 直接 RuntimeError(历史教训:env丢失静默落容器内sqlite→database is locked+重建丢数据);本地(DOCKER未设)默认仍是 data/panwatch.db。
 - `src/web/database.py::_migrate_remove_stock_enabled` — `enabled` 布尔字面量按方言(FALSE/TRUE vs 0/1,PG上`=0`直接operator崩);PRAGMA重建分支仅SQLite可进(PG DROP COLUMN必成功,失败直接raise)。
