@@ -151,7 +151,11 @@ services:
     environment:
       # 预测引擎经 8000 拿资金面/龙虎榜数据(fork 镜像里 /api/market-data/* 已就绪)
       - PANWATCH_URL=http://panwatch:8000
-      # 直接读取设置页的 forecast_llm_* 配置，保存后无需脚本或重启
+      # T7(2026-09-08): 配置通道改走 HTTP —— 服务 token(与主服务 SIDA_SERVICE_TOKEN
+      # 同值, 在 .env 设置)鉴权读 /api/service/forecast-config, 下发 forecast_llm_* +
+      # 裁判场景绑定。主库已切 PG, 下面 PANWATCH_DB 指向的文件不存在, 仅留作本地
+      # sqlite 直读的遗留兜底; 未设 SIDA_SERVICE_TOKEN 时引擎回落硬编码兜底并打告警。
+      - PANWATCH_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}
       - PANWATCH_DB=/app/panwatch-data/panwatch.db
       # 预测历史必须落到 panwatch_forecast_data 命名卷
       - FORECAST_DB_PATH=/app/data/panwatch_forecast.db

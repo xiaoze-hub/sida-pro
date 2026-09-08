@@ -39,6 +39,10 @@ def _read_auth_settings() -> dict[str, str]:
     )
     for path in db_paths:
         if not path or not os.path.isfile(path):
+            # 2026-09-08 T7: PG 部署下该 sqlite 文件不存在, 原来静默跳过导致
+            # 整条鉴权通道失效无感知 —— 环境变量指了但文件缺时必须告警。
+            if path:
+                logger.warning("PanWatch 认证配置文件不存在: %s(主库已切 PG? 请改用 PANWATCH_SERVICE_TOKEN)", path)
             continue
         try:
             with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3) as conn:
@@ -147,11 +151,21 @@ def get_token() -> str:
 
 
 def request_json(path: str, timeout: float = 30) -> Any:
-    """GET a protected PanWatch endpoint and retry once after a 401."""
+    """GET a protected PanWatch endpoint and retry once after a 401.
+
+    2026-09-08 T7: 支持 X-Service-Token 双轨 —— compose 注入
+    PANWATCH_SERVICE_TOKEN(与主服务 SIDA_SERVICE_TOKEN 同值)时直接走服务 token,
+    不再依赖 jwt_secret 自签 JWT(PG 部署下 forecast 读不到主库, 旧通道已断)。
+    """
     url = f"{get_panwatch_url()}/{path.lstrip('/')}"
+    svc_token = os.getenv("PANWATCH_SERVICE_TOKEN", "").strip()
     for attempt in range(2):
         token = get_token()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        headers = {}
+        if svc_token:
+            headers["X-Service-Token"] = svc_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

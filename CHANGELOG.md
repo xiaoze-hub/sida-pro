@@ -7,6 +7,17 @@
 
 ## 2026-09-08
 
+### fix-forecast配置通道PG下静默失效(LLM/裁判绑定/鉴权三线断裂)→改走HTTP服务token下发
+- 新增 `src/web/api/service_config.py` — `GET /api/service/forecast-config`(挂 data_read 组, 服务 token/用户 JWT): 一次性下发 ①app_settings.forecast_llm_* ②ai_scene_bindings 的 referee 绑定 + ai_models/ai_services 连接信息。app.py 挂载 + import。
+- `forecast_lib/forecast_sentiment.py` — ①删除模块级重复两遍的 `PANWATCH_URL=_detect_panwatch_url()` 死代码(探测逻辑原跑两次); ②新增 `_fetch_llm_config_via_api()` 走 HTTP 优先, sqlite 直读降为遗留兜底; ③兜底硬编码 agnes 时显式打警告(原静默回落, 用户配置被无视无感知)。
+- `forecast_lib/ai_referee.py` — `resolve_referee_model_cfg()` 优先级插入 API 通道(PANWATCH_DB 或 PANWATCH_SERVICE_TOKEN 存在时启用), DB 直读降为遗留; 失败打 warning 不静默。
+- `forecast_lib/panwatch_client.py` — ①`request_json` 支持 `X-Service-Token` 头(compose 注入 PANWATCH_SERVICE_TOKEN=SIDA_SERVICE_TOKEN 即通, 不再依赖 jwt_secret 自签 JWT —— PG 下 forecast 读不到主库, 旧自签通道必断); ②`_read_auth_settings` 对"环境变量指了但文件不存在"打 warning(原静默跳过)。
+- `docker-compose.yml` — forecast 服务注入 `PANWATCH_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}`; PANWATCH_DB 注释标注为遗留兜底。
+- `.env.example` — 新增 SIDA_SERVICE_TOKEN 说明项。
+- 新增 `tests/test_forecast_config_channel.py` — 3 用例: llm 下发/referee 绑定下发(含连接信息)/路由挂载于 data_read 组。
+- 验证: 3 passed; forecast_lib 三文件 ast 语法 OK; compose YAML 解析 OK。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-WS鉴权只验签不验状态(禁用/踢人后旧token仍可连)+行情广播跨用户泄露关注集合
 - `src/web/api/auth.py` — 新增 `verify_ws_token_payload(db, payload)`: WS 握手专用, 对齐 HTTP 层口径(校验 `is_active` + `token_version`, 畸形 ver 显式拒); 通过返回 user_id。原两处 WS(quote_stream/ws_hub)只 `decode_token`, 禁用账号/改密踢人后旧 JWT 在剩余有效期(默认 12h)内仍可连 WS 收通知/行情。
 - `src/web/api/quote_stream.py` — ① 握手改走 `verify_ws_token_payload`; ② 订阅绑定 user_id(`subscribe(user_id)`), 聚合器刷新 per-user 关注集合缓存(`_user_symbols_cache`, ""=历史遗留共享账户人人可见), `_broadcast` 按订阅者 symbol 集过滤后再 pack(定向帧 envelope.user_id=本人, 与 `?last_seq=` 重放过滤口径一致); 快照同样过滤; 无关注标的的用户不收帧(不再从推送内容推断他人持仓/自选)。
