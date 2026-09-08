@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import { toAmount } from '@/lib/format'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
@@ -1033,8 +1034,10 @@ export default function InteractiveKline(props: {
       {intentLabel && <span className={intentLabel.cls}>{intentLabel.text}</span>}
       {typeof mi.main_net === 'number' && (
         <span className="ml-2 font-mono">
-          {(mi.main_net / 1e4).toFixed(0)}万
-          {typeof mi.big_net === 'number' && ` (超大${(mi.big_net / 1e4).toFixed(0)}/大${(mi.mid_net ?? 0) / 1e4 >= 0 ? '+' : ''}${((mi.mid_net ?? 0) / 1e4).toFixed(0)})`}
+          {/* 2026-09-08 T12: 金额=元, 走 toAmount 万/亿口径(原硬除 1e4, ≥1亿时显示"12345万"违反单位口径) */}
+          {toAmount(mi.main_net)}
+          {typeof mi.big_net === 'number' &&
+            ` (超大${toAmount(mi.big_net)}/大${toAmount(mi.mid_net ?? 0)})`}
         </span>
       )}
       {mi.chip_peak != null && <span className="ml-2">筹码峰 <span className="font-mono">{mi.chip_peak.toFixed(2)}</span></span>}

@@ -7,6 +7,12 @@
 
 ## 2026-09-08
 
+### fix-InteractiveKline主力意图金额硬除1e4(≥1亿显示"12345万")→toAmount万/亿口径
+- `frontend/packages/biz-ui/src/components/InteractiveKline.tsx` — 主力净额/超大/大单金额由 `(x / 1e4).toFixed(0)万` 改 `toAmount()`(含 isFinite 守卫, ≥1亿自动切亿), 与全站金额口径收敛。业务硬约束: 金额=元。
+- 验证: `pnpm typecheck`(tsc -b) 0 错; `node scripts/check_ui_rules.mjs` → UI-RULES OK。
+- 未做: WencaiPanel/MinuteLwcChart/MarketMainlineCard/MainFlowCompareCard/BoardDetail/stock-insight-modal 另有 6 处改名手抄 fmt(精度互分叉), 属执行方案 T18/Q5 lint+门禁缝隙范围, 本轮不动。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-模拟盘跨账号越权(三表补user_id/引擎多账户扫描/API全链路归属过滤/全局动作收敛owner)
 - `src/web/migrations.py` — 新增 `_m135_paper_trading_user_id`(v135): paper_trading_account/positions/trades 三表补 `user_id TEXT` + 索引, 存量行回填最早 owner(与 _m122 同口径, 幂等)。修复: 三表原设计即"单例", 任一登录用户可查看并操作其他账号的模拟盘。
 - `src/web/models.py` — 三个模拟盘模型补 `user_id = Column(String(36), nullable=True, index=True)`。
