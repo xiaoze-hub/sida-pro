@@ -13,10 +13,19 @@ from src.web.migrations import has_pending_migrations, run_versioned_migrations
 
 logger = logging.getLogger(__name__)
 
-# 数据库连接(2026-08-17: 双方言兼容改造)
-# - 默认 SQLite(现状), 通过环境变量 SIDA_DB_URL 切换 PostgreSQL
-# - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@127.0.0.1:5432/sida"
+# 数据库连接(2026-09-08: PG 为唯一生产口径, SQLite 仅本地开发/单测)
+# - 容器内(DOCKER=1)无 SIDA_DB_URL 直接 fail-fast, 禁止静默落 sqlite
+#   (历史教训: env 丢失 → 生产跑在容器内 sqlite → database is locked + 数据丢)
+# - 本地开发(DOCKER 未设)默认 data/panwatch.db, 显式 SIDA_DB_URL 可切 PG
+# - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@panwatch-postgres:5432/sida"
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "panwatch.db")
+
+if os.environ.get("DOCKER") == "1" and not os.environ.get("SIDA_DB_URL"):
+    raise RuntimeError(
+        "DOCKER=1 但未设置 SIDA_DB_URL: 容器内禁止默认 SQLite,"
+        "请在 compose/deploy 中注入 postgresql 连接串"
+    )
+
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 DB_URL = os.environ.get("SIDA_DB_URL", f"sqlite:///{DB_PATH}")
@@ -658,28 +667,36 @@ def _migrate_remove_stock_enabled(engine):
         if not _has_table(conn, "stocks") or not _has_column(conn, "stocks", "enabled"):
             return
 
+        # PG 的 enabled 是 Boolean, SQLite 存 0/1: 字面量按方言写
+        # (历史教训: PG 上 `= 0`/`= 1` 直接 operator does not exist 崩)
+        is_pg = conn.dialect.name == "postgresql"
+        false_lit, true_lit = ("FALSE", "TRUE") if is_pg else ("0", "1")
+
         # 历史软删除数据：无任何关联则直接删除；有关联则恢复为有效股票。
         conn.execute(
             text(
-                """
+                f"""
 DELETE FROM stocks
-WHERE COALESCE(enabled, 1) = 0
+WHERE COALESCE(enabled, {true_lit}) = {false_lit}
   AND id NOT IN (SELECT DISTINCT stock_id FROM positions)
   AND id NOT IN (SELECT DISTINCT stock_id FROM stock_agents)
   AND id NOT IN (SELECT DISTINCT stock_id FROM price_alert_rules)
 """
             )
         )
-        conn.execute(text("UPDATE stocks SET enabled = 1 WHERE COALESCE(enabled, 1) = 0"))
+        conn.execute(text(f"UPDATE stocks SET enabled = {true_lit} WHERE COALESCE(enabled, {true_lit}) = {false_lit}"))
         conn.commit()
 
         # 优先直接删列；旧版 SQLite 不支持时，重建表以确保物理移除。
+        # (PG 的 DROP COLUMN 一定成功, 重建分支仅 SQLite 可进: PRAGMA 在 PG 上必崩)
         try:
             conn.execute(text("ALTER TABLE stocks DROP COLUMN enabled"))
             conn.commit()
             logger.info("已移除 stocks.enabled 列")
         except Exception:
             conn.rollback()
+            if is_pg:
+                raise
             logger.info("当前 SQLite 不支持 DROP COLUMN，改为重建 stocks 表移除 enabled")
             conn.execute(text("PRAGMA foreign_keys=OFF"))
             conn.execute(
