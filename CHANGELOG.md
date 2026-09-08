@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### update-v0.5.19生产部署+K线全量重刷完成(复权污染清除, 勘查报告附D对账)
+- **生产部署**: tag v0.5.19(21fc03f) 经 docker cp 覆盖层部署到 panwatch 容器(0.7 勘查既定路径: 本机无 ACR 凭据, docker config auths 为空, 镜像构建发布不可用)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0519_20260909_024720.tar.gz`, 仅代码不含 data) → `git archive` tag → 容器内解包 → restart → 42 条迁移全 success(含 _m137~_m142) → 容器内签发 admin token 跑 scripts/smoke_test.py **9/9 通过**。
+- **K线全量重刷**(0.7 §4 加列半场后的"重刷半场", 附C 验收全过): 预备份 pg_dump 踩坑(4,447B 归档含 TABLE DATA 条目但 restore-and-count=0 行, 表内实有 209,094 行, 根因未查明, stocks 对照组正常 —— **规则固化: 破坏性操作前备份必须 restore-and-count 验证**) → 依据 klines 属可再生派生数据 + 存量即待清污染, 执行 TRUNCATE → ingestor 重灌 71 股次(fail_details=0)。
+- **对账表**: 209,094 行(tencent/sina/eastmoney 三源假标签各 69,698, _m137 回填 adjust='none') → **43,949 行全 qfq/tencent 单源单分区**, 55 股, 2023-05-11→2026-09-08。明细见 `docs/research/K线复权污染勘查_20260907.md` 附D。
+- **验收(附C SQL 生产实测)**: 双柱键 537→**0**; 多源同键→**0**(单源不变量); volume ×20 跳变 46 只→**16**(逐条核对均真实停牌/复牌, 002251 系列); 主板不可能缺口 19→**10** —— tencent RAW 交叉验证 600502 的 +11.67% 缺口在原始数据中逐字存在, 判定 vendor 源头级非重刷引入; 本机到 eastmoney 不通(亦为 tencent 全胜 vendor 竞速的原因)、sina 无个股 K 线拉取, 第二源裁决暂不可用, 残留 10 条登记 wave-2 数据质量哨兵跟进。
+- [tag v0.5.19]
+
 ### fix-CI pytest门禁4红修复+全新PG库首启崩溃修复(v0.5.19发版门禁收敛)
 - 背景: v0.5.18 起 4 个发版工作流(release/build-and-push-image/build-push-acr/build-push-acr-forecast)的 pytest 门禁首次端到端跑即红(此前从未全绿), ACR 镜像又因 gitleaks generic-api-key 误报未产出(另修, 见 `fix: 渠道脱敏测试fixture变量名SECRET→FAKE_PK`), 生产一直停在 v0.5.14 底座+热修覆盖。本机用 python:3.11 容器跑与 CI 完全一致的命令(18 个 --ignore 相同)复现 4 failed/1737 passed, 逐个定位修复。
 - **门禁 4 红逐个修**:
