@@ -162,6 +162,10 @@ rebuild_container() {
   for _k in REDIS_URL SIDA_DB_URL THS_USERNAME THS_PASSWORD THS_MAC TDX_API_KEY ZHITU_TOKEN AUTH_USERNAME; do
     if [ -n "${!_k:-}" ]; then env_args+=(-e "$_k=${!_k}"); fi
   done
+  # v0.4.47 fix (2026-09-01): server.py 默认 127.0.0.1, Docker `-p 8000:8000`
+  # 必须显式 0.0.0.0, 否则外部 connection reset 全 502。
+  # 注意: docker run 续行中间不能插 `#` 注释行 —— bash 先按反斜杠拼逻辑行,
+  # 注释会吞掉续行导致后面的参数(--memory/--restart/镜像名)全部丢失(2026-09-08 审计实锤)。
   $DOCKER run -d \
     --name "$CONTAINER" \
     -p 8000:8000 \
@@ -172,12 +176,22 @@ rebuild_container() {
     -e AUTH_PASSWORD="$AUTH_PASSWORD" \
     ${env_args[@]+"${env_args[@]}"} \
     -e TZ="Asia/Shanghai" \
-    # v0.4.47 fix (2026-09-01): server.py 默认 127.0.0.1, Docker `-p 8000:8000`
-    # 必须显式 0.0.0.0, 否则外部 connection reset 全 502。下次重建必带。
     -e WEB_HOST=0.0.0.0 \
     --memory=1g \
     --restart=unless-stopped \
     "$IMAGE"
+  # 防御校验: 三个关键参数必须真实生效, 丢了就立刻失败而不是等线上 502
+  if ! $DOCKER inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^WEB_HOST=0.0.0.0$'; then
+    echo "  ❌ WEB_HOST=0.0.0.0 未注入(外部访问会全 502), 回滚删除容器"; $DOCKER rm -f "$CONTAINER" >/dev/null 2>&1; return 1
+  fi
+  _mem=$($DOCKER inspect "$CONTAINER" --format '{{.HostConfig.Memory}}')
+  if [ -z "$_mem" ] || [ "$_mem" = "0" ]; then
+    echo "  ⚠️ 内存限制未生效(HostConfig.Memory=$_mem)"
+  fi
+  _rp=$($DOCKER inspect "$CONTAINER" --format '{{.HostConfig.RestartPolicy.Name}}')
+  if [ "$_rp" != "unless-stopped" ]; then
+    echo "  ⚠️ 重启策略未生效(RestartPolicy=$_rp)"
+  fi
   echo "  ✅ 容器已重建"
   sleep 12
 }

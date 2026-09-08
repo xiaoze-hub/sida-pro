@@ -7,6 +7,12 @@
 
 ## 2026-09-08
 
+### fix-deploy_panwatch.sh热补丁部署docker run被续行内注释截断(WEB_HOST/memory/restart全丢)+防御校验
+- `deploy/deploy_panwatch.sh` — bash 先按行尾 `\` 拼逻辑行再解析注释，`docker run` 续行中间夹的两行 `#` 注释吞掉后续参数：实际只拿到 `-e TZ` 之前的部分，`WEB_HOST=0.0.0.0`、`--memory=1g`、`--restart=unless-stopped`、镜像名全部丢失 → `--full` 热补丁重建必然失败，且丢的正是 v0.4.47 修外部 502 的关键参数。注释移出命令块并在原地写明 bash 语义陷阱。
+- 新增防御校验：`docker run` 后 `docker inspect` 核对 WEB_HOST 环境变量（缺失则删容器硬失败）、Memory/RestartPolicy（缺失打 warning），参数丢失当场暴露而不是等线上 502。
+- 验证：续行+注释模式全文件扫描无残留；Windows 本地无 bash/WSL，语法与 docker inspect 输出解析待小主机下次部署实测（inspect 字段取法与脚本内既有 `--format` 用法同源）。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-前端错误上报端点双前缀(API_BASE已含/api再拼/api致404全链路失效)+门禁新增R5禁双前缀
 - `frontend/src/lib/error-report.ts` — ENDPOINT 由 `${API_BASE}/api/logs/frontend` 改 `${API_BASE}/logs/frontend`：API_BASE 已含 `/api`，原路径实际 POST `/api/api/logs/frontend` 404 且被 `.catch(()=>{})` 吞掉，9-08 建的系统日志闭环前端上报(window.onerror/unhandledrejection/ErrorBoundary)全部静默丢失。顺手把吞错改 `console.debug` 留痕。
 - `scripts/check_ui_rules.mjs` — 新增 R5：源码禁出现 `'/api/api/` 双前缀字面量，防同类死链回潮。
