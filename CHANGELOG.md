@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.20(风险整改第2波合入main)
+- 本次发版内容: 多租户数据访问统一收口(W2.1/C3: scoped()/owned_or_404()/writable() 三助手+20处越权面修复+AST静态门禁进4个CI工作流) / 测试与真实 DATA_DIR 彻底隔离(W2.2/E4: conftest 顶层重定向+Base重载防御) / 联网测试打标 network+CI 主门禁 `-m "not network"`+夜间网络工作流(W2.3/E2) / 前端四道门禁(W2.4/E3: vitest 17例+eslint 铁律+UI规则 R6棘轮/R7禁null→0+Dockerfile 恢复 tsc) / 覆盖率棘轮+requirements-lock 171包精确锁定+dependabot 三生态+pnpm/pip 双审计入档(W2.5/E5+E6) / 统一交易日历接线9处+缺失年份显式报错 TradingCalendarError(W2.6/B6)。
+- 部署注意: 本波 0 个 schema 迁移(纯代码+CI/测试/门禁面); 交易日历静态表覆盖 2025-2027, **2028 年初必须补 2028 表**(否则交易日判定显式报错, 不再静默); requirements-lock.txt/dependabot/coverage 基线为仓库侧新文件, 对运行中容器无影响(容器仍用 v0.5.14 底座已装依赖)。
+- 验证: 全量离线套件 **1825 passed / 2 failed / 5 skipped**(2 failed 均为已知本地环境损坏文件 ta_load_ohlcv_patch/thsdk_buffer_size, 从未进 CI, 与 wave2 分支基线一致); 新增 test_w26_trading_calendar_wiring 29 例; 前端 tsc/lint/vitest/UI-rules 四道全绿。
+- [tag v0.5.20]
+
 ### fix-统一交易日历接线+缺失年份显式报错(W2.6/B6)
 - 背景: B6 —— 仓内已有 src/core/trading_calendar.py(静态表 2025-2027, S6 产物), 但仅 prediction_outcome 一家在用; 其余交易日/竞价/时段判定仍是手写 weekday, 法定节假日(恰为工作日)会被当交易日: 国庆白天 kline TTL 按交易档刷新、竞价异动"当日池"节假日返回空池、dark_flow 盘中把上一交易日 tick 当未来时刻误丢、节假日空拉误告警、市场状态接口节假日白天误标"盘前/已收盘"。
 - **红线落地(缺失年份显式报错)**: is_trading_day 此前对未覆盖年份回落 weekday 推测(`_HOLIDAYS.get(year, set())`) —— 违反方案红线"缺失年份必须显式报错而不是回落 weekday 判断, 禁止推测"。新增 `TradingCalendarError`, 年份不在 2025-2027 静态表内直接抛(报错文案指明补表位置); add_trading_days/next/prev/trading_day_anchor 经同一判定继承 fail-loud。存量调用方 prediction_outcome 评估窗口最长 10 交易日, 恒在覆盖范围内, 不受影响。
