@@ -7,6 +7,18 @@
 
 ## 2026-09-08
 
+### fix-envelope每帧WS推送新建Redis连接→单例复用(连接风暴)+自愈
+- `src/web/realtime/envelope.py` — `_next_seq()` 原在函数体内每次 `redis_sync.from_url()` 新建连接，每帧 WS 推送/每条通知都建连，高频推送下连接风暴。改模块级单例 `_get_seq_client()`（对齐 ws_hub.py 既有写法），建连后 ping 校验；连接异常置空标记、下次取 seq 重建（简单自愈）；`reset_for_tests()` 同步清单例。
+- `tests/test_p2_realtime.py` — 新增 `test_seq_client_reused`：mock redis.from_url 计次，三次取 seq 断言 INCR 单调且建连仅 1 次。
+- 验证：`pytest tests/test_p2_realtime.py` 6 passed（原 5 用例 + 新 1 用例）。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-AgentScheduler防双跑(max_instances=1/coalesce/misfire)——LLM Agent并发双跑重复通知
+- `src/core/scheduler.py` — `add_job` 补 `max_instances=1, coalesce=True, misfire_grace_time=300`：LLM Agent 单次执行数分钟，interval 任务上一轮没跑完下一轮就启动 → 同一 Agent 并发双跑（重复通知/token 翻倍/record_agent_run 竞态）。对齐 server.py 后注册的 4 个 job 与 report/kline_backfill scheduler 的既有口径（此前唯独最核心的 Agent 调度没有防护）。
+- 新增 `tests/test_scheduler_guard.py` — 1 用例：mock add_job 捕获参数，断言注册 job 必带三参数。
+- 验证：`pytest tests/test_scheduler_guard.py tests/test_p2_realtime.py` 7 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-ACR生产流水线pytest门禁被管道吞退出码(全红照样绿)+补PR门禁+新增forecast镜像CI
 - `.github/workflows/build-push-acr.yml` — gates 的 pytest 改 `set -o pipefail` + 去掉 `| tail -3` 与 `pip install || true`（原写法管道退出码取 tail，生产 ACR 镜像构建零测试门禁，与注释宣称相反）；新增 `pull_request: [main]` 触发，build job 加 `if: github.event_name != 'pull_request'`（PR 只跑门禁不推镜像）。
 - `.github/workflows/build-and-push-image.yml` — 同步补 PR 门禁 + build job 事件守卫（GHCR 流水线 test job 本身写法正确，只缺 PR 触发）。

@@ -57,6 +57,13 @@ class AgentScheduler:
             id=agent.name,
             name=agent.display_name,
             replace_existing=True,
+            # 2026-09-08 审计修复: LLM Agent 单次动辄数分钟, interval 任务上一轮
+            # 没跑完下一轮就启动 → 同一 Agent 并发双跑(重复通知/token 翻倍/记录竞态)。
+            # max_instances=1 防并发, coalesce 合并积压, misfire 给 5 分钟宽限。
+            # 对齐 server.py 后注册的 4 个 job 与 report/kline_backfill scheduler 的既有口径。
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
         )
 
         logger.info(f"注册 Agent: {agent.display_name} (schedule: {schedule})")
