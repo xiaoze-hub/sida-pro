@@ -19,7 +19,13 @@ logger = logging.getLogger(__name__)
 #   唯一逃生口: 显式 SIDA_ALLOW_SQLITE=1(仅本地开发/测试容器)
 # - 本地开发(DOCKER 未设)默认 data/panwatch.db, 显式 SIDA_DB_URL 可切 PG
 # - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@panwatch-postgres:5432/sida"
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "panwatch.db")
+# W2.2/E4 (2026-09-09): DATA_DIR 是数据根的唯一口径 —— 设了 DATA_DIR(容器/
+# 测试隔离), 默认库文件必须跟着进去。否则 delenv SIDA_DB_URL + reload 的测试
+# 路径会解析回仓库 data/panwatch.db(实测测试曾把迁移跑进真实库, 留下 7 个 .bak)。
+if os.environ.get("DATA_DIR"):
+    DB_PATH = os.path.join(os.path.abspath(os.environ["DATA_DIR"]), "panwatch.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "panwatch.db")
 
 if (
     os.environ.get("DOCKER") == "1"
@@ -86,8 +92,15 @@ def _set_db_pragma(dbapi_conn, connection_record):
 SessionLocal = sessionmaker(bind=engine)
 
 
-class Base(DeclarativeBase):
-    pass
+# W2.2/E4 reload 防御: importlib.reload(本模块)保留 module __dict__ —— 必须复用
+# 旧 Base。若无条件重建, models.py 等在各自 import 时绑定了旧 Base 的 ORM 模型
+# 会与 reload 后的新 Base 脱钩, Base.metadata.create_all 建出空库(no such table)。
+# (test_pg_default 等用例按 DOCKER/env 语义 reload 本模块, 历史上靠字母序凑巧
+# 排在受害者之后未暴露。)
+if "Base" not in globals():
+
+    class Base(DeclarativeBase):
+        pass
 
 
 # SQLite 写锁信号量(2026-08-11): WAL 模式读写不互斥, 但写-写互斥。

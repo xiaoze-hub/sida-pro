@@ -2,10 +2,12 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.core.notify_center import push_notification
 from src.core.timezone import beijing_now_naive
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import AgentRun, Notification, NotifyChannel, User
@@ -89,10 +91,14 @@ def _to_out(n: Notification, run: AgentRun | None = None) -> NotificationOut:
     )
 
 
-def _configured_channels(db: Session) -> list[dict]:
-    """只向前端暴露安全的渠道标识，不返回 config 中的任何密钥。"""
+def _configured_channels(db: Session, user: User) -> list[dict]:
+    """只向前端暴露安全的渠道标识，不返回 config 中的任何密钥。
+
+    C3(2026-09-09): 只回当前用户自己的 + 全局渠道 —— 此前返回全库全部渠道的
+    id/名称(他人渠道名可探, 配合 id 可进一步探测)。
+    """
     rows = (
-        db.query(NotifyChannel)
+        scoped(db.query(NotifyChannel), user)
         .filter(NotifyChannel.enabled.is_(True))
         .order_by(NotifyChannel.id.asc())
         .all()
@@ -154,7 +160,7 @@ def list_notifications(
             for row in rows
         ],
         "unread": unread,
-        "configured_channels": _configured_channels(db),
+        "configured_channels": _configured_channels(db, user),
     }
 
 
@@ -287,16 +293,31 @@ def clear_read(
 
 
 @router.post("/test")
-def send_test(db: Session = Depends(get_db)):
-    """自检: 写一条站内通知并尝试外发, 返回外发状态便于排查渠道。"""
+def send_test(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """自检: 写一条站内通知并尝试外发, 返回外发状态便于排查渠道。
+
+    C3(2026-09-09): 此前无鉴权(未登录可写全库可见的全局通知), 且读取回显
+    无过滤。现在通知归属当前用户(user_id=user.id), 回显按归属过滤。
+    """
     nid = push_notification(
         "🔔 通知中心测试",
         "这是一条测试消息。若 push_status=skipped 说明未配置外发渠道（站内仍可见）。",
         category="system",
         level="success",
         source="manual_test",
+        user_id=user.id,
     )
-    n = db.query(Notification).filter(Notification.id == nid).first()
+    n = (
+        db.query(Notification)
+        .filter(
+            Notification.id == nid,
+            or_(Notification.user_id == user.id, Notification.user_id.is_(None)),
+        )
+        .first()
+    )
     return {
         "ok": True,
         "id": nid,

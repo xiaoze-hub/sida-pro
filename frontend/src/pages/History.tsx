@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Trash2, FileText, ArrowLeft } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -85,7 +85,7 @@ export default function HistoryPage() {
     return m ? m[1] : '--:--'
   }
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
@@ -99,9 +99,9 @@ export default function HistoryPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedAgent, historyKind, toast])
 
-  useEffect(() => { load() }, [selectedAgent, historyKind])
+  useEffect(() => { load() }, [load])
 
   useEffect(() => {
     const available = historyKind === 'workflow'

@@ -113,7 +113,7 @@ export default function SentimentGauge({
         },
       ],
     })
-  }, [phase, metrics, chartRef])
+  }, [phase, metrics, score, pointerColor, chartRef])
 
   return (
     // 2026-09-05 容器加高到 154px: 圆心在 78%(120px)，下方 34px 正好放下两行字，

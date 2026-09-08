@@ -162,11 +162,16 @@ def _drop_future_ticks(ticks: list[dict], now=None) -> list[dict]:
         limit = now_s + 60
     except Exception:  # noqa: BLE001
         return ticks
-    # 周末/盘后复盘放行: 非工作日交易时段(周末/09:25前/15:05后)不过滤，
+    # 非交易日/盘后复盘放行: 非交易时段(节假日周末/09:25前/15:05后)不过滤，
     # 直接看最近完整交易日(前端 trade_date 标注基准日)。盘中才严格丢未来。
     try:
-        in_session = _now.weekday() < 5 and _s("09:25:00") <= now_s <= _s("15:05:00")
-    except Exception:  # noqa: BLE001
+        from src.core.trading_calendar import is_trading_day
+
+        # W2.6(B6): 交易日判定走日历 —— 旧 weekday<5 在法定节假日(工作日)
+        # 会误判"盘中"把上一交易日 tick 当未来时刻误丢
+        in_session = is_trading_day(_now.date()) and _s("09:25:00") <= now_s <= _s("15:05:00")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[dark_flow] 交易日判定异常, 放行全部 ticks: %r", e)
         in_session = True
     if not in_session:
         return ticks
@@ -257,11 +262,13 @@ def _verdict_cache():
 
 
 def _in_trading_hours() -> bool:
-    """是否在交易时段(工作日 09:25-15:05)。空拉取此时段才值得重试+告警。"""
+    """是否在交易时段(交易日 09:25-15:05)。空拉取此时段才值得重试+告警。"""
     import datetime as _dt
+    from src.core.trading_calendar import is_trading_day
     try:
         now = _dt.datetime.now()
-        if now.weekday() >= 5:
+        # W2.6(B6): 交易日走日历 —— 旧 weekday<5 会在法定节假日空拉时误告警
+        if not is_trading_day(now.date()):
             return False
         t = now.strftime("%H:%M:%S")
         return "09:25:00" <= t <= "15:05:00"

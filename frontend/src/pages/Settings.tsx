@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Eye, EyeOff, Plus, Pencil, Trash2, Star, Send, Cpu, Play, Download, Upload, FileJson, BarChart3, User, Radar, QrCode, MonitorUp, MailCheck, Copy, KeyRound, Activity, Search } from 'lucide-react'
 import { fetchAPI, listSceneBindings, setSceneBinding, wechatBindStart, wechatBindStatus, wechatBindUnbind, wechatBindGet, type AIService, type AIModel, type NotifyChannel, type SceneBinding, type UserInfo, type SubscriptionItem, type WechatBindStartResult, type WechatBindInfo, authApi } from '@panwatch/api'
 import { QRCodeSVG } from 'qrcode.react'
@@ -414,7 +414,15 @@ export default function SettingsPage() {
     },
   ]
 
-  const load = async () => {
+  // 微信绑定状态(静默加载, 失败不阻塞设置页)
+  const loadWechatBind = useCallback(async () => {
+    try {
+      const info = await wechatBindGet()
+      setWechatBindInfo(info)
+    } catch { /* 后端未实现/未绑定时不阻塞设置页 */ }
+  }, [])
+
+  const load = useCallback(async () => {
     try {
       // 2026-09-01 审计修复: 改为 allSettled, 单个接口失败(如 /datasources 曾因缺列 500)
       // 不再拖垮整页 —— 失败的接口降级为空/默认值, 其余正常渲染。
@@ -456,7 +464,7 @@ export default function SettingsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [loadWechatBind])
 
   // 场景分配: 下拉选中 → 绑定/解绑模型(None=回落默认模型)
   // Radix Select 不允许空字符串 value, 用哨兵值表示"默认模型"(解绑)
@@ -523,7 +531,7 @@ export default function SettingsPage() {
     }
   }
 
-  const loadFeedbackStats = async () => {
+  const loadFeedbackStats = useCallback(async () => {
     setFbLoading(true)
     try {
       const stats = await fetchAPI<FeedbackStats>('/feedback/stats?days=14')
@@ -534,9 +542,9 @@ export default function SettingsPage() {
     } finally {
       setFbLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { load(); loadFeedbackStats() }, [])
+  useEffect(() => { load(); loadFeedbackStats() }, [load, loadFeedbackStats])
 
   // 卸载时停止扫码轮询
   useEffect(() => () => stopWechatPoll(), [])
@@ -1027,13 +1035,6 @@ export default function SettingsPage() {
   }
 
   // ── 扫码绑定个人微信(iLink 渠道) ──
-  const loadWechatBind = async () => {
-    try {
-      const info = await wechatBindGet()
-      setWechatBindInfo(info)
-    } catch { /* 后端未实现/未绑定时不阻塞设置页 */ }
-  }
-
   const stopWechatPoll = () => {
     if (wechatPollRef.current !== null) {
       window.clearInterval(wechatPollRef.current)
@@ -1838,7 +1839,7 @@ export default function SettingsPage() {
                 const text = await file.text()
                 const payload = JSON.parse(text)
                 await importTemplate(payload)
-              } catch (err) {
+              } catch {
                 toast('配置包解析失败', 'error')
               }
             }}

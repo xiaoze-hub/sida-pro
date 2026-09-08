@@ -6,8 +6,10 @@ from pydantic import BaseModel
 from sqlalchemy import func, case
 from sqlalchemy.orm import Session
 
+from src.web.api._scope import owned_or_404
+from src.web.api.auth import get_current_user
 from src.web.database import get_db
-from src.web.models import StockSuggestion, SuggestionFeedback
+from src.web.models import StockSuggestion, SuggestionFeedback, User
 
 
 logger = logging.getLogger(__name__)
@@ -20,14 +22,19 @@ class FeedbackIn(BaseModel):
 
 
 @router.post("")
-def submit_feedback(payload: FeedbackIn, db: Session = Depends(get_db)):
+def submit_feedback(
+    payload: FeedbackIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """C3(2026-09-09): 建议按归属校验(自己的 + 全局 NULL), 他人的统一 404 ——
+    此前任意用户可对他人建议提交反馈并探测其存在性。"""
     sug = (
         db.query(StockSuggestion)
         .filter(StockSuggestion.id == payload.suggestion_id)
         .first()
     )
-    if not sug:
-        raise HTTPException(404, "建议不存在")
+    owned_or_404(sug, user, "建议")
 
     fb = SuggestionFeedback(suggestion_id=payload.suggestion_id, useful=payload.useful)
     db.add(fb)

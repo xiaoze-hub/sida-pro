@@ -32,8 +32,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.core.abnormal_moves import analyze_for_symbols
+from src.core.trading_calendar import trading_day_anchor
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
-from src.web.cache.biz_cache import biz_cache
+from src.web.cache.biz_cache import biz_cache, user_scoped_key
 from src.web.database import get_db
 from src.web.models import AuctionAnomalyRecord, Stock, User
 
@@ -42,24 +44,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 CACHE_TTL_S = 60
-CACHE_KEY_FMT = "am:all:{min_proximity:.2f}"
 
 # 单股分析次数上限(防被异常数据拖爆); 实际生产由 K 线负缓存保护.
 _ANALYZE_LIMIT = 100
 
 
-def _gather_candidate_symbols(db: Session) -> dict[str, dict]:
+def _gather_candidate_symbols(db: Session, user: User) -> dict[str, dict]:
     """合并 watchlist + 当日竞价异动池, 返回 {symbol: {'name': ..., 'source': ...}}.
 
     - 去重: 同 symbol 多个来源时, 'source' 用逗号连接.
     - watchlist 全部走 db.query, 不依赖业务层外部 service.
-    - 当日候选: AuctionAnomalyRecord.created_at >= today 00:00 (本机 tz).
+    - 当日候选: AuctionAnomalyRecord.created_at >= 最近交易日 00:00 (本机 tz;
+      W2.6/B6 起按 trading_day_anchor 锚定, 周末/节假日回看上一交易日).
+    - C3(2026-09-09): 自选股按归属过滤(自己的 + 全局), 此前拉全库所有用户自选.
     """
     out: dict[str, dict] = {}
 
-    # 1) 自选股
+    # 1) 自选股(自己的 + 全局共享)
     try:
-        for row in db.query(Stock).all():
+        for row in scoped(db.query(Stock), user).all():
             code = (row.symbol or "").strip()
             if not code or not code.isdigit() or len(code) != 6:
                 continue
@@ -81,14 +84,15 @@ def _gather_candidate_symbols(db: Session) -> dict[str, dict]:
     except Exception as e:
         logger.debug("[abnormal_moves] watchlist 读取失败: %r", e)
 
-    # 2) 当日竞价异动池(本机时区今日 00:00 之后)
+    # 2) 当日竞价异动池: 按最近交易日锚定(W2.6/B6), 周末/节假日回看上一
+    #    交易日的池子而不是返回空池
     try:
-        today_midnight = datetime.combine(
-            datetime.now().date(), datetime.min.time()
+        anchor_midnight = datetime.combine(
+            trading_day_anchor(datetime.now().date()), datetime.min.time()
         )
         rows = (
             db.query(AuctionAnomalyRecord)
-            .filter(AuctionAnomalyRecord.created_at >= today_midnight)
+            .filter(AuctionAnomalyRecord.created_at >= anchor_midnight)
             .order_by(AuctionAnomalyRecord.created_at.desc())
             .all()
         )
@@ -137,9 +141,9 @@ def _attach_name_and_source(items: list[dict], meta: dict[str, dict]) -> list[di
     return items
 
 
-def _scan_impl(db: Session, min_proximity: float) -> dict[str, Any]:
+def _scan_impl(db: Session, user: User, min_proximity: float) -> dict[str, Any]:
     """缓存穿透封装: 命中-> 直返; miss-> 走 DB+分析后回填."""
-    meta = _gather_candidate_symbols(db)
+    meta = _gather_candidate_symbols(db, user)
     if not meta:
         return {
             "available": False,
@@ -184,16 +188,18 @@ def clear_cache() -> dict:
 def list_abnormal_moves(
     min_proximity: float = Query(0.5, ge=0.0, le=2.0, description="接近度阈值; 过滤 < 该值"),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """扫描自选股 + 当日竞价异动池, proximity 倒序返回异动接近度面板.
 
-    60s 进程内缓存(biz_cache L1+L2), 避免高频扫描拖慢 K 线源.
+    60s 进程内缓存(biz_cache L1+L2), 避免高频扫描拖慢 K 线源。
+    C3(2026-09-09): 缓存键强制带 user_id —— 此前 am:all:{threshold} 全用户共享,
+    用户 A 的自选结果会被用户 B 命中。
     """
-    cache_key = CACHE_KEY_FMT.format(min_proximity=min_proximity)
+    cache_key = user_scoped_key("am", user, min_proximity=f"{min_proximity:.2f}")
 
     def _fetch():
-        return _scan_impl(db, min_proximity)
+        return _scan_impl(db, user, min_proximity)
 
     cached = biz_cache.get_or_fetch(cache_key, ttl=CACHE_TTL_S, fetch=_fetch)
     return cached

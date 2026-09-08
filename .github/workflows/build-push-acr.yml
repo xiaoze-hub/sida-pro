@@ -50,18 +50,33 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-      - name: Backend pytest
+      - name: Backend pytest + coverage ratchet (W2.5/E5)
         run: |
           set -o pipefail
-          python3 -m pip install -q -r requirements.txt pytest-timeout
-          # 单测禁联网: 超 60s 的用例直接失败(防网络挂起拖死构建)
-          python3 -m pytest tests/ -q --timeout=60
-      - name: Frontend typecheck
+          # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
+          # lock 不含本仓本地包 marketdata(与 Dockerfile 同口径单独 --no-deps 装)
+          python3 -m pip install -q -r requirements-lock.txt pytest-timeout pytest-cov
+          python3 -m pip install -q --no-deps -e ./packages/marketdata
+          # W2.5/E6 漂移守卫: requirements.txt 新增顶层依赖而未再生 lock → 这里红
+          python3 scripts/check_lock_covers_reqs.py
+          # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
+          python3 scripts/check_scoped_queries.py
+          # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network, CI 主门禁跳过(-m "not network");
+          # 之前无 ignore 清单, 联网文件在 CI 本就会因访问不到行情源而挂/超时。
+          # 保留 --timeout=60: 仍未打标的潜在联网用例超时兜底。
+          # W2.5/E5: 覆盖率棘轮(基线 scripts/coverage-baseline.json, 只许升不许降)
+          python3 -m pytest tests/ -q --timeout=60 -m "not network" \
+            --cov=src --cov-report=json:coverage.json --cov-report=term
+          python3 scripts/check_coverage_ratchet.py coverage.json
+      - name: Frontend gates (tsc + eslint + vitest + ui-rules)
         run: |
           cd frontend
           npm install -g pnpm --silent 2>/dev/null || true
           pnpm install --frozen-lockfile
           pnpm typecheck
+          pnpm lint
+          pnpm test
+          node ../scripts/check_ui_rules.mjs
 
   build:
     # PR 门禁只跑 gates, 不构建不推送镜像

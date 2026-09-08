@@ -137,7 +137,7 @@ iframe{width:100%;height:100%;border:0}
       w.document.close()
       // blob URL 在父进程保留期间一直有效, 用户关闭子窗口后回收.
       w.addEventListener?.('beforeunload', () => {
-        try { URL.revokeObjectURL(blobUrl) } catch (e) { /* ignore */ }
+        try { URL.revokeObjectURL(blobUrl) } catch { /* ignore */ }
       })
     } catch {
       // 最终 fallback: 浏览器原生打开原始 URL(走 cookie / Authorization 头时已失效,

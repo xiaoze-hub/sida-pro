@@ -14,6 +14,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useLocalStorage } from '@/lib/utils'
+import { safeNum, safePercent } from '@/lib/format'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 
 interface Props {
@@ -282,10 +283,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
             ) : (
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {hotBoards.slice(0, 6).map((b) => {
-                  const rawPct = b.change_pct
-                  const pct = typeof rawPct === 'number' ? rawPct : (rawPct == null ? 0 : Number(rawPct))
-                  const safePct = isFinite(pct) ? pct : 0
-                  const color = safePct > 0 ? 'text-stock-up' : safePct < 0 ? 'text-stock-down' : 'text-muted-foreground'
+                  const pct = safeNum(b.change_pct)
+                  const color = pct !== null && pct > 0 ? 'text-stock-up' : pct !== null && pct < 0 ? 'text-stock-down' : 'text-muted-foreground'
                   return (
                     <button
                       key={b.code}
@@ -297,7 +296,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                         <div className="truncate text-[13px] font-medium text-foreground">{b.name}</div>
                         <div className="truncate font-mono text-[11px] text-muted-foreground">{b.code}</div>
                       </div>
-                      <div className={`font-mono text-[12px] font-semibold ${color}`}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</div>
+                      <div className={`font-mono text-[12px] font-semibold ${color}`}>{safePercent(pct)}</div>
                     </button>
                   )
                 })}
@@ -310,10 +309,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
               {stocksMode === 'for_you' && <div className="px-1 text-[11px] text-muted-foreground">根据持仓/自选/监控信号/风格偏好排序</div>}
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 {visibleHotStocks.slice(0, 6).map((s) => {
-                  const rawPct = s.change_pct
-                  const pct = typeof rawPct === 'number' ? rawPct : (rawPct == null ? 0 : Number(rawPct))
-                  const safePct = isFinite(pct) ? pct : 0
-                  const color = safePct > 0 ? 'text-stock-up' : safePct < 0 ? 'text-stock-down' : 'text-muted-foreground'
+                  const pct = safeNum(s.change_pct)
+                  const color = pct !== null && pct > 0 ? 'text-stock-up' : pct !== null && pct < 0 ? 'text-stock-down' : 'text-muted-foreground'
                   const reasons = (s as HotStockItem & { _reasons?: string[] })._reasons
                   return (
                     <div
@@ -331,7 +328,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                       </div>
                       <div className="text-right">
                         <div className="font-mono text-[12px] text-foreground">{typeof s.price === 'number' && isFinite(s.price) ? s.price.toFixed(2) : (s.price != null && isFinite(Number(s.price)) ? Number(s.price).toFixed(2) : '--')}</div>
-                        <div className={`font-mono text-[11px] ${color}`}>{safePct >= 0 ? '+' : ''}{safePct.toFixed(2)}%</div>
+                        <div className={`font-mono text-[11px] ${color}`}>{safePercent(pct)}</div>
                       </div>
                     </div>
                   )
@@ -353,10 +350,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
           ) : (
             <div className="scrollbar grid max-h-[60vh] grid-cols-1 gap-2 overflow-y-auto md:grid-cols-2">
               {boardStocks.map((s) => {
-                const rawPct = s.change_pct
-                const pct = typeof rawPct === 'number' ? rawPct : (rawPct == null ? 0 : Number(rawPct))
-                const safePct = isFinite(pct) ? pct : 0
-                const color = safePct > 0 ? 'text-stock-up' : safePct < 0 ? 'text-stock-down' : 'text-muted-foreground'
+                const pct = safeNum(s.change_pct)
+                const color = pct !== null && pct > 0 ? 'text-stock-up' : pct !== null && pct < 0 ? 'text-stock-down' : 'text-muted-foreground'
                 return (
                   <div
                     key={s.symbol}
@@ -372,7 +367,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-[12px] text-foreground">{typeof s.price === 'number' && isFinite(s.price) ? s.price.toFixed(2) : (s.price != null && isFinite(Number(s.price)) ? Number(s.price).toFixed(2) : '--')}</div>
-                      <div className={`font-mono text-[11px] ${color}`}>{safePct >= 0 ? '+' : ''}{safePct.toFixed(2)}%</div>
+                      <div className={`font-mono text-[11px] ${color}`}>{safePercent(pct)}</div>
                     </div>
                   </div>
                 )

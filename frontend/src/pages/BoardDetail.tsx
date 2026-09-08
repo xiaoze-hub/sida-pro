@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Layers, RefreshCw } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
@@ -102,7 +102,7 @@ export default function BoardDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!blockCode) return
     setLoading(true)
     setError('')
@@ -120,9 +120,9 @@ export default function BoardDetailPage() {
     // 板块轮动(全局, 独立加载, 失败静默)
     fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' }).then(setRotation).catch(() => {})
     setLoading(false)
-  }
+  }, [blockCode])
 
-  useEffect(() => { void load() }, [blockCode])
+  useEffect(() => { void load() }, [load])
 
   const rotItemsTop = useMemo(() => (rotation?.items ?? []).slice(0, 5), [rotation])
   // 本板块 5 日涨幅(从轮动结果按 block_code 反查; 非本板块命中则为空)

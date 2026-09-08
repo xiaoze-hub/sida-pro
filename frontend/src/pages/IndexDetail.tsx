@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, TrendingUp, RefreshCw, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
@@ -79,7 +79,7 @@ export default function IndexDetailPage() {
   // 大盘资金流(同花顺源, 东财502替代)
   const [marketFlow, setMarketFlow] = useState<MarketFlow | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
@@ -94,9 +94,9 @@ export default function IndexDetailPage() {
     }
     // 大盘资金流(独立加载, 失败静默)
     fetchAPI<MarketFlow>('/market-data/market-capital-flow').then(setMarketFlow).catch(() => {})
-  }
+  }, [symbol])
 
-  useEffect(() => { load() }, [symbol])
+  useEffect(() => { load() }, [load])
 
   const q = data?.quote
   const up = (q?.change_pct || 0) >= 0

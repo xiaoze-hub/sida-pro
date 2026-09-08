@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.models import (
     Stock,
@@ -103,6 +104,8 @@ def get_market_status():
     """获取各市场的交易状态"""
     from datetime import datetime
 
+    from src.core.trading_calendar import is_trading_day
+
     result = []
     for market_code, market_def in MARKETS.items():
         try:
@@ -124,6 +127,10 @@ def get_market_status():
             elif is_trading:
                 status = "trading"
                 status_text = "交易中"
+            elif market_code == MarketCode.CN and not is_trading_day(now.date()):
+                # W2.6(B6): A股法定节假日(工作日)白天, 旧逻辑会误标"盘前/已收盘"
+                status = "closed"
+                status_text = "休市（节假日）"
             else:
                 # 判断是盘前还是盘后
                 first_session = market_def.sessions[0]
@@ -432,7 +439,8 @@ async def trigger_stock_agent(
     suppress_notify = stock_id <= 0
 
     if stock_id > 0:
-        db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
+        # C3(2026-09-09): 股票按归属过滤 —— 不能借 stock_id 触发他人自选股的 Agent
+        db_stock = scoped(db.query(Stock), user).filter(Stock.id == stock_id).first()
         if not db_stock:
             raise HTTPException(404, "股票不存在")
 
@@ -456,7 +464,9 @@ async def trigger_stock_agent(
 
         market = (market or "CN").strip().upper() or "CN"
         name = (name or "").strip() or symbol
-        db_stock = db.query(Stock).filter(
+        # C3(2026-09-09): 同上按归属过滤; 非本人自选 → 走不落库的一次性分析,
+        # 不再复用他人 Stock 行/其 Agent 绑定。
+        db_stock = scoped(db.query(Stock), user).filter(
             Stock.symbol == symbol, Stock.market == market
         ).first()
         if db_stock:

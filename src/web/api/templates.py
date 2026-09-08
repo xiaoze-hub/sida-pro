@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.web.database import get_db
-from src.web.models import AgentConfig, AppSettings, Stock, StockAgent
+from src.web.models import AgentConfig, AppSettings, Stock, StockAgent, User
+from src.web.api.auth import require_owner
+from src.web.api._scope import allow_cross_user
 from src.core.agent_catalog import AGENT_KIND_CAPABILITY, infer_agent_kind
 
 
@@ -62,9 +64,11 @@ _SETTINGS_KEYS = {
 
 
 @router.get("/export")
+@allow_cross_user  # C3(2026-09-09): 仅 owner 可达; 导出全库配置(含各用户股票)是备份语义, 有意跨用户
 def export_template(
     include_internal: bool = Query(default=True),
     db: Session = Depends(get_db),
+    _owner: User = Depends(require_owner),
 ):
     """导出当前配置为可导入的配置包 JSON"""
     settings_rows = (
@@ -132,12 +136,14 @@ def export_template(
 
 
 @router.post("/import")
+@allow_cross_user  # C3(2026-09-09): 仅 owner 可达; 导入即全库配置恢复, 有意跨用户
 def import_template(
     payload: TemplatePayload,
     mode: str = Query(
         "merge", description="merge=合并更新, replace=替换(仅对 payload 涵盖的数据)"
     ),
     db: Session = Depends(get_db),
+    _owner: User = Depends(require_owner),
 ):
     """导入配置包。默认 merge：仅更新/创建 payload 中包含的对象。"""
 

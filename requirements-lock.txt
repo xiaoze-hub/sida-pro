@@ -1,0 +1,199 @@
+# requirements-lock.txt — Python 依赖精确锁定 (W2.5/E6, 2026-09-09)
+#
+# 来源: 生产容器 panwatch(镜像 xzxwz:v0.5.14 基座 + 热修)内
+#   docker exec panwatch python -c "
+#     import importlib.metadata as m
+#     seen={ (d.metadata['Name'] or '').strip(): d.version for d in m.distributions() if d.metadata['Name'] }
+#     [print(f'{k}=={v}') for k,v in sorted(seen.items(), key=lambda x: x[0].lower())]"
+# 即"生产真实在跑的版本", 不是本地猜的。CI 与 Dockerfile 都用它安装。
+#
+# 再生成流程: 升级依赖时先在测试环境验证 → 生产容器执行上面命令 →
+#   人工替换 tradingagents 行为 git+https 直链(见下) → 删 marketdata 本地包行 → 提交。
+#
+# 与 requirements.txt 的关系: requirements.txt 是人读的 loose 约束(意图),
+# 本文件是机器装的精确版本(事实)。CI 有 check_lock_covers_reqs.py 守卫:
+# requirements.txt 新增顶层依赖而未重生成本文件 → CI 红。
+#
+# 文件名说明: 不叫 requirements.lock 是因为 dependabot pip 生态只匹配
+# requirements*.txt / requirements-*.txt 命名, 叫 .lock 永远收不到升级 PR。
+#
+# 相对容器 freeze 的三处手工修正:
+#   1) tradingagents==0.3.0 → git+https 直链(该包不在 PyPI, 见 requirements.txt 注释)
+#   2) 删除 marketdata==0.1.0(本仓本地包, Dockerfile 用 --no-deps -e 单独装)
+#   3) 补 tzdata==2026.3: requirements.txt 2026-09-09 新增, v0.5.14 生产容器基座
+#      构建时尚无此依赖(容器靠系统 tzdata 兜底, zoneinfo 正常), 故 freeze 里没有。
+#      显式补进 lock 使 check_lock_covers_reqs.py 通过; 下次镜像构建随之进入镜像。
+
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+aiosqlite==0.22.1
+akracer==0.0.14
+akshare==1.18.94
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anthropic==1.4.0
+anyio==4.15.1
+apprise==1.13.1
+APScheduler==3.11.3
+arabic-reshaper==3.0.1
+asn1crypto==1.5.1
+attrs==26.1.0
+backtrader==1.9.78.123
+beautifulsoup4==4.15.0
+brotli==1.2.0
+build==1.6.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+cryptography==50.0.1
+cssselect==1.5.0
+cssselect2==0.10.1
+curl_cffi==0.16.3
+decorator==5.3.1
+distro==1.9.0
+docstring_parser==0.18.0
+et_xmlfile==2.0.0
+fastapi==0.141.1
+filetype==1.2.0
+fonttools==4.64.0
+frozenlist==1.8.0
+google-auth==2.57.1
+google-genai==2.22.0
+greenlet==3.5.5
+h11==0.16.0
+html5lib==1.1
+httpcore==1.0.9
+httpcore2==2.12.0
+httpx==0.28.1
+httpx-sse==0.4.3
+httpx2==2.12.0
+idna==3.19
+iniconfig==2.3.0
+jiter==0.16.0
+jmespath==1.1.0
+joblib==1.6.0
+jsonpatch==1.33
+jsonpath==0.82.2
+jsonpointer==3.1.1
+langchain-anthropic==1.7.1
+langchain-classic==1.0.8
+langchain-community==0.4.2
+langchain-core==1.6.2
+langchain-experimental==0.4.2
+langchain-google-genai==4.4.0
+langchain-openai==1.6.0
+langchain-protocol==0.0.19
+langchain-text-splitters==1.1.2
+langgraph==1.2.11
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-sqlite==3.1.1
+langgraph-prebuilt==1.1.0
+langgraph-sdk==0.4.4
+langsmith==0.12.2
+lxml==6.1.3
+Markdown==3.10.3
+markdown-it-py==4.2.0
+mdurl==0.1.2
+multidict==6.7.1
+multitasking==0.0.13
+narwhals==2.25.0
+numpy==2.4.6
+oauthlib==3.3.1
+openai==3.8.0
+openpyxl==3.1.5
+orjson==3.12.0
+ormsgpack==1.12.2
+oscrypto==1.3.0
+packaging==26.3
+pandas==3.0.5
+parsel==1.11.0
+peewee==4.5.0
+pillow==12.3.0
+platformdirs==4.11.7
+playwright==1.57.0
+pluggy==1.6.0
+prometheus_client==0.26.0
+prompt_toolkit==3.0.53
+propcache==0.5.2
+protobuf==7.36.1
+psycopg2-binary==2.9.12
+py-mini-racer==0.6.0
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==3.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+pydyf==0.12.1
+pyee==13.0.1
+Pygments==2.21.0
+pyHanko==0.37.0
+pyhanko-certvalidator==0.32.0
+PyJWT==2.13.0
+pypdf==6.17.0
+pyphen==0.18.1
+pyproject_hooks==1.2.0
+pytesseract==0.3.13
+pytest==9.1.1
+pytest-asyncio==1.4.0
+python-bidi==0.6.11
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+python-multipart==0.0.32
+pytz==2026.3.post1
+PyYAML==6.0.3
+questionary==2.1.1
+redis==8.1.0
+regex==2026.9.3
+reportlab==5.0.1
+requests==2.34.2
+requests-oauthlib==2.0.0
+requests-toolbelt==1.0.0
+rich==15.0.0
+scikit-learn==1.9.0
+scipy==1.17.1
+setuptools==84.0.0
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+soupsieve==2.9.2
+SQLAlchemy==2.0.52
+sqlite-vec==0.1.9
+starlette==1.6.0
+stockstats==0.6.8
+svglib==2.2.0
+TA-Lib==0.7.1
+tabulate==0.10.0
+tenacity==9.1.4
+threadpoolctl==3.6.0
+tiktoken==0.14.0
+tinycss2==1.5.1
+tinyhtml5==2.1.0
+tqdm==4.70.0
+tradingagents @ git+https://github.com/TauricResearch/TradingAgents.git@v0.3.0
+truststore==0.10.4
+typer==0.27.2
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.3
+tzlocal==5.4.4
+uritools==6.1.3
+urllib3==2.7.0
+uuid_utils==0.17.0
+uvicorn==0.52.4
+w3lib==2.4.1
+wcwidth==0.8.3
+weasyprint==69.0
+webencodings==0.6.1
+websockets==16.1.1
+wheel==0.46.3
+xhtml2pdf==0.2.18
+xlrd==2.0.2
+xxhash==4.0.1
+yarl==1.24.5
+yfinance==1.7.0
+zopfli==0.4.3
+zstandard==0.25.0

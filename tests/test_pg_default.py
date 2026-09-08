@@ -11,7 +11,20 @@ reload, 结束后原样恢复(否则 CI 门禁永远红)。
 import importlib
 import os
 
+import pytest
+
 _RELOAD_KEYS = ("DOCKER", "SIDA_DB_URL", "SIDA_ALLOW_SQLITE")
+
+
+@pytest.fixture(autouse=True)
+def _restore_database_module():
+    """reload 是对同一模块对象的原地操作 —— 用例结束后必须按恢复后的 env
+    再 reload 一次, 否则本文件留下的 DB_URL/engine 会污染后续所有用
+    SessionLocal 的测试(实测曾把迁移跑进真实 data/panwatch.db)。"""
+    yield
+    import src.web.database as db
+
+    importlib.reload(db)
 
 
 def _reload_database(env: dict):

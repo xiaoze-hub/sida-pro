@@ -5,8 +5,10 @@ import time as _time
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+from src.web.api._scope import scoped
+from src.web.api.auth import get_current_user
 from src.web.database import get_db
-from src.web.models import Stock
+from src.web.models import Stock, User
 from pydantic import BaseModel, Field
 
 from src.core.marketdata_client import md_quote_rows
@@ -367,10 +369,17 @@ async def get_minute(symbol: str, market: str = "CN"):
 
 # 2026-08-18: 根路径 GET (前端默认请求, 返回自选股票列表)
 @router.get("")
-async def get_quotes_root(db: Session = Depends(get_db)):
-    """首页 Dashboard 用的简化股票列表"""
+async def get_quotes_root(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """首页 Dashboard 用的简化股票列表。
+
+    C3(2026-09-09): 只返回当前用户的自选(此前 is_watchlist 全库, 他人自选串到首页)。
+    """
     try:
-        stocks = db.query(Stock).filter(Stock.is_watchlist == True).order_by(Stock.sort_order).limit(10).all()
+        q = scoped(db.query(Stock), user).filter(Stock.is_watchlist == True)  # noqa: E712
+        stocks = q.order_by(Stock.sort_order).limit(10).all()
         return {
             "code": 0,
             "success": True,

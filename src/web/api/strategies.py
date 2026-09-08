@@ -9,8 +9,11 @@ import logging
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from src.web.api.auth import get_current_user
+from src.web.models import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -278,7 +281,10 @@ def _evaluate_strategy(cfg: dict, q: dict, strategy_id: str, symbol: str, market
 
 
 @router.post("/scan")
-async def scan_strategy(req: ScanRequest):
+async def scan_strategy(
+    req: ScanRequest,
+    user: User = Depends(get_current_user),
+):
     """批量选股: 用策略硬过滤扫描全市场/候选池, 返回通过名单(按分数排序)。
 
     - universe=all: 全市场 A 股(优先缓存列表, 东财/akshare 兜底)
@@ -304,9 +310,16 @@ async def scan_strategy(req: ScanRequest):
     elif req.universe == "watchlist":
         from src.web.database import SessionLocal
         from src.web.models import Stock
+        # C3(2026-09-09): 自选池按归属过滤(自己的 + 全局), 此前拉全库所有用户自选
         db = SessionLocal()
         try:
-            rows = db.query(Stock).all()
+            rows = (
+                db.query(Stock)
+                .filter(
+                    (Stock.user_id == user.id) | (Stock.user_id.is_(None))
+                )
+                .all()
+            )
         finally:
             db.close()
         symbols = [str(s.symbol).strip() for s in rows if str(s.market) == mkt]

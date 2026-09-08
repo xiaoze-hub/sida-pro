@@ -14,6 +14,12 @@ python_functions = ["test_*"]
 # strict 模式)下 async def 测试报 "not natively supported"。本地 venv 被误降级到
 # pytest-asyncio 1.4.0(auto 默认)故本地能过 CI 不能 —— 根治靠这里显式声明。
 asyncio_mode = "auto"
+# W2.3/E2 (2026-09-09): 联网测试标记。CI 主门禁 -m "not network"(海外机房到不了
+# 国内行情源); nightly 工作流 -m network 单独跑。标记清单见各测试文件尾部
+# pytestmark = pytest.mark.network(文件级), 新增联网测试文件时随文件加标记。
+markers = [
+    "network: 需要真实外部网络接口的测试(国内行情源/thsdk), CI 主门禁跳过, nightly 单独跑",
+]
 
 [tool.ruff]
 line-length = 110

@@ -856,7 +856,7 @@ export default function InteractiveKline(props: {
       // 2026-09-03 撤单重叠修复: 同 date+kind 的多条事件(如一日多笔大额撤单)
       // 以前各画一个 marker, 全部叠在同一根 K 线上完全重合。先按 date|kind 聚合,
       // 多条合并为一个 marker, 笔数缀在文案后(×N), 信息不丢且不再重叠。
-      const grouped = new Map<string, { ev: (typeof props.events)[number]; n: number }>()
+      const grouped = new Map<string, { ev: KlineEvent; n: number }>()
       for (const ev of props.events) {
         const k = `${ev.date}|${ev.kind}`
         const g = grouped.get(k)
@@ -1010,7 +1010,7 @@ export default function InteractiveKline(props: {
         // ignore
       }
     }
-  }, [series, lwReady, showRsi, indexByDate, interval, mode, mainIntentData, layers, props.gsSignals, props.fundFlow, props.events, props.supportPressure])
+  }, [series, lwReady, showRsi, indexByDate, interval, mode, mainIntentData, layers, props.mainIntent, props.gsSignals, props.fundFlow, props.events, props.supportPressure])
 
   // 主力意图图例(2026-08-12): 展示方向/筹码峰/成本带, 仅在传入结构化数据时显示
   const mi = props.mainIntent ?? mainIntentData

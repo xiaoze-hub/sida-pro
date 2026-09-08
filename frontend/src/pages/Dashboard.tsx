@@ -347,10 +347,10 @@ export default function DashboardPage() {
   }
 
   // 异动池/热榜等数据源返回 SH/SZ/BJ(交易所代码),行情接口统一按 A股 CN 处理
-  const normalizeMarket = (m: string) => (['SH', 'SZ', 'BJ'].includes((m || '').toUpperCase()) ? 'CN' : m || 'CN')
+  const normalizeMarket = useCallback((m: string) => (['SH', 'SZ', 'BJ'].includes((m || '').toUpperCase()) ? 'CN' : m || 'CN'), [])
 
-  const openStock = (symbol: string, market: string, name = '', hasPosition = false) =>
-    setModal({ open: true, symbol, market: normalizeMarket(market), name, hasPosition })
+  const openStock = useCallback((symbol: string, market: string, name = '', hasPosition = false) =>
+    setModal({ open: true, symbol, market: normalizeMarket(market), name, hasPosition }), [normalizeMarket])
 
   // ========== PC 右键菜单 ==========
   const [stockCtxMenu, setStockCtxMenu] = useState<StockContextMenuState | null>(null)
@@ -359,7 +359,7 @@ export default function DashboardPage() {
     e.preventDefault()
     e.stopPropagation()
     setStockCtxMenu({ x: e.clientX, y: e.clientY, stock: { ...stock, market: normalizeMarket(stock.market) } })
-  }, [])
+  }, [normalizeMarket])
 
   const addToWatchlistFromMenu = useCallback((stock: StockContextTarget) => {
     void addToWatchlist(stock.symbol, stock.name || stock.symbol, stock.market || 'CN')

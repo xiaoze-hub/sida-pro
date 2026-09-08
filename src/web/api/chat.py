@@ -829,11 +829,21 @@ def _read_strategy_signals(db: Session, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def _read_notifications(db: Session, limit: int = 10, unread_only: bool = False) -> str:
-    """读取最近通知(主库 notifications, 按时间倒序; unread_only 时只取未读)。"""
+def _read_notifications(
+    db: Session, limit: int = 10, unread_only: bool = False, user: User | None = None
+) -> str:
+    """读取最近通知(主库 notifications, 按时间倒序; unread_only 时只取未读)。
+
+    C3(2026-09-09): 传 user 时只读本人 + 全局(NULL)通知 —— 此前 AI 工具链
+    get_notifications 会把所有用户的站内通知读给当前用户。
+    """
     q = db.query(Notification)
     if unread_only:
         q = q.filter(Notification.read_at.is_(None))
+    if user is not None:
+        q = q.filter(
+            or_(Notification.user_id == user.id, Notification.user_id.is_(None))
+        )
     total = q.count()
     if total == 0:
         return "暂无通知" + ("（无未读通知）" if unread_only else "") + "。"
@@ -1329,7 +1339,7 @@ async def _execute_tool(
         elif name == "get_notifications":
             limit = int(args.get("limit", 10) or 10)
             unread_only = bool(args.get("unread_only") or False)
-            return _read_notifications(db, limit, unread_only)
+            return _read_notifications(db, limit, unread_only, user=user)
         elif name == "get_fundamentals_detail":
             symbol = (args.get("symbol") or "").strip()
             market = args.get("market", "CN")
@@ -2609,11 +2619,13 @@ def suggested_questions(
         questions.append("今天的通知里有什么需要我关注的？")
 
     # ④ 持仓浮亏(简单判断: 模拟盘 open 且 unrealized_pnl < 0, 取浮亏最大的一只) → 问调仓
+    # C3(2026-09-09): 删掉 hasattr(PaperTradingPosition, "user_id") 猜测式保护 ——
+    # T6 迁移后 user_id 是真实列, 隔离按设计写, 不按"猜列存在与否"写。
     losing_q = db.query(PaperTradingPosition).filter(
         PaperTradingPosition.status == "open",
         PaperTradingPosition.unrealized_pnl < 0,
     )
-    if hasattr(PaperTradingPosition, "user_id"):
+    if user is not None:
         losing_q = losing_q.filter(
             or_(
                 PaperTradingPosition.user_id == user.id,

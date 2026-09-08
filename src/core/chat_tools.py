@@ -173,8 +173,13 @@ _CACHE_TTL = {
 
 
 def _cache_path() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    data_dir = os.path.join(root, "data")
+    # W2.2/E4: 缓存落 DATA_DIR(容器 DATA_DIR=/app/data → 路径不变;
+    # 测试 conftest 隔离 DATA_DIR → 不再写仓库 data/)。
+    data_dir = os.environ.get("DATA_DIR")
+    if not data_dir:
+        data_dir = os.path.join(
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), "data"
+        )
     os.makedirs(data_dir, exist_ok=True)
     return os.path.join(data_dir, "chat_tools_cache.json")
 

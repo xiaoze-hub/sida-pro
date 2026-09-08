@@ -49,8 +49,9 @@ def _fail_cooldown(market: MarketCode) -> float:
         md = MARKETS.get(market)
         if md and md.is_trading_time():
             return _FAIL_COOLDOWN_S
-    except Exception:
-        pass
+    except Exception as e:
+        # W2.6(B6): 交易日历未覆盖年份等硬错误要留痕, 不能静默按收盘处理
+        logger.warning("[kline] 交易时段判定异常, 按收盘冷却处理: %r", e)
     return _FAIL_COOLDOWN_CLOSED_S
 
 
@@ -69,29 +70,25 @@ def _get_fetch_lock(cache_key: str) -> threading.Lock:
         return lk
 
 
-def _is_auction_time() -> bool:
-    """判断当前是否处于集合竞价时段(9:15-9:25, 仅交易日)。"""
-    try:
-        import datetime as _dt
-        now = _dt.datetime.now(ZoneInfo("Asia/Shanghai"))
-        if now.weekday() >= 5:
-            return False
-        t = now.time()
-        return _dt.time(9, 15) <= t <= _dt.time(9, 25)
-    except Exception:
-        return False
+def _is_auction_time(now: datetime | None = None) -> bool:
+    """集合竞价时段(9:15-9:25)且为 A 股交易日; 判定统一走 trading_calendar(W2.6/B6)。"""
+    from src.core.trading_calendar import is_auction_time
+
+    return is_auction_time(now)
 
 
 def _kline_cache_ttl(market: MarketCode) -> float:
     try:
+        # W2.6(B6): 竞价档提前到 is_trading_time 之外判断 —— 旧写法竞价档嵌在
+        # 会话判定(9:30 起)里, 9:15-9:25 永远走不到, 是死分支; 仅对 CN 生效。
+        if market == MarketCode.CN and _is_auction_time():
+            return _KLINE_TTL_AUCTION_S
         md = MARKETS.get(market)
         if md and md.is_trading_time():
-            # 集合竞价期间数据秒级变动, 用最短 TTL
-            if _is_auction_time():
-                return _KLINE_TTL_AUCTION_S
             return _KLINE_TTL_TRADING_S
-    except Exception:
-        pass
+    except Exception as e:
+        # 交易日历未覆盖年份等硬错误要留痕, 不能静默按收盘档处理
+        logger.warning("[kline] 交易时段判定异常, 按收盘档处理: %r", e)
     return _KLINE_TTL_CLOSED_S
 
 

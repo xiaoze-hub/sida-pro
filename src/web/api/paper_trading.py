@@ -18,6 +18,7 @@ from src.core.paper_trading_engine import (
 )
 from src.core.portfolio_diagnostics import diagnose_paper_portfolio
 from src.core.quant_adapters import available_backends
+from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user, require_owner
 from src.web.database import get_db
 from src.web.models import (
@@ -117,12 +118,19 @@ def _build_equity_curve(
     ratio = market_allocations_or_default(acc).get(market, 0.0) if market else 1.0
     base = acc.initial_capital * ratio if market else acc.initial_capital
 
-    tq = db.query(PaperTradingTrade).order_by(PaperTradingTrade.closed_at.asc())
+    tq = (
+        db.query(PaperTradingTrade)
+        .filter(*_user_scope_trade(acc))
+        .order_by(PaperTradingTrade.closed_at.asc())
+    )
     if market:
         tq = tq.filter(PaperTradingTrade.stock_market == market)
     trades = tq.all()
 
-    pq = db.query(PaperTradingPosition).filter(PaperTradingPosition.status == "open")
+    pq = (
+        db.query(PaperTradingPosition)
+        .filter(PaperTradingPosition.status == "open", *_user_scope_pos(acc))
+    )
     if market:
         pq = pq.filter(PaperTradingPosition.stock_market == market)
     open_positions = pq.all()
@@ -189,7 +197,7 @@ def _account_summary(db: Session, acc: PaperTradingAccount, market: str | None) 
     if not market or market not in ALL_MARKETS:
         open_positions = (
             db.query(PaperTradingPosition)
-            .filter(PaperTradingPosition.status == "open")
+            .filter(PaperTradingPosition.status == "open", *_user_scope_pos(acc))
             .all()
         )
         unrealized = sum(p.unrealized_pnl or 0 for p in open_positions)
@@ -216,12 +224,16 @@ def _account_summary(db: Session, acc: PaperTradingAccount, market: str | None) 
         .filter(
             PaperTradingPosition.status == "open",
             PaperTradingPosition.stock_market == market,
+            *_user_scope_pos(acc),
         )
         .all()
     )
     trades = (
         db.query(PaperTradingTrade)
-        .filter(PaperTradingTrade.stock_market == market)
+        .filter(
+            PaperTradingTrade.stock_market == market,
+            *_user_scope_trade(acc),
+        )
         .all()
     )
     realized = sum(t.pnl for t in trades)
@@ -558,14 +570,24 @@ _NOTIFY_DEFAULTS = {
 
 
 @router.get("/notify-settings")
-def get_notify_settings(db: Session = Depends(get_db)):
-    """返回当前通知配置 + 可用渠道列表。"""
+def get_notify_settings(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """返回当前通知配置 + 可用渠道列表。
+
+    C3(2026-09-09): 渠道列表按归属过滤(自己的 + 全局), 此前列全库渠道。
+    """
     rows = db.query(AppSettings).filter(AppSettings.key.in_(_NOTIFY_KEYS)).all()
     settings = dict(_NOTIFY_DEFAULTS)
     for r in rows:
         settings[r.key] = r.value or _NOTIFY_DEFAULTS.get(r.key, "")
 
-    channels = db.query(NotifyChannel).filter(NotifyChannel.enabled.is_(True)).all()
+    channels = (
+        scoped(db.query(NotifyChannel), user)
+        .filter(NotifyChannel.enabled.is_(True))
+        .all()
+    )
     channel_list = [
         {"id": ch.id, "name": ch.name, "type": ch.type, "is_default": ch.is_default}
         for ch in channels

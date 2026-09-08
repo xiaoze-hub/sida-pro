@@ -54,9 +54,13 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Frontend typecheck (门禁 · tsc -b)
+      - name: Frontend gates (门禁 · tsc + eslint + vitest + ui-rules)
         working-directory: frontend
-        run: npx tsc -b
+        run: |
+          npx tsc -b
+          pnpm lint
+          pnpm test
+          node ../scripts/check_ui_rules.mjs
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -72,36 +76,29 @@ jobs:
             libffi-dev libfontconfig1 fonts-noto-cjk
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # W2.5/E6(2026-09-09): 统一走 requirements-lock.txt(生产容器 freeze 精确版本);
+        # 本地包 marketdata 与 Dockerfile 同口径 --no-deps 单独装(lock 不含 -e 行)
+        run: |
+          pip install -r requirements-lock.txt
+          pip install --no-deps -e ./packages/marketdata
+          python scripts/check_lock_covers_reqs.py
+
+      - name: Multi-tenant scope check (门禁 · C3 越权静态扫描)
+        # W2.1/C3(2026-09-09): 与 build-and-push-image.yml 同门禁
+        run: python scripts/check_scoped_queries.py
 
       - name: Run tests
-        # 2026-08-20: --ignore 排除 4 个已知 fragile 用例(测试顺序污染导致 suite 跑挂,
-        # 但单独跑全过)。这些是已知问题(详见 CHANGELOG),短期 fix 在 release workflow 里 ignore。
         # 2026-08-21: conftest 已加 _init_test_db + _clear_module_caches fixture 修好顺序污染,
-        # 缓存类 3 文件不再需要 ignore; 但 CI 海外机房访问不了国内行情源, 联网测试文件仍需排除
-        # (与 build-and-push-image.yml 保持一致)。
+        # 缓存类 3 文件不再需要 ignore。
         # 2026-09-08 0.6: 固定默认密码与其开关已删除,
         # 需要登录的测试文件自备 AUTH_USERNAME/AUTH_PASSWORD(见各测试 fixture)。
+        # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network(10 文件, pyproject 已注册),
+        # 主门禁 -m "not network" 一刀切(与 build-and-push-image.yml 一致),
+        # 保留 2 个 CI 环境级 broken 文件的 --ignore; nightly 工作流单独跑 network 集合。
         run: |
-          python -m pytest tests/ \
-            --ignore=tests/test_dark_flow.py \
+          python -m pytest tests/ -m "not network" \
             --ignore=tests/test_dark_l2_engine.py \
-            --ignore=tests/test_thsdk_api.py \
-            --ignore=tests/test_thsdk_board.py \
             --ignore=tests/test_thsdk_extended.py \
-            --ignore=tests/test_thsdk_ext.py \
-            --ignore=tests/test_main_flow_hengsheng.py \
-            --ignore=tests/test_main_flow_compare.py \
-            --ignore=tests/test_chat_thsdk_tools.py \
-            --ignore=tests/test_auction_pool.py \
-            --ignore=tests/test_events_routing.py \
-            --ignore=tests/test_context_enrichments.py \
-            --ignore=tests/test_datasource_admin_api.py \
-            --ignore=tests/test_datasource_reconcile.py \
-            --ignore=tests/test_datasources_health.py \
-            --ignore=tests/test_selfcheck.py \
-            --ignore=tests/test_shadow_account.py \
-            --ignore=tests/test_ta_us_news_passthrough.py \
             -q
 
       - name: Run marketdata package tests

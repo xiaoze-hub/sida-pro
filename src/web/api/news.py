@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
+from src.web.api._scope import scoped
+from src.web.api.auth import get_current_user
 from src.web.database import get_db
-from src.web.models import Stock, DataSource
+from src.web.models import Stock, DataSource, User
 from src.collectors.news_collector import NewsCollector, NewsItem
 
 router = APIRouter()
@@ -42,6 +44,7 @@ async def get_news(
     filter_related: bool = Query(default=True, description="只显示相关新闻"),
     source: str = Query(default="", description="来源过滤，逗号分隔：xueqiu/eastmoney_news/eastmoney"),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """获取新闻列表（基于数据源配置）
 
@@ -54,8 +57,8 @@ async def get_news(
     # 修复 2026-08-21: news 端点偶发 15s+ 超时拖累首页, 加 NEWS_DISABLE 紧急开关
     if os.getenv("NEWS_DISABLE", "").strip() in {"1", "true", "yes"}:
         return []
-    # 获取所有自选股（用于匹配）
-    all_stocks = db.query(Stock).all()
+    # 获取自选股(自己的 + 全局共享) 用于匹配; C3(2026-09-09): 此前拉全库所有用户自选
+    all_stocks = scoped(db.query(Stock), user).all()
     stock_map = {s.symbol: s.name for s in all_stocks}
     name_to_symbol = {s.name: s.symbol for s in all_stocks}
 

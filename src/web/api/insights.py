@@ -19,6 +19,7 @@ from src.collectors.market_http import TTLCache
 from src.web.database import get_db
 from src.web.models import Stock, User
 from src.web.api.auth import get_current_user
+from src.web.api._scope import allow_cross_user
 import asyncio
 import logging
 import time
@@ -190,6 +191,7 @@ async def _fetch_fundamental_context(symbol: str, market: str) -> str:
         return ""
 
 
+@allow_cross_user  # C3(2026-09-09): 仅取股票名称做展示上下文, 非数据越权面
 async def _fetch_message_context(db: Session, symbol: str, market: str) -> str:
     """消息面摘要:近 3 天新闻/公告标题 + 本地最近 AI 建议/分析(失败降级为空)。"""
     parts: list[str] = []
@@ -344,6 +346,7 @@ class AnnouncementEvalRequest(BaseModel):
 
 
 @router.post("/announcement-eval")
+@allow_cross_user  # C3(2026-09-09): 仅取股票名称做展示上下文, 非数据越权面
 async def announcement_eval(req: AnnouncementEvalRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """近期公告 → AI 逐条判利好/利空/中性 + 一句话。降级:无全文则用标题。"""
     market = _parse_market(req.market).value

@@ -92,3 +92,9 @@ class TestThsdkAlert:
         assert "direction" in r["close_surge"]
         assert "direction" in r["auction"]
         assert isinstance(r["wencai_pool"], dict)
+
+
+# W2.3/E2 (2026-09-09): 本文件测试需要真实外部接口(国内行情源/thsdk),
+# CI 主门禁以 -m "not network" 跳过, 由 nightly 网络工作流单独跑(-m network)。
+# 置于文件末尾: pytestmark 模块级任意位置生效, 避开 docstring/__future__/import 顺序。
+pytestmark = pytest.mark.network

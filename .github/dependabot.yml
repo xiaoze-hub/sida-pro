@@ -1,0 +1,38 @@
+# Dependabot 周更配置 (W2.5/E6, 2026-09-09)
+# 三个生态 weekly; 版本升级 PR 各自归一组(每组一个 PR, 控制噪音)。
+# 安全更新: Dependabot security updates(基于告警)自动单独开 PR、不在此分组,
+# 即"版本升级合并走周更组, 安全修复单独走" —— 与整改方案 2.5 第 3 条一致。
+version: 2
+updates:
+  # Python 后端: requirements-lock.txt 命中 dependabot 的 requirements-*.txt 匹配,
+  # 直接 bump 锁定精确版本。requirements.txt 的 loose 约束由 CI 守卫脚本
+  # (check_lock_covers_reqs.py)保证不漂移, 不单独依赖 dependabot 更新。
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-deps:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-deps:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-deps:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5

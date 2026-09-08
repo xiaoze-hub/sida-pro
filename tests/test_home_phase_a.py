@@ -45,7 +45,7 @@ def _seed(s):
     s.flush()
     s.add(M.Position(account_id=acc.id, stock_id=mt.id, cost_price=1700, quantity=100))
     s.add(M.Position(account_id=acc.id, stock_id=pa.id, cost_price=10, quantity=1000))
-    rule = M.PriceAlertRule(stock_id=mt.id, name="茅台破位", enabled=True)  # 仅茅台有提醒
+    rule = M.PriceAlertRule(stock_id=mt.id, name="茅台破位", enabled=True, user_id=_FAKE_USER.id)  # 仅茅台有提醒
     s.add(rule)
     s.flush()
     s.commit()
@@ -75,7 +75,7 @@ def test_today_hits_aggregate_with_stock_name(db):
         )
     )
     db.commit()
-    res = alerts_api.list_today_hits(db=db)
+    res = alerts_api.list_today_hits(db=db, user=_FAKE_USER)
     assert len(res) == 1
     assert res[0]["symbol"] == "600519"
     assert res[0]["name"] == "贵州茅台"
@@ -92,4 +92,4 @@ def test_today_hits_excludes_old(db):
         )
     )
     db.commit()
-    assert alerts_api.list_today_hits(db=db) == []
+    assert alerts_api.list_today_hits(db=db, user=_FAKE_USER) == []

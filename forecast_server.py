@@ -203,6 +203,8 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
         cur = df["timestamp"].iloc[-1]
         while cur.date() < target_dt.date() and n < 20:
             cur += timedelta(days=1)
+            # 豁免(W2.6/B6 审计): forecast_lib 独立部署不含 src/, 暂按 weekday 计交易日;
+            # 节假日目标日偏差已登记 docs/KNOWN_ISSUES.md
             if cur.weekday() < 5:
                 n += 1
         days = max(1, n)
@@ -448,6 +450,7 @@ def _do_predict(symbol: str, days: int = 5, task_id: str = "", target_date: str 
     cur_d = df["timestamp"].iloc[-1]
     while len(pred_dates) < days:
         cur_d += timedelta(days=1)
+        # 豁免(W2.6/B6 审计): 同上, forecast_lib 不含 src/, 见 docs/KNOWN_ISSUES.md
         if cur_d.weekday() < 5:
             pred_dates.append(str(cur_d.date()))
     target_date_str = pred_dates[-1] if pred_dates else last_date

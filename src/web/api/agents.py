@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from src.web.database import get_db
 from src.web.models import AgentConfig, AgentRun, LogEntry, User
 from src.web.api.auth import get_current_user
+from src.web.api._scope import allow_cross_user
 from src.core.ai_client import LLMDegradedError
 from src.core.schedule_parser import preview_schedule
 from src.core.schedule_parser import count_runs_within
@@ -123,6 +124,7 @@ router = APIRouter()
 
 
 @router.get("/health")
+@allow_cross_user  # C3(2026-09-09): 调度健康是全局运维视图(所有 agent 最近运行), 有意跨用户
 def agents_health(
     include_internal: bool = Query(default=False),
     db: Session = Depends(get_db),
@@ -422,6 +424,7 @@ async def trigger_agent_endpoint(
 
 
 @router.get("/tradingagents/running")
+@allow_cross_user  # C3(2026-09-09): trace 按 symbol 全局唯一, 前端权威状态源, 有意跨用户
 def find_running_for_stock(
     stock_symbol: str = Query(..., description="股票代码"),
     lookback_minutes: int = Query(default=30, ge=1, le=120),
@@ -489,6 +492,7 @@ def find_running_for_stock(
     }
 
 
+@allow_cross_user  # C3(2026-09-09): 幂等去重按全局 trace 判定, 防重复触发烧 LLM 费用, 有意跨用户
 def find_active_tradingagents_trace(db: Session, stock_symbol: str) -> str | None:
     """内部 helper:查该 symbol 是否有"真正在跑"的 tradingagents 任务。
 
