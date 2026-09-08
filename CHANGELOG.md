@@ -7,6 +7,16 @@
 
 ## 2026-09-08
 
+### fix-影子报告路径穿越+通知渠道跨用户越权+config明文脱敏(风险方案1.4/C1+C2)
+- 背景: C1 —— src/web/api/shadow.py 上传落盘名直接拼 `file.filename`(`../../` 可写出上传目录), `/report/{shadow_id}` 无格式/路径包含/归属校验且端点**未挂鉴权**, 任意(甚至未登录)请求可枚举读他人交割单分析报告(含交易画像/行为诊断); C2 —— src/web/api/channels.py GET 把 `config`(webhook URL/bot token 明文)整包返回给任何登录用户(全局渠道密钥泄露), PUT/DELETE 用"自己的+全局"谓词 → 非 owner 可改/删全局渠道, `POST /{id}/test` 完全无鉴权(任意用户拿别人的 webhook 发消息/探测)。
+- **C1**(shadow.py): 落盘名改 `uuid4().hex + 校验过后缀`(与用户输入彻底解耦, 后缀白名单不变, 保留供解析器识别格式); 新增 `_resolve_report` 三重校验 —— shadow_id 格式白名单(`shadow_<8hex>`, 与 `extractor._new_shadow_id` 生成器一致) → resolve 后 `is_relative_to` 报告目录(路径包含) → 落库 `users.shadow_profile_json` 的 shadow_id 必须与请求者匹配(归属), 报告不存在同样 404(不泄露存在性); `get_report`/`get_report_pdf` 挂 `get_current_user`。
+- **C2**(channels.py): 列表/创建/更新响应的 config 按键名脱敏(键名含 token|secret|key|password|webhook 不分大小写), 只留末 4 位供辨认, **DB 内仍存明文可用**(PUT 不传 config 不覆盖); 更新/删除改 `_get_channel_owned` 读宽写严(对齐 stocks.py: 自己的放行, 全局(NULL)仅 owner, 他人 403, 不存在 404); test 端点补 `get_current_user` + 同款归属校验; ChannelResponse 迁移 ConfigDict(顺手消 class-Config 弃用告警)。notifications.py `_configured_channels` 与 paper_trading.py 渠道列表核实已只回 id/name/type, 无泄露。
+- 索引核实(方案第4条): notify_channels.user_id 生产 PG 已有 `ix_notify_channels_user_id`, 无需迁移。
+- 遗留登记: chat_upload.py 把上传文件逐字解析到 100,000 字符喂 LLM(提示注入面), 按方案登记 §6.3 后续波次处理, 本任务不动; 前端 ShadowAccount 的 window.open 兜底链接(不带 Authorization 头)在报告端点加鉴权后会 401, 主路径 fetch+Bearer 不受影响(前端跟进归第4波)。
+- 测试: `tests/test_shadow_path_safety.py` 9 用例(4 种恶意/正常文件名落盘 `is_relative_to` 断言 + 用户名成分不入盘名; owner 可读/他人 404/无画像 404/格式与 URL 编码穿越全 404/缺文件 404 非 500/符号链接逃逸被路径包含校验拦下), `tests/test_channels_isolation.py` 13 用例(demo 列表脱敏: 响应体无任何完整 secret + 他人渠道不可见 + chat_id 不误伤; 创建响应掩码而库内明文; demo PUT/DELETE 全局 403、owner 200; 他人渠道 403; test 端点 demo→全局 403 不触达 NotifierManager / owner 200 且内部发送用明文 / demo 自己渠道走通到发送)。
+- 验证: 新批(shadow_path_safety + channels_isolation + pushplus_channel + shadow_account 存量) 36 passed 1 skipped(Windows 符号链接权限跳过); 邻域(test_user_isolation_api + test_selfcheck) 33 passed。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
 ### fix-调度器选主fail-closed+租约丢失真停+调度可观测性(风险方案1.3/A3)
 - 背景: WEB_WORKERS=2 时旧选主在 Redis 不可用时"回退为本 worker 启动"——每个 worker 都自认 leader, 定时 Agent 双跑(LLM 费用翻倍/通知重复/撮合双触发); 租约被抢/续期失败仅打日志, 调度器一直跑到进程重启, 选主形同虚设; 调度执行无 context 规模观测、异常不上报 error_tracker; 多数 add_job 站点缺防并发参数。
 - **fail-closed 选主**(src/core/scheduler_leader.py): Redis 不可用**绝不自认 leader** —— 指数退避(2s→30s 封顶)探测至 40s deadline, 仍不可用则放弃并置 `_state="failed"`; 锁在别人手里到期让位置 `_state="standby"`(合法状态); Redis 恢复由探测自动选主。显式口子: `SIDA_ENABLE_SCHEDULERS=1` 强制启动(兼容旧部署)、`SIDA_SCHEDULER_SINGLE_INSTANCE=1` 单实例部署跳过选主(开发)。`is_leader()` 删除, 改 `leader_state()` 三态(leader/standby/failed/init), 区分"合法没当上"与"没敢当"。裸连 Redis 不走 biz_cache 的红线例外已在模块 docstring 声明(分布式锁 NX/EX 语义, 非业务缓存)。
