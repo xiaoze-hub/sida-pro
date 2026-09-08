@@ -328,6 +328,21 @@ def decode_token(token: str) -> dict | None:
         return None
 
 
+def principal_from_payload(payload: dict | None) -> dict:
+    """JWT payload → request.state.user 的统一形状。
+
+    用户 id 在 sub 字段(create_token); 历史上限流/审计两处中间件各写各的
+    取法, 限流处取了不存在的 user_id claim → 分桶恒按 IP, 已登录互拖。
+    """
+    if not payload:
+        return {}
+    return {
+        "user_id": payload.get("sub") or payload.get("user_id"),
+        "username": payload.get("username") or "",
+        "role": payload.get("role") or "",
+    }
+
+
 # ── 权限依赖 ──────────────────────────────────────────────────────────
 
 async def get_current_user(

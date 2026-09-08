@@ -7,6 +7,13 @@
 
 ## 2026-09-08
 
+### fix-每用户限流分桶取错JWT claim(恒按IP)改统一解析sub(风险方案0.8)
+- `src/web/api/auth.py` — 新增 `principal_from_payload()`: JWT payload → request.state.user 的统一形状, 用户 id 取 `sub`(兜底历史 `user_id`), username/role 平级; 单一出口防止第三处中间件再各写各的。
+- `src/web/middleware.py` — JWTDecodeMiddleware 原 `"user_id": payload.get("user_id")` 取的是 JWT 里不存在的 claim(恒 None)→ 限流分桶永远走 IP, 同出口 IP 的多账号一人跑重活全员被限; 改调 `principal_from_payload()`。AuditMiddleware 的手写解析同款收编(原取法碰巧对, 但属重复实现)。
+- `tests/test_ratelimit_per_user.py` 新增 6 用例: principal_from_payload 三态(sub/兜底/空)、真 JWT 闭环下 state.user.user_id==sub、用户 A 打满 429 同 IP 用户 B 不受影响(修复前必 429 的核心回归)、匿名仍按 IP。
+- 验证: 新用例 6 passed; 关联 5 文件组合(test_ratelimit_per_user/security_20260823/multi_user_auth/p1_service_token/ws_auth_guard)基线对比 —— stash 本改动前后均 25 failed/33 passed, 失败集完全一致(本机缺 AUTH_ALLOW_DEFAULT_ADMIN/.env 的环境存量, 与 v0.5.18 发版注记的"Windows 环境存量"同类), 本改动零新增失败; `grep 'payload.get("user_id")' middleware.py` 零命中。全量门禁留待批次合并前统一跑。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### update-发版 v0.5.18(全面体检P0+P1修复合入main)
 - 本次发版内容: 前端错误上报端点修复+R5门禁 / 部署脚本截断修复 / CI门禁pipefail+PR触发+forecast镜像CI / envelope Redis连接复用 / 调度防双跑 / 模拟盘user_id隔离(迁移_m135) / InteractiveKline金额口径 / health脱敏 / WS鉴权+广播过滤 / forecast配置走HTTP服务token / compose安全加固 / Alertmanager告警闭环+备份docker exec。
 - 部署注意(.env 新增必填): POSTGRES_PASSWORD / REDIS_PASSWORD / SIDA_SERVICE_TOKEN —— 缺失时 compose up 直接报错(fail-fast, 勿用旧 env 直接拉起)。
