@@ -7,6 +7,12 @@
 
 ## 2026-09-08
 
+### update-发版 v0.5.18(全面体检P0+P1修复合入main)
+- 本次发版内容: 前端错误上报端点修复+R5门禁 / 部署脚本截断修复 / CI门禁pipefail+PR触发+forecast镜像CI / envelope Redis连接复用 / 调度防双跑 / 模拟盘user_id隔离(迁移_m135) / InteractiveKline金额口径 / health脱敏 / WS鉴权+广播过滤 / forecast配置走HTTP服务token / compose安全加固 / Alertmanager告警闭环+备份docker exec。
+- 部署注意(.env 新增必填): POSTGRES_PASSWORD / REDIS_PASSWORD / SIDA_SERVICE_TOKEN —— 缺失时 compose up 直接报错(fail-fast, 勿用旧 env 直接拉起)。
+- 验证: 后端全量 1746 passed / 3 failed(Windows 环境存量, 与 main 基线一致); 前端 tsc+build+UI门禁 OK; 迁移校验 35 个迁移一致。
+- [tag v0.5.18]
+
 ### feature-SIDA直调skill(Hermes可取生产数据)
 - 新增`skills/sida-pro-data/` — SKILL.md(端点表/两级认证/单位铁律)+`scripts/sida.py`(thin-client,只拼URL带头打印JSON,零密钥落仓)。
 - 已装进 Hermes:`~/.hermes/skills/sida-pro-data`软链指向仓内, 仓内改即时生效。
