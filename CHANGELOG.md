@@ -7,6 +7,10 @@
 
 ## 2026-09-08
 
+### fix-test_ws_auth_guard全量suite下因asyncio.get_event_loop无运行loop报错→改同步get_nowait
+- `tests/test_ws_auth_guard.py` — `_broadcast` 用 put_nowait 塞帧, 测试同步 `get_nowait()` 取即可; 原 `asyncio.get_event_loop()` 在全量 suite 中(主线程无运行 loop, 被其他用例关闭)抛 RuntimeError。单跑过、合跑挂的典型 flaky, 回归 `tests/test_ws_auth_guard.py` 单文件 + P1 全量 suite 1746 passed 双验证。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-告警闭环(无Alertmanager五条规则无出口)+备份脚本适配compose拓扑(docker exec)+失败告警
 - 新增 `deploy/alertmanager.yml` — 路由到 Hermes 企微桥(docker0 网关, 与 forecast 企微推送同通道); critical 级 1h 重复, 常规 4h。
 - `deploy/prometheus.yml` — 补 `alerting.alertmanagers: [alertmanager:9093]`("告警从没响过"的后一半根因: 指标名修对但根本没有接收端)。

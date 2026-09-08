@@ -11,8 +11,6 @@
 """
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -94,8 +92,9 @@ def test_broadcast_filtered_per_user(monkeypatch):
         qs._broadcast(
             {"type": "quotes", "ts": 0.0, "data": {"600519": {"price": 1500}, "000001": {"price": 10}}}
         )
-        frame_a = asyncio.get_event_loop().run_until_complete(asyncio.wait_for(q_a.get(), 1))
-        frame_b = asyncio.get_event_loop().run_until_complete(asyncio.wait_for(q_b.get(), 1))
+        # put_nowait 塞入, 同步取即可(不依赖事件循环, 全量 suite 里更稳)
+        frame_a = q_a.get_nowait()
+        frame_b = q_b.get_nowait()
         syms_a = set((frame_a["payload"].get("data") or {}).keys())
         syms_b = set((frame_b["payload"].get("data") or {}).keys())
         assert syms_a == {"600519"}   # A 收不到 B 的 000001
