@@ -241,7 +241,7 @@ async def health() -> dict[str, Any]:
       "version": "v0.2.65",
       "uptime_seconds": 1234,
       "components": {
-        "database": {"status": "ok", "pool_size": 5},
+        "database": {"status": "ok", "dialect": "postgresql", "pool_size": 5},
         "redis": {"status": "ok", "url": "redis://..."},
         "scheduler": {"status": "ok", "schedulers": ["agent", "price_alert", "paper_trading"]},
         "rate_limit": {"enabled": true, "buckets": 12},
@@ -267,11 +267,23 @@ async def health() -> dict[str, Any]:
             components["database"] = {
                 "status": "ok",
                 "latency_ms": latency_ms,
+                # 0.4② (2026-09-08): 方言标签, 一眼看出连的是哪个库(sqlite/postgresql)
+                "dialect": engine.url.get_backend_name(),
                 "url": str(engine.url).split("@")[-1] if "@" in str(engine.url) else "sqlite",
             }
             record_component_status("database", True)  # P4: 喂 Prometheus 告警
         except Exception as e:
-            components["database"] = {"status": "down", "error": str(e)[:100]}
+            try:
+                from src.web.database import IS_PG
+
+                _declared = "postgresql" if IS_PG else "sqlite"
+            except Exception:
+                _declared = "unknown"
+            components["database"] = {
+                "status": "down",
+                "dialect": _declared,
+                "error": str(e)[:100],
+            }
             record_component_status("database", False)  # P4: 喂 Prometheus 告警
             overall_ok = False
 

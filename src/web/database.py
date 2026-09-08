@@ -16,14 +16,20 @@ logger = logging.getLogger(__name__)
 # 数据库连接(2026-09-08: PG 为唯一生产口径, SQLite 仅本地开发/单测)
 # - 容器内(DOCKER=1)无 SIDA_DB_URL 直接 fail-fast, 禁止静默落 sqlite
 #   (历史教训: env 丢失 → 生产跑在容器内 sqlite → database is locked + 数据丢)
+#   唯一逃生口: 显式 SIDA_ALLOW_SQLITE=1(仅本地开发/测试容器)
 # - 本地开发(DOCKER 未设)默认 data/panwatch.db, 显式 SIDA_DB_URL 可切 PG
 # - 例: SIDA_DB_URL="postgresql+psycopg2://sida:xxx@panwatch-postgres:5432/sida"
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "panwatch.db")
 
-if os.environ.get("DOCKER") == "1" and not os.environ.get("SIDA_DB_URL"):
+if (
+    os.environ.get("DOCKER") == "1"
+    and not os.environ.get("SIDA_DB_URL")
+    and os.environ.get("SIDA_ALLOW_SQLITE") != "1"
+):
     raise RuntimeError(
         "DOCKER=1 但未设置 SIDA_DB_URL: 容器内禁止默认 SQLite,"
-        "请在 compose/deploy 中注入 postgresql 连接串"
+        "请在 compose/deploy 中注入 postgresql 连接串;"
+        "如确需容器内 SQLite(仅本地开发/测试), 显式设 SIDA_ALLOW_SQLITE=1"
     )
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

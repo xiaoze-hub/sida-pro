@@ -214,8 +214,9 @@ services:
     depends_on:
       forecast:
         condition: service_healthy
-      panwatch-redis:
+      redis:
         condition: service_healthy
+        required: false
       panwatch-postgres:
         condition: service_healthy
     healthcheck:
