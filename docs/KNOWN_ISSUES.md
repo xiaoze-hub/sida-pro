@@ -42,3 +42,15 @@ pip-audit 结果见下节。
 `pip-audit -r requirements-lock.txt --no-deps`: **No known vulnerabilities found**
 —— 后端 171 个锁定包在 OSV/PyPI 数据库中无已知漏洞, 暂无登记项。
 前端见上表(dependabot 接管后随周更 PR 逐项关闭)。
+
+## forecast_server 预测目标日按 weekday 计 (W2.6/B6 审计豁免, 2026-09-09)
+
+forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"未来 N 个
+交易日"计数按 weekday<5 推算(两处: target_date 换算天数 + pred_dates 生成),
+法定节假日会被当作交易日, 目标日期偏晚(如国庆前预测 3 个交易日, 实际应跨到
+节后)。影响面: 仅预测展示的目标日期标注, 不影响 src/ 内任何评估/回测链路
+(那部分已统一走 src/core/trading_calendar.py)。
+
+修复方向: 给 forecast_lib 内联一份静态日历表或部署时附带日历 JSON,
+随 src/ 表同步维护。Owner: TianXiang, 期限: 2026-10-31(与日历 2028 表
+补录同一维护窗口处理)。

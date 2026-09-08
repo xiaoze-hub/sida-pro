@@ -39,11 +39,19 @@ BACKFILL_DAYS_FALLBACK = 7  # 失败重试用 7 天
 CONCURRENCY = 5  # 并发 ingest 股数
 
 
-def _is_market_day() -> bool:
-    """简单交易日判断: 周一到周五 = 交易日。
-    注: 实际节假日需要专门的交易日历(目前用不到, 留个 hook)。
+def _is_market_day(now: datetime | None = None) -> bool:
+    """交易日判断: 统一走 trading_calendar(W2.6/B6, 上海时区, 节假日/调休感知)。
+
+    此前按 UTC weekday<5 判定; 原注释预留的"交易日历 hook"已落地。
     """
-    return datetime.now(timezone.utc).weekday() < 5  # 0-4 = Mon-Fri
+    from zoneinfo import ZoneInfo
+
+    from src.core.trading_calendar import is_trading_day
+
+    n = now or datetime.now(timezone.utc)
+    if n.tzinfo is None:
+        n = n.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return is_trading_day(n.astimezone(ZoneInfo("Asia/Shanghai")).date())
 
 
 def _backfill_in_worker(days: int) -> dict:

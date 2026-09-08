@@ -36,8 +36,14 @@ class MarketDef:
         else:
             dt = dt.astimezone(self.get_tz())
 
-        # 周末不交易
-        if dt.weekday() >= 5:
+        # W2.6(B6): A股交易日判定统一走 trading_calendar(法定节假日/调休补班
+        # 感知, 未覆盖年份显式报错); 港美暂无日历, 维持周末休市判定
+        if self.code == MarketCode.CN:
+            from src.core.trading_calendar import is_trading_day
+
+            if not is_trading_day(dt.date()):
+                return False
+        elif dt.weekday() >= 5:
             return False
 
         current_time = dt.time()

@@ -270,6 +270,7 @@ def _compute_features(
             "pnl": float(rt["pnl"]),
             "pnl_pct": float(rt["pnl_pct"]),
             "entry_hour": int(buy_dt.hour),
+            # 特征值(星期几), 非交易日判断 —— W2.6/B6 审计豁免
             "entry_weekday": int(buy_dt.weekday()),
             "buy_dt": buy_dt,
             "sell_dt": sell_dt,

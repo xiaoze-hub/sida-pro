@@ -223,17 +223,21 @@ def _tick_staleness(
 ) -> dict:
     """P1-5 停滞检测(纯函数, now 可注入单测)。
 
-    仅工作日 09:25-15:05 内判定: 末笔落后超 10 分钟 → stale=True。
+    仅交易日 09:25-15:05 内判定: 末笔落后超 10 分钟 → stale=True。
     非交易时段/跨日/无数据 → stale=False(不误报)。data_status 不动,
     只是 diag 里标, 口诀链路不断。
     """
     import datetime as _dt
+
+    from src.core.trading_calendar import is_trading_day
+
     now = now or _dt.datetime.now()
     info: dict = {"stale": False, "lag_sec": None}
     try:
         if not last_tick_t or trade_date != now.date().isoformat():
             return info
-        if now.weekday() >= 5:
+        # W2.6(B6): 交易日走日历, 不再按 weekday 推测
+        if not is_trading_day(now.date()):
             return info
         if not ("09:25:00" <= now.strftime("%H:%M:%S") <= "15:05:00"):
             return info

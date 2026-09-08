@@ -104,6 +104,8 @@ def get_market_status():
     """获取各市场的交易状态"""
     from datetime import datetime
 
+    from src.core.trading_calendar import is_trading_day
+
     result = []
     for market_code, market_def in MARKETS.items():
         try:
@@ -125,6 +127,10 @@ def get_market_status():
             elif is_trading:
                 status = "trading"
                 status_text = "交易中"
+            elif market_code == MarketCode.CN and not is_trading_day(now.date()):
+                # W2.6(B6): A股法定节假日(工作日)白天, 旧逻辑会误标"盘前/已收盘"
+                status = "closed"
+                status_text = "休市（节假日）"
             else:
                 # 判断是盘前还是盘后
                 first_session = market_def.sessions[0]

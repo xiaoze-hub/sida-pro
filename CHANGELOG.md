@@ -7,6 +7,16 @@
 
 ## 2026-09-09
 
+### fix-统一交易日历接线+缺失年份显式报错(W2.6/B6)
+- 背景: B6 —— 仓内已有 src/core/trading_calendar.py(静态表 2025-2027, S6 产物), 但仅 prediction_outcome 一家在用; 其余交易日/竞价/时段判定仍是手写 weekday, 法定节假日(恰为工作日)会被当交易日: 国庆白天 kline TTL 按交易档刷新、竞价异动"当日池"节假日返回空池、dark_flow 盘中把上一交易日 tick 当未来时刻误丢、节假日空拉误告警、市场状态接口节假日白天误标"盘前/已收盘"。
+- **红线落地(缺失年份显式报错)**: is_trading_day 此前对未覆盖年份回落 weekday 推测(`_HOLIDAYS.get(year, set())`) —— 违反方案红线"缺失年份必须显式报错而不是回落 weekday 判断, 禁止推测"。新增 `TradingCalendarError`, 年份不在 2025-2027 静态表内直接抛(报错文案指明补表位置); add_trading_days/next/prev/trading_day_anchor 经同一判定继承 fail-loud。存量调用方 prediction_outcome 评估窗口最长 10 交易日, 恒在覆盖范围内, 不受影响。
+- **新 API(盘中判定收口)**: `is_auction_time(now)`(9:15-9:25 含端点 + 交易日) / `is_trading_session(now)`(9:30-11:30, 13:00-15:00) / `trading_day_anchor(d)`(交易日取自身, 否则取最近上一交易日 —— "当日数据池"语义); 均上海时区, naive 入参视为上海墙上时间(单测可注入)。
+- **六处接线**: ① models/market.py `MarketDef.is_trading_time` CN 分支走 is_trading_day(港美无日历维持周末判定, 已知限制) —— intraday_monitor/paper_trading/price_alert/seal_sampler/scheduler/agents 等全部 is_trading_time 调用方统一获得节假日感知; ② kline_collector `_is_auction_time` 删本地实现改委托日历; `_kline_cache_ttl` 竞价档提到 is_trading_time 之外(旧写法竞价档嵌在 9:30 起的会话判定里, 9:15-9:25 永远走不到是死分支; 现在 CN 竞价期真正用 15s TTL; 仅 CN 生效); _kline_cache_ttl/_fail_cooldown 的异常从静默 pass 改 logger.warning 留痕(未覆盖年份不得无声当收盘档); ③ abnormal_moves.py 当日竞价池 `created_at >= trading_day_anchor(today) 00:00` —— 周末/节假日回看上一交易日池子而非空池; ④ dark_flow `_drop_future_ticks` 交易日走日历(节假日白天不再把上一交易日 tick 当未来误丢) + `_in_trading_hours` 走日历(节假日空拉不再误告警); ⑤ kline_backfill_scheduler `_is_market_day` 走日历(原注释预留的"交易日历 hook"落地, 顺带修正 UTC 时区口径为上海时区, 支持 now 注入); ⑥ darkflow.py `_tick_staleness` 走日历 + stocks.py `/markets/status` CN 增"休市（节假日）"状态。
+- **全仓 weekday 审计(grep 命中 14 处逐个处置)**: 接线 9 处(上列); 豁免 3 处 —— forecast_server.py×2(forecast_lib 独立部署不含 src/, 预测目标日暂按 weekday 计, 登记 docs/KNOWN_ISSUES.md 附 owner/期限)、shadow_account/extractor.py(entry_weekday 是特征值非交易日判断); 语义无关 2 处(prediction_outcome 文档串、trading_calendar 自身实现)。
+- **回归测试 tests/test_w26_trading_calendar_wiring.py 29 例**: 未覆盖年份 is_trading_day / add_trading_days 跨进 2028 / trading_day_anchor 回看 2024 三路抛错 + 2027 预估表可用; 竞价/会话窗口含端点与节假日周休排除; anchor 交易日自身/周六→周五/国庆→9/30; MarketDef CN 节假日/补班周六盘中/午休/未覆盖抛错 + HK/US 维持原判定; kline TTL 竞价档可达/CN 限定/节假日收盘档(验收用例)/交易档; dark_flow 节假日全放行+交易日照丢未来+非交易日不告警; darkflow 节假日不误报 stale + 交易日照常判定; backfill 节假日/周六/交易日。
+- 验证: 新测试 29/29 + 邻域回归(日历 S6 既有/dark_flow/kline 缓存与合并/abnormal_moves×2/darkflow_ops/paper_trading/price_alert/scheduler_guard/seal/market_phase) 87+174 passed; 全量离线套件(-m "not network")与改动前基线一致。
+- [branch fix/wave2-门禁-20260909, `git show HEAD`]
+
 ### fix-覆盖率棘轮+依赖精确锁定+dependabot+双审计(W2.5/E5+E6)
 - 背景: E5 —— CI 只判"测试过不过", 不看覆盖率, 删测试/裸写代码静默无感; E6 —— requirements.txt 全 loose 约束(>=), 生产镜像每次构建随 PyPI 漂移, 依赖 never 锁版本 never 审计。
 - **requirements-lock.txt(171 包精确锁定)**: 版本取自生产容器 panwatch 实测枚举(`docker exec panwatch python -c "importlib.metadata..."` —— 镜像瘦身删了 pip 本体, 不能用 pip freeze), 即"生产真实在跑的版本"而非本地猜。对容器 freeze 的 3 处手工修正(文件头有完整说明): ① tradingagents==0.3.0 还原为 git+https 直链(不在 PyPI); ② 删 marketdata 本地包(与 Dockerfile 同口径 `--no-deps -e` 单独装); ③ 补 tzdata==2026.3(requirements.txt 2026-09-09 新增, v0.5.14 基座构建时尚无, 容器靠系统 tzdata 兜底)。文件名不叫 requirements.lock: dependabot pip 生态只匹配 requirements-*.txt, 叫 .lock 永远收不到升级 PR。

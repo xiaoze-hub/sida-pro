@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.core.abnormal_moves import analyze_for_symbols
+from src.core.trading_calendar import trading_day_anchor
 from src.web.api._scope import scoped
 from src.web.api.auth import get_current_user
 from src.web.cache.biz_cache import biz_cache, user_scoped_key
@@ -53,7 +54,8 @@ def _gather_candidate_symbols(db: Session, user: User) -> dict[str, dict]:
 
     - 去重: 同 symbol 多个来源时, 'source' 用逗号连接.
     - watchlist 全部走 db.query, 不依赖业务层外部 service.
-    - 当日候选: AuctionAnomalyRecord.created_at >= today 00:00 (本机 tz).
+    - 当日候选: AuctionAnomalyRecord.created_at >= 最近交易日 00:00 (本机 tz;
+      W2.6/B6 起按 trading_day_anchor 锚定, 周末/节假日回看上一交易日).
     - C3(2026-09-09): 自选股按归属过滤(自己的 + 全局), 此前拉全库所有用户自选.
     """
     out: dict[str, dict] = {}
@@ -82,14 +84,15 @@ def _gather_candidate_symbols(db: Session, user: User) -> dict[str, dict]:
     except Exception as e:
         logger.debug("[abnormal_moves] watchlist 读取失败: %r", e)
 
-    # 2) 当日竞价异动池(本机时区今日 00:00 之后)
+    # 2) 当日竞价异动池: 按最近交易日锚定(W2.6/B6), 周末/节假日回看上一
+    #    交易日的池子而不是返回空池
     try:
-        today_midnight = datetime.combine(
-            datetime.now().date(), datetime.min.time()
+        anchor_midnight = datetime.combine(
+            trading_day_anchor(datetime.now().date()), datetime.min.time()
         )
         rows = (
             db.query(AuctionAnomalyRecord)
-            .filter(AuctionAnomalyRecord.created_at >= today_midnight)
+            .filter(AuctionAnomalyRecord.created_at >= anchor_midnight)
             .order_by(AuctionAnomalyRecord.created_at.desc())
             .all()
         )
