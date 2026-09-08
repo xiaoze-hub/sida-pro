@@ -29,6 +29,23 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _mask_url(url: str | None) -> str | None:
+    """连接串脱敏: 只留 scheme://host:port, 去掉凭据与路径(2026-09-08 T9)。"""
+    if not url:
+        return url
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        netloc = parts.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        return f"{parts.scheme}://{netloc}"
+    except Exception:
+        return "<masked>"
+
+
 # 复用 redis_client 的配置源, 保证两套客户端连同一个 Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
 REDIS_DISABLED = os.getenv("REDIS_DISABLED", "").strip().lower() in (
@@ -212,7 +229,8 @@ class BizCache:
             self._redis_down()
 
     def stats(self) -> dict:
-        """给 /health 端点: 显示 L1 条目数 + Redis 连通状态。"""
+        """给 /health 端点: 显示 L1 条目数 + Redis 连通状态。
+        2026-09-08 T9: 只回显 host 段, 不回完整连接串(可能带密码)。"""
         with self._lock:
             l1_size = len(self._l1)
         r = self._ensure_redis()
@@ -220,7 +238,7 @@ class BizCache:
         return {
             "l1_entries": l1_size,
             "redis": "ok" if redis_ok else ("disabled" if not self._enabled else "down"),
-            "redis_url": REDIS_URL if redis_ok else None,
+            "redis_url": _mask_url(REDIS_URL) if redis_ok else None,
         }
 
 

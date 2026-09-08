@@ -277,12 +277,15 @@ def test_run_selfcheck_keys_filter(monkeypatch):
 # --------------------------- 端点 ---------------------------
 
 def test_health_metrics_routes_mounted():
-    """v0.2.65 重构后: /api/health(健康检查) 与 /api/health/metrics(Prometheus) 已挂载。"""
+    """2026-09-08 T9 收敛单挂载后: /api/health(健康检查) 与 /api/metrics(Prometheus)。
+    旧的 /api/health/health 双挂载冗余路径已删除。"""
     from src.web.app import app
 
     paths = set(app.openapi().get("paths", {}).keys())
-    assert "/api/health" in paths or "/api/health/health" in paths
-    assert "/api/health/metrics" in paths
+    assert "/api/health" in paths
+    assert "/api/metrics" in paths
+    assert "/api/health/health" not in paths  # 冗余双挂载不得回潮
+    assert "/api/health/metrics" not in paths
 
 
 # --------------------------- CLI doctor ---------------------------

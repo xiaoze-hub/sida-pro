@@ -7,6 +7,15 @@
 
 ## 2026-09-08
 
+### fix-health/metrics信息泄露(REDIS_URL原文/全量指标匿名可读)+删除/api/health/health双挂载
+- `src/web/api/health.py` — ① redis 组件回显完整 `REDIS_URL`(可能带密码)改为 `_mask_url` 只留 scheme://host:port; ② `/api/metrics` 收紧为仅内网/回环来源或持 `SIDA_SERVICE_TOKEN` 者可读, 外部匿名 403(Prometheus 同 compose 网络来源为容器内网 IP, 抓取配置无需改)。
+- `src/web/cache/biz_cache.py` — `stats()`(喂 /health 的 biz_cache 组件)同样脱敏; 新增 `_mask_url` 助手。
+- `src/web/app.py` — 删除 health router 的重复挂载(原 app.py 两处挂载产生 `/api/health/health` 冗余路径, 且与 `/api/health` 鉴权语义相反); 现单挂载 `/api` 前缀 → `/api/health` + `/api/metrics`。Docker healthcheck 打的 `/api/health` 不受影响(匿名可用)。
+- 新增 `tests/test_health_metrics_guard.py` — 5 用例: 内网/回环放行、公网拒绝、连接串脱敏、metrics 匿名 403、内网 200。
+- `tests/test_selfcheck.py` — 路由挂载断言更新为单挂载拓扑(并断言冗余路径不得回潮)。
+- 验证: health_guard + p4_alerts + selfcheck 共 27 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-InteractiveKline主力意图金额硬除1e4(≥1亿显示"12345万")→toAmount万/亿口径
 - `frontend/packages/biz-ui/src/components/InteractiveKline.tsx` — 主力净额/超大/大单金额由 `(x / 1e4).toFixed(0)万` 改 `toAmount()`(含 isFinite 守卫, ≥1亿自动切亿), 与全站金额口径收敛。业务硬约束: 金额=元。
 - 验证: `pnpm typecheck`(tsc -b) 0 错; `node scripts/check_ui_rules.mjs` → UI-RULES OK。
