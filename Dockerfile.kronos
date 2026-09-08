@@ -53,5 +53,9 @@ ENV PYTHONPATH="/app/Kronos:/app"
 # 健康检查: 验证 Kronos 模块能 import
 RUN python -c "from model import KronosPredictor, KronosTokenizer, Kronos; print('Kronos OK')"
 
+# T10(2026-09-08 审计): 非 root 运行(原以 root; 与主 Dockerfile uid 10001 对齐)
+RUN useradd --uid 10001 --create-home app && chown -R app:app /app
+USER app
+
 # 这个镜像只装环境,不启动服务。CMD 由 forecast Dockerfile 覆盖。
 CMD ["python", "-c", "from model import KronosPredictor; print('panwatch-kronos:base ready')"]

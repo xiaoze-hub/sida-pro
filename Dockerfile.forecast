@@ -58,6 +58,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # 数据/模型持久化目录(挂载卷用)
 RUN mkdir -p /app/data /app/models
 
+# T10(2026-09-08 审计): 非 root 运行(原以 root 跑, 且曾挂载主数据卷为可写,
+# root + 可写主卷是最坏组合; 与主 Dockerfile:166/193 的 uid 10001 对齐)。
+RUN useradd --uid 10001 --create-home app && \
+    chown -R app:app /app /usr/local/lib/python3.11/site-packages 2>/dev/null || true
+USER app
+
 # 健康检查(预测引擎慢启动,Kronos 加载 ~25s,放宽超时)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; \

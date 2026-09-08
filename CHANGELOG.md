@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-compose安全加固(弱默认密码强制化/infra端口仅本机/Redis加密码/非root/内存与日志上限/规则挂载/主卷只读)
+- `docker-compose.yml` — ① PG 密码 `${POSTGRES_PASSWORD:?}` 强制(两处; 原 `:-sida_dev_only` 弱默认静默兜底); ② Redis 加 `--requirepass ${REDIS_PASSWORD:?}` + healthcheck 带密码 + 主服务 REDIS_URL 带密码(原无密码, 主机任意进程可直读全部缓存); ③ Prometheus/Loki/Grafana 端口绑 127.0.0.1(原 0.0.0.0 且无鉴权, 与 infra 编排对齐); ④ prometheus 补挂 `prometheus-rules.yml`(原缺失, --profile infra 启动即崩); ⑤ 全部 8 服务加 mem_limit(主 1.5g/forecast 4g/PG 1g/redis 320m/infra 各 192-512m)+ json-file 日志轮转(max-size 20-50m × 3, 上次 / 分区打满根因之一); ⑥ infra 容器补 TZ; ⑦ forecast 对主数据卷改 :ro(原 root 容器可写主卷)。
+- `Dockerfile.forecast` — 非 root(uid 10001 app, 对齐主 Dockerfile)+ 补装 tzdata(已设 TZ 但 slim 无时区数据, zoneinfo 实际失效)。
+- `Dockerfile.kronos` — 非 root。
+- `.env.example` — 新增 POSTGRES_PASSWORD / REDIS_PASSWORD 必填说明。
+- 验证: compose YAML 解析 OK; 脚本断言 8 服务全有 mem_limit+logging、弱默认清除、端口绑定、规则挂载、只读卷 —— ALL OK。docker build/实机拉起待小主机下次部署实测。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-forecast配置通道PG下静默失效(LLM/裁判绑定/鉴权三线断裂)→改走HTTP服务token下发
 - 新增 `src/web/api/service_config.py` — `GET /api/service/forecast-config`(挂 data_read 组, 服务 token/用户 JWT): 一次性下发 ①app_settings.forecast_llm_* ②ai_scene_bindings 的 referee 绑定 + ai_models/ai_services 连接信息。app.py 挂载 + import。
 - `forecast_lib/forecast_sentiment.py` — ①删除模块级重复两遍的 `PANWATCH_URL=_detect_panwatch_url()` 死代码(探测逻辑原跑两次); ②新增 `_fetch_llm_config_via_api()` 走 HTTP 优先, sqlite 直读降为遗留兜底; ③兜底硬编码 agnes 时显式打警告(原静默回落, 用户配置被无视无感知)。
