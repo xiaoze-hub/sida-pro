@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-WS鉴权只验签不验状态(禁用/踢人后旧token仍可连)+行情广播跨用户泄露关注集合
+- `src/web/api/auth.py` — 新增 `verify_ws_token_payload(db, payload)`: WS 握手专用, 对齐 HTTP 层口径(校验 `is_active` + `token_version`, 畸形 ver 显式拒); 通过返回 user_id。原两处 WS(quote_stream/ws_hub)只 `decode_token`, 禁用账号/改密踢人后旧 JWT 在剩余有效期(默认 12h)内仍可连 WS 收通知/行情。
+- `src/web/api/quote_stream.py` — ① 握手改走 `verify_ws_token_payload`; ② 订阅绑定 user_id(`subscribe(user_id)`), 聚合器刷新 per-user 关注集合缓存(`_user_symbols_cache`, ""=历史遗留共享账户人人可见), `_broadcast` 按订阅者 symbol 集过滤后再 pack(定向帧 envelope.user_id=本人, 与 `?last_seq=` 重放过滤口径一致); 快照同样过滤; 无关注标的的用户不收帧(不再从推送内容推断他人持仓/自选)。
+- `src/web/notifications/ws_hub.py` — 通知 WS 握手同样补 is_active/token_version 校验。
+- 新增 `tests/test_ws_auth_guard.py` — 6 用例: 正常通过/禁用拒/旧版本拒/畸形 ver 拒/广播按用户过滤(A 收不到仅属于 B 的标的)/无关注用户不收帧。
+- 验证: ws_guard + p2_realtime 共 12 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-health/metrics信息泄露(REDIS_URL原文/全量指标匿名可读)+删除/api/health/health双挂载
 - `src/web/api/health.py` — ① redis 组件回显完整 `REDIS_URL`(可能带密码)改为 `_mask_url` 只留 scheme://host:port; ② `/api/metrics` 收紧为仅内网/回环来源或持 `SIDA_SERVICE_TOKEN` 者可读, 外部匿名 403(Prometheus 同 compose 网络来源为容器内网 IP, 抓取配置无需改)。
 - `src/web/cache/biz_cache.py` — `stats()`(喂 /health 的 biz_cache 组件)同样脱敏; 新增 `_mask_url` 助手。
