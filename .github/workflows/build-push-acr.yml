@@ -21,6 +21,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Shell syntax check (bash -n)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # 0.1 类事故(行内注释截断续行命令)语法层即可发现
+          for f in deploy/*.sh scripts/*.sh; do
+            bash -n "$f"
+            echo "OK $f"
+          done
+      - name: Secret scan (gitleaks v8.18.4, SHA256 pinned)
+        run: |
+          set -euo pipefail
+          # 固定版本二进制+校验和, 不引入未钉版的第三方 action(0.6 治理项)
+          curl -sSfL -o /tmp/gitleaks.tgz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          echo "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # 扫工作区全部文件(不依赖 git 历史深度); --redact 防命中内容泄进 CI 日志
+          /tmp/gitleaks detect --no-git --redact
+      - name: Set up Python 3.11 (与生产一致)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Backend pytest
         run: |
           set -o pipefail

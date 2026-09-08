@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-CI门禁补密钥扫描+bash语法检查+Python钉3.11(风险方案0.5残留)
+- `build-push-acr.yml` gates 补三个 step(pipefail/删`||true`/PR触发已随全面体检T3落地, 勿重做):
+  1. `bash -n deploy/*.sh scripts/*.sh` — 0.1 类"续行块内注释截断命令"语法事故在 CI 即可发现。
+  2. gitleaks 密钥扫描: 固定 v8.18.4 二进制 + SHA256 校验和(`ba6dbb...8e7d`), **不引入未钉版的第三方 action**(与 0.6 的 action 钉版治理方向一致); `--no-git` 扫工作区不依赖历史深度, `--redact` 防命中内容泄进 CI 日志。
+  3. `actions/setup-python@v5` 钉 3.11(与生产一致; 此前用 runner 默认 python3, 版本随 ubuntu-latest 漂移)。
+- 验证: workflow YAML 解析 OK; 本地 `bash -n` 全部 7 个脚本通过; 本地 Windows 版 gitleaks 8.18.4 全仓 `detect --no-git` 实跑 0 命中(存量内容不会卡红门禁; 注意默认规则不识别 docs/_frozen/data.md:14 的自拟 PG 密码, 该文件清理仍归 0.4)。CI 端到端红/绿演练待 PR 触发后补录。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-数据源失败计数接线激活SidaDatasourceFailures告警(风险方案0.2)
 - 根因: `sida_datasource_failures_total` 计数器定义后全仓零调用方(仅注释提及), prometheus-rules.yml 的 `increase(...[15m]) > 50` 告警永不触发 —— 数据源(东财/新浪/腾讯/通达信)全黑监控无声。
 - 做法与派单方案的偏差: 方案建议改 marketdata vendor 层并经 `src/collectors/_metrics.py` 包 CM; 实测 vendor 既被 collectors/core/web 直调(21+ 处)又经单源 Engine 调用, 且 packages/marketdata 不能反向依赖 src.web。改为: `marketdata/vendors/base.py` 的 `Vendor.__init_subclass__` 在每个子类 `fetch` 定义处自动包失败上报(`emit_vendor_failure(name, kind)`, 异常原样抛出不吞; 监听者异常互不反噬); `engine.py` 的 TimeoutError 分支补发 `kind="timeout"`、异常分支按凭证错补发 `kind="auth"`/`"fetch"`; `src/web/api/health.py` 导入时 `on_vendor_failure` 注册桥接 → `record_datasource_failure`。一处覆盖直调/Engine/未来新增三条路径。
