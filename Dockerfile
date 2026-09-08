@@ -67,7 +67,7 @@ RUN set -eux; \
     for install_attempt in 1 2 3 4 5; do \
       if apt-get -o Acquire::Retries=8 -o Acquire::http::Timeout=120 -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends \
     tzdata \
-    # git: requirements.txt 中含 git+https 直链(tradingagents)
+    # git: requirements-lock.txt 中含 git+https 直链(tradingagents)
     git \
     # 中文字体
     fonts-noto-cjk \
@@ -118,14 +118,14 @@ RUN set -eux; \
     fc-cache -fv
 
 # 复制依赖文件
-COPY requirements.txt ./
+# W2.5/E6(2026-09-09): 第三方依赖统一走 requirements-lock.txt —— 生产容器
+# pip freeze(importlib.metadata 枚举)出的精确版本, CI 同用此文件(同口径)。
+# requirements.txt 保留为人读的 loose 约束; 漂移由 CI check_lock_covers_reqs.py 守卫。
+COPY requirements-lock.txt ./
 
 # 分层优化(2026-09-04 #6): 第三方依赖与本地包分开装。
-# 此前 requirements.txt 里 `-e ./packages/marketdata` 要求 COPY packages/ 在 pip 之前,
-# 改一行 marketdata 代码就整层 pip 重装(数分钟)。现在第三方先装(只随 requirements.txt 变),
-# 本地包放到代码层之后 --no-deps 秒装(httpx 由主 requirements.txt 提供)。
-RUN grep -v "^[[:space:]]*-e[[:space:]]" requirements.txt > /tmp/requirements3.txt && \
-    pip install --no-cache-dir --timeout 300 --retries 8 -i https://mirrors.aliyun.com/pypi/simple/ -r /tmp/requirements3.txt && \
+# lock 文件无 -e 行(本地包 marketdata 不在其中), 无需再 grep 过滤。
+RUN pip install --no-cache-dir --timeout 300 --retries 8 -i https://mirrors.aliyun.com/pypi/simple/ -r requirements-lock.txt && \
     python -c "from sqlalchemy import create_engine; assert create_engine"
 
 # 注意: Playwright 浏览器将在首次启动时自动安装到 data 目录

@@ -73,7 +73,12 @@ jobs:
             libffi-dev libfontconfig1 fonts-noto-cjk
 
       - name: Install Python deps
-        run: pip install -r requirements.txt
+        # W2.5/E6(2026-09-09): 统一走 requirements-lock.txt(生产容器 freeze 精确版本);
+        # 本地包 marketdata 与 Dockerfile 同口径 --no-deps 单独装(lock 不含 -e 行)
+        run: |
+          pip install -r requirements-lock.txt
+          pip install --no-deps -e ./packages/marketdata
+          python scripts/check_lock_covers_reqs.py
 
       - name: Lint (门禁 · ruff 真 bug 类)
         run: |

@@ -1,0 +1,4 @@
+{
+  "line_coverage": 50.0,
+  "note": "W2.5/E5 基线(2026-09-09): python:3.11-slim 容器 + requirements-lock.txt 精确依赖, 与 build-push-acr.yml gates 同口径(pytest tests/ -m 'not network' --cov=src)实测 50.8%, 取整下浮 0.8% 作安全余量。每波结束按当波 CI gates 实测值手动上调; 下调=退步, 禁止。"
+}

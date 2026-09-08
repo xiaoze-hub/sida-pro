@@ -35,3 +35,8 @@ src/.cache/
 aliyun-cli-linux-latest-amd64.tgz
 .codegraph/
 reply_d3_confirm.md
+
+# W2.5/E5 覆盖率产物
+coverage.json
+.coverage
+htmlcov/
