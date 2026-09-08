@@ -36,7 +36,7 @@ COPY frontend/packages/biz-ui/package.json ./packages/biz-ui/package.json
 # 安装依赖
 RUN pnpm install --frozen-lockfile
 
-# 复制源码并构建(直接 vite build, 跳过 tsc 严格类型检查以兼容 fork 源码既有 TS 警告)
+# 复制源码并构建(tsc -b 严格类型检查 2026-09-09 E3 恢复, 与 CI pnpm typecheck 同口径)
 # 先注入 sw.js 缓存版本号 → 发版后 SW 字节变化, 浏览器自动更新并清旧缓存
 # ACR 构建无 build-arg 时读仓库根 VERSION 文件兜底(2026-08-14: 个人版无构建参数功能)
 COPY frontend/ ./
@@ -46,7 +46,7 @@ RUN VERSION_VAL="${VERSION}"; \
       VERSION_VAL="$(cat VERSION | tr -d '[:space:]')"; \
     fi; \
     echo "SW version: ${VERSION_VAL}"; \
-    sed -i "s/__SW_VERSION__/${VERSION_VAL}/g" public/sw.js && npx vite build
+    sed -i "s/__SW_VERSION__/${VERSION_VAL}/g" public/sw.js && npx tsc -b && npx vite build
 
 
 # ===== Stage 2: Python 运行环境 =====

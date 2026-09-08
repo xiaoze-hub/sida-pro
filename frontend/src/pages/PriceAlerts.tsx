@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Plus, RefreshCw, Play, Trash2, BarChart3, BellRing } from 'lucide-react'
 import { fetchAPI, stocksApi, type NotifyChannel } from '@panwatch/api'
@@ -101,7 +101,7 @@ export default function PriceAlertsPage() {
 
   const stockOptions = useMemo(() => stocks, [stocks])
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const [ruleData, stockData, channelData] = await Promise.all([
@@ -117,11 +117,11 @@ export default function PriceAlertsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [toast])
 
   useEffect(() => {
     load()
-  }, [])
+  }, [load])
 
   useEffect(() => {
     if (prefillDone) return

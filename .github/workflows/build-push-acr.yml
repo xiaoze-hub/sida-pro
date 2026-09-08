@@ -60,12 +60,15 @@ jobs:
           # 之前无 ignore 清单, 联网文件在 CI 本就会因访问不到行情源而挂/超时。
           # 保留 --timeout=60: 仍未打标的潜在联网用例超时兜底。
           python3 -m pytest tests/ -q --timeout=60 -m "not network"
-      - name: Frontend typecheck
+      - name: Frontend gates (tsc + eslint + vitest + ui-rules)
         run: |
           cd frontend
           npm install -g pnpm --silent 2>/dev/null || true
           pnpm install --frozen-lockfile
           pnpm typecheck
+          pnpm lint
+          pnpm test
+          node ../scripts/check_ui_rules.mjs
 
   build:
     # PR 门禁只跑 gates, 不构建不推送镜像

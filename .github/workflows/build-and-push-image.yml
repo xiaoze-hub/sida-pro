@@ -51,9 +51,13 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Frontend typecheck (门禁 · tsc -b)
+      - name: Frontend gates (门禁 · tsc + eslint + vitest + ui-rules)
         working-directory: frontend
-        run: npx tsc -b
+        run: |
+          npx tsc -b
+          pnpm lint
+          pnpm test
+          node ../scripts/check_ui_rules.mjs
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5

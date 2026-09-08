@@ -220,6 +220,12 @@ export default function KlineChart(props: {
   const rawKlinesRef = useRef<Array<{ time: Time; close: number; volume: number }>>([])
   // L5 MACD 副图 series (subchart==='macd' 时渲染)
   const macdSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  // 回调 prop 走 latest-ref: 订阅只注册一次, 调用点取最新回调。父组件内联箭头函数
+  // 身份每次渲染都变, 直接进 deps 会导致整图重建(E3 门禁 2026-09-09)。
+  const onRangeSelectRef = useRef(props.onRangeSelect)
+  onRangeSelectRef.current = props.onRangeSelect
+  const onCrosshairMoveRef = useRef(props.onCrosshairMove)
+  onCrosshairMoveRef.current = props.onCrosshairMove
 
   // ── Lightweight Charts 实例化 ─────────────────────────────
   useEffect(() => {
@@ -336,19 +342,19 @@ export default function KlineChart(props: {
               ),
             }
           : null
-      props.onRangeSelect?.(r)
+      onRangeSelectRef.current?.(r)
     })
 
     // (3) 十字光标联动: 推 { time, price } 给副图/资金面板
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || param.point === undefined) {
-        props.onCrosshairMove?.(null)
+        onCrosshairMoveRef.current?.(null)
         return
       }
       const price = series.coordinateToPrice(param.point.y)
       const time =
         typeof param.time === 'number' ? String(param.time) : String(param.time)
-      props.onCrosshairMove?.({ time, price: price ?? null })
+      onCrosshairMoveRef.current?.({ time, price: price ?? null })
     })
 
     return () => {
@@ -366,7 +372,7 @@ export default function KlineChart(props: {
       chartRef.current = null
       seriesRef.current = null
     }
-  }, [props.height])
+  }, [props.height, interval])
 
   // ── 拉数据并 setData ──────────────────────────────────────
   useEffect(() => {
@@ -666,7 +672,7 @@ export default function KlineChart(props: {
       }
     }
     // 主动买卖比 / 情绪周期 : 需后端 realtime 数据, Klines 接口无 → 不做假实现, 留给调 UI 切换(灰显"副图数据待接")。
-  }, [props.layersVisible?.trend, rawKlinesRef.current.length, props.subchart, interval])
+  }, [props.layersVisible?.trend, rawKlinesRef.current.length, subchart, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time

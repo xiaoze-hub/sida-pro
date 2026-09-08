@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Pencil, Play, Database, Newspaper, LineChart, TrendingUp, DollarSign, Layers, Zap, Check, X, Clock, Trash2, ChevronUp, ChevronDown, ChevronRight, Eye, EyeOff, RotateCcw, AlertTriangle, BarChart3, Trophy, Landmark, Users, Gift, ArrowLeftRight } from 'lucide-react'
 import { fetchAPI, resetDataSourcesToSeed, type DataSource } from '@panwatch/api'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -125,7 +125,7 @@ export default function DataSourcesPage() {
   const { toast } = useToast()
   const { health: logicHealth, loading: logicLoading } = useSourceHealth()
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = await fetchAPI<DataSource[]>('/datasources', { cacheMode: 'reload' })
       setSources(data)
@@ -135,9 +135,9 @@ export default function DataSourcesPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [toast])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   const openDialog = (source?: DataSource, presetType?: string) => {
     if (source) {

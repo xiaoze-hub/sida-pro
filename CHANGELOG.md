@@ -7,6 +7,16 @@
 
 ## 2026-09-09
 
+### fix-前端四道门禁落地(W2.4/E3: vitest 17例+eslint铁律+UI规则R6棘轮R7禁null→0+Dockerfile恢复tsc)
+- 背景: E3 —— 前端零测试零 lint: Dockerfile `npx vite build` 跳过 tsc(注释自认"兼容 fork 源码既有 TS 警告"), check_ui_rules.mjs 只在本地手跑未进 CI, format.ts 全家桶(safeNum/safeMoney 等, 2026-08-23 S-5/M-3~M-8 收敛产物)无一行单测; `c.price.toFixed is not a function` 事故模式的防复发只靠 code review。
+- **vitest 单测 17 例(frontend/tests/lib/, node 环境纯逻辑零 mock)**: format.test.ts 12 例 —— safeNum 护栏(null/''/NaN/非数值串)、safeFixed 位数与 fallback、safePercent 符号与 '--'、safeMoney 元→亿万分档+尾零去除、safePrice 去尾零、safeInt 千分位、safeNetInflow 带符号亿、toAmount 元口径、toAmountFromWan 万口径(单位/口径标签全覆盖); kline-scorer.test.ts 5 例 —— 多头 buy/空头 avoid 评分与动作映射、持仓语义 hold/reduce/watch、空数据技术面中性、形态强弱分档(金针探底+2/三只乌鸦-2)。`pnpm test` = vitest run。
+- **eslint 9 flat config(frontend/eslint.config.js)**: 刻意最小规则集 —— `@typescript-eslint/no-unused-vars` + `react-hooks/rules-of-hooks` + `react-hooks/exhaustive-deps` 全 error(存量 any/类型告警由 tsc -b 把关, 不重复设岗)。首跑 20 error 全部修复: 3 处未使用 catch 变量改无绑定 catch; DiscoveryPanel 3 处 `rawPct == null ? 0 :` 缺数据渲染 "+0.00%" 改 safeNum/safePercent; SentimentGauge 补 score/pointerColor 依赖(score 变化此前不重绘, 顺手修 bug); KlineChart 回调 prop 走 latest-ref(父组件内联箭头函数身份不再触发整图重建)+ subchart deps 换 state(无调用方传该 prop); InteractiveKline 类型位 `typeof props.events` 致插件误报整对象 props, 改直接引用 KlineEvent; logs-modal loadLatest 走 latest-ref(query 防抖语义保留); 各页 load/loadConfigAsync/loadFeedbackStats 稳定化为 useCallback, Stocks loadPortfolio 经 quotesRef 解除对 WS 5s 推送 quotes 的闭包依赖, Stocks 挂载 effect 走 latest-ref(refreshQuotes/refreshKlines 依赖 buildQuoteItems(←stocks) 身份随数据变, 直接进 deps 会无限重拉); Dashboard normalizeMarket/openStock useCallback 链。
+- **check_ui_rules.mjs 扩 R6/R7 并进 CI**: R6 toFixed 棘轮 —— 裸 `.toFixed(` 冻结在 scripts/ui-rules-baseline.json(51 文件 340 处, 只许降不许升), 新文件出现即失败; R7 禁 `x == null ? 0 :` 三元(缺数据渲染成 0 掩盖缺失, 应走 '--' fallback) —— 该规则自己抓出 2 处此前 grep(只扫 frontend/src)漏掉的 biz-ui 站点(macd.map 暖机种子属数学输入非渲染, 进 R7_SKIP_LINE 豁免并附理由)。红测验证: 临时写入 `x.v === null ? 0 : x.v` → exit 1, 删除后恢复 OK。
+- **Dockerfile 恢复 tsc**: 构建行 `npx vite build` → `npx tsc -b && npx vite build`(本地 tsc -b 实测全绿, "fork 既有 TS 警告"已不存在); `grep -iE "skip|--noEmit" Dockerfile` 无命中。
+- **CI 接线**: build-and-push-image.yml / release.yml 的 "Frontend typecheck" 单步升级为 "Frontend gates"(tsc -b + pnpm lint + pnpm test + node ../scripts/check_ui_rules.mjs); build-push-acr.yml gates job 同步追加 lint/test/ui-rules(build-push-acr-forecast 为纯后端镜像无前端段, 不涉及)。
+- 验证: `pnpm typecheck`(tsc -b) / `pnpm lint`(0 error) / `pnpm test`(17/17) / `node scripts/check_ui_rules.mjs`(UI-RULES OK) 四道全绿; 红测 exit 1 复现。
+- [branch fix/wave2-门禁-20260909, `git show HEAD`]
+
 ### fix-多租户数据访问统一收口(W2.1/C3: scoped()/owned_or_404()/writable()三助手+20处越权面修复+静态门禁)
 - 背景: C3 —— M2 多账号改造后 user_id 列已铺开, 但读路径仍散落 `db.query(Stock)`/`db.query(NotifyChannel)` 等全库查询, 任意登录用户可枚举他人自选/提醒命中/通知渠道; plans 文档列名 9 处, 实际逐文件排查出 29 处裸查(含 3 个完全无鉴权端点)。
 - **统一助手 src/web/api/_scope.py**: `scoped(q, user)` 读过滤(user 自己 + 全局 NULL 共享, 单条出口); `owned_or_404(obj, user)` 读单条(他人资源 404 防账号探测, 与 S1-S4 口径一致); `writable(obj, user)` 写单条(自己的可改, 全局共享仅 owner); `allow_cross_user` 纯标记装饰器(静态门禁的显式豁免口, 须附理由注释)。缓存键助手 `user_scoped_key(prefix, user, **parts)` 进 biz_cache —— abnormal-moves 此前 `am:all:{threshold}` 全用户共享, A 的自选扫描结果会被 B 命中。

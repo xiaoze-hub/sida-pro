@@ -1539,7 +1539,7 @@ export default function StockInsightModal(props: {
     } finally {
       setImageExporting(false)
     }
-  }, [quote?.change_pct, resolvedName, shareCardPayload, symbol, toast])
+  }, [quote?.change_pct, resolvedName, shareCardPayload, symbol, toast, stockColors.up, stockColors.down])
 
   const copyTextWithFallback = useCallback(async (text: string): Promise<boolean> => {
     if (!text) return false

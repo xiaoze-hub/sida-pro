@@ -636,7 +636,7 @@ export default function StocksPage() {
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   // 非核心数据后台加载（不阻塞 UI）
-  const loadConfigAsync = async () => {
+  const loadConfigAsync = useCallback(async () => {
     try {
       const [agentData, servicesData, channelsData] = await Promise.all([
         fetchAPI<AgentConfig[]>('/agents'),
@@ -649,9 +649,9 @@ export default function StocksPage() {
     } catch (e) {
       console.warn('加载配置数据失败:', e)
     }
-  }
+  }, [])
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoadError(null)
     try {
       // 核心数据（立即需要）
@@ -680,15 +680,19 @@ export default function StocksPage() {
     } catch (e) {
       console.warn('获取市场状态失败:', e)
     }
-  }
+  }, [loadConfigAsync])
 
-  const loadPortfolio = async () => {
+  // quotes 走 latest-ref: 保持 loadPortfolio 身份稳定, 合并时取最新行情
+  // (quotes 由 WS 每 5s 推送, 直接进 deps 会让挂载 effect 反复重拉; E3 2026-09-09)
+  const quotesRef = useRef(quotes)
+  quotesRef.current = quotes
+  const loadPortfolio = useCallback(async () => {
     setPortfolioLoading(true)
     try {
       // 核心数据：仅本地账户/持仓
       const portfolioData = await fetchAPI<PortfolioSummary>('/portfolio/summary?include_quotes=false')
       setPortfolioRaw(portfolioData)
-      setPortfolio(mergePortfolioQuotes(portfolioData, quotes))
+      setPortfolio(mergePortfolioQuotes(portfolioData, quotesRef.current))
 
       // 市场状态（非核心，失败不影响页面）
       try {
@@ -703,7 +707,7 @@ export default function StocksPage() {
     } finally {
       setPortfolioLoading(false)
     }
-  }
+  }, [])
 
   const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
     const items: QuoteRequestItem[] = []
@@ -765,15 +769,6 @@ export default function StocksPage() {
     if (!portfolioRaw) return
     setPortfolio(mergePortfolioQuotes(portfolioRaw, quotes))
   }, [portfolioRaw, quotes])
-
-  useEffect(() => {
-    if (stocks.length === 0 && (!portfolioRaw || portfolioRaw.accounts.length === 0)) return
-    refreshQuotes()
-    // 刷新 K 线摘要（用于常驻评分徽章）
-    ;(async () => {
-      try { await refreshKlines() } catch {}
-    })()
-  }, [stocks, portfolioRaw, refreshQuotes])
 
   // 2026-08-12 行情推送(WebSocket): 自选股实时行情免手动刷新。
   // 后端每 5s 批量推一次(腾讯批量接口)。⚠️ 曾用 EventSource/SSE, uvicorn 下
@@ -1010,7 +1005,22 @@ export default function StocksPage() {
     ])
   }, [refreshQuotes, loadPoolSuggestions, refreshKlines])
 
-  useEffect(() => { load(); loadPortfolio(); loadPoolSuggestions(); loadPriceAlertSummaries(); refreshKlines() }, [])
+  // stocks/portfolioRaw 变化 → 刷新行情与 K 线摘要(评分徽章)。放在 loader 声明之后
+  // (refreshKlines 声明于 831 行, deps 不能前向引用)。
+  useEffect(() => {
+    if (stocks.length === 0 && (!portfolioRaw || portfolioRaw.accounts.length === 0)) return
+    refreshQuotes()
+    // 刷新 K 线摘要（用于常驻评分徽章）
+    ;(async () => {
+      try { await refreshKlines() } catch {}
+    })()
+  }, [stocks, portfolioRaw, refreshQuotes, refreshKlines])
+
+  // 挂载一次性拉全量。refreshQuotes/refreshKlines 依赖 buildQuoteItems(←stocks),
+  // 身份随数据变化, 直接进 deps 会在每次 load 后无限重拉 → latest-ref 只跑最新闭包(E3 2026-09-09)。
+  const mountLoadRef = useRef<() => void>(() => {})
+  mountLoadRef.current = () => { load(); loadPortfolio(); loadPoolSuggestions(); loadPriceAlertSummaries(); refreshKlines() }
+  useEffect(() => { mountLoadRef.current() }, [])
 
   // 仅关注列表场景（无持仓）也要在列表加载后预取 K 线摘要，保证技术指标徽章可见
   const watchlistKlineInitDone = useRef(false)
@@ -1144,7 +1154,7 @@ export default function StocksPage() {
         clearInterval(refreshTimerRef.current)
       }
     }
-  }, [autoRefresh, refreshInterval, refreshQuotes, refreshKlines])
+  }, [autoRefresh, refreshInterval, refreshQuotes, refreshKlines, loadPoolSuggestions])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -1193,7 +1203,7 @@ export default function StocksPage() {
       if (searchQuery) {
         doSearch(searchQuery)
       }
-    } catch (e) {
+    } catch {
       toast('刷新失败', 'error')
     } finally {
       setRefreshingStockList(false)

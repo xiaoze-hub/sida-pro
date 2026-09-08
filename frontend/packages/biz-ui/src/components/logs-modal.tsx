@@ -158,10 +158,13 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
   }, [load])
 
   // 初次打开或筛选变更时刷新（关键词搜索走防抖）
+  // loadLatest 走 latest-ref: query 变化会更新 load 闭包, 但关键词搜索由防抖
+  // 显式触发, 不进本 effect deps, 避免每次键入立即请求(E3 2026-09-09)。
+  const loadLatestRef = useRef(loadLatest)
+  loadLatestRef.current = loadLatest
   useEffect(() => {
     if (!open) return
-    loadLatest()
-    // query 由 handleSearchInput 防抖触发，避免每次键入都立即请求。
+    loadLatestRef.current()
   }, [open, selectedLevels, selectedLoggers, selectedFlow, domain, timeRange])
 
   // 自动刷新（仅刷新最新页）
