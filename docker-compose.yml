@@ -110,8 +110,8 @@ services:
       - FORECAST_ENGINE_URL=http://forecast:8010
       # P1-14: Redis L2/限流/调度选主走 compose 内 redis(与小主机生产对齐)
       - REDIS_URL=redis://panwatch-redis:6379/0
-      # PG 切库(默认 SQLite, 切 PG 前先做 SQLite→PG 数据迁移, 见 P1-14):
-      # - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:-sida_dev_only}@panwatch-postgres:5432/sida
+      # PG 主库(默认生产口径; 本地无 PG 时才落 SQLite, 见 P1-14):
+      - SIDA_DB_URL=postgresql+psycopg2://sida:${POSTGRES_PASSWORD:-sida_dev_only}@panwatch-postgres:5432/sida
       # Hermes cron 输出根目录(可选,挂载 ~/.hermes 后自动可用)
       - HERMES_HOME=/hermes
       # 数据源 key 在「设置 → 接口Key」UI 维护;此处只传 Hermes 必需的环境变量
@@ -131,6 +131,8 @@ services:
       forecast:
         condition: service_healthy
       panwatch-redis:
+        condition: service_healthy
+      panwatch-postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()"]
@@ -167,7 +169,7 @@ services:
       start_period: 60s   # Kronos 模型加载 ~25s
       retries: 3
 
-  # ============== PG 主库(可选, P1-14: 默认 SQLite; 切库前先迁移数据再解开 SIDA_DB_URL) ==============
+  # ============== PG 主库(默认生产口径; SQLite 仅本地无 PG 时的开发退路) ==============
   panwatch-postgres:
     image: postgres:16-alpine
     container_name: panwatch-postgres

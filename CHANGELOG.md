@@ -7,6 +7,15 @@
 
 ## 2026-09-08
 
+### fix-PG唯一生产口径(容器无连接串fail-fast/SQLite仅本地/compose默认接PG/布尔迁移按方言)
+- `src/web/database.py` — DOCKER=1 无 SIDA_DB_URL 直接 RuntimeError(历史教训:env丢失静默落容器内sqlite→database is locked+重建丢数据);本地(DOCKER未设)默认仍是 data/panwatch.db。
+- `src/web/database.py::_migrate_remove_stock_enabled` — `enabled` 布尔字面量按方言(FALSE/TRUE vs 0/1,PG上`=0`直接operator崩);PRAGMA重建分支仅SQLite可进(PG DROP COLUMN必成功,失败直接raise)。
+- `docker-compose.yml` — SIDA_DB_URL 默认解开(指 panwatch-postgres);panwatch 加 depends_on postgres healthy;PG 注释"可选/默认SQLite"全部改"默认生产口径"。
+- 新增`tests/test_pg_default.py` — 3用例(fail-fast/带串PG/本地sqlite),3 passed。
+- **回归**: P1/P2/P4共15 passed + syslog/source/decision/accuracy共11 passed + app import OK + compose YAML合法。
+- **未做**: forecast 容器的 PANWATCH_DB 仍指 sqlite 文件(PG 下该文件不存在,预测引擎读设置页走 HTTP 不走文件,暂不动,另开);生产小主机已有 SIDA_DB_URL,不受 fail-fast 影响,无需重启。
+- [branch feat/pg-default-0908, `git show HEAD`]
+
 ### chore-双树 verdict 落定(TQ 件已在主树, 切 venv 指向)
 - 核查结论:所谓"待合三件套"(formula引擎/_TQ_URL/dark_l2/.tck)早已在 `sida-pro` 主树且是超集;sida-src 是 08-31  snapshot 的 TQ 试验田,缺 09-02 以来全部线上修复(WAF/volume×100/陈旧门禁/限流/BJ前缀)。无代码可合,不碰 sida-src(28 号试验田, 另行归档)。
 - 环境修复:本地 venv 的 marketdata editable 重装指向 `sida-pro/packages`(之前指 sida-src 旧拷贝,本地包测试测的不是发版代码, volume 差 100 倍)。验证:包+宿主 9 passed, 无需 PYTHONPATH。
