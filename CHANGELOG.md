@@ -7,6 +7,12 @@
 
 ## 2026-09-08
 
+### update-发版 v0.5.19(数据正确性第1波合入main)
+- 本次发版内容: K线复权维度入列(_m137, qfq/none分区+PG优先读取+DO UPDATE自愈, 存量复权污染待发版后重刷) / vendor缺失字段None化+status标记(B2) / 调度器选主fail-closed+租约丢失真停+三态健康探针+SidaSchedulerLeaderDown告警(A3) / 影子报告路径穿越修复+通知渠道跨用户越权修复+config脱敏(C1+C2) / 迁移PG advisory锁串行化+运行时DDL 6处收编B层(_m138~_m142)+PG迁移前schema快照(A5)。
+- 部署注意: 启动时将自动跑版本化迁移 _m137~_m142(全部幂等, 已有表/列自动跳过); _m137 会重建 klines 唯一索引(存量行回填 adjust='none'), 建议发版后择机执行 K线全量重刷(backup → TRUNCATE → 95股×800日重灌), 未重刷前 qfq 读取仍吃存量 none 数据。
+- 验证: 全量套件 1912 passed / 7 failed(全部为已知环境损坏文件×6 + 已知 flaky×1, 与 wave1 分支基线一致); 迁移幂等性有专项测试覆盖。
+- [tag v0.5.19]
+
 ### fix-迁移advisory锁串行化+运行时DDL全面收编B层+PG迁移前schema快照(风险方案1.5/A5)
 - 背景: A5 —— schema 变更散落三层: A 层(database.py `_migrate*` 历史遗留)、B 层(migrations.py 版本化迁移+checksum)、C 层(业务模块运行时 `CREATE TABLE`/`__table__.create` 兜底)。C 层 DDL 与 B 层/ORM 漂移无人对账(同表两处定义); `run_versioned_migrations` 无锁, 生产 2 容器同时重启会并发跑同一 DDL(PG 撞死锁/duplicate); PG 迁移前无任何备份(SQLite 有整库 .bak, PG 什么都没有)。
 - **advisory lock 串行化**(src/web/migrations.py): `run_versioned_migrations` 在 PG 下先取会话级 `pg_advisory_lock(729138)` 再跑迁移, 拿锁实例执行, 等待实例轮到时迁移已全部 success=1 秒过; 锁挂**独立 AUTOCOMMIT 连接**(会话锁随事务回滚即释放, 不能放 per-migration 事务), 持锁横跨全部迁移事务, finally 解锁+关连接 —— inner 抛异常/取锁失败都保证关连接不泄漏, 解锁失败不掩盖迁移原始异常(连接断开会话锁由 PG 自动释放); SQLite 路径不加锁(dialect 探测, 无循环依赖); 锁 key 固定常量(换值=新旧实例锁不互斥)。
