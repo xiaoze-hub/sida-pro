@@ -30,6 +30,12 @@ jobs:
             bash -n "$f"
             echo "OK $f"
           done
+      - name: Deploy script stub test (DOCKER=echo)
+        run: |
+          set -euo pipefail
+          # 0.1: 部署脚本重建参数完整性+先验证后切换顺序+失败不删旧容器, echo 桩断言。
+          # 这是防止"注释再次被插回 docker run 续行块"的唯一机制(2026-09-08 停机事故)。
+          bash scripts/tests/test_deploy_script.sh
       - name: Secret scan (gitleaks v8.18.4, SHA256 pinned)
         run: |
           set -euo pipefail

@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-部署脚本改克隆式安全重建+接线冒烟门禁+CI stub自检(风险方案0.1残留)
+- `deploy/deploy_panwatch.sh` rebuild_container 重写。根因: 实测生产拓扑与脚本硬编码不一致(真实卷 `panwatch-data`/`panwatch-tck` 连字符命名 + 自定义网络 `panwatch-net` + `restart=always`/无内存限制; 原脚本硬编码 `panwatch_data` 下划线卷、无 `--network`、固定 unless-stopped+1g) —— 照原硬编码重建会造出连不上 redis/postgres 的孤儿容器。改为克隆式: 以运行中容器为唯一事实源 harvest env/卷/端口/网络/重启策略/内存 → 临时容器(`${CONTAINER}_new`, 8001)先起 → curl 健康 + `WEB_HOST=0.0.0.0` inspect 校验(任一失败删临时容器退出, 旧容器原样在跑, 无损回滚) → swap → 最终容器端口继承旧容器; 防漂移告警改与 harvested 值比对(生产 restart=always 不误报); 全新安装走 default_config 兜底(卷名同步改连字符); `DOCKER` 可环境变量覆盖供 CI stub。
+- 冒烟门禁: 部署尾部硬闸调用 `scripts/post_deploy_smoke.sh`, 失败 exit 1 并保留运行容器便于排查(`PANWATCH_SKIP_SMOKE=1` 供 CI/测试跳过)。同时修 post_deploy_smoke.sh 三处静默假通过: smoke_test.py 缺失/python3 无 requests → 显式 FAIL exit 1(原会 traceback 后因输出无 "FAIL" 而 exit 0); 退出码改透传 smoke_test.py 的 RC, 不再以输出含 "FAIL" 判定(误报源); PW 容器名/LOG/脚本路径全部环境变量可覆盖(本机实测 /home/ubuntu/scripts 与 backups 均不存在, 原脚本必然假通过)。
+- `scripts/tests/test_deploy_script.sh` 新增 13 断言(`DOCKER=echo` 桩, 不动真 Docker): run 行含全部关键参数(-e WEB_HOST=0.0.0.0 / --memory / --restart / -p 8000:8000 与 8001 / -v panwatch-data:/app/data / 镜像名), 无 `-e: command not found`(0.1 类"注释截断续行命令"事故回归), "新容器健康"先于 `rm -f panwatch`(先验证后删旧顺序), create 失败场景退出非零且全程无 `rm -f`(失败不删旧容器), 部署脚本确实接线 post_deploy_smoke.sh。
+- CI: build-push-acr.yml gates 增 step 跑该 stub 测试 —— 这是防止"注释再次被插回 docker run 续行块"的唯一机制(2026-09-08 停机事故)。
+- 验证: 三个脚本 `bash -n` 通过; stub 测试 13 passed 0 failed; harvest 格式串对生产容器实测逐项解析正确(27 env/2 卷/8000 端口映射/panwatch-net/restart=always/MEM=0)。真机 `--full` 重建未执行(生产操作需老板确认节奏), 上生产时由临时容器验证+冒烟门禁双兜底。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-删固定管理员密码/开关, 兜底首启改随机密码+stdin外一次性打印, workflow action 全量钉 SHA(风险方案0.6残留)
 - `src/web/api/auth.py` — 删除 `DEFAULT_ADMIN_PASSWORD` 常量与固定密码兜底分支(公开仓库源码内固定密码=失守入口); 兜底首启改 `secrets.token_urlsafe(12)` 随机强密码, 仅启动时 stderr 打印一次并引导"设置 → 修改密码"(自助改密端点 `POST /api/auth/change-password` 旧密码校验+token_version 踢人本就有, 前端 AccountMenu/Profile 已接入, docs/KNOWN_ISSUES.md 的 P1"无改密入口"就此关闭); env 凭证改惰性读取 `_env_credentials()`, 允许测试 import 后注入。生产部署注意: 裸库且无 `AUTH_USERNAME/AUTH_PASSWORD` 时, 升级后首启密码以 Docker logs 为准(仅打印一次)。
 - 测试去硬编码: test_multi_user_auth / test_permissions_rbac(派单清单漏了此文件, grep 全仓补出 4 处) / test_chat_stream / test_entry_candidate_feedback_api 的 admin 登录改 env fixture 引导(清库+`AUTH_USERNAME/AUTH_PASSWORD`); test_p1_service_token 删无用的默认密码开关 setenv; test_security_20260823 两个 P2-5 用例重写为断言"常量/开关不存在+兜底走 secrets+改密引导存在"(旧断言引用已删常量必 AttributeError); 密码字面量在测试源码内一律拆串拼接, 测试文件自身不做明文载体。
