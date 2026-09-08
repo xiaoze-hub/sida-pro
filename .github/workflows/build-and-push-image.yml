@@ -86,28 +86,13 @@ jobs:
         # 2026-09-08 0.6: 固定默认密码与其开关已删除,
         # 需要登录的测试文件自备 AUTH_USERNAME/AUTH_PASSWORD(见各测试 fixture)。
         run: |
-          # CI(海外机房)无法访问国内行情源, 排除联网测试文件(本地全量跑已验证)。
-          # 联网文件清单维护: 新增联网测试时加入此排除表。
-          python -m pytest tests/ -x -q \
-            --ignore=tests/test_dark_flow.py \
+          # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network(10 文件, pyproject 已注册),
+          # 主门禁 -m "not network" 一刀切, 新增联网测试只需打标, 不再维护 ignore 清单。
+          # 夜间网络工作流(nightly-network-tests.yml)单独跑 -m network。
+          # 仍保留 2 个 --ignore: 这两文件在 CI 环境缺依赖/数据即使不打网络也会挂(本地已验证)。
+          python -m pytest tests/ -x -q -m "not network" \
             --ignore=tests/test_dark_l2_engine.py \
-            --ignore=tests/test_thsdk_api.py \
-            --ignore=tests/test_thsdk_board.py \
-            --ignore=tests/test_thsdk_extended.py \
-            --ignore=tests/test_thsdk_ext.py \
-            --ignore=tests/test_main_flow_hengsheng.py \
-            --ignore=tests/test_main_flow_compare.py \
-            --ignore=tests/test_chat_thsdk_tools.py \
-            --ignore=tests/test_auction_pool.py \
-            --ignore=tests/test_events_routing.py \
-            --ignore=tests/test_context_enrichments.py \
-            --ignore=tests/test_datasource_admin_api.py \
-            --ignore=tests/test_datasource_reconcile.py \
-            --ignore=tests/test_datasources_health.py \
-            --ignore=tests/test_selfcheck.py \
-            --ignore=tests/test_shadow_account.py \
-            --ignore=tests/test_ta_us_news_passthrough.py \
-            --ignore=tests/test_source_health.py
+            --ignore=tests/test_thsdk_extended.py
           python -m pytest packages/marketdata/tests -q
 
   build:

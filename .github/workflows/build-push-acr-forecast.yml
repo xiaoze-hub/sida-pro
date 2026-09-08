@@ -30,7 +30,8 @@ jobs:
         run: |
           set -o pipefail
           python3 -m pip install -q -r requirements.txt pytest-timeout
-          python3 -m pytest tests/ -q --timeout=60
+          # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network, CI 主门禁跳过(同 build-push-acr)
+          python3 -m pytest tests/ -q --timeout=60 -m "not network"
 
   build:
     if: github.event_name != 'pull_request'

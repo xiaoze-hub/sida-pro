@@ -471,3 +471,9 @@ def test_build_symbol_contexts_failsoft_when_index_missing(monkeypatch):
     payload = result["symbols"]["00700"]
     assert payload["relative_strength"] is None
     assert payload["ta_verdict"] is None
+
+
+# W2.3/E2 (2026-09-09): 本文件测试需要真实外部接口(国内行情源/thsdk),
+# CI 主门禁以 -m "not network" 跳过, 由 nightly 网络工作流单独跑(-m network)。
+# 置于文件末尾: pytestmark 模块级任意位置生效, 避开 docstring/__future__/import 顺序。
+pytestmark = pytest.mark.network

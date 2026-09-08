@@ -1,0 +1,52 @@
+# nightly-network-tests.yml · 夜间联网测试工作流
+#
+# W2.3/E2(2026-09-09): 主 CI 门禁以 -m "not network" 跳过联网测试(10 文件, 143 用例,
+# 打 pytestmark = pytest.mark.network, 清单维护在 pyproject markers 说明)。
+# 本工作流在每日夜间单独跑 -m network 集合, 保证联网用例不烂尾:
+#   - 失败只告警不阻断任何发布门禁(GitHub 国内行情源可达性本身有波动)。
+#   - 也可以手动 dispatch 随时跑一次。
+#
+# 运行环境注意: GitHub 海外机房访问国内行情源(腾讯/东财/新浪)不稳定,
+# 单用例 --timeout=120 防挂死; continue-on-error 用于收集趋势, 失败会红钟但不算门禁。
+
+name: nightly-network-tests
+
+on:
+  schedule:
+    - cron: '30 18 * * *'   # UTC 18:30 = 北京时间 02:30, 避开开盘收盘时段
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest-timeout
+          # thsdk(同花顺 SDK)不在 requirements.txt(仅部署机安装, 见 data_source/thsdk_l2.py 头注释),
+          # 夜间联网测试需要它才有真实信号; 钉 1.7.18 与部署机/本地一致。
+          pip install "thsdk==1.7.18" || echo "thsdk install failed, 部分用例将失败(仅告警)"
+
+      - name: Run network-marked tests
+        # 只跑 -m network 集合(联网用例); --timeout=120 单用例挂死兜底。
+        continue-on-error: true
+        run: |
+          python -m pytest tests/ -q -m network --timeout=120
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### nightly network tests" >> $GITHUB_STEP_SUMMARY
+          echo "结果见上方 pytest step 日志; 红钟属预期(行情源可达性波动), 连续多日红需排查。" >> $GITHUB_STEP_SUMMARY

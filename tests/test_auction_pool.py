@@ -211,3 +211,9 @@ def test_register_cron_none_safe():
     """传入 None / 无 add_job 对象 -> 返回 False, 不崩。"""
     assert auction_pool.register_cron(None) is False
     assert auction_pool.register_cron(object()) is False
+
+
+# W2.3/E2 (2026-09-09): 本文件测试需要真实外部接口(国内行情源/thsdk),
+# CI 主门禁以 -m "not network" 跳过, 由 nightly 网络工作流单独跑(-m network)。
+# 置于文件末尾: pytestmark 模块级任意位置生效, 避开 docstring/__future__/import 顺序。
+pytestmark = pytest.mark.network

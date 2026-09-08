@@ -19,6 +19,14 @@
 - 验证: 全量套件 1919 passed / 4 failed(全部为已知环境损坏/本地 flaky: dark_l2_engine/ta_load_ohlcv_patch/thsdk_buffer_size/thsdk_extended, 与改动前基线一致); 真实 data/panwatch.db mtime 跨轮稳定; 元测试 4/4 过。
 - [branch fix/wave2-门禁-20260909, `git show HEAD`]
 
+### fix-联网测试打标network+CI门禁一刀切(W2.3/E2: -m "not network"替代19项ignore清单+夜间网络工作流)
+- 背景: E2 —— 联网测试靠 CI 手工维护 19 项 --ignore 清单(build-and-push-image/release), 其中 2 项指向已删除文件(main_flow_hengsheng/datasources_health); build-push-acr×2 完全没排除(联网用例靠 --timeout 兜底); 新增联网测试须记得改 4 处工作流, 漏一处即红。
+- **打标**: pyproject.toml 注册 `markers = ["network: ..."]`; 10 个联网测试文件(auction_pool/chat_thsdk_tools/context_enrichments/dark_flow/dark_l2_engine/main_flow_compare/thsdk_api/thsdk_board/thsdk_ext/thsdk_extended)EOF 追加 `pytestmark = pytest.mark.network`(置于文件末尾: 模块级任意位置生效, 避开 docstring/__future__/import 顺序坑)。分区: 1787 offline / 143 network / 1930 共。
+- **CI 主门禁**: build-and-push-image.yml + release.yml 的 19 项 --ignore 清单退役, 改 `-m "not network"`; 仅保留 2 个 CI 环境级 broken 文件的 --ignore(test_dark_l2_engine/test_thsdk_extended, 打标前就 red, 打标后双保险防收集期 import); 7 个曾被误伤的离线文件(datasource_admin_api/datasource_reconcile/selfcheck/shadow_account/ta_us_news_passthrough/source_health/events_routing)重新进主门禁(本地验证 19 passed)。build-push-acr.yml + build-push-acr-forecast.yml 补 `-m "not network"`(保留 --timeout=60 对未打标联网用例兜底)。
+- **nightly-network-tests.yml 新增**: 每日 UTC 18:30(北京 02:30)+手动 dispatch 跑 `pytest tests/ -m network --timeout=120`; 装钉版 `thsdk==1.7.18`(同花顺 SDK 不在 requirements, 仅部署机安装, PyPI 有 1.7.18 与部署机/本地一致); continue-on-error —— 海外机房访问国内行情源可达性有波动, 红钟只告警, 连续多日红再排查。联网用例从此有独立归宿不烂尾。
+- 验证: `--collect-only` 双向 1787/143 一致; 本地全量 `pytest tests/ -m "not network"` = **1780 passed / 2 failed / 5 skipped / 143 deselected**, 2 个失败均为已知本地环境损坏文件(ta_load_ohlcv_patch/thsdk_buffer_size, 从未进过 CI ignore 清单, CI 历史全绿); 6 个工作流 YAML 全部 safe_load 验证通过。
+- [branch fix/wave2-门禁-20260909, `git show HEAD`]
+
 ### update-v0.5.19生产部署+K线全量重刷完成(复权污染清除, 勘查报告附D对账)
 - **生产部署**: tag v0.5.19(21fc03f) 经 docker cp 覆盖层部署到 panwatch 容器(0.7 勘查既定路径: 本机无 ACR 凭据, docker config auths 为空, 镜像构建发布不可用)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0519_20260909_024720.tar.gz`, 仅代码不含 data) → `git archive` tag → 容器内解包 → restart → 42 条迁移全 success(含 _m137~_m142) → 容器内签发 admin token 跑 scripts/smoke_test.py **9/9 通过**。
 - **K线全量重刷**(0.7 §4 加列半场后的"重刷半场", 附C 验收全过): 预备份 pg_dump 踩坑(4,447B 归档含 TABLE DATA 条目但 restore-and-count=0 行, 表内实有 209,094 行, 根因未查明, stocks 对照组正常 —— **规则固化: 破坏性操作前备份必须 restore-and-count 验证**) → 依据 klines 属可再生派生数据 + 存量即待清污染, 执行 TRUNCATE → ingestor 重灌 71 股次(fail_details=0)。
