@@ -6,16 +6,22 @@
  + demo 只读(读 200/写 403/管理区 403) + 清理(临时号删除)。
 黄磊/娟姐: 密码未知, 只验存在+active, 直接登录测不了(报告如实标注)。
 
-用法: python3 /tmp/p3a_accept.py [demo_password]
+用法: P3A_ADMIN_USER/P3A_ADMIN_PASS 环境变量注入 admin 凭证, python3 /tmp/p3a_accept.py [demo_password]
 退出码: 0=全 PASS(黄磊/娟姐只读存在性检查不计入), 1=有 FAIL。
 """
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
 
-BASE = "https://www.sida.hengsheng-elec.com"
-ADMIN = ("admin", "xz.170530")
+BASE = os.getenv("P3A_BASE", "https://www.sida.hengsheng-elec.com")
+# 2026-09-08 0.6: admin 凭证改环境变量注入, 不再硬编码在公开仓库源码里
+ADMIN_USER = os.getenv("P3A_ADMIN_USER", "")
+ADMIN_PASS = os.getenv("P3A_ADMIN_PASS", "")
+if not ADMIN_USER or not ADMIN_PASS:
+    sys.exit("拒绝运行: 请先设置 P3A_ADMIN_USER / P3A_ADMIN_PASS 环境变量(凭证不进代码)")
+ADMIN = (ADMIN_USER, ADMIN_PASS)
 TMP_USER = "p3a_tmp"
 TMP_PASS = "p3a-Temp-0815"
 RESULTS = []

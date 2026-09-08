@@ -34,17 +34,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -59,7 +59,7 @@ jobs:
         run: npx tsc -b
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
@@ -80,9 +80,8 @@ jobs:
         # 2026-08-21: conftest 已加 _init_test_db + _clear_module_caches fixture 修好顺序污染,
         # 缓存类 3 文件不再需要 ignore; 但 CI 海外机房访问不了国内行情源, 联网测试文件仍需排除
         # (与 build-and-push-image.yml 保持一致)。
-        env:
-          # 2026-08-23 Q2: 测试用默认 admin 登录(仅 CI 虚拟库)
-          AUTH_ALLOW_DEFAULT_ADMIN: "1"
+        # 2026-09-08 0.6: 固定默认密码与其开关已删除,
+        # 需要登录的测试文件自备 AUTH_USERNAME/AUTH_PASSWORD(见各测试 fixture)。
         run: |
           python -m pytest tests/ \
             --ignore=tests/test_dark_flow.py \
@@ -134,7 +133,7 @@ jobs:
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry (thsdk vendor)
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: xiaoze-hub
@@ -142,10 +141,10 @@ jobs:
           password: ${{ secrets.GHCR_PAT }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Check Docker Hub credentials
         id: dockerhub-check
@@ -161,14 +160,14 @@ jobs:
 
       - name: Log in to Docker Hub
         if: steps.dockerhub-check.outputs.available == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
@@ -181,7 +180,7 @@ jobs:
             org.opencontainers.image.source=${{ github.repositoryUrl }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
@@ -242,7 +241,7 @@ jobs:
 
       - name: Create GitHub Release (tag push only)
         if: ${{ github.event_name == 'push' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.vars.outputs.version }}
           body_path: release-notes.md

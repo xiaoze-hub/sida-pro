@@ -7,6 +7,15 @@
 
 ## 2026-09-08
 
+### fix-删固定管理员密码/开关, 兜底首启改随机密码+stdin外一次性打印, workflow action 全量钉 SHA(风险方案0.6残留)
+- `src/web/api/auth.py` — 删除 `DEFAULT_ADMIN_PASSWORD` 常量与固定密码兜底分支(公开仓库源码内固定密码=失守入口); 兜底首启改 `secrets.token_urlsafe(12)` 随机强密码, 仅启动时 stderr 打印一次并引导"设置 → 修改密码"(自助改密端点 `POST /api/auth/change-password` 旧密码校验+token_version 踢人本就有, 前端 AccountMenu/Profile 已接入, docs/KNOWN_ISSUES.md 的 P1"无改密入口"就此关闭); env 凭证改惰性读取 `_env_credentials()`, 允许测试 import 后注入。生产部署注意: 裸库且无 `AUTH_USERNAME/AUTH_PASSWORD` 时, 升级后首启密码以 Docker logs 为准(仅打印一次)。
+- 测试去硬编码: test_multi_user_auth / test_permissions_rbac(派单清单漏了此文件, grep 全仓补出 4 处) / test_chat_stream / test_entry_candidate_feedback_api 的 admin 登录改 env fixture 引导(清库+`AUTH_USERNAME/AUTH_PASSWORD`); test_p1_service_token 删无用的默认密码开关 setenv; test_security_20260823 两个 P2-5 用例重写为断言"常量/开关不存在+兜底走 secrets+改密引导存在"(旧断言引用已删常量必 AttributeError); 密码字面量在测试源码内一律拆串拼接, 测试文件自身不做明文载体。
+- `tests/test_auth_no_default_password.py` 新增 4 静态用例(密码字面量/常量/开关全仓零残留+兜底随机+改密端点存在)、`tests/test_auth_change_password.py` 新增 3 行为用例(旧密码错 400、新密码过短 400、改密成功踢旧 token+旧密码失效)。5 个登录密集 fixture 统一 `RATE_LIMIT_ENABLED=False`(登录防爆破 20/min/IP 是进程级共享桶, 多文件合跑必然 429, test_ratelimit_per_user 自建 app 不受影响)。
+- workflows: build-and-push-image.yml / release.yml 删 `AUTH_ALLOW_DEFAULT_ADMIN: "1"`(CI 门禁登录测试已自备凭证); 全部 8 个 workflow 共 35 处 `uses:` 从 tag 钉到 40-hex commit SHA(pnpm/action-setup v4 为 annotated tag, 取 `^{}` 解引用值), 消除第三方 action tag 劫持面。
+- `scripts/p3a_accept.py` admin 凭证改 `P3A_ADMIN_USER/P3A_ADMIN_PASS` 环境变量注入, 缺失即拒绝运行(生产验收脚本不得内嵌凭证); frontend 移除零引用幽灵依赖 `date-fn`。
+- 验证: 7 个关联测试文件组合 53 passed 零失败; test_security_20260823 stash 基线对比 17 failed → 13 failed(差值 4 全为本改修复, 余 13 均为 Windows GBK 环境存量: 该文件 30 处 bare `open()` 无 encoding, CI UTF-8 不复现); 验收 grep `xz.170530|DEFAULT_ADMIN_PASSWORD|AUTH_ALLOW_DEFAULT_ADMIN` 全仓(除 CHANGELOG 历史与 git-ignored 的 data/panwatch.db 运行数据)零命中; 本地 gitleaks `detect --no-git` 0 命中; `pnpm typecheck` 通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-CI门禁补密钥扫描+bash语法检查+Python钉3.11(风险方案0.5残留)
 - `build-push-acr.yml` gates 补三个 step(pipefail/删`||true`/PR触发已随全面体检T3落地, 勿重做):
   1. `bash -n deploy/*.sh scripts/*.sh` — 0.1 类"续行块内注释截断命令"语法事故在 CI 即可发现。

@@ -344,8 +344,28 @@ def test_model_scene_no_user_keeps_global(scene_db):
 # ───────────────────────── 3. 中间件 RBAC ───────────────────────────
 
 
+# 0.6 删除固定默认密码后, 测试用 AUTH_USERNAME/AUTH_PASSWORD
+# 环境变量确定性引导 owner(见 client fixture)。
+ADMIN_USER = "admin"
+ADMIN_PW = "rbac-admin-0606"
+
+
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    # 登录限流(敏感路径 20/min/IP)在测试进程内跨文件累计 → 合跑 429, 单测关闭
+    monkeypatch.setattr("src.web.middleware.RATE_LIMIT_ENABLED", False)
+    monkeypatch.setenv("AUTH_USERNAME", ADMIN_USER)
+    monkeypatch.setenv("AUTH_PASSWORD", ADMIN_PW)
+    # 清掉库中已有 admin, 强制本次走 env 引导路径(密码确定)
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    db = SessionLocal()
+    try:
+        db.query(User).filter(User.username == ADMIN_USER).delete()
+        db.commit()
+    finally:
+        db.close()
     from src.web.app import app
 
     return TestClient(app)
@@ -399,7 +419,7 @@ def _set_permissions(username, permissions):
 def test_middleware_demo_readonly_and_admin_blocks(client, monkeypatch):
     """demo: 只读 + 自选增删例外 + 管理区403(settings/providers GET 可浏览)。"""
     monkeypatch.setattr("src.core.demo_limit.allow_api_get", lambda uid: True)
-    admin_token = _login(client, "admin", "xz.170530")
+    admin_token = _login(client, ADMIN_USER, ADMIN_PW)
     _create_user(client, admin_token, "demo", role="member")
     demo_token = _login(client, "demo", "rbac12345")
     H = {"Authorization": f"Bearer {demo_token}"}
@@ -422,7 +442,7 @@ def test_middleware_demo_readonly_and_admin_blocks(client, monkeypatch):
 def test_middleware_member_admin_403_readable_ok(client, monkeypatch):
     """member: 无 manage_* 时管理区403, 但 settings/providers GET 可浏览(向后兼容)。"""
     monkeypatch.setattr("src.core.demo_limit.allow_api_get", lambda uid: True)
-    admin_token = _login(client, "admin", "xz.170530")
+    admin_token = _login(client, ADMIN_USER, ADMIN_PW)
     _create_user(client, admin_token, "rbac_member", role="member")
     member_token = _login(client, "rbac_member", "rbac12345")
     H = {"Authorization": f"Bearer {member_token}"}
@@ -449,7 +469,7 @@ def test_middleware_member_admin_403_readable_ok(client, monkeypatch):
 def test_middleware_owner_passes_all(client, monkeypatch):
     """owner: 管理区全过。"""
     monkeypatch.setattr("src.core.demo_limit.allow_api_get", lambda uid: True)
-    admin_token = _login(client, "admin", "xz.170530")
+    admin_token = _login(client, ADMIN_USER, ADMIN_PW)
     H = {"Authorization": f"Bearer {admin_token}"}
 
     assert client.get("/api/datasources", headers=H).status_code != 403
@@ -460,7 +480,7 @@ def test_middleware_owner_passes_all(client, monkeypatch):
 def test_middleware_member_whitelist_grant(client, monkeypatch):
     """users.permissions 白名单: member 加 manage_datasources 后管理区放行。"""
     monkeypatch.setattr("src.core.demo_limit.allow_api_get", lambda uid: True)
-    admin_token = _login(client, "admin", "xz.170530")
+    admin_token = _login(client, ADMIN_USER, ADMIN_PW)
     _create_user(client, admin_token, "rbac_member_whitelist", role="member")
     _set_permissions("rbac_member_whitelist", ["manage_datasources"])
     member_token = _login(client, "rbac_member_whitelist", "rbac12345")

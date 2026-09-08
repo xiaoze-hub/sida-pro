@@ -7,9 +7,25 @@ from fastapi.testclient import TestClient
 from src.web.database import SessionLocal
 from src.web.models import User
 
+# 0.6 删除固定默认密码后, 测试用 AUTH_USERNAME/AUTH_PASSWORD
+# 环境变量确定性引导 owner(见 client fixture)。
+ADMIN_USER = "admin"
+ADMIN_PW = "admin-test-0606"
+
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    # 登录限流(敏感路径 20/min/IP)在测试进程内跨文件累计 → 合跑 429, 单测关闭
+    monkeypatch.setattr("src.web.middleware.RATE_LIMIT_ENABLED", False)
+    monkeypatch.setenv("AUTH_USERNAME", ADMIN_USER)
+    monkeypatch.setenv("AUTH_PASSWORD", ADMIN_PW)
+    # 清掉库中已有 admin, 强制本次走 env 引导路径(密码确定)
+    db = SessionLocal()
+    try:
+        db.query(User).filter(User.username == ADMIN_USER).delete()
+        db.commit()
+    finally:
+        db.close()
     from src.web.app import app
     return TestClient(app)
 
@@ -51,7 +67,7 @@ def test_owner_auto_created(client):
 
 def test_login_and_me(client):
     """登录返回 user 信息, me 返回当前用户。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json()["data"]["user"]["username"] == "admin"
@@ -60,7 +76,7 @@ def test_login_and_me(client):
 
 def test_create_member_and_login(client):
     """owner 建子账号, 子账号可登录。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     u = _create_member(client, token)
     assert u["role"] == "member"
     assert u["is_active"] is True
@@ -74,7 +90,7 @@ def test_create_member_and_login(client):
 
 def test_member_cannot_manage_users(client):
     """member 访问用户管理 → 403。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     _create_member(client, token)
     tok2 = _login(client, "alice", "alice12345")
 
@@ -88,15 +104,15 @@ def test_member_cannot_manage_users(client):
 
 def test_duplicate_username_rejected(client):
     """重复用户名 → 400。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     r = client.post("/api/auth/users", headers={"Authorization": f"Bearer {token}"},
-                    json={"username": "admin", "password": "xz.17053045", "role": "member"})
+                    json={"username": "admin", "password": "member-Test-45", "role": "member"})
     assert r.status_code == 400
 
 
 def test_disable_user_kicks_token(client):
     """禁用用户后其 token 失效。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     u = _create_member(client, token)
     tok2 = _login(client, "alice", "alice12345")
 
@@ -112,7 +128,7 @@ def test_disable_user_kicks_token(client):
 
 def test_change_password_bumps_token(client):
     """改密后旧 token 失效(踢人)。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     u = _create_member(client, token)
     tok2 = _login(client, "alice", "alice12345")
 
@@ -131,7 +147,7 @@ def test_change_password_bumps_token(client):
 
 def test_cannot_disable_self(client):
     """owner 不能禁用自己。"""
-    token = _login(client, "admin", "xz.170530")
+    token = _login(client, ADMIN_USER, ADMIN_PW)
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["data"]["user"]
     r = client.patch(f"/api/auth/users/{me['id']}", headers={"Authorization": f"Bearer {token}"},
                      json={"is_active": False})

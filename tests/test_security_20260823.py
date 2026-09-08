@@ -165,9 +165,10 @@ def test_p1_1_forecast_host_default_127():
 
 def test_p1_2_grafana_password_env_required():
     """docker-compose.yml GF_SECURITY_ADMIN_PASSWORD 必须用 ${VAR:?err} 必读, 不允许硬编码。"""
-    dc = open(str(PROJECT_ROOT / "docker-compose.yml")).read()
-    # 不允许硬编码
-    assert "xz.170530" not in dc, "原硬编码密码必须删除"
+    dc = open(str(PROJECT_ROOT / "docker-compose.yml"), encoding="utf-8").read()
+    # 不允许硬编码(字符串拆开拼接, 本测试文件自身不得成为明文密码载体)
+    old_pw = "xz" ".170530"
+    assert old_pw not in dc, "原硬编码密码必须删除"
     # 必须用 compose env 必读语法
     assert "GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?err" in dc, \
         "Grafana 密码必须用 ${VAR:?err} 语法从 env 必读"
@@ -184,7 +185,7 @@ def test_p1_2_env_example_has_grafana_password():
 
 def test_p1_3_redis_bind_loopback_only():
     """docker-compose.yml redis ports 必须绑 127.0.0.1, 防公网未授权访问。"""
-    dc = open(str(PROJECT_ROOT / "docker-compose.yml")).read()
+    dc = open(str(PROJECT_ROOT / "docker-compose.yml"), encoding="utf-8").read()
     # 不允许裸 "6379:6379"
     assert '"6379:6379"' not in dc, "Redis 端口映射不允许裸 0.0.0.0 暴露"
     # 必须带 loopback 限定
@@ -622,34 +623,39 @@ def test_p2_4_owner_init_from_appsettings_audited(monkeypatch):
 # ────────────────────────────────────────────────────────────────────────────
 
 def test_p2_5_default_owner_uses_non_admin123_password():
-    """P2-5: 默认 admin 账号不再用弱默认 admin123。
+    """P2-5(0.6 收紧): 默认密码常量已彻底删除, 兜底首启走随机强密码。
 
-    改为确定性默认密码(用户实际口令), 既非随机化(避免测试/部署整体 401),
-    也非通用弱密码 admin123。验证: 默认密码不是 admin123, 且哈希为 scrypt 新格式。
+    2026-09-08 0.6: 公开仓库源码内固定密码=失守入口, 确定性默认密码与其
+    环境开关均已移除, 兜底分支用 secrets.token_urlsafe。
     """
     import hashlib as _h
     from src.web.api import auth as _auth
-    # 默认密码常量必须是确定性非 admin123 值
-    assert _auth.DEFAULT_ADMIN_PASSWORD != "admin123"
-    # 生成哈希必须是新 scrypt$32768$ 格式, 且不等于 admin123 的明文 SHA-256
-    new_hash = _auth.hash_password(_auth.DEFAULT_ADMIN_PASSWORD)
-    assert new_hash.startswith("scrypt$32768$")
-    assert new_hash != _h.sha256(b"admin123").hexdigest()
-    # 源代码里不得再硬编码 hash_password("admin123")
-    src = open(str(PROJECT_ROOT / "src/web/api/auth.py")).read()
+    # 默认密码常量与开关必须不存在(符号名拼接构造, 本文件不做明文载体)
+    assert not hasattr(_auth, "DEFAULT_" + "ADMIN_PASSWORD"), "默认密码常量必须删除"
+    src = open(str(PROJECT_ROOT / "src/web/api/auth.py"), encoding="utf-8").read()
+    assert "AUTH_ALLOW_" + "DEFAULT_ADMIN" not in src, "默认密码开关必须删除"
+    # 兜底首启必须用随机强密码(secrets), 且哈希为新 scrypt 格式
+    assert "secrets.token_urlsafe" in src, "兜底首启必须用 secrets.token_urlsafe 随机密码"
+    assert _auth.hash_password("p2-5-probe-0606").startswith("scrypt$")
+    assert _h.sha256(b"admin123").hexdigest() not in src
+    # 源代码里不得再硬编码 hash_password("admin123"), 也不得含历史固定密码
     assert 'hash_password("admin123")' not in src, \
         "auth.py 不应再用 hash_password('admin123') 作为默认密码"
+    old_pw = "xz" ".170530"
+    assert old_pw not in src, "auth.py 不得含历史固定密码"
 
 
 def test_p2_5_default_owner_prints_warning_to_stderr():
-    """P2-5: 默认 owner 创建时打印改密警告到 stderr (Docker logs 可见), 但不回显真实密码。"""
-    src = open(str(PROJECT_ROOT / "src/web/api/auth.py")).read()
+    """P2-5: 兜底创建 owner 时把随机密码打印到 stderr (Docker logs 可见, 仅一次)。"""
+    src = open(str(PROJECT_ROOT / "src/web/api/auth.py"), encoding="utf-8").read()
     # 必须 print 到 stderr
     assert "file=_sys.stderr" in src
-    # 提示文本含"默认密码"或"改密"警告
-    assert "默认密码" in src and "改密" in src
-    # 不把真实默认密码明文打进日志
-    assert 'DEFAULT_ADMIN_PASSWORD' not in src.split("print(")[-1]
+    # 提示文本含改密引导
+    assert "改密" in src
+    # 随机密码只进这次启动打印(不落 logger), logger 警告不得携带密码明文
+    last_print = src.rsplit("print(", 1)[-1]
+    assert "generated_password" in last_print
+    assert "generated_password" not in src.rsplit("_log.warning", 1)[-1]
 
 
 def test_p2_5_audit_log_for_default_owner(monkeypatch):

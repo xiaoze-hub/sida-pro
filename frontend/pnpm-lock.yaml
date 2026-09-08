@@ -41,9 +41,6 @@ importers:
       clsx:
         specifier: ^2.1.0
         version: 2.1.1
-      date-fn:
-        specifier: ^0.0.2
-        version: 0.0.2
       html-to-image:
         specifier: ^1.11.13
         version: 1.11.13
@@ -1072,9 +1069,6 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
-
-  date-fn@0.0.2:
-    resolution: {integrity: sha512-DBIKrlB2w9d6UPZwYn6qqSeKLwHt5uRf9Mj/PiGWHGQ5CxnvMCx2KteO5owfiknkYzMngrDwz5nX4CGxYlr0uA==}
 
   date-fns-jalali@4.1.0-0:
     resolution: {integrity: sha512-hTIP/z+t+qKwBDcmmsnmjWTduxCg+5KfdqWQvb2X/8C9+knYY6epN/pfxdDuyVlSVeFz0sM5eEfwIUQ70U4ckg==}
@@ -2675,8 +2669,6 @@ snapshots:
   cssesc@3.0.0: {}
 
   csstype@3.2.3: {}
-
-  date-fn@0.0.2: {}
 
   date-fns-jalali@4.1.0-0: {}
 

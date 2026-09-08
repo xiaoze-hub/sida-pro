@@ -29,7 +29,6 @@ from src.web.database import Base, get_db
 
 def _app(monkeypatch) -> TestClient:
     monkeypatch.setenv("SIDA_SERVICE_TOKEN", "p1-test-service-token")
-    monkeypatch.setenv("AUTH_ALLOW_DEFAULT_ADMIN", "1")
     import src.web.api.auth as auth_mod
 
     auth_mod._service_token = None  # 隔离: 强迫重读本次 env
