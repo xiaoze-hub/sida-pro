@@ -83,7 +83,7 @@ def _init_metrics():
         "Notifications sent by channel and result",
         ["channel", "result"],
     )
-    # 数据源失败计数(2026-08-21): 哨兵/采集器可调用 record_datasource_failure
+    # 数据源失败计数: marketdata vendor 层失败自动上报(见本模块底部桥接), 包外自建源手工调用 record_datasource_failure
     _metrics.DATASOURCE_FAILURES = Counter(
         "sida_datasource_failures_total",
         "Datasource failures by provider and kind",
@@ -159,15 +159,38 @@ def record_request_metrics(method: str, path: str, status: int, duration_ms: flo
         pass
 
 
+_DATASOURCE_KINDS = ("fetch", "parse", "timeout", "auth")
+
+
 def record_datasource_failure(provider: str, kind: str = "fetch") -> None:
-    """数据源失败计数(哨兵/采集器调用)。"""
+    """数据源失败计数(供 Prometheus SidaDatasourceFailures 告警)。
+
+    调用点: marketdata vendors/base 的 fetch 包装与 Engine 的 timeout/auth
+    分支经 on_vendor_failure 桥接自动上报; 包外自建源可手工调用。
+    kind 固定枚举(未知值归一为 fetch, 防 label 基数膨胀);
+    禁止把 symbol 等高基数值放进 provider。"""
     try:
         if not _PROMETHEUS_AVAILABLE:
             return
+        if kind not in _DATASOURCE_KINDS:
+            kind = "fetch"
         _init_metrics()
         _metrics.DATASOURCE_FAILURES.labels(provider=provider, kind=kind).inc()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _on_vendor_failure(provider: str, kind: str = "fetch") -> None:
+    """marketdata vendor 层失败 → 本模块计数的桥。"""
+    record_datasource_failure(provider, kind=kind)
+
+
+try:
+    from marketdata.vendors.base import on_vendor_failure as _md_on_vendor_failure
+
+    _md_on_vendor_failure(_on_vendor_failure)
+except Exception:  # noqa: BLE001 - 桥接失败不影响业务
+    pass
 
 
 @router.get("/metrics")

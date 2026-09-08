@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-数据源失败计数接线激活SidaDatasourceFailures告警(风险方案0.2)
+- 根因: `sida_datasource_failures_total` 计数器定义后全仓零调用方(仅注释提及), prometheus-rules.yml 的 `increase(...[15m]) > 50` 告警永不触发 —— 数据源(东财/新浪/腾讯/通达信)全黑监控无声。
+- 做法与派单方案的偏差: 方案建议改 marketdata vendor 层并经 `src/collectors/_metrics.py` 包 CM; 实测 vendor 既被 collectors/core/web 直调(21+ 处)又经单源 Engine 调用, 且 packages/marketdata 不能反向依赖 src.web。改为: `marketdata/vendors/base.py` 的 `Vendor.__init_subclass__` 在每个子类 `fetch` 定义处自动包失败上报(`emit_vendor_failure(name, kind)`, 异常原样抛出不吞; 监听者异常互不反噬); `engine.py` 的 TimeoutError 分支补发 `kind="timeout"`、异常分支按凭证错补发 `kind="auth"`/`"fetch"`; `src/web/api/health.py` 导入时 `on_vendor_failure` 注册桥接 → `record_datasource_failure`。一处覆盖直调/Engine/未来新增三条路径。
+- `record_datasource_failure` 加 kind 枚举归一(fetch|parse|timeout|auth, 未知归 fetch)防 label 基数膨胀; 注释与 docstring 同步指明调用点; BoardFundFlow/Discovery 两类本就不进 Engine/DataSource 体系, 不入告警域。
+- `tests/test_datasource_failure_metrics.py` 新增 7 用例: fetch 失败上报+原样上抛/成功不误报/监听者异常隔离/注册幂等/真实 tencent vendor 断网(monkeypatch market_get)上报/桥接真实驱动 Prometheus 计数/labelnames 无 symbol+kind 归一。
+- 验证: 新用例 7 passed; marketdata/datasource 相关 44 个测试文件分两批 86 passed(批1 79)与 226 passed(批2), stash 本改动前后两批失败集完全一致(17 failed 均为本机缺 .env/AUTH_ALLOW_DEFAULT_ADMIN 的环境存量), 零新增失败。本机环境修正: `marketdata` editable 安装原指向旧 clone sida-pro, 已重指本仓 packages/marketdata(否则测试解析到 v0.5.11 旧代码)。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-每用户限流分桶取错JWT claim(恒按IP)改统一解析sub(风险方案0.8)
 - `src/web/api/auth.py` — 新增 `principal_from_payload()`: JWT payload → request.state.user 的统一形状, 用户 id 取 `sub`(兜底历史 `user_id`), username/role 平级; 单一出口防止第三处中间件再各写各的。
 - `src/web/middleware.py` — JWTDecodeMiddleware 原 `"user_id": payload.get("user_id")` 取的是 JWT 里不存在的 claim(恒 None)→ 限流分桶永远走 IP, 同出口 IP 的多账号一人跑重活全员被限; 改调 `principal_from_payload()`。AuditMiddleware 的手写解析同款收编(原取法碰巧对, 但属重复实现)。
