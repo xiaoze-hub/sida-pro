@@ -23,7 +23,7 @@ U_OWNER = "cccc1111-0000-0000-0000-000000000001"
 U_DEMO = "cccc1111-0000-0000-0000-000000000002"
 U_ALICE = "cccc1111-0000-0000-0000-000000000003"
 
-SECRET = "pk1234567890abcdefgh"  # pushplus token 形态(必填字段 token)
+FAKE_PK = "pk1234567890abcdefgh"  # pushplus token 形态(必填字段 token)
 
 
 @pytest.fixture()
@@ -39,7 +39,7 @@ def db():
         User(id=U_DEMO, username="demo", password_hash="x", role="member", is_active=True),
         User(id=U_ALICE, username="alice", password_hash="x", role="member", is_active=True),
         NotifyChannel(id=1, user_id=None, name="全局PushPlus", type="pushplus",
-                      config={"token": SECRET}, enabled=True, is_default=False),
+                      config={"token": FAKE_PK}, enabled=True, is_default=False),
         NotifyChannel(id=2, user_id=U_ALICE, name="alice的TG", type="telegram",
                       config={"bot_token": "123456:ABC-token", "chat_id": "88001"},
                       enabled=True, is_default=False),
@@ -67,7 +67,7 @@ def test_list_config_masked(db):
     import json
 
     blob = json.dumps([o.model_dump() for o in out])
-    assert SECRET not in blob
+    assert FAKE_PK not in blob
     assert "123456:ABC-token" not in blob
     assert "999:demo-token" not in blob
     # 读宽: demo 可见 全局(1) + 自己的(3); 他人(2)根本不在列表里
@@ -169,7 +169,7 @@ def test_owner_can_test_global_channel(db, monkeypatch):
     monkeypatch.setattr(ch_api, "NotifierManager", _FakeNotifier)
     out = asyncio.run(ch_api.test_channel(1, db=db, user=_u(U_OWNER, role="owner")))
     assert out["ok"] is True
-    assert sent["config"]["token"] == SECRET  # 内部发送用明文, 不受脱敏影响
+    assert sent["config"]["token"] == FAKE_PK  # 内部发送用明文, 不受脱敏影响
 
 
 def test_demo_can_test_own_channel(db, monkeypatch):
