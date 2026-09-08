@@ -32,7 +32,9 @@ export function reportFrontendError(type: string, message: string, stack?: strin
     })
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
     // 注: sendBeacon 发不出 Authorization 头, 后端要求登录, 故只用 fetch(keepalive 页面卸载也能送达)
-    void fetch(ENDPOINT, { method: 'POST', headers, body, keepalive: true }).catch(() => {})
+    void fetch(ENDPOINT, { method: 'POST', headers, body, keepalive: true }).catch((e) =>
+      console.debug('[error-report] 上报失败', e)
+    )
   } catch {
     /* 上报本身绝不能抛 */
   }

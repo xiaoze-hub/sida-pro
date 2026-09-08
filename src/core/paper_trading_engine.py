@@ -151,11 +151,21 @@ def compute_market_cash(
     return initial_capital * ratio + realized_pnl - open_cost
 
 
-def market_realized_open(db: Session, market: str) -> tuple[float, float]:
-    """返回 (该市场已实现盈亏合计, 该市场未平仓持仓成本合计)。"""
+def _user_scope(model: Any, user_id: str | None) -> tuple:
+    """按归属用户过滤的查询条件; user_id=None 匹配 NULL 行(冷启动遗留)。"""
+    if user_id is None:
+        return (model.user_id.is_(None),)
+    return (model.user_id == user_id,)
+
+
+def market_realized_open(db: Session, market: str, user_id: str | None = None) -> tuple[float, float]:
+    """返回 (该市场已实现盈亏合计, 该市场未平仓持仓成本合计)。user_id 限定归属用户。"""
     realized = (
         db.query(func.coalesce(func.sum(PaperTradingTrade.pnl), 0.0))
-        .filter(PaperTradingTrade.stock_market == market)
+        .filter(
+            PaperTradingTrade.stock_market == market,
+            *_user_scope(PaperTradingTrade, user_id),
+        )
         .scalar()
     ) or 0.0
     open_cost = (
@@ -168,6 +178,7 @@ def market_realized_open(db: Session, market: str) -> tuple[float, float]:
         .filter(
             PaperTradingPosition.status == "open",
             PaperTradingPosition.stock_market == market,
+            *_user_scope(PaperTradingPosition, user_id),
         )
         .scalar()
     ) or 0.0
@@ -180,7 +191,7 @@ def market_available_cash(
     """某市场当前可用现金（用于建仓门槛与展示）。"""
     alloc = alloc or market_allocations_or_default(account)
     ratio = alloc.get(market, 0.0)
-    realized, open_cost = market_realized_open(db, market)
+    realized, open_cost = market_realized_open(db, market, user_id=account.user_id)
     return compute_market_cash(account.initial_capital, ratio, realized, open_cost)
 
 
@@ -236,12 +247,37 @@ def _serialize_signal(sig: StrategySignalRun) -> dict:
 
 
 class PaperTradingEngine:
-    """模拟盘扫描引擎。"""
+    """模拟盘扫描引擎(2026-09-08 T6: 多用户隔离, 每用户一份账户/持仓/交易)。"""
 
-    def _get_or_create_account(self, db: Session) -> PaperTradingAccount:
-        account = db.query(PaperTradingAccount).first()
+    @staticmethod
+    def _owner_user_id(db: Session) -> str | None:
+        """最早创建的 owner 用户 id(冷启动无 owner 时返回 None)。"""
+        from src.web.models import User
+
+        owner = (
+            db.query(User)
+            .filter(User.role == "owner", User.is_active.is_(True))
+            .order_by(User.created_at.asc(), User.id.asc())
+            .first()
+        )
+        if owner:
+            return owner.id
+        fallback = db.query(User).order_by(User.id.asc()).first()
+        return fallback.id if fallback else None
+
+    def _get_or_create_account(self, db: Session, user_id: str | None = None) -> PaperTradingAccount:
+        """取(或建)指定用户的模拟盘账户; user_id=None 时归属 owner(调度/系统路径)。"""
+        if user_id is None:
+            user_id = self._owner_user_id(db)
+        query = db.query(PaperTradingAccount)
+        if user_id is None:
+            query = query.filter(PaperTradingAccount.user_id.is_(None))
+        else:
+            query = query.filter(PaperTradingAccount.user_id == user_id)
+        account = query.first()
         if not account:
             account = PaperTradingAccount(
+                user_id=user_id,
                 initial_capital=1000000.0,
                 current_capital=1000000.0,
                 peak_capital=1000000.0,
@@ -445,6 +481,7 @@ class PaperTradingEngine:
             holding_days = max(0, (now - opened).days)
 
         trade = PaperTradingTrade(
+            user_id=getattr(pos, "user_id", None),
             stock_symbol=pos.stock_symbol,
             stock_market=pos.stock_market,
             stock_name=pos.stock_name or "",
@@ -493,7 +530,10 @@ class PaperTradingEngine:
         exit_events: list[tuple[PaperTradingPosition, PaperTradingTrade]] = []
         positions = (
             db.query(PaperTradingPosition)
-            .filter(PaperTradingPosition.status == "open")
+            .filter(
+                PaperTradingPosition.status == "open",
+                *_user_scope(PaperTradingPosition, account.user_id),
+            )
             .all()
         )
         if not positions:
@@ -614,15 +654,33 @@ class PaperTradingEngine:
                 account.max_drawdown_pct = round(drawdown, 2)
 
     def _scan_sync(self) -> dict:
-        """同步扫描（在线程中执行）。"""
+        """同步扫描（在线程中执行）。2026-09-08 T6: 遍历所有用户的账户逐一扫描。"""
         db = SessionLocal()
         try:
-            account = self._get_or_create_account(db)
-            if not account.enabled:
-                return {"status": "disabled"}
+            # 需要扫描的账户集合: 已存在的全部账户(每用户一行) + owner 兜底账户
+            accounts = db.query(PaperTradingAccount).all()
+            if not accounts:
+                accounts = [self._get_or_create_account(db)]
 
-            opened, new_keys, entry_events = self._check_entries(db, account)
-            closed, exit_events = self._check_exits(db, account, skip_keys=new_keys)
+            total_opened = 0
+            total_closed = 0
+            entry_events: list[tuple[PaperTradingPosition, StrategySignalRun | None]] = []
+            exit_events: list[tuple[PaperTradingPosition, PaperTradingTrade]] = []
+            scanned_any = False
+            for account in accounts:
+                if not account.enabled:
+                    continue
+                scanned_any = True
+                opened, new_keys, acc_entries = self._check_entries(db, account)
+                closed, acc_exits = self._check_exits(db, account, skip_keys=new_keys)
+                total_opened += opened
+                total_closed += closed
+                entry_events.extend(acc_entries)
+                exit_events.extend(acc_exits)
+
+            if not scanned_any:
+                # 无账户或全部账户被停用
+                return {"status": "disabled"}
 
             # 在 db.close() 前将 ORM 对象序列化为 dict，避免 detached 问题
             serialized_entries = [
@@ -636,8 +694,8 @@ class PaperTradingEngine:
 
             return {
                 "status": "ok",
-                "opened": opened,
-                "closed": closed,
+                "opened": total_opened,
+                "closed": total_closed,
                 "entry_events": serialized_entries,
                 "exit_events": serialized_exits,
             }
@@ -654,16 +712,17 @@ class PaperTradingEngine:
         await self._send_notifications(result)
         return result
 
-    def close_position_manual(self, position_id: int) -> dict:
-        """手动平仓。"""
+    def close_position_manual(self, position_id: int, user_id: str | None = None) -> dict:
+        """手动平仓。user_id 非空时校验持仓归属(2026-09-08 T6 防跨账号平仓)。"""
         db = SessionLocal()
         try:
-            account = self._get_or_create_account(db)
+            account = self._get_or_create_account(db, user_id)
             pos = (
                 db.query(PaperTradingPosition)
                 .filter(
                     PaperTradingPosition.id == position_id,
                     PaperTradingPosition.status == "open",
+                    *_user_scope(PaperTradingPosition, account.user_id),
                 )
                 .first()
             )
@@ -718,21 +777,23 @@ class PaperTradingEngine:
         except Exception:
             logger.exception("[模拟盘] 通知发送失败")
 
-    def reset_account(self) -> dict:
-        """重置模拟盘（清空所有数据）。"""
+    def reset_account(self, user_id: str | None = None) -> dict:
+        """重置模拟盘（清空该用户所有数据; user_id=None 归属 owner）。"""
         db = SessionLocal()
         try:
-            db.query(PaperTradingPosition).delete()
-            db.query(PaperTradingTrade).delete()
-            account = db.query(PaperTradingAccount).first()
-            if account:
-                account.current_capital = account.initial_capital
-                account.total_pnl = 0.0
-                account.total_trades = 0
-                account.winning_trades = 0
-                account.max_drawdown_pct = 0.0
-                account.peak_capital = account.initial_capital
-                account.enabled = True
+            account = self._get_or_create_account(db, user_id)
+            scope = _user_scope(PaperTradingPosition, account.user_id)
+            db.query(PaperTradingPosition).filter(*scope).delete(synchronize_session=False)
+            db.query(PaperTradingTrade).filter(*_user_scope(PaperTradingTrade, account.user_id)).delete(
+                synchronize_session=False
+            )
+            account.current_capital = account.initial_capital
+            account.total_pnl = 0.0
+            account.total_trades = 0
+            account.winning_trades = 0
+            account.max_drawdown_pct = 0.0
+            account.peak_capital = account.initial_capital
+            account.enabled = True
             db.commit()
             return {"ok": True}
         finally:

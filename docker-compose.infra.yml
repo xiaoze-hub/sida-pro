@@ -45,6 +45,23 @@ services:
     networks:
       - panwatch-net
 
+  # T11(2026-09-08 审计): 告警通知出口(接收 deploy/alertmanager.yml 路由到 Hermes 企微桥)
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: panwatch-alertmanager
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    networks:
+      - panwatch-net
+
   loki:
     image: grafana/loki:2.9.4
     container_name: panwatch-loki
@@ -96,6 +113,8 @@ volumes:
     name: panwatch_redis_data
   prometheus_data:
     name: panwatch_prometheus_data
+  alertmanager_data:
+    name: panwatch_alertmanager_data
   loki_data:
     name: panwatch_loki_data
   grafana_data:

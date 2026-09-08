@@ -344,18 +344,29 @@ async def ws_notifications_handler(websocket: WebSocket) -> None:
         {"type":"event", ...payload}  推送一条事件(原样转发 push_notification 的入参 + id)
         {"type":"ping"}               心跳 (客户端无需回复, 任意帧即可)
     """
-    from src.web.api.auth import decode_token  # 延迟 import, 避免循环
+    from src.web.api.auth import decode_token, verify_ws_token_payload  # 延迟 import, 避免循环
 
     # 1) 鉴权 (复用 ws_quotes 模式)
     token, swp_sub = await _extract_ws_token(websocket)
     payload = decode_token(token) if token else None
-    if not payload or not payload.get("sub"):
+    # 2026-09-08 T8: 不止验签, 还对齐 HTTP 层口径(is_active + token_version) —
+    # 禁用账号/改密踢人后, 旧 JWT 在剩余有效期内不得再连 WS 收通知。
+    user_id: str | None = None
+    if payload:
+        from src.web.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            user_id = verify_ws_token_payload(db, payload)
+        finally:
+            db.close()
+    if not user_id:
         try:
             await websocket.close(code=4401, reason="unauthorized")
         except Exception:
             pass
         return
-    user_id = str(payload["sub"])
+    user_id = str(user_id)
 
     if swp_sub:
         await websocket.accept(subprotocol=swp_sub)

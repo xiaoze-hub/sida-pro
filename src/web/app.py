@@ -64,6 +64,7 @@ from src.web.api import (
 from src.web.api import factors
 from src.web.api import notifications
 from src.web.api import health as health_router
+from src.web.api import service_config
 from src.web.api import insights
 from src.web.api import wechat_bind
 from src.web.api import thsdk_snapshot, thsdk_alert as thsdk_alert_router
@@ -334,6 +335,10 @@ app.include_router(
 app.include_router(
     klines.router, prefix="/api/klines", tags=["klines"], dependencies=data_read
 )
+# T7(2026-09-08): forecast 容器配置下发通道(服务 token / 用户 JWT), 替代直读主库 sqlite
+app.include_router(
+    service_config.router, prefix="/api/service", tags=["service-config"], dependencies=data_read
+)
 app.include_router(
     insights.router, prefix="/api/insights", tags=["insights"], dependencies=protected
 )
@@ -501,12 +506,6 @@ app.include_router(
     factors.router,
     prefix="/api/factors",
     tags=["factors"],
-    dependencies=protected,
-)
-app.include_router(
-    health_router.router,
-    prefix="/api/health",
-    tags=["health"],
     dependencies=protected,
 )
 app.include_router(

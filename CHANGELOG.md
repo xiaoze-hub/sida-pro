@@ -14,6 +14,109 @@
 - 认证说明: svc口(quotes/klines)服务token可进, 用户JWT同样可进(data_read双轨); user口(decision/trust/accuracy/darkflow)需用户JWT(`/api/auth/login`拿, 字段是`data.token`)。
 - [branch feat/sida-skill-0908, `git show HEAD`]
 
+### fix-test_ws_auth_guard全量suite下因asyncio.get_event_loop无运行loop报错→改同步get_nowait
+- `tests/test_ws_auth_guard.py` — `_broadcast` 用 put_nowait 塞帧, 测试同步 `get_nowait()` 取即可; 原 `asyncio.get_event_loop()` 在全量 suite 中(主线程无运行 loop, 被其他用例关闭)抛 RuntimeError。单跑过、合跑挂的典型 flaky, 回归 `tests/test_ws_auth_guard.py` 单文件 + P1 全量 suite 1746 passed 双验证。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-告警闭环(无Alertmanager五条规则无出口)+备份脚本适配compose拓扑(docker exec)+失败告警
+- 新增 `deploy/alertmanager.yml` — 路由到 Hermes 企微桥(docker0 网关, 与 forecast 企微推送同通道); critical 级 1h 重复, 常规 4h。
+- `deploy/prometheus.yml` — 补 `alerting.alertmanagers: [alertmanager:9093]`("告警从没响过"的后一半根因: 指标名修对但根本没有接收端)。
+- `deploy/loki-config.yml` — ruler 的 `alertmanager_url` 由 `localhost:9093`(指向不存在服务)改 `alertmanager:9093`。
+- `docker-compose.yml` + `docker-compose.infra.yml` — 新增 alertmanager 服务(prom/alertmanager v0.27, 127.0.0.1:9093, 配置/数据卷挂载)。
+- `scripts/backup_pg.sh` — ①默认改 `docker exec panwatch-postgres pg_dump`(原 PGHOST=127.0.0.1 但 compose PG 无端口映射, cron 必失败且无人知晓); 显式 TCP 降为兜底模式; ②备份失败(脚本异常/dump 为空/非 PGDMP)经 Hermes webhook 告警——静默的备份等于没有备份; ③恢复演练步骤更新为 docker exec 形态。
+- 验证: 五份 YAML `yaml.safe_load` 全过; bash 语法/实弹告警待小主机部署实测(本地无 bash/docker)。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-compose安全加固(弱默认密码强制化/infra端口仅本机/Redis加密码/非root/内存与日志上限/规则挂载/主卷只读)
+- `docker-compose.yml` — ① PG 密码 `${POSTGRES_PASSWORD:?}` 强制(两处; 原 `:-sida_dev_only` 弱默认静默兜底); ② Redis 加 `--requirepass ${REDIS_PASSWORD:?}` + healthcheck 带密码 + 主服务 REDIS_URL 带密码(原无密码, 主机任意进程可直读全部缓存); ③ Prometheus/Loki/Grafana 端口绑 127.0.0.1(原 0.0.0.0 且无鉴权, 与 infra 编排对齐); ④ prometheus 补挂 `prometheus-rules.yml`(原缺失, --profile infra 启动即崩); ⑤ 全部 8 服务加 mem_limit(主 1.5g/forecast 4g/PG 1g/redis 320m/infra 各 192-512m)+ json-file 日志轮转(max-size 20-50m × 3, 上次 / 分区打满根因之一); ⑥ infra 容器补 TZ; ⑦ forecast 对主数据卷改 :ro(原 root 容器可写主卷)。
+- `Dockerfile.forecast` — 非 root(uid 10001 app, 对齐主 Dockerfile)+ 补装 tzdata(已设 TZ 但 slim 无时区数据, zoneinfo 实际失效)。
+- `Dockerfile.kronos` — 非 root。
+- `.env.example` — 新增 POSTGRES_PASSWORD / REDIS_PASSWORD 必填说明。
+- 验证: compose YAML 解析 OK; 脚本断言 8 服务全有 mem_limit+logging、弱默认清除、端口绑定、规则挂载、只读卷 —— ALL OK。docker build/实机拉起待小主机下次部署实测。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-forecast配置通道PG下静默失效(LLM/裁判绑定/鉴权三线断裂)→改走HTTP服务token下发
+- 新增 `src/web/api/service_config.py` — `GET /api/service/forecast-config`(挂 data_read 组, 服务 token/用户 JWT): 一次性下发 ①app_settings.forecast_llm_* ②ai_scene_bindings 的 referee 绑定 + ai_models/ai_services 连接信息。app.py 挂载 + import。
+- `forecast_lib/forecast_sentiment.py` — ①删除模块级重复两遍的 `PANWATCH_URL=_detect_panwatch_url()` 死代码(探测逻辑原跑两次); ②新增 `_fetch_llm_config_via_api()` 走 HTTP 优先, sqlite 直读降为遗留兜底; ③兜底硬编码 agnes 时显式打警告(原静默回落, 用户配置被无视无感知)。
+- `forecast_lib/ai_referee.py` — `resolve_referee_model_cfg()` 优先级插入 API 通道(PANWATCH_DB 或 PANWATCH_SERVICE_TOKEN 存在时启用), DB 直读降为遗留; 失败打 warning 不静默。
+- `forecast_lib/panwatch_client.py` — ①`request_json` 支持 `X-Service-Token` 头(compose 注入 PANWATCH_SERVICE_TOKEN=SIDA_SERVICE_TOKEN 即通, 不再依赖 jwt_secret 自签 JWT —— PG 下 forecast 读不到主库, 旧自签通道必断); ②`_read_auth_settings` 对"环境变量指了但文件不存在"打 warning(原静默跳过)。
+- `docker-compose.yml` — forecast 服务注入 `PANWATCH_SERVICE_TOKEN=${SIDA_SERVICE_TOKEN:-}`; PANWATCH_DB 注释标注为遗留兜底。
+- `.env.example` — 新增 SIDA_SERVICE_TOKEN 说明项。
+- 新增 `tests/test_forecast_config_channel.py` — 3 用例: llm 下发/referee 绑定下发(含连接信息)/路由挂载于 data_read 组。
+- 验证: 3 passed; forecast_lib 三文件 ast 语法 OK; compose YAML 解析 OK。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-WS鉴权只验签不验状态(禁用/踢人后旧token仍可连)+行情广播跨用户泄露关注集合
+- `src/web/api/auth.py` — 新增 `verify_ws_token_payload(db, payload)`: WS 握手专用, 对齐 HTTP 层口径(校验 `is_active` + `token_version`, 畸形 ver 显式拒); 通过返回 user_id。原两处 WS(quote_stream/ws_hub)只 `decode_token`, 禁用账号/改密踢人后旧 JWT 在剩余有效期(默认 12h)内仍可连 WS 收通知/行情。
+- `src/web/api/quote_stream.py` — ① 握手改走 `verify_ws_token_payload`; ② 订阅绑定 user_id(`subscribe(user_id)`), 聚合器刷新 per-user 关注集合缓存(`_user_symbols_cache`, ""=历史遗留共享账户人人可见), `_broadcast` 按订阅者 symbol 集过滤后再 pack(定向帧 envelope.user_id=本人, 与 `?last_seq=` 重放过滤口径一致); 快照同样过滤; 无关注标的的用户不收帧(不再从推送内容推断他人持仓/自选)。
+- `src/web/notifications/ws_hub.py` — 通知 WS 握手同样补 is_active/token_version 校验。
+- 新增 `tests/test_ws_auth_guard.py` — 6 用例: 正常通过/禁用拒/旧版本拒/畸形 ver 拒/广播按用户过滤(A 收不到仅属于 B 的标的)/无关注用户不收帧。
+- 验证: ws_guard + p2_realtime 共 12 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-health/metrics信息泄露(REDIS_URL原文/全量指标匿名可读)+删除/api/health/health双挂载
+- `src/web/api/health.py` — ① redis 组件回显完整 `REDIS_URL`(可能带密码)改为 `_mask_url` 只留 scheme://host:port; ② `/api/metrics` 收紧为仅内网/回环来源或持 `SIDA_SERVICE_TOKEN` 者可读, 外部匿名 403(Prometheus 同 compose 网络来源为容器内网 IP, 抓取配置无需改)。
+- `src/web/cache/biz_cache.py` — `stats()`(喂 /health 的 biz_cache 组件)同样脱敏; 新增 `_mask_url` 助手。
+- `src/web/app.py` — 删除 health router 的重复挂载(原 app.py 两处挂载产生 `/api/health/health` 冗余路径, 且与 `/api/health` 鉴权语义相反); 现单挂载 `/api` 前缀 → `/api/health` + `/api/metrics`。Docker healthcheck 打的 `/api/health` 不受影响(匿名可用)。
+- 新增 `tests/test_health_metrics_guard.py` — 5 用例: 内网/回环放行、公网拒绝、连接串脱敏、metrics 匿名 403、内网 200。
+- `tests/test_selfcheck.py` — 路由挂载断言更新为单挂载拓扑(并断言冗余路径不得回潮)。
+- 验证: health_guard + p4_alerts + selfcheck 共 27 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-InteractiveKline主力意图金额硬除1e4(≥1亿显示"12345万")→toAmount万/亿口径
+- `frontend/packages/biz-ui/src/components/InteractiveKline.tsx` — 主力净额/超大/大单金额由 `(x / 1e4).toFixed(0)万` 改 `toAmount()`(含 isFinite 守卫, ≥1亿自动切亿), 与全站金额口径收敛。业务硬约束: 金额=元。
+- 验证: `pnpm typecheck`(tsc -b) 0 错; `node scripts/check_ui_rules.mjs` → UI-RULES OK。
+- 未做: WencaiPanel/MinuteLwcChart/MarketMainlineCard/MainFlowCompareCard/BoardDetail/stock-insight-modal 另有 6 处改名手抄 fmt(精度互分叉), 属执行方案 T18/Q5 lint+门禁缝隙范围, 本轮不动。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-模拟盘跨账号越权(三表补user_id/引擎多账户扫描/API全链路归属过滤/全局动作收敛owner)
+- `src/web/migrations.py` — 新增 `_m135_paper_trading_user_id`(v135): paper_trading_account/positions/trades 三表补 `user_id TEXT` + 索引, 存量行回填最早 owner(与 _m122 同口径, 幂等)。修复: 三表原设计即"单例", 任一登录用户可查看并操作其他账号的模拟盘。
+- `src/web/models.py` — 三个模拟盘模型补 `user_id = Column(String(36), nullable=True, index=True)`。
+- `src/core/paper_trading_engine.py` — 引擎多账户化: `_get_or_create_account(db, user_id)`(None=owner 调度路径); `_scan_sync` 遍历全部账户逐一建仓/平仓(各扣各的资金); `_check_entries/_check_exits/_update_account_metrics/market_realized_open` 全部按 `account.user_id` 过滤(`_user_scope` 助手, NULL 行=冷启动遗留); 建仓/平仓落 trade 均带归属; `close_position_manual(position_id, user_id)` 跨账号平仓拒绝; `reset_account(user_id)` 只清本人数据。
+- `src/web/api/paper_trading.py` — 数据端点(account/positions/trades/metrics/diagnostics/toggle/reset/close/settings)全部 `Depends(get_current_user)` + 归属过滤; 系统级动作(scan/notify-settings 写/notify-test/premarket-plan/daily-summary)收敛 `require_owner`(通知配置是全局 AppSettings 非按用户隔离)。
+- `src/core/portfolio_diagnostics.py` — `diagnose_paper_portfolio(user_id)` 按用户过滤。
+- `src/web/api/chat.py` — 删除 `hasattr(PaperTradingPosition, "user_id")` 防御式判断(列已真实存在)。
+- 新增 `tests/test_paper_trading_isolation.py` — 5 用例: 账户按用户隔离/调度路径归 owner/跨账号平仓拒绝+本人平仓落账/reset 只清本人/组合诊断按用户过滤。fixture 同时替换 database/engine/diagnostics 三处 SessionLocal 引用(引擎是 `from x import` 持独立引用, 只 patch 源模块会误写真实库——首跑已误建 2 行假账户, 已清理)。
+- 验证: pytest isolation+notify 23 passed; `scripts/check_migrations.py` ✅ 35 个迁移(v101-v135) 列与模型一致; `from src.web.app import app` OK。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-envelope每帧WS推送新建Redis连接→单例复用(连接风暴)+自愈
+- `src/web/realtime/envelope.py` — `_next_seq()` 原在函数体内每次 `redis_sync.from_url()` 新建连接，每帧 WS 推送/每条通知都建连，高频推送下连接风暴。改模块级单例 `_get_seq_client()`（对齐 ws_hub.py 既有写法），建连后 ping 校验；连接异常置空标记、下次取 seq 重建（简单自愈）；`reset_for_tests()` 同步清单例。
+- `tests/test_p2_realtime.py` — 新增 `test_seq_client_reused`：mock redis.from_url 计次，三次取 seq 断言 INCR 单调且建连仅 1 次。
+- 验证：`pytest tests/test_p2_realtime.py` 6 passed（原 5 用例 + 新 1 用例）。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-AgentScheduler防双跑(max_instances=1/coalesce/misfire)——LLM Agent并发双跑重复通知
+- `src/core/scheduler.py` — `add_job` 补 `max_instances=1, coalesce=True, misfire_grace_time=300`：LLM Agent 单次执行数分钟，interval 任务上一轮没跑完下一轮就启动 → 同一 Agent 并发双跑（重复通知/token 翻倍/record_agent_run 竞态）。对齐 server.py 后注册的 4 个 job 与 report/kline_backfill scheduler 的既有口径（此前唯独最核心的 Agent 调度没有防护）。
+- 新增 `tests/test_scheduler_guard.py` — 1 用例：mock add_job 捕获参数，断言注册 job 必带三参数。
+- 验证：`pytest tests/test_scheduler_guard.py tests/test_p2_realtime.py` 7 passed。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-ACR生产流水线pytest门禁被管道吞退出码(全红照样绿)+补PR门禁+新增forecast镜像CI
+- `.github/workflows/build-push-acr.yml` — gates 的 pytest 改 `set -o pipefail` + 去掉 `| tail -3` 与 `pip install || true`（原写法管道退出码取 tail，生产 ACR 镜像构建零测试门禁，与注释宣称相反）；新增 `pull_request: [main]` 触发，build job 加 `if: github.event_name != 'pull_request'`（PR 只跑门禁不推镜像）。
+- `.github/workflows/build-and-push-image.yml` — 同步补 PR 门禁 + build job 事件守卫（GHCR 流水线 test job 本身写法正确，只缺 PR 触发）。
+- 新增 `.github/workflows/build-push-acr-forecast.yml` — forecast 镜像此前完全没有 CI（生产拉的 `xzxwz-forecast:latest` 只能手工构建）：tag v* 构建 `Dockerfile.forecast` 推 ACR + PR 触发路径过滤门禁。
+- 未做：`release.yml`（Docker Hub 通道）为单 job 混合测试+构建+推送，拆分属执行方案 T15 流水线收敛，本轮不动。
+- 验证：三份 workflow YAML `yaml.safe_load` 解析通过；门禁红灯/绿灯实弹验证待 push 分支后由 GitHub Actions 执行。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-deploy_panwatch.sh热补丁部署docker run被续行内注释截断(WEB_HOST/memory/restart全丢)+防御校验
+- `deploy/deploy_panwatch.sh` — bash 先按行尾 `\` 拼逻辑行再解析注释，`docker run` 续行中间夹的两行 `#` 注释吞掉后续参数：实际只拿到 `-e TZ` 之前的部分，`WEB_HOST=0.0.0.0`、`--memory=1g`、`--restart=unless-stopped`、镜像名全部丢失 → `--full` 热补丁重建必然失败，且丢的正是 v0.4.47 修外部 502 的关键参数。注释移出命令块并在原地写明 bash 语义陷阱。
+- 新增防御校验：`docker run` 后 `docker inspect` 核对 WEB_HOST 环境变量（缺失则删容器硬失败）、Memory/RestartPolicy（缺失打 warning），参数丢失当场暴露而不是等线上 502。
+- 验证：续行+注释模式全文件扫描无残留；Windows 本地无 bash/WSL，语法与 docker inspect 输出解析待小主机下次部署实测（inspect 字段取法与脚本内既有 `--format` 用法同源）。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-前端错误上报端点双前缀(API_BASE已含/api再拼/api致404全链路失效)+门禁新增R5禁双前缀
+- `frontend/src/lib/error-report.ts` — ENDPOINT 由 `${API_BASE}/api/logs/frontend` 改 `${API_BASE}/logs/frontend`：API_BASE 已含 `/api`，原路径实际 POST `/api/api/logs/frontend` 404 且被 `.catch(()=>{})` 吞掉，9-08 建的系统日志闭环前端上报(window.onerror/unhandledrejection/ErrorBoundary)全部静默丢失。顺手把吞错改 `console.debug` 留痕。
+- `scripts/check_ui_rules.mjs` — 新增 R5：源码禁出现 `'/api/api/` 双前缀字面量，防同类死链回潮。
+- 验证：`node scripts/check_ui_rules.mjs` → UI-RULES OK；`pnpm typecheck`(tsc -b) 0 错。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
+### fix-UI门禁脚本Windows路径兼容(URL.pathname中文编码/盘符双写/反斜杠致R4豁免失效)
+- `scripts/check_ui_rules.mjs` — ROOT 改 `fileURLToPath(new URL(...))`（原 `.pathname` 在 Windows + 中文路径下产生 `E:\E:\user\%E6%96%87...` 直接 ENOENT）；R4 stock-colors 豁免匹配前路径分隔符归一化（Windows `join` 反斜杠致 `/lib\/stock-colors\.ts$/` 永不命中，误报 7 条）。
+- 验证：Windows 本地 `node scripts/check_ui_rules.mjs` → UI-RULES OK。
+- [branch fix/audit-p0-0908, `git show HEAD~1`]
+
 ### fix-PG唯一生产口径(容器无连接串fail-fast/SQLite仅本地/compose默认接PG/布尔迁移按方言)
 - `src/web/database.py` — DOCKER=1 无 SIDA_DB_URL 直接 RuntimeError(历史教训:env丢失静默落容器内sqlite→database is locked+重建丢数据);本地(DOCKER未设)默认仍是 data/panwatch.db。
 - `src/web/database.py::_migrate_remove_stock_enabled` — `enabled` 布尔字面量按方言(FALSE/TRUE vs 0/1,PG上`=0`直接operator崩);PRAGMA重建分支仅SQLite可进(PG DROP COLUMN必成功,失败直接raise)。

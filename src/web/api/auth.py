@@ -370,6 +370,25 @@ async def require_owner(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def verify_ws_token_payload(db: Session, payload: dict | None) -> str | None:
+    """WS 握手专用校验(2026-09-08 T8): decode 之外再对齐 HTTP 层口径。
+
+    校验 is_active + token_version(禁用账号/改密踢人后, 旧 JWT 在剩余有效期
+    内不得再连 WS 收通知/行情)。校验通过返回 user_id, 否则 None。
+    """
+    if not payload or not payload.get("sub"):
+        return None
+    user = get_user_by_id(db, str(payload["sub"]))
+    if not user or not user.is_active:
+        return None
+    try:
+        if user.token_version != int(payload.get("ver", 0)):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return user.id
+
+
 # ── 服务 token(2026-09-07 P1 成熟化: 用户 JWT / 服务 token 双轨) ──────
 # 背景: klines/quotes 等纯读行情口挂了用户 JWT, 监控/回填等服务方拿 dashboard
 # token 调直接 401。写链路一律保持 get_current_user, 服务 token 永远走不进

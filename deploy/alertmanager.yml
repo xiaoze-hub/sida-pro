@@ -1,0 +1,32 @@
+# Alertmanager 配置 (2026-09-08 T11 审计修复)
+#
+# 背景: prometheus-rules.yml 五条告警规则自上线以来一条没响过, 指标名错(已修)
+# 只是前一半根因; 后一半是根本没有 Alertmanager —— 规则触发后进 Prometheus
+# 内存即止, 无任何通知出口。本文件补上接收端。
+#
+# 通知渠道: 复用现有 Hermes 企微桥(forecast_server.py 企微推送同通道)。
+# 部署在主机上跑 Hermes 桥时, 容器内经 docker0 网关 172.17.0.1 可达;
+# 桥接地址变化时用 .env 的 ALERT_WEBHOOK_URL 覆盖。
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: hermes
+  group_by: ['alertname', 'service']
+  group_wait: 30s        # 同组告警等 30s 聚合, 防抖动刷屏
+  group_interval: 5m
+  repeat_interval: 4h    # 未恢复的告警每 4h 重复提醒
+  routes:
+    # critical(如 PG 宕机)单独一条, 更快重复
+    - matchers:
+        - severity = "critical"
+      receiver: hermes
+      repeat_interval: 1h
+
+receivers:
+  - name: hermes
+    webhook_configs:
+      # Alertmanager 不做 env 替换 —— 桥接地址变化时直接改这里(或用
+      # compose 卷挂载覆盖)。默认与 forecast_server.py 企微推送同通道(docker0 网关)。
+      - url: 'http://172.17.0.1:8644/webhook/alertmanager'
+        send_resolved: true

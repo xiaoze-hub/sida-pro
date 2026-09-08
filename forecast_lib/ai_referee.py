@@ -138,13 +138,36 @@ def _db_model_by_id(model_id: int) -> dict | None:
 def resolve_referee_model_cfg() -> dict:
     """解析 AI 裁判模型配置(2026-08-13 统一 LLM 配置中心)。
 
-    优先级: ai_scene_bindings 的 referee 场景绑定 > 旧 forecast_llm_* 配置
-    (设置页 app_settings / ~/.panwatch_forecast.env) > 默认 agnes。
+    优先级: 2026-09-08 T7 起先走主服务 API(/api/service/forecast-config, 服务
+    token 鉴权) > ai_scene_bindings 直读 DB(遗留同机 sqlite) > 旧 forecast_llm_*
+    配置 > 默认 agnes。
     返回 dict; 场景绑定命中时带 ai_model_id(建会话时传给对话助手指定模型);
     旧配置/默认 agnes 无 ai_model_id(对话助手按自身 chat 场景/默认模型走)。
     任何失败都不抛异常(调用方按无指定模型处理)。
     """
-    # 1) referee 场景绑定(只读直查 PanWatch DB)
+    # 0) 主服务 API(PG/Compose 部署唯一可用通道; sqlite 直读在 PG 下文件不存在)
+    try:
+        import os as _os
+        if _os.getenv("PANWATCH_DB", "") or _os.getenv("PANWATCH_SERVICE_TOKEN", ""):
+            from forecast_lib import panwatch_client
+
+            data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
+            if isinstance(data, dict):
+                payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                ref = (payload or {}).get("referee")
+                if ref and ref.get("base_url"):
+                    logger.info("AI 裁判模型: 主服务 API 场景绑定 (%s)", ref.get("model"))
+                    return {
+                        "ai_model_id": ref.get("ai_model_id"),
+                        "model": ref.get("model") or "",
+                        "name": ref.get("name") or "",
+                        "base_url": ref.get("base_url") or "",
+                        "api_key": ref.get("api_key") or "",
+                    }
+    except Exception as exc:
+        logger.warning("经 API 读裁判场景绑定失败(回落 DB 直读/旧配置): %s", exc)
+
+    # 1) referee 场景绑定(遗留: 只读直查 PanWatch sqlite)
     try:
         mid = _db_scene_binding_model_id()
         if mid:

@@ -44,6 +44,43 @@ def test_replay_filters(monkeypatch):
     assert env.replay_since(f3["seq"]) == []
 
 
+def test_seq_client_reused(monkeypatch):
+    """seq 客户端单例复用: 连续取 seq 只 from_url 建连一次(修每帧新建连接的连接风暴)。"""
+    builds = {"n": 0}   # from_url 建连次数
+    seqs = {"n": 0}     # INCR 次数
+
+    class _FakeClient:
+        def incr(self, key):
+            seqs["n"] += 1
+            return seqs["n"]
+
+        def ping(self):
+            return True
+
+    import sys, types
+    fake_redis = types.ModuleType("redis")
+
+    def _fake_from_url(*a, **kw):
+        builds["n"] += 1
+        return _FakeClient()
+
+    fake_redis.from_url = _fake_from_url
+
+    monkeypatch.setitem(sys.modules, "redis", fake_redis)
+    monkeypatch.delenv("REDIS_DISABLED", raising=False)
+    monkeypatch.setattr("src.web.cache.redis_client.REDIS_URL", "redis://fake", raising=False)
+    env.reset_for_tests()
+    try:
+        s1 = env._next_seq()
+        s2 = env._next_seq()
+        s3 = env._next_seq()
+        assert s2 == s1 + 1 and s3 == s2 + 1  # INCR 语义: seq 单调
+        assert seqs["n"] == 3
+        assert builds["n"] == 1  # 三次取 seq 只建连一次
+    finally:
+        env.reset_for_tests()
+
+
 def _pg_engine(dates):
     eng = create_engine(
         "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool

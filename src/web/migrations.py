@@ -2459,6 +2459,42 @@ CREATE TABLE IF NOT EXISTS demon_factors (
     )
 
 
+def _m135_paper_trading_user_id(conn: Connection) -> None:
+    """T6(2026-09-08 审计): 模拟盘三表补 user_id —— 修复跨账号越权。
+
+    - paper_trading_account / paper_trading_positions / paper_trading_trades
+      原设计即"单例"(无 user_id), 任一登录用户可查看并操作其他账号的模拟盘。
+    - 列类型: TEXT(String(36) UUID), 索引, nullable=True(冷启动无 owner 时保留 NULL)
+    - 存量行回填到最早的 owner 用户(与 _m122 同口径)
+    - 幂等可重跑
+    """
+    owner_id = _resolve_earliest_owner_user_id(conn)
+    targets = [
+        ("paper_trading_account", "ix_paper_account_user"),
+        ("paper_trading_positions", "ix_paper_pos_user"),
+        ("paper_trading_trades", "ix_paper_trade_user"),
+    ]
+    for table, idx_name in targets:
+        if not _has_table(conn, table):
+            continue
+        _add_column_if_missing(
+            conn,
+            table,
+            "user_id",
+            f"ALTER TABLE {table} ADD COLUMN user_id TEXT",
+        )
+        _create_index_if_missing(
+            conn,
+            idx_name,
+            f"CREATE INDEX {idx_name} ON {table}(user_id)",
+        )
+        if owner_id:
+            conn.execute(
+                text(f"UPDATE {table} SET user_id = :uid WHERE user_id IS NULL OR TRIM(user_id) = ''"),
+                {"uid": owner_id},
+            )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2502,6 +2538,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(132, "limit_up_events_table", _m132_limit_up_events),
     Migration(133, "signal_snapshots_table", _m133_signal_snapshots),
     Migration(134, "demon_factors_table", _m134_demon_factors),
+    Migration(135, "paper_trading_user_id", _m135_paper_trading_user_id),
 )
 
 

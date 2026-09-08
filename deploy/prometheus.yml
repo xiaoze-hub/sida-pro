@@ -11,6 +11,13 @@ global:
 rule_files:
   - "/etc/prometheus/prometheus-rules.yml"
 
+# T11(2026-09-08 审计): 补 Alertmanager 对接 —— 原来五条规则触发后进内存即止,
+# 没有任何通知出口("上线以来一条没响过"的后一半根因)。
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 scrape_configs:
   # 主后端 SIDA
   - job_name: 'sida-panwatch'

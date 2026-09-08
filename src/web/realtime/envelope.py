@@ -22,21 +22,47 @@ _local_seq = 0
 _ring: deque = deque(maxlen=_RING_MAX)
 
 
+_seq_client: Any = None
+_seq_client_failed = False
+
+
+def _get_seq_client() -> Any:
+    """Redis 客户端单例(2026-09-08 审计修复: 原实现在 _next_seq 内每次 from_url 新建连接,
+    每帧 WS 推送都建连, 高频推送下连接风暴; 对齐 ws_hub.py 的单例缓存写法)。"""
+    global _seq_client, _seq_client_failed
+    if _seq_client is not None:
+        return _seq_client
+    if _seq_client_failed:
+        raise RuntimeError("redis_unavailable")
+    import os
+
+    if os.getenv("REDIS_DISABLED", "").strip().lower() in ("1", "true", "yes", "on"):
+        raise RuntimeError("redis_disabled")
+    import redis as redis_sync  # type: ignore
+    from src.web.cache.redis_client import REDIS_URL
+
+    client = redis_sync.from_url(REDIS_URL, encoding="utf-8", decode_responses=True,
+                                 socket_connect_timeout=1.0, socket_timeout=1.0)
+    client.ping()
+    _seq_client = client
+    return _seq_client
+
+
+def _drop_seq_client() -> None:
+    """连接异常时置空, 下次取 seq 重建(简单自愈)。"""
+    global _seq_client, _seq_client_failed
+    _seq_client = None
+    _seq_client_failed = True
+
+
 def _next_seq() -> int:
     """全局单调 seq(Redis INCR, 失败退进程内)。"""
     global _local_seq
     try:
-        import os
-
-        if os.getenv("REDIS_DISABLED", "").strip().lower() in ("1", "true", "yes", "on"):
-            raise RuntimeError("redis_disabled")
-        import redis as redis_sync  # type: ignore
-        from src.web.cache.redis_client import REDIS_URL
-
-        client = redis_sync.from_url(REDIS_URL, encoding="utf-8", decode_responses=True,
-                                     socket_connect_timeout=1.0, socket_timeout=1.0)
+        client = _get_seq_client()
         return int(client.incr(_SEQ_KEY))
     except Exception:
+        _drop_seq_client()
         with _lock:
             _local_seq += 1
             return _local_seq
@@ -73,11 +99,13 @@ def replay_since(last_seq: int | str | None, user_id: str | None = None) -> list
 
 
 def reset_for_tests() -> None:
-    """测试隔离: 清空 ring 与进程内 seq。"""
-    global _local_seq
+    """测试隔离: 清空 ring、进程内 seq 与 Redis 单例。"""
+    global _local_seq, _seq_client, _seq_client_failed
     with _lock:
         _ring.clear()
         _local_seq = 0
+        _seq_client = None
+        _seq_client_failed = False
 
 
 def ring_depth() -> int:

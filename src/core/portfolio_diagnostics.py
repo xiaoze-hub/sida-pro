@@ -84,15 +84,16 @@ def diagnose_positions(positions: list[dict]) -> dict:
     }
 
 
-def diagnose_paper_portfolio() -> dict:
-    """读模拟盘 open 持仓 → 组合诊断(只读)。"""
+def diagnose_paper_portfolio(user_id: str | None = None) -> dict:
+    """读模拟盘 open 持仓 → 组合诊断(只读)。2026-09-08 T6: user_id 限定归属用户。"""
     db = SessionLocal()
     try:
-        rows = (
-            db.query(PaperTradingPosition)
-            .filter(PaperTradingPosition.status == "open")
-            .all()
-        )
+        query = db.query(PaperTradingPosition).filter(PaperTradingPosition.status == "open")
+        if user_id is None:
+            query = query.filter(PaperTradingPosition.user_id.is_(None))
+        else:
+            query = query.filter(PaperTradingPosition.user_id == user_id)
+        rows = query.all()
         positions: list[dict] = []
         for p in rows:
             price = p.current_price or p.entry_price or 0.0

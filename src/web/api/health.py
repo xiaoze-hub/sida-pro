@@ -13,11 +13,12 @@
 
 import time
 import asyncio
+import hmac
 import logging
 import platform
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 try:
     from prometheus_client import (
         Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST,
@@ -170,11 +171,41 @@ def record_datasource_failure(provider: str, kind: str = "fetch") -> None:
 
 
 @router.get("/metrics")
-async def metrics() -> Response:
-    """Prometheus 抓取端点"""
+async def metrics(request: Request) -> Response:
+    """Prometheus 抓取端点。
+
+    2026-09-08 T9: 该端点泄露路径/状态码/AI 调用/数据源故障等运营细节,
+    收紧为仅容器内网/回环来源或持服务 token 者可读; 外部匿名请求 403。
+    (Prometheus 与本服务同 compose 网络, 抓取来源为内网 IP, 无需改抓取配置。)
+    """
     if not _PROMETHEUS_AVAILABLE:
         return Response(content=b"# prometheus_client not installed\n", media_type="text/plain", status_code=503)
+
+    if not _request_from_internal(request):
+        # 服务 token 兜底(与 auth.py 的 SIDA_SERVICE_TOKEN 双轨同源)
+        supplied = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        try:
+            from src.web.api.auth import get_service_token
+
+            if not (supplied and hmac.compare_digest(supplied, get_service_token())):
+                return Response(content=b"forbidden", media_type="text/plain", status_code=403)
+        except Exception:
+            return Response(content=b"forbidden", media_type="text/plain", status_code=403)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def _request_from_internal(req: Request) -> bool:
+    """来源是回环/私网(容器网络)即视为内部抓取方。"""
+    import ipaddress as _ip
+
+    client = getattr(getattr(req, "client", None), "host", "") or ""
+    if not client:
+        return False
+    try:
+        addr = _ip.ip_address(client)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback
 
 
 @router.get("/health")
@@ -229,7 +260,9 @@ async def health() -> dict[str, Any]:
                 record_component_status("redis", True)  # P4: disabled 是预期降级, 不告警
             elif await redis_client.ping():
                 from src.web.cache.redis_client import REDIS_URL
-                components["redis"] = {"status": "ok", "url": REDIS_URL}
+                from src.web.cache.biz_cache import _mask_url
+                # 2026-09-08 T9: /health 未鉴权, 只回显 host 段, 不回完整连接串(可能带密码)
+                components["redis"] = {"status": "ok", "url": _mask_url(REDIS_URL)}
                 record_component_status("redis", True)  # P4
             else:
                 components["redis"] = {"status": "down", "url": "n/a"}

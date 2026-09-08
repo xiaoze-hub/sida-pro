@@ -12,8 +12,9 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, extname } from 'path'
+import { fileURLToPath } from 'url'
 
-const ROOT = new URL('..', import.meta.url).pathname
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SRC = join(ROOT, 'frontend', 'src')
 const PKG_BIZ = join(ROOT, 'frontend', 'packages', 'biz-ui', 'src')
 
@@ -63,14 +64,16 @@ for (const f of files) {
     }
     // R2: 本地 toAmount 定义(调用点不管)
     if (/^\s*(function\s+toAmount|const\s+toAmount\s*=)/.test(ln)) bad('R2-NO-LOCAL-toAmount', rel(f), n, ln)
-    // R4 (令牌定义文件本身豁免: hex 只许出现在 fallback 默认值里)
+    // R4 (令牌定义文件本身豁免: hex 只许出现在 fallback 默认值里; 路径分隔符归一化, Windows 反斜杠也能命中)
     if (
-      !/lib\/stock-colors\.ts$/.test(f) &&
+      !/lib\/stock-colors\.ts$/.test(f.replace(/\\/g, '/')) &&
       !R4_SKIP_LINE.some((p) => p.test(ln)) &&
       /Kline|GsColors|stock-colors|GsSignal|gs/i.test(f) &&
       /#E53935|#43A047|#ef4444|#22c55e|#EF4444|#22C55E/i.test(ln)
     )
       bad('R4-NO-HARDCODED-GS-COLOR', rel(f), n, ln)
+    // R5: API_BASE 已含 '/api', 字符串再写 '/api/...' 即双前缀死链
+    if (/['"`]\/api\/api\//.test(ln)) bad('R5-NO-DOUBLE-API-PREFIX', rel(f), n, ln)
   })
 }
 

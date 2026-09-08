@@ -66,16 +66,33 @@ def _req_get(url: str, timeout: float = 8):
 PANWATCH_URL = _detect_panwatch_url()
 print(f"[forecast] PanWatch 地址: {PANWATCH_URL}")
 
-PANWATCH_URL = _detect_panwatch_url()
-print(f'[forecast] PanWatch 地址: {PANWATCH_URL}')
 
+
+def _fetch_llm_config_via_api() -> dict | None:
+    """经主服务 HTTP 读 LLM 配置(2026-09-08 T7)。
+
+    PG 部署下 forecast 读不到主库 sqlite 文件, 原 _db_llm_config 三候选路径
+    全部静默失败 → 用户在设置页配的 forecast_llm_* 被无视。现优先走
+    /api/service/forecast-config(服务 token 鉴权)。
+    """
+    try:
+        from forecast_lib import panwatch_client
+
+        data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
+        if isinstance(data, dict):
+            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+            cfg = payload.get("llm") or {}
+            out = {k: v for k, v in cfg.items() if v}
+            return out or None
+    except Exception as exc:
+        print(f"[forecast] 经 API 读 LLM 配置失败: {exc}")
+    return None
 
 
 def _db_llm_config() -> dict | None:
     """从 PanWatch 设置页 DB(app_settings.forecast_llm_*)读 LLM 配置。
 
-    设置页"接口 Key"区块维护,DB 优先于本地 env 文件。Docker
-    Compose 通过 PANWATCH_DB 指向共享数据卷，配置保存后下次调用即生效。
+    仅剩本地同机 sqlite 部署在用(遗留兼容); PG/Compose 部署走 _fetch_llm_config_via_api。
     返回 {base_url, model, api_key} 或 None(未配置/不可读)。
     """
     import os as _os
@@ -119,19 +136,28 @@ def _db_llm_config() -> dict | None:
 def _load_llm_config() -> dict:
     """加载 LLM 情绪打分配置。
 
-    优先级: 设置页 DB(app_settings.forecast_llm_*) > 本地配置(~/.panwatch_forecast.env)
-    > PanWatch 默认 AI 模型(动态) > 硬编码兜底。
+    优先级: 设置页 API(经服务 token, 2026-09-08 T7) > 设置页 DB(遗留 sqlite 直读)
+    > 本地配置(~/.panwatch_forecast.env) > PanWatch 默认 AI 模型(动态) > 硬编码兜底。
     """
     import os as _os
     import json as _json
 
     cfg = {"base_url": "https://api.agnes-ai.cn/v1", "model": "agnes-2.5-flash", "api_key": ""}
 
-    # 0. 设置页 DB 优先(接口 Key 区块维护,免重启)
+    # 0. 设置页 API 优先(接口 Key 区块维护,免重启)
+    api_cfg = _fetch_llm_config_via_api()
+    if api_cfg:
+        cfg.update({k: v for k, v in api_cfg.items() if v})
+        return cfg
+
+    # 0.5 遗留: 同机 sqlite 直读(主库已切 PG 的部署此路必空, 保留兜底但打告警)
     db_cfg = _db_llm_config()
     if db_cfg:
         cfg.update({k: v for k, v in db_cfg.items() if v})
         return cfg
+    if _os.getenv("PANWATCH_DB", ""):
+        print("[forecast] 警告: PANWATCH_DB 指向的库不可读且 API 通道失败, "
+              "回落硬编码兜底模型(agnes) —— 设置页的 forecast_llm_* 配置未生效!")
 
     # 1. 本地配置覆盖
     env_path = _os.path.expanduser("~/.panwatch_forecast.env")

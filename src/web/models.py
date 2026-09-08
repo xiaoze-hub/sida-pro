@@ -1143,11 +1143,12 @@ class PriceAlertHit(Base):
 
 
 class PaperTradingAccount(Base):
-    """模拟盘账户（单例）"""
+    """模拟盘账户(2026-09-08 T6: 每用户一行, user_id 归属; 迁移 _m135 存量行归 owner)"""
 
     __tablename__ = "paper_trading_account"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True, index=True)  # 归属用户(UUID); NULL=迁移前的冷启动遗留
     initial_capital = Column(Float, nullable=False, default=1000000.0)
     current_capital = Column(Float, nullable=False, default=1000000.0)
     total_pnl = Column(Float, nullable=False, default=0.0)
@@ -1173,6 +1174,7 @@ class PaperTradingPosition(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True, index=True)  # 归属用户(UUID), 与 account.user_id 同值
     stock_symbol = Column(String, nullable=False)
     stock_market = Column(String, nullable=False, default="CN")
     stock_name = Column(String, default="")
@@ -1203,6 +1205,7 @@ class PaperTradingTrade(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True, index=True)  # 归属用户(UUID), 与 account.user_id 同值
     stock_symbol = Column(String, nullable=False)
     stock_market = Column(String, nullable=False, default="CN")
     stock_name = Column(String, default="")
