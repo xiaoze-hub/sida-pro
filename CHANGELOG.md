@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-v0.5.20生产部署(docker cp覆盖层, 冒烟9/9)
+- **生产部署**: tag v0.5.20(752b35b merge) 经 docker cp 覆盖层部署到 panwatch 容器(同 v0.5.19 既定路径)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0520_20260909_072719.tar.gz`, 排除 data/downloads/node_modules/__pycache__) → `git archive v0.5.20` → 容器 `/app` 解包 → restart → healthy → 容器内签发 owner token 跑 scripts/smoke_test.py **9/9 通过**, /api/health 报 version=v0.5.20, PG/Redis ok。static/data/downloads 均不在 git 跟踪内, 覆盖层不触碰生产数据与前端构建产物。
+- **发版冒烟两处坑(已记 tdai)**: ① 容器内签 token 必须带 `PYTHONPATH=/app`(脚本放 /tmp 跑时 src 不可导入, v0.5.19 同坑); ② 冒烟用 token 的用户角色是 `owner` 不是 `admin`(M2 多账号口径, filter role=='admin' 查不到会静默拿到空 token → 全 401)。
+- 本波 0 个 schema 迁移(纯代码+CI/测试/门禁面), 启动日志无报错。
+- [tag v0.5.20]
+
 ### update-发版 v0.5.20(风险整改第2波合入main)
 - 本次发版内容: 多租户数据访问统一收口(W2.1/C3: scoped()/owned_or_404()/writable() 三助手+20处越权面修复+AST静态门禁进4个CI工作流) / 测试与真实 DATA_DIR 彻底隔离(W2.2/E4: conftest 顶层重定向+Base重载防御) / 联网测试打标 network+CI 主门禁 `-m "not network"`+夜间网络工作流(W2.3/E2) / 前端四道门禁(W2.4/E3: vitest 17例+eslint 铁律+UI规则 R6棘轮/R7禁null→0+Dockerfile 恢复 tsc) / 覆盖率棘轮+requirements-lock 171包精确锁定+dependabot 三生态+pnpm/pip 双审计入档(W2.5/E5+E6) / 统一交易日历接线9处+缺失年份显式报错 TradingCalendarError(W2.6/B6)。
 - 部署注意: 本波 0 个 schema 迁移(纯代码+CI/测试/门禁面); 交易日历静态表覆盖 2025-2027, **2028 年初必须补 2028 表**(否则交易日判定显式报错, 不再静默); requirements-lock.txt/dependabot/coverage 基线为仓库侧新文件, 对运行中容器无影响(容器仍用 v0.5.14 底座已装依赖)。
