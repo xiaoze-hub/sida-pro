@@ -33,67 +33,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ──────────── Task 1: 大盘资金快照表(双方言兼容, v0.4.7) ────────────
+# ──────────── Task 1: 大盘资金快照(双方言兼容, v0.4.7) ────────────
 # market-capital-flow 接口成功返回后, 异步写一条快照入 market_flow_snapshots;
 # 同一进程 30s 节流(前端高频轮询不会撑爆表), 失败静默不阻断主流程。
+# 建表由 B 层版本化迁移 src/web/migrations.py _m138 负责(W1.5/A5 收编)。
 _SNAPSHOT_INTERVAL_S = 30.0
 _snapshot_lock = threading.Lock()
 _snapshot_last_write_ts: float = 0.0
-_snapshot_table_ready = False
-
-
-def _ensure_snapshot_table() -> None:
-    """幂等建表: 模块加载时跑一次, CREATE TABLE IF NOT EXISTS。
-
-    双方言支持(SQLite / PostgreSQL):
-      - SQLite: ts DATETIME DEFAULT CURRENT_TIMESTAMP, 主键 INTEGER
-      - PG    : ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 主键 SERIAL
-    字段语义(与接口返回口径一致):
-      total_main_flow  两市主力净流入(亿元, 可负)
-      up/down/flat_count  涨跌平家数(同花顺APP盘面口径)
-      sh_flow / sz_flow  沪/深市主力净流入(亿元)
-    """
-    global _snapshot_table_ready
-    if _snapshot_table_ready:
-        return
-    try:
-        from src.web.database import IS_PG, engine
-        if IS_PG:
-            ddl = (
-                """
-                CREATE TABLE IF NOT EXISTS market_flow_snapshots (
-                    id SERIAL PRIMARY KEY,
-                    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    total_main_flow DOUBLE PRECISION,
-                    up_count INTEGER,
-                    down_count INTEGER,
-                    flat_count INTEGER,
-                    sh_flow DOUBLE PRECISION,
-                    sz_flow DOUBLE PRECISION
-                )
-                """
-            )
-        else:
-            ddl = (
-                """
-                CREATE TABLE IF NOT EXISTS market_flow_snapshots (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    total_main_flow REAL,
-                    up_count INTEGER,
-                    down_count INTEGER,
-                    flat_count INTEGER,
-                    sh_flow REAL,
-                    sz_flow REAL
-                )
-                """
-            )
-        with engine.begin() as conn:
-            conn.execute(text(ddl))
-        _snapshot_table_ready = True
-    except Exception as e:
-        # 静默失败(避免模块加载拖垮整个进程); 真正写入时再尝试
-        logger.debug(f"market_flow_snapshots 建表暂未就绪: {e}")
 
 
 def _try_write_snapshot_async(payload: dict) -> None:
@@ -136,15 +82,8 @@ def _try_write_snapshot_async(payload: dict) -> None:
             return  # 节流窗口内, 跳过
         _snapshot_last_write_ts = now
 
-    # 兜底: 首次写入时若建表未就绪, 再补一次
-    if not _snapshot_table_ready:
-        _ensure_snapshot_table()
     t = threading.Thread(target=_runner, name="mkt-flow-snapshot-writer", daemon=True)
     t.start()
-
-
-# 模块加载时尝试一次建表(进程冷启动时不依赖首次请求)
-_ensure_snapshot_table()
 
 
 @router.get("/dragon-tiger/{trade_date}")

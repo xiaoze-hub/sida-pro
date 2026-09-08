@@ -90,31 +90,8 @@ _ENGINE_ATTACHED_TYPES = {
 }
 
 
-# 2026-09-01 审计修复: DataSource 模型新增的 5 个健康累计列在已存在的旧库上,
-# 因 PostgreSQL create_all 不会给已有表自动加列而缺失, 导致 list/get 接口
-# SELECT * 报 UndefinedColumn → 500(前端设置页整页空白)。查询前幂等补齐一次。
-_HEALTH_COLUMNS_ENSURED = False
-
-
-def _ensure_health_columns(db: Session) -> None:
-    global _HEALTH_COLUMNS_ENSURED
-    if _HEALTH_COLUMNS_ENSURED:
-        return
-    try:
-        from sqlalchemy import inspect as sa_inspect, text
-        from src.core.source_health import HEALTH_COLUMNS
-
-        existing = {c["name"] for c in sa_inspect(db.bind).get_columns("data_sources")}
-        missing = [c for c in HEALTH_COLUMNS if c not in existing]
-        if missing:
-            for col in missing:
-                db.execute(text(f"ALTER TABLE data_sources ADD COLUMN {col} {HEALTH_COLUMNS[col]}"))
-            db.commit()
-        _HEALTH_COLUMNS_ENSURED = True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("data_sources 健康列补齐失败(下次请求重试): %s", e)
-
-
+# 2026-09-01 审计修复新增的 5 个健康累计列, 其 DDL 已由 B 层版本化迁移
+# src/web/migrations.py _m126 负责(W1.5/A5 收编后运行时补列逻辑拆除)。
 def _is_orphan(type_: str, provider: str) -> bool:
     """判定 (type, provider) 是否为孤儿数据源:不在包内引擎 vendor 集合、也不在当前 seed 列表里。
 
@@ -158,7 +135,6 @@ def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
 @router.get("")
 def list_datasources(type: str | None = None, db: Session = Depends(get_db)):
     """获取数据源列表，可按类型筛选"""
-    _ensure_health_columns(db)
     query = db.query(DataSource)
     if type:
         query = query.filter(DataSource.type == type)
@@ -269,9 +245,6 @@ def get_configured_sources_health(db: Session = Depends(get_db)):
     """
     from src.core.source_health import summarize_source
 
-    # 老库可能没有这 5 列(2026-09-01 新增) → 补齐后再查(幂等, 全进程一次)
-    _ensure_health_columns(db)
-
     try:
         rows = db.query(DataSource).all()
     except Exception as e:  # noqa: BLE001
@@ -306,7 +279,6 @@ def reset_datasources_to_seed(db: Session = Depends(get_db)):
 @router.get("/{source_id}")
 def get_datasource(source_id: int, db: Session = Depends(get_db)):
     """获取单个数据源"""
-    _ensure_health_columns(db)
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -316,9 +288,6 @@ def get_datasource(source_id: int, db: Session = Depends(get_db)):
 @router.post("")
 def create_datasource(data: DataSourceCreate, db: Session = Depends(get_db)):
     """创建数据源"""
-    # v2.1 §11 补丁(2026-09-01): P0-B 自愈一致性 — update/delete/create 也补列防御,
-    # 老库即使缺 5 健康列, 任何 ORM 操作也绝不 500(归 get 操作之后, 留作一致性兜底)
-    _ensure_health_columns(db)
     source = DataSource(
         name=data.name,
         type=data.type,
@@ -341,7 +310,6 @@ def update_datasource(
     source_id: int, data: DataSourceUpdate, db: Session = Depends(get_db)
 ):
     """更新数据源"""
-    _ensure_health_columns(db)
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -358,7 +326,6 @@ def update_datasource(
 @router.delete("/{source_id}")
 def delete_datasource(source_id: int, db: Session = Depends(get_db)):
     """删除数据源"""
-    _ensure_health_columns(db)
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")

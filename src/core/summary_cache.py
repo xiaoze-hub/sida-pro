@@ -5,12 +5,13 @@
   - 读时检查 computed_at + ttl_s, 命中→直接返, miss→调原逻辑
   - 写时 upsert + 删过期(>24h, 防表膨胀)
   - payload 用 TEXT 存 JSON (双方言), 上限 50KB 防爆
+W1.5/A5(2026-09-08): 建表收编进 B 层 src/web/migrations.py _m129,
+此处不再运行时建表 —— schema 变更唯一入口是版本化迁移。
 """
 from __future__ import annotations
 
 import json
 import logging
-import threading
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
@@ -26,56 +27,9 @@ def _engine():
     return engine
 
 
-_table_ready = False
-_table_lock = threading.Lock()
-
-
-def _ensure_summary_cache_table() -> None:
-    """幂等建表 summary_cache, 模块加载时跑一次。"""
-    global _table_ready
-    if _table_ready:
-        return
-    with _table_lock:
-        if _table_ready:
-            return
-        try:
-            from src.web.database import IS_PG, engine
-            if IS_PG:
-                ddl = """
-                CREATE TABLE IF NOT EXISTS summary_cache (
-                    symbol TEXT NOT NULL,
-                    market TEXT NOT NULL,
-                    computed_at TIMESTAMP NOT NULL,
-                    ttl_s INTEGER NOT NULL,
-                    payload TEXT NOT NULL,
-                    PRIMARY KEY (symbol, market)
-                )
-                """
-            else:
-                ddl = """
-                CREATE TABLE IF NOT EXISTS summary_cache (
-                    symbol TEXT NOT NULL,
-                    market TEXT NOT NULL,
-                    computed_at TIMESTAMP NOT NULL,
-                    ttl_s INTEGER NOT NULL,
-                    payload TEXT NOT NULL,
-                    PRIMARY KEY (symbol, market)
-                )
-                """
-            with engine.begin() as conn:
-                conn.execute(text(ddl))
-            _table_ready = True
-        except Exception as e:  # noqa: BLE001
-            logger.debug("summary_cache 建表失败(静默): %s", e)
-
-
 def get_cached_summary(symbol: str, market: str, ttl_s: int) -> dict | None:
     """读 summary_cache: 命中且未过期 → 返 payload 字典; miss/过期 → None。失败永不抛。"""
     try:
-        if not _table_ready:
-            _ensure_summary_cache_table()
-        if not _table_ready:
-            return None
         with _engine().begin() as conn:
             row = conn.execute(
                 text(
@@ -110,10 +64,6 @@ def get_cached_summary(symbol: str, market: str, ttl_s: int) -> dict | None:
 def put_cached_summary(symbol: str, market: str, payload: dict, ttl_s: int = 300) -> None:
     """写 summary_cache: upsert + 清过期。payload 超 50KB 截断。失败永不抛。"""
     try:
-        if not _table_ready:
-            _ensure_summary_cache_table()
-        if not _table_ready:
-            return
         from src.web.database import IS_PG
         body = json.dumps(payload or {}, ensure_ascii=False, default=str)
         if len(body) > SUMMARY_PAYLOAD_MAX:
@@ -167,7 +117,3 @@ def clear_summary_cache(symbol: str | None = None) -> int:
     except Exception as e:  # noqa: BLE001
         logger.debug("clear_summary_cache %s failed: %s", symbol, e)
         return 0
-
-
-# 模块加载时建表
-_ensure_summary_cache_table()

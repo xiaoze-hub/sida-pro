@@ -29,56 +29,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ──────────── Task 3: 主线日榜快照表(双方言兼容, v0.4.7) ────────────
+# ──────────── Task 3: 主线日榜快照(双方言兼容, v0.4.7) ────────────
 # 主线榜每次计算成功后 upsert 当日 (date, name, rank, score),
 # 跨日对比出 rank_change。PRIMARY KEY(date, name) 保证每日每线只留最新一条。
-_rank_table_ready = False
-_rank_table_lock = threading.Lock()
-
-
-def _ensure_mainline_rank_table() -> None:
-    """幂等建表 mainline_rank_daily, 模块加载跑一次。
-
-    字段: date(DATE) / name(TEXT) / rank(int) / score(float8)
-    主键: (date, name), 保证同日同线只有一条最新快照。
-    """
-    global _rank_table_ready
-    if _rank_table_ready:
-        return
-    with _rank_table_lock:
-        if _rank_table_ready:
-            return
-        try:
-            from src.web.database import IS_PG, engine
-            if IS_PG:
-                ddl = (
-                    """
-                    CREATE TABLE IF NOT EXISTS mainline_rank_daily (
-                        date DATE NOT NULL,
-                        name TEXT NOT NULL,
-                        rank INTEGER NOT NULL,
-                        score DOUBLE PRECISION,
-                        PRIMARY KEY (date, name)
-                    )
-                    """
-                )
-            else:
-                ddl = (
-                    """
-                    CREATE TABLE IF NOT EXISTS mainline_rank_daily (
-                        date TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        rank INTEGER NOT NULL,
-                        score REAL,
-                        PRIMARY KEY (date, name)
-                    )
-                    """
-                )
-            with engine.begin() as conn:
-                conn.execute(text(ddl))
-            _rank_table_ready = True
-        except Exception as e:
-            logger.debug(f"mainline_rank_daily 建表暂未就绪: {e}")
+# 建表由 B 层版本化迁移 src/web/migrations.py _m139 负责(W1.5/A5 收编)。
 
 
 def _load_yesterday_ranks(today_iso: str) -> dict[str, int]:
@@ -172,9 +126,6 @@ def _enrich_with_rank_change(ranked_groups: list[dict]) -> list[dict]:
     if not ranked_groups:
         return ranked_groups
     today_iso = date.today().isoformat()
-    # 兜底: 首次写入时若建表未就绪, 再补一次
-    if not _rank_table_ready:
-        _ensure_mainline_rank_table()
     yesterday = _load_yesterday_ranks(today_iso)
 
     enriched: list[dict] = []
@@ -193,9 +144,6 @@ def _enrich_with_rank_change(ranked_groups: list[dict]) -> list[dict]:
     _upsert_today_snapshot(today_iso, enriched)
     return enriched
 
-
-# 模块加载时尝试一次建表
-_ensure_mainline_rank_table()
 
 # ──────────── 60s 进程内缓存(per spec) ────────────
 # key 固定为 "mainline:top20", 共享一份 Top20 排名(全市场视角)。

@@ -122,6 +122,8 @@ def init_db():
     # 延迟 import: 触发所有 ORM 类注册到 Base.metadata (User/AuditLog/Account/...)
     # 否则 Base.metadata.create_all() 不知有这些表, 跑 ALTER users ADD COLUMN nickname 会失败。
     # (2026-08-31 SIDA-Pro 骨架验证发现; 顶部 import 会撞循环依赖: models 顶部 from src.web.database import Base)
+    # schema 变更分层(2026-09-08 W1.5/A5): 下方 _migrate* 是历史遗留 A 层(只读兼容旧库),
+    # B 层 src/web/migrations.py 版本化迁移是唯一 schema 变更入口 —— 新增表/列一律写 B 层。
     from src.web import models as _models  # noqa: F401, E402
 
     Base.metadata.create_all(bind=engine)
@@ -133,6 +135,7 @@ def init_db():
     _migrate_add_user_id_columns(engine)
     if has_pending_migrations(engine):
         _backup_db_before_migration()
+        _backup_pg_schema_before_migration()
     run_versioned_migrations(engine)
 
 
@@ -200,6 +203,65 @@ def _ddl_autoincrement(sql_template: str) -> str:
     if IS_PG:
         return sql_template.format(pk="SERIAL PRIMARY KEY", ts="TIMESTAMP")
     return sql_template.format(pk="INTEGER PRIMARY KEY AUTOINCREMENT", ts="DATETIME")
+
+
+def _backup_pg_schema_before_migration() -> None:
+    """PG 迁移前用 pg_dump --schema-only 留一份结构快照(W1.5/A5)。
+
+    SQLite 已有 _backup_db_before_migration 整库备份; PG 整库 dump 太重且
+    恢复需要 pg_restore(红线: 不在生产库跑 pg_restore), 故只存 schema。
+    pg_dump 二进制不在应用容器内时 fail-soft 跳过(警告日志), 不阻断迁移。
+    """
+    if not IS_PG:
+        return
+    import subprocess
+
+    from sqlalchemy.engine import make_url
+
+    pg_dump = shutil.which("pg_dump")
+    if not pg_dump:
+        logger.warning("pg_dump 不在 PATH(应用容器通常没有), 跳过迁移前 schema 快照")
+        return
+    backup_dir = os.path.join(
+        os.path.dirname(os.path.abspath(DB_PATH)), "migrations_backup"
+    )
+    os.makedirs(backup_dir, exist_ok=True)
+    out = os.path.join(
+        backup_dir, f"schema_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sql"
+    )
+    url = make_url(DB_URL)
+    cmd = [
+        pg_dump,
+        "--schema-only",
+        "--no-owner",
+        "--no-privileges",
+        "-h",
+        str(url.host or "localhost"),
+        "-p",
+        str(url.port or 5432),
+        "-U",
+        str(url.username or "sida"),
+        "-d",
+        str(url.database or "sida"),
+        "-f",
+        out,
+    ]
+    env = dict(os.environ)
+    if url.password:
+        # 密码只经环境变量传递, 绝不进命令行参数/日志
+        env["PGPASSWORD"] = url.password
+    try:
+        proc = subprocess.run(cmd, env=env, capture_output=True, timeout=120)
+        if proc.returncode == 0:
+            logger.info("PG 迁移前 schema 快照已写入 %s", out)
+        else:
+            logger.warning(
+                "pg_dump 失败(rc=%s): %s",
+                proc.returncode,
+                proc.stderr.decode("utf-8", "replace")[:500],
+            )
+    except Exception as e:  # noqa: BLE001 — 快照是尽力而为, 不阻断迁移
+        logger.warning("pg_dump schema 快照失败(fail-soft): %s", e)
 
 
 def _backup_db_before_migration() -> None:
