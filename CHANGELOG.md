@@ -7,6 +7,15 @@
 
 ## 2026-09-08
 
+### fix-告警闭环(无Alertmanager五条规则无出口)+备份脚本适配compose拓扑(docker exec)+失败告警
+- 新增 `deploy/alertmanager.yml` — 路由到 Hermes 企微桥(docker0 网关, 与 forecast 企微推送同通道); critical 级 1h 重复, 常规 4h。
+- `deploy/prometheus.yml` — 补 `alerting.alertmanagers: [alertmanager:9093]`("告警从没响过"的后一半根因: 指标名修对但根本没有接收端)。
+- `deploy/loki-config.yml` — ruler 的 `alertmanager_url` 由 `localhost:9093`(指向不存在服务)改 `alertmanager:9093`。
+- `docker-compose.yml` + `docker-compose.infra.yml` — 新增 alertmanager 服务(prom/alertmanager v0.27, 127.0.0.1:9093, 配置/数据卷挂载)。
+- `scripts/backup_pg.sh` — ①默认改 `docker exec panwatch-postgres pg_dump`(原 PGHOST=127.0.0.1 但 compose PG 无端口映射, cron 必失败且无人知晓); 显式 TCP 降为兜底模式; ②备份失败(脚本异常/dump 为空/非 PGDMP)经 Hermes webhook 告警——静默的备份等于没有备份; ③恢复演练步骤更新为 docker exec 形态。
+- 验证: 五份 YAML `yaml.safe_load` 全过; bash 语法/实弹告警待小主机部署实测(本地无 bash/docker)。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-compose安全加固(弱默认密码强制化/infra端口仅本机/Redis加密码/非root/内存与日志上限/规则挂载/主卷只读)
 - `docker-compose.yml` — ① PG 密码 `${POSTGRES_PASSWORD:?}` 强制(两处; 原 `:-sida_dev_only` 弱默认静默兜底); ② Redis 加 `--requirepass ${REDIS_PASSWORD:?}` + healthcheck 带密码 + 主服务 REDIS_URL 带密码(原无密码, 主机任意进程可直读全部缓存); ③ Prometheus/Loki/Grafana 端口绑 127.0.0.1(原 0.0.0.0 且无鉴权, 与 infra 编排对齐); ④ prometheus 补挂 `prometheus-rules.yml`(原缺失, --profile infra 启动即崩); ⑤ 全部 8 服务加 mem_limit(主 1.5g/forecast 4g/PG 1g/redis 320m/infra 各 192-512m)+ json-file 日志轮转(max-size 20-50m × 3, 上次 / 分区打满根因之一); ⑥ infra 容器补 TZ; ⑦ forecast 对主数据卷改 :ro(原 root 容器可写主卷)。
 - `Dockerfile.forecast` — 非 root(uid 10001 app, 对齐主 Dockerfile)+ 补装 tzdata(已设 TZ 但 slim 无时区数据, zoneinfo 实际失效)。

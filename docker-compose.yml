@@ -151,6 +151,29 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  # T11(2026-09-08 审计): 告警通知出口 —— 五条规则此前触发后无任何通知
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: panwatch-alertmanager
+    restart: unless-stopped
+    profiles: ["infra"]
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./deploy/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - TZ=Asia/Shanghai
+
   # ============== 主后端 8000 (FastAPI) ==============
   panwatch:
     # P1-14: 与 CI 一致拉 ACR(发版号替换 latest); forecast 镜像仍走 ghcr(独立构建链)
@@ -275,6 +298,8 @@ volumes:
     name: panwatch_forecast_data
   redis_data:
     name: panwatch_redis_data
+  alertmanager_data:
+    name: panwatch_alertmanager_data
   prometheus_data:
     name: panwatch_prometheus_data
   loki_data:
