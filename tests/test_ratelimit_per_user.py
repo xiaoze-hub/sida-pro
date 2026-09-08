@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 from src.web.api import auth as auth_mod
 from src.web.cache.redis_client import redis_client as _redis_singleton
 from src.web.middleware import JWTDecodeMiddleware, RateLimitMiddleware, _in_memory_bucket
-from src.web.models import User
+
+from factories import make_user
 
 
 @pytest.fixture()
@@ -44,7 +45,7 @@ def client(monkeypatch):
 
 
 def _make_token(user_id: str, username: str) -> str:
-    user = User(id=user_id, username=username, role="member", token_version=1)
+    user = make_user(username=username, id=user_id)
     token, _ = auth_mod.create_token(user)
     return token
 

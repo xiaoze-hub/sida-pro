@@ -148,12 +148,14 @@ def test_run_selfcheck_always_includes_system_items():
 def test_run_selfcheck_aggregates(monkeypatch):
     """枚举启用项 → 并发 probe → 聚合 summary(total/ok/slow/fail)。"""
     from src.core import selfcheck
-    from src.web.models import AIModel, AIService, DataSource, NotifyChannel
+    from src.web.models import AIModel, AIService, DataSource
+
+    from factories import make_notify_channel
 
     db = _mem_db()
     try:
         db.add(DataSource(name="东财", type="quote", provider="eastmoney", config={}, enabled=True))
-        db.add(NotifyChannel(name="TG", type="telegram", config={}, enabled=True))
+        db.add(make_notify_channel(name="TG", type="telegram", config={}))
         svc = AIService(name="deepseek", base_url="https://x", api_key="k")
         db.add(svc)
         db.flush()
@@ -199,12 +201,14 @@ def test_run_selfcheck_empty_db():
 def test_list_selfcheck_items_no_probe(monkeypatch):
     """list 模式只枚举待检身份(category/key/name),不跑探测。"""
     from src.core import selfcheck
-    from src.web.models import DataSource, NotifyChannel
+    from src.web.models import DataSource
+
+    from factories import make_notify_channel
 
     db = _mem_db()
     try:
         db.add(DataSource(name="东财", type="quote", provider="eastmoney", config={}, enabled=True))
-        db.add(NotifyChannel(name="TG", type="telegram", config={}, enabled=True))
+        db.add(make_notify_channel(name="TG", type="telegram", config={}))
         db.commit()
 
         called = {"n": 0}
@@ -248,12 +252,14 @@ def test_list_items_ai_has_service_group():
 def test_run_selfcheck_keys_filter(monkeypatch):
     """keys 过滤:只探测指定 key 的项(供前端逐项更新进度)。"""
     from src.core import selfcheck
-    from src.web.models import DataSource, NotifyChannel
+    from src.web.models import DataSource
+
+    from factories import make_notify_channel
 
     db = _mem_db()
     try:
         db.add(DataSource(name="东财", type="quote", provider="eastmoney", config={}, enabled=True))
-        db.add(NotifyChannel(name="TG", type="telegram", config={}, enabled=True))
+        db.add(make_notify_channel(name="TG", type="telegram", config={}))
         db.commit()
 
         async def fake_ds(s):

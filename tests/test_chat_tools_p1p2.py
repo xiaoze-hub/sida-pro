@@ -11,25 +11,24 @@
 """
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta
 
 import pytest
+
+from factories import make_notification, make_user
 
 
 @pytest.fixture(scope="module")
 def iso_users():
     """建 4 个隔离测试账号 (模拟 admin/黄磊/娟姐/demo 并存), 测试后清理。"""
     from src.web.database import SessionLocal
-    from src.web.models import User
 
     names = ["iso_admin", "iso_hl", "iso_jj", "iso_demo"]
     users = {}
     db = SessionLocal()
     try:
         for n in names:
-            u = User(id=str(uuid.uuid4()), username=n,
-                     password_hash="x", role="member", is_active=True)
+            u = make_user(username=n)
             db.add(u)
             users[n] = u.id
         db.commit()
@@ -38,7 +37,7 @@ def iso_users():
     yield users
     db = SessionLocal()
     try:
-        from src.web.models import Notification
+        from src.web.models import Notification, User
         db.query(Notification).filter(Notification.user_id.in_(list(users.values()))).delete(
             synchronize_session=False)
         db.query(User).filter(User.id.in_(list(users.values()))).delete(
@@ -52,7 +51,6 @@ def iso_users():
 def iso_notifications(iso_users):
     """每用户 2 条私有通知 + 1 条全局 (user_id=NULL)。"""
     from src.web.database import SessionLocal
-    from src.web.models import Notification
 
     db = SessionLocal()
     try:
@@ -60,11 +58,11 @@ def iso_notifications(iso_users):
         noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
         for name, uid in iso_users.items():
             for i in range(2):
-                db.add(Notification(user_id=uid, category="system", level="info",
-                                    title=f"private-{name}-{i}", body="b",
-                                    created_at=noon - timedelta(minutes=i + 1)))
-        db.add(Notification(user_id=None, category="system", level="info",
-                            title="global-iso-notice", body="b", created_at=noon))
+                db.add(make_notification(title=f"private-{name}-{i}", user_id=uid,
+                                         body="b", category="system",
+                                         created_at=noon - timedelta(minutes=i + 1)))
+        db.add(make_notification(title="global-iso-notice", user_id=None,
+                                 body="b", category="system", created_at=noon))
         db.commit()
     finally:
         db.close()

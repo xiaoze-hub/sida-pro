@@ -19,6 +19,8 @@ from sqlalchemy.pool import StaticPool
 from src.web.api import channels as ch_api
 from src.web.models import Base, NotifyChannel, User
 
+from factories import make_notify_channel, make_user
+
 U_OWNER = "cccc1111-0000-0000-0000-000000000001"
 U_DEMO = "cccc1111-0000-0000-0000-000000000002"
 U_ALICE = "cccc1111-0000-0000-0000-000000000003"
@@ -35,17 +37,16 @@ def db():
     S = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
     db = S()
     db.add_all([
-        User(id=U_OWNER, username="owner", password_hash="x", role="owner", is_active=True),
-        User(id=U_DEMO, username="demo", password_hash="x", role="member", is_active=True),
-        User(id=U_ALICE, username="alice", password_hash="x", role="member", is_active=True),
-        NotifyChannel(id=1, user_id=None, name="全局PushPlus", type="pushplus",
-                      config={"token": FAKE_PK}, enabled=True, is_default=False),
-        NotifyChannel(id=2, user_id=U_ALICE, name="alice的TG", type="telegram",
-                      config={"bot_token": "123456:ABC-token", "chat_id": "88001"},
-                      enabled=True, is_default=False),
-        NotifyChannel(id=3, user_id=U_DEMO, name="demo的TG", type="telegram",
-                      config={"bot_token": "999:demo-token", "chat_id": "88002"},
-                      enabled=True, is_default=True),
+        make_user(username="owner", id=U_OWNER, role="owner"),
+        make_user(username="demo", id=U_DEMO),
+        make_user(username="alice", id=U_ALICE),
+        make_notify_channel(id=1, user_id=None, name="全局PushPlus", type="pushplus",
+                            config={"token": FAKE_PK}),
+        make_notify_channel(id=2, user_id=U_ALICE, name="alice的TG", type="telegram",
+                            config={"bot_token": "123456:ABC-token", "chat_id": "88001"}),
+        make_notify_channel(id=3, user_id=U_DEMO, name="demo的TG", type="telegram",
+                            config={"bot_token": "999:demo-token", "chat_id": "88002"},
+                            is_default=True),
     ])
     db.commit()
     yield db
@@ -53,9 +54,7 @@ def db():
 
 
 def _u(uid: str, role: str = "member"):
-    from src.web.models import User
-
-    return User(id=uid, role=role)
+    return make_user(id=uid, role=role)
 
 
 # ── 读: config 脱敏 ──────────────────────────────────────────────

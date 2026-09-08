@@ -125,11 +125,12 @@ def test_valid_user_jwt_is_403(monkeypatch):
     client, Session = _app(monkeypatch)
     _seed_llm_settings(Session)
     import src.web.api.auth as auth_mod
-    from src.web.models import User
+
+    from factories import make_user
 
     monkeypatch.setattr(auth_mod, "get_jwt_secret", lambda: "unit-test-jwt-secret")
     s = Session()
-    u = User(id="u-admin-1", username="admin", password_hash="x", role="owner")
+    u = make_user(username="admin", id="u-admin-1", role="owner")
     s.add(u)
     s.commit()
     token, _ = create_token(u)

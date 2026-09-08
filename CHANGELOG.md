@@ -7,6 +7,18 @@
 
 ## 2026-09-09
 
+### fix-测试与真实数据目录彻底隔离(W2.2/E4: conftest顶层DATA_DIR重定向+Base重载防御+factories工厂)
+- 背景: E4 —— 单测会读写仓库真实 data/ 目录: error_tracker/disk_cache/media_utils/chat_tools 在模块 import 期把 DATA_DIR 烤进常量, conftest 在 fixture 期改 env 已晚; 更严重的是 test_pg_default 的 delenv+reload 会把 database 模块全局指回真实 data/panwatch.db, 污染后续所有用 SessionLocal 的测试(实测曾把迁移跑进真实库, 留下 7 个 .bak); 仓库 data/ 下 chat_tools_cache.json 也被测试写。真实库/真实数据目录从此是单测禁区。
+- **conftest 顶层隔离**(tests/conftest.py): 在任何 src.* import 之前把 DATA_DIR/PANWATCH_DATA_DIR/PANWATCH_CACHE_DIR 重定向到 tempfile.mkdtemp("sida_test_data_"), PANWATCH_DB(zhitu vendor 本地库回退)/SIDA_DB_URL setdefault 指向临时库 —— import 期烘焙路径的模块全部拿到临时目录。原 0.4② SIDA_ALLOW_SQLITE setdefault/_init_test_db/_clear_module_caches 保留。
+- **src/web/database.py 两处加固**: ① DB_PATH 跟随 DATA_DIR(与 error_tracker 同口径; 容器 DATA_DIR=/app/data 生产路径不变); ② Base 重载防御 `if "Base" not in globals()` —— importlib.reload 重执行 `class Base(DeclarativeBase)` 造出新 Base, models.py 持旧 Base, 运行时 `from src.web.database import Base` + create_all 建出空库 → permissions_rbac×16/pdf_export×2/ws_hub teardown "no such table: ai_services" 连锁(此前被测试收集顺序掩盖)。reload 保留原模块 __dict__, 守卫使 Base 不再重建。
+- **tests/test_pg_default.py autouse 兜底**: _restore_database_module 在用例结束后按恢复后 env 再 reload 一次, 本文件不再向后续测试泄漏 DB_URL/engine。
+- **src/core/chat_tools.py**: _cache_path() 跟随 DATA_DIR —— 会话级快照守卫实测抓到 chat_tools_cache.json 被写进仓库 data/ 后修复。
+- **tests/factories.py 新建**: make_user/make_stock/make_notify_channel/make_notification 纯构造器(不碰 Session), 5 个手搓 ORM/直连真实库的测试文件迁移(channels_isolation/chat_tools_p1p2/ratelimit_per_user/selfcheck/internal_scene_model_auth)。
+- **元测试 tests/test_conftest_isolation.py 4 例**: DATA_DIR 落临时目录/默认 DB_URL 隔离/error_tracker._FILE 隔离/子进程级 delenv+reload 后仍隔离(规避进程内 reload 污染)。
+- **会话级执法守卫**: _verify_real_data_untouched 对真实数据目录(调用方 DATA_DIR 或仓库 data/)做 rglob 文件快照(mtime_ns+size), 会话结束发现新增/删除/变更即 AssertionError —— "测试不得触碰真实数据"从此有自动化执法。
+- 验证: 全量套件 1919 passed / 4 failed(全部为已知环境损坏/本地 flaky: dark_l2_engine/ta_load_ohlcv_patch/thsdk_buffer_size/thsdk_extended, 与改动前基线一致); 真实 data/panwatch.db mtime 跨轮稳定; 元测试 4/4 过。
+- [branch fix/wave2-门禁-20260909, `git show HEAD`]
+
 ### update-v0.5.19生产部署+K线全量重刷完成(复权污染清除, 勘查报告附D对账)
 - **生产部署**: tag v0.5.19(21fc03f) 经 docker cp 覆盖层部署到 panwatch 容器(0.7 勘查既定路径: 本机无 ACR 凭据, docker config auths 为空, 镜像构建发布不可用)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0519_20260909_024720.tar.gz`, 仅代码不含 data) → `git archive` tag → 容器内解包 → restart → 42 条迁移全 success(含 _m137~_m142) → 容器内签发 admin token 跑 scripts/smoke_test.py **9/9 通过**。
 - **K线全量重刷**(0.7 §4 加列半场后的"重刷半场", 附C 验收全过): 预备份 pg_dump 踩坑(4,447B 归档含 TABLE DATA 条目但 restore-and-count=0 行, 表内实有 209,094 行, 根因未查明, stocks 对照组正常 —— **规则固化: 破坏性操作前备份必须 restore-and-count 验证**) → 依据 klines 属可再生派生数据 + 存量即待清污染, 执行 TRUNCATE → ingestor 重灌 71 股次(fail_details=0)。
