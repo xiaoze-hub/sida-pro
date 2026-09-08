@@ -42,8 +42,8 @@ def _parse_us_line(code: str, content: str) -> Quote | None:
     parts = content.split(",")
     if len(parts) < 30:
         return None
-    price = _to_float(parts[1]) or 0.0
-    if price <= 0:
+    price = _to_float(parts[1])
+    if price is None or price <= 0:
         return None
     return Quote(
         symbol=code.upper(),
@@ -64,8 +64,8 @@ def _parse_hk_line(code: str, content: str) -> Quote | None:
     parts = content.split(",")
     if len(parts) < 15:
         return None
-    price = _to_float(parts[6]) or 0.0
-    if price <= 0:
+    price = _to_float(parts[6])
+    if price is None or price <= 0:
         return None
     return Quote(
         symbol=code,

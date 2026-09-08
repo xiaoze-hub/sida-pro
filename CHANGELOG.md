@@ -7,6 +7,17 @@
 
 ## 2026-09-08
 
+### fix-vendor缺失字段None化+status完整性标记(风险方案1.1/B2)
+- 背景: 腾讯行情解析 `float(parts[3] or 0)` 等把缺失字段变 0 —— 价格 0 参与涨跌幅算术伪造 -100% 假暴跌, 直接违反「数据缺失必须显式标注『无数据』, 禁止推测」红线; 且 `turnover` 取自 parts[35] 第三段单位无标注(违反「金额=元」约定, AGENTS.md「对不上先怀疑单位换算」)。
+- **turnover 单位实测**(qt.gtimg.cn 真实报文, 2026-09-08 收盘后): sh600519 parts[35]="1309.30/17534/2302823753", 恒等式 amt/(price×vol(手)×100)=**1.0031**; sh601318=**1.0069**(偏差<0.7% 即 VWAP≠收盘的正常范围) → **单位=元**; 交叉印证 parts[37]=amt/10000(230282 vs 2302823753, 比值 10000.02, 万元口径)。已写入 `vendors/tencent.py` 模块 docstring 与 `docs/_frozen/data.md` 新增「单位约定」节。
+- `packages/marketdata/types.py`: `Quote.current_price` 改 `float | None`, 新增 `status`(ok/partial/missing) 与 `missing_fields: list[str]`。
+- `vendors/tencent.py`: 核心 10 字段(价/量/内外盘/涨跌/高低)全部 `_to_float` 保留 None; 缺失进 `missing_fields`; 全部价格字段缺 → status="missing", 部分缺 → "partial"; turnover 缺失保留 None。`fetch()`/`fetch_raw()` 过滤改 None 安全: 缺价 Quote 不出现(调用方视角=「无数据」), **partial(价在字段缺)照常透传** status/missing_fields。
+- 其余 vendor 逐个判定(全仓 `or 0)` 审计): `alphavantage.py`/`twelvedata.py`/`yfinance.py` OHLC+量缺失全部 None 化+partial 标注(此前 `or 0) or None` 双重洗白); `zhitu_full.py` 新增 `_num` 助手 —— K线 OHLC 缺失的行**整行丢弃**(绝不产出 0 价 bar 混进均线), 资金流/股东/估值缺失保留 None(字段皆 Optional); `sina.py` 美股/港股价格守卫去掉误导性 `or 0.0`(行为不变, 0 从不外泄)。判定保留: `kline.py:63` volume(Bar 契约 0 默认, K线维度治理归 1.2/B1)、`ths_hot.py:157` rank(0=未上榜约定哨兵)、`board_fund_flow.py:149` total(分页控制流非行情值)。
+- 下游接线: `src/core/marketdata_client.py` `_quote_to_row` 透传 `status`/`missing_fields`(前端 JSON 可显式标「无数据」); `md_stock_data` **跳过缺价 Quote**(绝不 0.0 进 agent 算术), status 随行; `src/models/market.py` `StockData` 增 `status: str = "ok"`(加性, 旧契约数值字段不动)。复权污染涉及的涨跌幅算术点(accounts.py:522 已有 None 守卫, 价格 None 时不再算出 -100%)。
+- 测试: `tests/test_vendor_missing_fields.py` 16 用例 —— tencent 残缺报文 fixture(缺价→None 非 0.0; 全价格缺→missing; partial 保价; turnover 缺失; turnover 恒等式单位=元; 真实"0.00"≠缺失), zhitu(_num/K线丢行/资金流 None), alphavantage/twelvedata(缺字段 None+partial/missing), Quote 默认值, `_quote_to_row` 透传, `md_stock_data` 跳过缺价。
+- 验证: 新用例 16 passed; 全量 `PYTHONUTF8=1 pytest tests/` 1838 passed / 6 failed —— 6 失败均为环境问题(缺 tradingagents/psycopg2/thsdk、DOCKER 门控、Windows 文件权限), **均不 import 本次改动模块**(grep 验证), 与 0.5 收编时基线一致。
+- [branch fix/wave1-数据正确性-20260908, `git show HEAD`]
+
 ### docs-0.7 K线复权污染勘查报告(只读, 四类污染实证)
 - 背景: 风险方案 0.7 勘查任务 —— 审计 B1 断言"qfq 与不复权混存于同一批唯一键, 除权后假跳空"。本任务只读 PG + 走读代码, 产出 `docs/research/K线复权污染勘查_20260907.md`。全程零写入(仅 SELECT), 未改任何代码。
 - 修正 B1 模型: 实测 69,154 个 (symbol,date) 三源 close 逐格相等零差异 —— ingestor 自 P2-19(2026-09-05) 起单链拉一次复写三个 source 标签(klines_ingestor.py:73-83), `source` 列无区分度; 取数口径实为前复权(腾讯 fqkline/qfq + 东财 fqt=1), 新浪不复权兜底不写 PG。表结构三处出入: 日期列是 `ts` 非 `trade_date`、唯一键已含 `period`、**无 `amount` 列**(方案 dev 判据不可执行, 改用涨跌停边界缺口判据)。

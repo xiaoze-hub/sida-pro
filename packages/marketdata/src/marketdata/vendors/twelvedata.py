@@ -78,22 +78,47 @@ class TwelveDataQuoteVendor(QuoteVendor):
         if not d or d.get("symbol") is None:
             return None
         try:
-            price = float(d.get("close") or 0)
-            prev = float(d.get("previous_close") or 0)
-            chg = float(d.get("change") or 0)
-            pct = float(d.get("percent_change") or 0)
+            # 2026-09-08 (风险方案1.1): 缺失字段保留 None + status 标注, 不用 0 冒充。
+            def _f(v) -> float | None:
+                if v is None or str(v).strip() == "":
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            price = _f(d.get("close"))
+            prev = _f(d.get("previous_close"))
+            open_ = _f(d.get("open"))
+            high = _f(d.get("high"))
+            low = _f(d.get("low"))
+            vol = _f(d.get("volume"))
+
+            missing = [n for n, v in (
+                ("current_price", price), ("prev_close", prev), ("open_price", open_),
+                ("high_price", high), ("low_price", low), ("volume", vol),
+            ) if v is None]
+            if price is None and prev is None:
+                status = "missing"
+            elif missing:
+                status = "partial"
+            else:
+                status = "ok"
+
             return Quote(
                 symbol=s.code,
                 market=s.market.value,
                 name=d.get("name", s.code),
                 current_price=price,
-                prev_close=prev or None,
-                open_price=float(d.get("open") or 0) or None,
-                high_price=float(d.get("high") or 0) or None,
-                low_price=float(d.get("low") or 0) or None,
-                change_amount=chg or None,
-                change_pct=pct or None,
-                volume=float(d.get("volume") or 0) or None,
+                prev_close=prev,
+                open_price=open_,
+                high_price=high,
+                low_price=low,
+                change_amount=_f(d.get("change")),
+                change_pct=_f(d.get("percent_change")),
+                volume=vol,
+                status=status,
+                missing_fields=missing,
             )
         except (ValueError, TypeError) as e:
             logger.debug(f"twelvedata 解析失败: {e}")

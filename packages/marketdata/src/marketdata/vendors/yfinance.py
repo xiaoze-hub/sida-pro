@@ -42,14 +42,23 @@ class YFinanceQuoteVendor(QuoteVendor):
                 prev = float(info["previous_close"]) if info.get("previous_close") else None
                 chg = last - prev if prev else 0.0
                 pct = (chg / prev * 100) if prev else 0.0
+                # 2026-09-08 (风险方案1.1): OHLC/量缺失保留 None + partial 标注, 不用 0 冒充。
+                open_ = float(info.get("open")) if info.get("open") else None
+                high = float(info.get("day_high")) if info.get("day_high") else None
+                low = float(info.get("day_low")) if info.get("day_low") else None
+                vol = float(info.get("last_volume")) if info.get("last_volume") else None
+                missing = [n for n, v in (
+                    ("prev_close", prev), ("open_price", open_),
+                    ("high_price", high), ("low_price", low), ("volume", vol),
+                ) if v is None]
                 out.append(Quote(
                     symbol=s.code, market=s.market.value, name="",
                     current_price=last, prev_close=prev,
-                    open_price=float(info.get("open") or 0),
-                    high_price=float(info.get("day_high") or 0),
-                    low_price=float(info.get("day_low") or 0),
+                    open_price=open_, high_price=high, low_price=low,
                     change_amount=chg, change_pct=pct,
-                    volume=float(info.get("last_volume") or 0),
+                    volume=vol,
+                    status="partial" if missing else "ok",
+                    missing_fields=missing,
                 ))
             except Exception as e:
                 logger.debug(f"yfinance 拉取 {s.code} 失败: {e}")

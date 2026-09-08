@@ -96,6 +96,10 @@ def _quote_to_row(q: Quote) -> dict:
         # 2026-09-08 来源透传: 实际命中的 vendor(空=未知, 前端按"未知源"标, 不编造)
         "source": getattr(q, "source", "") or "",
         "source_latency_ms": getattr(q, "latency_ms", 0) or 0,
+        # 2026-09-08 (风险方案1.1) 完整性透传: ok/partial/missing + 缺失字段清单。
+        # 前端对 partial/missing 与 null 字段显式标「无数据」, 不允许拿 0 画图。
+        "status": getattr(q, "status", "ok") or "ok",
+        "missing_fields": list(getattr(q, "missing_fields", []) or []),
     }
 
 
@@ -159,7 +163,13 @@ def md_news_by_keyword(keyword: str) -> list:
 
 
 def md_stock_data(symbols: list[str], market: str) -> list:
-    """返回 list[StockData](旧 AkshareCollector.get_stock_data 同形)。同步。"""
+    """返回 list[StockData](旧 AkshareCollector.get_stock_data 同形)。同步。
+
+    2026-09-08 (风险方案1.1): 缺价 Quote(current_price is None)在此跳过 = 调用方按
+    「无数据」处理, 绝不回退 0.0 参与 agent 算术。partial Quote 照常进入, status
+    随行, 但注意 StockData 数值字段是旧契约(非可选), 缺失数值仍会落 0.0 ——
+    消费方应先看 status 再信任数值。
+    """
     from src.models.market import MarketCode, StockData
 
     syms = list(symbols)
@@ -173,7 +183,9 @@ def md_stock_data(symbols: list[str], market: str) -> list:
         turnover=q.turnover or 0.0, open_price=q.open_price or 0.0,
         high_price=q.high_price or 0.0, low_price=q.low_price or 0.0,
         prev_close=q.prev_close or 0.0,
-        volume_ratio=getattr(q, "volume_ratio", None)) for q in quotes]
+        volume_ratio=getattr(q, "volume_ratio", None),
+        status=getattr(q, "status", "ok") or "ok",
+    ) for q in quotes if q.current_price is not None]
 
 
 def md_more_info(symbols: list[str], market: str = "CN") -> list[dict]:

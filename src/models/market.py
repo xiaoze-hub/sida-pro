@@ -97,6 +97,8 @@ class StockData:
     low_price: float
     prev_close: float
     volume_ratio: float | None = None  # 实时量比(腾讯行情口径, 与K线口径不同, 开盘初期更可信)
+    # 2026-09-08 (风险方案1.1) 完整性标记(透传自 marketdata.Quote): ok/partial/missing。
+    status: str = "ok"
     timestamp: datetime = field(default_factory=datetime.now)
 
 

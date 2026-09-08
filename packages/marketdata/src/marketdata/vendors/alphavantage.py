@@ -79,22 +79,48 @@ class AlphaVantageQuoteVendor(QuoteVendor):
         if not gq:
             return None
         try:
-            price = float(gq.get("05. price") or 0)
-            prev = float(gq.get("08. previous close") or 0)
-            chg = float(gq.get("09. change") or 0)
-            pct = float(gq.get("10. change percent", "0%").rstrip("%") or 0)
+            # 2026-09-08 (风险方案1.1): 缺失字段保留 None + status 标注, 不用 0 冒充。
+            def _f(v) -> float | None:
+                if v is None or str(v).strip() == "":
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            price = _f(gq.get("05. price"))
+            prev = _f(gq.get("08. previous close"))
+            pct = _f(str(gq.get("10. change percent") or "").rstrip("%"))
+            open_ = _f(gq.get("02. open"))
+            high = _f(gq.get("03. high"))
+            low = _f(gq.get("04. low"))
+            vol = _f(gq.get("06. volume"))
+
+            missing = [n for n, v in (
+                ("current_price", price), ("prev_close", prev), ("open_price", open_),
+                ("high_price", high), ("low_price", low), ("volume", vol),
+            ) if v is None]
+            if price is None and prev is None:
+                status = "missing"
+            elif missing:
+                status = "partial"
+            else:
+                status = "ok"
+
             return Quote(
                 symbol=s.code,
                 market=s.market.value,
                 name=gq.get("01. symbol", s.code),
                 current_price=price,
-                prev_close=prev or None,
-                open_price=float(gq.get("02. open") or 0) or None,
-                high_price=float(gq.get("03. high") or 0) or None,
-                low_price=float(gq.get("04. low") or 0) or None,
-                change_amount=chg or None,
-                change_pct=pct or None,
-                volume=float(gq.get("06. volume") or 0) or None,
+                prev_close=prev,
+                open_price=open_,
+                high_price=high,
+                low_price=low,
+                change_amount=_f(gq.get("09. change")),
+                change_pct=pct,
+                volume=vol,
+                status=status,
+                missing_fields=missing,
             )
         except (ValueError, TypeError) as e:
             logger.debug(f"alphavantage 解析失败: {e}")
