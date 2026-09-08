@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
-from src.web.api.auth import get_current_user
+from src.web.api.auth import get_current_user, get_user_or_service
 from src.web.database import SessionLocal, get_db
 from src.web.models import (
     AIModel,
@@ -2678,11 +2678,16 @@ def suggested_questions(
 def create_conversation(
     body: CreateConversationBody | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user=Depends(get_user_or_service),
 ):
-    """S2(2026-08-23): 新建会话写入 user_id, 多账号各自只看到自己的会话。"""
+    """S2(2026-08-23): 新建会话写入 user_id, 多账号各自只看到自己的会话。
+
+    0.0(风险方案): 服务令牌(8010 AI 裁判)经 X-Service-Token 也可建会话,
+    user_id=NULL(系统会话); 用户 JWT/服务令牌各自只能看到自己归属的会话。
+    """
+    is_service = getattr(user, "is_service", False)
     conv = ChatConversation(
-        user_id=user.id,
+        user_id=None if is_service else user.id,
         stock_symbol=body.stock_symbol if body else None,
         stock_market=body.stock_market if body else None,
         initial_context=body.initial_context if body else None,
@@ -2796,19 +2801,26 @@ def delete_conversation(
 async def send_message(
     conversation_id: int,
     body: SendMessageBody,
-    user: User = Depends(get_current_user),
+    user=Depends(get_user_or_service),
 ):
     """发送消息并获取 AI 回复（非流式，向后兼容）。
 
     S2(2026-08-23): 仅允许当前用户向自己的对话发消息; 越权访问返回 404 防账号探测。
+    0.0(风险方案): 服务令牌(8010 AI 裁判)经 X-Service-Token 只能访问
+    user_id=NULL 的系统会话, 与用户会话隔离。
     """
     db = SessionLocal()
     try:
+        owner_filter = (
+            ChatConversation.user_id.is_(None)
+            if getattr(user, "is_service", False)
+            else ChatConversation.user_id == user.id
+        )
         conv = (
             db.query(ChatConversation)
             .filter(
                 ChatConversation.id == conversation_id,
-                ChatConversation.user_id == user.id,
+                owner_filter,
             )
             .first()
         )

@@ -1,20 +1,19 @@
 """PanWatch HTTP client shared by forecast bridge modules.
 
-Docker Compose deployments authenticate with a short-lived JWT signed from the
-shared PanWatch database. This avoids copying a user's login password into the
-forecast container. Non-Compose deployments may provide ``PANWATCH_TOKEN`` or
-``PANWATCH_USERNAME``/``PANWATCH_PASSWORD`` explicitly.
+认证(2026-09-08 风险方案 0.0): forecast 容器只持只读服务凭据 ——
+``PANWATCH_SERVICE_TOKEN``(与主服务 ``SIDA_SERVICE_TOKEN`` 同值, 经 .env 注入),
+请求头 ``X-Service-Token``。不再从共享数据库读 JWT 签名密钥自签令牌:
+那等价于伪造 owner 全权凭据(能调任何 owner 接口, 含改配置/删数据),
+且切 PG 后读到的是过期 secret, 表现为"莫名其妙全 401"。
+
+非 Compose 部署可显式提供 ``PANWATCH_TOKEN`` 或
+``PANWATCH_USERNAME``/``PANWATCH_PASSWORD``(真实用户登录, 走正常鉴权)。
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
-import secrets
-import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +21,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 仅缓存显式凭据登录换来的 Bearer token(真实用户 JWT, 有过期时间)
 _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
@@ -30,80 +30,21 @@ def get_panwatch_url() -> str:
     return os.getenv("PANWATCH_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
-def _read_auth_settings() -> dict[str, str]:
-    """Read JWT material from the shared PanWatch DB without modifying it."""
-    db_paths = (
-        os.getenv("PANWATCH_DB", ""),
-        "/app/panwatch-data/panwatch.db",
-        "/app/data/panwatch.db",
+def get_service_token() -> str:
+    """只读服务令牌(与主服务 SIDA_SERVICE_TOKEN 同值, compose 经 .env 注入)。"""
+    return (
+        os.getenv("PANWATCH_SERVICE_TOKEN", "").strip()
+        or os.getenv("SIDA_SERVICE_TOKEN", "").strip()
     )
-    for path in db_paths:
-        if not path or not os.path.isfile(path):
-            # 2026-09-08 T7: PG 部署下该 sqlite 文件不存在, 原来静默跳过导致
-            # 整条鉴权通道失效无感知 —— 环境变量指了但文件缺时必须告警。
-            if path:
-                logger.warning("PanWatch 认证配置文件不存在: %s(主库已切 PG? 请改用 PANWATCH_SERVICE_TOKEN)", path)
-            continue
-        try:
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3) as conn:
-                settings = dict(
-                    conn.execute(
-                        "SELECT key, value FROM app_settings WHERE key IN "
-                        "('jwt_secret', 'auth_token_version')"
-                    ).fetchall()
-                )
-                # 服务 token 的 sub 必须是真实存在的用户 id(owner),否则 401
-                try:
-                    row = conn.execute(
-                        "SELECT id FROM users WHERE role='owner' ORDER BY created_at LIMIT 1"
-                    ).fetchone()
-                    if row:
-                        settings["owner_user_id"] = row[0]
-                except sqlite3.Error:
-                    pass
-                return settings
-        except sqlite3.Error as exc:
-            logger.warning("PanWatch 认证配置读取失败 [%s]: %s", path, exc)
-    return {}
-
-
-def _base64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _create_service_token(secret: str, token_version: int, sub: str = "user") -> tuple[str, float]:
-    """Create a five-minute HS256 token accepted by the PanWatch API.
-
-    sub 必须是 PanWatch users 表里真实存在的用户 id(owner),否则
-    auth.get_current_user 查不到用户 → 401。
-    """
-    now = int(time.time())
-    expires_at = now + 300
-    header = _base64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-    payload = _base64url(
-        json.dumps(
-            {
-                "exp": expires_at,
-                "iat": now,
-                "sub": sub,
-                "jti": secrets.token_hex(16),
-                "ver": token_version,
-            },
-            separators=(",", ":"),
-        ).encode()
-    )
-    signing_input = f"{header}.{payload}"
-    signature = _base64url(hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest())
-    return f"{signing_input}.{signature}", float(expires_at)
 
 
 def invalidate_token() -> None:
-    """Drop the cached token so a changed token version is picked up."""
+    """Drop the cached login token (e.g. after a 401)."""
     _TOKEN_CACHE.update(token="", expires_at=0.0)
 
 
 def _login_with_explicit_credentials() -> str:
-    """Compatibility fallback for hosts without a shared PanWatch database."""
+    """Compatibility fallback for hosts without a service token."""
     username = os.getenv("PANWATCH_USERNAME") or os.getenv("AUTH_USERNAME")
     password = os.getenv("PANWATCH_PASSWORD") or os.getenv("AUTH_PASSWORD")
     if not username or not password:
@@ -120,7 +61,11 @@ def _login_with_explicit_credentials() -> str:
 
 
 def get_token() -> str:
-    """Return an explicit, database-signed, or credential-login token."""
+    """Return an explicit token or a credential-login token; 无凭据返回空串。
+
+    0.0: 自签 JWT 通道已删 —— forecast 侧没有任何 JWT 签名密钥来源,
+    服务身份一律走 X-Service-Token(见 auth_headers)。
+    """
     explicit = os.getenv("PANWATCH_TOKEN", "").strip()
     if explicit:
         return explicit
@@ -129,16 +74,6 @@ def get_token() -> str:
     cached = str(_TOKEN_CACHE.get("token", ""))
     if cached and now < float(_TOKEN_CACHE.get("expires_at", 0)) - 30:
         return cached
-
-    settings = _read_auth_settings()
-    secret = os.getenv("PANWATCH_JWT_SECRET", "").strip() or settings.get("jwt_secret", "")
-    if secret:
-        raw_version = settings.get("auth_token_version", "1")
-        token_version = int(raw_version) if str(raw_version).isdigit() else 1
-        owner_id = settings.get("owner_user_id", "") or os.getenv("PANWATCH_OWNER_ID", "").strip()
-        token, expires_at = _create_service_token(secret, token_version, sub=owner_id or "user")
-        _TOKEN_CACHE.update(token=token, expires_at=expires_at)
-        return token
 
     try:
         token = _login_with_explicit_credentials()
@@ -150,22 +85,39 @@ def get_token() -> str:
     return token
 
 
+def auth_headers() -> dict[str, str]:
+    """构造 8000 请求头: 服务令牌优先(X-Service-Token), 其次 Bearer。
+
+    两者都没有时返回空 dict —— 调用方据此显式报错, 不再静默裸奔。
+    """
+    headers: dict[str, str] = {}
+    svc = get_service_token()
+    if svc:
+        headers["X-Service-Token"] = svc
+    token = get_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def has_credentials() -> bool:
+    return bool(get_service_token() or get_token())
+
+
 def request_json(path: str, timeout: float = 30) -> Any:
     """GET a protected PanWatch endpoint and retry once after a 401.
 
-    2026-09-08 T7: 支持 X-Service-Token 双轨 —— compose 注入
-    PANWATCH_SERVICE_TOKEN(与主服务 SIDA_SERVICE_TOKEN 同值)时直接走服务 token,
-    不再依赖 jwt_secret 自签 JWT(PG 部署下 forecast 读不到主库, 旧通道已断)。
+    认证双轨: X-Service-Token(服务令牌, 首选) / Bearer(显式 token 或凭据登录)。
+    无任何凭据时抛 RuntimeError —— 失败必须可见, 不允许静默回落。
     """
     url = f"{get_panwatch_url()}/{path.lstrip('/')}"
-    svc_token = os.getenv("PANWATCH_SERVICE_TOKEN", "").strip()
+    if not has_credentials():
+        raise RuntimeError(
+            "PanWatch 无可用凭据: 请在 forecast 容器注入 PANWATCH_SERVICE_TOKEN"
+            "(与主服务 SIDA_SERVICE_TOKEN 同值)或 PANWATCH_TOKEN/账号密码"
+        )
     for attempt in range(2):
-        token = get_token()
-        headers = {}
-        if svc_token:
-            headers["X-Service-Token"] = svc_token
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        headers = auth_headers()
         request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

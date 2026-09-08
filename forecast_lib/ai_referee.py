@@ -7,15 +7,19 @@
   → 发消息让 AI 用其工具(主力意图 get_main_intent / 资金流 get_capital_flow /
     技术面 get_technical_analysis / 形态 get_rally_analysis 等)核实后再评估
 - 解析 AI 回复中的 JSON 裁判结论:
-    {"verdict": "confirm"|"adjust", "direction": "up"|"down"|null, "reason": "..."}
+    {"verdict": "confirm"|"adjust"|"abstain", "direction": "up"|"down"|null, "reason": "..."}
   - verdict=confirm: 认可模型方向(direction 可为 null)
   - verdict=adjust : 不认可, direction 给建议方向(强势 B 方案: 直接覆盖最终方向)
-- 失败降级: 任何异常/超时/解析失败都返回
-    {"verdict": "confirm", "direction": null, "reason": "裁判不可用: <原因>"}
-  保证裁判故障不阻断预测主流程。
+  - verdict=abstain: 盘面证据不足/工具拉取失败 —— 不认可也不否决, 维持模型方向,
+    绝不在证据不足时强行 confirm(2026-09-08 风险方案 0.3/0.0)
+- 失败降级(0.0 fail-open→abstain): 任何异常/超时/解析失败都返回
+    {"verdict": "abstain", "direction": null, "reason": "裁判不可用: <原因>"}
+  保证裁判故障不阻断预测主流程, 也绝不伪造"裁判确认过"的结论。
 
-认证/寻址: 复用 forecast_lib/panwatch_client.py 的 get_panwatch_url() + get_token()
-(HS256 服务 token, 5 分钟), 不新造认证。对话助手侧(chat.py)零改动。
+认证/寻址: 复用 forecast_lib/panwatch_client.py 的 get_panwatch_url() +
+auth_headers()(X-Service-Token 只读服务令牌, 0.0 起不再伪造 owner JWT)。
+对话助手侧(chat.py): 建会话/发消息两端口 0.0 起接受 X-Service-Token,
+服务令牌建的会话 user_id=NULL(系统会话, 与用户会话互不可见)。
 
 性能: 对话助手是外部 API(agnes) + 多轮工具调用, 可能 20-45s;
 建会话超时 15s, 发消息超时 45s, 全程 try/except。
@@ -28,9 +32,9 @@ import re
 from typing import Any, Optional
 
 try:
-    from .panwatch_client import get_panwatch_url, get_token
+    from .panwatch_client import get_panwatch_url, auth_headers
 except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
-    from panwatch_client import get_panwatch_url, get_token
+    from panwatch_client import get_panwatch_url, auth_headers
 
 try:
     from .forecast_traces import record_referee_eval
@@ -48,154 +52,75 @@ _MESSAGE_TIMEOUT = 45.0
 
 # ── 统一 LLM 配置中心(2026-08-13): 裁判模型解析 ─────────────────────────────
 
-def _db_paths() -> list[str]:
-    """PanWatch 主库候选路径(只读探测, 与 forecast_sentiment._db_llm_config 同机制)。"""
-    import os as _os
-    return [
-        _os.getenv("PANWATCH_DB", ""),
-        "/var/lib/docker/volumes/panwatch_data/_data/panwatch.db",
-        "/app/data/panwatch.db",
-    ]
+class RefereeConfigUnavailable(RuntimeError):
+    """取不到 referee 场景模型配置。禁止回落硬编码模型(风险方案 0.0)。"""
 
 
-def _db_scene_binding_model_id() -> int | None:
-    """从 PanWatch DB 读 referee 场景绑定的 ai_models.id(只读, 无绑定返回 None)。
-
-    场景绑定表由基础设施(A 子任务, 统一 LLM 配置中心)提供; 表未迁移/列名差异/
-    无 referee 行/disabled 均自然回落, 不抛异常。兼容列名: scene/scene_name,
-    model_id/ai_model_id/model, enabled 列存在时 0/false 视为停用。
-    """
-    import os as _os
-    import sqlite3 as _sqlite
-
-    for p in _db_paths():
-        if not p or not _os.path.exists(p):
-            continue
-        try:
-            conn = _sqlite.connect(f"file:{p}?mode=ro", uri=True, timeout=3)
-            try:
-                cols = [r[1] for r in conn.execute("PRAGMA table_info(ai_scene_bindings)").fetchall()]
-                if not cols:
-                    continue  # 表不存在(A 子任务未迁移) → 回落
-                scene_col = "scene" if "scene" in cols else ("scene_name" if "scene_name" in cols else None)
-                id_col = next((c for c in ("model_id", "ai_model_id", "model") if c in cols), None)
-                if not scene_col or not id_col:
-                    continue
-                row = conn.execute(
-                    f"SELECT {id_col} FROM ai_scene_bindings WHERE {scene_col} = ?",
-                    ("referee",),
-                ).fetchone()
-                if not row or row[0] is None:
-                    continue
-                if "enabled" in cols:
-                    en = conn.execute(
-                        f"SELECT enabled FROM ai_scene_bindings WHERE {scene_col} = ?",
-                        ("referee",),
-                    ).fetchone()
-                    if en is not None and en[0] in (0, False, "0", "false", "off", "no"):
-                        continue
-                return int(row[0])
-            finally:
-                conn.close()
-        except Exception:
-            continue
-    return None
-
-
-def _db_model_by_id(model_id: int) -> dict | None:
-    """按 ai_models.id 读模型 + 服务商连接信息(只读)。"""
-    import os as _os
-    import sqlite3 as _sqlite
-
-    for p in _db_paths():
-        if not p or not _os.path.exists(p):
-            continue
-        try:
-            conn = _sqlite.connect(f"file:{p}?mode=ro", uri=True, timeout=3)
-            try:
-                row = conn.execute(
-                    "SELECT m.id, m.model, m.name, s.base_url, s.api_key "
-                    "FROM ai_models m JOIN ai_services s ON s.id = m.service_id "
-                    "WHERE m.id = ?",
-                    (model_id,),
-                ).fetchone()
-                if not row:
-                    return None
-                return {
-                    "ai_model_id": int(row[0]),
-                    "model": row[1] or "",
-                    "name": row[2] or "",
-                    "base_url": row[3] or "",
-                    "api_key": row[4] or "",
-                }
-            finally:
-                conn.close()
-        except Exception:
-            continue
-    return None
+try:
+    from forecast_lib import panwatch_client
+except ImportError:  # forecast_server.py 将 forecast_lib 直接加入 sys.path
+    import panwatch_client
 
 
 def resolve_referee_model_cfg() -> dict:
-    """解析 AI 裁判模型配置(2026-08-13 统一 LLM 配置中心)。
+    """解析 AI 裁判模型配置(统一 LLM 配置中心)。
 
-    优先级: 2026-09-08 T7 起先走主服务 API(/api/service/forecast-config, 服务
-    token 鉴权) > ai_scene_bindings 直读 DB(遗留同机 sqlite) > 旧 forecast_llm_*
-    配置 > 默认 agnes。
-    返回 dict; 场景绑定命中时带 ai_model_id(建会话时传给对话助手指定模型);
-    旧配置/默认 agnes 无 ai_model_id(对话助手按自身 chat 场景/默认模型走)。
-    任何失败都不抛异常(调用方按无指定模型处理)。
+    2026-09-08 风险方案 0.0: 唯一通道是主服务 HTTP
+    (/api/service/forecast-config, X-Service-Token 服务令牌鉴权)。
+    原 sqlite 直读主库的三候选路径(旧环境变量 → docker volume → /app/data)
+    已整体删除 —— 切 PG 后读到的是冻结旧值且不报错, 含明文 api_key, 属旁路。
+
+    Returns:
+        命中 referee 场景绑定时带 ai_model_id/base_url/api_key;
+        未绑定但配置了 forecast_llm_* 时返回该配置(显式用户配置, 非硬编码)。
+
+    Raises:
+        RefereeConfigUnavailable: API 不可达 / 无 referee 绑定 / 无任何可用
+        api_key。调用方(forecast_server/evaluate_prediction)按 abstain 处理,
+        绝不回落硬编码 agnes。
     """
-    # 0) 主服务 API(PG/Compose 部署唯一可用通道; sqlite 直读在 PG 下文件不存在)
     try:
-        import os as _os
-        if _os.getenv("PANWATCH_DB", "") or _os.getenv("PANWATCH_SERVICE_TOKEN", ""):
-            from forecast_lib import panwatch_client
-
-            data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
-            if isinstance(data, dict):
-                payload = data.get("data") if isinstance(data.get("data"), dict) else data
-                ref = (payload or {}).get("referee")
-                if ref and ref.get("base_url"):
-                    logger.info("AI 裁判模型: 主服务 API 场景绑定 (%s)", ref.get("model"))
-                    return {
-                        "ai_model_id": ref.get("ai_model_id"),
-                        "model": ref.get("model") or "",
-                        "name": ref.get("name") or "",
-                        "base_url": ref.get("base_url") or "",
-                        "api_key": ref.get("api_key") or "",
-                    }
+        data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
     except Exception as exc:
-        logger.warning("经 API 读裁判场景绑定失败(回落 DB 直读/旧配置): %s", exc)
+        raise RefereeConfigUnavailable(f"主服务 API 不可达(/api/service/forecast-config): {exc}") from exc
+    if not isinstance(data, dict):
+        raise RefereeConfigUnavailable(
+            "主服务 API 响应异常(/api/service/forecast-config)"
+        )
 
-    # 1) referee 场景绑定(遗留: 只读直查 PanWatch sqlite)
-    try:
-        mid = _db_scene_binding_model_id()
-        if mid:
-            cfg = _db_model_by_id(mid)
-            if cfg:
-                logger.info("AI 裁判模型: referee 场景绑定 ai_model_id=%s (%s)", mid, cfg.get("model"))
-                return cfg
-            logger.warning("AI 裁判模型: referee 场景绑定 ai_model_id=%s 但查无模型行, 回落旧配置", mid)
-    except Exception as exc:
-        logger.warning("referee 场景绑定解析失败(回落旧配置): %s", exc)
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    ref = (payload or {}).get("referee")
+    if isinstance(ref, dict) and ref.get("base_url"):
+        logger.info(
+            "AI 裁判模型: 主服务 API referee 场景绑定 ai_model_id=%s (%s)",
+            ref.get("ai_model_id"), ref.get("model"),
+        )
+        return {
+            "ai_model_id": ref.get("ai_model_id"),
+            "model": ref.get("model") or "",
+            "name": ref.get("name") or "",
+            "base_url": ref.get("base_url") or "",
+            "api_key": ref.get("api_key") or "",
+        }
 
-    # 2) 旧 forecast_llm_* 配置(设置页 DB > 本地 env > PanWatch 默认模型)
-    try:
-        from forecast_sentiment import _load_llm_config
-        old = _load_llm_config() or {}
-        if old.get("api_key"):
-            logger.info("AI 裁判模型: 旧 forecast_llm_* 配置 (%s)", old.get("model"))
-            return {
-                "base_url": old.get("base_url") or "https://api.agnes-ai.cn/v1",
-                "api_key": old.get("api_key") or "",
-                "model": old.get("model") or "agnes-2.5-flash",
-            }
-    except Exception as exc:
-        logger.warning("旧 forecast_llm_* 配置读取失败(回落默认 agnes): %s", exc)
+    # 无 referee 绑定: 退而用设置页显式配置的 forecast_llm_*(仍经 API 下发)
+    llm = (payload or {}).get("llm") or {}
+    if isinstance(llm, dict) and llm.get("api_key") and llm.get("base_url"):
+        logger.warning(
+            "AI 裁判模型: referee 场景未绑定, 回落设置页 forecast_llm_* (%s) —— "
+            "请在设置页为 referee 场景绑定模型",
+            llm.get("model"),
+        )
+        return {
+            "base_url": llm.get("base_url") or "",
+            "api_key": llm.get("api_key") or "",
+            "model": llm.get("model") or "",
+        }
 
-    # 3) 默认 agnes
-    logger.info("AI 裁判模型: 默认 agnes-2.5-flash")
-    return {"base_url": "https://api.agnes-ai.cn/v1", "api_key": "", "model": "agnes-2.5-flash"}
+    raise RefereeConfigUnavailable(
+        "referee 场景未绑定模型且未配置 forecast_llm_* —— "
+        "拒绝回落硬编码模型, 请在设置页配置"
+    )
 
 
 def _infer_market(symbol: str) -> str:
@@ -276,10 +201,13 @@ def _build_eval_message(
         f"get_rally_analysis(涨停/形态) 等, 需要哪个调哪个, 不要凭记忆。\n"
         f"2. 结合工具结果评估: 模型预测的方向和幅度是否可信? 主力行为/资金流/技术形态是支持还是反对?\n"
         f"3. 只输出一个 JSON 对象, 不要输出任何其他文字/解释/代码块标记:\n"
-        f'{{"verdict": "confirm" 或 "adjust", "direction": "up" 或 "down" 或 null, "reason": "中文理由(≤80字, 引用关键工具数据)"}}\n'
+        f'{{"verdict": "confirm" 或 "adjust" 或 "abstain", "direction": "up" 或 "down" 或 null, "reason": "中文理由(≤80字, 引用关键工具数据)"}}\n'
         f"   - verdict=confirm: 认可模型方向(此时 direction 可给 null 或维持原方向)\n"
         f"   - verdict=adjust : 不认可模型方向, direction 必须给出你建议的方向(up/down), reason 说明依据\n"
-        f"   - 若盘面证据不足/工具拉取失败, 默认 confirm 并说明。\n"
+        f"   - verdict=abstain: 盘面证据不足/工具拉取失败时输出 abstain 并在 reason 说明缺哪项证据; 禁止在证据不足时强行 confirm\n"
+        f"口径裁决规则(必须遵守):\n"
+        f"   - 严禁用 get_capital_flow 的数据直接下『主力派发/吸筹』结论(东财口径无逐笔方向性);\n"
+        f"   - 若 get_main_intent 与 get_capital_flow 方向冲突, 说明口径差异(逐笔 vs 东财)并优先采信 get_main_intent。\n"
         f"注意: 只输出 JSON, 严格用英文双引号, 不要用 markdown 代码块。"
     )
 
@@ -340,7 +268,8 @@ def _parse_verdict(text: str) -> Optional[dict]:
     """从 AI 回复里宽松提取 JSON 裁判结论。
 
     容忍: 代码块围栏、前后缀文字、多余字段; 校验 verdict/direction 枚举。
-    解析失败返回 None(上层按 confirm 降级)。
+    0.0: verdict 支持 abstain(证据不足时不许强行 confirm)。
+    解析失败返回 None(上层按 abstain 降级)。
     """
     if not text or not isinstance(text, str):
         return None
@@ -357,7 +286,7 @@ def _parse_verdict(text: str) -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     verdict = str(data.get("verdict", "")).strip().lower()
-    if verdict not in ("confirm", "adjust"):
+    if verdict not in ("confirm", "adjust", "abstain"):
         return None
     direction = data.get("direction")
     if direction is not None:
@@ -399,13 +328,15 @@ def evaluate_prediction(
                 无画像(None)行为与旧版完全一致。
         model_cfg: 裁判模型配置(统一 LLM 配置中心, 2026-08-13)。None 时内部调用
                 resolve_referee_model_cfg() 自解析(referee 场景绑定 > 旧
-                forecast_llm_* > 默认 agnes)。命中场景绑定(带 ai_model_id)时,
+                forecast_llm_*; 均不可用则按 abstain, 不回落硬编码 agnes)。
+                命中场景绑定(带 ai_model_id)时,
                 建会话 body 带 ai_model_id, 对话助手 send_message 优先用它。
 
     Returns:
-        {"verdict": "confirm"|"adjust", "direction": "up"|"down"|None,
+        {"verdict": "confirm"|"adjust"|"abstain", "direction": "up"|"down"|None,
          "reason": str, "conv_id": int|None, "elapsed_ms": int}
-        任何异常都降级返回 verdict=confirm, 不抛异常。
+        0.0: 任何异常/配置缺失都按 abstain 返回(不抛异常), 绝不伪造成
+        verdict=confirm"裁判确认过"。
     """
     import time
 
@@ -413,13 +344,12 @@ def evaluate_prediction(
     conv_id: Optional[int] = None
     try:
         base_url = get_panwatch_url()
-        token = get_token()
-        if not token:
-            raise RuntimeError("无可用 token(未配置 PANWATCH_TOKEN/JWT secret/账号密码)")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json", **auth_headers()}
+        if "X-Service-Token" not in headers and "Authorization" not in headers:
+            raise RuntimeError(
+                "无可用凭据(未配置 PANWATCH_SERVICE_TOKEN/SIDA_SERVICE_TOKEN/"
+                "PANWATCH_TOKEN/账号密码)"
+            )
 
         # 1) 建会话: 绑定股票, initial_context 放评估数据快照(会注入 system prompt)
         market = _infer_market(symbol)
@@ -493,20 +423,23 @@ def evaluate_prediction(
             symbol, stock_name, result["verdict"], result["direction"], conv_id,
         )
         # 裁判结论落库 (独立表 prediction_referee_evals, 供 referee_impact_stats
-        # 统计介入前后命中率对比; 仅真实裁判结论入库, 降级 confirm 不落库)。
-        try:
-            record_referee_eval(
-                run_id, symbol, result["verdict"], result["direction"],
-                result["reason"], conv_id,
-            )
-        except Exception as exc:
-            logger.warning("AI 裁判落库失败 %s %s: %s", symbol, stock_name, exc)
+        # 统计介入前后命中率对比; 仅 confirm/adjust 真实结论入库, abstain/降级不入)。
+        if result["verdict"] in ("confirm", "adjust"):
+            try:
+                record_referee_eval(
+                    run_id, symbol, result["verdict"], result["direction"],
+                    result["reason"], conv_id,
+                )
+            except Exception as exc:
+                logger.warning("AI 裁判落库失败 %s %s: %s", symbol, stock_name, exc)
         return result
     except Exception as exc:
+        # 0.0 fail-open→abstain: 裁判不可用绝不伪造成"裁判确认过"(confirm),
+        # 也不覆盖预测方向 —— 维持模型方向并显式标注 abstain。
         reason = f"裁判不可用: {exc}"
         logger.warning("AI 裁判降级 %s %s: %s", symbol, stock_name, exc)
         return {
-            "verdict": "confirm",
+            "verdict": "abstain",
             "direction": None,
             "reason": reason,
             "conv_id": conv_id,

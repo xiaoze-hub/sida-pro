@@ -474,6 +474,19 @@ async def get_user_or_service(
     )
 
 
+async def get_service_principal(request: Request) -> ServicePrincipal:
+    """仅服务令牌可通过(2026-09-08 风险方案 0.0)。
+
+    用于会返回密钥/内部配置的端点(如 /api/service/forecast-config 下发明文
+    api_key)。与 get_user_or_service 的区别: 那个为了兼容旧行为也接受用户 JWT,
+    本依赖不接受 —— 明文 api_key 绝不能因为"某人登录了"就下发。
+    """
+    svc = (request.headers.get(SERVICE_TOKEN_HEADER) or "").strip()
+    if svc and hmac.compare_digest(svc, get_service_token()):
+        return ServicePrincipal()
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅限服务令牌可通过")
+
+
 def user_to_dict(user: User) -> dict:
     return {
         "id": user.id,

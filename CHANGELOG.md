@@ -7,6 +7,17 @@
 
 ## 2026-09-08
 
+### fix-8010切断主库旁路+裁判abstain不伪装(风险方案0.0)
+- 背景: 8010 预测引擎此前持有多条主库旁路 —— panwatch_client 直读主库 sqlite 取 jwt_secret **自签 owner JWT**(等价伪造全权凭据, 能调任何 owner 接口含改配置/删数据), ai_referee/forecast_sentiment 各有一套三候选 sqlite 直读配置; 且裁判 fail-open: 任何异常降级 verdict=confirm, 等于把"裁判确认过"写进预测记录。主库切 PG 后这些直读全部静默失效(读到冻结旧值且不报错)。
+- `forecast_lib/panwatch_client.py`: 自签 JWT 路径整体删除(`_read_auth_settings`/`_create_service_token` 与 HMAC 签名逻辑, forecast 侧不再有任何 JWT 签名密钥来源); 改为只读服务凭据 `PANWATCH_SERVICE_TOKEN`/`SIDA_SERVICE_TOKEN` → 请求头 `X-Service-Token`(优先), 显式账号密码登录换真实 Bearer 的缓存路径保留(与伪造无关); 无任何凭据时 `auth_headers()` 返回空 dict、`get_token()` 返回空串, 由调用方显式报错, 绝不静默兜底。
+- `forecast_lib/ai_referee.py`: 删 `_db_paths`/`_db_scene_binding_model_id`/`_db_model_by_id` sqlite 直读; 新增 `RefereeConfigUnavailable` + `resolve_referee_model_cfg()` —— 裁判模型配置唯一通道是 `/api/service/forecast-config`(服务令牌鉴权), referee 场景绑定 > 设置页 forecast_llm_*, 均不可得即抛错, **绝不回落硬编码 agnes**; `evaluate_prediction` 任何异常/无凭据/解析失败一律返回 `verdict="abstain"`(维持模型方向, 不伪 confirm), abstain 不落 prediction_referee_evals; `_parse_verdict` 接受 abstain; prompt 增 abstain 输出约定 + 口径裁决句(严禁用 get_capital_flow 的东财口径直接下"主力派发/吸筹"结论; 与 get_main_intent 冲突时说明口径差异并优先采信逐笔口径)。
+- `forecast_lib/forecast_sentiment.py`: 删 `_db_llm_config` 三候选直读与其在 `_load_llm_config` 的调用分支; LLM 情绪打分配置唯一通道 = `/api/service/forecast-config`(T7 已落的 HTTP 通道)。
+- 8000 侧配套: `src/web/api/auth.py` 新增 `get_service_principal`(仅 X-Service-Token 可过, 用户 JWT 一律 403 —— 会下发明文 api_key 的端点专用); `src/web/api/service_config.py` forecast-config 依赖从 `get_user_or_service` 收紧为它, 关闭"登录用户也能读明文 api_key"的洞; `src/web/api/chat.py` 建会话/发消息两端点挂 `get_user_or_service`(8010 裁判经服务令牌建/发, 会话 `user_id=NULL` 为系统会话, 与用户会话按归属互相隔离, S2 语义不变)。
+- `forecast_server.py`: 裁判异常从"降级 confirm"改为 abstain(维持模型方向, 不再伪造"裁判确认过"); `docker-compose.yml` forecast 服务删 `PANWATCH_DB` env 与 `panwatch_data:/app/panwatch-data:ro` 主数据卷挂载 —— 8010 对主库零接触。
+- 测试: `tests/test_ai_referee_http.py` 新增 12 用例(绑定命中/回落 forecast_llm_*/三者皆无抛错/API 不可达抛错/响应异常抛错; prompt 口径句; abstain 解析; 网络错误/无凭据/配置不可得 → abstain 且不落库; confirm 正常落库且建会话带服务令牌+ai_model_id), `tests/test_internal_scene_model_auth.py` 新增 7 用例(正确令牌 200 且读到 forecast_llm_*、错/无令牌 403、**合法 admin JWT 也 403 且响应不含 api_key**), `tests/test_forecast_container_config.py` 重写(原用例断言的正是本次删除的自签 JWT 行为; 改为断言服务令牌头/无凭据空 dict)。
+- 验证: 新用例 22 passed(此两文件+container_config); 回归 test_user_isolation_api/test_p1_service_token/test_forecast_config_channel/test_chat_stream/test_ai_client_degradation/test_agent_notify_gate/test_chat_tools_p1p2|a4|two 共 100 passed; 验收 grep `PANWATCH_DB|_db_paths|panwatch\.db`(forecast_lib/+docker-compose.yml)与 `_read_auth_settings|_create_service_token|jwt_secret|auth_token_version`(forecast_lib/)全 0 命中, `优先采信 get_main_intent` 在 prompt 中(测试断言); `docker compose config -q` 通过; 旧 panwatch.db mv 出卷属生产数据操作, 与 0.4③ 同节奏待老板确认。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-LLM降级改抛类型化异常+显式超时+推送总闸+成本护栏fail-closed(风险方案0.3)
 - 背景: 限流时 ai_client 返回普通字符串 `"AI 服务暂时不可用(限流)…"`, 类型上与正常 LLM 输出无法区分, 曾被 daily_report 当日报存库并推送给老板; 且 AsyncOpenAI 未传 timeout 走 SDK 默认(~600s), 一次挂起能把 agent 卡住十分钟。本次按风险方案 0.3 全链路整改"降级不伪装"。
 - `src/core/ai_client.py`:
