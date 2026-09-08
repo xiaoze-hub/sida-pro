@@ -66,6 +66,9 @@ class HistoryResponse(BaseModel):
     news_debug: dict | None = None
     created_at: str
     updated_at: str
+    # 0.3(2026-09-08): 降级状态透出, 前端据此显示「未生成」而非伪装成正常分析
+    status: str = "success"
+    error: str | None = None
 
     class Config:
         from_attributes = True
@@ -155,6 +158,8 @@ def list_history(
             news_debug=None if summary_only else (r.raw_data.get("news_debug") if r.raw_data else None),
             created_at=_format_datetime(r.created_at),
             updated_at=_format_datetime(r.updated_at),
+            status=r.status or "success",
+            error=r.error,
         )
         for r in records
     ]
@@ -207,6 +212,8 @@ def get_history_detail(
         else None,
         created_at=_format_datetime(record.created_at),
         updated_at=_format_datetime(record.updated_at),
+        status=record.status or "success",
+        error=record.error,
     )
 
 

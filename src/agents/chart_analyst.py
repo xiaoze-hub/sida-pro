@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
+from src.core.ai_client import LLMDegradedError
 from src.collectors.screenshot_collector import ScreenshotCollector, ChartScreenshot
 from src.core.signals import SignalPackBuilder
 
@@ -196,11 +197,15 @@ class ChartAnalystAgent(BaseAgent):
         else:
             # 调用多模态 AI
             logger.info(f"使用 {len(image_paths)} 张截图进行多模态分析")
-            content = await context.ai_client.chat(
-                system_prompt,
-                user_content,
-                images=image_paths,
-            )
+            try:
+                content = await context.ai_client.chat(
+                    system_prompt,
+                    user_content,
+                    images=image_paths,
+                )
+            except LLMDegradedError as e:
+                # 0.3: 降级显式失败, 不把降级文案当图评正文
+                return self._degraded_result(e)
 
         # 构建标题
         stock_names = "、".join(s.name for s in context.watchlist[:5])
@@ -222,6 +227,8 @@ class ChartAnalystAgent(BaseAgent):
 
     async def should_notify(self, result: AnalysisResult) -> bool:
         """有截图且有内容时通知"""
+        if result.status != "success":
+            return False
         screenshots = result.raw_data.get("screenshots", [])
         return len(screenshots) > 0 and len(result.content) > 50
 

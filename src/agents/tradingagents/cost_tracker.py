@@ -7,6 +7,7 @@ AnalysisHistory 是 JSON 列,适合存复杂结构;AgentRun.result 只是截断�
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timezone
 
 from src.web.database import SessionLocal
@@ -31,8 +32,10 @@ def check_budget(monthly_budget_usd: float, agent_name: str = "tradingagents") -
     # AnalysisHistory.analysis_date 是 "YYYY-MM-DD" 字符串
     month_prefix = now.strftime("%Y-%m")
 
-    db = SessionLocal()
+    # db 放进 try: SessionLocal() 本身失败(库连不上)也必须走保守拦截, 不能裸抛
+    db = None
     try:
+        db = SessionLocal()
         records = (
             db.query(AnalysisHistory)
             .filter(
@@ -58,16 +61,23 @@ def check_budget(monthly_budget_usd: float, agent_name: str = "tradingagents") -
             "runs_this_month": len(records),
         }
     except Exception as e:
-        logger.warning(f"[TA成本] 预算查询失败,默认放行: {e}")
+        # 0.3(2026-09-08): 查询失败默认保守拦截, 防止预算失效期间继续烧钱;
+        # 明确知情后可用 TA_BUDGET_FAIL_OPEN=1 切回放行。
+        fail_open = os.environ.get("TA_BUDGET_FAIL_OPEN") == "1"
+        logger.warning(
+            f"[TA成本] 预算查询失败, {'放行(fail-open)' if fail_open else '保守拦截(fail-closed)'}: {e}"
+        )
         return {
             "used": 0.0,
-            "remaining": float(monthly_budget_usd),
+            "remaining": float(monthly_budget_usd) if fail_open else 0.0,
             "limit": float(monthly_budget_usd),
-            "exceeded": False,
+            "exceeded": not fail_open,
             "runs_this_month": 0,
+            "reason": "预算查询失败，保守拦截" if not fail_open else "预算查询失败，已按环境变量放行",
         }
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _extract_cost(raw_data) -> float:

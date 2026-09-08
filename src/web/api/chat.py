@@ -17,7 +17,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.config import Settings
-from src.core.ai_client import AIClient
+from src.core.ai_client import AIClient, LLMDegradedError
 from src.web.api.auth import get_current_user
 from src.web.database import SessionLocal, get_db
 from src.web.models import (
@@ -2005,6 +2005,9 @@ async def _run_tool_loop(
                 response_msg = await ai_client.chat_with_tools(
                     messages_for_ai, tools=CHAT_TOOLS, temperature=0.5,
                 )
+            except LLMDegradedError:
+                # 0.3: 服务降级≠工具不支持, 不许走 chat_multi 兜底重试放大
+                raise
             except Exception:
                 # 模型不支持 tool use → 直接用 chat_multi
                 logger.info("Tool use 不可用，使用普通对话")
@@ -2076,6 +2079,9 @@ async def _run_tool_loop_stream(ai_client, messages_for_ai, db, user: User | Non
                         yield "delta", payload
                     else:
                         response_msg = payload
+            except LLMDegradedError:
+                # 0.3: 服务降级≠流式工具不支持, 交给外层兜底给用户明确文案
+                raise
             except Exception:
                 logger.info("流式 tool use 不可用，使用普通对话")
                 ai_response = await ai_client.chat_multi(messages_for_ai, temperature=0.5)

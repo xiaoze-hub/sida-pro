@@ -22,6 +22,8 @@ def save_analysis(
     raw_data: dict | None = None,
     analysis_date: date | None = None,
     user_id: str | None = None,
+    status: str = "success",
+    error: str | None = None,
 ) -> bool:
     """
     保存分析结果
@@ -30,6 +32,8 @@ def save_analysis(
     - 历史记录不可覆盖（通过数据库约束保证）
     - M3(2026-08-23): 增加 user_id 维度, 调度入口传入触发用户。
       多账号下报告归属当前用户, history 端点按 user 过滤(S1)。
+    - 0.3(2026-09-08): 增加 status/error —— 降级报告显式落库,
+      前端据此显示「未生成」而非把降级提示当分析渲染。
 
     Args:
         agent_name: Agent 名称，如 "daily_report"
@@ -39,6 +43,8 @@ def save_analysis(
         raw_data: 原始数据快照
         analysis_date: 分析日期，默认今天
         user_id: 触发用户 UUID(系统调度/批量任务传 None, 走存量 NULL 共享)
+        status: success / degraded / failed
+        error: 降级或失败原因
 
     Returns:
         是否保存成功
@@ -69,6 +75,8 @@ def save_analysis(
             existing.content = content
             existing.raw_data = payload
             existing.agent_kind_snapshot = agent_kind
+            existing.status = status
+            existing.error = error
             logger.info(f"更新分析记录: {agent_name}/{stock_symbol}/{date_str}")
         else:
             # 新增
@@ -81,6 +89,8 @@ def save_analysis(
                 content=content,
                 raw_data=payload,
                 agent_kind_snapshot=agent_kind,
+                status=status,
+                error=error,
             )
             db.add(record)
             logger.info(f"新增分析记录: {agent_name}/{stock_symbol}/{date_str}")

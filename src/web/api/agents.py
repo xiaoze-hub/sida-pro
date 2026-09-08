@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from src.web.database import get_db
 from src.web.models import AgentConfig, AgentRun, LogEntry, User
 from src.web.api.auth import get_current_user
+from src.core.ai_client import LLMDegradedError
 from src.core.schedule_parser import preview_schedule
 from src.core.schedule_parser import count_runs_within
 from src.config import Settings
@@ -1181,9 +1182,16 @@ async def scan_intraday(
                             pass
 
                         system_prompt, user_content = agent.build_prompt(data, context)
-                        response = await context.ai_client.chat(
-                            system_prompt, user_content
-                        )
+                        try:
+                            response = await context.ai_client.chat(
+                                system_prompt, user_content
+                            )
+                        except LLMDegradedError as e:
+                            # 0.3: LLM 降级(限流/超时)≠空建议, 不许伪造建议条目
+                            logger.warning(
+                                "[盘中建议] %s LLM 降级, 跳过: %s", item["symbol"], e
+                            )
+                            return
 
                         # 解析结构化建议
                         suggestion = agent._parse_suggestion(response)

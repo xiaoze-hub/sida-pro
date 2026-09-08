@@ -2495,6 +2495,32 @@ def _m135_paper_trading_user_id(conn: Connection) -> None:
             )
 
 
+def _m136_analysis_history_status(conn: Connection) -> None:
+    """0.3(2026-09-08): analysis_history 增加降级状态列 —— 降级报告显式落库。
+
+    - status: success / degraded / failed, 存量行回填 'success'(历史数据视为正常)
+    - error: 降级原因, nullable
+    - 幂等可重跑
+    """
+    if not _has_table(conn, "analysis_history"):
+        return
+    _add_column_if_missing(
+        conn,
+        "analysis_history",
+        "status",
+        "ALTER TABLE analysis_history ADD COLUMN status TEXT DEFAULT 'success'",
+    )
+    _add_column_if_missing(
+        conn,
+        "analysis_history",
+        "error",
+        "ALTER TABLE analysis_history ADD COLUMN error TEXT",
+    )
+    conn.execute(
+        text("UPDATE analysis_history SET status = 'success' WHERE status IS NULL")
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -2539,6 +2565,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(133, "signal_snapshots_table", _m133_signal_snapshots),
     Migration(134, "demon_factors_table", _m134_demon_factors),
     Migration(135, "paper_trading_user_id", _m135_paper_trading_user_id),
+    Migration(136, "analysis_history_status", _m136_analysis_history_status),
 )
 
 

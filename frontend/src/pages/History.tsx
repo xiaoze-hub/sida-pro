@@ -24,6 +24,8 @@ interface HistoryRecord {
   news_debug?: Record<string, unknown> | null
   created_at: string
   updated_at: string
+  status?: string
+  error?: string | null
 }
 
 const AGENT_LABELS: Record<string, string> = {
@@ -250,6 +252,9 @@ export default function HistoryPage() {
                         {AGENT_LABELS[r.agent_name] || r.agent_name}
                       </Badge>
                       <span className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}>{r.title || '分析报告'}</span>
+                      {r.status && r.status !== 'success' && (
+                        <Badge variant="destructive" className="text-[10px] flex-shrink-0">未生成</Badge>
+                      )}
                     </div>
                     <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="font-mono">{r.analysis_date}</span>
@@ -311,9 +316,18 @@ export default function HistoryPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
-                  <ReactMarkdown>{selectedRecord.content}</ReactMarkdown>
-                </div>
+                {selectedRecord.status && selectedRecord.status !== 'success' ? (
+                  <div className="mt-4 p-4 border border-destructive/30 bg-destructive/5 rounded-md">
+                    <div className="text-[13px] font-medium text-destructive">本条报告未生成（{selectedRecord.status}）</div>
+                    {selectedRecord.error && (
+                      <div className="mt-1 text-[12px] text-muted-foreground break-words">{selectedRecord.error}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
+                    <ReactMarkdown>{selectedRecord.content}</ReactMarkdown>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-[13px] text-muted-foreground">请选择一条记录</div>
@@ -336,7 +350,11 @@ export default function HistoryPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none">
-            {detailRecord && <ReactMarkdown>{detailRecord.content}</ReactMarkdown>}
+            {detailRecord && detailRecord.status && detailRecord.status !== 'success' ? (
+              <div className="text-[13px] font-medium text-destructive">本条报告未生成（{detailRecord.status}）{detailRecord.error ? `：${detailRecord.error}` : ''}</div>
+            ) : (
+              detailRecord && <ReactMarkdown>{detailRecord.content}</ReactMarkdown>
+            )}
           </div>
           {detailRecord?.prompt_stats ? (
             <div className="mt-3 rounded-md border border-border/50 p-3">

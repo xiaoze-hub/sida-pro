@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult, apply_scene_binding
+from src.core.ai_client import LLMDegradedError
 
 
 def _resolve_user_id(context: AgentContext) -> str | None:
@@ -1165,7 +1166,26 @@ class PremarketOutlookAgent(BaseAgent):
             (user_content.count("\n") + 1) if user_content else 0,
         )
         logger.info("[%s] AI请求开始", trace_id)
-        content = await context.ai_client.chat(system_prompt, user_content)
+        try:
+            content = await context.ai_client.chat(system_prompt, user_content)
+        except LLMDegradedError as e:
+            # 0.3: 降级显式失败, 历史留 degraded 记录, 不再走建议/推送链路
+            result = self._degraded_result(e)
+            save_analysis(
+                agent_name=self.name,
+                stock_symbol="*",
+                content=result.content,
+                title=result.title,
+                user_id=_resolve_user_id(context),
+                raw_data={
+                    "status": "degraded",
+                    "error": result.error,
+                    "timestamp": data.get("timestamp"),
+                },
+                status="degraded",
+                error=result.error,
+            )
+            return result
         logger.info("[%s] AI请求完成: response_chars=%s", trace_id, len(content or ""))
 
         if context.model_label:

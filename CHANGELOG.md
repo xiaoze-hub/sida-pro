@@ -7,6 +7,32 @@
 
 ## 2026-09-08
 
+### fix-LLM降级改抛类型化异常+显式超时+推送总闸+成本护栏fail-closed(风险方案0.3)
+- 背景: 限流时 ai_client 返回普通字符串 `"AI 服务暂时不可用(限流)…"`, 类型上与正常 LLM 输出无法区分, 曾被 daily_report 当日报存库并推送给老板; 且 AsyncOpenAI 未传 timeout 走 SDK 默认(~600s), 一次挂起能把 agent 卡住十分钟。本次按风险方案 0.3 全链路整改"降级不伪装"。
+- `src/core/ai_client.py`:
+  - 新增 `LLMDegradedError(RuntimeError)`(携带 reason/scene/retry_after), chat/chat_multi/chat_with_tools 的全部 6 处降级点(令牌桶耗尽 + 429 + 超时/连接错误)一律改抛, 不再返回字符串或伪装 SimpleNamespace; 配置类错误(401/400)仍原样抛出不掩盖。
+  - 构造 AsyncOpenAI 显式 `httpx.Timeout(connect=10, read=可配, write=30, pool=10)`, read 由 `LLM_READ_TIMEOUT` 环境变量调节并钳制 [10,300]s, 默认 90s。
+  - 修存量 bug: `_is_retryable_error` 靠类名字符串匹配, "ConnectError" 匹配不上 "connection" 导致连接错误从不重试/降级 → 改 `isinstance(e, httpx.TransportError)` 显式判定。
+  - `_log_usage` 同步 DB commit 阻塞事件循环 → 拆 `_log_usage_sync` + run_in_executor fire-and-forget(无事件循环时回退同步); `chat_multi` 此前从不记账 → 补 `_log_usage` 调用。
+- `src/agents/base.py`: `AnalysisResult` 增 `status`(success/degraded/failed)+`error` 字段; `analyze` catch LLMDegradedError → `_degraded_result()`(title 生成失败/content "AI 分析未生成：<原因>"/status=degraded); `should_notify` 推送总闸最前面拦截非 success。5 个 agent(daily_report/premarket_outlook/news_digest/chart_analyst/intraday_monitor)逐个接 catch, 其中 3 个覆写 should_notify 的自己补了同款拦截; daily_report/news_digest 降级时以 status="degraded" 落库 save_analysis, 不再解析正文。
+- `src/web/api/agents.py` 盘中建议循环 `_analyze_item` catch LLMDegradedError → log+return 跳过该股, 不伪造建议条目; `src/web/api/chat.py` 两个 tool-loop 对 LLMDegradedError 显式 re-raise(不走"tool use 不可用→chat_multi 兜底"的放大路径, 用户侧仍由外层给出诚实文案)。
+- 成本护栏 fail-closed: `src/agents/tradingagents/cost_tracker.py` 查询失败从"默认放行"改为 `exceeded=True` + `reason="预算查询失败，保守拦截"`, 明确知情后可 `TA_BUDGET_FAIL_OPEN=1` 切回放行; `SessionLocal()` 挪进 try(原在 try 外, 库连不上会裸抛而非拦截)。
+- 持久化与前端: `AnalysisHistory` 增 `status`/`error` 列 + 迁移 `_m136_analysis_history_status`(存量回填 success, 幂等); `save_analysis` 增同名参数双路径写入; `/api/history` 列表与详情 `HistoryResponse` 透出 status/error; 前端 `frontend/src/pages/History.tsx` 非 success 显示「未生成」红色徽标与红框态(列表+正文+详情弹窗), 不把失败文案当分析正文渲染 —— 落实"数据缺失显式标注, 禁止编造"红线。
+- 测试: `tests/test_ai_client_degradation.py` 20 用例(429/503/read-timeout/connect-error × chat/chat_multi/chat_with_tools 全部断言抛 LLMDegradedError 且不返回字符串; 令牌桶耗尽不触达 SDK; chat_multi 记账; 构造 timeout 默认/钳上下限/非法值; cost_tracker DB 故障 fail-closed + env 放行), `tests/test_agent_notify_gate.py` 11 用例(degraded/failed × 5 agent should_notify 全 False + _degraded_result 字段)。
+- 验证: 新用例 31 passed; 回归 test_tradingagents_agent/test_user_isolation_api/test_user_isolation_core/test_chat_stream/test_daily_report_index/test_paper_trading_notify/test_ai_provider_sniff 95 passed, test_user_isolation_migrations/test_premarket_catalyst/test_context_enrichments/test_chat_ai_layer_tools/test_chat_l2_tools 89 passed; 验收 grep `"AI 服务暂时不可用"` ai_client.py 0 命中, 构造处含 httpx.Timeout, 8 文件含 except LLMDegradedError; `pnpm typecheck` 通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
+### fix-启动方言门禁fail-stop+/api/health方言标签+清docs明文密码(风险方案0.4①②残留)
+- 背景: 丢 `SIDA_DB_URL` 曾让生产静默回退 SQLite 跑 4 天。compose 侧(方案步骤①)v0.5.18 已解开 SIDA_DB_URL 并对 POSTGRES/REDIS 密码 fail-fast(`:?` 语法), 本次补齐启动期门禁与泄露清理。
+- `src/core/startup_check.py` 新增 `check_db_dialect_explicit()`: `SIDA_DB_URL` 未设置 → 拒绝启动, 除非显式 `SIDA_ALLOW_SQLITE=1`(仅本地开发/快速上手, 打醒目 WARNING 横幅); `server.py` lifespan 在 `init_db` 之前调用该门禁, 不过即 raise 终止启动 —— "丢 env 带病起服务"物理上不可能再发生。`src/web/database.py` 容器内 fail-fast(DOCKER=1 无 SIDA_DB_URL 即 raise)同步加 `SIDA_ALLOW_SQLITE=1` 唯一逃生口(容器内开发/测试用)。
+- `src/web/api/health.py` `components.database` 新增 `dialect` 字段(取 `engine.url.get_backend_name()`, DB 查不通时按声明方言 IS_PG 兜底), 一眼看出连的是哪个库; 测试环境为 sqlite, 生产 PG 部署后应为 postgresql。前端顶栏展示不在本批残留清单内, 留给后续前端批次。
+- `tests/conftest.py` 顶部 `setdefault("SIDA_ALLOW_SQLITE", "1")`(测试即本地开发模式, 免得门禁生效后全部测试被拒启动)。
+- `tests/test_startup_check_dialect.py` 新增 5 用例: 无任何 env → 拒绝启动; `SIDA_ALLOW_SQLITE=1` → 放行+WARNING 横幅断言; 显式 PG / 显式 SQLite URL → 放行; `/api/health` `dialect == "sqlite"`。
+- `docs/_frozen/data.md:14` 明文 PG 密码改为"密码见部署机 .env 的 POSTGRES_PASSWORD"; `git grep PanWatch2026PG` tracked 文件 0 命中。密码轮换(0.4③)涉及生产, 按方案需老板确认节奏后再执行, 本批未动凭证。
+- compose 顺手修一个阻断性 bug: panwatch 的 `depends_on` 写了 `panwatch-redis`(那是 container_name, 服务键是 `redis`), 且 redis 带 `profiles: ["infra"]` 默认不启动 → `docker compose config` 直接报 invalid project, 0.4 验收第 1 条(config 解析出 SIDA_DB_URL)在 v0.5.18 上本来就不可能通过。改为 `redis: {condition: service_healthy, required: false}`(infra profile 开启时仍守健康门, 默认栈靠应用自身 redis 降级路径, /api/health 对 redis down 已按预期降级处理)。
+- 验证: 新用例 5 passed; 存量回归 `test_startup_check.py` 6 passed / 改密+防回归静态 7 passed / multi_user+ratelimit 14 passed; `POSTGRES_PASSWORD=dummy REDIS_PASSWORD=dummy GF_SECURITY_ADMIN_PASSWORD=dummy SIDA_SERVICE_TOKEN=dummy docker compose config` 成功输出 `SIDA_DB_URL: postgresql+psycopg2://sida:***@panwatch-postgres:5432/sida`(dummy 为验证用假值); py_compile 6 文件通过。
+- [branch fix/wave0-止血-20260907, `git show HEAD`]
+
 ### fix-部署脚本改克隆式安全重建+接线冒烟门禁+CI stub自检(风险方案0.1残留)
 - `deploy/deploy_panwatch.sh` rebuild_container 重写。根因: 实测生产拓扑与脚本硬编码不一致(真实卷 `panwatch-data`/`panwatch-tck` 连字符命名 + 自定义网络 `panwatch-net` + `restart=always`/无内存限制; 原脚本硬编码 `panwatch_data` 下划线卷、无 `--network`、固定 unless-stopped+1g) —— 照原硬编码重建会造出连不上 redis/postgres 的孤儿容器。改为克隆式: 以运行中容器为唯一事实源 harvest env/卷/端口/网络/重启策略/内存 → 临时容器(`${CONTAINER}_new`, 8001)先起 → curl 健康 + `WEB_HOST=0.0.0.0` inspect 校验(任一失败删临时容器退出, 旧容器原样在跑, 无损回滚) → swap → 最终容器端口继承旧容器; 防漂移告警改与 harvested 值比对(生产 restart=always 不误报); 全新安装走 default_config 兜底(卷名同步改连字符); `DOCKER` 可环境变量覆盖供 CI stub。
 - 冒烟门禁: 部署尾部硬闸调用 `scripts/post_deploy_smoke.sh`, 失败 exit 1 并保留运行容器便于排查(`PANWATCH_SKIP_SMOKE=1` 供 CI/测试跳过)。同时修 post_deploy_smoke.sh 三处静默假通过: smoke_test.py 缺失/python3 无 requests → 显式 FAIL exit 1(原会 traceback 后因输出无 "FAIL" 而 exit 0); 退出码改透传 smoke_test.py 的 RC, 不再以输出含 "FAIL" 判定(误报源); PW 容器名/LOG/脚本路径全部环境变量可覆盖(本机实测 /home/ubuntu/scripts 与 backups 均不存在, 原脚本必然假通过)。
