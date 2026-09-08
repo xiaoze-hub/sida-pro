@@ -1,0 +1,83 @@
+name: build-push-acr-forecast
+
+# 预测引擎镜像构建: tag 推送触发 → 构建预测引擎 → 推阿里云 ACR
+# 2026-09-08 审计: forecast 镜像此前完全没有 CI(生产拉取的 ...-forecast:latest 只能手工构建),
+# 补齐门禁(pytest 主仓 tests + Dockerfile.forecast 构建)与 ACR 发布通道。
+# 注: forecast_requirements.txt 全部带版本区间(上界防破坏性升级), 主 requirements 的锁版本治理见执行方案 T15。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    # PR 时只做构建验证(不推送), 避免每次前端/后端无关 PR 都全量构建 torch 镜像
+    paths:
+      - 'Dockerfile.forecast'
+      - 'forecast_server.py'
+      - 'forecast_lib/**'
+      - 'kronos_src/**'
+      - 'forecast_requirements.txt'
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Backend pytest
+        run: |
+          set -o pipefail
+          python3 -m pip install -q -r requirements.txt pytest-timeout
+          python3 -m pytest tests/ -q --timeout=60
+
+  build:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: gates
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read VERSION
+        id: ver
+        run: |
+          REF_TYPE="${GITHUB_REF_TYPE:-}"
+          REF_NAME="${GITHUB_REF_NAME:-}"
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            V="$REF_NAME"
+          elif [[ "$REF_NAME" == v* ]]; then
+            V="$REF_NAME"
+          else
+            V=$(cat VERSION 2>/dev/null || echo "0.0.0")
+          fi
+          echo "version=$V" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push (forecast)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.forecast
+          platforms: linux/amd64
+          push: true
+          tags: |
+            crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz-forecast:${{ steps.ver.outputs.version }}
+            crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz-forecast:latest
+          # 个人版 ACR 不支持 OCI attestation 清单(与主镜像流水线同口径)
+          provenance: false
+          sbom: false

@@ -7,6 +7,14 @@
 
 ## 2026-09-08
 
+### fix-ACR生产流水线pytest门禁被管道吞退出码(全红照样绿)+补PR门禁+新增forecast镜像CI
+- `.github/workflows/build-push-acr.yml` — gates 的 pytest 改 `set -o pipefail` + 去掉 `| tail -3` 与 `pip install || true`（原写法管道退出码取 tail，生产 ACR 镜像构建零测试门禁，与注释宣称相反）；新增 `pull_request: [main]` 触发，build job 加 `if: github.event_name != 'pull_request'`（PR 只跑门禁不推镜像）。
+- `.github/workflows/build-and-push-image.yml` — 同步补 PR 门禁 + build job 事件守卫（GHCR 流水线 test job 本身写法正确，只缺 PR 触发）。
+- 新增 `.github/workflows/build-push-acr-forecast.yml` — forecast 镜像此前完全没有 CI（生产拉的 `xzxwz-forecast:latest` 只能手工构建）：tag v* 构建 `Dockerfile.forecast` 推 ACR + PR 触发路径过滤门禁。
+- 未做：`release.yml`（Docker Hub 通道）为单 job 混合测试+构建+推送，拆分属执行方案 T15 流水线收敛，本轮不动。
+- 验证：三份 workflow YAML `yaml.safe_load` 解析通过；门禁红灯/绿灯实弹验证待 push 分支后由 GitHub Actions 执行。
+- [branch fix/audit-p0-0908, `git show HEAD`]
+
 ### fix-deploy_panwatch.sh热补丁部署docker run被续行内注释截断(WEB_HOST/memory/restart全丢)+防御校验
 - `deploy/deploy_panwatch.sh` — bash 先按行尾 `\` 拼逻辑行再解析注释，`docker run` 续行中间夹的两行 `#` 注释吞掉后续参数：实际只拿到 `-e TZ` 之前的部分，`WEB_HOST=0.0.0.0`、`--memory=1g`、`--restart=unless-stopped`、镜像名全部丢失 → `--full` 热补丁重建必然失败，且丢的正是 v0.4.47 修外部 502 的关键参数。注释移出命令块并在原地写明 bash 语义陷阱。
 - 新增防御校验：`docker run` 后 `docker inspect` 核对 WEB_HOST 环境变量（缺失则删容器硬失败）、Memory/RestartPolicy（缺失打 warning），参数丢失当场暴露而不是等线上 502。
