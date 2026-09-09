@@ -15,6 +15,12 @@
 - **验证**: 前端 `tsc -b` + `eslint .` + `pnpm test` **30 passed**(27+3) + `pnpm build`。
 - [tag v0.5.28]
 
+### update-v0.5.28 生产部署(仅前端 static + VERSION, 冒烟 9/9, 浏览器实测通过)
+- **部署**: `frontend/dist` 覆盖 `/app/static` + `VERSION` → `/app/VERSION` → `chown -R app:app`; **无需重启**(静态按盘读取; `get_app_version()` 每请求读 VERSION 文件)。`/api/version` = **v0.5.28**。
+- **验收**: 冒烟 **9/9**(8.7s, dark-flow 预热后); 浏览器实测 Dashboard「主力净流入日内」已渲染 canvas、**"刚上线暂无历史"提示消失**、控制台无 JS 异常。
+- **观察(非本次引入)**: 期间容器 worker 偶发回收(3 分钟 1 次), 系 uvicorn 多进程 ping 超时对慢启动敏感 + 外部厂商接口慢; `compileall` 后大幅缓解。若再频发, 可按 runbook 以 `WEB_WORKERS=1` 重建容器(单进程无 ping 机制)。
+- [tag v0.5.28]
+
 ### update-v0.5.27 生产部署(代码+前端static覆盖层, 冒烟9/9, 浏览器回归通过)
 - **部署**: 备份 `/root/app_backup_pre_v0527_20260909.tar.gz` → `tar xf --overwrite` → **`chown -R app:app /app`(本次新增的必要步骤)** → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.27** → 冒烟 **9/9**(11.4s); **零迁移**。
 - **事故与恢复(两条教训)**: 首次覆盖后容器 unhealthy、worker 反复 `Child process died`。① **属主**: root 解包后 /app 文件属主变 root, 容器以 `app` 用户启动失败 → `chown -R app:app /app` 修复(回滚备份同样失败、同镜像临时容器正常, 排除代码问题)。② **启动慢于 uvicorn 多进程 ping 超时**: 修复属主后仍复发 —— uvicorn `workers=2` 的 supervisor 每秒 ping 各 worker、约 5s 无响应即终止; 覆盖层后 `.pyc` 全失效 + 宿主同时跑全量 pytest, 冷启动 import 超过该阈值 → 杀掉重启死循环。**修复: `docker exec -u app panwatch python -m compileall -q /app/src /app/server.py` 预热字节码后重启**, 之后 3 分钟 0 次 `Child process died`, 稳定 healthy。**后续覆盖层部署必须补 chown + compileall 两步**。
