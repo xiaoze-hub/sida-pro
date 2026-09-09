@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-因子快照前视护栏: 新闻/权重按快照日as-of + 历史重跑拒绝 + 输入指纹(W0.5, KI-035)
+- **背景**: KI-035 —— 因子快照唯一写入点只复制 payload 不重算, 但整条链路可被 `POST /api/recommendations/strategy-signals/refresh?snapshot_date=历史日` 触发重算: `_load_news_metrics` 硬用 `utc_now()-72h`、权重读当前值 → 会用今天的新闻/当前权重覆盖历史因子行(前视污染, 且同日旧行被物理删除)。
+- **做法**: ① `_load_news_metrics(..., as_of=None)`: 新闻窗口 `[as_of-72h, as_of]` 且衰减以 as_of 计(**补上了原先缺失的上界 —— 由新测试抓出**); ② `get_factor_weights(market, as_of=...)` 按 `FactorWeightHistory` 取 as-of 前最后一次生效权重, `get_effective_weight_map(..., as_of=...)` 按 `StrategyWeightHistory` 同理; ③ `refresh_strategy_signals` 由 snapshot 推导 as_of(当日 23:59:59, 不超过 utc_now)并透传给新闻与两处权重; ④ refresh API 对历史 `snapshot_date` 直接 **400**(需 `SIDA_ALLOW_FACTOR_BACKFILL=1` 显式放行); ⑤ 因子行 `factor_payload` 新增 `input_hash`(sha256 前 16)/`news_window_hours`/`weight_version`/`strategy_weight`。
+- **验证**: `pytest -q tests/test_factor_snapshot_pit.py tests/test_factor_eval_cross_section.py tests/test_factor_calibration_oos.py tests/test_factor_calibration.py tests/test_strategy_semantics.py tests/test_factor_calibration_loop.py` → **25 passed**; 新增 4 用例: 新闻窗口上界/权重 as-of/历史重跑 400/input_hash 可复现。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
 ### fix-回测口径三修: 逐日盯市净值/涨跌停成交约束/交易日窗口(W0.1-W0.3, KI-031/032/033)
 - **背景**: 分析报告 P0-1/P0-2/P0-3/P0-5 —— ① 净值按平仓笔累积却按交易日年化; ② 涨跌停不可成交与成交量上限缺失; ③ 后验窗口用自然日且缺失时静默回退更早收盘。
 - **B0.1**(`src/core/backtest/engine.py`): 新增 `_daily_equity_curve` —— 逐交易日净值 = 现金 + 持仓当日收盘市值(停牌无行情按成本估值), 现金流走 CostModel Decimal; 新增 `metrics.validate_equity_curve` 契约校验(长度一致 + 逐日有日期); 年化/夏普/MDD 由此口径计算。

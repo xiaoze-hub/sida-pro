@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from math import sqrt
 
 from sqlalchemy import case, func
@@ -483,9 +483,13 @@ def _load_news_metrics(
     *,
     db,
     candidates: list[EntryCandidate],
+    as_of: datetime | None = None,
     lookback_hours: int = 72,
     max_rows: int = 5000,
 ) -> dict[str, dict]:
+    """B0.5(2026-09-09): 新增 as_of —— 新闻窗口与衰减都以「快照时点」为准,
+    而不是 utc_now()。历史快照重算时不得把今天的新闻算进去(前视污染)。
+    """
     if not candidates:
         return {}
     symbol_set = {
@@ -506,10 +510,11 @@ def _load_news_metrics(
     if not symbol_set:
         return {}
 
-    cutoff = utc_now() - timedelta(hours=max(1, int(lookback_hours)))
+    now = as_of or utc_now()
+    cutoff = now - timedelta(hours=max(1, int(lookback_hours)))
     rows = (
         db.query(NewsCache)
-        .filter(NewsCache.publish_time >= cutoff)
+        .filter(NewsCache.publish_time >= cutoff, NewsCache.publish_time <= now)
         .order_by(NewsCache.publish_time.desc())
         .limit(max(100, int(max_rows)))
         .all()
@@ -517,7 +522,6 @@ def _load_news_metrics(
     if not rows:
         return {}
 
-    now = utc_now()
     metrics: dict[str, dict] = {}
 
     for n in rows:
@@ -933,6 +937,15 @@ def _compute_factor_breakdown(
     }
 
 
+def _factor_input_hash(body: dict) -> str:
+    """因子快照输入指纹(sha256 前 16 位), 用于事后复现与篡改检测(B0.5)。"""
+    import hashlib
+    import json
+
+    blob = json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def _sync_factor_and_risk_snapshots(
     *,
     db,
@@ -980,25 +993,29 @@ def _sync_factor_and_risk_snapshots(
         row.source_bonus = float(breakdown.get("source_bonus") or 0.0)
         row.regime_multiplier = float(breakdown.get("regime_multiplier") or 1.0)
         row.final_score = float(breakdown.get("weighted_score") or s.rank_score or 0.0)
-        row.factor_payload = to_jsonable(
-            {
-                "score_breakdown": breakdown,
-                "source_pool": s.source_pool or "watchlist",
-                "risk_level": s.risk_level or "medium",
-                "cross_feature": payload.get("cross_feature")
-                if isinstance(payload.get("cross_feature"), dict)
-                else {},
-                "news_metric": _normalize_news_metric(
-                    payload.get("news_metric")
-                    if isinstance(payload.get("news_metric"), dict)
-                    else None
-                ),
-                "constrained": bool(payload.get("constrained")),
-                "constraint_reasons": payload.get("constraint_reasons")
-                if isinstance(payload.get("constraint_reasons"), list)
-                else [],
-            }
-        )
+        body = {
+            "score_breakdown": breakdown,
+            "source_pool": s.source_pool or "watchlist",
+            "risk_level": s.risk_level or "medium",
+            "cross_feature": payload.get("cross_feature")
+            if isinstance(payload.get("cross_feature"), dict)
+            else {},
+            "news_metric": _normalize_news_metric(
+                payload.get("news_metric")
+                if isinstance(payload.get("news_metric"), dict)
+                else None
+            ),
+            "constrained": bool(payload.get("constrained")),
+            "constraint_reasons": payload.get("constraint_reasons")
+            if isinstance(payload.get("constraint_reasons"), list)
+            else [],
+            # B0.5: 可复现性元数据 —— 输入指纹 + 新闻窗口 + 权重版本
+            "news_window_hours": 72,
+            "weight_version": s.strategy_version or "v1",
+            "strategy_weight": float(payload.get("strategy_weight") or 1.0),
+        }
+        body["input_hash"] = _factor_input_hash(body)
+        row.factor_payload = to_jsonable(body)
         row.updated_at = utc_now()
         touched_ids.add(sid)
 
@@ -1259,6 +1276,17 @@ def refresh_strategy_signals(
         if not candidates:
             return {"snapshot_date": snapshot, "count": 0, "items": []}
 
+        # B0.5(2026-09-09): 历史快照重算必须用「当时」的信息 —— 新闻窗口与权重都按
+        # 快照日 as-of, 否则等于拿今天的新闻/当前权重给历史日打分(前视污染)。
+        snap_day = _parse_day(snapshot)
+        as_of_dt = None
+        if snap_day is not None:
+            as_of_dt = datetime.combine(
+                snap_day, time(23, 59, 59), tzinfo=utc_now().tzinfo
+            )
+            if as_of_dt > utc_now():
+                as_of_dt = utc_now()
+
         profile_map = get_strategy_profile_map()
         regime_rows = _upsert_market_regime_snapshots(
             db=db,
@@ -1269,6 +1297,7 @@ def refresh_strategy_signals(
         news_metrics = _load_news_metrics(
             db=db,
             candidates=candidates,
+            as_of=as_of_dt,
             lookback_hours=72,
             max_rows=5000,
         )
@@ -1294,11 +1323,13 @@ def refresh_strategy_signals(
             market = (c.stock_market or "CN").strip().upper() or "CN"
             weights = weight_cache.get(market)
             if weights is None:
-                weights = get_effective_weight_map(market=market, regime="default")
+                weights = get_effective_weight_map(
+                    market=market, regime="default", as_of=as_of_dt
+                )
                 weight_cache[market] = weights
             factor_weights = factor_weight_cache.get(market)
             if factor_weights is None:
-                factor_weights = get_factor_weights(market, db=db)
+                factor_weights = get_factor_weights(market, as_of=as_of_dt, db=db)
                 factor_weight_cache[market] = factor_weights
             codes = _strategy_codes_for_candidate(c)
             for code in codes:

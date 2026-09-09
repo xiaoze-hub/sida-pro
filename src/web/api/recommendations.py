@@ -73,6 +73,18 @@ def _get_refresh_state() -> dict:
         return dict(_refresh_state)
 
 
+def _allow_factor_backfill() -> bool:
+    """B0.5: 历史快照回补开关(默认关闭, 需显式设 SIDA_ALLOW_FACTOR_BACKFILL=1)。"""
+    import os
+
+    return (os.getenv("SIDA_ALLOW_FACTOR_BACKFILL", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _refresh_worker(
     *,
     snapshot_date: str,
@@ -390,6 +402,21 @@ def refresh_strategy_signal_list(
         description="跳过东财榜单抓取, 市场池沿用 7 日内快照(共振查询联动秒级重算用)",
     ),
 ):
+    # B0.5(2026-09-09): 禁止对历史快照重算 —— 历史日的新闻/权重无法完整还原,
+    # 重算会覆盖既有因子行并引入前视污染(KI-035)。确需回补须显式开环境开关。
+    if snapshot_date:
+        from datetime import date as _date
+
+        if str(snapshot_date).strip()[:10] < _date.today().isoformat() and not _allow_factor_backfill():
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "禁止对历史快照重算因子(会造成前视污染); "
+                    "如确需回补请显式设置 SIDA_ALLOW_FACTOR_BACKFILL=1"
+                ),
+            )
     if wait:
         return refresh_strategy_signals(
             snapshot_date=snapshot_date,

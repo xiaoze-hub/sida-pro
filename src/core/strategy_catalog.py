@@ -191,7 +191,11 @@ def get_strategy_profile_map() -> dict[str, dict]:
     return {x["code"]: x for x in rows}
 
 
-def get_effective_weight_map(*, market: str = "ALL", regime: str = "default") -> dict[str, float]:
+def get_effective_weight_map(
+    *, market: str = "ALL", regime: str = "default", as_of=None
+) -> dict[str, float]:
+    """有效策略权重映射。as_of(B0.5): 传入 datetime 时按 `StrategyWeightHistory`
+    取该时点之前最近一次生效的权重(历史快照可复现), 无历史则回落当前值。"""
     ensure_strategy_catalog()
     mkt = (market or "ALL").strip().upper() or "ALL"
     reg = (regime or "default").strip() or "default"
@@ -201,6 +205,29 @@ def get_effective_weight_map(*, market: str = "ALL", regime: str = "default") ->
             s.code: float(s.default_weight or 1.0)
             for s in db.query(StrategyCatalog).all()
         }
+        if as_of is not None:
+            from src.web.models import StrategyWeightHistory
+
+            hist = (
+                db.query(StrategyWeightHistory)
+                .filter(
+                    StrategyWeightHistory.regime == reg,
+                    StrategyWeightHistory.market.in_(("ALL", mkt)),
+                    StrategyWeightHistory.created_at <= as_of,
+                )
+                .order_by(StrategyWeightHistory.created_at.asc())
+                .all()
+            )
+            out = dict(defaults)
+            for h in hist:
+                key = (h.strategy_code or "").strip()
+                if not key:
+                    continue
+                if (h.market or "ALL").upper() == mkt:
+                    out[key] = float(h.new_weight or out.get(key, 1.0))
+                elif key not in out:
+                    out[key] = float(h.new_weight or 1.0)
+            return out
         rows = (
             db.query(StrategyWeight)
             .filter(
