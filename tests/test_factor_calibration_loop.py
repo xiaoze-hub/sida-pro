@@ -41,9 +41,13 @@ def test_calibrate_all_markets_closes_loop_into_scoring():
 
     db = _mem_db()
     try:
-        d = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d")
-        for i in range(1, 7):  # CN:alpha 与 ret 完全正相关
-            _seed_pair(db, i, market="CN", snapshot_date=d, alpha=float(i), ret=float(i))
+        sid = 1
+        for days_ago in (50, 45, 40, 35, 30, 25):  # 6 个快照日 × 5 只, 每日横截面 IC=+1
+            d = (date.today() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+            for rank in range(1, 6):
+                _seed_pair(db, sid, market="CN", snapshot_date=d,
+                           alpha=float(rank), ret=float(rank))
+                sid += 1
         db.commit()
 
         res = calibrate_all_markets(db=db, min_samples=5)
