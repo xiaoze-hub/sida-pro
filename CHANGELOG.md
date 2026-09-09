@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-v0.5.23生产部署(docker cp覆盖层, 冒烟9/9, 迁移v149首执行)
+- **生产部署**: tag v0.5.23(c5aa35c) 经 docker cp 覆盖层部署到 panwatch 容器。步骤: 备份现行代码(`/root/app_backup_pre_v0523_20260909.tar.gz`) → `git archive`(21.3MB) → docker cp 进容器 /tmp → `docker exec -u root ... tar xf --overwrite` → restart → 68s healthy → 冒烟门禁 **9/9**(10.7s), /api/health `version=v0.5.23`, database/redis/scheduler 全 ok。
+- **迁移对账**: **v149 `stock_universe_snapshots` 首次在生产库执行成功**(`schema_migrations` 149 success=1); 迁移使首次启动变慢(约 2.5min 到 healthy), 属预期。
+- **部署坑(新记档, 高危)**: `git archive --format=tar` 产出的是**普通 tar**, 覆盖层解包必须 `tar xf`; 误用 `tar xzf` 会报 `gzip: stdin: not in gzip format` 且**静默不生效** —— 此时容器仍跑旧代码, 而冒烟 9/9 照样通过(骗过门禁)。**部署后必须核对容器 `/app/VERSION` 与 `schema_migrations` 新增版本号**, 不能只看冒烟。
+- [tag v0.5.23]
+
 ### update-发版 v0.5.23(优化改进创新第0波·回测可信度合入main)
 - 本次发版内容: W0.1 回测净值改逐日 mark-to-market + 指标契约(engine/metrics) / W0.2 涨跌停不可成交 + 成交量参与率上限 / W0.3 后验窗口交易日化 + 去静默兜底(含缺口报告口径统一) / W0.4 因子 IC 横截面化 + 70/30 样本外门禁 / W0.5 因子快照前视护栏(新闻/权重 as-of + 历史重跑 400 + input_hash) / W0.6 PIT 股票池快照(迁移 **v149** + 回填脚本 + ST 未知保守 5%)。
 - 部署注意: ①**首个含 schema 迁移的发版**(v149 `stock_universe_snapshots`, 幂等建表; 已在本机临时 PG 容器预演全量迁移链); ②**口径变更**: 历史回测的年化/夏普/MDD 与"N 日收益"标签**不可比**(修正后年化/夏普下降、目标日后移); ③`POST /api/recommendations/strategy-signals/refresh` 对历史 `snapshot_date` 返回 **400**(需 `SIDA_ALLOW_FACTOR_BACKFILL=1` 显式放行)。
