@@ -13,6 +13,20 @@ import statistics
 TRADING_DAYS_PER_YEAR = 252
 
 
+def validate_equity_curve(equity_curve: list[float], equity_dates: list[str]) -> None:
+    """契约校验: 净值曲线必须是逐交易日序列且与日期轴等长。
+
+    B0.1(2026-09-09): 生产者(engine.run)必须逐日 mark-to-market;
+    若再退回"按平仓笔累积", 年化/夏普会按笔年化、MDD 会漏掉持仓期浮亏。
+    """
+    if len(equity_curve) != len(equity_dates):
+        raise ValueError(
+            f"equity_curve({len(equity_curve)}) 与 equity_dates({len(equity_dates)}) 长度不一致"
+        )
+    if len(equity_dates) > 1 and not all(equity_dates[1:]):
+        raise ValueError("equity_dates 必须逐日有日期(仅首元素可为空占位)")
+
+
 def daily_returns(equity_curve: list[float]) -> list[float]:
     """由净值序列推日收益率。"""
     out: list[float] = []

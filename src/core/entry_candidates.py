@@ -13,6 +13,7 @@ from src.core.json_safe import to_jsonable
 from src.core.marketdata_client import md_stock_data
 from src.core.notifier import get_global_proxy
 from src.core.timezone import to_iso_with_tz, to_utc, utc_now
+from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
 from src.web.models import (
@@ -633,7 +634,12 @@ def _parse_day(value: str | None) -> date | None:
     return None
 
 
-def _pick_close_on_or_before(klines: list, target: date) -> float | None:
+def _pick_close_on_or_before(klines: list, target: date, *, strict: bool = False) -> float | None:
+    """取收盘价。strict=True 时只认 target 当日(缺失 → None, 不回退更早收盘)。
+
+    B0.3(2026-09-09): 后验 outcome 一律 strict=True —— 原"最近 <= target"的静默兜底
+    会把节假日/停牌日的样本前移, 造成标签口径漂移。
+    """
     if not klines:
         return None
     rows: list[tuple[date, float]] = []
@@ -650,7 +656,9 @@ def _pick_close_on_or_before(klines: list, target: date) -> float | None:
         return None
     rows.sort(key=lambda x: x[0])
     for d, c in reversed(rows):
-        if d <= target:
+        if d == target:
+            return c
+        if not strict and d < target:
             return c
     return None
 
@@ -2304,8 +2312,8 @@ def evaluate_entry_candidate_outcomes(
 
             for horizon in missing_due:
                 stats["eligible"] += 1
-                target_day = snap_day + timedelta(days=horizon)
-                outcome_price = _pick_close_on_or_before(klines, target_day)
+                target_day = add_trading_days(snap_day, horizon)
+                outcome_price = _pick_close_on_or_before(klines, target_day, strict=True)
                 if outcome_price is None:
                     stats["skipped_no_price"] += 1
                     continue
@@ -2437,7 +2445,8 @@ def _due_unverified_pairs(
         if snap is None:
             continue
         for h in safe_horizons:
-            if snap + timedelta(days=h) <= today and (int(r.id), h) not in verified:
+            # B0.3: 到期判定与评估器同口径(交易日), 否则缺口报告会长期显示幻影缺口
+            if add_trading_days(snap, h) <= today and (int(r.id), h) not in verified:
                 missing[h] += 1
     return missing
 

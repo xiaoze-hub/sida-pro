@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 IR_REF = 0.5
 IC_REF = 0.05
 
+# B0.4(2026-09-09): 样本外门禁 —— 权重调整必须在 holdout 段仍成立。
+# 取日期后 30% 作为 holdout; |holdout IC| 低于阈值或与主口径反号 → 本轮不调权。
+OOS_RATIO = 0.3
+OOS_MIN_IC = 0.02
+
 
 def compute_target(factor_code: str, ic, ir, *, beta: float = 0.4) -> float | None:
     """由 IC/IR 算目标权重;优先 IR(更稳),fallback IC;惩罚因子翻符号。
@@ -60,25 +65,30 @@ def blend(old: float, target: float, *, alpha: float = 0.35,
 def calibrate_factor_weights(
     market: str, *, alpha: float = 0.35, beta: float = 0.4,
     clamp: tuple[float, float] = (0.5, 1.5),
-    min_samples: int = 20, horizon: int = 5, days: int = 90, db=None,
+    min_samples: int = 20, horizon: int = 5, days: int = 90,
+    oos_ratio: float = OOS_RATIO, oos_min_ic: float = OOS_MIN_IC, db=None,
 ) -> dict:
     """对单个市场跑一轮因子权重标定,写 FactorWeight + FactorWeightHistory。
 
     门控:is_pinned / auto_calibrate=False / 样本不足 / IC 缺失 → 跳过(不改权重)。
-    每次都把最近观测(last_ic/ir/sample_size)写入 FactorWeight.meta 供 API 展示;
+    **B0.4 新增样本外门禁**: IC 主口径为按日横截面均值, 且 holdout 段(日期后 oos_ratio)
+    的横截面 IC 必须与主口径同向且 |ic| >= oos_min_ic, 否则本轮不调权(计入 skipped_oos)。
+    每次都把最近观测(last_ic/ir/holdout_ic/sample_size)写入 FactorWeight.meta 供 API 展示;
     History 只记录「实际发生的调整」(reason=auto),避免冷启动期审计噪声。
     """
     own = db is None
     db = db or SessionLocal()
     try:
         ic_result = evaluate_factor_ic(
-            days=days, horizon=horizon, min_samples=min_samples, market=market, db=db
+            days=days, horizon=horizon, min_samples=min_samples, market=market,
+            holdout_ratio=oos_ratio, db=db,
         )
         factors = ic_result.get("factors", {})
         get_factor_weights(market, db=db)  # 确保 5 个因子行存在
 
         lo, hi = float(clamp[0]), float(clamp[1])
         changed = 0
+        skipped_oos = 0
         rows_changed: list[dict] = []
 
         for code in CALIBRATABLE_FACTORS:
@@ -91,18 +101,30 @@ def calibrate_factor_weights(
             stats = factors.get(code, {})
             ic = stats.get("ic")
             ir = stats.get("ir")
+            ic_holdout = stats.get("ic_holdout")
             n = int(stats.get("sample_size", 0))
 
             # 记录最近一次观测(供 API 展示),无论是否调整。
             row.meta = {
                 **(row.meta or {}),
                 "last_ic": ic, "last_ir": ir, "last_sample_size": n,
+                "last_ic_pooled": stats.get("ic_pooled"),
+                "last_holdout_ic": ic_holdout,
                 "last_calibrated_at": utc_now().isoformat(),
             }
 
             if row.is_pinned or not row.auto_calibrate:
                 continue
             if n < min_samples or ic is None:
+                continue
+            # 样本外门禁: 信息不足 / 强度不够 / 符号翻转 → 本轮不调权
+            if ic_holdout is None or abs(float(ic_holdout)) < float(oos_min_ic):
+                skipped_oos += 1
+                row.meta = {**(row.meta or {}), "oos_rejected": "insufficient"}
+                continue
+            if float(ic) * float(ic_holdout) < 0:
+                skipped_oos += 1
+                row.meta = {**(row.meta or {}), "oos_rejected": "sign_flip"}
                 continue
             target = compute_target(code, ic, ir, beta=beta)
             if target is None:
@@ -112,13 +134,13 @@ def calibrate_factor_weights(
                 continue
 
             row.weight = new
-            row.reason = f"auto(ic={ic}, ir={ir}, n={n})"
+            row.reason = f"auto(ic={ic}, ir={ir}, oos_ic={ic_holdout}, n={n})"
             row.effective_from = utc_now()
             row.updated_at = utc_now()
             db.add(FactorWeightHistory(
                 factor_code=code, market=market, old_weight=old, new_weight=new,
                 ic=ic, ir=ir, sample_size=n, reason="auto",
-                meta={"target": round(target, 4), "alpha": alpha},
+                meta={"target": round(target, 4), "alpha": alpha, "oos_ic": ic_holdout},
             ))
             changed += 1
             rows_changed.append({
@@ -127,7 +149,7 @@ def calibrate_factor_weights(
 
         db.commit()
         return {"market": market, "checked": len(CALIBRATABLE_FACTORS),
-                "changed": changed, "rows": rows_changed}
+                "changed": changed, "skipped_oos": skipped_oos, "rows": rows_changed}
     except Exception as e:  # pragma: no cover - 防御性
         logger.warning(f"[因子标定] market={market} 失败: {e}")
         db.rollback()

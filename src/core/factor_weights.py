@@ -33,17 +33,33 @@ PENALTY_FACTORS = frozenset({"risk_penalty", "crowd_penalty"})
 MARKETS = ("CN", "HK", "US")
 
 
-def get_factor_weights(market: str, *, db=None) -> dict[str, float]:
+def get_factor_weights(market: str, *, as_of=None, db=None) -> dict[str, float]:
     """读取某市场各可标定因子的权重;缺失因子 lazy seed 为 1.0。
 
+    as_of(B0.5, 2026-09-09): 传入 datetime 时按 `FactorWeightHistory` 取该时点**之前**
+    最近一次生效的权重(历史快照可复现, 不套用今天的权重); 无历史记录则回落当前值。
     返回 {factor_code: weight},键恒为 CALIBRATABLE_FACTORS 全集。
-    消费方对未登记因子应用 `.get(code, 1.0)` 兜底。
     """
     own = db is None
     db = db or SessionLocal()
     try:
         rows = db.query(FactorWeight).filter(FactorWeight.market == market).all()
         existing = {r.factor_code: float(r.weight) for r in rows}
+        if as_of is not None:
+            hist = (
+                db.query(FactorWeightHistory)
+                .filter(
+                    FactorWeightHistory.market == market,
+                    FactorWeightHistory.created_at <= as_of,
+                )
+                .order_by(FactorWeightHistory.created_at.asc())
+                .all()
+            )
+            asof_map: dict[str, float] = {}
+            for h in hist:  # 升序遍历, 后写覆盖前 → 取 as_of 前最后一次
+                if h.factor_code:
+                    asof_map[h.factor_code] = float(h.new_weight or 1.0)
+            return {f: asof_map.get(f, existing.get(f, 1.0)) for f in CALIBRATABLE_FACTORS}
         missing = [f for f in CALIBRATABLE_FACTORS if f not in existing]
         if missing:
             for f in missing:

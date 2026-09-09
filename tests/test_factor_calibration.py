@@ -145,15 +145,18 @@ def test_evaluate_factor_ic_excludes_unelapsed_horizon():
 # --------------------------- DB:calibrate_factor_weights ---------------------------
 
 def test_calibrate_moves_weight_from_ic_and_audits():
-    """alpha 与收益完全正相关 → IC=+1 → 权重上调并写 auto 审计。"""
+    """横截面 alpha 与收益完全正相关 → IC=+1 → 权重上调并写 auto 审计(B0.4)。"""
     from src.core.factor_calibration import calibrate_factor_weights
     from src.web.models import FactorWeight, FactorWeightHistory
 
     db = _mem_db()
     try:
-        d = _old_date()
-        for i in range(1, 7):  # 6 条,alpha 与 ret 单调一致
-            _seed_pair(db, i, market="CN", snapshot_date=d, alpha=float(i), ret=float(i))
+        sid = 1
+        for days_ago in (50, 45, 40, 35, 30, 25):  # 6 个快照日 × 5 只, 每日横截面 IC=+1
+            for rank in range(1, 6):
+                _seed_pair(db, sid, market="CN", snapshot_date=_old_date(days_ago),
+                           alpha=float(rank), ret=float(rank))
+                sid += 1
         db.commit()
 
         calibrate_factor_weights("CN", min_samples=5, db=db)

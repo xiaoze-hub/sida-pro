@@ -7,6 +7,33 @@
 
 ## 2026-09-09
 
+### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
+- **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
+- **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
+- **验证**: `pytest -q tests/test_entry_candidate_outcomes.py tests/test_backtest*.py tests/test_outcome_horizon.py tests/test_factor_*.py tests/test_pit_universe.py tests/test_seal_quality.py` → **57 passed**。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
+### feat-PIT股票池快照: 消除幸存者偏差 + ST未知保守5%(W0.6, KI-036)
+- **背景**: KI-036 —— 全仓无 universe 快照/退市表/ST 字段, 回测用"今天的名单"回看历史, 已退市/已戴帽标的被系统性剔除, 收益与胜率偏高且无法靠调参弥补。
+- **做法**: ① 新表 `stock_universe_snapshots`(迁移 **v149**, 唯一键 `as_of_date+symbol+market`, 字段 is_st/is_delisted/list_date/delist_date/source); ② 新模块 `src/core/universe.py`: `upsert_universe`(幂等) / `universe_as_of`(按日取池, **无快照返回空列表不静默用今天名单**) / `filter_symbols`(无快照回退并告警) / `backfill_from_entry_candidates`(库内唯一 PIT 来源) / `backfill_from_stock_table`; ③ `decision_backtest.backtest_resonance(..., universe_as_of=日期)` 按该日池过滤标的; ④ `limit_rules.limit_ratio/is_st=None` **保守取 5%**(显式 False 才 10%) —— fail-safe 优先; ⑤ 回填脚本 `scripts/backfill_universe.py`。
+- **验证**: `pytest -q tests/test_pit_universe.py tests/test_seal_quality.py tests/test_backtest*.py tests/test_outcome_horizon.py tests/test_decision_enhance.py` → **61 passed**; 新增 4 用例: 退市/ST 过滤、幂等、无快照回退告警、ST 未知保守 5%。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
+### feat-因子快照前视护栏: 新闻/权重按快照日as-of + 历史重跑拒绝 + 输入指纹(W0.5, KI-035)
+- **背景**: KI-035 —— 因子快照唯一写入点只复制 payload 不重算, 但整条链路可被 `POST /api/recommendations/strategy-signals/refresh?snapshot_date=历史日` 触发重算: `_load_news_metrics` 硬用 `utc_now()-72h`、权重读当前值 → 会用今天的新闻/当前权重覆盖历史因子行(前视污染, 且同日旧行被物理删除)。
+- **做法**: ① `_load_news_metrics(..., as_of=None)`: 新闻窗口 `[as_of-72h, as_of]` 且衰减以 as_of 计(**补上了原先缺失的上界 —— 由新测试抓出**); ② `get_factor_weights(market, as_of=...)` 按 `FactorWeightHistory` 取 as-of 前最后一次生效权重, `get_effective_weight_map(..., as_of=...)` 按 `StrategyWeightHistory` 同理; ③ `refresh_strategy_signals` 由 snapshot 推导 as_of(当日 23:59:59, 不超过 utc_now)并透传给新闻与两处权重; ④ refresh API 对历史 `snapshot_date` 直接 **400**(需 `SIDA_ALLOW_FACTOR_BACKFILL=1` 显式放行); ⑤ 因子行 `factor_payload` 新增 `input_hash`(sha256 前 16)/`news_window_hours`/`weight_version`/`strategy_weight`。
+- **验证**: `pytest -q tests/test_factor_snapshot_pit.py tests/test_factor_eval_cross_section.py tests/test_factor_calibration_oos.py tests/test_factor_calibration.py tests/test_strategy_semantics.py tests/test_factor_calibration_loop.py` → **25 passed**; 新增 4 用例: 新闻窗口上界/权重 as-of/历史重跑 400/input_hash 可复现。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
+### fix-回测口径三修: 逐日盯市净值/涨跌停成交约束/交易日窗口(W0.1-W0.3, KI-031/032/033)
+- **背景**: 分析报告 P0-1/P0-2/P0-3/P0-5 —— ① 净值按平仓笔累积却按交易日年化; ② 涨跌停不可成交与成交量上限缺失; ③ 后验窗口用自然日且缺失时静默回退更早收盘。
+- **B0.1**(`src/core/backtest/engine.py`): 新增 `_daily_equity_curve` —— 逐交易日净值 = 现金 + 持仓当日收盘市值(停牌无行情按成本估值), 现金流走 CostModel Decimal; 新增 `metrics.validate_equity_curve` 契约校验(长度一致 + 逐日有日期); 年化/夏普/MDD 由此口径计算。
+- **B0.2**(同上): `Signal.is_st` + `Backtester(participation_rate=0.05)`; 一字涨停买不进 → 顺延到下一可成交日(全程封板则信号作废并计 skipped)、一字跌停卖不出 → 止损/到期顺延、单笔成交量 ≤ 当日成交量×参与率(不足一手顺延/作废); 复用 `src/core/limit_rules.py`(主板 10%/创业板科创板 20%/ST 5%/北交所 30%)。
+- **B0.3**(`strategy_engine.py`/`entry_candidates.py`/`backtest/engine.py`): 后验 target 改 `trading_calendar.add_trading_days`(自然日 → 交易日); `_pick_close_on_or_before(..., strict=True)` 只认目标交易日**当日**收盘, 缺失返回 None 并计入 `skipped_no_price`(基准价保留 on-or-before 语义)。
+- **验证**: `pytest -q tests/test_backtest.py tests/test_backtest_daily_equity.py tests/test_backtest_fill_constraints.py tests/test_outcome_horizon.py` → **26 passed**; 新增 3 个测试文件 15 个用例, 覆盖曲线长度=交易日数/持仓浮亏计入 MDD/终点=期初+已实现盈亏/一字板顺延与作废/跌停止损顺延/量能上限/ST 5%/跨节交易日窗口/strict 不回退。
+- **口径影响**: 历史回测的年化/夏普/MDD 与"N 日收益"标签**不可比**(修正后年化与夏普普遍下降、目标日后移), UI 文案需同步。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
 ### docs-优化/改进/创新开发方案(实盘辅助定位, 7波31任务; W0回测可信度优先)
 - **背景**: 应老板要求, 从量化策略研究/金融数据工程/高级软件架构三视角审查本项目, 产出《优化/改进/创新分析报告》并收敛为可执行开发方案。方法: 4 路并行静态审查 + 关键文件逐行核验 + 生产库只读抽查(`strategy_factor_snapshots` 7434 行, 见 KI-035)。老板定调**定位=实盘辅助**(本地部署、不接真实下单、非开盘时段可生产实跑验收)。
 - **交付**: `docs/优化改进创新_开发方案_20260909.md`(基线 main@66360f7 / v0.5.22, 含 AGENTS.md 要求的三要素头) —— **7 波 31 个可执行任务**: W0 回测可信度(6) / W1 数据地基(6) / W2 回测框架(6) / W3 风控硬化(4) / W4 架构与可观测(5) / W5 前端可视化(4) / W6 创新(8 选做)。每任务固定五件套: 来源(P0-x/KI 编号) → 改动文件:行号 → 做法 → 验收命令/断言 → 优先级; 附统一 DoD(9 条)、口径回归对账、风险与回滚、6 个决策点。

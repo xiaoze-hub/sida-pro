@@ -2673,6 +2673,13 @@ def _m142_dark_fund_top_snapshots_table(conn: Connection) -> None:
     DarkFundTopSnapshot.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m149_stock_universe_snapshots(conn: Connection) -> None:
+    """PIT 股票池日快照表 stock_universe_snapshots(B0.6/KI-036, 消除幸存者偏差)。"""
+    from src.web.models import StockUniverseSnapshot
+
+    StockUniverseSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3357,6 +3364,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(146, "legacy_positions_to_accounts", _m146_legacy_positions_to_accounts),
     Migration(147, "legacy_remove_stock_enabled", _m147_legacy_remove_stock_enabled),
     Migration(148, "legacy_add_user_id_columns", _m148_legacy_add_user_id_columns),
+    Migration(149, "stock_universe_snapshots", _m149_stock_universe_snapshots),
 )
 
 

@@ -113,6 +113,7 @@ def backtest_resonance(
     fund_source: Optional[str] = None,
     activity_line: float = 3.0,
     bars_days: int = 800,
+    universe_as_of: Optional[str] = None,
 ) -> dict:
     """三指标共振回测。
 
@@ -124,6 +125,8 @@ def backtest_resonance(
         fund_source: None = 双指标(不含资金); "ohlc" = 资金维用 OHLC 对照项
         activity_line: 活跃度门槛(3.0 强势线 / 6.0 大牛线)
         bars_days: 每股取 K 线根数(需覆盖回测区间 + MIN_BARS 预热)
+        universe_as_of: B0.6 —— 传入日期时按 `stock_universe_snapshots` 的该日池
+            过滤 symbols(消除幸存者偏差); 无快照则回退调用方名单并告警。
 
     Returns:
         {
@@ -136,6 +139,11 @@ def backtest_resonance(
         }
     """
     from src.core import ai_activity, gs_strategy, resonance
+
+    if universe_as_of:
+        from src.core.universe import filter_symbols
+
+        symbols = filter_symbols(symbols, universe_as_of, market="CN")
 
     samples: dict[str, list[dict]] = {}
     ok_symbols = 0

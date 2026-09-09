@@ -1,9 +1,13 @@
-"""因子有效性评估(Phase 2):IC / IR。
+"""因子有效性评估(Phase 2):横截面 IC / IR。
 
 回答「哪些因子在 A 股真正有 alpha」—— 把 StrategyFactorSnapshot(每个信号的因子分)
 与 StrategyOutcome(前向收益)按 signal_run_id 关联,算每个因子的:
-- IC(信息系数):因子值与未来收益的 Spearman 秩相关(全样本)
-- IR(信息比率):按快照日分组的 IC 序列的 mean/std
+- IC(信息系数, **主口径**):按快照日做**横截面** Spearman 后取均值(B0.4, 2026-09-09);
+  另附 t 统计量 ic_t 与标准差 ic_std。
+- ic_pooled(**参考值**):全样本 pooled Spearman —— 混入时序变异, 可能与真实横截面
+  选股能力背离, 仅作对照, 不再作为决策口径。
+- IR(信息比率):IC 时序序列的 mean/std(= ic / ic_std)。
+- ic_holdout:样本外段(按日期后 30%)的横截面 IC, 供因子标定的 OOS 门禁用。
 
 纯 Python 实现相关系数(不引入 scipy/alphalens),与回测内核一致的轻量约束。
 """
@@ -70,15 +74,16 @@ def spearman(xs: list[float], ys: list[float]) -> float | None:
 
 def evaluate_factor_ic(
     *, days: int = 90, horizon: int = 5, min_samples: int = 20, min_period_samples: int = 5,
-    market: str | None = None, db=None,
+    market: str | None = None, holdout_ratio: float = 0.0, db=None,
 ) -> dict:
-    """计算各因子的 IC/IR。
+    """计算各因子的横截面 IC / IR(+ pooled 参考值 + 样本外 IC)。
 
     Args:
         days: 回看快照天数
         horizon: 用哪个持有期(交易日)的 outcome
-        min_samples: 全样本 IC 的最小样本量
-        min_period_samples: 单日 IC 的最小样本量(用于 IR 的时序序列)
+        min_samples: pooled IC 的最小样本量
+        min_period_samples: 单日横截面 IC 的最小样本量
+        holdout_ratio: >0 时按日期后段切出样本外段(如 0.3 = 后 30% 日期)
     """
     own = db is None
     db = db or SessionLocal()
@@ -129,11 +134,19 @@ def evaluate_factor_ic(
                 slot[1].append(r)
 
         factors: dict[str, dict] = {}
+        dates_sorted = sorted(d for d in by_date if d)
+        holdout_dates: set[str] = set()
+        if 0.0 < float(holdout_ratio) < 1.0 and len(dates_sorted) >= 4:
+            split = int(len(dates_sorted) * (1.0 - float(holdout_ratio)))
+            split = max(1, min(len(dates_sorted) - 1, split))
+            holdout_dates = set(dates_sorted[split:])
+
         for f in FACTOR_FIELDS:
             xs, ys = all_xy[f]
-            ic = spearman(xs, ys) if len(xs) >= min_samples else None
+            ic_pooled = spearman(xs, ys) if len(xs) >= min_samples else None
             period_ics: list[float] = []
-            for _d, facmap in by_date.items():
+            holdout_ics: list[float] = []
+            for d, facmap in by_date.items():
                 if f not in facmap:
                     continue
                 pxs, pys = facmap[f]
@@ -141,19 +154,35 @@ def evaluate_factor_ic(
                     di = spearman(pxs, pys)
                     if di is not None:
                         period_ics.append(di)
-            ir = None
-            if len(period_ics) >= 3:
-                m = fmean(period_ics)
-                s = stdev(period_ics)
-                ir = (m / s) if s > 0 else None
+                        if d in holdout_dates:
+                            holdout_ics.append(di)
+            # 主口径: 横截面 IC 均值(>=3 个期才有意义)
+            ic = fmean(period_ics) if len(period_ics) >= 3 else None
+            ic_std = stdev(period_ics) if len(period_ics) >= 3 else None
+            ic_t = None
+            if ic is not None and ic_std and ic_std > 0:
+                ic_t = ic / (ic_std / (len(period_ics) ** 0.5))
+            ir = (ic / ic_std) if (ic is not None and ic_std and ic_std > 0) else None
+            ic_holdout = fmean(holdout_ics) if len(holdout_ics) >= 2 else None
             factors[f] = {
                 "ic": round(ic, 4) if ic is not None else None,
+                "ic_t": round(ic_t, 4) if ic_t is not None else None,
+                "ic_std": round(ic_std, 4) if ic_std is not None else None,
+                "ic_pooled": round(ic_pooled, 4) if ic_pooled is not None else None,
+                "ic_holdout": round(ic_holdout, 4) if ic_holdout is not None else None,
                 "ir": round(ir, 4) if ir is not None else None,
                 "sample_size": len(xs),
                 "ic_periods": len(period_ics),
+                "holdout_periods": len(holdout_ics),
             }
 
-        return {"horizon": int(horizon), "days": int(days), "market": market, "factors": factors}
+        return {
+            "horizon": int(horizon),
+            "days": int(days),
+            "market": market,
+            "holdout_ratio": float(holdout_ratio),
+            "factors": factors,
+        }
     except Exception as e:
         logger.warning(f"[因子评估] IC 计算失败: {e}")
         return {"horizon": int(horizon), "days": int(days), "market": market,

@@ -62,6 +62,16 @@ def _mk_candidate(session, symbol: str, snap: date, *, score: float = 80.0) -> i
     return c.id
 
 
+def _trading_days_ago(n: int) -> date:
+    """n 个交易日之前的日期(B0.3 后验窗口按交易日计, 测试须同口径)。"""
+    from src.core.trading_calendar import prev_trading_day
+
+    d = date.today()
+    for _ in range(n):
+        d = prev_trading_day(d)
+    return d
+
+
 def _kline_rows(n_days_back: int = 40, close: float = 11.0) -> list[SimpleNamespace]:
     """最近 n_days_back 天(含今天)的日线, 收盘价固定 close。"""
     today = date.today()
@@ -128,8 +138,8 @@ class TestDueOnlyAndOldestFirst:
         session = factory()
         today = date.today()
 
-        old_id = _mk_candidate(session, "600001", today - timedelta(days=10))  # h1/h3/h5/h10 全到期
-        mid_id = _mk_candidate(session, "600002", today - timedelta(days=3))   # h1/h3 到期
+        old_id = _mk_candidate(session, "600001", _trading_days_ago(10))  # h1/h3/h5/h10 全到期
+        mid_id = _mk_candidate(session, "600002", _trading_days_ago(3))   # h1/h3 到期
         new_id = _mk_candidate(session, "600003", today)                       # 不可能到期
         stale_id = _mk_candidate(session, "600004", today - timedelta(days=50))  # 超 45 天窗口
         session.close()
@@ -171,7 +181,7 @@ class TestDueOnlyAndOldestFirst:
         today = date.today()
         # 3 个候选同日快照(均 4 个 horizon 到期), score 区分先后; 单轮上限 1 → 三轮全验证
         ids = [
-            _mk_candidate(session, f"6001{i:02d}", today - timedelta(days=10), score=float(90 - i))
+            _mk_candidate(session, f"6001{i:02d}", _trading_days_ago(10), score=float(90 - i))
             for i in range(3)
         ]
         session.close()
@@ -230,7 +240,7 @@ class TestFailureHandling:
         factory = sessionmaker(bind=engine)
         session = factory()
         today = date.today()
-        cid = _mk_candidate(session, "600201", today - timedelta(days=5))
+        cid = _mk_candidate(session, "600201", _trading_days_ago(5))
         # 预置一条失败记录: h1 曾因无 base price 失败
         session.add(EntryCandidateOutcome(
             candidate_id=cid,
@@ -268,7 +278,7 @@ class TestFailureHandling:
         factory = sessionmaker(bind=engine)
         session = factory()
         today = date.today()
-        cid = _mk_candidate(session, "600202", today - timedelta(days=5))
+        cid = _mk_candidate(session, "600202", _trading_days_ago(5))
         session.close()
 
         orig_collector = ec.KlineCollector
@@ -300,8 +310,8 @@ class TestMissingReport:
         factory = sessionmaker(bind=engine)
         session = factory()
         today = date.today()
-        a_id = _mk_candidate(session, "600301", today - timedelta(days=10))  # 全缺 h1..h10
-        b_id = _mk_candidate(session, "600302", today - timedelta(days=5))   # 只缺 h3/h5
+        a_id = _mk_candidate(session, "600301", _trading_days_ago(10))  # 全缺 h1..h10
+        b_id = _mk_candidate(session, "600302", _trading_days_ago(5))   # 只缺 h3/h5
         _mk_candidate(session, "600303", today)                              # 未到期, 不算缺口
         # b 已验 h1
         session.add(EntryCandidateOutcome(
@@ -335,7 +345,7 @@ class TestMissingReport:
         factory = sessionmaker(bind=engine)
         session = factory()
         today = date.today()
-        cid = _mk_candidate(session, "600303", today - timedelta(days=10))
+        cid = _mk_candidate(session, "600303", _trading_days_ago(10))
         for h in (1, 3, 5, 10):
             session.add(EntryCandidateOutcome(
                 candidate_id=cid,

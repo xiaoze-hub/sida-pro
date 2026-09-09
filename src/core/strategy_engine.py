@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from math import sqrt
 
 from sqlalchemy import case, func
@@ -19,6 +19,7 @@ from src.core.strategy_catalog import (
 )
 from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
+from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
 from src.web.models import (
@@ -250,7 +251,12 @@ def _parse_day(value: str | None) -> date | None:
     return None
 
 
-def _pick_close_on_or_before(klines: list, target: date) -> float | None:
+def _pick_close_on_or_before(klines: list, target: date, *, strict: bool = False) -> float | None:
+    """取收盘价。strict=True 时只认 target 当日(缺失 → None, 不回退更早收盘)。
+
+    B0.3(2026-09-09): 后验 outcome 一律 strict=True —— 原"最近 <= target"的静默兜底
+    会把节假日/停牌日的样本前移, 造成标签口径漂移。
+    """
     if not klines:
         return None
     rows: list[tuple[date, float]] = []
@@ -267,7 +273,9 @@ def _pick_close_on_or_before(klines: list, target: date) -> float | None:
         return None
     rows.sort(key=lambda x: x[0])
     for d, c in reversed(rows):
-        if d <= target:
+        if d == target:
+            return c
+        if not strict and d < target:
             return c
     return None
 
@@ -475,9 +483,13 @@ def _load_news_metrics(
     *,
     db,
     candidates: list[EntryCandidate],
+    as_of: datetime | None = None,
     lookback_hours: int = 72,
     max_rows: int = 5000,
 ) -> dict[str, dict]:
+    """B0.5(2026-09-09): 新增 as_of —— 新闻窗口与衰减都以「快照时点」为准,
+    而不是 utc_now()。历史快照重算时不得把今天的新闻算进去(前视污染)。
+    """
     if not candidates:
         return {}
     symbol_set = {
@@ -498,10 +510,11 @@ def _load_news_metrics(
     if not symbol_set:
         return {}
 
-    cutoff = utc_now() - timedelta(hours=max(1, int(lookback_hours)))
+    now = as_of or utc_now()
+    cutoff = now - timedelta(hours=max(1, int(lookback_hours)))
     rows = (
         db.query(NewsCache)
-        .filter(NewsCache.publish_time >= cutoff)
+        .filter(NewsCache.publish_time >= cutoff, NewsCache.publish_time <= now)
         .order_by(NewsCache.publish_time.desc())
         .limit(max(100, int(max_rows)))
         .all()
@@ -509,7 +522,6 @@ def _load_news_metrics(
     if not rows:
         return {}
 
-    now = utc_now()
     metrics: dict[str, dict] = {}
 
     for n in rows:
@@ -925,6 +937,15 @@ def _compute_factor_breakdown(
     }
 
 
+def _factor_input_hash(body: dict) -> str:
+    """因子快照输入指纹(sha256 前 16 位), 用于事后复现与篡改检测(B0.5)。"""
+    import hashlib
+    import json
+
+    blob = json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def _sync_factor_and_risk_snapshots(
     *,
     db,
@@ -972,25 +993,29 @@ def _sync_factor_and_risk_snapshots(
         row.source_bonus = float(breakdown.get("source_bonus") or 0.0)
         row.regime_multiplier = float(breakdown.get("regime_multiplier") or 1.0)
         row.final_score = float(breakdown.get("weighted_score") or s.rank_score or 0.0)
-        row.factor_payload = to_jsonable(
-            {
-                "score_breakdown": breakdown,
-                "source_pool": s.source_pool or "watchlist",
-                "risk_level": s.risk_level or "medium",
-                "cross_feature": payload.get("cross_feature")
-                if isinstance(payload.get("cross_feature"), dict)
-                else {},
-                "news_metric": _normalize_news_metric(
-                    payload.get("news_metric")
-                    if isinstance(payload.get("news_metric"), dict)
-                    else None
-                ),
-                "constrained": bool(payload.get("constrained")),
-                "constraint_reasons": payload.get("constraint_reasons")
-                if isinstance(payload.get("constraint_reasons"), list)
-                else [],
-            }
-        )
+        body = {
+            "score_breakdown": breakdown,
+            "source_pool": s.source_pool or "watchlist",
+            "risk_level": s.risk_level or "medium",
+            "cross_feature": payload.get("cross_feature")
+            if isinstance(payload.get("cross_feature"), dict)
+            else {},
+            "news_metric": _normalize_news_metric(
+                payload.get("news_metric")
+                if isinstance(payload.get("news_metric"), dict)
+                else None
+            ),
+            "constrained": bool(payload.get("constrained")),
+            "constraint_reasons": payload.get("constraint_reasons")
+            if isinstance(payload.get("constraint_reasons"), list)
+            else [],
+            # B0.5: 可复现性元数据 —— 输入指纹 + 新闻窗口 + 权重版本
+            "news_window_hours": 72,
+            "weight_version": s.strategy_version or "v1",
+            "strategy_weight": float(payload.get("strategy_weight") or 1.0),
+        }
+        body["input_hash"] = _factor_input_hash(body)
+        row.factor_payload = to_jsonable(body)
         row.updated_at = utc_now()
         touched_ids.add(sid)
 
@@ -1251,6 +1276,17 @@ def refresh_strategy_signals(
         if not candidates:
             return {"snapshot_date": snapshot, "count": 0, "items": []}
 
+        # B0.5(2026-09-09): 历史快照重算必须用「当时」的信息 —— 新闻窗口与权重都按
+        # 快照日 as-of, 否则等于拿今天的新闻/当前权重给历史日打分(前视污染)。
+        snap_day = _parse_day(snapshot)
+        as_of_dt = None
+        if snap_day is not None:
+            as_of_dt = datetime.combine(
+                snap_day, time(23, 59, 59), tzinfo=utc_now().tzinfo
+            )
+            if as_of_dt > utc_now():
+                as_of_dt = utc_now()
+
         profile_map = get_strategy_profile_map()
         regime_rows = _upsert_market_regime_snapshots(
             db=db,
@@ -1261,6 +1297,7 @@ def refresh_strategy_signals(
         news_metrics = _load_news_metrics(
             db=db,
             candidates=candidates,
+            as_of=as_of_dt,
             lookback_hours=72,
             max_rows=5000,
         )
@@ -1286,11 +1323,13 @@ def refresh_strategy_signals(
             market = (c.stock_market or "CN").strip().upper() or "CN"
             weights = weight_cache.get(market)
             if weights is None:
-                weights = get_effective_weight_map(market=market, regime="default")
+                weights = get_effective_weight_map(
+                    market=market, regime="default", as_of=as_of_dt
+                )
                 weight_cache[market] = weights
             factor_weights = factor_weight_cache.get(market)
             if factor_weights is None:
-                factor_weights = get_factor_weights(market, db=db)
+                factor_weights = get_factor_weights(market, as_of=as_of_dt, db=db)
                 factor_weight_cache[market] = factor_weights
             codes = _strategy_codes_for_candidate(c)
             for code in codes:
@@ -1689,12 +1728,12 @@ def evaluate_strategy_outcomes(
             for horizon in safe_horizons:
                 if (s.id, horizon) in existing:
                     continue
-                target_day = snap_day + timedelta(days=horizon)
+                target_day = add_trading_days(snap_day, horizon)
                 if target_day > today:
                     stats["skipped_not_due"] += 1
                     continue
                 stats["eligible"] += 1
-                outcome_price = _pick_close_on_or_before(klines, target_day)
+                outcome_price = _pick_close_on_or_before(klines, target_day, strict=True)
                 if outcome_price is None:
                     stats["skipped_no_price"] += 1
                     continue
