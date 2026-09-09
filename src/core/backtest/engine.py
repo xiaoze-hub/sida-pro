@@ -8,7 +8,8 @@
 - 平仓(event):逐日检查止损/止盈;同日双触保守判为先止损;达最大持有交易日按收盘平。
 - 跳空:开盘已越过止损/止盈则按开盘价成交(gap)。
 - 仓位:默认每笔固定名义资金,买 A 股 100 股整数倍(可注入 sizer 供 Phase 1 替换)。
-- 净值曲线:按平仓日累积已实现盈亏(简化);并发持仓的逐日浮动 mark 留作后续扩展。
+- 净值曲线(B0.1, 2026-09-09):**逐交易日 mark-to-market** —— 现金 + 持仓按当日收盘市值,
+  与 metrics.py 的契约(逐日净值序列)一致; 年化/夏普/最大回撤均由此口径计算。
 - 涨跌停无法成交约束未建模(TODO:需前收 + 板块判定)。
 
 另提供 horizon_return():复刻 strategy_engine.evaluate_strategy_outcomes 口径,用于交叉验证。
@@ -24,6 +25,8 @@ from typing import Callable
 from src.core.backtest import metrics as M
 from src.core.backtest.cost_model import CostModel
 from src.core.backtest.data_adapter import PriceBar, first_index_after
+from src.core.limit_rules import limit_down_price, limit_up_price
+from src.core.trading_calendar import add_trading_days
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,7 @@ class Signal:
     stop_loss: float | None = None
     target_price: float | None = None
     holding_days: int = 10            # 最大持有交易日(event 模式)
+    is_st: bool = False               # B0.2: ST 涨跌停幅度 5%(代码无法判, 由调用方标注)
 
 
 @dataclass
@@ -97,24 +101,72 @@ class Backtester:
         cash_per_trade: float = 100_000.0,
         lot: int = 100,
         sizer: PositionSizer | None = None,
+        participation_rate: float = 0.05,
     ) -> None:
         self.cost = cost_model or CostModel()
         self.initial_capital = float(initial_capital)
+        self.lot = max(1, int(lot))
+        self.participation_rate = max(0.0, float(participation_rate))
         self.sizer = sizer or fixed_cash_sizer(cash_per_trade, lot)
 
+    def _buyable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
+        """一字涨停(全天封死)时买不进 → False; 无法判定(非 A 股代码/缺昨收) → True。"""
+        up = limit_up_price(
+            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
+        )
+        if up is None:
+            return True
+        bar = bars[idx]
+        return not (bar.open >= up - 1e-9 and bar.high <= up + 1e-9)
+
+    def _sellable(self, bars: list[PriceBar], idx: int, signal: Signal) -> bool:
+        """一字跌停(全天封死)时卖不出 → False; 无法判定 → True。"""
+        dn = limit_down_price(
+            signal.symbol, bars[idx - 1].close if idx > 0 else None, signal.is_st
+        )
+        if dn is None:
+            return True
+        bar = bars[idx]
+        return not (bar.open <= dn + 1e-9 and bar.low >= dn - 1e-9)
+
+    def _cap_qty(self, qty: int, volume: float) -> int:
+        """按当日成交量参与率裁剪(向下取整到一手); 无成交量数据 → 0(保守不可成交)。"""
+        try:
+            vol = float(volume or 0.0)
+        except Exception:
+            vol = 0.0
+        if vol <= 0 or qty <= 0:
+            return 0
+        cap = int(vol * self.participation_rate)
+        cap = (cap // self.lot) * self.lot
+        return int(min(int(qty), cap))
+
     def run_single(self, signal: Signal, bars: list[PriceBar]) -> BTTrade | None:
-        """单信号回测:下一交易日开盘入场,逐日止损/止盈/到期平仓。"""
+        """单信号回测:下一交易日开盘入场,逐日止损/止盈/到期平仓。
+
+        B0.2(2026-09-09): 涨跌停不可成交 —— 一字涨停买不进(顺延到下一可成交日,
+        全程封板则该信号作废); 一字跌停卖不出(止损/到期顺延); 成交量参与率上限
+        (单笔 ≤ 当日成交量 × participation_rate, 不足一手则顺延/作废)。
+        """
         if not bars:
             return None
         ei = first_index_after(bars, signal.signal_date)
         if ei is None or ei >= len(bars):
             return None
-        entry_bar = bars[ei]
-        entry_price = entry_bar.open if signal.entry_price is None else float(signal.entry_price)
-        if entry_price <= 0:
-            return None
-        qty = self.sizer(entry_price)
-        if qty <= 0:
+
+        entry_idx = None
+        entry_price = 0.0
+        qty = 0
+        while ei < len(bars):
+            bar = bars[ei]
+            px = bar.open if signal.entry_price is None else float(signal.entry_price)
+            if px > 0 and self._buyable(bars, ei, signal):
+                q = self._cap_qty(self.sizer(px), bar.volume)
+                if q > 0:
+                    entry_idx, entry_price, qty = ei, px, q
+                    break
+            ei += 1
+        if entry_idx is None:
             return None
 
         stop = signal.stop_loss
@@ -124,16 +176,18 @@ class Backtester:
         exit_price = exit_date = exit_reason = None
         held = 0
         # T+1 起逐日检查(入场日当天不可卖)
-        for j in range(ei + 1, len(bars)):
-            held = j - ei
+        for j in range(entry_idx + 1, len(bars)):
+            held = j - entry_idx
             bar = bars[j]
             if stop and stop > 0:
                 if bar.open <= stop:  # 跳空跌破
-                    exit_price, exit_date, exit_reason = bar.open, bar.date, "stop_loss"
-                    break
-                if bar.low <= stop:
-                    exit_price, exit_date, exit_reason = stop, bar.date, "stop_loss"
-                    break
+                    if self._sellable(bars, j, signal):
+                        exit_price, exit_date, exit_reason = bar.open, bar.date, "stop_loss"
+                        break
+                elif bar.low <= stop:
+                    if self._sellable(bars, j, signal):
+                        exit_price, exit_date, exit_reason = stop, bar.date, "stop_loss"
+                        break
             if target and target > 0:
                 if bar.open >= target:  # 跳空冲高
                     exit_price, exit_date, exit_reason = bar.open, bar.date, "target"
@@ -142,19 +196,20 @@ class Backtester:
                     exit_price, exit_date, exit_reason = target, bar.date, "target"
                     break
             if held >= max_hold:
-                exit_price, exit_date, exit_reason = bar.close, bar.date, "expire"
-                break
+                if self._sellable(bars, j, signal):
+                    exit_price, exit_date, exit_reason = bar.close, bar.date, "expire"
+                    break
 
         if exit_price is None:
             last = bars[-1]
             exit_price, exit_date, exit_reason = last.close, last.date, "eod"
-            held = len(bars) - 1 - ei
+            held = len(bars) - 1 - entry_idx
 
         rt = self.cost.round_trip_pnl(entry_price, exit_price, qty)
         return BTTrade(
             symbol=signal.symbol,
             market=signal.market,
-            entry_date=entry_bar.date,
+            entry_date=bars[entry_idx].date,
             entry_price=round(entry_price, 4),
             exit_date=exit_date,
             exit_price=round(exit_price, 4),
@@ -166,10 +221,88 @@ class Backtester:
             holding_bars=held,
         )
 
+    @staticmethod
+    def _bar_key(trade: BTTrade, bars_by_symbol: dict):
+        """定位该笔交易在 bars_by_symbol 中的键((symbol, market) 优先, 退化为 symbol)。"""
+        key = (trade.symbol, trade.market)
+        if key in bars_by_symbol:
+            return key
+        if trade.symbol in bars_by_symbol:
+            return trade.symbol
+        return None
+
+    def _daily_equity_curve(
+        self, trades: list[BTTrade], bars_by_symbol: dict
+    ) -> tuple[list[float], list[str]]:
+        """逐交易日净值曲线 = 现金 + 持仓当日收盘市值(含浮动盈亏)。
+
+        B0.1(2026-09-09): 原实现按平仓笔累积已实现盈亏, 与 metrics.py 的
+        "逐交易日净值"契约不符, 导致年化/夏普按笔年化、最大回撤忽略持仓期浮亏。
+        """
+        if not trades:
+            return [self.initial_capital], [""]
+
+        start = min(t.entry_date for t in trades)
+        end = max(t.exit_date for t in trades)
+        all_dates = sorted(
+            {
+                b.date
+                for bars in bars_by_symbol.values()
+                for b in bars
+                if start <= b.date <= end
+            }
+        )
+        if not all_dates:
+            return [self.initial_capital], [""]
+
+        close_by_key: dict = {}
+        for key, bars in bars_by_symbol.items():
+            close_by_key[key] = {b.date: b.close for b in bars}
+
+        entries: dict[str, list[tuple[int, BTTrade]]] = {}
+        exits: dict[str, list[tuple[int, BTTrade]]] = {}
+        for idx, t in enumerate(trades):
+            entries.setdefault(t.entry_date, []).append((idx, t))
+            exits.setdefault(t.exit_date, []).append((idx, t))
+
+        cash = self.initial_capital
+        open_pos: list[dict] = []
+        curve: list[float] = []
+        dates: list[str] = []
+
+        for d in all_dates:
+            # 先出场(回款)再入场(占款), 同日不重复计
+            for idx, t in exits.get(d, []):
+                sell = self.cost.fill("sell", t.exit_price, t.quantity)
+                cash += sell.cash_delta
+                open_pos = [p for p in open_pos if p["tid"] != idx]
+            for idx, t in entries.get(d, []):
+                buy = self.cost.fill("buy", t.entry_price, t.quantity)
+                cash += buy.cash_delta
+                open_pos.append(
+                    {
+                        "tid": idx,
+                        "key": self._bar_key(t, bars_by_symbol),
+                        "qty": t.quantity,
+                        "entry_price": t.entry_price,
+                    }
+                )
+
+            mv = 0.0
+            for p in open_pos:
+                px = close_by_key.get(p["key"], {}).get(d)
+                if px is None:
+                    px = p["entry_price"]  # 当日无行情(停牌等)按成本估值, 保守
+                mv += p["qty"] * px
+            curve.append(round(cash + mv, 4))
+            dates.append(d)
+
+        return curve, dates
+
     def run(
         self, signals: list[Signal], bars_by_symbol: dict
     ) -> BacktestResult:
-        """批量回测,聚合净值曲线与绩效指标。
+        """批量回测, 聚合逐日净值曲线与绩效指标。
 
         bars_by_symbol: 键可为 (symbol, market) 或 symbol。
         """
@@ -186,14 +319,9 @@ class Backtester:
                 continue
             trades.append(t)
 
-        trades_sorted = sorted(trades, key=lambda t: t.exit_date)
-        equity = self.initial_capital
-        curve = [self.initial_capital]
-        dates = [""]
-        for t in trades_sorted:
-            equity += t.pnl
-            curve.append(round(equity, 4))
-            dates.append(t.exit_date)
+        trades_sorted = sorted(trades, key=lambda t: (t.exit_date, t.entry_date))
+        curve, dates = self._daily_equity_curve(trades_sorted, bars_by_symbol)
+        M.validate_equity_curve(curve, dates)
 
         pnls = [t.pnl for t in trades]
         return BacktestResult(
@@ -209,23 +337,16 @@ class Backtester:
 def horizon_return(signal: Signal, bars: list[PriceBar], horizon_days: int) -> float | None:
     """复刻 strategy_engine.evaluate_strategy_outcomes 口径,用于交叉验证。
 
-    base = signal.entry_price;target_day = signal_date + horizon_days(自然日);
-    outcome = 最近 <= target_day 的收盘价;return% = (outcome-base)/base*100。
+    B0.3(2026-09-09): target_day = signal_date 起第 horizon_days 个**交易日**
+    (原实现用自然日 → "5 日"实为约 3 个交易日); outcome = target_day **当日**收盘,
+    缺失即 None(不再回退更早收盘)。
     """
     snap = _parse_day(signal.signal_date)
     base = signal.entry_price
     if snap is None or not bars or not base or base <= 0:
         return None
-    target_day = snap + timedelta(days=int(horizon_days))
-    outcome = None
+    target = add_trading_days(snap, int(horizon_days)).isoformat()
     for b in bars:
-        d = _parse_day(b.date)
-        if d is None:
-            continue
-        if d <= target_day:
-            outcome = b.close
-        else:
-            break
-    if outcome is None:
-        return None
-    return (outcome - base) / base * 100.0
+        if b.date == target:
+            return (b.close - base) / base * 100.0
+    return None

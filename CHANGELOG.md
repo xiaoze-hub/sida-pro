@@ -7,6 +7,15 @@
 
 ## 2026-09-09
 
+### fix-回测口径三修: 逐日盯市净值/涨跌停成交约束/交易日窗口(W0.1-W0.3, KI-031/032/033)
+- **背景**: 分析报告 P0-1/P0-2/P0-3/P0-5 —— ① 净值按平仓笔累积却按交易日年化; ② 涨跌停不可成交与成交量上限缺失; ③ 后验窗口用自然日且缺失时静默回退更早收盘。
+- **B0.1**(`src/core/backtest/engine.py`): 新增 `_daily_equity_curve` —— 逐交易日净值 = 现金 + 持仓当日收盘市值(停牌无行情按成本估值), 现金流走 CostModel Decimal; 新增 `metrics.validate_equity_curve` 契约校验(长度一致 + 逐日有日期); 年化/夏普/MDD 由此口径计算。
+- **B0.2**(同上): `Signal.is_st` + `Backtester(participation_rate=0.05)`; 一字涨停买不进 → 顺延到下一可成交日(全程封板则信号作废并计 skipped)、一字跌停卖不出 → 止损/到期顺延、单笔成交量 ≤ 当日成交量×参与率(不足一手顺延/作废); 复用 `src/core/limit_rules.py`(主板 10%/创业板科创板 20%/ST 5%/北交所 30%)。
+- **B0.3**(`strategy_engine.py`/`entry_candidates.py`/`backtest/engine.py`): 后验 target 改 `trading_calendar.add_trading_days`(自然日 → 交易日); `_pick_close_on_or_before(..., strict=True)` 只认目标交易日**当日**收盘, 缺失返回 None 并计入 `skipped_no_price`(基准价保留 on-or-before 语义)。
+- **验证**: `pytest -q tests/test_backtest.py tests/test_backtest_daily_equity.py tests/test_backtest_fill_constraints.py tests/test_outcome_horizon.py` → **26 passed**; 新增 3 个测试文件 15 个用例, 覆盖曲线长度=交易日数/持仓浮亏计入 MDD/终点=期初+已实现盈亏/一字板顺延与作废/跌停止损顺延/量能上限/ST 5%/跨节交易日窗口/strict 不回退。
+- **口径影响**: 历史回测的年化/夏普/MDD 与"N 日收益"标签**不可比**(修正后年化与夏普普遍下降、目标日后移), UI 文案需同步。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
 ### docs-优化/改进/创新开发方案(实盘辅助定位, 7波31任务; W0回测可信度优先)
 - **背景**: 应老板要求, 从量化策略研究/金融数据工程/高级软件架构三视角审查本项目, 产出《优化/改进/创新分析报告》并收敛为可执行开发方案。方法: 4 路并行静态审查 + 关键文件逐行核验 + 生产库只读抽查(`strategy_factor_snapshots` 7434 行, 见 KI-035)。老板定调**定位=实盘辅助**(本地部署、不接真实下单、非开盘时段可生产实跑验收)。
 - **交付**: `docs/优化改进创新_开发方案_20260909.md`(基线 main@66360f7 / v0.5.22, 含 AGENTS.md 要求的三要素头) —— **7 波 31 个可执行任务**: W0 回测可信度(6) / W1 数据地基(6) / W2 回测框架(6) / W3 风控硬化(4) / W4 架构与可观测(5) / W5 前端可视化(4) / W6 创新(8 选做)。每任务固定五件套: 来源(P0-x/KI 编号) → 改动文件:行号 → 做法 → 验收命令/断言 → 优先级; 附统一 DoD(9 条)、口径回归对账、风险与回滚、6 个决策点。

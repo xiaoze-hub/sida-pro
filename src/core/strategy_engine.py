@@ -19,6 +19,7 @@ from src.core.strategy_catalog import (
 )
 from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
+from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
 from src.web.models import (
@@ -250,7 +251,12 @@ def _parse_day(value: str | None) -> date | None:
     return None
 
 
-def _pick_close_on_or_before(klines: list, target: date) -> float | None:
+def _pick_close_on_or_before(klines: list, target: date, *, strict: bool = False) -> float | None:
+    """取收盘价。strict=True 时只认 target 当日(缺失 → None, 不回退更早收盘)。
+
+    B0.3(2026-09-09): 后验 outcome 一律 strict=True —— 原"最近 <= target"的静默兜底
+    会把节假日/停牌日的样本前移, 造成标签口径漂移。
+    """
     if not klines:
         return None
     rows: list[tuple[date, float]] = []
@@ -267,7 +273,9 @@ def _pick_close_on_or_before(klines: list, target: date) -> float | None:
         return None
     rows.sort(key=lambda x: x[0])
     for d, c in reversed(rows):
-        if d <= target:
+        if d == target:
+            return c
+        if not strict and d < target:
             return c
     return None
 
@@ -1689,12 +1697,12 @@ def evaluate_strategy_outcomes(
             for horizon in safe_horizons:
                 if (s.id, horizon) in existing:
                     continue
-                target_day = snap_day + timedelta(days=horizon)
+                target_day = add_trading_days(snap_day, horizon)
                 if target_day > today:
                     stats["skipped_not_due"] += 1
                     continue
                 stats["eligible"] += 1
-                outcome_price = _pick_close_on_or_before(klines, target_day)
+                outcome_price = _pick_close_on_or_before(klines, target_day, strict=True)
                 if outcome_price is None:
                     stats["skipped_no_price"] += 1
                     continue

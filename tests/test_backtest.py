@@ -87,18 +87,28 @@ def test_engine_expire():
 
 
 def test_horizon_return_matches_manual():
-    """horizon_return 复刻 StrategyOutcome 口径:(后收盘-基准)/基准。"""
+    """horizon_return 按交易日口径:(target 当日收盘-基准)/基准(B0.3)。"""
+    from datetime import date
+
+    from src.core.trading_calendar import add_trading_days
+
+    target = add_trading_days(date(2026, 1, 1), 5).isoformat()
     bars = [_bar("2026-01-01", 10, 10, 10, 10), _bar("2026-01-02", 10, 11, 10, 11),
-            _bar("2026-01-06", 11, 12, 11, 12)]
+            _bar(target, 11, 12, 11, 12)]
     sig = Signal("X", "CN", "2026-01-01", entry_price=10.0)
-    r = horizon_return(sig, bars, horizon_days=5)  # target_day=01-06 → outcome=12 → +20%
+    r = horizon_return(sig, bars, horizon_days=5)
     assert r is not None and abs(r - 20.0) < 1e-6
+    # 目标交易日缺失 → None(不再回退更早收盘)
+    assert horizon_return(sig, bars[:2], horizon_days=5) is None
 
 
 def test_backtest_run_aggregates():
-    """批量回测聚合净值曲线与指标。"""
+    """批量回测聚合逐日净值曲线与指标(B0.1: 曲线按交易日逐日, 非按笔)。"""
     bars = [_bar(f"2026-01-{d:02d}", 10, 10.1, 9.9, 10) for d in range(1, 15)]
     sigs = [Signal("X", "CN", "2026-01-01", stop_loss=5, target_price=20, holding_days=3)]
     res = Backtester().run(sigs, {("X", "CN"): bars})
     assert len(res.trades) == 1 and res.metrics["trades"] == 1
-    assert len(res.equity_curve) == 2
+    # 入场 01-02 → 到期 01-05, 逐日曲线共 4 个交易日
+    assert len(res.equity_curve) == len(res.equity_dates) == 4
+    assert res.equity_dates[0] == "2026-01-02"
+    assert abs(res.equity_curve[-1] - (res.initial_capital + res.trades[0].pnl)) < 1e-6
