@@ -18,7 +18,7 @@ import type { Stock } from './shared'
 import type { StockAgentInfo } from './shared'
 import type { StockContextTarget } from '@/components/StockContextMenu'
 import { fetchAPI } from '@panwatch/api'
-import { getToken } from '@panwatch/api'
+import { useQuoteStream, type QuoteTickMap } from '@/realtime/useQuoteStream'
 import { mergePortfolioQuotes } from './shared'
 import { parseServerTime } from '@/lib/utils'
 import { stocksApi } from '@panwatch/api'
@@ -311,57 +311,32 @@ useEffect(() => {
   setPortfolio(mergePortfolioQuotes(portfolioRaw, quotes))
 }, [portfolioRaw, quotes, setPortfolio])
 
-// 2026-08-12 行情推送(WebSocket): 自选股实时行情免手动刷新。
-// 后端每 5s 批量推一次(腾讯批量接口)。⚠️ 曾用 EventSource/SSE, uvicorn 下
-// StreamingResponse+while True 生成器挂起, 改 WebSocket 稳定。断线自动重连。
-useEffect(() => {
-  const token = getToken()
-  let ws: WebSocket | null = null
-  let retryTimer: ReturnType<typeof setTimeout> | null = null
-  // P1-8 (2026-09-05 28号审计): 卸载守卫, 防离开页面后无限重连
-  let closed = false
-
-  const connect = () => {
-    if (!token || closed) return
-    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/quotes/ws?token=${encodeURIComponent(token)}`)
-    ws.onmessage = (ev) => {
-      try {
-        const payload = JSON.parse(ev.data)
-        if (!payload || payload.type !== 'quotes' || !payload.data) return
-        // payload.data: {symbol: {price, change_pct, prev_close, name}}
-        setQuotes(prev => {
-          const next = { ...prev }
-          // ⚠️ ref 存的是函数, 必须调用拿数组(2026-08-12 白屏根因: 迭代了函数本身)
-          const items = buildQuoteItemsRef.current()
-          for (const item of items) {
-            const q = payload.data[item.symbol]
-            if (!q || typeof q.price !== 'number') continue
-            next[`${item.market}:${item.symbol}`] = {
-              current_price: q.price,
-              change_pct: q.change_pct ?? null,
-              quote_time: null,
-              quote_date: null,
-              daily_pnl_period: prev[`${item.market}:${item.symbol}`]?.daily_pnl_period ?? 'unknown',
-            }
-          }
-          return next
-        })
-      } catch { /* 忽略坏帧 */ }
+// 2026-08-12 行情推送: 后端每 5s 批量推持仓行情(腾讯批量接口)。
+// KI-025(2026-09-09): 统一走 envelope 客户端 —— SWP 头带 token(不进 URL/日志)、
+// 断线 last_seq 补发、指数退避、4401 不重连。⚠️ 曾用 EventSource/SSE, uvicorn 下
+// StreamingResponse+while True 生成器挂起, 改 WebSocket 稳定。
+// 注意: WS 只推"持仓"标的; 自选(未持仓)仍靠 refreshQuotes 轮询兜底, 故轮询不撤。
+const onQuoteTicks = useCallback((data: QuoteTickMap) => {
+  setQuotes(prev => {
+    const next = { ...prev }
+    // ⚠️ ref 存的是函数, 必须调用拿数组(2026-08-12 白屏根因: 迭代了函数本身)
+    const items = buildQuoteItemsRef.current()
+    for (const item of items) {
+      const q = data[item.symbol]
+      if (!q || typeof q.price !== 'number') continue
+      next[`${item.market}:${item.symbol}`] = {
+        current_price: q.price,
+        change_pct: q.change_pct ?? null,
+        quote_time: null,
+        quote_date: null,
+        daily_pnl_period: prev[`${item.market}:${item.symbol}`]?.daily_pnl_period ?? 'unknown',
+      }
     }
-    ws.onclose = () => {
-      if (closed) return
-      // 断线 5s 后重连(EventSource 原生有重连, WebSocket 需手动)
-      retryTimer = setTimeout(connect, 5000)
-    }
-  }
-
-  connect()
-  return () => {
-    closed = true
-    if (retryTimer) clearTimeout(retryTimer)
-    ws?.close()
-  }
+    return next
+  })
 }, [setQuotes])
+
+useQuoteStream(onQuoteTicks)
 
 // 刷新 K 线摘要（并发受限的单个请求，避免批量接口慢）；并防止重入
 const refreshKlines = useCallback(async () => {

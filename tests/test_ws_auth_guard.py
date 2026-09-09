@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.web.api.auth import verify_ws_token_payload
 from src.web.api import quote_stream as qs
-from src.web.models import Base, User
+from src.web.models import Account, Base, Position, Stock, User
 
 U_ACTIVE = "aaaa1111-0000-0000-0000-000000000001"
 U_DISABLED = "aaaa1111-0000-0000-0000-000000000002"
@@ -133,3 +133,43 @@ def test_broadcast_skips_user_with_no_watchlist(monkeypatch):
         qs.unsubscribe(sid_a)
         with qs._symbols_lock:
             qs._user_symbols_cache.clear()
+
+
+def test_collect_includes_watchlist_without_positions(monkeypatch):
+    """KI-025: 纯自选(无任何持仓)标的也必须进推送集。
+
+    原实现只 join positions, 有自选无持仓时聚合器 groups 为空 → WS 全程静默。
+    """
+    eng = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(
+        eng,
+        tables=[User.__table__, Stock.__table__, Account.__table__, Position.__table__],
+    )
+    TestingSession = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
+    import src.web.database as db_mod
+
+    monkeypatch.setattr(db_mod, "SessionLocal", TestingSession)
+    db = TestingSession()
+    db.add(
+        User(id=U_ACTIVE, username="active", password_hash="x", role="member",
+             is_active=True, token_version=1)
+    )
+    db.add_all(
+        [
+            Stock(id=1, symbol="600519", name="贵州茅台", market="CN", user_id=U_ACTIVE),
+            Stock(id=2, symbol="000001", name="平安银行", market="CN", user_id=U_ACTIVE),
+        ]
+    )
+    db.commit()
+    try:
+        groups = qs._collect_watchlist_symbols()
+        assert set(groups.get("CN", [])) == {"600519", "000001"}
+        with qs._symbols_lock:
+            allowed = set(qs._user_symbols_cache.get(U_ACTIVE, set()))
+        assert allowed == {"CN:600519", "CN:000001"}
+    finally:
+        with qs._symbols_lock:
+            qs._user_symbols_cache.clear()
+        db.close()

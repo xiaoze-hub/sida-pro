@@ -150,10 +150,13 @@ def _aggregator_loop():
 
 
 def _collect_watchlist_symbols() -> dict[str, list[str]]:
-    """从 DB 收集启用账户持仓(按市场分组), 并刷新 per-user 关注集合缓存。
+    """从 DB 收集「自选 + 启用账户持仓」(按市场分组), 并刷新 per-user 关注集合缓存。
 
     2026-09-08 T8: 返回值是全体 union(供聚合器一次批量拉行情), 用户的可见
     集合落在 `_user_symbols_cache`(含 "" = 历史遗留共享账户, 人人可见)。
+    2026-09-09 KI-025: 原实现只 join `positions`, 纯自选(未持仓)标的不进推送集 →
+    有自选无持仓时 WS 全程静默(与模块 docstring「自选股行情推送」不符)。
+    现补上 `stocks` 表(user_id 归属), 自选与持仓合并推送。
     """
     try:
         from src.web.database import SessionLocal
@@ -161,22 +164,34 @@ def _collect_watchlist_symbols() -> dict[str, list[str]]:
 
         db = SessionLocal()
         try:
-            rows = (
+            per_user: dict[str | None, set[str]] = {}
+            groups: dict[str, list[str]] = defaultdict(list)
+
+            def _add(sym: str | None, mkt: str | None, owner: str | None) -> None:
+                if not sym:
+                    return
+                mkt = mkt or "CN"
+                groups.setdefault(mkt, [])
+                if sym not in groups[mkt]:
+                    groups[mkt].append(sym)
+                key = owner if owner else ""  # "" = 历史遗留共享账户
+                per_user.setdefault(key, set()).add(f"{mkt}:{sym}")
+
+            # 1) 自选(stocks.user_id 归属)
+            for sym, mkt, uid in db.query(
+                Stock.symbol, Stock.market, Stock.user_id
+            ).all():
+                _add(sym, mkt, uid)
+            # 2) 启用账户持仓(account.user_id 归属; 可能含未加自选的标的)
+            for sym, mkt, uid in (
                 db.query(Stock.symbol, Stock.market, Account.user_id)
                 .join(Position, Position.stock_id == Stock.id)
                 .join(Account, Account.id == Position.account_id)
                 .filter(Account.enabled == True)  # noqa: E712
                 .all()
-            )
-            per_user: dict[str | None, set[str]] = {}
-            groups: dict[str, list[str]] = defaultdict(list)
-            for sym, mkt, acc_user_id in rows:
-                mkt = mkt or "CN"
-                groups.setdefault(mkt, [])
-                if sym not in groups[mkt]:
-                    groups[mkt].append(sym)
-                key = acc_user_id if acc_user_id else ""  # "" = 历史遗留共享账户
-                per_user.setdefault(key, set()).add(f"{mkt}:{sym}")
+            ):
+                _add(sym, mkt, uid)
+
             with _symbols_lock:
                 _user_symbols_cache.clear()
                 _user_symbols_cache.update(per_user)

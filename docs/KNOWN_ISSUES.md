@@ -34,14 +34,10 @@
 | KI-015 | P2 | 前端 6 处手抄 fmt 金额精度互分叉 | 2026-09-08 | TianXiang |
 | KI-016 | P2 | 前端设计债 7 项(W3.7 审计重跑产出) | 2026-09-09 | TianXiang |
 | KI-017 | P3 | release.yml 单 job 混合测试+构建+推送(执行方案 T15) | 2026-09-08 | TianXiang |
-| KI-018 | P3 | GET /api/logs/errors 无 UI 展示页(接口先行) | 2026-09-08 | TianXiang |
-| KI-019 | P3 | 数据源来源徽标前端未接(接口先行) | 2026-09-08 | TianXiang |
 | KI-020 | P3 | 命中榜因子自动降权未做(权重策略待定) | 2026-09-08 | unassigned |
-| KI-021 | P3 | 决策合成 GET /api/decision 前端卡片未接(接口先行) | 2026-09-08 | TianXiang |
 | KI-022 | P2 | hermes-gateway CLOSE-WAIT 无自愈(独立仓库) | 2026-09-07 | unassigned |
 | KI-023 | P2 | ws_hub PubSub 自回显疑似循环(未验证) | 2026-09-07 | TianXiang |
 | KI-024 | P3 | WS Hub 抽独立进程(部署拓扑变更) | 2026-09-07 | TianXiang |
-| KI-025 | P3 | 前端 WS 消费 envelope 未接(当前全轮询) | 2026-09-07 | TianXiang |
 | KI-026 | P2 | KlineChart/InteractiveKline 大重构 + orval 全量 codegen | 2026-09-07 | TianXiang |
 | KI-027 | P3 | 本地环境损坏测试文件 2 个(不进 CI, 本地基线 2 failed) | 2026-09-08 | TianXiang |
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
@@ -138,22 +134,6 @@
 - 涉及文件: .github/workflows/release.yml。
 - 建议修复: 按执行方案 T15 拆分, 参照 build-push-acr.yml 现成结构。
 
-### KI-018 /errors 无 UI 页 (P3)
-
-- 发现: 2026-09-08(feature-系统日志闭环)
-- 现象: GET /api/logs/errors(owner) 已上线, 投研/系统页无展示 UI("接口先行")。
-- 影响: 前端上报错误只能 Grafana/Loki 或手 curl 查看, 站内不可见。
-- 涉及文件: src/web/api/logs.py、frontend 系统 Hub。
-- 建议修复: 系统 Hub 增"错误"Tab 消费该接口。
-
-### KI-019 来源徽标前端未接 (P3)
-
-- 发现: 2026-09-08(feature-来源透传+vendor质量分)
-- 现象: GET /api/datasources/trust 与 Quote 的 source/source_latency_ms 透传已就绪, 前端来源徽标未接。
-- 影响: 用户看不到当前行情来自哪个源及其可信度。
-- 涉及文件: frontend 行情相关页(接口已先行)。
-- 建议修复: 行情页数据角标展示 source+latency; PG 收盘价偏离记分(第二阶段)另行评估。
-
 ### KI-020 命中榜因子自动降权未做 (P3)
 
 - 发现: 2026-09-08(feature-分Agent命中榜)
@@ -161,14 +141,6 @@
 - 影响: 命中差的因素仍以固定权重参与合成, 无自动退化。
 - 涉及文件: src/web/api/profile.py(_accuracy_board)。
 - 建议修复: 先定权重策略(人工调参 vs 自动退化), 再另开实现。
-
-### KI-021 决策卡片前端未接 (P3)
-
-- 发现: 2026-09-08(feature-决策合成)
-- 现象: GET /api/decision/{symbol}(三信号→动手/看看/别碰)已上线, 前端决策卡片未接("接口先行")。
-- 影响: 决策合成能力仅 API 可用。
-- 涉及文件: src/core/decision.py、frontend Quote 页。
-- 建议修复: Quote 页加决策卡片; 与命中榜联动(方向 3 数据回灌)另开。
 
 ### KI-022 hermes-gateway CLOSE-WAIT 无自愈 (P2)
 
@@ -193,14 +165,6 @@
 - 影响: WS 高连接量时与 HTTP 争资源; 当前规模无感, 属部署拓扑变更(有迁移成本)。
 - 涉及文件: src/web/notifications/ws_hub.py。
 - 建议修复: 连接量上升后随 CLOSE-WAIT 自愈(P4 原计划)一起做。
-
-### KI-025 前端 WS 消费 envelope 未接 (P3)
-
-- 发现: 2026-09-07(feature-P2/P3 未做项)
-- 现象: 前端 envelope 客户端(frontend/src/realtime/envelope.ts, parseFrame/重放/maxSeq)已就绪, 但无页面消费 WS, 全轮询。
-- 影响: 实时性弱于推送且重复请求; 现状可用。
-- 涉及文件: frontend/src/realtime/envelope.ts。
-- 建议修复: 行情页接 WS tick(配合 TanStack Query setQueryData 就地更新)。
 
 ### KI-026 KlineChart 大重构 + orval 全量 codegen (P2)
 
@@ -314,4 +278,6 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 
 **2026-09-09 深夜(KI-037 收口)**: 前端指标收敛到 `frontend/packages/biz-ui/src/lib/indicators.ts` 并**逐值对齐后端 `src/core/indicators.py`**(MACD HIST 补 ×2、RSI6 由 Wilder 改 Cutler), 新增跨语言 parity 测试 `frontend/tests/lib/indicators-parity.test.ts`(夹具由后端生成, 容差 1e-9) → **KI-037 修复移入 CHANGELOG**, 台账 **30 条在册(P1×9/P2×16/P3×13)**; 仅 KI-039 保留开启。
 
-**2026-09-09 深夜(KI-039 清零)**: 第二阶段把剩余 13 个反向依赖全部下沉 —— `src/core/paths.py`(报告目录) / `src/db/redis_client.py`+`src/db/streams.py` / `src/collectors/stock_list.py` / `src/collectors/wencai.py` / `src/core/market_scan_jobs.py` / `src/core/auth_tokens.py` / `src/core/notify_sink.py`(WS 推送槽, ws_hub 导入时注册), 另 unit_check 直调 `core.datasource_failures.record`。**`src/core` 反向依赖 `src/web` = 0 文件**, 棘轮白名单清空(新增即失败) → **KI-039 关闭移入 CHANGELOG**, 台账 **29 条在册(P1×9/P2×15/P3×13)**。
+**2026-09-09 深夜(KI-039 清零)**: 第二阶段把剩余 13 个反向依赖全部下沉 —— `src/core/paths.py`(报告目录) / `src/db/redis_client.py`+`src/db/streams.py` / `src/collectors/stock_list.py` / `src/collectors/wencai.py` / `src/core/market_scan_jobs.py` / `src/core/auth_tokens.py` / `src/core/notify_sink.py`(WS 推送槽, ws_hub 导入时注册), 另 unit_check 直调 `core.datasource_failures.record`。**`src/core` 反向依赖 `src/web` = 0 文件**, 棘轮白名单清空(新增即失败) → **KI-039 关闭移入 CHANGELOG**, 台账 **29 条在册**。
+
+**2026-09-09 深夜(接口先行项落地)**: KI-019(来源徽标)/KI-021(决策卡片)/KI-018(错误页签)前端落地发版 **v0.5.35**; KI-025 前端 WS 消费 envelope(新增 `src/realtime/useQuoteStream.ts`: SWP 鉴权 / last_seq 补发 / 指数退避 / 4401 不重连) + 后端补推自选标的(`_collect_watchlist_symbols` 补 `stocks` 表)发版 **v0.5.36** → **4 条修复移入 CHANGELOG**, 台账 **25 条在册(P1×3/P2×13/P3×9)**。

@@ -15,6 +15,19 @@
 - **验证**: `tsc -b` + `eslint .` + `pnpm test` 34 passed + `pnpm build`。
 - [tag v0.5.35]
 
+### update-v0.5.35 生产部署(仅前端 static + VERSION, 冒烟 9/9, 浏览器实测)
+- **部署**: `docker cp frontend/dist/.` + `VERSION` + `chown -R app:app`(纯前端, **不重启**: `get_app_version()` 每请求读 VERSION) → `/api/version` = **v0.5.35** → 冒烟 **9/9**(9.4s)。
+- **浏览器实测**(owner token, 清 SW 缓存后): Quote 页「源: tencent · 95ms」徽标 + 「决策合成: 看看 / 趋势 S区间 · 活跃度 0.79 · 资金 —」卡片; `/system?tab=errors` 错误页签渲染 50 条(展开显示 traceback + context JSON); 控制台仅既有 forecast 503(预测引擎未部署), 无新增报错。
+- [tag v0.5.35]
+
+### feat-KI-025 前端 WS 消费 envelope(行情实时流统一入口) + 后端补推自选标的
+- **前端**: 新增 `src/realtime/useQuoteStream.ts` —— 承接此前就绪但无人消费的 `envelope.ts`: 鉴权改走 `Sec-WebSocket-Protocol: panwatch.auth.bearer,<jwt>`(**token 不进 URL/access log**)、`parseFrame` 兼容新旧帧、断线带 `last_seq` 补发、指数退避(1s→30s 封顶)、**4401 鉴权失败不重连**; `pages/stocks/useStocksData.ts` 原内联 WS 块替换为该 hook(持仓标的行情就地更新)。
+- **后端修缺陷**: `_collect_watchlist_symbols` 原只 `join positions`, **纯自选(未持仓)标的不进推送集** → 有自选无持仓时 WS 全程静默(与模块 docstring「自选股行情推送」不符); 现补上 `stocks` 表(user_id 归属), 自选+持仓合并推送, 仍按 per-user 过滤。
+- **测试**: 前端 `tests/lib/use-quote-stream.test.tsx` 7 例(envelope/裸帧/非行情帧忽略/SWP 不带 token/last_seq 退避递增/4401 不重连/enabled=false); 后端 `tests/test_ws_auth_guard.py::test_collect_includes_watchlist_without_positions`。
+- **验证**: 前端 `tsc -b` + `eslint .` + `pnpm test` **41 passed** + `pnpm build`; 后端全量离线套件 **1987 passed / 2 failed(KI-027 本机) / 5 skipped**; 3 静态门禁通过; SWP 握手实测 `protocol=panwatch.auth.bearer` 且 URL 无 token。
+- **口径**: WS 只推持仓+自选, **轮询不撤**(自选未持仓仍靠 `refreshQuotes` 兜底; 实时流是增量不是替代)。
+- [tag v0.5.36]
+
 ### refactor-KI-039 第二阶段(清零): src/core 反向依赖 src/web 13 → 0 文件, KI-039 关闭
 - **目标**: 把上一版剩余的 13 个反向依赖按"服务下沉"逐个清零, 使 `src/core` 完全脱离 Web 层。
 - **八项下沉**:
