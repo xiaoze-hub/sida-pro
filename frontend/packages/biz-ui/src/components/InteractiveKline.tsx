@@ -7,6 +7,11 @@ import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
 import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
+import {
+  smaSeries,
+  macd as macdSeries,
+  rsiCutlerSeries,
+} from '../lib/indicators'
 
 type BusinessDay = { year: number; month: number; day: number }
 
@@ -191,75 +196,17 @@ function parseCrosshairDateKey(time: any): string | null {
 }
 
 function sma(values: number[], period: number): Array<number | null> {
-  if (period <= 1) return values.map(v => v)
-  const out: Array<number | null> = new Array(values.length).fill(null)
-  let sum = 0
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i]
-    if (i >= period) sum -= values[i - period]
-    if (i >= period - 1) out[i] = sum / period
-  }
-  return out
-}
-
-function ema(values: number[], period: number): Array<number | null> {
-  const out: Array<number | null> = new Array(values.length).fill(null)
-  if (values.length === 0) return out
-  const k = 2 / (period + 1)
-  let prev: number | null = null
-  for (let i = 0; i < values.length; i++) {
-    const v = values[i]
-    if (prev == null) {
-      prev = v
-      out[i] = v
-      continue
-    }
-    prev = v * k + prev * (1 - k)
-    out[i] = prev
-  }
-  return out
+  return smaSeries(values, period)
 }
 
 function computeMacd(closes: number[]) {
-  const e12 = ema(closes, 12)
-  const e26 = ema(closes, 26)
-  const macd: Array<number | null> = closes.map((_, i) => {
-    const a = e12[i]
-    const b = e26[i]
-    if (a == null || b == null) return null
-    return a - b
-  })
-  const macdVals = macd.map(v => (v == null ? 0 : v))
-  const signal = ema(macdVals, 9)
-  const hist: Array<number | null> = macd.map((v, i) => {
-    if (v == null || signal[i] == null) return null
-    return v - (signal[i] as number)
-  })
-  return { macd, signal, hist }
+  // 统一指标库口径: dif=EMA12-EMA26, dea=EMA(dif,9), hist=(dif-dea)*2
+  const { dif, dea, hist } = macdSeries(closes)
+  return { macd: dif, signal: dea, hist }
 }
 
 function computeRsi(closes: number[], period = 6): Array<number | null> {
-  const out: Array<number | null> = new Array(closes.length).fill(null)
-  if (closes.length <= period) return out
-  let gain = 0
-  let loss = 0
-  for (let i = 1; i <= period; i++) {
-    const diff = closes[i] - closes[i - 1]
-    if (diff >= 0) gain += diff
-    else loss += -diff
-  }
-  let avgGain = gain / period
-  let avgLoss = loss / period
-  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1]
-    const g = diff > 0 ? diff : 0
-    const l = diff < 0 ? -diff : 0
-    avgGain = (avgGain * (period - 1) + g) / period
-    avgLoss = (avgLoss * (period - 1) + l) / period
-    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss)
-  }
-  return out
+  return rsiCutlerSeries(closes, period)
 }
 
 function getLW() {

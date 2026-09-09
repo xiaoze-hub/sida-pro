@@ -7,6 +7,15 @@
 
 ## 2026-09-09
 
+### refactor-KI-037 收口: 前端指标统一到 lib/indicators.ts 并与后端逐值对齐
+- **背景**: KI-037「指标口径分叉 + 前后端双实现」—— 后端已统一到 `src/core/indicators.py`, 前端 `InteractiveKline.tsx` 仍自带一份, 且 **MACD HIST 漏 ×2**、**RSI6 用 Wilder(后端是 Cutler 简单均值)** → 同一指标在图表与「技术指标建议」/策略口径不一致。
+- **做法**: 新增 `frontend/packages/biz-ui/src/lib/indicators.ts`(`smaSeries` / `emaSeries` / `macd` / `rsiCutlerSeries`, 口径注释齐全); `InteractiveKline.tsx` 改调该库(删本地 4 个函数), 本地包装保留 `{macd, signal, hist}` 旧形状, 调用面零变更。
+- **跨语言 parity 测试**: `scripts/gen_indicators_parity_fixture.py` 用**后端实现**生成夹具 `frontend/tests/fixtures/indicators_parity.json`(120 根确定性 OHLC + SMA5/10/20/60、EMA12/26、MACD DIF/DEA/HIST、RSI6 全序列), `frontend/tests/lib/indicators-parity.test.ts` 逐值断言(容差 **1e-9**)。
+- **用户可见影响**: K 线图的 MACD 柱与 RSI6 数值会与修复前略有差异 —— 现在与后端「技术指标建议」及策略口径一致(这就是本条的目的)。
+- **验证**: 前端 `tsc` + `eslint` + `pnpm test` **34 passed**(30+4) + `build`。
+- **台账**: KI-037 关闭移入本条, 台账 **31→30 条在册**(仅 KI-039 保留开启)。
+- [tag v0.5.31]
+
 ### fix-L2/洞察「主力净额·主买净额」恒显 "--" + L2 页字段缺解释
 - **现象**: 盘口资金页与洞察弹窗的 主力净额 / 主买净额 恒显 `--`, 但 TQ raw 实际有值(002361: `Zjl=-7086.62`、`Zjl_HB=-3762.99`)。
 - **根因①(后端)**: `md_more_info` 未把 vendor 的 `zjl`/`zjl_hb` 透传进 payload(`insight/types.ts` 早已声明这两字段 → 一直读到 undefined)。

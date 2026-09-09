@@ -47,7 +47,6 @@
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
-| KI-037 | P2 | 指标口径分叉 + 前后端双实现 | 2026-09-09 | TianXiang |
 | KI-039 | P2 | src/core 反向依赖 src/web 141 处 | 2026-09-09 | TianXiang |
 
 ## 详情
@@ -244,15 +243,6 @@
 - 涉及文件: 生产 env(JWT_SECRET)、src/web/api/auth.py。
 - 建议修复: 随维护窗口换 ≥32 字节随机值 —— 注意会使全部现存会话失效(用户重新登录), 与口令类轮换同窗口执行成本最低。
 
-### KI-037 指标口径分叉 + 前后端双实现 (P2)
-
-- 发现: 2026-09-09(报告 P1-5)
-- 现象: 无指标库; `kline_collector.py:185-327` 手写且非向量化; ATR 用简单均值非 Wilder(`:205-207`)、RSI 用 Cutler(`:264-265`)与 `shadow_account/extractor.py:139-140` 的 Wilder-EWM 矛盾、EMA 用 `data[0]` 播种(`:191-195`)、BOLL 用总体标准差(`:320-321`); 前端 `InteractiveKline.tsx:196-260` 再实现一份; 测试仅覆盖 ATR。
-- 影响: 同一指标在不同页面/模块数值不一致; 阈值类策略不可迁移。
-- 涉及文件: src/collectors/kline_collector.py、src/core/shadow_account/extractor.py、frontend/packages/biz-ui/src/components/InteractiveKline.tsx。
-- 建议修复: 建 `src/core/indicators/` 统一实现并标注口径; 前后端逐值比对测试(容差 1e-9)。任务 B4.3。
-- **进展(2026-09-09 晚)**: 后端已统一到 `src/core/indicators.py`(口径与旧实现逐值对齐 + Wilder 对照函数), `kline_collector` 7 个指标函数改为委托, parity 测试锁定; **前端 `InteractiveKline.tsx` 仍为 TS 侧独立实现** —— 前后端逐值比对待前端切换后补, 本条保持开启。
-
 ### KI-039 src/core 反向依赖 src/web 141 处 (P2)
 
 - 发现: 2026-09-09(报告 P2-1)
@@ -330,4 +320,6 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 
 后续台账变化: 2026-09-09 维护窗口 KI-004 修复移入 CHANGELOG(生产容器限额重建+PG 口令轮换条目); 同日新增 KI-029/030, 台账现 29 条在册(P1×3)。2026-09-09 晚《优化/改进/创新分析报告》新增 **KI-031..040**(P1×6: 回测口径/涨跌停成交/结果口径/因子 OOS/因子快照前视护栏/PIT universe; P2×4: 指标分叉/风控熔断/core→web 耦合/K 线校验), 台账现 **39 条在册(P1×9/P2×17/P3×13)**; 每条的修复任务编号(B0.x-B5.x)见 `docs/优化改进创新_开发方案_20260909.md`。
 
-**2026-09-09 晚(第 0-6 波交付后)**: **KI-031/032/033/034/035/036/038/040 共 8 条修复移入 CHANGELOG**(对应 W0.1-W0.6 / W3 / W1), 台账 **31 条在册**; KI-037(前端指标仍独立实现)与 KI-039(存量 56 文件未清)保留开启并已更新进展。
+**2026-09-09 晚(第 0-6 波交付后)**: **KI-031/032/033/034/035/036/038/040 共 8 条修复移入 CHANGELOG**(对应 W0.1-W0.6 / W3 / W1), 台账 **31 条在册**; KI-039(存量 56 文件未清)保留开启并已更新进展。
+
+**2026-09-09 深夜(KI-037 收口)**: 前端指标收敛到 `frontend/packages/biz-ui/src/lib/indicators.ts` 并**逐值对齐后端 `src/core/indicators.py`**(MACD HIST 补 ×2、RSI6 由 Wilder 改 Cutler), 新增跨语言 parity 测试 `frontend/tests/lib/indicators-parity.test.ts`(夹具由后端生成, 容差 1e-9) → **KI-037 修复移入 CHANGELOG**, 台账 **30 条在册(P1×9/P2×16/P3×13)**; 仅 KI-039 保留开启。
