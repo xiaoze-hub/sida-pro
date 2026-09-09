@@ -67,7 +67,20 @@
 - 单位约定：金额=元，成交量=股；`vol × price == amt` 必须精确匹配，对不上先怀疑单位换算。
 - 方向位编码、竞价 M 标记等字段语义见 `a-share-main-force-intent` skill，禁止按直觉猜。
 - 数据缺失必须显式标注"无数据"，**禁止 LLM 推测或编造数字**；基准日滞后要在 UI 显式标注。
-- 主力意图识别必须走 `get_main_intent`（逐笔口径），禁用 `get_capital_flow`（东财方向位会反）。
+- 主力意图识别必须走 `get_main_intent`（腾讯逐笔口径），**禁用 `get_capital_flow`
+  做主力意图/方向性判定**（东财方向位会反）。可执行规则（B3/3.4，契约代码
+  `src/core/caliber.py`，口径矩阵 `docs/_frozen/caliber_matrix.md`）：
+  1. 用途映射：主力意图/吸筹派发 → 仅 `get_main_intent`（tick 逐笔）；
+     「资金流向/主力净流入多少/超大单大单」→ `get_capital_flow`（eastmoney4
+     按单金额四档归类）；L2 主力净流入 → `get_decision_pioneer`（TQ 口径）。
+  2. 口径类型：资金类指标返回值必须带 `caliber`（tick/eastmoney4/ths/unknown）
+     + `direction_semantics`（`src/core/caliber.py`）；下游拿不到标签按 unknown
+     处理，一律不得用于方向性判定。
+  3. 冲突裁决：两口径方向冲突时必须说明差异（逐笔主动买卖 vs 按单金额归类）
+     并**一律优先采信逐笔**；代码出口用 `require_directional()` 校验
+     （非 tick 做方向判定直接抛 `CaliberViolationError`）。
+  4. UI 标注：资金面展示处必须可见口径标签（Dashboard 大盘资金流、暗盘资金
+     TOP 榜、chat 工具文本均已带）。
 - 缓存一律走 `src/web/cache/biz_cache.py`（L1 内存 + L2 Redis，key 前缀 `biz:`），禁止业务代码裸连 Redis。
 - 多用户：任何接口/数据改动考虑 user_id 隔离（4 账号并存），不能只验自己账号。
 - K线读取走 PG hypertable 优先（`get_klines()`），补数用 klines_ingestor。

@@ -7,6 +7,18 @@
 
 ## 2026-09-09
 
+### feat-口径治理产品化caliber契约+资金流出口标注+文档红线修订(W3.4/B3)
+- 背景: B3 —— "主力净流入"类指标与"主力意图"是两个口径: 东财/腾讯四档是**按单金额归类**净额, 与逐笔主动买卖方向可能相反; 此前只有 chat.py 0.0 系统提示里一段 prompt 文案约束, 无代码层类型, 下游(signal_pack/forecast/UI)拿到 get_capital_flow 数据时无从判断能不能做方向性结论, docs/PROJECT_MAP.md:57 甚至还在推荐 get_capital_flow(与 AGENTS.md 红线自相矛盾)。
+- **src/core/caliber.py(新, 口径契约)**: `Caliber` Literal[tick/eastmoney4/ths/unknown] + direction_semantics 语义常量 + `CaliberTag` frozen dataclass(caliber/direction_semantics/source, ui_label() 中文出口文案, to_dict() 四键透传) + `CAPITAL_FLOW_TAG`(collector 全部取数路径同属按单金额归类, 统一 eastmoney4 标) + **`require_directional(tag, usage)`** 出口校验(非 tick 抛 `CaliberViolationError`, 指回 get_main_intent) + **`reconcile_direction(main, main_value, ref, ref_value)`** 双口径裁决(方向冲突 → statement 明确说明"逐笔主动买卖盘 vs 按单金额四档归类"差异并**以逐笔为准**; main 非 tick 直接抛 —— 方案 B3 验收"构造方向相反场景输出差异+优先逐笔"从 prompt 承诺变成代码可验证)。
+- **collector 口径随数据透传**: capital_flow_collector.CapitalFlow 增 caliber/direction_semantics/source_label 字段(默认值即正确: 东财 push2 直连/网关、腾讯四档、Engine 四档全部构造路径同属归类口径)+ caliber_tag(); `get_capital_flow_summary` 返回 dict `**CAPITAL_FLOW_TAG.to_dict()` 展开透传(signal_pack/chat/forecast/UI 拿到数据即见口径)。
+- **三个消费出口全部标注**: ① chat.py `_fetch_capital_flow_context` 资金流上下文首行缀 CAPITAL_FLOW_TAG.ui_label() + "口径说明: 按单金额四档归类, 禁止用于主力意图判定; 主力意图一律以 get_main_intent(逐笔)为准, 冲突时优先采信逐笔"; ② forecast.py payload["capital_flow"] 增 caliber/direction_semantics/caliber_label 键; ③ signal_pack 过时注释("wudao 盘中实时→Engine 四档兜底"与现链路不符)替换为真实链路+口径治理注释(summary dict 连标签整体进 SignalPack.capital_flow)。
+- **豁免显式化**(get_capital_flow 全仓命中逐一处置, 无悬空引用): data_collector.py 两处(存储路径/健康检查连通性, 不做方向判断)、portfolio_context.py(只注入逐笔口径数据, 不消费 get_capital_flow)、registry.py get_capital_flow handler(W3.3 已带红线前缀, 原样)。
+- **UI 标注**: market_data.py market-capital-flow 代理返回增 caliber/caliber_label; Dashboard 大盘资金流标题增"四档口径 · 资金面参考"chip(title 提示禁用主力意图判定), DarkFundTop 增"DDE口径 · 资金面参考"chip —— 与既有 thsdk_dde 数据源标注对齐; dashboard.ts 类型同步。
+- **文档矛盾修复**: AGENTS.md 口径红线条目由一句话升级为 4 条可执行规则(用途映射/口径类型/冲突裁决 require_directional+CaliberViolationError/UI 标注), 指向 src/core/caliber.py 与 **docs/_frozen/caliber_matrix.md(新)** —— 9 类资金指标 × 数据源/口径类型/方向语义/单位/可用于方向判定矩阵 + 使用规则 + file:line 实测依据(northbound kamt 断供 2024-08、TQ 通达信网关、ths_flow data.10jqka 单位亿等); PROJECT_MAP.md 标题/49/57 行修订: 8010 资金面应走 get_main_intent(逐笔), get_capital_flow 仅作资金面参考**禁止**主力意图判定。
+- 测试: 新增 tests/test_w34_caliber.py 15 例(require_directional tick 放行/四类拒绝含文案锚点、reconcile 冲突场景断言"口径冲突"+"以逐笔为准"+agree 场景"方向一致"+main 非 tick 抛、CapitalFlow 默认口径+caliber_tag、summary dict 四标签透传(monkeypatch 不打网络)、chat 资金流上下文含 ui_label+口径说明+优先采信逐笔(monkeypatch)、PROJECT_MAP 旧推荐话术删除+AGENTS.md 可执行规则+caliber_matrix ≥5 指标×≥3 数据源家族、signal_pack 透传链路结构断言); 邻域 test_capital_flow_routing/test_capital_flow_zero_guard/test_signal_* + test_ai_layer_data_sources + test_w33_chat_registry 61 例全绿。
+- 验证: W3.4 新测试 15/15; 邻域 61 例; 前端门禁 tsc --noEmit 干净 + vitest 17/17 + eslint(3 个触碰文件)零告警; 全量离线套件 **1855 passed / 2 failed / 5 skipped**(较 W3.3 基线 +15 即本波新测试; 2 failed 仍为已知本地环境损坏 ta_load_ohlcv_patch/thsdk_buffer_size, 不进 CI, 与本次改动无关)。
+- [branch fix/wave3-依赖与口径-20260909, `git show HEAD`]
+
 ### refactor-删死代码chat_tools.py+工具注册表registry+合并双tool loop+流式断开守卫(W3.3/D3)
 - 背景: D3 —— src/core/chat_tools.py(679 行)是"生产死代码": 39 个工具包装函数与 chat.py 内联实现同名并行维护, 全仓无任何调用点(引用全部来自其自身测试, server 启动链不触达), 却持续随实现漂移; chat.py 3021 行同时承担 30 个工具 handler + 40 个 schema + 流式/非流式两套近乎重复的 tool loop。
 - **删除**: src/core/chat_tools.py 整文件(679 行); tests/test_chat_tools_a4.py + tests/test_chat_tools_p1p2.py(纯包装层测试)git rm; test_chat_tools_two.py 263→137 / test_orderbook_a1.py 187→156(删包装层用例, 保留 to_ths_code/find_tck_file/dark_flow_from_tck/ImgSnapshot/算法等底层实活测试); src/core/dark_flow.py 删一条指向 chat_tools 的过时 docstring。

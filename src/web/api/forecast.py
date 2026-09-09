@@ -359,6 +359,10 @@ async def forecast_report_push(payload: dict):
                         "mid_net_inflow": cf.mid_net_inflow,
                         "small_net_inflow": cf.small_net_inflow,
                         "main_net_5d": cf.main_net_5d,
+                        # 口径标签(B3/3.4): 8010 报告侧必须带口径, 禁止用于主力意图判定
+                        "caliber": cf.caliber,
+                        "direction_semantics": cf.direction_semantics,
+                        "caliber_label": cf.caliber_tag().ui_label(),
                     }
                     logger.info(f"注入资金流(东财口径): {symbol} 主力净流入 {cf.main_net_inflow}")
             except Exception as e:

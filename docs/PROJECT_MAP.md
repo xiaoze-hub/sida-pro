@@ -1,4 +1,4 @@
-# PanWatch 项目结构地图（2026-08-08 实测）
+# SIDA-Pro 项目结构地图（2026-09-09 修订, 原 PanWatch; B3/3.4 口径红线修订版）
 
 ## 部署拓扑
 - **8000** = FastAPI 主后端，跑在 **Docker 容器**内（镜像 `ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest`）
@@ -46,7 +46,7 @@ vendors 里 `capital_flow.py` 调东财 `push2his.eastmoney.com/api/qt/stock/ffl
 
 ## 8000 已有规范化端点（8010 应优先复用，而非野路子）
 - `src/web/api/discovery.py` — 热点板块 `get_hot_boards`、板块成分股 `get_board_stocks`（走 marketdata）
-- `src/web/api/chat.py` — `get_capital_flow` 工具 → `CapitalFlowCollector.get_capital_flow_summary`
+- `src/web/api/chat.py` / `src/agents/chat/registry.py` — `get_capital_flow` 工具 → `CapitalFlowCollector.get_capital_flow_summary`（**eastmoney4 按单金额四档归类口径, 仅作资金面参考, 禁止用于主力意图判定** —— AGENTS.md 口径红线; 主力意图一律走 `get_main_intent` 逐笔口径）
 - `src/web/api/datasources.py` — 数据源健康检查（含 capital_flow/dragon_tiger/northbound 类型）
 - `src/web/api/market.py` — 指数行情
 - `src/web/api/recommendations.py` — 策略引擎代理（`refresh_strategy_signals` → `src/core/strategy_engine.py`）
@@ -54,7 +54,10 @@ vendors 里 `capital_flow.py` 调东财 `push2his.eastmoney.com/api/qt/stock/ffl
 
 ## 我的改动在架构里的位置
 - `forecast_lib/panwatch_bridge.py` — 8010 经 8000 `/api/tdx/ask`（问小达）拿资金流
-  → **野路子**：应优先改成调 8000 规范化端点（discovery 的热点板块 / chat 的 get_capital_flow）
+  → **野路子**：应优先改成调 8000 规范化端点（discovery 的热点板块等）。
+  ⚠️ **口径红线（B3/3.4 修订）**：8010 取资金面应走 `get_main_intent`（逐笔口径，
+  可用于方向性判断）；`get_capital_flow` 仅作东财四档资金面参考，**禁止**用于
+  主力意图判定（AGENTS.md "SIDA 业务硬约束" 口径条目）。
 - `forecast_server.py` predict 流程 — 调 panwatch_bridge 拿东财口径资金流（已撤掉错的 zhitu）
 - `forecast_lib/forecast_reports.py` `generate_wecom_report` — 企微版加资金面段（东财口径）
 - `forecast_lib/forecast_utils.py` `calc_capital_score` / `build_recommendation` — 资金面参与权重+策略

@@ -1404,7 +1404,15 @@ async def _fetch_capital_flow_context(symbol: str, market: str) -> str:
         pct_str = f"{float(pct):+.1f}%" if pct is not None else "--"
         flow_date = summary.get("date") or "最近交易日"
 
-        lines = [f"资金流向（今日实时, 基准日 {flow_date}）"]
+        # 口径标签(B3/3.4): 与 get_main_intent(逐笔) 区分, 红线见 AGENTS.md
+        from src.core.caliber import CAPITAL_FLOW_TAG
+
+        lines = [
+            f"资金流向（今日实时, 基准日 {flow_date}）{CAPITAL_FLOW_TAG.ui_label()}",
+            f"- 口径说明: 本数据为按单金额四档归类, 非逐笔主动买卖方向, "
+            f"禁止用于主力意图/吸筹派发判定; 主力意图一律以 get_main_intent(逐笔)为准, "
+            f"两口径数字冲突时说明差异并优先采信逐笔。",
+        ]
         lines.append(f"- 主力{direction} {_fmt(main)}（占比{pct_str}）")
         if summary.get("super_net_inflow") is not None:
             lines.append(

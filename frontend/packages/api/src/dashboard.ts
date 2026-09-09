@@ -40,6 +40,9 @@ export interface DashboardMarketCapitalFlow {
   sz?: { point?: number; change_pct?: number } | null
   cyb?: { point?: number; change_pct?: number } | null
   source?: string
+  /** B3/3.4 口径标签: eastmoney4=按单金额四档归类, 禁用于主力意图判定 */
+  caliber?: string
+  caliber_label?: string
   timestamp?: string
   inflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]
   outflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]

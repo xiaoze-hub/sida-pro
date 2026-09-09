@@ -1,9 +1,20 @@
-"""资金流向采集器 - 经 marketdata 包统一接入"""
+"""资金流向采集器 - 经 marketdata 包统一接入
+
+口径(B3/3.4, AGENTS.md "SIDA 业务硬约束"): 本采集器全部取数路径(东财 push2
+直连/网关、腾讯四档、Engine 四档)均为**按单金额四档归类口径**, 方向语义同类,
+与逐笔口径可能相反 —— 禁止用于主力意图判定, 仅作资金面参考; 主力意图一律走
+get_main_intent(腾讯逐笔)。红线详情见 AGENTS.md。
+"""
 import logging
 
 from dataclasses import dataclass
 
 from src.collectors.market_http import TTLCache
+from src.core.caliber import (
+    CAPITAL_FLOW_TAG,
+    DIRECTION_EASTMONEY4,
+    CaliberTag,
+)
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -14,7 +25,7 @@ _FLOW_CACHE = TTLCache(default_ttl_sec=120.0)
 
 @dataclass
 class CapitalFlow:
-    """资金流向数据"""
+    """资金流向数据(按单金额四档归类口径, 非逐笔 —— AGENTS.md 口径红线)"""
     symbol: str
     name: str
 
@@ -29,6 +40,15 @@ class CapitalFlow:
     # 5日资金流
     main_net_5d: float | None = None  # 5日主力净流入
     date: str | None = None  # 数据基准日(盘中=T-1收盘)
+
+    # 口径标签(B3/3.4): 本类全部构造路径同属按单金额归类口径, 默认值即正确;
+    # 显式字段是为了让下游(signal_pack/forecast/chat)拿到数据就能读到口径
+    caliber: str = "eastmoney4"
+    direction_semantics: str = DIRECTION_EASTMONEY4
+    source_label: str = "东财push2/腾讯四档/Engine四档(按单金额归类)"
+
+    def caliber_tag(self) -> CaliberTag:
+        return CAPITAL_FLOW_TAG
 
 
 def get_market_data():
@@ -185,6 +205,9 @@ class CapitalFlowCollector:
     def get_capital_flow(self, symbol: str) -> CapitalFlow | None:
         """获取单只股票的资金流向。
 
+        口径: 按单金额四档归类(eastmoney4), 非逐笔 —— 禁止用于主力意图判定
+        (AGENTS.md 红线), 主力意图走 get_main_intent(腾讯逐笔)。
+
         取数优先级(2026-08-11 更新):
         1) 东财 push2delay 今日实时资金流(直连/网关, 含完整四档) — 开盘初期全 0 视为未就绪回退
         2) Engine 四档实时(新浪 T-1 / 东财 push2his)
@@ -277,7 +300,11 @@ class CapitalFlowCollector:
         return capital_flow
 
     def get_capital_flow_summary(self, symbol: str) -> dict:
-        """获取资金流向摘要（用于 prompt）"""
+        """获取资金流向摘要（用于 prompt/信号包, 带口径标签透传下游与 UI）。
+
+        口径: eastmoney4(按单金额四档归类) —— 下游禁止据此做主力意图判定,
+        仅作资金面参考(AGENTS.md 口径红线; 主力意图走 get_main_intent 逐笔)。
+        """
         flow = self.get_capital_flow(symbol)
 
         if not flow:
@@ -319,4 +346,7 @@ class CapitalFlowCollector:
             "small_net_inflow": flow.small_net_inflow,
             "trend_5d": trend_5d,
             "date": flow.date,  # 数据基准日(盘中=T-1, 明确标注防误导)
+            # 口径标签(B3/3.4): 随数据透传到 signal_pack/chat/forecast 下游与 UI,
+            # eastmoney4 禁止用于主力意图判定(AGENTS.md 红线)
+            **CAPITAL_FLOW_TAG.to_dict(),
         }

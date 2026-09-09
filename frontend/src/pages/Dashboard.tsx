@@ -584,6 +584,13 @@ export default function DashboardPage() {
           <div className="flex items-baseline gap-2">
             <span className="text-[13px] font-semibold">大盘资金流</span>
             <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
+            {/* B3/3.4 口径标签: 后端 caliber_label 缺失时回退静态文案 */}
+            <span
+              className="cursor-help text-[10px] text-muted-foreground/80 underline decoration-dotted underline-offset-2"
+              title={marketFlow.caliber_label || '主力净流入为按单金额四档归类口径(资金面参考), 禁用于主力意图判定'}
+            >
+              四档口径 · 资金面参考
+            </span>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
               <span className="text-muted-foreground">主力净流入

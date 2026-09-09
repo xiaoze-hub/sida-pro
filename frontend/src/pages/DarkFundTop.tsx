@@ -144,6 +144,11 @@ export default function DarkFundTopPage() {
                 {' · '}实际计算 <span className="font-mono">{data.computed ?? '-'}</span> 只
                 {' · '}TOP <span className="font-mono">{data.top?.length ?? 0}</span> 条
                 {' · '}数据源 <span className="font-mono">thsdk_dde</span>(同花顺官方主力资金流)
+                {/* B3/3.4 口径标签: DDE 大单口径, 禁用于主力意图判定 */}
+                {' · '}<span
+                  className="cursor-help underline decoration-dotted underline-offset-2"
+                  title="同花顺 DDE 大单口径, 非逐笔主动买卖方向 —— 仅作资金面参考, 禁用于主力意图判定(AGENTS.md 口径红线)"
+                >DDE口径 · 资金面参考</span>
                 {' · '}更新 <span className="font-mono">{data.updated_at ?? '-'}</span>
               </p>
             </div>

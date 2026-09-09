@@ -276,6 +276,11 @@ async def market_capital_flow_proxy():
             "inflow_boards": inflow_boards,
             "outflow_boards": outflow_boards,
             "source": "eastmoney_push2delay_cn",
+            # 口径标签(B3/3.4): 主力净流入为按单金额四档归类(资金面参考),
+            # 板块明细为同花顺行业资金 —— 均禁止用于主力意图判定(AGENTS.md 红线)
+            "caliber": "eastmoney4",
+            "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定; "
+                             "板块明细: 同花顺行业资金(参考)",
             "timestamp": None,
         }
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
