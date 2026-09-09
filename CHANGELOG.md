@@ -11,6 +11,7 @@
 - **部署**: 备份 `/root/app_backup_pre_v0527_20260909.tar.gz` → `tar xf --overwrite` → **`chown -R app:app /app`(本次新增的必要步骤)** → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.27** → 冒烟 **9/9**(11.4s); **零迁移**。
 - **事故与恢复(重要教训)**: 首次覆盖后容器 unhealthy, worker 反复 `Child process died`。定位为 **root 解包覆盖层后 /app 文件属主变 root, app 用户启动失败**(非代码问题: 回滚到备份同样失败; 同镜像同 env 的临时容器可正常启动)。执行 `chown -R app:app /app` 后恢复。**后续以 root 解包覆盖层必须补 chown 回 app**。
 - **浏览器回归(生产 :8000)**: `/portfolio` 持仓 + 关注列表(33 只, 价格/AI 徽标)渲染正常; 「神剑股份」洞察弹窗 **9 个 tab**(概览/建议/报告/深度/K线/基本面/公告/新闻/简介)全部渲染; `/settings` 全部 11 个区块 + 模型管理弹窗(能力徽标) + 全局搜索过滤正常; 控制台仅 SW 注册日志与预期 404(`dark-flow-tq` 盘后未采集 / `wechat-bind` 空参), **无 JS 异常**。
+- **文档**: 方案 `docs/优化改进创新_开发方案_20260909.md` §11 台账更新为 **31/31 交付**（W5.3 拆分明细表 + 部署/坑记档）。
 - [tag v0.5.27]
 
 ### update-发版 v0.5.27(W5.3 前端大文件拆分收口)
