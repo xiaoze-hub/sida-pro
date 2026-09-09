@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-因子工厂核心: 因子注册表 + 横截面分层回测(B6.1)
+- **背景**: `factor_eval` 只有 IC/IR, 缺"因子注册"与"分层(quantile)回测"两件基础设施; 新增因子要散落改代码, 也无法回答"因子单调性如何"。
+- **做法**: 新增 `src/core/factor_lab.py`: `FactorSpec` + `register_factor`(装饰器/显式登记, 重复 code 报错) + `cross_section_quantiles`(单日按因子值分 N 层, 输出各层均值/单调性/long_short) + `factor_summary`(多日汇总 `monotonic_ratio`/`avg_long_short`)。
+- **验证**: `pytest -q tests/test_factor_lab.py tests/test_gs_windows.py` → **8 passed**。
+- [branch fix/w6-创新-20260909, `git show HEAD`]
+
 ### feat-决策先锋 1/3/5 日序列 + 0 轴穿越(B6.8, 接口文档 P0 缺口)
 - **背景**: `docs/数据源与算法接口设计_TDX_THS互补.md:32` 点名"暗盘/GS 的 1/3/5 日序列 + 0 轴穿越"为 P0 缺口, 现有 `compute_gs_signal` 只给最近一次交叉方向与当前状态。
 - **做法**: `src/core/decision_pioneer.py` 新增 `compute_gs_windows(bars, windows=(1,3,5))`: 对 A0−BB0 差值序列给每个窗口统计 0 轴穿越次数 / 窗口累计差值 / 窗口末方向, 并给出最近一次穿越的方向与距今天数; `compute_decision_pioneer` 响应新增 `gs_windows` 字段(不破坏既有 `gs`)。
