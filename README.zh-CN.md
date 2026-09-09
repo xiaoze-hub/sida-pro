@@ -5,7 +5,7 @@
 **闭源个人股票交易分析平台** — 通达信(.tck/.img/TQ) + 同花顺(thsdk) 双数据源 → 全市场扫描 → K线图层标注 → AI 全数据管家，自托管一体系统。
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.5.28-blue) <!-- 发版时随 VERSION 文件同步更新 -->
+![Version](https://img.shields.io/badge/version-v0.5.29-blue) <!-- 发版时随 VERSION 文件同步更新 -->
 
 </div>
 

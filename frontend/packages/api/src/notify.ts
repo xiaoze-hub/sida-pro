@@ -1,11 +1,11 @@
 import { fetchAPI } from './client'
 
 // ── 扫码绑定个人微信(腾讯官方 iLink 直连) ──
-// 后端端点:
+// 后端端点(注意: get/unbind 路由注册为 "" → 无尾斜杠; 带尾斜杠会 404):
 //   POST   /notify/wechat-bind/start   → { qrcode, qrcode_url }
 //   GET    /notify/wechat-bind/status?qrcode=<qrcode> → { status: 'waiting'|'success', ... }
-//   DELETE /notify/wechat-bind/        → 解除绑定
-//   GET    /notify/wechat-bind/        → 当前绑定信息(未绑定返回 account_id 为空)
+//   DELETE /notify/wechat-bind         → 解除绑定
+//   GET    /notify/wechat-bind         → 当前绑定信息(未绑定返回 account_id 为空)
 
 export interface WechatBindStartResult {
   qrcode: string
@@ -42,10 +42,10 @@ export function wechatBindStatus(qrcode: string): Promise<WechatBindStatusResult
 
 /** 解除当前个人微信绑定 */
 export function wechatBindUnbind(): Promise<{ message?: string }> {
-  return fetchAPI<{ message?: string }>('/notify/wechat-bind/', { method: 'DELETE' })
+  return fetchAPI<{ message?: string }>('/notify/wechat-bind', { method: 'DELETE' })
 }
 
 /** 查询当前绑定信息(未绑定时 account_id 为空) */
 export function wechatBindGet(): Promise<WechatBindInfo> {
-  return fetchAPI<WechatBindInfo>('/notify/wechat-bind/', { cacheMode: false })
+  return fetchAPI<WechatBindInfo>('/notify/wechat-bind', { cacheMode: false })
 }

@@ -7,6 +7,16 @@
 
 ## 2026-09-09
 
+### fix-个人微信绑定状态恒显"未绑定"(尾斜杠 404) + favicon 404
+- **现象①**: 设置页「个人微信(iLink)」卡片恒显示未绑定, 但后端 `GET /api/notify/wechat-bind` 实测返回 `bound:true`(生产账号已绑)。
+- **根因①**: 后端路由注册为 `@router.get("")` / `@router.delete("")`(路径**无**尾斜杠), 而 `frontend/packages/api/src/notify.ts` 调用 `/notify/wechat-bind/`(带尾斜杠) → 每次 404, 前端 catch 后按未绑定渲染; 解绑请求同样打不中。
+- **修复①**: `wechatBindGet` / `wechatBindUnbind` 去掉尾斜杠(与 `start`/`status` 路由一致)。
+- **现象②**: 浏览器持续请求 `/favicon.ico` → 404(3h 内 10 次)。
+- **根因②**: `index.html` 只声明了 `apple-touch-icon`, 没有 `<link rel="icon">`。
+- **修复②**: 补 `<link rel="icon" type="image/svg+xml" href="/icon.svg">`。
+- **验证**: 33 个 GET 端点探针 → 仅剩 2 个"方法不匹配"误报(POST-only 路由), 无真实 404; 前端 `tsc` + `eslint` + `pnpm test` 30 passed + `build`。
+- [tag v0.5.29]
+
 ### fix-大盘资金日内曲线空态误报: 前端按数组解析信封 → 恒显"刚上线暂无历史"
 - **现象**: Dashboard「主力净流入日内」面积图始终显示 `盘中每30秒积累一条 · 刚上线暂无历史`, 即使 `market_flow_snapshots` 已有快照(生产实测 count=2)。
 - **根因**: `GET /api/market-data/market-capital-flow/history` 返回**信封** `{hours,count,items,note}`(market_data.py:349), 而 `FlowHistoryChart` 按数组解析 —— `Array.isArray(res)` 恒 false → `setRows([])` 恒走空态。
