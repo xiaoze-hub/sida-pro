@@ -15,6 +15,11 @@
 - **验证**: 新增 `tests/test_more_info_mapping.py`(zjl/zjl_hb 必须透传); 前端 `tsc` + `eslint` + `pnpm test` 30 passed + `build`。
 - [tag v0.5.30]
 
+### update-v0.5.30 生产部署(代码+static覆盖层, chown+compileall, 冒烟 9/9, 浏览器实测)
+- **部署**: 备份 `/root/app_backup_pre_v0530_20260909.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.30** → 冒烟 **9/9**(11.7s, 2 分钟 0 次 `Child process died`)。
+- **浏览器实测(生产 :8000)**: L2 页「主力净额 **-3762.99万** / 主买净额 **-7086.62万**」正常显示(修复前恒 `--`), 形态/买盘占比/最优/价差 均有值; `/api/quotes/002361/more-info` 实测 `zjl=-7086.62, zjl_hb=-3762.99`。
+- [tag v0.5.30]
+
 ### fix-个人微信绑定状态恒显"未绑定"(尾斜杠 404) + favicon 404
 - **现象①**: 设置页「个人微信(iLink)」卡片恒显示未绑定, 但后端 `GET /api/notify/wechat-bind` 实测返回 `bound:true`(生产账号已绑)。
 - **根因①**: 后端路由注册为 `@router.get("")` / `@router.delete("")`(路径**无**尾斜杠), 而 `frontend/packages/api/src/notify.ts` 调用 `/notify/wechat-bind/`(带尾斜杠) → 每次 404, 前端 catch 后按未绑定渲染; 解绑请求同样打不中。
