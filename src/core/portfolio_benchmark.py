@@ -66,7 +66,7 @@ INDEX_TENCENT: dict[str, tuple[str, str]] = {
     "000001": ("sh000001", "上证指数"),
 }
 DEFAULT_BENCHMARK = "000300"
-_ANNUALIZE = 242  # A股年化交易日数
+_ANNUALIZE = 252  # A股年化交易日数(B2.5: 与 backtest.metrics.TRADING_DAYS_PER_YEAR 统一)
 
 
 def benchmark_label(code: str) -> str:

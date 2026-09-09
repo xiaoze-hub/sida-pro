@@ -67,7 +67,11 @@ def _state_without_fund(trend: str, activity: Optional[float], line: float) -> O
 
 
 def _outcome(bars: list[dict], i: int, hold_days: int) -> Optional[dict]:
-    """第 i 根(信号日)之后 hold_days 内的收益表现。"""
+    """第 i 根(信号日)之后 hold_days 内的收益表现。
+
+    B2.6(2026-09-10): 同时给**可实现口径** `close_return`(第 hold_days 根收盘 vs
+    信号日收盘)与路径极值 `max_gain`/`max_loss`(仅统计参考, 不可交易)。
+    """
     if i + hold_days >= len(bars):
         return None
     c0 = bars[i].get("close")
@@ -79,28 +83,46 @@ def _outcome(bars: list[dict], i: int, hold_days: int) -> Optional[dict]:
     lows = [l for l in lows if isinstance(l, (int, float)) and l > 0]
     if not highs or not lows:
         return None
+    c_end = bars[i + hold_days].get("close")
+    if not isinstance(c_end, (int, float)) or c_end <= 0:
+        return None
     max_gain = (max(highs) - c0) / c0 * 100.0
     max_loss = (min(lows) - c0) / c0 * 100.0
-    return {"max_gain": round(max_gain, 4), "max_loss": round(max_loss, 4)}
+    close_return = (c_end - c0) / c0 * 100.0
+    return {
+        "max_gain": round(max_gain, 4),
+        "max_loss": round(max_loss, 4),
+        "close_return": round(close_return, 4),
+    }
 
 
 def _agg(samples: list[dict], success_pct: float) -> dict:
-    """一组样本 → 上涨概率 / 盈亏比。"""
+    """一组样本 → 上涨概率 / 盈亏比(**可实现口径**: 目标日收盘 vs 信号日收盘)。
+
+    B2.6: 胜负集合互斥(赢 = close_return ≥ success_pct; 亏 = close_return ≤ −success_pct),
+    不再用可重叠的路径极值判定; 极值另立 path_* 字段并标注不可交易。
+    """
     if not samples:
         return {"count": 0, "win_rate": None, "profit_ratio": None,
-                "avg_gain": None, "avg_loss": None}
-    wins = [s["max_gain"] for s in samples if s["max_gain"] > success_pct]
-    losses = [abs(s["max_loss"]) for s in samples if s["max_loss"] < 0]
+                "avg_gain": None, "avg_loss": None,
+                "path_max_gain_avg": None, "path_max_loss_avg": None}
+    wins = [s["close_return"] for s in samples if s["close_return"] >= success_pct]
+    losses = [abs(s["close_return"]) for s in samples if s["close_return"] <= -success_pct]
     win_rate = round(len(wins) / len(samples), 4)
     avg_gain = round(sum(wins) / len(wins), 4) if wins else None
     avg_loss = round(sum(losses) / len(losses), 4) if losses else None
     profit_ratio = round(avg_gain / avg_loss, 2) if (avg_gain and avg_loss) else None
+    path_gains = [s["max_gain"] for s in samples if isinstance(s.get("max_gain"), (int, float))]
+    path_losses = [abs(s["max_loss"]) for s in samples if isinstance(s.get("max_loss"), (int, float))]
     return {
         "count": len(samples),
         "win_rate": win_rate,
         "profit_ratio": profit_ratio,
         "avg_gain": avg_gain,
         "avg_loss": avg_loss,
+        "basis": "close_to_close",
+        "path_max_gain_avg": round(sum(path_gains) / len(path_gains), 4) if path_gains else None,
+        "path_max_loss_avg": round(sum(path_losses) / len(path_losses), 4) if path_losses else None,
     }
 
 

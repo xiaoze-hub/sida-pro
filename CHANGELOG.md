@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-回测框架: 指标补全+年化统一+胜负互斥+回测只读端点(W2/B2.4-B2.6)
+- **背景**: 缺索提诺/卡玛/换手; 年化常数 252 vs 242 分叉; `decision_backtest` 胜负集合可重叠(胜率+败率可 >1); 回测内核无生产调用方。
+- **做法**: ① **B2.5** `metrics.py` 补 `sortino`/`kalmar`/`turnover` 并纳入 `summarize`; `portfolio_benchmark._ANNUALIZE` 242→**252**(与内核统一); ② **B2.6** `decision_backtest._outcome/_agg` 改**可实现口径**(目标日收盘 vs 信号日收盘), 胜负互斥, 路径极值降级为 `path_max_*` 参考字段并标 `basis=close_to_close`; ③ **B2.4** 新增 `src/core/backtest/service.py`(MA5 上穿 MA20 金叉策略, 走内核撮合含 B0.2 涨跌停/量能约束) + `POST /api/backtest/run`(登录态, 入参有界)并注册路由。
+- **验证**: `pytest -q tests/test_metrics_extra.py tests/test_backtest_service.py tests/test_decision_enhance.py tests/test_portfolio_benchmark.py tests/test_backtest*.py` → **56 passed**。
+- **如实说明(未做)**: **B2.1 组合级撮合**(现金/并发/容量组合约束)、**B2.2 walk-forward**、**B2.3 参数扫描** 按方案"实盘辅助"排序属长期研究性功能(方案 0.5 已列为长期), 本波未做。
+- [branch fix/w2-回测框架-20260909, `git show HEAD`]
+
 ### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
 - **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
 - **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
