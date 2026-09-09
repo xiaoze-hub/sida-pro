@@ -13,7 +13,13 @@ interface FlowSnapshot {
   ts: string
   total_main_flow: number
 }
-type FlowResp = FlowSnapshot[]
+/** 后端返回信封: {hours, count, items, note}(2026-09-09 修复: 曾误按数组解析 → 有数据也显示空态) */
+type FlowResp = {
+  hours?: number
+  count?: number
+  items?: FlowSnapshot[]
+  note?: string
+}
 
 /** ts → HH:mm */
 function fmtTime(ts: string): string {
@@ -24,6 +30,7 @@ function fmtTime(ts: string): string {
 export default function FlowHistoryChart() {
   const { ref, chartRef } = useECharts()
   const [rows, setRows] = useState<FlowSnapshot[] | null>(null)
+  const [note, setNote] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -32,9 +39,13 @@ export default function FlowHistoryChart() {
         const res = await fetchAPI<FlowResp>(
           '/market-data/market-capital-flow/history?hours=4',
         )
-        if (alive) setRows(Array.isArray(res) ? res : [])
+        if (!alive) return
+        setRows(Array.isArray(res?.items) ? res.items : [])
+        setNote(res?.note || '')
       } catch {
-        if (alive) setRows((prev) => prev ?? [])
+        if (!alive) return
+        setRows((prev) => prev ?? [])
+        setNote('读取失败')
       }
     }
     void load()
@@ -100,8 +111,8 @@ export default function FlowHistoryChart() {
   }
   if (rows.length === 0) {
     return (
-      <div className="flex h-[150px] items-center justify-center text-[11px] text-muted-foreground">
-        盘中每30秒积累一条 · 刚上线暂无历史
+      <div className="flex h-[150px] items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
+        {note || '盘中每30秒积累一条 · 暂无历史快照'}
       </div>
     )
   }

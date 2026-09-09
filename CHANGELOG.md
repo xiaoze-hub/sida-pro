@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### fix-大盘资金日内曲线空态误报: 前端按数组解析信封 → 恒显"刚上线暂无历史"
+- **现象**: Dashboard「主力净流入日内」面积图始终显示 `盘中每30秒积累一条 · 刚上线暂无历史`, 即使 `market_flow_snapshots` 已有快照(生产实测 count=2)。
+- **根因**: `GET /api/market-data/market-capital-flow/history` 返回**信封** `{hours,count,items,note}`(market_data.py:349), 而 `FlowHistoryChart` 按数组解析 —— `Array.isArray(res)` 恒 false → `setRows([])` 恒走空态。
+- **修复**: 按 `res.items` 解析; 空态改为显示后端 `note`(请求失败显示「读取失败」), 不再谎报"刚上线"。`frontend/packages/biz-ui/src/components/dashboard/FlowHistoryChart.tsx`。
+- **回归测试**: 新增 `frontend/tests/components/flow-history-chart.test.tsx` —— ① 信封有数据不显空态 ② items 空显 note ③ 请求失败显「读取失败」。
+- **验证**: 前端 `tsc -b` + `eslint .` + `pnpm test` **30 passed**(27+3) + `pnpm build`。
+- [tag v0.5.28]
+
 ### update-v0.5.27 生产部署(代码+前端static覆盖层, 冒烟9/9, 浏览器回归通过)
 - **部署**: 备份 `/root/app_backup_pre_v0527_20260909.tar.gz` → `tar xf --overwrite` → **`chown -R app:app /app`(本次新增的必要步骤)** → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.27** → 冒烟 **9/9**(11.4s); **零迁移**。
 - **事故与恢复(两条教训)**: 首次覆盖后容器 unhealthy、worker 反复 `Child process died`。① **属主**: root 解包后 /app 文件属主变 root, 容器以 `app` 用户启动失败 → `chown -R app:app /app` 修复(回滚备份同样失败、同镜像临时容器正常, 排除代码问题)。② **启动慢于 uvicorn 多进程 ping 超时**: 修复属主后仍复发 —— uvicorn `workers=2` 的 supervisor 每秒 ping 各 worker、约 5s 无响应即终止; 覆盖层后 `.pyc` 全失效 + 宿主同时跑全量 pytest, 冷启动 import 超过该阈值 → 杀掉重启死循环。**修复: `docker exec -u app panwatch python -m compileall -q /app/src /app/server.py` 预热字节码后重启**, 之后 3 分钟 0 次 `Child process died`, 稳定 healthy。**后续覆盖层部署必须补 chown + compileall 两步**。
