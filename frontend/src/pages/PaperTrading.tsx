@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
 import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
+import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
 import {
   paperTradingApi,
@@ -120,6 +121,7 @@ export default function PaperTradingPage() {
   const [trades, setTrades] = useState<PaperTradingTradeItem[]>([])
   const [tradesTotal, setTradesTotal] = useState(0)
   const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([])
+  const [klineTrade, setKlineTrade] = useState<PaperTradingTradeItem | null>(null)
   const [strategyPerf, setStrategyPerf] = useState<StrategyPerformanceItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)  // 2026-08-17 闭环修正:错误态系统统一
@@ -626,6 +628,9 @@ export default function PaperTradingPage() {
                         <td className="py-2 px-2 text-xs text-muted-foreground">{t.strategy_code || '-'}</td>
                         <td className="text-right py-2 px-2">{t.holding_days}天</td>
                         <td className="text-right py-2 pl-2 text-xs text-muted-foreground">{t.closed_at?.slice(0, 10) || '-'}</td>
+                        <td className="text-right py-2 pl-2">
+                          <Button variant="outline" size="sm" onClick={() => setKlineTrade(t)}>K线</Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -805,6 +810,30 @@ export default function PaperTradingPage() {
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* B5.2: 成交点叠加到 K 线(my_trade 标记) */}
+      <Dialog open={!!klineTrade} onOpenChange={(open) => { if (!open) setKlineTrade(null) }}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{klineTrade ? `${klineTrade.stock_name || klineTrade.stock_symbol} 成交点` : '成交点'}</DialogTitle>
+            <DialogDescription>K 线上的「我的买卖点」标记 = 本次模拟成交的买入/卖出</DialogDescription>
+          </DialogHeader>
+          {klineTrade && (
+            <InteractiveKline
+              symbol={klineTrade.stock_symbol}
+              market={klineTrade.stock_market}
+              events={[
+                ...(klineTrade.opened_at
+                  ? [{ date: klineTrade.opened_at.slice(0, 10), kind: 'my_trade' as const, label: `买入 ¥${safeFixed(klineTrade.entry_price)}` }]
+                  : []),
+                ...(klineTrade.closed_at
+                  ? [{ date: klineTrade.closed_at.slice(0, 10), kind: 'my_trade' as const, label: `卖出 ¥${safeFixed(klineTrade.exit_price)}（${EXIT_REASON_MAP[klineTrade.exit_reason] || klineTrade.exit_reason}）` }]
+                  : []),
+              ]}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

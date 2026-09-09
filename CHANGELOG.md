@@ -7,6 +7,11 @@
 
 ## 2026-09-09
 
+### feat-模拟盘成交点叠加到 K 线(W5.2 后半)
+- **做法**: `PaperTrading` 成交明细每行加「K线」按钮 → 弹窗渲染 `InteractiveKline`, 把该笔的 `opened_at`/`closed_at` 映射为 `KlineEvent(kind='my_trade')`(买入/卖出 + 价格 + 平仓原因), 复用现有 L4 事件标注图层。
+- **验证**: `pnpm exec tsc -b` 通过; `pnpm test -- --run` **27 passed**。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
 ### test-前端组件渲染测试 + 图表组件抽取(W5.4/W5.3 部分)
 - **背景**: 前端测试栈此前只有 lib 级 vitest(node 环境), 关键图表组件无渲染测试(KI-016/P2-1)。
 - **做法**: ① 引入 `jsdom` + `@testing-library/react` + `@testing-library/jest-dom`(devDeps, npmmirror 安装); ② 把 `DrawdownChart`/`RealizedPnlChart` 从 `PaperTrading.tsx` 抽到 `src/components/PnlCharts.tsx`(可测 + 页面瘦身 812 行); ③ 新增 `tests/components/pnl-charts.test.tsx`(4 用例: 占位提示、SVG 路径、圆点数量、累计值)。
