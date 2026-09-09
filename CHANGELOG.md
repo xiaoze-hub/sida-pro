@@ -7,6 +7,18 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.24(优化改进创新第1-6波合入main: 数据地基/回测框架/风控硬化/架构可观测/前端可视化/创新)
+- 本版合并 W1-W6 六波(各自独立分支+独立测试, 逐波条目见本文件下方各 entry):
+  - **W1 数据地基**(B1.1-B1.6): K 线入库校验(硬错误拒收 + 跳变标记 `quality_flag=0`) / 哨兵 K 线质量规则 / `klines.amount` 列(迁移 v150) / 除权因子表(v152)+折算函数 / 停牌表(v151)+判定 / 数据源失败明细(v153)+health 落库。
+  - **W2 回测框架**(B2.4-B2.6): 索提诺/卡玛/换手 + 年化常数统一 252 / `decision_backtest` 胜负互斥(可实现口径) / `POST /api/backtest/run` 只读端点(登录态)。
+  - **W3 风控硬化**(B3.1-B3.4): 组合级回撤熔断(默认 20%) + 单票/总敞口/持仓数强制上限 + 模拟盘 T+1 + 预警阈值环境变量化。
+  - **W4 架构与可观测**(B4.1/B4.3/B4.4/B4.5): 统一指标库(口径逐值对齐 + Wilder 对照) + core→web 棘轮门禁 / 因子行 `model_version`/`prompt_version` / 回测取数下沉 `src/db/klines_repo.py`。
+  - **W5 前端可视化**(B5.1): 模拟盘回撤曲线(纯函数 + SVG + vitest)。
+  - **W6 创新**(B6.1/B6.4/B6.7/B6.8): 因子工厂(注册表+分层回测) / 情绪因子 v1 / 可复现实验日志 / 决策先锋 1/3/5 日序列 + 0 轴穿越。
+- 部署注意: ①新增迁移 **v150-v153**(幂等, v150 为 `klines` 加列); ②前端有变更 → 部署需构建 `frontend/dist` 并覆盖容器 `/app/static`; ③W1 的入库校验会在 ingest 拒绝硬错误柱并标记跳变柱(首次重跑可能出现 `rejected`/`flagged` 计数, 属预期)。
+- 验收: 全量离线套件 `PYTHONUTF8=1 python -m pytest -q -m "not network"` → **1976 passed / 2 failed(KI-027 本机环境损坏) / 5 skipped**; 前端 `pnpm -C frontend test` 20 passed + `pnpm build` 通过。
+- [tag v0.5.24]
+
 ### fix-合并后修复: ingest prev_close 未初始化 + 门禁白名单 + 测试库 amount 列(W1/W4 合并连带)
 - **背景**: W1-W6 合入 main 后全量套件 7 failed —— ①`klines_ingestor.ingest_symbol` 的 B1.1 跳变校验引用了**未初始化的局部变量 `prev_close`**(UnboundLocalError, 4 个入库测试失败; W1 单波测试只测了纯函数 `validate_bar`, 未覆盖 `ingest_symbol`); ②W4 的 core→web 棘轮门禁抓到 W1 新增的 3 个数据访问模块(`adjust.py`/`halts.py`/`datasource_failures.py`)未入白名单; ③`tests/test_kline_adjust_dimension.py` 的测试库 DDL 缺 W1.3 新增的 `amount` 列。
 - **做法**: ①`prev_close: float | None = None` 初始化后再进循环; ②白名单按合并后树重生成(**56→59**, 新增 3 个 W1 数据访问模块, 待 repository 层下沉后回收); ③测试 DDL 补 `amount FLOAT`。
