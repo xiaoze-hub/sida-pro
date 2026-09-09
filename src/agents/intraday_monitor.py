@@ -854,8 +854,8 @@ class IntradayMonitorAgent(BaseAgent):
         event_only: bool = True,
         price_alert_threshold: float = 3.0,
         volume_alert_ratio: float = 2.0,
-        stop_loss_warning: float = -5.0,
-        take_profit_warning: float = 10.0,
+        stop_loss_warning: float | None = None,
+        take_profit_warning: float | None = None,
     ):
         """
         Args:
@@ -864,17 +864,29 @@ class IntradayMonitorAgent(BaseAgent):
             bypass_market_hours: 是否跳过交易时段门禁（仅手动分析场景）
             price_alert_threshold: 涨跌幅超过阈值视为价格异动（%）
             volume_alert_ratio: 量比超过阈值视为放量异动
-            stop_loss_warning: 浮亏超过阈值触发止损预警（%）
-            take_profit_warning: 浮盈超过阈值触发止盈提醒（%）
+            stop_loss_warning: 浮亏超过阈值触发止损预警（%）；None → 环境变量
+                SIDA_ALERT_STOP_LOSS_PCT（默认 -5.0）
+            take_profit_warning: 浮盈超过阈值触发止盈提醒（%）；None → 环境变量
+                SIDA_ALERT_TAKE_PROFIT_PCT（默认 10.0）
         """
+        from src.core.risk_limits import env_float
+
         self.throttle_minutes = throttle_minutes
         self.bypass_throttle = bypass_throttle
         self.bypass_market_hours = bypass_market_hours
         self.event_only = event_only
         self.price_alert_threshold = price_alert_threshold
         self.volume_alert_ratio = volume_alert_ratio
-        self.stop_loss_warning = stop_loss_warning
-        self.take_profit_warning = take_profit_warning
+        self.stop_loss_warning = (
+            stop_loss_warning
+            if stop_loss_warning is not None
+            else env_float("SIDA_ALERT_STOP_LOSS_PCT", -5.0)
+        )
+        self.take_profit_warning = (
+            take_profit_warning
+            if take_profit_warning is not None
+            else env_float("SIDA_ALERT_TAKE_PROFIT_PCT", 10.0)
+        )
 
     async def collect(self, context: AgentContext) -> dict:
         """采集实时行情 + K线 + 历史分析"""

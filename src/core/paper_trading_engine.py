@@ -11,6 +11,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -26,6 +27,7 @@ from src.web.models import (
     StrategySignalRun,
 )
 from src.core.backtest.cost_model import CostModel
+from src.core.risk_limits import check_entry, load_risk_limits
 from src.core.timezone import to_utc
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,38 @@ def _compute_quantity(
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _notify_risk_block(account, reason: str, equity: float) -> None:
+    """风控拦截开仓时留痕: 日志 + 站内通知(W3/B3.1)。"""
+    labels = {
+        "drawdown_halt": "回撤熔断",
+        "max_positions": "持仓只数上限",
+        "no_equity": "账户净值为零",
+    }
+    label = labels.get(reason, reason)
+    mdd = float(getattr(account, "max_drawdown_pct", 0.0) or 0.0)
+    logger.warning(
+        "[模拟盘风控] 账户 %s 暂停开仓: %s (净值=%.2f, 回撤=%.2f%%)",
+        getattr(account, "id", "?"), label, equity, mdd * 100.0,
+    )
+    try:
+        from src.core.notify_center import push_notification
+
+        push_notification(
+            title=f"模拟盘风控: {label}",
+            body=(
+                f"账户回撤 {mdd * 100:.1f}%（净值 {equity:.0f} 元）已触发「{label}」，"
+                "本轮起暂停开仓；检查持仓后可在模拟盘页重置，"
+                "或调整阈值环境变量 SIDA_RISK_HALT_DRAWDOWN / SIDA_RISK_MAX_POSITIONS。"
+            ),
+            category="risk",
+            level="warning",
+            source="paper_trading_risk",
+            user_id=getattr(account, "user_id", None),
+        )
+    except Exception as e:  # 通知失败不得影响主流程
+        logger.debug("[模拟盘风控] 熔断通知发送失败: %s", e)
 
 
 def _to_market(market: str) -> MarketCode:
@@ -355,6 +389,26 @@ class PaperTradingEngine:
         for p in open_positions:
             open_keys.add((p.stock_symbol, p.stock_market))
 
+        # ── W3/B3.1-B3.2 组合级风控闸门 ────────────────────────────────
+        limits = load_risk_limits()
+        exposure_value = 0.0
+        for p in open_positions:
+            px = _safe_float(getattr(p, "current_price", None)) or float(p.entry_price or 0.0)
+            exposure_value += float(p.quantity or 0) * float(px or 0.0)
+        equity = float(account.current_capital or 0.0) + exposure_value
+        pos_count = len(open_positions)
+        block = check_entry(
+            limits=limits,
+            account_drawdown_pct=account.max_drawdown_pct,
+            equity=equity,
+            position_value=exposure_value,
+            new_position_value=0.0,
+            position_count=pos_count,
+        )
+        if block in ("no_equity", "drawdown_halt", "max_positions"):
+            _notify_risk_block(account, block, equity)
+            return 0, new_keys, entry_events
+
         # 收集需要报价的信号（去重：同股票只取 rank_score 最高的一条）
         candidates = []
         seen = set()
@@ -406,6 +460,23 @@ class PaperTradingEngine:
             if quantity <= 0:
                 continue  # 子池额度不足以买入最小一手
 
+            # W3/B3.2: 单票上限 + 总敞口上限(按当前净值口径, 不只看市场子池)
+            new_value = float(quantity) * float(entry_price)
+            gate = check_entry(
+                limits=limits,
+                account_drawdown_pct=account.max_drawdown_pct,
+                equity=equity,
+                position_value=exposure_value,
+                new_position_value=new_value,
+                position_count=pos_count,
+            )
+            if gate:
+                logger.info(
+                    "[模拟盘] 风控拦截 %s %s: %s (仓位 %.0f / 净值 %.0f)",
+                    sig.stock_symbol, sig.stock_market, gate, new_value, equity,
+                )
+                continue
+
             # 含交易成本的实际买入流出(B5: Decimal 结算)
             buy_fill = COST_MODEL.fill("buy", entry_price, quantity)
             buy_outlay = -to_dec(buy_fill.cash_delta)
@@ -453,6 +524,9 @@ class PaperTradingEngine:
             new_keys.add((sig.stock_symbol, sig.stock_market))
             entry_events.append((pos, sig))
             opened += 1
+            # 风控口径随建仓同步累加(同一轮内后续候选按最新敞口判定)
+            exposure_value += new_value
+            pos_count += 1
             logger.info(
                 "[模拟盘] 建仓: %s %s @ %.2f x%d, 止损=%.2f, 止盈=%s, 买入费=%.2f, 策略=%s",
                 sig.stock_name or sig.stock_symbol,
@@ -567,6 +641,14 @@ class PaperTradingEngine:
 
             if current_price is None or current_price <= 0:
                 continue
+
+            # W3/B3.3: A股 T+1 —— 当日买入当日不可卖(含止损), 与回测内核口径一致
+            if pos.opened_at:
+                opened_cst = (
+                    to_utc(pos.opened_at).astimezone(ZoneInfo("Asia/Shanghai")).date()
+                )
+                if opened_cst == datetime.now(ZoneInfo("Asia/Shanghai")).date():
+                    continue
 
             # 更新现价、净浮动盈亏(含若此刻平仓的双边成本)、持仓期最高价
             pos.current_price = current_price
