@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-指令文件与版本号统一+行尾欠账后第4波启动(W4.1/F1)
+- 背景: 4.1 —— ①CLAUDE.md(96 行)与 AGENTS.md 大量重叠且互相不一致(commit type 一个写 `{feat,fix,docs,refactor,style,test,chore}`, 一个写 `{fix,feature,update,doc}`), AI 读到哪份按哪份做; ②版本号三处不一致: VERSION=v0.5.21(真值) vs README 徽章 v0.5.0 vs 拉取命令 v0.4.3; ③README 运行示例卷名 `sida_data`, 全仓其余地方均为 `panwatch_data`(docker-compose.yml:204,294-295 / deploy/deploy_panwatch.sh), 照 README 起容器会挂到空卷(数据"消失")。
+- 做法: ①CLAUDE.md 改 3 行指针(规范唯一入口 AGENTS.md, 冲突以 AGENTS.md 为准); ②两 README 徽章 v0.5.0→v0.5.21 并加 HTML 注释"发版时随 VERSION 同步"; 拉取命令 v0.4.3→`:$(cat VERSION)` 形式并注明"版本以仓库 VERSION 文件为准"; ③卷名 sida_data→panwatch_data(两 README); ④AGENTS.md "Commit & Pull Request Guidelines" 重写: type 词汇表对齐实际主流 `{feat,fix,update,refactor,docs,test,chore,style,perf}`, CHANGELOG 标题格式固化 `### <type>-<中文标题>`(与 commit type 一致), 新增发版步骤行"VERSION bump 必须与两 README 徽章同 commit"。历史 CHANGELOG 标题不回改, 自本条起按新规范。
+- 验收: CLAUDE.md=3 行(≤10); `grep v0.5.0|v0.4.3 README*` 命中 0; 卷名 grep `sida_data` 在 README/compose/deploy 脚本命中 0(全仓其余命中均为 Prometheus 指标名 `sida_datasource_failures_total` 的子串, 非卷名, 不属本项清理范围); commit type 三处(AGENTS/CLAUDE/CHANGELOG)一致。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
 ### update-v0.5.21生产部署(docker cp覆盖层, 冒烟9/9, 迁移143-148首执行)
 - **生产部署**: tag v0.5.21(8ecfeb7 merge) 经 docker cp 覆盖层部署到 panwatch 容器(同 v0.5.19/20 既定路径)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0521_20260909_1438.tar.gz`, 12.9MB, 排除 data/static-data/downloads/node_modules/__pycache__) → `git archive v0.5.21` → 容器 `/app` 解包 → **显式 rm 3 个本波删除文件**(src/core/chat_tools.py、tests/test_chat_tools_a4.py、tests/test_chat_tools_p1p2.py —— 覆盖层解包不会删文件) → restart → 50s healthy → 冒烟 **9/9 通过**(7.4s), /api/health 报 version=v0.5.21, PG/Redis ok。
 - **迁移对账(与发版条目预判完全一致)**: v108/v121/v124 因 checksum 变更各幂等重跑一次; **v143-148(收编历史 A 层)首次在生产库执行**, 全部 Applying 无 ERROR, 耗时 ~600ms; 多用户旧数据归 owner 5 表处理正常。调度器重启后 5 个 scheduler 正常。

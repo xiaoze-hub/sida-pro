@@ -35,16 +35,13 @@
 - Fixtures: use factory helpers for DB models; avoid network calls (mock collectors and AI clients).
 
 ## Commit & Pull Request Guidelines
-- Commit format: `<type>: <subject>` where type ∈ `{fix, feature, update, doc}`.
+- Commit format: `<type>: <subject>` where type ∈ `{feat, fix, update, refactor, docs, test, chore, style, perf}`.
 - Keep the type prefix in English, and write the subject after the colon (plus any optional commit body) in Chinese.
-  Example: `feature: 新增盘中监控 Agent`.
+  Example: `feat: 新增盘中监控 Agent`.
 - Keep one logical, reviewable change per commit. Once a change is ready to record, commit it instead of accumulating unrelated work.
-- Every commit must update `CHANGELOG.md` in the same commit. Add a concise entry under the current date and one of these headings:
-  - `fix` — bug fixes and regression corrections.
-  - `feature` — new user-facing or developer-facing capabilities.
-  - `update` — changes to existing behavior, dependencies, configuration, refactors, tests, or operations.
-  - `doc` — documentation and development-process changes.
+- Every commit must update `CHANGELOG.md` in the same commit. Add a concise entry under the current date with the heading `### <type>-<中文标题>` (matching the commit type; 2026-09-09 W4.1 统一: 此前 AGENTS 写 `feature/doc` 与实际 `feat/docs` 并存, 以实际主流写法为准).
 - Do not create a code-only commit followed by a separate changelog commit; the change and its changelog entry are one atomic commit.
+- Release steps: VERSION bump must go together with both README badges (`README.md` / `README.zh-CN.md` version line) in the release commit; `VERSION` file is the single source of truth.
 - Pull Requests: include a clear description, linked issues, and screenshots/GIFs for UI changes. Update docs/prompts when applicable.
 - CI hygiene: ensure backend runs (`python server.py`) and frontend builds (`pnpm build`). No secrets in commits; use `.env` or UI settings.
 
