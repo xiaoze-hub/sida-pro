@@ -7,10 +7,16 @@
 
 ## 2026-09-09
 
+### update-v0.5.27 生产部署(代码+前端static覆盖层, 冒烟9/9, 浏览器回归通过)
+- **部署**: 备份 `/root/app_backup_pre_v0527_20260909.tar.gz` → `tar xf --overwrite` → **`chown -R app:app /app`(本次新增的必要步骤)** → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.27** → 冒烟 **9/9**(11.4s); **零迁移**。
+- **事故与恢复(重要教训)**: 首次覆盖后容器 unhealthy, worker 反复 `Child process died`。定位为 **root 解包覆盖层后 /app 文件属主变 root, app 用户启动失败**(非代码问题: 回滚到备份同样失败; 同镜像同 env 的临时容器可正常启动)。执行 `chown -R app:app /app` 后恢复。**后续以 root 解包覆盖层必须补 chown 回 app**。
+- **浏览器回归(生产 :8000)**: `/portfolio` 持仓 + 关注列表(33 只, 价格/AI 徽标)渲染正常; 「神剑股份」洞察弹窗 **9 个 tab**(概览/建议/报告/深度/K线/基本面/公告/新闻/简介)全部渲染; `/settings` 全部 11 个区块 + 模型管理弹窗(能力徽标) + 全局搜索过滤正常; 控制台仅 SW 注册日志与预期 404(`dark-flow-tq` 盘后未采集 / `wechat-bind` 空参), **无 JS 异常**。
+- [tag v0.5.27]
+
 ### update-发版 v0.5.27(W5.3 前端大文件拆分收口)
 - 内容: `stock-insight-modal.tsx` 2820→**46** / `Stocks.tsx` 3079→**56** / `Settings.tsx` 2562→**55**; 拆为 `packages/biz-ui/src/components/insight/`(18 文件) / `src/pages/stocks/`(16) / `src/pages/settings/`(18); 单文件最大 **736 行**, W5.3 验收"单文件 ≤ 800 行"达成。
-- 部署: 仅覆盖容器 `/app/static`(前端产物), 不重启后端; **无迁移变更**。
-- 验收: `tsc -b` + `eslint .` + `pnpm test` 27 passed + `pnpm build`; 生产冒烟 9/9。
+- 部署: 代码覆盖层 + `/app/static` 覆盖 + 重启(见上条部署记录); **无迁移变更**。
+- 验收: `tsc -b` + `eslint .` + `pnpm test` 27 passed + `pnpm build`; 生产冒烟 9/9 + 浏览器回归。
 - [tag v0.5.27]
 
 ### refactor-前端大文件拆分收口(W5.3): 三个巨型文件全部 ≤800 行
