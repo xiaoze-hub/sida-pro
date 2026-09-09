@@ -9,7 +9,8 @@
 
 ### update-v0.5.27 生产部署(代码+前端static覆盖层, 冒烟9/9, 浏览器回归通过)
 - **部署**: 备份 `/root/app_backup_pre_v0527_20260909.tar.gz` → `tar xf --overwrite` → **`chown -R app:app /app`(本次新增的必要步骤)** → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.27** → 冒烟 **9/9**(11.4s); **零迁移**。
-- **事故与恢复(重要教训)**: 首次覆盖后容器 unhealthy, worker 反复 `Child process died`。定位为 **root 解包覆盖层后 /app 文件属主变 root, app 用户启动失败**(非代码问题: 回滚到备份同样失败; 同镜像同 env 的临时容器可正常启动)。执行 `chown -R app:app /app` 后恢复。**后续以 root 解包覆盖层必须补 chown 回 app**。
+- **事故与恢复(两条教训)**: 首次覆盖后容器 unhealthy、worker 反复 `Child process died`。① **属主**: root 解包后 /app 文件属主变 root, 容器以 `app` 用户启动失败 → `chown -R app:app /app` 修复(回滚备份同样失败、同镜像临时容器正常, 排除代码问题)。② **启动慢于 uvicorn 多进程 ping 超时**: 修复属主后仍复发 —— uvicorn `workers=2` 的 supervisor 每秒 ping 各 worker、约 5s 无响应即终止; 覆盖层后 `.pyc` 全失效 + 宿主同时跑全量 pytest, 冷启动 import 超过该阈值 → 杀掉重启死循环。**修复: `docker exec -u app panwatch python -m compileall -q /app/src /app/server.py` 预热字节码后重启**, 之后 3 分钟 0 次 `Child process died`, 稳定 healthy。**后续覆盖层部署必须补 chown + compileall 两步**。
+- **复验**: 稳定后 `post_deploy_smoke.sh` **9/9**(7.9s, dark-flow 已预热); 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1985 passed / 2 failed(KI-027) / 5 skipped**, 与基线一致无回退。
 - **浏览器回归(生产 :8000)**: `/portfolio` 持仓 + 关注列表(33 只, 价格/AI 徽标)渲染正常; 「神剑股份」洞察弹窗 **9 个 tab**(概览/建议/报告/深度/K线/基本面/公告/新闻/简介)全部渲染; `/settings` 全部 11 个区块 + 模型管理弹窗(能力徽标) + 全局搜索过滤正常; 控制台仅 SW 注册日志与预期 404(`dark-flow-tq` 盘后未采集 / `wechat-bind` 空参), **无 JS 异常**。
 - **文档**: 方案 `docs/优化改进创新_开发方案_20260909.md` §11 台账更新为 **31/31 交付**（W5.3 拆分明细表 + 部署/坑记档）。
 - [tag v0.5.27]
