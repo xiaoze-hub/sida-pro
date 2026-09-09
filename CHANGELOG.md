@@ -7,6 +7,15 @@
 
 ## 2026-09-09
 
+### refactor-前端大文件拆分: stock-insight-modal.tsx 2820→46 行 + Stocks.tsx 前导块外移(W5.3)
+- **背景**: W5.3 目标"单文件 ≤ 800 行"; 该弹窗 2820 行, 是 `Stocks/Dashboard/Opportunities` 三页共用的详情入口。
+- **做法①**: 按职责外移到 `packages/biz-ui/src/components/insight/` —— 纯模块 `types.ts`(216) / `helpers.tsx`(275) / `FundamentalsPanel.tsx`(202) / `deep-analysis.tsx`(249); 状态与副作用 hook `useInsightData.ts`(697); 派生值 hook `useInsightDerived.ts`(233); 交互动作 hook `useInsightActions.ts`(301); `context.tsx` 提供 `useInsight()`; 9 个 tab/头部组件(`OverviewTab` 357 为最大)。主文件仅保留 hook 组合 + Dialog 壳。
+- **做法②**: `Stocks.tsx` 的类型/常量/纯函数前导块外移到 `src/pages/stocks/shared.ts`(397 行), 页面 **3443→3079 行**。
+- **等价性**: 全部为逐字搬迁(仅改缩进/补 import/补 hook 依赖数组), 无逻辑改动; 状态与回调仍在同一 React 树内, 未引入额外请求。
+- **验证**: `pnpm exec tsc -b` 通过; `eslint` 通过(含 react-hooks/exhaustive-deps); `pnpm test` 27 passed; `pnpm build` 通过。浏览器回归见后续发版记录。
+- **未完成**: `Stocks.tsx`(3079) / `Settings.tsx`(2562) 仍 > 800 行, 继续拆分中。
+- [branch fix/w5c-大文件拆分-20260909]
+
 ### update-发版 v0.5.26(前端 Settings 拆分)
 - 内容: `Settings.tsx` 组件外移(`CapBadges`/`LlmUsageSection` → `src/components/settings/`), 页面 2764→2562 行; **无后端/迁移变更**。
 - 部署: 仅覆盖容器 `/app/static`(前端产物), 不重启后端。
