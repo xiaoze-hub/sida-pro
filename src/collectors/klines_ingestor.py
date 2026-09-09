@@ -30,9 +30,52 @@ from src.web.database import DB_URL  # 复用应用 DB 连接
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+# B1.1(2026-09-10): 单日涨跌幅宽容度 —— 留出四舍五入/复权误差, 超过板块限幅×该系数
+# 视为可疑跳变(保留但打 quality_flag=0, 由哨兵 B1.2 汇总)。
+_JUMP_TOLERANCE = 1.02
+
+# 硬错误(直接拒绝入库)
+_HARD_REJECT_REASONS = (
+    "unparsable",
+    "non_positive_price",
+    "ohlc_relation",
+    "negative_volume",
+)
+
+
+def validate_bar(
+    symbol: str, k: KlineData, prev_close: float | None, *, is_st: bool | None = None
+) -> str | None:
+    """单根日 K 合法性校验(B1.1/KI-040)。
+
+    返回 None = 通过; "jump_beyond_limit" = 可疑跳变(保留 + quality_flag=0);
+    其余为硬错误(拒绝入库): unparsable / non_positive_price / ohlc_relation / negative_volume。
+
+    说明: 前复权序列理论上不应出现超过涨跌停的跳变(除权已被复权抹平), 出现的
+    多为 vendor 侧脏柱(见 KI-011 的 10 条缺口), 故标记而非静默接受。
+    """
+    try:
+        o, h, l, c = float(k.open), float(k.high), float(k.low), float(k.close)
+        v = float(k.volume or 0)
+    except Exception:
+        return "unparsable"
+    if min(o, h, l, c) <= 0:
+        return "non_positive_price"
+    if l > min(o, c) + 1e-9 or max(o, c) > h + 1e-9:
+        return "ohlc_relation"
+    if v < 0:
+        return "negative_volume"
+    if prev_close and prev_close > 0:
+        from src.core.limit_rules import limit_ratio
+
+        ratio = limit_ratio(symbol, is_st)
+        if ratio is not None and abs(c / prev_close - 1.0) > ratio * _JUMP_TOLERANCE:
+            return "jump_beyond_limit"
+    return None
+
 
 def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData, ts,
-               adjust: str = "qfq") -> dict:
+               adjust: str = "qfq", quality_flag: int = 1) -> dict:
     """KlineData → klines 表字典。"""
     return {
         "ts": ts,
@@ -46,7 +89,9 @@ def _to_db_row(symbol: str, market: str, period: str, source: str, k: KlineData,
         "low": float(k.low),
         "close": float(k.close),
         "volume": int(k.volume or 0),
-        "quality_flag": 1,
+        # B1.3: vendor 提供成交额时入库; 缺失留 NULL(诚实缺失, 不伪造)
+        "amount": (float(k.amount) if getattr(k, "amount", None) is not None else None),
+        "quality_flag": int(quality_flag),
     }
 
 
@@ -89,10 +134,20 @@ async def ingest_symbol(
     # 2026-08-23 修复(M-11): 收集失败明细, 便于上游聚合日志。
     fail_details: list[dict] = []
     rows: list[dict] = []
+    hard_rejected = 0
+    flagged = 0
     if not isinstance(klines, list) or not klines:
         fail_details.append({"source": source, "error": "empty/no klines"})
     else:
-        for k in klines:
+        # B1.1: 升序遍历, prev_close 用于跳变校验
+        for k in sorted(klines, key=lambda x: str(getattr(x, "date", ""))):
+            reason = validate_bar(symbol, k, prev_close, is_st=None)
+            if reason in _HARD_REJECT_REASONS:
+                hard_rejected += 1
+                fail_details.append(
+                    {"source": source, "error": f"reject:{reason}@{getattr(k, 'date', '')}"}
+                )
+                continue
             # KlineData.date 是 'YYYY-MM-DD'(CST 交易日) → 当天 00:00 CST 转 UTC
             # P2-19: 旧代码 .replace(tzinfo=utc) 把北京时间午夜标成 UTC 午夜, 差 8h
             try:
@@ -102,7 +157,15 @@ async def ingest_symbol(
                     ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
                 except Exception:
                     ts = datetime.now(timezone.utc)
-            rows.append(_to_db_row(symbol, market.value, period, source, k, ts, adjust="qfq"))
+            rows.append(
+                _to_db_row(
+                    symbol, market.value, period, source, k, ts, adjust="qfq",
+                    quality_flag=0 if reason == "jump_beyond_limit" else 1,
+                )
+            )
+            if reason == "jump_beyond_limit":
+                flagged += 1
+            prev_close = float(k.close)
 
     # 入库: DO UPDATE 同键覆盖(自愈复权基准), 一次 1 行确保 ON CONFLICT 走对路径
     total = 0
@@ -122,13 +185,14 @@ async def ingest_symbol(
                 result = conn.execute(
                     text(
                         "INSERT INTO klines (ts, symbol, market, period, source, adjust, "
-                        "open, high, low, close, volume, quality_flag) "
+                        "open, high, low, close, volume, amount, quality_flag) "
                         "VALUES (:ts, :symbol, :market, :period, :source, :adjust, "
-                        ":open, :high, :low, :close, :volume, :quality_flag) "
+                        ":open, :high, :low, :close, :volume, :amount, :quality_flag) "
                         "ON CONFLICT (symbol, market, period, ts, source, adjust) "
                         "DO UPDATE SET open=EXCLUDED.open, high=EXCLUDED.high, "
                         "low=EXCLUDED.low, close=EXCLUDED.close, "
-                        "volume=EXCLUDED.volume, quality_flag=EXCLUDED.quality_flag"
+                        "volume=EXCLUDED.volume, amount=EXCLUDED.amount, "
+                        "quality_flag=EXCLUDED.quality_flag"
                     ),
                     row,
                 )
@@ -140,6 +204,8 @@ async def ingest_symbol(
         "ingested": total,
         "by_source": {source: len(rows)} if rows else {},
         "fail_details": fail_details,
+        "rejected": hard_rejected,
+        "flagged": flagged,
     }
 
 

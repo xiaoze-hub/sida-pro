@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-数据地基: K线入库校验/哨兵K线规则/amount列/除权因子/停牌表/失败明细(W1/B1.1-B1.6, KI-040)
+- **背景**: KI-040 —— ingest 无 OHLCV 校验、哨兵无 K 线规则、klines 无 amount 列、无除权因子表、无停牌表、数据源失败只有 Prometheus 聚合无明细。
+- **做法**: ① `klines_ingestor.validate_bar`: 硬错误拒收(unparsable/非正价/OHLC 关系/负成交量), 跳变超板块限幅×1.02 → **保留但 quality_flag=0 并计数**(前复权序列理论上不应出现超限跳变, 见 KI-011), 入库统计新增 `rejected`/`flagged`; ② `data_quality_sentinel._check_kline_quality`: 近 20 天 OHLC 异常 + 相邻柱跳变, ≥1 warn / ≥50 fail, 查询失败不阻断其它检查; ③ 迁移 **v150** `klines` 加 `amount` 列(幂等, 历史 NULL 诚实缺失), ingest 写入 vendor 提供值; ④ 迁移 **v152** `adj_factors` + `src/core/adjust.py`(`adjust_close`/`to_qfq_series` 按 ex_date 折算); ⑤ 迁移 **v151** `trading_halts` + `src/core/halts.py`(`upsert_halt`/`is_halted`/`load_halts`); ⑥ 迁移 **v153** `datasource_failures` + `src/core/datasource_failures.py`(按 (provider,kind) 60s 限流落明细) 且 `health.record_datasource_failure` 同步落库。
+- **验证**: `pytest -q tests/test_klines_ingest_validation.py tests/test_sentinel_kline_rules.py tests/test_klines_amount_and_halts.py tests/test_adjust_and_failures.py` → **24 passed**(新增 4 个测试文件)。
+- **如实说明(未做的部分)**: B1.4 的"存储路径改不复权价+因子 + reader 迁移"与 B1.6 的"权威源表接进 engine 源排序"属高风险改动, 留作独立迁移(已在台账注明); 停牌期的持仓冻结依赖"停牌日无行情→引擎自然跳过", `trading_halts` 供显式标注与研究过滤。
+- [branch fix/w1-数据地基-20260909, `git show HEAD`]
+
 ### feat-PIT股票池快照: 消除幸存者偏差 + ST未知保守5%(W0.6, KI-036)
 - **背景**: KI-036 —— 全仓无 universe 快照/退市表/ST 字段, 回测用"今天的名单"回看历史, 已退市/已戴帽标的被系统性剔除, 收益与胜率偏高且无法靠调参弥补。
 - **做法**: ① 新表 `stock_universe_snapshots`(迁移 **v149**, 唯一键 `as_of_date+symbol+market`, 字段 is_st/is_delisted/list_date/delist_date/source); ② 新模块 `src/core/universe.py`: `upsert_universe`(幂等) / `universe_as_of`(按日取池, **无快照返回空列表不静默用今天名单**) / `filter_symbols`(无快照回退并告警) / `backfill_from_entry_candidates`(库内唯一 PIT 来源) / `backfill_from_stock_table`; ③ `decision_backtest.backtest_resonance(..., universe_as_of=日期)` 按该日池过滤标的; ④ `limit_rules.limit_ratio/is_st=None` **保守取 5%**(显式 False 才 10%) —— fail-safe 优先; ⑤ 回填脚本 `scripts/backfill_universe.py`。

@@ -2680,6 +2680,51 @@ def _m149_stock_universe_snapshots(conn: Connection) -> None:
     StockUniverseSnapshot.__table__.create(bind=conn, checkfirst=True)
 
 
+def _has_column(conn: Connection, table: str, column: str) -> bool:
+    if _dialect_is_pg(conn):
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :t AND column_name = :c LIMIT 1"
+            ),
+            {"t": table, "c": column},
+        ).first()
+        return bool(row)
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    return any(str(r[1]) == column for r in rows)
+
+
+def _m150_klines_amount_column(conn: Connection) -> None:
+    """klines 补 amount 列(B1.3/KI-040): 成交额, 供单位恒等式与金额口径使用。
+
+    历史行留 NULL(诚实缺失, 不伪造); 写入端在 vendor 提供时填充。
+    """
+    if not _has_column(conn, "klines", "amount"):
+        col_type = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+        conn.execute(text(f"ALTER TABLE klines ADD COLUMN amount {col_type}"))
+
+
+def _m151_trading_halts_table(conn: Connection) -> None:
+    """停牌区间表 trading_halts(B1.5/KI-040)。"""
+    from src.web.models import TradingHalt
+
+    TradingHalt.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m152_adj_factors_table(conn: Connection) -> None:
+    """除权除息因子表 adj_factors(B1.4/KI-040)。"""
+    from src.web.models import AdjFactor
+
+    AdjFactor.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m153_datasource_failures_table(conn: Connection) -> None:
+    """数据源失败明细表 datasource_failures(B1.6/KI-040)。"""
+    from src.web.models import DatasourceFailure
+
+    DatasourceFailure.__table__.create(bind=conn, checkfirst=True)
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3365,6 +3410,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(147, "legacy_remove_stock_enabled", _m147_legacy_remove_stock_enabled),
     Migration(148, "legacy_add_user_id_columns", _m148_legacy_add_user_id_columns),
     Migration(149, "stock_universe_snapshots", _m149_stock_universe_snapshots),
+    Migration(150, "klines_amount_column", _m150_klines_amount_column),
+    Migration(151, "trading_halts_table", _m151_trading_halts_table),
+    Migration(152, "adj_factors_table", _m152_adj_factors_table),
+    Migration(153, "datasource_failures_table", _m153_datasource_failures_table),
 )
 
 
