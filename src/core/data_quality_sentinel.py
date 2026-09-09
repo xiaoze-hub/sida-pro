@@ -17,6 +17,8 @@
   c) suggestion_drop          近24h 建议数 vs 前7天日均, <30% warn
   d) failure_notifications    notifications 近24h title/body 含"获取失败"或"失败"条数,
                               >10 warn
+  e) kline_quality            B1.2/KI-040: klines(qfq 日K)近 20 天 OHLC 关系异常 +
+                              相邻柱缺口超板块限幅 + quality_flag=0 计数, >=1 warn, >=50 fail
 
 聚合: 任一 fail→fail; 否则任一 warn→warn; 否则 ok。
 仅当 overall != ok 时写一条 Notification。
@@ -43,6 +45,13 @@ _SUGG_DROP_PCT = 30.0    # 近24h 建议数 < 前7天日均 30% → warn
 _FAIL_NOTIFY_WARN = 10   # 近24h '失败' 通知 > 10 → warn
 _TICK_HOUR = 15          # 盘后对账起始小时
 _TICK_MINUTE = 10        # 盘后对账起始分钟(15:10)
+
+# B1.2(KI-040): K 线质量
+_KLINE_LOOKBACK_DAYS = 20
+_KLINE_SYMBOL_LIMIT = 40
+_KLINE_BAD_WARN = 1
+_KLINE_BAD_FAIL = 50
+_KLINE_JUMP_TOLERANCE = 1.02
 
 _SOURCE = "data_quality_sentinel"
 
@@ -340,6 +349,70 @@ def _write_notification(overall: str, checks: list[dict], now: datetime) -> None
             logger.warning("[dq] 哨兵推送用户 %s 失败: %s", uid[:8], e)
 
 
+def _check_kline_quality(db, now: datetime) -> dict:
+    """e) K 线质量(B1.2/KI-040): OHLC 关系 / 相邻柱缺口超限幅 / quality_flag=0。"""
+    from sqlalchemy import text as _sql
+
+    from src.core.limit_rules import limit_ratio
+
+    base = {"check": "kline_quality", "value": None}
+    since = (now - timedelta(days=_KLINE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    try:
+        rows = db.execute(
+            _sql(
+                "SELECT symbol, ts, open, high, low, close, quality_flag "
+                "FROM klines WHERE period='1d' AND adjust='qfq' AND ts >= :since "
+                "ORDER BY symbol, ts"
+            ),
+            {"since": since},
+        ).fetchall()
+    except Exception as e:
+        return {**base, "status": "ok", "detail": f"klines 查询跳过: {e}"}
+    if not rows:
+        return {**base, "status": "ok", "detail": f"近 {_KLINE_LOOKBACK_DAYS} 天无 K 线样本"}
+
+    bad_ohlc = bad_jump = bad_flag = 0
+    prev_close: dict[str, float] = {}
+    symbols: set[str] = set()
+    for symbol, _ts, o, h, l, c, flag in rows:
+        symbol = str(symbol or "")
+        if symbol not in symbols and len(symbols) >= _KLINE_SYMBOL_LIMIT:
+            continue
+        symbols.add(symbol)
+        try:
+            o, h, l, c = float(o), float(h), float(l), float(c)
+        except Exception:
+            bad_ohlc += 1
+            continue
+        if l > min(o, c) + 1e-9 or max(o, c) > h + 1e-9:
+            bad_ohlc += 1
+        if int(flag or 1) == 0:
+            bad_flag += 1
+        pc = prev_close.get(symbol)
+        if pc and pc > 0:
+            ratio = limit_ratio(symbol, None)  # ST 未知 → 保守 5%
+            if ratio is not None and abs(c / pc - 1.0) > ratio * _KLINE_JUMP_TOLERANCE:
+                bad_jump += 1
+        prev_close[symbol] = c
+
+    total_bad = bad_ohlc + bad_jump
+    if total_bad >= _KLINE_BAD_FAIL:
+        status = "fail"
+    elif total_bad >= _KLINE_BAD_WARN:
+        status = "warn"
+    else:
+        status = "ok"
+    return {
+        "check": "kline_quality",
+        "status": status,
+        "value": total_bad,
+        "detail": (
+            f"近 {_KLINE_LOOKBACK_DAYS} 天: OHLC异常={bad_ohlc} 跳变={bad_jump} "
+            f"quality_flag=0={bad_flag} 样本={len(rows)} 标的={len(symbols)}"
+        ),
+    }
+
+
 def run_dq_checks(db) -> dict:
     """执行 4 项数据质量检查。
 
@@ -353,6 +426,7 @@ def run_dq_checks(db) -> dict:
         _check_null_created_at,
         _check_suggestion_drop,
         _check_failure_notifications,
+        _check_kline_quality,
     ]
     checks: list[dict] = []
     for fn in check_fns:

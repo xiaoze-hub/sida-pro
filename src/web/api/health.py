@@ -203,12 +203,22 @@ def record_datasource_failure(provider: str, kind: str = "fetch") -> None:
     调用点: marketdata vendors/base 的 fetch 包装与 Engine 的 timeout/auth
     分支经 on_vendor_failure 桥接自动上报; 包外自建源可手工调用。
     kind 固定枚举(未知值归一为 fetch, 防 label 基数膨胀);
-    禁止把 symbol 等高基数值放进 provider。"""
+    禁止把 symbol 等高基数值放进 provider。
+
+    B1.6(2026-09-10): 除 Prometheus 计数外, 同步落一条**可查明细**
+    (datasource_failures 表, 内部按 (provider, kind) 60s 限流)。
+    """
     try:
-        if not _PROMETHEUS_AVAILABLE:
-            return
         if kind not in _DATASOURCE_KINDS:
             kind = "fetch"
+        try:
+            from src.core.datasource_failures import record as _record_failure
+
+            _record_failure(provider, kind)
+        except Exception:  # noqa: BLE001 - 明细落库绝不影响计数
+            pass
+        if not _PROMETHEUS_AVAILABLE:
+            return
         _init_metrics()
         _metrics.DATASOURCE_FAILURES.labels(provider=provider, kind=kind).inc()
     except Exception:  # noqa: BLE001

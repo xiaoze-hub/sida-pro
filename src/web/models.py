@@ -1057,6 +1057,67 @@ class StockUniverseSnapshot(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class TradingHalt(Base):
+    """停牌区间(B1.5/KI-040): 回测/研究按日冻结, 避免把停牌当"无波动持有"。
+
+    每个停牌区间一行; end_date 为空表示"至查询日仍未复牌"。
+    """
+
+    __tablename__ = "trading_halts"
+    __table_args__ = (
+        UniqueConstraint("symbol", "market", "start_date", name="uq_halt_symbol_start"),
+        Index("ix_halt_symbol_range", "symbol", "start_date", "end_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    start_date = Column(String, nullable=False)   # YYYY-MM-DD
+    end_date = Column(String, default="")          # 空 = 仍未复牌
+    reason = Column(String, default="")
+    source = Column(String, default="manual")      # manual/announcement/vendor
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class AdjFactor(Base):
+    """除权除息因子(B1.4/KI-040): 按 (symbol, ex_date) 存复权比例。
+
+    ratio = 除权日理论价 / 除权前收盘价(前复权用它把历史价折算到最新基准)。
+    """
+
+    __tablename__ = "adj_factors"
+    __table_args__ = (
+        UniqueConstraint("symbol", "market", "ex_date", name="uq_adj_symbol_exdate"),
+        Index("ix_adj_symbol_date", "symbol", "ex_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    ex_date = Column(String, nullable=False)   # 除权除息日 YYYY-MM-DD
+    ratio = Column(Float, nullable=False, default=1.0)
+    source = Column(String, default="manual")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class DatasourceFailure(Base):
+    """数据源失败明细(B1.6/KI-040): Prometheus 计数之外的"可查明细"。"""
+
+    __tablename__ = "datasource_failures"
+    __table_args__ = (
+        Index("ix_dsfail_time", "created_at"),
+        Index("ix_dsfail_provider_kind", "provider", "kind"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String, nullable=False)
+    kind = Column(String, nullable=False, default="fetch")  # fetch/parse/timeout/auth
+    symbol = Column(String, default="")
+    detail = Column(String, default="")
+    latency_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class PortfolioRiskSnapshot(Base):
     """按快照/市场聚合的组合风险画像。"""
 
