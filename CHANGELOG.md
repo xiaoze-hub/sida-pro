@@ -22,7 +22,8 @@
 
 ### feat-KI-025 前端 WS 消费 envelope(行情实时流统一入口) + 后端补推自选标的
 - **前端**: 新增 `src/realtime/useQuoteStream.ts` —— 承接此前就绪但无人消费的 `envelope.ts`: 鉴权改走 `Sec-WebSocket-Protocol: panwatch.auth.bearer,<jwt>`(**token 不进 URL/access log**)、`parseFrame` 兼容新旧帧、断线带 `last_seq` 补发、指数退避(1s→30s 封顶)、**4401 鉴权失败不重连**; `pages/stocks/useStocksData.ts` 原内联 WS 块替换为该 hook(持仓标的行情就地更新)。
-- **后端修缺陷**: `_collect_watchlist_symbols` 原只 `join positions`, **纯自选(未持仓)标的不进推送集** → 有自选无持仓时 WS 全程静默(与模块 docstring「自选股行情推送」不符); 现补上 `stocks` 表(user_id 归属), 自选+持仓合并推送, 仍按 per-user 过滤。
+- **后端修缺陷①(静默根因)**: per-user 缓存键原为 `"CN:600519"`, 但下行 `data`/快照均以**裸 symbol**为键, `_broadcast`/`subscribe` 用 `_sym_key(k)` 比对 → 永不相等 → **任何用户都收不到帧**(2026-09-08 T8 引入的键格式回归, 含快照); 现缓存改存裸 symbol。
+- **后端修缺陷②(推送集不全)**: `_collect_watchlist_symbols` 原只 `join positions`, **纯自选(未持仓)标的不进推送集** → 有自选无持仓时 WS 全程静默(与模块 docstring「自选股行情推送」不符); 现补上 `stocks` 表(user_id 归属), 自选+持仓合并推送, 仍按 per-user 过滤。
 - **测试**: 前端 `tests/lib/use-quote-stream.test.tsx` 7 例(envelope/裸帧/非行情帧忽略/SWP 不带 token/last_seq 退避递增/4401 不重连/enabled=false); 后端 `tests/test_ws_auth_guard.py::test_collect_includes_watchlist_without_positions`。
 - **验证**: 前端 `tsc -b` + `eslint .` + `pnpm test` **41 passed** + `pnpm build`; 后端全量离线套件 **1987 passed / 2 failed(KI-027 本机) / 5 skipped**; 3 静态门禁通过; SWP 握手实测 `protocol=panwatch.auth.bearer` 且 URL 无 token。
 - **口径**: WS 只推持仓+自选, **轮询不撤**(自选未持仓仍靠 `refreshQuotes` 兜底; 实时流是增量不是替代)。

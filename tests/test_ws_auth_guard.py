@@ -168,7 +168,21 @@ def test_collect_includes_watchlist_without_positions(monkeypatch):
         assert set(groups.get("CN", [])) == {"600519", "000001"}
         with qs._symbols_lock:
             allowed = set(qs._user_symbols_cache.get(U_ACTIVE, set()))
-        assert allowed == {"CN:600519", "CN:000001"}
+        # 裸 symbol(不带市场前缀): 下行 data / 快照均以裸 symbol 为键, 前缀会导致永不匹配。
+        assert allowed == {"600519", "000001"}
+
+        # 端到端: 收集 → 广播 → 订阅者确实收到该用户的自选帧(回归 T8 键格式不匹配)。
+        monkeypatch.setattr(qs, "_ensure_aggregator", lambda: None)
+        qs._last_snapshot.clear()
+        with qs._subscribers_lock:
+            qs._subscribers.clear()
+        sid, q = qs.subscribe(U_ACTIVE)
+        try:
+            qs._broadcast({"type": "quotes", "ts": 0.0, "data": {"600519": {"price": 1.0}}})
+            frame = q.get_nowait()
+            assert set((frame["payload"].get("data") or {}).keys()) == {"600519"}
+        finally:
+            qs.unsubscribe(sid)
     finally:
         with qs._symbols_lock:
             qs._user_symbols_cache.clear()

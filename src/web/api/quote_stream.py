@@ -112,7 +112,7 @@ def _allowed_symbols(user_id: str | None) -> set[str] | None:
     return cached if cached is not None else set()
 
 
-# per-user 关注标的缓存 {user_id(或 "" = 历史遗留共享账户): {"CN:600519", ...}}
+# per-user 关注标的缓存 {user_id(或 "" = 历史遗留共享账户): {"600519", ...}}(裸 symbol)
 _user_symbols_cache: dict[str | None, set[str]] = {}
 _symbols_lock = threading.Lock()
 
@@ -175,7 +175,11 @@ def _collect_watchlist_symbols() -> dict[str, list[str]]:
                 if sym not in groups[mkt]:
                     groups[mkt].append(sym)
                 key = owner if owner else ""  # "" = 历史遗留共享账户
-                per_user.setdefault(key, set()).add(f"{mkt}:{sym}")
+                # 2026-09-09 KI-025: 缓存键必须是**裸 symbol** —— 下行 data 与快照
+                # 均以裸 symbol 为键(见 _fetch_batch_quotes), 而 _broadcast/subscribe
+                # 用 _sym_key(k) 比对; 原存 "CN:600519" 与裸键永不相等 → 任何用户都
+                # 收不到帧(含快照)。故此处存 sym, 不拼市场前缀。
+                per_user.setdefault(key, set()).add(sym)
 
             # 1) 自选(stocks.user_id 归属)
             for sym, mkt, uid in db.query(
