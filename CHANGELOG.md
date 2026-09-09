@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-v0.5.22生产部署(docker cp覆盖层, 冒烟9/9, 零迁移零代码变更)
+- **生产部署**: tag v0.5.22(53ef4a4 merge) 经 docker cp 覆盖层部署到 panwatch 容器(既定路径)。步骤: 备份现行代码(WSL `/tmp/app_backup_pre_v0522_20260909.tar.gz`, 14.07MB/1123 项, 排除 data/static-data/downloads/node_modules/__pycache__) → `git archive v0.5.22`(13.3MB) → docker cp 至容器 /tmp → `/app` 解包 → restart → ~35s healthy → 冒烟门禁 `scripts/post_deploy_smoke.sh` **9/9 通过**(13.8s), /api/health 报 version=v0.5.22, database/redis/scheduler ok, forecast_engine down(= W3.6 预期基线, 生产 8010 未部署)。
+- **覆盖层解包三坑(新记档, runbook 固化 `docker exec -u root`)**: ①容器 exec 默认用户为 app(uid 10001), 普通解包 `tar xzf` 对已存在文件整包报 "Cannot open: File exists"(busybox tar 目标存在即 O_EXCL 拒绝), /app 未被改动; ②改 `--overwrite` 后仅 /app 顶层 3 个 app 属主文件(VERSION/README.md/docker-compose.yml)写成功, 其余 ~1006 个 root 属主文件报 "Permission denied" —— --overwrite 原地打开已存在文件写入, 需文件写权限, app 用户对 root 代码文件无权; ③正确姿势 `docker exec -u root panwatch sh -c "cd /app && tar xzf /tmp/vXX.tar.gz --overwrite"`: 重跑 TAR_EXIT=0/0 错误行, 解包文件落 root 属主(app 只读运行不受影响), KI-028/MemorySwap 抽查命中, /app/data 运行数据未触碰。两段失败期间未重启容器, 全程运行 v0.5.21, 无带病运行窗口。
+- **迁移对账**: 与发版条目预判一致 —— 本波 0 个 schema 迁移、0 个代码文件(diff v0.5.21..v0.5.22 仅 13 个 docs/compose/deploy/README 文件), 重启后日志无新 Applying; compose/deploy_panwatch.sh 属宿主机侧文件随覆盖层进 /app 仅作留痕不生效; VERSION 随覆盖层更新 → /api/health 如实报 v0.5.22。备份/解包后容器 /tmp 中间产物已清理。
+- [tag v0.5.22]
+
 ### update-发版 v0.5.22(风险整改第4波·流程债合入main)
 - 本次发版内容: W4.1/F1 指令文件与版本号统一(CLAUDE.md 改 3 行指针/两 README 徽章+拉取 tag 对齐 VERSION/卷名 panwatch_data/AGENTS 提交词汇表与 CHANGELOG 标题格式固化) / W4.2/E7 资源限制收口(主 compose 三服务+infra 六服务补 memswap_limit/mem_reservation/cpus+deploy 脚本克隆 swap/cpus+static 陈述三方一致实证) / W4.3/F5 已知问题台账(docs/KNOWN_ISSUES.md 收口 **28 条 KI-001..028**, 8 字段全带, P1×4, 含对账说明) / W4.4/F4 文档基线规范(AGENTS 新增 Documentation Standards 三要素+4 存量规划/审计文档补头+UI 审计副本缺陷永久留痕)。
 - 部署注意: ①本波 **0 个 schema 迁移**; ②**零代码文件改动**——`git diff v0.5.21..HEAD` 仅 13 个文档/compose/deploy/README 文件, 无 .py/.ts, 套件结果结构上沿用 v0.5.21 基线 1891 passed/2 failed/5 skipped(发版后实测记录于部署条目); ③docker-compose*.yml 与 deploy/deploy_panwatch.sh 属编排/宿主机侧文件, 不进容器覆盖层; VERSION 随覆盖层更新 /app/VERSION → /api/health version=v0.5.22; ④已知项见 docs/KNOWN_ISSUES.md(KI-004 生产容器限额重建仍待老板确认)。
