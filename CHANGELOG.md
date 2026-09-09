@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.27(W5.3 前端大文件拆分收口)
+- 内容: `stock-insight-modal.tsx` 2820→**46** / `Stocks.tsx` 3079→**56** / `Settings.tsx` 2562→**55**; 拆为 `packages/biz-ui/src/components/insight/`(18 文件) / `src/pages/stocks/`(16) / `src/pages/settings/`(18); 单文件最大 **736 行**, W5.3 验收"单文件 ≤ 800 行"达成。
+- 部署: 仅覆盖容器 `/app/static`(前端产物), 不重启后端; **无迁移变更**。
+- 验收: `tsc -b` + `eslint .` + `pnpm test` 27 passed + `pnpm build`; 生产冒烟 9/9。
+- [tag v0.5.27]
+
 ### refactor-前端大文件拆分收口(W5.3): 三个巨型文件全部 ≤800 行
 - **目标**: W5.3 "单文件 ≤ 800 行"; 本 commit 收口 `Stocks.tsx`(3079→**56**) 与 `Settings.tsx`(2562→**55**), 加上上一 commit 的 `stock-insight-modal.tsx`(2820→**46**), 三个文件全部达标。
 - **Stocks.tsx 做法**: `src/pages/stocks/` 下新增 `useStocksState`(320) / `useStocksData`(728) / `useStocksDerived`(91) / `useStocksActions`(573) 四个 hook + `context.tsx` + 12 个区块组件(`AccountsSection` 525 最大); 骨架屏抽 `StocksSkeleton`, 顶部 tab/汇总/关注列表/各弹窗各自成组件。
