@@ -1069,6 +1069,17 @@ export default function OpportunitiesPage() {
     }))
   }, [stats])
 
+  // W3.7/D7 去卡片化: 列表默认只展示表格化扫读行, 明细按行展开(对齐 UI 审计 P0)
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
   return (
     <div className="page-container sida-page-enter pb-10">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
@@ -1927,6 +1938,18 @@ export default function OpportunitiesPage() {
       )}
 
       <div className="border-t border-border/60">
+        {/* W3.7/D7 去卡片化: 表头(桌面端), 与扫读行列对齐 */}
+        <div className="hidden md:grid grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] gap-x-3 px-1 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border/40">
+          <span />
+          <span>标的</span>
+          <span>动作</span>
+          <span className="text-right">评分</span>
+          <span>入场</span>
+          <span>止损</span>
+          <span>目标</span>
+          <span>来源</span>
+          <span className="text-right">操作</span>
+        </div>
         {visibleItems.map((group) => {
           const item = group.primary
           const payload = item.payload && typeof item.payload === 'object' ? item.payload as Record<string, unknown> : {}
@@ -1960,52 +1983,77 @@ export default function OpportunitiesPage() {
           const sourcePoolLabel = group.hasMarketScan
             ? (group.members.some((x) => x.source_pool === 'mixed') ? '市场+关注' : '市场池')
             : (item.source_pool_label || '关注池')
+          const expanded = expandedRows.has(stateKey)
+          const score = Math.round(item.rank_score || item.score || 0)
           return (
-            <div key={stateKey} className={`border-b border-border/40 py-2.5 transition-colors hover:bg-accent/30 ${toneClass(item)}`}>
-              <button className="w-full text-left" onClick={() => openInsight(item)}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-[15px] font-semibold truncate flex items-center gap-1.5">
-                      <span className="truncate">{item.stock_name || item.stock_symbol}</span>
-                      {/* P1: 多源共振火焰 */}
-                      {resCount >= 2 && (
-                        <span
-                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-500/15 text-orange-600 dark:text-orange-400"
-                          title={`多源共振×${resCount}: ${resonanceSourcesLabel(item) || badgeSources.map(sourceCn).join(' + ')}`}
-                        >
-                          🔥×{resCount}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[12px]">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] ${actionBadgeClass(item.action)}`}>
-                        {displayActionLabel(item)}
+            <div key={stateKey} className={`border-b border-border/40 ${toneClass(item)}`}>
+              {/* W3.7/D7 扫读行: 点击展开/收起明细; 桌面端表格化对齐, 移动端保留名称+动作 */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded}
+                onClick={() => toggleExpanded(stateKey)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    toggleExpanded(stateKey)
+                  }
+                }}
+                className="w-full cursor-pointer grid grid-cols-[20px_minmax(0,1fr)_auto] md:grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] items-center gap-x-3 px-1 py-2.5 text-left transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              >
+                <span className={`text-[10px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+                <div className="min-w-0">
+                  <div className="text-[14px] font-semibold truncate flex items-center gap-1.5">
+                    <span className="truncate">{item.stock_name || item.stock_symbol}</span>
+                    {/* P1: 多源共振火焰 */}
+                    {resCount >= 2 && (
+                      <span
+                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-500/15 text-orange-600 dark:text-orange-400"
+                        title={`多源共振×${resCount}: ${resonanceSourcesLabel(item) || badgeSources.map(sourceCn).join(' + ')}`}
+                      >
+                        🔥×{resCount}
                       </span>
-                    </div>
-                    {/* 2026-09-04 去抢戏: 评分降为次级(此前13px加粗压过交易价) */}
-                    <div className={`text-[11px] font-medium font-mono mt-1 ${Number(item.rank_score || item.score || 0) >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>
-                      评分 {Math.round(item.rank_score || item.score || 0)}
-                    </div>
-                    {item.ai_score != null && (
-                      <div className="mt-1 flex items-center justify-end gap-1">
-                        <span className="text-[10px] text-muted-foreground">AI</span>
-                        <span className={`inline-flex items-center justify-center min-w-[18px] px-1.5 py-0.5 rounded text-[11px] font-semibold ${item.ai_score >= 8 ? 'bg-green-500/20 text-green-700 dark:text-green-400' : item.ai_score >= 6 ? 'bg-primary/20 text-primary' : item.ai_score >= 4 ? 'bg-amber-500/20 text-amber-700 dark:text-amber-600' : 'bg-red-500/20 text-red-700 dark:text-red-400'}`}>
-                          {item.ai_score}
-                        </span>
-                      </div>
                     )}
                   </div>
+                  <div className="text-[11px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
                 </div>
-                <div className="mt-1.5 text-[12px] leading-5 text-foreground line-clamp-2">{item.signal || item.reason || '--'}</div>
-                {/* 2026-09-04 交易三要素独立一行提权(入场/止损/目标是决策核心, 此前埋在11px杂烩里) */}
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[12px] font-semibold">
-                  <span className="text-foreground">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
-                  <span className="text-stock-down">止损 {formatPlanPrice(stopLoss)}</span>
-                  <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
+                <div>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] ${actionBadgeClass(item.action)}`}>
+                    {displayActionLabel(item)}
+                  </span>
                 </div>
+                <div className={`hidden md:block text-right text-[12px] font-mono font-medium ${score >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>{score}</div>
+                <div className="hidden md:block text-[12px] font-mono font-semibold truncate">{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
+                <div className="hidden md:block text-[12px] font-mono text-stock-down truncate">{formatPlanPrice(stopLoss)}</div>
+                <div className="hidden md:block text-[12px] font-mono text-stock-up truncate">{formatPlanPrice(targetPrice)}</div>
+                <div className="hidden md:flex items-center gap-1 min-w-0">
+                  {badgeSources.slice(0, 2).map((s) => (
+                    <span key={s} className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[10px]">
+                      {sourceCn(s) || s}
+                    </span>
+                  ))}
+                  {badgeSources.length > 2 && <span className="text-[10px] text-muted-foreground shrink-0">+{badgeSources.length - 2}</span>}
+                </div>
+                <div className="hidden md:flex justify-end">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); openInsight(item) }}
+                    className="text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                    title="打开 AI 洞察"
+                  >
+                    洞察
+                  </button>
+                </div>
+              </div>
+              {expanded && (
+                <div className="px-1 pb-3 pt-0.5 md:pl-8 space-y-1.5 bg-accent/10">
+                  {/* 移动端: 扫读行隐藏的三要素在这里补齐 */}
+                  <div className="md:hidden flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[12px] font-semibold">
+                    <span className="text-foreground">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
+                    <span className="text-stock-down">止损 {formatPlanPrice(stopLoss)}</span>
+                    <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
+                  </div>
+                  <div className="text-[12px] leading-5 text-foreground">{item.signal || item.reason || '--'}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
                   <span>失效 {item.invalidation || '--'}</span>
                   <span>策略 {strategyHead}{strategyTailCount > 0 ? ` +${strategyTailCount}` : ''}</span>
@@ -2023,6 +2071,7 @@ export default function OpportunitiesPage() {
                   <span>{sourcePoolLabel} · {sourceAgentHead}{sourceAgentTailCount > 0 ? ` +${sourceAgentTailCount}` : ''} · {item.risk_level_label || item.risk_level || '--'} · {marketRegime.regime_label || marketRegime.regime || '--'} · {item.is_holding_snapshot ? '持仓中' : '未持仓'}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] leading-4 text-muted-foreground/80">
+                  {item.ai_score != null && <span>AI 评分 <span className="font-semibold text-foreground">{item.ai_score}</span></span>}
                   <span>α {formatMetric(breakdown.alpha_score)}</span>
                   <span>催化 {formatMetric(breakdown.catalyst_score)}</span>
                   <span>质量 {formatMetric(breakdown.quality_score)}</span>
@@ -2049,7 +2098,6 @@ export default function OpportunitiesPage() {
                     组合约束: {(item.constraint_reasons || []).join('；') || '已自动降级'}
                   </div>
                 )}
-              </button>
 
               <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
                 <div className="text-[10px] text-muted-foreground">
@@ -2098,6 +2146,8 @@ export default function OpportunitiesPage() {
                   <div className="text-[10px] text-muted-foreground">评估: 自动后验</div>
                 </div>
               </div>
+                </div>
+              )}
             </div>
           )
         })}

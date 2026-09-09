@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import { RefreshCw, Search, FileText, Calendar, Hash, Loader2, ExternalLink } from 'lucide-react'
-import { reportsApi, type ReportItem } from '@panwatch/api'
+import { type ReportItem, type ReportListResponse, reportsApi } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import ErrorBanner from '@/components/ErrorBanner'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 // 修复(S-5, 2026-08-23): PG DECIMAL → 字符串后 .toFixed 抛 TypeError. 改 safe 包装.
 function formatBytes(n: unknown): string {
@@ -21,32 +22,22 @@ function formatDate(iso: string): string {
 }
 
 export default function ReportsPage() {
-  const [items, setItems] = useState<ReportItem[]>([])
-  const [jobs, setJobs] = useState<{ job_id: string; job_name: string }[]>([])
-  const [loading, setLoading] = useState(false)
+  // W3.7/D7: 列表加载交给 TanStack Query(items+jobs 同源一次请求); 刷新/轮询用 refetch。
+  const { data, isLoading, isFetching, error: loadErrorRaw, refetch } = useApiQuery<ReportListResponse>(
+    ['reports'],
+    '/reports/list?limit=500',
+  )
+  const items = useMemo(() => data?.items ?? [], [data])
+  const jobs = data?.jobs ?? []
   // 初始加载失败提示(失败≠空态:不把"加载失败"误读为"暂无报告")
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [dismissed, setDismissed] = useState(false)
+  useEffect(() => setDismissed(false), [loadErrorRaw])
+  const loadError = loadErrorRaw instanceof Error ? loadErrorRaw.message : loadErrorRaw ? '加载失败' : null
+  const load = () => void refetch()
   const [search, setSearch] = useState('')
   const [jobFilter, setJobFilter] = useState<string>('') // 空 = 全部
   const [selected, setSelected] = useState<{ item: ReportItem; content: string } | null>(null)
   const [loadingContent, setLoadingContent] = useState(false)
-
-  const load = async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const res = await reportsApi.list({ limit: 500 })
-      setItems(res.items)
-      setJobs(res.jobs)
-    } catch (e) {
-      console.error(e)
-      setLoadError(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
 
   const filtered = useMemo(() => {
     let r = items
@@ -99,8 +90,8 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <Button variant="ghost" size="sm" onClick={load} disabled={isFetching}>
+            <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
@@ -132,14 +123,14 @@ export default function ReportsPage() {
       </div>
 
       {/* 报告列表(按任务分组) */}
-      {loading ? (
+      {isLoading ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground">
           <Loader2 className="w-5 h-5 animate-spin mr-2" /> 加载中...
         </div>
-      ) : loadError ? (
+      ) : loadError && !dismissed ? (
         <ErrorBanner
-          errors={loadError ? [{ source: '报告列表', message: loadError, retry: () => void load() }] : []}
-          onDismiss={() => setLoadError(null)}
+          errors={[{ source: '报告列表', message: loadError, retry: () => void refetch() }]}
+          onDismiss={() => setDismissed(true)}
         />
       ) : grouped.size === 0 ? (
         <div className="py-8 text-center text-sm text-muted-foreground">

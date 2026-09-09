@@ -14,6 +14,7 @@ import {
 import { getMarketBadge } from '@panwatch/biz-ui'
 import { useLocalStorage, parseServerTime } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
@@ -710,7 +711,13 @@ export default function StockInsightModal(props: {
   hasPosition?: boolean
 }) {
   const { toast } = useToast()
+  // W3.7/D7: 弹窗→全屏行情路由桥(弹窗预览 60%/侧栏场景的出口, 直达 /quote/:symbol)
+  const navigate = useNavigate()
   const symbol = String(props.symbol || '').trim()
+  const goFullQuote = () => {
+    props.onOpenChange(false)
+    navigate(`/quote/${encodeURIComponent(symbol)}`)
+  }
   const market = String(props.market || 'CN').trim().toUpperCase()
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<InsightTab>('overview')
@@ -1796,6 +1803,10 @@ export default function StockInsightModal(props: {
                 >
                   <Sparkles className="w-3.5 h-3.5 mr-1" /> 问 AI
                 </Button>
+                <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={goFullQuote} title="在全屏行情页查看">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>全屏行情</span>
+                </Button>
                 <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => handleRefreshAll()} disabled={loading}>
                   <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
                 </Button>
@@ -1836,6 +1847,9 @@ export default function StockInsightModal(props: {
                 }}
               >
                 <Sparkles className="w-3.5 h-3.5 mr-1" /> 问 AI
+              </Button>
+              <Button variant="secondary" size="sm" className="h-8 px-2.5 shrink-0" onClick={goFullQuote} title="在全屏行情页查看">
+                <ExternalLink className="w-3.5 h-3.5" />
               </Button>
               <Button variant="outline" size="sm" className="h-8 px-2.5 shrink-0" onClick={() => handleRefreshAll()} disabled={loading}>
                 <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
