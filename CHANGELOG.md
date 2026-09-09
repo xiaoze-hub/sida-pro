@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-决策先锋 1/3/5 日序列 + 0 轴穿越(B6.8, 接口文档 P0 缺口)
+- **背景**: `docs/数据源与算法接口设计_TDX_THS互补.md:32` 点名"暗盘/GS 的 1/3/5 日序列 + 0 轴穿越"为 P0 缺口, 现有 `compute_gs_signal` 只给最近一次交叉方向与当前状态。
+- **做法**: `src/core/decision_pioneer.py` 新增 `compute_gs_windows(bars, windows=(1,3,5))`: 对 A0−BB0 差值序列给每个窗口统计 0 轴穿越次数 / 窗口累计差值 / 窗口末方向, 并给出最近一次穿越的方向与距今天数; `compute_decision_pioneer` 响应新增 `gs_windows` 字段(不破坏既有 `gs`)。
+- **验证**: `pytest -q tests/test_gs_windows.py` → **3 passed**(穿越捕捉与窗口统计、与 `compute_gs_signal` 状态/差值一致性、空数据 fail-soft)。
+- **如实说明(未做)**: W6 其余 7 个方向(因子工厂 B6.1 / 事件驱动 B6.2 / LLM 财报解读 B6.3 / 情绪因子 B6.4 / 组合优化 B6.5 / tick 撮合仿真 B6.6 / 可复现研究平台 B6.7)属选做创新项, 本波未实施。
+- [branch fix/w6-创新-20260909, `git show HEAD`]
+
 ### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
 - **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
 - **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
