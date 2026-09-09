@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### refactor-策略求值实现下沉 core, 消灭 API 层第二策略实现(W4.2, KI-039)
+- **背景**: `src/web/api/strategies.py` 内联了 300 余行策略求值/打分实现, 与 `src/core/strategy_engine.py` 形成两套策略口径(KI-039 点名项)。
+- **做法**: 纯搬迁(非重写)`_evaluate_strategy` + `_quote_to_dict` + `rounding_safe` 到新增 `src/core/strategy_library.py`(206 行, 逐字保留); API 层改为 import 后再导出, 既有导入路径(`tests/test_strategy_semantics.py`)不破; `strategies.py` **445→263 行**。
+- **验证**: `pytest -q tests/test_strategy_semantics.py tests/test_strategies_scan.py tests/test_w41_core_web_dependency.py` → **12 passed**; 两模块导入冒烟通过。
+- **如实说明**: 新模块仍以 `fastapi.HTTPException` 表达"策略配置非法"(框架级依赖), 未改成 core 自有异常——留待 repository/异常体系专项。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
 ### feat-组合级撮合 + 参数扫描/walk-forward + 已实现盈亏曲线(B2.1/B2.2/B2.3/B5.2)
 - **B2.1 组合级撮合**: 新增 `src/core/backtest/portfolio.py`(`PortfolioBacktester` + `PortfolioConfig`): 共享现金账户 + 并发持仓上限 + 现金不足按手缩量 + 容量约束, 逐日 mark-to-market; 内核抽出 `simulate_exit` 供单笔/组合共用(行为零变更), `BacktestResult` 增 `skipped_cash`/`skipped_slots` 归因字段。
 - **B2.2/B2.3 滚动验证与参数扫描**: 新增 `src/core/backtest/research.py`: `sweep`(参数网格按指标倒序) + `walk_forward`(训练窗选参 → 测试窗只读评估, **汇总只报样本外**) + 参数化 `golden_cross_signals`。
