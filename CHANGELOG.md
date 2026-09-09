@@ -7,6 +7,10 @@
 
 ## 2026-09-09
 
+### update-v0.5.25生产部署(代码+前端static, 冒烟9/9, 零迁移)
+- **生产部署**: tag v0.5.25 部署到 panwatch 容器(备份 `/root/app_backup_pre_v0525_20260909.tar.gz` → `git archive` → `tar xf --overwrite` → `frontend/dist` 覆盖 `/app/static` → restart → 40s healthy)。`/app/VERSION` 核对 **v0.5.25**; 冒烟 **9/9**(10.5s); 迁移 150-153 保持 success(本版零新增迁移)。
+- [tag v0.5.25]
+
 ### update-发版 v0.5.25(延后项补齐: 组合撮合/滚动验证/参数扫描/策略下沉/成交点与盈亏曲线/组件测试)
 - 本版补齐方案 §11 台账中的 6 个延后项:
   - **B2.1 组合级撮合**: 共享现金账户 + 并发持仓上限 + 现金不足缩量 + 容量约束(`src/core/backtest/portfolio.py`; 内核抽出 `simulate_exit` 供单笔/组合共用)。
