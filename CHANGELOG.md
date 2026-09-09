@@ -30,6 +30,12 @@
 - **口径**: WS 只推持仓+自选, **轮询不撤**(自选未持仓仍靠 `refreshQuotes` 兜底; 实时流是增量不是替代)。
 - [tag v0.5.36]
 
+### update-v0.5.36 生产部署(代码+static覆盖层, chown+compileall, 冒烟 9/9, 浏览器实测)
+- **部署**: `git archive` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.36** → 冒烟 **9/9**(4.5s)。含两轮修正(`bf741f2` 键格式 / `6172386` 按需拉取)。
+- **浏览器实测**(owner token, SWP 握手): `/api/quotes/ws` 握手 `Sec-WebSocket-Protocol: panwatch.auth.bearer` 且 URL 无 token; 收帧 `quote.snapshot`/`quote.tick`(33 标的, 含 seq); `/portfolio` 页自身建连且稳定(无重连churn), 控制台无新增报错。
+- **性能旁证**: 冷 `dark-flow` 受行情源(thsdk, 当日 17:37 起持续 -6 超时)影响波动大(2.5s~155s, 属 KI-029 已知门禁抖动); 聚合器单次批量拉取实测 0.21s(TTL 命中 0.00s), 无订阅者时不再拉取。
+- [tag v0.5.36]
+
 ### refactor-KI-039 第二阶段(清零): src/core 反向依赖 src/web 13 → 0 文件, KI-039 关闭
 - **目标**: 把上一版剩余的 13 个反向依赖按"服务下沉"逐个清零, 使 `src/core` 完全脱离 Web 层。
 - **八项下沉**:
