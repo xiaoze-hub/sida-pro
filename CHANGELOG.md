@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### feat-组合级撮合 + 参数扫描/walk-forward + 已实现盈亏曲线(B2.1/B2.2/B2.3/B5.2)
+- **B2.1 组合级撮合**: 新增 `src/core/backtest/portfolio.py`(`PortfolioBacktester` + `PortfolioConfig`): 共享现金账户 + 并发持仓上限 + 现金不足按手缩量 + 容量约束, 逐日 mark-to-market; 内核抽出 `simulate_exit` 供单笔/组合共用(行为零变更), `BacktestResult` 增 `skipped_cash`/`skipped_slots` 归因字段。
+- **B2.2/B2.3 滚动验证与参数扫描**: 新增 `src/core/backtest/research.py`: `sweep`(参数网格按指标倒序) + `walk_forward`(训练窗选参 → 测试窗只读评估, **汇总只报样本外**) + 参数化 `golden_cross_signals`。
+- **B5.2 已实现盈亏曲线**: 新增 `frontend/src/lib/trades.ts`(`computeRealizedPnlSeries`/`realizedByDate`) + `PaperTrading` 的 `RealizedPnlChart`(零轴虚线 + 逐点盈亏色)。
+- **验证**: `pytest -q tests/test_backtest_portfolio.py tests/test_backtest_research.py tests/test_backtest*.py` → **39 passed**; 前端 `pnpm test -- --run` **23 passed**(4 文件) + `tsc -b` 通过。
+- **如实说明(未做)**: 成交点在 K 线上叠加(W5.2 后半, 需给 InteractiveKline 接 trades 标记 props)、大文件拆分(W5.3)、组件渲染测试(W5.4)仍待做。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
 ### update-v0.5.24生产部署(代码覆盖层+前端static, 冒烟9/9, 迁移v150-153首执行)
 - **生产部署**: tag v0.5.24(c3eb1fb) 部署到 panwatch 容器。步骤: 备份现行代码(`/root/app_backup_pre_v0524_20260909.tar.gz` 14.1MB) → `git archive`(21.4MB) → `docker exec -u root ... tar xf --overwrite`(**普通 tar, 不是 xzf**) → 前端 `pnpm build` 产物覆盖 `/app/static`(index.html 4280B) → restart → 40s healthy → 冒烟 **9/9**(7.4s), /api/health `version=v0.5.24 status=ok`(database/redis/scheduler ok, forecast_engine down = 预期基线)。
 - **迁移对账**: **v150 `klines.amount` 加列 + v151 `trading_halts` + v152 `adj_factors` + v153 `datasource_failures` 首次在生产库执行全部成功**(`schema_migrations` 150-153 success=1); 新表/新列已核对存在。
