@@ -27,9 +27,18 @@ def _record(name: str, ok: bool, dt: float, note: str = "") -> None:
 
 
 def _get(base: str, path: str, token: str | None, timeout: float = 15.0):
+    """GET 一次; 连接层瞬断(RemoteDisconnected/ConnectionReset)自动重试一次。
+
+    2026-09-09: 大请求(如 dark-flow 6-7s)后紧跟的请求偶发 RemoteDisconnected,
+    直连复测必成功 —— 属连接层抖动, 不是接口故障; 重试一次可让门禁不再误红。
+    """
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     t0 = time.time()
-    r = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
+    try:
+        r = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
+    except requests.exceptions.ConnectionError:
+        time.sleep(1.0)
+        r = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
     return r, time.time() - t0
 
 

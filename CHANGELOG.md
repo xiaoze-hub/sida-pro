@@ -16,6 +16,12 @@
 - **台账**: KI-037 关闭移入本条, 台账 **31→30 条在册**(仅 KI-039 保留开启)。
 - [tag v0.5.31]
 
+### update-v0.5.31 生产部署(仅前端 static + VERSION, 冒烟 9/9) + 冒烟客户端抗抖动
+- **部署**: `frontend/dist` 覆盖 `/app/static` + `VERSION` → `/app/VERSION` + `chown`; 无需重启。`/api/version` = **v0.5.31**; 冒烟 **9/9**。
+- **浏览器实测(生产 :8000)**: `/quote/002361` 渲染 7 个 canvas(含 MACD 副图)、85 根 K 线、GS/主力意图正常, 控制台无 JS 异常(仅 8010 预测引擎 503)。
+- **测试链修复**: `scripts/smoke_test.py` 的 `_get` 增加**连接层瞬断重试一次**(RemoteDisconnected/ConnectionReset)。触发场景: 大请求(如 dark-flow 6-7s)之后紧跟的请求偶发 `RemoteDisconnected` 且直连复测必成功 —— 属连接抖动而非接口故障, 门禁不再误红(真实 5xx 仍照常失败)。
+- [tag v0.5.31]
+
 ### fix-L2/洞察「主力净额·主买净额」恒显 "--" + L2 页字段缺解释
 - **现象**: 盘口资金页与洞察弹窗的 主力净额 / 主买净额 恒显 `--`, 但 TQ raw 实际有值(002361: `Zjl=-7086.62`、`Zjl_HB=-3762.99`)。
 - **根因①(后端)**: `md_more_info` 未把 vendor 的 `zjl`/`zjl_hb` 透传进 payload(`insight/types.ts` 早已声明这两字段 → 一直读到 undefined)。
