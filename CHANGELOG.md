@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### fix-三compose资源限制收口+deploy脚本限制克隆+static陈述实证(W4.2/E7)
+- 背景: 4.2 —— 方案写作时"3 个 compose 全无资源限制"; 实测现状: docker-compose.yml 的 panwatch(1500m)/forecast(4g)/postgres(1g) 已在 P1-14 时代加了 mem_limit, 但 **cpus/memswap_limit/mem_reservation 全缺**(8010 推理高峰 CPU 争抢与 swap 超限无保护); docker-compose.infra.yml 6 个服务只有 restart 无任何 mem 限额; deploy/deploy_panwatch.sh 克隆重建时只克隆 --memory, swap/cpus 丢失。另: **生产 panwatch 容器实测 mem=0(完全无限制)** —— 非 compose 管理的历史 docker run 部署, compose 里的 1500m 从未生效。
+- 做法: ①docker-compose.yml 三服务补齐 memswap_limit(=mem_limit, 不给额外 swap)+mem_reservation+cpus: panwatch 1500m/512m/1.5, forecast 4g/1g/2.0, postgres 1g/256m/1.0; ②docker-compose.infra.yml 六服务加 mem_limit+memswap_limit(与主 compose 同值防漂移: redis 320m/prometheus 512m/loki 512m/promtail 192m/grafana 512m/alertmanager 128m); ③deploy 脚本克隆逻辑补 MemorySwap/NanoCpus inspect 与 --memory-swap/--cpus 透传; ④docker-compose.dev.yml 是 overlay(继承主 compose 限额), 不重复加(overlay 加限会覆盖基线值, 反而引入漂移)。
+- **8010 峰值内存实测约束(如实记录)**: 本机 8010 未部署(0.0 勘查既定, /api/health forecast_engine=down), 方案要求的"实测推理峰值×1.5"**本波无法执行**; 4g 沿用 P1-14 既定值, 校准项登记 KNOWN_ISSUES(KI-005, 8010 首次部署前实测校准, 不许拍脑袋)。
+- **static 陈述实证(方案观察已被前波修复)**: build.sh 实际行为 `rm -rf static && cp -r frontend/dist/* static/`、Dockerfile:162 `COPY --from=frontend-builder /app/frontend/dist ./static/`、AGENTS.md:19 陈述三方一致; frontend/vite.config.ts 无 outDir 覆盖(默认 dist)——方案"声称与实际不符"不复存在, 仅记录实证无改动。
+- 验证: `docker compose config --quiet --no-interpolate` 主/infra 两文件均 0 error; `bash -n deploy_panwatch.sh` 语法通过。**遗留(登记 KI-004)**: 生产 panwatch 容器(非 compose 管理)重建以套用 1500m 限额属生产可见变更, 待老板确认后随下次维护窗口执行。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
 ### feat-指令文件与版本号统一+行尾欠账后第4波启动(W4.1/F1)
 - 背景: 4.1 —— ①CLAUDE.md(96 行)与 AGENTS.md 大量重叠且互相不一致(commit type 一个写 `{feat,fix,docs,refactor,style,test,chore}`, 一个写 `{fix,feature,update,doc}`), AI 读到哪份按哪份做; ②版本号三处不一致: VERSION=v0.5.21(真值) vs README 徽章 v0.5.0 vs 拉取命令 v0.4.3; ③README 运行示例卷名 `sida_data`, 全仓其余地方均为 `panwatch_data`(docker-compose.yml:204,294-295 / deploy/deploy_panwatch.sh), 照 README 起容器会挂到空卷(数据"消失")。
 - 做法: ①CLAUDE.md 改 3 行指针(规范唯一入口 AGENTS.md, 冲突以 AGENTS.md 为准); ②两 README 徽章 v0.5.0→v0.5.21 并加 HTML 注释"发版时随 VERSION 同步"; 拉取命令 v0.4.3→`:$(cat VERSION)` 形式并注明"版本以仓库 VERSION 文件为准"; ③卷名 sida_data→panwatch_data(两 README); ④AGENTS.md "Commit & Pull Request Guidelines" 重写: type 词汇表对齐实际主流 `{feat,fix,update,refactor,docs,test,chore,style,perf}`, CHANGELOG 标题格式固化 `### <type>-<中文标题>`(与 commit type 一致), 新增发版步骤行"VERSION bump 必须与两 README 徽章同 commit"。历史 CHANGELOG 标题不回改, 自本条起按新规范。

@@ -206,6 +206,11 @@ services:
       # ⚠️ 朋友请改成自己的路径,不存在会自动创建空目录不影响服务启动
       - ~/.hermes:/hermes:ro
     mem_limit: 1500m
+    # E7(2026-09-09): memswap=mem_limit 即不给额外 swap, 防内存超限拖垮宿主机;
+    # reservation 保底调度; cpus 上限防 CPU 争抢(8010 推理高峰不拖累 8000)。
+    memswap_limit: 1500m
+    mem_reservation: 512m
+    cpus: 1.5
     logging:
       driver: json-file
       options:
@@ -251,6 +256,12 @@ services:
       # 预测历史 SQLite(回测报告/预测记录/资金面 LLM 情绪记录)
       - panwatch_forecast_data:/app/data
     mem_limit: 4g
+    # E7(2026-09-09): 4g 沿用 P1-14 既定值 —— 本机 8010 未部署(0.0 勘查既定,
+    # /api/health forecast_engine=down), 推理峰值内存无法实测校准, 已登记
+    # KNOWN_ISSUES(8010 首次真正部署前须实测峰值×1.5 校准, 不许拍脑袋)。
+    memswap_limit: 4g
+    mem_reservation: 1g
+    cpus: 2.0
     logging:
       driver: json-file
       options:
@@ -277,6 +288,9 @@ services:
     volumes:
       - panwatch_pg_data:/var/lib/postgresql/data
     mem_limit: 1g
+    memswap_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.0
     logging:
       driver: json-file
       options:
