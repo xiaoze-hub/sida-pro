@@ -190,6 +190,70 @@ def compute_gs_signal(bars: list[dict]) -> dict | None:
     }
 
 
+def compute_gs_windows(bars: list[dict], windows: tuple[int, ...] = (1, 3, 5)) -> dict | None:
+    """决策先锋 1/3/5 日序列 + 0 轴穿越(B6.8, 接口文档点名的 P0 缺口)。
+
+    对 A0−BB0 差值序列, 给每个窗口统计: 窗口内 0 轴穿越次数、窗口累计差值、窗口末方向;
+    并给出最近一次 0 轴穿越的方向与距今天数(0 = 最后一根)。
+    """
+    if not bars or len(bars) < 5:
+        return None
+    closes: list[float] = []
+    a0s: list[float] = []
+    bb0s: list[float | None] = []
+    for b in bars:
+        c, o, h, l = _bar_close_open_high_low(b)
+        closes.append(c)
+        a0s.append((h + l + 2 * o + 6 * c) / 10)
+        parts: list[float] = []
+        for n in (3, 7, 13, 27):
+            m = _sma(closes, n)
+            if m is None:
+                parts = []
+                break
+            parts.append(m)
+        bb0s.append(sum(parts) / 4 if parts else None)
+
+    dif: list[float | None] = [
+        None if bb0s[i] is None else a0s[i] - bb0s[i] for i in range(len(bars))
+    ]
+    valid = [(i, d) for i, d in enumerate(dif) if d is not None]
+    if len(valid) < 2:
+        return None
+
+    last_cross_dir: str | None = None
+    last_cross_bars_ago: int | None = None
+    for k in range(1, len(valid)):
+        _i_prev, d_prev = valid[k - 1]
+        i_cur, d_cur = valid[k]
+        if d_prev <= 0 < d_cur:
+            last_cross_dir, last_cross_bars_ago = "G", len(bars) - 1 - i_cur
+        elif d_prev >= 0 > d_cur:
+            last_cross_dir, last_cross_bars_ago = "S", len(bars) - 1 - i_cur
+
+    series: dict[str, dict] = {}
+    for w in windows:
+        w = max(1, int(w))
+        seg = [d for _, d in valid[-(w + 1):]]
+        crossings = sum(
+            1
+            for k in range(1, len(seg))
+            if (seg[k - 1] <= 0 < seg[k]) or (seg[k - 1] >= 0 > seg[k])
+        )
+        series[f"{w}d"] = {
+            "crossings": crossings,
+            "cum_dif": round(sum(seg), 4),
+            "last_dir": "G" if seg and seg[-1] > 0 else ("S" if seg and seg[-1] < 0 else None),
+        }
+
+    return {
+        "dif": round(valid[-1][1], 4),
+        "state": "G区" if valid[-1][1] > 0 else "S区",
+        "last_cross": {"direction": last_cross_dir, "bars_ago": last_cross_bars_ago},
+        "windows": series,
+    }
+
+
 def _bars_to_dicts(bars) -> list[dict]:
     """Bar 对象列表 → 统一 dict 列表(按 date 升序)。"""
     out: list[dict] = []
@@ -397,6 +461,8 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     bars = fetch_bars(symbol, market=market, days=60)
     act = compute_institution_activity(bars)
     gs = compute_gs_signal(bars)
+    # B6.8: 1/3/5 日序列 + 0 轴穿越(接口文档点名的 P0 缺口)
+    gs_windows = compute_gs_windows(bars)
     l2 = fetch_tq_l2(symbol, market=market)
 
     # 主力意图(复用现有 dark_flow, 失败不阻塞三指标)
@@ -425,6 +491,7 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
         "market": market,
         "institution_activity": act,
         "gs": gs,
+        "gs_windows": gs_windows,
         "l2": _l2_summary(l2),
         "main_intent": main_intent,
         "data_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
