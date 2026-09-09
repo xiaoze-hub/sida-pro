@@ -74,7 +74,7 @@ def _check_tick_reconciliation(db, now: datetime) -> dict:
         })
         return base
 
-    from src.web.models import Stock
+    from src.db.models import Stock
 
     stocks = (
         db.query(Stock)
@@ -143,7 +143,7 @@ def _check_tick_reconciliation(db, now: datetime) -> dict:
 
 def _check_null_created_at(db, now: datetime) -> dict:
     """b) created_at NULL 计数: >0 warn, >100 fail。"""
-    from src.web.models import AgentRun, Notification, StockSuggestion
+    from src.db.models import AgentRun, Notification, StockSuggestion
 
     models = [
         ("stock_suggestions", StockSuggestion),
@@ -171,7 +171,7 @@ def _check_null_created_at(db, now: datetime) -> dict:
 
 def _check_suggestion_drop(db, now: datetime) -> dict:
     """c) 近24h 建议数 vs 前7天日均, <30% warn。"""
-    from src.web.models import StockSuggestion
+    from src.db.models import StockSuggestion
 
     cutoff_24h = now - timedelta(hours=24)
     cutoff_8d = now - timedelta(days=8)
@@ -221,7 +221,7 @@ def _check_suggestion_drop(db, now: datetime) -> dict:
 
 def _check_failure_notifications(db, now: datetime) -> dict:
     """d) 近24h 含'失败'/'获取失败'的通知条数, >10 warn。"""
-    from src.web.models import Notification
+    from src.db.models import Notification
 
     cutoff = now - timedelta(hours=24)
     try:
@@ -305,8 +305,8 @@ def _write_notification(overall: str, checks: list[dict], now: datetime) -> None
     避免打扰全部用户。
     """
     from src.core.notify_center import push_notification
-    from src.web.database import SessionLocal
-    from src.web.models import User
+    from src.db.session import SessionLocal
+    from src.db.models import User
 
     level = "error" if overall == "fail" else "warning"
     overall_cn = _OVERALL_LABELS.get(overall, overall)
@@ -461,7 +461,7 @@ def _app_timezone() -> str:
 
 def _hourly_run() -> None:
     """同步调度入口: 打开自己的 session 跑一轮检查。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:

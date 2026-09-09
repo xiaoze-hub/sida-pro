@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 
-from src.web.database import SessionLocal
+from src.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ async def probe_db() -> dict:
     """对真实库执行 SELECT 1。"""
     from sqlalchemy import text
 
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     t0 = time.monotonic()
     try:
@@ -171,7 +171,7 @@ async def probe_disk() -> dict:
     import os
     import shutil
 
-    from src.web.database import DB_PATH
+    from src.db.dialect import DB_PATH
 
     t0 = time.monotonic()
     try:
@@ -233,7 +233,7 @@ async def _guard(coro, fallback: dict) -> dict:
 
 def _enumerate(db, include_system: bool = True) -> list[dict]:
     """枚举所有待检项(身份 + ORM 引用),不探测。include_system 加 DB/磁盘/调度 系统基础项。"""
-    from src.web.models import AIModel, AIService, DataSource, NotifyChannel
+    from src.db.models import AIModel, AIService, DataSource, NotifyChannel
 
     targets: list[dict] = []
     if include_system:

@@ -10,8 +10,8 @@ import logging
 import os
 from datetime import date, datetime, timezone
 
-from src.web.database import SessionLocal
-from src.web.models import AnalysisHistory
+from src.db.session import SessionLocal
+from src.db.models import AnalysisHistory
 
 logger = logging.getLogger(__name__)
 

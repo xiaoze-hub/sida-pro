@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 
-from src.web.database import SessionLocal
-from src.web.models import AdjFactor
+from src.db.session import SessionLocal
+from src.db.models import AdjFactor
 
 logger = logging.getLogger(__name__)
 

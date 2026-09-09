@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy import and_, func, or_
 
-from src.web.database import SessionLocal
-from src.web.models import StockSuggestion
+from src.db.session import SessionLocal
+from src.db.models import StockSuggestion
 from src.core.timezone import utc_now, to_iso_with_tz, to_utc
 from src.core.json_safe import to_jsonable
 

@@ -251,6 +251,7 @@
 - 涉及文件: src/core/*、src/agents/*、src/collectors/*、src/web/api/strategies.py、src/core/backtest/data_adapter.py。
 - 建议修复: 抽 `src/db/repository`; 统一策略实现; 加 core→web 静态门禁(存量白名单 + 禁止新增)。任务 B4.1/B4.2/B4.5。
 - **进展(2026-09-09 晚)**: 已加**棘轮门禁** `tests/test_w41_core_web_dependency.py`(冻结清单 + 禁止新增)并下沉 `backtest/data_adapter` 取数到 `src/db/klines_repo.py`(文件数 57→56); **存量 56 文件与 API 层第二策略实现(B4.2)仍未清** —— 本条保持开启。
+- **进展(2026-09-09 深夜, 切片A+B)**: ORM/会话下沉中立层 —— `src/db/session.py`(Base/engine/SessionLocal/get_db) + `src/web/models.py`→`src/db/models.py`(web 侧留 re-export shim); core/agents/collectors 57 个文件导入改指 `src.db.*`; 棘轮白名单同步收紧。**core→web 依赖 59 → 13 文件(-78%)**。剩余 13 个为 stock_list/wencai/market_scan jobs/reports 常量/ws_hub/auth/health/cache.streams —— 需按"服务下沉"逐个设计(第二阶段), 本条继续开启。
 
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 

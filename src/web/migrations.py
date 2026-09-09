@@ -2654,28 +2654,28 @@ def _m140_market_scan_ranks_table(conn: Connection) -> None:
     ORM 模型建表: 方言类型由模型自带, 无需手写双份 DDL。延迟 import 规避
     database ↔ migrations 循环依赖。老库已由 create_all/兜底建过 → checkfirst 跳过。
     """
-    from src.web.models import MarketScanRank
+    from src.db.models import MarketScanRank
 
     MarketScanRank.__table__.create(bind=conn, checkfirst=True)
 
 
 def _m141_signal_summary_daily_table(conn: Connection) -> None:
     """信号摘要日快照表 signal_summary_daily(W1.5/A5 收编: 原 signal_summary.py 运行时兜底建表)。"""
-    from src.web.models import SignalSummaryDaily
+    from src.db.models import SignalSummaryDaily
 
     SignalSummaryDaily.__table__.create(bind=conn, checkfirst=True)
 
 
 def _m142_dark_fund_top_snapshots_table(conn: Connection) -> None:
     """暗盘资金 TOP 快照表 dark_fund_top_snapshots(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。"""
-    from src.web.models import DarkFundTopSnapshot
+    from src.db.models import DarkFundTopSnapshot
 
     DarkFundTopSnapshot.__table__.create(bind=conn, checkfirst=True)
 
 
 def _m149_stock_universe_snapshots(conn: Connection) -> None:
     """PIT 股票池日快照表 stock_universe_snapshots(B0.6/KI-036, 消除幸存者偏差)。"""
-    from src.web.models import StockUniverseSnapshot
+    from src.db.models import StockUniverseSnapshot
 
     StockUniverseSnapshot.__table__.create(bind=conn, checkfirst=True)
 
@@ -2706,21 +2706,21 @@ def _m150_klines_amount_column(conn: Connection) -> None:
 
 def _m151_trading_halts_table(conn: Connection) -> None:
     """停牌区间表 trading_halts(B1.5/KI-040)。"""
-    from src.web.models import TradingHalt
+    from src.db.models import TradingHalt
 
     TradingHalt.__table__.create(bind=conn, checkfirst=True)
 
 
 def _m152_adj_factors_table(conn: Connection) -> None:
     """除权除息因子表 adj_factors(B1.4/KI-040)。"""
-    from src.web.models import AdjFactor
+    from src.db.models import AdjFactor
 
     AdjFactor.__table__.create(bind=conn, checkfirst=True)
 
 
 def _m153_datasource_failures_table(conn: Connection) -> None:
     """数据源失败明细表 datasource_failures(B1.6/KI-040)。"""
-    from src.web.models import DatasourceFailure
+    from src.db.models import DatasourceFailure
 
     DatasourceFailure.__table__.create(bind=conn, checkfirst=True)
 

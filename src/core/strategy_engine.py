@@ -21,8 +21,8 @@ from src.core.factor_weights import get_factor_weights
 from src.core.timezone import to_iso_with_tz, utc_now
 from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
-from src.web.database import SessionLocal
-from src.web.models import (
+from src.db.session import SessionLocal
+from src.db.models import (
     EntryCandidate,
     MarketRegimeSnapshot,
     NewsCache,

@@ -171,8 +171,8 @@ def _check_zhitu_token() -> CheckResult:
             "ZHITU_TOKEN 池化已配置(多 key)。",
         )
     try:
-        from src.web.database import SessionLocal
-        from src.web.models import AppSettings
+        from src.db.session import SessionLocal
+        from src.db.models import AppSettings
         db = SessionLocal()
         row = db.query(AppSettings).filter(AppSettings.key == "zhitu_token").first()
         db.close()
@@ -203,8 +203,8 @@ def _check_zhitu_token() -> CheckResult:
 
 def _check_notify_channels() -> CheckResult:
     """检查 7: 通知渠道。notify_channels enabled 数量为 0 → warning。"""
-    from src.web.database import SessionLocal
-    from src.web.models import NotifyChannel
+    from src.db.session import SessionLocal
+    from src.db.models import NotifyChannel
 
     db = SessionLocal()
     try:

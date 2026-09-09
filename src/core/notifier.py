@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def get_global_proxy() -> str:
     """获取全局 HTTP 代理设置"""
     try:
-        from src.web.database import SessionLocal
-        from src.web.models import AppSettings
+        from src.db.session import SessionLocal
+        from src.db.models import AppSettings
 
         db = SessionLocal()
         try:
@@ -589,8 +589,8 @@ class NotifierManager:
     def _persist_context_token(self, config: dict, new_ctx: str):
         """把刷新后的 context_token 写回 DB(notify_channels.config)。"""
         try:
-            from src.web.database import SessionLocal
-            from src.web.models import NotifyChannel
+            from src.db.session import SessionLocal
+            from src.db.models import NotifyChannel
 
             db = SessionLocal()
             try:

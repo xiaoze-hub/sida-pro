@@ -7,6 +7,16 @@
 
 ## 2026-09-09
 
+### refactor-KI-039 切片A+B: ORM/会话下沉 src/db, core→web 反向依赖 59→13 文件(-78%)
+- **背景**: KI-039 —— `src/core` 反向依赖 `src/web`(ORM `models` / `SessionLocal`)共 59 个文件, 核心逻辑无法脱离 Web 层单测; 棘轮门禁已冻结存量。
+- **切片A(会话)**: 新增 `src/db/session.py`(`Base` / `engine` / `SessionLocal` / `get_db`, 含 reload 防御), `src/web/database.py` 变薄壳(re-export + 保留 `init_db()` 迁移/备份职责)。
+- **切片B(模型)**: `git mv src/web/models.py src/db/models.py`(保留历史), 内部 `Base` 改从 `src.db.session` 导入; `src/web/models.py` 留 re-export shim(`from src.db.models import *` + 显式 `Base`)。
+- **导入重写**: `src/core` / `src/agents` / `src/collectors` / `src/web/migrations.py` 共 57 个文件改为 `src.db.session` / `src.db.models` / `src.db.dialect`。
+- **测试适配**: `tests/test_pg_default.py` reload 序列补 `src.db.session`(engine 现在那里); 4 个测试文件的 monkeypatch 目标从 `src.web.*` 改到 `src.db.*`(否则 patch 打在 shim 上不生效)。
+- **效果**: core→web 依赖 **59 → 13 文件**, 棘轮白名单同步收紧到 13(真正冻结剩余债务)。剩余 13 为 `stock_list`(4) / `wencai`(2) / `market_scan` jobs(1) / `reports` 常量(1) / `ws_hub`(1) / `auth`(2) / `health.record_datasource_failure`(1) / `cache.streams`(1) —— 需按"服务下沉"逐个设计(第二阶段)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1986 passed / 2 failed(KI-027 本机环境) / 5 skipped**(较基线 1985 +1, 无回退); 棘轮门禁 + `check_is_pg_scope` + `check_scoped_queries` + `check_migrations` 通过; `import server` OK。
+- [tag v0.5.33]
+
 ### feat-前端字段说明补齐(hover 解释)
 - **范围**: ① 模拟盘 5 个指标卡(总资产/总收益/胜率/最大回撤/可用资金) + 策略绩效 8 个表头; ② 行情页决策条(该不该动/主力/风险/盘口); ③ 影子账户 5 个指标(盈利回合/总回合/胜率/偏好市场/持仓中位); ④ 暗盘/明盘资金卡 11 个字段(主力净额/超大单/大单/散户/参与度/买占比/暗盘净额/疑似主力买卖/散户买卖/量比/涨跌/位置/外盘额/主动盘占比); ⑤ 盘口资金页 11 个字段(已于 v0.5.30 补)。
 - **形式**: 原生 `title` hover 提示(与洞察弹窗既有 InfoTip 口径一致), 零依赖、零布局变更。

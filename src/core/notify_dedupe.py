@@ -10,8 +10,8 @@ import hashlib
 from datetime import timedelta
 
 from src.core.timezone import utc_now
-from src.web.database import SessionLocal
-from src.web.models import NotifyThrottle
+from src.db.session import SessionLocal
+from src.db.models import NotifyThrottle
 
 
 def build_notify_dedupe_key(agent_name: str, title: str, content: str) -> str:

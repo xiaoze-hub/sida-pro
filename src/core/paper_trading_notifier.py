@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 from src.core.notifier import NotifierManager
-from src.web.database import SessionLocal
-from src.web.models import (
+from src.db.session import SessionLocal
+from src.db.models import (
     AppSettings,
     NotifyChannel,
     PaperTradingAccount,

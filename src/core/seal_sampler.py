@@ -129,7 +129,7 @@ def store_samples(rows: list[dict]) -> int:
         return 0
     from sqlalchemy import text
 
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     saved = 0
     db = SessionLocal()
@@ -203,7 +203,7 @@ def get_recent_samples(symbol: str, limit: int = 120) -> list[dict]:
     """API 用: 当日(按最新样本日期)该股全部采样, ts 升序。"""
     from sqlalchemy import text
 
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:

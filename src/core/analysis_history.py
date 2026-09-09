@@ -4,8 +4,8 @@ import re
 from datetime import date, datetime, timedelta
 
 from src.core.agent_catalog import infer_agent_kind
-from src.web.database import SessionLocal
-from src.web.models import AnalysisHistory
+from src.db.session import SessionLocal
+from src.db.models import AnalysisHistory
 from src.core.json_safe import to_jsonable
 
 logger = logging.getLogger(__name__)

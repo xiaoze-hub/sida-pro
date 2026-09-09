@@ -64,8 +64,8 @@ class NewsDigestAgent(BaseAgent):
         if not items:
             return []
 
-        from src.web.database import SessionLocal
-        from src.web.models import NewsCache
+        from src.db.session import SessionLocal
+        from src.db.models import NewsCache
 
         db = SessionLocal()
         try:

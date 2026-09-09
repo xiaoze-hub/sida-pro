@@ -79,8 +79,8 @@ class SignalPackBuilder:
         """
 
         try:
-            from src.web.database import SessionLocal
-            from src.web.models import DataSource
+            from src.db.session import SessionLocal
+            from src.db.models import DataSource
 
             db = SessionLocal()
             try:

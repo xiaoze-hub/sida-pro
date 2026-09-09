@@ -256,8 +256,9 @@ def sync_auction_to_db(records: list) -> int:
     if not records:
         return 0
     try:
-        from src.web.database import SessionLocal, acquire_write
-        from src.web.models import AuctionAnomalyRecord
+        from src.db.dialect import acquire_write
+        from src.db.session import SessionLocal
+        from src.db.models import AuctionAnomalyRecord
 
         lock = acquire_write()
         try:
@@ -289,8 +290,8 @@ def get_anomaly_history(symbol: str, days: int = 5) -> list[dict]:
     """从 DB 查询某只股票近 N 天竞价异动历史(按时间倒序, 最多 200 条)。"""
     from datetime import datetime, timedelta
 
-    from src.web.database import SessionLocal
-    from src.web.models import AuctionAnomalyRecord
+    from src.db.session import SessionLocal
+    from src.db.models import AuctionAnomalyRecord
 
     sym = (symbol or "").strip()
     if not sym:

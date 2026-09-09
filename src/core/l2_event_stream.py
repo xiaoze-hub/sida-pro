@@ -59,8 +59,8 @@ def push_event(kind: str, symbol: str, day: str, detail: str) -> bool:
         if not should_alert(symbol, day, kind):
             return False
         from src.core.notifier import NotifierManager
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyChannel
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyChannel
 
         db = SessionLocal()
         try:

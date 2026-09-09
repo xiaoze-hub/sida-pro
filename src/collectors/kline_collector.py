@@ -689,7 +689,7 @@ class KlineCollector:
             from datetime import datetime
             from zoneinfo import ZoneInfo
             from sqlalchemy import create_engine, text as _text
-            from src.web.database import DB_URL
+            from src.db.dialect import DB_URL
             engine = create_engine(DB_URL, pool_pre_ping=True)
             with engine.begin() as conn:
                 for b in bars:
@@ -727,7 +727,7 @@ class KlineCollector:
         try:
             from datetime import datetime, timedelta, timezone
             from sqlalchemy import create_engine, text
-            from src.web.database import DB_URL
+            from src.db.dialect import DB_URL
             engine = create_engine(DB_URL, pool_pre_ping=True)
             cutoff = datetime.now(timezone.utc) - timedelta(days=max(days, 5) * 2)
             with engine.connect() as conn:

@@ -25,7 +25,7 @@ from sqlalchemy import create_engine, text
 
 from src.collectors.kline_collector import KlineData
 from src.models.market import MarketCode
-from src.web.database import DB_URL  # 复用应用 DB 连接
+from src.db.dialect import DB_URL  # 复用应用 DB 连接
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -300,8 +300,8 @@ def get_default_symbols() -> list[tuple[str, str]]:
     并入拉取列表,与 watchlist 按 (symbol, market) 去重,一并补 800 天历史。
     market 缺省 CN(对齐 EntryCandidate.stock_market 列 default)。
     """
-    from src.web.database import SessionLocal
-    from src.web.models import EntryCandidate, Stock
+    from src.db.session import SessionLocal
+    from src.db.models import EntryCandidate, Stock
 
     today = _today_cst()
 

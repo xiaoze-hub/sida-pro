@@ -35,7 +35,8 @@ except ImportError:  # pragma: no cover - 部署机才有真实 thsdk
     THS_PREFIX_BLOCK = "URFI"
 
 from src.core.timezone import beijing_now_naive
-from src.web.database import SessionLocal, acquire_write
+from src.db.dialect import acquire_write
+from src.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,7 @@ def sync_boards_to_db(db=None) -> dict:
     失败容错: 单个板块失败只记日志, 不中断整体。
     返回统计 dict, 不抛异常。
     """
-    from src.web.models import Board, BoardDaily
+    from src.db.models import Board, BoardDaily
 
     own_session = db is None
     session = db if db is not None else SessionLocal()
@@ -458,7 +459,7 @@ def compute_rotation(days: int = 5, db=None) -> list[dict]:
     强度分 = 动量(45) + 资金(30) + 连续性(15) + 基础(10), 区间映射线性打分。
     排序按 rotation_score 降序。数据不足的板块按可用数据计算。
     """
-    from src.web.models import Board, BoardDaily
+    from src.db.models import Board, BoardDaily
 
     days = max(1, int(days))
     own_session = db is None

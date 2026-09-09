@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 
-from src.web.database import SessionLocal
-from src.web.models import AnalysisHistory, StockSuggestion
+from src.db.session import SessionLocal
+from src.db.models import AnalysisHistory, StockSuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def backfill_tradingagents_suggestions(days: int = 7) -> dict:
             # 从 AnalysisHistory record 拿股票名(如果存在)
             stock_name = ""
             try:
-                from src.web.models import Stock
+                from src.db.models import Stock
                 stk = db.query(Stock).filter(Stock.symbol == symbol).first()
                 if stk:
                     stock_name = stk.name or ""

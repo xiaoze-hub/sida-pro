@@ -20,7 +20,7 @@ def _engine():
     if _ENG is None:
         from sqlalchemy import create_engine
 
-        from src.web.database import DB_URL
+        from src.db.dialect import DB_URL
         _ENG = create_engine(DB_URL, pool_pre_ping=True, pool_size=2, max_overflow=5)
     return _ENG
 

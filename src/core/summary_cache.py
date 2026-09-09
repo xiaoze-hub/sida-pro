@@ -23,7 +23,7 @@ SUMMARY_PAYLOAD_MAX = 50_000  # 50KB 上限, 超过截断
 
 
 def _engine():
-    from src.web.database import engine
+    from src.db.session import engine
     return engine
 
 

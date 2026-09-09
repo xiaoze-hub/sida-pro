@@ -24,7 +24,7 @@ def register_precache_cron(scheduler) -> bool:
                 get_default_symbols,
                 ingest_symbol,
             )
-            from src.web.database import engine
+            from src.db.session import engine
 
             symbols = get_default_symbols()
             if not symbols:

@@ -183,8 +183,8 @@ class EventsCollector:
 
     @classmethod
     def from_database(cls) -> "EventsCollector":
-        from src.web.database import SessionLocal
-        from src.web.models import DataSource
+        from src.db.session import SessionLocal
+        from src.db.models import DataSource
 
         collectors = []
         db = SessionLocal()

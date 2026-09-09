@@ -40,7 +40,7 @@ def _now_cst_iso() -> str:
 
 def _existing_max_dates() -> dict[str, str]:
     """全表每股最大事件日(一次查询, 增量判断用)。无事件的股票不在结果里。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:
@@ -161,7 +161,7 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
     单次批量拉取近一年事件分组重算, 每股一条 upsert(最新快照口径)。
     """
     from src.core.demon_score import demon_score_from_events
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     cutoff = _year_ago()
     db = SessionLocal()
@@ -272,7 +272,7 @@ def _year_ago() -> str:
 
 def load_factor_pool(topn: int = 50, min_total: float = 0) -> list[dict]:
     """妖股池直读因子表(总因子分降序)。空表返回 [](调用方可回退现算)。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:

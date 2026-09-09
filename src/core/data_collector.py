@@ -8,8 +8,8 @@ from typing import Any, Callable
 
 from marketdata import PACKAGE_VENDORS_BY_TYPE, capture_errors
 
-from src.web.database import SessionLocal
-from src.web.models import DataSource
+from src.db.session import SessionLocal
+from src.db.models import DataSource
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ class DataCollectorManager:
 
     def _get_stock_names(self, symbols: list[str]) -> dict[str, str]:
         """获取股票代码到名称的映射"""
-        from src.web.models import Stock
+        from src.db.models import Stock
 
         # 默认测试股票名称映射
         default_names = {

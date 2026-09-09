@@ -397,7 +397,7 @@ def _build_counter_client(db=None):
     if db is not None:
         try:
             from src.core.ai_client import get_model_for_scene
-            from src.web.models import AIService
+            from src.db.models import AIService
 
             m = get_model_for_scene(db, "intraday_monitor") or get_model_for_scene(db, "chat")
             if m is not None:
@@ -512,7 +512,7 @@ def _ai_counter_check(symbol: str, dark: dict, db=None) -> dict | None:
     _close_db = False
     if db is None:
         try:
-            from src.web.database import SessionLocal
+            from src.db.session import SessionLocal
             db = SessionLocal()
             _close_db = True
         except Exception:
@@ -2092,8 +2092,8 @@ class IntradayMonitorAgent(BaseAgent):
 
     def _check_throttle(self, symbol: str) -> bool:
         """检查是否可以发送通知（未被节流）"""
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyThrottle
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyThrottle
 
         db = SessionLocal()
         try:
@@ -2121,8 +2121,8 @@ class IntradayMonitorAgent(BaseAgent):
 
     def _update_throttle(self, symbol: str):
         """更新节流记录"""
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyThrottle
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyThrottle
 
         db = SessionLocal()
         try:

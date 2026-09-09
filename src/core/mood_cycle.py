@@ -49,8 +49,8 @@ def current_mood() -> dict:
     try:
         from sqlalchemy import desc
 
-        from src.web.database import SessionLocal
-        from src.web.models import MarketPhaseDaily
+        from src.db.session import SessionLocal
+        from src.db.models import MarketPhaseDaily
 
         db = SessionLocal()
         try:

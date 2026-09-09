@@ -100,7 +100,7 @@ def backfill_symbol(symbol: str, name: str = "") -> int:
 def _upsert_rows(rows: list[dict]) -> int:
     if not rows:
         return 0
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     saved = 0
     db = SessionLocal()
@@ -167,7 +167,7 @@ def backfill_all(symbols: list[str] | None = None, max_stocks: int = 0) -> dict:
 
 def get_events_window(symbol: str, days: int = 250) -> list[dict]:
     """取某股近 N 自然日涨停事件(ts 升序), 供 demon_score。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     cutoff = datetime.now(_CST).strftime("%Y%m%d")
     # 简化: 近一年 = 日期字符串前 6 位在近 12 个月内(YYYYMMDD 字典序可用)

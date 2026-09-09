@@ -16,8 +16,8 @@ from src.core.notifier import NotifierManager
 from src.core.marketdata_client import md_quote_rows
 from src.core.timezone import to_utc
 from src.models.market import MarketCode, MARKETS
-from src.web.database import SessionLocal
-from src.web.models import NotifyChannel, PriceAlertHit, PriceAlertRule, Stock
+from src.db.session import SessionLocal
+from src.db.models import NotifyChannel, PriceAlertHit, PriceAlertRule, Stock
 
 logger = logging.getLogger(__name__)
 

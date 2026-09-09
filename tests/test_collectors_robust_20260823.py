@@ -300,7 +300,7 @@ class TestEventsCollectorRobustness:
     def test_factory_failure_logs_exception(self, caplog):
         """L-1: events_collector 工厂构造失败时 logger.exception 应被调用, 而不是裸 pass。"""
         from src.collectors import events_collector
-        from src.web import database as web_db
+        from src.db import session as web_db
 
         # 模拟一坏 factory
         def bad_factory(cfg):

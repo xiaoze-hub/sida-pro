@@ -44,7 +44,7 @@ def record_signal(
         return False
     now = datetime.now(_CST)
     emit_date = emit_date or now.strftime("%Y%m%d")
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     db = SessionLocal()
     try:
@@ -113,7 +113,7 @@ def _load_closes(symbol: str) -> dict[str, float]:
 
 def nightly_review(days_back: int = 3) -> dict:
     """每晚对账(默认回看 3 天未检查样本): 回填 T+1/T+5 收盘收益。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     cutoff = (datetime.now(_CST) - timedelta(days=days_back)).strftime("%Y%m%d")
     db = SessionLocal()
@@ -179,7 +179,7 @@ def nightly_review(days_back: int = 3) -> dict:
 
 def hit_rate(signal_type: str | None = None, days: int = 30) -> dict:
     """命中率统计: 按信号类型聚合 T+1/T+5 胜率与均值(方向按 long 归一)。"""
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     cutoff = (datetime.now(_CST) - timedelta(days=days)).strftime("%Y%m%d")
     db = SessionLocal()

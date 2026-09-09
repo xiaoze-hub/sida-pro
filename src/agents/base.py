@@ -30,7 +30,7 @@ def _scene_db(context) -> tuple[Any, bool]:
     if db is not None:
         return db, False
     try:
-        from src.web.database import SessionLocal
+        from src.db.session import SessionLocal
 
         return SessionLocal(), True
     except Exception:
@@ -74,7 +74,7 @@ def apply_scene_binding(context, scene: str, system_prompt: str) -> str:
                 db, scene, user=getattr(context, "user", None)
             )
             if bound_model is not None and getattr(context, "ai_client", None) is not None:
-                from src.web.models import AIService
+                from src.db.models import AIService
 
                 service = (
                     db.query(AIService)

@@ -27,9 +27,11 @@ def _restore_database_module():
     SessionLocal 的测试(实测曾把迁移跑进真实 data/panwatch.db)。"""
     yield
     import src.db.dialect as dbd
+    import src.db.session as dbs
     import src.web.database as db
 
     importlib.reload(dbd)
+    importlib.reload(dbs)
     importlib.reload(db)
 
 
@@ -39,12 +41,15 @@ def _reload_database(env: dict):
         os.environ.pop(k, None)
     os.environ.update(env)
     import src.db.dialect as dbd
+    import src.db.session as dbs
     import src.web.database as db
 
     try:
-        # 顺序敏感: 先 reload dialect(env→DB_PATH/DB_URL), 再 reload database
-        # (engine=build_engine() 才会按新 DB_URL 重建)
+        # 顺序敏感: 先 reload dialect(env→DB_PATH/DB_URL), 再 reload session
+        # (engine=build_engine() 才会按新 DB_URL 重建; KI-039 后 engine 在
+        # src/db/session.py), 最后 reload web.database(re-export)。
         importlib.reload(dbd)
+        importlib.reload(dbs)
         return dbd, importlib.reload(db)
     finally:
         for k, v in saved.items():

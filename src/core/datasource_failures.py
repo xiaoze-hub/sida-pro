@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 import time
 
-from src.web.database import SessionLocal
-from src.web.models import DatasourceFailure
+from src.db.session import SessionLocal
+from src.db.models import DatasourceFailure
 
 logger = logging.getLogger(__name__)
 

@@ -46,8 +46,8 @@ def maybe_emit_paper_trading_signal(
         )
         return False
 
-    from src.web.database import SessionLocal
-    from src.web.models import StrategySignalRun
+    from src.db.session import SessionLocal
+    from src.db.models import StrategySignalRun
 
     snapshot_date = date.today().isoformat()
     entry_low = round(current_price * 0.98, 2)

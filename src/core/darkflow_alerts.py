@@ -39,8 +39,8 @@ def maybe_alert_anomaly(symbol6: str, tcode: str, day: str, kind: str, detail: s
     try:
         if not should_alert(tcode, day, kind):
             return False
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyChannel
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyChannel
         from src.core.notifier import NotifierManager
 
         db = SessionLocal()

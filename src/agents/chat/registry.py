@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from src.web.models import User
+    from src.db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -832,8 +832,8 @@ async def _tool_get_northbound(db: Session, args: dict, user: User | None = None
         mgr = DataCollectorManager()
 
         def _fetch_nb():
-            from src.web.database import SessionLocal
-            from src.web.models import DataSource
+            from src.db.session import SessionLocal
+            from src.db.models import DataSource
 
             db = SessionLocal()
             try:

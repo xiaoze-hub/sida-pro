@@ -15,8 +15,8 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from src.web.database import SessionLocal
-from src.web.models import StockUniverseSnapshot
+from src.db.session import SessionLocal
+from src.db.models import StockUniverseSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def filter_symbols(symbols, as_of_date: str, *, market: str = "CN", db=None) -> 
 
 def backfill_from_entry_candidates(*, market: str | None = None, db=None) -> dict:
     """用 EntryCandidate 的历史快照回填池(每个 snapshot_date 一行一票)。"""
-    from src.web.models import EntryCandidate
+    from src.db.models import EntryCandidate
 
     own = db is None
     db = db or SessionLocal()
@@ -129,7 +129,7 @@ def backfill_from_entry_candidates(*, market: str | None = None, db=None) -> dic
 
 def backfill_from_stock_table(*, as_of_date: str | None = None, db=None) -> int:
     """用当前 Stock 名单生成某日池(仅"今天"或兜底用, 历史日勿用)。"""
-    from src.web.models import Stock
+    from src.db.models import Stock
 
     own = db is None
     db = db or SessionLocal()

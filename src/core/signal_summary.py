@@ -99,7 +99,7 @@ async def _block_mainline() -> dict:
 def _block_market_scan(db) -> dict:
     """块3 全市场三榜: 读 market_scan_ranks 最新快照(盘后 cron 已落库)。"""
     try:
-        from src.web.models import MarketScanRank
+        from src.db.models import MarketScanRank
 
         row = (
             db.query(MarketScanRank)
@@ -253,8 +253,8 @@ def run_signal_summary_job() -> dict:
 
     内部自开 DB session(与 run_market_scan_job 同款), 不与 FastAPI 依赖耦合。
     """
-    from src.web.database import SessionLocal
-    from src.web.models import SignalSummaryDaily
+    from src.db.session import SessionLocal
+    from src.db.models import SignalSummaryDaily
 
     db = SessionLocal()
     try:
@@ -294,7 +294,7 @@ def run_signal_summary_job() -> dict:
 def read_latest_summary_text(db) -> str | None:
     """对话热路径: 读最新信号摘要 text(纯文本), 无快照 → None(不注入)。"""
     try:
-        from src.web.models import SignalSummaryDaily
+        from src.db.models import SignalSummaryDaily
 
         row = (
             db.query(SignalSummaryDaily)

@@ -30,7 +30,7 @@ SOURCE = "thsdk_big_order"
 
 
 def _engine():
-    from src.web.database import engine
+    from src.db.session import engine
     return engine
 
 

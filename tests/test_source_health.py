@@ -154,7 +154,7 @@ def test_shadow_db_ok(monkeypatch):
         def close(self):
             pass
 
-    import src.web.database as dbmod
+    import src.db.session as dbmod
 
     monkeypatch.setattr(dbmod, "SessionLocal", lambda: FakeSession())
     assert sh.check_shadow()["status"] == "connected"
@@ -162,7 +162,7 @@ def test_shadow_db_ok(monkeypatch):
 
 def test_shadow_db_error_is_unknown(monkeypatch):
     """DB 异常 → unknown(附原因), 不静默吞掉也不假装 connected。"""
-    import src.web.database as dbmod
+    import src.db.session as dbmod
 
     def boom():
         raise RuntimeError("db down")

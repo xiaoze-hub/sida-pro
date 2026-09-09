@@ -56,7 +56,7 @@ def _report_root() -> Path:
 
 
 def _db_session():
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
 
     return SessionLocal()
 
@@ -244,7 +244,7 @@ async def _collect_entry_candidates(db, limit: int = 8) -> list[dict]:
     """今日关注候选: entry_candidates 表(最新快照 active, 按 score 降序)。"""
     from sqlalchemy import func as sa_func
 
-    from src.web.models import EntryCandidate
+    from src.db.models import EntryCandidate
 
     try:
         latest = (
@@ -284,7 +284,7 @@ async def _collect_entry_candidates(db, limit: int = 8) -> list[dict]:
 
 async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
     """用户持仓(positions 表 join stocks) + 实时/前日行情。失败标注。"""
-    from src.web.models import Position, Stock
+    from src.db.models import Position, Stock
 
     try:
         rows = (
@@ -347,7 +347,7 @@ async def _collect_positions(db, with_quotes: bool = True) -> list[dict]:
 
 async def _collect_strategy_signals(db, limit: int = 10) -> list[dict]:
     """策略信号回顾: strategy_signal_runs 今日 active 记录, 按 rank_score 降序。"""
-    from src.web.models import StrategySignalRun
+    from src.db.models import StrategySignalRun
 
     try:
         today = beijing_now().strftime("%Y-%m-%d")
@@ -457,7 +457,7 @@ async def _llm_generate(db, report_type: str, data: dict) -> str | None:
     """经统一 LLM 配置中心(场景 reports)调用生成报告。失败返回 None。"""
     try:
         from src.core.ai_client import AIClient, get_model_for_scene
-        from src.web.models import AIService
+        from src.db.models import AIService
 
         model = get_model_for_scene(db, "reports")
         if model is None:

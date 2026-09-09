@@ -21,8 +21,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from src.core.timezone import beijing_now_naive
-from src.web.database import SessionLocal
-from src.web.models import AgentConfig, AnalysisHistory
+from src.db.session import SessionLocal
+from src.db.models import AgentConfig, AnalysisHistory
 
 logger = logging.getLogger(__name__)
 

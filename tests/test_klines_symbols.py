@@ -91,7 +91,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock([])  # 候选池空
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
 
         result = klines_ingestor.get_default_symbols()
         assert result == [("600519", "CN"), ("002361", "CN"), ("300750", "CN")]
@@ -115,7 +115,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock(candidate_rows)
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
 
         result = klines_ingestor.get_default_symbols()
         # 顺序: 先 watchlist 已有, 再候选池新加入的(688521, 600487)
@@ -134,7 +134,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock([_FakeCandidate("002361", "CN", today)])
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
 
         klines_ingestor.get_default_symbols()
 
@@ -154,7 +154,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock([])
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
         monkeypatch.setattr(klines_ingestor, "_today_cst", _fake_today_cst)
 
         klines_ingestor.get_default_symbols()
@@ -172,7 +172,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock([_BadCandidate()])
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
 
         result = klines_ingestor.get_default_symbols()
         assert ("002361", "CN") in result
@@ -183,7 +183,7 @@ class TestMergeWatchlistAndCandidates:
         q_cand = _make_query_mock([])
 
         db = _make_session_mock(q_watch, q_cand)
-        monkeypatch.setattr("src.web.database.SessionLocal", lambda: db)
+        monkeypatch.setattr("src.db.session.SessionLocal", lambda: db)
 
         result = klines_ingestor.get_default_symbols()
         assert result == []

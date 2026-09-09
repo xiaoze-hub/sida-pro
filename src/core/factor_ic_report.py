@@ -197,7 +197,7 @@ def _build_client(db=None):
     if db is not None:
         try:
             from src.core.ai_client import get_model_for_scene
-            from src.web.models import AIService
+            from src.db.models import AIService
 
             m = get_model_for_scene(db, "factor_ic_report") or get_model_for_scene(db, "chat")
             if m is not None:

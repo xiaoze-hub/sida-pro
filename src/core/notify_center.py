@@ -16,8 +16,8 @@ import asyncio
 import logging
 import time as _time_module
 
-from src.web.database import SessionLocal
-from src.web.models import Notification, NotifyChannel, User
+from src.db.session import SessionLocal
+from src.db.models import Notification, NotifyChannel, User
 
 logger = logging.getLogger(__name__)
 

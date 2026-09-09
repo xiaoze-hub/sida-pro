@@ -181,8 +181,8 @@ class AIClient:
     def _log_usage_sync(self, scene: str | None, model_name: str,
                         usage, latency_ms: int) -> None:
         try:
-            from src.web.models import LLMUsage
-            from src.web.database import SessionLocal
+            from src.db.models import LLMUsage
+            from src.db.session import SessionLocal
             prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
             completion_tokens = getattr(usage, "completion_tokens", 0) or 0
             if prompt_tokens == 0 and completion_tokens == 0:
@@ -598,7 +598,7 @@ def get_model_for_scene(db, scene: str, user=None):
                 # 否则从授权列表挑: is_default 优先, 其余按 id 升序
                 # (owner 授权了模型, 用户就一定能用其中之一, 不再因场景
                 #  绑定不在列表而全禁 —— 2026-08-16 修复)
-                from src.web.models import AIModel
+                from src.db.models import AIModel
 
                 granted = (
                     db.query(AIModel)
@@ -615,7 +615,7 @@ def get_model_for_scene(db, scene: str, user=None):
 
 def _resolve_global_model(db, scene: str):
     """原全局解析逻辑: 场景绑定 → 默认模型(is_default) → 模型池第一个。"""
-    from src.web.models import AISceneBinding, AIModel
+    from src.db.models import AISceneBinding, AIModel
 
     # 1. 场景显式绑定
     binding = (
@@ -673,7 +673,7 @@ def _resolve_user_byok(db, user, scene: str) -> dict | None:
     if not user_id:
         return None
     try:
-        from src.web.models import UserAIService
+        from src.db.models import UserAIService
 
         services = (
             db.query(UserAIService)

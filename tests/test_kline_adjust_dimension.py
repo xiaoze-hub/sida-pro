@@ -367,7 +367,7 @@ class TestPersistBars:
         """新浪兜底数据诚实落 PG(source='sina', adjust='none'), 供后续 none 读。"""
         engine = _mk_sqlite_db(tmp_path, name="p.db")
         url = f"sqlite:///{tmp_path / 'p.db'}"
-        monkeypatch.setattr("src.web.database.DB_URL", url)
+        monkeypatch.setattr("src.db.dialect.DB_URL", url)
         c = kc.KlineCollector(MarketCode.CN)
         bars = [kc.KlineData(date="2026-09-05", open=10, high=11, low=9,
                              close=10.5, volume=100)]
@@ -376,7 +376,7 @@ class TestPersistBars:
 
     def test_persist_bars_fail_soft_on_bad_db(self, monkeypatch, tmp_path):
         """库不可达时 fail-soft 不抛(兜底路径不能反过来打死采集)。"""
-        monkeypatch.setattr("src.web.database.DB_URL", f"sqlite:///{tmp_path / 'nope.db'}")
+        monkeypatch.setattr("src.db.dialect.DB_URL", f"sqlite:///{tmp_path / 'nope.db'}")
         c = kc.KlineCollector(MarketCode.CN)
         bars = [kc.KlineData(date="2026-09-05", open=10, high=11, low=9,
                              close=10.5, volume=100)]

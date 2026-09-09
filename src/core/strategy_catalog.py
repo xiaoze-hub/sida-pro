@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.web.database import SessionLocal
-from src.web.models import StrategyCatalog, StrategyWeight
+from src.db.session import SessionLocal
+from src.db.models import StrategyCatalog, StrategyWeight
 
 
 @dataclass(frozen=True)
@@ -206,7 +206,7 @@ def get_effective_weight_map(
             for s in db.query(StrategyCatalog).all()
         }
         if as_of is not None:
-            from src.web.models import StrategyWeightHistory
+            from src.db.models import StrategyWeightHistory
 
             hist = (
                 db.query(StrategyWeightHistory)

@@ -48,8 +48,8 @@ async def _ask_ai(
     image_data: 可选图片 base64 data URL(多模态, 模型直接看图)。
     """
     from src.web.api.auth import create_token
-    from src.web.database import SessionLocal
-    from src.web.models import User
+    from src.db.session import SessionLocal
+    from src.db.models import User
 
     db = SessionLocal()
     try:
@@ -89,8 +89,8 @@ async def _ask_ai(
 def _persist_cfg(channel_id: int, **fields):
     """把字段写回 notify_channels.config(供 notifier 推送复用最新 context_token)。"""
     try:
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyChannel
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyChannel
 
         db = SessionLocal()
         try:
@@ -109,8 +109,8 @@ def _persist_cfg(channel_id: int, **fields):
 def _load_accounts() -> list[tuple[int, str, dict]]:
     """读取所有启用的 wechat_ilink 渠道(扫码绑定的微信账号), 返回 (channel_id, user_id, config)。"""
     try:
-        from src.web.database import SessionLocal
-        from src.web.models import NotifyChannel
+        from src.db.session import SessionLocal
+        from src.db.models import NotifyChannel
 
         db = SessionLocal()
         try:

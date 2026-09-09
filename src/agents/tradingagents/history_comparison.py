@@ -20,8 +20,8 @@ from datetime import date, timedelta
 
 from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
-from src.web.database import SessionLocal
-from src.web.models import AnalysisHistory
+from src.db.session import SessionLocal
+from src.db.models import AnalysisHistory
 
 logger = logging.getLogger(__name__)
 

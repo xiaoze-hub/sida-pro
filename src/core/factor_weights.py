@@ -12,8 +12,8 @@ from __future__ import annotations
 import logging
 
 from src.core.timezone import utc_now
-from src.web.database import SessionLocal
-from src.web.models import FactorWeight, FactorWeightHistory
+from src.db.session import SessionLocal
+from src.db.models import FactorWeight, FactorWeightHistory
 
 logger = logging.getLogger(__name__)
 

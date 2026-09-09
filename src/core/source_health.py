@@ -134,8 +134,8 @@ def check_shadow() -> dict[str, Any]:
     检查: DB 可连 + paper_trading_trades 表可查。查不到表 → unknown(附原因)。
     """
     try:
-        from src.web.database import SessionLocal
-        from src.web.models import PaperTradingTrade
+        from src.db.session import SessionLocal
+        from src.db.models import PaperTradingTrade
     except Exception as e:  # pragma: no cover
         return {"status": STATUS_UNKNOWN, "detail": f"交割单模型不可用: {e}"}
     try:

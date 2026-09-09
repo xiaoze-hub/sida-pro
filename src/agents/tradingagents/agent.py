@@ -701,8 +701,8 @@ class TradingAgentsAgent(BaseAgent):
     @staticmethod
     def _collect_toolkit_diagnostic(trace_id: str) -> dict:
         """查同 trace_id 的 ta_toolkit 日志,聚合成 {summary, recent}。"""
-        from src.web.database import SessionLocal
-        from src.web.models import LogEntry
+        from src.db.session import SessionLocal
+        from src.db.models import LogEntry
 
         db = SessionLocal()
         try:

@@ -5,8 +5,8 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_
 
-from src.web.database import SessionLocal
-from src.web.models import (
+from src.db.session import SessionLocal
+from src.db.models import (
     AgentContextRun,
     AgentPredictionOutcome,
     NewsTopicSnapshot,

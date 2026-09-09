@@ -1,8 +1,10 @@
-"""src/db — 数据库方言层(W3.1/D2, 2026-09-09)。
+"""src/db — 数据库方言层与中立 ORM 入口(W3.1/D2, 2026-09-09; KI-039 切片 A/B 扩充)。
 
 分工:
 - dialect.py: 环境解析(DATA_DIR/DOCKER 门禁)/方言判定/引擎构造/SQLite 写锁/
   语义化 SQL 助手(upsert_sql / insert_ignore_sql)
+- session.py: **Base / engine / SessionLocal / get_db**(中立层, core 可直接依赖)
+- models.py: 全部 ORM 模型(KI-039 切片 B 自 src/web/models.py 下沉; web 侧留 re-export shim)
 - backup.py: 版本化迁移前的备份(sqlite 整库 + PG schema 快照)
 
 红线: ``IS_PG`` 模块级布尔只允许出现在 dialect.py(CI 门禁

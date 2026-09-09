@@ -18,8 +18,8 @@ from src.core.news_ranker import (
     summarize_news_topics,
 )
 from src.models.market import MarketCode
-from src.web.database import SessionLocal
-from src.web.models import AnalysisHistory
+from src.db.session import SessionLocal
+from src.db.models import AnalysisHistory
 from src.core.json_safe import to_jsonable
 
 logger = logging.getLogger(__name__)

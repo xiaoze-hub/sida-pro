@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session
 from src.core.marketdata_client import md_quote_rows
 from src.core.money import q2, q4, to_dec
 from src.models.market import MarketCode, MARKETS
-from src.web.database import SessionLocal
-from src.web.models import (
+from src.db.session import SessionLocal
+from src.db.models import (
     PaperTradingAccount,
     PaperTradingPosition,
     PaperTradingTrade,
@@ -297,7 +297,7 @@ class PaperTradingEngine:
     @staticmethod
     def _owner_user_id(db: Session) -> str | None:
         """最早创建的 owner 用户 id(冷启动无 owner 时返回 None)。"""
-        from src.web.models import User
+        from src.db.models import User
 
         owner = (
             db.query(User)

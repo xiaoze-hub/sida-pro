@@ -1,8 +1,8 @@
 """Agent 运行记录 - 写入 agent_runs 表（供 UI 查询）"""
 import logging
 
-from src.web.database import SessionLocal
-from src.web.models import AgentRun
+from src.db.session import SessionLocal
+from src.db.models import AgentRun
 
 logger = logging.getLogger(__name__)
 

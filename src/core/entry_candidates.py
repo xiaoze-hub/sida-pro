@@ -15,8 +15,8 @@ from src.core.notifier import get_global_proxy
 from src.core.timezone import to_iso_with_tz, to_utc, utc_now
 from src.core.trading_calendar import add_trading_days
 from src.models.market import MarketCode
-from src.web.database import SessionLocal
-from src.web.models import (
+from src.db.session import SessionLocal
+from src.db.models import (
     EntryCandidate,
     EntryCandidateFeedback,
     EntryCandidateOutcome,
@@ -1174,7 +1174,7 @@ def _load_market_scan_inputs(limit_per_market: int = 60) -> dict[str, dict]:
 
 def _load_strategy_signal_seeds(snapshot_date: str, limit: int = 60) -> dict[str, dict]:
     """策略库批量扫描信号 → 候选种子(candidate_source=strategy)。"""
-    from src.web.models import StrategySignalRun
+    from src.db.models import StrategySignalRun
 
     seeds: dict[str, dict] = {}
     db = SessionLocal()
@@ -1240,7 +1240,7 @@ def _load_auction_anomaly_seeds(limit: int = 40) -> dict[str, dict]:
     """当日竞价异动池 → 候选种子(candidate_source=auction)。"""
     from datetime import date as _date, timedelta as _timedelta
 
-    from src.web.models import AuctionAnomalyRecord
+    from src.db.models import AuctionAnomalyRecord
 
     seeds: dict[str, dict] = {}
     db = SessionLocal()
@@ -1314,7 +1314,7 @@ def _load_manual_query_seeds(kind: str, snapshot_date: str, limit_per_kind: int 
     manual_query_candidates 表(见 discovery.py/wencai.py 的 record hook);
     本函数只读表。若表不存在/为空则静默返回空。
     """
-    from src.web.models import ManualQueryCandidate
+    from src.db.models import ManualQueryCandidate
 
     source_label = {"tdx": "通达信问小达", "wencai": "问财选股"}.get(kind, kind)
     seeds: dict[str, dict] = {}
@@ -2058,7 +2058,7 @@ def record_manual_query_candidates(
     """
     if kind not in ("tdx", "wencai") or not items:
         return 0
-    from src.web.models import ManualQueryCandidate
+    from src.db.models import ManualQueryCandidate
 
     day = (snapshot_date or date.today().strftime("%Y-%m-%d")).strip()
     db = SessionLocal()

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 
-from src.web.database import SessionLocal
-from src.web.models import TradingHalt
+from src.db.session import SessionLocal
+from src.db.models import TradingHalt
 
 logger = logging.getLogger(__name__)
 

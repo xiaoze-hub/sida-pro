@@ -237,8 +237,8 @@ class AgentScheduler:
         if not content:
             return
         try:
-            from src.web.database import SessionLocal
-            from src.web.models import ReportSubscription, User
+            from src.db.session import SessionLocal
+            from src.db.models import ReportSubscription, User
             from src.core.notify_center import push_notification
 
             db = SessionLocal()
