@@ -50,48 +50,27 @@ def load_price_history(symbol: str, market, days: int = 250) -> list[PriceBar]:
 
     2026-08-17: 引入 TimescaleDB hypertable, K线持久化后, 回测不再每次联网。
     性能: 查库 ~70ms, 联网 ~500ms (单只股 800 天)。
+    B4.5(2026-09-10): 查库逻辑下沉 `src/db/klines_repo.py`, 本模块不再依赖 web 层
+    (core 反向依赖收敛, 见 tests/test_w41_core_web_dependency.py)。
     """
-    from datetime import datetime, timedelta, timezone
-    from sqlalchemy import create_engine, text
-    from src.web.database import DB_URL
-
     # 1. 查 PG klines 表(qfq 分区; 2026-09-08 风险方案1.2/B1: 复权维度入列,
     #    回测序列必须与主源同为前复权, 严禁混入 none 原始价)
-    try:
-        mc_str = market.value if hasattr(market, "value") else str(market).upper()
-        mc_str = "CN" if mc_str in ("SH", "SZ", "BJ") else mc_str
+    from src.db.klines_repo import load_qfq_bars
 
-        engine = create_engine(DB_URL, pool_pre_ping=True)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT ts, open, high, low, close, volume "
-                    "FROM klines "
-                    "WHERE symbol=:s AND market=:m AND period='1d' "
-                    "  AND source='tencent' AND adjust='qfq' AND ts >= :c "
-                    "ORDER BY ts ASC"
-                ),
-                {"s": symbol, "m": mc_str, "c": cutoff},
-            ).fetchall()
-        engine.dispose()
-
+    rows = load_qfq_bars(symbol, market, days)
+    if rows:
         # 库里有数据就直接用(用户传 days 只是 hint, 实际取所有行)
-        if rows:
-            return [
-                PriceBar(
-                    date=str(r[0])[:10],
-                    open=float(r[1]),
-                    high=float(r[2]),
-                    low=float(r[3]),
-                    close=float(r[4]),
-                    volume=float(r[5] or 0),
-                )
-                for r in rows
-            ]
-    except Exception as e:
-        logger.warning(f"[回测] 查 PG klines 失败 {symbol}: {e}, fallback 到联网拉")
+        return [
+            PriceBar(
+                date=r["date"],
+                open=r["open"],
+                high=r["high"],
+                low=r["low"],
+                close=r["close"],
+                volume=r["volume"],
+            )
+            for r in rows
+        ]
 
     # 2. Fallback: 走 KlineCollector 拉
     from src.collectors.kline_collector import KlineCollector

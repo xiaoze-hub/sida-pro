@@ -183,48 +183,30 @@ class TechnicalIndicators:
 
 
 def _calculate_ma(closes: list[float], period: int) -> float | None:
-    if len(closes) < period:
-        return None
-    return sum(closes[-period:]) / period
+    from src.core.indicators import sma
+
+    return sma(closes, period)
 
 
 def _ema(data: list[float], period: int) -> list[float]:
-    """计算 EMA"""
-    if not data:
-        return []
-    result = [data[0]]
-    multiplier = 2 / (period + 1)
-    for price in data[1:]:
-        result.append((price - result[-1]) * multiplier + result[-1])
-    return result
+    """计算 EMA(B4.3: 委托统一指标库, 口径不变)。"""
+    from src.core.indicators import ema_series
+
+    return ema_series(data, period)
 
 
 def _calculate_atr(klines: list[KlineData], period: int = 14) -> float | None:
     """计算 ATR(平均真实波幅)。
 
-    TR = max(high-low, |high-prevClose|, |low-prevClose|)。
-    与本模块其它指标一致,取最近 period 个 TR 的简单均值(非 Wilder 递归平滑),
-    便于复现与手算校验。
+    口径: 最近 period 个 TR 的简单均值(非 Wilder 递归平滑), 见
+    `src/core/indicators.atr` 的说明与 parity 测试(B4.3/KI-037)。
 
-    需要至少 period+1 根 K 线(才能算出 period 个含前收的 TR);
-    数据不足或异常一律返回 None,不抛异常(fail-soft)。
+    需要至少 period+1 根 K 线; 数据不足或异常一律返回 None,不抛异常(fail-soft)。
     """
+    from src.core.indicators import atr
+
     try:
-        if not klines or len(klines) < period + 1:
-            return None
-        trs: list[float] = []
-        for i in range(1, len(klines)):
-            cur = klines[i]
-            prev_close = klines[i - 1].close
-            tr = max(
-                cur.high - cur.low,
-                abs(cur.high - prev_close),
-                abs(cur.low - prev_close),
-            )
-            trs.append(tr)
-        if len(trs) < period:
-            return None
-        return sum(trs[-period:]) / period
+        return atr([(k.high, k.low, k.close) for k in klines], period)
     except Exception:
         return None
 
@@ -232,99 +214,35 @@ def _calculate_atr(klines: list[KlineData], period: int = 14) -> float | None:
 def _calculate_macd(
     closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9
 ) -> tuple[list[float], list[float], list[float]] | None:
-    """计算 MACD，返回完整序列用于判断交叉"""
-    if len(closes) < slow + signal:
-        return None
+    """计算 MACD，返回完整序列用于判断交叉(B4.3: 委托统一指标库)。"""
+    from src.core.indicators import macd
 
-    ema_fast = _ema(closes, fast)
-    ema_slow = _ema(closes, slow)
-    dif = [f - s for f, s in zip(ema_fast, ema_slow)]
-    dea = _ema(dif, signal)
-    macd_hist = [(d - e) * 2 for d, e in zip(dif, dea)]
-    return dif, dea, macd_hist
+    return macd(closes, fast, slow, signal)
 
 
 def _calculate_rsi(closes: list[float], period: int) -> float | None:
-    """计算 RSI"""
-    if len(closes) < period + 1:
-        return None
+    """计算 RSI(Cutler 简单均值口径, B4.3: 委托统一指标库)。"""
+    from src.core.indicators import rsi
 
-    gains = []
-    losses = []
-    for i in range(1, len(closes)):
-        change = closes[i] - closes[i - 1]
-        if change > 0:
-            gains.append(change)
-            losses.append(0)
-        else:
-            gains.append(0)
-            losses.append(abs(change))
-
-    # 使用最近 period 天计算
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return rsi(closes, period)
 
 
 def _calculate_kdj(
     klines: list[KlineData], n: int = 9, m1: int = 3, m2: int = 3
 ) -> tuple[list[float], list[float], list[float]] | None:
-    """计算 KDJ，返回完整序列"""
-    if len(klines) < n:
-        return None
+    """计算 KDJ，返回完整序列(B4.3: 委托统一指标库)。"""
+    from src.core.indicators import kdj
 
-    k_values = []
-    d_values = []
-    j_values = []
-
-    for i in range(n - 1, len(klines)):
-        period_klines = klines[i - n + 1 : i + 1]
-        highest = max(k.high for k in period_klines)
-        lowest = min(k.low for k in period_klines)
-        close = klines[i].close
-
-        if highest == lowest:
-            rsv = 50
-        else:
-            rsv = (close - lowest) / (highest - lowest) * 100
-
-        if not k_values:
-            k = 50
-            d = 50
-        else:
-            k = (2 / 3) * k_values[-1] + (1 / 3) * rsv
-            d = (2 / 3) * d_values[-1] + (1 / 3) * k
-
-        j = 3 * k - 2 * d
-
-        k_values.append(k)
-        d_values.append(d)
-        j_values.append(j)
-
-    return k_values, d_values, j_values
+    return kdj([(k.high, k.low, k.close) for k in klines], n, m1, m2)
 
 
 def _calculate_boll(
     closes: list[float], period: int = 20, num_std: int = 2
 ) -> tuple[float, float, float, float] | None:
-    """计算布林带：上轨、中轨、下轨、带宽"""
-    if len(closes) < period:
-        return None
+    """计算布林带：上轨、中轨、下轨、带宽(B4.3: 委托统一指标库)。"""
+    from src.core.indicators import boll
 
-    recent = closes[-period:]
-    mid = sum(recent) / period
-    variance = sum((x - mid) ** 2 for x in recent) / period
-    std = variance**0.5
-
-    upper = mid + num_std * std
-    lower = mid - num_std * std
-    width = (upper - lower) / mid * 100 if mid > 0 else 0
-
-    return upper, mid, lower, width
+    return boll(closes, period, num_std)
 
 
 def _detect_kline_pattern(klines: list[KlineData]) -> str | None:

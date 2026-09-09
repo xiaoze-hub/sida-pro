@@ -1009,9 +1009,11 @@ def _sync_factor_and_risk_snapshots(
             "constraint_reasons": payload.get("constraint_reasons")
             if isinstance(payload.get("constraint_reasons"), list)
             else [],
-            # B0.5: 可复现性元数据 —— 输入指纹 + 新闻窗口 + 权重版本
+            # B0.5/B4.4: 可复现性元数据 —— 输入指纹 + 新闻窗口 + 权重/模型/提示词版本
             "news_window_hours": 72,
             "weight_version": s.strategy_version or "v1",
+            "model_version": "rules-v1",  # 规则型信号无 LLM 模型; LLM 参与时填实际模型版本
+            "prompt_version": "",         # 规则型信号无提示词; LLM 参与时填提示词版本
             "strategy_weight": float(payload.get("strategy_weight") or 1.0),
         }
         body["input_hash"] = _factor_input_hash(body)

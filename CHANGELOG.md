@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-架构与可观测: 统一指标库/core→web棘轮门禁/信号版本元数据/回测取数下沉(W4/B4.1-B4.5, KI-039/KI-037)
+- **背景**: KI-039(141 处 core→web 反向依赖, 无门禁)、KI-037(指标无库且口径分叉)。
+- **做法**: ① **B4.3 统一指标库** `src/core/indicators.py`: MA/EMA/ATR/MACD/RSI/KDJ/BOLL 口径与既有实现**逐值对齐**(ATR 简单均值非 Wilder、RSI Cutler、EMA 首值播种、BOLL 总体标准差), 另附 `atr_wilder`/`rsi_wilder` 研究对照; `kline_collector` 7 个指标函数改为委托调用(行为零变更); ② **B4.1 棘轮门禁** `tests/test_w41_core_web_dependency.py` + 冻结清单 `tests/fixtures/core_web_deps_allowlist.txt`(57→**56** 文件), 新增 core→web 依赖直接失败; ③ **B4.4** 因子行 `factor_payload` 补 `model_version`(rules-v1)/`prompt_version`, 与 B0.5 的 input_hash/news_window_hours/weight_version 合成完整复现元数据; ④ **B4.5** 回测取数下沉 `src/db/klines_repo.py`, `backtest/data_adapter.py` 不再依赖 web 层(allowlist 因此减 1)。
+- **验证**: `pytest -q tests/test_indicators_parity.py tests/test_w41_core_web_dependency.py tests/test_intraday_atr.py tests/test_factor_snapshot_pit.py tests/test_backtest*.py` → **32 passed**(新增 2 个测试文件: 指标逐值 parity + 依赖棘轮)。
+- **如实说明(未做)**: **B4.2**(消灭 API 层第二策略实现 `web/api/strategies.py:114-283`) 涉及 170 行逻辑搬迁且被 `test_strategy_semantics.py` 直接引用, 需独立 PR + 金样例对照, 本波未做; 前端 `InteractiveKline.tsx` 的指标复算仍为 TS 侧独立实现(前后端逐值比对测试待前端切换后补)。
+- [branch fix/w4-架构与可观测-20260909, `git show HEAD`]
+
 ### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
 - **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
 - **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
