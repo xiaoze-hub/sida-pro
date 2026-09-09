@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### test-前端组件渲染测试 + 图表组件抽取(W5.4/W5.3 部分)
+- **背景**: 前端测试栈此前只有 lib 级 vitest(node 环境), 关键图表组件无渲染测试(KI-016/P2-1)。
+- **做法**: ① 引入 `jsdom` + `@testing-library/react` + `@testing-library/jest-dom`(devDeps, npmmirror 安装); ② 把 `DrawdownChart`/`RealizedPnlChart` 从 `PaperTrading.tsx` 抽到 `src/components/PnlCharts.tsx`(可测 + 页面瘦身 812 行); ③ 新增 `tests/components/pnl-charts.test.tsx`(4 用例: 占位提示、SVG 路径、圆点数量、累计值)。
+- **验证**: `pnpm test -- --run` → **27 passed / 5 文件**; `tsc -b` 通过。
+- **如实说明(未做)**: W5.2 的"成交点叠加到 K 线"(需给 InteractiveKline 接 trades 标记 props)与 W5.3 的大文件拆分(Stocks.tsx 3443 行 / stock-insight-modal 2820 行 / Settings 2764 行)仍待做。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
 ### refactor-策略求值实现下沉 core, 消灭 API 层第二策略实现(W4.2, KI-039)
 - **背景**: `src/web/api/strategies.py` 内联了 300 余行策略求值/打分实现, 与 `src/core/strategy_engine.py` 形成两套策略口径(KI-039 点名项)。
 - **做法**: 纯搬迁(非重写)`_evaluate_strategy` + `_quote_to_dict` + `rounding_safe` 到新增 `src/core/strategy_library.py`(206 行, 逐字保留); API 层改为 import 后再导出, 既有导入路径(`tests/test_strategy_semantics.py`)不破; `strategies.py` **445→263 行**。
