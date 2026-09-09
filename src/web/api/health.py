@@ -274,9 +274,9 @@ async def health() -> dict[str, Any]:
             record_component_status("database", True)  # P4: 喂 Prometheus 告警
         except Exception as e:
             try:
-                from src.web.database import IS_PG
+                from src.db.dialect import declared_backend
 
-                _declared = "postgresql" if IS_PG else "sqlite"
+                _declared = declared_backend()
             except Exception:
                 _declared = "unknown"
             components["database"] = {

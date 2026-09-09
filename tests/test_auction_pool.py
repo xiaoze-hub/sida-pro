@@ -161,8 +161,10 @@ def in_mem_db(monkeypatch):
     models.Base.metadata.create_all(engine)
     monkeypatch.setattr(_db, "engine", engine)
     monkeypatch.setattr(_db, "SessionLocal", sessionmaker(bind=engine))
-    monkeypatch.setattr(_db, "IS_PG", False)
-    # sync 里走 acquire_write -> 其上引用 _db.IS_PG(False 则取 sqlite 信号量, OK)
+    import src.db.dialect as _dialect
+
+    monkeypatch.setattr(_dialect, "is_postgres", lambda: False)
+    # sync 里走 acquire_write -> 其上引用 src.db.dialect.is_postgres(False 则取 sqlite 信号量, OK)
     return models
 
 

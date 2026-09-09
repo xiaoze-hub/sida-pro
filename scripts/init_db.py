@@ -5,8 +5,8 @@
 新克隆者第一次跑不动。脚本直接调用 src.web.database.init_db(), 由其负责:
   1. 触发 SQLAlchemy ORM 类注册 (延迟 import src.web.models 避免循环依赖)
   2. Base.metadata.create_all() 创建所有未存在的表 (含 users 等)
-  3. _migrate* 老式迁移 (兼容旧库)
-  4. run_versioned_migrations() 跑 m101..m125 增量迁移
+  3. run_versioned_migrations() 跑 m101..m148 增量迁移(含 W3.1 收编的历史
+     A 层 legacy 迁移 143-148)
   5. 跑完打印 pending=0 即视为 OK
 
 用法:
@@ -36,19 +36,20 @@ def main() -> int:
     args = parser.parse_args()
 
     # 触发 Base.metadata 注册 (models 里所有 Table 全部挂上)
-    from src.web.database import Base, DB_URL, engine, IS_PG, init_db  # noqa: F401
+    from src.db.dialect import declared_backend
+    from src.web.database import Base, DB_URL, engine, init_db  # noqa: F401
 
     if args.print_db:
         print(f"[init_db] DB_URL = {DB_URL}")
-        print(f"[init_db] dialect = {'postgres' if IS_PG else 'sqlite'}")
+        print(f"[init_db] dialect = {declared_backend()}")
         print(f"[init_db] registered tables = {len(Base.metadata.tables)}")
         return 0
 
     print(f"[init_db] engine = {DB_URL}")
-    print(f"[init_db] dialect = {'postgres' if IS_PG else 'sqlite'}")
+    print(f"[init_db] dialect = {declared_backend()}")
     print(f"[init_db] registered tables = {len(Base.metadata.tables)}")
 
-    print("[init_db] step 1/2: init_db() = create_all + legacy migrate + versioned migrate ...")
+    print("[init_db] step 1/2: init_db() = create_all + versioned migrate(m101..m148) ...")
     init_db()
     print(f"[init_db]   OK, current tables = {len(Base.metadata.tables)}")
 

@@ -19,7 +19,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from src.web.database import IS_PG
+from src.db.dialect import is_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,8 @@ class CheckResult:
 
 
 def _check_db_dialect() -> CheckResult:
-    """检查 1: 数据库方言。IS_PG=False(SQLite) → warning; True → info。"""
-    if IS_PG:
+    """检查 1: 数据库方言。SQLite → warning; PostgreSQL → info。"""
+    if is_postgres():
         return CheckResult(
             "database.dialect",
             "info",
@@ -74,7 +74,7 @@ def check_db_dialect_explicit() -> tuple[bool, str]:
     返回 (是否放行, 说明); server.py lifespan 在 init_db 之前调用, False 即终止启动。
     """
     if os.environ.get("SIDA_DB_URL"):
-        return True, f"数据库方言: {'PostgreSQL' if IS_PG else 'SQLite'}"
+        return True, f"数据库方言: {'PostgreSQL' if is_postgres() else 'SQLite'}"
     if os.environ.get("SIDA_ALLOW_SQLITE") == "1":
         logger.warning(
             "\n%s\n[启动门禁] SIDA_DB_URL 未设置, 已按 SIDA_ALLOW_SQLITE=1 回退 SQLite\n"

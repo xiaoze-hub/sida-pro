@@ -71,6 +71,11 @@
 - 缓存一律走 `src/web/cache/biz_cache.py`（L1 内存 + L2 Redis，key 前缀 `biz:`），禁止业务代码裸连 Redis。
 - 多用户：任何接口/数据改动考虑 user_id 隔离（4 账号并存），不能只验自己账号。
 - K线读取走 PG hypertable 优先（`get_klines()`），补数用 klines_ingestor。
+- 数据库分层（W3.1/D2）：PG 为唯一生产口径，SQLite 仅本地开发/单测；方言判定与
+  引擎构造只走 `src/db/dialect.py`（`is_postgres()/declared_backend()/
+  upsert_sql()/insert_ignore_sql()`），业务代码禁止出现 `IS_PG`（CI 门禁
+  `scripts/check_is_pg_scope.py`）；schema 变更唯一入口是 `src/web/migrations.py`
+  版本化迁移（含收编的历史 A 层 143-148），禁止运行时建表/加列。
 
 ## Codex 协作补充
 - 本文件与全局 `~/.codex/AGENTS.md` 同时生效；冲突时以本文件为准。

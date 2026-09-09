@@ -86,6 +86,8 @@ jobs:
       - name: Multi-tenant scope check (门禁 · C3 越权静态扫描)
         # W2.1/C3(2026-09-09): 与 build-and-push-image.yml 同门禁
         run: python scripts/check_scoped_queries.py
+      - name: Dialect layer scope check (门禁 · W3.1 IS_PG 只在 src/db)
+        run: python scripts/check_is_pg_scope.py
 
       - name: Run tests
         # 2026-08-21: conftest 已加 _init_test_db + _clear_module_caches fixture 修好顺序污染,

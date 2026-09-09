@@ -525,7 +525,9 @@ class TestMarketPhaseApi:
         sm = sessionmaker(bind=engine)
         monkeypatch.setattr(db, "engine", engine)
         monkeypatch.setattr(db, "SessionLocal", sm)
-        monkeypatch.setattr(db, "IS_PG", False)
+        import src.db.dialect as _dialect
+
+        monkeypatch.setattr(_dialect, "is_postgres", lambda: False)
         # 同步注入到 market_phase 模块级 SessionLocal 引用
         monkeypatch.setattr(mpm, "SessionLocal", sm)
         return models

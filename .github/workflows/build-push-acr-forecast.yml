@@ -32,6 +32,8 @@ jobs:
           python3 -m pip install -q -r requirements.txt pytest-timeout
           # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
           python3 scripts/check_scoped_queries.py
+          # W3.1/D2(2026-09-09): 方言分叉只允许出现在 src/db/ 层
+          python3 scripts/check_is_pg_scope.py
           # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network, CI 主门禁跳过(同 build-push-acr)
           python3 -m pytest tests/ -q --timeout=60 -m "not network"
 

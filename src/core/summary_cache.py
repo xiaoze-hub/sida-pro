@@ -64,35 +64,32 @@ def get_cached_summary(symbol: str, market: str, ttl_s: int) -> dict | None:
 def put_cached_summary(symbol: str, market: str, payload: dict, ttl_s: int = 300) -> None:
     """写 summary_cache: upsert + 清过期。payload 超 50KB 截断。失败永不抛。"""
     try:
-        from src.web.database import IS_PG
+        from src.db.dialect import upsert_sql
+
         body = json.dumps(payload or {}, ensure_ascii=False, default=str)
         if len(body) > SUMMARY_PAYLOAD_MAX:
             body = body[:SUMMARY_PAYLOAD_MAX]
             payload = {"truncated": True, "note": f"payload>{SUMMARY_PAYLOAD_MAX}B 截断", "head": json.loads(body[:5000])}
             body = json.dumps(payload, ensure_ascii=False, default=str)
         now = datetime.now(timezone.utc)
-        if IS_PG:
-            stmt = """
-                INSERT INTO summary_cache (symbol, market, computed_at, ttl_s, payload)
-                VALUES (:symbol, :market, :ts, :ttl, :payload)
-                ON CONFLICT (symbol, market) DO UPDATE
-                SET computed_at = EXCLUDED.computed_at,
-                    ttl_s = EXCLUDED.ttl_s,
-                    payload = EXCLUDED.payload
-            """
-        else:
-            stmt = """
-                INSERT INTO summary_cache (symbol, market, computed_at, ttl_s, payload)
-                VALUES (:symbol, :market, :ts, :ttl, :payload)
-                ON CONFLICT(symbol, market) DO UPDATE
-                SET computed_at = excluded.computed_at,
-                    ttl_s = excluded.ttl_s,
-                    payload = excluded.payload
-            """
+        # W3.1(D2): 原 PG/SQLite 双分支 SQL 仅 EXCLUDED 大小写之差(两后端均
+        # 大小写不敏感), 收编为 src/db/dialect.upsert_sql 单一语句
+        stmt = upsert_sql(
+            "summary_cache",
+            ["symbol", "market", "computed_at", "ttl_s", "payload"],
+            ["symbol", "market"],
+            ["computed_at", "ttl_s", "payload"],
+        )
         with _engine().begin() as conn:
             conn.execute(
                 text(stmt),
-                {"symbol": symbol, "market": market, "ts": now, "ttl": int(ttl_s), "payload": body},
+                {
+                    "symbol": symbol,
+                    "market": market,
+                    "computed_at": now,
+                    "ttl_s": int(ttl_s),
+                    "payload": body,
+                },
             )
             conn.execute(
                 text("DELETE FROM summary_cache WHERE computed_at < :cut"),
