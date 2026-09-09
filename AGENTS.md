@@ -24,7 +24,7 @@
 
 ## Coding Style & Naming Conventions
 - Python: PEP 8, 4-space indent, type hints required for new code. Files `snake_case.py`, classes `PascalCase`, functions/vars `snake_case`.
-- Agents: implement in `src/agents/*.py`, register in `server.py` (`AGENT_REGISTRY`) and seed config in `seed_agents()`.
+- Agents: implement in `src/agents/*.py` with `@register_agent("<name>")` on the class (auto-discovered by `src/bootstrap/agents.py` since W3.2 — do NOT edit server.py or any manual registry); seed config rows via `AGENT_SEED_SPECS` in `src/core/agent_catalog.py`.
 - Collectors: place in `src/collectors/`, keep stateless; return typed dataclasses.
 - TypeScript: components `PascalCase.tsx` in `frontend/src/`, hooks `use-` prefix, utilities `camelCase.ts`.
 - Prompts: one prompt file per agent in `prompts/` (e.g., `daily_report.txt`).

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from src.bootstrap.agents import register_agent
 import asyncio
 import logging
 from datetime import date, datetime, timezone
@@ -194,6 +195,7 @@ class TradingAgentsUnavailable(RuntimeError):
     """tradingagents 库未安装或上游 API 变更导致不可用。"""
 
 
+@register_agent("tradingagents")
 class TradingAgentsAgent(BaseAgent):
     name = "tradingagents"
     display_name = "TradingAgents 深度分析"

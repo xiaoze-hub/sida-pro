@@ -1,5 +1,6 @@
 """新闻速递 Agent - 自选股相关新闻摘要"""
 
+from src.bootstrap.agents import register_agent
 import logging
 import re
 from datetime import datetime
@@ -41,6 +42,7 @@ NEWS_ACTION_MAP = {
 }
 
 
+@register_agent("news_digest")
 class NewsDigestAgent(BaseAgent):
     """新闻速递 Agent"""
 

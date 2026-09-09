@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from src.bootstrap.agents import register_agent
 import logging
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from src.agents.base import AgentContext, BaseAgent
 logger = logging.getLogger(__name__)
 
 
+@register_agent("theme_launch_detector")
 class ThemeLaunchDetectorAgent(BaseAgent):
     """题材启动识别:扫描新题材+首板候选,输出潜伏池。"""
 

@@ -1,3 +1,4 @@
+from src.bootstrap.agents import register_agent
 import logging
 import re
 from datetime import datetime
@@ -59,6 +60,7 @@ def get_market_data():
     return _g()
 
 
+@register_agent("daily_report")
 class DailyReportAgent(BaseAgent):
     """盘后日报 Agent"""
 

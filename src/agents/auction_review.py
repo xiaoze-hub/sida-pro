@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+from src.bootstrap.agents import register_agent
 import logging
 from datetime import datetime
 
@@ -17,6 +18,7 @@ from src.agents.base import AgentContext, BaseAgent
 logger = logging.getLogger(__name__)
 
 
+@register_agent("auction_review")
 class AuctionReviewAgent(BaseAgent):
     """竞价复盘:9:30 后解读当日竞价(情绪/主线/盯盘名单)。"""
 
