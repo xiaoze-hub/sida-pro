@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.21(风险整改第3波合入main)
+- 本次发版内容: 方言层 src/db 收口(IS_PG 全仓唯一化+upsert/insert-ignore 统一模板+历史 A 层收编为迁移 143-148+check_is_pg_scope 门禁进 4 工作流, W3.1/D2) / server.py 巨石拆解为 src/bootstrap 装配层(2104→46 行+agent 装饰器自动发现+启动行为前后对账一致, W3.2/D1) / 删死代码 chat_tools.py(679 行)+工具注册表 registry 统一注册 41 工具+双 tool loop 合并+流式断开守卫(chat.py 3021→1974, W3.3/D3) / 口径治理产品化(caliber 契约+资金流出口标注+文档红线修订, W3.4/B3) / 单位一致性恒等式校验出口+每日对账 job+结算路径 Decimal(W3.5/B5) / 8000→8010 依赖改单向+DDE 端点唯一化+依赖方向图 CI 门禁 9 例(W3.6/D5+D6) / 前端 TanStack Query 服务端状态层+机会页去卡片化+/quote/:symbol 路由+审计重跑(W3.7/D7)。
+- 部署注意: ① **启动时迁移 143-148 将首次在生产库执行**(收编的历史 A 层 DDL, 幂等已验证), 且 m108/m121/m124 因 checksum 变更各幂等重跑一次(去重无重复可去/CREATE IF NOT EXISTS/DROP IF EXISTS, W3.1 已验证安全); 迁移前自动双备份(sqlite copy2+pg_dump schema-only)。② **W3.6 后 /api/health 新增 components.forecast_engine 键**——生产 8010 forecast 服务未部署(0.0 勘查既定), 该组件报 down 属验收预期而非故障。③ 前端改动(W3.7)仅进仓库源码, 容器 static/ 构建产物不在 git 跟踪内不受覆盖层影响。
+- 验证: 全量离线套件 **1891 passed / 2 failed / 5 skipped**(2 failed 均为已知本地环境损坏文件 ta_load_ohlcv_patch/thsdk_buffer_size, 从未进 CI, 与 wave3 分支基线一致; 较 W3.6 基线 +10 = W3.6 依赖方向 9 例+W3.5 对账例); 前端 tsc/vitest 17/17/eslint 0 error(W3.7)。
+- [tag v0.5.21]
+
 ### feat-前端TanStack Query服务端状态层+机会页去卡片化+/quote/:symbol路由+审计重跑(W3.7/D7)
 - 背景: D7 —— 前端历史包袱: ①136 处手写 setLoading/setError try/finally, 每页自绘加载/错误/空态, 无统一缓存与去重(切页即重取); ②2026-09-02 审计(《UI终端化_设计系统审计_研究.md》)判定的 P0"K 线弹窗承载无全屏路由 / Opportunities 卡片堆叠"两项; ③响应信封审计需复核裸 fetch 旁路。本波为**服务端状态层统一 + P0 收尾 + 审计基线重跑**, 不动后端。
 - **TanStack Query 引入**(v5, `frontend/src/hooks/useApiQuery.ts` 新): useApiQuery/useApiMutation 薄壳, queryFn 固定 `cacheMode:'reload'` 绕开 fetchAPI 内置 30s _RESP_CACHE —— **TanStack 是唯一缓存所有者**, 否则 mutation 后 refetch 拿到旧缓存值; main.tsx 装 QueryClientProvider(全局 staleTime 30s / retry 1 / refetchOnWindowFocus false)+ `registerQueryClient` 单例, 登出流程 `clearQueryCache()` 配合既有 clearResponseCache。pnpm add @tanstack/react-query(npm install 在本 workspace 会挂, 必须走 pnpm)。
