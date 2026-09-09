@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### fix-L2/洞察「主力净额·主买净额」恒显 "--" + L2 页字段缺解释
+- **现象**: 盘口资金页与洞察弹窗的 主力净额 / 主买净额 恒显 `--`, 但 TQ raw 实际有值(002361: `Zjl=-7086.62`、`Zjl_HB=-3762.99`)。
+- **根因①(后端)**: `md_more_info` 未把 vendor 的 `zjl`/`zjl_hb` 透传进 payload(`insight/types.ts` 早已声明这两字段 → 一直读到 undefined)。
+- **根因②(前端)**: L2 页 `rawPick` 只接受 `typeof v === 'number'`, 而 TQ raw 值是**字符串** `'-7086.62'` → 恒返回 null。
+- **修复**: ① `src/core/marketdata_client.py` 补 `zjl`/`zjl_hb` 映射; ② `frontend/src/pages/L2Orderbook.tsx` `rawPick` 兼容数字字符串, 并优先用后端已解析字段; ③ 补齐 L2 页 11 个字段的中文解释(hover 提示: 形态/买盘占比/最优/价差/主力净额/主买净额/总买卖量/撤买卖量/逐笔委托/十档买卖额/幽灵单)。
+- **验证**: 新增 `tests/test_more_info_mapping.py`(zjl/zjl_hb 必须透传); 前端 `tsc` + `eslint` + `pnpm test` 30 passed + `build`。
+- [tag v0.5.30]
+
 ### fix-个人微信绑定状态恒显"未绑定"(尾斜杠 404) + favicon 404
 - **现象①**: 设置页「个人微信(iLink)」卡片恒显示未绑定, 但后端 `GET /api/notify/wechat-bind` 实测返回 `bound:true`(生产账号已绑)。
 - **根因①**: 后端路由注册为 `@router.get("")` / `@router.delete("")`(路径**无**尾斜杠), 而 `frontend/packages/api/src/notify.ts` 调用 `/notify/wechat-bind/`(带尾斜杠) → 每次 404, 前端 catch 后按未绑定渲染; 解绑请求同样打不中。

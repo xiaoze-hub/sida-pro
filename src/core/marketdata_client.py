@@ -225,6 +225,9 @@ def md_more_info(symbols: list[str], market: str = "CN") -> list[dict]:
             "total_sell_vol": m.total_sell_vol,
             "cancel_buy": m.cancel_buy,
             "cancel_sell": m.cancel_sell,
+            # 2026-09-09: 资金两字段此前漏映射 → 前端「主力净额/主买净额」恒显 "--"
+            "zjl": m.zjl,
+            "zjl_hb": m.zjl_hb,
             "raw": m.raw,
             "quote_time": m.quote_time.isoformat() if m.quote_time else None,
         })

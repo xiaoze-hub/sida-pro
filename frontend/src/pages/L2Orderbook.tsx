@@ -50,6 +50,9 @@ interface MoreInfo {
   total_sell_vol?: number | null
   cancel_buy?: number | null
   cancel_sell?: number | null
+  /** 主力净额(万元, 同花顺口径) / 主买净额(万元) — 后端 2026-09-09 起随 payload 下发 */
+  zjl_hb?: number | null
+  zjl?: number | null
   quote_time?: string | null
   raw?: Record<string, any> | null
 }
@@ -61,12 +64,16 @@ function num(v: number | null | undefined): string {
   return String(v)
 }
 
-/** more-info raw 容错取 L2 主力字段（大小写/命名多版本兼容） */
+/** more-info raw 容错取 L2 主力字段（大小写/命名多版本兼容; TQ raw 值为字符串, 需转数值） */
 function rawPick(raw: Record<string, any> | null | undefined, ...keys: string[]): number | null {
   if (!raw) return null
   for (const k of keys) {
     const v = raw[k]
     if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
   }
   return null
 }
@@ -123,8 +130,9 @@ export default function L2OrderbookPage() {
   const tot10 = (bid10 ?? 0) + (ask10 ?? 0)
   const bidPct = tot10 > 0 ? ((bid10 ?? 0) / tot10) * 100 : null
 
-  const zjlHb = rawPick(mi?.raw, 'Zjl_HB', 'zjl_hb', 'ZJL_HB')
-  const zjl = rawPick(mi?.raw, 'Zjl', 'zjl', 'ZJL')
+  // 优先用后端已解析字段(数值), 回退 raw(字符串, 兼容旧后端)
+  const zjlHb = mi?.zjl_hb ?? rawPick(mi?.raw, 'Zjl_HB', 'zjl_hb', 'ZJL_HB')
+  const zjl = mi?.zjl ?? rawPick(mi?.raw, 'Zjl', 'zjl', 'ZJL')
 
   return (
     <div className="sida-page-enter w-full space-y-3">
@@ -161,16 +169,16 @@ export default function L2OrderbookPage() {
 
       {/* === 形态条带 === */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px]">
-        <span className="text-muted-foreground">形态:</span>
+        <span className="text-muted-foreground" title="托压形态: 按十档买卖额结构判定(均衡/买盘占优/卖盘占优)">形态:</span>
         <span className="font-medium text-foreground">{sumOb?.shape ?? '--'}</span>
         <span className="text-border/60">|</span>
-        <span className="text-muted-foreground">买盘占比:</span>
+        <span className="text-muted-foreground" title="买盘占比 = 十档买额 /(十档买额 + 十档卖额)">买盘占比:</span>
         <span className="font-mono">{sumOb?.bid_pressure != null ? `${(sumOb.bid_pressure * 100).toFixed(1)}%` : '--'}</span>
         <span className="text-border/60">|</span>
-        <span className="text-muted-foreground">最优:</span>
+        <span className="text-muted-foreground" title="最优买价(买一) / 最优卖价(卖一)">最优:</span>
         <span className="font-mono">{sumOb?.best_bid ?? '--'} / {sumOb?.best_ask ?? '--'}</span>
         <span className="text-border/60">|</span>
-        <span className="text-muted-foreground">价差:</span>
+        <span className="text-muted-foreground" title="价差 = 卖一价 - 买一价">价差:</span>
         <span className="font-mono">{sumOb?.spread ?? '--'}</span>
         {sumOb && !sumOb.available && sumOb.note && (
           <span className="text-[11px] text-amber-500">⚠ {sumOb.note}</span>
@@ -181,7 +189,7 @@ export default function L2OrderbookPage() {
         <div className="col-span-12 lg:col-span-7 space-y-3">
           {/* === 十档买卖额双向条 === */}
           <div className="border-b border-border/40 pb-3">
-            <div className="text-[11px] text-muted-foreground mb-2">十档买卖额（thsdk 盘口聚合）</div>
+            <div className="text-[11px] text-muted-foreground mb-2" title="十档买额 / 卖额合计(元), 来自 thsdk 盘口快照聚合">十档买卖额（thsdk 盘口聚合）</div>
             {!ob?.available ? (
               <div className="text-[12px] text-muted-foreground py-4 text-center">
                 {ob?.note ?? '盘口无数据（非交易时段或 thsdk 未接）'}
@@ -221,27 +229,27 @@ export default function L2OrderbookPage() {
             ) : (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2 text-[12px]">
                 <div>
-                  <div className="text-muted-foreground text-[11px]">主力净额</div>
+                  <div className="text-muted-foreground text-[11px]" title="主力净额(万元, 同花顺口径)= 大单 + 超大单净额; 正为净流入, 持续为正代表主力吸筹">主力净额</div>
                   <div className={`font-mono ${zjlHb == null ? '' : zjlHb > 0 ? 'text-stock-up' : zjlHb < 0 ? 'text-stock-down' : ''}`}>
                     {zjlHb != null ? toAmount(zjlHb * 1e4) : '--'}
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground text-[11px]">主买净额</div>
+                  <div className="text-muted-foreground text-[11px]" title="主买净额(万元)= 主动买入 - 主动卖出; 正为多方占优">主买净额</div>
                   <div className={`font-mono ${zjl == null ? '' : zjl > 0 ? 'text-stock-up' : zjl < 0 ? 'text-stock-down' : ''}`}>
                     {zjl != null ? toAmount(zjl * 1e4) : '--'}
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground text-[11px]">总买/总卖量</div>
+                  <div className="text-muted-foreground text-[11px]" title="当日累计总买量 / 总卖量(手), TQ 明盘口径">总买/总卖量</div>
                   <div className="font-mono">{num(mi.total_buy_vol)} / {num(mi.total_sell_vol)}</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground text-[11px]">撤买/撤卖量</div>
+                  <div className="text-muted-foreground text-[11px]" title="当日累计撤买 / 撤卖量, 撤单量大代表挂单意愿不稳">撤买/撤卖量</div>
                   <div className="font-mono">{num(mi.cancel_buy)} / {num(mi.cancel_sell)}</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground text-[11px]">逐笔成交/委托笔数</div>
+                  <div className="text-muted-foreground text-[11px]" title="L2 逐笔成交笔数 / 委托笔数">逐笔成交/委托笔数</div>
                   <div className="font-mono">{num(mi.l2_tick_num)} / {num(mi.l2_order_num)}</div>
                 </div>
               </div>
@@ -255,7 +263,7 @@ export default function L2OrderbookPage() {
             <div className="text-[11px] text-muted-foreground">
               盘口演变事件
               {ob?.ghost_ratio != null && (
-                <span className="ml-1 font-mono text-[10px] opacity-70">幽灵单 {(ob.ghost_ratio * 100).toFixed(1)}%</span>
+                <span className="ml-1 font-mono text-[10px] opacity-70" title="幽灵单占比: 由撤单率异常估算的虚拟挂单比例, 越高越可能是假挂单">幽灵单 {(ob.ghost_ratio * 100).toFixed(1)}%</span>
               )}
             </div>
             {!ob?.available ? (
