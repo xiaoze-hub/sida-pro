@@ -172,6 +172,8 @@ harvest_existing_config() {
   case "$CLONE_NET" in ""|"bridge"|"host"|"none") CLONE_NET="";; esac
   CLONE_RESTART=$($DOCKER inspect "$_c" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)
   CLONE_MEM=$($DOCKER inspect "$_c" --format '{{.HostConfig.Memory}}' 2>/dev/null)
+  CLONE_SWAP=$($DOCKER inspect "$_c" --format '{{.HostConfig.MemorySwap}}' 2>/dev/null)
+  CLONE_NANOCPUS=$($DOCKER inspect "$_c" --format '{{.HostConfig.NanoCpus}}' 2>/dev/null)
 }
 
 default_config() {
@@ -217,6 +219,13 @@ compose_run_args() {
   fi
   if [ -n "$CLONE_MEM" ] && [ "$CLONE_MEM" != "0" ]; then
     RUN_ARGS+=(--memory="$CLONE_MEM")
+  fi
+  # E7(2026-09-09): 资源限制一并克隆(swap=limit 即不给额外 swap; cpus 防 CPU 争抢)
+  if [ -n "$CLONE_SWAP" ] && [ "$CLONE_SWAP" != "0" ]; then
+    RUN_ARGS+=(--memory-swap="$CLONE_SWAP")
+  fi
+  if [ -n "$CLONE_NANOCPUS" ] && [ "$CLONE_NANOCPUS" != "0" ]; then
+    RUN_ARGS+=("--cpus=$(awk -v n="$CLONE_NANOCPUS" 'BEGIN{print n/1000000000}')")
   fi
   RUN_ARGS+=("$IMAGE")
 }

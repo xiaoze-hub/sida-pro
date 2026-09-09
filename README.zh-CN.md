@@ -5,7 +5,7 @@
 **闭源个人股票交易分析平台** — 通达信(.tck/.img/TQ) + 同花顺(thsdk) 双数据源 → 全市场扫描 → K线图层标注 → AI 全数据管家，自托管一体系统。
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.5.0-blue)
+![Version](https://img.shields.io/badge/version-v0.5.22-blue) <!-- 发版时随 VERSION 文件同步更新 -->
 
 </div>
 
@@ -64,10 +64,10 @@ SIDA 不重复造轮子 — 把经过验证的开源项目整合成一条流水�
 ```bash
 # GitHub 源(全球)或阿里云 ACR(国内加速)
 docker pull ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest
-# 或: docker pull crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:v0.4.3
+# 或: docker pull crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:$(cat VERSION)  # 版本以仓库 VERSION 文件为准
 
 docker run -d --name sida -p 8000:8000 --restart unless-stopped \
-  -v sida_data:/app/data \
+  -v panwatch_data:/app/data \
   -e AUTH_USERNAME=admin \
   -e AUTH_PASSWORD=your_password \
   -e TZ=Asia/Shanghai \

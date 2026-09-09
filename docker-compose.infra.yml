@@ -27,6 +27,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    # E7(2026-09-09): 与 docker-compose.yml 同值, 两文件不漂移
+    mem_limit: 320m
+    memswap_limit: 320m
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -44,6 +47,8 @@ services:
       - "--storage.tsdb.retention.time=15d"
     networks:
       - panwatch-net
+    mem_limit: 512m
+    memswap_limit: 512m
 
   # T11(2026-09-08 审计): 告警通知出口(接收 deploy/alertmanager.yml 路由到 Hermes 企微桥)
   alertmanager:
@@ -61,6 +66,8 @@ services:
       - "--storage.path=/alertmanager"
     networks:
       - panwatch-net
+    mem_limit: 128m
+    memswap_limit: 128m
 
   loki:
     image: grafana/loki:2.9.4
@@ -74,6 +81,8 @@ services:
       - loki_data:/loki
     networks:
       - panwatch-net
+    mem_limit: 512m
+    memswap_limit: 512m
 
   promtail:
     image: grafana/promtail:2.9.4
@@ -87,6 +96,8 @@ services:
     command: -config.file=/etc/promtail/config.yml
     networks:
       - panwatch-net
+    mem_limit: 192m
+    memswap_limit: 192m
 
   grafana:
     image: grafana/grafana:10.4.2
@@ -107,6 +118,8 @@ services:
       - loki
     networks:
       - panwatch-net
+    mem_limit: 512m
+    memswap_limit: 512m
 
 volumes:
   redis_data:

@@ -7,6 +7,40 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.22(风险整改第4波·流程债合入main)
+- 本次发版内容: W4.1/F1 指令文件与版本号统一(CLAUDE.md 改 3 行指针/两 README 徽章+拉取 tag 对齐 VERSION/卷名 panwatch_data/AGENTS 提交词汇表与 CHANGELOG 标题格式固化) / W4.2/E7 资源限制收口(主 compose 三服务+infra 六服务补 memswap_limit/mem_reservation/cpus+deploy 脚本克隆 swap/cpus+static 陈述三方一致实证) / W4.3/F5 已知问题台账(docs/KNOWN_ISSUES.md 收口 **28 条 KI-001..028**, 8 字段全带, P1×4, 含对账说明) / W4.4/F4 文档基线规范(AGENTS 新增 Documentation Standards 三要素+4 存量规划/审计文档补头+UI 审计副本缺陷永久留痕)。
+- 部署注意: ①本波 **0 个 schema 迁移**; ②**零代码文件改动**——`git diff v0.5.21..HEAD` 仅 13 个文档/compose/deploy/README 文件, 无 .py/.ts, 套件结果结构上沿用 v0.5.21 基线 1891 passed/2 failed/5 skipped(发版后实测记录于部署条目); ③docker-compose*.yml 与 deploy/deploy_panwatch.sh 属编排/宿主机侧文件, 不进容器覆盖层; VERSION 随覆盖层更新 /app/VERSION → /api/health version=v0.5.22; ④已知项见 docs/KNOWN_ISSUES.md(KI-004 生产容器限额重建仍待老板确认)。
+- [tag v0.5.22]
+
+### docs-规划/审计/研究文档头部基线标识+AGENTS文档规范(W4.4/F4)
+- 背景: F4 —— docs/innov-dev-plan.md:8 带 hash("v0.5.8 = d0bf7cd 基线")是正面典型, 但 PROJECT_MAP.md 只写日期不写 hash; 09-02 UI 审计既无 hash 也没说明审的是哪个副本(结果审到一份缺 6-7 个页面的不完整拷贝, 有被当完整审计用的风险)。
+- 做法: ①AGENTS.md 新增 "Documentation Standards (规划/审计/研究文档)" 节: docs/ 下规划/审计/研究文档(含 downloads/ 审计回执)头部必须含三要素——基线标识(commit hash 或 VERSION)/对象完整路径/覆盖范围(**含没审哪些**), 缺任一不得作为决策依据引用; ②存量补头: PROJECT_MAP.md(基线 c28f9a0=W3.4/B3 修订时点, 对应发版 v0.5.21; 覆盖=部署拓扑+目录+主链路, 未覆盖=前端组件级与测试布局)、UI审计_研究.md(基线=`C:\Users\tianxiang\sida-pro` 独立副本≈v0.5.8/d0bf7cd 同期, 非 git 检出无精确 commit + **⚠️留痕: 该副本缺 6-7 页/漏盘 13 页/5 条目过时, 已被重跑版校正, 勿单独引用** + 覆盖/未审)、UI审计_重跑_20260909.md(基线=after eab597a/before 3047f87; 覆盖=28 页路由矩阵+信封 10 处+设计债 7 项)、决策先锋复刻矩阵(基线同副本口径; 覆盖=三指标+共振+七行状态表差距矩阵)。
+- 已合规不改: docs/research/K线复权污染勘查_20260907.md(头部既有 @ 685d0da 基准+对象+方法)、downloads/audit_reply.md(标题即 v0.5.5 commit 8803fa3+四块覆盖陈述)。
+- 验证: 引用 hash git cat-file 实存(d0bf7cd/3047f87/c28f9a0/685d0da/eab597a); 5 文件头部逐一 grep "基线" 命中; AGENTS.md 规范落位 Testing Guidelines 与 Commit & PR Guidelines 之间。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
+### docs-已知问题台账收口(CHANGELOG未做项迁入KNOWN_ISSUES 28条+对账)(W4.3/F5)
+- 背景: F5 —— "已知问题"散落 CHANGELOG 各条目的"未做/待办/已知限制"里, 新接手只能读全文猜; docs/KNOWN_ISSUES.md 此前只有 W2.5 依赖审计与 W2.6 weekday 豁免两节, 无统一编号台账。
+- 做法: ①CHANGELOG 全文扫描(未做/待办/已知限制/暂不/明确不做/遗留)逐条判定开/闭状态, **28 条登记为 KI-001..028**, 每条 8 字段(id/level/owner/发现日期/现象/影响/涉及文件/建议修复); ②KI-004(生产容器无限制)/KI-005(8010 校准)沿用 W4.2 已发布锚点编号; ③W2.5 审计表与 W2.6 豁免两节保留为详情并收编 KI-001/002/003/006/007; ④方案 §4.3 点名项入册: chat_upload.py 提示注入面(KI-008, P1, 方案 §6.3 后续波次)、chat.py f-string SQL(KI-009, 方案记录行号 :695 现为 :234, 已核实 cols/table 均白名单+参数化无注入面, 留痕不修); ⑤"明确不做"决策(Alembic/W3.1 三项/前端设计取舍/裸 fetch 10 处)单列"决策留痕"节, 防被当欠账重复提出; ⑥两条此前无归属的新登记: KI-027 本地环境损坏测试文件 2 个(test_ta_load_ohlcv_patch/test_thsdk_buffer_size, 本地基线恒 2 failed 的出处, 建议加环境探测 skip 收敛到 0)、KI-028 交易日历 2028 表硬期限(2027-12-31 前补, 逾期 fail-loud 停摆, P1)。
+- 级别分布: P0=0 / **P1=4**(KI-001 react-router-dom、KI-004 生产容器限额、KI-008 提示注入面、KI-028 2028 表) / P2=13 / P3=11。
+- 对账(验收第 3 条): `grep -c "未做\|待办\|已知限制" CHANGELOG.md` = **13 行 → 13 条 KI**(L543 一行产 2 条: KI-022+024; L560 一行产 2 条: KI-025+023, "Hub 抽独立进程"与 L543 重复计一次; L569 产 0 条——audit 独立 Session 已于 08-21 修复/orval 并入 KI-026/Alembic 归决策留痕; L1275 产 0 条——设计取舍归决策留痕); 扩词 grep(加 暂不|明确不做|遗留, 29 行)与其它来源另产 15 条; 已修复项(GS 配色 v0.4.71 已统一等)不迁入, 明细对账表落在 KNOWN_ISSUES.md 文末。
+- 验证: 28 条 ≥ 20; 总览表每条含 id/level/owner; 编号唯一性 `grep -o "KI-0[0-9][0-9]" | sort -u` = 28 无重复。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
+### fix-三compose资源限制收口+deploy脚本限制克隆+static陈述实证(W4.2/E7)
+- 背景: 4.2 —— 方案写作时"3 个 compose 全无资源限制"; 实测现状: docker-compose.yml 的 panwatch(1500m)/forecast(4g)/postgres(1g) 已在 P1-14 时代加了 mem_limit, 但 **cpus/memswap_limit/mem_reservation 全缺**(8010 推理高峰 CPU 争抢与 swap 超限无保护); docker-compose.infra.yml 6 个服务只有 restart 无任何 mem 限额; deploy/deploy_panwatch.sh 克隆重建时只克隆 --memory, swap/cpus 丢失。另: **生产 panwatch 容器实测 mem=0(完全无限制)** —— 非 compose 管理的历史 docker run 部署, compose 里的 1500m 从未生效。
+- 做法: ①docker-compose.yml 三服务补齐 memswap_limit(=mem_limit, 不给额外 swap)+mem_reservation+cpus: panwatch 1500m/512m/1.5, forecast 4g/1g/2.0, postgres 1g/256m/1.0; ②docker-compose.infra.yml 六服务加 mem_limit+memswap_limit(与主 compose 同值防漂移: redis 320m/prometheus 512m/loki 512m/promtail 192m/grafana 512m/alertmanager 128m); ③deploy 脚本克隆逻辑补 MemorySwap/NanoCpus inspect 与 --memory-swap/--cpus 透传; ④docker-compose.dev.yml 是 overlay(继承主 compose 限额), 不重复加(overlay 加限会覆盖基线值, 反而引入漂移)。
+- **8010 峰值内存实测约束(如实记录)**: 本机 8010 未部署(0.0 勘查既定, /api/health forecast_engine=down), 方案要求的"实测推理峰值×1.5"**本波无法执行**; 4g 沿用 P1-14 既定值, 校准项登记 KNOWN_ISSUES(KI-005, 8010 首次部署前实测校准, 不许拍脑袋)。
+- **static 陈述实证(方案观察已被前波修复)**: build.sh 实际行为 `rm -rf static && cp -r frontend/dist/* static/`、Dockerfile:162 `COPY --from=frontend-builder /app/frontend/dist ./static/`、AGENTS.md:19 陈述三方一致; frontend/vite.config.ts 无 outDir 覆盖(默认 dist)——方案"声称与实际不符"不复存在, 仅记录实证无改动。
+- 验证: `docker compose config --quiet --no-interpolate` 主/infra 两文件均 0 error; `bash -n deploy_panwatch.sh` 语法通过。**遗留(登记 KI-004)**: 生产 panwatch 容器(非 compose 管理)重建以套用 1500m 限额属生产可见变更, 待老板确认后随下次维护窗口执行。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
+### feat-指令文件与版本号统一+行尾欠账后第4波启动(W4.1/F1)
+- 背景: 4.1 —— ①CLAUDE.md(96 行)与 AGENTS.md 大量重叠且互相不一致(commit type 一个写 `{feat,fix,docs,refactor,style,test,chore}`, 一个写 `{fix,feature,update,doc}`), AI 读到哪份按哪份做; ②版本号三处不一致: VERSION=v0.5.21(真值) vs README 徽章 v0.5.0 vs 拉取命令 v0.4.3; ③README 运行示例卷名 `sida_data`, 全仓其余地方均为 `panwatch_data`(docker-compose.yml:204,294-295 / deploy/deploy_panwatch.sh), 照 README 起容器会挂到空卷(数据"消失")。
+- 做法: ①CLAUDE.md 改 3 行指针(规范唯一入口 AGENTS.md, 冲突以 AGENTS.md 为准); ②两 README 徽章 v0.5.0→v0.5.21 并加 HTML 注释"发版时随 VERSION 同步"; 拉取命令 v0.4.3→`:$(cat VERSION)` 形式并注明"版本以仓库 VERSION 文件为准"; ③卷名 sida_data→panwatch_data(两 README); ④AGENTS.md "Commit & Pull Request Guidelines" 重写: type 词汇表对齐实际主流 `{feat,fix,update,refactor,docs,test,chore,style,perf}`, CHANGELOG 标题格式固化 `### <type>-<中文标题>`(与 commit type 一致), 新增发版步骤行"VERSION bump 必须与两 README 徽章同 commit"。历史 CHANGELOG 标题不回改, 自本条起按新规范。
+- 验收: CLAUDE.md=3 行(≤10); `grep v0.5.0|v0.4.3 README*` 命中 0; 卷名 grep `sida_data` 在 README/compose/deploy 脚本命中 0(全仓其余命中均为 Prometheus 指标名 `sida_datasource_failures_total` 的子串, 非卷名, 不属本项清理范围); commit type 三处(AGENTS/CLAUDE/CHANGELOG)一致。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
 ### update-v0.5.21生产部署(docker cp覆盖层, 冒烟9/9, 迁移143-148首执行)
 - **生产部署**: tag v0.5.21(8ecfeb7 merge) 经 docker cp 覆盖层部署到 panwatch 容器(同 v0.5.19/20 既定路径)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0521_20260909_1438.tar.gz`, 12.9MB, 排除 data/static-data/downloads/node_modules/__pycache__) → `git archive v0.5.21` → 容器 `/app` 解包 → **显式 rm 3 个本波删除文件**(src/core/chat_tools.py、tests/test_chat_tools_a4.py、tests/test_chat_tools_p1p2.py —— 覆盖层解包不会删文件) → restart → 50s healthy → 冒烟 **9/9 通过**(7.4s), /api/health 报 version=v0.5.21, PG/Redis ok。
 - **迁移对账(与发版条目预判完全一致)**: v108/v121/v124 因 checksum 变更各幂等重跑一次; **v143-148(收编历史 A 层)首次在生产库执行**, 全部 Applying 无 ERROR, 耗时 ~600ms; 多用户旧数据归 owner 5 表处理正常。调度器重启后 5 个 scheduler 正常。
