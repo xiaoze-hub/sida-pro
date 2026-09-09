@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-情绪因子 v1: 关键词极性 + 时效衰减 + 日序列(B6.4)
+- **背景**: 新闻已有 `NewsCache` 与事件关键词, 但没有可聚合、可解释的情绪分。
+- **做法**: 新增 `src/core/sentiment.py`: `score_text`(正向 +1 / 负向 −1.2, 负面冲击更重) + `recency_weight`(48h 线性衰减, 下限 0.05) + `sentiment_for_items`(加权和 + confidence) + `sentiment_series`(按日序列, 供前端与价格对照)。纯函数、无网络/DB。
+- **验证**: `pytest -q tests/test_sentiment.py` → **4 passed**。
+- **如实说明**: 关键词表为 v1(可扩), 未接 LLM 语义; 未接入前端展示与因子合成(属后续工作)。
+- [branch fix/w6-创新-20260909, `git show HEAD`]
+
 ### feat-可复现实验日志: JSONL 追加写 + 复跑参数还原(B6.7)
 - **背景**: 回测/研究跑完只有口头参数, 事后无法回答"当时用什么参数、数据是否一致"。
 - **做法**: 新增 `src/core/experiment_log.py`: `log_experiment`(追加 `DATA_DIR/experiments.jsonl`, 自动 run_id/时间戳) / `list_experiments` / `find_experiment` / `reproduce_command`(还原参数并给出数据指纹一致性提示), 与 B0.5 的 `input_hash` 形成"参数+数据指纹"双记录。
