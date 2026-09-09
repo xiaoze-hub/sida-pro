@@ -17,6 +17,11 @@
 - **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1986 passed / 2 failed(KI-027 本机环境) / 5 skipped**(较基线 1985 +1, 无回退); 棘轮门禁 + `check_is_pg_scope` + `check_scoped_queries` + `check_migrations` 通过; `import server` OK。
 - [tag v0.5.33]
 
+### update-v0.5.33 生产部署(代码+static覆盖层, chown+compileall, 冒烟 9/9)
+- **部署**: 备份 `/root/app_backup_pre_v0533_20260909.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.33** → 冒烟 **9/9**(8.9s; 3 分钟 0 次 `Child process died`)。
+- **说明**: 本版为**纯导入路径/模块位置**变更(ORM 下沉), API 行为与 v0.5.32 一致; 冒烟覆盖 stocks/settings/datasources/dark-flow/main-flow/klines 全绿。
+- [tag v0.5.33]
+
 ### feat-前端字段说明补齐(hover 解释)
 - **范围**: ① 模拟盘 5 个指标卡(总资产/总收益/胜率/最大回撤/可用资金) + 策略绩效 8 个表头; ② 行情页决策条(该不该动/主力/风险/盘口); ③ 影子账户 5 个指标(盈利回合/总回合/胜率/偏好市场/持仓中位); ④ 暗盘/明盘资金卡 11 个字段(主力净额/超大单/大单/散户/参与度/买占比/暗盘净额/疑似主力买卖/散户买卖/量比/涨跌/位置/外盘额/主动盘占比); ⑤ 盘口资金页 11 个字段(已于 v0.5.30 补)。
 - **形式**: 原生 `title` hover 提示(与洞察弹窗既有 InfoTip 口径一致), 零依赖、零布局变更。
