@@ -30,6 +30,10 @@ export const insightApi = {
   klineSummary: <T>(symbol: string, market: string) =>
     fetchAPI<T>(`/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`),
 
+  /** 决策合成(KI-021): 三信号 → 动手/看看/别碰 + 一行理由(后端永不 500) */
+  decision: <T>(symbol: string, market: string = 'CN') =>
+    fetchAPI<T>(`/decision/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`),
+
   /** L2 盘口 OB 失衡(thsdk 20档, 含十档买卖额/ob_series/事件/幽灵单; 不可用时 available=false) */
   orderbookOb: <T>(symbol: string) =>
     fetchAPI<T>(`/orderbook-ob?symbol=${encodeURIComponent(symbol)}`),

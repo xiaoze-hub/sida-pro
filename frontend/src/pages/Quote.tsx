@@ -4,7 +4,7 @@ import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
-import { insightApi, dashboardApi, type DashboardPosition } from '@panwatch/api'
+import { insightApi, dashboardApi, datasourcesApi, type DashboardPosition, type VendorTrustItem } from '@panwatch/api'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import {
   normalizeKlineEvents,
@@ -168,6 +168,27 @@ interface SealQualityResp {
   metrics?: SealQualityMetrics | null
 }
 
+/** KI-021: GET /api/decision/{symbol} 决策合成(后端永不 500, 缺数→看看) */
+interface DecisionResp {
+  symbol?: string
+  verdict?: string
+  reason?: string
+  phase?: string
+  row?: number
+  parts?: {
+    trend?: string | null
+    activity?: number | null
+    fund_net?: number | null
+  } | null
+}
+
+/** 决策合成 verdict 配色: 动手=红(A股买色)/别碰=绿(卖色)/看看=琥珀 */
+const DECISION_CLASS: Record<string, string> = {
+  动手: 'text-stock-up',
+  别碰: 'text-stock-down',
+  看看: 'text-amber-600 dark:text-amber-400',
+}
+
 /** 置信度徽章配色: A=可信(主色)/B=单源(灰)/C=分歧(琥珀, 非涨跌语义) */
 const CONFIDENCE_CLASS: Record<string, string> = {
   A: 'bg-primary/10 text-foreground',
@@ -241,6 +262,11 @@ export default function QuotePage() {
   const [summary, setSummary] = useState<SummaryResp | null>(null)
   const [, setSummaryLoading] = useState(false)
   const [, setSummaryError] = useState('')
+  // KI-019 来源徽标: 当前行情由哪个 vendor 提供 + 采集延迟(空源显式标"未知")
+  const [quoteSrc, setQuoteSrc] = useState<{ source: string; latency: number } | null>(null)
+  const [vendorTrust, setVendorTrust] = useState<Record<string, VendorTrustItem>>({})
+  // KI-021 决策合成卡片(后端三信号 → 动手/看看/别碰)
+  const [decisionCard, setDecisionCard] = useState<DecisionResp | null>(null)
 
   // A3 封单成色(批次A, 2026-09-06): 只在指标可用时渲染, 无数据不占位(缺失不编造)
   const [seal, setSeal] = useState<SealQualityResp | null>(null)
@@ -289,6 +315,50 @@ export default function QuotePage() {
       .finally(() => { if (alive) setSummaryLoading(false) })
     return () => { alive = false }
   }, [symbol, type])
+
+  // KI-019: 行情来源徽标 —— 取当前 quote 的 source/source_latency_ms(空源=未知, 不编造)
+  useEffect(() => {
+    if (!symbol || type !== 'stock') { setQuoteSrc(null); return }
+    let alive = true
+    insightApi
+      .quote<{ source?: string | null; source_latency_ms?: number | null }>(symbol, 'CN')
+      .then((q) => {
+        if (!alive) return
+        setQuoteSrc({ source: String(q?.source || ''), latency: Number(q?.source_latency_ms || 0) })
+      })
+      .catch(() => { if (alive) setQuoteSrc(null) })
+    return () => { alive = false }
+  }, [symbol, type])
+
+  // KI-021: 决策合成卡片(独立请求, 不阻塞 K线; 失败静默不渲染)
+  useEffect(() => {
+    if (!symbol || type !== 'stock') { setDecisionCard(null); return }
+    let alive = true
+    insightApi
+      .decision<DecisionResp>(symbol, 'CN')
+      .then((d) => { if (alive) setDecisionCard(d ?? null) })
+      .catch(() => { if (alive) setDecisionCard(null) })
+    return () => { alive = false }
+  }, [symbol, type])
+
+  // KI-019: vendor 质量分(60s 轮询足够; 失败静默 —— 徽标退化为只显 source+延迟)
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      datasourcesApi
+        .trust()
+        .then((d) => {
+          if (!alive) return
+          const map: Record<string, VendorTrustItem> = {}
+          for (const it of d?.items ?? []) if (it?.vendor) map[it.vendor] = it
+          setVendorTrust(map)
+        })
+        .catch(() => { /* 静默: 无质量分不阻断行情 */ })
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [])
 
   // Phase 0: 持仓成本(全账户 positions 按代码匹配, 无持仓不画线不编造)
   const [positions, setPositions] = useState<DashboardPosition[]>([])
@@ -385,6 +455,27 @@ export default function QuotePage() {
       '正常波动'
     return { action, mainDesc, riskDesc, lastSide: lastGs?.side, lastConfirmed: lastGs?.confirmed, obShape: ob?.shape }
   }, [summary])
+
+  // KI-019: 来源徽标文案(未知源显式标, 不编造; 质量分来自 /datasources/trust)
+  const srcBadge = useMemo(() => {
+    if (!quoteSrc) return null
+    const vendor = quoteSrc.source.trim()
+    const t = vendor ? vendorTrust[vendor] : undefined
+    const tips = [vendor ? `行情来源: ${vendor}` : '行情来源: 未知(后端未透传 source)']
+    if (quoteSrc.latency > 0) tips.push(`采集延迟 ${quoteSrc.latency}ms`)
+    if (t) {
+      tips.push(`质量分 ${t.score}`)
+      if (t.success_rate != null) tips.push(`成功率 ${(t.success_rate * 100).toFixed(0)}%`)
+      if (t.p50_latency_ms != null) tips.push(`P50 ${t.p50_latency_ms}ms`)
+    } else if (vendor) {
+      tips.push('暂无质量分样本')
+    }
+    return {
+      label: vendor || '未知',
+      latency: quoteSrc.latency,
+      title: tips.join('；'),
+    }
+  }, [quoteSrc, vendorTrust])
 
   // 区间聚合(联动 K线选段)
   const rangeAgg = useMemo(() => {
@@ -509,7 +600,37 @@ export default function QuotePage() {
             <Link to={`/l2?symbol=${encodeURIComponent(symbol)}`} className="text-[11px] text-primary hover:underline">明细›</Link>
           </>
         )}
+        {srcBadge && (
+          <>
+            <span className="text-border/60">|</span>
+            <span className="text-muted-foreground" title="当前行情由哪个数据源提供及其采集延迟(质量分来自 /api/datasources/trust)">源:</span>
+            <span className="font-mono text-muted-foreground" title={srcBadge.title}>
+              {srcBadge.label}{srcBadge.latency > 0 ? ` · ${srcBadge.latency}ms` : ''}
+            </span>
+          </>
+        )}
       </div>
+
+      {/* === KI-021 决策合成卡片(后端三信号 → 动手/看看/别碰; 缺数诚实标 —) === */}
+      {decisionCard && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/40 bg-accent/10 px-3 py-1.5 text-[12px]">
+          <span
+            className="text-muted-foreground"
+            title="后端合成: 趋势(GS) × 活跃度(AI) × 资金(明+暗主力净额) → 7 行状态表; 与上方「该不该动」的前端快判口径不同, 以后者仅作参考"
+          >
+            决策合成:
+          </span>
+          <span className={`font-semibold ${DECISION_CLASS[decisionCard.verdict || ''] || 'text-foreground'}`}>
+            {decisionCard.verdict || '看看'}
+          </span>
+          <span className="text-foreground/90">{decisionCard.reason || '—'}</span>
+          <span className="font-mono text-[11px] text-muted-foreground" title="三信号明细: 趋势/活跃度/资金(明+暗主力净额, 万元)">
+            趋势 {decisionCard.parts?.trend || '—'}
+            {' · '}活跃度 {decisionCard.parts?.activity != null ? Number(decisionCard.parts.activity).toFixed(2) : '—'}
+            {' · '}资金 {decisionCard.parts?.fund_net != null ? `${(Number(decisionCard.parts.fund_net) / 1e4).toFixed(0)}万` : '—'}
+          </span>
+        </div>
+      )}
 
       {/* === 两栏布局: K线主图(≥80%屏宽) + 窄栏(决策依据/事件) === */}
       {type === 'board' ? (

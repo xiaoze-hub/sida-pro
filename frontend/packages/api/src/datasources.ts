@@ -41,6 +41,21 @@ export interface SourceHealthResp {
   items: SourceHealthItem[]
 }
 
+/** vendor 质量分单项(KI-019: 行情来源徽标消费). */
+export interface VendorTrustItem {
+  vendor: string
+  score: number
+  success_rate?: number
+  p50_latency_ms?: number
+  samples?: number
+  last_error?: string
+}
+
+export interface VendorTrustResp {
+  checked_at?: number
+  items: VendorTrustItem[]
+}
+
 export const datasourcesApi = {
   /** 4 个 L4 逻辑源 (探测式, 决定事件图标灰显). */
   health: <T = SourceHealthResp>() =>
@@ -51,4 +66,7 @@ export const datasourcesApi = {
   /** 单个逻辑源. */
   singleHealth: (id: string) =>
     fetchAPI<SourceHealthItem>(`/datasources/health/${encodeURIComponent(id)}`),
+  /** vendor 质量分(成功/延迟样本) —— 行情来源徽标显示可信度用. */
+  trust: <T = VendorTrustResp>() =>
+    fetchAPI<T>('/datasources/trust'),
 }

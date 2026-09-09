@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
+- **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
+- **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。
+- **KI-018 错误日志页签**: 系统 Hub 增「错误」页签(ownerOnly), 消费 `GET /api/logs/errors`; 每行可展开 traceback/context; 拉取失败显式报错、空态显式「最近没有错误事件」。
+- **API 封装**: 新增 `datasourcesApi.trust()` / `insightApi.decision()` / `logsApi.errors()`(新 `packages/api/src/logs.ts`)。
+- **验证**: `tsc -b` + `eslint .` + `pnpm test` 34 passed + `pnpm build`。
+- [tag v0.5.35]
+
 ### refactor-KI-039 第二阶段(清零): src/core 反向依赖 src/web 13 → 0 文件, KI-039 关闭
 - **目标**: 把上一版剩余的 13 个反向依赖按"服务下沉"逐个清零, 使 `src/core` 完全脱离 Web 层。
 - **八项下沉**:

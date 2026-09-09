@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Bot, Database, Loader2 } from 'lucide-react'
+import { Bot, Database, Loader2, ShieldAlert } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
 
@@ -9,9 +9,11 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  * 两个页签各自沿用原有页面组件(Agents / DataSources, 均自包含无 props),
  * 权限点原样保留(manage_agents / manage_datasources), 未授权则页签隐藏。
  * 旧路由 /agents、/datasources 由 App.tsx 重定向到 /system?tab=xxx, 书签不失效。
+ * KI-018(2026-09-09): 增「错误」页签消费 GET /api/logs/errors(owner)。
  */
 const AgentsPage = lazy(() => import('@/pages/Agents'))
 const DataSourcesPage = lazy(() => import('@/pages/DataSources'))
+const ErrorLogPage = lazy(() => import('@/pages/ErrorLog'))
 
 const SYSTEM_TABS: TabDef[] = [
   {
@@ -33,6 +35,17 @@ const SYSTEM_TABS: TabDef[] = [
     render: () => (
       <Suspense fallback={<TabLoading />}>
         <DataSourcesPage />
+      </Suspense>
+    ),
+  },
+  {
+    key: 'errors',
+    label: '错误',
+    icon: ShieldAlert,
+    ownerOnly: true,
+    render: () => (
+      <Suspense fallback={<TabLoading />}>
+        <ErrorLogPage />
       </Suspense>
     ),
   },
