@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
-import { computeDrawdownSeries } from '@/lib/drawdown'
+import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
+import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
 import {
   paperTradingApi,
@@ -44,50 +45,6 @@ function PnlPctText({ value }: { value: unknown }) {
   const prefix = n !== null && n > 0 ? '+' : ''
   const txt = n === null ? '--' : `${n.toFixed(2)}%`
   return <span className={color}>{prefix}{txt}</span>
-}
-
-function DrawdownChart({ data }: { data: EquityCurvePoint[] }) {
-  const series = computeDrawdownSeries(data)
-  if (series.length < 2) {
-    return <div className="h-40 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制回撤</div>
-  }
-
-  const width = 600
-  const height = 140
-  const pad = { top: 14, right: 20, bottom: 26, left: 60 }
-  const w = width - pad.left - pad.right
-  const h = height - pad.top - pad.bottom
-
-  const worst = Math.min(...series.map(d => d.dd), -1) // 至少 -1% 留出轴空间
-  const points = series.map((d, i) => ({
-    x: pad.left + (i / (series.length - 1)) * w,
-    y: pad.top + (d.dd / worst) * h, // dd=0 → 顶部; worst → 底部
-    ...d,
-  }))
-  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
-  const areaD = pathD + ` L${points[points.length - 1].x},${pad.top} L${points[0].x},${pad.top} Z`
-  const sc = readStockColors()
-  const xIndices = [0, Math.floor(series.length / 2), series.length - 1]
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
-      {[{ v: 0, y: pad.top }, { v: worst, y: pad.top + h }].map((t, i) => (
-        <g key={i}>
-          <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
-          <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
-            {`${t.v.toFixed(1)}%`}
-          </text>
-        </g>
-      ))}
-      <path d={areaD} fill={withAlpha(sc.down, 0.12)} />
-      <path d={pathD} fill="none" stroke={sc.down} strokeWidth={2} />
-      {xIndices.map(i => (
-        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
-          {series[i].date.slice(5)}
-        </text>
-      ))}
-    </svg>
-  )
 }
 
 function EquityChart({ data }: { data: EquityCurvePoint[] }) {
@@ -164,6 +121,7 @@ export default function PaperTradingPage() {
   const [trades, setTrades] = useState<PaperTradingTradeItem[]>([])
   const [tradesTotal, setTradesTotal] = useState(0)
   const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([])
+  const [klineTrade, setKlineTrade] = useState<PaperTradingTradeItem | null>(null)
   const [strategyPerf, setStrategyPerf] = useState<StrategyPerformanceItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)  // 2026-08-17 闭环修正:错误态系统统一
@@ -518,6 +476,15 @@ export default function PaperTradingPage() {
         <DrawdownChart data={equityCurve} />
       </div>
 
+      {/* Realized PnL (B5.2) */}
+      <div className="border-b border-border/40 pb-4">
+        <h2 className="text-sm font-semibold mb-3">
+          已实现盈亏
+          <span className="ml-2 text-xs font-normal text-muted-foreground">按平仓日累计(元)</span>
+        </h2>
+        <RealizedPnlChart trades={trades} />
+      </div>
+
       {/* Strategy Performance */}
       {strategyPerf.length > 0 && (
         <div className="border-b border-border/40 pb-4">
@@ -661,6 +628,9 @@ export default function PaperTradingPage() {
                         <td className="py-2 px-2 text-xs text-muted-foreground">{t.strategy_code || '-'}</td>
                         <td className="text-right py-2 px-2">{t.holding_days}天</td>
                         <td className="text-right py-2 pl-2 text-xs text-muted-foreground">{t.closed_at?.slice(0, 10) || '-'}</td>
+                        <td className="text-right py-2 pl-2">
+                          <Button variant="outline" size="sm" onClick={() => setKlineTrade(t)}>K线</Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -840,6 +810,30 @@ export default function PaperTradingPage() {
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* B5.2: 成交点叠加到 K 线(my_trade 标记) */}
+      <Dialog open={!!klineTrade} onOpenChange={(open) => { if (!open) setKlineTrade(null) }}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{klineTrade ? `${klineTrade.stock_name || klineTrade.stock_symbol} 成交点` : '成交点'}</DialogTitle>
+            <DialogDescription>K 线上的「我的买卖点」标记 = 本次模拟成交的买入/卖出</DialogDescription>
+          </DialogHeader>
+          {klineTrade && (
+            <InteractiveKline
+              symbol={klineTrade.stock_symbol}
+              market={klineTrade.stock_market}
+              events={[
+                ...(klineTrade.opened_at
+                  ? [{ date: klineTrade.opened_at.slice(0, 10), kind: 'my_trade' as const, label: `买入 ¥${safeFixed(klineTrade.entry_price)}` }]
+                  : []),
+                ...(klineTrade.closed_at
+                  ? [{ date: klineTrade.closed_at.slice(0, 10), kind: 'my_trade' as const, label: `卖出 ¥${safeFixed(klineTrade.exit_price)}（${EXIT_REASON_MAP[klineTrade.exit_reason] || klineTrade.exit_reason}）` }]
+                  : []),
+              ]}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

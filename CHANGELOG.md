@@ -7,6 +7,80 @@
 
 ## 2026-09-09
 
+### refactor-前端大文件拆分收口(W5.3): 三个巨型文件全部 ≤800 行
+- **目标**: W5.3 "单文件 ≤ 800 行"; 本 commit 收口 `Stocks.tsx`(3079→**56**) 与 `Settings.tsx`(2562→**55**), 加上上一 commit 的 `stock-insight-modal.tsx`(2820→**46**), 三个文件全部达标。
+- **Stocks.tsx 做法**: `src/pages/stocks/` 下新增 `useStocksState`(320) / `useStocksData`(728) / `useStocksDerived`(91) / `useStocksActions`(573) 四个 hook + `context.tsx` + 12 个区块组件(`AccountsSection` 525 最大); 骨架屏抽 `StocksSkeleton`, 顶部 tab/汇总/关注列表/各弹窗各自成组件。
+- **Settings.tsx 做法**: `src/pages/settings/` 下新增 `types.ts`(205, 含 12 个接口与常量) + `useSettingsState`(333) / `useSettingsData`(205) / `useSettingsDerived`(81) / `useSettingsActions`(736) + `context.tsx` + 13 个区块/弹窗组件(`AiDialogs` 490 最大)。
+- **等价性**: 逐字搬迁, 无逻辑改动; 仅补 hook 依赖数组(eslint exhaustive-deps)与把 `if (loading) return …` 骨架抽成组件由主文件条件渲染。状态、effect 顺序与请求次数不变。
+- **验证**: `pnpm exec tsc -b` 通过; `eslint .` 通过; `pnpm test` 27 passed; `pnpm build` 通过。全量文件最大 736 行(`useSettingsActions.ts`)。
+- **未做**: 浏览器回归与发版部署见下一条记录。
+- [branch fix/w5c-大文件拆分-20260909]
+
+### refactor-前端大文件拆分: stock-insight-modal.tsx 2820→46 行 + Stocks.tsx 前导块外移(W5.3)
+- **背景**: W5.3 目标"单文件 ≤ 800 行"; 该弹窗 2820 行, 是 `Stocks/Dashboard/Opportunities` 三页共用的详情入口。
+- **做法①**: 按职责外移到 `packages/biz-ui/src/components/insight/` —— 纯模块 `types.ts`(216) / `helpers.tsx`(275) / `FundamentalsPanel.tsx`(202) / `deep-analysis.tsx`(249); 状态与副作用 hook `useInsightData.ts`(697); 派生值 hook `useInsightDerived.ts`(233); 交互动作 hook `useInsightActions.ts`(301); `context.tsx` 提供 `useInsight()`; 9 个 tab/头部组件(`OverviewTab` 357 为最大)。主文件仅保留 hook 组合 + Dialog 壳。
+- **做法②**: `Stocks.tsx` 的类型/常量/纯函数前导块外移到 `src/pages/stocks/shared.ts`(397 行), 页面 **3443→3079 行**。
+- **等价性**: 全部为逐字搬迁(仅改缩进/补 import/补 hook 依赖数组), 无逻辑改动; 状态与回调仍在同一 React 树内, 未引入额外请求。
+- **验证**: `pnpm exec tsc -b` 通过; `eslint` 通过(含 react-hooks/exhaustive-deps); `pnpm test` 27 passed; `pnpm build` 通过。浏览器回归见后续发版记录。
+- **未完成**: `Stocks.tsx`(3079) / `Settings.tsx`(2562) 仍 > 800 行, 继续拆分中。
+- [branch fix/w5c-大文件拆分-20260909]
+
+### update-发版 v0.5.26(前端 Settings 拆分)
+- 内容: `Settings.tsx` 组件外移(`CapBadges`/`LlmUsageSection` → `src/components/settings/`), 页面 2764→2562 行; **无后端/迁移变更**。
+- 部署: 仅覆盖容器 `/app/static`(前端产物), 不重启后端。
+- 验收: `tsc -b` + `pnpm test` 27 passed + `pnpm build`; 生产冒烟 9/9。
+- [tag v0.5.26]
+
+### refactor-前端大文件拆分(部分): Settings.tsx 组件外移(W5.3 部分)
+- **背景**: W5.3 目标"单文件 ≤ 800 行"; `Settings.tsx` 2764 行内含可独立组件。
+- **做法**: 逐字外移 `CapBadges`(+ `MODEL_CAP_META`/`MODEL_CAP_ORDER` 常量) 与 `LlmUsageSection` 到 `src/components/settings/`; `Settings.tsx` **2764→2562 行**。
+- **验证**: `pnpm exec tsc -b` 通过; `pnpm test -- --run` **27 passed**; `pnpm build` 通过。
+- **如实说明(未完成)**: **W5.3 未达成** —— `Stocks.tsx`(3443)/`stock-insight-modal.tsx`(2820) 的 ≤800 行目标需按组件边界勘线逐页拆分 + 浏览器回归, 属独立专项; 本次仅交付 Settings 的干净外移。
+- [branch fix/w5c-大文件拆分-20260909, `git show HEAD`]
+
+### update-v0.5.25生产部署(代码+前端static, 冒烟9/9, 零迁移)
+- **生产部署**: tag v0.5.25 部署到 panwatch 容器(备份 `/root/app_backup_pre_v0525_20260909.tar.gz` → `git archive` → `tar xf --overwrite` → `frontend/dist` 覆盖 `/app/static` → restart → 40s healthy)。`/app/VERSION` 核对 **v0.5.25**; 冒烟 **9/9**(10.5s); 迁移 150-153 保持 success(本版零新增迁移)。
+- [tag v0.5.25]
+
+### update-发版 v0.5.25(延后项补齐: 组合撮合/滚动验证/参数扫描/策略下沉/成交点与盈亏曲线/组件测试)
+- 本版补齐方案 §11 台账中的 6 个延后项:
+  - **B2.1 组合级撮合**: 共享现金账户 + 并发持仓上限 + 现金不足缩量 + 容量约束(`src/core/backtest/portfolio.py`; 内核抽出 `simulate_exit` 供单笔/组合共用)。
+  - **B2.2/B2.3 滚动验证与参数扫描**: `src/core/backtest/research.py`(`sweep` / `walk_forward`, 训练窗选参、测试窗只读评估, 汇总只报样本外)。
+  - **B4.2 策略求值下沉**: `src/core/strategy_library.py`(纯搬迁, API 层 445→263 行, 消灭第二策略实现)。
+  - **B5.2 成交点与盈亏曲线**: `PnlCharts.tsx` 抽取 + `lib/trades.ts` + 成交明细「K线」弹窗以 `my_trade` 标记叠加买卖点。
+  - **B5.4 组件渲染测试**: 引入 `jsdom`/`@testing-library/react`, 4 个组件用例。
+- 部署注意: **无新增迁移**; 前端有变更 → 需构建 `frontend/dist` 覆盖容器 `/app/static`。
+- 验收: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1985 passed / 2 failed(KI-027 本机环境损坏) / 5 skipped**; 前端 `pnpm test -- --run` 27 passed + `tsc -b` + `pnpm build`。
+- 仍剩: **W5.3 大文件拆分**(`Stocks.tsx` 3443 / `stock-insight-modal.tsx` 2820 / `Settings.tsx` 2764 行) —— 属独立专项(方案 §11)。
+- [tag v0.5.25]
+
+### feat-模拟盘成交点叠加到 K 线(W5.2 后半)
+- **做法**: `PaperTrading` 成交明细每行加「K线」按钮 → 弹窗渲染 `InteractiveKline`, 把该笔的 `opened_at`/`closed_at` 映射为 `KlineEvent(kind='my_trade')`(买入/卖出 + 价格 + 平仓原因), 复用现有 L4 事件标注图层。
+- **验证**: `pnpm exec tsc -b` 通过; `pnpm test -- --run` **27 passed**。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
+### test-前端组件渲染测试 + 图表组件抽取(W5.4/W5.3 部分)
+- **背景**: 前端测试栈此前只有 lib 级 vitest(node 环境), 关键图表组件无渲染测试(KI-016/P2-1)。
+- **做法**: ① 引入 `jsdom` + `@testing-library/react` + `@testing-library/jest-dom`(devDeps, npmmirror 安装); ② 把 `DrawdownChart`/`RealizedPnlChart` 从 `PaperTrading.tsx` 抽到 `src/components/PnlCharts.tsx`(可测 + 页面瘦身 812 行); ③ 新增 `tests/components/pnl-charts.test.tsx`(4 用例: 占位提示、SVG 路径、圆点数量、累计值)。
+- **验证**: `pnpm test -- --run` → **27 passed / 5 文件**; `tsc -b` 通过。
+- **如实说明(未做)**: W5.2 的"成交点叠加到 K 线"(需给 InteractiveKline 接 trades 标记 props)与 W5.3 的大文件拆分(Stocks.tsx 3443 行 / stock-insight-modal 2820 行 / Settings 2764 行)仍待做。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
+### refactor-策略求值实现下沉 core, 消灭 API 层第二策略实现(W4.2, KI-039)
+- **背景**: `src/web/api/strategies.py` 内联了 300 余行策略求值/打分实现, 与 `src/core/strategy_engine.py` 形成两套策略口径(KI-039 点名项)。
+- **做法**: 纯搬迁(非重写)`_evaluate_strategy` + `_quote_to_dict` + `rounding_safe` 到新增 `src/core/strategy_library.py`(206 行, 逐字保留); API 层改为 import 后再导出, 既有导入路径(`tests/test_strategy_semantics.py`)不破; `strategies.py` **445→263 行**。
+- **验证**: `pytest -q tests/test_strategy_semantics.py tests/test_strategies_scan.py tests/test_w41_core_web_dependency.py` → **12 passed**; 两模块导入冒烟通过。
+- **如实说明**: 新模块仍以 `fastapi.HTTPException` 表达"策略配置非法"(框架级依赖), 未改成 core 自有异常——留待 repository/异常体系专项。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
+### feat-组合级撮合 + 参数扫描/walk-forward + 已实现盈亏曲线(B2.1/B2.2/B2.3/B5.2)
+- **B2.1 组合级撮合**: 新增 `src/core/backtest/portfolio.py`(`PortfolioBacktester` + `PortfolioConfig`): 共享现金账户 + 并发持仓上限 + 现金不足按手缩量 + 容量约束, 逐日 mark-to-market; 内核抽出 `simulate_exit` 供单笔/组合共用(行为零变更), `BacktestResult` 增 `skipped_cash`/`skipped_slots` 归因字段。
+- **B2.2/B2.3 滚动验证与参数扫描**: 新增 `src/core/backtest/research.py`: `sweep`(参数网格按指标倒序) + `walk_forward`(训练窗选参 → 测试窗只读评估, **汇总只报样本外**) + 参数化 `golden_cross_signals`。
+- **B5.2 已实现盈亏曲线**: 新增 `frontend/src/lib/trades.ts`(`computeRealizedPnlSeries`/`realizedByDate`) + `PaperTrading` 的 `RealizedPnlChart`(零轴虚线 + 逐点盈亏色)。
+- **验证**: `pytest -q tests/test_backtest_portfolio.py tests/test_backtest_research.py tests/test_backtest*.py` → **39 passed**; 前端 `pnpm test -- --run` **23 passed**(4 文件) + `tsc -b` 通过。
+- **如实说明(未做)**: 成交点在 K 线上叠加(W5.2 后半, 需给 InteractiveKline 接 trades 标记 props)、大文件拆分(W5.3)、组件渲染测试(W5.4)仍待做。
+- [branch fix/w2b-组合撮合-20260909, `git show HEAD`]
+
 ### update-v0.5.24生产部署(代码覆盖层+前端static, 冒烟9/9, 迁移v150-153首执行)
 - **生产部署**: tag v0.5.24(c3eb1fb) 部署到 panwatch 容器。步骤: 备份现行代码(`/root/app_backup_pre_v0524_20260909.tar.gz` 14.1MB) → `git archive`(21.4MB) → `docker exec -u root ... tar xf --overwrite`(**普通 tar, 不是 xzf**) → 前端 `pnpm build` 产物覆盖 `/app/static`(index.html 4280B) → restart → 40s healthy → 冒烟 **9/9**(7.4s), /api/health `version=v0.5.24 status=ok`(database/redis/scheduler ok, forecast_engine down = 预期基线)。
 - **迁移对账**: **v150 `klines.amount` 加列 + v151 `trading_halts` + v152 `adj_factors` + v153 `datasource_failures` 首次在生产库执行全部成功**(`schema_migrations` 150-153 success=1); 新表/新列已核对存在。

@@ -69,9 +69,51 @@ class BacktestResult:
     metrics: dict
     initial_capital: float
     skipped: int = 0
+    skipped_cash: int = 0   # B2.1: 因现金不足被跳过
+    skipped_slots: int = 0  # B2.1: 因并发持仓上限被跳过
 
 
 PositionSizer = Callable[[float], int]  # price -> qty
+
+
+def simulate_exit(
+    bars: list[PriceBar],
+    entry_idx: int,
+    *,
+    stop: float | None,
+    target: float | None,
+    max_hold: int,
+    sellable: Callable[[int], bool] | None = None,
+) -> tuple[float, str, str, int]:
+    """逐日止损/止盈/到期撮合(B2.1 抽出, 供单笔与组合引擎共用, 行为零变更)。
+
+    返回 (exit_price, exit_date, exit_reason, holding_bars)。
+    - T+1: 入场日当天不检查(从 entry_idx+1 起);
+    - 跳空: 开盘已越过止损/止盈按开盘价成交;
+    - 一字跌停(sellable(j)=False)时止损/到期顺延到下一可成交日;
+    - 全程未触发 → 最后一根收盘(eod)。
+    """
+    is_sellable = sellable or (lambda _j: True)
+    for j in range(entry_idx + 1, len(bars)):
+        held = j - entry_idx
+        bar = bars[j]
+        if stop and stop > 0:
+            if bar.open <= stop:  # 跳空跌破
+                if is_sellable(j):
+                    return bar.open, bar.date, "stop_loss", held
+            elif bar.low <= stop:
+                if is_sellable(j):
+                    return stop, bar.date, "stop_loss", held
+        if target and target > 0:
+            if bar.open >= target:  # 跳空冲高
+                return bar.open, bar.date, "target", held
+            if bar.high >= target:
+                return target, bar.date, "target", held
+        if held >= max_hold:
+            if is_sellable(j):
+                return bar.close, bar.date, "expire", held
+    last = bars[-1]
+    return last.close, last.date, "eod", len(bars) - 1 - entry_idx
 
 
 def fixed_cash_sizer(cash_per_trade: float, lot: int = 100) -> PositionSizer:
@@ -173,37 +215,15 @@ class Backtester:
         target = signal.target_price
         max_hold = max(1, int(signal.holding_days or 10))
 
-        exit_price = exit_date = exit_reason = None
-        held = 0
-        # T+1 起逐日检查(入场日当天不可卖)
-        for j in range(entry_idx + 1, len(bars)):
-            held = j - entry_idx
-            bar = bars[j]
-            if stop and stop > 0:
-                if bar.open <= stop:  # 跳空跌破
-                    if self._sellable(bars, j, signal):
-                        exit_price, exit_date, exit_reason = bar.open, bar.date, "stop_loss"
-                        break
-                elif bar.low <= stop:
-                    if self._sellable(bars, j, signal):
-                        exit_price, exit_date, exit_reason = stop, bar.date, "stop_loss"
-                        break
-            if target and target > 0:
-                if bar.open >= target:  # 跳空冲高
-                    exit_price, exit_date, exit_reason = bar.open, bar.date, "target"
-                    break
-                if bar.high >= target:
-                    exit_price, exit_date, exit_reason = target, bar.date, "target"
-                    break
-            if held >= max_hold:
-                if self._sellable(bars, j, signal):
-                    exit_price, exit_date, exit_reason = bar.close, bar.date, "expire"
-                    break
-
-        if exit_price is None:
-            last = bars[-1]
-            exit_price, exit_date, exit_reason = last.close, last.date, "eod"
-            held = len(bars) - 1 - entry_idx
+        # B2.1: 出场撮合抽到 simulate_exit(单笔/组合引擎共用), 行为与原实现一致
+        exit_price, exit_date, exit_reason, held = simulate_exit(
+            bars,
+            entry_idx,
+            stop=stop,
+            target=target,
+            max_hold=max_hold,
+            sellable=lambda j: self._sellable(bars, j, signal),
+        )
 
         rt = self.cost.round_trip_pnl(entry_price, exit_price, qty)
         return BTTrade(
