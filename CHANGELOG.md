@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-风控硬化: 组合级回撤熔断/强制上限 + 模拟盘T+1 + 预警阈值可配置(W3/B3.1-B3.4, KI-038)
+- **背景**: KI-038 —— 最大回撤只测量不动作; 单票 0.40 集中度阈值仅诊断不拦截; 无总敞口上限; 模拟盘无 T+1; 盘中预警阈值硬编码。
+- **做法**: ① 新增 `src/core/risk_limits.py`: 纯函数闸门 `check_entry`(no_equity/drawdown_halt/max_positions/max_exposure/max_single) + 环境变量阈值 `SIDA_RISK_HALT_DRAWDOWN`(默认 0.20)/`MAX_SINGLE`(0.20)/`MAX_EXPOSURE`(0.90)/`MAX_POSITIONS`(20); ② `paper_trading_engine._check_entries` 接入闸门: 回撤/只数/零净值 → **熔断暂停本轮开仓**并推送站内通知(`_notify_risk_block`); 单票与总敞口按**账户净值**逐笔强制校验(同一轮内敞口随建仓累加); ③ `_check_exits` 加 **T+1**: 当日(CST)买入当日不可卖(含止损), 与回测内核 `engine.py:126-127` 口径一致; ④ `intraday_monitor` 止损/止盈预警阈值改环境变量(`SIDA_ALERT_STOP_LOSS_PCT`/`SIDA_ALERT_TAKE_PROFIT_PCT`), 显式传参优先。
+- **验证**: `pytest -q tests/test_risk_limits.py tests/test_paper_trading_*.py tests/test_w35_settlement.py` → **53 passed**(新增 6 用例: 正常放行/回撤熔断/单票与总敞口/只数与零净值/风控阈值环境变量/预警阈值可配置)。
+- [branch fix/w3-风控硬化-20260909, `git show HEAD`]
+
 ### feat-PIT股票池快照: 消除幸存者偏差 + ST未知保守5%(W0.6, KI-036)
 - **背景**: KI-036 —— 全仓无 universe 快照/退市表/ST 字段, 回测用"今天的名单"回看历史, 已退市/已戴帽标的被系统性剔除, 收益与胜率偏高且无法靠调参弥补。
 - **做法**: ① 新表 `stock_universe_snapshots`(迁移 **v149**, 唯一键 `as_of_date+symbol+market`, 字段 is_st/is_delisted/list_date/delist_date/source); ② 新模块 `src/core/universe.py`: `upsert_universe`(幂等) / `universe_as_of`(按日取池, **无快照返回空列表不静默用今天名单**) / `filter_symbols`(无快照回退并告警) / `backfill_from_entry_candidates`(库内唯一 PIT 来源) / `backfill_from_stock_table`; ③ `decision_backtest.backtest_resonance(..., universe_as_of=日期)` 按该日池过滤标的; ④ `limit_rules.limit_ratio/is_st=None` **保守取 5%**(显式 False 才 10%) —— fail-safe 优先; ⑤ 回填脚本 `scripts/backfill_universe.py`。
