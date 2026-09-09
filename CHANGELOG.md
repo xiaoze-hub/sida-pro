@@ -7,6 +7,16 @@
 
 ## 2026-09-09
 
+### update-生产PG口令轮换+panwatch容器限额重建(KI-004关闭, 冒烟9/9, 备份重验通过)
+- **维护窗口**: 延期 ops 两项合并单窗口执行 —— 0.4③ 生产 PG 口令轮换(方案 §0.4)+ KI-004 生产容器资源限额(方案 §0.9 顺序: 0.9 演练先过才许 0.4 轮换)。老板指派 AI 执行, 口令经聊天交付, 不落任何文件/日志/commit(弱口令已提示, 建议后续自助重轮换)。
+- **安全网先行(0.9)**: 全量 `pg_dump -Fc`(WSL `/root/sida_backups/pg_full_pre_rotation_20260909.sql.gz`, 577MB, gzip -t 过, 242 CREATE TABLE 证实全量) → 演练库 restore 对账(klines 74933=74933 / users 4=4 / audit_logs 7793 vs 7811 为活库追加漂移, 接受) → 安全网通过后才动凭证。
+- **口令轮换**: `ALTER ROLE sida PASSWORD` 经 stdin 管道执行(psql argv 不落口令); TCP 新口令验证通过; backup_pg.sh Mode A 走 docker exec socket 信任免密, 轮换后实测备份成功(`/root/sida_backups/sida_20260909_174941.dump.gz` 551M)—— 备份链路不受轮换影响(方案 :908 轮换后立即重验备份, 达成)。
+- **容器限额重建(KI-004 关闭, 移入本条)**: 新姿势 docker commit 快照镜像(`panwatch:v0.5.22-pre-rotation-20260909`, 2.46GB, v0.5.22 覆盖层已烘焙) → rm 旧容器 → 快照+新 env 重建, 停机 ~35s。四限实测生效 mem=1500m / memswap=1500m / reservation=512m / cpus=1.5。**坑: `docker run --memory-swap` 未生效**(inspect MemorySwap=-1), `docker update --memory-swap` 补刀生效 —— 重建 runbook 必须事后 verify 四限而非信 flag。快照重建优于覆盖层重放: 无 v0.5.14 基座引导窗、无删文件步骤; 回滚=旧 env 文件+快照重跑。
+- **验证**: /api/health version=v0.5.22, database=ok(新口令端到端证明)/redis ok/scheduler ok/forecast_engine down(预期基线); 冒烟门禁 **9/9**(5.9s)。首跑 8/9 系 dark-flow 冷缓存误报(容器重建清空 dark_flow_verdict 磁盘缓存, 冷态重算 3-67s 撞冒烟 1s 客户端超时; 预热 3 连后命中缓存回落亚秒, 复跑 9/9, 根因闭环) —— 登记 KI-029, 重建 runbook 补"预热 dark-flow 再冒烟"。
+- **顺手发现**: 容器日志 InsecureKeyLengthWarning, JWT_SECRET 24 字节 < RFC 7518 HS256 建议 32 字节 → 登记 KI-030(P3, 轮换会使全量会话失效需窗口)。
+- **凭证卫生与收尾**: 含新旧口令的 env 临时文件/补丁脚本已删, 演练容器已 rm; 快照镜像与旧 env 备份留至老板签核 0.4③ 后清理。PG 容器自身 env 的 POSTGRES_PASSWORD 仍持旧值(仅首次初始化用, 不参与运行时认证), 清理需重建 pg 容器另择窗口。0.4③ 完成待老板人工签核(方案 :618)。
+- [branch main, `git show HEAD`]
+
 ### update-v0.5.22生产部署(docker cp覆盖层, 冒烟9/9, 零迁移零代码变更)
 - **生产部署**: tag v0.5.22(53ef4a4 merge) 经 docker cp 覆盖层部署到 panwatch 容器(既定路径)。步骤: 备份现行代码(WSL `/tmp/app_backup_pre_v0522_20260909.tar.gz`, 14.07MB/1123 项, 排除 data/static-data/downloads/node_modules/__pycache__) → `git archive v0.5.22`(13.3MB) → docker cp 至容器 /tmp → `/app` 解包 → restart → ~35s healthy → 冒烟门禁 `scripts/post_deploy_smoke.sh` **9/9 通过**(13.8s), /api/health 报 version=v0.5.22, database/redis/scheduler ok, forecast_engine down(= W3.6 预期基线, 生产 8010 未部署)。
 - **覆盖层解包三坑(新记档, runbook 固化 `docker exec -u root`)**: ①容器 exec 默认用户为 app(uid 10001), 普通解包 `tar xzf` 对已存在文件整包报 "Cannot open: File exists"(busybox tar 目标存在即 O_EXCL 拒绝), /app 未被改动; ②改 `--overwrite` 后仅 /app 顶层 3 个 app 属主文件(VERSION/README.md/docker-compose.yml)写成功, 其余 ~1006 个 root 属主文件报 "Permission denied" —— --overwrite 原地打开已存在文件写入, 需文件写权限, app 用户对 root 代码文件无权; ③正确姿势 `docker exec -u root panwatch sh -c "cd /app && tar xzf /tmp/vXX.tar.gz --overwrite"`: 重跑 TAR_EXIT=0/0 错误行, 解包文件落 root 属主(app 只读运行不受影响), KI-028/MemorySwap 抽查命中, /app/data 运行数据未触碰。两段失败期间未重启容器, 全程运行 v0.5.21, 无带病运行窗口。

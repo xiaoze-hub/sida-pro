@@ -21,7 +21,6 @@
 | KI-001 | P1 | react-router-dom 开放重定向→XSS(唯一运行时可触达) | 2026-09-09 | TianXiang |
 | KI-002 | P2 | rollup 任意文件写/路径穿越(仅构建链) | 2026-09-09 | TianXiang |
 | KI-003 | P2 | vite dev server fs.deny 绕过(跨大版本升级) | 2026-09-09 | TianXiang |
-| KI-004 | P1 | 生产 panwatch 容器无内存/CPU 限制(compose 限额从未生效) | 2026-09-09 | TianXiang |
 | KI-005 | P2 | forecast 4g 限额沿用既定值, 未按实测推理峰值校准 | 2026-09-09 | TianXiang |
 | KI-006 | P2 | 构建/测试链传递依赖已知漏洞 18 条(不进产物) | 2026-09-09 | TianXiang |
 | KI-007 | P2 | forecast_lib 交易日按 weekday 计(法定节假日偏晚) | 2026-09-09 | TianXiang |
@@ -46,16 +45,10 @@
 | KI-026 | P2 | KlineChart/InteractiveKline 大重构 + orval 全量 codegen | 2026-09-07 | TianXiang |
 | KI-027 | P3 | 本地环境损坏测试文件 2 个(不进 CI, 本地基线 2 failed) | 2026-09-08 | TianXiang |
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
+| KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
+| KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
 
 ## 详情
-
-### KI-004 生产 panwatch 容器无内存/CPU 限制 (P1)
-
-- 发现: 2026-09-09(W4.2/E7 排查)
-- 现象: 生产 panwatch 容器 `docker inspect` Memory=0/MemorySwap=0/NanoCpus=0 —— 非 compose 管理的历史 docker run 部署, docker-compose.yml 里 P1-14 时代加的 1500m 限额从未作用于生产。
-- 影响: 一次内存失控(LLM 响应堆积/解析异常/模型加载)可拖死宿主机, 连带同机 postgres/redis/8000 全部受累。
-- 涉及文件: docker-compose.yml(限额已收口但未作用于生产容器)、deploy/deploy_panwatch.sh(重建时可克隆 mem/swap/cpus)。
-- 建议修复: 择维护窗口按 compose 同参数 docker run 重建容器(生产可见变更, 待老板确认后执行, 已列入延期 ops 清单)。
 
 ### KI-005 forecast 4g 限额未按实测校准 (P2)
 
@@ -233,6 +226,22 @@
 - 涉及文件: src/core/trading_calendar.py(_HOLIDAYS)。
 - 建议修复: 2027-12-31 前依官方放假安排补 2028 表; 与 KI-007 修复同一维护窗口执行。
 
+### KI-029 dark-flow 冷缓存撞冒烟 1s 超时 (P3)
+
+- 发现: 2026-09-09(维护窗口容器重建后首跑冒烟 8/9)
+- 现象: 容器重建清空 dark_flow_verdict 磁盘缓存, 冷态首请求需重算(1.5 CPU 上限下实测 6.8/3.2/4.9s, 重建后首批曾 67/21s), 冒烟客户端 1s 读超时判 FAIL —— 端点本身 200 且 main_net 正确, 属门禁误报非功能故障; 预热 3 连后命中缓存回落亚秒, 复跑 9/9。
+- 影响: 仅容器重建/清缓存后的首个冒烟窗可能 8/9; 线上用户冷态同样遇慢响应(浏览器无超时, 仅慢不失败)。
+- 涉及文件: scripts/smoke_test.py(dark-flow 检查 1s 超时)、scripts/post_deploy_smoke.sh、src/web/api/darkflow.py(磁盘缓存)。
+- 建议修复: post_deploy_smoke.sh 在重建场景加 dark-flow 预热步(带 symbol 请求 1-3 次再跑门禁), 或 dark-flow 检查单独放宽超时; 重建 runbook 已补"预热后再冒烟"。
+
+### KI-030 JWT_SECRET 24 字节低于 HS256 建议 32 字节 (P3)
+
+- 发现: 2026-09-09(维护窗口容器日志 InsecureKeyLengthWarning)
+- 现象: 生产 JWT_SECRET 24 字节, python-jose 对 HS256(SHA256)建议密钥 ≥32 字节(RFC 7518 §3.2)。
+- 影响: 非已知可利用面(24 字节 HS256 仍非弱密钥, 低于规范建议与告警基线); 每次签发刷一条告警日志。
+- 涉及文件: 生产 env(JWT_SECRET)、src/web/api/auth.py。
+- 建议修复: 随维护窗口换 ≥32 字节随机值 —— 注意会使全部现存会话失效(用户重新登录), 与口令类轮换同窗口执行成本最低。
+
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
 复现命令:
@@ -298,3 +307,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 `grep -c "未做\|待办\|已知限制" CHANGELOG.md` = **13 行 → 13 条 KI**: L147→KI-012, L438→KI-015, L468→KI-017, L495→KI-013, L510→KI-018, L519→KI-019, L524→KI-020, L530→KI-021, L543→KI-022+KI-024(一行两项), L552→KI-026, L560→KI-025+KI-023("Hub 抽独立进程"与 L543 重复计一次), L569→0 新增(Alembic 归决策留痕; audit 独立 Session 已于 08-21 修复; orval 并入 KI-026), L1275→0 新增(设计取舍归决策留痕)。
 
 扩词 grep(加 `暂不|明确不做|遗留`, 29 行)与其它来源额外产出 15 条: KI-004(L15)、KI-005(L13 W4.2 做法行)、KI-006(L159 经 W2.5 条目)、KI-007(L148 豁免清单)、KI-008+KI-010(L249)、KI-011(L209)、KI-014(L29)、KI-016(L51)、KI-001/002/003(W2.5 既有表收编)、KI-027(历次发版"已知本地环境损坏"汇总)、KI-028(L139 部署注意)、KI-009(方案 §4.3 点名)。其余命中为历史叙事用词("历史遗留"描述)或已修复项(GS 配色 L1338 已于 v0.4.71 修复), 不迁入。合计 **28 条**(≥20 达标)。
+
+后续台账变化: 2026-09-09 维护窗口 KI-004 修复移入 CHANGELOG(生产容器限额重建+PG 口令轮换条目); 同日新增 KI-029/030, 台账现 29 条在册(P1×3)。
