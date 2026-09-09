@@ -7,6 +7,15 @@
 
 ## 2026-09-09
 
+### update-v0.5.21生产部署(docker cp覆盖层, 冒烟9/9, 迁移143-148首执行)
+- **生产部署**: tag v0.5.21(8ecfeb7 merge) 经 docker cp 覆盖层部署到 panwatch 容器(同 v0.5.19/20 既定路径)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0521_20260909_1438.tar.gz`, 12.9MB, 排除 data/static-data/downloads/node_modules/__pycache__) → `git archive v0.5.21` → 容器 `/app` 解包 → **显式 rm 3 个本波删除文件**(src/core/chat_tools.py、tests/test_chat_tools_a4.py、tests/test_chat_tools_p1p2.py —— 覆盖层解包不会删文件) → restart → 50s healthy → 冒烟 **9/9 通过**(7.4s), /api/health 报 version=v0.5.21, PG/Redis ok。
+- **迁移对账(与发版条目预判完全一致)**: v108/v121/v124 因 checksum 变更各幂等重跑一次; **v143-148(收编历史 A 层)首次在生产库执行**, 全部 Applying 无 ERROR, 耗时 ~600ms; 多用户旧数据归 owner 5 表处理正常。调度器重启后 5 个 scheduler 正常。
+- **/api/health 基线 diff(已解释非静默)**: 唯一新键 `components.forecast_engine = {status: down, url: http://172.19.0.1:8010, Connection refused}` —— **W3.6 验收预期项**(生产 8010 forecast 服务未部署, W3.6 后健康检查如实暴露而非隐藏); 其余组件 database/redis/biz_cache/scheduler/rate_limit 全 ok(biz_cache l1_entries 15→0 为重启冷启动)。
+- **发版流程两坑(已记 tdai)**: ① `git archive` 前**禁止把失败命令与后续命令用 `&&` 串联在管道后** —— 首次 merge 失败被 `| tail` 吞掉退出码, `&&` 链继续把 tag v0.5.21 打在旧 commit 上并推送(已重打 8ecfeb7 并同步远端); ② 容器内备份 tar 必须用**绝对路径 `/app`**(WORKDIR=/app, 相对路径 `app` 解析为 /app/app 报 Cannot stat, 首次备份得到 45B 空包)。
+- **迁移前备份的降级记录(非阻塞)**: src.db.backup 创建了 `/app/data/panwatch.db.bak.20260909_143911`(对遗留陈旧 sqlite 文件的 copy2); pg_dump 不在应用容器 PATH → **PG schema 快照跳过**。生产真库(PG)安全: v143-148 均为幂等 DDL, 且有 v0.5.20 时代全库备份兜底。此点提示 W4.2 资源限制排查时顺带确认应用容器是否需要装 pg_dump。
+- 本波 0 个新增 schema 迁移(143-148 为已上线历史 DDL 的收编), 前端 W3.7 改动仅进仓库源码, 容器 static/ 构建产物未变(与发版条目预判一致)。
+- [tag v0.5.21]
+
 ### chore-17文件行尾renormalize(CRLF→LF, 清除上游欠账)
 - 背景: 0.0 勘查既定欠账 —— 19 个 .py 文件的 index blob 本身是 CRLF, 而 .gitattributes(2026-09-07)规定 `*.py text eol=lf` → 这批文件在任何新检出里永远显示"已修改"(工作副本被写为 LF, 与 index 的 CRLF blob 比对不等), 且阻塞 merge/checkout(本次 v0.5.21 合并被 test_chat_tools_a4/two、test_orderbook_a1 三文件挡下)。
 - 做法: 对 17 个幻影脏文件执行 renormalize(仅行尾 CRLF→LF, `git diff --ignore-cr-at-eol` 为空, 零内容变化, 3767↔3767 对称); 另 2 文件已在历史波次中自然归一。合并后 main 侧 blob 全 LF, 永恒脏状态与 merge 阻塞一并消除。
