@@ -20,8 +20,12 @@ def _round_cent(x: float) -> float:
     return int(x * 100 + 0.5) / 100
 
 
-def limit_ratio(symbol6: str, is_st: bool | None = False) -> float | None:
-    """按代码段返回涨跌停幅度(0.10/0.20/0.30/0.05)。无法识别 → None。"""
+def limit_ratio(symbol6: str, is_st: bool | None = None) -> float | None:
+    """按代码段返回涨跌停幅度(0.10/0.20/0.30/0.05)。无法识别 → None。
+
+    B0.6(2026-09-09): ST 未知(is_st=None)时**保守按 5%** 处理 —— fail-safe 优先,
+    宁可低估涨停空间也不把 ST 股当 10% 主板来算。显式传 False 才用 10%。
+    """
     code = (symbol6 or "").strip()
     if len(code) != 6 or not code.isdigit():
         return None
@@ -30,11 +34,11 @@ def limit_ratio(symbol6: str, is_st: bool | None = False) -> float | None:
     if code.startswith(("30", "688", "689")):
         return 0.20
     if code.startswith(("60", "00")):
-        return 0.05 if is_st else 0.10
+        return 0.10 if is_st is False else 0.05
     return None
 
 
-def limit_up_price(symbol6: str, prev_close: float | None, is_st: bool | None = False) -> float | None:
+def limit_up_price(symbol6: str, prev_close: float | None, is_st: bool | None = None) -> float | None:
     """昨收 → 涨停价。prev_close 缺失/非正(新股首日/数据缺失) → None(显式无数据)。"""
     ratio = limit_ratio(symbol6, is_st)
     if ratio is None or not prev_close or prev_close <= 0:
@@ -42,7 +46,7 @@ def limit_up_price(symbol6: str, prev_close: float | None, is_st: bool | None = 
     return _round_cent(prev_close * (1 + ratio))
 
 
-def limit_down_price(symbol6: str, prev_close: float | None, is_st: bool | None = False) -> float | None:
+def limit_down_price(symbol6: str, prev_close: float | None, is_st: bool | None = None) -> float | None:
     ratio = limit_ratio(symbol6, is_st)
     if ratio is None or not prev_close or prev_close <= 0:
         return None

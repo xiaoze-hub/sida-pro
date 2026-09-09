@@ -109,10 +109,13 @@ def test_pairwise_rates_skips_reset_pairs():
 # ---------------------------------------------------------------------------
 
 def test_limit_price_main_board():
-    assert limit_ratio("600519") == 0.10
-    assert limit_ratio("000001") == 0.10
-    assert limit_up_price("600519", 10.00) == 11.00
-    assert limit_up_price("000001", 3.07) == 3.38  # 3.377 四舍五入到分
+    assert limit_ratio("600519", False) == 0.10
+    assert limit_ratio("000001", False) == 0.10
+    assert limit_up_price("600519", 10.00, False) == 11.00
+    assert limit_up_price("000001", 3.07, False) == 3.38  # 3.377 四舍五入到分
+    # B0.6: ST 未知(None) → 保守 5%
+    assert limit_ratio("600519") == 0.05
+    assert limit_up_price("600519", 10.00) == 10.50
 
 
 def test_limit_price_gem_star():
@@ -130,13 +133,13 @@ def test_limit_price_bj():
 def test_limit_price_st_and_down():
     assert limit_ratio("600519", is_st=True) == 0.05
     assert limit_up_price("600519", 10.00, is_st=True) == 10.50
-    assert limit_down_price("600519", 10.00) == 9.00
+    assert limit_down_price("600519", 10.00, False) == 9.00
 
 
 def test_limit_price_edge_cases():
     # 银行家舍入陷阱: round(2.675,2)=2.67, 交易所口径应 2.68
-    assert limit_up_price("600519", 2.43) == 2.67  # 2.673 → 2.67
-    assert limit_up_price("600519", 2.435) is not None
+    assert limit_up_price("600519", 2.43, False) == 2.67  # 2.673 → 2.67
+    assert limit_up_price("600519", 2.435, False) is not None
     # 新股首日/无昨收 → None(显式无数据)
     assert limit_up_price("600519", None) is None
     assert limit_up_price("600519", 0) is None

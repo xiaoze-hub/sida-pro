@@ -1032,6 +1032,31 @@ class StrategyFactorSnapshot(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class StockUniverseSnapshot(Base):
+    """PIT 股票池日快照(B0.6/KI-036): 回测按 as_of_date 取池, 消除幸存者偏差。
+
+    每个 (as_of_date, symbol, market) 一行, 记录当日是否在池 / 是否 ST / 是否已退市。
+    """
+
+    __tablename__ = "stock_universe_snapshots"
+    __table_args__ = (
+        UniqueConstraint("as_of_date", "symbol", "market", name="uq_universe_date_symbol"),
+        Index("ix_universe_asof_market", "as_of_date", "market"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of_date = Column(String, nullable=False)  # YYYY-MM-DD
+    symbol = Column(String, nullable=False)
+    market = Column(String, nullable=False, default="CN")
+    stock_name = Column(String, default="")
+    is_st = Column(Boolean, default=False)
+    is_delisted = Column(Boolean, default=False)
+    list_date = Column(String, default="")     # YYYY-MM-DD, 缺失为空
+    delist_date = Column(String, default="")   # YYYY-MM-DD, 未退市为空
+    source = Column(String, default="backfill")  # entry_candidates/stock/backfill
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class PortfolioRiskSnapshot(Base):
     """按快照/市场聚合的组合风险画像。"""
 

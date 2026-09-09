@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-PIT股票池快照: 消除幸存者偏差 + ST未知保守5%(W0.6, KI-036)
+- **背景**: KI-036 —— 全仓无 universe 快照/退市表/ST 字段, 回测用"今天的名单"回看历史, 已退市/已戴帽标的被系统性剔除, 收益与胜率偏高且无法靠调参弥补。
+- **做法**: ① 新表 `stock_universe_snapshots`(迁移 **v149**, 唯一键 `as_of_date+symbol+market`, 字段 is_st/is_delisted/list_date/delist_date/source); ② 新模块 `src/core/universe.py`: `upsert_universe`(幂等) / `universe_as_of`(按日取池, **无快照返回空列表不静默用今天名单**) / `filter_symbols`(无快照回退并告警) / `backfill_from_entry_candidates`(库内唯一 PIT 来源) / `backfill_from_stock_table`; ③ `decision_backtest.backtest_resonance(..., universe_as_of=日期)` 按该日池过滤标的; ④ `limit_rules.limit_ratio/is_st=None` **保守取 5%**(显式 False 才 10%) —— fail-safe 优先; ⑤ 回填脚本 `scripts/backfill_universe.py`。
+- **验证**: `pytest -q tests/test_pit_universe.py tests/test_seal_quality.py tests/test_backtest*.py tests/test_outcome_horizon.py tests/test_decision_enhance.py` → **61 passed**; 新增 4 用例: 退市/ST 过滤、幂等、无快照回退告警、ST 未知保守 5%。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
 ### feat-因子快照前视护栏: 新闻/权重按快照日as-of + 历史重跑拒绝 + 输入指纹(W0.5, KI-035)
 - **背景**: KI-035 —— 因子快照唯一写入点只复制 payload 不重算, 但整条链路可被 `POST /api/recommendations/strategy-signals/refresh?snapshot_date=历史日` 触发重算: `_load_news_metrics` 硬用 `utc_now()-72h`、权重读当前值 → 会用今天的新闻/当前权重覆盖历史因子行(前视污染, 且同日旧行被物理删除)。
 - **做法**: ① `_load_news_metrics(..., as_of=None)`: 新闻窗口 `[as_of-72h, as_of]` 且衰减以 as_of 计(**补上了原先缺失的上界 —— 由新测试抓出**); ② `get_factor_weights(market, as_of=...)` 按 `FactorWeightHistory` 取 as-of 前最后一次生效权重, `get_effective_weight_map(..., as_of=...)` 按 `StrategyWeightHistory` 同理; ③ `refresh_strategy_signals` 由 snapshot 推导 as_of(当日 23:59:59, 不超过 utc_now)并透传给新闻与两处权重; ④ refresh API 对历史 `snapshot_date` 直接 **400**(需 `SIDA_ALLOW_FACTOR_BACKFILL=1` 显式放行); ⑤ 因子行 `factor_payload` 新增 `input_hash`(sha256 前 16)/`news_window_hours`/`weight_version`/`strategy_weight`。
