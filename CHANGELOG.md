@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.23(优化改进创新第0波·回测可信度合入main)
+- 本次发版内容: W0.1 回测净值改逐日 mark-to-market + 指标契约(engine/metrics) / W0.2 涨跌停不可成交 + 成交量参与率上限 / W0.3 后验窗口交易日化 + 去静默兜底(含缺口报告口径统一) / W0.4 因子 IC 横截面化 + 70/30 样本外门禁 / W0.5 因子快照前视护栏(新闻/权重 as-of + 历史重跑 400 + input_hash) / W0.6 PIT 股票池快照(迁移 **v149** + 回填脚本 + ST 未知保守 5%)。
+- 部署注意: ①**首个含 schema 迁移的发版**(v149 `stock_universe_snapshots`, 幂等建表; 已在本机临时 PG 容器预演全量迁移链); ②**口径变更**: 历史回测的年化/夏普/MDD 与"N 日收益"标签**不可比**(修正后年化/夏普下降、目标日后移); ③`POST /api/recommendations/strategy-signals/refresh` 对历史 `snapshot_date` 返回 **400**(需 `SIDA_ALLOW_FACTOR_BACKFILL=1` 显式放行)。
+- 验收: 全量离线套件 `PYTHONUTF8=1 python -m pytest -q -m "not network"` → **1917 passed / 2 failed(KI-027 本机环境损坏) / 5 skipped**(基线 1891 passed/2 failed); 生产冒烟 `scripts/post_deploy_smoke.sh` 9/9; /api/health diff 见部署记录。
+- 工程注记: 本机(中文 Windows)跑套件须 `PYTHONUTF8=1`, 否则 13 个读仓库文件的安全测试会因 GBK 解码失败误报。
+- [tag v0.5.23]
+
 ### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
 - **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
 - **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
