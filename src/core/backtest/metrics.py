@@ -88,6 +88,43 @@ def sharpe(
     return mean / sd * math.sqrt(periods_per_year)
 
 
+def sortino(
+    returns: list[float],
+    risk_free: float = 0.0,
+    periods_per_year: int = TRADING_DAYS_PER_YEAR,
+) -> float:
+    """年化索提诺比率: 只惩罚下行波动(B2.5)。"""
+    if len(returns) < 2:
+        return 0.0
+    rf_per_period = risk_free / periods_per_year
+    excess = [r - rf_per_period for r in returns]
+    downside = [min(0.0, e) ** 2 for e in excess]
+    dd = (sum(downside) / len(downside)) ** 0.5
+    if dd == 0:
+        return 0.0
+    return statistics.fmean(excess) / dd * math.sqrt(periods_per_year)
+
+
+def kalmar(
+    equity_curve: list[float], periods_per_year: int = TRADING_DAYS_PER_YEAR
+) -> float:
+    """卡玛比率 = 年化收益 / 最大回撤(B2.5)。"""
+    mdd = max_drawdown(equity_curve)
+    if mdd <= 0:
+        return 0.0
+    return annualized_return(equity_curve, periods_per_year) / mdd
+
+
+def turnover(invested_amounts: list[float], avg_equity: float) -> float:
+    """换手率 = Σ|成交金额| / 平均净值(B2.5)。
+
+    invested_amounts: 每笔建仓投入金额(含成本); avg_equity: 期初与期末净值均值。
+    """
+    if not invested_amounts or avg_equity <= 0:
+        return 0.0
+    return sum(abs(float(x)) for x in invested_amounts) / float(avg_equity)
+
+
 def win_rate(trade_pnls: list[float]) -> float:
     if not trade_pnls:
         return 0.0
@@ -121,6 +158,8 @@ def summarize(equity_curve: list[float], trade_pnls: list[float]) -> dict:
         "annualized_return": round(annualized_return(equity_curve), 6),
         "max_drawdown": round(max_drawdown(equity_curve), 6),
         "sharpe": round(sharpe(rets), 4),
+        "sortino": round(sortino(rets), 4),
+        "kalmar": round(kalmar(equity_curve), 4),
         "trades": len(trade_pnls),
         "win_rate": round(win_rate(trade_pnls), 4),
         "profit_factor": round(profit_factor(trade_pnls), 4),

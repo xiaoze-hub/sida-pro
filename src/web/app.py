@@ -297,6 +297,10 @@ async def demo_isolation_middleware(request: Request, call_next):
 
 # 认证路由（无需登录）
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+# 回测只读端点(B2.4): 需登录, 入参有界, 无写操作
+from src.web.api import backtest as backtest_api
+
+app.include_router(backtest_api.router, prefix="/api/backtest", tags=["backtest"])
 # 行情 WebSocket(2026-08-12): 独立 router, 无路由级 auth(WS 握手与 HTTPBearer 冲突)
 from src.web.api.ws_quotes import router as ws_quotes_router
 
