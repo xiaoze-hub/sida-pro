@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### refactor-前端大文件拆分(部分): Settings.tsx 组件外移(W5.3 部分)
+- **背景**: W5.3 目标"单文件 ≤ 800 行"; `Settings.tsx` 2764 行内含可独立组件。
+- **做法**: 逐字外移 `CapBadges`(+ `MODEL_CAP_META`/`MODEL_CAP_ORDER` 常量) 与 `LlmUsageSection` 到 `src/components/settings/`; `Settings.tsx` **2764→2562 行**。
+- **验证**: `pnpm exec tsc -b` 通过; `pnpm test -- --run` **27 passed**; `pnpm build` 通过。
+- **如实说明(未完成)**: **W5.3 未达成** —— `Stocks.tsx`(3443)/`stock-insight-modal.tsx`(2820) 的 ≤800 行目标需按组件边界勘线逐页拆分 + 浏览器回归, 属独立专项; 本次仅交付 Settings 的干净外移。
+- [branch fix/w5c-大文件拆分-20260909, `git show HEAD`]
+
 ### update-v0.5.25生产部署(代码+前端static, 冒烟9/9, 零迁移)
 - **生产部署**: tag v0.5.25 部署到 panwatch 容器(备份 `/root/app_backup_pre_v0525_20260909.tar.gz` → `git archive` → `tar xf --overwrite` → `frontend/dist` 覆盖 `/app/static` → restart → 40s healthy)。`/app/VERSION` 核对 **v0.5.25**; 冒烟 **9/9**(10.5s); 迁移 150-153 保持 success(本版零新增迁移)。
 - [tag v0.5.25]
