@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
+import { computeDrawdownSeries } from '@/lib/drawdown'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
 import {
   paperTradingApi,
@@ -43,6 +44,50 @@ function PnlPctText({ value }: { value: unknown }) {
   const prefix = n !== null && n > 0 ? '+' : ''
   const txt = n === null ? '--' : `${n.toFixed(2)}%`
   return <span className={color}>{prefix}{txt}</span>
+}
+
+function DrawdownChart({ data }: { data: EquityCurvePoint[] }) {
+  const series = computeDrawdownSeries(data)
+  if (series.length < 2) {
+    return <div className="h-40 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制回撤</div>
+  }
+
+  const width = 600
+  const height = 140
+  const pad = { top: 14, right: 20, bottom: 26, left: 60 }
+  const w = width - pad.left - pad.right
+  const h = height - pad.top - pad.bottom
+
+  const worst = Math.min(...series.map(d => d.dd), -1) // 至少 -1% 留出轴空间
+  const points = series.map((d, i) => ({
+    x: pad.left + (i / (series.length - 1)) * w,
+    y: pad.top + (d.dd / worst) * h, // dd=0 → 顶部; worst → 底部
+    ...d,
+  }))
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+  const areaD = pathD + ` L${points[points.length - 1].x},${pad.top} L${points[0].x},${pad.top} Z`
+  const sc = readStockColors()
+  const xIndices = [0, Math.floor(series.length / 2), series.length - 1]
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+      {[{ v: 0, y: pad.top }, { v: worst, y: pad.top + h }].map((t, i) => (
+        <g key={i}>
+          <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
+          <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
+            {`${t.v.toFixed(1)}%`}
+          </text>
+        </g>
+      ))}
+      <path d={areaD} fill={withAlpha(sc.down, 0.12)} />
+      <path d={pathD} fill="none" stroke={sc.down} strokeWidth={2} />
+      {xIndices.map(i => (
+        <text key={i} x={points[i].x} y={height - 6} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={10}>
+          {series[i].date.slice(5)}
+        </text>
+      ))}
+    </svg>
+  )
 }
 
 function EquityChart({ data }: { data: EquityCurvePoint[] }) {
@@ -462,6 +507,15 @@ export default function PaperTradingPage() {
       <div className="border-b border-border/40 pb-4">
         <h2 className="text-sm font-semibold mb-3">收益曲线</h2>
         <EquityChart data={equityCurve} />
+      </div>
+
+      {/* Drawdown Curve (B5.1) */}
+      <div className="border-b border-border/40 pb-4">
+        <h2 className="text-sm font-semibold mb-3">
+          回撤曲线
+          <span className="ml-2 text-xs font-normal text-muted-foreground">从峰值回撤(%), 越深风险越大</span>
+        </h2>
+        <DrawdownChart data={equityCurve} />
       </div>
 
       {/* Strategy Performance */}

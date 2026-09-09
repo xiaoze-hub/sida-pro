@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### feat-前端可视化: 模拟盘回撤曲线(B5.1, KI-038)
+- **背景**: KI-038/P2-3 —— 回撤只有标量 `max_drawdown_pct`, 用户看不到"什么时候在亏、亏了多少"。
+- **做法**: 新增 `frontend/src/lib/drawdown.ts`(`computeDrawdownSeries` 逐日回撤 = equity/runningPeak−1, 与后端 metrics.max_drawdown 同口径; `maxDrawdownOf` 取最差) + `PaperTrading.tsx` 内 `DrawdownChart`(SVG 面积图, 复用 `readStockColors`/`withAlpha` 令牌, 0% 顶部到最差回撤), 接在收益曲线下方; 空/单点数据给出占位提示。
+- **验证**: `pnpm -C frontend test -- --run` → **20 passed**(3 文件, 含新增 `tests/lib/drawdown.test.ts` 3 用例: 峰值/回撤折算、非法值跳过、空输入); `pnpm exec tsc -b` 通过。
+- **如实说明(未做)**: **B5.2** 持仓 PnL 曲线 + 成交点叠加、**B5.3** 大文件拆分(Stocks.tsx 3443 行等)、**B5.4** 组件渲染测试(需 jsdom/@testing-library, 当前前端测试栈只有 lib 级 vitest) 本波未做。
+- [branch fix/w5-前端可视化-20260909, `git show HEAD`]
+
 ### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
 - **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
 - **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
