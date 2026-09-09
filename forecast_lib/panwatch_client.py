@@ -26,8 +26,13 @@ _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
 
 
 def get_panwatch_url() -> str:
-    """Return the PanWatch base URL configured for this process."""
-    return os.getenv("PANWATCH_URL", "http://127.0.0.1:8000").rstrip("/")
+    """Return the PanWatch base URL configured for this process.
+
+    D5(2026-09-09): 主服务地址环境变量统一为 ``SIDA_MAIN_API_URL``(旧名已废弃,
+    forecast_lib 内禁止出现旧名字样, 见 CI 依赖方向断言 tests/test_w36_dependency_direction.py);
+    旧探测兜底(网关猜测/硬编码网关 IP)已随 forecast_sentiment 一并删除。
+    """
+    return os.getenv("SIDA_MAIN_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
 def get_service_token() -> str:

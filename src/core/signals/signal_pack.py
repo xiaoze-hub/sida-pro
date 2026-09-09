@@ -319,7 +319,12 @@ class SignalPackBuilder:
                             for provider, cfg in flow_providers:
                                 try:
                                     # collector.get_capital_flow_summary 内部自选最优源
-                                    # (wudao 盘中实时 → Engine 四档兜底),不依赖 provider 名
+                                    # (东财 push2 直连/网关 → 腾讯四档 → Engine 四档兜底,
+                                    # 悟道盘中实时已移除), 不依赖 provider 名。
+                                    # 口径(B3/3.4): 返回 dict 自带 caliber/label
+                                    # (eastmoney4 按单金额归类) —— 本包仅作资金面
+                                    # 快照透传 UI/agent, 禁止据此做主力意图方向判定
+                                    # (AGENTS.md 口径红线, 主力意图走 get_main_intent 逐笔)
                                     self._flow_cache[key] = (
                                         collector.get_capital_flow_summary(sym)
                                     )

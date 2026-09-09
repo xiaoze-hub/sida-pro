@@ -79,27 +79,17 @@ def _upsert_today_snapshot(today_iso: str, ranked_groups: list[dict]) -> None:
     if not ranked_groups:
         return
     try:
+        from src.db.dialect import upsert_sql
         from src.web.database import engine
-        from src.web.database import IS_PG
-        if IS_PG:
-            stmt = (
-                """
-                INSERT INTO mainline_rank_daily (date, name, rank, score)
-                VALUES (:date, :name, :rank, :score)
-                ON CONFLICT (date, name) DO UPDATE
-                SET rank = EXCLUDED.rank, score = EXCLUDED.score
-                """
-            )
-        else:
-            # SQLite UPSERT (3.24+)
-            stmt = (
-                """
-                INSERT INTO mainline_rank_daily (date, name, rank, score)
-                VALUES (:date, :name, :rank, :score)
-                ON CONFLICT (date, name) DO UPDATE
-                SET rank = excluded.rank, score = excluded.score
-                """
-            )
+
+        # W3.1(D2): 方言分叉收编 src/db/dialect.upsert_sql
+        # (两后端均支持 ON CONFLICT ... DO UPDATE SET x = excluded.x)
+        stmt = upsert_sql(
+            "mainline_rank_daily",
+            ["date", "name", "rank", "score"],
+            ["date", "name"],
+            ["rank", "score"],
+        )
         with engine.begin() as conn:
             for g in ranked_groups:
                 name = g.get("name")

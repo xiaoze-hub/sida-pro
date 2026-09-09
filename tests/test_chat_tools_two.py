@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""第3块 两个空壳工具补实 单测:
-   get_dark_flow_precise (.tck 主笔级暗盘) / get_order_book_queue (.img 托压单)
-   + dark_split.find_tck_file / dark_flow_from_tck / orderbook_engine.to_ths_code
+"""dark_split / orderbook_engine 底层单测:
+   dark_split.find_tck_file / dark_flow_from_tck / orderbook_engine.to_ths_code
+(原空壳工具包装层测试随该包装层于 W3.3 删除一并移除)
 """
 import os
 import sys
@@ -12,7 +12,6 @@ import pytest
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.core import chat_tools as ct  # noqa: E402
 from src.core import dark_split as ds  # noqa: E402
 from src.core import orderbook_engine as obe  # noqa: E402
 
@@ -136,128 +135,4 @@ def test_dark_flow_from_tck_empty_marks_no_data():
     assert r["net"] is None and r["active_net"] is None
     assert r["note"] == "无数据"
 
-
-# ---------------------------------------------------------------------------
-# get_dark_flow_precise 工具
-# ---------------------------------------------------------------------------
-
-
-def _res(r):
-    """ToolResult 是 dataclass(无 ok 字段), 统一转 dict 便于断言。"""
-    return r.to_dict()
-
-
-def _ok(r):
-    d = _res(r)
-    return d["error"] is None and d["data"] is not None
-
-
-def test_tool_dark_flow_precise_no_file(monkeypatch):
-    monkeypatch.delenv("PANWATCH_TCK_DIR", raising=False)
-    r = ct.get_dark_flow_precise("000977", "2026-08-31", user_id="admin")
-    assert _ok(r) is False
-    assert "无 .tck" in (_res(r)["error"] or "")
-
-
-def test_tool_dark_flow_precise_ok(monkeypatch, tmp_path):
-    (tmp_path / "sz000977_20260831.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
-
-    trades, orders, cancels = _trades(), [{"a28": 0, "a32": 1, "amt": 100000.0}], [{"seq": 9}]
-    import src.core.tdx_tick_parser as ttp
-    monkeypatch.setattr(ttp, "parse_tck", lambda p: (trades, orders, cancels))
-
-    r = ct.get_dark_flow_precise("000977", "2026-08-31", user_id="admin")
-    d = _res(r)
-    assert _ok(r) is True
-    assert d["data"]["net"] == 550000.0 + 100000.0
-    assert d["data"]["cancel_count"] == 1
-    assert d["data"]["partial"] is True
-    assert d["units"]["net"] == "元"
-
-
-def test_tool_dark_flow_precise_empty_trades(monkeypatch, tmp_path):
-    (tmp_path / "sz000977.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
-    import src.core.tdx_tick_parser as ttp
-    monkeypatch.setattr(ttp, "parse_tck", lambda p: ([], [], []))
-
-    r = ct.get_dark_flow_precise("000977", user_id="admin")
-    assert _ok(r) is False
-    assert "无成交记录" in (_res(r)["error"] or "")
-
-
-def test_tool_dark_flow_precise_parse_error(monkeypatch, tmp_path):
-    (tmp_path / "sz000977.tck").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_TCK_DIR", str(tmp_path))
-    import src.core.tdx_tick_parser as ttp
-    monkeypatch.setattr(ttp, "parse_tck",
-                        lambda p: (_ for _ in ()).throw(ValueError("bad tck")))
-    r = ct.get_dark_flow_precise("000977", user_id="admin")
-    assert _ok(r) is False and "bad tck" in (_res(r)["error"] or "")
-
-
-# ---------------------------------------------------------------------------
-# get_order_book_queue 工具
-# ---------------------------------------------------------------------------
-
-
-def _img_frame(bid_vols, ask_vols, queue=None):
-    from src.core.tdx_img_parser import ImgSnapshot
-    n = len(bid_vols)
-    return ImgSnapshot(
-        t="14:30:00",
-        bid_prices=[10.00 - 0.01 * i for i in range(n)],
-        bid_vols=bid_vols,
-        ask_prices=[10.01 + 0.01 * i for i in range(len(ask_vols))],
-        ask_vols=ask_vols,
-        queue=queue,
-    )
-
-
-def test_tool_order_book_queue_from_img(monkeypatch, tmp_path):
-    (tmp_path / "sz000977_a.img").write_bytes(b"x")
-    monkeypatch.setenv("PANWATCH_IMG_DIR", str(tmp_path))
-    import src.core.tdx_img_parser as tip
-    monkeypatch.setattr(tip, "frames_from_img",
-                        lambda p: [_img_frame([90000] * 5, [10000] * 5, queue=[1000, 2000])])
-
-    r = ct.get_order_book_queue("000977", user_id="admin")
-    d = _res(r)
-    assert _ok(r) is True
-    assert d["data"]["shape"] == "托盘"
-    assert d["data"]["img_path"].endswith("sz000977_a.img")
-    assert d["units"]["queue_shares"] == "股"
-
-
-def test_tool_order_book_queue_fallback_thsdk(monkeypatch):
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
-    monkeypatch.setattr(obe, "fetch_snapshot",
-                        lambda code: obe.img_frame_to_snapshot(
-                            _img_frame([10000] * 5, [90000] * 5), ts=0.0))
-    r = ct.get_order_book_queue("000977", user_id="admin")
-    assert _ok(r) is True
-    assert _res(r)["data"]["shape"] == "压盘"
-
-
-def test_tool_order_book_queue_all_fail_marks_no_data(monkeypatch):
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
-    monkeypatch.setattr(obe, "fetch_snapshot",
-                        lambda code: (_ for _ in ()).throw(RuntimeError("thsdk 不通")))
-    r = ct.get_order_book_queue("000977", user_id="admin")
-    assert _ok(r) is False
-    assert _res(r)["note"] == "无数据"
-
-
-def test_tool_order_book_queue_passes_ths_code(monkeypatch):
-    """fetch_snapshot 必须收到 USZA/USHA 代码, 不是腾讯 sz 风格。"""
-    monkeypatch.delenv("PANWATCH_IMG_DIR", raising=False)
-    seen = {}
-
-    def fake(code):
-        seen["code"] = code
-        return obe.img_frame_to_snapshot(_img_frame([50000] * 5, [50000] * 5), ts=0.0)
-
-    monkeypatch.setattr(obe, "fetch_snapshot", fake)
-    ct.get_order_book_queue("000977", user_id="admin")
-    assert seen["code"] == "USZA000977"
+

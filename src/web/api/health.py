@@ -114,6 +114,41 @@ def record_component_status(component: str, ok: bool) -> None:
         pass
 
 
+_FORECAST_PROBE_CACHE: dict = {"ts": 0.0, "detail": {"status": "unknown"}}
+
+
+def _forecast_engine_probe() -> dict:
+    """探测 8010 预测引擎可达性(30s 缓存 + 1.5s 超时, D5/3.6)。
+
+    8010 停机时 /api/health components.forecast_engine=down 明确反映(验收项);
+    8010 是可选加速引擎, 不翻转 overall。结果喂 record_component_status。
+    """
+    import time as _t
+
+    now = _t.time()
+    if now - _FORECAST_PROBE_CACHE["ts"] < 30.0:
+        return _FORECAST_PROBE_CACHE["detail"]
+    detail: dict
+    try:
+        from src.web.api.forecast import FORECAST_ENGINE_URL as url
+    except Exception:
+        url = "unknown"
+    try:
+        import httpx as _httpx
+
+        r = _httpx.get(f"{url}/health", timeout=1.5)
+        if r.status_code == 200:
+            detail = {"status": "ok", "url": url}
+        else:
+            detail = {"status": "down", "url": url, "error": f"HTTP {r.status_code}"}
+    except Exception as e:  # noqa: BLE001
+        detail = {"status": "down", "url": url, "error": str(e)[:100]}
+    record_component_status("forecast_engine", detail["status"] == "ok")
+    _FORECAST_PROBE_CACHE["ts"] = now
+    _FORECAST_PROBE_CACHE["detail"] = detail
+    return detail
+
+
 def record_request_metrics(method: str, path: str, status: int, duration_ms: float) -> None:
     """HTTP 指标埋点(供 RequestLoggerMiddleware 调用)。
 
@@ -274,9 +309,9 @@ async def health() -> dict[str, Any]:
             record_component_status("database", True)  # P4: 喂 Prometheus 告警
         except Exception as e:
             try:
-                from src.web.database import IS_PG
+                from src.db.dialect import declared_backend
 
-                _declared = "postgresql" if IS_PG else "sqlite"
+                _declared = declared_backend()
             except Exception:
                 _declared = "unknown"
             components["database"] = {
@@ -382,6 +417,9 @@ async def health() -> dict[str, Any]:
             components["rate_limit"] = get_rate_limit_stats()
         except Exception:
             components["rate_limit"] = {"enabled": False, "error": "not loaded"}
+
+        # ─── 预测引擎(8010)可达性(D5/3.6): 停机时明确反映, 不翻转 overall ───
+        components["forecast_engine"] = _forecast_engine_probe()
 
         # ─── service info ───
         import os

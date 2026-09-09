@@ -6,7 +6,6 @@
   - orderbook_engine.img_frame_to_snapshot(.img 帧 → 同构快照)
   - orderbook_engine.order_book_queue(托压单形态识别)
   - orderbook_engine 三算法(演变/失衡/幽灵单, 合成数据)
-  - chat_tools.get_order_book_queue(.img 路径 + thsdk 回退)
 """
 import sys
 from pathlib import Path
@@ -18,7 +17,6 @@ sys.path.insert(0, str(ROOT))
 
 from src.core import orderbook_engine as obe  # noqa: E402
 from src.core import tdx_img_parser as tip  # noqa: E402
-from src.core import chat_tools as ct  # noqa: E402
 
 
 # ──────────────────────────── ImgSnapshot 派生指标 ────────────────────────────
@@ -156,32 +154,4 @@ def test_ghost_order():
     assert 0.0 <= ratio <= 1.0
     # 合成数据 s5 卖一大单 50000 手(>1000手 且 >档总50%) → 应被识别为大单
     assert any(g["hands"] >= 1000 for g in ghosts) if ghosts else True
-
-
-# ──────────────────────────── 工具链路 ────────────────────────────
-
-def test_get_order_book_queue_img(monkeypatch):
-    monkeypatch.setattr(obe, "find_img_file", lambda code, market="CN": "fake.img")
-    monkeypatch.setattr(
-        obe, "load_snapshots_from_img",
-        lambda img_path, limit=None: [
-            obe.img_frame_to_snapshot(
-                _img_snap([11.27], [9000], [11.28], [1000]), ts=0.0
-            )
-        ],
-    )
-    r = ct.get_order_book_queue("002361")
-    assert r.error is None
-    assert r.data["available"] is True
-    assert r.data["shape"] == "托盘"
-    assert r.data["img_path"] == "fake.img"
-
-
-def test_get_order_book_queue_no_source(monkeypatch):
-    monkeypatch.setattr(obe, "find_img_file", lambda code, market="CN": None)
-    # thsdk 回退也失败(不真正调用, 直接让 fetch_snapshot 抛异常)
-    monkeypatch.setattr(obe, "fetch_snapshot", lambda ths_code: (_ for _ in ()).throw(RuntimeError("no thsdk")))
-    monkeypatch.setattr(obe, "to_ths_code", lambda code: "USZA002361")
-    r = ct.get_order_book_queue("002361")
-    assert r.error is not None
-    assert r.data is None
+

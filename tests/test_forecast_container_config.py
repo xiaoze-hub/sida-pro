@@ -8,7 +8,7 @@ def test_panwatch_client_service_token_no_forge(tmp_path, monkeypatch):
     (调用方显式报错, 绝不静默伪造 owner JWT); 服务令牌经环境变量注入,
     请求头为 X-Service-Token。
     """
-    monkeypatch.setenv("PANWATCH_URL", "http://panwatch:8000/")
+    monkeypatch.setenv("SIDA_MAIN_API_URL", "http://panwatch:8000/")
     monkeypatch.setenv("PANWATCH_SERVICE_TOKEN", "svc-token-0")
     for key in (
         "PANWATCH_DB",
@@ -32,7 +32,7 @@ def test_panwatch_client_service_token_no_forge(tmp_path, monkeypatch):
 
 def test_panwatch_client_no_credentials_yields_empty_auth(tmp_path, monkeypatch):
     """连服务令牌都没有 → auth_headers() 为空 dict, 调用方必须显式失败。"""
-    monkeypatch.setenv("PANWATCH_URL", "http://panwatch:8000/")
+    monkeypatch.setenv("SIDA_MAIN_API_URL", "http://panwatch:8000/")
     for key in (
         "PANWATCH_SERVICE_TOKEN",
         "SIDA_SERVICE_TOKEN",

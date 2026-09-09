@@ -1,5 +1,6 @@
 """盘前分析 Agent - 开盘前展望今日走势"""
 
+from src.bootstrap.agents import register_agent
 import asyncio
 import logging
 import re
@@ -49,6 +50,7 @@ PREMARKET_ACTION_MAP = {
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "premarket_outlook.txt"
 
 
+@register_agent("premarket_outlook")
 class PremarketOutlookAgent(BaseAgent):
     """盘前分析 Agent"""
 

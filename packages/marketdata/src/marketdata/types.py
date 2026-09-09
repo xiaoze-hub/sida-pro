@@ -75,6 +75,11 @@ class Bar:
     high: float
     low: float
     volume: float = 0.0
+    # B5 单位一致性: 成交额(元, 原始不复权值)。目前仅东财(f57)提供;
+    # None=源未提供(腾讯 ifzq/新浪/TQ), 恒等式校验(vol×price≈amt)对 None 跳过。
+    # 注意: close 可能是复权价而 amount 恒为原始值, 校验须在不复权数据上做(见
+    # src/core/unit_check.py), qfq 柱上恒等式天然破缺(实测 000651 除息前柱 dev≈5%)。
+    amount: float | None = None
 
 
 @dataclass

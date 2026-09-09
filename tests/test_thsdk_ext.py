@@ -167,11 +167,9 @@ def auth_token():
 @pytest.fixture(autouse=True)
 def reset_caches():
     from src.web.api import thsdk_ext
-    thsdk_ext._DDE_CACHE.clear()
     thsdk_ext._CODE_CACHE.clear()
     thsdk_ext._MKT_CACHE.clear()
     yield
-    thsdk_ext._DDE_CACHE.clear()
     thsdk_ext._CODE_CACHE.clear()
     thsdk_ext._MKT_CACHE.clear()
 
@@ -183,34 +181,13 @@ def client():
     return TestClient(app)
 
 
-def test_http_dde_endpoint(monkeypatch, client, auth_token):
-    from src.web.api import thsdk_ext
-    fake = {
-        "symbol": "600519", "ths_code": "USHA600519", "price": 1291.5,
-        "total_amount_wan": 328047.42, "main_net_amount_wan": -8259.721,
-        "main_net_ratio": -0.0051, "summary": {}, "detail": {},
-    }
-    monkeypatch.setattr(thsdk_ext, "get_main_flow_official", lambda s: fake, raising=False)
-    resp = client.get("/api/thsdk/ext/dde/600519", headers={"Authorization": f"Bearer {auth_token}"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["data"]["main_net_amount_wan"] == pytest.approx(-8259.721)
-    assert body["data"]["warnings"] == []
-
-
-def test_http_dde_endpoint_fallback(monkeypatch, client, auth_token):
-    """thsdk 失败 → 200 + data=None + warnings, 不抛 500。"""
+def test_http_dde_endpoint_merged_away(client, auth_token):
+    """D5+D6: 重复 DDE 端点已删, 唯一入口是 /api/thsdk/dde/{symbol}。"""
     from src.web.api import thsdk_ext
 
-    def boom(s):
-        raise RuntimeError("熔断")
-
-    monkeypatch.setattr(thsdk_ext, "get_main_flow_official", boom, raising=False)
     resp = client.get("/api/thsdk/ext/dde/600519", headers={"Authorization": f"Bearer {auth_token}"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["data"] is None
-    assert any("thsdk" in w for w in body["data"]["warnings"])
+    assert resp.status_code == 404
+    assert not hasattr(thsdk_ext, "_DDE_CACHE")
 
 
 def test_http_code_endpoint(monkeypatch, client, auth_token):

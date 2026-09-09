@@ -1,5 +1,6 @@
 """技术分析 Agent - 多模态 K 线图分析"""
 
+from src.bootstrap.agents import register_agent
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "chart_analyst.txt"
 
 
+@register_agent("chart_analyst")
 class ChartAnalystAgent(BaseAgent):
     """
     技术分析 Agent

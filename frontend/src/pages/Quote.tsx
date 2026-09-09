@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { useSearchParams, Link } from 'react-router-dom'
+import { useSearchParams, useParams, Link } from 'react-router-dom'
 import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
@@ -199,6 +199,14 @@ const RESONANCE_TONE_CLASS = (tone: string | null | undefined) =>
 
 export default function QuotePage() {
   const [params, setParams] = useSearchParams()
+  const routeSymbol = useParams().symbol
+  // W3.7/D7: 支持 path 式 /quote/600519(URL 直达/收藏) —— 规范化为 query 式后复用
+  // 单一 symbol 来源; 用户站内切换仍走 query, 不会出现 path/query 双源打架。
+  useEffect(() => {
+    if (routeSymbol && !params.get('symbol')) {
+      setParams({ symbol: routeSymbol.trim() }, { replace: true })
+    }
+  }, [routeSymbol, params, setParams])
   // 默认股票: URL > 上次查看(localStorage) > 上证指数(仅首次)
   const symbol = (params.get('symbol') || readLastSymbol() || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'

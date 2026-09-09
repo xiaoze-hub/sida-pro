@@ -235,7 +235,9 @@ services:
       - "8010"   # 不暴露给主机,仅 compose 网络内访问
     environment:
       # 预测引擎经 8000 拿资金面/龙虎榜数据(fork 镜像里 /api/market-data/* 已就绪)
-      - PANWATCH_URL=http://panwatch:8000
+      # D5(2026-09-09): 原 PANWATCH_URL 更名 —— forecast_lib 内禁止 PANWATCH_URL
+      # 字样(CI 依赖方向断言), 8010 情绪 LLM 配置改由 8000 经 POST /predict payload 推送
+      - SIDA_MAIN_API_URL=http://panwatch:8000
       # T7(2026-09-08): 配置通道走 HTTP —— 服务 token(与主服务 SIDA_SERVICE_TOKEN
       # 同值, 在 .env 设置)鉴权读 /api/service/forecast-config, 下发 forecast_llm_* +
       # 裁判场景绑定。2026-09-08 风险方案 0.0: 原 sqlite 直读主库的环境变量与主数据

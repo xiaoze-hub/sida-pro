@@ -88,11 +88,12 @@ class TestMaCriticalGuard:
 class TestNewsMultiSource:
     def test_chat_news_uses_flash_news(self):
         """get_market_news 应优先市场级多源快讯(flash_news), 悟道降级。"""
-        src = open(str(ROOT / "src/web/api/chat.py")).read()
+        # W3.3: 工具 handler 已从 chat.py 迁至 src/agents/chat/registry.py
+        src = open(str(ROOT / "src/agents/chat/registry.py")).read()
         assert "flash_news" in src
         assert "wudao_mcp_client" in src
         # 在 get_market_news 分支内部: flash_news(多源)应出现在 news_hotlist(悟道)之前
-        branch_start = src.find('name == "get_market_news"')
+        branch_start = src.find("async def _tool_get_market_news")
         assert branch_start != -1
         branch = src[branch_start:]
         news_pos = branch.find("flash_news(")

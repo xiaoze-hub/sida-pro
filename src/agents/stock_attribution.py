@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from src.bootstrap.agents import register_agent
 import asyncio
 import logging
 from datetime import datetime
@@ -26,6 +27,7 @@ def md_quote_rows_wrapper(symbols: list[str], market: str) -> list:
     return md_quote_rows(symbols, market)
 
 
+@register_agent("stock_attribution")
 class StockAttributionAgent(BaseAgent):
     """短线归因:为什么涨/为什么涨停/异动核心原因。"""
 

@@ -480,6 +480,8 @@ function App() {
               <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
               {/* Phase 4 走查补: /quote 别名(站内多处仍链 /quote?type=...&symbol=..., 无路由会落空跳首页) */}
               <Route path="/quote" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
+              {/* W3.7/D7 Quote 路由化: path 式 URL 直达(/quote/600519), Quote 页内规范化为 query 式 */}
+              <Route path="/quote/:symbol" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
               <Route path="/l2" element={<PermGuard perm="view_forecast" myPerms={myPerms}><L2OrderbookPage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />

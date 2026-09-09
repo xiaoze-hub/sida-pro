@@ -95,6 +95,8 @@ jobs:
         # W2.1/C3(2026-09-09): src/web/api 下 db.query(带 user_id 的模型)必须走
         # scoped()/owned_or_404()/writable() 或显式 @allow_cross_user 豁免。
         run: python scripts/check_scoped_queries.py
+      - name: Dialect layer scope check (门禁 · W3.1 IS_PG 只在 src/db)
+        run: python scripts/check_is_pg_scope.py
 
       - name: Backend tests (门禁 · pytest)
         # 2026-09-08 0.6: 固定默认密码与其开关已删除,

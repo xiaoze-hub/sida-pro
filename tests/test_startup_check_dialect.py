@@ -41,7 +41,7 @@ def test_gate_allows_dev_mode_with_warning_banner(monkeypatch, caplog):
 
 def test_gate_allows_explicit_pg_url(monkeypatch):
     monkeypatch.setenv("SIDA_DB_URL", "postgresql+psycopg2://u:p@localhost:5432/db")
-    monkeypatch.setattr(sc, "IS_PG", True)
+    monkeypatch.setattr(sc, "is_postgres", lambda: True)
     ok, msg = sc.check_db_dialect_explicit()
     assert ok is True
     assert "PostgreSQL" in msg
@@ -49,7 +49,7 @@ def test_gate_allows_explicit_pg_url(monkeypatch):
 
 def test_gate_allows_explicit_sqlite_url(monkeypatch):
     monkeypatch.setenv("SIDA_DB_URL", "sqlite:///./data/panwatch.db")
-    monkeypatch.setattr(sc, "IS_PG", False)
+    monkeypatch.setattr(sc, "is_postgres", lambda: False)
     ok, msg = sc.check_db_dialect_explicit()
     assert ok is True
     assert "SQLite" in msg

@@ -271,6 +271,8 @@ class DataCollectorManager:
 
         try:
             collector = CapitalFlowCollector(MarketCode.CN)
+            # 豁免(B3/3.4): 数据入库存储路径, 不做方向性判断; 口径标签随
+            # CapitalFlow.caliber 字段携带(eastmoney4, AGENTS.md 口径红线)
             data = collector.get_capital_flow(symbol)
 
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -425,6 +427,7 @@ class DataCollectorManager:
             collector = CapitalFlowCollector(MarketCode.CN)
             results = []
             for symbol in test_symbols[:_TEST_SYMBOL_LIMIT]:
+                # 豁免(B3/3.4): 数据源健康检查连通性测试, 不做方向性判断(AGENTS.md 口径红线)
                 data = collector.get_capital_flow(symbol)
                 if data:
                     results.append(

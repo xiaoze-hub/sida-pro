@@ -1,5 +1,6 @@
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
@@ -8,6 +9,7 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { fileToAvatarDataUrl } from '@/hooks/use-avatar'
 import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 interface ProfileInfo {
   username: string
@@ -69,10 +71,13 @@ function StatTile({ icon: Icon, label, value, sub, accent }: { icon: any; label:
 export function Profile() {
   const { toast } = useToast()
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const queryClient = useQueryClient()
 
   // ── 个人资料 ──
-  const [profile, setProfile] = useState<ProfileInfo | null>(null)
-  const [loading, setLoading] = useState(true)
+  // W3.7/D7: GET /profile 与 /profile/stats 交给 TanStack Query; 编辑态(nicknameDraft 等)仍是本地 state,
+  // 由 data 变化同步; PUT 保存后用 setQueryData 就地更新缓存, 不整页重取。
+  const { data: profile, isLoading, error: profileError } = useApiQuery<ProfileInfo>(['profile'], '/profile')
+  const { data: stats, error: statsError } = useApiQuery<ProfileStats>(['profile', 'stats'], '/profile/stats')
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
   const [avatarChanged, setAvatarChanged] = useState(false)
@@ -87,37 +92,17 @@ export function Profile() {
   const [pwdError, setPwdError] = useState<string | null>(null)
   const [changingPwd, setChangingPwd] = useState(false)
 
-  // ── 我的数据 ──
-  const [stats, setStats] = useState<ProfileStats | null>(null)
-
-  const loadProfile = async () => {
-    try {
-      const p = await fetchAPI<ProfileInfo>('/profile', { cacheMode: 'reload' })
-      setProfile(p)
-      setNicknameDraft(p.nickname || '')
-      setAvatarDraft(p.avatar || '')
-      setAvatarChanged(false)
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '加载个人资料失败', 'error')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadStats = async () => {
-    try {
-      const s = await fetchAPI<ProfileStats>('/profile/stats', { cacheMode: 'reload' })
-      setStats(s)
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '加载我的数据失败', 'error')
-    }
-  }
+  useEffect(() => {
+    if (!profile) return
+    setNicknameDraft(profile.nickname || '')
+    setAvatarDraft(profile.avatar || '')
+    setAvatarChanged(false)
+  }, [profile])
 
   useEffect(() => {
-    loadProfile()
-    loadStats()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (profileError) toast(profileError instanceof Error ? profileError.message : '加载个人资料失败', 'error')
+    if (statsError) toast(statsError instanceof Error ? statsError.message : '加载我的数据失败', 'error')
+  }, [profileError, statsError, toast])
 
   const onPickAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -164,7 +149,7 @@ export function Profile() {
       const payload: { nickname: string; avatar?: string } = { nickname }
       if (avatarChanged) payload.avatar = avatarDraft // 未改动头像则不提交, 避免无谓回写
       const updated = await fetchAPI<ProfileInfo>('/profile', { method: 'PUT', body: JSON.stringify(payload) })
-      setProfile(updated)
+      queryClient.setQueryData(['profile'], updated)
       setNicknameDraft(updated.nickname || '')
       setAvatarDraft(updated.avatar || '')
       setAvatarChanged(false)
@@ -200,7 +185,7 @@ export function Profile() {
     })
   }
 
-  if (loading && !profile) {
+  if (isLoading && !profile) {
     return (
       <div className="w-full h-[60vh] flex items-center justify-center">
         <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />

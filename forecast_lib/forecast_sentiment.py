@@ -2,113 +2,34 @@
 import os, json, time
 from datetime import datetime, timedelta
 
+# D5(2026-09-09): 原 _detect_panwatch_url(网关探测 + 硬编码网关 IP 兜底)
+# 与 _load_llm_config 里的 /api/providers/services 回调整体删除 —— 8010 不再
+# 回调 8000 取配置, LLM 配置由 8000 编排方在 /predict 请求体里推送
+# (set_runtime_llm_config), 独立进程兜底本地 ~/.panwatch_forecast.env。
+RUNTIME_LLM_CONFIG: dict = {}
 
 
-def _detect_panwatch_url() -> str:
-    """自动探测 PanWatch 地址(容器网关 IP)。
-
-    引擎跑在主机,PanWatch 在 Docker 容器内,需通过主机→容器网关访问。
-    网关 IP 可能随 Docker 网络变化,不能写死。自动从 /proc/net/route 探测,
-    多候选尝试连通性。
-    """
-    import socket as _socket
-
-    candidates = []
-
-    # 1. 环境变量优先
-    import os as _os
-    env = _os.getenv("PANWATCH_URL", "")
-    if env:
-        candidates.append(env.rstrip("/"))
-
-    # 2. 默认网关(主机→Docker 网桥)
-    try:
-        with open("/proc/net/route") as f:
-            for line in f.readlines()[1:]:
-                parts = line.split()
-                if len(parts) >= 3 and parts[1] == "00000000":
-                    ip_int = int(parts[2], 16)
-                    gw = f"{(ip_int & 0xFF)}.{(ip_int >> 8 & 0xFF)}.{(ip_int >> 16 & 0xFF)}.{(ip_int >> 24 & 0xFF)}"
-                    candidates.append(f"http://{gw}:8000")
-                    break
-    except Exception:
-        pass
-
-    # 3. 常见 Docker 网桥(兜底)
-    for ip in ("172.17.0.1", "172.18.0.1", "10.8.0.1"):
-        candidates.append(f"http://{ip}:8000")
-
-    # 4. 去重 + 探测连通性
-    seen, checked = set(), []
-    for c in candidates:
-        if c in seen:
-            continue
-        seen.add(c)
-        checked.append(c)
-        try:
-            r = _req_get(f"{c}/api/health", timeout=3)
-            if r and r.status_code < 500:
-                return c
-        except Exception:
-            continue
-
-    # 全部失败: 用第一个候选(可能是环境变量)
-    return candidates[0] if candidates else "http://172.17.0.1:8000"
-
-
-
-def _req_get(url: str, timeout: float = 8):
-    """轻量 GET(避免顶层 import requests 的副作用)。"""
-    import requests as _r
-    return _r.get(url, timeout=timeout)
-
-
-PANWATCH_URL = _detect_panwatch_url()
-print(f"[forecast] PanWatch 地址: {PANWATCH_URL}")
-
-
-
-def _fetch_llm_config_via_api() -> dict | None:
-    """经主服务 HTTP 读 LLM 配置(2026-09-08 T7)。
-
-    PG 部署下 forecast 读不到主库 sqlite 文件, 原 _db_llm_config 三候选路径
-    全部静默失败 → 用户在设置页配的 forecast_llm_* 被无视。现优先走
-    /api/service/forecast-config(服务 token 鉴权)。
-    """
-    try:
-        from forecast_lib import panwatch_client
-
-        data = panwatch_client.request_json("/api/service/forecast-config", timeout=10)
-        if isinstance(data, dict):
-            payload = data.get("data") if isinstance(data.get("data"), dict) else data
-            cfg = payload.get("llm") or {}
-            out = {k: v for k, v in cfg.items() if v}
-            return out or None
-    except Exception as exc:
-        print(f"[forecast] 经 API 读 LLM 配置失败: {exc}")
-    return None
-
-
-# 2026-09-08 风险方案 0.0: 原 _db_llm_config(环境变量 → docker volume → /app/data
-# 三候选 sqlite 直读主库)整体删除 —— 切 PG 后读到的是冻结旧值且不报错, 含明文
-# api_key, 属旁路。LLM 配置唯一通道是 _fetch_llm_config_via_api(服务 token 鉴权)。
+def set_runtime_llm_config(cfg: dict | None) -> None:
+    """8000 编排方经 /predict payload 推送的情绪 LLM 配置(优先级最高)。"""
+    RUNTIME_LLM_CONFIG.clear()
+    if isinstance(cfg, dict) and cfg:
+        RUNTIME_LLM_CONFIG.update({k: v for k, v in cfg.items() if v})
 
 
 def _load_llm_config() -> dict:
     """加载 LLM 情绪打分配置。
 
-    优先级: 设置页 API(经服务 token, 2026-09-08 T7) > 本地配置(~/.panwatch_forecast.env)
-    > PanWatch 默认 AI 模型(动态) > 硬编码兜底。
+    优先级: /predict payload 推送(D5, set_runtime_llm_config) > 本地配置
+    (~/.panwatch_forecast.env) > 硬编码兜底(agnes key 文件/环境变量)。
     """
     import os as _os
     import json as _json
 
     cfg = {"base_url": "https://api.agnes-ai.cn/v1", "model": "agnes-2.5-flash", "api_key": ""}
 
-    # 0. 设置页 API 优先(接口 Key 区块维护,免重启)
-    api_cfg = _fetch_llm_config_via_api()
-    if api_cfg:
-        cfg.update({k: v for k, v in api_cfg.items() if v})
+    # 0. 8000 编排方经 /predict payload 推送(优先, 免重启)
+    if RUNTIME_LLM_CONFIG:
+        cfg.update({k: v for k, v in RUNTIME_LLM_CONFIG.items() if v})
         return cfg
 
     # 1. 本地配置覆盖
@@ -130,26 +51,7 @@ def _load_llm_config() -> dict:
         except Exception:
             pass
 
-    # 2. 从 PanWatch 拉默认 AI 模型(设置页配置,动态跟随)
-    if not cfg["api_key"]:
-        try:
-            import requests as _req
-            r = _req.get(f"{PANWATCH_URL}/api/providers/services", timeout=8)
-            if r.status_code == 200:
-                services = r.json()
-                # providers API 无鉴权返回? 若 401 需带 token,则跳过
-                if isinstance(services, list):
-                    for svc in services:
-                        for m in svc.get("models", []):
-                            if m.get("is_default"):
-                                cfg["base_url"] = svc.get("base_url", cfg["base_url"])
-                                cfg["model"] = m.get("model", cfg["model"])
-                                cfg["api_key"] = svc.get("api_key", cfg["api_key"])
-                                return cfg
-        except Exception:
-            pass
-
-    # 3. 兜底: agnes key 文件
+    # 2. 兜底: agnes key 文件
     if not cfg["api_key"]:
         key_path = _os.path.expanduser("~/.agnes_key")
         if _os.path.exists(key_path):

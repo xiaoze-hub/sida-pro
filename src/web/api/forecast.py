@@ -9,7 +9,11 @@ import asyncio
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session
+
+from src.web.database import get_db
+from src.web.models import AppSettings
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +65,42 @@ def _log_forecast(level: str, msg: str, task_id: str = "", **extra):
             pass
 
 
+def _forecast_llm_payload(db: Session) -> dict:
+    """D5(2026-09-09): 预测引擎所需情绪 LLM 配置随 /predict 请求体推送。
+
+    8010 不再回调 8000 取配置(原 forecast_sentiment 经 /api/providers/services
+    拉默认模型已删), 依赖单向: 8000 编排方 → 8010 被调用方。
+    """
+    keys = ("forecast_llm_base_url", "forecast_llm_model", "forecast_llm_api_key")
+    rows = db.query(AppSettings).filter(AppSettings.key.in_(keys)).all()
+    merged = {r.key.removeprefix("forecast_llm_"): (r.value or "") for r in rows}
+    return {k: merged.get(k, "") for k in ("base_url", "model", "api_key")}
+
+
 @router.get("/forecast/predict")
 async def forecast_predict(
     symbol: str = Query(..., description="6位A股代码"),
     days: int = Query(5, ge=1, le=20, description="预测天数"),
     task_id: str = Query("", description="预测任务ID"),
     target_date: str = Query("", description="预测目标日期 YYYY-MM-DD"),
+    db: Session = Depends(get_db),
 ):
-    """多模型预测(Kronos+XGBoost+回归)。"""
+    """多模型预测(Kronos+XGBoost+回归)。
+
+    D5: 改 POST 到 8010 /predict, 预测参数与情绪 LLM 配置随请求体推送。
+    """
     _log_forecast("info", f"预测开始: {symbol} {days}天", task_id=task_id)
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            r = await client.get(
+            r = await client.post(
                 f"{FORECAST_ENGINE_URL}/predict",
-                params={"symbol": symbol, "days": days, "task_id": task_id, "target_date": target_date},
+                json={
+                    "symbol": symbol,
+                    "days": days,
+                    "task_id": task_id,
+                    "target_date": target_date,
+                    "llm_config": _forecast_llm_payload(db),
+                },
             )
             r.raise_for_status()
             data = r.json()
@@ -91,7 +117,7 @@ async def forecast_predict(
         raise HTTPException(e.response.status_code, "预测引擎错误")
     except httpx.ConnectError:
         _log_forecast("error", f"预测失败: {symbol} 引擎未启动", task_id=task_id)
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("预测请求失败")
         _log_forecast("error", f"预测异常: {symbol} {e}", task_id=task_id)
@@ -112,7 +138,7 @@ async def forecast_predict_status(
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("预测状态查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -133,7 +159,7 @@ async def forecast_history(
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("历史查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -158,7 +184,7 @@ async def forecast_card(
                 headers={"Content-Disposition": f'inline; filename="forecast_{symbol}.png"'},
             )
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("卡片生成失败")
         raise HTTPException(500, f"卡片生成失败: {e}")
@@ -188,7 +214,7 @@ async def forecast_backtest(
         raise HTTPException(e.response.status_code, "预测引擎错误")
     except httpx.ConnectError:
         _log_forecast("error", f"回测失败: {symbol} 引擎未启动")
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("回测请求失败")
         _log_forecast("error", f"回测异常: {symbol} {e}")
@@ -204,7 +230,7 @@ async def forecast_weights():
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("模型权重查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -219,7 +245,7 @@ async def forecast_models():
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("模型清单查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -259,7 +285,7 @@ async def forecast_report_generate(
         raise HTTPException(e.response.status_code, "预测引擎错误")
     except httpx.ConnectError:
         _log_forecast("error", f"报告生成失败: {symbol} 引擎未启动", task_id=task_id)
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("报告生成失败")
         _log_forecast("error", f"报告生成异常: {symbol} {e}", task_id=task_id)
@@ -284,7 +310,7 @@ async def forecast_report_backtest(
         _log_forecast("error", f"回测报告失败: {symbol} HTTP {e.response.status_code}")
         raise HTTPException(e.response.status_code, "预测引擎错误")
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("回测报告生成失败")
         _log_forecast("error", f"回测报告异常: {symbol} {e}")
@@ -306,7 +332,7 @@ async def forecast_report_list(
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("报告列表查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -326,7 +352,7 @@ async def forecast_report_get(
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("报告查询失败")
         raise HTTPException(500, f"查询失败: {e}")
@@ -359,6 +385,10 @@ async def forecast_report_push(payload: dict):
                         "mid_net_inflow": cf.mid_net_inflow,
                         "small_net_inflow": cf.small_net_inflow,
                         "main_net_5d": cf.main_net_5d,
+                        # 口径标签(B3/3.4): 8010 报告侧必须带口径, 禁止用于主力意图判定
+                        "caliber": cf.caliber,
+                        "direction_semantics": cf.direction_semantics,
+                        "caliber_label": cf.caliber_tag().ui_label(),
                     }
                     logger.info(f"注入资金流(东财口径): {symbol} 主力净流入 {cf.main_net_inflow}")
             except Exception as e:
@@ -373,7 +403,7 @@ async def forecast_report_push(payload: dict):
             # 包成 ApiResponse 外壳, 符合前端 fetchAPI 约定
             return {"code": 0, "data": data, "message": ""}
     except httpx.ConnectError:
-        return {"code": 503, "data": None, "message": "预测引擎未启动(需在主机运行 forecast_server.py)"}
+        return {"code": 503, "data": None, "message": "预测引擎不可用(需在主机运行 forecast_server.py)"}
     except Exception as e:
         logger.exception("报告推送失败")
         return {"code": 500, "data": None, "message": f"推送失败: {e}"}
@@ -394,7 +424,7 @@ async def stocks_search(
             r.raise_for_status()
             return r.json()
     except httpx.ConnectError:
-        raise HTTPException(503, "预测引擎未启动(需在主机运行 forecast_server.py)")
+        raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("股票搜索失败")
         raise HTTPException(500, f"搜索失败: {e}")

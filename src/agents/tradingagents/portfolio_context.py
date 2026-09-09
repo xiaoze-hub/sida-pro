@@ -30,6 +30,8 @@ def build_main_intent_context(main_intent_text: str | None) -> str:
 
     腾讯逐笔口径(主力/超大单/大单/参与度/买占比/5日阶段/竞价/筹码峰/成本带/
     拆单/内外盘口诀/背离/时段节奏),与 get_capital_flow(东财四档)不同源。
+    豁免说明(B3/3.4): 本段只注入逐笔口径数据, 不消费 get_capital_flow;
+    方向性判定仅用逐笔(AGENTS.md 口径红线)。
 
     返回空串表示无数据(调用方跳过注入)。纯函数,无 IO。
     """

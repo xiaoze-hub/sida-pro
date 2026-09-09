@@ -97,7 +97,7 @@ def persist_l2_ticks(symbol: str, market: str, source: str, rows: list[dict]) ->
     if not rows:
         return 0
     try:
-        from src.web.database import IS_PG
+        from src.db.dialect import insert_ignore_sql
 
         now = datetime.now(timezone.utc)
         params = []
@@ -119,17 +119,11 @@ def persist_l2_ticks(symbol: str, market: str, source: str, rows: list[dict]) ->
             )
         if not params:
             return 0
-        if IS_PG:
-            stmt = """
-INSERT INTO l2_ticks (ts, symbol, market, source, direction, price, vol, amt, tick_time)
-VALUES (:ts, :symbol, :market, :source, :direction, :price, :vol, :amt, :tick_time)
-ON CONFLICT DO NOTHING
-"""
-        else:
-            stmt = """
-INSERT OR IGNORE INTO l2_ticks (ts, symbol, market, source, direction, price, vol, amt, tick_time)
-VALUES (:ts, :symbol, :market, :source, :direction, :price, :vol, :amt, :tick_time)
-"""
+        # W3.1(D2): 方言分叉收编 src/db/dialect.insert_ignore_sql
+        stmt = insert_ignore_sql(
+            "l2_ticks",
+            ["ts", "symbol", "market", "source", "direction", "price", "vol", "amt", "tick_time"],
+        )
         with _engine().begin() as conn:
             # changes()/RETURNING 在 executemany 下不精确 → 用本批 ts 水位前后计数得精确写入数
             before = conn.execute(

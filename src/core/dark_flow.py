@@ -1393,7 +1393,6 @@ def compute_tck_active_ratio(symbol: str, tck_dir: str | None = None) -> float |
       - float 0-100: 主动率(可用)
       - None: 无 .tck 文件 / orders 为空 / 文件解析失败(调用方走兜底)
 
-    集成路径: chat_tools.dark_review_from_tck 已用 parse_tck, 此函数复用其结果。
     性能: parse_tck 是 9ms 级(36字节定长 + zlib, 见 tdx_tick_parser 注释), 每次调用
     解析一次 OK, 不需要缓存(盘后场景调用频次低)。
     """

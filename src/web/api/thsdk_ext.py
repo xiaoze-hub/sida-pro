@@ -1,12 +1,13 @@
-"""thsdk 深度扩展 API(v0.3.1 选项B):DDE 主力资金 + 代码补齐 + 市场代码表。
+"""thsdk 深度扩展 API(v0.3.1 选项B):代码补齐 + 市场代码表。
 
-在 v0.3.0 已落地的 8 个能力之外,新增 3 个最核心能力的只读端点:
-
-    GET /api/thsdk/ext/dde/{symbol}     个股官方主力资金(汇总 + 特大单/大单分档明细)
     GET /api/thsdk/ext/code/{code}      证券代码补齐为标准 THS 代码(支持逗号分隔多只)
     GET /api/thsdk/ext/market/{market}  市场代码全量列表(代码 + 名称)
 
-底层包装 data_source.thsdk_l2 的 DDE/complete_ths_code/market_block 能力,
+D5+D6(2026-09-09): 原 GET /api/thsdk/ext/dde/{symbol} 重复端点已删除,
+DDE 一律走 /api/thsdk/dde/{symbol}(src/web/api/thsdk_extended.py, 扁平化
+响应 + 30s TTL 缓存 + 口径文档)。
+
+底层包装 data_source.thsdk_l2 的 complete_ths_code/market_block 能力,
 复用其限频/重试/熔断,并在此层加进程内 TTL 缓存避免重复拉 thsdk。
 """
 from __future__ import annotations
@@ -26,12 +27,10 @@ logger = logging.getLogger(__name__)
 # 模块层属性优先 + lazy import 兜底(测试 monkeypatch 可替换)
 try:
     from data_source.thsdk_l2 import (  # noqa: F401
-        get_main_flow_official,
         complete_ths_code,
         get_market_codes,
     )
 except Exception:  # noqa: BLE001
-    get_main_flow_official = None  # type: ignore[assignment]
     complete_ths_code = None  # type: ignore[assignment]
     get_market_codes = None  # type: ignore[assignment]
 
@@ -39,7 +38,6 @@ router = APIRouter()
 
 # 进程内 TTL 缓存,30s 过期
 _TTL = 30.0
-_DDE_CACHE: dict = {}
 _CODE_CACHE: dict = {}
 _MKT_CACHE: dict = {}
 
@@ -65,45 +63,15 @@ def _resolve(name: str) -> Any:
     fn = globals().get(name)
     if fn is not None:
         return fn
-    if name == "get_main_flow_official":
-        from data_source.thsdk_l2 import get_main_flow_official as _f
-    elif name == "complete_ths_code":
+    if name == "complete_ths_code":
         from data_source.thsdk_l2 import complete_ths_code as _f
     else:
         from data_source.thsdk_l2 import get_market_codes as _f
     return _f
 
 
-@router.get("/dde/{symbol}")
-def dde(symbol: str, user=Depends(get_current_user)) -> dict:
-    """单只股票同花顺官方主力资金(汇总 + 分档明细)。"""
-    symbol = symbol.strip().upper()
-
-    def _fetch() -> dict:
-        return _resolve("get_main_flow_official")(symbol)
-
-    try:
-        data = _cached(_DDE_CACHE, symbol, _fetch)
-        if isinstance(data, dict) and data.get("error"):
-            raise HTTPException(502, f"thsdk 无法获取 DDE: {data['error']}")
-        return {
-            "symbol": symbol,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "data": data,
-            "warnings": [],
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"thsdk dde 失败 {symbol}: {e}", exc_info=True)
-        return {
-            "symbol": symbol,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "data": None,
-            "warnings": [f"thsdk 数据不可用: {e}"],
-        }
+# D5+D6(2026-09-09): 原 /dde/{symbol} 路由已删 —— DDE 唯一入口是
+# /api/thsdk/dde/{symbol}(thsdk_extended.py), 见模块 docstring。
 
 
 @router.get("/code/{code}")

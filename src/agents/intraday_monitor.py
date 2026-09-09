@@ -1,5 +1,6 @@
 """盘中监测 Agent - 实时监控持仓，AI 判断是否需要提醒"""
 
+from src.bootstrap.agents import register_agent
 import json
 import logging
 import re
@@ -829,6 +830,7 @@ SUGGESTION_TYPES = {
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "intraday_monitor.txt"
 
 
+@register_agent("intraday_monitor")
 class IntradayMonitorAgent(BaseAgent):
     """
     盘中监测 Agent

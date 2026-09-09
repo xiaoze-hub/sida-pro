@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { ScrollText, RefreshCw } from 'lucide-react'
-import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { formatFullDateTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
+import { useApiQuery } from '@/hooks/useApiQuery'
 
 interface AuditEntry {
   id: number
@@ -35,30 +35,20 @@ const ACTION_LABELS: Record<string, { label: string; tone: string }> = {
 }
 
 export default function AuditPage() {
-  const [logs, setLogs] = useState<AuditEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
   const [filterUser, setFilterUser] = useState('')
-  const [users, setUsers] = useState<string[]>([])
+  const [dismissed, setDismissed] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const q = filterUser ? `&user=${encodeURIComponent(filterUser)}` : ''
-      const data = await fetchAPI<AuditResponse>(`/audit?limit=200${q}`, { cacheMode: 'reload' })
-      setLogs(data?.logs || [])
-      if (data?.users) setUsers(data.users)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [filterUser])
+  // W3.7/D7: 数据获取迁 TanStack Query(loading/error/缓存/按用户筛选重取交给 query)
+  const q = filterUser ? `&user=${encodeURIComponent(filterUser)}` : ''
+  const { data, isLoading: loading, error: queryError, refetch } = useApiQuery<AuditResponse>(
+    ['audit', filterUser],
+    `/audit?limit=200${q}`,
+  )
+  const logs = data?.logs || []
+  const users = data?.users || []
+  const error = queryError instanceof Error ? queryError.message : queryError ? '加载失败' : ''
 
-  useEffect(() => {
-    load()
-  }, [load])
+  useEffect(() => setDismissed(false), [filterUser])
 
   const actionMeta = (action: string) => ACTION_LABELS[action] || { label: action || '--', tone: 'text-muted-foreground' }
 
@@ -89,7 +79,7 @@ export default function AuditPage() {
               <option key={u} value={u}>{u}</option>
             ))}
           </select>
-          <Button variant="outline" size="sm" onClick={load} disabled={loading} className="w-fit">
+          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={loading} className="w-fit">
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
             刷新
           </Button>
@@ -143,7 +133,7 @@ export default function AuditPage() {
         {!loading && !error && logs.length === 0 && (
           <div className="p-10 text-center text-[13px] text-muted-foreground">暂无审计记录</div>
         )}
-        <ErrorBanner errors={!loading && error ? [{ source: '审计日志', message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
+        <ErrorBanner errors={!loading && !dismissed && error ? [{ source: '审计日志', message: error, retry: () => void refetch() }] : []} onDismiss={() => setDismissed(true)} />
       </div>
     </div>
   )

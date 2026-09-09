@@ -38,8 +38,9 @@ def test_missing_sida_db_url_produces_warning(monkeypatch, tmp_path):
 
 def test_is_pg_false_produces_warning(monkeypatch, tmp_path):
     """数据库方言非 PG(SQLite) → warning。"""
-    # IS_PG 是 src.web.database 的模块常量, 在 startup_check 里以模块全局引用, 可 monkeypatch
-    monkeypatch.setattr(sc, "IS_PG", False)
+    # is_postgres 在 startup_check 里以模块全局引用, 可 monkeypatch
+    # (W3.1/D2 后方言判定走 src.db.dialect.is_postgres 函数)
+    monkeypatch.setattr(sc, "is_postgres", lambda: False)
     monkeypatch.setenv("SIDA_DB_URL", "sqlite:////tmp/x.db")
     monkeypatch.setenv("THS_USERNAME", "ths_user")
     monkeypatch.setenv("JWT_SECRET", "test-secret")
@@ -51,7 +52,7 @@ def test_is_pg_false_produces_warning(monkeypatch, tmp_path):
 
 def test_all_normal_has_no_warning(monkeypatch, tmp_path):
     """全部检查项正常(token/渠道/目录等) → 无 warning / error。"""
-    monkeypatch.setattr(sc, "IS_PG", True)
+    monkeypatch.setattr(sc, "is_postgres", lambda: True)
     monkeypatch.setenv("SIDA_DB_URL", "postgresql://u:p@h:5432/sida")
     monkeypatch.setenv("THS_USERNAME", "ths_user")
     monkeypatch.setenv("JWT_SECRET", "test-secret")
