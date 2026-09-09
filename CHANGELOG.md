@@ -7,6 +7,13 @@
 
 ## 2026-09-09
 
+### docs-规划/审计/研究文档头部基线标识+AGENTS文档规范(W4.4/F4)
+- 背景: F4 —— docs/innov-dev-plan.md:8 带 hash("v0.5.8 = d0bf7cd 基线")是正面典型, 但 PROJECT_MAP.md 只写日期不写 hash; 09-02 UI 审计既无 hash 也没说明审的是哪个副本(结果审到一份缺 6-7 个页面的不完整拷贝, 有被当完整审计用的风险)。
+- 做法: ①AGENTS.md 新增 "Documentation Standards (规划/审计/研究文档)" 节: docs/ 下规划/审计/研究文档(含 downloads/ 审计回执)头部必须含三要素——基线标识(commit hash 或 VERSION)/对象完整路径/覆盖范围(**含没审哪些**), 缺任一不得作为决策依据引用; ②存量补头: PROJECT_MAP.md(基线 c28f9a0=W3.4/B3 修订时点, 对应发版 v0.5.21; 覆盖=部署拓扑+目录+主链路, 未覆盖=前端组件级与测试布局)、UI审计_研究.md(基线=`C:\Users\tianxiang\sida-pro` 独立副本≈v0.5.8/d0bf7cd 同期, 非 git 检出无精确 commit + **⚠️留痕: 该副本缺 6-7 页/漏盘 13 页/5 条目过时, 已被重跑版校正, 勿单独引用** + 覆盖/未审)、UI审计_重跑_20260909.md(基线=after eab597a/before 3047f87; 覆盖=28 页路由矩阵+信封 10 处+设计债 7 项)、决策先锋复刻矩阵(基线同副本口径; 覆盖=三指标+共振+七行状态表差距矩阵)。
+- 已合规不改: docs/research/K线复权污染勘查_20260907.md(头部既有 @ 685d0da 基准+对象+方法)、downloads/audit_reply.md(标题即 v0.5.5 commit 8803fa3+四块覆盖陈述)。
+- 验证: 引用 hash git cat-file 实存(d0bf7cd/3047f87/c28f9a0/685d0da/eab597a); 5 文件头部逐一 grep "基线" 命中; AGENTS.md 规范落位 Testing Guidelines 与 Commit & PR Guidelines 之间。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
 ### docs-已知问题台账收口(CHANGELOG未做项迁入KNOWN_ISSUES 28条+对账)(W4.3/F5)
 - 背景: F5 —— "已知问题"散落 CHANGELOG 各条目的"未做/待办/已知限制"里, 新接手只能读全文猜; docs/KNOWN_ISSUES.md 此前只有 W2.5 依赖审计与 W2.6 weekday 豁免两节, 无统一编号台账。
 - 做法: ①CHANGELOG 全文扫描(未做/待办/已知限制/暂不/明确不做/遗留)逐条判定开/闭状态, **28 条登记为 KI-001..028**, 每条 8 字段(id/level/owner/发现日期/现象/影响/涉及文件/建议修复); ②KI-004(生产容器无限制)/KI-005(8010 校准)沿用 W4.2 已发布锚点编号; ③W2.5 审计表与 W2.6 豁免两节保留为详情并收编 KI-001/002/003/006/007; ④方案 §4.3 点名项入册: chat_upload.py 提示注入面(KI-008, P1, 方案 §6.3 后续波次)、chat.py f-string SQL(KI-009, 方案记录行号 :695 现为 :234, 已核实 cols/table 均白名单+参数化无注入面, 留痕不修); ⑤"明确不做"决策(Alembic/W3.1 三项/前端设计取舍/裸 fetch 10 处)单列"决策留痕"节, 防被当欠账重复提出; ⑥两条此前无归属的新登记: KI-027 本地环境损坏测试文件 2 个(test_ta_load_ohlcv_patch/test_thsdk_buffer_size, 本地基线恒 2 failed 的出处, 建议加环境探测 skip 收敛到 0)、KI-028 交易日历 2028 表硬期限(2027-12-31 前补, 逾期 fail-loud 停摆, P1)。

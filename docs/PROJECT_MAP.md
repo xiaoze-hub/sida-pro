@@ -1,5 +1,9 @@
 # SIDA-Pro 项目结构地图（2026-09-09 修订, 原 PanWatch; B3/3.4 口径红线修订版）
 
+> 基线: 本仓 c28f9a0（W3.4/B3 口径红线修订时点, 对应发版 v0.5.21）
+> 对象: 本仓全仓（部署拓扑 / 目录结构 / 关键数据链路）
+> 覆盖: 部署拓扑、目录与模块职责、关键数据流主链路（粒度到目录与关键文件, 非逐文件穷举）; 未覆盖: 前端组件级明细、测试布局逐文件清单
+
 ## 部署拓扑
 - **8000** = FastAPI 主后端，跑在 **Docker 容器**内（镜像 `ghcr.io/xiaoze-hub/stock-intelligent-data-analytics:latest`）
   - 容器挂载：`/home/ubuntu/.hermes:/hermes`(ro)、`panwatch_data:/app/data`

@@ -34,6 +34,9 @@
 - Coverage: target meaningful coverage for new modules (no strict threshold yet, but include happy-path and error cases).
 - Fixtures: use factory helpers for DB models; avoid network calls (mock collectors and AI clients).
 
+## Documentation Standards (规划/审计/研究文档)
+- `docs/` 下的规划、审计、研究文档（含 `downloads/` 审计回执）**头部必须含三要素**: ①基线标识（commit hash 或 `VERSION`，即"审的是哪个状态的代码"）; ②审计/盘点对象的完整路径; ③覆盖范围（审了哪些文件/页面，**以及没审哪些**）。缺任一要素的文档不得作为决策依据引用。（W4.4/F4, 2026-09-09; 正面典型: docs/innov-dev-plan.md:8）
+
 ## Commit & Pull Request Guidelines
 - Commit format: `<type>: <subject>` where type ∈ `{feat, fix, update, refactor, docs, test, chore, style, perf}`.
 - Keep the type prefix in English, and write the subject after the colon (plus any optional commit body) in Chinese.
