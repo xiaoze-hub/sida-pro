@@ -133,17 +133,25 @@ def _ensure_aggregator():
 
 
 def _aggregator_loop():
-    """聚合器主循环: 每 5s 拉一次自选股行情, 广播。"""
+    """聚合器主循环: 每 5s 拉一次自选股行情, 广播。
+
+    2026-09-09 KI-025: 无订阅者时跳过拉取 —— 自选纳入推送集后, 无脑每 5s 拉全量
+    自选会在无人看盘时也持续打行情源(1.5 CPU 生产限额下无谓占用/风控风险)。
+    有订阅者才拉, 新订阅者最多等一个周期(≤5s)拿到首帧; 快照改由该周期顺带填充。
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     while True:
         try:
-            symbols = _collect_watchlist_symbols()
-            if symbols:
-                data = loop.run_until_complete(_fetch_batch_quotes(symbols))
-                if data:
-                    _last_snapshot.update(data)
-                    _broadcast({"type": "quotes", "data": data, "ts": time.time()})
+            with _subscribers_lock:
+                has_subscribers = bool(_subscribers)
+            if has_subscribers:
+                symbols = _collect_watchlist_symbols()
+                if symbols:
+                    data = loop.run_until_complete(_fetch_batch_quotes(symbols))
+                    if data:
+                        _last_snapshot.update(data)
+                        _broadcast({"type": "quotes", "data": data, "ts": time.time()})
         except Exception as e:
             logger.warning(f"行情聚合器异常: {e}")
         time.sleep(_agg_interval_s)
