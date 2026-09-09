@@ -53,10 +53,10 @@ def test_pass_within_tol_returns_dev():
 def test_x10000_fake_data_logs_and_counts(caplog, monkeypatch):
     """方案 B5 验收: amount 放大 10000 倍假数据 → error 日志 + 失败计数自增。"""
     calls = []
-    import src.web.api.health as health_mod
+    import src.core.datasource_failures as failures_mod
 
     monkeypatch.setattr(
-        health_mod, "record_datasource_failure",
+        failures_mod, "record",
         lambda provider, kind="fetch": calls.append((provider, kind)),
     )
     with caplog.at_level("ERROR", logger="src.core.unit_check"):

@@ -214,7 +214,7 @@ def _wencai_events(symbol: str, query_tpl: str, kind: str, label: str,
                    date_: str) -> list[dict]:
     """wencai 查询 → 事件; 数据源不可用或零命中 → [](不编造)。"""
     try:
-        from src.web.api.wencai import run_wencai
+        from src.collectors.wencai import run_wencai
     except Exception as e:  # pragma: no cover
         logger.debug("wencai 不可用: %s", e)
         return []

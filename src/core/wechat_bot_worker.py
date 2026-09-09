@@ -47,7 +47,7 @@ async def _ask_ai(
 
     image_data: 可选图片 base64 data URL(多模态, 模型直接看图)。
     """
-    from src.web.api.auth import create_token
+    from src.core.auth_tokens import create_token
     from src.db.session import SessionLocal
     from src.db.models import User
 

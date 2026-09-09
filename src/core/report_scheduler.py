@@ -42,7 +42,7 @@ class ReportScheduler:
             # 独立 try 包裹: 三榜扫描失败不影响报告生成本身。
             if report_type == "postmarket":
                 try:
-                    from src.web.api.market_scan import run_market_scan_job
+                    from src.core.market_scan_jobs import run_market_scan_job
 
                     scan_res = await asyncio.to_thread(run_market_scan_job)
                     logger.info(
@@ -68,7 +68,7 @@ class ReportScheduler:
                 # 全市场暗盘资金 TOP 扫描(设计稿 §6.1 A6, 2026-09-01 接线)。
                 # thsdk DDE 批量主力资金流, 全市场约 16s; 依赖 thsdk 登录态。
                 try:
-                    from src.web.api.market_scan import run_dark_fund_top_job
+                    from src.core.market_scan_jobs import run_dark_fund_top_job
 
                     dft_res = await asyncio.to_thread(run_dark_fund_top_job)
                     logger.info(

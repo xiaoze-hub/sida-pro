@@ -4,44 +4,16 @@
 """
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from src.core.paths import CRON_OUTPUT_DIR, HERMES_HOME  # noqa: F401  (KI-039 第二阶段: 路径解析下沉 core)
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Hermes cron 输出根目录
-# 容器内通过 HERMES_HOME 环境变量指定(挂载主机 ~/.hermes 到 /hermes, HERMES_HOME=/hermes)
-# 则 CRON_OUTPUT_DIR = /hermes/cron/output
-# 2026-09-07 hotfix: 生产容器未挂载 /hermes, 原默认直接 Permission denied 导致
-# 盘前/盘后报告落盘失败。不可写时退到 DATA_DIR(容器持久卷 /app/data)。
-HERMES_HOME = Path(
-    os.environ.get("HERMES_HOME")
-    or os.environ.get("CRON_OUTPUT_DIR")
-    or "/hermes"  # 推荐挂载点
-)
-
-
-def _pick_report_root() -> Path:
-    preferred = HERMES_HOME / "cron" / "output"
-    try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        return preferred
-    except OSError as e:
-        fallback = Path(os.environ.get("DATA_DIR") or "/app/data") / "cron" / "output"
-        try:
-            fallback.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return preferred
-        logger.warning("报告目录 %s 不可用(%s), 改用 %s", preferred, e, fallback)
-        return fallback
-
-
-CRON_OUTPUT_DIR = _pick_report_root()
 
 
 def _strip_meta(content: str) -> str:

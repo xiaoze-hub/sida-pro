@@ -113,7 +113,7 @@ def check_wencai() -> dict[str, Any]:
     **不发起真实查询** —— 一次 wencai 查询要几秒, 健康检查不能这么重。
     """
     try:
-        from src.web.api.wencai import run_wencai  # noqa: F401
+        from src.collectors.wencai import run_wencai  # noqa: F401
     except Exception as e:  # pragma: no cover
         return {"status": STATUS_DOWN, "detail": f"wencai 模块不可用: {e}"}
     try:

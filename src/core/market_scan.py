@@ -173,7 +173,7 @@ def resonance_pick(
     from src.core import ai_activity, gs_strategy, resonance
 
     if symbols is None:
-        from src.web.stock_list import get_stock_list
+        from src.collectors.stock_list import get_stock_list
 
         raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
         symbols = _valid_symbols(raw)
@@ -304,7 +304,7 @@ def scan(
         }
     """
     if symbols is None:
-        from src.web.stock_list import get_stock_list
+        from src.collectors.stock_list import get_stock_list
 
         raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
         symbols = _valid_symbols(raw)

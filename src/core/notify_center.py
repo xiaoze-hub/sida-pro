@@ -182,7 +182,7 @@ def _after_push_hook(
     if nid is None:
         return
     try:
-        from src.web.notifications.ws_hub import (
+        from src.core.notify_sink import (
             broadcast_notification,
             incr_unread,
         )

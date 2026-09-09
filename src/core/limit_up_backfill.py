@@ -134,7 +134,7 @@ def backfill_all(symbols: list[str] | None = None, max_stocks: int = 0) -> dict:
     started = datetime.now(_CST)
     try:
         if symbols is None:
-            from src.web.stock_list import get_stock_list
+            from src.collectors.stock_list import get_stock_list
 
             stocks = [
                 {"symbol": s["symbol"], "name": s.get("name") or ""}

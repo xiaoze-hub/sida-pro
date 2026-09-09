@@ -93,11 +93,14 @@ def _tol_from_env() -> float:
 
 
 def _record_failure(source: str) -> None:
-    """复用 0.2 数据源失败计数。SIDA 侧直调 health; 无 server 上下文时静默跳过
-    (unit_check 也被 marketdata 独立消费场景使用, 不能强依赖 web 层)。"""
-    try:
-        from src.web.api.health import record_datasource_failure
+    """落一条数据源解析失败明细(中立层, KI-039 第二阶段: 不再依赖 web 层)。
 
-        record_datasource_failure(source or "unknown", kind="parse")
+    明细与 Prometheus 计数由 web 侧 health 模块各自桥接; 这里只写可查明细
+    (datasource_failures 表, 内部 60s 限流)。
+    """
+    try:
+        from src.core.datasource_failures import record as _record
+
+        _record(source or "unknown", kind="parse")
     except Exception:  # noqa: BLE001
         pass

@@ -47,7 +47,6 @@
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
-| KI-039 | P2 | src/core 反向依赖 src/web 141 处 | 2026-09-09 | TianXiang |
 
 ## 详情
 
@@ -243,16 +242,6 @@
 - 涉及文件: 生产 env(JWT_SECRET)、src/web/api/auth.py。
 - 建议修复: 随维护窗口换 ≥32 字节随机值 —— 注意会使全部现存会话失效(用户重新登录), 与口令类轮换同窗口执行成本最低。
 
-### KI-039 src/core 反向依赖 src/web 141 处 (P2)
-
-- 发现: 2026-09-09(报告 P2-1)
-- 现象: core→web import 141 处(`agent_runs.py:4-5`、`context_builder.py:21-22`、`data_quality_sentinel.py:299-300` 等); agents 43 处、collectors 7 处; `marketdata_client.py:24-37` 直读 ORM; 策略第二实现在 `web/api/strategies.py:114-283`; `backtest/data_adapter.py:56-75` 直连 DB; 仅 8000↔8010 有方向门禁。
-- 影响: 核心逻辑无法脱离 Web 单测; ORM 变更牵动全局; 策略口径分叉。
-- 涉及文件: src/core/*、src/agents/*、src/collectors/*、src/web/api/strategies.py、src/core/backtest/data_adapter.py。
-- 建议修复: 抽 `src/db/repository`; 统一策略实现; 加 core→web 静态门禁(存量白名单 + 禁止新增)。任务 B4.1/B4.2/B4.5。
-- **进展(2026-09-09 晚)**: 已加**棘轮门禁** `tests/test_w41_core_web_dependency.py`(冻结清单 + 禁止新增)并下沉 `backtest/data_adapter` 取数到 `src/db/klines_repo.py`(文件数 57→56); **存量 56 文件与 API 层第二策略实现(B4.2)仍未清** —— 本条保持开启。
-- **进展(2026-09-09 深夜, 切片A+B)**: ORM/会话下沉中立层 —— `src/db/session.py`(Base/engine/SessionLocal/get_db) + `src/web/models.py`→`src/db/models.py`(web 侧留 re-export shim); core/agents/collectors 57 个文件导入改指 `src.db.*`; 棘轮白名单同步收紧。**core→web 依赖 59 → 13 文件(-78%)**。剩余 13 个为 stock_list/wencai/market_scan jobs/reports 常量/ws_hub/auth/health/cache.streams —— 需按"服务下沉"逐个设计(第二阶段), 本条继续开启。
-
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
 复现命令:
@@ -324,3 +313,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-09 晚(第 0-6 波交付后)**: **KI-031/032/033/034/035/036/038/040 共 8 条修复移入 CHANGELOG**(对应 W0.1-W0.6 / W3 / W1), 台账 **31 条在册**; KI-039(存量 56 文件未清)保留开启并已更新进展。
 
 **2026-09-09 深夜(KI-037 收口)**: 前端指标收敛到 `frontend/packages/biz-ui/src/lib/indicators.ts` 并**逐值对齐后端 `src/core/indicators.py`**(MACD HIST 补 ×2、RSI6 由 Wilder 改 Cutler), 新增跨语言 parity 测试 `frontend/tests/lib/indicators-parity.test.ts`(夹具由后端生成, 容差 1e-9) → **KI-037 修复移入 CHANGELOG**, 台账 **30 条在册(P1×9/P2×16/P3×13)**; 仅 KI-039 保留开启。
+
+**2026-09-09 深夜(KI-039 清零)**: 第二阶段把剩余 13 个反向依赖全部下沉 —— `src/core/paths.py`(报告目录) / `src/db/redis_client.py`+`src/db/streams.py` / `src/collectors/stock_list.py` / `src/collectors/wencai.py` / `src/core/market_scan_jobs.py` / `src/core/auth_tokens.py` / `src/core/notify_sink.py`(WS 推送槽, ws_hub 导入时注册), 另 unit_check 直调 `core.datasource_failures.record`。**`src/core` 反向依赖 `src/web` = 0 文件**, 棘轮白名单清空(新增即失败) → **KI-039 关闭移入 CHANGELOG**, 台账 **29 条在册(P1×9/P2×15/P3×13)**。

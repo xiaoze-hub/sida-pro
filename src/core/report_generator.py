@@ -45,12 +45,11 @@ _MARKET_OVERVIEW_URL = "http://115.190.177.213:8100/cn/market-overview"
 
 
 def _report_root() -> Path:
-    """报告中心根目录 = CRON_OUTPUT_DIR(与 reports.py list_reports 同源解析)。
+    """报告中心根目录 = `src.core.paths.CRON_OUTPUT_DIR`(与 reports.py 同源解析)。
 
-    惰性 import: reports.py 在 import 时按环境变量解析目录, 保持一致保证
-    "生成器写入的位置 = 报告中心读取的位置"。
+    KI-039 第二阶段: 解析已下沉到中立层 `src/core/paths.py`, 不再依赖 web。
     """
-    from src.web.api.reports import CRON_OUTPUT_DIR
+    from src.core.paths import CRON_OUTPUT_DIR
 
     return Path(CRON_OUTPUT_DIR)
 

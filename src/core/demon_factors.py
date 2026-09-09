@@ -252,7 +252,7 @@ def update_pipeline(symbols: list[str] | None = None) -> dict:
 
 def _stock_names() -> dict[str, str]:
     try:
-        from src.web.stock_list import get_stock_list
+        from src.collectors.stock_list import get_stock_list
 
         return {
             s["symbol"]: (s.get("name") or "")

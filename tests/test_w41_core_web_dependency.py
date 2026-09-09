@@ -28,7 +28,7 @@ def test_no_new_core_to_web_dependencies():
     allowed = {
         ln.strip()
         for ln in ALLOWLIST.read_text(encoding="utf-8").splitlines()
-        if ln.strip()
+        if ln.strip() and not ln.strip().startswith("#")
     }
     current = _current_offenders()
     new = sorted(current - allowed)

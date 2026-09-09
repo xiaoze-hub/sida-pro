@@ -24,7 +24,7 @@ _SECTOR_TOPN = 10
 def _stock_index() -> dict[str, str]:
     """name → symbol(失败 → 空 dict, 上游降级)。"""
     try:
-        from src.web.stock_list import get_stock_list
+        from src.collectors.stock_list import get_stock_list
 
         return {s["name"]: s["symbol"] for s in get_stock_list() if s.get("name") and s.get("symbol")}
     except Exception as e:

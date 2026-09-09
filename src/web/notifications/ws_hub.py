@@ -475,3 +475,21 @@ def stats() -> dict[str, Any]:
         "per_user": per_user,
         "loop_attached": loop is not None and not loop.is_closed(),
     }
+
+
+# ── KI-039 第二阶段: 把 WS 实现注册到中立推送槽(core 侧不再 import web) ──
+# 用**包装函数**注册而非直接绑定: 模块属性被 monkeypatch 时仍然生效(晚绑定)。
+def _sink_broadcast(user_id, payload, *, category=None):
+    return broadcast_notification(user_id, payload, category=category)
+
+
+def _sink_incr_unread(user_id, n=1):
+    return incr_unread(user_id, n)
+
+
+try:
+    from src.core.notify_sink import register as _register_notify_sink
+
+    _register_notify_sink(_sink_broadcast, _sink_incr_unread)
+except Exception as _e:  # pragma: no cover - 注册失败不影响 WS 自身
+    logger.warning("[WS-Hub] notify_sink 注册失败: %s", _e)

@@ -111,7 +111,7 @@ async def lifespan(app):
 
     # 后台刷新股票列表缓存
     import threading
-    from src.web.stock_list import get_stock_list, refresh_stock_list
+    from src.collectors.stock_list import get_stock_list, refresh_stock_list
 
     def refresh_stock_cache():
         stocks = get_stock_list()

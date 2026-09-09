@@ -156,7 +156,7 @@ def test_ms_to_hms_edge_cases():
 
 
 def test_dragon_tiger_when_wencai_available(monkeypatch):
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     monkeypatch.setattr(wapi, "run_wencai", lambda q: {"available": True, "rows": [{"a": 1}, {"a": 2}]})
     ev = le.dragon_tiger_events("000977", "2026-09-01")
@@ -167,7 +167,7 @@ def test_dragon_tiger_when_wencai_available(monkeypatch):
 
 
 def test_announcement_when_wencai_available(monkeypatch):
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     monkeypatch.setattr(wapi, "run_wencai", lambda q: {"available": True, "rows": [{"a": 1}]})
     ev = le.announcement_events("000977", "2026-09-01")
@@ -176,7 +176,7 @@ def test_announcement_when_wencai_available(monkeypatch):
 
 def test_wencai_unavailable_returns_empty(monkeypatch):
     """wencai 不可用 → 空列表, 不编造事件。"""
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     monkeypatch.setattr(wapi, "run_wencai", lambda q: {"available": False, "rows": [], "note": "thsdk 不可用"})
     assert le.dragon_tiger_events("000977", "2026-09-01") == []
@@ -185,14 +185,14 @@ def test_wencai_unavailable_returns_empty(monkeypatch):
 
 def test_wencai_zero_hits_returns_empty(monkeypatch):
     """查询成功但零命中 → 空(不是"有龙虎榜")。"""
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     monkeypatch.setattr(wapi, "run_wencai", lambda q: {"available": True, "rows": []})
     assert le.dragon_tiger_events("000977", "2026-09-01") == []
 
 
 def test_wencai_raises_returns_empty(monkeypatch):
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     monkeypatch.setattr(wapi, "run_wencai", lambda q: (_ for _ in ()).throw(RuntimeError("超时")))
     assert le.dragon_tiger_events("000977", "2026-09-01") == []
@@ -200,7 +200,7 @@ def test_wencai_raises_returns_empty(monkeypatch):
 
 def test_dragon_tiger_query_contains_symbol(monkeypatch):
     """查询串里必须带代码, 否则查的不是这只票。"""
-    import src.web.api.wencai as wapi
+    import src.collectors.wencai as wapi
 
     seen = {}
 

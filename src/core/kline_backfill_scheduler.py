@@ -23,7 +23,7 @@ from src.collectors.klines_ingestor import ingest_batch, get_default_symbols, in
 from src.models.market import MarketCode
 from sqlalchemy import create_engine
 from src.db.dialect import DB_URL
-from src.web.cache.streams import publish_kline_backfill  # 2026-08-17 v0.2.65 (Phase 1)
+from src.db.streams import publish_kline_backfill  # 2026-08-17 v0.2.65 (Phase 1)
 
 logger = logging.getLogger(__name__)
 

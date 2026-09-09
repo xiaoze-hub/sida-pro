@@ -113,7 +113,7 @@ def _check_jwt_secret() -> CheckResult:
             "JWT_SECRET 已通过环境变量配置。",
         )
     try:
-        from src.web.api.auth import get_jwt_secret
+        from src.core.auth_tokens import get_jwt_secret
 
         get_jwt_secret()
         return CheckResult(

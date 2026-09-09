@@ -158,7 +158,7 @@ def test_run_job_scan_failure_returns_ok_false(monkeypatch):
 
 def test_run_job_success(monkeypatch):
     import src.core.market_scan as core_scan
-    import src.web.database as dbmod
+    import src.db.session as dbmod
 
     monkeypatch.setattr(
         core_scan, "scan",

@@ -7,6 +7,22 @@
 
 ## 2026-09-09
 
+### refactor-KI-039 第二阶段(清零): src/core 反向依赖 src/web 13 → 0 文件, KI-039 关闭
+- **目标**: 把上一版剩余的 13 个反向依赖按"服务下沉"逐个清零, 使 `src/core` 完全脱离 Web 层。
+- **八项下沉**:
+  1. `src/core/paths.py` —— 报告目录解析(`HERMES_HOME`/`CRON_OUTPUT_DIR` → `DATA_DIR` 回退)从 `web/api/reports.py` 下沉;
+  2. `src/db/redis_client.py` + `src/db/streams.py` —— Redis 客户端与 Streams 从 `web/cache/` 下沉(web 侧留 shim);
+  3. `src/collectors/stock_list.py` —— 股票列表缓存/搜索从 `web/stock_list.py` 下沉(web 侧留 shim);
+  4. `src/collectors/wencai.py` —— 问财纯函数从 `web/api/wencai.py` 下沉(web 侧只留 FastAPI 路由);
+  5. `src/core/market_scan_jobs.py` —— 盘后扫描 cron 入口(三榜/暗盘 TOP)从 `web/api/market_scan.py` 下沉(web 侧 re-export);
+  6. `src/core/auth_tokens.py` —— JWT 原语(`get_jwt_secret`/`create_token`/`decode_token`/`principal_from_payload`)从 `web/api/auth.py` 下沉;
+  7. `src/core/notify_sink.py` —— WS 推送槽; `ws_hub` 导入时用**晚绑定包装**注册(`broadcast_notification`/`incr_unread` 被 monkeypatch 时仍生效);
+  8. `src/core/unit_check.py` 直调 `core.datasource_failures.record`(不再绕 `web/api/health`)。
+- **测试适配**: 5 个测试文件的 monkeypatch 目标改到新位置(`src.db.session` / `src.core.datasource_failures` / `src.collectors.wencai` / `src.db.session`); 棘轮测试允许 allowlist 注释行; **allowlist 清空**(新增即失败)。
+- **效果**: **`src/core` 反向依赖 `src/web` = 0 文件**(起始 59 → 13 → **0**); **KI-039 关闭**, 台账 30→**29 条在册**(P1×9/P2×15/P3×13)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1986 passed / 2 failed(KI-027 本机环境) / 5 skipped**; 4 项静态门禁(`check_is_pg_scope` / `check_scoped_queries` / `check_migrations` / `check_lock_covers_reqs`)通过; `import server` OK。
+- [tag v0.5.34]
+
 ### refactor-KI-039 切片A+B: ORM/会话下沉 src/db, core→web 反向依赖 59→13 文件(-78%)
 - **背景**: KI-039 —— `src/core` 反向依赖 `src/web`(ORM `models` / `SessionLocal`)共 59 个文件, 核心逻辑无法脱离 Web 层单测; 棘轮门禁已冻结存量。
 - **切片A(会话)**: 新增 `src/db/session.py`(`Base` / `engine` / `SessionLocal` / `get_db`, 含 reload 防御), `src/web/database.py` 变薄壳(re-export + 保留 `init_db()` 迁移/备份职责)。
