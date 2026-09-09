@@ -48,7 +48,7 @@ def _recent_bars(n: int, end_offset_days: int = 0) -> list[kc.KlineData]:
 _SQL_CREATE_KLINES = (
     "CREATE TABLE klines (ts TIMESTAMP, symbol VARCHAR(16), market VARCHAR(4), "
     "period VARCHAR(4), source VARCHAR(16), {adjust}open FLOAT, high FLOAT, low FLOAT, "
-    "close FLOAT, volume BIGINT, quality_flag INT)"
+    "close FLOAT, volume BIGINT, amount FLOAT, quality_flag INT)"
 )
 _UQ_NEW = ("CREATE UNIQUE INDEX uq_klines_symbol_period_ts_adjust "
            "ON klines(symbol, market, period, ts, source, adjust)")

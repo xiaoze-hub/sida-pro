@@ -140,6 +140,7 @@ async def ingest_symbol(
         fail_details.append({"source": source, "error": "empty/no klines"})
     else:
         # B1.1: 升序遍历, prev_close 用于跳变校验
+        prev_close: float | None = None
         for k in sorted(klines, key=lambda x: str(getattr(x, "date", ""))):
             reason = validate_bar(symbol, k, prev_close, is_st=None)
             if reason in _HARD_REJECT_REASONS:

@@ -47,16 +47,8 @@
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
-| KI-031 | P1 | 回测绩效指标口径错误(净值按笔累积/年化按笔) | 2026-09-09 | TianXiang |
-| KI-032 | P1 | 涨跌停不可成交 + 无成交量上限 | 2026-09-09 | TianXiang |
-| KI-033 | P1 | 结果口径自然日 horizon + 近邻收盘静默兜底 | 2026-09-09 | TianXiang |
-| KI-034 | P1 | 因子权重同窗拟合 + 无样本外 + IC 非横截面 | 2026-09-09 | TianXiang |
-| KI-035 | P1 | 因子快照可被历史重跑污染(前视护栏缺失) | 2026-09-09 | TianXiang |
-| KI-036 | P1 | 无 PIT universe(幸存者偏差) | 2026-09-09 | TianXiang |
 | KI-037 | P2 | 指标口径分叉 + 前后端双实现 | 2026-09-09 | TianXiang |
-| KI-038 | P2 | 组合级回撤熔断缺失 + 上限建议性 | 2026-09-09 | TianXiang |
 | KI-039 | P2 | src/core 反向依赖 src/web 141 处 | 2026-09-09 | TianXiang |
-| KI-040 | P2 | K 线 ingest 无 OHLCV 校验 + klines 无 amount 列 | 2026-09-09 | TianXiang |
 
 ## 详情
 
@@ -252,54 +244,6 @@
 - 涉及文件: 生产 env(JWT_SECRET)、src/web/api/auth.py。
 - 建议修复: 随维护窗口换 ≥32 字节随机值 —— 注意会使全部现存会话失效(用户重新登录), 与口令类轮换同窗口执行成本最低。
 
-### KI-031 回测绩效指标口径错误 (P1)
-
-- 发现: 2026-09-09(《优化/改进/创新分析报告》P0-1/P0-2)
-- 现象: `metrics.py:1-6` 约定 equity_curve 为逐交易日净值, 但 `engine.py:189-197` 按平仓笔累加(`dates[0]=""`); `annualized_return` 用 `252/笔数`(`metrics.py:34-41`)、`sharpe` 的 `sqrt(252)` 作用于笔间收益(`:60-74`)。
-- 影响: 年化收益/夏普被放大数倍; 最大回撤因无逐日盯市而结构性低估 —— 所有回测绩效数字不可信。
-- 涉及文件: src/core/backtest/engine.py、src/core/backtest/metrics.py。
-- 建议修复: 净值曲线改逐日 mark-to-market(现金 + 持仓收盘市值), 指标输入改日收益序列, 契约断言 equity_dates 非空。任务 B0.1。
-
-### KI-032 涨跌停不可成交与流动性约束缺失 (P1)
-
-- 发现: 2026-09-09(报告 P0-3)
-- 现象: `engine.py:12` 明文 TODO 未建模涨跌停不可成交; 成交价无条件按 stop/target/open 撮合(`:131-143`); `CostModel.fill` 无成交量参数(`cost_model.py:63`), 引擎不读 volume。
-- 影响: 一字板追入/跌停出逃按理想价成交(A 股回测典型收益虚高); 无容量约束, 大资金结论失真。
-- 涉及文件: src/core/backtest/engine.py、src/core/backtest/cost_model.py。
-- 建议修复: 复用 `limit_rules.py:23-49` 判一字板并顺延/作废; 新增 participation_rate=5% 成交量上限。任务 B0.2。
-
-### KI-033 结果口径自然日 horizon + 静默兜底 (P1)
-
-- 发现: 2026-09-09(报告 P0-5)
-- 现象: `strategy_engine.py:1692` 与 `entry_candidates.py:2307` 用自然日 timedelta 推目标日; `_pick_close_on_or_before`(`:253-272`)缺当日时静默取更早收盘; `decision_backtest.py:76-93` 胜负集合用未来 high/low 且可重叠。
-- 影响: "5 日"实为约 3 个交易日; 节前后样本被截断; 胜率 + 败率可 > 1。
-- 涉及文件: src/core/strategy_engine.py、src/core/entry_candidates.py、src/core/decision_backtest.py、src/core/backtest/engine.py。
-- 建议修复: 统一 `trading_calendar.add_trading_days`; 缺失返回 None 并计入 missing; 胜负改目标日收盘口径。任务 B0.3/B2.6。
-
-### KI-034 因子权重同窗拟合 + 无样本外 + IC 非横截面 (P1)
-
-- 发现: 2026-09-09(报告 P0-4)
-- 现象: `factor_calibration.py:74-127` 用同一 90 天窗口拟合并立即写权重, 无 holdout; `factor_eval.py:124-134` 的 IC 是全样本 pooled Spearman(混入时序变异), 仅 IR 按日分组(`:136-148`); 全仓无 grid search/walk-forward/OOS。
-- 影响: 因子"有效"可能只是该窗口有效; 权重自适应持续放大噪声。
-- 涉及文件: src/core/factor_eval.py、src/core/factor_calibration.py、src/core/factor_weights.py。
-- 建议修复: IC 主口径改按日横截面均值 + t 统计; calibration 70/30 切分, OOS 不达标不写库。任务 B0.4。
-
-### KI-035 因子快照可被历史重跑污染(前视护栏缺失) (P1)
-
-- 发现: 2026-09-09(产出方追溯 + 生产库只读抽查; 详见 tdai `msg-eb6f16055320`)
-- 现象: 唯一写入点 `strategy_engine.py:928`(由 `refresh_strategy_signals` 驱动), 值来自信号 payload 复制; `_load_news_metrics`(`:474-548`)硬用 `utc_now()-72h` 无 as_of, 权重读当前值(`:1289,1293`); refresh API 的 snapshot_date 为开放参数(`recommendations.py:382`)且 `wait=true` 同步执行。生产抽查: 7434 行中 740 行为 2026-08-26 22:30 批量延迟物化, 但对应信号行未被改写(`signal_updated_after=0`)→ **当前未被污染**。
-- 影响: 若今后用历史日期重跑, 会用今天的新闻 + 当前权重覆盖历史因子行(并物理删除同日旧行), 造成前视污染与不可复现。
-- 涉及文件: src/core/strategy_engine.py、src/core/factor_weights.py、src/web/api/recommendations.py。
-- 建议修复: `_load_news_metrics` 加 as_of; 权重按 StrategyWeightHistory/FactorWeightHistory 取 as-of; 历史日期 400 拒绝; 因子行落 input_hash/news_window/weight_version。任务 B0.5。
-
-### KI-036 无 PIT universe(幸存者偏差) (P1)
-
-- 发现: 2026-09-09(报告 P0-6)
-- 现象: 全仓无 universe 快照/退市表/ST 字段(grep survivorship|universe_snapshot|as_of_date 均 0); 股票池为当前实时名单, 回测吃调用方给的 symbol 列表(`decision_backtest.py:144`)。
-- 影响: 历史回测自动剔除已退市/戴帽标的, 收益与胜率系统性偏高, 无法靠调参弥补。
-- 涉及文件: src/core/backtest/data_adapter.py、src/core/decision_backtest.py、src/web/stock_list.py。
-- 建议修复: 建 `stock_universe_snapshots`(as_of_date/symbol/market/is_st/is_delisted/list_date/delist_date) + 回填脚本; 回测按 as_of 取池。任务 B0.6。
-
 ### KI-037 指标口径分叉 + 前后端双实现 (P2)
 
 - 发现: 2026-09-09(报告 P1-5)
@@ -307,14 +251,7 @@
 - 影响: 同一指标在不同页面/模块数值不一致; 阈值类策略不可迁移。
 - 涉及文件: src/collectors/kline_collector.py、src/core/shadow_account/extractor.py、frontend/packages/biz-ui/src/components/InteractiveKline.tsx。
 - 建议修复: 建 `src/core/indicators/` 统一实现并标注口径; 前后端逐值比对测试(容差 1e-9)。任务 B4.3。
-
-### KI-038 组合级回撤熔断缺失 + 上限建议性 (P2)
-
-- 发现: 2026-09-09(报告 P1-6)
-- 现象: 最大回撤只测量不动作(`paper_trading_engine.py:648-671` 只写 max_drawdown_pct); 单票 0.40 集中度阈值仅诊断(`portfolio_diagnostics.py:15-18`); 无总敞口/杠杆上限; 模拟盘无 T+1(内核 `engine.py:126-127` 有)。
-- 影响: 极端行情可满仓硬扛; "策略失效自动停机"缺失。
-- 涉及文件: src/core/paper_trading_engine.py、src/core/portfolio_diagnostics.py。
-- 建议修复: 账户级回撤熔断(默认 20%) + 单票/单策略/总敞口强制校验 + 模拟盘 T+1。任务 B3.1/B3.2/B3.3。
+- **进展(2026-09-09 晚)**: 后端已统一到 `src/core/indicators.py`(口径与旧实现逐值对齐 + Wilder 对照函数), `kline_collector` 7 个指标函数改为委托, parity 测试锁定; **前端 `InteractiveKline.tsx` 仍为 TS 侧独立实现** —— 前后端逐值比对待前端切换后补, 本条保持开启。
 
 ### KI-039 src/core 反向依赖 src/web 141 处 (P2)
 
@@ -323,14 +260,7 @@
 - 影响: 核心逻辑无法脱离 Web 单测; ORM 变更牵动全局; 策略口径分叉。
 - 涉及文件: src/core/*、src/agents/*、src/collectors/*、src/web/api/strategies.py、src/core/backtest/data_adapter.py。
 - 建议修复: 抽 `src/db/repository`; 统一策略实现; 加 core→web 静态门禁(存量白名单 + 禁止新增)。任务 B4.1/B4.2/B4.5。
-
-### KI-040 K 线 ingest 无 OHLCV 校验 + klines 无 amount 列 (P2)
-
-- 发现: 2026-09-09(报告 P1-2)
-- 现象: `klines_ingestor.py:95-135` 直接写库无校验; 哨兵 4 条规则无一条针对 K 线(`data_quality_sentinel.py:38-45`); `klines` 表无 amount 列(`migrations.py:2113-2127`)致"量×价≈额"恒等式无法在存储层校验; 12 天新鲜度门槛静默接受旧数据(`kline_collector.py:717-728`)。
-- 影响: 脏柱直接进策略与回测; 复权污染只能事后人工勘查(KI-011)。
-- 涉及文件: src/collectors/klines_ingestor.py、src/core/data_quality_sentinel.py、src/web/migrations.py。
-- 建议修复: ingest 加 OHLC 关系/涨跌幅/volume 校验; 哨兵加缺口与陈旧度规则; 补 amount 列恢复单位校验。任务 B1.1/B1.2/B1.3。
+- **进展(2026-09-09 晚)**: 已加**棘轮门禁** `tests/test_w41_core_web_dependency.py`(冻结清单 + 禁止新增)并下沉 `backtest/data_adapter` 取数到 `src/db/klines_repo.py`(文件数 57→56); **存量 56 文件与 API 层第二策略实现(B4.2)仍未清** —— 本条保持开启。
 
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
@@ -399,3 +329,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 扩词 grep(加 `暂不|明确不做|遗留`, 29 行)与其它来源额外产出 15 条: KI-004(L15)、KI-005(L13 W4.2 做法行)、KI-006(L159 经 W2.5 条目)、KI-007(L148 豁免清单)、KI-008+KI-010(L249)、KI-011(L209)、KI-014(L29)、KI-016(L51)、KI-001/002/003(W2.5 既有表收编)、KI-027(历次发版"已知本地环境损坏"汇总)、KI-028(L139 部署注意)、KI-009(方案 §4.3 点名)。其余命中为历史叙事用词("历史遗留"描述)或已修复项(GS 配色 L1338 已于 v0.4.71 修复), 不迁入。合计 **28 条**(≥20 达标)。
 
 后续台账变化: 2026-09-09 维护窗口 KI-004 修复移入 CHANGELOG(生产容器限额重建+PG 口令轮换条目); 同日新增 KI-029/030, 台账现 29 条在册(P1×3)。2026-09-09 晚《优化/改进/创新分析报告》新增 **KI-031..040**(P1×6: 回测口径/涨跌停成交/结果口径/因子 OOS/因子快照前视护栏/PIT universe; P2×4: 指标分叉/风控熔断/core→web 耦合/K 线校验), 台账现 **39 条在册(P1×9/P2×17/P3×13)**; 每条的修复任务编号(B0.x-B5.x)见 `docs/优化改进创新_开发方案_20260909.md`。
+
+**2026-09-09 晚(第 0-6 波交付后)**: **KI-031/032/033/034/035/036/038/040 共 8 条修复移入 CHANGELOG**(对应 W0.1-W0.6 / W3 / W1), 台账 **31 条在册**; KI-037(前端指标仍独立实现)与 KI-039(存量 56 文件未清)保留开启并已更新进展。

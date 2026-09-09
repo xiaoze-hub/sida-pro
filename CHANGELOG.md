@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### fix-合并后修复: ingest prev_close 未初始化 + 门禁白名单 + 测试库 amount 列(W1/W4 合并连带)
+- **背景**: W1-W6 合入 main 后全量套件 7 failed —— ①`klines_ingestor.ingest_symbol` 的 B1.1 跳变校验引用了**未初始化的局部变量 `prev_close`**(UnboundLocalError, 4 个入库测试失败; W1 单波测试只测了纯函数 `validate_bar`, 未覆盖 `ingest_symbol`); ②W4 的 core→web 棘轮门禁抓到 W1 新增的 3 个数据访问模块(`adjust.py`/`halts.py`/`datasource_failures.py`)未入白名单; ③`tests/test_kline_adjust_dimension.py` 的测试库 DDL 缺 W1.3 新增的 `amount` 列。
+- **做法**: ①`prev_close: float | None = None` 初始化后再进循环; ②白名单按合并后树重生成(**56→59**, 新增 3 个 W1 数据访问模块, 待 repository 层下沉后回收); ③测试 DDL 补 `amount FLOAT`。
+- **验证**: `pytest -q tests/test_kline_adjust_dimension.py tests/test_w41_core_web_dependency.py tests/test_klines_ingest_validation.py tests/test_klines_amount_and_halts.py` → **19 passed**; 随后全量套件复跑作为 v0.5.24 门禁。
+- [branch main, `git show HEAD`]
+
 ### update-v0.5.23生产部署(docker cp覆盖层, 冒烟9/9, 迁移v149首执行)
 - **生产部署**: tag v0.5.23(c5aa35c) 经 docker cp 覆盖层部署到 panwatch 容器。步骤: 备份现行代码(`/root/app_backup_pre_v0523_20260909.tar.gz`) → `git archive`(21.3MB) → docker cp 进容器 /tmp → `docker exec -u root ... tar xf --overwrite` → restart → 68s healthy → 冒烟门禁 **9/9**(10.7s), /api/health `version=v0.5.23`, database/redis/scheduler 全 ok。
 - **迁移对账**: **v149 `stock_universe_snapshots` 首次在生产库执行成功**(`schema_migrations` 149 success=1); 迁移使首次启动变慢(约 2.5min 到 healthy), 属预期。
