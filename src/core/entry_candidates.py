@@ -2445,7 +2445,8 @@ def _due_unverified_pairs(
         if snap is None:
             continue
         for h in safe_horizons:
-            if snap + timedelta(days=h) <= today and (int(r.id), h) not in verified:
+            # B0.3: 到期判定与评估器同口径(交易日), 否则缺口报告会长期显示幻影缺口
+            if add_trading_days(snap, h) <= today and (int(r.id), h) not in verified:
                 missing[h] += 1
     return missing
 

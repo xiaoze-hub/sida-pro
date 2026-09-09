@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### fix-后验到期判定统一交易日口径(补齐 W0.3 遗漏的缺口报告)
+- **背景**: W0.3 把评估器到期判定改为交易日(`add_trading_days`), 但 `entry_candidates._due_unverified_pairs`(缺口报告/调度告警)仍用自然日 → 两侧口径分叉, 缺口报告会长期显示"幻影缺口"(评估器认为未到期、报告认为已到期), 全量套件抓出 4 个失败。
+- **做法**: `_due_unverified_pairs` 改 `add_trading_days(snap, h) <= today`; 同步修正 `tests/test_entry_candidate_outcomes.py` 的样本日期为交易日回溯(新增 `_trading_days_ago` 助手), 4 个用例与新口径对齐。
+- **验证**: `pytest -q tests/test_entry_candidate_outcomes.py tests/test_backtest*.py tests/test_outcome_horizon.py tests/test_factor_*.py tests/test_pit_universe.py tests/test_seal_quality.py` → **57 passed**。
+- [branch fix/w0-回测可信度-20260909, `git show HEAD`]
+
 ### feat-PIT股票池快照: 消除幸存者偏差 + ST未知保守5%(W0.6, KI-036)
 - **背景**: KI-036 —— 全仓无 universe 快照/退市表/ST 字段, 回测用"今天的名单"回看历史, 已退市/已戴帽标的被系统性剔除, 收益与胜率偏高且无法靠调参弥补。
 - **做法**: ① 新表 `stock_universe_snapshots`(迁移 **v149**, 唯一键 `as_of_date+symbol+market`, 字段 is_st/is_delisted/list_date/delist_date/source); ② 新模块 `src/core/universe.py`: `upsert_universe`(幂等) / `universe_as_of`(按日取池, **无快照返回空列表不静默用今天名单**) / `filter_symbols`(无快照回退并告警) / `backfill_from_entry_candidates`(库内唯一 PIT 来源) / `backfill_from_stock_table`; ③ `decision_backtest.backtest_resonance(..., universe_as_of=日期)` 按该日池过滤标的; ④ `limit_rules.limit_ratio/is_st=None` **保守取 5%**(显式 False 才 10%) —— fail-safe 优先; ⑤ 回填脚本 `scripts/backfill_universe.py`。
