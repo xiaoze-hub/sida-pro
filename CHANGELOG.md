@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.26(前端 Settings 拆分)
+- 内容: `Settings.tsx` 组件外移(`CapBadges`/`LlmUsageSection` → `src/components/settings/`), 页面 2764→2562 行; **无后端/迁移变更**。
+- 部署: 仅覆盖容器 `/app/static`(前端产物), 不重启后端。
+- 验收: `tsc -b` + `pnpm test` 27 passed + `pnpm build`; 生产冒烟 9/9。
+- [tag v0.5.26]
+
 ### refactor-前端大文件拆分(部分): Settings.tsx 组件外移(W5.3 部分)
 - **背景**: W5.3 目标"单文件 ≤ 800 行"; `Settings.tsx` 2764 行内含可独立组件。
 - **做法**: 逐字外移 `CapBadges`(+ `MODEL_CAP_META`/`MODEL_CAP_ORDER` 常量) 与 `LlmUsageSection` 到 `src/components/settings/`; `Settings.tsx` **2764→2562 行**。
