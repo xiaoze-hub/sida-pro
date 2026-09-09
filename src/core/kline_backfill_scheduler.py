@@ -102,9 +102,26 @@ def _ingest_one_in_worker(engine, symbol: str, market: MarketCode) -> dict:
 class KlineBackfillScheduler:
     """K线每日 backfill 调度器, 18:00 收盘后自动入库。"""
 
+    # B5 单位对账: 18:35(紧跟 backfill 后)抽样跑 vol×price≈amt 恒等式。
+    # 挂同一调度器而非新建 7th scheduler —— 避免 health "scheduler N running"
+    # 基线变化(W3-REL 冒烟按存档基线逐项复对)。
+    RECON_CRON = {"hour": 18, "minute": 35}
+    RECON_SAMPLE_N = 20
+
     def __init__(self, timezone: str = "Asia/Shanghai"):
         self.scheduler = AsyncIOScheduler(timezone=timezone)
         self._running = False
+
+    async def _unit_recon_job(self):
+        """B5 每日单位对账(不复权抽样恒等式, 报告落 DATA_DIR/reports/unit_recon)。"""
+        if not _is_market_day():
+            return
+        try:
+            from src.core.unit_recon import run_unit_reconciliation
+
+            await asyncio.to_thread(run_unit_reconciliation, self.RECON_SAMPLE_N)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[单位对账] 执行失败(fail-soft, 不影响 backfill): %r", e)
 
     async def _backfill_job(self):
         if self._running:
@@ -141,6 +158,18 @@ class KlineBackfillScheduler:
             coalesce=True,  # 错过的多次合并成一次
             max_instances=1,
             misfire_grace_time=300,
+        )
+        self.scheduler.add_job(
+            self._unit_recon_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=self.RECON_CRON["hour"],
+            minute=self.RECON_CRON["minute"],
+            id="unit_recon_daily",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,  # W3.1 源码一致性测试要求与既有 job 统一
         )
         self.scheduler.start()
         from src.core.scheduler_registry import register

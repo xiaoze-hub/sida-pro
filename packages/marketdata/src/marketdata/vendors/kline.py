@@ -211,7 +211,7 @@ def fetch_eastmoney_kline(secid: str, days: int) -> list[Bar]:
         _EASTMONEY_URL, host_key="push2his.eastmoney.com", min_interval_s=0.2,
         params={"secid": secid, "klt": "101", "fqt": "1",
                 "lmt": str(min(max(int(days or 1), 1200), 20000)), "end": "20500101",
-                "fields1": "f1,f2,f3,f4,f5,f6", "fields2": "f51,f52,f53,f54,f55,f56",
+                "fields1": "f1,f2,f3,f4,f5,f6", "fields2": "f51,f52,f53,f54,f55,f56,f57",
                 "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
         headers={"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"},
         timeout=12, retries=1, parse="json", log_label="东财K线", symbol=secid,
@@ -224,8 +224,11 @@ def fetch_eastmoney_kline(secid: str, days: int) -> list[Bar]:
         if len(p) < 6:
             continue
         try:
+            # f57=成交额(元, 原始不复权值, 不参与手/股换算) —— B5 单位一致性校验数据源
+            amount = float(p[6]) if len(p) > 6 and float(p[6]) > 0 else None
             out.append(Bar(date=p[0], open=float(p[1]), close=float(p[2]),
-                           high=float(p[3]), low=float(p[4]), volume=float(p[5]) * to_shares))
+                           high=float(p[3]), low=float(p[4]), volume=float(p[5]) * to_shares,
+                           amount=amount))
         except Exception:
             continue
     return out

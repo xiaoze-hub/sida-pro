@@ -8,11 +8,17 @@
 
 滑点体现在实际成交价(fill_price),不重复计入显式规费;显式规费 = 佣金+印花税+过户费。
 现金变动(cash_delta)= 买入为负、卖出为正,已扣全部成本与滑点,PnL 由买卖两腿 cash_delta 相加得出。
+
+B5(2026-09-09): fill/round_trip_pnl 内部金额运算改 Decimal(src/core/money.py),
+消除 float 二进制漂移在反复结算中的累积误差; Fill 字段仍为 float(边界: 历史量化
+精度经 str 往返无损), DB 列维持 Float, 数值迁移另行评估。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from src.core.money import q4, q6, to_dec
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,9 @@ class CostModel:
             side: "buy" 或 "sell"
             price: 名义价(未含滑点)
             quantity: 股数(正整数)
+
+        B5: 内部金额运算 Decimal(str 往返), 消除 float 漂移; 输出经历史精度
+        量化(fill_price 6 位 / 金额项 4 位)后转 float。
         """
         side = (side or "").strip().lower()
         if side not in ("buy", "sell"):
@@ -69,12 +78,14 @@ class CostModel:
         if qty <= 0 or price <= 0:
             raise ValueError(f"price/quantity 必须为正,得到 price={price} qty={quantity}")
 
-        fill_price = self._apply_slippage(price, side)
+        price_d = to_dec(price)
+        slip = price_d * to_dec(self.cfg.slippage_bps) / to_dec(10000)
+        fill_price = price_d + slip if side == "buy" else max(to_dec(0), price_d - slip)
         gross = fill_price * qty
-        commission = max(gross * self.cfg.commission_rate, self.cfg.min_commission)
-        stamp_duty = gross * self.cfg.stamp_duty_rate if side == "sell" else 0.0
-        transfer_fee = gross * self.cfg.transfer_fee_rate
-        slippage_cost = abs(fill_price - price) * qty
+        commission = max(gross * to_dec(self.cfg.commission_rate), to_dec(self.cfg.min_commission))
+        stamp_duty = gross * to_dec(self.cfg.stamp_duty_rate) if side == "sell" else to_dec(0)
+        transfer_fee = gross * to_dec(self.cfg.transfer_fee_rate)
+        slippage_cost = abs(fill_price - price_d) * qty
         explicit_fees = commission + stamp_duty + transfer_fee
 
         if side == "buy":
@@ -85,16 +96,16 @@ class CostModel:
         return Fill(
             side=side,
             price=float(price),
-            fill_price=round(fill_price, 6),
+            fill_price=float(q6(fill_price)),
             quantity=qty,
-            gross=round(gross, 4),
-            commission=round(commission, 4),
-            stamp_duty=round(stamp_duty, 4),
-            transfer_fee=round(transfer_fee, 4),
-            slippage_cost=round(slippage_cost, 4),
-            explicit_fees=round(explicit_fees, 4),
-            friction=round(explicit_fees + slippage_cost, 4),
-            cash_delta=round(cash_delta, 4),
+            gross=float(q4(gross)),
+            commission=float(q4(commission)),
+            stamp_duty=float(q4(stamp_duty)),
+            transfer_fee=float(q4(transfer_fee)),
+            slippage_cost=float(q4(slippage_cost)),
+            explicit_fees=float(q4(explicit_fees)),
+            friction=float(q4(explicit_fees + slippage_cost)),
+            cash_delta=float(q4(cash_delta)),
         )
 
     def round_trip_pnl(
@@ -103,21 +114,21 @@ class CostModel:
         """一买一卖的完整盈亏(扣全部成本)。便于单笔回测与对账。"""
         buy = self.fill("buy", entry_price, quantity)
         sell = self.fill("sell", exit_price, quantity)
-        # 现金口径:买入流出 -cash_delta(正数),卖出流入 cash_delta
-        invested = -buy.cash_delta
-        proceeds = sell.cash_delta
+        # 现金口径:买入流出 -cash_delta(正数),卖出流入 cash_delta(B5: Decimal 结算)
+        invested = -to_dec(buy.cash_delta)
+        proceeds = to_dec(sell.cash_delta)
         pnl = proceeds - invested
-        pnl_pct = (pnl / invested * 100.0) if invested > 0 else 0.0
-        total_cost = buy.friction + sell.friction
+        pnl_pct = (pnl / invested * to_dec(100)) if invested > 0 else to_dec(0)
+        total_cost = to_dec(buy.friction) + to_dec(sell.friction)
         return {
             "entry_price": float(entry_price),
             "exit_price": float(exit_price),
             "quantity": int(quantity),
-            "invested": round(invested, 4),
-            "proceeds": round(proceeds, 4),
-            "pnl": round(pnl, 4),
-            "pnl_pct": round(pnl_pct, 4),
-            "total_cost": round(total_cost, 4),
+            "invested": float(q4(invested)),
+            "proceeds": float(q4(proceeds)),
+            "pnl": float(q4(pnl)),
+            "pnl_pct": float(q4(pnl_pct)),
+            "total_cost": float(q4(total_cost)),
             "buy": buy,
             "sell": sell,
         }

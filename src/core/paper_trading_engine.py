@@ -1,4 +1,9 @@
-"""模拟盘引擎：自动按策略信号建仓/平仓，跟踪虚拟账户收益。"""
+"""模拟盘引擎：自动按策略信号建仓/平仓，跟踪虚拟账户收益。
+
+B5(2026-09-09) 结算分界: 平仓结算/可用现金/账户净值等**金额运算**走
+src/core/money.py Decimal; 行情展示与 DB 列(模型 Float)留 float —— 入库值
+均为 Decimal 精确结算后量化的结果, 数值迁移另行评估。
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.core.marketdata_client import md_quote_rows
+from src.core.money import q2, q4, to_dec
 from src.models.market import MarketCode, MARKETS
 from src.web.database import SessionLocal
 from src.web.models import (
@@ -147,8 +153,10 @@ def allocations_from_excluded(excluded: list[str] | None) -> dict[str, float]:
 def compute_market_cash(
     initial_capital: float, ratio: float, realized_pnl: float, open_cost: float
 ) -> float:
-    """某市场可用现金 = 总资金×比例 + 该市场已实现盈亏 − 该市场持仓成本（纯函数，可单测）。"""
-    return initial_capital * ratio + realized_pnl - open_cost
+    """某市场可用现金 = 总资金×比例 + 该市场已实现盈亏 − 该市场持仓成本（纯函数，可单测）。
+
+    B5: Decimal 结算(量化到分); ratio 经 str 往返, 10000×0.3 类 float 漂移被消除。"""
+    return float(q2(to_dec(initial_capital) * to_dec(ratio) + to_dec(realized_pnl) - to_dec(open_cost)))
 
 
 def _user_scope(model: Any, user_id: str | None) -> tuple:
@@ -159,7 +167,10 @@ def _user_scope(model: Any, user_id: str | None) -> tuple:
 
 
 def market_realized_open(db: Session, market: str, user_id: str | None = None) -> tuple[float, float]:
-    """返回 (该市场已实现盈亏合计, 该市场未平仓持仓成本合计)。user_id 限定归属用户。"""
+    """返回 (该市场已实现盈亏合计, 该市场未平仓持仓成本合计)。user_id 限定归属用户。
+
+    B5 分界: SQL 侧聚合返回 float(小数列运算在库内), 下游 compute_market_cash
+    经 to_dec 进入 Decimal 结算。"""
     realized = (
         db.query(func.coalesce(func.sum(PaperTradingTrade.pnl), 0.0))
         .filter(
@@ -395,9 +406,9 @@ class PaperTradingEngine:
             if quantity <= 0:
                 continue  # 子池额度不足以买入最小一手
 
-            # 含交易成本的实际买入流出
+            # 含交易成本的实际买入流出(B5: Decimal 结算)
             buy_fill = COST_MODEL.fill("buy", entry_price, quantity)
-            buy_outlay = -buy_fill.cash_delta
+            buy_outlay = -to_dec(buy_fill.cash_delta)
 
             # 基于入场价计算止损/止盈
             # 优先用信号的止损/止盈比例，否则用默认 -8%/+15%
@@ -436,8 +447,8 @@ class PaperTradingEngine:
                 strategy_code=sig.strategy_code or "",
             )
             db.add(pos)
-            account.current_capital -= buy_outlay
-            market_cash[mkt] = avail - buy_outlay
+            account.current_capital -= float(buy_outlay)
+            market_cash[mkt] = float(to_dec(avail) - buy_outlay)
             open_keys.add((sig.stock_symbol, sig.stock_market))
             new_keys.add((sig.stock_symbol, sig.stock_market))
             entry_events.append((pos, sig))
@@ -469,11 +480,13 @@ class PaperTradingEngine:
         """平仓单个持仓，返回交易记录。"""
         now = _utc_now()
         # 含交易成本的净盈亏:卖出净回收 − 建仓含费投入(与建仓口径一致,资金守恒)
-        buy_cost = -COST_MODEL.fill("buy", pos.entry_price, pos.quantity).cash_delta
+        # B5: 结算走 Decimal(fill 内部已 Decimal 化, float 值经 str 往返精确还原)
+        buy_cost = -to_dec(COST_MODEL.fill("buy", pos.entry_price, pos.quantity).cash_delta)
         sell_fill = COST_MODEL.fill("sell", exit_price, pos.quantity)
-        sell_proceeds = sell_fill.cash_delta
-        pnl = round(sell_proceeds - buy_cost, 4)
-        pnl_pct = (pnl / buy_cost * 100) if buy_cost > 0 else 0.0
+        sell_proceeds = to_dec(sell_fill.cash_delta)
+        pnl_d = q4(sell_proceeds - buy_cost)
+        pnl = float(pnl_d)
+        pnl_pct = float(q2(pnl_d / buy_cost * to_dec(100))) if buy_cost > 0 else 0.0
 
         holding_days = 0
         if pos.opened_at:
@@ -505,8 +518,8 @@ class PaperTradingEngine:
         pos.current_price = exit_price
         pos.unrealized_pnl = pnl
 
-        # 回收资金(卖出净回收,已扣卖出费)
-        account.current_capital += sell_proceeds
+        # 回收资金(卖出净回收,已扣卖出费; DB 列 Float 分界: 值已量化)
+        account.current_capital += float(sell_proceeds)
         account.total_pnl += pnl
         account.total_trades += 1
         if pnl > 0:
@@ -633,7 +646,9 @@ class PaperTradingEngine:
         return closed, exit_events
 
     def _update_account_metrics(self, db: Session, account: PaperTradingAccount) -> None:
-        """更新账户峰值和最大回撤。"""
+        """更新账户峰值和最大回撤。
+
+        B5: 净值/回撤为金额结算 → Decimal; 入库值量化(账户列 Float 分界)。"""
         # 计算包含浮动盈亏的总资产
         open_positions = (
             db.query(PaperTradingPosition)
@@ -641,17 +656,19 @@ class PaperTradingEngine:
             .all()
         )
         unrealized_total = sum(p.unrealized_pnl or 0 for p in open_positions)
-        total_equity = account.current_capital + sum(
-            (p.current_price or p.entry_price) * p.quantity for p in open_positions
+        total_equity = to_dec(account.current_capital) + sum(
+            to_dec(p.current_price or p.entry_price) * to_dec(p.quantity)
+            for p in open_positions
         )
+        total_equity_f = float(q2(total_equity))
 
-        if total_equity > account.peak_capital:
-            account.peak_capital = total_equity
+        if total_equity_f > account.peak_capital:
+            account.peak_capital = total_equity_f
 
         if account.peak_capital > 0:
-            drawdown = (account.peak_capital - total_equity) / account.peak_capital * 100
-            if drawdown > account.max_drawdown_pct:
-                account.max_drawdown_pct = round(drawdown, 2)
+            drawdown = (to_dec(account.peak_capital) - total_equity) / to_dec(account.peak_capital) * to_dec(100)
+            if drawdown > to_dec(account.max_drawdown_pct):
+                account.max_drawdown_pct = float(q2(drawdown))
 
     def _scan_sync(self) -> dict:
         """同步扫描（在线程中执行）。2026-09-08 T6: 遍历所有用户的账户逐一扫描。"""
