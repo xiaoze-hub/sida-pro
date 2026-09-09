@@ -14,7 +14,8 @@
 - **容器限额重建(KI-004 关闭, 移入本条)**: 新姿势 docker commit 快照镜像(`panwatch:v0.5.22-pre-rotation-20260909`, 2.46GB, v0.5.22 覆盖层已烘焙) → rm 旧容器 → 快照+新 env 重建, 停机 ~35s。四限实测生效 mem=1500m / memswap=1500m / reservation=512m / cpus=1.5。**坑: `docker run --memory-swap` 未生效**(inspect MemorySwap=-1), `docker update --memory-swap` 补刀生效 —— 重建 runbook 必须事后 verify 四限而非信 flag。快照重建优于覆盖层重放: 无 v0.5.14 基座引导窗、无删文件步骤; 回滚=旧 env 文件+快照重跑。
 - **验证**: /api/health version=v0.5.22, database=ok(新口令端到端证明)/redis ok/scheduler ok/forecast_engine down(预期基线); 冒烟门禁 **9/9**(5.9s)。首跑 8/9 系 dark-flow 冷缓存误报(容器重建清空 dark_flow_verdict 磁盘缓存, 冷态重算 3-67s 撞冒烟 1s 客户端超时; 预热 3 连后命中缓存回落亚秒, 复跑 9/9, 根因闭环) —— 登记 KI-029, 重建 runbook 补"预热 dark-flow 再冒烟"。
 - **顺手发现**: 容器日志 InsecureKeyLengthWarning, JWT_SECRET 24 字节 < RFC 7518 HS256 建议 32 字节 → 登记 KI-030(P3, 轮换会使全量会话失效需窗口)。
-- **凭证卫生与收尾**: 含新旧口令的 env 临时文件/补丁脚本已删, 演练容器已 rm; 快照镜像与旧 env 备份留至老板签核 0.4③ 后清理。PG 容器自身 env 的 POSTGRES_PASSWORD 仍持旧值(仅首次初始化用, 不参与运行时认证), 清理需重建 pg 容器另择窗口。0.4③ 完成待老板人工签核(方案 :618)。
+- **凭证卫生与收尾**: 含新旧口令的 env 临时文件/补丁脚本已删, 演练容器已 rm。PG 容器自身 env 的 POSTGRES_PASSWORD 仍持旧值(仅首次初始化用, 不参与运行时认证), 清理需重建 pg 容器另择窗口。
+- **签核(0.4③ 正式关闭)**: 老板 2026-09-09 晚回复"确认"(方案 :618 人工签核项达成)。更正本条早前"快照镜像签核后清理"的表述: 快照镜像**保留不清理** —— 它就是当前生产容器的运行镜像(restart=always 重启依赖); "签核后可清理"实际仅指旧 env 备份(已随凭证文件删除)。
 - [branch main, `git show HEAD`]
 
 ### update-v0.5.22生产部署(docker cp覆盖层, 冒烟9/9, 零迁移零代码变更)
