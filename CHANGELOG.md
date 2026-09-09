@@ -23,6 +23,11 @@
 - **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1986 passed / 2 failed(KI-027 本机环境) / 5 skipped**; 4 项静态门禁(`check_is_pg_scope` / `check_scoped_queries` / `check_migrations` / `check_lock_covers_reqs`)通过; `import server` OK。
 - [tag v0.5.34]
 
+### update-v0.5.34 生产部署(代码+static覆盖层, chown+compileall, 冒烟 9/9)
+- **部署**: 备份 `/root/app_backup_pre_v0534_20260909.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.34** → 冒烟 **9/9**(8.9s)。
+- **说明**: 纯模块位置/导入路径变更(无 API 行为变化); 冒烟覆盖 health/stocks/datasources/settings/notifications/agents/dark-flow/main-flow/klines 全绿。
+- [tag v0.5.34]
+
 ### refactor-KI-039 切片A+B: ORM/会话下沉 src/db, core→web 反向依赖 59→13 文件(-78%)
 - **背景**: KI-039 —— `src/core` 反向依赖 `src/web`(ORM `models` / `SessionLocal`)共 59 个文件, 核心逻辑无法脱离 Web 层单测; 棘轮门禁已冻结存量。
 - **切片A(会话)**: 新增 `src/db/session.py`(`Base` / `engine` / `SessionLocal` / `get_db`, 含 reload 防御), `src/web/database.py` 变薄壳(re-export + 保留 `init_db()` 迁移/备份职责)。
