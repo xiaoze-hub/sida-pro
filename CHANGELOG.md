@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### chore-17文件行尾renormalize(CRLF→LF, 清除上游欠账)
+- 背景: 0.0 勘查既定欠账 —— 19 个 .py 文件的 index blob 本身是 CRLF, 而 .gitattributes(2026-09-07)规定 `*.py text eol=lf` → 这批文件在任何新检出里永远显示"已修改"(工作副本被写为 LF, 与 index 的 CRLF blob 比对不等), 且阻塞 merge/checkout(本次 v0.5.21 合并被 test_chat_tools_a4/two、test_orderbook_a1 三文件挡下)。
+- 做法: 对 17 个幻影脏文件执行 renormalize(仅行尾 CRLF→LF, `git diff --ignore-cr-at-eol` 为空, 零内容变化, 3767↔3767 对称); 另 2 文件已在历史波次中自然归一。合并后 main 侧 blob 全 LF, 永恒脏状态与 merge 阻塞一并消除。
+- 验证: 内容零变化(忽略行尾 diff 为空); 全量套件在 renormalize 前的同内容树上已跑 1891 passed / 2 failed / 5 skipped(行尾不参与 Python 语义, 无需重跑)。
+- [commit 本条目所在 commit]
+
 ### update-v0.5.20生产部署(docker cp覆盖层, 冒烟9/9)
 - **生产部署**: tag v0.5.20(752b35b merge) 经 docker cp 覆盖层部署到 panwatch 容器(同 v0.5.19 既定路径)。步骤: 备份现行代码 tar.gz(WSL `/tmp/app_backup_pre_v0520_20260909_072719.tar.gz`, 排除 data/downloads/node_modules/__pycache__) → `git archive v0.5.20` → 容器 `/app` 解包 → restart → healthy → 容器内签发 owner token 跑 scripts/smoke_test.py **9/9 通过**, /api/health 报 version=v0.5.20, PG/Redis ok。static/data/downloads 均不在 git 跟踪内, 覆盖层不触碰生产数据与前端构建产物。
 - **发版冒烟两处坑(已记 tdai)**: ① 容器内签 token 必须带 `PYTHONPATH=/app`(脚本放 /tmp 跑时 src 不可导入, v0.5.19 同坑); ② 冒烟用 token 的用户角色是 `owner` 不是 `admin`(M2 多账号口径, filter role=='admin' 查不到会静默拿到空 token → 全 401)。
