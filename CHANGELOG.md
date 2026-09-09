@@ -17,6 +17,12 @@
 - **验证**: 33 个 GET 端点探针 → 仅剩 2 个"方法不匹配"误报(POST-only 路由), 无真实 404; 前端 `tsc` + `eslint` + `pnpm test` 30 passed + `build`。
 - [tag v0.5.29]
 
+### update-v0.5.29 生产部署(仅前端 static + VERSION, 冒烟 9/9, 浏览器实测通过)
+- **部署**: `frontend/dist` 覆盖 `/app/static` + `VERSION` → `/app/VERSION` + `chown -R app:app`; 无需重启。`/api/version` = **v0.5.29**。
+- **浏览器实测(SW 缓存已清)**: 设置页「个人微信(iLink)」显示 **已绑定：o9cq80y8…@im.wechat**(修复前恒显未绑定); 控制台仅 SW 注册日志, **favicon 404 与 wechat-bind 404 均消失**。
+- **冒烟**: **9/9**(8.3s)。
+- [tag v0.5.29]
+
 ### fix-大盘资金日内曲线空态误报: 前端按数组解析信封 → 恒显"刚上线暂无历史"
 - **现象**: Dashboard「主力净流入日内」面积图始终显示 `盘中每30秒积累一条 · 刚上线暂无历史`, 即使 `market_flow_snapshots` 已有快照(生产实测 count=2)。
 - **根因**: `GET /api/market-data/market-capital-flow/history` 返回**信封** `{hours,count,items,note}`(market_data.py:349), 而 `FlowHistoryChart` 按数组解析 —— `Array.isArray(res)` 恒 false → `setRows([])` 恒走空态。
