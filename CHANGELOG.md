@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### update-v0.5.24生产部署(代码覆盖层+前端static, 冒烟9/9, 迁移v150-153首执行)
+- **生产部署**: tag v0.5.24(c3eb1fb) 部署到 panwatch 容器。步骤: 备份现行代码(`/root/app_backup_pre_v0524_20260909.tar.gz` 14.1MB) → `git archive`(21.4MB) → `docker exec -u root ... tar xf --overwrite`(**普通 tar, 不是 xzf**) → 前端 `pnpm build` 产物覆盖 `/app/static`(index.html 4280B) → restart → 40s healthy → 冒烟 **9/9**(7.4s), /api/health `version=v0.5.24 status=ok`(database/redis/scheduler ok, forecast_engine down = 预期基线)。
+- **迁移对账**: **v150 `klines.amount` 加列 + v151 `trading_halts` + v152 `adj_factors` + v153 `datasource_failures` 首次在生产库执行全部成功**(`schema_migrations` 150-153 success=1); 新表/新列已核对存在。
+- **前端覆盖**: 本版含 W5 回撤曲线, 按 runbook 构建 `frontend/dist` 并覆盖容器 `/app/static`(先清空再拷贝)。
+- [tag v0.5.24]
+
 ### update-发版 v0.5.24(优化改进创新第1-6波合入main: 数据地基/回测框架/风控硬化/架构可观测/前端可视化/创新)
 - 本版合并 W1-W6 六波(各自独立分支+独立测试, 逐波条目见本文件下方各 entry):
   - **W1 数据地基**(B1.1-B1.6): K 线入库校验(硬错误拒收 + 跳变标记 `quality_flag=0`) / 哨兵 K 线质量规则 / `klines.amount` 列(迁移 v150) / 除权因子表(v152)+折算函数 / 停牌表(v151)+判定 / 数据源失败明细(v153)+health 落库。
