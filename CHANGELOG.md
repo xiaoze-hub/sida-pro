@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-可复现实验日志: JSONL 追加写 + 复跑参数还原(B6.7)
+- **背景**: 回测/研究跑完只有口头参数, 事后无法回答"当时用什么参数、数据是否一致"。
+- **做法**: 新增 `src/core/experiment_log.py`: `log_experiment`(追加 `DATA_DIR/experiments.jsonl`, 自动 run_id/时间戳) / `list_experiments` / `find_experiment` / `reproduce_command`(还原参数并给出数据指纹一致性提示), 与 B0.5 的 `input_hash` 形成"参数+数据指纹"双记录。
+- **验证**: `pytest -q tests/test_experiment_log.py` → **3 passed**(追加/倒序/按名过滤、查找与复跑还原、文件缺失与坏行容错)。
+- [branch fix/w6-创新-20260909, `git show HEAD`]
+
 ### feat-因子工厂核心: 因子注册表 + 横截面分层回测(B6.1)
 - **背景**: `factor_eval` 只有 IC/IR, 缺"因子注册"与"分层(quantile)回测"两件基础设施; 新增因子要散落改代码, 也无法回答"因子单调性如何"。
 - **做法**: 新增 `src/core/factor_lab.py`: `FactorSpec` + `register_factor`(装饰器/显式登记, 重复 code 报错) + `cross_section_quantiles`(单日按因子值分 N 层, 输出各层均值/单调性/long_short) + `factor_summary`(多日汇总 `monotonic_ratio`/`avg_long_short`)。
