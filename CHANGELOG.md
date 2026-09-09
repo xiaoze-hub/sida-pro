@@ -7,6 +7,11 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.22(风险整改第4波·流程债合入main)
+- 本次发版内容: W4.1/F1 指令文件与版本号统一(CLAUDE.md 改 3 行指针/两 README 徽章+拉取 tag 对齐 VERSION/卷名 panwatch_data/AGENTS 提交词汇表与 CHANGELOG 标题格式固化) / W4.2/E7 资源限制收口(主 compose 三服务+infra 六服务补 memswap_limit/mem_reservation/cpus+deploy 脚本克隆 swap/cpus+static 陈述三方一致实证) / W4.3/F5 已知问题台账(docs/KNOWN_ISSUES.md 收口 **28 条 KI-001..028**, 8 字段全带, P1×4, 含对账说明) / W4.4/F4 文档基线规范(AGENTS 新增 Documentation Standards 三要素+4 存量规划/审计文档补头+UI 审计副本缺陷永久留痕)。
+- 部署注意: ①本波 **0 个 schema 迁移**; ②**零代码文件改动**——`git diff v0.5.21..HEAD` 仅 13 个文档/compose/deploy/README 文件, 无 .py/.ts, 套件结果结构上沿用 v0.5.21 基线 1891 passed/2 failed/5 skipped(发版后实测记录于部署条目); ③docker-compose*.yml 与 deploy/deploy_panwatch.sh 属编排/宿主机侧文件, 不进容器覆盖层; VERSION 随覆盖层更新 /app/VERSION → /api/health version=v0.5.22; ④已知项见 docs/KNOWN_ISSUES.md(KI-004 生产容器限额重建仍待老板确认)。
+- [tag v0.5.22]
+
 ### docs-规划/审计/研究文档头部基线标识+AGENTS文档规范(W4.4/F4)
 - 背景: F4 —— docs/innov-dev-plan.md:8 带 hash("v0.5.8 = d0bf7cd 基线")是正面典型, 但 PROJECT_MAP.md 只写日期不写 hash; 09-02 UI 审计既无 hash 也没说明审的是哪个副本(结果审到一份缺 6-7 个页面的不完整拷贝, 有被当完整审计用的风险)。
 - 做法: ①AGENTS.md 新增 "Documentation Standards (规划/审计/研究文档)" 节: docs/ 下规划/审计/研究文档(含 downloads/ 审计回执)头部必须含三要素——基线标识(commit hash 或 VERSION)/对象完整路径/覆盖范围(**含没审哪些**), 缺任一不得作为决策依据引用; ②存量补头: PROJECT_MAP.md(基线 c28f9a0=W3.4/B3 修订时点, 对应发版 v0.5.21; 覆盖=部署拓扑+目录+主链路, 未覆盖=前端组件级与测试布局)、UI审计_研究.md(基线=`C:\Users\tianxiang\sida-pro` 独立副本≈v0.5.8/d0bf7cd 同期, 非 git 检出无精确 commit + **⚠️留痕: 该副本缺 6-7 页/漏盘 13 页/5 条目过时, 已被重跑版校正, 勿单独引用** + 覆盖/未审)、UI审计_重跑_20260909.md(基线=after eab597a/before 3047f87; 覆盖=28 页路由矩阵+信封 10 处+设计债 7 项)、决策先锋复刻矩阵(基线同副本口径; 覆盖=三指标+共振+七行状态表差距矩阵)。
