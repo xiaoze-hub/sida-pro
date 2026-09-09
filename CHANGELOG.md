@@ -7,6 +7,15 @@
 
 ## 2026-09-09
 
+### refactor-前端大文件拆分收口(W5.3): 三个巨型文件全部 ≤800 行
+- **目标**: W5.3 "单文件 ≤ 800 行"; 本 commit 收口 `Stocks.tsx`(3079→**56**) 与 `Settings.tsx`(2562→**55**), 加上上一 commit 的 `stock-insight-modal.tsx`(2820→**46**), 三个文件全部达标。
+- **Stocks.tsx 做法**: `src/pages/stocks/` 下新增 `useStocksState`(320) / `useStocksData`(728) / `useStocksDerived`(91) / `useStocksActions`(573) 四个 hook + `context.tsx` + 12 个区块组件(`AccountsSection` 525 最大); 骨架屏抽 `StocksSkeleton`, 顶部 tab/汇总/关注列表/各弹窗各自成组件。
+- **Settings.tsx 做法**: `src/pages/settings/` 下新增 `types.ts`(205, 含 12 个接口与常量) + `useSettingsState`(333) / `useSettingsData`(205) / `useSettingsDerived`(81) / `useSettingsActions`(736) + `context.tsx` + 13 个区块/弹窗组件(`AiDialogs` 490 最大)。
+- **等价性**: 逐字搬迁, 无逻辑改动; 仅补 hook 依赖数组(eslint exhaustive-deps)与把 `if (loading) return …` 骨架抽成组件由主文件条件渲染。状态、effect 顺序与请求次数不变。
+- **验证**: `pnpm exec tsc -b` 通过; `eslint .` 通过; `pnpm test` 27 passed; `pnpm build` 通过。全量文件最大 736 行(`useSettingsActions.ts`)。
+- **未做**: 浏览器回归与发版部署见下一条记录。
+- [branch fix/w5c-大文件拆分-20260909]
+
 ### refactor-前端大文件拆分: stock-insight-modal.tsx 2820→46 行 + Stocks.tsx 前导块外移(W5.3)
 - **背景**: W5.3 目标"单文件 ≤ 800 行"; 该弹窗 2820 行, 是 `Stocks/Dashboard/Opportunities` 三页共用的详情入口。
 - **做法①**: 按职责外移到 `packages/biz-ui/src/components/insight/` —— 纯模块 `types.ts`(216) / `helpers.tsx`(275) / `FundamentalsPanel.tsx`(202) / `deep-analysis.tsx`(249); 状态与副作用 hook `useInsightData.ts`(697); 派生值 hook `useInsightDerived.ts`(233); 交互动作 hook `useInsightActions.ts`(301); `context.tsx` 提供 `useInsight()`; 9 个 tab/头部组件(`OverviewTab` 357 为最大)。主文件仅保留 hook 组合 + Dialog 壳。
