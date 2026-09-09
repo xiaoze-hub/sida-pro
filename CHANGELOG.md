@@ -7,6 +7,18 @@
 
 ## 2026-09-09
 
+### update-发版 v0.5.25(延后项补齐: 组合撮合/滚动验证/参数扫描/策略下沉/成交点与盈亏曲线/组件测试)
+- 本版补齐方案 §11 台账中的 6 个延后项:
+  - **B2.1 组合级撮合**: 共享现金账户 + 并发持仓上限 + 现金不足缩量 + 容量约束(`src/core/backtest/portfolio.py`; 内核抽出 `simulate_exit` 供单笔/组合共用)。
+  - **B2.2/B2.3 滚动验证与参数扫描**: `src/core/backtest/research.py`(`sweep` / `walk_forward`, 训练窗选参、测试窗只读评估, 汇总只报样本外)。
+  - **B4.2 策略求值下沉**: `src/core/strategy_library.py`(纯搬迁, API 层 445→263 行, 消灭第二策略实现)。
+  - **B5.2 成交点与盈亏曲线**: `PnlCharts.tsx` 抽取 + `lib/trades.ts` + 成交明细「K线」弹窗以 `my_trade` 标记叠加买卖点。
+  - **B5.4 组件渲染测试**: 引入 `jsdom`/`@testing-library/react`, 4 个组件用例。
+- 部署注意: **无新增迁移**; 前端有变更 → 需构建 `frontend/dist` 覆盖容器 `/app/static`。
+- 验收: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1985 passed / 2 failed(KI-027 本机环境损坏) / 5 skipped**; 前端 `pnpm test -- --run` 27 passed + `tsc -b` + `pnpm build`。
+- 仍剩: **W5.3 大文件拆分**(`Stocks.tsx` 3443 / `stock-insight-modal.tsx` 2820 / `Settings.tsx` 2764 行) —— 属独立专项(方案 §11)。
+- [tag v0.5.25]
+
 ### feat-模拟盘成交点叠加到 K 线(W5.2 后半)
 - **做法**: `PaperTrading` 成交明细每行加「K线」按钮 → 弹窗渲染 `InteractiveKline`, 把该笔的 `opened_at`/`closed_at` 映射为 `KlineEvent(kind='my_trade')`(买入/卖出 + 价格 + 平仓原因), 复用现有 L4 事件标注图层。
 - **验证**: `pnpm exec tsc -b` 通过; `pnpm test -- --run` **27 passed**。
