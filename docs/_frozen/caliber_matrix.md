@@ -20,6 +20,8 @@
 | 板块/行业资金 | 同花顺 `marketdata/vendors/ths_flow.py`（data.10jqka.com.cn/funds/hyzjl|gnzjl） | ths | 同花顺行业资金净额（流入/流出榜），口径独立 | 亿元 | **禁止**（参考） |
 | 北向资金 | 同花顺 hexin `marketdata/vendors/northbound.py`（东财 kamt 自 2024-08 断供） | ths | hexin 当日分钟累计净买入（市场级） | 元 | 参考（市场级情绪，无个股方向语义） |
 | 龙虎榜 | 东财 datacenter（`marketdata` dragon_tiger，datasources 健康检查含此类型） | eastmoney4 | 榜单营业部净买入归类（日频 T-1），非实时方向语义 | 元 | **禁止**（参考） |
+| 内外盘（`/api/dark-flow` inner_outer） | 腾讯逐笔聚合（`compute_dark_flow` 产出，底层随 active source 可变）+ 腾讯 Quote 兜底刷新量比/涨跌/位置（`src/web/api/darkflow.py`） | tick（随 source 可变，见下一行） | 外盘=主动买、内盘=主动卖（逐笔方向聚合金额与占比）；Quote 兜底字段（量比/涨跌/位置）无方向语义 | 元/占比 | **可以**（source∈{tencent_ticks,tdx_tck} 时；insufficient 状态仅供参考） |
+| `/api/dark-flow` source 开关（per-request 灰度） | `_SOURCE_ALLOW` 白名单：tencent_ticks / tdx_tck / thsdk / thsdk_big_order（`darkflow.py:60`，非法 source 直接 400，默认走环境变量源） | tick（tencent_ticks、tdx_tck）或 ths（thsdk、thsdk_big_order） | 同一端点切源=切口径：tick 系=逐笔主动买卖可判方向；ths 系=同花顺大单归类禁判方向 | 元 | 仅 tick 系 source **可以**；ths 系 source **禁止**（前端展示须带口径标签） |
 
 ## 使用规则（与 AGENTS.md 同步）
 
@@ -41,3 +43,6 @@
 - TQ 网关链路与延迟：`tq.py:1-8`（frps/frpc→通达信 TQ HTTP，27-48ms 实测）。
 - 同花顺 ths_flow 端点与单位：`ths_flow.py:1-8`（hyzjl/gnzjl，单位亿）。
 - DDE 单位万元：`frontend/src/pages/DarkFundTop.tsx:7`（main_net_wan 口径注释）。
+- D6(2026-09-09) `/api/dark-flow` source 白名单与 per-request 灰度：`darkflow.py:60-72`
+  （2026-09-04 #2 引入，非法 source 400）；inner_outer 由 `compute_dark_flow` 产出
+  + Quote 兜底刷新（`darkflow.py:111-121`）。

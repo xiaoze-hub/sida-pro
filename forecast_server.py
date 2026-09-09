@@ -97,18 +97,8 @@ def health():
     return {"status": "ok", "kronos_ready": get_predictor() is not None, "time": datetime.now().isoformat()}
 
 
-@app.get("/predict")
-def predict(symbol: str, days: int = 5, task_id: str = "", target_date: str = "", force: bool = False):
-    """多模型预测: Kronos + Chronos-Bolt + XGBoost + 线性回归 加权投票。
-
-    target_date 可选: 预测到该日期为止(自动换算交易日数)。task_id 可选(进度日志)。
-    force=True 可跳过"同 symbol 未到期不重复预测"节流, 强制重新预测。
-
-    并发控制(2026-08-10 多用户): 信号量限流(2核跑2个推理, 超出排队)
-    + 结果缓存(symbol+基准日, 团队重复查询零重算)。
-    + 预测节流(2026-08-13): 同 symbol 已有未到期预测(target_date >= 今天)时
-      拒绝重复预测(夜间连发 bug 根因: 002361 一晚 6 连发 22:49→00:30)。
-    """
+def _predict_with_guard(symbol: str, days: int, task_id: str, target_date: str, force: bool):
+    """缓存/节流/限流守卫 + 预测主体(GET 与 POST /predict 共用)。"""
     if not symbol.isdigit() or len(symbol) != 6:
         raise HTTPException(400, "symbol 需为 6 位 A 股代码")
 
@@ -136,6 +126,44 @@ def predict(symbol: str, days: int = 5, task_id: str = "", target_date: str = ""
         # 写缓存(TTL 30 分钟)
         _predict_cache[cache_key] = result
         return result
+
+
+@app.get("/predict")
+def predict(symbol: str, days: int = 5, task_id: str = "", target_date: str = "", force: bool = False):
+    """多模型预测: Kronos + Chronos-Bolt + XGBoost + 线性回归 加权投票。
+
+    target_date 可选: 预测到该日期为止(自动换算交易日数)。task_id 可选(进度日志)。
+    force=True 可跳过"同 symbol 未到期不重复预测"节流, 强制重新预测。
+
+    并发控制(2026-08-10 多用户): 信号量限流(2核跑2个推理, 超出排队)
+    + 结果缓存(symbol+基准日, 团队重复查询零重算)。
+    + 预测节流(2026-08-13): 同 symbol 已有未到期预测(target_date >= 今天)时
+      拒绝重复预测(夜间连发 bug 根因: 002361 一晚 6 连发 22:49→00:30)。
+    """
+    return _predict_with_guard(symbol, days, task_id, target_date, force)
+
+
+@app.post("/predict")
+def predict_post(body: dict):
+    """D5(2026-09-09) 编排入口: 8000 经 POST body 推送预测参数与情绪 LLM 配置,
+    8010 不再自行回调 8000 取配置(GET /predict 保留给 systemd/手动调用,
+    其 LLM 配置走本地 ~/.panwatch_forecast.env 兜底)。
+
+    body: {symbol, days, task_id, target_date, force, llm_config:{base_url,model,api_key}}
+    """
+    symbol = str(body.get("symbol") or "")
+    try:
+        days = int(body.get("days") or 5)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "days 需为整数")
+    from forecast_sentiment import set_runtime_llm_config
+    set_runtime_llm_config(body.get("llm_config"))
+    return _predict_with_guard(
+        symbol, days,
+        str(body.get("task_id") or ""),
+        str(body.get("target_date") or ""),
+        bool(body.get("force") or False),
+    )
 
 
 def _find_active_prediction(symbol: str) -> dict | None:

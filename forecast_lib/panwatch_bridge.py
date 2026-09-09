@@ -11,7 +11,7 @@
   见 https://www.tdx.com.cn/skillhub/ §21。skill 模板是问小达经过训练的固定 prompt,
   MCP 层仍走 tdx_screener,只是 message 用更精准的 skill 触发句。
 
-依赖: `PANWATCH_URL` 指向健康可访问的 PanWatch 主后端。
+依赖: `SIDA_MAIN_API_URL` 指向健康可访问的 PanWatch 主后端。
 """
 from __future__ import annotations
 

@@ -65,6 +65,16 @@ def client(test_app):
     return TestClient(test_app)
 
 
+@pytest.fixture(autouse=True)
+def _reset_dde_cache():
+    """D5+D6: dde 端点带 30s TTL 缓存, 用例间必须清掉防串值。"""
+    from src.web.api import thsdk_extended
+
+    thsdk_extended._DDE_CACHE.clear()
+    yield
+    thsdk_extended._DDE_CACHE.clear()
+
+
 @pytest.fixture
 def auth_token(test_app):
     """用 dependency_overrides 绕过登录校验。"""
@@ -98,7 +108,7 @@ def test_thsdk_extended_router_registered():
         # 并行 agent(选项 C)在途改 chat.py 时 src.web.app 可能暂不可导入
         pytest.skip(f"src.web.app 暂不可导入(并行选项C在途改动?): {e}")
 
-    registered = {getattr(r, "path", None) for r in app.routes}
+    registered = set(app.openapi().get("paths", {}))
     for p in _EXPECTED_PATHS:
         assert p in registered, f"端点未注册: {p}"
 

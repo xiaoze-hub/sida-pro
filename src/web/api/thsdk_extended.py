@@ -54,6 +54,23 @@ except Exception:  # noqa: BLE001 - thsdk 不可用时降级,不阻塞 import
 
 router = APIRouter(tags=["thsdk-extended"])
 
+# D5+D6(2026-09-09): DDE 端点唯一化 —— 原 /api/thsdk/ext/dde 重复端点已删,
+# 本端点是 canonical, 并补 30s TTL 缓存(thsdk 是限频源, 原 ext 端点的缓存不能丢)。
+_DDE_CACHE: dict = {}
+_DDE_TTL = 30.0
+
+
+def _dde_cached(key: str, fn):
+    import time as _t
+
+    now = _t.time()
+    hit = _DDE_CACHE.get(key)
+    if hit and (now - hit[0]) < _DDE_TTL:
+        return hit[1]
+    out = fn()
+    _DDE_CACHE[key] = (now, out)
+    return out
+
 
 # ---------- 通用工具 ----------
 
@@ -163,7 +180,9 @@ def api_dde(symbol: str, user=Depends(get_current_user)) -> dict:
     注意:thsdk DDE 仅支持最近交易日(不是当日实时,游客账户可用)。
     """
     try:
-        result = _invoke("get_main_flow_official", symbol)
+        result = _dde_cached(
+            symbol.strip().upper(), lambda: _invoke("get_main_flow_official", symbol)
+        )
     except RuntimeError as e:
         raise HTTPException(503, f"thsdk DDE 数据源不可用: {e}") from e
     except Exception as e:  # noqa: BLE001
