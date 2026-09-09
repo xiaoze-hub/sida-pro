@@ -254,12 +254,12 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
               </div>
             ) : null}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
-              <Stat label="主力净额" value={fmtWan(mi.main_net)} valueClass={upColor(mi.main_net)} />
-              <Stat label="超大单净额" value={fmtWan(mi.big_net)} valueClass={upColor(mi.big_net)} />
-              <Stat label="大单净额" value={fmtWan(mi.mid_net)} valueClass={upColor(mi.mid_net)} />
-              <Stat label="散户净额" value={fmtWan(mi.retail_net)} valueClass={upColor(mi.retail_net)} />
-              <Stat label="主力参与度" value={fmtPct(mi.main_intensity)} />
-              <Stat label="主力买占比" value={fmtPct(mi.main_buy_ratio)} />
+              <Stat label="主力净额" value={fmtWan(mi.main_net)} valueClass={upColor(mi.main_net)} hint="明盘口径主力净额 = 大单 + 超大单净额(万元)" />
+              <Stat label="超大单净额" value={fmtWan(mi.big_net)} valueClass={upColor(mi.big_net)} hint="超大单(≥100万)净额(万元)" />
+              <Stat label="大单净额" value={fmtWan(mi.mid_net)} valueClass={upColor(mi.mid_net)} hint="大单(20万-100万)净额(万元)" />
+              <Stat label="散户净额" value={fmtWan(mi.retail_net)} valueClass={upColor(mi.retail_net)} hint="中小单净额(万元), 与主力方向相反多为对手盘" />
+              <Stat label="主力参与度" value={fmtPct(mi.main_intensity)} hint="主力成交额占当日总成交额的比例" />
+              <Stat label="主力买占比" value={fmtPct(mi.main_buy_ratio)} hint="主力买入额 /(主力买入 + 主力卖出)" />
             </div>
             {/* 2026-09-04: 数据行(逐笔总数/末笔/页数), 小字不抢戏 */}
             {diag?.tick_count != null ? (
@@ -313,11 +313,11 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
             </div>
           )}
           <div className="grid grid-cols-3 gap-2 text-[11px]">
-            <Stat label="暗盘净额" value={fmtWan(darkOrder.net)} valueClass={upColor(darkOrder.net)} />
-            <Stat label="疑似主力买" value={fmtWan(darkOrder.main_buy ?? darkOrder.buy_amt)} valueClass={upColor(darkOrder.main_buy ?? darkOrder.buy_amt)} />
-            <Stat label="疑似主力卖" value={fmtWan(darkOrder.main_sell ?? darkOrder.sell_amt)} valueClass={upColor(darkOrder.main_sell ?? darkOrder.sell_amt)} />
-            <Stat label="散户买(顺势)" value={fmtWan(darkOrder.herd_buy)} valueClass={upColor(darkOrder.herd_buy)} />
-            <Stat label="散户卖(解套)" value={fmtWan(darkOrder.herd_sell)} valueClass={upColor(darkOrder.herd_sell)} />
+            <Stat label="暗盘净额" value={fmtWan(darkOrder.net)} valueClass={upColor(darkOrder.net)} hint="暗盘口径净额 = 疑似主力买 − 疑似主力卖(万元, 盘后逐笔还原)" />
+            <Stat label="疑似主力买" value={fmtWan(darkOrder.main_buy ?? darkOrder.buy_amt)} valueClass={upColor(darkOrder.main_buy ?? darkOrder.buy_amt)} hint="按拆单特征识别的主力买入额(万元)" />
+            <Stat label="疑似主力卖" value={fmtWan(darkOrder.main_sell ?? darkOrder.sell_amt)} valueClass={upColor(darkOrder.main_sell ?? darkOrder.sell_amt)} hint="按拆单特征识别的主力卖出额(万元)" />
+            <Stat label="散户买(顺势)" value={fmtWan(darkOrder.herd_buy)} valueClass={upColor(darkOrder.herd_buy)} hint="跟随主力方向的中小单买入额(万元)" />
+            <Stat label="散户卖(解套)" value={fmtWan(darkOrder.herd_sell)} valueClass={upColor(darkOrder.herd_sell)} hint="解套/割肉型的中小单卖出额(万元)" />
           </div>
           {darkOrder.groups?.length ? (
             <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
@@ -358,17 +358,19 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
               <span className="text-stock-down font-mono">内盘 {fmtPct(io.sell_pct)}</span>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px] mt-2">
-              <Stat label="量比" value={io.volume_ratio != null ? io.volume_ratio.toFixed(2) : '--'} />
+              <Stat label="量比" value={io.volume_ratio != null ? io.volume_ratio.toFixed(2) : '--'} hint="当前每分钟成交量 / 过去5日同段均量; >1 放量" />
               <Stat
                 label="涨跌"
                 value={fmtSigned(io.change_pct)}
                 valueClass={upColor(io.change_pct)}
+                hint="当日涨跌幅(%)"
               />
               <Stat
                 label="位置"
                 value={typeof io.position === 'string' ? io.position : io.position != null ? String(io.position) : '--'}
+                hint="当前价在近期区间中的相对位置(高位/中位/低位)"
               />
-              <Stat label="外盘额" value={fmtWan(io.buy_amt)} valueClass={upColor(io.buy_amt)} />
+              <Stat label="外盘额" value={fmtWan(io.buy_amt)} valueClass={upColor(io.buy_amt)} hint="主动买入成交额(万元)" />
               <Stat
                 label="主动盘占比"
                 value={
@@ -376,6 +378,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
                     ? `${(io.buy_pct + io.sell_pct).toFixed(1)}%`
                     : '--'
                 }
+                hint="主动买占比 + 主动卖占比(主动成交占总成交的比例)"
               />
             </div>
           </>
@@ -417,13 +420,15 @@ function Stat({
   label,
   value,
   valueClass,
+  hint,
 }: {
   label: string
   value: string
   valueClass?: string
+  hint?: string
 }) {
   return (
-    <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
+    <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={hint}>
       <div className="text-muted-foreground">{label}</div>
       <div className={`font-mono ${valueClass ?? 'text-foreground'}`}>{value}</div>
     </div>

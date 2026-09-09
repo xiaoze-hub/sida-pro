@@ -7,6 +7,12 @@
 
 ## 2026-09-09
 
+### feat-前端字段说明补齐(hover 解释)
+- **范围**: ① 模拟盘 5 个指标卡(总资产/总收益/胜率/最大回撤/可用资金) + 策略绩效 8 个表头; ② 行情页决策条(该不该动/主力/风险/盘口); ③ 影子账户 5 个指标(盈利回合/总回合/胜率/偏好市场/持仓中位); ④ 暗盘/明盘资金卡 11 个字段(主力净额/超大单/大单/散户/参与度/买占比/暗盘净额/疑似主力买卖/散户买卖/量比/涨跌/位置/外盘额/主动盘占比); ⑤ 盘口资金页 11 个字段(已于 v0.5.30 补)。
+- **形式**: 原生 `title` hover 提示(与洞察弹窗既有 InfoTip 口径一致), 零依赖、零布局变更。
+- **验证**: 前端 `tsc` + `eslint` + `pnpm test` 34 passed + `build`。
+- [tag v0.5.32]
+
 ### refactor-KI-037 收口: 前端指标统一到 lib/indicators.ts 并与后端逐值对齐
 - **背景**: KI-037「指标口径分叉 + 前后端双实现」—— 后端已统一到 `src/core/indicators.py`, 前端 `InteractiveKline.tsx` 仍自带一份, 且 **MACD HIST 漏 ×2**、**RSI6 用 Wilder(后端是 Cutler 简单均值)** → 同一指标在图表与「技术指标建议」/策略口径不一致。
 - **做法**: 新增 `frontend/packages/biz-ui/src/lib/indicators.ts`(`smaSeries` / `emaSeries` / `macd` / `rsiCutlerSeries`, 口径注释齐全); `InteractiveKline.tsx` 改调该库(删本地 4 个函数), 本地包装保留 `{macd, signal, hist}` 旧形状, 调用面零变更。

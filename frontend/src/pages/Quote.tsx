@@ -493,18 +493,18 @@ export default function QuotePage() {
 
       {/* === 决策三问(顶部条带, 不是卡片) === */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px]">
-        <span className="text-muted-foreground">该不该动:</span>
+        <span className="text-muted-foreground" title="综合 GS 策略信号 + 暗盘主力净额给出的操作倾向(仅供参考, 不构成投资建议)">该不该动:</span>
         <span className="font-medium text-foreground">{decision.action}</span>
         <span className="text-border/60">|</span>
-        <span className="text-muted-foreground">主力:</span>
+        <span className="text-muted-foreground" title="主力资金方向: 明盘三源(thsdk/腾讯/东财)交叉 + 暗盘 TQ 口径">主力:</span>
         <span className="font-mono">{decision.mainDesc}</span>
         <span className="text-border/60">|</span>
-        <span className="text-muted-foreground">风险:</span>
+        <span className="text-muted-foreground" title="风险提示: 按近期涨跌停/波动率等规则生成">风险:</span>
         <span className="font-medium text-foreground">{decision.riskDesc}</span>
         {summary?.orderbook?.shape && (
           <>
             <span className="text-border/60">|</span>
-            <span className="text-muted-foreground">盘口:</span>
+            <span className="text-muted-foreground" title="盘口形态: 按十档买卖额结构判定(均衡/买盘占优/卖盘占优)">盘口:</span>
             <span className="font-medium text-foreground">{summary.orderbook.shape}</span>
             <Link to={`/l2?symbol=${encodeURIComponent(symbol)}`} className="text-[11px] text-primary hover:underline">明细›</Link>
           </>

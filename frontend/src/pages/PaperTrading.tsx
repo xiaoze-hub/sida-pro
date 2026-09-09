@@ -423,21 +423,21 @@ export default function PaperTradingPage() {
       {account && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="border-l border-border/40 pl-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="账户总权益 = 可用资金 + 持仓市值">
               <Wallet className="w-3.5 h-3.5" />
               总资产
             </div>
             <div className="text-xl font-bold font-num tabular-nums">{formatCurrency(account.total_equity)}</div>
           </div>
           <div className="border-l border-border/40 pl-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="总收益 = 已实现盈亏 + 持仓浮动盈亏(相对初始资金)">
               {account.total_pnl >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               总收益
             </div>
             <div className="text-lg font-bold"><PnlText value={account.total_pnl} /></div>
           </div>
           <div className="border-l border-border/40 pl-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="胜率 = 盈利平仓笔数 / 已平仓笔数">
               <Trophy className="w-3.5 h-3.5" />
               胜率
             </div>
@@ -445,14 +445,14 @@ export default function PaperTradingPage() {
             <div className="text-xs text-muted-foreground">{account.winning_trades}/{account.total_trades} 笔</div>
           </div>
           <div className="border-l border-border/40 pl-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="权益曲线自峰值起算的最大回撤幅度(%), 越深代表风险越大">
               <BarChart3 className="w-3.5 h-3.5" />
               最大回撤
             </div>
             <div className="text-lg font-bold text-emerald-500">{safeFixed(account.max_drawdown_pct)}%</div>
           </div>
           <div className="border-l border-border/40 pl-3">
-            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="当前可用于开新仓的现金">
               <Wallet className="w-3.5 h-3.5" />
               可用资金
             </div>
@@ -494,13 +494,13 @@ export default function PaperTradingPage() {
               <thead>
                 <tr className="border-b border-border text-muted-foreground text-xs">
                   <th className="text-left py-2 pr-3">策略</th>
-                  <th className="text-right py-2 px-2">已平仓</th>
-                  <th className="text-right py-2 px-2">胜率</th>
-                  <th className="text-right py-2 px-2">已实现盈亏</th>
-                  <th className="text-right py-2 px-2">平均盈亏%</th>
-                  <th className="text-right py-2 px-2">平均持仓天数</th>
-                  <th className="text-right py-2 px-2">持仓中</th>
-                  <th className="text-right py-2 pl-2">浮动盈亏</th>
+                  <th className="text-right py-2 px-2" title="该策略已平仓的交易笔数">已平仓</th>
+                  <th className="text-right py-2 px-2" title="该策略盈利平仓笔数占已平仓的比例">胜率</th>
+                  <th className="text-right py-2 px-2" title="该策略已平仓累计盈亏(元)">已实现盈亏</th>
+                  <th className="text-right py-2 px-2" title="每笔平仓交易的平均收益率(%)">平均盈亏%</th>
+                  <th className="text-right py-2 px-2" title="已平仓交易的平均持有天数(按交易日计)">平均持仓天数</th>
+                  <th className="text-right py-2 px-2" title="该策略当前仍持有的笔数">持仓中</th>
+                  <th className="text-right py-2 pl-2" title="持仓中标的的浮动盈亏(元, 按最新价估算)">浮动盈亏</th>
                 </tr>
               </thead>
               <tbody>

@@ -31,9 +31,9 @@ function ruleLabel(r: any): string {
   return r?.human_text || r?.rule_id || '--'
 }
 
-function StatCard({ icon: Icon, label, value, sub, color }: { icon: any; label: string; value: string; sub?: string; color: string }) {
+function StatCard({ icon: Icon, label, value, sub, color, hint }: { icon: any; label: string; value: string; sub?: string; color: string; hint?: string }) {
   return (
-    <div className="border-l border-border/40 pl-3">
+    <div className="border-l border-border/40 pl-3" title={hint}>
       <div className="flex items-center gap-2 mb-1.5">
         <Icon className={`w-3.5 h-3.5 ${color}`} />
         <span className="text-[11px] text-muted-foreground">{label}</span>
@@ -223,8 +223,8 @@ iframe{width:100%;height:100%;border:0}
             </div>
             <p className="text-[12px] leading-relaxed text-foreground whitespace-pre-line">{myProfile.profile_text}</p>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <StatCard icon={CheckCircle2} label="盈利回合" value={fmt(myProfile.profitable_roundtrips)} color="text-emerald-700 dark:text-emerald-500" />
-              <StatCard icon={Activity} label="总回合" value={fmt(myProfile.total_roundtrips)} color="text-blue-500" />
+              <StatCard icon={CheckCircle2} label="盈利回合" value={fmt(myProfile.profitable_roundtrips)} color="text-emerald-700 dark:text-emerald-500" hint="按回合(买入→卖出)统计的盈利回合数" />
+              <StatCard icon={Activity} label="总回合" value={fmt(myProfile.total_roundtrips)} color="text-blue-500" hint="已完成回合总数(买入→卖出为一回合)" />
               <StatCard
                 icon={Target}
                 label="胜率"
@@ -236,18 +236,21 @@ iframe{width:100%;height:100%;border:0}
                   return `${((win / total) * 100).toFixed(0)}%`
                 })()}
                 color="text-violet-500"
+                hint="胜率 = 盈利回合 / 总回合"
               />
               <StatCard
                 icon={TrendingUp}
                 label="偏好市场"
                 value={(myProfile.preferred_markets || []).join(', ') || '--'}
                 color="text-amber-500"
+                hint="按回合数量占比最高的市场(CN/HK/US)"
               />
               <StatCard
                 icon={Activity}
                 label="持仓中位(天)"
                 value={Array.isArray(myProfile.typical_holding_days) && myProfile.typical_holding_days[0] != null ? fmt(myProfile.typical_holding_days[0]) : '--'}
                 color="text-sky-500"
+                hint="回合持仓天数的中位数(比平均更抗极端值)"
               />
             </div>
             {myProfile.rules && myProfile.rules.length > 0 && (
