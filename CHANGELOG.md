@@ -7,6 +7,14 @@
 
 ## 2026-09-09
 
+### docs-已知问题台账收口(CHANGELOG未做项迁入KNOWN_ISSUES 28条+对账)(W4.3/F5)
+- 背景: F5 —— "已知问题"散落 CHANGELOG 各条目的"未做/待办/已知限制"里, 新接手只能读全文猜; docs/KNOWN_ISSUES.md 此前只有 W2.5 依赖审计与 W2.6 weekday 豁免两节, 无统一编号台账。
+- 做法: ①CHANGELOG 全文扫描(未做/待办/已知限制/暂不/明确不做/遗留)逐条判定开/闭状态, **28 条登记为 KI-001..028**, 每条 8 字段(id/level/owner/发现日期/现象/影响/涉及文件/建议修复); ②KI-004(生产容器无限制)/KI-005(8010 校准)沿用 W4.2 已发布锚点编号; ③W2.5 审计表与 W2.6 豁免两节保留为详情并收编 KI-001/002/003/006/007; ④方案 §4.3 点名项入册: chat_upload.py 提示注入面(KI-008, P1, 方案 §6.3 后续波次)、chat.py f-string SQL(KI-009, 方案记录行号 :695 现为 :234, 已核实 cols/table 均白名单+参数化无注入面, 留痕不修); ⑤"明确不做"决策(Alembic/W3.1 三项/前端设计取舍/裸 fetch 10 处)单列"决策留痕"节, 防被当欠账重复提出; ⑥两条此前无归属的新登记: KI-027 本地环境损坏测试文件 2 个(test_ta_load_ohlcv_patch/test_thsdk_buffer_size, 本地基线恒 2 failed 的出处, 建议加环境探测 skip 收敛到 0)、KI-028 交易日历 2028 表硬期限(2027-12-31 前补, 逾期 fail-loud 停摆, P1)。
+- 级别分布: P0=0 / **P1=4**(KI-001 react-router-dom、KI-004 生产容器限额、KI-008 提示注入面、KI-028 2028 表) / P2=13 / P3=11。
+- 对账(验收第 3 条): `grep -c "未做\|待办\|已知限制" CHANGELOG.md` = **13 行 → 13 条 KI**(L543 一行产 2 条: KI-022+024; L560 一行产 2 条: KI-025+023, "Hub 抽独立进程"与 L543 重复计一次; L569 产 0 条——audit 独立 Session 已于 08-21 修复/orval 并入 KI-026/Alembic 归决策留痕; L1275 产 0 条——设计取舍归决策留痕); 扩词 grep(加 暂不|明确不做|遗留, 29 行)与其它来源另产 15 条; 已修复项(GS 配色 v0.4.71 已统一等)不迁入, 明细对账表落在 KNOWN_ISSUES.md 文末。
+- 验证: 28 条 ≥ 20; 总览表每条含 id/level/owner; 编号唯一性 `grep -o "KI-0[0-9][0-9]" | sort -u` = 28 无重复。
+- [branch fix/wave4-流程债-20260909, `git show HEAD`]
+
 ### fix-三compose资源限制收口+deploy脚本限制克隆+static陈述实证(W4.2/E7)
 - 背景: 4.2 —— 方案写作时"3 个 compose 全无资源限制"; 实测现状: docker-compose.yml 的 panwatch(1500m)/forecast(4g)/postgres(1g) 已在 P1-14 时代加了 mem_limit, 但 **cpus/memswap_limit/mem_reservation 全缺**(8010 推理高峰 CPU 争抢与 swap 超限无保护); docker-compose.infra.yml 6 个服务只有 restart 无任何 mem 限额; deploy/deploy_panwatch.sh 克隆重建时只克隆 --memory, swap/cpus 丢失。另: **生产 panwatch 容器实测 mem=0(完全无限制)** —— 非 compose 管理的历史 docker run 部署, compose 里的 1500m 从未生效。
 - 做法: ①docker-compose.yml 三服务补齐 memswap_limit(=mem_limit, 不给额外 swap)+mem_reservation+cpus: panwatch 1500m/512m/1.5, forecast 4g/1g/2.0, postgres 1g/256m/1.0; ②docker-compose.infra.yml 六服务加 mem_limit+memswap_limit(与主 compose 同值防漂移: redis 320m/prometheus 512m/loki 512m/promtail 192m/grafana 512m/alertmanager 128m); ③deploy 脚本克隆逻辑补 MemorySwap/NanoCpus inspect 与 --memory-swap/--cpus 透传; ④docker-compose.dev.yml 是 overlay(继承主 compose 限额), 不重复加(overlay 加限会覆盖基线值, 反而引入漂移)。
