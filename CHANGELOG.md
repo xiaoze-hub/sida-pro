@@ -53,6 +53,14 @@
 - **只读验收**: 容器内 `fetch_auction_snapshots_thsdk(["002361","600769"])` 实测 **0.77s 返回 2 条真实快照**(002361 低开 竞价价10.1 偏离-0.198% 09:20前撤单率17.0%; 600769 低开 16.35 -0.305% 撤单率83.9%) → 悟道屏蔽窗内有结构化替代源。
 - [tag v0.5.39]
 
+### feat-竞价复盘接入通达信 TQ 逐票竞价字段(老板建议)
+- **实测(TQ 网关 `127.0.0.1:17709`, 容器内可达)**: `get_market_snapshot` 返回 `Open/Now/LastClose/Average` + **`Buyp/Buyv/Sellp/Sellv`(买卖价量, 竞价时段即虚拟撮合盘口)**; `get_more_info` 返回 **`OpenAmo`(竞价成交额)/`OpenZAF`(开盘涨幅)/`OpenZTBuy`(开盘一字买量)**。未知方法报 `-32601 MCP不支持该tqcenter方法名`(网关为白名单, 无 `tools/list`)。
+- **改动**: `auction_collector` 新增 `fetch_auction_snapshots_tq(symbols, limit=20)`(单票失败跳过/整体失败 `{}`, 不伪造); `auction_review.collect` 在悟道独家字段不可得时, **先用 TQ(快 ~30ms/票、覆盖到 20 只)补开盘涨幅/竞价成交额/一字买量/买一卖一, 再用 thsdk(限 10 只)叠竞价方向/撤单率近似**, 合并为逐票快照(`source=tq+thsdk`); `build_prompt` 逐票渲染两源字段并标口径。
+- **边界(诚实标注)**: TQ 是**单点快照, 无竞价时段逐帧历史 → 算不出撤单率**(该字段仍由 thsdk 提供); `consistency/bidStrength` 两者都给不了(悟道独家)。
+- **测试**: `tests/test_auction_review_degrade.py` 扩到 **11 例**(+TQ 解析与跳过 / TQ+thsdk 合并与 source / prompt 双源渲染)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1987 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**; 4 项静态门禁通过。
+- [tag v0.5.40]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。

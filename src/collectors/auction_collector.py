@@ -391,6 +391,68 @@ def fetch_auction_snapshots_thsdk(symbols: list[str], limit: int = 10) -> dict[s
     return out
 
 
+def fetch_auction_snapshots_tq(symbols: list[str], limit: int = 20) -> dict[str, dict]:
+    """通达信 TQ 逐票竞价字段(已接通, 实测 ~30ms/票)。
+
+    2026-09-10: 老板建议的通达信客户端接口 —— 比腾讯降级多出**竞价成交额/开盘涨幅/
+    一字板开盘买量**, 比 thsdk 快 ~25×, 适合覆盖更多自选。
+    来源: `get_market_snapshot`(Open/Now/LastClose/Buyp/Buyv/Sellp/Sellv)
+        + `get_more_info`(OpenZAF 开盘涨幅 / OpenAmo 竞价成交额 / OpenZTBuy 开盘一字买量)。
+    单票失败跳过; 整体失败返回 {} —— 不伪造。返回 {symbol: {...}}。
+
+    注意: 快照是**单点**读数, 不含竞价时段逐帧历史 → **算不出撤单率**(需 thsdk 帧序列)。
+    """
+    out: dict[str, dict] = {}
+    syms = [s for s in (symbols or []) if s][:limit]
+    if not syms:
+        return out
+    try:
+        from marketdata import Symbol as _Symbol
+        from marketdata.vendors import tq as _tq
+    except ImportError:
+        logger.debug("TQ vendor 不可用, 跳过竞价快照")
+        return out
+
+    def _f(v):
+        try:
+            return float(str(v).strip())
+        except Exception:  # noqa: BLE001
+            return None
+
+    for sym in syms:
+        try:
+            code = _tq.to_tq_code(_Symbol.parse(sym, "CN"))
+            if not code:
+                continue
+            snap = _tq._rpc("get_market_snapshot", {"stock_code": code})
+            if not isinstance(snap, dict):
+                continue
+            try:
+                mi = _tq._rpc("get_more_info", {"stock_code": code}) or {}
+            except Exception:  # noqa: BLE001 - 扩展字段缺失不致命
+                mi = {}
+            if not isinstance(mi, dict):
+                mi = {}
+            row = {
+                "source": "tq",
+                "last_close": _f(snap.get("LastClose")),
+                "open": _f(snap.get("Open")),
+                "open_pct": _f(mi.get("OpenZAF")),
+                "open_amount": _f(mi.get("OpenAmo")),
+                "open_limit_buy": _f(mi.get("OpenZTBuy")),
+                "buy1": (snap.get("Buyp") or [None])[0],
+                "buy1_vol": (snap.get("Buyv") or [None])[0],
+                "sell1": (snap.get("Sellp") or [None])[0],
+                "sell1_vol": (snap.get("Sellv") or [None])[0],
+            }
+            if row["open"] is None and row["open_pct"] is None:
+                continue  # 无开盘信息 → 不计入
+            out[sym] = row
+        except Exception as e:  # noqa: BLE001 - 单票失败不影响其余
+            logger.debug("TQ 竞价快照单票失败 %s: %s", sym, e)
+    return out
+
+
 def fetch_auction_risk(limit: int = 10) -> str:
     """竞价被核风险(悟道独家, 无降级)。"""
     cache_key = f"risk:{limit}"

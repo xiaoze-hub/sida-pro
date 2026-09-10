@@ -57,27 +57,51 @@ class AuctionReviewAgent(BaseAgent):
                 bool(data.get(k))
                 for k in ("theme_strength", "market_scan", "weak_to_strong", "limitup_feedback")
             )
-            # B 方案(2026-09-10): 悟道独家字段不可得(免费档 9:15-10:30 被服务端屏蔽)时,
-            # 用同花顺超级盘口补一条**逐票**竞价快照(竞价方向/高低/撤单率近似, 游客账户可用)。
+            # 悟道独家字段不可得(免费档 9:15-10:30 被服务端屏蔽)时, 补**逐票**竞价快照:
+            # ① 通达信 TQ(老板建议, 已接通, ~30ms/票): 开盘涨幅/竞价成交额/一字买量/买一卖一;
+            # ② 同花顺超级盘口(游客账户): 竞价方向/高低 + 09:20 前撤单率近似(需帧序列, TQ 给不了)。
             if not _has_wudao_only:
+                _wl = (
+                    [s.symbol for s in context.watchlist] if context is not None else []
+                )
+                _snaps: dict = {}
+                _snap_srcs: list[str] = []
+                # ① 通达信 TQ(快 ~30ms/票, 覆盖多): 开盘涨幅/竞价成交额/一字买量/买一卖一
+                try:
+                    from src.collectors.auction_collector import (
+                        fetch_auction_snapshots_tq,
+                    )
+
+                    _rows = fetch_auction_snapshots_tq(_wl, limit=20)
+                    if _rows:
+                        _snap_srcs.append("tq")
+                        for _sym, _row in _rows.items():
+                            _snaps[_sym] = dict(_row)
+                except Exception as e:  # noqa: BLE001 - 补充源失败不拖垮主流程
+                    logger.debug("[%s] TQ 竞价快照补充失败: %s", trace_id, e)
+                # ② 同花顺(慢, 覆盖少): 补 竞价方向/高低 + 09:20 前撤单率近似(需帧序列)
                 try:
                     from src.collectors.auction_collector import (
                         fetch_auction_snapshots_thsdk,
                     )
 
-                    _wl = (
-                        [s.symbol for s in context.watchlist] if context is not None else []
-                    )
-                    _snaps = fetch_auction_snapshots_thsdk(_wl, limit=10)
-                    if _snaps:
-                        data["auction_snapshots"] = _snaps
-                except Exception as e:  # noqa: BLE001 - 补充源失败不拖垮主流程
+                    _rows2 = fetch_auction_snapshots_thsdk(_wl, limit=10)
+                    if _rows2:
+                        _snap_srcs.append("thsdk")
+                        for _sym, _row in _rows2.items():
+                            _snaps.setdefault(_sym, {}).update(_row)
+                except Exception as e:  # noqa: BLE001
                     logger.debug("[%s] thsdk 竞价快照补充失败: %s", trace_id, e)
+                if _snaps:
+                    data["auction_snapshots"] = _snaps
+                    data["snapshot_sources"] = _snap_srcs
             _has_snaps = bool(data.get("auction_snapshots"))
             data["client_ok"] = _has_data or _has_snaps
             data["degraded"] = bool(data["client_ok"]) and not _has_wudao_only
             data["source"] = (data.get("opening_snapshot") or {}).get("source") or (
-                "wudao" if _has_wudao_only else ("thsdk" if _has_snaps else "")
+                "wudao"
+                if _has_wudao_only
+                else "+".join(data.get("snapshot_sources") or [])
             )
             if raw.get("limited"):
                 data["limited"] = True
@@ -159,30 +183,46 @@ class AuctionReviewAgent(BaseAgent):
         if ad.get("degraded"):
             user_content.append(
                 f"> 数据口径: {ad.get('client_error') or '悟道数据不可用'}; "
-                "「竞价全景」为腾讯批量行情降级(竞价高开榜), 并附**同花顺逐票竞价快照**"
-                "(竞价方向/高低/撤单率近似); **题材一致性(consistency)/竞价强度榜(bidStrength)/"
+                "「竞价全景」为腾讯批量行情降级(竞价高开榜), 并附**通达信+同花顺逐票竞价快照**"
+                "(开盘涨幅/竞价成交额/一字买量/竞价方向/撤单率近似); **题材一致性(consistency)/竞价强度榜(bidStrength)/"
                 "弱转强/被核反馈为悟道独家字段, 本时段不可得**。请基于已有高开榜+逐票快照做截面解读, "
                 "缺的字段标注'不可得'即可, 不要索要数据。\n"
             )
 
-        # 自选竞价快照(thsdk 逐票): 悟道独家字段不可得时的补充源
+        # 自选竞价快照(逐票): 通达信 TQ + 同花顺超级盘口(悟道独家字段不可得时的替代源)
         snaps = ad.get("auction_snapshots") or {}
         if snaps:
-            user_content.append("## 自选竞价快照(同花顺超级盘口, 逐票)")
+            user_content.append("## 自选竞价快照(逐票)")
             for sym, s in snaps.items():
-                _dir = s.get("direction") or "-"
-                _gap = s.get("gap_pct")
-                _gap_s = f"{_gap:+.2f}%" if isinstance(_gap, (int, float)) else "-"
+                parts: list[str] = []
+                if s.get("open") is not None:
+                    _pct = s.get("open_pct")
+                    _pct_s = f"({_pct:+.2f}%)" if isinstance(_pct, (int, float)) else ""
+                    parts.append(f"开盘{s.get('open')}{_pct_s}")
+                _amt = s.get("open_amount")
+                if isinstance(_amt, (int, float)):
+                    _amt_s = (
+                        f"{_amt / 1e8:.2f}亿" if abs(_amt) >= 1e8 else f"{_amt / 1e4:.0f}万"
+                    )
+                    parts.append(f"竞价额{_amt_s}")
+                _ztb = s.get("open_limit_buy")
+                if isinstance(_ztb, (int, float)) and _ztb:
+                    parts.append(f"开盘一字买量{_ztb:.0f}")
+                if s.get("direction") and s.get("direction") != "无数据":
+                    _g = s.get("gap_pct")
+                    _g_s = f"{_g:+.2f}%" if isinstance(_g, (int, float)) else "-"
+                    parts.append(f"同花顺{s.get('direction')}(偏离{_g_s})")
                 _wr = s.get("withdraw_rate_pre0920")
-                _wr_s = f"{_wr * 100:.1f}%" if isinstance(_wr, (int, float)) else "-"
-                user_content.append(
-                    f"- {sym}: {_dir}(竞价价{s.get('auction_price')}, "
-                    f"高{s.get('auction_high')}/低{s.get('auction_low')}, 偏离昨收{_gap_s}) "
-                    f"| 09:20前撤单率近似{_wr_s}"
-                )
+                if isinstance(_wr, (int, float)):
+                    parts.append(f"09:20前撤单率近似{_wr * 100:.1f}%")
+                _b1, _b1v = s.get("buy1"), s.get("buy1_vol")
+                if _b1:
+                    parts.append(f"买一{_b1}×{_b1v or '-'}")
+                if parts:
+                    user_content.append(f"- {sym}: " + " | ".join(parts))
             user_content.append(
-                "> 口径: 同花顺超级盘口逐票竞价快照(虚拟匹配价+匹配量); "
-                "与悟道 consistency/bidStrength 口径不同, 不可互相换算。\n"
+                "> 口径: 开盘/竞价额/一字买量来自**通达信**, 竞价方向/撤单率来自**同花顺超级盘口**近似; "
+                "均与悟道 consistency/bidStrength 口径不同, 不可互相换算。\n"
             )
 
         # 竞价全景

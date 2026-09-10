@@ -129,35 +129,81 @@ def test_fetch_snapshots_thsdk_filters_and_scopes(monkeypatch):
     assert set(out2) == {"600519"}
 
 
-def test_collect_ok_when_only_thsdk_snapshots(monkeypatch):
-    """腾讯降级失败但 thsdk 快照有数据 → client_ok=True 且 source=thsdk。"""
+def _mk_raw_empty():
+    return {
+        "opening_snapshot": {},
+        "theme_strength": {},
+        "market_scan": {},
+        "weak_to_strong": {},
+        "limitup_feedback": {},
+        "limited": True,
+        "error": "悟道限流窗口",
+    }
+
+
+class _Ctx:
+    class _S:
+        symbol = "002361"
+
+    watchlist = [_S()]
+
+
+def test_fetch_snapshots_tq(monkeypatch):
+    from marketdata.vendors import tq as tqm
+
+    def fake_rpc(method, params, timeout=4.0):
+        code = params.get("stock_code")
+        if code != "002361.SZ":
+            return {}
+        if method == "get_market_snapshot":
+            return {
+                "Open": "10.10", "LastClose": "10.12",
+                "Buyp": ["10.09"], "Buyv": ["500"], "Sellp": ["10.11"], "Sellv": ["300"],
+            }
+        if method == "get_more_info":
+            return {"OpenZAF": "-0.20", "OpenAmo": "2103800.00", "OpenZTBuy": "0.00"}
+        return {}
+
+    monkeypatch.setattr(tqm, "_rpc", fake_rpc)
+    out = ac.fetch_auction_snapshots_tq(["002361", "600519"], limit=10)
+    assert set(out) == {"002361"}  # 600519 无开盘信息 → 跳过
+    row = out["002361"]
+    assert row["source"] == "tq"
+    assert row["open"] == 10.10 and row["open_pct"] == -0.20
+    assert row["open_amount"] == 2103800.0
+    assert row["buy1"] == "10.09" and row["buy1_vol"] == "500"
+
+
+def test_collect_merges_tq_and_thsdk(monkeypatch):
+    """TQ(涨停/竞价额) + thsdk(方向/撤单率) 合并同一 symbol, source=tq+thsdk。"""
+    monkeypatch.setattr(ac, "fetch_auction_raw", _mk_raw_empty)
     monkeypatch.setattr(
         ac,
-        "fetch_auction_raw",
-        lambda: {
-            "opening_snapshot": {},
-            "theme_strength": {},
-            "market_scan": {},
-            "weak_to_strong": {},
-            "limitup_feedback": {},
-            "limited": True,
-            "error": "悟道限流窗口",
-        },
+        "fetch_auction_snapshots_tq",
+        lambda symbols, limit=20: {"002361": {"source": "tq", "open": 10.1, "open_pct": -0.2}},
     )
+    monkeypatch.setattr(
+        ac,
+        "fetch_auction_snapshots_thsdk",
+        lambda symbols, limit=10: {"002361": {"direction": "低开", "withdraw_rate_pre0920": 0.17}},
+    )
+    ad = asyncio.run(AuctionReviewAgent().collect(_Ctx()))["auction_data"]  # type: ignore[arg-type]
+    assert ad["client_ok"] is True
+    assert ad["source"] == "tq+thsdk"
+    row = ad["auction_snapshots"]["002361"]
+    assert row["open"] == 10.1 and row["direction"] == "低开"
+
+
+def test_collect_ok_when_only_thsdk_snapshots(monkeypatch):
+    """腾讯降级失败但 thsdk 快照有数据 → client_ok=True 且 source=thsdk。"""
+    monkeypatch.setattr(ac, "fetch_auction_raw", _mk_raw_empty)
+    monkeypatch.setattr(ac, "fetch_auction_snapshots_tq", lambda symbols, limit=20: {})
     monkeypatch.setattr(
         ac,
         "fetch_auction_snapshots_thsdk",
         lambda symbols, limit=10: {"002361": {"direction": "低开", "gap_pct": -0.2}},
     )
-
-    class _Ctx:
-        class _S:
-            symbol = "002361"
-
-        watchlist = [_S()]
-
-    data = asyncio.run(AuctionReviewAgent().collect(_Ctx()))  # type: ignore[arg-type]
-    ad = data["auction_data"]
+    ad = asyncio.run(AuctionReviewAgent().collect(_Ctx()))["auction_data"]  # type: ignore[arg-type]
     assert ad["client_ok"] is True
     assert ad["degraded"] is True
     assert ad["source"] == "thsdk"
@@ -175,10 +221,13 @@ def test_build_prompt_renders_thsdk_snapshots():
                 "opening_snapshot": {"text": BOARD, "source": "tencent_fallback"},
                 "auction_snapshots": {
                     "002361": {
+                        "open": 10.10,
+                        "open_pct": -0.20,
+                        "open_amount": 2103800.0,
+                        "open_limit_buy": 0.0,
+                        "buy1": "10.09",
+                        "buy1_vol": "500",
                         "direction": "低开",
-                        "auction_price": 10.1,
-                        "auction_high": 10.12,
-                        "auction_low": 10.1,
                         "gap_pct": -0.198,
                         "withdraw_rate_pre0920": 0.17,
                     }
@@ -187,9 +236,12 @@ def test_build_prompt_renders_thsdk_snapshots():
         },
         None,  # type: ignore[arg-type]
     )
-    assert "自选竞价快照(同花顺超级盘口, 逐票)" in uc
-    assert "002361: 低开" in uc
-    assert "撤单率近似17.0%" in uc
+    assert "自选竞价快照(逐票)" in uc
+    assert "开盘10.1(-0.20%)" in uc   # 通达信
+    assert "竞价额210万" in uc
+    assert "同花顺低开(偏离-0.20%)" in uc
+    assert "09:20前撤单率近似17.0%" in uc
+    assert "买一10.09×500" in uc
 
 
 def test_build_prompt_degrade_branches():
