@@ -7,6 +7,12 @@
 
 ## 2026-09-10
 
+### feat-P3-1 命令面板动作化 (OpenTerminal 借鉴 A2): 股票项 Shift+Enter 直接加自选
+- **前端**: `src/components/CommandPalette.tsx` 结果动作化 —— Enter 保持跳转, 股票项 **Shift+Enter 直接加自选**(POST /stocks 复用既有接口): 成功 → toast "已加自选：X" + 关面板; 重复添加(400 "已存在")→ info toast "已在自选：X"(不报错不关面板); 其他失败 → error toast; busy 防连按。行内提示(active 股票项显示 "⇧↵ 加自选" 芯片)+ 底部快捷键说明同步更新。
+- **测试**: 新增 `tests/components/command-palette.test.tsx` 5 例(Enter=跳转不发 POST / Shift+Enter=POST 载荷+toast+关闭 / 重复=info 不关闭 / 页命令 Shift+Enter 仍跳转 / 底部提示含 ⇧↵)。门禁: vitest 99 passed(17 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测(Ctrl+K → 搜 600519 → 行内提示 "⇧↵ 加自选" → Shift+Enter)→ toast "已加自选：贵州茅台" + 面板关闭 + API 侧确认自选列表新增 1 条。
+- [commit <见 git log>]
+
 ### feat-P2-3 价格 Flash 复用扩展 (OpenTerminal 借鉴 A3): 自选行/K线分时现价变动闪色 + FlashValue 补行为测试
 - **背景**: `FlashValue` 组件已于 2026-09-05 存在(红涨绿跌令牌 + prefers-reduced-motion 尊重), 但全仓仅 Dashboard 指数条 1 处在用; A3 = 把"盘中价格静默换数字"补齐闪色反馈。
 - **前端**: ① `src/pages/stocks/WatchlistSection.tsx` 自选行现价(WS 实时推送, `useQuoteStream`)包 `FlashValue`——非有限值传 null 不闪(dirty 字符串防 NaN 反复触发); ② `packages/biz-ui/src/components/InteractiveKline.tsx` 分时统计格"现价"同款包裹(分时 30s 轮询)。加 Dashboard 既有点, 共 3 处。
