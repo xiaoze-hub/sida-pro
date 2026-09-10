@@ -20,6 +20,12 @@
 - **只读验收**(开盘时段不触发 LLM): 容器内实测 `agent_user_buckets("premarket_outlook")` = **3 个用户桶**; 各桶自选 = admin 2 / 娟姐 3 / 黄磊 35 只(**互不串号**); 旧口径(不过滤)仍 40 只 → 隔离生效。
 - [tag v0.5.37]
 
+### test-W2.3 残留收口: 腾讯直连测试补 network 标(消除主门禁随机红)
+- **问题**: `tests/test_tencent_data_sources.py` / `test_tencent_info.py` / `test_chip_distribution.py::test_real_data` **直连腾讯接口却未打 `pytest.mark.network`** → CI 主门禁(`-m "not network"`)仍会执行, 行情源抖动即随机红(2026-09-10 实测 `fetch_price_distribution→None`、`big_order_stats→全 0`, 令 2 例失败)。属 W2.3/E2 约定("联网测试统一打 network")的残留。
+- **修法**(只标真联网的类/用例, 纯函数用例留在主门禁): `test_tencent_data_sources.py` 类级标记 `TestTencentFundflowVendor`/`TestTencentPanel`(`TestTencentCode` 4 例保留); `test_tencent_info.py` 模块级标记(9 例全联网); `test_chip_distribution.py::test_real_data` 单例标记(其余 3 例合成数据保留)。其余候选文件(`test_vendor_missing_fields`/`test_collectors_hardening`/`test_datasource_failure_metrics` 等)经核均为 monkeypatch/Mock, 不动。
+- **验证**: `-m "not network"` → 7 passed / 15 deselected; `-m network` → 15 例(供 nightly); 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1976 passed / 2 failed(仅 KI-027 本机损坏文件) / 5 skipped / 157 deselected** —— 主门禁不再受行情源抖动影响。
+- [tag v0.5.37]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。

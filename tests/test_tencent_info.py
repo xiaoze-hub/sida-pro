@@ -22,6 +22,9 @@ from marketdata.vendors.tencent_info import (
 
 S = Symbol.parse("002361", "CN")
 
+# W2.3/E2: 该文件全部用例直连腾讯深挖接口 → 整体打 network 标, CI 主门禁(-m "not network")跳过。
+pytestmark = pytest.mark.network
+
 
 class TestTencentInfo:
     def test_notice_list(self):

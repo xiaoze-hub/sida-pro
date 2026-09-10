@@ -40,6 +40,7 @@ class TestChipDistribution:
     def test_insufficient_data(self):
         assert compute_chips(_mk_klines(5)) is None
 
+    @pytest.mark.network  # W2.3/E2: 直连腾讯 K 线接口, 联网测试
     def test_real_data(self):
         """真实数据: 神剑应返回合理筹码峰。"""
         from marketdata.vendors.kline import fetch_tencent_kline_raw

@@ -31,6 +31,9 @@ class TestTencentCode:
 
 
 class TestTencentFundflowVendor:
+    # W2.3/E2: 直连腾讯接口, 属联网测试 → 打 network 标, CI 主门禁(-m "not network")跳过。
+    pytestmark = pytest.mark.network
+
     def test_fetch_real(self):
         """真实网络: 002361 应返回四档资金流。"""
         rows = TencentFundflowVendor().fetch([Symbol.parse("002361", "CN")], {})
@@ -48,6 +51,9 @@ class TestTencentFundflowVendor:
 
 
 class TestTencentPanel:
+    # W2.3/E2: 直连腾讯面板接口, 属联网测试 → 打 network 标。
+    pytestmark = pytest.mark.network
+
     def test_pan_analysis(self):
         pan = fetch_pan_analysis(Symbol.parse("002361", "CN"))
         assert pan is not None
