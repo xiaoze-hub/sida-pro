@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from src.bootstrap.agents import register_agent
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 from src.agents.base import AgentContext, BaseAgent
 
@@ -95,6 +95,15 @@ class AuctionReviewAgent(BaseAgent):
                 if _snaps:
                     data["auction_snapshots"] = _snaps
                     data["snapshot_sources"] = _snap_srcs
+                    # 批次2(2026-09-10): 竞价快照落库(当日唯一) → 竞价历史可查
+                    try:
+                        from src.core.market_archive import persist_auction_snapshots
+
+                        _n = persist_auction_snapshots(date.today(), _snaps)
+                        if _n:
+                            logger.info("[%s] 竞价快照已落库 %d 条", trace_id, _n)
+                    except Exception as e:  # noqa: BLE001 - 落库失败不拖垮主流程
+                        logger.debug("[%s] 竞价快照落库失败: %s", trace_id, e)
             _has_snaps = bool(data.get("auction_snapshots"))
             data["client_ok"] = _has_data or _has_snaps
             data["degraded"] = bool(data["client_ok"]) and not _has_wudao_only

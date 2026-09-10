@@ -304,6 +304,13 @@ def compute_near_term_chips(symbol_code: str, days: int = 10) -> dict | None:
     }
     _NEAR_CHIPS_CACHE[symbol_code] = (_now, _result)
     _chips_persist()
+    # 批次2(2026-09-10): 筹码日频落库(写穿, 当日唯一幂等) → 历史可查; 失败静默
+    try:
+        from src.core.market_archive import persist_chip_daily
+
+        persist_chip_daily(datetime.date.today(), symbol_code[2:], "CN", _result)
+    except Exception:  # noqa: BLE001
+        pass
     return _result
 
 

@@ -2725,6 +2725,138 @@ def _m153_datasource_failures_table(conn: Connection) -> None:
     DatasourceFailure.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m154_auction_snapshots_table(conn: Connection) -> None:
+    """集合竞价快照表 auction_snapshots(批次2, 2026-09-10)。
+
+    竞价在 9:15-9:25 唯一 → `(trade_date, symbol, market)` 唯一键, 重跑覆盖(upsert)。
+    字段: TQ(开盘价/涨幅/竞价成交额/开盘一字买量) + thsdk(方向/高低/09:20 前撤单率近似)。
+    与 `_m138` 同款: 迁移建表(非 ORM), 写入走裸 SQL 幂等 upsert。
+    """
+    if _has_table(conn, "auction_snapshots"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE auction_snapshots (
+                    id SERIAL PRIMARY KEY,
+                    trade_date DATE NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    source TEXT,
+                    auction_price DOUBLE PRECISION,
+                    open_price DOUBLE PRECISION,
+                    open_pct DOUBLE PRECISION,
+                    open_amount DOUBLE PRECISION,
+                    open_limit_buy DOUBLE PRECISION,
+                    direction TEXT,
+                    gap_pct DOUBLE PRECISION,
+                    auction_high DOUBLE PRECISION,
+                    auction_low DOUBLE PRECISION,
+                    withdraw_rate_pre0920 DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_auction_snapshots UNIQUE (trade_date, symbol, market)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE auction_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    source TEXT,
+                    auction_price REAL,
+                    open_price REAL,
+                    open_pct REAL,
+                    open_amount REAL,
+                    open_limit_buy REAL,
+                    direction TEXT,
+                    gap_pct REAL,
+                    auction_high REAL,
+                    auction_low REAL,
+                    withdraw_rate_pre0920 REAL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, symbol, market)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_auction_snapshots_symbol_date",
+        "CREATE INDEX ix_auction_snapshots_symbol_date "
+        "ON auction_snapshots (symbol, trade_date DESC)",
+    )
+
+
+def _m155_chip_daily_table(conn: Connection) -> None:
+    """筹码分布日表 chip_daily(批次2, 2026-09-10)。
+
+    每交易日一算一存(自选∪持仓) → `(trade_date, symbol, market)` 唯一, 重算覆盖。
+    字段口径同 `src/core/chip_distribution.compute_chips` 的输出。
+    """
+    if _has_table(conn, "chip_daily"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE chip_daily (
+                    id SERIAL PRIMARY KEY,
+                    trade_date DATE NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    cost_10 DOUBLE PRECISION,
+                    cost_50 DOUBLE PRECISION,
+                    cost_90 DOUBLE PRECISION,
+                    profit_ratio DOUBLE PRECISION,
+                    peak_price DOUBLE PRECISION,
+                    cost_band_low DOUBLE PRECISION,
+                    cost_band_high DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_chip_daily UNIQUE (trade_date, symbol, market)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE chip_daily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    cost_10 REAL,
+                    cost_50 REAL,
+                    cost_90 REAL,
+                    profit_ratio REAL,
+                    peak_price REAL,
+                    cost_band_low REAL,
+                    cost_band_high REAL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, symbol, market)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_chip_daily_symbol_date",
+        "CREATE INDEX ix_chip_daily_symbol_date ON chip_daily (symbol, trade_date DESC)",
+    )
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3414,6 +3546,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(151, "trading_halts_table", _m151_trading_halts_table),
     Migration(152, "adj_factors_table", _m152_adj_factors_table),
     Migration(153, "datasource_failures_table", _m153_datasource_failures_table),
+    # 批次2(2026-09-10): 把市场数据"最大化落库" —— 竞价快照 + 筹码日频。
+    Migration(154, "auction_snapshots_table", _m154_auction_snapshots_table),
+    Migration(155, "chip_daily_table", _m155_chip_daily_table),
 )
 
 

@@ -7,6 +7,15 @@
 
 ## 2026-09-10
 
+### feat-数据落库 批次2(1/2): 竞价快照 auction_snapshots + 筹码日频 chip_daily 落库
+- **迁移**: `_m154_auction_snapshots_table` / `_m155_chip_daily_table`(双方言 DDL; `(trade_date,symbol,market)` 唯一 + 查询索引), 沿用 `klines`/`l2_ticks` 的"**迁移建表 + 裸 SQL**"(不引入 ORM 表, 不动 `Base.metadata`)。
+- **写入器**: 新增 `src/core/market_archive.py` —— `persist_/read_auction_snapshots`、`persist_/read_chip_daily`。**幂等 upsert**(`ON CONFLICT DO UPDATE`, 重跑覆盖可自愈)、**字段缺失写 NULL 不伪造**、**失败返回 0/False/[](不抛)**。
+- **接线**: ① `auction_review.collect` 把 TQ+thsdk 合并的逐票竞价快照落库(**当日唯一**); ② `chip_distribution.compute_near_term_chips` **写穿**落库(当日唯一天然幂等, 失败静默)。
+- **口径**: 均为**公共数据**(表内无 user_id) → 多账号共用一份, 与"避免各账号各打源"一致; 历史可直接查(为批次 3 查询侧留接口)。
+- **测试**: 新增 `tests/test_market_archive.py` 5 例(建表/幂等覆盖/空值不伪造/未建表读取不抛)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **2004 passed / 2 failed(仅 KI-027 本机) / 5 skipped**; 4 项静态门禁通过。
+- [tag v0.5.43]
+
 ### feat-数据落库/共享缓存 批次1: marketdata 缓存 Redis 化 + klines 压缩
 - **1-B(完成)**: `marketdata` 新增**可注入缓存后端** —— `cache.py` 加 `CacheBackend` 协议, `MarketData(cache_factory=)` 让 14 个 Engine 全部走工厂。应用侧 `src/core/md_redis_cache.py` 实现 **Redis 共享缓存**(同步 `redis.Redis` + dataclass↔JSON 编解码 + TTL±10% 抖动), 由 `get_market_data()` 注入 → **消除 `WEB_WORKERS=2` 下"同标的两个 worker 各拉一次"**。**降级安全**: Redis 不可用→退进程内 TTLCache; 编解码失败→当未命中(绝不返回错值); `MD_REDIS_CACHE=0` 一键回退。
 - **1-A(部分)**: 新增 `scripts/ts_storage_governance.py`(体检 + `--apply` 幂等); 本轮仅对 **`klines`** 开启压缩(其唯一索引 `(symbol,market,period,ts,source,adjust)` **含分区列 ts**, 安全)。
