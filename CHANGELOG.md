@@ -39,6 +39,15 @@
 - **只读验收**(09:55 仍在悟道限流窗口内): 容器内 `fetch_auction_raw()` 实测 `limited=True` 且 `opening_snapshot.source=tencent_fallback`、内含真实竞价高开榜(24 只, 如 601318 +0.40% / 600519 +0.01%) → 降级链生效, agent 不再拿空 prompt。
 - [tag v0.5.38]
 
+### feat-竞价复盘补「同花顺逐票竞价快照」(B 方案: 悟道免费档屏蔽窗的结构化替代)
+- **背景(实测证据)**: 悟道 MCP **免费档**在 `09:15-10:30 Asia/Shanghai` 被**服务端硬屏蔽** —— 窗口内调用不超时不报错(0.1-0.33s, HTTP 200), 但返回 JSON-RPC `error{code:-32030, FREE_TIER_MARKET_OPEN_RESTRICTED, quotaTier:free, retryAfterMs}`。即 `consistency/bidStrength/弱转强/被核` 四个独家字段在该时段**拿不到**(非客户端保守)。
+- **B 方案**: 用**同花顺超级盘口(游客账户可用)**补一条**逐票竞价快照** —— 竞价方向(高/低/平开)/竞价高低与撮合价/偏离昨收/09:20 前撤单率近似。复用既有 `src/core/thsdk_alert.auction_snapshot`(实测 0.76s 返回真实数据)。
+- **改动**: ① `auction_collector` 新增 `fetch_auction_snapshots_thsdk(symbols, limit=10)` + `_to_ths_code`(6 位→USHA/USZA/USTM), 单票失败跳过、整体失败返回 `{}`(不伪造); ② `auction_review.collect` 在悟道独家字段不可得时补拉自选逐票快照, 并计入 `client_ok`(`source=thsdk`); ③ `build_prompt` 增「自选竞价快照(同花顺超级盘口, 逐票)」段 + 更新降级口径说明。
+- **口径**: 快照来自虚拟匹配价/匹配量, **与悟道 consistency/bidStrength 口径不同, 不可互相换算**(prompt 内已注明)。
+- **测试**: `tests/test_auction_review_degrade.py` 扩到 9 例(+ths 码转换 / 快照过滤与 limit / 仅 thsdk 时 client_ok / prompt 渲染)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1985 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**; 4 项静态门禁通过。
+- [tag v0.5.39]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。

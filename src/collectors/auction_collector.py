@@ -341,6 +341,56 @@ def fetch_auction_raw() -> dict:
     return out
 
 
+def _to_ths_code(symbol: str) -> str:
+    """6 位 A 股代码 → thsdk 前缀代码(USHA 沪 / USZA 深 / USTM 北)。"""
+    s = str(symbol or "").strip().upper()
+    if s.startswith(("USZA", "USHA", "USTM")):
+        return s
+    if len(s) == 6 and s.isdigit():
+        if s.startswith(("60", "68")):
+            return f"USHA{s}"
+        if s.startswith(("00", "30")):
+            return f"USZA{s}"
+        if s.startswith(("8", "4", "9")):
+            return f"USTM{s}"
+    return ""
+
+
+def fetch_auction_snapshots_thsdk(symbols: list[str], limit: int = 10) -> dict[str, dict]:
+    """自选标的的 thsdk 竞价快照(逐票): 竞价方向/高低/09:20 前撤单率近似。
+
+    2026-09-10 B 方案: 悟道独家字段(consistency/bidStrength)在**免费档 9:15-10:30
+    被服务端屏蔽**, 用同花顺超级盘口(游客账户可用)补一条**逐票**竞价截面。
+    单票失败跳过; 整体失败返回 {} —— 不伪造。返回 {symbol: auction_snapshot}。
+    """
+    out: dict[str, dict] = {}
+    syms = [s for s in (symbols or []) if s][:limit]
+    if not syms:
+        return out
+    try:
+        from src.core import thsdk_alert as ta
+    except ImportError:
+        logger.debug("thsdk 不可用, 跳过竞价快照补充")
+        return out
+    try:
+        with ta.THS() as ths:
+            for sym in syms:
+                code = _to_ths_code(sym)
+                if not code:
+                    continue
+                try:
+                    ticks = ta._fetch_tick_super_level1(ths, code)
+                    prev = ta._fetch_prev_close(ths, code)
+                    snap = ta.auction_snapshot(ticks or [], prev)
+                    if snap.get("direction") and snap.get("direction") != "无数据":
+                        out[sym] = snap
+                except Exception as e:  # noqa: BLE001 - 单票失败不影响其余
+                    logger.debug("thsdk 竞价快照单票失败 %s: %s", sym, e)
+    except Exception as e:  # noqa: BLE001 - 整体降级
+        logger.warning("thsdk 竞价快照整体失败: %s", e)
+    return out
+
+
 def fetch_auction_risk(limit: int = 10) -> str:
     """竞价被核风险(悟道独家, 无降级)。"""
     cache_key = f"risk:{limit}"

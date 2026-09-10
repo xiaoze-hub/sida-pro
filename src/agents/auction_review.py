@@ -57,10 +57,27 @@ class AuctionReviewAgent(BaseAgent):
                 bool(data.get(k))
                 for k in ("theme_strength", "market_scan", "weak_to_strong", "limitup_feedback")
             )
-            data["client_ok"] = _has_data
-            data["degraded"] = _has_data and not _has_wudao_only
+            # B 方案(2026-09-10): 悟道独家字段不可得(免费档 9:15-10:30 被服务端屏蔽)时,
+            # 用同花顺超级盘口补一条**逐票**竞价快照(竞价方向/高低/撤单率近似, 游客账户可用)。
+            if not _has_wudao_only:
+                try:
+                    from src.collectors.auction_collector import (
+                        fetch_auction_snapshots_thsdk,
+                    )
+
+                    _wl = (
+                        [s.symbol for s in context.watchlist] if context is not None else []
+                    )
+                    _snaps = fetch_auction_snapshots_thsdk(_wl, limit=10)
+                    if _snaps:
+                        data["auction_snapshots"] = _snaps
+                except Exception as e:  # noqa: BLE001 - 补充源失败不拖垮主流程
+                    logger.debug("[%s] thsdk 竞价快照补充失败: %s", trace_id, e)
+            _has_snaps = bool(data.get("auction_snapshots"))
+            data["client_ok"] = _has_data or _has_snaps
+            data["degraded"] = bool(data["client_ok"]) and not _has_wudao_only
             data["source"] = (data.get("opening_snapshot") or {}).get("source") or (
-                "wudao" if _has_wudao_only else ""
+                "wudao" if _has_wudao_only else ("thsdk" if _has_snaps else "")
             )
             if raw.get("limited"):
                 data["limited"] = True
@@ -142,9 +159,30 @@ class AuctionReviewAgent(BaseAgent):
         if ad.get("degraded"):
             user_content.append(
                 f"> 数据口径: {ad.get('client_error') or '悟道数据不可用'}; "
-                "下方「竞价全景」为腾讯批量行情降级(竞价高开榜, 含竞价涨幅/竞价涨停), "
-                "**题材一致性(consistency)/竞价强度榜(bidStrength)/弱转强/被核反馈为悟道独家字段, "
-                "本时段不可得**。请基于已有竞价高开榜做截面解读, 缺的字段标注'不可得'即可, 不要索要数据。\n"
+                "「竞价全景」为腾讯批量行情降级(竞价高开榜), 并附**同花顺逐票竞价快照**"
+                "(竞价方向/高低/撤单率近似); **题材一致性(consistency)/竞价强度榜(bidStrength)/"
+                "弱转强/被核反馈为悟道独家字段, 本时段不可得**。请基于已有高开榜+逐票快照做截面解读, "
+                "缺的字段标注'不可得'即可, 不要索要数据。\n"
+            )
+
+        # 自选竞价快照(thsdk 逐票): 悟道独家字段不可得时的补充源
+        snaps = ad.get("auction_snapshots") or {}
+        if snaps:
+            user_content.append("## 自选竞价快照(同花顺超级盘口, 逐票)")
+            for sym, s in snaps.items():
+                _dir = s.get("direction") or "-"
+                _gap = s.get("gap_pct")
+                _gap_s = f"{_gap:+.2f}%" if isinstance(_gap, (int, float)) else "-"
+                _wr = s.get("withdraw_rate_pre0920")
+                _wr_s = f"{_wr * 100:.1f}%" if isinstance(_wr, (int, float)) else "-"
+                user_content.append(
+                    f"- {sym}: {_dir}(竞价价{s.get('auction_price')}, "
+                    f"高{s.get('auction_high')}/低{s.get('auction_low')}, 偏离昨收{_gap_s}) "
+                    f"| 09:20前撤单率近似{_wr_s}"
+                )
+            user_content.append(
+                "> 口径: 同花顺超级盘口逐票竞价快照(虚拟匹配价+匹配量); "
+                "与悟道 consistency/bidStrength 口径不同, 不可互相换算。\n"
             )
 
         # 竞价全景
