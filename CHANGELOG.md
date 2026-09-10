@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-数据落库 批次3: 查询侧收口 API(/api/archive 只读 + 新鲜度/缓存命中率面板)
+- **查询侧**: 新增 `src/web/api/market_archive.py`, 注册 `/api/archive`(protected, 只读不触发回源) —— `GET /overview`(六张落库表行数+最早/最新 trade_date **新鲜度** + Redis keyspace 命中率; 统计失败=None 不伪装) / `GET /quote-snapshots?symbol&date&market`(分钟序列升序, 分时回放底座, 上限 2000 行) / `GET /auction-snapshots?date&symbol` / `GET /chip-daily?date&symbol` / `GET /dragon-tiger?date|symbol&days`。空态如实返 `items: []`+note, 参数边界校验 400。
+- **口径**: 只读 L0 归档面, 服务于设计文档批次3⑦("前端历史查询改走 L0, 带日期区间裁剪"); 指数分钟序列用 `market=IDX`。批次3⑧ 新鲜度/命中率面板即 `/overview`。
+- **测试**: 新增 `tests/test_market_archive_api.py` 6 例(真实 sqlite 建 m154-157 + 种子行 → TestClient 走裸 SQL; 覆盖计数新鲜度/升序/过滤/空态/400 边界/Redis 无 URL 全 None)。离线门禁 `-m "not network"` → **2025 passed / 2 failed(仅 KI-027 本机) / 5 skipped**。
+- **未做**: 分钟 K线入库+连续聚合(设计文档批次2⑤)与 l2_ticks A/B/C 决策纠缠, 一并待老板拍板; 前端分时回放页面按老板挑范围后接本 API。
+- [tag v0.5.46]
+
 ### feat-数据落库 批次2(2/2): 快照行情 1 分钟桶 quote_snapshots 落库
 - **迁移**: `_m157_quote_snapshots_table`(双方言 DDL; **`(trade_date, market, symbol, ts)` 唯一** + 索引 (symbol, ts DESC))。唯一键含 `trade_date` —— 规避 l2_ticks 教训(分区/裁剪列必须进唯一键)。
 - **写入器**: 新增 `src/core/quote_snapshots.py` —— `collect_once`(永不抛) 每分钟采集 **自选(stocks)∪启用账户持仓(positions join accounts)∪大盘指数**, 个股走 `md_quote_rows`(与 WS 聚合器同源全字段), 指数走 `index_quotes` **腾讯原始符号**(sh000001 等, market='IDX', 避免与同号个股撞键)。幂等: 同 `(trade_date, ts)` 桶重拉跳过已存在键。

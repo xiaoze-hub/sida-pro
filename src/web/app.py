@@ -60,6 +60,7 @@ from src.web.api import (
     seal_quality,
     demon_pool,
     signals_review,
+    market_archive,
 )
 from src.web.api import factors
 from src.web.api import notifications
@@ -633,6 +634,13 @@ app.include_router(
     demon_pool.router,
     prefix="/api/demon-pool",
     tags=["demon-pool"],
+    dependencies=protected,
+)
+# 数据落库面查询(批次3 查询侧收口, 2026-09-10): 四表只读 + 新鲜度/缓存命中率面板
+app.include_router(
+    market_archive.router,
+    prefix="/api/archive",
+    tags=["market-archive"],
     dependencies=protected,
 )
 # 信号→复盘闭环(批次D, 2026-09-06): 命中率统计+对账触发
