@@ -7,6 +7,11 @@
 
 ## 2026-09-10
 
+### update-v0.5.50 生产部署(代码覆盖层+前端产物, chown+compileall, 冒烟 9/9)
+- **部署**(本机 WSL=生产, Tailscale 100.91.30.35:8000): 备份 `/root/app_backup_pre_v0550_20260910.tar.gz`(22.2MB, 代码面, 排除 data/)→ 覆盖层(`git archive v0.5.50` + 新 `frontend/dist` 拷入 `static/`, 14.4MB)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy → `/api/version` = **v0.5.50** → 冒烟 **9/9**(7.9s, 含 dark-flow 5.7s)。
+- **前端核对**: 线上 `/` 引用 `assets/index-BoddnwU8.js` 与本地构建逐字一致; "源心跳"/"已加自选"等新功能字符串在线上 bundle 内。
+- [tag v0.5.50 已推 origin]
+
 ### release-OpenTerminal 借鉴 P1-P3 全量交付(12 项); v0.5.50
 - **交付范围**(方案 §四 全部 12 项, 按 P1→P3 顺序, 逐项 commit + CHANGELOG 见本日各条目): P1-1 板块热力图(B1) / P1-2 单源依赖审计(C4); P2-1 数据源 EWMA+心跳条(C1) / P2-2 看板轻量定制(A1) / P2-3 价格 Flash(A3); P3-1 命令面板动作化(A2) / P3-2 新闻去重(C3) / P3-3 stale-on-error(C2) / P3-4 三态审计(B5) / P3-5 三地市场状态(A4) / P3-6 面板联动开关(A6) / P3-7 AI 合规护栏(D3)。
 - **两个审计交付物**: `docs/research/单源依赖审计_20260910.md`(单源约 30 条三分类 + 处置) / `docs/research/三态覆盖审计_20260910.md`(14 数据面 × 三态矩阵)。
