@@ -15,6 +15,13 @@
 - **测试**: 新增 `tests/test_md_redis_cache.py` 8 例; `packages/marketdata/tests` **199 passed**; 后端全量离线套件 **1999 passed / 2 failed(仅 KI-027 本机) / 5 skipped**; 4 项静态门禁通过。
 - [tag v0.5.42]
 
+### update-v0.5.42 生产部署(代码覆盖层, chown+compileall, 冒烟 9/9, Redis/压缩实测)
+- **部署**: 备份 `/root/app_backup_pre_v0542_20260910.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy → `/api/version` = **v0.5.42** → 冒烟 **9/9**(9.4s)。
+- **klines 压缩**: `ts_storage_governance.py --apply` 实测 `开启压缩 + 压缩策略(30天)` 均 `OK`(幂等; klines 唯一索引含分区列 ts, 安全)。
+- **Redis 共享缓存生效**: 容器内调 `quotes()` 后, `redis-cli --scan --pattern 'md:*'` 命中 `md:quote|...|002361|`、`md:more_info|...` → 跨 worker 共享缓存已工作(默认开, `MD_REDIS_CACHE=0` 可回退)。
+- **待决策(未动)**: `l2_ticks`(16GB/7564 万行) 转 hypertable 的语义选择 A/B/C(见设计文档 §5.1)。
+- [tag v0.5.42]
+
 ### docs-《数据落库与共享缓存设计》(最大化落库 · 历史可查)
 - **背景**: 老板提出"市场数据尽量落库以便查历史, 且避免多账号同时访问时各自打上游接口"。
 - **产出**: 新增 `docs/数据落库与共享缓存设计_20260910.md`(基线 main @ `e7e4e79`), 含: 现状实测盘点(见下) / 三层模型(L0 PG 定稿·L1 Redis 热·L2 实时不落库) / **14 项落库矩阵**(表名·粒度·键·写入者·保留·归属) / 存储治理 / Key 与隔离红线 / 一致性(击穿·雪崩·回填) / 可观测指标 / 3 批落地路线 / 风险回滚 / 4 个待决策点。
