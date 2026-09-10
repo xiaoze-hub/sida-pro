@@ -2923,6 +2923,160 @@ def _m156_dragon_tiger_events_table(conn: Connection) -> None:
     )
 
 
+def _m160_lhb_detail_tables(conn: Connection) -> None:
+    """龙虎榜机构/营业部明细两张表(2026-09-10, 老板"切换到东财全自动方案")。
+
+    - lhb_institution_daily: 东财 RPT_ORGANIZATION_TRADE_DETAILS(机构买卖统计),
+      含上榜后 1/2/3/5/10 日涨幅; `(trade_date, symbol, reason)` 唯一, 重拉幂等。
+    - lhb_seat_details: 东财 RPT_BILLBOARD_DAILYDETAILSBUY/SELL(营业部买卖明细),
+      含席位买入/卖出/净额、3 日上涨概率; 行唯一键 = row_uid(内容哈希) ——
+      同一营业部同日同股可在不同上榜原因下多行, 不能按(日期,营业部)粗去重。
+    """
+    if not _has_table(conn, "lhb_institution_daily"):
+        if _dialect_is_pg(conn):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE lhb_institution_daily (
+                        trade_date TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        name TEXT,
+                        reason TEXT NOT NULL DEFAULT '',
+                        close DOUBLE PRECISION,
+                        change_pct DOUBLE PRECISION,
+                        buy_times INTEGER,
+                        sell_times INTEGER,
+                        buy_amt DOUBLE PRECISION,
+                        sell_amt DOUBLE PRECISION,
+                        net_amt DOUBLE PRECISION,
+                        accum_amount DOUBLE PRECISION,
+                        ratio DOUBLE PRECISION,
+                        turnover_pct DOUBLE PRECISION,
+                        free_cap DOUBLE PRECISION,
+                        d1_pct DOUBLE PRECISION,
+                        d2_pct DOUBLE PRECISION,
+                        d3_pct DOUBLE PRECISION,
+                        d5_pct DOUBLE PRECISION,
+                        d10_pct DOUBLE PRECISION,
+                        source TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT uq_lhb_institution_daily UNIQUE (trade_date, symbol, reason)
+                    )
+                    """
+                )
+            )
+        else:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE lhb_institution_daily (
+                        trade_date TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        name TEXT,
+                        reason TEXT NOT NULL DEFAULT '',
+                        close REAL,
+                        change_pct REAL,
+                        buy_times INTEGER,
+                        sell_times INTEGER,
+                        buy_amt REAL,
+                        sell_amt REAL,
+                        net_amt REAL,
+                        accum_amount REAL,
+                        ratio REAL,
+                        turnover_pct REAL,
+                        free_cap REAL,
+                        d1_pct REAL,
+                        d2_pct REAL,
+                        d3_pct REAL,
+                        d5_pct REAL,
+                        d10_pct REAL,
+                        source TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (trade_date, symbol, reason)
+                    )
+                    """
+                )
+            )
+        _create_index_if_missing(
+            conn,
+            "ix_lhb_institution_sym_date",
+            "CREATE INDEX ix_lhb_institution_sym_date ON lhb_institution_daily (symbol, trade_date DESC)",
+        )
+    if not _has_table(conn, "lhb_seat_details"):
+        if _dialect_is_pg(conn):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE lhb_seat_details (
+                        row_uid TEXT PRIMARY KEY,
+                        trade_date TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        name TEXT,
+                        reason TEXT NOT NULL DEFAULT '',
+                        operate_dept_code TEXT NOT NULL DEFAULT '',
+                        operate_dept_name TEXT NOT NULL DEFAULT '',
+                        close DOUBLE PRECISION,
+                        change_pct DOUBLE PRECISION,
+                        accum_amount DOUBLE PRECISION,
+                        accum_volume DOUBLE PRECISION,
+                        buy_amt DOUBLE PRECISION,
+                        sell_amt DOUBLE PRECISION,
+                        net_amt DOUBLE PRECISION,
+                        rise_probability_3d DOUBLE PRECISION,
+                        change_type TEXT,
+                        trade_id TEXT,
+                        total_buy_ratio DOUBLE PRECISION,
+                        total_sell_ratio DOUBLE PRECISION,
+                        source TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+        else:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE lhb_seat_details (
+                        row_uid TEXT PRIMARY KEY,
+                        trade_date TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        name TEXT,
+                        reason TEXT NOT NULL DEFAULT '',
+                        operate_dept_code TEXT NOT NULL DEFAULT '',
+                        operate_dept_name TEXT NOT NULL DEFAULT '',
+                        close REAL,
+                        change_pct REAL,
+                        accum_amount REAL,
+                        accum_volume REAL,
+                        buy_amt REAL,
+                        sell_amt REAL,
+                        net_amt REAL,
+                        rise_probability_3d REAL,
+                        change_type TEXT,
+                        trade_id TEXT,
+                        total_buy_ratio REAL,
+                        total_sell_ratio REAL,
+                        source TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+        _create_index_if_missing(
+            conn,
+            "ix_lhb_seat_details_sym_date",
+            "CREATE INDEX ix_lhb_seat_details_sym_date ON lhb_seat_details (symbol, trade_date DESC)",
+        )
+        _create_index_if_missing(
+            conn,
+            "ix_lhb_seat_details_date",
+            "CREATE INDEX ix_lhb_seat_details_date ON lhb_seat_details (trade_date, side)",
+        )
+
+
 def _m157_quote_snapshots_table(conn: Connection) -> None:
     """快照行情 1 分钟桶表 quote_snapshots(批次2 2/2, 2026-09-10)。
 
@@ -3836,6 +3990,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(157, "quote_snapshots_table", _m157_quote_snapshots_table),
     Migration(158, "l2_ticks_event_time_key", _m158_l2_ticks_event_time_key),
     Migration(159, "klines_minute_continuous_agg", _m159_klines_minute_continuous_agg),
+    Migration(160, "lhb_detail_tables", _m160_lhb_detail_tables),
 )
 
 

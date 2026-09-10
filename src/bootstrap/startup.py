@@ -293,6 +293,61 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"龙虎榜每日增量回填注册失败: {e}")
 
+        # 龙虎榜机构/营业部明细(2026-09-10 老板"切换到东财全自动方案"): 交易日 17:50
+        # 与榜单 17:45 错峰; 近 3 日幂等 upsert; 永不抛异常
+        try:
+            from src.core.lhb_detail_backfill import daily_job as lhb_detail_job
+
+            rt.scheduler.scheduler.add_job(
+                lhb_detail_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=17,
+                minute=50,
+                id="lhb-detail-daily-backfill",
+                name="龙虎榜机构/营业部明细每日回填",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("龙虎榜机构/营业部明细回填已注册(交易日 17:50)")
+        except Exception as e:
+            logger.error(f"龙虎榜机构/营业部明细回填注册失败: {e}")
+
+        # 龙虎榜盘后兜底重扫(老板: "龙虎榜是每天收盘后四五点之后才有"): 19:45 / 20:00
+        # 东财发布晚于 17:45 时, 当晚再扫一遍(近 3 日幂等 upsert, 有则补无则空跑)
+        try:
+            from src.core.lhb_backfill import daily_job as lhb_list_job
+            from src.core.lhb_detail_backfill import daily_job as lhb_detail_job
+
+            rt.scheduler.scheduler.add_job(
+                lhb_list_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=19,
+                minute=45,
+                id="lhb-daily-backfill-retry",
+                name="龙虎榜榜单兜底重扫",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            rt.scheduler.scheduler.add_job(
+                lhb_detail_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=20,
+                minute=0,
+                id="lhb-detail-daily-backfill-retry",
+                name="龙虎榜明细兜底重扫",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("龙虎榜盘后兜底重扫已注册(交易日 19:45/20:00)")
+        except Exception as e:
+            logger.error(f"龙虎榜盘后兜底重扫注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once

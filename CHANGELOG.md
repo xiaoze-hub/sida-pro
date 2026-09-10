@@ -7,6 +7,15 @@
 
 ## 2026-09-10
 
+### feat-龙虎榜机构/营业部明细接入(东财, 全自动定时入库); v0.5.55
+- **老板拍板**: "切换到东财全自动方案"(替代通达信页面缓存的手动路径为主线; 通达信侧 v0.5.54 端点保留作补充)。
+- **数据源**(东财 datacenter, 实测可达): `RPT_ORGANIZATION_TRADE_DETAILS` **机构买卖统计**(机构买/卖次数与金额、成交额占比、换手、流通市值, **上榜后 1/2/3/5/10 日涨幅**) → `lhb_institution_daily`; `RPT_BILLBOARD_DAILYDETAILSBUY/SELL` **营业部买卖明细**(营业部名/席位买卖额/净额、**3 日上涨概率**、占买卖总额比) → `lhb_seat_details`。
+- **实现**: 迁移 **v160**(两表 + 索引; 机构表 `(trade_date,symbol,reason)` 唯一; 席位表 `row_uid`(内容哈希)主键 —— 实测同一营业部同日同股可在不同上榜原因下多行, 粗去重会丢行) + `src/core/lhb_detail_backfill.py`(归一化/幂等 upsert/分页拉取/回填管线, 单日单报告失败只记账不抛) + vendor 扩展(`market_flow.py`: `fetch_lhb_institutions` / `fetch_lhb_seat_details`, `_datacenter_get` 支持分页) + **cron 交易日 17:50**(与榜单 17:45 错峰) + **盘后兜底重扫 19:45/20:00**(老板: "龙虎榜是每天收盘后四五点之后才有" —— 东财发布晚时当晚补扫, 幂等空跑无害) + API `GET /api/archive/lhb-institution`、`GET /api/archive/lhb-seats`(date|symbol 至少一个, side 可选)。
+- **实测**(真实东财, 2026-09-10): 机构 **35 行** / 席位 **640 行**(买 320 + 卖 320), 幂等复跑行数不变; 抽查 002636 金安国纪 机构净买 **2.03亿**、600354 国泰海通总部席位净买 **2.68亿**(3日上涨概率 44.4%); D1/D3 涨幅当日为 None(未来涨幅未发生, 不编造)。
+- **测试**: `tests/test_lhb_detail_backfill.py` 4 例(归一化/行唯一键稳定性/幂等/异常不抛) + vendor 31 passed + 档案 API 既有用例; 离线全量 **2108 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
+- **待办**: 生产历史回填(机构 365 天 / 席位 90 天)部署后执行; 前端展示(龙虎榜页/个股洞察面板)按需另开。
+- [tag v0.5.55]
+
 ### update-v0.5.54 生产部署(覆盖层, 后端-only, 冒烟 9/9) + 龙虎榜缓存首次同步
 - **部署**: 备份 `/root/app_backup_pre_v0554_20260910.tar.gz` → 覆盖层 `git archive v0.5.54` + 现有 `frontend/dist`(本次无前端改动)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy(~40s) → `/api/version` = **v0.5.54** → 冒烟 **9/9**(7.3s)。
 - **缓存同步**: `scripts/sync_tdx_lhb_cache.sh`(WSL root)首跑: 客户端缓存 → 数据卷 `/app/data/tdx_lhb/{list,lhbfx}`, 容器内可见; **定时(5 分钟)计划任务待老板确认后注册**。
