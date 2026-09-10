@@ -49,7 +49,7 @@ for (const f of [...walk(SRC), ...walk(PKG_BIZ)]) {
 const files = [...walk(SRC), ...walk(PKG_BIZ)].filter((f) => !readFileSync(f).includes('\r'))
 
 // R7 豁免清单(带理由, 见循环内注释)
-const R7_SKIP_LINE = [/macdVals\s*=\s*macd\.map/]
+const R7_SKIP_LINE = [/macdVals\s*=\s*macd\.map/, /difVals\s*=\s*dif\.map/]
 
 const CHART = ['KlineChart.tsx', 'InteractiveKline.tsx']
 // R1 白名单(2026-09-07 P3 实测定级): InteractiveKline 分时模式下挂在图下方的堆叠
@@ -86,6 +86,8 @@ for (const f of files) {
     // R7: null/undefined 三元落到 0 —— 缺数据被渲染成 "+0.00%" 掩盖缺失, 应走 '--'
     // 豁免(2026-09-09): `macdVals = macd.map(v => v == null ? 0 : v)` 是喂 ema() 的暖机
     // 种子(仅前 26 根窗口), 数学输入而非渲染; 渲染侧 null 由 hist 的 null 守卫处理。
+    // 豁免(2026-09-10): `difVals = dif.map(v => v == null ? 0 : v)` 同类——DIF 暖机期
+    // null 喂 dea=emaSeries(difVals), 渲染侧 hist 对 dif/dea 双 null 守卫。
     if (!R7_SKIP_LINE.some((p) => p.test(ln)) && /(==|===)\s*(null|undefined)\s*\?\s*0\s*:/.test(ln)) bad('R7-NO-NULL-ZERO-COERCE', rel(f), n, ln)
   })
 }

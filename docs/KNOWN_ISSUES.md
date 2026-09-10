@@ -43,6 +43,7 @@
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
+| KI-041 | P3 | 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) | 2026-09-10 | TianXiang |
 
 ## 详情
 
@@ -206,6 +207,14 @@
 - 涉及文件: 生产 env(JWT_SECRET)、src/web/api/auth.py。
 - 建议修复: 随维护窗口换 ≥32 字节随机值 —— 注意会使全部现存会话失效(用户重新登录), 与口令类轮换同窗口执行成本最低。
 
+### KI-041 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) (P3)
+
+- 发现: 2026-09-10(P1-1 板块热力图提交前门禁复跑, `node scripts/check_ui_rules.mjs` 报 16 违规)
+- 现象: UI 规则 R6 基线自 979d79c(W2.4/E3, 2026-09-09)冻结后未再补挂, 此后各波新增/迁移的 14 个 toFixed 文件(`insight/OverviewTab` 34、`insight/helpers.tsx` 9、`stocks/AccountsSection` 5、`PnlCharts` 2、`lib/drawdown.ts`/`lib/trades.ts`/`stocks/WatchlistSection` 等)不在基线 → 门禁持续红。`Quote.tsx` 8→11 系 v0.5.35(KI-019/021/018)落地时新增, 站点均有 `Number()`/null 守卫。
+- 影响: 门禁在 CI release/image 工作流(task tag 触发)会红, 属流程阻塞而非运行时故障; 站点本身无字符串 `.toFixed` 崩溃风险(已逐点核)。
+- 涉及文件: scripts/ui-rules-baseline.json(2026-09-10 重算冻结 60 键)、scripts/check_ui_rules.mjs(R7 补 difVals 豁免)。
+- 建议修复: 后续波次将存量站点逐步改 `@/lib/format` safe* 并同步调低基线(只降不升); 基线维护可在 check_ui_rules.mjs 加 `--update` 模式(本次未加)。
+
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
 复现命令:
@@ -281,3 +290,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-09 深夜(KI-039 清零)**: 第二阶段把剩余 13 个反向依赖全部下沉 —— `src/core/paths.py`(报告目录) / `src/db/redis_client.py`+`src/db/streams.py` / `src/collectors/stock_list.py` / `src/collectors/wencai.py` / `src/core/market_scan_jobs.py` / `src/core/auth_tokens.py` / `src/core/notify_sink.py`(WS 推送槽, ws_hub 导入时注册), 另 unit_check 直调 `core.datasource_failures.record`。**`src/core` 反向依赖 `src/web` = 0 文件**, 棘轮白名单清空(新增即失败) → **KI-039 关闭移入 CHANGELOG**, 台账 **29 条在册**。
 
 **2026-09-09 深夜(接口先行项落地)**: KI-019(来源徽标)/KI-021(决策卡片)/KI-018(错误页签)前端落地发版 **v0.5.35**; KI-025 前端 WS 消费 envelope(新增 `src/realtime/useQuoteStream.ts`: SWP 鉴权 / last_seq 补发 / 指数退避 / 4401 不重连) + 后端补推自选标的(`_collect_watchlist_symbols` 补 `stocks` 表)发版 **v0.5.36** → **4 条修复移入 CHANGELOG**, 台账 **25 条在册(P1×3/P2×13/P3×9)**。
+
+**2026-09-10(P1-1 板块热力图)**: 新增 **KI-041**(R6 基线自 979d79c 冻结后未补挂 → 门禁存量红; 本次重算冻结 60 键 + R7 difVals 豁免), 台账 **26 条在册(P1×3/P2×13/P3×10)**。

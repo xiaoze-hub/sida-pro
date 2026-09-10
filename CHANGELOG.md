@@ -7,6 +7,18 @@
 
 ## 2026-09-10
 
+### feat-P1-1 板块热力图 (OpenTerminal 借鉴 B1): /api/boards/heatmap + treemap 页 + hslaVar canvas 兼容修复
+- **后端**: `src/web/api/boards.py` 新增 `GET /api/boards/heatmap?type=industry|concept` —— 一次拉全板块当日快照(block_code/name/change_pct/fund_net/volume/has_daily); 无当日数据的板块如实带 null(不剔除、不编造, 前端画灰块); 排序=有数据在前+涨跌幅降序; 静态路径声明在 `/{block_code}` 动态段之前防吞路由; type 非法 400 / DB 错 502。
+- **前端**: `packages/biz-ui/src/lib/board-heatmap.ts` 纯函数层(13 例: 色带 ±3% 夹紧 / 平盘与无数据归灰 / 面积口径 量能缺失以正数中位数 2% 保底 / 等权); `components/dashboard/BoardHeatmap.tsx` treemap 组件(面积=量能或等权切换、tooltip、点击下钻 `/boards/:code`、120s 轮询、加载/空/错/stale 三态); `src/pages/Heatmap.tsx` + App 路由与导航入口(`/heatmap`, perm=view_forecast, "行情"组)。
+- **走查修根因**: `hslaVar()` 原输出 CSS Color 4 空格语法 `hsla(215 16% 65%, 0.18)`, **zrender/canvas 画笔解析不了**(fillStyle 赋值被静默忽略、保留前值) → 热力图无数据块整片染成前一块颜色(概念视图 378/390 无数据时满屏红)。改为 legacy 逗号语法 `hsla(215, 16%, 65%, 0.18)`; 新增 `tests/lib/stock-colors.test.ts` 3 例锁定(浏览器实测: 空格语法赋值无效、逗号语法得 rgba(151,163,180,0.18))。
+- **顺带修复前端门禁存量红(技术债, 与本功能无关但阻发布)**:
+  - UI 规则 R6 基线自 979d79c(W2.4/E3)冻结后未再补挂, v0.5.31+ 各波新增的 toFixed 文件(`insight/OverviewTab` 34、`stocks/AccountsSection` 5、`PnlCharts` 2、`drawdown.ts`/`trades.ts` 等 14 个)未入基线 → 门禁一直红。**重算冻结基线**(60 键; 3 个已归零键删除; `Quote.tsx` 8→11 系 v0.5.35 徽标/决策卡落地时新增, 站点均有 `Number()`/null 守卫, 一并冻结为 KNOWN_ISSUES **KI-041** 待降档)。
+  - R7 补豁免 `difVals = dif.map(v => v == null ? 0 : v)`(与既有 macdVals 同类: DIF 暖机期 null 喂 `dea=emaSeries(difVals)`, 渲染侧 hist 双 null 守卫; 见 `scripts/check_ui_rules.mjs` 注释)。
+  - 本功能两个新文件 0 个裸 toFixed(走 `@/lib/format` safeFixed; `fmtMoney` 顺带消除 PG DECIMAL 字符串 `.toFixed` 崩溃风险)。
+- **测试**: 前端 vitest **63 passed**(新增 board-heatmap 13 + 组件 6 + stock-colors 3); tsc / eslint / UI 规则(`UI-RULES OK`) / `pnpm build` 全过。后端 `tests/test_boards_heatmap.py` 6 例过。
+- **本地走查**: 本地 repro 栈(容器热替 boards.py + 36 行种子)浏览器实测 —— 行业/概念、量能/等权切换、tooltip 数值(黑色家电 +2.99% / 量能 268.50亿 / 资金 13.16亿)、点击下钻 `/boards/URFI881132` 数值一致; 种子数据与临时验证账号已删净。
+- [commit <见 git log>]
+
 ### fix-回填脚本直跑引导: sys.path 自举(生产实撞; 版本号仍 v0.5.49, 随下次覆盖层进容器)
 - **生产实撞**: `docker exec panwatch python /app/scripts/l2_ticks_event_time.py --apply` 秒挂 `ModuleNotFoundError: No module named 'src'`——文件路径直跑时 sys.path[0] 是 scripts/ 而非 /app, 干跑(不连库)掩盖了问题。补 `sys.path.insert(0, parents[1])` 自举, 容器内裸跑不再依赖 `PYTHONPATH=/app`。当时执行用 `-e PYTHONPATH=/app` 绕过, 无数据影响(失败发生在任何 DDL 之前)。
 - [commit <见 git log>]
