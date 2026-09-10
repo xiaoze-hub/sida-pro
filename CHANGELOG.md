@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### fix-板块日线同步修复: "基础数据"档无涨跌幅 → 批量两档取数; board_daily 480 行回填; v0.5.51
+- **生产实撞**(老板截图): 板块热力图几乎全灰"无数据"。排查: `board_daily` 空表(0 行)→ 热力图/轮动全空。日志显示 09-10 08:47 同步跑过但 **480 板块全部被跳过**(0 行日线): 逐板块调 thsdk `get_block_market(code, "基础数据")`, 实测该档返回 11 个字段(**成交量/总金额/领涨股/涨跌家数/市值 —— 根本没有涨跌幅**), `change_pct` 恒 None → 全量跳过。**该缺陷自阶段2.1 上线起从未产出过一行日线**(轮动排序同样常年空), 热力图是第一个暴露它的消费方。
+- **修法**(`src/core/thsdk_board.py` + `data_source/thsdk_l2.py`): ① 新增批量方法 `get_block_market_batch(codes, mode)`(thsdk 支持一次多代码, 实测 3 码→df(3,9)); ② 新增 `fetch_block_snapshots()`: **"扩展"档(涨幅/主力净流入, 元) + "基础数据"档(总金额=成交额, 元)** 双档合并, 80 码/片, 单档失败不阻断; ③ `sync_boards_to_db` 改批量快照, 全零(概念无行情)仍跳过保持"无数据"语义; ④ 提取器 volume 优先 `总金额`; ⑤ **cron 08:30(盘前残值) → 16:10(收盘后, 日线=当日收盘口径)**。
+- **实测**(本地=生产栈): 修复后一次同步 **480/480 行, 20.2 秒**(旧路径 17 分钟 0 行); 抽查量级合理(融资融券概念 1.42 万亿成交额/-225 亿净流出; 银行 +1.47% 与同花顺资金页 1.47% 互证)。API: `/boards/heatmap` concept 390/390 有涨跌幅、industry 90 条, trade_date=2026-09-10; `/boards/rotation` **480 条**(此前恒空)。冒烟 9/9。
+- **测试**: 新增 `tests/test_board_sync_batch.py` 8 例(纯 mock 离线: 两档合并/分片/失败容错/总金额口径/批量写入幂等/全零跳过/缺快照跳过/cron 收盘后); 既有 network 用例同步适配(`test_thsdk_board.py` 改 mock 批量快照 + cron 断言)。相关域 24 passed。
+- [tag v0.5.51]
+
 ### update-v0.5.50 生产部署(代码覆盖层+前端产物, chown+compileall, 冒烟 9/9)
 - **部署**(本机 WSL=生产, Tailscale 100.91.30.35:8000): 备份 `/root/app_backup_pre_v0550_20260910.tar.gz`(22.2MB, 代码面, 排除 data/)→ 覆盖层(`git archive v0.5.50` + 新 `frontend/dist` 拷入 `static/`, 14.4MB)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy → `/api/version` = **v0.5.50** → 冒烟 **9/9**(7.9s, 含 dark-flow 5.7s)。
 - **前端核对**: 线上 `/` 引用 `assets/index-BoddnwU8.js` 与本地构建逐字一致; "源心跳"/"已加自选"等新功能字符串在线上 bundle 内。

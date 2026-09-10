@@ -738,13 +738,31 @@ class THSDKL2:
         板块行情数据
 
         :param block_code: 板块代码(URFI 开头,如 "URFI883404")
-        :param extended: 档位名称(基础数据/扩展1)
+        :param extended: 档位名称(基础数据 / 扩展; "扩展" 档含涨幅/主力净流入)
         :return: dict,板块当前行情
         """
         resp = self._query("market_data_block", block_code, extended)
         if hasattr(resp, "data") and resp.data:
             return resp.data[0] if isinstance(resp.data, list) else resp.data
         return {}
+
+    def get_block_market_batch(
+        self, block_codes: list[str], extended: str = "扩展"
+    ) -> list[dict]:
+        """批量板块行情(一次多代码, 2026-09-10 增: 480 板块逐只拉要十几分钟)。
+
+        :param block_codes: 板块代码列表(URFI 开头)
+        :param extended: 档位名称(基础数据 / 扩展)
+        :return: [{字段: 值}, ...]; 空入参/无数据返回 []
+        """
+        codes = [str(c).strip() for c in (block_codes or []) if str(c).strip()]
+        if not codes:
+            return []
+        resp = self._query("market_data_block", codes, extended)
+        df = self._to_dataframe(resp)
+        if df is None or df.empty:
+            return []
+        return df.to_dict(orient="records")
 
     def get_block_constituents(self, block_code: str = "URFI883404") -> pd.DataFrame:
         """
@@ -1415,6 +1433,10 @@ def get_ths_concept() -> pd.DataFrame:
 
 def get_block_market(block_code: str = "URFI883404", extended: str = "基础数据") -> dict:
     return _get_default_client().get_block_market(block_code, extended)
+
+
+def get_block_market_batch(block_codes: list[str], extended: str = "扩展") -> list[dict]:
+    return _get_default_client().get_block_market_batch(block_codes, extended)
 
 
 def get_block_constituents(block_code: str = "URFI883404") -> pd.DataFrame:

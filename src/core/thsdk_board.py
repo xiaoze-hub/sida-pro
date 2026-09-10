@@ -5,7 +5,7 @@
 - fetch_block_detail / fetch_block_constituents: 单个板块行情/成分股(1 小时 TTL 缓存)
 - sync_boards_to_db: cron 每日拉列表 + 板块日线写入 Board / BoardDaily
 - compute_rotation: 基于 BoardDaily 计算板块轮动排序(强度分 0-100)
-- register_board_sync_job: 把 08:30 工作日同步任务挂到【已有】APScheduler 实例
+- register_board_sync_job: 把 16:10(收盘后) 工作日同步任务挂到【已有】APScheduler 实例
 
 设计要点:
 - 复用 data_source/thsdk_l2.py 的 THSDKL2, 不重写 SDK 调用
@@ -285,8 +285,60 @@ def _extract_block_metrics(detail: Optional[dict]) -> dict:
         "fund_net": _first_num(
             "主力净流入", "资金净流入", "净流入", "主力净额", "fund_net", "main_net_inflow"
         ),
-        "volume": _first_num("成交额", "成交金额", "成交量", "volume", "amount", "成交额(元)"),
+        # 总金额 = 板块成交额(元), 热力图"面积=量能"口径优先于成交量(股)
+        "volume": _first_num("总金额", "成交额", "成交金额", "成交量", "volume", "amount", "成交额(元)"),
     }
+
+
+def _num(value: Any) -> Optional[float]:
+    """DataFrame 单元格 → float; None/NaN/非数 → None。"""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+# 批量快照分片大小(代码数/次): 480 板块 ≈ 6 片 × 2 档, 秒级完成
+_SNAPSHOT_BATCH = 80
+
+
+def fetch_block_snapshots(codes: list[str]) -> dict[str, dict]:
+    """批量拉板块快照 → {code: {change_pct, fund_net, volume}}(2026-09-10 生产修复)。
+
+    背景(实撞): 原实现逐板块调 thsdk "基础数据" 档, 实测该档**没有涨跌幅字段** →
+    change_pct 恒 None → 480 板块全量被跳过, board_daily 长期 0 行(热力图/轮动全空)。
+    修法: 批量两档 —— "扩展"(涨幅/主力净流入, 元) + "基础数据"(总金额=成交额, 元)。
+    单档失败不阻断另一档(字段缺失保持 None, 由调用方按"无数据"处理)。
+    """
+    out: dict[str, dict] = {}
+    clean = [str(c).strip() for c in (codes or []) if str(c).strip()]
+    if not clean:
+        return out
+    client = _client()
+    for i in range(0, len(clean), _SNAPSHOT_BATCH):
+        chunk = clean[i:i + _SNAPSHOT_BATCH]
+        for mode in ("扩展", "基础数据"):
+            try:
+                rows = client.get_block_market_batch(chunk, mode)
+            except Exception as e:  # noqa: BLE001 - 单档失败不阻断
+                logger.warning("thsdk 板块快照批量拉取失败(%s, %d 码): %s", mode, len(chunk), e)
+                continue
+            for r in rows or []:
+                code = str(r.get("代码") or "").strip()
+                if not code:
+                    continue
+                rec = out.setdefault(code, {})
+                if mode == "扩展":
+                    rec["change_pct"] = _num(r.get("涨幅"))
+                    rec["fund_net"] = _num(r.get("主力净流入"))
+                else:
+                    rec["volume"] = _num(r.get("总金额"))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -356,13 +408,16 @@ def sync_boards_to_db(db=None) -> dict:
                 board.board_type = btype
                 board.last_synced_at = beijing_now_naive()
 
-            # 每板块拉详情写日线(容量控制: 逐个拉, thsdk 内部自带限频/重试)
+            # 批量快照(扩展: 涨幅/主力净流入; 基础数据: 总金额量能) —— 480 板块秒级
+            # (2026-09-10 修: 原逐板块 "基础数据" 档无涨跌幅 → 全量跳过, 表长期空)
+            snapshots = fetch_block_snapshots([c for c, _, _ in deduped])
             for code, _name, _btype in deduped:
                 try:
-                    detail = fetch_block_detail(code)
-                    metrics = _extract_block_metrics(detail)
-                    if metrics["change_pct"] is None:
-                        # 板块可能停牌/无成交, 跳过日线写入
+                    m = snapshots.get(code) or {}
+                    change_pct = m.get("change_pct")
+                    volume = m.get("volume")
+                    # 无行情(概念未启用/停牌/无成交) → 不写日线, 保持"无数据"语义
+                    if change_pct is None or (change_pct == 0 and not volume):
                         stats["skipped"] += 1
                         continue
                     daily = (
@@ -378,9 +433,9 @@ def sync_boards_to_db(db=None) -> dict:
                             block_code=code, date=today, change_pct=0.0
                         )
                         session.add(daily)
-                    daily.change_pct = metrics["change_pct"]
-                    daily.fund_net = metrics["fund_net"]
-                    daily.volume = metrics["volume"]
+                    daily.change_pct = change_pct
+                    daily.fund_net = m.get("fund_net")
+                    daily.volume = volume
                     stats["daily_rows"] += 1
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[board sync] 板块 %s 日线写入失败: %s", code, e)
@@ -574,14 +629,15 @@ def _norm(value: float, lo: float, hi: float) -> float:
 # ---------------------------------------------------------------------------
 # cron 集成(复用现有 APScheduler, 不新建调度器)
 # ---------------------------------------------------------------------------
-BOARD_SYNC_CRON = {"hour": 8, "minute": 30}
+# 2026-09-10 调整: 08:30(盘前, 拿到的是前一日残值/零值) → 16:10(收盘后, 日线=当日收盘口径)
+BOARD_SYNC_CRON = {"hour": 16, "minute": 10}
 BOARD_SYNC_JOB_ID = "boards_daily_sync"
 
 
 def register_board_sync_job(scheduler) -> None:
     """把板块每日同步任务注册到【已有】AsyncIOScheduler 实例。
 
-    工作日(周一至五) 08:30 触发一遍 sync_boards_to_db。
+    工作日(周一至五) 16:10 触发一遍 sync_boards_to_db(收盘后, 日线即当日收盘口径)。
     scheduler: 复用 server.py 启动的主调度器(scheduler.scheduler)即可,
     本函数不创建任何新调度器。可重复调用(同 id 会 replace)。
     """
