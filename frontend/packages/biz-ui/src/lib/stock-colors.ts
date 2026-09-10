@@ -44,10 +44,15 @@ export function withAlpha(color: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-/** HSL 通道变量 → hsla() 字符串 (index.css 里 --background/--border 等都是 "H S% L%" 通道格式)。 */
+/**
+ * HSL 通道变量 → hsla() 字符串 (index.css 里 --background/--border 等都是 "H S% L%" 通道格式)。
+ * 必须输出 legacy 逗号语法: ECharts/zrender 的 canvas 画笔不认 CSS Color 4 空格语法,
+ * 会静默忽略该 fillStyle (保留前值) → 色块整片染错色。
+ */
 export function hslaVar(name: string, fallback: string, alpha = 1): string {
-  const ch = cssVar(name, fallback)
-  return alpha >= 1 ? `hsl(${ch})` : `hsla(${ch}, ${alpha})`
+  const ch = cssVar(name, fallback).trim()
+  const channels = ch.includes(',') ? ch : ch.split(/\s+/).join(', ')
+  return alpha >= 1 ? `hsl(${channels})` : `hsla(${channels}, ${alpha})`
 }
 
 export interface ChartTheme {

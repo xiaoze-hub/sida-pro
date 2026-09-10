@@ -6,6 +6,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
+import FlashValue from './FlashValue'
 import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
 import {
   smaSeries,
@@ -1099,7 +1100,10 @@ export default function InteractiveKline(props: {
                 <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]">
                   <span className="text-muted-foreground">现价</span>{' '}
                   <span className={`font-mono ml-1 ${minutePoints[minutePoints.length - 1]?.price >= (minutePrevClose ?? 0) ? 'text-stock-up' : 'text-stock-down'}`}>
-                    {minutePoints[minutePoints.length - 1]?.price.toFixed(2)}
+                    {/* A3: 分时现价变动闪色(红涨绿跌) */}
+                    <FlashValue value={minutePoints[minutePoints.length - 1]?.price ?? null} className="inline-block">
+                      {minutePoints[minutePoints.length - 1]?.price.toFixed(2)}
+                    </FlashValue>
                   </span>
                 </div>
                 <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]">

@@ -41,12 +41,14 @@ export interface SourceHealthResp {
   items: SourceHealthItem[]
 }
 
-/** vendor 质量分单项(KI-019: 行情来源徽标消费). */
+/** vendor 质量分单项(KI-019: 行情来源徽标消费; C1: 心跳条/数据源页消费 EWMA). */
 export interface VendorTrustItem {
   vendor: string
-  score: number
-  success_rate?: number
-  p50_latency_ms?: number
+  score: number | null
+  success_rate?: number | null
+  p50_latency_ms?: number | null
+  /** 延迟 EWMA(2026-09-10 C1): 近期加权延迟读数, 无样本为 null(不冒充 0) */
+  ewma_latency_ms?: number | null
   samples?: number
   last_error?: string
 }

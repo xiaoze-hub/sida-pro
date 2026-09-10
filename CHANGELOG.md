@@ -7,6 +7,105 @@
 
 ## 2026-09-10
 
+### release-OpenTerminal 借鉴 P1-P3 全量交付(12 项); v0.5.50
+- **交付范围**(方案 §四 全部 12 项, 按 P1→P3 顺序, 逐项 commit + CHANGELOG 见本日各条目): P1-1 板块热力图(B1) / P1-2 单源依赖审计(C4); P2-1 数据源 EWMA+心跳条(C1) / P2-2 看板轻量定制(A1) / P2-3 价格 Flash(A3); P3-1 命令面板动作化(A2) / P3-2 新闻去重(C3) / P3-3 stale-on-error(C2) / P3-4 三态审计(B5) / P3-5 三地市场状态(A4) / P3-6 面板联动开关(A6) / P3-7 AI 合规护栏(D3)。
+- **两个审计交付物**: `docs/research/单源依赖审计_20260910.md`(单源约 30 条三分类 + 处置) / `docs/research/三态覆盖审计_20260910.md`(14 数据面 × 三态矩阵)。
+- **台账**: 新增 KI-041(R6 基线冷冻包干)+ KI-042..046(分钟K线/自选批量/板块资金/新闻 静默态 + 死配置), 台账 **31 条在册**。
+- **门禁汇总**: 后端离线全量 `PYTHONUTF8=1 python -m pytest -m "not network"` → **2069 passed / 2 failed(仅 KI-027 本机已知) / 5 skipped**; 前端 vitest **107 passed(19 文件)** / tsc / eslint / UI-RULES OK / `pnpm build` 全过。
+- **本地走查**: P1-1 热力图(行业/概念 × 量能/等权 + 下钻) / P2-1 心跳条(真实 EWMA) / P2-2 定制(隐藏→刷新仍生效→重置) / P3-1 面板 Shift+Enter 加自选(API 核对) / P3-5 三徽标 / P3-6 锁定后切标的不跟随(网络侧核对) 全部实测通过。
+- [tag v0.5.50]
+
+### feat-P3-7 AI 合规护栏统一挂载 (OpenTerminal 借鉴 D3): 提示词层"不构成投资建议"全覆盖
+- **自查结论**(方案 D3 "确认现有 prompt 有同类护栏"): ① chat 系统提示词自 2026-08-14 已含合规声明(chat.py:52, 要求买卖倾向/预测结论必须附"仅供参考, 不构成投资建议"); ② 报告/PDF/影子报告输出另有**确定性页脚**("不构成投资建议, 入市需谨慎" —— 比提示词更硬); ③ 缺口: 场景 Agent 提示词(归因/题材/竞价/反证/日报等)与 3 个直接提示词点位(insights 加仓评估/公告解读、dashboard 候选排序)无护栏。
+- **实现**: `src/core/ai_client.py` 新增 `COMPLIANCE_CLAUSE` + `with_compliance()`(幂等, 已含不重复追加)并挂到 `build_system_prompt`(统一组装入口 → 全部场景 Agent 覆盖); `insights.py`×2 与 `dashboard.py` curate 三个直接点位补挂。形成三层防线: 提示词 → 组装入口 → 输出物页脚。
+- **测试**: 新增 `tests/test_ai_compliance.py` 5 例(追加/幂等/空值安全/build_system_prompt 集成/**源扫描棘轮防新增漏挂**)。相关域 39 passed。
+- [commit <见 git log>]
+
+### feat-P3-6 面板联动开关 (OpenTerminal 借鉴 A6): K线面板跟随/锁定, 支持盘中对比
+- **前端**: 新增 `src/components/PanelLockToggle.tsx`(跟随/已锁定两态; 与当前浏览分离时给"当前浏览 X（本面板未跟随）"提示); Quote 页 K线面板接入 —— 默认跟随当前标的(不改变既有行为), 点击锁定到当前标的; 锁定后切换标的本面板不再跟随(父层重定向 `symbol` prop, KlineChart 自拉锁定标的的K线)。
+- **不串数据**: 锁定且与当前浏览分离时, 来自页面级 summary 的叠加数据(K线事件/支撑压力/成本线/GS信号/资金流/活跃度)一律置空 —— 宁可少画, 不把 B 的叠加画到 A 的 K线上。
+- **测试**: 新增 `tests/components/panel-lock-toggle.test.tsx` 4 例(跟随态 / 锁定态 / 分离提示 / 同标的不提示)。门禁: vitest 107 passed(19 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: SPA 内实测 —— 锁定 600519 后切到 000001: 按钮保持"已锁定 600519" + 提示"当前浏览 000001（本面板未跟随）"; 网络侧确认图表**未**拉 `/klines/000001`(仍 600519), 页面其余面板正常切到 000001。
+- [commit <见 git log>]
+
+### feat-P3-5 三地市场状态徽标 (OpenTerminal 借鉴 A4): 开闭市文案 + 交易时段直显
+- **前端**: 新增 `src/components/MarketStatusPills.tsx`(自 Dashboard 头部内联 pill 抽出) —— 每个市场 = 名称 + 开/闭市文案(交易中琥珀高亮) + 桌面档(lg)直显交易时段; 悬停 title 含完整时段与当地时间; 空列表不渲染。后端 `/stocks/markets/status` 本就返回 `status_text/sessions/local_time`, A4 缺的只是展示, 故零后端改动。
+- **口径留痕**: CN 已含法定节假日判定(trading_calendar); HK/US 仍为周末口径 —— KI-012 在册未变。
+- **测试**: 新增 `tests/components/market-status-pills.test.tsx` 4 例(徽标文案 / 交易中高亮 / 时段+当地时间 tooltip 与直显 / 空列表不渲染)。门禁: vitest 103 passed(18 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测三徽标 —— A股 已收盘 09:30-11:30/13:00-15:00(当地 21:20) / 港股 已收盘 / 美股 盘前 09:30-16:00(当地 09:20)。
+- [commit <见 git log>]
+
+### chore-P3-4 三态覆盖审计 (OpenTerminal 借鉴 B5): 主数据面 加载/空/错 清单 + 修 1 处静默空白
+- **审计交付**: `docs/research/三态覆盖审计_20260910.md` —— 14 个主数据面 × 三态矩阵(方法: 代码扫描 `Skeleton/暂无/catch` + 关键组件逐个人工复核); 结论: 主面基本齐备(多为 Skeleton + 空态引导文案 + ErrorBanner, 与既有基建一致)。
+- **修复(P1)**: `frontend/src/pages/IndexDetail.tsx` 成交额趋势 `AmountChart` 空数组原 `return null` → 标题下静默空白(易被误读为渲染失败), 改为显式"暂无成交额趋势数据"。
+- **遗留留痕(非 P0/P1)**: 深度分析弹窗整窗空态文案、Quote 选段无资金流样本提示 —— 清单见审计文档 §3。
+- **门禁**: vitest 99 / tsc / eslint / UI-RULES OK。
+- [commit <见 git log>]
+
+### feat-P3-3 stale-on-error 展示类资金流兜底 (OpenTerminal 借鉴 C2): 源故障回退旧快照 + 显式标注
+- **口径**(方案 C2): "过期数据+标注 > 空白", **仅限非结算类展示数据**; 行情/结算/下单路径严禁复用(报价必须实时)。
+- **实现(Web 层)**: `src/web/api/market_data.py` 新增 `_stale_put/_stale_take`(复用 biz_cache L1+L2, 生产即 Redis, 跨进程/重启不丢; 备份保留窗 24h); `/market-data/board-capital-flow` 与 `/market-data/market-capital-flow` 接入 —— 成功即备份(新鲜响应无感), 源异常/空返回/网关 error 时回退备份并在响应叠加 `stale: true` + `stale_age_sec`; 无备份维持原有 502/error 语义(底线不破)。
+- **前端标注**: Dashboard"大盘资金流"块与 IndexDetail 资金流面板在 `stale` 时显示琥珀色"· 数据滞后 N 分钟"(title 注明"源暂不可用, 展示最后一次成功快照"); `DashboardMarketCapitalFlow`/`MarketFlow` 类型补字段。
+- **测试**: 新增 `tests/test_stale_on_error.py` 7 例(板块: 成功写备份 / 故障回退+年龄 / 无备份仍 502 / 空返回回退; 大盘: 成功写备份 / 网关异常回退 / 无备份仍 502)。门禁: 7 passed; 前端 vitest 99 / tsc / eslint / UI-RULES OK。
+- **真实栈验证**(本地 repro 热替后): 实调两端点 → biz_cache(Redis) 出现 `stale:board-flow:industry` / `stale:market-flow` 备份(age≈11s); `_stale_take` 读回带 stale=True+age。源故障现场未诱导(不破本地源), 端点分支选择由单测锁定。
+- **未做(留痕)**: /news 与财经日历的 stale 接入 —— /news 响应为裸 list 无标注位(需形变), 日历为单源无缓存层; 机制已就绪, 接入点明列于此供后续拍板。
+- [commit <见 git log>]
+
+### feat-P3-2 新闻标题归一化去重 (OpenTerminal 借鉴 C3): 跨源同题只留一条
+- **根因**: 新闻聚合原有去重只按 `external_id`, 而东财/新浪/腾讯/雪球转载同一条新闻时各自 ID 不同 → 同题重复原样透出(方案 C3 指出的信噪比缺口)。修在**聚合层**(`packages/marketdata/client.py` `news()`), 一处修复覆盖全部消费方(/news 端点、NewsDialog、聊天/日报等), 优于在单页面前端去重。
+- **口径**(方案原文): 标题归一化 = 转小写 + 去全部空白 + 取前 80 字符做 key; 空标题不参与标题去重(保留 external_id 去重兜底); 命中时保留先处理(高优先级源)的那条, 与既有 external_id 规则一致; 不做模糊匹配防误合并。
+- **实现**: `client.py` 新增模块级 `_title_key()`; `news()` 去重循环加第二遍 title-key 判定。
+- **测试**: `packages/marketdata/tests/test_news.py` +3: 跨源同题(空白差异)去重且留高优先级源 / 归一化规则直测(大小写空白不敏感、80 字符截断、None 与空串) / 不同标题不过度合并。相关域 29 passed。
+- [commit <见 git log>]
+
+### feat-P3-1 命令面板动作化 (OpenTerminal 借鉴 A2): 股票项 Shift+Enter 直接加自选
+- **前端**: `src/components/CommandPalette.tsx` 结果动作化 —— Enter 保持跳转, 股票项 **Shift+Enter 直接加自选**(POST /stocks 复用既有接口): 成功 → toast "已加自选：X" + 关面板; 重复添加(400 "已存在")→ info toast "已在自选：X"(不报错不关面板); 其他失败 → error toast; busy 防连按。行内提示(active 股票项显示 "⇧↵ 加自选" 芯片)+ 底部快捷键说明同步更新。
+- **测试**: 新增 `tests/components/command-palette.test.tsx` 5 例(Enter=跳转不发 POST / Shift+Enter=POST 载荷+toast+关闭 / 重复=info 不关闭 / 页命令 Shift+Enter 仍跳转 / 底部提示含 ⇧↵)。门禁: vitest 99 passed(17 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测(Ctrl+K → 搜 600519 → 行内提示 "⇧↵ 加自选" → Shift+Enter)→ toast "已加自选：贵州茅台" + 面板关闭 + API 侧确认自选列表新增 1 条。
+- [commit <见 git log>]
+
+### feat-P2-3 价格 Flash 复用扩展 (OpenTerminal 借鉴 A3): 自选行/K线分时现价变动闪色 + FlashValue 补行为测试
+- **背景**: `FlashValue` 组件已于 2026-09-05 存在(红涨绿跌令牌 + prefers-reduced-motion 尊重), 但全仓仅 Dashboard 指数条 1 处在用; A3 = 把"盘中价格静默换数字"补齐闪色反馈。
+- **前端**: ① `src/pages/stocks/WatchlistSection.tsx` 自选行现价(WS 实时推送, `useQuoteStream`)包 `FlashValue`——非有限值传 null 不闪(dirty 字符串防 NaN 反复触发); ② `packages/biz-ui/src/components/InteractiveKline.tsx` 分时统计格"现价"同款包裹(分时 30s 轮询)。加 Dashboard 既有点, 共 3 处。
+- **测试**: 新增 `tests/components/flash-value.test.tsx` 4 例(既有组件补行为测试): 变大 up/变小 down/首挂载与相同值不闪/null→有值不闪(基准语义)/reduced-motion 永不闪。门禁: vitest 94 passed(16 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测自选行价格 DOM 已被 FlashValue 包裹(价格 1285.13, 页面控制台干净); 盘后 WS 无有效 tick, 闪色动效未能在盘中现场观察(组件行为由 jsdom 用例锁定); InteractiveKline 分时视图未在快速走查中定位到(该处改动为 3 行包裹, 靠类型/回归门禁兜底)。
+- [commit <见 git log>]
+
+### feat-P2-2 看板轻量定制 (OpenTerminal 借鉴 A1): 模块显隐 + 分区排序 + 本机持久化
+- **口径**(方案 §三 A1 轻量版): 不做自由拖拽/网格布局(引入成本大 + 与"白底工程感"设计语言冲突), 只做**显隐开关 + 上下排序 + 偏好持久化**; 排序按 Dashboard 真实网格分 3 区(全宽区/双列区/工作台与次级)区内生效、组间不可换位(与布局约束一致, 不假装任意布局)。
+- **前端**: ① `src/lib/dashboard-layout.ts` 纯逻辑层(11 模块 × 3 分区; toggle/move/reset/orderIndex; normalizeLayout 容错: 未知 id 丢弃、缺失补默认、垃圾输入回默认; localStorage `panwatch_dashboard_layout_v1`, 存储异常静默降级"本次会话有效"); ② `src/components/DashboardCustomizer.tsx` 定制对话框(分区列出 11 模块, 显隐开关 + 上下移 + 重置, 组边界按钮禁用); ③ Dashboard 顶部"自定义"入口 + 4 个布局容器接线(`style.order` 实现区内排序; 隐藏即不渲染, 不占位不假空)。
+- **测试**: 前端 +17(`tests/lib/dashboard-layout.test.ts` 12 / `tests/components/dashboard-customizer.test.tsx` 5); 逻辑层做过**变异校验**(临时去掉跨组保护 → "不跨组"用例精确变红 → 恢复全绿, 证明用例真在防回归)。门禁: vitest 90 passed(15 文件) / tsc / eslint / UI-RULES OK / `pnpm build` 全过。
+- **本地走查**: 浏览器实测——"自定义"→ 关掉"市场 KPI 带"→ 页面即时消失且 localStorage 写入; 刷新仍隐藏(持久化生效); "重置"→ 恢复显示且 hidden=[] 清空。
+- [commit <见 git log>]
+
+### feat-P2-1 数据源延迟 EWMA + 顶部心跳条 (OpenTerminal 借鉴 C1): trust 透出 ewma + 心跳条 + 数据源页质量卡
+- **后端**: `packages/marketdata/src/marketdata/defaults.py` `_Metrics` 新增**延迟 EWMA**(α=0.3 递推, 首笔=样值; 失败样本一并计入——超时耗时应体现在健康读数里; 选 EWMA 而非 p50: p50 对"持续变慢"不敏感, 一半样本都慢才会动); `snapshot()` 增 `ewma_latency_ms`(无样本 None, 不冒充 0); `src/web/api/datasources.py /trust` 透出该字段(附加字段, 既有消费方无感)。
+- **前端**: ① `src/lib/vendor-trust.ts` 纯函数层(色档 >=80/>=50/<50/无分, 延迟文案 "512ms"/"1.2s", tooltip 与汇总, 无样本一律显式"—"); ② `src/hooks/useVendorTrust.ts` 60s 轮询(失败置 error 保留上次快照, 显式标注不静默); ③ `src/components/SourceHeartbeat.tsx` **顶部细心跳条**——每源一色段, 悬停出 成功率/EWMA/p50/样本/最近错误, 点击进数据源页; 刷新失败显式标注; 从未有样本不渲染(无源可报≠故障); ④ App 顶部挂载(全页可见); ⑤ 数据源页新增"行情源质量"卡(与心跳条同源); ⑥ Quote 来源徽标 tooltip 增 EWMA 读数, 并修 score=null 时"质量分 null"文案。
+- **测试**: 后端 +3(`test_ports_defaults.py` EWMA 递推/无样本 None 2 例 + `test_source_trust.py` /trust 透传 1 例); 前端 +10(`tests/lib/vendor-trust.test.ts` 6 + `tests/components/source-heartbeat.test.tsx` 4)。门禁: vitest 73 passed / tsc / eslint / UI-RULES OK / `pnpm build` 全过; 后端相关域 222 passed。
+- **本地走查**(热替 defaults.py+datasources.py 到本地 repro 容器): 浏览器实测首页心跳条("源心跳 · 2 源 · 2 正常 · tencent 117ms")与数据源页质量区(tencent EWMA 336ms / ths_flow 91ms)均真实数据渲染, 控制台无新增报错; 临时验证账号与容器内脚本已清理。
+- [commit <见 git log>]
+
+### feat-P1-2 单源依赖审计 (OpenTerminal 借鉴 C4): 指数行情补链(腾讯→新浪) + /market/indices 显式降级 + 全量审计报告
+- **审计交付**: `docs/research/单源依赖审计_20260910.md` —— 逐层扫描(Engine 优先级链 / registry 合法源 / DATA_SOURCE_SEEDS / 绕 Engine 旁路)+ 关键行人工复核, 给出全部用户可见数据端点的"源数/上游/失败态/判定"表; 单源路径约 30 条归三类(注册表级: board_capital_flow/market_capital_flow/events/northbound 等; 绕 Engine 硬编码: 指数行情/分钟K线/dark-flow/thsdk 全家桶/财经日历等; 本地派生: 落库/文件); 顺带发现死配置 `src/core/marketdata_authoritative_sources.py`(全仓零 import, 决议登记 KI-046)。
+- **补链(审计最高价值项)**: 指数行情原为腾讯硬编码单源(client.py `index_quotes` 直取 `fetch_raw`), 腾讯对生产云 IP 有风控史 → 首页指数条会整片消失。① `packages/marketdata/vendors/sina.py` 新增 `fetch_index_quotes()`: CN 全格式 / 港指 hkHSI / 美股 gb_$ 三族解析, 输出 symbol 对齐腾讯 parts[2] 口径(裸码/点前缀), volume/turnover 恒 null(单位口径未对齐, 缺失优于错误); ② `client.py index_quotes()` 缺项自动走新浪——腾讯有数时零额外请求, 6 处消费方(首页/指数详情/日报/盘前/快照落库/报告)无感受益。
+- **显式降级**: `src/web/api/market.py /market/indices` 源异常/双源全空由静默 `return []` 改显式 502 —— 原状态下前端 Dashboard 指数条静默消失(只有 HTTP 异常才触发 ErrorBanner); 现在直接走既有 `ErrorBanner('大盘指数') + 重试`, 失败≠空态。
+- **实测**(2026-09-10, 只读公开接口): 新浪三族字段布局逐条探测(数值与腾讯同码一致: 上证 3934.40 / 恒指 24954.47 / 纳指 26253.34 / 道指 52380.66); 全链路双验证——腾讯在网返回腾讯数据且新浪零调用, 模拟腾讯不可达 5 只指数一次请求补全。
+- **测试**: 新增 7 例全离线(monkeypatch): `test_sina_quote_vendor.py` +2(三族解析 / 未知符号零请求)、`test_index_methods.py` +3(兜底 / 腾讯优先零回退 / 部分缺项只补缺)、`tests/test_index_routing.py` +2(全空、异常 → 502)。离线门禁 `PYTHONUTF8=1 python -m pytest -m "not network"` → **2056 passed / 2 failed(仅 KI-027 本机已知) / 5 skipped**。
+- **遗留登记**: 审计发现的 4 项"静默空白"残留(分钟K线/自选批量行情/板块资金/新闻超时)登记 KI-042..045(含逐条修复建议), 台账 31 条在册。
+- [commit <见 git log>]
+
+### feat-P1-1 板块热力图 (OpenTerminal 借鉴 B1): /api/boards/heatmap + treemap 页 + hslaVar canvas 兼容修复
+- **后端**: `src/web/api/boards.py` 新增 `GET /api/boards/heatmap?type=industry|concept` —— 一次拉全板块当日快照(block_code/name/change_pct/fund_net/volume/has_daily); 无当日数据的板块如实带 null(不剔除、不编造, 前端画灰块); 排序=有数据在前+涨跌幅降序; 静态路径声明在 `/{block_code}` 动态段之前防吞路由; type 非法 400 / DB 错 502。
+- **前端**: `packages/biz-ui/src/lib/board-heatmap.ts` 纯函数层(13 例: 色带 ±3% 夹紧 / 平盘与无数据归灰 / 面积口径 量能缺失以正数中位数 2% 保底 / 等权); `components/dashboard/BoardHeatmap.tsx` treemap 组件(面积=量能或等权切换、tooltip、点击下钻 `/boards/:code`、120s 轮询、加载/空/错/stale 三态); `src/pages/Heatmap.tsx` + App 路由与导航入口(`/heatmap`, perm=view_forecast, "行情"组)。
+- **走查修根因**: `hslaVar()` 原输出 CSS Color 4 空格语法 `hsla(215 16% 65%, 0.18)`, **zrender/canvas 画笔解析不了**(fillStyle 赋值被静默忽略、保留前值) → 热力图无数据块整片染成前一块颜色(概念视图 378/390 无数据时满屏红)。改为 legacy 逗号语法 `hsla(215, 16%, 65%, 0.18)`; 新增 `tests/lib/stock-colors.test.ts` 3 例锁定(浏览器实测: 空格语法赋值无效、逗号语法得 rgba(151,163,180,0.18))。
+- **顺带修复前端门禁存量红(技术债, 与本功能无关但阻发布)**:
+  - UI 规则 R6 基线自 979d79c(W2.4/E3)冻结后未再补挂, v0.5.31+ 各波新增的 toFixed 文件(`insight/OverviewTab` 34、`stocks/AccountsSection` 5、`PnlCharts` 2、`drawdown.ts`/`trades.ts` 等 14 个)未入基线 → 门禁一直红。**重算冻结基线**(60 键; 3 个已归零键删除; `Quote.tsx` 8→11 系 v0.5.35 徽标/决策卡落地时新增, 站点均有 `Number()`/null 守卫, 一并冻结为 KNOWN_ISSUES **KI-041** 待降档)。
+  - R7 补豁免 `difVals = dif.map(v => v == null ? 0 : v)`(与既有 macdVals 同类: DIF 暖机期 null 喂 `dea=emaSeries(difVals)`, 渲染侧 hist 双 null 守卫; 见 `scripts/check_ui_rules.mjs` 注释)。
+  - 本功能两个新文件 0 个裸 toFixed(走 `@/lib/format` safeFixed; `fmtMoney` 顺带消除 PG DECIMAL 字符串 `.toFixed` 崩溃风险)。
+- **测试**: 前端 vitest **63 passed**(新增 board-heatmap 13 + 组件 6 + stock-colors 3); tsc / eslint / UI 规则(`UI-RULES OK`) / `pnpm build` 全过。后端 `tests/test_boards_heatmap.py` 6 例过。
+- **本地走查**: 本地 repro 栈(容器热替 boards.py + 36 行种子)浏览器实测 —— 行业/概念、量能/等权切换、tooltip 数值(黑色家电 +2.99% / 量能 268.50亿 / 资金 13.16亿)、点击下钻 `/boards/URFI881132` 数值一致; 种子数据与临时验证账号已删净。
+- [commit <见 git log>]
+
 ### fix-回填脚本直跑引导: sys.path 自举(生产实撞; 版本号仍 v0.5.49, 随下次覆盖层进容器)
 - **生产实撞**: `docker exec panwatch python /app/scripts/l2_ticks_event_time.py --apply` 秒挂 `ModuleNotFoundError: No module named 'src'`——文件路径直跑时 sys.path[0] 是 scripts/ 而非 /app, 干跑(不连库)掩盖了问题。补 `sys.path.insert(0, parents[1])` 自举, 容器内裸跑不再依赖 `PYTHONPATH=/app`。当时执行用 `-e PYTHONPATH=/app` 绕过, 无数据影响(失败发生在任何 DDL 之前)。
 - [commit <见 git log>]

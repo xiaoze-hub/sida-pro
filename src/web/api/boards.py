@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from src.core.thsdk_board import (
@@ -78,6 +79,77 @@ def board_rotation(
     except Exception as e:  # noqa: BLE001
         logger.warning("板块轮动接口异常: %s", e)
         raise HTTPException(502, f"板块轮动计算失败: {e}")
+
+
+@router.get("/heatmap")
+def board_heatmap(
+    type: str = Query("industry", description="industry / concept"),
+    db: Session = Depends(get_db),
+):
+    """全板块最新日线一次拉取(treemap 热力图数据源, P1-1 2026-09-10)。
+
+    每板块取 BoardDaily 最新一行(逐板块 latest, 非全局同日 —— 同步不全时不丢板块);
+    Boards 已注册但无日线的板块也返回(has_daily=False + 指标 None, 前端显式标注无数据)。
+    trade_date = 有日线项中的最新日期, 供 UI 基准日标注。
+
+    路由顺序注意: 本静态路径必须先于 /{block_code} 声明, 否则 "heatmap" 会被当作 block_code。
+    """
+    btype = (type or "industry").lower()
+    if btype not in _VALID_TYPES:
+        raise HTTPException(400, f"type 仅支持 {'/'.join(_VALID_TYPES)}")
+
+    try:
+        boards = db.query(Board).filter(Board.board_type == btype).all()
+        latest = (
+            db.query(
+                BoardDaily.block_code,
+                func.max(BoardDaily.date).label("max_date"),
+            )
+            .group_by(BoardDaily.block_code)
+            .subquery()
+        )
+        daily_rows = (
+            db.query(BoardDaily)
+            .join(
+                latest,
+                and_(
+                    BoardDaily.block_code == latest.c.block_code,
+                    BoardDaily.date == latest.c.max_date,
+                ),
+            )
+            .all()
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("查询板块热力图数据失败: %s", e)
+        raise HTTPException(502, f"查询板块热力图数据失败: {e}")
+
+    daily_by_code = {r.block_code: r for r in daily_rows}
+    items: list[dict[str, Any]] = []
+    for b in boards:
+        d = daily_by_code.get(b.block_code)
+        items.append(
+            {
+                "block_code": b.block_code,
+                "name": b.name or "",
+                "board_type": b.board_type or "",
+                "change_pct": d.change_pct if d is not None else None,
+                "fund_net": d.fund_net if d is not None else None,
+                "volume": d.volume if d is not None else None,
+                "date": d.date.strftime("%Y-%m-%d") if d is not None and d.date else None,
+                "has_daily": d is not None,
+            }
+        )
+
+    # 排序: 涨跌幅降序, 无数据排最后(Python 侧排, 不依赖方言 NULLS LAST 支持)
+    items.sort(key=lambda x: (x["change_pct"] is None, -(x["change_pct"] or 0.0), x["name"]))
+
+    dates = [i["date"] for i in items if i["date"]]
+    return {
+        "type": btype,
+        "trade_date": max(dates) if dates else None,
+        "count": len(items),
+        "items": items,
+    }
 
 
 @router.get("/{block_code}")

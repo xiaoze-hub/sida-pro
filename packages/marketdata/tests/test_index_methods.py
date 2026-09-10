@@ -1,6 +1,7 @@
 """指数 quote/kline:显式符号/secid 专用路径(不经 Symbol.parse,避免 000001 股/指歧义)。"""
 
 import marketdata.vendors.kline as kv
+import marketdata.vendors.sina as sv
 import marketdata.vendors.tencent as tv
 from marketdata import MarketData, StaticConfigProvider
 
@@ -29,6 +30,55 @@ def test_index_quotes(monkeypatch):
     assert out[0]["current_price"] == 3200.0
     assert out[0]["change_pct"] == 0.63
     assert out[0]["turnover"] == 500000.0
+
+
+_SINA_CN_INDEX_LINE = (
+    'var hq_str_sh000001="上证指数,3939.0948,3951.5068,3934.4036,3949.2549,3927.3472,'
+    '0,0,484675114,779672692270,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2026-09-10,15:40:32,00,";'
+)
+
+
+def test_index_quotes_falls_back_to_sina_on_tencent_empty(monkeypatch):
+    """C4 单源审计补链: 腾讯不可达 → 新浪指数兜底, 输出码口径(裸码)与腾讯一致。"""
+    monkeypatch.setattr(tv, "market_get", lambda *a, **k: None)
+    monkeypatch.setattr(sv, "market_get", lambda *a, **k: _SINA_CN_INDEX_LINE)
+    out = _md().index_quotes(["sh000001"])
+    assert out and out[0]["symbol"] == "000001"
+    assert out[0]["name"] == "上证指数" and out[0]["current_price"] == 3934.4036
+
+
+def test_index_quotes_tencent_ok_skips_sina(monkeypatch):
+    """腾讯有数 → 不触发新浪(腾讯优先, 正常路径零额外请求)。"""
+    monkeypatch.setattr(tv, "market_get", lambda *a, **k: _fake_index_line().encode("gbk"))
+    calls = {"n": 0}
+
+    def _boom(*a, **k):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(sv, "market_get", _boom)
+    out = _md().index_quotes(["sh000001"])
+    assert out and out[0]["current_price"] == 3200.0
+    assert calls["n"] == 0
+
+
+def test_index_quotes_partial_fills_only_missing_from_sina(monkeypatch):
+    """腾讯部分返回 → 只对缺项请求新浪, 已有项不被覆盖。"""
+    monkeypatch.setattr(tv, "market_get", lambda *a, **k: _fake_index_line().encode("gbk"))
+    seen: dict = {}
+
+    def _fake_sina(url, **k):
+        seen["url"] = url
+        return ('var hq_str_sz399006="创业板指,3324.333,3354.969,3338.422,3368.733,3308.705,'
+                '0,0,14218171993,380056426215,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2026-09-10,15:00:03,00";')
+
+    monkeypatch.setattr(sv, "market_get", _fake_sina)
+    out = _md().index_quotes(["sh000001", "sz399006"])
+    by = {r["symbol"]: r for r in out}
+    assert set(by) == {"000001", "399006"}
+    assert by["000001"]["current_price"] == 3200.0      # 腾讯项未被覆盖
+    assert by["399006"]["current_price"] == 3338.422    # 新浪补缺
+    assert "sz399006" in seen["url"] and "sh000001" not in seen["url"]
 
 
 def test_index_klines(monkeypatch):

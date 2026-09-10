@@ -20,6 +20,9 @@ interface MarketFlow {
   flat_count?: number
   source?: string
   timestamp?: string
+  /** C2 stale-on-error: 源故障回退旧快照时为 true */
+  stale?: boolean
+  stale_age_sec?: number
   inflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]
   outflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]
 }
@@ -47,7 +50,10 @@ interface IndexDetail {
 
 // 成交额柱状图(大盘资金流替代: 近20日成交额)
 function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
-  if (trend.length === 0) return null
+  // B5 三态审计修复(2026-09-10): 空数据显式给文案 —— 标题下静默消失会被误读为渲染失败
+  if (trend.length === 0) {
+    return <div className="py-6 text-center text-[12px] text-muted-foreground">暂无成交额趋势数据</div>
+  }
   const maxA = Math.max(...trend.map(t => t.amount))
   const W = 720, H = 90
   const bw = W / trend.length
@@ -166,6 +172,12 @@ export default function IndexDetailPage() {
                   <TrendingUp className="h-4 w-4 text-primary" />
                   <span className="text-[12px] font-semibold">大盘资金流</span>
                   <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
+                  {/* C2: 源故障回退旧快照的显式标注 */}
+                  {marketFlow.stale && (
+                    <span className="text-[10px] text-amber-600" title="数据源暂不可用, 当前展示最后一次成功快照(非实时)">
+                      · 数据滞后{marketFlow.stale_age_sec != null ? ` ${Math.max(1, Math.round(marketFlow.stale_age_sec / 60))} 分钟` : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 text-[12px]">
                   <span className="text-muted-foreground">主力净流入

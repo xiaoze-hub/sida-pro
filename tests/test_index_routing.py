@@ -1,6 +1,9 @@
 """指数取数(K线 + market.py /indices)路由测试"""
 import asyncio
 
+import pytest
+from fastapi import HTTPException
+
 import src.collectors.kline_collector as kc
 import src.web.api.market as mkt
 
@@ -57,3 +60,35 @@ def test_get_market_indices_uses_marketdata(monkeypatch):
     # 未命中行情的指数仍返回基本信息占位(current_price=None),匹配逻辑不变
     hsi = next(i for i in out if i["symbol"] == "HSI")
     assert hsi["current_price"] is None
+
+
+def test_get_market_indices_explicit_502_when_all_empty(monkeypatch):
+    """C4 单源审计: 源全空 → 显式 502(不再 return [] 让首页指数条静默消失)。"""
+    mkt.clear_indices_cache()
+
+    class _MD:
+        def index_quotes(self, tencent_symbols):
+            return []
+
+    monkeypatch.setattr(mkt, "get_market_data", lambda: _MD())
+    monkeypatch.setattr(mkt, "get_index_klines", lambda *a, **k: [])
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(mkt.get_market_indices())
+    assert ei.value.status_code == 502
+
+
+def test_get_market_indices_explicit_502_on_source_exception(monkeypatch):
+    """C4 单源审计: 取数抛异常 → 显式 502(原来是吞掉返回 []), 前端走 ErrorBanner 重试。"""
+    mkt.clear_indices_cache()
+
+    class _MD:
+        def index_quotes(self, tencent_symbols):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(mkt, "get_market_data", lambda: _MD())
+    monkeypatch.setattr(mkt, "get_index_klines", lambda *a, **k: [])
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(mkt.get_market_indices())
+    assert ei.value.status_code == 502

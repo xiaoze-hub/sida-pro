@@ -6,6 +6,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { ExternalLink } from 'lucide-react'
 import { Newspaper } from 'lucide-react'
 import { SuggestionBadge } from '@panwatch/biz-ui/components/suggestion-badge'
+import FlashValue from '@panwatch/biz-ui/components/FlashValue'
 import { X } from 'lucide-react'
 import { useStocks } from './context'
 
@@ -165,7 +166,13 @@ export function WatchlistSection() {
                 </div>
                 <div className="text-right shrink-0 whitespace-nowrap">
                   <div className={`font-mono text-[14px] font-bold leading-tight tabular-nums ${changeColor}`}>
-                    {quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price).toFixed(2) : '--'}
+                    {/* A3: 自选行现价 WS 实时变动闪色(红涨绿跌); 非有限值传 null 不闪 */}
+                    <FlashValue
+                      value={quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price) : null}
+                      className="inline-block"
+                    >
+                      {quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price).toFixed(2) : '--'}
+                    </FlashValue>
                   </div>
                   <div className={`font-mono text-[11px] leading-tight tabular-nums ${changeColor}`}>
                     {quote?.change_pct != null && Number.isFinite(Number(quote.change_pct)) ? `${quote.change_pct >= 0 ? '+' : ''}${Number(quote.change_pct).toFixed(2)}%` : '--'}

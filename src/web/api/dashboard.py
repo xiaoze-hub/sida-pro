@@ -455,8 +455,10 @@ async def curate_today(req: CurateRequest, db: Session = Depends(get_db)):
 
     items: list[dict] = []
     try:
+        from src.core.ai_client import with_compliance  # D3 合规护栏
+
         content = await _get_ai_client(db, req.model_id).chat(
-            system_prompt, user_content, temperature=0.3
+            with_compliance(system_prompt), user_content, temperature=0.3
         )
         for line in (content or "").splitlines():
             parts = line.split("|")

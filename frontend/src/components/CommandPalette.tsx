@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, TrendingUp } from 'lucide-react'
+import { Search, TrendingUp, Plus } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import { useToast } from '@panwatch/base-ui/components/ui/toast'
 
 // 设计稿 v2.0 §4.4: 全局搜索(Ctrl+K)命令面板 —— 搜股票跳行情, 搜功能跳页面。
+// A2 (2026-09-10): 结果动作化 —— Enter 跳转, 股票项 Shift+Enter 直接加自选(不离开面板流程)。
 
 interface StockHit {
   symbol: string
@@ -51,10 +53,12 @@ function localDate(): string {
 
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [q, setQ] = useState('')
   const [stocks, setStocks] = useState<StockHit[]>([])
   const [loading, setLoading] = useState(false)
   const [active, setActive] = useState(0)
+  const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // 打开时重置
@@ -112,6 +116,29 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     onClose()
   }
 
+  /** A2: Shift+Enter 直接加自选; 重复添加给显式提示而非报错。 */
+  const addToWatchlist = async (item: { symbol: string; name: string; market: string }) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await fetchAPI('/stocks', {
+        method: 'POST',
+        body: JSON.stringify({ symbol: item.symbol, name: item.name, market: item.market }),
+      })
+      toast(`已加自选：${item.name}`, 'success')
+      onClose()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('已存在')) {
+        toast(`已在自选：${item.name}`, 'info')
+      } else {
+        toast(`加自选失败：${msg}`, 'error')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -121,7 +148,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       setActive((a) => Math.max(a - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      if (items[active]) run(items[active])
+      const it = items[active]
+      if (!it) return
+      if (e.shiftKey && it.type === 'stock') {
+        void addToWatchlist(it)
+      } else {
+        run(it)
+      }
     } else if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
@@ -169,6 +202,12 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                 <>
                   <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.name}</span>
+                  {i === active && (
+                    <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-primary/80">
+                      <Plus className="h-3 w-3" />
+                      ⇧↵ 加自选
+                    </span>
+                  )}
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {it.symbol} · {it.market}
                   </span>
@@ -188,6 +227,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           </span>
           <span>
             <kbd className="rounded bg-muted px-1">↵</kbd> 打开
+          </span>
+          <span>
+            <kbd className="rounded bg-muted px-1">⇧↵</kbd> 加自选
           </span>
           <span>
             <kbd className="rounded bg-muted px-1">esc</kbd> 关闭
