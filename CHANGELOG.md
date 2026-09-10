@@ -7,6 +7,15 @@
 
 ## 2026-09-10
 
+### feat-通达信龙虎榜接入(客户端页面缓存路径) — /api/archive 两个只读端点; v0.5.54
+- **背景**: 老板"那通达信客户端的龙虎榜数据也可以接入吧"。实测: TQ 云数据接口**取不到**龙虎榜明细(与板块异动同因, 需通达信数据权限, 见 KI-048; 用今天真上榜的 8 只股票跑 `上榜资金` 公式全 0, `get_gpjy_value` 全 null); **但客户端打开「龙虎榜」页后数据会落地为本地缓存** → 走这条实路接入(老板当场点开页面验证)。
+- **数据**(客户端 `T0002/cloud_cache/`): 榜单 `list/func_lhbfx101_1.jsn`(GBK JSON): 买入/卖出成交占比、净买入、买入合计、卖出合计、**陆股通席位数 sl1 / 机构席位数 sl2**、异动类型、3日上榜标记、关联ID; 席位明细 `lhbfx/<关联ID>.jsn`: 营业部(含"买(1): 深股通专用"式标注)、买入额/卖出额/净买入/占比、**买入后1/3/5日成功率**、预估成本/收益。
+- **实现**: `src/core/tdx_lhb.py`(解析+布局兼容: 扁平 `<root>/{list,lhbfx}` 与客户端原生目录皆可; 非预期结构/缺失一律 `available=false` 不编造) + `scripts/sync_tdx_lhb_cache.sh`(WSL root 执行: `/mnt/c/new_tdx64/T0002/cloud_cache` → panwatch 数据卷 `/app/data/tdx_lhb`, 仅变更时拷贝, 幂等) + API `GET /api/archive/dragon-tiger-tdx`(榜单, 带 trade_date/synced_at 新鲜度) 与 `GET /api/archive/dragon-tiger-tdx/seats?ref_id=`(席位明细)。
+- **实测**(真实缓存, 老板 23:04 点开页面): 榜单 **64 条**(600744 净买 2.22亿/陆股通 2 席; 002174 净买 1.56亿/机构 3 席…), 席位明细 12 条(002636 金安国纪: 深股通专用净买 1.40亿、机构专用 1.67亿…); 与东财库内上榜名单(605177/688496 等)交叉一致。
+- **边界(如实)**: 新鲜度=老板打开客户端页面的时刻(响应带 `synced_at`); 容器无法反向拉取, 缓存缺失/过期如实不可用; 席位明细按需落地(点开个股才有); 定时同步(计划任务)待老板确认后注册。
+- **测试**: `tests/test_tdx_lhb.py` 7 例(榜单/席位解析、GBK、原生布局、接口、不可用态); 离线全量 **2104 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
+- [tag v0.5.54]
+
 ### update-v0.5.53 生产部署(代码覆盖层+前端产物, chown+compileall, 冒烟 9/9)
 - **部署**(本机 WSL=生产): 备份 `/root/app_backup_pre_v0553_20260910.tar.gz`(24.6MB, 排除 data/)→ 覆盖层(`git archive v0.5.53` + 新 `frontend/dist`→`static/`, 14.4MB)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy(~40s) → `/api/version` = **v0.5.53** → 冒烟 **9/9**(7.3s)。
 - **生产实测**(容器内 curl): `/boards/heatmap?type=industry` → **source=tdx, count=128**, 航海装备 +2.25%/156.6亿/+2.83亿; `/boards/881290.SH/constituents` → **source=tdx, 11 只带涨幅**(国瑞科技 +6.92% / 中国船舶 +3.26% …)。
