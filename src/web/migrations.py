@@ -2996,6 +2996,150 @@ def _m157_quote_snapshots_table(conn: Connection) -> None:
     )
 
 
+def _m158_l2_ticks_event_time_key(conn: Connection) -> None:
+    """l2_ticks 唯一键升级: tick_time(无日期) → ts 事件时间(设计文档 §5.1 方案A)。
+
+    旧键 (symbol,market,source,tick_time,direction,price,vol,amt) 不含日期 →
+    跨日同秒同价同量互相顶掉(假去重); 新键以 ts=交易日+tick_time 为准。
+    仅空表/新库就地重塑(用 SELECT..LIMIT 1 O(1) 探测, PG 8s statement_timeout
+    下不允许 COUNT(*) 全表扫); 有数据的生产库 no-op, 由
+    scripts/l2_ticks_event_time.py 在停写窗口备份+回填(79M 行重写 16GB)。
+    """
+    ddl = """
+CREATE TABLE IF NOT EXISTS l2_ticks (
+  ts TIMESTAMPTZ NOT NULL,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL,
+  source TEXT NOT NULL,
+  direction TEXT,
+  price DOUBLE PRECISION,
+  vol DOUBLE PRECISION,
+  amt DOUBLE PRECISION,
+  tick_time TEXT
+)
+"""
+
+    def _create_new():
+        conn.execute(text(ddl))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_l2_ticks_dedupe "
+                "ON l2_ticks(symbol, market, source, ts, direction, price, vol, amt)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_l2_ticks_symbol_ts "
+                "ON l2_ticks(symbol, market, ts)"
+            )
+        )
+        # TimescaleDB: 按天分块 + 压缩(分段键=唯一键前缀, Timescale 要求唯一
+        # 约束覆盖全部分段列) + 90 天 retention(宽阈值, 保留期决策另行调整)。
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb"))
+            conn.execute(
+                text(
+                    "SELECT create_hypertable('l2_ticks', 'ts', if_not_exists => TRUE, "
+                    "chunk_time_interval => INTERVAL '1 day')"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE l2_ticks SET (timescaledb.compress, "
+                    "timescaledb.compress_segmentby = 'symbol, market, source', "
+                    "timescaledb.compress_orderby = 'ts DESC')"
+                )
+            )
+            conn.execute(
+                text(
+                    "SELECT add_compression_policy('l2_ticks', INTERVAL '2 days', "
+                    "if_not_exists => TRUE)"
+                )
+            )
+            conn.execute(
+                text(
+                    "SELECT add_retention_policy('l2_ticks', INTERVAL '90 days', "
+                    "if_not_exists => TRUE)"
+                )
+            )
+        except Exception as e:
+            logger.warning(f"l2_ticks: TimescaleDB 不可用, 降级普通表: {e}")
+
+    if not _has_table(conn, "l2_ticks"):
+        _create_new()
+        return
+    probe = conn.execute(text("SELECT 1 FROM l2_ticks LIMIT 1")).first()
+    if probe is not None:
+        logger.info(
+            "l2_ticks 有数据, 唯一键事件时间化由 scripts/l2_ticks_event_time.py "
+            "停写窗口回填执行, 迁移跳过"
+        )
+        return
+    conn.execute(text("DROP TABLE l2_ticks"))
+    _create_new()
+
+
+def _m159_klines_minute_continuous_agg(conn: Connection) -> None:
+    """klines 1m 分钟K → 日线 Timescale 连续聚合(PG+timescaledb 专属, 其余 no-op)。
+
+    分钟K线(1m)盘中入库后, 日线 OHLCV 由连续聚合增量维护(实时段自动合并原始行),
+    供回测/回查读取与日K一致性校验。不给 klines 挂 retention —— 会把 2023 年起
+    的日线历史按 90 天误删, 保留期另行决策。
+    """
+    if not _dialect_is_pg(conn):
+        return
+    try:
+        has_ext = conn.execute(
+            text("SELECT 1 FROM pg_extension WHERE extname='timescaledb' LIMIT 1")
+        ).first()
+        if not has_ext:
+            logger.info("klines 连续聚合: timescaledb 扩展不可用, 跳过")
+            return
+        has_ht = conn.execute(
+            text(
+                "SELECT 1 FROM timescaledb_information.hypertables "
+                "WHERE hypertable_name='klines' LIMIT 1"
+            )
+        ).first()
+        if not has_ht:
+            logger.info("klines 连续聚合: klines 非 hypertable, 跳过")
+            return
+        conn.execute(
+            text(
+                """
+CREATE MATERIALIZED VIEW IF NOT EXISTS klines_daily_agg
+WITH (timescaledb.continuous) AS
+SELECT time_bucket('1 day', ts, 'Asia/Shanghai') AS bucket,
+       symbol, market,
+       first(open, ts) AS open,
+       max(high) AS high,
+       min(low) AS low,
+       last(close, ts) AS close,
+       sum(volume) AS volume,
+       count(*) AS bar_count
+FROM klines
+WHERE period = '1m'
+GROUP BY bucket, symbol, market
+WITH NO DATA
+"""
+            )
+        )
+        conn.execute(
+            text(
+                """
+SELECT add_continuous_aggregate_policy('klines_daily_agg',
+  start_offset => INTERVAL '3 days',
+  end_offset => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '30 minutes',
+  if_not_exists => TRUE)
+"""
+            )
+        )
+        logger.info("klines_daily_agg 连续聚合已创建(1m→日线, 30min 增量刷新)")
+    except Exception as e:
+        logger.warning(f"klines 连续聚合创建失败(不阻塞启动): {e}")
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3690,6 +3834,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(155, "chip_daily_table", _m155_chip_daily_table),
     Migration(156, "dragon_tiger_events_table", _m156_dragon_tiger_events_table),
     Migration(157, "quote_snapshots_table", _m157_quote_snapshots_table),
+    Migration(158, "l2_ticks_event_time_key", _m158_l2_ticks_event_time_key),
+    Migration(159, "klines_minute_continuous_agg", _m159_klines_minute_continuous_agg),
 )
 
 

@@ -120,6 +120,63 @@ def _is_cn_secid(secid: str) -> bool:
     return str(secid).split(".")[0] in ("0", "1")
 
 
+_TENCENT_MKLINE_URL = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
+
+# 腾讯分钟周期 → mkline param 值。1m 为入库基准(5m/15m/30m/60m 留接口)。
+_MINUTE_PERIODS = {"1m": "m1", "5m": "m5", "15m": "m15", "30m": "m30", "60m": "m60"}
+
+
+def fetch_tencent_minute_kline(code: str, count: int = 320, period: str = "1m") -> list[Bar]:
+    """按**原始腾讯符号**(sh600000)取分钟K(未复权)。Bar.date='YYYY-MM-DD HH:MM'(CST)。
+
+    2026-09-10 实测(浦发银行): 行=[YYYYMMDDHHMM, open, close, high, low, vol(手), {}, …];
+    量级印证 vol 单位=手 → ×100 归一股(与日K同口径铁律)。末字段语义不明, amount 诚实置 None。
+    host 用 ifzq.gtimg.cn(免跳转); web.ifzq 对 mkline 302→web3.ifzq(该域名 DNS 不稳)。
+    """
+    pf = _MINUTE_PERIODS.get(period)
+    if not pf:
+        return []
+    n = min(max(int(count or 1), 1), _TENCENT_MAX_COUNT)
+    text = market_get(
+        _TENCENT_MKLINE_URL, host_key="ifzq.gtimg.cn", min_interval_s=0.15,
+        params={"param": f"{code},{pf},,{n}"},
+        timeout=10, retries=2, parse="text", log_label="腾讯分钟K线", symbol=code,
+    )
+    if not text:
+        return []
+    if "waf.tencent.com" in text:
+        logger.warning("[腾讯分钟K线] %s 被 WAF 风控拦截(501)", code)
+        return []
+    try:
+        data = json.loads(text)
+    except Exception:
+        return []
+    raw = data.get("data", {}) if isinstance(data, dict) else {}
+    rows = []
+    if isinstance(raw, dict):
+        sd = raw.get(code, {})
+        if isinstance(sd, dict):
+            rows = sd.get(pf) or []
+    elif isinstance(raw, list):
+        rows = raw
+    out: list[Bar] = []
+    for it in rows or []:
+        if not isinstance(it, (list, tuple)) or len(it) < 6:
+            continue
+        raw_t = str(it[0] or "")
+        if len(raw_t) != 12 or not raw_t.isdigit():
+            continue
+        try:
+            d = datetime.strptime(raw_t, "%Y%m%d%H%M")
+            out.append(Bar(date=d.strftime("%Y-%m-%d %H:%M"),
+                           open=float(it[1]), close=float(it[2]),
+                           high=float(it[3]), low=float(it[4]),
+                           volume=float(it[5]) * 100))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 # 腾讯美股日K必须带交易所后缀(usTSLA.OQ=纳斯达克 / usBABA.N=纽交所);裸 us{CODE}
 # 只回"首日+最新"两根退化数据,错后缀只回 1 根。后缀无法从代码推断 → 依次试
 # .OQ/.N/裸,根数达标即命中并进程内记忆(下次直达,不再多请求)。

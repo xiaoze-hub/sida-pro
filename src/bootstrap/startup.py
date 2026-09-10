@@ -311,6 +311,24 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"快照行情1分钟落库注册失败: {e}")
 
+        # 分钟K线 1m 滚动入库(2026-09-10, 数据落库设计 Matrix #2): 每 60s, 交易时段由模块内守卫
+        try:
+            from src.core.klines_minute import collect_minute_klines_once
+
+            rt.scheduler.scheduler.add_job(
+                collect_minute_klines_once,
+                "interval",
+                seconds=60,
+                id="klines-minute-1min",
+                name="分钟K线1m滚动入库",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("分钟K线1m滚动入库已注册(interval 60s, 时段守卫在模块内)")
+        except Exception as e:
+            logger.error(f"分钟K线1m滚动入库注册失败: {e}")
+
         # 信号对账(批次D 复盘闭环, 2026-09-06): 交易日 18:30 回填 T+1/T+5 收益
         try:
             from src.core.signal_review import nightly_review

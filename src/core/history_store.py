@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, time, timedelta, timezone
+from datetime import datetime as _datetime_cls
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -16,6 +19,32 @@ logger = logging.getLogger(__name__)
 
 DP_RETENTION_DAYS = 180
 L2_RETENTION_DAYS = 60
+
+# 方案A(设计文档 §5.1): l2_ticks 事件时间口径。ts = 交易日 + tick_time,
+# 唯一键含 ts → 跨日同 tick_time 不再互相顶掉(旧键无日期的假去重缺陷)。
+_CN_TZ = ZoneInfo("Asia/Shanghai")
+_TICK_TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+
+
+def _l2_event_ts(tick_time, now: datetime) -> datetime:
+    """逐笔事件时间: 采集交易日(上海时区) + tick_time。
+
+    - tick_time 晚于当前本地时刻 → 属隔日凌晨拉取的前一交易日, 归属前一天
+    - tick_time 缺失/非法(如 "24:00:00") → 回退采集时刻 now(旧口径, 不丢行)
+    幂等: 已是事件时间的行再变换结果不变(可安全与回填脚本混跑)。
+    """
+    s = str(tick_time or "").strip()
+    if not _TICK_TIME_RE.fullmatch(s):
+        return now
+    try:
+        hh, mm, ss = (int(x) for x in s.split(":"))
+        tod = time(hh, mm, ss)
+    except ValueError:
+        return now
+    local = now.astimezone(_CN_TZ)
+    day = local.date() if tod <= local.time() else local.date() - timedelta(days=1)
+    # _datetime_cls: 不经模块级 datetime(测试会替换时钟), 保证返回真实 datetime 类型
+    return _datetime_cls(day.year, day.month, day.day, hh, mm, ss, tzinfo=_CN_TZ)
 
 
 def _engine():
@@ -93,20 +122,32 @@ LIMIT :limit
 
 
 def persist_l2_ticks(symbol: str, market: str, source: str, rows: list[dict]) -> int:
-    """存 L2 逐笔(唯一索引去重, 重复拉取天然幂等)。返回实际写入行数(去重后)。"""
+    """存 L2 逐笔(唯一索引去重, 重复拉取天然幂等)。返回实际写入行数(去重后)。
+
+    事件时间口径(方案A): ts=交易日+tick_time; 唯一键 (symbol,market,source,ts,
+    direction,price,vol,amt) 含日期, 跨日同秒不再假去重。
+    PG 端 retention 交给 90 天 policy(压缩 hypertable 上跑行级 DELETE 有整事务
+    回滚风险), 本函数不删; SQLite 仍按 L2_RETENTION_DAYS 就地清理。
+    """
     if not rows:
         return 0
     try:
-        from src.db.dialect import insert_ignore_sql
+        from src.db.dialect import insert_ignore_sql, is_postgres
 
         now = datetime.now(timezone.utc)
         params = []
+        ts_min = ts_max = None
         for r in rows:
             if not isinstance(r, dict):
                 continue
+            ts = _l2_event_ts(r.get("t"), now)
+            if ts_min is None or ts < ts_min:
+                ts_min = ts
+            if ts_max is None or ts > ts_max:
+                ts_max = ts
             params.append(
                 {
-                    "ts": now,
+                    "ts": ts,
                     "symbol": symbol,
                     "market": market,
                     "source": source,
@@ -121,29 +162,26 @@ def persist_l2_ticks(symbol: str, market: str, source: str, rows: list[dict]) ->
             return 0
         # W3.1(D2): 方言分叉收编 src/db/dialect.insert_ignore_sql
         stmt = insert_ignore_sql(
-            "l2_ticks",
-            ["ts", "symbol", "market", "source", "direction", "price", "vol", "amt", "tick_time"],
+            "l2_ticks", ["ts", "symbol", "market", "source", "direction", "price", "vol", "amt", "tick_time"]
         )
         with _engine().begin() as conn:
-            # changes()/RETURNING 在 executemany 下不精确 → 用本批 ts 水位前后计数得精确写入数
-            before = conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM l2_ticks WHERE symbol=:s AND market=:m AND source=:src AND ts>=:w"
-                ),
-                {"s": symbol, "m": market, "src": source, "w": now},
-            ).scalar() or 0
-            conn.execute(text(stmt), params)
-            after = conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM l2_ticks WHERE symbol=:s AND market=:m AND source=:src AND ts>=:w"
-                ),
-                {"s": symbol, "m": market, "src": source, "w": now},
-            ).scalar() or 0
-            written = max(0, int(after) - int(before))
-            conn.execute(
-                text("DELETE FROM l2_ticks WHERE ts < :cut"),
-                {"cut": now - timedelta(days=L2_RETENTION_DAYS)},
+            # changes()/RETURNING 在 executemany 下不精确 → 用本批事件 ts 窗口
+            # (min..max, 走 ix_l2_ticks_symbol_ts)前后计数得精确写入数; 窗口内既有行
+            # 前后两次计数都含, 差值即本批净写入。
+            cnt_sql = (
+                "SELECT COUNT(*) FROM l2_ticks WHERE symbol=:s AND market=:m "
+                "AND source=:src AND ts>=:t0 AND ts<=:t1"
             )
+            wparams = {"s": symbol, "m": market, "src": source, "t0": ts_min, "t1": ts_max}
+            before = conn.execute(text(cnt_sql), wparams).scalar() or 0
+            conn.execute(text(stmt), params)
+            after = conn.execute(text(cnt_sql), wparams).scalar() or 0
+            written = max(0, int(after) - int(before))
+            if not is_postgres():
+                conn.execute(
+                    text("DELETE FROM l2_ticks WHERE ts < :cut"),
+                    {"cut": now - timedelta(days=L2_RETENTION_DAYS)},
+                )
         return int(written)
     except Exception as e:  # noqa: BLE001
         logger.debug("persist_l2_ticks %s failed: %s", symbol, e)
