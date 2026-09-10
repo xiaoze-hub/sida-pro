@@ -266,3 +266,27 @@ def dragon_tiger(date: str | None = None, symbol: str | None = None, days: int =
         "note": "完整榜单(含 ETF/可转债 6 位码); 空=无覆盖" if not rows else "",
         "items": rows,
     }
+
+
+# ── 通达信龙虎榜(客户端页面缓存, 2026-09-10 老板要求) ─────────────────────────
+# 数据来自客户端打开"龙虎榜"页后落地的本地缓存(GBK JSON), 由宿主脚本同步进容器;
+# 容器无法反向拉取 → 缓存缺失/过期时 available=false 如实返回, 不编造。
+@router.get("/dragon-tiger-tdx")
+def dragon_tiger_tdx(limit: int = 500):
+    """通达信龙虎榜榜单(净买入/买卖合计/成交占比/陆股通·机构席位数/异动类型)。"""
+    from src.core import tdx_lhb
+
+    limit = max(min(int(limit), 2000), 1)
+    return tdx_lhb.board(limit=limit)
+
+
+@router.get("/dragon-tiger-tdx/seats")
+def dragon_tiger_tdx_seats(ref_id: str):
+    """通达信单一上榜股的席位明细(营业部/买卖额/占比/席位胜率)。
+
+    ref_id = 榜单条目里的 ref_id(客户端页面缓存文件名, 点开该股才会落地;
+    缺失 → available=false)。
+    """
+    from src.core import tdx_lhb
+
+    return tdx_lhb.seats(ref_id)
