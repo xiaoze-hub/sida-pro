@@ -404,6 +404,97 @@ def test_news_dedup_keeps_first_seen_across_vendors(monkeypatch):
     assert out[0].title == "来自东财的标题"
 
 
+def test_news_title_dedup_across_sources(monkeypatch):
+    """C3: 跨源同题(标题归一化后相同)去重 —— 不同 external_id 但同一新闻, 保留先处理(高优先级)源。"""
+
+    def fake(url, *, host_key, params=None, **kwargs):
+        if host_key == news_mod._EM_NEWS_HOST:
+            return _jsonp(
+                {
+                    "code": 0,
+                    "result": {
+                        "cmsArticleWebOld": [
+                            {
+                                "code": "T1",
+                                "title": "赛力斯发布新车型亮点",
+                                "content": "东财内容",
+                                "url": "https://finance.eastmoney.com/a/T1.html",
+                                "date": "2026-07-17 10:00:00",
+                            }
+                        ]
+                    },
+                }
+            )
+        if host_key == news_mod._XUEQIU_HOST:
+            return json.dumps(
+                {
+                    "list": [
+                        {
+                            "id": "T2",
+                            "title": "  赛力斯发布新车型亮点 ",  # 仅空白差异 → 同题
+                            "description": "雪球内容",
+                            "created_at": 1752739200000,
+                            "target": "https://xueqiu.com/x/T2",
+                        }
+                    ]
+                }
+            )
+        return None
+
+    monkeypatch.setattr(news_mod, "market_get", fake)
+    md = MarketData(
+        config=StaticConfigProvider(
+            {
+                "news": [
+                    SourceConfig(vendor="eastmoney_news", priority=1),
+                    SourceConfig(vendor="xueqiu", priority=2),
+                ]
+            }
+        )
+    )
+    out = md.news(["600519"])
+    assert len(out) == 1
+    assert out[0].source == "eastmoney_news"
+
+
+def test_news_title_dedup_normalization_rules(monkeypatch):
+    """归一化口径(方案 C3): 转小写 + 去空白 + 前 80 字符; 前 80 相同即视为同题; 空标题不参与。"""
+    from marketdata.client import _title_key
+
+    assert _title_key("  A B\tC\nD ") == "abcd"
+    assert _title_key("ABC") == _title_key(" abc ")  # 大小写/空白不敏感
+    long1 = "x" * 80 + "尾部甲"
+    long2 = "x" * 80 + "尾部乙"
+    assert _title_key(long1) == _title_key(long2)  # 前 80 字符截断
+    assert _title_key("") == ""
+    assert _title_key(None) == ""
+
+
+def test_news_distinct_titles_not_deduped(monkeypatch):
+    """不同标题不过度合并(去重只按归一化 key, 不做模糊匹配)。"""
+
+    def fake(url, *, host_key, params=None, **kwargs):
+        if host_key == news_mod._EM_NEWS_HOST:
+            return _jsonp(
+                {
+                    "code": 0,
+                    "result": {
+                        "cmsArticleWebOld": [
+                            {"code": "U1", "title": "标题甲", "content": "a",
+                             "url": "https://finance.eastmoney.com/a/U1.html", "date": "2026-07-17 10:00:00"},
+                            {"code": "U2", "title": "标题乙", "content": "b",
+                             "url": "https://finance.eastmoney.com/a/U2.html", "date": "2026-07-17 09:00:00"},
+                        ]
+                    },
+                }
+            )
+        return None
+
+    monkeypatch.setattr(news_mod, "market_get", fake)
+    md = MarketData(config=StaticConfigProvider({"news": [SourceConfig(vendor="eastmoney_news", priority=1)]}))
+    assert len(md.news(["600519"])) == 2
+
+
 def test_news_unknown_or_disabled_source_skipped(monkeypatch):
     monkeypatch.setattr(news_mod, "market_get", lambda *a, **k: None)
 

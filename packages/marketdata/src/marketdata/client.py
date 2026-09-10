@@ -35,6 +35,18 @@ from marketdata.types import (
 from marketdata.vendors.discovery import DiscoveryVendor
 from marketdata.vendors.news import EastmoneyStockNewsVendor
 
+
+def _title_key(title: str | None) -> str:
+    """新闻标题归一化 key(C3 跨源去重, 2026-09-10): 转小写 + 去全部空白 + 取前 80 字符。
+
+    跨源(东财/新浪/腾讯/雪球)转载同一新闻时 external_id 各不相同,只有标题能对齐;
+    空标题返回 ""(不参与标题去重, 保留 external_id 去重兜底)。
+    """
+    if not title:
+        return ""
+    return "".join(title.split()).lower()[:80]
+
+
 # 指数 secid(东财):指数与个股 secid 前缀规则不同,必须显式映射,否则按个股规则会取错标的。
 # 美股指数东财K线不支持,未列入 → index_klines 返回空,fail-soft。
 INDEX_SECID: dict[str, str] = {
@@ -360,11 +372,17 @@ class MarketData:
             all_articles.extend(articles)
 
         seen: set[str] = set()
+        seen_titles: set[str] = set()
         deduped: list[NewsArticle] = []
         for a in all_articles:
             if a.external_id in seen:
                 continue
+            tkey = _title_key(a.title)
+            if tkey and tkey in seen_titles:
+                continue  # C3: 跨源转载同题(归一化后相同)只留先处理的高优先级源
             seen.add(a.external_id)
+            if tkey:
+                seen_titles.add(tkey)
             deduped.append(a)
 
         deduped.sort(key=lambda a: a.publish_time, reverse=True)

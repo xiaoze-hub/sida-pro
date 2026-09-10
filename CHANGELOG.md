@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P3-2 新闻标题归一化去重 (OpenTerminal 借鉴 C3): 跨源同题只留一条
+- **根因**: 新闻聚合原有去重只按 `external_id`, 而东财/新浪/腾讯/雪球转载同一条新闻时各自 ID 不同 → 同题重复原样透出(方案 C3 指出的信噪比缺口)。修在**聚合层**(`packages/marketdata/client.py` `news()`), 一处修复覆盖全部消费方(/news 端点、NewsDialog、聊天/日报等), 优于在单页面前端去重。
+- **口径**(方案原文): 标题归一化 = 转小写 + 去全部空白 + 取前 80 字符做 key; 空标题不参与标题去重(保留 external_id 去重兜底); 命中时保留先处理(高优先级源)的那条, 与既有 external_id 规则一致; 不做模糊匹配防误合并。
+- **实现**: `client.py` 新增模块级 `_title_key()`; `news()` 去重循环加第二遍 title-key 判定。
+- **测试**: `packages/marketdata/tests/test_news.py` +3: 跨源同题(空白差异)去重且留高优先级源 / 归一化规则直测(大小写空白不敏感、80 字符截断、None 与空串) / 不同标题不过度合并。相关域 29 passed。
+- [commit <见 git log>]
+
 ### feat-P3-1 命令面板动作化 (OpenTerminal 借鉴 A2): 股票项 Shift+Enter 直接加自选
 - **前端**: `src/components/CommandPalette.tsx` 结果动作化 —— Enter 保持跳转, 股票项 **Shift+Enter 直接加自选**(POST /stocks 复用既有接口): 成功 → toast "已加自选：X" + 关面板; 重复添加(400 "已存在")→ info toast "已在自选：X"(不报错不关面板); 其他失败 → error toast; busy 防连按。行内提示(active 股票项显示 "⇧↵ 加自选" 芯片)+ 底部快捷键说明同步更新。
 - **测试**: 新增 `tests/components/command-palette.test.tsx` 5 例(Enter=跳转不发 POST / Shift+Enter=POST 载荷+toast+关闭 / 重复=info 不关闭 / 页命令 Shift+Enter 仍跳转 / 底部提示含 ⇧↵)。门禁: vitest 99 passed(17 文件) / tsc / eslint / UI-RULES OK。
