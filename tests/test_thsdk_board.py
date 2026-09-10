@@ -251,10 +251,13 @@ def test_sync_boards_to_db_writes_and_idempotent(monkeypatch):
         "fetch_ths_concept",
         lambda: [{"block_code": "URFI883405", "name": "白酒", "涨跌幅": 1.0}],
     )
+    # 2026-09-10 起 sync 走批量快照("基础数据"档无涨跌幅, 已弃用)
     monkeypatch.setattr(
         tb,
-        "fetch_block_detail",
-        lambda code: {"涨跌幅": 2.5, "主力净流入": 100.0, "成交额": 5000.0},
+        "fetch_block_snapshots",
+        lambda codes: {
+            c: {"change_pct": 2.5, "fund_net": 100.0, "volume": 5000.0} for c in codes
+        },
     )
 
     try:
@@ -295,7 +298,7 @@ def test_sync_boards_both_fail_skips(monkeypatch):
 
 
 def test_register_board_sync_job_reuses_scheduler():
-    """注册到已有 AsyncIOScheduler(不新建), 工作日 08:30, 同 id 幂等。"""
+    """注册到已有 AsyncIOScheduler(不新建), 工作日 16:10(收盘后), 同 id 幂等。"""
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
 
@@ -305,7 +308,7 @@ def test_register_board_sync_job_reuses_scheduler():
     job = sched.get_job(tb.BOARD_SYNC_JOB_ID)
     assert job is not None
     assert isinstance(job.trigger, CronTrigger)
-    # 触发的 cron 字段覆盖 时/分/day_of_week(由 register 的 hour=8, minute=30, mon-fri 决定)
+    # 触发的 cron 字段覆盖 时/分/day_of_week(由 register 的 hour=16, minute=10, mon-fri 决定)
     field_names = {f.name for f in job.trigger.fields}
     assert {"hour", "minute", "day_of_week"} <= field_names
     # 幂等: 再次注册(同 id + replace_existing)不产生重复 job
