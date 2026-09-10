@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
-import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight } from 'lucide-react'
+import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import {
   dashboardApi,
   portfolioApi,
@@ -46,6 +46,18 @@ import AnimatedNumber from '@panwatch/biz-ui/components/AnimatedNumber'
 import FlashValue from '@panwatch/biz-ui/components/FlashValue'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
+import DashboardCustomizer from '@/components/DashboardCustomizer'
+import {
+  isHidden,
+  loadLayout,
+  moveModule,
+  orderIndex,
+  resetLayout,
+  saveLayout,
+  toggleModule,
+  type DashboardLayout,
+  type DashboardModuleId,
+} from '@/lib/dashboard-layout'
 import BenchChart from '@/components/BenchChart'
 import BenchmarkShareCard from '@/components/BenchmarkShareCard'
 import DiagnosticsShareCard from '@/components/DiagnosticsShareCard'
@@ -203,6 +215,20 @@ export default function DashboardPage() {
   const [shareBench, setShareBench] = useState(false)
   const [shareDiag, setShareDiag] = useState(false)
   const [shareDigest, setShareDigest] = useState(false)
+  // A1 看板轻量定制(2026-09-10): 模块显隐/分区排序, 偏好 localStorage 持久化
+  const [layout, setLayout] = useState<DashboardLayout>(() => loadLayout())
+  const [customizerOpen, setCustomizerOpen] = useState(false)
+  const updateLayout = useCallback((updater: (l: DashboardLayout) => DashboardLayout) => {
+    setLayout(prev => {
+      const next = updater(prev)
+      saveLayout(next)
+      return next
+    })
+  }, [])
+  const toggleModuleById = useCallback((id: DashboardModuleId) => updateLayout(l => toggleModule(l, id)), [updateLayout])
+  const moveModuleById = useCallback((id: DashboardModuleId, dir: -1 | 1) => updateLayout(l => moveModule(l, id, dir)), [updateLayout])
+  const resetModules = useCallback(() => updateLayout(() => resetLayout()), [updateLayout])
+  const shown = (id: DashboardModuleId) => !isHidden(layout, id)
   // 修复 2026-08-21: 默认关闭 Onboarding(原默认 true → 换浏览器/清缓存后用户被强制挡整页无法点击)
   // 改由头部"新手引导"按钮主动触发, localStorage 标志仍用于标记"已看过"以避免重复打扰
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -498,6 +524,17 @@ export default function DashboardPage() {
           >
             新手引导
           </Button>
+          {/* A1: 看板模块显隐/排序入口 */}
+          <Button
+            onClick={() => setCustomizerOpen(true)}
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-[11px] text-muted-foreground"
+            title="自定义看板模块显隐与排序"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1" />
+            自定义
+          </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           {refreshedAt && <span className="text-muted-foreground">{formatHeaderTime(refreshedAt)}</span>}
@@ -514,8 +551,11 @@ export default function DashboardPage() {
       {/* 2026-08-17: 数据源失败显式标识 — ErrorBanner 组件,展示具体哪个源挂了 */}
       <ErrorBanner errors={sourceErrors} onDismiss={(id) => setSourceErrors(prev => prev.filter(e => e.id !== id))} retryAll={load} />
 
-            {/* 指数走势 pills */}
-      <div className="mb-3 grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
+      {/* A1 看板定制: main 区(全宽纵列) flex 容器 — style.order 实现分区内排序 */}
+      <div className="flex flex-col">
+      {/* 指数走势 pills */}
+      {shown('indices') && (
+      <div style={{ order: orderIndex(layout, 'indices') }} className="mb-3 grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
         {loading && indices.length === 0
           ? Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="p-2.5">
@@ -552,8 +592,11 @@ export default function DashboardPage() {
           </button>
         ))}
       </div>
+      )}
 
       {/* v0.4.6 KPI 带(借鉴 TSP): 数字优先 6 格, 一眼看全市场状态 */}
+      {shown('kpi') && (
+      <div style={{ order: orderIndex(layout, 'kpi') }}>
       <KpiBand
         upCount={marketFlow?.up_count ?? null}
         downCount={marketFlow?.down_count ?? null}
@@ -567,20 +610,24 @@ export default function DashboardPage() {
         limitDown={phaseKpi.limitDown}
         sealRate={phaseKpi.sealRate}
       />
+      </div>
+      )}
 
       {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
       {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
-      <div id="market-phase-anchor" className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
+      {shown('overview') && (
+      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
         <MarketPhaseCard />
         <MarketMainlineCard />
         {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
         <PhaseGaugeCard />
       </div>
+      )}
 
       {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}
       {/* 反AI模板 P2:次要列表区去卡片化 — 去掉盒子, 顶部 1px hairline + 留白, 标题/指标直排 */}
-      {marketFlow && (
-        <div className="mt-5 border-t border-border/60 pt-3">
+      {shown('fundflow') && marketFlow && (
+        <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5 border-t border-border/60 pt-3">
           <div className="flex items-baseline gap-2">
             <span className="text-[13px] font-semibold">大盘资金流</span>
             <span className="text-[10px] text-muted-foreground">东财 · 两市主力</span>
@@ -650,12 +697,14 @@ export default function DashboardPage() {
           ) : null}
         </div>
       )}
+      </div>{/* /A1 main 区 */}
 
       {/* 异动池(东财) | 热榜(同花顺):并排双列,移动端堆叠;独立加载,任一失败静默不影响首页 */}
       {/* 反AI模板 P2:异动/热榜同为列表感区块, 去卡片化 — 与大盘资金流一致 hairline 分隔 */}
       <div className="mt-5 grid grid-cols-1 gap-x-6 md:grid-cols-2">
         {/* 异动池(东财) — v0.4.7 与涨跌分布并排 */}
-        <div className="border-t border-border/60 pt-2.5">
+        {shown('anomalies') && (
+        <div style={{ order: orderIndex(layout, 'anomalies') }} className="border-t border-border/60 pt-2.5">
           <SectionHeader
             title="异动池"
             action={
@@ -718,12 +767,15 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* v0.4.7: 全市场涨跌分布(双向柱) */}
-        <div className="border-t border-border/60 pt-2.5">
+        {shown('breadth') && (
+        <div style={{ order: orderIndex(layout, 'breadth') }} className="border-t border-border/60 pt-2.5">
           <SectionHeader title="涨跌分布" action={<span className="text-[10px] text-muted-foreground">全A · 9档</span>} />
           <BreadthDistributionChart />
         </div>
+        )}
       </div>
       {/* 热榜已移除(v0.4.7): 与发现页重复 */}
 
@@ -731,7 +783,8 @@ export default function DashboardPage() {
       {/* 反AI模板 P2:上方列表区已去卡片化, 工作台卡片区补 mt-3 维持呼吸感 */}
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* 今日要紧事(左列,窄) */}
-        <div className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
+        {shown('agenda') && (
+        <div style={{ order: orderIndex(layout, 'agenda') }} className="border-t border-border/60 pt-3 lg:col-span-7 xl:col-span-3">
           <SectionHeader
             title="今日要紧事"
             action={
@@ -811,9 +864,11 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* 组合体检(中列,宽) */}
-        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
+        {shown('portfolio') && (
+        <div style={{ order: orderIndex(layout, 'portfolio') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
           <div className="mb-2 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-primary" />
             <h2 className="text-sm font-semibold">组合体检</h2>
@@ -986,9 +1041,11 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* 机会精选(右列,窄) */}
-        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+        {shown('picks') && (
+        <div style={{ order: orderIndex(layout, 'picks') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           {/* 反AI模板 P2:机会非高频扫描区, 去掉图标 — 只给要紧事/体检保留扫描区的图标 */}
           <SectionHeader
             title="机会精选"
@@ -1035,9 +1092,11 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
 {/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
-        <div className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
+        {shown('reports') && (
+        <div style={{ order: orderIndex(layout, 'reports') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           <SectionHeader
             title="最新报告"
             action={
@@ -1078,16 +1137,29 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
 
                 {/* 简报已移除(v0.4.7): 与报告中心重复, 入口保留在最新报告卡 */}
 
 {/* 机会发现(次级,右;1280px 以下整行) */}
-        <div className="lg:col-span-12 xl:col-span-6">
+        {shown('discover') && (
+        <div style={{ order: orderIndex(layout, 'discover') }} className="lg:col-span-12 xl:col-span-6">
           <DiscoveryPanel monitorStocks={scan} onOpenStock={openStock} />
         </div>
+        )}
       </div>
 
 
+
+      {/* A1: 看板定制对话框(显隐 + 分区排序 + 重置) */}
+      <DashboardCustomizer
+        open={customizerOpen}
+        onOpenChange={setCustomizerOpen}
+        layout={layout}
+        onToggle={toggleModuleById}
+        onMove={moveModuleById}
+        onReset={resetModules}
+      />
 
       <StockInsightModal
         open={modal.open}

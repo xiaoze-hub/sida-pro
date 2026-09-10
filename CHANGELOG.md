@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P2-2 看板轻量定制 (OpenTerminal 借鉴 A1): 模块显隐 + 分区排序 + 本机持久化
+- **口径**(方案 §三 A1 轻量版): 不做自由拖拽/网格布局(引入成本大 + 与"白底工程感"设计语言冲突), 只做**显隐开关 + 上下排序 + 偏好持久化**; 排序按 Dashboard 真实网格分 3 区(全宽区/双列区/工作台与次级)区内生效、组间不可换位(与布局约束一致, 不假装任意布局)。
+- **前端**: ① `src/lib/dashboard-layout.ts` 纯逻辑层(11 模块 × 3 分区; toggle/move/reset/orderIndex; normalizeLayout 容错: 未知 id 丢弃、缺失补默认、垃圾输入回默认; localStorage `panwatch_dashboard_layout_v1`, 存储异常静默降级"本次会话有效"); ② `src/components/DashboardCustomizer.tsx` 定制对话框(分区列出 11 模块, 显隐开关 + 上下移 + 重置, 组边界按钮禁用); ③ Dashboard 顶部"自定义"入口 + 4 个布局容器接线(`style.order` 实现区内排序; 隐藏即不渲染, 不占位不假空)。
+- **测试**: 前端 +17(`tests/lib/dashboard-layout.test.ts` 12 / `tests/components/dashboard-customizer.test.tsx` 5); 逻辑层做过**变异校验**(临时去掉跨组保护 → "不跨组"用例精确变红 → 恢复全绿, 证明用例真在防回归)。门禁: vitest 90 passed(15 文件) / tsc / eslint / UI-RULES OK / `pnpm build` 全过。
+- **本地走查**: 浏览器实测——"自定义"→ 关掉"市场 KPI 带"→ 页面即时消失且 localStorage 写入; 刷新仍隐藏(持久化生效); "重置"→ 恢复显示且 hidden=[] 清空。
+- [commit <见 git log>]
+
 ### feat-P2-1 数据源延迟 EWMA + 顶部心跳条 (OpenTerminal 借鉴 C1): trust 透出 ewma + 心跳条 + 数据源页质量卡
 - **后端**: `packages/marketdata/src/marketdata/defaults.py` `_Metrics` 新增**延迟 EWMA**(α=0.3 递推, 首笔=样值; 失败样本一并计入——超时耗时应体现在健康读数里; 选 EWMA 而非 p50: p50 对"持续变慢"不敏感, 一半样本都慢才会动); `snapshot()` 增 `ewma_latency_ms`(无样本 None, 不冒充 0); `src/web/api/datasources.py /trust` 透出该字段(附加字段, 既有消费方无感)。
 - **前端**: ① `src/lib/vendor-trust.ts` 纯函数层(色档 >=80/>=50/<50/无分, 延迟文案 "512ms"/"1.2s", tooltip 与汇总, 无样本一律显式"—"); ② `src/hooks/useVendorTrust.ts` 60s 轮询(失败置 error 保留上次快照, 显式标注不静默); ③ `src/components/SourceHeartbeat.tsx` **顶部细心跳条**——每源一色段, 悬停出 成功率/EWMA/p50/样本/最近错误, 点击进数据源页; 刷新失败显式标注; 从未有样本不渲染(无源可报≠故障); ④ App 顶部挂载(全页可见); ⑤ 数据源页新增"行情源质量"卡(与心跳条同源); ⑥ Quote 来源徽标 tooltip 增 EWMA 读数, 并修 score=null 时"质量分 null"文案。
