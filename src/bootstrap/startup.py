@@ -293,6 +293,24 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"龙虎榜每日增量回填注册失败: {e}")
 
+        # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
+        try:
+            from src.core.quote_snapshots import collect_once
+
+            rt.scheduler.scheduler.add_job(
+                collect_once,
+                "interval",
+                seconds=60,
+                id="quote-snapshots-1min",
+                name="快照行情1分钟落库",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("快照行情1分钟落库已注册(interval 60s, 时段守卫在模块内)")
+        except Exception as e:
+            logger.error(f"快照行情1分钟落库注册失败: {e}")
+
         # 信号对账(批次D 复盘闭环, 2026-09-06): 交易日 18:30 回填 T+1/T+5 收益
         try:
             from src.core.signal_review import nightly_review

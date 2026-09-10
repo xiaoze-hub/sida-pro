@@ -2923,6 +2923,79 @@ def _m156_dragon_tiger_events_table(conn: Connection) -> None:
     )
 
 
+def _m157_quote_snapshots_table(conn: Connection) -> None:
+    """快照行情 1 分钟桶表 quote_snapshots(批次2 2/2, 2026-09-10)。
+
+    自选∪持仓∪指数 的报价每分钟落一桶((trade_date, market, symbol, ts) 唯一,
+    重拉幂等)。唯一键含 trade_date(规避 l2_ticks 教训: 分区/裁剪列必须进唯一键)。
+    指数走腾讯原始符号(sh000001 等), market='IDX' 避免与同号个股(平安银行 000001)撞键。
+    设计保留 1 年 → agg 日线(治理脚本后续挂)。
+    """
+    if _has_table(conn, "quote_snapshots"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE quote_snapshots (
+                    trade_date TEXT NOT NULL,
+                    ts TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    name TEXT,
+                    last DOUBLE PRECISION,
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    prev_close DOUBLE PRECISION,
+                    change_pct DOUBLE PRECISION,
+                    volume DOUBLE PRECISION,
+                    turnover DOUBLE PRECISION,
+                    turnover_rate DOUBLE PRECISION,
+                    volume_ratio DOUBLE PRECISION,
+                    circ_mv DOUBLE PRECISION,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_quote_snapshots UNIQUE (trade_date, market, symbol, ts)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE quote_snapshots (
+                    trade_date TEXT NOT NULL,
+                    ts TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    name TEXT,
+                    last REAL,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    prev_close REAL,
+                    change_pct REAL,
+                    volume REAL,
+                    turnover REAL,
+                    turnover_rate REAL,
+                    volume_ratio REAL,
+                    circ_mv REAL,
+                    source TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, market, symbol, ts)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_quote_snapshots_sym_ts",
+        "CREATE INDEX ix_quote_snapshots_sym_ts ON quote_snapshots (symbol, ts DESC)",
+    )
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3616,6 +3689,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(154, "auction_snapshots_table", _m154_auction_snapshots_table),
     Migration(155, "chip_daily_table", _m155_chip_daily_table),
     Migration(156, "dragon_tiger_events_table", _m156_dragon_tiger_events_table),
+    Migration(157, "quote_snapshots_table", _m157_quote_snapshots_table),
 )
 
 

@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### feat-数据落库 批次2(2/2): 快照行情 1 分钟桶 quote_snapshots 落库
+- **迁移**: `_m157_quote_snapshots_table`(双方言 DDL; **`(trade_date, market, symbol, ts)` 唯一** + 索引 (symbol, ts DESC))。唯一键含 `trade_date` —— 规避 l2_ticks 教训(分区/裁剪列必须进唯一键)。
+- **写入器**: 新增 `src/core/quote_snapshots.py` —— `collect_once`(永不抛) 每分钟采集 **自选(stocks)∪启用账户持仓(positions join accounts)∪大盘指数**, 个股走 `md_quote_rows`(与 WS 聚合器同源全字段), 指数走 `index_quotes` **腾讯原始符号**(sh000001 等, market='IDX', 避免与同号个股撞键)。幂等: 同 `(trade_date, ts)` 桶重拉跳过已存在键。
+- **时段守卫**: 交易日(交易日历) ∩ 09:15-11:30 / 12:55-15:05, 非时段直接跳过不打源不写库; 日历挂掉退回 weekday 判定(采集器宁多跑不漏跑)。写入者为后台 job(API 只读), 调度注册 `interval 60s`(max_instances=1, coalesce=True)。
+- **口径**: 公共数据(表内无 user_id) → 多账号共用一份; 保留 1 年(agg 日线治理脚本后续挂, 表按 trade_date 裁剪)。为批次 3 查询侧(分时回放/趋势图)留底座。
+- **测试**: 新增 `tests/test_quote_snapshots.py` 10 例(幂等/时段守卫/分钟 floor/指数符号对位/collect_once 全链路不触网/永不抛); 连同 lhb/migration **23 passed**; 全量套件 **2173 passed / 3 failed**(KI-027 两项本机 + dark_l2 全量并发偶发超时, 单跑通过)。
+- [tag v0.5.45]
+
 ### feat-妖股因子 lhb 维接入: 东财龙虎榜回填(历史+每日增量)
 - **背景**: 老板指示"妖股因子 lhb 回填, 用东财接口获取龙虎榜, 直接部署"。demon_score 六维中 `lhb(10分)` 此前恒"缺数据计 0"(wencai 未接), K 线回填的 limit_up_events 也无流通市值 → 妖股池普遍少 10 分且无市值加分。
 - **数据源实测校准**: 东财 datacenter `RPT_DAILYBILLBOARD_DETAILSNEW`(市场级按日, 单日 ~66-150 行一页取全); 实抓确认 `FREE_MARKET_CAP`(流通市值, **单位=元**, 2026-09-09 样本 3.32e10≈332亿)与 `BILLBOARD_DEAL_AMT`(榜上成交额)。
