@@ -44,6 +44,11 @@
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
 | KI-041 | P3 | 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) | 2026-09-10 | TianXiang |
+| KI-042 | P2 | 分钟K线端点腾讯 ifzq 单源, 失败态 `points: []` 静默(文案误归因) | 2026-09-10 | TianXiang |
+| KI-043 | P2 | 自选批量行情 /stocks/quotes 逐市场吞异常(缺项无提示) | 2026-09-10 | TianXiang |
+| KI-044 | P2 | 板块资金 board-capital-flow 空列表静默(单源 ths_flow) | 2026-09-10 | TianXiang |
+| KI-045 | P2 | /news 8s 超时静默置空(超时与"无新闻"不可分) | 2026-09-10 | TianXiang |
+| KI-046 | P3 | marketdata_authoritative_sources.py 死配置(零 import, 待决议) | 2026-09-10 | TianXiang |
 
 ## 详情
 
@@ -215,6 +220,46 @@
 - 涉及文件: scripts/ui-rules-baseline.json(2026-09-10 重算冻结 60 键)、scripts/check_ui_rules.mjs(R7 补 difVals 豁免)。
 - 建议修复: 后续波次将存量站点逐步改 `@/lib/format` safe* 并同步调低基线(只降不升); 基线维护可在 check_ui_rules.mjs 加 `--update` 模式(本次未加)。
 
+### KI-042 分钟K线端点腾讯 ifzq 单源静默 (P2)
+
+- 发现: 2026-09-10(P1-2 单源依赖审计, docs/research/单源依赖审计_20260910.md §4-P1)
+- 现象: `GET /quotes/minute/{symbol}` 硬编码 `web.ifzq.gtimg.cn`(quotes.py:271), 取数失败与"真无分时"共用 `points: []`; 分时对话框文案为"暂无分时数据(非交易日或停牌)"(minute-dialog.tsx:92) → 源故障被误归因为非交易日/停牌。
+- 影响: 源抖/风控时用户看到误导读数; 属"静默空白"类(审计判 🔴)。
+- 涉及文件: src/web/api/quotes.py(minute 端点)、frontend/packages/biz-ui/src/components/minute-dialog.tsx、InteractiveKline.tsx(有错误态但空数据时无提示)。
+- 建议修复: 响应加 `degraded: true, note: "分时源(腾讯)暂不可用"`, 对话框优先展示 note; 可评估 1m 落库(klines)兜底(注意 1m 源同为腾讯 mkline, 仅作传输面冗余)。
+
+### KI-043 自选批量行情逐市场吞异常 (P2)
+
+- 发现: 2026-09-10(P1-2 单源依赖审计 §4-P1)
+- 现象: `GET /stocks/quotes`(stocks.py:219-229)对每个市场 `except Exception: logger.error(...)` 后静默跳过 → 失败市场标的全部缺价, 前端无任何提示。
+- 影响: 自选页整列"--"/缺行且无原因提示; 属"缺项无提示"类(审计判 🔴)。
+- 涉及文件: src/web/api/stocks.py、frontend Stocks 页消费侧。
+- 建议修复: 收集 `degraded_markets: [{market, error}]` 随响应返回, 前端复用 ErrorBanner 显式展示+重试。
+
+### KI-044 板块资金空列表静默 (P2)
+
+- 发现: 2026-09-10(P1-2 单源依赖审计 §4-P1)
+- 现象: `GET /market-data/board-capital-flow`(market_data.py:176-211)上游单源(ths_flow)返回空时输出 `count: 0, items: []`, 与"今日确实无数据"不可分(异常才有 502)。
+- 影响: 资金流页板块明细静默空白; 同文件 `/market-capital-flow` 消费该函数时同样继承空语义。
+- 涉及文件: src/web/api/market_data.py、packages/marketdata(ths_flow)、frontend 资金流页。
+- 建议修复: 非节假日空态改显式 502 或带 `degraded` 标记(与 /market/indices 同款口径, 参考本轮已修模式); 备源 `board_fund_flow`(东财)海外 502 不推荐接链。
+
+### KI-045 新闻 8s 超时静默置空 (P2)
+
+- 发现: 2026-09-10(P1-2 单源依赖审计 §4-P1)
+- 现象: `GET /news`(news.py:96-106)`asyncio.wait_for(..., 8.0)` 超时/异常一律 `return []`, 与"无相关新闻"不可分。
+- 影响: 首页/资讯静默空白; 属"超时静默"类(审计判 🔴)。
+- 涉及文件: src/web/api/news.py。
+- 建议修复: 返回结构带 `degraded: "timeout"`(或信封层), 前端已有 ErrorBanner 基建可复用。
+
+### KI-046 marketdata_authoritative_sources 死配置 (P3)
+
+- 发现: 2026-09-10(P1-2 单源依赖审计 §1.3)
+- 现象: `src/core/marketdata_authoritative_sources.py`(2026-08-31 P0 骨架)的 `AUTHORITATIVE`/`FALLBACK_CHAIN`/`get_vendor_for` **全仓零 import**, docstring 自述"待 marketdata_client.py 集成"; 实际降级链在 registry+DataSource seed 中实现。
+- 影响: 无运行时影响; 但"权威源+降级链"设计有两处真相源(该文件 vs registry), 后续维护者可能被误导。
+- 涉及文件: src/core/marketdata_authoritative_sources.py、packages/marketdata/registry.py。
+- 建议修复: 三选一交老板决议 —— ① 接线(重构成本高, 价值与 registry 重叠); ② 降级为纯文档(docs/ 下注明与 registry 的关系); ③ 删除(信息已无增量)。
+
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
 复现命令:
@@ -292,3 +337,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-09 深夜(接口先行项落地)**: KI-019(来源徽标)/KI-021(决策卡片)/KI-018(错误页签)前端落地发版 **v0.5.35**; KI-025 前端 WS 消费 envelope(新增 `src/realtime/useQuoteStream.ts`: SWP 鉴权 / last_seq 补发 / 指数退避 / 4401 不重连) + 后端补推自选标的(`_collect_watchlist_symbols` 补 `stocks` 表)发版 **v0.5.36** → **4 条修复移入 CHANGELOG**, 台账 **25 条在册(P1×3/P2×13/P3×9)**。
 
 **2026-09-10(P1-1 板块热力图)**: 新增 **KI-041**(R6 基线自 979d79c 冻结后未补挂 → 门禁存量红; 本次重算冻结 60 键 + R7 difVals 豁免), 台账 **26 条在册(P1×3/P2×13/P3×10)**。
+
+**2026-09-10(P1-2 单源依赖审计)**: 产出 `docs/research/单源依赖审计_20260910.md`(全量路径表 + 单源约 30 条三分类 + 处置决策); 本轮修复 = 指数行情补链(腾讯→新浪, CN/HK/US 全兜底) + `/market/indices` 静默 `[]`→显式 502; 审计遗留 4 项静默态登记 **KI-042..045**(分钟K线/自选批量/板块资金/新闻) + 死配置留痕 **KI-046**, 台账 **31 条在册(P1×3/P2×17/P3×11)**。

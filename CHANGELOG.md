@@ -7,6 +7,15 @@
 
 ## 2026-09-10
 
+### feat-P1-2 单源依赖审计 (OpenTerminal 借鉴 C4): 指数行情补链(腾讯→新浪) + /market/indices 显式降级 + 全量审计报告
+- **审计交付**: `docs/research/单源依赖审计_20260910.md` —— 逐层扫描(Engine 优先级链 / registry 合法源 / DATA_SOURCE_SEEDS / 绕 Engine 旁路)+ 关键行人工复核, 给出全部用户可见数据端点的"源数/上游/失败态/判定"表; 单源路径约 30 条归三类(注册表级: board_capital_flow/market_capital_flow/events/northbound 等; 绕 Engine 硬编码: 指数行情/分钟K线/dark-flow/thsdk 全家桶/财经日历等; 本地派生: 落库/文件); 顺带发现死配置 `src/core/marketdata_authoritative_sources.py`(全仓零 import, 决议登记 KI-046)。
+- **补链(审计最高价值项)**: 指数行情原为腾讯硬编码单源(client.py `index_quotes` 直取 `fetch_raw`), 腾讯对生产云 IP 有风控史 → 首页指数条会整片消失。① `packages/marketdata/vendors/sina.py` 新增 `fetch_index_quotes()`: CN 全格式 / 港指 hkHSI / 美股 gb_$ 三族解析, 输出 symbol 对齐腾讯 parts[2] 口径(裸码/点前缀), volume/turnover 恒 null(单位口径未对齐, 缺失优于错误); ② `client.py index_quotes()` 缺项自动走新浪——腾讯有数时零额外请求, 6 处消费方(首页/指数详情/日报/盘前/快照落库/报告)无感受益。
+- **显式降级**: `src/web/api/market.py /market/indices` 源异常/双源全空由静默 `return []` 改显式 502 —— 原状态下前端 Dashboard 指数条静默消失(只有 HTTP 异常才触发 ErrorBanner); 现在直接走既有 `ErrorBanner('大盘指数') + 重试`, 失败≠空态。
+- **实测**(2026-09-10, 只读公开接口): 新浪三族字段布局逐条探测(数值与腾讯同码一致: 上证 3934.40 / 恒指 24954.47 / 纳指 26253.34 / 道指 52380.66); 全链路双验证——腾讯在网返回腾讯数据且新浪零调用, 模拟腾讯不可达 5 只指数一次请求补全。
+- **测试**: 新增 7 例全离线(monkeypatch): `test_sina_quote_vendor.py` +2(三族解析 / 未知符号零请求)、`test_index_methods.py` +3(兜底 / 腾讯优先零回退 / 部分缺项只补缺)、`tests/test_index_routing.py` +2(全空、异常 → 502)。离线门禁 `PYTHONUTF8=1 python -m pytest -m "not network"` → **2056 passed / 2 failed(仅 KI-027 本机已知) / 5 skipped**。
+- **遗留登记**: 审计发现的 4 项"静默空白"残留(分钟K线/自选批量行情/板块资金/新闻超时)登记 KI-042..045(含逐条修复建议), 台账 31 条在册。
+- [commit <见 git log>]
+
 ### feat-P1-1 板块热力图 (OpenTerminal 借鉴 B1): /api/boards/heatmap + treemap 页 + hslaVar canvas 兼容修复
 - **后端**: `src/web/api/boards.py` 新增 `GET /api/boards/heatmap?type=industry|concept` —— 一次拉全板块当日快照(block_code/name/change_pct/fund_net/volume/has_daily); 无当日数据的板块如实带 null(不剔除、不编造, 前端画灰块); 排序=有数据在前+涨跌幅降序; 静态路径声明在 `/{block_code}` 动态段之前防吞路由; type 非法 400 / DB 错 502。
 - **前端**: `packages/biz-ui/src/lib/board-heatmap.ts` 纯函数层(13 例: 色带 ±3% 夹紧 / 平盘与无数据归灰 / 面积口径 量能缺失以正数中位数 2% 保底 / 等权); `components/dashboard/BoardHeatmap.tsx` treemap 组件(面积=量能或等权切换、tooltip、点击下钻 `/boards/:code`、120s 轮询、加载/空/错/stale 三态); `src/pages/Heatmap.tsx` + App 路由与导航入口(`/heatmap`, perm=view_forecast, "行情"组)。

@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import time
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from src.collectors.kline_collector import get_index_klines
 from src.models.market import MarketCode
@@ -82,7 +82,12 @@ async def get_market_indices():
         quotes = get_market_data().index_quotes(tencent_symbols)
     except Exception as e:
         logger.error(f"获取市场指数失败: {e}")
-        return []
+        # 2026-09-10 C4 单源审计: 原为 return [], 首页指数条会静默整片消失;
+        # 改为显式 502, 前端 ErrorBanner('大盘指数') 给出重试入口, 失败≠空态。
+        raise HTTPException(502, "指数行情数据源调用失败(腾讯/新浪)")
+    if not quotes:
+        # 腾讯+新浪双空: 同样不装作"没有数据", 显式降级让前端可见可重试。
+        raise HTTPException(502, "指数行情暂不可用(腾讯/新浪源均无返回)")
 
     # 构建 response_symbol -> quote 映射
     quote_map = {}

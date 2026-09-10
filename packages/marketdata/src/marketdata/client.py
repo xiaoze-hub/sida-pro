@@ -223,10 +223,24 @@ class MarketData:
         """按原始腾讯指数符号(sh000001/hkHSI/usDJI…)取行情,不经 Symbol.parse。
 
         指数代码可能与个股代码撞号(如 000001 既是平安银行又是上证指数),故走显式符号路径。
+        2026-09-10 (C4 单源审计补链): 腾讯对生产云 IP 有风控史(501/403), 一旦不可达首页
+        指数条整片消失 —— 缺项自动走新浪同码兜底(CN/HK/US 指数, vendors/sina.fetch_index_quotes);
+        输出 symbol 口径与腾讯一致(裸码/点前缀), 对下游消费无感。腾讯有数时零额外请求。
         返回 list[dict]。
         """
+        from marketdata.vendors.sina import fetch_index_quotes, index_output_code
         from marketdata.vendors.tencent import fetch_raw
-        return fetch_raw(list(tencent_symbols)) if tencent_symbols else []
+
+        syms = list(tencent_symbols or [])
+        if not syms:
+            return []
+        rows = fetch_raw(syms)
+        if len(rows) < len(syms):
+            got = {r.get("symbol") for r in rows}
+            missing = [s for s in syms if (index_output_code(s) or s) not in got]
+            if missing:
+                rows.extend(fetch_index_quotes(missing))
+        return rows
 
     def index_klines(self, code: str, *, market: str, days: int = 120) -> list:
         """指数日K:东财 secid 主源;失败/未映射(如美股指数)走腾讯原始符号兜底;都无 → []。
