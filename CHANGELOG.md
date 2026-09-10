@@ -67,6 +67,13 @@
 - **只读验收**: 容器内 `fetch_auction_snapshots_tq(["002361","600769"])` 实测 **0.56s 返回 2 条**(002361 开盘10.1(-0.20%) 竞价额210.4万 买一10.39×559; 600769 开盘16.32(-0.49%) 竞价额127.8万 买一16.14×27)。
 - [tag v0.5.40]
 
+### fix-桌面端账号菜单向下展开跑到视口外(主题/亮暗/退出不可见) + 悟道 token 读错库
+- **① "主题(亮/暗/跟随系统)不见了"**(老板报): `use-theme` 接线与渲染均正常, 问题在**桌面端布局** —— `AccountMenu` 挂在**全高固定侧栏的最后一格**(`aside.fixed.inset-y-0.flex-col` 底部), 面板却用 `absolute top-full` **向下展开** → 整块落到**视口下方**, 用户看不到任何一项(浏览器实测: 移动端实例在顶栏向下展开正常, 主题/亮色/暗色/跟随系统 齐全)。修: `AccountMenu` 增 `placement?: 'down' | 'up'`(默认 `down`), 面板按方向用 `top-full pt-2` / `bottom-full pb-2`(透明内边距仍是 hover 桥接); 桌面实例(App.tsx sidebar)传 `placement="up"`。
+- **② 悟道 token 读错库(会挡住"买套餐后换 token")**: `WudaoMCPClient._db_token()` 原先**直读 sqlite** `/app/data/panwatch.db`, 而应用早已跑 **PG**(设置页写 PG) → 设置页改 token 后代码仍读旧 sqlite 值 = "改 key 不生效"。修: 优先读规范库(`src.db.session` + `AppSettings`), 仅当库不可用时退 sqlite(抽 `_sqlite_token()`, 兼容老 sqlite 部署)。
+- **测试**: 新增 `tests/test_wudao_token_source.py` 4 例(PG 优先 / 多 token 轮换 / 库不可用退 sqlite / 全空)。
+- **验证**: 后端全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1991 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**; 前端 `tsc -b` + `eslint .` + `pnpm test` **41 passed** + `pnpm build`; 4 项静态门禁通过。
+- [tag v0.5.41]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。

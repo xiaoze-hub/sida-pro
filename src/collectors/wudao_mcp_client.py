@@ -41,11 +41,8 @@ class WudaoMCPClient:
         self._initialized = False
 
     @staticmethod
-    def _db_token() -> str:
-        """设置页 DB(app_settings.wudao_mcp_token) > env。改 key 立即生效,无需重建容器。
-
-        支持多 token 池化: DB 值若为逗号分隔多个 token, 按模块级轮换索引依次返回(多 key 分摊额度)。
-        """
+    def _sqlite_token() -> str:
+        """兜底: 老 sqlite 部署读 `/app/data/panwatch.db`(PG 部署下本函数通常返回 '')。"""
         import os
         import sqlite3
 
@@ -58,21 +55,51 @@ class WudaoMCPClient:
                 row = conn.execute(
                     "SELECT value FROM app_settings WHERE key='wudao_mcp_token'"
                 ).fetchone()
-                raw = row[0] if row and row[0] else ""
+                return row[0] if row and row[0] else ""
             finally:
                 conn.close()
-            if not raw:
-                return ""
-            # 多 token 池化: 逗号分隔, 模块级轮换
-            tokens = [t.strip() for t in raw.split(",") if t.strip()]
-            if len(tokens) <= 1:
-                return tokens[0] if tokens else ""
-            WudaoMCPClient._token_idx = (WudaoMCPClient._token_idx + 1) % len(tokens)
-            return tokens[WudaoMCPClient._token_idx]
-        # 注意: 下面的 except 是外层 try 的延续, 见原始结构
-        except Exception as e:
-            logger.debug(f"读设置页 wudao_mcp_token 失败: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"读 sqlite wudao_mcp_token 失败: {e}")
             return ""
+
+    @staticmethod
+    def _db_token() -> str:
+        """设置页 DB(app_settings.wudao_mcp_token) > env。改 key 立即生效,无需重建容器。
+
+        M8(2026-09-10): **改走应用的规范库**(`src.db.session`, 即 PG) —— 原先直读
+        sqlite `/app/data/panwatch.db`, 而应用早已跑 PG: 设置页改 token 后代码读到的
+        仍是旧 sqlite 值 → "改 key 不生效"(会挡住买套餐后换 token)。sqlite 仅作兜底。
+
+        支持多 token 池化: DB 值若为逗号分隔多个 token, 按模块级轮换索引依次返回(多 key 分摊额度)。
+        """
+        raw = ""
+        try:
+            from src.db.models import AppSettings
+            from src.db.session import SessionLocal
+
+            db = SessionLocal()
+            try:
+                row = (
+                    db.query(AppSettings)
+                    .filter(AppSettings.key == "wudao_mcp_token")
+                    .first()
+                )
+                raw = (row.value if row and row.value else "") or ""
+            finally:
+                db.close()
+        except Exception as e:  # noqa: BLE001 - 库不可用则退 sqlite
+            logger.debug(f"读 DB wudao_mcp_token 失败, 退 sqlite: {e}")
+            raw = ""
+        if not raw:
+            raw = WudaoMCPClient._sqlite_token()
+        if not raw:
+            return ""
+        # 多 token 池化: 逗号分隔, 模块级轮换
+        tokens = [t.strip() for t in raw.split(",") if t.strip()]
+        if len(tokens) <= 1:
+            return tokens[0] if tokens else ""
+        WudaoMCPClient._token_idx = (WudaoMCPClient._token_idx + 1) % len(tokens)
+        return tokens[WudaoMCPClient._token_idx]
 
     _token_idx: int = -1
 

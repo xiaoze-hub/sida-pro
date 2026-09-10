@@ -32,6 +32,11 @@ interface AccountMenuProps {
   onOpenSelfCheck: () => void
   /** 头像尺寸:桌面 md,移动端 sm。 */
   size?: 'sm' | 'md'
+  /**
+   * 面板展开方向。桌面实例在**全高侧栏的最底部**,向下展开会整体落到视口外
+   * (主题/亮暗/退出等全部不可见) → 必须向上展开;移动端顶栏保持向下。
+   */
+  placement?: 'down' | 'up'
 }
 
 /**
@@ -45,6 +50,7 @@ export default function AccountMenu({
   onSetMode,
   onOpenSelfCheck,
   size = 'md',
+  placement = 'down',
 }: AccountMenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -130,8 +136,12 @@ export default function AccountMenu({
       </button>
 
       {open && (
-        // top-full + pt-2:用透明内边距桥接头像与菜单,hover 移入不断开
-        <div className="absolute right-0 top-full pt-2 z-50">
+        // top-full/bottom-full + pt-2/pb-2:用透明内边距桥接头像与菜单,hover 移入不断开
+        <div
+          className={`absolute right-0 z-50 ${
+            placement === 'up' ? 'bottom-full pb-2' : 'top-full pt-2'
+          }`}
+        >
           <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-xl">
           {/* 原“更多”导航 */}
           {navItems.map(({ to, icon: Icon, label }) => {

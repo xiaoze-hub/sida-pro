@@ -396,6 +396,7 @@ function App() {
             mode={mode}
             onSetMode={setMode}
             onOpenSelfCheck={() => setSelfCheckOpen(true)}
+            placement="up"
           />
         </div>
       </aside>
