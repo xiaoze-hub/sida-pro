@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### fix-/api/archive/overview 生产 PG 适配(l2_ticks/klines 无 trade_date + DATE 类型归一)
+- **实撞问题**(v0.5.46 生产首测): ① `auction_snapshots`/`chip_daily` 在 PG 为 `trade_date DATE`, SQL 里 `COALESCE(date,'')` 类型不匹配直接报错 → 返 None; ② `l2_ticks`(7900 万行)/`klines` **无 trade_date 列**(只有 ts 时间戳) → 整表统计失败。
+- **修法**: 按表适配 —— trade_date 表维持原查询, DATE 值 Python 侧归一 YYYYMMDD; l2_ticks/klines 日期取 MIN/MAX(ts)(l2_ticks 的 ts 是**入库时间**, note 如实标注), 行数走 PG `reltuples` 估算(`rows_estimated: true`, 规避 7900 万行精确 COUNT 的 ~20s; sqlite 精确 COUNT)。
+- **生产复测**: overview 全六表有值(l2_ticks 估算 7698 万/入库 16:03, klines 最新 20260910, dragon_tiger 20273 行/最新 20260908); quote-snapshots/空态/边界照旧。
+- **测试**: `tests/test_market_archive_api.py` 6 例全过(含 sqlite 缺表 → None 优雅路径)。
+- [tag v0.5.47]
+
 ### feat-数据落库 批次3: 查询侧收口 API(/api/archive 只读 + 新鲜度/缓存命中率面板)
 - **查询侧**: 新增 `src/web/api/market_archive.py`, 注册 `/api/archive`(protected, 只读不触发回源) —— `GET /overview`(六张落库表行数+最早/最新 trade_date **新鲜度** + Redis keyspace 命中率; 统计失败=None 不伪装) / `GET /quote-snapshots?symbol&date&market`(分钟序列升序, 分时回放底座, 上限 2000 行) / `GET /auction-snapshots?date&symbol` / `GET /chip-daily?date&symbol` / `GET /dragon-tiger?date|symbol&days`。空态如实返 `items: []`+note, 参数边界校验 400。
 - **口径**: 只读 L0 归档面, 服务于设计文档批次3⑦("前端历史查询改走 L0, 带日期区间裁剪"); 指数分钟序列用 `market=IDX`。批次3⑧ 新鲜度/命中率面板即 `/overview`。

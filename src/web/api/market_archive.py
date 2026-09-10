@@ -75,39 +75,92 @@ def _redis_stats() -> dict:
         return {"keyspace_hits": None, "keyspace_misses": None, "hit_rate": None}
 
 
+def _norm_dateval(v) -> str | None:
+    """DATE/TEXT trade_date → YYYYMMDD; None 原样。"""
+    if v is None:
+        return None
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y%m%d")
+    s = str(v)
+    return s.replace("-", "") if len(s) == 10 and s[4] == "-" else s
+
+
+# 表 → 日期口径: td=trade_date 列; ts=无 trade_date 用 ts 时间戳(l2_ticks 的 ts 是入库时间)
+_TABLE_SPECS = (
+    ("quote_snapshots", "td"),
+    ("auction_snapshots", "td"),
+    ("chip_daily", "td"),
+    ("dragon_tiger_events", "td"),
+    ("l2_ticks", "ts_est"),
+    ("klines", "ts_est"),
+)
+
+
 @router.get("/overview")
 def overview():
-    """各落库表新鲜度(行数+最新日期) + 缓存命中率。表不存在按 0 行/无数据计。"""
-    tables = [
-        "quote_snapshots",
-        "auction_snapshots",
-        "chip_daily",
-        "dragon_tiger_events",
-        "l2_ticks",
-        "klines",
-    ]
+    """各落库表新鲜度(行数+最早/最新日期) + 缓存命中率。统计失败 → None 不伪装。
+
+    l2_ticks/klines 无 trade_date: 日期取 MIN/MAX(ts)(l2_ticks 的 ts 为入库时间,
+    非行情时间), 行数为 PG reltuples 估算(rows_estimated=true)以避免 7900 万行
+    精确 COUNT 的 20s 开销。
+    """
+    from src.web.database import SessionLocal
+
     items = []
-    for name in tables:
-        try:
-            rows = _fetch_rows(
-                f"SELECT COUNT(*) AS n, COALESCE(MIN(trade_date), '') AS min_d, "
-                f"COALESCE(MAX(trade_date), '') AS max_d FROM {name}",
-                {},
-            )
-            items.append(
-                {
-                    "table": name,
-                    "rows": rows[0]["n"] or 0,
-                    "earliest_date": rows[0]["min_d"],
-                    "latest_date": rows[0]["max_d"],
-                }
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("新鲜度统计 %s 失败: %s", name, e)
-            items.append(
-                {"table": name, "rows": None, "earliest_date": None, "latest_date": None}
-            )
-    return {"tables": items, "redis_cache": _redis_stats(), "note": "新鲜度=表内最新 trade_date; None=统计失败不伪装"}
+    db = SessionLocal()
+    try:
+        is_pg = db.bind.dialect.name == "postgresql"
+        for name, mode in _TABLE_SPECS:
+            try:
+                est = False
+                if mode == "ts_est":
+                    if is_pg:
+                        row = db.execute(
+                            text("SELECT reltuples::bigint FROM pg_class WHERE relname = :t"),
+                            {"t": name},
+                        ).fetchone()
+                        n = int(row[0]) if row and row[0] and row[0] > 0 else None
+                        est = n is not None
+                    else:
+                        n = db.execute(text(f"SELECT COUNT(*) FROM {name}")).scalar()
+                    drow = db.execute(
+                        text(f"SELECT MIN(ts) AS a, MAX(ts) AS b FROM {name}")
+                    ).fetchone()
+                else:
+                    row = db.execute(
+                        text(
+                            f"SELECT COUNT(*) AS n, MIN(trade_date) AS a, MAX(trade_date) AS b"
+                            f" FROM {name}"
+                        )
+                    ).fetchone()
+                    n, est, drow = row[0], False, row
+                items.append(
+                    {
+                        "table": name,
+                        "rows": n,
+                        "rows_estimated": est,
+                        "earliest_date": _norm_dateval(drow[0]),
+                        "latest_date": _norm_dateval(drow[1]),
+                    }
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("新鲜度统计 %s 失败: %s", name, e)
+                items.append(
+                    {
+                        "table": name,
+                        "rows": None,
+                        "rows_estimated": False,
+                        "earliest_date": None,
+                        "latest_date": None,
+                    }
+                )
+    finally:
+        db.close()
+    return {
+        "tables": items,
+        "redis_cache": _redis_stats(),
+        "note": "新鲜度=表内最新日期(YYYYMMDD); l2_ticks 为入库时间, 行数带 rows_estimated=true 为估算; None=统计失败不伪装",
+    }
 
 
 @router.get("/quote-snapshots")
