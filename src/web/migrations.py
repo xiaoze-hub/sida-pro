@@ -2857,6 +2857,72 @@ def _m155_chip_daily_table(conn: Connection) -> None:
     )
 
 
+def _m156_dragon_tiger_events_table(conn: Connection) -> None:
+    """龙虎榜事件表 dragon_tiger_events(2026-09-10, 妖股因子 lhb 维数据底座)。
+
+    东财 datacenter RPT_DAILYBILLBOARD_DETAILSNEW 每日明细落档,
+    `(trade_date, symbol, reason)` 唯一(同日多上榜原因各一行), 重拉幂等。
+    demon_score lhb 维(近一年上榜天数)与 circ_mv(流通市值)从这里取。
+    """
+    if _has_table(conn, "dragon_tiger_events"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dragon_tiger_events (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    name TEXT,
+                    reason TEXT NOT NULL DEFAULT '',
+                    close DOUBLE PRECISION,
+                    change_pct DOUBLE PRECISION,
+                    net_buy DOUBLE PRECISION,
+                    buy_amt DOUBLE PRECISION,
+                    sell_amt DOUBLE PRECISION,
+                    deal_amt DOUBLE PRECISION,
+                    turnover_pct DOUBLE PRECISION,
+                    free_market_cap DOUBLE PRECISION,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_dragon_tiger_events UNIQUE (trade_date, symbol, reason)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dragon_tiger_events (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    name TEXT,
+                    reason TEXT NOT NULL DEFAULT '',
+                    close REAL,
+                    change_pct REAL,
+                    net_buy REAL,
+                    buy_amt REAL,
+                    sell_amt REAL,
+                    deal_amt REAL,
+                    turnover_pct REAL,
+                    free_market_cap REAL,
+                    source TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, symbol, reason)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_dragon_tiger_events_sym_date",
+        "CREATE INDEX ix_dragon_tiger_events_sym_date ON dragon_tiger_events (symbol, trade_date DESC)",
+    )
+
+
 # ── 历史 A 层迁移收编(W3.1/D2, 2026-09-09) ────────────────────────────────
 # 以下 143-148 是原 src/web/database.py 的 A 层 _migrate* 函数(database.py
 # 210-876 行), 按 1.5/W3.1 决议搬进版本化迁移成为唯一 schema 变更入口。
@@ -3549,6 +3615,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 批次2(2026-09-10): 把市场数据"最大化落库" —— 竞价快照 + 筹码日频。
     Migration(154, "auction_snapshots_table", _m154_auction_snapshots_table),
     Migration(155, "chip_daily_table", _m155_chip_daily_table),
+    Migration(156, "dragon_tiger_events_table", _m156_dragon_tiger_events_table),
 )
 
 

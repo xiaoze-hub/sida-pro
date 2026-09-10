@@ -272,6 +272,27 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"妖股因子增量管线注册失败: {e}")
 
+        # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
+        # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
+        try:
+            from src.core.lhb_backfill import daily_job
+
+            rt.scheduler.scheduler.add_job(
+                daily_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=17,
+                minute=45,
+                id="lhb-daily-backfill",
+                name="龙虎榜每日增量回填",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("龙虎榜每日增量回填已注册(交易日 17:45)")
+        except Exception as e:
+            logger.error(f"龙虎榜每日增量回填注册失败: {e}")
+
         # 信号对账(批次D 复盘闭环, 2026-09-06): 交易日 18:30 回填 T+1/T+5 收益
         try:
             from src.core.signal_review import nightly_review

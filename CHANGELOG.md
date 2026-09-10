@@ -7,6 +7,17 @@
 
 ## 2026-09-10
 
+### feat-妖股因子 lhb 维接入: 东财龙虎榜回填(历史+每日增量)
+- **背景**: 老板指示"妖股因子 lhb 回填, 用东财接口获取龙虎榜, 直接部署"。demon_score 六维中 `lhb(10分)` 此前恒"缺数据计 0"(wencai 未接), K 线回填的 limit_up_events 也无流通市值 → 妖股池普遍少 10 分且无市值加分。
+- **数据源实测校准**: 东财 datacenter `RPT_DAILYBILLBOARD_DETAILSNEW`(市场级按日, 单日 ~66-150 行一页取全); 实抓确认 `FREE_MARKET_CAP`(流通市值, **单位=元**, 2026-09-09 样本 3.32e10≈332亿)与 `BILLBOARD_DEAL_AMT`(榜上成交额)。
+- **落库**: 迁移 **v156** `dragon_tiger_events`(`(trade_date,symbol,reason)` 唯一, 同日多上榜原因各一行; 索引 (symbol,trade_date))。完整榜单落库(含 ETF/可转债 6 位代码), demon 因子按 limit_up_events 股票 join 天然过滤。
+- **管线**: 新增 `src/core/lhb_backfill.py` —— `backfill_history(days=365)`(交易日取自两表 distinct 日期, 单日批量去重写入, 0.3s/日礼貌间隔) / `daily_recent` / `daily_job`(cron **交易日 17:45**, 榜单 ~17:30 发布; 拉近 3 日 → 有新行股票触发因子重算) / `lhb_stats`(近一年**上榜天数**按日去重 + 最新流通市值)。
+- **口径(诚实)**: 榜单未覆盖的股票 `n_lhb=0`(**真实 0**, 不打缺数据旗) —— 仅当表内有任何数据才启用; 统计失败/表空回退 `n_lhb=None` 缺数据语义, 绝不把失败伪装成 0 分。
+- **接线**: `demon_factors.recompute_factors`、`demon_pool._pool_from_db`(现算回退)、`GET /demon-pool/{symbol}` 全部传入 `n_lhb`/`circ_mv`; 满分口径 **75+5 → 85+5**(题材维仍缺), API note 同步。
+- **vendor**: `DragonTigerItem` + `deal_amt`/`free_market_cap` 两字段(可选, 向后兼容), 东财映射补两列。
+- **测试**: 新增 `tests/test_lhb_backfill.py` 6 例(归一化/幂等/分组统计/lhb 维激活/回填管线不触网/daily_job 触发重算); vendor 测试补两字段断言; demon_factors/migrations/startup/marketdata **226 passed**。
+- [tag v0.5.44]
+
 ### feat-数据落库 批次2(1/2): 竞价快照 auction_snapshots + 筹码日频 chip_daily 落库
 - **迁移**: `_m154_auction_snapshots_table` / `_m155_chip_daily_table`(双方言 DDL; `(trade_date,symbol,market)` 唯一 + 查询索引), 沿用 `klines`/`l2_ticks` 的"**迁移建表 + 裸 SQL**"(不引入 ORM 表, 不动 `Base.metadata`)。
 - **写入器**: 新增 `src/core/market_archive.py` —— `persist_/read_auction_snapshots`、`persist_/read_chip_daily`。**幂等 upsert**(`ON CONFLICT DO UPDATE`, 重跑覆盖可自愈)、**字段缺失写 NULL 不伪造**、**失败返回 0/False/[](不抛)**。

@@ -119,7 +119,9 @@ class EastmoneyDragonTigerVendor(DragonTigerVendor):
                         net_buy=_to_float(row.get("BILLBOARD_NET_AMT")),
                         buy_amt=_to_float(row.get("BILLBOARD_BUY_AMT")),
                         sell_amt=_to_float(row.get("BILLBOARD_SELL_AMT")),
+                        deal_amt=_to_float(row.get("BILLBOARD_DEAL_AMT")),
                         turnover_pct=_to_float(row.get("TURNOVERRATE")),
+                        free_market_cap=_to_float(row.get("FREE_MARKET_CAP")),
                     )
                 )
             except Exception as e:

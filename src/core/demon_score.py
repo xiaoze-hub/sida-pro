@@ -8,10 +8,11 @@
 - lianban 20   最高连板高度 + 断板再连(反复激活)
 - seal 15      封板成功率(封板收/盘中触及)
 - theme 15     涨停归因题材广度(wencai, MVP 未接 → flags 标"缺数据")
-- lhb 10       近一年龙虎榜频次(wencai, MVP 未接 → flags 标"缺数据")
+- lhb 10       近一年龙虎榜上榜天数(东财 LHB, 2026-09-10 接入; 榜单未覆盖=真实 0)
 - stamina 10   近 60 日仍活跃(涨停/触及出现次数)
-调整项: 流通市值 20-120 亿 +5(妖股温床); 最新事件一字板 → "不可参与"标注。
-MVP 满分 75+5(题材/龙虎榜接入后 100+5), 前端展示时注明口径。
+调整项: 流通市值 20-120 亿 +5(妖股温床; 市值取自 LHB FREE_MARKET_CAP, 无则不加分);
+最新事件一字板 → 排板口径标注。
+MVP 满分 85+5(题材维 wencai 接入后 100+5), 前端展示时注明口径。
 
 分档阈值与权重为初版经验值, 由"题材启动日妖股领先效应"回测校准
 (scripts/backtest_demon_leading.py), 结果入 docs。
@@ -142,7 +143,7 @@ def demon_score_from_events(
         flags.append("题材广度缺数据(wencai 未接入)")
     s_theme = _bucket_score(n_themes) if n_themes is not None else None
     if n_lhb is None:
-        flags.append("龙虎榜频次缺数据(wencai 未接入)")
+        flags.append("龙虎榜频次缺数据(东财 LHB 未覆盖)")
     s_lhb = _bucket_score(n_lhb) if n_lhb is not None else None
     n_recent = recent_activity(events)
     s_stamina = _bucket_score(n_recent) if n_recent is not None else None

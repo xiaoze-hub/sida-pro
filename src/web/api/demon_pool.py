@@ -4,7 +4,7 @@ GET  ""            全市场妖股池(近一年涨停事件 → 六维评分, To
 GET  /{symbol}     单只股评分明细(六维分项+flags)
 POST /backfill     手动触发回填(运维; 默认 symbols=None 全市场)
 
-红线: 无事件 → 空 list 不编造; 题材/龙虎榜维度未接入 → flags 标注缺数据。
+红线: 无事件 → 空 list 不编造; 题材维未接入 → flags 标注缺数据(龙虎榜维已接东财 LHB, 2026-09-10)。
 池缓存 300s(评分纯计算, 回填后才变化, 无需更长)。
 """
 
@@ -46,12 +46,23 @@ def _pool_from_db(topn: int = 50, min_events: int = 3) -> list[dict]:
     for r in rows:
         d = dict(r._mapping)
         by_symbol.setdefault(d["symbol"], []).append(d)
+    try:
+        from src.core.lhb_backfill import lhb_stats
+
+        lhb = lhb_stats(list(by_symbol.keys()))
+    except Exception:  # noqa: BLE001
+        lhb = {}
     out = []
     for symbol, events in by_symbol.items():
         if len(events) < min_events:
             continue
         name = next((e.get("name") for e in events if e.get("name")), "")
-        score = demon_score_from_events(events, circ_mv=None)
+        st = lhb.get(symbol) or {}
+        score = demon_score_from_events(
+            events,
+            circ_mv=st.get("circ_mv"),
+            n_lhb=st.get("n_lhb", 0) if lhb else None,
+        )
         score["symbol"] = symbol
         score["name"] = name
         score["last_event_date"] = str(events[-1].get("trade_date"))
@@ -81,6 +92,9 @@ def top_demon_symbols(n: int = 20, min_events: int = 5) -> set[str]:
         return set()
 
 
+_NOTE = "满分 85+5(龙虎榜维已接东财 LHB; 题材维 wencai 未接入, flags 标注); 权重由回测校准"
+
+
 @router.get("")
 def demon_pool(topn: int = 50, refresh: int = 0):
     """妖股池 TopN——直读因子表(demon_factors, 15:30 增量管线落档)。
@@ -96,7 +110,7 @@ def demon_pool(topn: int = 50, refresh: int = 0):
                 "source": "factors",
                 "count": len(factors),
                 "factor_date": factors[0].get("factor_date"),
-                "note": "MVP 满分 75+5(题材/龙虎榜维度 wencai 未接入, flags 标注); 权重由回测校准",
+                "note": _NOTE,
                 "items": factors,
             }
     except Exception as e:  # noqa: BLE001
@@ -113,7 +127,7 @@ def demon_pool(topn: int = 50, refresh: int = 0):
     return {
         "source": "computed",
         "count": len(_CACHE["data"]),
-        "note": "MVP 满分 75+5(题材/龙虎榜维度 wencai 未接入, flags 标注); 权重由回测校准",
+        "note": _NOTE,
         "items": _CACHE["data"][: max(min(topn, 200), 1)],
     }
 
@@ -123,9 +137,21 @@ def demon_detail(symbol: str):
     try:
         from src.core.demon_score import demon_score_from_events
         from src.core.limit_up_backfill import get_events_window
+        from src.core.lhb_backfill import lhb_stats
 
-        events = get_events_window(symbol.strip())
-        return {"symbol": symbol, "score": demon_score_from_events(events)}
+        sym = symbol.strip()
+        events = get_events_window(sym)
+        try:
+            lhb = lhb_stats([sym])
+        except Exception:  # noqa: BLE001
+            lhb = {}
+        st = lhb.get(sym) or {}
+        score = demon_score_from_events(
+            events,
+            circ_mv=st.get("circ_mv"),
+            n_lhb=st.get("n_lhb", 0) if lhb else None,
+        )
+        return {"symbol": symbol, "lhb": st or None, "score": score}
     except Exception as e:  # noqa: BLE001
         logger.warning("妖股明细 %s 失败: %s", symbol, e)
         raise HTTPException(status_code=500, detail=f"demon detail failed: {e}")
@@ -133,8 +159,16 @@ def demon_detail(symbol: str):
 
 @router.post("/backfill")
 def trigger_backfill(symbols: list[str] | None = None, mode: str = "incremental", max_stocks: int = 0):
-    """回填+因子管线。mode=incremental(默认, 每日增量+因子重算) / full(TQ直连全量重建, 存档层重建用)。"""
+    """回填+因子管线。mode=incremental(默认, 每日增量+因子重算) / full(TQ直连全量重建, 存档层重建用)
+    / lhb(东财龙虎榜历史回填 days=365 + 因子全量重算)。"""
     try:
+        if mode == "lhb":
+            from src.core.demon_factors import recompute_factors
+            from src.core.lhb_backfill import backfill_history
+
+            stats = backfill_history(days=365)
+            rec = recompute_factors()
+            return {"lhb": stats, "factors": rec}
         if mode == "full":
             from src.core.demon_factors import backfill_direct_tq, recompute_factors, _stock_names
 

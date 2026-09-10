@@ -75,6 +75,8 @@ class TestDragonTiger:
             "BILLBOARD_BUY_AMT": 20000000.0,
             "BILLBOARD_SELL_AMT": 7654321.1,
             "TURNOVERRATE": 1.23,
+            "BILLBOARD_DEAL_AMT": 27654321.1,
+            "FREE_MARKET_CAP": 213000000000.0,
         }
 
     def test_no_date_returns_empty_without_calling_market_get(self, monkeypatch):
@@ -104,6 +106,8 @@ class TestDragonTiger:
         assert item.buy_amt == 20000000.0
         assert item.sell_amt == 7654321.1
         assert item.turnover_pct == 1.23
+        assert item.deal_amt == 27654321.1
+        assert item.free_market_cap == 213000000000.0
 
     def test_request_uses_date_filter(self, monkeypatch):
         captured = {}
@@ -337,6 +341,8 @@ class TestClientMethods:
             "BILLBOARD_BUY_AMT": 20000000.0,
             "BILLBOARD_SELL_AMT": 7654321.1,
             "TURNOVERRATE": 1.23,
+            "BILLBOARD_DEAL_AMT": 27654321.1,
+            "FREE_MARKET_CAP": 213000000000.0,
         }
         monkeypatch.setattr(mf, "market_get", lambda *a, **k: _datacenter_payload([row]))
 

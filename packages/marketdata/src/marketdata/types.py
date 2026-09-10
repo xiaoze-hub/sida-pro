@@ -210,7 +210,7 @@ class Fundamentals:
 
 @dataclass
 class DragonTigerItem:
-    """龙虎榜(东财每日龙虎榜明细,市场级,按 date 过滤)。字段待实抓校准。"""
+    """龙虎榜(东财每日龙虎榜明细,市场级,按 date 过滤)。2026-09-10 实抓校准(FREE_MARKET_CAP 单位=元)。"""
 
     trade_date: str
     symbol: str
@@ -221,7 +221,9 @@ class DragonTigerItem:
     net_buy: float | None = None       # 龙虎榜净买额(元)
     buy_amt: float | None = None       # 龙虎榜买入额(元)
     sell_amt: float | None = None      # 龙虎榜卖出额(元)
+    deal_amt: float | None = None      # 龙虎榜成交额(元, BILLBOARD_DEAL_AMT)
     turnover_pct: float | None = None  # 换手率(%)
+    free_market_cap: float | None = None  # 流通市值(元, FREE_MARKET_CAP)
     # 2026-08-20: 席位级明细(ftshare 独有,东财 datacenter 公开 API 无)。仅 ftshare 填。
     top_buyers: list | None = None     # [{name, buy, sell, net}, ...] 前5买方席位
     top_sellers: list | None = None    # [{name, buy, sell, net}, ...] 前5卖方席位

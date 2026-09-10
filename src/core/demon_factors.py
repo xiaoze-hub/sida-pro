@@ -159,8 +159,11 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
     """因子重算并落库(存档)。symbols=None → 全市场有事件的股票。
 
     单次批量拉取近一年事件分组重算, 每股一条 upsert(最新快照口径)。
+    2026-09-10: 接入龙虎榜(dragon_tiger_events) → lhb 维(近一年上榜天数)
+    与 circ_mv(流通市值加分)不再恒缺数据; 榜单未覆盖的股票 n_lhb=0(真实 0)。
     """
     from src.core.demon_score import demon_score_from_events
+    from src.core.lhb_backfill import lhb_stats
     from src.db.session import SessionLocal
 
     cutoff = _year_ago()
@@ -185,6 +188,11 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
         targets = {s: by_symbol.get(s, []) for s in symbols}
     else:
         targets = by_symbol
+    try:
+        lhb = lhb_stats(symbols=None if symbols is None else list(targets.keys()))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("龙虎榜统计失败, lhb 维退回缺数据口径: %s", e)
+        lhb = {}
 
     updated = 0
     factor_date = datetime.now(_CST).strftime("%Y%m%d")
@@ -194,7 +202,12 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
             if not events:
                 continue
             name = next((e.get("name") for e in events if e.get("name")), None)
-            score = demon_score_from_events(events, circ_mv=None)
+            st = lhb.get(sym) or {}
+            # 表有数据才启用"未上榜=真实 0"口径; 统计失败/表空时传 None 保持缺数据语义
+            n_lhb = st.get("n_lhb", 0) if lhb else None
+            score = demon_score_from_events(
+                events, circ_mv=st.get("circ_mv"), n_lhb=n_lhb
+            )
             payload = {
                 "factor_date": factor_date,
                 "symbol": sym,
