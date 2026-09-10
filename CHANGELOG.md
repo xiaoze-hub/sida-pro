@@ -74,6 +74,11 @@
 - **验证**: 后端全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1991 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**; 前端 `tsc -b` + `eslint .` + `pnpm test` **41 passed** + `pnpm build`; 4 项静态门禁通过。
 - [tag v0.5.41]
 
+### update-v0.5.41 生产部署(代码+static覆盖层, chown+compileall, 冒烟 9/9, 浏览器几何验收)
+- **部署**: 备份 `/root/app_backup_pre_v0541_20260910.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → `frontend/dist` 覆盖 `/app/static` → restart → healthy → `/api/version` = **v0.5.41** → 冒烟 **9/9**(17.2s)。执行窗口 **约 12:30 午间休市**(合规)。
+- **浏览器几何验收**(桌面实例, 临时显形侧栏仅量测不改源码): 面板类名 = `absolute right-0 z-50 bottom-full pb-2`(向上); 头像 y=884~912, 面板 **557~884**(完全落在 922px 视口内, `fullyInsideViewport=true`), 内含 主题/亮色/暗色/跟随系统; 修复前面板会在 912~1239 → 整块在视口外(即"主题不见了")。
+- [tag v0.5.41]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。
