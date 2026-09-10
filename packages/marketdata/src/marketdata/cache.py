@@ -1,11 +1,25 @@
-"""带 TTL 的轻量内存缓存,线程安全,过期 key 在下次 get 时被动剔除。"""
+"""带 TTL 的轻量内存缓存,线程安全,过期 key 在下次 get 时被动剔除。
+
+2026-09-10(批次1-B): 新增 `CacheBackend` 协议 —— Engine 只依赖 `get/set` 两个方法,
+宿主可注入 **跨进程共享** 的实现(如 Redis)以消除多 worker 各自打源; 包内**不引入**
+redis 依赖, 保持可插拔。
+"""
 
 from __future__ import annotations
 
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class CacheBackend(Protocol):
+    """Engine 使用的最小缓存契约(get 未命中返回 None; ttl<=0 时 set 可忽略)。"""
+
+    def get(self, key: str) -> Any | None: ...
+
+    def set(self, key: str, value: Any, ttl_sec: float | None = None) -> None: ...
 
 
 @dataclass

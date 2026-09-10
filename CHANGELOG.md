@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### feat-数据落库/共享缓存 批次1: marketdata 缓存 Redis 化 + klines 压缩
+- **1-B(完成)**: `marketdata` 新增**可注入缓存后端** —— `cache.py` 加 `CacheBackend` 协议, `MarketData(cache_factory=)` 让 14 个 Engine 全部走工厂。应用侧 `src/core/md_redis_cache.py` 实现 **Redis 共享缓存**(同步 `redis.Redis` + dataclass↔JSON 编解码 + TTL±10% 抖动), 由 `get_market_data()` 注入 → **消除 `WEB_WORKERS=2` 下"同标的两个 worker 各拉一次"**。**降级安全**: Redis 不可用→退进程内 TTLCache; 编解码失败→当未命中(绝不返回错值); `MD_REDIS_CACHE=0` 一键回退。
+- **1-A(部分)**: 新增 `scripts/ts_storage_governance.py`(体检 + `--apply` 幂等); 本轮仅对 **`klines`** 开启压缩(其唯一索引 `(symbol,market,period,ts,source,adjust)` **含分区列 ts**, 安全)。
+- **1-A 阻塞(实测新增, 待决策)**: `l2_ticks`(7564 万行/16GB) **不能直接转 hypertable** —— 唯一索引 `uq_l2_ticks_dedupe` **不含分区列 ts**; 且 `ts` 是**入库时间**(每批同一个 `now`, 见 `history_store.persist_l2_ticks`)而非行情时间、`tick_time` 无日期 → 把 ts 加进唯一键会**破坏重拉幂等**(重复入库)。已写进设计文档 §5.1, 给出 A(事件时间化+回填 7564 万行)/B(trade_date 分区)/C(普通表 DELETE 保留) 三选项。
+- **顺带修**: `packages/marketdata/tests/test_tq_stale_guard.py` 的 `test_stale_two_days_ago` 是**既有坏测试**(floor today-1→today-3 后恒不可能通过), 改为对齐文档语义。
+- **测试**: 新增 `tests/test_md_redis_cache.py` 8 例; `packages/marketdata/tests` **199 passed**; 后端全量离线套件 **1999 passed / 2 failed(仅 KI-027 本机) / 5 skipped**; 4 项静态门禁通过。
+- [tag v0.5.42]
+
 ### docs-《数据落库与共享缓存设计》(最大化落库 · 历史可查)
 - **背景**: 老板提出"市场数据尽量落库以便查历史, 且避免多账号同时访问时各自打上游接口"。
 - **产出**: 新增 `docs/数据落库与共享缓存设计_20260910.md`(基线 main @ `e7e4e79`), 含: 现状实测盘点(见下) / 三层模型(L0 PG 定稿·L1 Redis 热·L2 实时不落库) / **14 项落库矩阵**(表名·粒度·键·写入者·保留·归属) / 存储治理 / Key 与隔离红线 / 一致性(击穿·雪崩·回填) / 可观测指标 / 3 批落地路线 / 风险回滚 / 4 个待决策点。

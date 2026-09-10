@@ -57,10 +57,17 @@ _md: MarketData | None = None
 
 
 def get_market_data() -> MarketData:
-    """进程级单例。vendor 无状态、配置现查 DB,故无需失效钩子。"""
+    """进程级单例。vendor 无状态、配置现查 DB,故无需失效钩子。
+
+    批次1-B(2026-09-10): 注入 **Redis 共享缓存**(跨 uvicorn worker), 消除
+    "同标的被两个 worker 各拉一次"; 未配置 Redis / Redis 故障时自动退回进程内缓存
+    (行为与改造前一致, 不会退化成"无缓存风暴")。
+    """
     global _md
     if _md is None:
-        _md = MarketData(config=DbConfigProvider())
+        from src.core.md_redis_cache import redis_cache_factory
+
+        _md = MarketData(config=DbConfigProvider(), cache_factory=redis_cache_factory())
     return _md
 
 

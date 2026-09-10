@@ -29,9 +29,11 @@ def test_fresh_yesterday_boundary():
     assert tq_bars_fresh([_cst(5), _cst(1)]) is True
 
 
-def test_stale_two_days_ago():
-    # 09-04 事故复现: 最新 09-02 → 陈旧
-    assert tq_bars_fresh([_cst(4), _cst(2)]) is False
+def test_stale_beyond_floor():
+    # 2026-09-10 修: floor 已由 today-1 放宽到 **today-3**(见 tq_bars_fresh docstring,
+    # 为覆盖周末+1天假期), 故"2 天前"属新鲜; 陈旧须**超过 3 天**。
+    assert tq_bars_fresh([_cst(5), _cst(4)]) is False
+    assert tq_bars_fresh([_cst(3)]) is True   # 边界: 恰好 today-3 仍算新鲜
 
 
 def test_empty_is_stale():

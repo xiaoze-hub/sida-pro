@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta
+from typing import Any, Callable
 
-from marketdata.cache import TTLCache
+from marketdata.cache import CacheBackend, TTLCache
 from marketdata.defaults import InMemoryMetricsSink
 from marketdata.engine import Engine
 from marketdata.http import record_error
@@ -59,47 +60,65 @@ INDEX_TENCENT: dict[str, str] = {
 
 
 class MarketData:
-    def __init__(self, config: ConfigProvider, metrics: MetricsSink | None = None):
+    def __init__(
+        self,
+        config: ConfigProvider,
+        metrics: MetricsSink | None = None,
+        cache_factory: "Callable[[float], CacheBackend] | None" = None,
+    ):
+        """`cache_factory(ttl) -> CacheBackend` 可注入**跨进程共享**缓存(如 Redis)。
+
+        2026-09-10(批次1-B): 默认仍是进程内 `TTLCache`; 宿主(marketdata_client)注入
+        Redis 实现后, 多个 uvicorn worker 共用同一份缓存, 消除"同标的各拉一次"。
+        """
         self.config = config
         self.metrics = metrics or InMemoryMetricsSink()
+        self._cache_factory = cache_factory
+
+        def _mk_cache(ttl: float) -> Any:
+            if self._cache_factory is not None:
+                return self._cache_factory(ttl)
+            return TTLCache(default_ttl_sec=ttl)
+
+        self._mk_cache = _mk_cache  # 供下方各 Engine 复用
         self._quote_engine = Engine(
             datatype="quote",
             vendors=build_vendors("quote"),
             config=config,
             metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=5.0),
+            cache=_mk_cache(5.0),
             default_ttl=5.0,
         )
         self._kline_engine = Engine(
             datatype="kline",
             vendors=build_vendors("kline"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=0.0), default_ttl=0.0,
+            cache=_mk_cache(0.0), default_ttl=0.0,
         )
         self._capital_flow_engine = Engine(
             datatype="capital_flow",
             vendors=build_vendors("capital_flow"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=0.0), default_ttl=0.0,
+            cache=_mk_cache(0.0), default_ttl=0.0,
         )
         # 板块/大盘资金(同花顺,免登录免费源):市场级,日频,沿用 300s TTL。
         self._board_flow_engine = Engine(
             datatype="board_capital_flow",
             vendors=build_vendors("board_capital_flow"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         self._market_flow_engine = Engine(
             datatype="market_capital_flow",
             vendors=build_vendors("market_capital_flow"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         self._events_engine = Engine(
             datatype="events",
             vendors=build_vendors("events"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=0.0), default_ttl=0.0,
+            cache=_mk_cache(0.0), default_ttl=0.0,
         )
         # flash_news(快讯 7×24)是市场级(symbols 恒空),但仍走 Engine 做主备/缓存/健康度,
         # 与 discovery(不进 Engine)的区别是:flash_news 有多源竞争、需要统一 TTL 缓存。
@@ -107,7 +126,7 @@ class MarketData:
             datatype="flash_news",
             vendors=build_vendors("flash_news"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=30.0), default_ttl=30.0,
+            cache=_mk_cache(30.0), default_ttl=30.0,
         )
         # discovery(东财热门榜)是市场级、单源、非 symbol 模型,不进 Engine/不进 DataSource
         # taxonomy —— md 直接委托给 DiscoveryVendor。
@@ -120,7 +139,7 @@ class MarketData:
             datatype="fundamentals",
             vendors=build_vendors("fundamentals"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         # 龙虎榜/融资融券/股东户数/分红:市场/资金面,均走东财 datacenter 同构接口,
         # 更新频率低(日频/期频),沿用 fundamentals 同款 300s TTL。
@@ -128,25 +147,25 @@ class MarketData:
             datatype="dragon_tiger",
             vendors=build_vendors("dragon_tiger"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         self._margin_engine = Engine(
             datatype="margin",
             vendors=build_vendors("margin"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         self._shareholders_engine = Engine(
             datatype="shareholders",
             vendors=build_vendors("shareholders"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         self._dividend_engine = Engine(
             datatype="dividend",
             vendors=build_vendors("dividend"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=300.0), default_ttl=300.0,
+            cache=_mk_cache(300.0), default_ttl=300.0,
         )
         # 北向资金(同花顺 hexin 当日分钟累计净买入):市场级、单源,更新频率为分钟级
         # 但当日累计值短期内变化不大,沿用 flash_news 同款 60s TTL(比 300s 更贴合"盘中递增")。
@@ -154,14 +173,14 @@ class MarketData:
             datatype="northbound",
             vendors=build_vendors("northbound"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=60.0), default_ttl=60.0,
+            cache=_mk_cache(60.0), default_ttl=60.0,
         )
         # TQ 扩展指标(104字段, get_more_info): 盘中实时, 5s TTL 与 quote 同步
         self._more_info_engine = Engine(
             datatype="more_info",
             vendors=build_vendors("more_info"),
             config=config, metrics=self.metrics,
-            cache=TTLCache(default_ttl_sec=5.0), default_ttl=5.0,
+            cache=_mk_cache(5.0), default_ttl=5.0,
         )
 
     def klines(self, symbol: str, *, market: str, days: int = 120, min_count: int = 1) -> list:
