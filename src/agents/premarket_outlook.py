@@ -1449,37 +1449,77 @@ class PremarketOutlookAgent(BaseAgent):
         else:
             logger.error("[%s] 盘前分析保存历史记录失败", trace_id)
 
-        # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程
+        # C4(批次C, 2026-09-06): 盘前埋伏简报推送(站内+外发渠道), 失败静默不拖垮主流程。
+        # M7(2026-09-10): ①只推本人(user_id, 不再 user_id=None 全局广播给所有人);
+        #                 ②与主报告共用"安静时段 + 12h 去重"闸, 手动/定时重复触发不再重复推。
         try:
             from src.core.notify_center import push_notification
+            from src.core.notify_dedupe import (
+                build_notify_dedupe_key,
+                check_and_mark_notify,
+            )
 
-            _mood = data.get("mood") or {}
-            _ab = data.get("ambush_scored") or data.get("ambush_list") or []
-            _top = [
-                f"[{a.get('symbol')}] {a.get('catalyst')} 埋伏分{a.get('ambush_total')}({a.get('action', '')})"
-                for a in _ab[:3]
-                if isinstance(a, dict)
-            ]
-            _mood_line = (
-                f"{_mood.get('label')} 容许度{_mood.get('allowance')}/10"
-                if _mood.get("available")
-                else "无数据"
+            uid = _resolve_user_id(context)
+            policy = getattr(context, "notify_policy", None)
+            quiet = False
+            if policy is not None:
+                try:
+                    quiet = bool(policy.is_quiet_now())
+                except Exception:
+                    quiet = False
+            _brief_title = f"盘前埋伏简报 {analysis_date}"
+            _dedupe_ttl = 12 * 60
+            _scope = (
+                f"__notify__:"
+                f"{build_notify_dedupe_key(self.name, _brief_title, uid or '*')}"
             )
-            _body = (
-                f"情绪: {_mood_line}\n"
-                f"埋伏候选 Top{len(_top)}:\n" + ("\n".join(_top) if _top else "今日无候选(漏斗过滤后为空)")
-                + f"\n催化日历(30天): {len(data.get('catalyst_local') or [])} 条"
+            allowed = check_and_mark_notify(
+                agent_name=self.name, scope=_scope, ttl_minutes=_dedupe_ttl, mark=False
             )
-            await asyncio.to_thread(
-                push_notification,
-                f"盘前埋伏简报 {analysis_date}",
-                _body,
-                category="report",
-                level="info",
-                source="premarket_outlook",
-                trace_id=trace_id,
-            )
-            logger.info("[%s] 盘前埋伏简报已推送", trace_id)
+
+            if quiet or not allowed:
+                logger.info(
+                    "[%s] 盘前埋伏简报跳过(quiet=%s deduped=%s) user=%s",
+                    trace_id,
+                    quiet,
+                    not allowed,
+                    (uid or "global")[:8],
+                )
+            else:
+                _mood = data.get("mood") or {}
+                _ab = data.get("ambush_scored") or data.get("ambush_list") or []
+                _top = [
+                    f"[{a.get('symbol')}] {a.get('catalyst')} 埋伏分{a.get('ambush_total')}({a.get('action', '')})"
+                    for a in _ab[:3]
+                    if isinstance(a, dict)
+                ]
+                _mood_line = (
+                    f"{_mood.get('label')} 容许度{_mood.get('allowance')}/10"
+                    if _mood.get("available")
+                    else "无数据"
+                )
+                _body = (
+                    f"情绪: {_mood_line}\n"
+                    f"埋伏候选 Top{len(_top)}:\n"
+                    + ("\n".join(_top) if _top else "今日无候选(漏斗过滤后为空)")
+                    + f"\n催化日历(30天): {len(data.get('catalyst_local') or [])} 条"
+                )
+                await asyncio.to_thread(
+                    push_notification,
+                    _brief_title,
+                    _body,
+                    category="report",
+                    level="info",
+                    source="premarket_outlook",
+                    trace_id=trace_id,
+                    user_id=uid,
+                )
+                check_and_mark_notify(
+                    agent_name=self.name, scope=_scope, ttl_minutes=_dedupe_ttl, mark=True
+                )
+                logger.info(
+                    "[%s] 盘前埋伏简报已推送 user=%s", trace_id, (uid or "global")[:8]
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] 盘前简报推送失败(不影响主流程): %s", trace_id, e)
 

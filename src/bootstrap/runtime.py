@@ -38,6 +38,9 @@ from src.web.models import (
 
 logger = logging.getLogger("server")
 
+# M7(2026-09-10): 区分"不过滤用户"(旧调用方) 与 "过滤 user_id IS NULL"(遗留共享桶)。
+_UNSET: object = object()
+
 
 # 全局 scheduler 实例，供 agents API 调用
 scheduler: AgentScheduler | None = None
@@ -54,8 +57,14 @@ kline_backfill_scheduler: KlineBackfillScheduler | None = None
 _kline_oneoff_loop: asyncio.AbstractEventLoop | None = None
 
 
-def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
-    """从数据库加载某个 Agent 关联的自选股"""
+def load_watchlist_for_agent(agent_name: str, user_id: str | None = _UNSET) -> list[StockConfig]:  # type: ignore[assignment]
+    """从数据库加载某个 Agent 关联的自选股。
+
+    M7(2026-09-10 多用户隔离): 新增 user_id 归属过滤。
+    - user_id 不传(_UNSET) → 不过滤(兼容旧调用方);
+    - user_id=None → 只取归属为空的遗留共享标的(user_id IS NULL);
+    - user_id="<uuid>" → 只取该用户的标的。
+    """
     db = SessionLocal()
     try:
         stock_agents = (
@@ -66,7 +75,12 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
             return []
 
         # 绑定优先：只要绑定了 Agent，就纳入执行范围
-        stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
+        q = db.query(Stock).filter(Stock.id.in_(stock_ids))
+        if user_id is not _UNSET:
+            q = q.filter(
+                Stock.user_id.is_(None) if user_id is None else Stock.user_id == user_id
+            )
+        stocks = q.all()
         result = []
         for s in stocks:
             try:
@@ -85,8 +99,39 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
         db.close()
 
 
-def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
-    """从数据库加载某个 Agent 关联股票的持仓信息（包括多账户）"""
+def agent_user_buckets(agent_name: str) -> list[str | None]:
+    """M7(2026-09-10): 列出该 agent 应按哪些用户分别执行(去重, 保序)。
+
+    取自该 agent 绑定标的(`stock_agents`)的归属 `stocks.user_id`; 无绑定返回 [] →
+    调度器退回单次全量执行(兼容没有 stock_agents 绑定的 agent)。None 表示归属为空的
+    遗留共享桶。
+    """
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Stock.user_id)
+            .join(StockAgent, StockAgent.stock_id == Stock.id)
+            .filter(StockAgent.agent_name == agent_name)
+            .all()
+        )
+        out: list[str | None] = []
+        seen: set[str | None] = set()
+        for (uid,) in rows:
+            if uid in seen:
+                continue
+            seen.add(uid)
+            out.append(uid)
+        return out
+    finally:
+        db.close()
+
+
+def load_portfolio_for_agent(agent_name: str, user_id: str | None = _UNSET) -> PortfolioInfo:  # type: ignore[assignment]
+    """从数据库加载某个 Agent 关联股票的持仓信息（包括多账户）。
+
+    M7(2026-09-10 多用户隔离): user_id 过滤口径同 `load_watchlist_for_agent`
+    (不传=不过滤 / None=遗留共享账户 / uuid=该用户账户)。
+    """
     from src.web.models import Account, Position
 
     db = SessionLocal()
@@ -99,8 +144,13 @@ def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
         if not stock_ids:
             return PortfolioInfo()
 
-        # 获取所有启用的账户
-        accounts = db.query(Account).filter(Account.enabled == True).all()
+        # 获取启用的账户(按归属过滤)
+        acc_q = db.query(Account).filter(Account.enabled == True)
+        if user_id is not _UNSET:
+            acc_q = acc_q.filter(
+                Account.user_id.is_(None) if user_id is None else Account.user_id == user_id
+            )
+        accounts = acc_q.all()
 
         account_infos = []
         for acc in accounts:
@@ -283,11 +333,35 @@ def resolve_ai_model(
 
 
 def resolve_notify_channels(
-    agent_name: str, stock_agent_id: int | None = None
+    agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
 ) -> list[NotifyChannel]:
-    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)"""
+    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)。
+
+    M7(2026-09-10 多用户隔离): 传入具体 user_id 时, 只取**该用户自己的渠道 +
+    全局共享(user_id IS NULL)渠道** —— 不再借用 agent 级全局渠道(那是 owner 的),
+    避免 A 的报告发到 B 的渠道。user_id 不传/为 None 时保持旧行为。
+    """
     db = SessionLocal()
     try:
+        # 0) 指定用户: 用户渠道 ∪ 全局共享渠道(与 notify_center._build_notifier 同口径)
+        if user_id is not _UNSET and user_id is not None:
+            from sqlalchemy import or_ as _or_
+
+            channels = (
+                db.query(NotifyChannel)
+                .filter(
+                    NotifyChannel.enabled == True,  # noqa: E712
+                    _or_(
+                        NotifyChannel.user_id == user_id,
+                        NotifyChannel.user_id.is_(None),
+                    ),
+                )
+                .all()
+            )
+            for ch in channels:
+                db.expunge(ch)
+            return channels
+
         channel_ids = None
 
         # 1. stock_agent 级别覆盖
@@ -393,17 +467,35 @@ def _build_ai_client(
     )
 
 
-def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentContext:
-    """为指定 Agent 构建运行上下文"""
+def build_context(
+    agent_name: str, stock_agent_id: int | None = None, user_id: str | None = _UNSET  # type: ignore[assignment]
+) -> AgentContext:
+    """为指定 Agent 构建运行上下文。
+
+    M7(2026-09-10 多用户隔离): 传入 user_id 时, 自选/持仓/通知渠道/画像全部收敛到
+    该用户(建议与历史以该 user_id 落库, 不再写成人人可见的共享行); 不传时保持原全量行为。
+    """
     settings = Settings()
-    watchlist = load_watchlist_for_agent(agent_name)
-    portfolio = load_portfolio_for_agent(agent_name)
+    watchlist = load_watchlist_for_agent(agent_name, user_id)
+    portfolio = load_portfolio_for_agent(agent_name, user_id)
     proxy = _get_proxy() or settings.http_proxy
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
     ai_client = _build_ai_client(model, service, proxy)
-    channels = resolve_notify_channels(agent_name, stock_agent_id)
+    channels = resolve_notify_channels(agent_name, stock_agent_id, user_id=user_id)
     notifier = _build_notifier(channels)
+
+    user_obj = None
+    if user_id is not _UNSET and user_id is not None:
+        from src.web.models import User
+
+        db = SessionLocal()
+        try:
+            user_obj = db.query(User).filter(User.id == user_id).first()
+            if user_obj is not None:
+                db.expunge(user_obj)
+        finally:
+            db.close()
 
     model_label = f"{service.name}/{model.model}" if model and service else ""
     config = AppConfig(settings=settings, watchlist=watchlist)
@@ -414,6 +506,7 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
         portfolio=portfolio,
         model_label=model_label,
         notify_policy=getattr(notifier, "policy", None),
+        user=user_obj,
     )
 
 
@@ -425,6 +518,8 @@ def build_scheduler() -> AgentScheduler:
 
     # 设置 context 构建函数（每次执行时动态获取最新配置）
     sched.set_context_builder(build_context)
+    # M7(2026-09-10 多用户隔离): 按绑定标的归属把 agent 拆成"每用户一次"执行
+    sched.set_user_bucket_resolver(agent_user_buckets)
 
     db = SessionLocal()
     try:
@@ -537,8 +632,94 @@ def get_agent_config(agent_name: str) -> dict:
         db.close()
 
 
-async def trigger_agent(agent_name: str) -> str:
-    """手动触发 Agent 执行（根据执行模式处理）"""
+async def _trigger_agent_once(
+    agent_name: str,
+    agent_cls,
+    user_id: str | None,
+    trace_id: str,
+    start: float,
+) -> str | None:
+    """执行单个用户桶的手动触发; 该桶无关联自选返回 None。"""
+    watchlist = load_watchlist_for_agent(agent_name, user_id)
+    logger.info(
+        f"[watchlist] Agent={agent_name} user={(user_id or 'shared')[:8]} "
+        f"count={len(watchlist)} symbols={[s.symbol for s in watchlist]}"
+    )
+    if not watchlist:
+        return None
+
+    model, service = resolve_ai_model(agent_name)
+    channels = resolve_notify_channels(agent_name, user_id=user_id)
+    _log_trigger_info(agent_name, watchlist, model, service, channels)
+
+    context = build_context(agent_name, user_id=user_id)
+    execution_mode = get_agent_execution_mode(agent_name)
+    agent_config = get_agent_config(agent_name)
+
+    # 根据配置初始化 Agent
+    if agent_config:
+        agent = agent_cls(**agent_config)
+    else:
+        agent = agent_cls()
+
+    try:
+        if execution_mode == "single" and hasattr(agent, "run_single"):
+            # 单只模式：逐只股票分析
+            results = []
+            for stock in watchlist:
+                result = await agent.run_single(context, stock.symbol)
+                if result:
+                    results.append(f"{stock.name}: {result.content[:100]}...")
+            msg = "\n\n".join(results) if results else "无异动"
+            record_agent_run(
+                agent_name=agent_name,
+                status="success",
+                result=msg,
+                duration_ms=int((time.monotonic() - start) * 1000),
+                trace_id=trace_id,
+                trigger_source="manual",
+                model_label=context.model_label,
+            )
+            return msg
+        else:
+            # 批量模式：所有股票一起分析
+            result = await agent.run(context)
+            raw = result.raw_data or {}
+            record_agent_run(
+                agent_name=agent_name,
+                status="success",
+                result=result.content,
+                duration_ms=int((time.monotonic() - start) * 1000),
+                trace_id=trace_id,
+                trigger_source="manual",
+                notify_attempted=(
+                    "notified" in raw
+                    or "notify_error" in raw
+                    or "notify_skipped" in raw
+                ),
+                notify_sent=bool(raw.get("notified", False)),
+                model_label=context.model_label,
+            )
+            return result.content
+    except Exception as e:
+        record_agent_run(
+            agent_name=agent_name,
+            status="failed",
+            error=str(e),
+            duration_ms=int((time.monotonic() - start) * 1000),
+            trace_id=trace_id,
+            trigger_source="manual",
+            model_label=context.model_label,
+        )
+        raise
+
+
+async def trigger_agent(agent_name: str, user_id: str | None = None) -> str:
+    """手动触发 Agent 执行（根据执行模式处理）。
+
+    M7(2026-09-10 多用户隔离): user_id 指定 → 只跑该用户; 不指定 → 按绑定标的归属
+    逐用户跑(回溯修复"把多用户自选混成一份分析且落库为共享行")。
+    """
     start = time.monotonic()
     trace_id = f"man-{agent_name}-{int(time.time() * 1000)}"
     agent_cls = AGENT_REGISTRY.get(agent_name)
@@ -552,77 +733,19 @@ async def trigger_agent(agent_name: str) -> str:
         event="trigger_agent",
         tags={"trigger_source": "manual"},
     ):
-        watchlist = load_watchlist_for_agent(agent_name)
-        logger.info(
-            f"[watchlist] Agent={agent_name} count={len(watchlist)} symbols={[s.symbol for s in watchlist]}"
+        buckets: list[str | None] = (
+            [user_id] if user_id else (agent_user_buckets(agent_name) or [None])
         )
-        if not watchlist:
-            return f"Agent {agent_name} 没有关联的自选股"
-
-        model, service = resolve_ai_model(agent_name)
-        channels = resolve_notify_channels(agent_name)
-        _log_trigger_info(agent_name, watchlist, model, service, channels)
-
-        context = build_context(agent_name)
-        execution_mode = get_agent_execution_mode(agent_name)
-        agent_config = get_agent_config(agent_name)
-
-        # 根据配置初始化 Agent
-        if agent_config:
-            agent = agent_cls(**agent_config)
-        else:
-            agent = agent_cls()
-
-        try:
-            if execution_mode == "single" and hasattr(agent, "run_single"):
-                # 单只模式：逐只股票分析
-                results = []
-                for stock in watchlist:
-                    result = await agent.run_single(context, stock.symbol)
-                    if result:
-                        results.append(f"{stock.name}: {result.content[:100]}...")
-                msg = "\n\n".join(results) if results else "无异动"
-                record_agent_run(
-                    agent_name=agent_name,
-                    status="success",
-                    result=msg,
-                    duration_ms=int((time.monotonic() - start) * 1000),
-                    trace_id=trace_id,
-                    trigger_source="manual",
-                    model_label=context.model_label,
-                )
-                return msg
-            else:
-                # 批量模式：所有股票一起分析
-                result = await agent.run(context)
-                raw = result.raw_data or {}
-                record_agent_run(
-                    agent_name=agent_name,
-                    status="success",
-                    result=result.content,
-                    duration_ms=int((time.monotonic() - start) * 1000),
-                    trace_id=trace_id,
-                    trigger_source="manual",
-                    notify_attempted=(
-                        "notified" in raw
-                        or "notify_error" in raw
-                        or "notify_skipped" in raw
-                    ),
-                    notify_sent=bool(raw.get("notified", False)),
-                    model_label=context.model_label,
-                )
-                return result.content
-        except Exception as e:
-            record_agent_run(
-                agent_name=agent_name,
-                status="failed",
-                error=str(e),
-                duration_ms=int((time.monotonic() - start) * 1000),
-                trace_id=trace_id,
-                trigger_source="manual",
-                model_label=context.model_label,
+        outputs: list[str] = []
+        for uid in buckets:
+            out = await _trigger_agent_once(
+                agent_name, agent_cls, uid, trace_id, start
             )
-            raise
+            if out:
+                outputs.append(out)
+        if not outputs:
+            return f"Agent {agent_name} 没有关联的自选股"
+        return "\n\n".join(outputs)
 
 
 async def trigger_agent_for_stock(

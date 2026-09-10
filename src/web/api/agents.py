@@ -389,8 +389,9 @@ async def trigger_agent_endpoint(
         description="是否同步等待执行完成；batch agent 默认异步排队",
     ),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """手动触发 Agent 执行"""
+    """手动触发 Agent 执行(M7: 需要登录; 只跑当前用户的自选/持仓)"""
     agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
     if not agent:
         raise HTTPException(404, f"Agent {agent_name} 不存在")
@@ -410,12 +411,13 @@ async def trigger_agent_endpoint(
             _spawn_async_run(
                 trigger_agent,
                 agent_name,
+                user.id,
                 name=f"trigger_agent:{agent_name}",
                 notify_label=(agent.display_name or agent_name),
             )
             return {"ok": True, "queued": True, "message": "已提交后台执行"}
 
-        result = await trigger_agent(agent_name)
+        result = await trigger_agent(agent_name, user.id)
         return {"ok": True, "queued": False, "message": result}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -940,8 +942,8 @@ async def scan_intraday(
     agent_cfg = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
     agent_kwargs = agent_cfg.config if agent_cfg and agent_cfg.config else {}
 
-    # 只获取关联了盘中监测 Agent 的股票
-    watchlist = load_watchlist_for_agent(agent_name)
+    # 只获取关联了盘中监测 Agent 的股票(M7: 收敛到当前登录用户, 不扫别人的自选)
+    watchlist = load_watchlist_for_agent(agent_name, user.id)
 
     if not watchlist:
         return {
@@ -971,8 +973,8 @@ async def scan_intraday(
     if cached is not None:
         return cached
 
-    # 获取持仓信息
-    portfolio = load_portfolio_for_agent(agent_name)
+    # 获取持仓信息(M7: 只取当前用户账户)
+    portfolio = load_portfolio_for_agent(agent_name, user.id)
 
     # 按市场分组采集行情
     market_symbols: dict[MarketCode, list] = {}
@@ -1026,7 +1028,7 @@ async def scan_intraday(
             premarket_analysis = None
 
         try:
-            scan_context = build_context(agent_name)
+            scan_context = build_context(agent_name, user_id=user.id)
             original_watchlist = scan_context.config.watchlist
             scan_context.config.watchlist = active_watchlist
             sym_list = [(s.symbol, s.market, s.name) for s in active_watchlist]
@@ -1127,7 +1129,7 @@ async def scan_intraday(
     # AI 分析
     if analyze and results:
         try:
-            context = scan_context or build_context(agent_name)
+            context = scan_context or build_context(agent_name, user_id=user.id)
             agent = monitor_agent
 
             ai_sem = asyncio.Semaphore(3)

@@ -5,7 +5,15 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
-## 2026-09-09
+## 2026-09-10
+
+### fix-定时/手动 Agent 多用户隔离 + 盘前简报重复推送(M7)
+- **根因**: 调度(`build_scheduler` 每 agent 一个 job)与手动触发都走 `build_context(agent_name)`, **不带用户** → 一个 job 把**所有用户**绑定到该 agent 的自选混成一份 prompt; 建议/历史以 `user_id=None` 落库, 而 `user_id=None` 在 `list_suggestions`/历史查询里是"**共享行, 人人可见**"。生产实测: `premarket_outlook` 绑定 **40 只跨 3 个用户**(admin 2 / 娟姐 3 / 黄磊 35), 共享建议 64 条含他人标的。
+- **隔离**: `load_watchlist_for_agent` / `load_portfolio_for_agent` 增 `user_id` 归属过滤(不传=旧行为 / None=遗留共享桶 / uuid=该用户); `build_context(agent, user_id=)` 收敛自选/持仓/AI 渠道并注入 `context.user`; 新增 `agent_user_buckets` 按绑定标的归属拆用户桶; `AgentScheduler._build_contexts` 逐用户桶执行(空自选桶跳过), 旧签名 builder 自动回退; 手动 `trigger_agent(agent_name, user_id)` 同口径; `/api/agents/{name}/trigger` 增 `Depends(get_current_user)`(**该端点此前无鉴权**, 兼按用户收敛); `intraday/scan` 端点 4 处调用改带 `user.id`。
+- **双推送**: 盘前「埋伏简报」原 `push_notification(user_id=None)` → 全局站内(所有用户可见)+ 绕过安静时段/去重; 现改为**只推本人(user_id)** 且复用"安静时段 + 12h 去重"闸; `_push_to_subscribers` 跳过"本轮已按用户桶投递"的订阅者, 消除同一份完整报告重复外发。
+- **测试**: 新增 `tests/test_multiuser_agent_scope.py`(4 例: 用户桶去重保序 / 归属过滤不串号 / 空自选桶跳过 / 无解析器与旧签名回退)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1989 passed / 4 failed / 5 skipped**(4 类均为环境: 2 个 KI-027 本机损坏文件 + `test_tencent_data_sources` 2 例直连腾讯面板接口, 探针实测 `fetch_price_distribution→None`、`big_order_stats→全 0`, 与本改动无关); 4 项静态门禁通过; `import server` OK。
+- [tag v0.5.37]
 
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
