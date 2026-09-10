@@ -48,10 +48,12 @@ def _to_int(value) -> int | None:
         return None
 
 
-def _datacenter_get(report: str, filter_str: str, sort_col: str, page_size: int = 50) -> list[dict]:
+def _datacenter_get(
+    report: str, filter_str: str, sort_col: str, page_size: int = 50, page: int = 1
+) -> list[dict]:
     """东财 datacenter 统一请求 helper:GET datacenter-web.eastmoney.com/api/data/v1/get。
 
-    防御:请求失败或响应结构不含 result.data 一律返回 []。
+    防御:请求失败或响应结构不含 result.data 一律返回 []。page 供分页循环使用。
     """
     resp = market_get(
         _DATACENTER_URL,
@@ -60,7 +62,7 @@ def _datacenter_get(report: str, filter_str: str, sort_col: str, page_size: int 
             "reportName": report,
             "columns": "ALL",
             "filter": filter_str,
-            "pageNumber": 1,
+            "pageNumber": page,
             "pageSize": page_size,
             "sortColumns": sort_col,
             "sortTypes": -1,
@@ -131,6 +133,47 @@ class EastmoneyDragonTigerVendor(DragonTigerVendor):
 
 
 # ============================== 融资融券(按 symbol) ==============================
+
+# ============================== 龙虎榜明细(机构/营业部, 2026-09-10) ==============
+_REPORT_LHB_SEATS_BUY = "RPT_BILLBOARD_DAILYDETAILSBUY"
+_REPORT_LHB_SEATS_SELL = "RPT_BILLBOARD_DAILYDETAILSSELL"
+_REPORT_LHB_INST = "RPT_ORGANIZATION_TRADE_DETAILS"
+_LHB_PAGE = 500
+_LHB_MAX_PAGES = 12  # 上限防失控(单日单报告 ~320 行, 12 页足够)
+
+
+def _datacenter_get_all(report: str, filter_str: str, sort_col: str) -> list[dict]:
+    """分页拉全量(东财单页上限 500; 到最后一页或达上限停止)。"""
+    out: list[dict] = []
+    for page in range(1, _LHB_MAX_PAGES + 1):
+        rows = _datacenter_get(report, filter_str, sort_col, page_size=_LHB_PAGE, page=page)
+        out.extend(rows)
+        if len(rows) < _LHB_PAGE:
+            break
+    return out
+
+
+def _day_filter(date: str) -> str:
+    d = str(date or "").strip()
+    if len(d) == 8:
+        d = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    return f"(TRADE_DATE>='{d}')(TRADE_DATE<='{d}')"
+
+
+def fetch_lhb_institutions(date: str) -> list[dict]:
+    """东财机构买卖统计(单日): 原始行列表(字段见映射注释), 失败返回 []。"""
+    if not date:
+        return []
+    return _datacenter_get_all(_REPORT_LHB_INST, _day_filter(date), "TRADE_DATE")
+
+
+def fetch_lhb_seat_details(date: str, side: str) -> list[dict]:
+    """东财营业部买卖明细(单日, side=buy|sell): 原始行列表, 失败返回 []。"""
+    if not date or side not in ("buy", "sell"):
+        return []
+    report = _REPORT_LHB_SEATS_BUY if side == "buy" else _REPORT_LHB_SEATS_SELL
+    return _datacenter_get_all(report, _day_filter(date), "TRADE_DATE")
+
 
 _REPORT_MARGIN = "RPTA_WEB_RZRQ_GGMX"
 

@@ -290,3 +290,73 @@ def dragon_tiger_tdx_seats(ref_id: str):
     from src.core import tdx_lhb
 
     return tdx_lhb.seats(ref_id)
+
+
+# ── 龙虎榜机构/营业部明细(东财, 全自动定时入库, 2026-09-10) ──────────────────
+@router.get("/lhb-institution")
+def lhb_institution(date: str | None = None, symbol: str | None = None, days: int = 0, limit: int = 2000):
+    """机构买卖统计(含上榜后 1/2/3/5/10 日涨幅): date 或 symbol 至少一个。"""
+    if not date and not (symbol and symbol.strip()):
+        raise HTTPException(status_code=400, detail="date 与 symbol 至少一个")
+    limit = max(min(int(limit), 5000), 1)
+    params: dict = {"lim": limit}
+    where = []
+    if date:
+        where.append("trade_date = :d")
+        params["d"] = _norm_date(date)
+    if symbol and symbol.strip():
+        where.append("symbol = :sym")
+        params["sym"] = symbol.strip()
+        if days and days > 0:
+            from datetime import datetime, timedelta
+            from zoneinfo import ZoneInfo
+
+            start = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=int(days))).strftime("%Y%m%d")
+            where.append("trade_date >= :start")
+            params["start"] = start
+    rows = _fetch_rows(
+        f"SELECT * FROM lhb_institution_daily WHERE {' AND '.join(where)}"
+        " ORDER BY trade_date DESC, symbol ASC LIMIT :lim",
+        params,
+    )
+    return {"count": len(rows), "note": "空=无覆盖(非交易日或不含机构上榜)" if not rows else "", "items": rows}
+
+
+@router.get("/lhb-seats")
+def lhb_seats(
+    date: str | None = None,
+    symbol: str | None = None,
+    side: str | None = None,
+    days: int = 0,
+    limit: int = 2000,
+):
+    """营业部席位明细: date 或 symbol 至少一个; side=buy|sell 可选。"""
+    if not date and not (symbol and symbol.strip()):
+        raise HTTPException(status_code=400, detail="date 与 symbol 至少一个")
+    limit = max(min(int(limit), 5000), 1)
+    if side and side not in ("buy", "sell"):
+        raise HTTPException(status_code=400, detail="side 仅支持 buy/sell")
+    params: dict = {"lim": limit}
+    where = []
+    if date:
+        where.append("trade_date = :d")
+        params["d"] = _norm_date(date)
+    if symbol and symbol.strip():
+        where.append("symbol = :sym")
+        params["sym"] = symbol.strip()
+        if days and days > 0:
+            from datetime import datetime, timedelta
+            from zoneinfo import ZoneInfo
+
+            start = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=int(days))).strftime("%Y%m%d")
+            where.append("trade_date >= :start")
+            params["start"] = start
+    if side:
+        where.append("side = :side")
+        params["side"] = side
+    rows = _fetch_rows(
+        f"SELECT * FROM lhb_seat_details WHERE {' AND '.join(where)}"
+        " ORDER BY trade_date DESC, symbol ASC, side ASC, net_amt DESC LIMIT :lim",
+        params,
+    )
+    return {"count": len(rows), "note": "空=无覆盖(非交易日或榜单无营业部明细)" if not rows else "", "items": rows}
