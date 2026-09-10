@@ -72,7 +72,7 @@ def test_auto_outside_hours_uses_daily_no_live_call(monkeypatch):
 
     monkeypatch.setattr(boards_api, "fetch_block_snapshots", _boom)
 
-    body = client.get("/api/boards/heatmap?type=industry").json()
+    body = client.get("/api/boards/heatmap?source=ths&type=industry").json()
     assert calls["n"] == 0
     assert body["live"] is False and body["as_of"] is None
     sem = next(i for i in body["items"] if i["block_code"] == "URFI0001")
@@ -92,7 +92,7 @@ def test_auto_in_hours_merges_live_snapshot(monkeypatch):
         },
     )
 
-    body = client.get("/api/boards/heatmap?type=industry").json()
+    body = client.get("/api/boards/heatmap?source=ths&type=industry").json()
     assert body["live"] is True and body["as_of"]
     sem = next(i for i in body["items"] if i["block_code"] == "URFI0001")
     assert sem["change_pct"] == 3.2           # 实时覆盖
@@ -113,7 +113,7 @@ def test_live_1_forces_outside_hours(monkeypatch):
         boards_api, "fetch_block_snapshots",
         lambda codes, **k: {"URFI0001": {"change_pct": 4.4, "fund_net": None, "volume_ratio": None, "speed": None}},
     )
-    body = client.get("/api/boards/heatmap?type=industry&live=1").json()
+    body = client.get("/api/boards/heatmap?source=ths&type=industry&live=1").json()
     assert body["live"] is True
     sem = next(i for i in body["items"] if i["block_code"] == "URFI0001")
     assert sem["change_pct"] == 4.4
@@ -129,7 +129,7 @@ def test_live_0_never_calls_even_in_hours(monkeypatch):
         boards_api, "fetch_block_snapshots",
         lambda codes, **k: (calls.__setitem__("n", calls["n"] + 1), {})[1],
     )
-    body = client.get("/api/boards/heatmap?type=industry&live=0").json()
+    body = client.get("/api/boards/heatmap?source=ths&type=industry&live=0").json()
     assert calls["n"] == 0 and body["live"] is False
 
 
@@ -142,7 +142,7 @@ def test_live_fetch_failure_falls_back_to_daily(monkeypatch):
         raise RuntimeError("thsdk down")
 
     monkeypatch.setattr(boards_api, "fetch_block_snapshots", _boom)
-    body = client.get("/api/boards/heatmap?type=industry").json()
+    body = client.get("/api/boards/heatmap?source=ths&type=industry").json()
     assert body["live"] is False
     sem = next(i for i in body["items"] if i["block_code"] == "URFI0001")
     assert sem["change_pct"] == 1.0  # 回落日线, 不报错
@@ -159,15 +159,15 @@ def test_live_cache_single_flight_within_ttl(monkeypatch):
         return {"URFI0001": {"change_pct": 1.1, "fund_net": None, "volume_ratio": None, "speed": None}}
 
     monkeypatch.setattr(boards_api, "fetch_block_snapshots", _snap)
-    client.get("/api/boards/heatmap?type=industry")
-    client.get("/api/boards/heatmap?type=industry")
+    client.get("/api/boards/heatmap?source=ths&type=industry")
+    client.get("/api/boards/heatmap?source=ths&type=industry")
     assert calls["n"] == 1  # 60s TTL 内只拉一次
     boards_api._clear_live_cache()
-    client.get("/api/boards/heatmap?type=industry")
+    client.get("/api/boards/heatmap?source=ths&type=industry")
     assert calls["n"] == 2
 
 
 def test_live_bad_param_400():
     client, Session = _client()
     _seed(Session)
-    assert client.get("/api/boards/heatmap?type=industry&live=maybe").status_code == 400
+    assert client.get("/api/boards/heatmap?source=ths&type=industry&live=maybe").status_code == 400

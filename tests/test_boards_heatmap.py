@@ -55,7 +55,7 @@ def test_heatmap_returns_latest_per_board():
     db.commit()
     db.close()
 
-    resp = client.get("/api/boards/heatmap?type=industry")
+    resp = client.get("/api/boards/heatmap?source=ths&type=industry")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["trade_date"] == "2026-09-10"
@@ -82,7 +82,7 @@ def test_heatmap_keeps_older_latest_for_stale_board():
     db.commit()
     db.close()
 
-    resp = client.get("/api/boards/heatmap?type=industry")
+    resp = client.get("/api/boards/heatmap?source=ths&type=industry")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["count"] == 2
@@ -103,7 +103,7 @@ def test_heatmap_includes_boards_without_daily_as_nodata():
     db.commit()
     db.close()
 
-    resp = client.get("/api/boards/heatmap?type=industry")
+    resp = client.get("/api/boards/heatmap?source=ths&type=industry")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["count"] == 2
@@ -125,12 +125,12 @@ def test_heatmap_filters_by_type_and_rejects_invalid():
     db.commit()
     db.close()
 
-    resp = client.get("/api/boards/heatmap?type=concept")
+    resp = client.get("/api/boards/heatmap?source=ths&type=concept")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert [i["block_code"] for i in body["items"]] == ["URFI9001"]
 
-    bad = client.get("/api/boards/heatmap?type=foo")
+    bad = client.get("/api/boards/heatmap?source=ths&type=foo")
     assert bad.status_code == 400
 
 
@@ -149,7 +149,7 @@ def test_heatmap_sorted_by_change_pct_desc_nulls_last():
     db.commit()
     db.close()
 
-    resp = client.get("/api/boards/heatmap?type=industry")
+    resp = client.get("/api/boards/heatmap?source=ths&type=industry")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert [i["name"] for i in body["items"]] == ["A", "B", "C"]
@@ -159,7 +159,7 @@ def test_heatmap_sorted_by_change_pct_desc_nulls_last():
 def test_heatmap_empty_db_returns_empty():
     """空库 → items=[], trade_date=None, count=0(UI 空态走"等待每日同步"文案)。"""
     client, Session = _client()
-    resp = client.get("/api/boards/heatmap?type=industry")
+    resp = client.get("/api/boards/heatmap?source=ths&type=industry")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["items"] == []
