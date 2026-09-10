@@ -34,6 +34,11 @@
 - **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1981 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**。
 - [tag v0.5.38]
 
+### update-v0.5.38 生产部署(代码覆盖层, chown+compileall, 冒烟 9/9, 只读验收)
+- **部署**: 备份 `/root/app_backup_pre_v0538_20260910.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy → `/api/version` = **v0.5.38** → 冒烟 **9/9**(6.5s)。纯后端。
+- **只读验收**(09:55 仍在悟道限流窗口内): 容器内 `fetch_auction_raw()` 实测 `limited=True` 且 `opening_snapshot.source=tencent_fallback`、内含真实竞价高开榜(24 只, 如 601318 +0.40% / 600519 +0.01%) → 降级链生效, agent 不再拿空 prompt。
+- [tag v0.5.38]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。
