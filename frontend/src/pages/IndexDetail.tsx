@@ -50,7 +50,10 @@ interface IndexDetail {
 
 // 成交额柱状图(大盘资金流替代: 近20日成交额)
 function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
-  if (trend.length === 0) return null
+  // B5 三态审计修复(2026-09-10): 空数据显式给文案 —— 标题下静默消失会被误读为渲染失败
+  if (trend.length === 0) {
+    return <div className="py-6 text-center text-[12px] text-muted-foreground">暂无成交额趋势数据</div>
+  }
   const maxA = Math.max(...trend.map(t => t.amount))
   const W = 720, H = 90
   const bw = W / trend.length

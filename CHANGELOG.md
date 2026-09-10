@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### chore-P3-4 三态覆盖审计 (OpenTerminal 借鉴 B5): 主数据面 加载/空/错 清单 + 修 1 处静默空白
+- **审计交付**: `docs/research/三态覆盖审计_20260910.md` —— 14 个主数据面 × 三态矩阵(方法: 代码扫描 `Skeleton/暂无/catch` + 关键组件逐个人工复核); 结论: 主面基本齐备(多为 Skeleton + 空态引导文案 + ErrorBanner, 与既有基建一致)。
+- **修复(P1)**: `frontend/src/pages/IndexDetail.tsx` 成交额趋势 `AmountChart` 空数组原 `return null` → 标题下静默空白(易被误读为渲染失败), 改为显式"暂无成交额趋势数据"。
+- **遗留留痕(非 P0/P1)**: 深度分析弹窗整窗空态文案、Quote 选段无资金流样本提示 —— 清单见审计文档 §3。
+- **门禁**: vitest 99 / tsc / eslint / UI-RULES OK。
+- [commit <见 git log>]
+
 ### feat-P3-3 stale-on-error 展示类资金流兜底 (OpenTerminal 借鉴 C2): 源故障回退旧快照 + 显式标注
 - **口径**(方案 C2): "过期数据+标注 > 空白", **仅限非结算类展示数据**; 行情/结算/下单路径严禁复用(报价必须实时)。
 - **实现(Web 层)**: `src/web/api/market_data.py` 新增 `_stale_put/_stale_take`(复用 biz_cache L1+L2, 生产即 Redis, 跨进程/重启不丢; 备份保留窗 24h); `/market-data/board-capital-flow` 与 `/market-data/market-capital-flow` 接入 —— 成功即备份(新鲜响应无感), 源异常/空返回/网关 error 时回退备份并在响应叠加 `stale: true` + `stale_age_sec`; 无备份维持原有 502/error 语义(底线不破)。
