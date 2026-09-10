@@ -307,13 +307,17 @@ def _num(value: Any) -> Optional[float]:
 _SNAPSHOT_BATCH = 80
 
 
-def fetch_block_snapshots(codes: list[str]) -> dict[str, dict]:
-    """批量拉板块快照 → {code: {change_pct, fund_net, volume}}(2026-09-10 生产修复)。
+def fetch_block_snapshots(
+    codes: list[str], modes: tuple[str, ...] = ("扩展", "基础数据")
+) -> dict[str, dict]:
+    """批量拉板块快照 → {code: {change_pct, fund_net, volume, volume_ratio, speed}}。
 
-    背景(实撞): 原实现逐板块调 thsdk "基础数据" 档, 实测该档**没有涨跌幅字段** →
+    背景(实撞, 2026-09-10): 原实现逐板块调 thsdk "基础数据" 档, 实测该档**没有涨跌幅字段** →
     change_pct 恒 None → 480 板块全量被跳过, board_daily 长期 0 行(热力图/轮动全空)。
-    修法: 批量两档 —— "扩展"(涨幅/主力净流入, 元) + "基础数据"(总金额=成交额, 元)。
+    修法: 批量档位查询 —— "扩展"(涨幅/主力净流入元/量比/板块涨速) + "基础数据"(总金额=成交额元)。
     单档失败不阻断另一档(字段缺失保持 None, 由调用方按"无数据"处理)。
+
+    modes: 白天实时只取 ("扩展",) 更快(~10s); 日终入库默认双档(量能+涨跌)。
     """
     out: dict[str, dict] = {}
     clean = [str(c).strip() for c in (codes or []) if str(c).strip()]
@@ -322,7 +326,7 @@ def fetch_block_snapshots(codes: list[str]) -> dict[str, dict]:
     client = _client()
     for i in range(0, len(clean), _SNAPSHOT_BATCH):
         chunk = clean[i:i + _SNAPSHOT_BATCH]
-        for mode in ("扩展", "基础数据"):
+        for mode in modes:
             try:
                 rows = client.get_block_market_batch(chunk, mode)
             except Exception as e:  # noqa: BLE001 - 单档失败不阻断
@@ -336,6 +340,8 @@ def fetch_block_snapshots(codes: list[str]) -> dict[str, dict]:
                 if mode == "扩展":
                     rec["change_pct"] = _num(r.get("涨幅"))
                     rec["fund_net"] = _num(r.get("主力净流入"))
+                    rec["volume_ratio"] = _num(r.get("量比"))
+                    rec["speed"] = _num(r.get("板块涨速"))
                 else:
                     rec["volume"] = _num(r.get("总金额"))
     return out

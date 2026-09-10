@@ -2,6 +2,7 @@
 // 色阶映射(A股红涨绿跌, ±3% 夹紧) + treemap 数据变换(面积=成交额, 无数据保底可见)。
 import { describe, expect, it } from 'vitest'
 import {
+  detectHeatAnomaly,
   formatHeatPct,
   heatCellColor,
   heatLabelColor,
@@ -125,5 +126,42 @@ describe('toTreemapCells treemap 数据变换', () => {
 
   it('空列表 → 空数组(不抛)', () => {
     expect(toTreemapCells([], { palette: PALETTE, areaMetric: 'volume' })).toEqual([])
+  })
+})
+
+describe('detectHeatAnomaly 板块异动规则 (盘中实时, 仅高亮不推送)', () => {
+  it('涨速达标 → 急拉/急跌; 未达标 → null', () => {
+    expect(detectHeatAnomaly({ speed: 0.6, volume_ratio: null })?.kinds).toEqual(['surge'])
+    expect(detectHeatAnomaly({ speed: -0.8, volume_ratio: null })?.kinds).toEqual(['dump'])
+    expect(detectHeatAnomaly({ speed: 0.3, volume_ratio: 1.1 })).toBeNull()
+  })
+
+  it('量比达标 → 放量; 与急拉并存时合并标签', () => {
+    expect(detectHeatAnomaly({ speed: null, volume_ratio: 2.5 })?.kinds).toEqual(['heavy_volume'])
+    const a = detectHeatAnomaly({ speed: 1.2, volume_ratio: 3 })
+    expect(a?.kinds).toEqual(['surge', 'heavy_volume'])
+    expect(a?.label).toBe('急拉 · 放量')
+  })
+
+  it('null/NaN/未达标量比 → 不误报', () => {
+    expect(detectHeatAnomaly({ speed: null, volume_ratio: null })).toBeNull()
+    expect(detectHeatAnomaly({ speed: Number.NaN, volume_ratio: Number.NaN })).toBeNull()
+    expect(detectHeatAnomaly({ speed: undefined, volume_ratio: 1.9 })).toBeNull()
+  })
+})
+
+describe('toTreemapCells 异动高亮', () => {
+  it('异动块带 border 高亮与 anomaly 标注; 普通块无 border', () => {
+    const cells = toTreemapCells(
+      [
+        item({ block_code: 'URFI-A', speed: 0.9, volume_ratio: 2.4 }),
+        item({ block_code: 'URFI-B', speed: 0.1, volume_ratio: 1.0 }),
+      ],
+      { palette: PALETTE, areaMetric: 'equal' },
+    )
+    expect(cells[0].anomaly?.label).toBe('急拉 · 放量')
+    expect(cells[0].itemStyle.borderWidth).toBe(2)
+    expect(cells[1].anomaly).toBeNull()
+    expect(cells[1].itemStyle.borderWidth ?? 0).toBe(0)
   })
 })
