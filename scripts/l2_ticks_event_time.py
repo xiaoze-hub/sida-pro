@@ -7,6 +7,7 @@ pg_dump 备份(--confirm-backup 门禁, 备份命令见下方 usage)。
 用法(panwatch 容器内):
   干跑校验:   python scripts/l2_ticks_event_time.py
   正式执行:   python scripts/l2_ticks_event_time.py --apply --confirm-backup
+  (脚本自带 sys.path 引导, 容器内无需预设 PYTHONPATH)
 
 备份(panwatch-postgres 容器, 宿主 WSL):
   docker exec panwatch-postgres sh -c \\
@@ -31,11 +32,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
+
+# 以文件路径直跑(python /app/scripts/xxx.py)时 sys.path[0] 是 scripts/, 而非 /app
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("l2_event_time")
@@ -208,7 +214,7 @@ def main() -> None:
     logger.info(note)
     if not args.apply:
         logger.info("[干跑] 步骤: 预检 → 建回填表(hypertable 1d, 新唯一键含 ts) → 全量变换回填 "
-                    "(幂等, 可重跑) → 行数对账(差>0.1%% 中止) → 换名(l2_ticks_old 留回滚) → "
+                    "(幂等, 可重跑) → 行数对账(差异过大中止) → 换名(l2_ticks_old 留回滚) → "
                     "压缩(2d)+retention(90d)+ANALYZE。正式执行加 --apply --confirm-backup")
         return
     if not args.confirm_backup:

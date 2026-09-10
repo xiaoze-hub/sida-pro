@@ -7,6 +7,10 @@
 
 ## 2026-09-10
 
+### fix-回填脚本直跑引导: sys.path 自举(生产实撞; 版本号仍 v0.5.49, 随下次覆盖层进容器)
+- **生产实撞**: `docker exec panwatch python /app/scripts/l2_ticks_event_time.py --apply` 秒挂 `ModuleNotFoundError: No module named 'src'`——文件路径直跑时 sys.path[0] 是 scripts/ 而非 /app, 干跑(不连库)掩盖了问题。补 `sys.path.insert(0, parents[1])` 自举, 容器内裸跑不再依赖 `PYTHONPATH=/app`。当时执行用 `-e PYTHONPATH=/app` 绕过, 无数据影响(失败发生在任何 DDL 之前)。
+- [commit <见 git log>]
+
 ### feat-数据落库 方案A + 分钟K线: l2_ticks 事件时间化 + 1m 滚动入库 + 连续聚合; v0.5.49
 - **l2_ticks 方案A(设计文档 §5.1)**: ts 从"入库时刻"改为**事件时间**(交易日+tick_time), 修复旧唯一键无日期导致跨日同秒同价同量互相顶掉的假去重。① 写入方 `src/core/history_store.py`: `_l2_event_ts`(隔日凌晨拉取归属前一交易日, 非法 tick_time 回退采集时刻, 幂等), 写入计数改为批次事件 ts 窗口前后计数; PG 不再跑 in-code 行级 DELETE(压缩 hypertable 上有整事务回滚风险), retention 交给 90 天 policy, SQLite 保留 60 天就地清理。② 迁移 `v158`: 空表/新库就地重塑(唯一键 `(symbol,market,source,ts,direction,price,vol,amt)` + hypertable 1d 分块 + 压缩 segmentby=symbol,market,source + retention 90d), **用 `SELECT..LIMIT 1` O(1) 探测空表**(79M 行 COUNT(*) 会撞 8s statement_timeout); 有数据的生产库 no-op, 走回填脚本。③ 新增 `scripts/l2_ticks_event_time.py`: `--apply --confirm-backup` 双门禁 + 08:00-17:00 上海时间保守禁改窗(--force 显式覆盖) → LIKE 建 l2_ticks_new → 变换回填(幂等, 快照间隙补拉) → 行数对账(差>0.1% 中止换名) → 换名(旧表留 l2_ticks_old 回滚) → 压缩 2d/retention 90d/ANALYZE。**生产执行顺序: pg_dump -t l2_ticks 备份 → 干跑 → --apply**(约 10-40 分钟, 非交易时段)。
 - **分钟K线(设计文档 Matrix #2)**: ① `marketdata/vendors/kline.py` 新增 `fetch_tencent_minute_kline`(mkline 真实接口 2026-09-10 实测: 行=[YYYYMMDDHHMM,open,close,high,low,vol(手),…], ×100 归一股; host 用 ifzq.gtimg.cn 免跳转——web.ifzq 对 mkline 302→web3.ifzq 且该域名 DNS 不稳; Bar.date 输出 'YYYY-MM-DD HH:MM' 兼容入库解析)。② 新增 `src/core/klines_minute.py` 60s 盘中滚动入库(交易时段守卫复用 quote_snapshots.in_trading_window; 标的=自选∪候选池仅 CN; 指数不入 klines——裸码与个股撞键, 指数分时由 quote_snapshots 承担; ON CONFLICT upsert 幂等, 320 根窗口断档自愈); startup 注册 `klines-minute-1min`。③ 迁移 `v159`(PG+timescaledb 守卫, 其余 no-op): `klines_daily_agg` 连续聚合 1m→日线(time_bucket 上海时区, 30min 增量刷新, 实时段自动合并原始行); **不给 klines 挂 retention**(会把 2023 年起的日线历史按 90 天误删, 保留期另行决策)。
