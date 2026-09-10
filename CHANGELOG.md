@@ -7,6 +7,12 @@
 
 ## 2026-09-10
 
+### update-v0.5.54 生产部署(覆盖层, 后端-only, 冒烟 9/9) + 龙虎榜缓存首次同步
+- **部署**: 备份 `/root/app_backup_pre_v0554_20260910.tar.gz` → 覆盖层 `git archive v0.5.54` + 现有 `frontend/dist`(本次无前端改动)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy(~40s) → `/api/version` = **v0.5.54** → 冒烟 **9/9**(7.3s)。
+- **缓存同步**: `scripts/sync_tdx_lhb_cache.sh`(WSL root)首跑: 客户端缓存 → 数据卷 `/app/data/tdx_lhb/{list,lhbfx}`, 容器内可见; **定时(5 分钟)计划任务待老板确认后注册**。
+- **生产实测**: `GET /api/archive/dragon-tiger-tdx` → available, trade_date=20260910, **64 条**(600744 净买 2.22亿/陆股通 2 席; 002174 净买 1.56亿/机构 3 席), synced_at 23:07; `GET .../seats?ref_id=3746237` → **12 条席位**(深股通专用净买 1.40亿 / 机构专用 1.67亿 / 营业部含 1·3·5 日成功率 + 买入合计行)。
+- [tag v0.5.54 已推 origin]
+
 ### feat-通达信龙虎榜接入(客户端页面缓存路径) — /api/archive 两个只读端点; v0.5.54
 - **背景**: 老板"那通达信客户端的龙虎榜数据也可以接入吧"。实测: TQ 云数据接口**取不到**龙虎榜明细(与板块异动同因, 需通达信数据权限, 见 KI-048; 用今天真上榜的 8 只股票跑 `上榜资金` 公式全 0, `get_gpjy_value` 全 null); **但客户端打开「龙虎榜」页后数据会落地为本地缓存** → 走这条实路接入(老板当场点开页面验证)。
 - **数据**(客户端 `T0002/cloud_cache/`): 榜单 `list/func_lhbfx101_1.jsn`(GBK JSON): 买入/卖出成交占比、净买入、买入合计、卖出合计、**陆股通席位数 sl1 / 机构席位数 sl2**、异动类型、3日上榜标记、关联ID; 席位明细 `lhbfx/<关联ID>.jsn`: 营业部(含"买(1): 深股通专用"式标注)、买入额/卖出额/净买入/占比、**买入后1/3/5日成功率**、预估成本/收益。
