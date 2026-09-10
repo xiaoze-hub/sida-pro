@@ -18,6 +18,12 @@ export interface BoardHeatItem {
   volume: number | null
   date: string | null
   has_daily: boolean
+  /** 实时量比(仅 live 命中项; 日线回落时为 null) */
+  volume_ratio?: number | null
+  /** 板块涨速=近5分钟涨幅%(仅 live) */
+  speed?: number | null
+  /** 是否实时数据(live 模式覆盖) */
+  live?: boolean
 }
 
 export interface HeatPalette {
@@ -31,6 +37,8 @@ export interface HeatPalette {
   labelDark: string
   /** 深色块上的浅色字 */
   labelLight: string
+  /** 异动警示环色(可选; 缺省 amber-500 —— 语义警示色, 非涨跌主题色) */
+  ring?: string
 }
 
 export type HeatAreaMetric = 'volume' | 'equal'
@@ -44,7 +52,11 @@ export interface TreemapCell {
   volume: number | null
   date: string | null
   hasDaily: boolean
-  itemStyle: { color: string }
+  volumeRatio?: number | null
+  speed?: number | null
+  /** 异动标注(无 → null); 命中时 itemStyle 带警示环 */
+  anomaly: HeatAnomaly | null
+  itemStyle: { color: string; borderColor?: string; borderWidth?: number }
   label: { color: string }
 }
 
@@ -55,6 +67,48 @@ const LABEL_LIGHT_ALPHA = 0.45
 const DEFAULT_MIN_SHARE = 0.02
 /** 与 safePercent 展示口径一致: 四舍五入到 0.00 的幅度视为平盘 */
 const FLAT_EPSILON = 0.005
+
+// ── 板块异动规则(2026-09-10 盘中实时化; 仅高亮不推送) ─────────────────────────
+// 阈值常量: 先在实盘观察几天, 噪声大就上调(规则本身与推送解耦, 后续接通知可直接复用)。
+/** 板块涨速(近5分钟涨幅, %)急拉/急跌阈值 */
+export const ANOMALY_SPEED_PCT = 0.5
+/** 量比放量阈值 */
+export const ANOMALY_VOLUME_RATIO = 2.0
+/** 缺省警示环色: amber-500(语义警示色, 与红涨绿跌主题色区分) */
+const DEFAULT_ANOMALY_RING = '#f59e0b'
+
+export type AnomalyKind = 'surge' | 'dump' | 'heavy_volume'
+
+export interface HeatAnomaly {
+  kinds: AnomalyKind[]
+  /** 中文短标签, 如 "急拉 · 放量" */
+  label: string
+}
+
+export const ANOMALY_LABEL: Record<AnomalyKind, string> = {
+  surge: '急拉',
+  dump: '急跌',
+  heavy_volume: '放量',
+}
+
+/**
+ * 板块异动判定(纯函数): 涨速 ±阈值 → 急拉/急跌; 量比 ≥阈值 → 放量; 可叠加。
+ * 数据缺(日线回落/未开盘)一律返回 null —— 不猜不误报。
+ */
+export function detectHeatAnomaly(
+  item: Pick<BoardHeatItem, 'speed' | 'volume_ratio'>,
+): HeatAnomaly | null {
+  const kinds: AnomalyKind[] = []
+  const speed = item.speed
+  if (speed != null && isFinite(speed)) {
+    if (speed >= ANOMALY_SPEED_PCT) kinds.push('surge')
+    else if (speed <= -ANOMALY_SPEED_PCT) kinds.push('dump')
+  }
+  const vr = item.volume_ratio
+  if (vr != null && isFinite(vr) && vr >= ANOMALY_VOLUME_RATIO) kinds.push('heavy_volume')
+  if (kinds.length === 0) return null
+  return { kinds, label: kinds.map((k) => ANOMALY_LABEL[k]).join(' · ') }
+}
 
 /** |pct|/clamp 归一 0~1; null/NaN → null(走 neutral)。 */
 function heatRatio(pct: number | null | undefined, clampPct: number): number | null {
@@ -129,6 +183,7 @@ export function toTreemapCells(
 
   return items.map((it, i) => {
     const raw = raws[i]
+    const anomaly = detectHeatAnomaly(it)
     return {
       name: it.name || it.block_code,
       value: raw === null ? floor : raw,
@@ -138,7 +193,15 @@ export function toTreemapCells(
       volume: it.volume,
       date: it.date,
       hasDaily: it.has_daily,
-      itemStyle: { color: heatCellColor(it.change_pct, palette, clampPct) },
+      volumeRatio: it.volume_ratio ?? null,
+      speed: it.speed ?? null,
+      anomaly,
+      itemStyle: {
+        color: heatCellColor(it.change_pct, palette, clampPct),
+        ...(anomaly
+          ? { borderColor: palette.ring || DEFAULT_ANOMALY_RING, borderWidth: 2 }
+          : {}),
+      },
       label: { color: heatLabelColor(it.change_pct, palette, clampPct) },
     }
   })

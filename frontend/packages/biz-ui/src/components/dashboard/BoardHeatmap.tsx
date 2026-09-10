@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Zap } from 'lucide-react'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { hslaVar, readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import {
+  detectHeatAnomaly,
   formatHeatPct,
   toTreemapCells,
   type BoardHeatItem,
+  type HeatAnomaly,
   type HeatAreaMetric,
   type HeatPalette,
   type TreemapCell,
@@ -18,7 +20,11 @@ import LoadingState from '@panwatch/biz-ui/components/LoadingState'
 /**
  * 板块热力图 (P1-1, 2026-09-10, 借鉴 OpenTerminal treemap 热力图):
  * 面积=成交额(缺失保底)/等权, 颜色=涨跌幅(A股红涨绿跌, ±3% 夹紧), 点击下钻成分股。
- * 数据为板块最新日线(见 GET /boards/heatmap), 页面显式标注"数据截至"基准日。
+ *
+ * 实时化(2026-09-10 晚, 老板拍板"60s 自动刷新 + 异动高亮, 不推送"):
+ * 交易时段内后端自动用 thsdk 实时快照覆盖涨跌幅/资金/量比/涨速(live=true),
+ * 页面 60s 轮询 → treemap 自动重绘; 命中异动规则(急拉/急跌/放量)的板块加警示环 +
+ * 顶部"板块异动"清单(点击下钻)。仅高亮, 不发通知。
  */
 
 export interface BoardHeatmapProps {
@@ -30,13 +36,18 @@ interface HeatmapResp {
   type: string
   trade_date: string | null
   count: number
+  live?: boolean
+  live_count?: number
+  as_of?: string | null
   items: BoardHeatItem[]
 }
 
 type BoardType = 'industry' | 'concept'
 
-const POLL_MS = 120_000
+const POLL_MS = 60_000
 const CHART_HEIGHT = 560
+/** 异动清单最多展示条数(超出截断, 避免横条刷屏) */
+const MAX_ANOMALY_CHIPS = 8
 /** 稳定引用: 避免 useMemo 依赖每次渲染都变 (react-hooks/exhaustive-deps) */
 const NO_ITEMS: BoardHeatItem[] = []
 
@@ -66,20 +77,39 @@ function tooltipHtml(c: TreemapCell): string {
     ['量能', fmtMoney(c.volume)],
     ['资金净流入', fmtMoney(c.fundNet)],
   ]
+  if (c.volumeRatio !== null && c.volumeRatio !== undefined && isFinite(c.volumeRatio)) {
+    rows.push(['量比', safeFixed(c.volumeRatio, 2)])
+  }
+  if (c.speed !== null && c.speed !== undefined && isFinite(c.speed)) {
+    rows.push(['涨速(5m)', formatHeatPct(c.speed)])
+  }
   const body = rows
     .map(
       ([k, v]) =>
         `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.65">${k}</span><span style="font-family:monospace">${v}</span></div>`,
     )
     .join('')
+  const anomaly = c.anomaly
+    ? `<div style="margin-top:2px;font-size:11px;color:#f59e0b">异动: ${c.anomaly.label}</div>`
+    : ''
   const stale = c.hasDaily ? '' : '<div style="margin-top:2px;font-size:11px;opacity:.65">暂无当日数据</div>'
   return (
     `<div style="font-size:12px;min-width:150px">` +
     `<div style="font-weight:600;margin-bottom:4px">${c.name}</div>` +
     body +
+    anomaly +
     stale +
     `</div>`
   )
+}
+
+/** UTC ISO → 本地 HH:MM:SS(仅实时基准时刻展示; 非法/缺失 → 空串) */
+function fmtClock(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (!isFinite(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
 export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapProps) {
@@ -126,6 +156,18 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
     () => (fresh && items.length > 0 ? toTreemapCells(items, { palette: buildPalette(), areaMetric }) : null),
     [fresh, items, areaMetric],
   )
+
+  const liveMode = fresh && data ? Boolean(data.live) : false
+  const liveClock = liveMode && data?.as_of ? fmtClock(data.as_of) : ''
+  /** 实时异动清单: 按 |涨速| 降序, 仅高亮不推送 */
+  const liveAnomalies = useMemo(() => {
+    if (!liveMode) return []
+    return items
+      .map((item) => ({ item, anomaly: detectHeatAnomaly(item) }))
+      .filter((x): x is { item: BoardHeatItem; anomaly: HeatAnomaly } => x.anomaly !== null)
+      .sort((a, b) => Math.abs(b.item.speed ?? 0) - Math.abs(a.item.speed ?? 0))
+      .slice(0, MAX_ANOMALY_CHIPS)
+  }, [liveMode, items])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -205,7 +247,12 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
-          {fresh && data.trade_date ? (
+          {liveMode ? (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-500">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              实时{liveClock ? ` · ${liveClock}` : ''}
+            </span>
+          ) : fresh && data.trade_date ? (
             <span className="text-[11px] text-muted-foreground">
               数据截至 {data.trade_date}
               {noDataCount > 0 ? ` · ${noDataCount} 个暂无当日数据` : ''}
@@ -232,6 +279,31 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-500">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           刷新失败，当前展示上次数据
+        </div>
+      )}
+
+      {liveMode && liveAnomalies.length > 0 && (
+        <div
+          data-testid="heatmap-anomalies"
+          className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]"
+        >
+          <span className="inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
+            <Zap className="h-3.5 w-3.5" />
+            板块异动
+          </span>
+          {liveAnomalies.map(({ item, anomaly }) => (
+            <button
+              key={item.block_code}
+              type="button"
+              title={`${item.name} ${anomaly.label}`}
+              onClick={() => onOpenRef.current(item.block_code, item.name)}
+              className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-500"
+            >
+              <span className="font-medium">{item.name}</span>
+              <span className="font-mono">{formatHeatPct(item.change_pct)}</span>
+              <span>{anomaly.label}</span>
+            </button>
+          ))}
         </div>
       )}
 

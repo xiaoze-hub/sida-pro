@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### feat-板块热力图实时化(老板拍板: 60s 自动刷新 + 异动高亮, 不推送); v0.5.52
+- **背景**: 老板提议"热力图 + 盘中异动结合, 让板块自己动起来, 还会有异动提示"; 拍板首期范围 = **盘中 60s 自动刷新 + 异动高亮, 不发通知**。阈值规则做成纯函数(与推送解耦, 后续要接通知可直接复用)。
+- **后端**(`src/web/api/boards.py` + `src/core/thsdk_board.py`): `/api/boards/heatmap` 新增 `live=auto|1|0`(缺省 auto)。auto = 交易时段内(`in_trading_window()`)用 thsdk **"扩展"档批量快照**(涨幅/主力净流入/量比/板块涨速)覆盖涨跌幅与资金净流入, **面积量能仍取日线成交额**(日内相对大小稳定); 非交易时段/取数失败 → 静默回落纯日线, 不报错。实时快照 **60s TTL 缓存 + 单飞**(并发请求只打一次 thsdk, 后到者等锁取缓存); 响应新增 `live / live_count / as_of(UTC)` 供前端标注基准时刻。`fetch_block_snapshots()` 泛化 `modes` 参数复用既有批量分片/容错。
+- **前端**(`packages/biz-ui/src/lib/board-heatmap.ts` + `components/dashboard/BoardHeatmap.tsx`): ① 轮询 120s → **60s**; ② 页头 live 时显示"**实时 · HH:MM:SS**"(emerald 脉冲点), 否则维持"数据截至 date"; ③ 新增纯函数 `detectHeatAnomaly()`: 涨速 ≥±0.5% → 急拉/急跌, 量比 ≥2.0 → 放量(可叠加为"急拉 · 放量"), **数据缺失一律 null 不猜不误报**; ④ 命中异动的色块加 amber 警示环(borderWidth 2, 与红涨绿跌主题色区分), 页顶"**板块异动**"清单(按 |涨速| 降序, 最多 8 条, 点击下钻成分股); ⑤ tooltip 增量比/涨速/异动行。
+- **测试**: 后端 `tests/test_boards_heatmap_live.py` 7 例(live 三态语义 / 合并口径(涨跌幅覆盖+量能守日线+量比涨速) / 失败回落 / 60s 缓存单飞 / 非法参数 400); 前端纯函数 17 例(阈值边界/叠加/NaN 安全) + 组件 8 例(实时标注+异动清单+警示环+点击下钻 / 非实时无清单)。门禁: 前端 vitest **113 passed(19 文件)** / tsc / eslint / UI-RULES / `pnpm build` 全过; 后端相关域 21 passed; 后端离线全量 **2084 passed / 2 failed(仅 KI-027 本机已知: tradingagents 文档损坏 + buffer_size flaky, 隔离重跑即过) / 5 skipped**。
+- **台账**: 新增 **KI-047**(异动阈值为暂定值 + 仅交易时段生效, 待实盘观察调优), 台账 **32 条在册(P1×3/P2×17/P3×12)**。
+- [tag v0.5.52]
+
 ### fix-板块日线同步修复: "基础数据"档无涨跌幅 → 批量两档取数; board_daily 480 行回填; v0.5.51
 - **生产实撞**(老板截图): 板块热力图几乎全灰"无数据"。排查: `board_daily` 空表(0 行)→ 热力图/轮动全空。日志显示 09-10 08:47 同步跑过但 **480 板块全部被跳过**(0 行日线): 逐板块调 thsdk `get_block_market(code, "基础数据")`, 实测该档返回 11 个字段(**成交量/总金额/领涨股/涨跌家数/市值 —— 根本没有涨跌幅**), `change_pct` 恒 None → 全量跳过。**该缺陷自阶段2.1 上线起从未产出过一行日线**(轮动排序同样常年空), 热力图是第一个暴露它的消费方。
 - **修法**(`src/core/thsdk_board.py` + `data_source/thsdk_l2.py`): ① 新增批量方法 `get_block_market_batch(codes, mode)`(thsdk 支持一次多代码, 实测 3 码→df(3,9)); ② 新增 `fetch_block_snapshots()`: **"扩展"档(涨幅/主力净流入, 元) + "基础数据"档(总金额=成交额, 元)** 双档合并, 80 码/片, 单档失败不阻断; ③ `sync_boards_to_db` 改批量快照, 全零(概念无行情)仍跳过保持"无数据"语义; ④ 提取器 volume 优先 `总金额`; ⑤ **cron 08:30(盘前残值) → 16:10(收盘后, 日线=当日收盘口径)**。
