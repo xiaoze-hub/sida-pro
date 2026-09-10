@@ -27,3 +27,22 @@ def test_metrics_snapshot():
     assert snap["count"] == 2
     assert snap["success_rate"] == 0.5
     assert snap["last_error"] == "boom"
+
+
+def test_metrics_ewma_latency():
+    """延迟 EWMA(C1): 首笔=样值, 之后 alpha=0.3 递推; 失败样本也计入(超时体现为高延迟)。"""
+    m = InMemoryMetricsSink()
+    m.record(vendor="a", datatype="quote", market="CN", ok=True, count=1, latency_ms=1000)
+    assert m.snapshot()["a"]["ewma_latency_ms"] == 1000
+    m.record(vendor="a", datatype="quote", market="CN", ok=True, count=1, latency_ms=100)
+    assert m.snapshot()["a"]["ewma_latency_ms"] == 730  # 0.3*100 + 0.7*1000
+    m.record(vendor="a", datatype="quote", market="CN", ok=False, count=0, latency_ms=8000, error="timeout")
+    assert m.snapshot()["a"]["ewma_latency_ms"] == 2911  # 0.3*8000 + 0.7*730
+
+
+def test_metrics_ewma_none_before_first_record():
+    """从未记录过 → ewma=None(不冒充 0/不编造)。"""
+    m = InMemoryMetricsSink()
+    assert m.snapshot() == {}
+    m.record(vendor="b", datatype="quote", market="CN", ok=True, count=1, latency_ms=50)
+    assert m.snapshot()["b"]["ewma_latency_ms"] == 50

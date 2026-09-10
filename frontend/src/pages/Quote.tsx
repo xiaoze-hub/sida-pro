@@ -464,8 +464,9 @@ export default function QuotePage() {
     const tips = [vendor ? `行情来源: ${vendor}` : '行情来源: 未知(后端未透传 source)']
     if (quoteSrc.latency > 0) tips.push(`采集延迟 ${quoteSrc.latency}ms`)
     if (t) {
-      tips.push(`质量分 ${t.score}`)
+      if (t.score != null) tips.push(`质量分 ${t.score}`)
       if (t.success_rate != null) tips.push(`成功率 ${(t.success_rate * 100).toFixed(0)}%`)
+      if (t.ewma_latency_ms != null) tips.push(`EWMA ${t.ewma_latency_ms}ms`)
       if (t.p50_latency_ms != null) tips.push(`P50 ${t.p50_latency_ms}ms`)
     } else if (vendor) {
       tips.push('暂无质量分样本')

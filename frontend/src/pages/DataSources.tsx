@@ -9,6 +9,8 @@ import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
+import { useVendorTrust } from '@/hooks/useVendorTrust'
+import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone } from '@/lib/vendor-trust'
 
 const HEALTH_DOT: Record<string, string> = {
   connected: 'bg-emerald-500',
@@ -124,6 +126,8 @@ export default function DataSourcesPage() {
 
   const { toast } = useToast()
   const { health: logicHealth, loading: logicLoading } = useSourceHealth()
+  // C1: 行情源质量(Engine 滚动窗口, 与顶部心跳条同源)
+  const { items: vendorTrust } = useVendorTrust()
 
   const load = useCallback(async () => {
     try {
@@ -372,6 +376,32 @@ export default function DataSourcesPage() {
       </div>
 
       <div className="space-y-6">
+        {/* C1 (2026-09-10): 行情源质量 — Engine 滚动最近 100 次的 成功率/延迟 EWMA/p50, 与顶部心跳条同源 */}
+        {vendorTrust.length > 0 && (
+          <section className="border-b border-border/40 pb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[13px] font-semibold text-muted-foreground">行情源质量</span>
+              <span className="text-[11px] text-muted-foreground/70">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
+            </div>
+            <div className="grid gap-1.5 md:grid-cols-2">
+              {vendorTrust.map(it => (
+                <div key={it.vendor} className="flex items-center gap-2 rounded-md border border-border/40 px-2.5 py-1.5 text-[12px]">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TRUST_TONE_CLASS[trustTone(it.score)]}`} />
+                  <span className="font-medium text-foreground/90">{it.vendor}</span>
+                  <span className="text-muted-foreground">
+                    {it.success_rate != null ? `成功率 ${Math.round(it.success_rate * 100)}%` : '成功率 —'}
+                  </span>
+                  <span className="text-muted-foreground">EWMA {formatLatency(it.ewma_latency_ms)}</span>
+                  <span className="text-muted-foreground">p50 {formatLatency(it.p50_latency_ms)}</span>
+                  <span className="text-muted-foreground/70">n={it.samples ?? 0}</span>
+                  {it.last_error && (
+                    <span className="truncate text-amber-600" title={it.last_error}>· {it.last_error}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
         {!logicLoading && Object.keys(logicHealth).length > 0 && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/40 pb-2 text-[12px] text-muted-foreground">
             <span>实时链路</span>

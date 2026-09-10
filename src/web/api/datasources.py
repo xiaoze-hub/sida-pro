@@ -224,6 +224,8 @@ def get_vendor_trust():
             "score": _score(s.get("success_rate"), s.get("p50_latency_ms")),
             "success_rate": s.get("success_rate"),
             "p50_latency_ms": s.get("p50_latency_ms"),
+            # 2026-09-10 (C1): 延迟 EWMA —— 心跳条/数据源页的"当前延迟"读数(p50 对持续变慢不敏感)
+            "ewma_latency_ms": s.get("ewma_latency_ms"),
             "samples": s.get("count", 0),
             "last_error": s.get("last_error") or "",
         }

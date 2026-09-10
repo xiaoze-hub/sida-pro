@@ -37,6 +37,7 @@ import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
+import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
 import SelfCheckModal from '@/components/SelfCheckModal'
@@ -469,6 +470,8 @@ function App() {
 
       {/* Content */}
       <main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+        {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数 */}
+        <SourceHeartbeat />
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary
             onError={(error) =>

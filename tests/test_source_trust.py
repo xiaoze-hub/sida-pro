@@ -46,3 +46,27 @@ def test_trust_endpoint_shape_and_scoring(monkeypatch):
     assert items["eastmoney"]["score"] == 25  # 50-25
     assert items["never"]["score"] is None  # 没调用过不冒充
     assert r.json()["items"][0]["vendor"] == "tencent"  # 高分在前
+
+
+def test_trust_items_carry_ewma_latency(monkeypatch):
+    """C1: /trust 透出延迟 EWMA(缺该字段的历史快照取 None, 不编造)。"""
+    import src.core.marketdata_client as md_client
+
+    class _FakeMD:
+        def health(self):
+            return {
+                "tencent": {"success_rate": 0.98, "p50_latency_ms": 400, "ewma_latency_ms": 512,
+                            "count": 100, "last_error": ""},
+                "old": {"success_rate": 0.9, "p50_latency_ms": 300,
+                        "count": 10, "last_error": ""},
+            }
+
+    monkeypatch.setattr(md_client, "get_market_data", lambda: _FakeMD())
+    app = FastAPI()
+    app.include_router(ds_api.router, prefix="/ds")
+    c = TestClient(app, raise_server_exceptions=False)
+    r = c.get("/ds/trust")
+    assert r.status_code == 200, r.text
+    items = {i["vendor"]: i for i in r.json()["items"]}
+    assert items["tencent"]["ewma_latency_ms"] == 512
+    assert items["old"]["ewma_latency_ms"] is None

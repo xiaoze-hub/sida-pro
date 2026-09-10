@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P2-1 数据源延迟 EWMA + 顶部心跳条 (OpenTerminal 借鉴 C1): trust 透出 ewma + 心跳条 + 数据源页质量卡
+- **后端**: `packages/marketdata/src/marketdata/defaults.py` `_Metrics` 新增**延迟 EWMA**(α=0.3 递推, 首笔=样值; 失败样本一并计入——超时耗时应体现在健康读数里; 选 EWMA 而非 p50: p50 对"持续变慢"不敏感, 一半样本都慢才会动); `snapshot()` 增 `ewma_latency_ms`(无样本 None, 不冒充 0); `src/web/api/datasources.py /trust` 透出该字段(附加字段, 既有消费方无感)。
+- **前端**: ① `src/lib/vendor-trust.ts` 纯函数层(色档 >=80/>=50/<50/无分, 延迟文案 "512ms"/"1.2s", tooltip 与汇总, 无样本一律显式"—"); ② `src/hooks/useVendorTrust.ts` 60s 轮询(失败置 error 保留上次快照, 显式标注不静默); ③ `src/components/SourceHeartbeat.tsx` **顶部细心跳条**——每源一色段, 悬停出 成功率/EWMA/p50/样本/最近错误, 点击进数据源页; 刷新失败显式标注; 从未有样本不渲染(无源可报≠故障); ④ App 顶部挂载(全页可见); ⑤ 数据源页新增"行情源质量"卡(与心跳条同源); ⑥ Quote 来源徽标 tooltip 增 EWMA 读数, 并修 score=null 时"质量分 null"文案。
+- **测试**: 后端 +3(`test_ports_defaults.py` EWMA 递推/无样本 None 2 例 + `test_source_trust.py` /trust 透传 1 例); 前端 +10(`tests/lib/vendor-trust.test.ts` 6 + `tests/components/source-heartbeat.test.tsx` 4)。门禁: vitest 73 passed / tsc / eslint / UI-RULES OK / `pnpm build` 全过; 后端相关域 222 passed。
+- **本地走查**(热替 defaults.py+datasources.py 到本地 repro 容器): 浏览器实测首页心跳条("源心跳 · 2 源 · 2 正常 · tencent 117ms")与数据源页质量区(tencent EWMA 336ms / ths_flow 91ms)均真实数据渲染, 控制台无新增报错; 临时验证账号与容器内脚本已清理。
+- [commit <见 git log>]
+
 ### feat-P1-2 单源依赖审计 (OpenTerminal 借鉴 C4): 指数行情补链(腾讯→新浪) + /market/indices 显式降级 + 全量审计报告
 - **审计交付**: `docs/research/单源依赖审计_20260910.md` —— 逐层扫描(Engine 优先级链 / registry 合法源 / DATA_SOURCE_SEEDS / 绕 Engine 旁路)+ 关键行人工复核, 给出全部用户可见数据端点的"源数/上游/失败态/判定"表; 单源路径约 30 条归三类(注册表级: board_capital_flow/market_capital_flow/events/northbound 等; 绕 Engine 硬编码: 指数行情/分钟K线/dark-flow/thsdk 全家桶/财经日历等; 本地派生: 落库/文件); 顺带发现死配置 `src/core/marketdata_authoritative_sources.py`(全仓零 import, 决议登记 KI-046)。
 - **补链(审计最高价值项)**: 指数行情原为腾讯硬编码单源(client.py `index_quotes` 直取 `fetch_raw`), 腾讯对生产云 IP 有风控史 → 首页指数条会整片消失。① `packages/marketdata/vendors/sina.py` 新增 `fetch_index_quotes()`: CN 全格式 / 港指 hkHSI / 美股 gb_$ 三族解析, 输出 symbol 对齐腾讯 parts[2] 口径(裸码/点前缀), volume/turnover 恒 null(单位口径未对齐, 缺失优于错误); ② `client.py index_quotes()` 缺项自动走新浪——腾讯有数时零额外请求, 6 处消费方(首页/指数详情/日报/盘前/快照落库/报告)无感受益。
