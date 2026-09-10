@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P2-3 价格 Flash 复用扩展 (OpenTerminal 借鉴 A3): 自选行/K线分时现价变动闪色 + FlashValue 补行为测试
+- **背景**: `FlashValue` 组件已于 2026-09-05 存在(红涨绿跌令牌 + prefers-reduced-motion 尊重), 但全仓仅 Dashboard 指数条 1 处在用; A3 = 把"盘中价格静默换数字"补齐闪色反馈。
+- **前端**: ① `src/pages/stocks/WatchlistSection.tsx` 自选行现价(WS 实时推送, `useQuoteStream`)包 `FlashValue`——非有限值传 null 不闪(dirty 字符串防 NaN 反复触发); ② `packages/biz-ui/src/components/InteractiveKline.tsx` 分时统计格"现价"同款包裹(分时 30s 轮询)。加 Dashboard 既有点, 共 3 处。
+- **测试**: 新增 `tests/components/flash-value.test.tsx` 4 例(既有组件补行为测试): 变大 up/变小 down/首挂载与相同值不闪/null→有值不闪(基准语义)/reduced-motion 永不闪。门禁: vitest 94 passed(16 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测自选行价格 DOM 已被 FlashValue 包裹(价格 1285.13, 页面控制台干净); 盘后 WS 无有效 tick, 闪色动效未能在盘中现场观察(组件行为由 jsdom 用例锁定); InteractiveKline 分时视图未在快速走查中定位到(该处改动为 3 行包裹, 靠类型/回归门禁兜底)。
+- [commit <见 git log>]
+
 ### feat-P2-2 看板轻量定制 (OpenTerminal 借鉴 A1): 模块显隐 + 分区排序 + 本机持久化
 - **口径**(方案 §三 A1 轻量版): 不做自由拖拽/网格布局(引入成本大 + 与"白底工程感"设计语言冲突), 只做**显隐开关 + 上下排序 + 偏好持久化**; 排序按 Dashboard 真实网格分 3 区(全宽区/双列区/工作台与次级)区内生效、组间不可换位(与布局约束一致, 不假装任意布局)。
 - **前端**: ① `src/lib/dashboard-layout.ts` 纯逻辑层(11 模块 × 3 分区; toggle/move/reset/orderIndex; normalizeLayout 容错: 未知 id 丢弃、缺失补默认、垃圾输入回默认; localStorage `panwatch_dashboard_layout_v1`, 存储异常静默降级"本次会话有效"); ② `src/components/DashboardCustomizer.tsx` 定制对话框(分区列出 11 模块, 显隐开关 + 上下移 + 重置, 组边界按钮禁用); ③ Dashboard 顶部"自定义"入口 + 4 个布局容器接线(`style.order` 实现区内排序; 隐藏即不渲染, 不占位不假空)。
