@@ -173,6 +173,35 @@ async def capital_flow_proxy(
         raise HTTPException(502, f"数据源调用失败: {e}")
 
 
+# ── C2 stale-on-error (2026-09-10, OpenTerminal 借鉴 C2) ─────────────────────
+# 展示类资金流: 源故障/空返回时回退"上次成功快照 + 显式标注"(过期数据+标注 > 空白)。
+# ⚠️ 仅展示类端点接入(板块/大盘资金); 行情/结算/下单路径严禁复用 —— 报价必须实时。
+_STALE_TTL_S = 24 * 3600  # 备份保留窗口(旧数据上限; 响应带 stale_age_sec 供前端标注)
+
+
+def _stale_put(kind: str, payload: dict) -> None:
+    """成功后备份一份供源故障时回退; 备份失败静默, 不影响主流程。"""
+    try:
+        biz_cache.set_json(f"stale:{kind}", {"saved_at": time.time(), "payload": payload}, ttl=_STALE_TTL_S)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stale_take(kind: str) -> dict | None:
+    """取备份并打 stale 标注; 无备份返回 None(调用方维持原有 502/错误语义)。"""
+    try:
+        rec = biz_cache.get_json(f"stale:{kind}")
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(rec, dict) or not isinstance(rec.get("payload"), dict):
+        return None
+    try:
+        age = max(0, int(time.time() - float(rec.get("saved_at") or 0)))
+    except (TypeError, ValueError):
+        age = 0
+    return {**rec["payload"], "stale": True, "stale_age_sec": age}
+
+
 @router.get("/board-capital-flow")
 async def board_capital_flow_proxy(
     board_type: str = Query("industry", description="industry 行业 / concept 概念"),
@@ -180,12 +209,18 @@ async def board_capital_flow_proxy(
     """板块资金流向(同花顺行业/概念资金,免登录免费源)。
 
     返回按净额降序的板块资金列表(流入/流出/净额,单位亿)。
+    C2: 源故障/空返回且有备份 → 回退旧快照并带 stale/stale_age_sec 标注。
     """
     try:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         boards = md.board_capital_flow(board_type=board_type)
-        return {
+        if not boards:
+            stale = _stale_take(f"board-flow:{board_type}")
+            if stale is not None:
+                logger.info("板块资金源返回空, 回退备份(age=%ss)", stale.get("stale_age_sec"))
+                return stale
+        payload = {
             "board_type": board_type,
             "count": len(boards),
             "items": [
@@ -206,8 +241,14 @@ async def board_capital_flow_proxy(
                 for b in boards
             ],
         }
+        _stale_put(f"board-flow:{board_type}", payload)
+        return payload
     except Exception as e:
         logger.warning(f"板块资金代理失败: {e}")
+        stale = _stale_take(f"board-flow:{board_type}")
+        if stale is not None:
+            logger.warning("板块资金源故障, 回退备份(age=%ss): %s", stale.get("stale_age_sec"), e)
+            return stale
         raise HTTPException(502, f"数据源调用失败: {e}")
 
 
@@ -225,6 +266,10 @@ async def market_capital_flow_proxy():
             "http://115.190.177.213:8100/cn/market-overview", timeout=6
         ).json()
         if ov.get("error"):
+            # C2: 网关显式报错同属"源不可用" → 有备份则回退旧快照+标注
+            stale = _stale_take("market-flow")
+            if stale is not None:
+                return stale
             return {"error": ov["error"]}
         # 2026-09-05 口径修正: 上游网关 point/change_pct 放大了100倍
         # (point=393012实际3930.12, change_pct=-30实际-0.3%), 此处归一化。
@@ -288,9 +333,15 @@ async def market_capital_flow_proxy():
             _try_write_snapshot_async(result)
         except Exception:
             pass
+        # C2: 成功后备份(供源故障时回退+标注)
+        _stale_put("market-flow", result)
         return result
     except Exception as e:
         logger.warning(f"大盘资金代理失败: {e}")
+        stale = _stale_take("market-flow")
+        if stale is not None:
+            logger.warning("大盘资金源故障, 回退备份(age=%ss): %s", stale.get("stale_age_sec"), e)
+            return stale
         raise HTTPException(502, f"数据源调用失败: {e}")
 
 

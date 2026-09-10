@@ -7,6 +7,15 @@
 
 ## 2026-09-10
 
+### feat-P3-3 stale-on-error 展示类资金流兜底 (OpenTerminal 借鉴 C2): 源故障回退旧快照 + 显式标注
+- **口径**(方案 C2): "过期数据+标注 > 空白", **仅限非结算类展示数据**; 行情/结算/下单路径严禁复用(报价必须实时)。
+- **实现(Web 层)**: `src/web/api/market_data.py` 新增 `_stale_put/_stale_take`(复用 biz_cache L1+L2, 生产即 Redis, 跨进程/重启不丢; 备份保留窗 24h); `/market-data/board-capital-flow` 与 `/market-data/market-capital-flow` 接入 —— 成功即备份(新鲜响应无感), 源异常/空返回/网关 error 时回退备份并在响应叠加 `stale: true` + `stale_age_sec`; 无备份维持原有 502/error 语义(底线不破)。
+- **前端标注**: Dashboard"大盘资金流"块与 IndexDetail 资金流面板在 `stale` 时显示琥珀色"· 数据滞后 N 分钟"(title 注明"源暂不可用, 展示最后一次成功快照"); `DashboardMarketCapitalFlow`/`MarketFlow` 类型补字段。
+- **测试**: 新增 `tests/test_stale_on_error.py` 7 例(板块: 成功写备份 / 故障回退+年龄 / 无备份仍 502 / 空返回回退; 大盘: 成功写备份 / 网关异常回退 / 无备份仍 502)。门禁: 7 passed; 前端 vitest 99 / tsc / eslint / UI-RULES OK。
+- **真实栈验证**(本地 repro 热替后): 实调两端点 → biz_cache(Redis) 出现 `stale:board-flow:industry` / `stale:market-flow` 备份(age≈11s); `_stale_take` 读回带 stale=True+age。源故障现场未诱导(不破本地源), 端点分支选择由单测锁定。
+- **未做(留痕)**: /news 与财经日历的 stale 接入 —— /news 响应为裸 list 无标注位(需形变), 日历为单源无缓存层; 机制已就绪, 接入点明列于此供后续拍板。
+- [commit <见 git log>]
+
 ### feat-P3-2 新闻标题归一化去重 (OpenTerminal 借鉴 C3): 跨源同题只留一条
 - **根因**: 新闻聚合原有去重只按 `external_id`, 而东财/新浪/腾讯/雪球转载同一条新闻时各自 ID 不同 → 同题重复原样透出(方案 C3 指出的信噪比缺口)。修在**聚合层**(`packages/marketdata/client.py` `news()`), 一处修复覆盖全部消费方(/news 端点、NewsDialog、聊天/日报等), 优于在单页面前端去重。
 - **口径**(方案原文): 标题归一化 = 转小写 + 去全部空白 + 取前 80 字符做 key; 空标题不参与标题去重(保留 external_id 去重兜底); 命中时保留先处理(高优先级源)的那条, 与既有 external_id 规则一致; 不做模糊匹配防误合并。

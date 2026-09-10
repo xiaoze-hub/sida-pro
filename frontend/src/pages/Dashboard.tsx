@@ -638,6 +638,15 @@ export default function DashboardPage() {
             >
               四档口径 · 资金面参考
             </span>
+            {/* C2 stale-on-error: 源故障回退旧快照 → 显式标注滞后年龄(过期数据+标注 > 空白) */}
+            {marketFlow.stale && (
+              <span
+                className="text-[10px] text-amber-600"
+                title="数据源暂不可用, 当前展示最后一次成功快照(非实时)"
+              >
+                · 数据滞后{marketFlow.stale_age_sec != null ? ` ${Math.max(1, Math.round(marketFlow.stale_age_sec / 60))} 分钟` : ''}
+              </span>
+            )}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
               <span className="text-muted-foreground">主力净流入

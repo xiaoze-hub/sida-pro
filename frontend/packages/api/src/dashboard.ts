@@ -44,6 +44,10 @@ export interface DashboardMarketCapitalFlow {
   caliber?: string
   caliber_label?: string
   timestamp?: string
+  /** C2 stale-on-error: 源故障回退旧快照时为 true(前端须显式标注滞后) */
+  stale?: boolean
+  /** 旧快照年龄(秒), 仅 stale 时有意义 */
+  stale_age_sec?: number
   inflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]
   outflow_boards?: { name: string; net_inflow: number; change_pct?: number | null }[]
 }
