@@ -7,6 +7,12 @@
 
 ## 2026-09-10
 
+### fix-overview earliest/latest 列错位 + klines reltuples 回退精确 COUNT; v0.5.48
+- **实撞**(v0.5.47 生产): td 分支把整行传给日期取值 → `earliest_date` 错成 COUNT(如 quote_snapshots 显示 '66'), `latest_date` 错成 MIN(如 dragon_tiger 显示 '20250910')。改为显式 `lo, hi = row[1], row[2]`。
+- **klines reltuples 无效(-1 未 VACUUM)** → 行数 None: 回退精确 COUNT 并去掉估算标记。
+- **测试**: overview 断言补 `earliest_date`(种子 dragon_tiger 最早 20260909 ≠ 行数 2, 可拦错位回归)。
+- [tag v0.5.48]
+
 ### fix-/api/archive/overview 生产 PG 适配(l2_ticks/klines 无 trade_date + DATE 类型归一)
 - **实撞问题**(v0.5.46 生产首测): ① `auction_snapshots`/`chip_daily` 在 PG 为 `trade_date DATE`, SQL 里 `COALESCE(date,'')` 类型不匹配直接报错 → 返 None; ② `l2_ticks`(7900 万行)/`klines` **无 trade_date 列**(只有 ts 时间戳) → 整表统计失败。
 - **修法**: 按表适配 —— trade_date 表维持原查询, DATE 值 Python 侧归一 YYYYMMDD; l2_ticks/klines 日期取 MIN/MAX(ts)(l2_ticks 的 ts 是**入库时间**, note 如实标注), 行数走 PG `reltuples` 估算(`rows_estimated: true`, 规避 7900 万行精确 COUNT 的 ~20s; sqlite 精确 COUNT)。

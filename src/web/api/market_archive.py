@@ -119,13 +119,17 @@ def overview():
                             text("SELECT reltuples::bigint FROM pg_class WHERE relname = :t"),
                             {"t": name},
                         ).fetchone()
-                        n = int(row[0]) if row and row[0] and row[0] > 0 else None
+                        n = int(row[0]) if row and row[0] and int(row[0]) > 0 else None
                         est = n is not None
+                        if n is None:
+                            n = db.execute(text(f"SELECT COUNT(*) FROM {name}")).scalar()
+                            est = False
                     else:
                         n = db.execute(text(f"SELECT COUNT(*) FROM {name}")).scalar()
                     drow = db.execute(
                         text(f"SELECT MIN(ts) AS a, MAX(ts) AS b FROM {name}")
                     ).fetchone()
+                    lo, hi = drow[0], drow[1]
                 else:
                     row = db.execute(
                         text(
@@ -133,14 +137,14 @@ def overview():
                             f" FROM {name}"
                         )
                     ).fetchone()
-                    n, est, drow = row[0], False, row
+                    n, est, lo, hi = row[0], False, row[1], row[2]
                 items.append(
                     {
                         "table": name,
                         "rows": n,
                         "rows_estimated": est,
-                        "earliest_date": _norm_dateval(drow[0]),
-                        "latest_date": _norm_dateval(drow[1]),
+                        "earliest_date": _norm_dateval(lo),
+                        "latest_date": _norm_dateval(hi),
                     }
                 )
             except Exception as e:  # noqa: BLE001

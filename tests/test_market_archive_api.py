@@ -101,8 +101,10 @@ def test_overview_freshness(monkeypatch):
     by_name = {t["table"]: t for t in data["tables"]}
     assert len(data["tables"]) == 6
     assert by_name["quote_snapshots"]["rows"] == 3
+    assert by_name["quote_snapshots"]["earliest_date"] == "20260910"  # 不能误取 COUNT
     assert by_name["quote_snapshots"]["latest_date"] == "20260910"
     assert by_name["dragon_tiger_events"]["rows"] == 2
+    assert by_name["dragon_tiger_events"]["earliest_date"] == "20260909"
 
 
 def test_quote_snapshots_route(monkeypatch):
