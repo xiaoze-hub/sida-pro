@@ -15,6 +15,11 @@
 - **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1989 passed / 4 failed / 5 skipped**(4 类均为环境: 2 个 KI-027 本机损坏文件 + `test_tencent_data_sources` 2 例直连腾讯面板接口, 探针实测 `fetch_price_distribution→None`、`big_order_stats→全 0`, 与本改动无关); 4 项静态门禁通过; `import server` OK。
 - [tag v0.5.37]
 
+### update-v0.5.37 生产部署(代码覆盖层, chown+compileall, 冒烟 9/9, 只读验收)
+- **部署**: 备份 `/root/app_backup_pre_v0537_20260910.tar.gz` → `tar xf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy → `/api/version` = **v0.5.37** → 冒烟 **9/9**(28.2s)。纯后端, 前端 static 未动(无前端改动)。
+- **只读验收**(开盘时段不触发 LLM): 容器内实测 `agent_user_buckets("premarket_outlook")` = **3 个用户桶**; 各桶自选 = admin 2 / 娟姐 3 / 黄磊 35 只(**互不串号**); 旧口径(不过滤)仍 40 只 → 隔离生效。
+- [tag v0.5.37]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。
