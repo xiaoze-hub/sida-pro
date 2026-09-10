@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### release-OpenTerminal 借鉴 P1-P3 全量交付(12 项); v0.5.50
+- **交付范围**(方案 §四 全部 12 项, 按 P1→P3 顺序, 逐项 commit + CHANGELOG 见本日各条目): P1-1 板块热力图(B1) / P1-2 单源依赖审计(C4); P2-1 数据源 EWMA+心跳条(C1) / P2-2 看板轻量定制(A1) / P2-3 价格 Flash(A3); P3-1 命令面板动作化(A2) / P3-2 新闻去重(C3) / P3-3 stale-on-error(C2) / P3-4 三态审计(B5) / P3-5 三地市场状态(A4) / P3-6 面板联动开关(A6) / P3-7 AI 合规护栏(D3)。
+- **两个审计交付物**: `docs/research/单源依赖审计_20260910.md`(单源约 30 条三分类 + 处置) / `docs/research/三态覆盖审计_20260910.md`(14 数据面 × 三态矩阵)。
+- **台账**: 新增 KI-041(R6 基线冷冻包干)+ KI-042..046(分钟K线/自选批量/板块资金/新闻 静默态 + 死配置), 台账 **31 条在册**。
+- **门禁汇总**: 后端离线全量 `PYTHONUTF8=1 python -m pytest -m "not network"` → **2069 passed / 2 failed(仅 KI-027 本机已知) / 5 skipped**; 前端 vitest **107 passed(19 文件)** / tsc / eslint / UI-RULES OK / `pnpm build` 全过。
+- **本地走查**: P1-1 热力图(行业/概念 × 量能/等权 + 下钻) / P2-1 心跳条(真实 EWMA) / P2-2 定制(隐藏→刷新仍生效→重置) / P3-1 面板 Shift+Enter 加自选(API 核对) / P3-5 三徽标 / P3-6 锁定后切标的不跟随(网络侧核对) 全部实测通过。
+- [tag v0.5.50]
+
 ### feat-P3-7 AI 合规护栏统一挂载 (OpenTerminal 借鉴 D3): 提示词层"不构成投资建议"全覆盖
 - **自查结论**(方案 D3 "确认现有 prompt 有同类护栏"): ① chat 系统提示词自 2026-08-14 已含合规声明(chat.py:52, 要求买卖倾向/预测结论必须附"仅供参考, 不构成投资建议"); ② 报告/PDF/影子报告输出另有**确定性页脚**("不构成投资建议, 入市需谨慎" —— 比提示词更硬); ③ 缺口: 场景 Agent 提示词(归因/题材/竞价/反证/日报等)与 3 个直接提示词点位(insights 加仓评估/公告解读、dashboard 候选排序)无护栏。
 - **实现**: `src/core/ai_client.py` 新增 `COMPLIANCE_CLAUSE` + `with_compliance()`(幂等, 已含不重复追加)并挂到 `build_system_prompt`(统一组装入口 → 全部场景 Agent 覆盖); `insights.py`×2 与 `dashboard.py` curate 三个直接点位补挂。形成三层防线: 提示词 → 组装入口 → 输出物页脚。
