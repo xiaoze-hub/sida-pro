@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P3-5 三地市场状态徽标 (OpenTerminal 借鉴 A4): 开闭市文案 + 交易时段直显
+- **前端**: 新增 `src/components/MarketStatusPills.tsx`(自 Dashboard 头部内联 pill 抽出) —— 每个市场 = 名称 + 开/闭市文案(交易中琥珀高亮) + 桌面档(lg)直显交易时段; 悬停 title 含完整时段与当地时间; 空列表不渲染。后端 `/stocks/markets/status` 本就返回 `status_text/sessions/local_time`, A4 缺的只是展示, 故零后端改动。
+- **口径留痕**: CN 已含法定节假日判定(trading_calendar); HK/US 仍为周末口径 —— KI-012 在册未变。
+- **测试**: 新增 `tests/components/market-status-pills.test.tsx` 4 例(徽标文案 / 交易中高亮 / 时段+当地时间 tooltip 与直显 / 空列表不渲染)。门禁: vitest 103 passed(18 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: 浏览器实测三徽标 —— A股 已收盘 09:30-11:30/13:00-15:00(当地 21:20) / 港股 已收盘 / 美股 盘前 09:30-16:00(当地 09:20)。
+- [commit <见 git log>]
+
 ### chore-P3-4 三态覆盖审计 (OpenTerminal 借鉴 B5): 主数据面 加载/空/错 清单 + 修 1 处静默空白
 - **审计交付**: `docs/research/三态覆盖审计_20260910.md` —— 14 个主数据面 × 三态矩阵(方法: 代码扫描 `Skeleton/暂无/catch` + 关键组件逐个人工复核); 结论: 主面基本齐备(多为 Skeleton + 空态引导文案 + ErrorBanner, 与既有基建一致)。
 - **修复(P1)**: `frontend/src/pages/IndexDetail.tsx` 成交额趋势 `AmountChart` 空数组原 `return null` → 标题下静默空白(易被误读为渲染失败), 改为显式"暂无成交额趋势数据"。

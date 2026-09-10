@@ -46,6 +46,7 @@ import AnimatedNumber from '@panwatch/biz-ui/components/AnimatedNumber'
 import FlashValue from '@panwatch/biz-ui/components/FlashValue'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
+import MarketStatusPills from '@/components/MarketStatusPills'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import {
   isHidden,
@@ -538,12 +539,8 @@ export default function DashboardPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           {refreshedAt && <span className="text-muted-foreground">{formatHeaderTime(refreshedAt)}</span>}
-          {marketStatus.map((m) => (
-            <span key={m.code} className="inline-flex items-center gap-1.5 rounded-full bg-accent/40 px-2 py-0.5">
-              <span className={`h-1.5 w-1.5 rounded-full ${m.is_trading ? 'bg-amber-500' : 'bg-muted-foreground/40'}`} />
-              <span className="text-muted-foreground">{m.name}</span>
-            </span>
-          ))}
+          {/* A4: 三地开闭市徽标(交易中高亮) + 交易时段(桌面档直显, 悬停含当地时间) */}
+          <MarketStatusPills items={marketStatus} />
         </div>
       </div>
 
