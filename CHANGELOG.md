@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### update-v0.5.52 生产部署(代码覆盖层+前端产物, chown+compileall, 冒烟 9/9)
+- **部署**(本机 WSL=生产, Tailscale 100.91.30.35:8000): 备份 `/root/app_backup_pre_v0552_20260910.tar.gz`(23.9MB, 代码面, 排除 data/)→ 覆盖层(`git archive v0.5.52` + 新 `frontend/dist` 拷入 `static/`, 14.4MB)`tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → healthy(约 40s) → `/api/version` = **v0.5.52** → 冒烟 **9/9**(11.2s)。
+- **前端核对**: 线上 `/` 引用 `assets/index-DdSzE-FM.js` 与本地构建一致; 热力图 lazy chunk `assets/Heatmap-DHYZvAGz.js` 线上/本地 **sha256 逐字节一致**(0193315e...), 且含新串"实时/板块异动/急拉/急跌/放量"。
+- **API 实测**: `GET /boards/heatmap?live=1`(强制档)→ live=true / live_count=90 / as_of 有值, 项目带 volume_ratio/speed/live; 缺省 auto(22:20 非交易时段)→ live=false 日线口径回落正确。
+- **浏览器走查**(生产 v0.5.52, 会话令牌容器内签发注入, 走查后已清除): 默认视图显示"数据截至 2026-09-10"(非时段, 无实时标注/无异动清单, 回归正常); 浏览器侧强制 `live=1`(仅本会话 fetch 改写, 真数据真接口)后 **页头"● 实时 · 22:21:51" + "板块异动"清单"代糖概念 -3.19% 放量"(真实命中, 量比 2.47)** 正常渲染; 点击异动 chip → 下钻板块详情(URFI885904, 今日 -3.19% 与清单一致, 成分股 25 只)通过。走查后 fetch 改写与注入 token 均已清除。
+- **待首验**: "盘中自动(不传 live 参数)"路径需交易时段(下一交易日 09:30 后)自然首验 —— 届时页面应自动出现"实时"标注与异动清单。
+- [tag v0.5.52 已推 origin]
+
 ### feat-板块热力图实时化(老板拍板: 60s 自动刷新 + 异动高亮, 不推送); v0.5.52
 - **背景**: 老板提议"热力图 + 盘中异动结合, 让板块自己动起来, 还会有异动提示"; 拍板首期范围 = **盘中 60s 自动刷新 + 异动高亮, 不发通知**。阈值规则做成纯函数(与推送解耦, 后续要接通知可直接复用)。
 - **后端**(`src/web/api/boards.py` + `src/core/thsdk_board.py`): `/api/boards/heatmap` 新增 `live=auto|1|0`(缺省 auto)。auto = 交易时段内(`in_trading_window()`)用 thsdk **"扩展"档批量快照**(涨幅/主力净流入/量比/板块涨速)覆盖涨跌幅与资金净流入, **面积量能仍取日线成交额**(日内相对大小稳定); 非交易时段/取数失败 → 静默回落纯日线, 不报错。实时快照 **60s TTL 缓存 + 单飞**(并发请求只打一次 thsdk, 后到者等锁取缓存); 响应新增 `live / live_count / as_of(UTC)` 供前端标注基准时刻。`fetch_block_snapshots()` 泛化 `modes` 参数复用既有批量分片/容错。
