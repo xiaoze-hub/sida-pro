@@ -279,7 +279,8 @@ async def add_position_eval(req: AddPositionEvalRequest, db: Session = Depends(g
         # 跨服务商绑定必须连 base_url/api_key 一起换, 否则 404 model not found)
         # 2026-08-16 传 user: 走 BYOK/平台授权用户级解析
         try:
-            from src.core.ai_client import get_model_for_scene
+            from src.core.ai_client import get_model_for_scene, with_compliance
+            system_prompt = with_compliance(system_prompt)  # D3 合规护栏
 
             scene_client = _client_from_scene_cfg(db, get_model_for_scene(db, "insights", user=user))
             if scene_client is not None:
@@ -378,7 +379,8 @@ async def announcement_eval(req: AnnouncementEvalRequest, db: Session = Depends(
         # 2026-08-13 统一 LLM 配置中心: insights 场景绑定覆盖(client 整体重建)
         # 2026-08-16 传 user: 走 BYOK/平台授权用户级解析
         try:
-            from src.core.ai_client import get_model_for_scene
+            from src.core.ai_client import get_model_for_scene, with_compliance
+            system_prompt = with_compliance(system_prompt)  # D3 合规护栏
 
             scene_client = _client_from_scene_cfg(db, get_model_for_scene(db, "insights", user=user))
             if scene_client is not None:

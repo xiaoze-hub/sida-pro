@@ -7,6 +7,12 @@
 
 ## 2026-09-10
 
+### feat-P3-7 AI 合规护栏统一挂载 (OpenTerminal 借鉴 D3): 提示词层"不构成投资建议"全覆盖
+- **自查结论**(方案 D3 "确认现有 prompt 有同类护栏"): ① chat 系统提示词自 2026-08-14 已含合规声明(chat.py:52, 要求买卖倾向/预测结论必须附"仅供参考, 不构成投资建议"); ② 报告/PDF/影子报告输出另有**确定性页脚**("不构成投资建议, 入市需谨慎" —— 比提示词更硬); ③ 缺口: 场景 Agent 提示词(归因/题材/竞价/反证/日报等)与 3 个直接提示词点位(insights 加仓评估/公告解读、dashboard 候选排序)无护栏。
+- **实现**: `src/core/ai_client.py` 新增 `COMPLIANCE_CLAUSE` + `with_compliance()`(幂等, 已含不重复追加)并挂到 `build_system_prompt`(统一组装入口 → 全部场景 Agent 覆盖); `insights.py`×2 与 `dashboard.py` curate 三个直接点位补挂。形成三层防线: 提示词 → 组装入口 → 输出物页脚。
+- **测试**: 新增 `tests/test_ai_compliance.py` 5 例(追加/幂等/空值安全/build_system_prompt 集成/**源扫描棘轮防新增漏挂**)。相关域 39 passed。
+- [commit <见 git log>]
+
 ### feat-P3-6 面板联动开关 (OpenTerminal 借鉴 A6): K线面板跟随/锁定, 支持盘中对比
 - **前端**: 新增 `src/components/PanelLockToggle.tsx`(跟随/已锁定两态; 与当前浏览分离时给"当前浏览 X（本面板未跟随）"提示); Quote 页 K线面板接入 —— 默认跟随当前标的(不改变既有行为), 点击锁定到当前标的; 锁定后切换标的本面板不再跟随(父层重定向 `symbol` prop, KlineChart 自拉锁定标的的K线)。
 - **不串数据**: 锁定且与当前浏览分离时, 来自页面级 summary 的叠加数据(K线事件/支撑压力/成本线/GS信号/资金流/活跃度)一律置空 —— 宁可少画, 不把 B 的叠加画到 A 的 K线上。

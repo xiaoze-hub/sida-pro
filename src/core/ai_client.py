@@ -723,13 +723,30 @@ def _resolve_user_byok(db, user, scene: str) -> dict | None:
     return None
 
 
+# ── D3 AI 合规护栏 (2026-09-10, OpenTerminal 借鉴 D3) ─────────────────────────
+# 面向用户的 LLM 提示词统一附加(chat 系统提示词 2026-08-14 已单独含同类声明;
+# 报告/PDF 输出另有确定性页脚兜底, 三重防线: 提示词 → 组装入口 → 输出物)。
+COMPLIANCE_CLAUSE = (
+    "\n\n【合规护栏】不提供个性化投资建议: 只做数据研究与公开信息梳理, "
+    '不承诺收益、不保证盈利; 涉及买卖倾向或预测结论时, 必须注明"仅供参考, 不构成投资建议"。'
+)
+
+
+def with_compliance(system_prompt: str) -> str:
+    """给 system prompt 追加合规护栏(幂等: 已含"不构成投资建议"不重复追加; 空值原样返回)。"""
+    if not system_prompt or "不构成投资建议" in system_prompt:
+        return system_prompt
+    return system_prompt + COMPLIANCE_CLAUSE
+
+
 def build_system_prompt(db, scene: str, base_prompt: str, user) -> str:
     """组装最终 system prompt(统一 LLM 配置中心入口)。
 
-    - 先 base_prompt;
+    - 先接合规护栏(D3: 场景 Agent 提示词全覆盖);
     - 若 user.shadow_profile_json 非空(用户上传过交割单), 追加用户交易风格画像段;
-    - 无画像(或 user 为 None)时原样返回 base_prompt, 完全向后兼容。
+    - 无画像(或 user 为 None)时返回 base_prompt + 合规护栏, 完全向后兼容。
     """
+    base_prompt = with_compliance(base_prompt)
     if not base_prompt:
         return base_prompt
 
