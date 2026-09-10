@@ -284,13 +284,26 @@ def fetch_auction_weak_to_strong(limit: int = 15) -> str:
         return f"弱转强获取失败: {e}"
 
 
+def _tencent_fallback_snapshot(limit: int = 15) -> dict:
+    """限流窗口/悟道失败时的结构化降级: 腾讯竞价高开榜(文本, 无悟道独家字段)。"""
+    text = _fetch_tencent_gainer_board(limit, title="竞价高开榜(腾讯降级)")
+    if text and text.startswith("【"):
+        return {"text": text, "source": "tencent_fallback"}
+    return {}
+
+
+# 悟道结构化字段(agent 视角): 除 opening_snapshot 外均为悟道独家, 无免费等价源。
+_WUDAO_ONLY_SECTIONS = ("theme_strength", "market_scan", "weak_to_strong", "limitup_feedback")
+
+
 def fetch_auction_raw() -> dict:
     """结构化竞价数据(agent 用): 悟道原始 dict 优先, 限流窗口内快速失败不白等。
 
     返回: {opening_snapshot, theme_strength, market_scan, weak_to_strong,
            limitup_feedback, limited(bool), error}
-    限流窗口(9:15-10:30)内不调用悟道(避免 25s 超时), 全部置空并标 limited=True;
-    窗口外悟道失败也标 limited=False + error(由调用方降级展示)。
+    限流窗口(9:15-10:30)内不调用悟道(避免 25s 超时), 并以**腾讯竞价高开榜降级**填充
+    `opening_snapshot`(2026-09-10 修: 原先全空 → agent 拿到空 prompt 只能回报"数据缺失");
+    窗口外悟道失败/全空同样用腾讯兜底, 保证 agent 至少有真实数据可分析。
     """
     out: dict = {
         "opening_snapshot": {},
@@ -303,7 +316,10 @@ def fetch_auction_raw() -> dict:
     }
     if not _wudao_available():
         out["limited"] = True
-        out["error"] = "悟道限流窗口(9:15-10:30), 竞价数据降级"
+        out["error"] = "悟道限流窗口(9:15-10:30), 竞价独家字段不可得, 已降级腾讯竞价高开榜"
+        snap = _tencent_fallback_snapshot()
+        if snap:
+            out["opening_snapshot"] = snap
         return out
     try:
         from src.collectors.wudao_mcp_client import WudaoMCPClient
@@ -317,6 +333,11 @@ def fetch_auction_raw() -> dict:
         out["limitup_feedback"] = client.auction_limitup_feedback(focus="all", group_by="streak") or {}
     except Exception as e:
         out["error"] = str(e)
+    # 悟道可用但拿不到任何结构化数据 → 仍用腾讯降级兜底(别把空 prompt 丢给 LLM)
+    if not any(out.get(k) for k in ("opening_snapshot", *_WUDAO_ONLY_SECTIONS)):
+        snap = _tencent_fallback_snapshot()
+        if snap:
+            out["opening_snapshot"] = snap
     return out
 
 

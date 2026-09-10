@@ -37,16 +37,40 @@ class AuctionReviewAgent(BaseAgent):
             from src.collectors.auction_collector import fetch_auction_raw
 
             raw = fetch_auction_raw()
-            data["client_ok"] = True
             data["opening_snapshot"] = raw.get("opening_snapshot") or {}
             data["theme_strength"] = raw.get("theme_strength") or {}
             data["market_scan"] = raw.get("market_scan") or {}
             data["weak_to_strong"] = raw.get("weak_to_strong") or {}
             data["limitup_feedback"] = raw.get("limitup_feedback") or {}
+            # 2026-09-10 修: 原先无条件 client_ok=True, 即使五个字段全空 → build_prompt 的
+            # "数据不可用→降级"分支永不触发, 送空 prompt 给 LLM → 模型回报"数据缺失/日期在未来"。
+            _sections = (
+                "opening_snapshot",
+                "theme_strength",
+                "market_scan",
+                "weak_to_strong",
+                "limitup_feedback",
+            )
+            _has_data = any(bool(data.get(k)) for k in _sections)
+            # 仅腾讯降级(无悟道独家字段) → 可用但降级, 需在 prompt 里标口径
+            _has_wudao_only = any(
+                bool(data.get(k))
+                for k in ("theme_strength", "market_scan", "weak_to_strong", "limitup_feedback")
+            )
+            data["client_ok"] = _has_data
+            data["degraded"] = _has_data and not _has_wudao_only
+            data["source"] = (data.get("opening_snapshot") or {}).get("source") or (
+                "wudao" if _has_wudao_only else ""
+            )
             if raw.get("limited"):
                 data["limited"] = True
                 data["client_error"] = raw.get("error", "悟道限流窗口")
-                logger.info("[%s] 悟道限流窗口, 竞价数据降级: %s", trace_id, raw.get("error"))
+                logger.info(
+                    "[%s] 悟道限流窗口, 竞价降级(has_data=%s): %s",
+                    trace_id,
+                    _has_data,
+                    raw.get("error"),
+                )
             elif raw.get("error"):
                 data["client_error"] = raw.get("error")
                 logger.warning("[%s] 悟道竞价采集失败: %s", trace_id, raw.get("error"))
@@ -92,6 +116,10 @@ class AuctionReviewAgent(BaseAgent):
 4. 弱转强/被核:昨炸板谁反包强,昨高标谁被核
 5. 风险提示
 
+【数据与时效】
+- 用户消息里已给出**当日真实数据与日期**; 严禁以"日期在未来/超出知识库截止/需要你提供数据"为由拒答, 也不要向用户索要数据。
+- 数据缺字段(如悟道独家字段在 9:15-10:30 限流窗口不可得)就明确标注"该字段不可得", 并**基于已有数据**给出结论。
+
 【硬约束】
 - 先结论后证据
 - 不给买卖建议,不预测后续涨跌,只做竞价截面解释
@@ -102,9 +130,22 @@ class AuctionReviewAgent(BaseAgent):
         user_content.append(f"## 日期:{data.get('timestamp', datetime.now().isoformat())[:10]} 竞价复盘\n")
 
         if not ad.get("client_ok"):
-            user_content.append(f"⚠️ wudao 竞价数据不可用:{ad.get('client_error', '未知错误')}")
-            user_content.append("(无法获取竞价全景/一致性/弱转强,竞价复盘降级为普通盘前展望)")
+            user_content.append(f"⚠️ 竞价数据全部不可用:{ad.get('client_error', '未知错误')}")
+            user_content.append(
+                "(悟道独家字段与腾讯降级榜均未取到 —— 无法给出竞价截面解读。"
+                "请直接说明'今日竞价数据暂不可得(数据源不可用)', 并仅给中性提示; "
+                "严禁编造具体数字, 也不要向用户索要数据。)"
+            )
             return system_prompt, "\n".join(user_content)
+
+        # 数据口径(降级时): 说明缺哪些字段及其原因, 避免模型把"缺失"当异常或反过来索要数据
+        if ad.get("degraded"):
+            user_content.append(
+                f"> 数据口径: {ad.get('client_error') or '悟道数据不可用'}; "
+                "下方「竞价全景」为腾讯批量行情降级(竞价高开榜, 含竞价涨幅/竞价涨停), "
+                "**题材一致性(consistency)/竞价强度榜(bidStrength)/弱转强/被核反馈为悟道独家字段, "
+                "本时段不可得**。请基于已有竞价高开榜做截面解读, 缺的字段标注'不可得'即可, 不要索要数据。\n"
+            )
 
         # 竞价全景
         snap = ad.get("opening_snapshot", {}) or {}

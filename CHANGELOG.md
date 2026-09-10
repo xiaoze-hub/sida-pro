@@ -26,6 +26,14 @@
 - **验证**: `-m "not network"` → 7 passed / 15 deselected; `-m network` → 15 例(供 nightly); 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1976 passed / 2 failed(仅 KI-027 本机损坏文件) / 5 skipped / 157 deselected** —— 主门禁不再受行情源抖动影响。
 - [tag v0.5.37]
 
+### fix-竞价复盘(auction_review)恒"数据缺失": 限流窗口无降级 + client_ok 误置
+- **现象**(老板反馈 09-08 那条"关键数据缺失提醒…请补充数据源"): 该 agent 定于 **9:26** 触发, 正落在采集器判定的**悟道限流窗口(9:15-10:30)**。生产 `agent_runs` 佐证: 09-08 "数据缺失提示"、09-07/09-04 模型答"日期在未来/超出知识库截止"、09-10 failed、09-09 LLM 超时 —— 连续多日无有效产出。
+- **根因**(两处叠加): ① `auction_collector.fetch_auction_raw` 限流窗口**直接返回五字段全空且无降级**(对比字符串版 `fetch_auction_overview/strongest` 本就有腾讯降级) → agent 拿不到任何数据; ② `auction_review.collect` **无条件 `client_ok=True`** → `build_prompt` 里"数据不可用→降级为盘前展望"分支**永不触发**, 送只有日期无数据的 prompt → 模型按"缺字段就明说"回报缺数据/误判日期。
+- **修复**: ① `fetch_auction_raw` 限流窗口/悟道失败/全空时用**腾讯竞价高开榜降级**填充 `opening_snapshot`(`source=tencent_fallback`); ② `collect` 如实置 `client_ok`(有无数据) + 新增 `degraded`(仅腾讯降级、无悟道独家字段); ③ `build_prompt` 全空走明确降级分支、降级时加"数据口径"说明(哪些字段为悟道独家不可得); ④ system prompt 增【数据与时效】: 已给当日真实数据, **禁止以"日期在未来/超出知识库"拒答、禁止向用户索要数据**。
+- **测试**: 新增 `tests/test_auction_review_degrade.py` 5 例(限流窗口降级填充 / 悟道全空降级 / collect 如实标记 / 全空 / 两条 build_prompt 分支)。
+- **验证**: 全量离线套件 `PYTHONUTF8=1 pytest -q -m "not network"` → **1981 passed / 2 failed(仅 KI-027 本机) / 5 skipped / 157 deselected**。
+- [tag v0.5.38]
+
 ### feat-接口先行项落地①: 行情来源徽标(KI-019) + 决策合成卡片(KI-021) + 错误日志页签(KI-018)
 - **KI-019 来源徽标**: Quote 页决策条增「源: {vendor} · {latency}ms」; 悬浮显示 `/api/datasources/trust` 的质量分/成功率/P50; **空源显式标「未知」**(不编造)。
 - **KI-021 决策合成卡片**: Quote 页增卡片, 消费 `GET /api/decision/{symbol}`(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由 + 三信号明细); 与既有「该不该动」前端快判**口径不同**, 卡片 tooltip 已注明。
