@@ -7,6 +7,13 @@
 
 ## 2026-09-10
 
+### feat-P3-6 面板联动开关 (OpenTerminal 借鉴 A6): K线面板跟随/锁定, 支持盘中对比
+- **前端**: 新增 `src/components/PanelLockToggle.tsx`(跟随/已锁定两态; 与当前浏览分离时给"当前浏览 X（本面板未跟随）"提示); Quote 页 K线面板接入 —— 默认跟随当前标的(不改变既有行为), 点击锁定到当前标的; 锁定后切换标的本面板不再跟随(父层重定向 `symbol` prop, KlineChart 自拉锁定标的的K线)。
+- **不串数据**: 锁定且与当前浏览分离时, 来自页面级 summary 的叠加数据(K线事件/支撑压力/成本线/GS信号/资金流/活跃度)一律置空 —— 宁可少画, 不把 B 的叠加画到 A 的 K线上。
+- **测试**: 新增 `tests/components/panel-lock-toggle.test.tsx` 4 例(跟随态 / 锁定态 / 分离提示 / 同标的不提示)。门禁: vitest 107 passed(19 文件) / tsc / eslint / UI-RULES OK。
+- **本地走查**: SPA 内实测 —— 锁定 600519 后切到 000001: 按钮保持"已锁定 600519" + 提示"当前浏览 000001（本面板未跟随）"; 网络侧确认图表**未**拉 `/klines/000001`(仍 600519), 页面其余面板正常切到 000001。
+- [commit <见 git log>]
+
 ### feat-P3-5 三地市场状态徽标 (OpenTerminal 借鉴 A4): 开闭市文案 + 交易时段直显
 - **前端**: 新增 `src/components/MarketStatusPills.tsx`(自 Dashboard 头部内联 pill 抽出) —— 每个市场 = 名称 + 开/闭市文案(交易中琥珀高亮) + 桌面档(lg)直显交易时段; 悬停 title 含完整时段与当地时间; 空列表不渲染。后端 `/stocks/markets/status` 本就返回 `status_text/sessions/local_time`, A4 缺的只是展示, 故零后端改动。
 - **口径留痕**: CN 已含法定节假日判定(trading_calendar); HK/US 仍为周末口径 —— KI-012 在册未变。

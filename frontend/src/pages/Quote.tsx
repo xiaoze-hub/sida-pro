@@ -4,6 +4,7 @@ import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import PanelLockToggle from '@/components/PanelLockToggle'
 import { insightApi, dashboardApi, datasourcesApi, type DashboardPosition, type VendorTrustItem } from '@panwatch/api'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import {
@@ -231,6 +232,13 @@ export default function QuotePage() {
   // 默认股票: URL > 上次查看(localStorage) > 上证指数(仅首次)
   const symbol = (params.get('symbol') || readLastSymbol() || '000001').trim()
   const type = (params.get('type') as QuoteType) || 'stock'
+
+  // A6 面板联动开关(2026-09-10): K线面板锁定标的(null=跟随当前浏览标的);
+  // 锁定后切换标的不再联动, 供盘中对比(一个面板看 A, 页面其余部分看 B)。
+  const [chartLock, setChartLock] = useState<string | null>(null)
+  const chartSymbol = chartLock ?? symbol
+  /** 锁定面板的标的与当前浏览标的分离(对比态): 叠加数据(事件/资金/活跃度)不同步过来 */
+  const chartLockedAway = chartSymbol !== symbol
 
   const [input, setInput] = useState(symbol)
   const [suggests, setSuggests] = useState<StockSuggest[]>([])
@@ -685,24 +693,33 @@ export default function QuotePage() {
                   {s === 'vol' ? '成交量' : s === 'macd' ? 'MACD' : '活跃度'}
                 </button>
               ))}
+              {/* A6: 面板联动开关 —— K线面板默认跟随当前标的, 可锁定做盘中对比 */}
+              <span className="ml-auto">
+                <PanelLockToggle
+                  symbol={symbol}
+                  locked={chartLock}
+                  onToggle={() => setChartLock((prev) => (prev == null ? symbol : null))}
+                />
+              </span>
             </div>
             {/* K线大图(无卡片包) */}
+            {/* A6: 锁定态(chartSymbol≠当前浏览)时叠加数据来自别的标的, 一律置空 —— 宁可少画, 不串数据 */}
             <KlineChart
-              key={`${type}:${symbol}`}
-              symbol={symbol}
+              key={`${type}:${chartSymbol}`}
+              symbol={chartSymbol}
               market="CN"
               initialInterval="1d"
               initialDays={120}
-              events={normEvents}
-              supportPressure={normPriceLines}
-              costLines={costLines}
-              gsSignals={normGsSignals}
-              fundFlow={summary?.fund_flow?.map((r) => ({
+              events={chartLockedAway ? [] : normEvents}
+              supportPressure={chartLockedAway ? [] : normPriceLines}
+              costLines={chartLockedAway ? [] : costLines}
+              gsSignals={chartLockedAway ? [] : normGsSignals}
+              fundFlow={chartLockedAway ? [] : summary?.fund_flow?.map((r) => ({
                 date: r.date,
                 open_net: r.ming_net,
                 dark_net: r.dark_net,
               }))}
-              activitySeries={(summary?.activity_series ?? [])
+              activitySeries={chartLockedAway ? [] : (summary?.activity_series ?? [])
                 .filter((r) => r.date != null)
                 .map((r) => ({
                   date: r.date as string,
