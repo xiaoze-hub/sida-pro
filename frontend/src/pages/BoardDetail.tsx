@@ -4,18 +4,22 @@ import { ArrowLeft, Layers, RefreshCw } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
+import { safeFixed } from '@/lib/format'
 
 /**
  * 板块详情页(2026-08-20, v0.3.0) 路由 /boards/:blockCode。
  * 依赖:
  *   GET /api/boards/{block_code}             板块详情(今日 change_pct / fund_net / volume)
- *   GET /api/boards/{block_code}/constituents 成分股(thsdk 实时, 1h 缓存)
+ *   GET /api/boards/{block_code}/constituents 成分股(通达信实时 / thsdk 实时)
  *   GET /api/boards/rotation?days=5          板块轮动排序(取 Top5 横条 + 本板块 5 日涨幅)
- * 口径:
- *   - 今日涨跌幅 change_pct、资金净流入 fund_net、量能 volume 均来自 thsdk 板块日线。
- *   - 5 日涨幅 = 近 5 日日线复利累计涨幅(rotation 接口, 若命中本板块)。
- *   - 换手率接口未提供(仅 volume), 故用成交额/量能呈现并注明口径。
- * 成分股字段为 thsdk 原始列, 前端按语义模糊取列(代码/名称/涨速/资金), 缺字段显示 --。
+ * 口径(方案B 2026-09-10, 老板拍板):
+ *   - 通达信板块(88xxxx.SH): 今日涨跌幅/主力资金/成交额 + 成分股涨幅 均为**通达信客户端实时**
+ *     (get_pricevol + AMO/SUPAMO 公式批量, 本地无配额); 资金为"通达信主力资金"口径,
+ *     与 thsdk 主力净流入定义不同, 不混用。
+ *   - thsdk 板块(URFI*): 沿用日线/扩展档口径。
+ *   - 5 日涨幅 = 轮动接口(thsdk 日线复利), 通达信板块暂不命中(显示 --)。
+ * 成分股: 通达信路径为规范字段(symbol/name/price/change_pct/amount); thsdk 路径为原始列,
+ * 前端按语义模糊取列, 缺字段显示 --。
  */
 
 interface BoardToday {
@@ -29,6 +33,7 @@ interface BoardDetailResp {
   block_code: string
   name: string
   board_type?: string
+  source?: string
   today?: BoardToday | null
   has_daily?: boolean
   live?: boolean
@@ -37,6 +42,7 @@ interface BoardDetailResp {
 
 interface BoardConstituent {
   count: number
+  source?: string
   items: Record<string, unknown>[]
 }
 
@@ -135,13 +141,14 @@ export default function BoardDetailPage() {
   const maxScore = Math.max(1, ...rotItemsTop.map((r) => r.rotation_score))
 
   const today = detail?.today ?? null
+  const srcLabel = detail?.source === 'tdx' ? '通达信实时' : 'thsdk 日线'
 
   // 顶栏关键指标
   const metrics = [
-    { label: '今日涨跌幅', value: fmtPct(today?.change_pct), cls: pctColor(today?.change_pct), note: 'thsdk 日线' },
+    { label: '今日涨跌幅', value: fmtPct(today?.change_pct), cls: pctColor(today?.change_pct), note: srcLabel },
     { label: '5日涨幅', value: fmtPct(selfRotation?.change_5d), cls: pctColor(selfRotation?.change_5d), note: '轮动复利' },
-    { label: '资金净流入', value: fmtWan(fundNet), cls: pctColor(fundNet), note: 'thsdk 日线' },
-    { label: '量能', value: today?.volume != null && Number.isFinite(today.volume) ? `${(today.volume / 1e8).toFixed(2)}亿` : '--', cls: 'text-foreground', note: '换手率未提供' },
+    { label: '资金净流入', value: fmtWan(fundNet), cls: pctColor(fundNet), note: detail?.source === 'tdx' ? '通达信主力资金' : 'thsdk 日线' },
+    { label: '成交额', value: today?.volume != null && Number.isFinite(today.volume) ? `${(today.volume / 1e8).toFixed(2)}亿` : '--', cls: 'text-foreground', note: detail?.source === 'tdx' ? '通达信实时' : '换手率未提供' },
   ]
 
   const rotBarColor = (r: RotationItem): string => {
@@ -202,7 +209,7 @@ export default function BoardDetailPage() {
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-[14px] font-semibold text-foreground">成分股</h2>
                 <span className="text-[11px] text-muted-foreground">
-                  共 {constituents?.count ?? 0} 只 · 口径 thsdk 实时
+                  共 {constituents?.count ?? 0} 只 · 口径 {constituents?.source === 'tdx' ? '通达信实时' : 'thsdk 实时'}
                 </span>
               </div>
               <div className="overflow-x-auto">
@@ -212,34 +219,41 @@ export default function BoardDetailPage() {
                       <th className="text-left py-1.5 pr-2 w-8">#</th>
                       <th className="text-left py-1.5 pr-2">代码</th>
                       <th className="text-left py-1.5 pr-2">名称</th>
-                      <th className="text-right py-1.5 pr-2">涨速</th>
-                      <th className="text-right py-1.5">资金</th>
+                      <th className="text-right py-1.5 pr-2">现价</th>
+                      <th className="text-right py-1.5 pr-2">涨幅</th>
+                      <th className="text-right py-1.5">成交额</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(constituents?.items ?? []).map((row, i) => {
-                      const code = pickStr(row, '代码', 'code', '证券代码')
-                      const name = pickStr(row, '名称', 'name', '证券名称')
-                      // 涨速: 语义匹配含"速"/"speed"的列
-                      const speedKey = Object.keys(row).find((k) => k.includes('速') || k.toLowerCase().includes('speed'))
-                      const speed = speedKey ? pickNum(row, speedKey) : null
-                      // 资金: 语义匹配含"主力净"/"资金"/"净流入"/"fund"的列
-                      const fundKey = Object.keys(row).find((k) => /主力净|资金|净流入|fund/i.test(k))
-                      const fund = fundKey ? pickNum(row, fundKey) : null
+                      const code = pickStr(row, 'symbol', '代码', 'code', '证券代码')
+                      const name = pickStr(row, 'name', '名称', '证券名称')
+                      // 通达信路径为规范字段(price/change_pct/amount); thsdk 路径回退语义模糊取列
+                      const priceKey = Object.keys(row).find(
+                        (k) => k.includes('现价') || k.includes('最新价') || k.toLowerCase() === 'price',
+                      )
+                      const chgKey = Object.keys(row).find((k) => /涨幅|涨跌|pct|change/i.test(k))
+                      const amtKey = Object.keys(row).find((k) => /金额|成交额/.test(k) || /amount/i.test(k))
+                      const price = pickNum(row, 'price', ...(priceKey ? [priceKey] : []))
+                      const chg = pickNum(row, 'change_pct', ...(chgKey ? [chgKey] : []))
+                      const amt = pickNum(row, 'amount', ...(amtKey ? [amtKey] : []))
                       return (
                         <tr key={code || i} className="border-b border-border/30 hover:bg-accent/40">
                           <td className="py-1 pr-2 text-[10px] text-muted-foreground">{i + 1}</td>
                           <td className="py-1 pr-2 font-mono text-muted-foreground">{code || '--'}</td>
                           <td className="py-1 pr-2 font-medium text-foreground">{name || '--'}</td>
-                          <td className={`py-1 pr-2 text-right font-mono tabular-nums ${pctColor(speed)}`}>{fmtPct(speed)}</td>
-                          <td className={`py-1 text-right font-mono tabular-nums ${pctColor(fund)}`}>{fmtWan(fund)}</td>
+                          <td className="py-1 pr-2 text-right font-mono tabular-nums text-muted-foreground">
+                            {price == null ? '--' : safeFixed(price, 2)}
+                          </td>
+                          <td className={`py-1 pr-2 text-right font-mono tabular-nums ${pctColor(chg)}`}>{fmtPct(chg)}</td>
+                          <td className="py-1 text-right font-mono tabular-nums text-muted-foreground">{fmtWan(amt)}</td>
                         </tr>
                       )
                     })}
                     {!constituents && (
                       <tr>
-                        <td colSpan={5} className="py-8 text-center text-[11px] text-muted-foreground">
-                          成分股暂不可用(thsdk 未接入 / 拉取失败)
+                        <td colSpan={6} className="py-8 text-center text-[11px] text-muted-foreground">
+                          成分股暂不可用(数据源未接入 / 拉取失败)
                         </td>
                       </tr>
                     )}

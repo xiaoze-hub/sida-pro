@@ -39,6 +39,8 @@ interface HeatmapResp {
   live?: boolean
   live_count?: number
   as_of?: string | null
+  /** 实际数据源: tdx=通达信客户端(方案B 默认) / ths=同花顺 thsdk(回落) */
+  source?: string
   items: BoardHeatItem[]
 }
 
@@ -247,6 +249,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
+          {fresh && data.source ? (
+            <span className="rounded bg-accent/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {data.source === 'tdx' ? '通达信' : '同花顺'}
+            </span>
+          ) : null}
           {liveMode ? (
             <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-500">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
