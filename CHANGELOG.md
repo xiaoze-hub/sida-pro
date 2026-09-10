@@ -7,6 +7,14 @@
 
 ## 2026-09-10
 
+### docs-《数据落库与共享缓存设计》(最大化落库 · 历史可查)
+- **背景**: 老板提出"市场数据尽量落库以便查历史, 且避免多账号同时访问时各自打上游接口"。
+- **产出**: 新增 `docs/数据落库与共享缓存设计_20260910.md`(基线 main @ `e7e4e79`), 含: 现状实测盘点(见下) / 三层模型(L0 PG 定稿·L1 Redis 热·L2 实时不落库) / **14 项落库矩阵**(表名·粒度·键·写入者·保留·归属) / 存储治理 / Key 与隔离红线 / 一致性(击穿·雪崩·回填) / 可观测指标 / 3 批落地路线 / 风险回滚 / 4 个待决策点。
+- **实测依据**: PG **16.15 + TimescaleDB 2.29.2**, 库 17 GB; **仅 `klines` 是 hypertable**; **`l2_ticks` 7564 万行 / 16 GB / 仅 7 天(≈2.3 GB/天)且为普通表**; Timescale **无压缩无保留策略**; Redis 生产已接通但**仅跑 streams**; marketdata 为**进程内 TTLCache(per-worker, 2 worker 各拉一次)**。
+- **两个结论**: ① "各账号各打一次"的放大器是 **worker 数**, 共享缓存必须出进程; ② "最大化落库"的真正瓶颈是**存储**, 须先做 hypertable+压缩+保留, 否则不可持续(全市场 5s 快照 ≈8600 万行/天, 明确不落 PG)。
+- **待决策**: `l2_ticks` 保留期 / 全市场快照落库范围 / 分钟线 raw 保留期 / 是否先只做"存储治理 + Redis 化"第 1 批。
+- [commit e7e4e79 后文档提交]
+
 ### fix-定时/手动 Agent 多用户隔离 + 盘前简报重复推送(M7)
 - **根因**: 调度(`build_scheduler` 每 agent 一个 job)与手动触发都走 `build_context(agent_name)`, **不带用户** → 一个 job 把**所有用户**绑定到该 agent 的自选混成一份 prompt; 建议/历史以 `user_id=None` 落库, 而 `user_id=None` 在 `list_suggestions`/历史查询里是"**共享行, 人人可见**"。生产实测: `premarket_outlook` 绑定 **40 只跨 3 个用户**(admin 2 / 娟姐 3 / 黄磊 35), 共享建议 64 条含他人标的。
 - **隔离**: `load_watchlist_for_agent` / `load_portfolio_for_agent` 增 `user_id` 归属过滤(不传=旧行为 / None=遗留共享桶 / uuid=该用户); `build_context(agent, user_id=)` 收敛自选/持仓/AI 渠道并注入 `context.user`; 新增 `agent_user_buckets` 按绑定标的归属拆用户桶; `AgentScheduler._build_contexts` 逐用户桶执行(空自选桶跳过), 旧签名 builder 自动回退; 手动 `trigger_agent(agent_name, user_id)` 同口径; `/api/agents/{name}/trigger` 增 `Depends(get_current_user)`(**该端点此前无鉴权**, 兼按用户收敛); `intraday/scan` 端点 4 处调用改带 `user.id`。
