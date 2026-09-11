@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import text
 
@@ -54,16 +54,18 @@ def collect_once(now: datetime | None = None) -> dict:
         from src.db.session import engine
 
         with engine.begin() as conn:
+            # ts 不显式传值: 与接口侧写入(_try_write_snapshot_async)一致由 DB 默认
+            # CURRENT_TIMESTAMP 生成 —— 曾按 UTC 手写, 与既有本地时间序列错位。
             conn.execute(
                 text(
                     """
                     INSERT INTO market_flow_snapshots
-                        (ts, total_main_flow, up_count, down_count, flat_count, sh_flow, sz_flow)
+                        (total_main_flow, up_count, down_count, flat_count, sh_flow, sz_flow)
                     VALUES
-                        (:ts, :total_main_flow, :up_count, :down_count, :flat_count, :sh_flow, :sz_flow)
+                        (:total_main_flow, :up_count, :down_count, :flat_count, :sh_flow, :sz_flow)
                     """
                 ),
-                {**row, "ts": datetime.now(timezone.utc).replace(tzinfo=None)},
+                row,
             )
     except Exception as e:  # noqa: BLE001
         logger.warning("大盘资金快照写库失败(静默): %s", e)
