@@ -93,8 +93,8 @@ export default function ThemeMoodPage() {
         </div>
       </div>
 
-      <div className="flex gap-3">
-        <div className="w-[420px] shrink-0">
+      <div className="flex flex-col gap-3 xl:flex-row">
+        <div className="w-full shrink-0 xl:w-[420px]">
           <div className="mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 px-2 text-[10px] text-muted-foreground">
             <span>题材</span>
             <span className="text-right">情绪分</span>
@@ -137,7 +137,7 @@ export default function ThemeMoodPage() {
             <div className="mb-1 text-[11px] text-muted-foreground">
               题材 × 日期(近 {windowDays} 个交易日 · 色块=情绪分)
             </div>
-            <div className="space-y-0.5">
+            <div className="space-y-0.5 overflow-x-auto">
               {(resp?.items ?? []).map((it) => (
                 <div key={it.block_code} className="flex items-center gap-1">
                   <span className="w-[76px] shrink-0 truncate text-[11px]">{it.block_name || it.block_code}</span>
