@@ -130,3 +130,48 @@ def dim_core(candidates: list[dict]) -> tuple[float | None, dict]:
     detail = {"core_count": len(scores), "top": round(scores[0], 2),
               "second": round(scores[1], 2) if len(scores) > 1 else None}
     return score, detail
+
+
+_ANCH_PROMOTE = [(0, 10), (20, 35), (33, 50), (50, 70), (80, 90), (100, 100)]
+_ANCH_SEAL = [(0, 10), (30, 35), (50, 50), (70, 65), (90, 85), (100, 100)]
+_ANCH_CARRY = [(0, 10), (30, 40), (50, 55), (70, 70), (90, 85), (100, 100)]
+_ANCH_D1 = [(-10, 0), (-5, 25), (0, 50), (5, 75), (10, 100)]
+
+
+def dim_relay(*, prev_sealed: int, promoted: int, touched_today: int, sealed_today: int,
+              prev_failed: int, failed_up: int, highest_pct: float | None) -> tuple[float | None, dict]:
+    """S4 接力反馈: 晋级率35 + 封板率30 + 断板承接20 + 昨日最高板D+1 15; 子项缺失→50。"""
+    promote = anchor_map(promoted / prev_sealed * 100.0, _ANCH_PROMOTE) if prev_sealed else None
+    seal = anchor_map(sealed_today / touched_today * 100.0, _ANCH_SEAL) if touched_today else None
+    carry = anchor_map(failed_up / prev_failed * 100.0, _ANCH_CARRY) if prev_failed else None
+    d1 = anchor_map(highest_pct, _ANCH_D1) if highest_pct is not None else None
+    if promote is None and seal is None and carry is None and d1 is None:
+        return None, {"missing": "无昨日样本"}
+    score = (
+        0.35 * (NEUTRAL if promote is None else promote)
+        + 0.30 * (NEUTRAL if seal is None else seal)
+        + 0.20 * (NEUTRAL if carry is None else carry)
+        + 0.15 * (NEUTRAL if d1 is None else d1)
+    )
+    detail = {
+        "promote_rate": None if promote is None else round(promoted / prev_sealed * 100.0, 1),
+        "seal_rate": None if seal is None else round(sealed_today / touched_today * 100.0, 1),
+        "carry_rate": None if carry is None else round(failed_up / prev_failed * 100.0, 1),
+        "highest_d1_pct": highest_pct,
+        "prev_sealed": prev_sealed, "prev_failed": prev_failed,
+    }
+    return score, detail
+
+
+def dim_continuity(recent_s1: list[float]) -> tuple[float | None, dict]:
+    """S5 连续性: 此前 3 个交易日结构分的均值 × 稳定度(100 − 2×标准差)。"""
+    xs = [float(x) for x in recent_s1 if x is not None][-3:]
+    if not xs:
+        return None, {"missing": "无历史结构分"}
+    mean = sum(xs) / len(xs)
+    if len(xs) >= 2:
+        var = sum((x - mean) ** 2 for x in xs) / len(xs)
+        stab = max(0.0, min(100.0, 100.0 - 2.0 * (var ** 0.5)))
+    else:
+        stab = NEUTRAL
+    return 0.6 * mean + 0.4 * stab, {"s1_mean3": round(mean, 2), "stability": round(stab, 2), "days": len(xs)}

@@ -71,3 +71,23 @@ def test_dim_core_top2_weighting():
     assert s1 == 70.0 and d1["second"] is None
     s0, d0 = tm.dim_core([])
     assert s0 is None and "无核心候选" in d0["missing"]
+
+
+def test_dim_relay_subitems_and_missing():
+    s, d = tm.dim_relay(prev_sealed=4, promoted=2, touched_today=6, sealed_today=3,
+                        prev_failed=2, failed_up=1, highest_pct=5.0)
+    assert d["promote_rate"] == 50.0 and d["seal_rate"] == 50.0 and d["carry_rate"] == 50.0
+    assert round(s, 1) == round(0.35 * 70 + 0.30 * 50 + 0.20 * 55 + 0.15 * 75, 1)
+    s2, d2 = tm.dim_relay(prev_sealed=0, promoted=0, touched_today=0, sealed_today=0,
+                          prev_failed=0, failed_up=0, highest_pct=None)
+    assert s2 is None and "无昨日样本" in d2["missing"]
+
+
+def test_dim_continuity_uses_prior_3_days():
+    s, d = tm.dim_continuity([60.0, 62.0])
+    assert d["days"] == 2 and d["stability"] == 50.0
+    assert round(s, 1) == round(0.6 * 61.0 + 0.4 * 50.0, 1)
+    s2, d2 = tm.dim_continuity([80.0, 60.0, 60.0, 60.0])  # 只取最后 3 个
+    assert d2["days"] == 3 and d2["s1_mean3"] == 60.0
+    s3, d3 = tm.dim_continuity([])
+    assert s3 is None and "无历史结构分" in d3["missing"]
