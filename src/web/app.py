@@ -46,6 +46,7 @@ from src.web.api import (
     stock_pool,
     boards,
     main_flow,
+    theme_mood,
     auction_pool,
     abnormal_moves,
     market_phase,
@@ -614,6 +615,13 @@ app.include_router(
     resonance.router,
     prefix="/api/resonance",
     tags=["resonance"],
+    dependencies=protected,
+)
+# 题材情绪分(2026-09-12, 老板口径): 榜单/20日矩阵/详情, 收盘确认口径
+app.include_router(
+    theme_mood.router,
+    prefix="/api/theme-mood",
+    tags=["theme-mood"],
     dependencies=protected,
 )
 # 板块数据(阶段2.1/2.2, 2026-08-20): 板块/概念列表 + 详情 + 成分股 + 轮动

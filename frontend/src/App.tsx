@@ -22,6 +22,8 @@ const IndexDetailPage = lazy(() => import('@/pages/IndexDetail'))
 const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
 const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
+// 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
+const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
 const QuotePage = lazy(() => import('@/pages/Quote'))
@@ -54,6 +56,8 @@ const navItems = [
   { to: '/l2', icon: ArrowLeftRight, label: '盘口', perm: 'view_forecast' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, label: '板块热力', perm: 'view_forecast' },
+  // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
+  { to: '/theme-mood', icon: Activity, label: '题材情绪', perm: 'view_forecast' },
   { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_opportunities' },
@@ -74,7 +78,7 @@ const navItems = [
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
 const desktopNavGroups = [
   { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
-  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast', '/l2', '/heatmap'].includes(n.to)) },
+  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast', '/l2', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
@@ -493,6 +497,7 @@ function App() {
               <Route path="/l2" element={<PermGuard perm="view_forecast" myPerms={myPerms}><L2OrderbookPage /></PermGuard>} />
               {/* P1-1: 板块热力图(复用 view_forecast 权限, 与行情域一致) */}
               <Route path="/heatmap" element={<PermGuard perm="view_forecast" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
+              <Route path="/theme-mood" element={<PermGuard perm="view_forecast" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
