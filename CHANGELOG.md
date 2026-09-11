@@ -7,6 +7,12 @@
 
 ## 2026-09-11
 
+### fix-决策卡片文案: 无缺失但组合不在状态表时改显示"未共振"; v0.5.57
+- **背景**: v0.5.56 修复资金信号后暴露: 三信号齐全但组合不在官方 7 行状态表(row 0)时, `synthesize` 用 `note or "信号不全"` 兜底 → 卡片显示误导性的"信号不全(信号不全)"。
+- **修复**: `src/core/decision.py` 区分两种"看看" —— 有缺失 → "信号不全(缺失: X), 先别动手"; 无缺失(无共振) → "未共振(无共振), 先观察"。
+- **测试**: 新增 `test_synthesize_no_resonance_wording`(S信号+强势+流出 → 未共振; 缺资金 → 仍报缺失); 决策域 50 passed。与 v0.5.56 合并部署。
+- [tag v0.5.57]
+
 ### fix-决策合成"资金"信号恒缺失(属性访问 dict 的静默 AttributeError); v0.5.56
 - **生产实撞**(老板截图: 行情页决策卡片"决策合成: 看看 / 信号不全(缺失: 资金), 先别动手"): 三只股票(002361/600519/000001)复现 fund_net 恒 None。
 - **根因**: `src/core/decision.py` 的 `decide()` 写的是 `compute_pool_flow(symbol).main_net` —— 而该函数返回 **dict**, 属性访问抛 `AttributeError: 'dict' object has no attribute 'main_net'`, 被内层 `except` 静默吞掉(仅 debug 日志) → 资金信号**自 KI-021 上线(v0.5.35)起从未送达状态表** → `evaluate_state` 判定"缺失: 资金" → 卡片对所有股票恒为"看看"。
