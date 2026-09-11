@@ -3,7 +3,7 @@
 输入复用现有能力, 不重写算法:
 - 趋势: gs_strategy.eval_gs + trend_label
 - 活跃度: ai_activity.eval_activity(当日 + 砍末根算前日)
-- 资金: dark_pool_flow.compute_pool_flow(symbol).main_net(明+暗)
+- 资金: dark_pool_flow.compute_pool_flow(symbol)["main_net"](明+暗; 未齐时为 None)
 - 合成: resonance.evaluate_state(7 行状态表) → verdict 映射
 
 verdict 映射: 向好→动手, 拐点/分歧→看看, 走坏→别碰;
@@ -110,7 +110,9 @@ def decide(symbol: str, market: str = "CN", days: int = 120) -> dict:
         act_prev = eval_activity(bars[:-1])
         activity_prev = act_prev.get("activity") if isinstance(act_prev, dict) else None
         try:
-            fund_net = compute_pool_flow(symbol).main_net
+            # compute_pool_flow 返回 dict(main_net 可能为 None: 明/暗盘未齐时不硬算)
+            pool = compute_pool_flow(symbol)
+            fund_net = (pool or {}).get("main_net")
         except Exception as e:  # noqa: BLE001
             logger.debug("decision fund %s failed: %s", symbol, e)
             fund_net = None
