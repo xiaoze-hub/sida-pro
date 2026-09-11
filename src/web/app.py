@@ -42,6 +42,7 @@ from src.web.api import (
     darkflow,
     decision_pioneer,
     decision,
+    resonance,
     stock_pool,
     boards,
     main_flow,
@@ -606,6 +607,13 @@ app.include_router(
     stock_pool.router,
     prefix="/api/stock-pool",
     tags=["stock-pool"],
+    dependencies=protected,
+)
+# 三指标共振(2026-09-11 决策先锋升级): 全市场盘后扫描结果 + 活跃度序列
+app.include_router(
+    resonance.router,
+    prefix="/api/resonance",
+    tags=["resonance"],
     dependencies=protected,
 )
 # 板块数据(阶段2.1/2.2, 2026-08-20): 板块/概念列表 + 详情 + 成分股 + 轮动

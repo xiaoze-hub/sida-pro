@@ -367,6 +367,27 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"大盘资金流快照采样注册失败: {e}")
 
+        # 三指标共振全市场扫描(2026-09-11 决策先锋升级): 交易日 15:40(收盘后)
+        # 用我们自己的实现(非客户端复刻公式), 落库 resonance_scan 供页面/回看
+        try:
+            from src.core.resonance_scan import daily_job as resonance_job
+
+            rt.scheduler.scheduler.add_job(
+                resonance_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=40,
+                id="resonance-scan-daily",
+                name="三指标共振全市场扫描",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("三指标共振全市场扫描已注册(交易日 15:40)")
+        except Exception as e:
+            logger.error(f"三指标共振扫描注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once

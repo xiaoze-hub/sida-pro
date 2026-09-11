@@ -29,7 +29,7 @@ function renderDialog(overrides: Record<string, unknown> = {}) {
 }
 
 describe('DashboardCustomizer', () => {
-  it('列出全部 11 个模块与 3 个分区标题', () => {
+  it('列出全部 12 个模块与 3 个分区标题', () => {
     renderDialog()
     for (const id of MODULE_IDS) {
       expect(document.querySelector(`[data-module="${id}"]`)).toBeTruthy()

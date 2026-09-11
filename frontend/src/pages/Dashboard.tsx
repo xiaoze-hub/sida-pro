@@ -39,6 +39,7 @@ import MarketMainlineCard from '@panwatch/biz-ui/components/MarketMainlineCard'
 import BreadthDistributionChart from '@panwatch/biz-ui/components/dashboard/BreadthDistributionChart'
 import SentimentGauge from '@panwatch/biz-ui/components/dashboard/SentimentGauge'
 import FlowHistoryChart from '@panwatch/biz-ui/components/dashboard/FlowHistoryChart'
+import ResonancePanel from '@panwatch/biz-ui/components/dashboard/ResonancePanel'
 import DiscoveryPanel from '@/components/DiscoveryPanel'
 import SkeletonRows from '@/components/SkeletonRows'
 import Sparkline from '@/components/Sparkline'
@@ -701,6 +702,12 @@ export default function DashboardPage() {
               ) : null}
             </div>
           ) : null}
+        </div>
+      )}
+      {/* 三指标共振(2026-09-11 决策先锋升级 B): 盘后全市场扫描落库结果 */}
+      {shown('resonance') && (
+        <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
+          <ResonancePanel />
         </div>
       )}
       </div>{/* /A1 main 区 */}

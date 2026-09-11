@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { activityLevelColor } from '../lib/stock-colors'
+import ActivitySparkline from './ActivitySparkline'
 
 /**
  * 决策先锋三指标卡片(2026-08-30)
@@ -190,6 +191,11 @@ export default function DecisionPioneerCard({ symbol, market }: { symbol: string
             <div className="text-muted-foreground">无数据(休市/TQ未连接)</div>
           )}
         </div>
+      </div>
+
+      {/* 机构活跃度副图(2026-09-11 升级 C): 逐日活跃度 + 生命/强势/大牛三线 + 共振日红点 */}
+      <div className="mt-3 border-t border-border/40 pt-2">
+        <ActivitySparkline symbol={symbol} />
       </div>
 
       {data?.data_time ? (

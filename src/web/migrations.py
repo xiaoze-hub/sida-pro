@@ -2923,6 +2923,74 @@ def _m156_dragon_tiger_events_table(conn: Connection) -> None:
     )
 
 
+def _m161_resonance_scan_table(conn: Connection) -> None:
+    """三指标共振扫描结果表 resonance_scan(2026-09-11, 决策先锋升级)。
+
+    全市场盘后扫描: 趋势(GS) × 强度(AI机构活跃度≥3) × 资金(主力净流入>0),
+    `(trade_date, symbol)` 唯一, 重扫幂等(结果覆盖)。
+    """
+    if _has_table(conn, "resonance_scan"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE resonance_scan (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT,
+                    trend TEXT,
+                    activity DOUBLE PRECISION,
+                    level TEXT,
+                    fund_net DOUBLE PRECISION,
+                    hits INTEGER NOT NULL DEFAULT 0,
+                    resonance BOOLEAN NOT NULL DEFAULT FALSE,
+                    near BOOLEAN NOT NULL DEFAULT FALSE,
+                    close DOUBLE PRECISION,
+                    change_pct DOUBLE PRECISION,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_resonance_scan UNIQUE (trade_date, symbol)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE resonance_scan (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT,
+                    trend TEXT,
+                    activity REAL,
+                    level TEXT,
+                    fund_net REAL,
+                    hits INTEGER NOT NULL DEFAULT 0,
+                    resonance INTEGER NOT NULL DEFAULT 0,
+                    near INTEGER NOT NULL DEFAULT 0,
+                    close REAL,
+                    change_pct REAL,
+                    source TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, symbol)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_resonance_scan_date_hits",
+        "CREATE INDEX ix_resonance_scan_date_hits ON resonance_scan (trade_date DESC, hits DESC)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_resonance_scan_sym_date",
+        "CREATE INDEX ix_resonance_scan_sym_date ON resonance_scan (symbol, trade_date DESC)",
+    )
+
+
 def _m160_lhb_detail_tables(conn: Connection) -> None:
     """龙虎榜机构/营业部明细两张表(2026-09-10, 老板"切换到东财全自动方案")。
 
@@ -3991,6 +4059,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(158, "l2_ticks_event_time_key", _m158_l2_ticks_event_time_key),
     Migration(159, "klines_minute_continuous_agg", _m159_klines_minute_continuous_agg),
     Migration(160, "lhb_detail_tables", _m160_lhb_detail_tables),
+    Migration(161, "resonance_scan_table", _m161_resonance_scan_table),
 )
 
 

@@ -11,7 +11,7 @@
 export type DashboardGroup = 'main' | 'duo' | 'workspace'
 
 export type DashboardModuleId =
-  | 'indices' | 'kpi' | 'overview' | 'fundflow'
+  | 'indices' | 'kpi' | 'overview' | 'fundflow' | 'resonance'
   | 'anomalies' | 'breadth'
   | 'agenda' | 'portfolio' | 'picks'
   | 'reports' | 'discover'
@@ -27,6 +27,7 @@ export const DASHBOARD_MODULES: DashboardModuleDef[] = [
   { id: 'kpi', label: '市场 KPI 带', group: 'main' },
   { id: 'overview', label: '市场全景(情绪·主线)', group: 'main' },
   { id: 'fundflow', label: '大盘资金流', group: 'main' },
+  { id: 'resonance', label: '三指标共振', group: 'main' },
   { id: 'anomalies', label: '异动池', group: 'duo' },
   { id: 'breadth', label: '涨跌分布', group: 'duo' },
   { id: 'agenda', label: '今日要紧事', group: 'workspace' },
