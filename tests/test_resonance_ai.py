@@ -109,3 +109,75 @@ def test_analyze_degrades_honestly_when_llm_fails(monkeypatch):
 def test_analyze_rejects_bad_symbol(monkeypatch):
     client = _client(monkeypatch, _FakeAIClient(content="{}"))
     assert client.post("/api/resonance/analyze/abc").status_code == 400
+
+
+# ── 盘后批量判定(2026-09-11 老板"可以") ──────────────────────────────────────
+def test_build_batch_content_formats_rows():
+    txt = rai.build_batch_content(
+        [
+            {"symbol": "300563", "name": "神宇股份", "trend": "G区间", "activity": 26.68, "level": "大牛", "fund_net": 2.3e8, "level3": "强"},
+            {"symbol": "600519", "name": "贵州茅台", "trend": "S信号", "activity": None, "level": None, "fund_net": None, "level3": "无"},
+        ]
+    )
+    assert "300563|神宇股份|G区间|26.68(大牛)|+2.30亿|强" in txt
+    assert "600519|贵州茅台|S信号|无数据(未知)|无数据|无" in txt
+
+
+def test_parse_batch_verdicts_filters_and_tolerates():
+    content = (
+        "好的, 结果如下:\n"
+        '[{"symbol":"300563","verdict":"强共振","confidence":0.9,"summary":"三对","risk":"涨幅大"},'
+        '{"symbol":"999999","verdict":"强共振","confidence":0.9,"summary":"不在池内"},'
+        '{"symbol":"603421","verdict":"超级共振","confidence":2,"summary":"非法枚举","risk":""}]'
+    )
+    out = rai.parse_batch_verdicts(content, ["300563", "603421"])
+    assert [x["symbol"] for x in out] == ["300563", "603421"]  # 池外的 999999 被丢弃
+    assert out[0]["verdict"] == "强共振" and out[0]["risk"] == "涨幅大"
+    assert out[1]["verdict"] == rai.VERDICT_UNKNOWN and out[1]["confidence"] == 1.0
+    assert rai.parse_batch_verdicts("没有 JSON", ["300563"]) == []
+
+
+def test_run_daily_verdicts_upserts_and_is_idempotent(monkeypatch):
+    """批量判定: 落库 + 幂等; LLM 失败只记账不抛。"""
+    from sqlalchemy import create_engine, text as _t
+    from sqlalchemy.pool import StaticPool
+
+    import src.db.session as dbs
+    from src.web.migrations import _m161_resonance_scan_table, _m162_resonance_ai_verdicts_table
+
+    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    with eng.begin() as conn:
+        _m161_resonance_scan_table(conn)
+        _m162_resonance_ai_verdicts_table(conn)
+        conn.execute(
+            _t(
+                "INSERT INTO resonance_scan (trade_date, symbol, name, trend, activity, level, fund_net, hits, resonance, near)"
+                " VALUES ('20260911','300563','神宇股份','G区间',26.68,'大牛',2.3e8,3,1,0),"
+                "        ('20260911','603421','鼎信通讯','G信号',25.17,'大牛',6.9e7,3,1,0)"
+            )
+        )
+    monkeypatch.setattr(dbs, "engine", eng)
+    from sqlalchemy.orm import sessionmaker
+
+    monkeypatch.setattr(dbs, "SessionLocal", sessionmaker(bind=eng))  # 防误连真实库
+
+    class _AI:
+        async def chat(self, system, user, temperature=0.2):  # noqa: ARG002
+            return '[{"symbol":"300563","verdict":"强共振","confidence":0.9,"summary":"三对","risk":"涨幅大"},{"symbol":"603421","verdict":"弱共振","confidence":0.6,"summary":"资金偏弱","risk":""}]'
+
+    monkeypatch.setattr(rai, "_build_batch_client", lambda db=None: _AI())
+    out = asyncio.run(rai.run_daily_verdicts(limit=10))
+    assert out["ok"] is True and out["verdicts"] == 2 and out["calls"] == 1
+    asyncio.run(rai.run_daily_verdicts(limit=10))  # 幂等重跑
+    with eng.begin() as conn:
+        n = conn.execute(_t("SELECT COUNT(*) FROM resonance_ai_verdicts")).scalar()
+        v = conn.execute(_t("SELECT verdict FROM resonance_ai_verdicts WHERE symbol='300563'")).scalar()
+    assert n == 2 and v == "强共振"
+
+    class _Boom:
+        async def chat(self, system, user, temperature=0.2):  # noqa: ARG002
+            raise RuntimeError("llm down")
+
+    monkeypatch.setattr(rai, "_build_batch_client", lambda db=None: _Boom())
+    out2 = asyncio.run(rai.run_daily_verdicts(limit=10))
+    assert out2["ok"] is False and out2["errors"] == 1  # 不抛, 如实记错

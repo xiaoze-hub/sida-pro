@@ -309,8 +309,13 @@ def latest(trade_date: str | None = None, *, only: str = "all", limit: int = 200
             where_sql = " WHERE trade_date = :d" + (" AND resonance = TRUE" if only == "resonance" else " AND near = TRUE" if only == "near" else "")
         rows = conn.execute(
             text(
-                f"SELECT trade_date, symbol, name, trend, activity, level, fund_net, hits, resonance, near, close, change_pct"
-                f" FROM {_TABLE}{where_sql} ORDER BY hits DESC, activity DESC NULLS LAST LIMIT :lim"
+                "SELECT s.trade_date, s.symbol, s.name, s.trend, s.activity, s.level, s.fund_net, s.hits,"
+                " s.resonance, s.near, s.close, s.change_pct, v.verdict AS ai_verdict, v.summary AS ai_summary,"
+                " v.confidence AS ai_confidence"
+                f" FROM {_TABLE} s LEFT JOIN resonance_ai_verdicts v"
+                " ON v.trade_date = s.trade_date AND v.symbol = s.symbol"
+                f"{where_sql.replace('trade_date =', 's.trade_date =').replace('resonance = TRUE', 's.resonance = TRUE').replace('near = TRUE', 's.near = TRUE')}"
+                " ORDER BY s.hits DESC, s.activity DESC NULLS LAST LIMIT :lim"
             ),
             params,
         ).fetchall()

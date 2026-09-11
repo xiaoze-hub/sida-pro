@@ -7,6 +7,7 @@ import { safeFixed } from '@/lib/format'
  * 三指标共振清单卡片(2026-09-11, 决策先锋升级 B)。
  * 数据来自 GET /api/resonance/scan?only=resonance|near(盘后全市场扫描落库结果)。
  * 判定: 趋势(GS G区) × 强度(活跃度≥3) × 资金(净流入>0); 三项全对=共振, 两项=接近。
+ * 行末 AI: 盘后 15:50 批量 LLM 复核结论(强共振/弱共振/未共振/无法判定), 悬停看摘要。
  */
 
 interface ScanItem {
@@ -22,6 +23,19 @@ interface ScanItem {
   near: boolean
   close: number | null
   change_pct: number | null
+  ai_verdict: string | null
+  ai_summary: string | null
+  ai_confidence: number | null
+}
+
+function aiTag(it: ScanItem): { text: string; cls: string; tip: string } {
+  if (!it.ai_verdict) {
+    return { text: '--', cls: 'text-muted-foreground/50', tip: 'AI 判定待生成(盘后 15:50 自动批量)' }
+  }
+  const conf = it.ai_confidence == null ? '' : ` · 置信 ${Math.round(it.ai_confidence * 100)}%`
+  const cls =
+    it.ai_verdict === '强共振' ? 'text-stock-up' : it.ai_verdict === '弱共振' ? 'text-amber-500' : 'text-muted-foreground/70'
+  return { text: it.ai_verdict, cls, tip: `AI ${it.ai_verdict}${conf}${it.ai_summary ? `\n${it.ai_summary}` : ''}` }
 }
 
 interface ScanResp {
@@ -110,6 +124,9 @@ export default function ResonancePanel({ className }: { className?: string }) {
                 <span className={it.hits >= 1 ? 'text-stock-up' : 'text-muted-foreground'}>趋</span>
                 <span className={it.hits >= 2 ? 'text-stock-up' : 'text-muted-foreground'}>强</span>
                 <span className={it.hits >= 3 ? 'text-stock-up' : 'text-muted-foreground'}>资</span>
+              </span>
+              <span className={`w-[52px] shrink-0 text-right text-[10px] ${aiTag(it).cls}`} title={aiTag(it).tip}>
+                {aiTag(it).text}
               </span>
             </button>
           ))}

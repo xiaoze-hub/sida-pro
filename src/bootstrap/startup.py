@@ -388,6 +388,34 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"三指标共振扫描注册失败: {e}")
 
+        # 三指标共振 AI 批量判定(2026-09-11 老板"可以"): 交易日 15:50(扫描后 10 分钟)
+        try:
+            from src.core.resonance_ai import run_daily_verdicts
+
+            def _resonance_ai_job() -> None:
+                import asyncio
+
+                try:
+                    asyncio.run(run_daily_verdicts(limit=24))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("共振 AI 批量判定任务异常: %s", e)
+
+            rt.scheduler.scheduler.add_job(
+                _resonance_ai_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=50,
+                id="resonance-ai-daily",
+                name="三指标共振 AI 批量判定",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("三指标共振 AI 批量判定已注册(交易日 15:50)")
+        except Exception as e:
+            logger.error(f"共振 AI 批量判定注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once

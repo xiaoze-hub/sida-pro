@@ -161,3 +161,22 @@ async def analyze(symbol: str):
         }
     _ai_cache[code] = (now, out)
     return out
+
+@router.post("/analyze-daily")
+def analyze_daily(limit: int = Query(24, ge=1, le=100)):
+    """手动触发盘后批量 AI 判定(后台线程, 单次多票; 结果落 resonance_ai_verdicts)。"""
+    import threading
+
+    def _runner() -> None:
+        import asyncio
+
+        from src.core import resonance_ai
+
+        try:
+            out = asyncio.run(resonance_ai.run_daily_verdicts(limit=limit))
+            logger.info("手动批量共振判定完成: %s", out)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("手动批量共振判定失败: %s", e)
+
+    threading.Thread(target=_runner, name="resonance-ai-daily", daemon=True).start()
+    return {"started": True, "limit": limit}
