@@ -1,4 +1,5 @@
 /** 题材情绪分纯函数(2026-09-12): 色阶/格式化/窗口切分, 供页面与测试复用。 */
+import { safeFixed } from '@/lib/format'
 
 export interface MoodCell {
   date: string
@@ -7,8 +8,8 @@ export interface MoodCell {
 }
 
 export function fmtScore(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return '--'
-  return (Math.round(v * 10) / 10).toFixed(1)
+  if (v == null) return '--'
+  return safeFixed(v, 1)
 }
 
 export function cellColorClass(score: number | null | undefined): string {

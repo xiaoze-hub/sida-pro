@@ -131,7 +131,7 @@ export default function KpiBand({
       <button
         type="button"
         className="cursor-pointer text-left transition-colors hover:bg-accent/20"
-        onClick={() => navigate('/')}
+        onClick={() => navigate('/theme-mood')}
         title="查看情绪周期详情"
       >
         <Cell
