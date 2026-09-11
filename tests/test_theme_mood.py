@@ -85,8 +85,8 @@ def test_dim_relay_subitems_and_missing():
 
 def test_dim_continuity_uses_prior_3_days():
     s, d = tm.dim_continuity([60.0, 62.0])
-    assert d["days"] == 2 and d["stability"] == 50.0
-    assert round(s, 1) == round(0.6 * 61.0 + 0.4 * 50.0, 1)
+    assert d["days"] == 2 and d["stability"] == 98.0   # 2 日样本: 100 − 2×std(1.0)
+    assert round(s, 1) == round(0.6 * 61.0 + 0.4 * 98.0, 1)
     s2, d2 = tm.dim_continuity([80.0, 60.0, 60.0, 60.0])  # 只取最后 3 个
     assert d2["days"] == 3 and d2["s1_mean3"] == 60.0
     s3, d3 = tm.dim_continuity([])
