@@ -51,3 +51,23 @@ def test_dim_diffusion_subtracts_market():
     assert round(s, 2) == round(0.45 * 75 + 0.30 * 68.75 + 0.25 * 100, 2)
     s2, d2 = tm.dim_diffusion(pcts=[], market=market)
     assert s2 is None and "无成分行情" in d2["missing"]
+
+
+def test_core_stock_score_and_prob():
+    hi = tm.core_stock_score(boards=3, amount_pct=100.0, momentum5=15.0)
+    lo = tm.core_stock_score(boards=1, amount_pct=0.0, momentum5=-5.0)
+    assert hi > lo and 0 <= lo <= 100 and 0 <= hi <= 100
+    assert tm.continuation_prob(boards=1, seal_quality="开过板", amount_pct=10.0) < \
+           tm.continuation_prob(boards=4, seal_quality="一字", amount_pct=90.0)
+    assert 0 < tm.continuation_prob(boards=1, seal_quality="开过板", amount_pct=None) < 1
+
+
+def test_dim_core_top2_weighting():
+    cands = [{"core_score": 80.0}, {"core_score": 60.0}, {"core_score": 40.0}]
+    s, d = tm.dim_core(cands)
+    assert round(s, 2) == round(0.7 * 80 + 0.3 * 60, 2)
+    assert d["core_count"] == 3
+    s1, d1 = tm.dim_core([{"core_score": 70.0}])
+    assert s1 == 70.0 and d1["second"] is None
+    s0, d0 = tm.dim_core([])
+    assert s0 is None and "无核心候选" in d0["missing"]

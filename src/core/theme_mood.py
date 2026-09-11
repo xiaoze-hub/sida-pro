@@ -97,3 +97,36 @@ def dim_diffusion(*, pcts: list[float], market: dict) -> tuple[float | None, dic
         "strong_excess_pp": round(strong_ex, 2), "sample": n,
     }
     return score, detail
+
+
+_ANCH_BOARDS = [(1, 25), (2, 55), (3, 75), (4, 88), (6, 100)]
+_ANCH_MOM5 = [(-10, 0), (0, 45), (5, 65), (15, 85), (30, 100)]
+SEAL_QUALITY = {"一字": 1.0, "全天封死": 0.8, "开过板": 0.45}
+
+
+def core_stock_score(*, boards: int, amount_pct: float | None, momentum5: float | None) -> float:
+    """个股核心分 = 0.45×连板高度 + 0.30×题材内成交额分位 + 0.25×近5日动量。"""
+    return (
+        0.45 * anchor_map(boards, _ANCH_BOARDS)
+        + 0.30 * (NEUTRAL if amount_pct is None else float(amount_pct))
+        + 0.25 * anchor_map(momentum5, _ANCH_MOM5)
+    )
+
+
+def continuation_prob(*, boards: int, seal_quality: str, amount_pct: float | None) -> float:
+    """连续概率(0-1, 展示用, 不参与总分): 连板高度 + 封板质量 + 量能分位。"""
+    q = SEAL_QUALITY.get(seal_quality, 0.45)
+    h = min(1.0, 0.25 * max(0, int(boards) - 1))
+    a = (float(amount_pct) / 100.0) if amount_pct is not None else 0.5
+    return round(max(0.05, min(0.95, 0.35 * q + 0.30 * h + 0.20 * a + 0.15)), 2)
+
+
+def dim_core(candidates: list[dict]) -> tuple[float | None, dict]:
+    """S3 核心强度 = 0.7×最高核心分 + 0.3×次高(仅 1 只则权重 1.0)。"""
+    if not candidates:
+        return None, {"missing": "无核心候选"}
+    scores = sorted((float(c["core_score"]) for c in candidates), reverse=True)
+    score = scores[0] if len(scores) == 1 else 0.7 * scores[0] + 0.3 * scores[1]
+    detail = {"core_count": len(scores), "top": round(scores[0], 2),
+              "second": round(scores[1], 2) if len(scores) > 1 else None}
+    return score, detail
