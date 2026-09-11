@@ -153,6 +153,48 @@ def test_compute_theme_day_full_row():
     assert row["breadth"]["coverage"] == 1.0 and row["limit_up_cnt"] == 3
 
 
+def test_is_meta_board_filters_attribute_boards():
+    assert tm.is_meta_board("昨日涨停") is True
+    assert tm.is_meta_board("昨日连板") is True
+    assert tm.is_meta_board("基金重仓") is True
+    assert tm.is_meta_board("微盘股") is True
+    assert tm.is_meta_board("MSCI成份") is True
+    assert tm.is_meta_board("即将解禁") is True
+    assert tm.is_meta_board("ST板块") is True
+    assert tm.is_meta_board("元件") is False
+    assert tm.is_meta_board("绿色电力") is False
+    assert tm.is_meta_board("专精特新") is False
+    assert tm.is_meta_board("无人机") is False
+    assert tm.is_meta_board(None) is False
+
+
+def test_scan_skips_meta_boards(monkeypatch):
+    from sqlalchemy import text as _t
+
+    import src.db.session as dbs
+
+    eng = _mk_engine()
+    with eng.begin() as conn:  # 预置脏行: 属性板块此前已落库 → 扫描后应被清除
+        conn.execute(_t("INSERT INTO theme_mood_daily (trade_date, block_code, block_name, score)"
+                        " VALUES ('20260911','880002.SH','昨日涨停',88.0)"))
+    monkeypatch.setattr(dbs, "engine", eng)
+    monkeypatch.setattr(tm, "sector_items", lambda: [
+        {"code": "880001.SH", "name": "甲题材", "type": "concept"},
+        {"code": "880002.SH", "name": "昨日涨停", "type": "concept"},
+    ])
+    monkeypatch.setattr(tm, "constituents", lambda c: ["600001.SH"])
+    monkeypatch.setattr(tm, "name_map", lambda: {})
+    monkeypatch.setattr(tm, "_fetch_bars", lambda codes: {"600001.SH": [
+        {"date": "20260910", "open": 10.0, "close": 10.0, "high": 10.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
+        {"date": "20260911", "open": 10.0, "close": 11.0, "high": 11.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
+    ]})
+    out = tm.scan(write_days=1)
+    assert out["ok"] is True and out["skipped_meta"] == 1 and out["purged"] == 1
+    with eng.begin() as conn:
+        names = [r[0] for r in conn.execute(_t("SELECT DISTINCT block_name FROM theme_mood_daily")).fetchall()]
+    assert names == ["甲题材"]
+
+
 def _mk_engine():
     from sqlalchemy import create_engine
     from sqlalchemy.pool import StaticPool
@@ -197,10 +239,41 @@ def test_scan_upserts_and_is_idempotent(monkeypatch):
     assert out["ok"] is True and out["rows"] >= 4 and out["dates"] == ["20260910", "20260911"]
     with eng.begin() as conn:
         n1 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
+        sealed_0910 = conn.execute(_t("SELECT limit_up_cnt FROM theme_mood_daily"
+                                      " WHERE trade_date='20260910' AND block_code='880001.SH'")).scalar()
+    assert n1 == 4
+    assert sealed_0910 == 2  # 20260910 两只成分股均封板(10.0→11.0 = +10% 主板涨停)
     tm.scan(write_days=2)  # 幂等
     with eng.begin() as conn:
         n2 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
     assert n1 == n2 == 4
+
+
+def test_scan_tolerates_suspended_constituent(monkeypatch):
+    """真实数据回归(2026-09-12): 成分股停牌/无行情(不在 bars 里)不得让扫描炸掉。"""
+    from sqlalchemy import text as _t
+
+    import src.db.session as dbs
+
+    eng = _mk_engine()
+    monkeypatch.setattr(dbs, "engine", eng)
+    monkeypatch.setattr(tm, "sector_items", lambda: [{"code": "880001.SH", "name": "甲题材", "type": "concept"}])
+    monkeypatch.setattr(tm, "constituents", lambda c: ["600001.SH", "601091.SH"])  # 601091 无行情
+    monkeypatch.setattr(tm, "name_map", lambda: {"600001.SH": "甲股"})
+
+    def _bars(codes):
+        return {c: [
+            {"date": "20260910", "open": 10.0, "close": 10.0, "high": 10.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
+            {"date": "20260911", "open": 10.0, "close": 11.0, "high": 11.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
+        ] for c in codes if c == "600001.SH"}
+
+    monkeypatch.setattr(tm, "_fetch_bars", _bars)
+    out = tm.scan(write_days=1)
+    assert out["ok"] is True and out["rows"] == 1
+    with eng.begin() as conn:
+        r = conn.execute(_t("SELECT breadth, limit_up_cnt FROM theme_mood_daily")).fetchone()
+    assert r[1] == 1                      # 只有一只有行情 → 封住 1
+    assert '"members": 2' in r[0]         # 成分总数仍记录 2(覆盖率如实反映)
 
 
 def test_scan_failure_keeps_previous(monkeypatch):

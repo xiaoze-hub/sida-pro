@@ -11,6 +11,20 @@ from __future__ import annotations
 WEIGHTS = {"s1": 0.28, "s2": 0.24, "s3": 0.20, "s4": 0.20, "s5": 0.08}
 NEUTRAL = 50.0
 
+# 属性/情绪类"板块"不是题材: 昨日涨停/连板系、持仓系、股本属性系等 —— 参与评分会误导
+# (如"昨日涨停"必然恒居榜首)。名称命中即整板跳过(不评分不落库), 计入 scan() 返回的 skipped_meta。
+META_KEYWORDS = (
+    "昨日", "MSCI", "QFII", "重仓", "新进", "微盘", "微小盘", "大盘股", "次新", "低价股",
+    "高价股", "破净", "送转", "分红", "解禁", "减持", "增持", "回购", "户数", "融资",
+    "活跃小盘", "个人持股", "金股", "ST板块",
+)
+
+
+def is_meta_board(name: str) -> bool:
+    """属性/情绪类板块(非题材)判定(纯函数)。"""
+    n = str(name or "")
+    return any(k in n for k in META_KEYWORDS)
+
 
 def anchor_map(value, anchors) -> float:
     """分段线性夹逼 → 0-100; None/脏值 → 50 中性。anchors 按 x 升序。"""
@@ -334,9 +348,13 @@ def _fetch_bars(codes: list[str]) -> dict[str, list[dict]]:
 
 
 def _stock_series(symbol: str, name: str, bars: list[dict]) -> dict:
-    """个股窗口序列: {pct, amount, events, streak}(events 与 limit_up_events 同口径)。"""
+    """个股窗口序列: {pct, amount, events, streak}(events 与 limit_up_events 同口径)。
+
+    注意: limit_rules 只认 6 位纯数字代码(带 .SH/.SZ 后缀会返 None), 故此处剥离后缀。
+    """
     from src.core.limit_up_backfill import _extract_events_from_bars
 
+    code6 = str(symbol).split(".")[0]
     pct: dict[str, float] = {}
     amount: dict[str, float] = {}
     for i, b in enumerate(bars):
@@ -347,7 +365,7 @@ def _stock_series(symbol: str, name: str, bars: list[dict]) -> dict:
         prev_c, cur_c = bars[i - 1].get("close"), b.get("close")
         if prev_c and cur_c:
             pct[b["date"]] = (float(cur_c) / float(prev_c) - 1.0) * 100.0
-    events = {e["trade_date"]: e for e in _extract_events_from_bars(symbol, name, bars)}
+    events = {e["trade_date"]: e for e in _extract_events_from_bars(code6, name, bars)}
     streak: dict[str, int] = {}
     run = 0
     for b in bars:
@@ -487,12 +505,37 @@ def _upsert(rows: list[dict]) -> int:
     return len(rows)
 
 
+def _purge_codes(dates: list[str], codes: list[str]) -> int:
+    """删除指定日期下这些板块的落库行(属性板块规则变更/收紧后不留脏行)。"""
+    if not dates or not codes:
+        return 0
+    from sqlalchemy import text as _text
+
+    from src.db.session import engine
+
+    n = 0
+    with engine.begin() as conn:
+        for d in dates:
+            for i in range(0, len(codes), 100):
+                part = codes[i:i + 100]
+                keys = {f"c{j}": c for j, c in enumerate(part)}
+                ph = ", ".join(f":{k}" for k in keys)
+                r = conn.execute(
+                    _text(f"DELETE FROM theme_mood_daily WHERE trade_date = :d AND block_code IN ({ph})"),
+                    {"d": d, **keys},
+                )
+                n += r.rowcount or 0
+    return n
+
+
 def scan(*, write_days: int = 1, day: str | None = None) -> dict:
     """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。"""
     try:
-        themes = sector_items()
-        if not themes:
+        themes_all = sector_items()
+        if not themes_all:
             return {"ok": False, "reason": "板块目录为空"}
+        themes = [t for t in themes_all if not is_meta_board(t.get("name"))]
+        skipped_meta = len(themes_all) - len(themes)
         const: dict[str, list[str]] = {}
         for t in themes:
             syms = constituents(t["code"]) or []
@@ -527,7 +570,8 @@ def scan(*, write_days: int = 1, day: str | None = None) -> dict:
                 cores = _theme_cores(code, members, series, d)
                 if d in write:
                     row = compute_theme_day(
-                        date=d, today=today, pcts=[series[s]["pct"].get(d) for s in members],
+                        date=d, today=today,
+                        pcts=[(series.get(s) or {}).get("pct", {}).get(d) for s in members],
                         market=market, hist_sealed=sealed_hist[code][-60:], s1_history=s1_hist[code][-3:],
                         sealed_history=sealed_hist[code][-2:], prev=prev, core_candidates=cores,
                     )
@@ -550,7 +594,10 @@ def scan(*, write_days: int = 1, day: str | None = None) -> dict:
         if not rows:
             return {"ok": False, "reason": "无可写行"}
         _upsert(rows)
-        return {"ok": True, "rows": len(rows), "dates": write, "themes": len(const), "symbols": len(all_syms)}
+        meta_codes = [t["code"] for t in themes_all if is_meta_board(t.get("name"))]
+        purged = _purge_codes(write, meta_codes)
+        return {"ok": True, "rows": len(rows), "dates": write, "themes": len(const),
+                "symbols": len(all_syms), "skipped_meta": skipped_meta, "purged": purged}
     except Exception as e:  # noqa: BLE001
         logger.warning("题材情绪扫描异常: %s", e)
         return {"ok": False, "reason": str(e)}
