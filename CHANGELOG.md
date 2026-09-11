@@ -7,6 +7,13 @@
 
 ## 2026-09-11
 
+### update-v0.5.64 生产部署(盘后 AI 批量判定上线, 冒烟 9/9)
+- **部署**: 覆盖层 v0.5.64 → `/api/version` = **v0.5.64** → 迁移 **v162 已应用** → cron「三指标共振 AI 批量判定(15:50)」注册成功 → 冒烟 **9/9**(5.1s)。
+- **生产实测(真 LLM, 当日共振 top24)**: `POST /api/resonance/analyze-daily?limit=24` → **24 条判定落库**(2 组 LLM 调用, 秒级完成), top: 002856 强共振 0.97("G信号确认, 活跃度大牛级, 主力净流入0.02亿")、603936 0.96、688260 0.95 …; `GET /api/resonance/scan` 每行携带 `ai_verdict/ai_confidence`。
+- **浏览器走查**: 首页「三指标共振」卡片 30 行, **前 24 行行末渲染 AI 判定**(强共振, tooltip 带置信度与摘要), 其余显示 `--`; 走查用临时账号已删除(users 表复原为 5 个既有账号)。
+- [tag v0.5.64 已推 origin]
+
+
 ### feat-三指标共振盘后 AI 批量判定 + 首页行内结论; v0.5.64
 - **老板**: "可以"(批准: 每天收盘扫描后, 自动对当日全部「共振」标的批量跑一遍 AI 判定, 首页卡片直接把 AI 结论显示在每行末尾)。
 - **后端**(`src/core/resonance_ai.py`): 批量判定 `BATCH_CHUNK=12` 分组(控调用量与输出长度); `build_batch_content` 逐行 `代码|名称|趋势|活跃度(档位)|资金(亿)|规则判定`; `parse_batch_verdicts` 池外代码丢弃 / 非法枚举→**无法判定** / 解析失败该组不落库(宁缺勿编); `run_daily_verdicts` 取当日共振 top N → 分组调 LLM → 按 `(trade_date, symbol)` 幂等落库, 单组失败只记数不抛。LLM 客户端 **core 内自建** `_build_batch_client`(chat 场景绑定 → Settings 兜底), 不走 web 层 `_get_ai_client` —— 避免触发 core→web 反向依赖棘轮(B4.1)。
