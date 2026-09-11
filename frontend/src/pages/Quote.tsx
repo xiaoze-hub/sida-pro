@@ -3,6 +3,7 @@ import { useSearchParams, useParams, Link } from 'react-router-dom'
 import { Loader2, Search } from 'lucide-react'
 
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import ResonanceVerdictPanel from '@panwatch/biz-ui/components/ResonanceVerdictPanel'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import PanelLockToggle from '@/components/PanelLockToggle'
 import { insightApi, dashboardApi, datasourcesApi, type DashboardPosition, type VendorTrustItem } from '@panwatch/api'
@@ -923,10 +924,14 @@ export default function QuotePage() {
                 </>
               ) : (
                 <div className="mt-1">
-                  <span className="font-mono text-[13px] text-muted-foreground">观望</span>
-                  <span className="ml-1.5 text-[10px] text-muted-foreground/70">共振数据缺失 · 不编造</span>
+                  <span className="font-mono text-[13px] text-muted-foreground">状态表暂不可判</span>
+                  <span className="ml-1.5 text-[10px] text-muted-foreground/70">见下方三灯与 AI 判定</span>
                 </div>
               )}
+              {/* 2026-09-11: 三指标三灯 + AI 共振判定(状态表缺数据时的兜底视角, 老板"没办法知道到底有没有共振") */}
+              <div className="mt-1.5 border-t border-border/30 pt-1.5">
+                <ResonanceVerdictPanel symbol={symbol} />
+              </div>
             </div>
             {/* 2026-09-04 去空占位: 两项全空就不渲染整块(此前挂两个"--") */}
             {summary?.chips && (summary.chips.cost_10 != null || summary.chips.peak_price != null) ? (

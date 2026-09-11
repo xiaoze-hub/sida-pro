@@ -76,3 +76,88 @@ def activity(symbol: str, days: int = Query(120, ge=30, le=250)):
     from src.core import resonance_scan
 
     return resonance_scan.activity_series(code, days=days)
+
+# ── 规则三灯 + AI 共振判定(2026-09-11, 老板"要接入ai分析, 给出是否共振") ──────────
+_ai_cache: dict[str, tuple[float, dict]] = {}
+_AI_TTL = 600.0  # AI 判定缓存 10 分钟(球权在 LLM, 避免刷屏)
+
+
+@router.get("/symbol/{symbol}")
+def symbol_rule(symbol: str):
+    """单票三指标现状 + 规则判定(日线口径, 不依赖 L2/盘中快照; 供三灯展示)。"""
+    code = (symbol or "").strip()
+    if not code or not (code.isdigit() and len(code) == 6 or "." in code):
+        raise HTTPException(400, f"非法代码: {symbol!r}")
+    from src.core import resonance_scan
+
+    return resonance_scan.symbol_detail(code)
+
+
+@router.post("/analyze/{symbol}")
+async def analyze(symbol: str):
+    """AI 共振判定: 规则三灯 + LLM 结构化结论(强共振/弱共振/未共振/无法判定)。
+
+    LLM 不可用/超时 → available=false + 保留规则判定(诚实降级, 不编造)。
+    """
+    import time
+
+    code = (symbol or "").strip()
+    if not code or not (code.isdigit() and len(code) == 6 or "." in code):
+        raise HTTPException(400, f"非法代码: {symbol!r}")
+    now = time.time()
+    hit = _ai_cache.get(code)
+    if hit and now - hit[0] < _AI_TTL:
+        return hit[1]
+
+    from src.core import resonance_ai, resonance_scan
+
+    detail = resonance_scan.symbol_detail(code)
+    rule = {
+        "trend": detail.get("trend"),
+        "activity": detail.get("activity"),
+        "level": detail.get("level"),
+        "fund_net": detail.get("fund_net"),
+        "level3": detail.get("level3"),
+        "hits": detail.get("hits"),
+        "trade_date": detail.get("trade_date"),
+    }
+    if not detail.get("available"):
+        out = {"symbol": code, "available": False, "reason": detail.get("reason") or "无数据", "rule": rule, "ai": None}
+        _ai_cache[code] = (now, out)
+        return out
+
+    series = (resonance_scan.activity_series(code, days=30) or {}).get("items") or []
+    user_content = resonance_ai.build_user_content(
+        code, str(detail.get("name") or ""), detail, series
+    )
+    try:
+        from src.core.ai_client import with_compliance
+        from src.web.api.chat import _get_ai_client
+        from src.web.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            content = await _get_ai_client(db).chat(
+                with_compliance(resonance_ai.SYSTEM_PROMPT), user_content, temperature=0.2
+            )
+        finally:
+            db.close()
+        ai = resonance_ai.parse_ai_verdict(content)
+        out = {
+            "symbol": code,
+            "available": True,
+            "rule": rule,
+            "ai": ai,
+            "data_time": detail.get("trade_date"),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("共振 AI 判定失败 %s: %s", code, e)
+        out = {
+            "symbol": code,
+            "available": False,
+            "reason": f"AI 不可用: {type(e).__name__}",
+            "rule": rule,
+            "ai": None,
+        }
+    _ai_cache[code] = (now, out)
+    return out
