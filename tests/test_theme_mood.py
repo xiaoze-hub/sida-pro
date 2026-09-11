@@ -151,3 +151,75 @@ def test_compute_theme_day_full_row():
     assert row["core"] in (True, False) and isinstance(row["confidence"], int)
     assert len(row["core_stocks"]) == 2 and row["core_stocks"][0]["symbol"] == "600001.SH"
     assert row["breadth"]["coverage"] == 1.0 and row["limit_up_cnt"] == 3
+
+
+def _mk_engine():
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+
+    from src.web.migrations import _m163_theme_mood_table
+
+    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    with eng.begin() as conn:
+        _m163_theme_mood_table(conn)
+    return eng
+
+
+def test_scan_upserts_and_is_idempotent(monkeypatch):
+    from sqlalchemy import text as _t
+
+    import src.db.session as dbs
+
+    eng = _mk_engine()
+    monkeypatch.setattr(dbs, "engine", eng)
+
+    monkeypatch.setattr(tm, "sector_items", lambda: [
+        {"code": "880001.SH", "name": "甲题材", "type": "concept"},
+        {"code": "881001.SH", "name": "乙行业", "type": "industry"},
+    ])
+    monkeypatch.setattr(tm, "constituents", lambda c: ["600001.SH", "600002.SH"])
+    monkeypatch.setattr(tm, "name_map", lambda: {"600001.SH": "甲股", "600002.SH": "乙股"})
+    dates = ["20260909", "20260910", "20260911"]   # 首根无涨幅 → 可写日期为后两根
+
+    def _bars(codes):
+        out = {}
+        for c in codes:
+            bars = []
+            for i, d in enumerate(dates):
+                px = 10.0 + i          # 每日 +10%(10→11→12, 第二日封板/第三日炸板)
+                bars.append({"date": d, "open": px * 0.99, "close": px, "high": px * 1.1, "low": px * 0.98,
+                             "volume": 1000.0, "amount": 1e8})
+            out[c] = bars
+        return out
+
+    monkeypatch.setattr(tm, "_fetch_bars", _bars)
+    out = tm.scan(write_days=2)
+    assert out["ok"] is True and out["rows"] >= 4 and out["dates"] == ["20260910", "20260911"]
+    with eng.begin() as conn:
+        n1 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
+    tm.scan(write_days=2)  # 幂等
+    with eng.begin() as conn:
+        n2 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
+    assert n1 == n2 == 4
+
+
+def test_scan_failure_keeps_previous(monkeypatch):
+    from sqlalchemy import text as _t
+
+    import src.db.session as dbs
+
+    eng = _mk_engine()
+    with eng.begin() as conn:
+        conn.execute(_t("INSERT INTO theme_mood_daily (trade_date, block_code, score)"
+                        " VALUES ('20260910','880001.SH',66.6)"))
+    monkeypatch.setattr(dbs, "engine", eng)
+
+    def _boom():
+        raise RuntimeError("tdx down")
+
+    monkeypatch.setattr(tm, "sector_items", _boom)
+    out = tm.scan(write_days=1)
+    assert out["ok"] is False
+    with eng.begin() as conn:
+        n = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
+    assert n == 1  # 旧数据保留

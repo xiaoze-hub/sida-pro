@@ -266,3 +266,300 @@ def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_
                     "median_pct": d2.get("median_pct"), "strong_share": d2.get("strong_share")},
         "source": "close",
     }
+
+
+# ── IO 段: 取数(通达信) → 逐日计算 → 幂等落库 ─────────────────────────────────
+import json  # noqa: E402
+import logging  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from src.core.tdx_boards import constituents, name_map, sector_items  # noqa: E402
+
+logger = logging.getLogger(__name__)
+_CST = timezone(timedelta(hours=8))
+TABLE = "theme_mood_daily"
+KLINE_WINDOW = 60          # 取数窗口(交易日), 提供 60 日自身分位
+_CHUNK = 100               # TDX get_market_data 单次代码上限
+
+
+def _f(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tdx_code(sym: str) -> str:
+    s = str(sym or "").strip().upper()
+    if "." in s:
+        return s
+    if s.startswith(("6", "9")):
+        return f"{s}.SH"
+    if s.startswith(("4", "8")):
+        return f"{s}.BJ"
+    return f"{s}.SZ"
+
+
+def _fetch_bars(codes: list[str]) -> dict[str, list[dict]]:
+    """通达信批量日线(前复权) → {code: bars}; 分片失败跳过。"""
+    from marketdata.vendors.tq import tq_rpc
+
+    out: dict[str, list[dict]] = {}
+    for i in range(0, len(codes), _CHUNK):
+        part = codes[i:i + _CHUNK]
+        try:
+            v = tq_rpc("get_market_data", {"stock_list": part, "period": "1d",
+                                           "count": KLINE_WINDOW + 5, "dividend_type": "front"}, timeout=120)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("题材情绪: 日线批量失败(%d 码): %s", len(part), e)
+            continue
+        for code, rows in (v or {}).items():
+            if not isinstance(rows, dict):
+                continue
+            ds, op, cl = rows.get("Date") or [], rows.get("Open") or [], rows.get("Close") or []
+            hi, lo = rows.get("High") or [], rows.get("Low") or []
+            vo, am = rows.get("Volume") or [], rows.get("Amount") or []
+            n = min(len(ds), len(op), len(cl), len(hi), len(lo))
+            bars = []
+            for j in range(n):
+                bars.append({
+                    "date": str(ds[j]).replace("-", ""),
+                    "open": _f(op[j]), "close": _f(cl[j]), "high": _f(hi[j]), "low": _f(lo[j]),
+                    "volume": _f(vo[j]) if j < len(vo) else None,
+                    "amount": _f(am[j]) if j < len(am) else None,
+                })
+            if bars:
+                out[code] = bars
+    return out
+
+
+def _stock_series(symbol: str, name: str, bars: list[dict]) -> dict:
+    """个股窗口序列: {pct, amount, events, streak}(events 与 limit_up_events 同口径)。"""
+    from src.core.limit_up_backfill import _extract_events_from_bars
+
+    pct: dict[str, float] = {}
+    amount: dict[str, float] = {}
+    for i, b in enumerate(bars):
+        if b.get("amount") is not None:
+            amount[b["date"]] = float(b["amount"])
+        if i == 0:
+            continue
+        prev_c, cur_c = bars[i - 1].get("close"), b.get("close")
+        if prev_c and cur_c:
+            pct[b["date"]] = (float(cur_c) / float(prev_c) - 1.0) * 100.0
+    events = {e["trade_date"]: e for e in _extract_events_from_bars(symbol, name, bars)}
+    streak: dict[str, int] = {}
+    run = 0
+    for b in bars:
+        d = b["date"]
+        ev = events.get(d)
+        run = run + 1 if (ev and ev.get("is_sealed_close")) else 0
+        if run:
+            streak[d] = run
+    return {"pct": pct, "amount": amount, "events": events, "streak": streak}
+
+
+def _market_ctx(series: dict[str, dict], date: str) -> dict:
+    """全市场当日基准(等权): 中位/平均涨幅、≥5% 占比、封住家数。"""
+    market_pcts = [s["pct"].get(date) for s in series.values()]
+    market_pcts = [p for p in market_pcts if p is not None]
+    market_pcts.sort()
+    n = len(market_pcts)
+    med = None
+    if n:
+        med = market_pcts[n // 2] if n % 2 else (market_pcts[n // 2 - 1] + market_pcts[n // 2]) / 2.0
+    mean = (sum(market_pcts) / n) if n else None
+    strong = (sum(1 for p in market_pcts if p >= 5.0) / n * 100.0) if n else None
+    sealed = sum(1 for s in series.values() if (s["events"].get(date) or {}).get("is_sealed_close"))
+    return {"pct_median": med, "pct_mean": mean, "strong_share": strong, "sealed": sealed}
+
+
+def _theme_today(code: str, members: list[str], series: dict, date: str) -> dict:
+    sealed_syms, failed_syms, touched = [], [], 0
+    ge2, sealed, best_board, highest_sym = 0, 0, 0, None
+    for s in members:
+        ser = series.get(s)
+        if not ser:
+            continue
+        ev = ser["events"].get(date)
+        if not ev:
+            continue
+        touched += 1
+        st = int(ser["streak"].get(date) or 0)
+        if ev.get("is_sealed_close"):
+            sealed += 1
+            sealed_syms.append(s)
+            if st >= 2:
+                ge2 += 1
+            if st > best_board:
+                best_board, highest_sym = st, s
+        else:
+            failed_syms.append(s)
+    return {"members": len(members), "sealed": sealed, "touched": touched, "max_boards": best_board,
+            "ge2": ge2, "sealed_syms": sealed_syms, "failed_syms": failed_syms, "highest_sym": highest_sym}
+
+
+def _theme_prev(prev_state: dict, today: dict, series: dict, date: str) -> dict:
+    """接力反馈输入: 昨日封住→今日晋级 / 昨日炸板→今日承接 / 昨日最高板→今日涨跌幅。"""
+    prev_sealed = list(prev_state.get("sealed_syms") or [])
+    promoted = sum(1 for s in prev_sealed
+                   if (series.get(s, {}).get("events", {}).get(date) or {}).get("is_sealed_close"))
+    prev_failed = list(prev_state.get("failed_syms") or [])
+    failed_up = sum(1 for s in prev_failed if (series.get(s, {}).get("pct", {}).get(date) or 0) > 0)
+    hs = prev_state.get("highest_sym")
+    highest_pct = (series.get(hs, {}).get("pct", {}).get(date)) if hs else None
+    return {"prev_sealed": len(prev_sealed), "promoted": promoted,
+            "touched_today": today["touched"], "sealed_today": today["sealed"],
+            "prev_failed": len(prev_failed), "failed_up": failed_up, "highest_pct": highest_pct}
+
+
+def _theme_cores(code: str, members: list[str], series: dict, date: str) -> list[dict]:
+    """核心候选: 该题材今日封住股, 按 连板高度/题材内成交额分位/近5日动量 打分。"""
+    ev_syms = [(s, series[s]) for s in members
+               if series.get(s) and (series[s]["events"].get(date) or {}).get("is_sealed_close")]
+    if not ev_syms:
+        return []
+    amounts = sorted((ser["amount"].get(date) or 0.0) for _, ser in ev_syms)
+    out = []
+    for s, ser in ev_syms:
+        ev = ser["events"][date]
+        boards = int(ser["streak"].get(date) or 1)
+        amt = ser["amount"].get(date) or 0.0
+        rank = (sum(1 for a in amounts if a <= amt) / len(amounts) * 100.0) if amounts else None
+        mom5 = None
+        pcts = [ser["pct"][d] for d in sorted(ser["pct"])]
+        if len(pcts) >= 5:
+            base = 100.0
+            for p in pcts[-5:]:
+                base *= (1 + p / 100.0)
+            mom5 = base - 100.0
+        if ev.get("one_way"):
+            quality = "一字"
+        elif ev.get("low_price") is not None and ev.get("limit_price") is not None \
+                and float(ev["low_price"]) >= float(ev["limit_price"]) - 1e-6:
+            quality = "全天封死"
+        else:
+            quality = "开过板"
+        out.append({
+            "symbol": s, "name": ev.get("name"), "boards": boards, "pct": ser["pct"].get(date),
+            "core_score": core_stock_score(boards=boards, amount_pct=rank, momentum5=mom5),
+            "prob": continuation_prob(boards=boards, seal_quality=quality, amount_pct=rank),
+        })
+    return out
+
+
+def _upsert(rows: list[dict]) -> int:
+    from sqlalchemy import text as _text
+
+    from src.db.session import engine
+
+    cols = ("trade_date", "block_code", "block_name", "block_type", "score", "s1", "s2", "s3", "s4", "s5",
+            "confidence", "limit_up_cnt", "touched_cnt", "max_boards", "ge2_cnt", "source")
+    with engine.begin() as conn:
+        for r in rows:
+            conn.execute(
+                _text(
+                    """
+                    INSERT INTO theme_mood_daily
+                        (trade_date, block_code, block_name, block_type, score, s1, s2, s3, s4, s5,
+                         confidence, core, limit_up_cnt, touched_cnt, max_boards, ge2_cnt,
+                         core_stocks, detail, breadth, source)
+                    VALUES (:trade_date, :block_code, :block_name, :block_type, :score, :s1, :s2, :s3, :s4, :s5,
+                            :confidence, :core, :limit_up_cnt, :touched_cnt, :max_boards, :ge2_cnt,
+                            :core_stocks, :detail, :breadth, :source)
+                    ON CONFLICT(trade_date, block_code) DO UPDATE SET
+                        block_name=excluded.block_name, block_type=excluded.block_type, score=excluded.score,
+                        s1=excluded.s1, s2=excluded.s2, s3=excluded.s3, s4=excluded.s4, s5=excluded.s5,
+                        confidence=excluded.confidence, core=excluded.core, limit_up_cnt=excluded.limit_up_cnt,
+                        touched_cnt=excluded.touched_cnt, max_boards=excluded.max_boards, ge2_cnt=excluded.ge2_cnt,
+                        core_stocks=excluded.core_stocks, detail=excluded.detail, breadth=excluded.breadth,
+                        source=excluded.source, updated_at=CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    **{k: r.get(k) for k in cols},
+                    "core": bool(r.get("core")),
+                    "core_stocks": json.dumps(r.get("core_stocks") or [], ensure_ascii=False),
+                    "detail": json.dumps(r.get("detail") or {}, ensure_ascii=False),
+                    "breadth": json.dumps(r.get("breadth") or {}, ensure_ascii=False),
+                },
+            )
+    return len(rows)
+
+
+def scan(*, write_days: int = 1, day: str | None = None) -> dict:
+    """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。"""
+    try:
+        themes = sector_items()
+        if not themes:
+            return {"ok": False, "reason": "板块目录为空"}
+        const: dict[str, list[str]] = {}
+        for t in themes:
+            syms = constituents(t["code"]) or []
+            if syms:
+                const[t["code"]] = [_tdx_code(s) for s in syms]
+        all_syms = sorted({s for syms in const.values() for s in syms})
+        if not all_syms:
+            return {"ok": False, "reason": "无成分股"}
+        bars_by = _fetch_bars(all_syms)
+        # 个股名(供 ST 涨停幅度 5% 判定: _extract_events_from_bars 按 "ST" 关键字识别)
+        names = name_map()
+        series = {s: _stock_series(s, names.get(s, ""), b) for s, b in bars_by.items()}
+        dates = sorted({d for s in series.values() for d in s["pct"]})
+        if not dates:
+            return {"ok": False, "reason": "无日线数据"}
+        if day:
+            dates = [d for d in dates if d <= day.replace("-", "")]
+        write = dates[-max(1, int(write_days)):]
+        sealed_hist: dict[str, list[int]] = {c: [] for c in const}
+        s1_hist: dict[str, list[float]] = {c: [] for c in const}
+        prev_state: dict[str, dict] = {c: {} for c in const}
+        rows: list[dict] = []
+        for d in dates:
+            market = _market_ctx(series, d)
+            for t in themes:
+                code = t["code"]
+                members = const.get(code) or []
+                if not members:
+                    continue
+                today = _theme_today(code, members, series, d)
+                prev = _theme_prev(prev_state[code], today, series, d)
+                cores = _theme_cores(code, members, series, d)
+                if d in write:
+                    row = compute_theme_day(
+                        date=d, today=today, pcts=[series[s]["pct"].get(d) for s in members],
+                        market=market, hist_sealed=sealed_hist[code][-60:], s1_history=s1_hist[code][-3:],
+                        sealed_history=sealed_hist[code][-2:], prev=prev, core_candidates=cores,
+                    )
+                    row["block_code"] = code
+                    row["block_name"] = t.get("name") or code
+                    row["block_type"] = t.get("type") or ("industry" if code.startswith("881") else "concept")
+                    rows.append(row)
+                s1_valid = None
+                if today["sealed"]:
+                    s1_valid, _ = dim_structure(sealed=today["sealed"], touched=today["touched"],
+                                                max_boards=today["max_boards"], ge2=today["ge2"],
+                                                hist_sealed=sealed_hist[code][-60:],
+                                                market_sealed=int(market.get("sealed") or 0))
+                sealed_hist[code].append(today["sealed"])
+                s1_hist[code].append(NEUTRAL if s1_valid is None else s1_valid)
+                prev_state[code] = {
+                    "sealed_syms": today["sealed_syms"], "failed_syms": today["failed_syms"],
+                    "highest_sym": today["highest_sym"],
+                }
+        if not rows:
+            return {"ok": False, "reason": "无可写行"}
+        _upsert(rows)
+        return {"ok": True, "rows": len(rows), "dates": write, "themes": len(const), "symbols": len(all_syms)}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("题材情绪扫描异常: %s", e)
+        return {"ok": False, "reason": str(e)}
+
+
+def daily_job() -> dict:
+    """cron 入口(交易日 15:45): 扫描当日。永不抛异常。"""
+    try:
+        return scan(write_days=1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("题材情绪每日任务异常: %s", e)
+        return {"ok": False, "reason": str(e)}

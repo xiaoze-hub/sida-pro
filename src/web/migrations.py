@@ -3048,6 +3048,74 @@ def _m162_resonance_ai_verdicts_table(conn: Connection) -> None:
     )
 
 
+def _m163_theme_mood_table(conn: Connection) -> None:
+    """题材情绪分日表(2026-09-12): 每题材每日一行, 五维 + 置信度 + 核心股 + 明细。
+
+    JSON 载荷一律 TEXT(SQLite/PG 同构, 读侧 json.loads)。
+    """
+    if _has_table(conn, "theme_mood_daily"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE theme_mood_daily (
+                    trade_date TEXT NOT NULL,
+                    block_code TEXT NOT NULL,
+                    block_name TEXT,
+                    block_type TEXT,
+                    score DOUBLE PRECISION,
+                    s1 DOUBLE PRECISION, s2 DOUBLE PRECISION, s3 DOUBLE PRECISION,
+                    s4 DOUBLE PRECISION, s5 DOUBLE PRECISION,
+                    confidence INTEGER,
+                    core BOOLEAN DEFAULT FALSE,
+                    limit_up_cnt INTEGER DEFAULT 0,
+                    touched_cnt INTEGER DEFAULT 0,
+                    max_boards INTEGER DEFAULT 0,
+                    ge2_cnt INTEGER DEFAULT 0,
+                    core_stocks TEXT,
+                    detail TEXT,
+                    breadth TEXT,
+                    source TEXT DEFAULT 'close',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_theme_mood_daily UNIQUE (trade_date, block_code)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE theme_mood_daily (
+                    trade_date TEXT NOT NULL,
+                    block_code TEXT NOT NULL,
+                    block_name TEXT,
+                    block_type TEXT,
+                    score REAL,
+                    s1 REAL, s2 REAL, s3 REAL, s4 REAL, s5 REAL,
+                    confidence INTEGER,
+                    core INTEGER DEFAULT 0,
+                    limit_up_cnt INTEGER DEFAULT 0,
+                    touched_cnt INTEGER DEFAULT 0,
+                    max_boards INTEGER DEFAULT 0,
+                    ge2_cnt INTEGER DEFAULT 0,
+                    core_stocks TEXT,
+                    detail TEXT,
+                    breadth TEXT,
+                    source TEXT DEFAULT 'close',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, block_code)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn, "ix_theme_mood_daily_date",
+        "CREATE INDEX ix_theme_mood_daily_date ON theme_mood_daily (trade_date DESC)",
+    )
+
+
 def _m160_lhb_detail_tables(conn: Connection) -> None:
     """龙虎榜机构/营业部明细两张表(2026-09-10, 老板"切换到东财全自动方案")。
 
@@ -4118,6 +4186,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(160, "lhb_detail_tables", _m160_lhb_detail_tables),
     Migration(161, "resonance_scan_table", _m161_resonance_scan_table),
     Migration(162, "resonance_ai_verdicts_table", _m162_resonance_ai_verdicts_table),
+    Migration(163, "theme_mood_table", _m163_theme_mood_table),
 )
 
 
