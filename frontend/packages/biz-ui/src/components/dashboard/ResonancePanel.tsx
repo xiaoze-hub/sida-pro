@@ -43,16 +43,23 @@ export default function ResonancePanel({ className }: { className?: string }) {
 
   useEffect(() => {
     let alive = true
-    void (async () => {
+    // 首页并发高(20+ 请求), 首拉易排队超时 → 失败/空结果保留上次数据并自动重试
+    const load = async () => {
       try {
         const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
-        if (alive) setResp(res)
+        if (alive && res?.items?.length) setResp(res)
+        else if (alive) setResp((prev) => (prev && prev.items.length > 0 && prev.trade_date ? prev : { trade_date: null, count: 0, items: [] }))
       } catch {
-        if (alive) setResp({ trade_date: null, count: 0, items: [] })
+        if (alive) setResp((prev) => prev ?? { trade_date: null, count: 0, items: [] })
       }
-    })()
+    }
+    void load()
+    const retry = window.setTimeout(() => void load(), 8000)
+    const timer = window.setInterval(() => void load(), 60000)
     return () => {
       alive = false
+      window.clearTimeout(retry)
+      window.clearInterval(timer)
     }
   }, [only])
 
