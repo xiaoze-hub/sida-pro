@@ -5,6 +5,16 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-11
+
+### fix-决策合成"资金"信号恒缺失(属性访问 dict 的静默 AttributeError); v0.5.56
+- **生产实撞**(老板截图: 行情页决策卡片"决策合成: 看看 / 信号不全(缺失: 资金), 先别动手"): 三只股票(002361/600519/000001)复现 fund_net 恒 None。
+- **根因**: `src/core/decision.py` 的 `decide()` 写的是 `compute_pool_flow(symbol).main_net` —— 而该函数返回 **dict**, 属性访问抛 `AttributeError: 'dict' object has no attribute 'main_net'`, 被内层 `except` 静默吞掉(仅 debug 日志) → 资金信号**自 KI-021 上线(v0.5.35)起从未送达状态表** → `evaluate_state` 判定"缺失: 资金" → 卡片对所有股票恒为"看看"。
+- **修复**: 改为 `(compute_pool_flow(symbol) or {}).get("main_net")`(池流不可得仍为 None, 不编造; 明/暗盘未齐时 compute_pool_flow 本就返回 main_net=None 的语义不变)。
+- **验证**: 容器内直跑 `compute_pool_flow('600519')` → coverage=full / main_net=-8347万(明盘+暗盘数据链路本身正常); 修复后 `decide()` 取到资金并参与状态表。
+- **测试**: 新增回归 `tests/test_decision.py::test_decide_fund_net_reads_dict_field`(dict 取值路径 + None 不编造); 决策域 55 passed; 离线全量 **2109 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
+- [tag v0.5.56]
+
 ## 2026-09-10
 
 ### update-v0.5.55 生产部署(覆盖层+迁移 v160, 冒烟 9/9) + 龙虎榜明细 365 天回填
