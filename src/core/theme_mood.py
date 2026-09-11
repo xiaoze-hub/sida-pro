@@ -175,3 +175,94 @@ def dim_continuity(recent_s1: list[float]) -> tuple[float | None, dict]:
     else:
         stab = NEUTRAL
     return 0.6 * mean + 0.4 * stab, {"s1_mean3": round(mean, 2), "stability": round(stab, 2), "days": len(xs)}
+
+
+MAX_CORE_STOCKS = 2
+
+
+def total_score(parts: dict[str, float | None]) -> float:
+    """情绪分: 缺失维度按 50 参与(权重不转移)。"""
+    return round(sum(WEIGHTS[k] * (NEUTRAL if parts.get(k) is None else float(parts[k])) for k in WEIGHTS), 1)
+
+
+def confidence_of(*, parts: dict[str, float | None], coverage: float | None, fresh: float = 1.0) -> int:
+    """置信度(0-100): 0.5×有效维度权重覆盖 + 0.3×成分覆盖率 + 0.2×数据新鲜度。"""
+    valid_w = sum(WEIGHTS[k] for k in WEIGHTS if parts.get(k) is not None)
+    cov = 0.5 if coverage is None else max(0.0, min(1.0, float(coverage)))
+    fresh = max(0.0, min(1.0, float(fresh)))
+    return int(round(100 * (0.5 * valid_w + 0.3 * cov + 0.2 * fresh)))
+
+
+def is_core(*, score: float, confidence: int, recent_scores: list, recent_sealed: list,
+            sealed_today: int, relay: float | None) -> bool:
+    """核心题材判定: 分≥60 且 置信≥70 且 近3日≥2日≥55 且其中至少一日封住≥2 且 当日封住≥2 且 接力≥50。"""
+    if score < 60 or confidence < 70 or sealed_today < 2:
+        return False
+    if relay is None or relay < 50:
+        return False
+    pairs = [(s, n) for s, n in zip(list(recent_scores)[-3:], list(recent_sealed)[-3:]) if s is not None]
+    days55 = [p for p in pairs if p[0] >= 55]
+    if len(days55) < 2:
+        return False
+    return any(n is not None and int(n) >= 2 for _, n in days55)
+
+
+def rank_items(items: list[dict]) -> list[dict]:
+    """排序: 情绪分 → 近3日均分 → 置信度 → 当日封住家数 → 板块代码(稳定序)。"""
+    def key(it: dict):
+        return (
+            -float(it.get("score") or 0.0),
+            -float(it.get("score3_avg") or 0.0),
+            -int(it.get("confidence") or 0),
+            -int(it.get("limit_up_cnt") or 0),
+            str(it.get("block_code") or ""),
+        )
+    return sorted(items, key=key)
+
+
+def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_sealed: list,
+                      s1_history: list, sealed_history: list, prev: dict, core_candidates: list) -> dict:
+    """单题材单日装配(纯函数): 五维 → 总分/置信度/核心/明细/广度。"""
+    s1, d1 = dim_structure(sealed=int(today["sealed"]), touched=int(today["touched"]),
+                           max_boards=int(today["max_boards"]), ge2=int(today["ge2"]),
+                           hist_sealed=hist_sealed, market_sealed=int(market.get("sealed") or 0))
+    s2, d2 = dim_diffusion(pcts=pcts, market=market)
+    s3, d3 = dim_core(core_candidates)
+    s4, d4 = dim_relay(**prev)
+    s5, d5 = dim_continuity(s1_history)
+    parts = {"s1": s1, "s2": s2, "s3": s3, "s4": s4, "s5": s5}
+    score = total_score(parts)
+    sample = [p for p in pcts if p is not None]
+    members = int(today.get("members") or 0)
+    coverage = (len(sample) / members) if members else None
+    conf = confidence_of(parts=parts, coverage=coverage)
+    recent_scores = [*list(s1_history)[-2:], s1] if s1 is not None else list(s1_history)[-3:]
+    recent_sealed = [*list(sealed_history)[-2:], int(today["sealed"])]
+    core = is_core(score=score, confidence=conf, recent_scores=recent_scores, recent_sealed=recent_sealed,
+                   sealed_today=int(today["sealed"]), relay=s4)
+    stocks = sorted(core_candidates, key=lambda c: -float(c.get("core_score") or 0))[:MAX_CORE_STOCKS]
+    return {
+        "trade_date": date,
+        "score": score,
+        "s1": None if s1 is None else round(s1, 1),
+        "s2": None if s2 is None else round(s2, 1),
+        "s3": None if s3 is None else round(s3, 1),
+        "s4": None if s4 is None else round(s4, 1),
+        "s5": None if s5 is None else round(s5, 1),
+        "confidence": conf,
+        "core": core,
+        "limit_up_cnt": int(today["sealed"]),
+        "touched_cnt": int(today["touched"]),
+        "max_boards": int(today["max_boards"]),
+        "ge2_cnt": int(today["ge2"]),
+        "core_stocks": [
+            {"symbol": c.get("symbol"), "name": c.get("name"), "boards": c.get("boards"),
+             "pct": c.get("pct"), "score": round(float(c.get("core_score") or 0), 1), "prob": c.get("prob")}
+            for c in stocks
+        ],
+        "detail": {"s1": d1, "s2": d2, "s3": d3, "s4": d4, "s5": d5},
+        "breadth": {"coverage": None if coverage is None else round(coverage, 3),
+                    "sample": len(sample), "members": members,
+                    "median_pct": d2.get("median_pct"), "strong_share": d2.get("strong_share")},
+        "source": "close",
+    }

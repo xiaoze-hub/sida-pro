@@ -91,3 +91,63 @@ def test_dim_continuity_uses_prior_3_days():
     assert d2["days"] == 3 and d2["s1_mean3"] == 60.0
     s3, d3 = tm.dim_continuity([])
     assert s3 is None and "无历史结构分" in d3["missing"]
+
+
+def _today(**kw):
+    base = {"members": 40, "sealed": 0, "touched": 0, "max_boards": 0, "ge2": 0,
+            "sealed_syms": [], "failed_syms": [], "highest_sym": None}
+    base.update(kw)
+    return base
+
+
+def test_total_score_neutral_keeps_weights():
+    s = tm.total_score({"s1": 100.0, "s2": None, "s3": None, "s4": None, "s5": None})
+    assert s == round(0.28 * 100 + 0.72 * 50, 1)      # 缺失按 50, 权重不转移
+
+
+def test_confidence_and_core_rules():
+    parts = {"s1": 70.0, "s2": 70.0, "s3": 70.0, "s4": 60.0, "s5": None}
+    c = tm.confidence_of(parts=parts, coverage=1.0)
+    # 有效权重 0.92(s5 缺失) → 0.5*0.92 + 0.3*1.0 + 0.2*1.0 = 0.96 → 96
+    assert c == 96
+    assert tm.is_core(score=65.0, confidence=80, recent_scores=[56, 58, 65], recent_sealed=[1, 2, 3],
+                      sealed_today=3, relay=55.0) is True
+    assert tm.is_core(score=65.0, confidence=80, recent_scores=[56, 58, 65], recent_sealed=[1, 2, 3],
+                      sealed_today=1, relay=55.0) is False
+    assert tm.is_core(score=59.0, confidence=80, recent_scores=[56, 58, 59], recent_sealed=[2, 2, 3],
+                      sealed_today=3, relay=55.0) is False
+    assert tm.is_core(score=65.0, confidence=69, recent_scores=[56, 58, 65], recent_sealed=[2, 2, 3],
+                      sealed_today=3, relay=55.0) is False
+    assert tm.is_core(score=65.0, confidence=80, recent_scores=[56, 58, 65], recent_sealed=[2, 2, 3],
+                      sealed_today=3, relay=45.0) is False
+
+
+def test_rank_items_tiebreakers():
+    items = [
+        {"block_code": "880002.SH", "score": 70.0, "score3_avg": 60.0, "confidence": 80, "limit_up_cnt": 3},
+        {"block_code": "880001.SH", "score": 70.0, "score3_avg": 60.0, "confidence": 80, "limit_up_cnt": 3},
+        {"block_code": "880003.SH", "score": 70.0, "score3_avg": 61.0, "confidence": 80, "limit_up_cnt": 3},
+    ]
+    got = [x["block_code"] for x in tm.rank_items(items)]
+    assert got == ["880003.SH", "880001.SH", "880002.SH"]
+
+
+def test_compute_theme_day_full_row():
+    row = tm.compute_theme_day(
+        date="20260911",
+        today=_today(members=40, sealed=3, touched=5, max_boards=3, ge2=2),
+        pcts=[3.0, 1.0, -1.0, 6.0] + [0.0] * 36,
+        market={"sealed": 40, "pct_median": 1.0, "pct_mean": 1.5, "strong_share": 5.0},
+        hist_sealed=[0, 1, 2],
+        s1_history=[55.0, 58.0],
+        sealed_history=[1, 2],
+        prev={"prev_sealed": 2, "promoted": 1, "touched_today": 5, "sealed_today": 3,
+              "prev_failed": 1, "failed_up": 1, "highest_pct": 3.0},
+        core_candidates=[{"symbol": "600001.SH", "name": "甲", "core_score": 80.0, "prob": 0.6, "boards": 3, "pct": 10.0},
+                         {"symbol": "600002.SH", "name": "乙", "core_score": 70.0, "prob": 0.5, "boards": 2, "pct": 6.0}],
+    )
+    assert row["trade_date"] == "20260911" and 0 <= row["score"] <= 100
+    assert row["s1"] is not None and row["s3"] is not None
+    assert row["core"] in (True, False) and isinstance(row["confidence"], int)
+    assert len(row["core_stocks"]) == 2 and row["core_stocks"][0]["symbol"] == "600001.SH"
+    assert row["breadth"]["coverage"] == 1.0 and row["limit_up_cnt"] == 3
