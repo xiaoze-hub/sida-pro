@@ -11,7 +11,7 @@ import src.db.session as dbs
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
-from src.web.migrations import _m161_resonance_scan_table
+from src.web.migrations import _m161_resonance_scan_table, _m162_resonance_ai_verdicts_table
 
 
 def _mk_engine():
@@ -20,6 +20,7 @@ def _mk_engine():
     )
     with eng.begin() as conn:
         _m161_resonance_scan_table(conn)
+        _m162_resonance_ai_verdicts_table(conn)
     return eng
 
 

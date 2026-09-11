@@ -7,6 +7,15 @@
 
 ## 2026-09-11
 
+### feat-三指标共振盘后 AI 批量判定 + 首页行内结论; v0.5.64
+- **老板**: "可以"(批准: 每天收盘扫描后, 自动对当日全部「共振」标的批量跑一遍 AI 判定, 首页卡片直接把 AI 结论显示在每行末尾)。
+- **后端**(`src/core/resonance_ai.py`): 批量判定 `BATCH_CHUNK=12` 分组(控调用量与输出长度); `build_batch_content` 逐行 `代码|名称|趋势|活跃度(档位)|资金(亿)|规则判定`; `parse_batch_verdicts` 池外代码丢弃 / 非法枚举→**无法判定** / 解析失败该组不落库(宁缺勿编); `run_daily_verdicts` 取当日共振 top N → 分组调 LLM → 按 `(trade_date, symbol)` 幂等落库, 单组失败只记数不抛。LLM 客户端 **core 内自建** `_build_batch_client`(chat 场景绑定 → Settings 兜底), 不走 web 层 `_get_ai_client` —— 避免触发 core→web 反向依赖棘轮(B4.1)。
+- **落库/触发**: 迁移 **v162** `resonance_ai_verdicts`(verdict/confidence/summary/reasons/risks/watch/missing/model); 新 API `POST /api/resonance/analyze-daily`(手动触发, 后台线程); cron **交易日 15:50**(盘后扫描 15:40 后 10 分钟)。
+- **读侧**: `resonance_scan.latest()` LEFT JOIN 该表, `/api/resonance/scan` 每行携带 `ai_verdict/ai_summary/ai_confidence`。
+- **前端**(`ResonancePanel`): 每行末尾新增 AI 判定列(强共振=涨色 / 弱共振=琥珀 / 未共振·无法判定=灰), 悬停 tooltip 显示"置信度 + 一句话摘要", 未生成显示 `--`(提示盘后自动批量)。
+- **测试**: 后端批量 3 例(行格式 / 解析容错与池外过滤 / 落库+幂等+失败不抛; 顺带修 `test_resonance_scan` 夹具缺 v162 表导致的 JOIN 失败); 前端 panel 4 例(+AI 判定/占位); 前端 **124 passed** / tsc / eslint / UI-RULES / build 全过; 后端离线全量 **2126 passed / 5 skipped**(2 failed = 本机环境基线: `tradingagents` 模块缺失 / thsdk 用例全量下偶发, 单跑通过, 均与本次改动无关)。
+- [tag v0.5.64]
+
 ### update-v0.5.63 生产部署(共振 AI 判定上线, 冒烟 9/9)
 - **部署**: 覆盖层 v0.5.63 → `/api/version` = **v0.5.63** → 冒烟 **9/9**(7.4s)。
 - **生产实测(真 LLM, 今日共振票 300563)**: 规则三灯 → G区间 / 活跃度 26.68(大牛) / 资金 +2.30亿 → 规则"强"; **AI 判定 → 强共振(置信 0.95)** + 依据 3 条 + 风险("近两日活跃度由 0.609 激增至 26.68, 波动极大, 需防范短期获利盘冲击") + 关注("活跃度能否高位企稳")。

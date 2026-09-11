@@ -18,8 +18,8 @@ const RESP = {
   trade_date: '20260911',
   count: 2,
   items: [
-    { trade_date: '20260911', symbol: '002361', name: '神剑股份', trend: 'G区间', activity: 4.31, level: '强势', fund_net: 2.5e8, hits: 3, resonance: true, near: false, close: 12.3, change_pct: 3.21 },
-    { trade_date: '20260911', symbol: '300750', name: '宁德时代', trend: 'G区间', activity: 3.1, level: '强势', fund_net: -1e7, hits: 2, resonance: false, near: true, close: 210.0, change_pct: -0.5 },
+    { trade_date: '20260911', symbol: '002361', name: '神剑股份', trend: 'G区间', activity: 4.31, level: '强势', fund_net: 2.5e8, hits: 3, resonance: true, near: false, close: 12.3, change_pct: 3.21, ai_verdict: '强共振', ai_summary: '三项齐备', ai_confidence: 0.91 },
+    { trade_date: '20260911', symbol: '300750', name: '宁德时代', trend: 'G区间', activity: 3.1, level: '强势', fund_net: -1e7, hits: 2, resonance: false, near: true, close: 210.0, change_pct: -0.5, ai_verdict: null, ai_summary: null, ai_confidence: null },
   ],
 }
 
@@ -50,6 +50,15 @@ describe('ResonancePanel 三指标共振', () => {
       const last = String(mocks.fetchAPI.mock.calls.at(-1)?.[0] ?? '')
       expect(last).toContain('only=near')
     })
+  })
+
+  it('行末展示 AI 判定(含置信度 tooltip), 未生成显示占位', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ResonancePanel />)
+    const tag = await screen.findByText('强共振')
+    expect(tag.getAttribute('title')).toContain('置信 91%')
+    expect(tag.getAttribute('title')).toContain('三项齐备')
+    expect(screen.getAllByText('--').length).toBe(1) // 第二行 AI 未生成
   })
 
   it('空清单展示占位文案', async () => {

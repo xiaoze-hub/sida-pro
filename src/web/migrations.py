@@ -2991,6 +2991,63 @@ def _m161_resonance_scan_table(conn: Connection) -> None:
     )
 
 
+def _m162_resonance_ai_verdicts_table(conn: Connection) -> None:
+    """共振 AI 判定存档(2026-09-11, 老板"批量跑一遍 AI 判定, 首页每行显示结论")。
+
+    盘后扫描(15:40)完成后, 对当日共振标的批量跑 LLM 判定(单次多票, 控制调用量),
+    结果按 `(trade_date, symbol)` 唯一落库, 供首页卡片行内显示与回看。
+    """
+    if _has_table(conn, "resonance_ai_verdicts"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE resonance_ai_verdicts (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    verdict TEXT,
+                    confidence DOUBLE PRECISION,
+                    summary TEXT,
+                    reasons TEXT,
+                    risks TEXT,
+                    watch TEXT,
+                    missing TEXT,
+                    model TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_resonance_ai_verdicts UNIQUE (trade_date, symbol)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE resonance_ai_verdicts (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    verdict TEXT,
+                    confidence REAL,
+                    summary TEXT,
+                    reasons TEXT,
+                    risks TEXT,
+                    watch TEXT,
+                    missing TEXT,
+                    model TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (trade_date, symbol)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_resonance_ai_verdicts_date",
+        "CREATE INDEX ix_resonance_ai_verdicts_date ON resonance_ai_verdicts (trade_date DESC)",
+    )
+
+
 def _m160_lhb_detail_tables(conn: Connection) -> None:
     """龙虎榜机构/营业部明细两张表(2026-09-10, 老板"切换到东财全自动方案")。
 
@@ -4060,6 +4117,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(159, "klines_minute_continuous_agg", _m159_klines_minute_continuous_agg),
     Migration(160, "lhb_detail_tables", _m160_lhb_detail_tables),
     Migration(161, "resonance_scan_table", _m161_resonance_scan_table),
+    Migration(162, "resonance_ai_verdicts_table", _m162_resonance_ai_verdicts_table),
 )
 
 
