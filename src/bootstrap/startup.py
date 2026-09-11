@@ -348,6 +348,25 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"龙虎榜盘后兜底重扫注册失败: {e}")
 
+        # 大盘资金流快照采样(2026-09-11, 老板报"大盘资金流图没内容"): 每 60s
+        # 快照原先只随前端调用写入 → 页面不开则日内曲线空白; 本任务独立采样(时段守卫内建)
+        try:
+            from src.core.market_flow_sampler import collect_once as mkt_flow_collect
+
+            rt.scheduler.scheduler.add_job(
+                mkt_flow_collect,
+                "interval",
+                seconds=60,
+                id="market-flow-sampler",
+                name="大盘资金流快照采样",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("大盘资金流快照采样已注册(每 60s, 交易时段内生效)")
+        except Exception as e:
+            logger.error(f"大盘资金流快照采样注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once
