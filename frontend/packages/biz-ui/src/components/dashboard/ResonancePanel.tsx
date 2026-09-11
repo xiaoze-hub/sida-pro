@@ -1,0 +1,113 @@
+import { useEffect, useState } from 'react'
+import { fetchAPI } from '@panwatch/api'
+import { useNavigate } from 'react-router-dom'
+import { safeFixed } from '@/lib/format'
+
+/**
+ * 三指标共振清单卡片(2026-09-11, 决策先锋升级 B)。
+ * 数据来自 GET /api/resonance/scan?only=resonance|near(盘后全市场扫描落库结果)。
+ * 判定: 趋势(GS G区) × 强度(活跃度≥3) × 资金(净流入>0); 三项全对=共振, 两项=接近。
+ */
+
+interface ScanItem {
+  trade_date: string
+  symbol: string
+  name: string | null
+  trend: string | null
+  activity: number | null
+  level: string | null
+  fund_net: number | null
+  hits: number
+  resonance: boolean
+  near: boolean
+  close: number | null
+  change_pct: number | null
+}
+
+interface ScanResp {
+  trade_date: string | null
+  count: number
+  items: ScanItem[]
+}
+
+function fmtYi(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return '--'
+  const yi = v / 1e8
+  return `${yi > 0 ? '+' : ''}${safeFixed(yi, 2)}亿`
+}
+
+export default function ResonancePanel({ className }: { className?: string }) {
+  const navigate = useNavigate()
+  const [only, setOnly] = useState<'resonance' | 'near'>('resonance')
+  const [resp, setResp] = useState<ScanResp | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
+        if (alive) setResp(res)
+      } catch {
+        if (alive) setResp({ trade_date: null, count: 0, items: [] })
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [only])
+
+  return (
+    <div className={className}>
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] font-semibold">三指标共振</span>
+        <span className="text-[10px] text-muted-foreground">趋势 × 活跃度 × 资金</span>
+        {resp?.trade_date ? <span className="text-[10px] text-muted-foreground">· {resp.trade_date}</span> : null}
+        <div className="ml-auto flex items-center gap-1">
+          {(['resonance', 'near'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setOnly(k)}
+              className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                only === k ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+              }`}
+            >
+              {k === 'resonance' ? '共振' : '接近共振'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {resp && resp.items.length === 0 ? (
+        <div className="py-6 text-center text-[11px] text-muted-foreground">
+          {only === 'resonance' ? '今日无三指标共振标的(等待盘后扫描)' : '暂无接近共振标的'}
+        </div>
+      ) : (
+        <div className="mt-1.5 divide-y divide-border/40">
+          {(resp?.items ?? []).map((it) => (
+            <button
+              key={it.symbol}
+              type="button"
+              onClick={() => navigate(`/quote/${it.symbol}`)}
+              className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
+            >
+              <span className="w-[70px] shrink-0 truncate font-medium">{it.name || it.symbol}</span>
+              <span className="w-[58px] shrink-0 font-mono text-[11px] text-muted-foreground">{it.symbol}</span>
+              <span className={`w-[46px] shrink-0 text-right font-mono ${(it.change_pct ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                {it.change_pct == null ? '--' : `${it.change_pct > 0 ? '+' : ''}${safeFixed(it.change_pct, 2)}%`}
+              </span>
+              <span className="w-[64px] shrink-0 text-right font-mono text-[11px]">
+                {it.activity == null ? '--' : safeFixed(it.activity, 2)}
+              </span>
+              <span className="w-[72px] shrink-0 text-right font-mono text-[11px] text-muted-foreground">{fmtYi(it.fund_net)}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-0.5 text-[10px]">
+                <span className={it.hits >= 1 ? 'text-stock-up' : 'text-muted-foreground'}>趋</span>
+                <span className={it.hits >= 2 ? 'text-stock-up' : 'text-muted-foreground'}>强</span>
+                <span className={it.hits >= 3 ? 'text-stock-up' : 'text-muted-foreground'}>资</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

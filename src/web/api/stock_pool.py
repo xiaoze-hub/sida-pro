@@ -52,23 +52,15 @@ def _resonance(gs, act, l2) -> tuple[str, int]:
     只认 state(G区/S区)作方向过滤, S区/无GS 直接不共振。买卖强度看活跃度+L2资金。
     """
     # GS 趋势过滤: 只认 G区(趋势向上), S区/无GS 直接过滤
-    if not (gs and gs.get("state") == "G区"):
-        return "无", 0
-    score = 0
-    # 强度分: AI机构活跃度 ≥ 强势线3
-    if act:
-        level = act.get("level")
-        activity = act.get("activity")
-        if level in ("大牛", "强势") or (isinstance(activity, (int, float)) and activity >= 3):
-            score += 1
-    # 资金分: L2 主力净流入 > 0
-    if l2 and l2.get("available") and isinstance(l2.get("zjl_hb"), (int, float)) and l2["zjl_hb"] > 0:
-        score += 1
-    if score >= 2:
-        return "强", 2
-    if score == 1:
-        return "弱", 1
-    return "无", 0
+    zone_g = bool(gs and gs.get("state") == "G区")
+    activity = (act or {}).get("activity")
+    if activity is None and (act or {}).get("level") in ("大牛", "强势"):
+        activity = 3.0  # 老口径: level 达标等价活跃度达标
+    fund = (l2 or {}).get("zjl_hb") if (l2 or {}).get("available") else None
+    # 共享判定(唯一真相源, 与全市场共振扫描同规则)
+    from src.core.resonance_scan import resonance_level
+
+    return resonance_level(trend_zone_g=zone_g, activity=activity, fund_net=fund)
 
 
 def _screen(symbols: list[str]) -> dict:

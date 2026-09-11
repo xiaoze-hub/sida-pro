@@ -25,9 +25,9 @@ function fakeStorage(init: Record<string, string> = {}) {
 }
 
 describe('DASHBOARD_MODULES 定义', () => {
-  it('11 个模块且 id 唯一', () => {
-    expect(DASHBOARD_MODULES.length).toBe(11)
-    expect(new Set(DASHBOARD_MODULES.map((m) => m.id)).size).toBe(11)
+  it('12 个模块且 id 唯一', () => {
+    expect(DASHBOARD_MODULES.length).toBe(12)
+    expect(new Set(DASHBOARD_MODULES.map((m) => m.id)).size).toBe(12)
   })
 })
 
@@ -57,7 +57,7 @@ describe('moveModule 组内排序', () => {
 
   it('不跨组(main 末项下移是 no-op, 即使配置序下一个是 duo 的首个)', () => {
     const l0 = defaultLayout()
-    const l1 = moveModule(l0, 'fundflow', 1)
+    const l1 = moveModule(l0, 'resonance', 1)
     expect(l1.order).toEqual(l0.order)
   })
 
@@ -78,8 +78,8 @@ describe('normalizeLayout 容错', () => {
   it('未知 id 丢弃、重复去重、缺失补默认末尾', () => {
     const l = normalizeLayout({ order: ['picks', 'not-a-module', 'picks', 'indices'], hidden: ['zzz', 'kpi'] })
     expect(l.order.slice(0, 2)).toEqual(['picks', 'indices'])
-    expect(l.order.length).toBe(11)
-    expect(new Set(l.order).size).toBe(11)
+    expect(l.order.length).toBe(12)
+    expect(new Set(l.order).size).toBe(12)
     expect(l.hidden).toEqual(['kpi'])
   })
 
