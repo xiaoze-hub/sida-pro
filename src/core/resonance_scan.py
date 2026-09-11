@@ -26,7 +26,7 @@ _CST = ZoneInfo("Asia/Shanghai")
 _TABLE = "resonance_scan"
 _STRONG_LINE = 3.0  # 与 ai_activity.STRONG_LINE 同源(强势线)
 _BARS = 90          # 扫描用日线根数(BB0 需 28, 活跃度需 2; 90 富余)
-_KLINE_CHUNK = 400  # 单次批量日线的代码数
+_KLINE_CHUNK = 100  # 单次批量日线代码数(TDX get_market_data 实测单次上限 ~100 码, 超出静默截断)
 _COLS = (
     "trade_date", "symbol", "name", "trend", "activity", "level",
     "fund_net", "hits", "resonance", "near", "close", "change_pct", "source", "created_at",
