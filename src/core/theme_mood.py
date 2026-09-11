@@ -38,3 +38,62 @@ def percentile_rank(values, v) -> float | None:
     if not xs or v is None:
         return None
     return 100.0 * sum(1 for x in xs if x <= float(v)) / len(xs)
+
+
+_ANCH_LADDER_HEIGHT = [(1, 20), (2, 45), (3, 65), (4, 80), (6, 100)]
+_ANCH_LADDER_GE2 = [(0, 0), (1, 40), (2, 60), (3, 75), (5, 100)]
+_ANCH_SCALE = [(1, 35), (2, 55), (3, 68), (5, 82), (8, 92), (12, 100)]
+_ANCH_SCARCE = [(0.0, 0), (0.02, 40), (0.05, 60), (0.10, 80), (0.20, 100)]
+_ANCH_EXCESS_PCT = [(-3, 0), (-1, 25), (0, 50), (1, 75), (3, 100)]
+_ANCH_STRONG_PP = [(-15, 0), (-8, 10), (-3, 30), (0, 50), (3, 70), (8, 90), (15, 100)]
+
+
+def dim_structure(*, sealed: int, touched: int, max_boards: int, ge2: int,
+                  hist_sealed: list[int], market_sealed: int) -> tuple[float | None, dict]:
+    """S1 涨停结构(封住口径): 梯队40 + 规模25 + 自身历史分位20 + 同日稀缺度15。"""
+    if not sealed:
+        return None, {"missing": "当日无封住"}
+    ladder = 0.6 * anchor_map(max_boards, _ANCH_LADDER_HEIGHT) + 0.4 * anchor_map(ge2, _ANCH_LADDER_GE2)
+    scale = anchor_map(sealed, _ANCH_SCALE)
+    pct = percentile_rank(hist_sealed, sealed)
+    share = (sealed / market_sealed) if market_sealed else None
+    scarce = anchor_map(share, _ANCH_SCARCE) if share is not None else None
+    score = (
+        0.40 * ladder
+        + 0.25 * scale
+        + 0.20 * (NEUTRAL if pct is None else pct)
+        + 0.15 * (NEUTRAL if scarce is None else scarce)
+    )
+    detail = {
+        "sealed": sealed, "touched": touched, "max_boards": max_boards, "ge2": ge2,
+        "ladder": round(ladder, 2), "scale": round(scale, 2),
+        "hist_pct": None if pct is None else round(pct, 2),
+        "scarce": None if scarce is None else round(scarce, 2),
+    }
+    return score, detail
+
+
+def dim_diffusion(*, pcts: list[float], market: dict) -> tuple[float | None, dict]:
+    """S2 题材扩散: 中位/平均涨幅与强涨占比, 全部减全市场同口径(扣普涨)。"""
+    sample = [float(p) for p in pcts if p is not None]
+    if not sample:
+        return None, {"missing": "无成分行情"}
+    sample.sort()
+    n = len(sample)
+    med = sample[n // 2] if n % 2 else (sample[n // 2 - 1] + sample[n // 2]) / 2.0
+    mean = sum(sample) / n
+    strong_share = sum(1 for p in sample if p >= 5.0) / n * 100.0
+    med_ex = med - float(market.get("pct_median") or 0.0)
+    mean_ex = mean - float(market.get("pct_mean") or 0.0)
+    strong_ex = strong_share - float(market.get("strong_share") or 0.0)
+    score = (
+        0.45 * anchor_map(med_ex, _ANCH_EXCESS_PCT)
+        + 0.30 * anchor_map(mean_ex, _ANCH_EXCESS_PCT)
+        + 0.25 * anchor_map(strong_ex, _ANCH_STRONG_PP)
+    )
+    detail = {
+        "median_pct": round(med, 2), "mean_pct": round(mean, 2), "strong_share": round(strong_share, 2),
+        "median_excess": round(med_ex, 2), "mean_excess": round(mean_ex, 2),
+        "strong_excess_pp": round(strong_ex, 2), "sample": n,
+    }
+    return score, detail

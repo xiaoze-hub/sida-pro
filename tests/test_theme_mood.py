@@ -26,3 +26,28 @@ def test_percentile_rank_basic():
     assert tm.percentile_rank([1, 2, 3, 4], None) is None
     assert tm.percentile_rank([1, 2, 3, 4], 4) == 100.0
     assert tm.percentile_rank([1, 2, 3, 4], 2) == 50.0
+
+
+def test_dim_structure_neutral_when_no_sealed():
+    s, d = tm.dim_structure(sealed=0, touched=3, max_boards=0, ge2=0, hist_sealed=[0, 1], market_sealed=40)
+    assert s is None and "无封住" in d["missing"]
+
+
+def test_dim_structure_scores_and_subitem_missing():
+    s, d = tm.dim_structure(sealed=3, touched=5, max_boards=3, ge2=2, hist_sealed=[0, 1, 2, 3, 4], market_sealed=40)
+    # ladder = 0.6*65 + 0.4*60 = 63; scale(3)=68; hist_pct(3/5)=80; scarce(3/40=7.5%)=70
+    assert round(s, 1) == round(0.40 * 63 + 0.25 * 68 + 0.20 * 80 + 0.15 * 70, 1)
+    s2, d2 = tm.dim_structure(sealed=2, touched=2, max_boards=2, ge2=1, hist_sealed=[], market_sealed=0)
+    # 历史/稀缺缺失 → 各自按 50 收缩, 权重不转移
+    assert round(s2, 1) == round(0.40 * (0.6 * 45 + 0.4 * 40) + 0.25 * 55 + 0.20 * 50 + 0.15 * 50, 1)
+    assert d2["hist_pct"] is None and d2["scarce"] is None
+
+
+def test_dim_diffusion_subtracts_market():
+    market = {"pct_median": 1.0, "pct_mean": 1.5, "strong_share": 5.0}
+    s, d = tm.dim_diffusion(pcts=[3.0, 1.0, -1.0, 6.0], market=market)
+    # 中位 2.0(超额+1.0→75); 均值 2.25(超额+0.75→68.75); 强涨占比 25%(超额+20pp→上夹逼100)
+    assert d["median_excess"] == 1.0 and d["strong_excess_pp"] == 20.0
+    assert round(s, 2) == round(0.45 * 75 + 0.30 * 68.75 + 0.25 * 100, 2)
+    s2, d2 = tm.dim_diffusion(pcts=[], market=market)
+    assert s2 is None and "无成分行情" in d2["missing"]
