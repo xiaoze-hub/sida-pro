@@ -81,3 +81,17 @@ def test_decide_fund_net_reads_dict_field(monkeypatch):
     monkeypatch.setattr(dpf, "compute_pool_flow", lambda s: None)
     out2 = core_mod.decide("002361")
     assert out2["parts"]["fund_net"] is None
+
+
+def test_synthesize_no_resonance_wording():
+    """无缺失但组合不在 7 行状态表 → 应显示"未共振"(而非误导性的"信号不全")。
+
+    场景: S信号 + 活跃度强势 + 资金流出 → 非官方表内组合(row 0, 无缺失)。
+    """
+    out = synthesize("S信号", 5.755, 5.0, -4.1e7)
+    assert out["verdict"] == "看看"
+    assert "信号不全" not in out["reason"], out
+    assert "未共振" in out["reason"]
+    # 缺资金时仍如实报"信号不全(缺失: 资金)"
+    out2 = synthesize("S信号", 5.755, 5.0, None)
+    assert "信号不全" in out2["reason"] and "资金" in out2["reason"]

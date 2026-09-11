@@ -42,10 +42,15 @@ def synthesize(
     )
     phase = st.get("phase") or "无"
     if phase == "无" or st.get("row", 0) == 0:
-        missing = st.get("note") or "信号不全"
+        note = st.get("note")
+        if note:
+            reason = f"信号不全({note}), 先别动手"  # 数据缺失: 明说缺哪个
+        else:
+            # 三信号齐全但组合不在 7 行状态表(row 0 无共振): 不冒充"信号不全"
+            reason = f"未共振({st.get('state') or '组合不在状态表'}), 先观察"
         return {
             "verdict": "看看",
-            "reason": f"信号不全({missing}), 先别动手",
+            "reason": reason,
             "phase": phase,
             "row": st.get("row", 0),
             "parts": _parts_text(trend, activity, fund_net),
