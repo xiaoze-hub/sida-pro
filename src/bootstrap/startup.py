@@ -416,6 +416,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"共振 AI 批量判定注册失败: {e}")
 
+        # 题材情绪分(2026-09-12 老板口径): 交易日 15:45(在 demon 15:35 落涨停事件之后)
+        try:
+            from src.core.theme_mood import daily_job as theme_mood_job
+
+            rt.scheduler.scheduler.add_job(
+                theme_mood_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=45,
+                id="theme-mood-daily",
+                name="题材情绪分扫描",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("题材情绪分扫描已注册(交易日 15:45)")
+        except Exception as e:
+            logger.error(f"题材情绪分扫描注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once
