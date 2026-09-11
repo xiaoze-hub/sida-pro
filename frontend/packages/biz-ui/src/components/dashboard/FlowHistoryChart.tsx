@@ -62,7 +62,13 @@ export default function FlowHistoryChart() {
     // 主力净流入=资金流入语义, 统一取 --stock-up 令牌 (红, A股口径)
     const sc = readStockColors()
     const times = rows.map((r) => fmtTime(r.ts))
-    const vals = rows.map((r) => +(r.total_main_flow / 1e8).toFixed(2))
+    // 后端 total_main_flow 单位=亿(与大盘资金流卡片同源, 2026-09-11 修: 曾误除 1e8 → 压平成 0);
+    // null 保留为断点(不编造 0)。
+    const vals = rows.map((r) =>
+      r.total_main_flow == null || !Number.isFinite(Number(r.total_main_flow))
+        ? null
+        : +Number(r.total_main_flow).toFixed(1),
+    )
     chart.setOption({
       grid: { left: 44, right: 10, top: 8, bottom: 18 },
       xAxis: {

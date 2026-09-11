@@ -7,6 +7,15 @@
 
 ## 2026-09-11
 
+### fix-大盘资金流日内曲线"没内容"(单位除错) + 盘中独立采样; v0.5.58
+- **生产实撞**(老板截图: 大盘资金流卡片有数"主力净流入 -695.9亿"但曲线压平在 0): 库内快照值 -695.9/-636.9, 前端却画出 ~0 的直线。
+- **根因**: 后端 `total_main_flow` 单位=**亿**(与卡片同源, market_data.py 注释即"亿"), 前端 `FlowHistoryChart` 又 `/1e8` → -695.9 变 -7e-06 → 曲线压平; 同时 null 会被算成 0。
+- **修复**(前端): 原样使用亿单位(保留 1 位小数); null 保留断点(不编造 0)。
+- **配套**(后端): 新增 `src/core/market_flow_sampler.py` + 启动任务 **每 60s 独立采样**(交易时段守卫内建) —— 快照原先只在前端调用大盘资金流接口时写入, 页面不打开则日内曲线只有零星几点("没内容"的另一半原因); 采样器与接口同一网关、同字段映射(total_main_flow/sh/sz main_flow), 失败静默不抛。
+- **测试**: 前端 `flow-history-chart` 5 例(新增: 亿单位原样画图 / null 断点; 旧例夹具从"元"改正为"亿"); 后端 `test_market_flow_sampler` 3 例(时段跳过/取数失败静默/落库值); core→web 反向依赖棘轮过(采样器初版误从 `src.web.database` 取 engine, 被测试+棘轮双重拦下改为 `src.db.session`); 前端 115 passed / tsc / eslint / UI-RULES / build 全过; 离线全量 **2113 passed / 2 failed(KI-027 本机基线) / 5 skipped**。
+- [tag v0.5.58]
+
+
 ### update-v0.5.57 生产部署(收盘前热修, 老板当场点头, 冒烟 9/9)
 - **决策合成资金信号修复(v0.5.56)+未共振文案(v0.5.57)合并部署**; 老板选择"现在热修"(盘中例外, 已当场确认)。
 - **部署**: 备份 `/root/app_backup_pre_v0557_20260911.tar.gz` → 覆盖层 v0.5.57 `tar xzf --overwrite` → `chown` → `compileall` → restart → healthy(~40s) → `/api/version` = **v0.5.57** → 冒烟 **9/9**(11.6s)。
