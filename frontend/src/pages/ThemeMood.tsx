@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
@@ -50,6 +50,30 @@ interface MoodItem {
   max_boards: number | null
   core_stocks: CoreStock[]
   cells: MoodCell[]
+  /** 轮动(v0.5.81): 窗口内进过每日 Top-K 的痕迹; 退榜题材仍留一行看它怎么退的 */
+  top_days?: number
+  first_top_date?: string | null
+  last_top_date?: string | null
+  in_top_today?: boolean
+}
+
+interface RotationDay {
+  date: string
+  new_n: number
+  exit_n: number
+  new_codes: string[]
+  exit_codes: string[]
+}
+
+interface LadderDay {
+  date: string
+  rows: { boards: number; codes: string[]; names: string[]; sealed_n: number }[]
+}
+
+interface LadderResp {
+  dates: string[]
+  ladder: LadderDay[]
+  note?: string
 }
 
 interface BoardResp {
@@ -59,6 +83,8 @@ interface BoardResp {
   dates?: string[]
   items: MoodItem[]
   market?: { date: string; score: number | null }[]
+  rotation?: RotationDay[]
+  rotation_top_k?: number
 }
 
 const WINDOWS = [10, 20, 30] as const
@@ -125,8 +151,10 @@ function TrendChart({ trend, width, height, label, hint, ariaLabel }: {
 export default function ThemeMoodPage() {
   const [windowDays, setWindowDays] = useState<number>(20)
   const [resp, setResp] = useState<BoardResp | null>(null)
+  const [ladder, setLadder] = useState<LadderResp | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [showAllRows, setShowAllRows] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -136,6 +164,12 @@ export default function ThemeMoodPage() {
         if (alive) setResp(res)
       } catch {
         /* 保留旧数据 */
+      }
+      try {
+        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, { cacheMode: 'reload' })
+        if (alive) setLadder(lad)
+      } catch {
+        if (alive) setLadder(null)
       }
     }
     void load()
@@ -147,6 +181,11 @@ export default function ThemeMoodPage() {
   }, [windowDays, reloadKey])
 
   const items = resp?.items ?? []
+  const rotationByDate = useMemo(
+    () => new Map((resp?.rotation ?? []).map((r) => [r.date, r])),
+    [resp],
+  )
+  const visibleItems = showAllRows ? items : items.slice(0, 15)
   const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
   const bands = monthBands(axis)
   const labels = dayLabels(axis)
@@ -287,6 +326,35 @@ export default function ThemeMoodPage() {
                   ))}
                 </div>
               </div>
+              <div className="mb-1 flex w-max min-w-full items-center gap-1">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[10px] leading-4 text-foreground/60">
+                  轮动
+                </span>
+                <div className="flex gap-0.5">
+                  {axis.map((d) => {
+                    const r = rotationByDate.get(d)
+                    const entered = r?.new_n ?? 0
+                    const exited = r?.exit_n ?? 0
+                    return (
+                      <span
+                        key={d}
+                        title={r
+                          ? `${d} 新进 Top${resp?.rotation_top_k ?? 10}: ${r.new_codes.join('、') || '无'}\n退榜: ${r.exit_codes.join('、') || '无'}`
+                          : d}
+                        className="w-[38px] shrink-0 text-center text-[10px] leading-4 text-foreground/60"
+                      >
+                        {entered || exited ? (
+                          <>
+                            {entered ? <span className="text-primary">+{entered}</span> : null}
+                            {entered && exited ? ' ' : null}
+                            {exited ? <span className="text-muted-foreground line-through">−{exited}</span> : null}
+                          </>
+                        ) : '·'}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
               {marketTrend ? (
                 <div
                   className="mb-1 border-b border-border/40 pb-1"
@@ -308,8 +376,10 @@ export default function ThemeMoodPage() {
                 </div>
               ) : null}
               <div className="space-y-0.5">
-                {items.map((it) => {
+                {visibleItems.map((it) => {
                   const byDate = cellsByDate(it.cells)
+                  const faded = it.in_top_today === false && (it.top_days ?? 0) > 0
+                  const fresh = it.first_top_date != null && it.first_top_date === latestDate
                   return (
                     <button
                       key={it.block_code}
@@ -320,11 +390,16 @@ export default function ThemeMoodPage() {
                       }`}
                     >
                       <span
-                        title={it.block_name || it.block_code}
+                        title={
+                          `${it.block_name || it.block_code}`
+                          + (it.top_days ? `\n窗口内在榜 ${it.top_days} 天(${it.first_top_date} ~ ${it.last_top_date})` : '')
+                        }
                         className={`sticky left-0 z-10 w-[76px] shrink-0 truncate bg-background px-1 text-left text-[11px] ${
-                          active === it.block_code ? 'font-semibold text-primary' : ''
+                          active === it.block_code ? 'font-semibold text-primary' : faded ? 'text-muted-foreground' : ''
                         }`}
                       >
+                        {fresh ? <span className="mr-0.5 text-primary">新</span> : null}
+                        {faded ? <span className="mr-0.5 text-muted-foreground">退</span> : null}
                         {it.block_name || it.block_code}
                       </span>
                       <div className="flex gap-0.5">
@@ -349,6 +424,15 @@ export default function ThemeMoodPage() {
                   )
                 })}
               </div>
+              {items.length > 15 ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAllRows((v) => !v)}
+                  className="mt-1 w-full rounded border border-border/50 py-1 text-center text-[11px] text-muted-foreground hover:bg-accent/40"
+                >
+                  {showAllRows ? '收起' : `展开其余 ${items.length - 15} 行(含窗口内退榜题材)`}
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -407,6 +491,43 @@ export default function ThemeMoodPage() {
           )}
         </div>
       </div>
+
+      {ladder?.ladder?.length ? (
+        <div className="mt-4 rounded border border-border/60 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[13px] font-semibold">连板梯队</span>
+            <span className="text-[10px] text-muted-foreground">{ladder.note}</span>
+          </div>
+          <div className="overflow-x-auto pb-1">
+            <div className="flex w-max gap-1">
+              {ladder.ladder.map((day) => (
+                <div key={day.date} className="w-[132px] shrink-0 rounded border border-border/40 p-1.5">
+                  <div className="mb-1 flex items-baseline justify-between">
+                    <span className="text-[11px] font-medium text-foreground/80">{day.date.slice(5)}</span>
+                    <span className="text-[10px] text-muted-foreground">封 {day.rows.reduce((a, r) => a + r.codes.length, 0)}</span>
+                  </div>
+                  {day.rows.length === 0 ? (
+                    <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
+                  ) : (
+                    day.rows.map((r) => (
+                      <div key={r.boards} className="mb-1 last:mb-0">
+                        <div className="text-[10px] font-medium text-primary">{r.boards}板</div>
+                        <div
+                          title={r.names.join('、')}
+                          className="truncate text-[11px] text-foreground/80"
+                        >
+                          {r.names.slice(0, 2).join('、')}
+                          {r.names.length > 2 ? ` +${r.names.length - 2}` : ''}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -14,6 +14,7 @@ import logging
 import threading
 
 from src.core.jobs import jobs
+from src.core.theme_rotation import daily_top_sets, membership_flags, rotation_series
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 _WINDOWS = (10, 20, 30)
 _TOPS = (6, 8, 10, 15)
+# 轮动口径: 每日 Top-K 的 K。与榜单 top 参数解耦 —— 榜单看"今天谁强",
+# 轮动看"窗口内谁进出过", 两者 K 不必相同。
+ROTATION_TOP_K = 10
 
 
 def _read(sql: str, params: dict) -> list[dict]:
@@ -31,6 +35,20 @@ def _read(sql: str, params: dict) -> list[dict]:
 
     with engine.begin() as conn:
         rows = conn.execute(text(sql), params).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def _read_codes(sql: str, params: dict, codes: tuple[str, ...]) -> list[dict]:
+    """带 `IN :codes` 的查询(text 参数不能展开元组, 必须 expanding bindparam)。"""
+    from sqlalchemy import bindparam, text
+
+    from src.db.session import engine
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(sql).bindparams(bindparam("codes", expanding=True)),
+            {**params, "codes": codes},
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
@@ -78,9 +96,31 @@ def _board_data(window: int, top: int) -> dict:
         if h["score"] is not None:
             hist_scores.setdefault(h["block_code"], []).append(float(h["score"]))
     items = []
-    for r in rows:
-        code = r["block_code"]
+    latest_codes = {r["block_code"] for r in rows}
+    # 轮动(v0.5.81): 行集合 = 最新一天 ∪ 窗口内进过每日 Top-K 的题材。
+    # 只取最新一天的话,"昨天还热今天掉榜"的题材整行消失, 轮动就看不见。
+    top_sets = daily_top_sets(hist, top_k=ROTATION_TOP_K)
+    flags = membership_flags(dates, top_sets)
+    rotation = rotation_series(dates, top_sets)
+    union_codes = latest_codes | set(flags)
+    meta: dict[str, dict] = {r["block_code"]: r for r in rows}
+    if union_codes - latest_codes:
+        extra = _read_codes(
+            "SELECT block_code, block_name, block_type, MAX(trade_date) AS last_d "
+            "FROM theme_mood_daily WHERE trade_date >= :a AND block_code IN :codes "
+            "GROUP BY block_code", {"a": dates[0]}, tuple(sorted(union_codes - latest_codes)),
+        )
+        for e in extra:
+            meta[e["block_code"]] = {**e, "score": None, "confidence": None, "core": 0,
+                                     "s1": None, "s2": None, "s3": None, "s4": None, "s5": None,
+                                     "limit_up_cnt": None, "max_boards": None, "core_stocks": None}
+    for code in union_codes:
+        r = meta.get(code)
+        if r is None:
+            continue
         recent = hist_scores.get(code, [])[-3:]
+        fl = flags.get(code, {"top_days": 0, "first_top_date": None,
+                              "last_top_date": None, "in_top_today": False})
         items.append({
             "block_code": code, "block_name": r["block_name"], "block_type": r["block_type"],
             "score": r["score"],
@@ -92,11 +132,14 @@ def _board_data(window: int, top: int) -> dict:
             "core_stocks": _loads(r["core_stocks"]) or [],
             "score3_avg": (round(sum(recent) / len(recent), 1) if recent else None),
             "cells": cells.get(code, []),
+            "top_days": fl["top_days"], "first_top_date": fl["first_top_date"],
+            "last_top_date": fl["last_top_date"], "in_top_today": fl["in_top_today"],
         })
-    ranked = rank_items(items)[: int(top)]
+    ranked = rank_items(items)
     for it in ranked:
         it["cells"] = align_cells(it["cells"], dates)
-    return {"dates": dates, "items": ranked, "market": market_series(hist, dates)}
+    return {"dates": dates, "items": ranked, "market": market_series(hist, dates),
+            "rotation": rotation, "rotation_top_k": ROTATION_TOP_K}
 
 
 def _detail_rows(block_code: str, days: int) -> list[dict]:
@@ -141,6 +184,31 @@ def _spawn_scan() -> dict:
 
     threading.Thread(target=_runner, name="theme-mood-scan", daemon=True).start()
     return {"started": True, "reason": None, "job_id": job_id}
+
+
+@router.get("/ladder")
+def get_ladder(window: int = Query(20, ge=5, le=60)):
+    """连板梯队(v0.5.81, 老板: "连扳梯队也要做")。
+
+    通达信式天梯: 每日按连板高度分组列个股。连板数**不信任 limit_days 列**(从未落库),
+    从事件表自己推: 沿表内日期序列数连续收盘封板日。只算收盘封板, touch 未封不算。
+    """
+    from src.core.limit_ladder import ladder_window
+
+    days = _read(
+        "SELECT DISTINCT trade_date FROM limit_up_events ORDER BY trade_date DESC LIMIT :n",
+        {"n": int(window)},
+    )
+    dates = sorted(d["trade_date"] for d in days)
+    if not dates:
+        return {"dates": [], "ladder": [], "note": "limit_up_events 无数据"}
+    events = _read(
+        "SELECT trade_date, symbol, name, is_sealed_close FROM limit_up_events "
+        "WHERE trade_date >= :a ORDER BY trade_date", {"a": dates[0]},
+    )
+    names = {e["symbol"]: e["name"] for e in events if e.get("name")}
+    return {"dates": dates, "ladder": ladder_window(dates, events, names),
+            "note": "连板数=沿事件表日期序列的连续收盘封板日; 只算收盘封板"}
 
 
 @router.get("/board")

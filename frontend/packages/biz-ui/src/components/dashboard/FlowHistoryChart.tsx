@@ -122,5 +122,12 @@ export default function FlowHistoryChart() {
       </div>
     )
   }
-  return <div ref={ref} className="h-[150px] w-full" />
+  return (
+    <div>
+      <div ref={ref} className="h-[150px] w-full" />
+      {note ? (
+        <div className="mt-1 text-[10px] text-muted-foreground">{note}</div>
+      ) : null}
+    </div>
+  )
 }

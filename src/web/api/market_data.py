@@ -346,6 +346,41 @@ async def market_capital_flow_proxy():
 
 
 # ──────────── 大盘资金快照历史(v0.4.7) ────────────
+def _is_flat(items: list[dict]) -> bool:
+    vals = [i["total_main_flow"] for i in items if i.get("total_main_flow") is not None]
+    return len(vals) >= 2 and (max(vals) - min(vals)) < 1e-9
+
+
+def _last_varying_session(conn, *, exclude: str | None, lookback_days: int = 10):
+    """往前找最近一个盘中真有变动的交易日; 找不到返回 (None, None)。"""
+    from datetime import timedelta
+
+    since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d 00:00:00")
+    dates = conn.execute(
+        text("SELECT DISTINCT date(ts) AS d FROM market_flow_snapshots "
+             "WHERE ts >= :since ORDER BY d DESC"),
+        {"since": since},
+    ).fetchall()
+    for row in dates:
+        d = str(row[0])
+        if exclude and d == exclude:
+            continue
+        rows = conn.execute(
+            text("SELECT ts, total_main_flow FROM market_flow_snapshots "
+                 "WHERE date(ts) = :d ORDER BY ts ASC LIMIT 500"),
+            {"d": d},
+        ).fetchall()
+        items = []
+        for r in rows:
+            ts_val = r[0]
+            ts_str = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val)
+            items.append({"ts": ts_str,
+                          "total_main_flow": float(r[1]) if r[1] is not None else None})
+        if len(items) >= 2 and not _is_flat(items):
+            return items, d
+    return None, None
+
+
 @router.get("/market-capital-flow/history")
 async def market_capital_flow_history(
     hours: int = Query(4, ge=1, le=24, description="回溯小时数(默认 4h, 上限 24h)"),
@@ -397,11 +432,25 @@ async def market_capital_flow_history(
                     "sz_flow": float(r[5]) if r[5] is not None else None,
                 }
             )
+        # 非交易时段(周末/开盘前)vendor 会反复返回同一个值 → 曲线是一条直线,
+        # 看着像坏了。回退到最近一个**盘中真有变动**的交易日并标明, 不拿直线冒充曲线。
+        session, session_date = "today", (items[0]["ts"][:10] if items else None)
+        if _is_flat(items):
+            prev_items, prev_date = _last_varying_session(conn, exclude=session_date)
+            if prev_items:
+                items, session, session_date = prev_items, "prev", prev_date
+        note = ""
+        if not items:
+            note = "暂无快照(等待大盘资金接口写入)"
+        elif session == "prev":
+            note = f"非交易时段, 显示 {session_date} 盘中曲线(当日无变动)"
         return {
             "hours": hours,
             "count": len(items),
             "items": items,
-            "note": "" if items else "暂无快照(等待大盘资金接口写入)",
+            "session": session,
+            "session_date": session_date,
+            "note": note,
         }
     except Exception as e:
         logger.warning(f"大盘资金历史读取失败: {e}")

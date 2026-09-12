@@ -7,6 +7,17 @@
 
 ## 2026-09-12
 
+### feat-题材轮动 + 连板梯队 + 大盘资金流曲线化(老板三条); v0.5.81
+- **① 题材不能固定, 要轮动**: 原 `_board_data` 的行集合 = **最新一天**的 Top-N(`SELECT * WHERE trade_date = latest`), 于是"昨天还热、今天掉榜"的题材**整行消失**, 轮动根本看不见。改为: 行集合 = 最新一天 ∪ **窗口内进过每日 Top-10 的题材**(`src/core/theme_rotation.py`, 纯函数), 退榜题材留一行、`score=None`、带 `top_days/first_top_date/last_top_date/in_top_today`, 用它自己的分数曲线展示"怎么退的"。
+  前端: 日期轴下新增**轮动条**(每日 `+新进 / −退榜` 计数, tooltip 列名单), 行名前打「新」/「退」标, 默认显示前 15 行 + 「展开其余 N 行(含窗口内退榜题材)」。
+  口径刻意与榜单解耦: `ROTATION_TOP_K=10` 看"谁进出过", 榜单 `top` 看"今天谁强", 两者不必相同。
+- **② 连板梯队**: 新增 `src/core/limit_ladder.py` + `GET /api/theme-mood/ladder?window=`。通达信式天梯: 每日按连板高度分组列个股。
+  **连板数不信任 `limit_up_events.limit_days`(该列从未落库)**, 从事件表自己推: 沿**表内日期序列**数连续**收盘封板**日(只 touch 未封不算, 与 market_phase 的 sealed 口径一致); 空日 `rows: []` 不编造。
+  前端在题材情绪页底部渲染横向天梯(每日一列, 高度降序, 单元格列个股、全名单在 tooltip)。
+- **③ 大盘资金流不再是直线**: 非交易时段 vendor 反复返回同一个值 → 曲线恒平, 看着像坏了。`/market-capital-flow/history` 现在检测当日序列零方差时**回退到最近一个盘中真有变动的交易日**, 并返回 `session='prev'` + `session_date` + note; `FlowHistoryChart` 在图下显示该 note("非交易时段, 显示 2026-09-11 盘中曲线(当日无变动)"), 不再拿直线冒充曲线。
+- **测试**: `tests/test_rotation_ladder.py` 6 例(退榜留行/首日不猜/连板沿表内日期/touch 未封不算/空日不编造) + `test_theme_mood_api.py` 新增 1 例(mock `_read`/`_read_codes` 验证 union 行集合与轮动序列); 前端 192 passed + tsc + eslint + UI-RULES + build 全绿; 后端离线全量见部署记录。
+- [tag v0.5.81]
+
 ### update-v0.5.80 生产部署(高开追高徽标 + 回填契约上线; 冒烟 10/10)
 - **部署链**: 备份 `/root/app_backup_pre_v0580_20260912.tar.gz`(21.0MB) → 覆盖层 19.1MB(`tar xzf --overwrite` → `chown -R app:app` → `compileall` → restart)。**无迁移**。`/api/version` = v0.5.80, 容器 healthy。
 - **`/api/gap-study?days=250` 生产真值(167 只标的 / 55,184 个观测 / 剔除"开盘涨停买不进" 195 笔)**:
