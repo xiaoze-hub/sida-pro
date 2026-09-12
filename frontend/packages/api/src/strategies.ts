@@ -1,5 +1,17 @@
 import { fetchAPI } from './client'
 
+/** 后端由"求值器真正读的阈值键"派生出的可编辑参数(前端不必逐策略写控件)。 */
+export interface StrategyParam {
+  key: string
+  label: string
+  value: number
+  unit?: string
+  min: number
+  max: number
+  step: number
+  help?: string
+}
+
 export interface StrategyItem {
   id: string
   display_name: string
@@ -9,6 +21,7 @@ export interface StrategyItem {
   ui_badge: string
   source: string
   filter: Record<string, number | string>
+  params?: StrategyParam[]
   eod_fields: string[]
   data_window: 'realtime' | 'eod'
   available_now: boolean
@@ -23,6 +36,8 @@ export interface ApplyRequest {
   strategy_id: string
   symbol: string
   market?: string
+  /** 只认该策略 params 声明过的阈值键; 未声明的键后端会静默丢弃 */
+  overrides?: Record<string, number>
 }
 
 export interface ScoreFactor {
@@ -54,6 +69,8 @@ export interface ScanRequest {
   symbol_limit?: number
   /** 自定义股票池(共振查询精筛): 传入则只扫这几只, 优先于 universe, ≤100 只 */
   symbols?: string[]
+  /** 参数覆盖(与 apply 同规则): 只认该策略 params 声明过的阈值键 */
+  overrides?: Record<string, number>
 }
 
 export interface ScanItem {

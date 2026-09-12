@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Search, BookOpen, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Play, XCircle } from 'lucide-react'
+import { Search, BookOpen, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Play, RotateCcw, XCircle } from 'lucide-react'
 import { strategiesApi, type StrategyItem, type ApplyResult } from '@panwatch/api'
+import { activeOverrides, displayValue, parseParamInput } from '@/lib/strategy-params'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
@@ -59,6 +60,8 @@ export default function StrategyLibraryDialog({
   const [symbol, setSymbol] = useState(defaultSymbol)
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null)
   const [applying, setApplying] = useState(false)
+  // 用户改过的策略参数(未改的不进这里 → 不发覆盖)
+  const [overrides, setOverrides] = useState<Record<string, number>>({})
 
   const load = async () => {
     setLoading(true)
@@ -101,6 +104,7 @@ export default function StrategyLibraryDialog({
         strategy_id: selected.id,
         symbol: symbol.trim(),
         market: 'CN',
+        overrides: activeOverrides(selected.params, overrides),
       })
       setApplyResult(res)
     } catch (e: any) {
@@ -173,7 +177,7 @@ export default function StrategyLibraryDialog({
               return (
                 <button
                   key={it.id}
-                  onClick={() => { setSelected(it); setApplyResult(null) }}
+                  onClick={() => { setSelected(it); setApplyResult(null); setOverrides({}) }}
                   className="card-subtle p-4 text-left hover:border-primary/40 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
@@ -237,16 +241,63 @@ export default function StrategyLibraryDialog({
                 </DialogHeader>
 
                 <div className="mt-4 space-y-4">
-                  {/* 硬过滤 */}
+                  {/* 硬过滤: 表单由策略自己的 params 描述生成(不再逐策略手写控件) */}
                   <div>
-                    <h4 className="text-xs font-semibold text-muted-foreground mb-2">硬过滤条件</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {Object.entries(selected.filter || {}).map(([k, v]) => (
-                        <span key={k} className="text-[10px] px-2 py-0.5 rounded bg-accent/40 font-mono">
-                          {k}: {String(v)}
-                        </span>
-                      ))}
+                    <div className="mb-2 flex items-center gap-2">
+                      <h4 className="text-xs font-semibold text-muted-foreground">
+                        硬过滤条件{selected.params?.length ? '(可调)' : ''}
+                      </h4>
+                      {Object.keys(overrides).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setOverrides({})}
+                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                          title="清掉本次覆盖, 回到策略原值"
+                        >
+                          <RotateCcw className="w-3 h-3" /> 恢复默认({Object.keys(overrides).length})
+                        </button>
+                      )}
                     </div>
+                    {selected.params?.length ? (
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-2 md:grid-cols-3">
+                        {selected.params.map(p => {
+                          const val = displayValue(p, overrides)
+                          const changed = p.key in overrides
+                          return (
+                            <label key={p.key} className="block" title={p.help || p.key}>
+                              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                {p.label}
+                                {changed && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Input
+                                  type="number"
+                                  value={String(val)}
+                                  min={p.min}
+                                  max={p.max}
+                                  step={p.step}
+                                  onChange={e => {
+                                    const next = parseParamInput(e.target.value, p)
+                                    if (next === null) return
+                                    setOverrides(o => ({ ...o, [p.key]: next }))
+                                  }}
+                                  className={`h-7 w-20 text-[12px] font-mono ${changed ? 'border-primary/50' : ''}`}
+                                />
+                                {p.unit && <span className="text-[10px] text-muted-foreground">{p.unit}</span>}
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {Object.entries(selected.filter || {}).map(([k, v]) => (
+                          <span key={k} className="text-[10px] px-2 py-0.5 rounded bg-accent/40 font-mono">
+                            {k}: {String(v)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* 应用到单只股票 */}

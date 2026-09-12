@@ -7,6 +7,20 @@
 
 ## 2026-09-12
 
+### feat-第三批: 策略=一文件+META 与 K线子图注册表(D1/C2); v0.5.78
+- **来源**: TSP 借鉴清单第三批 C2 + D1(老板"按计划全做")。研究档案 `C:\Users\tianxiang\sida-research\tick-stock-panel-全系统研究.md`。
+- **C2 策略参数自描述(`src/core/strategy_library.py`)**: 新增 `PARAM_DEFS`(14 个阈值键的中文名/单位/范围/步长)+ `strategy_params(cfg)` + `effective_config(cfg, overrides)`。
+  - **关键设计**: 可编辑参数**从求值器真正读的阈值键派生**(`price_min`/`change_pct_max`/`pe_ttm_max`…), 而不是另写一份表单定义 —— 描述与行为不可能脱节; 注释里钉死"新键必须先在 PARAM_DEFS 与求值器成对出现"。
+  - `meta.params.<key>` 只允许**覆盖描述**(label/min/max/step/help), 不能塞新值也不能造新键; 阈值写在 `filter:` 下或策略顶层(dual_low 的历史写法)两种位置都认。
+  - 覆盖是白名单式: 未声明键、非数值、NaN/inf 一律丢弃并 warning(不抛错打断选股); 写回它**原本所在的位置**; **返回副本不改原 cfg** —— YAML 是模块级复用对象, 原地改会让一次调参污染后续所有用户。
+  - API: `/strategies/list` 与 `/strategies/{id}` 带 `params`; `/scan` 与 `/apply` 收 `overrides`。前端 `StrategyLibraryDialog` 的"硬过滤条件"从只读 chip 变成**自动生成的可调表单**(带"改过"圆点与恢复默认), 纯函数收在 `src/lib/strategy-params.ts`(只把真改过的键发出去, 改回原值=没改)。
+- **D1 子图注册表(`packages/biz-ui/src/lib/subcharts.ts`)**: 副图的名字(含参数口径 `MACD(12,26,9)`/`RSI(6)`)、pane 顺序、悬停读数集中声明; `InteractiveKline` 在画布上方渲染**每 pane 一条信息栏**(悬停时读该根, 不悬停读最后一根; 缺数一律 `--` 不补 0), 只有 MACD 柱用红绿(遵守"红绿只给价格/方向"的全仓约束)。
+  - **取舍说明**: 信息栏做成画布上方的条, 没有做进 pane 内部 —— LWC v5 的 pane 几何要额外测量且窄屏易叠字, 条带按 pane 顺序排列已足够定位; 这条如果老板要"贴进 pane 左上角"再改。
+  - 顺手删掉一个**装饰状态**: `LayerState.subchart` 声明了 `'vol'|'macd'|'dark_ratio'|'phase'|'orderbook'` 五档, 但**全文件没有任何一处读它**(图里 MACD 恒画、RSI 走另一个开关), 也没有调用方传 `initialLayers` → 删除, 副图身份归注册表。
+- **测试**: 后端新增 `tests/test_strategy_meta.py` 10 例(派生只认声明键/顶层阈值也算/meta 只改描述/写回原位且不污染原 cfg/坏覆盖 6 种参数化/覆盖真的改变判定/真实 YAML 每条策略都可编辑 + capital_heat 的"追高上限"生效/YAML 仍可解析); 前端新增 `strategy-params.test.ts` 5 例 + `subcharts.test.ts` 7 例。
+- **门禁**: 后端 `pytest -m "not network"` = **2196 passed / 7 failed**, 7 条与 KI-055 登记的存量**逐条相同**(进度条 F 计数 7 = FAILED 行 7, 无新增); 前端 **179 passed / 31 文件** + tsc + eslint + UI-RULES + `pnpm build` 全绿。
+- [tag v0.5.78]
+
 ### update-v0.5.77 生产部署(走查缺陷收口: 读数同源 + 进度会动 + 扫描有入口; 冒烟 10/10)
 - **部署链**: 备份 `/root/app_backup_pre_v0577_20260912.tar.gz`(21.0MB, 排除 `data/` 与 `static/assets`) → `git archive main` + `frontend/dist→static/` 打成 19.1MB → `docker cp` → `tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart。**无迁移**(本轮不动表)。`/api/version` = **v0.5.77**, 容器 healthy, `static/assets` 2240 个历史 chunk(旧哈希保留, 回滚只需还原 index.html)。
 - **生产实测(不是本地断言)**:

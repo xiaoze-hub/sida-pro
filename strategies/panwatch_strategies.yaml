@@ -6,6 +6,12 @@
 #
 # 2026-08-23 P3 口径修正: 字段缺失 = 无法验证 = 该票不通过(保守语义, 防止
 # "无量的放量策略/无估值的低估值策略"裸筛), 缺失项仍标注在 missing_fields
+#
+# 2026-09-12 v0.5.78(借鉴 tick-stock-panel 的"一文件 + META"): 每个策略的**可编辑参数**
+#   由 `src/core/strategy_library.py::PARAM_DEFS` 自动派生 —— 只要写了求值器真正会读的
+#   阈值键(price_min / change_pct_max / pe_ttm_max …), 前端表单与扫描网格就不必逐策略手写。
+#   可选 `meta.params.<key>` 只用于**覆盖描述**(label/min/max/step/help), 不能凭空引入新键:
+#   新键必须先在 PARAM_DEFS 与求值器里成对出现, 否则描述会与行为脱节。
 
 dual_low:
   display_name: "双低选股(价值)"
@@ -51,6 +57,14 @@ capital_heat:
     stable: 0.1
   ui_badge: "资金"
   source: "alphasift/capital_heat@v1.1"
+  meta:                       # 只改描述, 不改语义(键必须是 PARAM_DEFS 里声明过的阈值)
+    params:
+      change_pct_max:
+        label: "追高上限"
+        help: "当日涨过头就不追: 超过此值视为情绪末端, 直接筛掉"
+      change_pct_min:
+        label: "资金启动下限"
+        help: "当日需有资金推动, 平盘/下跌不视为热度"
 
 volume_breakout:
   display_name: "放量突破"

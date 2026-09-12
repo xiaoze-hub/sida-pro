@@ -11,10 +11,93 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 可编辑参数(借鉴 tick-stock-panel 的"一文件 + META": 表单与扫描网格由策略自己描述)
+# ---------------------------------------------------------------------------
+# key 必须与 _evaluate_strategy 实际读的阈值名一一对应 —— 描述与行为脱节比没有描述更坏。
+PARAM_DEFS: dict[str, dict] = {
+    "price_min":         {"label": "股价下限", "unit": "元", "min": 1, "max": 500, "step": 0.5},
+    "price_max":         {"label": "股价上限", "unit": "元", "min": 2, "max": 2000, "step": 1},
+    "change_pct_min":    {"label": "涨幅下限", "unit": "%", "min": -10, "max": 10, "step": 0.5},
+    "change_pct_max":    {"label": "涨幅上限", "unit": "%", "min": -10, "max": 20, "step": 0.5},
+    "volume_ratio_min":  {"label": "量比下限", "unit": "倍", "min": 0, "max": 10, "step": 0.1},
+    "volume_ratio_max":  {"label": "量比上限", "unit": "倍", "min": 0.5, "max": 30, "step": 0.5},
+    "turnover_rate_min": {"label": "换手率下限", "unit": "%", "min": 0, "max": 30, "step": 0.1},
+    "turnover_rate_max": {"label": "换手率上限", "unit": "%", "min": 0, "max": 60, "step": 0.5},
+    "pe_ttm_min":        {"label": "PE(TTM)下限", "unit": "倍", "min": 0, "max": 100, "step": 0.01},
+    "pe_ttm_max":        {"label": "PE(TTM)上限", "unit": "倍", "min": 1, "max": 300, "step": 0.5},
+    "pb_min":            {"label": "PB下限", "unit": "倍", "min": 0, "max": 20, "step": 0.05},
+    "pb_max":            {"label": "PB上限", "unit": "倍", "min": 0.1, "max": 50, "step": 0.1},
+    "market_cap_min":    {"label": "总市值下限", "unit": "亿", "min": 0, "max": 2000, "step": 10},
+    "market_cap_max":    {"label": "总市值上限", "unit": "亿", "min": 10, "max": 50000, "step": 50},
+}
+
+
+def _threshold_value(cfg: dict, key: str):
+    """阈值可能写在 `filter:` 下(硬过滤), 也可能写在策略顶层(dual_low 的 pe/pb/市值写法)。"""
+    if key in (cfg.get("filter") or {}):
+        return cfg["filter"][key], "filter"
+    if key in cfg:
+        return cfg[key], "top"
+    return None, None
+
+
+def strategy_params(cfg: dict) -> list[dict]:
+    """该策略的可编辑参数表(前端据此自动渲染表单, 不必为每个策略写一遍控件)。
+
+    顺序 = 声明顺序; `meta.params.<key>` 只做**覆盖**(改 label/min/max/step 或加 help),
+    不能凭空引入新键 —— 新键必须先在 PARAM_DEFS 与求值器里成对出现。
+    """
+    meta = (cfg.get("meta") or {}).get("params") or {}
+    out: list[dict] = []
+    for key, spec in PARAM_DEFS.items():
+        value, _where = _threshold_value(cfg, key)
+        if value is None:
+            continue
+        p = {**spec, "key": key, "value": value}
+        p.update({k: v for k, v in (meta.get(key) or {}).items() if v is not None})
+        out.append(p)
+    return out
+
+
+def effective_config(cfg: dict, overrides: dict | None) -> dict:
+    """把调用方的参数覆盖合并进策略配置(返回副本, 不改原 cfg)。
+
+    只接受 `strategy_params()` 声明过的键 —— 未声明的键静默丢弃, 不抛错也不生效:
+    防止有人借"覆盖"改 ranking 权重之外的结构字段(如整段 filter/ranking_factors)。
+    """
+    if not overrides:
+        return cfg
+    allowed = {p["key"] for p in strategy_params(cfg)}
+    merged = {**cfg, "filter": {**(cfg.get("filter") or {})}}
+    dropped = []
+    for key, raw in overrides.items():
+        if key not in allowed:
+            dropped.append(key)
+            continue
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            dropped.append(key)
+            continue
+        if not math.isfinite(val):
+            dropped.append(key)
+            continue
+        _v, where = _threshold_value(cfg, key)
+        if where == "filter":
+            merged["filter"][key] = val
+        else:
+            merged[key] = val
+    if dropped:
+        logger.warning("策略参数覆盖被忽略(未声明或非数值): %s", dropped)
+    return merged
 
 
 def _quote_to_dict(q) -> dict:
