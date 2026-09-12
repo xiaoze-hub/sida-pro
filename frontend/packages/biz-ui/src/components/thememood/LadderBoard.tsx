@@ -84,8 +84,9 @@ export default function LadderBoard(props: {
   mode: string
   stale: boolean
   lastOk: string | null
+  noteClosing?: string | null
 }) {
-  const { ladder, liveDay, mode, stale, lastOk } = props
+  const { ladder, liveDay, mode, stale, lastOk, noteClosing } = props
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => { scrollToLatest(ref.current) }, [ladder, liveDay])
   const cols = [...ladder, ...(liveDay ? [liveDay] : [])]
@@ -96,6 +97,9 @@ export default function LadderBoard(props: {
         <span className="text-[10px] text-muted-foreground">
           {mode === 'live' ? '盘中实时(60s)' : '收盘定型'}
         </span>
+        {noteClosing ? (
+          <span className="text-[10px] text-[--stock-up]">{noteClosing}</span>
+        ) : null}
         {stale ? (
           <span className="text-[10px] text-[--stock-up]">实时源中断 {lastOk ?? ''}</span>
         ) : null}

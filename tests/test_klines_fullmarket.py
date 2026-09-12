@@ -12,14 +12,21 @@ def test_a_share_universe_filters_non_stock():
         {"symbol": "000001", "market": "CN"},      # 深主板 收
         {"symbol": "300750", "market": "CN"},      # 创业 收
         {"symbol": "688981", "market": "CN"},      # 科创 收
-        {"symbol": "832000", "market": "CN"},      # 北交 收
+        {"symbol": "832000", "market": "CN"},      # 新三板 排(非交易所)
         {"symbol": "510300", "market": "CN"},      # 基金 排
         {"symbol": "123456", "market": "CN"},      # 转债 排
         {"symbol": "600519", "market": "CN"},      # 去重
         {"symbol": "00700", "market": "HK"},       # 非CN 排
         {"symbol": "abc", "market": "CN"},         # 非6位 排
     ]
-    assert a_share_universe(stocks) == ["000001", "300750", "600519", "688981", "832000"]
+    assert a_share_universe(stocks) == ["000001", "300750", "600519", "688981"]
+
+
+def test_merge_universe_adds_pool_symbols():
+    from src.core.klines_fullmarket import merge_universe
+
+    assert merge_universe(["600519", "000001"], ["830001", "000001"]) == [
+        "000001", "600519", "830001"]
 
 
 def test_filter_needing_uses_coverage():

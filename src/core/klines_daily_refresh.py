@@ -16,11 +16,16 @@ logger = logging.getLogger(__name__)
 def daily_job(days: int = 10, concurrency: int = 8) -> dict:
     from src.collectors.klines_ingestor import ingest_symbol
     from src.collectors.stock_list import get_stock_list
-    from src.core.klines_fullmarket import a_share_universe, run_backfill
+    from src.core.klines_fullmarket import (
+        a_share_universe,
+        limit_up_symbols,
+        merge_universe,
+        run_backfill,
+    )
     from src.db.session import engine
     from src.models.market import MarketCode
 
-    universe = a_share_universe(get_stock_list())
+    universe = merge_universe(a_share_universe(get_stock_list()), limit_up_symbols())
 
     async def ingest(symbol: str, d: int) -> dict:
         return await ingest_symbol(engine, symbol, MarketCode.CN, "1d", d)

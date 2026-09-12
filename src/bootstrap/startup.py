@@ -335,6 +335,20 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"全市场日线每日增量注册失败: {e}")
 
+        # 连板梯队盘中实时(v0.5.87, 老板"盘中实时跟踪直到收盘定型"): 60s 一轮
+        # scan_tick 内部自判交易时段(时段外返回 None 不写态); 15:05 后 /ladder 切 finalized。
+        try:
+            from src.core.limit_ladder_live import scan_tick
+
+            rt.scheduler.scheduler.add_job(
+                scan_tick, "interval", seconds=60,
+                id="ladder-live-tick", name="连板梯队盘中扫描",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            logger.info("连板梯队盘中扫描已注册(60s)")
+        except Exception as e:
+            logger.error(f"连板梯队盘中扫描注册失败: {e}")
+
         # 龙虎榜盘后兜底重扫(老板: "龙虎榜是每天收盘后四五点之后才有"): 19:45 / 20:00
         # 东财发布晚于 17:45 时, 当晚再扫一遍(近 3 日幂等 upsert, 有则补无则空跑)
         try:

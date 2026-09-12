@@ -7,6 +7,26 @@
 
 ## 2026-09-13
 
+### feat-连板梯队盘中实时(三态+60s job+live 路径) + 全市场日线回填启动; v0.5.87
+- **盘中三态状态机** `src/core/limit_ladder_live.py`(spec §3.1): `classify`(sealed_now/blown/broken/idle,
+  1 分容差, 没封过不叫炸板, 昨首板今未触≠断板) / `merge_state`(first_at 不覆写, 回封清 opened) /
+  `build_live_day`(在板按昨板+1 分组, 炸/断进组, 缺 O/H/L 不编影线) / `scan_tick`(时段自判, 失败 rounds_failed+1, ≥3 置 stale)。
+  单测 12 例(含 fake deps 模拟 Redis 持久化、时段外 noop、空 quotes 不写)。
+- **Redis 盘中态** `src/core/ladder_live_state.py`: 键 `ladder_live:<date>`/`:meta`/`:day`, TTL 6h, fail-soft(cli None/异常不抛)。
+  `:day` 存**预渲染 live_day**, /ladder 直接读, 不必每请求重拉 TDX。单测 4 例。
+- **60s job** startup 注册 `ladder-live-tick`(interval 60s, max_instances=1, coalesce); 另有**交易日 16:00** `klines-fullmarket-daily`。
+- **/ladder live 路径**: mode=auto/live 时读 `_live_snapshot()`; 有快照→mode=live+live_day+stale+note_closing(15:00-15:05「收盘撮合中, 稍后定型」);
+  无快照(Redis 不可用/非时段/无 day)→**降级 finalized(200)**, 不再 400。端点测试 3 例。
+- **前端**: 梯队单独 60s 轮询(board 仍 120s); LadderBoard 增 noteClosing 渲染 + 盘中「盘中实时(60s)」/「盘中」角标/stale 横幅。页测 +1。
+- **全市场日线回填**(老板批): `src/core/klines_fullmarket.py`(宇宙过滤/需补/可续跑 runner) + `scripts/klines_fullmarket_backfill.py`
+  + `klines_daily_refresh.daily_job`。⚠️ 首跑宇宙膨胀到 **12012**(前缀白名单混入新三板)→ 已停并收窄为
+  沪深创科(60/00/30/68) ∪ 涨停池个股 = **5827**; 续跑已带 already_done=530 恢复。取数走既有 ingest_symbol(marketdata engine)。
+  ⚠️ 勘查: TDX K线 RPC(`get_market_data`/`get_kline`/公式 CLOSE)探针失败(None/ErrorId=9)→ 弃 TDX 走 engine;
+  盘中 K 的 O/H/L 由 `pricevol_only` 透传(报文带则用, 不带落 None 不编), **周一盘中确认**。
+- **门禁**: 后端 2259 passed / 7 failed(=KI-055 存量, 新增 0); 前端 tsc/eslint/UI-RULES/vitest **207** 全绿。
+- **状态**: 代码已部署(容器重启, jobs 已注册); 回填后台跑(~2h); **盘中实测+断源演练+走查=周一(2026-09-14)盘中**, 见后续记录。
+- [tag v0.5.87]
+
 ### feat-全市场日线(qfq)回填 + 每日增量 job(老板批"回1"); v0.5.87 前置
 - **动机**: klines(qfq) 原仅覆盖自选/扫描池 ~168 只, 连板天梯逐股日K 对库外个股只能显「无K数据」占位
   (v0.5.85 走查实测 with_candle=179/1473)。老板 2026-09-13 批全市场回填。

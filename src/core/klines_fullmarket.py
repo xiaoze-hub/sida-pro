@@ -17,12 +17,14 @@ from typing import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
-# A 股代码前缀(沪主板/深主板/创业/科创/北交); 排除基金(1x/5x)、债券(12x/01x)等
-_A_SHARE_PREFIXES = ("60", "00", "30", "68", "83", "87", "43", "92")
+# A 股代码前缀(沪主板/深主板/创业/科创)。
+# 注意: 不含 83/87/43/92 —— 那些前缀混入大量新三板挂牌(非交易所), 2026-09-13 实测宇宙膨胀到 12012;
+# 北交等涨停池个股由 limit_up_symbols() 并入, 不靠前缀猜。
+_A_SHARE_PREFIXES = ("60", "00", "30", "68")
 
 
 def a_share_universe(stocks: Iterable[dict]) -> list[str]:
-    """从 stock_list 条目筛出 A 股代码(6 位 + 白名单前缀 + market=CN)。"""
+    """从 stock_list 条目筛出沪深创科代码(6 位 + 白名单前缀 + market=CN)。"""
     out = []
     for s in stocks or []:
         sym = str(s.get("symbol") or "").strip()
@@ -34,6 +36,22 @@ def a_share_universe(stocks: Iterable[dict]) -> list[str]:
             continue
         out.append(sym)
     return sorted(set(out))
+
+
+def limit_up_symbols() -> list[str]:
+    """涨停池历史去重个股(含北交等), 保证天梯逐股日K 有覆盖。"""
+    from sqlalchemy import text
+
+    from src.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        rows = db.execute(text("SELECT DISTINCT symbol FROM limit_up_events")).fetchall()
+    return sorted({str(r[0]) for r in rows if r[0]})
+
+
+def merge_universe(main: list[str], pool: list[str]) -> list[str]:
+    """沪深创科 ∪ 涨停池个股, 去重排序。"""
+    return sorted(set(main) | set(pool))
 
 
 def filter_needing(universe: list[str], coverage: dict[str, int], min_days: int) -> list[str]:

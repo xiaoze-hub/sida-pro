@@ -22,7 +22,9 @@ from src.collectors.klines_ingestor import ingest_symbol  # noqa: E402
 from src.collectors.stock_list import get_stock_list  # noqa: E402
 from src.core.klines_fullmarket import (  # noqa: E402
     a_share_universe,
+    limit_up_symbols,
     load_state,
+    merge_universe,
     run_backfill,
     save_state,
 )
@@ -41,7 +43,7 @@ async def main() -> int:
     ap.add_argument("--state", default="data/klines_fullmarket_state.json")
     args = ap.parse_args()
 
-    universe = a_share_universe(get_stock_list())
+    universe = merge_universe(a_share_universe(get_stock_list()), limit_up_symbols())
     if args.limit > 0:
         universe = universe[: args.limit]
     state = load_state(args.state)

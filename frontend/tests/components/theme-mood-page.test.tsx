@@ -166,3 +166,26 @@ describe('ThemeMood 布局(v0.5.85)', () => {
     expect(localStorage.getItem('tm-board-collapsed')).toBe('0')
   })
 })
+
+describe('ThemeMood 盘中实时(v0.5.87)', () => {
+  afterEach(() => { cleanup(); localStorage.clear() })
+  beforeEach(() => mocks.fetchAPI.mockReset())
+
+  it('live 模式显示盘中角标与收盘撮合提示', async () => {
+    const liveLadder = {
+      dates: ['20260911'],
+      ladder: [],
+      mode: 'live',
+      live_day: { date: '20260912', rows: [], blown: [], broken: [], provisional: true },
+      stale: false,
+      degraded: null,
+      note_closing: '收盘撮合中, 稍后定型',
+    }
+    mocks.fetchAPI.mockImplementation((url: string) =>
+      String(url).includes('/theme-mood/ladder') ? Promise.resolve(liveLadder) : Promise.resolve(RESP))
+    render(<ThemeMoodPage />)
+    expect(await screen.findByText('盘中实时(60s)')).toBeTruthy()
+    expect(screen.getByText('收盘撮合中, 稍后定型')).toBeTruthy()
+    expect(screen.getByText('盘中')).toBeTruthy()  // live_day provisional 角标
+  })
+})
