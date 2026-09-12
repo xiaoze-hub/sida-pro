@@ -62,4 +62,28 @@ describe('ThemeMood 页面', () => {
     // 某概念只有 20260911 一天 → 其余三列渲染 '--' 占位
     expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(3)
   })
+
+  it('时间轴加载后默认滚到最新一端', async () => {
+    const proto = HTMLElement.prototype
+    const origW = Object.getOwnPropertyDescriptor(proto, 'scrollWidth')
+    const origL = Object.getOwnPropertyDescriptor(proto, 'scrollLeft')
+    const writes: number[] = []
+    Object.defineProperty(proto, 'scrollWidth', { configurable: true, get: () => 800 })
+    Object.defineProperty(proto, 'scrollLeft', {
+      configurable: true,
+      get: () => writes[writes.length - 1] ?? 0,
+      set: (v: number) => {
+        writes.push(v)
+      },
+    })
+    try {
+      mocks.fetchAPI.mockResolvedValue(RESP)
+      render(<ThemeMoodPage />)
+      await screen.findAllByText('元件')
+      expect(writes).toContain(800)
+    } finally {
+      if (origW) Object.defineProperty(proto, 'scrollWidth', origW)
+      if (origL) Object.defineProperty(proto, 'scrollLeft', origL)
+    }
+  })
 })
