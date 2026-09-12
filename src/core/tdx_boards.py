@@ -314,6 +314,9 @@ def pricevol_only(codes: list[str]) -> dict[str, dict]:
                 val = _num(p.get(src_key))
                 if val is not None:
                     row[dst] = val
+            amt = _num(p.get("Amount"))
+            if amt is not None:
+                row["amount"] = amt * 1e4  # 源为万元 → 元(与 board_quotes 同口径)
             out[code] = row
     return out
 

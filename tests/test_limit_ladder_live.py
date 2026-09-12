@@ -141,3 +141,66 @@ def test_scan_tick_empty_quotes_no_write():
     deps = _Deps(quotes={})
     assert live.scan_tick(now=datetime(2026, 9, 11, 10, 0, 0), deps=deps) is None
     assert deps.saved == []  # TDX 空(非交易/无数据)不写态
+
+
+def test_classify_charging_when_near_limit_not_sealed():
+    # 涨停 10%: limit=11.0, floor=10*1.07=10.7; price=10.8 未封未炸未断 → 冲板
+    assert live.classify(10.8, 11.0, False, 0, charging_floor=10.7) == live.STATE_CHARGING
+    assert live.classify(10.2, 11.0, False, 0, charging_floor=10.7) == live.STATE_IDLE
+
+
+def test_merge_state_counts_open_episodes_and_resealed():
+    s1 = live.merge_state({}, {"A": live.STATE_SEALED}, "09:30")
+    s2 = live.merge_state(s1, {"A": live.STATE_BLOWN}, "09:40")   # 第1次开板
+    assert s2["A"]["open_count"] == 1 and s2["A"]["opened_at"] == "09:40"
+    s3 = live.merge_state(s2, {"A": live.STATE_SEALED}, "09:50")  # 回封
+    assert s3["A"]["resealed"] is True and s3["A"]["opened_at"] is None
+    s4 = live.merge_state(s3, {"A": live.STATE_BLOWN}, "10:00")   # 第2次开板
+    assert s4["A"]["open_count"] == 2
+
+
+def test_build_live_day_tags_and_plate_type():
+    state = {
+        "Y": {"ever_sealed": True, "first_at": "09:25", "last_sealed_at": "09:25",
+              "opened_at": None, "open_count": 0, "resealed": False},          # 一字
+        "T": {"ever_sealed": True, "first_at": "09:30", "last_sealed_at": "10:00",
+              "opened_at": None, "open_count": 1, "resealed": True},           # T字/回封
+        "H": {"ever_sealed": True, "first_at": "09:31", "last_sealed_at": "09:31",
+              "opened_at": None, "open_count": 0, "resealed": False},          # 换手
+        "B": {"ever_sealed": True, "first_at": "09:30", "last_sealed_at": "09:30",
+              "opened_at": "09:40", "open_count": 1, "resealed": False},       # 炸板
+        "C": {"ever_sealed": False, "first_at": "09:35", "last_sealed_at": None,
+              "opened_at": None, "open_count": 0, "resealed": False},          # 冲板
+    }
+    quotes = {
+        "Y": {"price": 11.0, "limit_px": 11.0, "open": 11.0, "high": 11.0, "low": 11.0,
+              "change_pct": 10.0, "amount": 1e8},
+        "T": {"price": 11.0, "limit_px": 11.0, "open": 10.0, "high": 11.0, "low": 9.9,
+              "change_pct": 10.0},
+        "H": {"price": 11.0, "limit_px": 11.0, "open": 10.0, "high": 11.0, "low": 9.9,
+              "change_pct": 10.0},
+        "B": {"price": 9.5, "limit_px": 11.0, "change_pct": -4.8},
+        "C": {"price": 10.8, "limit_px": 11.0, "charging_floor": 10.7, "change_pct": 8.0},
+    }
+    day = live.build_live_day(state, quotes, {"Y": 1, "T": 1, "H": 1, "B": 2, "C": 0},
+                              {k: k for k in state}, "20260912",
+                              seal_amounts={"Y": 3.9e7})
+    by = {s["symbol"]: s for row in day["rows"] for s in row["stocks"]}
+    assert by["Y"]["tag"] == "封住" and by["Y"]["plate_type"] == "一字"
+    assert by["Y"]["seal_ratio"] == round(3.9e7 / 1e8, 4)  # 封成比
+    assert by["T"]["tag"] == "回封" and by["T"]["plate_type"] == "T字"
+    assert by["H"]["tag"] == "封住" and by["H"]["plate_type"] == "换手"
+    assert [m["symbol"] for m in day["blown"]] == ["B"] and day["blown"][0]["tag"] == "炸板"
+    assert [m["symbol"] for m in day["charging"]] == ["C"] and day["charging"][0]["tag"] == "冲板"
+
+
+def test_build_live_day_broken_water_flat_tags():
+    state = {
+        "W": {"ever_sealed": False, "first_at": None, "open_count": 0, "resealed": False},
+        "F": {"ever_sealed": False, "first_at": None, "open_count": 0, "resealed": False},
+    }
+    quotes = {"W": {"price": 9.0, "limit_px": 11.0, "change_pct": -5.0},
+              "F": {"price": 10.0, "limit_px": 11.0, "change_pct": 0.2}}
+    day = live.build_live_day(state, quotes, {"W": 3, "F": 3}, {"W": "W", "F": "F"}, "20260912")
+    tags = {m["symbol"]: m["tag"] for m in day["broken"]}
+    assert tags == {"W": "水下", "F": "平盘"}

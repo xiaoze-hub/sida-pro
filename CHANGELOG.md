@@ -7,6 +7,26 @@
 
 ## 2026-09-13
 
+### feat-借鉴 quicktiny 连板天梯: A布局统计 + B盘中细分状态; v0.5.88
+- **来源**: 老板让看其登录平台 stock.quicktiny.cn/stock-ladder(实时/多日天梯)。拆完后选 A+B 两组(C 组: 板块chips/原因/多视图K/对比回放 后置)。
+- **A 布局+统计**:
+  - `/ladder` 新增 `stats`(昨候选/首板/晋级/炸板/断板/冲板) 与 `as_of`; 前端头部统计条 + 更新时间。
+  - LadderBoard 新增**矩阵视图**(行=板高 × 列=日期, 格=个股 chip, 借鉴多日天梯), 与按日列视图可切换;
+    矩阵行可**收起/展开** + 点板高**只看本板**。
+  - 每股 chip 增**成交额**(klines amount, 缺则 '--' 不编)。
+- **B 盘中细分状态**(状态机 v0.5.87 三态 → 细分):
+  - 新增 `charging`(冲板: 未封但涨幅达涨停幅 70%+); 断板细分 **水下/平盘**(按涨跌幅)。
+  - 累计态增 `open_count`(开板次数, 每次炸板+1)、`resealed`(开板后回封)、`last_sealed`(=尾封)。
+  - 板型: **一字**(开盘即涨停且未开板)/ **T字**(开板后回封)/ **换手**(其余封住); open 缺失不猜一字。
+  - 封单额(seal_quality_samples 最新)+ **封成比**(封单/当日成交额, 缺任一不编)。
+  - 每股 tooltip 汇总: 状态/板型/涨跌幅/首封/尾封/开板/封单/封成比/额。
+- **取数**: 盘中走 TDX `pricevol_only`(增透传 Amount→元); 封单走 seal_quality_samples; 定型成交额走 klines amount。
+- **UI 规则**: 新格式化函数 fmtPct/fmtAmount 放 biz-ui ladder-format, **手动 2 位小数不用 toFixed**(R6 棘轮)。
+- **门禁**: 后端 2265 passed / 7 failed(=KI-055 存量, 新增 0); 前端 tsc/eslint/UI-RULES/vitest **207** 全绿。
+  单测新增: 状态机细分 6 例(冲板/开板计数/回封/板型/水下平盘) + stats 1 例 + _read_ohlc amount 更新。
+- **状态**: 代码已提交; 部署+走查(矩阵/统计/tooltip)随本版; **盘中 live 细分状态实测=周一(2026-09-14)**(与 T171 合并)。
+- [tag v0.5.88]
+
 ### feat-连板梯队盘中实时(三态+60s job+live 路径) + 全市场日线回填启动; v0.5.87
 - **盘中三态状态机** `src/core/limit_ladder_live.py`(spec §3.1): `classify`(sealed_now/blown/broken/idle,
   1 分容差, 没封过不叫炸板, 昨首板今未触≠断板) / `merge_state`(first_at 不覆写, 回封清 opened) /

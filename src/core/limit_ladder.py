@@ -113,8 +113,12 @@ def finalize_marks(dates: list[str], events: Iterable[dict]) -> dict[str, dict]:
 
 
 def attach_candles(stocks: list[dict], date: str, ohlc: dict) -> list[dict]:
-    """给逐股明细挂当日K(v0.5.85, spec §6); 缺 OHLC → candle=None(不编影线)。
+    """给逐股明细挂当日K(v0.5.85, spec §6)与成交额(v0.5.88); 缺 OHLC → candle=None(不编影线)。
 
-    ohlc 键为 (date, symbol) → {"o","h","l","c"}。
+    ohlc 键为 (date, symbol) → {"o","h","l","c","amount"?}。
     """
-    return [{**s, "candle": ohlc.get((date, s["symbol"]))} for s in stocks]
+    out = []
+    for s in stocks:
+        c = ohlc.get((date, s["symbol"]))
+        out.append({**s, "candle": c, "amount": (c or {}).get("amount")})
+    return out

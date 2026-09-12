@@ -184,14 +184,16 @@ class _FakeBegin:
 
 def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     rows = [
-        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "A", "open": 1, "high": 2, "low": 1, "close": 2}),
-        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "B", "open": 1, "high": None, "low": 1, "close": 2}),
+        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "A", "open": 1, "high": 2,
+                  "low": 1, "close": 2, "amount": 1.5e8}),
+        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "B", "open": 1, "high": None,
+                  "low": 1, "close": 2, "amount": 1e8}),
     ]
     conn = _FakeConn(rows)
     fake_engine = type("E", (), {"begin": lambda self: _FakeBegin(conn)})()
     monkeypatch.setattr("src.db.session.engine", fake_engine)
     out = api._read_ohlc(["20260911"], ["A", "B"])
-    assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2}}   # B 缺 high 被丢; ts 归一回紧凑
+    assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2, "amount": 1.5e8}}  # B 缺 high 被丢
     assert conn.last_params == {"dates": ("2026-09-11",), "codes": ("A", "B")}  # 入参转 ISO
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
@@ -283,3 +285,32 @@ def test_ladder_no_snapshot_degrades_finalized(monkeypatch):
     c = _ladder_client(monkeypatch, None)
     d = c.get("/api/theme-mood/ladder?mode=live").json()["data"]  # live 请求但无快照
     assert d["mode"] == "finalized" and d["live_day"] is None
+
+
+def test_ladder_stats_from_latest_finalized(monkeypatch):
+    dates = ["20260910", "20260911"]
+    ev = [
+        # 0910: C 封(昨候选1)
+        {"trade_date": "20260910", "symbol": "C", "name": "CC", "is_sealed_close": True},
+        # 0911: C 封(晋级, boards=2), D 首板, Z 触板未封(炸板)
+        {"trade_date": "20260911", "symbol": "C", "name": "CC", "is_sealed_close": True},
+        {"trade_date": "20260911", "symbol": "D", "name": "DD", "is_sealed_close": True},
+        {"trade_date": "20260911", "symbol": "Z", "name": "ZZ", "is_sealed_close": False},
+    ]
+
+    def fake_read(sql, params):
+        if "DISTINCT trade_date" in sql:
+            return [{"trade_date": d} for d in reversed(dates)]
+        return [e for e in ev if e["trade_date"] >= params["a"]]
+
+    monkeypatch.setattr(api, "_read", fake_read)
+    monkeypatch.setattr(api, "_read_ohlc", lambda d, s: {})
+    monkeypatch.setattr(api, "_live_snapshot", lambda: None)
+    d = _client(monkeypatch, ROWS).get("/api/theme-mood/ladder?window=20").json()["data"]
+    st = d["stats"]
+    assert st["prev_candidates"] == 1      # 0910 只有 C
+    assert st["first"] == 1                # 0911 D 首板
+    assert st["promoted"] == 1             # 0911 C 晋级(2板)
+    assert st["blown"] == 1                # Z 炸板
+    assert st["broken"] == 0
+    assert st["charging"] == 0

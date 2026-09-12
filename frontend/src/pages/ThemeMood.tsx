@@ -76,6 +76,14 @@ interface LadderResp {
   degraded?: string | null
   live_day?: LadderDay | null
   note_closing?: string
+  stats?: {
+    prev_candidates: number
+    first: number
+    promoted: number
+    blown: number
+    broken: number
+    charging: number
+  } | null
 }
 
 interface BoardResp {
@@ -264,6 +272,8 @@ export default function ThemeMoodPage() {
         stale={ladder?.stale ?? false}
         lastOk={null}
         noteClosing={ladder?.note_closing ?? null}
+        stats={ladder?.stats ?? null}
+        asOf={ladder?.as_of ?? null}
       />
 
       <button

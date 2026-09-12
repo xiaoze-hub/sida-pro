@@ -68,7 +68,7 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
 
     iso = [f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in dates]
     stmt = text(
-        "SELECT ts, symbol, open, high, low, close FROM klines "
+        "SELECT ts, symbol, open, high, low, close, amount FROM klines "
         "WHERE period = '1d' AND adjust = 'qfq' AND CAST(ts AS date) IN :dates AND symbol IN :codes"
     ).bindparams(bindparam("dates", expanding=True), bindparam("codes", expanding=True))
     with engine.begin() as conn:
@@ -81,8 +81,39 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
         if None in (m["open"], m["high"], m["low"], m["close"]):
             continue
         out[(str(m["ts"])[:10].replace("-", ""), str(m["symbol"]))] = {
-            "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"]}
+            "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"],
+            "amount": m["amount"]}
     return out
+
+
+def _ladder_stats(ladder: list, live_day) -> dict:
+    """头部统计(借鉴 quicktiny): 昨日候选/今日首板/晋级/炸板/断板/冲板。
+
+    live 时用 live_day(盘中), 否则用最新定型日。空 → 全 0(不猜)。
+    """
+    def counts(day):
+        rows = (day or {}).get("rows") or []
+        first = sum(len(r.get("codes") or []) for r in rows if r.get("boards") == 1)
+        promoted = sum(len(r.get("codes") or []) for r in rows if (r.get("boards") or 0) >= 2)
+        return first, promoted, len((day or {}).get("blown") or []), \
+            len((day or {}).get("broken") or []), len((day or {}).get("charging") or [])
+
+    if live_day:
+        first, promoted, blown, broken, charging = counts(live_day)
+        prev_total = sum(len(r.get("codes") or []) for r in (ladder[-1]["rows"] if ladder else [])) \
+            if ladder else 0
+    else:
+        if len(ladder) >= 2:
+            prev_total = sum(len(r.get("codes") or []) for r in ladder[-2]["rows"])
+            first, promoted, blown, broken, charging = counts(ladder[-1])
+        elif ladder:
+            prev_total = 0
+            first, promoted, blown, broken, charging = counts(ladder[-1])
+        else:
+            return {"prev_candidates": 0, "first": 0, "promoted": 0,
+                    "blown": 0, "broken": 0, "charging": 0}
+    return {"prev_candidates": prev_total, "first": first, "promoted": promoted,
+            "blown": blown, "broken": broken, "charging": charging}
 
 
 def _live_snapshot():
@@ -300,6 +331,7 @@ def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
         "stale": stale,
         "degraded": None,
         "note_closing": note_closing,
+        "stats": _ladder_stats(ladder, live_day),
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
 
