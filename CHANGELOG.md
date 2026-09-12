@@ -7,6 +7,14 @@
 
 ## 2026-09-12
 
+### update-v0.5.69/70 生产部署(情绪走势曲线 + 轴字放大 + 新 Logo 上线, 冒烟 9/9)
+- **部署**: 备份 `/root/app_backup_pre_v0569_20260912.tar.gz`(32.1MB 代码面) → 覆盖层 v0.5.69(19MB / 1359 项, 含 `frontend/dist → static/`) → 容器内 `tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → `/api/version` = **v0.5.69** → 冒烟 **9/9**(8.4s; 首跑 8/9 卡在 dark-flow 1s 客户端读超时 = KI-029, 预热 3 次后通过); 随后走查发现**应用内**品牌图标仍是通用 lucide 图标 → **v0.5.70 静态面无重启部署**(`docker cp frontend/dist/.` + `VERSION` + chown)。
+- **生产 API 实测**: `GET /api/theme-mood/board?window=20&top=15` → `market` 20 条与 `dates` 同长同序、**0 空值**, 区间 **67.1~83.8**(尾部 0904 73.4 → 0907 80.5 → 0908 80.7 → 0910 69.6 → 0911 71.7)。
+- **浏览器走查**(真接口/真数据): 顶部「情绪走势 71.7」折线与时间轴**逐列对齐**(取点 x=19,59,…,779 = 列中心, pitch 40); 明细「通信设备」曲线 20 点同几何(最高 76.9 · 最低 37.4 · 最新 76.9); 两条曲线各带面积填充 + 最新点放大 + 逐点 tooltip; 日期轴 9px → **12px**、颜色 `rgba(226,226,233,0.8)`(放大加深已生效); 侧边栏品牌标记为新造型(3 柱 + 上行箭头), 页头 vv0.5.70。
+- **图标核对**: 容器 `/app/static/icon-512.png` 与本地 `frontend/dist` **md5 一致**(88def1bd…), `icon.svg` 1463B 同步; SW 缓存名升到 `panwatch-v0.5.69-bust`, 老客户端装新 SW 时重新预缓存图标。
+- **走查清理**: 临时账号 `qav0569` 删除(含为冒烟种的一条自选股, users 表回到 5)、浏览器 localStorage token 清除、容器 `/tmp/v0569.tar.gz` + `/tmp/qav0569_token.txt` 删除、本机 `.deploy/` 删除; 备份 tar 保留在 `/root`。
+- [tag v0.5.69 / v0.5.70 已推 origin]
+
 ### fix-品牌标记接入应用内(侧边栏/移动端头部/登录页); v0.5.70
 - **走查发现**: v0.5.69 只换了 favicon / apple-touch / PWA 图标, **应用内**的侧边栏、移动端头部、登录页仍是通用的 lucide `TrendingUp` 图标 —— 浏览器标签是"柱状+箭头"、页面里却是另一个形状, 品牌不一致。
 - **修**: 新增 `frontend/src/components/BrandMark.tsx`(与 `icon.svg` 同一造型: 三根递增柱 + 上行箭头), 针对 16~32px 界面尺寸做**小尺寸简化**(折线去锯齿走直线、柱体加粗留白), 单色 `currentColor` 放进原有渐变方章; App.tsx 桌面侧边栏/移动端头部 + Login.tsx 共三处替换。
