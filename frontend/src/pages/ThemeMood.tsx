@@ -185,6 +185,26 @@ export default function ThemeMoodPage() {
     }
   }, [windowDays, reloadKey])
 
+  // 盘中实时(v0.5.87): 梯队单独 60s 轮询(board 仍 120s); live_day/stale/note_closing 由 /ladder 带出
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try {
+        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, {
+          cacheMode: 'reload',
+        })
+        if (alive) setLadder(lad)
+      } catch {
+        /* 保留旧数据 */
+      }
+    }
+    const timer = window.setInterval(() => void poll(), 60000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [windowDays, reloadKey])
+
   const items = resp?.items ?? []
   const rotationByDate = useMemo(
     () => new Map((resp?.rotation ?? []).map((r) => [r.date, r])),
@@ -243,6 +263,7 @@ export default function ThemeMoodPage() {
         mode={ladder?.mode ?? 'finalized'}
         stale={ladder?.stale ?? false}
         lastOk={null}
+        noteClosing={ladder?.note_closing ?? null}
       />
 
       <button

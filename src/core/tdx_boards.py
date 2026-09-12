@@ -292,6 +292,32 @@ def board_quotes(codes: list[str], *, with_fund: bool = True) -> dict[str, dict]
     return out
 
 
+def pricevol_only(codes: list[str]) -> dict[str, dict]:
+    """只拉 get_pricevol → {code: {price, last_close, open?, high?, low?}}。
+
+    供连板梯队盘中扫描(v0.5.87): 状态机只需 price/last_close; 当日K 的 O/H/L 若原始报文
+    带则透传(盘中成形K), 不带则调用方落 candle=None(不编影线)。单 chunk 失败跳过不抛。
+    非交易时段 TDX 可能返回空 → 返回 {}(调用方降级)。
+    """
+    out: dict[str, dict] = {}
+    for part in _chunks(list(codes), _BATCH):
+        try:
+            got = _rpc("get_pricevol", {"stock_list": part}) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("TDX pricevol_only 失败(%d 码): %s", len(part), e)
+            continue
+        for code, p in (got or {}).items():
+            if not isinstance(p, dict):
+                continue
+            row = {"price": _num(p.get("Now")), "last_close": _num(p.get("LastClose"))}
+            for src_key, dst in (("Open", "open"), ("High", "high"), ("Low", "low")):
+                val = _num(p.get(src_key))
+                if val is not None:
+                    row[dst] = val
+            out[code] = row
+    return out
+
+
 def constituents(block_code: str) -> list[str] | None:
     """板块成分股代码列表(失败 None)。"""
     try:

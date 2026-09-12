@@ -85,6 +85,34 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
     return out
 
 
+def _live_snapshot():
+    """盘中态快照(v0.5.87): 读 scan_tick 预渲染的 live_day + meta。
+
+    返回 None 的情况(调用方降级 finalized): Redis 不可用 / 当日无 live_day / 非交易时段。
+    closing=True 表示 15:00~15:05 收盘撮合窗口(仍给 live 但提示稍后定型)。
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.core import ladder_live_state as rst
+    from src.core.limit_ladder_live import _is_intraday
+
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    cli = rst.client()
+    if cli is None:
+        return None
+    if not _is_intraday(now):
+        return None
+    date = now.strftime("%Y%m%d")
+    day = rst.load_day(cli, date)
+    if not day:
+        return None
+    meta = rst.load_meta(cli, date)
+    mins = now.hour * 60 + now.minute
+    return {"live_day": day, "meta": meta, "date": date,
+            "closing": (15 * 60 <= mins <= 15 * 60 + 5)}
+
+
 def _loads(v):
     if not v:
         return None
@@ -232,8 +260,7 @@ def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
 
     if mode not in ("auto", "finalized", "live"):
         raise HTTPException(400, "mode 仅支持 auto/finalized/live")
-    if mode == "live":
-        raise HTTPException(400, "live 未上线(v0.5.86)")
+    snap = _live_snapshot() if mode in ("auto", "live") else None
     days = _read(
         "SELECT DISTINCT trade_date FROM limit_up_events ORDER BY trade_date DESC LIMIT :n",
         {"n": int(window)},
@@ -261,12 +288,19 @@ def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
             r["tag"] = "首板" if r["boards"] == 1 else None
         day["blown"] = marks[day["date"]]["blown"]
         day["broken"] = marks[day["date"]]["broken"]
+    eff_mode = "live" if snap else "finalized"
+    live_day = snap["live_day"] if snap else None
+    stale = bool(snap["meta"].get("stale")) if snap else False
+    note_closing = "收盘撮合中, 稍后定型" if (snap and snap["closing"]) else None
     return {
         "dates": dates, "ladder": ladder,
         "note": "连板数=沿事件表日期序列的连续收盘封板日; 只算收盘封板",
-        "mode": "finalized",
+        "mode": eff_mode,
+        "live_day": live_day,
+        "stale": stale,
+        "degraded": None,
+        "note_closing": note_closing,
         "as_of": datetime.now(timezone.utc).isoformat(),
-        "stale": False, "degraded": None, "live_day": None,
     }
 
 

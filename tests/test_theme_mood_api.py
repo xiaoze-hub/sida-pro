@@ -235,4 +235,51 @@ def test_ladder_rejects_bad_mode(monkeypatch):
     monkeypatch.setattr(api, "_read", lambda sql, params: [])
     c = _client(monkeypatch, ROWS)
     assert c.get("/api/theme-mood/ladder?mode=bogus").status_code == 400
-    assert c.get("/api/theme-mood/ladder?mode=live").status_code == 400   # P1 未上线
+    # live 已上线(v0.5.87): 无快照时降级 finalized(200), 不再 400
+    assert c.get("/api/theme-mood/ladder?mode=live").status_code == 200
+    assert c.get("/api/theme-mood/ladder?mode=live").json()["data"]["mode"] == "finalized"
+
+
+def _ladder_client(monkeypatch, snapshot):
+    dates = ["20260910", "20260911"]
+    ev = [
+        {"trade_date": "20260910", "symbol": "C", "name": "CC", "is_sealed_close": True},
+        {"trade_date": "20260911", "symbol": "C", "name": "CC", "is_sealed_close": True},
+    ]
+
+    def fake_read(sql, params):
+        if "DISTINCT trade_date" in sql:
+            return [{"trade_date": d} for d in reversed(dates)]
+        return [e for e in ev if e["trade_date"] >= params["a"]]
+
+    monkeypatch.setattr(api, "_read", fake_read)
+    monkeypatch.setattr(api, "_read_ohlc", lambda d, s: {})
+    monkeypatch.setattr(api, "_live_snapshot", lambda: snapshot)
+    return _client(monkeypatch, ROWS)
+
+
+def test_ladder_live_mode_when_snapshot(monkeypatch):
+    snap = {"live_day": {"date": "20260912", "rows": [], "blown": [], "broken": [],
+                         "provisional": True},
+            "meta": {"stale": False}, "date": "20260912", "closing": False}
+    c = _ladder_client(monkeypatch, snap)
+    d = c.get("/api/theme-mood/ladder?mode=auto").json()["data"]
+    assert d["mode"] == "live"
+    assert d["live_day"]["provisional"] is True
+    assert d["stale"] is False and d["note_closing"] is None
+
+
+def test_ladder_stale_and_closing_flags(monkeypatch):
+    snap = {"live_day": {"date": "20260912", "rows": [], "blown": [], "broken": [],
+                         "provisional": True},
+            "meta": {"stale": True}, "date": "20260912", "closing": True}
+    c = _ladder_client(monkeypatch, snap)
+    d = c.get("/api/theme-mood/ladder?mode=auto").json()["data"]
+    assert d["mode"] == "live" and d["stale"] is True
+    assert d["note_closing"] == "收盘撮合中, 稍后定型"
+
+
+def test_ladder_no_snapshot_degrades_finalized(monkeypatch):
+    c = _ladder_client(monkeypatch, None)
+    d = c.get("/api/theme-mood/ladder?mode=live").json()["data"]  # live 请求但无快照
+    assert d["mode"] == "finalized" and d["live_day"] is None
