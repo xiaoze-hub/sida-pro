@@ -7,6 +7,33 @@
 
 ## 2026-09-12
 
+### fix-资金流回落查询用了已关闭的连接(端点恒返回 0 点); v0.5.83
+- **缺陷③(最严重的一条, 老板第三条需求实际上没交付)**: `market_capital_flow_history` 里
+  `_last_varying_session(conn, ...)` 写在 `with engine.connect() as conn:` **块外** —— 连接已关闭。
+  后果不是"回落失效", 而是整个端点抛异常落进 except 分支, **恒返回 `count=0` + `items=[]`**,
+  note = `读取失败: This Connection is closed`。也就是说**首页大盘资金流图从 v0.5.81 起就是空态**,
+  连原来那条直线都没了 —— 比修之前更糟。
+- **生产实测证据**(v0.5.82 部署后打真接口, 不是本地推断):
+  `GET /api/market-data/market-capital-flow/history?hours=4` 与 `hours=24` 都返回
+  `keys=['count','hours','items','note']`(**session/session_date 两个键根本不在**, 因为走的是 except 分支)、
+  `points=0`、`note='读取失败: This Connection is closed'`; 容器日志同时留有一条
+  `WARNING 大盘资金历史读取失败: This Connection is closed`。
+- **修法**: 把 items 组装与回落查询整体挪进 `with` 块内(回退查询复用同一条连接);
+  顺手抽 `_flow_items()` + `_FLOW_COLS`, 让**回落分支的 item 与当日分支同形(6 键)** ——
+  原来回落只 SELECT `ts, total_main_flow`, 前端 tooltip 取 `up_count` 会拿到 undefined;
+  except 分支也补上 `session`/`session_date`(值 None), 使键集合不再随成败而变。
+- **回归测试是"变异验证"过的, 不是写完就算**: 新增 `tests/test_market_flow_history.py`(8 例),
+  假连接**关闭后再 execute 就抛**(复刻 SQLAlchemy 行为)。把 bug 原样改回去跑一遍 →
+  **3 例变红**, 且 captured log 里赫然是 `This Connection is closed`(与生产同症);
+  恢复修复 → 22 例(本文件 8 + theme_mood_api 8 + rotation_ladder 6)全绿。
+  覆盖: 平→回落成功(session=prev + note 带日期 + 回落序列真有方差)、回落 item 形状、
+  当日有波动就不查回落、空序列不假装有数据、回落也找不到时如实保留、`_is_flat` 对 None/单点的判定、hours 透传。
+- **同类隐患已扫**: 脚本遍历 `src/**.py`, 找"在 `with ....connect() as X` 块外仍 `X.execute`"的位置
+  → **无第二处**。
+- **门禁**: `PYTHONUTF8=1 pytest -q -m "not network"` = **2226 passed / 7 failed / 5 skipped**(370s),
+  7 红与 KI-055 存量逐条相同, 新增 0; 2226 = v0.5.82 的 2218 + 本次新增 8 例。
+- [tag v0.5.83]
+
 ### fix-v0.5.81 部署后自检抓出两个真缺陷(轮动载荷被端点吞掉 + 空板 500); v0.5.82
 - **缺陷① 端点吞字段**: `_board_data` 已经算好 `rotation` / `rotation_top_k`, 但 `GET /api/theme-mood/board`
   的返回字典没带这两个键 → **前端轮动条永远空**, 老板要的"题材是轮动的"在生产上等于没做。
