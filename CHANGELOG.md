@@ -7,6 +7,27 @@
 
 ## 2026-09-12
 
+### fix-v0.5.81 部署后自检抓出两个真缺陷(轮动载荷被端点吞掉 + 空板 500); v0.5.82
+- **缺陷① 端点吞字段**: `_board_data` 已经算好 `rotation` / `rotation_top_k`, 但 `GET /api/theme-mood/board`
+  的返回字典没带这两个键 → **前端轮动条永远空**, 老板要的"题材是轮动的"在生产上等于没做。
+  v0.5.81 已打标签、已推 origin、已部署到生产容器(`docker cp` 覆盖层 + `chown` + `compileall` + restart,
+  `/api/version` = v0.5.81), 缺陷是在**跑冒烟前逐行核对端点返回**时发现的。
+- **缺陷② 空板会 500**: `_board_data` 两个提前返回(无日期 / 当日无行)只有 `dates/items/market` 三个键,
+  端点补上 `data["rotation"]` 之后, **空库或当日未扫描时会 KeyError → 500**(而不是干净的空态)。
+- **为什么单测没拦住**: `tests/test_theme_mood_api.py` 的 `_client` 把 `_board_data` 整个 monkeypatch 掉,
+  新增的 `test_board_rows_include_rotated_out_themes` 又直接打 helper —— **两层都绕过了端点**。
+  修法不是再补一个 helper 断言, 而是补**打端点**的回归测试:
+  `test_board_endpoint_forwards_rotation`(断言 rotation 原样透出) +
+  `test_board_data_empty_shape_is_complete`(断言空态结构与有数据时同形)。
+  `_client` 的替身也补上 rotation 键, 让"替身形状 ≠ 真函数形状"这类假绿不再可能。
+- **门禁**: `PYTHONUTF8=1 pytest -q -m "not network"` = **2218 passed / 7 failed / 5 skipped**(369s),
+  7 红与 KI-055 登记存量**逐条相同**(entry_candidate_outcomes 5 + ta_load_ohlcv_patch 1 + thsdk_buffer_size 1), 新增 0;
+  2218 = v0.5.81 的 2216 + 本次新增 2 例。
+  ⚠️ **一个踩到的坑**: 同一套全量在**没带 `PYTHONUTF8=1`** 的 shell 里跑会多出 14 红
+  (`UnicodeDecodeError: 'gbk' codec` —— 安全类用例读 `.env.example`/`server.py` 未指定编码),
+  看着像回归其实是环境。已按 UTF-8 复跑确认真值, 不把环境噪声当代码问题、也不当没看见。
+- [tag v0.5.82]
+
 ### feat-题材轮动 + 连板梯队 + 大盘资金流曲线化(老板三条); v0.5.81
 - **① 题材不能固定, 要轮动**: 原 `_board_data` 的行集合 = **最新一天**的 Top-N(`SELECT * WHERE trade_date = latest`), 于是"昨天还热、今天掉榜"的题材**整行消失**, 轮动根本看不见。改为: 行集合 = 最新一天 ∪ **窗口内进过每日 Top-10 的题材**(`src/core/theme_rotation.py`, 纯函数), 退榜题材留一行、`score=None`、带 `top_days/first_top_date/last_top_date/in_top_today`, 用它自己的分数曲线展示"怎么退的"。
   前端: 日期轴下新增**轮动条**(每日 `+新进 / −退榜` 计数, tooltip 列名单), 行名前打「新」/「退」标, 默认显示前 15 行 + 「展开其余 N 行(含窗口内退榜题材)」。

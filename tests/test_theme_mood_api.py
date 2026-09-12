@@ -12,10 +12,14 @@ import src.web.api.theme_mood as api
 from src.web.response import ResponseWrapperMiddleware
 
 
-def _client(monkeypatch, rows, detail=None, latest="20260911", dates=("20260910", "20260911"), market=None):
+def _client(monkeypatch, rows, detail=None, latest="20260911", dates=("20260910", "20260911"), market=None,
+            rotation=None, rotation_top_k=10):
     mkt = market if market is not None else [{"date": d, "score": None} for d in dates]
+    rot = rotation if rotation is not None else [
+        {"date": d, "new_n": 0, "exit_n": 0, "new_codes": [], "exit_codes": []} for d in dates]
     monkeypatch.setattr(api, "_board_data",
-                        lambda window, top: {"dates": list(dates), "items": rows, "market": mkt})
+                        lambda window, top: {"dates": list(dates), "items": rows, "market": mkt,
+                                             "rotation": rot, "rotation_top_k": rotation_top_k})
     monkeypatch.setattr(api, "_latest_date", lambda: latest)
     if detail is not None:
         monkeypatch.setattr(api, "_detail_rows", lambda code, days: detail)
@@ -48,6 +52,20 @@ def test_board_contract(monkeypatch):
     assert d["market"] == [{"date": "20260910", "score": 71.5}, {"date": "20260911", "score": 71.7}]
 
 
+def test_board_endpoint_forwards_rotation(monkeypatch):
+    """端点必须把轮动载荷透出去。
+
+    v0.5.81 走查发现的缺陷: `_board_data` 算好了 rotation, 但 `/board` 的返回字典没带它,
+    前端轮动条永远空 —— 只有打端点才测得出来(打 helper 测不出)。
+    """
+    rot = [{"date": "20260910", "new_n": 2, "exit_n": 1, "new_codes": ["C", "D"], "exit_codes": ["B"]},
+           {"date": "20260911", "new_n": 1, "exit_n": 1, "new_codes": ["B"], "exit_codes": ["A"]}]
+    c = _client(monkeypatch, ROWS, rotation=rot, rotation_top_k=10)
+    d = c.get("/api/theme-mood/board?window=20&top=15").json()["data"]
+    assert d["rotation"] == rot
+    assert d["rotation_top_k"] == 10
+
+
 def test_board_validates_params(monkeypatch):
     c = _client(monkeypatch, ROWS)
     assert c.get("/api/theme-mood/board?window=99").status_code == 400
@@ -58,6 +76,15 @@ def test_board_empty_state(monkeypatch):
     c = _client(monkeypatch, [], latest=None, dates=())
     d = c.get("/api/theme-mood/board").json()["data"]
     assert d["trade_date"] is None and d["items"] == [] and d["dates"] == [] and d["market"] == []
+
+
+def test_board_data_empty_shape_is_complete(monkeypatch):
+    """空表时 `_board_data` 的结构必须与有数据时同形, 否则端点取 rotation 直接 KeyError → 500。"""
+    monkeypatch.setattr(api, "_read", lambda sql, params: [])
+    assert api._board_data(20, 15) == {
+        "dates": [], "items": [], "market": [], "rotation": [],
+        "rotation_top_k": api.ROTATION_TOP_K,
+    }
 
 
 def test_detail_not_found_and_found(monkeypatch):
