@@ -19,6 +19,14 @@ export interface CapabilitySource {
   last_error: string
 }
 
+/** 驱动本次结论的那个源(后端 classify 用的就是它, 与"按 priority 路由生效"是两回事)。 */
+export interface CapabilityVerdict {
+  provider: string
+  success_rate: number
+  samples: number
+  basis: 'ewma' | 'db' | 'none'
+}
+
 export interface CapabilityItem {
   type: string
   label: string
@@ -26,6 +34,8 @@ export interface CapabilityItem {
   status_label: string
   reason: string
   sources: CapabilitySource[]
+  /** 未测量/无可用源时为 null —— 此时**不许**显示成功率。 */
+  verdict: CapabilityVerdict | null
   enabled_count: number
   latest_date: string | null
   age_days: number | null
@@ -44,6 +54,8 @@ export interface CapabilitySummary {
 export interface CapabilitiesResp {
   items: CapabilityItem[]
   summary: CapabilitySummary
+  /** 判定门槛(后端 MIN_SAMPLES 透传): 样本不足时 UI 显示进度而不是结论。 */
+  min_samples?: number
 }
 
 export const STATUS_DOT: Record<CapabilityStatus, string> = {
@@ -80,4 +92,14 @@ export function effectiveSource(item: CapabilityItem): CapabilitySource | null {
   if (!on.length) return null
   return on.reduce((best, s) =>
     (s.priority ?? 99) < (best.priority ?? 99) ? s : best, on[0])
+}
+
+/** 矩阵"读数"列(KI-050): 有结论就显示**驱动结论那个源**的成功率; 没结论就显示
+ * 样本进度而不是百分比 —— 绝不允许出现"未测量 · 100%"或"正常 · --"这种自相矛盾。 */
+export function capabilityRateCell(item: CapabilityItem, minSamples?: number): string {
+  if (item.verdict) return `${Math.round(item.verdict.success_rate * 100)}%`
+  if (item.status === 'unavailable') return ''
+  if (!minSamples) return ''
+  const n = Math.max(0, ...item.sources.filter((s) => s.enabled).map((s) => s.samples ?? 0))
+  return `样本 ${n}/${minSamples}`
 }

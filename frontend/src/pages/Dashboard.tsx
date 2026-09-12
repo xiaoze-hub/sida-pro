@@ -40,6 +40,7 @@ import BreadthDistributionChart from '@panwatch/biz-ui/components/dashboard/Brea
 import SentimentGauge from '@panwatch/biz-ui/components/dashboard/SentimentGauge'
 import FlowHistoryChart from '@panwatch/biz-ui/components/dashboard/FlowHistoryChart'
 import ResonancePanel from '@panwatch/biz-ui/components/dashboard/ResonancePanel'
+import ScanJobButton from '@/components/ScanJobButton'
 import DiscoveryPanel from '@/components/DiscoveryPanel'
 import SkeletonRows from '@/components/SkeletonRows'
 import Sparkline from '@/components/Sparkline'
@@ -510,8 +511,8 @@ export default function DashboardPage() {
   return (
     <div className="page-container sida-page-enter pb-10">
       {/* 顶部:标题 + 刷新 + 日期/市场状态 pills */}
-      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-2">
+      <div className="mb-3 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:justify-between">
+        <div className="flex shrink-0 items-center gap-2">
           <h1 className="text-[20px] font-bold tracking-tight text-foreground md:text-[22px]">今日该看什么</h1>
           <Button onClick={() => load()} disabled={loading} size="sm" variant="ghost" className="h-7 px-2">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -707,7 +708,7 @@ export default function DashboardPage() {
       {/* 三指标共振(2026-09-11 决策先锋升级 B): 盘后全市场扫描落库结果 */}
       {shown('resonance') && (
         <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
-          <ResonancePanel />
+          <ResonancePanel actions={<ScanJobButton path="/resonance/scan/run" title="全市场三指标共振扫描(后台执行, 分钟级)" />} />
         </div>
       )}
       </div>{/* /A1 main 区 */}

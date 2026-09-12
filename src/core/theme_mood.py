@@ -577,8 +577,24 @@ def _purge_codes(dates: list[str], codes: list[str]) -> int:
 
 
 def scan(*, write_days: int = 1, day: str | None = None,
-         min_members: int = POOL_MIN_MEMBERS, max_members: int = POOL_MAX_MEMBERS) -> dict:
-    """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。"""
+         min_members: int = POOL_MIN_MEMBERS, max_members: int = POOL_MAX_MEMBERS,
+         on_progress=None) -> dict:
+    """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。
+
+    `on_progress(frac: float, stage: str)`(可选)按**流水线阶段**报进度, frac 单调 0→1:
+    成分股 0~0.25 / 日线批量 0.25~0.40 / 逐日计算 0.40~0.95 / 落库 0.95~1。
+    权重是阶段占比不是耗时预估(日线才是大头), 目的是让面板的进度条**会动**、
+    并让作业存储的 `updated_at` 持续刷新 —— 否则按停滞时长回收的 `reap_stale`
+    会把还在跑的长任务误判卡死(KI-054)。
+    """
+    def report(frac: float, stage: str) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(max(0.0, min(1.0, float(frac))), stage)
+        except Exception as e:  # noqa: BLE001 - 进度上报绝不能打断扫描
+            logger.debug("题材情绪进度上报失败: %s", e)
+
     try:
         themes_all = sector_items()
         if not themes_all:
@@ -587,7 +603,8 @@ def scan(*, write_days: int = 1, day: str | None = None,
         skipped_meta = len(themes_all) - len(themes)
         const: dict[str, list[str]] = {}
         wide_codes: list[str] = []
-        for t in themes:
+        total_themes = max(1, len(themes))
+        for idx, t in enumerate(themes, 1):
             syms = constituents(t["code"]) or []
             # 成员数上下限过滤(宽基/风格标签): 与名称黑名单叠加, 挡掉新出现的属性板块
             if not is_pool_eligible(t.get("name"), len(syms), min_members, max_members):
@@ -595,10 +612,14 @@ def scan(*, write_days: int = 1, day: str | None = None,
                 continue
             if syms:
                 const[t["code"]] = [_tdx_code(s) for s in syms]
+            if idx % 25 == 0 or idx == total_themes:
+                report(0.25 * idx / total_themes, f"成分股 {idx}/{total_themes}")
         all_syms = sorted({s for syms in const.values() for s in syms})
         if not all_syms:
             return {"ok": False, "reason": "无成分股"}
+        report(0.25, f"拉取 {len(all_syms)} 只标的日线")
         bars_by = _fetch_bars(all_syms)
+        report(0.40, "日线就绪")
         # 个股名(供 ST 涨停幅度 5% 判定: _extract_events_from_bars 按 "ST" 关键字识别)
         names = name_map()
         series = {s: _stock_series(s, names.get(s, ""), b) for s, b in bars_by.items()}
@@ -612,7 +633,8 @@ def scan(*, write_days: int = 1, day: str | None = None,
         s1_hist: dict[str, list[float]] = {c: [] for c in const}
         prev_state: dict[str, dict] = {c: {} for c in const}
         rows: list[dict] = []
-        for d in dates:
+        total_dates = max(1, len(dates))
+        for di, d in enumerate(dates, 1):
             market = _market_ctx(series, d)
             for t in themes:
                 code = t["code"]
@@ -645,8 +667,10 @@ def scan(*, write_days: int = 1, day: str | None = None,
                     "sealed_syms": today["sealed_syms"], "failed_syms": today["failed_syms"],
                     "highest_sym": today["highest_sym"],
                 }
+            report(0.40 + 0.55 * di / total_dates, f"计算 {d}({di}/{total_dates})")
         if not rows:
             return {"ok": False, "reason": "无可写行"}
+        report(0.95, f"落库 {len(rows)} 行")
         _upsert(rows)
         meta_codes = [t["code"] for t in themes_all if is_meta_board(t.get("name"))]
         purged = _purge_codes(write, meta_codes + wide_codes)

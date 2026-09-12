@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { safeFixed } from '@/lib/format'
@@ -50,7 +50,7 @@ function fmtYi(v: number | null): string {
   return `${yi > 0 ? '+' : ''}${safeFixed(yi, 2)}亿`
 }
 
-export default function ResonancePanel({ className }: { className?: string }) {
+export default function ResonancePanel({ className, actions }: { className?: string; actions?: ReactNode }) {
   const navigate = useNavigate()
   const [only, setOnly] = useState<'resonance' | 'near'>('resonance')
   const [resp, setResp] = useState<ScanResp | null>(null)
@@ -84,6 +84,7 @@ export default function ResonancePanel({ className }: { className?: string }) {
         <span className="text-[10px] text-muted-foreground">趋势 × 活跃度 × 资金</span>
         {resp?.trade_date ? <span className="text-[10px] text-muted-foreground">· {resp.trade_date}</span> : null}
         <div className="ml-auto flex items-center gap-1">
+          {actions}
           {(['resonance', 'near'] as const).map((k) => (
             <button
               key={k}

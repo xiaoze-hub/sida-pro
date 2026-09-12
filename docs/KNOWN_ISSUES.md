@@ -51,12 +51,6 @@
 | KI-046 | P3 | marketdata_authoritative_sources.py 死配置(零 import, 待决议) | 2026-09-10 | TianXiang |
 | KI-047 | P3 | 板块异动阈值为暂定值(涨速±0.5%/量比2.0)且仅盘中生效, 待实盘观察调优 | 2026-09-10 | TianXiang |
 | KI-048 | P3 | 通达信云数据(板块异动类型/轮动系数等)需客户端数据权限, TQ 接口当前返空 | 2026-09-10 | TianXiang |
-| KI-049 | P3 | 侧栏版本渲染成 "vv0.5.76"(前端又加了一次 v 前缀) | 2026-09-12 | TianXiang |
-| KI-050 | P2 | 能力矩阵"成功率"列与状态口径不一致(正常却显示 --, 未测量却显示 100%) | 2026-09-12 | TianXiang |
-| KI-051 | P3 | 侧栏能力胶囊跳到不存在的 `/settings?tab=datasources` | 2026-09-12 | TianXiang |
-| KI-052 | P3 | 首页大标题在 768~1150px 视口被挤成竖排"今日/该看/什么" | 2026-09-12 | TianXiang |
-| KI-053 | P2 | 作业面板没有任何可达触发入口(两页无「立即扫描」按钮, 空态文案指向不存在的按钮) | 2026-09-12 | TianXiang |
-| KI-054 | P2 | 扫描器从不调 `jobs.progress()` → 进度条恒 0, 且长任务会被停滞自愈误判卡死 | 2026-09-12 | TianXiang |
 | KI-055 | P2 | 离线门禁存量 7 红(日历相关断言/缺包/用例间 mock 污染), 与 v0.5.76 无关 | 2026-09-12 | TianXiang |
 
 ## 详情
@@ -286,54 +280,6 @@
 - 建议修复: 向老板确认客户端是否具备/愿意开通通达信云数据权限; 若开通, 在 `tdx_boards.py` 增加云数据拉取(字段名已在客户端 XML 中);
   若不开放, 保持自算口径并在展示层标注。
 
-### KI-049 侧栏版本号双 v 前缀 (P3)
-
-- 发现: 2026-09-12(v0.5.76 生产走查)
-- 现象: 侧栏品牌行显示 `数智分析 vv0.5.76`。`/api/version` 返回的 `version` 字段本身已带 `v`(直接取 `VERSION` 文件内容), 前端模板又拼了一次 `v{version}`。
-- 影响: 纯观感, 但发版当天老板第一眼就能看到。
-- 涉及文件: frontend/src/App.tsx:301(桌面侧栏)、frontend/src/App.tsx:394(移动头部)。
-- 建议修复: 两处改为直接渲染 `{version}`; 或在取到值时 `replace(/^v/i, '')` 归一, 二选一即可, 别两处口径不同。
-
-### KI-050 能力矩阵"成功率"列与状态口径不一致 (P2)
-
-- 发现: 2026-09-12(v0.5.76 生产走查, 实测截图)
-- 现象: 同一行出现两种自相矛盾 —— `基本面 正常 · 成功率 --`(3 源, 状态由成功率最高的源判定, 而列里取的是 priority 最小的源, 那个源没有读数); `板块资金 未测量 · 100%`(样本 6 < MIN_SAMPLES 10, 不出状态但百分比照打)。
-- 影响: 这张面板的全部价值在于"读一眼就知道能不能信", 状态与数字互相打脸会直接摧毁信任; 也违反本项目"有多少证据说多少话"的口径纪律。
-- 涉及文件: frontend/src/components/DataCapabilities.tsx(Row)、frontend/src/lib/data-capabilities.ts(`effectiveSource` 是**路由生效源**, 不是**判定源**)、src/core/data_capabilities.py(`classify` 用 best)。
-- 建议修复: ①后端把"驱动本次结论的那个源"显式返回(如 `verdict: {provider, success_rate, samples, basis}`), 前端不再自己猜; ②`unknown` 行显示 `样本 6/10` 进度而不是百分比; ③`min_samples` 由 `/capabilities` 响应带出, 前端不硬编码 10(单一口径源)。
-
-### KI-051 侧栏能力胶囊跳到不存在的路由 (P3)
-
-- 发现: 2026-09-12(v0.5.76 生产走查)
-- 现象: `CapabilityPill` 点击后 `navigate('/settings?tab=datasources')`, 但数据源页签在 **系统** 页(`/system?tab=datasources`); 设置页没有 datasources 页签。同页的「源心跳」组件跳的是正确地址, 两者不一致。
-- 影响: 降级提示是唯一常驻入口, 点了却看不到矩阵 —— 恰好是最需要它的时候失效。
-- 涉及文件: frontend/src/components/DataCapabilities.tsx(`CapabilityPill`)。
-- 建议修复: 改为 `/system?tab=datasources`; 顺手把 tooltip 里"点击查看数据源设置"改成"点击查看数据能力矩阵"。
-
-### KI-052 首页大标题在窄视口被挤成竖排 (P3)
-
-- 发现: 2026-09-12(v0.5.76 生产走查, 1000px 视口)
-- 现象: 「今日该看什么」渲染成一列一个字。顶栏 `md:flex-row md:justify-between` 里, 右侧"日期 + 三地市场状态 pills"宽度大, 左侧标题组没有 `shrink-0`/`flex-wrap`, 被压到 1ch 宽 → 逐字换行。
-- 影响: 768~1150px 视口(笔记本半屏、小窗、分屏)必现, 首页观感崩塌。
-- 涉及文件: frontend/src/pages/Dashboard.tsx:512-515。
-- 建议修复: 顶栏加 `flex-wrap`, 标题加 `whitespace-nowrap shrink-0`; 或把市场状态 pills 换成容器查询断点(本项目已有 `@container` 用法)而不是视口断点。
-
-### KI-053 作业面板没有可达的触发入口 (P2)
-
-- 发现: 2026-09-12(v0.5.76 生产走查)
-- 现象: 系统→任务 空态写着"在「题材情绪」或「决策先锋」页点「立即扫描」后回到这里看进度", 但**两个页面都没有这个按钮**(前端全文搜不到 `theme-mood/scan` 与 `resonance/scan/run` 的调用), 后端端点其实早已存在且带 single-flight。
-- 影响: C1 作业框架上线后实际只能看到 cron 一天一次的记录, 用户永远看不到"进度条 + 取消"这套能力; 空态文案还在教用户点不存在的东西。
-- 涉及文件: frontend/src/components/JobPanel.tsx(文案)、frontend/src/pages/ThemeMood.tsx、frontend/src/pages/DecisionPioneer.tsx(缺按钮)。
-- 建议修复: 两页各加「立即扫描」按钮(调既有 API, 成功后 toast + 面板自然轮询到该 job); 与 KI-054 一起做, 否则点完只看到一个恒 0 的条。
-
-### KI-054 扫描器不上报进度: 进度条恒 0 + 长任务会被误判卡死 (P2)
-
-- 发现: 2026-09-12(v0.5.76 生产端到端实测: 题材情绪扫描 41s, 期间 `progress=0`、`updated_at` 停在创建时刻)
-- 现象: `theme_mood`/`resonance` 两个扫描器只调 `jobs.create/start/succeed/fail`, **从不调 `jobs.progress()`** → 面板进度条 0% 一直到结束才跳 100%。
-- 影响: ①进度显示形同装饰; ②更要紧的是 `reap_stale(STALL_SECONDS=900)` 以 `updated_at` 判停滞, **任何跑过 15 分钟的扫描都会被自愈机制标成"卡死"而它其实还在跑**(共振扫描 6000 标的即属此类), 进而让 single-flight 提前放行第二个并发扫描。
-- 涉及文件: src/web/api/theme_mood.py、src/web/api/resonance.py、src/core/theme_mood.py(`scan`)、src/core/resonance_scan.py(`scan`)、src/core/jobs.py(`reap_stale`)。
-- 建议修复: 两个 `scan()` 接 `on_progress(done, total, stage)` 回调, API 侧节流写 `jobs.progress`(每 ~25 个题材或 ≥2s 一次) —— 既是真进度也是心跳; 心跳与"是否真的还在干活"解耦后, 共振这类长任务再评估 STALL_SECONDS。
-
 ### KI-055 离线门禁存量 7 红 (P2)
 
 - 发现: 2026-09-12(v0.5.76 发版跑全量门禁时发现)
@@ -430,3 +376,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-10 晚(方案B 通达信板块数据)**: 新增 **KI-048**(通达信云数据异动/轮动系数需数据权限, 当前返空), 台账 **33 条在册(P1×3/P2×17/P3×13)**。
 
 **2026-09-12(v0.5.76 生产走查)**: 新增 **KI-049..055** 共 7 条 —— P2×4(矩阵成功率列口径 KI-050 / 作业面板无入口 KI-053 / 扫描器不上报进度 KI-054 / 离线门禁存量 7 红 KI-055) + P3×3(双 v 前缀 KI-049 / 能力胶囊错路由 KI-051 / 首页标题竖排 KI-052), 台账 **40 条在册(P1×3/P2×21/P3×16)**。全部来自真机走查与端到端实测, 非静态审阅。
+
+**2026-09-12(v0.5.77 收口)**: **KI-049/050/051/052/053/054 六条修复移入 CHANGELOG**(其中 KI-050 改了契约: `/capabilities` 新增 `verdict` 与 `min_samples`; KI-054 新增 `JobStore.progress_reporter` 心跳), 台账 **34 条在册(P1×3/P2×18/P3×13)**; 本轮仅 **KI-055(离线门禁存量 7 红)** 保留开启。

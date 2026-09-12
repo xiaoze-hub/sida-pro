@@ -132,7 +132,7 @@ def _spawn_scan() -> dict:
             from src.core import theme_mood
 
             jobs.start(job_id, "scanning")
-            out = theme_mood.scan(write_days=1)
+            out = theme_mood.scan(write_days=1, on_progress=jobs.progress_reporter(job_id))
             jobs.succeed(job_id, str(out)[:500])
             logger.info("手动题材情绪扫描完成: %s", out)
         except Exception as e:  # noqa: BLE001

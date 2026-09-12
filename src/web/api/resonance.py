@@ -50,7 +50,7 @@ def run_scan(limit: int | None = Query(None, ge=1, le=6000)):
             from src.core import resonance_scan
 
             jobs.start(job_id, "scanning")
-            out = resonance_scan.scan(limit=limit)
+            out = resonance_scan.scan(limit=limit, on_progress=jobs.progress_reporter(job_id))
             jobs.succeed(job_id, str(out)[:500])
             logger.info("手动共振扫描完成: %s", out)
         except Exception as e:  # noqa: BLE001

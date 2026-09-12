@@ -11,6 +11,7 @@ import { Layers } from 'lucide-react'
 import {
   STATUS_DOT,
   STATUS_TEXT,
+  capabilityRateCell,
   capabilitySummary,
   effectiveSource,
   sortItemsByRisk,
@@ -48,11 +49,10 @@ export function useCapabilities(): { data: CapabilitiesResp | null; loading: boo
   return { data, loading }
 }
 
-function Row({ item }: { item: CapabilityItem }) {
+function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }) {
   const eff = effectiveSource(item)
-  const sr = eff?.success_rate
   return (
-    <div className="flex items-center gap-2 py-1 text-[12px]" title={`${item.reason}${eff ? ` · 生效源 ${eff.provider}` : ''}`}>
+    <div className="flex items-center gap-2 py-1 text-[12px]" title={`${item.reason}${eff ? ` · 路由生效源 ${eff.provider}` : ''}`}>
       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[item.status]}`} />
       <span className="w-[92px] shrink-0 truncate">{item.label}</span>
       <span className={`w-[52px] shrink-0 ${STATUS_TEXT[item.status]}`}>{item.status_label}</span>
@@ -60,7 +60,7 @@ function Row({ item }: { item: CapabilityItem }) {
         {item.enabled_count}源
       </span>
       <span className="w-[74px] shrink-0 font-mono text-[11px] text-muted-foreground">
-        {sr == null ? '成功率 --' : `${Math.round(sr * 100)}%`}
+        {capabilityRateCell(item, minSamples)}
       </span>
       <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
         {item.age_days == null ? '' : `数据滞后 ${item.age_days} 天`}
@@ -86,7 +86,9 @@ export function DataCapabilities() {
           正常 {s.ok} · 降级 {s.degraded} · 未测量 {s.unknown} · 无可用源 {s.unavailable}
         </span>
       </div>
-      <div className="divide-y divide-border/40">{items.map((i) => <Row key={i.type} item={i} />)}</div>
+      <div className="divide-y divide-border/40">
+        {items.map((i) => <Row key={i.type} item={i} minSamples={data.min_samples} />)}
+      </div>
     </div>
   )
 }
@@ -102,8 +104,8 @@ export function CapabilityPill({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <button
       type="button"
-      onClick={() => navigate('/settings?tab=datasources')}
-      title={capabilitySummary(s) + ' —— 点击查看数据源设置'}
+      onClick={() => navigate('/system?tab=datasources')}
+      title={capabilitySummary(s) + ' —— 点击查看数据能力矩阵'}
       className="mx-2 mb-1 flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-accent/60"
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : STATUS_DOT.ok}`} />

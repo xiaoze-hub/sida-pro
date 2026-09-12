@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  capabilityRateCell,
   capabilitySummary,
   effectiveSource,
   sortItemsByRisk,
@@ -7,8 +8,11 @@ import {
   type CapabilitySummary,
 } from '@/lib/data-capabilities'
 
-const item = (type: string, label: string, status: CapabilityItem['status'], sources: CapabilityItem['sources'] = []): CapabilityItem => ({
-  type, label, status, status_label: status, reason: '', sources,
+const item = (
+  type: string, label: string, status: CapabilityItem['status'],
+  sources: CapabilityItem['sources'] = [], verdict: CapabilityItem['verdict'] = null,
+): CapabilityItem => ({
+  type, label, status, status_label: status, reason: '', sources, verdict,
   enabled_count: sources.filter((s) => s.enabled).length, latest_date: null, age_days: null,
 })
 
@@ -52,5 +56,24 @@ describe('effectiveSource', () => {
     const it = item('q', '实时行情', 'ok', [src('tq', true, 4, 0.9), src('tencent', true, 1, 0.7), src('x', false, 0, 1)])
     expect(effectiveSource(it)?.provider).toBe('tencent')
     expect(effectiveSource(item('q', '实时行情', 'unavailable', [src('a', false)]) as CapabilityItem)).toBeNull()
+  })
+})
+
+describe('capabilityRateCell (KI-050: 数字必须与状态同源)', () => {
+  const verdict = (provider: string, success_rate: number): CapabilityItem['verdict'] =>
+    ({ provider, success_rate, samples: 54, basis: 'db' })
+
+  it('有结论时显示判定源的百分比', () => {
+    expect(capabilityRateCell(item('k', 'K线数据', 'ok', [src('tq')], verdict('tq', 0.9934)), 10)).toBe('99%')
+  })
+  it('未测量只显示样本进度, 绝不显示百分比', () => {
+    expect(capabilityRateCell(item('b', '板块资金', 'unknown', [src('ths_flow')], null), 10)).toBe('样本 20/10')
+    expect(capabilityRateCell(item('b', '板块资金', 'unknown', [src('ths_flow')], null), 10)).not.toContain('%')
+  })
+  it('无可用源整列留空', () => {
+    expect(capabilityRateCell(item('m', '两融', 'unavailable', [], null), 10)).toBe('')
+  })
+  it('后端没给门槛时不猜阈值', () => {
+    expect(capabilityRateCell(item('b', '板块资金', 'unknown', [src('a')], null), undefined)).toBe('')
   })
 })

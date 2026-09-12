@@ -59,6 +59,31 @@ def test_build_capabilities_groups_and_summarizes():
     assert s["unavailable_labels"] == ["实时行情"] and s["degraded_labels"] == ["龙虎榜"]
 
 
+def test_verdict_source_matches_the_source_classify_used():
+    """KI-050: 状态由谁定, 数就显示谁 —— 不能按 priority 猜。"""
+    srcs = [_src("low", sr=0.5, n=40), _src("high", sr=0.95, n=40, basis="db", prio=9)]
+    v = dc.verdict_source(srcs)
+    assert v["provider"] == "high" and v["basis"] == "db"
+    reason = dc.classify(srcs)[1]
+    assert "high" in reason and "95%" in reason
+    # 判不出来 → None(UI 因此显示样本进度, 不显示百分比)
+    assert dc.verdict_source([_src("a", sr=0.9, n=3)]) is None
+    assert dc.verdict_source([_src("a", sr=0.9, n=40, enabled=False)]) is None
+
+
+def test_build_capabilities_exposes_verdict_and_min_samples():
+    rows = [_row("kline", "tq"), _row("kline", "tencent", prio=9), _row("news", "sina")]
+    health = {"tq": _h(0.5), "tencent": _h(0.95), "sina": _h(0.99, 3)}
+    out = dc.build_capabilities(rows, health, {}, today="2026-09-12")
+    assert out["min_samples"] == dc.MIN_SAMPLES
+    by = {i["type"]: i for i in out["items"]}
+    # 结论由 tencent 定(样本足里最高), 即使 tq 优先级更高
+    assert by["kline"]["verdict"]["provider"] == "tencent"
+    assert by["kline"]["status"] == "ok"
+    # 样本不足 → 无 verdict, 状态 unknown
+    assert by["news"]["verdict"] is None and by["news"]["status"] == "unknown"
+
+
 def test_age_days_handles_both_date_formats():
     assert dc._age_days("20260911", "2026-09-12") == 1
     assert dc._age_days("2026-09-11 15:00:00+08:00", "2026-09-12") == 1

@@ -219,7 +219,7 @@ function App() {
 
   useEffect(() => {
     appApi.version()
-      .then(data => setVersion(data?.version || ''))
+      .then(data => setVersion(String(data?.version || '').replace(/^v/i, '')))
       .catch(() => {})
   }, [])
 
