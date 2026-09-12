@@ -346,13 +346,37 @@ async def market_capital_flow_proxy():
 
 
 # ──────────── 大盘资金快照历史(v0.4.7) ────────────
+_FLOW_COLS = "ts, total_main_flow, up_count, down_count, sh_flow, sz_flow"
+
+
 def _is_flat(items: list[dict]) -> bool:
     vals = [i["total_main_flow"] for i in items if i.get("total_main_flow") is not None]
     return len(vals) >= 2 and (max(vals) - min(vals)) < 1e-9
 
 
+def _flow_items(rows) -> list[dict]:
+    """行 → 前端契约(6 键)。ts 统一转 ISO 字符串; null 保留为 null, 不编造 0。"""
+    items = []
+    for r in rows:
+        ts_val = r[0]
+        ts_str = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val)
+        items.append({
+            "ts": ts_str,
+            "total_main_flow": float(r[1]) if r[1] is not None else None,
+            "up_count": int(r[2]) if r[2] is not None else None,
+            "down_count": int(r[3]) if r[3] is not None else None,
+            "sh_flow": float(r[4]) if r[4] is not None else None,
+            "sz_flow": float(r[5]) if r[5] is not None else None,
+        })
+    return items
+
+
 def _last_varying_session(conn, *, exclude: str | None, lookback_days: int = 10):
-    """往前找最近一个盘中真有变动的交易日; 找不到返回 (None, None)。"""
+    """往前找最近一个盘中真有变动的交易日; 找不到返回 (None, None)。
+
+    调用方必须**在连接仍然打开时**调用(2026-09-12 v0.5.82 修: 曾在 with 块外调用,
+    conn 已关闭 → 整个端点落到 except 分支, 恒返回 0 点 + "This Connection is closed")。
+    """
     from datetime import timedelta
 
     since = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d 00:00:00")
@@ -366,16 +390,11 @@ def _last_varying_session(conn, *, exclude: str | None, lookback_days: int = 10)
         if exclude and d == exclude:
             continue
         rows = conn.execute(
-            text("SELECT ts, total_main_flow FROM market_flow_snapshots "
+            text(f"SELECT {_FLOW_COLS} FROM market_flow_snapshots "
                  "WHERE date(ts) = :d ORDER BY ts ASC LIMIT 500"),
             {"d": d},
         ).fetchall()
-        items = []
-        for r in rows:
-            ts_val = r[0]
-            ts_str = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val)
-            items.append({"ts": ts_str,
-                          "total_main_flow": float(r[1]) if r[1] is not None else None})
+        items = _flow_items(rows)
         if len(items) >= 2 and not _is_flat(items):
             return items, d
     return None, None
@@ -400,9 +419,8 @@ async def market_capital_flow_history(
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    """
-                    SELECT ts, total_main_flow, up_count, down_count,
-                           sh_flow, sz_flow
+                    f"""
+                    SELECT {_FLOW_COLS}
                     FROM market_flow_snapshots
                     WHERE ts >= :cutoff
                     ORDER BY ts ASC
@@ -411,34 +429,15 @@ async def market_capital_flow_history(
                 ),
                 {"cutoff": cutoff},
             ).fetchall()
-        items = []
-        for r in rows:
-            ts_val = r[0]
-            # 统一把 datetime/timestamp 转 ISO 字符串, 给前端 timeline 用
-            try:
-                if hasattr(ts_val, "isoformat"):
-                    ts_str = ts_val.isoformat()
-                else:
-                    ts_str = str(ts_val)
-            except Exception:
-                ts_str = str(ts_val)
-            items.append(
-                {
-                    "ts": ts_str,
-                    "total_main_flow": float(r[1]) if r[1] is not None else None,
-                    "up_count": int(r[2]) if r[2] is not None else None,
-                    "down_count": int(r[3]) if r[3] is not None else None,
-                    "sh_flow": float(r[4]) if r[4] is not None else None,
-                    "sz_flow": float(r[5]) if r[5] is not None else None,
-                }
-            )
-        # 非交易时段(周末/开盘前)vendor 会反复返回同一个值 → 曲线是一条直线,
-        # 看着像坏了。回退到最近一个**盘中真有变动**的交易日并标明, 不拿直线冒充曲线。
-        session, session_date = "today", (items[0]["ts"][:10] if items else None)
-        if _is_flat(items):
-            prev_items, prev_date = _last_varying_session(conn, exclude=session_date)
-            if prev_items:
-                items, session, session_date = prev_items, "prev", prev_date
+            items = _flow_items(rows)
+            # 非交易时段(周末/开盘前)vendor 会反复返回同一个值 → 曲线是一条直线,
+            # 看着像坏了。回退到最近一个**盘中真有变动**的交易日并标明, 不拿直线冒充曲线。
+            # 必须在 with 块内做: 回退查询要复用这条连接。
+            session, session_date = "today", (items[0]["ts"][:10] if items else None)
+            if _is_flat(items):
+                prev_items, prev_date = _last_varying_session(conn, exclude=session_date)
+                if prev_items:
+                    items, session, session_date = prev_items, "prev", prev_date
         note = ""
         if not items:
             note = "暂无快照(等待大盘资金接口写入)"
@@ -458,6 +457,8 @@ async def market_capital_flow_history(
             "hours": hours,
             "count": 0,
             "items": [],
+            "session": None,
+            "session_date": None,
             "note": f"读取失败: {e}",
         }
 
