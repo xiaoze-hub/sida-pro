@@ -7,6 +7,13 @@
 
 ## 2026-09-12
 
+### fix-情绪周期回填加覆盖度门槛并清理不可信历史行(v0.5.74, 生产数据自查发现)
+- v0.5.73 回填跑出 **2522 天 / 181 段**, 但按年一看就不对: 2024 年以前 `first_board` 日均 **0.3~3**、2025 年 **23.3**、2026 年 **68.7**。查 `limit_up_events` 每日事件量证实: **2022 年前日均 1~9 条、2025 起 107 条中位、2026 年 131 条** —— 早年只是零星残留, 不是全市场覆盖。
+- 危害不只是"早年标签没意义": **EMA 平滑与 2 日确认会跨日传播**, 稀疏早年还会把 `calibrate()` 的分位数与"历史段数/平均时长/去向概率"一起带偏(面板会自信地输出错结论)。
+- 修: `MIN_DAY_EVENTS=50` + `eligible_dates()`(每日事件不足即整日排除, 不参与标定也不落库) + `_purge_uncovered()`(删掉表内不在可信日期集的行, 含本次之前误写的稀疏年份行); `scan_from_events(min_events=...)` 可覆盖门槛(测试/运维用)。
+- 测试: 本模块 10 例(新增 `test_eligible_dates_drops_sparse_days` 钉住"49 条也不放行"与门槛值)。
+- [tag v0.5.74]
+
 ### fix-市场情绪回填读事件用了 Row 字符串下标(v0.5.73, 部署时暴露)
 - v0.5.72 部署后跑生产回填直接失败: `市场情绪周期回填异常: tuple indices must be integers or slices, not str` —— `_read_events()` 里对 SQLAlchemy 2.0 的 `Row` 用了 `r["trade_date"]`, 1.x 可以、2.0 不行(theme_mood 一直用的是 `dict(r._mapping)`, 我没照做)。
 - 修: 走 `_mapping`。**根因是这条路径此前只有纯函数单测, 没碰过真库** → 补 `test_scan_from_events_end_to_end_and_idempotent`: 内存 SQLite 建 `limit_up_events` + `market_phase_daily`(列与 v164 一致), 12 交易日 × 12 票, 断言首日全首板/第4日 11 只 4 板、**梯队完整度=1/3(只有最高档, 中间断档)**、**封板率=11/12(触及未封计入分母)**、phase 与 phase_raw 均已写、重跑幂等不增行。该测试正是拦下本 bug 的那一层。
