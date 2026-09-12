@@ -218,9 +218,22 @@ def _fetch_funds(codes: list[str]) -> dict[str, float | None]:
     return out
 
 
-def scan(limit: int | None = None, *, trade_date: str | None = None) -> dict:
-    """全市场扫描并落库。返回汇总(永不抛异常由调用方 daily_job 兜)。"""
+def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress=None) -> dict:
+    """全市场扫描并落库。返回汇总(永不抛异常由调用方 daily_job 兜)。
+
+    `on_progress(frac, stage)` 按流水线阶段报进度(池 0~0.1 / 日K 0.1~0.5 /
+    资金 0.5~0.7 / 计算 0.7~0.95 / 落库 0.95~1)。全市场 6000+ 只本就是分钟级任务,
+    不报进度会让作业面板的条恒 0, 且 `reap_stale` 会把它误判卡死(KI-054)。
+    """
     from src.core import tdx_boards
+
+    def report(frac: float, stage: str) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(max(0.0, min(1.0, float(frac))), stage)
+        except Exception as e:  # noqa: BLE001 - 进度上报绝不能打断扫描
+            logger.debug("共振扫描进度上报失败: %s", e)
 
     try:
         pairs = _stock_pool()
@@ -231,12 +244,20 @@ def scan(limit: int | None = None, *, trade_date: str | None = None) -> dict:
     pool = [c for c, _ in pairs]
     if limit:
         pool = pool[: int(limit)]
+    report(0.1, f"股票池 {len(pool)} 只")
 
+    report(0.12, "拉日K")
     bars_by = _fetch_daily(pool)
+    report(0.5, f"日K就绪 {len(bars_by)} 只")
+    report(0.52, "拉资金")
     funds = _fetch_funds([c for c in pool if c in bars_by])
+    report(0.7, f"资金就绪 {len(funds)} 只")
     day = trade_date or datetime.now(_CST).strftime("%Y%m%d")
     rows = []
-    for code in pool:
+    total = max(1, len(pool))
+    for ci, code in enumerate(pool, 1):
+        if ci % 300 == 0 or ci == total:
+            report(0.7 + 0.25 * ci / total, f"计算 {ci}/{total}")
         bars = bars_by.get(code)
         if not bars:
             continue
@@ -268,6 +289,7 @@ def scan(limit: int | None = None, *, trade_date: str | None = None) -> dict:
                 "created_at": _now(),
             }
         )
+    report(0.95, f"落库 {len(rows)} 行")
     inserted = _upsert(rows)
     n_res = sum(1 for r in rows if r["resonance"])
     n_near = sum(1 for r in rows if r["near"])

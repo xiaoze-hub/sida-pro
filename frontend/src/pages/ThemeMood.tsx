@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
+import ScanJobButton from '@/components/ScanJobButton'
 import {
   AXIS_CELL_W,
   AXIS_PITCH,
@@ -125,6 +126,7 @@ export default function ThemeMoodPage() {
   const [windowDays, setWindowDays] = useState<number>(20)
   const [resp, setResp] = useState<BoardResp | null>(null)
   const [active, setActive] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -142,7 +144,7 @@ export default function ThemeMoodPage() {
       alive = false
       window.clearInterval(timer)
     }
-  }, [windowDays])
+  }, [windowDays, reloadKey])
 
   const items = resp?.items ?? []
   const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
@@ -171,6 +173,7 @@ export default function ThemeMoodPage() {
         <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">收盘确认口径</span>
         {resp?.trade_date ? <span className="text-[11px] text-muted-foreground">{resp.trade_date}</span> : null}
         <div className="ml-auto flex items-center gap-1">
+          <ScanJobButton path="/theme-mood/scan/run" onDone={() => setReloadKey((k) => k + 1)} />
           {WINDOWS.map((w) => (
             <button
               key={w}

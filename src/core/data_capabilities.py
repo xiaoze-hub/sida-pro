@@ -77,15 +77,28 @@ def _source_view(row: dict, health: dict) -> dict:
     }
 
 
+def _measured(sources: list[dict]) -> list[dict]:
+    """够格参与判定的源: 启用 + 样本足 + 有成功率。判定口径只在这里定义一次。"""
+    return [s for s in sources
+            if s["enabled"] and (s["samples"] or 0) >= MIN_SAMPLES and s["success_rate"] is not None]
+
+
+def verdict_source(sources: list[dict]) -> dict | None:
+    """**驱动本次结论的那个源**(与 classify 同口径: 够格里成功率最高者)。
+    判不出(未测量/无启用源)→ None。UI 必须显示这个源的读数, 而不是按 priority 猜。"""
+    measured = _measured(sources)
+    return max(measured, key=lambda s: s["success_rate"]) if measured else None
+
+
 def classify(sources: list[dict]) -> tuple[str, str]:
     """由该数据集的源列表 + 健康指标定状态。返回 (status, reason)。"""
     enabled = [s for s in sources if s["enabled"]]
     if not enabled:
         return "unavailable", "没有启用的数据源"
-    measured = [s for s in enabled if (s["samples"] or 0) >= MIN_SAMPLES and s["success_rate"] is not None]
-    if not measured:
+    best = verdict_source(sources)
+    if best is None:
         return "unknown", f"{len(enabled)} 个源尚无足够样本(需 ≥{MIN_SAMPLES} 次调用)"
-    best = max(measured, key=lambda s: s["success_rate"])
+    measured = _measured(sources)
     basis_label = {"ewma": "滚动EWMA", "db": "累计统计"}.get(best.get("basis") or "")
     suffix = f"({basis_label})" if basis_label else ""
     if best["success_rate"] >= OK_SUCCESS_RATE:
@@ -131,6 +144,7 @@ def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = 
         sources = sorted((_source_view(r, health) for r in by_type[t]),
                          key=lambda s: (not s["enabled"], s["priority"] if s["priority"] is not None else 99))
         status, reason = classify(sources)
+        verdict = verdict_source(sources)
         table, _col = FRESHNESS_PROBES.get(t, (None, None))
         latest = str(freshness[table]) if (table and freshness.get(table) is not None) else None
         items.append({
@@ -140,6 +154,12 @@ def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = 
             "status_label": STATUS_LABELS[status],
             "reason": reason,
             "sources": sources,
+            "verdict": None if verdict is None else {
+                "provider": verdict["provider"],
+                "success_rate": verdict["success_rate"],
+                "samples": verdict["samples"],
+                "basis": verdict.get("basis") or "none",
+            },
             "enabled_count": sum(1 for s in sources if s["enabled"]),
             "latest_date": latest,
             "age_days": _age_days(latest, today),
@@ -150,6 +170,7 @@ def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = 
 
     return {
         "items": items,
+        "min_samples": MIN_SAMPLES,   # 前端据此显示"样本 n/10", 不自己硬编码阈值
         "summary": {
             "total": len(items),
             "ok": _count("ok"),

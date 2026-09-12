@@ -89,3 +89,36 @@ def test_reads_survive_missing_table(monkeypatch):
     monkeypatch.setattr(dbs, "engine", eng)
     s = J.JobStore()
     assert s.recent() == [] and s.active() == [] and s.get("nope") is None
+
+
+def test_progress_reporter_throttles_and_clamps(store):
+    """KI-054: 进度回调必须节流写库、把比例夹到 0~100, 且失败不外抛。"""
+    jid, _ = store.create("resonance_scan", "三指标共振全市场扫描")
+    store.start(jid)
+    t = {"now": 1000.0}
+    rep = store.progress_reporter(jid, min_interval_sec=2.0, clock=lambda: t["now"])
+
+    rep(0.05, "股票池 6000 只")            # 首条必报(基准已退到一个窗口前)
+    assert store.get(jid)["progress"] == 5
+    rep(0.30, "拉日K")                     # 窗口内 → 不写
+    assert store.get(jid)["progress"] == 5
+    t["now"] += 2.5
+    rep(1.4, "落库")                       # 越界比例夹到 100
+    row = store.get(jid)
+    assert row["progress"] == 100 and row["stage"] == "落库"
+    t["now"] += 2.5
+    rep(-3, "")                            # 下界夹到 0
+    assert store.get(jid)["progress"] == 0
+
+
+def test_reporter_heartbeat_keeps_job_alive(store):
+    """心跳的意义: 跑满一个停滞窗口但一直报进度的任务, 不该被 reap_stale 判卡死。"""
+    jid, _ = store.create("theme_mood_scan")
+    store.start(jid)
+    t = {"now": 500.0}
+    rep = store.progress_reporter(jid, min_interval_sec=0.0, clock=lambda: t["now"])
+    for i in range(5):
+        t["now"] += 1.0
+        rep(i / 4, f"计算 {i}")
+    assert store.reap_stale() == 0                       # 还活着
+    assert store.get(jid)["status"] == "running"

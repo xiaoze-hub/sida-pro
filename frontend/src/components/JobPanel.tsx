@@ -128,7 +128,7 @@ export function JobPanel() {
         </div>
         {recent.length === 0 ? (
           <div className="py-6 text-center text-[12px] text-muted-foreground">
-            还没有后台任务记录 —— 在「题材情绪」或「决策先锋」页点「立即扫描」后回到这里看进度
+            还没有后台任务记录 —— 在「题材情绪」页或首页「三指标共振」卡点「立即扫描」后回到这里看进度
           </div>
         ) : (
           <div className="space-y-1">

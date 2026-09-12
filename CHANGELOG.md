@@ -7,6 +7,15 @@
 
 ## 2026-09-12
 
+### fix-收口 v0.5.76 走查发现的 6 处缺陷(KI-049..054); v0.5.77
+- **来源**: v0.5.76 生产走查(真机 + 端到端实测, 非静态审阅)。老板拍板"按计划全做"后, 这批属于"把已上线的功能做到能用"。
+- **KI-050 契约改动(最重要, 状态与数字必须同源)**: 能力矩阵原先把"成功率"列取 `effectiveSource`(**按 priority 的路由生效源**), 而后端 `classify` 按**成功率最高的源**下结论 → 生产实测出现 `基本面 正常 · 成功率 --` 与 `板块资金 未测量 · 100%` 两种自相矛盾。改为后端显式返回 **`verdict`(驱动结论的那个源的 provider/success_rate/samples/basis)** + 顶层 **`min_samples`**; 前端 `capabilityRateCell()` 有结论就显示判定源的率、**未测量显示"样本 n/10"进度而不是百分比、无可用源留空、后端没给门槛时不猜阈值**。`classify`/`verdict_source` 共用同一个 `_measured()` 谓词, 口径只定义一次。
+- **KI-054 进度心跳(修的是一个会误杀健康任务的机制)**: 两个扫描器只调 `create/start/succeed/fail`, **从不报进度** → ①面板进度条恒 0(实测 41s 的题材情绪扫描全程 `progress=0`、`updated_at` 停在创建时刻); ②`reap_stale(STALL_SECONDS=900)` 以 `updated_at` 判停滞, **跑过 15 分钟的扫描会被判卡死而它其实还在跑**, 且随之放行第二个并发扫描。新增 `JobStore.progress_reporter(job_id, min_interval_sec, clock)`(节流只看时间 → 兼作心跳; 夹取 0~100; 吞异常), `theme_mood.scan()` / `resonance_scan.scan()` 各接 `on_progress(frac, stage)` 按**流水线阶段**上报(成分股/日K/资金/计算/落库), 权重是阶段占比不是耗时预估。
+- **KI-053 入口**: 新增 `ScanJobButton`(POST 既有端点 → toast → 可选轮询 `/jobs/{id}` 到终态后回调 `onDone` 让宿主页刷新; **只读档 demo/guest 不渲染**)。挂在 题材情绪页头 与 首页「三指标共振」卡(`ResonancePanel` 加 `actions?: ReactNode` 插槽, 不让 biz-ui 反向 import 应用层组件)。JobPanel 空态原文案让用户去点一个**不存在的**「决策先锋」页按钮, 已改为指向这两个真入口。
+- **KI-049 / KI-051 / KI-052(三处小但扎眼)**: 侧栏 `v{version}` 双 v(`vv0.5.76`)→ 取数时归一前缀; 能力胶囊跳不存在的 `/settings?tab=datasources` → `/system?tab=datasources`; 首页大标题在 768~1150px 视口被挤成竖排"今日/该看/什么" → 顶栏 `md:flex-wrap` + 标题组 `shrink-0`。
+- **测试**: 后端 `test_jobs_framework` +2(节流/夹取/心跳挡住 reap)、`test_data_capabilities` +2(verdict 与 classify 同源、`min_samples` 契约)→ 触及模块 66 passed; 前端 `data-capabilities.test.ts` +4(读数列四种情形)、新增 `scan-job-button.test.tsx` 4 例(只读档不渲染/起任务/单飞转达原因/跑完回调刷新)→ **167 passed / 29 文件**, tsc + eslint + UI-RULES 全绿, `pnpm build` 通过。
+- [tag v0.5.77]
+
 ### update-v0.5.75 + v0.5.76 生产部署(能力矩阵 + 作业框架上线, 冒烟 10/10)
 - **部署链**: v0.5.75 走覆盖层(迁移 **v165 已应用** 13:59, `app_jobs` 建表), v0.5.76 走 **docker cp 热修**(5 个文件: `VERSION` + `src/core/{md_metrics_sink,data_capabilities,marketdata_client}.py` + `src/web/api/datasources.py`) → `chown -R app:app /app` → `compileall` → restart。`/api/version` = **v0.5.76**, 容器 healthy。回滚点: 容器内 `/root/bak_v0576/pre_v0576_files.tar.gz`(11.5KB, 覆盖前的 4 个文件)。
 - **能力矩阵前后对比(生产真值)**: 修前 `18 类全 unknown`; 部署后立刻 **正常 4 / 未测量 14 / 降级 0 / 无可用源 0**, 侧栏胶囊同步显示"数据能力 4/18"。累计计数落库验证: 21 行非零(`tencent 79/0`、`tq 68/0`、`eastmoney 6/0`、**`xueqiu 0/4`** —— 失败路径同样计入), 且 14 次报价后 EWMA 样本过 10 → 判定依据自动从 `(累计统计)` 切回 `(滚动EWMA)`。剩余 14 类是**低流量数据源样本不足**(n=6 或 0), 会在正常交易日随调用量点亮, 不是故障。

@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -180,6 +181,29 @@ class JobStore:
     def is_cancelled(self, job_id: str) -> bool:
         row = self.get(job_id)
         return bool(row and row["status"] == "cancelled")
+
+    def progress_reporter(self, job_id: str, min_interval_sec: float = 2.0, clock=None):
+        """给长任务用的进度回调: `report(frac 0~1, stage)` → 节流写 progress。
+
+        两层用途(KI-054): ①面板进度条真的会动; ②**兼作心跳** —— `reap_stale` 按
+        `updated_at` 停滞判卡死, 不报进度的健康长任务会被误杀并放行第二个并发任务。
+        节流只看时间(不看百分比是否变化), 所以至少每 `min_interval_sec` 刷一次心跳;
+        内部吞异常 —— 上报失败绝不能拖垮扫描本身。`clock` 可注入(测试用虚拟时钟)。
+        """
+        now_fn = clock or time.monotonic
+        state = {"last": now_fn() - min_interval_sec}   # 首条必报, 面板尽早有数
+
+        def report(frac: float, stage: str = "") -> None:
+            now = now_fn()
+            if now - state["last"] < min_interval_sec:
+                return
+            state["last"] = now
+            try:
+                self.progress(job_id, int(max(0.0, min(1.0, float(frac))) * 100), stage)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("作业 %s 进度上报失败: %s", job_id, e)
+
+        return report
 
 
 jobs = JobStore()
