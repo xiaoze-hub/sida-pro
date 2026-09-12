@@ -314,6 +314,27 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"龙虎榜机构/营业部明细回填注册失败: {e}")
 
+        # 全市场日线(qfq)每日增量(v0.5.87, 老板批"全市场日线回填"): 交易日 16:00
+        # 对全 A 股跑 days=10 增量 upsert, 让连板天梯等逐股日K 覆盖全市场而非仅自选池。
+        try:
+            from src.core.klines_daily_refresh import daily_job as klines_fullmarket_job
+
+            rt.scheduler.scheduler.add_job(
+                klines_fullmarket_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=16,
+                minute=0,
+                id="klines-fullmarket-daily",
+                name="全市场日线每日增量",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("全市场日线每日增量已注册(交易日 16:00)")
+        except Exception as e:
+            logger.error(f"全市场日线每日增量注册失败: {e}")
+
         # 龙虎榜盘后兜底重扫(老板: "龙虎榜是每天收盘后四五点之后才有"): 19:45 / 20:00
         # 东财发布晚于 17:45 时, 当晚再扫一遍(近 3 日幂等 upsert, 有则补无则空跑)
         try:

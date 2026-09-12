@@ -7,6 +7,20 @@
 
 ## 2026-09-13
 
+### feat-全市场日线(qfq)回填 + 每日增量 job(老板批"回1"); v0.5.87 前置
+- **动机**: klines(qfq) 原仅覆盖自选/扫描池 ~168 只, 连板天梯逐股日K 对库外个股只能显「无K数据」占位
+  (v0.5.85 走查实测 with_candle=179/1473)。老板 2026-09-13 批全市场回填。
+- **新增** `src/core/klines_fullmarket.py`: 纯函数 `a_share_universe`(6位+白名单前缀+CN, 排基金/转债/非CN)、
+  `filter_needing`(按已有行数)、`load/save_state`(可续跑 json)、`run_backfill`(信号量限并发, 失败不进 done 下轮重试,
+  异常计 fail 不抛)。IO 经注入, 单测 5 例(宇宙过滤/需补/ok-fail-done/跳过已完成/异常不抛)。
+- **新增** `scripts/klines_fullmarket_backfill.py`: 一次性回填 CLI(`--days 500 --concurrency 8 --limit N 试跑 --state 续跑`)。
+- **新增** `src/core/klines_daily_refresh.py:daily_job` + startup 注册 **交易日 16:00** 全市场 days=10 增量 upsert。
+- **取数链**: 复用既有 `klines_ingestor.ingest_symbol`(marketdata engine 单链单标签, ON CONFLICT 自愈), **不新造取数链**。
+  ⚠️ 勘查: 本想用本地 TDX 的 K线 RPC, 但 `get_market_data`/`get_kline`/`formula_process_mul_zb(CLOSE)` 探针均失败
+  (None / ErrorId=9 公式不存在), 方法名不可靠 → 弃 TDX, 走 marketdata engine(与现有 168 只同源, 口径一致)。
+- **状态**: 代码+单测绿; 生产回填于 2026-09-13 凌晨试跑(--limit)后全量后台跑, 结果见后续部署记录。
+- [v0.5.87 发版时统一打 tag]
+
 ### update-v0.5.85→v0.5.86 生产部署 + 走查(梯队重排落地; 真值揪出日K全空)
 - **部署链**: v0.5.85 完整覆盖层(备份 `/root/app_backup_pre_v0585_20260913.tar.gz` → 19MB 包
   `tar xzf --overwrite` → `chown -R app:app` → `compileall` → restart); v0.5.86 单文件热修
