@@ -7,6 +7,14 @@
 
 ## 2026-09-12
 
+### fix-行情页整页崩(Value is null)+ 前端报错上报恒 405; v0.5.79
+- **怎么发现的**: v0.5.78 走查 D1 时打开 `/quote/600519` 直接白到错误边界("页面遇到了问题 · Value is null"), 顺手确认 `/quote/002361` 同样崩 —— **与 v0.5.78 无关**(`git diff v0.5.77..v0.5.78` 未碰 KlineChart/Quote, 崩在 KlineChart 的 marker 路径), 是一直存在的坑, 只在**非交易日**踩到。
+- **根因**: lightweight-charts v5 的 `setMarkers` 对**时间落在首/末根 K 线之外**的 marker 会在转换时拿到 null 并抛错 → 整页进错误边界。生产数据正好命中: 600519 当天(周六 09-12)有一条公告事件, 而最后一根 K 线是 09-11。同类坑此前只治了一半 —— `KlineChart.load` 已过滤 OHLC 为 null 的 K 线行(注释里就写着"lightweight-charts setData 遇 null 直接抛 Value is null"), 但 marker 侧没人管。
+- **修**: 新增 `packages/biz-ui/src/lib/chart-markers.ts`(`dayKey` 统一 BusinessDay 与 UTCTimestamp 到日序号 + `filterMarkersInBarsRange`), `KlineChart` 的 event/GS marker 与 `InteractiveKline` 的 GS/事件 marker 四处全部先裁范围再交给图表; **没有 K 线时全丢**、**坏时间不放开**(宁可少画一个点, 不崩整页); 越界事件仍可在事件列表看到, 只是不钉在图上(不做"贴到最后一根"的假定位)。
+- **顺带挖出一个更隐蔽的洞**: `src/lib/error-report.ts` 把上报地址拼成 `${API_BASE}/api/logs/frontend`, 而 `API_BASE` 本身就是 `/api` → 实际请求 `/api/api/logs/frontend` **恒 405**。也就是说自 2026-09-08 上线前端上报以来, **前端崩溃在服务端一条记录都没有**(这次若不是我正好用浏览器打开, 仍会无声)。已改为 `${API_BASE}/logs/frontend`。
+- **测试**: 新增 `tests/lib/chart-markers.test.ts` 7 例(范围内外/两种时间类型混用/空 K 线全丢/坏时间不放开/空列表), 其中"次日公告"一例就是本次生产的真实形状。前端 **186 passed / 32 文件** + tsc + eslint + UI-RULES + build 全绿; 后端本轮未改代码。
+- [tag v0.5.79]
+
 ### feat-第三批: 策略=一文件+META 与 K线子图注册表(D1/C2); v0.5.78
 - **来源**: TSP 借鉴清单第三批 C2 + D1(老板"按计划全做")。研究档案 `C:\Users\tianxiang\sida-research\tick-stock-panel-全系统研究.md`。
 - **C2 策略参数自描述(`src/core/strategy_library.py`)**: 新增 `PARAM_DEFS`(14 个阈值键的中文名/单位/范围/步长)+ `strategy_params(cfg)` + `effective_config(cfg, overrides)`。
