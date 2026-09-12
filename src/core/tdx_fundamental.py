@@ -22,14 +22,22 @@ def _tq(symbol: str):
 
 
 def fetch_gb(symbol: str) -> dict | None:
-    """最近一条股本数据 {date, ltgb, zgb}; 失败 None。"""
+    """最近一条股本数据 {date, ltgb(流通股本), zgb(总股本)}; 失败 None。
+
+    get_gb_info 需 date_list+count 同时给(探针: 只给 date_list → ErrorId=9;
+    count+type → 缺 market/list_type; date_list+count → OK)。给近 5 天 + count=1 取最新一条。
+    """
     try:
+        from datetime import datetime, timedelta
+
         from marketdata.vendors.tq import tq_rpc
 
         tqc = _tq(symbol)
         if not tqc:
             return None
-        v = tq_rpc("get_gb_info", {"stock_code": tqc, "count": 1})
+        now = datetime.now()
+        date_list = [(now - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)]
+        v = tq_rpc("get_gb_info", {"stock_code": tqc, "date_list": date_list, "count": 1})
     except Exception as e:  # noqa: BLE001
         logger.warning("TDX 股本失败 %s: %s", symbol, e)
         return None
