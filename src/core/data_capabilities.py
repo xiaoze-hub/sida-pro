@@ -50,14 +50,28 @@ STATUS_LABELS = {"ok": "正常", "degraded": "降级", "unknown": "未测量", "
 
 
 def _source_view(row: dict, health: dict) -> dict:
-    h = health.get(row.get("provider") or "") or {}
+    """单个源的健康读数。
+
+    **优先用 vendor 滚动 EWMA; 但它只在进程内存里 —— 每次重启后归零, 18 类会全变
+    "未测量"(诚实却没用)。所以 EWMA 样本不足时退回该源自己的 DB 累计计数**
+    (`data_sources.success_count/error_count`, 跨重启存活), 并记下判断依据 basis。
+    两者都不足 → 仍返回 None 让上层判 unknown, 不猜。
+    """
+    prov = row.get("provider") or ""
+    h = health.get(prov) or {}
+    sr, n, basis = h.get("success_rate"), (h.get("count") or 0), ("ewma" if h else "none")
+    ds, de = int(row.get("success_count") or 0), int(row.get("error_count") or 0)
+    if (sr is None or n < MIN_SAMPLES) and (ds + de) > n:
+        tot = ds + de
+        sr, n, basis = (ds / tot if tot else None), tot, "db"
     return {
         "provider": row.get("provider"),
         "name": row.get("name"),
         "enabled": bool(row.get("enabled")),
         "priority": row.get("priority"),
-        "success_rate": h.get("success_rate"),
-        "samples": h.get("count"),
+        "success_rate": round(sr, 4) if sr is not None else None,
+        "samples": n,
+        "basis": basis,
         "ewma_latency_ms": h.get("ewma_latency_ms"),
         "last_error": h.get("last_error") or "",
     }
@@ -72,10 +86,12 @@ def classify(sources: list[dict]) -> tuple[str, str]:
     if not measured:
         return "unknown", f"{len(enabled)} 个源尚无足够样本(需 ≥{MIN_SAMPLES} 次调用)"
     best = max(measured, key=lambda s: s["success_rate"])
+    basis_label = {"ewma": "滚动EWMA", "db": "累计统计"}.get(best.get("basis") or "")
+    suffix = f"({basis_label})" if basis_label else ""
     if best["success_rate"] >= OK_SUCCESS_RATE:
-        return "ok", f"最佳源 {best['provider']} 成功率 {round(best['success_rate'] * 100)}%"
+        return "ok", f"最佳源 {best['provider']} 成功率 {round(best['success_rate'] * 100)}%{suffix}"
     worst = ", ".join(f"{s['provider']} {round(s['success_rate'] * 100)}%" for s in measured)
-    return "degraded", f"全部源成功率低于 {round(OK_SUCCESS_RATE * 100)}%({worst})"
+    return "degraded", f"全部源成功率低于 {round(OK_SUCCESS_RATE * 100)}%({worst}{suffix})"
 
 
 def _age_days(latest: str | None, today: str | None) -> int | None:
@@ -101,7 +117,8 @@ def _age_days(latest: str | None, today: str | None) -> int | None:
 
 def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = None,
                        today: str | None = None) -> dict:
-    """rows: DataSource 记录(dict); health: vendor→指标; freshness: 表名→最新日期字符串。"""
+    """rows: DataSource 记录(dict, 含 success_count/error_count); health: vendor→EWMA;
+    freshness: 表名→最新日期字符串。"""
     freshness = freshness or {}
     by_type: dict[str, list[dict]] = {}
     for r in rows:
