@@ -109,3 +109,68 @@ def test_calibrate_falls_back_then_overrides():
     assert thr2["climax_ge2"] != mp.DEFAULT_THR["climax_ge2"]
     # 标定值必须来自自有分布: climax_ge2 = p90(ge2)*2
     assert abs(thr2["climax_ge2"] - mp._pct([r["ge2_count"] for r in big], 0.90) * 2) < 1e-9
+
+
+# ── 端到端: 从 limit_up_events 回填(拦住行下标/SQL 方言这类只在写库时暴露的 bug) ──
+def _mk_engines():
+    """内存 SQLite: 建 limit_up_events + market_phase_daily 两张表(列与迁移 v164 一致)。"""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.pool import StaticPool
+
+    eng = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    with eng.begin() as conn:
+        conn.execute(text(
+            """
+            CREATE TABLE limit_up_events (
+              trade_date TEXT NOT NULL, symbol TEXT NOT NULL, market TEXT DEFAULT 'CN',
+              touched INTEGER, is_sealed_close INTEGER, limit_days INTEGER
+            )
+            """))
+        conn.execute(text(
+            """
+            CREATE TABLE market_phase_daily (
+              date DATE PRIMARY KEY, first_board INTEGER NOT NULL DEFAULT 0,
+              ge2_count INTEGER NOT NULL DEFAULT 0, ge3_count INTEGER NOT NULL DEFAULT 0,
+              ge5_count INTEGER NOT NULL DEFAULT 0, max_height INTEGER NOT NULL DEFAULT 0,
+              promo_rate REAL, seal_rate REAL, sh_index_pct REAL,
+              phase TEXT NOT NULL DEFAULT '', updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              completeness REAL, phase_raw TEXT
+            )
+            """))
+    return eng
+
+
+def test_scan_from_events_end_to_end_and_idempotent(monkeypatch):
+    import sqlalchemy as sa
+
+    import src.db.session as dbs
+
+    eng = _mk_engines()
+    monkeypatch.setattr(dbs, "engine", eng)
+    rows = []
+    # 12 个交易日 × 12 只票: 前 11 只每天封板(连板递增), 第 12 只只首日封
+    for i in range(12):
+        d = f"202609{i + 1:02d}" if i < 10 else f"202610{i - 9:02d}"
+        for j in range(11):
+            rows.append((d, f"60000{j}", 1, 1))
+        rows.append((d, "600099", 1, 1 if i == 0 else 0))
+    with eng.begin() as c:
+        c.execute(sa.text("INSERT INTO limit_up_events (trade_date, symbol, touched, is_sealed_close)"
+                          " VALUES (:d, :s, :t, :sl)"),
+                  [{"d": a, "s": b, "t": t, "sl": sl} for a, b, t, sl in rows])
+
+    out = mp.scan_from_events(write=True)
+    assert out["ok"] is True and out["days"] == 12, out
+    with eng.begin() as c:
+        got = c.execute(sa.text("SELECT date, first_board, ge2_count, max_height, phase, phase_raw,"
+                                " completeness, seal_rate FROM market_phase_daily ORDER BY date")).fetchall()
+    assert len(got) == 12
+    assert got[0][1] == 12 and got[0][2] == 0 and got[0][3] == 1      # 首日全首板, 无连板
+    assert got[3][1] == 0 and got[3][2] == 11 and got[3][3] == 4      # 第4日: 11 只全部 4 板(600099 仅首日封过)
+    assert all(r[4] for r in got) and all(r[5] for r in got)           # phase 与 phase_raw 均已写
+    assert got[3][6] == round(1 / 3, 4) and got[3][7] == round(11 / 12, 4)
+
+    again = mp.scan_from_events(write=True)                            # 幂等: 不产生新行
+    assert again["ok"] is True and again["days"] == 12
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT COUNT(*) FROM market_phase_daily")).scalar() == 12

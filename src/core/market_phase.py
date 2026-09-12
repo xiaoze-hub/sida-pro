@@ -617,8 +617,10 @@ def _read_events(start: str | None = None) -> list[dict]:
            + (" WHERE trade_date >= :s" if start else ""))
     with engine.begin() as conn:
         rows = conn.execute(text(sql), {"s": start} if start else {}).fetchall()
+    # SQLAlchemy 2.0 的 Row 不支持 row["col"] 字符串下标, 必须走 _mapping(与 theme_mood 同法)
     return [{"trade_date": r["trade_date"], "symbol": r["symbol"],
-             "touched": bool(r["touched"]), "sealed": bool(r["sealed"])} for r in rows]
+             "touched": bool(r["touched"]), "sealed": bool(r["sealed"])}
+            for r in (dict(x._mapping) for x in rows)]
 
 
 _UPSERT = """
