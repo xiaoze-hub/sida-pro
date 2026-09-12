@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
@@ -12,6 +12,12 @@ const RESP = {
   window: 20,
   count: 2,
   dates: ['20260831', '20260901', '20260910', '20260911'],
+  market: [
+    { date: '20260831', score: 71.5 },
+    { date: '20260901', score: 83.8 },
+    { date: '20260910', score: 69.6 },
+    { date: '20260911', score: 71.7 },
+  ],
   items: [
     {
       block_code: '881101.SH', block_name: '元件', block_type: 'industry', score: 78.2, delta: 4.1,
@@ -61,6 +67,30 @@ describe('ThemeMood 页面', () => {
     expect(screen.getByText('9/1')).toBeTruthy()
     // 某概念只有 20260911 一天 → 其余三列渲染 '--' 占位
     expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('走势曲线: 顶部渲染前20均值曲线并标最新值', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    const { container } = render(<ThemeMoodPage />)
+    await screen.findAllByText('元件')
+    expect(screen.getByText('情绪走势')).toBeTruthy()
+    expect(screen.getByText('71.7')).toBeTruthy()
+    // 4 个交易日 → 1 条折线(4 个点) + 1 块面积
+    expect(container.querySelectorAll('polyline')).toHaveLength(1)
+    expect(container.querySelector('polyline')?.getAttribute('points')).toBe('19,35.5 59,6 99,40 139,35')
+    expect(container.querySelectorAll('path')).toHaveLength(1)
+  })
+
+  it('走势曲线: 点选题材后明细里画出该题材曲线', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    const { container } = render(<ThemeMoodPage />)
+    const names = await screen.findAllByText('元件')
+    fireEvent.click(names[0].closest('button') as HTMLButtonElement)
+    expect(screen.getByText('情绪走势(近 4 个交易日)')).toBeTruthy()
+    // 该题材自身曲线(58/64/74.1/78.2 → 最高78.2 最低58.0), 与顶部曲线各占一条折线
+    expect(screen.getByText('最高 78.2 · 最低 58.0 · 最新', { exact: false })).toBeTruthy()
+    expect(container.querySelectorAll('polyline')).toHaveLength(2)
+    expect(container.querySelectorAll('polyline')[1].getAttribute('points')).toBe('19,62 59,45.4 99,17.4 139,6')
   })
 
   it('时间轴加载后默认滚到最新一端', async () => {

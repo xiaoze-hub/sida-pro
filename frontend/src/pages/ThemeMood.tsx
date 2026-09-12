@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import {
   AXIS_CELL_W,
   AXIS_PITCH,
   axisDates,
+  axisWidth,
   cellColorClass,
   cellTextClass,
   cellsByDate,
   dayLabels,
   fmtScore,
   monthBands,
+  scoreTrend,
   type MoodCell,
+  type TrendLine,
+  type TrendDot,
 } from '@/lib/theme-mood'
 
 /**
@@ -52,10 +56,69 @@ interface BoardResp {
   count: number
   dates?: string[]
   items: MoodItem[]
+  market?: { date: string; score: number | null }[]
 }
 
 const WINDOWS = [10, 20, 30] as const
 const DIMS = ['涨停结构', '题材扩散', '核心强度', '接力反馈', '连续性'] as const
+const MARKET_CURVE_H = 46
+const DETAIL_CURVE_H = 68
+
+/** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。 */
+function useAutoScrollToLatest(axisLen: number) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const lastLen = useRef(0)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || axisLen === 0 || axisLen === lastLen.current) return
+    lastLen.current = axisLen
+    el.scrollLeft = el.scrollWidth
+  }, [axisLen])
+  return ref
+}
+
+/** 走势折线(与矩阵共用列几何): 面积 + 折线 + 逐点圆点, 最新点放大并描边。 */
+function TrendChart({ trend, width, height, label, hint, ariaLabel }: {
+  trend: TrendLine
+  width: number
+  height: number
+  label?: ReactNode
+  hint: (d: TrendDot) => string
+  ariaLabel: string
+}) {
+  return (
+    <div className="flex w-max min-w-full items-center gap-1">
+      {label ? (
+        <span className="sticky left-0 z-10 flex h-full w-[76px] shrink-0 flex-col justify-center bg-background px-1 leading-tight">
+          {label}
+        </span>
+      ) : null}
+      <svg width={width} height={height} className="block shrink-0" role="img" aria-label={ariaLabel}>
+        {trend.areas.map((d, i) => (
+          <path key={`a${i}`} d={d} className="fill-primary/10" />
+        ))}
+        {trend.lines.map((points, i) => (
+          <polyline
+            key={`l${i}`}
+            points={points}
+            className="fill-none stroke-primary"
+            strokeWidth={1.6}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+        {trend.dots.map((d) => (
+          <circle key={d.i} cx={d.x} cy={d.y} r={1.8} className="fill-primary/60">
+            <title>{hint(d)}</title>
+          </circle>
+        ))}
+        {trend.last ? (
+          <circle cx={trend.last.x} cy={trend.last.y} r={3.2} className="fill-primary stroke-background" strokeWidth={1.5} />
+        ) : null}
+      </svg>
+    </div>
+  )
+}
 
 export default function ThemeMoodPage() {
   const [windowDays, setWindowDays] = useState<number>(20)
@@ -87,16 +150,18 @@ export default function ThemeMoodPage() {
   const latestDate = axis.length ? axis[axis.length - 1] : null
   const detail = items.find((it) => it.block_code === active) ?? null
   const dims = detail ? [detail.s1, detail.s2, detail.s3, detail.s4, detail.s5] : []
+  const axisW = axisWidth(axis.length)
+
+  // 走势曲线: 顶部=强势题材(当日情绪分前20均值, 后端 market), 明细=选中题材自身情绪分。
+  const marketByDate = new Map((resp?.market ?? []).map((m) => [m.date, m.score]))
+  const marketTrend = axis.length ? scoreTrend(axis.map((d) => marketByDate.get(d) ?? null), { height: MARKET_CURVE_H }) : null
+  const detailCells = detail ? cellsByDate(detail.cells) : null
+  const detailTrend =
+    detail && axis.length ? scoreTrend(axis.map((d) => detailCells?.get(d)?.score ?? null), { height: DETAIL_CURVE_H }) : null
 
   // 时间轴默认对齐"最新"一端; 仅轴长度变化(首次加载/切窗口)时回滚, 轮询刷新不动用户的滚动位置。
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const lastAxisLen = useRef(0)
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el || axis.length === 0 || axis.length === lastAxisLen.current) return
-    lastAxisLen.current = axis.length
-    el.scrollLeft = el.scrollWidth
-  }, [axis.length])
+  const scrollRef = useAutoScrollToLatest(axis.length)
+  const detailScrollRef = useAutoScrollToLatest(axis.length)
 
   return (
     <div className="mx-auto max-w-[1400px] p-4">
@@ -164,6 +229,7 @@ export default function ThemeMoodPage() {
             <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
               <span>题材 × 日期(近 {windowDays} 个交易日 · 色块=情绪分)</span>
               {latestDate ? <span>最新 {latestDate}</span> : null}
+              <span className="text-[10px]">曲线=当日前 20 均值</span>
               <span className="ml-auto flex items-center gap-1 text-[10px]">
                 色阶
                 {[
@@ -187,7 +253,7 @@ export default function ThemeMoodPage() {
                   {bands.map((b) => (
                     <span
                       key={b.key}
-                      className="border-b border-border/60 pb-0.5 text-center text-[9px] leading-3 text-muted-foreground"
+                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground/60"
                       style={{ width: b.count * AXIS_PITCH - (AXIS_PITCH - AXIS_CELL_W) }}
                     >
                       {b.label}
@@ -196,7 +262,7 @@ export default function ThemeMoodPage() {
                 </div>
               </div>
               <div className="mb-1 flex w-max min-w-full items-center gap-1">
-                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[9px] leading-3 text-muted-foreground">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground/60">
                   日期
                 </span>
                 <div className="flex gap-0.5">
@@ -204,8 +270,8 @@ export default function ThemeMoodPage() {
                     <span
                       key={d}
                       title={`${d}${i === axis.length - 1 ? ' · 最新收盘' : ''}`}
-                      className={`w-[38px] shrink-0 text-center text-[9px] leading-3 ${
-                        i === axis.length - 1 ? 'font-medium text-primary' : 'text-muted-foreground'
+                      className={`w-[38px] shrink-0 text-center text-[12px] leading-4 ${
+                        i === axis.length - 1 ? 'font-semibold text-primary' : 'text-foreground/80'
                       }`}
                     >
                       {labels[i]}
@@ -213,6 +279,26 @@ export default function ThemeMoodPage() {
                   ))}
                 </div>
               </div>
+              {marketTrend ? (
+                <div
+                  className="mb-1 border-b border-border/40 pb-1"
+                  title="情绪走势 = 当日情绪分前 20 名题材的均值(领先端), 不是全市场均值"
+                >
+                  <TrendChart
+                    trend={marketTrend}
+                    width={axisW}
+                    height={MARKET_CURVE_H}
+                    ariaLabel={`强势题材情绪走势, 最新 ${fmtScore(marketTrend.last?.score)}`}
+                    hint={(d) => `${axis[d.i]} · 前20均值 ${fmtScore(d.score)}`}
+                    label={
+                      <>
+                        <span className="text-[11px] text-foreground/60">情绪走势</span>
+                        <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(marketTrend.last?.score)}</span>
+                      </>
+                    }
+                  />
+                </div>
+              ) : null}
               <div className="space-y-0.5">
                 {items.map((it) => {
                   const byDate = cellsByDate(it.cells)
@@ -275,6 +361,26 @@ export default function ThemeMoodPage() {
                   </div>
                 ))}
               </div>
+              {detailTrend ? (
+                <div className="mt-3">
+                  <div className="mb-1 flex items-baseline gap-2 text-[11px]">
+                    <span className="text-foreground/70">情绪走势(近 {axis.length} 个交易日)</span>
+                    <span className="ml-auto text-muted-foreground">
+                      最高 {fmtScore(detailTrend.hi)} · 最低 {fmtScore(detailTrend.lo)} · 最新{' '}
+                      <span className="font-mono text-foreground">{fmtScore(detailTrend.last?.score)}</span>
+                    </span>
+                  </div>
+                  <div ref={detailScrollRef} className="overflow-x-auto pb-1">
+                    <TrendChart
+                      trend={detailTrend}
+                      width={axisW}
+                      height={DETAIL_CURVE_H}
+                      ariaLabel={`${detail.block_name || detail.block_code} 情绪走势, 最新 ${fmtScore(detailTrend.last?.score)}`}
+                      hint={(d) => `${axis[d.i]} · 情绪分 ${fmtScore(d.score)}`}
+                    />
+                  </div>
+                </div>
+              ) : null}
               {detail.core_stocks.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {detail.core_stocks.slice(0, 2).map((s) => (

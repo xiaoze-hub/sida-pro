@@ -1,5 +1,6 @@
 // PanWatch Service Worker
-const CACHE_NAME = 'panwatch-v0.2.65.2-bust';
+// 2026-09-12: 换 Logo(B 方案) → 提升缓存名, 让老客户端安装新 SW 时重新预缓存 icon-192/512
+const CACHE_NAME = 'panwatch-v0.5.69-bust';
 
 // 需要缓存的静态资源
 // 注意: 不缓存 '/' (index.html) —— 每次发版 HTML 都变, 缓存旧 HTML 会导致
