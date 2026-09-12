@@ -645,27 +645,18 @@ MIN_DAY_EVENTS = 50
 
 
 def eligible_dates(events: list[dict], min_events: int = MIN_DAY_EVENTS) -> list[str]:
-    """按当日事件总量筛出覆盖充分的交易日(升序)。"""
-    per_day: dict[str, int] = {}
-    for e in events:
-        per_day[e["trade_date"]] = per_day.get(e["trade_date"], 0) + 1
-    return sorted(d for d, n in per_day.items() if n >= int(min_events))
+    """按当日事件总量筛出覆盖充分的交易日(升序)。口径实现见 `backfill_guard`。"""
+    from src.core.backfill_guard import count_by_field, coverage_gate
+
+    ok, _dropped = coverage_gate(count_by_field(events, "trade_date"), min_events)
+    return ok
 
 
 def _purge_uncovered(keep: set[str]) -> int:
     """删掉表内不在可信日期集里的行(含更早误回填的稀疏年份行)。"""
-    from sqlalchemy import text
+    from src.core.backfill_guard import purge_rows_outside
 
-    from src.db.session import engine
-
-    removed = 0
-    with engine.begin() as conn:
-        rows = conn.execute(text("SELECT date FROM market_phase_daily")).fetchall()
-        for r in rows:
-            if str(r[0]).replace("-", "") not in keep:
-                conn.execute(text("DELETE FROM market_phase_daily WHERE date = :d"), {"d": r[0]})
-                removed += 1
-    return removed
+    return purge_rows_outside(keep, table="market_phase_daily", date_col="date")
 
 
 def scan_from_events(*, start: str | None = None, write: bool = True,
