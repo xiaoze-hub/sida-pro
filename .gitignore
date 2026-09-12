@@ -40,3 +40,4 @@ reply_d3_confirm.md
 coverage.json
 .coverage
 htmlcov/
+.deploy/
