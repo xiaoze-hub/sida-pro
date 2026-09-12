@@ -278,6 +278,43 @@ def reset_datasources_to_seed(db: Session = Depends(get_db)):
     return summary
 
 
+@router.get("/capabilities")
+def get_data_capabilities(db: Session = Depends(get_db)):
+    """数据集能力矩阵(2026-09-12, 借鉴 tick-stock-panel 的能力路由视图)。
+
+    回答"此刻哪类数据是好的、哪类在降级、哪类根本没测过" —— 按数据集聚合,
+    不是按源罗列。**从未测量的类型给 unknown, 不并入 ok**(对齐 0.3「降级不伪装」)。
+    新鲜度只对确实落库的类型探测, 其余 latest_date=None。
+    """
+    from datetime import datetime
+
+    from sqlalchemy import text
+
+    from src.core.data_capabilities import FRESHNESS_PROBES, build_capabilities
+
+    rows = [{"type": r.type, "provider": r.provider, "name": r.name,
+             "enabled": bool(r.enabled), "priority": r.priority} for r in db.query(DataSource).all()]
+    try:
+        from src.core.marketdata_client import get_market_data
+
+        health = get_market_data().health() or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("能力矩阵取 vendor 健康失败: %s", e)
+        health = {}
+
+    freshness: dict[str, str] = {}
+    for table, col in FRESHNESS_PROBES.values():
+        try:
+            v = db.execute(text(f"SELECT max({col}) FROM {table}")).scalar()  # noqa: S608 表/列来自本模块常量
+        except Exception:  # noqa: BLE001 表可能尚未创建(新库/未迁移)
+            db.rollback()
+            continue
+        if v is not None:
+            freshness[table] = str(v)
+    today = datetime.now().date().isoformat()
+    return build_capabilities(rows, health, freshness, today=today)
+
+
 @router.get("/{source_id}")
 def get_datasource(source_id: int, db: Session = Depends(get_db)):
     """获取单个数据源"""

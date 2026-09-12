@@ -13,13 +13,13 @@ import json
 import logging
 import threading
 
+from src.core.jobs import jobs
+
 from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-_scan_lock = threading.Lock()
-_scan_running = False
 _WINDOWS = (10, 20, 30)
 _TOPS = (6, 8, 10, 15)
 
@@ -118,26 +118,29 @@ def _detail_rows(block_code: str, days: int) -> list[dict]:
 
 
 def _spawn_scan() -> dict:
-    global _scan_running
-    with _scan_lock:
-        if _scan_running:
-            return {"started": False, "reason": "扫描进行中"}
-        _scan_running = True
+    """起一次扫描作业。
+
+    2026-09-12: 模块级 `_scan_lock/_scan_running` 换成统一作业框架 —— 单飞复用
+    (重复点击拿回同一个 job_id) + 进度落库, /api/jobs 与作业面板里看得见。
+    """
+    job_id, is_new = jobs.create("theme_mood_scan", "题材情绪分扫描")
+    if not is_new:
+        return {"started": False, "reason": "扫描进行中", "job_id": job_id}
 
     def _runner() -> None:
-        global _scan_running
         try:
             from src.core import theme_mood
 
-            logger.info("手动题材情绪扫描完成: %s", theme_mood.scan(write_days=1))
+            jobs.start(job_id, "scanning")
+            out = theme_mood.scan(write_days=1)
+            jobs.succeed(job_id, str(out)[:500])
+            logger.info("手动题材情绪扫描完成: %s", out)
         except Exception as e:  # noqa: BLE001
+            jobs.fail(job_id, str(e))
             logger.warning("手动题材情绪扫描失败: %s", e)
-        finally:
-            with _scan_lock:
-                _scan_running = False
 
     threading.Thread(target=_runner, name="theme-mood-scan", daemon=True).start()
-    return {"started": True, "reason": None}
+    return {"started": True, "reason": None, "job_id": job_id}
 
 
 @router.get("/board")

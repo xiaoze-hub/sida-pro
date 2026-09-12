@@ -11,14 +11,13 @@ from __future__ import annotations
 import logging
 import threading
 
+from src.core.jobs import jobs
+
 from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_scan_lock = threading.Lock()
-_scan_running = False
 
 
 @router.get("/scan")
@@ -37,34 +36,34 @@ def get_scan(
 
 @router.post("/scan/run")
 def run_scan(limit: int | None = Query(None, ge=1, le=6000)):
-    """手动触发全市场扫描(后台执行, 完成后可从 GET /scan 读取)。"""
-    global _scan_running
-    with _scan_lock:
-        if _scan_running:
-            return {"started": False, "reason": "扫描进行中"}
-        _scan_running = True
+    """手动触发全市场扫描(后台执行, 完成后可从 GET /scan 读取)。
+
+    2026-09-12: 原来的模块级 `_scan_lock/_scan_running` 换成统一作业框架 ——
+    单飞复用(重复点击返回同一 job_id) + 进度落库, 作业面板里看得见。
+    """
+    job_id, is_new = jobs.create("resonance_scan", "三指标共振全市场扫描")
+    if not is_new:
+        return {"started": False, "running": True, "reason": "扫描进行中", "job_id": job_id}
 
     def _runner() -> None:
-        global _scan_running
         try:
             from src.core import resonance_scan
 
+            jobs.start(job_id, "scanning")
             out = resonance_scan.scan(limit=limit)
+            jobs.succeed(job_id, str(out)[:500])
             logger.info("手动共振扫描完成: %s", out)
         except Exception as e:  # noqa: BLE001
+            jobs.fail(job_id, str(e))
             logger.warning("手动共振扫描失败: %s", e)
-        finally:
-            with _scan_lock:
-                _scan_running = False
 
     threading.Thread(target=_runner, name="resonance-scan-manual", daemon=True).start()
-    return {"started": True, "running": True}
+    return {"started": True, "running": True, "job_id": job_id}
 
 
 @router.get("/scan/status")
 def scan_status():
-    with _scan_lock:
-        return {"running": _scan_running}
+    return {"running": bool(jobs.active(kind="resonance_scan"))}
 
 
 @router.get("/activity/{symbol}")

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Bot, Database, Loader2, ShieldAlert } from 'lucide-react'
+import { Bot, Database, ListChecks, Loader2, ShieldAlert } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
 
@@ -14,6 +14,7 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
 const AgentsPage = lazy(() => import('@/pages/Agents'))
 const DataSourcesPage = lazy(() => import('@/pages/DataSources'))
 const ErrorLogPage = lazy(() => import('@/pages/ErrorLog'))
+const JobPanelPage = lazy(() => import('@/components/JobPanel').then(m => ({ default: m.JobPanel })))
 
 const SYSTEM_TABS: TabDef[] = [
   {
@@ -35,6 +36,18 @@ const SYSTEM_TABS: TabDef[] = [
     render: () => (
       <Suspense fallback={<TabLoading />}>
         <DataSourcesPage />
+      </Suspense>
+    ),
+  },
+  {
+    /* C1 (2026-09-12, 借鉴 TSP 作业面板): 扫描/AI 批量/回填的进度与结果看得见、可取消 */
+    key: 'jobs',
+    label: '任务',
+    icon: ListChecks,
+    ownerOnly: true,
+    render: () => (
+      <Suspense fallback={<TabLoading />}>
+        <JobPanelPage />
       </Suspense>
     ),
   },
