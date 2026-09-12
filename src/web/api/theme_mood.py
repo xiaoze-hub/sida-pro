@@ -74,11 +74,11 @@ def _board_data(window: int, top: int) -> dict:
                  {"n": int(window)})
     dates = sorted([d["trade_date"] for d in days])
     if not dates:
-        return {"dates": [], "items": [], "market": []}
+        return {"dates": [], "items": [], "market": [], "rotation": [], "rotation_top_k": ROTATION_TOP_K}
     latest = dates[-1]
     rows = _read("SELECT * FROM theme_mood_daily WHERE trade_date = :d", {"d": latest})
     if not rows:
-        return {"dates": [], "items": [], "market": []}
+        return {"dates": [], "items": [], "market": [], "rotation": [], "rotation_top_k": ROTATION_TOP_K}
     prev = dates[-2] if len(dates) > 1 else None
     prev_map: dict[str, float] = {}
     if prev:
@@ -217,7 +217,8 @@ def get_board(window: int = Query(20), top: int = Query(15)):
         raise HTTPException(400, f"window 仅支持 {_WINDOWS}, top 仅支持 {_TOPS}")
     data = _board_data(window, top)
     return {"trade_date": _latest_date(), "window": window, "count": len(data["items"]),
-            "dates": data["dates"], "items": data["items"], "market": data["market"]}
+            "dates": data["dates"], "items": data["items"], "market": data["market"],
+            "rotation": data["rotation"], "rotation_top_k": data["rotation_top_k"]}
 
 
 @router.get("/detail/{block_code}")
