@@ -293,7 +293,9 @@ def get_data_capabilities(db: Session = Depends(get_db)):
     from src.core.data_capabilities import FRESHNESS_PROBES, build_capabilities
 
     rows = [{"type": r.type, "provider": r.provider, "name": r.name,
-             "enabled": bool(r.enabled), "priority": r.priority} for r in db.query(DataSource).all()]
+             "enabled": bool(r.enabled), "priority": r.priority,
+             "success_count": r.success_count, "error_count": r.error_count}
+            for r in db.query(DataSource).all()]
     try:
         from src.core.marketdata_client import get_market_data
 

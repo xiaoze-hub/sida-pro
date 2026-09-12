@@ -7,6 +7,19 @@
 
 ## 2026-09-12
 
+### fix-能力矩阵重启后 18 类全"未测量": 补 vendor 调用累计计数落库(v0.5.76, 部署自查发现)
+- v0.5.75 部署后生产自查: `能力矩阵: total 18 ok 0 degraded 0 unknown 18` —— 口径诚实但等于没用。根因两层:
+  ① 唯一活着的健康读数是 `marketdata` 的**滚动 EWMA 窗口**(`_Metrics.window`, maxlen=100), 它只在 uvicorn 进程内存里, **每次重启/换 worker 归零**;
+  ② 本该兜底的 `data_sources.success_count/error_count/last_used_at` 三列 **2026-09-01 就建好了, 但全仓库没有任何一处写入** —— 于是 `/health/data-sources`(按累计成/败推断)也永远返回 `unknown`。
+- 修(两件事一起做, 缺一个都不成立):
+  - 新增 `src/core/md_metrics_sink.py::DbCountingMetricsSink` —— 装饰 marketdata 的 `MetricsSink` 端口: 内存快照原样透传(`health()`/信任面板行为不变), 另外把成/败**累计落库**。在 `marketdata_client.get_market_data()` 注入(包内不动, 依赖方向仍是 app→包)。
+  - `data_capabilities._source_view()`: EWMA 缺失或样本 `<MIN_SAMPLES` 时退回该源 DB 累计计数, 并记下判定依据 `basis=ewma|db|none`; `classify()` 把依据写进 reason 尾巴(`(滚动EWMA)` / `(累计统计)`)。
+- 分层口径(有意为之, 别以后被"为什么两个数不一样"绕进去): EWMA=最近 100 次的**近期视角**, 优先用; 累计=历史全部的**长期视角**, 只在冷启动兜底。所以刚重启时面板读累计, 约 10 次调用后自动切回 EWMA —— 一个源今天坏了不会因"历史 98% 成功"而被掩盖。
+- 护栏: ①热路径不能每次调用都 UPDATE → 增量先在内存聚合, 距上次落库 ≥30s 才写, 进程退出 `atexit` 排空(面板读数因此最多滞后 30s, 对"此刻好不好"无影响); ②多 worker 并发 → 用 `col = COALESCE(col,0) + :delta` 原子自增, 不做读改写; ③落库异常只 warning 且**计数回灌**待下次, 绝不把取数打挂; `flush_at_exit()` 幂等, 防 shutdown 钩子重复触发二次自增。
+- 顺手治了一处同类不诚实: `classify()` 原先 basis 缺省就被当成"累计统计"。现按真正驱动结论的那个源标注, **依据未知就不标注**。
+- 测试: 新增 `tests/test_md_metrics_sink.py` 8 例(手动刷写/连续刷是累加不是覆盖/窗口内不自动落/失败回灌不抛/空 vendor 不入库/快照语义不变/atexit 只刷一次) + `tests/test_data_capabilities.py` 补 2 例(冷启动退回 DB、basis 未知不标注); 本模块合计 13 passed。
+- [tag v0.5.76]
+
 ### update-v0.5.71~74 生产部署(市场级情绪周期上线: 回填 265 天 / 37 段, 冒烟 9/9)
 - **部署链**: 备份 `/root/app_backup_pre_v0572_20260912.tar.gz`(38.1MB) → v0.5.72/v0.5.73 覆盖层(19MB/1367 项, `tar xzf --overwrite` → `chown -R app:app` → `compileall` → restart) → v0.5.74 走 **docker cp 热修**(只改 2 个后端文件)。迁移 **v164 已应用**(`completeness`/`phase_raw` 两列入库)。`/api/version` = **v0.5.74**, 容器 healthy。
 - **生产回填结果(三轮迭代)**: ① v0.5.72 首跑直接崩 —— `Row` 字符串下标在 SQLAlchemy 2.0 不可用(→ v0.5.73 修 + 补端到端测试); ② v0.5.73 跑出 **2522 天/181 段** 但按年一看是错的(2024 前日均首板 0.3~3 vs 2025 年 23.3 / 2026 年 68.7 —— `limit_up_events` 早年只是零星残留, 日均 1~9 条 vs 2025 起 107 条) → ③ v0.5.74 加覆盖度门槛后 **265 天(2024-10-08~2026-09-11) / 37 段 / 清理不可信历史行 2257 条 / 阈值 calibrated=True**。

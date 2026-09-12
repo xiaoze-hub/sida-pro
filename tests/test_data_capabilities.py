@@ -17,10 +17,11 @@ def _h(sr, n=50):
     return {"success_rate": sr, "count": n, "ewma_latency_ms": 120, "last_error": ""}
 
 
-def _src(p, enabled=True, prio=1, sr=None, n=0):
+def _src(p, enabled=True, prio=1, sr=None, n=0, basis="ewma"):
     """classify 的入参是 build_capabilities 内部产出的"源视图", 不是 DB 行。"""
     return {"provider": p, "name": p, "enabled": enabled, "priority": prio,
-            "success_rate": sr, "samples": n, "ewma_latency_ms": None, "last_error": ""}
+            "success_rate": sr, "samples": n, "basis": basis,
+            "ewma_latency_ms": None, "last_error": ""}
 
 
 def test_classify_four_statuses_never_merges_unknown_into_ok():
@@ -35,6 +36,9 @@ def test_classify_four_statuses_never_merges_unknown_into_ok():
     assert st == "degraded" and "a 40%" in reason
     # 样本太少不足以判降级 → unknown(冷启动不误判)
     assert dc.classify([_src("a", sr=0.1, n=3)])[0] == "unknown"
+    # basis 未知 → 不冒充任何依据; 明确 db → 标注"累计统计"
+    assert "(" not in dc.classify([_src("a", sr=0.95, n=40, basis="none")])[1]
+    assert "累计统计)" in dc.classify([_src("a", sr=0.2, n=40, basis="db")])[1]
 
 
 def test_build_capabilities_groups_and_summarizes():
@@ -69,3 +73,23 @@ def test_capabilities_route_registered_before_source_id_route():
     paths = [getattr(r, "path", "") for r in ds_api.router.routes]
     assert "/capabilities" in paths
     assert paths.index("/capabilities") < paths.index("/{source_id}")
+
+
+def test_db_counts_take_over_when_ewma_cold():
+    """EWMA 是进程内存的, 重启后归零 —— 必须退回 DB 累计计数, 否则整张矩阵全灰。"""
+    row = {"type": "kline", "provider": "tq", "name": "TQ", "enabled": True, "priority": 4,
+           "success_count": 900, "error_count": 6, "last_error": ""}
+    # 冷启动: EWMA 里没这个 vendor
+    out = dc.build_capabilities([row], {}, {}, today="2026-09-12")
+    it = out["items"][0]
+    assert it["status"] == "ok" and "累计统计" in it["reason"]
+    assert it["sources"][0]["samples"] == 906 and it["sources"][0]["basis"] == "db"
+    # EWMA 有足够样本时优先用它(更能反映"此刻"质量), 且 reason 标出依据
+    hot = {"tq": {"success_rate": 0.3, "count": 50, "ewma_latency_ms": 900, "last_error": "timeout"}}
+    out2 = dc.build_capabilities([row], hot, {}, today="2026-09-12")
+    it2 = out2["items"][0]
+    assert it2["status"] == "degraded" and "滚动EWMA" in it2["reason"]
+    assert it2["sources"][0]["samples"] == 50
+    # 两边都不足 → 仍然 unknown, 不猜
+    cold = dict(row, success_count=2, error_count=0)
+    assert dc.build_capabilities([cold], {}, {}, today="2026-09-12")["items"][0]["status"] == "unknown"

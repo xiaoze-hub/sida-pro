@@ -13,6 +13,8 @@ export interface CapabilitySource {
   priority: number | null
   success_rate: number | null
   samples: number | null
+  /** 读数依据: ewma=进程内滚动窗口(重启归零) / db=累计计数 / none=两者都不足 */
+  basis?: 'ewma' | 'db' | 'none'
   ewma_latency_ms: number | null
   last_error: string
 }

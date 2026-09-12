@@ -62,12 +62,17 @@ def get_market_data() -> MarketData:
     批次1-B(2026-09-10): 注入 **Redis 共享缓存**(跨 uvicorn worker), 消除
     "同标的被两个 worker 各拉一次"; 未配置 Redis / Redis 故障时自动退回进程内缓存
     (行为与改造前一致, 不会退化成"无缓存风暴")。
+
+    v0.5.76: 注入 DbCountingMetricsSink —— 内存 EWMA 快照照旧, 另外把成/败**累计落库**,
+    否则每次重启后健康读数归零, 数据能力矩阵 18 类全变「未测量」。
     """
     global _md
     if _md is None:
+        from src.core.md_metrics_sink import get_metrics_sink
         from src.core.md_redis_cache import redis_cache_factory
 
-        _md = MarketData(config=DbConfigProvider(), cache_factory=redis_cache_factory())
+        _md = MarketData(config=DbConfigProvider(), metrics=get_metrics_sink(),
+                         cache_factory=redis_cache_factory())
     return _md
 
 
