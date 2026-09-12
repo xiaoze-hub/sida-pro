@@ -159,7 +159,7 @@ def test_scan_from_events_end_to_end_and_idempotent(monkeypatch):
                           " VALUES (:d, :s, :t, :sl)"),
                   [{"d": a, "s": b, "t": t, "sl": sl} for a, b, t, sl in rows])
 
-    out = mp.scan_from_events(write=True)
+    out = mp.scan_from_events(write=True, min_events=1)
     assert out["ok"] is True and out["days"] == 12, out
     with eng.begin() as c:
         got = c.execute(sa.text("SELECT date, first_board, ge2_count, max_height, phase, phase_raw,"
@@ -170,7 +170,17 @@ def test_scan_from_events_end_to_end_and_idempotent(monkeypatch):
     assert all(r[4] for r in got) and all(r[5] for r in got)           # phase 与 phase_raw 均已写
     assert got[3][6] == round(1 / 3, 4) and got[3][7] == round(11 / 12, 4)
 
-    again = mp.scan_from_events(write=True)                            # 幂等: 不产生新行
+    again = mp.scan_from_events(write=True, min_events=1)             # 幂等: 不产生新行
     assert again["ok"] is True and again["days"] == 12
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT COUNT(*) FROM market_phase_daily")).scalar() == 12
+
+
+def test_eligible_dates_drops_sparse_days():
+    """覆盖度门槛: limit_up_events 2025 年前是零星残留, 稀疏日必须排除在标定与规律之外。"""
+    ev = [{"trade_date": "20260101", "symbol": f"S{i}", "touched": 1, "sealed": 1} for i in range(60)]
+    ev += [{"trade_date": "20040915", "symbol": "X1", "touched": 1, "sealed": 1}]
+    ev += [{"trade_date": "20040916", "symbol": f"Y{i}", "touched": 1, "sealed": 1} for i in range(49)]
+    assert mp.eligible_dates(ev) == ["20260101"]              # 49 条也不足 50
+    assert mp.eligible_dates(ev, min_events=10) == ["20040916", "20260101"]
+    assert mp.MIN_DAY_EVENTS == 50

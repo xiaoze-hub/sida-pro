@@ -638,12 +638,44 @@ ON CONFLICT(date) DO UPDATE SET
 """
 
 
-def scan_from_events(*, start: str | None = None, write: bool = True) -> dict:
-    """回填市场情绪周期: 读 limit_up_events → 派生梯队 → 全量重标 → upsert。
+# 覆盖度门槛: limit_up_events 在 2025 年前只是零星残留(实测日均 1~9 条, 2025 起 107+,
+# 2026 年 131 条)。拿稀疏早年算梯队=错数据, 拿它标定阈值/算"历史规律"=错结论;
+# 低于门槛的交易日既不回填也不参与标定。
+MIN_DAY_EVENTS = 50
 
-    为什么全量重标而不是增量: EMA 平滑与 2 日确认都依赖完整序列(与 TSP 的
-    refresh_phase_labels 同一取舍), 而全量只有几百行, 开销可忽略。
-    不动 `sh_index_pct`(那是 vendor 同步写的, 回填没有当日指数数据)。
+
+def eligible_dates(events: list[dict], min_events: int = MIN_DAY_EVENTS) -> list[str]:
+    """按当日事件总量筛出覆盖充分的交易日(升序)。"""
+    per_day: dict[str, int] = {}
+    for e in events:
+        per_day[e["trade_date"]] = per_day.get(e["trade_date"], 0) + 1
+    return sorted(d for d, n in per_day.items() if n >= int(min_events))
+
+
+def _purge_uncovered(keep: set[str]) -> int:
+    """删掉表内不在可信日期集里的行(含更早误回填的稀疏年份行)。"""
+    from sqlalchemy import text
+
+    from src.db.session import engine
+
+    removed = 0
+    with engine.begin() as conn:
+        rows = conn.execute(text("SELECT date FROM market_phase_daily")).fetchall()
+        for r in rows:
+            if str(r[0]).replace("-", "") not in keep:
+                conn.execute(text("DELETE FROM market_phase_daily WHERE date = :d"), {"d": r[0]})
+                removed += 1
+    return removed
+
+
+def scan_from_events(*, start: str | None = None, write: bool = True,
+                     min_events: int = MIN_DAY_EVENTS) -> dict:
+    """回填市场情绪周期: 读 limit_up_events → 筛覆盖 → 派生梯队 → 全量重标 → upsert。
+
+    只处理覆盖充分的日子(`eligible_dates`), 并清掉表内不可信的历史行 —— EMA 与
+    2 日确认都会跨日传播, 混入稀疏早年会把阶段标签和"历史规律"一起带偏。
+    全量重标而非增量: 这两步都依赖完整序列(与 TSP 的 refresh_phase_labels 同一取舍),
+    而可信区间只有几百行, 开销可忽略。不动 `sh_index_pct`(vendor 同步才写它)。
     """
     from sqlalchemy import text
 
@@ -651,12 +683,16 @@ def scan_from_events(*, start: str | None = None, write: bool = True) -> dict:
 
     try:
         events = _read_events(start)
-        dates = sorted({e["trade_date"] for e in events})
-        if not dates:
+        if not events:
             return {"ok": False, "reason": "无涨停事件可回填"}
+        dates = eligible_dates(events, min_events)
+        if not dates:
+            return {"ok": False, "reason": f"无覆盖充分的交易日(每日需 ≥{min_events} 条事件)"}
+        keep = set(dates)
+        events = [e for e in events if e["trade_date"] in keep]
         rows = metrics_rows_from_events(dates, events)
         labelled = classify_phase_series_full(rows)
-        thr, calibrated = calibrate(rows)
+        _thr, calibrated = calibrate(rows)
         payload = []
         for r, lab in zip(rows, labelled):
             payload.append({
@@ -667,17 +703,20 @@ def scan_from_events(*, start: str | None = None, write: bool = True) -> dict:
                 "seal_rate": r["seal_rate"], "completeness": r["completeness"],
                 "phase": lab["phase"], "phase_raw": lab["phase_raw"],
             })
+        purged = 0
         if write:
             with engine.begin() as conn:
                 for p in payload:
                     conn.execute(text(_UPSERT), p)
+            purged = _purge_uncovered(keep)
         segs = segmentize([dict(p, phase=p["phase"]) for p in payload])
         return {
             "ok": True, "days": len(payload), "segments": len(segs), "calibrated": calibrated,
+            "purged_uncovered": purged, "min_day_events": int(min_events),
             "latest_phase": payload[-1]["phase"] if payload else None,
-            "note": (f"回填 {len(payload)} 天({dates[0]}~{dates[-1]}); 阈值"
-                     + ("已用自有历史分位标定" if calibrated else "沿用默认(历史<120天)")
-                     + f"; 共 {len(segs)} 段; 阈值集 {sorted(thr)[:2]}…"),
+            "note": (f"回填 {len(payload)} 天({dates[0]}~{dates[-1]}); 覆盖门槛 ≥{min_events} 条/日; "
+                     + ("阈值已用自有历史分位标定" if calibrated else "阈值沿用默认(历史<120天)")
+                     + f"; 共 {len(segs)} 段; 清理不可信历史行 {purged}"),
         }
     except Exception as e:  # noqa: BLE001
         logger.warning("市场情绪周期回填异常: %s", e)
