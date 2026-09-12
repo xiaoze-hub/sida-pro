@@ -11,12 +11,18 @@ const RESP = {
   trade_date: '20260911',
   window: 20,
   count: 2,
+  dates: ['20260831', '20260901', '20260910', '20260911'],
   items: [
     {
       block_code: '881101.SH', block_name: '元件', block_type: 'industry', score: 78.2, delta: 4.1,
       confidence: 86, core: true, s1: 80, s2: 75, s3: 82, s4: 70, s5: 60, limit_up_cnt: 9, max_boards: 3,
       core_stocks: [{ symbol: '600001.SH', name: '甲股', boards: 3, pct: 10.0, score: 88.4, prob: 0.62 }],
-      cells: [{ date: '20260910', score: 74.1, limit_up_cnt: 7 }, { date: '20260911', score: 78.2, limit_up_cnt: 9 }],
+      cells: [
+        { date: '20260831', score: 58.0, limit_up_cnt: 3 },
+        { date: '20260901', score: 64.0, limit_up_cnt: 5 },
+        { date: '20260910', score: 74.1, limit_up_cnt: 7 },
+        { date: '20260911', score: 78.2, limit_up_cnt: 9 },
+      ],
     },
     {
       block_code: '880301.SH', block_name: '某概念', block_type: 'concept', score: 61.0, delta: -2.0,
@@ -43,5 +49,17 @@ describe('ThemeMood 页面', () => {
     render(<ThemeMoodPage />)
     await screen.findAllByText('元件')
     expect(String(mocks.fetchAPI.mock.calls[0][0])).toContain('window=20')
+  })
+
+  it('时间轴: 渲染月份带与日号, 缺该交易日的题材显示空位', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ThemeMoodPage />)
+    await screen.findAllByText('元件')
+    expect(screen.getByText('8月')).toBeTruthy()
+    expect(screen.getByText('9月')).toBeTruthy()
+    expect(screen.getByText('8/31')).toBeTruthy()
+    expect(screen.getByText('9/1')).toBeTruthy()
+    // 某概念只有 20260911 一天 → 其余三列渲染 '--' 占位
+    expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(3)
   })
 })

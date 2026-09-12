@@ -12,8 +12,8 @@ import src.web.api.theme_mood as api
 from src.web.response import ResponseWrapperMiddleware
 
 
-def _client(monkeypatch, rows, detail=None, latest="20260911"):
-    monkeypatch.setattr(api, "_board_rows", lambda window, top: rows)
+def _client(monkeypatch, rows, detail=None, latest="20260911", dates=("20260910", "20260911")):
+    monkeypatch.setattr(api, "_board_data", lambda window, top: {"dates": list(dates), "items": rows})
     monkeypatch.setattr(api, "_latest_date", lambda: latest)
     if detail is not None:
         monkeypatch.setattr(api, "_detail_rows", lambda code, days: detail)
@@ -39,6 +39,7 @@ def test_board_contract(monkeypatch):
     assert j["success"] is True and j["code"] == 0
     d = j["data"]
     assert d["trade_date"] == "20260911" and len(d["items"]) == 1
+    assert d["dates"] == ["20260910", "20260911"]
     assert d["items"][0]["block_code"] == "881101.SH" and d["items"][0]["core"] is True
 
 
@@ -49,9 +50,9 @@ def test_board_validates_params(monkeypatch):
 
 
 def test_board_empty_state(monkeypatch):
-    c = _client(monkeypatch, [], latest=None)
+    c = _client(monkeypatch, [], latest=None, dates=())
     d = c.get("/api/theme-mood/board").json()["data"]
-    assert d["trade_date"] is None and d["items"] == []
+    assert d["trade_date"] is None and d["items"] == [] and d["dates"] == []
 
 
 def test_detail_not_found_and_found(monkeypatch):

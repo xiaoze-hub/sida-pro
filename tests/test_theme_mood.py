@@ -132,6 +132,17 @@ def test_rank_items_tiebreakers():
     assert got == ["880003.SH", "880001.SH", "880002.SH"]
 
 
+def test_align_cells_pads_missing_days_on_shared_axis():
+    dates = ["20260909", "20260910", "20260911"]
+    cells = [{"date": "20260909", "score": 61.0, "limit_up_cnt": 2},
+             {"date": "20260911", "score": 70.0, "limit_up_cnt": 4}]
+    got = tm.align_cells(cells, dates)
+    assert [c["date"] for c in got] == dates
+    assert got[1] == {"date": "20260910", "score": None, "limit_up_cnt": None}
+    assert tm.align_cells(None, dates) == [
+        {"date": d, "score": None, "limit_up_cnt": None} for d in dates]
+
+
 def test_compute_theme_day_full_row():
     row = tm.compute_theme_day(
         date="20260911",
