@@ -7,6 +7,21 @@
 
 ## 2026-09-13
 
+### update-v0.5.88 生产部署 + 走查(借鉴 quicktiny A+B 落地)
+- **部署链**: 覆盖层 19MB(备份 `/root/app_backup_pre_v0588_20260913.tar.gz` → `tar xzf --overwrite` →
+  `chown -R app:app` → `compileall` → restart)。`/api/version`=v0.5.88, healthy。冒烟 9/9。
+- **走查(浏览器, 收盘定型态)**:
+  - 头部统计条实测: `昨候选 47 · 首板 35 · 晋级 9 · 炸板 30 · 断板 3 · 冲板 0` + `更新 17:42:01`(与 /ladder stats 一致)。
+  - **矩阵视图**: 行=7板…1板(每行收起/展开+只看本板), 列=2026-08-17…(全格式), 格=个股 chip(迷你K+名称),
+    横向滚动条在; 切回「按日列视图」正常; 矩阵下方「折叠题材表」按钮在。
+  - 按日列视图: 每股 chip 有迷你K; **涨跌幅显 '--'** —— 定型 ladder 未带当日 pct(诚实不编),
+    参考平台有涨跌幅 → **follow-up**: 用 klines 前收(LAG) 补 pct, 待批。
+- **清理**: 临时账号 qav0588(owner+1自选)已删, users 回 5; 容器 QA 文件+token 已删; 浏览器 localStorage 已清;
+  本机 stage 已删。`/tmp/klines_fullmarket.log` 保留(回填仍在跑, 完成后删)。
+- **待办(周一 2026-09-14 盘中, 与 T171 合并)**: live 细分状态实测(冲板/开板/回封/板型/封单/封成比)、
+  断源演练、get_pricevol O/H/L 确认、回填覆盖核对、矩阵 live 列走查。
+- [tag v0.5.88 已推 origin]
+
 ### feat-借鉴 quicktiny 连板天梯: A布局统计 + B盘中细分状态; v0.5.88
 - **来源**: 老板让看其登录平台 stock.quicktiny.cn/stock-ladder(实时/多日天梯)。拆完后选 A+B 两组(C 组: 板块chips/原因/多视图K/对比回放 后置)。
 - **A 布局+统计**:
