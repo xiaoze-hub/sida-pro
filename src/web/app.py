@@ -49,6 +49,7 @@ from src.web.api import (
     theme_mood,
     auction_pool,
     abnormal_moves,
+    gap_study,
     market_phase,
     chat_upload,
     my_ai_services,
@@ -683,6 +684,13 @@ app.include_router(
     abnormal_moves.router,
     prefix="/api/abnormal-moves",
     tags=["abnormal-moves"],
+    dependencies=protected,
+)
+# 高开分档实证(v0.5.80 A7): 开盘买入→当日/次日收益按高开档位统计, 给盘前榜单贴徽标用
+app.include_router(
+    gap_study.router,
+    prefix="/api/gap-study",
+    tags=["gap-study"],
     dependencies=protected,
 )
 # 情绪周期 6 阶段(2026-08-24, 任务 A): 当前阶段 + 30 天序列 + 分布

@@ -3,6 +3,7 @@ import { RefreshCw, UserPlus, Eye, Info } from 'lucide-react'
 import { fetchAPI, stocksApi } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { chaseBadge, type GapStudyResp } from '@/lib/gap-study'
 
 /**
  * 竞价异动池 Tab(2026-08-24, v0.3.1 修复字段口径)
@@ -72,6 +73,9 @@ function gapColor(gap: number | null | undefined): string {
   return gap > 0 ? 'text-stock-up' : gap < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
+/** 高开分档实证(v0.5.80 A7)刷新频率: 结论以周计变化, 半天一次足够(后端另有 1 天缓存)。 */
+const GAP_STUDY_REFRESH_MS = 6 * 3600_000
+
 export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: AuctionAnomalyTabProps) {
   const { toast } = useToast()
   const [data, setData] = useState<AuctionAnomalyResp | null>(null)
@@ -79,6 +83,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
   const [error, setError] = useState('')
   const [adding, setAdding] = useState<Set<string>>(new Set())
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [gapStudy, setGapStudy] = useState<GapStudyResp | null>(null)
   const mountedRef = useRef(true)
 
   const load = useCallback(async () => {
@@ -106,6 +111,25 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       window.clearInterval(timer)
     }
   }, [load])
+
+  // 高开分档实证: 拉不到就只是不贴徽标, 绝不影响竞价池本身
+  useEffect(() => {
+    let alive = true
+    const loadStudy = async () => {
+      try {
+        const r = await fetchAPI<GapStudyResp>('/gap-study?days=250')
+        if (alive) setGapStudy(r?.available ? r : null)
+      } catch {
+        if (alive) setGapStudy(null)
+      }
+    }
+    void loadStudy()
+    const t = window.setInterval(() => void loadStudy(), GAP_STUDY_REFRESH_MS)
+    return () => {
+      alive = false
+      window.clearInterval(t)
+    }
+  }, [])
 
   const addToWatchlist = useCallback(
     async (item: AuctionAnomalyItem) => {
@@ -229,7 +253,20 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                   >
                     {name}
                   </td>
-                  <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${gapColor(gap)}`}>{fmtPct(gap)}</td>
+                  <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${gapColor(gap)}`}>
+                    {fmtPct(gap)}
+                    {(() => {
+                      const badge = chaseBadge(gapStudy, gap)
+                      return badge ? (
+                        <span
+                          className="mt-0.5 block text-[10px] font-sans text-red-600 dark:text-red-400"
+                          title={badge.note}
+                        >
+                          {badge.label}
+                        </span>
+                      ) : null
+                    })()}
+                  </td>
                   <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-muted-foreground">
                     {withdrawMissing || withdraw == null ? '—' : fmtNum(withdraw, '%')}
                   </td>

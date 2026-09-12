@@ -7,6 +7,35 @@
 
 ## 2026-09-12
 
+### feat-单点批: 高开追高实证徽标(A7) + 回填防污染契约(B3); A6 查明已上线; v0.5.80
+- **A6「偏移异动」= 不用做**。动手前先查了一遍: 交易所偏离值引擎 `src/core/abnormal_moves.py`
+  (2026-08-24 任务 C)早已实现主板3日±20% / 创业·科创±30% / 北交±40% + 严重 10日+100/−50、
+  30日+200/−70、基准指数映射与接近度分级(triggered/edge/watch), `GET /api/abnormal-moves`
+  也已挂上, 前端 `AbnormalMovesCard`(382 行)就在机会页「异动预警」视图里。
+  **我先按 TSP 清单写了一版面板+页签, 发现是重复品后完整回退**(`git checkout` + 删两个新文件),
+  没有留下第二份口径。→ 借鉴清单里这一条对 SIDA 而言是"已交付", 后续只剩"要不要挪到首页"这种产品取舍。
+- **A7 高开追高实证(`src/core/gap_study.py`)**: 借鉴的是"把验证过的结论贴在盘前数据旁边"这个思路,
+  **结论用我们自己的日线重算**, 不抄 TSP 的数字。口径三条:
+  ① **开盘即涨停的样本剔除** —— 那种交易根本买不进去, 留着等于对着一笔做不到的交易算收益
+  (按非 ST 比例判, 漏剔数在 `excluded_limit_up` 里如实暴露);
+  ② `r_day`=开盘买入→当日收盘, `r_next`=开盘买入→次日收盘, 缺次日数据是 None 不是 0;
+  ③ **每档 n<60 → `insufficient`; 样本够但前后半段(按日期对半切)不同向 → `unstable`; 两者都不贴徽标**,
+  只有 `stable + negative` 才在竞价涨幅下方出「追高需谨慎」, tooltip 带均值/胜率/次日/n/剔除数与**样本偏差**。
+  API `GET /api/gap-study?days=250`(缓存 1 天, 结论以周计变化); 纯函数在 `frontend/src/lib/gap-study.ts`。
+  **宇宙偏差必须跟着结果走**: 库里 1d/qfq 日线只有 168 只(自选/扫描池), 不是全 A ——
+  `universe.note` 随响应返回并写进 tooltip, 否则用户会当全市场规律用。
+- **B3 回填防污染契约(`src/core/backfill_guard.py`)**: 把 v0.5.73 事故(稀疏早年事件被当事实回填,
+  EMA+2日确认跨日传播把标定与历史规律一起带偏)当时的就地修法提成两条共用规则:
+  `coverage_gate`(覆盖不足不写, 且**排除清单必须如实返回**, 不许静默) + `purge_rows_outside`
+  (清掉表内不可信日期)。表名/列名过标识符白名单才拼 SQL(这两处不能参数绑定);
+  删除改成"先查实际存在的日期再分片 `IN`", 避开 SQLite 变量数上限; **`keep` 为空集时拒绝执行返回 0**,
+  防止门槛配错把整张表删空。`market_phase.eligible_dates/_purge_uncovered` 改为委托实现(签名与行为不变,
+  原有 `test_market_phase_borrow` 全绿即为证)。
+- **测试**: 后端 `test_gap_study.py` 6 例 + `test_backfill_guard.py` 7 例(含注入用例、空 keep 拒删、分片、
+  归一化比较); 前端 `gap-study.test.ts` 6 例(档位边界、四种 verdict 的贴/不贴、均值缺失不硬造文案)。
+- **门禁**: 前端 192 passed / 33 文件 + tsc + eslint + UI-RULES + build 全绿; 后端离线全量见部署记录。
+- [tag v0.5.80]
+
 ### chore-清掉误提交的 .deploy 历史 + 容器/研究实例清理(老板点头)
 - **历史改写(仅 `.deploy` 路径)**: `git filter-branch --index-filter 'git rm -r --cached --ignore-unmatch .deploy' --tag-name-filter cat -- --all`。先确认**只有 main 含坏提交**(601f0f3), 远端另外 6 个分支(dependabot×2 / perf-cache / resonance-retry / wave2-4)全部早于它 → 不碰不推。实际被改写的只有 `601f0f3..main` 的 **18 个提交 + 7 个标签(v0.5.73..79)**。
 - **等价性核对**: 新 `main`=433f2a4 与旧 `f5a6163` **`git diff --stat` 为空(树完全一致)**、工作区干净、`git rev-list --count main` 587 不变、`git fsck` 无错、触及模块 70 passed。**生产无需重部署**(容器里是覆盖层文件, 与树内容一致)。
