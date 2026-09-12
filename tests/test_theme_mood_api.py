@@ -184,15 +184,15 @@ class _FakeBegin:
 
 def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     rows = [
-        _FakeRow({"ts": "20260911", "symbol": "A", "open": 1, "high": 2, "low": 1, "close": 2}),
-        _FakeRow({"ts": "20260911", "symbol": "B", "open": 1, "high": None, "low": 1, "close": 2}),
+        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "A", "open": 1, "high": 2, "low": 1, "close": 2}),
+        _FakeRow({"ts": "2026-09-11 00:00:00+08:00", "symbol": "B", "open": 1, "high": None, "low": 1, "close": 2}),
     ]
     conn = _FakeConn(rows)
     fake_engine = type("E", (), {"begin": lambda self: _FakeBegin(conn)})()
     monkeypatch.setattr("src.db.session.engine", fake_engine)
     out = api._read_ohlc(["20260911"], ["A", "B"])
-    assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2}}   # B 缺 high 被丢
-    assert conn.last_params == {"dates": ("20260911",), "codes": ("A", "B")}
+    assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2}}   # B 缺 high 被丢; ts 归一回紧凑
+    assert conn.last_params == {"dates": ("2026-09-11",), "codes": ("A", "B")}  # 入参转 ISO
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
 
