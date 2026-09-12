@@ -273,65 +273,18 @@ def backfill_phase(
     start: str | None = None,
     _user: User = Depends(require_owner),
 ) -> dict:
-    """从已落库 limit_up_events 回填全部历史阶段(不依赖 vendor, 可重复执行)。
+    """从已落库 limit_up_events 回填全部历史阶段(不依赖 vendor, 幂等可重跑)。
 
-    连板数由封板事件按交易日历连续 run 派生; 封板率取 sealed/touched 真值。
-    EMA 与 2 日确认依赖完整序列, 故对**全量**历史重标后整表 upsert。
+    连板数由封板事件按交易日历连续 run 派生; 封板率取 sealed/touched 真值;
+    EMA 与 2 日确认依赖完整序列 → 全量重标。写库逻辑在 src/core/market_phase.py。
     """
-    from sqlalchemy import text as _text
+    from src.core.market_phase import scan_from_events
 
-    from src.core import market_phase as mp
-    from src.db.session import engine
-
-    db = SessionLocal()
-    try:
-        sql = ("SELECT trade_date, symbol, touched, is_sealed_close AS sealed "
-               "FROM limit_up_events" + (" WHERE trade_date >= :s" if start else ""))
-        with engine.begin() as conn:
-            ev = conn.execute(_text(sql), {"s": start} if start else {}).fetchall()
-        events = [{"trade_date": r["trade_date"], "symbol": r["symbol"],
-                   "touched": bool(r["touched"]), "sealed": bool(r["sealed"])} for r in ev]
-        dates = sorted({e["trade_date"] for e in events})
-        if not dates:
-            return {"ok": False, "reason": "无涨停事件可回填"}
-        rows = mp.metrics_rows_from_events(dates, events)
-        labelled = mp.classify_phase_series_full(rows)
-        _thr, calibrated = mp.calibrate(rows)
-
-        existing = {r.date: r for r in db.query(MarketPhaseDaily).all()}
-        written = 0
-        for row, lab in zip(rows, labelled):
-            d = datetime.strptime(row["date"], "%Y%m%d").date()
-            rec = existing.get(d)
-            if rec is None:
-                rec = MarketPhaseDaily(date=d)
-                db.add(rec)
-            rec.first_board = row["first_board"]
-            rec.ge2_count = row["ge2_count"]
-            rec.ge3_count = row["ge3_count"]
-            rec.ge5_count = row["ge5_count"]
-            rec.max_height = row["max_height"]
-            rec.promo_rate = row["promo_rate"]
-            rec.seal_rate = row["seal_rate"]
-            rec.completeness = row["completeness"]
-            rec.phase = lab["phase"]
-            rec.phase_raw = lab["phase_raw"]
-            written += 1
-        db.commit()
-        biz_cache.delete(_PHASE_CACHE_KEY)
-        segs = mp.segmentize([dict(r, phase=lab["phase"]) for r, lab in zip(rows, labelled)])
-        return {
-            "ok": True, "days": written, "segments": len(segs),
-            "calibrated": calibrated,
-            "note": (f"回填 {written} 天; 阈值{'已用自有历史标定' if calibrated else '沿用默认(历史不足)'}; "
-                     f"共 {len(segs)} 段"),
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.exception("[market-phase-backfill] 回填失败")
-        db.rollback()
-        raise HTTPException(502, f"阶段回填失败: {e!r}")
-    finally:
-        db.close()
+    out = scan_from_events(start=start)
+    if not out.get("ok"):
+        raise HTTPException(502, out.get("reason") or "回填失败")
+    biz_cache.delete(_PHASE_CACHE_KEY)
+    return out
 
 
 @router.get("/phase/segments")
