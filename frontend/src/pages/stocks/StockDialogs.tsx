@@ -1,4 +1,3 @@
-import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 import { KlineSummaryDialog } from '@panwatch/biz-ui/components/kline-summary-dialog'
 import { MinuteDialog } from '@panwatch/biz-ui/components/minute-dialog'
@@ -18,12 +17,6 @@ export function StockDialogs() {
     minuteDialogSymbol,
     minuteDialogMarket,
     minuteDialogName,
-    insightOpen,
-    setInsightOpen,
-    insightSymbol,
-    insightMarket,
-    insightName,
-    insightHasPosition,
     deepAnalysisTarget,
     setDeepAnalysisTarget,
   } = useStocks()
@@ -46,15 +39,6 @@ export function StockDialogs() {
   symbol={minuteDialogSymbol}
   market={minuteDialogMarket}
   stockName={minuteDialogName}
-/>
-
-<StockInsightModal
-  open={insightOpen}
-  onOpenChange={setInsightOpen}
-  symbol={insightSymbol}
-  market={insightMarket}
-  stockName={insightName}
-  hasPosition={insightHasPosition}
 />
 
 {/* TradingAgents 深度分析弹窗 */}

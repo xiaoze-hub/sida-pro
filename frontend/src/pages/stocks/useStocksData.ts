@@ -70,11 +70,6 @@ export function useStocksData(state: ReturnType<typeof useStocksState>) {
     setMinuteDialogSymbol,
     setMinuteDialogMarket,
     setMinuteDialogName,
-    setInsightOpen,
-    setInsightSymbol,
-    setInsightMarket,
-    setInsightName,
-    setInsightHasPosition,
     setStockCtxMenu,
     setMarketStatus,
     klineRefreshInFlight,
@@ -442,16 +437,14 @@ const openNewsDialog = useCallback((stockName?: string) => {
   loadNews(stockName)
 }, [loadNews, setNewsDialogOpen, setNewsDialogSymbol])
 
-const openStockDetail = useCallback((stockSymbol: string, stockMarket: string, stockName?: string, hasPosition?: boolean) => {
-  setInsightSymbol(stockSymbol)
-  setInsightMarket(stockMarket || 'CN')
-  setInsightName(stockName)
-  setInsightHasPosition(!!hasPosition)
-  setInsightOpen(true)
-}, [setInsightHasPosition, setInsightMarket, setInsightName, setInsightOpen, setInsightSymbol])
+const navigate = useNavigate()
+
+const openStockDetail = useCallback((stockSymbol: string, _stockMarket: string, _stockName?: string, _hasPosition?: boolean) => {
+  // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol
+  if (stockSymbol) navigate(`/stocks/${encodeURIComponent(stockSymbol)}`)
+}, [navigate])
 
 // ========== PC 右键菜单 ==========
-const navigate = useNavigate()
 
 const openStockContextMenu = useCallback((e: React.MouseEvent, stock: StockContextTarget) => {
   e.preventDefault()

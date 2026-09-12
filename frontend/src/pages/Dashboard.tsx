@@ -32,7 +32,6 @@ import {
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Skeleton } from '@panwatch/base-ui/components/ui/skeleton'
 import { Onboarding } from '@panwatch/biz-ui/components/onboarding'
-import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
 import MarketPhaseCard from '@panwatch/biz-ui/components/MarketPhaseCard'
 import MarketMainlineCard from '@panwatch/biz-ui/components/MarketMainlineCard'
@@ -236,13 +235,6 @@ export default function DashboardPage() {
   // 改由头部"新手引导"按钮主动触发, localStorage 标志仍用于标记"已看过"以避免重复打扰
   const [showOnboarding, setShowOnboarding] = useState(false)
   const openOnboarding = useCallback(() => setShowOnboarding(true), [])
-  const [modal, setModal] = useState<{ open: boolean; symbol: string; market: string; name: string; hasPosition: boolean }>({
-    open: false,
-    symbol: '',
-    market: 'CN',
-    name: '',
-    hasPosition: false,
-  })
 
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
   const loadBench = useCallback(() => {
@@ -378,8 +370,10 @@ export default function DashboardPage() {
   // 异动池/热榜等数据源返回 SH/SZ/BJ(交易所代码),行情接口统一按 A股 CN 处理
   const normalizeMarket = useCallback((m: string) => (['SH', 'SZ', 'BJ'].includes((m || '').toUpperCase()) ? 'CN' : m || 'CN'), [])
 
-  const openStock = useCallback((symbol: string, market: string, name = '', hasPosition = false) =>
-    setModal({ open: true, symbol, market: normalizeMarket(market), name, hasPosition }), [normalizeMarket])
+  // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol
+  const openStock = useCallback((symbol: string, _market: string, _name = '', _hasPosition = false) => {
+    if (symbol) navigate(`/stocks/${encodeURIComponent(symbol)}`)
+  }, [navigate])
 
   // ========== PC 右键菜单 ==========
   const [stockCtxMenu, setStockCtxMenu] = useState<StockContextMenuState | null>(null)
@@ -1173,15 +1167,6 @@ export default function DashboardPage() {
         onToggle={toggleModuleById}
         onMove={moveModuleById}
         onReset={resetModules}
-      />
-
-      <StockInsightModal
-        open={modal.open}
-        onOpenChange={(o) => setModal((m) => ({ ...m, open: o }))}
-        symbol={modal.symbol}
-        market={modal.market}
-        stockName={modal.name}
-        hasPosition={modal.hasPosition}
       />
 
       {/* 分享卡:模拟盘成绩单(vs 基准) */}

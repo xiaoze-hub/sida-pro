@@ -24,7 +24,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/compo
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { useLocalStorage } from '@/lib/utils'
-import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
+import { useNavigate } from 'react-router-dom'
+import StockHoverPreview, { type HoverPreviewData } from '@panwatch/biz-ui/components/StockHoverPreview'
 import FactorWeightsPanel from '@/components/FactorWeightsPanel'
 import SignalScoreShareCard from '@/components/SignalScoreShareCard'
 import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
@@ -375,12 +376,6 @@ export default function OpportunitiesPage() {
   // 选股工具 tab: 共振查询(默认)/ 策略选股 / 问小达 / 问财
   const [toolTab, setToolTab] = useLocalStorage<ToolTab>('panwatch_opportunities_tool_tab_v1', 'resonance')
 
-  const [insightOpen, setInsightOpen] = useState(false)
-  const [insightSymbol, setInsightSymbol] = useState('')
-  const [insightMarket, setInsightMarket] = useState('CN')
-  const [insightName, setInsightName] = useState<string | undefined>(undefined)
-  const [insightHasPosition, setInsightHasPosition] = useState(false)
-
   // 个股 AI 评分分享卡:当前分享的信号
   const [shareSignal, setShareSignal] = useState<StrategySignalItem | null>(null)
 
@@ -510,22 +505,25 @@ export default function OpportunitiesPage() {
     }
   }, [scanStrategyId, market, scanUniverse])
 
-  const openInsight = useCallback((item: StrategySignalItem) => {
-    setInsightSymbol(item.stock_symbol)
-    setInsightMarket(item.stock_market || 'CN')
-    setInsightName(item.stock_name)
-    setInsightHasPosition(!!item.is_holding_snapshot)
-    setInsightOpen(true)
-  }, [])
+  const navigate = useNavigate()
+  const [hover, setHover] = useState<HoverPreviewData | null>(null)
+  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 })
 
-  // 竞价异动 Tab 行点击 → 打开相同的个股洞察弹窗(2026-08-20)
-  const openAuctionDetail = useCallback((symbol: string, market: string, name?: string) => {
-    setInsightSymbol(symbol)
-    setInsightMarket(market || 'CN')
-    setInsightName(name)
-    setInsightHasPosition(false)
-    setInsightOpen(true)
+  // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol; 悬停出预览卡
+  const openInsight = useCallback((item: StrategySignalItem) => {
+    navigate(`/stocks/${encodeURIComponent(item.stock_symbol)}`)
+  }, [navigate])
+
+  // 竞价异动 Tab 行点击 → 个股工作台(原弹窗)
+  const openAuctionDetail = useCallback((symbol: string, _market: string, _name?: string) => {
+    navigate(`/stocks/${encodeURIComponent(symbol)}`)
+  }, [navigate])
+
+  const showHover = useCallback((symbol: string, name: string | undefined, e: React.MouseEvent) => {
+    setHover({ symbol, name })
+    setHoverPos({ x: e.clientX, y: e.clientY })
   }, [])
+  const hideHover = useCallback(() => setHover(null), [])
 
   const loadWatchlist = useCallback(async () => {
     try {
@@ -1209,7 +1207,7 @@ export default function OpportunitiesPage() {
       </div>
 
       {viewMode === 'abnormal' ? (
-        <AbnormalMovesCard />
+        <AbnormalMovesCard onOpenDetail={(symbol) => navigate(`/stocks/${encodeURIComponent(symbol)}`)} />
       ) : viewMode === 'auction' ? (
         <AuctionAnomalyTab market="CN" onOpenDetail={openAuctionDetail} />
       ) : (
@@ -1612,7 +1610,11 @@ export default function OpportunitiesPage() {
                       const d = it.current_data || {}
                       const num = (v: unknown) => (v == null || Number.isNaN(Number(v)) ? '--' : Number(v).toFixed(2))
                       return (
-                        <tr key={it.symbol} className="border-b border-border/30 hover:bg-accent/40 cursor-pointer" onClick={() => openInsight({
+                        <tr key={it.symbol} className="border-b border-border/30 hover:bg-accent/40 cursor-pointer"
+                          onMouseEnter={(e) => showHover(it.symbol, it.name, e)}
+                          onMouseMove={(e) => showHover(it.symbol, it.name, e)}
+                          onMouseLeave={hideHover}
+                          onClick={() => openInsight({
                           stock_symbol: it.symbol,
                           stock_market: (it.market || 'CN') as 'CN',
                           stock_name: it.name,
@@ -1701,6 +1703,9 @@ export default function OpportunitiesPage() {
                           key={`${code}-${i}`}
                           type="button"
                           disabled={!clickable}
+                          onMouseEnter={(e) => clickable && showHover(code, name, e)}
+                          onMouseMove={(e) => clickable && showHover(code, name, e)}
+                          onMouseLeave={hideHover}
                           onClick={() => clickable && openInsight({
                             stock_symbol: code,
                             stock_market: 'CN',
@@ -2169,14 +2174,7 @@ export default function OpportunitiesPage() {
       </>
       )}
 
-      <StockInsightModal
-        open={insightOpen}
-        onOpenChange={setInsightOpen}
-        symbol={insightSymbol}
-        market={insightMarket}
-        stockName={insightName}
-        hasPosition={insightHasPosition}
-      />
+      <StockHoverPreview data={hover} x={hoverPos.x} y={hoverPos.y} />
 
       {shareSignal && (
         <SignalScoreShareCard

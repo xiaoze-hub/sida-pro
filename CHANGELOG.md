@@ -7,6 +7,15 @@
 
 ## 2026-09-13
 
+### feat-工作台③: 个股模态降级为 hover 预览 + 点击跳整页工作台; v0.5.93
+- **背景**: 老板否掉"卡片堆叠逐层点击"的个股详情模态; 新路由 `/stocks/:symbol`(StockWorkbench, 图为主+右栏平铺)已上线(①②), 本批收口③——把残留的 `StockInsightModal` 入口全部改为"悬停出预览卡 / 点击跳工作台"。
+- **新组件** `packages/biz-ui/.../StockHoverPreview.tsx`: 悬停个股行浮现(现价/涨跌/封单/PE(TTM)/连板数/板块 chips + "点击进个股工作台"); 数据 on-demand 单股拉 `/stocks/{sym}/l2` + `/blocks`, 缺值 `--` 不编, 不轮询; effect 以 `symbol` 为键(mousemove 不重复拉)。
+- **接线**: `Opportunities`(扫描结果行 + 问小达结果 + 异动预警卡 onOpenDetail)、`Dashboard`(openStock)、`pages/stocks`(持仓/自选 openStockDetail)的个股点击统一 `navigate('/stocks/:symbol')`; 悬停行挂 showHover/hideHover。
+- **删除死代码**: `stock-insight-modal.tsx` + 整个 `insight/` 目录(18 文件, 仅自引用) + `ui-rules-baseline.json` 中 5 条 insight 存量; `StockDialogs`/`useStocksData` 摘除 insight 状态。
+- **门禁**: 前端 tsc / eslint / UI-RULES / vitest **207** 全绿。
+- **待办**: 周一(2026-09-14)盘中实测 hover 预览 + 工作台 L2/fundamental/blocks live; 断源演练; 全市场日线回填覆盖核对。
+- [tag v0.5.93]
+
 ### feat-通达信 P2 数据接入(基本面/股本/次新) + 日历每日交叉; v0.5.92
 - **探针**: `get_report_data` MCP 不支持 → **研报卡不做**(老板知情); `get_financial_data` 需客户端先下载专业财务数据+field_list → 不接;
   `get_ipo_info` 是"今天及未来新股申购"(非个股次新) → 次新改用 `get_stock_info.J_start`(上市日期<365天)。
