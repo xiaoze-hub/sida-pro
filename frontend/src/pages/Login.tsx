@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { TrendingUp, Lock, Eye, EyeOff, User } from 'lucide-react'
+import { BrandMark } from '@/components/BrandMark'
+import { Lock, Eye, EyeOff, User } from 'lucide-react'
 import { authApi, fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -99,7 +100,7 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mb-4">
-            <TrendingUp className="w-8 h-8 text-white" />
+            <BrandMark className="w-9 h-9 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-foreground">数智分析 SIDA</h1>
           <p className="text-sm text-muted-foreground mt-1">A股智能分析 · AI 全链路打通</p>

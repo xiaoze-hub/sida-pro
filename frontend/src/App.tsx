@@ -39,6 +39,7 @@ import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
+import { BrandMark } from '@/components/BrandMark'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
@@ -324,7 +325,7 @@ function App() {
         <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
           <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
-              <TrendingUp className="w-4 h-4 text-white" />
+              <BrandMark className="w-4 h-4 text-white" />
             </div>
             {!sidebarCollapsed && (
               <>
@@ -416,7 +417,7 @@ function App() {
           <div className="h-12 flex items-center justify-between">
             <NavLink to="/" className="flex items-center gap-2 group">
               <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
-                <TrendingUp className="w-3.5 h-3.5 text-white" />
+                <BrandMark className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="text-[14px] font-bold text-foreground">数智分析</span>
               {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
