@@ -7,6 +7,12 @@
 
 ## 2026-09-12
 
+### refactor-市场情绪回填的写库逻辑收口到 core 层; v0.5.72
+- v0.5.71 的 `POST /api/market/phase/backfill` 一开始把"读事件→派生→重标→upsert"写在 API 层里, 与 `theme_mood`/`market_phase` 既有分层(API 薄、口径与写库在 core)不一致, 也没法给脚本/未来 cron 复用。
+- 改为 core 层 `market_phase.scan_from_events(start=None, write=True)`(含 `_read_events` 与幂等 `ON CONFLICT(date)` upsert; **不动 `sh_index_pct`** —— 那是 vendor 同步写的, 回填没有当日指数数据), API 只调用 + 清缓存 + 失败转 502。
+- 测试: 后端本模块 37 passed; 语法/导入检查通过。
+- [tag v0.5.72]
+
 ### feat-市场级情绪周期回填 + 阶段规律面板; 候选池成员数过滤; 空态/涨跌色治理; v0.5.71
 - **来源**: 借鉴 `tick-stock-panel` 借鉴清单第一批 A1~A5 + D3/D4(研究档案 `C:\Users\tianxiang\sida-research\tick-stock-panel-全系统研究.md`, 老板"按计划全做")。
 - **关键发现(省掉一大截工作)**: SIDA **2026-08-24 就有** 6 阶段引擎 `src/core/market_phase.py`(EMA α=1/3 + 2 日确认 + 弱档否决, 与 TSP 同源), 缺的不是算法而是**历史** —— `market_phase_daily` 只有 11 天(每日 vendor sync 攒的), 阶段规律/分位无从谈起; 而 `limit_up_events` 有 **328 个有效交易日** → 补一条"从已落库事件回填"的路即可, **不依赖 vendor**。

@@ -605,3 +605,78 @@ def percentile_of(value: float | None, samples: Sequence[float]) -> int | None:
         return None
     below = sum(1 for s in samples if s < value)
     return int(round(100 * below / len(samples)))
+
+
+# ─────────────────── IO: 从已落库涨停事件回填(不依赖 vendor) ───────────────────
+def _read_events(start: str | None = None) -> list[dict]:
+    from sqlalchemy import text
+
+    from src.db.session import engine
+
+    sql = ("SELECT trade_date, symbol, touched, is_sealed_close AS sealed FROM limit_up_events"
+           + (" WHERE trade_date >= :s" if start else ""))
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"s": start} if start else {}).fetchall()
+    return [{"trade_date": r["trade_date"], "symbol": r["symbol"],
+             "touched": bool(r["touched"]), "sealed": bool(r["sealed"])} for r in rows]
+
+
+_UPSERT = """
+INSERT INTO market_phase_daily (date, first_board, ge2_count, ge3_count, ge5_count, max_height,
+                                promo_rate, seal_rate, completeness, phase, phase_raw)
+VALUES (:date, :first_board, :ge2_count, :ge3_count, :ge5_count, :max_height,
+        :promo_rate, :seal_rate, :completeness, :phase, :phase_raw)
+ON CONFLICT(date) DO UPDATE SET
+  first_board = EXCLUDED.first_board, ge2_count = EXCLUDED.ge2_count,
+  ge3_count = EXCLUDED.ge3_count, ge5_count = EXCLUDED.ge5_count,
+  max_height = EXCLUDED.max_height, promo_rate = EXCLUDED.promo_rate,
+  seal_rate = EXCLUDED.seal_rate, completeness = EXCLUDED.completeness,
+  phase = EXCLUDED.phase, phase_raw = EXCLUDED.phase_raw,
+  updated_at = CURRENT_TIMESTAMP
+"""
+
+
+def scan_from_events(*, start: str | None = None, write: bool = True) -> dict:
+    """回填市场情绪周期: 读 limit_up_events → 派生梯队 → 全量重标 → upsert。
+
+    为什么全量重标而不是增量: EMA 平滑与 2 日确认都依赖完整序列(与 TSP 的
+    refresh_phase_labels 同一取舍), 而全量只有几百行, 开销可忽略。
+    不动 `sh_index_pct`(那是 vendor 同步写的, 回填没有当日指数数据)。
+    """
+    from sqlalchemy import text
+
+    from src.db.session import engine
+
+    try:
+        events = _read_events(start)
+        dates = sorted({e["trade_date"] for e in events})
+        if not dates:
+            return {"ok": False, "reason": "无涨停事件可回填"}
+        rows = metrics_rows_from_events(dates, events)
+        labelled = classify_phase_series_full(rows)
+        thr, calibrated = calibrate(rows)
+        payload = []
+        for r, lab in zip(rows, labelled):
+            payload.append({
+                "date": f"{r['date'][:4]}-{r['date'][4:6]}-{r['date'][6:]}",
+                "first_board": r["first_board"], "ge2_count": r["ge2_count"],
+                "ge3_count": r["ge3_count"], "ge5_count": r["ge5_count"],
+                "max_height": r["max_height"], "promo_rate": r["promo_rate"],
+                "seal_rate": r["seal_rate"], "completeness": r["completeness"],
+                "phase": lab["phase"], "phase_raw": lab["phase_raw"],
+            })
+        if write:
+            with engine.begin() as conn:
+                for p in payload:
+                    conn.execute(text(_UPSERT), p)
+        segs = segmentize([dict(p, phase=p["phase"]) for p in payload])
+        return {
+            "ok": True, "days": len(payload), "segments": len(segs), "calibrated": calibrated,
+            "latest_phase": payload[-1]["phase"] if payload else None,
+            "note": (f"回填 {len(payload)} 天({dates[0]}~{dates[-1]}); 阈值"
+                     + ("已用自有历史分位标定" if calibrated else "沿用默认(历史<120天)")
+                     + f"; 共 {len(segs)} 段; 阈值集 {sorted(thr)[:2]}…"),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("市场情绪周期回填异常: %s", e)
+        return {"ok": False, "reason": str(e)}
