@@ -7,6 +7,16 @@
 
 ## 2026-09-12
 
+### update-v0.5.78 + v0.5.79 生产部署(策略参数自描述 + 副图信息栏; 顺手治好行情页整页崩; 冒烟 10/10)
+- **部署链**: 备份 `/root/app_backup_pre_v0578_20260912.tar.gz`(20.98MB) → v0.5.78 全量覆盖层(19.1MB, `tar xzf --overwrite` → `chown -R app:app` → `compileall` → restart, 无迁移) → v0.5.79 **静态面无重启**(`docker cp dist→/app/static/` + `VERSION` + chown)。`/api/version` = **v0.5.79**, 容器 healthy, index.html 已指向新 chunk `index-CfrJrSlZ.js`。
+- **C2 生产实测**: `/strategies/list` 9 条策略**全部带 params**; `capital_heat` 表单 6 项含 meta 覆盖后的 `追高上限`(带 help)与 `资金启动下限`。`/strategies/apply` 对 002361(当日 -0.87%, 量比 0.73): 原值 `passed=False` 失败项含 `change_pct≥1.0` 与 `volume_ratio≥1.5`; 覆盖 `{change_pct_min:-5, volume_ratio_min:0.5}` → **passed=True 且失败项清空**; 覆盖 `{price_min:500}` → 新增失败项 `current_price 10.21 min 500`; 未声明键 `{made_up_key:5}` → 与原值**逐字段相同**。浏览器侧: 双低策略详情渲染出 **10 个** 带 min/max/step/单位的输入框(未写一行逐策略表单代码)。
+- **D1 生产实测**: `/index/000001` 图上方信息栏读到 `MACD(12,26,9) DIF 1.823 DEA 5.452 柱 -7.259 | RSI(6) 强弱 22.1 区 超卖`(柱为负显绿、超卖分区正确)。**行情页大图(KlineChart)尚未接上**, 其副图集合不同 → 已登记 **KI-056**。
+- **走查中挖出的整页崩(先复现后修, v0.5.79)**: `/quote/600519` 与 `/quote/002361` **都**直接进错误边界 `Value is null`(栈停在 `setMarkers`)。与 v0.5.78 无关(`git diff v0.5.77..v0.5.78` 未碰 KlineChart/Quote), 是 LWC v5 对"marker 时间落在首/末根 K 线之外"必抛的既有坑, **只在非交易日触发**(当天有公告、当天没 K 线)。修后浏览器复测: `crashed=false`, 页面正常出图。
+- **顺带修的第二个洞**: 前端报错上报地址拼错成 `/api/api/logs/frontend` → 恒 405, 即 **09-08 以来前端崩溃在服务端零记录**(否则这个崩早该在 系统→错误 里看到)。
+- **门禁**: 后端 `pytest -m "not network"` = 2196 passed / 7 failed(与 KI-055 存量逐条相同, F 计数=FAILED 行=7); 前端 **186 passed / 32 文件** + tsc + eslint + UI-RULES + build 全绿。
+- **走查清理**: 临时账号 `qav0578`(含 600519 自选)已删, users 回到 5 个真实账号、无孤儿自选; 容器 `/tmp/{qa_v0578.py,qa_v0578_pass,v0578.tar.gz,V79}` 与 WSL `/tmp/V79` 已删; 浏览器 localStorage 已清; 本机 `stage77/stage78` 目录已删。**容器 /tmp 仍有历次诊断脚本与 v0572/v0575 部署包(~310MB, 非本次产生)** —— 等老板点头再清。
+- [tag v0.5.78 / v0.5.79 已推 origin]
+
 ### fix-行情页整页崩(Value is null)+ 前端报错上报恒 405; v0.5.79
 - **怎么发现的**: v0.5.78 走查 D1 时打开 `/quote/600519` 直接白到错误边界("页面遇到了问题 · Value is null"), 顺手确认 `/quote/002361` 同样崩 —— **与 v0.5.78 无关**(`git diff v0.5.77..v0.5.78` 未碰 KlineChart/Quote, 崩在 KlineChart 的 marker 路径), 是一直存在的坑, 只在**非交易日**踩到。
 - **根因**: lightweight-charts v5 的 `setMarkers` 对**时间落在首/末根 K 线之外**的 marker 会在转换时拿到 null 并抛错 → 整页进错误边界。生产数据正好命中: 600519 当天(周六 09-12)有一条公告事件, 而最后一根 K 线是 09-11。同类坑此前只治了一半 —— `KlineChart.load` 已过滤 OHLC 为 null 的 K 线行(注释里就写着"lightweight-charts setData 遇 null 直接抛 Value is null"), 但 marker 侧没人管。

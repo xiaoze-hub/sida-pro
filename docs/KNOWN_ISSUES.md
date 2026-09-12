@@ -52,6 +52,7 @@
 | KI-047 | P3 | 板块异动阈值为暂定值(涨速±0.5%/量比2.0)且仅盘中生效, 待实盘观察调优 | 2026-09-10 | TianXiang |
 | KI-048 | P3 | 通达信云数据(板块异动类型/轮动系数等)需客户端数据权限, TQ 接口当前返空 | 2026-09-10 | TianXiang |
 | KI-055 | P2 | 离线门禁存量 7 红(日历相关断言/缺包/用例间 mock 污染), 与 v0.5.76 无关 | 2026-09-12 | TianXiang |
+| KI-056 | P3 | 行情页大图(KlineChart)还没有每 pane 信息栏 —— 只有 InteractiveKline 有 |
 
 ## 详情
 
@@ -291,6 +292,15 @@
 - 涉及文件: 上述三个测试文件。
 - 建议修复: ①把用例时间基准改成注入的固定日期(不依赖 `date.today()`); ②`tradingagents` 缺失时 `pytest.importorskip`; ③给 thsdk buffer 用例补 `@pytest.mark.network` 并修 mock 隔离(它现在会在整套跑时真连外网)。
 
+### KI-056 KlineChart(行情页大图)还没有每 pane 信息栏 (P3)
+
+- 发现: 2026-09-12(v0.5.79 走查 D1 时实测)
+- 现象: D1 的"每 pane 信息栏"只落在 `InteractiveKline`(指数详情/分析详情/模拟盘/洞察模态用), 而**行情页 `/quote/:symbol` 的大图用的是 `KlineChart`** —— 生产实测 `/quote/600519` 页面上找不到 `MACD(12,26,9)` / `RSI(6)` 任何一条栏。
+- 为什么没顺手做: 两个图表的副图集合不同 —— `KlineChart` 是 `vol | macd | active_ratio | phase | activity`(且 RSI 根本没算), `InteractiveKline` 是 `vol | macd | rsi`。注册表 `lib/subcharts.ts` 现在只描述后者, 直接套会把不存在的读数写成 `--`。
+- 影响: 老板最常看的那张大图拿不到"悬停那根的副图读数", D1 的价值只兑现了一半。
+- 涉及文件: frontend/packages/biz-ui/src/lib/subcharts.ts、frontend/packages/biz-ui/src/components/KlineChart.tsx。
+- 建议修复: 把注册表按 chart 分组(或给 def 加 `series` 字段标明属于哪个图), 为 KlineChart 声明 vol/macd/active/phase 四类读数, 再接它已有的 `subscribeCrosshairMove`(350 行)把 hover 索引提到 state 渲染条带; 与 [[个股详情整页工作台]] 的图表主体改造合并做最省。
+
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
 复现命令:
@@ -378,3 +388,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-12(v0.5.76 生产走查)**: 新增 **KI-049..055** 共 7 条 —— P2×4(矩阵成功率列口径 KI-050 / 作业面板无入口 KI-053 / 扫描器不上报进度 KI-054 / 离线门禁存量 7 红 KI-055) + P3×3(双 v 前缀 KI-049 / 能力胶囊错路由 KI-051 / 首页标题竖排 KI-052), 台账 **40 条在册(P1×3/P2×21/P3×16)**。全部来自真机走查与端到端实测, 非静态审阅。
 
 **2026-09-12(v0.5.77 收口)**: **KI-049/050/051/052/053/054 六条修复移入 CHANGELOG**(其中 KI-050 改了契约: `/capabilities` 新增 `verdict` 与 `min_samples`; KI-054 新增 `JobStore.progress_reporter` 心跳), 台账 **34 条在册(P1×3/P2×18/P3×13)**; 本轮仅 **KI-055(离线门禁存量 7 红)** 保留开启。
+
+**2026-09-12(v0.5.78/79)**: 新增 **KI-056**(行情页大图还没有每 pane 信息栏, 注册表目前只覆盖 InteractiveKline 的副图集合), 台账 **35 条在册(P1×3/P2×18/P3×14)**; 同日修复并移入 CHANGELOG 的两项(行情页 marker 越界整页崩、前端报错上报恒 405)因从未登记过, 直接记在 CHANGELOG。
