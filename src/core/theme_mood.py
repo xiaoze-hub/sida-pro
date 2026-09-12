@@ -244,6 +244,25 @@ def align_cells(cells: list[dict] | None, dates: list[str]) -> list[dict]:
     return out
 
 
+def market_series(rows: list[dict], dates: list[str], top_n: int = 20) -> list[dict]:
+    """强势情绪走势(周期表顶部曲线): 每个交易日情绪分前 top_n 名的均值。
+
+    不用全体题材均值 —— 521 个题材里多数长期休眠(贴 50 中性), 均值被压成 49~53 的直线;
+    前 top_n 是"领先端", 才有周期形态(实测 67.9 → 83.8 → 71.7)。缺该交易日 → score=None。
+    """
+    by_date: dict[str, list[float]] = {}
+    for r in rows:
+        d, s = r.get("trade_date"), r.get("score")
+        if d is None or s is None:
+            continue
+        by_date.setdefault(d, []).append(float(s))
+    out = []
+    for d in dates:
+        vals = sorted(by_date.get(d) or [], reverse=True)[: int(top_n)]
+        out.append({"date": d, "score": round(sum(vals) / len(vals), 1) if vals else None})
+    return out
+
+
 def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_sealed: list,
                       s1_history: list, sealed_history: list, prev: dict, core_candidates: list) -> dict:
     """单题材单日装配(纯函数): 五维 → 总分/置信度/核心/明细/广度。"""

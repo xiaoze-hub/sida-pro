@@ -12,8 +12,10 @@ import src.web.api.theme_mood as api
 from src.web.response import ResponseWrapperMiddleware
 
 
-def _client(monkeypatch, rows, detail=None, latest="20260911", dates=("20260910", "20260911")):
-    monkeypatch.setattr(api, "_board_data", lambda window, top: {"dates": list(dates), "items": rows})
+def _client(monkeypatch, rows, detail=None, latest="20260911", dates=("20260910", "20260911"), market=None):
+    mkt = market if market is not None else [{"date": d, "score": None} for d in dates]
+    monkeypatch.setattr(api, "_board_data",
+                        lambda window, top: {"dates": list(dates), "items": rows, "market": mkt})
     monkeypatch.setattr(api, "_latest_date", lambda: latest)
     if detail is not None:
         monkeypatch.setattr(api, "_detail_rows", lambda code, days: detail)
@@ -32,7 +34,8 @@ ROWS = [
 
 
 def test_board_contract(monkeypatch):
-    c = _client(monkeypatch, ROWS)
+    c = _client(monkeypatch, ROWS, market=[{"date": "20260910", "score": 71.5},
+                                           {"date": "20260911", "score": 71.7}])
     r = c.get("/api/theme-mood/board?window=20&top=15")
     assert r.status_code == 200
     j = r.json()
@@ -41,6 +44,8 @@ def test_board_contract(monkeypatch):
     assert d["trade_date"] == "20260911" and len(d["items"]) == 1
     assert d["dates"] == ["20260910", "20260911"]
     assert d["items"][0]["block_code"] == "881101.SH" and d["items"][0]["core"] is True
+    # 走势曲线与轴同长同序(前端逐列取点)
+    assert d["market"] == [{"date": "20260910", "score": 71.5}, {"date": "20260911", "score": 71.7}]
 
 
 def test_board_validates_params(monkeypatch):
@@ -52,7 +57,7 @@ def test_board_validates_params(monkeypatch):
 def test_board_empty_state(monkeypatch):
     c = _client(monkeypatch, [], latest=None, dates=())
     d = c.get("/api/theme-mood/board").json()["data"]
-    assert d["trade_date"] is None and d["items"] == [] and d["dates"] == []
+    assert d["trade_date"] is None and d["items"] == [] and d["dates"] == [] and d["market"] == []
 
 
 def test_detail_not_found_and_found(monkeypatch):

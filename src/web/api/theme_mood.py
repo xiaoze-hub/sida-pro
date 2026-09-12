@@ -49,18 +49,18 @@ def _latest_date() -> str | None:
 
 
 def _board_data(window: int, top: int) -> dict:
-    """Top 榜 + 每题材按共享日期轴对齐的 matrix cells; 无数据 → {"dates": [], "items": []}。"""
-    from src.core.theme_mood import align_cells, rank_items
+    """Top 榜 + 每题材按共享日期轴对齐的 matrix cells + 强势情绪走势; 无数据 → 空结构。"""
+    from src.core.theme_mood import align_cells, market_series, rank_items
 
     days = _read("SELECT DISTINCT trade_date FROM theme_mood_daily ORDER BY trade_date DESC LIMIT :n",
                  {"n": int(window)})
     dates = sorted([d["trade_date"] for d in days])
     if not dates:
-        return {"dates": [], "items": []}
+        return {"dates": [], "items": [], "market": []}
     latest = dates[-1]
     rows = _read("SELECT * FROM theme_mood_daily WHERE trade_date = :d", {"d": latest})
     if not rows:
-        return {"dates": [], "items": []}
+        return {"dates": [], "items": [], "market": []}
     prev = dates[-2] if len(dates) > 1 else None
     prev_map: dict[str, float] = {}
     if prev:
@@ -96,7 +96,7 @@ def _board_data(window: int, top: int) -> dict:
     ranked = rank_items(items)[: int(top)]
     for it in ranked:
         it["cells"] = align_cells(it["cells"], dates)
-    return {"dates": dates, "items": ranked}
+    return {"dates": dates, "items": ranked, "market": market_series(hist, dates)}
 
 
 def _detail_rows(block_code: str, days: int) -> list[dict]:
@@ -146,7 +146,7 @@ def get_board(window: int = Query(20), top: int = Query(15)):
         raise HTTPException(400, f"window 仅支持 {_WINDOWS}, top 仅支持 {_TOPS}")
     data = _board_data(window, top)
     return {"trade_date": _latest_date(), "window": window, "count": len(data["items"]),
-            "dates": data["dates"], "items": data["items"]}
+            "dates": data["dates"], "items": data["items"], "market": data["market"]}
 
 
 @router.get("/detail/{block_code}")

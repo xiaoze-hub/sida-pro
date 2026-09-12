@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   axisDates,
+  axisWidth,
   cellColorClass,
   cellTextClass,
   cellsByDate,
+  columnCenterX,
   dayLabels,
   fmtScore,
   monthBands,
+  scoreTrend,
 } from '@/lib/theme-mood'
 
 describe('fmtScore', () => {
@@ -67,5 +70,53 @@ describe('cellsByDate', () => {
     const m = cellsByDate([{ date: '20260901', score: 61.0, limit_up_cnt: 2 }])
     expect(m.get('20260901')?.score).toBe(61.0)
     expect(m.get('20260902')).toBeUndefined()
+  })
+})
+
+describe('轴几何', () => {
+  it('轴宽与列中心跟色块行逐像素一致(38 格 + 2 隙)', () => {
+    expect(axisWidth(0)).toBe(0)
+    expect(axisWidth(1)).toBe(38)
+    expect(axisWidth(4)).toBe(4 * 38 + 3 * 2)
+    expect(columnCenterX(0)).toBe(19)
+    expect(columnCenterX(3)).toBe(3 * 40 + 19)
+  })
+})
+
+describe('scoreTrend', () => {
+  it('按列中心取点, 与时间轴逐列对齐', () => {
+    const t = scoreTrend([50, 60, 70], { height: 40 })!
+    expect(t.dots.map((d) => d.x)).toEqual([19, 59, 99])
+    expect(t.lines).toHaveLength(1)
+    expect(t.areas).toHaveLength(1)
+    expect(t.last?.score).toBe(70)
+    expect([t.lo, t.hi]).toEqual([50, 70])
+  })
+
+  it('空序列或全空值 → null', () => {
+    expect(scoreTrend([], { height: 40 })).toBeNull()
+    expect(scoreTrend([null, undefined], { height: 40 })).toBeNull()
+  })
+
+  it('缺交易日断线, 不跨缺口连成假直线', () => {
+    const t = scoreTrend([50, null, 70], { height: 40 })!
+    expect(t.lines).toHaveLength(2)
+    expect(t.dots.map((d) => d.i)).toEqual([0, 2])
+  })
+
+  it('平稳段有保底跨度, 不被放大成剧烈波动', () => {
+    const flat = scoreTrend([50, 51], { height: 40, minSpan: 8 })!
+    const steep = scoreTrend([20, 90], { height: 40, minSpan: 8 })!
+    const dy = (t: typeof flat) => Math.abs(t.dots[0].y - t.dots[1].y)
+    expect(dy(flat)).toBeLessThan(8)
+    expect(dy(steep)).toBeGreaterThan(20)
+  })
+
+  it('点落在绘图区内(padY 内不收越界)', () => {
+    const t = scoreTrend([10, 55, 99], { height: 40, padY: 6 })!
+    for (const d of t.dots) {
+      expect(d.y).toBeGreaterThanOrEqual(6)
+      expect(d.y).toBeLessThanOrEqual(34)
+    }
   })
 })

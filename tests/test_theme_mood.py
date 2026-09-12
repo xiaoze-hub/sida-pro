@@ -11,6 +11,39 @@ def test_module_imports():
     assert tm.WEIGHTS == {"s1": 0.28, "s2": 0.24, "s3": 0.20, "s4": 0.20, "s5": 0.08}
 
 
+def test_market_series_takes_top_n_mean():
+    rows = [
+        {"trade_date": "20260911", "score": 90.0},
+        {"trade_date": "20260911", "score": 80.0},
+        {"trade_date": "20260911", "score": 70.0},
+        {"trade_date": "20260911", "score": 60.0},
+        {"trade_date": "20260910", "score": 50.0},
+        {"trade_date": "20260910", "score": None},      # 空分不参与均值
+        {"trade_date": "20260909", "score": 40.0},      # 不在轴上 → 忽略
+    ]
+    out = tm.market_series(rows, ["20260910", "20260911"], top_n=2)
+    assert out == [{"date": "20260910", "score": 50.0}, {"date": "20260911", "score": 85.0}]
+
+
+def test_market_series_keeps_axis_with_missing_day():
+    assert tm.market_series([], ["20260911"], top_n=2) == [{"date": "20260911", "score": None}]
+    assert tm.market_series([], [], top_n=2) == []
+
+
+def test_market_series_tracks_leading_edge_not_flat_mean():
+    """全体均值被休眠题材摊平(实测 49~53), 前 N 均值才跟得住强势端(实测 68~84)。"""
+    rows = []
+    for d in ("20260910", "20260911"):
+        rows += [{"trade_date": d, "score": 80.0 + (5.0 if d == "20260911" else 0.0)} for _ in range(20)]
+        rows += [{"trade_date": d, "score": 50.0} for _ in range(500)]
+    top = [r["score"] for r in tm.market_series(rows, ["20260910", "20260911"], top_n=20)]
+    all_mean = [round(sum(r["score"] for r in rows if r["trade_date"] == d) /
+                      len([r for r in rows if r["trade_date"] == d]), 1)
+                for d in ("20260910", "20260911")]
+    assert top == [80.0, 85.0]
+    assert (all_mean[1] - all_mean[0]) < (top[1] - top[0])
+
+
 def test_anchor_map_clamps_and_interpolates():
     anchors = [(0, 0), (2, 40), (5, 100)]
     assert tm.anchor_map(None, anchors) == 50.0          # 缺值 → 中性
