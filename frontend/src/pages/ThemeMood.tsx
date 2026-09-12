@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import {
   AXIS_CELL_W,
@@ -88,6 +88,16 @@ export default function ThemeMoodPage() {
   const detail = items.find((it) => it.block_code === active) ?? null
   const dims = detail ? [detail.s1, detail.s2, detail.s3, detail.s4, detail.s5] : []
 
+  // 时间轴默认对齐"最新"一端; 仅轴长度变化(首次加载/切窗口)时回滚, 轮询刷新不动用户的滚动位置。
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const lastAxisLen = useRef(0)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || axis.length === 0 || axis.length === lastAxisLen.current) return
+    lastAxisLen.current = axis.length
+    el.scrollLeft = el.scrollWidth
+  }, [axis.length])
+
   return (
     <div className="mx-auto max-w-[1400px] p-4">
       <div className="mb-3 flex items-center gap-3">
@@ -170,7 +180,7 @@ export default function ThemeMoodPage() {
                 ))}
               </span>
             </div>
-            <div className="overflow-x-auto pb-1">
+            <div ref={scrollRef} className="overflow-x-auto pb-1">
               <div className="flex w-max min-w-full items-end gap-1">
                 <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background" />
                 <div className="flex gap-0.5">
