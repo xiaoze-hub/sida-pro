@@ -18,7 +18,9 @@ from src.web.models import User
 from src.core.strategy_library import (  # noqa: F401  (W4.2: 实现下沉 core, 此处再导出)
     _evaluate_strategy,
     _quote_to_dict,
+    effective_config,
     rounding_safe,
+    strategy_params,
 )
 
 router = APIRouter()
@@ -59,6 +61,7 @@ async def list_strategies():
             "source": cfg.get("source", ""),
             "filter": cfg.get("filter", {}),
             "eod_fields": list(_eod_fields(cfg)),  # 需要的盘后字段
+            "params": strategy_params(cfg),         # 可编辑参数(前端据此自动渲染表单)
             "data_window": strategy_data_status.get("available_in", "realtime"),
             "available_now": strategy_data_status.get("available_in", "realtime") == "realtime",
         })
@@ -82,6 +85,7 @@ async def get_strategy(strategy_id: str):
         "filter": cfg.get("filter", {}),
         "ranking_factors": cfg.get("ranking_factors", {}),
         "eod_only_fields": list(_eod_fields(cfg)),
+        "params": strategy_params(cfg),
         "ui_badge": cfg.get("ui_badge", ""),
         "source": cfg.get("source", ""),
         "data_window": completeness.get("available_in", "realtime"),
@@ -92,6 +96,8 @@ class ApplyRequest(BaseModel):
     strategy_id: str
     symbol: str
     market: str = "CN"
+    # 参数覆盖(键须是该策略 params 声明过的阈值), 未声明的键会被静默丢弃
+    overrides: dict[str, float] = Field(default_factory=dict)
 
 
 class ScanRequest(BaseModel):
@@ -104,6 +110,8 @@ class ScanRequest(BaseModel):
     # 自定义股票池(2026-08-22 共振查询): 传入则优先于 universe,
     # 只扫这几只(如 问小达+问财 合并后的候选), 上限 100 防滥用
     symbols: list[str] = Field(default_factory=list)
+    # 参数覆盖(与 apply 同规则): 只认该策略 params 声明过的阈值键
+    overrides: dict[str, float] = Field(default_factory=dict)
 
 
 @router.post("/scan")
@@ -125,7 +133,7 @@ async def scan_strategy(
     data = _load_strategies()
     if req.strategy_id not in data:
         raise HTTPException(404, f"策略不存在: {req.strategy_id}")
-    cfg = data[req.strategy_id]
+    cfg = effective_config(data[req.strategy_id], req.overrides)
 
     # 1. 确定扫描股票池
     mkt = (req.market or "CN").strip().upper()
@@ -235,7 +243,7 @@ async def apply_strategy(req: ApplyRequest):
     data = _load_strategies()
     if req.strategy_id not in data:
         raise HTTPException(404, f"策略不存在: {req.strategy_id}")
-    cfg = data[req.strategy_id]
+    cfg = effective_config(data[req.strategy_id], req.overrides)
 
     # 拉取股票行情(用 quotes, 通用接口)
     try:

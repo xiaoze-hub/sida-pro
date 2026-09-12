@@ -8,6 +8,7 @@ import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
 import FlashValue from './FlashValue'
 import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
+import { subChartReadouts, visibleSubCharts, type SubChartRow } from '../lib/subcharts'
 import {
   smaSeries,
   macd as macdSeries,
@@ -111,7 +112,11 @@ type HoverTipRow = {
   ma20: number | null
   macd: number | null
   signal: number | null
+  hist: number | null
   rsi6: number | null
+  volume: number | null
+  volMa5: number | null
+  volMa10: number | null
 }
 
 type HoverTip = {
@@ -122,7 +127,7 @@ type HoverTip = {
 }
 
 // ============== SIDA Pro 设计稿 v2.0: K线图层标注 (2026-09-01) ==============
-// 5 层架构: L0 事实底 + L1 趋势 + L2 买卖点 + L3 资金柱 + L4 事件标注 + L5 副图切换
+// 5 层架构: L0 事实底 + L1 趋势 + L2 买卖点 + L3 资金柱 + L4 事件标注 + L5 副图(注册表 ../lib/subcharts)
 /** GS 买卖点: 日线均线交叉, 实心=收盘确认, 空心=盘中疑似 */
 export type GsSignalPoint = {
   date: string
@@ -163,20 +168,18 @@ export type SupportPressureLine = {
   kind: 'support' | 'pressure'
   label?: string
 }
-/** 6 个图层开关状态 */
+/** 4 个图层开关状态(副图不在这里 —— 副图身份见 `../lib/subcharts` 注册表) */
 export type LayerState = {
   trend: boolean // L1 MA5/10/20/60 + 牛/马线
   signal: boolean // L2 GS 买卖点
   capital: boolean // L3 资金柱 (明盘+暗盘)
   event: boolean // L4 事件标注
-  subchart: 'vol' | 'macd' | 'dark_ratio' | 'phase' | 'orderbook' // L5 副图切换
 }
 const DEFAULT_LAYERS: LayerState = {
   trend: true,
   signal: true,
   capital: true,
   event: true,
-  subchart: 'vol',
 }
 
 function parseBusinessDay(dateStr: string): BusinessDay | null {
@@ -273,9 +276,9 @@ export default function InteractiveKline(props: {
   // P1-9: 跨 loadMinute/load 的请求序号(切股时旧响应丢弃)
   const seqRef = useRef(0)
   minuteRef.current = { pts: minutePoints, prev: minutePrevClose }
-  // ============== SIDA Pro: 6 个图层开关 (2026-09-01) ==============
+  // ============== SIDA Pro: 4 个图层开关 (2026-09-01; 副图另见 subcharts 注册表) ==============
   const [layers, setLayers] = useState<LayerState>({ ...DEFAULT_LAYERS, ...(props.initialLayers ?? {}) })
-  const toggleLayer = (key: keyof Omit<LayerState, 'subchart'>) =>
+  const toggleLayer = (key: keyof LayerState) =>
     setLayers(prev => ({ ...prev, [key]: !prev[key] }))
 
   const loadMinute = async () => {
@@ -445,6 +448,22 @@ export default function InteractiveKline(props: {
     const rsi6 = computeRsi(closes, 6)
     return { klines, candles, volumes, ma5, ma10, ma20, ma60, volMa5, volMa10, macd, rsi6 }
   }, [data])
+
+  // 副图信息栏的"没悬停时读哪根": 最后一根(与主图指标带同一口径)
+  const lastSubRow = useMemo<SubChartRow | null>(() => {
+    if (!series.klines.length) return null
+    const i = series.klines.length - 1
+    return {
+      date: series.klines[i].date,
+      volume: series.volumes[i]?.value ?? null,
+      volMa5: series.volMa5[i],
+      volMa10: series.volMa10[i],
+      macd: series.macd.macd[i],
+      signal: series.macd.signal[i],
+      hist: series.macd.hist[i],
+      rsi6: series.rsi6[i],
+    }
+  }, [series])
 
   const latestMetrics = useMemo(() => {
     if (!series.klines.length) return null
@@ -922,7 +941,11 @@ export default function InteractiveKline(props: {
           ma20: series.ma20[idx],
           macd: series.macd.macd[idx],
           signal: series.macd.signal[idx],
+          hist: series.macd.hist[idx],
           rsi6: series.rsi6[idx],
+          volume: series.volumes[idx]?.value ?? null,
+          volMa5: series.volMa5[idx],
+          volMa10: series.volMa10[idx],
         },
       })
     })
@@ -1174,6 +1197,24 @@ export default function InteractiveKline(props: {
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">振幅</span> <span className="font-mono ml-1">{latestMetrics.ampPct.toFixed(2)}%</span></div>
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">区间高低</span> <span className="font-mono ml-1">{latestMetrics.maxHigh.toFixed(2)}/{latestMetrics.minLow.toFixed(2)}</span></div>
           <div className="rounded-lg bg-accent/20 px-2.5 py-2 text-[11px]"><span className="text-muted-foreground">均量</span> <span className="font-mono ml-1">{(latestMetrics.avgVol / 10000).toFixed(1)}万</span></div>
+        </div>
+      ) : null}
+      {mode === 'kline' ? (
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <span className="font-mono">{(hoverTip.row ?? lastSubRow)?.date ?? ''}</span>
+          {visibleSubCharts({ rsi: !showRsi }).map(def => (
+            <span key={def.key} className="inline-flex items-center gap-1.5 rounded bg-accent/15 px-1.5 py-0.5">
+              <span className="text-foreground/80">{def.label}</span>
+              {subChartReadouts(def, hoverTip.row ?? lastSubRow).map(r => (
+                <span
+                  key={r.label}
+                  className={`font-mono ${r.tone === 'up' ? 'text-stock-up' : r.tone === 'down' ? 'text-stock-down' : ''}`}
+                >
+                  {r.label} {r.value}
+                </span>
+              ))}
+            </span>
+          ))}
         </div>
       ) : null}
       <div className="relative">
