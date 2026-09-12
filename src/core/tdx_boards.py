@@ -333,6 +333,41 @@ def constituents(block_code: str) -> list[str] | None:
     return [str(x).strip().upper() for x in v if str(x).strip()]
 
 
+_stock_blocks_cache: dict = {"date": None, "data": {}}
+
+
+def stock_blocks(symbol: str) -> list[dict] | None:
+    """个股→所属板块反查(P1, get_relation): [{code,name,type}]; 失败 None。
+
+    注: get_block_name  MCP 不支持, 板块名用 get_relation 返回的 BlockName。
+    按日缓存(板块归属日内不变)。
+    """
+    from datetime import date
+
+    today = date.today().isoformat()
+    if _stock_blocks_cache.get("date") != today:
+        _stock_blocks_cache["date"] = today
+        _stock_blocks_cache["data"] = {}
+    cached = _stock_blocks_cache["data"].get(symbol)
+    if cached is not None:
+        return cached
+    try:
+        v = _rpc("get_relation", {"stock_code": _to_tq_code(symbol) or symbol})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TDX 个股板块反查失败 %s: %s", symbol, e)
+        return None
+    if not isinstance(v, list):
+        return None
+    out = [
+        {"code": str(b.get("BlockCode") or "").strip(),
+         "name": str(b.get("BlockName") or "").strip(),
+         "type": str(b.get("BlockType") or "").strip()}
+        for b in v if isinstance(b, dict) and b.get("BlockCode")
+    ]
+    _stock_blocks_cache["data"][symbol] = out
+    return out
+
+
 def amount_baseline(codes: list[str]) -> dict[str, float]:
     """每码"前 5 个交易日日均成交额(元)" — 当日缓存(盘中不变), 量比代理的基准。"""
     from datetime import date

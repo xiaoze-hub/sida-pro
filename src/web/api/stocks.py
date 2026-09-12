@@ -195,6 +195,17 @@ def get_stock_l2(symbol: str, user=Depends(get_current_user)):
     return {**data, "note": None}
 
 
+@router.get("/{symbol}/blocks")
+def get_stock_blocks(symbol: str, user=Depends(get_current_user)):
+    """个股→所属板块反查(P1, get_relation): [{code,name,type}]; 源不可用 → 空列表+note(不编)。"""
+    from src.core.tdx_boards import stock_blocks
+
+    blocks = stock_blocks(symbol)
+    if blocks is None:
+        return {"symbol": symbol, "blocks": [], "note": "板块反查不可用(通达信源)"}
+    return {"symbol": symbol, "blocks": blocks, "note": None}
+
+
 @router.post("/refresh-list")
 def refresh_list():
     """刷新股票列表缓存"""

@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### feat-通达信 P1 数据接入(板块反查+日历/复权交叉); v0.5.91
+- **探针**(离线): `get_relation`(个股→板块)✅ / `get_trading_dates`✅ / `get_divid_factors`✅;
+  **`get_block_name` MCP 不支持**(报错"不支持该tqcenter方法名") → 板块名改用 get_relation 的 BlockName。
+- **板块反查**: `tdx_boards.stock_blocks(symbol)`(get_relation, 按日缓存) + 新端点 `GET /api/stocks/{symbol}/blocks`
+  → 工作台右栏新增「题材/板块」卡(chips: 板块名+类型); 源不可用 → 空+note(不编)。
+- **交叉校验**: `src/core/tdx_calendar.py`: `tdx_trading_dates`(通达信权威日历) + `calendar_mismatch`(本地 vs 通达信差异,
+  只告警不自动改本地日历) + `tdx_divid_factors`(复权因子, 供 qfq 复权交叉校验, 复权污染历史坑 KI-011)。
+- **门禁**: 后端 24 passed(相关); 前端 tsc/eslint/UI-RULES/vitest **207** 全绿。
+- **待办**: 日历/复权交叉做成每日 job 告警(下批); P2(基本面/股本/研报/次新股 → 工作台右栏②)下批 v0.5.92。
+- [tag v0.5.91]
+
 ### feat-改名数智决策 + 个股整页工作台第①步; v0.5.90
 - **改名**: 「决策先锋」→「**数智决策**」(老板指令)。改用户可见串+代码注释+docs(前端/agents/monitor/卡片标题/聊天工具描述);
   **保留** dark_flow_l2/dark_flow_fusion 里引用_vendor_「决策先锋8问8答/暗盘」的出处表述, 及 CHANGELOG 历史(不篡改历史)。

@@ -117,6 +117,37 @@ function L2Card({ symbol }: { symbol: string }) {
   )
 }
 
+function BlocksCard({ symbol }: { symbol: string }) {
+  const [data, setData] = useState<{ blocks: { code: string; name: string; type: string }[]; note?: string | null } | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<{ blocks: { code: string; name: string; type: string }[]; note?: string | null }>(
+      `/stocks/${encodeURIComponent(symbol)}/blocks`,
+    )
+      .then((r) => { if (alive) setData(r) })
+      .catch(() => { /* 保留旧值 */ })
+    return () => { alive = false }
+  }, [symbol])
+  const blocks = data?.blocks ?? []
+  return (
+    <div className="rounded border border-border/60 p-2">
+      <div className="mb-1 text-[12px] font-semibold">题材 / 板块</div>
+      {data?.note ? <div className="text-[10px] text-muted-foreground">{data.note}</div> : null}
+      {blocks.length === 0 && !data?.note ? (
+        <div className="text-[10px] text-muted-foreground">--</div>
+      ) : null}
+      <div className="flex flex-wrap gap-1">
+        {blocks.map((b) => (
+          <span key={b.code} className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80">
+            {b.name}
+            <span className="ml-0.5 text-[9px] text-muted-foreground">{b.type}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function StockWorkbench() {
   const { symbol = '' } = useParams()
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少股票代码</div>
@@ -131,6 +162,7 @@ export default function StockWorkbench() {
       <div className="flex w-[320px] shrink-0 flex-col gap-2">
         <DecisionPioneerCard symbol={symbol} market="CN" />
         <ResonanceVerdictPanel symbol={symbol} />
+        <BlocksCard symbol={symbol} />
         <L2Card symbol={symbol} />
       </div>
     </div>
