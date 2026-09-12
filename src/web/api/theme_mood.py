@@ -53,9 +53,11 @@ def _read_codes(sql: str, params: dict, codes: tuple[str, ...]) -> list[dict]:
 
 
 def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
-    """klines 日线 OHLC(qfq, 唯一常驻复权维度) → {(date, symbol): {o,h,l,c}}。
+    """klines 日线 OHLC(qfq, 唯一常驻复权维度) → {(compact_date, symbol): {o,h,l,c}}。
 
-    两个 IN 列表都用 expanding bindparam; 任一入参为空短路返回 {}。
+    klines.ts 是 timestamptz('2026-09-11 00:00:00+08:00'), 而入参 dates 是紧凑 'yyyymmdd',
+    直接 IN 会因时区/格式不匹配而全空(v0.5.85 生产实测 with_candle=0) → 这里把入参转 ISO、
+    用 CAST(ts AS date) 比较, 结果键再归一回紧凑格式。任一入参为空短路返回 {}。
     OHLC 任一为 None 的行丢弃(调用方落 candle=None, 不编)。
     """
     if not dates or not symbols:
@@ -64,20 +66,21 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
 
     from src.db.session import engine
 
+    iso = [f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in dates]
     stmt = text(
         "SELECT ts, symbol, open, high, low, close FROM klines "
-        "WHERE period = '1d' AND adjust = 'qfq' AND ts IN :dates AND symbol IN :codes"
+        "WHERE period = '1d' AND adjust = 'qfq' AND CAST(ts AS date) IN :dates AND symbol IN :codes"
     ).bindparams(bindparam("dates", expanding=True), bindparam("codes", expanding=True))
     with engine.begin() as conn:
         raw = conn.execute(
-            stmt, {"dates": tuple(sorted(dates)), "codes": tuple(sorted(symbols))}
+            stmt, {"dates": tuple(sorted(iso)), "codes": tuple(sorted(symbols))}
         ).fetchall()
     out = {}
     for r in raw:
         m = dict(r._mapping)
         if None in (m["open"], m["high"], m["low"], m["close"]):
             continue
-        out[(str(m["ts"]), str(m["symbol"]))] = {
+        out[(str(m["ts"])[:10].replace("-", ""), str(m["symbol"]))] = {
             "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"]}
     return out
 
