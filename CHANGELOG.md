@@ -7,6 +7,15 @@
 
 ## 2026-09-12
 
+### chore-清掉误提交的 .deploy 历史 + 容器/研究实例清理(老板点头)
+- **历史改写(仅 `.deploy` 路径)**: `git filter-branch --index-filter 'git rm -r --cached --ignore-unmatch .deploy' --tag-name-filter cat -- --all`。先确认**只有 main 含坏提交**(601f0f3), 远端另外 6 个分支(dependabot×2 / perf-cache / resonance-retry / wave2-4)全部早于它 → 不碰不推。实际被改写的只有 `601f0f3..main` 的 **18 个提交 + 7 个标签(v0.5.73..79)**。
+- **等价性核对**: 新 `main`=433f2a4 与旧 `f5a6163` **`git diff --stat` 为空(树完全一致)**、工作区干净、`git rev-list --count main` 587 不变、`git fsck` 无错、触及模块 70 passed。**生产无需重部署**(容器里是覆盖层文件, 与树内容一致)。
+- **体积**: 删 `refs/original` 备份 + `reflog expire --expire=now --all` + `gc --prune=now` → `.git` **89MB → 20MB**, `rev-list --objects --all` 里 `.deploy` 对象 **17 → 0**。推送用 `--force-with-lease=main:f5a6163…`(不是裸 force), 标签只强推差别的 7 个(远端 136 个标签其余未动)。
+- **⚠️ 残留面(如实说明)**: 我们这一侧已彻底没有这些 blob, 但 **GitHub 服务端的不可达对象要等它自己的 gc, 直接按旧 SHA 访问的 URL 可能仍可解析一段时间**; 要立刻彻底抹掉需向 GitHub 提 support request。另外**任何人的旧克隆再 fetch 会留下 dangling 引用**, 建议 `git fetch --prune` 后重新克隆或 `git reset --hard origin/main`。
+- **容器侧清理(生产 panwatch)**: `/tmp` 历次部署包+诊断脚本+**遗留凭据文件** → **676MB → 4KB**; `/root` 29 个 `app_backup_pre_*`(1.6GB) 只留最近 3 个(v0575/77/78)+ 14 个 `overlay_*` 包(224MB) → **1.8GB → 78MB**。顺带删掉了 `/tmp/qa_v0576_pass` 与 `/tmp/qav0575_token.txt` 两个凭据残留(历次走查该删未删)。
+- **TSP 研究实例**: `docker compose down --rmi local --remove-orphans` → 容器 `TickFlow_Stock_Panel`、本地构建镜像 `tick-stock-panel-app`(1.92GB 虚 / 474MB 实)与网络全清, 3018 端口释放。保留 `/root/research/tick-stock-panel`(193MB 源码+数据) 与两份研究文档(CHANGELOG/调研里按路径引用)。附带一条值得记: 它的 compose 把主机 `/root/.codex` **只读挂进容器**给第三方代码读登录态 —— 现在这条暴露面随实例删除而消失, 以后要再跑研究实例别挂凭据目录。
+- [无版本号变更: 纯历史/环境维护, 代码树未动]
+
 ### update-v0.5.78 + v0.5.79 生产部署(策略参数自描述 + 副图信息栏; 顺手治好行情页整页崩; 冒烟 10/10)
 - **部署链**: 备份 `/root/app_backup_pre_v0578_20260912.tar.gz`(20.98MB) → v0.5.78 全量覆盖层(19.1MB, `tar xzf --overwrite` → `chown -R app:app` → `compileall` → restart, 无迁移) → v0.5.79 **静态面无重启**(`docker cp dist→/app/static/` + `VERSION` + chown)。`/api/version` = **v0.5.79**, 容器 healthy, index.html 已指向新 chunk `index-CfrJrSlZ.js`。
 - **C2 生产实测**: `/strategies/list` 9 条策略**全部带 params**; `capital_heat` 表单 6 项含 meta 覆盖后的 `追高上限`(带 help)与 `资金启动下限`。`/strategies/apply` 对 002361(当日 -0.87%, 量比 0.73): 原值 `passed=False` 失败项含 `change_pct≥1.0` 与 `volume_ratio≥1.5`; 覆盖 `{change_pct_min:-5, volume_ratio_min:0.5}` → **passed=True 且失败项清空**; 覆盖 `{price_min:500}` → 新增失败项 `current_price 10.21 min 500`; 未声明键 `{made_up_key:5}` → 与原值**逐字段相同**。浏览器侧: 双低策略详情渲染出 **10 个** 带 min/max/step/单位的输入框(未写一行逐策略表单代码)。
