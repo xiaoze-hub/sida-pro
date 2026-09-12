@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import { useVendorTrust } from '@/hooks/useVendorTrust'
+import { DataCapabilities } from '@/components/DataCapabilities'
 import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone } from '@/lib/vendor-trust'
 
 const HEALTH_DOT: Record<string, string> = {
@@ -376,6 +377,8 @@ export default function DataSourcesPage() {
       </div>
 
       <div className="space-y-6">
+        {/* B1 (2026-09-12, 借鉴 TSP 能力路由视图): 按数据集看此刻可用性, 有问题的排前面 */}
+        <DataCapabilities />
         {/* C1 (2026-09-10): 行情源质量 — Engine 滚动最近 100 次的 成功率/延迟 EWMA/p50, 与顶部心跳条同源 */}
         {vendorTrust.length > 0 && (
           <section className="border-b border-border/40 pb-3">

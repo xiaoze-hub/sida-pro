@@ -4104,6 +4104,37 @@ def _m164_market_phase_extra_columns(conn: Connection) -> None:
     )
 
 
+def _m165_app_jobs_table(conn: Connection) -> None:
+    """后台任务表(2026-09-12, 借鉴 TSP 作业框架): 扫描/AI 批量/回填的进度与结果落库。
+
+    落库而不是只放内存: 重启后仍能看到"上一次跑成没有"; status=running 但 updated_at
+    停滞过久的行由 JobStore.reap_stale 自愈为 failed(孤儿任务不会永远挂着)。
+    """
+    if _has_table(conn, "app_jobs"):
+        return
+    conn.execute(
+        text(
+            """
+CREATE TABLE app_jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  label TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  progress INTEGER DEFAULT 0,
+  stage TEXT DEFAULT '',
+  message TEXT DEFAULT '',
+  error TEXT DEFAULT '',
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  finished_at TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_app_jobs_kind_created ON app_jobs(kind, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_app_jobs_status ON app_jobs(status)"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4204,6 +4235,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(162, "resonance_ai_verdicts_table", _m162_resonance_ai_verdicts_table),
     Migration(163, "theme_mood_table", _m163_theme_mood_table),
     Migration(164, "market_phase_extra_columns", _m164_market_phase_extra_columns),
+    Migration(165, "app_jobs_table", _m165_app_jobs_table),
 )
 
 

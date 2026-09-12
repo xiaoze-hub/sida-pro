@@ -65,6 +65,7 @@ from src.web.api import (
     market_archive,
 )
 from src.web.api import factors
+from src.web.api import jobs as jobs_api
 from src.web.api import notifications
 from src.web.api import health as health_router
 from src.web.api import service_config
@@ -416,6 +417,9 @@ app.include_router(
 )
 app.include_router(
     settings.router, prefix="/api/settings", tags=["settings"], dependencies=protected
+)
+app.include_router(
+    jobs_api.router, prefix="/api/jobs", tags=["jobs"], dependencies=protected
 )
 app.include_router(
     logs.router, prefix="/api/logs", tags=["logs"], dependencies=protected

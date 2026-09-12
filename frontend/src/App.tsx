@@ -40,6 +40,7 @@ import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
+import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
@@ -348,6 +349,9 @@ function App() {
             )
           })}
         </nav>
+
+        {/* B1 (2026-09-12, 借鉴 TSP): 数据能力常驻一行 —— 降级/缺源要一眼看得见 */}
+        <CapabilityPill collapsed={sidebarCollapsed} />
 
         {/* 底部: GitHub + 日志 + 通知 + 头像 */}
         <div className={`border-t border-border p-2 shrink-0 flex ${sidebarCollapsed ? 'flex-col items-center gap-1' : 'flex-row items-center justify-between'}`}>
