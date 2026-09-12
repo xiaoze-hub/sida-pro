@@ -54,7 +54,9 @@ describe('ThemeMood 页面', () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     render(<ThemeMoodPage />)
     await screen.findAllByText('元件')
-    expect(String(mocks.fetchAPI.mock.calls[0][0])).toContain('window=20')
+    // 页面同时拉了市场级情绪周期(segments/stats), 只断言榜单那次请求
+    const boardCall = mocks.fetchAPI.mock.calls.map((c) => String(c[0])).find((u) => u.includes('/theme-mood/board'))
+    expect(boardCall).toContain('window=20')
   })
 
   it('时间轴: 渲染月份带与日号, 缺该交易日的题材显示空位', async () => {
@@ -75,10 +77,12 @@ describe('ThemeMood 页面', () => {
     await screen.findAllByText('元件')
     expect(screen.getByText('情绪走势')).toBeTruthy()
     expect(screen.getByText('71.7')).toBeTruthy()
-    // 4 个交易日 → 1 条折线(4 个点) + 1 块面积
-    expect(container.querySelectorAll('polyline')).toHaveLength(1)
-    expect(container.querySelector('polyline')?.getAttribute('points')).toBe('19,35.5 59,6 99,40 139,35')
-    expect(container.querySelectorAll('path')).toHaveLength(1)
+    // 只数图表 svg(role=img), 排除 lucide 图标里的 polyline/path
+    const charts = () => container.querySelectorAll('svg[role="img"]')
+    expect(charts()).toHaveLength(1)
+    expect(charts()[0].querySelectorAll('polyline')).toHaveLength(1)
+    expect(charts()[0].querySelector('polyline')?.getAttribute('points')).toBe('19,35.5 59,6 99,40 139,35')
+    expect(charts()[0].querySelectorAll('path')).toHaveLength(1)
   })
 
   it('走势曲线: 点选题材后明细里画出该题材曲线', async () => {
@@ -89,8 +93,9 @@ describe('ThemeMood 页面', () => {
     expect(screen.getByText('情绪走势(近 4 个交易日)')).toBeTruthy()
     // 该题材自身曲线(58/64/74.1/78.2 → 最高78.2 最低58.0), 与顶部曲线各占一条折线
     expect(screen.getByText('最高 78.2 · 最低 58.0 · 最新', { exact: false })).toBeTruthy()
-    expect(container.querySelectorAll('polyline')).toHaveLength(2)
-    expect(container.querySelectorAll('polyline')[1].getAttribute('points')).toBe('19,62 59,45.4 99,17.4 139,6')
+    const polys = container.querySelectorAll('svg[role="img"] polyline')
+    expect(polys).toHaveLength(2)
+    expect(polys[1].getAttribute('points')).toBe('19,62 59,45.4 99,17.4 139,6')
   })
 
   it('时间轴加载后默认滚到最新一端', async () => {

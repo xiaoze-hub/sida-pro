@@ -7,6 +7,20 @@
 
 ## 2026-09-12
 
+### feat-市场级情绪周期回填 + 阶段规律面板; 候选池成员数过滤; 空态/涨跌色治理; v0.5.71
+- **来源**: 借鉴 `tick-stock-panel` 借鉴清单第一批 A1~A5 + D3/D4(研究档案 `C:\Users\tianxiang\sida-research\tick-stock-panel-全系统研究.md`, 老板"按计划全做")。
+- **关键发现(省掉一大截工作)**: SIDA **2026-08-24 就有** 6 阶段引擎 `src/core/market_phase.py`(EMA α=1/3 + 2 日确认 + 弱档否决, 与 TSP 同源), 缺的不是算法而是**历史** —— `market_phase_daily` 只有 11 天(每日 vendor sync 攒的), 阶段规律/分位无从谈起; 而 `limit_up_events` 有 **328 个有效交易日** → 补一条"从已落库事件回填"的路即可, **不依赖 vendor**。
+- **后端 `market_phase.py`**: `consecutive_boards()`(封板事件按交易日历做连续 run 算连板数, 与 TSP `consec.shift(1).over("symbol")` 同义; 连板数**没有落库**, limit_up_events.limit_days 全空)、`ladder_completeness()`、`metrics_rows_from_events()`(封板率=封/触 **真值**, 优于 vendor 池给的 None)、`calibrate()`(**用自有历史 p10/p60/p90 标定阈值**, <120 天回落默认并在 note 里如实标注)、`segmentize()`、`transition_stats()`、`percentile_of()`、`classify_phase_series_full()`(同时给确认前后标签, 差值即被 2 日确认拦下的抖动)。
+- **迁移 v164**: `market_phase_daily` 加 `completeness` / `phase_raw` 两列。
+- **API**: `POST /api/market/phase/backfill`(**owner 限定**, 幂等可重跑, 全量重标后整表 upsert) + `GET /api/market/phase/segments` + `GET /api/market/phase/stats`(含当前各驱动量历史分位)。
+- **前端**: 新 `MarketPhasePanel` 挂在 `/theme-mood` 顶部 —— 当前阶段·已持续 N 天 / 5 个**分位徽标**(首板 p42·2板+ p38·高度 p55·晋级率 p61·梯队完整度 p70) / **阶段规律**(历史段数·平均·最长·**去向概率** top3) / **阶段色带**(段宽∝天数, 配色与 biz-ui `PHASE_STYLE` 同源); 空态是**可操作空态**(owner 见「回填历史阶段」按钮, 非 owner 说明需管理员)。
+- **候选池 A4**: 新增 `is_pool_eligible()` = 名称黑名单 **+ 成员数上下限**(默认 4~2500)。生产实测 521 个题材只有 **4 个成员<4**、最大 **1219** → 上限不改变现有榜单, 是**防未来**的宽基标签闸(融资融券~7700 / 沪深股通~3300 这类名称黑名单会漏的); 上限没照抄 TSP 的 600, 否则会误剔"华为概念(2006)/人工智能(2166)"这种真主题。scan 返回加 `skipped_wide`, 脏行清理一并覆盖。
+- **D3 空态**: 4 处裸「暂无数据」改成"说明原因 + 下一步"(DiscoveryPanel×3 / DarkFundTop)。
+- **D4 涨跌色治理**(借 TSP 那条"bull/bear 只用于价格与K线"): 注册 `gs-go`/`gs-stop` 语义色, 「加仓/减仓」按钮从 `stock-up/down` 换到 GS 语义 token(视觉不变, 语义分离)。
+- **顺带**: JWT claims 解析从 `App.tsx` 抽到 `src/lib/jwt.ts` 共用(面板要按角色控制回填按钮), 补 4 例容错测试。
+- **测试**: 后端本批 37 passed(新增 `test_market_phase_borrow.py` 8 例 + 候选池边界 1 例); 全量离线 **2158 passed / 7 failed**(全部为记录在案基线: 5 例 `test_entry_candidate_outcomes` 日期相关 + tradingagents 模块缺失 + thsdk 全量偶发单跑通过); 前端 **154 passed** / tsc / eslint / UI-RULES / build 全过。
+- [tag v0.5.71]
+
 ### update-v0.5.69/70 生产部署(情绪走势曲线 + 轴字放大 + 新 Logo 上线, 冒烟 9/9)
 - **部署**: 备份 `/root/app_backup_pre_v0569_20260912.tar.gz`(32.1MB 代码面) → 覆盖层 v0.5.69(19MB / 1359 项, 含 `frontend/dist → static/`) → 容器内 `tar xzf --overwrite` → `chown -R app:app /app` → `compileall` → restart → `/api/version` = **v0.5.69** → 冒烟 **9/9**(8.4s; 首跑 8/9 卡在 dark-flow 1s 客户端读超时 = KI-029, 预热 3 次后通过); 随后走查发现**应用内**品牌图标仍是通用 lucide 图标 → **v0.5.70 静态面无重启部署**(`docker cp frontend/dist/.` + `VERSION` + chown)。
 - **生产 API 实测**: `GET /api/theme-mood/board?window=20&top=15` → `market` 20 条与 `dates` 同长同序、**0 空值**, 区间 **67.1~83.8**(尾部 0904 73.4 → 0907 80.5 → 0908 80.7 → 0910 69.6 → 0911 71.7)。

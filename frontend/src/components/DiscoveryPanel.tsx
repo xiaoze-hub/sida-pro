@@ -271,7 +271,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
           ) : discoverTab === 'boards' ? (
             hotBoards.length === 0 ? (
               <div className="py-6 text-center text-[12px] text-muted-foreground">
-                {discoverError || (discoverMarket === 'CN' ? '暂无数据' : `${discoverMarket === 'HK' ? '港股' : '美股'}暂不提供板块榜，已支持热门股票`)}
+                {discoverError || (discoverMarket === 'CN' ? '暂无板块热度 —— 板块日线未同步或今日尚未更新，可点右上「刷新」' : `${discoverMarket === 'HK' ? '港股' : '美股'}暂不提供板块榜，已支持热门股票`)}
                 {discoverMarket !== 'CN' && (
                   <div className="mt-2">
                     <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setDiscoverTab('stocks')}>
@@ -303,7 +303,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
               </div>
             )
           ) : hotStocks.length === 0 ? (
-            <div className="py-6 text-center text-[12px] text-muted-foreground">{discoverError || '暂无数据'}</div>
+            <div className="py-6 text-center text-[12px] text-muted-foreground">{discoverError || '暂无热门股票 —— 稍后重试或切换市场'}</div>
           ) : (
             <div className="space-y-2">
               {stocksMode === 'for_you' && <div className="px-1 text-[11px] text-muted-foreground">根据持仓/自选/监控信号/风格偏好排序</div>}
@@ -346,7 +346,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
             <DialogDescription>点击个股打开统一详情弹窗（含概览、K线、建议、新闻、历史）</DialogDescription>
           </DialogHeader>
           {boardStocks.length === 0 ? (
-            <div className="py-6 text-center text-[12px] text-muted-foreground">暂无数据</div>
+            <div className="py-6 text-center text-[12px] text-muted-foreground">该板块暂无成分股 —— 板块成分未同步</div>
           ) : (
             <div className="scrollbar grid max-h-[60vh] grid-cols-1 gap-2 overflow-y-auto md:grid-cols-2">
               {boardStocks.map((s) => {

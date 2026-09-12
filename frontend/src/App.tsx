@@ -40,6 +40,7 @@ import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
+import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
@@ -95,42 +96,8 @@ const desktopNavGroups = [
 const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/forecast', '/notifications']
 
 // ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
-// 修复(M-2, 2026-08-23): atob 解 JWT payload 必须容错:
-// - token 不是合法 base64(空 token / 第三方篡改) → JSON.parse 抛 → catch 返回 null
-// - token 仅有两段(去除签名/头为空) → split('.')[1] 拿到 undefined → atob 抛
-// - payload 是数组/其它非对象类型(JSON.parse 合法但结构异常) → null 安全返回
+// 2026-09-12: claims 解析抽到 src/lib/jwt.ts 共用(情绪周期回填按钮也要按角色控制)。
 // 仅用于 UI 展示用途的 claims 解析, 不参与授权判断(权限最终看后端).
-function _safeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    if (!token) return null
-    const parts = token.split('.')
-    if (parts.length < 2) return null
-    // base64url → base64: '-' '_' 替换成 '+' '/', 补 '='
-    let s = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    while (s.length % 4) s += '='
-    const decoded = atob(s)
-    const obj = JSON.parse(decoded)
-    return obj && typeof obj === 'object' && !Array.isArray(obj) ? (obj as Record<string, unknown>) : null
-  } catch {
-    return null
-  }
-}
-const getJwtUsername = (): string | null => {
-  const t = localStorage.getItem('token') || ''
-  const p = _safeJwtPayload(t)
-  const u = p?.username
-  return typeof u === 'string' ? u : null
-}
-// 2026-08-15: 从 JWT payload 取 role(owner|member|guest); demo 账号兼容按 username==demo 判定
-const getJwtRole = (): string | null => {
-  const t = localStorage.getItem('token') || ''
-  const p = _safeJwtPayload(t)
-  const r = p?.role
-  return typeof r === 'string' ? r : null
-}
-const isDemoUser = (): boolean => getJwtUsername() === 'demo'
-// 是否 guest 角色: role==guest 或 demo 账号(后端口径: username=="demo" || role=="guest")
-const isGuestUser = (): boolean => getJwtRole() === 'guest' || isDemoUser()
 // 角色化隐藏导航: owner/member 全部显示(现状不变); guest(demo) 隐藏管理/个人页面
 // (数据源/AI配置/Agent/策略等核心内容; 设置/持仓/自选可浏览但只读)
 const GUEST_HIDDEN_PATHS = ['/paper-trading', '/alerts', '/shadow', '/system']
