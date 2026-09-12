@@ -1,9 +1,12 @@
-"""大盘资金流历史端点契约(v0.5.82)。
+"""大盘资金流历史端点契约(v0.5.82 连接生命周期 / v0.5.84 回落选日与 note 口径)。
 
-主回归: **回退查询必须在连接还开着的时候发**。v0.5.81 把 `_last_varying_session(conn, ...)`
+主回归一: **回退查询必须在连接还开着的时候发**。v0.5.81 把 `_last_varying_session(conn, ...)`
 写在 `with engine.connect()` 块外, conn 已关闭 → 整个端点落进 except, 恒返回 0 点 +
 "This Connection is closed"。这里的假连接**关闭后再用就抛**, 与 SQLAlchemy 行为一致,
 所以那条 bug 一回归就红。
+
+主回归二: **回落不排除当天**。原实现把"窗口首条的日期"排除掉, 于是交易日晚上(窗口平、
+但当天全天有波动)会跳到昨天去。现在逐日自己判平, 当天有波动就给当天(session=today_full)。
 """
 from __future__ import annotations
 
@@ -17,12 +20,21 @@ import src.web.api.market_data as api
 import src.web.database as database
 from src.web.response import ResponseWrapperMiddleware
 
-COLS = 6
+TODAY = dt.datetime.now().strftime("%Y-%m-%d")
+PREV = (dt.datetime.now() - dt.timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _row(day: str, minute: int, flow: float):
     ts = dt.datetime.fromisoformat(f"{day}T09:{minute:02d}:00")
     return (ts, flow, 100 + minute, 900 - minute, flow / 2, flow / 2)
+
+
+def _flat(day: str, flow: float = 12.3):
+    return [_row(day, 30, flow), _row(day, 31, flow), _row(day, 32, flow)]
+
+
+def _varying(day: str):
+    return [_row(day, 30, 10.0), _row(day, 31, 25.5), _row(day, 32, 40.0)]
 
 
 class _Result:
@@ -34,13 +46,16 @@ class _Result:
 
 
 class _FakeConn:
-    """关闭后再 execute 就抛 —— 复刻 SQLAlchemy 的 'This Connection is closed'。"""
+    """关闭后再 execute 就抛 —— 复刻 SQLAlchemy 的 'This Connection is closed'。
 
-    def __init__(self, today_rows, prev_day, prev_rows):
+    days: [(date_str, rows), ...] 按 DESC 排列, 模拟回溯期内的每日全天序列。
+    """
+
+    def __init__(self, window_rows, days):
         self.closed = False
-        self.today_rows = today_rows
-        self.prev_day = prev_day
-        self.prev_rows = prev_rows
+        self.window_rows = window_rows
+        self.days = dict(days)
+        self.day_order = [d for d, _ in days]
         self.queries: list[str] = []
 
     def execute(self, clause, params=None):
@@ -49,22 +64,13 @@ class _FakeConn:
         sql = " ".join(str(clause).split())
         self.queries.append(sql)
         if "DISTINCT date(ts)" in sql:
-            return _Result([(self.prev_day,)])
+            return _Result([(d,) for d in self.day_order])
         if "date(ts) =" in sql:
-            return _Result(self.prev_rows)
-        return _Result(self.today_rows)
+            return _Result(self.days.get(str((params or {}).get("d")), []))
+        return _Result(self.window_rows)
 
     def close(self):
         self.closed = True
-
-
-class _FakeEngine:
-    def __init__(self, conn):
-        self.conn = conn
-
-    def connect(self):
-        conn = self.conn
-        return _Ctx(conn)
 
 
 class _Ctx:
@@ -79,10 +85,16 @@ class _Ctx:
         return False
 
 
-def _client(monkeypatch, today_rows, prev_day="2026-09-11", prev_rows=None):
-    prev_rows = prev_rows if prev_rows is not None else [
-        _row(prev_day, 30, 10.0), _row(prev_day, 31, 25.5), _row(prev_day, 32, 40.0)]
-    conn = _FakeConn(today_rows, prev_day, prev_rows)
+class _FakeEngine:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def connect(self):
+        return _Ctx(self.conn)
+
+
+def _client(monkeypatch, window_rows, days):
+    conn = _FakeConn(window_rows, days)
     monkeypatch.setattr(database, "engine", _FakeEngine(conn))
     app = FastAPI()
     app.include_router(api.router, prefix="/api/market-data")
@@ -90,58 +102,63 @@ def _client(monkeypatch, today_rows, prev_day="2026-09-11", prev_rows=None):
     return TestClient(app), conn
 
 
-FLAT_TODAY = [_row("2026-09-12", 30, 12.3), _row("2026-09-12", 31, 12.3),
-              _row("2026-09-12", 32, 12.3)]
-VARYING_TODAY = [_row("2026-09-11", 30, 12.3), _row("2026-09-11", 31, 30.9),
-                 _row("2026-09-11", 32, 44.4)]
+def _get(c, hours=4):
+    return c.get(f"/api/market-data/market-capital-flow/history?hours={hours}").json()["data"]
 
 
-def test_flat_today_falls_back_to_prev_session(monkeypatch):
-    c, conn = _client(monkeypatch, FLAT_TODAY)
-    d = c.get("/api/market-data/market-capital-flow/history?hours=4").json()["data"]
-    assert d["session"] == "prev" and d["session_date"] == "2026-09-11"
-    assert d["count"] == 3 and "非交易时段" in d["note"] and "2026-09-11" in d["note"]
+def test_flat_window_falls_back_to_most_recent_varying_day(monkeypatch):
+    """周末: 窗口平、当天全天也平 → 回落到最近一个真有波动的那天, 并如实标注。"""
+    c, conn = _client(monkeypatch, _flat(TODAY), [(TODAY, _flat(TODAY)), (PREV, _varying(PREV))])
+    d = _get(c)
+    assert d["session"] == "prev" and d["session_date"] == PREV
+    assert d["count"] == 3 and PREV in d["note"] and "无变动" in d["note"]
     flows = [i["total_main_flow"] for i in d["items"]]
     assert max(flows) - min(flows) > 1e-9                  # 回落拿到的必须是真曲线, 不是直线
-    # 回退查询确实是在连接关闭前发的(否则 _FakeConn 已抛, 端点会落到 except 分支)
-    assert d["note"] != f"读取失败: This Connection is closed"
     assert any("DISTINCT date(ts)" in q for q in conn.queries)
+
+
+def test_trading_day_evening_returns_today_not_yesterday(monkeypatch):
+    """交易日晚上: 窗口(收盘后)是平的, 但**当天全天有波动** → 必须给当天, 不许跳到昨天。"""
+    c, _ = _client(monkeypatch, _flat(TODAY), [(TODAY, _varying(TODAY)), (PREV, _varying(PREV))])
+    d = _get(c)
+    assert d["session"] == "today_full" and d["session_date"] == TODAY
+    assert TODAY in d["note"] and "全天" in d["note"]
+    flows = [i["total_main_flow"] for i in d["items"]]
+    assert max(flows) - min(flows) > 1e-9
 
 
 def test_fallback_items_keep_full_contract(monkeypatch):
     """回落分支的 item 形状必须与当日分支一致(6 键), 否则前端 tooltip 会拿到 undefined。"""
-    c, _ = _client(monkeypatch, FLAT_TODAY)
-    d = c.get("/api/market-data/market-capital-flow/history").json()["data"]
+    c, _ = _client(monkeypatch, _flat(TODAY), [(TODAY, _flat(TODAY)), (PREV, _varying(PREV))])
+    d = _get(c)
     expected = {"ts", "total_main_flow", "up_count", "down_count", "sh_flow", "sz_flow"}
     assert d["count"] > 0
     for it in d["items"]:
         assert set(it) == expected
 
 
-def test_varying_today_stays_today(monkeypatch):
-    c, conn = _client(monkeypatch, VARYING_TODAY)
-    d = c.get("/api/market-data/market-capital-flow/history").json()["data"]
-    assert d["session"] == "today" and d["session_date"] == "2026-09-11"
+def test_varying_window_stays_as_requested(monkeypatch):
+    c, conn = _client(monkeypatch, _varying(TODAY), [(TODAY, _varying(TODAY))])
+    d = _get(c)
+    assert d["session"] == "today" and d["session_date"] == TODAY
     assert d["note"] == "" and d["count"] == 3
-    assert not any("DISTINCT date(ts)" in q for q in conn.queries)   # 没变动需求就不查回退
+    assert not any("DISTINCT date(ts)" in q for q in conn.queries)   # 窗口有波动就不查回落
 
 
 def test_empty_series_reports_empty_not_zero(monkeypatch):
-    c, conn = _client(monkeypatch, [])
-    d = c.get("/api/market-data/market-capital-flow/history").json()["data"]
+    c, conn = _client(monkeypatch, [], [(TODAY, [])])
+    d = _get(c)
     assert d["count"] == 0 and d["items"] == []
     assert d["session"] == "today" and d["session_date"] is None
     assert d["note"] == "暂无快照(等待大盘资金接口写入)"
     assert not any("DISTINCT date(ts)" in q for q in conn.queries)
 
 
-def test_no_varying_session_keeps_flat_and_says_so(monkeypatch):
-    """回退也找不到有变动的一天: 保留当日直线, 但如实说明, 不假装是曲线。"""
-    flat_prev = [_row("2026-09-11", 30, 5.0), _row("2026-09-11", 31, 5.0)]
-    c, _ = _client(monkeypatch, FLAT_TODAY, prev_rows=flat_prev)
-    d = c.get("/api/market-data/market-capital-flow/history").json()["data"]
-    assert d["session"] == "today" and d["count"] == 3
-    assert d["note"] == ""
+def test_no_varying_day_keeps_flat_series(monkeypatch):
+    """回溯期内一天都没有波动: 保留窗口原样(直线), 不编造曲线、也不假装回落成功。"""
+    c, _ = _client(monkeypatch, _flat(TODAY), [(TODAY, _flat(TODAY)), (PREV, _flat(PREV, 5.0))])
+    d = _get(c)
+    assert d["session"] == "today" and d["count"] == 3 and d["note"] == ""
 
 
 def test_is_flat_ignores_none_and_single_point():
@@ -154,6 +171,5 @@ def test_is_flat_ignores_none_and_single_point():
 
 @pytest.mark.parametrize("hours", [1, 24])
 def test_hours_param_passed_through(monkeypatch, hours):
-    c, _ = _client(monkeypatch, VARYING_TODAY)
-    d = c.get(f"/api/market-data/market-capital-flow/history?hours={hours}").json()["data"]
-    assert d["hours"] == hours
+    c, _ = _client(monkeypatch, _varying(TODAY), [(TODAY, _varying(TODAY))])
+    assert _get(c, hours)["hours"] == hours

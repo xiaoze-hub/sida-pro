@@ -371,8 +371,12 @@ def _flow_items(rows) -> list[dict]:
     return items
 
 
-def _last_varying_session(conn, *, exclude: str | None, lookback_days: int = 10):
-    """往前找最近一个盘中真有变动的交易日; 找不到返回 (None, None)。
+def _last_varying_session(conn, *, lookback_days: int = 10):
+    """回溯期内**最近一个全天序列真有变动**的交易日; 找不到返回 (None, None)。
+
+    不排除任何日期: 逐日自己判平。交易日晚上请求 4h 窗口时, 窗口是平的(收盘后 vendor
+    返回常量)但**当天全天序列是有波动的** —— 那时该给当天, 不该跳到昨天
+    (2026-09-12 v0.5.84 修: 原 `exclude=窗口首日` 会让它跳过当天)。
 
     调用方必须**在连接仍然打开时**调用(2026-09-12 v0.5.82 修: 曾在 with 块外调用,
     conn 已关闭 → 整个端点落到 except 分支, 恒返回 0 点 + "This Connection is closed")。
@@ -387,8 +391,6 @@ def _last_varying_session(conn, *, exclude: str | None, lookback_days: int = 10)
     ).fetchall()
     for row in dates:
         d = str(row[0])
-        if exclude and d == exclude:
-            continue
         rows = conn.execute(
             text(f"SELECT {_FLOW_COLS} FROM market_flow_snapshots "
                  "WHERE date(ts) = :d ORDER BY ts ASC LIMIT 500"),
@@ -430,19 +432,22 @@ async def market_capital_flow_history(
                 {"cutoff": cutoff},
             ).fetchall()
             items = _flow_items(rows)
-            # 非交易时段(周末/开盘前)vendor 会反复返回同一个值 → 曲线是一条直线,
-            # 看着像坏了。回退到最近一个**盘中真有变动**的交易日并标明, 不拿直线冒充曲线。
+            # 请求窗口内 vendor 反复返回同一个值时曲线是一条直线, 看着像坏了。
+            # 回退到最近一个**全天真有变动**的交易日并标明, 不拿直线冒充曲线。
             # 必须在 with 块内做: 回退查询要复用这条连接。
             session, session_date = "today", (items[0]["ts"][:10] if items else None)
             if _is_flat(items):
-                prev_items, prev_date = _last_varying_session(conn, exclude=session_date)
-                if prev_items:
-                    items, session, session_date = prev_items, "prev", prev_date
+                fb_items, fb_date = _last_varying_session(conn)
+                if fb_items:
+                    items, session_date = fb_items, fb_date
+                    session = "today_full" if fb_date == datetime.now().strftime("%Y-%m-%d") else "prev"
         note = ""
         if not items:
             note = "暂无快照(等待大盘资金接口写入)"
+        elif session == "today_full":
+            note = f"所选 {hours}h 窗口内资金无变动, 显示 {session_date} 全天盘中曲线"
         elif session == "prev":
-            note = f"非交易时段, 显示 {session_date} 盘中曲线(当日无变动)"
+            note = f"所选 {hours}h 窗口内资金无变动, 显示最近有变动的 {session_date} 盘中曲线"
         return {
             "hours": hours,
             "count": len(items),
