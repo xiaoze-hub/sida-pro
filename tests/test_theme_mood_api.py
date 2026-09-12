@@ -151,3 +151,47 @@ def test_board_rows_include_rotated_out_themes(monkeypatch):
     assert rot["20260910"]["new_codes"] == ["C"] and rot["20260910"]["exit_codes"] == ["B"]
     assert rot["20260911"]["new_codes"] == ["B"] and rot["20260911"]["exit_codes"] == ["A"]
     assert out["rotation_top_k"] == api.ROTATION_TOP_K
+
+
+class _FakeRow:
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self._rows = rows
+        self.last_params = None
+
+    def execute(self, stmt, params):
+        self.last_params = params
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeBegin:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
+    rows = [
+        _FakeRow({"ts": "20260911", "symbol": "A", "open": 1, "high": 2, "low": 1, "close": 2}),
+        _FakeRow({"ts": "20260911", "symbol": "B", "open": 1, "high": None, "low": 1, "close": 2}),
+    ]
+    conn = _FakeConn(rows)
+    fake_engine = type("E", (), {"begin": lambda self: _FakeBegin(conn)})()
+    monkeypatch.setattr("src.db.session.engine", fake_engine)
+    out = api._read_ohlc(["20260911"], ["A", "B"])
+    assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2}}   # B 缺 high 被丢
+    assert conn.last_params == {"dates": ("20260911",), "codes": ("A", "B")}
+    assert api._read_ohlc([], ["A"]) == {}
+    assert api._read_ohlc(["20260911"], []) == {}

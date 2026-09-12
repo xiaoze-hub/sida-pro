@@ -31,3 +31,12 @@ def test_sealed_today_neither_blown_nor_broken():
 
 def test_empty_events_all_empty():
     assert finalize_marks(["20260911"], []) == {"20260911": {"blown": [], "broken": []}}
+
+
+def test_attach_candles_missing_is_none_not_fake():
+    from src.core.limit_ladder import attach_candles
+
+    ohlc = {("20260911", "A"): {"o": 1.0, "h": 2.0, "l": 0.5, "c": 1.8}}
+    out = attach_candles([{"symbol": "A"}, {"symbol": "B"}], "20260911", ohlc)
+    assert out[0]["candle"] == {"o": 1.0, "h": 2.0, "l": 0.5, "c": 1.8}
+    assert out[1]["candle"] is None          # 缺数据不编影线

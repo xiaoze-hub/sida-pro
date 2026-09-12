@@ -52,6 +52,36 @@ def _read_codes(sql: str, params: dict, codes: tuple[str, ...]) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
+    """klines 日线 OHLC(qfq, 唯一常驻复权维度) → {(date, symbol): {o,h,l,c}}。
+
+    两个 IN 列表都用 expanding bindparam; 任一入参为空短路返回 {}。
+    OHLC 任一为 None 的行丢弃(调用方落 candle=None, 不编)。
+    """
+    if not dates or not symbols:
+        return {}
+    from sqlalchemy import bindparam, text
+
+    from src.db.session import engine
+
+    stmt = text(
+        "SELECT ts, symbol, open, high, low, close FROM klines "
+        "WHERE period = '1d' AND adjust = 'qfq' AND ts IN :dates AND symbol IN :codes"
+    ).bindparams(bindparam("dates", expanding=True), bindparam("codes", expanding=True))
+    with engine.begin() as conn:
+        raw = conn.execute(
+            stmt, {"dates": tuple(sorted(dates)), "codes": tuple(sorted(symbols))}
+        ).fetchall()
+    out = {}
+    for r in raw:
+        m = dict(r._mapping)
+        if None in (m["open"], m["high"], m["low"], m["close"]):
+            continue
+        out[(str(m["ts"]), str(m["symbol"]))] = {
+            "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"]}
+    return out
+
+
 def _loads(v):
     if not v:
         return None
