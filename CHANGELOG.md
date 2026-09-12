@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### update-v0.5.89 生产部署 + /l2 端点离线验证
+- **部署链**: 覆盖层 19MB(备份 `/root/app_backup_pre_v0589_20260913.tar.gz` → `tar xzf --overwrite` →
+  `chown -R app:app` → `compileall` → restart)。`/api/version`=v0.5.89, healthy。
+- **`/api/stocks/600519/l2` 离线实测**(非交易时段, 临时 token): status 200, note=None;
+  snapshot{now 1275.16, open 1285.15, high 1286.15, low 1263.01, before5min 1276.31, buyp[1275.16,0,0,0,0]};
+  more{zt_price 1413.64, fcamo 0.0, ever_zt_count 0, l2_tic 26432} —— 字段齐全, 缺值如实 0/None。
+- **回填**: restart 会杀容器内 nohup 回填进程(再次确认), 已重跑续跑(already_done=1529/5827)。**跑完前不再 restart**。
+- **清理**: 临时账号 qav0589 已删(users 回 5); /tmp token+脚本已删; 本机 stage 已删。
+- **待周一盘中**: L2 live 值(FCAmo/五档/跳水)实测 + v0.5.87 live 联动 + 断源演练 + 回填覆盖核对。
+- [tag v0.5.89 已推 origin]
+
 ### feat-通达信 L2 字段接入(涨停价/封单/五档/逐笔/跳水); v0.5.89
 - **来源**: 老板让研究通达信接口文档 L2 字段(全文抽取 `~/tdx_doc_text.txt`, 231 页)。离线探针(非交易时段)确认字段有值。
 - **P1 涨停判定切权威源**: live 状态机对候选池(接近涨停/今日曾封)调 `get_more_info` 取 **ZTPrice**(涨停价) 与
