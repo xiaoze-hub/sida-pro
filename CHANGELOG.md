@@ -7,6 +7,16 @@
 
 ## 2026-09-12
 
+### update-v0.5.75 + v0.5.76 生产部署(能力矩阵 + 作业框架上线, 冒烟 10/10)
+- **部署链**: v0.5.75 走覆盖层(迁移 **v165 已应用** 13:59, `app_jobs` 建表), v0.5.76 走 **docker cp 热修**(5 个文件: `VERSION` + `src/core/{md_metrics_sink,data_capabilities,marketdata_client}.py` + `src/web/api/datasources.py`) → `chown -R app:app /app` → `compileall` → restart。`/api/version` = **v0.5.76**, 容器 healthy。回滚点: 容器内 `/root/bak_v0576/pre_v0576_files.tar.gz`(11.5KB, 覆盖前的 4 个文件)。
+- **能力矩阵前后对比(生产真值)**: 修前 `18 类全 unknown`; 部署后立刻 **正常 4 / 未测量 14 / 降级 0 / 无可用源 0**, 侧栏胶囊同步显示"数据能力 4/18"。累计计数落库验证: 21 行非零(`tencent 79/0`、`tq 68/0`、`eastmoney 6/0`、**`xueqiu 0/4`** —— 失败路径同样计入), 且 14 次报价后 EWMA 样本过 10 → 判定依据自动从 `(累计统计)` 切回 `(滚动EWMA)`。剩余 14 类是**低流量数据源样本不足**(n=6 或 0), 会在正常交易日随调用量点亮, 不是故障。
+- **作业框架实测(端到端)**: `POST /theme-mood/scan/run` → `{started:true, job_id:0f7bb10157}`; 紧接着再点一次 → `{started:false, reason:"扫描进行中", job_id 同一个}`(**single-flight 生效**); 41s 后 系统→任务 显示 **成功 · 题材情绪分扫描 · 100% · 41s · {'ok': True, 'rows': 517, ...}**。
+- **冒烟**: **10/10**(5.7s; dark-flow 5.0s 一次过, 未需要预热)。
+- **离线门禁**: `pytest -m "not network"` = **2179 passed / 7 failed / 5 skipped**。7 条已用 **v0.5.75 worktree 跑同一套全量做基线** —— 失败清单**逐条相同**(基线还多 1 个 worktree 环境的 teardown error), 即本次改动**没有引入任何失败**。这 7 条分三类, 都是既有问题: ① `test_entry_candidate_outcomes` 5 条(断言 `missing_pairs==6` 实得 4, 用例按 `date.today()` + 交易日推算, 周六跑必偏 —— 待确认是否日历相关); ② `test_ta_load_ohlcv_patch` 1 条(本机没装 `tradingagents` 包, CI 有); ③ `test_thsdk_buffer_size` 1 条(**只在整套顺序跑时红**: mock 被别的用例污染, 实际走了真 thsdk 连接 5 次失败 → 该用例还漏标 `@pytest.mark.network`)。
+- **走查发现 6 处缺陷(已登记 KI-049..054, 待 v0.5.77 修)**: 侧栏版本渲染成 "vv0.5.76"(双 v); 能力矩阵"成功率"列取的是**路由生效源**而后端状态按**最佳源**判 → 出现"正常·成功率 --"与"未测量·100%"两种自相矛盾; 侧栏能力胶囊跳到不存在的 `/settings?tab=datasources`; 首页大标题在 768~1150px 视口被挤成竖排; **作业面板没有任何可达触发入口**(两页都无「立即扫描」按钮, 空态文案让用户去点不存在的按钮); **扫描器从不调 `jobs.progress()`** → 进度条恒 0(只在结束时跳 100%), 且 `updated_at` 不推进会让 15 分钟停滞自愈把还在跑的长任务误判卡死(共振扫描 6000 标的有真实风险)。
+- **走查清理**: 本次临时账号 `qav0576`(含为其种的 600519 自选)已删; **另发现 v0.5.75 走查遗留的 `qav0575` owner 账号未删(建于 14:01, 带 002361 自选), 一并删除** —— users 表回到 5 个真实账号(admin/demo/娟姐/李冬冬/黄磊), 无孤儿自选行; 容器 `/tmp/{qa_v0576,verify_v0576,trigger_scan}.py` 与口令文件、WSL `/tmp/verify_v0576.out` 已删; 浏览器 localStorage 已清(32 keys); 本机 stage 目录与验证 worktree 已删(释放 49MB)。口令只经容器内 0600 文件传递, 未进代码/日志/commit。
+- [tag v0.5.76 已推 origin]
+
 ### fix-能力矩阵重启后 18 类全"未测量": 补 vendor 调用累计计数落库(v0.5.76, 部署自查发现)
 - v0.5.75 部署后生产自查: `能力矩阵: total 18 ok 0 degraded 0 unknown 18` —— 口径诚实但等于没用。根因两层:
   ① 唯一活着的健康读数是 `marketdata` 的**滚动 EWMA 窗口**(`_Metrics.window`, maxlen=100), 它只在 uvicorn 进程内存里, **每次重启/换 worker 归零**;
