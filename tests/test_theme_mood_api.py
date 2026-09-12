@@ -195,3 +195,44 @@ def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     assert conn.last_params == {"dates": ("20260911",), "codes": ("A", "B")}
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
+
+
+def test_ladder_contract_marks_stocks_and_mode(monkeypatch):
+    dates = ["20260910", "20260911"]
+    ev = [
+        {"trade_date": "20260910", "symbol": "C", "name": "CC", "is_sealed_close": True},
+        {"trade_date": "20260911", "symbol": "C", "name": "CC", "is_sealed_close": True},
+        {"trade_date": "20260911", "symbol": "Z", "name": "ZZ", "is_sealed_close": False},
+        {"trade_date": "20260911", "symbol": "D", "name": "DD", "is_sealed_close": True},
+    ]
+
+    def fake_read(sql, params):
+        if "DISTINCT trade_date" in sql:
+            return [{"trade_date": d} for d in reversed(dates)]
+        return [e for e in ev if e["trade_date"] >= params["a"]]
+
+    monkeypatch.setattr(api, "_read", fake_read)
+    monkeypatch.setattr(api, "_read_ohlc",
+                        lambda d, s: {("20260911", "C"): {"o": 1, "h": 2, "l": 1, "c": 2}})
+    c = _client(monkeypatch, ROWS)
+    r = c.get("/api/theme-mood/ladder?window=20")
+    d = r.json()["data"]
+    assert d["mode"] == "finalized" and d["stale"] is False and d["degraded"] is None
+    assert d["live_day"] is None
+    day = {x["date"]: x for x in d["ladder"]}[ "20260911"]
+    assert [b["symbol"] for b in day["blown"]] == ["Z"]
+    assert day["broken"] == []
+    stocks = {s["symbol"]: s for row in day["rows"] for s in row["stocks"]}
+    assert stocks["C"]["candle"] == {"o": 1, "h": 2, "l": 1, "c": 2}
+    assert stocks["D"]["candle"] is None                      # 缺 OHLC 不编
+    one = [row for row in day["rows"] if row["boards"] == 1]
+    assert len(one) == 1 and one[0]["tag"] == "首板"           # D 仅当日封板=首板
+    assert [row for row in day["rows"] if row["boards"] == 2][0]["tag"] is None
+    assert d["dates"] == dates          # 日期仍紧凑, 格式化归前端
+
+
+def test_ladder_rejects_bad_mode(monkeypatch):
+    monkeypatch.setattr(api, "_read", lambda sql, params: [])
+    c = _client(monkeypatch, ROWS)
+    assert c.get("/api/theme-mood/ladder?mode=bogus").status_code == 400
+    assert c.get("/api/theme-mood/ladder?mode=live").status_code == 400   # P1 未上线
