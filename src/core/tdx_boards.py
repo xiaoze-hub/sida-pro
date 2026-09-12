@@ -352,7 +352,11 @@ def stock_blocks(symbol: str) -> list[dict] | None:
     if cached is not None:
         return cached
     try:
-        v = _rpc("get_relation", {"stock_code": _to_tq_code(symbol) or symbol})
+        from marketdata.symbol import Symbol as _Symbol
+        from marketdata.vendors.tq import to_tq_code as _tq
+
+        tqc = _tq(_Symbol.parse(symbol, "CN")) or symbol
+        v = _rpc("get_relation", {"stock_code": tqc})
     except Exception as e:  # noqa: BLE001
         logger.warning("TDX 个股板块反查失败 %s: %s", symbol, e)
         return None

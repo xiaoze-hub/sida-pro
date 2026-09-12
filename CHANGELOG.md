@@ -7,6 +7,14 @@
 
 ## 2026-09-13
 
+### fix-v0.5.91 板块反查 NameError(_to_tq_code 未定义) 热修
+- **缺陷**: `tdx_boards.stock_blocks` 误引用本模块不存在的 `_to_tq_code` → NameError 被 except 吞 →
+  `/stocks/{sym}/blocks` 恒返回"板块反查不可用"+空(离线探针 get_relation 本身是好的, 是转换函数名错)。
+- **修**: 改用 `marketdata.vendors.tq.to_tq_code` + `Symbol.parse` 转换(与 stock_l2 同模式)。
+- **实测**: `/api/stocks/600519/blocks` → [酿酒(行业), 贵州板块(地区), 通达信88(概念), 白酒概念(概念), 乡村振兴(概念), 融资融券(风格)]。
+- 热修: docker cp tdx_boards.py + compileall + restart(回填再次重跑续跑)。
+- [随 v0.5.92 统一打 tag]
+
 ### feat-通达信 P1 数据接入(板块反查+日历/复权交叉); v0.5.91
 - **探针**(离线): `get_relation`(个股→板块)✅ / `get_trading_dates`✅ / `get_divid_factors`✅;
   **`get_block_name` MCP 不支持**(报错"不支持该tqcenter方法名") → 板块名改用 get_relation 的 BlockName。
