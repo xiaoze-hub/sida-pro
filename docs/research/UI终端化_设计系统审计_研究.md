@@ -58,7 +58,7 @@
 | 5 | `pages/Forecast.tsx` | /forecast | 预测 | `get_forecast` | **高** | 含 Kronos / Chronos-Bolt 模型结果 |
 | 6 | `pages/AnalysisDetail.tsx` | /analysis/:symbol | 分析详情 | 单股聚合 | **高** | 关键详情页 |
 | 7 | `pages/IndexDetail.tsx` | /index/:code | 指数详情 | 指数聚合 | 中 | — |
-| 8 | `pages/Opportunities.tsx` | /opportunities | 机会页 | `get_opportunities` | **高** | 决策先锋三指标主要展示位 |
+| 8 | `pages/Opportunities.tsx` | /opportunities | 机会页 | `get_opportunities` | **高** | 数智决策三指标主要展示位 |
 | 9 | `pages/Quote.tsx` | /quote/:symbol | **行情核心**（已未找到本地）| `get_market_data_cn` + summary + WS | **🔴 高（v0.4.60 已去卡片化）** | Hermes 本机已有；本地副本缺失 |
 | 10 | `pages/Portfolio.tsx` | /portfolio | 持仓 | `get_portfolio` | 中 | — |
 | 11 | `pages/Watchlist.tsx` | /watchlist | 自选股 | `get_watchlist` | 中 | — |
@@ -87,7 +87,7 @@
 | 页名（推断）| 可能路由 | 备注 |
 |---|---|---|
 | 三指标共振扫描页 | /resonance | 应与 Opportunities 区分 |
-| L2 深度盘口页 | /l2/:symbol | 决策先锋核心展示 |
+| L2 深度盘口页 | /l2/:symbol | 数智决策核心展示 |
 | 持仓成本线页 | /cost-basis/:symbol | v0.4.64 候选 |
 | 主题设置/暗黑切换页 | /theme | 系统偏好 |
 | 帮助/快捷键页 | /help | 终端风必备 |
@@ -199,11 +199,11 @@
 
 ## 3. 与专业终端调性的差距（四向对照）
 
-> 对照对象：**TradingView（业界标杆）/ 同花顺决策先锋（中国市场标杆）/ 通达信（本土老牌）/ Bloomberg Terminal（专业天花板）**
+> 对照对象：**TradingView（业界标杆）/ 同花顺数智决策（中国市场标杆）/ 通达信（本土老牌）/ Bloomberg Terminal（专业天花板）**
 
 ### 3.1 布局范式（专业终端核心特征）
 
-| 维度 | SIDA-Pro 当前 | TradingView | 同花顺决策先锋 | 通达信 | Bloomberg | 差距评估 |
+| 维度 | SIDA-Pro 当前 | TradingView | 同花顺数智决策 | 通达信 | Bloomberg | 差距评估 |
 |---|---|---|---|---|---|---|
 | 主图布局 | Dialog 弹窗（KlineModal）| 全屏路由 | 全屏路由 | 全屏路由 | 多 Panel 全屏 | 🔴 **大**：弹窗 vs 全屏 |
 | 主图占比 | 50-60% | 70-80% | 70-80% | 60-70% | 视内容而定 | 🔴 **大**：信息密度低 |
@@ -223,14 +223,14 @@
 
 ### 3.3 色彩语义（专业终端的另一核心）
 
-| 元素 | SIDA-Pro 当前 | TradingView | 同花顺决策先锋 | 通达信 | Bloomberg | 差距评估 |
+| 元素 | SIDA-Pro 当前 | TradingView | 同花顺数智决策 | 通达信 | Bloomberg | 差距评估 |
 |---|---|---|---|---|---|---|
 | 红涨绿跌 | ✅ 已对齐 | ❌ 绿涨红跌（西方）| ✅ 已对齐 | ✅ 已对齐 | 黑白为主 | ✅ 无差距 |
 | G/S 图标 | ❌ 无 | ❌（需自编 Pine）| ✅ 主图叠加 | ❌ | ❌ | 🔴 **大**：GS 独有 |
 | 三色柱（紫/红/绿）| ❌ 无 | ❌ | ✅ 活跃度 | ❌ | ❌ | 🔴 **大**：活跃度独有 |
 | 阈值线（生命/强势/大牛）| ❌ 无 | ❌ | ✅ 三条灰虚线 | ❌ | ❌ | 🔴 **大**：活跃度独有 |
 | 资金红绿柱 | ⚠️ 部分（OHLC 对照）| ✅ 有 | ✅ 红绿+0 轴 | ✅ 有 | ❌ | 🟡 中：待主笔级 |
-| 0 轴穿越图标 | ❌ 无 | ❌ | ✅ ▲▼ | ✅ 有 | ❌ | 🔴 **大**：决策先锋独有 |
+| 0 轴穿越图标 | ❌ 无 | ❌ | ✅ ▲▼ | ✅ 有 | ❌ | 🔴 **大**：数智决策独有 |
 | 警示色彩 | ⚠️ 部分 | ✅ 完善 | ✅ 完善 | ✅ 完善 | ✅ 完善 | 🟡 中：基础具备 |
 | 主题切换（暗色）| ✅ 完整 | ✅ 完善 | ✅ 完善 | ✅ 完善 | 强制黑底 | ✅ 无差距 |
 
@@ -246,7 +246,7 @@
 
 ### 3.5 交互模式
 
-| 维度 | SIDA-Pro 当前 | TradingView | 同花顺决策先锋 | 通达信 | Bloomberg | 差距评估 |
+| 维度 | SIDA-Pro 当前 | TradingView | 同花顺数智决策 | 通达信 | Bloomberg | 差距评估 |
 |---|---|---|---|---|---|---|
 | 键盘快捷键 | ⚠️ 基础（`use-hotkeys.ts`）| ✅ 业界领先 | ✅ 中等 | ✅ 中等 | ✅ 键盘之王 | 🔴 **大**：Bloomberg 风缺失 |
 | 鼠标滚轮缩放 | ⚠️ 基础 | ✅ 完善 | ✅ 完善 | ✅ 完善 | ✅ 完善 | 🟡 中：可改进 |
@@ -295,7 +295,7 @@
 | 页 | 理由 | 工作量 | 风险 |
 |---|---|---|---|
 | **Quote.tsx**（全屏路由化）| 行情核心页；v0.4.60 已去卡片化但仍在弹窗；迁到全屏路由后才能展示"主图 + 副图三件套" | 5 天 | 低（已有 5 层架构基础）|
-| **Opportunities.tsx**（去卡片化 + 三指标共振展示）| 决策先锋三指标主要展示位；当前用 OpportunityCard 堆叠；改为"左侧列表 + 右侧 K 线"或"网格 + 标签筛选" | 2-3 天 | 低 |
+| **Opportunities.tsx**（去卡片化 + 三指标共振展示）| 数智决策三指标主要展示位；当前用 OpportunityCard 堆叠；改为"左侧列表 + 右侧 K 线"或"网格 + 标签筛选" | 2-3 天 | 低 |
 
 ### 4.3 dark + enterprise 风格落地要素清单
 
@@ -459,7 +459,7 @@
 - 后端：3 条 wencai 模板 + 暗盘 SERIES + 实战文案 API
 - 前端：dark + enterprise 设计系统 + Quote 全屏路由 + Opportunities 去卡片化
 
-预期 v0.4.65 demo 版产出"决策先锋三指标复刻 + 专业终端 UI"完整可演示版本。
+预期 v0.4.65 demo 版产出"数智决策三指标复刻 + 专业终端 UI"完整可演示版本。
 
 ---
 
@@ -583,7 +583,7 @@
 
 ## 附录 B：四向对照速查表（专业终端要素 × SIDA-Pro 现状）
 
-| 要素 | TradingView | 同花顺决策先锋 | 通达信 | Bloomberg | SIDA-Pro |
+| 要素 | TradingView | 同花顺数智决策 | 通达信 | Bloomberg | SIDA-Pro |
 |---|---|---|---|---|---|
 | **命令驱动** | `/` 全局搜索 | ❌ | ✅ 命令 | ✅ `<GO>` | ❌ |
 | **绘图工具** | 业界领先 | 基础 | 完善 | 完善 | 基础 |

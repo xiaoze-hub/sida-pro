@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""summary API resonance 字段(决策先锋三指标共振状态)单测。
+"""summary API resonance 字段(数智决策三指标共振状态)单测。
 
 字段契约(前端严格按此消费, 2026-09-02):
     resonance = {
@@ -304,7 +304,7 @@ def test_build_layer_data_no_bars_resonance_default(monkeypatch):
 
 
 def test_build_layer_data_non_cn_resonance_default():
-    """非 A 股(决策先锋体系仅 A 股) → resonance 安全默认。"""
+    """非 A 股(数智决策体系仅 A 股) → resonance 安全默认。"""
     from src.models.market import MarketCode
 
     out = kapi._build_layer_data("00700", MarketCode.HK)

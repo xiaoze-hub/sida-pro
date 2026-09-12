@@ -1,4 +1,4 @@
-"""决策先锋三指标 API(盘中实时)。
+"""数智决策三指标 API(盘中实时)。
 
 GET /api/decision-pioneer/002361?market=CN
 → {symbol, market, institution_activity, gs, l2, main_intent, data_time}
@@ -50,7 +50,7 @@ def _get(symbol: str, market: str) -> dict:
 
 @router.get("/{symbol}/history")
 def get_decision_pioneer_history(symbol: str, market: str = "CN", days: int = 30):
-    """决策先锋历史快照(09-03 落库回查; 空=该股尚无落库, 不编造)。"""
+    """数智决策历史快照(09-03 落库回查; 空=该股尚无落库, 不编造)。"""
     code = _valid_symbol(symbol)
     if market.upper() not in ("CN",):
         raise HTTPException(400, "decision-pioneer 仅支持 CN 市场")
@@ -61,7 +61,7 @@ def get_decision_pioneer_history(symbol: str, market: str = "CN", days: int = 30
 
 @router.get("/{symbol}")
 def get_decision_pioneer(symbol: str, market: str = "CN"):
-    """决策先锋三指标 + L2 主力净流入 + 主力意图(盘中实时)。"""
+    """数智决策三指标 + L2 主力净流入 + 主力意图(盘中实时)。"""
     code = _valid_symbol(symbol)
     if market.upper() not in ("CN",):
         raise HTTPException(400, "decision-pioneer 仅支持 CN 市场")
@@ -69,4 +69,4 @@ def get_decision_pioneer(symbol: str, market: str = "CN"):
         return _get(code, market.upper())
     except Exception as e:  # noqa: BLE001
         logger.warning("decision-pioneer API %s failed: %s", code, e)
-        raise HTTPException(502, f"决策先锋数据获取失败: {e}") from e
+        raise HTTPException(502, f"数智决策数据获取失败: {e}") from e

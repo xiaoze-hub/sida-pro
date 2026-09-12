@@ -5,7 +5,7 @@ import { activityLevelColor } from '../lib/stock-colors'
 import ActivitySparkline from './ActivitySparkline'
 
 /**
- * 决策先锋三指标卡片(2026-08-30)
+ * 数智决策三指标卡片(2026-08-30)
  * 数据来自 GET /api/decision-pioneer/{symbol}?market=CN
  * (fetchAPI 自动补 /api 前缀)。盘中每 30 秒自动刷新, 与分时图节奏一致。
  * 三指标 = GS策略(趋势) × AI机构活跃度(强度) × L2主力净流入(资金, 明盘口径, 非暗盘)。
@@ -104,7 +104,7 @@ export default function DecisionPioneerCard({ symbol, market }: { symbol: string
       <div className="mt-3 rounded-xl border border-border/50 bg-card p-3">
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <ShieldAlert className="w-3.5 h-3.5" />
-          <span>决策先锋三指标暂不可用({error})</span>
+          <span>数智决策三指标暂不可用({error})</span>
         </div>
       </div>
     )
@@ -118,7 +118,7 @@ export default function DecisionPioneerCard({ symbol, market }: { symbol: string
     <div className="mt-3 rounded-xl border border-border/50 bg-card p-3">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
-          <div className="text-[13px] font-semibold text-foreground">🧭 决策先锋三指标</div>
+          <div className="text-[13px] font-semibold text-foreground">🧭 数智决策三指标</div>
           <span className="text-[10px] text-muted-foreground">GS趋势 × 机构活跃度 × L2资金</span>
         </div>
         <button

@@ -2142,7 +2142,7 @@ CREATE TABLE IF NOT EXISTS klines (
 
 
 def _m127_dp_history_table(conn: Connection) -> None:
-    """决策先锋快照历史(09-03: 快照落库, 回查/回测用; PG/SQLite 通用类型)。"""
+    """数智决策快照历史(09-03: 快照落库, 回查/回测用; PG/SQLite 通用类型)。"""
     conn.execute(
         text(
             """
@@ -2924,7 +2924,7 @@ def _m156_dragon_tiger_events_table(conn: Connection) -> None:
 
 
 def _m161_resonance_scan_table(conn: Connection) -> None:
-    """三指标共振扫描结果表 resonance_scan(2026-09-11, 决策先锋升级)。
+    """三指标共振扫描结果表 resonance_scan(2026-09-11, 数智决策升级)。
 
     全市场盘后扫描: 趋势(GS) × 强度(AI机构活跃度≥3) × 资金(主力净流入>0),
     `(trade_date, symbol)` 唯一, 重扫幂等(结果覆盖)。

@@ -594,7 +594,7 @@ app.include_router(
     tags=["dark-flow"],
     dependencies=protected,
 )
-# 决策先锋三指标(GS策略+暗盘资金+AI机构活跃度) + L2主力净流入(盘中实时, 2026-08-30)
+# 数智决策三指标(GS策略+暗盘资金+AI机构活跃度) + L2主力净流入(盘中实时, 2026-08-30)
 app.include_router(
     decision_pioneer.router,
     prefix="/api/decision-pioneer",
@@ -608,14 +608,14 @@ app.include_router(
     tags=["decision"],
     dependencies=protected,
 )
-# 决策先锋选股池(三指标共振扫描, 盘中实时, 2026-08-30)
+# 数智决策选股池(三指标共振扫描, 盘中实时, 2026-08-30)
 app.include_router(
     stock_pool.router,
     prefix="/api/stock-pool",
     tags=["stock-pool"],
     dependencies=protected,
 )
-# 三指标共振(2026-09-11 决策先锋升级): 全市场盘后扫描结果 + 活跃度序列
+# 三指标共振(2026-09-11 数智决策升级): 全市场盘后扫描结果 + 活跃度序列
 app.include_router(
     resonance.router,
     prefix="/api/resonance",

@@ -390,7 +390,7 @@ export default function OpportunitiesPage() {
   const [feedbackMap, setFeedbackMap] = useState<Record<string, boolean>>({})
   const [feedbackPending, setFeedbackPending] = useState<Set<string>>(new Set())
 
-  // 选股池(决策先锋三指标共振扫描, 2026-08-30)
+  // 选股池(数智决策三指标共振扫描, 2026-08-30)
   const [poolSymbols, setPoolSymbols] = useState('002361, 600519, 300750, 002407')
   const [poolRows, setPoolRows] = useState<StockPoolRow[]>([])
   const [poolLoading, setPoolLoading] = useState(false)
@@ -1797,7 +1797,7 @@ export default function OpportunitiesPage() {
               </Button>
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
-              决策先锋三指标共振：GS趋势 + AI机构活跃度 + L2主力净流入，三项全满足=强共振
+              数智决策三指标共振：GS趋势 + AI机构活跃度 + L2主力净流入，三项全满足=强共振
             </div>
             {poolScanned ? (
               poolRows.length ? (

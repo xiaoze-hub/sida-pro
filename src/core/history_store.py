@@ -1,4 +1,4 @@
-"""历史落库: 决策先锋快照 + L2 逐笔(回测回查用)。
+"""历史落库: 数智决策快照 + L2 逐笔(回测回查用)。
 
 双库兼容(PG 生产 / SQLite 本地): 只用标准类型 + TEXT 存 JSON,
 SQLite 靠类型宽松(type affinity)通过, PG 走原生类型。
@@ -54,7 +54,7 @@ def _engine():
 
 
 def record_dp_snapshot(symbol: str, market: str, data: dict) -> None:
-    """存一条决策先锋快照(只在新鲜计算后调, 30s 缓存天然节流)。"""
+    """存一条数智决策快照(只在新鲜计算后调, 30s 缓存天然节流)。"""
     try:
         act = (data or {}).get("institution_activity") or {}
         gs = (data or {}).get("gs") or {}
@@ -97,7 +97,7 @@ WHERE ts < :cut
 
 
 def query_dp_history(symbol: str, market: str, days: int = 30, limit: int = 500) -> list[dict]:
-    """读决策先锋历史(按 ts 升序, 回查/回测用)。"""
+    """读数智决策历史(按 ts 升序, 回查/回测用)。"""
     try:
         days = max(1, min(int(days or 30), DP_RETENTION_DAYS))
         limit = max(1, min(int(limit or 500), 2000))

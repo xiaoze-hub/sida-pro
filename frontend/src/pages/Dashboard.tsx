@@ -705,7 +705,7 @@ export default function DashboardPage() {
           ) : null}
         </div>
       )}
-      {/* 三指标共振(2026-09-11 决策先锋升级 B): 盘后全市场扫描落库结果 */}
+      {/* 三指标共振(2026-09-11 数智决策升级 B): 盘后全市场扫描落库结果 */}
       {shown('resonance') && (
         <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
           <ResonancePanel actions={<ScanJobButton path="/resonance/scan/run" title="全市场三指标共振扫描(后台执行, 分钟级)" />} />

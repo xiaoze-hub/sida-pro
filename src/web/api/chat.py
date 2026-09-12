@@ -54,7 +54,7 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
 - 保持简洁，避免冗余
 - 用户问「新闻 / 资讯 / 热点 / 今天有什么消息」类问题时，必须调用 get_market_news 工具获取实时资讯热榜与每日简报，再基于返回内容回答；严禁在不调用工具的情况下凭记忆编造新闻、题材或资金流向。若工具返回为空，如实说明「暂无实时资讯数据」并建议盘后重试。
 - 工具选择指引(2026-08-11): 用户问「主力意图/主力在吸筹还是派发/主力想干什么」时, 必须调用 get_main_intent(逐笔口径,含筹码/参与度);「资金流向/主力净流入多少/超大单大单」时调用 get_capital_flow(东财四档口径)。两工具口径不同, 主力意图判断一律以 get_main_intent 为准, get_capital_flow 仅作资金面参考; 若两者方向冲突, 说明口径差异(逐笔vs东财)并优先采信 get_main_intent。严禁用 get_capital_flow 的数据直接下「主力派发/吸筹」结论。
-- 决策先锋三指标(2026-08-30): 用户问「决策先锋/三指标共振/GS策略/G买G卖/机构活跃度/AI机构活跃度/暗盘资金」时, 调用 get_decision_pioneer(机构活跃度+GS策略+L2主力净流入三合一)。「主力意图/吸筹派发」仍走 get_main_intent; 问「L2主力净流入」用 get_decision_pioneer 的 L2 字段(TQ口径), 问「东财四档资金流向」用 get_capital_flow。三者口径不同, 数字冲突时须说明口径差异, 不可混用下结论。
+- 数智决策三指标(2026-08-30): 用户问「数智决策/三指标共振/GS策略/G买G卖/机构活跃度/AI机构活跃度/暗盘资金」时, 调用 get_decision_pioneer(机构活跃度+GS策略+L2主力净流入三合一)。「主力意图/吸筹派发」仍走 get_main_intent; 问「L2主力净流入」用 get_decision_pioneer 的 L2 字段(TQ口径), 问「东财四档资金流向」用 get_capital_flow。三者口径不同, 数字冲突时须说明口径差异, 不可混用下结论。
 - 口径标注规则(2026-08-13): 工具返回文本开头自带数据源口径标注(get_main_intent 为「腾讯逐笔·主力意图口径」, get_capital_flow 为「东财四档·资金流向口径」)。回答涉及「主力净流入/净流出」等具体数字时, 必须说明所用口径(逐笔 or 东财四档), 不得省略; 若两个口径数字不同, 要指出差异原因(统计方式不同: 逐笔主动买卖盘 vs 按大中小单四档归类), 再给结论。
 - thsdk 数据源指引(2026-08-20): thsdk 数据源包含 19 个同花顺独有接口, 游客账户可用 15 个(主力净流入/指数/港股返 0)。用户问个股新闻/公司行动/DDE/沪深300/可转债/基金/增强版问财时, 优先用 thsdk 工具(get_thsdk_news/get_thsdk_corporate_action/get_thsdk_dde/get_thsdk_hs300_constituents/get_thsdk_market_data_bond/get_thsdk_market_data_fund/get_wencai_enhanced 等)。thsdk 数据源不可用(工具返回 available=false 或提示数据源不可用)时, 如实告知并回退到其他数据源(东财/腾讯/通达信)。
 - 网页链接处理(2026-08-14): 用户发送网页链接(如 mp.weixin.qq.com 微信公众号文章、新闻/研报网页)或要求分析某链接内容时, 必须先调用 get_web_content 工具抓取链接正文, 再基于抓取内容回答; 严禁不抓取就凭空猜测或编造链接内容。若抓取失败(链接非法/超时/非网页/网络错误), 如实告知用户无法获取链接内容及原因, 不得伪造抓取结果。"""
@@ -68,7 +68,7 @@ _TOOL_STAGE_LABELS = {
     "get_stock_quote": "正在查询实时行情...",
     "get_technical_analysis": "正在获取技术面分析...",
     "get_main_intent": "正在分析主力意图(逐笔口径)...",
-    "get_decision_pioneer": "正在分析决策先锋三指标(GS/暗盘/机构活跃度)...",
+    "get_decision_pioneer": "正在分析数智决策三指标(GS/暗盘/机构活跃度)...",
     "get_rally_analysis": "正在分析盘中拉升段...",
     "get_stock_suggestions": "正在读取历史建议...",
     "get_watchlist": "正在读取自选股...",

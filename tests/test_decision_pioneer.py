@@ -1,4 +1,4 @@
-"""决策先锋三指标纯计算单元测试(不依赖网络/DB)。"""
+"""数智决策三指标纯计算单元测试(不依赖网络/DB)。"""
 import sys
 from pathlib import Path
 

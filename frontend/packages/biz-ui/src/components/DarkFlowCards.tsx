@@ -404,7 +404,7 @@ export default function DarkFlowCards({ symbol, market }: { symbol: string; mark
         )}
       </div>
 
-      {/* ============ 卡片: 决策先锋三指标(2026-08-30) ============ */}
+      {/* ============ 卡片: 数智决策三指标(2026-08-30) ============ */}
       <DecisionPioneerCard symbol={symbol} market={market} />
 
       {/* ============ 卡片③: OB 盘口失衡条(2026-08-20) — 底部挂载 ============ */}

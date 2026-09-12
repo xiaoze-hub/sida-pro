@@ -104,7 +104,7 @@ interface ChipsInfo {
   cost_90?: number | null
 }
 
-/** 决策先锋三指标共振状态(后端 summary.resonance, 全部可选以容错) */
+/** 数智决策三指标共振状态(后端 summary.resonance, 全部可选以容错) */
 interface ResonanceInfo {
   available?: boolean
   row?: number | null
@@ -892,10 +892,10 @@ export default function QuotePage() {
               </div>
             )}
 
-            {/* 决策先锋共振(三指标共振状态, 替换原写死操作建议; 无卡片, hairline 分隔) */}
+            {/* 数智决策共振(三指标共振状态, 替换原写死操作建议; 无卡片, hairline 分隔) */}
             <div className="border-b border-border/40 pb-2">
               <div className="text-[11px] text-muted-foreground">
-                决策先锋共振
+                数智决策共振
                 {summary?.resonance?.available && summary.resonance.row != null && (
                   <span className="ml-1 font-mono text-[10px] opacity-70">第 {summary.resonance.row} 档</span>
                 )}

@@ -24,6 +24,7 @@ const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
 const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
+const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
 const QuotePage = lazy(() => import('@/pages/Quote'))
@@ -473,6 +474,7 @@ function App() {
               <Route path="/index/:symbol" element={<IndexDetailPage />} />
               <Route path="/boards/:blockCode" element={<BoardDetailPage />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
+              <Route path="/stocks/:symbol" element={<PermGuard perm="view_forecast" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />

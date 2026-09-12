@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _CST = ZoneInfo("Asia/Shanghai")
 _TABLE = "signal_snapshots"
 
-# 官方对照基准(决策先锋 8问8答, 2024.10-2025.10): 仅 resonance 类信号参考
+# 官方对照基准(数智决策 8问8答, 2024.10-2025.10): 仅 resonance 类信号参考
 OFFICIAL_BENCHMARK = {"resonance": {"win_rate": 75.42, "pl_ratio": 3.45}}
 
 KNOWN_SIGNAL_TYPES = ("seal_quality", "ambush_candidate", "gs_signal", "resonance", "dark_cluster")

@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### feat-改名数智决策 + 个股整页工作台第①步; v0.5.90
+- **改名**: 「决策先锋」→「**数智决策**」(老板指令)。改用户可见串+代码注释+docs(前端/agents/monitor/卡片标题/聊天工具描述);
+  **保留** dark_flow_l2/dark_flow_fusion 里引用_vendor_「决策先锋8问8答/暗盘」的出处表述, 及 CHANGELOG 历史(不篡改历史)。
+  回归: 数智决策/共振相关单测 49 passed。
+- **个股整页工作台第①步**(老板否掉"卡片堆叠逐层点击"): 新路由 `/stocks/:symbol` → `StockWorkbench`。
+  布局=主图区(InteractiveKline 大K) + 右栏平铺卡(数智决策三指标 DecisionPioneerCard / 共振判定 ResonanceVerdictPanel /
+  **盘口L2 卡**(新, 用 `/stocks/{sym}/l2`, 30s 轮询, 五档买卖+封单+主力净流入+逐笔+连板vendor, 缺值 '--' 不编)。
+  不嵌套不逐层点击; 第②步右栏加基本面/资金/题材/公告卡, 第③步 hover 预览替代模态。
+- **门禁**: 前端 tsc/eslint/UI-RULES/vitest **207** 全绿; 后端无改动(复用 v0.5.89 /l2)。
+- [tag v0.5.90]
+
 ### update-v0.5.89 生产部署 + /l2 端点离线验证
 - **部署链**: 覆盖层 19MB(备份 `/root/app_backup_pre_v0589_20260913.tar.gz` → `tar xzf --overwrite` →
   `chown -R app:app` → `compileall` → restart)。`/api/version`=v0.5.89, healthy。

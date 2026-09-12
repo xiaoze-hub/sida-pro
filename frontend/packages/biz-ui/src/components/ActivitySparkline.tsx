@@ -4,7 +4,7 @@ import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 
 /**
- * 机构活跃度副图(2026-09-11, 决策先锋升级 C)。
+ * 机构活跃度副图(2026-09-11, 数智决策升级 C)。
  * 数据来自 GET /api/resonance/activity/{symbol}?days=120(逐日活跃度 + 生命/强势/大牛三线)。
  * 三线: 生命线 1.56 / 强势线 3 / 大牛线 6; 共振日(趋势G区+强度+资金) 以红点标注。
  */

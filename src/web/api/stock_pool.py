@@ -1,8 +1,8 @@
-"""决策先锋选股池 API(盘中实时, 2026-08-30)。
+"""数智决策选股池 API(盘中实时, 2026-08-30)。
 
 POST /api/stock-pool/screen
 请求体: {"symbols": ["002361", "600519", ...]}
-→ 对每只股票批量算决策先锋三指标(GS + 机构活跃度 + L2主力净流入),
+→ 对每只股票批量算数智决策三指标(GS + 机构活跃度 + L2主力净流入),
   按"共振强度"排序返回。
 
 共振判定(买入方向):
@@ -114,7 +114,7 @@ def _screen(symbols: list[str]) -> dict:
 
 @router.post("/screen")
 def screen_stock_pool(req: StockPoolScreenRequest):
-    """决策先锋选股池共振扫描(批量, 盘中实时)。"""
+    """数智决策选股池共振扫描(批量, 盘中实时)。"""
     symbols = _valid_symbols(req.symbols)
     if not symbols:
         return {"rows": [], "total": 0, "truncated": False}

@@ -693,7 +693,7 @@ def _append_main_intent(lines: list, symbol: str) -> None:
 
 
 def _append_decision_pioneer(lines: list, symbol: str) -> None:
-    """决策先锋三指标段(2026-08-30): GS策略 + AI机构活跃度 + L2主力净流入。
+    """数智决策三指标段(2026-08-30): GS策略 + AI机构活跃度 + L2主力净流入。
 
     与主力意图段(逐笔, 真暗盘)不同源: 本段=GS趋势(日线均线交叉) + 机构活跃度(纯K线波动)
     + L2主力净流入(TQ get_more_info.Zjl_HB, 明盘口径, 同花顺"主力资金"对齐)。数据源失败静默。
@@ -704,7 +704,7 @@ def _append_decision_pioneer(lines: list, symbol: str) -> None:
         d = fetch_decision_pioneer(symbol, "CN")
         if not d:
             return
-        lines.append("\n## 决策先锋三指标(GS趋势 × 机构活跃度 × L2资金)")
+        lines.append("\n## 数智决策三指标(GS趋势 × 机构活跃度 × L2资金)")
         act = d.get("institution_activity")
         if act:
             ma5 = f"，5日均{act['ma5']}" if act.get("ma5") is not None else ""
@@ -730,7 +730,7 @@ def _append_decision_pioneer(lines: list, symbol: str) -> None:
         else:
             lines.append("- 主力净流入(L2·TQ)：无数据(TQ未连接或休市)")
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"决策先锋段获取失败(不影响其他段): {e}")
+        logger.debug(f"数智决策段获取失败(不影响其他段): {e}")
 
 
 def get_realtime_volume_ratio(symbol: str, market: str = "CN") -> float | None:
@@ -1558,7 +1558,7 @@ class IntradayMonitorAgent(BaseAgent):
         # 逐笔实时口径 + 筹码面 + 股东户数, 资金面之外的决策核心
         _append_main_intent(lines, stock.symbol)
 
-        # ============ 决策先锋三指标(2026-08-30) ============
+        # ============ 数智决策三指标(2026-08-30) ============
         # GS趋势 + 机构活跃度 + L2主力净流入(对齐同花顺暗盘)
         _append_decision_pioneer(lines, stock.symbol)
 
@@ -1853,12 +1853,12 @@ class IntradayMonitorAgent(BaseAgent):
         intent = _main_intent_summary(stock.symbol)
         if intent:
             lines.append(f"主力意图：{intent}")
-        # 决策先锋三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
+        # 数智决策三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
         try:
             from src.core.decision_pioneer import decision_pioneer_text
             dp = decision_pioneer_text(stock.symbol, "CN")
             if dp:
-                lines.append(f"决策先锋：{dp}")
+                lines.append(f"数智决策：{dp}")
         except Exception:  # noqa: BLE001
             pass
         if triggers:

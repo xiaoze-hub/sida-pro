@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 
 /**
- * 决策先锋共振判定面板(2026-09-11, 老板"要接入ai分析, 给出是否共振; 现在没办法知道到底有没有共振")。
+ * 数智决策共振判定面板(2026-09-11, 老板"要接入ai分析, 给出是否共振; 现在没办法知道到底有没有共振")。
  *
  * 上半: 规则三灯(趋势/强度/资金, 日线口径, 来自 GET /api/resonance/symbol/{symbol});
  * 下半: 点「AI 分析」→ POST /api/resonance/analyze/{symbol} → 结构化结论

@@ -412,7 +412,7 @@ def _resonance_default() -> dict:
 
 
 def _build_resonance(symbol: str, bars: list[dict]) -> dict:
-    """决策先锋三指标共振状态(2026-09-02 暴露到 summary, 字段契约见前端消费方)。
+    """数智决策三指标共振状态(2026-09-02 暴露到 summary, 字段契约见前端消费方)。
 
     三指标当日最新值, 全部复用已有能力, 不重写算法:
       - 趋势  : gs_strategy.eval_gs(bars) + trend_label(复用 layer 已拉的 bars, 纯计算)

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { safeFixed } from '@/lib/format'
 
 /**
- * 三指标共振清单卡片(2026-09-11, 决策先锋升级 B)。
+ * 三指标共振清单卡片(2026-09-11, 数智决策升级 B)。
  * 数据来自 GET /api/resonance/scan?only=resonance|near(盘后全市场扫描落库结果)。
  * 判定: 趋势(GS G区) × 强度(活跃度≥3) × 资金(净流入>0); 三项全对=共振, 两项=接近。
  * 行末 AI: 盘后 15:50 批量 LLM 复核结论(强共振/弱共振/未共振/无法判定), 悬停看摘要。

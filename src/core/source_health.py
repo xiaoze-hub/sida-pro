@@ -150,7 +150,7 @@ def check_shadow() -> dict[str, Any]:
 
 
 def check_tq_moreinfo() -> dict[str, Any]:
-    """TQ 扩展指标网关(more_info/明盘资金/决策先锋共用链路)。
+    """TQ 扩展指标网关(more_info/明盘资金/数智决策共用链路)。
 
     只做轻探测, 不发起真实行情查询:
       - `TDX_QUANT_URL` 已配 → 探该地址
@@ -186,7 +186,7 @@ SOURCE_DEFS: dict[str, dict[str, Any]] = {
     "img":    {"name": ".img 盘口队列", "check": check_img,    "icons": ["🛡托/🔒压"]},
     "wencai": {"name": "wencai/thsdk", "check": check_wencai, "icons": ["涨"]},
     "shadow": {"name": "shadow 交割单", "check": check_shadow, "icons": ["我"]},
-    "tq_moreinfo": {"name": "TQ 扩展指标(明盘/决策先锋)", "check": check_tq_moreinfo, "icons": ["明盘"]},
+    "tq_moreinfo": {"name": "TQ 扩展指标(明盘/数智决策)", "check": check_tq_moreinfo, "icons": ["明盘"]},
 }
 
 

@@ -13,7 +13,7 @@ import { datasourcesApi } from '@panwatch/api'
  *   img         → 🛡托 / 🔒压
  *   wencai      → 涨
  *   shadow      → 我
- *   tq_moreinfo → 明盘(TQ 扩展指标/决策先锋链路)
+ *   tq_moreinfo → 明盘(TQ 扩展指标/数智决策链路)
  *
  * ⚠️ 诚实口径: 请求失败 / 状态未知时一律按 **不可用** 处理(灰显),
  * 不假设"接口挂了但数据应该还在"。

@@ -203,7 +203,7 @@ async def _tool_get_main_intent(db: Session, args: dict, user: User | None = Non
         "type": "function",
         "function": {
             "name": "get_decision_pioneer",
-            "description": "获取股票决策先锋三指标（GS策略趋势 + 暗盘资金/L2主力净流入 + AI机构活跃度）：机构活跃度数值与档位(生命线1.56/强势线3/大牛线6)、连强天数、5日均值，GS策略G买/S卖信号与当前G区/S区状态，L2主力净流入(TQ口径,对齐同花顺暗盘)。回答'三指标共振''机构活跃度''GS策略信号''暗盘资金''决策先锋'等问题。",
+            "description": "获取股票数智决策三指标（GS策略趋势 + 暗盘资金/L2主力净流入 + AI机构活跃度）：机构活跃度数值与档位(生命线1.56/强势线3/大牛线6)、连强天数、5日均值，GS策略G买/S卖信号与当前G区/S区状态，L2主力净流入(TQ口径,对齐同花顺暗盘)。回答'三指标共振''机构活跃度''GS策略信号''暗盘资金''数智决策'等问题。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -214,21 +214,21 @@ async def _tool_get_main_intent(db: Session, args: dict, user: User | None = Non
             },
         },
     },
-    caliber="决策先锋三指标·机构活跃度+GS+L2主力净流入(TQ口径)",
+    caliber="数智决策三指标·机构活跃度+GS+L2主力净流入(TQ口径)",
 )
 async def _tool_get_decision_pioneer(db: Session, args: dict, user: User | None = None) -> str:
     symbol = args.get("symbol", "")
     market = args.get("market", "CN")
     if market != "CN":
-        return "决策先锋三指标仅支持 A 股(CN)。"
+        return "数智决策三指标仅支持 A 股(CN)。"
     try:
         from src.core.decision_pioneer import decision_pioneer_text
 
         # 热修: 同步网络调用包 to_thread, 防阻塞事件循环
         result = await asyncio.to_thread(decision_pioneer_text, symbol, market)
-        return f"[数据源: 决策先锋三指标·机构活跃度+GS+L2主力净流入]\n{result}" if result else f"未能获取 {symbol} 的决策先锋数据。"
+        return f"[数据源: 数智决策三指标·机构活跃度+GS+L2主力净流入]\n{result}" if result else f"未能获取 {symbol} 的数智决策数据。"
     except Exception as e:
-        return f"决策先锋获取失败: {str(e)[:100]}"
+        return f"数智决策获取失败: {str(e)[:100]}"
 
 
 @register_chat_tool(

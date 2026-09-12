@@ -1,4 +1,4 @@
-"""三指标共振 API(2026-09-11, 决策先锋升级)。
+"""三指标共振 API(2026-09-11, 数智决策升级)。
 
 GET  /api/resonance/scan            全市场扫描结果(最近一次, only=all|resonance|near)
 POST /api/resonance/scan/run        手动触发一次全市场扫描(后台线程; 盘后自动 15:40)
