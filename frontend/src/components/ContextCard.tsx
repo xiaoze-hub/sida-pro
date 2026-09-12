@@ -214,11 +214,11 @@ function HoldingsCard({ symbol }: { symbol: string; market: string }) {
             {!editing && (
               <>
                 <button type="button" onClick={() => { setEditing('add'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-stock-up hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-gs-go hover:bg-accent">
                   <Plus className="h-3 w-3" /> 加仓
                 </button>
                 <button type="button" onClick={() => { setEditing('reduce'); setMsg('') }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-stock-down hover:bg-accent">
+                  className="inline-flex items-center gap-1 rounded-lg border border-border/50 px-2.5 py-1 text-[11px] text-gs-stop hover:bg-accent">
                   <Minus className="h-3 w-3" /> 减仓
                 </button>
               </>

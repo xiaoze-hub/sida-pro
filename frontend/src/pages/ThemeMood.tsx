@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import {
   AXIS_CELL_W,
   AXIS_PITCH,
@@ -183,6 +184,10 @@ export default function ThemeMoodPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="mb-3">
+        <MarketPhasePanel />
       </div>
 
       <div className="flex flex-col gap-3 xl:flex-row">

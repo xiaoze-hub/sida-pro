@@ -105,7 +105,7 @@ export default function DarkFundTopPage() {
   if (loading) return <SimpleLoading text="加载暗盘资金 TOP 榜…" />
   if (error) return <SimpleError text={error} />
 
-  if (!data) return <SimpleEmpty text="暂无数据" />
+  if (!data) return <SimpleEmpty text="暂无暗盘资金榜单 —— 盘后 15:30 快照任务未跑或今日休市，可点右上「刷新」" />
 
   // 场景 1: 无快照(盘后 15:30 cron 还没跑 / 首次部署 / 刷新失败)
   if (isUnavailable(data)) {

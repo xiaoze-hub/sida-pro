@@ -44,6 +44,16 @@ def test_market_series_tracks_leading_edge_not_flat_mean():
     assert (all_mean[1] - all_mean[0]) < (top[1] - top[0])
 
 
+def test_pool_eligible_member_bounds_beyond_name_blacklist():
+    """成员数上下限是结构性判据, 补名称黑名单漏掉的新属性板块。"""
+    assert tm.is_pool_eligible("人工智能", 2166) is True          # 真主题, 大但保留
+    assert tm.is_pool_eligible("融资融券", 7700) is False         # 超上限 → 挡掉
+    assert tm.is_pool_eligible("沪深股通", 3300) is False
+    assert tm.is_pool_eligible("某某次新", 50) is False           # 名称黑名单仍生效
+    assert tm.is_pool_eligible("空壳概念", 2) is False             # 低于下限
+    assert tm.is_pool_eligible("自定义宽基", 900, 4, 600) is False  # 上限可覆盖(TSP 默认 600)
+
+
 def test_anchor_map_clamps_and_interpolates():
     anchors = [(0, 0), (2, 40), (5, 100)]
     assert tm.anchor_map(None, anchors) == 50.0          # 缺值 → 中性
@@ -232,7 +242,7 @@ def test_scan_skips_meta_boards(monkeypatch):
         {"date": "20260910", "open": 10.0, "close": 10.0, "high": 10.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
         {"date": "20260911", "open": 10.0, "close": 11.0, "high": 11.0, "low": 10.0, "volume": 1.0, "amount": 1e8},
     ]})
-    out = tm.scan(write_days=1)
+    out = tm.scan(write_days=1, min_members=1)
     assert out["ok"] is True and out["skipped_meta"] == 1 and out["purged"] == 1
     with eng.begin() as conn:
         names = [r[0] for r in conn.execute(_t("SELECT DISTINCT block_name FROM theme_mood_daily")).fetchall()]
@@ -279,7 +289,7 @@ def test_scan_upserts_and_is_idempotent(monkeypatch):
         return out
 
     monkeypatch.setattr(tm, "_fetch_bars", _bars)
-    out = tm.scan(write_days=2)
+    out = tm.scan(write_days=2, min_members=1)
     assert out["ok"] is True and out["rows"] >= 4 and out["dates"] == ["20260910", "20260911"]
     with eng.begin() as conn:
         n1 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
@@ -287,7 +297,7 @@ def test_scan_upserts_and_is_idempotent(monkeypatch):
                                       " WHERE trade_date='20260910' AND block_code='880001.SH'")).scalar()
     assert n1 == 4
     assert sealed_0910 == 2  # 20260910 两只成分股均封板(10.0→11.0 = +10% 主板涨停)
-    tm.scan(write_days=2)  # 幂等
+    tm.scan(write_days=2, min_members=1)  # 幂等
     with eng.begin() as conn:
         n2 = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()
     assert n1 == n2 == 4
@@ -312,7 +322,7 @@ def test_scan_tolerates_suspended_constituent(monkeypatch):
         ] for c in codes if c == "600001.SH"}
 
     monkeypatch.setattr(tm, "_fetch_bars", _bars)
-    out = tm.scan(write_days=1)
+    out = tm.scan(write_days=1, min_members=1)
     assert out["ok"] is True and out["rows"] == 1
     with eng.begin() as conn:
         r = conn.execute(_t("SELECT breadth, limit_up_cnt FROM theme_mood_daily")).fetchone()
@@ -335,7 +345,7 @@ def test_scan_failure_keeps_previous(monkeypatch):
         raise RuntimeError("tdx down")
 
     monkeypatch.setattr(tm, "sector_items", _boom)
-    out = tm.scan(write_days=1)
+    out = tm.scan(write_days=1, min_members=1)
     assert out["ok"] is False
     with eng.begin() as conn:
         n = conn.execute(_t("SELECT COUNT(*) FROM theme_mood_daily")).scalar()

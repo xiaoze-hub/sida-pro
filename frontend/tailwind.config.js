@@ -42,6 +42,13 @@ export default {
           up: '#E53935',
           down: '#43A047',
         },
+        /* GS 买卖语义色(2026-09-12 借鉴 TSP 的涨跌色治理):
+           stock-up/down 只用于**价格与K线**; "买入/加仓""卖出/减仓"这类交易动作
+           走 gs-go/gs-stop —— 同值不同名, 让"价格涨跌"与"买卖动作"两种语义可分别演进。 */
+        gs: {
+          go: 'var(--gs-go)',
+          stop: 'var(--gs-stop)',
+        },
       },
       borderRadius: {
         lg: 'var(--radius)',

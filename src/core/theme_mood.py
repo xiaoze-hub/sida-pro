@@ -26,6 +26,25 @@ def is_meta_board(name: str) -> bool:
     return any(k in n for k in META_KEYWORDS)
 
 
+# 宽基/风格标签的**成员数上下限**(2026-09-12 借鉴 tick-stock-panel 的主线过滤):
+# 名称黑名单是打补丁 —— 新出现的属性/风格板块会漏进来霸榜; 成员数是结构性判据。
+# TSP 默认上限 600, 但那会把"华为概念(2006)""人工智能(2166)"这类真主题一起误剔,
+# 所以这里上限放到 2500 —— 只挡"融资融券(~7700)/沪深股通(~3300)"这种全市场级标签。
+# 上下限都可由 scan() 参数覆盖(设置页可调是后续项)。
+POOL_MIN_MEMBERS = 4
+POOL_MAX_MEMBERS = 2500
+
+
+def is_pool_eligible(name: str, member_count: int,
+                     min_members: int = POOL_MIN_MEMBERS,
+                     max_members: int = POOL_MAX_MEMBERS) -> bool:
+    """题材候选池判定(纯函数): 名称黑名单 + 成员数上下限一起过。"""
+    if is_meta_board(name):
+        return False
+    n = int(member_count or 0)
+    return int(min_members) <= n <= int(max_members)
+
+
 def anchor_map(value, anchors) -> float:
     """分段线性夹逼 → 0-100; None/脏值 → 50 中性。anchors 按 x 升序。"""
     if value is None:
@@ -557,7 +576,8 @@ def _purge_codes(dates: list[str], codes: list[str]) -> int:
     return n
 
 
-def scan(*, write_days: int = 1, day: str | None = None) -> dict:
+def scan(*, write_days: int = 1, day: str | None = None,
+         min_members: int = POOL_MIN_MEMBERS, max_members: int = POOL_MAX_MEMBERS) -> dict:
     """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。"""
     try:
         themes_all = sector_items()
@@ -566,8 +586,13 @@ def scan(*, write_days: int = 1, day: str | None = None) -> dict:
         themes = [t for t in themes_all if not is_meta_board(t.get("name"))]
         skipped_meta = len(themes_all) - len(themes)
         const: dict[str, list[str]] = {}
+        wide_codes: list[str] = []
         for t in themes:
             syms = constituents(t["code"]) or []
+            # 成员数上下限过滤(宽基/风格标签): 与名称黑名单叠加, 挡掉新出现的属性板块
+            if not is_pool_eligible(t.get("name"), len(syms), min_members, max_members):
+                wide_codes.append(t["code"])
+                continue
             if syms:
                 const[t["code"]] = [_tdx_code(s) for s in syms]
         all_syms = sorted({s for syms in const.values() for s in syms})
@@ -624,9 +649,10 @@ def scan(*, write_days: int = 1, day: str | None = None) -> dict:
             return {"ok": False, "reason": "无可写行"}
         _upsert(rows)
         meta_codes = [t["code"] for t in themes_all if is_meta_board(t.get("name"))]
-        purged = _purge_codes(write, meta_codes)
+        purged = _purge_codes(write, meta_codes + wide_codes)
         return {"ok": True, "rows": len(rows), "dates": write, "themes": len(const),
-                "symbols": len(all_syms), "skipped_meta": skipped_meta, "purged": purged}
+                "symbols": len(all_syms), "skipped_meta": skipped_meta,
+                "skipped_wide": len(wide_codes), "purged": purged}
     except Exception as e:  # noqa: BLE001
         logger.warning("题材情绪扫描异常: %s", e)
         return {"ok": False, "reason": str(e)}

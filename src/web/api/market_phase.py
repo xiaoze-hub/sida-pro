@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc
 
 from src.collectors.market_sentiment_collector import MarketSentimentCollector
@@ -28,9 +28,10 @@ from src.core.market_phase import (
     ordered_distribution,
     phase_distribution,
 )
+from src.web.api.auth import require_owner
 from src.web.cache.biz_cache import biz_cache
 from src.web.database import SessionLocal
-from src.web.models import MarketPhaseDaily
+from src.web.models import MarketPhaseDaily, User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -262,6 +263,130 @@ def sync_phase(date_str: str | None = None) -> dict:
         logger.exception("[market-phase-sync] 同步失败")
         db.rollback()
         raise HTTPException(502, f"阶段同步失败: {e!r}")
+    finally:
+        db.close()
+
+
+# ─────────────────── 历史回填 + 阶段规律(2026-09-12, 借鉴 TSP) ───────────────────
+@router.post("/phase/backfill")
+def backfill_phase(
+    start: str | None = None,
+    _user: User = Depends(require_owner),
+) -> dict:
+    """从已落库 limit_up_events 回填全部历史阶段(不依赖 vendor, 可重复执行)。
+
+    连板数由封板事件按交易日历连续 run 派生; 封板率取 sealed/touched 真值。
+    EMA 与 2 日确认依赖完整序列, 故对**全量**历史重标后整表 upsert。
+    """
+    from sqlalchemy import text as _text
+
+    from src.core import market_phase as mp
+    from src.db.session import engine
+
+    db = SessionLocal()
+    try:
+        sql = ("SELECT trade_date, symbol, touched, is_sealed_close AS sealed "
+               "FROM limit_up_events" + (" WHERE trade_date >= :s" if start else ""))
+        with engine.begin() as conn:
+            ev = conn.execute(_text(sql), {"s": start} if start else {}).fetchall()
+        events = [{"trade_date": r["trade_date"], "symbol": r["symbol"],
+                   "touched": bool(r["touched"]), "sealed": bool(r["sealed"])} for r in ev]
+        dates = sorted({e["trade_date"] for e in events})
+        if not dates:
+            return {"ok": False, "reason": "无涨停事件可回填"}
+        rows = mp.metrics_rows_from_events(dates, events)
+        labelled = mp.classify_phase_series_full(rows)
+        _thr, calibrated = mp.calibrate(rows)
+
+        existing = {r.date: r for r in db.query(MarketPhaseDaily).all()}
+        written = 0
+        for row, lab in zip(rows, labelled):
+            d = datetime.strptime(row["date"], "%Y%m%d").date()
+            rec = existing.get(d)
+            if rec is None:
+                rec = MarketPhaseDaily(date=d)
+                db.add(rec)
+            rec.first_board = row["first_board"]
+            rec.ge2_count = row["ge2_count"]
+            rec.ge3_count = row["ge3_count"]
+            rec.ge5_count = row["ge5_count"]
+            rec.max_height = row["max_height"]
+            rec.promo_rate = row["promo_rate"]
+            rec.seal_rate = row["seal_rate"]
+            rec.completeness = row["completeness"]
+            rec.phase = lab["phase"]
+            rec.phase_raw = lab["phase_raw"]
+            written += 1
+        db.commit()
+        biz_cache.delete(_PHASE_CACHE_KEY)
+        segs = mp.segmentize([dict(r, phase=lab["phase"]) for r, lab in zip(rows, labelled)])
+        return {
+            "ok": True, "days": written, "segments": len(segs),
+            "calibrated": calibrated,
+            "note": (f"回填 {written} 天; 阈值{'已用自有历史标定' if calibrated else '沿用默认(历史不足)'}; "
+                     f"共 {len(segs)} 段"),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[market-phase-backfill] 回填失败")
+        db.rollback()
+        raise HTTPException(502, f"阶段回填失败: {e!r}")
+    finally:
+        db.close()
+
+
+@router.get("/phase/segments")
+def get_phase_segments(days: int = 260) -> dict:
+    """连续阶段段列表 + 每段统计(高度/宽度/晋级率/封板率均值)。"""
+    from src.core import market_phase as mp
+
+    db = SessionLocal()
+    try:
+        rows = (db.query(MarketPhaseDaily).order_by(desc(MarketPhaseDaily.date))
+                .limit(max(30, min(days, 1500))).all())
+        rows = list(reversed(rows))
+        as_dicts = [{
+            "date": r.date.isoformat(), "phase": r.phase, "max_height": r.max_height,
+            "first_board": r.first_board, "ge2_count": r.ge2_count,
+            "promo_rate": r.promo_rate, "seal_rate": r.seal_rate,
+        } for r in rows if r.phase]
+        segs = mp.segmentize(as_dicts)
+        return {"available": bool(segs), "segments": segs, "total_days": len(rows)}
+    finally:
+        db.close()
+
+
+@router.get("/phase/stats")
+def get_phase_stats(days: int = 260) -> dict:
+    """阶段规律: 每阶段历史段数/平均时长/最长 + 去向概率; 另附当前各驱动量历史分位。"""
+    from src.core import market_phase as mp
+
+    db = SessionLocal()
+    try:
+        rows = (db.query(MarketPhaseDaily).order_by(desc(MarketPhaseDaily.date))
+                .limit(max(30, min(days, 1500))).all())
+        rows = list(reversed(rows))
+        as_dicts = [{
+            "date": r.date.isoformat(), "phase": r.phase, "max_height": r.max_height,
+            "first_board": r.first_board, "ge2_count": r.ge2_count,
+            "promo_rate": r.promo_rate, "seal_rate": r.seal_rate,
+        } for r in rows if r.phase]
+        segs = mp.segmentize(as_dicts)
+        stats = mp.transition_stats(segs)
+        cur = rows[-1] if rows else None
+        percentiles = None
+        if cur is not None:
+            percentiles = {
+                "first_board": mp.percentile_of(cur.first_board, [r.first_board or 0 for r in rows]),
+                "ge2_count": mp.percentile_of(cur.ge2_count, [r.ge2_count or 0 for r in rows]),
+                "max_height": mp.percentile_of(cur.max_height, [r.max_height or 0 for r in rows]),
+                "promo_rate": mp.percentile_of(cur.promo_rate,
+                                               [r.promo_rate for r in rows if r.promo_rate is not None]),
+                "completeness": mp.percentile_of(getattr(cur, "completeness", None),
+                                                 [r.completeness for r in rows
+                                                  if getattr(r, "completeness", None) is not None]),
+            }
+        return {"available": bool(segs), "stats": stats, "percentiles": percentiles,
+                "total_days": len(rows)}
     finally:
         db.close()
 

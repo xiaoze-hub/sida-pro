@@ -4088,6 +4088,22 @@ def _m148_legacy_add_user_id_columns(conn: Connection) -> None:
             logger.warning(f"多用户迁移 {table} 失败: {e}")
 
 
+def _m164_market_phase_extra_columns(conn: Connection) -> None:
+    """market_phase_daily 补两列(2026-09-12, 借鉴 TSP 阶段体系):
+
+    - completeness: 梯队完整度(2..最高板 非空档占比, 最高板<3 记 NULL)
+    - phase_raw:    2 日确认**前**的原始标签(与 phase 的差即被拦下的抖动, 供审计)
+    """
+    _add_column_if_missing(
+        conn, "market_phase_daily", "completeness",
+        "ALTER TABLE market_phase_daily ADD COLUMN completeness DOUBLE PRECISION",
+    )
+    _add_column_if_missing(
+        conn, "market_phase_daily", "phase_raw",
+        "ALTER TABLE market_phase_daily ADD COLUMN phase_raw VARCHAR(32)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4187,6 +4203,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(161, "resonance_scan_table", _m161_resonance_scan_table),
     Migration(162, "resonance_ai_verdicts_table", _m162_resonance_ai_verdicts_table),
     Migration(163, "theme_mood_table", _m163_theme_mood_table),
+    Migration(164, "market_phase_extra_columns", _m164_market_phase_extra_columns),
 )
 
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from statistics import mean
 from typing import Iterable, Sequence
 
 logger = logging.getLogger(__name__)
@@ -245,8 +246,10 @@ def _raw_phase_label(
     ge2_s: Sequence[float],
     promo_s: Sequence[float],
     seal_s: Sequence[float],
+    thr: dict[str, float] | None = None,
 ) -> str:
     """根据 EMA 平滑后的驱动量, 按优先级判定当日 raw 阶段标签。"""
+    t = thr or DEFAULT_THR
     h = height_s[i]
     fb = first_s[i]
     g2 = ge2_s[i]
@@ -258,26 +261,26 @@ def _raw_phase_label(
     h_prev = height_s[prev_idx]
 
     # 高潮 — 极端宣泄
-    if g2 >= CLIMAX_GE2 or fb >= CLIMAX_FIRST_BOARD:
+    if g2 >= t["climax_ge2"] or fb >= t["climax_fb"]:
         return PHASE_CLIMAX
     # 主升 — 三维同高 / 晋级率极强
-    if h >= RALLY_HEIGHT and g2 >= RALLY_GE2 and pr >= RALLY_PROMO:
+    if h >= t["rally_h"] and g2 >= t["rally_ge2"] and pr >= t["rally_promo"]:
         return PHASE_RALLY
-    if pr >= RALLY_PROMO_ALT and g2 >= RALLY_GE2_ALT and h >= RALLY_HEIGHT_ALT:
+    if pr >= t["rally_promo_alt"] and g2 >= t["rally_ge2_alt"] and h >= t["rally_h_alt"]:
         return PHASE_RALLY
     # 冰点 — 三维贴地(优先于退潮, 长期死寂不应被标"自高位退潮")
-    if h <= ICE_HEIGHT and g2 <= ICE_GE2 and fb <= ICE_FIRST_BOARD:
+    if h <= t["ice_h"] and g2 <= t["ice_ge2"] and fb <= t["ice_fb"]:
         return PHASE_ICE
     # 退潮 — 自高位回落 + 晋级率坍塌 / 双弱
-    from_high = g2_prev >= EBB_RECENT_GE2 or h_prev >= EBB_RECENT_HEIGHT
-    if from_high and pr <= EBB_PROMO and g2 < g2_prev:
+    from_high = g2_prev >= t["ebb_recent_ge2"] or h_prev >= t["ebb_recent_h"]
+    if from_high and pr <= t["ebb_promo"] and g2 < g2_prev:
         return PHASE_EBB
-    if sr is not None and sr > 0 and pr <= EBB_PROMO_STRICT and sr < EBB_SEAL:
+    if sr is not None and sr > 0 and pr <= t["ebb_promo_strict"] and sr < t["ebb_seal"]:
         return PHASE_EBB
     # 启动 — 自低位扩张
-    if g2 - g2_prev >= IGNITE_GE2_DELTA and g2 >= IGNITE_GE2 and pr >= IGNITE_PROMO:
+    if g2 - g2_prev >= t["ignite_ge2_delta"] and g2 >= t["ignite_ge2"] and pr >= t["ignite_promo"]:
         return PHASE_IGNITE
-    if h - h_prev >= IGNITE_HEIGHT_DELTA and h >= IGNITE_HEIGHT and pr >= IGNITE_PROMO_SOFT:
+    if h - h_prev >= t["ignite_h_delta"] and h >= t["ignite_h"] and pr >= t["ignite_promo_soft"]:
         return PHASE_IGNITE
     return PHASE_REPAIR
 
@@ -324,9 +327,10 @@ def classify_phase_series(rows: Sequence[dict]) -> list[str]:
     sr_s = _ema(seal)
 
     # 逐日 raw 阶段 + 弱档否决
+    thr, _calibrated = calibrate(rows)
     raw_labels: list[str] = []
     for i in range(n):
-        raw = _raw_phase_label(i, h_s, fb_s, g2_s, pr_s, sr_s)
+        raw = _raw_phase_label(i, h_s, fb_s, g2_s, pr_s, sr_s, thr)
         sh_pct = sh[i]
         if raw in POSITIVE_PHASES and sh_pct is not None and sh_pct < WEAK_VETO_SH_PCT:
             raw = PHASE_REPAIR
@@ -358,6 +362,32 @@ def classify_phase_series(rows: Sequence[dict]) -> list[str]:
         else:
             final.append(current)
     return final
+
+
+def classify_phase_series_full(rows: Sequence[dict]) -> list[dict]:
+    """同 classify_phase_series, 但返回逐日 {phase, phase_raw}(回填/审计用)。
+
+    phase_raw = 确认前的原始标签; 两者差异即"被 2 日确认拦下的抖动"。
+    """
+    labels = classify_phase_series(rows)
+    if not labels:
+        return []
+    # raw 标签重算一次(与 classify 内部同参数), 供落库对照
+    height = [_safe_num(r.get("max_height")) for r in rows]
+    first = [_safe_num(r.get("first_board")) for r in rows]
+    ge2 = [_safe_num(r.get("ge2_count")) for r in rows]
+    promo = [_safe_num(r.get("promo_rate")) for r in rows]
+    seal = [_safe_num(r.get("seal_rate")) for r in rows]
+    sh = [_safe_num(r.get("sh_index_pct")) for r in rows]
+    h_s, fb_s, g2_s, pr_s, sr_s = _ema(height), _ema(first), _ema(ge2), _ema(promo), _ema(seal)
+    thr, _ = calibrate(rows)
+    out = []
+    for i, lab in enumerate(labels):
+        raw = _raw_phase_label(i, h_s, fb_s, g2_s, pr_s, sr_s, thr)
+        if raw in POSITIVE_PHASES and sh[i] is not None and sh[i] < WEAK_VETO_SH_PCT:
+            raw = PHASE_REPAIR
+        out.append({"phase": lab, "phase_raw": raw})
+    return out
 
 
 def phase_distribution(phases: Iterable[str]) -> dict[str, int]:
@@ -398,3 +428,180 @@ def _safe_num(v) -> float | None:
         return f
     except (TypeError, ValueError):
         return None
+
+
+# ─────────────── 阈值标定(2026-09-12, 借鉴 TSP: 用自有历史分位, 不抄常数) ───────────────
+# 默认值 = 模块顶部常量(TSP 标定自其 6 年历史); 自有历史足够时 calibrate() 覆盖。
+DEFAULT_THR: dict[str, float] = {
+    "climax_ge2": CLIMAX_GE2, "climax_fb": CLIMAX_FIRST_BOARD,
+    "rally_h": RALLY_HEIGHT, "rally_ge2": RALLY_GE2, "rally_promo": RALLY_PROMO,
+    "rally_promo_alt": RALLY_PROMO_ALT, "rally_ge2_alt": RALLY_GE2_ALT,
+    "rally_h_alt": RALLY_HEIGHT_ALT,
+    "ebb_promo": EBB_PROMO, "ebb_promo_strict": EBB_PROMO_STRICT, "ebb_seal": EBB_SEAL,
+    "ebb_recent_ge2": EBB_RECENT_GE2, "ebb_recent_h": EBB_RECENT_HEIGHT,
+    "ignite_ge2_delta": IGNITE_GE2_DELTA, "ignite_ge2": IGNITE_GE2,
+    "ignite_promo": IGNITE_PROMO, "ignite_h_delta": IGNITE_HEIGHT_DELTA,
+    "ignite_h": IGNITE_HEIGHT, "ignite_promo_soft": IGNITE_PROMO_SOFT,
+    "ice_h": ICE_HEIGHT, "ice_ge2": ICE_GE2, "ice_fb": ICE_FIRST_BOARD,
+}
+CALIBRATE_MIN_DAYS = 120   # 自有历史不足此天数 → 沿用默认阈值(并在 API note 里说明)
+
+
+def _pct(samples: list[float], q: float) -> float:
+    if not samples:
+        return 0.0
+    s = sorted(samples)
+    k = (len(s) - 1) * q
+    lo, hi = int(k), min(int(k) + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (k - lo)
+
+
+def calibrate(rows: Sequence[dict]) -> tuple[dict[str, float], bool]:
+    """用自有历史分位标定阈值。返回 (thr, calibrated)。
+
+    标定规则沿用 TSP 的倍率(高潮=p90 的 2/2.5 倍; 主升/退潮/启动/冰点取 p60/p20/p10),
+    但分位数取自**我们自己的** limit_up_events 历史, 不抄别人的常数。
+    历史不足 CALIBRATE_MIN_DAYS 天 → 返回默认阈值 + calibrated=False。
+    """
+    if len(rows) < CALIBRATE_MIN_DAYS:
+        return dict(DEFAULT_THR), False
+    fb = [float(r["first_board"]) for r in rows]
+    ge2 = [float(r["ge2_count"]) for r in rows]
+    ht = [float(r["max_height"]) for r in rows if r.get("max_height")]
+    promo = [float(r["promo_rate"]) for r in rows if r.get("promo_rate") is not None]
+    seal = [float(r["seal_rate"]) for r in rows if r.get("seal_rate") is not None]
+    thr = dict(DEFAULT_THR)
+    thr.update({
+        "climax_ge2": _pct(ge2, 0.90) * 2, "climax_fb": _pct(fb, 0.90) * 2.5,
+        "rally_h": max(_pct(ht, 0.60), 4), "rally_ge2": _pct(ge2, 0.60),
+        "rally_promo": _pct(promo, 0.60), "rally_promo_alt": _pct(promo, 0.85),
+        "rally_ge2_alt": _pct(ge2, 0.60) * 0.8, "rally_h_alt": max(_pct(ht, 0.50), 3),
+        "ebb_promo": _pct(promo, 0.20), "ebb_promo_strict": _pct(promo, 0.15),
+        "ebb_seal": _pct(seal, 0.20) if seal else DEFAULT_THR["ebb_seal"],
+        "ebb_recent_ge2": max(_pct(ge2, 0.60), 10), "ebb_recent_h": max(_pct(ht, 0.70), 5),
+        "ignite_ge2": max(_pct(ge2, 0.35), 6), "ignite_promo": _pct(promo, 0.40),
+        "ignite_promo_soft": _pct(promo, 0.35),
+        "ice_h": max(_pct(ht, 0.10), 2), "ice_ge2": max(_pct(ge2, 0.10), 3),
+        "ice_fb": max(_pct(fb, 0.10), 8),
+    })
+    return thr, True
+
+
+# ─────────────── 从已落库涨停事件派生历史指标(回填用, 不依赖 vendor) ───────────────
+def consecutive_boards(dates: Sequence[str], sealed: dict[tuple[str, str], bool]) -> dict[tuple[str, str], int]:
+    """按交易日历连续 run 算每只票当日连板数(仅封板日有值)。
+
+    与 TSP 的 `consec.shift(1).over("symbol")` 同义: 昨日封板且今日封板 → +1, 否则 1。
+    """
+    out: dict[tuple[str, str], int] = {}
+    prev: str | None = None
+    for d in dates:
+        for (dd, sym), ok in sealed.items():
+            if dd != d or not ok:
+                continue
+            prior = out.get((prev, sym)) if prev else None
+            out[(d, sym)] = (prior or 0) + 1
+        prev = d
+    return out
+
+
+def ladder_completeness(runs: Sequence[int], height: int) -> float | None:
+    """梯队完整度: 2..height 中非空档位占比; height<3 记 None(样本无意义)。"""
+    if height < 3:
+        return None
+    present = {n for n in runs if n >= 2}
+    return round(len(present) / (height - 1), 4)
+
+
+def metrics_rows_from_events(dates: Sequence[str], events: Sequence[dict]) -> list[dict]:
+    """events: [{trade_date, symbol, touched, sealed}] → classify_phase_series 入参行。
+
+    封板率这里能算真值(sealed/touched), 优于 vendor 池的 None。
+    """
+    sealed = {(e["trade_date"], e["symbol"]): bool(e["sealed"]) for e in events}
+    touched_cnt: dict[str, int] = {}
+    for e in events:
+        if e.get("touched"):
+            touched_cnt[e["trade_date"]] = touched_cnt.get(e["trade_date"], 0) + 1
+    boards = consecutive_boards(dates, sealed)
+    by_date: dict[str, list[int]] = {}
+    for (d, _s), n in boards.items():
+        by_date.setdefault(d, []).append(n)
+
+    rows: list[dict] = []
+    for i, d in enumerate(dates):
+        runs = by_date.get(d, [])
+        height = max(runs) if runs else 0
+        sealed_n = len(runs)
+        pool = by_date.get(dates[i - 1], []) if i > 0 else []
+        promoted = sum(1 for n in runs if n >= 2)
+        touched = touched_cnt.get(d, 0)
+        rows.append({
+            "date": d,
+            "first_board": sum(1 for n in runs if n == 1),
+            "ge2_count": sum(1 for n in runs if n >= 2),
+            "ge3_count": sum(1 for n in runs if n >= 3),
+            "ge5_count": sum(1 for n in runs if n >= 5),
+            "max_height": height,
+            "promo_rate": round(promoted / len(pool), 4) if len(pool) >= PROMO_MIN_POOL else None,
+            "promo_pool": len(pool),
+            "seal_rate": round(sealed_n / touched, 4) if touched else None,
+            "sh_index_pct": None,
+            "completeness": ladder_completeness(runs, height),
+        })
+    return rows
+
+
+# ─────────────── 分段 / 转移概率 / 分位数(阶段规律面板用) ───────────────
+def segmentize(rows: Sequence[dict]) -> list[dict]:
+    """连续同阶段合并成段: {phase,label,start,end,days,avg_*}。"""
+    out: list[dict] = []
+    for r in rows:
+        ph = r.get("phase") or ""
+        if not ph:
+            continue
+        if out and out[-1]["phase"] == ph:
+            out[-1]["end"] = r["date"]
+            out[-1]["days"] += 1
+            out[-1]["_rows"].append(r)
+        else:
+            out.append({"phase": ph, "label": PHASE_LABELS.get(ph, ph),
+                        "start": r["date"], "end": r["date"], "days": 1, "_rows": [r]})
+    for s in out:
+        rs = s.pop("_rows")
+        s["avg_height"] = round(mean([r.get("max_height") or 0 for r in rs]), 1)
+        s["avg_first_board"] = round(mean([r.get("first_board") or 0 for r in rs]), 1)
+        s["avg_ge2"] = round(mean([r.get("ge2_count") or 0 for r in rs]), 1)
+        pr = [r["promo_rate"] for r in rs if r.get("promo_rate") is not None]
+        sr = [r["seal_rate"] for r in rs if r.get("seal_rate") is not None]
+        s["avg_promo"] = round(mean(pr), 3) if pr else None
+        s["avg_seal_rate"] = round(mean(sr), 3) if sr else None
+    return out
+
+
+def transition_stats(segments: Sequence[dict]) -> dict:
+    """每阶段: 历史段数/平均时长/最长 + 去向概率(段→段转移, 按占比降序)。"""
+    stats: dict[str, dict] = {}
+    for s in segments:
+        st = stats.setdefault(s["phase"], {"count": 0, "total_days": 0, "max_days": 0, "next": {}})
+        st["count"] += 1
+        st["total_days"] += s["days"]
+        st["max_days"] = max(st["max_days"], s["days"])
+    for a, b in zip(segments, segments[1:]):
+        nxt = stats[a["phase"]]["next"]
+        nxt[b["phase"]] = nxt.get(b["phase"], 0) + 1
+    for ph, st in stats.items():
+        tot = sum(st["next"].values()) or 1
+        st["next"] = {k: round(v / tot, 2) for k, v in sorted(st["next"].items(), key=lambda kv: -kv[1])}
+        st["next_labels"] = {PHASE_LABELS.get(k, k): v for k, v in st["next"].items()}
+        st["avg_days"] = round(st["total_days"] / st["count"], 1)
+        st["label"] = PHASE_LABELS.get(ph, ph)
+    return stats
+
+
+def percentile_of(value: float | None, samples: Sequence[float]) -> int | None:
+    """value 在历史样本中的百分位(0-100); 缺值/空样本 → None(前端显 '--')。"""
+    if value is None or not samples:
+        return None
+    below = sum(1 for s in samples if s < value)
+    return int(round(100 * below / len(samples)))

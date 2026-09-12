@@ -1497,6 +1497,8 @@ class MarketPhaseDaily(Base):
     max_height = Column(Integer, default=0, nullable=False)
     promo_rate = Column(Float, nullable=True)        # 晋级率, 池不足时 None
     seal_rate = Column(Float, nullable=True)         # 封板率, 数据源不可得时 None
+    completeness = Column(Float, nullable=True)      # 梯队完整度(v164), 最高板<3 时 None
+    phase_raw = Column(String(32), nullable=True)    # 2日确认前原始标签(v164), 供审计
     sh_index_pct = Column(Float, nullable=True)      # 上证当日涨跌幅 %
     phase = Column(String(32), default="", nullable=False)  # ice/ignite/rally/climax/ebb/repair/accumulating
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
