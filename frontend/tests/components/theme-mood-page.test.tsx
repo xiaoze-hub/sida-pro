@@ -122,3 +122,47 @@ describe('ThemeMood 页面', () => {
     }
   })
 })
+
+const LADDER = {
+  dates: ['20260911'],
+  ladder: [
+    {
+      date: '20260911',
+      rows: [
+        { boards: 1, codes: ['D'], names: ['DD'], tag: '首板', stocks: [{ symbol: 'D', name: 'DD', candle: null }] },
+      ],
+      blown: [], broken: [],
+    },
+  ],
+  mode: 'finalized', stale: false, degraded: null, live_day: null,
+}
+
+describe('ThemeMood 布局(v0.5.85)', () => {
+  afterEach(() => { cleanup(); localStorage.clear() })
+  beforeEach(() => mocks.fetchAPI.mockReset())
+
+  const mountBoth = async () => {
+    mocks.fetchAPI.mockImplementation((url: string) =>
+      String(url).includes('/theme-mood/ladder') ? Promise.resolve(LADDER) : Promise.resolve(RESP))
+    render(<ThemeMoodPage />)
+    await screen.findAllByText('元件')
+  }
+
+  it('梯队在题材表之前(打开即见)', async () => {
+    await mountBoth()
+    const ladder = screen.getByText('连板梯队')
+    const board = screen.getByText('题材')
+    // ladder 在 board 之前 => board 相对 ladder 是 FOLLOWING
+    expect(ladder.compareDocumentPosition(board) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('题材表可折叠且记忆到 localStorage', async () => {
+    await mountBoth()
+    const collapse = screen.getByRole('button', { name: '折叠题材表' })
+    fireEvent.click(collapse)
+    expect(localStorage.getItem('tm-board-collapsed')).toBe('1')
+    expect(screen.getByRole('button', { name: '展开题材表' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '展开题材表' }))
+    expect(localStorage.getItem('tm-board-collapsed')).toBe('0')
+  })
+})

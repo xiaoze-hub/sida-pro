@@ -118,11 +118,24 @@ def test_flat_window_falls_back_to_most_recent_varying_day(monkeypatch):
 
 
 def test_trading_day_evening_returns_today_not_yesterday(monkeypatch):
-    """交易日晚上: 窗口(收盘后)是平的, 但**当天全天有波动** → 必须给当天, 不许跳到昨天。"""
-    c, _ = _client(monkeypatch, _flat(TODAY), [(TODAY, _varying(TODAY)), (PREV, _varying(PREV))])
+    """交易日晚上: 窗口(收盘后)是平的, 但**当天全天有波动** → 必须给当天, 不许跳到昨天。
+
+    用固定时钟(2026-09-11 周五 20:00), 不依赖跑测试的真实时刻 —— 否则跨午夜跑全量会假红
+    (模块级 TODAY 与端点内 now() 不同日)。
+    """
+    fixed_now = dt.datetime(2026, 9, 11, 20, 0, 0)
+
+    class _FixedDateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ARG006
+            return fixed_now
+
+    monkeypatch.setattr(api, "datetime", _FixedDateTime)
+    day, prev = "2026-09-11", "2026-09-10"
+    c, _ = _client(monkeypatch, _flat(day), [(day, _varying(day)), (prev, _varying(prev))])
     d = _get(c)
-    assert d["session"] == "today_full" and d["session_date"] == TODAY
-    assert TODAY in d["note"] and "全天" in d["note"]
+    assert d["session"] == "today_full" and d["session_date"] == day
+    assert day in d["note"] and "全天" in d["note"]
     flows = [i["total_main_flow"] for i in d["items"]]
     assert max(flows) - min(flows) > 1e-9
 

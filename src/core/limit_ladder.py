@@ -69,3 +69,52 @@ def ladder_window(dates: list[str], events: Iterable[dict],
             })
         out.append({"date": d, "rows": rows})
     return out
+
+
+def touched_by_date(events: Iterable[dict]) -> dict[str, set[str]]:
+    """当日**触板**(含封住与炸板)的 symbol 集合 —— 事件表每行即一次触板。"""
+    out: dict[str, set[str]] = {}
+    for e in events:
+        d, sym = str(e.get("trade_date") or ""), str(e.get("symbol") or "")
+        if not d or not sym:
+            continue
+        out.setdefault(d, set()).add(sym)
+    return out
+
+
+def finalize_marks(dates: list[str], events: Iterable[dict]) -> dict[str, dict]:
+    """收盘定型的炸板/断板(v0.5.85, spec §3.2)。
+
+    blown  = 当日触板但收盘未封(is_sealed_close=False);
+    broken = 上一表日收盘封板且 boards>=2, 当日**未触板**;
+             昨首板今未续只算淘汰, 不标断板;
+    prev_boards = 上一表日的连板数(boards_for_date 口径), 无则 None。
+    纯函数; 空事件 → 每日 {"blown": [], "broken": []}(不编)。
+    """
+    events = list(events)
+    sealed = _sealed_by_date(events)
+    touched = touched_by_date(events)
+    names = {str(e["symbol"]): e.get("name") for e in events if e.get("name")}
+    out: dict[str, dict] = {}
+    for i, d in enumerate(dates):
+        prev = dates[i - 1] if i > 0 else None
+        prev_boards = boards_for_date(dates, sealed, prev) if prev else {}
+        blown = [
+            {"symbol": s, "name": names.get(s), "prev_boards": prev_boards.get(s)}
+            for s in sorted(touched.get(d, set()) - sealed.get(d, set()))
+        ]
+        broken = [
+            {"symbol": s, "name": names.get(s), "prev_boards": b}
+            for s, b in sorted(prev_boards.items())
+            if b >= 2 and s not in touched.get(d, set())
+        ]
+        out[d] = {"blown": blown, "broken": broken}
+    return out
+
+
+def attach_candles(stocks: list[dict], date: str, ohlc: dict) -> list[dict]:
+    """给逐股明细挂当日K(v0.5.85, spec §6); 缺 OHLC → candle=None(不编影线)。
+
+    ohlc 键为 (date, symbol) → {"o","h","l","c"}。
+    """
+    return [{**s, "candle": ohlc.get((date, s["symbol"]))} for s in stocks]

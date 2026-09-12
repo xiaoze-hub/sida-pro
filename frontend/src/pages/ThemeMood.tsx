@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
 import {
@@ -65,15 +66,16 @@ interface RotationDay {
   exit_codes: string[]
 }
 
-interface LadderDay {
-  date: string
-  rows: { boards: number; codes: string[]; names: string[]; sealed_n: number }[]
-}
-
 interface LadderResp {
   dates: string[]
   ladder: LadderDay[]
   note?: string
+  mode?: 'live' | 'finalized'
+  as_of?: string | null
+  stale?: boolean
+  degraded?: string | null
+  live_day?: LadderDay | null
+  note_closing?: string
 }
 
 interface BoardResp {
@@ -155,6 +157,9 @@ export default function ThemeMoodPage() {
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [showAllRows, setShowAllRows] = useState(false)
+  const [boardCollapsed, setBoardCollapsed] = useState(
+    () => localStorage.getItem('tm-board-collapsed') === '1',
+  )
 
   useEffect(() => {
     let alive = true
@@ -232,7 +237,29 @@ export default function ThemeMoodPage() {
         <MarketPhasePanel />
       </div>
 
-      <div className="flex flex-col gap-3 xl:flex-row">
+      <LadderBoard
+        ladder={ladder?.ladder ?? []}
+        liveDay={ladder?.live_day ?? null}
+        mode={ladder?.mode ?? 'finalized'}
+        stale={ladder?.stale ?? false}
+        lastOk={null}
+      />
+
+      <button
+        type="button"
+        onClick={() =>
+          setBoardCollapsed((v) => {
+            const n = !v
+            localStorage.setItem('tm-board-collapsed', n ? '1' : '0')
+            return n
+          })
+        }
+        className="mb-1 mt-3 w-full rounded border border-border/50 py-1 text-center text-[11px] text-muted-foreground"
+      >
+        {boardCollapsed ? '展开题材表' : '折叠题材表'}
+      </button>
+
+      <div className={`flex flex-col gap-3 xl:flex-row ${boardCollapsed ? 'hidden' : ''}`}>
         <div className="w-full shrink-0 xl:w-[420px]">
           <div className="mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 px-2 text-[10px] text-muted-foreground">
             <span>题材</span>
@@ -491,43 +518,6 @@ export default function ThemeMoodPage() {
           )}
         </div>
       </div>
-
-      {ladder?.ladder?.length ? (
-        <div className="mt-4 rounded border border-border/60 p-3">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="text-[13px] font-semibold">连板梯队</span>
-            <span className="text-[10px] text-muted-foreground">{ladder.note}</span>
-          </div>
-          <div className="overflow-x-auto pb-1">
-            <div className="flex w-max gap-1">
-              {ladder.ladder.map((day) => (
-                <div key={day.date} className="w-[132px] shrink-0 rounded border border-border/40 p-1.5">
-                  <div className="mb-1 flex items-baseline justify-between">
-                    <span className="text-[11px] font-medium text-foreground/80">{day.date.slice(5)}</span>
-                    <span className="text-[10px] text-muted-foreground">封 {day.rows.reduce((a, r) => a + r.codes.length, 0)}</span>
-                  </div>
-                  {day.rows.length === 0 ? (
-                    <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
-                  ) : (
-                    day.rows.map((r) => (
-                      <div key={r.boards} className="mb-1 last:mb-0">
-                        <div className="text-[10px] font-medium text-primary">{r.boards}板</div>
-                        <div
-                          title={r.names.join('、')}
-                          className="truncate text-[11px] text-foreground/80"
-                        >
-                          {r.names.slice(0, 2).join('、')}
-                          {r.names.length > 2 ? ` +${r.names.length - 2}` : ''}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }

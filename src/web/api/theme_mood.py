@@ -52,6 +52,36 @@ def _read_codes(sql: str, params: dict, codes: tuple[str, ...]) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
+    """klines 日线 OHLC(qfq, 唯一常驻复权维度) → {(date, symbol): {o,h,l,c}}。
+
+    两个 IN 列表都用 expanding bindparam; 任一入参为空短路返回 {}。
+    OHLC 任一为 None 的行丢弃(调用方落 candle=None, 不编)。
+    """
+    if not dates or not symbols:
+        return {}
+    from sqlalchemy import bindparam, text
+
+    from src.db.session import engine
+
+    stmt = text(
+        "SELECT ts, symbol, open, high, low, close FROM klines "
+        "WHERE period = '1d' AND adjust = 'qfq' AND ts IN :dates AND symbol IN :codes"
+    ).bindparams(bindparam("dates", expanding=True), bindparam("codes", expanding=True))
+    with engine.begin() as conn:
+        raw = conn.execute(
+            stmt, {"dates": tuple(sorted(dates)), "codes": tuple(sorted(symbols))}
+        ).fetchall()
+    out = {}
+    for r in raw:
+        m = dict(r._mapping)
+        if None in (m["open"], m["high"], m["low"], m["close"]):
+            continue
+        out[(str(m["ts"]), str(m["symbol"]))] = {
+            "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"]}
+    return out
+
+
 def _loads(v):
     if not v:
         return None
@@ -187,28 +217,54 @@ def _spawn_scan() -> dict:
 
 
 @router.get("/ladder")
-def get_ladder(window: int = Query(20, ge=5, le=60)):
-    """连板梯队(v0.5.81, 老板: "连扳梯队也要做")。
+def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
+    """连板梯队(v0.5.81) + 定型炸板/断板/当日K(v0.5.85) + 盘中实时(v0.5.86, 见 live 分支)。
 
     通达信式天梯: 每日按连板高度分组列个股。连板数**不信任 limit_days 列**(从未落库),
     从事件表自己推: 沿表内日期序列数连续收盘封板日。只算收盘封板, touch 未封不算。
     """
-    from src.core.limit_ladder import ladder_window
+    from datetime import datetime, timezone
 
+    from src.core.limit_ladder import attach_candles, finalize_marks, ladder_window
+
+    if mode not in ("auto", "finalized", "live"):
+        raise HTTPException(400, "mode 仅支持 auto/finalized/live")
+    if mode == "live":
+        raise HTTPException(400, "live 未上线(v0.5.86)")
     days = _read(
         "SELECT DISTINCT trade_date FROM limit_up_events ORDER BY trade_date DESC LIMIT :n",
         {"n": int(window)},
     )
     dates = sorted(d["trade_date"] for d in days)
     if not dates:
-        return {"dates": [], "ladder": [], "note": "limit_up_events 无数据"}
+        return {"dates": [], "ladder": [], "note": "limit_up_events 无数据",
+                "mode": "finalized", "as_of": None, "stale": False,
+                "degraded": None, "live_day": None}
     events = _read(
         "SELECT trade_date, symbol, name, is_sealed_close FROM limit_up_events "
         "WHERE trade_date >= :a ORDER BY trade_date", {"a": dates[0]},
     )
     names = {e["symbol"]: e["name"] for e in events if e.get("name")}
-    return {"dates": dates, "ladder": ladder_window(dates, events, names),
-            "note": "连板数=沿事件表日期序列的连续收盘封板日; 只算收盘封板"}
+    ladder = ladder_window(dates, events, names)
+    marks = finalize_marks(dates, events)
+    symbols = sorted({str(e["symbol"]) for e in events})
+    ohlc = _read_ohlc(dates, symbols)
+    for day in ladder:
+        for r in day["rows"]:
+            r["stocks"] = attach_candles(
+                [{"symbol": c, "name": n} for c, n in zip(r["codes"], r["names"])],
+                day["date"], ohlc,
+            )
+            r["tag"] = "首板" if r["boards"] == 1 else None
+        day["blown"] = marks[day["date"]]["blown"]
+        day["broken"] = marks[day["date"]]["broken"]
+    return {
+        "dates": dates, "ladder": ladder,
+        "note": "连板数=沿事件表日期序列的连续收盘封板日; 只算收盘封板",
+        "mode": "finalized",
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "stale": False, "degraded": None, "live_day": None,
+    }
 
 
 @router.get("/board")
