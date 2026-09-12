@@ -234,6 +234,16 @@ def rank_items(items: list[dict]) -> list[dict]:
     return sorted(items, key=key)
 
 
+def align_cells(cells: list[dict] | None, dates: list[str]) -> list[dict]:
+    """按共享日期轴对齐 cells(缺该交易日的题材补空位), 保证矩阵列与时间轴严格对位。"""
+    by_date = {c.get("date"): c for c in (cells or [])}
+    out = []
+    for d in dates:
+        c = by_date.get(d) or {}
+        out.append({"date": d, "score": c.get("score"), "limit_up_cnt": c.get("limit_up_cnt")})
+    return out
+
+
 def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_sealed: list,
                       s1_history: list, sealed_history: list, prev: dict, core_candidates: list) -> dict:
     """单题材单日装配(纯函数): 五维 → 总分/置信度/核心/明细/广度。"""

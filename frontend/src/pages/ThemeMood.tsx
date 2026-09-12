@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
-import { cellColorClass, cellTextClass, fmtScore, splitWindows, type MoodCell } from '@/lib/theme-mood'
+import {
+  AXIS_CELL_W,
+  AXIS_PITCH,
+  axisDates,
+  cellColorClass,
+  cellTextClass,
+  cellsByDate,
+  dayLabels,
+  fmtScore,
+  monthBands,
+  type MoodCell,
+} from '@/lib/theme-mood'
 
 /**
  * 题材情绪页(2026-09-12, 老板口径): 收盘确认口径的题材×日情绪矩阵。
@@ -39,6 +50,7 @@ interface BoardResp {
   trade_date: string | null
   window: number
   count: number
+  dates?: string[]
   items: MoodItem[]
 }
 
@@ -68,7 +80,12 @@ export default function ThemeMoodPage() {
     }
   }, [windowDays])
 
-  const detail = resp?.items.find((it) => it.block_code === active) ?? null
+  const items = resp?.items ?? []
+  const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
+  const bands = monthBands(axis)
+  const labels = dayLabels(axis)
+  const latestDate = axis.length ? axis[axis.length - 1] : null
+  const detail = items.find((it) => it.block_code === active) ?? null
   const dims = detail ? [detail.s1, detail.s2, detail.s3, detail.s4, detail.s5] : []
 
   return (
@@ -134,28 +151,100 @@ export default function ThemeMoodPage() {
 
         <div className="min-w-0 flex-1">
           <div className="rounded border border-border/60 p-2">
-            <div className="mb-1 text-[11px] text-muted-foreground">
-              题材 × 日期(近 {windowDays} 个交易日 · 色块=情绪分)
+            <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span>题材 × 日期(近 {windowDays} 个交易日 · 色块=情绪分)</span>
+              {latestDate ? <span>最新 {latestDate}</span> : null}
+              <span className="ml-auto flex items-center gap-1 text-[10px]">
+                色阶
+                {[
+                  ['<50', 'bg-muted/40'],
+                  ['50-60', 'bg-muted/60'],
+                  ['60-70', 'bg-stock-up/15'],
+                  ['70-82', 'bg-stock-up/30'],
+                  ['≥82', 'bg-stock-up/45'],
+                ].map(([label, cls]) => (
+                  <span key={label} className="flex items-center gap-0.5">
+                    <span className={`inline-block h-2.5 w-3.5 rounded-sm ${cls}`} />
+                    {label}
+                  </span>
+                ))}
+              </span>
             </div>
-            <div className="space-y-0.5 overflow-x-auto">
-              {(resp?.items ?? []).map((it) => (
-                <div key={it.block_code} className="flex items-center gap-1">
-                  <span className="w-[76px] shrink-0 truncate text-[11px]">{it.block_name || it.block_code}</span>
-                  <div className="flex flex-wrap gap-0.5">
-                    {splitWindows(it.cells, windowDays).map((c) => (
-                      <span
-                        key={c.date}
-                        title={`${c.date} · 情绪分 ${fmtScore(c.score)} · 涨停 ${c.limit_up_cnt ?? 0}`}
-                        className={`flex h-[22px] w-[38px] items-center justify-center rounded text-[10px] ${cellColorClass(
-                          c.score,
-                        )} ${cellTextClass(c.score)}`}
-                      >
-                        {c.score == null ? '--' : Math.round(c.score)}
-                      </span>
-                    ))}
-                  </div>
+            <div className="overflow-x-auto pb-1">
+              <div className="flex w-max min-w-full items-end gap-1">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background" />
+                <div className="flex gap-0.5">
+                  {bands.map((b) => (
+                    <span
+                      key={b.key}
+                      className="border-b border-border/60 pb-0.5 text-center text-[9px] leading-3 text-muted-foreground"
+                      style={{ width: b.count * AXIS_PITCH - (AXIS_PITCH - AXIS_CELL_W) }}
+                    >
+                      {b.label}
+                    </span>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div className="mb-1 flex w-max min-w-full items-center gap-1">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[9px] leading-3 text-muted-foreground">
+                  日期
+                </span>
+                <div className="flex gap-0.5">
+                  {axis.map((d, i) => (
+                    <span
+                      key={d}
+                      title={`${d}${i === axis.length - 1 ? ' · 最新收盘' : ''}`}
+                      className={`w-[38px] shrink-0 text-center text-[9px] leading-3 ${
+                        i === axis.length - 1 ? 'font-medium text-primary' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {labels[i]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-0.5">
+                {items.map((it) => {
+                  const byDate = cellsByDate(it.cells)
+                  return (
+                    <button
+                      key={it.block_code}
+                      type="button"
+                      onClick={() => setActive(it.block_code)}
+                      className={`group flex w-max min-w-full items-center gap-1 rounded ${
+                        active === it.block_code ? 'bg-accent/50' : 'hover:bg-accent/30'
+                      }`}
+                    >
+                      <span
+                        title={it.block_name || it.block_code}
+                        className={`sticky left-0 z-10 w-[76px] shrink-0 truncate bg-background px-1 text-left text-[11px] ${
+                          active === it.block_code ? 'font-semibold text-primary' : ''
+                        }`}
+                      >
+                        {it.block_name || it.block_code}
+                      </span>
+                      <div className="flex gap-0.5">
+                        {axis.map((d, i) => {
+                          const c = byDate.get(d)
+                          return (
+                            <span
+                              key={d}
+                              title={`${it.block_name || it.block_code} · ${d} · 情绪分 ${fmtScore(c?.score)} · 涨停 ${c?.limit_up_cnt ?? 0}`}
+                              className={`flex h-[22px] w-[38px] shrink-0 items-center justify-center rounded text-[10px] ${cellColorClass(
+                                c?.score,
+                              )} ${cellTextClass(c?.score)} ${
+                                i === axis.length - 1 ? 'ring-1 ring-inset ring-primary/50' : ''
+                              }`}
+                            >
+                              {c?.score == null ? '--' : Math.round(c.score)}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </div>
 

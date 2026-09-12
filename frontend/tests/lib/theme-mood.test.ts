@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { cellColorClass, cellTextClass, fmtScore, splitWindows } from '@/lib/theme-mood'
+import {
+  axisDates,
+  cellColorClass,
+  cellTextClass,
+  cellsByDate,
+  dayLabels,
+  fmtScore,
+  monthBands,
+} from '@/lib/theme-mood'
 
 describe('fmtScore', () => {
   it('保留一位小数, 空值占位', () => {
@@ -25,10 +33,39 @@ describe('cellTextClass', () => {
   })
 })
 
-describe('splitWindows', () => {
-  it('把矩阵行按窗口截断到最近 N 天', () => {
-    const cells = Array.from({ length: 30 }, (_, i) => ({ date: `202609${String(i + 1).padStart(2, '0')}`, score: i * 3 }))
-    expect(splitWindows(cells, 20)).toHaveLength(20)
-    expect(splitWindows(cells, 10)[0].date).toBe('20260921')
+describe('monthBands', () => {
+  it('按自然月分组并统计交易日数(供月份带宽度)', () => {
+    expect(monthBands(['20260831', '20260901', '20260902', '20260903'])).toEqual([
+      { key: '202608', label: '8月', count: 1 },
+      { key: '202609', label: '9月', count: 3 },
+    ])
+    expect(monthBands([])).toEqual([])
+  })
+})
+
+describe('dayLabels', () => {
+  it('首个交易日与跨月首日显示 M/D, 其余只显示日号', () => {
+    expect(dayLabels(['20260831', '20260901', '20260902', '20260903'])).toEqual(['8/31', '9/1', '2', '3'])
+  })
+})
+
+describe('axisDates', () => {
+  const cells = [
+    { date: '20260901', score: 61.0, limit_up_cnt: 2 },
+    { date: '20260902', score: 66.0, limit_up_cnt: 3 },
+  ]
+  it('优先共享轴, 缺省回退首个题材 cells, 并按窗口截断', () => {
+    expect(axisDates(['20260901', '20260902', '20260903'], cells, 2)).toEqual(['20260902', '20260903'])
+    expect(axisDates(undefined, cells, 20)).toEqual(['20260901', '20260902'])
+    expect(axisDates([], cells, 20)).toEqual(['20260901', '20260902'])
+    expect(axisDates(undefined, [], 20)).toEqual([])
+  })
+})
+
+describe('cellsByDate', () => {
+  it('按日期建索引, 缺该交易日返回 undefined', () => {
+    const m = cellsByDate([{ date: '20260901', score: 61.0, limit_up_cnt: 2 }])
+    expect(m.get('20260901')?.score).toBe(61.0)
+    expect(m.get('20260902')).toBeUndefined()
   })
 })

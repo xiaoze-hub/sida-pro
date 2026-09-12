@@ -48,19 +48,19 @@ def _latest_date() -> str | None:
     return rows[0]["d"] if rows else None
 
 
-def _board_rows(window: int, top: int) -> list[dict]:
-    """Top 榜 + 每题材 matrix cells; 无数据 → []。"""
-    from src.core.theme_mood import rank_items
+def _board_data(window: int, top: int) -> dict:
+    """Top 榜 + 每题材按共享日期轴对齐的 matrix cells; 无数据 → {"dates": [], "items": []}。"""
+    from src.core.theme_mood import align_cells, rank_items
 
     days = _read("SELECT DISTINCT trade_date FROM theme_mood_daily ORDER BY trade_date DESC LIMIT :n",
                  {"n": int(window)})
     dates = sorted([d["trade_date"] for d in days])
     if not dates:
-        return []
+        return {"dates": [], "items": []}
     latest = dates[-1]
     rows = _read("SELECT * FROM theme_mood_daily WHERE trade_date = :d", {"d": latest})
     if not rows:
-        return []
+        return {"dates": [], "items": []}
     prev = dates[-2] if len(dates) > 1 else None
     prev_map: dict[str, float] = {}
     if prev:
@@ -93,7 +93,10 @@ def _board_rows(window: int, top: int) -> list[dict]:
             "score3_avg": (round(sum(recent) / len(recent), 1) if recent else None),
             "cells": cells.get(code, []),
         })
-    return rank_items(items)[: int(top)]
+    ranked = rank_items(items)[: int(top)]
+    for it in ranked:
+        it["cells"] = align_cells(it["cells"], dates)
+    return {"dates": dates, "items": ranked}
 
 
 def _detail_rows(block_code: str, days: int) -> list[dict]:
@@ -141,8 +144,9 @@ def _spawn_scan() -> dict:
 def get_board(window: int = Query(20), top: int = Query(15)):
     if window not in _WINDOWS or top not in _TOPS:
         raise HTTPException(400, f"window 仅支持 {_WINDOWS}, top 仅支持 {_TOPS}")
-    items = _board_rows(window, top)
-    return {"trade_date": _latest_date(), "window": window, "count": len(items), "items": items}
+    data = _board_data(window, top)
+    return {"trade_date": _latest_date(), "window": window, "count": len(data["items"]),
+            "dates": data["dates"], "items": data["items"]}
 
 
 @router.get("/detail/{block_code}")
