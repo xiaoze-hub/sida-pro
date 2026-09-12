@@ -10,6 +10,9 @@ export interface LadderStock {
   first_time?: string | null
   amount?: number | null
   tag?: string | null
+  seal_tag?: string | null
+  dive?: boolean | null
+  boards_vendor?: number | null
   plate_type?: string | null
   open_count?: number | null
   last_sealed?: string | null
@@ -49,6 +52,9 @@ function stockTitle(s: LadderStock): string {
   if (s.first_time) parts.push(`首封 ${s.first_time}`)
   if (s.last_sealed) parts.push(`尾封 ${s.last_sealed}`)
   if (s.open_count) parts.push(`开板 ${s.open_count}次`)
+  if (s.seal_tag) parts.push(`盘口 ${s.seal_tag}`)
+  if (s.dive) parts.push('跳水')
+  if (s.boards_vendor != null) parts.push(`vendor连板 ${s.boards_vendor}`)
   if (s.seal_amount != null) parts.push(`封单 ${fmtAmount(s.seal_amount)}`)
   if (s.seal_ratio != null) parts.push(`封成比 ${fmtPct(s.seal_ratio * 100)}`)
   if (s.amount != null) parts.push(`额 ${fmtAmount(s.amount)}`)
@@ -66,6 +72,12 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
       <span className={`text-[9px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
       {s.tag ? (
         <span className="rounded bg-accent/50 px-0.5 text-[8px] text-muted-foreground">{s.tag}</span>
+      ) : null}
+      {s.seal_tag && s.seal_tag !== s.tag ? (
+        <span className="rounded bg-accent/40 px-0.5 text-[8px] text-muted-foreground">{s.seal_tag}</span>
+      ) : null}
+      {s.dive ? (
+        <span className="rounded bg-[--stock-down]/20 px-0.5 text-[8px] text-[--stock-down]">跳水</span>
       ) : null}
     </span>
   )

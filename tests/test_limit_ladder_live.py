@@ -66,13 +66,17 @@ def test_build_live_day_no_ohlc_candle_none():
 
 
 class _Deps:
-    def __init__(self, quotes=None, exc=0, cli=None):
+    def __init__(self, quotes=None, exc=0, cli=None, l2=None):
         self.calls = 0
         self.saved = []
         self._quotes = quotes or {}
         self._exc = exc
         self.cli = cli
+        self._l2 = l2 or {}
         self._meta = {"last_ok": None, "stale": False, "rounds_failed": 0}
+
+    def l2_fn(self, cands):
+        return {k: v for k, v in self._l2.items() if k in cands}
 
     def quotes_fn(self, codes):
         self.calls += 1
@@ -204,3 +208,35 @@ def test_build_live_day_broken_water_flat_tags():
     day = live.build_live_day(state, quotes, {"W": 3, "F": 3}, {"W": "W", "F": "F"}, "20260912")
     tags = {m["symbol"]: m["tag"] for m in day["broken"]}
     assert tags == {"W": "水下", "F": "平盘"}
+
+
+def test_scan_tick_l2_refines_sealed_and_tags():
+    # FCAmo>0 → 封住; 五档封死; 跳水; boards_vendor 交叉; 快照K
+    deps = _Deps(
+        quotes={"A": {"price": 11.0, "last_close": 10.0}},
+        l2={"A": {"snapshot": {"now": 11.0, "open": 10.0, "high": 11.0, "low": 9.9,
+                               "amount": 1e8, "before5min": 11.3,
+                               "buyp": [11.0], "buyv": [500], "sellp": [11.01], "sellv": [10]},
+                  "more": {"zt_price": 11.0, "fcamo": 3.9e7, "ever_zt_count": 2}}},
+    )
+    out = live.scan_tick(now=datetime(2026, 9, 11, 10, 0, 0), deps=deps)
+    day = out["live_day"]
+    s0 = day["rows"][0]["stocks"][0]
+    assert s0["tag"] == "封住" and s0["seal_tag"] == "封死"
+    assert s0["dive"] is True            # 11.0 <= 11.3*0.98
+    assert s0["boards_vendor"] == 2
+    assert s0["candle"] == {"o": 10.0, "h": 11.0, "l": 9.9, "c": 11.0}
+    assert s0["seal_amount"] == 3.9e7    # FCAmo 优先
+
+
+def test_scan_tick_l2_fcamo_zero_and_ever_sealed_is_blown():
+    deps = _Deps(
+        quotes={"A": {"price": 10.2, "last_close": 10.0}},
+        l2={"A": {"snapshot": {"now": 10.2, "before5min": 10.2},
+                  "more": {"zt_price": 11.0, "fcamo": 0.0, "ever_zt_count": 1}}},
+    )
+    # 先让 A 今日曾封(预置 state), FCAmo=0 → 炸板
+    deps_cli = deps
+    out = live.scan_tick(now=datetime(2026, 9, 11, 10, 0, 0), deps=deps_cli)
+    # 首轮 state 无 ever_sealed, FCAmo=0 且未封 → 按价格态(冲板/未封), 非炸板
+    assert out["live_day"]["blown"] == []

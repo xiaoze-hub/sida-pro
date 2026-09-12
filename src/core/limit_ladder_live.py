@@ -108,11 +108,13 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
         yb = (yesterday_boards or {}).get(sym, 0)
         st = classify(q.get("price"), q.get("limit_px"), bool(rec.get("ever_sealed")),
                       yb, q.get("charging_floor"))
-        candle = None
-        if q.get("open") is not None and q.get("high") is not None and q.get("low") is not None:
+        candle = q.get("candle")
+        if candle is None and q.get("open") is not None and q.get("high") is not None and q.get("low") is not None:
             candle = {"o": q["open"], "h": q["high"], "l": q["low"], "c": q.get("price")}
         pct = q.get("change_pct")
         seal_amt = seal_amounts.get(sym)
+        if seal_amt is None:
+            seal_amt = q.get("fcamo")  # 优先 more_info FCAmo(权威), 回退 seal_quality_samples
         seal_ratio = None
         if seal_amt is not None and q.get("amount"):
             seal_ratio = round(seal_amt / q["amount"], 4)
@@ -120,6 +122,9 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
             "symbol": sym, "name": (names or {}).get(sym), "candle": candle,
             "pct": pct, "first_time": rec.get("first_at"),
             "tag": _stock_tag(st, rec, pct),
+            "seal_tag": q.get("seal_tag"),
+            "dive": q.get("dive"),
+            "boards_vendor": q.get("boards_vendor"),
             "plate_type": _plate_type(q, rec, q.get("limit_px")) if st == STATE_SEALED else None,
             "open_count": int(rec.get("open_count", 0)),
             "last_sealed": rec.get("last_sealed_at"),
@@ -180,7 +185,7 @@ def scan_tick(now=None, deps=None):
     yb = d.yesterday_boards_fn()
     seal_amounts = d.seal_amounts_fn() if hasattr(d, "seal_amounts_fn") else {}
     prev_state = d.load_fn(d.cli, date)
-    round_states, quotes = {}, {}
+    quotes = {}
     for sym, q in raw.items():
         price = q.get("price")
         last = q.get("last_close")
@@ -189,9 +194,51 @@ def scan_tick(now=None, deps=None):
         floor = last * (1 + (ratio or 0.1) * _CHARGE_RATIO) if (last and ratio) else None
         quotes[sym] = {**q, "limit_px": limit_px, "charging_floor": floor,
                        "change_pct": ((price / last - 1.0) * 100.0) if price and last else None}
+    # L2 精修(单股接口, 只对候选池: 接近涨停 或 今日曾封): ZTPrice/FCAmo/五档/快照K/跳水/连板交叉
+    from src.core.stock_l2 import fetch_stock_l2_batch, is_dive, seal_quality_tag
+
+    cands = [s for s, q in quotes.items()
+             if (q.get("price") and q.get("last_close")
+                 and q["price"] >= q["last_close"] * 1.05)
+             or (prev_state.get(s) or {}).get("ever_sealed")]
+    for sym, l2 in (d.l2_fn(cands) if hasattr(d, "l2_fn") else fetch_stock_l2_batch(cands)).items():
+        snap = l2.get("snapshot") or {}
+        more = l2.get("more") or {}
+        q = quotes[sym]
+        zt = more.get("zt_price")
+        if zt:
+            q["limit_px"] = zt
+        if more.get("fcamo") is not None:
+            q["fcamo"] = more["fcamo"]
+        if snap.get("open") is not None and snap.get("high") is not None and snap.get("low") is not None:
+            q["candle"] = {"o": snap["open"], "h": snap["high"], "l": snap["low"],
+                           "c": snap.get("now")}
+            q["amount"] = q.get("amount") or snap.get("amount")
         rec = prev_state.get(sym) or {}
-        round_states[sym] = classify(price, limit_px, bool(rec.get("ever_sealed")),
-                                     yb.get(sym, 0), floor)
+        q["seal_tag"] = seal_quality_tag(snap.get("buyp") or [], snap.get("buyv") or [],
+                                         snap.get("sellp") or [], snap.get("sellv") or [],
+                                         q["limit_px"], snap.get("now"),
+                                         bool(rec.get("ever_sealed")))
+        q["dive"] = is_dive(snap.get("now"), snap.get("before5min"))
+        q["boards_vendor"] = more.get("ever_zt_count")
+    round_states = {}
+    for sym, q in quotes.items():
+        price = q.get("price")
+        rec = prev_state.get(sym) or {}
+        ever = bool(rec.get("ever_sealed"))
+        fcamo = q.get("fcamo")
+        if fcamo is not None:
+            # 官方口径: FCAmo>0 涨停(封), <0 跌停; 0 且未封 → 按价格态
+            if fcamo > 0:
+                round_states[sym] = STATE_SEALED
+            elif ever:
+                round_states[sym] = STATE_BLOWN
+            else:
+                round_states[sym] = classify(price, q.get("limit_px"), ever,
+                                             yb.get(sym, 0), q.get("charging_floor"))
+        else:
+            round_states[sym] = classify(price, q.get("limit_px"), ever,
+                                         yb.get(sym, 0), q.get("charging_floor"))
     state = merge_state(prev_state, round_states, ts)
     meta = {**meta, "rounds_failed": 0, "stale": False, "last_ok": ts}
     d.save_fn(d.cli, date, state, meta)
@@ -255,7 +302,7 @@ def _default_deps():
     cli = rst.client()
     return SimpleNamespace(cli=cli, quotes_fn=pricevol_only, universe_fn=universe_fn,
                            names_fn=names_fn, yesterday_boards_fn=yesterday_boards_fn,
-                           seal_amounts_fn=seal_amounts_fn,
+                           seal_amounts_fn=seal_amounts_fn, l2_fn=fetch_stock_l2_batch,
                            save_fn=rst.save_state, load_fn=rst.load_state,
                            meta_fn=rst.load_meta, save_day_fn=rst.save_day,
                            load_day_fn=rst.load_day)

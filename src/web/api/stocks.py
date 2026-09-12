@@ -179,6 +179,22 @@ def search(q: str = Query("", min_length=1), market: str = Query("")):
     return search_stocks(q, market)
 
 
+@router.get("/{symbol}/l2")
+def get_stock_l2(symbol: str, user=Depends(get_current_user)):
+    """单股 L2 字段(v0.5.89): 通达信 snapshot(五档/开高低/内外盘/5分钟前价) + more_info(涨停价/封单/连板/逐笔)。
+
+    on-demand 单股接口(工作台打开时调, 30s 轮询可接受); 不做全市场批量。
+    源不可用 → 200 + 空 dict + note(不编数据)。
+    """
+    from src.core.stock_l2 import fetch_stock_l2
+
+    data = fetch_stock_l2(symbol)
+    if not data:
+        return {"symbol": symbol, "snapshot": {}, "more": {}, "as_of": None,
+                "note": "无L2数据(通达信源不可用)"}
+    return {**data, "note": None}
+
+
 @router.post("/refresh-list")
 def refresh_list():
     """刷新股票列表缓存"""

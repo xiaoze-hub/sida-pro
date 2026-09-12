@@ -7,6 +7,23 @@
 
 ## 2026-09-13
 
+### feat-通达信 L2 字段接入(涨停价/封单/五档/逐笔/跳水); v0.5.89
+- **来源**: 老板让研究通达信接口文档 L2 字段(全文抽取 `~/tdx_doc_text.txt`, 231 页)。离线探针(非交易时段)确认字段有值。
+- **P1 涨停判定切权威源**: live 状态机对候选池(接近涨停/今日曾封)调 `get_more_info` 取 **ZTPrice**(涨停价) 与
+  **FCAmo**(封单额, 万元; 官方 >0 涨停/<0 跌停)。`FCAmo>0` 优先判封, 缺失回退价格判定并标 fallback。封单额优先 FCAmo。
+- **P2 五档盘口 + 快照K**: `get_market_snapshot` 五档(Buyp/Buyv/Sellp/Sellv) → 封板质量细分
+  **封死/排队/开板/未封**(买一=涨停价且无卖压=封死; 涨停价有卖压=排队; 跌破且曾封=开板; 从未封=未封; 五档缺→None 不猜)。
+  盘中K 改用 snapshot Open/Max/Min/Now(替代 get_pricevol 的 O/H/L, 探针未确认其携带)。
+- **P3 交叉+跳水**: `EverZTCount`(vendor 连板) 作交叉校验暴露 `boards_vendor`(主口径仍自推);
+  `Before5MinNow` → **跳水**(现价≤5分钟前价*0.98)。前端 chip 增 封死/排队/开板/跳水 小标 + tooltip 汇总。
+- **新端点** `GET /api/stocks/{symbol}/l2`: 单股 snapshot+more_info 汇总(工作台用, on-demand, 不批量);
+  源不可用 → 200 + 空 dict + note(不编)。
+- **新增** `src/core/stock_l2.py`(单股 L2 取数+纯函数 seal_quality_tag/is_dive) + 单测 6 例;
+  live 状态机增 L2 精修(l2_fn 可注入, 单测离线不碰真 TDX) + 单测 2 例。
+- **门禁**: 后端 2273 passed / 7 failed(=KI-055 存量, 新增 0); 前端 tsc/eslint/UI-RULES/vitest **207** 全绿。
+- **待周一盘中实测**: FCAmo/五档/跳水 live 值、/l2 端点盘中值、与 v0.5.87 live 状态联动。
+- [tag v0.5.89]
+
 ### update-v0.5.88 生产部署 + 走查(借鉴 quicktiny A+B 落地)
 - **部署链**: 覆盖层 19MB(备份 `/root/app_backup_pre_v0588_20260913.tar.gz` → `tar xzf --overwrite` →
   `chown -R app:app` → `compileall` → restart)。`/api/version`=v0.5.88, healthy。冒烟 9/9。
