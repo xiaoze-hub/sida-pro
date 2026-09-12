@@ -117,6 +117,52 @@ function L2Card({ symbol }: { symbol: string }) {
   )
 }
 
+function FundamentalCard({ symbol }: { symbol: string }) {
+  const [fund, setFund] = useState<{
+    gb?: { date?: string; ltgb?: number | null; zgb?: number | null } | null
+    listing?: { name?: string; listing_date?: string } | null
+    sub_new?: boolean | null
+    note?: string | null
+  } | null>(null)
+  const [val, setVal] = useState<{ pe_dynamic?: number | null; pe_ttm?: number | null; pb?: number | null; dividend_yield?: number | null } | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<typeof fund>(`/stocks/${encodeURIComponent(symbol)}/fundamental`)
+      .then((r) => { if (alive) setFund(r ?? null) })
+      .catch(() => { /* 保留旧值 */ })
+    fetchAPI<{ more?: typeof val }>(`/stocks/${encodeURIComponent(symbol)}/l2`)
+      .then((r) => { if (alive) setVal(r?.more ?? null) })
+      .catch(() => { /* 保留旧值 */ })
+    return () => { alive = false }
+  }, [symbol])
+  const row = (label: string, v: string) => (
+    <div className="flex justify-between text-[11px]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-mono">{v}</span>
+    </div>
+  )
+  const fmtNum = (v: number | null | undefined, unit = '') =>
+    v == null ? '--' : `${v}${unit}`
+  return (
+    <div className="rounded border border-border/60 p-2">
+      <div className="mb-1 flex items-center gap-1 text-[12px] font-semibold">
+        基本面 / 股本
+        {fund?.sub_new ? (
+          <span className="rounded bg-[--stock-up]/20 px-1 text-[9px] text-[--stock-up]">次新</span>
+        ) : null}
+      </div>
+      {fund?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{fund.note}</div> : null}
+      {row('PE(动)', fmtNum(val?.pe_dynamic))}
+      {row('PE(TTM)', fmtNum(val?.pe_ttm))}
+      {row('PB', fmtNum(val?.pb))}
+      {row('股息率', val?.dividend_yield != null ? `${val.dividend_yield}%` : '--')}
+      {row('流通股本', fund?.gb?.ltgb != null ? fmtNum(Math.round(fund.gb.ltgb / 1e4), '万') : '--')}
+      {row('总股本', fund?.gb?.zgb != null ? fmtNum(Math.round(fund.gb.zgb / 1e4), '万') : '--')}
+      {row('上市', fund?.listing?.listing_date ? fund.listing.listing_date : '--')}
+    </div>
+  )
+}
+
 function BlocksCard({ symbol }: { symbol: string }) {
   const [data, setData] = useState<{ blocks: { code: string; name: string; type: string }[]; note?: string | null } | null>(null)
   useEffect(() => {
@@ -162,6 +208,7 @@ export default function StockWorkbench() {
       <div className="flex w-[320px] shrink-0 flex-col gap-2">
         <DecisionPioneerCard symbol={symbol} market="CN" />
         <ResonanceVerdictPanel symbol={symbol} />
+        <FundamentalCard symbol={symbol} />
         <BlocksCard symbol={symbol} />
         <L2Card symbol={symbol} />
       </div>

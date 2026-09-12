@@ -349,6 +349,35 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"连板梯队盘中扫描注册失败: {e}")
 
+        # 交易日历交叉校验(P1, 2026-09-13): 每日 08:00 本地 vs 通达信(近30天), 只告警不自动改本地日历
+        try:
+            from src.core.tdx_calendar import calendar_mismatch
+
+            def _calendar_crosscheck() -> None:
+                from datetime import datetime, timedelta
+
+                now = datetime.now()
+                start = (now - timedelta(days=30)).strftime("%Y%m%d")
+                end = (now + timedelta(days=30)).strftime("%Y%m%d")
+                res = calendar_mismatch(start, end)
+                if not res.get("ok"):
+                    logger.warning("交易日历交叉校验不可用: %s", res.get("reason"))
+                    return
+                lo, to = res.get("local_only") or [], res.get("tdx_only") or []
+                if lo or to:
+                    logger.warning("交易日历差异 local_only=%s tdx_only=%s", lo, to)
+                else:
+                    logger.info("交易日历交叉校验一致(%s~%s)", start, end)
+
+            rt.scheduler.scheduler.add_job(
+                _calendar_crosscheck, "cron", hour=8, minute=0,
+                id="tdx-calendar-crosscheck", name="交易日历交叉校验",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            logger.info("交易日历交叉校验已注册(每日08:00)")
+        except Exception as e:
+            logger.error(f"交易日历交叉校验注册失败: {e}")
+
         # 龙虎榜盘后兜底重扫(老板: "龙虎榜是每天收盘后四五点之后才有"): 19:45 / 20:00
         # 东财发布晚于 17:45 时, 当晚再扫一遍(近 3 日幂等 upsert, 有则补无则空跑)
         try:

@@ -206,6 +206,25 @@ def get_stock_blocks(symbol: str, user=Depends(get_current_user)):
     return {"symbol": symbol, "blocks": blocks, "note": None}
 
 
+@router.get("/{symbol}/fundamental")
+def get_stock_fundamental(symbol: str, user=Depends(get_current_user)):
+    """个股基本面/股本/次新(P2): 股本(get_gb_info) + 上市信息(get_stock_info) + 次新判定。
+
+    PE/PB/股息 走 /l2 的 more(不新增 RPC); 研报 get_report_data MCP 不支持 → 不做。
+    源不可用 → 对应字段 None + note(不编)。
+    """
+    from src.core.tdx_fundamental import fetch_gb, fetch_listing, is_sub_new
+
+    gb = fetch_gb(symbol)
+    listing = fetch_listing(symbol)
+    sub_new = is_sub_new(listing.get("listing_date") or "") if listing else None
+    note = None
+    if gb is None and listing is None:
+        note = "基本面/股本不可用(通达信源)"
+    return {"symbol": symbol, "gb": gb, "listing": listing,
+            "sub_new": sub_new, "note": note}
+
+
 @router.post("/refresh-list")
 def refresh_list():
     """刷新股票列表缓存"""

@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### feat-通达信 P2 数据接入(基本面/股本/次新) + 日历每日交叉; v0.5.92
+- **探针**: `get_report_data` MCP 不支持 → **研报卡不做**(老板知情); `get_financial_data` 需客户端先下载专业财务数据+field_list → 不接;
+  `get_ipo_info` 是"今天及未来新股申购"(非个股次新) → 次新改用 `get_stock_info.J_start`(上市日期<365天)。
+- **新端点** `GET /api/stocks/{symbol}/fundamental`: 股本(get_gb_info, count=1 → 流通/总股本) + 上市信息(J_start) + 次新判定;
+  PE(动)/PE(TTM)/PB/股息率 复用 `/l2` 的 more_info(DynaPE/StaticPE_TTM/PB_MRQ/DYRatio, 不新增 RPC)。源不可用 → None+note(不编)。
+- **工作台右栏②**: 新增「基本面/股本」卡(PE/PB/股息/流通/总股本/上市+次新标) + 已有「题材/板块」「盘口L2」。
+- **日历交叉每日 job**: 每日 08:00 本地 vs 通达信(近30天) `calendar_mismatch`, 只告警不自动改本地日历。
+- **门禁**: 后端 24 passed(相关); 前端 tsc/eslint/UI-RULES/vitest **207** 全绿。
+- **待办**: 工作台③(hover 预览替代模态)下批; 周一盘中实测 fundamental/blocks/live + 断源演练 + 回填覆盖核对。
+- [tag v0.5.92]
+
 ### fix-v0.5.91 板块反查 NameError(_to_tq_code 未定义) 热修
 - **缺陷**: `tdx_boards.stock_blocks` 误引用本模块不存在的 `_to_tq_code` → NameError 被 except 吞 →
   `/stocks/{sym}/blocks` 恒返回"板块反查不可用"+空(离线探针 get_relation 本身是好的, 是转换函数名错)。

@@ -95,6 +95,8 @@ def fetch_more(symbol: str) -> dict:
         "l2_tic": _f(m.get("L2TicNum")), "l2_order": _f(m.get("L2OrderNum")),
         "total_bvol": _f(m.get("TotalBVol")), "total_svol": _f(m.get("TotalSVol")),
         "bcancel": _f(m.get("BCancel")), "scancel": _f(m.get("SCancel")),
+        "pe_dynamic": _f(m.get("DynaPE")), "pe_ttm": _f(m.get("StaticPE_TTM")),
+        "pb": _f(m.get("PB_MRQ")), "dividend_yield": _f(m.get("DYRatio")),
     }
 
 
