@@ -5,6 +5,30 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-13
+
+### feat-连板梯队重排+标记+日K(老板六条之展示批); v0.5.85
+- **老板原话**: 「题材情绪的左侧题材需要折叠，现在想看到连扳梯队要向下滑动很久；看最新梯队要滚到最新；
+  日期格式用 2026-09-11 这种而不是简单的 911；连扳梯队也要标记出那些断板了、哪些首板、那些炸板；
+  需要盘中实时跟踪直到收盘定型；可以显示日k红绿柱」（参考通达信连板天梯图）。本批=展示+收盘口径，盘中实时=v0.5.86。
+- **布局**: 梯队(`LadderBoard`)移到市场情绪周期卡**正下方**(打开即见)，题材表整块可折叠
+  (`折叠题材表/展开题材表` 按钮, 状态存 localStorage `tm-board-collapsed`)；删掉页底旧梯队 JSX。
+- **日期**: 列头改全格式 `2026-09-11`(原 `date.slice(5)`="911")；格式化只在前端 `ladder-format.fmtISODate` 做，API 仍返回紧凑 yyyymmdd。
+- **自动滚最新**: `LadderBoard` 数据变化后 `scrollLeft=scrollWidth`(滚到最右=最新一天)。
+- **标记**: 每日列内新增「炸板 n」(红描边)/「断板 n」(灰)两组(tooltip 列「昨N板/今日触板」全名单)；
+  1板组头显式标「首板」。口径: 炸板=当日触板但收盘未封; 断板=昨≥2板今未触板; **昨首板今未续只算淘汰不标断板**。
+- **日K**: 每股一根当日红绿 K(`DayCandle` SVG, 红=收≥开/绿=收<开, 影线=高低)；定型日 OHLC 取 klines qfq；
+  缺 OHLC → 占位块+「无K数据」,**不编影线**；tooltip 标「前复权」。
+- **后端**: `/theme-mood/ladder` 增 `mode`(auto/finalized; live 暂 400 待 v0.5.86)/`as_of`/`stale`/`degraded`/`live_day`；
+  每日增 `blown`/`broken`，`rows[]` 增 `stocks[](symbol/name/candle)` 与 `tag`；新增纯函数
+  `limit_ladder.finalize_marks/touched_by_date/attach_candles` + api `_read_ohlc`(双 expanding bindparam, 缺 OHLC 行丢弃)。
+- **门禁**: 后端离线 **2235 passed / 7 failed**(与 KI-055 存量逐条相同, 新增 0)；
+  前端 tsc/eslint/UI-RULES/vitest **206 passed**/build 全绿。
+  ⚠️ 跑全量时曾多 1 红(`test_market_flow_history` evening 例)——**跨午夜假红**(模块级 TODAY 与端点 now() 不同日)，
+  已改固定时钟(2026-09-11 20:00)修掉，非代码缺陷。
+- **变异验证**: `finalize_marks` 的断板规则改 `b>=1` 必红(首板排除被覆盖)；改回绿。
+- [tag v0.5.85]
+
 ## 2026-09-12
 
 ### update-v0.5.81→v0.5.84 生产部署 + 走查(老板三条全部落地; 自检揪出 4 个真缺陷)
