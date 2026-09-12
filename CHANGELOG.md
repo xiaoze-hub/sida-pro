@@ -7,6 +7,12 @@
 
 ## 2026-09-12
 
+### fix-市场情绪回填读事件用了 Row 字符串下标(v0.5.73, 部署时暴露)
+- v0.5.72 部署后跑生产回填直接失败: `市场情绪周期回填异常: tuple indices must be integers or slices, not str` —— `_read_events()` 里对 SQLAlchemy 2.0 的 `Row` 用了 `r["trade_date"]`, 1.x 可以、2.0 不行(theme_mood 一直用的是 `dict(r._mapping)`, 我没照做)。
+- 修: 走 `_mapping`。**根因是这条路径此前只有纯函数单测, 没碰过真库** → 补 `test_scan_from_events_end_to_end_and_idempotent`: 内存 SQLite 建 `limit_up_events` + `market_phase_daily`(列与 v164 一致), 12 交易日 × 12 票, 断言首日全首板/第4日 11 只 4 板、**梯队完整度=1/3(只有最高档, 中间断档)**、**封板率=11/12(触及未封计入分母)**、phase 与 phase_raw 均已写、重跑幂等不增行。该测试正是拦下本 bug 的那一层。
+- 测试: 本模块 9 例 / 题材情绪+API 合计 38 passed。
+- [tag v0.5.73]
+
 ### refactor-市场情绪回填的写库逻辑收口到 core 层; v0.5.72
 - v0.5.71 的 `POST /api/market/phase/backfill` 一开始把"读事件→派生→重标→upsert"写在 API 层里, 与 `theme_mood`/`market_phase` 既有分层(API 薄、口径与写库在 core)不一致, 也没法给脚本/未来 cron 复用。
 - 改为 core 层 `market_phase.scan_from_events(start=None, write=True)`(含 `_read_events` 与幂等 `ON CONFLICT(date)` upsert; **不动 `sh_index_pct`** —— 那是 vendor 同步写的, 回填没有当日指数数据), API 只调用 + 清缓存 + 失败转 502。
