@@ -1473,6 +1473,9 @@ export default function OpportunitiesPage() {
                         <tr
                           key={r.symbol}
                           className="border-b border-border/30 hover:bg-accent/40 cursor-pointer"
+                          onMouseEnter={(e) => showHover(r.symbol, r.name, e)}
+                          onMouseMove={(e) => showHover(r.symbol, r.name, e)}
+                          onMouseLeave={hideHover}
                           onClick={() => openInsight({
                             stock_symbol: r.symbol,
                             stock_market: 'CN',
@@ -1998,6 +2001,9 @@ export default function OpportunitiesPage() {
                 tabIndex={0}
                 aria-expanded={expanded}
                 onClick={() => toggleExpanded(stateKey)}
+                onMouseEnter={(e) => showHover(item.stock_symbol, item.stock_name, e)}
+                onMouseMove={(e) => showHover(item.stock_symbol, item.stock_name, e)}
+                onMouseLeave={hideHover}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
