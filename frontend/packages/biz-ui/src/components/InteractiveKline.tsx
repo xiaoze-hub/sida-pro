@@ -8,6 +8,7 @@ import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
 import FlashValue from './FlashValue'
 import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
+import { filterMarkersInBarsRange } from '../lib/chart-markers'
 import { subChartReadouts, visibleSubCharts, type SubChartRow } from '../lib/subcharts'
 import {
   smaSeries,
@@ -766,10 +767,16 @@ export default function InteractiveKline(props: {
         })
         .filter(Boolean)
       if (signalMarkers.length) {
-        if (typeof candleSeries.setMarkers === 'function') {
-          candleSeries.setMarkers([...(mainIntent && mainIntent.data_status !== 'insufficient' ? [] : []), ...signalMarkers])
-        } else if (typeof LW.createSeriesMarkers === 'function') {
-          LW.createSeriesMarkers(candleSeries, signalMarkers)
+        // LWC v5 与 KlineChart 同坑: marker 时间落在首/末根 K 线之外会抛 "Value is null"
+        // (周末/节假日"当天有事件、当天没 K 线"), 先裁范围再交给图表。
+        const barTimes = series.klines.map(k => parseBusinessDay(k.date) as BusinessDay)
+        const safeSignalMarkers = filterMarkersInBarsRange(signalMarkers, barTimes)
+        if (safeSignalMarkers.length) {
+          if (typeof candleSeries.setMarkers === 'function') {
+            candleSeries.setMarkers([...(mainIntent && mainIntent.data_status !== 'insufficient' ? [] : []), ...safeSignalMarkers])
+          } else if (typeof LW.createSeriesMarkers === 'function') {
+            LW.createSeriesMarkers(candleSeries, safeSignalMarkers)
+          }
         }
       }
     }
@@ -862,14 +869,16 @@ export default function InteractiveKline(props: {
         })
         .filter(Boolean)
       if (eventMarkers.length) {
+        const barTimes = series.klines.map(k => parseBusinessDay(k.date) as BusinessDay)
+        const safeEventMarkers = filterMarkersInBarsRange(eventMarkers, barTimes)
         // event markers 优先叠在主图, 不覆盖已有 markers
-        if (typeof LW.createSeriesMarkers === 'function') {
-          LW.createSeriesMarkers(candleSeries, eventMarkers)
-        } else if (typeof candleSeries.setMarkers === 'function') {
+        if (safeEventMarkers.length && typeof LW.createSeriesMarkers === 'function') {
+          LW.createSeriesMarkers(candleSeries, safeEventMarkers)
+        } else if (safeEventMarkers.length && typeof candleSeries.setMarkers === 'function') {
           // 退化路径: 合并到现有 markers(LWC v4)
           try {
             const existing = candleSeries.markers?.() ?? []
-            candleSeries.setMarkers([...existing, ...eventMarkers])
+            candleSeries.setMarkers([...existing, ...safeEventMarkers])
           } catch {
             // 忽略: 部分版本不支持读 markers
           }

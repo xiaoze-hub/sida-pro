@@ -29,6 +29,7 @@ import {
 import { fetchAPI } from '@panwatch/api'
 
 import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
+import { filterMarkersInBarsRange } from '../lib/chart-markers'
 
 import {
   KIND_ICON,
@@ -489,8 +490,11 @@ export default function KlineChart(props: {
         })
       }
     }
-    if (!markerPluginRef.current) markerPluginRef.current = createSeriesMarkers(series, markers)
-    markerPluginRef.current.setMarkers(markers)
+    // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
+    // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
+    const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
+    if (!markerPluginRef.current) markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
+    markerPluginRef.current.setMarkers(safeMarkers)
 
     // 2) 支撑压力位 (L2 买卖点/价位线, showSignal 开关 + priceLinesVisible 过滤)。
     //    先清掉上一轮的价位线, 再按当前开关重建 — 避免切开关导致虚线累积。

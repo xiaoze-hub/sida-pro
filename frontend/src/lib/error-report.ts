@@ -8,7 +8,9 @@
  */
 import { API_BASE, getToken } from '@panwatch/api'
 
-const ENDPOINT = `${API_BASE}/api/logs/frontend`
+// API_BASE 本身已是 '/api'(packages/api/src/client.ts), 这里不能再带一次 /api
+// —— 之前拼成 /api/api/logs/frontend 恒 405, 前端崩溃在服务端**零记录**(2026-09-12 排查时发现)。
+const ENDPOINT = `${API_BASE}/logs/frontend`
 const DEDUPE_MS = 60_000
 const lastSent = new Map<string, number>()
 
