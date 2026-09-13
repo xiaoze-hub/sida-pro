@@ -63,3 +63,52 @@ describe('insightApi 实时端点默认跳过 30s GET 缓存', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3) // 数字 TTL 只覆盖默认值, 行为仍走 fetchAPI 原逻辑
   })
 })
+
+/**
+ * Task 12 复审 Finding 2 的回归护栏: `/suggestions/{symbol}` 也必须默认跳过 30s GET 缓存。
+ *
+ * 不这么做时(修复前的实际行为): 「触发盘中监测」提交后端 AI 作业后的**立即刷新**会命中
+ * 挂载时那次 `/suggestions` 写下的缓存(30s TTL) ⇒ 页面继续显示**触发前**的旧列表;
+ * 随后每 5s 的轮询同样命中同一份缓存 ⇒ UI 承诺的「新建议通常 5-15 秒出现」最长 30s 不可见、
+ * 且不可验证。判据同样走**真** `fetchAPI`(只 stub `globalThis.fetch` 数真实请求次数)。
+ */
+describe('insightApi.suggestions 默认跳过 30s GET 缓存(复审 Finding 2)', () => {
+  const fetchMock = vi.fn(async () => okResponse())
+
+  beforeEach(() => {
+    clearResponseCache()
+    fetchMock.mockClear()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearResponseCache()
+  })
+
+  it('触发后的立即刷新与 5s 轮询都真发请求(修复前第二次起命中触发前的缓存)', async () => {
+    const params = { market: 'CN', limit: 20, include_expired: true }
+
+    await insightApi.suggestions('002636', params)
+    await insightApi.suggestions('002636', params)
+    expect(fetchMock).toHaveBeenCalledTimes(2) // 修复前 = 1(第二次命中挂载时写下的 30s 缓存)
+
+    // 轮询 tick(5s 后)仍必须真取数
+    await insightApi.suggestions('002636', params)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+
+    // 关键字参数对判据不敏感: include_expired 变化时同样是真请求
+    await insightApi.suggestions('002636', { ...params, include_expired: false })
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('调用方仍可用 cacheMode:false / 数字 TTL 覆盖默认的 reload', async () => {
+    await insightApi.suggestions('002636', { market: 'CN' }, { cacheMode: false })
+    await insightApi.suggestions('002636', { market: 'CN' }, { cacheMode: false })
+    expect(fetchMock).toHaveBeenCalledTimes(2) // false ⇒ 不读也不写缓存
+
+    await insightApi.suggestions('002636', { market: 'CN' }, { cacheMode: 60 })
+    await insightApi.suggestions('002636', { market: 'CN' }, { cacheMode: 60 })
+    expect(fetchMock).toHaveBeenCalledTimes(3) // 数字 TTL 只覆盖默认值, 行为仍走 fetchAPI 原逻辑
+  })
+})

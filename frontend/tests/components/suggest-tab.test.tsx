@@ -15,9 +15,13 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    `useInsightDerived.technicalFallbackSuggestion` → `buildKlineSuggestion` 产出);
  *    技术指标也不可得 → 诚实空态「暂无建议」(不编造、不伪造 `--`);
  * ④ **「触发盘中监测」是真实后端作业** —— 挂载时**不**额外触发(Provider 自动建议路径本用例用
- *    持仓态抑制), 点击后恰好调一次 `stocksApi.triggerAgent(..., 'intraday_monitor')`; 失败时
- *    渲染事实性失败提示(不猜原因);
- * ⑤ **卸载后手工触发的 5s 轮询停止**(Task 12 修复的既有泄漏: 原 `handleSetAlert` 的 interval
+ *    持仓态抑制; 断言等过其 700ms 延迟), 点击后恰好调一次 `stocksApi.triggerAgent(..., 'intraday_monitor')`;
+ *    失败时渲染事实性失败提示(不猜原因);
+ * ⑤ **持久化副作用在可见 UI 里明示**(复审 Finding 1): 按钮左侧有一行 note「未关注时会先加入
+ *    自选并绑定盘中监测」, 不依赖 hover tooltip; 且可见文案**不出现**内部 agent 名 `intraday_monitor`;
+ * ⑥ **部分成功如实陈述**(复审 Finding 1): `create`/`updateAgents` 已落库而 `triggerAgent` 失败时,
+ *    提示必须点明「加入自选 / 绑定已写入, 不会自动回滚」; 前置阶段就失败时不得声称已写入;
+ * ⑦ **卸载后手工触发的 5s 轮询停止**(Task 12 修复的既有泄漏: 原 `handleSetAlert` 的 interval
  *    只在 125s 自停定时器里清, 切标签后最长 ~2 分钟仍在打 `/suggestions`)。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*`/
@@ -233,11 +237,28 @@ describe('Task 12 建议: 空态回退(诚实, 不编造)', () => {
 })
 
 describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
-  it('挂载不触发; 点击后恰好调一次 triggerAgent(intraday_monitor), 且先绑定后触发', async () => {
+  it('按钮的持久化副作用在可见 UI 明示(不只藏在 title), 且可见文案不泄漏内部 agent 名', async () => {
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
-    // 挂载不额外触发(持仓态抑制了 Provider 的自动建议路径)
-    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+
+    // 可见 note: 不 hover 也能看到"未关注时会先加入自选并绑定盘中监测"
+    const note = screen.getByTestId('suggest-trigger-note')
+    expect(note.textContent).toBe('未关注时会先加入自选并绑定盘中监测')
+    // 反面: 不得只靠 title tooltip 承载该副作用(点击/触摸用户看不到 tooltip)
+    const title = triggerButton().getAttribute('title') || ''
+    expect(title.length).toBeGreaterThan(0)
+    // 可见文案(含 title)不得出现内部 agent 名 `intraday_monitor`(复审 Minor)
+    expect(screen.getByTestId('suggest-tab').textContent || '').not.toMatch(/intraday_monitor/)
+    expect(title).not.toMatch(/intraday_monitor/)
+    expect(note.textContent || '').not.toMatch(/intraday_monitor/)
+  })
+
+  it('挂载不触发: 等过 Provider 自动建议的 700ms 延迟后仍零触发; 点击后恰好一次', async () => {
+    renderTab()
+    await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
+    // 复审 Minor: 原断言只等 30ms, 而 Provider 的自动建议延迟 700ms ⇒ "沉默"不可证。
+    // 等过 700ms(留余量到 900ms): 若持仓态抑制失效, 这里会看到 allow_unbound 的自动触发。
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
     expect(mocks.triggerAgent).not.toHaveBeenCalled()
 
     fireEvent.click(triggerButton())
@@ -254,7 +275,7 @@ describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
     expect(screen.queryByTestId('suggest-trigger-failed')).toBeNull()
   })
 
-  it('触发失败 → 事实性失败提示 + 按钮可重试(不伪装已提交)', async () => {
+  it('部分成功: create/updateAgents 已落库而 trigger 失败 → 提示如实点明"已写入, 不回滚"', async () => {
     mocks.triggerAgent.mockRejectedValue(new Error('HTTP 500'))
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
@@ -263,9 +284,29 @@ describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
 
     await waitFor(() => expect(screen.getByTestId('suggest-trigger-failed')).toBeTruthy())
     expect(screen.getByText(/触发失败/)).toBeTruthy()
-    expect(screen.getByText(/不推断/)).toBeTruthy()
+    expect(screen.getByText(/不在此处推断/)).toBeTruthy()
+    // 前置两步确实落库了(未关注 → create; 绑定 → updateAgents)
+    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
+    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
+    // 复审 Finding 1: 必须说清"什么已经成功" —— 不隐瞒已发生的持久化写入, 也不许夸大
+    expect(screen.getByText(/已写入\(不会自动回滚\)/)).toBeTruthy()
+    expect(screen.getByText(/加入自选 \+ 绑定盘中监测/)).toBeTruthy()
+    expect(screen.queryByText(/本次未发生/)).toBeNull()
     // 按钮恢复可用(alerting 复位), 可重试
     await waitFor(() => expect((triggerButton() as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('前置阶段就失败(加自选失败)→ 提示不得声称已写入', async () => {
+    mocks.stocksCreate.mockRejectedValue(new Error('HTTP 500'))
+    renderTab()
+    await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
+
+    fireEvent.click(triggerButton())
+
+    await waitFor(() => expect(screen.getByTestId('suggest-trigger-failed')).toBeTruthy())
+    expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
+    expect(screen.getByText(/本次未发生自选 \/ 绑定写入/)).toBeTruthy()
+    expect(screen.queryByText(/已写入/)).toBeNull()
   })
 
   it('卸载后手工触发的 5s 轮询停止(修复前会打到 ~2 分钟)', async () => {

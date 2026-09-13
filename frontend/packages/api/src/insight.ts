@@ -68,16 +68,26 @@ export const insightApi = {
       })
     ),
 
+  /**
+   * AI 建议池(`/suggestions/{symbol}`, 含「包含过期」开关)。
+   * 复审 Finding 2(2026-09-13): 默认跳过 `fetchAPI` 的 30s GET 缓存(`cacheMode:'reload'`,
+   * 同 `orderbookOb`/`sealQuality`)。建议由 AI 作业在**提交之后**产出 —— 触发按钮后的立即刷新
+   * 与 5s 轮询若命中缓存, 会一路返回**触发前**的旧列表(最长 30s), 用户看不到新建议
+   * ⇒ 与 UI 承诺的「新建议通常 5-15 秒出现」不符、且该承诺不可验证。
+   * 调用方仍可用 `cacheMode:false` / 数字 TTL 覆盖。
+   */
   suggestions: <T>(
     symbol: string,
-    params: { market?: string; limit?: number; include_expired?: boolean }
+    params: { market?: string; limit?: number; include_expired?: boolean },
+    options?: ApiRequestOptions
   ) =>
     fetchAPI<T>(
       withQuery(`/suggestions/${encodeURIComponent(symbol)}`, {
         market: params.market,
         limit: params.limit,
         include_expired: params.include_expired,
-      })
+      }),
+      { ...options, cacheMode: options?.cacheMode ?? 'reload' }
     ),
 
   news: <T>(params: Record<string, QueryValue>) => fetchAPI<T>(withQuery('/news', params)),
