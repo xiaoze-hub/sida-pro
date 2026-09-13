@@ -132,7 +132,16 @@ function fmtShares(v: unknown): string {
   return Math.abs(n) >= 1e8 ? `${safeFixed(n / 1e8, 2)}亿` : `${safeFixed(n / 1e4, 2)}万`
 }
 
-/** ② 盘口速览: 现价/涨停价/封单/主力净额 + 五档买卖价量, 30s 轮询(失败保留旧值)。 */
+/**
+ * ② 盘口速览: **封单 / 主力净额 + 五档买卖价量**, 30s 轮询(失败保留旧值)。
+ *
+ * **去重(控制器裁定)**: 「现价」(`snapshot.now`)与「涨停价」(`more.zt_price`)归**带1
+ * `HeaderBand`**(顶行现价 / `band1.snapshot` 的 `limit_price`, spec 去重表 #9), 本卡
+ * **不渲染**这两个数据点 —— 同一数据点全工作台只出现一次; 五档买卖价即本卡的价格上下文。
+ * 「主力净额」保留: 去重表 #4 明确允许右栏留一条主力净额速览摘要。
+ * `L2Snapshot.now` / `L2More.zt_price` 的声明**保留**(本文件对 wire 形态的说明, 与同样
+ * 未渲染的 `amount` 同例); 日后若要在此加价格行, 先回去重表重新裁定, 不要直接加。
+ */
 function QuoteCard({ symbol, market }: { symbol: string; market: string }) {
   const cn = cnDataEnabled(market)
   const [l2, setL2] = useState<L2Resp | null>(null)
@@ -171,8 +180,7 @@ function QuoteCard({ symbol, market }: { symbol: string; market: string }) {
         {clock ? <span className="font-mono text-[9px] text-muted-foreground">快照 {clock}</span> : null}
       </div>
       {l2?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{l2.note}</div> : null}
-      <Row label="现价" value={safePrice(s.now, 2)} />
-      <Row label="涨停价" value={m.zt_price != null ? String(m.zt_price) : '--'} />
+      {/* 去重: 现价/涨停价 只在带1 HeaderBand, 此处不渲染(见本组件头注) */}
       <Row label="封单" value={fmtSignedAmount(m.fcamo)} />
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
       <div className="mt-1 grid grid-cols-5 gap-0.5 text-[9px]">

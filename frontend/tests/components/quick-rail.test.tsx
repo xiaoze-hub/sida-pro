@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  *
  * 守四件事(都是本任务的绑定条款):
  *  ① 顺序 = 数智决策 → 盘口速览 → 基本面/股本 → 题材/板块; 根节点**不设宽**(320px 由页面给);
- *  ② 盘口速览真值落位(现价/涨停价/封单/主力净额 + 五档)且 **30s 轮询 + 失败保留旧值**;
+ *  ② 盘口速览真值落位(封单/主力净额 + 五档)且 **30s 轮询 + 失败保留旧值**;
+ *     **去重**: 现价/涨停价 归带1 HeaderBand, 本卡不得渲染(即使接口给了真值);
  *  ③ 缺值一律 `--`(真数据纪律: 不编、不渲染 NaN/0);
  *  ④ CN-only 闸门(非 CN 标的绝不发通达信接口)。
  */
@@ -107,11 +108,9 @@ describe('QuickRail 右栏速览', () => {
     expect(screen.getAllByTestId('decision')).toHaveLength(1)
   })
 
-  it('盘口速览真值落位: 四行 + 五档买卖价量 + 负值金额带单位', async () => {
+  it('盘口速览真值落位: 两行(封单/主力净额) + 五档买卖价量 + 负值金额带单位', async () => {
     const { container } = render(<QuickRail symbol="002636" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('10.5'))
-    expect(rowValue(container, '涨停价')).toBe('11.55')
-    expect(rowValue(container, '封单')).toBe('2300万')
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2300万'))
     expect(rowValue(container, '主力净额')).toBe('-1800万')
     // 快照时间戳(取数时刻, 守 stale 透明)
     expect(screen.getByText('快照 14:30:12')).toBeTruthy()
@@ -120,6 +119,17 @@ describe('QuickRail 右栏速览', () => {
     for (const v of ['10.49', '10.45', '10.51', '10.55', '1200', '5600', '1100', '5500']) {
       expect(txt).toContain(v)
     }
+  })
+
+  it('去重(裁定): 现价/涨停价 归带1 HeaderBand, 本卡即使拿到真值也不渲染', async () => {
+    // fixture 的 `snapshot.now = 10.5` / `more.zt_price = 11.55` 是真值 —— 接口给了也不许画,
+    // 这正是去重契约(同一数据点全工作台只出现一处)的回归点: 重新加回任一行 → 本例如下断言失败。
+    const { container } = render(<QuickRail symbol="002636" market="CN" />)
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2300万'))
+    expect(rowValue(container, '现价')).toBeNull()
+    expect(rowValue(container, '涨停价')).toBeNull()
+    expect(container.textContent).not.toContain('现价')
+    expect(container.textContent).not.toContain('涨停价')
   })
 
   it('基本面/股本: PE(TTM)/PB 走 /l2 more, 股本=流通/总, 次新标注', async () => {
@@ -148,10 +158,11 @@ describe('QuickRail 右栏速览', () => {
       throw new Error(`unexpected url ${u}`)
     })
     const { container } = render(<QuickRail symbol="002636" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('--'))
-    expect(rowValue(container, '涨停价')).toBe('--')
-    expect(rowValue(container, '封单')).toBe('--')
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('--'))
     expect(rowValue(container, '主力净额')).toBe('--')
+    // 去重: 现价/涨停价 两行本卡不存在(缺值时也不会以 `--` 形式出现)
+    expect(rowValue(container, '现价')).toBeNull()
+    expect(rowValue(container, '涨停价')).toBeNull()
     expect(rowValue(container, 'PE(TTM)')).toBe('--')
     expect(rowValue(container, 'PB')).toBe('--')
     expect(rowValue(container, '股本(流通/总)')).toBe('-- / --')
@@ -177,7 +188,7 @@ describe('QuickRail 右栏速览', () => {
     }) as typeof window.setInterval)
 
     const { container } = render(<QuickRail symbol="002636" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('10.5'))
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2300万'))
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), L2_POLL_MS)
     expect(poll).not.toBeNull()
 
@@ -188,35 +199,35 @@ describe('QuickRail 右栏速览', () => {
     await act(async () => {
       poll?.()
     })
-    expect(rowValue(container, '现价')).toBe('10.5')
+    expect(rowValue(container, '封单')).toBe('2300万')
 
-    // 恢复 → 新值上屏
+    // 恢复 → 新值上屏(观察点用封单: 现价已按去重裁定移出本卡)
     mocks.fetchAPI.mockImplementation(async (url: unknown) => {
       const u = String(url)
-      if (u.includes('/l2')) return { ...L2_FULL, snapshot: { ...L2_FULL.snapshot, now: 12.34 } }
+      if (u.includes('/l2')) return { ...L2_FULL, more: { ...L2_FULL.more, fcamo: 26000000 } }
       return respond(url)
     })
     await act(async () => {
       poll?.()
     })
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('12.34'))
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2600万'))
   })
 
   it('换股先清旧值(不把上一只票的盘口画到新标的上)', async () => {
     const { container, rerender } = render(<QuickRail symbol="002636" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('10.5'))
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2300万'))
 
     mocks.fetchAPI.mockImplementation(async () => {
       throw new Error('boom')
     })
     rerender(<QuickRail symbol="600519" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('--'))
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('--'))
     expect(rowValue(container, 'PE(TTM)')).toBe('--')
   })
 
   it('CN-only 闸门: 非 CN 标的不发通达信接口, 全部 --', async () => {
     const { container } = render(<QuickRail symbol="AAPL" market="US" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('--'))
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('--'))
     expect(mocks.fetchAPI).not.toHaveBeenCalled()
     expect(rowValue(container, '股本(流通/总)')).toBe('-- / --')
     expect(screen.queryByText('半导体')).toBeNull()
@@ -244,10 +255,11 @@ describe('QuickRail 右栏速览', () => {
       return { blocks: [], note: null }
     })
     const { container } = render(<QuickRail symbol="002636" market="CN" />)
-    await waitFor(() => expect(rowValue(container, '现价')).toBe('82.46'))
-    expect(rowValue(container, '涨停价')).toBe('84.1')
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('0'))
     // 未封板 → FCAmo = 0(真值, 不是缺值): 显示 '0' 而非 '--'
-    expect(rowValue(container, '封单')).toBe('0')
+    // 去重: 真源同时给了 now=82.46 / zt_price=84.1, 本卡也不渲染这两行(归带1)
+    expect(rowValue(container, '现价')).toBeNull()
+    expect(rowValue(container, '涨停价')).toBeNull()
     // 小额净流出: 旧卡会渲染裸 -29575.36, 这里按万档带符号
     expect(rowValue(container, '主力净额')).toBe('-3万')
     expect(rowValue(container, 'PE(TTM)')).toBe('60.26')

@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务5 去重修复: QuickRail 盘口速览删「现价/涨停价」(归带1)
+- **问题**(去重复审 Important): `QuickRail` ② 盘口速览渲染「现价」(`snapshot.now`)与「涨停价」(`more.zt_price`), 但这两个数据点归**带1 `HeaderBand`** —— 顶行 `price` = `quote.current_price`(`HeaderBand.tsx:112`)、快照行 `limit_price` = `l2m.zt_price`(`:147`), spec 去重表 #9(涨停价/连板 → 带1)。于是同一数据点在带1 与右栏各画一次, 与 spec §一「同一数据点只出现一处」相违。
+- **修复(控制器裁定)**: **两行全删** —— 现价/涨停价只由带1 持有。本卡保留 `封单`(`fcamo`)、`主力净额`(`zjl_hb`)(去重表 #4 明确允许右栏留一条主力净额速览摘要)与五档买卖价量(`buyp/buyv/sellp/sellv`, 五档价即本卡的价格上下文); 卡标题「盘口速览」+ 右上「快照 HH:MM:SS」即锚点, 未另加标签。**轮询(30s)/端点/取数/stale-on-error/换股清值/CN 闸门/`--` 纪律零改动**; `L2Snapshot.now` / `L2More.zt_price` 的接口声明保留(本文件对 wire 形态的说明, 与同样不渲染的 `amount` 同例), 并在 `QuoteCard` 头注写明"日后勿直接加回本卡"。
+- **测试**: `frontend/tests/components/quick-rail.test.tsx` 由「四行」改「两行」, 新增 1 例**去重回归**「现价/涨停价 归带1 HeaderBand, 本卡即使拿到真值也不渲染」(fixture 仍带 `now=10.5` / `zt_price=11.55` 真值 —— 接口给了也不许画); 轮询/换股/CN 闸门三例的观察点由「现价」改「封单」(恢复上屏用例改为 `fcamo 23000000→26000000` → `2300万→2600万`); 缺值/真形态两例补 `null` 断言。**变异验证**: 把「现价」行加回 → 3 例失败(`expected '10.5'/'--'/'82.46' to be null`), 证明断言非空。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **253/253**(42 files, 基线 252/42, 净 +1 = 去重回调用例)。R6: 改动文件零 `.toFixed(`。
+
 ### feat(wb)-工作台 v2 任务5: QuickRail 右栏速览卡(盘口/基本面/板块精简 + 数智决策置顶)
 - 新增 `frontend/packages/biz-ui/src/components/workbench/QuickRail.tsx`(默认导出 `QuickRail({symbol, market})`): 工作台右栏 320px 竖排四卡, 顺序即 spec §1.2 ①②③④ —— **数智决策**(Task 4 的 `DecisionCard`, 本文件不重复任何三指标/共振读数)→ **盘口速览** → **基本面/股本**(精简 3 行) → **题材/板块**(chips)。内容由 `StockWorkbench.tsx:44-195` 的三个内联卡(`L2Card`/`FundamentalCard`/`BlocksCard`)**搬迁精简**(逐段挪取数逻辑, 不重写); 根节点只有 `flex flex-col gap-2`, **不设宽**(320px 由页面外壳 `w-[320px] shrink-0` 给, 便于别处复用)。
 - **数据面**(全部真数据, 缺值 `--`, 不编): ① `GET /stocks/{s}/l2`(`snapshot.now` + `more.{zt_price,fcamo,zjl_hb}` + 五档 `buyp/buyv/sellp/sellv`)—— **30s 轮询** + 失败**保留旧值**(stale-on-error), 换股/换市场**先清旧值**; ② `GET /stocks/{s}/fundamental`(`gb.ltgb/zgb` 股本 + `sub_new` 次新) + `GET /stocks/{s}/l2` 的 `more.{pe_ttm,pb}`(后端 `src/core/tdx_fundamental.py` 头注即"PE/PB 复用 /l2, 不新增 RPC"); ③ `GET /stocks/{s}/blocks` chips。
@@ -20,6 +26,7 @@
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(首轮 R6 误报 —— 文件注释里写了裸 toFixed 字面量被纯文本扫描命中, 已改写注释) / `npx vitest run` **252/252**(42 files, 基线 242/41, 净 +10)。
 - **真数据核对**(实现期直连真源, 非交易时段 002636): `/l2` → `now=82.46 / zt_price=84.1 / fcamo=0.0 / zjl_hb=-29575.36 / pe_ttm=60.26 / pb=14.0`、`buyp=[82.45,0,0,0,0]`(仅一档有值 → 其余档 `--`); `/fundamental` → `gb={ltgb:725234944, zgb:728000000}`、`sub_new=false`; `/blocks` → 22 条、`code` 含 5 个 `'0'`。
 - **未做/遗留**(见 task-5-report): `StockWorkbench.tsx` 内联三卡**本轮按 brief 保留未删**(该页仍编译; 由 Task 6 重写时替换为 `QuickRail`), 因此右栏暂存"两套卡"; 22 条板块 chips 未截断(320px 速览卡高度待 Task 6 走查定夺); 「盘口资金」标签(Task 11)需承接本轮删掉的 逐笔/连板/5分钟前 数据点; `as_of` 是后端**取数时刻**而非行情 tick 时刻, 文案已按"快照 {时间}"措辞。
+- **本条目已按后续去重裁定修订**: 本卡「现价/涨停价」两行**已删除**(归带1 `HeaderBand`), 见上一条 `fix(wb)-…任务5 去重修复`; 本条上方「4 行」「数据面含 `snapshot.now`/`more.zt_price`」「测试: 盘口真值四行」的描述以该 fix 条目为准(`/l2` 的轮询与取数本身未变)。
 
 ### fix(wb)-工作台 v2 任务4 复审修复: DecisionCard 单卡化(消嵌套卡壳 + 消重复/倒挂标题)
 - **问题**(Task 4 复审 Important): `DecisionCard` 自己套了 `rounded border border-border/60 p-2` 边框 + 标题「数智决策」+ 副标题「三指标读数」, 而子组件 `DecisionPioneerCard` 根部自带 `mt-3 rounded-xl border border-border/50 bg-card p-3` 卡壳与「🧭 数智决策三指标」标题+副标题, `ResonanceVerdictPanel` 又带一个「三指标」标签 —— 于是渲染出**卡中卡双向边框**与**三级标题(最内层字号最大)**, 合并卡视觉上是一堆重复标题而不是一张卡。
