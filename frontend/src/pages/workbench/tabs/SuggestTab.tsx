@@ -103,7 +103,7 @@ function SuggestTabBody() {
 
       {triggerFailed ? (
         <div className="rounded border border-border/50 px-3 py-2 text-[11px] text-muted-foreground" data-testid="suggest-trigger-failed">
-          触发失败: 盘中监测作业未提交成功(具体错误见上方提示) —— 可重试; 失败原因以错误提示为准, 此处不推断。
+          触发失败: 盘中监测作业未提交成功(具体错误见错误提示) —— 可重试; 失败原因以错误提示为准, 此处不推断。
         </div>
       ) : null}
 
