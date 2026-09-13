@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### chore(wb)-v0.6.0 遗留清理第 3 批: 再删 2 个死文件 + 清掉 `refreshForAuto` 的已死 tab 分支
+- **又找到 2 个恢复后零引用的死组件**(与第1批同手法核过 import) —— `insight/OverviewTab.tsx`(34 处 R6 存量, 占 baseline 大头) 与 `insight/FundamentalsTab.tsx`(工作台用的是 `FundamentalsPanel`, 不走这层): 删除并在 `scripts/ui-rules-baseline.json` 移除 `OverviewTab: 34` 条目。
+- **遗留⑪(`refreshForAuto` 按内部 `tab` 收敛)** —— 排查发现**唯一的 `setTab` 调用方就是刚删的 `OverviewTab`** ⇒ 所有消费者的 `tab` 恒为 `'overview'`, 那些 `tab === 'X'` 分支**已经不可能命中**(死条件, 且让人误以为"有的会随 tick 重取、有的不会")。改为**纯键门控**: 启用哪个 key 就刷新哪些端点; `company`/`fundamentals` 是 EOD 数据, 明确**不随 20s tick 重取**(需要时走 `handleRefreshAll`); 同时在当前消费者上**行为零变化**(原来 `tab==='overview'` 就已命中 kline/suggestions/news/announcements/reports)。依赖数组同步删除两个不再使用的 loader —— **这条正是刚纳入门禁的 eslint 当场抓出来的**(`react-hooks/exhaustive-deps`)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint(含 54 测试文件) 0 / UI-RULES OK / vitest **361/361**。
+- [commit 见下方第 3 批提交]
+
 ### chore(web)-v0.6.0 遗留清理第 2 批(工程债): `tests/` 纳入类型与 lint 门禁
 - **遗留⑧(测试不在门禁内)** —— 此前 `tsconfig.json` 的 `include` 只有 `src`/`packages/*/src`、`eslint.config.js` 的 `files` 也不含 `tests/`, **54 个测试文件的类型错误与 lint 问题一律门禁抓不到**(T16 已实证: 往测试塞必然类型错误，`tsc -b`/`eslint` 仍全绿)。
 - **修法(不耦合 app 构建)**: 新增 `frontend/tsconfig.tests.json`(`extends` 主配置; `include` 加 `tests`; `lib` 提到 ES2022 以支持 `.at()`; `types: [node, vite/client, @testing-library/jest-dom]`)并加脚本 **`pnpm typecheck:tests`** —— **不动** `tsc -b` 的 `include`, 所以 app 的 `build` 不会被测试类型错误阻塞(测试坏了不该挡生产发版)。`eslint.config.js` 的 `files` 加 `tests/**/*.{ts,tsx}`。

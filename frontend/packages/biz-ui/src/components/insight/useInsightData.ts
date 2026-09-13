@@ -498,38 +498,29 @@ const handleRefreshAll = useCallback(async () => {
 const refreshForAuto = useCallback(async () => {
   if (!symbol) return
   const tasks: Promise<any>[] = []
-  // Task 10 门控: 自动刷新同样只碰「已启用」的端点(缺省全开 = 旧行为逐字不变)。
+  // 键门控(缺省 undefined = 全开)。**已不再按内部 `tab` 收敛** —— 唯一的 `setTab` 调用方是
+  // `OverviewTab`, 而该组件随旧模态一起删除(2026-09-13, 全仓零引用) ⇒ 所有消费者的 `tab` 恒为
+  // `'overview'`, 保留 `tab === 'X'` 分支只会让"什么会随 tick 重取"难以读懂(遗留⑪: 清掉这批已死分支;
+  // 在当前消费者上**行为零变化** —— 原来 `tab==='overview'` 就已命中 kline/suggestions/news/announcements/reports)。
   if (isResourceEnabled(enabledKeys, 'core')) {
-    tasks.push(loadQuote(), loadMoreInfo(), loadHoldingAgg())
-    if (tab === 'overview' || tab === 'kline') {
-      tasks.push(loadKline(), loadMiniKline({ silent: true }))
-    }
+    tasks.push(loadQuote(), loadMoreInfo(), loadHoldingAgg(), loadKline(), loadMiniKline({ silent: true }))
   }
-  if (isResourceEnabled(enabledKeys, 'suggestions') && (tab === 'overview' || tab === 'suggestions')) {
+  if (isResourceEnabled(enabledKeys, 'suggestions')) {
     tasks.push(loadSuggestions())
   }
-  if (isResourceEnabled(enabledKeys, 'news') && (tab === 'overview' || tab === 'news')) {
+  if (isResourceEnabled(enabledKeys, 'news')) {
     tasks.push(loadNews())
   }
-  if (isResourceEnabled(enabledKeys, 'announcements') && (tab === 'overview' || tab === 'announcements')) {
+  if (isResourceEnabled(enabledKeys, 'announcements')) {
     tasks.push(loadAnnouncements())
   }
-  if (isResourceEnabled(enabledKeys, 'reports') && (tab === 'overview' || tab === 'reports')) {
+  if (isResourceEnabled(enabledKeys, 'reports')) {
     tasks.push(loadReports())
   }
-  // 自动刷新仍保留「按标签收敛」(20s 周期重取是可选行为, 与首拉的键门控正交):
-  // `company`/`fundamentals` 只在内部 tab 命中时随 tick 重取 —— 工作台标签的 `tab` 恒为
-  // `'overview'`(EOD 数据, 无新鲜度承诺, 不随 tick 重取; 需要重取走 Provider 的手动刷新)。
-  // `company` 分支原先是**无键门控**的(任何键集下 tab==='company' 都会取), 2026-09-13 一并补上
-  // 键判定(缺省 undefined = 全开 ⇒ 旧行为不变)。
-  if (isResourceEnabled(enabledKeys, 'company') && tab === 'company') {
-    tasks.push(loadCompany())
-  }
-  if (isResourceEnabled(enabledKeys, 'fundamentals') && tab === 'fundamentals') {
-    tasks.push(loadFundamentals())
-  }
+  // **EOD 数据有意不随 tick 重取**: `company`(简介/基本信息) 与 `fundamentals`(龙虎榜/两融/股东户数)
+  // 无盘内新鲜度承诺, 20s 重取纯浪费配额 —— 需要重取时走 Provider 暴露的 `handleRefreshAll`(手动刷新)。
   await Promise.allSettled(tasks)
-}, [symbol, tab, enabledKeys, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports, loadCompany, loadFundamentals])
+}, [symbol, enabledKeys, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports])
 
 const loadDeepResult = useCallback(async () => {
   if (!symbol) return

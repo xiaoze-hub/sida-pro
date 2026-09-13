@@ -16,7 +16,6 @@
   "frontend/packages/biz-ui/src/components/dashboard/FlowHistoryChart.tsx": 1,
   "frontend/packages/biz-ui/src/components/deep-analysis-modal.tsx": 9,
   "frontend/packages/biz-ui/src/components/insight/FundamentalsPanel.tsx": 3,
-  "frontend/packages/biz-ui/src/components/insight/OverviewTab.tsx": 34,
   "frontend/packages/biz-ui/src/components/insight/deep-analysis.tsx": 5,
   "frontend/packages/biz-ui/src/components/insight/helpers.tsx": 9,
   "frontend/packages/biz-ui/src/components/insight/useInsightDerived.ts": 1,
