@@ -1,9 +1,12 @@
-import type { ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { InsightContext } from '@panwatch/biz-ui/components/insight/context'
-import { useInsightData } from '@panwatch/biz-ui/components/insight/useInsightData'
+import { useInsightData, type ResourceKey } from '@panwatch/biz-ui/components/insight/useInsightData'
 import { useInsightDerived } from '@panwatch/biz-ui/components/insight/useInsightDerived'
 import { useInsightActions } from '@panwatch/biz-ui/components/insight/useInsightActions'
 import type { StockInsightModalProps } from '@panwatch/biz-ui/components/insight/types'
+
+/** 供 Task 11–16 声明「本标签需要哪些端点」时直接 import 的类型。 */
+export type { ResourceKey }
 
 /**
  * 惰性 `InsightProvider`(工作台 v2 三合一, Task 10)。
@@ -13,10 +16,13 @@ import type { StockInsightModalProps } from '@panwatch/biz-ui/components/insight
  * (`stock-insight-modal.tsx`, 已退役) 才是原来的 Provider, 本组件在**工作台页内**补上它,
  * **不复刻模态壳**(无 Dialog/无遮罩/无关闭, 不渲染任何自己的 DOM)。
  *
- * 惰性(关键): 本 Provider 定位是**挂在每个标签内部**(Task 11–16 各自包住自己的正文),
- * `TabPanel` 只渲染当前激活标签 ⇒ 挂载某个标签 = 才触发该标签下 `useInsightData` 的取数。
- * 因此本任务只**创建** Provider, **不做任何接线**(接线属 Task 17); `props.open` 恒 `true`
- * —— 钩子内所有取数 effect 都以 `props.open` 为总闸, 恒 `true` 才会在挂载时取数。
+ * 惰性(spec §4.3, 两层):
+ *  1. **按标签挂载** —— 本 Provider 定位是挂在每个标签内部(Task 11–16 各自包住自己的正文),
+ *     `TabPanel` 只渲染当前激活标签 ⇒ 未挂载的标签完全不取数;
+ *  2. **按资源键门控(`keys`)** —— 传入 `keys` 后, 只有被启用的端点才会在挂载时取数
+ *     (`useInsightData` 的每个取数 effect 逐键早退), 自动 AI 建议触发(`useInsightActions`)
+ *     也只在 `suggestions` 键启用时才可能发生。`keys` **省略 = 全开**, 与不传该参数时的旧
+ *     行为逐字相同(默认路径不受影响)。
  *
  * 与旧模态壳的三处语义差异(均为"无壳"的必然结果, 非新增逻辑):
  *  1. `onOpenChange` 传 **noop**: 组件内 `goFullQuote()`(切换路由到 `/quote/:symbol`)与
@@ -39,6 +45,11 @@ export interface InsightProviderProps {
   market: string
   stockName?: string
   hasPosition?: boolean
+  /**
+   * 资源门控键(Task 11–16 各标签按需声明)。省略 = 全开(旧行为); 空数组 = 全关。
+   * 内部按**内容签名**记忆化(`keys.join(',')`), 故调用方传内联数组也不会每帧重取数。
+   */
+  keys?: readonly ResourceKey[]
   children: ReactNode
 }
 
@@ -50,12 +61,21 @@ export function InsightProvider({
   market,
   stockName,
   hasPosition,
+  keys,
   children,
 }: InsightProviderProps) {
   const props: StockInsightModalProps = { open: true, onOpenChange: noop, symbol, market, stockName, hasPosition }
-  const data = useInsightData(props)
+  // 门控键: 按**内容签名**(非数组/Set 引用)记忆化 —— 宿主写 `keys={['core']}` 这类内联数组时
+  // 每帧都是新数组, 若直接 `new Set(keys)` 会每帧换引用 ⇒ 取数 effect 反复重跑(请求风暴)。
+  // 签名是原始字符串: 内容不变则 Set 引用不变; `undefined`(全开)与 `[]`(全关)用 `null` 区分。
+  const keysSignature = keys === undefined ? null : keys.join(',')
+  const enabledKeys = useMemo<ReadonlySet<ResourceKey> | undefined>(
+    () => (keysSignature === null ? undefined : new Set(keysSignature.split(',') as ResourceKey[])),
+    [keysSignature],
+  )
+  const data = useInsightData(props, enabledKeys)
   const derived = useInsightDerived(props, data)
-  const actions = useInsightActions(props, data, derived)
+  const actions = useInsightActions(props, data, derived, enabledKeys)
   return (
     <InsightContext.Provider value={{ props, ...data, ...derived, ...actions }}>
       {children}

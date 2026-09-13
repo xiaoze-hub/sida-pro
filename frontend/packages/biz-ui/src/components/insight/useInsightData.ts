@@ -32,7 +32,35 @@ import type {
   StockItem,
 } from './types'
 
-export function useInsightData(props: StockInsightModalProps) {
+/**
+ * 资源门控键(工作台 v2 三合一, Task 10)。spec §4.3: 进入工作台只取「带1+带2」所需的
+ * `core` 端点, 下部标签各自的端点**只在该标签激活时**才取 —— 由宿主(各标签)按需传入
+ * 自己的键集合实现。
+ *
+ * 语义: `keys === undefined` = **全开**(与不传该参数的旧行为逐字相同);
+ *       `keys` 为空集 = **全关**(一个端点都不取, 自动刷新亦不启动)。
+ */
+export type ResourceKey =
+  | 'core'          // 带1+带2: quote / moreInfo / darkFlowTq / klineSummary / klines(36d) / portfolioSummary
+  | 'watchlist'     // stocksApi.list —— 关注状态
+  | 'news'          // /news(含级联兜底)
+  | 'announcements' // /news?source=eastmoney(含级联兜底)
+  | 'suggestions'   // /suggestions
+  | 'reports'       // /history x3 agent(含全局兜底)
+  | 'deep'          // tradingAgents 深度分析(另受内部 tab==='deep' 约束)
+  | 'fundamentals'  // fundamentalsApi.detail(另受内部 tab==='fundamentals' 约束)
+
+/** 单键判定: `keys` 缺省 = 全开。 */
+export function isResourceEnabled(keys: ReadonlySet<ResourceKey> | undefined, key: ResourceKey): boolean {
+  return !keys || keys.has(key)
+}
+
+/** 是否至少启用了一个键(`keys` 缺省 = 全开); 用于自动刷新总闸。 */
+export function hasAnyResourceEnabled(keys: ReadonlySet<ResourceKey> | undefined): boolean {
+  return !keys || keys.size > 0
+}
+
+export function useInsightData(props: StockInsightModalProps, enabledKeys?: ReadonlySet<ResourceKey>) {
 const { toast } = useToast()
 // W3.7/D7: 弹窗→全屏行情路由桥(弹窗预览 60%/侧栏场景的出口, 直达 /quote/:symbol)
 const navigate = useNavigate()
@@ -462,30 +490,34 @@ const handleRefreshAll = useCallback(async () => {
 
 const refreshForAuto = useCallback(async () => {
   if (!symbol) return
-  const tasks: Promise<any>[] = [loadQuote(), loadMoreInfo(), loadHoldingAgg()]
-  if (tab === 'overview' || tab === 'kline') {
-    tasks.push(loadKline(), loadMiniKline({ silent: true }))
+  const tasks: Promise<any>[] = []
+  // Task 10 门控: 自动刷新同样只碰「已启用」的端点(缺省全开 = 旧行为逐字不变)。
+  if (isResourceEnabled(enabledKeys, 'core')) {
+    tasks.push(loadQuote(), loadMoreInfo(), loadHoldingAgg())
+    if (tab === 'overview' || tab === 'kline') {
+      tasks.push(loadKline(), loadMiniKline({ silent: true }))
+    }
   }
-  if (tab === 'overview' || tab === 'suggestions') {
+  if (isResourceEnabled(enabledKeys, 'suggestions') && (tab === 'overview' || tab === 'suggestions')) {
     tasks.push(loadSuggestions())
   }
-  if (tab === 'overview' || tab === 'news') {
+  if (isResourceEnabled(enabledKeys, 'news') && (tab === 'overview' || tab === 'news')) {
     tasks.push(loadNews())
   }
-  if (tab === 'overview' || tab === 'announcements') {
+  if (isResourceEnabled(enabledKeys, 'announcements') && (tab === 'overview' || tab === 'announcements')) {
     tasks.push(loadAnnouncements())
   }
-  if (tab === 'overview' || tab === 'reports') {
+  if (isResourceEnabled(enabledKeys, 'reports') && (tab === 'overview' || tab === 'reports')) {
     tasks.push(loadReports())
   }
   if (tab === 'company') {
     tasks.push(loadCompany())
   }
-  if (tab === 'fundamentals') {
+  if (isResourceEnabled(enabledKeys, 'fundamentals') && tab === 'fundamentals') {
     tasks.push(loadFundamentals())
   }
   await Promise.allSettled(tasks)
-}, [symbol, tab, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports, loadCompany, loadFundamentals])
+}, [symbol, tab, enabledKeys, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports, loadCompany, loadFundamentals])
 
 const loadDeepResult = useCallback(async () => {
   if (!symbol) return
@@ -510,6 +542,8 @@ const loadDeepResult = useCallback(async () => {
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  // Task 10 门控: `core` = 带1+带2 所需的全部端点; 未启用则连状态重置也跳过(每次挂载都是新实例)。
+  if (!isResourceEnabled(enabledKeys, 'core')) return
   setTab('overview')
   setSuggestions([])
   setNews([])
@@ -524,26 +558,29 @@ useEffect(() => {
   setFundamentalsLoaded(false)
   setMoreInfo(null)
   loadCore()
-}, [props.open, symbol, market, loadCore])
+}, [props.open, symbol, market, enabledKeys, loadCore])
 
 // 切到「深度」tab 时按需拉取(仅首次)
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'deep')) return
   if (tab === 'deep' && !deepLoaded && !deepLoading) {
     loadDeepResult()
   }
-}, [tab, props.open, symbol, deepLoaded, deepLoading, loadDeepResult])
+}, [tab, props.open, symbol, enabledKeys, deepLoaded, deepLoading, loadDeepResult])
 
 // 切到「基本面」tab 时按需拉取(仅首次; 失败也置 loaded, 避免反复请求 404)
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'fundamentals')) return
   if (tab === 'fundamentals' && !fundamentalsLoaded && !fundamentalsLoading) {
     loadFundamentals()
   }
-}, [tab, props.open, symbol, fundamentalsLoaded, fundamentalsLoading, loadFundamentals])
+}, [tab, props.open, symbol, enabledKeys, fundamentalsLoaded, fundamentalsLoading, loadFundamentals])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'watchlist')) return
   let cancelled = false
   ;(async () => {
     try {
@@ -562,37 +599,43 @@ useEffect(() => {
     }
   })()
   return () => { cancelled = true }
-}, [props.open, symbol, market])
+}, [props.open, symbol, market, enabledKeys])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'news')) return
   loadNews().catch(() => setNews([]))
-}, [props.open, symbol, newsHours, loadNews])
+}, [props.open, symbol, newsHours, enabledKeys, loadNews])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'announcements')) return
   loadAnnouncements().catch(() => setAnnouncements([]))
-}, [props.open, symbol, announcementHours, loadAnnouncements])
+}, [props.open, symbol, announcementHours, enabledKeys, loadAnnouncements])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'suggestions')) return
   loadSuggestions().catch(() => setSuggestions([]))
-}, [props.open, symbol, includeExpiredSuggestions, loadSuggestions])
+}, [props.open, symbol, includeExpiredSuggestions, enabledKeys, loadSuggestions])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'reports')) return
   loadReports().catch(() => setReports([]))
-}, [props.open, symbol, loadReports])
+}, [props.open, symbol, enabledKeys, loadReports])
 
 useEffect(() => {
   if (!props.open || !symbol || !autoRefreshEnabled) return
+  // Task 10 门控: 一个键都没启用时, 20s 自动刷新整体不启动(缺省全开 = 旧行为不变)。
+  if (!hasAnyResourceEnabled(enabledKeys)) return
   const sec = Number(autoRefreshSec) > 0 ? Number(autoRefreshSec) : 20
   const ms = Math.max(10, sec) * 1000
   const timer = setInterval(() => {
     refreshForAuto().catch(() => undefined)
   }, ms)
   return () => clearInterval(timer)
-}, [props.open, symbol, autoRefreshEnabled, autoRefreshSec, refreshForAuto])
+}, [props.open, symbol, autoRefreshEnabled, autoRefreshSec, enabledKeys, refreshForAuto])
 
 const miniKlineExtrema = useMemo(() => {
   if (!miniKlines.length) return null

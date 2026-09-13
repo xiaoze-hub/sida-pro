@@ -1,7 +1,8 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { stocksApi } from '@panwatch/api'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import type { StockInsightModalProps } from './types'
+import { isResourceEnabled, type ResourceKey } from './useInsightData'
 import type { useInsightData } from './useInsightData'
 import type { useInsightDerived } from './useInsightDerived'
 
@@ -9,6 +10,7 @@ export function useInsightActions(
   props: StockInsightModalProps,
   data: ReturnType<typeof useInsightData>,
   derived: ReturnType<typeof useInsightDerived>,
+  enabledKeys?: ReadonlySet<ResourceKey>,
 ) {
   const {
     symbol, market, resolvedName, quote, loadSuggestions, watchingStock, setWatchingStock, stockCacheRef,
@@ -17,6 +19,15 @@ export function useInsightActions(
   } = data
   const { hasHolding, shareCardPayload, shareText, stockColors } = derived
   const { toast } = useToast()
+
+// Task 10 修复(既存缺陷): 自动 AI 建议的 5s 轮询 interval 原先只在 125s 的 setTimeout 里清理,
+// **卸载时不清** —— 离开标签后最长 2 分钟仍在打 `/suggestions`。改为显式持有句柄, 卸载/被取代时都清。
+const autoPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+const autoPollStopRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+const stopAutoPolling = useCallback(() => {
+  if (autoPollRef.current !== null) { clearInterval(autoPollRef.current); autoPollRef.current = null }
+  if (autoPollStopRef.current !== null) { clearTimeout(autoPollStopRef.current); autoPollStopRef.current = null }
+}, [])
 const handleExportShareImage = useCallback(async () => {
   const esc = (s: string) => String(s || '')
     .replace(/&/g, '&amp;')
@@ -245,6 +256,9 @@ const toggleWatch = useCallback(async () => {
 }, [hasHolding, market, resolvedName, symbol, toast, watchingStock, setWatchToggleLoading, setWatchingStock, stockCacheRef])
 
 const triggerAutoAiSuggestion = useCallback(async () => {
+  // Task 10 门控(spec §4.3): 未启用 `suggestions` 键时**绝不触发** —— 本函数会真实提交后端 AI 作业
+  // (`stocksApi.triggerAgent`), 默认路径(不传 enabledKeys)仍与旧行为逐字相同。
+  if (!isResourceEnabled(enabledKeys, 'suggestions')) return
   // 自动建议仅针对”确认未持仓”的股票，且不自动创建股票/绑定 Agent。
   if (!symbol || !market || !holdingLoaded || holdingLoadError || hasHolding || autoSuggesting) return
   const key = `${market}:${symbol}`
@@ -263,13 +277,15 @@ const triggerAutoAiSuggestion = useCallback(async () => {
       bypass_market_hours: true,
     })
     // 异步模式：triggerAgent 立即返回，轮询等待建议生成
+    stopAutoPolling() // 被新一轮触发取代时先清掉上一轮(防叠加)
     const before = Date.now()
-    const poll = setInterval(async () => {
-      if (Date.now() - before > 120_000) { clearInterval(poll); setAutoSuggesting(false); return }
+    autoPollRef.current = setInterval(async () => {
+      if (Date.now() - before > 120_000) { stopAutoPolling(); setAutoSuggesting(false); return }
       await loadSuggestions()
     }, 5_000)
     await loadSuggestions()
-    setTimeout(() => clearInterval(poll), 125_000)
+    // 到点自停(句柄记在 ref, 卸载/被取代时由 stopAutoPolling 一并清)
+    autoPollStopRef.current = setTimeout(() => stopAutoPolling(), 125_000)
     return
   } catch (e) {
     toast(
@@ -278,15 +294,20 @@ const triggerAutoAiSuggestion = useCallback(async () => {
     )
     setAutoSuggesting(false)
   }
-}, [symbol, market, resolvedName, holdingLoaded, holdingLoadError, hasHolding, autoSuggesting, loadSuggestions, toast, autoTriggeredRef, setAutoSuggesting])
+}, [symbol, market, resolvedName, holdingLoaded, holdingLoadError, hasHolding, autoSuggesting, enabledKeys, loadSuggestions, toast, autoTriggeredRef, setAutoSuggesting, stopAutoPolling])
 
 useEffect(() => {
   if (!props.open || !symbol) return
+  // Task 10 门控: 未启用 `suggestions` 时连 700ms 的自动触发定时器都不设。
+  if (!isResourceEnabled(enabledKeys, 'suggestions')) return
   const timer = setTimeout(() => {
     triggerAutoAiSuggestion().catch(() => undefined)
   }, 700)
   return () => clearTimeout(timer)
-}, [props.open, symbol, market, triggerAutoAiSuggestion])
+}, [props.open, symbol, market, enabledKeys, triggerAutoAiSuggestion])
+
+// Task 10 修复: 卸载(切走标签)时清掉 5s 轮询, 不留后台请求。
+useEffect(() => () => stopAutoPolling(), [stopAutoPolling])
 
 
   return {
