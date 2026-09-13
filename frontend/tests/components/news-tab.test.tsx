@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
 
 /**
- * Task 14 标签「消息」守五件事:
+ * Task 14 标签「消息」守六件事:
  *
  * ① **两段真渲染** —— 公告(东财, `/news?source=eastmoney`)与新闻(`/news`)两段各自的
  *    标题/来源/外链列表**全部来自网络层 mock 的真实响应形状**(复用恢复组件
@@ -22,8 +22,12 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ④ **诚实空态** —— 真·空响应 ⇒ 复用组件的「暂无公告」+「暂无相关新闻」, 且段头**不**显示
  *    「共 0 条」(首拉在途与确无内容不可混为一谈); 页面无任何编造内容;
  * ⑤ **取数失败不伪装成"无内容"** —— 两个端点 reject(恢复组件的 hook 把失败静默降级为
- *    空列表)时, 屏上仍是空态, 但必须同时出现常驻说明
- *    「列表为空时「该时间窗内确无内容」与「取数失败」在此不可区分」, **不**声称"没有内容"。
+ *    空列表)时, 屏上仍是空态, 但必须同时出现常驻说明(**与 impl 文案全文精确匹配**, 三成因并列)
+ *    `列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分`, **不**声称"没有内容";
+ * ⑥ **换标的不串台** —— 本标签未启用 `core`, `useInsightData:555-573` 那个(被 `core` 门控的)
+ *    挂载空值重置路径**不跑** ⇒ 换标的时旧标的的 `news`/`announcements` 数组不会被清空。故
+ *    `NewsTab.tsx:153` 把 `key={symbol}` 挂在 Provider 上; 本用例在**新标的响应悬挂不落地**的
+ *    最坏窗口里换标的, 断言上一只票的文章标题**一条都不在屏上**(去掉 `key` 必失败)。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsightData`/
  * 两个恢复组件全走真实代码。
@@ -149,14 +153,19 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function renderTab() {
-  return render(
+/** 宿主树(换标的用例要用 `rerender` 复用同一棵树, 只是换 `symbol`)。 */
+function tabTree(symbol = '002636', market = 'CN') {
+  return (
     <MemoryRouter>
       <ToastProvider>
-        <NewsTab symbol="002636" market="CN" />
+        <NewsTab symbol={symbol} market={market} />
       </ToastProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+}
+
+function renderTab(symbol = '002636', market = 'CN') {
+  return render(tabTree(symbol, market))
 }
 
 /** `/news` 的全部调用参数(按 `source` 分流)。 */
@@ -236,6 +245,35 @@ describe('Task 14 消息: 公告 + 新闻两段真渲染', () => {
     // 新闻段不得带上公告的窗口(反之亦然)
     expect(articleCalls().some((p) => p.hours === '4320')).toBe(false)
     expect(announcementCalls().some((p) => p.hours === '6')).toBe(false)
+  })
+
+  it('换标的时上一只票的公告/新闻一条都不得留屏(key={symbol} 强制重挂载; 新响应仍在途)', async () => {
+    // 新标的的请求**悬挂不返回** —— 模拟"新响应尚未落地"的最坏窗口(正是泄漏窗口)
+    const neverSettles = new Promise<never>(() => {})
+    mocks.news.mockImplementation((params?: Record<string, string>) =>
+      params?.symbols === '600519' ? neverSettles : dispatchNews(params),
+    )
+
+    const { rerender } = renderTab()
+    // 老标的(002636)两段都已真渲染, 且各 2 条
+    await within(await screen.findByTestId('news-section-announcements')).findByText('关于回购股份的进展公告')
+    await within(screen.getByTestId('news-section-news')).findByText('公司获多家机构调研关注')
+    expect(screen.getAllByText('共 2 条')).toHaveLength(2)
+
+    // 换标的(symbol 变 ⇒ Provider 的 key 变 ⇒ 整棵子树重挂载)
+    rerender(tabTree('600519'))
+
+    // 老标的的四条文章必须**立刻**消失: 新响应永不落地, 它们若还在就是"画在新标的名下"
+    expect(screen.queryByText('关于回购股份的进展公告')).toBeNull()
+    expect(screen.queryByText('2026年半年度报告摘要')).toBeNull()
+    expect(screen.queryByText('公司获多家机构调研关注')).toBeNull()
+    expect(screen.queryByText('行业景气度回升带动板块走强')).toBeNull()
+    // 证明是"重挂载后的空 state"(不是旧数组残留): 两段回到空态, 且不出任何条数
+    expect(await screen.findByText('暂无公告')).toBeTruthy()
+    expect(await screen.findByText('暂无相关新闻')).toBeTruthy()
+    expect(screen.queryByText(/共 \d+ 条/)).toBeNull()
+    // 新标的的请求确实发出去了(空态不是因为"根本没取数")
+    expect(newsCalls().some((p) => p.symbols === '600519')).toBe(true)
   })
 })
 

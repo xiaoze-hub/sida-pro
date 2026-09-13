@@ -40,7 +40,11 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  * `if (!isResourceEnabled(enabledKeys,'core')) return` —— 本标签**未启用 `core`** ⇒ 换标的时
  * 旧标的的文章不会被清空, 取数 effect 又要等新响应落地才覆盖 ⇒ 中间一段会**把上一只票的
  * 公告/新闻画在新标的名下**。整棵子树随 `symbol` 重挂载可消除该窗口(与 T13 的
- * `FundamentalTab` 同法; L2Tab/SuggestTab 未加, 因它们的键自带挂载重置路径)。
+ * `FundamentalTab` 同法; L2Tab/SuggestTab 未加, 因它们的键自带挂载重置路径)。**`key` 只含
+ * `symbol`, 不含 `market`**: 本标签启用的两个端点的请求参数里**没有** market(`loadNews` /
+ * `loadAnnouncements` 只发 hours/limit/filter_related/source/names|symbols, `useInsightData:264-290`
+ * 与 `:345-370`)⇒ 同代码换市场时两次请求逐字相同、落地数据也相同, 不存在要挡的跨市场脏窗口;
+ * 把 `market` 塞进 key 只会多一次无收益的重挂载(若将来 `/news` 变成市场维度, 需同步扩 key 并补测)。
  *
  * 诚实空态(never fabricate):
  *  - 段内列表为空时, 复用组件给出的是「暂无公告」/「暂无相关新闻」——**不含任何编造内容**;

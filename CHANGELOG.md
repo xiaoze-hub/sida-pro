@@ -7,6 +7,15 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务14 复审: 跨标的泄漏防线补测试(零覆盖)+ 测试头注空态成因订正为三因
+
+- **Finding (Important, 零覆盖) —— 防跨标的串台的那道防线没有任何测试**。`NewsTab.tsx:153` 把 `key={symbol}` 挂在 `InsightProvider` 上, 唯一目的是挡住"换标的时**上一只票**的公告/新闻画在新标的名下"(根因: 本标签未启用 `core`, 而 news/announcements 数组的空值重置写在 `useInsightData:555-573` 那个被 `core` 门控的挂载总 effect 里 ⇒ 该路径不跑); 但原有 5 例**没有一例换标的** ⇒ 删掉 `key={symbol}` 整套测试仍然全绿(已取证, 见下)。报告已把跨标的泄漏列为本标签的核心风险, 防线却无守卫。
+- **修复(新增 1 例, 共 6 例)** —— `frontend/tests/components/news-tab.test.tsx` 新增「换标的时上一只票的公告/新闻一条都不得留屏」: 老标的(`002636`)两段各 2 条真渲染后, 让新标的(`600519`)的 `/news` 请求**悬挂永不落地**(即"新响应尚未覆盖旧 state"的最坏窗口), 再 `rerender` 换 `symbol`, 断言 ① 老标的**四条**文章标题一条都不在屏上; ② 两段回到空态(「暂无公告」/「暂无相关新闻」)且不出任何 `共 N 条` —— 证明是**新挂载后的空 state**, 而非继承的旧数组; ③ 新标的的请求确实发出(`symbols=600519`)—— 空态不是"根本没取数"。宿主树抽成 `tabTree(symbol, market)` 供 `rerender` 复用(原无参 `renderTab()` 调用点不变)。
+- **变异验证(1 处, 已还原; 证明新断言真能抓到回归)** —— 删掉 `NewsTab.tsx:153` 的 `key={symbol}` ⇒ 新增用例失败 `AssertionError: expected <div …(1)></div> to be null`, 收到 `关于回购股份的进展公告`(旧标的文章确实留在了新标的名下); **同一次变异下原有 5 例全部通过**(`Tests 1 failed | 5 passed`), 正是 Finding 描述的"删掉它也照样绿"。
+- **`key` 是否要含 `market`(Finding 要求给结论)** —— **不含**, 理由写进 `NewsTab.tsx` 头注: 本标签启用的两个端点的请求参数里**没有** market(`loadNews`/`loadAnnouncements` 只发 `hours`/`limit`/`filter_related`/`source`/`names|symbols`, 见 `useInsightData:264-290` 与 `:345-370`)⇒ 同代码换市场时两次请求**逐字相同**、落地数据也相同, 不存在要挡的跨市场脏窗口; 把 `market` 塞进 key 只会多一次无收益的整树重挂载。若将来 `/news` 变成市场维度, 需同步扩 key 并补测(已写在头注里作为触发条件)。
+- **Minor(测试头注与 impl 对齐)** —— `news-tab.test.tsx` 头注 ⑤ 原文只列**两种**空态成因、且引号悬空(`「列表为空时「该时间窗内确无内容」与「取数失败」在此不可区分」`), 与 impl/断言的三因文案不一致 ⇒ 改为与 impl **全文精确匹配**的 `列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分`(顺带消掉悬空引号); 头注顶行「守五件事」→「守六件事」并补 ⑥ 条目。**仅注释与测试, 无行为改动**。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **316/316**(50 files; 上一提交基线 315/50 → 净 +1 = 新增 1 例)。无 UI/token/尺度改动(源码仅头注, 测试仅新增用例 + 抽宿主树); `scripts/ui-rules-baseline.json` 未动。本 entry 未缀 `[commit <hash>]`(与 T11/T12/T13/T14 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+
 ### feat(wb)-工作台 v2 任务14: 标签「消息」(公告 + 新闻 两段列表, 复用恢复组件)
 
 - **新增(2 文件)** —— `frontend/src/pages/workbench/tabs/NewsTab.tsx`(默认导出 `NewsTab({ symbol, market, hasPosition? })`) + `frontend/tests/components/news-tab.test.tsx`(5 例)。**未接线**(`StockWorkbench.tsx` 的 `TabPanel` 仍是「建设中」, Task 17 才换成真实标签), 故本 commit **不改任何现存页面行为** —— 与 T9/T10/T11/T12/T13 同形态。
