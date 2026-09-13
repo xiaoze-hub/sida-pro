@@ -111,6 +111,42 @@ export interface CompanyInfo {
   note?: string | null
 }
 
+/**
+ * `GET /klines/{symbol}/summary` 的**顶层** `orderbook` 字段(注意: 不在 `summary` 里面)。
+ *
+ * 后端证据:
+ *  - 装配处 `src/web/api/klines.py:518-545`(`_build_layer_data` 的 ⓪ 段)—— 优先 `.img` 离线委托队列
+ *    (命中时额外带 `img_path`), 无 `.img` 时退回 thsdk 实时快照(带硬超时), 都拿不到 → `None`;
+ *  - 字段口径 `src/core/orderbook_engine.py:217-271`(`order_book_queue`)。
+ *
+ * 诚实约束(与后端同纪律): 空快照时后端只回 `{available:false, shape:null, note:'无数据'}` ——
+ * 其余字段**整体缺失**; 消费方一律"缺 → `--`", 不得用别的口径顶替或编造。
+ */
+export interface SummaryOrderbook {
+  /** 是否有真实盘口价(空快照/源不可用 = false, 见 orderbook_engine.py:258-260 的复核注) */
+  available?: boolean
+  /** 快照来源(后端 `snapshot.source`, 如 thsdk / img) */
+  source?: string | null
+  /** 最优买价(买档最高价, 元) */
+  best_bid?: number | null
+  /** 最优卖价(卖档最低价, 元) */
+  best_ask?: number | null
+  /** 价差 = best_ask − best_bid(元, 后端 round 6 位); 任一价缺失 → null */
+  spread?: number | null
+  /** 买盘力量占比 = 买委托量合计 /(买 + 卖委托量合计), 0~1; 总量为 0 → null */
+  bid_pressure?: number | null
+  /** 委托队列总量(股); 无 `.img` 队列时缺失 */
+  queue_shares?: number | null
+  /** 队列失衡 = 队列总量 − 卖一量(股); 两者缺一即 null */
+  queue_imbalance?: number | null
+  /** 形态: `托盘`(占比 ≥0.6) / `压盘`(≤0.4) / `均衡`(其间); 无占比 → null(不猜) */
+  shape?: string | null
+  /** 命中 `.img` 离线文件时下发其路径(klines.py:530) */
+  img_path?: string | null
+  /** `available=false` 时后端给的说明原文(如「无数据」)—— 原样展示, 不本地编理由 */
+  note?: string | null
+}
+
 export interface KlineSummaryResponse {
   symbol: string
   market: string
@@ -124,6 +160,12 @@ export interface KlineSummaryResponse {
   fund_flow?: FundFlowBarLike[]
   /** L4 事件标注. 后端 P2 阶段输出 */
   events?: KlineEventLike[]
+  /**
+   * 盘口形态/最优买卖/价差/买盘占比(v0.6.0 遗留④ 起暴露给消费方)。
+   * **顶层字段**, 与 `summary` 平级(klines.py:879-891 的 `result` 里 `**_build_layer_data(...)`);
+   * 仅 A 股计算, 非 CN 或源不可用 → `null`。
+   */
+  orderbook?: SummaryOrderbook | null
 }
 // 镜像 InteractiveKline 的新图层类型, 避免循环 import (组件已 export 同名 type)
 export type GsSignalLike = { date: string; side: 'G' | 'S'; confirmed: boolean; price: number }

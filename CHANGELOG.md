@@ -5,6 +5,21 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-14
+
+### fix(wb)-v0.6.0 遗留清理第 4 批: 零副作用触发 + 真盘口形态 + 带1 补三格 + 刷新不重挂载
+
+老板批「③④⑤⑦ 一起做掉」(KI-056 明确跳过)。四项都是 v0.6.0 发版时登记在案的遗留, 全部**只改前端**、**不新增任何接口请求**。
+
+- **遗留③(「触发盘中监测」有持久化副作用)** —— 工作台「建议」标签的按钮原先调 `handleSetAlert`(与旧模态「一键设提醒」同一动作): `list()` → 未关注则 `create()` **写入自选** → `updateAgents()` **写入 Agent 绑定** → `triggerAgent()`, 两步写入不回滚。现新增 `useInsightActions.triggerIntradayOnce`: 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name, … })` —— **一个写入都不做**。后端证据(`src/web/api/stocks.py:461-533`): `stock_id<=0` ⇒ `suppress_notify=True`(:485, 不发站内通知); 标的不在当前用户自选时走"不落库"分支用 `SimpleNamespace(id=0,…)` 顶替(:523-533 注释原文「不落库：…一次性分析」), 已在自选时也只**读**既有行; 下游 `trigger_agent_for_stock` 只把 `stock_agent_id` 用于 `resolve_ai_model`/`resolve_notify_channels`(`src/bootstrap/runtime.py:790-791`), 无 `db.add`/无建绑定。可见 note 随之改为如实陈述「一次性触发: 不加入自选、不绑定盘中监测」—— **不再发生的事不许留在 UI 上**; 失败行固定陈述「本次未发生自选 / 绑定写入」(本路径无"部分成功")。`handleSetAlert` + `SetAlertOutcome` **原样保留**给需要持久化语义的调用方(见 KI-058: 它现已零生产调用方)。
+- **遗留④(盘口形态用 OB label 当代理)** —— `/klines/{s}/summary` 的**顶层** `orderbook`(与 `summary` 平级, 装配处 `src/web/api/klines.py:518-545` → `orderbook_engine.order_book_queue`)此前没被暴露: `loadKline` 只存了 `data.summary`。现单独存一份 `summaryOrderbook` 并暴露(换标的无条件清值, 防上一只票的形态留在屏上), `L2Tab` 的 形态 / 买盘占比 改为**优先**取真字段, 并新增 最优买卖(`best_bid`/`best_ask`) 与 价差(`spread`) 两格。OB 序列 label 降级为**回退**, 且回退时屏上明示一行 + 写进 cell 的 `hint`(两套口径不冒充); 后端 `available:false` 时把它自己的 `note` **原样转述**(不本地编理由)。`core` 键本来就在打这条接口 ⇒ **零新增请求**。
+- **遗留⑤(带1 快照行缺三格)** —— `mapSnapshot` 补 成交量 / 振幅 / 封单额, 数据面全部来自**已在打的两条响应**: `/quotes/{s}` 的 `volume`(单位=手) 与 `prev_close`(振幅分母), `/stocks/{s}/l2` 的 `more.fcamo`(封单额, 后端 `stock_l2.py:89` 已 `×1e4` 换算成元) 与 `snapshot.{high,low,last_close}`(振幅的 CN 回退源)。**振幅 = (最高 − 最低) / 昨收 × 100**(A 股通行口径, 与仓内既有前端实现 `useInsightDerived.amplitudePct` 逐字一致); 三个入参**强制同源**(quotes 三者齐全才用 quotes, 否则整体回退 l2 snapshot), 绝不跨源拼数; 除零/缺值/非 finite → `--`。`snapshot.volume` **有意不渲染** —— 通达信该字段单位在本仓无实测证据, 单位不明就不画。**去重裁定**: `DATA_OWNERSHIP.seal_amount = 'band1.snapshot'` ⇒ 右栏 `QuickRail`「盘口速览」的封单行**删除**, 带1 是全站唯一拥有面(设计文档去重表 #7 的"带1 / 盘口速览"双归属作废); 带符号金额格式化收敛到共享的 `lib/ladder-format.ts::fmtSignedAmount`(带1 封单额与右栏主力净额必须同一套单位映射)。`seal_amount` 同时进 `EQUITY_ONLY_KEYS`(指数/板块**隐藏**, 不留 `--` 噪声) ⇒ 非个股隐藏 cell 由 7 个变 8 个。
+- **遗留⑦(刷新重放入场动画)** —— 页面级刷新原先给指数/板块正文挂 `key={refreshKey}`: 换 key 会卸载并重建整棵子树 ⇒ 每次点刷新都重放 `sida-page-enter` 动画(视觉"闪一下")并丢掉正文自己的内部 UI 状态。现 `IndexBody`/`BoardBody` 接受可选 `refreshToken?: number` 并放进取数 effect 依赖 ⇒ token 变化**只重跑取数**, 组件实例与 DOM 节点都不动(不传该 prop 时行为与旧版逐字一致)。个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都是"挂载即取数"且无 token 入参, 重挂载是它们唯一的整棵重取数手段, 逐个加 token 属跨组件改造, 不在本批范围。
+- **真接口探针(生产 :8000, 真数据, 非 mock)** —— `/quotes/600519`: `prev_close=1285.13 / high=1286.15 / low=1263.01 / volume=34801.0`(手) ⇒ 振幅 = 1.80%(实算核对); `/stocks/600519/l2`: `more.fcamo=0.0`(未封板的**真值**, 渲染 `0` 不是 `--`) + `snapshot.{high,low,last_close}` 齐备; `/klines/600519/summary` 顶层确有 `orderbook` 键, 当前(休市、无 `.img`、thsdk 不可达)返回 `{available:false, shape:null, note:"无数据"}` ⇒ 正是设计里的"诚实空态", ④ 走**回退口径 + 明示披露**那条路( populated 路径需盘中 thsdk 在线, 留待周一盘中实测)。**零写入实测基线**: 触发前 `admin` 自选 33 条、600519 已在自选但其 `intraday_monitor` 绑定数 = 0、全库该 Agent 绑定 44 条 —— 供点击后比对(③ 的验收判据)。
+- **附带发现(登记 KI, 均未擅自改代码)** —— **KI-057**: 「振幅」在产品内有**两套分母口径**(后端落库 `kline_collector.py:853` 用 `/low`, 前端实时用 `/prev_close`), 且同一工作台页面可同屏到达(带1 快照行 vs 建议条 → `KlineSummaryDialog`), 需老板先定口径再改(牵涉历史 `klines.amplitude` 是否回填重算); **KI-058**: ③ 改完后 `handleSetAlert` 成**零生产调用方的孤儿**, 即"给个股绑定盘中监测提醒"这一能力自 v0.6.0 退役旧模态后**已无任何 UI 入口** —— 补显式「设提醒」按钮(新功能)还是删死代码, 待老板拍板; **KI-056** 描述订正(其引用的 `/quote/:symbol` 已随 v0.6.0 退役, 条目本身仍开启)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint(含 55 测试文件) 0 / UI-RULES OK / vitest **385/385**(较第3批 361 新增 24 条)。
+- [commit 待遗留⑭ 统一回填]
+
 ## 2026-09-13
 
 ### chore(wb)-v0.6.0 遗留清理第 3 批: 再删 2 个死文件 + 清掉 `refreshForAuto` 的已死 tab 分支

@@ -300,6 +300,30 @@
 - 影响: 老板最常看的那张大图拿不到"悬停那根的副图读数", D1 的价值只兑现了一半。
 - 涉及文件: frontend/packages/biz-ui/src/lib/subcharts.ts、frontend/packages/biz-ui/src/components/KlineChart.tsx。
 - 建议修复: 把注册表按 chart 分组(或给 def 加 `series` 字段标明属于哪个图), 为 KlineChart 声明 vol/macd/active/phase 四类读数, 再接它已有的 `subscribeCrosshairMove`(350 行)把 hover 索引提到 state 渲染条带; 与 [[个股详情整页工作台]] 的图表主体改造合并做最省。
+- **2026-09-14 订正(条目仍开启, 老板本批明确跳过)**: 上文"行情页 `/quote/:symbol`"已随 **v0.6.0** 退役 —— 该路由现在是 redirect, `KlineChart` 成了**个股工作台带2 的主图**(`/stocks/:symbol`)。缺陷本体不变(这张图仍无每 pane 信息栏), 只是入口路径变了; 修复落点也仍是同两个文件。
+
+### KI-057 「振幅」两套分母口径(后端 `/low` vs 前端 `/prev_close`) (P2)
+
+- 发现: 2026-09-14(v0.6.0 遗留⑤ 给工作台带1 快照行加「振幅」格时, 核对既有实现发现)
+- 现象: 同一个标签「振幅」在产品里有**两个不同公式**, 且两者能从**同一个页面**到达:
+  ① **后端落库口径** `src/collectors/kline_collector.py:853` → `amplitude = (curr.high - curr.low) / curr.low * 100`(**分母是最低价**), 存进 `klines.amplitude`, 由 `kline-summary-dialog.tsx` 展示(其解释文案 `:793`「今日振幅≈(High-Low)/Low」与之一致), 并被 `daily_report`/`premarket_outlook`/`intraday_monitor` 三个 Agent 写进 AI 报告文本。
+  ② **前端实时口径** `(high - low) / prev_close * 100`(**分母是昨收**, 即 A 股通行口径) —— 原在 `insight/useInsightDerived.ts:97`, v0.6.0 遗留⑤ 起也用于工作台带1 的「振幅」格(`workbench/HeaderBand.tsx::amplitudePct`)。
+  同屏可达路径: 工作台带1 快照行显示 ②; 带1 的技术指标建议条 → `suggestion-badge.tsx` → `KlineSummaryDialog` 显示 ①。同一只票同一交易日, 两处数字**不相等**(分母 `low` ≤ `prev_close` 时 ① 恒 ≥ ②)。
+- 影响: 老板在同一个页面看到两个都叫「振幅」的数, 无法判断哪个对 —— 与 KI-037(前端指标逐值对齐后端)同类的口径分叉, 只是这次分叉在"定义"层而非"实现"层。另: `useInsightDerived.amplitudePct` 现已**零消费方**(唯一消费者 `OverviewTab` 在 v0.6.0 清理第3批被删), 属死代码。
+- 涉及文件: src/collectors/kline_collector.py、frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx、frontend/packages/biz-ui/src/components/insight/useInsightDerived.ts、frontend/packages/biz-ui/src/components/kline-summary-dialog.tsx。
+- 建议修复: **先定口径再改代码**(需老板拍板, 不擅自改) —— 若取 A 股通行口径(分母=昨收), 则改 `kline_collector.py:853` 并同步 dialog 解释文案, 且要决定**历史 `klines.amplitude` 是否回填重算**(改了不回填 = 新旧行不同口径混在一张表里, 比现在更糟); 若保留 `/low`, 则带1 应改成消费后端口径而不是自己算(但那是 EOD 值, 盘中会显示昨日振幅, 也不对)。**当前处置**: 带1 保持 A 股通行口径(实时面本就该用实时 high/low/prev_close), 分叉登记在此不静默; 顺手可删 `useInsightDerived.amplitudePct` 死代码。
+
+### KI-058 「设提醒」能力无 UI 入口 / `handleSetAlert` 成孤儿 (P2, 待老板拍板)
+
+- 发现: 2026-09-14(v0.6.0 遗留③ 把工作台「触发盘中监测」改成零副作用路径后, 反查调用方发现)
+- 现象: 给个股**绑定 `intraday_monitor` Agent**(= 让它进定时扫描并推提醒)的唯一实现是 `insight/useInsightActions.ts::handleSetAlert`(`list()` → 未关注则 `create()` 写入自选 → `updateAgents()` 写入绑定 → `triggerAgent`), 而它现在**全仓零生产调用方**:
+  - 原来的入口「一键设提醒」按钮在旧个股详情模态 `stock-insight-modal.tsx` 里, 该模态随 **v0.6.0** 退役(未恢复) ⇒ 能力入口当时就没了;
+  - v0.6.0 期间工作台「建议」标签的「触发盘中监测」按钮**顺带**调了它, 于是"点一下分析就偷偷加自选+绑 Agent"成了副作用缺陷(复审 Finding 1);
+  - 遗留③ 按要求把该按钮改成 `triggerIntradayOnce`(`stock_id=0` + `allow_unbound`, 后端 `src/web/api/stocks.py:523-533` 的"不落库"分支, 零写入) ⇒ 那条顺带的路径也没了。
+  现仅 `tests/components/suggest-tab.test.tsx` 用探针组件直调它(守护"保留项不被改坏")。`stocksApi.updateAgents` 因此也只剩这一个调用方。
+- 影响: 用户**无法从界面上**给任何个股开启盘中监测提醒(只能靠已有的历史绑定行继续跑); 同时仓里留着一个"会做持久化写入却无人能触发"的动作 —— 后人若随手接上一个按钮, 就会把 ③ 刚消除的副作用重新引进来, 而当初那句警示文案已随旧模态一起删掉了。
+- 涉及文件: frontend/packages/biz-ui/src/components/insight/useInsightActions.ts、frontend/src/pages/workbench/tabs/SuggestTab.tsx、frontend/packages/api/src/stocks.ts。
+- 建议修复(**两条路, 需老板选, 未擅自决定**): (A) 在工作台「建议」标签补一个**独立且明示写入**的「设提醒」按钮调 `handleSetAlert`(与「触发盘中监测」并排, 各自把副作用讲清楚) —— 恢复 v0.6.0 之前的能力, 属**新功能**, 按 [[feedback-scope-before-product-work]] 先列清单再动; (B) 确认该能力不再需要, 则删 `handleSetAlert` + `SetAlertOutcome` + 对应探针测试(与清理第1/3批删死文件同手法)。当前批次**两条都没做**: 遗留③ 的既定范围明确写了"保留 `handleSetAlert` 给「一键设提醒」", 故先原样保留并登记在此。
 
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 

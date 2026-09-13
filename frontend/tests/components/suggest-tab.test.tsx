@@ -14,15 +14,20 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ③ **空态回退链** —— 无 AI 建议 + 技术指标可得 → 「技术指标基础建议」(由
  *    `useInsightDerived.technicalFallbackSuggestion` → `buildKlineSuggestion` 产出);
  *    技术指标也不可得 → 诚实空态「暂无建议」(不编造、不伪造 `--`);
- * ④ **「触发盘中监测」是真实后端作业** —— 挂载时**不**额外触发(Provider 自动建议路径本用例用
- *    持仓态抑制; 断言等过其 700ms 延迟), 点击后恰好调一次 `stocksApi.triggerAgent(..., 'intraday_monitor')`;
- *    失败时渲染事实性失败提示(不猜原因);
- * ⑤ **持久化副作用在可见 UI 里明示**(复审 Finding 1): 按钮左侧有一行 note「未关注时会先加入
- *    自选并绑定盘中监测」, 不依赖 hover tooltip; 且可见文案**不出现**内部 agent 名 `intraday_monitor`;
- * ⑥ **部分成功如实陈述**(复审 Finding 1): `create`/`updateAgents` 已落库而 `triggerAgent` 失败时,
- *    提示必须点明「加入自选 / 绑定已写入, 不会自动回滚」; 前置阶段就失败时不得声称已写入;
- * ⑦ **卸载后手工触发的 5s 轮询停止**(Task 12 修复的既有泄漏: 原 `handleSetAlert` 的 interval
- *    只在 125s 自停定时器里清, 切标签后最长 ~2 分钟仍在打 `/suggestions`)。
+ * ④ **「触发盘中监测」是零副作用的一次性真实后端作业**(v0.6.0 遗留③) —— 挂载时**不**额外触发
+ *    (Provider 自动建议路径本用例用持仓态抑制; 断言等过其 700ms 延迟), 点击后恰好调一次
+ *    `stocksApi.triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name, … })`
+ *    —— `stock_id=0 + allow_unbound` 命中后端"不落库"分支(`src/web/api/stocks.py:504-533`),
+ *    故 `stocksApi.list/create/updateAgents` **一个都不许发**(这是"零副作用"的直接观测点);
+ * ⑤ **可见 note 与新语义一致**: 「一次性触发: 不加入自选、不绑定盘中监测」—— 旧那句
+ *    「未关注时会先加入自选并绑定盘中监测」必须消失(不再发生的写入不许留在 UI 上);
+ *    且可见文案**不出现**内部 agent 名 `intraday_monitor`;
+ * ⑥ **失败如实陈述**(不猜原因): 触发失败 → 事实性提示 + 固定一句「本次未发生自选 / 绑定写入」
+ *    (本路径没有"部分成功", 因为触发前后都没有写入); busy 态禁用按钮 + 「提交中…」;
+ * ⑦ **卸载后 5s 轮询停止**(Task 12 修复的既有泄漏, 新路径复用同一套句柄管理);
+ * ⑧ **保留项 `handleSetAlert`(「一键设提醒」)不被顺手改坏** —— 本标签已不调它, 故用探针组件
+ *    在 Provider 内直调: 仍是 list → create(加自选) → updateAgents(绑 Agent) → 用**真实 stock.id**
+ *    触发(无 `allow_unbound`), 且仍回传 `SetAlertOutcome` 如实陈述部分成功。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*`/
  * `SuggestionsTab`/`SuggestionBadge` 全走真实代码。用例统一 `hasPosition={true}` —— 让
@@ -81,6 +86,8 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
+import InsightProvider from '@/pages/workbench/InsightProvider'
+import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 
 /** 建议池 fixture: 一条盘中监测(在有效期内) + 一条盘后日报(已过期)。 */
 const AI_SUGGESTIONS = [
@@ -236,28 +243,30 @@ describe('Task 12 建议: 空态回退(诚实, 不编造)', () => {
   })
 })
 
-describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
-  it('按钮的持久化副作用在可见 UI 明示(不只藏在 title), 且可见文案不泄漏内部 agent 名', async () => {
+describe('遗留③ 触发盘中监测: 零副作用的一次性触发(不加自选/不绑 Agent)', () => {
+  it('可见 note 如实陈述"一次性触发", 且不再声称会写入自选/绑定; 文案不泄漏内部 agent 名', async () => {
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
 
-    // 可见 note: 不 hover 也能看到"未关注时会先加入自选并绑定盘中监测"
     const note = screen.getByTestId('suggest-trigger-note')
-    expect(note.textContent).toBe('未关注时会先加入自选并绑定盘中监测')
-    // 反面: 不得只靠 title tooltip 承载该副作用(点击/触摸用户看不到 tooltip)
+    expect(note.textContent).toBe('一次性触发: 不加入自选、不绑定盘中监测')
+    // 旧 note(描述持久化副作用)必须消失 —— 不再发生的事不许留在 UI 上
+    expect(note.textContent).not.toContain('未关注时会先加入自选')
+    expect(screen.queryByText(/未关注时会先加入自选并绑定盘中监测/)).toBeNull()
+    // 反面: 不只靠 title tooltip 承载语义(点击/触摸用户看不到 tooltip)
     const title = triggerButton().getAttribute('title') || ''
     expect(title.length).toBeGreaterThan(0)
-    // 可见文案(含 title)不得出现内部 agent 名 `intraday_monitor`(复审 Minor)
+    expect(title).toContain('不加入自选')
+    // 可见文案(含 title)不得出现内部 agent 名 `intraday_monitor`
     expect(screen.getByTestId('suggest-tab').textContent || '').not.toMatch(/intraday_monitor/)
     expect(title).not.toMatch(/intraday_monitor/)
     expect(note.textContent || '').not.toMatch(/intraday_monitor/)
   })
 
-  it('挂载不触发: 等过 Provider 自动建议的 700ms 延迟后仍零触发; 点击后恰好一次', async () => {
+  it('挂载不触发; 点击后恰好一次 triggerAgent(0, …, allow_unbound) 且**零写入**(list/create/updateAgents 一个都不发)', async () => {
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
-    // 复审 Minor: 原断言只等 30ms, 而 Provider 的自动建议延迟 700ms ⇒ "沉默"不可证。
-    // 等过 700ms(留余量到 900ms): 若持仓态抑制失效, 这里会看到 allow_unbound 的自动触发。
+    // 等过 Provider 自动建议的 700ms 延迟(持仓态抑制 ⇒ 自动路径不参与), 证明"沉默"可证
     await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
     expect(mocks.triggerAgent).not.toHaveBeenCalled()
 
@@ -266,16 +275,26 @@ describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
     await waitFor(() => expect(mocks.triggerAgent).toHaveBeenCalledTimes(1))
     const [stockId, agentName, opts] = mocks.triggerAgent.mock.calls[0] as [number, string, Record<string, unknown>]
     expect(agentName).toBe('intraday_monitor')
-    expect(stockId).toBe(1) // 未关注 → 先 create(自选) 再触发(与「一键设提醒」同一动作)
-    expect(opts).toMatchObject({ bypass_throttle: true, bypass_market_hours: true })
-    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
+    // 后端"不落库"分支的入口条件: stock_id<=0 + allow_unbound=true(src/web/api/stocks.py:504-533)
+    expect(stockId).toBe(0)
+    expect(opts).toMatchObject({
+      allow_unbound: true,
+      symbol: '002636',
+      market: 'CN',
+      name: '测试标的', // resolvedName = props.stockName || quote.name || symbol
+      bypass_throttle: true,
+      bypass_market_hours: true,
+    })
+    // **零副作用**的直接证据: 三步持久化写入(查自选/建自选/绑 Agent)一个都没发生
+    expect(mocks.stocksList).not.toHaveBeenCalled()
+    expect(mocks.stocksCreate).not.toHaveBeenCalled()
+    expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
     // 提交成功后立即刷新一次建议(挂载 1 次 + 触发后 1 次), 随后 5s 轮询(见卸载用例)
     await waitFor(() => expect(mocks.suggestions.mock.calls.length).toBeGreaterThan(1))
-    // 无失败提示
     expect(screen.queryByTestId('suggest-trigger-failed')).toBeNull()
   })
 
-  it('部分成功: create/updateAgents 已落库而 trigger 失败 → 提示如实点明"已写入, 不回滚"', async () => {
+  it('触发失败: 事实性提示 + 固定陈述"本次未发生自选 / 绑定写入"(不猜原因, 不谎称已写入)', async () => {
     mocks.triggerAgent.mockRejectedValue(new Error('HTTP 500'))
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
@@ -285,31 +304,33 @@ describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
     await waitFor(() => expect(screen.getByTestId('suggest-trigger-failed')).toBeTruthy())
     expect(screen.getByText(/触发失败/)).toBeTruthy()
     expect(screen.getByText(/不在此处推断/)).toBeTruthy()
-    // 前置两步确实落库了(未关注 → create; 绑定 → updateAgents)
-    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
-    // 复审 Finding 1: 必须说清"什么已经成功" —— 不隐瞒已发生的持久化写入, 也不许夸大
-    expect(screen.getByText(/已写入\(不会自动回滚\)/)).toBeTruthy()
-    expect(screen.getByText(/加入自选 \+ 绑定盘中监测/)).toBeTruthy()
-    expect(screen.queryByText(/本次未发生/)).toBeNull()
+    expect(screen.getByText(/本次未发生自选 \/ 绑定写入/)).toBeTruthy()
+    // 零副作用路径: 失败也不可能有写入 —— 断言确实一个写入都没发(不许"其实写了却声称没写")
+    expect(mocks.stocksCreate).not.toHaveBeenCalled()
+    expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
+    // 旧的部分成功文案不得出现(本路径没有"已写入"这回事)
+    expect(screen.queryByText(/已写入\(不会自动回滚\)/)).toBeNull()
     // 按钮恢复可用(alerting 复位), 可重试
     await waitFor(() => expect((triggerButton() as HTMLButtonElement).disabled).toBe(false))
   })
 
-  it('前置阶段就失败(加自选失败)→ 提示不得声称已写入', async () => {
-    mocks.stocksCreate.mockRejectedValue(new Error('HTTP 500'))
+  it('提交中 busy 态: 按钮禁用 + 文案「提交中…」, 落定后恢复可点', async () => {
+    let release: (() => void) | null = null
+    mocks.triggerAgent.mockReturnValue(new Promise((r) => { release = () => r({}) }))
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
 
     fireEvent.click(triggerButton())
+    // busy 期间按钮的可及名变成「提交中…」(故不能再按「触发盘中监测」查它)
+    const busy = (await screen.findByRole('button', { name: '提交中…' })) as HTMLButtonElement
+    expect(busy.disabled).toBe(true)
 
-    await waitFor(() => expect(screen.getByTestId('suggest-trigger-failed')).toBeTruthy())
-    expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
-    expect(screen.getByText(/本次未发生自选 \/ 绑定写入/)).toBeTruthy()
-    expect(screen.queryByText(/已写入/)).toBeNull()
+    await act(async () => { release?.() })
+    await waitFor(() => expect(screen.getByRole('button', { name: '触发盘中监测' })).toBeTruthy())
+    expect((screen.getByRole('button', { name: '触发盘中监测' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('卸载后手工触发的 5s 轮询停止(修复前会打到 ~2 分钟)', async () => {
+  it('卸载后一次性触发的 5s 轮询停止(与「一键设提醒」共用同一套句柄管理)', async () => {
     vi.useFakeTimers()
     const view = renderTab()
     await act(async () => { await vi.advanceTimersByTimeAsync(10) })
@@ -326,5 +347,69 @@ describe('Task 12 建议: 触发盘中监测(真实后端作业)', () => {
     const afterUnmount = mocks.suggestions.mock.calls.length
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
     expect(mocks.suggestions.mock.calls.length).toBe(afterUnmount)
+  })
+})
+
+/**
+ * `handleSetAlert`(「一键设提醒」)按遗留③ 的要求**原样保留**给需要持久化语义的调用方 ——
+ * 本标签已不再调它, 故用探针组件(Provider 内直接取 action)守住它没被顺手改坏:
+ * 仍是 list → create(加自选) → updateAgents(绑 Agent) → triggerAgent(**真实 stock.id**),
+ * 且仍回传 `SetAlertOutcome` 如实陈述"部分成功"(触发失败时前两步已落库不回滚)。
+ */
+describe('遗留③ 保留项: handleSetAlert 的持久化路径不变(探针直调)', () => {
+  function SetAlertProbe({ onOutcome }: { onOutcome: (o: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }) => void }) {
+    const { handleSetAlert } = useInsight()
+    return (
+      <button type="button" onClick={() => void handleSetAlert().then(onOutcome)}>
+        一键设提醒
+      </button>
+    )
+  }
+
+  function renderProbe(onOutcome: (o: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }) => void) {
+    return render(
+      <MemoryRouter>
+        <ToastProvider>
+          <InsightProvider symbol="002636" market="CN" hasPosition keys={['suggestions', 'core']}>
+            <SetAlertProbe onOutcome={onOutcome} />
+          </InsightProvider>
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it('未关注 → 先 create 加自选 + updateAgents 绑定, 再用**真实 stock.id** 触发(无 allow_unbound)', async () => {
+    const outcomes: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }[] = []
+    renderProbe((o) => outcomes.push(o))
+    // 等 core 取数落定(quote.name → resolvedName), 避免自动建议路径干扰计数
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
+    expect(mocks.triggerAgent).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '一键设提醒' }))
+
+    await waitFor(() => expect(mocks.triggerAgent).toHaveBeenCalledTimes(1))
+    const [stockId, agentName, opts] = mocks.triggerAgent.mock.calls[0] as [number, string, Record<string, unknown>]
+    expect(agentName).toBe('intraday_monitor')
+    expect(stockId).toBe(1) // stocksCreate 夹具的 id
+    expect(opts).toMatchObject({ bypass_throttle: true, bypass_market_hours: true })
+    expect(opts.allow_unbound).toBeUndefined() // 持久化路径走的是"已绑定"分支
+    expect(mocks.stocksList).toHaveBeenCalledTimes(1)
+    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
+    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(outcomes).toEqual([{ ok: true, watchlistEnsured: true, agentBound: true }]))
+  })
+
+  it('部分成功仍如实回传: create/updateAgents 已落库而 trigger 失败 → ok=false + 两个写入位为 true', async () => {
+    mocks.triggerAgent.mockRejectedValue(new Error('HTTP 500'))
+    const outcomes: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }[] = []
+    renderProbe((o) => outcomes.push(o))
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
+
+    fireEvent.click(screen.getByRole('button', { name: '一键设提醒' }))
+
+    await waitFor(() => expect(outcomes.length).toBe(1))
+    expect(outcomes[0]).toEqual({ ok: false, watchlistEnsured: true, agentBound: true })
+    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
+    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
   })
 })

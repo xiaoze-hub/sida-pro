@@ -23,6 +23,25 @@ export function fmtAmount(v: number | null | undefined): string {
   return String(Math.round(v))
 }
 
+/**
+ * **带符号**金额(元 → 万/亿): 用于可为负的资金读数 —— 封单额 `FCAmo < 0` = 跌停封单、
+ * 主力净额 `Zjl_HB < 0` = 净流出。`fmtAmount` 只对正值分档(负值会原样吐出 `-18000000`),
+ * 故这里取绝对值分档后补 `-`; `0` 是真值(未封板)⇒ 渲染 `0` 而不是 `--`。
+ *
+ * 单一实现(v0.6.0 遗留⑤): 带1 `HeaderBand`(封单额)与右栏 `QuickRail`(主力净额)**共用** ——
+ * 同一类金额在不同拥有面必须同一套单位映射, 否则会被读成两个数。
+ * 入参 `unknown`: PG DECIMAL 经 JSON 到前端可能是字符串(`"8.12E+8"`/`"23000000"`),
+ * 一律先安全转数值 —— 空串/非数字/NaN/Infinity → `--`(不渲染 `NaN万`, 不当 0)。
+ */
+export function fmtSignedAmount(v: unknown): string {
+  if (v == null) return '--'
+  const s = typeof v === 'string' ? v.trim() : v
+  if (s === '') return '--'
+  const n = typeof s === 'number' ? s : Number(s)
+  if (!Number.isFinite(n)) return '--'
+  return `${n < 0 ? '-' : ''}${fmtAmount(Math.abs(n))}`
+}
+
 /** 紧凑 yyyymmdd → 2026-09-11; 非紧凑原样返回(不猜)。 */
 export function fmtISODate(compact: string): string {
   return /^\d{8}$/.test(compact)

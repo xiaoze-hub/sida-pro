@@ -22,6 +22,11 @@ import { safeFixed, safeNum, safeNetInflow } from '@/lib/format'
  *     `/quotes/{s}`(同代码 = 另一标的)也不渲染名称/现价, 见 `HeaderBand` 头注「同码不同标的闸门」;
  *  2. 数字格式化改走 `@/lib/format` 的 safe* 系列 (项目红线 #6 / R6 禁裸 toFixed):
  *     每处外部守卫不变, 输出字符串逐字相同。
+ *  3. **新增可选 `refreshToken`(v0.6.0 遗留⑦)**: 页面级刷新改为 `refreshToken={refreshKey}`
+ *     而**不是** `key={refreshKey}` —— 换 key 会卸载并重建整棵正文子树, 于是每次点刷新都重放
+ *     `sida-page-enter` 入场动画(视觉"闪一下")并丢掉正文自己的内部 UI 状态。现在 token 变化只
+ *     **重跑取数 effect**(见下), 组件实例与 DOM 节点都保持不动。不传该 prop 时行为与旧版一致
+ *     (只在挂载/换标的时取数)。
  *
  * 真数据: `GET /market/indices/{symbol}` + `GET /market-data/market-capital-flow`(失败静默)。
  */
@@ -92,7 +97,7 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   )
 }
 
-export default function IndexBody({ symbol }: { symbol: string }) {
+export default function IndexBody({ symbol, refreshToken }: { symbol: string; refreshToken?: number }) {
   const [data, setData] = useState<IndexDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -116,7 +121,10 @@ export default function IndexBody({ symbol }: { symbol: string }) {
     fetchAPI<MarketFlow>('/market-data/market-capital-flow').then(setMarketFlow).catch(() => {})
   }, [symbol])
 
-  useEffect(() => { load() }, [load])
+  // 遗留⑦: `refreshToken` 变化 = 页面级刷新(带1 的刷新按钮)⇒ **只重跑取数**, 不重挂载组件。
+  // 旧做法是页面给正文子树挂 `key={refreshKey}`: 换 key 会卸载并重建整棵子树 ⇒ 重放
+  // `sida-page-enter` 入场动画(视觉上"闪一下")并丢掉正文自己的内部 UI 状态。
+  useEffect(() => { load() }, [load, refreshToken])
 
   const q = data?.quote
   const up = (q?.change_pct || 0) >= 0

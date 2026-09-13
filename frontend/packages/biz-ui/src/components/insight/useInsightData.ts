@@ -22,6 +22,7 @@ import type {
   DarkFlowTqResponse,
   CompanyInfo,
   KlineSummaryResponse,
+  SummaryOrderbook,
   GsSignalLike,
   FundFlowBarLike,
   KlineEventLike,
@@ -104,6 +105,13 @@ const [fundamentals, setFundamentals] = useState<FundamentalsDetail | null>(null
 const [fundamentalsLoading, setFundamentalsLoading] = useState(false)
 const [fundamentalsLoaded, setFundamentalsLoaded] = useState(false)
 const [klineSummary, setKlineSummary] = useState<KlineSummary | null>(null)
+/**
+ * `GET /klines/{s}/summary` 的**顶层** `orderbook`(盘口形态/最优买卖/价差/买盘占比)。
+ * v0.6.0 遗留④: 此前 `loadKline` 只存 `data.summary`(⇒ `klineSummary` 里没有 `orderbook`),
+ * 消费方(工作台「盘口资金」标签)拿不到退役 `/l2` 页原本渲染的那四个盘口读数, 只能用
+ * `/orderbook-ob` 的 OB 序列 label 当形态代理。现单独存一份并暴露(缺 → `null`, 由渲染层走 `--`)。
+ */
+const [summaryOrderbook, setSummaryOrderbook] = useState<SummaryOrderbook | null>(null)
 /** 2026-08-12 预热优化: 弹窗打开即拉主力意图, 切到 K线 tab 秒显图例卡 */
 const [mainIntent, setMainIntent] = useState<MainIntentStructured | null>(null)
 // ============== SIDA Pro: K线图层标注数据 state (P1+ P2) (2026-09-01) ==============
@@ -208,6 +216,9 @@ const loadKline = useCallback(async () => {
   if (!symbol) return
   const data = await insightApi.klineSummary<KlineSummaryResponse>(symbol, market)
   setKlineSummary(data?.summary || null)
+  // 遗留④: 顶层 `orderbook`(与 summary 平级)单独存一份 —— 无条件 set(缺失即 null),
+  // 否则换标的/源不可用时会把上一只票的盘口形态留在屏上。
+  setSummaryOrderbook(data?.orderbook ?? null)
   // 2026-08-12 预热优化: 顺手存主力意图, 传给 K线 tab 秒显(免组件二次请求)
   if (data?.main_intent_structured) setMainIntent(data.main_intent_structured)
   // ============== SIDA Pro: K线图层标注数据 (P1+ P2 入口) (2026-09-01) ==============
@@ -560,6 +571,8 @@ useEffect(() => {
   setFundamentals(null)
   setFundamentalsLoaded(false)
   setMoreInfo(null)
+  // 换标的清盘口形态(遗留④): 顶行/快照同理, 不许把上一只票的 orderbook 画到新标的上
+  setSummaryOrderbook(null)
   loadCore()
 }, [props.open, symbol, market, enabledKeys, loadCore])
 
@@ -695,6 +708,8 @@ const miniKlineExtrema = useMemo(() => {
     fundamentalsLoading,
     fundamentalsLoaded,
     klineSummary,
+    // 遗留④: `/klines/{s}/summary` 的**顶层** orderbook(形态/最优买卖/价差/买盘占比)
+    summaryOrderbook,
     mainIntent,
     gsSignals,
     fundFlow,

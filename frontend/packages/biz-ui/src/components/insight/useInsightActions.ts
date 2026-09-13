@@ -26,6 +26,16 @@ export interface SetAlertOutcome {
   agentBound: boolean
 }
 
+/**
+ * `triggerIntradayOnce` 的结果(v0.6.0 遗留③): **零副作用**触发只有"提交成功/未成功"两态 ——
+ * 它不做任何前置写入(不加自选、不绑 Agent), 故不存在 `SetAlertOutcome` 那种"部分成功"。
+ * 调用方仍**不得**据此推断失败原因(错误原文由本 action 内部 toast; `symbol` 缺失的早退是静默的)。
+ */
+export interface TriggerOnceOutcome {
+  /** `true` = 作业已提交(5s 轮询在跑); `false` = 未提交。 */
+  ok: boolean
+}
+
 export function useInsightActions(
   props: StockInsightModalProps,
   data: ReturnType<typeof useInsightData>,
@@ -276,6 +286,67 @@ const handleSetAlert = async (): Promise<SetAlertOutcome> => {
   }
 }
 
+/**
+ * **零副作用**手工触发「盘中监测」(v0.6.0 遗留③: 工作台「建议」标签的按钮改用本动作)。
+ *
+ * 与 `handleSetAlert`(「一键设提醒」)的**唯一**差别是"要不要落库":
+ *  - `handleSetAlert`: `list()` → 未关注则 `create()`(写入自选)→ `updateAgents()`(写入 Agent 绑定)
+ *    → `triggerAgent(stock.id, …)`; 两步写入**不回滚**, 故调用方必须如实陈述"部分成功"。
+ *  - 本动作: 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name })`
+ *    —— **一个写入都不做**(不 `list`/不 `create`/不 `updateAgents`)。
+ *
+ * 后端证据(`src/web/api/stocks.py:461-533` `trigger_stock_agent`):
+ *  - `stock_id <= 0` ⇒ `suppress_notify = True`(不发站内通知), 且必须 `allow_unbound=true`
+ *    否则 400「当 stock_id<=0 时，需设置 allow_unbound=true」(:508-509);
+ *  - 该标的**不在**当前用户自选时走"不落库"分支: `trigger_stock = SimpleNamespace(id=0, …)`
+ *    (:523-533 注释原文「不落库：用于详情弹窗未持仓且未关注股票的一次性分析」);
+ *  - 已在自选时也只**读**既有 Stock/StockAgent 行(:515-522), 不新建、不改绑定。
+ *  ⇒ 两条分支都**没有持久化写入**, 符合"一次性触发"的产品意图。
+ *
+ * 与自动路径 `triggerAutoAiSuggestion` 的关系: 线格式(stock_id=0 + allow_unbound + symbol/market/name)
+ * **完全相同**(它早已在用这条无绑定链路), 差别只在门控 —— 自动路径要过 `suggestions` 键、
+ * "确认未持仓"、5 分钟去重与 `autoSuggesting`; 本动作是**用户点按钮**的一次性触发, 不套这些门控
+ * (点了就该发), 但仍复用同一套 busy/轮询/卸载守卫:
+ *  - busy: `setAlerting`(与「一键设提醒」共用一个禁用态, 避免两条路径同时提交);
+ *  - 轮询: 复用 `autoPollRef`/`autoPollStopRef`/`stopAutoPolling` + `mountedRef`
+ *    (Task 10/12 修的泄漏与在途卸载竞态, 本动作同样适用: await 之后先查挂载态);
+ *  - 失败: toast 原始错误(不吞不伪装), 回传 `{ ok: false }`; **不猜**失败原因。
+ *  早退: 无 `symbol`/`market` 时静默返回 `{ ok: false }`(与 `handleSetAlert` 同处置, 不 toast)。
+ */
+const triggerIntradayOnce = async (): Promise<TriggerOnceOutcome> => {
+  if (!symbol || !market) return { ok: false }
+  setAlerting(true)
+  try {
+    await stocksApi.triggerAgent(0, 'intraday_monitor', {
+      allow_unbound: true,
+      symbol,
+      market,
+      name: resolvedName || symbol,
+      bypass_throttle: true,
+      bypass_market_hours: true,
+    })
+    // 文案如实: 提交了一轮分析, 且**没有**发生自选/绑定写入(UI 不出现内部 agent 名/术语)。
+    toast('已提交一轮盘中监测分析（一次性触发，未加入自选、未绑定提醒）', 'success')
+    // 提交成功后轮询等新建议(最多 ~2 分钟, 每 5 秒一次) —— 句柄/卸载守卫与 handleSetAlert 同形。
+    if (!mountedRef.current) return { ok: true }
+    stopAutoPolling() // 被新一轮触发取代时先清上一轮(防叠加)
+    const before = Date.now()
+    autoPollRef.current = setInterval(async () => {
+      if (Date.now() - before > 120_000) { stopAutoPolling(); return }
+      await loadSuggestions()
+    }, 5_000)
+    await loadSuggestions()
+    if (!mountedRef.current) return { ok: true }
+    autoPollStopRef.current = setTimeout(() => stopAutoPolling(), 125_000)
+    return { ok: true }
+  } catch (e) {
+    if (mountedRef.current) toast(e instanceof Error ? e.message : '触发盘中监测失败', 'error')
+    return { ok: false }
+  } finally {
+    if (mountedRef.current) setAlerting(false)
+  }
+}
+
 const toggleWatch = useCallback(async () => {
   if (!symbol) return
   if (watchingStock && hasHolding) {
@@ -377,6 +448,9 @@ useEffect(() => {
     handleCopyShareText,
     handleShareInsight,
     handleSetAlert,
+    // v0.6.0 遗留③: 零副作用的一次性触发(工作台「建议」标签用); `handleSetAlert` 保留给
+    // 需要"持久化设提醒"语义的调用方(两者线格式不同, 见各自头注)。
+    triggerIntradayOnce,
     toggleWatch,
     triggerAutoAiSuggestion,
     copyTextWithFallback,

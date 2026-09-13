@@ -33,24 +33,26 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  *    `/klines/{s}/summary` 重复一次。若要收敛, 需给 `InsightProvider` 增加更细的键(如
  *    `klineSummary` 单键), 属跨任务改动, 本任务不擅自扩 API 面。
  *
- * 「触发盘中监测」的真实链路(经 Provider 的 actions, 非本文件自建):
- *  按钮 → `useInsight().handleSetAlert`(`insight/useInsightActions.ts`)→
- *  `stocksApi.list()` 找到/`create()` 建关注 → `updateAgents` 确保绑定 `intraday_monitor` →
- *  `stocksApi.triggerAgent(stock.id, 'intraday_monitor', { bypass_throttle: true, bypass_market_hours: true })`
- *  → 提交成功后 5s 轮询 `loadSuggestions()` 最长 120s(新建议带「来源: 盘中监测」)。
- *  即与恢复组件的「一键设提醒」**同一个动作**, 故有**同形副作用**: 标的未关注时会先加入自选
- *  并绑定该 Agent —— 复审 Finding 1: 该副作用**在可见 UI 里明示**(按钮左侧一行 note
- *  「未关注时会先加入自选并绑定盘中监测」, 不只藏在 `title` tooltip 里, 否则点击/触摸用户看不到);
- *  本标签 `keys` 未启用 `watchlist`(不为此额外取数), 无法判定"当前是否已关注", 故 note 用
- *  **条件句**陈述, 不假装知道当前绑定状态。
- *  失败态: 该 action 内部 `toast` 原始错误(不吞错、不伪装), 并回传
- *  `SetAlertOutcome{ ok, watchlistEnsured, agentBound }`(Task 12 复审增量; 既有调用方均忽略
- *  返回值 ⇒ 行为不变)。本标签据此渲染一行**事实性**失败提示, 并**分别**陈述触发前的两步写入
- *  是否已落库(部分成功不得被隐去, 未落库的也不许声称已写入) —— **不猜**失败原因, 也**不假定**
- *  存在错误提示(`symbol` 缺失的早退是静默的, 复审 Minor)。
- *  busy 态: Provider 的 `alerting`(禁用按钮 + 「提交中…」)。
+ * 「触发盘中监测」的真实链路(v0.6.0 遗留③ 改为**零副作用**路径, 经 Provider 的 actions):
+ *  按钮 → `useInsight().triggerIntradayOnce`(`insight/useInsightActions.ts`)→
+ *  `stocksApi.triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name,
+ *  bypass_throttle: true, bypass_market_hours: true })` → 提交成功后 5s 轮询 `loadSuggestions()`
+ *  最长 ~120s(新建议带「来源: 盘中监测」)。
+ *  **不做任何持久化写入**: 后端 `src/web/api/stocks.py:461-533`(`trigger_stock_agent`)对
+ *  `stock_id<=0 + allow_unbound=true` 有专门的"不落库"分支 —— 标的不在当前用户自选时用
+ *  `SimpleNamespace(id=0, …)` 顶替 Stock 行(:523-533 注释原文「不落库：…一次性分析」), 已在自选时
+ *  也只**读**既有行(:515-522), 两条分支都不 `create`/不写 `StockAgent`; 且 `suppress_notify=True`
+ *  (:485, 不发站内通知)。故按钮左侧的 note 改为如实陈述"一次性触发, 不加入自选、不绑定盘中监测"
+ *  —— 原先那句「未关注时会先加入自选并绑定盘中监测」随持久化路径一起去掉(不再发生的事不许留在 UI 上)。
+ *  需要"持久化设提醒"语义的调用方仍用**原样保留**的 `handleSetAlert`(「一键设提醒」: list→create→
+ *  updateAgents→trigger, 并回传 `SetAlertOutcome` 陈述部分成功); 本标签不再调它。
+ *  失败态: 该 action 内部 `toast` 原始错误(不吞错、不伪装), 回传 `{ ok: false }`; 本标签据此渲染
+ *  一行**事实性**失败提示 —— **不猜**失败原因, 也**不假定**存在错误提示(`symbol` 缺失的早退是静默的)。
+ *  本路径没有"部分成功"(触发前无任何写入), 故失败行固定陈述「本次未发生自选 / 绑定写入」。
+ *  busy 态: Provider 的 `alerting`(禁用按钮 + 「提交中…」; 与「一键设提醒」共用同一 busy 位)。
  *  挂载时**不额外触发**(除 Provider 自身 `suggestions` 键的自动建议逻辑外); 本文件无
- *  mount 副作用(无 useEffect), 也**不动** `triggerAutoAiSuggestion` 的自动路径。
+ *  mount 副作用(无 useEffect), 也**不动** `triggerAutoAiSuggestion` 的自动路径
+ *  (它本来就走同一条 `allow_unbound` 无绑定链路, 只是多了持仓/5 分钟去重门控)。
  *  UI 文案**不出现**内部 agent 名 `intraday_monitor`(一律用用户可见名「盘中监测」, 复审 Minor)。
  *
  * 降级(never fabricate): 无 AI 建议且技术指标可得 → 复用组件回退「技术指标基础建议」;
@@ -67,10 +69,10 @@ const SUGGEST_TAB_KEYS = ['suggestions', 'core'] as const
 const INTRADAY_LABEL = '盘中监测'
 
 function SuggestTabBody() {
-  const { suggestions, alerting, handleSetAlert } = useInsight()
-  // 失败态(Finding 1/复审): 除"未提交"外, 还要如实陈述触发**之前**的持久化写入是否已落库
-  // (`watchlistEnsured`/`agentBound` 由 `handleSetAlert` 回传) —— 部分成功不得被隐去, 也不得夸大。
-  const [triggerFailure, setTriggerFailure] = useState<null | { watchlistEnsured: boolean; agentBound: boolean }>(null)
+  const { suggestions, alerting, triggerIntradayOnce } = useInsight()
+  // 失败态: 本路径**零副作用**(触发前没有任何写入)⇒ 不存在"部分成功", 只需如实说"未提交成功"
+  // + "本次未发生自选 / 绑定写入"; 失败原因**不在此处推断**(错误原文由 action 内部 toast)。
+  const [triggerFailed, setTriggerFailed] = useState(false)
 
   // 列表里**真实出现**的来源标签(后端 `agent_label` 原文, 如「盘中监测」); 空列表不渲染该行。
   const sources = useMemo(
@@ -82,11 +84,9 @@ function SuggestTabBody() {
   )
 
   const onTrigger = () => {
-    setTriggerFailure(null)
-    void handleSetAlert().then((outcome) => {
-      if (!outcome.ok) {
-        setTriggerFailure({ watchlistEnsured: outcome.watchlistEnsured, agentBound: outcome.agentBound })
-      }
+    setTriggerFailed(false)
+    void triggerIntradayOnce().then((outcome) => {
+      if (!outcome.ok) setTriggerFailed(true)
     })
   }
 
@@ -105,16 +105,17 @@ function SuggestTabBody() {
             {sources.length > 0 ? <span className="font-sans"> · 来源: {sources.join(' · ')}</span> : null}
           </span>
         ) : null}
-        {/* Finding 1: 该按钮的**持久化副作用**必须在可见 UI 里写明(点击/触摸用户看不到 title tooltip)。
-            本标签 keys 未启用 `watchlist`(不额外取数), 故无法判定当前是否已关注 —— 用**条件句**如实陈述。 */}
+        {/* 可见 note(不只藏 title): 本按钮是**一次性**触发 —— 后端 stock_id<=0 + allow_unbound 走
+            "不落库"分支(src/web/api/stocks.py:523-533), 既不加自选也不绑 Agent, 故如实这么写。
+            需要持久化设提醒的语义仍由 Provider 保留的 `handleSetAlert`(「一键设提醒」)承担。 */}
         <span className="ml-auto text-[10px]" data-testid="suggest-trigger-note">
-          未关注时会先加入自选并绑定{INTRADAY_LABEL}
+          一次性触发: 不加入自选、不绑定{INTRADAY_LABEL}
         </span>
         <button
           type="button"
           onClick={onTrigger}
           disabled={alerting}
-          title={`立即向后端提交一轮「${INTRADAY_LABEL}」AI 作业; 与「一键设提醒」同一个动作: 标的未关注时会先加入自选并绑定该 Agent(持久写入, 不会自动回滚)。提交成功后新建议通常 5-15 秒出现(来源标「${INTRADAY_LABEL}」)。`}
+          title={`立即向后端提交一轮「${INTRADAY_LABEL}」AI 作业(一次性触发): 不加入自选、不绑定该 Agent、不发站内通知 —— 无任何持久化写入。提交成功后新建议通常 5-15 秒出现(来源标「${INTRADAY_LABEL}」)。`}
           className="inline-flex h-6 items-center gap-1 rounded border border-border/50 px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-60"
         >
           {alerting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Radar className="h-3 w-3" />}
@@ -122,15 +123,11 @@ function SuggestTabBody() {
         </button>
       </div>
 
-      {triggerFailure ? (
+      {triggerFailed ? (
         <div className="rounded border border-border/50 px-3 py-2 text-[11px] text-muted-foreground" data-testid="suggest-trigger-failed">
           触发失败: {INTRADAY_LABEL}作业未提交成功 —— 可重试; 失败原因不在此处推断(若出现错误提示, 以其为准)。
-          {/* 部分成功必须如实陈述: 触发前的写入已落库且不回滚, 不因后续失败而消失 */}
-          {triggerFailure.agentBound
-            ? ` 注意: 触发前的「加入自选 + 绑定${INTRADAY_LABEL}」已写入(不会自动回滚)。`
-            : triggerFailure.watchlistEnsured
-              ? ` 注意: 该标的已加入自选(不会自动回滚), 但${INTRADAY_LABEL}绑定未完成。`
-              : ' 本次未发生自选 / 绑定写入。'}
+          {/* 如实陈述写入状况: 本路径触发前后都没有任何持久化写入(不加自选/不绑 Agent), 故固定这一句。 */}
+          {' 本次未发生自选 / 绑定写入。'}
         </div>
       ) : null}
 

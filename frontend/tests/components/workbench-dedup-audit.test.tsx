@@ -8,10 +8,10 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * Task 19 去重核对(spec §三 / `DATA_OWNERSHIP`): **每个数据点全站只出现一次**。
  *
  * 做法: 把工作台的**四个拥有面**(带1 `HeaderBand`、右栏 `QuickRail`、标签 `L2Tab`、
- * 标签 `FundamentalTab`)**同屏渲染**(真组件 + mock 网络层), 然后对 brief 点名的六个数据点
+ * 标签 `FundamentalTab`)**同屏渲染**(真组件 + mock 网络层), 然后对 brief 点名的数据点
  * 数"出现次数", 断言 == 1(或 spec 明确允许的 2 处: 主力净流入 = tab.l2 + rail 速览摘要)。
  *
- * 六个被点名核对的数据点(brief Part B):
+ * 被点名核对的数据点(brief Part B + v0.6.0 遗留⑤ 新增 ⑦):
  *  ① 涨停价        → band1 快照行 only(rail / tab 均不得出现);
  *  ② 主力净流入    → 盘口资金 tab + rail 速览摘要 = **2 处**(spec §三 #4 明确允许), 且不得有第 3 处;
  *  ③ PE/PB/股息    → band1 快照 + 基本面 tab(+ rail 精简 2-3 行, spec #5 允许) —— 核对基本面 tab
@@ -19,6 +19,8 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *  ④ 题材/板块     → rail only(基本面 tab 的 `showConcepts={false}` 生效, 概念名不得出现);
  *  ⑤ 封单成色      → 盘口资金 tab only(带1 / rail 不得出现该词);
  *  ⑥ 三指标/共振   → rail DecisionCard only(带1/两标签不得出现).
+ *  ⑦ 封单额        → **band1 快照行 only**(`DATA_OWNERSHIP.seal_amount='band1.snapshot'`;
+ *                    右栏「盘口速览」原有一行「封单」是重复拥有面, 已删) —— 精确 1 处 + 值也在带1。
  *
  * **"0 违规"的证据标准(本次复审加固, Finding 1)**: 每条缺席断言都**先等该拥有面自己的数据落定**,
  * 再数缺席 —— 否则断言可能在数据在途时**空过**(vacuously pass): DOM 里还没有该面, `queryByText`
@@ -325,12 +327,53 @@ describe('Task 19 去重核对(六点唯一归属)', () => {
     expect(countIn(s.fundamental, '主力净额')).toBe(0)
   })
 
+  it('⑦ 封单额(遗留⑤): 只在带1 快照行出现一次, 右栏「盘口速览」的封单行已删', async () => {
+    renderAllSurfaces()
+    await awaitAllSurfacesData()
+    const s = surfaces()
+    // 先证点确实在带1(标签 + **真值**都在): 否则后面的"缺席"可能是"整格没渲染"的假象。
+    expectAtLeastOne(countIn(s.band1, '封单额'), '封单额', '带1')
+    expect(countIn(s.band1, '封单额')).toBe(1)
+    // `/l2` 的 more.fcamo = 8.12e8 元 → 8.12亿(带1 与右栏拿到的是**同一条响应**, 故右栏也有真值可用)
+    expect(within(s.band1).getByText('8.12亿')).toBeTruthy()
+    // **全屏总数精确 1**(无隐藏的第 2 处)
+    expect(countLabel('封单额')).toBe(1)
+    // 右栏: 新标签「封单额」与旧行标签「封单」都不许存在, 真值也不许以任何形式出现
+    expect(countIn(s.rail, '封单额')).toBe(0)
+    expect(countIn(s.rail, '封单')).toBe(0)
+    expect(within(s.rail).queryByText('8.12亿')).toBeNull()
+    expect(countLabel('封单')).toBe(0)
+    // 两个标签同样零出现
+    expect(countIn(s.l2, '封单额')).toBe(0)
+    expect(countIn(s.fundamental, '封单额')).toBe(0)
+    // 反向护栏: 「封单成色」是**另一个**数据点(tab.l2 拥有, 去重表 #8)—— 本条断言不得靠抹掉它来通过
+    expectAtLeastOne(countDeepest(s.l2, '封单成色'), '封单成色', '盘口资金标签')
+    // 右栏保留项(去重表 #3/#4 允许的速览摘要): 主力净额 + 五档
+    expect(countIn(s.rail, '主力净额')).toBe(1)
+  })
+
   it('无"同一标签在多个拥有面重复"的漂移(快照行 cell 名在带1 唯一)', async () => {
     renderAllSurfaces()
     await awaitAllSurfacesData()
     const s = surfaces()
     // 带1 快照行的关键 cell 各自恰一份(现价/涨跌幅不在快照行, 单列于下)
-    for (const label of ['涨停价', '连板', 'PE(动)', 'PE(TTM)', 'PB', '股息率', '今开', '最高', '最低', '换手率', '量比']) {
+    for (const label of [
+      '涨停价',
+      '连板',
+      'PE(动)',
+      'PE(TTM)',
+      'PB',
+      '股息率',
+      '今开',
+      '最高',
+      '最低',
+      '换手率',
+      '量比',
+      // 遗留⑤ 新增三格: 成交量/振幅(三类型共享) + 封单额(个股专属)
+      '成交量',
+      '振幅',
+      '封单额',
+    ]) {
       expectAtLeastOne(countIn(s.band1, label), label, '带1')
       expect(countIn(s.band1, label)).toBe(1)
     }

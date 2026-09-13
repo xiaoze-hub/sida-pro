@@ -337,6 +337,93 @@ describe('Task 11 盘口资金: 缺数据一律 `--` / note, 不编造', () => {
 })
 
 /**
+ * 遗留④: 退役 `/l2` 页的 盘口形态/最优买卖/价差/买盘占比 取自 `GET /klines/{s}/summary` 的
+ * **顶层** `orderbook`(后端 `src/web/api/klines.py:518-545` → `orderbook_engine.order_book_queue`),
+ * 而 `useInsightData` 此前只暴露 `data.summary` ⇒ 本标签只能用 OB 序列 label 当形态代理。
+ * 修后: 真字段优先, OB label 只在真字段缺失时作**已披露的回退**(两套口径不冒充), 缺失一律 `--`。
+ */
+describe('遗留④ 盘口形态取 summary.orderbook(真字段优先, OB label 仅回退)', () => {
+  /** 后端 order_book_queue 的"有数据"形态(字段名逐个对齐 orderbook_engine.py:261-271)。 */
+  const SUMMARY_OB = {
+    available: true,
+    source: 'img',
+    best_bid: 11.49,
+    best_ask: 11.5,
+    spread: 0.01,
+    bid_pressure: 0.62,
+    queue_shares: 1_234_500,
+    queue_imbalance: 86_400,
+    shape: '托盘',
+    img_path: '/data/img/002636.img',
+  }
+
+  it('真字段在场: 形态=托盘(不是 OB label「买压」)+ 最优买卖/价差/买盘占比(委托口径) + 无回退披露', async () => {
+    mocks.klineSummary.mockResolvedValue({ summary: null, orderbook: SUMMARY_OB })
+    renderTab()
+
+    const obSec = section('orderbook')
+    await waitFor(() => expect(cellValue(obSec, '盘口形态')).toBe('托盘'))
+    expect(cellValue(obSec, '最优买卖')).toBe('11.49 / 11.5')
+    expect(cellValue(obSec, '价差')).toBe('0.01')
+    // bid_pressure 0.62 → 62.0%(委托量口径), 而不是十档额口径的 58.5%
+    expect(cellValue(obSec, '买盘占比')).toBe('62.0%')
+    // OB 序列仍照旧渲染(双向条 + 失衡值), 只是它的 label 不再冒充形态
+    expect(cellValue(obSec, 'OB 失衡')).toBe('+0.792')
+    expect(within(obSec).queryByText('买压')).toBeNull()
+    expect(screen.queryByTestId('l2-shape-fallback')).toBeNull()
+  })
+
+  it('真字段缺失(summary 无 orderbook): 回退 OB label + 屏上明示回退口径, 最优买卖/价差 --', async () => {
+    mocks.klineSummary.mockResolvedValue({ summary: null })
+    renderTab()
+
+    const obSec = section('orderbook')
+    await waitFor(() => expect(cellValue(obSec, '盘口形态')).toBe('买压'))
+    // 回退必须**可见**披露(不只写在 title 里)
+    expect(screen.getByTestId('l2-shape-fallback').textContent).toContain('回退口径')
+    // 买盘占比同样回退到十档额口径(12345678/(12345678+8765432))
+    expect(cellValue(obSec, '买盘占比')).toBe('58.5%')
+    // 真字段缺失的价格/价差: 一律 --, 绝不拿十档额或别的口径顶替
+    expect(cellValue(obSec, '最优买卖')).toBe('-- / --')
+    expect(cellValue(obSec, '价差')).toBe('--')
+  })
+
+  it('后端显式不可用({available:false, shape:null, note:"无数据"}): 原样转述 note, 形态不编造', async () => {
+    mocks.klineSummary.mockResolvedValue({
+      summary: null,
+      orderbook: { available: false, shape: null, note: '无数据' },
+    })
+    renderTab()
+
+    const obSec = section('orderbook')
+    await waitFor(() => expect(within(obSec).getByText(/盘口快照源: 无数据/)).toBeTruthy())
+    // shape=null ⇒ 回退 OB label(并披露), 绝不本地编一个形态出来
+    expect(cellValue(obSec, '盘口形态')).toBe('买压')
+    expect(screen.getByTestId('l2-shape-fallback')).toBeTruthy()
+    expect(cellValue(obSec, '最优买卖')).toBe('-- / --')
+    expect(cellValue(obSec, '价差')).toBe('--')
+    expect(cellValue(obSec, '买盘占比')).toBe('58.5%')
+  })
+
+  it('真字段为脏值(字符串数字/空串形态): 不崩、不渲染 NaN; 空串形态视为未下发 → 回退', async () => {
+    mocks.klineSummary.mockResolvedValue({
+      summary: null,
+      orderbook: { available: true, best_bid: '11.49', best_ask: '11.50', spread: '0.01', bid_pressure: '0.4', shape: '  ' },
+    })
+    renderTab()
+
+    const obSec = section('orderbook')
+    await waitFor(() => expect(cellValue(obSec, '最优买卖')).toBe('11.49 / 11.5'))
+    expect(cellValue(obSec, '价差')).toBe('0.01')
+    expect(cellValue(obSec, '买盘占比')).toBe('40.0%')
+    // 空串形态 = 未下发 ⇒ 回退 OB label 并披露
+    expect(cellValue(obSec, '盘口形态')).toBe('买压')
+    expect(screen.getByTestId('l2-shape-fallback')).toBeTruthy()
+    expect(obSec.textContent).not.toContain('NaN')
+  })
+})
+
+/**
  * 复审 Finding 1 的**盲区用例**(旧版 3 例全走 resolve, reject 路径零覆盖):
  * 原实现 `insightApi.orderbookOb(...).catch(() => null)` + 无条件 `setOb(o ?? null)`,
  * 于是 ① 401/500/网络失败被当成"后端无数据", ② 屏上配一句**本地编造**的

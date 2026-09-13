@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
-import { fmtAmount } from '@panwatch/biz-ui/lib/ladder-format'
+// 带符号金额(元 → 万/亿)走**共享实现**(v0.6.0 遗留⑤): 带1 `HeaderBand` 的「封单额」cell 与
+// 本卡的「主力净额」行必须同一套单位映射(同类金额在两个拥有面显示不同单位会被读成两个数)。
+// 语义与原本卡内的局部实现逐字相同: 负值取绝对值分档后补 `-`, `0` 是真值, 缺值/脏值 `--`。
+import { fmtSignedAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { safeFixed, safeNum, safePrice } from '@/lib/format'
 import DecisionCard from './DecisionCard'
 
@@ -10,6 +13,7 @@ import DecisionCard from './DecisionCard'
  * 竖排四张「一眼看过」的卡(顺序即 spec §1.2 的 ①②③④):
  *   ① 数智决策   —— Task 4 的合并卡(三指标读数 + 共振判定, 全工作台**只此一处**);
  *   ② 盘口速览   —— `GET /stocks/{s}/l2`(通达信 snapshot + more_info), **30s 轮询**;
+ *                      内容 = **主力净额 + 五档买卖价量**(封单额已移交带1 快照行, 见下「去重」);
  *   ③ 基本面/股本 —— `GET /stocks/{s}/fundamental`(股本/次新) + **复用 ② 的同一份 `/l2` `more.pe_ttm/pb`**
  *                      (Task 6 收敛: 首屏 `/l2` 由本文件**唯一**的 `useL2` 发出, ②③ 共用同一 state —— 原先
  *                      ③ 自带一次 `/l2` 取数, 首屏同一端点被打两遍, 违反 spec §4.3「首屏过重视为未达标」);
@@ -23,7 +27,7 @@ import DecisionCard from './DecisionCard'
  *
  * 真数据纪律: 任一字段缺失/脏值(PG DECIMAL 字符串、空串、NaN)→ `--`, 绝不编造、绝不渲染 NaN;
  * 请求失败 **保留旧值**(stale-on-error), 不把失败伪装成 0。
- * 本文件零裸 toFixed 调用(R6), 格式化全走 `@/lib/format` safe* 与 `fmtAmount`; 配色只用设计令牌。
+ * 本文件零裸 toFixed 调用(R6), 格式化全走 `@/lib/format` safe* 与共享的 `fmtSignedAmount`; 配色只用设计令牌。
  */
 
 /** `/stocks/{symbol}/l2` 的 `snapshot` 段(src/core/stock_l2.py::fetch_snapshot)。 */
@@ -149,17 +153,6 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
-/**
- * 带符号金额(元 → 万/亿): 封单/主力净额**可为负**(FCAmo < 0 = 跌停封单, Zjl_HB < 0 = 净流出),
- * 而共享的 `fmtAmount` 只对正值分万/亿档(负值会原样吐出 `-18000000`)—— 本卡是"一眼看数"处,
- * 这里取绝对值走 `fmtAmount` 再补 `-`, 正数与旧卡逐字一致, 缺值仍 `--`(不编)。
- */
-function fmtSignedAmount(v: number | null | undefined): string {
-  const n = safeNum(v)
-  if (n == null) return '--'
-  return `${n < 0 ? '-' : ''}${fmtAmount(Math.abs(n))}`
-}
-
 /** 五档价/量单元: 缺失或 0 → `--`(通达信没给该档 = 无值, 不画 0)。 */
 function lvl(v: unknown): string {
   const n = safeNum(v)
@@ -186,7 +179,7 @@ export function fmtShares(v: unknown): string {
 }
 
 /**
- * ② 盘口速览: **封单 / 主力净额 + 五档买卖价量**, 30s 轮询(失败保留旧值)。
+ * ② 盘口速览: **主力净额 + 五档买卖价量**, 30s 轮询(失败保留旧值)。
  *
  * **纯展示**: `/l2` 的取数与轮询由容器 `QuickRail` 的 `useL2` 唯一持有(Task 6 收敛 ——
  * 原先本卡自带一次取数, 与 ③ 基本面卡各打一条, 首屏同端点两遍), 本卡只消费 state。
@@ -195,8 +188,13 @@ export function fmtShares(v: unknown): string {
  * `HeaderBand`**(顶行现价 / `band1.snapshot` 的 `limit_price`, spec 去重表 #9), 本卡
  * **不渲染**这两个数据点 —— 同一数据点全工作台只出现一次; 五档买卖价即本卡的价格上下文。
  * 「主力净额」保留: 去重表 #4 明确允许右栏留一条主力净额速览摘要。
- * `L2Snapshot.now` / `L2More.zt_price` 的声明**保留**(本文件对 wire 形态的说明, 与同样
- * 未渲染的 `amount` 同例); 日后若要在此加价格行, 先回去重表重新裁定, 不要直接加。
+ *
+ * **封单额已移出本卡(v0.6.0 遗留⑤)**: `DATA_OWNERSHIP.seal_amount = 'band1.snapshot'` ⇒
+ * 封单额由**带1 快照行**唯一拥有(那边的「封单额」cell 取同一条 `/l2` 的 `more.fcamo`),
+ * 本卡的「封单」行**删除** —— 一个数据点两处显示会被读成两个数, 且带1 的快照行是 spec §1.2
+ * 明列的归属面。本卡保留 主力净额 + 五档(去重表 #3/#4 允许的速览摘要)。
+ * `L2Snapshot.now` / `L2More.zt_price` / `L2More.fcamo` 的声明**保留**(本文件对 wire 形态的说明,
+ * 与同样未渲染的 `amount` 同例); 日后若要在此加回任一行, 先回去重表重新裁定, 不要直接加。
  */
 function QuoteCard({ l2 }: { l2: L2Resp | null }) {
   const s = l2?.snapshot ?? {}
@@ -209,8 +207,7 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
         {clock ? <span className="font-mono text-[9px] text-muted-foreground">快照 {clock}</span> : null}
       </div>
       {l2?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{l2.note}</div> : null}
-      {/* 去重: 现价/涨停价 只在带1 HeaderBand, 此处不渲染(见本组件头注) */}
-      <Row label="封单" value={fmtSignedAmount(m.fcamo)} />
+      {/* 去重: 现价/涨停价/封单额 归带1 HeaderBand, 此处不渲染(见本组件头注) */}
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
       <div className="mt-1 grid grid-cols-5 gap-0.5 text-[9px]">
         {(s.buyp ?? []).slice(0, 5).map((p, i) => (
