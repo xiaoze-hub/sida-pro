@@ -7,6 +7,29 @@
 
 ## 2026-09-14
 
+### release-v0.6.1: 个股工作台 v0.6.0 遗留清理收口(四批) + 复审整改 + 离线门禁清零
+
+**性质**: 纯前端 + 测试/文档, **无后端代码改动、无迁移、无接口契约变更**。部署走**静态面**(`docker cp dist → /app/static` + `VERSION` + `chown`), **不重启容器**(重启会杀掉容器内 nohup 回填任务)。
+
+**这批交付了什么**(老板批「除了 D 其他开干」→「KI-056 先跳过, 纯债清完再说」→「③④⑤⑦ 一起做掉」):
+- **遗留清理四批**(第1批 `c8b7d31` / 第2批 `5038bbc` / 第3批 `8f55242` / 第4批 `28af43b`): 预测页预选标的、持仓态 60s 轮询、板块 chips 截断、删 4 个恢复后零引用的死文件、market 口径归一、`tests/` 纳入类型与 lint 门禁(新增 `pnpm typecheck:tests`, 与 `tsc -b` 解耦 ⇒ 测试坏了不挡生产构建)、`refreshForAuto` 改纯键门控、以及 ③④⑤⑦ 四项。
+- **第4批复审整改** `88d7f14`: 独立复审判 needs fixes, 2 个阻塞项(**③ 的"零写入"是假话** / **⑦ 自己引入的响应乱序竞态**)已回源核实并修掉, 另修 5 个 Minor(含**停牌股会渲染假「振幅 0.00%」**)、订正 4 处失实引用。两处修复都做了**变异验证**(把守卫改坏 ⇒ 恰好对应新用例红、其余绿)。
+- **KI-055 关闭**: 离线门禁存量红 **7 failed → 0 failed**(实测 2280 passed / 5 skipped)。其中 5 条是日历敏感用例, 在工作日自动转绿(未改一行代码); 另 2 条的修法**都没有采用 KI 里原先的建议**(不用 `importorskip`、不标 `@pytest.mark.network`), 理由见该条目。
+- **⑭**: CHANGELOG 回填 **42 条** `[commit <hash>]`, 删 15 处已作废的免责从句; 50 个哈希全部通过 `git cat-file -e` 存在性校验。
+
+**门禁**: 前端 `tsc -b` 0 / `typecheck:tests` 0 / `eslint` 0 / `UI-RULES OK` / vitest **388/388**; 后端 `pytest -m "not network"` **2280 passed / 0 failed / 5 skipped**。真接口探针(生产 :8000)已核过 ④⑤ 的数据面(见第4批条目)。
+
+**⚠️ 需要老板拍板的 3 条新登记 KI**(均已查明事实、给出方案, **未擅自改**):
+- **KI-057(P2)** 「振幅」两套分母口径: 后端落库 `(high−low)/low`(`kline_collector.py:853`) vs 前端实时 `(high−low)/prev_close`(A 股通行口径)。同一工作台页可同屏到达(带1 快照行 vs 建议条 → `KlineSummaryDialog`), 同一只票两个数。改后端要先定口径, 且要决定**历史 `klines.amplitude` 是否回填重算**(改了不回填 = 新旧口径混在一张表, 比现在更糟)。
+- **KI-058(P2)** 「设提醒」能力**已无任何 UI 入口**: 遗留③ 之后 `handleSetAlert` 成零生产调用方的孤儿(旧入口随 v0.6.0 退役旧模态一起没了) ⇒ 用户无法从界面上给个股开启盘中监测提醒。两条路: (A) 在「建议」标签补一个**独立且明示写入**的「设提醒」按钮(= 新功能); (B) 确认不再需要则删死代码。
+- **KI-059(P2)** 封单额迁到带1 后**失去 30s 轮询与快照时钟**: 它恰是那一行里变化最快的读数(涨停股盘中几秒能从几亿砸到 0), 现在看着像实时、其实是首屏时刻, 且无时效提示。三选一: (A) 带1 的 `/l2` 加 30s 轮询; (B) **只加快照时钟**(成本最低, 倾向此项); (C) 迁回右栏(不推荐, 会重新引入双处显示)。
+
+**留到周一盘中实测的项**(休市时无法验证, 已如实登记不作"已验证"计): ④ 的 `summary.orderbook` **populated** 路径(形态/最优买卖/价差 的真值渲染) —— 当前生产返回 `{available:false, shape:null, note:"无数据"}`, 页面走的是**回退口径 + 明示披露**那条路, 需盘中 thsdk 在线才能验真值; 以及既有待办 **P2-T15**(连板梯队盘中实测 + 断源演练 —— 断源演练要停生产 redis, 须老板当场点头)。
+
+**本批明确没做**: KI-056(老板点名跳过)、B⑩(Provider 暴露失败位, 让 消息/基本面/建议 能区分"端点失败"与"确实没内容")、B⑫(`core` 键下 `HeaderBand` 与 `SuggestTab` 重复取一次 `/klines/{s}/summary`)、复审 Minor M4/M8/M9 —— 全部留痕待后续批次。
+- [tag v0.6.1]
+- [commit 待发版提交与合并提交产生后按 ⑭ 的做法回填]
+
 ### fix(wb)-v0.6.0 遗留清理第 4 批: 无自选/绑定副作用触发 + 真盘口形态 + 带1 补三格 + 刷新不重挂载
 
 老板批「③④⑤⑦ 一起做掉」(KI-056 明确跳过)。四项都是 v0.6.0 发版时登记在案的遗留, 全部**只改前端**、**不新增任何接口请求**。
@@ -38,7 +61,7 @@
   - **M7 去重契约漏登记新数据点** → `DATA_OWNERSHIP` 补 `volume`/`amplitude`(→`band1.snapshot`)与 `orderbook_shape`/`best_bid_ask`/`bid_spread`(→`tab.l2`); 设计文档 §1.2 的快照行 ASCII 补上漏掉的 **封单额**(去重表 #7 早已裁定它归带1 唯一拥有, 实现也渲染了, 只有图没跟上)。契约表是防漂移的唯一锚点, 新数据点不登记 = 不受保护。
 - **有意没做、登记留痕的 4 个 Minor**: **M5**(封单额迁到带1 后失去 30s 轮询与快照时钟 —— 新鲜度下降, 三选一方案需老板拍板)→ **KI-059**; **M4**(`summary.orderbook` 有 5 分钟双层缓存且优先取离线 `.img`, 但新渲染的 形态/最优买卖/价差 无任何时效或来源披露; 缓解事实是 `PANWATCH_IMG_DIR` 全仓无任何 compose/env 配置 ⇒ `.img` 分支在生产是惰性的); **M8**(「触发盘中监测」无客户端冷却: `bypass_throttle:true` + 后端幂等兜底只覆盖 `tradingagents` 不覆盖 `intraday_monitor` ⇒ 连点会各提交一个真实 AI 作业, 属成本面风险); **M9**(「最优买卖」与右栏五档的买一/卖一是同一数据点两个源, spec 去重表 #3 明确允许并存 ⇒ 不算违规, 但屏上无口径说明)。M4/M8/M9 记入 SDD 台账待后续批次。
 - **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint 0 / UI-RULES OK / vitest **388/388**(较 `28af43b` 的 385 净 +3 = 两条竞态回归用例 + 一条振幅非正价格守卫用例); 后端 `pytest -m "not network"` **2280 passed / 0 failed / 5 skipped**。
-- [commit 待下一次回填 —— 哈希在本提交完成后才存在]
+- [commit 88d7f14]
 
 ### test(gate)-KI-055 关闭: 离线门禁存量红清零(7 failed → **0 failed**)
 - **实测**: `PYTHONUTF8=1 python -m pytest -q -p no:warnings -m "not network"` = **2280 passed / 0 failed / 5 skipped**(此前长期是 7 failed / 2273 passed, 每次发版都要人工比基线才能确认没引入回归 —— 这正是"CI 真门禁"想消除的成本)。
@@ -46,7 +69,7 @@
 - **② `test_ta_load_ohlcv_patch.py` 1 条 —— 没用 `importorskip`**: 那只是把红变跳过, 会**丢覆盖**。真因是 `tradingagents` 为**软依赖**(CI 装了、本机没装), 而适配器两种环境抛**不同**异常(`src/agents/tradingagents/toolkit_adapter.py:452-461`: 上游可导入 → `NoMarketDataError`; `except ImportError` → `RuntimeError` 兜底)。改为**按环境断言对应类型**: CI 仍钉住上游契约, 本机则真正覆盖那条**原本零覆盖**的兜底分支 —— 两种环境都在测东西。"不回退 yfinance"(`real_calls==0`)是该用例的真意图, 与环境无关, 两边都断言。
 - **③ `test_thsdk_buffer_size.py` 1 条 —— 没标 `@pytest.mark.network`**: 标 network 等于承认它本该联网, 与用例自述意图("不依赖真实 thsdk 安装")相反, 还会让离线门禁少守一条真契约。**真根因**(也解释了它为何"单跑绿、整套跑红"): 文件顶部换假 `sys.modules["thsdk"]` 只在 `data_source.thsdk_l2` **首次 import** 时生效; 全量跑时别的用例早已 import 过它 ⇒ 本文件拿到的是**绑着真 `THS`** 的缓存模块, 换假成了空操作 ⇒ `_query` 真去连行情服务(5 次重试全败 → `Response(success=False, error='未登录')`)。改为 `monkeypatch` 直接替换 `_query` 实际取用的**模块属性** `M.THS`(`data_source/thsdk_l2.py:98` 的 `from thsdk import THS`, 用于 `:349`/`:361`)⇒ 与 import 顺序无关且**全程离线**; `__main__` 块改走 `pytest.main`(用例现在要 fixture, 不能裸调)。
 - **验证**: 单文件跑 7 passed; **全量跑 0 failed**(③ 的缺陷只在整套顺序下出现, 故全量跑才是有效证据)。
-- [commit 待下一次回填 —— 哈希在本提交完成后才存在]
+- [commit 88d7f14]
 
 ### docs(changelog)-v0.6.0 遗留⑭: 回填 42 条 entry 的 `[commit <hash>]`
 - **背景**: 本文件头部约定"每条 entry 末尾缀 `[commit <short-hash>]`, 可直接 `git show` 看完整 diff"。但 v0.6.0 那批(任务 T1–T20, 46 commits)的 entry 都是在**提交之前**写的, 于是留下一堆占位与免责句("hash 写入时尚不存在"、"补 hash 需 amend 既有提交, 不在本任务授权内")。这些 commit 现在都存在了, 借口作废。
@@ -54,7 +77,7 @@
 - **同时删掉 15 处免责从句**, 但**保留**同句里的其它事实(门禁数字、遗留项等) —— 只切除借口, 不动信息。
 - **校验**: 50 个插入的哈希与映射表**集合相同**(每个恰用一次), 且全部通过 `git cat-file -e` 存在性检查(错哈希比没哈希更糟 —— 会把读者送到不存在的提交)。
 - **有意留白 1 条**: `docs-个股工作台 v2 三合一设计(spec)落档` 不在任务号映射内, 执行方**没有猜**; 由控制器另行核实后补 `359af2d`(spec 设计文档) + `88ed465`(实现计划)。
-- [commit 待下一次回填 —— 哈希在本提交完成后才存在]
+- [commit 88d7f14]
 
 ## 2026-09-13
 
