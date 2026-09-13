@@ -7,6 +7,13 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务6 测试加固: 主图面板外壳承重类(`min-w-0 flex-1`)纳入 className 断言
+- **问题**(Task 6 复审 Important): `frontend/src/pages/StockWorkbench.tsx:106` 的 KlineChart 面板外壳 `min-w-0 flex-1 rounded border border-border/60 p-2` 里, **`min-w-0` 是承重类** —— 没有它, echarts canvas 会撑破与固定 `w-[320px]` 右栏并排的 flex 行(spec §1.2 带2 横向布局), 但页面测试只断言了右栏外壳 `w-[320px] shrink-0` 与根容器 `mx-auto/max-w-[1500px]/p-3`, **从未断言**该主图外壳, 故重构删掉 `min-w-0`/`flex-1` 仍会全绿(测试覆盖漏洞, 非实现缺陷 —— 组件类本身正确, 本次**未改组件**)。
+- **修复**: `frontend/tests/components/stock-workbench.test.tsx` 用例 1 内新增对**真实渲染元素**的断言 —— 以 mock 的 `KlineChart`(`data-testid="kline"`)的 `parentElement` 为稳定句柄(与既有 `railBox` 取法一致), 断言其 className 含 `min-w-0` / `flex-1` / `rounded` / `border-border/60` / `p-2`; `klineBox` 声明紧邻 `railBox`, 形状与既有断言同构。
+- **变异验证**(证明断言非空, 已验证后还原): 临时把组件该行改为 `flex-1 rounded border border-border/60 p-2`(删 `min-w-0`)→ 该例失败 `AssertionError: expected 'flex-1 rounded border border-border/6…' to contain 'min-w-0'`(`tests/components/stock-workbench.test.tsx:98`); 还原后 9/9 通过。`grep MUTATION-PROBE` 0 命中, `git diff --stat` 仅测试文件 +8 行(组件零改动)。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **263/263**(43 files, 与加固前同数, 本任务只加断言不加用例)。R6 无新裸 `toFixed`。
+- **文档**: 修正 `task-6-report.md` §6 中「用例 1 逐项断言」的**过度声明** —— 原文把"主图外壳"也计入"逐项断言", 实际当时只断言了右栏与根容器; 现措辞改为如实描述(加固后才覆盖主图外壳), 并追加本次加固小节。
+
 ### feat(wb)-工作台 v2 任务6: 三带骨架(带1 → 带2 大K线+右栏 → 带3 单层标签)+ QuickRail `/l2` 取数收敛
 - **重写 `frontend/src/pages/StockWorkbench.tsx`**(`/stocks/:symbol`, 旧版 217 行): 三带结构落地 —— 带1 `HeaderBand`(吸顶, 三类型共享)→ 带2 `KlineChart`(`flex-1`, `initialInterval="1d"` / `initialDays={120}` / `height={420}`, 外层 `rounded border border-border/60 p-2`)+ 右栏 `QuickRail`(外壳 `w-[320px] shrink-0`)→ 带3 `TabBar` + `TabPanel`。外壳沿用改版前容器惯例 `mx-auto max-w-[1500px] p-3`。
 - **类型分流**(spec §1.3): `type = normalizeType(sp.get('type'))`(Task 1 纯函数); `type !== 'stock'` 只渲染带1 + `IndexBoardHost`, **不渲染**右栏/6 标签/建议条; 个股才渲染带2/带3。`?type=` 切换**不跳页**(`setQuery` 只写 query, 且保留另一键 —— 切类型不丢 `?tab=`), 与 spec §1.3「工作台内切类型」一致。

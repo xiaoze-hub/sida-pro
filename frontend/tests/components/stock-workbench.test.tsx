@@ -92,6 +92,14 @@ describe('StockWorkbench 三带骨架', () => {
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
     expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
     expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
+    // 主图面板外壳: `min-w-0` 是**承重**类 —— 没有它, echarts canvas 会撑破与固定
+    // `w-[320px]` 右栏并排的 flex 行(overflow);`flex-1` 让它吃掉剩余宽度。
+    const klineBox = screen.getByTestId('kline').parentElement as HTMLElement
+    expect(klineBox.className).toContain('min-w-0')
+    expect(klineBox.className).toContain('flex-1')
+    expect(klineBox.className).toContain('rounded')
+    expect(klineBox.className).toContain('border-border/60')
+    expect(klineBox.className).toContain('p-2')
     const railBox = screen.getByTestId('rail').parentElement as HTMLElement
     expect(railBox.className).toContain('w-[320px]')
     expect(railBox.className).toContain('shrink-0')
