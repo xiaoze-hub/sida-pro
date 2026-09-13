@@ -7,6 +7,16 @@
 
 ## 2026-09-13
 
+### feat(wb)-工作台 v2 任务3: HeaderBand 顶部信息带 + mapSnapshot 单测
+- 新增 `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`: 三合一「带1 顶部信息带」(吸顶, 个股/指数/板块共享)。顶行=名称+代码+现价+涨跌色(`text-[--stock-up]`/`text-[--stock-down]`)+类型三按钮(`onTypeChange`)+刷新(自己重拉, 失败保留旧值); 快照行由纯函数 `mapSnapshot(quote, more)` 驱动; 技术指标建议条=`insightApi.klineSummary` → `buildKlineSuggestion(summary, hasPosition)` → 「建议·动作 + 评分 + 证据关键词(signal)」, 点击 `onGotoTab('suggest')`; `type!=='stock'` 时不拉 l2/summary 且不渲染建议条。
+- **字段名以真实接口为准**(计划书示意的 `total_mv`/`amount`/`current_price` 旧名作废, 若照抄会恒显 `--`): 行情取 `/quotes/{s}`(`_quote_to_response`, `src/web/api/quotes.py:70-95`)的 `current_price/change_pct/open_price/high_price/low_price/turnover`; 换手率/量比/总市值取 `/quotes/{s}/more-info`(`src/core/marketdata_client.py:208-245`)的 `turnover_rate/volume_ratio/total_market_value`; 涨停价取 `/stocks/{s}/l2`(`src/core/stock_l2.py:75-98`)的 `more.zt_price`。
+- **两处口径修正**: ① `more-info` 无成交额字段 → 成交额取 quote 的 `turnover`(元)经 `fmtAmount`; ② `more_info.total_market_value` 单位是**亿**(`packages/marketdata/.../types.py:296` Zsz 原值), 不能过 `fmtAmount`(元口径)否则丢单位 → 改 `safePrice(v,2)+'亿'`。缺值/脏值(NaN/非数字串/PG DECIMAL 字符串)一律 `--`, 不编造。
+- **Ruling A**: 涨停价由 HeaderBand 自取 `/stocks/{s}/l2` 注入 `more.zt_price`(QuickRail 是兄弟组件, 无法回喂), 删除计划书「由 Task 5 补」注。
+- **去重**: 现价/涨跌幅已在顶行醒目呈现 → 快照行不再重复渲染(`TOP_ROW_KEYS` 过滤), 守 spec §一「同一数据点只出现一处」。
+- **测试**: 新增 `frontend/tests/lib/workbench-snapshot.test.ts`(8 例): 缺值全 `--`(空对象/undefined 双跑)、真实 key 落位、涨跌幅 `+`/`-` 号、more-info 三字段、`zt_price`→涨停价、字符串数字不崩、脏值走 `--`、cell key/label 顺序防漂移。TDD: 先跑出 "Cannot find module .../HeaderBand"(RED), 实现后 8/8(GREEN)。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK(首轮 R6 误报——注释里写了 `.toFixed(` 字面量被纯文本扫描命中, 已改写注释) / `npx vitest run` **226/226 通过**(39 files, 新 +8)。
+- **待办**(本任务未做, 见 report concerns): spec §4.1 + `DATA_OWNERSHIP` 归 `band1.snapshot` 的 PE(动)/PE(TTM)/PB/股息率/流通市值/振幅/封单额/连板 未落带1; 建议条同源详情(`KlineIndicators`)在「建议」标签(任务12/17)。
+
 ### fix(wb)-工作台 v2 任务2 复审修复: 侧栏「行情」选中态(带 query 的 to 恒不命中)
 - **问题**(Task 2 复审 Important): `navItems` 的「行情」项 `to = '/stocks/000001?type=index'`, 而旧活跃判定是 `location.pathname.startsWith(to)`, `pathname` 永不含 `?` → 恒 false, 桌面侧栏与移动底栏的「行情」永不选中。
 - **修复**: 新增纯函数 `frontend/src/lib/nav-active.ts::isNavItemActive(to, pathname)`; `App.tsx` 侧栏(桌面)与移动底栏两处判定改调它。规则: `to === '/'` → 仅 pathname 为 `/` 命中(原逻辑不变); 否则取 `to` 的 pathname 部分(`to.split('?')[0]`)比对前缀, 且**该 pathname 落在 `/stocks` 下时整段 `/stocks` 分区都算命中**(`/stocks/:symbol` 是同一工作台的不同 symbol, `/stocks/002636` 无法用 `/stocks/000001` 前缀覆盖); 其余项一律 `pathname.startsWith(toPath)`, 行为零变化。
