@@ -45,6 +45,7 @@ import { BrandMark } from '@/components/BrandMark'
 import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import { normalizeType } from '@/lib/workbench-tabs'
+import { isNavItemActive } from '@/lib/nav-active'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
@@ -354,7 +355,7 @@ function App() {
                 {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{group.label}</div>}
                 <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, label }) => {
-                    const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
+                    const isActive = isNavItemActive(to, location.pathname)
                     return (
                       <NavLink
                         key={to}
@@ -454,7 +455,7 @@ function App() {
       <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
           {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, label }) => {
-            const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to)
+            const isActive = isNavItemActive(to, location.pathname)
             return (
               <NavLink
                 key={to}

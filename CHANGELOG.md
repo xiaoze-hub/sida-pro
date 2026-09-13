@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务2 复审修复: 侧栏「行情」选中态(带 query 的 to 恒不命中)
+- **问题**(Task 2 复审 Important): `navItems` 的「行情」项 `to = '/stocks/000001?type=index'`, 而旧活跃判定是 `location.pathname.startsWith(to)`, `pathname` 永不含 `?` → 恒 false, 桌面侧栏与移动底栏的「行情」永不选中。
+- **修复**: 新增纯函数 `frontend/src/lib/nav-active.ts::isNavItemActive(to, pathname)`; `App.tsx` 侧栏(桌面)与移动底栏两处判定改调它。规则: `to === '/'` → 仅 pathname 为 `/` 命中(原逻辑不变); 否则取 `to` 的 pathname 部分(`to.split('?')[0]`)比对前缀, 且**该 pathname 落在 `/stocks` 下时整段 `/stocks` 分区都算命中**(`/stocks/:symbol` 是同一工作台的不同 symbol, `/stocks/002636` 无法用 `/stocks/000001` 前缀覆盖); 其余项一律 `pathname.startsWith(toPath)`, 行为零变化。
+- **测试**: 新增 `frontend/tests/lib/nav-active.test.ts`(5 例, 覆盖 query 项命/不命中、其它 symbol、无 query 项原前缀语义、首页精确匹配)。
+- **门禁**: `npx tsc -b` / `npx eslint .` 双绿; `npx vitest run` **218/218 通过**(38 files, 新 +5)。
+
 ### feat(wb)-工作台 v2 任务2: 路由/侧栏/redirect 三合一
 - `frontend/src/App.tsx`: 新增 4 个旧路由 redirect 组件(`LegacyForecastRedirect`/`LegacyQuoteSymbolRedirect`/`LegacyL2Redirect`/`LegacyIndexRedirect`) → 旧行情页/盘口页/指数详情/板块详情统一跳 `/stocks/:symbol`(带 `?type=`/`?tab=l2`); `/forecast` `/quote` `/quote/:symbol` `/l2` `/index/:symbol` `/boards/:blockCode` 六条路由改挂 redirect(不再挂 `QuotePage`/`L2OrderbookPage`/`IndexDetailPage`/`BoardDetailPage`), 旧书签/推送链接不断。
 - **类型归一**复用 Task 1 的 `normalizeType`(只认 index/board, 其余归 stock); 摘除 4 个页面的 lazy 绑定(页面文件保留在磁盘, Task 7 抽 `IndexBody`/`BoardBody` 时由工作台直接 import), 避免 `noUnusedLocals` 报错。注: `/boards/:blockCode` 的参数名与 `/index/:symbol` 不同, redirect 同时读 `symbol`/`blockCode` 确保板块代码不丢。
