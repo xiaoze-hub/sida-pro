@@ -1,217 +1,126 @@
-import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { fetchAPI } from '@panwatch/api'
-import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
-import DecisionPioneerCard from '@panwatch/biz-ui/components/DecisionPioneerCard'
-import ResonanceVerdictPanel from '@panwatch/biz-ui/components/ResonanceVerdictPanel'
-import { fmtAmount, fmtPct } from '@panwatch/biz-ui/lib/ladder-format'
+import { useParams, useSearchParams } from 'react-router-dom'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
+import PageTabs from '@/components/PageTabs'
+import {
+  normalizeType,
+  parseTab,
+  WORKBENCH_TABS,
+  type WorkbenchTab,
+  type WorkbenchType,
+} from '@/lib/workbench-tabs'
 
 /**
- * 个股整页工作台(v0.5.90 第①步, 老板否掉"卡片堆叠逐层点击")。
- * 布局: 主图区(大K线) + 右栏平铺卡(数智决策三指标/共振判定/盘口L2), 不嵌套不逐层点击。
- * 盘口L2 用 GET /api/stocks/{symbol}/l2(通达信 snapshot+more_info), 30s 轮询; 缺值显 '--' 不编。
+ * 个股/指数/板块 **三类型唯一详情页**(工作台 v2 三合一, spec §1.2 三带结构)。
+ *
+ * 三带(自上而下):
+ *  带1 `HeaderBand`           —— 名称/现价/涨跌 + 类型三按钮 + 快照行 + 个股建议条(吸顶, 三类型共享);
+ *  带2 主图 `KlineChart`(flex-1) + 右栏 `QuickRail`(320px) —— 个股专属(spec §1.3: 指数/板块无右栏);
+ *  带3 `TabBar`(`WORKBENCH_TABS` 6 键, ?tab= 深链) + `TabPanel`(选中标签正文, 整宽单层)。
+ *
+ * 类型切换**不跳页**: `?type=` 只改本路由的 query(spec §1.3「工作台内切类型」); 标签同理走 `?tab=`。
+ * 指数/板块在本路由内渲染 `IndexBoardHost`, **不渲染**右栏与 6 标签。
+ *
+ * **Ruling B 临时占位**(保证本任务单独可编译/可走查, 后续任务逐一替换):
+ *  - `IndexBoardHost` —— 现渲染「指数/板块正文建设中」面板; Task 7 换成 `IndexBody`/`BoardBody`;
+ *  - `TabPanel`       —— 现渲染「{label} 建设中」; Task 17 换成 6 个真实标签组件。
+ *  `TabBar` 是本任务的**正式**产物(6 键 + `?tab=` 深链), 非占位。
+ *
+ * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart` 内。
  */
 
-interface L2Snap {
-  now?: number | null
-  last_close?: number | null
-  open?: number | null
-  high?: number | null
-  low?: number | null
-  amount?: number | null
-  before5min?: number | null
-  buyp?: number[]
-  buyv?: number[]
-  sellp?: number[]
-  sellv?: number[]
-}
-interface L2More {
-  zt_price?: number | null
-  fcamo?: number | null
-  ever_zt_count?: number | null
-  l2_tic?: number | null
-  l2_order?: number | null
-  zjl_hb?: number | null
-}
-interface L2Resp {
-  symbol: string
-  as_of?: string | null
-  note?: string | null
-  snapshot?: L2Snap
-  more?: L2More
-}
+/** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
+const MARKET = 'CN'
 
-function L2Card({ symbol }: { symbol: string }) {
-  const [l2, setL2] = useState<L2Resp | null>(null)
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-        if (alive) setL2(r)
-      } catch {
-        /* 保留旧值 */
-      }
-    }
-    void load()
-    const t = window.setInterval(() => void load(), 30000)
-    return () => {
-      alive = false
-      window.clearInterval(t)
-    }
-  }, [symbol])
-  const s = l2?.snapshot ?? {}
-  const m = l2?.more ?? {}
-  const row = (label: string, val: string) => (
-    <div className="flex justify-between text-[11px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono">{val}</span>
-    </div>
-  )
+/**
+ * 指数/板块正文宿主(**临时占位**, Task 7 替换为真实 `IndexBody`/`BoardBody`)。
+ * `type === 'board'` 走板块正文(spec §1.3: 同一路由内切, 正文复用既有页).
+ */
+function IndexBoardHost({ type, symbol }: { type: WorkbenchType; symbol: string }) {
   return (
-    <div className="rounded border border-border/60 p-2">
-      <div className="mb-1 text-[12px] font-semibold">盘口 / L2</div>
-      {l2?.note ? (
-        <div className="mb-1 text-[10px] text-muted-foreground">{l2.note}</div>
-      ) : null}
-      {row('现价', s.now != null ? String(s.now) : '--')}
-      {row('涨停价', m.zt_price != null ? String(m.zt_price) : '--')}
-      {row('封单', m.fcamo != null ? fmtAmount(m.fcamo) : '--')}
-      {row('主力净流入', m.zjl_hb != null ? fmtAmount(m.zjl_hb) : '--')}
-      {row('逐笔成交/委托', m.l2_tic != null && m.l2_order != null ? `${m.l2_tic}/${m.l2_order}` : '--')}
-      {row('连板(vendor)', m.ever_zt_count != null ? String(m.ever_zt_count) : '--')}
-      <div className="mt-1 grid grid-cols-5 gap-0.5 text-[9px]">
-        {(s.buyp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`b${i}`} className="truncate text-center text-[--stock-up]">
-            {p > 0 ? p : '--'}
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[9px]">
-        {(s.buyv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`bv${i}`} className="truncate text-center text-muted-foreground">
-            {v > 0 ? v : '--'}
-          </div>
-        ))}
-      </div>
-      <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[9px]">
-        {(s.sellp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`s${i}`} className="truncate text-center text-[--stock-down]">
-            {p > 0 ? p : '--'}
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[9px]">
-        {(s.sellv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`sv${i}`} className="truncate text-center text-muted-foreground">
-            {v > 0 ? v : '--'}
-          </div>
-        ))}
-      </div>
-      {s.before5min != null && s.now != null ? (
-        <div className="mt-1 text-[10px] text-muted-foreground">
-          5分钟前 {s.before5min} · 额 {fmtAmount(s.amount ?? null)} · {fmtPct(s.last_close ? ((s.now - s.last_close) / s.last_close) * 100 : null)}
-        </div>
-      ) : null}
+    <div className="mt-3 rounded border border-border/60 p-4 text-[12px] text-muted-foreground">
+      {type === 'index' ? '指数' : '板块'}正文建设中
+      <span className="ml-2 font-mono text-[11px]">{symbol}</span>
     </div>
   )
 }
 
-function FundamentalCard({ symbol }: { symbol: string }) {
-  const [fund, setFund] = useState<{
-    gb?: { date?: string; ltgb?: number | null; zgb?: number | null } | null
-    listing?: { name?: string; listing_date?: string } | null
-    sub_new?: boolean | null
-    note?: string | null
-  } | null>(null)
-  const [val, setVal] = useState<{ pe_dynamic?: number | null; pe_ttm?: number | null; pb?: number | null; dividend_yield?: number | null } | null>(null)
-  useEffect(() => {
-    let alive = true
-    fetchAPI<typeof fund>(`/stocks/${encodeURIComponent(symbol)}/fundamental`)
-      .then((r) => { if (alive) setFund(r ?? null) })
-      .catch(() => { /* 保留旧值 */ })
-    fetchAPI<{ more?: typeof val }>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-      .then((r) => { if (alive) setVal(r?.more ?? null) })
-      .catch(() => { /* 保留旧值 */ })
-    return () => { alive = false }
-  }, [symbol])
-  const row = (label: string, v: string) => (
-    <div className="flex justify-between text-[11px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono">{v}</span>
-    </div>
-  )
-  const fmtNum = (v: number | null | undefined, unit = '') =>
-    v == null ? '--' : `${v}${unit}`
+/**
+ * 带3 标签栏: `WORKBENCH_TABS` 六键(设计稿 §4.3), 复用通用件 `PageTabs`(既有视觉语言,
+ * 不引新样式), 点击写 `?tab=` 深链。本组件是本任务的正式产物, Task 17 不动它。
+ */
+function TabBar({ value, onChange }: { value: WorkbenchTab; onChange: (t: WorkbenchTab) => void }) {
   return (
-    <div className="rounded border border-border/60 p-2">
-      <div className="mb-1 flex items-center gap-1 text-[12px] font-semibold">
-        基本面 / 股本
-        {fund?.sub_new ? (
-          <span className="rounded bg-[--stock-up]/20 px-1 text-[9px] text-[--stock-up]">次新</span>
-        ) : null}
-      </div>
-      {fund?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{fund.note}</div> : null}
-      {row('PE(动)', fmtNum(val?.pe_dynamic))}
-      {row('PE(TTM)', fmtNum(val?.pe_ttm))}
-      {row('PB', fmtNum(val?.pb))}
-      {row('股息率', val?.dividend_yield != null ? `${val.dividend_yield}%` : '--')}
-      {row('流通股本', fund?.gb?.ltgb != null ? fmtNum(Math.round(fund.gb.ltgb / 1e4), '万') : '--')}
-      {row('总股本', fund?.gb?.zgb != null ? fmtNum(Math.round(fund.gb.zgb / 1e4), '万') : '--')}
-      {row('上市', fund?.listing?.listing_date ? fund.listing.listing_date : '--')}
-    </div>
+    <PageTabs
+      tabs={WORKBENCH_TABS.map((t) => ({ key: t.id, label: t.label }))}
+      value={value}
+      // 点击回传的是普通 string → 用 Task 1 的 parseTab 收敛回联合类型(非法值落 'l2')
+      onChange={(key) => onChange(parseTab(key))}
+      className="mt-3"
+    />
   )
 }
 
-function BlocksCard({ symbol }: { symbol: string }) {
-  const [data, setData] = useState<{ blocks: { code: string; name: string; type: string }[]; note?: string | null } | null>(null)
-  useEffect(() => {
-    let alive = true
-    fetchAPI<{ blocks: { code: string; name: string; type: string }[]; note?: string | null }>(
-      `/stocks/${encodeURIComponent(symbol)}/blocks`,
-    )
-      .then((r) => { if (alive) setData(r) })
-      .catch(() => { /* 保留旧值 */ })
-    return () => { alive = false }
-  }, [symbol])
-  const blocks = data?.blocks ?? []
+/** 选中标签的正文(**临时占位**, Task 17 替换为 6 个真实标签组件)。 */
+function TabPanel({ tab, symbol }: { tab: WorkbenchTab; symbol: string }) {
+  const label = WORKBENCH_TABS.find((t) => t.id === tab)?.label ?? tab
   return (
-    <div className="rounded border border-border/60 p-2">
-      <div className="mb-1 text-[12px] font-semibold">题材 / 板块</div>
-      {data?.note ? <div className="text-[10px] text-muted-foreground">{data.note}</div> : null}
-      {blocks.length === 0 && !data?.note ? (
-        <div className="text-[10px] text-muted-foreground">--</div>
-      ) : null}
-      <div className="flex flex-wrap gap-1">
-        {blocks.map((b) => (
-          <span key={b.code} className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80">
-            {b.name}
-            <span className="ml-0.5 text-[9px] text-muted-foreground">{b.type}</span>
-          </span>
-        ))}
-      </div>
+    <div className="mt-3 rounded border border-border/60 p-4 text-[12px] text-muted-foreground">
+      「{label}」建设中
+      <span className="ml-2 font-mono text-[11px]">{symbol}</span>
     </div>
   )
 }
 
 export default function StockWorkbench() {
   const { symbol = '' } = useParams()
-  if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少股票代码</div>
+  const [sp, setSp] = useSearchParams()
+  const type = normalizeType(sp.get('type'))
+  const tab = parseTab(sp.get('tab'))
+
+  /** 写单个 query(保留其它键, 如 ?type / ?tab 并存), 不跳页。 */
+  const setQuery = (key: 'type' | 'tab', value: string) =>
+    setSp((prev) => ({ ...Object.fromEntries(prev), [key]: value }))
+
+  if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
+
   return (
-    <div className="mx-auto flex max-w-[1500px] gap-3 p-3">
-      <div className="min-w-0 flex-1">
-        <div className="mb-1 text-[14px] font-semibold">{symbol}</div>
-        <div className="rounded border border-border/60 p-2">
-          <InteractiveKline symbol={symbol} market="CN" />
-        </div>
-      </div>
-      <div className="flex w-[320px] shrink-0 flex-col gap-2">
-        <DecisionPioneerCard symbol={symbol} market="CN" />
-        <ResonanceVerdictPanel symbol={symbol} />
-        <FundamentalCard symbol={symbol} />
-        <BlocksCard symbol={symbol} />
-        <L2Card symbol={symbol} />
-      </div>
+    <div className="mx-auto max-w-[1500px] p-3">
+      {/* 带1: 顶部信息带(吸顶, 三类型共享) */}
+      <HeaderBand
+        symbol={symbol}
+        market={MARKET}
+        type={type}
+        onTypeChange={(t) => setQuery('type', t)}
+        onGotoTab={(t) => setQuery('tab', t)}
+      />
+
+      {type !== 'stock' ? (
+        /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条) */
+        <IndexBoardHost type={type} symbol={symbol} />
+      ) : (
+        <>
+          {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡 */}
+          <div className="mt-3 flex gap-3">
+            <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
+              <KlineChart
+                symbol={symbol}
+                market={MARKET}
+                initialInterval="1d"
+                initialDays={120}
+                height={420}
+              />
+            </div>
+            <div className="w-[320px] shrink-0">
+              <QuickRail symbol={symbol} market={MARKET} />
+            </div>
+          </div>
+          {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
+          <TabBar value={tab} onChange={(t) => setQuery('tab', t)} />
+          <TabPanel tab={tab} symbol={symbol} />
+        </>
+      )}
     </div>
   )
 }

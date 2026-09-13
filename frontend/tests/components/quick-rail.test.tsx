@@ -141,6 +141,19 @@ describe('QuickRail 右栏速览', () => {
     expect(screen.getByText('次新')).toBeTruthy()
   })
 
+  it('取数收敛(Task 6): 首屏 /l2 只发一次, ②盘口与③基本面共用同一份 more', async () => {
+    // 收敛前 ② 自带 30s 轮询取数 + ③ 另发一条, 首屏同一端点两遍(spec §4.3「首屏过重视为未达标」)。
+    // 回归点: 谁再加回一条 /l2 → 本例如下断言失败。
+    const { container } = render(<QuickRail symbol="002636" market="CN" />)
+    await waitFor(() => expect(rowValue(container, '封单')).toBe('2300万'))
+    await waitFor(() => expect(rowValue(container, 'PE(TTM)')).toBe('28.56'))
+    const urls = mocks.fetchAPI.mock.calls.map((c) => String(c[0]))
+    expect(urls.filter((u) => u.includes('/l2'))).toHaveLength(1)
+    // ②③ 是同一份 state 的两个字段: more.pe_ttm 只从这一条响应里来(否则上面的值取不到)
+    expect(urls.filter((u) => u.includes('/fundamental'))).toHaveLength(1)
+    expect(urls.filter((u) => u.includes('/blocks'))).toHaveLength(1)
+  })
+
   it('题材/板块 chips 渲染 name + type', async () => {
     const { container } = render(<QuickRail symbol="002636" market="CN" />)
     await waitFor(() => expect(screen.getByText('半导体')).toBeTruthy())

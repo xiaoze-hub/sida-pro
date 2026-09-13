@@ -10,11 +10,13 @@ import DecisionCard from './DecisionCard'
  * 竖排四张「一眼看过」的卡(顺序即 spec §1.2 的 ①②③④):
  *   ① 数智决策   —— Task 4 的合并卡(三指标读数 + 共振判定, 全工作台**只此一处**);
  *   ② 盘口速览   —— `GET /stocks/{s}/l2`(通达信 snapshot + more_info), **30s 轮询**;
- *   ③ 基本面/股本 —— `GET /stocks/{s}/fundamental`(股本/次新) + `GET /stocks/{s}/l2` 的 `more.pe_ttm/pb`;
+ *   ③ 基本面/股本 —— `GET /stocks/{s}/fundamental`(股本/次新) + **复用 ② 的同一份 `/l2` `more.pe_ttm/pb`**
+ *                      (Task 6 收敛: 首屏 `/l2` 由本文件**唯一**的 `useL2` 发出, ②③ 共用同一 state —— 原先
+ *                      ③ 自带一次 `/l2` 取数, 首屏同一端点被打两遍, 违反 spec §4.3「首屏过重视为未达标」);
  *   ④ 题材/板块   —— `GET /stocks/{s}/blocks` chips。
  *
- * 由 `StockWorkbench.tsx` 内联的 `L2Card/FundamentalCard/BlocksCard` **搬迁精简**而来
- * (逐段挪, 不重写取数逻辑; 轮到 Task 6 重写该页时替换成引用本组件)。
+ * 由 `StockWorkbench.tsx`(改版前)内联的 `L2Card/FundamentalCard/BlocksCard` **搬迁精简**而来
+ * (逐段挪, 不重写取数逻辑)。Task 6 起该页右栏即引用本组件, 旧内联三卡已删除。
  *
  * 宽度: 本组件**不设宽**, 根节点只有 `flex flex-col gap-2` —— 320px 由页面外壳
  * (`w-[320px] shrink-0`)决定, 便于别处复用(指数/板块页不渲染本卡, 见 spec §1.3)。
@@ -91,6 +93,49 @@ function cnDataEnabled(market: string): boolean {
   return market === 'CN'
 }
 
+/**
+ * **唯一**的 `/stocks/{s}/l2` 取数(Task 6 收敛, 首屏一个端点只打一次)。
+ *
+ * 收敛前: ② 盘口速览(30s 轮询)与 ③ 基本面卡(一次性)各自 `useEffect` 里发一条 `/l2`,
+ * 首屏同一端点被请求两遍。现由本 hook 在 `QuickRail` 根部发**一条**(30s 轮询保留),
+ * ② 的 `snapshot` 与 ③ 的 `more.pe_ttm/pb` 共用同一 state 的两个字段。
+ *
+ * 纪律与原两处取数逐条一致(未改任何语义, 只把"发几次"从 2 收敛到 1):
+ *  - 仅「CN 标的」发(`cnDataEnabled`); 换股/换市场**先清旧值**(不把上一只票的盘口画到新标的上);
+ *  - 轮询失败**保留旧值**(stale-on-error), 不把失败渲染成 0/编造值;
+ *  - 卸载/换股时清 `setInterval` 并置 `alive=false`(弃掉在途响应)。
+ */
+function useL2(symbol: string, market: string): L2Resp | null {
+  const cn = cnDataEnabled(market)
+  const [l2, setL2] = useState<L2Resp | null>(null)
+
+  // 换股/换市场先清旧值(否则会把上一只票的盘口画到新标的上); 轮询失败不清, 以保 stale-on-error。
+  useEffect(() => {
+    setL2(null)
+  }, [symbol, market])
+
+  useEffect(() => {
+    if (!symbol || !cn) return
+    let alive = true
+    const load = async () => {
+      try {
+        const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
+        if (alive) setL2(r ?? null)
+      } catch {
+        /* 保留旧值(stale-on-error) */
+      }
+    }
+    void load()
+    const t = window.setInterval(() => void load(), L2_POLL_MS)
+    return () => {
+      alive = false
+      window.clearInterval(t)
+    }
+  }, [symbol, cn])
+
+  return l2
+}
+
 /** 卡片共用行(左标签 / 右等宽数值)。 */
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -135,6 +180,9 @@ function fmtShares(v: unknown): string {
 /**
  * ② 盘口速览: **封单 / 主力净额 + 五档买卖价量**, 30s 轮询(失败保留旧值)。
  *
+ * **纯展示**: `/l2` 的取数与轮询由容器 `QuickRail` 的 `useL2` 唯一持有(Task 6 收敛 ——
+ * 原先本卡自带一次取数, 与 ③ 基本面卡各打一条, 首屏同端点两遍), 本卡只消费 state。
+ *
  * **去重(控制器裁定)**: 「现价」(`snapshot.now`)与「涨停价」(`more.zt_price`)归**带1
  * `HeaderBand`**(顶行现价 / `band1.snapshot` 的 `limit_price`, spec 去重表 #9), 本卡
  * **不渲染**这两个数据点 —— 同一数据点全工作台只出现一次; 五档买卖价即本卡的价格上下文。
@@ -142,34 +190,7 @@ function fmtShares(v: unknown): string {
  * `L2Snapshot.now` / `L2More.zt_price` 的声明**保留**(本文件对 wire 形态的说明, 与同样
  * 未渲染的 `amount` 同例); 日后若要在此加价格行, 先回去重表重新裁定, 不要直接加。
  */
-function QuoteCard({ symbol, market }: { symbol: string; market: string }) {
-  const cn = cnDataEnabled(market)
-  const [l2, setL2] = useState<L2Resp | null>(null)
-
-  // 换股/换市场先清旧值(否则会把上一只票的盘口画到新标的上); 轮询失败不清, 以保 stale-on-error。
-  useEffect(() => {
-    setL2(null)
-  }, [symbol, market])
-
-  useEffect(() => {
-    if (!symbol || !cn) return
-    let alive = true
-    const load = async () => {
-      try {
-        const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-        if (alive) setL2(r ?? null)
-      } catch {
-        /* 保留旧值(stale-on-error) */
-      }
-    }
-    void load()
-    const t = window.setInterval(() => void load(), L2_POLL_MS)
-    return () => {
-      alive = false
-      window.clearInterval(t)
-    }
-  }, [symbol, cn])
-
+function QuoteCard({ l2 }: { l2: L2Resp | null }) {
   const s = l2?.snapshot ?? {}
   const m = l2?.more ?? {}
   const clock = asOfClock(l2?.as_of)
@@ -215,15 +236,20 @@ function QuoteCard({ symbol, market }: { symbol: string; market: string }) {
   )
 }
 
-/** ③ 基本面/股本(精简 3 行: PE(TTM) / PB / 股本) —— PE/PB 走 /l2 的 more, 股本走 /fundamental。 */
-function FundamentalCard({ symbol, market }: { symbol: string; market: string }) {
+/**
+ * ③ 基本面/股本(精简 3 行: PE(TTM) / PB / 股本)。
+ *
+ * PE/PB **不自己取数** —— 直接消费容器 `useL2` 那份 `/l2` 的 `more`(Task 6 收敛):
+ * 后端已在该端点含 PE/PB(见 `src/core/tdx_fundamental.py` 头注), 原先本卡另发一条
+ * `/l2`, 与 ② 盘口速览在同一首屏重复请求同一端点; 现共用同一 state。
+ * 股本仍走 `GET /stocks/{s}/fundamental`(该卡唯一的数据面)。
+ */
+function FundamentalCard({ symbol, market, more }: { symbol: string; market: string; more: L2More | null }) {
   const cn = cnDataEnabled(market)
   const [fund, setFund] = useState<FundamentalResp | null>(null)
-  const [more, setMore] = useState<L2More | null>(null)
 
   useEffect(() => {
     setFund(null)
-    setMore(null)
   }, [symbol, market])
 
   useEffect(() => {
@@ -231,10 +257,6 @@ function FundamentalCard({ symbol, market }: { symbol: string; market: string })
     let alive = true
     fetchAPI<FundamentalResp>(`/stocks/${encodeURIComponent(symbol)}/fundamental`)
       .then((r) => { if (alive) setFund(r ?? null) })
-      .catch(() => { /* 保留旧值 */ })
-    // PE/PB 复用 /l2 的 more(后端已含, 不新增 RPC —— 见 src/core/tdx_fundamental.py 头注)
-    fetchAPI<{ more?: L2More | null }>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-      .then((r) => { if (alive) setMore(r?.more ?? null) })
       .catch(() => { /* 保留旧值 */ })
     return () => { alive = false }
   }, [symbol, cn])
@@ -303,13 +325,15 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
 /**
  * 右栏速览卡(顺序即 spec §1.2): 数智决策 → 盘口速览 → 基本面/股本 → 题材/板块。
  * 数智决策**只在这里渲染一次**, 本文件不重复任何三指标/共振读数。
+ * `/l2` 只在容器层发**一条**(`useL2`, 30s 轮询), ②③ 两卡共用(Task 6 收敛)。
  */
 export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
+  const l2 = useL2(symbol, market)
   return (
     <div className="flex flex-col gap-2">
       <DecisionCard symbol={symbol} market={market} />
-      <QuoteCard symbol={symbol} market={market} />
-      <FundamentalCard symbol={symbol} market={market} />
+      <QuoteCard l2={l2} />
+      <FundamentalCard symbol={symbol} market={market} more={l2?.more ?? null} />
       <BlocksCard symbol={symbol} market={market} />
     </div>
   )
