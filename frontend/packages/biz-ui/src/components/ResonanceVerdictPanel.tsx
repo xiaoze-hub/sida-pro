@@ -46,6 +46,12 @@ interface AnalyzeResp {
 
 export interface ResonanceVerdictPanelProps {
   symbol: string
+  /**
+   * bare=true: 不出自己的标题(规则行的「三指标」标签) —— 供「数智决策」合并卡
+   * (workbench/DecisionCard) 合成, 标题由外层唯一承载。根部 `space-y-1.5` 是纯布局
+   * (无边框/底色/标题), 保留, 否则三灯行与 AI 行会贴在一起。默认 false 行为不变。
+   */
+  bare?: boolean
 }
 
 function lampClass(ok: boolean | undefined, known: boolean): string {
@@ -60,7 +66,7 @@ const VERDICT_CLASS: Record<string, string> = {
   无法判定: 'text-muted-foreground',
 }
 
-export default function ResonanceVerdictPanel({ symbol }: ResonanceVerdictPanelProps) {
+export default function ResonanceVerdictPanel({ symbol, bare = false }: ResonanceVerdictPanelProps) {
   const [rule, setRule] = useState<RuleResp | null>(null)
   const [ruleState, setRuleState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [ai, setAi] = useState<AnalyzeResp | null>(null)
@@ -104,7 +110,7 @@ export default function ResonanceVerdictPanel({ symbol }: ResonanceVerdictPanelP
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-3 text-[11px]">
-        <span className="text-muted-foreground">三指标</span>
+        {!bare ? <span className="text-muted-foreground">三指标</span> : null}
         <span className="inline-flex items-center gap-1">
           <span className={`h-2 w-2 rounded-full ${lampClass(hits[0], known)}`} />
           <span className={hits[0] ? 'text-stock-up' : 'text-muted-foreground'}>

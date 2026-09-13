@@ -49,6 +49,8 @@ describe('ResonanceVerdictPanel 三灯 + AI 判定', () => {
     })
     render(<ResonanceVerdictPanel symbol="300563" />)
     await waitFor(() => expect(screen.getByText(/趋势 G区间/)).toBeTruthy())
+    // 默认(bare 未传): 自己的「三指标」标题仍在 —— 既有调用点行为不变
+    expect(screen.getByText('三指标')).toBeTruthy()
     expect(screen.getByText(/强度 26.68\(大牛\)/)).toBeTruthy()
     expect(screen.getByText(/资金 2.30亿/)).toBeTruthy()
     expect(screen.getByText('规则: 强')).toBeTruthy()
@@ -77,5 +79,17 @@ describe('ResonanceVerdictPanel 三灯 + AI 判定', () => {
     await waitFor(() => expect(screen.getByText('数据缺失')).toBeTruthy())
     const btn = screen.getByText('AI 分析').closest('button') as HTMLButtonElement
     expect(btn.disabled).toBe(true)
+  })
+
+  it('bare 时不出自己的「三指标」标题(合并卡合成用), 三灯/AI 按钮仍在', async () => {
+    mocks.fetchAPI.mockImplementation(async (url: string) => {
+      if (String(url).includes('/analyze/')) return AI_OK
+      return RULE
+    })
+    render(<ResonanceVerdictPanel symbol="300563" bare />)
+    await waitFor(() => expect(screen.getByText(/趋势 G区间/)).toBeTruthy())
+    expect(screen.queryByText('三指标')).toBeNull()
+    expect(screen.getByText('规则: 强')).toBeTruthy()
+    expect(screen.getByText('AI 分析')).toBeTruthy()
   })
 })
