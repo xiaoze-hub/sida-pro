@@ -7,6 +7,33 @@
 
 ## 2026-09-13
 
+### feat(wb)-个股工作台 v2 三合一发版: 行情/盘口/旧详情 并入工作台 + 三类型内切 + 六标签 + 全站去重; v0.6.0
+
+**背景**: 老板原话「行情盘口内容和持仓个股详情内容才有重叠…工作台未改动之前, 点进去的盘中监测/技术指标买卖建议等信息没了, 就连工作台信息数智决策都是重复的」→ 拍板三件事: ① 行情页/盘口页并入工作台; ② 旧个股详情(9 tab)全量还原进工作台; ③ 去重。
+
+**交付**(分支 `feat/workbench-merge-20260913`, 46 commits; 设计 `docs/个股工作台v2三合一设计_20260913.md` / 计划 `…实现计划_20260913.md`):
+- **路由与入口**: `/stocks/:symbol?type=stock|index|board&tab=` 成个股唯一入口; 退役 `/forecast` `/quote` `/quote/:symbol` `/l2` `/index/:symbol` `/boards/:code`(全部 redirect, 不断链); 侧栏撤「盘口」、「行情」改指工作台默认上证指数; 热键 `g m`/移动底栏同步。旧 `Quote.tsx`(1069行)/`L2Orderbook.tsx`(295行) 已删, baseline 同步清理。
+- **三带布局**: 带1 顶部信息带(名称/价/类型切换 + 16 格快照行 + 技术指标买卖建议条) / 带2 主图 `KlineChart`(4图层+副图) + 右栏 `QuickRail`(数智决策合并卡 / 盘口速览 / 基本面精简 / 题材板块) / 带3 下部单层六标签。
+- **六标签**(复用 git `b49263c` 的 `insight/` 组件, 非重写): 盘口资金(十档/成品资金/演变/意图+封单成色/资金流水/暗盘TQ/筹码) · 建议(盘中监测 AI 建议+技术指标兜底+触发) · 基本面(财务股本/龙虎榜/两融/股东户数/分红/简介/加仓计算器) · 消息(公告+新闻) · 研究(AI报告+深度) · 预测(四模型内嵌)。
+- **指数/板块**: 既有 `IndexDetail`/`BoardDetail` 正文抽为 `IndexBody`/`BoardBody` 复用, 原页删除并 redirect。
+- **惰性**: 每标签自带 `InsightProvider`(`keys` 资源门控, T10 新增 `enabledKeys` —— 修复恢复组件"挂载即 13+ 请求"与"挂载 700ms 后真发 AI 作业+5s 轮询不清理"); 进工作台只取带1+带2, 换标签才取该标签数据。
+- **去重**: 按 `DATA_OWNERSHIP` 表逐点唯一归属(数智决策三指标+共振合并为一张卡; 主图统一 `KlineChart`; 盘口五档归标签; PE/PB 归带1+基本面; 题材板块归右栏; 封单成色归盘口资金); 专项审计测试精确计数 + 变异验证, **0 违规**。
+
+**本轮自检揪出并修复的真缺陷**(非本次引入者亦修):
+1. `type=index` 时带1 竟取 `/quotes/000001`(**个股平安银行**)并画其价 → 同码不同标的泄漏 → 非个股不再取/画个股快照。
+2. `useInsightData` 全量拉 + `triggerAutoAiSuggestion` 真发后端 AI 作业且轮询不清理 → 资源门控 + 卸载清理 + 在途竞态守卫。
+3. `keys:[]` 退化成非空集致"全关"仍启动 20s 刷新 → 真空集。
+4. `keys=['fundamentals']` 被内部 tab 二次门控而恒不取数 → 解耦为仅键门控 + 新增 `company` 键。
+5. `React.lazy` 永久缓存 rejection + lazy 实例放模块级常量 ⇒ 预测页「重试」永远不再发 `import()`, 一次分块失败即不可恢复 → 实例移入 `state`, 重试重建。
+6. `L2Tab` 取数失败被当成"无数据"且显示**本地自造原因**(违"不伪装") → 失败保留上次成功值 + 诚实文案; 顺带修 `orderbookOb`/`sealQuality`/`suggestions` 被 `fetchAPI` 30s GET 缓存吞掉刷新按钮的问题(`cacheMode:'reload'`)。
+7. **主图 L3 明盘分量恒 0**(既有真 bug): `KlineChart` 读 `open_net` 而后端 `fundSummary.fund_flow` 下发 `ming_net` → 抽 `lib/fund-bar.ts` 两图共用 `net=明+暗` + NaN 守卫。
+8. `hasPosition` 无真实源(持仓用户被静默按未持仓评分/加仓计算器被隐藏) → 接 `dashboardApi.portfolioSummary`, **三态**(`undefined`=未知)且显式「持仓态未知」标注, 绝不伪装 `false`。
+
+**门禁**: 前端 tsc / eslint / UI-RULES / vitest **361/361**(54 文件) 全绿; 后端 `pytest -m "not network"` **2273 passed / 7 failed**(7 项为既有 KI-055 baseline, 无新增回归)。
+**部署**: 纯前端 → 静态面(`docker cp dist→/app/static/` + VERSION + chown, **无重启**, 不杀回填)。
+**已知遗留**(见 KNOWN_ISSUES): `PanelLockToggle` 现已无生产调用方(保留: 小而有测试的可复用件); `useHasPosition` 挂载取一次不轮询(盘中持仓变更需刷新); `预测引擎` 未启动时 `/forecast/*` 503 为既有状态。
+- [tag v0.6.0]
+
 ### fix(wb)-工作台 v2 任务19 复审整改: 去重核对改「精确计数 + 逐面等数据」+ 两图共用资金柱 net + 持仓取数闸门 + 两处「持仓态未知」真组件用例
 
 - **F1(CRITICAL) 去重核对断言不再空过** —— `frontend/tests/components/workbench-dedup-audit.test.tsx` 原 7 例有洞: ②「主力净额」用 `toBeGreaterThanOrEqual(1)` 钉不住 spec 的"恰 2"; ①④⑦ 的**缺席**断言只等带1 渲染完就下结论 ⇒ 其余三面数据在途时**空过**(vacuously pass)。整改: 新增 `awaitAllSurfacesData()` —— **逐拥有面**在其面内 `findByText` 等**该面自己的**锚点(`band1`=涨停价 / `rail`=数智决策 / `l2`=封单成色 / `fundamental`=PE(TTM)), 之后的所有缺席断言才生效; 新增 `expectAtLeastOne()` —— 每条**存在**断言先证 `>=1`(点消失即先红)再钉**精确**次数; ② 改为 `l2` 恰 1 + **全屏总数恰 2**(带1 零出现, 无隐藏第 3 处); ⑤ 补上**带1 缺席**(原用例漏断言); ⑥ 除 proxy 字符串「数智决策」外, 加断真实标签「共振判定」与三灯读数行「趋势 …」的存在, 并逐面断言带1/l2/fundamental 零出现。
