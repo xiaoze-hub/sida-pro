@@ -12,17 +12,19 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    `GET /stocks/{s}/fundamental`; 股本与右栏**同一单位映射**(`QuickRail.fmtShares` 的亿/万双档);
  * ② **缺数据走 `--`**(8 格全 `--`), **不编造**(不写 0/不写猜测值); 取数**失败**另有中性文案且
  *    **不猜原因**(与"后端真的没数据"分开陈述);
- * ③ **龙虎榜/融资融券/股东户数**由 `FundamentalsPanel` 真渲染 —— 而它的取数**必须**同时满足
- *    `keys=['fundamentals']` 与 Provider 内部 `tab === 'fundamentals'`(**去掉本标签那句
- *    `setTab('fundamentals')` 该段就恒为「暂无基本面数据」**, 见文件头注);
- * ④ **公司简介/基本信息**由 `CompanyTab` 真渲染; 且**不列板块** —— 概念板块 chips 归右栏
- *    (去重表 #6), 故 `showConcepts={false}` 下 `概念板块` 与概念名都不出现;
+ * ③ **龙虎榜/融资融券/股东户数**由 `FundamentalsPanel` 真渲染 —— 取数只由 `keys={['fundamentals']}`
+ *    这一个键门控(Task 13 复审解耦后不再需要 Provider 内部 `tab === 'fundamentals'`, 故本标签
+ *    **没有** `setTab` 代置; 把 `tab` 的与条件加回去该段就恒为「暂无基本面数据」, 见
+ *    `tests/components/insight-provider-gating.test.tsx` 的变异用例);
+ * ④ **公司简介/基本信息**由 `CompanyTab` 真渲染(取数由新增的 `company` 键门控 —— 本标签
+ *    `keys={['fundamentals','company']}`, 不再直调 `loadCompany()`); 且**不列板块** —— 概念板块
+ *    chips 归右栏(去重表 #6), 故 `showConcepts={false}` 下 `概念板块` 与概念名都不出现;
  * ⑤ **加仓计算器只在 `hasPosition` 时挂载**, 未持仓既不渲染也不打 `/portfolio/summary`;
  * ⑥ **不把持仓显示成空仓**: 有 `hasPosition` 但取不到真实持仓数时给中性说明, **不代填 0**
  *    (复用组件 0 持仓会写「当前空仓 · 建仓测算」= 对持仓标的的假陈述);
- * ⑦ **惰性门控**: `keys=['fundamentals']` —— quote/moreInfo/darkFlowTq/klineSummary/klines/
- *    suggestions/news/history/deep 零调用; 本标签只打 3 个端点(`fundamentals-detail` + 自有的
- *    `/stocks/{s}/l2`、`/stocks/{s}/fundamental`; 持仓时 +`/portfolio/summary`)。
+ * ⑦ **惰性门控**: `keys=['fundamentals','company']` —— quote/moreInfo/darkFlowTq/klineSummary/klines/
+ *    suggestions/news/history/deep 零调用; 本标签只打 4 个端点(`fundamentals-detail` + `company` +
+ *    自有的 `/stocks/{s}/l2`、`/stocks/{s}/fundamental`; 持仓时 +`/portfolio/summary`)。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*`/
  * `FundamentalsPanel`/`CompanyTab`/`AddPositionCalculator` 全走真实代码。
@@ -241,10 +243,11 @@ describe('Task 13 基本面: 财务/股本行(真数据, 同一套映射)', () =
 })
 
 describe('Task 13 基本面: 龙虎榜/融资融券/股东户数(复用 FundamentalsPanel)', () => {
-  it('三段真渲染, 且取数受 keys ∧ 内部 tab 双条件门控', async () => {
+  it('三段真渲染(键 fundamentals 只按键即取, 标签不做任何 setTab)', async () => {
     renderTab()
 
-    // 该段取数必须真的发生 —— 去掉 `setTab('fundamentals')` 时这里恒为「暂无基本面数据」
+    // 该段取数必须真的发生 —— 它只由 `keys=['fundamentals']` 门控(Task 13 复审解耦):
+    // 若把 `tab === 'fundamentals'` 的与条件加回去, 这里恒为「暂无基本面数据」(内部 tab 恒 'overview')
     await waitFor(() => expect(mocks.fundamentalsDetail).toHaveBeenCalledTimes(1))
     expect(mocks.fundamentalsDetail).toHaveBeenCalledWith('002636', 'CN')
 
@@ -337,11 +340,12 @@ describe('Task 13 基本面: 加仓计算器(仅持仓; 且不把持仓显示成
   })
 })
 
-describe('Task 13 基本面: 惰性门控(keys=[fundamentals])', () => {
+describe('Task 13 基本面: 惰性门控(keys=[fundamentals, company])', () => {
   it('只打本标签的端点, 其余键一个都不发', async () => {
     renderTab()
 
     await waitFor(() => expect(mocks.fundamentalsDetail).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.company).toHaveBeenCalled())
     // 标签外端点零调用
     expect(mocks.quote).not.toHaveBeenCalled()
     expect(mocks.moreInfo).not.toHaveBeenCalled()

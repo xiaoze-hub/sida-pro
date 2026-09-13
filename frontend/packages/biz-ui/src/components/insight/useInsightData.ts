@@ -39,6 +39,12 @@ import type {
  *
  * 语义: `keys === undefined` = **全开**(与不传该参数的旧行为逐字相同);
  *       `keys` 为空集 = **全关**(一个端点都不取, 自动刷新亦不启动)。
+ *
+ * 2026-09-13 解耦裁定(Task 13 复审): `deep`/`fundamentals`/`company` 三个键**只按键判定**,
+ * **不再**与内部 `tab` 取与 —— 否则宿主只传 `keys` 时(工作台标签没有旧模态的标签栏, 内部
+ * `tab` 恒为 `'overview'`)该键等于失效, 宿主只能 `setTab(...)` 代置共享的内部状态(会引起
+ * `refreshForAuto` 等无关的 tab 分支副作用)。内部的 `tab` 仍保留给**旧模态语义**(自动刷新
+ * 的按标签收敛)与恢复组件的 `setTab` 使用; 每个键的自动刷新判定见 `refreshForAuto`。
  */
 export type ResourceKey =
   | 'core'          // 带1+带2: quote / moreInfo / darkFlowTq / klineSummary / klines(36d) / portfolioSummary
@@ -47,8 +53,9 @@ export type ResourceKey =
   | 'announcements' // /news?source=eastmoney(含级联兜底)
   | 'suggestions'   // /suggestions
   | 'reports'       // /history x3 agent(含全局兜底)
-  | 'deep'          // tradingAgents 深度分析(另受内部 tab==='deep' 约束)
-  | 'fundamentals'  // fundamentalsApi.detail(另受内部 tab==='fundamentals' 约束)
+  | 'deep'          // tradingAgents 深度分析(getLatestForStock + getHistoryComparison)
+  | 'fundamentals'  // fundamentalsApi.detail(龙虎榜/两融/股东户数/分红/事件日历)
+  | 'company'       // insightApi.company —— /quotes/{s}/company(公司简介/基本信息)
 
 /** 单键判定: `keys` 缺省 = 全开。 */
 export function isResourceEnabled(keys: ReadonlySet<ResourceKey> | undefined, key: ResourceKey): boolean {
@@ -510,7 +517,12 @@ const refreshForAuto = useCallback(async () => {
   if (isResourceEnabled(enabledKeys, 'reports') && (tab === 'overview' || tab === 'reports')) {
     tasks.push(loadReports())
   }
-  if (tab === 'company') {
+  // 自动刷新仍保留「按标签收敛」(20s 周期重取是可选行为, 与首拉的键门控正交):
+  // `company`/`fundamentals` 只在内部 tab 命中时随 tick 重取 —— 工作台标签的 `tab` 恒为
+  // `'overview'`(EOD 数据, 无新鲜度承诺, 不随 tick 重取; 需要重取走 Provider 的手动刷新)。
+  // `company` 分支原先是**无键门控**的(任何键集下 tab==='company' 都会取), 2026-09-13 一并补上
+  // 键判定(缺省 undefined = 全开 ⇒ 旧行为不变)。
+  if (isResourceEnabled(enabledKeys, 'company') && tab === 'company') {
     tasks.push(loadCompany())
   }
   if (isResourceEnabled(enabledKeys, 'fundamentals') && tab === 'fundamentals') {
@@ -560,23 +572,36 @@ useEffect(() => {
   loadCore()
 }, [props.open, symbol, market, enabledKeys, loadCore])
 
-// 切到「深度」tab 时按需拉取(仅首次)
+// `deep` 键启用即取(**只按键判定**, 不再要求内部 tab==='deep' —— 见 ResourceKey 头注):
+// 宿主(工作台「研究/预测」等标签)没有旧模态标签栏, 内部 `tab` 恒为 'overview'。
 useEffect(() => {
   if (!props.open || !symbol) return
   if (!isResourceEnabled(enabledKeys, 'deep')) return
-  if (tab === 'deep' && !deepLoaded && !deepLoading) {
+  if (!deepLoaded && !deepLoading) {
     loadDeepResult()
   }
-}, [tab, props.open, symbol, enabledKeys, deepLoaded, deepLoading, loadDeepResult])
+}, [props.open, symbol, enabledKeys, deepLoaded, deepLoading, loadDeepResult])
 
-// 切到「基本面」tab 时按需拉取(仅首次; 失败也置 loaded, 避免反复请求 404)
+// `fundamentals` 键启用即取(**只按键判定**, 不再要求内部 tab==='fundamentals' —— 见 ResourceKey
+// 头注; Task 13 复审裁定)。失败也置 loaded, 避免反复请求 404。
 useEffect(() => {
   if (!props.open || !symbol) return
   if (!isResourceEnabled(enabledKeys, 'fundamentals')) return
-  if (tab === 'fundamentals' && !fundamentalsLoaded && !fundamentalsLoading) {
+  if (!fundamentalsLoaded && !fundamentalsLoading) {
     loadFundamentals()
   }
-}, [tab, props.open, symbol, enabledKeys, fundamentalsLoaded, fundamentalsLoading, loadFundamentals])
+}, [props.open, symbol, enabledKeys, fundamentalsLoaded, fundamentalsLoading, loadFundamentals])
+
+// `company` 键启用即取(Task 13 复审新增的键 —— 此前 `/quotes/{s}/company` **没有任何键**,
+// 只由 `refreshForAuto` 的 `tab === 'company'` 分支触发 ⇒ 无旧模态标签栏的宿主只能直调
+// `loadCompany()`; 现在按键门控, 与其它键同形)。幂等由 `loadCompany` 自身的
+// `if (companyInfo) return` 早退保证(成功后 `companyInfo` 变化 → 本 effect 重跑 → 早退,
+// 不再发请求也不改状态 ⇒ 无循环); 换标的由宿主的 `key={symbol}` 重挂载保证。
+useEffect(() => {
+  if (!props.open || !symbol) return
+  if (!isResourceEnabled(enabledKeys, 'company')) return
+  loadCompany()
+}, [props.open, symbol, enabledKeys, loadCompany])
 
 useEffect(() => {
   if (!props.open || !symbol) return

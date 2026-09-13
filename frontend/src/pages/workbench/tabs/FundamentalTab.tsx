@@ -34,23 +34,18 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  *  ①②③ 的**渲染**全部复用恢复组件(本文件零重写其内部逻辑); ④ 复用既有 `AddPositionCalculator`。
  *  本文件自建的只有「财务/股本行」的取值映射与降级文案(该行在恢复组件里不存在对应组件)。
  *
- * 取数键与两处 provider 接线(说明「为什么需要这两步」, 均**未新增 key、未新增 API**):
+ * 取数键与两处 provider 接线(**只传 `keys`, 无任何 `setTab` / 直调取数**):
  *  1. `keys={['fundamentals']}` —— 门控 `/market-data/fundamentals-detail`(spec §4.3 惰性);
- *  2. **`setTab('fundamentals')`** —— 关键: `useInsightData` 里该端点的取数条件是
- *     `isResourceEnabled(keys,'fundamentals') && tab === 'fundamentals'`(两条件的**与**), 而
- *     provider 的**内部** `tab` 默认 `'overview'`、且只有启用 `core` 键的挂载 effect 才会重置它 ——
- *     只传 `keys` 时该 effect 不会点火, 屏上会恒为「暂无基本面数据」。工作台没有旧模态的标签栏,
- *     故由本标签在挂载时代它声明「当前视图 = 基本面」(用 provider 暴露的 `setTab`, 非自建取数)。
- *     代价(照实记录): provider 的 20s 自动刷新会顺带重取该端点(数据为 EOD 口径, 属冗余但无害;
- *     且 `fetchAPI` 的 30s GET 缓存多数 tick 直接命中), 且 `fundamentalsLoading` 会在后台刷新时
- *     置真 —— 故传给 `FundamentalsPanel` 的是 `fundamentalsLoading && !fundamentals`(仅**首**拉
- *     显示「加载中...」, 后台刷新保留屏上已有数据, 不打断阅读; 与 L2Tab 的 stale-on-error 同旨)。
- *     更干净的根治是让 `fundamentals` 键**解耦**内部 `tab`(跨任务改 biz-ui 的 API 面, 本任务不扩)。
- *  3. **公司数据**: `/quotes/{s}/company` **没有任何资源键**(`loadCompany` 只在
- *     `tab === 'company'` 的自动刷新分支里被调用, 且与上一步要的 `tab === 'fundamentals'` 互斥),
- *     故本标签在挂载时直接调 provider 暴露的 `loadCompany()`(仍走它自己的 `companyLoading`/
- *     `companyInfo` 状态与错误静默降级, 非自建 fetch)。**未加新键**(见 task-13-report concern)。
- *  4. `key={symbol}` 挂在 `InsightProvider` 上 —— 换标的时整棵 provider 重挂载: 否则
+ *  2. `keys={['company']}` —— 门控 `/quotes/{s}/company`(公司简介/基本信息)。
+ *  说明(Task 13 复审已把两处历史遗留一并解耦): 本标签**最初**的写法是 `keys={['fundamentals']}`
+ *  + 挂载时 `setTab('fundamentals')`(当时 `useInsightData` 里该端点的取数条件是
+ *  `isResourceEnabled(keys,'fundamentals') && tab === 'fundamentals'` 两条件的**与**, 而工作台没有
+ *  旧模态的标签栏, 内部 `tab` 恒为 `'overview'` ⇒ 只传 `keys` 时屏上恒为「暂无基本面数据」),
+ *  公司数据则因为**没有任何资源键**而在挂载时直调 `loadCompany()`。两处都是**绕过** Provider 门控的
+ *  变通: `setTab` 会改写 Provider 的共享内部状态(并顺带点亮 `refreshForAuto` 的**别的** tab 分支);
+ *  直调取数不受任何键约束。现 Provider 已把 `deep`/`fundamentals`/`company` 三个键**解耦**内部
+ *  `tab`(只按键判定), 故本标签只声明键集即可, 不碰 Provider 的任何内部状态、不直调任何取数函数。
+ *  3. `key={symbol}` 挂在 `InsightProvider` 上 —— 换标的时整棵 provider 重挂载: 否则
  *     `fundamentalsLoaded`(无 `core` 键时不会被重置)与 `companyInfo`(`loadCompany` 有
  *     `if (companyInfo) return` 早退)会把**上一只票**的基本面/公司数据画到新标的上。
  *
@@ -71,8 +66,12 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  * `TabPanel` 按 `?tab=` 挂载); 不新增 biz-ui 依赖方向。
  */
 
-/** 门控键: 模块级常量 —— 每帧新建数组会换引用(Provider 内部虽按内容签名记忆化, 此为防御性收敛)。 */
-const FUNDAMENTAL_TAB_KEYS = ['fundamentals'] as const
+/**
+ * 门控键: 模块级常量 —— 每帧新建数组会换引用(Provider 内部虽按内容签名记忆化, 此为防御性收敛)。
+ * `fundamentals` = `/market-data/fundamentals-detail/{s}`; `company` = `/quotes/{s}/company`
+ * (Task 13 复审新增的键, 见文件头注 §「取数键」)。
+ */
+const FUNDAMENTAL_TAB_KEYS = ['fundamentals', 'company'] as const
 
 /* ------------------------------------------------------------------ *
  * 后端契约(仅取本页用到的字段; 缺失一律可选, 由渲染层走 '--')
@@ -388,23 +387,9 @@ function FundamentalTabBody({
   market: string
   hasPosition?: boolean
 }) {
-  const { setTab, loadCompany, fundamentals, fundamentalsLoading, fundamentalsLoaded } = useInsight()
+  const { fundamentals, fundamentalsLoading, fundamentalsLoaded } = useInsight()
   const snap = useCnSnapshot(symbol, market)
   const cn = market === 'CN'
-
-  // 见文件头注「取数键与两处 provider 接线」第 2 条: 该端点的取数条件是 keys ∧ 内部 tab。
-  useEffect(() => {
-    setTab('fundamentals')
-  }, [setTab])
-
-  // 见文件头注第 3 条: `/quotes/{s}/company` **没有任何资源键**, `loadCompany` 只在
-  // `tab === 'company'` 的自动刷新分支里被调用(与本标签要的 `tab === 'fundamentals'` 互斥),
-  // 故由本标签在挂载时直接调 provider 暴露的 `loadCompany()`(取数/状态/降级全在 provider 内)。
-  // 依赖抖动说明: 成功后 `companyInfo` 变化会让 `loadCompany` 换引用 → 本 effect 再跑一次 →
-  // 命中 `if (companyInfo) return` 早退(不再发请求, 也不改状态 ⇒ 无循环)。
-  useEffect(() => {
-    void loadCompany()
-  }, [loadCompany])
 
   return (
     <div className="mt-1 space-y-3 text-[12px]" data-testid="fundamental-tab">
@@ -422,7 +407,8 @@ function FundamentalTabBody({
         title="龙虎榜 · 融资融券 · 股东户数"
         hint="GET /market-data/fundamentals-detail/{s}(含分红/事件日历; 无数据的段不渲染)"
       >
-        {/* 后台刷新(provider 20s 节奏)时不把已有数据换成「加载中...」, 仅首拉显示 */}
+        {/* 首拉在途才显「加载中...」; 已有数据时不清屏(手动刷新/未来 tab 驱动的重取也走这条:
+            后台重取不把屏上数据换成占位 —— 与 L2Tab 的 stale-on-error 同旨) */}
         <FundamentalsPanel
           data={fundamentals}
           loading={fundamentalsLoading && !fundamentals}
@@ -441,10 +427,11 @@ function FundamentalTabBody({
 }
 
 /**
- * 标签入口。`keys={['fundamentals']}`: 只启用 `/market-data/fundamentals-detail` 一个键
- * (quote/moreInfo/darkFlowTq/klineSummary/klines/portfolioSummary/watchlist/news/announcements/
- * suggestions/reports/deep 一个都不发; 本标签的另两个端点 `/stocks/{s}/l2`、`/stocks/{s}/fundamental`
- * 是 CN 专有、按需直连)。`key={symbol}`: 换标的整体重挂载(见头注第 4 条)。
+ * 标签入口。`keys={['fundamentals','company']}`: 只启用 `/market-data/fundamentals-detail`(龙虎榜/
+ * 两融/股东户数)与 `/quotes/{s}/company`(公司简介/基本信息)两个键 —— quote/moreInfo/darkFlowTq/
+ * klineSummary/klines/portfolioSummary/watchlist/news/announcements/suggestions/reports/deep
+ * 一个都不发; 本标签的另两个端点 `/stocks/{s}/l2`、`/stocks/{s}/fundamental` 是 CN 专有、按需直连
+ * (不经 Provider 键表)。`key={symbol}`: 换标的整体重挂载(见头注第 3 条)。
  */
 export default function FundamentalTab({
   symbol,

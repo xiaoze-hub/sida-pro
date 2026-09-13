@@ -18,7 +18,13 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ④ **`keys: []` 全关 = 零请求, 且 20s 自动刷新 interval 根本不装**; 以及**卸载后 5s 轮询停止**
  *   (修复前该 interval 只在 125s 的 setTimeout 里清);
  * ⑤ **复审修复: `triggerAgent` 在途时卸载 ⇒ 续体不装轮询**(修复前 `await` 之后仍会
- *   `setInterval` + 立即 `loadSuggestions()`, 且没有任何东西会清它, 最长 ~125s 空转)。
+ *   `setInterval` + 立即 `loadSuggestions()`, 且没有任何东西会清它, 最长 ~125s 空转);
+ * ⑥ **Task 13 复审解耦: `deep`/`fundamentals`/`company` 三个键只按键判定** —— 宿主(工作台标签)
+ *   没有旧模态的标签栏, 内部 `tab` 恒为 `'overview'`; 修复前 `fundamentals` 的取数条件是
+ *   `keys.has('fundamentals') && tab === 'fundamentals'`(`deep` 同形), `/quotes/{s}/company`
+ *   则**根本没有键**(只在 `refreshForAuto` 的 `tab === 'company'` 分支里取)。本文件的 Harness
+ *   **从不**调用 `setTab` ⇒ 这三例就是对"只传 keys 就够"的直接证明: 把 `tab` 的与条件加回去,
+ *   `keys:['fundamentals']` / `keys:['deep']` 两例必定零调用而失败。
  *
  * 说明: mock 的是**网络层**(`@panwatch/api`), Provider/两个 hook 走真实代码;
  * 上下文消费者用真组件 `Probe`(读 `useInsight()`), 无 Provider 时 `useInsight()` 会 throw。
@@ -134,10 +140,34 @@ const ALL_OTHER_ENDPOINTS = [
   ['insightApi.news (news)', mocks.news],
   ['insightApi.suggestions (suggestions)', mocks.suggestions],
   ['insightApi.history (reports/news 兜底)', mocks.history],
+  ['insightApi.company (company)', mocks.company],
   ['tradingAgentsApi.getLatestForStock (deep)', mocks.getLatestForStock],
   ['tradingAgentsApi.getHistoryComparison (deep)', mocks.getHistoryComparison],
   ['fundamentalsApi.detail (fundamentals)', mocks.fundamentalsDetail],
 ] as const
+
+/** Task 13 复审新增用例的共用断言: `core` 的六个端点一个都没发(未启用 `core` 键)。 */
+function expectCoreEndpointsIdle() {
+  for (const [label, fn] of [
+    ['insightApi.quote (core)', mocks.quote],
+    ['insightApi.moreInfo (core)', mocks.moreInfo],
+    ['insightApi.darkFlowTq (core)', mocks.darkFlowTq],
+    ['insightApi.klineSummary (core)', mocks.klineSummary],
+    ['insightApi.klines (core)', mocks.klines],
+    ['insightApi.portfolioSummary (core)', mocks.portfolioSummary],
+  ] as const) {
+    expect(fn, label).not.toHaveBeenCalled()
+  }
+}
+
+/** 除 `allowed`(本用例要断言"被调用"的那几个)外, 所有端点(含 core)零调用。 */
+function expectIdleExcept(...allowed: readonly unknown[]) {
+  expectCoreEndpointsIdle()
+  for (const [label, fn] of ALL_OTHER_ENDPOINTS) {
+    if ((allowed as readonly unknown[]).includes(fn)) continue
+    expect(fn, label).not.toHaveBeenCalled()
+  }
+}
 
 describe('Task 10 门控: keys=[\'core\'] 只取带1+带2 的端点', () => {
   it('core 6 端点各 1 次; 下部标签端点与自动 AI 作业零调用', async () => {
@@ -180,11 +210,56 @@ describe('Task 10 门控: 默认(不传 keys)= 全开, 旧行为不变', () => {
     expect(mocks.news).toHaveBeenCalled()
     expect(mocks.suggestions).toHaveBeenCalled()
     expect(mocks.history).toHaveBeenCalled()
-    // deep / fundamentals 仍受内部 tab 约束(不动 = 预期), 故此处不断言其被调用
+    // deep / fundamentals / company 缺省 = 全开 ⇒ 挂载即取(Task 13 复审解耦后不再受内部 tab 约束;
+    // 旧行为里这三者要内部 tab 命中旧模态标签栏才会取, 而旧模态壳已退役、无 undefined 调用方)。
+    await waitFor(() => expect(mocks.fundamentalsDetail).toHaveBeenCalledTimes(1))
+    expect(mocks.company).toHaveBeenCalledTimes(1)
+    expect(mocks.getLatestForStock).toHaveBeenCalledTimes(1)
+    expect(mocks.getHistoryComparison).toHaveBeenCalledTimes(1)
     // 自动 AI 作业照旧(未持仓 + holding 已加载)
     await act(async () => { await new Promise(r => setTimeout(r, 900)) })
     expect(mocks.triggerAgent).toHaveBeenCalledTimes(1)
     expect(mocks.triggerAgent.mock.calls[0][1]).toBe('intraday_monitor')
+  })
+})
+
+describe('Task 13 复审解耦: keys=[\'fundamentals\'] 只按键即取(无需任何 setTab)', () => {
+  it('fundamentalsApi.detail 恰好 1 次; 其余端点零调用', async () => {
+    // 本 Harness **不调用** `setTab` ⇒ Provider 内部 tab 恒为 'overview'(= 工作台标签的真实处境)。
+    render(<Harness keys={['fundamentals']} />)
+    expect(await waitForProbe()).toBeTruthy()
+
+    await waitFor(() => expect(mocks.fundamentalsDetail).toHaveBeenCalledTimes(1))
+    expect(mocks.fundamentalsDetail).toHaveBeenCalledWith('000001', 'CN')
+
+    // 只有该键的端点被取: core 六端点、company、deep、news/suggestions/reports/watchlist 全零
+    expectIdleExcept(mocks.fundamentalsDetail)
+  })
+})
+
+describe('Task 13 复审解耦: keys=[\'company\'] 取 /quotes/{s}/company(新键)', () => {
+  it('insightApi.company 恰好 1 次; 其余端点零调用', async () => {
+    render(<Harness keys={['company']} />)
+    expect(await waitForProbe()).toBeTruthy()
+
+    // 修复前该端点**没有任何键**, 只在 refreshForAuto 的 tab==='company' 分支里取 ⇒ 这里必定 0 次
+    await waitFor(() => expect(mocks.company).toHaveBeenCalledTimes(1))
+    expect(mocks.company).toHaveBeenCalledWith('000001', 'CN')
+
+    expectIdleExcept(mocks.company)
+  })
+})
+
+describe('Task 13 复审解耦: keys=[\'deep\'] 只按键即取', () => {
+  it('tradingAgents 两个端点各 1 次; 其余端点零调用', async () => {
+    render(<Harness keys={['deep']} />)
+    expect(await waitForProbe()).toBeTruthy()
+
+    // 修复前 `tab === 'deep'` 与条件不满足(tab 恒 'overview')⇒ 这里必定 0 次
+    await waitFor(() => expect(mocks.getLatestForStock).toHaveBeenCalledTimes(1))
+    expect(mocks.getHistoryComparison).toHaveBeenCalledTimes(1)
+
+    expectIdleExcept(mocks.getLatestForStock, mocks.getHistoryComparison)
   })
 })
 
