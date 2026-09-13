@@ -1,4 +1,4 @@
-import { fetchAPI } from './client'
+import { fetchAPI, type ApiRequestOptions } from './client'
 
 type QueryValue = string | number | boolean | null | undefined
 
@@ -34,17 +34,30 @@ export const insightApi = {
   decision: <T>(symbol: string, market: string = 'CN') =>
     fetchAPI<T>(`/decision/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`),
 
-  /** L2 盘口 OB 失衡(thsdk 20档, 含十档买卖额/ob_series/事件/幽灵单; 不可用时 available=false) */
-  orderbookOb: <T>(symbol: string) =>
-    fetchAPI<T>(`/orderbook-ob?symbol=${encodeURIComponent(symbol)}`),
+  /**
+   * L2 盘口 OB 失衡(thsdk 20档, 含十档买卖额/ob_series/事件/幽灵单; 不可用时 available=false)。
+   * 实时端点: 默认 `cacheMode:'reload'` —— 跳过 `fetchAPI` 的 30s GET 内存缓存,
+   * 否则手动刷新在 30s 内是空操作、30s 轮询会命中上一次轮询写下的缓存(真实取数退化成 ~60s)。
+   */
+  orderbookOb: <T>(symbol: string, options?: ApiRequestOptions) =>
+    fetchAPI<T>(`/orderbook-ob?symbol=${encodeURIComponent(symbol)}`, {
+      ...options,
+      cacheMode: options?.cacheMode ?? 'reload',
+    }),
 
   /** 股票检索(代码/名称模糊, 后端 /api/stocks/search) */
   searchStocks: <T>(q: string) =>
     fetchAPI<T>(`/stocks/search?q=${encodeURIComponent(q)}`),
 
-  /** 封单成色(批次A, 2026-09-06: 涨停封单撤单率/成色, 盘中60s采样; 无数据 available=false) */
-  sealQuality: <T>(symbol: string) =>
-    fetchAPI<T>(`/seal-quality/${encodeURIComponent(symbol)}`),
+  /**
+   * 封单成色(批次A, 2026-09-06: 涨停封单撤单率/成色, 盘中60s采样; 无数据 available=false)。
+   * 实时端点: 同 `orderbookOb`, 默认跳过 30s GET 缓存(`cacheMode:'reload'`)。
+   */
+  sealQuality: <T>(symbol: string, options?: ApiRequestOptions) =>
+    fetchAPI<T>(`/seal-quality/${encodeURIComponent(symbol)}`, {
+      ...options,
+      cacheMode: options?.cacheMode ?? 'reload',
+    }),
 
   klines: <T>(symbol: string, params: { market: string; days?: number; interval?: string }) =>
     fetchAPI<T>(
@@ -55,16 +68,26 @@ export const insightApi = {
       })
     ),
 
+  /**
+   * AI 建议池(`/suggestions/{symbol}`, 含「包含过期」开关)。
+   * 复审 Finding 2(2026-09-13): 默认跳过 `fetchAPI` 的 30s GET 缓存(`cacheMode:'reload'`,
+   * 同 `orderbookOb`/`sealQuality`)。建议由 AI 作业在**提交之后**产出 —— 触发按钮后的立即刷新
+   * 与 5s 轮询若命中缓存, 会一路返回**触发前**的旧列表(最长 30s), 用户看不到新建议
+   * ⇒ 与 UI 承诺的「新建议通常 5-15 秒出现」不符、且该承诺不可验证。
+   * 调用方仍可用 `cacheMode:false` / 数字 TTL 覆盖。
+   */
   suggestions: <T>(
     symbol: string,
-    params: { market?: string; limit?: number; include_expired?: boolean }
+    params: { market?: string; limit?: number; include_expired?: boolean },
+    options?: ApiRequestOptions
   ) =>
     fetchAPI<T>(
       withQuery(`/suggestions/${encodeURIComponent(symbol)}`, {
         market: params.market,
         limit: params.limit,
         include_expired: params.include_expired,
-      })
+      }),
+      { ...options, cacheMode: options?.cacheMode ?? 'reload' }
     ),
 
   news: <T>(params: Record<string, QueryValue>) => fetchAPI<T>(withQuery('/news', params)),

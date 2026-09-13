@@ -1,18 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Layers, RefreshCw } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import { safeFixed } from '@/lib/format'
 
 /**
- * 板块详情页(2026-08-20, v0.3.0) 路由 /boards/:blockCode。
- * 依赖:
- *   GET /api/boards/{block_code}             板块详情(今日 change_pct / fund_net / volume)
- *   GET /api/boards/{block_code}/constituents 成分股(通达信实时 / thsdk 实时)
- *   GET /api/boards/rotation?days=5          板块轮动排序(取 Top5 横条 + 本板块 5 日涨幅)
- * 口径(方案B 2026-09-10, 老板拍板):
+ * 板块正文(Task 7, 三合一 spec §1.3): 从 `pages/BoardDetail.tsx` **原样搬移**的取数与渲染。
+ *
+ * 归属 `packages/biz-ui/src/components/workbench/`(计划 §文件结构): 正文只依赖
+ * `@panwatch/api` / `@panwatch/biz-ui/lib/stock-colors` / `@/lib/format` —— 后者的 biz-ui → `@/lib/*`
+ * 依赖是本仓既有形态(`kline-summary-dialog.tsx:6`、`workbench/HeaderBand.tsx:8`), 包边界不新开边。
+ * (兄弟 `IndexBody` 需 `@/components/ErrorBanner`(app 层), 故落在 `src/pages/workbench/`。)
+ *
+ * 与旧页的差异(仅两处, 均非业务逻辑):
+ *  1. **去掉页面骨架**(返回按钮/标题/刷新): spec §1.3 末条「抽取前的页面骨架并入共享 HeaderBand,
+ *     避免重复」—— 工作台带1 提供类型切换 + 刷新(刷新经 `onRefresh` 广播到本正文); **本正文
+ *     自己拥有板块名称与数值**(`/boards/{code}`)—— 带1 对 `type !== 'stock'` **不取**
+ *     `/quotes/{s}`(同代码 = 另一标的)也不渲染名称/现价, 见 `HeaderBand` 头注「同码不同标的闸门」;
+ *  2. 数字格式化改走 `@/lib/format` 的 safe* 系列 (项目红线 #6 / R6 禁裸 toFixed):
+ *     每处外部守卫不变, 输出字符串逐字相同。
+ *
+ * 板块详情(spec 口径不变, 2026-08-20 v0.3.0 / 方案B 2026-09-10):
+ *   GET /boards/{code}              板块详情(今日 change_pct / fund_net / volume)
+ *   GET /boards/{code}/constituents 成分股(通达信实时 / thsdk 实时)
+ *   GET /boards/rotation?days=5     板块轮动排序(取 Top5 横条 + 本板块 5 日涨幅)
  *   - 通达信板块(88xxxx.SH): 今日涨跌幅/主力资金/成交额 + 成分股涨幅 均为**通达信客户端实时**
  *     (get_pricevol + AMO/SUPAMO 公式批量, 本地无配额); 资金为"通达信主力资金"口径,
  *     与 thsdk 主力净流入定义不同, 不混用。
@@ -84,13 +95,13 @@ function fmtWan(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '--'
   const abs = Math.abs(v)
   const sign = v > 0 ? '+' : v < 0 ? '-' : ''
-  if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(2)}亿`
-  return `${sign}${(abs / 1e4).toFixed(0)}万`
+  if (abs >= 1e8) return `${sign}${safeFixed(abs / 1e8, 2)}亿`
+  return `${sign}${safeFixed(abs / 1e4, 0)}万`
 }
 
 function fmtPct(v: number | null | undefined, plus = true): string {
   if (v == null || !Number.isFinite(v)) return '--'
-  return `${plus && v > 0 ? '+' : ''}${v.toFixed(2)}%`
+  return `${plus && v > 0 ? '+' : ''}${safeFixed(v, 2)}%`
 }
 
 function pctColor(v: number | null | undefined): string {
@@ -99,8 +110,7 @@ function pctColor(v: number | null | undefined): string {
   return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
-export default function BoardDetailPage() {
-  const { blockCode } = useParams<{ blockCode: string }>()
+export default function BoardBody({ code }: { code: string }) {
   const navigate = useNavigate()
   const [detail, setDetail] = useState<BoardDetailResp | null>(null)
   const [constituents, setConstituents] = useState<BoardConstituent | null>(null)
@@ -109,13 +119,13 @@ export default function BoardDetailPage() {
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    if (!blockCode) return
+    if (!code) return
     setLoading(true)
     setError('')
     try {
       const [d, c] = await Promise.all([
-        fetchAPI<BoardDetailResp>(`/boards/${encodeURIComponent(blockCode)}`, { cacheMode: 'reload' }),
-        fetchAPI<BoardConstituent>(`/boards/${encodeURIComponent(blockCode)}/constituents`, { cacheMode: 'reload' }).catch(() => null),
+        fetchAPI<BoardDetailResp>(`/boards/${encodeURIComponent(code)}`, { cacheMode: 'reload' }),
+        fetchAPI<BoardConstituent>(`/boards/${encodeURIComponent(code)}/constituents`, { cacheMode: 'reload' }).catch(() => null),
       ])
       if (d?.error) setError(d.error)
       else setDetail(d)
@@ -126,15 +136,15 @@ export default function BoardDetailPage() {
     // 板块轮动(全局, 独立加载, 失败静默)
     fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' }).then(setRotation).catch(() => {})
     setLoading(false)
-  }, [blockCode])
+  }, [code])
 
   useEffect(() => { void load() }, [load])
 
   const rotItemsTop = useMemo(() => (rotation?.items ?? []).slice(0, 5), [rotation])
   // 本板块 5 日涨幅(从轮动结果按 block_code 反查; 非本板块命中则为空)
   const selfRotation = useMemo(
-    () => (rotation?.items ?? []).find((r) => r.block_code === blockCode) ?? null,
-    [rotation, blockCode]
+    () => (rotation?.items ?? []).find((r) => r.block_code === code) ?? null,
+    [rotation, code]
   )
   const fundNet = detail?.today?.fund_net ?? selfRotation?.fund_net
   // 轮动分数区间 → 颜色(涨红/跌绿, 强弱由 ± score 比例决定)
@@ -148,7 +158,7 @@ export default function BoardDetailPage() {
     { label: '今日涨跌幅', value: fmtPct(today?.change_pct), cls: pctColor(today?.change_pct), note: srcLabel },
     { label: '5日涨幅', value: fmtPct(selfRotation?.change_5d), cls: pctColor(selfRotation?.change_5d), note: '轮动复利' },
     { label: '资金净流入', value: fmtWan(fundNet), cls: pctColor(fundNet), note: detail?.source === 'tdx' ? '通达信主力资金' : 'thsdk 日线' },
-    { label: '成交额', value: today?.volume != null && Number.isFinite(today.volume) ? `${(today.volume / 1e8).toFixed(2)}亿` : '--', cls: 'text-foreground', note: detail?.source === 'tdx' ? '通达信实时' : '换手率未提供' },
+    { label: '成交额', value: today?.volume != null && Number.isFinite(today.volume) ? `${safeFixed(today.volume / 1e8, 2)}亿` : '--', cls: 'text-foreground', note: detail?.source === 'tdx' ? '通达信实时' : '换手率未提供' },
   ]
 
   const rotBarColor = (r: RotationItem): string => {
@@ -161,29 +171,6 @@ export default function BoardDetailPage() {
 
   return (
     <div className="page-container sida-page-enter pb-10">
-      {/* 页头 */}
-      <div className="flex items-center gap-3 mb-4">
-        <Button variant="ghost" size="sm" className="h-8" onClick={() => navigate(-1)}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div>
-          <h1 className="text-[20px] md:text-[22px] font-bold flex items-center gap-2">
-            <Layers className="w-5 h-5 text-primary" />
-            {detail?.name || '板块详情'}
-          </h1>
-          <div className="text-[11px] text-muted-foreground font-mono">
-            {detail?.block_code || blockCode}
-            {detail?.board_type ? ` · ${detail.board_type === 'concept' ? '概念' : '行业'}` : ''}
-            {detail?.live ? ' · 实时' : detail?.has_daily ? ' · 日线' : ''}
-          </div>
-        </div>
-        <div className="ml-auto">
-          <Button variant="outline" size="sm" className="h-8" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> 刷新
-          </Button>
-        </div>
-      </div>
-
       {error && <div className="card p-3 mb-4 text-[12px] text-amber-700 dark:text-amber-500">{error}</div>}
       {loading && !detail ? (
         <div className="grid gap-3">
@@ -226,7 +213,7 @@ export default function BoardDetailPage() {
                   </thead>
                   <tbody>
                     {(constituents?.items ?? []).map((row, i) => {
-                      const code = pickStr(row, 'symbol', '代码', 'code', '证券代码')
+                      const rowCode = pickStr(row, 'symbol', '代码', 'code', '证券代码')
                       const name = pickStr(row, 'name', '名称', '证券名称')
                       // 通达信路径为规范字段(price/change_pct/amount); thsdk 路径回退语义模糊取列
                       const priceKey = Object.keys(row).find(
@@ -238,9 +225,9 @@ export default function BoardDetailPage() {
                       const chg = pickNum(row, 'change_pct', ...(chgKey ? [chgKey] : []))
                       const amt = pickNum(row, 'amount', ...(amtKey ? [amtKey] : []))
                       return (
-                        <tr key={code || i} className="border-b border-border/30 hover:bg-accent/40">
+                        <tr key={rowCode || i} className="border-b border-border/30 hover:bg-accent/40">
                           <td className="py-1 pr-2 text-[10px] text-muted-foreground">{i + 1}</td>
-                          <td className="py-1 pr-2 font-mono text-muted-foreground">{code || '--'}</td>
+                          <td className="py-1 pr-2 font-mono text-muted-foreground">{rowCode || '--'}</td>
                           <td className="py-1 pr-2 font-medium text-foreground">{name || '--'}</td>
                           <td className="py-1 pr-2 text-right font-mono tabular-nums text-muted-foreground">
                             {price == null ? '--' : safeFixed(price, 2)}
@@ -278,13 +265,13 @@ export default function BoardDetailPage() {
                       type="button"
                       className="w-full text-left group"
                       onClick={() => navigate(`/boards/${r.block_code}`)}
-                      title={`${r.name} · 强度 ${r.rotation_score.toFixed(1)}`}
+                      title={`${r.name} · 强度 ${safeFixed(r.rotation_score, 1)}`}
                     >
                       <div className="flex items-center justify-between text-[11px] mb-0.5">
                         <span className="truncate font-medium text-foreground group-hover:text-primary transition-colors">{r.name}</span>
                         <span className="font-mono ml-2 shrink-0">
                           <span className={pctColor(r.change_5d)}>{fmtPct(r.change_5d)}</span>
-                          <span className="text-muted-foreground ml-1.5">{r.rotation_score.toFixed(0)}</span>
+                          <span className="text-muted-foreground ml-1.5">{safeFixed(r.rotation_score, 0)}</span>
                         </span>
                       </div>
                       <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden">

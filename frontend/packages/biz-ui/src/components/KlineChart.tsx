@@ -28,8 +28,10 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
-import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
+import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
+// L3 资金柱的**唯一**净额/分色/时间口径(与 InteractiveKline 共用, 见 lib/fund-bar.ts)
+import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInterval } from '../lib/fund-bar'
 
 import {
   KIND_ICON,
@@ -39,14 +41,10 @@ import {
   type KlinePriceLine,
 } from '../klineEvents'
 
-/** 资金柱数据(对接后端 fund_flow 字段). 红涨绿跌 + 主净分色. */
-export interface FundFlowBar {
-  date: string
-  /** 明盘净额 (东财大单/特大单, 元) */
-  open_net?: number | null
-  /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
-  dark_net?: number | null
-}
+// 重导出共享模块的类型/纯函数 —— 既有调用方(`import { fundBarPoint } from '.../KlineChart'`)
+// 与既有测试导入路径零改动; 真源统一在 `../lib/fund-bar`。
+export type { FundFlowBar, KlineInterval } from '../lib/fund-bar'
+export { fundBarPoint, fundBarTime, capitalBarRows } from '../lib/fund-bar'
 
 // 与 InteractiveKline.tsx 顶层类型对齐, 暂时不耦合 (改 one-side 即可)
 export interface KlineItem {
@@ -64,8 +62,6 @@ export interface KlinesResponse {
   source?: string
 }
 
-export type KlineInterval = '1m' | '5m' | '15m' | '30m' | '60m' | '1d' | '1w' | '1mth'
-
 const INTERVAL_OPTIONS: Array<{ key: KlineInterval; label: string }> = [
   { key: '1m', label: '1分' },
   { key: '5m', label: '5分' },
@@ -76,8 +72,6 @@ const INTERVAL_OPTIONS: Array<{ key: KlineInterval; label: string }> = [
   { key: '1w', label: '周K' },
   { key: '1mth', label: '月K' },
 ]
-
-const DAY_BUCKETS: KlineInterval[] = ['1d', '1w', '1mth']
 
 // ── L1 趋势 / L2 买卖点 / L5 副图 · 前端自算辅助 (移植自 InteractiveKline v0.4.34) ──
 
@@ -592,20 +586,9 @@ export default function KlineChart(props: {
       const fs = fundSeriesRef.current
       if (fs) {
         if (showCapital && subchart === 'vol' && props.fundFlow && props.fundFlow.length > 0) {
-          fs.setData(
-            props.fundFlow.map((bar) => {
-              const open = bar.open_net ?? 0
-              const dark = bar.dark_net ?? 0
-              const net = open + dark
-              let color = readChartTheme().nodata
-              if (dark !== null && dark !== undefined && dark !== 0) {
-                color = dark > 0 ? sc.up : sc.down
-              } else if (open !== null && open !== undefined && open !== 0) {
-                color = open > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
-              }
-              return { time: toChartTime(bar.date, interval), value: net, color }
-            }),
-          )
+          // 净额与分色由纯函数算(T19 抽出以便单测: 明盘字段名 `ming_net` 曾误读 `open_net`)。
+          const theme = readChartTheme()
+          fs.setData(props.fundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
           fs.setData([])
@@ -679,17 +662,11 @@ export default function KlineChart(props: {
   }, [props.layersVisible?.trend, rawKlinesRef.current.length, subchart, interval])
 
   // ── 时间格式转换 ──────────────────────────────────────────
-  // lightweight-charts 要求: 日级 YYYY-MM-DD; 分钟级 unix time
+  // lightweight-charts 要求: 日级 UTCTimestamp(秒); 分钟级 unix time。
+  // 单一真源 = `fundBarTime`(lib/fund-bar.ts, 与 L3 资金柱共用) —— 组件内不再另存 `DAY_BUCKETS`/
+  // 解析逻辑, 避免"同口径两处各写一份"的漂移(本次 Finding 2 收敛)。
   function toChartTime(date: string, intv: KlineInterval): Time {
-    // v0.4.61: LC v5 markers / series 必须用 UTCTimestamp(秒数字), 字符串 "YYYY-MM-DD"
-    //   会导致 markers 全部静默不渲染。统一转秒。
-    if (DAY_BUCKETS.includes(intv)) {
-      const t = new Date(date.substring(0, 10) + 'T00:00:00Z').getTime() / 1000
-      return (Number.isFinite(t) ? t : 0) as Time
-    }
-    // 分钟级: 兼容 ISO 时间或 YYYY-MM-DD HH:MM:SS
-    const t = new Date(date.replace(' ', 'T')).getTime() / 1000
-    return (Number.isFinite(t) ? t : 0) as Time
+    return fundBarTime(date, intv) as Time
   }
 
   return (

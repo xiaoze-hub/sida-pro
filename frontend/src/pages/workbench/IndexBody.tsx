@@ -1,14 +1,30 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, TrendingUp, RefreshCw, BarChart3, Flame, Droplets } from 'lucide-react'
+import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
-import { Button } from '@panwatch/base-ui/components/ui/button'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import { describeApiError } from '@/lib/api-error'
 import { safeFixed, safeNum, safeNetInflow } from '@/lib/format'
 
+/**
+ * 指数正文(Task 7, 三合一 spec §1.3): 从 `pages/IndexDetail.tsx` **原样搬移**的取数与渲染。
+ *
+ * 归属 `src/pages/workbench/` 而非 `packages/biz-ui/.../workbench/` 的原因:
+ * 正文用 `@/components/ErrorBanner`(app 层组件, 全仓仅 `src/pages/*` 引用) —— 放 biz-ui 会新增
+ * **biz-ui → src/components 反向依赖**(现存为零); `@/lib/api-error` 同属 src。故整个 Body 留在
+ * app 层, 包边界不变。兄弟 `BoardBody` 无 app 层依赖, 按计划落在 biz-ui/workbench。
+ *
+ * 与旧页的差异(仅两处, 均非业务逻辑):
+ *  1. **去掉页面骨架**(返回按钮/标题/刷新): spec §1.3 末条「抽取前的页面骨架并入共享 HeaderBand,
+ *     避免重复」—— 工作台带1 提供类型切换 + 刷新(刷新经 `onRefresh` 广播到本正文); **本正文
+ *     自己拥有指数名称与数值**(`/market/indices/{s}`)—— 带1 对 `type !== 'stock'` **不取**
+ *     `/quotes/{s}`(同代码 = 另一标的)也不渲染名称/现价, 见 `HeaderBand` 头注「同码不同标的闸门」;
+ *  2. 数字格式化改走 `@/lib/format` 的 safe* 系列 (项目红线 #6 / R6 禁裸 toFixed):
+ *     每处外部守卫不变, 输出字符串逐字相同。
+ *
+ * 真数据: `GET /market/indices/{symbol}` + `GET /market-data/market-capital-flow`(失败静默)。
+ */
 interface MarketFlow {
   total_main_flow?: number
   sh_flow?: number
@@ -76,9 +92,7 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   )
 }
 
-export default function IndexDetailPage() {
-  const { symbol } = useParams<{ symbol: string }>()
-  const navigate = useNavigate()
+export default function IndexBody({ symbol }: { symbol: string }) {
   const [data, setData] = useState<IndexDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -109,23 +123,6 @@ export default function IndexDetailPage() {
 
   return (
     <div className="sida-page-enter space-y-4">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" className="h-8" onClick={() => navigate(-1)}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <TrendingUp className="h-6 w-6" /> {data?.name || '大盘指数'}
-          </h1>
-          <div className="text-xs text-muted-foreground font-mono">{symbol}</div>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-8" onClick={load} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} /> 刷新
-          </Button>
-        </div>
-      </div>
-
       {loading ? (
         <div className="text-center text-muted-foreground py-12">加载中...</div>
       ) : error ? (
@@ -185,11 +182,11 @@ export default function IndexDetailPage() {
                       {safeNetInflow(marketFlow.total_main_flow)}
                     </b>
                   </span>
-                  <span className="text-muted-foreground">成交额 <b className="font-mono">{safeNum(marketFlow.total_amount) !== null ? `${(marketFlow.total_amount!).toFixed(0)}亿` : '--'}</b></span>
+                  <span className="text-muted-foreground">成交额 <b className="font-mono">{safeNum(marketFlow.total_amount) !== null ? `${safeFixed(marketFlow.total_amount, 0)}亿` : '--'}</b></span>
                   <span className="text-muted-foreground">涨 <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
                     <span className="mx-1">/</span>跌 <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
-                  <span className="text-muted-foreground">沪 <b className="font-mono">{safeNum(marketFlow.sh_flow) !== null ? `${(marketFlow.sh_flow!).toFixed(1)}亿` : '--'}</b>
-                    <span className="mx-1">/</span>深 <b className="font-mono">{safeNum(marketFlow.sz_flow) !== null ? `${(marketFlow.sz_flow!).toFixed(1)}亿` : '--'}</b></span>
+                  <span className="text-muted-foreground">沪 <b className="font-mono">{safeNum(marketFlow.sh_flow) !== null ? `${safeFixed(marketFlow.sh_flow, 1)}亿` : '--'}</b>
+                    <span className="mx-1">/</span>深 <b className="font-mono">{safeNum(marketFlow.sz_flow) !== null ? `${safeFixed(marketFlow.sz_flow, 1)}亿` : '--'}</b></span>
                 </div>
               </div>
 
@@ -203,7 +200,7 @@ export default function IndexDetailPage() {
                         {marketFlow.inflow_boards.map(b => (
                           <div key={b.name} className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground truncate">{b.name}</span>
-                            <span className="font-mono text-stock-up">{safeNum(b.net_inflow) !== null ? `+${Number(b.net_inflow).toFixed(1)}亿` : '--'}</span>
+                            <span className="font-mono text-stock-up">{safeNum(b.net_inflow) !== null ? `+${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
                         ))}
                       </div>
@@ -216,7 +213,7 @@ export default function IndexDetailPage() {
                         {marketFlow.outflow_boards.map(b => (
                           <div key={b.name} className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground truncate">{b.name}</span>
-                            <span className="font-mono text-stock-down">{safeNum(b.net_inflow) !== null ? `${Number(b.net_inflow).toFixed(1)}亿` : '--'}</span>
+                            <span className="font-mono text-stock-down">{safeNum(b.net_inflow) !== null ? `${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
                         ))}
                       </div>
