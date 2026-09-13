@@ -7,7 +7,7 @@ import { fmtAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { safeFixed, safeNum, safePrice } from '@/lib/format'
 import type { KlineSummaryData } from '@panwatch/biz-ui/components/kline-summary-dialog'
-import type { WorkbenchTab, WorkbenchType } from '@/lib/workbench-tabs'
+import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/workbench-tabs'
 
 /**
  * 带1 顶部信息带(v0.5.96, 三合一 spec §4.1): 个股/指数/板块**共享**。
@@ -17,12 +17,19 @@ import type { WorkbenchTab, WorkbenchType } from '@/lib/workbench-tabs'
  *                PE(动)/PE(TTM)/PB/股息率/涨停价/连板)
  *       + 技术指标买卖建议条(仅 type=stock; 点击跳「建议」标签)。
  *
+ * 类型分流(spec 绑定条款): `type !== 'stock'` 时**隐藏**(非渲染成 `--`)7 个个股专属 cell ——
+ * `float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`/`limit_boards`;
+ * 指数/板块保留共享 cell(今开/最高/最低/成交额/换手率/量比/总市值)。
+ * `mapSnapshot` 保持 type-agnostic（纯函数不动），分流在渲染侧 `visibleSnapshotCells`。
+ *
  * 数据面(全部真数据, 缺值 `--`, 绝不编造):
  *  - GET /quotes/{symbol}            → current_price/change_pct/open_price/high_price/low_price/turnover
  *  - GET /quotes/{symbol}/more-info  → turnover_rate/volume_ratio/total_market_value(亿)/circulating_market_value(亿)
  *  - GET /stocks/{symbol}/l2         → more.zt_price(涨停价) + more.pe_dynamic/pe_ttm/pb/dividend_yield/ever_zt_count
  *                                      (自包含, 不等兄弟组件回喂)
  *  - GET /klines/{symbol}/summary    → buildKlineSuggestion(技术面建议)
+ * **CN-only**: more-info 与 /l2 只在 `个股 + CN` 时发(`cnStockDataEnabled`)—— more-info 对非 CN 后端 400,
+ * /l2 是 CN TQ RPC; 否则同代码的境外标的会把 CN 涨停价/PE/PB 画成自己的。
  * 任一接口失败**保留旧值**(stale-on-error), 不把失败渲染成 0/编造值。
  */
 
@@ -146,6 +153,48 @@ export function mapSnapshot(
 /** 现价/涨跌幅在顶行已醒目呈现 → 快照行去除, 守住「同一数据点只出现一处」(spec §一)。 */
 const TOP_ROW_KEYS = new Set(['price', 'change_pct'])
 
+/**
+ * 个股专属 cell(仅 `type === 'stock'` 显示): 涨停价/连板来自 CN-only 的 `/stocks/{s}/l2`,
+ * 流通市值/PE/PB/股息率是个股估值口径 —— 指数/板块无此概念, 渲染成 `--` 只是噪声,
+ * 故**隐藏**而非占位。与 CN-only 数据面闸门(`cnStockDataEnabled`)同源:
+ * 非同 CN 标的这些格本就取不到值, 一并消失比留 7 个 `--` 更诚实。
+ * 过滤在**渲染侧**(不在 `mapSnapshot` 内做类型分流, 保持纯函数 type-agnostic)。
+ */
+const EQUITY_ONLY_KEYS = new Set([
+  'float_market_cap',
+  'pe_dynamic',
+  'pe_ttm',
+  'pb',
+  'dividend_yield',
+  'limit_price',
+  'limit_boards',
+])
+
+/**
+ * 渲染侧可见 cell(纯函数, 供单测锚定): 顶行去重 + 个股专属 cell 的**类型分流**。
+ * 非个股直接**不渲染** 7 个估值/涨停/连板 cell(而非渲染成 `--`)。
+ * `mapSnapshot` 保持 type-agnostic 不变。
+ */
+export function visibleSnapshotCells(
+  q?: QuoteSnapshot | null,
+  more?: MoreInfoSnapshot | null,
+  l2?: L2MoreSnapshot | null,
+  isStock = true,
+): SnapshotCell[] {
+  return mapSnapshot(q, more, l2).filter(
+    (c) => !TOP_ROW_KEYS.has(c.key) && (isStock || !EQUITY_ONLY_KEYS.has(c.key)),
+  )
+}
+
+/**
+ * CN-only 数据面闸门(纯函数, 供单测锚定): `/quotes/{s}/more-info` 对非 CN 后端直接 400,
+ * `/stocks/{s}/l2` 是 CN TQ RPC —— 只有「个股 + CN」才允许发这两个请求,
+ * 否则同代码的境外标的会把 CN 涨停价/PE/PB 画成自己的。
+ */
+export function cnStockDataEnabled(t?: WorkbenchType, market?: string): boolean {
+  return showStockOnly(t ?? 'stock') && (market ?? 'CN') === 'CN'
+}
+
 const TYPE_OPTIONS: { id: WorkbenchType; label: string }[] = [
   { id: 'stock', label: '个股' },
   { id: 'index', label: '指数' },
@@ -173,7 +222,9 @@ export default function HeaderBand({
   onTypeChange,
   onGotoTab,
 }: HeaderBandProps) {
-  const isStock = type === 'stock'
+  const isStock = showStockOnly(type)
+  /** CN-only 数据面闸门: `/stocks/{s}/l2` 是 CN TQ RPC, more-info 对非 CN 直接 400 —— 同代码的境外标的绝不能发, 否则会把 CN 涨停价/PE/PB 画到别的标的上。 */
+  const cnStock = cnStockDataEnabled(type, market)
   const [quote, setQuote] = useState<QuoteSnapshot | null>(null)
   const [more, setMore] = useState<MoreInfoSnapshot | null>(null)
   const [l2More, setL2More] = useState<L2MoreSnapshot | null>(null)
@@ -198,17 +249,23 @@ export default function HeaderBand({
       insightApi.quote<QuoteSnapshot>(symbol, market).then((r) => {
         if (alive) setQuote(r ?? null)
       }),
-      insightApi.moreInfo<MoreInfoSnapshot>(symbol, market).then((r) => {
-        if (alive) setMore(r ?? null)
-      }),
     ]
-    if (isStock) {
+    if (cnStock) {
+      // CN-only 数据面(非同 CN 标的不得发): more-info 对非 CN 后端 400;
+      // /stocks/{s}/l2 是 CN TQ RPC → 涨停价/PE/PB/股息率/连板 只对 CN 个股有意义。
+      tasks.push(
+        insightApi.moreInfo<MoreInfoSnapshot>(symbol, market).then((r) => {
+          if (alive) setMore(r ?? null)
+        }),
+      )
       // Ruling A: 涨停价/PE/PB/股息率/连板 自包含取 /stocks/{s}/l2(不能依赖兄弟组件回喂)
       tasks.push(
         fetchAPI<L2MoreResp>(`/stocks/${encodeURIComponent(symbol)}/l2`).then((r) => {
           if (alive) setL2More(r?.more ?? null)
         }),
       )
+    }
+    if (isStock) {
       tasks.push(
         insightApi.klineSummary<KlineSummaryData>(symbol, market).then((r) => {
           if (alive) setSummary(r ?? null)
@@ -222,7 +279,7 @@ export default function HeaderBand({
     return () => {
       alive = false
     }
-  }, [symbol, market, isStock, tick])
+  }, [symbol, market, isStock, cnStock, tick])
 
   const refresh = useCallback(() => setTick((t) => t + 1), [])
 
@@ -240,7 +297,9 @@ export default function HeaderBand({
         : changeNum < 0
           ? 'text-[--stock-down]'
           : 'text-muted-foreground'
-  const cells = mapSnapshot(quote, more, l2More).filter((c) => !TOP_ROW_KEYS.has(c.key))
+  // 顶行去重(price/change_pct) + 个股专属 cell 的**类型分流**:
+  // index/board 直接不渲染估值/涨停/连板(它们是 -- 噪声, 且指数/板块无此概念), 而非渲染成 `--`。
+  const cells = visibleSnapshotCells(quote, more, l2More, isStock)
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { mapSnapshot, type SnapshotCell } from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import {
+  cnStockDataEnabled,
+  mapSnapshot,
+  visibleSnapshotCells,
+  type SnapshotCell,
+} from '@panwatch/biz-ui/components/workbench/HeaderBand'
 
 /**
  * 带1 快照行纯函数单测(任务3 + 复审修复: 补 spec §1.2 缺的 流通市值/PE(动)/PE(TTM)/PB/股息率/连板)。
@@ -231,5 +236,106 @@ describe('mapSnapshot(带1 快照行)', () => {
       '涨停价',
       '连板',
     ])
+  })
+})
+
+/**
+ * 复审修复 1(Important): 个股专属 cell 在指数/板块必须**隐藏**(不渲染), 而非渲染成 `--`。
+ * 绑定条款: "Stock-only bits hidden when type !== 'stock'"。
+ * `mapSnapshot` 保持 type-agnostic(仍产出 16 cell), 分流在渲染侧 `visibleSnapshotCells`。
+ */
+describe('visibleSnapshotCells(带1 快照行渲染侧类型分流)', () => {
+  /** 个股专属 7 格(复审点名) —— 非个股必须整格消失。 */
+  const EQUITY_ONLY = [
+    'float_market_cap',
+    'pe_dynamic',
+    'pe_ttm',
+    'pb',
+    'dividend_yield',
+    'limit_price',
+    'limit_boards',
+  ]
+  /** 三类型共享 7 格(非个股必须保留)。 */
+  const SHARED = ['open', 'high', 'low', 'amount', 'turnover', 'volume_ratio', 'market_cap']
+
+  it('isStock=true: 等值 mapSnapshot 去掉顶行两格(price/change_pct), 14 格全保留', () => {
+    const keys = visibleSnapshotCells({}, {}, {}, true).map((c) => c.key)
+    expect(keys).toEqual(ALL_KEYS.filter((k) => k !== 'price' && k !== 'change_pct'))
+    expect(keys).toEqual([...SHARED, ...EQUITY_ONLY])
+  })
+
+  it('isStock=false: 7 个个股专属 cell 整格消失(不是渲染成 --), 共享 7 格保留', () => {
+    const cells = visibleSnapshotCells({}, {}, {}, false)
+    const keys = cells.map((c) => c.key)
+    expect(keys).toEqual(SHARED)
+    // 逐格锚定: 一个都不许漏(防"改成 -- 也算过"的假修复)
+    for (const k of EQUITY_ONLY) expect(keys).not.toContain(k)
+    // 且渲染侧确实没有这些格 → 不存在 `--` 占位噪声
+    expect(cells.some((c) => c.value === '--' && EQUITY_ONLY.includes(c.key))).toBe(false)
+  })
+
+  it('指数/板块结果一致(两者同一分流: 非 stock 即隐藏)', () => {
+    const nonStock = visibleSnapshotCells({}, {}, {}, false).map((c) => c.key)
+    expect(nonStock).toEqual(SHARED)
+  })
+
+  it('有真值时同样隐藏(不是"因为值是 -- 才消失")', () => {
+    const l2 = {
+      zt_price: 11.22,
+      pe_dynamic: 28.56,
+      pe_ttm: 31.2,
+      pb: 4.5,
+      dividend_yield: 1.85,
+      ever_zt_count: 3,
+    }
+    const more = { turnover_rate: 3.2, volume_ratio: 1.4, total_market_value: 1234.56, circulating_market_value: 456.78 }
+    const stockKeys = visibleSnapshotCells({ current_price: 10 }, more, l2, true).map((c) => c.key)
+    const indexKeys = visibleSnapshotCells({ current_price: 10 }, more, l2, false).map((c) => c.key)
+    expect(stockKeys).toContain('pe_ttm')
+    expect(stockKeys).toContain('limit_price')
+    expect(indexKeys).not.toContain('pe_ttm')
+    expect(indexKeys).not.toContain('limit_price')
+    expect(indexKeys).not.toContain('float_market_cap')
+  })
+
+  it('默认参数按个股处理(向后兼容, 不误伤既有调用)', () => {
+    expect(visibleSnapshotCells({}, {}, {}).map((c) => c.key)).toEqual(
+      ALL_KEYS.filter((k) => k !== 'price' && k !== 'change_pct'),
+    )
+  })
+})
+
+/**
+ * 复审修复 2(Important): CN-only 数据面闸门。
+ * `/quotes/{s}/more-info` 非 CN 后端 400, `/stocks/{s}/l2` 是 CN TQ RPC →
+ * 只有 `个股 + CN` 才发, 防同代码非 CN 标的画出 CN 涨停价/PE/PB。
+ */
+describe('cnStockDataEnabled(CN-only 数据面闸门)', () => {
+  it('个股 + CN → 放行', () => {
+    expect(cnStockDataEnabled('stock', 'CN')).toBe(true)
+  })
+
+  it('个股 + 非 CN(US/HK/空串) → 拒发(核心回归: 同代码境外标的不得复用 CN 估值)', () => {
+    expect(cnStockDataEnabled('stock', 'US')).toBe(false)
+    expect(cnStockDataEnabled('stock', 'HK')).toBe(false)
+    expect(cnStockDataEnabled('stock', '')).toBe(false)
+  })
+
+  it('指数/板块 + CN → 拒发(非个股无更多信息/无 L2)', () => {
+    expect(cnStockDataEnabled('index', 'CN')).toBe(false)
+    expect(cnStockDataEnabled('board', 'CN')).toBe(false)
+  })
+
+  it('指数/板块 + 非 CN → 拒发(双重不满足)', () => {
+    expect(cnStockDataEnabled('index', 'US')).toBe(false)
+    expect(cnStockDataEnabled('board', 'HK')).toBe(false)
+  })
+
+  it('默认值: type 缺省=stock、market 缺省=CN(与组件默认 props 同源) → 放行', () => {
+    expect(cnStockDataEnabled()).toBe(true)
+    expect(cnStockDataEnabled(undefined, undefined)).toBe(true)
+    expect(cnStockDataEnabled('stock')).toBe(true)
+    expect(cnStockDataEnabled(undefined, 'CN')).toBe(true)
+    expect(cnStockDataEnabled(undefined, 'HK')).toBe(false)
   })
 })

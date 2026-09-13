@@ -7,6 +7,15 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务3 复审修复②: 个股专属 cell 在指数/板块**隐藏** + CN-only 数据面按 market 门控
+- **问题1**(Task 3 复审 Important / 绑定条款 "Stock-only bits hidden when `type !== 'stock'`"): 快照行只过滤了 `TOP_ROW_KEYS`, 指数/板块仍渲染 7 个个股专属格(`float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`(涨停价)/`limit_boards`(连板))为 `--` 占位 —— 视觉噪声, 且指数/板块根本无此概念。
+- **修复1**: `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx` 新增 `EQUITY_ONLY_KEYS` 与导出纯函数 `visibleSnapshotCells(q, more, l2, isStock=true)`(渲染侧分流: `!TOP_ROW_KEYS.has(key) && (isStock || !EQUITY_ONLY_KEYS.has(key))`), 组件改调它; **`mapSnapshot` 保持 type-agnostic 不变**(仍产出 16 cell, 纯函数语义未动)。个股 14 格不变; 指数/板块只留共享 7 格(今开/最高/最低/成交额/换手率/量比/总市值)。
+- **问题2**(Task 3 复审 Important / CN-only 数据面): 效果里只按 `isStock` 门控 `/quotes/{s}/more-info` 与 `/stocks/{s}/l2` —— more-info 对非 CN 后端直接 400, `/l2` 是 CN TQ RPC; 同代码的非 CN 标的会因此把 CN 涨停价/PE/PB 画成自己的。
+- **修复2**: 新增导出纯函数 `cnStockDataEnabled(type, market)`(`个股 && market === 'CN'`), 组件 `cnStock` 由它派生; more-info 与 `/l2` 移入 `if (cnStock)` 分支, `klineSummary`/建议条仍只按 `isStock` 门控(非 CN-only)。换股/换市场/换类型仍清空旧值(`[symbol, market, isStock]` reset effect 未动), 失败仍 stale-on-error 保留旧值。
+- **附带(Minor)**: 不再本地写 `type === 'stock'`, 改复用 `frontend/src/lib/workbench-tabs.ts::showStockOnly(type)`(Task 1 产出), 消除双份判定漂移面。
+- **测试**: `frontend/tests/lib/workbench-snapshot.test.ts` 9→19 例(净 +10): 新增 `visibleSnapshotCells` 5 例(个股 14 格 / 非个股 7 个专属格逐格 `not.toContain` 且**有真值时同样隐藏** / 指数与板块一致 / 默认参向后兼容)与 `cnStockDataEnabled` 5 例(个股+CN 放行; 个股+US/HK/空串拒发; 指数/板块+CN 拒发; 缺省 type/market 与组件默认 props 同源)。`npx vitest run tests/lib/workbench-snapshot.test.ts` → **19/19 passed**; 全量 **237/237**(39 files, 基线 227)。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(R6: 零 `.toFixed(` 字面量, 格式化仍全走 `@/lib/format` safe* 与 `fmtAmount`)。
+
 ### fix(wb)-工作台 v2 任务3 复审修复: 带1 快照行补齐 spec §1.2 缺的 6 个数据点
 - **问题**(Task 3 复审 Important / spec 覆盖缺口): `mapSnapshot` 只渲染 10 cell, 而 spec §1.2(`docs/个股工作台v2三合一设计_20260913.md:49`)与 T1 的 `DATA_OWNERSHIP`(`pe_pb_dividend`/`limit_price_boards` → `band1.snapshot`)要求快照行还含 PE(动)/PE(TTM)/PB/股息率/流通市值/连板 → 这些数据点在全工作台无归属。
 - **修复**: `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx` 的 `mapSnapshot(q, more, l2)` 增加第 3 参 `L2MoreSnapshot`(`/stocks/{s}/l2` 的 `more` 段, `src/core/stock_l2.py::fetch_more:75-98`), 新增 6 cell: `float_market_cap`(流通市值, 来自 more-info 的 `circulating_market_value` ← Ltsz, **亿**, 同总市值格式 `${safePrice(v,2)}亿`)、`pe_dynamic`/`pe_ttm`/`pb`(纯数值, 走 `safePrice(v,2)`, PE/PB 为负原样透传 = 亏损股真实口径)、`dividend_yield`(`${safePrice(v,2)}%`)、`limit_boards`(连板, 整数 `safeFixed(v,0)`, 不加「板」后缀/不加千分位, 单位由 label 承载)。`zt_price` 由 `MoreInfoSnapshot` 迁到 `L2MoreSnapshot`(它本就来自 /l2, 不是 more-info)。组件侧 `ztPrice` state 换成整个 `l2More` 对象并整段传入; 换股/换类型仍清空(不把 A 股 PE 画到指数上), 失败仍保留旧值。
