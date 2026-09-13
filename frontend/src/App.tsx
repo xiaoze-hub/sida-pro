@@ -28,8 +28,10 @@ const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
 const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 两个收纳枢纽页
-// 个股工作台三合一(Task 2, 2026-09-13): Quote/L2Orderbook 的 lazy 绑定已摘除 ——
-// 行情页/盘口页并入 /stocks/:symbol, 旧路由改走 LegacyForecastRedirect/LegacyL2Redirect。
+// 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
+// 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
+// 正文已搬入工作台(KlineChart 复用, L2 内容挪至「盘口资金」标签), 原页 Quote.tsx/L2Orderbook.tsx
+// 已于 Task 18 删除。
 const SystemPage = lazy(() => import('@/pages/System'))
 const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
