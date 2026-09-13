@@ -7,6 +7,19 @@
 
 ## 2026-09-13
 
+### feat(wb)-工作台 v2 任务17: TabPanel 接线 6 个真实标签(按 ?tab= 只渲染激活项 = 惰性取数)
+
+- **改动(2 文件)** —— `frontend/src/pages/StockWorkbench.tsx`(占位 `TabPanel` → 真实 6 标签) + `frontend/tests/components/stock-workbench.test.tsx`(沿用既有文件扩断言, 未新建)。这是"三合一"里**最后一块占位**: 带1 `HeaderBand`/带2 主图+右栏/带3 `TabBar` 此前均已真实, 只有 `TabPanel` 还渲染「{label} 建设中」。
+- **接线(`TabPanel`)** —— `switch (tab)` 覆盖 `WorkbenchTab` 六值, 各渲染对应组件(`L2Tab`/`SuggestTab`/`FundamentalTab`/`NewsTab`/`ResearchTab`/`ForecastTab`), 统一传 `symbol` + `market={MARKET}`('CN'); 五键另传 `hasPosition`。`switch` 全部覆盖后 TS 收敛为 `never`(实现里留 `const neverTab: never = tab` 穷尽性守卫)⇒ 将来 `WorkbenchTab` 加键时 `tsc -b` 会在 `TabPanel` 报错, 逼人补分支, 不静默漏渲染。`ResearchTab` 的可选 `stockName` **不传**(本页无名称来源, 带1 自取; 该标签兜底链会回退 symbol 匹配), `ForecastTab` 只收 `{ symbol, market }`(其签名不消费, 统一调用约定)。
+- **惰性(核心约束, spec §4.3)** —— 六个标签各在文件内自带 `InsightProvider`(各自 `keys`), 取数 hook 在**挂载**时实例化 ⇒ `TabPanel` **只渲染激活的那一个**(而非全渲染 + CSS 隐藏), 切标签 = 旧标签卸载 / 新标签挂载 = 惰性取数。同时挂载会把六组端点在工作台首屏一次打满, 这正是本任务要防的。此约束有机器守卫: 测试断言任一 `?tab=` 下**只有对应 `data-testid="tab-<id>"` 在屏**、其余五个 `queryByTestId` 为 `null`, 且"当前挂载中"集合恰为一项。
+- **`hasPosition` 来源(诚实登记: 仍是占位)** —— Task 6 Ruling 已裁定深链页 `/stocks/:symbol` **没有**持仓上下文(旧模态由调用方传入), 页面无真来源 ⇒ 本任务引入 `const POSITION_UNKNOWN = false` 单点常量并透传给 `HeaderBand`(建议条评分按非持仓口径)与 `FundamentalTab`(加仓计算器**不渲染**、不发 `/portfolio/summary`)。未持仓只是不渲染该块, **不产生假数据**; 真实持仓判定源留待 T19 去重核对后补。**不是**本任务新引入的技术债, 而是沿用既有裁定并集中到一处(接真源时只改这一行)。
+- **保留不动(已验证)** —— `IndexBoardHost` 是 Task 7 的真实产物(`type=index` → `IndexBody symbol`; `type=board` → `BoardBody code`), **非占位**, 本次未动。带1 刷新(`refreshKey` 重挂载正文子树)/`?type=`/`?tab=` 深链/`PageTabs` 六键全部沿用 T6/T7 行为。
+- **删除的占位代码** —— 原 `TabPanel` 里那句 `WORKBENCH_TABS.find(...)` 取 label 的兜底与「建设中」`<div>`(连同 `rounded border border-border/60 p-4` 外壳)一并删除; 头注「Ruling B」条目同步改写(TabPanel 不再标"后续任务替换")并补「标签惰性」「持仓上下文」两节。
+- **测试(沿用既有文件, 12 例; 上基线同文件 10 例)** —— ① 默认页断言真实 `tab-l2` 入参 `l2:002636:CN:false` + 其余五标签**不在屏** + 挂载集合 `['l2']`; ② `?type=index`/`?type=board` 断言**一个标签都不挂载**; ③ 六键逐一循环: 选中态 + 对应组件入参精确相等 + 其余五键 `null` + 挂载集合恰一项(`ForecastTab` 单独断言 `hasPosition` 真为 `undefined` —— 它签名不收, 这条钉住了"不虚构入参"); ④ **切标签**: `fireEvent.click` 后断言 `unmount('l2')` 恰一次、`mount` 共 2 次且第二次是 `research`、挂载集合 `['research']` ⇒ 直接证明旧标签**被卸载**(不是六个都留着); ⑤ 非法 `?tab=` 收敛 l2; ⑥ `?type=` 切换后标签**全部卸载**; ⑦ 带1 `onGotoTab` 跳标签; ⑧ T7 刷新用例补"激活标签随正文一起重挂载(`mount` 2 次 / `unmount('news')`)且集合仍只 news"。
+- **变异验证(1 处, 已还原; 证明惰性断言真能抓回归)** —— 把 `TabPanel` 改成**无条件渲染全部六个**(模拟"六个都挂载") ⇒ `1 file | 6 failed | 6 passed`: 默认页/六键逐一/切标签/非法 tab/onGotoTab/刷新 六例同时红(均为"其余标签不该在屏 / 挂载集合不该多于一项")。还原后 12/12 绿。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **330/330**(52 files, 与上一提交同数 —— 本任务扩断言未增删用例数)。R6: 新代码裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未动。视觉只用既有 token 类, 无硬编码色。
+- **未做(留给控制器/后续任务)** —— ① **未部署**: brief Task 17 提到"dist + 静态面部署", 但按控制器指令本任务止于门禁绿 + 提交, dist 构建/部署/浏览器走查由控制器在提交后执行; ② brief Step 5 的 `VERSION` 递增/tag/push **未做**(属 T20 发版, 不在本任务授权); ③ 真实持仓判定源(见上「hasPosition 来源」)仍缺; ④ `tests/` 不在 `tsc -b`/`eslint` 覆盖内(全仓既有缺口, T16 已登记, 本任务同样受影响 —— 测试文件的类型错误不会被门禁抓到)。本 entry 未缀 `[commit <hash>]`。
+
 ### fix(wb)-工作台 v2 任务16: 修两处测试不诚实(工厂计数/真 chunk reject)+ 顺带修好"重试"真重发 import()
 
 - **起因(复审 finding 1+2, 都成立)** —— ① `forecast-tab.test.tsx` 声明并在 `beforeEach` 清了 `mocks.load`, 但**从没调用/断言**;文件头注与 task-16-report §2 却声称用例③证明"重试后惰性工厂计数 == 2" —— 实际用例③只是"渲染抛错 ⇒ 换个正常替身重挂载 ⇒ 成功", 一个**工厂计数都没断言**。② 头注/CHANGELOG 把边界描述成覆盖 `lazy` 的 `import()` **rejection**, 但用例是用"已 resolve 的组件体里 `throw`"(render-throw)模拟 —— 收敛到同一 ErrorBoundary, 行为覆盖了, 但**真实的动态 `import()` 失败**没覆盖。

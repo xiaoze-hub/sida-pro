@@ -6,6 +6,12 @@ import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
 import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
+import L2Tab from '@/pages/workbench/tabs/L2Tab'
+import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
+import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
+import NewsTab from '@/pages/workbench/tabs/NewsTab'
+import ResearchTab from '@/pages/workbench/tabs/ResearchTab'
+import ForecastTab from '@/pages/workbench/tabs/ForecastTab'
 import {
   normalizeType,
   parseTab,
@@ -27,10 +33,21 @@ import {
  *
  * **Ruling B**(保证本任务单独可编译/可走查, 后续任务逐一替换):
  *  - `IndexBoardHost` —— Task 7 已换成真实 `IndexBody`/`BoardBody`(正文从 `IndexDetail`/`BoardDetail` 原样搬移);
- *  - `TabPanel`       —— 现渲染「{label} 建设中」; Task 17 换成 6 个真实标签组件。
+ *  - `TabPanel`       —— Task 17 已换成 6 个真实标签组件(见下「标签惰性」)。
  *  `TabBar` 是本任务的**正式**产物(6 键 + `?tab=` 深链), 非占位。
  *
- * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart`/`IndexBody`/`BoardBody` 内。
+ * **标签惰性(Task 17, spec §4.3)**: `TabPanel` 按 `?tab=` **只渲染当前激活的那一个**标签 ——
+ * 每个标签内部自带 `InsightProvider`(各自的 `keys`), 挂载才实例化取数 hook ⇒ 切标签 = 惰性取数,
+ * 进工作台**不**触发下部接口风暴。六个标签**不得**同时挂载(否则首屏打满全部标签的端点)。
+ *
+ * **持仓上下文 `hasPosition`(Task 6 Ruling, 本任务沿用)**: 深链页(`/stocks/:symbol`)无持仓上下文
+ * (旧模态由调用方传 `hasPosition`), 页面暂无真来源 ⇒ 本页传 `POSITION_UNKNOWN = false`:
+ *  ① 带1 建议条评分按非持仓口径(`HeaderBand hasPosition`);
+ *  ② 基本面标签的**加仓计算器**不渲染、也不发 `/portfolio/summary`(FundamentalTab 的 `hasPosition` 分支)。
+ * 未持仓只是**不渲染**该块, **不产生假数据**。真实持仓判定源留待 T19 去重核对后补(不在本任务授权内)。
+ *
+ * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart`/`IndexBody`/
+ * `BoardBody`/六个标签组件内。
  *
  * **页面级刷新**(Task 7 复审 Finding 1, 控制器裁定): 带1 `HeaderBand` 的刷新按钮除刷自身行情外,
  * 还回调 `onRefresh` → 本页 `refreshKey + 1`。`refreshKey` 只作**正文子树**的 `key`(两个分支
@@ -40,6 +57,13 @@ import {
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
+
+/**
+ * 持仓上下文占位(Task 6 Ruling): 深链页没有持仓来源 ⇒ 恒 `false`。
+ * 消费方只有两处(`HeaderBand` 建议条评分、`FundamentalTab` 加仓计算器), 均属"未持仓则不渲染",
+ * 不发请求、不编造数据。接真源时改这一处即可(全页唯一出入口)。
+ */
+const POSITION_UNKNOWN = false
 
 /**
  * 指数/板块正文宿主(Task 7 换成真实正文)。
@@ -68,15 +92,36 @@ function TabBar({ value, onChange }: { value: WorkbenchTab; onChange: (t: Workbe
   )
 }
 
-/** 选中标签的正文(**临时占位**, Task 17 替换为 6 个真实标签组件)。 */
+/**
+ * 带3 正文: 按 `?tab=` **只渲染当前激活的那一个**真实标签(Task 17)。
+ *
+ * 为什么是 `switch`(而不是六个都渲染 + CSS 隐藏): 每个标签自带 `InsightProvider`(各自 `keys`),
+ * 取数 hook 在**挂载**时实例化 ⇒ 只渲染激活项才等价于"切标签才惰性取数"(spec §4.3)。
+ * 六个同时挂载会在进工作台首屏把六组端点一次打满 —— 本任务的核心约束。
+ * `switch` 覆盖联合类型全部六值后 TS 收敛为 `never`(下面 `neverTab` 的穷尽性守卫),
+ * 将来 `WorkbenchTab` 加键时 `tsc -b` 会在此处报错, 逼人补分支(不静默漏渲染)。
+ *
+ * 传参: `symbol`/`market` 一律 `MARKET`('CN'); `hasPosition` 见头注「持仓上下文」。
+ * `ResearchTab` 另收可选 `stockName`, 本页无名称来源(带1 自己取)故不传 —— 其兜底链会回退到
+ * symbol 匹配, 不编造名称。`ForecastTab` 不消费 `symbol`/`market`(签名同形, 只为统一接线)。
+ */
 function TabPanel({ tab, symbol }: { tab: WorkbenchTab; symbol: string }) {
-  const label = WORKBENCH_TABS.find((t) => t.id === tab)?.label ?? tab
-  return (
-    <div className="mt-3 rounded border border-border/60 p-4 text-[12px] text-muted-foreground">
-      「{label}」建设中
-      <span className="ml-2 font-mono text-[11px]">{symbol}</span>
-    </div>
-  )
+  switch (tab) {
+    case 'l2':
+      return <L2Tab symbol={symbol} market={MARKET} hasPosition={POSITION_UNKNOWN} />
+    case 'suggest':
+      return <SuggestTab symbol={symbol} market={MARKET} hasPosition={POSITION_UNKNOWN} />
+    case 'fundamental':
+      return <FundamentalTab symbol={symbol} market={MARKET} hasPosition={POSITION_UNKNOWN} />
+    case 'news':
+      return <NewsTab symbol={symbol} market={MARKET} hasPosition={POSITION_UNKNOWN} />
+    case 'research':
+      return <ResearchTab symbol={symbol} market={MARKET} hasPosition={POSITION_UNKNOWN} />
+    case 'forecast':
+      return <ForecastTab symbol={symbol} market={MARKET} />
+  }
+  const neverTab: never = tab
+  return <div className="mt-3 text-[12px] text-muted-foreground">未知标签: {neverTab}</div>
 }
 
 export default function StockWorkbench() {
@@ -103,6 +148,7 @@ export default function StockWorkbench() {
         symbol={symbol}
         market={MARKET}
         type={type}
+        hasPosition={POSITION_UNKNOWN}
         onTypeChange={(t) => setQuery('type', t)}
         onGotoTab={(t) => setQuery('tab', t)}
         onRefresh={() => setRefreshKey((k) => k + 1)}
