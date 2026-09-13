@@ -189,8 +189,16 @@ const handleShareInsight = useCallback(async () => {
   }
 }, [copyTextWithFallback, resolvedName, shareText, toast])
 
-const handleSetAlert = async () => {
-  if (!symbol) return
+/**
+ * 手工触发「盘中监测」(恢复组件的「一键设提醒」按钮)。派生自 `intraday_monitor` 的实际链路:
+ * `stocksApi.list()` → 未关注则 `create()` → `updateAgents` 确保绑定 → `triggerAgent(..., 'intraday_monitor')`。
+ *
+ * **返回值**(Task 12 增量): `true` = 作业已提交(5s 轮询在跑), `false` = 未提交(已 toast 原始错误)。
+ * 既有调用方(`InsightHeaderBar` 的 `onClick`)全部忽略返回值 ⇒ 行为逐字不变; 新增的消费方
+ * (工作台「建议」标签)据此渲染失败提示 —— **不猜**失败原因。
+ */
+const handleSetAlert = async (): Promise<boolean> => {
+  if (!symbol) return false
   setAlerting(true)
   try {
     const stocks = await stocksApi.list()
@@ -217,19 +225,27 @@ const handleSetAlert = async () => {
     })
     toast('已设置提醒，AI 分析已提交', 'success')
     // 轮询等待建议生成（最多 2 分钟，每 5 秒一次）
+    // Task 12 修复(既有缺陷, 与 Task 10 Finding 2 同形): 原实现持有**局部** `poll` 句柄 + 125s
+    // setTimeout 自停, **卸载时不清** —— 工作台切走「建议」标签后最长 ~2 分钟仍每 5s 打
+    // `/suggestions`。改为复用同文件既有的句柄管理(autoPollRef/autoPollStopRef/stopAutoPolling)
+    // + `mountedRef` 守卫: 卸载/被新一轮取代都会清; await 期间若已卸载则不再装轮询、不再 setState。
+    if (!mountedRef.current) return true
+    stopAutoPolling() // 被新一轮触发取代时先清上一轮(防叠加)
     const before = Date.now()
-    const poll = setInterval(async () => {
-      if (Date.now() - before > 120_000) { clearInterval(poll); setAlerting(false); return }
+    autoPollRef.current = setInterval(async () => {
+      if (Date.now() - before > 120_000) { stopAutoPolling(); return }
       await loadSuggestions()
     }, 5_000)
     await loadSuggestions()
-    // 延迟清理：2 分钟后 interval 自动停止
-    setTimeout(() => clearInterval(poll), 125_000)
-    return
+    if (!mountedRef.current) return true
+    // 到点自停(句柄记在 ref, 卸载/被取代时由 stopAutoPolling 一并清)
+    autoPollStopRef.current = setTimeout(() => stopAutoPolling(), 125_000)
+    return true
   } catch (e) {
-    toast(e instanceof Error ? e.message : '设置提醒失败', 'error')
+    if (mountedRef.current) toast(e instanceof Error ? e.message : '设置提醒失败', 'error')
+    return false
   } finally {
-    setAlerting(false)
+    if (mountedRef.current) setAlerting(false)
   }
 }
 
