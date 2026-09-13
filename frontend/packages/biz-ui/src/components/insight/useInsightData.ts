@@ -22,6 +22,7 @@ import type {
   DarkFlowTqResponse,
   CompanyInfo,
   KlineSummaryResponse,
+  SummaryOrderbook,
   GsSignalLike,
   FundFlowBarLike,
   KlineEventLike,
@@ -104,6 +105,13 @@ const [fundamentals, setFundamentals] = useState<FundamentalsDetail | null>(null
 const [fundamentalsLoading, setFundamentalsLoading] = useState(false)
 const [fundamentalsLoaded, setFundamentalsLoaded] = useState(false)
 const [klineSummary, setKlineSummary] = useState<KlineSummary | null>(null)
+/**
+ * `GET /klines/{s}/summary` 的**顶层** `orderbook`(盘口形态/最优买卖/价差/买盘占比)。
+ * v0.6.0 遗留④: 此前 `loadKline` 只存 `data.summary`(⇒ `klineSummary` 里没有 `orderbook`),
+ * 消费方(工作台「盘口资金」标签)拿不到退役 `/l2` 页原本渲染的那四个盘口读数, 只能用
+ * `/orderbook-ob` 的 OB 序列 label 当形态代理。现单独存一份并暴露(缺 → `null`, 由渲染层走 `--`)。
+ */
+const [summaryOrderbook, setSummaryOrderbook] = useState<SummaryOrderbook | null>(null)
 /** 2026-08-12 预热优化: 弹窗打开即拉主力意图, 切到 K线 tab 秒显图例卡 */
 const [mainIntent, setMainIntent] = useState<MainIntentStructured | null>(null)
 // ============== SIDA Pro: K线图层标注数据 state (P1+ P2) (2026-09-01) ==============
@@ -208,6 +216,9 @@ const loadKline = useCallback(async () => {
   if (!symbol) return
   const data = await insightApi.klineSummary<KlineSummaryResponse>(symbol, market)
   setKlineSummary(data?.summary || null)
+  // 遗留④: 顶层 `orderbook`(与 summary 平级)单独存一份 —— 无条件 set(缺失即 null),
+  // 否则换标的/源不可用时会把上一只票的盘口形态留在屏上。
+  setSummaryOrderbook(data?.orderbook ?? null)
   // 2026-08-12 预热优化: 顺手存主力意图, 传给 K线 tab 秒显(免组件二次请求)
   if (data?.main_intent_structured) setMainIntent(data.main_intent_structured)
   // ============== SIDA Pro: K线图层标注数据 (P1+ P2 入口) (2026-09-01) ==============
@@ -398,7 +409,7 @@ const loadHoldingAgg = useCallback(async () => {
     let pnl = 0
     for (const acc of data?.accounts || []) {
       for (const p of acc.positions || []) {
-        if (p.symbol !== symbol || p.market !== market) continue
+        if (p.symbol !== symbol || String(p.market || '').trim().toUpperCase() !== market) continue
         quantity += Number(p.quantity || 0)
         cost += Number(p.cost_price || 0) * Number(p.quantity || 0)
         marketValue += Number(p.market_value_cny || 0)
@@ -498,38 +509,29 @@ const handleRefreshAll = useCallback(async () => {
 const refreshForAuto = useCallback(async () => {
   if (!symbol) return
   const tasks: Promise<any>[] = []
-  // Task 10 门控: 自动刷新同样只碰「已启用」的端点(缺省全开 = 旧行为逐字不变)。
+  // 键门控(缺省 undefined = 全开)。**已不再按内部 `tab` 收敛** —— 唯一的 `setTab` 调用方是
+  // `OverviewTab`, 而该组件随旧模态一起删除(2026-09-13, 全仓零引用) ⇒ 所有消费者的 `tab` 恒为
+  // `'overview'`, 保留 `tab === 'X'` 分支只会让"什么会随 tick 重取"难以读懂(遗留⑪: 清掉这批已死分支;
+  // 在当前消费者上**行为零变化** —— 原来 `tab==='overview'` 就已命中 kline/suggestions/news/announcements/reports)。
   if (isResourceEnabled(enabledKeys, 'core')) {
-    tasks.push(loadQuote(), loadMoreInfo(), loadHoldingAgg())
-    if (tab === 'overview' || tab === 'kline') {
-      tasks.push(loadKline(), loadMiniKline({ silent: true }))
-    }
+    tasks.push(loadQuote(), loadMoreInfo(), loadHoldingAgg(), loadKline(), loadMiniKline({ silent: true }))
   }
-  if (isResourceEnabled(enabledKeys, 'suggestions') && (tab === 'overview' || tab === 'suggestions')) {
+  if (isResourceEnabled(enabledKeys, 'suggestions')) {
     tasks.push(loadSuggestions())
   }
-  if (isResourceEnabled(enabledKeys, 'news') && (tab === 'overview' || tab === 'news')) {
+  if (isResourceEnabled(enabledKeys, 'news')) {
     tasks.push(loadNews())
   }
-  if (isResourceEnabled(enabledKeys, 'announcements') && (tab === 'overview' || tab === 'announcements')) {
+  if (isResourceEnabled(enabledKeys, 'announcements')) {
     tasks.push(loadAnnouncements())
   }
-  if (isResourceEnabled(enabledKeys, 'reports') && (tab === 'overview' || tab === 'reports')) {
+  if (isResourceEnabled(enabledKeys, 'reports')) {
     tasks.push(loadReports())
   }
-  // 自动刷新仍保留「按标签收敛」(20s 周期重取是可选行为, 与首拉的键门控正交):
-  // `company`/`fundamentals` 只在内部 tab 命中时随 tick 重取 —— 工作台标签的 `tab` 恒为
-  // `'overview'`(EOD 数据, 无新鲜度承诺, 不随 tick 重取; 需要重取走 Provider 的手动刷新)。
-  // `company` 分支原先是**无键门控**的(任何键集下 tab==='company' 都会取), 2026-09-13 一并补上
-  // 键判定(缺省 undefined = 全开 ⇒ 旧行为不变)。
-  if (isResourceEnabled(enabledKeys, 'company') && tab === 'company') {
-    tasks.push(loadCompany())
-  }
-  if (isResourceEnabled(enabledKeys, 'fundamentals') && tab === 'fundamentals') {
-    tasks.push(loadFundamentals())
-  }
+  // **EOD 数据有意不随 tick 重取**: `company`(简介/基本信息) 与 `fundamentals`(龙虎榜/两融/股东户数)
+  // 无盘内新鲜度承诺, 20s 重取纯浪费配额 —— 需要重取时走 Provider 暴露的 `handleRefreshAll`(手动刷新)。
   await Promise.allSettled(tasks)
-}, [symbol, tab, enabledKeys, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports, loadCompany, loadFundamentals])
+}, [symbol, enabledKeys, loadQuote, loadMoreInfo, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports])
 
 const loadDeepResult = useCallback(async () => {
   if (!symbol) return
@@ -569,6 +571,8 @@ useEffect(() => {
   setFundamentals(null)
   setFundamentalsLoaded(false)
   setMoreInfo(null)
+  // 换标的清盘口形态(遗留④): 顶行/快照同理, 不许把上一只票的 orderbook 画到新标的上
+  setSummaryOrderbook(null)
   loadCore()
 }, [props.open, symbol, market, enabledKeys, loadCore])
 
@@ -704,6 +708,8 @@ const miniKlineExtrema = useMemo(() => {
     fundamentalsLoading,
     fundamentalsLoaded,
     klineSummary,
+    // 遗留④: `/klines/{s}/summary` 的**顶层** orderbook(形态/最优买卖/价差/买盘占比)
+    summaryOrderbook,
     mainIntent,
     gsSignals,
     fundFlow,

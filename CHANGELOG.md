@@ -5,7 +5,103 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-14
+
+### release-v0.6.1: 个股工作台 v0.6.0 遗留清理收口(四批) + 复审整改 + 离线门禁清零
+
+**性质**: 纯前端 + 测试/文档, **无后端代码改动、无迁移、无接口契约变更**。部署走**静态面**(`docker cp dist → /app/static` + `VERSION` + `chown`), **不重启容器**(重启会杀掉容器内 nohup 回填任务)。
+
+**这批交付了什么**(老板批「除了 D 其他开干」→「KI-056 先跳过, 纯债清完再说」→「③④⑤⑦ 一起做掉」):
+- **遗留清理四批**(第1批 `c8b7d31` / 第2批 `5038bbc` / 第3批 `8f55242` / 第4批 `28af43b`): 预测页预选标的、持仓态 60s 轮询、板块 chips 截断、删 4 个恢复后零引用的死文件、market 口径归一、`tests/` 纳入类型与 lint 门禁(新增 `pnpm typecheck:tests`, 与 `tsc -b` 解耦 ⇒ 测试坏了不挡生产构建)、`refreshForAuto` 改纯键门控、以及 ③④⑤⑦ 四项。
+- **第4批复审整改** `88d7f14`: 独立复审判 needs fixes, 2 个阻塞项(**③ 的"零写入"是假话** / **⑦ 自己引入的响应乱序竞态**)已回源核实并修掉, 另修 5 个 Minor(含**停牌股会渲染假「振幅 0.00%」**)、订正 4 处失实引用。两处修复都做了**变异验证**(把守卫改坏 ⇒ 恰好对应新用例红、其余绿)。
+- **KI-055 关闭**: 离线门禁存量红 **7 failed → 0 failed**(实测 2280 passed / 5 skipped)。其中 5 条是日历敏感用例, 在工作日自动转绿(未改一行代码); 另 2 条的修法**都没有采用 KI 里原先的建议**(不用 `importorskip`、不标 `@pytest.mark.network`), 理由见该条目。
+- **⑭**: CHANGELOG 回填 **42 条** `[commit <hash>]`, 删 15 处已作废的免责从句; 50 个哈希全部通过 `git cat-file -e` 存在性校验。
+
+**门禁**: 前端 `tsc -b` 0 / `typecheck:tests` 0 / `eslint` 0 / `UI-RULES OK` / vitest **388/388**; 后端 `pytest -m "not network"` **2280 passed / 0 failed / 5 skipped**。真接口探针(生产 :8000)已核过 ④⑤ 的数据面(见第4批条目)。
+
+**⚠️ 需要老板拍板的 3 条新登记 KI**(均已查明事实、给出方案, **未擅自改**):
+- **KI-057(P2)** 「振幅」两套分母口径: 后端落库 `(high−low)/low`(`kline_collector.py:853`) vs 前端实时 `(high−low)/prev_close`(A 股通行口径)。同一工作台页可同屏到达(带1 快照行 vs 建议条 → `KlineSummaryDialog`), 同一只票两个数。改后端要先定口径, 且要决定**历史 `klines.amplitude` 是否回填重算**(改了不回填 = 新旧口径混在一张表, 比现在更糟)。
+- **KI-058(P2)** 「设提醒」能力**已无任何 UI 入口**: 遗留③ 之后 `handleSetAlert` 成零生产调用方的孤儿(旧入口随 v0.6.0 退役旧模态一起没了) ⇒ 用户无法从界面上给个股开启盘中监测提醒。两条路: (A) 在「建议」标签补一个**独立且明示写入**的「设提醒」按钮(= 新功能); (B) 确认不再需要则删死代码。
+- **KI-059(P2)** 封单额迁到带1 后**失去 30s 轮询与快照时钟**: 它恰是那一行里变化最快的读数(涨停股盘中几秒能从几亿砸到 0), 现在看着像实时、其实是首屏时刻, 且无时效提示。三选一: (A) 带1 的 `/l2` 加 30s 轮询; (B) **只加快照时钟**(成本最低, 倾向此项); (C) 迁回右栏(不推荐, 会重新引入双处显示)。
+
+**留到周一盘中实测的项**(休市时无法验证, 已如实登记不作"已验证"计): ④ 的 `summary.orderbook` **populated** 路径(形态/最优买卖/价差 的真值渲染) —— 当前生产返回 `{available:false, shape:null, note:"无数据"}`, 页面走的是**回退口径 + 明示披露**那条路, 需盘中 thsdk 在线才能验真值; 以及既有待办 **P2-T15**(连板梯队盘中实测 + 断源演练 —— 断源演练要停生产 redis, 须老板当场点头)。
+
+**本批明确没做**: KI-056(老板点名跳过)、B⑩(Provider 暴露失败位, 让 消息/基本面/建议 能区分"端点失败"与"确实没内容")、B⑫(`core` 键下 `HeaderBand` 与 `SuggestTab` 重复取一次 `/klines/{s}/summary`)、复审 Minor M4/M8/M9 —— 全部留痕待后续批次。
+- [tag v0.6.1]
+- [commit 待发版提交与合并提交产生后按 ⑭ 的做法回填]
+
+### fix(wb)-v0.6.0 遗留清理第 4 批: 无自选/绑定副作用触发 + 真盘口形态 + 带1 补三格 + 刷新不重挂载
+
+老板批「③④⑤⑦ 一起做掉」(KI-056 明确跳过)。四项都是 v0.6.0 发版时登记在案的遗留, 全部**只改前端**、**不新增任何接口请求**。
+
+- **遗留③(「触发盘中监测」有持久化副作用)** —— 工作台「建议」标签的按钮原先调 `handleSetAlert`(与旧模态「一键设提醒」同一动作): `list()` → 未关注则 `create()` **写入自选** → `updateAgents()` **写入 Agent 绑定** → `triggerAgent()`, 两步写入不回滚。现新增 `useInsightActions.triggerIntradayOnce`: 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name, … })` —— **不动用户的自选/绑定状态**。后端证据(`src/web/api/stocks.py:461-533`): 标的不在当前用户自选时走"不落库"分支用 `SimpleNamespace(id=0,…)` 顶替(:523-533 注释原文「不落库：…一次性分析」), 已在自选时也只**读**既有行(:515-522), 两条分支都不 `create`/不写 `StockAgent`; 下游 `trigger_agent_for_stock` 只把 `stock_agent_id` 用于 `resolve_ai_model`/`resolve_notify_channels`(`src/bootstrap/runtime.py:790-791`), 不建绑定。可见 note 随之改为如实陈述「一次性触发: 不加入自选、不绑定盘中监测」—— **不再发生的事不许留在 UI 上**; 失败行固定陈述「本次未发生自选 / 绑定写入」(本路径无"部分成功")。`handleSetAlert` + `SetAlertOutcome` **原样保留**给需要持久化语义的调用方(见 KI-058: 它现已零生产调用方)。
+  - ⚠️ **本条初版曾写成"零写入/不发站内通知", 是假的, 已由独立复审揪出并订正(Finding 1)**: `suppress_notify = stock_id<=0`(:485)只让 `trigger_agent_for_stock` 内部 `channels=[]`(`runtime.py:790`), 即"**不外发 Agent 自己解析到的渠道**"; 而 API 层收尾 `_notify`(`stocks.py:589-630`, **无 `suppress_notify` 判断**)→ `notify_task_done`(`src/core/notify_center.py:97-111` 恒 `db.add(Notification)`+`commit()`)照样写一条**站内「任务完成」通知**, 且不传 `user_id` ⇒ 按 `:338-341` **兜底推给 owner 账号**; 另 `record_agent_run`(`src/core/agent_runs.py:40`)写一条 **AgentRun 运行记录**。⇒ 一轮真实 Agent 运行**必然**落库, 这点本路径与 `handleSetAlert` **没有区别**; ③ 消除的只是"偷偷改用户自选/绑定"。按钮 `title` 已按实况改写(明说仍会留运行记录与站内通知), 相关源码头注/测试命名同步订正。**教训**: 核"没有写入"必须把**收尾/回调路径**一起读完, 只读入口分支不够。
+- **遗留④(盘口形态用 OB label 当代理)** —— `/klines/{s}/summary` 的**顶层** `orderbook`(与 `summary` 平级, 装配处 `src/web/api/klines.py:518-545` → `orderbook_engine.order_book_queue`)此前没被暴露: `loadKline` 只存了 `data.summary`。现单独存一份 `summaryOrderbook` 并暴露(换标的无条件清值, 防上一只票的形态留在屏上), `L2Tab` 的 形态 / 买盘占比 改为**优先**取真字段, 并新增 最优买卖(`best_bid`/`best_ask`) 与 价差(`spread`) 两格。OB 序列 label 降级为**回退**, 且回退时屏上明示一行 + 写进 cell 的 `hint`(两套口径不冒充); 后端 `available:false` 时把它自己的 `note` **原样转述**(不本地编理由)。`core` 键本来就在打这条接口 ⇒ **零新增请求**。
+- **遗留⑤(带1 快照行缺三格)** —— `mapSnapshot` 补 成交量 / 振幅 / 封单额, 数据面全部来自**已在打的两条响应**: `/quotes/{s}` 的 `volume`(单位=手) 与 `prev_close`(振幅分母), `/stocks/{s}/l2` 的 `more.fcamo`(封单额, 后端 `stock_l2.py:89` 已 `×1e4` 换算成元) 与 `snapshot.{high,low,last_close}`(振幅的 CN 回退源)。**振幅 = (最高 − 最低) / 昨收 × 100**(A 股通行口径, 与仓内既有前端实现 `useInsightDerived.amplitudePct` 逐字一致); 三个入参**强制同源**(quotes 三者齐全才用 quotes, 否则整体回退 l2 snapshot), 绝不跨源拼数; 除零/缺值/非 finite → `--`。`snapshot.volume` **有意不渲染** —— 通达信该字段单位在本仓无实测证据, 单位不明就不画。**去重裁定**: `DATA_OWNERSHIP.seal_amount = 'band1.snapshot'` ⇒ 右栏 `QuickRail`「盘口速览」的封单行**删除**, 带1 是全站唯一拥有面(设计文档去重表 #7 的"带1 / 盘口速览"双归属作废); 带符号金额格式化收敛到共享的 `lib/ladder-format.ts::fmtSignedAmount`(带1 封单额与右栏主力净额必须同一套单位映射)。`seal_amount` 同时进 `EQUITY_ONLY_KEYS`(指数/板块**隐藏**, 不留 `--` 噪声) ⇒ 非个股隐藏 cell 由 7 个变 8 个。
+- **遗留⑦(刷新重放入场动画)** —— 页面级刷新原先给指数/板块正文挂 `key={refreshKey}`: 换 key 会卸载并重建整棵子树 ⇒ 每次点刷新都重放 `sida-page-enter` 动画(视觉"闪一下")并丢掉正文自己的内部 UI 状态。现 `IndexBody`/`BoardBody` 接受可选 `refreshToken?: number` 并放进取数 effect 依赖 ⇒ token 变化**只重跑取数**, 组件实例与 DOM 节点都不动(不传该 prop 时行为与旧版逐字一致)。个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都是"挂载即取数"且无 token 入参, 重挂载是它们唯一的整棵重取数手段, 逐个加 token 属跨组件改造, 不在本批范围。
+  - ⚠️ **⑦ 自身引入的竞态, 已由独立复审揪出并修掉(Finding 2)**: 改成 `refreshToken` 后正文实例**常驻**, 而旧的 `key` 重挂载本来会顺手把在飞请求连实例一起丢弃 ⇒ 连点刷新会让多个 `load()` 并行, 慢的**旧**请求后到就用旧数据/旧错误覆盖新结果。`IndexBody` 的渲染顺序是 `loading → error → data`(**error 优先**), 所以一次过期失败足以把已到手的好内容整块换成错误横幅; `BoardBody` 则会多出一条过期错误横幅。修法: 按仓内既有形态(`L2Tab.tsx` 的 `useL2Sources.seqRef`)给两个正文的 `load` 加**取号守卫** —— await 之后只认最新号(含 `catch`/`finally`), 附属取数(大盘资金流 / 板块轮动)与 `setLoading(false)` 同样只在序号最新时生效(过期号不清 loading, 否则新请求还在飞就提前显示"加载完成")。并补 2 条**变异敏感**回归测试: 挂住第 1 次取数 → 第 2 次先回好数据 → 再让第 1 次**失败后到**, 断言好数据仍在屏 / 过期错误横幅不出现(去掉守卫必红)。
+- **真接口探针(生产 :8000, 真数据, 非 mock)** —— `/quotes/600519`: `prev_close=1285.13 / high=1286.15 / low=1263.01 / volume=34801.0`(手) ⇒ 振幅 = 1.80%(实算核对); `/stocks/600519/l2`: `more.fcamo=0.0`(未封板的**真值**, 渲染 `0` 不是 `--`) + `snapshot.{high,low,last_close}` 齐备; `/klines/600519/summary` 顶层确有 `orderbook` 键, 当前(休市、无 `.img`、thsdk 不可达)返回 `{available:false, shape:null, note:"无数据"}` ⇒ 正是设计里的"诚实空态", ④ 走**回退口径 + 明示披露**那条路( populated 路径需盘中 thsdk 在线, 留待周一盘中实测)。**自选/绑定写入实测基线**: 触发前 `admin` 自选 33 条、600519 已在自选但其 `intraday_monitor` 绑定数 = 0、全库该 Agent 绑定 44 条 —— 供点击后比对(③ 的验收判据; 注意这只量**自选/绑定**, 运行记录与站内通知不在其中)。
+- **附带发现(登记 KI, 均未擅自改代码)** —— **KI-057**: 「振幅」在产品内有**两套分母口径**(后端落库 `kline_collector.py:853` 用 `/low`, 前端实时用 `/prev_close`), 且同一工作台页面可同屏到达(带1 快照行 vs 建议条 → `KlineSummaryDialog`), 需老板先定口径再改(牵涉历史 `klines.amplitude` 是否回填重算); **KI-058**: ③ 改完后 `handleSetAlert` 成**零生产调用方的孤儿**, 即"给个股绑定盘中监测提醒"这一能力自 v0.6.0 退役旧模态后**已无任何 UI 入口** —— 补显式「设提醒」按钮(新功能)还是删死代码, 待老板拍板; **KI-056** 描述订正(其引用的 `/quote/:symbol` 已随 v0.6.0 退役, 条目本身仍开启)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint(含 55 测试文件) 0 / UI-RULES OK / vitest **385/385**(较第3批 361 新增 24 条)。
+- [commit 28af43b]
+
+### fix(wb)-v0.6.0 遗留清理第 4 批**复审整改**: 2 个阻塞项 + 4 处失实引用
+独立复审(读 `28af43b` 的未提交前身)判 **needs fixes**, 两个阻塞项都已核实为真并修掉。**这两项都不是门禁能抓到的** —— 五项门禁当时全绿。
+
+- **Finding 1(阻塞, 诚实性) —— ③ 的"零写入/不发站内通知"是假话**。`suppress_notify = stock_id<=0`(`stocks.py:485`)只让 `trigger_agent_for_stock` 内部 `channels=[]`(`runtime.py:790`), 即"不外发 **Agent 自己解析到的**渠道"; 而 API 层收尾 `_notify`(`stocks.py:589-630`)对 `suppress_notify` **没有任何判断**, 无条件调 `notify_task_done` → `notify_center.py:97-111` **恒** `db.add(Notification)`+`commit()`, 且不传 `user_id` ⇒ 按 `:338-341` **兜底推给 owner 账号**; 另 `record_agent_run`(`agent_runs.py:40`)写一条 `AgentRun`。⇒ 一轮真实运行**必然**落库, 本路径与 `handleSetAlert` 在这点上没区别; ③ 真正消除的只有"偷偷改用户自选/绑定"。**修法**: 按钮 `title` 按实况改写(明说仍会留运行记录与站内通知), 并订正 `useInsightActions` 头注/`TriggerOnceOutcome` 头注/`SuggestTab` 头注与 state 注释/测试的 describe 与 it 命名与断言旁注(共 8 处"零副作用/零写入"措辞)。**可见 note「一次性触发: 不加入自选、不绑定盘中监测」与失败行「本次未发生自选 / 绑定写入」本身是真的, 保留不动。**
+  - **控制器自查也漏了这条**: 我读过 `stocks.py:540-620`(那段里就有 `_notify` 的定义)却没把它和"零写入"的声称连起来。**教训写进台账**: 核"没有写入"必须把**收尾/回调/后台线程**路径一起读完, 只读入口分支不够。
+- **Finding 2(阻塞, 竞态) —— ⑦ 自己引入了一个新缺陷**。改成 `refreshToken` 后正文实例**常驻**, 而旧的 `key` 重挂载本来会顺手把在飞请求连实例一起丢弃 ⇒ 连点刷新会让多个 `load()` 并行, 慢的**旧**请求后到就用旧数据/旧错误覆盖新结果。`IndexBody` 渲染顺序是 `loading → error → data`(**error 优先**), 一次过期失败足以把已到手的好内容**整块换成错误横幅**; `BoardBody` 则会多挂一条过期错误横幅。**修法**: 按仓内既有形态(`L2Tab.tsx` 的 `useL2Sources.seqRef`)给两个正文的 `load` 加**取号守卫** —— await 之后只认最新号(含 `catch`/`finally`), 附属取数(大盘资金流 / 板块轮动)与 `setLoading(false)` 同样只在序号最新时生效。
+  - **变异验证(不是"写了测试就算")**: 把两处 `const seq = ++seqRef.current` 临时改成 `const seq = seqRef.current`(守卫失效)后重跑 ⇒ **恰好新增那 2 条用例红、其余 4 条仍绿**(证明用例精确指向该守卫, 不是碰巧通过); 随后从备份还原并复跑 6/6 绿。
+- **4 处失实引用订正**(复审逐条核对后端行号/口径后指出, 控制器复核确认): ① `types.ts` 称 `summary.orderbook`"非 CN 或**源不可用** → `null`" —— 错, 源不可用返回的是**对象** `{available:false, shape:null, note:'无数据'}`(已用生产接口实测确认), 只有非 CN / 装配整段抛异常才是 `null`; ② `HeaderBand` 引 `stock_l2.py::fetch_more:75-98` —— 实为 **80-100**; ③ 同处称 `fetch_more`"不做单位换算" —— 与其自身 docstring「万元→元 仅 FCAmo/OpenAmo」矛盾, 且与本接口新加的 `fcamo`(已 ×1e4)自相矛盾, 改为"本接口这几个字段是原值透传, 但 fcamo 有换算"; ④ `QuickRail` 称共享 `fmtSignedAmount` 与原局部实现"逐字相同" —— 对**纯空白字符串**不同(共享版 `trim()` 后判空 → `--`; 原实现 `safeNum('  ')` → `Number('  ')`=0 → `'0'`), 新行为更正确(空白=缺值), 但不能叫等价改写。
+- **一并修掉的 5 个非阻塞 Minor**(复审共列 9 个): 
+  - **M2 停牌股会渲染假「振幅 0.00%」** → 腾讯源对停牌/未开盘给 `high="0.00"`/`low="0.00"`, `_to_float` 返回 **0.0 而不是 None**, 于是 `(0-0)/prev_close*100 = 0` 上屏成「振幅 0.00%」—— 把"没有数据"伪装成"今天零波动", 且这是个**算出来的**数, 比直显 0 更容易被当真。违反本仓自己的 vendor 纪律(`vendors/tencent.py:4`「绝不回退 0」)。已加 `h<=0 || l<=0 || c<=0 → null` 守卫(单边为 0 也拦, 否则会算出 95.24% 的假振幅), 并补回归用例; **变异验证**: 去掉守卫 ⇒ 恰好该用例红、其余 24 条绿。
+  - **M3 「买盘占比」两口径并排却无解释** → 格子优先 `bid_pressure`(委托量口径), 而紧邻的买/卖双向条**恒**按十档额口径画, 于是屏上会同时出现 62.0% 与按 58.5% 画的条子, 读者只能当成矛盾。已给值加**口径后缀**(`62.0%(委托)` / `58.5%(十档额)`), 并在两口径同屏时补一行可见说明(`data-testid="l2-bidpct-mix"`) —— 与形态那条回退披露同处置(口径差异不许只藏在 `title` 里)。
+  - **M1 `handleSetAlert` 的注释断言了一个不存在的调用方** → 注释写"保留给需要持久化设提醒语义的调用方", 但全仓已零生产调用方(旧入口随模态壳退役)。已把两处注释改为如实陈述"当前零调用方、保留待接线", 并指向 KI-058。
+  - **M6 注释/行号小错 4 处** → `StockWorkbench.tsx` 的 `refreshKey` JSDoc 还写着"只作正文子树的 key…两个分支各自重挂载"(与同文件新头注自相矛盾)已改写; `stock_l2.py` 行号 `fetch_more:75-98`→**80-100**、`fetch_snapshot:64-79`→**64-77**; `header-band.test.tsx` 有条注释把"检出跨源拼数"的功劳记在自己头上, 但它的 `/l2` 夹具**根本没有 `snapshot` 段**, 不可能检出 —— 已改为指向真正守这条纪律的 `workbench-snapshot.test.ts` 用例。
+  - **M7 去重契约漏登记新数据点** → `DATA_OWNERSHIP` 补 `volume`/`amplitude`(→`band1.snapshot`)与 `orderbook_shape`/`best_bid_ask`/`bid_spread`(→`tab.l2`); 设计文档 §1.2 的快照行 ASCII 补上漏掉的 **封单额**(去重表 #7 早已裁定它归带1 唯一拥有, 实现也渲染了, 只有图没跟上)。契约表是防漂移的唯一锚点, 新数据点不登记 = 不受保护。
+- **有意没做、登记留痕的 4 个 Minor**: **M5**(封单额迁到带1 后失去 30s 轮询与快照时钟 —— 新鲜度下降, 三选一方案需老板拍板)→ **KI-059**; **M4**(`summary.orderbook` 有 5 分钟双层缓存且优先取离线 `.img`, 但新渲染的 形态/最优买卖/价差 无任何时效或来源披露; 缓解事实是 `PANWATCH_IMG_DIR` 全仓无任何 compose/env 配置 ⇒ `.img` 分支在生产是惰性的); **M8**(「触发盘中监测」无客户端冷却: `bypass_throttle:true` + 后端幂等兜底只覆盖 `tradingagents` 不覆盖 `intraday_monitor` ⇒ 连点会各提交一个真实 AI 作业, 属成本面风险); **M9**(「最优买卖」与右栏五档的买一/卖一是同一数据点两个源, spec 去重表 #3 明确允许并存 ⇒ 不算违规, 但屏上无口径说明)。M4/M8/M9 记入 SDD 台账待后续批次。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint 0 / UI-RULES OK / vitest **388/388**(较 `28af43b` 的 385 净 +3 = 两条竞态回归用例 + 一条振幅非正价格守卫用例); 后端 `pytest -m "not network"` **2280 passed / 0 failed / 5 skipped**。
+- [commit 88d7f14]
+
+### test(gate)-KI-055 关闭: 离线门禁存量红清零(7 failed → **0 failed**)
+- **实测**: `PYTHONUTF8=1 python -m pytest -q -p no:warnings -m "not network"` = **2280 passed / 0 failed / 5 skipped**(此前长期是 7 failed / 2273 passed, 每次发版都要人工比基线才能确认没引入回归 —— 这正是"CI 真门禁"想消除的成本)。
+- **① `test_entry_candidate_outcomes.py` 5 条 —— 未改一行代码**: 2026-09-14 是**周一(工作日)**, 同一套用例直接转绿, 证实 KI-055 原判断"疑为日历相关(待工作日复跑确认)"。(仍建议改成注入固定日期, 否则每逢周末门禁就假红 5 条; 本次不改 —— 成因已复现确认, 且改法属测试重构, 不在本批范围。)
+- **② `test_ta_load_ohlcv_patch.py` 1 条 —— 没用 `importorskip`**: 那只是把红变跳过, 会**丢覆盖**。真因是 `tradingagents` 为**软依赖**(CI 装了、本机没装), 而适配器两种环境抛**不同**异常(`src/agents/tradingagents/toolkit_adapter.py:452-461`: 上游可导入 → `NoMarketDataError`; `except ImportError` → `RuntimeError` 兜底)。改为**按环境断言对应类型**: CI 仍钉住上游契约, 本机则真正覆盖那条**原本零覆盖**的兜底分支 —— 两种环境都在测东西。"不回退 yfinance"(`real_calls==0`)是该用例的真意图, 与环境无关, 两边都断言。
+- **③ `test_thsdk_buffer_size.py` 1 条 —— 没标 `@pytest.mark.network`**: 标 network 等于承认它本该联网, 与用例自述意图("不依赖真实 thsdk 安装")相反, 还会让离线门禁少守一条真契约。**真根因**(也解释了它为何"单跑绿、整套跑红"): 文件顶部换假 `sys.modules["thsdk"]` 只在 `data_source.thsdk_l2` **首次 import** 时生效; 全量跑时别的用例早已 import 过它 ⇒ 本文件拿到的是**绑着真 `THS`** 的缓存模块, 换假成了空操作 ⇒ `_query` 真去连行情服务(5 次重试全败 → `Response(success=False, error='未登录')`)。改为 `monkeypatch` 直接替换 `_query` 实际取用的**模块属性** `M.THS`(`data_source/thsdk_l2.py:98` 的 `from thsdk import THS`, 用于 `:349`/`:361`)⇒ 与 import 顺序无关且**全程离线**; `__main__` 块改走 `pytest.main`(用例现在要 fixture, 不能裸调)。
+- **验证**: 单文件跑 7 passed; **全量跑 0 failed**(③ 的缺陷只在整套顺序下出现, 故全量跑才是有效证据)。
+- [commit 88d7f14]
+
+### docs(changelog)-v0.6.0 遗留⑭: 回填 42 条 entry 的 `[commit <hash>]`
+- **背景**: 本文件头部约定"每条 entry 末尾缀 `[commit <short-hash>]`, 可直接 `git show` 看完整 diff"。但 v0.6.0 那批(任务 T1–T20, 46 commits)的 entry 都是在**提交之前**写的, 于是留下一堆占位与免责句("hash 写入时尚不存在"、"补 hash 需 amend 既有提交, 不在本任务授权内")。这些 commit 现在都存在了, 借口作废。
+- **做法**: 以 `git log --oneline --reverse 88ed465..c935d86` + 三个清理批提交为**权威映射**, 逐条把占位换成真哈希; 一个任务跨多 commit 时用**逗号列举**(不用 `A..B` 区间 —— 该语法**不含** A, 会漏掉首个提交)。共回填 **42 条**, 其中把哈希分配给"真正撰写/修订该 entry 的那次提交"(逐个用 commit subject + `git show --stat` 核对, 不是按任务号一把塞给最后一个 commit)。
+- **同时删掉 15 处免责从句**, 但**保留**同句里的其它事实(门禁数字、遗留项等) —— 只切除借口, 不动信息。
+- **校验**: 50 个插入的哈希与映射表**集合相同**(每个恰用一次), 且全部通过 `git cat-file -e` 存在性检查(错哈希比没哈希更糟 —— 会把读者送到不存在的提交)。
+- **有意留白 1 条**: `docs-个股工作台 v2 三合一设计(spec)落档` 不在任务号映射内, 执行方**没有猜**; 由控制器另行核实后补 `359af2d`(spec 设计文档) + `88ed465`(实现计划)。
+- [commit 88d7f14]
+
 ## 2026-09-13
+
+### chore(wb)-v0.6.0 遗留清理第 3 批: 再删 2 个死文件 + 清掉 `refreshForAuto` 的已死 tab 分支
+- **又找到 2 个恢复后零引用的死组件**(与第1批同手法核过 import) —— `insight/OverviewTab.tsx`(34 处 R6 存量, 占 baseline 大头) 与 `insight/FundamentalsTab.tsx`(工作台用的是 `FundamentalsPanel`, 不走这层): 删除并在 `scripts/ui-rules-baseline.json` 移除 `OverviewTab: 34` 条目。
+- **遗留⑪(`refreshForAuto` 按内部 `tab` 收敛)** —— 排查发现**唯一的 `setTab` 调用方就是刚删的 `OverviewTab`** ⇒ 所有消费者的 `tab` 恒为 `'overview'`, 那些 `tab === 'X'` 分支**已经不可能命中**(死条件, 且让人误以为"有的会随 tick 重取、有的不会")。改为**纯键门控**: 启用哪个 key 就刷新哪些端点; `company`/`fundamentals` 是 EOD 数据, 明确**不随 20s tick 重取**(需要时走 `handleRefreshAll`); 同时在当前消费者上**行为零变化**(原来 `tab==='overview'` 就已命中 kline/suggestions/news/announcements/reports)。依赖数组同步删除两个不再使用的 loader —— **这条正是刚纳入门禁的 eslint 当场抓出来的**(`react-hooks/exhaustive-deps`)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / eslint(含 54 测试文件) 0 / UI-RULES OK / vitest **361/361**。
+- [commit 8f55242]
+
+### chore(web)-v0.6.0 遗留清理第 2 批(工程债): `tests/` 纳入类型与 lint 门禁
+- **遗留⑧(测试不在门禁内)** —— 此前 `tsconfig.json` 的 `include` 只有 `src`/`packages/*/src`、`eslint.config.js` 的 `files` 也不含 `tests/`, **54 个测试文件的类型错误与 lint 问题一律门禁抓不到**(T16 已实证: 往测试塞必然类型错误，`tsc -b`/`eslint` 仍全绿)。
+- **修法(不耦合 app 构建)**: 新增 `frontend/tsconfig.tests.json`(`extends` 主配置; `include` 加 `tests`; `lib` 提到 ES2022 以支持 `.at()`; `types: [node, vite/client, @testing-library/jest-dom]`)并加脚本 **`pnpm typecheck:tests`** —— **不动** `tsc -b` 的 `include`, 所以 app 的 `build` 不会被测试类型错误阻塞(测试坏了不该挡生产发版)。`eslint.config.js` 的 `files` 加 `tests/**/*.{ts,tsx}`。
+- **修出的 3 类真实问题**(首跑 10 错 → 修完 0 错): ① 6 处 `Array.prototype.at()` 被 ES2020 lib 判错(测试配置提 ES2022 解决); ② `tests/lib/indicators-parity.test.ts` 用 `node:fs` 但未装 `@types/node` ⇒ **新增 devDependency `@types/node`**; ③ **`ladder-board.test.tsx` 夹具漏了必填 `candle`**(`LadderMark extends LadderStock`, 该字段必填) —— 是个**不合契约的假夹具**, 补上。
+- **门禁**: `pnpm typecheck:tests` 0 错; `npx eslint .` 覆盖 54 个测试文件 0 错(先前这些文件被 eslint 直接忽略); `tsc -b`(app) 0 错; vitest **361/361**。
+- [commit 5038bbc]
+
+### fix(wb)-v0.6.0 遗留清理第 1 批(低风险工程债): 预测页预选标的 + 持仓态轮询 + 板块 chips 截断 + 删死文件
+- **遗留②(预测页不预选)** —— `ForecastPage` 新增可选 `initialSymbol`(默认空对象 ⇒ `<ForecastPage />` 仍合法, 既有 `Quote.tsx` 调用不变); `ForecastTab` 把工作台 `symbol` 作 `initialSymbol` 透传, 进来即预填(仍可在页内改, 仍要手动点「开始预测」); 口径行改为「已按工作台标的预填代码」。T16 的 `@ts-expect-error` 钉改成"只接受 `initialSymbol`、`symbol` 仍是错属性名"(钉仍在, 且新增正/负断言各一)。
+- **遗留①(持仓态不轮询)** —— `StockWorkbench.useHasPosition` 由一次性取数改为 **60s 轮询**(`POSITION_POLL_MS`), 盘中买卖后不必整页刷新; 失败**保留上次值**(stale-on-error), 首次即失败仍显 `undefined`(未知), 三态语义与「持仓态未知」标注不变; 换标的/关闸门清值+卸载清定时器不变。
+- **遗留⑥(板块 chips 未截断)** —— `QuickRail` 题材/板块 chips 截首屏 `BLOCKS_MAX=8`, 余量折成 `+N`(悬停 `title` 列全名); 320px 速览卡高度不再被 22 条撑爆。
+- **遗留⑨(死文件)** —— 删 `insight/KlineTab.tsx` + `insight/InsightHeaderBar.tsx`(恢复后全仓零引用; 无 R6 baseline 条目)。
+- **遗留⑬(market 口径)** —— `useInsightData` 的 HoldingAgg 持仓匹配把 `p.market` 也做 `trim().toUpperCase()` 归一(原来只归一左侧), 消除大小写/空格造成的漏匹配。
+- **门禁**: 前端 tsc / eslint / UI-RULES / vitest **361/361** 全绿。
+- [commit c8b7d31]
 
 ### feat(wb)-个股工作台 v2 三合一发版: 行情/盘口/旧详情 并入工作台 + 三类型内切 + 六标签 + 全站去重; v0.6.0
 
@@ -33,6 +129,7 @@
 **部署**: 纯前端 → 静态面(`docker cp dist→/app/static/` + VERSION + chown, **无重启**, 不杀回填)。
 **已知遗留**(见 KNOWN_ISSUES): `PanelLockToggle` 现已无生产调用方(保留: 小而有测试的可复用件); `useHasPosition` 挂载取一次不轮询(盘中持仓变更需刷新); `预测引擎` 未启动时 `/forecast/*` 503 为既有状态。
 - [tag v0.6.0]
+- [commit 6284ba3, c935d86]
 
 ### fix(wb)-工作台 v2 任务19 复审整改: 去重核对改「精确计数 + 逐面等数据」+ 两图共用资金柱 net + 持仓取数闸门 + 两处「持仓态未知」真组件用例
 
@@ -44,6 +141,7 @@
 - **测试** —— `kline-fund-bar.test.ts` +4 例(`capitalBarRows`: 暗盘独有 / 明盘+暗盘相加 / NaN 挡 / 逐根对齐); `header-band.test.tsx` +3 例; `fundamental-tab.test.tsx` +2 例; `stock-workbench.test.tsx` +4 例(index/board 零请求 + 个股对照 + 切类型重发闸门); `workbench-dedup-audit.test.tsx` 重写(7 例)。
 - **变异验证(全部已还原)** —— ① band1 加一处「主力净额」⇒ ② 红(`expected 3 to be 2`); ② l2 加「涨停价」⇒ ① 与漂移例红(`2 != 1`); ③ band1 加「封单成色」⇒ ⑤ 红(`1 != 0`, 原用例不抓); ④ 删 l2「封单成色」⇒ 7 例全红(锚点消失即失败, 不空过); ⑤ 去掉 F3 闸门 ⇒ index/board 两例红; ⑥ 把共享 net 退回旧语义 ⇒ 相加断言红(`1e6 != 3e6`); ⑦ 去掉 `Number.isFinite` ⇒ NaN 两例红; ⑧ 断掉 HeaderBand/FundamentalTab 未知标注 JSX ⇒ 各自真组件例红。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **361/361**(54 files; 整改前 348)。R6: 新文件 `fund-bar.ts` 零裸 `.toFixed(`; `scripts/ui-rules-baseline.json` 未动; 无新增 token 之外的视觉。
+- [commit b81bc75]
 
 ### fix(wb)-工作台 v2 任务19: 修主图明盘恒 0(`open_net`→`ming_net`)+ `hasPosition` 接真实持仓源 + 去重核对 + 走查记录
 
@@ -54,7 +152,8 @@
 - **纠正前一位实现者 1 处错断言** —— `workbench-dedup-audit.test.tsx` 末例原断言带1 内 `现价` leaf == 1, 但 `HeaderBand.visibleSnapshotCells` 对个股**已移除** `现价`/`涨跌幅` 两个 cell(顶行已醒目呈现)⇒ 实为 0。改为断言带1 内**无** `现价`/`涨跌幅` leaf, 与该文件自身注释对齐。产品行为未改(正是去重规则的正确体现)。前一位自述遗留的 `countExact` 未用 helper: 全仓 grep 零命中, 已不存在。
 - **测试** —— 新增 2 文件: `tests/lib/kline-fund-bar.test.ts`(7 例, 钉 `ming_net` 读入/open_net 兜底/分色/脏值/时间戳) + `tests/components/workbench-dedup-audit.test.tsx`(7 例); 扩 `tests/components/stock-workbench.test.tsx`(+4 例, 覆盖 `hasPosition` 三态: 在册 true/不在册 false/失败保持 undefined+标注/首帧不伪装 false)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(无 stale-key) / `npx vitest run` **348/348**(54 files; T18 基线 330/52 ⇒ +18 例 +2 文件)。R6: 新代码裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未动; 视觉只用既有 token 类。
-- **未做(留给控制器/T20)** —— ① Part B 浏览器活体走查(凭据不可得, 已如实登记); ② `useHasPosition` 无轮询(盘中持仓变动需刷新页面); ③ P2 生产部署仍与 T20 合并(见 T18 待办)。本 entry 未缀 `[commit <hash>]`(由控制器在提交后补)。
+- **未做(留给控制器/T20)** —— ① Part B 浏览器活体走查(凭据不可得, 已如实登记); ② `useHasPosition` 无轮询(盘中持仓变动需刷新页面); ③ P2 生产部署仍与 T20 合并(见 T18 待办)。
+- [commit faf4d49]
 
 ### chore(wb)-工作台 v2 任务18: 退役行情页/盘口页(删 2 文件) + baseline 清理 + App.tsx 注释订正
 
@@ -62,7 +161,8 @@
 - **baseline 清理(1 文件)** —— `scripts/ui-rules-baseline.json` 删去 `"frontend/src/pages/L2Orderbook.tsx": 3` 与 `"frontend/src/pages/Quote.tsx": 11` 两条。这是"裸 `.toFixed(`"规则的存量豁免名单: 文件已不存在, 留着就是 stale key。清理后 `node ../scripts/check_ui_rules.mjs` 输出 `UI-RULES OK`(无 stale-key 提示)。
 - **注释订正(1 文件, 仅注释)** —— `frontend/src/App.tsx:31` 原写「Quote/L2Orderbook 的 lazy 绑定已摘除 —— 行情页/盘口页并入 `/stocks/:symbol`」, 但**文件本体当时还在**(只摘了绑定), 措辞失准。改写为如实陈述三件事: 并入去向(`/stocks/:symbol`)、正文落点(KlineChart 复用 + L2 内容挪至「盘口资金」标签)、**原页已于 Task 18 删除**。`frontend/src/pages/workbench/tabs/L2Tab.tsx:43` 的注释**保留不动** —— 它描述的是"与退役 `/l2` 页的形态差异(只搬内容不复刻页面壳)", 该陈述在页面删除后依旧正确。
 - **孤儿组件核查(逐符号 grep, 无 live import 者登记不擅删)** —— 逐项核对 `Quote.tsx` 的 import 面: `KlineChart`(`StockWorkbench.tsx` + `biz-ui/index.ts` 仍用) / `ResonanceVerdictPanel`(`workbench/DecisionCard.tsx`) / `SectionHeader`(`Dashboard`/`DiscoveryPanel`/`IndexBody`/`MarketMainlineCard` 等多处) / `useSourceHealth`(`pages/DataSources.tsx`) / `@panwatch/biz-ui/klineEvents`(`KlineChart.tsx` 仍 import) / `insightApi.*`(各端点定义, 工作台各标签仍在调) —— **均仍有消费方, 未挂空**。`FundForecast` 在 brief 里被列为一个 import, 实测**全仓 grep 零命中**(该名字不存在, brief 系近似描述)。**唯一新增孤儿**: `frontend/src/components/PanelLockToggle.tsx` —— 生产侧消费方**只剩被删的 `Quote.tsx`**, 现仅被 `frontend/tests/components/panel-lock-toggle.test.tsx`(4 例)引用。按 brief「存疑则上交控制器, 本任务不擅自删」的指示**未删**, 已登记于 task-18-report 供控制器裁定(组件本身非死代码, 且删它需一并处置其测试, 超出本任务授权面)。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(无 stale-key) / `npx vitest run` **330/330**(52 files, 与上一提交同数 —— 本任务只删未被引用的页面, 未增删用例)。本 entry 未缀 `[commit <hash>]`(由控制器在提交后补)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(无 stale-key) / `npx vitest run` **330/330**(52 files, 与上一提交同数 —— 本任务只删未被引用的页面, 未增删用例)。
+- [commit 3e87b05, 3df3c8d]
 
 ### feat(wb)-工作台 v2 任务17: TabPanel 接线 6 个真实标签(按 ?tab= 只渲染激活项 = 惰性取数)
 
@@ -75,7 +175,8 @@
 - **测试(沿用既有文件, 12 例; 上基线同文件 10 例)** —— ① 默认页断言真实 `tab-l2` 入参 `l2:002636:CN:false` + 其余五标签**不在屏** + 挂载集合 `['l2']`; ② `?type=index`/`?type=board` 断言**一个标签都不挂载**; ③ 六键逐一循环: 选中态 + 对应组件入参精确相等 + 其余五键 `null` + 挂载集合恰一项(`ForecastTab` 单独断言 `hasPosition` 真为 `undefined` —— 它签名不收, 这条钉住了"不虚构入参"); ④ **切标签**: `fireEvent.click` 后断言 `unmount('l2')` 恰一次、`mount` 共 2 次且第二次是 `research`、挂载集合 `['research']` ⇒ 直接证明旧标签**被卸载**(不是六个都留着); ⑤ 非法 `?tab=` 收敛 l2; ⑥ `?type=` 切换后标签**全部卸载**; ⑦ 带1 `onGotoTab` 跳标签; ⑧ T7 刷新用例补"激活标签随正文一起重挂载(`mount` 2 次 / `unmount('news')`)且集合仍只 news"。
 - **变异验证(1 处, 已还原; 证明惰性断言真能抓回归)** —— 把 `TabPanel` 改成**无条件渲染全部六个**(模拟"六个都挂载") ⇒ `1 file | 6 failed | 6 passed`: 默认页/六键逐一/切标签/非法 tab/onGotoTab/刷新 六例同时红(均为"其余标签不该在屏 / 挂载集合不该多于一项")。还原后 12/12 绿。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **330/330**(52 files, 与上一提交同数 —— 本任务扩断言未增删用例数)。R6: 新代码裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未动。视觉只用既有 token 类, 无硬编码色。
-- **未做(留给控制器/后续任务)** —— ① **未部署**: brief Task 17 提到"dist + 静态面部署", 但按控制器指令本任务止于门禁绿 + 提交, dist 构建/部署/浏览器走查由控制器在提交后执行; ② brief Step 5 的 `VERSION` 递增/tag/push **未做**(属 T20 发版, 不在本任务授权); ③ 真实持仓判定源(见上「hasPosition 来源」)仍缺; ④ `tests/` 不在 `tsc -b`/`eslint` 覆盖内(全仓既有缺口, T16 已登记, 本任务同样受影响 —— 测试文件的类型错误不会被门禁抓到)。本 entry 未缀 `[commit <hash>]`。
+- **未做(留给控制器/后续任务)** —— ① **未部署**: brief Task 17 提到"dist + 静态面部署", 但按控制器指令本任务止于门禁绿 + 提交, dist 构建/部署/浏览器走查由控制器在提交后执行; ② brief Step 5 的 `VERSION` 递增/tag/push **未做**(属 T20 发版, 不在本任务授权); ③ 真实持仓判定源(见上「hasPosition 来源」)仍缺; ④ `tests/` 不在 `tsc -b`/`eslint` 覆盖内(全仓既有缺口, T16 已登记, 本任务同样受影响 —— 测试文件的类型错误不会被门禁抓到)。
+- [commit 26ed846]
 
 ### fix(wb)-工作台 v2 任务16: 修两处测试不诚实(工厂计数/真 chunk reject)+ 顺带修好"重试"真重发 import()
 
@@ -86,13 +187,15 @@
 - **修法(测试, finding 2 采用"真 reject"路线)** —— 新增用例④: 让动态 `import()` **本身 reject**(工厂返回 rejected promise, `gate.mode='reject'`, 消息 `Failed to fetch dynamically imported module`)—— 这才是真实 module-load 失败路径。断言: 屏上 `forecast-tab-error`(成因域 + **真实错误消息** + 「重试」)、外层整页兜底哨兵 `OuterBoundary` 未触发、**工厂计数 == 1**; 点「重试」⇒ **工厂计数 == 2** 且预测页上屏。原用例③(render-throw)**保留**, 继续覆盖成因域的另一半"页内渲染报错"(但不再声称计数 == 2)。用例数 5 → 6。
 - **诚实登记(顺带发现)** —— 头注⑥ 声称 `@ts-expect-error` 由 `tsc -b` 守卫, 但 `tsconfig.json` 的 `include` 是 `[src, packages/[star]/src]`、`eslint.config.js` 的 `files` 也不含 `tests/` ⇒ **现有门禁根本不检查测试文件**(实测: 往测试文件塞必然类型错误, `tsc -b`/`eslint .` 仍全绿)。已在头注与 report **更正措辞并披露该缺口**(不再谎称"门禁已守住"); 该指令本身**是真守卫**: 用一次性 tsconfig 把 tests 纳入后, 保留指令 0 error、删掉立刻 TS2322(`Property 'symbol' does not exist`) ⇒ 确认它在压制一个真实类型错误。
 - **变异验证(3 处, 均已还原, 证明新断言真能抓回归)** —— ① 删掉「重试」里的 `setForecastPage(...)`(只重挂载、不换实例)⇒ 用例④失败(`Unable to find an element by: [data-testid="fake-forecast-page"]` —— 重试后页面永不上屏), `1 failed | 5 passed`; ② 把 `lazy()` 实例改回模块级常量 ⇒ 用例④/②失败(实例 payload 跨用例被污染 + 工厂不再重跑); ③ 删掉 `react.lazy` 包装里的 `reject` 分支 ⇒ 用例④失败(找不到 `forecast-tab-error`, 证明该用例确实依赖"真 reject")。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **330/330**(52 files; 上提交 329 ⇒ 净 +1 例, 因新增用例④)。本 entry 同样未缀 `[commit <hash>]`。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **330/330**(52 files; 上提交 329 ⇒ 净 +1 例, 因新增用例④)。
+- [commit 14dea8f]
 
 ### fix(wb)-工作台 v2 任务16 自审: 错误兜底文案的 markdown 星号直出 + 头注引号失衡
 
 - **起因(`d30a2ac` 的收尾自审, 逐行读实现时发现的两处真缺陷)** —— ① `ForecastFallback` 里那句成因域文案写成 `此处**不作**"引擎未启动"的推断`, 而它渲染在**裸文本节点**里(markdown 不生效)⇒ 用户会在标签内兜底块上**看到两个星号**; ② `ForecastTab.tsx` 头注「形态差异」那段引号失衡(`断言屏上**不存在** \`InsightProvider 的取数端点调用**` —— 后半个加粗标记错位, 读起来像句法错误)。两处都只在**新增文件**内, 未影响其它文件。
 - **修复** —— ① 屏上文案去掉 `**`(`此处不作"引擎未启动"的推断`), 并**补断言** `expect(box.textContent).not.toContain('**')` 防复发(该断言读的是用户可见文本, 与实现正文精确对位); ② 头注那句改写为 `断言挂载期间真 @panwatch/api 零调用 —— 正是"没走 provider"的可观测后果`(**仅注释**)。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **329/329**(52 files, 与 `d30a2ac` 同数 —— 本 entry 只改文案与注释, 未增删用例)。本 entry 同样未缀 `[commit <hash>]`。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **329/329**(52 files, 与 `d30a2ac` 同数 —— 本 entry 只改文案与注释, 未增删用例)。
+- [commit fa52ad5]
 
 ### feat(wb)-工作台 v2 任务16: 标签「预测」(惰性内嵌四模型页)
 
@@ -106,13 +209,15 @@
 - **测试怎么可控地模拟 chunk(踩坑记录, 供后人复用)** —— `vi.mock('@/pages/Forecast')` 替身的 `default` **必须是普通组件, 不能再是 `React.lazy` 对象**: 本标签自身那层 `lazy()` 会把模块 `default` 当组件类型, 若 `default` 本身是 lazy 对象, 外层解析出的"组件"仍是 lazy 对象 ⇒ React 报 `Element type is invalid. Received a promise that resolves to: [object Object]. Lazy element type must resolve to a class or function. Did you wrap a component in React.lazy() more than once?`(**双层 lazy**, 已实测取证)。同理, 把 react 的 `lazy` 替成透明直通(`lazy: f => f`)也不可行: 元素类型退化成普通函数后, React 会把工厂返回的 promise 当普通 children 渲染 ⇒ `Objects are not valid as a React child (found: [object Promise])`, 且 `Suspense` 不会被触发。最终方案: **只留一层 lazy**(本标签那层), 替身模块按模块级开关在 `import()` 时决定给 React 什么 —— 正常态给真组件、`pending` 给永不 settle 的 promise、`reject` 给失败 promise。
 - **变异验证(2 处, 已还原; 证明新断言真能抓到回归)** —— ① 把 `<AppErrorBoundary>` 换成普通 `<div>` ⇒ 用例③失败(`Unable to find an element by: [data-testid="forecast-tab-error"]`, `1 failed | 4 passed`); ② 把 `Suspense` 的 `fallback` 换成 `null` ⇒ 用例②失败(找不到「加载预测页(四模型)…」, `1 failed | 4 passed`)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **329/329**(52 files; 上一提交基线 324/51 → 净 +5 例 +1 文件)。R6: 新文件裸 `.toFixed(` 命中 0; `scripts/ui-rules-baseline.json` 未动。视觉只用既有 token 类(`text-[11px]`/`text-[10px]`/`text-muted-foreground`/`border-border/40`/`bg-muted/20`/`text-amber-600`/`hover:bg-accent`), 无新尺度、无硬编码色。
-- **未做/遗留(见 `task-16-report.md`)** —— ① brief Step 2 的 `?tab=forecast` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态 ⇒ 建议并入 Task 17/19 的 P2 走查; ② 预测页以**空标的**挂载 ⇒ 用户从工作台带过来的 `symbol` 不会自动预选, 要预测哪只票需在该页搜索框重选一次; 预选需给 `Forecast.tsx` 加 props 或让它读查询参数, 属**改既有生产页**, 超出本任务授权(已如实写在口径行, 未做假象); ③ 本 CHANGELOG entry 未缀 `[commit <hash>]`(与 T11–T15 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+- **未做/遗留(见 `task-16-report.md`)** —— ① brief Step 2 的 `?tab=forecast` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态 ⇒ 建议并入 Task 17/19 的 P2 走查; ② 预测页以**空标的**挂载 ⇒ 用户从工作台带过来的 `symbol` 不会自动预选, 要预测哪只票需在该页搜索框重选一次; 预选需给 `Forecast.tsx` 加 props 或让它读查询参数, 属**改既有生产页**, 超出本任务授权(已如实写在口径行, 未做假象)。
+- [commit d30a2ac]
 
 ### style(wb)-工作台 v2 任务15 自审: `Section.count` 注释与实现对齐(「条」→「份」)
 
 - **起因(`2539bba` 的收尾自审)** —— `ResearchTab.tsx` 的 `Section` 组件注释写的是「省略或 `<= 0` 时不渲染『共 N 条』」, 而实现渲染的是「共 N 份」(本标签只有报告用该措辞: 三个 agent 各至多 1 份)。后人按注释找「共 N 条」会 grep 不到。顺带把「深度段的历史对比条数不套用该措辞」写进注释(它只在空态说明里作事实陈述, 不上段头)。
 - **改动** —— **仅 `ResearchTab.tsx` 的注释, 零行为改动**(渲染文案、断言、DOM 一字未改)。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files)。本 entry 同样未缀 `[commit <hash>]`。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files)。
+- [commit 2a5572f]
 
 ### feat(wb)-工作台 v2 任务15: 标签「研究」(AI 报告 + 深度分析, 全复用恢复组件)
 
@@ -124,13 +229,15 @@
 - **诚实空态(never fabricate)** —— 恢复组件的空态不含编造内容(「暂无报告」/「暂无深度分析报告」), 本文件不塞占位条目、不补数值。另给**成因不可区分**的常驻说明: 报告段三因(「该标的三个 agent 均无已存报告 / 取数失败 / 首拉在途」)、深度段两因(「该标的尚无深度分析 / 取数失败」; 历史对比若取到则把真实条数写进说明)。**并区分出一种可区分的情形**: 列表非空而当前子页签的 agent 不在其中(`activeReport === null`)⇒ 另给带真实份数的文案(`research-reports-agent-missing`), 不冒充"没有报告"。段头份数只在 `> 0` 时渲染(首拉在途与确无内容不混同)。根治需 provider 给这两个端点增失败位+加载位(跨任务 API 面, 见 task-15-report concern)。
 - **测试(8 例)** —— ①两段真渲染 + 子页签点「盘后」真换正文 + 入口点击真跳 `/analysis/002636/2026-09-12`; ②门控 `['reports','deep']`(core 六端点/watchlist/suggestions/news/announcements/company/fundamentals/triggerAgent/taTrigger 全零); ③列表非空但当前 agent 缺失的可区分文案; ④真·空 ⇒ 两条空态 + 成因不可区分说明 + 不出「共 0 份」+ 无编造内容; ⑤两端点 reject ⇒ 仍空态且如实说明"不可区分"; ⑥深度结果缺失但历史取到 ⇒ 说明里带真实条数; ⑦换标的(新响应悬挂)⇒ 旧标的报告/结论一条不留屏; ⑧同代码换市场 ⇒ 不留另一市场的深度结论。
 - **变异验证(2 处, 已还原; 证明新断言真能抓到回归)** —— 删掉 `key` ⇒ 用例⑦⑧**同时失败**(`2 failed | 6 passed`); 只把 key 退成 `key={symbol}`(丢 market)⇒ **仅用例⑧失败**(`1 failed | 7 passed`), 正是"市场维度无守卫"的缺口。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files; 上一基线 316/50 → 净 +8 例 +1 文件)。无 UI token/尺度改动(纯 Tailwind token 类), `scripts/ui-rules-baseline.json` 未动。本 entry 未缀 `[commit <hash>]`(与 T11–T14 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files; 上一基线 316/50 → 净 +8 例 +1 文件)。无 UI token/尺度改动(纯 Tailwind token 类), `scripts/ui-rules-baseline.json` 未动。
+- [commit 2539bba]
 
 ### style(wb)-工作台 v2 任务14 复审: 行号引用校正(避免 stale 行号)
 
 - **起因(`5dfb1dd` 的收尾自审)** —— 该提交自身给 `NewsTab.tsx` 头注加了 4 行(补"`key` 为何不含 `market`"), 但同期写的测试头注 ⑥ 与 CHANGELOG 仍按**改动前**的位置引 `NewsTab.tsx:153`; 提交后 `key={symbol}` 实际落在 `:157` ⇒ 后人按 153 grep 会落到别处(这类 stale 行号在本仓已出现过, 见 `082fb98` 同类订正)。
 - **修复** —— `news-tab.test.tsx` 头注 ⑥ 改为**不带行号**的指代(「`NewsTab.tsx` 的标签入口」, 并注明"不写行号: 头注增删会漂"); 本书上一则 entry 的两处引用改为「标签入口(提交内 `:157`)」/「标签入口的 `key={symbol}`」。**仅注释与 CHANGELOG 文案, 零行为改动, 测试断言一字未改**。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **316/316**(50 files)。本 entry 同样未缀 `[commit <hash>]`。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **316/316**(50 files)。
+- [commit e876c06]
 
 ### fix(wb)-工作台 v2 任务14 复审: 跨标的泄漏防线补测试(零覆盖)+ 测试头注空态成因订正为三因
 
@@ -139,7 +246,8 @@
 - **变异验证(1 处, 已还原; 证明新断言真能抓到回归)** —— 删掉 `NewsTab.tsx` 标签入口的 `key={symbol}` ⇒ 新增用例失败 `AssertionError: expected <div …(1)></div> to be null`, 收到 `关于回购股份的进展公告`(旧标的文章确实留在了新标的名下); **同一次变异下原有 5 例全部通过**(`Tests 1 failed | 5 passed`), 正是 Finding 描述的"删掉它也照样绿"。
 - **`key` 是否要含 `market`(Finding 要求给结论)** —— **不含**, 理由写进 `NewsTab.tsx` 头注: 本标签启用的两个端点的请求参数里**没有** market(`loadNews`/`loadAnnouncements` 只发 `hours`/`limit`/`filter_related`/`source`/`names|symbols`, 见 `useInsightData:264-290` 与 `:345-370`)⇒ 同代码换市场时两次请求**逐字相同**、落地数据也相同, 不存在要挡的跨市场脏窗口; 把 `market` 塞进 key 只会多一次无收益的整树重挂载。若将来 `/news` 变成市场维度, 需同步扩 key 并补测(已写在头注里作为触发条件)。
 - **Minor(测试头注与 impl 对齐)** —— `news-tab.test.tsx` 头注 ⑤ 原文只列**两种**空态成因、且引号悬空(`「列表为空时「该时间窗内确无内容」与「取数失败」在此不可区分」`), 与 impl/断言的三因文案不一致 ⇒ 改为与 impl **全文精确匹配**的 `列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分`(顺带消掉悬空引号); 头注顶行「守五件事」→「守六件事」并补 ⑥ 条目。**仅注释与测试, 无行为改动**。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **316/316**(50 files; 上一提交基线 315/50 → 净 +1 = 新增 1 例)。无 UI/token/尺度改动(源码仅头注, 测试仅新增用例 + 抽宿主树); `scripts/ui-rules-baseline.json` 未动。本 entry 未缀 `[commit <hash>]`(与 T11/T12/T13/T14 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **316/316**(50 files; 上一提交基线 315/50 → 净 +1 = 新增 1 例)。无 UI/token/尺度改动(源码仅头注, 测试仅新增用例 + 抽宿主树); `scripts/ui-rules-baseline.json` 未动。
+- [commit 5dfb1dd]
 
 ### feat(wb)-工作台 v2 任务14: 标签「消息」(公告 + 新闻 两段列表, 复用恢复组件)
 
@@ -151,7 +259,8 @@
 - **测试(5 例, jsdom + mock 网络层 `@panwatch/api`, `MemoryRouter`+`ToastProvider` 真宿主)** —— ① 两段真渲染: 公告条目标题/东财来源/外链 + 新闻条目标题/新浪来源/外链, 段头各 `共 2 条`, 两段各一个 `role="combobox"`(恢复组件自带的时间窗下拉), 且公告请求带 `source=eastmoney`、新闻请求不带; ② 门控 `keys=['news','announcements']`: core 六端点 + watchlist + suggestions + reports(`/history` 仅全空时才走兜底)+ deep + fundamentals + company **全零调用**, 未启用 `suggestions` ⇒ `triggerAgent` 零调用; ③ 时间窗接线(从**状态入口** `stock_insight_announcement_hours`/`stock_insight_news_hours` 预置不同窗口值): 公告请求 `hours=4320`、新闻请求 `hours=6`, 且两段**互不串台** —— jsdom 里 Radix `Select` 点不开, 故不模拟点开下拉(仓库现有测试同样不驱动 Radix Select), 而从两个下拉各自绑的 localStorage 键验证; ④ 真·空响应 ⇒ 两个空态 + caveat 在且不出条数; ⑤ 两端点 reject(被降级为空列表)⇒ 空态 + caveat **原样**呈现, 不声称"没有内容"。
 - **变异验证(3 处, 均已还原; 证明新断言真能抓到回归)** —— ① 去掉 `keys={NEWS_TAB_KEYS}`(缺省 = 全开)⇒ 门控例失败(`expected "spy" to not be called at all, but actually been called 1 times`); ② 段头条数写死 `count={0}` ⇒ 两段渲染例失败(找不到 `共 2 条`); ③ 删掉 caveat 那行 span ⇒ ④⑤ 两例失败(`Unable to find an element by: [data-testid="news-empty-caveat"]`)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **315/315**(50 files; 上一提交基线 310/49 → 净 +5 = 新增 1 文件 5 例)。R6: 新文件裸 `.toFixed(` 命中 0。无新视觉 token/尺度/硬编码色(只用既有 `text-[11px]`/`text-muted-foreground`/`border-border/40` 与 `text-[10px]`)。
-- **未做/遗留(见 `task-14-report.md`)** —— ① brief Step 2 的 `?tab=news` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态; 建议并入 Task 17/19 的 P2 走查; ② provider 未暴露 news/announcements 的失败位 ⇒ 本标签无法区分「端点失败」与「该窗口确无内容」(二者都落复用组件的空态), 已用常驻说明如实披露(与 Task 11 Finding 1 同组问题, 根治需 provider 增字段); ③ 本 CHANGELOG entry 未缀 `[commit <hash>]`(与 T11/T12/T13 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+- **未做/遗留(见 `task-14-report.md`)** —— ① brief Step 2 的 `?tab=news` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态; 建议并入 Task 17/19 的 P2 走查; ② provider 未暴露 news/announcements 的失败位 ⇒ 本标签无法区分「端点失败」与「该窗口确无内容」(二者都落复用组件的空态), 已用常驻说明如实披露(与 Task 11 Finding 1 同组问题, 根治需 provider 增字段)。
+- [commit 7827b20, 9c22e53, 082fb98]
 
 ### fix(wb)-工作台 v2 任务13 复审: `enabledKeys` 门控对 `deep`/`fundamentals` 失效 + `company` 键解耦(控制器裁定「只按键判定」)
 
@@ -162,6 +271,7 @@
 - **变异验证(3 处, 均已还原; 证明新断言真能抓到回归)** —— ① `fundamentals` effect 加回 `&& tab === 'fundamentals'` ⇒ **5 例失败**(`expected "spy" to be called 1 times, but got 0 times`); ② `company` effect 加回 `&& tab === 'company'` ⇒ **4 例失败**(同形); ③ `deep` effect 加回 `&& tab === 'deep'` ⇒ **2 例失败**(同形)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **310/310**(49 files; 上一提交基线 307/49 → 净 +3 = 新增的 3 例)。R6: 未新增任何裸 `.toFixed(`, `scripts/ui-rules-baseline.json` 未动; 无 UI/token 改动(仅注释与门控逻辑)。
 - **未做/遗留** —— `refreshForAuto` 仍保留按内部 `tab` 的收敛(工作台标签的 `tab` 恒为 `'overview'` ⇒ 三个键**不随 20s tick 重取**; EOD 数据且两个端点在屏上无新鲜度承诺, 需要重取走 Provider 的 `handleRefreshAll`); 若要"键启用即随 tick 重取", 需另行裁定(会改变旧模态的刷新面)。
+- [commit 0849710]
 
 ### feat(wb)-工作台 v2 任务13: 标签「基本面」(财务/股本 · 龙虎榜/两融/股东户数 · 公司简介 · 加仓测算)
 
@@ -180,6 +290,7 @@
 - **变异验证(4 处, 均已还原)** —— ① 去掉 `setTab('fundamentals')` ⇒ 3 例失败(`expected "spy" to be called 1 times, but got 0 times`); ② 去掉 `loadCompany()` ⇒ 公司用例失败; ③ 改回 `<CompanyTab />` ⇒ 概念板块用例失败; ④ `currentQuantity/currentCost` 写死 0 ⇒ 「传真实持仓数」用例失败(反推行不再出现)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **307/307**(49 files; 上一提交基线 295/48 → 净 +12 = 新增 1 文件 12 例)。无新视觉 token/尺度/硬编码色(只用既有 `text-[11px]`/`text-muted-foreground`/`border-border/40` 等)。
 - **未做/遗留(见 `task-13-report.md`)** —— ① brief Step 2 的 `?tab=fundamental` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态; 建议并入 Task 17/19 的 P2 走查; ② provider 未暴露 `fundamentalsApi.detail` 的失败位 ⇒ 本标签无法区分「端点失败」与「该股无基本面数据」(二者都落复用组件的「暂无基本面数据」), 与 Task 11 Finding 1 同组问题, 根治需 provider 增字段或改用自有取数(跨任务 API 面); ③ `fundamentals` 键与内部 `tab` 的耦合未解, 本任务只**代置**了内部分支; ④ `hasPosition` 目前仍由页面传入(页面暂无来源, 见 Task 6 Ruling), 标签侧已就绪。
+- [commit e63e8a4]
 
 ### fix(wb)-工作台 v2 任务12 复审修复: 触发按钮的持久化副作用进可见 UI + 部分成功如实陈述 + `/suggestions` 跳过 30s GET 缓存
 
@@ -190,6 +301,7 @@
 - **变异验证(均已还原, 4 处)** —— ① `insight.ts` 去掉 `?? 'reload'` ⇒ 新增缓存例失败 `expected "spy" to be called 2 times, but got 1 times`; ② 删掉 note span(退回"只有 title")⇒ 新增可见性例失败 `Unable to find an element by: [data-testid="suggest-trigger-note"]`; ③ catch 分支写死 `agentBound: false` ⇒ 部分成功例失败 `Unable to find an element with the text: /已写入\(不会自动回滚\)/`; ④ 测试宿主改 `hasPosition={false}`(让 Provider 700ms 自动触发参与)⇒ 挂载不触发例失败 `expected "spy" to not be called at all, but actually been called 1 times`(证明 900ms 断言真能抓到 700ms 自动触发)。
 - **自审订正(同 commit 内自查发现)** —— 部分成功文案初稿写作「…已写入(不会自动回滚), **可在右栏「关注」核对**」, 但 `QuickRail`(`packages/biz-ui/src/components/workbench/QuickRail.tsx`)**并无**「关注」入口(全仓 `grep 关注` 在 `src/` 下命中的是 Opportunities/Dashboard 等别页)⇒ 该半句是对**不存在**的 UI 位置的臆断(与 `0ae8508` 收敛掉的"见上方提示"同类错误)。已删除位置指示, 只陈述"已写入、不会自动回滚"这一**可被 `SetAlertOutcome` 证实**的事实; task-12-report §10.1 同步订正。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **295/295**(48 files; 上一提交基线 291/48 → 净 +4 = 建议标签 +2、api 缓存 +2)。改动面仅 3 个源文件(`SuggestTab.tsx` / `useInsightActions.ts` / `insight.ts`) + 2 个测试文件 + 本 CHANGELOG; 无新视觉 token/尺度/硬编码色(note 只用既有 `text-[10px]`/`text-muted-foreground`), 未动 `SuggestionsTab`/`SuggestionBadge` 渲染逻辑。
+- [commit df5a767, 717c045]
 
 ### feat(wb)-工作台 v2 任务12: 标签「建议」(AI 建议列表/技术指标基础建议/触发盘中监测)
 
@@ -203,6 +315,7 @@
 - **测试(7 例, jsdom + mock 网络层 `@panwatch/api`, `MemoryRouter`+`ToastProvider` 真宿主)** —— ① 列表两条建议各带来源(`来源: 盘中监测`×2 / `来源: 盘后日报`)+ 头部 `共 2 条`·`来源: 盘中监测 · 盘后日报` + 徽章 `买入`/`卖出`; 拨动「包含过期」开关 ⇒ `/suggestions` 以 `include_expired:false` 重取(证明开关真接线); ② 门控: 只打 `suggestions`/`core`, `news`/`history`(reports)/`fundamentals`/`deep` 零调用; ③ 空建议 + 技术指标可得 ⇒ 「当前显示技术指标基础建议」+ `加仓`(持仓态 score 5), 且**不**出现「暂无建议」; ④ 空建议 + 技术指标不可得 ⇒ 「暂无建议」, 无编造; ⑤ 挂载**不**触发, 点击后恰好一次 `triggerAgent(1, 'intraday_monitor', {bypass_throttle,bypass_market_hours})`(先 `updateAgents` 绑定)且无失败提示; ⑥ `triggerAgent` reject ⇒ 出现 `suggest-trigger-failed` 事实性提示 + 按钮复位可重试(**不伪装已提交**); ⑦ 假定时器: 手工触发的 5s 轮询在**卸载后停止**。**变异验证(均已还原)**: 去掉 `core` 键 ⇒ ②③ 失败; 去掉卸载清理的 `stopAutoPolling()` ⇒ ⑦ 失败(`expected 15 to be 3`)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **291/291**(48 files; 上一提交基线 284/47 → 净 +7 = 新增 1 文件 7 例)。R6: 新文件裸 `.toFixed(` 命中 0, 改动文件未新增; 无硬编码色(只走既有 token 与 `lucide` 图标)/无新尺度。
 - **未做/遗留(见 task-12-report §5)** —— ① brief Step 2 的 `/stocks/002636?tab=suggest` 手验**当前不可执行**(标签尚未接线, Task 17), 且本地后端需登录态(401), 建议并入 Task 17/19 的 P2 走查; ② 「触发盘中监测」按 brief 走 Provider 的 `handleSetAlert`, 因此继承「按需加入自选 + 绑定 Agent」的副作用(与「一键设提醒」同动作) —— 若产品要求"零副作用的一次性触发", 需 Provider 增加 `allow_unbound` 触发 action(后端已支持 `stock_id<=0 + allow_unbound=true`); ③ `core` 键带来的重复取数(与带1 的 `/klines/{s}/summary`)同上, 需更细的资源键才能收敛。
+- [commit d28f392, 0ae8508]
 
 ### fix(wb)-工作台 v2 任务11 复审修复: 取数失败不再伪装成"无数据"(保留上次成功值) + 实时端点跳过 30s GET 缓存
 
@@ -212,6 +325,7 @@
 - **测试(+4 例, 47 files / 284 tests)** —— ① `frontend/tests/components/l2-tab.test.tsx` 新增 reject 路径用例(**旧 3 例全走 resolve, 这正是 Finding 1 的盲区**): 假定时器下首拉成功 → 第二次 30s 轮询两端点同时 reject ⇒ 断言上次成功值仍在屏上(`买压`/`+0.792`/`+1234.57万`/演变事件 `托单`/封单 `成色 82%`)、三节各出现一条 `取数失败（上次成功 HH:MM:SS）`、且 `thsdk 未接`/`非交易时段或 thsdk`/`无封单成色样本`/`盘口不可用` **四个猜测文案全为 null**; ② 首拉即 reject ⇒ `取数失败（暂无成功记录）` + 三格 `--` + 幽灵单占比 `--` + 猜测文案全 null; ③④ 新增 `frontend/tests/api/insight-cache.test.ts`(不 mock `@panwatch/api`, 只 stub `globalThis.fetch` 数真请求): `orderbookOb`/`sealQuality` 各调 2 次 ⇒ 真发 **2** 次请求, 对照的普通 GET 端点 2 次调用只发 **1** 次(证明修复面未外溢), 以及 `cacheMode:false`/数字 TTL 的调用方逃生门仍生效。
 - **变异验证(均已还原)** —— ① 把失败分支改回"丢掉上次值"(`{ data: null, failed: true, lastOkAt: now }`)⇒ 新增 2 例**双双失败**(`Unable to find an element with the text: 买压` / `Unable to find an element with the text: /取数失败（暂无成功记录）/`); ② 去掉 `orderbookOb` 的 `cacheMode:'reload'` ⇒ `insight-cache.test.ts` 2 例失败(`expected "spy" to be called 2 times, but got 1 times`)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **284/284**(47 files; 上一提交基线 280/46 → 净 +4 = 本 commit 新增的 4 例)。R6: 改动文件裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未增未减; 无硬编码色/新尺度(降级文案走既有 `text-muted-foreground` 令牌)。
+- [commit 6306958]
 
 ### feat(wb)-工作台 v2 任务11: 标签「盘口资金」正文(十档/成品资金/演变/封单成色/暗盘/流水)
 
@@ -223,6 +337,7 @@
 - **测试(3 例, jsdom + mock 网络层 `@panwatch/api`, `MemoryRouter`+`ToastProvider` 真宿主)** —— ① 七节各以真值渲染(买盘占比 58.5% / OB +0.792 / 十档额 `+1234.57万`·`+876.54万` / 主力净额 `+1234.50万`(万元口径换算) / 主买 `-234.60万` / 事件 `托单`·幽灵单占比 25.4% / 方向 `吸筹`·主力净额 `+1.20亿` / 成色 `82%` / 流水表 `+876.54万`·`+123.46万` / 拆单 `456`·`18.7%` / 筹码峰 `11.35`·成本带 `10.80 - 12.10`); ② 惰性门控: 只打 core 六端点 + `orderbookOb`/`sealQuality`, `stocksApi.list`/`news`/`suggestions`/`history` **零调用**(证明标签自带的 `keys=['core']` 生效); ③ 全缺数据用例: 盘口 note 原文 + 各节 `--`/空态/`reason` 原文逐一断言。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **280/280**(46 files; 上一提交基线 277/45 → 净 +3 = 新增 1 文件 3 例)。R6: 新文件裸 `.toFixed(` 0 命中, `scripts/ui-rules-baseline.json` 未增未减。
 - **未做/遗留(见 task-11-report)** —— ① brief Step 2 的 `/stocks/002636?tab=l2` 手验**当前不可执行**: 标签尚未接线(Task 17), 且本地后端 `GET /api/orderbook-ob` 返回 **401**(需登录态); ② **未含 `summary.orderbook` 的 形态/最优价/价差/买盘占比** —— 该字段在 `/klines/{s}/summary` 的**顶层** `orderbook`, 而 `InsightProvider` 只暴露 `data.summary`(`main_intent_structured`/`fund_flow` 是钩子单独 setState 的例外), 为不重复打同一 summary 接口, 本页形态条改用 OB 序列 label(买压/卖压/中性)+ 十档额自算占比(诚实口径, 已在头注写明); ③ 发现既存口径不一致(未改, 属别任务): 后端 `fund_flow` 下发 `ming_net`, 而 biz-ui `FundFlowBarLike`/`KlineChart` 读 `open_net` ⇒ 主图 L3 资金柱的明盘分量恒按 0 计 —— 本表两键兼容读取, 故表格数据正确。
+- [commit 6e83202, 5142100]
 
 ### fix(wb)-工作台 v2 任务10 复审修复: 空 `keys` 真正全关 + `triggerAgent` 在途卸载不再装轮询
 - **Finding 1(Important, 空 `keys` 不是"全关")** —— `InsightProvider.tsx:71-75` 用 `keys.join(',')` 做内容签名: 空数组 `[]` 的签名是 `''`(**不是** `null`), 而 `''.split(',')` → `['']` ⇒ `new Set([''])` 的 size 是 **1** ⇒ `hasAnyResourceEnabled` 判真 ⇒ **20s 自动刷新 interval 照启动**(虽因 `refreshForAuto` 逐键过滤而不发请求, 但与 `useInsightData.ts:48-52` / Provider 头注 / 测试用例一致声明的「空集 = 全关」契约相悖, 白挂一个空转 timer)。**修复**: 签名 `''` **显式映射成真空集** `new Set<ResourceKey>()`(size 0), 只有 `null`(= `keys === undefined`)才是全开; `undefined` → all-enabled 语义**未变**(默认路径逐字不变)。
@@ -231,6 +346,7 @@
 - **变异验证**(证明新断言非空, 均已还原): ① 回退 Finding 1(`''` 走 `split(',')`)→ `keys: []` 用例失败 `expected "setInterval" to not be called at all, but actually been called 1 times`(实参 `[Function anonymous, 20000]`); ② 删掉 await 后的 `if (!mountedRef.current) return` → 在途卸载用例失败 `expected 8 to be 1`(卸载后仍被轮询 7 次 = 立即 1 次 + 每 5s 共 6 次)。
 - **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **277/277**(45 files; 上一提交基线 276/45 → 净 +1 = 新增的"在途卸载"用例)。**R6: 本次 3 个改动文件裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未增未减**; 无 DOM/className 变更。
 - **订正上一条 entry 的 ③ 措辞** —— 原文「③ `keys: []` … (含 20s 自动刷新未启动)」是**过度声明**: 当时用例只断言零请求, 根本证不出 interval 未启动, 实际上 interval 是被装上的(Finding 1 本身)。现按测试真实判据改写, 并由本条记入修复。
+- [commit 2f25617]
 
 ### feat(wb)-工作台 v2 任务10 续: 资源门控 `enabledKeys`(spec §4.3 —— 首屏只取带1+带2, 下部标签按需)
 - **背景** —— 任务10 首版报告判定「光靠按标签挂载达不到 spec §4.3 的『首屏 ≈ 5 请求』」并上报控制器; 控制器**裁定实施资源门控**(采纳 report §3.5 方案 B, 显式承认改 Task 9 恢复的冻结 hook)。本条即该裁定的落地: 进入工作台只取 `core`(带1+带2), 下部标签各自的端点**只在该标签激活时**取。
@@ -238,8 +354,9 @@
 - **逐键门控的 effect(行号为改后实测)** —— `core`: 挂载总取数 effect(`L545-546`, quote/moreInfo/darkFlowTq/klineSummary/klines36d/portfolioSummary 共 6 个, 早退时连状态重置一并跳过); `deep`: `L566`; `fundamentals`: `L575`; `watchlist`: `L583`(stocksApi.list); `news`: `L606`; `announcements`: `L612`; `suggestions`: `L618`; `reports`: `L624`。四个"静默常驻"亦同步门控: 20s 自动刷新(`L628-631`)在**一个键都没启用时不启动**(`hasAnyResourceEnabled`), 且 `refreshForAuto`(`L495-516`)内每个任务组按同键过滤(否则 `keys:['core']` 下 20s tick 仍会打 news/suggestions/reports)。默认路径(不传 `enabledKeys`)所有分支判定恒真 ⇒ **行为不变**。
 - **`useInsightActions.ts` 两处** —— ① `triggerAutoAiSuggestion`(真实 `POST triggerAgent` 后端 AI 作业)**加 `suggestions` 键闸**(函数体内 + 700ms 定时器 effect 双重), 未启用时**绝不触发**; ② **修既存泄漏**: 该函数的 5s 轮询 interval 原先只在 125s 的 `setTimeout` 里清、**卸载时不清**(切走标签后最长 2 分钟仍在打 `/suggestions`), 改为 `autoPollRef`/`autoPollStopRef` 持有句柄 + `stopAutoPolling()`, 在被新一轮取代时先清上一轮, 并新增 `useEffect(() => () => stopAutoPolling(), [stopAutoPolling])` 卸载即清。`handleSetAlert` 的同形轮询(手工点「一键设提醒」触发)**未改**(不在本裁定范围, 记录备查)。
 - **测试** —— 新增 `frontend/tests/components/insight-provider-gating.test.tsx`(真组件 + mock 网络层 `@panwatch/api`, `MemoryRouter` + `ToastProvider` 真宿主): ① `keys:['core']` → core 6 端点各 1 次, `stocksApi.list`/`news`/`suggestions`/`history`/tradingAgents/fundamentals **零调用**, 且 900ms 后 `triggerAgent` 仍零调用(**自动 AI 作业不触发**); ② 默认(不传 keys) → 下部端点照取 + `triggerAgent` 照触发(证明①的门确由 `keys` 造成, 非别的原因打死链路); ③ `keys: []` → 推 25s 虚拟时间后**零请求**; ④ 假定时器下**卸载后 5s 轮询停止**(修复前该断言失败)。**变异验证**(均还原): core/`suggestions` 闸改恒真 → ①②③ 中 2 例失败; 去掉卸载清理 effect → ④ 失败(`expected 9 to be 3`)。
-- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题(`react-hooks/exhaustive-deps` error 级亦过: 所有门控 effect 的依赖已补 `enabledKeys`) / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **276/276**(45 files; 基线 272/44 → 净 +4 = 新增 1 文件 4 例)。**R6: 改动文件裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未变**; 无自有 DOM/className 变更, 无硬编码色。CHANGELOG entry 未缀 `[commit <hash>]`(hash 写入时尚不存在, 沿用本分支既有形态)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题(`react-hooks/exhaustive-deps` error 级亦过: 所有门控 effect 的依赖已补 `enabledKeys`) / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **276/276**(45 files; 基线 272/44 → 净 +4 = 新增 1 文件 4 例)。**R6: 改动文件裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未变**; 无自有 DOM/className 变更, 无硬编码色。
 - **遗留/已知取舍**: ① `keys` 的键→端点归属由 Task 11–16 各标签自行声明, 本任务不预置标签映射(工作台 6 标签与旧模态内部 `tab` 是两套体系); ② `deep`/`fundamentals` 另受内部 `tab` 约束, 本任务**未**改该约束(仍不可达, 记录在案); ③ `handleSetAlert` 的手工轮询未清理(同形缺陷, 见上)。
+- [commit 399a048]
 
 ### feat(wb)-工作台 v2 任务10: 惰性 `InsightProvider`(按标签挂载, 不复刻模态壳)
 - **背景** —— Task 9(`a37b854`)恢复的 `insight/` 18 个 tab 组件读 `InsightContext`(`useInsight()` 无 Provider 直接 throw), 原 Provider 是已退役的模态壳。本任务在**工作台页内**补 Provider, 使 Task 11–16 的 6 个下部标签可复用这批组件 —— **不复刻模态壳**(无 Dialog/遮罩/关闭, 只渲染 `{children}`)。
@@ -254,8 +371,9 @@
   - **额外发现(比接口风暴更重)**: `useInsightActions.ts:283-289` 挂载 700ms 后调 `triggerAutoAiSuggestion`(`L247-281`)⇒ 未持仓时 **`stocksApi.triggerAgent(0,'intraday_monitor',{bypass_throttle:true,bypass_market_hours:true})`(L257)真实提交后端 AI 作业**, 并 5s 轮询 `/suggestions` 最长 120s(`L267-272`); 节流为每 `market:symbol` 5 分钟(`L108/L251-252`)。该轮询 interval **卸载时不清**(只在 125s `setTimeout` 里清)⇒ 切走标签后仍在打, 被"按标签挂载"放大。三方案(接受口径 / 立新任务加可选 `only` 门控 / 宿主延迟挂载)已写入 task-10-report §3.5。
   - 未复用 `InsightHeaderBar` 时 noop 无害; 若复用: 关闭按钮"无反应"(工作台无壳可关), 「全屏行情页」按钮走 `goFullQuote`(`useInsightData.ts:40-43`)→ `/quote/:symbol` → `App.tsx:496-497` 的 `LegacyQuoteSymbolRedirect`(`L140-143`)**立刻 replace 回 `/stocks/:symbol`** = 一次无意义跳转往返(非 bug, 建议届时换掉该按钮)。
 - **显式未做(接线属 Task 11–17)** —— `grep -rn "InsightProvider" frontend/src frontend/packages` **仅命中文件自身** ⇒ 本 commit 无任何消费方, 故 vitest 用例数**不变**(272/272)是预期: 不可达代码路径无前置断言, 首个行为断言随 Task 11 接线落地。brief Step 3 的 Network 手验同理**当前无法执行**(Provider 无宿主即无请求)。
-- **门禁**(frontend/, 全绿): `npx tsc -b` **0 error**(**无需 `as any`**, 展开类型直接匹配 `InsightCtx`) / `npx eslint .` 0 问题(`react-hooks/exhaustive-deps` error 级亦过) / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 与任务9 收口后同数)。R6: 新文件裸 `.toFixed(` 命中 **0**, 未新增 baseline; 本组件**不渲染自有 DOM/className**(只 `{children}`), 无硬编码色/新尺度。CHANGELOG entry 未缀 `[commit <hash>]`(hash 写入时尚不存在, 沿用本分支 T1–T9 既有形态)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` **0 error**(**无需 `as any`**, 展开类型直接匹配 `InsightCtx`) / `npx eslint .` 0 问题(`react-hooks/exhaustive-deps` error 级亦过) / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 与任务9 收口后同数)。R6: 新文件裸 `.toFixed(` 命中 **0**, 未新增 baseline; 本组件**不渲染自有 DOM/className**(只 `{children}`), 无硬编码色/新尺度。
 - **遗留/已知取舍**: ① 「惰性」只做到"**未挂载的标签不取数**", 做不到"**标签内只取本标签所需端点**" —— 需控制器在 Task 11 前拍板(方案见 report §3.5); ② 后端 AI 作业副作用(上文)需与 spec「不做自动 AI 触发」对齐, 且 `InsightContext` 要求全量 value ⇒ 宿主**无法**"只提供 data 不提供 actions"; ③ `HoldingAgg` 比较用**未大写**的 `market`(`useInsightData.ts:366`)—— 工作台传 `'CN'` 无影响, 既有口径瑕疵记录备查(未动)。
+- [commit 1f5631e, a9747b9]
 
 ### feat(wb)-工作台 v2 任务9: 恢复 `insight/` 组件(18 文件, from `b49263c`)供工作台标签复用
 - **背景** —— v0.5.93(commit `47634c9`/`47636c9`)把旧个股模态全线退役: 删 `frontend/packages/biz-ui/src/components/stock-insight-modal.tsx` + 整个 `insight/` 目录(18 文件) + `scripts/ui-rules-baseline.json` 5 条。工作台 v2 的「下部 6 标签」(Task 10–16)要**复用这批 tab 组件**在**新工作台页内**, 故本任务把它们从 git 恢复 —— **只恢复 tab 组件, 不恢复模态壳**。
@@ -264,8 +382,9 @@
 - **Ruling C(R6 基线, 冻结既有代码而非改源)** —— 恢复的文件写于 R6 规则之前, 含裸 `.toFixed(`; 因 v0.5.93 已把它们的 baseline 条目删掉, 直接恢复会打挂 `check_ui_rules.mjs`。按项目机制(**baseline 即"冻结存量"的正式通道, 不改恢复源码**)把 5 条**原样加回** `scripts/ui-rules-baseline.json`, 计数取自 `node ../scripts/check_ui_rules.mjs` 的实测输出(**与 v0.5.93 删除前逐字相同**, 证明恢复是无损还原): `insight/FundamentalsPanel.tsx: 3`、`insight/OverviewTab.tsx: 34`、`insight/deep-analysis.tsx: 5`、`insight/helpers.tsx: 9`、`insight/useInsightDerived.ts: 1`(共 **52** 处)。加回后复跑 → `UI-RULES OK` 且**无** "可调低 baseline" / "可从 baseline 删除" 提示 = 计数精确匹配(不多不少)。**未动恢复源码一行**。
 - **编译** —— `cd frontend && npx tsc -b --force` → **0 error**; **无需任何 import 修复**: 18 文件的外部依赖(`@panwatch/api`、`@panwatch/base-ui/components/ui/{button,dialog,select,switch,toast}`、`@panwatch/biz-ui` 及其 `components/{InteractiveKline,add-position-calculator,kline-indicators,stock-price-alert-panel,suggestion-badge,technical-badge}`、`@panwatch/biz-ui/lib/stock-colors`、`@/lib/{kline-scorer,utils}`、`react-markdown`/`remark-gfm`/`lucide-react`/`react-router-dom`)在 `b49263c` 之后**全部仍存在且签名兼容**, 无一改名/删除。故"未启用文件"(Step 3)其实**可编译**(未使用 ≠ 不可编译), 无悬空引用。
 - **范围** —— **无新功能、无接线、无页面改动、无旧页删除**(后者属 Task 18)。本 commit 仅 3 处变更面: 18 个恢复文件 + `scripts/ui-rules-baseline.json`(+5 条) + 本 CHANGELOG entry。
-- **门禁**(frontend/): `npx tsc -b --force` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 与任务8 收口后同数 —— 本任务只加"无人引用"的文件, 不加用例)。R6: 恢复源码裸 `toFixed` 共 52 命中, **全部走 baseline 冻结**, 未改源、未新增; 无新增硬编码色(check_ui_rules 其余规则全过 —— 恢复文件的配色/尺度规则同样按既有源码冻结在案)。CHANGELOG entry 未缀 `[commit <hash>]`(hash 写入时尚不存在, 沿用本分支 T1–T8 既有形态)。
+- **门禁**(frontend/): `npx tsc -b --force` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 与任务8 收口后同数 —— 本任务只加"无人引用"的文件, 不加用例)。R6: 恢复源码裸 `toFixed` 共 52 命中, **全部走 baseline 冻结**, 未改源、未新增; 无新增硬编码色(check_ui_rules 其余规则全过 —— 恢复文件的配色/尺度规则同样按既有源码冻结在案)。
 - **遗留/已知取舍**: ① `KlineTab.tsx` / `InsightHeaderBar.tsx` 恢复后**无引用**(按计划保留, 是否最终启用由 Task 10–16/19 定; 若届时仍无人用, 属死代码, 可在 Task 18「退役页删除」一并处理); ② 这批组件依赖 `useInsight()` provider(无 provider 时 `useInsight()` **throw**)—— 现在没有任何 provider, 直接渲染会抛错, **这是预期的**(惰性 `InsightProvider` 是 Task 10); ③ `InsightHeaderBar` 恢复的是**旧模态头部**(含 close/onOpenChange 语义), 工作台标签未必复用它 —— Task 10–16 按需取用。
+- [commit a37b854]
 
 ### fix(wb)-工作台 v2 任务8: 带1 修「同码不同标的」泄漏 —— 指数/板块不再取/画 `/quotes/{s}` 的个股数据
 - **缺陷(P1 走查, Important, 控制器裁定)** —— `/stocks/000001?type=index` 的 `000001` 是**上证指数**, 但 `HeaderBand` 无条件 `GET /quotes/000001`(=**个股平安银行**), 于是带1 渲染成 `平安银行 11.74 -0.93%` + 个股快照行(今开 11.82 / 最高 11.86 …), 而正文 `IndexBody` 正确显示 `上证指数 3888.11 -1.18%` —— 带1 画的是**另一个标的**的数据, 正是本仓明令禁止的"同码不同标的"泄漏。
@@ -277,6 +396,7 @@
 - **测试**: `frontend/tests/components/header-band.test.tsx` 2 → **6 例**(真组件 + mock 网络层): ① 刷新语义两例由 `type="index"` 改 `type="stock"`(quote 现为个股专属 —— 原断言形态保留: 自身重取 + `onRefresh` 恰好一次 / 向后兼容); ② 新增 `type=index`、`type=board` 两例断言**零取数**(`quote`/`moreInfo`/`fetchAPI`/`klineSummary` 均未调用)且**不渲染** `平安银行`/`11.74`/`-0.93%`/`今开`/`11.82`, 只留裸代码 + 类型按钮; ③ 新增「index 点刷新仍广播 `onRefresh` 但绝不发 `/quotes`」; ④ 新增 `type=stock` 对照例(名称/现价/涨跌/快照行照旧)。fixture 刻意用**另一标的**(平安银行)真值 —— 组件若在非个股下取了/画了它, 断言立即抓到。
 - **变异验证**(证明断言非空, 已验证后还原): 把取数 `if (isStock)` 临时改回无条件 → 3 例失败 `expected "spy" to not be called at all, but actually been called 1 times`(index/board)与 `…2 times`(刷新例); 还原后 6/6 通过。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 基线 268/44 → 净 +4 = header-band 2→6)。R6: 改动文件裸 `.toFixed(` 命中 **0**; 配色仍只用既有令牌/类(`text-muted-foreground` 等), 无新硬编码色, 无新样式尺度。
+- [commit 1c1c014]
 
 ### fix(wb)-工作台 v2 任务7 复审修复: 带1 刷新改为页面级(正文/带2 一起重取)+ 指数/板块正文补 `mt-3` 间距
 - **Finding 1(Important, 控制器裁定「页面级刷新」)** —— 指数/板块正文**没有手动刷新**: 旧独立页各自的「刷新」按钮随骨架(返回/标题/刷新)并入带1 后, `HeaderBand` 的刷新只刷**它自己**的行情, 而 `IndexBody`/`BoardBody` 只在**挂载/换标的**时取数 ⇒ 盘中无法手动更新 = 回归。修复(无新端点, 最小改动):
@@ -286,7 +406,8 @@
 - **测试**: 新增 `frontend/tests/components/header-band.test.tsx`(2 例, mock 网络层 `@panwatch/api` 用真组件)守「刷新 = 自身行情重取 **且** 广播 `onRefresh` 恰好一次」+「不传 `onRefresh` 向后兼容」—— 页面测试把带1 mock 掉了, 不补本例则"回调漏调"仍会全绿。`frontend/tests/components/stock-workbench.test.tsx` 9 → 12 例: mock 的 `HeaderBand` 增加 `mock-refresh` 按钮, `IndexBody`/`BoardBody` mock 改为**挂载即记一次"取数"**(`vi.hoisted` 计数), 新增三例断言刷新后 ①正文"取数"调用次数 **+1** ②正文 DOM 节点换新(重挂载) ③带1/外壳保持同一节点 ④`?type=`/`?tab=` 不丢 ⑤指数/板块分支正文块含 `mt-3`。
 - **变异验证**(证明新断言非空, 均已还原): ① 去掉正文块的 `key={refreshKey}` → 刷新用例失败 `expected 1 to be 2`(取数次数没增加); ② 去掉 `mt-3` → 失败 `expected '' to contain 'mt-3'`; ③ `HeaderBand` 刷新不外抛 `onRefresh` → `header-band` 用例失败 `expected "spy" to be called 1 times, but got 0 times`; ④ 页面漏传 `onRefresh` → 页面刷新 3 例失败。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **268/268**(44 files, 基线 263/43 → 净 +5 = 页面 +3 + HeaderBand +2)。R6: 两个改动源文件裸 `toFixed` 命中 **0**(未新增); 配色仍只用设计令牌(`mt-3` 为既有间距尺度)。
-- **遗留/已知取舍**: 正文块用 `key` 重挂载会**重放一次** `sida-page-enter` 入场动画, 且正文内部状态(如轮动条选中态等纯 UI 局部态)刷新后回到初始值 —— 与旧页「刷新」只重取数据不同; 若走查(Task 8)觉得闪烁或局部态丢失不可接受, 后续可改为向正文透传 `refreshToken` prop 触发内部重取, 而非重挂载。CHANGELOG entry 仍未缀 `[commit <hash>]`(hash 写入时尚不存在, 沿用本分支 T1–T7 既有形态)。
+- **遗留/已知取舍**: 正文块用 `key` 重挂载会**重放一次** `sida-page-enter` 入场动画, 且正文内部状态(如轮动条选中态等纯 UI 局部态)刷新后回到初始值 —— 与旧页「刷新」只重取数据不同; 若走查(Task 8)觉得闪烁或局部态丢失不可接受, 后续可改为向正文透传 `refreshToken` prop 触发内部重取, 而非重挂载。
+- [commit c4581d3]
 
 ### feat(wb)-工作台 v2 任务7: 指数/板块正文抽为 IndexBody/BoardBody + 工作台内类型复用(旧页删除)
 - **抽正文**(spec §1.3「逻辑不变, 只搬位置」): 新建 `frontend/src/pages/workbench/IndexBody.tsx`(`IndexBody({symbol})` ← `IndexDetailPage` 的取数与渲染: `GET /market/indices/{s}` + `/market-data/market-capital-flow`); 新建 `frontend/packages/biz-ui/src/components/workbench/BoardBody.tsx`(`BoardBody({code})` ← `BoardDetailPage`: `GET /boards/{c}` + `/boards/{c}/constituents` + `/boards/rotation?days=5`)。三态(loading/error/空态)、stale-on-error 滞后标注、成交额趋势 SVG、成分股语义取列、轮动 Top5 横条全部逐段搬移。
@@ -297,6 +418,7 @@
 - **测试**: `frontend/tests/components/stock-workbench.test.tsx`(9 例, mock 由 3 个增至 5 个)把原「指数/板块正文建设中」占位断言换成**真实接线**断言: `?type=index` → `index-body:000001` + 无 `board-body`; `?type=board` → `board-body:880001` + 无 `index-body`; 个股分支断言两 Body 均不渲染; 带1 切类型后 → `index-body:002636` 且无主图。两类型分支的「无主图/无右栏/无 6 标签」断言原样保留。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(无 stale baseline 提示) / `npx vitest run` **263/263**(43 files, 与基线同数 —— 本任务只改断言不加用例)。配色只用设计令牌(`border-border/40`/`text-muted-foreground`/`text-stock-up|down` 等), 未新增硬编码色(搬移保留的 `#60a5fa`/`#94a3b8` 是轮动条无涨跌时的中性 fallback, 与旧页逐字一致)。
 - **未做/遗留**: ① 浏览器目视走查(本地无 dev server)由 **Task 8** 覆盖 —— 真数据下指数/板块正文需与旧页逐块对照(成交额趋势/大盘资金流/成分股/轮动); ② 正文自身的「刷新」按钮随骨架并入带1 后, **正文只能在挂载/换标的时取数**(带1 的刷新只刷它自己的行情), 若走查认为正文需手动刷新, 需另派(建议 HeaderBand 发全局刷新广播)。
+- [commit c5b9af7]
 
 ### fix(wb)-工作台 v2 任务6 测试加固: 主图面板外壳承重类(`min-w-0 flex-1`)纳入 className 断言
 - **问题**(Task 6 复审 Important): `frontend/src/pages/StockWorkbench.tsx:106` 的 KlineChart 面板外壳 `min-w-0 flex-1 rounded border border-border/60 p-2` 里, **`min-w-0` 是承重类** —— 没有它, echarts canvas 会撑破与固定 `w-[320px]` 右栏并排的 flex 行(spec §1.2 带2 横向布局), 但页面测试只断言了右栏外壳 `w-[320px] shrink-0` 与根容器 `mx-auto/max-w-[1500px]/p-3`, **从未断言**该主图外壳, 故重构删掉 `min-w-0`/`flex-1` 仍会全绿(测试覆盖漏洞, 非实现缺陷 —— 组件类本身正确, 本次**未改组件**)。
@@ -304,6 +426,7 @@
 - **变异验证**(证明断言非空, 已验证后还原): 临时把组件该行改为 `flex-1 rounded border border-border/60 p-2`(删 `min-w-0`)→ 该例失败 `AssertionError: expected 'flex-1 rounded border border-border/6…' to contain 'min-w-0'`(`tests/components/stock-workbench.test.tsx:98`); 还原后 9/9 通过。`grep MUTATION-PROBE` 0 命中, `git diff --stat` 仅测试文件 +8 行(组件零改动)。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `npx vitest run` **263/263**(43 files, 与加固前同数, 本任务只加断言不加用例)。R6 无新裸 `toFixed`。
 - **文档**: 修正 `task-6-report.md` §6 中「用例 1 逐项断言」的**过度声明** —— 原文把"主图外壳"也计入"逐项断言", 实际当时只断言了右栏与根容器; 现措辞改为如实描述(加固后才覆盖主图外壳), 并追加本次加固小节。
+- [commit f6b4d9c]
 
 ### feat(wb)-工作台 v2 任务6: 三带骨架(带1 → 带2 大K线+右栏 → 带3 单层标签)+ QuickRail `/l2` 取数收敛
 - **重写 `frontend/src/pages/StockWorkbench.tsx`**(`/stocks/:symbol`, 旧版 217 行): 三带结构落地 —— 带1 `HeaderBand`(吸顶, 三类型共享)→ 带2 `KlineChart`(`flex-1`, `initialInterval="1d"` / `initialDays={120}` / `height={420}`, 外层 `rounded border border-border/60 p-2`)+ 右栏 `QuickRail`(外壳 `w-[320px] shrink-0`)→ 带3 `TabBar` + `TabPanel`。外壳沿用改版前容器惯例 `mx-auto max-w-[1500px] p-3`。
@@ -315,12 +438,14 @@
 - **测试**: 新增 `frontend/tests/components/stock-workbench.test.tsx`(9 例, mock 三个子组件 + `MemoryRouter`): 三带齐全 + 外壳惯例 + 右栏 320px; `?type=index` / `?type=board` 只留带1 + 正文占位且**无**主图/右栏/标签; 无 symbol → 「缺少代码」; `?tab=news` 深链选中; 非法 `?tab=` 收敛; 点标签只改 query; 切类型保留 `?tab=`; 建议条跳标签。`frontend/tests/components/quick-rail.test.tsx` 11→12 例(新增「首屏 `/l2` 只发一次」+ 三个端点各 1 次)。**变异验证**(证明断言非空, 已验证后还原): ① `useL2` 内多打一条 `/l2` → 收敛用例失败(`expected [...] to have a length of 1 but got 2`); ② 关掉页面 `type !== 'stock'` 分支 → 类型分流 3 例失败。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **263/263**(43 files, 基线 253/42, 净 +10 = 页面 9 + 收敛 1)。R6: 改动文件零裸 toFixed 调用; 配色只用设计令牌(`border-border/60`/`text-muted-foreground` 等), 无硬编码色。
 - **未做/遗留**(详见 task-6-report): `HeaderBand` 的 `hasPosition` 未接线(个股建议条按默认 `false` 评分 —— 持仓判定源待后续任务接入); 指数/板块无「预测」入口(按 spec §1.3 仅个股页有 6 标签); 下部标签内容**全是占位**(Task 11–17 落位, spec §4.3 的「按标签惰性加载」在那时验收); 未做浏览器目视走查(本地无 dev server/浏览器), 由 Task 8 走查覆盖。
+- [commit a458c0f]
 
 ### fix(wb)-工作台 v2 任务5 去重修复: QuickRail 盘口速览删「现价/涨停价」(归带1)
 - **问题**(去重复审 Important): `QuickRail` ② 盘口速览渲染「现价」(`snapshot.now`)与「涨停价」(`more.zt_price`), 但这两个数据点归**带1 `HeaderBand`** —— 顶行 `price` = `quote.current_price`(`HeaderBand.tsx:112`)、快照行 `limit_price` = `l2m.zt_price`(`:147`), spec 去重表 #9(涨停价/连板 → 带1)。于是同一数据点在带1 与右栏各画一次, 与 spec §一「同一数据点只出现一处」相违。
 - **修复(控制器裁定)**: **两行全删** —— 现价/涨停价只由带1 持有。本卡保留 `封单`(`fcamo`)、`主力净额`(`zjl_hb`)(去重表 #4 明确允许右栏留一条主力净额速览摘要)与五档买卖价量(`buyp/buyv/sellp/sellv`, 五档价即本卡的价格上下文); 卡标题「盘口速览」+ 右上「快照 HH:MM:SS」即锚点, 未另加标签。**轮询(30s)/端点/取数/stale-on-error/换股清值/CN 闸门/`--` 纪律零改动**; `L2Snapshot.now` / `L2More.zt_price` 的接口声明保留(本文件对 wire 形态的说明, 与同样不渲染的 `amount` 同例), 并在 `QuoteCard` 头注写明"日后勿直接加回本卡"。
 - **测试**: `frontend/tests/components/quick-rail.test.tsx` 由「四行」改「两行」, 新增 1 例**去重回归**「现价/涨停价 归带1 HeaderBand, 本卡即使拿到真值也不渲染」(fixture 仍带 `now=10.5` / `zt_price=11.55` 真值 —— 接口给了也不许画); 轮询/换股/CN 闸门三例的观察点由「现价」改「封单」(恢复上屏用例改为 `fcamo 23000000→26000000` → `2300万→2600万`); 缺值/真形态两例补 `null` 断言。**变异验证**: 把「现价」行加回 → 3 例失败(`expected '10.5'/'--'/'82.46' to be null`), 证明断言非空。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **253/253**(42 files, 基线 252/42, 净 +1 = 去重回调用例)。R6: 改动文件零 `.toFixed(`。
+- [commit b3dd574]
 
 ### feat(wb)-工作台 v2 任务5: QuickRail 右栏速览卡(盘口/基本面/板块精简 + 数智决策置顶)
 - 新增 `frontend/packages/biz-ui/src/components/workbench/QuickRail.tsx`(默认导出 `QuickRail({symbol, market})`): 工作台右栏 320px 竖排四卡, 顺序即 spec §1.2 ①②③④ —— **数智决策**(Task 4 的 `DecisionCard`, 本文件不重复任何三指标/共振读数)→ **盘口速览** → **基本面/股本**(精简 3 行) → **题材/板块**(chips)。内容由 `StockWorkbench.tsx:44-195` 的三个内联卡(`L2Card`/`FundamentalCard`/`BlocksCard`)**搬迁精简**(逐段挪取数逻辑, 不重写); 根节点只有 `flex flex-col gap-2`, **不设宽**(320px 由页面外壳 `w-[320px] shrink-0` 给, 便于别处复用)。
@@ -336,6 +461,7 @@
 - **真数据核对**(实现期直连真源, 非交易时段 002636): `/l2` → `now=82.46 / zt_price=84.1 / fcamo=0.0 / zjl_hb=-29575.36 / pe_ttm=60.26 / pb=14.0`、`buyp=[82.45,0,0,0,0]`(仅一档有值 → 其余档 `--`); `/fundamental` → `gb={ltgb:725234944, zgb:728000000}`、`sub_new=false`; `/blocks` → 22 条、`code` 含 5 个 `'0'`。
 - **未做/遗留**(见 task-5-report): `StockWorkbench.tsx` 内联三卡**本轮按 brief 保留未删**(该页仍编译; 由 Task 6 重写时替换为 `QuickRail`), 因此右栏暂存"两套卡"; 22 条板块 chips 未截断(320px 速览卡高度待 Task 6 走查定夺); 「盘口资金」标签(Task 11)需承接本轮删掉的 逐笔/连板/5分钟前 数据点; `as_of` 是后端**取数时刻**而非行情 tick 时刻, 文案已按"快照 {时间}"措辞。
 - **本条目已按后续去重裁定修订**: 本卡「现价/涨停价」两行**已删除**(归带1 `HeaderBand`), 见上一条 `fix(wb)-…任务5 去重修复`; 本条上方「4 行」「数据面含 `snapshot.now`/`more.zt_price`」「测试: 盘口真值四行」的描述以该 fix 条目为准(`/l2` 的轮询与取数本身未变)。
+- [commit 8633b01]
 
 ### fix(wb)-工作台 v2 任务4 复审修复: DecisionCard 单卡化(消嵌套卡壳 + 消重复/倒挂标题)
 - **问题**(Task 4 复审 Important): `DecisionCard` 自己套了 `rounded border border-border/60 p-2` 边框 + 标题「数智决策」+ 副标题「三指标读数」, 而子组件 `DecisionPioneerCard` 根部自带 `mt-3 rounded-xl border border-border/50 bg-card p-3` 卡壳与「🧭 数智决策三指标」标题+副标题, `ResonanceVerdictPanel` 又带一个「三指标」标签 —— 于是渲染出**卡中卡双向边框**与**三级标题(最内层字号最大)**, 合并卡视觉上是一堆重复标题而不是一张卡。
@@ -344,6 +470,7 @@
 - **默认路径逐字不变**(硬证据, 非"看起来一样"): 把 `dcbec14` 的两个子组件原文件临时拷回同目录, 用同一 mock(`@panwatch/api` + `useECharts`)分别渲染新旧组件并 `expect(newContainer.innerHTML).toBe(oldContainer.innerHTML)` —— `DecisionPioneerCard` 数据态 / 加载态骨架 / 错误态卡壳 + `ResonanceVerdictPanel` 数据态 **4/4 全等**(校验脚本为一次性临时文件, 验完即删, 未入库)。既有测试 `tests/components/resonance-verdict-panel.test.tsx` 三例(不带 `bare`)未改断言即通过, 亦为默认路径不变的回归证据。
 - **测试**: ① `frontend/tests/components/decision-card.test.tsx` 更新 2 例(mock 子组件): 断言「三指标读数」**已不存在**、两个子组件各只渲染一次且 `symbol`/`market` 原样透传、**且 `bare: true` 已传到两个子组件**。② 新增 `frontend/tests/components/decision-card-chrome.test.tsx`(2 例, **渲染真实子组件**): 直接量 DOM —— 卡内"圆角+四边完整 token 边框"的元素数 **== 1**(加载态与数据态各验一次)、`数智决策` 精确文本 **只 1 处** 且为 `text-[12px]`、子卡的「🧭 数智决策三指标」「三指标读数」「三指标」标签**全部为 null**、分段小标题 `共振判定` 为 `text-[11px]`、手动刷新按钮仍在; 第二例守默认路径(`DecisionPioneerCard` 不带 `bare` 仍出自己的卡壳 + 标题 + 刷新)。**该用例已在"故意把 `bare` 去掉"的变异下复现失败(expected 2 to be 1)**, 证明它不是空断言。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(R6: 改动文件零新增 `.toFixed(`) / `npx vitest run` **242/242**(41 files, 基线 239/40, 净 +3 = 新增 chrome 2 例 + 共振 `bare` 1 例)。
+- [commit 4dc6542]
 
 ### feat(wb)-工作台 v2 任务4: DecisionCard 合并卡(三指标 + 共振去重为一张)
 - 新增 `frontend/packages/biz-ui/src/components/workbench/DecisionCard.tsx`: 工作台右栏**唯一**的「数智决策」卡, 落实 spec 去重表第 1 项(`decision_indicators` 与 `resonance_verdict` 同归 `rail.decision`)——旧行情页/旧详情模态的三指标块与共振块删除后, 两处读数只在这张卡里出现一次。
@@ -352,6 +479,7 @@
 - **测试**: 新增 `frontend/tests/components/decision-card.test.tsx`(2 例, mock 两个子组件): ①一张卡内「数智决策」+ 两段小标题都在, 两个子组件各只渲染一次(去重契约), `symbol`/`market` 原样透传到对应组件; ②换 `symbol`/`market` 后仍是各一次挂载(无重复取数入口)。`npx vitest run tests/components/decision-card.test.tsx` → **2/2 passed**; 全量 **239/239**(40 files, 基线 237)。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`。
 - **未做/遗留**: 本卡尚未被任何页面引用 —— 接线在工作台三带骨架(Task 6)的右栏速览卡容器(Task 5 `QuickRail`)里; 本次仅产出组件+测试, `StockWorkbench.tsx` 未动(其现有两处独立渲染由 Task 6 替换)。
+- [commit dcbec14]
 
 ### fix(wb)-工作台 v2 任务3 复审修复②: 个股专属 cell 在指数/板块**隐藏** + CN-only 数据面按 market 门控
 - **问题1**(Task 3 复审 Important / 绑定条款 "Stock-only bits hidden when `type !== 'stock'`"): 快照行只过滤了 `TOP_ROW_KEYS`, 指数/板块仍渲染 7 个个股专属格(`float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`(涨停价)/`limit_boards`(连板))为 `--` 占位 —— 视觉噪声, 且指数/板块根本无此概念。
@@ -361,6 +489,7 @@
 - **附带(Minor)**: 不再本地写 `type === 'stock'`, 改复用 `frontend/src/lib/workbench-tabs.ts::showStockOnly(type)`(Task 1 产出), 消除双份判定漂移面。
 - **测试**: `frontend/tests/lib/workbench-snapshot.test.ts` 9→19 例(净 +10): 新增 `visibleSnapshotCells` 5 例(个股 14 格 / 非个股 7 个专属格逐格 `not.toContain` 且**有真值时同样隐藏** / 指数与板块一致 / 默认参向后兼容)与 `cnStockDataEnabled` 5 例(个股+CN 放行; 个股+US/HK/空串拒发; 指数/板块+CN 拒发; 缺省 type/market 与组件默认 props 同源)。`npx vitest run tests/lib/workbench-snapshot.test.ts` → **19/19 passed**; 全量 **237/237**(39 files, 基线 227)。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(R6: 零 `.toFixed(` 字面量, 格式化仍全走 `@/lib/format` safe* 与 `fmtAmount`)。
+- [commit e8f18e9]
 
 ### fix(wb)-工作台 v2 任务3 复审修复: 带1 快照行补齐 spec §1.2 缺的 6 个数据点
 - **问题**(Task 3 复审 Important / spec 覆盖缺口): `mapSnapshot` 只渲染 10 cell, 而 spec §1.2(`docs/个股工作台v2三合一设计_20260913.md:49`)与 T1 的 `DATA_OWNERSHIP`(`pe_pb_dividend`/`limit_price_boards` → `band1.snapshot`)要求快照行还含 PE(动)/PE(TTM)/PB/股息率/流通市值/连板 → 这些数据点在全工作台无归属。
@@ -369,6 +498,7 @@
 - **测试**: `frontend/tests/lib/workbench-snapshot.test.ts` 8→9 例: 16 cell 缺值全 `--`(含三参全 undefined)、more-info 新增 `circulating_market_value`→`456.78亿`、/l2 六字段落位(`28.56`/`31.2`/`4.5`/`1.85%`/`3`)、**PE/PB 为负原样透传**、PG DECIMAL 字符串不崩、脏值走 `--`、16 个 key 与 10→16 个 label 逐个锚定防漂移。`npx vitest run tests/lib/workbench-snapshot.test.ts` → **9/9 passed**; 全量 **227/227**(39 files, 净 +1)。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(R6: 本文件零 `.toFixed(` 字面量, 全部走 `@/lib/format` safe* 与 `fmtAmount`)。
 - **遗留**(未做, 见 report): spec §1.2 快照行还列了 成交量/振幅 两格(本 finding 未要求, 且 more-info/l2 无现成振幅字段)与 封单额(`seal_amount`, 归 `band1.snapshot`)—— 待后续任务。
+- [commit ae6e239]
 
 ### feat(wb)-工作台 v2 任务3: HeaderBand 顶部信息带 + mapSnapshot 单测
 - 新增 `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`: 三合一「带1 顶部信息带」(吸顶, 个股/指数/板块共享)。顶行=名称+代码+现价+涨跌色(`text-[--stock-up]`/`text-[--stock-down]`)+类型三按钮(`onTypeChange`)+刷新(自己重拉, 失败保留旧值); 快照行由纯函数 `mapSnapshot(quote, more)` 驱动; 技术指标建议条=`insightApi.klineSummary` → `buildKlineSuggestion(summary, hasPosition)` → 「建议·动作 + 评分 + 证据关键词(signal)」, 点击 `onGotoTab('suggest')`; `type!=='stock'` 时不拉 l2/summary 且不渲染建议条。
@@ -379,27 +509,32 @@
 - **测试**: 新增 `frontend/tests/lib/workbench-snapshot.test.ts`(8 例): 缺值全 `--`(空对象/undefined 双跑)、真实 key 落位、涨跌幅 `+`/`-` 号、more-info 三字段、`zt_price`→涨停价、字符串数字不崩、脏值走 `--`、cell key/label 顺序防漂移。TDD: 先跑出 "Cannot find module .../HeaderBand"(RED), 实现后 8/8(GREEN)。
 - **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK(首轮 R6 误报——注释里写了 `.toFixed(` 字面量被纯文本扫描命中, 已改写注释) / `npx vitest run` **226/226 通过**(39 files, 新 +8)。
 - **待办**(本任务未做, 见 report concerns): spec §4.1 + `DATA_OWNERSHIP` 归 `band1.snapshot` 的 PE(动)/PE(TTM)/PB/股息率/流通市值/振幅/封单额/连板 未落带1; 建议条同源详情(`KlineIndicators`)在「建议」标签(任务12/17)。
+- [commit b785ec0]
 
 ### fix(wb)-工作台 v2 任务2 复审修复: 侧栏「行情」选中态(带 query 的 to 恒不命中)
 - **问题**(Task 2 复审 Important): `navItems` 的「行情」项 `to = '/stocks/000001?type=index'`, 而旧活跃判定是 `location.pathname.startsWith(to)`, `pathname` 永不含 `?` → 恒 false, 桌面侧栏与移动底栏的「行情」永不选中。
 - **修复**: 新增纯函数 `frontend/src/lib/nav-active.ts::isNavItemActive(to, pathname)`; `App.tsx` 侧栏(桌面)与移动底栏两处判定改调它。规则: `to === '/'` → 仅 pathname 为 `/` 命中(原逻辑不变); 否则取 `to` 的 pathname 部分(`to.split('?')[0]`)比对前缀, 且**该 pathname 落在 `/stocks` 下时整段 `/stocks` 分区都算命中**(`/stocks/:symbol` 是同一工作台的不同 symbol, `/stocks/002636` 无法用 `/stocks/000001` 前缀覆盖); 其余项一律 `pathname.startsWith(toPath)`, 行为零变化。
 - **测试**: 新增 `frontend/tests/lib/nav-active.test.ts`(5 例, 覆盖 query 项命/不命中、其它 symbol、无 query 项原前缀语义、首页精确匹配)。
 - **门禁**: `npx tsc -b` / `npx eslint .` 双绿; `npx vitest run` **218/218 通过**(38 files, 新 +5)。
+- [commit 57126ec]
 
 ### feat(wb)-工作台 v2 任务2: 路由/侧栏/redirect 三合一
 - `frontend/src/App.tsx`: 新增 4 个旧路由 redirect 组件(`LegacyForecastRedirect`/`LegacyQuoteSymbolRedirect`/`LegacyL2Redirect`/`LegacyIndexRedirect`) → 旧行情页/盘口页/指数详情/板块详情统一跳 `/stocks/:symbol`(带 `?type=`/`?tab=l2`); `/forecast` `/quote` `/quote/:symbol` `/l2` `/index/:symbol` `/boards/:blockCode` 六条路由改挂 redirect(不再挂 `QuotePage`/`L2OrderbookPage`/`IndexDetailPage`/`BoardDetailPage`), 旧书签/推送链接不断。
 - **类型归一**复用 Task 1 的 `normalizeType`(只认 index/board, 其余归 stock); 摘除 4 个页面的 lazy 绑定(页面文件保留在磁盘, Task 7 抽 `IndexBody`/`BoardBody` 时由工作台直接 import), 避免 `noUnusedLocals` 报错。注: `/boards/:blockCode` 的参数名与 `/index/:symbol` 不同, redirect 同时读 `symbol`/`blockCode` 确保板块代码不丢。
 - **侧栏/热键/底栏**: `navItems` 撤「盘口」项、「行情」改指 `/stocks/000001?type=index`(默认上证指数); `desktopNavGroups.market` 成员同步; `MOBILE_PRIMARY_TO` 与热键 `g m` 同步改指。
 - **门禁**: `npx tsc -b` / `npx eslint .` 双绿; `npx vitest run` 213/213 通过; `npx vite build` 通过且 `Quote`/`L2Orderbook`/`IndexDetail`/`BoardDetail` 四个 chunk 已不再产出(彻底脱离打包图)。
+- [commit 53c56a2]
 
 ### docs-个股工作台 v2 三合一设计(spec)落档
 - 老板拍板: **行情页(/forecast)+盘口页(/l2)+旧个股详情(9 tab 模态) 并入个股工作台 `/stocks/:symbol`**, 工作台成个股唯一入口; 布局=**图为主 + 右栏平铺 + 下部单层标签**; 类型(个股/指数/板块)在**同一路由内切**; 旧详情**全量还原**(复用 git `b49263c` 的 `insight/` 组件); 同数据点**去重**只留一处。
 - 设计文档: `docs/个股工作台v2三合一设计_20260913.md`(含 三带结构/6标签落位/去重表/路由与入口变更/分批 P1-P3/验收)。
 - 下一步: 实现计划已产出 `docs/个股工作台v2三合一实现计划_20260913.md`(P1 骨架/P2 六标签/P3 收口, 20 任务)。
+- [commit 359af2d(spec 设计文档), 88ed465(实现计划)]
 
 ### feat(wb)-工作台 v2 任务1: workbench-tabs 纯函数 + 单测
 - 新增 `frontend/src/lib/workbench-tabs.ts`: 类型 `WorkbenchType`(stock/index/board)与 `WorkbenchTab`(6 标签)、`WORKBENCH_TABS` 固定顺序标签表、`normalizeType`(只认 index/board, 其余归 stock)、`parseTab`(白名单外回落 l2)、`showStockOnly`(个股专属块仅 type=stock 显示)、`DATA_OWNERSHIP` 去重归属表(数据点→唯一归属, 防漂移)。
 - 新增 `frontend/tests/lib/workbench-tabs.test.ts`(6 例): 覆盖归一化/标签回落/标签数量与顺序/个股专属判定/去重归属(数智决策三指标与共振同归 `rail.decision`、K线/盘口/建议条/盘中监控归属固定)。TDD: 先写测试跑出 "Cannot find module '@/lib/workbench-tabs'"(RED), 实现后 6/6 通过(GREEN); `npx tsc -b` 绿。
+- [commit 109023b]
 
 ### feat-工作台③补全: hover 预览覆盖共振查询行 + 候选池主卡片; v0.5.94
 - **承接 v0.5.93**: ③ 首发只把 hover 预览挂在「策略选股扫描结果行 + 问小达结果 + 异动预警卡」; 本批补全到机会页**全部个股行**——「共振查询结果表行(resRows)」与「候选池主卡片行(展开/收起那张)」也挂 showHover/hideHover。

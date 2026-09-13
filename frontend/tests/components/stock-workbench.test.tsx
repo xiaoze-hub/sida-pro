@@ -14,8 +14,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  *  ④ 类型/标签切换**只改 query**(`?type=`/`?tab=`)—— 不跳页, 且保留另一个键(切类型不丢标签);
  *  ⑤ 无 symbol → 「缺少代码」兜底;
  *  ⑥ 外壳沿用既有容器惯例 `mx-auto max-w-[1500px] p-3`;
- *  ⑦ **页面级刷新**(Task 7 复审 Finding 1): 带1 的刷新广播(`onRefresh`)只重挂载**正文子树**
- *     —— 指数/板块正文与个股带2(`KlineChart`/`QuickRail`)整棵换新(挂载副作用 ⇒ 重新取数),
+ *  ⑦ **页面级刷新**(Task 7 复审 Finding 1 + v0.6.0 遗留⑦): 带1 的刷新广播(`onRefresh`)只影响
+ *     **正文子树** —— 个股分支仍用 `key={refreshKey}` 重挂载带2(`KlineChart`/`QuickRail`/激活标签
+ *     都是"挂载即取数"且无 token 入参); **指数/板块分支改为传 `refreshToken={refreshKey}`** ——
+ *     正文**重新取数但不重挂载**(不重放 `sida-page-enter` 入场动画、不丢正文内部 UI 状态)。
  *     带1/页面外壳**不**重挂载, 且刷新不跳页不改 query; 正文块与个股带2 同为 `mt-3` 间距(Finding 2)。
  *
  * **Task 17 追加守两件(标签接线)**:
@@ -43,6 +45,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  */
 const mocks = vi.hoisted(() => ({
   bodyFetch: vi.fn(),
+  /** 遗留⑦: 正文**挂载**次数(挂载副作用只跑一次)—— 刷新后仍为 1 即证明没有重挂载。 */
+  bodyMount: vi.fn(),
   mount: vi.fn(),
   unmount: vi.fn(), // 卸载计数(证明旧标签被卸载, 不是六个都留着)
   /**
@@ -104,13 +108,19 @@ vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
  */
 
 // Task 7: 指数/板块正文(取数组件, 测试内 mock; 断言"类型 → 正文 + 入参"接线)
+// 遗留⑦: 真组件新增了可选 `refreshToken`(页面级刷新不再靠 `key` 重挂载)——替身同形:
+// 取数 effect 依赖 `[symbol, refreshToken]`(token 变即重取), 另用 `bodyMount` 记**挂载次数**
+// (挂载副作用只跑一次 ⇒ 刷新后仍是 1 即证明"没有重挂载")。
 vi.mock('@/pages/workbench/IndexBody', async () => {
   const { useEffect } = await import('react')
-  function IndexBodyMock(p: { symbol: string }) {
-    // 模拟真组件"挂载/换标的即取数"
+  function IndexBodyMock(p: { symbol: string; refreshToken?: number }) {
+    useEffect(() => {
+      mocks.bodyMount('index')
+    }, [])
+    // 模拟真组件"挂载/换标的/刷新 token 变化即取数"
     useEffect(() => {
       mocks.bodyFetch('index', p.symbol)
-    }, [p.symbol])
+    }, [p.symbol, p.refreshToken])
     return <div data-testid="index-body">{`index-body:${p.symbol}`}</div>
   }
   return { default: IndexBodyMock }
@@ -118,10 +128,13 @@ vi.mock('@/pages/workbench/IndexBody', async () => {
 
 vi.mock('@panwatch/biz-ui/components/workbench/BoardBody', async () => {
   const { useEffect } = await import('react')
-  function BoardBodyMock(p: { code: string }) {
+  function BoardBodyMock(p: { code: string; refreshToken?: number }) {
+    useEffect(() => {
+      mocks.bodyMount('board')
+    }, [])
     useEffect(() => {
       mocks.bodyFetch('board', p.code)
-    }, [p.code])
+    }, [p.code, p.refreshToken])
     return <div data-testid="board-body">{`board-body:${p.code}`}</div>
   }
   return { default: BoardBodyMock }
@@ -242,6 +255,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   // 逐例清零"取数"/"挂载"计数(hoisted mock 跨例复用); 断言一律用**例内前后次数差**。
   mocks.bodyFetch.mockClear()
+  mocks.bodyMount.mockClear()
   mocks.mount.mockClear()
   mocks.unmount.mockClear()
   mocks.portfolioSummary.mockReset()
@@ -436,13 +450,18 @@ describe('StockWorkbench 三带骨架', () => {
   })
 
   // ---- Task 7 复审 Finding 1/2: 页面级刷新 + 正文块间距 ----
-  // 两层观测: ① mock 正文的"取数"调用次数(每次挂载 +1 —— 真组件挂载即取数)必须**增加**;
-  // ② DOM 节点身份 —— React 在 `key` 变化时卸载并重建该子树 ⇒ 节点换新。带1/外壳未挂 key,
-  //    必须保持**同一节点**(吸顶带不丢焦点/滚动)。
+  // 遗留⑦ 起指数/板块分支的观测点变了: 刷新**不再**重挂载正文(旧断言是"节点身份变了"),
+  // 而是把 `refreshKey` 当 `refreshToken` prop 传下去 ⇒ 断言改为**两条同时成立**:
+  //  ① 正文**重新取数**(mock 的取数计数 +1 —— 真组件把 token 放进了取数 effect 的依赖);
+  //  ② 正文**没有重挂载**(DOM 节点身份不变 + 挂载计数仍为 1)—— 这正是"不重放入场动画、
+  //     不丢正文内部 UI 状态"的可观测等价物。
+  // 个股分支仍走 `key={refreshKey}`(见实现注释): 那里的断言保持"节点换新"。
   const fetchCount = (kind: 'index' | 'board') =>
     mocks.bodyFetch.mock.calls.filter((c) => c[0] === kind).length
+  const mountCount = (kind: 'index' | 'board') =>
+    mocks.bodyMount.mock.calls.filter((c) => c[0] === kind).length
 
-  it('Finding 1 刷新: 指数正文重新取数(调用次数 +1)且重挂载, 带1/外壳稳定不跳页', () => {
+  it('Finding 1 + 遗留⑦ 刷新: 指数正文**重新取数**但**不重挂载**(同节点), 带1/外壳稳定不跳页', () => {
     renderAt('/stocks/000001?type=index')
     // Finding 2: 正文块与个股分支带2 同为 mt-3(不再与带1 贴死)
     const contentBox = screen.getByTestId('index-body').parentElement as HTMLElement
@@ -451,30 +470,42 @@ describe('StockWorkbench 三带骨架', () => {
     const bodyBefore = screen.getByTestId('index-body')
     const bandBefore = screen.getByTestId('band1')
     const callsBefore = fetchCount('index')
+    expect(mountCount('index')).toBe(1)
     fireEvent.click(screen.getByText('mock-refresh'))
 
-    // ① 刷新触发正文**重新取数**
+    // ① 刷新触发正文**重新取数**(token 进了取数 effect 的依赖)
     expect(fetchCount('index')).toBe(callsBefore + 1)
     expect(mocks.bodyFetch).toHaveBeenLastCalledWith('index', '000001')
-    // ② 正文重挂载(内容不变), 带1/外壳不重挂载, 且不跳页/不改 query
-    expect(screen.getByTestId('index-body')).not.toBe(bodyBefore)
+    // ② **没有重挂载**: 同一 DOM 节点 + 挂载计数仍为 1(重挂载会换新节点并再记一次挂载)
+    expect(screen.getByTestId('index-body')).toBe(bodyBefore)
+    expect(mountCount('index')).toBe(1)
     expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
+    // 带1/外壳不重挂载, 且不跳页/不改 query
     expect(screen.getByTestId('band1')).toBe(bandBefore)
     expect(search()).toBe('?type=index')
+
+    // 再点一次: 取数再 +1, 节点仍是同一个(可重复, 不是一次性巧合)
+    fireEvent.click(screen.getByText('mock-refresh'))
+    expect(fetchCount('index')).toBe(callsBefore + 2)
+    expect(screen.getByTestId('index-body')).toBe(bodyBefore)
+    expect(mountCount('index')).toBe(1)
   })
 
-  it('Finding 1 刷新: 板块正文重新取数(调用次数 +1)+ 带 mt-3 间距', () => {
+  it('Finding 1 + 遗留⑦ 刷新: 板块正文**重新取数**但**不重挂载** + 带 mt-3 间距', () => {
     renderAt('/stocks/880001?type=board')
     const contentBox = screen.getByTestId('board-body').parentElement as HTMLElement
     expect(contentBox.className).toContain('mt-3')
 
     const bodyBefore = screen.getByTestId('board-body')
     const callsBefore = fetchCount('board')
+    expect(mountCount('board')).toBe(1)
     fireEvent.click(screen.getByText('mock-refresh'))
 
     expect(fetchCount('board')).toBe(callsBefore + 1)
     expect(mocks.bodyFetch).toHaveBeenLastCalledWith('board', '880001')
-    expect(screen.getByTestId('board-body')).not.toBe(bodyBefore)
+    // 不重挂载(遗留⑦)
+    expect(screen.getByTestId('board-body')).toBe(bodyBefore)
+    expect(mountCount('board')).toBe(1)
     expect(screen.getByTestId('board-body').textContent).toBe('board-body:880001')
   })
 

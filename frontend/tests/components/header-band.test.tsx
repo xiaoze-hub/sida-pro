@@ -222,3 +222,96 @@ describe('HeaderBand 持仓态未知(Task 19: 真组件, 可见文案)', () => {
     expect(screen.queryByTestId('position-unknown')).toBeNull()
   })
 })
+
+/**
+ * 遗留⑤: 快照行补 **成交量 / 振幅 / 封单额**(spec §1.2 明列, `DATA_OWNERSHIP` 把它们都判给
+ * `band1.snapshot`)。守的是**接线**(纯函数口径由 `tests/lib/workbench-snapshot.test.ts` 守):
+ *  ① 三格的值来自带1 **本来就在打**的两个端点 —— `/quotes/{s}`(volume/high/low/prev_close)与
+ *     `/stocks/{s}/l2`(`more.fcamo` + `snapshot`), 且 `/l2` **仍只有一条请求**(snapshot 与 more 同源);
+ *  ② 缺字段 → `--`(不编造, 不当 0);
+ *  ③ 封单额是个股专属 cell: `type=index` 时整条快照行(含三格)都不渲染 —— 右栏「盘口速览」的
+ *     封单行已删, 带1 是全站唯一拥有面(去重断言见 `workbench-dedup-audit.test.tsx` ⑦)。
+ */
+describe('HeaderBand 快照行补 成交量/振幅/封单额(遗留⑤)', () => {
+  const L2_FULL = {
+    snapshot: { now: 82.46, last_close: 77.4, high: 83.2, low: 76.5, volume: 12345 },
+    more: {
+      zt_price: 84.1,
+      fcamo: 812_000_000, // 元(后端已把 FCAmo 万元 ×1e4)
+      pe_dynamic: 39.19,
+      pe_ttm: 60.26,
+      pb: 14,
+      dividend_yield: 1.23,
+      ever_zt_count: 2,
+    },
+  }
+
+  beforeEach(() => {
+    mocks.quote.mockResolvedValue({
+      name: '金安国纪',
+      current_price: 82.46,
+      change_pct: 7.86,
+      open_price: 77.0,
+      high_price: 83.2,
+      low_price: 76.5,
+      prev_close: 77.4,
+      volume: 1_234_567, // 手
+      turnover: 987_654_321,
+    })
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      if (String(url).includes('/l2')) return L2_FULL
+      return {}
+    })
+  })
+
+  it('三格真值落位: 成交量 123.46万手 / 振幅 8.66% / 封单额 8.12亿, 且 /l2 仍只发一条', async () => {
+    render(<HeaderBand symbol="002636" market="CN" type="stock" />)
+
+    await waitFor(() => expect(screen.getByText('成交量')).toBeTruthy())
+    // 成交量: /quotes.volume(手)→ 万手
+    expect(screen.getByText('123.46万手')).toBeTruthy()
+    // 振幅 = (83.2 − 76.5) / 77.4 × 100 = 8.66%(三值同源自 /quotes)
+    expect(screen.getByText('振幅')).toBeTruthy()
+    expect(screen.getByText('8.66%')).toBeTruthy()
+    // 封单额: /l2 的 more.fcamo(元)→ 8.12亿
+    expect(screen.getByText('封单额')).toBeTruthy()
+    expect(screen.getByText('8.12亿')).toBeTruthy()
+
+    // **未新增请求**: snapshot 与 more 取自同一条 `/l2` 响应
+    const l2Calls = mocks.fetchAPI.mock.calls.filter((c) => String(c[0]).includes('/l2'))
+    expect(l2Calls).toHaveLength(1)
+    expect(mocks.quote).toHaveBeenCalledTimes(1)
+  })
+
+  it('缺字段 → 三格 `--`(quote 无 volume/prev_close, /l2 无 snapshot 与 fcamo)', async () => {
+    mocks.quote.mockResolvedValue({ name: '金安国纪', current_price: 82.46, change_pct: 7.86, high_price: 83.2, low_price: 76.5 })
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      if (String(url).includes('/l2')) return { more: { zt_price: 84.1 } }
+      return {}
+    })
+    render(<HeaderBand symbol="002636" market="CN" type="stock" />)
+
+    await waitFor(() => expect(screen.getByText('封单额')).toBeTruthy())
+    // /quotes 三值缺失 ⇒ 振幅不出数(缺值守卫), 成交量/封单额同样 `--`(不因"有别的源到了"就误填)。
+    // 注: 本用例的 `/l2` 夹具**没有 `snapshot` 段**, 故它**检不出**"跨源拼数"(如 quotes.high 配
+    // l2.last_close) —— 那条同源纪律由 `tests/lib/workbench-snapshot.test.ts` 的
+    // 「振幅回退: … 绝不跨源拼数」用例守(复审 Minor 6: 原注释把功劳记错了地方)。
+    expect(screen.getByText('振幅').parentElement?.textContent).toBe('振幅--')
+    expect(screen.getByText('成交量').parentElement?.textContent).toBe('成交量--')
+    expect(screen.getByText('封单额').parentElement?.textContent).toBe('封单额--')
+    // 涨停价(同一条 /l2 的 more)照旧渲染 ⇒ 证明不是"整条 /l2 没到"造成的空过
+    expect(screen.getByText('84.1')).toBeTruthy()
+  })
+
+  it('type=index: 整条快照行不渲染(含三格), 且一个数据面都不发', async () => {
+    render(<HeaderBand symbol="000001" market="CN" type="index" />)
+    await waitFor(() => expect(screen.getByRole('group', { name: '类型切换' })).toBeTruthy())
+
+    expect(screen.queryByText('成交量')).toBeNull()
+    expect(screen.queryByText('振幅')).toBeNull()
+    expect(screen.queryByText('封单额')).toBeNull()
+    expect(screen.queryByText('8.12亿')).toBeNull()
+    expect(mocks.quote).not.toHaveBeenCalled()
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+  })
+})

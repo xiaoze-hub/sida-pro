@@ -30,9 +30,10 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ⑤ **形态差异可观测(未走 `InsightProvider`)** —— 与 T11–T15 不同, 本标签不引用
  *    `InsightProvider`(控制器裁定: 预测页自包含)。断言挂载期间真 `@panwatch/api` 零调用 ——
  *    若有人给本标签补上 provider 取数, 这条会立刻失败。
- * ⑥ **`ForecastPage` 无 props 面(接口事实, 由 TS 守卫)** —— 对真实模块用 `@ts-expect-error`
- *    断言 `<ForecastPage symbol="600519" />` 类型不通过: 若将来 `Forecast.tsx` 加了 props, 该
- *    指令会变成"未使用" ⇒ 类型检查报错, 逼后人重审本标签"不传 symbol"的决定。
+ * ⑥ **`ForecastPage` 的 props 面(接口事实, 由 TS 守卫)** —— 它**只**吃可选 `initialSymbol`
+ *    (v0.6.0 遗留②: 本标签据此预选标的)。对真实模块用 `@ts-expect-error` 断言
+ *    `<ForecastPage symbol="600519" />` 类型不通过(错属性名): 若将来 `Forecast.tsx` 把
+ *    `symbol` 也收进来, 该指令会变成"未使用" ⇒ 类型检查报错, 逼后人重审本标签的透传契约。
  *    ⚠ **诚实说明谁在检查这条**: 本项目 `frontend/tsconfig.json` 的 `include` 是
  *    `["src", "packages/[star]/src"]`(此处 `[star]` 代指星号, 避免注释被提前闭合), `tests/`
  *    **不在**其中, 且 `eslint.config.js` 的 `files` 也不含 `tests/` ⇒ 现有门禁 `npx tsc -b` /
@@ -101,10 +102,14 @@ vi.mock('react', async (importOriginal) => {
   }
 })
 
-/** 预测页替身正文: 只给一个可断言的标记文本。 */
-function FakeForecastPage() {
+/** 预测页替身正文: 只给一个可断言的标记文本; `initialSymbol` 回显以便断言预选透传。 */
+function FakeForecastPage({ initialSymbol }: { initialSymbol?: string }) {
   mocks.render()
-  return <div data-testid="fake-forecast-page">FORECAST-PAGE-RENDERED</div>
+  return (
+    <div data-testid="fake-forecast-page" data-initial-symbol={initialSymbol ?? ''}>
+      FORECAST-PAGE-RENDERED
+    </div>
+  )
 }
 
 vi.mock('@/pages/Forecast', () => ({
@@ -122,7 +127,7 @@ vi.mock('@panwatch/api', () => ({
 
 import ForecastTab from '@/pages/workbench/tabs/ForecastTab'
 // 本文件把 `@/pages/Forecast` 换成了受控替身 ⇒ 这里的 `ForecastPage` 就是替身;
-// 断言⑥ 的"零 props 面"由 `@ts-expect-error` 守住 —— 它读的是**类型**, 而 `vi.mock` 不改类型。
+// 断言⑥ 的"props 面只有 initialSymbol"由 `@ts-expect-error` 守住 —— 它读的是**类型**, 而 `vi.mock` 不改类型。
 import ForecastPage from '@/pages/Forecast'
 import AppErrorBoundary from '@/components/ErrorBoundary'
 
@@ -179,8 +184,10 @@ describe('Task 16 预测: 惰性加载', () => {
     expect(mocks.load).toHaveBeenCalledTimes(1)
     // fallback 退场, 无残影
     expect(screen.queryByText('加载预测页(四模型)…')).toBeNull()
-    // 口径行如实: 不预选标的
-    expect(screen.getByTestId('forecast-tab').textContent).toContain('预测页不接受外部标的传入, 本标签不预填')
+    // 预选透传: 工作台 symbol 作 `initialSymbol` 进了预测页(v0.6.0 遗留②)
+    expect(screen.getByTestId('fake-forecast-page').getAttribute('data-initial-symbol')).toBe('002636')
+    // 口径行如实: 已按工作台标的预填(不再声称"不预填")
+    expect(screen.getByTestId('forecast-tab').textContent).toContain('已按工作台标的预填代码')
   })
 
   it('pending ⇒ 出 fallback, 预测页零渲染(不预填/不假装已加载)', async () => {
@@ -265,11 +272,12 @@ describe('Task 16 预测: 形态差异(未走 InsightProvider, 零取数)', () =
   })
 })
 
-describe('Task 16 预测: ForecastPage 无 props 面(接口事实由 TS 守卫)', () => {
-  it('真实模块是零 props 默认导出 ⇒ 强塞 symbol 类型不通过', () => {
-    // 零 props: 传 symbol 必须类型报错。若将来 Forecast.tsx 加了 props, 这行会变成
-    // "未使用的 @ts-expect-error" ⇒ 类型检查失败 ⇒ 逼后人重审本标签"不传 symbol"的决定。
-    // @ts-expect-error ForecastPage 无 props 面
+describe('Task 16 预测: ForecastPage props 面(接口事实由 TS 守卫)', () => {
+  it('真实模块只吃 initialSymbol ⇒ 强塞 symbol 类型不通过', () => {
+    // 预选走 `initialSymbol`(v0.6.0 遗留②); `symbol` 属错属性名, 必须类型报错。
+    // 若将来 Forecast.tsx 把 `symbol` 也收进来, 这行会变成"未使用的 @ts-expect-error"
+    // ⇒ 类型检查失败 ⇒ 逼后人重审本标签的透传契约。
+    // @ts-expect-error ForecastPage 只接受 initialSymbol, 没有 symbol
     const bad = <ForecastPage symbol="600519" />
     // ↓ 运行时断言**不含**类型价值(元素对象恒 truthy): 本条的全部价值在上一行的 `@ts-expect-error`
     //   (编译期)。注意 tests/ 不在 tsconfig.json 的 include 里, 现有 `tsc -b`/`eslint .` **不**检查

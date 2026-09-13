@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
@@ -22,6 +22,11 @@ import { safeFixed, safeNum, safeNetInflow } from '@/lib/format'
  *     `/quotes/{s}`(同代码 = 另一标的)也不渲染名称/现价, 见 `HeaderBand` 头注「同码不同标的闸门」;
  *  2. 数字格式化改走 `@/lib/format` 的 safe* 系列 (项目红线 #6 / R6 禁裸 toFixed):
  *     每处外部守卫不变, 输出字符串逐字相同。
+ *  3. **新增可选 `refreshToken`(v0.6.0 遗留⑦)**: 页面级刷新改为 `refreshToken={refreshKey}`
+ *     而**不是** `key={refreshKey}` —— 换 key 会卸载并重建整棵正文子树, 于是每次点刷新都重放
+ *     `sida-page-enter` 入场动画(视觉"闪一下")并丢掉正文自己的内部 UI 状态。现在 token 变化只
+ *     **重跑取数 effect**(见下), 组件实例与 DOM 节点都保持不动。不传该 prop 时行为与旧版一致
+ *     (只在挂载/换标的时取数)。
  *
  * 真数据: `GET /market/indices/{symbol}` + `GET /market-data/market-capital-flow`(失败静默)。
  */
@@ -92,31 +97,46 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   )
 }
 
-export default function IndexBody({ symbol }: { symbol: string }) {
+export default function IndexBody({ symbol, refreshToken }: { symbol: string; refreshToken?: number }) {
   const [data, setData] = useState<IndexDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   // 大盘资金流(同花顺源, 东财502替代)
   const [marketFlow, setMarketFlow] = useState<MarketFlow | null>(null)
+  /** `load()` 竞态守卫的取号器(见 `load` 内注): 只认最新一次取数的结果。 */
+  const seqRef = useRef(0)
 
   const load = useCallback(async () => {
+    // 竞态守卫(遗留⑦ 复审 Finding 2): 改用 `refreshToken` 后本组件实例**常驻**(旧做法靠
+    // `key` 重挂载把在飞请求连同实例一起丢弃), 连点刷新 ⇒ 多个 `load()` 同时在飞。
+    // 本组件渲染顺序是 loading → **error → data**, 即 error 优先: 一次**过期**的失败足以把
+    // 已到手的好数据整块换成错误横幅。故 await 之后只认最新号(形态同 `L2Tab.tsx` 的 seqRef)。
+    const seq = ++seqRef.current
     setLoading(true)
     setError('')
     try {
       const d = await fetchAPI<IndexDetail>(`/market/indices/${symbol}`)
+      if (seq !== seqRef.current) return
       if (d?.error) setError(d.error)
       else setData(d)
     } catch (e: any) {
+      if (seq !== seqRef.current) return
       // 2026-08-17: 错误分类 (B 报告 P1-9) — TIMEOUT / HTTP_5xx / NETWORK 分别给文案
       setError(describeApiError(e))
     } finally {
-      setLoading(false)
+      // 过期号不清 loading(交给最新那次), 否则新请求还在飞就提前显示"加载完成"
+      if (seq === seqRef.current) setLoading(false)
     }
-    // 大盘资金流(独立加载, 失败静默)
-    fetchAPI<MarketFlow>('/market-data/market-capital-flow').then(setMarketFlow).catch(() => {})
+    // 大盘资金流(独立加载, 失败静默) —— 过期号不许写 state
+    fetchAPI<MarketFlow>('/market-data/market-capital-flow')
+      .then((m) => { if (seq === seqRef.current) setMarketFlow(m) })
+      .catch(() => {})
   }, [symbol])
 
-  useEffect(() => { load() }, [load])
+  // 遗留⑦: `refreshToken` 变化 = 页面级刷新(带1 的刷新按钮)⇒ **只重跑取数**, 不重挂载组件。
+  // 旧做法是页面给正文子树挂 `key={refreshKey}`: 换 key 会卸载并重建整棵子树 ⇒ 重放
+  // `sida-page-enter` 入场动画(视觉上"闪一下")并丢掉正文自己的内部 UI 状态。
+  useEffect(() => { load() }, [load, refreshToken])
 
   const q = data?.quote
   const up = (q?.change_pct || 0) >= 0

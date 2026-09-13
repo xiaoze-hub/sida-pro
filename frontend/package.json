@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview"
@@ -40,6 +41,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.5.1",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.0",

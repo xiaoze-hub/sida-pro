@@ -291,6 +291,10 @@
 - 影响: 门禁不再"全绿可依赖", 每次发版都要人工比对基线才能确认没引入回归 —— 正是 CI 真门禁(0.5)想消除的成本。
 - 涉及文件: 上述三个测试文件。
 - 建议修复: ①把用例时间基准改成注入的固定日期(不依赖 `date.today()`); ②`tradingagents` 缺失时 `pytest.importorskip`; ③给 thsdk buffer 用例补 `@pytest.mark.network` 并修 mock 隔离(它现在会在整套跑时真连外网)。
+- ✅ **2026-09-14 已关闭(三类全部清零)** —— 实测 `PYTHONUTF8=1 python -m pytest -q -p no:warnings -m "not network"` = **2280 passed / 0 failed / 5 skipped**(此前 7 failed / 2273 passed)。逐类处置:
+  - **① `test_entry_candidate_outcomes.py` 5 条**: **无需改代码** —— 2026-09-14 是**周一(工作日)**, 同一套用例直接转绿, 证实原判断"疑为日历相关"。(仍建议按原方案改成注入固定日期, 否则每逢周末门禁就会假红 5 条; 本次未改, 因为不改也已复现并确认成因, 且改法属测试重构, 不在本批范围。)
+  - **② `test_ta_load_ohlcv_patch.py` 1 条**: **没有采用 `importorskip`** —— 那只是把红变成跳过, 会**丢掉覆盖**。实况是 `tradingagents` 为软依赖时适配器抛的是**另一种**异常(`toolkit_adapter.py:452-461` 的 `except ImportError → RuntimeError`), 故改为**按环境断言对应异常类型**: CI(装了上游)仍钉住 `NoMarketDataError` 契约, 本机则真正覆盖那条**原本零覆盖**的兜底分支。两种环境都在测东西, 都不是跳过。
+  - **③ `test_thsdk_buffer_size.py` 1 条**: **没有采用"标 `@pytest.mark.network`"** —— 那等于承认它本该联网, 与用例自述意图("不依赖真实 thsdk 安装")相反, 且会让离线门禁少守一条真契约。真根因是: 文件顶部换假 `sys.modules["thsdk"]` 只在 `data_source.thsdk_l2` **首次** import 时生效, 全量跑时别的用例早已 import 过它 ⇒ 拿到的是**绑着真 `THS`** 的缓存模块, 换假成了空操作 ⇒ `_query` 真去连行情服务(5 次重试全败, 返回 `error='未登录'`)。改为用 `monkeypatch` 直接替换 `_query` 实际取用的**模块属性** `M.THS`(`thsdk_l2.py:98` 的 `from thsdk import THS`, 用于 `:349`/`:361`)⇒ 与 import 顺序无关且**全程离线**。已补回归验证: 单文件跑与全量跑均绿。
 
 ### KI-056 KlineChart(行情页大图)还没有每 pane 信息栏 (P3)
 
@@ -300,6 +304,39 @@
 - 影响: 老板最常看的那张大图拿不到"悬停那根的副图读数", D1 的价值只兑现了一半。
 - 涉及文件: frontend/packages/biz-ui/src/lib/subcharts.ts、frontend/packages/biz-ui/src/components/KlineChart.tsx。
 - 建议修复: 把注册表按 chart 分组(或给 def 加 `series` 字段标明属于哪个图), 为 KlineChart 声明 vol/macd/active/phase 四类读数, 再接它已有的 `subscribeCrosshairMove`(350 行)把 hover 索引提到 state 渲染条带; 与 [[个股详情整页工作台]] 的图表主体改造合并做最省。
+- **2026-09-14 订正(条目仍开启, 老板本批明确跳过)**: 上文"行情页 `/quote/:symbol`"已随 **v0.6.0** 退役 —— 该路由现在是 redirect, `KlineChart` 成了**个股工作台带2 的主图**(`/stocks/:symbol`)。缺陷本体不变(这张图仍无每 pane 信息栏), 只是入口路径变了; 修复落点也仍是同两个文件。
+
+### KI-057 「振幅」两套分母口径(后端 `/low` vs 前端 `/prev_close`) (P2)
+
+- 发现: 2026-09-14(v0.6.0 遗留⑤ 给工作台带1 快照行加「振幅」格时, 核对既有实现发现)
+- 现象: 同一个标签「振幅」在产品里有**两个不同公式**, 且两者能从**同一个页面**到达:
+  ① **后端落库口径** `src/collectors/kline_collector.py:853` → `amplitude = (curr.high - curr.low) / curr.low * 100`(**分母是最低价**), 存进 `klines.amplitude`, 由 `kline-summary-dialog.tsx` 展示(其解释文案 `:793`「今日振幅≈(High-Low)/Low」与之一致), 并被 `daily_report`/`premarket_outlook`/`intraday_monitor` 三个 Agent 写进 AI 报告文本。
+  ② **前端实时口径** `(high - low) / prev_close * 100`(**分母是昨收**, 即 A 股通行口径) —— 原在 `insight/useInsightDerived.ts:97`, v0.6.0 遗留⑤ 起也用于工作台带1 的「振幅」格(`workbench/HeaderBand.tsx::amplitudePct`)。
+  同屏可达路径: 工作台带1 快照行显示 ②; 带1 的技术指标建议条 → `suggestion-badge.tsx` → `KlineSummaryDialog` 显示 ①。同一只票同一交易日, 两处数字**不相等**(分母 `low` ≤ `prev_close` 时 ① 恒 ≥ ②)。
+- 影响: 老板在同一个页面看到两个都叫「振幅」的数, 无法判断哪个对 —— 与 KI-037(前端指标逐值对齐后端)同类的口径分叉, 只是这次分叉在"定义"层而非"实现"层。另: `useInsightDerived.amplitudePct` 现已**零消费方**(唯一消费者 `OverviewTab` 在 v0.6.0 清理第3批被删), 属死代码。
+- 涉及文件: src/collectors/kline_collector.py、frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx、frontend/packages/biz-ui/src/components/insight/useInsightDerived.ts、frontend/packages/biz-ui/src/components/kline-summary-dialog.tsx。
+- 建议修复: **先定口径再改代码**(需老板拍板, 不擅自改) —— 若取 A 股通行口径(分母=昨收), 则改 `kline_collector.py:853` 并同步 dialog 解释文案, 且要决定**历史 `klines.amplitude` 是否回填重算**(改了不回填 = 新旧行不同口径混在一张表里, 比现在更糟); 若保留 `/low`, 则带1 应改成消费后端口径而不是自己算(但那是 EOD 值, 盘中会显示昨日振幅, 也不对)。**当前处置**: 带1 保持 A 股通行口径(实时面本就该用实时 high/low/prev_close), 分叉登记在此不静默; 顺手可删 `useInsightDerived.amplitudePct` 死代码。
+
+### KI-058 「设提醒」能力无 UI 入口 / `handleSetAlert` 成孤儿 (P2, 待老板拍板)
+
+- 发现: 2026-09-14(v0.6.0 遗留③ 把工作台「触发盘中监测」改成**不动自选/绑定**的路径后, 反查调用方发现)
+- 现象: 给个股**绑定 `intraday_monitor` Agent**(= 让它进定时扫描并推提醒)的唯一实现是 `insight/useInsightActions.ts::handleSetAlert`(`list()` → 未关注则 `create()` 写入自选 → `updateAgents()` 写入绑定 → `triggerAgent`), 而它现在**全仓零生产调用方**:
+  - 原来的入口「一键设提醒」按钮在旧个股详情模态 `stock-insight-modal.tsx` 里, 该模态随 **v0.6.0** 退役(未恢复) ⇒ 能力入口当时就没了;
+  - v0.6.0 期间工作台「建议」标签的「触发盘中监测」按钮**顺带**调了它, 于是"点一下分析就偷偷加自选+绑 Agent"成了副作用缺陷(复审 Finding 1);
+  - 遗留③ 按要求把该按钮改成 `triggerIntradayOnce`(`stock_id=0` + `allow_unbound`, 后端 `src/web/api/stocks.py:523-533` 的"不落库"分支 ⇒ **不加自选、不绑 Agent**; 注: 这**不是**"零写入" —— 那轮运行仍会落一条 `AgentRun` 运行记录与一条站内「任务完成」通知, 2026-09-14 复审 Finding 1 已证伪原先的过度声称) ⇒ 那条顺带的路径也没了。
+  现仅 `tests/components/suggest-tab.test.tsx` 用探针组件直调它(守护"保留项不被改坏")。`stocksApi.updateAgents` 因此也只剩这一个调用方。
+- 影响: 用户**无法从界面上**给任何个股开启盘中监测提醒(只能靠已有的历史绑定行继续跑); 同时仓里留着一个"会做持久化写入却无人能触发"的动作 —— 后人若随手接上一个按钮, 就会把 ③ 刚消除的副作用重新引进来, 而当初那句警示文案已随旧模态一起删掉了。
+- 涉及文件: frontend/packages/biz-ui/src/components/insight/useInsightActions.ts、frontend/src/pages/workbench/tabs/SuggestTab.tsx、frontend/packages/api/src/stocks.ts。
+- 建议修复(**两条路, 需老板选, 未擅自决定**): (A) 在工作台「建议」标签补一个**独立且明示写入**的「设提醒」按钮调 `handleSetAlert`(与「触发盘中监测」并排, 各自把副作用讲清楚) —— 恢复 v0.6.0 之前的能力, 属**新功能**, 按 [[feedback-scope-before-product-work]] 先列清单再动; (B) 确认该能力不再需要, 则删 `handleSetAlert` + `SetAlertOutcome` + 对应探针测试(与清理第1/3批删死文件同手法)。当前批次**两条都没做**: 遗留③ 的既定范围明确写了"保留 `handleSetAlert` 给「一键设提醒」", 故先原样保留并登记在此。
+
+### KI-059 封单额迁到带1 后失去 30s 轮询与快照时钟 (P2, 待老板裁定)
+
+- 发现: 2026-09-14(v0.6.0 遗留⑤ 按去重契约把封单额从右栏迁到带1 后, 独立复审 Minor 5 提出)
+- 现象: 迁移前「封单额」在右栏「盘口速览」卡里, 该卡 `/stocks/{s}/l2` **30s 轮询**且显示 `快照 HH:MM:SS`(`QuickRail.tsx`); 迁移后它在**带1 快照行**, 而 `HeaderBand` **没有任何轮询**(取数 effect 依赖 `[symbol, market, isStock, cnStock, tick]`, `tick` 只在手动点刷新时 +1), 也**没有快照时钟** ⇒ 封单额变成"进来时看一眼, 之后不动"。
+- 为什么值得单列: 封单额恰恰是那一行里**变化最快**的读数(封板扛不扛得住就看它), 涨停股盘中几秒就能从几亿砸到 0; 而 涨停价/PE/PB 这些同排的格子本来就是慢变量。**这是遵循去重契约的必然结果, 不是实现错误**(契约 `DATA_OWNERSHIP.seal_amount='band1.snapshot'` 指定带1 为唯一拥有面), 但代价是新鲜度下降。
+- 影响: 盯涨停板的用户会拿到一个**看着像实时、其实是首屏时刻**的封单额, 且屏上没有任何时效提示 —— 与"不伪装"纪律相冲突的是**缺少时效披露**这一点。
+- 涉及文件: frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx。
+- 建议修复(**三选一, 需老板拍板**): (A) 给带1 的 `/l2` 加 30s 轮询(与右栏同频; 代价是带1 从"静态吸顶带"变成持续取数, 首屏后每 30s 多一条请求); (B) **只加快照时钟** `快照 HH:MM:SS`(不轮询, 但让用户知道这个数是什么时候的 —— 成本最低、最符合"不伪装"); (C) 把封单额迁回右栏并改去重契约(不推荐: 会重新引入两处显示同一数据点)。**倾向 B**(或 A+B), 但未擅自实现。
 
 ## 依赖安全审计 (W2.5/E5+E6, 2026-09-09 → KI-001/002/003/006)
 
@@ -390,3 +427,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-12(v0.5.77 收口)**: **KI-049/050/051/052/053/054 六条修复移入 CHANGELOG**(其中 KI-050 改了契约: `/capabilities` 新增 `verdict` 与 `min_samples`; KI-054 新增 `JobStore.progress_reporter` 心跳), 台账 **34 条在册(P1×3/P2×18/P3×13)**; 本轮仅 **KI-055(离线门禁存量 7 红)** 保留开启。
 
 **2026-09-12(v0.5.78/79)**: 新增 **KI-056**(行情页大图还没有每 pane 信息栏, 注册表目前只覆盖 InteractiveKline 的副图集合), 台账 **35 条在册(P1×3/P2×18/P3×14)**; 同日修复并移入 CHANGELOG 的两项(行情页 marker 越界整页崩、前端报错上报恒 405)因从未登记过, 直接记在 CHANGELOG。
+
+**2026-09-14(v0.6.0 遗留清理第 4 批)**: **KI-055 关闭**(离线门禁存量红清零: 实测 `pytest -m "not network"` = **2280 passed / 0 failed / 5 skipped**, 三类处置见该条目 ✅ 段 —— 其中 ① 5 条日历敏感用例在工作日**自动转绿**, 未改代码); 新增 **KI-057**(「振幅」两套分母口径: 后端落库 `/low` vs 前端实时 `/prev_close`, 同一工作台页可同屏到达, 需老板先定口径且牵涉历史 `klines.amplitude` 是否回填) + **KI-058**(遗留③ 之后 `handleSetAlert` 成零生产调用方孤儿 ⇒ "绑定盘中监测提醒"自 v0.6.0 退役旧模态起**已无任何 UI 入口**; 补显式按钮=新功能 vs 删死代码, 待老板拍板); 另订正 **KI-056** 描述(其引用的 `/quote/:symbol` 已随 v0.6.0 退役, 条目仍开启)。台账 **36 条在册(P1×3/P2×19/P3×14)**; 同批复审另提出 Minor 5(封单额迁移后失去 30s 轮询与快照时钟)⇒ 新增 **KI-059**, 台账 **37 条在册(P1×3/P2×20/P3×14)**。

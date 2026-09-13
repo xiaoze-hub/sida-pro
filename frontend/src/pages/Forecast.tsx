@@ -184,8 +184,8 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
   )
 }
 
-export default function ForecastPage() {
-  const [symbol, setSymbol] = useState('')
+export default function ForecastPage({ initialSymbol }: { initialSymbol?: string } = {}) {
+  const [symbol, setSymbol] = useState(initialSymbol ?? '')
   const [days] = useState(5)
   const [searchText, setSearchText] = useState('')
   const [searchResults, setSearchResults] = useState<{ symbol: string; name: string }[]>([])

@@ -3,7 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import { fetchAPI, insightApi } from '@panwatch/api'
 import { cn } from '@panwatch/base-ui'
 import { TechnicalBadge, technicalToneFromSuggestionAction } from '@panwatch/biz-ui/components/technical-badge'
-import { fmtAmount } from '@panwatch/biz-ui/lib/ladder-format'
+import { fmtAmount, fmtSignedAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { safeFixed, safeNum, safePrice } from '@/lib/format'
 import type { KlineSummaryData } from '@panwatch/biz-ui/components/kline-summary-dialog'
@@ -19,14 +19,14 @@ import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/work
  * (盘中手动刷新缺失 = 回归)。`onRefresh` 可选: 单独使用 `HeaderBand` 且不传时维持旧行为。
  *
  * 结构(**个股**): 顶行(名称 + 代码 + 现价 + 涨跌色 + 类型三按钮 + 刷新)
- *       + 快照行(今开/最高/最低/成交额/换手率/量比/总市值/流通市值/
- *                PE(动)/PE(TTM)/PB/股息率/涨停价/连板)
+ *       + 快照行(今开/最高/最低/成交量/成交额/振幅/换手率/量比/总市值/流通市值/
+ *                PE(动)/PE(TTM)/PB/股息率/涨停价/封单额/连板)
  *       + 技术指标买卖建议条(仅 type=stock; 点击跳「建议」标签)。
  *
  * **非个股(指数/板块)只渲染类型三按钮 + 刷新 + 中性代码标签** —— 见下「同码不同标的」闸门。
  *
- * 类型分流(spec 绑定条款): `type !== 'stock'` 时**隐藏**(非渲染成 `--`)7 个个股专属 cell ——
- * `float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`/`limit_boards`;
+ * 类型分流(spec 绑定条款): `type !== 'stock'` 时**隐藏**(非渲染成 `--`)8 个个股专属 cell ——
+ * `float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`/`seal_amount`/`limit_boards`;
  * `mapSnapshot` 保持 type-agnostic（纯函数不动），分流在渲染侧 `visibleSnapshotCells`。
  *
  * **同码不同标的闸门(Important, 控制器裁定)**: `/stocks/000001?type=index` 的 `000001` 是
@@ -42,11 +42,15 @@ import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/work
  *
  * 数据面(全部真数据, 缺值 `--`, 绝不编造):
  *  - GET /quotes/{symbol}            → current_price/change_pct/open_price/high_price/low_price/turnover
+ *                                      + **volume(成交量, 手)/prev_close(昨收, 振幅分母)**(遗留⑤)
  *                                      (**仅个股** —— 指数/板块同代码返回的是另一标的, 不发)
  *  - GET /quotes/{symbol}/more-info  → turnover_rate/volume_ratio/total_market_value(亿)/circulating_market_value(亿)
  *  - GET /stocks/{symbol}/l2         → more.zt_price(涨停价) + more.pe_dynamic/pe_ttm/pb/dividend_yield/ever_zt_count
- *                                      (自包含, 不等兄弟组件回喂)
+ *                                      + **more.fcamo(封单额, 元)** + **snapshot.high/low/last_close(振幅的 CN 回退源)**
+ *                                      (遗留⑤: 都是**同一条**响应里的字段 ⇒ 未新增任何请求; 自包含, 不等兄弟组件回喂)
  *  - GET /klines/{symbol}/summary    → buildKlineSuggestion(技术面建议)
+ * **封单额归属(遗留⑤ 去重裁定)**: `DATA_OWNERSHIP.seal_amount = 'band1.snapshot'` ⇒ 本快照行是
+ * 全站**唯一**拥有面; 右栏 `QuickRail` 的「盘口速览」封单行**已删**(该卡只留 主力净额 + 五档)。
  * **CN-only**: more-info 与 /l2 只在 `个股 + CN` 时发(`cnStockDataEnabled`)—— more-info 对非 CN 后端 400,
  * /l2 是 CN TQ RPC; 否则同代码的境外标的会把 CN 涨停价/PE/PB 画成自己的。
  * 任一接口失败**保留旧值**(stale-on-error), 不把失败渲染成 0/编造值。
@@ -72,6 +76,15 @@ export interface QuoteSnapshot {
   high_price?: number | string | null
   /** 最低(元) */
   low_price?: number | string | null
+  /** 昨收(元) —— 振幅的分母(遗留⑤) */
+  prev_close?: number | string | null
+  /**
+   * 成交量(**手**) —— 遗留⑤ 新增 cell 的数据面。
+   * 单位证据: `packages/marketdata/src/marketdata/vendors/tencent.py:95`(「最新价/成交量(手)/成交额(元)」)
+   * + `src/agents/intraday_monitor.py:1072`(同一 quote 字段渲染成「成交量：{volume} 手」)
+   * + `types.py:51-52`(内/外盘亦标「手」)。
+   */
+  volume?: number | string | null
   /** 成交额(元); 单位证据见 packages/marketdata .../types.py::Quote.turnover */
   turnover?: number | string | null
 }
@@ -94,8 +107,10 @@ export interface MoreInfoSnapshot {
 
 /**
  * `/stocks/{symbol}/l2` 的 `more` 段(spec §1.2 快照行后半段的真数据面; 仅个股/CN 可用)。
- * 字段证据: src/core/stock_l2.py::fetch_more:75-98(`_f` 取原值, 不做单位换算) + 源键
+ * 字段证据: `src/core/stock_l2.py::fetch_more`(**:80-100**; 2026-09-14 复审订正行号, 原写 75-98) + 源键
  * packages/marketdata/.../vendors/tq.py::_parse_more_info:203-219(ZTPrice/DynaPE/StaticPE_TTM/PB_MRQ/DYRatio/EverZTCount)。
+ * 单位: 上述几个字段是 `_f()` **原值透传**(不换算); 但 `fetch_more` 整体**并非**都不换算 ——
+ * 其 docstring 明写「万元→元 仅 FCAmo/OpenAmo」, 即下方 `fcamo`(封单额)**已 ×1e4 成元**(见该字段注)。
  */
 export interface L2MoreSnapshot {
   /** 涨停价(元) — ZTPrice */
@@ -110,6 +125,80 @@ export interface L2MoreSnapshot {
   dividend_yield?: number | string | null
   /** 连板天数(个) — EverZTCount */
   ever_zt_count?: number | string | null
+  /**
+   * 封单额(**元**) — FCAmo(遗留⑤: 去重表 `seal_amount → band1.snapshot`, 右栏「盘口速览」的
+   * 封单行已删, 本 cell 是全站唯一拥有面)。后端已把万元换算成元:
+   * `src/core/stock_l2.py::fetch_more`(`"fcamo": (fcamo * 1e4)`); **可为负**(FCAmo<0 = 跌停封单),
+   * `0` 是真值(未封板)不是缺值 ⇒ 用带符号的 `fmtSignedAmount` 渲染。
+   */
+  fcamo?: number | string | null
+}
+
+/**
+ * `/stocks/{symbol}/l2` 的 `snapshot` 段(遗留⑤: 振幅的 CN 回退数据面)。
+ * 字段证据: `src/core/stock_l2.py::fetch_snapshot`(Max→high / Min→low / LastClose→last_close /
+ * Volume→volume, 均 `_f()` 原值透传, 缺字段为 `None`)。
+ *
+ * 注: 本带**只用** high/low/last_close 三个价格(振幅), **不用** `snapshot.volume` ——
+ * 通达信 `get_market_snapshot` 的 `Volume` 单位在本仓无实测证据(stock_l2.py 原值透传、无单位注),
+ * 单位不明就不画(never fabricate); 成交量走 `/quotes/{s}.volume`(单位=手, 证据见 `QuoteSnapshot.volume`)。
+ */
+export interface L2QuoteSnapshot {
+  /** 最高(元) — Max */
+  high?: number | string | null
+  /** 最低(元) — Min */
+  low?: number | string | null
+  /** 昨收(元) — LastClose */
+  last_close?: number | string | null
+  /** 成交量(单位未证实, 见接口头注 —— 本带不渲染它) — Volume */
+  volume?: number | string | null
+}
+
+/**
+ * 成交量(**手**)→ 紧凑显示(遗留⑤)。单位=手 的证据见 `QuoteSnapshot.volume`。
+ * 缺值/脏值 → `--`(不编, 不当 0); `0` 是真值(停牌/未开盘)⇒ 渲染 `0手`。
+ * R6: 小数位一律走 `@/lib/format` 的 `safeFixed`(本文件零裸调用)。
+ */
+export function fmtVolumeHands(v: unknown): string {
+  const n = safeNum(v)
+  if (n == null) return '--'
+  const abs = Math.abs(n)
+  if (abs >= 1e8) return `${safeFixed(n / 1e8, 2)}亿手`
+  if (abs >= 1e4) return `${safeFixed(n / 1e4, 2)}万手`
+  return `${safeFixed(n, 0)}手`
+}
+
+/**
+ * 振幅(%) = **(最高 − 最低) / 昨收 × 100**(遗留⑤; 公式即 A 股通行口径)。
+ *
+ * **同源纪律**: 三个入参必须来自**同一个响应** —— 优先 `/quotes/{s}` 的
+ * `high_price`/`low_price`/`prev_close`; 三者任一缺失时整体回退 `/stocks/{s}/l2` 的
+ * `snapshot.high`/`low`/`last_close`(通达信同源快照, CN-only)。
+ * **绝不跨源混用**(如 quotes.high 配 l2.last_close): 两个源的取值时刻不同, 拼出来的振幅是假数。
+ *
+ * 守卫: 昨收缺失或为 0(除零)、任一价缺失、结果非有限 ⇒ `null`(渲染层出 `--`), 不猜、不返回 0。
+ */
+export function amplitudePct(
+  q?: QuoteSnapshot | null,
+  l2snap?: L2QuoteSnapshot | null,
+): number | null {
+  const amp = (high: unknown, low: unknown, lastClose: unknown): number | null => {
+    const h = safeNum(high)
+    const l = safeNum(low)
+    const c = safeNum(lastClose)
+    if (h == null || l == null || c == null) return null
+    // **非正价格守卫**(复审 Minor 2): 停牌/未开盘时腾讯源给 `high="0.00"`/`low="0.00"`,
+    // `_to_float` 返回 **0.0 而不是 None** ⇒ `(0-0)/c*100 = 0` 会在屏上渲染成「振幅 0.00%」,
+    // 把"没有数据"伪装成"今天零波动"(一个**算出来的**假读数, 比直显 0 更容易被当真)。
+    // 与本仓 vendor 纪律同源: `packages/marketdata/.../vendors/tencent.py:4`「解析层对缺失/空字段
+    // 一律保留 None, 绝不回退 0(0 价参与算术会伪造假暴跌)」。c<=0 同时兼掉除零与负价脏数据。
+    if (h <= 0 || l <= 0 || c <= 0) return null
+    const v = ((h - l) / c) * 100
+    return Number.isFinite(v) ? v : null
+  }
+  const fromQuote = amp(q?.high_price, q?.low_price, q?.prev_close)
+  if (fromQuote != null) return fromQuote
+  return amp(l2snap?.high, l2snap?.low, l2snap?.last_close)
 }
 
 /** 快照行纯函数: 缺值/脏值一律 `--`(不编, 不渲染 NaN)。格式化一律走 @/lib/format 的 safe* 系列(R6)。 */
@@ -117,6 +206,11 @@ export function mapSnapshot(
   q?: QuoteSnapshot | null,
   more?: MoreInfoSnapshot | null,
   l2?: L2MoreSnapshot | null,
+  /**
+   * `/stocks/{s}/l2` 的 `snapshot` 段(遗留⑤ 新增第 4 参, 可选 ⇒ 既有调用方逐字不变)。
+   * 目前只被 振幅 用作 CN 回退源(见 `amplitudePct` 的同源纪律)。
+   */
+  l2snap?: L2QuoteSnapshot | null,
 ): SnapshotCell[] {
   const quote = q ?? {}
   const info = more ?? {}
@@ -127,6 +221,7 @@ export function mapSnapshot(
   const floatCap = safeNum(info.circulating_market_value)
   const dividendYield = safeNum(l2m.dividend_yield)
   const boards = safeNum(l2m.ever_zt_count)
+  const amplitude = amplitudePct(q, l2snap)
   return [
     { key: 'price', label: '现价', value: safePrice(quote.current_price, 2) },
     {
@@ -137,7 +232,15 @@ export function mapSnapshot(
     { key: 'open', label: '今开', value: safePrice(quote.open_price, 2) },
     { key: 'high', label: '最高', value: safePrice(quote.high_price, 2) },
     { key: 'low', label: '最低', value: safePrice(quote.low_price, 2) },
+    // 成交量(手): 只取 /quotes 的 volume(单位有实测证据); 不回退 /l2 的 snapshot.volume(单位未证实)
+    { key: 'volume', label: '成交量', value: fmtVolumeHands(quote.volume) },
     { key: 'amount', label: '成交额', value: fmtAmount(safeNum(quote.turnover)) },
+    // 振幅 = (最高 − 最低) / 昨收 × 100(公式与同源/除零守卫见 amplitudePct)
+    {
+      key: 'amplitude',
+      label: '振幅',
+      value: amplitude == null ? '--' : `${safeFixed(amplitude, 2)}%`,
+    },
     {
       key: 'turnover',
       label: '换手率',
@@ -164,6 +267,9 @@ export function mapSnapshot(
       value: dividendYield == null ? '--' : `${safePrice(dividendYield, 2)}%`,
     },
     { key: 'limit_price', label: '涨停价', value: safePrice(l2m.zt_price, 2) },
+    // 封单额(元, 可为负 = 跌停封单; 0 = 未封板的真值): 去重表 seal_amount → band1.snapshot,
+    // 右栏「盘口速览」的封单行已删 ⇒ 本 cell 是全站唯一拥有面(遗留⑤)。
+    { key: 'seal_amount', label: '封单额', value: fmtSignedAmount(l2m.fcamo) },
     // 连板: 整数天(safeFixed(...,0) 四舍五入, 不加千分位——连板数上限个位数)
     { key: 'limit_boards', label: '连板', value: safeFixed(boards, 0) },
   ]
@@ -186,21 +292,25 @@ const EQUITY_ONLY_KEYS = new Set([
   'pb',
   'dividend_yield',
   'limit_price',
+  // 遗留⑤: 封单额来自 CN-only 的 `/stocks/{s}/l2`.more.fcamo(且封单是涨停/跌停个股概念) ——
+  // 指数/板块既取不到也无此概念, 与 涨停价/连板 同处置(**隐藏**, 不留 `--` 噪声)。
+  'seal_amount',
   'limit_boards',
 ])
 
 /**
  * 渲染侧可见 cell(纯函数, 供单测锚定): 顶行去重 + 个股专属 cell 的**类型分流**。
- * 非个股直接**不渲染** 7 个估值/涨停/连板 cell(而非渲染成 `--`)。
- * `mapSnapshot` 保持 type-agnostic 不变。
+ * 非个股直接**不渲染** 8 个估值/涨停/封单额/连板 cell(而非渲染成 `--`)。
+ * `mapSnapshot` 保持 type-agnostic 不变。参数顺序与 `mapSnapshot` 对齐(数据四参在前, `isStock` 收尾)。
  */
 export function visibleSnapshotCells(
   q?: QuoteSnapshot | null,
   more?: MoreInfoSnapshot | null,
   l2?: L2MoreSnapshot | null,
+  l2snap?: L2QuoteSnapshot | null,
   isStock = true,
 ): SnapshotCell[] {
-  return mapSnapshot(q, more, l2).filter(
+  return mapSnapshot(q, more, l2, l2snap).filter(
     (c) => !TOP_ROW_KEYS.has(c.key) && (isStock || !EQUITY_ONLY_KEYS.has(c.key)),
   )
 }
@@ -220,8 +330,10 @@ const TYPE_OPTIONS: { id: WorkbenchType; label: string }[] = [
   { id: 'board', label: '板块' },
 ]
 
-interface L2MoreResp {
+interface L2Resp {
   more?: L2MoreSnapshot | null
+  /** 遗留⑤: 同一份 `/l2` 响应的 `snapshot` 段(振幅的 CN 回退源) —— 不新增请求。 */
+  snapshot?: L2QuoteSnapshot | null
 }
 
 export interface HeaderBandProps {
@@ -260,6 +372,8 @@ export default function HeaderBand({
   const [quote, setQuote] = useState<QuoteSnapshot | null>(null)
   const [more, setMore] = useState<MoreInfoSnapshot | null>(null)
   const [l2More, setL2More] = useState<L2MoreSnapshot | null>(null)
+  /** 遗留⑤: `/stocks/{s}/l2` 的 `snapshot` 段(与 `l2More` **同一条响应**, 不新增请求)。 */
+  const [l2Snap, setL2Snap] = useState<L2QuoteSnapshot | null>(null)
   const [summary, setSummary] = useState<KlineSummaryData | null>(null)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -270,6 +384,7 @@ export default function HeaderBand({
     setQuote(null)
     setMore(null)
     setL2More(null)
+    setL2Snap(null)
     setSummary(null)
   }, [symbol, market, isStock])
 
@@ -296,9 +411,12 @@ export default function HeaderBand({
         }),
       )
       // Ruling A: 涨停价/PE/PB/股息率/连板 自包含取 /stocks/{s}/l2(不能依赖兄弟组件回喂)
+      // 遗留⑤: 同一条响应里顺手取 `more.fcamo`(封单额)与 `snapshot`(振幅的 CN 回退源) —— **不新增请求**。
       tasks.push(
-        fetchAPI<L2MoreResp>(`/stocks/${encodeURIComponent(symbol)}/l2`).then((r) => {
-          if (alive) setL2More(r?.more ?? null)
+        fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`).then((r) => {
+          if (!alive) return
+          setL2More(r?.more ?? null)
+          setL2Snap(r?.snapshot ?? null)
         }),
       )
     }
@@ -339,8 +457,8 @@ export default function HeaderBand({
           ? 'text-[--stock-down]'
           : 'text-muted-foreground'
   // 顶行去重(price/change_pct) + 个股专属 cell 的**类型分流**:
-  // index/board 直接不渲染估值/涨停/连板(它们是 -- 噪声, 且指数/板块无此概念), 而非渲染成 `--`。
-  const cells = visibleSnapshotCells(quote, more, l2More, isStock)
+  // index/board 直接不渲染估值/涨停/封单额/连板(它们是 -- 噪声, 且指数/板块无此概念), 而非渲染成 `--`。
+  const cells = visibleSnapshotCells(quote, more, l2More, l2Snap, isStock)
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (

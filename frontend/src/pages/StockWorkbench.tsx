@@ -52,13 +52,20 @@ import {
  * `HeaderBand`/`QuickRail`/`KlineChart`/`IndexBody`/`BoardBody`/六个标签组件内。
  *
  * **页面级刷新**(Task 7 复审 Finding 1, 控制器裁定): 带1 `HeaderBand` 的刷新按钮除刷自身行情外,
- * 还回调 `onRefresh` → 本页 `refreshKey + 1`。`refreshKey` 只作**正文子树**的 `key`(两个分支
- * 各一个), 于是指数/板块正文与个股带2(`KlineChart`/`QuickRail`)整棵重挂载 → **各自重新取数**;
+ * 还回调 `onRefresh` → 本页 `refreshKey + 1`。`refreshKey` 的两种用法(遗留⑦ 起分开):
+ *  - **个股分支**: 仍作正文子树的 `key` —— `KlineChart`/`QuickRail`/激活标签都是"挂载即取数"且
+ *    没有 token 入参, 重挂载是它们唯一的整棵重取数手段;
+ *  - **指数/板块分支**: 作 `IndexBody`/`BoardBody` 的 **`refreshToken` prop**(不再是 `key`)——
+ *    token 变化只让正文**重跑取数 effect**, 组件不卸载 ⇒ 不重放 `sida-page-enter` 入场动画,
+ *    也不丢正文自己的内部 UI 状态。
  * 页面外壳与带1 **不挂 key**(吸顶带不因刷新丢焦点/滚动位置, 也不重发它自己的请求)。
  */
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
+
+/** 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。 */
+const POSITION_POLL_MS = 60000
 
 /**
  * 持仓上下文 `hasPosition`(T19 接**真源**)。
@@ -86,22 +93,25 @@ function useHasPosition(symbol: string, market: string, enabled: boolean): boole
     setHeld(undefined)
     // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
     if (!enabled || !symbol) return () => { alive = false }
-    dashboardApi
-      .portfolioSummary({ include_quotes: false })
-      .then((r) => {
+    const want = `${market}:${symbol}`
+    const load = async () => {
+      try {
+        const r = await dashboardApi.portfolioSummary({ include_quotes: false })
         if (!alive) return
-        const want = `${market}:${symbol}`
         const has = (r?.accounts || []).some((acc) =>
           (acc.positions || []).some((p) => `${p.market}:${p.symbol}` === want),
         )
         setHeld(has)
-      })
-      .catch(() => {
-        // 失败保持 `undefined`(未知), 不静默当未持仓 —— 见头注「三态」。
-        if (alive) setHeld(undefined)
-      })
+      } catch {
+        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`(未知) —— 不静默当未持仓。
+      }
+    }
+    void load()
+    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器要等整页刷新才更新。
+    const t = window.setInterval(() => void load(), POSITION_POLL_MS)
     return () => {
       alive = false
+      window.clearInterval(t)
     }
   }, [symbol, market, enabled])
   return held
@@ -113,9 +123,26 @@ function useHasPosition(symbol: string, market: string, enabled: boolean): boole
  * `type === 'board'` 走板块正文(`BoardBody`, 来自 `BoardDetailPage`; 同路由内切, spec §1.3)。
  * 两组件均按 spec §1.3 去掉了旧页骨架(返回/标题/刷新 —— 头部并入带1 `HeaderBand`; 旧页各自的
  * 「刷新」按钮改由带1 的 `onRefresh` 统一广播, 见头注「页面级刷新」, 正文仍能手动更新)。
+ *
+ * **`refreshToken`(v0.6.0 遗留⑦)**: 页面把 `refreshKey` 作为 **prop** 传进正文, 而不再挂
+ * `key={refreshKey}` —— 换 key 会卸载并重建整棵子树, 于是每次点刷新都重放正文根节点的
+ * `sida-page-enter` 入场动画(视觉"闪一下"), 还会丢掉正文自己的内部 UI 状态(如已展开的块)。
+ * 正文把 token 放进取数 effect 的依赖 ⇒ token 变化**只重跑取数**, 组件实例与 DOM 节点都不动。
  */
-function IndexBoardHost({ type, symbol }: { type: WorkbenchType; symbol: string }) {
-  return type === 'index' ? <IndexBody symbol={symbol} /> : <BoardBody code={symbol} />
+function IndexBoardHost({
+  type,
+  symbol,
+  refreshToken,
+}: {
+  type: WorkbenchType
+  symbol: string
+  refreshToken?: number
+}) {
+  return type === 'index' ? (
+    <IndexBody symbol={symbol} refreshToken={refreshToken} />
+  ) : (
+    <BoardBody code={symbol} refreshToken={refreshToken} />
+  )
 }
 
 /**
@@ -180,8 +207,10 @@ export default function StockWorkbench() {
   const type = normalizeType(sp.get('type'))
   const tab = parseTab(sp.get('tab'))
   /**
-   * 页面级刷新计数器(Finding 1): 只作**正文子树**的 `key`。带1 刷新 → 自增 → 两个分支的
-   * 内容块各自重挂载一次 → 正文/主图/右栏在挂载副作用里重新取数(各自组件本就"挂载即取数")。
+   * 页面级刷新计数器(Finding 1; 用法自遗留⑦ 起**分成两种**, 详见文件头注「页面级刷新」):
+   *  - **个股分支**: 仍作正文子树的 `key` → 自增即重挂载, 主图/右栏/激活标签在挂载副作用里重新取数;
+   *  - **指数/板块分支**: 作 `IndexBody`/`BoardBody` 的 **`refreshToken` prop**(不再是 `key`)
+   *    → 只重跑正文的取数 effect, 组件不卸载(不重放入场动画、不丢正文内部状态)。
    */
   const [refreshKey, setRefreshKey] = useState(0)
   /**
@@ -214,11 +243,16 @@ export default function StockWorkbench() {
 
       {type !== 'stock' ? (
         /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
-           `key={refreshKey}`: 刷新时正文重挂载重取数; `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <div key={refreshKey} className="mt-3">
-          <IndexBoardHost type={type} symbol={symbol} />
+           遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
+           改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
+           `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
+        <div className="mt-3">
+          <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
         </div>
       ) : (
+        /* 个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都没有
+           `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
+           给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
         <div key={refreshKey}>
           {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡 */}
           <div className="mt-3 flex gap-3">

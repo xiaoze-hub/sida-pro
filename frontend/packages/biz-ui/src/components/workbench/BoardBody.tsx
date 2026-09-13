@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '@panwatch/api'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
@@ -19,6 +19,11 @@ import { safeFixed } from '@/lib/format'
  *     `/quotes/{s}`(同代码 = 另一标的)也不渲染名称/现价, 见 `HeaderBand` 头注「同码不同标的闸门」;
  *  2. 数字格式化改走 `@/lib/format` 的 safe* 系列 (项目红线 #6 / R6 禁裸 toFixed):
  *     每处外部守卫不变, 输出字符串逐字相同。
+ *  3. **新增可选 `refreshToken`(v0.6.0 遗留⑦)**: 页面级刷新改为 `refreshToken={refreshKey}`
+ *     而**不是** `key={refreshKey}` —— 换 key 会卸载并重建整棵正文子树, 于是每次点刷新都重放
+ *     `sida-page-enter` 入场动画(视觉"闪一下")并丢掉正文自己的内部 UI 状态。现在 token 变化只
+ *     **重跑取数 effect**(见下), 组件实例与 DOM 节点都保持不动。不传该 prop 时行为与旧版一致
+ *     (只在挂载/换标的时取数)。
  *
  * 板块详情(spec 口径不变, 2026-08-20 v0.3.0 / 方案B 2026-09-10):
  *   GET /boards/{code}              板块详情(今日 change_pct / fund_net / volume)
@@ -110,16 +115,23 @@ function pctColor(v: number | null | undefined): string {
   return v > 0 ? 'text-stock-up' : v < 0 ? 'text-stock-down' : 'text-muted-foreground'
 }
 
-export default function BoardBody({ code }: { code: string }) {
+export default function BoardBody({ code, refreshToken }: { code: string; refreshToken?: number }) {
   const navigate = useNavigate()
   const [detail, setDetail] = useState<BoardDetailResp | null>(null)
   const [constituents, setConstituents] = useState<BoardConstituent | null>(null)
   const [rotation, setRotation] = useState<RotationResp | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  /** `load()` 竞态守卫的取号器(见 `load` 内注): 只认最新一次取数的结果。 */
+  const seqRef = useRef(0)
 
   const load = useCallback(async () => {
     if (!code) return
+    // 竞态守卫(遗留⑦ 复审 Finding 2): 改用 `refreshToken` 后本组件实例**常驻**(不再被 key 重挂载
+    // 丢弃在飞请求), 连点刷新 ⇒ 多个 `load()` 同时在飞。慢的旧请求后到就会用**旧数据/旧错误**
+    // 覆盖新结果 —— 本组件 `error` 优先于 `detail` 渲染, 一次过期失败足以把好内容换成错误横幅。
+    // 取号 → await 后只认最新号(形态同 `L2Tab.tsx` 的 `useL2Sources.seqRef`)。
+    const seq = ++seqRef.current
     setLoading(true)
     setError('')
     try {
@@ -127,18 +139,26 @@ export default function BoardBody({ code }: { code: string }) {
         fetchAPI<BoardDetailResp>(`/boards/${encodeURIComponent(code)}`, { cacheMode: 'reload' }),
         fetchAPI<BoardConstituent>(`/boards/${encodeURIComponent(code)}/constituents`, { cacheMode: 'reload' }).catch(() => null),
       ])
+      if (seq !== seqRef.current) return
       if (d?.error) setError(d.error)
       else setDetail(d)
       setConstituents(c)
     } catch (e) {
+      if (seq !== seqRef.current) return
       setError(e instanceof Error ? e.message : '板块详情加载失败')
     }
-    // 板块轮动(全局, 独立加载, 失败静默)
-    fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' }).then(setRotation).catch(() => {})
-    setLoading(false)
+    // 板块轮动(全局, 独立加载, 失败静默) —— 过期号不许写 state
+    fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' })
+      .then((r) => { if (seq === seqRef.current) setRotation(r) })
+      .catch(() => {})
+    // 过期号不清 loading(交给最新那次), 否则新请求还在飞就提前显示"加载完成"
+    if (seq === seqRef.current) setLoading(false)
   }, [code])
 
-  useEffect(() => { void load() }, [load])
+  // 遗留⑦: `refreshToken` 变化 = 页面级刷新(带1 的刷新按钮)⇒ **只重跑取数**, 不重挂载组件。
+  // 旧做法是页面给正文子树挂 `key={refreshKey}`: 换 key 会卸载并重建整棵子树 ⇒ 重放
+  // `sida-page-enter` 入场动画(视觉上"闪一下")并丢掉正文自己的内部 UI 状态。
+  useEffect(() => { void load() }, [load, refreshToken])
 
   const rotItemsTop = useMemo(() => (rotation?.items ?? []).slice(0, 5), [rotation])
   // 本板块 5 日涨幅(从轮动结果按 block_code 反查; 非本板块命中则为空)

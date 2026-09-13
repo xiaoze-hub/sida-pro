@@ -3,9 +3,9 @@ import { insightApi } from '@panwatch/api'
 import { RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
-import type { DarkFlowTqResponse, MoreInfoResponse } from '@panwatch/biz-ui/components/insight/types'
+import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@panwatch/biz-ui/components/insight/types'
 import type { MainIntentStructured } from '@panwatch/biz-ui/components/InteractiveKline'
-import { safeFixed, safeInt, safeNum, toAmount } from '@/lib/format'
+import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
 
 /**
  * 工作台标签「盘口资金」(工作台 v2 三合一, Task 11)。
@@ -18,7 +18,8 @@ import { safeFixed, safeInt, safeNum, toAmount } from '@/lib/format'
  *  - `insightApi.orderbookOb`(`/orderbook-ob`)—— 十档买/卖额、OB 失衡序列、盘口演变事件、幽灵单占比;
  *  - `useInsight()`(由本文件内的 `<InsightProvider keys={['core']}>` 提供)——
  *    `moreInfo`(`/quotes/{s}/more-info` L2 成品) · `darkFlowTq`(`/quotes/{s}/dark-flow-tq` 盘后还原)
- *    · `mainIntent`/`fundFlow`(均由 `/klines/{s}/summary` 的 `main_intent_structured`/`fund_flow` 派生);
+ *    · `mainIntent`/`fundFlow`(均由 `/klines/{s}/summary` 的 `main_intent_structured`/`fund_flow` 派生)
+ *    · `summaryOrderbook`(同一响应的**顶层** `orderbook`: 盘口形态/最优买卖/价差/买盘占比, 遗留④);
  *  - `insightApi.sealQuality`(`/seal-quality/{s}`)—— 封单成色(盘中 60s 采样)。
  *
  * 惰性: 本标签默认导出即自带 `InsightProvider keys={['core']}` —— 标签**挂载才取数**
@@ -41,9 +42,12 @@ import { safeFixed, safeInt, safeNum, toAmount } from '@/lib/format'
  * 上一次轮询写下的缓存把真实取数拖成 ~60s。同端点兄弟组件 `OrderBookObBar` 同理。
  *
  * 与退役 `/l2` 页(`L2Orderbook.tsx`)的差异(只搬内容, 不复刻页面壳): 无股票输入框/查询按钮/页面标题
- * (工作台带1 已拥有)、无 `/klines/summary` 的二次取数; 形态条改由 OB 序列 label 判定 —— 旧页取自
- * `summary.orderbook.shape`, 该字段**不在** `InsightProvider` 暴露的 `data.summary` 内(见报告 concern),
- * 不为此重复打一遍 summary 接口。
+ * (工作台带1 已拥有)、无 `/klines/summary` 的**二次**取数 —— 形态/最优买卖/价差/买盘占比与旧页
+ * **同一字段**(`summary.orderbook`, 后端 `src/web/api/klines.py:518-545` → `orderbook_engine.order_book_queue`),
+ * 由 `useInsightData` 的 `summaryOrderbook` 暴露(遗留④: 此前只暴露 `data.summary`, 拿不到顶层
+ * `orderbook`, 只能用 OB 序列 label 当形态代理), 而 `core` 键本来就在打 `/klines/{s}/summary`
+ * ⇒ **不新增任何请求**。OB 序列 label 仅作**回退**(真字段缺失时), 且回退在屏上明示一行
+ * + 写进 cell 的 `title`(两套口径不冒充); 缺值一律 `--`, 绝不编造形态/价格。
  *
  * 复用 vs 自建: 未复用 `OrderBookObBar` —— 它是**自取数黑盒**(内部 fetchAPI `/orderbook-ob` + 30s 轮询,
  * props 只有 `{ symbol }`), 本标签还需要同一响应的 `ob_series`/`events`/`ghost_ratio`
@@ -342,18 +346,69 @@ function useL2Sources(symbol: string): L2Sources {
  * ① 十档买卖额双向条 + 盘口形态
  * ------------------------------------------------------------------ */
 
-function OrderbookSection({ feed, loading }: { feed: Feed<ObResp>; loading: boolean }) {
+function OrderbookSection({
+  feed,
+  loading,
+  sumOb,
+}: {
+  feed: Feed<ObResp>
+  loading: boolean
+  /**
+   * `GET /klines/{s}/summary` 的**顶层** `orderbook`(由 `useInsightData` 暴露, 遗留④)。
+   * 形态/最优买卖/价差/买盘占比**优先**取它(退役 `/l2` 页的同一字段);
+   * 它没下发形态时才回退 `/orderbook-ob` 的 OB 序列 label(口径不同, 屏上明示)。
+   */
+  sumOb: SummaryOrderbook | null
+}) {
   const ob = feed.data
   const series = ob?.ob_series ?? []
   const latest = series.length > 0 ? series[series.length - 1] : null
   const bid10 = safeNum(latest?.bid_amt10)
   const ask10 = safeNum(latest?.ask_amt10)
   const total = bid10 != null && ask10 != null ? bid10 + ask10 : 0
-  const bidPct = total > 0 && bid10 != null ? (bid10 / total) * 100 : null
+  /** 十档额口径买盘占比(%): 买十档额 /(买十档额 + 卖十档额) —— 仅作 `bid_pressure` 缺失时的回退。 */
+  const obBidPct = total > 0 && bid10 != null ? (bid10 / total) * 100 : null
   const obVal = safeNum(latest?.ob)
   const available = ob?.available === true
-  const shapeClass =
-    obVal == null
+
+  /** 真字段: `summary.orderbook.shape`('托盘'/'压盘'/'均衡'); 空串/缺失一律视为"未下发"(不猜)。 */
+  const realShape = (() => {
+    const s = typeof sumOb?.shape === 'string' ? sumOb.shape.trim() : ''
+    return s ? s : null
+  })()
+  /** 回退字段: OB 序列末帧的 label(后端 `orderbook_engine` 按 OB 阈值给的中文标签)。 */
+  const obShape = (() => {
+    const s = typeof latest?.label === 'string' ? latest.label.trim() : ''
+    return s ? s : null
+  })()
+  const shape = realShape ?? obShape
+  const shapeFromFallback = realShape == null && obShape != null
+
+  /**
+   * 买盘占比: 优先 `bid_pressure`(委托量口径, 0~1); 缺失回退十档额口径。
+   * **值自带口径后缀**(复审 Minor 3): 下方买/卖双向条的宽度**恒**按十档额口径(`obBidPct`)画,
+   * 若格子只显示一个裸百分数, 两个口径的数就会并排出现且无从解释(如格子 62.0% / 条子按 58.5% 画),
+   * 读者只能当成矛盾或 bug。故后缀直接标在数字上, 并对"两口径同屏"给出可见说明(见 `bidPctMix`)。
+   */
+  const pressure = safeNum(sumOb?.bid_pressure)
+  const bidPctText =
+    pressure != null
+      ? `${safeFixed(pressure * 100, 1)}%(委托)`
+      : obBidPct == null
+        ? '--'
+        : `${safeFixed(obBidPct, 1)}%(十档额)`
+  /** 两口径同屏(格子=委托量, 双向条=十档额) ⇒ 需要一行可见说明, 不能只藏在 title 里。 */
+  const bidPctMix = pressure != null && obBidPct != null
+
+  // 形态着色: 真字段按形态语义(托盘=买盘托底→涨色 / 压盘=卖盘压制→跌色 / 均衡=中性);
+  // 回退口径沿用原来的 OB 阈值着色(>+0.3 买压 / <-0.3 卖压), 两套口径不混色。
+  const shapeClass = realShape
+    ? realShape === '托盘'
+      ? 'text-stock-up'
+      : realShape === '压盘'
+        ? 'text-stock-down'
+        : 'text-muted-foreground'
+    : obVal == null
       ? 'text-muted-foreground'
       : obVal > 0.3
         ? 'text-stock-up'
@@ -381,20 +436,46 @@ function OrderbookSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
       <div className="mb-2 grid grid-cols-3 gap-x-4 gap-y-1.5">
         <Cell
           label="盘口形态"
-          value={latest?.label ?? '--'}
+          value={shape ?? '--'}
           valueClass={shapeClass}
-          hint="OB 失衡口径: OB=(买十档额-卖十档额)/(两者和), >+0.3 买压 / <-0.3 卖压 / 其余中性"
+          hint={
+            realShape
+              ? 'summary.orderbook.shape: 买盘力量占比 ≥0.6 托盘 / ≤0.4 压盘 / 其间均衡(委托量口径)'
+              : '回退口径: OB 失衡序列末帧 label(OB=(买十档额-卖十档额)/(两者和), >+0.3 买压 / <-0.3 卖压) —— summary.orderbook 未下发形态'
+          }
         />
         <Cell
           label="买盘占比"
-          value={bidPct == null ? '--' : `${safeFixed(bidPct, 1)}%`}
-          hint="十档买额 /(十档买额 + 十档卖额)"
+          value={bidPctText}
+          hint={
+            pressure != null
+              ? 'summary.orderbook.bid_pressure: 买委托量合计 /(买 + 卖委托量合计)'
+              : '回退口径: 十档买额 /(十档买额 + 卖十档额) —— summary.orderbook 未下发 bid_pressure'
+          }
+        />
+        <Cell
+          label="最优买卖"
+          value={`${safePrice(sumOb?.best_bid, 2)} / ${safePrice(sumOb?.best_ask, 2)}`}
+          hint="summary.orderbook.best_bid / best_ask(买档最高价 / 卖档最低价, 元); 缺失 --"
+        />
+        <Cell
+          label="价差"
+          value={safePrice(sumOb?.spread, 3)}
+          hint="summary.orderbook.spread = 最优卖价 − 最优买价(元)"
         />
         <Cell
           label="OB 失衡"
           value={obVal == null ? '--' : `${obVal > 0 ? '+' : ''}${safeFixed(obVal, 3)}`}
-          valueClass={shapeClass}
-          hint="OB ∈ [-1, 1], 正 = 买盘占优"
+          valueClass={
+            obVal == null
+              ? 'text-muted-foreground'
+              : obVal > 0.3
+                ? 'text-stock-up'
+                : obVal < -0.3
+                  ? 'text-stock-down'
+                  : 'text-muted-foreground'
+          }
+          hint="OB ∈ [-1, 1], 正 = 买盘占优(/orderbook-ob 十档额口径)"
         />
       </div>
 
@@ -402,18 +483,35 @@ function OrderbookSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
         <div className="flex items-center gap-2">
           <span className="w-6 shrink-0 text-muted-foreground">买</span>
           <div className="h-3.5 flex-1 bg-accent/20">
-            <div className="h-3.5 bg-stock-up" style={{ width: `${bidPct ?? 0}%` }} />
+            <div className="h-3.5 bg-stock-up" style={{ width: `${obBidPct ?? 0}%` }} />
           </div>
           <span className="w-24 shrink-0 text-right font-mono text-stock-up">{toAmount(bid10)}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-6 shrink-0 text-muted-foreground">卖</span>
           <div className="h-3.5 flex-1 bg-accent/20">
-            <div className="h-3.5 bg-stock-down" style={{ width: `${bidPct != null ? 100 - bidPct : 0}%` }} />
+            <div className="h-3.5 bg-stock-down" style={{ width: `${obBidPct != null ? 100 - obBidPct : 0}%` }} />
           </div>
           <span className="w-24 shrink-0 text-right font-mono text-stock-down">{toAmount(ask10)}</span>
         </div>
       </div>
+
+      {/* 两口径同屏的**可见**披露(复审 Minor 3): 格子=委托量口径, 下面双向条=十档额口径, 不必相等 */}
+      {bidPctMix ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-bidpct-mix">
+          「买盘占比」为委托量口径, 上方买/卖双向条按十档额口径绘制 —— 两者口径不同, 数值不必相等
+        </div>
+      ) : null}
+      {/* 回退口径**可见**披露: 形态来自 OB 序列 label 而非 summary.orderbook.shape(两套口径不同, 不冒充) */}
+      {shapeFromFallback ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-shape-fallback">
+          盘口形态取 OB 序列 label 回退口径(/klines/summary 的 orderbook 未下发形态)
+        </div>
+      ) : null}
+      {/* 后端显式说"盘口快照不可用"时原样转述其 note(不本地编理由); note 缺失则不说话 */}
+      {sumOb && sumOb.available !== true && sumOb.note ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70">盘口快照源: {sumOb.note}</div>
+      ) : null}
 
       {available && ob?.note ? (
         <div className="mt-1.5 text-[10px] text-muted-foreground/70">{ob.note}</div>
@@ -744,7 +842,7 @@ function ChipsSection({ mainIntent }: { mainIntent: MainIntentStructured | null 
  * ------------------------------------------------------------------ */
 
 function L2TabBody({ symbol }: { symbol: string }) {
-  const { moreInfo, moreInfoLoading, darkFlowTq, mainIntent, fundFlow } = useInsight()
+  const { moreInfo, moreInfoLoading, darkFlowTq, mainIntent, fundFlow, summaryOrderbook } = useInsight()
   const { ob, seal, loading, updatedAt, reload } = useL2Sources(symbol)
   // `fundFlow` 的元素类型在 biz-ui 里声明为 `open_net`, 后端实际下发 `ming_net` —— 两种键都读。
   const fundRows = (fundFlow ?? []) as FundFlowRow[]
@@ -771,7 +869,7 @@ function L2TabBody({ symbol }: { symbol: string }) {
 
       <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-12">
         <div className="space-y-3 lg:col-span-7">
-          <OrderbookSection feed={ob} loading={loading} />
+          <OrderbookSection feed={ob} loading={loading} sumOb={summaryOrderbook} />
           <L2FundSection moreInfo={moreInfo} loading={moreInfoLoading} />
           <FundFlowSection rows={fundRows} />
         </div>
