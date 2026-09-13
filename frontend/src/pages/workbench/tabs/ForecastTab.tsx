@@ -13,16 +13,19 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  * `AppErrorBoundary` + 加载/错误两条如实文案(见下)。
  *
  * 惰性怎么工作(计划 Step 1 的字面要求: `React.lazy` + `Suspense`, 仅激活标签时加载):
- *  - `lazy(() => import('@/pages/Forecast'))` 的工厂只在**首次渲染**这个 lazy 组件时调用 ⇒
- *    Vite/Rollup 把 `Forecast.tsx` 及其依赖(`ReactMarkdown` / `ForecastConeChart` /
- *    `@panwatch/api` 的 stocksApi 等)拆成**独立 chunk**, 与工作台首屏包分离;
+ *  - `lazy(importForecastPage)` 的工厂(即 `() => import('@/pages/Forecast')`)只在**首次渲染**
+ *    这个 lazy 组件时调用 ⇒ Vite/Rollup 把 `Forecast.tsx` 及其依赖(`ReactMarkdown` /
+ *    `ForecastConeChart` / `@panwatch/api` 的 stocksApi 等)拆成**独立 chunk**, 与工作台首屏包分离;
  *  - 本文件是**默认导出**, 但索引本身是静态导入(与 T11–T15 同形态: 标签组件都不在路由表上)
  *    ⇒ 只要没人渲染本组件就不会触发工厂。Task 17 的 `TabPanel` 按 `?tab=` **只渲染激活标签**
  *    ⇒ 非预测标签下这段 `import()` 一次都不发生(首屏不拉预测接口、不下载预测 chunk);
  *    `?tab=forecast` 时才 `import()`、先出 `Suspense` fallback、chunk 落地后换成预测页。
- *  - 与 `Quote.tsx` 的既有用法(`const ForecastPage = lazy(() => import('@/pages/Forecast'))`)
- *    **同一模块、同一说明符** ⇒ 打包器把它们归到**同一个 chunk**(两处消费方共享, 不产生重复
- *    副本); P3 退役 `Quote.tsx` 时本标签是该 chunk 的剩余消费方, 行为不变。
+ *  - `lazy()` 实例用 `useState` **持有在组件内**(惰性初始化, 只建一次; 而非模块级常量):
+ *    同一 attempt 内 state 不变(不白闪), 「重试」时 `setForecastPage` 换全新实例 —— 这是
+ *    "重试能真重发 `import()`"的前提, 理由见下第 2 条。
+ *  - 与 `Quote.tsx` 的既有 `lazy(() => import('@/pages/Forecast'))` **同一模块、同一说明符** ⇒
+ *    打包器把它们归到**同一个 chunk**(两处消费方共享, 不产生重复副本); P3 退役 `Quote.tsx`
+ *    时本标签是该 chunk 的剩余消费方, 行为不变(说明符未改)。
  *
  * `ForecastPage` 要不要参数? **不要** —— 已核实其导出面:
  *  - 签名是 `export default function ForecastPage()`(**零 props**), 内部 `symbol` 是
@@ -51,9 +54,13 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  *     一个标签炸掉会导致"预测/回测/历史/权重/报告"五处都进不去(它们**全在同一个 chunk** 里)。
  *     故本标签就近包一层 `AppErrorBoundary`(复用既有 `@/components/ErrorBoundary`, 不新建),
  *     用**自定义 fallback** 把范围收敛成标签内一块: 文案如实说明**原因域**(代码块下载失败 /
- *     页内渲染报错)并给出可点的「重试」; 重试 = boundary 自身 `reset` + 通过 `key` 重挂载
- *     `Suspense`, 于是 `lazy` **重新执行** `import()`(成功的 `import()` 会被模块缓存命中, 失败
- *     的则重发)→ 无需整页刷新。**不假装**已恢复、**不吞掉**错误(`console.error` 由 boundary 打)。
+ *     页内渲染报错)并给出可点的「重试」; 重试 = boundary 自身 `reset` + `setForecastPage(新 lazy 实例)`
+ *     + 自增 `attempt` 换 `Suspense` 的 `key`(重挂载)⇒ `import()` 真的**再次执行**
+ *     (成功的 `import()` 会被模块缓存命中, 失败的则重发)→ 无需整页刷新。
+ *     **为什么必须换新实例**(实测取证, 见组件内注释与 task-16-report): 只重挂载而不换 `lazy()`
+ *     实例时, `React.lazy` 会把 reject **永久缓存**, 工厂**不再被调用**(实测工厂计数停在 1、
+ *     错误一直复现、页面永远不上屏)。故本标签**不能**用模块级 `lazy()` 常量。
+ *     **不假装**已恢复、**不吞掉**错误(`console.error` 由 boundary 打)。
  *  3. **未预选标的** —— 预测页以空标的挂载, 用户要预测哪只票就在该页搜索框里选(默认不预填)。
  *     这是**产品事实**(上面已核实其无 props/无路由入参), 本标签如实写在口径行里, **不**声称
  *     "已带入 002636", 也不额外造一个"帮用户填好"的假象。若将来要预选, 需给 `Forecast.tsx`
@@ -66,8 +73,18 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  * 归属 `src/pages/workbench/tabs/`: 与 T11–T15 同层, 由 Task 17 的 `TabPanel` 按 `?tab=forecast`
  * 挂载; 本文件不新增 biz-ui 依赖方向(只消费 app 层 `@/components/ErrorBoundary` 与 base-ui 图标)。
  */
-/** lazy 边界: 模块级常量 —— 放在组件内会每帧新建一个 lazy 组件, 导致每次都重新走 suspense。 */
-const ForecastPage = lazy(() => import('@/pages/Forecast'))
+/**
+ * lazy 边界的**模块级工厂**(纯函数: 每次调用返回 `import()` 的 thenable)。
+ *
+ * 为什么要把它和 `lazy()` 实例拆开(而非直接 `const ForecastPage = lazy(...)`):
+ *  `React.lazy` 会把失败**永久缓存**在 payload 上(react.development.js `lazyInitializer`:
+ *  reject 时 `_status = Rejected`. 此后每次渲染都 `throw payload._result` 同一个错, **不再调用工厂**)。
+ *  若用模块级 `lazy()` 常量, 则「重试」只能重挂载, 工厂不会再跑 ⇒ 一次 chunk 下载失败后**永远**恢复
+ *  不了(除非整页刷新)。故本标签把 `lazy()` 实例放组件 state(见组件内 `useState`), 「重试」时换**全新**
+ *  实例, 让「重试」真的重新执行 `import()` —— 这才是文件头注第 2 条承诺的行为, 也有测试断言工厂
+ *  计数 == 2 兜住。
+ */
+const importForecastPage = () => import('@/pages/Forecast')
 
 /** 加载态文案(与 `Quote.tsx`「加载预测…」措辞一致, 避免同一 chunk 两处说法不同)。 */
 const LOADING_TEXT = '加载预测页(四模型)…'
@@ -109,16 +126,28 @@ function ForecastFallback({ error, onRetry }: { error: Error; onRetry: () => voi
  * 静默改写(不用它们拼请求、不用它们预选标的)。
  */
 export default function ForecastTab({ symbol, market }: { symbol: string; market: string }) {
-  /**
-   * 重试计数: 只作 `Suspense` 子树的 `key` —— 自增即整块重挂载, `lazy` 重新执行 `import()`。
-   * (不放在 `AppErrorBoundary` 的 key 上: boundary 自己会 `reset`, 两者并存会让"重试"多一次
-   * 无意义的重建。)
-   */
-  const [attempt, setAttempt] = useState(0)
   // 两个属性**确实不消费**(见上): 声明式 `void` 保留签名文档价值 + 给读代码的人一个显式"已知未用"
   // 信号(参数表里保留它们, 是为了与 T11–T15 的 `{ symbol, market }` 调用约定同形, 便于 Task 17 统一接线)。
   void symbol
   void market
+
+  /**
+   * `lazy()` 实例的**持有方式**: 放 state(惰性初始化, 只建一次)而不是模块级常量。
+   *
+   * 为什么不能是模块级常量(实测取证): `React.lazy` 会把 reject **永久缓存**在 payload 上
+   * (react.development.js `lazyInitializer` 里 reject 分支把 `_status` 置 `Rejected`; 此后每次
+   * 渲染都 `throw payload._result` 同一个错, **不再调用工厂**)。若实例是模块级常量, 「重试」只能
+   * 重挂载, 工厂不会重跑 ⇒ 一次 chunk 下载失败后**永远**恢复不了(除非整页刷新)。
+   * 放 state 则能在「重试」时用 `setForecastPage` 换一个**全新实例**(payload = `Uninitialized`)⇒
+   * 工厂被再次调用、`import()` 真重发。同一 attempt 内 state 不变 ⇒ 不会每帧新建、不白闪。
+   */
+  const [ForecastPage, setForecastPage] = useState(() => lazy(importForecastPage))
+
+  /**
+   * 重试计数: 作 `Suspense` 子树的 `key`(自增即整块重挂载)。换 `lazy()` 实例由 `onRetry` 里
+   * 的 `setForecastPage` 负责 —— 两者一起保证"重挂载 + 换实例"同步发生, 这样工厂计数才会是 2。
+   */
+  const [attempt, setAttempt] = useState(0)
 
   return (
     <div className="mt-1 text-[12px]" data-testid="forecast-tab">
@@ -137,6 +166,10 @@ export default function ForecastTab({ symbol, market }: { symbol: string; market
               error={error}
               onRetry={() => {
                 reset()
+                // 换一个**全新** lazy 实例(旧实例的 payload 已被 reject 永久污染) + 自增 key 重挂载。
+                // 两件事都必须做: 少了换实例, 工厂不会重跑(React.lazy 缓存 reject); 少了换 key,
+                // 重挂载语义不明确。有测试断言"重试后工厂计数 == 2"兜住这条。
+                setForecastPage(lazy(importForecastPage))
                 setAttempt((n) => n + 1)
               }}
             />

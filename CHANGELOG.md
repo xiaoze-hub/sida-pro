@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务16: 修两处测试不诚实(工厂计数/真 chunk reject)+ 顺带修好"重试"真重发 import()
+
+- **起因(复审 finding 1+2, 都成立)** —— ① `forecast-tab.test.tsx` 声明并在 `beforeEach` 清了 `mocks.load`, 但**从没调用/断言**;文件头注与 task-16-report §2 却声称用例③证明"重试后惰性工厂计数 == 2" —— 实际用例③只是"渲染抛错 ⇒ 换个正常替身重挂载 ⇒ 成功", 一个**工厂计数都没断言**。② 头注/CHANGELOG 把边界描述成覆盖 `lazy` 的 `import()` **rejection**, 但用例是用"已 resolve 的组件体里 `throw`"(render-throw)模拟 —— 收敛到同一 ErrorBoundary, 行为覆盖了, 但**真实的动态 `import()` 失败**没覆盖。
+- **深挖时发现一个真实现缺陷(两 finding 的根因)** —— `React.lazy` 会把 reject **永久缓存**在 payload 上(`react.development.js` `lazyInitializer`: reject 分支把 `_status` 置 `Rejected`; 之后每次渲染都 `throw payload._result` 同一个错、**不再调用工厂**)。原实现把 `lazy()` 实例写成**模块级常量** ⇒ 「重试」(boundary `reset()` + 换 `Suspense` key 重挂载)**根本不会重跑工厂**: 实测真实 chunk reject 后点重试, 工厂计数停在 **1**、错误框**永远**在那、预测页**永不上屏**(除非整页刷新)。即原报告 §1/§2 与 CHANGELOG 对"重试真重发 `import()`"的陈述**是错的**。
+- **修法(实现)** —— `ForecastTab.tsx` 把 `lazy()` 实例从**模块级常量**改为 **`useState` 持有**(惰性初始化只建一次、不白闪), 模块级只留纯工厂 `importForecastPage = () => import('@/pages/Forecast')`;「重试」里 `setForecastPage(lazy(importForecastPage))` 换**全新实例** + 自增 `attempt` 换 `Suspense` key ⇒ 工厂被再次调用、`import()` 真重发。文件头注同步改写(说明为何**不能**用模块级常量)。
+- **修法(测试, finding 1 采用"真断言"路线)** —— 删掉死掉的 `mocks.load.mockClear()` 摆设, 改为**真计数**: 对 `react` 做 `vi.mock`(只包一层 `lazy`: 计数 + 按 `mocks.gate` 决定本次 chunk 落地/在途/失败, 其余导出 `...await importOriginal()` 原样透传, 签名与 `@types/react` 的 `lazy<T extends ComponentType<any>>` 对齐)。断言①: 未挂载工厂 **0** 次 / 挂载后 **1** 次。
+- **修法(测试, finding 2 采用"真 reject"路线)** —— 新增用例④: 让动态 `import()` **本身 reject**(工厂返回 rejected promise, `gate.mode='reject'`, 消息 `Failed to fetch dynamically imported module`)—— 这才是真实 module-load 失败路径。断言: 屏上 `forecast-tab-error`(成因域 + **真实错误消息** + 「重试」)、外层整页兜底哨兵 `OuterBoundary` 未触发、**工厂计数 == 1**; 点「重试」⇒ **工厂计数 == 2** 且预测页上屏。原用例③(render-throw)**保留**, 继续覆盖成因域的另一半"页内渲染报错"(但不再声称计数 == 2)。用例数 5 → 6。
+- **诚实登记(顺带发现)** —— 头注⑥ 声称 `@ts-expect-error` 由 `tsc -b` 守卫, 但 `tsconfig.json` 的 `include` 是 `[src, packages/[star]/src]`、`eslint.config.js` 的 `files` 也不含 `tests/` ⇒ **现有门禁根本不检查测试文件**(实测: 往测试文件塞必然类型错误, `tsc -b`/`eslint .` 仍全绿)。已在头注与 report **更正措辞并披露该缺口**(不再谎称"门禁已守住"); 该指令本身**是真守卫**: 用一次性 tsconfig 把 tests 纳入后, 保留指令 0 error、删掉立刻 TS2322(`Property 'symbol' does not exist`) ⇒ 确认它在压制一个真实类型错误。
+- **变异验证(3 处, 均已还原, 证明新断言真能抓回归)** —— ① 删掉「重试」里的 `setForecastPage(...)`(只重挂载、不换实例)⇒ 用例④失败(`Unable to find an element by: [data-testid="fake-forecast-page"]` —— 重试后页面永不上屏), `1 failed | 5 passed`; ② 把 `lazy()` 实例改回模块级常量 ⇒ 用例④/②失败(实例 payload 跨用例被污染 + 工厂不再重跑); ③ 删掉 `react.lazy` 包装里的 `reject` 分支 ⇒ 用例④失败(找不到 `forecast-tab-error`, 证明该用例确实依赖"真 reject")。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **330/330**(52 files; 上提交 329 ⇒ 净 +1 例, 因新增用例④)。本 entry 同样未缀 `[commit <hash>]`。
+
 ### fix(wb)-工作台 v2 任务16 自审: 错误兜底文案的 markdown 星号直出 + 头注引号失衡
 
 - **起因(`d30a2ac` 的收尾自审, 逐行读实现时发现的两处真缺陷)** —— ① `ForecastFallback` 里那句成因域文案写成 `此处**不作**"引擎未启动"的推断`, 而它渲染在**裸文本节点**里(markdown 不生效)⇒ 用户会在标签内兜底块上**看到两个星号**; ② `ForecastTab.tsx` 头注「形态差异」那段引号失衡(`断言屏上**不存在** \`InsightProvider 的取数端点调用**` —— 后半个加粗标记错位, 读起来像句法错误)。两处都只在**新增文件**内, 未影响其它文件。
