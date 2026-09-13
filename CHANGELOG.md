@@ -7,6 +7,14 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务3 复审修复: 带1 快照行补齐 spec §1.2 缺的 6 个数据点
+- **问题**(Task 3 复审 Important / spec 覆盖缺口): `mapSnapshot` 只渲染 10 cell, 而 spec §1.2(`docs/个股工作台v2三合一设计_20260913.md:49`)与 T1 的 `DATA_OWNERSHIP`(`pe_pb_dividend`/`limit_price_boards` → `band1.snapshot`)要求快照行还含 PE(动)/PE(TTM)/PB/股息率/流通市值/连板 → 这些数据点在全工作台无归属。
+- **修复**: `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx` 的 `mapSnapshot(q, more, l2)` 增加第 3 参 `L2MoreSnapshot`(`/stocks/{s}/l2` 的 `more` 段, `src/core/stock_l2.py::fetch_more:75-98`), 新增 6 cell: `float_market_cap`(流通市值, 来自 more-info 的 `circulating_market_value` ← Ltsz, **亿**, 同总市值格式 `${safePrice(v,2)}亿`)、`pe_dynamic`/`pe_ttm`/`pb`(纯数值, 走 `safePrice(v,2)`, PE/PB 为负原样透传 = 亏损股真实口径)、`dividend_yield`(`${safePrice(v,2)}%`)、`limit_boards`(连板, 整数 `safeFixed(v,0)`, 不加「板」后缀/不加千分位, 单位由 label 承载)。`zt_price` 由 `MoreInfoSnapshot` 迁到 `L2MoreSnapshot`(它本就来自 /l2, 不是 more-info)。组件侧 `ztPrice` state 换成整个 `l2More` 对象并整段传入; 换股/换类型仍清空(不把 A 股 PE 画到指数上), 失败仍保留旧值。
+- **真数据/不编造**: 流通市值**未**走「流通股本 × 现价」的推算路径 —— more-info 本身就有 `circulating_market_value`(亿, `src/core/marketdata_client.py:215` 映射, `packages/marketdata/.../vendors/tq.py:210 ← Ltsz`), 同口径、同接口、零新增 RPC, 比推算更干净。缺值/脏值(PG DECIMAL 字符串/NaN/空串/非数字)一律 `--`; 指数/板块不发 /l2 → 这 6 cell 显 `--`(与涨停价既有行为一致)。
+- **测试**: `frontend/tests/lib/workbench-snapshot.test.ts` 8→9 例: 16 cell 缺值全 `--`(含三参全 undefined)、more-info 新增 `circulating_market_value`→`456.78亿`、/l2 六字段落位(`28.56`/`31.2`/`4.5`/`1.85%`/`3`)、**PE/PB 为负原样透传**、PG DECIMAL 字符串不崩、脏值走 `--`、16 个 key 与 10→16 个 label 逐个锚定防漂移。`npx vitest run tests/lib/workbench-snapshot.test.ts` → **9/9 passed**; 全量 **227/227**(39 files, 净 +1)。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(R6: 本文件零 `.toFixed(` 字面量, 全部走 `@/lib/format` safe* 与 `fmtAmount`)。
+- **遗留**(未做, 见 report): spec §1.2 快照行还列了 成交量/振幅 两格(本 finding 未要求, 且 more-info/l2 无现成振幅字段)与 封单额(`seal_amount`, 归 `band1.snapshot`)—— 待后续任务。
+
 ### feat(wb)-工作台 v2 任务3: HeaderBand 顶部信息带 + mapSnapshot 单测
 - 新增 `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`: 三合一「带1 顶部信息带」(吸顶, 个股/指数/板块共享)。顶行=名称+代码+现价+涨跌色(`text-[--stock-up]`/`text-[--stock-down]`)+类型三按钮(`onTypeChange`)+刷新(自己重拉, 失败保留旧值); 快照行由纯函数 `mapSnapshot(quote, more)` 驱动; 技术指标建议条=`insightApi.klineSummary` → `buildKlineSuggestion(summary, hasPosition)` → 「建议·动作 + 评分 + 证据关键词(signal)」, 点击 `onGotoTab('suggest')`; `type!=='stock'` 时不拉 l2/summary 且不渲染建议条。
 - **字段名以真实接口为准**(计划书示意的 `total_mv`/`amount`/`current_price` 旧名作废, 若照抄会恒显 `--`): 行情取 `/quotes/{s}`(`_quote_to_response`, `src/web/api/quotes.py:70-95`)的 `current_price/change_pct/open_price/high_price/low_price/turnover`; 换手率/量比/总市值取 `/quotes/{s}/more-info`(`src/core/marketdata_client.py:208-245`)的 `turnover_rate/volume_ratio/total_market_value`; 涨停价取 `/stocks/{s}/l2`(`src/core/stock_l2.py:75-98`)的 `more.zt_price`。

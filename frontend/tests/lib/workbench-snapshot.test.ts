@@ -2,24 +2,46 @@ import { describe, it, expect } from 'vitest'
 import { mapSnapshot, type SnapshotCell } from '@panwatch/biz-ui/components/workbench/HeaderBand'
 
 /**
- * 带1 快照行纯函数单测(任务3)。
+ * 带1 快照行纯函数单测(任务3 + 复审修复: 补 spec §1.2 缺的 流通市值/PE(动)/PE(TTM)/PB/股息率/连板)。
  *
  * 合成对象的 key 一律用**后端真实返回字段名**(非计划书示意的 total_mv/amount/current_price 旧名):
  *  - GET /quotes/{symbol}          → src/web/api/quotes.py::_quote_to_response
  *      current_price / change_pct / open_price / high_price / low_price / turnover(成交额, 元)
- *  - GET /quotes/{symbol}/more-info → src/core/marketdata_client.py::md_more_info
+ *  - GET /quotes/{symbol}/more-info → src/core/marketdata_client.py::md_more_info:208-245
  *      turnover_rate(换手率%) / volume_ratio(量比) / total_market_value(总市值, 亿)
- *  - GET /stocks/{symbol}/l2        → src/core/stock_l2.py::fetch_more
- *      more.zt_price(涨停价; Ruling A: HeaderBand 自取注入)
+ *      / circulating_market_value(流通市值, 亿; tq.py:210 ← Ltsz)
+ *  - GET /stocks/{symbol}/l2        → src/core/stock_l2.py::fetch_more:75-98
+ *      more.zt_price / pe_dynamic / pe_ttm / pb / dividend_yield / ever_zt_count
+ *      (Ruling A: HeaderBand 自取后作为第 3 参传入)
  * 换手率/量比/市值取自 more-info(与 quote 同名时以 more-info 为准)。
  */
 
 const byKey = (rows: SnapshotCell[]): Record<string, string> =>
   Object.fromEntries(rows.map((r) => [r.key, r.value]))
 
+/** 16 cell 的固定 key(顺序即 spec §1.2 快照行顺序; price/change_pct 由顶行渲染, 这里仍产出)。 */
+const ALL_KEYS = [
+  'price',
+  'change_pct',
+  'open',
+  'high',
+  'low',
+  'amount',
+  'turnover',
+  'volume_ratio',
+  'market_cap',
+  'float_market_cap',
+  'pe_dynamic',
+  'pe_ttm',
+  'pb',
+  'dividend_yield',
+  'limit_price',
+  'limit_boards',
+]
+
 describe('mapSnapshot(带1 快照行)', () => {
-  it('缺值一律 --, 不编(空对象与 undefined 双跑)', () => {
-    const b = byKey(mapSnapshot({}, {}))
+  it('缺值一律 --, 不编(空对象与 undefined 三参双跑)', () => {
+    const b = byKey(mapSnapshot({}, {}, {}))
     expect(b.price).toBe('--')
     expect(b.change_pct).toBe('--')
     expect(b.open).toBe('--')
@@ -29,13 +51,24 @@ describe('mapSnapshot(带1 快照行)', () => {
     expect(b.turnover).toBe('--')
     expect(b.volume_ratio).toBe('--')
     expect(b.market_cap).toBe('--')
+    // 复审新增 6 cell: 缺值同样必须 --(不编造 PE/PB/股息率/连板)
+    expect(b.float_market_cap).toBe('--')
+    expect(b.pe_dynamic).toBe('--')
+    expect(b.pe_ttm).toBe('--')
+    expect(b.pb).toBe('--')
+    expect(b.dividend_yield).toBe('--')
     expect(b.limit_price).toBe('--')
+    expect(b.limit_boards).toBe('--')
 
-    expect(() => mapSnapshot(undefined, undefined)).not.toThrow()
-    const u = byKey(mapSnapshot(undefined, undefined))
-    expect(u.price).toBe('--')
+    expect(() => mapSnapshot(undefined, undefined, undefined)).not.toThrow()
+    expect(() => mapSnapshot()).not.toThrow()
+    const u = byKey(mapSnapshot(undefined, undefined, undefined))
     expect(u.turnover).toBe('--')
     expect(u.limit_price).toBe('--')
+    expect(u.float_market_cap).toBe('--')
+    expect(u.pe_ttm).toBe('--')
+    expect(u.dividend_yield).toBe('--')
+    expect(u.limit_boards).toBe('--')
   })
 
   it('行情字段用真实 key: current_price/change_pct/open_price/high_price/low_price/turnover', () => {
@@ -50,6 +83,7 @@ describe('mapSnapshot(带1 快照行)', () => {
           turnover: 123456789,
         },
         {},
+        {},
       ),
     )
     expect(b.price).toBe('82.46')
@@ -62,31 +96,82 @@ describe('mapSnapshot(带1 快照行)', () => {
   })
 
   it('跌时带 - 号(涨跌幅符号不丢)', () => {
-    expect(byKey(mapSnapshot({ current_price: 10, change_pct: -3.5 }, {})).change_pct).toBe('-3.50%')
-    expect(byKey(mapSnapshot({ current_price: 10, change_pct: 0 }, {})).change_pct).toBe('+0.00%')
+    expect(byKey(mapSnapshot({ current_price: 10, change_pct: -3.5 }, {}, {})).change_pct).toBe(
+      '-3.50%',
+    )
+    expect(byKey(mapSnapshot({ current_price: 10, change_pct: 0 }, {}, {})).change_pct).toBe('+0.00%')
   })
 
-  it('more-info 真实 key 落位: turnover_rate/volume_ratio/total_market_value(亿)', () => {
+  it('more-info 真实 key 落位: turnover_rate/volume_ratio/total_market_value/circulating_market_value(亿)', () => {
     const b = byKey(
       mapSnapshot(
         { current_price: 10 },
-        { turnover_rate: 3.2, volume_ratio: 1.4, total_market_value: 1234.56 },
+        {
+          turnover_rate: 3.2,
+          volume_ratio: 1.4,
+          total_market_value: 1234.56,
+          circulating_market_value: 456.78,
+        },
+        {},
       ),
     )
     expect(b.turnover).toBe('3.2%')
     expect(b.volume_ratio).toBe('1.4')
     expect(b.market_cap).toBe('1234.56亿')
+    // 流通市值与总市值同单位(亿, Ltsz 原值未换算), 同一格式
+    expect(b.float_market_cap).toBe('456.78亿')
   })
 
-  it('涨停价取 /stocks/{s}/l2 的 more.zt_price(Ruling A 自包含)', () => {
-    expect(byKey(mapSnapshot({}, { zt_price: 11.22 })).limit_price).toBe('11.22')
+  it('/stocks/{s}/l2 的 more 真实 key 落位: zt_price/pe_dynamic/pe_ttm/pb/dividend_yield/ever_zt_count', () => {
+    const b = byKey(
+      mapSnapshot(
+        {},
+        {},
+        {
+          zt_price: 11.22,
+          pe_dynamic: 28.56,
+          pe_ttm: 31.2,
+          pb: 4.5,
+          dividend_yield: 1.85,
+          ever_zt_count: 3,
+        },
+      ),
+    )
+    expect(b.limit_price).toBe('11.22')
+    expect(b.pe_dynamic).toBe('28.56')
+    // 数值不补尾 0(与 safePrice 的既有一致口径)
+    expect(b.pe_ttm).toBe('31.2')
+    expect(b.pb).toBe('4.5')
+    expect(b.dividend_yield).toBe('1.85%')
+    // 连板为整数(不带「板」后缀, 单位由 label 承载)
+    expect(b.limit_boards).toBe('3')
+  })
+
+  it('PE/PB 为负原样透传(亏损股真实口径, 不取绝对值、不归零)', () => {
+    const b = byKey(mapSnapshot({}, {}, { pe_dynamic: -12.3, pe_ttm: -15, pb: -0.8 }))
+    expect(b.pe_dynamic).toBe('-12.3')
+    expect(b.pe_ttm).toBe('-15')
+    expect(b.pb).toBe('-0.8')
   })
 
   it('PG DECIMAL→JSON 字符串数字不崩、不渲染 NaN', () => {
     const b = byKey(
       mapSnapshot(
         { current_price: '82.46', change_pct: '7.86', turnover: '123456789' },
-        { turnover_rate: '3.2', volume_ratio: '1.4', total_market_value: '1234.56', zt_price: '11.22' },
+        {
+          turnover_rate: '3.2',
+          volume_ratio: '1.4',
+          total_market_value: '1234.56',
+          circulating_market_value: '456.78',
+        },
+        {
+          zt_price: '11.22',
+          pe_dynamic: '28.56',
+          pe_ttm: '31.2',
+          pb: '4.5',
+          dividend_yield: '1.85',
+          ever_zt_count: '3',
+        },
       ),
     )
     expect(b.price).toBe('82.46')
@@ -94,30 +179,57 @@ describe('mapSnapshot(带1 快照行)', () => {
     expect(b.amount).toBe('1.23亿')
     expect(b.turnover).toBe('3.2%')
     expect(b.market_cap).toBe('1234.56亿')
+    expect(b.float_market_cap).toBe('456.78亿')
+    expect(b.pe_dynamic).toBe('28.56')
+    expect(b.pe_ttm).toBe('31.2')
+    expect(b.pb).toBe('4.5')
+    expect(b.dividend_yield).toBe('1.85%')
     expect(b.limit_price).toBe('11.22')
+    expect(b.limit_boards).toBe('3')
   })
 
-  it('脏值(NaN/非数字串)走 -- 而非 NaN 文案', () => {
-    const b = byKey(mapSnapshot({ current_price: 'abc', change_pct: NaN }, { total_market_value: 'x' }))
+  it('脏值(NaN/非数字串/空串)走 -- 而非 NaN 文案', () => {
+    const b = byKey(
+      mapSnapshot(
+        { current_price: 'abc', change_pct: NaN },
+        { total_market_value: 'x', circulating_market_value: '' },
+        { pe_dynamic: 'abc', pe_ttm: NaN, pb: '', dividend_yield: '--', ever_zt_count: 'x' },
+      ),
+    )
     expect(b.price).toBe('--')
     expect(b.change_pct).toBe('--')
     expect(b.market_cap).toBe('--')
+    expect(b.float_market_cap).toBe('--')
+    expect(b.pe_dynamic).toBe('--')
+    expect(b.pe_ttm).toBe('--')
+    expect(b.pb).toBe('--')
+    // 股息率/连板: 脏值 → --, 不带 % 后缀、不渲染 NaN
+    expect(b.dividend_yield).toBe('--')
+    expect(b.limit_boards).toBe('--')
   })
 
-  it('cell 顺序与 key/label 固定(防漂移: 现价/涨跌幅/今开/最高/最低/成交额/换手率/量比/总市值/涨停价)', () => {
-    const rows = mapSnapshot({}, {})
-    expect(rows.map((r) => r.key)).toEqual([
-      'price',
-      'change_pct',
-      'open',
-      'high',
-      'low',
-      'amount',
-      'turnover',
-      'volume_ratio',
-      'market_cap',
-      'limit_price',
-    ])
+  it('cell 顺序与 key 固定(防漂移, 顺序对齐 spec §1.2 快照行)', () => {
+    const rows = mapSnapshot({}, {}, {})
+    expect(rows.map((r) => r.key)).toEqual(ALL_KEYS)
     expect(rows.every((r) => r.label.length > 0)).toBe(true)
+    // label 面向用户, 逐个锚定(PE 动/TTM 大小写、流通市值不可写成总市值)
+    expect(rows.map((r) => r.label)).toEqual([
+      '现价',
+      '涨跌幅',
+      '今开',
+      '最高',
+      '最低',
+      '成交额',
+      '换手率',
+      '量比',
+      '总市值',
+      '流通市值',
+      'PE(动)',
+      'PE(TTM)',
+      'PB',
+      '股息率',
+      '涨停价',
+      '连板',
+    ])
   })
 })

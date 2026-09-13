@@ -13,13 +13,15 @@ import type { WorkbenchTab, WorkbenchType } from '@/lib/workbench-tabs'
  * 带1 顶部信息带(v0.5.96, 三合一 spec §4.1): 个股/指数/板块**共享**。
  *
  * 结构: 顶行(名称 + 代码 + 现价 + 涨跌色 + 类型三按钮 + 刷新)
- *       + 快照行(今开/最高/最低/成交额/换手率/量比/总市值/涨停价)
+ *       + 快照行(今开/最高/最低/成交额/换手率/量比/总市值/流通市值/
+ *                PE(动)/PE(TTM)/PB/股息率/涨停价/连板)
  *       + 技术指标买卖建议条(仅 type=stock; 点击跳「建议」标签)。
  *
  * 数据面(全部真数据, 缺值 `--`, 绝不编造):
  *  - GET /quotes/{symbol}            → current_price/change_pct/open_price/high_price/low_price/turnover
- *  - GET /quotes/{symbol}/more-info  → turnover_rate/volume_ratio/total_market_value(亿)
- *  - GET /stocks/{symbol}/l2         → more.zt_price(涨停价; 自包含, 不等兄弟组件回喂)
+ *  - GET /quotes/{symbol}/more-info  → turnover_rate/volume_ratio/total_market_value(亿)/circulating_market_value(亿)
+ *  - GET /stocks/{symbol}/l2         → more.zt_price(涨停价) + more.pe_dynamic/pe_ttm/pb/dividend_yield/ever_zt_count
+ *                                      (自包含, 不等兄弟组件回喂)
  *  - GET /klines/{symbol}/summary    → buildKlineSuggestion(技术面建议)
  * 任一接口失败**保留旧值**(stale-on-error), 不把失败渲染成 0/编造值。
  */
@@ -49,8 +51,9 @@ export interface QuoteSnapshot {
 }
 
 /**
- * more-info 侧字段(packages/marketdata types.py::MoreInfo 透传) + `/stocks/{s}/l2` 注入的 zt_price。
- * 注意 total_market_value 单位是**亿**(Zsz 原值未换算), 展示必须带「亿」, 不可再过 fmtAmount(元口径)。
+ * more-info 侧字段(packages/marketdata types.py::MoreInfo 透传)。
+ * 注意 total_market_value / circulating_market_value 单位都是**亿**(Zsz/Ltsz 原值未换算),
+ * 展示必须带「亿」, 不可再过 fmtAmount(元口径)。
  */
 export interface MoreInfoSnapshot {
   /** 换手率(%) — fHSL */
@@ -59,20 +62,45 @@ export interface MoreInfoSnapshot {
   volume_ratio?: number | string | null
   /** 总市值(亿) — Zsz */
   total_market_value?: number | string | null
-  /** 涨停价(元) — 来自 /stocks/{symbol}/l2 的 more.zt_price(non CN/l2 不可用时为 null) */
+  /** 流通市值(亿) — Ltsz */
+  circulating_market_value?: number | string | null
+}
+
+/**
+ * `/stocks/{symbol}/l2` 的 `more` 段(spec §1.2 快照行后半段的真数据面; 仅个股/CN 可用)。
+ * 字段证据: src/core/stock_l2.py::fetch_more:75-98(`_f` 取原值, 不做单位换算) + 源键
+ * packages/marketdata/.../vendors/tq.py::_parse_more_info:203-219(ZTPrice/DynaPE/StaticPE_TTM/PB_MRQ/DYRatio/EverZTCount)。
+ */
+export interface L2MoreSnapshot {
+  /** 涨停价(元) — ZTPrice */
   zt_price?: number | string | null
+  /** PE(动) — DynaPE */
+  pe_dynamic?: number | string | null
+  /** PE(TTM) — StaticPE_TTM */
+  pe_ttm?: number | string | null
+  /** PB(市净率) — PB_MRQ */
+  pb?: number | string | null
+  /** 股息率(%) — DYRatio */
+  dividend_yield?: number | string | null
+  /** 连板天数(个) — EverZTCount */
+  ever_zt_count?: number | string | null
 }
 
 /** 快照行纯函数: 缺值/脏值一律 `--`(不编, 不渲染 NaN)。格式化一律走 @/lib/format 的 safe* 系列(R6)。 */
 export function mapSnapshot(
   q?: QuoteSnapshot | null,
   more?: MoreInfoSnapshot | null,
+  l2?: L2MoreSnapshot | null,
 ): SnapshotCell[] {
   const quote = q ?? {}
   const info = more ?? {}
+  const l2m = l2 ?? {}
   const changeNum = safeNum(quote.change_pct)
   const turnoverRate = safeNum(info.turnover_rate)
   const marketCap = safeNum(info.total_market_value)
+  const floatCap = safeNum(info.circulating_market_value)
+  const dividendYield = safeNum(l2m.dividend_yield)
+  const boards = safeNum(l2m.ever_zt_count)
   return [
     { key: 'price', label: '现价', value: safePrice(quote.current_price, 2) },
     {
@@ -95,7 +123,23 @@ export function mapSnapshot(
       label: '总市值',
       value: marketCap == null ? '--' : `${safePrice(marketCap, 2)}亿`,
     },
-    { key: 'limit_price', label: '涨停价', value: safePrice(info.zt_price, 2) },
+    {
+      key: 'float_market_cap',
+      label: '流通市值',
+      value: floatCap == null ? '--' : `${safePrice(floatCap, 2)}亿`,
+    },
+    // 估值三件套: 原样数值(PE/PB 可为负 = 亏损股真实口径), 缺值 `--`
+    { key: 'pe_dynamic', label: 'PE(动)', value: safePrice(safeNum(l2m.pe_dynamic), 2) },
+    { key: 'pe_ttm', label: 'PE(TTM)', value: safePrice(safeNum(l2m.pe_ttm), 2) },
+    { key: 'pb', label: 'PB', value: safePrice(safeNum(l2m.pb), 2) },
+    {
+      key: 'dividend_yield',
+      label: '股息率',
+      value: dividendYield == null ? '--' : `${safePrice(dividendYield, 2)}%`,
+    },
+    { key: 'limit_price', label: '涨停价', value: safePrice(l2m.zt_price, 2) },
+    // 连板: 整数天(safeFixed(...,0) 四舍五入, 不加千分位——连板数上限个位数)
+    { key: 'limit_boards', label: '连板', value: safeFixed(boards, 0) },
   ]
 }
 
@@ -109,7 +153,7 @@ const TYPE_OPTIONS: { id: WorkbenchType; label: string }[] = [
 ]
 
 interface L2MoreResp {
-  more?: { zt_price?: number | null } | null
+  more?: L2MoreSnapshot | null
 }
 
 export interface HeaderBandProps {
@@ -132,7 +176,7 @@ export default function HeaderBand({
   const isStock = type === 'stock'
   const [quote, setQuote] = useState<QuoteSnapshot | null>(null)
   const [more, setMore] = useState<MoreInfoSnapshot | null>(null)
-  const [ztPrice, setZtPrice] = useState<number | null>(null)
+  const [l2More, setL2More] = useState<L2MoreSnapshot | null>(null)
   const [summary, setSummary] = useState<KlineSummaryData | null>(null)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -142,7 +186,7 @@ export default function HeaderBand({
   useEffect(() => {
     setQuote(null)
     setMore(null)
-    setZtPrice(null)
+    setL2More(null)
     setSummary(null)
   }, [symbol, market, isStock])
 
@@ -159,10 +203,10 @@ export default function HeaderBand({
       }),
     ]
     if (isStock) {
-      // Ruling A: 涨停价自包含取 /stocks/{s}/l2(不能依赖兄弟组件回喂)
+      // Ruling A: 涨停价/PE/PB/股息率/连板 自包含取 /stocks/{s}/l2(不能依赖兄弟组件回喂)
       tasks.push(
         fetchAPI<L2MoreResp>(`/stocks/${encodeURIComponent(symbol)}/l2`).then((r) => {
-          if (alive) setZtPrice(r?.more?.zt_price ?? null)
+          if (alive) setL2More(r?.more ?? null)
         }),
       )
       tasks.push(
@@ -196,9 +240,7 @@ export default function HeaderBand({
         : changeNum < 0
           ? 'text-[--stock-down]'
           : 'text-muted-foreground'
-  const cells = mapSnapshot(quote, { ...(more ?? {}), zt_price: ztPrice }).filter(
-    (c) => !TOP_ROW_KEYS.has(c.key),
-  )
+  const cells = mapSnapshot(quote, more, l2More).filter((c) => !TOP_ROW_KEYS.has(c.key))
   const scoreText = suggestion ? `${suggestion.score >= 0 ? '+' : ''}${suggestion.score}` : '--'
 
   return (
