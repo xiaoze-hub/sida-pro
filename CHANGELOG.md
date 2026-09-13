@@ -12,6 +12,10 @@
 - 设计文档: `docs/个股工作台v2三合一设计_20260913.md`(含 三带结构/6标签落位/去重表/路由与入口变更/分批 P1-P3/验收)。
 - 下一步: 实现计划已产出 `docs/个股工作台v2三合一实现计划_20260913.md`(P1 骨架/P2 六标签/P3 收口, 20 任务)。
 
+### feat(wb)-工作台 v2 任务1: workbench-tabs 纯函数 + 单测
+- 新增 `frontend/src/lib/workbench-tabs.ts`: 类型 `WorkbenchType`(stock/index/board)与 `WorkbenchTab`(6 标签)、`WORKBENCH_TABS` 固定顺序标签表、`normalizeType`(只认 index/board, 其余归 stock)、`parseTab`(白名单外回落 l2)、`showStockOnly`(个股专属块仅 type=stock 显示)、`DATA_OWNERSHIP` 去重归属表(数据点→唯一归属, 防漂移)。
+- 新增 `frontend/tests/lib/workbench-tabs.test.ts`(6 例): 覆盖归一化/标签回落/标签数量与顺序/个股专属判定/去重归属(数智决策三指标与共振同归 `rail.decision`、K线/盘口/建议条/盘中监控归属固定)。TDD: 先写测试跑出 "Cannot find module '@/lib/workbench-tabs'"(RED), 实现后 6/6 通过(GREEN); `npx tsc -b` 绿。
+
 ### feat-工作台③补全: hover 预览覆盖共振查询行 + 候选池主卡片; v0.5.94
 - **承接 v0.5.93**: ③ 首发只把 hover 预览挂在「策略选股扫描结果行 + 问小达结果 + 异动预警卡」; 本批补全到机会页**全部个股行**——「共振查询结果表行(resRows)」与「候选池主卡片行(展开/收起那张)」也挂 showHover/hideHover。
 - **实测(浏览器, 真接口)**: 悬停「金安国纪 002636」预览卡返回 现价 82.46 / +7.86% / 封单 0 / PE(TTM) 60.26 / 板块[元器件·上海板块·PCB概念·深股通标的] + "点击进个股工作台"; 点「洞察」→ `/stocks/002636` 工作台(K线+数智决策三指标+基本面/股本+题材/板块+盘口L2 全真实数据); Dashboard/机会页控制台 0 报错。
