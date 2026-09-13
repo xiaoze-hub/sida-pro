@@ -84,6 +84,9 @@ interface BlocksResp {
 /** 盘口速览轮询间隔(与旧 `L2Card` 一致)。 */
 const L2_POLL_MS = 30000
 
+/** 题材/板块 chips 在 320px 速览卡内的首屏上限(实测个股可达 22 条, 余量折 +N)。 */
+const BLOCKS_MAX = 8
+
 /**
  * CN-only 数据面闸门: 本文件三个接口(`/stocks/{s}/l2`、`/fundamental`、`/blocks`)全是
  * 通达信 CN 源(非 CN 标的取不到, 硬发只会把 CN 口径画到别的标的上)—— 仅 `market === 'CN'` 才发。
@@ -313,7 +316,7 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
       <div className="flex flex-wrap gap-1">
         {/* key 用 code+序号: 通达信反查里「概念/指数」类关系的 code 会是 '0'(实测 002636 有 5 条),
             单用 b.code 会重复 key(React 复用错乱) —— 序号在列表整体替换(换股清空)下稳定。 */}
-        {blocks.map((b, i) => (
+        {blocks.slice(0, BLOCKS_MAX).map((b, i) => (
           <span
             key={`${b.code}-${i}`}
             className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80"
@@ -322,6 +325,15 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
             <span className="ml-0.5 text-[9px] text-muted-foreground">{b.type}</span>
           </span>
         ))}
+        {/* 320px 速览卡: 板块实测可达 22 条 ⇒ 截断首屏, 余量折成 +N(悬停 title 列全名)。 */}
+        {blocks.length > BLOCKS_MAX ? (
+          <span
+            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-muted-foreground"
+            title={blocks.slice(BLOCKS_MAX).map((b) => b.name).join('、')}
+          >
+            +{blocks.length - BLOCKS_MAX}
+          </span>
+        ) : null}
       </div>
     </div>
   )

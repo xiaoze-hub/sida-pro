@@ -27,15 +27,17 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  *    打包器把它们归到**同一个 chunk**(两处消费方共享, 不产生重复副本); P3 退役 `Quote.tsx`
  *    时本标签是该 chunk 的剩余消费方, 行为不变(说明符未改)。
  *
- * `ForecastPage` 要不要参数? **不要** —— 已核实其导出面:
- *  - 签名是 `export default function ForecastPage()`(**零 props**), 内部 `symbol` 是
- *    `useState('')` 的本地状态, 由用户在该页自带的搜索框/自选下拉里选;
+ * `ForecastPage` 要不要参数? **只吃一个可选 `initialSymbol`** —— 已核实其导出面:
+ *  - 签名是 `export default function ForecastPage({ initialSymbol }: { initialSymbol?: string } = {})`
+ *    (默认空对象 ⇒ `<ForecastPage />` 仍合法, 满足既有调用方 `Quote.tsx`), 内部 `symbol` 是
+ *    `useState(initialSymbol ?? '')`, 之后仍由用户在该页自带的搜索框/自选下拉里改;
  *  - **不读路由** —— 该文件里没有 `useParams`/`useSearchParams`/`useLocation`/`useNavigate`
  *    (grep 零命中), 也不读 `?symbol=`; 四个子功能走的是**页内页签状态**而非
  *    `/forecast/predict|backtest|...` 路由(brief 里那串路径实为该页调用的**端点**)⇒ 嵌进
  *    工作台不需要额外包一层 Router, `Quote.tsx` 里也是 `<ForecastPage />` 裸渲染。
- *  因此本标签**不**把工作台的 `symbol` 透传进去(透传会被 TS 直接拒掉: 该组件无 props 面),
- *  也**不**伪造"已预选标的"的观感 —— 见下「诚实空态」第 3 条。
+ *  因此本标签把工作台的 `symbol` 作 `initialSymbol` 透传(**预选标的**, 修 v0.6.0 遗留②),
+ *  消灭"从工作台点进来还要在预测页重选一次"的断点; `initialSymbol` 只作初始值, 不锁输入
+ *  (用户仍可在页内改); 未预选时才落回该页原生的"请在搜索框选择"空态。
  *  - `market` 同理不需要: 预测页只按 6 位 A 股代码取数(`/^\d{6}$/` 校验), 与市场无关。
  *
  * 与兄弟标签的**形态差异(有意, 非疏漏)**: T11–T15 都是"标签自带 `InsightProvider` + 按 keys
@@ -61,10 +63,9 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  *     实例时, `React.lazy` 会把 reject **永久缓存**, 工厂**不再被调用**(实测工厂计数停在 1、
  *     错误一直复现、页面永远不上屏)。故本标签**不能**用模块级 `lazy()` 常量。
  *     **不假装**已恢复、**不吞掉**错误(`console.error` 由 boundary 打)。
- *  3. **未预选标的** —— 预测页以空标的挂载, 用户要预测哪只票就在该页搜索框里选(默认不预填)。
- *     这是**产品事实**(上面已核实其无 props/无路由入参), 本标签如实写在口径行里, **不**声称
- *     "已带入 002636", 也不额外造一个"帮用户填好"的假象。若将来要预选, 需给 `Forecast.tsx`
- *     加 props 或读查询参数 —— 属改既有生产页, 超出本任务授权(见 task-16-report concern 1)。
+ *  3. **预选标的(v0.6.0 遗留②已修)** —— 预测页接受可选 `initialSymbol` ⇒ 本标签把工作台的
+ *     `symbol` 传进去, 进来即预填; 用户仍可在页内搜索框改。未传时(如 `Quote.tsx` 裸渲染)落回
+ *     该页原生的"请在搜索框选择"空态。**不**伪造已出结果 —— 预选只是填输入, 仍要手动点"开始预测"。
  *
  * 去重(§三 去重表): 现价/名称/涨跌归带1 `HeaderBand`; 本标签内只有预测页自己的输入区(搜索框
  * 里出现代码文本、已选行)会显示标的代码 —— 那是**用户在该页输入回显**, 与带1 的行情快照
@@ -120,15 +121,13 @@ function ForecastFallback({ error, onRetry }: { error: Error; onRetry: () => voi
 }
 
 /**
- * 标签入口。`symbol` / `market` **有意不消费**(理由见文件头注「ForecastPage 要不要参数?」):
- * 预测页无 props 面、不读路由 ⇒ 传进去无落点。签名仍与兄弟标签同形(`{ symbol, market }`),
- * 好让 Task 17 的 `TabPanel` 用同一套调用约定接线; 两个属性在签名里保留类型信息, 不做任何
- * 静默改写(不用它们拼请求、不用它们预选标的)。
+ * 标签入口。`symbol` **作 `initialSymbol` 透传给预测页**(预选标的, v0.6.0 遗留②);
+ * `market` 仍**有意不消费**(预测页只按 6 位 A 股代码取数, 与市场无关)。签名与兄弟标签同形
+ * (`{ symbol, market }`)以配合 Task 17 的 `TabPanel` 调用约定; `market` 保留类型信息不做静默改写。
  */
 export default function ForecastTab({ symbol, market }: { symbol: string; market: string }) {
-  // 两个属性**确实不消费**(见上): 声明式 `void` 保留签名文档价值 + 给读代码的人一个显式"已知未用"
-  // 信号(参数表里保留它们, 是为了与 T11–T15 的 `{ symbol, market }` 调用约定同形, 便于 Task 17 统一接线)。
-  void symbol
+  // `market` 有意不消费 → 声明式 `void` 给读代码的人一个显式"已知未用"信号(签名与 T11–T15
+  // 的 `{ symbol, market }` 调用约定同形, 便于 Task 17 统一接线); `symbol` 已作 initialSymbol 透传。
   void market
 
   /**
@@ -151,12 +150,12 @@ export default function ForecastTab({ symbol, market }: { symbol: string; market
 
   return (
     <div className="mt-1 text-[12px]" data-testid="forecast-tab">
-      {/* 口径行: 如实说明内嵌的是哪一页 + 标的从哪来(不预选) */}
+      {/* 口径行: 如实说明内嵌的是哪一页 + 标的从哪来(工作台预填) */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/40 pb-2 text-[11px] text-muted-foreground">
         <span className="text-foreground">预测</span>
         <span className="text-border/60">|</span>
         <span>四模型(预测 / 历史回测 / 预测记录 / 模型权重 / 预测报告) · 惰性加载, 进入本标签才下载并取数</span>
-        <span className="ml-auto text-[10px]">标的在该页搜索框内选择(预测页不接受外部标的传入, 本标签不预填)</span>
+        <span className="ml-auto text-[10px]">已按工作台标的预填代码; 可在页内搜索框更换, 再点「开始预测」</span>
       </div>
 
       <div className="mt-2">
@@ -184,7 +183,7 @@ export default function ForecastTab({ symbol, market }: { symbol: string; market
               </div>
             }
           >
-            <ForecastPage />
+            <ForecastPage initialSymbol={symbol} />
           </Suspense>
         </AppErrorBoundary>
       </div>

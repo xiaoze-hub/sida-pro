@@ -60,6 +60,9 @@ import {
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
 
+/** 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。 */
+const POSITION_POLL_MS = 60000
+
 /**
  * 持仓上下文 `hasPosition`(T19 接**真源**)。
  *
@@ -86,22 +89,25 @@ function useHasPosition(symbol: string, market: string, enabled: boolean): boole
     setHeld(undefined)
     // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
     if (!enabled || !symbol) return () => { alive = false }
-    dashboardApi
-      .portfolioSummary({ include_quotes: false })
-      .then((r) => {
+    const want = `${market}:${symbol}`
+    const load = async () => {
+      try {
+        const r = await dashboardApi.portfolioSummary({ include_quotes: false })
         if (!alive) return
-        const want = `${market}:${symbol}`
         const has = (r?.accounts || []).some((acc) =>
           (acc.positions || []).some((p) => `${p.market}:${p.symbol}` === want),
         )
         setHeld(has)
-      })
-      .catch(() => {
-        // 失败保持 `undefined`(未知), 不静默当未持仓 —— 见头注「三态」。
-        if (alive) setHeld(undefined)
-      })
+      } catch {
+        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`(未知) —— 不静默当未持仓。
+      }
+    }
+    void load()
+    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器要等整页刷新才更新。
+    const t = window.setInterval(() => void load(), POSITION_POLL_MS)
     return () => {
       alive = false
+      window.clearInterval(t)
     }
   }, [symbol, market, enabled])
   return held

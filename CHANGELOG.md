@@ -7,6 +7,14 @@
 
 ## 2026-09-13
 
+### fix(wb)-v0.6.0 遗留清理第 1 批(低风险工程债): 预测页预选标的 + 持仓态轮询 + 板块 chips 截断 + 删死文件
+- **遗留②(预测页不预选)** —— `ForecastPage` 新增可选 `initialSymbol`(默认空对象 ⇒ `<ForecastPage />` 仍合法, 既有 `Quote.tsx` 调用不变); `ForecastTab` 把工作台 `symbol` 作 `initialSymbol` 透传, 进来即预填(仍可在页内改, 仍要手动点「开始预测」); 口径行改为「已按工作台标的预填代码」。T16 的 `@ts-expect-error` 钉改成"只接受 `initialSymbol`、`symbol` 仍是错属性名"(钉仍在, 且新增正/负断言各一)。
+- **遗留①(持仓态不轮询)** —— `StockWorkbench.useHasPosition` 由一次性取数改为 **60s 轮询**(`POSITION_POLL_MS`), 盘中买卖后不必整页刷新; 失败**保留上次值**(stale-on-error), 首次即失败仍显 `undefined`(未知), 三态语义与「持仓态未知」标注不变; 换标的/关闸门清值+卸载清定时器不变。
+- **遗留⑥(板块 chips 未截断)** —— `QuickRail` 题材/板块 chips 截首屏 `BLOCKS_MAX=8`, 余量折成 `+N`(悬停 `title` 列全名); 320px 速览卡高度不再被 22 条撑爆。
+- **遗留⑨(死文件)** —— 删 `insight/KlineTab.tsx` + `insight/InsightHeaderBar.tsx`(恢复后全仓零引用; 无 R6 baseline 条目)。
+- **遗留⑬(market 口径)** —— `useInsightData` 的 HoldingAgg 持仓匹配把 `p.market` 也做 `trim().toUpperCase()` 归一(原来只归一左侧), 消除大小写/空格造成的漏匹配。
+- **门禁**: 前端 tsc / eslint / UI-RULES / vitest **361/361** 全绿。
+
 ### feat(wb)-个股工作台 v2 三合一发版: 行情/盘口/旧详情 并入工作台 + 三类型内切 + 六标签 + 全站去重; v0.6.0
 
 **背景**: 老板原话「行情盘口内容和持仓个股详情内容才有重叠…工作台未改动之前, 点进去的盘中监测/技术指标买卖建议等信息没了, 就连工作台信息数智决策都是重复的」→ 拍板三件事: ① 行情页/盘口页并入工作台; ② 旧个股详情(9 tab)全量还原进工作台; ③ 去重。

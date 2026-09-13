@@ -398,7 +398,7 @@ const loadHoldingAgg = useCallback(async () => {
     let pnl = 0
     for (const acc of data?.accounts || []) {
       for (const p of acc.positions || []) {
-        if (p.symbol !== symbol || p.market !== market) continue
+        if (p.symbol !== symbol || String(p.market || '').trim().toUpperCase() !== market) continue
         quantity += Number(p.quantity || 0)
         cost += Number(p.cost_price || 0) * Number(p.quantity || 0)
         marketValue += Number(p.market_value_cny || 0)
