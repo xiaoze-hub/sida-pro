@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
@@ -180,6 +180,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -332,5 +333,72 @@ describe('Task 11 盘口资金: 缺数据一律 `--` / note, 不编造', () => {
     const chipSec = section('chips')
     expect(within(chipSec).getAllByText('--').length).toBeGreaterThanOrEqual(3)
     expect(within(chipSec).getByText(/暂无筹码数据/)).toBeTruthy()
+  })
+})
+
+/**
+ * 复审 Finding 1 的**盲区用例**(旧版 3 例全走 resolve, reject 路径零覆盖):
+ * 原实现 `insightApi.orderbookOb(...).catch(() => null)` + 无条件 `setOb(o ?? null)`,
+ * 于是 ① 401/500/网络失败被当成"后端无数据", ② 屏上配一句**本地编造**的
+ * 「盘口无数据(非交易时段或 thsdk 未接)」/「无封单成色样本(非涨停股或非交易时段)」,
+ * ③ 任何一次 30s 轮询打嗝都丢掉上一份好快照(违反 stale-on-error)。
+ * 修复后: 失败**保留上次成功值** + 显示「取数失败（上次成功 HH:MM:SS）」; 无成功记录时
+ * 「取数失败（暂无成功记录）」; 猜测文案一个都不许出现。
+ */
+describe('Task 11 复审修复: 取数失败保留上次成功值 + 不猜原因', () => {
+  it('首拉成功 → 第二次 30s 轮询 reject: 上次成功值仍在屏上 + 失败文案 + 无猜测文案', async () => {
+    vi.useFakeTimers()
+    renderTab()
+
+    // 首拉(全部 mock 立即 resolve)
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    expect(within(section('orderbook')).getByText('买压')).toBeTruthy()
+    expect(within(section('orderbook')).getByText('+0.792')).toBeTruthy()
+    expect(cellValue(section('intent'), '成色')).toBe('82%')
+
+    // 第二次轮询: 两个端点同时 reject(401/500/网络失败)
+    mocks.orderbookOb.mockRejectedValue(new Error('HTTP 500'))
+    mocks.sealQuality.mockRejectedValue(new Error('HTTP 500'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+
+    // ① 上次成功值仍在(修复前会被 null 掉 → 整节 `--`)
+    const obSec = section('orderbook')
+    expect(within(obSec).getByText('买压')).toBeTruthy()
+    expect(within(obSec).getByText('+0.792')).toBeTruthy()
+    expect(within(obSec).getByText('+1234.57万')).toBeTruthy()
+    expect(within(section('events')).getByText('托单')).toBeTruthy()
+    expect(cellValue(section('intent'), '成色')).toBe('82%')
+
+    // ② 失败文案: 十档盘口 / 盘口演变 / 封单成色 各一条, 且带上次成功时刻
+    const failedLines = screen.getAllByText(/^取数失败（上次成功 .+）$/)
+    expect(failedLines.length).toBe(3)
+
+    // ③ 本地编造的理由(后端从未下发)一个都不许出现
+    expect(screen.queryByText(/thsdk 未接/)).toBeNull()
+    expect(screen.queryByText(/非交易时段或 thsdk/)).toBeNull()
+    expect(screen.queryByText(/无封单成色样本/)).toBeNull()
+    expect(screen.queryByText(/盘口不可用/)).toBeNull()
+  })
+
+  it('首拉即失败(无成功记录): 事实文案 + 全部 `--`, 不出现猜测的 时段/thsdk/涨停股 原因', async () => {
+    mocks.orderbookOb.mockRejectedValue(new Error('请求超时，请稍后重试'))
+    mocks.sealQuality.mockRejectedValue(new Error('HTTP 500'))
+    vi.useFakeTimers()
+    renderTab()
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    const obSec = section('orderbook')
+    expect(within(obSec).getByText(/取数失败（暂无成功记录）/)).toBeTruthy()
+    expect(within(obSec).getAllByText('--').length).toBeGreaterThanOrEqual(3)
+
+    const evSec = section('events')
+    expect(within(evSec).getByText(/取数失败（暂无成功记录）/)).toBeTruthy()
+    expect(within(evSec).getByText(/幽灵单占比 --/)).toBeTruthy()
+
+    expect(within(section('intent')).getByText(/取数失败（暂无成功记录）/)).toBeTruthy()
+
+    expect(screen.queryByText(/thsdk 未接/)).toBeNull()
+    expect(screen.queryByText(/非涨停股或非交易时段/)).toBeNull()
+    expect(screen.queryByText(/盘口不可用/)).toBeNull()
   })
 })

@@ -26,10 +26,19 @@ import { safeFixed, safeInt, safeNum, toAmount } from '@/lib/format'
  *
  * 降级(`--` / note, 永不伪造):
  *  - 盘口源不可用(`available=false`)→ 原样展示后端 `note` + 全部 `--`;
+ *  - **取数失败(401/500/网络)** → **保留上次成功快照**(stale-on-error, 与 `usePolling` 同规则),
+ *    并显示「取数失败（上次成功 HH:MM:SS）」; 无成功记录时显示「取数失败（暂无成功记录）」。
+ *    **绝不**把失败当成"无数据", 也**绝不**本地编造「非交易时段 / thsdk 未接 / 非涨停股」这类
+ *    后端从未下发的理由(后端真给了 `note`/`reason` 才照原样展示, 否则中性「暂无数据」);
  *  - `moreInfo`/`mainIntent`/`fundFlow` 缺字段 → 对应单元格 `--`(走 `@/lib/format` safe* 系列,
  *    后端 DECIMAL 序列化成字符串也不会崩);
  *  - 封单成色 `available=false` → 展示 `reason` 原文 + `--`;
  *  - 暗盘 TQ `data_status !== 'complete'`(未采/样本不足)→ 展示状态原文 + `--`。
+ *
+ * 取数卫生(复审 Finding 2): `/orderbook-ob` 与 `/seal-quality` 都是**实时**端点, 走
+ * `insightApi` 时**默认跳过** `fetchAPI` 的 30s GET 内存缓存(`cacheMode:'reload'`) —— 否则
+ * 本标签「刷新」按钮 30s 内是空操作(而 `updatedAt` 仍在变 = 假的"已刷新"), 30s 轮询也会命中
+ * 上一次轮询写下的缓存把真实取数拖成 ~60s。同端点兄弟组件 `OrderBookObBar` 同理。
  *
  * 与退役 `/l2` 页(`L2Orderbook.tsx`)的差异(只搬内容, 不复刻页面壳): 无股票输入框/查询按钮/页面标题
  * (工作台带1 已拥有)、无 `/klines/summary` 的二次取数; 形态条改由 OB 序列 label 判定 —— 旧页取自
@@ -241,9 +250,41 @@ function Cell({
  * 取数(本标签自有的两个端点: 盘口 OB + 封单成色)
  * ------------------------------------------------------------------ */
 
+/** 单端点取数态(**stale-on-error**, 与 `@panwatch/biz-ui` 的 `usePolling` 同规则)。 */
+interface Feed<T> {
+  data: T | null
+  /** 最近一次取数失败; 与 data 可**并存**(此时 data 就是上次成功值) */
+  failed: boolean
+  /** 最近一次**成功**取数时刻(HH:MM:SS); 从未成功过 = 空串(换股后重置) */
+  lastOkAt: string
+}
+
+const EMPTY_OB: Feed<ObResp> = { data: null, failed: false, lastOkAt: '' }
+const EMPTY_SEAL: Feed<SealResp> = { data: null, failed: false, lastOkAt: '' }
+
+/**
+ * 端点降级文案(**永不猜原因**):
+ *  ① 首帧无数据且在途 → `加载中…`;
+ *  ② 取数失败 → `取数失败（上次成功 HH:MM:SS）`(上次成功值仍在屏上); 从未成功过 → `取数失败（暂无成功记录）`;
+ *  ③ 取数成功但源不可用 → 后端 `note`/`reason` **原文**; 后端未下发文案 → 中性 `暂无数据`。
+ * 本地**不**再编造「非交易时段 / thsdk 未接 / 非涨停股」这类后端从未下发的理由(brief: 源不可用 →
+ * 后端 `available=false`/`note` 原文; never fabricate)。
+ */
+function feedNote(
+  loading: boolean,
+  hasData: boolean,
+  failed: boolean,
+  lastOkAt: string,
+  backendNote?: string | null,
+): string {
+  if (loading && !hasData) return '加载中…'
+  if (failed) return lastOkAt ? `取数失败（上次成功 ${lastOkAt}）` : '取数失败（暂无成功记录）'
+  return backendNote ?? '暂无数据'
+}
+
 interface L2Sources {
-  ob: ObResp | null
-  seal: SealResp | null
+  ob: Feed<ObResp>
+  seal: Feed<SealResp>
   loading: boolean
   updatedAt: string
   reload: () => void
@@ -251,11 +292,16 @@ interface L2Sources {
 
 /**
  * `/orderbook-ob`(30s 盘中节奏, 与退役 `/l2` 页一致) + `/seal-quality` 两端口一次拉。
- * 换股: 请求序号守卫 + 清空旧值(不把上一只票的盘口画到新标的上); 单端点失败独立静默降级。
+ * 换股: 请求序号守卫 + 清空旧值(不把上一只票的盘口画到新标的上);
+ * 取数失败: **保留上次成功值** + 只置 `failed`(两个端点各自独立判定, 单端点失败不牵连另一个,
+ * 也不把上一份好快照抹成空态); 两个端点**全失败**时不推进 `updatedAt`
+ * (头部时间恒为"上次成功时刻", 不给一个假的"刚刷新过"信号)。
+ * 注: 成败判定用 `Promise.allSettled` —— 需要**逐端点**区分 fulfilled/rejected(原 `.catch(() => null)`
+ * 把失败与"后端真的没数据"混成一个 null, 正是本轮复审 Finding 1)。
  */
 function useL2Sources(symbol: string): L2Sources {
-  const [ob, setOb] = useState<ObResp | null>(null)
-  const [seal, setSeal] = useState<SealResp | null>(null)
+  const [ob, setOb] = useState<Feed<ObResp>>(EMPTY_OB)
+  const [seal, setSeal] = useState<Feed<SealResp>>(EMPTY_SEAL)
   const [loading, setLoading] = useState(false)
   const [updatedAt, setUpdatedAt] = useState('')
   const seqRef = useRef(0)
@@ -264,20 +310,25 @@ function useL2Sources(symbol: string): L2Sources {
     if (!symbol) return
     const seq = ++seqRef.current
     setLoading(true)
-    const [o, s] = await Promise.all([
-      insightApi.orderbookOb<ObResp>(symbol).catch(() => null),
-      insightApi.sealQuality<SealResp>(symbol).catch(() => null),
+    const [o, s] = await Promise.allSettled([
+      insightApi.orderbookOb<ObResp>(symbol),
+      insightApi.sealQuality<SealResp>(symbol),
     ])
     if (seq !== seqRef.current) return
-    setOb(o ?? null)
-    setSeal(s ?? null)
-    setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    setOb((prev) =>
+      o.status === 'fulfilled' ? { data: o.value, failed: false, lastOkAt: now } : { ...prev, failed: true },
+    )
+    setSeal((prev) =>
+      s.status === 'fulfilled' ? { data: s.value, failed: false, lastOkAt: now } : { ...prev, failed: true },
+    )
+    if (o.status === 'fulfilled' || s.status === 'fulfilled') setUpdatedAt(now)
     setLoading(false)
   }, [symbol])
 
   useEffect(() => {
-    setOb(null)
-    setSeal(null)
+    setOb(EMPTY_OB)
+    setSeal(EMPTY_SEAL)
     setUpdatedAt('')
     void load()
     const timer = window.setInterval(() => void load(), POLL_MS)
@@ -291,7 +342,8 @@ function useL2Sources(symbol: string): L2Sources {
  * ① 十档买卖额双向条 + 盘口形态
  * ------------------------------------------------------------------ */
 
-function OrderbookSection({ ob, loading }: { ob: ObResp | null; loading: boolean }) {
+function OrderbookSection({ feed, loading }: { feed: Feed<ObResp>; loading: boolean }) {
+  const ob = feed.data
   const series = ob?.ob_series ?? []
   const latest = series.length > 0 ? series[series.length - 1] : null
   const bid10 = safeNum(latest?.bid_amt10)
@@ -320,9 +372,9 @@ function OrderbookSection({ ob, loading }: { ob: ObResp | null; loading: boolean
         ) : null
       }
     >
-      {!available ? (
+      {!available || feed.failed ? (
         <div className="mb-2 text-[12px] text-muted-foreground">
-          {loading && !ob ? '加载中…' : (ob?.note ?? '盘口无数据(非交易时段或 thsdk 未接)')}
+          {feedNote(loading, ob != null, feed.failed, feed.lastOkAt, ob?.note)}
         </div>
       ) : null}
 
@@ -427,10 +479,12 @@ function L2FundSection({ moreInfo, loading }: { moreInfo: MoreInfoResponse | nul
  * ③ 盘口演变事件 + 幽灵单占比
  * ------------------------------------------------------------------ */
 
-function EvolutionSection({ ob, loading }: { ob: ObResp | null; loading: boolean }) {
+function EvolutionSection({ feed, loading }: { feed: Feed<ObResp>; loading: boolean }) {
+  const ob = feed.data
   const available = ob?.available === true
   const events = ob?.events ?? []
   const shown = events.slice(-8).reverse()
+  const statusText = feedNote(loading, ob != null, feed.failed, feed.lastOkAt, ob?.note)
 
   return (
     <Section
@@ -439,19 +493,22 @@ function EvolutionSection({ ob, loading }: { ob: ObResp | null; loading: boolean
       hint="托单/压单/撤单/幽灵单(跨快照跟踪)"
       extra={
         <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-          幽灵单占比 {pct(ob?.ghost_ratio)} · 事件 {events.length} 条
+          幽灵单占比 {available ? pct(ob?.ghost_ratio) : '--'} · 事件 {events.length} 条
         </span>
       }
     >
       {!available ? (
-        <div className="text-[12px] text-muted-foreground">
-          {loading && !ob ? '加载中…' : (ob?.note ?? '盘口不可用, 无演变事件')}
-        </div>
-      ) : shown.length === 0 ? (
-        <div className="text-[12px] text-muted-foreground">暂无托单/压单/撤单/幽灵单事件</div>
+        <div className="text-[12px] text-muted-foreground">{statusText}</div>
       ) : (
-        <ul className="space-y-1">
-          {shown.map((e, i) => (
+        <>
+          {feed.failed ? (
+            <div className="mb-1.5 text-[11px] text-muted-foreground">{statusText}</div>
+          ) : null}
+          {shown.length === 0 ? (
+            <div className="text-[12px] text-muted-foreground">暂无托单/压单/撤单/幽灵单事件</div>
+          ) : (
+            <ul className="space-y-1">
+              {shown.map((e, i) => (
             <li key={`${e.type ?? 'e'}-${String(e.ts ?? i)}-${i}`} className="flex items-baseline gap-1.5">
               <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground">{clockOf(e.ts)}</span>
               <span className="min-w-0 flex-1 truncate">
@@ -467,8 +524,10 @@ function EvolutionSection({ ob, loading }: { ob: ObResp | null; loading: boolean
                 </span>
               </span>
             </li>
-          ))}
-        </ul>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </Section>
   )
@@ -484,10 +543,10 @@ function IntentSealSection({
   sealLoading,
 }: {
   mainIntent: MainIntentStructured | null
-  seal: SealResp | null
+  seal: Feed<SealResp>
   sealLoading: boolean
 }) {
-  const m = seal?.metrics ?? null
+  const m = seal.data?.metrics ?? null
   const sealAvailable = m?.available === true
   const mi = mainIntent
 
@@ -529,7 +588,7 @@ function IntentSealSection({
           封单成色
           <span className="ml-1 text-[10px] opacity-70">
             {m?.window_min != null ? `近 ${safeFixed(m.window_min, 0)} 分钟 · ` : ''}盘中 60s 采样
-            {seal?.n_samples != null ? ` · ${seal.n_samples} 样本` : ''}
+            {seal.data?.n_samples != null ? ` · ${seal.data.n_samples} 样本` : ''}
           </span>
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
@@ -552,9 +611,9 @@ function IntentSealSection({
             hint="最新样本是否处于封板状态"
           />
         </div>
-        {!sealAvailable ? (
+        {!sealAvailable || seal.failed ? (
           <div className="mt-1.5 text-[10px] text-muted-foreground/70">
-            {sealLoading && !seal ? '加载中…' : (m?.reason ?? '无封单成色样本(非涨停股或非交易时段)')}
+            {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason)}
           </div>
         ) : null}
       </div>
@@ -712,12 +771,12 @@ function L2TabBody({ symbol }: { symbol: string }) {
 
       <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-12">
         <div className="space-y-3 lg:col-span-7">
-          <OrderbookSection ob={ob} loading={loading} />
+          <OrderbookSection feed={ob} loading={loading} />
           <L2FundSection moreInfo={moreInfo} loading={moreInfoLoading} />
           <FundFlowSection rows={fundRows} />
         </div>
         <div className="space-y-3 lg:col-span-5 lg:border-l lg:border-border/40 lg:pl-4">
-          <EvolutionSection ob={ob} loading={loading} />
+          <EvolutionSection feed={ob} loading={loading} />
           <IntentSealSection mainIntent={mainIntent} seal={seal} sealLoading={loading} />
           <DarkFlowTqSection data={darkFlowTq} />
           <ChipsSection mainIntent={mainIntent} />
