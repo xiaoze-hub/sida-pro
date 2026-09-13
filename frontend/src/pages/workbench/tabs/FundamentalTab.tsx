@@ -398,6 +398,13 @@ function FundamentalTabBody({
         <span className="text-foreground">基本面</span>
         <span className="text-border/60">|</span>
         <span>财务/股本 · 龙虎榜/融资融券/股东户数 · 公司简介/基本信息{hasPosition ? ' · 加仓测算' : ''}</span>
+        {/* T19: 持仓态未知(真源在途/失败) → 显式标注, 不把"未知"说成"未持仓"。
+            未知与未持仓一样不渲染加仓计算器(无真实持仓数则不渲染), 但用户能看到原因。 */}
+        {hasPosition === undefined ? (
+          <span data-testid="fundamental-position-unknown" className="text-muted-foreground/80">
+            持仓态未知 · 加仓测算暂不显示
+          </span>
+        ) : null}
       </div>
 
       <FinanceSection snap={snap} cn={cn} />

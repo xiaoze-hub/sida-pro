@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 /**
@@ -20,13 +20,19 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  *
  * **Task 17 追加守两件(标签接线)**:
  *  ⑧ `TabPanel` 按 `?tab=` 渲染**对应**的真实标签(六键全覆盖), 且入参 `symbol`/`market`('CN')/
- *     `hasPosition` 按页面口径传入(hasPosition 现为占位 `false` —— Task 6 Ruling, 见实现头注);
+ *     `hasPosition` 按页面口径传入;
  *  ⑨ **一次只挂载一个标签** —— 切标签时旧标签**卸载**、新标签**挂载**(挂载即取数 ⇒ 惰性)。
  *     这条是 spec §4.3 的核心: 六个标签各带 `InsightProvider`, 同时挂载会把六组端点一次打满。
  *
+ * **Task 19 追加守一件(持仓态真源)**:
+ *  ⑩ `hasPosition` 由页面自取 `GET /portfolio/summary` 判定(T19 之前的占位恒 `false` 已删):
+ *     持仓在册 → `true`; 不在册 → `false`; 取数在途/失败 → `undefined`(**未知**, 绝不猜 `false`)。
+ *     同时断言带1 在未知时收到 `positionUnknown=true`(显式标注「持仓态未知」)。
+ *
  * 子组件(含 echarts 的 KlineChart、取数的 HeaderBand/QuickRail、Task 7 的 IndexBody/BoardBody、
  * **Task 17 的六个标签**)在本例全部 mock —— 本任务守的是**骨架与接线**, 它们的内部取数/渲染
- * 由各自单测守。真数据: 本页零取数。
+ * 由各自单测守。`dashboardApi.portfolioSummary` 也 mock(页面唯一自取的数据) —— 用替身喂
+ * **真实形状**的 `accounts[].positions[]`, 断言页面据真判定 `hasPosition`。
  */
 
 /**
@@ -39,7 +45,27 @@ const mocks = vi.hoisted(() => ({
   bodyFetch: vi.fn(),
   mount: vi.fn(),
   unmount: vi.fn(), // 卸载计数(证明旧标签被卸载, 不是六个都留着)
+  /**
+   * Task 19: `GET /portfolio/summary` 替身。默认**空持仓**(页面据此判 `false`),
+   * 用例可 `mockResolvedValue(...)` 喂真实形状的持仓, 或 `mockRejectedValue` 造失败。
+   */
+  portfolioSummary: vi.fn(),
 }))
+
+/**
+ * Task 19: 页面自取持仓汇总(`dashboardApi.portfolioSummary`)。只替这一个方法, 其余导出透传
+ * (页面只用到它; `importOriginal` 保真其余导出, 避免误伤)。
+ */
+vi.mock('@panwatch/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@panwatch/api')>()
+  return {
+    ...actual,
+    dashboardApi: {
+      ...actual.dashboardApi,
+      portfolioSummary: mocks.portfolioSummary,
+    },
+  }
+})
 
 /** 生成一个标签替身: 渲染入参回显 + 挂载/卸载计数。 */
 function makeTabMock(id: string) {
@@ -108,11 +134,14 @@ vi.mock('@panwatch/biz-ui/components/workbench/HeaderBand', () => ({
     type: string
     onTypeChange?: (t: string) => void
     onGotoTab?: (t: string) => void
+    /** Task 19: 持仓态未知标注(真实持仓源在途/失败) */
+    positionUnknown?: boolean
     /** Task 7 复审 Finding 1: 页面级刷新广播(真组件里由刷新按钮点火) */
     onRefresh?: () => void
   }) => (
     <div data-testid="band1">
       <span>{`band1:${p.symbol}:${p.market}:${p.type}`}</span>
+      <span data-testid="band1-position-unknown">{`unknown:${String(!!p.positionUnknown)}`}</span>
       <button type="button" onClick={() => p.onTypeChange?.('index')}>
         mock-to-index
       </button>
@@ -155,6 +184,59 @@ function renderAt(path: string) {
 
 const search = () => screen.getByTestId('search').textContent ?? ''
 
+/** Task 19: `/portfolio/summary` 的健康返回(空持仓) —— 真实形状, 无持仓。 */
+const EMPTY_PORTFOLIO = {
+  accounts: [],
+  total: {
+    total_market_value: 0,
+    total_cost: 0,
+    total_pnl: 0,
+    total_pnl_pct: 0,
+    total_daily_pnl: 0,
+    daily_pnl_period: 'unknown' as const,
+    daily_pnl_label: '',
+    daily_pnl_date: null,
+    available_funds: 0,
+    total_assets: 0,
+  },
+}
+
+/** Task 19: 持仓在册的返回(单账户含 `positions[]`) —— 与 `DiscoveryPanel.holdingSet` 同口径。 */
+const WITH_POSITION = {
+  accounts: [
+    {
+      id: 1,
+      name: '默认',
+      available_funds: 0,
+      total_cost: 0,
+      total_market_value: 0,
+      total_pnl: 0,
+      total_pnl_pct: 0,
+      total_daily_pnl: 0,
+      daily_pnl_period: 'unknown' as const,
+      daily_pnl_label: '',
+      daily_pnl_date: null,
+      total_assets: 0,
+      positions: [
+        {
+          id: 1,
+          stock_id: 1,
+          symbol: '002636',
+          name: '金安国纪',
+          market: 'CN',
+          cost_price: 10,
+          quantity: 100,
+          invested_amount: 1000,
+          trading_style: 'swing',
+          current_price: 12,
+          change_pct: 1.2,
+        },
+      ],
+    },
+  ],
+  total: EMPTY_PORTFOLIO.total,
+}
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
@@ -162,6 +244,7 @@ afterEach(() => {
   mocks.bodyFetch.mockClear()
   mocks.mount.mockClear()
   mocks.unmount.mockClear()
+  mocks.portfolioSummary.mockReset()
 })
 
 /** Task 17 观测点: 当前**在挂载中**的标签集合(挂载过 − 已卸载过)。 */
@@ -172,8 +255,23 @@ const mountedTabs = () => {
   return [...ids]
 }
 
+/**
+ * Task 19: 逐例默认"空持仓"返回 —— 不关心持仓的用例据此看到 `hasPosition=false`(已判定未持仓,
+ * 与 T19 之前的占位值同值但**语义不同**: 现在是"真查过, 不在册")。用例可在 render 前覆盖。
+ */
+beforeEach(() => {
+  mocks.portfolioSummary.mockResolvedValue(EMPTY_PORTFOLIO)
+})
+
+/** Task 19: 等页面持仓判定落定后, 再读标签回显的 `hasPosition`(判定在 fetch 后 setState)。 */
+async function expectTabHasPosition(id: string, expected: string) {
+  await waitFor(() =>
+    expect(screen.getByTestId(`tab-${id}`).textContent).toBe(`${id}:002636:CN:${expected}`),
+  )
+}
+
 describe('StockWorkbench 三带骨架', () => {
-  it('个股(默认): 带1 + 主图 + 右栏 + 6 键标签 + 真实「盘口资金」标签, 外壳沿用容器惯例', () => {
+  it('个股(默认): 带1 + 主图 + 右栏 + 6 键标签 + 真实「盘口资金」标签, 外壳沿用容器惯例', async () => {
     renderAt('/stocks/002636')
 
     // 带1
@@ -211,7 +309,10 @@ describe('StockWorkbench 三带骨架', () => {
     ])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     // Task 17 接线: 默认标签渲染真实组件(替身回显 symbol/market/hasPosition 的实际入参)
-    expect(screen.getByTestId('tab-l2').textContent).toBe('l2:002636:CN:false')
+    // Task 19: 持仓判定在 `/portfolio/summary` 返回后落定 ⇒ 首帧为「未知」, 落定后才是 false(不在册)。
+    await expectTabHasPosition('l2', 'false')
+    // 判定落定(真查过 → 未持仓)后, 带1 不再显示「持仓态未知」
+    await waitFor(() => expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:false'))
     // 其余五个**不得**挂载(惰性: 只有激活标签在挂载中)
     expect(screen.queryByTestId('tab-suggest')).toBeNull()
     expect(screen.queryByTestId('tab-fundamental')).toBeNull()
@@ -255,7 +356,7 @@ describe('StockWorkbench 三带骨架', () => {
   })
 
   // ---- Task 17: 六标签逐一接线 + 惰性(一次只挂载一个) ----
-  it('?tab= 六键逐一: 每个 tab 渲染**对应**组件(入参 symbol/market/hasPosition 一致)', () => {
+  it('?tab= 六键逐一: 每个 tab 渲染**对应**组件(入参 symbol/market/hasPosition 一致)', async () => {
     const cases: [string, string][] = [
       ['l2', '盘口资金'],
       ['suggest', '建议'],
@@ -273,7 +374,8 @@ describe('StockWorkbench 三带骨架', () => {
         // ForecastTab 签名只收 `{ symbol, market }`(不消费; 见实现头注)⇒ hasPosition 真为 undefined
         expect(box.textContent).toBe('forecast:002636:CN:undefined')
       } else {
-        expect(box.textContent).toBe(`${id}:002636:CN:false`)
+        // Task 19: 持仓判定落定后 = false(真查过, 不在册)
+        await expectTabHasPosition(id, 'false')
       }
       // **只有它一个**在渲染中
       for (const [otherId] of cases) {
@@ -287,7 +389,7 @@ describe('StockWorkbench 三带骨架', () => {
     }
   })
 
-  it('切标签: 写 ?tab= 且**旧标签卸载 / 新标签挂载**(一次只挂一个 —— 惰性取数的直接证据)', () => {
+  it('切标签: 写 ?tab= 且**旧标签卸载 / 新标签挂载**(一次只挂一个 —— 惰性取数的直接证据)', async () => {
     renderAt('/stocks/002636')
     expect(mountedTabs()).toEqual(['l2'])
     expect(mocks.mount).toHaveBeenCalledTimes(1)
@@ -298,7 +400,7 @@ describe('StockWorkbench 三带骨架', () => {
     // 只改 query, 不跳页
     expect(search()).toContain('tab=research')
     // 新标签上屏、旧标签下屏
-    expect(screen.getByTestId('tab-research').textContent).toBe('research:002636:CN:false')
+    await expectTabHasPosition('research', 'false')
     expect(screen.queryByTestId('tab-l2')).toBeNull()
     // 旧标签**真的被卸载了**(不是六个都留着): unmount('l2') 恰一次, mount 共 2 次且第二次是 research
     expect(mocks.unmount).toHaveBeenCalledWith('l2')
@@ -307,9 +409,9 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mountedTabs()).toEqual(['research'])
   })
 
-  it('非法 ?tab= 收敛回「盘口资金」(不崩, 且渲染 l2 标签)', () => {
+  it('非法 ?tab= 收敛回「盘口资金」(不崩, 且渲染 l2 标签)', async () => {
     renderAt('/stocks/002636?tab=__nope__')
-    expect(screen.getByTestId('tab-l2').textContent).toBe('l2:002636:CN:false')
+    await expectTabHasPosition('l2', 'false')
     expect(mountedTabs()).toEqual(['l2'])
   })
 
@@ -325,11 +427,11 @@ describe('StockWorkbench 三带骨架', () => {
     expect(mountedTabs()).toEqual([])
   })
 
-  it('带1 建议条跳标签(onGotoTab → ?tab=, 渲染对应标签)', () => {
+  it('带1 建议条跳标签(onGotoTab → ?tab=, 渲染对应标签)', async () => {
     renderAt('/stocks/002636')
     fireEvent.click(screen.getByText('mock-goto-news'))
     expect(search()).toContain('tab=news')
-    expect(screen.getByTestId('tab-news').textContent).toBe('news:002636:CN:false')
+    await expectTabHasPosition('news', 'false')
     expect(mountedTabs()).toEqual(['news'])
   })
 
@@ -376,7 +478,7 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.getByTestId('board-body').textContent).toBe('board-body:880001')
   })
 
-  it('Finding 1 刷新: 个股带2(主图 + 右栏 + 激活标签)重挂载, ?tab= 不丢', () => {
+  it('Finding 1 刷新: 个股带2(主图 + 右栏 + 激活标签)重挂载, ?tab= 不丢', async () => {
     renderAt('/stocks/002636?tab=news')
     const klineBefore = screen.getByTestId('kline')
     const railBefore = screen.getByTestId('rail')
@@ -391,7 +493,7 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
     expect(search()).toContain('tab=news')
     // Task 17: 刷新把带3(含激活标签)一起重挂载 ⇒ 标签卸载并重新挂载(= 重新取数), 且仍是 news
-    expect(screen.getByTestId('tab-news').textContent).toBe('news:002636:CN:false')
+    await expectTabHasPosition('news', 'false')
     expect(mocks.mount).toHaveBeenCalledTimes(2)
     expect(mocks.mount).toHaveBeenLastCalledWith('news')
     expect(mocks.unmount).toHaveBeenCalledWith('news')
@@ -399,5 +501,48 @@ describe('StockWorkbench 三带骨架', () => {
     expect([...new Set(mocks.mount.mock.calls.map((c) => c[0]))]).toEqual(['news'])
     // 刷新期间指数/板块正文一次都不该被取(仍是个股分支)
     expect(mocks.bodyFetch).not.toHaveBeenCalled()
+  })
+
+  // ---- Task 19: `hasPosition` 真源(三态; 绝不把"未知"说成"未持仓") ----
+  it('持仓在册: 页面据 `/portfolio/summary` 判 hasPosition=true, 带1 不再标「持仓态未知」', async () => {
+    mocks.portfolioSummary.mockResolvedValue(WITH_POSITION)
+    renderAt('/stocks/002636?tab=fundamental')
+
+    await expectTabHasPosition('fundamental', 'true')
+    // 已判定 ⇒ 未知标注消失
+    expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:false')
+    // 真源只打一次(页面挂载时取其自消费的持仓汇总)
+    expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
+    expect(mocks.portfolioSummary).toHaveBeenCalledWith({ include_quotes: false })
+  })
+
+  it('不持仓(在册但无该标的): 判 false, 且**不是**"未知"', async () => {
+    // 持仓里有 002636 之外的票 ⇒ 当前标的判 false(与"未知"区分)
+    mocks.portfolioSummary.mockResolvedValue({
+      ...WITH_POSITION,
+      accounts: [
+        { ...WITH_POSITION.accounts[0], positions: [{ ...WITH_POSITION.accounts[0].positions[0], symbol: '600519' }] },
+      ],
+    })
+    renderAt('/stocks/002636?tab=l2')
+    await expectTabHasPosition('l2', 'false')
+    expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:false')
+  })
+
+  it('取数失败: hasPosition 保持**未知**(undefined), 带1 显式标「持仓态未知」—— 不猜 false', async () => {
+    mocks.portfolioSummary.mockRejectedValue(new Error('boom'))
+    renderAt('/stocks/002636?tab=l2')
+
+    // 失败 ⇒ 一直是未知; 标签拿到 `undefined`, 带1 的未知标注为 true
+    await waitFor(() => expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:true'))
+    expect(screen.getByTestId('tab-l2').textContent).toBe('l2:002636:CN:undefined')
+  })
+
+  it('未知时**不**伪装成 false 的时序: 首帧(< fetch 落定)即为 undefined + 未知标注', () => {
+    // 永不落定的 fetch ⇒ 停在"未知"; 断言首帧不是 false 假象
+    mocks.portfolioSummary.mockReturnValue(new Promise(() => {}))
+    renderAt('/stocks/002636?tab=suggest')
+    expect(screen.getByTestId('tab-suggest').textContent).toBe('suggest:002636:CN:undefined')
+    expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:true')
   })
 })

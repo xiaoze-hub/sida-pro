@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务19: 修主图明盘恒 0(`open_net`→`ming_net`)+ `hasPosition` 接真实持仓源 + 去重核对 + 走查记录
+
+- **A1 修主图 L3 资金柱明盘恒 0(真缺陷)** —— 后端 `/klines/{s}/summary`.fund_flow 的真实键是 **`ming_net`**(`src/web/api/klines.py:570/589/853`), 而 `KlineChart.tsx` 只读 `open_net`(后端从不下发)⇒ 明盘分量恒 0、资金柱只剩暗盘。改: `FundFlowBar` 增 `ming_net?`(保留 `open_net` 作旧调用方兜底); 把资金柱单点计算抽成**纯函数 `fundBarPoint(bar, interval, sc, nodataColor)`**(优先 `ming_net`), 渲染处改调它; 同修 `InteractiveKline.tsx` + `insight/types.ts` 的 `FundFlowBarLike`。`L2Tab.tsx` 原本已读 `ming_net ?? open_net`, **未改动**(不破坏既有接线)。
+- **A2 `hasPosition` 接真实源(原为硬编码 `false`)** —— `StockWorkbench.tsx` 新增 `useHasPosition(symbol, market)`, 挂载时取 `dashboardApi.portfolioSummary({include_quotes:false})`(`GET /portfolio/summary`, 与 `DiscoveryPanel.holdingSet` 同接口同口径), 按 `market:symbol` 在 `accounts[].positions[]` 判定。**三态**: `undefined`=未知(在途/失败), `true`/`false`=已判定。**未知时绝不猜 `false`**(那对持仓用户是假陈述): 带1 显式渲染「持仓态未知」标注(`HeaderBand` 新增 `positionUnknown?`, `data-testid="position-unknown"`), `FundamentalTab` 显式渲染「持仓态未知 · 加仓测算暂不显示」。未知与未持仓**同样不渲染**加仓计算器(无真实持仓数则不渲染), 但用户可见原因。真数据, 不编造持仓。
+- **去重核对(spec §三 / `DATA_OWNERSHIP`), 违规 0 处** —— 新增 `frontend/tests/components/workbench-dedup-audit.test.tsx`(7 例): 把四个拥有面(带1 `HeaderBand`/右栏 `QuickRail`/`L2Tab`/`FundamentalTab`)**真组件同屏渲染**, 机器数每个数据点出现次数。核对结果: 涨停价/连板 band1-only ✅; 主力净流入 = tab.l2 + rail 速览摘要 **恰 2 处**(spec #4 允许, L2 另一处「主力净额(逐笔)」为不同 leaf/口径有意并列)✅; PE/PB/股息 band1+基本面 ✅; 题材/板块 rail-only(`FundamentalTab` `showConcepts={false}` ⇒ 无概念名)✅; 封单成色 `L2Tab`-only(全仓仅 1 文件渲染)✅; 三指标/共振 rail `DecisionCard`-only ✅。
+- **走查记录(Part C)** —— `docs/个股工作台v2三合一设计_20260913.md` **追加**「九、走查记录」节(不改既有章节): P2 六标签真接口走查结论(引用 T18 控制器记录 `progress.md:109-115`: 六标签均渲染真实数据、惰性生效、控制台 0 新报错)、去重核对表、A1/A2 修复、门禁、遗留。**诚实登记**: 本环境无可用登录凭据 ⇒ 浏览器活体走查**未做**, 以同屏 DOM 次数断言替代(等价可复跑)。
+- **纠正前一位实现者 1 处错断言** —— `workbench-dedup-audit.test.tsx` 末例原断言带1 内 `现价` leaf == 1, 但 `HeaderBand.visibleSnapshotCells` 对个股**已移除** `现价`/`涨跌幅` 两个 cell(顶行已醒目呈现)⇒ 实为 0。改为断言带1 内**无** `现价`/`涨跌幅` leaf, 与该文件自身注释对齐。产品行为未改(正是去重规则的正确体现)。前一位自述遗留的 `countExact` 未用 helper: 全仓 grep 零命中, 已不存在。
+- **测试** —— 新增 2 文件: `tests/lib/kline-fund-bar.test.ts`(7 例, 钉 `ming_net` 读入/open_net 兜底/分色/脏值/时间戳) + `tests/components/workbench-dedup-audit.test.tsx`(7 例); 扩 `tests/components/stock-workbench.test.tsx`(+4 例, 覆盖 `hasPosition` 三态: 在册 true/不在册 false/失败保持 undefined+标注/首帧不伪装 false)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`(无 stale-key) / `npx vitest run` **348/348**(54 files; T18 基线 330/52 ⇒ +18 例 +2 文件)。R6: 新代码裸 `.toFixed(` 命中 0, `scripts/ui-rules-baseline.json` 未动; 视觉只用既有 token 类。
+- **未做(留给控制器/T20)** —— ① Part B 浏览器活体走查(凭据不可得, 已如实登记); ② `useHasPosition` 无轮询(盘中持仓变动需刷新页面); ③ P2 生产部署仍与 T20 合并(见 T18 待办)。本 entry 未缀 `[commit <hash>]`(由控制器在提交后补)。
+
 ### chore(wb)-工作台 v2 任务18: 退役行情页/盘口页(删 2 文件) + baseline 清理 + App.tsx 注释订正
 
 - **删除(2 文件, `git rm`)** —— `frontend/src/pages/Quote.tsx`(行情页, 1069 行) + `frontend/src/pages/L2Orderbook.tsx`(盘口页, 295 行)。二者已被工作台取代: Task 2 已把 `/forecast`、`/quote`、`/quote/:symbol`、`/l2` 四条路由改成 `LegacyForecastRedirect`/`LegacyL2Redirect`, K线图(`KlineChart`)被工作台带2 复用, L2 正文挪进「盘口资金」标签 ⇒ 两页**已无任何 live 引用**(`grep -rn "pages/Quote|L2Orderbook|QuotePage|L2OrderbookPage" frontend/src frontend/packages` 仅剩自身定义 + 两条说明性注释; `grep "from ['\"].*Quote|from ['\"].*L2Orderbook"` 零命中)。

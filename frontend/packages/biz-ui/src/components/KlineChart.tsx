@@ -28,7 +28,7 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 
-import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary, type StockColors } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
 
 import {
@@ -42,7 +42,12 @@ import {
 /** 资金柱数据(对接后端 fund_flow 字段). 红涨绿跌 + 主净分色. */
 export interface FundFlowBar {
   date: string
-  /** 明盘净额 (东财大单/特大单, 元) */
+  /**
+   * 明盘净额 (单笔 >30 万大单, 元) —— **后端真实字段名**(`/klines/{s}/summary`.fund_flow.ming_net,
+   * 见 `src/web/api/klines.py`)。历史逐日为 null(big_order_flow 仅当日), 显式无数据。
+   */
+  ming_net?: number | null
+  /** 明盘净额的旧别名: 早期本类型误写成 `open_net`(后端从不下发) ⇒ 恒 0。保留兼容既有调用方。 */
   open_net?: number | null
   /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
   dark_net?: number | null
@@ -62,6 +67,57 @@ export interface KlineItem {
 export interface KlinesResponse {
   klines: KlineItem[]
   source?: string
+}
+
+/**
+ * 数值收敛: 非 number(NaN/字符串/null/undefined)一律返回 null, 不静默当 0。
+ * L3 资金柱用它区分"字段缺失(→ 明盘 0, 只剩暗盘)"与"字段为真实数值"。
+ */
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/** 日线级 K 线周期(日期粒度) —— 与组件内 `DAY_BUCKETS` 同口径(此处独立声明, 供纯函数用)。 */
+const DAY_BUCKETS_PURE: readonly KlineInterval[] = ['1d', '1w', '1mth']
+
+/** 日期 → LWC 时间(秒). 与组件内 `toChartTime` 逐字节同口径(抽出来单独给纯函数用)。 */
+export function fundBarTime(date: string, intv: KlineInterval): number {
+  if (DAY_BUCKETS_PURE.includes(intv)) {
+    const t = new Date(date.substring(0, 10) + 'T00:00:00Z').getTime() / 1000
+    return Number.isFinite(t) ? t : 0
+  }
+  const t = new Date(date.replace(' ', 'T')).getTime() / 1000
+  return Number.isFinite(t) ? t : 0
+}
+
+/**
+ * L3 资金柱单点(纯函数, T19 从渲染 effect 抽出以便单测)。
+ *
+ * **明盘字段名是 `ming_net`**(后端 `/klines/{s}/summary`.fund_flow 的真实键, 见 `src/web/api/klines.py`);
+ * 早期本组件误读 `open_net` ⇒ 明盘分量恒 0、资金柱只剩暗盘。此函数优先读 `ming_net`,
+ * `open_net` 仅作旧调用方兼容兜底。
+ *
+ * 返回 `{time, value(元, = 明盘 + 暗盘), color}`:
+ *  - 有暗盘分量 → 暗盘色(实心 up/down);
+ *  - 无暗盘但有明盘 → 明盘色(55% 透明度 up/down);
+ *  - 两者皆无 → `nodata` 中性色, value 为 0。
+ */
+export function fundBarPoint(
+  bar: FundFlowBar,
+  interval: KlineInterval,
+  sc: StockColors,
+  nodataColor: string,
+): { time: Time; value: number; color: string } {
+  const ming = numOrNull(bar.ming_net) ?? numOrNull(bar.open_net) ?? 0
+  const dark = numOrNull(bar.dark_net) ?? 0
+  const net = ming + dark
+  let color = nodataColor
+  if (dark !== 0) {
+    color = dark > 0 ? sc.up : sc.down
+  } else if (ming !== 0) {
+    color = ming > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
+  }
+  return { time: fundBarTime(bar.date, interval) as Time, value: net, color }
 }
 
 export type KlineInterval = '1m' | '5m' | '15m' | '30m' | '60m' | '1d' | '1w' | '1mth'
@@ -592,20 +648,9 @@ export default function KlineChart(props: {
       const fs = fundSeriesRef.current
       if (fs) {
         if (showCapital && subchart === 'vol' && props.fundFlow && props.fundFlow.length > 0) {
-          fs.setData(
-            props.fundFlow.map((bar) => {
-              const open = bar.open_net ?? 0
-              const dark = bar.dark_net ?? 0
-              const net = open + dark
-              let color = readChartTheme().nodata
-              if (dark !== null && dark !== undefined && dark !== 0) {
-                color = dark > 0 ? sc.up : sc.down
-              } else if (open !== null && open !== undefined && open !== 0) {
-                color = open > 0 ? withAlpha(sc.up, 0.55) : withAlpha(sc.down, 0.55)
-              }
-              return { time: toChartTime(bar.date, interval), value: net, color }
-            }),
-          )
+          // 净额与分色由纯函数算(T19 抽出以便单测: 明盘字段名 `ming_net` 曾误读 `open_net`)。
+          const theme = readChartTheme()
+          fs.setData(props.fundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
           fs.setData([])

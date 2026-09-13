@@ -229,6 +229,12 @@ export interface HeaderBandProps {
   market?: string
   type?: WorkbenchType
   hasPosition?: boolean
+  /**
+   * 持仓态未知(T19): 真实持仓判定源在途/失败时由页面传 `true`。此时 `hasPosition` 的 `false`
+   * **不代表"未持仓"**, 只是"按未持仓口径算评分"; 本带据此在建议条旁显式标注「持仓态未知」,
+   * 不把未知说成未持仓。
+   */
+  positionUnknown?: boolean
   onTypeChange?: (t: WorkbenchType) => void
   onGotoTab?: (tab: WorkbenchTab) => void
   /**
@@ -243,6 +249,7 @@ export default function HeaderBand({
   market = 'CN',
   type = 'stock',
   hasPosition = false,
+  positionUnknown = false,
   onTypeChange,
   onGotoTab,
   onRefresh,
@@ -404,19 +411,31 @@ export default function HeaderBand({
       ) : null}
 
       {suggestion ? (
-        <button
-          type="button"
-          onClick={() => onGotoTab?.('suggest')}
-          className="mt-1.5 flex w-full items-center gap-2 rounded border border-border/60 px-2 py-1 text-left hover:bg-accent/40"
-        >
-          <TechnicalBadge
-            label={`建议·${suggestion.action_label}`}
-            tone={technicalToneFromSuggestionAction(suggestion.action, suggestion.action_label)}
-            size="sm"
-          />
-          <span className="font-mono text-[11px] text-muted-foreground">评分 {scoreText}</span>
-          <span className="truncate text-[11px]">{suggestion.signal}</span>
-        </button>
+        <div className="mt-1.5 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onGotoTab?.('suggest')}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded border border-border/60 px-2 py-1 text-left hover:bg-accent/40"
+          >
+            <TechnicalBadge
+              label={`建议·${suggestion.action_label}`}
+              tone={technicalToneFromSuggestionAction(suggestion.action, suggestion.action_label)}
+              size="sm"
+            />
+            <span className="font-mono text-[11px] text-muted-foreground">评分 {scoreText}</span>
+            <span className="truncate text-[11px]">{suggestion.signal}</span>
+          </button>
+          {/* T19: 持仓态未知时显式标注 —— 评分按**未持仓**口径算, 不把"未知"说成"未持仓"。 */}
+          {positionUnknown ? (
+            <span
+              data-testid="position-unknown"
+              title="持仓态未知: 持仓判定源在途或取数失败, 评分暂按未持仓口径"
+              className="shrink-0 text-[10px] text-muted-foreground/80"
+            >
+              持仓态未知
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

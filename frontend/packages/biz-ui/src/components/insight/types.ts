@@ -127,7 +127,13 @@ export interface KlineSummaryResponse {
 }
 // 镜像 InteractiveKline 的新图层类型, 避免循环 import (组件已 export 同名 type)
 export type GsSignalLike = { date: string; side: 'G' | 'S'; confirmed: boolean; price: number }
-export type FundFlowBarLike = { date: string; open_net?: number | null; dark_net?: number | null }
+// `ming_net` 是后端真实字段(明盘); `open_net` 是早期误写的别名, 保留兼容(见 KlineChart FundFlowBar)。
+export type FundFlowBarLike = {
+  date: string
+  ming_net?: number | null
+  open_net?: number | null
+  dark_net?: number | null
+}
 export type KlineEventLike = { date: string; kind: string; label?: string }
 
 export interface MiniKlineResponse {

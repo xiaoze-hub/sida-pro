@@ -141,7 +141,9 @@ export type GsSignalPoint = {
 /** 资金柱: 明盘/暗盘日净额 (元). 缺失=无数据 */
 export type FundFlowBar = {
   date: string
-  /** 明盘净额 (东财大单/特大单, 元) */
+  /** 明盘净额 (单笔 >30 万大单, 元) —— **后端真实字段名**(`/klines/{s}/summary`.fund_flow.ming_net) */
+  ming_net?: number | null
+  /** 明盘净额的旧别名: 早期本类型误写成 `open_net`(后端从不下发) ⇒ 恒 0。保留兼容既有调用方。 */
   open_net?: number | null
   /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
   dark_net?: number | null
@@ -789,9 +791,12 @@ export default function InteractiveKline(props: {
       const capitalData = series.klines
         .map((k) => {
           const f = flowByDate.get(k.date)
-          if (!f || (f.open_net == null && f.dark_net == null)) return null
+          // 2026-09-13 T19 修: 后端真实字段是 `ming_net`(明盘), 早期只读 `open_net` ⇒ 明盘恒 0。
+          // 优先读 ming_net, 保留 open_net 兼容旧调用方(与 KlineChart 同修)。
+          const ming = typeof f?.ming_net === 'number' ? f.ming_net : null
+          if (!f || (ming == null && f.open_net == null && f.dark_net == null)) return null
           // 明盘净额 (主柱)
-          const on = typeof f.open_net === 'number' ? f.open_net : null
+          const on = ming ?? (typeof f.open_net === 'number' ? f.open_net : null)
           // 暗盘净额 (副柱, 画在明盘基础上 0.3 倍偏移示意)
           const dn = typeof f.dark_net === 'number' ? f.dark_net : null
           const value = on ?? dn ?? 0
