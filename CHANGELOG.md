@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### style(wb)-工作台 v2 任务15 自审: `Section.count` 注释与实现对齐(「条」→「份」)
+
+- **起因(`2539bba` 的收尾自审)** —— `ResearchTab.tsx` 的 `Section` 组件注释写的是「省略或 `<= 0` 时不渲染『共 N 条』」, 而实现渲染的是「共 N 份」(本标签只有报告用该措辞: 三个 agent 各至多 1 份)。后人按注释找「共 N 条」会 grep 不到。顺带把「深度段的历史对比条数不套用该措辞」写进注释(它只在空态说明里作事实陈述, 不上段头)。
+- **改动** —— **仅 `ResearchTab.tsx` 的注释, 零行为改动**(渲染文案、断言、DOM 一字未改)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files)。本 entry 同样未缀 `[commit <hash>]`。
+
 ### feat(wb)-工作台 v2 任务15: 标签「研究」(AI 报告 + 深度分析, 全复用恢复组件)
 
 - **新增(2 文件)** —— `frontend/src/pages/workbench/tabs/ResearchTab.tsx`(默认导出 `ResearchTab({ symbol, market, stockName?, hasPosition? })`) + `frontend/tests/components/research-tab.test.tsx`(8 例)。**未接线**(`StockWorkbench.tsx` 的 `TabPanel` 仍是「建设中」, Task 17 才换成真实标签), 故本 commit **不改任何现存页面行为** —— 与 T9–T14 同形态。

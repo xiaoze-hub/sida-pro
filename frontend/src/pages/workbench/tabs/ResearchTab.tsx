@@ -92,7 +92,11 @@ function Section({
   id: string
   title: string
   hint?: string
-  /** 条数; 省略或 `<= 0` 时不渲染「共 N 条」(首拉在途与确无内容不混同)。 */
+  /**
+   * 份数(本标签只有「报告」用: 三个 agent 各至多 1 份); 省略或 `<= 0` 时不渲染
+   * 「共 N 份」(首拉在途与确无内容不混同; 深度段的历史对比条数不套用该措辞, 只在空态
+   * 说明里作事实陈述)。
+   */
   count?: number
   children: ReactNode
 }) {
