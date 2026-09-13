@@ -17,8 +17,9 @@ const day = {
       stocks: [{ symbol: 'D', name: 'DD', candle: null, pct: 10.0, first_time: '13:02' }],
     },
   ],
-  blown: [{ symbol: 'Z', name: 'ZZ', prev_boards: 3 }],
-  broken: [{ symbol: 'B', name: 'BB', prev_boards: null }],
+  // LadderMark extends LadderStock ⇒ `candle` 必填(此前夹具漏了, 是不合契约的假夹具)。
+  blown: [{ symbol: 'Z', name: 'ZZ', candle: { o: 5, h: 6, l: 4.5, c: 5.5 }, prev_boards: 3 }],
+  broken: [{ symbol: 'B', name: 'BB', candle: null, prev_boards: null }],
 }
 
 describe('LadderBoard', () => {

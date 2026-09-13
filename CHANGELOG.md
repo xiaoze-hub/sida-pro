@@ -7,6 +7,13 @@
 
 ## 2026-09-13
 
+### chore(web)-v0.6.0 遗留清理第 2 批(工程债): `tests/` 纳入类型与 lint 门禁
+- **遗留⑧(测试不在门禁内)** —— 此前 `tsconfig.json` 的 `include` 只有 `src`/`packages/*/src`、`eslint.config.js` 的 `files` 也不含 `tests/`, **54 个测试文件的类型错误与 lint 问题一律门禁抓不到**(T16 已实证: 往测试塞必然类型错误，`tsc -b`/`eslint` 仍全绿)。
+- **修法(不耦合 app 构建)**: 新增 `frontend/tsconfig.tests.json`(`extends` 主配置; `include` 加 `tests`; `lib` 提到 ES2022 以支持 `.at()`; `types: [node, vite/client, @testing-library/jest-dom]`)并加脚本 **`pnpm typecheck:tests`** —— **不动** `tsc -b` 的 `include`, 所以 app 的 `build` 不会被测试类型错误阻塞(测试坏了不该挡生产发版)。`eslint.config.js` 的 `files` 加 `tests/**/*.{ts,tsx}`。
+- **修出的 3 类真实问题**(首跑 10 错 → 修完 0 错): ① 6 处 `Array.prototype.at()` 被 ES2020 lib 判错(测试配置提 ES2022 解决); ② `tests/lib/indicators-parity.test.ts` 用 `node:fs` 但未装 `@types/node` ⇒ **新增 devDependency `@types/node`**; ③ **`ladder-board.test.tsx` 夹具漏了必填 `candle`**(`LadderMark extends LadderStock`, 该字段必填) —— 是个**不合契约的假夹具**, 补上。
+- **门禁**: `pnpm typecheck:tests` 0 错; `npx eslint .` 覆盖 54 个测试文件 0 错(先前这些文件被 eslint 直接忽略); `tsc -b`(app) 0 错; vitest **361/361**。
+- [commit 见下方第 2 批提交]
+
 ### fix(wb)-v0.6.0 遗留清理第 1 批(低风险工程债): 预测页预选标的 + 持仓态轮询 + 板块 chips 截断 + 删死文件
 - **遗留②(预测页不预选)** —— `ForecastPage` 新增可选 `initialSymbol`(默认空对象 ⇒ `<ForecastPage />` 仍合法, 既有 `Quote.tsx` 调用不变); `ForecastTab` 把工作台 `symbol` 作 `initialSymbol` 透传, 进来即预填(仍可在页内改, 仍要手动点「开始预测」); 口径行改为「已按工作台标的预填代码」。T16 的 `@ts-expect-error` 钉改成"只接受 `initialSymbol`、`symbol` 仍是错属性名"(钉仍在, 且新增正/负断言各一)。
 - **遗留①(持仓态不轮询)** —— `StockWorkbench.useHasPosition` 由一次性取数改为 **60s 轮询**(`POSITION_POLL_MS`), 盘中买卖后不必整页刷新; 失败**保留上次值**(stale-on-error), 首次即失败仍显 `undefined`(未知), 三态语义与「持仓态未知」标注不变; 换标的/关闸门清值+卸载清定时器不变。
