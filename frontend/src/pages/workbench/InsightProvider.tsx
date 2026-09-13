@@ -70,7 +70,15 @@ export function InsightProvider({
   // 签名是原始字符串: 内容不变则 Set 引用不变; `undefined`(全开)与 `[]`(全关)用 `null` 区分。
   const keysSignature = keys === undefined ? null : keys.join(',')
   const enabledKeys = useMemo<ReadonlySet<ResourceKey> | undefined>(
-    () => (keysSignature === null ? undefined : new Set(keysSignature.split(',') as ResourceKey[])),
+    // Task 10 复审修复: 空数组的签名是 `''`(非 `null`)——**不能**走 `''.split(',')`, 那会得到
+    // `['']`(size 1)⇒ `hasAnyResourceEnabled` 判真 ⇒ 20s 自动刷新 interval 照启动(与
+    // "空集 = 全关"契约相悖)。`''` 必须显式映射成**真空集**(size 0), 只有 `null` 才是全开。
+    () =>
+      keysSignature === null
+        ? undefined
+        : keysSignature === ''
+          ? new Set<ResourceKey>()
+          : new Set(keysSignature.split(',') as ResourceKey[]),
     [keysSignature],
   )
   const data = useInsightData(props, enabledKeys)

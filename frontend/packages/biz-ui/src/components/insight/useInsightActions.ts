@@ -24,6 +24,11 @@ export function useInsightActions(
 // **卸载时不清** —— 离开标签后最长 2 分钟仍在打 `/suggestions`。改为显式持有句柄, 卸载/被取代时都清。
 const autoPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 const autoPollStopRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+// Task 10 复审修复: 卸载守卫。`autoPollRef`/`autoPollStopRef` 只在**卸载清理跑之前**被赋值才有效;
+// 而 `triggerAutoAiSuggestion` 的 `await stocksApi.triggerAgent(...)` 期间宿主可能已卸载(切标签),
+// 此时卸载清理早已跑过(refs 为 null), 续体若继续装 interval/stop-timer 就**没有任何东西会清**
+// (最长 ~125s 空转打 `/suggestions`, 且是卸载后才发生的泄漏)。故每个 await 之后先查挂载态。
+const mountedRef = useRef(true)
 const stopAutoPolling = useCallback(() => {
   if (autoPollRef.current !== null) { clearInterval(autoPollRef.current); autoPollRef.current = null }
   if (autoPollStopRef.current !== null) { clearTimeout(autoPollStopRef.current); autoPollStopRef.current = null }
@@ -277,6 +282,9 @@ const triggerAutoAiSuggestion = useCallback(async () => {
       bypass_market_hours: true,
     })
     // 异步模式：triggerAgent 立即返回，轮询等待建议生成
+    // Task 10 复审修复: await 期间组件可能已卸载 —— 此时续体**不得**再装轮询/自停定时器
+    // (卸载清理已跑过, 没人会清这轮 interval), 也不再做 post-await setState。
+    if (!mountedRef.current) return
     stopAutoPolling() // 被新一轮触发取代时先清掉上一轮(防叠加)
     const before = Date.now()
     autoPollRef.current = setInterval(async () => {
@@ -285,9 +293,11 @@ const triggerAutoAiSuggestion = useCallback(async () => {
     }, 5_000)
     await loadSuggestions()
     // 到点自停(句柄记在 ref, 卸载/被取代时由 stopAutoPolling 一并清)
+    if (!mountedRef.current) return
     autoPollStopRef.current = setTimeout(() => stopAutoPolling(), 125_000)
     return
   } catch (e) {
+    if (!mountedRef.current) return
     toast(
       e instanceof Error ? e.message : '自动 AI 建议触发失败，可点击「一键设提醒」重试',
       'error'
@@ -307,7 +317,16 @@ useEffect(() => {
 }, [props.open, symbol, market, enabledKeys, triggerAutoAiSuggestion])
 
 // Task 10 修复: 卸载(切走标签)时清掉 5s 轮询, 不留后台请求。
-useEffect(() => () => stopAutoPolling(), [stopAutoPolling])
+// Task 10 复审修复: 同时把 `mountedRef` 置 false —— 让 `triggerAutoAiSuggestion` 在 `await`
+// 期间被卸载时(续体晚于本清理)能自查并放弃装轮询/自停定时器。body 里重置为 true 以兼容
+// React 18 StrictMode 的「挂载→清理→再挂载」双跑(否则第二次挂载后被误判为已卸载)。
+useEffect(() => {
+  mountedRef.current = true
+  return () => {
+    mountedRef.current = false
+    stopAutoPolling()
+  }
+}, [stopAutoPolling])
 
 
   return {

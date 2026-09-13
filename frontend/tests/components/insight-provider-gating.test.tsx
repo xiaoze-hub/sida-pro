@@ -15,11 +15,18 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *   在 900ms(> 700ms 触发窗口)后仍**零调用**;
  * ③ **默认路径(不传 `keys`)行为不变** —— 全量端点照旧 + 自动作业照旧触发(证明②的门是
  *   `keys` 造成的, 而非别的原因把触发链路打死了);
- * ④ **`keys: []` 全关 = 零请求, 且 20s 自动刷新不启动**; 以及**卸载后 5s 轮询停止**
- *   (修复前该 interval 只在 125s 的 setTimeout 里清)。
+ * ④ **`keys: []` 全关 = 零请求, 且 20s 自动刷新 interval 根本不装**; 以及**卸载后 5s 轮询停止**
+ *   (修复前该 interval 只在 125s 的 setTimeout 里清);
+ * ⑤ **复审修复: `triggerAgent` 在途时卸载 ⇒ 续体不装轮询**(修复前 `await` 之后仍会
+ *   `setInterval` + 立即 `loadSuggestions()`, 且没有任何东西会清它, 最长 ~125s 空转)。
  *
  * 说明: mock 的是**网络层**(`@panwatch/api`), Provider/两个 hook 走真实代码;
  * 上下文消费者用真组件 `Probe`(读 `useInsight()`), 无 Provider 时 `useInsight()` 会 throw。
+ *
+ * ④(`keys: []`)的「自动刷新不启动」判据用 `vi.spyOn(globalThis, 'setInterval')` 直接看 interval
+ * **有没有被装**(本树里唯一的 interval 就是 `useInsightData` 的 20s 自动刷新) —— 只看
+ * 「有没有发请求」是**证不出来的**: 空集门控会把 tick 里的每个任务组都过滤掉, 于是
+ * interval 装了也照样零请求(这正是复审 Finding 1 逃过旧断言的原因)。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -182,8 +189,11 @@ describe('Task 10 门控: 默认(不传 keys)= 全开, 旧行为不变', () => {
 })
 
 describe('Task 10 门控: keys=[] 全关', () => {
-  it('一个请求都不发, 且 20s 自动刷新不启动', async () => {
+  it('一个请求都不发, 且 20s 自动刷新 interval 根本不装', async () => {
     vi.useFakeTimers()
+    // 复审 Finding 1 的硬判据: 修复前 `[]` 的签名 `''` 被 `''.split(',')` 变成 `['']`(size 1)
+    // ⇒ `hasAnyResourceEnabled` 判真 ⇒ 下面这一次 20000ms 的 setInterval 会被装上。
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
     render(<Harness keys={[]} />)
     expect(probeEl()).toBeTruthy()
 
@@ -200,6 +210,10 @@ describe('Task 10 门控: keys=[] 全关', () => {
       expect(fn, label).not.toHaveBeenCalled()
     }
     expect(mocks.triggerAgent).not.toHaveBeenCalled()
+
+    // 自动刷新 interval 根本没装(真组件树里唯一的 interval 就是它; 空集 = 全关按契约不启动)
+    expect(setIntervalSpy).not.toHaveBeenCalled()
+    setIntervalSpy.mockRestore()
   })
 })
 
@@ -225,6 +239,40 @@ describe('Task 10 修复: 自动 AI 建议的 5s 轮询在卸载时停止', () =
     const afterUnmount = mocks.suggestions.mock.calls.length
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
     expect(mocks.suggestions.mock.calls.length).toBe(afterUnmount)
+  })
+})
+
+describe('Task 10 复审修复: triggerAgent 在途时卸载', () => {
+  it('await 期间卸载 ⇒ 续体不装轮询、不再发 /suggestions(修复前会空转到 125s)', async () => {
+    vi.useFakeTimers()
+    // `triggerAgent` 挂住不 resolve —— 模拟"后端 AI 作业提交请求在途"
+    let releaseTrigger!: (value: unknown) => void
+    mocks.triggerAgent.mockImplementation(
+      () => new Promise((resolve) => { releaseTrigger = resolve }),
+    )
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+
+    const view = render(<Harness />)
+    expect(probeEl()).toBeTruthy()
+
+    // 挂载副作用落地(holding 加载完成) → 跨过 700ms 触发窗口: 此刻 triggerAgent 在途
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    expect(mocks.triggerAgent).toHaveBeenCalledTimes(1)
+    const intervalsBeforeUnmount = setIntervalSpy.mock.calls.length
+
+    // 卸载发生在 await 续体之前(切走标签): 卸载清理已跑过, refs 归 null
+    view.unmount()
+    const afterUnmount = mocks.suggestions.mock.calls.length
+
+    // 放行 triggerAgent: 修复前续体会在此刻 setInterval(…, 5000) + 立即 loadSuggestions(),
+    // 且这轮 interval 没有任何清理者 ⇒ 卸载后仍每 5s 打 /suggestions 直到 125s。
+    await act(async () => { releaseTrigger({}) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+
+    expect(mocks.suggestions.mock.calls.length).toBe(afterUnmount)
+    expect(setIntervalSpy.mock.calls.length).toBe(intervalsBeforeUnmount)
+    setIntervalSpy.mockRestore()
   })
 })
 
