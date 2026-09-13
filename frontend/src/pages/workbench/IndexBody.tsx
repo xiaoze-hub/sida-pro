@@ -115,7 +115,12 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
     setLoading(true)
     setError('')
     try {
-      const d = await fetchAPI<IndexDetail>(`/market/indices/${symbol}`)
+      // `cacheMode: 'reload'`(生产走查实测缺陷): `fetchAPI` 默认有 **30s GET 缓存**
+      // (`packages/api/src/client.ts:67` `_CACHE_TTL_DEFAULT`), 不传 reload 时点带1「刷新」
+      // 虽然 `load()` 确实重跑了(遗留⑦ 的 token 生效), 但拿到的是**缓存响应** ⇒ 30s 内刷新
+      // 等于什么都没发生。兄弟组件 `BoardBody` 的三条取数早就传了 `reload`, 两个分支不该不一致。
+      // 实测证据: TTL 内点击 → 网络计数 0; 过 TTL 后点击 → 计数 1(同一按钮、同一实例)。
+      const d = await fetchAPI<IndexDetail>(`/market/indices/${symbol}`, { cacheMode: 'reload' })
       if (seq !== seqRef.current) return
       if (d?.error) setError(d.error)
       else setData(d)
@@ -127,8 +132,8 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
       // 过期号不清 loading(交给最新那次), 否则新请求还在飞就提前显示"加载完成"
       if (seq === seqRef.current) setLoading(false)
     }
-    // 大盘资金流(独立加载, 失败静默) —— 过期号不许写 state
-    fetchAPI<MarketFlow>('/market-data/market-capital-flow')
+    // 大盘资金流(独立加载, 失败静默) —— 过期号不许写 state; 同样要 reload(否则刷新拿缓存)
+    fetchAPI<MarketFlow>('/market-data/market-capital-flow', { cacheMode: 'reload' })
       .then((m) => { if (seq === seqRef.current) setMarketFlow(m) })
       .catch(() => {})
   }, [symbol])

@@ -168,6 +168,23 @@ describe('IndexBody refreshToken(遗留⑦, 真组件)', () => {
     expect(screen.getByText('3999.99')).toBeTruthy()
     expect(screen.queryByText('加载中...')).toBeNull()
   })
+
+  it('取数必须带 cacheMode:"reload"(生产走查缺陷: 默认 30s GET 缓存会吞掉手动刷新)', async () => {
+    // `fetchAPI` 默认有 30s GET 缓存(`packages/api/src/client.ts:67`)。不传 reload 时:
+    // 点带1「刷新」→ `refreshToken` 变 → `load()` **确实重跑**(上面的用例已证), 但拿到的是
+    // **缓存响应** ⇒ 30s 内刷新等于什么都没发生。生产实测: TTL 内点击网络计数 0, 过 TTL 后计数 1。
+    // 兄弟组件 `BoardBody` 早就传了 reload, 两个分支不该不一致 —— 故在此钉住。
+    render(<IndexBody symbol="000001" refreshToken={0} />)
+    await waitFor(() => expect(calls('/market/indices/')).toBe(1))
+    const opt = (frag: string) =>
+      mocks.fetchAPI.mock.calls.find((c) => String(c[0]).includes(frag))?.[1] as
+        | { cacheMode?: string }
+        | undefined
+    expect(opt('/market/indices/')?.cacheMode).toBe('reload')
+    // 附属的大盘资金流同样要 reload(否则刷新拿缓存)
+    await waitFor(() => expect(calls('market-capital-flow')).toBe(1))
+    expect(opt('market-capital-flow')?.cacheMode).toBe('reload')
+  })
 })
 
 describe('BoardBody refreshToken(遗留⑦, 真组件)', () => {
