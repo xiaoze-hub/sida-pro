@@ -4,23 +4,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 /**
- * 工作台三带骨架(Task 6, spec §1.2/§1.3)。
+ * 工作台三带骨架(Task 6, spec §1.2/§1.3) + 指数/板块正文接线(Task 7)。
  *
- * 守五件事(都是本任务的绑定条款):
+ * 守六件事(都是绑定条款):
  *  ① 个股(默认 `type=stock`): 带1 `HeaderBand` → 带2 主图 `KlineChart`(当日线/120 天/高 420) +
  *     右栏 `QuickRail`(外壳 `w-[320px]`) → 带3 `TabBar`(6 键, 顺序取 `WORKBENCH_TABS`)+ `TabPanel`;
  *  ② `type !== 'stock'`: 只留带1 + `IndexBoardHost`, **不渲染**主图/右栏/6 标签;
- *  ③ 类型/标签切换**只改 query**(`?type=`/`?tab=`)—— 不跳页, 且保留另一个键(切类型不丢标签);
- *  ④ 无 symbol → 「缺少代码」兜底;
- *  ⑤ 外壳沿用既有容器惯例 `mx-auto max-w-[1500px] p-3`。
+ *  ③ `type=index` → `IndexBody symbol`; `type=board` → `BoardBody code`(Task 7 接线);
+ *  ④ 类型/标签切换**只改 query**(`?type=`/`?tab=`)—— 不跳页, 且保留另一个键(切类型不丢标签);
+ *  ⑤ 无 symbol → 「缺少代码」兜底;
+ *  ⑥ 外壳沿用既有容器惯例 `mx-auto max-w-[1500px] p-3`。
  *
- * 三个子组件(含 echarts 的 KlineChart、取数的 HeaderBand/QuickRail)在本例全部 mock ——
- * 本任务守的是**骨架与接线**, 它们的内部取数/渲染由各自单测守。真数据: 本页零取数。
+ * 四个子组件(含 echarts 的 KlineChart、取数的 HeaderBand/QuickRail、Task 7 的 IndexBody/BoardBody)
+ * 在本例全部 mock —— 本任务守的是**骨架与接线**, 它们的内部取数/渲染由各自单测守。真数据: 本页零取数。
  */
 vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
   default: (p: { symbol: string; market: string; height?: number; initialInterval?: string; initialDays?: number }) => (
     <div data-testid="kline">{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
   ),
+}))
+
+// Task 7: 指数/板块正文(取数组件, 测试内 mock; 断言"类型 → 正文 + 入参"接线)
+vi.mock('@/pages/workbench/IndexBody', () => ({
+  default: (p: { symbol: string }) => <div data-testid="index-body">{`index-body:${p.symbol}`}</div>,
+}))
+
+vi.mock('@panwatch/biz-ui/components/workbench/BoardBody', () => ({
+  default: (p: { code: string }) => <div data-testid="board-body">{`board-body:${p.code}`}</div>,
 }))
 
 vi.mock('@panwatch/biz-ui/components/workbench/HeaderBand', () => ({
@@ -117,22 +127,26 @@ describe('StockWorkbench 三带骨架', () => {
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     expect(screen.getByText(/「盘口资金」建设中/)).toBeTruthy()
     // 指数/板块正文不得出现
-    expect(screen.queryByText(/正文建设中/)).toBeNull()
+    expect(screen.queryByTestId('index-body')).toBeNull()
+    expect(screen.queryByTestId('board-body')).toBeNull()
   })
 
-  it('?type=index: 只留带1 + IndexBoardHost(无主图/无右栏/无 6 标签)', () => {
+  it('?type=index: 只留带1 + IndexBody(无主图/无右栏/无 6 标签)', () => {
     renderAt('/stocks/000001?type=index')
     expect(screen.getByTestId('band1').textContent).toContain('band1:000001:CN:index')
-    expect(screen.getByText(/指数正文建设中/)).toBeTruthy()
+    // Task 7 接线: 指数正文拿 symbol
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
+    expect(screen.queryByTestId('board-body')).toBeNull()
     expect(screen.queryByTestId('kline')).toBeNull()
     expect(screen.queryByTestId('rail')).toBeNull()
     expect(screen.queryAllByRole('tab')).toHaveLength(0)
   })
 
-  it('?type=board: 板块正文占位', () => {
+  it('?type=board: 板块正文拿 code', () => {
     renderAt('/stocks/880001?type=board')
     expect(screen.getByTestId('band1').textContent).toContain('band1:880001:CN:board')
-    expect(screen.getByText(/板块正文建设中/)).toBeTruthy()
+    expect(screen.getByTestId('board-body').textContent).toBe('board-body:880001')
+    expect(screen.queryByTestId('index-body')).toBeNull()
     expect(screen.queryByTestId('kline')).toBeNull()
   })
 
@@ -167,7 +181,7 @@ describe('StockWorkbench 三带骨架', () => {
     fireEvent.click(screen.getByText('mock-to-index'))
     expect(search()).toContain('type=index')
     expect(search()).toContain('tab=news')
-    expect(screen.getByText(/指数正文建设中/)).toBeTruthy()
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
     expect(screen.queryByTestId('kline')).toBeNull()
   })
 

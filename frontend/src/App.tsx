@@ -18,9 +18,9 @@ const StocksPage = lazy(() => import('@/pages/Stocks'))
 // App.tsx 不再直接挂载, 避免首屏多拉 6 个 chunk。
 const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
 const LoginPage = lazy(() => import('@/pages/Login'))
-// 个股工作台三合一(Task 2, 2026-09-13): IndexDetail/BoardDetail 的 lazy 绑定已摘除 ——
-// /index/:symbol、/boards/:blockCode 改走 LegacyIndexRedirect。页面文件保留在磁盘,
-// Task 7 抽 IndexBody/BoardBody 时由工作台直接 import。
+// 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情页的 lazy 绑定已摘除 ——
+// /index/:symbol、/boards/:blockCode 改走 LegacyIndexRedirect。正文已由 Task 7 抽成
+// IndexBody(src/pages/workbench) / BoardBody(biz-ui .../workbench) 供工作台复用, 原页已删。
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
 const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵

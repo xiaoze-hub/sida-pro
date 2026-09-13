@@ -2,6 +2,8 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
+import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
+import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import {
   normalizeType,
@@ -22,28 +24,25 @@ import {
  * 类型切换**不跳页**: `?type=` 只改本路由的 query(spec §1.3「工作台内切类型」); 标签同理走 `?tab=`。
  * 指数/板块在本路由内渲染 `IndexBoardHost`, **不渲染**右栏与 6 标签。
  *
- * **Ruling B 临时占位**(保证本任务单独可编译/可走查, 后续任务逐一替换):
- *  - `IndexBoardHost` —— 现渲染「指数/板块正文建设中」面板; Task 7 换成 `IndexBody`/`BoardBody`;
+ * **Ruling B**(保证本任务单独可编译/可走查, 后续任务逐一替换):
+ *  - `IndexBoardHost` —— Task 7 已换成真实 `IndexBody`/`BoardBody`(正文从 `IndexDetail`/`BoardDetail` 原样搬移);
  *  - `TabPanel`       —— 现渲染「{label} 建设中」; Task 17 换成 6 个真实标签组件。
  *  `TabBar` 是本任务的**正式**产物(6 键 + `?tab=` 深链), 非占位。
  *
- * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart` 内。
+ * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart`/`IndexBody`/`BoardBody` 内。
  */
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
 
 /**
- * 指数/板块正文宿主(**临时占位**, Task 7 替换为真实 `IndexBody`/`BoardBody`)。
- * `type === 'board'` 走板块正文(spec §1.3: 同一路由内切, 正文复用既有页).
+ * 指数/板块正文宿主(Task 7 换成真实正文)。
+ * `type === 'index'` 走指数正文(`IndexBody`, 取数/渲染来自 `IndexDetailPage`);
+ * `type === 'board'` 走板块正文(`BoardBody`, 来自 `BoardDetailPage`; 同路由内切, spec §1.3)。
+ * 两组件均按 spec §1.3 去掉了旧页骨架(返回/标题/刷新 —— 已并入带1 `HeaderBand`)。
  */
 function IndexBoardHost({ type, symbol }: { type: WorkbenchType; symbol: string }) {
-  return (
-    <div className="mt-3 rounded border border-border/60 p-4 text-[12px] text-muted-foreground">
-      {type === 'index' ? '指数' : '板块'}正文建设中
-      <span className="ml-2 font-mono text-[11px]">{symbol}</span>
-    </div>
-  )
+  return type === 'index' ? <IndexBody symbol={symbol} /> : <BoardBody code={symbol} />
 }
 
 /**
