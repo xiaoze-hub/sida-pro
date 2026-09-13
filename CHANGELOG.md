@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务16 自审: 错误兜底文案的 markdown 星号直出 + 头注引号失衡
+
+- **起因(`d30a2ac` 的收尾自审, 逐行读实现时发现的两处真缺陷)** —— ① `ForecastFallback` 里那句成因域文案写成 `此处**不作**"引擎未启动"的推断`, 而它渲染在**裸文本节点**里(markdown 不生效)⇒ 用户会在标签内兜底块上**看到两个星号**; ② `ForecastTab.tsx` 头注「形态差异」那段引号失衡(`断言屏上**不存在** \`InsightProvider 的取数端点调用**` —— 后半个加粗标记错位, 读起来像句法错误)。两处都只在**新增文件**内, 未影响其它文件。
+- **修复** —— ① 屏上文案去掉 `**`(`此处不作"引擎未启动"的推断`), 并**补断言** `expect(box.textContent).not.toContain('**')` 防复发(该断言读的是用户可见文本, 与实现正文精确对位); ② 头注那句改写为 `断言挂载期间真 @panwatch/api 零调用 —— 正是"没走 provider"的可观测后果`(**仅注释**)。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **329/329**(52 files, 与 `d30a2ac` 同数 —— 本 entry 只改文案与注释, 未增删用例)。本 entry 同样未缀 `[commit <hash>]`。
+
 ### feat(wb)-工作台 v2 任务16: 标签「预测」(惰性内嵌四模型页)
 
 - **新增(2 文件)** —— `frontend/src/pages/workbench/tabs/ForecastTab.tsx`(默认导出 `ForecastTab({ symbol, market })`) + `frontend/tests/components/forecast-tab.test.tsx`(5 例)。**未接线**(`StockWorkbench.tsx` 的 `TabPanel` 仍是「建设中」, Task 17 才换成真实标签), 故本 commit **不改任何现存页面行为** —— 与 T9–T15 同形态。

@@ -167,6 +167,8 @@ describe('Task 16 预测: chunk 失败就近兜底 + 重试真重发', () => {
     expect(box.textContent).toContain('预测页加载失败')
     expect(box.textContent).toContain('预测页代码块下载失败 / 页内渲染报错')
     expect(box.textContent).toContain('Failed to fetch dynamically imported module')
+    // 屏上文案不许带 markdown 星号(用户可见文本; 曾出现 `**不作**` 直出)
+    expect(box.textContent).not.toContain('**')
     // 错误没有冒出本标签(外层整页兜底哨兵未触发)
     expect(outerProbe).toBe(0)
     expect(screen.queryByText('页面遇到了问题')).toBeNull()

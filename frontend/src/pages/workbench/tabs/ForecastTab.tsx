@@ -39,8 +39,8 @@ import AppErrorBoundary from '@/components/ErrorBoundary'
  * 取数 + `data-testid="*-tab"` 根节点"; 本标签**不引用 `InsightProvider`**(控制器裁定, 见
  * progress「Task 16 Ruling」: 预测页自包含, 不走 provider 的 `ResourceKey` 资源面), 且预测页
  * 是既有生产页、**一字未改** ⇒ 不给它套额外的 `data-testid` 包裹层(那要动 `Forecast.tsx`)。
- * 本条口径的机器守卫见测试里的「形态差异」用例(断言屏上**不存在** `InsightProvider 的取数
- * 端点调用**: 正是"没走 provider"的可观测后果)。
+ * 本条口径的机器守卫见测试里的「形态差异」用例(断言挂载期间真 `@panwatch/api` 零调用
+ * —— 正是"没走 provider"的可观测后果)。
  *
  * 诚实加载 / 错误态(never fabricate):
  *  1. **加载中** —— `Suspense` fallback 是一行如实文案(带 true 的 spinner), **不**编造骨架屏
@@ -88,7 +88,7 @@ function ForecastFallback({ error, onRetry }: { error: Error; onRetry: () => voi
         <span className="font-medium">预测页加载失败</span>
       </div>
       <div className="mt-1 text-muted-foreground">
-        成因域: 预测页代码块下载失败 / 页内渲染报错(此处**不作**"引擎未启动"的推断 —— 该页有自己的引擎状态位)
+        成因域: 预测页代码块下载失败 / 页内渲染报错(此处不作"引擎未启动"的推断 —— 该页有自己的引擎状态位)
       </div>
       <div className="mt-1 font-mono text-[11px] text-muted-foreground break-all">{error.message || String(error)}</div>
       <button
