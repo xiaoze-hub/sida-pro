@@ -246,8 +246,9 @@ describe('Task 14 消息: 诚实空态(不编造)', () => {
 
     expect(await screen.findByText('暂无公告')).toBeTruthy()
     expect(await screen.findByText('暂无相关新闻')).toBeTruthy()
-    // 空态不得被读成"确无内容": 常驻说明必须在
+    // 空态不得被读成"确无内容": 常驻说明必须在(三种成因不可区分)
     expect(screen.getByTestId('news-empty-caveat').textContent).toContain('取数失败')
+    expect(screen.getByTestId('news-empty-caveat').textContent).toContain('首拉在途')
     // 首拉在途与确无内容不混同: 空列表不出条数
     expect(screen.queryByText(/共 \d+ 条/)).toBeNull()
     // 无编造条目/编造数值
@@ -261,9 +262,10 @@ describe('Task 14 消息: 诚实空态(不编造)', () => {
 
     expect(await screen.findByText('暂无公告')).toBeTruthy()
     expect(await screen.findByText('暂无相关新闻')).toBeTruthy()
-    // 失败被降级为空列表是**既有 hook 行为**(无失败位) —— 本标签用常驻说明如实披露, 不假装"确无内容"
+    // 失败被降级为空列表是**既有 hook 行为**(无失败位), 且首拉在途同为 [] —— 本标签用常驻说明
+    // 如实披露三种成因不可区分, 不假装"确无内容"
     const caveat = screen.getByTestId('news-empty-caveat')
-    expect(caveat.textContent).toBe('列表为空时「该时间窗内确无内容」与「取数失败」在此不可区分')
+    expect(caveat.textContent).toBe('列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分')
     expect(screen.queryByText(/共 \d+ 条/)).toBeNull()
   })
 })
