@@ -7,6 +7,14 @@
 
 ## 2026-09-13
 
+### feat(wb)-工作台 v2 任务4: DecisionCard 合并卡(三指标 + 共振去重为一张)
+- 新增 `frontend/packages/biz-ui/src/components/workbench/DecisionCard.tsx`: 工作台右栏**唯一**的「数智决策」卡, 落实 spec 去重表第 1 项(`decision_indicators` 与 `resonance_verdict` 同归 `rail.decision`)——旧行情页/旧详情模态的三指标块与共振块删除后, 两处读数只在这张卡里出现一次。
+- **纯组合、零新增取数**: 上半 `<DecisionPioneerCard symbol market />`(`/decision-pioneer/{s}` 30s 轮询 + `ActivitySparkline`), 中间 `border-t border-border/40` 细分隔线, 下半 `<ResonanceVerdictPanel symbol />`(`/resonance/symbol/{s}` 挂载即取 + 「AI 分析」按需 POST)。两个既有子组件的内部实现与各自取数/轮询策略**原样复用**, 本卡不重写、不重复请求(守 §一"同一数据点只出现一处"+§4.3 惰性要求)。
+- **结构与样式**: 外层复用工作台既有卡 chrome `rounded border border-border/60 p-2`, 标题「数智决策」; 内部分两个 `<section>`, 小标题「三指标读数」/「共振判定」(共振面板自身无标题, 该小标题是必要信息); 共振段包 `mt-3` 与 `DecisionPioneerCard` 自带 `mt-3` 对齐, 两段"标题→内容"间距一致。全部用设计令牌(`text-muted-foreground`/`border-border/40`), **零硬编码色**; 本文件零 `.toFixed(`(R6)。
+- **测试**: 新增 `frontend/tests/components/decision-card.test.tsx`(2 例, mock 两个子组件): ①一张卡内「数智决策」+ 两段小标题都在, 两个子组件各只渲染一次(去重契约), `symbol`/`market` 原样透传到对应组件; ②换 `symbol`/`market` 后仍是各一次挂载(无重复取数入口)。`npx vitest run tests/components/decision-card.test.tsx` → **2/2 passed**; 全量 **239/239**(40 files, 基线 237)。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK`。
+- **未做/遗留**: 本卡尚未被任何页面引用 —— 接线在工作台三带骨架(Task 6)的右栏速览卡容器(Task 5 `QuickRail`)里; 本次仅产出组件+测试, `StockWorkbench.tsx` 未动(其现有两处独立渲染由 Task 6 替换)。
+
 ### fix(wb)-工作台 v2 任务3 复审修复②: 个股专属 cell 在指数/板块**隐藏** + CN-only 数据面按 market 门控
 - **问题1**(Task 3 复审 Important / 绑定条款 "Stock-only bits hidden when `type !== 'stock'`"): 快照行只过滤了 `TOP_ROW_KEYS`, 指数/板块仍渲染 7 个个股专属格(`float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`(涨停价)/`limit_boards`(连板))为 `--` 占位 —— 视觉噪声, 且指数/板块根本无此概念。
 - **修复1**: `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx` 新增 `EQUITY_ONLY_KEYS` 与导出纯函数 `visibleSnapshotCells(q, more, l2, isStock=true)`(渲染侧分流: `!TOP_ROW_KEYS.has(key) && (isStock || !EQUITY_ONLY_KEYS.has(key))`), 组件改调它; **`mapSnapshot` 保持 type-agnostic 不变**(仍产出 16 cell, 纯函数语义未动)。个股 14 格不变; 指数/板块只留共享 7 格(今开/最高/最低/成交额/换手率/量比/总市值)。
