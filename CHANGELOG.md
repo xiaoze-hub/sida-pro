@@ -7,6 +7,12 @@
 
 ## 2026-09-13
 
+### feat(wb)-工作台 v2 任务2: 路由/侧栏/redirect 三合一
+- `frontend/src/App.tsx`: 新增 4 个旧路由 redirect 组件(`LegacyForecastRedirect`/`LegacyQuoteSymbolRedirect`/`LegacyL2Redirect`/`LegacyIndexRedirect`) → 旧行情页/盘口页/指数详情/板块详情统一跳 `/stocks/:symbol`(带 `?type=`/`?tab=l2`); `/forecast` `/quote` `/quote/:symbol` `/l2` `/index/:symbol` `/boards/:blockCode` 六条路由改挂 redirect(不再挂 `QuotePage`/`L2OrderbookPage`/`IndexDetailPage`/`BoardDetailPage`), 旧书签/推送链接不断。
+- **类型归一**复用 Task 1 的 `normalizeType`(只认 index/board, 其余归 stock); 摘除 4 个页面的 lazy 绑定(页面文件保留在磁盘, Task 7 抽 `IndexBody`/`BoardBody` 时由工作台直接 import), 避免 `noUnusedLocals` 报错。注: `/boards/:blockCode` 的参数名与 `/index/:symbol` 不同, redirect 同时读 `symbol`/`blockCode` 确保板块代码不丢。
+- **侧栏/热键/底栏**: `navItems` 撤「盘口」项、「行情」改指 `/stocks/000001?type=index`(默认上证指数); `desktopNavGroups.market` 成员同步; `MOBILE_PRIMARY_TO` 与热键 `g m` 同步改指。
+- **门禁**: `npx tsc -b` / `npx eslint .` 双绿; `npx vitest run` 213/213 通过; `npx vite build` 通过且 `Quote`/`L2Orderbook`/`IndexDetail`/`BoardDetail` 四个 chunk 已不再产出(彻底脱离打包图)。
+
 ### docs-个股工作台 v2 三合一设计(spec)落档
 - 老板拍板: **行情页(/forecast)+盘口页(/l2)+旧个股详情(9 tab 模态) 并入个股工作台 `/stocks/:symbol`**, 工作台成个股唯一入口; 布局=**图为主 + 右栏平铺 + 下部单层标签**; 类型(个股/指数/板块)在**同一路由内切**; 旧详情**全量还原**(复用 git `b49263c` 的 `insight/` 组件); 同数据点**去重**只留一处。
 - 设计文档: `docs/个股工作台v2三合一设计_20260913.md`(含 三带结构/6标签落位/去重表/路由与入口变更/分批 P1-P3/验收)。

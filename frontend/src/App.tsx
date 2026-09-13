@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
-import { Routes, Route, NavLink, useLocation, useNavigate, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, ArrowLeftRight, LayoutGrid } from 'lucide-react'
+import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -18,17 +18,18 @@ const StocksPage = lazy(() => import('@/pages/Stocks'))
 // App.tsx 不再直接挂载, 避免首屏多拉 6 个 chunk。
 const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
 const LoginPage = lazy(() => import('@/pages/Login'))
-const IndexDetailPage = lazy(() => import('@/pages/IndexDetail'))
-const BoardDetailPage = lazy(() => import('@/pages/BoardDetail'))
+// 个股工作台三合一(Task 2, 2026-09-13): IndexDetail/BoardDetail 的 lazy 绑定已摘除 ——
+// /index/:symbol、/boards/:blockCode 改走 LegacyIndexRedirect。页面文件保留在磁盘,
+// Task 7 抽 IndexBody/BoardBody 时由工作台直接 import。
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
 const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
 const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
 const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
-// 设计稿 v2.0 §4.3 (2026-09-01): 行情三合一页 + 两个收纳枢纽页
-const QuotePage = lazy(() => import('@/pages/Quote'))
-const L2OrderbookPage = lazy(() => import('@/pages/L2Orderbook'))
+// 设计稿 v2.0 §4.3 (2026-09-01): 两个收纳枢纽页
+// 个股工作台三合一(Task 2, 2026-09-13): Quote/L2Orderbook 的 lazy 绑定已摘除 ——
+// 行情页/盘口页并入 /stocks/:symbol, 旧路由改走 LegacyForecastRedirect/LegacyL2Redirect。
 const SystemPage = lazy(() => import('@/pages/System'))
 const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
@@ -43,6 +44,7 @@ import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
 import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
+import { normalizeType } from '@/lib/workbench-tabs'
 import SourceHeartbeat from '@/components/SourceHeartbeat'
 import BrowserNotificationBridge from '@/components/BrowserNotificationBridge'
 import AccountMenu from '@/components/AccountMenu'
@@ -55,9 +57,9 @@ import { reportFrontendError } from '@/lib/error-report'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
-  // §4.3 行情三合一: /forecast 由「预测」升为「行情」入口
-  { to: '/forecast', icon: LineChart, label: '行情', perm: 'view_forecast' },
-  { to: '/l2', icon: ArrowLeftRight, label: '盘口', perm: 'view_forecast' },
+  // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
+  // 「行情」默认落上证指数(000001, type=index); 「盘口」项撤除(内容进工作台「盘口资金」标签)。
+  { to: '/stocks/000001?type=index', icon: LineChart, label: '行情', perm: 'view_forecast' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
   { to: '/heatmap', icon: LayoutGrid, label: '板块热力', perm: 'view_forecast' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
@@ -82,7 +84,7 @@ const navItems = [
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
 const desktopNavGroups = [
   { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
-  { key: 'market', label: '行情', items: navItems.filter(n => ['/forecast', '/l2', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', label: '行情', items: navItems.filter(n => ['/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
@@ -95,7 +97,7 @@ const desktopNavGroups = [
 // 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
 // 老书签 /alerts 仍经 LegacyTabRedirect 跳到 /notifications?tab=alerts)。
 // navItems 数组顺序保持不动, 桌面端平铺分组完全不变。
-const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/forecast', '/notifications']
+const MOBILE_PRIMARY_TO = ['/', '/portfolio', '/opportunities', '/stocks/000001?type=index', '/notifications']
 
 // ═══ demo 账号只读模式(2026-08-15): 从 JWT payload 解出 username/role, 按角色控制导航 ═══
 // 2026-09-12: claims 解析抽到 src/lib/jwt.ts 共用(情绪周期回填按钮也要按角色控制)。
@@ -122,6 +124,32 @@ const mobileMoreNavItems = navItems.filter(n => !MOBILE_PRIMARY_TO.includes(n.to
 function LegacyStocksRedirect() {
   const location = useLocation()
   return <Navigate to={`/portfolio${location.search}`} replace />
+}
+
+// ═══ 个股工作台三合一(Task 2, 2026-09-13): 旧行情/盘口/指数/板块路由 → 工作台 ═══
+// 行情页(/forecast /quote /quote/:symbol)、盘口页(/l2)、指数详情(/index/:symbol)、
+// 板块详情(/boards/:blockCode) 均已并入 /stocks/:symbol; 旧链接一律 redirect, 不断书签/推送。
+function LegacyForecastRedirect() {
+  const loc = useLocation()
+  const p = new URLSearchParams(loc.search)
+  const type = normalizeType(p.get('type'))
+  const sym = p.get('symbol') || '000001'
+  return <Navigate to={`/stocks/${encodeURIComponent(sym)}?type=${type}`} replace />
+}
+function LegacyQuoteSymbolRedirect() {
+  const { symbol = '' } = useParams()
+  return <Navigate to={`/stocks/${encodeURIComponent(symbol)}`} replace />
+}
+function LegacyL2Redirect() {
+  const loc = useLocation()
+  const sym = new URLSearchParams(loc.search).get('symbol')
+  return <Navigate to={sym ? `/stocks/${encodeURIComponent(sym)}?tab=l2` : '/stocks/000001?type=index'} replace />
+}
+function LegacyIndexRedirect({ type }: { type: 'index' | 'board' }) {
+  // 两条来源路由参数名不同: /index/:symbol 给 symbol, /boards/:blockCode 给 blockCode
+  const params = useParams()
+  const symbol = params.symbol ?? params.blockCode ?? ''
+  return <Navigate to={`/stocks/${encodeURIComponent(symbol)}?type=${type}`} replace />
 }
 
 /**
@@ -263,7 +291,7 @@ function App() {
     // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
     { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
-    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/forecast')) },  // 行情 Market (合并预测)
+    { sequence: ['g', 'm'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/stocks/000001?type=index')) },  // 行情 Market (并入工作台, 默认上证指数)
     { sequence: ['g', 'o'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/opportunities')) }, // 机会 Opportunities
     { sequence: ['g', 'r'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/reports')) },   // 投研 Reports (合并历史)
     { sequence: ['g', 'u'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/settings')) },  // 系统 User settings
@@ -461,18 +489,19 @@ function App() {
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流;复用 view_opportunities 权限) */}
               <Route path="/dark-fund-top" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
-              {/* §4.3 行情三合一: /forecast 作为行情入口(内部分时日K/预测/资金/事件 四 Tab) */}
-              <Route path="/forecast" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
-              {/* Phase 4 走查补: /quote 别名(站内多处仍链 /quote?type=...&symbol=..., 无路由会落空跳首页) */}
-              <Route path="/quote" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
-              {/* W3.7/D7 Quote 路由化: path 式 URL 直达(/quote/600519), Quote 页内规范化为 query 式 */}
-              <Route path="/quote/:symbol" element={<PermGuard perm="view_forecast" myPerms={myPerms}><QuotePage /></PermGuard>} />
-              <Route path="/l2" element={<PermGuard perm="view_forecast" myPerms={myPerms}><L2OrderbookPage /></PermGuard>} />
+              {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
+                  旧路由 redirect 到 /stocks/:symbol(工作台), 内容并入「盘口资金/预测」等标签 */}
+              <Route path="/forecast" element={<LegacyForecastRedirect />} />
+              <Route path="/quote" element={<LegacyForecastRedirect />} />
+              <Route path="/quote/:symbol" element={<LegacyQuoteSymbolRedirect />} />
+              <Route path="/l2" element={<LegacyL2Redirect />} />
               {/* P1-1: 板块热力图(复用 view_forecast 权限, 与行情域一致) */}
               <Route path="/heatmap" element={<PermGuard perm="view_forecast" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
               <Route path="/theme-mood" element={<PermGuard perm="view_forecast" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
-              <Route path="/index/:symbol" element={<IndexDetailPage />} />
-              <Route path="/boards/:blockCode" element={<BoardDetailPage />} />
+              {/* 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情并入工作台
+                  (同路由内切 ?type=index|board); 正文由 Task 7 抽成 IndexBody/BoardBody */}
+              <Route path="/index/:symbol" element={<LegacyIndexRedirect type="index" />} />
+              <Route path="/boards/:blockCode" element={<LegacyIndexRedirect type="board" />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
               <Route path="/stocks/:symbol" element={<PermGuard perm="view_forecast" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
