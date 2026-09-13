@@ -170,8 +170,13 @@ function asOfClock(iso?: string | null): string | null {
   return /^\d{2}:\d{2}:\d{2}$/.test(clock) ? clock : null
 }
 
-/** 股本(股) → 亿/万紧凑; 缺值 `--`(R6: 走 safeFixed, 不手写裸 toFixed)。 */
-function fmtShares(v: unknown): string {
+/**
+ * 股本(股) → 亿/万紧凑; 缺值 `--`(R6: 走 safeFixed, 不手写裸 toFixed)。
+ *
+ * 导出供 Task 13「基本面」标签的财务/股本行复用 —— 两个位置必须**同一套单位映射**
+ * (同一数据点在不同标签显示不同单位会被读成两个数); 本函数行为不变, 仅加 `export`。
+ */
+export function fmtShares(v: unknown): string {
   const n = safeNum(v)
   if (n == null) return '--'
   return Math.abs(n) >= 1e8 ? `${safeFixed(n / 1e8, 2)}亿` : `${safeFixed(n / 1e4, 2)}万`

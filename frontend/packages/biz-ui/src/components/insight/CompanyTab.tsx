@@ -1,6 +1,15 @@
 import { useInsight } from './context'
 
-export function CompanyTab() {
+/**
+ * 公司简介 / 基本信息(源: `GET /quotes/{s}/company`)。
+ *
+ * `showConcepts`(Task 13 新增, **默认 `true` = 旧行为逐字不变**): 末段「概念板块」chips 由
+ * `/quotes/{s}/company` 的 `idea` 字段而来, 与右栏题材/板块卡(`/stocks/{s}/blocks`)在用户
+ * 眼里是同一类东西 —— 工作台去重表 #6「「基本面/简介」不再重复列板块」禁止「基本面」标签再列,
+ * 故该标签传 `showConcepts={false}`。属**可选关段**, 不改任何取值/渲染逻辑(与 Task 4 给
+ * DecisionPioneerCard/ResonanceVerdictPanel 增可选 `bare` 同法)。
+ */
+export function CompanyTab({ showConcepts = true }: { showConcepts?: boolean }) {
   const {
     companyInfo,
     companyLoading,
@@ -95,8 +104,8 @@ export function CompanyTab() {
               )}
             </div>
           </div>
-          {/* 概念板块 */}
-          {companyInfo.concepts && (
+          {/* 概念板块(去重表 #6 下由宿主关闭; 默认仍渲染) */}
+          {showConcepts && companyInfo.concepts && (
             <div className="card p-4">
               <div className="text-[11px] text-muted-foreground mb-2">概念板块</div>
               <div className="flex flex-wrap gap-1.5">
