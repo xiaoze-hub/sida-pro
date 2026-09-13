@@ -26,8 +26,9 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  *    `列表为空时「该时间窗内确无内容 / 取数失败 / 首拉在途」在此不可区分`, **不**声称"没有内容";
  * ⑥ **换标的不串台** —— 本标签未启用 `core`, `useInsightData:555-573` 那个(被 `core` 门控的)
  *    挂载空值重置路径**不跑** ⇒ 换标的时旧标的的 `news`/`announcements` 数组不会被清空。故
- *    `NewsTab.tsx:153` 把 `key={symbol}` 挂在 Provider 上; 本用例在**新标的响应悬挂不落地**的
- *    最坏窗口里换标的, 断言上一只票的文章标题**一条都不在屏上**(去掉 `key` 必失败)。
+ *    `NewsTab.tsx` 的标签入口把 `key={symbol}` 挂在 Provider 上(**不写行号**: 头注增删会漂)。
+ *    本用例在**新标的响应悬挂不落地**的最坏窗口里换标的, 断言上一只票的文章标题**一条都不在屏上**
+ *    (去掉 `key` 必失败)。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsightData`/
  * 两个恢复组件全走真实代码。
