@@ -384,14 +384,21 @@ function OrderbookSection({
   const shape = realShape ?? obShape
   const shapeFromFallback = realShape == null && obShape != null
 
-  /** 买盘占比: 优先 `bid_pressure`(委托量口径, 0~1); 缺失回退十档额口径。 */
+  /**
+   * 买盘占比: 优先 `bid_pressure`(委托量口径, 0~1); 缺失回退十档额口径。
+   * **值自带口径后缀**(复审 Minor 3): 下方买/卖双向条的宽度**恒**按十档额口径(`obBidPct`)画,
+   * 若格子只显示一个裸百分数, 两个口径的数就会并排出现且无从解释(如格子 62.0% / 条子按 58.5% 画),
+   * 读者只能当成矛盾或 bug。故后缀直接标在数字上, 并对"两口径同屏"给出可见说明(见 `bidPctMix`)。
+   */
   const pressure = safeNum(sumOb?.bid_pressure)
   const bidPctText =
     pressure != null
-      ? `${safeFixed(pressure * 100, 1)}%`
+      ? `${safeFixed(pressure * 100, 1)}%(委托)`
       : obBidPct == null
         ? '--'
-        : `${safeFixed(obBidPct, 1)}%`
+        : `${safeFixed(obBidPct, 1)}%(十档额)`
+  /** 两口径同屏(格子=委托量, 双向条=十档额) ⇒ 需要一行可见说明, 不能只藏在 title 里。 */
+  const bidPctMix = pressure != null && obBidPct != null
 
   // 形态着色: 真字段按形态语义(托盘=买盘托底→涨色 / 压盘=卖盘压制→跌色 / 均衡=中性);
   // 回退口径沿用原来的 OB 阈值着色(>+0.3 买压 / <-0.3 卖压), 两套口径不混色。
@@ -489,6 +496,12 @@ function OrderbookSection({
         </div>
       </div>
 
+      {/* 两口径同屏的**可见**披露(复审 Minor 3): 格子=委托量口径, 下面双向条=十档额口径, 不必相等 */}
+      {bidPctMix ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-bidpct-mix">
+          「买盘占比」为委托量口径, 上方买/卖双向条按十档额口径绘制 —— 两者口径不同, 数值不必相等
+        </div>
+      ) : null}
       {/* 回退口径**可见**披露: 形态来自 OB 序列 label 而非 summary.orderbook.shape(两套口径不同, 不冒充) */}
       {shapeFromFallback ? (
         <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-shape-fallback">

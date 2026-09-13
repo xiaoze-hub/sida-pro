@@ -163,7 +163,14 @@ export interface KlineSummaryResponse {
   /**
    * 盘口形态/最优买卖/价差/买盘占比(v0.6.0 遗留④ 起暴露给消费方)。
    * **顶层字段**, 与 `summary` 平级(klines.py:879-891 的 `result` 里 `**_build_layer_data(...)`);
-   * 仅 A 股计算, 非 CN 或源不可用 → `null`。
+   * 仅 A 股计算。
+   *
+   * 空值有**两种不同形态**(2026-09-14 复审订正; 原注"非 CN 或源不可用 → null"是错的):
+   *  - **源不可用/空快照** → 不是 `null`, 而是一个**对象** `{available:false, shape:null, note:'无数据'}`
+   *    (`orderbook_engine.order_book_queue` 的显式空快照分支) —— 此时应把 `note` **原样转述**, 不本地编理由;
+   *  - **非 CN 标的**, 或 `klines.py:518-545` 那段装配整体抛异常 → 才是 `null`。
+   * 生产实测(2026-09-14 休市, 无 `.img` 且 thsdk 不可达): `/klines/600519/summary` 的 `orderbook`
+   * 返回的正是 `{"available": false, "shape": null, "note": "无数据"}` ⇒ 走的是第一种。
    */
   orderbook?: SummaryOrderbook | null
 }

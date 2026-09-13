@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 // 带符号金额(元 → 万/亿)走**共享实现**(v0.6.0 遗留⑤): 带1 `HeaderBand` 的「封单额」cell 与
 // 本卡的「主力净额」行必须同一套单位映射(同类金额在两个拥有面显示不同单位会被读成两个数)。
-// 语义与原本卡内的局部实现逐字相同: 负值取绝对值分档后补 `-`, `0` 是真值, 缺值/脏值 `--`。
+// 语义: 负值取绝对值分档后补 `-`, `0` 是真值, 缺值/脏值 `--`。
+// **不是**与原卡内局部实现逐字相同(2026-09-14 复审订正): 共享版对**纯空白字符串**先 `trim()` 再判空
+// ⇒ 返回 `--`; 原局部实现走 `safeNum('  ')` → `Number('  ')` = 0 ⇒ 返回 `'0'`。新行为更正确
+// (空白 = 缺值, 不是 0), 属有意的口径收紧, 不是等价改写。
 import { fmtSignedAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { safeFixed, safeNum, safePrice } from '@/lib/format'
 import DecisionCard from './DecisionCard'

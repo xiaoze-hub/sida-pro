@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
@@ -103,22 +103,34 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
   const [error, setError] = useState('')
   // 大盘资金流(同花顺源, 东财502替代)
   const [marketFlow, setMarketFlow] = useState<MarketFlow | null>(null)
+  /** `load()` 竞态守卫的取号器(见 `load` 内注): 只认最新一次取数的结果。 */
+  const seqRef = useRef(0)
 
   const load = useCallback(async () => {
+    // 竞态守卫(遗留⑦ 复审 Finding 2): 改用 `refreshToken` 后本组件实例**常驻**(旧做法靠
+    // `key` 重挂载把在飞请求连同实例一起丢弃), 连点刷新 ⇒ 多个 `load()` 同时在飞。
+    // 本组件渲染顺序是 loading → **error → data**, 即 error 优先: 一次**过期**的失败足以把
+    // 已到手的好数据整块换成错误横幅。故 await 之后只认最新号(形态同 `L2Tab.tsx` 的 seqRef)。
+    const seq = ++seqRef.current
     setLoading(true)
     setError('')
     try {
       const d = await fetchAPI<IndexDetail>(`/market/indices/${symbol}`)
+      if (seq !== seqRef.current) return
       if (d?.error) setError(d.error)
       else setData(d)
     } catch (e: any) {
+      if (seq !== seqRef.current) return
       // 2026-08-17: 错误分类 (B 报告 P1-9) — TIMEOUT / HTTP_5xx / NETWORK 分别给文案
       setError(describeApiError(e))
     } finally {
-      setLoading(false)
+      // 过期号不清 loading(交给最新那次), 否则新请求还在飞就提前显示"加载完成"
+      if (seq === seqRef.current) setLoading(false)
     }
-    // 大盘资金流(独立加载, 失败静默)
-    fetchAPI<MarketFlow>('/market-data/market-capital-flow').then(setMarketFlow).catch(() => {})
+    // 大盘资金流(独立加载, 失败静默) —— 过期号不许写 state
+    fetchAPI<MarketFlow>('/market-data/market-capital-flow')
+      .then((m) => { if (seq === seqRef.current) setMarketFlow(m) })
+      .catch(() => {})
   }, [symbol])
 
   // 遗留⑦: `refreshToken` 变化 = 页面级刷新(带1 的刷新按钮)⇒ **只重跑取数**, 不重挂载组件。

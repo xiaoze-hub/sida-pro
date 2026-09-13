@@ -292,7 +292,10 @@ describe('HeaderBand 快照行补 成交量/振幅/封单额(遗留⑤)', () => 
     render(<HeaderBand symbol="002636" market="CN" type="stock" />)
 
     await waitFor(() => expect(screen.getByText('封单额')).toBeTruthy())
-    // 昨收缺失 ⇒ 振幅不出数(除零/缺值守卫), 也不许拿 /l2 的值跨源拼
+    // /quotes 三值缺失 ⇒ 振幅不出数(缺值守卫), 成交量/封单额同样 `--`(不因"有别的源到了"就误填)。
+    // 注: 本用例的 `/l2` 夹具**没有 `snapshot` 段**, 故它**检不出**"跨源拼数"(如 quotes.high 配
+    // l2.last_close) —— 那条同源纪律由 `tests/lib/workbench-snapshot.test.ts` 的
+    // 「振幅回退: … 绝不跨源拼数」用例守(复审 Minor 6: 原注释把功劳记错了地方)。
     expect(screen.getByText('振幅').parentElement?.textContent).toBe('振幅--')
     expect(screen.getByText('成交量').parentElement?.textContent).toBe('成交量--')
     expect(screen.getByText('封单额').parentElement?.textContent).toBe('封单额--')

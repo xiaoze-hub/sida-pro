@@ -18,7 +18,7 @@ import {
  *  - GET /quotes/{symbol}/more-info → src/core/marketdata_client.py::md_more_info:208-245
  *      turnover_rate(换手率%) / volume_ratio(量比) / total_market_value(总市值, 亿)
  *      / circulating_market_value(流通市值, 亿; tq.py:210 ← Ltsz)
- *  - GET /stocks/{symbol}/l2        → src/core/stock_l2.py::fetch_more:75-98 / fetch_snapshot:64-79
+ *  - GET /stocks/{symbol}/l2        → src/core/stock_l2.py::fetch_more:80-100 / fetch_snapshot:64-77
  *      more.zt_price / pe_dynamic / pe_ttm / pb / dividend_yield / ever_zt_count
  *      / **more.fcamo(封单额, 元; 后端已把 FCAmo 万元×1e4, 可为负=跌停封单, 0=未封板真值)**
  *      / **snapshot.high / low / last_close**(振幅的 CN 回退源)
@@ -281,6 +281,22 @@ describe('mapSnapshot(带1 快照行)', () => {
     expect(b.amplitude).toBe('8.66%')
     // 一字板(高=低)→ 0.00% 是真值
     expect(byKey(mapSnapshot({ high_price: 11.55, low_price: 11.55, prev_close: 10.5 }, {}, {}, {})).amplitude).toBe('0.00%')
+  })
+
+  it('振幅守卫(复审 Minor 2): 停牌/未开盘的 high=low=0 → --, 绝不渲染成「0.00%」', () => {
+    // 腾讯源对停牌股给 `high="0.00"`/`low="0.00"`, `_to_float` 返回 **0.0 而不是 None**
+    // (vendors/tencent.py:4「绝不回退 0」的正是这类) ⇒ 没有非正价格守卫时
+    // (0-0)/prev_close*100 = 0, 屏上就是「振幅 0.00%」—— 把"无数据"伪装成"今天零波动"。
+    // 这是个**算出来的**假读数, 比直显 0 更容易被当成真值, 故必须出 `--`。
+    const numeric = byKey(mapSnapshot({ high_price: 0, low_price: 0, prev_close: 10.5 }, {}, {}, {})).amplitude
+    expect(numeric).toBe('--')
+    expect(numeric).not.toBe('0.00%')
+    // 线上实际是字符串形态(PG/JSON 透传), 同样必须守住
+    expect(byKey(mapSnapshot({ high_price: '0.00', low_price: '0.00', prev_close: '10.50' }, {}, {}, {})).amplitude).toBe('--')
+    // 单边为 0(只有最低是 0)也算脏数据: 会算出 (10-0)/10.5 = 95.24% 的假振幅
+    expect(byKey(mapSnapshot({ high_price: 10, low_price: 0, prev_close: 10.5 }, {}, {}, {})).amplitude).toBe('--')
+    // 回退源(/l2 snapshot)同样受守卫约束
+    expect(byKey(mapSnapshot({}, {}, {}, { high: 0, low: 0, last_close: 10.5 })).amplitude).toBe('--')
   })
 
   it('振幅守卫: 昨收为 0(除零)/三值任一缺失/脏值 → --, 不返回 0 也不渲染 NaN/Infinity', () => {

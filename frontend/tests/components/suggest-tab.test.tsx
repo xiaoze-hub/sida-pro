@@ -14,11 +14,16 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ③ **空态回退链** —— 无 AI 建议 + 技术指标可得 → 「技术指标基础建议」(由
  *    `useInsightDerived.technicalFallbackSuggestion` → `buildKlineSuggestion` 产出);
  *    技术指标也不可得 → 诚实空态「暂无建议」(不编造、不伪造 `--`);
- * ④ **「触发盘中监测」是零副作用的一次性真实后端作业**(v0.6.0 遗留③) —— 挂载时**不**额外触发
+ * ④ **「触发盘中监测」不动用户的自选/绑定状态**(v0.6.0 遗留③) —— 挂载时**不**额外触发
  *    (Provider 自动建议路径本用例用持仓态抑制; 断言等过其 700ms 延迟), 点击后恰好调一次
  *    `stocksApi.triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name, … })`
  *    —— `stock_id=0 + allow_unbound` 命中后端"不落库"分支(`src/web/api/stocks.py:504-533`),
- *    故 `stocksApi.list/create/updateAgents` **一个都不许发**(这是"零副作用"的直接观测点);
+ *    故 `stocksApi.list/create/updateAgents` **一个都不许发**(这是"不动自选/绑定"的直接观测点);
+ *    ⚠️ 但**不要**把它读成"什么都不写"(2026-09-14 复审 Finding 1 证伪了原先的"零写入/零副作用"措辞):
+ *    提交成功后那轮 Agent 运行仍会落一条 `AgentRun`(`src/core/agent_runs.py:40`)与一条站内
+ *    「任务完成」通知(`stocks.py:589-630` 的 `_notify` **无** `suppress_notify` 判断 →
+ *    `notify_center.py:97-111` 恒 `db.add(Notification)`+`commit()`, 且不传 user_id ⇒ 兜底推给 owner)。
+ *    本文件只守前端能观测的那三步写入, 后端那两条记录不在本用例的断言范围内。
  * ⑤ **可见 note 与新语义一致**: 「一次性触发: 不加入自选、不绑定盘中监测」—— 旧那句
  *    「未关注时会先加入自选并绑定盘中监测」必须消失(不再发生的写入不许留在 UI 上);
  *    且可见文案**不出现**内部 agent 名 `intraday_monitor`;
@@ -243,7 +248,7 @@ describe('Task 12 建议: 空态回退(诚实, 不编造)', () => {
   })
 })
 
-describe('遗留③ 触发盘中监测: 零副作用的一次性触发(不加自选/不绑 Agent)', () => {
+describe('遗留③ 触发盘中监测: 不动自选/绑定的一次性触发(不加自选/不绑 Agent)', () => {
   it('可见 note 如实陈述"一次性触发", 且不再声称会写入自选/绑定; 文案不泄漏内部 agent 名', async () => {
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
@@ -263,7 +268,7 @@ describe('遗留③ 触发盘中监测: 零副作用的一次性触发(不加自
     expect(note.textContent || '').not.toMatch(/intraday_monitor/)
   })
 
-  it('挂载不触发; 点击后恰好一次 triggerAgent(0, …, allow_unbound) 且**零写入**(list/create/updateAgents 一个都不发)', async () => {
+  it('挂载不触发; 点击后恰好一次 triggerAgent(0, …, allow_unbound) 且**不动自选/绑定**(list/create/updateAgents 一个都不发)', async () => {
     renderTab()
     await waitFor(() => expect(mocks.suggestions).toHaveBeenCalled())
     // 等过 Provider 自动建议的 700ms 延迟(持仓态抑制 ⇒ 自动路径不参与), 证明"沉默"可证
@@ -285,7 +290,7 @@ describe('遗留③ 触发盘中监测: 零副作用的一次性触发(不加自
       bypass_throttle: true,
       bypass_market_hours: true,
     })
-    // **零副作用**的直接证据: 三步持久化写入(查自选/建自选/绑 Agent)一个都没发生
+    // **不动自选/绑定**的直接证据: 三步持久化写入(查自选/建自选/绑 Agent)一个都没发生
     expect(mocks.stocksList).not.toHaveBeenCalled()
     expect(mocks.stocksCreate).not.toHaveBeenCalled()
     expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
@@ -305,7 +310,8 @@ describe('遗留③ 触发盘中监测: 零副作用的一次性触发(不加自
     expect(screen.getByText(/触发失败/)).toBeTruthy()
     expect(screen.getByText(/不在此处推断/)).toBeTruthy()
     expect(screen.getByText(/本次未发生自选 \/ 绑定写入/)).toBeTruthy()
-    // 零副作用路径: 失败也不可能有写入 —— 断言确实一个写入都没发(不许"其实写了却声称没写")
+    // 无前置写入路径: 失败时自选/绑定那三步也不可能已发 —— 断言确实一个都没发
+    // (不许"其实写了却声称没写"; 后端的运行记录/站内通知不属前端可观测面, 不在本断言范围)
     expect(mocks.stocksCreate).not.toHaveBeenCalled()
     expect(mocks.stocksUpdateAgents).not.toHaveBeenCalled()
     // 旧的部分成功文案不得出现(本路径没有"已写入"这回事)

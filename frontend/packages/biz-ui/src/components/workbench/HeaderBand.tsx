@@ -107,8 +107,10 @@ export interface MoreInfoSnapshot {
 
 /**
  * `/stocks/{symbol}/l2` 的 `more` 段(spec §1.2 快照行后半段的真数据面; 仅个股/CN 可用)。
- * 字段证据: src/core/stock_l2.py::fetch_more:75-98(`_f` 取原值, 不做单位换算) + 源键
+ * 字段证据: `src/core/stock_l2.py::fetch_more`(**:80-100**; 2026-09-14 复审订正行号, 原写 75-98) + 源键
  * packages/marketdata/.../vendors/tq.py::_parse_more_info:203-219(ZTPrice/DynaPE/StaticPE_TTM/PB_MRQ/DYRatio/EverZTCount)。
+ * 单位: 上述几个字段是 `_f()` **原值透传**(不换算); 但 `fetch_more` 整体**并非**都不换算 ——
+ * 其 docstring 明写「万元→元 仅 FCAmo/OpenAmo」, 即下方 `fcamo`(封单额)**已 ×1e4 成元**(见该字段注)。
  */
 export interface L2MoreSnapshot {
   /** 涨停价(元) — ZTPrice */
@@ -185,7 +187,12 @@ export function amplitudePct(
     const l = safeNum(low)
     const c = safeNum(lastClose)
     if (h == null || l == null || c == null) return null
-    if (c === 0) return null // 除零守卫(次新/停牌等昨收为 0 的脏数据)
+    // **非正价格守卫**(复审 Minor 2): 停牌/未开盘时腾讯源给 `high="0.00"`/`low="0.00"`,
+    // `_to_float` 返回 **0.0 而不是 None** ⇒ `(0-0)/c*100 = 0` 会在屏上渲染成「振幅 0.00%」,
+    // 把"没有数据"伪装成"今天零波动"(一个**算出来的**假读数, 比直显 0 更容易被当真)。
+    // 与本仓 vendor 纪律同源: `packages/marketdata/.../vendors/tencent.py:4`「解析层对缺失/空字段
+    // 一律保留 None, 绝不回退 0(0 价参与算术会伪造假暴跌)」。c<=0 同时兼掉除零与负价脏数据。
+    if (h <= 0 || l <= 0 || c <= 0) return null
     const v = ((h - l) / c) * 100
     return Number.isFinite(v) ? v : null
   }

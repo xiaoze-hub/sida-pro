@@ -6,6 +6,8 @@
 import sys, types
 from unittest import mock
 
+import pytest
+
 # 装一个最小 thsdk 包, 避免 import 失败。
 # v0.4.80 fix: data_source.thsdk_l2 在模块级 `from thsdk import THS` 绑定,
 # 全量跑时真 thsdk 已在 sys.modules(别的用例先 import), 旧 `if 缺失才装假`
@@ -33,7 +35,27 @@ finally:
     else:
         del sys.modules["thsdk"]
 
-def test_buffer_size_injected():
+
+@pytest.fixture
+def fake_ths(monkeypatch):
+    """把 **模块属性** `M.THS` 换成假类, 返回它。
+
+    KI-055③ 根因: 上面那段 sys.modules 换法只在 `data_source.thsdk_l2` **首次** import 时
+    生效 —— 全量跑时别的用例早已 import 过它, 模块进了 sys.modules 缓存, 于是本文件的
+    `import M` 拿到的是**绑着真 THS** 的既有模块, 换假模块成了空操作 ⇒ `_query` 真去连
+    行情服务(5 次重试全失败, 返回 `Response(success=False, error='未登录')`), 断言随之红。
+    单跑绿、整套跑红就是这个原因(且它会真发外网连接, 却不该被标 network —— 本用例的
+    意图明确是"不依赖真实 thsdk 安装")。
+    改法: 不依赖 import 时机, 直接把 `_query` 实际取用的模块级名字 `THS`
+    (`data_source/thsdk_l2.py:98` 的 `from thsdk import THS`, 用于 `:349`/`:361`)换成假类
+    ⇒ 与 import 顺序无关, 且**全程离线**。
+    """
+    fake = _make_fake_thsdk().THS
+    monkeypatch.setattr(M, "THS", fake)
+    return fake
+
+
+def test_buffer_size_injected(fake_ths):
     """_query 必须把 THS_BUFFER_SIZE 传给 method()"""
     l2 = M.THSDKL2.__new__(M.THSDKL2)  # skip __init__
     # Mock 掉内部依赖
@@ -54,6 +76,5 @@ def test_buffer_size_module_constant():
     print(f"✅ THS_BUFFER_SIZE = {M.THS_BUFFER_SIZE // (1024*1024)} MB")
 
 if __name__ == "__main__":
-    test_buffer_size_module_constant()
-    test_buffer_size_injected()
-    print("ALL OK")
+    # 用例现在要 `fake_ths` fixture(monkeypatch M.THS), 不能裸调 ⇒ 走 pytest 跑本文件。
+    raise SystemExit(pytest.main([__file__, "-q", "-s"]))

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -139,6 +139,35 @@ describe('IndexBody refreshToken(遗留⑦, 真组件)', () => {
     await waitFor(() => expect(calls('/market/indices/')).toBe(2))
     expect(mocks.fetchAPI.mock.calls.some((c) => String(c[0]).includes('/market/indices/399001'))).toBe(true)
   })
+
+  it('过期请求后到**不得**覆盖新数据(复审 Finding 2: `seqRef` 取号守卫)', async () => {
+    // 第 1 次(挂载)取数**挂住不发**; token 变化触发第 2 次并先回好数据; 随后让第 1 次**失败后到**。
+    // 没有取号守卫时那次过期失败会 `setError`, 而本组件渲染顺序是 loading → **error → data**
+    // (error 优先) ⇒ 已到手的好内容会被整块换成错误横幅。去掉守卫本用例必红。
+    let rejectStale: (e: unknown) => void = () => {}
+    let n = 0
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      if (!u.includes('/market/indices/')) return respond(url)
+      n += 1
+      if (n === 1) return new Promise((_res, rej) => { rejectStale = rej })
+      return { ...INDEX_DETAIL, quote: { ...INDEX_DETAIL.quote, current_price: 3999.99 } }
+    })
+
+    const { rerender } = render(<IndexBody symbol="000001" refreshToken={0} />)
+    await waitFor(() => expect(calls('/market/indices/')).toBe(1))
+    rerender(<IndexBody symbol="000001" refreshToken={1} />)
+    await waitFor(() => expect(screen.getByText('3999.99')).toBeTruthy())
+
+    // 过期那次现在才失败
+    rejectStale(new Error('HTTP 503 过期请求'))
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+    // 好数据仍在屏(⇒ 没被 error 分支顶掉); 且界面没卡在"加载中"
+    // (过期号不许清 loading —— 但最新那次已经清过了)
+    expect(screen.getByText('3999.99')).toBeTruthy()
+    expect(screen.queryByText('加载中...')).toBeNull()
+  })
 })
 
 describe('BoardBody refreshToken(遗留⑦, 真组件)', () => {
@@ -178,5 +207,36 @@ describe('BoardBody refreshToken(遗留⑦, 真组件)', () => {
     // 成分股/轮动两条附属取数也随 token 重跑(同一个 load 里)
     expect(calls('/constituents')).toBe(2)
     expect(calls('/boards/rotation')).toBe(2)
+  })
+
+  it('过期请求后到**不得**冒出错误横幅(复审 Finding 2: `seqRef` 取号守卫)', async () => {
+    // 与 IndexBody 同型, 但本组件的 `error` 是**额外**横幅(`{error && <div>…}`)而非顶掉正文,
+    // 故这里的关键断言是"**过期错误横幅不出现**"(去掉守卫则该横幅会挂在好内容上方)。
+    let rejectStale: (e: unknown) => void = () => {}
+    let n = 0
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      if (u === '/boards/880001') {
+        n += 1
+        if (n === 1) return new Promise((_res, rej) => { rejectStale = rej })
+        return { ...BOARD_DETAIL, today: { ...BOARD_DETAIL.today, change_pct: 2.5 } }
+      }
+      return respond(url)
+    })
+
+    const { rerender } = renderBoard({ code: '880001', refreshToken: 0 })
+    await waitFor(() => expect(exactCalls('/boards/880001')).toBe(1))
+    rerender(
+      <MemoryRouter>
+        <BoardBody code="880001" refreshToken={1} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText('+2.50%')).toBeTruthy())
+
+    rejectStale(new Error('过期板块请求失败'))
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+    expect(screen.getByText('+2.50%')).toBeTruthy()
+    expect(screen.queryByText(/过期板块请求失败/)).toBeNull()
   })
 })

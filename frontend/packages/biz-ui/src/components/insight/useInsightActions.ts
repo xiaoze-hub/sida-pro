@@ -27,8 +27,10 @@ export interface SetAlertOutcome {
 }
 
 /**
- * `triggerIntradayOnce` 的结果(v0.6.0 遗留③): **零副作用**触发只有"提交成功/未成功"两态 ——
- * 它不做任何前置写入(不加自选、不绑 Agent), 故不存在 `SetAlertOutcome` 那种"部分成功"。
+ * `triggerIntradayOnce` 的结果(v0.6.0 遗留③): 该动作不做任何**前置**写入(不加自选、不绑 Agent),
+ * 故不存在 `SetAlertOutcome` 那种"部分成功", 只有"提交成功/未成功"两态。
+ * 注: 这**不等于**"零副作用" —— 提交成功后那轮 Agent 运行本身仍会落运行记录与站内通知
+ * (见 `triggerIntradayOnce` 头注的 ⚠️ 段)。
  * 调用方仍**不得**据此推断失败原因(错误原文由本 action 内部 toast; `symbol` 缺失的早退是静默的)。
  */
 export interface TriggerOnceOutcome {
@@ -287,21 +289,30 @@ const handleSetAlert = async (): Promise<SetAlertOutcome> => {
 }
 
 /**
- * **零副作用**手工触发「盘中监测」(v0.6.0 遗留③: 工作台「建议」标签的按钮改用本动作)。
+ * **无自选/绑定副作用**地手工触发「盘中监测」(v0.6.0 遗留③: 工作台「建议」标签的按钮改用本动作)。
  *
- * 与 `handleSetAlert`(「一键设提醒」)的**唯一**差别是"要不要落库":
+ * 与 `handleSetAlert`(「一键设提醒」)的差别是"要不要改**用户的自选/绑定状态**":
  *  - `handleSetAlert`: `list()` → 未关注则 `create()`(写入自选)→ `updateAgents()`(写入 Agent 绑定)
  *    → `triggerAgent(stock.id, …)`; 两步写入**不回滚**, 故调用方必须如实陈述"部分成功"。
  *  - 本动作: 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name })`
- *    —— **一个写入都不做**(不 `list`/不 `create`/不 `updateAgents`)。
+ *    —— **不动自选、不动绑定**(不 `list`/不 `create`/不 `updateAgents`)。
  *
  * 后端证据(`src/web/api/stocks.py:461-533` `trigger_stock_agent`):
- *  - `stock_id <= 0` ⇒ `suppress_notify = True`(不发站内通知), 且必须 `allow_unbound=true`
- *    否则 400「当 stock_id<=0 时，需设置 allow_unbound=true」(:508-509);
+ *  - `stock_id <= 0` 时必须 `allow_unbound=true`, 否则 400「当 stock_id<=0 时，需设置 allow_unbound=true」(:508-509);
  *  - 该标的**不在**当前用户自选时走"不落库"分支: `trigger_stock = SimpleNamespace(id=0, …)`
  *    (:523-533 注释原文「不落库：用于详情弹窗未持仓且未关注股票的一次性分析」);
  *  - 已在自选时也只**读**既有 Stock/StockAgent 行(:515-522), 不新建、不改绑定。
- *  ⇒ 两条分支都**没有持久化写入**, 符合"一次性触发"的产品意图。
+ *
+ * ⚠️ **但这不是"零写入"** —— 一次真实的 Agent 运行本身就会落库, 本动作与 `handleSetAlert` 在这一点上**没有区别**:
+ *  - `record_agent_run(...)`(`src/core/agent_runs.py:40` `db.add(AgentRun(...))`) ⇒ 一条**运行记录**;
+ *  - API 层收尾 `_notify`(`stocks.py:589-630`, **无 `suppress_notify` 判断**) → `notify_task_done`
+ *    (`src/core/notify_center.py:97-111` 恒 `db.add(Notification)` + `commit()`) ⇒ 一条**站内「任务完成」通知**;
+ *    且它不传 `user_id`, 按 `notify_center.py:338-341` 会**兜底推给 owner 账号**。
+ *  - `suppress_notify = stock_id <= 0`(:485)只影响 `trigger_agent_for_stock` 内部
+ *    `channels = [] if suppress_notify else resolve_notify_channels(...)`(`src/bootstrap/runtime.py:790`)
+ *    ⇒ 仅"**不外发 Agent 自己解析到的渠道**", **不等于**"不写站内通知"。
+ *  ⇒ 允许/禁止的措辞只能是"不加入自选、不绑定 Agent", **不得**写成"无任何持久化写入/不发通知"
+ *    (2026-09-14 复审 Finding 1: 原措辞是假的, 已按上述实况订正; 相关 UI 文案同步改)。
  *
  * 与自动路径 `triggerAutoAiSuggestion` 的关系: 线格式(stock_id=0 + allow_unbound + symbol/market/name)
  * **完全相同**(它早已在用这条无绑定链路), 差别只在门控 —— 自动路径要过 `suggestions` 键、
@@ -448,8 +459,9 @@ useEffect(() => {
     handleCopyShareText,
     handleShareInsight,
     handleSetAlert,
-    // v0.6.0 遗留③: 零副作用的一次性触发(工作台「建议」标签用); `handleSetAlert` 保留给
-    // 需要"持久化设提醒"语义的调用方(两者线格式不同, 见各自头注)。
+    // v0.6.0 遗留③: 无自选/绑定副作用的一次性触发(工作台「建议」标签用)。
+    // `handleSetAlert` 原样保留但**当前零生产调用方**(旧入口随 v0.6.0 模态壳退役) ⇒ 全站暂无
+    // "持久化设提醒/绑定 Agent" 的 UI 入口, 见 KI-058(补按钮 vs 删死代码待拍板)。
     triggerIntradayOnce,
     toggleWatch,
     triggerAutoAiSuggestion,

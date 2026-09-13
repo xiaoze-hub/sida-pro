@@ -207,8 +207,10 @@ export default function StockWorkbench() {
   const type = normalizeType(sp.get('type'))
   const tab = parseTab(sp.get('tab'))
   /**
-   * 页面级刷新计数器(Finding 1): 只作**正文子树**的 `key`。带1 刷新 → 自增 → 两个分支的
-   * 内容块各自重挂载一次 → 正文/主图/右栏在挂载副作用里重新取数(各自组件本就"挂载即取数")。
+   * 页面级刷新计数器(Finding 1; 用法自遗留⑦ 起**分成两种**, 详见文件头注「页面级刷新」):
+   *  - **个股分支**: 仍作正文子树的 `key` → 自增即重挂载, 主图/右栏/激活标签在挂载副作用里重新取数;
+   *  - **指数/板块分支**: 作 `IndexBody`/`BoardBody` 的 **`refreshToken` prop**(不再是 `key`)
+   *    → 只重跑正文的取数 effect, 组件不卸载(不重放入场动画、不丢正文内部状态)。
    */
   const [refreshKey, setRefreshKey] = useState(0)
   /**

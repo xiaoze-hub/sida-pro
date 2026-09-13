@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchAPI } from '@panwatch/api'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
@@ -122,9 +122,16 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
   const [rotation, setRotation] = useState<RotationResp | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  /** `load()` 竞态守卫的取号器(见 `load` 内注): 只认最新一次取数的结果。 */
+  const seqRef = useRef(0)
 
   const load = useCallback(async () => {
     if (!code) return
+    // 竞态守卫(遗留⑦ 复审 Finding 2): 改用 `refreshToken` 后本组件实例**常驻**(不再被 key 重挂载
+    // 丢弃在飞请求), 连点刷新 ⇒ 多个 `load()` 同时在飞。慢的旧请求后到就会用**旧数据/旧错误**
+    // 覆盖新结果 —— 本组件 `error` 优先于 `detail` 渲染, 一次过期失败足以把好内容换成错误横幅。
+    // 取号 → await 后只认最新号(形态同 `L2Tab.tsx` 的 `useL2Sources.seqRef`)。
+    const seq = ++seqRef.current
     setLoading(true)
     setError('')
     try {
@@ -132,15 +139,20 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
         fetchAPI<BoardDetailResp>(`/boards/${encodeURIComponent(code)}`, { cacheMode: 'reload' }),
         fetchAPI<BoardConstituent>(`/boards/${encodeURIComponent(code)}/constituents`, { cacheMode: 'reload' }).catch(() => null),
       ])
+      if (seq !== seqRef.current) return
       if (d?.error) setError(d.error)
       else setDetail(d)
       setConstituents(c)
     } catch (e) {
+      if (seq !== seqRef.current) return
       setError(e instanceof Error ? e.message : '板块详情加载失败')
     }
-    // 板块轮动(全局, 独立加载, 失败静默)
-    fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' }).then(setRotation).catch(() => {})
-    setLoading(false)
+    // 板块轮动(全局, 独立加载, 失败静默) —— 过期号不许写 state
+    fetchAPI<RotationResp>('/boards/rotation?days=5', { cacheMode: 'reload' })
+      .then((r) => { if (seq === seqRef.current) setRotation(r) })
+      .catch(() => {})
+    // 过期号不清 loading(交给最新那次), 否则新请求还在飞就提前显示"加载完成"
+    if (seq === seqRef.current) setLoading(false)
   }, [code])
 
   // 遗留⑦: `refreshToken` 变化 = 页面级刷新(带1 的刷新按钮)⇒ **只重跑取数**, 不重挂载组件。

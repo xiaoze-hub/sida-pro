@@ -208,7 +208,7 @@ describe('Task 11 盘口资金: 七节真实渲染', () => {
     // 十档买卖额(双向条 + 形态)
     await waitFor(() => expect(within(section('orderbook')).getByText('买压')).toBeTruthy())
     const obSec = section('orderbook')
-    expect(within(obSec).getByText('58.5%')).toBeTruthy() // 买盘占比
+    expect(within(obSec).getByText('58.5%(十档额)')).toBeTruthy() // 买盘占比(值自带口径后缀)
     expect(within(obSec).getByText('+0.792')).toBeTruthy() // OB 失衡
     expect(within(obSec).getByText('+1234.57万')).toBeTruthy() // 买十档额
     expect(within(obSec).getByText('+876.54万')).toBeTruthy() // 卖十档额
@@ -365,8 +365,11 @@ describe('遗留④ 盘口形态取 summary.orderbook(真字段优先, OB label 
     await waitFor(() => expect(cellValue(obSec, '盘口形态')).toBe('托盘'))
     expect(cellValue(obSec, '最优买卖')).toBe('11.49 / 11.5')
     expect(cellValue(obSec, '价差')).toBe('0.01')
-    // bid_pressure 0.62 → 62.0%(委托量口径), 而不是十档额口径的 58.5%
-    expect(cellValue(obSec, '买盘占比')).toBe('62.0%')
+    // bid_pressure 0.62 → 62.0%(委托量口径), 而不是十档额口径的 58.5%; 值自带口径后缀
+    expect(cellValue(obSec, '买盘占比')).toBe('62.0%(委托)')
+    // 两口径同屏(格子=委托量 62.0%, 下方双向条按十档额 58.5% 画)⇒ 必须有**可见**口径说明,
+    // 否则读者只能把两个数当成矛盾(复审 Minor 3)
+    expect(screen.getByTestId('l2-bidpct-mix').textContent).toContain('口径不同')
     // OB 序列仍照旧渲染(双向条 + 失衡值), 只是它的 label 不再冒充形态
     expect(cellValue(obSec, 'OB 失衡')).toBe('+0.792')
     expect(within(obSec).queryByText('买压')).toBeNull()
@@ -382,7 +385,7 @@ describe('遗留④ 盘口形态取 summary.orderbook(真字段优先, OB label 
     // 回退必须**可见**披露(不只写在 title 里)
     expect(screen.getByTestId('l2-shape-fallback').textContent).toContain('回退口径')
     // 买盘占比同样回退到十档额口径(12345678/(12345678+8765432))
-    expect(cellValue(obSec, '买盘占比')).toBe('58.5%')
+    expect(cellValue(obSec, '买盘占比')).toBe('58.5%(十档额)')
     // 真字段缺失的价格/价差: 一律 --, 绝不拿十档额或别的口径顶替
     expect(cellValue(obSec, '最优买卖')).toBe('-- / --')
     expect(cellValue(obSec, '价差')).toBe('--')
@@ -402,7 +405,7 @@ describe('遗留④ 盘口形态取 summary.orderbook(真字段优先, OB label 
     expect(screen.getByTestId('l2-shape-fallback')).toBeTruthy()
     expect(cellValue(obSec, '最优买卖')).toBe('-- / --')
     expect(cellValue(obSec, '价差')).toBe('--')
-    expect(cellValue(obSec, '买盘占比')).toBe('58.5%')
+    expect(cellValue(obSec, '买盘占比')).toBe('58.5%(十档额)')
   })
 
   it('真字段为脏值(字符串数字/空串形态): 不崩、不渲染 NaN; 空串形态视为未下发 → 回退', async () => {
@@ -415,7 +418,7 @@ describe('遗留④ 盘口形态取 summary.orderbook(真字段优先, OB label 
     const obSec = section('orderbook')
     await waitFor(() => expect(cellValue(obSec, '最优买卖')).toBe('11.49 / 11.5'))
     expect(cellValue(obSec, '价差')).toBe('0.01')
-    expect(cellValue(obSec, '买盘占比')).toBe('40.0%')
+    expect(cellValue(obSec, '买盘占比')).toBe('40.0%(委托)')
     // 空串形态 = 未下发 ⇒ 回退 OB label 并披露
     expect(cellValue(obSec, '盘口形态')).toBe('买压')
     expect(screen.getByTestId('l2-shape-fallback')).toBeTruthy()

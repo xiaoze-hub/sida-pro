@@ -9,9 +9,23 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pandas as pd
+import pytest
 
 from src.agents.tradingagents import toolkit_adapter as ta
 from src.collectors.kline_collector import KlineCollector, KlineData
+
+
+def _upstream_no_market_data_error():
+    """上游 `tradingagents` 装了 → 返回其 `NoMarketDataError`; 没装(软依赖) → `None`。
+
+    本仓把 `tradingagents` 当**软依赖**(CI 有, 本机常没有), 适配器两种环境抛不同异常
+    (见 `toolkit_adapter.py:452-461`)。用例据此按环境断言, 而不是硬写上游类型 ⇒ 本机红。
+    """
+    try:
+        from tradingagents.dataflows.errors import NoMarketDataError
+    except ImportError:
+        return None
+    return NoMarketDataError
 
 
 def _sample_klines(n: int = 40) -> list[KlineData]:
@@ -63,12 +77,19 @@ def test_load_ohlcv_passthrough_for_us(monkeypatch):
 
 
 def test_load_ohlcv_a_share_no_klines_raises_not_fallback(monkeypatch):
-    """A股取不到 K线时,直接抛 NoMarketDataError 报清晰错,**不回退 yfinance**。
+    """A股取不到 K线时报清晰错, **不回退 yfinance**。
 
     A股/港股在 Yahoo 无数据 + 限流,回退只会把"K线获取失败"变成误导的"Yahoo no rows"。
+
+    KI-055②: `tradingagents` 是本仓**软依赖**(CI 装了, 本机没装), 适配器对两种环境抛
+    **不同**异常 —— `src/agents/tradingagents/toolkit_adapter.py:452-461`:
+    上游可导入 → `NoMarketDataError`(TA 期望的类型); `ImportError` → `RuntimeError`(兜底)。
+    原用例硬写 `NoMarketDataError` 且在函数体顶部直接 `from tradingagents...` ⇒ 本机必红
+    (ModuleNotFoundError), 而那条 ImportError 回退分支**零覆盖**。改为按环境断言对应的
+    异常类型: CI 仍钉住上游契约, 本机则真正覆盖兜底分支 —— 两边都不是"跳过", 都在测东西。
+    `real_calls["n"] == 0`(不回退 yfinance)是本用例的真正意图, 与环境无关, 两种下都断言。
     """
-    import pytest
-    from tradingagents.dataflows.errors import NoMarketDataError
+    expected = _upstream_no_market_data_error() or RuntimeError
 
     monkeypatch.setattr(KlineCollector, "get_klines", lambda self, symbol, days=60: [])
     real_calls = {"n": 0}
@@ -78,7 +99,7 @@ def test_load_ohlcv_a_share_no_klines_raises_not_fallback(monkeypatch):
         return pd.DataFrame()
 
     monkeypatch.setattr(ta, "_real_load_ohlcv", fake_real)
-    with pytest.raises(NoMarketDataError):
+    with pytest.raises(expected):
         ta._panwatch_load_ohlcv("601238", "2026-06-18")
     assert real_calls["n"] == 0, "A股拉空不应回退 yfinance"
 
