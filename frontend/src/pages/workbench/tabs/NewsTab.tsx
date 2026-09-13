@@ -28,8 +28,12 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  *  (无旧模态标签栏, `tab` 恒 `'overview'`)只传 `keys` 即可取数, 无需任何 `setTab`(T13 复审
  *  已把 `deep`/`fundamentals`/`company` 的同类耦合解掉; 本标签用的两个键从一开始就是纯键判定)。
  *  代价: `core` 未启用 ⇒ 本标签**不取** quote/moreInfo/klineSummary/klines/portfolioSummary,
- *  故右侧「来源」行里 `resolvedName` 恒等于 `symbol`(不会用股票名做名称检索的第一跳)——
- *  仅影响检索式, 不影响本标签渲染(NEWS/公告的兜底链内部自会覆盖)。
+ *  故 `resolvedName`(`props.stockName || quote?.name || symbol`)恒等于 `symbol` —— 请求里
+ *  不会带「用股票名检索」的第一跳(兜底链后三级仍会跑)。仅影响检索式, 不影响本标签渲染。
+ *
+ * 段头 vs 顶部口径条(**有意分层, 非重复**): 顶部条给一眼可读的**摘要**(来源 + 窗口区间,
+ * 对应计划 Task 14 的「公告(时间窗) · 新闻(时间窗)」), 段头给**明细**(端点 + 该段下拉的全部
+ * 候选项; 恢复组件的时间窗下拉正在段内, 故候选项列在段头最贴近用户视线)。
  *
  * `key={symbol}` 挂在 `InsightProvider` 上(**必要, 非风格**): `news`/`announcements` 两个
  * 数组的**重置**写在 `useInsightData:555-573` 的挂载总 effect 里, 而该 effect 第一句就是
