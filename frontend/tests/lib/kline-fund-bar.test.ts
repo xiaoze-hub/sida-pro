@@ -10,7 +10,7 @@
 //  ② `open_net` 仍被兜底(不打断既有调用方);
 //  ③ 明盘/暗盘/两者皆无 的分色规则。
 import { describe, expect, it } from 'vitest'
-import { fundBarPoint } from '@panwatch/biz-ui/components/KlineChart'
+import { capitalBarRows, fundBarPoint } from '@panwatch/biz-ui/components/KlineChart'
 import type { StockColors } from '@panwatch/biz-ui/lib/stock-colors'
 
 const SC: StockColors = { up: '#ef4444', down: '#22c55e' }
@@ -57,5 +57,41 @@ describe('fundBarPoint (L3 资金柱: 明盘字段名 ming_net)', () => {
   it('时间戳按日线口径(该日 00:00Z 秒数)', () => {
     const p = call({ ming_net: 1, dark_net: null })
     expect(p.time).toBe(Math.floor(new Date('2026-09-11T00:00:00Z').getTime() / 1000))
+  })
+})
+
+/**
+ * Finding 2: `InteractiveKline` 的 L3 资金柱逐日映射(`capitalBarRows`) —— 它现在与 `KlineChart`
+ * **共用** `fundBarPoint` 的 net 定义。这里直接钉住 `InteractiveKline` 渲染 effect 实际调用的
+ * 那个纯函数的**柱值**, 覆盖旧实现(`value = on ?? dn ?? 0`, 只明盘或只暗盘 + 无 NaN 守卫)会错的
+ * 三种情形: **暗盘独有**、**明盘 + 暗盘相加**、**NaN 脏值**。
+ */
+describe('capitalBarRows (InteractiveKline L3 资金柱: 与 KlineChart 同 net 定义)', () => {
+  const dates = ['2026-09-10', '2026-09-11', '2026-09-12']
+  const rows = (bars: Array<{ date: string; ming_net?: number | null; open_net?: number | null; dark_net?: number | null }>) =>
+    capitalBarRows(dates, bars, SC, NODATA)
+
+  it('暗盘独有(明盘 null): 柱值 = 暗盘(旧实现 `on ?? dn ?? 0` 恰好也取暗盘, 但此处钉住不回归)', () => {
+    const r = rows([{ date: '2026-09-11', ming_net: null, open_net: null, dark_net: -400_000 }])
+    expect(r[1]).toEqual({ date: '2026-09-11', value: -400_000, color: SC.down })
+  })
+
+  it('明盘 + 暗盘**相加**(旧实现 `on ?? dn ?? 0` 会丢暗盘, 只给明盘 ⇒ 值偏小)', () => {
+    const r = rows([{ date: '2026-09-11', ming_net: 1_000_000, dark_net: 2_000_000 }])
+    expect(r[1]?.value).toBe(3_000_000)
+  })
+
+  it('NaN 脏值被 `numOrNull` 挡住(旧实现 `typeof NaN === "number"` ⇒ NaN 混入柱值)', () => {
+    const r = rows([{ date: '2026-09-11', ming_net: Number.NaN, dark_net: Number.NaN }])
+    expect(r[1]).toEqual({ date: '2026-09-11', value: 0, color: NODATA })
+    // 明确断言不是 NaN(否则 lightweight-charts 会因 NaN 柱高崩/画空)
+    expect(Number.isNaN(r[1]?.value)).toBe(false)
+  })
+
+  it('逐根对齐 K 线日期: 无资金数据的那根为 null(调用方过滤)', () => {
+    const r = rows([{ date: '2026-09-11', ming_net: 5, dark_net: null }])
+    expect(r[0]).toBeNull()
+    expect(r[1]?.value).toBe(5)
+    expect(r[2]).toBeNull()
   })
 })

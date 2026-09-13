@@ -170,3 +170,55 @@ describe('HeaderBand 同码不同标的闸门: 指数/板块不发 /quotes, 不�
     expect(screen.getByText('11.82')).toBeTruthy()
   })
 })
+
+/**
+ * Task 19 (Finding 4): 「持仓态未知」标注的**真组件**守卫。
+ *
+ * `stock-workbench.test.tsx` 把 `HeaderBand` mock 掉了(它守的是页面接线), 于是带1 里
+ * `position-unknown` 那个 span 的 JSX 若被改坏(删了/改了条件), 页面测试**照样全绿**。
+ * 本文件渲染**真组件** + mock 网络层, 直接断言可见文案与 testid 的存在/缺席。
+ *
+ * 语义: `positionUnknown` 为 `true` 时(真实持仓源在途/失败)显示「持仓态未知」;
+ * 为 `false`(已判定持仓/未持仓)时**不显示** —— 不把已判定态说成未知。
+ */
+describe('HeaderBand 持仓态未知(Task 19: 真组件, 可见文案)', () => {
+  /** 让建议条渲染的最小 summary(klineSummary 非空 ⇒ buildKlineSuggestion 出建议条)。 */
+  const SUMMARY = {
+    timeframe: '1d',
+    asof: '2026-09-11',
+    trend: '多头排列',
+    ma5: 11.5,
+    ma10: 11.2,
+    ma20: 11.0,
+    macd_status: '金叉',
+    macd_hist: 0.12,
+    rsi14: 55,
+    volume_status: '放量',
+  }
+
+  it('positionUnknown=true: 真组件渲染可见「持仓态未知」(testid position-unknown)', async () => {
+    mocks.klineSummary.mockResolvedValue(SUMMARY)
+    render(<HeaderBand symbol="002636" market="CN" type="stock" hasPosition={false} positionUnknown />)
+    // 等建议条落定(未知标注挂在建议条旁)
+    await waitFor(() => expect(screen.getByTestId('position-unknown')).toBeTruthy())
+    expect(screen.getByTestId('position-unknown').textContent).toBe('持仓态未知')
+    expect(screen.getByText('持仓态未知')).toBeTruthy()
+  })
+
+  it('positionUnknown=false(已判定未持仓): 真组件**不**渲染「持仓态未知」', async () => {
+    mocks.klineSummary.mockResolvedValue(SUMMARY)
+    render(<HeaderBand symbol="002636" market="CN" type="stock" hasPosition={false} />)
+    await waitFor(() => expect(mocks.klineSummary).toHaveBeenCalled())
+    // 先证建议条确实渲染了(不是"整条没渲染"导致的空过)
+    await waitFor(() => expect(screen.getByText(/建议·/)).toBeTruthy())
+    expect(screen.queryByTestId('position-unknown')).toBeNull()
+    expect(screen.queryByText('持仓态未知')).toBeNull()
+  })
+
+  it('positionUnknown=true 但 summary 未落定: 建议条未出 ⇒ 未知标注也不在(不孤立挂载)', async () => {
+    mocks.klineSummary.mockResolvedValue(null)
+    render(<HeaderBand symbol="002636" market="CN" type="stock" hasPosition={false} positionUnknown />)
+    await waitFor(() => expect(mocks.klineSummary).toHaveBeenCalled())
+    expect(screen.queryByTestId('position-unknown')).toBeNull()
+  })
+})

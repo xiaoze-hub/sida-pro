@@ -64,21 +64,28 @@ const MARKET = 'CN'
  * 持仓上下文 `hasPosition`(T19 接**真源**)。
  *
  * 三态:
- *  - `undefined` —— **未知**(取数在途 / 失败)。调用方**不得**把它当 `false`(那等于断言"未持仓",
- *    对持仓用户是假陈述);
+ *  - `undefined` —— **未知**(取数在途 / 失败 / **未启用**)。调用方**不得**把它当 `false`
+ *    (那等于断言"未持仓", 对持仓用户是假陈述);
  *  - `true`/`false` —— 已从真实持仓接口判定。
  *
  * 真源: `dashboardApi.portfolioSummary({ include_quotes: false })`(`GET /portfolio/summary`)——
  * 与 `DiscoveryPanel` 判定 `holdingSet` 用的是**同一个接口同一口径**(`accounts[].positions[]` 的
  * `market:symbol`)。不编造: 取数失败即保持 `undefined`, 由调用方展示「持仓态未知」而不是猜 `false`。
+ *
+ * **`enabled` 闸门(Finding 3)**: 只有**个股视图**(`type === 'stock'`)才需要持仓态 —— 指数/板块
+ * 分支既不渲染右栏/标签, 也不消费 `hasPosition`(见 `StockWorkbench` 的 `type !== 'stock'` 早分支)。
+ * 若不闸门, `?type=index`/`?type=board` 会白发一次 `GET /portfolio/summary` 且结果**永不被读**。
+ * `enabled=false` 时本 hook **不发请求**且恒为 `undefined`(未知), 与"未启用"同态。个股视图的三态
+ * 语义(在册 true / 不在册 false / 在途失败 undefined)**逐字节不变**。
  */
-function useHasPosition(symbol: string, market: string): boolean | undefined {
+function useHasPosition(symbol: string, market: string, enabled: boolean): boolean | undefined {
   const [held, setHeld] = useState<boolean | undefined>(undefined)
   useEffect(() => {
     let alive = true
-    // 换标的先回到"未知", 避免把上一只票的持仓态画到新标的上(与 HeaderBand 清旧值同纪律)。
+    // 换标的/关闸门先回到"未知", 避免把上一只票(或已离开的个股视图)的持仓态画到当前标的上。
     setHeld(undefined)
-    if (!symbol) return () => { alive = false }
+    // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
+    if (!enabled || !symbol) return () => { alive = false }
     dashboardApi
       .portfolioSummary({ include_quotes: false })
       .then((r) => {
@@ -96,7 +103,7 @@ function useHasPosition(symbol: string, market: string): boolean | undefined {
     return () => {
       alive = false
     }
-  }, [symbol, market])
+  }, [symbol, market, enabled])
   return held
 }
 
@@ -180,8 +187,10 @@ export default function StockWorkbench() {
   /**
    * 持仓态(T19 真源): `undefined` = 未知(在途/失败), 见 `useHasPosition` 头注。
    * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
+   * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费 `hasPosition`,
+   * 不该为其白发一次 `GET /portfolio/summary`(见 `useHasPosition` 的 `enabled`)。
    */
-  const hasPosition = useHasPosition(symbol, MARKET)
+  const hasPosition = useHasPosition(symbol, MARKET, type === 'stock')
 
   /** 写单个 query(保留其它键, 如 ?type / ?tab 并存), 不跳页。 */
   const setQuery = (key: 'type' | 'tab', value: string) =>

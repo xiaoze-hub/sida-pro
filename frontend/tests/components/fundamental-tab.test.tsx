@@ -361,3 +361,42 @@ describe('Task 13 基本面: 惰性门控(keys=[fundamentals, company])', () => 
     expect(mocks.portfolioSummary).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * Task 19 (Finding 4): 「持仓态未知」标注的**真组件**守卫。
+ *
+ * `stock-workbench.test.tsx` 把 `FundamentalTab` mock 掉了(守页面接线), 于是本标签里
+ * `fundamental-position-unknown` 那个 span 的 JSX 若被改坏, 页面测试**照样全绿**。
+ * 本文件渲染**真组件**, 直接断言可见文案: `hasPosition === undefined`(未知) → 显示
+ * 「持仓态未知 · 加仓测算暂不显示」且**不渲染**加仓计算器; 已判定(`true`/`false`) → 不显示。
+ */
+describe('Task 19 基本面: 持仓态未知(真组件, 可见文案)', () => {
+  const renderUnknown = () =>
+    render(
+      <MemoryRouter>
+        <ToastProvider>
+          {/* hasPosition 不传 / 传 undefined = 页面持仓判定在途或失败 */}
+          <FundamentalTab symbol="002636" market="CN" hasPosition={undefined} />
+        </ToastProvider>
+      </MemoryRouter>,
+    )
+
+  it('hasPosition=undefined: 真组件渲染可见「持仓态未知 · 加仓测算暂不显示」, 且不加仓计算器', async () => {
+    renderUnknown()
+    // 等财务行落定(证明标签确实渲染了, 不是整块空过)
+    await waitFor(() => expect(financeCell('pe_dynamic').textContent).toContain('39.19'))
+    const note = screen.getByTestId('fundamental-position-unknown')
+    expect(note.textContent).toContain('持仓态未知')
+    expect(note.textContent).toContain('加仓测算暂不显示')
+    expect(screen.getByText(/持仓态未知/)).toBeTruthy()
+    // 未知 = 无真实持仓数 ⇒ 加仓计算器不渲染(与未持仓同处置, 但有可见原因)
+    expect(screen.queryByTestId('fundamental-add-position')).toBeNull()
+  })
+
+  it('hasPosition=false(已判定未持仓): 真组件**不**渲染「持仓态未知」', async () => {
+    renderTab(false)
+    await waitFor(() => expect(financeCell('pe_dynamic').textContent).toContain('39.19'))
+    expect(screen.queryByTestId('fundamental-position-unknown')).toBeNull()
+    expect(screen.queryByText(/持仓态未知/)).toBeNull()
+  })
+})

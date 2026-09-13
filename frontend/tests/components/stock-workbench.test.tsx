@@ -545,4 +545,40 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.getByTestId('tab-suggest').textContent).toBe('suggest:002636:CN:undefined')
     expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:true')
   })
+
+  // ---- Task 19 Finding 3: 指数/板块**不**发 /portfolio/summary(结果无人消费) ----
+  it('?type=index: **不**打 `/portfolio/summary`(持仓态对其无用, 不发无用请求)', async () => {
+    renderAt('/stocks/000001?type=index')
+    // 指数正文已渲染(证明组件挂载完成、副作用已跑过一轮)
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:000001')
+    // 等一拍(若 hook 会发请求, 此刻已发出)再断言"零调用"
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mocks.portfolioSummary).not.toHaveBeenCalled()
+  })
+
+  it('?type=board: **不**打 `/portfolio/summary`', async () => {
+    renderAt('/stocks/880001?type=board')
+    expect(screen.getByTestId('board-body').textContent).toBe('board-body:880001')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mocks.portfolioSummary).not.toHaveBeenCalled()
+  })
+
+  it('个股(对照): **打** `/portfolio/summary` 一次(三态语义不受闸门影响)', async () => {
+    mocks.portfolioSummary.mockResolvedValue(WITH_POSITION)
+    renderAt('/stocks/002636?tab=l2')
+    await expectTabHasPosition('l2', 'true')
+    expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
+    expect(mocks.portfolioSummary).toHaveBeenCalledWith({ include_quotes: false })
+  })
+
+  it('stock → index 切类型: 切走后不再(重复)请求持仓; 判定只在个股分支发生', async () => {
+    renderAt('/stocks/002636')
+    await expectTabHasPosition('l2', 'false')
+    expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('mock-to-index'))
+    expect(screen.getByTestId('index-body').textContent).toBe('index-body:002636')
+    await new Promise((r) => setTimeout(r, 0))
+    // 闸门关闭 ⇒ 不因切类型再发一次(仍恰 1 次)
+    expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
+  })
 })

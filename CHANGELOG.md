@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务19 复审整改: 去重核对改「精确计数 + 逐面等数据」+ 两图共用资金柱 net + 持仓取数闸门 + 两处「持仓态未知」真组件用例
+
+- **F1(CRITICAL) 去重核对断言不再空过** —— `frontend/tests/components/workbench-dedup-audit.test.tsx` 原 7 例有洞: ②「主力净额」用 `toBeGreaterThanOrEqual(1)` 钉不住 spec 的"恰 2"; ①④⑦ 的**缺席**断言只等带1 渲染完就下结论 ⇒ 其余三面数据在途时**空过**(vacuously pass)。整改: 新增 `awaitAllSurfacesData()` —— **逐拥有面**在其面内 `findByText` 等**该面自己的**锚点(`band1`=涨停价 / `rail`=数智决策 / `l2`=封单成色 / `fundamental`=PE(TTM)), 之后的所有缺席断言才生效; 新增 `expectAtLeastOne()` —— 每条**存在**断言先证 `>=1`(点消失即先红)再钉**精确**次数; ② 改为 `l2` 恰 1 + **全屏总数恰 2**(带1 零出现, 无隐藏第 3 处); ⑤ 补上**带1 缺席**(原用例漏断言); ⑥ 除 proxy 字符串「数智决策」外, 加断真实标签「共振判定」与三灯读数行「趋势 …」的存在, 并逐面断言带1/l2/fundamental 零出现。
+- **F2(Important) 两图共用一套净额定义** —— 新增 `frontend/packages/biz-ui/src/lib/fund-bar.ts`(纯函数单一真源: `numOrNull`(带 `Number.isFinite` 挡 NaN)/`fundBarTime`/`DAY_BUCKETS`/`fundBarPoint`/`capitalBarRows`)。`KlineChart.tsx` 删去本地 `numOrNull`/`DAY_BUCKETS_PURE`/`fundBarTime`/`fundBarPoint` 与组件内 `DAY_BUCKETS`, 改从 lib 导入并**转发**导出(既有 import 路径与既有测试零改动); `InteractiveKline.tsx` 的 L3 资金柱由**发散的** `value = on ?? dn ?? 0`(只明盘或只暗盘 + 无 NaN 守卫)改为调用 `capitalBarRows`(与 `KlineChart` **同一** `fundBarPoint`: `net = 明盘 + 暗盘`、明盘优先 `ming_net`、`open_net` 兜底、脏值收敛 null)。两图不再各算一套 net。
+- **F3(Important) 指数/板块不再白发持仓请求** —— `StockWorkbench.tsx` 的 `useHasPosition(symbol, market, enabled)` 新增 `enabled` 闸门, 调用点传 `type === 'stock'`。`?type=index`/`?type=board` 结果**永不消费**, 原实现无条件先取 `GET /portfolio/summary` ⇒ 无用请求。个股视图三态语义(在册 true / 不在册 false / 在途失败 undefined)**逐字节不变**。
+- **F4(Important) 两处「持仓态未知」改为真组件用例** —— `stock-workbench.test.tsx` 把 `HeaderBand`/`FundamentalTab` mock 掉(守接线), 遂可见标注 JSX 改坏也**不会红**。改为在 `header-band.test.tsx` 渲染**真** `HeaderBand` 断 `data-testid="position-unknown"` 文案「持仓态未知」+ 缺席对照; 在 `fundamental-tab.test.tsx` 渲染**真** `FundamentalTab`(`hasPosition={undefined}`)断 `fundamental-position-unknown` 文案「持仓态未知 · 加仓测算暂不显示」且不加仓计算器 + 缺席对照。
+- **Minor** —— `fundBarTime`/`DAY_BUCKETS_PURE` 与组件内 `toChartTime`/`DAY_BUCKETS` 双份口径**已收敛为单一真源**(见 F2), 组件内 `toChartTime` 改为直接委托 `fundBarTime`。
+- **测试** —— `kline-fund-bar.test.ts` +4 例(`capitalBarRows`: 暗盘独有 / 明盘+暗盘相加 / NaN 挡 / 逐根对齐); `header-band.test.tsx` +3 例; `fundamental-tab.test.tsx` +2 例; `stock-workbench.test.tsx` +4 例(index/board 零请求 + 个股对照 + 切类型重发闸门); `workbench-dedup-audit.test.tsx` 重写(7 例)。
+- **变异验证(全部已还原)** —— ① band1 加一处「主力净额」⇒ ② 红(`expected 3 to be 2`); ② l2 加「涨停价」⇒ ① 与漂移例红(`2 != 1`); ③ band1 加「封单成色」⇒ ⑤ 红(`1 != 0`, 原用例不抓); ④ 删 l2「封单成色」⇒ 7 例全红(锚点消失即失败, 不空过); ⑤ 去掉 F3 闸门 ⇒ index/board 两例红; ⑥ 把共享 net 退回旧语义 ⇒ 相加断言红(`1e6 != 3e6`); ⑦ 去掉 `Number.isFinite` ⇒ NaN 两例红; ⑧ 断掉 HeaderBand/FundamentalTab 未知标注 JSX ⇒ 各自真组件例红。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **361/361**(54 files; 整改前 348)。R6: 新文件 `fund-bar.ts` 零裸 `.toFixed(`; `scripts/ui-rules-baseline.json` 未动; 无新增 token 之外的视觉。
+
 ### fix(wb)-工作台 v2 任务19: 修主图明盘恒 0(`open_net`→`ming_net`)+ `hasPosition` 接真实持仓源 + 去重核对 + 走查记录
 
 - **A1 修主图 L3 资金柱明盘恒 0(真缺陷)** —— 后端 `/klines/{s}/summary`.fund_flow 的真实键是 **`ming_net`**(`src/web/api/klines.py:570/589/853`), 而 `KlineChart.tsx` 只读 `open_net`(后端从不下发)⇒ 明盘分量恒 0、资金柱只剩暗盘。改: `FundFlowBar` 增 `ming_net?`(保留 `open_net` 作旧调用方兜底); 把资金柱单点计算抽成**纯函数 `fundBarPoint(bar, interval, sc, nodataColor)`**(优先 `ming_net`), 渲染处改调它; 同修 `InteractiveKline.tsx` + `insight/types.ts` 的 `FundFlowBarLike`。`L2Tab.tsx` 原本已读 `ming_net ?? open_net`, **未改动**(不破坏既有接线)。

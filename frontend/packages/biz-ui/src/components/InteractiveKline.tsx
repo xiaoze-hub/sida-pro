@@ -7,9 +7,13 @@ import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
 import FlashValue from './FlashValue'
-import { readStockColors, withAlpha, readGsColors } from '../lib/stock-colors'
+import { readStockColors, withAlpha, readGsColors, readChartTheme } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
 import { subChartReadouts, visibleSubCharts, type SubChartRow } from '../lib/subcharts'
+// L3 资金柱的**唯一**净额/分色/时间口径(与 KlineChart 共用, T19 Finding 2)
+import { capitalBarRows, type FundFlowBar } from '../lib/fund-bar'
+// 重导出本组件既有公开名(实为同一类型, 真源在 lib/fund-bar)
+export type { FundFlowBar }
 import {
   smaSeries,
   macd as macdSeries,
@@ -139,15 +143,9 @@ export type GsSignalPoint = {
   price: number
 }
 /** 资金柱: 明盘/暗盘日净额 (元). 缺失=无数据 */
-export type FundFlowBar = {
-  date: string
-  /** 明盘净额 (单笔 >30 万大单, 元) —— **后端真实字段名**(`/klines/{s}/summary`.fund_flow.ming_net) */
-  ming_net?: number | null
-  /** 明盘净额的旧别名: 早期本类型误写成 `open_net`(后端从不下发) ⇒ 恒 0。保留兼容既有调用方。 */
-  open_net?: number | null
-  /** 暗盘净额 (.tck 委托号或 thsdk 逐笔, 元). null=无数据 */
-  dark_net?: number | null
-}
+// 与 `KlineChart` 共用 `lib/fund-bar` 的**同一** `FundFlowBar` 类型与 `capitalBarRows` 净额定义
+// (T19 Finding 2: 同名同源字段不得在两图各算一套 net)。`FundFlowBar` 已由本文件顶部的
+// `export type { FundFlowBar }` 以既有公开名转发。
 /** K线事件标注 */
 export type KlineEventKind =
   | 'limit_up' // 涨停
@@ -787,32 +785,20 @@ export default function InteractiveKline(props: {
     // 设计稿: 流入红/流出绿. 暗盘只在有数据时画 (.tck 盘后 / thsdk 盘中)
     // 这里用 volSeries 的 pane 1 (与量能共 pane, 避免再加一个 pane 高度挤压)
     if (layers.capital && props.fundFlow && props.fundFlow.length) {
-      const flowByDate = new Map(props.fundFlow.map((f) => [f.date, f]))
-      const capitalData = series.klines
-        .map((k) => {
-          const f = flowByDate.get(k.date)
-          // 2026-09-13 T19 修: 后端真实字段是 `ming_net`(明盘), 早期只读 `open_net` ⇒ 明盘恒 0。
-          // 优先读 ming_net, 保留 open_net 兼容旧调用方(与 KlineChart 同修)。
-          const ming = typeof f?.ming_net === 'number' ? f.ming_net : null
-          if (!f || (ming == null && f.open_net == null && f.dark_net == null)) return null
-          // 明盘净额 (主柱)
-          const on = ming ?? (typeof f.open_net === 'number' ? f.open_net : null)
-          // 暗盘净额 (副柱, 画在明盘基础上 0.3 倍偏移示意)
-          const dn = typeof f.dark_net === 'number' ? f.dark_net : null
-          const value = on ?? dn ?? 0
-          return {
-            time: parseBusinessDay(k.date) as BusinessDay,
-            value,
-            color:
-              value >= 0
-                ? on != null && dn != null
-                  ? withAlpha(sc.up, 0.55) // 双向有数据, 中性偏红
-                  : withAlpha(sc.up, 0.35)
-                : on != null && dn != null
-                  ? withAlpha(sc.down, 0.55)
-                  : withAlpha(sc.down, 0.35),
-          }
-        })
+      // 2026-09-13 T19(修 + Finding 2 收敛): 净额/分色/NaN 护栏**一律**走共享纯函数
+      // `capitalBarRows` → `fundBarPoint`(优先 `ming_net`、`open_net` 兜底、`net = 明盘 + 暗盘`,
+      // `numOrNull` 挡 NaN) —— 与 `KlineChart` 用**同一个** net 定义, 消除"同名同源字段两图各算一套"
+      // (原实现 `value = on ?? dn ?? 0` 是"只明盘或只暗盘", 既漏相加也无 NaN 守卫)。
+      const theme = readChartTheme()
+      const rows = capitalBarRows(
+        series.klines.map((k) => k.date),
+        props.fundFlow,
+        sc,
+        theme.nodata,
+      )
+      // 时间保持与本图其余 series 同表示(日线 BusinessDay 对象); 缺值 → null 被滤掉。
+      const capitalData = rows
+        .map((r) => (r ? { time: parseBusinessDay(r.date) as BusinessDay, value: r.value, color: r.color } : null))
         .filter(Boolean)
       if (capitalData.length) {
         // 用现有 volSeries 旁追加一个独立 series 会增加 pane, 这里复用 volSeries 空间不新增
