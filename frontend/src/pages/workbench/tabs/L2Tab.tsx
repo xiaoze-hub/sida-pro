@@ -505,7 +505,12 @@ function IntentSealSection({
       {/* 主力意图(逐笔口径, 来自 klineSummary.main_intent_structured) */}
       <div className="mb-2 grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-3">
         <Cell label="方向" value={intentLabel(mi)} valueClass={intentClass(mi)} hint="V14 判据: 净额 + 参与度 + 买占比" />
-        <Cell label="主力净额" value={money(mi?.main_net)} valueClass={dirClass(mi?.main_net)} hint="主力净额(元), 逐笔口径" />
+        <Cell
+          label="主力净额(逐笔)"
+          value={money(mi?.main_net)}
+          valueClass={dirClass(mi?.main_net)}
+          hint="逐笔口径主力净额(元); 与「L2 成品资金」的主力净额(同花顺明盘口径, 万元)是两套口径, 并列不冲突"
+        />
         <Cell label="参与度" value={pctRaw(mi?.participation)} hint="主力成交额 / 当日总成交额(%)" />
         <Cell label="超大单净额" value={money(mi?.big_net)} valueClass={dirClass(mi?.big_net)} hint="超大单净额(元)" />
         <Cell label="大单净额" value={money(mi?.mid_net)} valueClass={dirClass(mi?.mid_net)} hint="大单净额(元)" />
@@ -658,7 +663,7 @@ function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
 function ChipsSection({ mainIntent }: { mainIntent: MainIntentStructured | null }) {
   const band = mainIntent?.chip_band ?? null
   return (
-    <Section id="chips" title="筹码" hint="近 10 日分价分布(腾讯/新浪标准筹码接口)">
+    <Section id="chips" title="筹码" hint="近 10 日分价分布 · 筹码峰/成本带/获利盘(逐日成本分位未暴露)">
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-3">
         <Cell label="筹码峰" value={safeFixed(mainIntent?.chip_peak, 2)} hint="成交最密集价位" />
         <Cell
@@ -695,6 +700,7 @@ function L2TabBody({ symbol }: { symbol: string }) {
         <button
           type="button"
           onClick={reload}
+          title="重取十档盘口与封单成色(其余字段由 InsightProvider 自身节奏刷新)"
           className="ml-auto inline-flex h-6 items-center gap-1 rounded border border-border/50 px-2 text-[11px] text-muted-foreground hover:text-foreground"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} /> 刷新

@@ -231,7 +231,7 @@ describe('Task 11 盘口资金: 七节真实渲染', () => {
     // 主力意图 + 封单成色
     const intentSec = section('intent')
     expect(cellValue(intentSec, '方向')).toBe('吸筹')
-    expect(cellValue(intentSec, '主力净额')).toBe('+1.20亿')
+    expect(cellValue(intentSec, '主力净额(逐笔)')).toBe('+1.20亿')
     expect(cellValue(intentSec, '参与度')).toBe('42.5%')
     expect(cellValue(intentSec, '主力买占比')).toBe('53.2%')
     expect(cellValue(intentSec, '尾盘净额')).toBe('-300.00万')
