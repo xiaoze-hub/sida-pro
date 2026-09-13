@@ -7,6 +7,17 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务8: 带1 修「同码不同标的」泄漏 —— 指数/板块不再取/画 `/quotes/{s}` 的个股数据
+- **缺陷(P1 走查, Important, 控制器裁定)** —— `/stocks/000001?type=index` 的 `000001` 是**上证指数**, 但 `HeaderBand` 无条件 `GET /quotes/000001`(=**个股平安银行**), 于是带1 渲染成 `平安银行 11.74 -0.93%` + 个股快照行(今开 11.82 / 最高 11.86 …), 而正文 `IndexBody` 正确显示 `上证指数 3888.11 -1.18%` —— 带1 画的是**另一个标的**的数据, 正是本仓明令禁止的"同码不同标的"泄漏。
+- **修复(最小改动, 无新端点, 复用既有 `isStock`/`showStockOnly` 闸门)** —— `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`:
+  - `useEffect` 取数: 把 `insightApi.quote(...)` 从无条件 `tasks` 首项改为**仅 `isStock` 时 push** —— 指数/板块**一条 `/quotes/{s}` 都不发**(与 CN-only 的 `cnStockDataEnabled` 同源思路); more-info/`/l2`(cnStock)、klineSummary(isStock)闸门不变。
+  - 渲染: 顶行的 `quote.name/current_price/change_pct` 与**整条快照行**包在 `isStock ? … : …` 内。`type !== 'stock'` 只渲染**裸代码中性标签**(纯 `symbol` 字符串, 非 quote) + 类型三按钮 + 刷新; 个股分支(`type === 'stock'`)的取数与 DOM **逐字节不变**。建议条 gating(`isStock && summary`)与 suggestion strip 代码**未动**。
+  - 顺带修正 `IndexBody.tsx`/`BoardBody.tsx` 头注里「工作台带1 已提供名称/现价」的失效陈述(改为: 带1 提供类型切换+刷新; 名称与数值由本正文拥有)。
+  - **未做 bonus**: 未把正文名称回传带1(需页面对两个 Body 加回调 + 状态提升, 引入换标的/换类型时的陈旧名风险, 且属新耦合) —— 按裁定取**最小安全形态**(switch + 裸代码)。
+- **测试**: `frontend/tests/components/header-band.test.tsx` 2 → **6 例**(真组件 + mock 网络层): ① 刷新语义两例由 `type="index"` 改 `type="stock"`(quote 现为个股专属 —— 原断言形态保留: 自身重取 + `onRefresh` 恰好一次 / 向后兼容); ② 新增 `type=index`、`type=board` 两例断言**零取数**(`quote`/`moreInfo`/`fetchAPI`/`klineSummary` 均未调用)且**不渲染** `平安银行`/`11.74`/`-0.93%`/`今开`/`11.82`, 只留裸代码 + 类型按钮; ③ 新增「index 点刷新仍广播 `onRefresh` 但绝不发 `/quotes`」; ④ 新增 `type=stock` 对照例(名称/现价/涨跌/快照行照旧)。fixture 刻意用**另一标的**(平安银行)真值 —— 组件若在非个股下取了/画了它, 断言立即抓到。
+- **变异验证**(证明断言非空, 已验证后还原): 把取数 `if (isStock)` 临时改回无条件 → 3 例失败 `expected "spy" to not be called at all, but actually been called 1 times`(index/board)与 `…2 times`(刷新例); 还原后 6/6 通过。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **272/272**(44 files, 基线 268/44 → 净 +4 = header-band 2→6)。R6: 改动文件裸 `.toFixed(` 命中 **0**; 配色仍只用既有令牌/类(`text-muted-foreground` 等), 无新硬编码色, 无新样式尺度。
+
 ### fix(wb)-工作台 v2 任务7 复审修复: 带1 刷新改为页面级(正文/带2 一起重取)+ 指数/板块正文补 `mt-3` 间距
 - **Finding 1(Important, 控制器裁定「页面级刷新」)** —— 指数/板块正文**没有手动刷新**: 旧独立页各自的「刷新」按钮随骨架(返回/标题/刷新)并入带1 后, `HeaderBand` 的刷新只刷**它自己**的行情, 而 `IndexBody`/`BoardBody` 只在**挂载/换标的**时取数 ⇒ 盘中无法手动更新 = 回归。修复(无新端点, 最小改动):
   - `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`: `HeaderBandProps` 新增可选 `onRefresh?: () => void`; 刷新按钮的既有内部重取(`tick` → 重发 `/quotes` 等)之后**再**调 `onRefresh?.()`。不传 = 维持旧行为(单用本组件处不受影响)。

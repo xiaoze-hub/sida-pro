@@ -3,17 +3,23 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * 带1 `HeaderBand` 的**刷新**语义(Task 7 复审 Finding 1, 控制器裁定「页面级刷新」)。
+ * 带1 `HeaderBand` 守两件事:
  *
- * 守两件事:
- *  ① 点刷新按钮 = 本带行情重取(`tick` → 重新发 `GET /quotes/{s}`)**且**回调 `onRefresh`
- *     —— 页面(`StockWorkbench`)靠它把正文子树(指数/板块正文、个股带2)重挂载 ⇒ 重新取数;
- *  ② `onRefresh` 可选: 不传时行为与旧版一致(只刷自身, 不抛)。
+ * ① **刷新**语义(Task 7 复审 Finding 1, 控制器裁定「页面级刷新」):
+ *   点刷新 = 本带行情重取(`tick` → 重新发 `GET /quotes/{s}`, **个股**) **且**回调 `onRefresh`
+ *   —— 页面(`StockWorkbench`)靠它把正文子树(指数/板块正文、个股带2)重挂载 ⇒ 重新取数;
+ *   `onRefresh` 可选: 不传时行为与旧版一致(只刷自身, 不抛)。
+ *
+ * ② **同码不同标的闸门**(Important, 控制器裁定): `type !== 'stock'`(指数/板块)**不发**
+ *   `GET /quotes/{s}`, 也**不渲染**其名称/现价/涨跌(顶行)与整条快照行 —— 同一代码在个股面与
+ *   指数/板块面是**不同标的**(`000001`: 指数 = 上证指数, 个股 = 平安银行 11.74 -0.93%)。
+ *   带1 对非个股只给类型三按钮 + 刷新 + 裸代码中性标签; 名称与数值由正文 `IndexBody`/`BoardBody`
+ *   拥有。故个股 fixture 刻意用**另一标的**(平安银行)的真值: 组件若在 `type=index|board` 下
+ *   画了它, 断言立刻抓到泄漏。
  *
  * 说明: 页面测试(`stock-workbench.test.tsx`)把本组件 mock 掉了, 故"真组件是否真的调了
- * `onRefresh`"必须由本文件守 —— 否则把回调漏调, 页面测试仍会全绿。
+ * `onRefresh`"/"是否真的没发 /quotes"必须由本文件守 —— 否则漏调/误发, 页面测试仍会全绿。
  * 真数据纪律: 本文件 mock 的是**网络层**(`@panwatch/api`), 组件取数/渲染走真实代码。
- * 用 `type="index"` 以最小化数据面(仅 `/quotes`, 不发 CN-only 的 more-info / l2 / klineSummary)。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -34,11 +40,21 @@ vi.mock('@panwatch/api', () => ({
 
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 
-const QUOTE = { name: '上证指数', current_price: 3200.5, change_pct: 0.42, open_price: 3190 }
+/**
+ * 个股(000001)真值: **平安银行** —— 与 `?type=index` 的 `000001`(上证指数)**不同标的**。
+ * 顶行/快照行若在非个股下渲染出这些数, 即"同码不同标的"泄漏(本测试的核心断言)。
+ */
+const STOCK_QUOTE = {
+  name: '平安银行',
+  current_price: 11.74,
+  change_pct: -0.93,
+  open_price: 11.82,
+  high_price: 11.86,
+}
 
 beforeEach(() => {
   mocks.fetchAPI.mockResolvedValue({})
-  mocks.quote.mockResolvedValue(QUOTE)
+  mocks.quote.mockResolvedValue(STOCK_QUOTE)
   mocks.moreInfo.mockResolvedValue({})
   mocks.klineSummary.mockResolvedValue(null)
 })
@@ -51,9 +67,9 @@ afterEach(() => {
 const refreshButton = () => screen.getByRole('button', { name: '刷新' })
 
 describe('HeaderBand 刷新(页面级)', () => {
-  it('点刷新: 自身行情重取 + 广播 onRefresh(正文据此重挂载重取数)', async () => {
+  it('个股: 点刷新 → 自身行情重取 + 广播 onRefresh(正文据此重挂载重取数)', async () => {
     const onRefresh = vi.fn()
-    render(<HeaderBand symbol="000001" market="CN" type="index" onRefresh={onRefresh} />)
+    render(<HeaderBand symbol="000001" market="CN" type="stock" onRefresh={onRefresh} />)
 
     // 挂载即取数
     await waitFor(() => expect(mocks.quote).toHaveBeenCalledTimes(1))
@@ -72,15 +88,85 @@ describe('HeaderBand 刷新(页面级)', () => {
     expect(onRefresh).toHaveBeenCalledTimes(2)
   })
 
-  it('不传 onRefresh: 仍只刷自身行情(向后兼容, 不抛)', async () => {
-    render(<HeaderBand symbol="000001" market="CN" type="index" />)
+  it('个股 不传 onRefresh: 仍只刷自身行情(向后兼容, 不抛)', async () => {
+    render(<HeaderBand symbol="000001" market="CN" type="stock" />)
     await waitFor(() => expect(mocks.quote).toHaveBeenCalledTimes(1))
 
     fireEvent.click(refreshButton())
     await waitFor(() => expect(mocks.quote).toHaveBeenCalledTimes(2))
-    // index 类型不发 CN-only 数据面(more-info / l2 / klineSummary)
+  })
+})
+
+describe('HeaderBand 同码不同标的闸门: 指数/板块不发 /quotes, 不渲染个股名称/价格', () => {
+  it('type=index: 一次都不发 /quotes|more-info|l2|klineSummary, 只给裸代码 + 类型按钮/刷新', async () => {
+    render(<HeaderBand symbol="000001" market="CN" type="index" />)
+    // 挂载后给微任务一轮机会(若误发请求, 这里就能被看到) —— 断言"零取数"
+    await waitFor(() => expect(screen.getByRole('group', { name: '类型切换' })).toBeTruthy())
+    expect(mocks.quote).not.toHaveBeenCalled()
     expect(mocks.moreInfo).not.toHaveBeenCalled()
     expect(mocks.fetchAPI).not.toHaveBeenCalled()
     expect(mocks.klineSummary).not.toHaveBeenCalled()
+
+    // **不渲染**个股的名称/现价/涨跌(平安银行 11.74 -0.93% 属另一标的)
+    expect(screen.queryByText('平安银行')).toBeNull()
+    expect(screen.queryByText('11.74')).toBeNull()
+    expect(screen.queryByText('-0.93%')).toBeNull()
+    // **不渲染**个股快照行(今开 11.82 / 最高 11.86 …)
+    expect(screen.queryByText('今开')).toBeNull()
+    expect(screen.queryByText('11.82')).toBeNull()
+    expect(screen.queryByText('最高')).toBeNull()
+
+    // 保留: 裸代码中性标签(非 quote) + 类型三按钮(指数选中) + 刷新
+    expect(screen.getByText('000001')).toBeTruthy()
+    const switchGroup = screen.getByRole('group', { name: '类型切换' })
+    expect(switchGroup.textContent).toContain('个股')
+    expect(switchGroup.textContent).toContain('板块')
+    expect(screen.getByRole('button', { name: '指数' }).getAttribute('aria-pressed')).toBe('true')
+    expect(refreshButton()).toBeTruthy()
+  })
+
+  it('type=board: 同样零取数、不渲染个股名称/价格/快照行', async () => {
+    render(<HeaderBand symbol="880001" market="CN" type="board" />)
+    await waitFor(() => expect(screen.getByRole('group', { name: '类型切换' })).toBeTruthy())
+    expect(mocks.quote).not.toHaveBeenCalled()
+    expect(mocks.moreInfo).not.toHaveBeenCalled()
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+    expect(mocks.klineSummary).not.toHaveBeenCalled()
+
+    expect(screen.queryByText('平安银行')).toBeNull()
+    expect(screen.queryByText('11.74')).toBeNull()
+    expect(screen.queryByText('-0.93%')).toBeNull()
+    expect(screen.queryByText('今开')).toBeNull()
+
+    expect(screen.getByText('880001')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '板块' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('type=index 点刷新: 仍广播 onRefresh(正文重取), 但绝不因此发 /quotes', async () => {
+    const onRefresh = vi.fn()
+    render(<HeaderBand symbol="000001" market="CN" type="index" onRefresh={onRefresh} />)
+
+    fireEvent.click(refreshButton())
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    // 刷新仍不碰个股数据面
+    expect(mocks.quote).not.toHaveBeenCalled()
+    expect(mocks.moreInfo).not.toHaveBeenCalled()
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+
+    fireEvent.click(refreshButton())
+    expect(onRefresh).toHaveBeenCalledTimes(2)
+    expect(mocks.quote).not.toHaveBeenCalled()
+  })
+
+  it('type=stock(对照): 名称/现价/涨跌/快照行都渲染, /quotes 恰好一次', async () => {
+    render(<HeaderBand symbol="000001" market="CN" type="stock" />)
+    await waitFor(() => expect(mocks.quote).toHaveBeenCalledTimes(1))
+
+    expect(screen.getByText('平安银行')).toBeTruthy()
+    expect(screen.getByText('11.74')).toBeTruthy()
+    expect(screen.getByText('-0.93%')).toBeTruthy()
+    // 快照行(今开 11.82)在个股下照旧渲染
+    expect(screen.getByText('今开')).toBeTruthy()
+    expect(screen.getByText('11.82')).toBeTruthy()
   })
 })

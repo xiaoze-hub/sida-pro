@@ -18,18 +18,31 @@ import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/work
  * 自己(正文有各自按钮), 骨架并入带1 后若不外抛, 正文就**只能在挂载/换标的时取数**
  * (盘中手动刷新缺失 = 回归)。`onRefresh` 可选: 单独使用 `HeaderBand` 且不传时维持旧行为。
  *
- * 结构: 顶行(名称 + 代码 + 现价 + 涨跌色 + 类型三按钮 + 刷新)
+ * 结构(**个股**): 顶行(名称 + 代码 + 现价 + 涨跌色 + 类型三按钮 + 刷新)
  *       + 快照行(今开/最高/最低/成交额/换手率/量比/总市值/流通市值/
  *                PE(动)/PE(TTM)/PB/股息率/涨停价/连板)
  *       + 技术指标买卖建议条(仅 type=stock; 点击跳「建议」标签)。
  *
+ * **非个股(指数/板块)只渲染类型三按钮 + 刷新 + 中性代码标签** —— 见下「同码不同标的」闸门。
+ *
  * 类型分流(spec 绑定条款): `type !== 'stock'` 时**隐藏**(非渲染成 `--`)7 个个股专属 cell ——
  * `float_market_cap`/`pe_dynamic`/`pe_ttm`/`pb`/`dividend_yield`/`limit_price`/`limit_boards`;
- * 指数/板块保留共享 cell(今开/最高/最低/成交额/换手率/量比/总市值)。
  * `mapSnapshot` 保持 type-agnostic（纯函数不动），分流在渲染侧 `visibleSnapshotCells`。
+ *
+ * **同码不同标的闸门(Important, 控制器裁定)**: `/stocks/000001?type=index` 的 `000001` 是
+ * **上证指数**, 而同代码的 `GET /quotes/000001` 返回的是**个股 平安银行** —— 在带1 里顶行画
+ * `quote.name/current_price/change_pct`、快照行画 `quote.open/high/low/turnover` 就是把**另一个
+ * 标的**的数据当成本页标的画出来(本仓明令禁止的"同码不同标的"泄漏)。故 `type !== 'stock'` 时:
+ *  ① **不发** `GET /quotes/{s}`(`isStock` 闸门, 与 CN-only 的 `cnStockDataEnabled` 同源);
+ *  ② **不渲染**顶行的 `quote.*`(名称/现价/涨跌)与整条快照行(那些 cell 的值全部来自 `quote`/
+ *     `more`/`l2`, 对指数/板块只会是 `--` 噪声);
+ *  ③ 只保留类型三按钮 + 刷新 + **裸代码**(中性标签, **非** quote —— 纯 `symbol` 字符串, 无取数)。
+ * 指数/板块的**名称与涨跌值由正文 `IndexBody`/`BoardBody` 拥有**(它们按正确端点取正确标的),
+ * 带1 绝不代取。个股分支(`type === 'stock'`)渲染与取数**逐字节不变**。
  *
  * 数据面(全部真数据, 缺值 `--`, 绝不编造):
  *  - GET /quotes/{symbol}            → current_price/change_pct/open_price/high_price/low_price/turnover
+ *                                      (**仅个股** —— 指数/板块同代码返回的是另一标的, 不发)
  *  - GET /quotes/{symbol}/more-info  → turnover_rate/volume_ratio/total_market_value(亿)/circulating_market_value(亿)
  *  - GET /stocks/{symbol}/l2         → more.zt_price(涨停价) + more.pe_dynamic/pe_ttm/pb/dividend_yield/ever_zt_count
  *                                      (自包含, 不等兄弟组件回喂)
@@ -257,11 +270,16 @@ export default function HeaderBand({
     if (!symbol) return
     let alive = true
     setBusy(true)
-    const tasks: Promise<unknown>[] = [
-      insightApi.quote<QuoteSnapshot>(symbol, market).then((r) => {
-        if (alive) setQuote(r ?? null)
-      }),
-    ]
+    const tasks: Promise<unknown>[] = []
+    // `isStock` 闸门(同码不同标的): 指数/板块**绝不**发 `/quotes/{s}` —— 同代码的个股报价是
+    // 另一标的(000001: 指数=上证指数 vs 个股=平安银行), 画进本页即"同码不同标的"泄漏。
+    if (isStock) {
+      tasks.push(
+        insightApi.quote<QuoteSnapshot>(symbol, market).then((r) => {
+          if (alive) setQuote(r ?? null)
+        }),
+      )
+    }
     if (cnStock) {
       // CN-only 数据面(非同 CN 标的不得发): more-info 对非 CN 后端 400;
       // /stocks/{s}/l2 是 CN TQ RPC → 涨停价/PE/PB/股息率/连板 只对 CN 个股有意义。
@@ -321,14 +339,23 @@ export default function HeaderBand({
   return (
     <div className="sticky top-0 z-20 rounded border border-border/60 bg-background/95 px-3 py-2 backdrop-blur">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-[15px] font-semibold">{quote?.name || symbol}</span>
-        <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
-        <span className={cn('font-mono text-[18px] font-semibold', toneClass)}>
-          {safePrice(quote?.current_price, 2)}
-        </span>
-        <span className={cn('font-mono text-[12px]', toneClass)}>
-          {changeNum == null ? '--' : `${changeNum >= 0 ? '+' : ''}${safeFixed(changeNum, 2)}%`}
-        </span>
+        {isStock ? (
+          // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
+          <>
+            <span className="text-[15px] font-semibold">{quote?.name || symbol}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
+            <span className={cn('font-mono text-[18px] font-semibold', toneClass)}>
+              {safePrice(quote?.current_price, 2)}
+            </span>
+            <span className={cn('font-mono text-[12px]', toneClass)}>
+              {changeNum == null ? '--' : `${changeNum >= 0 ? '+' : ''}${safeFixed(changeNum, 2)}%`}
+            </span>
+          </>
+        ) : (
+          // 指数/板块: 只给**裸代码**中性标签 —— 不渲染 quote 的名称/现价/涨跌
+          // (同代码的个股报价是**另一标的**; 名称与数值由正文 IndexBody/BoardBody 拥有)。
+          <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
           <div className="flex items-center gap-0.5" role="group" aria-label="类型切换">
@@ -363,14 +390,18 @@ export default function HeaderBand({
         </div>
       </div>
 
-      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-        {cells.map((c) => (
-          <div key={c.key} className="flex items-baseline gap-1 text-[11px]">
-            <span className="text-muted-foreground">{c.label}</span>
-            <span className="font-mono">{c.value}</span>
-          </div>
-        ))}
-      </div>
+      {/* 快照行**仅个股** —— 其 cell 的值全部来自 `/quotes`(个股)/more-info/l2, 对指数/板块
+          既是 `--` 噪声, 又(若发了 /quotes)会把另一标的的今开/最高/最低/成交额画出来。 */}
+      {isStock ? (
+        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+          {cells.map((c) => (
+            <div key={c.key} className="flex items-baseline gap-1 text-[11px]">
+              <span className="text-muted-foreground">{c.label}</span>
+              <span className="font-mono">{c.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {suggestion ? (
         <button
