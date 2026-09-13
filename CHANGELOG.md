@@ -7,6 +7,16 @@
 
 ## 2026-09-13
 
+### fix(wb)-工作台 v2 任务7 复审修复: 带1 刷新改为页面级(正文/带2 一起重取)+ 指数/板块正文补 `mt-3` 间距
+- **Finding 1(Important, 控制器裁定「页面级刷新」)** —— 指数/板块正文**没有手动刷新**: 旧独立页各自的「刷新」按钮随骨架(返回/标题/刷新)并入带1 后, `HeaderBand` 的刷新只刷**它自己**的行情, 而 `IndexBody`/`BoardBody` 只在**挂载/换标的**时取数 ⇒ 盘中无法手动更新 = 回归。修复(无新端点, 最小改动):
+  - `frontend/packages/biz-ui/src/components/workbench/HeaderBand.tsx`: `HeaderBandProps` 新增可选 `onRefresh?: () => void`; 刷新按钮的既有内部重取(`tick` → 重发 `/quotes` 等)之后**再**调 `onRefresh?.()`。不传 = 维持旧行为(单用本组件处不受影响)。
+  - `frontend/src/pages/StockWorkbench.tsx`: 新增 `refreshKey` state, `onRefresh={() => setRefreshKey(k => k + 1)}`; `key={refreshKey}` **只挂正文子树**(指数/板块正文块 + 个股带2/带3 块各一个), 两分支的主内容整棵重挂载 → 各自在挂载副作用里重新取数。页面外壳与带1 **不挂 key** —— 吸顶带不因刷新丢焦点/滚动, 也不重发自己的请求; 刷新不跳页、不改 `?type=`/`?tab=`。
+- **Finding 2(Minor)** —— 指数/板块分支丢了带间间距: 该分支现包在 `<div key={refreshKey} className="mt-3">` 内(个股分支带2 本就是 `mt-3`), 带1 ↔ 正文间距两分支一致。
+- **测试**: 新增 `frontend/tests/components/header-band.test.tsx`(2 例, mock 网络层 `@panwatch/api` 用真组件)守「刷新 = 自身行情重取 **且** 广播 `onRefresh` 恰好一次」+「不传 `onRefresh` 向后兼容」—— 页面测试把带1 mock 掉了, 不补本例则"回调漏调"仍会全绿。`frontend/tests/components/stock-workbench.test.tsx` 9 → 12 例: mock 的 `HeaderBand` 增加 `mock-refresh` 按钮, `IndexBody`/`BoardBody` mock 改为**挂载即记一次"取数"**(`vi.hoisted` 计数), 新增三例断言刷新后 ①正文"取数"调用次数 **+1** ②正文 DOM 节点换新(重挂载) ③带1/外壳保持同一节点 ④`?type=`/`?tab=` 不丢 ⑤指数/板块分支正文块含 `mt-3`。
+- **变异验证**(证明新断言非空, 均已还原): ① 去掉正文块的 `key={refreshKey}` → 刷新用例失败 `expected 1 to be 2`(取数次数没增加); ② 去掉 `mt-3` → 失败 `expected '' to contain 'mt-3'`; ③ `HeaderBand` 刷新不外抛 `onRefresh` → `header-band` 用例失败 `expected "spy" to be called 1 times, but got 0 times`; ④ 页面漏传 `onRefresh` → 页面刷新 3 例失败。
+- **门禁**(frontend/): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` `UI-RULES OK` / `npx vitest run` **268/268**(44 files, 基线 263/43 → 净 +5 = 页面 +3 + HeaderBand +2)。R6: 两个改动源文件裸 `toFixed` 命中 **0**(未新增); 配色仍只用设计令牌(`mt-3` 为既有间距尺度)。
+- **遗留/已知取舍**: 正文块用 `key` 重挂载会**重放一次** `sida-page-enter` 入场动画, 且正文内部状态(如轮动条选中态等纯 UI 局部态)刷新后回到初始值 —— 与旧页「刷新」只重取数据不同; 若走查(Task 8)觉得闪烁或局部态丢失不可接受, 后续可改为向正文透传 `refreshToken` prop 触发内部重取, 而非重挂载。CHANGELOG entry 仍未缀 `[commit <hash>]`(hash 写入时尚不存在, 沿用本分支 T1–T7 既有形态)。
+
 ### feat(wb)-工作台 v2 任务7: 指数/板块正文抽为 IndexBody/BoardBody + 工作台内类型复用(旧页删除)
 - **抽正文**(spec §1.3「逻辑不变, 只搬位置」): 新建 `frontend/src/pages/workbench/IndexBody.tsx`(`IndexBody({symbol})` ← `IndexDetailPage` 的取数与渲染: `GET /market/indices/{s}` + `/market-data/market-capital-flow`); 新建 `frontend/packages/biz-ui/src/components/workbench/BoardBody.tsx`(`BoardBody({code})` ← `BoardDetailPage`: `GET /boards/{c}` + `/boards/{c}/constituents` + `/boards/rotation?days=5`)。三态(loading/error/空态)、stale-on-error 滞后标注、成交额趋势 SVG、成分股语义取列、轮动 Top5 横条全部逐段搬移。
 - **落位分家 + 理由**: `BoardBody` → `packages/biz-ui/src/components/workbench/`(计划 §文件结构既定路径; 依赖 `@panwatch/api`/`@panwatch/biz-ui/lib/stock-colors`/`@/lib/format`, 其中 biz-ui → `@/lib/*` 是本仓既有形态 —— `kline-summary-dialog.tsx:6`、`workbench/HeaderBand.tsx:8`, **不新开包边**); `IndexBody` → `src/pages/workbench/` —— 正文用 `@/components/ErrorBanner`(app 层组件, 全仓仅 `src/pages/*` 引用 12 处), 放 biz-ui 会新增**现存为零**的 biz-ui → `src/components` 反向依赖; `@/lib/api-error` 同属 src。两文件头注均写明归属理由。

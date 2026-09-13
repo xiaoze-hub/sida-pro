@@ -12,6 +12,12 @@ import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/work
 /**
  * 带1 顶部信息带(v0.5.96, 三合一 spec §4.1): 个股/指数/板块**共享**。
  *
+ * 刷新语义(Task 7 复审 Finding 1, 控制器裁定「页面级刷新」): 刷新按钮除了刷**自己**的行情
+ * (`tick`), 还回调 `onRefresh` —— 由页面(`StockWorkbench`)用 `refreshKey` 重挂载正文子树,
+ * 让指数/板块正文与个股带2(`KlineChart`/`QuickRail`)一起重新取数。旧独立页的「刷新」只管
+ * 自己(正文有各自按钮), 骨架并入带1 后若不外抛, 正文就**只能在挂载/换标的时取数**
+ * (盘中手动刷新缺失 = 回归)。`onRefresh` 可选: 单独使用 `HeaderBand` 且不传时维持旧行为。
+ *
  * 结构: 顶行(名称 + 代码 + 现价 + 涨跌色 + 类型三按钮 + 刷新)
  *       + 快照行(今开/最高/最低/成交额/换手率/量比/总市值/流通市值/
  *                PE(动)/PE(TTM)/PB/股息率/涨停价/连板)
@@ -212,6 +218,11 @@ export interface HeaderBandProps {
   hasPosition?: boolean
   onTypeChange?: (t: WorkbenchType) => void
   onGotoTab?: (tab: WorkbenchTab) => void
+  /**
+   * 页面级刷新回调(Finding 1): 刷新按钮点火后, 页面借此重挂载正文子树
+   * (指数/板块正文 + 个股带2), 使它们的挂载取数重新执行。不传 = 只刷本带行情。
+   */
+  onRefresh?: () => void
 }
 
 export default function HeaderBand({
@@ -221,6 +232,7 @@ export default function HeaderBand({
   hasPosition = false,
   onTypeChange,
   onGotoTab,
+  onRefresh,
 }: HeaderBandProps) {
   const isStock = showStockOnly(type)
   /** CN-only 数据面闸门: `/stocks/{s}/l2` 是 CN TQ RPC, more-info 对非 CN 直接 400 —— 同代码的境外标的绝不能发, 否则会把 CN 涨停价/PE/PB 画到别的标的上。 */
@@ -281,7 +293,11 @@ export default function HeaderBand({
     }
   }, [symbol, market, isStock, cnStock, tick])
 
-  const refresh = useCallback(() => setTick((t) => t + 1), [])
+  // 刷新 = 本带行情重取(`tick`)+ 页面级广播(`onRefresh`, 让正文/带2 也重新取数)。见头注 Finding 1。
+  const refresh = useCallback(() => {
+    setTick((t) => t + 1)
+    onRefresh?.()
+  }, [onRefresh])
 
   const suggestion = useMemo(
     () => (isStock && summary ? buildKlineSuggestion(summary, hasPosition) : null),

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
@@ -30,6 +31,11 @@ import {
  *  `TabBar` 是本任务的**正式**产物(6 键 + `?tab=` 深链), 非占位。
  *
  * 真数据: 本页不取数(mock 零容忍) —— 取数全在 `HeaderBand`/`QuickRail`/`KlineChart`/`IndexBody`/`BoardBody` 内。
+ *
+ * **页面级刷新**(Task 7 复审 Finding 1, 控制器裁定): 带1 `HeaderBand` 的刷新按钮除刷自身行情外,
+ * 还回调 `onRefresh` → 本页 `refreshKey + 1`。`refreshKey` 只作**正文子树**的 `key`(两个分支
+ * 各一个), 于是指数/板块正文与个股带2(`KlineChart`/`QuickRail`)整棵重挂载 → **各自重新取数**;
+ * 页面外壳与带1 **不挂 key**(吸顶带不因刷新丢焦点/滚动位置, 也不重发它自己的请求)。
  */
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
@@ -39,7 +45,8 @@ const MARKET = 'CN'
  * 指数/板块正文宿主(Task 7 换成真实正文)。
  * `type === 'index'` 走指数正文(`IndexBody`, 取数/渲染来自 `IndexDetailPage`);
  * `type === 'board'` 走板块正文(`BoardBody`, 来自 `BoardDetailPage`; 同路由内切, spec §1.3)。
- * 两组件均按 spec §1.3 去掉了旧页骨架(返回/标题/刷新 —— 已并入带1 `HeaderBand`)。
+ * 两组件均按 spec §1.3 去掉了旧页骨架(返回/标题/刷新 —— 头部并入带1 `HeaderBand`; 旧页各自的
+ * 「刷新」按钮改由带1 的 `onRefresh` 统一广播, 见头注「页面级刷新」, 正文仍能手动更新)。
  */
 function IndexBoardHost({ type, symbol }: { type: WorkbenchType; symbol: string }) {
   return type === 'index' ? <IndexBody symbol={symbol} /> : <BoardBody code={symbol} />
@@ -77,6 +84,11 @@ export default function StockWorkbench() {
   const [sp, setSp] = useSearchParams()
   const type = normalizeType(sp.get('type'))
   const tab = parseTab(sp.get('tab'))
+  /**
+   * 页面级刷新计数器(Finding 1): 只作**正文子树**的 `key`。带1 刷新 → 自增 → 两个分支的
+   * 内容块各自重挂载一次 → 正文/主图/右栏在挂载副作用里重新取数(各自组件本就"挂载即取数")。
+   */
+  const [refreshKey, setRefreshKey] = useState(0)
 
   /** 写单个 query(保留其它键, 如 ?type / ?tab 并存), 不跳页。 */
   const setQuery = (key: 'type' | 'tab', value: string) =>
@@ -86,20 +98,24 @@ export default function StockWorkbench() {
 
   return (
     <div className="mx-auto max-w-[1500px] p-3">
-      {/* 带1: 顶部信息带(吸顶, 三类型共享) */}
+      {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
         market={MARKET}
         type={type}
         onTypeChange={(t) => setQuery('type', t)}
         onGotoTab={(t) => setQuery('tab', t)}
+        onRefresh={() => setRefreshKey((k) => k + 1)}
       />
 
       {type !== 'stock' ? (
-        /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条) */
-        <IndexBoardHost type={type} symbol={symbol} />
+        /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
+           `key={refreshKey}`: 刷新时正文重挂载重取数; `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
+        <div key={refreshKey} className="mt-3">
+          <IndexBoardHost type={type} symbol={symbol} />
+        </div>
       ) : (
-        <>
+        <div key={refreshKey}>
           {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡 */}
           <div className="mt-3 flex gap-3">
             <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
@@ -118,7 +134,7 @@ export default function StockWorkbench() {
           {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
           <TabBar value={tab} onChange={(t) => setQuery('tab', t)} />
           <TabPanel tab={tab} symbol={symbol} />
-        </>
+        </div>
       )}
     </div>
   )
