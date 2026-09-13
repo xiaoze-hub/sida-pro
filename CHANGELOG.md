@@ -7,6 +7,18 @@
 
 ## 2026-09-13
 
+### feat(wb)-工作台 v2 任务15: 标签「研究」(AI 报告 + 深度分析, 全复用恢复组件)
+
+- **新增(2 文件)** —— `frontend/src/pages/workbench/tabs/ResearchTab.tsx`(默认导出 `ResearchTab({ symbol, market, stockName?, hasPosition? })`) + `frontend/tests/components/research-tab.test.tsx`(8 例)。**未接线**(`StockWorkbench.tsx` 的 `TabPanel` 仍是「建设中」, Task 17 才换成真实标签), 故本 commit **不改任何现存页面行为** —— 与 T9–T14 同形态。
+- **落位(spec §三 去重表 / 计划 Task 15)** —— ① **AI 报告**: 盘前/盘后/新闻 三子页签 + 正文(agent 标签 · 分析日 · 标题 · 买/卖标签 · Markdown 正文 · 「查看分析上下文」折叠); ② **深度分析**: TradingAgents 决策卡/历史决策 vs 实际涨跌/4 位分析师报告/辩论/免责声明 + 入口(打开 `/analysis/{symbol}/{date}`)。去重表锚点: `workbench-tabs.ts` 的 `DATA_OWNERSHIP` 里 `reports → tab.research`、`deep → tab.research`。现价/名称/涨跌归带1 `HeaderBand`, 本标签一概不渲染。
+- **复用 vs 自建(brief 硬要求「REUSE them (don't re-implement)」)** —— ① 的**三子页签与正文渲染全部复用**恢复组件 `ReportsTab`(biz-ui); ② 的**正文与入口全部复用** `DeepTab` + `deep-analysis.tsx`(`DeepAnalysisSection`/`DeepHistoryComparison`)—— 连入口按钮「打开详情页 ↗」与其目标路径(`/analysis/{symbol}/{结果时间戳日期段}`)都来自复用组件, 本文件**不再造第二个入口**。两个恢复文件**一字未改**。本文件自建的只有: 一层 `InsightProvider` + 段头(标题/口径/份数)+ 两段如实的空态说明。
+- **取数键 `keys=['reports','deep']`(控制器裁定, 见 progress「Task 15 Ruling」)** —— `/history`(三 agent, 三份全空时回退全局记录 `stock_symbol=*` 按代码/名称匹配)与 TradingAgents(`getLatestForStock` + `getHistoryComparison(90 天)`)。两个 effect 都**只按键**门控(与内部 `tab` 无关)⇒ 工作台标签只传 `keys` 即可取数, **无任何 `setTab`/直调取数**(T13 复审已解掉同类耦合)。
+- **防串台 key `${market}:${symbol}`(与 T14 的 `key={symbol}` 不同 —— 差异已论证)** —— `reports`/`deepResult` 的空值重置写在被 `core` 门控的挂载总 effect 里, 而本标签未启用 `core`(该路径不跑); 深度取数 effect 又有 `if (!deepLoaded && !deepLoading)` 守卫 ⇒ 不重挂载则换标的后**新标的永远不取 deep**、且把上一只票的报告/结论画在新标的名下。**market 进 key 是为 `deep` 服务的**: `getHistoryComparison(symbol, market, 90)` 是市场维度端点, 同一代码换市场时 `loadDeepResult` 身份变化会让 effect 重跑却被 `deepLoaded === true` 早退 ⇒ 不重挂载会把**另一个市场**的历史对比留在屏上(`reports` 的三个请求与 market 无关)。key 用归一化后的 market, 避免 `'cn'`/`'CN'` 各挂一次。
+- **诚实空态(never fabricate)** —— 恢复组件的空态不含编造内容(「暂无报告」/「暂无深度分析报告」), 本文件不塞占位条目、不补数值。另给**成因不可区分**的常驻说明: 报告段三因(「该标的三个 agent 均无已存报告 / 取数失败 / 首拉在途」)、深度段两因(「该标的尚无深度分析 / 取数失败」; 历史对比若取到则把真实条数写进说明)。**并区分出一种可区分的情形**: 列表非空而当前子页签的 agent 不在其中(`activeReport === null`)⇒ 另给带真实份数的文案(`research-reports-agent-missing`), 不冒充"没有报告"。段头份数只在 `> 0` 时渲染(首拉在途与确无内容不混同)。根治需 provider 给这两个端点增失败位+加载位(跨任务 API 面, 见 task-15-report concern)。
+- **测试(8 例)** —— ①两段真渲染 + 子页签点「盘后」真换正文 + 入口点击真跳 `/analysis/002636/2026-09-12`; ②门控 `['reports','deep']`(core 六端点/watchlist/suggestions/news/announcements/company/fundamentals/triggerAgent/taTrigger 全零); ③列表非空但当前 agent 缺失的可区分文案; ④真·空 ⇒ 两条空态 + 成因不可区分说明 + 不出「共 0 份」+ 无编造内容; ⑤两端点 reject ⇒ 仍空态且如实说明"不可区分"; ⑥深度结果缺失但历史取到 ⇒ 说明里带真实条数; ⑦换标的(新响应悬挂)⇒ 旧标的报告/结论一条不留屏; ⑧同代码换市场 ⇒ 不留另一市场的深度结论。
+- **变异验证(2 处, 已还原; 证明新断言真能抓到回归)** —— 删掉 `key` ⇒ 用例⑦⑧**同时失败**(`2 failed | 6 passed`); 只把 key 退成 `key={symbol}`(丢 market)⇒ **仅用例⑧失败**(`1 failed | 7 passed`), 正是"市场维度无守卫"的缺口。
+- **门禁**(frontend/, 全绿): `npx tsc -b` 0 error / `npx eslint .` 0 问题 / `node ../scripts/check_ui_rules.mjs` UI-RULES OK / `npx vitest run` **324/324**(51 files; 上一基线 316/50 → 净 +8 例 +1 文件)。无 UI token/尺度改动(纯 Tailwind token 类), `scripts/ui-rules-baseline.json` 未动。本 entry 未缀 `[commit <hash>]`(与 T11–T14 同; 补 hash 需 amend 既有提交, 不在本任务授权内)。
+
 ### style(wb)-工作台 v2 任务14 复审: 行号引用校正(避免 stale 行号)
 
 - **起因(`5dfb1dd` 的收尾自审)** —— 该提交自身给 `NewsTab.tsx` 头注加了 4 行(补"`key` 为何不含 `market`"), 但同期写的测试头注 ⑥ 与 CHANGELOG 仍按**改动前**的位置引 `NewsTab.tsx:153`; 提交后 `key={symbol}` 实际落在 `:157` ⇒ 后人按 153 grep 会落到别处(这类 stale 行号在本仓已出现过, 见 `082fb98` 同类订正)。
