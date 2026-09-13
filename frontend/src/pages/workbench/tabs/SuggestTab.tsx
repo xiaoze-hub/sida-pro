@@ -127,7 +127,7 @@ function SuggestTabBody() {
           触发失败: {INTRADAY_LABEL}作业未提交成功 —— 可重试; 失败原因不在此处推断(若出现错误提示, 以其为准)。
           {/* 部分成功必须如实陈述: 触发前的写入已落库且不回滚, 不因后续失败而消失 */}
           {triggerFailure.agentBound
-            ? ` 注意: 触发前的「加入自选 + 绑定${INTRADAY_LABEL}」已写入(不会自动回滚), 可在右栏「关注」核对。`
+            ? ` 注意: 触发前的「加入自选 + 绑定${INTRADAY_LABEL}」已写入(不会自动回滚)。`
             : triggerFailure.watchlistEnsured
               ? ` 注意: 该标的已加入自选(不会自动回滚), 但${INTRADAY_LABEL}绑定未完成。`
               : ' 本次未发生自选 / 绑定写入。'}
