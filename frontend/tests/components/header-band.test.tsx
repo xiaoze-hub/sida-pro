@@ -315,3 +315,57 @@ describe('HeaderBand 快照行补 成交量/振幅/封单额(遗留⑤)', () => 
     expect(mocks.fetchAPI).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * KI-059 方案 B(2026-09-18): 封单额等 `/l2` 读数在带1 **无 30s 轮询** —— 盘中封单额可能
+ * 秒级剧变但屏上不动。方案 B = **不轮询**, 在快照行尾显式标「快照 HH:MM:SS」(取数时刻),
+ * 不把首屏时刻伪装成实时。`as_of` 缺失则不渲染时钟(不编时间)。
+ */
+describe('HeaderBand 快照时钟(KI-059 方案 B)', () => {
+  beforeEach(() => {
+    mocks.quote.mockResolvedValue({
+      name: '金安国纪',
+      current_price: 82.46,
+      change_pct: 7.86,
+    })
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      if (String(url).includes('/l2')) {
+        return {
+          as_of: '2026-09-18T10:23:45+08:00',
+          more: { zt_price: 84.1, fcamo: 812_000_000 },
+          snapshot: {},
+        }
+      }
+      return {}
+    })
+  })
+
+  it('/l2 带 as_of → 快照行尾渲染「快照 10:23:45」, title 说明无轮询', async () => {
+    render(<HeaderBand symbol="002636" market="CN" type="stock" />)
+    await waitFor(() => expect(screen.getByTestId('band1-l2-snapshot-clock')).toBeTruthy())
+    const el = screen.getByTestId('band1-l2-snapshot-clock')
+    expect(el.textContent).toBe('快照 10:23:45')
+    expect(el.getAttribute('title') || '').toContain('无 30s 轮询')
+    // 封单额仍在(时钟是附加披露, 不替代数值)
+    expect(screen.getByText('8.12亿')).toBeTruthy()
+  })
+
+  it('/l2 缺 as_of → 不渲染时钟(不编时间)', async () => {
+    mocks.fetchAPI.mockImplementation(async (url: unknown) => {
+      if (String(url).includes('/l2')) {
+        return { more: { zt_price: 84.1, fcamo: 812_000_000 }, snapshot: {} }
+      }
+      return {}
+    })
+    render(<HeaderBand symbol="002636" market="CN" type="stock" />)
+    await waitFor(() => expect(screen.getByText('封单额')).toBeTruthy())
+    expect(screen.queryByTestId('band1-l2-snapshot-clock')).toBeNull()
+  })
+
+  it('type=index: 无 /l2 请求 ⇒ 无快照时钟', async () => {
+    render(<HeaderBand symbol="000001" market="CN" type="index" />)
+    await waitFor(() => expect(screen.getByRole('group', { name: '类型切换' })).toBeTruthy())
+    expect(screen.queryByTestId('band1-l2-snapshot-clock')).toBeNull()
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+  })
+})

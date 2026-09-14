@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  asOfClock,
   cnStockDataEnabled,
   mapSnapshot,
   visibleSnapshotCells,
@@ -449,5 +450,25 @@ describe('cnStockDataEnabled(CN-only 数据面闸门)', () => {
     expect(cnStockDataEnabled('stock')).toBe(true)
     expect(cnStockDataEnabled(undefined, 'CN')).toBe(true)
     expect(cnStockDataEnabled(undefined, 'HK')).toBe(false)
+  })
+})
+
+/**
+ * KI-059 方案 B: `as_of` ISO → `HH:MM:SS`。缺值/脏值 → null(不编时间)。
+ * 口径与 QuickRail::asOfClock 一致(两处显示同一 `/l2` 时刻)。
+ */
+describe('asOfClock(KI-059B 快照时钟)', () => {
+  it('合法 ISO → HH:MM:SS', () => {
+    expect(asOfClock('2026-09-18T10:23:45+08:00')).toBe('10:23:45')
+    expect(asOfClock('2026-09-18T00:00:00Z')).toBe('00:00:00')
+  })
+
+  it('缺值/过短/格式不符 → null(不猜)', () => {
+    expect(asOfClock(null)).toBeNull()
+    expect(asOfClock(undefined)).toBeNull()
+    expect(asOfClock('')).toBeNull()
+    expect(asOfClock('2026-09-18')).toBeNull()
+    expect(asOfClock('2026-09-18T10:23:45')).toBe('10:23:45') // 19 字符仍合法
+    expect(asOfClock('2026-09-18Taa:bb:cc+08:00')).toBeNull()
   })
 })

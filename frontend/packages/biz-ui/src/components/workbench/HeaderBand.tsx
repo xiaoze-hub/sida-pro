@@ -51,6 +51,10 @@ import { showStockOnly, type WorkbenchTab, type WorkbenchType } from '@/lib/work
  *  - GET /klines/{symbol}/summary    → buildKlineSuggestion(技术面建议)
  * **封单额归属(遗留⑤ 去重裁定)**: `DATA_OWNERSHIP.seal_amount = 'band1.snapshot'` ⇒ 本快照行是
  * 全站**唯一**拥有面; 右栏 `QuickRail` 的「盘口速览」封单行**已删**(该卡只留 主力净额 + 五档)。
+ * **快照时钟(KI-059 方案 B, 2026-09-18)**: 封单额/涨停价/连板等来自 `/l2` 的读数在带1 **无 30s 轮询**
+ * (取数只在挂载/换标的/手动刷新时跑) ⇒ 盘中封单额可能秒级剧变但屏上不动。方案 B = **不轮询**,
+ * 在快照行尾显式标 `快照 HH:MM:SS`(`as_of` 取数时刻) —— 让用户知道这些数是什么时候的,
+ * 不把首屏时刻伪装成实时。`as_of` 缺失则不渲染时钟(不编时间)。
  * **CN-only**: more-info 与 /l2 只在 `个股 + CN` 时发(`cnStockDataEnabled`)—— more-info 对非 CN 后端 400,
  * /l2 是 CN TQ RPC; 否则同代码的境外标的会把 CN 涨停价/PE/PB 画成自己的。
  * 任一接口失败**保留旧值**(stale-on-error), 不把失败渲染成 0/编造值。
@@ -334,6 +338,15 @@ interface L2Resp {
   more?: L2MoreSnapshot | null
   /** 遗留⑤: 同一份 `/l2` 响应的 `snapshot` 段(振幅的 CN 回退源) —— 不新增请求。 */
   snapshot?: L2QuoteSnapshot | null
+  /** KI-059B: 取数时刻 ISO 串(后端 `/l2` 顶层字段, 与 QuickRail 同源)。 */
+  as_of?: string | null
+}
+
+/** `as_of` ISO 串 → `HH:MM:SS`; 缺值/格式不符 → null(不猜、不编时间)。与 QuickRail::asOfClock 同口径。 */
+export function asOfClock(iso?: string | null): string | null {
+  if (!iso || iso.length < 19) return null
+  const clock = iso.slice(11, 19)
+  return /^\d{2}:\d{2}:\d{2}$/.test(clock) ? clock : null
 }
 
 export interface HeaderBandProps {
@@ -374,6 +387,8 @@ export default function HeaderBand({
   const [l2More, setL2More] = useState<L2MoreSnapshot | null>(null)
   /** 遗留⑤: `/stocks/{s}/l2` 的 `snapshot` 段(与 `l2More` **同一条响应**, 不新增请求)。 */
   const [l2Snap, setL2Snap] = useState<L2QuoteSnapshot | null>(null)
+  /** KI-059B: `/l2` 取数时刻(快照时钟; 无轮询, 只在挂载/刷新时更新)。 */
+  const [l2AsOf, setL2AsOf] = useState<string | null>(null)
   const [summary, setSummary] = useState<KlineSummaryData | null>(null)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
@@ -385,6 +400,7 @@ export default function HeaderBand({
     setMore(null)
     setL2More(null)
     setL2Snap(null)
+    setL2AsOf(null)
     setSummary(null)
   }, [symbol, market, isStock])
 
@@ -417,6 +433,7 @@ export default function HeaderBand({
           if (!alive) return
           setL2More(r?.more ?? null)
           setL2Snap(r?.snapshot ?? null)
+          setL2AsOf(r?.as_of ?? null)
         }),
       )
     }
@@ -518,13 +535,28 @@ export default function HeaderBand({
       {/* 快照行**仅个股** —— 其 cell 的值全部来自 `/quotes`(个股)/more-info/l2, 对指数/板块
           既是 `--` 噪声, 又(若发了 /quotes)会把另一标的的今开/最高/最低/成交额画出来。 */}
       {isStock ? (
-        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
           {cells.map((c) => (
             <div key={c.key} className="flex items-baseline gap-1 text-[11px]">
               <span className="text-muted-foreground">{c.label}</span>
               <span className="font-mono">{c.value}</span>
             </div>
           ))}
+          {/* KI-059B: /l2 派生读数(封单额/涨停价/连板)无轮询, 标取数时刻防误读成实时。
+              as_of 缺失则整块不渲染(不编时间); 与 QuickRail「快照 HH:MM:SS」同口径。 */}
+          {(() => {
+            const clock = asOfClock(l2AsOf)
+            if (!clock) return null
+            return (
+              <span
+                data-testid="band1-l2-snapshot-clock"
+                title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
+                className="font-mono text-[9px] text-muted-foreground"
+              >
+                快照 {clock}
+              </span>
+            )
+          })()}
         </div>
       ) : null}
 
