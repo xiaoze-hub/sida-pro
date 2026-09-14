@@ -12,6 +12,8 @@ import { useSourceHealth } from '@/hooks/useSourceHealth'
 import { useVendorTrust } from '@/hooks/useVendorTrust'
 import { DataCapabilities } from '@/components/DataCapabilities'
 import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone } from '@/lib/vendor-trust'
+// KI-015: 预览区数值多来自 PG DECIMAL(JSON 字符串), 裸 toFixed 会 TypeError
+import { safeFixed, safeNum } from '@/lib/format'
 
 const HEALTH_DOT: Record<string, string> = {
   connected: 'bg-emerald-500',
@@ -646,11 +648,11 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{quoteItem.name || quoteItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[12px] font-mono">{quoteItem.price?.toFixed(2)}</span>
+                          <span className="text-[12px] font-mono">{safeFixed(quoteItem.price)}</span>
                           <span className={`text-[11px] font-medium ${
                             (quoteItem.change_pct ?? 0) > 0 ? 'text-stock-up' : (quoteItem.change_pct ?? 0) < 0 ? 'text-stock-down' : 'text-muted-foreground'
                           }`}>
-                            {(quoteItem.change_pct ?? 0) > 0 ? '+' : ''}{quoteItem.change_pct?.toFixed(2)}%
+                            {(quoteItem.change_pct ?? 0) > 0 ? '+' : ''}{safeFixed(quoteItem.change_pct)}%
                           </span>
                         </div>
                       </div>
@@ -664,7 +666,7 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{klineItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[12px] font-mono">{klineItem.last_close?.toFixed(2)}</span>
+                          <span className="text-[12px] font-mono">{safeFixed(klineItem.last_close)}</span>
                           <span className="text-[11px] text-muted-foreground">{klineItem.trend}</span>
                         </div>
                       </div>
@@ -694,9 +696,9 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{fundItem.name || fundItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[11px] text-muted-foreground">PE {fundItem.pe_ttm?.toFixed(2) ?? '-'}</span>
-                          <span className="text-[11px] text-muted-foreground">PB {fundItem.pb?.toFixed(2) ?? '-'}</span>
-                          <span className="text-[11px] text-muted-foreground">ROE {fundItem.roe?.toFixed(2) ?? '-'}%</span>
+                          <span className="text-[11px] text-muted-foreground">PE {safeFixed(fundItem.pe_ttm, 2, '-')}</span>
+                          <span className="text-[11px] text-muted-foreground">PB {safeFixed(fundItem.pb, 2, '-')}</span>
+                          <span className="text-[11px] text-muted-foreground">ROE {safeFixed(fundItem.roe, 2, '-')}%</span>
                         </div>
                       </div>
                     )
@@ -712,10 +714,10 @@ export default function DataSourcesPage() {
                           <span className={`text-[12px] font-mono ${
                             (flowItem.main_net ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                           }`}>
-                            {(flowItem.main_net ?? 0) > 0 ? '+' : ''}{((flowItem.main_net ?? 0) / 10000).toFixed(2)}万
+                            {(flowItem.main_net ?? 0) > 0 ? '+' : ''}{safeNum(flowItem.main_net) == null ? '--' : safeFixed(Number(flowItem.main_net) / 10000)}万
                           </span>
                           <span className="text-[11px] text-muted-foreground">
-                            {flowItem.main_pct?.toFixed(2)}%
+                            {safeFixed(flowItem.main_pct)}%
                           </span>
                         </div>
                       </div>
@@ -731,7 +733,7 @@ export default function DataSourcesPage() {
                         <span className={`text-[12px] font-mono ${
                           (dtItem.net_buy ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                         }`}>
-                          {(dtItem.net_buy ?? 0) > 0 ? '+' : ''}{((dtItem.net_buy ?? 0) / 10000).toFixed(2)}万
+                          {(dtItem.net_buy ?? 0) > 0 ? '+' : ''}{safeNum(dtItem.net_buy) == null ? '--' : safeFixed(Number(dtItem.net_buy) / 10000)}万
                         </span>
                       </div>
                     )
@@ -744,7 +746,7 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{marginItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[12px] font-mono">{((marginItem.total_balance ?? 0) / 10000).toFixed(2)}万</span>
+                          <span className="text-[12px] font-mono">{safeNum(marginItem.total_balance) == null ? '--' : safeFixed(Number(marginItem.total_balance) / 10000)}万</span>
                           <span className="text-[11px] text-muted-foreground">{marginItem.date}</span>
                         </div>
                       </div>
@@ -772,7 +774,7 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-center justify-between p-2 rounded-md bg-accent/30">
                         <span className="text-[12px] font-medium text-foreground">{divItem.symbol}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[12px] font-mono">{divItem.dividend_per_share?.toFixed(4) ?? '-'} 元/股</span>
+                          <span className="text-[12px] font-mono">{safeFixed(divItem.dividend_per_share, 4, '-')} 元/股</span>
                           <span className="text-[11px] text-muted-foreground">{divItem.ex_date}</span>
                         </div>
                       </div>
@@ -789,10 +791,10 @@ export default function DataSourcesPage() {
                           <span className={`text-[12px] font-mono ${
                             (nbItem.total_net ?? 0) > 0 ? 'text-stock-up' : 'text-stock-down'
                           }`}>
-                            {(nbItem.total_net ?? 0) > 0 ? '+' : ''}{((nbItem.total_net ?? 0) / 10000).toFixed(2)}万
+                            {(nbItem.total_net ?? 0) > 0 ? '+' : ''}{safeNum(nbItem.total_net) == null ? '--' : safeFixed(Number(nbItem.total_net) / 10000)}万
                           </span>
                           <span className="text-[11px] text-muted-foreground">
-                            沪股通 {((nbItem.hgt_net ?? 0) / 10000).toFixed(2)}万
+                            沪股通 {safeNum(nbItem.hgt_net) == null ? '--' : safeFixed(Number(nbItem.hgt_net) / 10000)}万
                           </span>
                         </div>
                       </div>

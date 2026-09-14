@@ -7,6 +7,30 @@
 
 ## 2026-09-18
 
+### release-v0.6.7: KI 全清批次 —— 日历2028 / pg_dump / forecast日历 / ws_hub / KlineChart信息栏
+
+**性质**: 后端多文件 + 前端多文件。**需重启后端** + 静态面。发版 v0.6.7。
+
+**关闭**: KI-007 / 013 / 014 / 015(主预览区) / 023 / 027 / 028 / 056。  
+**说明**: KI-057 回填**不适用** —— `amplitude` 不落库, collector 每次按新口径计算。  
+**仍开启**(已登记理由): 003/006 构建链跨大版本、005 需实测、009 P3 留痕、011 vendor 源头、012 港美日历、016/026 大重构、017 CI 拆分、020/022/024/029/041/047/048 低优。
+
+### fix(ki): 关闭 KI-007/013/014/015/023/027/028/056
+
+**性质**: 后端 calendar/backup/ws_hub/Dockerfile + forecast_lib + 前端 KlineChart/DataSources。
+
+- **KI-028**: 2028 交易日静态表(预估, 2027-12 前按国办公告复核)。
+- **KI-014**: Dockerfile 加 `postgresql-client`; 无 pg_dump 时 SQLAlchemy inspector 落表列清单(不再静默跳过)。
+- **KI-007**: `forecast_lib/trading_days.py` 优先 import 主日历, 失败回落 weekday + 警告。
+- **KI-013**: compose 已无 `PANWATCH_DB` sqlite 遗留 → 关闭。
+- **KI-015**: DataSources 预览区 13 处裸 `toFixed` → `safeFixed`(PG DECIMAL 字符串防崩)。
+- **KI-023**: ws_hub PubSub 加 `origin` 标记, 回声跳过, 不再双投。
+- **KI-027**: 既有损坏测试已绿(7 passed) → 关闭。
+- **KI-056**: KlineChart 悬停信息栏(OHLC + 量) —— 与 InteractiveKline 同思路。
+- **门禁**: 后端 calendar/backup 相关 34+7 passed; 前端 vitest **434/434**, tsc/eslint 0。
+
+[commit 待回填]
+
 ### fix(ki): 关闭 KI-010/030/046 + 台账对账 008/043/044/045
 
 **性质**: 后端 1 文件(auth_tokens 告警 + 删死文件) + 前端 1 文件(ShadowAccount)。**需重启后端**。

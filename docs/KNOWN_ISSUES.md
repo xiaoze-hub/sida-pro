@@ -23,24 +23,24 @@
 | KI-003 | P2 | vite dev server fs.deny 绕过(跨大版本升级) | 2026-09-09 | TianXiang |
 | KI-005 | P2 | forecast 4g 限额沿用既定值, 未按实测推理峰值校准 | 2026-09-09 | TianXiang |
 | KI-006 | P2 | 构建/测试链传递依赖已知漏洞 18 条(不进产物) | 2026-09-09 | TianXiang |
-| KI-007 | P2 | forecast_lib 交易日按 weekday 计(法定节假日偏晚) | 2026-09-09 | TianXiang |
+| KI-007 | P2 | ~~forecast_lib 交易日按 weekday 计~~ ✅ 已关(trading_days 优先日历) | 2026-09-09 | TianXiang |
 | KI-008 | P1 | ~~chat_upload 提示注入面~~ ✅ 已关(分隔符+说明+前缀切断) | 2026-09-08 | TianXiang |
 | KI-009 | P3 | chat.py f-string 拼 SQL(已核实安全, 留痕) | 2026-09-09 | unassigned |
 | KI-010 | P2 | ~~ShadowAccount window.open 兜底 401~~ ✅ 已关(改显式报错) | 2026-09-08 | TianXiang |
 | KI-011 | P2 | 主板 K 线"不可能缺口"残留 10 条(vendor 源头级) | 2026-09-09 | TianXiang |
 | KI-012 | P3 | 港美市场无交易日历, 盘中判定维持周末口径 | 2026-09-09 | unassigned |
-| KI-013 | P3 | forecast 容器 PANWATCH_DB 指向不存在的 sqlite 文件 | 2026-09-08 | TianXiang |
-| KI-014 | P2 | 应用容器无 pg_dump, 迁移前 PG schema 快照静默跳过 | 2026-09-09 | TianXiang |
-| KI-015 | P2 | 前端 6 处手抄 fmt 金额精度互分叉 | 2026-09-08 | TianXiang |
+| KI-013 | P3 | ~~forecast PANWATCH_DB sqlite 遗留~~ ✅ 已关(compose 已无该 env) | 2026-09-08 | TianXiang |
+| KI-014 | P2 | ~~应用容器无 pg_dump~~ ✅ 已关(Dockerfile+inspector 降级) | 2026-09-09 | TianXiang |
+| KI-015 | P2 | ~~前端 6 处手抄 fmt~~ ✅ 已关(DataSources 预览区 safeFixed) | 2026-09-08 | TianXiang |
 | KI-016 | P2 | 前端设计债 7 项(W3.7 审计重跑产出) | 2026-09-09 | TianXiang |
 | KI-017 | P3 | release.yml 单 job 混合测试+构建+推送(执行方案 T15) | 2026-09-08 | TianXiang |
 | KI-020 | P3 | 命中榜因子自动降权未做(权重策略待定) | 2026-09-08 | unassigned |
 | KI-022 | P2 | hermes-gateway CLOSE-WAIT 无自愈(独立仓库) | 2026-09-07 | unassigned |
-| KI-023 | P2 | ws_hub PubSub 自回显疑似循环(未验证) | 2026-09-07 | TianXiang |
+| KI-023 | P2 | ~~ws_hub PubSub 自回显疑似循环~~ ✅ 已关(origin 标记跳过回声) | 2026-09-07 | TianXiang |
 | KI-024 | P3 | WS Hub 抽独立进程(部署拓扑变更) | 2026-09-07 | TianXiang |
 | KI-026 | P2 | KlineChart/InteractiveKline 大重构 + orval 全量 codegen | 2026-09-07 | TianXiang |
-| KI-027 | P3 | 本地环境损坏测试文件 2 个(不进 CI, 本地基线 2 failed) | 2026-09-08 | TianXiang |
-| KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
+| KI-027 | P3 | ~~本地环境损坏测试文件~~ ✅ 已关(7 passed) | 2026-09-08 | TianXiang |
+| KI-028 | P1 | ~~交易日历 2028 表~~ ✅ 已关(预估表, 2027-12 前复核) | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | ~~JWT_SECRET 24 字节~~ ✅ 已关(启动告警; DB 生成已是 32B) | 2026-09-09 | TianXiang |
 | KI-041 | P3 | 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) | 2026-09-10 | TianXiang |
@@ -52,7 +52,7 @@
 | KI-047 | P3 | 板块异动阈值为暂定值(涨速±0.5%/量比2.0)且仅盘中生效, 待实盘观察调优 | 2026-09-10 | TianXiang |
 | KI-048 | P3 | 通达信云数据(板块异动类型/轮动系数等)需客户端数据权限, TQ 接口当前返空 | 2026-09-10 | TianXiang |
 | KI-055 | P2 | 离线门禁存量 7 红(日历相关断言/缺包/用例间 mock 污染), 与 v0.5.76 无关 | 2026-09-12 | TianXiang |
-| KI-056 | P3 | 行情页大图(KlineChart)还没有每 pane 信息栏 —— 只有 InteractiveKline 有 |
+| KI-056 | P3 | ~~KlineChart 每 pane 信息栏~~ ✅ 已关(悬停 OHLC+量) |
 
 ## 详情
 
@@ -436,5 +436,9 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-18**: **KI-059 关闭(方案 B 快照时钟)** —— `HeaderBand` 快照行尾渲染 `快照 HH:MM:SS`(取 `/l2.as_of`, 与 QuickRail 同口径); 未加 30s 轮询、未改去重契约。详见 CHANGELOG 同日条目。台账 **36 条在册(P1×3/P2×19/P3×14)**。
 
 **2026-09-18**: **KI-001/KI-002 关闭(依赖安全 patch)** —— react-router-dom 6.30.3→**6.30.6**(唯一运行时可触达漏洞清零) + rollup 4.56.0→**4.59.0**。详见 CHANGELOG 同日条目。台账 **35 条在册(P1×2/P2×19/P3×14)**。
+
+**2026-09-18**: **KI-042/043/044/045/008 关闭** + **KI-010/030/046 关闭** + **KI-007/013/014/015/023/027/028/056 关闭(v0.6.7)**。  
+KI-057: 口径已统一为 `/prev_close`; **历史回填不适用**(`amplitude` 不落库, collector 每次计算)。  
+台账约 **23 条在册**; 仍开: 003/005/006/009/011/012/016/017/020/022/024/026/029/041/047/048。
 
 **2026-09-18**: **KI-042 关闭(分时 degraded)** —— `/quotes/minute` 源故障带 `degraded`+`note`, 前端不再误写成"非交易日/停牌"。详见 CHANGELOG 同日条目。台账 **34 条在册(P1×2/P2×18/P3×14)**。
