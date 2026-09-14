@@ -351,7 +351,9 @@ export default function ThemeMoodPage() {
                 ))}
               </span>
             </div>
-            <div ref={scrollRef} className="overflow-x-auto pb-1">
+            {/* 横向滚动条跟随暗色主题(2026-09-14 走查: 矩阵默认浅色滚动条在暗底上刺眼)。
+                .scrollbar 是 index.css 里的 token 化工具类(scrollbar-color: muted-foreground/0.35)。 */}
+            <div ref={scrollRef} className="scrollbar overflow-x-auto pb-1">
               <div className="flex w-max min-w-full items-end gap-1">
                 <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background" />
                 <div className="flex gap-0.5">
@@ -384,8 +386,16 @@ export default function ThemeMoodPage() {
                   ))}
                 </div>
               </div>
-              <div className="mb-1 flex w-max min-w-full items-center gap-1">
-                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[10px] leading-4 text-foreground/60">
+              {/* 轮动行(2026-09-14 走查: 原先紧贴日期表头、只有 10px 小字, 读起来像表头的一部分)。
+                  加分隔线 + 上间距, 标签升到 11px 并补 title 说明自身口径。 */}
+              <div
+                data-testid="thememood-rotation-row"
+                className="mb-1 mt-2 flex w-max min-w-full items-center gap-1 border-t border-border/40 pt-1.5"
+              >
+                <span
+                  title={`轮动: 每日新进 / 退出 Top${resp?.rotation_top_k ?? 10} 的题材数(绿色 = 新进, 划线 = 退出)`}
+                  className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-muted-foreground"
+                >
                   轮动
                 </span>
                 <div className="flex gap-0.5">
@@ -399,7 +409,7 @@ export default function ThemeMoodPage() {
                         title={r
                           ? `${d} 新进 Top${resp?.rotation_top_k ?? 10}: ${r.new_codes.join('、') || '无'}\n退榜: ${r.exit_codes.join('、') || '无'}`
                           : d}
-                        className="w-[38px] shrink-0 text-center text-[10px] leading-4 text-foreground/60"
+                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground/60"
                       >
                         {entered || exited ? (
                           <>

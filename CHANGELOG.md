@@ -7,6 +7,17 @@
 
 ## 2026-09-14
 
+### fix(theme-mood): 轮动行不再冒充表头 + 矩阵滚动条跟随暗色主题
+
+**性质**: 单页样式/结构修复(`frontend/src/pages/ThemeMood.tsx`) + 2 条钉住用例。纯前端。
+
+- **缺陷①**(走查截图): 「题材 × 日期」矩阵里那一行**轮动数字**(如 `-1.6 -5 -7 +4 …`)**紧贴日期表头正下方**, 且只有 10px 小字、无任何标签说明 ⇒ 读起来像表头的一部分, 不知道该行是什么。**修法**: 给它独立容器(`data-testid="thememood-rotation-row"`)+ 上分隔线(`border-t`)+ 上间距(`mt-2 pt-1.5`), 标签从 10px 升到 **11px** 并补 `title` 说明自身口径(轮动 = 每日新进/退出 Top N 的题材数), 消除"这行属于表头"的误导。
+- **缺陷②**(走查截图): 矩阵的**横向滚动条是浏览器默认浅色**, 在暗色主题下刺眼。**修法**: 滚动容器加已有的 token 化工具类 `.scrollbar`(`src/index.css:208`, `scrollbar-color: hsl(var(--muted-foreground) / 0.35)`)。
+  - **已核实 `.scrollbar` 真实存在且是 token 化实现**(不是空修复) —— 这一点专门查过: 若该类不存在, 改动只是加了个无效果的 class, 而断言"className 含 scrollbar"的测试照样会绿。
+- **钉住(2 例)**: 轮动行必须独立容器 + 含 `border-t`/`mt-2`/`pt-1.5` + 标签带"新进"口径说明; 矩阵内**所有** `overflow-x-auto` 容器都必须同时带 `scrollbar` 类(防后人新增裸滚动容器)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest 全绿。
+
+
 ### perf(obs): 传输层日志噪音不再写库 —— 修开盘后 app/PG 被日志打满
 
 **性质**: 单文件后端修复(`src/bootstrap/env.py`) + 1 个新测试文件。**需重启生效**。

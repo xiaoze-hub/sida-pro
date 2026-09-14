@@ -98,6 +98,38 @@ describe('ThemeMood 页面', () => {
     expect(polys[1].getAttribute('points')).toBe('19,62 59,45.4 99,17.4 139,6')
   })
 
+  // 2026-09-14 走查缺陷: 轮动行紧贴日期表头 + 只有 10px 小字 ⇒ 读起来像表头的一部分;
+  // 矩阵横向滚动条在暗色主题下是浏览器默认浅色。两者都在此钉住。
+  it('轮动行与日期表头分开: 独立容器 + 分隔线/上间距 + 自身口径说明', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ThemeMoodPage />)
+    await screen.findAllByText('元件')
+
+    const row = screen.getByTestId('thememood-rotation-row')
+    expect(row.className).toContain('border-t')
+    expect(row.className).toContain('mt-2')
+    expect(row.className).toContain('pt-1.5')
+    expect(row.textContent).toContain('轮动')
+    // 标签自身带口径说明(轮动 = 新进/退出数), 不再是"不知道该行是什么"
+    expect(row.querySelector('[title*="新进"]')).toBeTruthy()
+  })
+
+  it('题材矩阵横向滚动条走主题 token(.scrollbar), 不用浏览器默认浅色', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    const { container } = render(<ThemeMoodPage />)
+    await screen.findAllByText('元件')
+
+    const row = screen.getByTestId('thememood-rotation-row')
+    // 轮动行与日期表头同在矩阵滚动容器内 → 顺着往上找不到 scrollbar 类就是回归
+    const scroller = row.parentElement
+    expect(scroller?.className).toContain('scrollbar')
+    expect(scroller?.className).toContain('overflow-x-auto')
+    // 全页所有横向滚动容器都不该裸着(默认浅色滚动条)
+    container.querySelectorAll('.overflow-x-auto').forEach((el) => {
+      expect(el.className).toContain('scrollbar')
+    })
+  })
+
   it('时间轴加载后默认滚到最新一端', async () => {
     const proto = HTMLElement.prototype
     const origW = Object.getOwnPropertyDescriptor(proto, 'scrollWidth')
