@@ -115,8 +115,9 @@ def setup_logging():
 
     分级策略:
     - root logger 始终 DEBUG,所有日志都会传播到 handler
-    - 控制台 handler 按 LOG_LEVEL 过滤(默认 INFO),并丢弃 httpx 等三方库的 < WARNING 噪音
-    - DB handler 始终 DEBUG 全量收录,UI 日志板永远可以看到包括心跳/httpx 请求在内的完整记录
+    - 控制台 handler 按 `LOG_LEVEL` 过滤(默认 INFO),并丢弃**传输层**低级别噪音
+    - DB handler 恒 DEBUG 收录**业务/Agent** 的全量记录(「错误日志」页面由此可用),
+      但同样丢弃传输层噪音(`_TransportNoiseFilter`) —— 见该类头注里 2026-09-14 的实测代价。
     """
     console_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     console_level = getattr(logging, console_level_name, logging.INFO)
@@ -138,7 +139,7 @@ def setup_logging():
     console = logging.StreamHandler()
     console._panwatch_console = True  # type: ignore[attr-defined]
     console.setLevel(console_level)
-    console.addFilter(_ConsoleNoiseFilter())
+    console.addFilter(_TransportNoiseFilter())
     console.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)-5s [%(name)s] %(message)s", datefmt="%H:%M:%S"
@@ -146,8 +147,11 @@ def setup_logging():
     )
     root.addHandler(console)
 
-    # 数据库持久化: 始终全量收录,UI 日志板可查 DEBUG
+    # 数据库持久化: 收录业务/Agent 的 DEBUG 供「错误日志」页签排查;
+    # **同时**挂传输层噪音过滤器 —— 否则开盘时 httpx/httpcore/thsdk 的 DEBUG 会把
+    # CPU 与 Postgres 打满(2026-09-14 实测 app 122% / PG 50-95% / too many clients)。
     db_handler = DBLogHandler(level=logging.DEBUG)
+    db_handler.addFilter(_TransportNoiseFilter())
     db_handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(db_handler)
 
@@ -161,14 +165,31 @@ def setup_logging():
         lg.setLevel(logging.DEBUG)
 
 
-class _ConsoleNoiseFilter(logging.Filter):
-    """控制台 handler 过滤器: 三方库的 INFO/DEBUG 不进 stdout,WARNING+ 仍然显示。
-    DB handler 不挂这个过滤器,UI 日志板能看到完整请求记录。
+class _TransportNoiseFilter(logging.Filter):
+    """**传输层噪音**过滤器: httpx/httpcore/thsdk 等底层库的 INFO/DEBUG 一律丢弃,
+    WARNING+ **仍然放行**(真实错误必须留痕)。
+
+    **两个 handler 都挂它**(2026-09-14 起, 见 `setup_logging`): 控制台与数据库各挂一份。
+    改这一段之前先读这条历史 —— 原先**只有控制台**挂, DB handler 恒 DEBUG 全量收录,
+    于是开盘时每条 `httpx/httpcore/thsdk` 的 DEBUG 都要被格式化并写进日志表, 实测把
+    app CPU 打到 122%、Postgres 打到 50-95%, 并伴随 `too many clients already`;
+    关掉这条噪音后 app 与 PG 才回到可用区间。业务/Agent 自身的 DEBUG **不受影响**
+    (不在名单里), 所以「错误日志」页签仍然可用。
 
     uvicorn.access 是每条请求的 access log(`INFO: 127.0.0.1 - "GET /api/..." 200 OK`),
-    属于底层心跳;uvicorn / uvicorn.error 是应用级日志(启动、报错),保留。"""
+    属于底层心跳; uvicorn / uvicorn.error 是应用级日志(启动、报错), 保留。"""
 
-    _NOISY_PREFIXES = ("httpx", "httpcore", "urllib3", "apscheduler", "uvicorn.access")
+    # thsdk: 通达信/同花顺 SDK, 断连重试期每条都打(2026-09-14 日志实证刷屏)
+    _NOISY_PREFIXES = (
+        "httpx",
+        "httpcore",
+        "hpack",
+        "h11",
+        "urllib3",
+        "thsdk",
+        "apscheduler",
+        "uvicorn.access",
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.WARNING:

@@ -7,6 +7,19 @@
 
 ## 2026-09-14
 
+### perf(obs): 传输层日志噪音不再写库 —— 修开盘后 app/PG 被日志打满
+
+**性质**: 单文件后端修复(`src/bootstrap/env.py`) + 1 个新测试文件。**需重启生效**。
+
+- **实测现象**(2026-09-14 开盘后, 真机): 容器 **CPU 91-122%**、内存 1.395GiB/1.465GiB(顶到 1500m 上限); **Postgres 50-95% CPU** 且报 `FATAL: sorry, too many clients already`; 每个 uvicorn worker **116-118 线程**(其一累计烧 ~8 CPU 小时)。用户侧表现: **所有查库接口超时**, 而 `/api/health`、`/api/version` 仍 0.1s 返回 ⇒ 「系统 → Agent」等页面**永久停在"加载中…"**, 过几分钟又自己恢复(间歇性)。
+- **根因**: `setup_logging` 里 `_ConsoleNoiseFilter`(含 `httpx/httpcore/urllib3/...`)**只挂在控制台 handler 上**, 而 **DB handler 没有任何过滤器且恒 `level=DEBUG`** ⇒ 开盘时每条 `httpx/httpcore/thsdk` 的 DEBUG 都被**格式化并写进日志表**(`docker logs` 实证刷屏 `httpcore.http11 receive_response_body.complete` 与 `thsdk.base ❌ -6 请求超时`)。原 docstring 把这写成有意设计(「UI 日志板永远可以看到包括心跳/httpx 请求在内的完整记录」), 代价在开盘量级下不可接受。
+- **修法(最小、不牺牲排查能力)**: 把该过滤器改名为 `_TransportNoiseFilter` 并**同时挂到控制台与 DB 两个 handler**; 名单补 `thsdk`(日志实证刷屏的元凶)与 `hpack`/`h11`(同属 HTTP 传输细节)。语义保持: **WARNING+ 一律放行**(`thsdk` 的 `-6 请求超时` 是 ERROR, 必须留痕), **业务/Agent 自身的 DEBUG 不在名单里 ⇒ 照旧进日志板**, 所以「错误日志」页签仍然可用。同步订正 `setup_logging` 的 docstring(原文承诺"DB 全量收录"与新行为矛盾)。
+- **钉住**: 新增 `tests/test_log_noise_filter.py`(22 例) —— 8 个噪音库 × {DEBUG/INFO 被挡, WARNING/ERROR/CRITICAL 放行}、4 个业务 logger 的 DEBUG 放行、前缀匹配按标签段判定(不误伤 `httpx_utils`), 以及**最要紧的一条**: `setup_logging()` 之后 **DB handler 上确实存在该 filter**(只测过滤器本身发现不了"忘了挂")。
+- **变异验证**: 删掉 `db_handler.addFilter(...)` ⇒ 恰好 `test_setup_logging_attaches_filter_to_DB_handler` 变红, 其余 21 例仍绿; 还原后 22/22 绿。
+- **门禁**: 后端 `pytest -m "not network"` **2302 passed / 0 failed / 5 skipped**(基线 2280, 净 +22 = 本文件)。前端未改。
+- 注: 线程膨胀(单 worker 116-118 线程)与 THS 超时堆积属另一条 P1(调用并发上限+硬超时), **本次未做**, 已留痕待后续批次。
+
+
 ### fix(portfolio): 持仓页存量金额不再带 '+' (可用资金/总资产/总市值) + 盈亏不再双写号("++1.00万")
 
 **性质**: 金额格式化**分层**(新增 1 个 `@/lib/format` 助手) + 持仓页取数处收敛 + 4 条钉住用例。
