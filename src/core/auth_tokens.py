@@ -38,6 +38,13 @@ def get_jwt_secret() -> str:
     # 环境变量优先
     if os.getenv("JWT_SECRET"):
         _jwt_secret = os.getenv("JWT_SECRET")
+        # KI-030: RFC 7518 HS256 建议 >=32 字节; 短密钥只告警不拦启动(轮换会踢掉全部会话)
+        if len(_jwt_secret.encode("utf-8")) < 32:
+            import logging
+            logging.getLogger(__name__).warning(
+                "JWT_SECRET 仅 %d 字节 (<32, RFC 7518 HS256 建议); 建议择机轮换为 32+ 字节",
+                len(_jwt_secret.encode("utf-8")),
+            )
         return _jwt_secret
 
     # 从数据库读取或首次生成
