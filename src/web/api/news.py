@@ -35,7 +35,7 @@ class NewsItemResponse(BaseModel):
     url: str = ""
 
 
-@router.get("", response_model=list[NewsItemResponse])
+@router.get("")
 async def get_news(
     symbols: str = Query(default="", description="股票代码，逗号分隔"),
     names: str = Query(default="", description="股票名称，逗号分隔（优先使用，比 symbols 更稳定）"),
@@ -56,7 +56,7 @@ async def get_news(
     """
     # 修复 2026-08-21: news 端点偶发 15s+ 超时拖累首页, 加 NEWS_DISABLE 紧急开关
     if os.getenv("NEWS_DISABLE", "").strip() in {"1", "true", "yes"}:
-        return []
+        return {"items": [], "degraded": True, "note": "新闻源已被 NEWS_DISABLE 开关关闭"}
     # 获取自选股(自己的 + 全局共享) 用于匹配; C3(2026-09-09): 此前拉全库所有用户自选
     all_stocks = scoped(db.query(Stock), user).all()
     stock_map = {s.symbol: s.name for s in all_stocks}
@@ -78,7 +78,7 @@ async def get_news(
         passed_symbol_names = stock_map
 
     if not symbol_list:
-        return []
+        return {"items": [], "degraded": False, "note": None}
 
     source_filters = {s.strip() for s in source.split(",") if s.strip()} if source else set()
 
@@ -102,8 +102,13 @@ async def get_news(
             timeout=8.0,
         )
     except (asyncio.TimeoutError, Exception) as e:
+        # KI-045: 超时/故障 ≠ 无新闻 —— 显式 degraded, 不再静默 []
         logger.warning("news fetch failed/timeout: %s", e)
-        return []
+        return {
+            "items": [],
+            "degraded": True,
+            "note": "新闻源 8s 超时或调用失败(不是「无相关新闻」)",
+        }
 
     def is_related(item: NewsItem) -> bool:
         """判断新闻是否与自选股相关"""
@@ -147,7 +152,8 @@ async def get_news(
         if len(result) >= limit:
             break
 
-    return result
+    # KI-045: 统一信封 {items, degraded, note} —— 成功时 degraded=false
+    return {"items": [r.model_dump() for r in result], "degraded": False, "note": None}
 
 
 @router.get("/sources")

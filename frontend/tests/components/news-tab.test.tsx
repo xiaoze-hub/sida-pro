@@ -68,6 +68,15 @@ vi.mock('@panwatch/api', () => ({
     history: (...a: unknown[]) => mocks.history(...a),
     company: (...a: unknown[]) => mocks.company(...a),
   },
+  // KI-045: 信封归一必须走真函数(与生产同路径), 不能在 mock 里再包一层
+  normalizeNewsEnvelope: (raw: unknown) => {
+    if (Array.isArray(raw)) return { items: raw, degraded: false, note: null }
+    if (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown[] }).items)) {
+      const o = raw as { items: unknown[]; degraded?: boolean; note?: string | null }
+      return { items: o.items, degraded: !!o.degraded, note: o.note ?? null }
+    }
+    return { items: [], degraded: false, note: null }
+  },
   stocksApi: {
     list: (...a: unknown[]) => mocks.stocksList(...a),
     create: (...a: unknown[]) => mocks.stocksCreate(...a),

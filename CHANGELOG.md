@@ -35,6 +35,61 @@
 - **钉住**: 组件 3 例(as_of 在场 → 时钟 + title 含"无 30s 轮询" + 封单额仍在; as_of 缺失 → 无时钟; type=index → 无 /l2 亦无时钟); 纯函数 2 例(合法 ISO → `HH:MM:SS`; null/过短/脏值 → null)。**变异验证**: 去掉 `setL2AsOf` ⇒ 前 2 例红。
 - **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint` 0 / UI-RULES OK / vitest **435/435(59 files)**(基线 430, 净 +5)。
 
+### release-v0.6.5: 遗留 KI 清理批次 + THS 并发治理 + 依赖安全
+
+**性质**: 后端多文件(需重启) + 前端多文件 + 依赖升级。发版自 main。
+
+**本批关闭的 KI**: 001/002(依赖安全)、008(chat_upload 注入面第一层)、042(分时 degraded)、043(自选批量行情 degraded)、044(板块资金空态 degraded)、045(新闻超时 degraded)、057(振幅口径统一为 /prev_close)、058(删 handleSetAlert 死代码)、059(封单额快照时钟方案 B)。
+
+**另含独立分支合入**: `fix/ths-timeout-20260918`(THS 并发上限 + 真硬超时, 修开盘线程膨胀)。
+
+**门禁**: 后端 `pytest -m "not network"` **2326 passed / 0 failed / 5 skipped**; 前端 `tsc`/`typecheck:tests`/`eslint`/UI-RULES 全 0 + vitest **428/428(59 files)**。
+
+### feat(ki-clear): 诚实性 degraded 批次 + 振幅口径统一 + 设提醒死代码清理
+
+**性质**: 后端 5 文件 + 前端 4 文件 + 测试。**关闭 KI-008/043/044/045/057/058**。**需重启后端**。
+
+- **KI-043**: `/stocks/quotes` 逐市场失败改返回 `{quotes, degraded_markets:[{market,error}]}`, 不再静默吞异常。
+- **KI-044**: 板块资金空且无 stale 备份 → `degraded:true` + note(与"今日无资金流"可分)。
+- **KI-045**: `/news` 统一信封 `{items, degraded, note}`; 超时/NEWS_DISABLE/真空态三分; 前端 `normalizeNewsEnvelope` 兼容旧裸 list。
+- **KI-008**: chat_upload 解析文本包进 `<<<UNTRUSTED_...>>>` 分隔符 + 前置"不得当作指令"说明 + 切断常见逃逸前缀 + `untrusted:true`。
+- **KI-057**: 落库振幅分母 `/low` → **`/prev_close`**(A 股通行, 与带1 实时口径统一); dialog 文案同步。**历史 `klines.amplitude` 未回填**(混口径风险已登记, 下批用日线重算脚本处理)。
+- **KI-058**: 删除零生产调用方的 `handleSetAlert`/`SetAlertOutcome` 及探针测试; 「触发盘中监测」保持无绑定副作用路径。恢复「一键设提醒」需产品重做入口。
+
+[commit 待回填]
+
+### fix(wb): 带1 封单额加快照时钟(KI-059 方案 B)
+
+**性质**: 纯前端。**关闭 KI-059**。详见前一 commit(合入自 `fix/seal-amount-snapshot-clock-20260918`)。
+
+### fix(ths): 同步 vendor 调用加并发上限 + 真硬超时
+
+**性质**: 后端。详见 `fix/ths-timeout-20260918` 分支 CHANGELOG(合入本 release)。
+
+### fix(quotes): 分时源故障不再伪装成「非交易日/停牌」(KI-042)
+
+**性质**: 后端 1 文件(`src/web/api/quotes.py`) + 前端 2 文件(`minute-dialog.tsx` / `InteractiveKline.tsx`) + 5 条钉住用例。**关闭 KI-042**。**需重启后端**。
+
+- **缺陷**(单源依赖审计 🔴): `GET /quotes/minute/{symbol}` 腾讯 ifzq 单源, 取数失败与"真无分时"**共用** `points: []`; 分时对话框固定文案「暂无分时数据(非交易日或停牌)」⇒ 源抖/风控被误归因为停牌。
+- **修法**:
+  - `_tencent_minute` 改三元组: `points=None` = **源故障**(带 note); `points=[]` = 接口成功但真无行。
+  - 响应加 `degraded: bool` + `note`(源故障时为「分时源(腾讯)暂不可用」原文); 真空态 `degraded=false` 且 note 为 null。缓存 5 元组, **TTL 内故障缓存命中仍带 degraded**(否则 60s 内故障被伪装成真空态)。
+  - 前端: `MinuteDialog` 故障态显式渲染 note(琥珀色), **不再**写"非交易日或停牌"; `InteractiveKline` 同款分流(故障=note 原文, 真空态才说非交易日/停牌)。
+- **钉住**(5 例): 源故障 → degraded+note; 真空态 → 非 degraded; 成功路径; **缓存命中仍带 degraded**; urlopen 异常 → points=None。**变异验证**: 把 `points is None` 改回恒 `[]` ⇒ 第 1、5 例红。
+- **门禁**: 后端本文件 5/5; 前端 `tsc`/`eslint`/UI-RULES 0 + vitest **430/430**。
+- **未做**: 1m 落库兜底(klines_ingestor 已有 1m 滚动入库, 但分钟对话框未接 PG 回查) —— 那是接链, 不在本批。
+
+[commit 待回填]
+
+### chore(deps): 关闭 KI-001/KI-002 —— react-router-dom 6.30.3→6.30.6 + rollup 4.56.0→4.59.0
+
+**性质**: 依赖升级(`frontend/package.json` + `pnpm-lock.yaml`)。**关闭 KI-001(唯一运行时可触达漏洞)与 KI-002(构建链)**。静态面部署, 不重启容器。
+
+- **KI-001(P1, 期限 2026-09-30)**: `react-router-dom@6.30.3` 开放重定向→XSS(moderate, 含 react-router/@remix-run/router 共 5 条)。暴露面**运行时**, 用户可触达 —— 2026-09-09 依赖安全审计里唯一的运行时高危项。升级到 **6.30.6**(同大版本 patch, 修复版本 `>=6.30.6`), package.json 范围同步收成 `^6.30.6`。
+- **KI-002(P2, 期限 2026-09-30)**: `rollup@4.56.0` 任意文件写/路径穿越(high)。仅构建链、不进产物。升级到 **4.59.0**(`>=4.59.0`)。
+- **未动**: KI-003(vite 5→6 跨大版本, 期限 10-31, 需单独评估)、KI-006(tailwind/babel 传递依赖 17 条, 期限 10-31, 由 dependabot weekly 接管)。
+- **验证**: `pnpm typecheck` / `typecheck:tests` / `eslint` / UI-RULES 全 0; vitest **430/430(59 files)**; `pnpm build` 成功(rollup 4.59.0 真实跑通生产构建)。
+
 [commit 待回填]
 
 ## 2026-09-14

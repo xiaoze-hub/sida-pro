@@ -84,6 +84,9 @@ type MinuteResponse = {
   prev_close?: number | null
   is_index?: boolean
   swings?: MinuteSwings | null
+  /** KI-042: true = 分时源故障(空列表是故障, 不是停牌); note 为后端原文。 */
+  degraded?: boolean
+  note?: string | null
 }
 
 /** 主力意图结构化数据(2026-08-12): 后端 klines summary API 返回, 供 K线 markers/筹码叠加 */
@@ -273,6 +276,8 @@ export default function InteractiveKline(props: {
   const [minuteSwings, setMinuteSwings] = useState<MinuteSwings | null>(null)
   const [minuteLoading, setMinuteLoading] = useState(false)
   const [minuteError, setMinuteError] = useState<string>('')
+  /** KI-042: 源故障 note(与非交易日真空态可分)。 */
+  const [minuteDegradedNote, setMinuteDegradedNote] = useState<string | null>(null)
   const minuteRef = useRef<{ pts: MinutePoint[]; prev: number | null }>({ pts: [], prev: minutePrevClose })
   // P1-9: 跨 loadMinute/load 的请求序号(切股时旧响应丢弃)
   const seqRef = useRef(0)
@@ -288,6 +293,7 @@ export default function InteractiveKline(props: {
     const seq = ++seqRef.current
     setMinuteLoading(true)
     setMinuteError('')
+    setMinuteDegradedNote(null)
     try {
       // 2026-08-20: 分钟接口冷启动 ~15s(swings 全量逐笔翻页), 前端默认 20s 超时必中招。
       // timeoutMs: 60000 给冷启动留足空间; 缓存命中后通常 0.01s, 不影响体验。
@@ -300,6 +306,7 @@ export default function InteractiveKline(props: {
       setMinutePrevClose(res.prev_close ?? null)
       setMinuteIsIndex(!!res.is_index)
       setMinuteSwings(res.swings || null)
+      setMinuteDegradedNote(res.degraded ? (res.note || '分时源暂不可用') : null)
     } catch (e) {
       if (seq !== seqRef.current) return
       setMinuteError(e instanceof Error ? e.message : '加载分时失败')
@@ -307,6 +314,7 @@ export default function InteractiveKline(props: {
       setMinutePrevClose(null)
       setMinuteIsIndex(false)
       setMinuteSwings(null)
+      setMinuteDegradedNote(null)
     } finally {
       if (seq === seqRef.current) setMinuteLoading(false)
     }
@@ -1114,8 +1122,14 @@ export default function InteractiveKline(props: {
           {minuteLoading && !minutePoints.length ? (
             <div className="w-full h-[380px] rounded-xl border border-border/50 animate-pulse bg-accent/20" />
           ) : !minutePoints.length ? (
-            <div className="w-full h-[380px] rounded-xl border border-border/50 flex items-center justify-center text-[12px] text-muted-foreground">
-              暂无分时数据（非交易日 / 停牌 / 数据源不可用）
+            <div
+              className="w-full h-[380px] rounded-xl border border-border/50 flex items-center justify-center text-[12px]"
+              data-testid="minute-empty"
+            >
+              {/* KI-042: 源故障用 note 原文 + 琥珀色; 真空态才说"非交易日/停牌" */}
+              <span className={minuteDegradedNote ? 'text-amber-600' : 'text-muted-foreground'}>
+                {minuteDegradedNote || '暂无分时数据（非交易日 / 停牌）'}
+              </span>
             </div>
           ) : (
             <>

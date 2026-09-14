@@ -118,7 +118,7 @@ function SuggestTabBody() {
         ) : null}
         {/* 可见 note(不只藏 title): 本按钮是**一次性**触发 —— 后端 stock_id<=0 + allow_unbound 走
             "不落库"分支(src/web/api/stocks.py:523-533), 既不加自选也不绑 Agent, 故如实这么写。
-            需要持久化设提醒的语义仍由 Provider 保留的 `handleSetAlert`(「一键设提醒」)承担。 */}
+            KI-058: 旧「一键设提醒」(handleSetAlert 持久化路径)已删; 恢复需产品重做独立入口。 */}
         <span className="ml-auto text-[10px]" data-testid="suggest-trigger-note">
           一次性触发: 不加入自选、不绑定{INTRADAY_LABEL}
         </span>

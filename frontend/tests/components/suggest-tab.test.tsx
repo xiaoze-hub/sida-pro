@@ -91,8 +91,7 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
-import InsightProvider from '@/pages/workbench/InsightProvider'
-import { useInsight } from '@panwatch/biz-ui/components/insight/context'
+// KI-058: 探针组件(handleSetAlert)已删, 故不再 import InsightProvider/useInsight
 
 /** 建议池 fixture: 一条盘中监测(在有效期内) + 一条盘后日报(已过期)。 */
 const AI_SUGGESTIONS = [
@@ -356,66 +355,6 @@ describe('遗留③ 触发盘中监测: 不动自选/绑定的一次性触发(�
   })
 })
 
-/**
- * `handleSetAlert`(「一键设提醒」)按遗留③ 的要求**原样保留**给需要持久化语义的调用方 ——
- * 本标签已不再调它, 故用探针组件(Provider 内直接取 action)守住它没被顺手改坏:
- * 仍是 list → create(加自选) → updateAgents(绑 Agent) → triggerAgent(**真实 stock.id**),
- * 且仍回传 `SetAlertOutcome` 如实陈述"部分成功"(触发失败时前两步已落库不回滚)。
- */
-describe('遗留③ 保留项: handleSetAlert 的持久化路径不变(探针直调)', () => {
-  function SetAlertProbe({ onOutcome }: { onOutcome: (o: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }) => void }) {
-    const { handleSetAlert } = useInsight()
-    return (
-      <button type="button" onClick={() => void handleSetAlert().then(onOutcome)}>
-        一键设提醒
-      </button>
-    )
-  }
+// KI-058(2026-09-18): 旧 handleSetAlert(持久化设提醒)已删 —— 零生产调用方的死代码。
+// 恢复「一键设提醒」需产品重做入口, 不要把 triggerIntradayOnce 改回会偷偷写自选/绑定的路径。
 
-  function renderProbe(onOutcome: (o: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }) => void) {
-    return render(
-      <MemoryRouter>
-        <ToastProvider>
-          <InsightProvider symbol="002636" market="CN" hasPosition keys={['suggestions', 'core']}>
-            <SetAlertProbe onOutcome={onOutcome} />
-          </InsightProvider>
-        </ToastProvider>
-      </MemoryRouter>,
-    )
-  }
-
-  it('未关注 → 先 create 加自选 + updateAgents 绑定, 再用**真实 stock.id** 触发(无 allow_unbound)', async () => {
-    const outcomes: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }[] = []
-    renderProbe((o) => outcomes.push(o))
-    // 等 core 取数落定(quote.name → resolvedName), 避免自动建议路径干扰计数
-    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
-    expect(mocks.triggerAgent).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: '一键设提醒' }))
-
-    await waitFor(() => expect(mocks.triggerAgent).toHaveBeenCalledTimes(1))
-    const [stockId, agentName, opts] = mocks.triggerAgent.mock.calls[0] as [number, string, Record<string, unknown>]
-    expect(agentName).toBe('intraday_monitor')
-    expect(stockId).toBe(1) // stocksCreate 夹具的 id
-    expect(opts).toMatchObject({ bypass_throttle: true, bypass_market_hours: true })
-    expect(opts.allow_unbound).toBeUndefined() // 持久化路径走的是"已绑定"分支
-    expect(mocks.stocksList).toHaveBeenCalledTimes(1)
-    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(outcomes).toEqual([{ ok: true, watchlistEnsured: true, agentBound: true }]))
-  })
-
-  it('部分成功仍如实回传: create/updateAgents 已落库而 trigger 失败 → ok=false + 两个写入位为 true', async () => {
-    mocks.triggerAgent.mockRejectedValue(new Error('HTTP 500'))
-    const outcomes: { ok: boolean; watchlistEnsured: boolean; agentBound: boolean }[] = []
-    renderProbe((o) => outcomes.push(o))
-    await act(async () => { await new Promise((r) => setTimeout(r, 900)) })
-
-    fireEvent.click(screen.getByRole('button', { name: '一键设提醒' }))
-
-    await waitFor(() => expect(outcomes.length).toBe(1))
-    expect(outcomes[0]).toEqual({ ok: false, watchlistEnsured: true, agentBound: true })
-    expect(mocks.stocksCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.stocksUpdateAgents).toHaveBeenCalledTimes(1)
-  })
-})

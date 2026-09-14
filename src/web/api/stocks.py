@@ -242,12 +242,17 @@ def list_stocks(db: Session = Depends(get_db), user: User = Depends(get_current_
 
 @router.get("/quotes")
 def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """获取所有自选股的实时行情"""
+    """获取所有自选股的实时行情。
+
+    KI-043(2026-09-18): 逐市场失败不再静默吞掉 —— 响应带 `degraded_markets`
+    `[{market, error}]`, 成功市场的报价仍在 `quotes` 映射里。
+    响应形状: `{quotes: {symbol: {...}}, degraded_markets: [...]}`。
+    """
     stocks = db.query(Stock).filter(
         or_(Stock.user_id == user.id, Stock.user_id.is_(None))
     ).all()
     if not stocks:
-        return {}
+        return {"quotes": {}, "degraded_markets": []}
 
     # 按市场分组
     market_stocks: dict[str, list[Stock]] = {}
@@ -255,10 +260,12 @@ def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_u
         market_stocks.setdefault(s.market, []).append(s)
 
     quotes = {}
+    degraded_markets: list[dict] = []
     for market, stock_list in market_stocks.items():
         try:
             MarketCode(market)  # 校验市场合法
         except ValueError:
+            degraded_markets.append({"market": market, "error": f"未知市场 {market}"})
             continue
 
         symbols = [s.symbol for s in stock_list]   # 原始代码,md 内部按市场格式化
@@ -273,8 +280,9 @@ def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_u
                 }
         except Exception as e:
             logger.error(f"获取 {market} 行情失败: {e}")
+            degraded_markets.append({"market": market, "error": str(e)[:200]})
 
-    return quotes
+    return {"quotes": quotes, "degraded_markets": degraded_markets}
 
 
 @router.post("", response_model=StockResponse)

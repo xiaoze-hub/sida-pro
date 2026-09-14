@@ -268,8 +268,15 @@ _MINUTE_CACHE: dict = {}  # {symbol_market: (ts, points)}
 _MINUTE_TTL = 60.0
 
 
-def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float | None]:
-    """腾讯分时接口。返回 (points, prev_close) — prev_close 为昨收(±分界线用)。"""
+def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float | None, str | None]:
+    """腾讯分时接口。
+
+    Returns:
+        (points, prev_close, error_note)
+        - points is None  → **源故障**(网络/超时/解析), error_note 有值; **不是**"无分时"
+        - points == []    → 接口成功但当日真无分时(非交易日/停牌等)
+        - prev_close      → 昨收(±分界线用)
+    """
     # 指数代码识别(2026-08-10 修复): 000001=上证指数(非平安银行!), 399001=深证成指
     # 指数约定: 沪指以 000 开头(sh), 深指以 399 开头(sz); 个股 000 开头是深市(sz)
     prefix = {"CN": "sh" if symbol.startswith(("6", "9")) else "sz",
@@ -289,7 +296,8 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
             d = _json.load(resp)
         data = (d.get("data") or {}).get(code, {}).get("data", {}).get("data")
         if not data:
-            return None, None
+            # 接口 200 且解析成功、但无分时行 —— 真空态(非交易日/停牌), **不是**源故障
+            return [], None, None
         # 昨收: qt list[4](指数与个股通用: [3]=现价 [4]=昨收 [5]=今开)
         prev_close = None
         try:
@@ -326,18 +334,23 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
             bar_vol = max(cum_vol - prev_cum_vol, 0.0)  # 本分钟增量成交量(手)
             prev_cum_vol = cum_vol
             points.append({"t": t, "price": price, "avg": round(avg, 2), "volume": int(bar_vol)})
-        return points, prev_close
+        return points, prev_close, None
     except Exception as e:
+        # KI-042: 源故障必须与"真空态"可分 —— 返回 None + note, 不再伪装成 points=[]
         logger.debug(f"腾讯分时失败 {symbol}: {e}")
-        return None, None
+        return None, None, "分时源(腾讯)暂不可用"
 
 
 @router.get("/minute/{symbol}")
 async def get_minute(symbol: str, market: str = "CN"):
-    """分时走势(盘中实时)。腾讯优先, 失败返回空。含昨收(±分界线)。
+    """分时走势(盘中实时)。腾讯优先。含昨收(±分界线)。
 
     2026-08-12: 附加 swings 字段(顺势拉升段/瞬时下探段标记, 逐单明细判别),
     供前端分时K线区间着色。仅 A 股计算(复用逐笔 30s 缓存, 开销 ~0.1s)。
+
+    KI-042(2026-09-18): 源故障与"真空态"可分 —— 失败时 `points` 仍为 `[]`
+    (兼容既有前端), 但 **`degraded: true` + `note` 原文**; 真空态(非交易日/停牌)
+    `degraded: false` 且无 note。缓存 5 元组: (ts, points, prev_close, swings, note)。
     """
     is_index = market == "CN" and (
         symbol in ("000001", "000300", "000016", "000905", "000852")
@@ -346,25 +359,29 @@ async def get_minute(symbol: str, market: str = "CN"):
     cache_key = f"{market}:{symbol}"
     cached = _MINUTE_CACHE.get(cache_key)
     if cached and (_time.time() - cached[0]) < _MINUTE_TTL:
-        # 兼容旧3元组缓存(2026-08-12 加 swings 前): 缺第4元素则 swings=None
+        # 兼容旧缓存: 3元组=无 swings/note; 4元组=有 swings 无 note; 5元组=全量
         swings_old = cached[3] if len(cached) > 3 else None
+        note_old = cached[4] if len(cached) > 4 else None
         return {"symbol": symbol, "market": market, "points": cached[1],
-                "prev_close": cached[2], "is_index": is_index, "swings": swings_old or None}
-    points, prev_close = _tencent_minute(symbol, market)
+                "prev_close": cached[2], "is_index": is_index, "swings": swings_old or None,
+                "degraded": bool(note_old), "note": note_old}
+    points, prev_close, src_note = _tencent_minute(symbol, market)
+    degraded = points is None
     if points is None:
         points = []
     # 拉升/下探段(仅A股个股, 逐单明细判别; 失败静默 None 不阻塞分时)
     swings = None
-    if market == "CN" and not is_index:
+    if market == "CN" and not is_index and not degraded:
         try:
             from src.core.rally_analysis import analyze_swings
             swings = analyze_swings(symbol)
         except Exception as e:
             logger.warning(f"minute swings 计算失败 {symbol}: {e}", exc_info=True)
             swings = None
-    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings)
+    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings, src_note)
     return {"symbol": symbol, "market": market, "points": points,
-            "prev_close": prev_close, "is_index": is_index, "swings": swings}
+            "prev_close": prev_close, "is_index": is_index, "swings": swings,
+            "degraded": degraded, "note": src_note}
 
 
 # 2026-08-18: 根路径 GET (前端默认请求, 返回自选股票列表)

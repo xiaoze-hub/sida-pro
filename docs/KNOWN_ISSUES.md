@@ -18,8 +18,8 @@
 
 | ID | 级别 | 标题 | 发现 | Owner |
 |---|---|---|---|---|
-| KI-001 | P1 | react-router-dom 开放重定向→XSS(唯一运行时可触达) | 2026-09-09 | TianXiang |
-| KI-002 | P2 | rollup 任意文件写/路径穿越(仅构建链) | 2026-09-09 | TianXiang |
+| KI-001 | P1 | ~~react-router-dom 开放重定向→XSS~~ ✅ 已关(→6.30.6) | 2026-09-09 | TianXiang |
+| KI-002 | P2 | ~~rollup 任意文件写/路径穿越~~ ✅ 已关(→4.59.0) | 2026-09-09 | TianXiang |
 | KI-003 | P2 | vite dev server fs.deny 绕过(跨大版本升级) | 2026-09-09 | TianXiang |
 | KI-005 | P2 | forecast 4g 限额沿用既定值, 未按实测推理峰值校准 | 2026-09-09 | TianXiang |
 | KI-006 | P2 | 构建/测试链传递依赖已知漏洞 18 条(不进产物) | 2026-09-09 | TianXiang |
@@ -44,7 +44,7 @@
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
 | KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
 | KI-041 | P3 | 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) | 2026-09-10 | TianXiang |
-| KI-042 | P2 | 分钟K线端点腾讯 ifzq 单源, 失败态 `points: []` 静默(文案误归因) | 2026-09-10 | TianXiang |
+| KI-042 | P2 | ~~分钟K线腾讯 ifzq 单源静默~~ ✅ 已关(degraded+note) | 2026-09-10 | TianXiang |
 | KI-043 | P2 | 自选批量行情 /stocks/quotes 逐市场吞异常(缺项无提示) | 2026-09-10 | TianXiang |
 | KI-044 | P2 | 板块资金 board-capital-flow 空列表静默(单源 ths_flow) | 2026-09-10 | TianXiang |
 | KI-045 | P2 | /news 8s 超时静默置空(超时与"无新闻"不可分) | 2026-09-10 | TianXiang |
@@ -231,6 +231,7 @@
 - 影响: 源抖/风控时用户看到误导读数; 属"静默空白"类(审计判 🔴)。
 - 涉及文件: src/web/api/quotes.py(minute 端点)、frontend/packages/biz-ui/src/components/minute-dialog.tsx、InteractiveKline.tsx(有错误态但空数据时无提示)。
 - 建议修复: 响应加 `degraded: true, note: "分时源(腾讯)暂不可用"`, 对话框优先展示 note; 可评估 1m 落库(klines)兜底(注意 1m 源同为腾讯 mkline, 仅作传输面冗余)。
+- ✅ **2026-09-18 已关闭** —— 详见 CHANGELOG 同日「分时源故障不再伪装成非交易日」。`degraded`+`note` 已落地; 1m 落库兜底**未接**(留后续)。
 
 ### KI-043 自选批量行情逐市场吞异常 (P2)
 
@@ -357,8 +358,8 @@ pip-audit 结果见节末。
 
 | KI | # | 依赖 | 装机版本 | 问题 | 修复版本 | 暴露面 | Owner | 期限 |
 |----|---|------|---------|------|---------|--------|-------|------|
-| KI-001 | 1 | react-router-dom | 6.30.3 | 开放重定向→XSS (moderate, 5 条含 react-router/@remix-run/router) | >=6.30.6 (同大版本 patch) | **运行时**, 用户可触达 | TianXiang | 2026-09-30 |
-| KI-002 | 2 | rollup | 4.56.0 | 任意文件写/路径穿越 (high) | >=4.59.0 | 仅构建链, 不进产物 | TianXiang | 2026-09-30 |
+| KI-001 | 1 | ~~react-router-dom~~ ✅ | ~~6.30.3~~ → **6.30.6** | 开放重定向→XSS (moderate) | >=6.30.6 | **运行时**, 用户可触达 | TianXiang | 2026-09-30 **已关** |
+| KI-002 | 2 | ~~rollup~~ ✅ | ~~4.56.0~~ → **4.59.0** | 任意文件写/路径穿越 (high) | >=4.59.0 | 仅构建链, 不进产物 | TianXiang | 2026-09-30 **已关** |
 | KI-003 | 3 | vite | 5.4.21 | dev server fs.deny 绕过 (high) 等 3 条 | >=6.4.3 (跨大版本) | 仅 dev server | TianXiang | 2026-10-31 |
 | KI-006 | 4 | tailwind/babel 构建链传递依赖 (postcss/nanoid/picomatch/browserslist/@babel/core/esbuild 等) | 见 pnpm-lock | ReDoS/原型污染/文件读 等 17 条 | 均 patch/minor 可修 | 仅构建链/dev 依赖, 不进产物 | TianXiang | 2026-10-31 |
 
@@ -369,6 +370,7 @@ pip-audit 结果见节末。
 - 暴露面判定: 前端构建工具链 (vite/rollup/postcss/babel/tailwind) 只在本机
   dev/build 阶段执行, 产物是静态 bundle, 漏洞不影响线上用户; 真正运行时
   依赖里的已知漏洞当前只有 react-router-dom 一处。
+- ✅ **2026-09-18 KI-001/KI-002 已关闭**: react-router-dom 6.30.3→**6.30.6** + rollup 4.56.0→**4.59.0**。详见 CHANGELOG 同日条目。**运行时已知漏洞清零**; KI-003/KI-006 仍开启(构建链/dev, 期限 10-31)。
 - vitest 3.2.7 的 @vitest/mocker 路径穿越 (moderate) 仅测试环境, 随 W2.4
   引入的测试栈, 跟随 vitest 大版本升级处理(并入 KI-006 口径)。
 
@@ -432,3 +434,7 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-14(v0.6.0 遗留清理第 4 批)**: **KI-055 关闭**(离线门禁存量红清零: 实测 `pytest -m "not network"` = **2280 passed / 0 failed / 5 skipped**, 三类处置见该条目 ✅ 段 —— 其中 ① 5 条日历敏感用例在工作日**自动转绿**, 未改代码); 新增 **KI-057**(「振幅」两套分母口径: 后端落库 `/low` vs 前端实时 `/prev_close`, 同一工作台页可同屏到达, 需老板先定口径且牵涉历史 `klines.amplitude` 是否回填) + **KI-058**(遗留③ 之后 `handleSetAlert` 成零生产调用方孤儿 ⇒ "绑定盘中监测提醒"自 v0.6.0 退役旧模态起**已无任何 UI 入口**; 补显式按钮=新功能 vs 删死代码, 待老板拍板); 另订正 **KI-056** 描述(其引用的 `/quote/:symbol` 已随 v0.6.0 退役, 条目仍开启)。台账 **36 条在册(P1×3/P2×19/P3×14)**; 同批复审另提出 Minor 5(封单额迁移后失去 30s 轮询与快照时钟)⇒ 新增 **KI-059**, 台账 **37 条在册(P1×3/P2×20/P3×14)**。
 
 **2026-09-18**: **KI-059 关闭(方案 B 快照时钟)** —— `HeaderBand` 快照行尾渲染 `快照 HH:MM:SS`(取 `/l2.as_of`, 与 QuickRail 同口径); 未加 30s 轮询、未改去重契约。详见 CHANGELOG 同日条目。台账 **36 条在册(P1×3/P2×19/P3×14)**。
+
+**2026-09-18**: **KI-001/KI-002 关闭(依赖安全 patch)** —— react-router-dom 6.30.3→**6.30.6**(唯一运行时可触达漏洞清零) + rollup 4.56.0→**4.59.0**。详见 CHANGELOG 同日条目。台账 **35 条在册(P1×2/P2×19/P3×14)**。
+
+**2026-09-18**: **KI-042 关闭(分时 degraded)** —— `/quotes/minute` 源故障带 `degraded`+`note`, 前端不再误写成"非交易日/停牌"。详见 CHANGELOG 同日条目。台账 **34 条在册(P1×2/P2×18/P3×14)**。

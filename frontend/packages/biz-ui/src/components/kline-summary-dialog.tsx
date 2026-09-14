@@ -790,7 +790,7 @@ export function KlineSummaryDialog({
                         </div>
                         <div>
                           <span className="font-medium text-foreground">本项目如何算：</span>
-                          今日振幅≈(High-Low)/Low。数值越大，表示盘中波动越剧烈、风险与机会都更大。
+                          今日振幅≈(High−Low)/昨收×100（A股通行口径, 2026-09-18 与带1实时振幅统一）。数值越大，表示盘中波动越剧烈、风险与机会都更大。
                         </div>
                         <div>
                           <span className="font-medium text-foreground">怎么解读：</span>

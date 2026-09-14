@@ -14,6 +14,25 @@ function withQuery(path: string, params: Record<string, QueryValue>): string {
   return s ? `${path}?${s}` : path
 }
 
+/**
+ * KI-045: `/news` 统一信封 `{items, degraded, note}`; 兼容旧裸 list(滚动升级期)。
+ * 源故障时 items=[] 且 degraded=true —— 调用方必须区分"超时"与"无新闻"。
+ */
+export function normalizeNewsEnvelope<T = unknown>(raw: unknown): {
+  items: T[]
+  degraded: boolean
+  note: string | null
+} {
+  if (Array.isArray(raw)) {
+    return { items: raw as T[], degraded: false, note: null }
+  }
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown }).items)) {
+    const o = raw as { items: T[]; degraded?: boolean; note?: string | null }
+    return { items: o.items, degraded: !!o.degraded, note: o.note ?? null }
+  }
+  return { items: [], degraded: false, note: null }
+}
+
 export const insightApi = {
   quote: <T>(symbol: string, market: string) =>
     fetchAPI<T>(`/quotes/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`),

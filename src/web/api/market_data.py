@@ -220,6 +220,14 @@ async def board_capital_flow_proxy(
             if stale is not None:
                 logger.info("板块资金源返回空, 回退备份(age=%ss)", stale.get("stale_age_sec"))
                 return stale
+            # KI-044: 空且无备份 —— 显式 degraded, 不与"今日无板块资金"混同
+            return {
+                "board_type": board_type,
+                "count": 0,
+                "items": [],
+                "degraded": True,
+                "note": "板块资金源暂无数据(源故障或空返回); 非「今日无资金流」",
+            }
         payload = {
             "board_type": board_type,
             "count": len(boards),
