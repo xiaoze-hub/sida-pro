@@ -254,8 +254,10 @@ export default function StockWorkbench() {
            `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
         <div key={refreshKey}>
-          {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡 */}
-          <div className="mt-3 flex gap-3">
+          {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡
+              走查 2026-09-18: 右栏更高时左图下方会大片空白 —— 右栏限高与主图同高并可滚,
+              两列底部对齐, 不再被最长列撑出死白。 */}
+          <div className="mt-3 flex items-stretch gap-3">
             <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
               <KlineChart
                 symbol={symbol}
@@ -265,7 +267,7 @@ export default function StockWorkbench() {
                 height={420}
               />
             </div>
-            <div className="w-[320px] shrink-0">
+            <div className="scrollbar w-[320px] shrink-0 max-h-[436px] overflow-y-auto">
               <QuickRail symbol={symbol} market={MARKET} />
             </div>
           </div>

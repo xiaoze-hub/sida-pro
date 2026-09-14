@@ -54,6 +54,9 @@ export default function ResonancePanel({ className, actions }: { className?: str
   const navigate = useNavigate()
   const [only, setOnly] = useState<'resonance' | 'near'>('resonance')
   const [resp, setResp] = useState<ScanResp | null>(null)
+  /** 走查 2026-09-18: 默认只展示 Top20 —— 40+ 行会把首页异动池/发现区推得很远 */
+  const [expanded, setExpanded] = useState(false)
+  const PREVIEW_N = 20
 
   useEffect(() => {
     let alive = true
@@ -76,6 +79,9 @@ export default function ResonancePanel({ className, actions }: { className?: str
       window.clearInterval(timer)
     }
   }, [only])
+
+  const items = resp?.items ?? []
+  const visible = expanded ? items : items.slice(0, PREVIEW_N)
 
   return (
     <div className={className}>
@@ -105,7 +111,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
         </div>
       ) : (
         <div className="mt-1.5 divide-y divide-border/40">
-          {(resp?.items ?? []).map((it) => (
+          {visible.map((it) => (
             <button
               key={it.symbol}
               type="button"
@@ -131,6 +137,15 @@ export default function ResonancePanel({ className, actions }: { className?: str
               </span>
             </button>
           ))}
+          {items.length > PREVIEW_N && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="w-full py-1.5 text-center text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              {expanded ? '收起' : `展开全部 ${items.length} 条`}
+            </button>
+          )}
         </div>
       )}
     </div>

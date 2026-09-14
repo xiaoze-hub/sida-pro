@@ -116,14 +116,17 @@ export default function KpiBand({
   const flowAnim = useCountUp(mainFlowYi)
   const amountAnim = useCountUp(amountYi)
 
-  // 情绪周期: 失败 → 显式"加载失败"; 数据源明确无数据 → '--' + 后端 note 原文做悬停说明
-  const phaseFailed = !!phase.error
+  // 情绪周期: 有好值优先展示(失败只进 title 提示); 从未拿到 → 显式失败; available=false → '--'
+  const phaseHasValue = !!(phase.label || phase.limitUp != null)
+  const phaseFailed = !!phase.error && !phaseHasValue
   const phaseValue = phaseFailed
     ? FAIL_TEXT
     : phase.loading && !phase.label && !phase.unavailableNote
       ? '…'
       : phase.label || '--'
-  const phaseTitle = phaseFailed ? `情绪周期数据加载失败: ${phase.error}` : phase.unavailableNote || undefined
+  const phaseTitle = phase.error
+    ? (phaseHasValue ? `本次刷新失败: ${phase.error} — 仍展示上次成功数据` : `情绪周期数据加载失败: ${phase.error}`)
+    : phase.unavailableNote || undefined
 
   return (
     <div className="card grid grid-cols-3 divide-x divide-border/40 md:grid-cols-6">
@@ -243,7 +246,9 @@ export function usePhaseLabel(): PhaseKpi {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetchAPI<PhaseResp>('/market/phase', { cacheMode: 'reload' })
+      // 走 fetchAPI 默认 30s GET 缓存(与轮询同频): 首页多组件同打 /market/phase 时
+      // 共享一份响应, 不再各自 cacheMode:reload 叠并发(2026-09-18 走查「请求超时」根因之一)。
+      const res = await fetchAPI<PhaseResp>('/market/phase')
       if (!aliveRef.current) return
       const cur = res?.available ? res.current : null
       if (cur) {
@@ -252,6 +257,7 @@ export function usePhaseLabel(): PhaseKpi {
         setLimitUp((cur.first_board ?? 0) + (cur.ge2_count ?? 0))
         setSealRate(cur.seal_rate)
         setUnavailableNote(null)
+        setError(null)
       } else {
         setLabel(null)
         setLimitUp(null)
@@ -261,9 +267,7 @@ export function usePhaseLabel(): PhaseKpi {
       }
     } catch (e) {
       if (!aliveRef.current) return
-      setLabel(null)
-      setLimitUp(null)
-      setSealRate(null)
+      // stale-on-error: 保留上次成功值, 只标 error(与 PhaseGaugeCard 同规则)
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
       if (aliveRef.current) setLoading(false)
