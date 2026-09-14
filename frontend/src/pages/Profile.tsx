@@ -355,7 +355,16 @@ export function Profile() {
               icon={Target}
               label="预测命中率"
               value={stats?.prediction?.hit_rate != null ? `${stats.prediction.hit_rate}%` : '--'}
-              sub={stats?.prediction?.total ? `命中 ${stats.prediction.hit_count}/${stats.prediction.total} · ${stats.prediction.note}` : '暂无已评估预测'}
+              sub={
+                stats?.prediction?.total
+                  ? [
+                      `命中 ${stats.prediction.hit_count}/${stats.prediction.total}`,
+                      stats.prediction.note ? String(stats.prediction.note) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                  : '暂无已评估预测'
+              }
               accent="text-primary"
             />
             <StatTile

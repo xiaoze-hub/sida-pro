@@ -7,6 +7,20 @@
 
 ## 2026-09-18
 
+### fix(ui): 全站走查修复 —— Profile undefined / 指数 OHLC / 持仓空态
+
+**性质**: 纯前端 3 文件 + 走查报告。静态面部署, **不重启容器**。
+
+- **走查**: Playwright 注入 admin token, 18 页 fullPage 截图 + 空态采集, 详见 `docs/UI走查_20260918.md` 与 `docs/screenshots/ui-sweep-20260918/`。
+- **修复**:
+  1. 个人中心「命中 587/1360 · **undefined**」—— `prediction.note` 缺省被模板字符串字面量化; 改为 note 非空才拼接。
+  2. 指数工作台 今开/最高/最低 恒 `--` —— 腾讯指数 quote 对 OHLC 常返 null; **仅当日**最后一根日K回填, 非当日不编造。
+  3. 持仓页无持仓时主体 ~70% 死白 —— 空态改居中两行引导(如何添加 / 去关注页)。
+- **未改(报告留痕)**: 首页 `/market/phase` 超时导致三卡失败; 三指标共振列表过长; 工作台左右列高度差; 通知失败告警噪音; 盘中 L2 真值需盘中复验。
+- **门禁**: `tsc -b` 0 / `eslint` 0。
+
+[commit 待回填]
+
 ### fix(ths): 同步 vendor 调用加并发上限 + 真硬超时 —— 修开盘线程膨胀(v0.6.3 留下的 P1)
 
 **性质**: 后端 3 文件(`src/core/thsdk_breaker.py` 核心 + `src/web/api/klines.py` 2 处 + `src/core/dark_l2.py` 1 处) + 1 个测试文件扩写。**需重启生效**。

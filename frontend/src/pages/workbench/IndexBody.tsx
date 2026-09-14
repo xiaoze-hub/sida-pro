@@ -168,9 +168,22 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
               </div>
               <div className="flex gap-6 text-sm text-muted-foreground">
                 <div><span className="block text-[10px]">昨收</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.prev_close)}</span></div>
-                <div><span className="block text-[10px]">今开</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.open)}</span></div>
-                <div><span className="block text-[10px]">最高</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.high)}</span></div>
-                <div><span className="block text-[10px]">最低</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.low)}</span></div>
+                {/* 走查 2026-09-18: 腾讯指数 quote 对 open/high/low 常返 null —— 用**当日**最后一根日K回填, 不编造 */}
+                {(() => {
+                  const last = data.klines[data.klines.length - 1]
+                  const today = new Date().toISOString().slice(0, 10)
+                  const sameDay = last && last.date === today
+                  const open = q?.open ?? (sameDay ? last.open : null)
+                  const high = q?.high ?? (sameDay ? last.high : null)
+                  const low = q?.low ?? (sameDay ? last.low : null)
+                  return (
+                    <>
+                      <div><span className="block text-[10px]">今开</span><span className="font-mono text-foreground tabular-nums">{safeFixed(open)}</span></div>
+                      <div><span className="block text-[10px]">最高</span><span className="font-mono text-foreground tabular-nums">{safeFixed(high)}</span></div>
+                      <div><span className="block text-[10px]">最低</span><span className="font-mono text-foreground tabular-nums">{safeFixed(low)}</span></div>
+                    </>
+                  )
+                })()}
                 <div><span className="block text-[10px]">成交量</span><span className="font-mono text-foreground tabular-nums">{q?.volume != null && Number.isFinite(Number(q.volume)) ? safeFixed(Number(q.volume) / 1e8) + '亿股' : '--'}</span></div>
               </div>
             </div>
