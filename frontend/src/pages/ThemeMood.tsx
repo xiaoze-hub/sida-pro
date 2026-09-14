@@ -530,7 +530,7 @@ export default function ThemeMoodPage() {
                       <span className="font-mono text-foreground">{fmtScore(detailTrend.last?.score)}</span>
                     </span>
                   </div>
-                  <div ref={detailScrollRef} className="overflow-x-auto pb-1">
+                  <div ref={detailScrollRef} className="scrollbar overflow-x-auto pb-1">
                     <TrendChart
                       trend={detailTrend}
                       width={axisW}
