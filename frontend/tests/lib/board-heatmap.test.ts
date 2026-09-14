@@ -4,9 +4,12 @@ import { describe, expect, it } from 'vitest'
 import {
   detectHeatAnomaly,
   formatHeatPct,
+  hasDrawableArea,
+  hasUsableVolume,
   heatCellColor,
   heatLabelColor,
   toTreemapCells,
+  usableVolumeCount,
   type BoardHeatItem,
   type HeatPalette,
 } from '@panwatch/biz-ui/lib/board-heatmap'
@@ -54,6 +57,31 @@ describe('heatCellColor 色阶映射', () => {
   it('0% 平盘 → neutral 灰(全站平盘灰惯例), 极小幅度同样归灰', () => {
     expect(heatCellColor(0, PALETTE)).toBe(PALETTE.neutral)
     expect(heatCellColor(0.002, PALETTE)).toBe(PALETTE.neutral)
+  })
+})
+
+// 2026-09-14 缺陷修复: -100 假暴跌。口径是"只把空当无数据":
+// 前端**不按量级猜哨兵**, 缺数据必须由后端返回 null。理由见 board-heatmap.ts heatRatio 注释。
+describe('heatCellColor: 缺数据(空)才算无数据, 不猜哨兵量级', () => {
+  it('null/undefined/NaN/Infinity → neutral 灰(只有"空"才是无数据)', () => {
+    expect(heatCellColor(null, PALETTE)).toBe(PALETTE.neutral)
+    expect(heatCellColor(undefined, PALETTE)).toBe(PALETTE.neutral)
+    expect(heatCellColor(Number.NaN, PALETTE)).toBe(PALETTE.neutral)
+    expect(heatCellColor(Number.POSITIVE_INFINITY, PALETTE)).toBe(PALETTE.neutral)
+  })
+
+  it('真实跌幅照旧染 down 绿: -10% 与 -100% 都不许变灰(按量级猜会把真跌染成灰)', () => {
+    expect(heatCellColor(-10, PALETTE)).toContain('67, 160, 71')
+    // -100 在 A 股板块上基本不可能, 但"是不是哨兵"只有数据源知道 —— 前端不猜,
+    // 只如实按读数上色; 缺数据由后端改成 null 后自然走 neutral。
+    expect(heatCellColor(-100, PALETTE)).toContain('67, 160, 71')
+    expect(heatCellColor(-100, PALETTE)).not.toBe(PALETTE.neutral)
+  })
+
+  it('百分本文案同样只对"空"显式无数据', () => {
+    expect(formatHeatPct(undefined)).toBe('无数据')
+    expect(formatHeatPct(Number.NaN)).toBe('无数据')
+    expect(formatHeatPct(-10)).toBe('-10.00%')
   })
 })
 
@@ -126,6 +154,63 @@ describe('toTreemapCells treemap 数据变换', () => {
 
   it('空列表 → 空数组(不抛)', () => {
     expect(toTreemapCells([], { palette: PALETTE, areaMetric: 'volume' })).toEqual([])
+  })
+})
+
+// 2026-09-14 缺陷修复(P0 热力图空白): 后端整批返回 volume=0 时, 量能视图必须
+// 要么给出正面积(保底可见)要么由调用方显式说明 —— 绝不允许 0 面积静默空白画布。
+describe('toTreemapCells 量能全缺时的保底面积(空白画布根因)', () => {
+  const zeros: BoardHeatItem[] = [
+    item({ block_code: 'A', volume: 0, change_pct: -100, has_daily: false }),
+    item({ block_code: 'B', volume: null, change_pct: null, has_daily: false }),
+    // PG DECIMAL 经 JSON 变字符串的脏数(历史崩溃模式)也按缺失处理
+    item({ block_code: 'C', volume: '0' as unknown as number, change_pct: null }),
+  ]
+
+  it('全部 volume=0/null/脏数 → 每块都拿到正保底面积(不会 0 面积消失)', () => {
+    const cells = toTreemapCells(zeros, { palette: PALETTE, areaMetric: 'volume' })
+    expect(cells).toHaveLength(3)
+    for (const c of cells) {
+      expect(Number.isFinite(c.value)).toBe(true)
+      expect(c.value).toBeGreaterThan(0)
+    }
+    // 全缺时面积相等(等权保底), 且 ECharts 画得出来
+    expect(new Set(cells.map((c) => c.value)).size).toBe(1)
+    expect(hasDrawableArea(cells)).toBe(true)
+  })
+
+  it('旧行为对照: 只要保底面积落到 0, ECharts 就整块不画 —— hasDrawableArea 必须为 false', () => {
+    const empty: ReturnType<typeof toTreemapCells> = []
+    expect(hasDrawableArea(empty)).toBe(false)
+    expect(hasDrawableArea(null)).toBe(false)
+    const zeroCells = toTreemapCells(zeros, { palette: PALETTE, areaMetric: 'volume' }).map((c) => ({
+      ...c,
+      value: 0,
+    }))
+    expect(hasDrawableArea(zeroCells)).toBe(false)
+  })
+
+  it('hasUsableVolume / usableVolumeCount: 只有正有限数算可用量能', () => {
+    expect(hasUsableVolume(zeros)).toBe(false)
+    expect(usableVolumeCount(zeros)).toBe(0)
+    const mixed = [...zeros, item({ block_code: 'D', volume: 1e10 })]
+    expect(hasUsableVolume(mixed)).toBe(true)
+    expect(usableVolumeCount(mixed)).toBe(1)
+    expect(hasUsableVolume([item({ volume: Number.NaN })])).toBe(false)
+    expect(hasUsableVolume([item({ volume: -5 })])).toBe(false)
+    expect(hasUsableVolume([])).toBe(false)
+  })
+
+  it('混合场景保底仍按正值中位数 × minShare(全缺才退到固定保底)', () => {
+    const cells = toTreemapCells(
+      [item({ block_code: 'A', volume: 1_000_000 }), item({ block_code: 'B', volume: 0 })],
+      { palette: PALETTE, areaMetric: 'volume' },
+    )
+    const a = cells.find((c) => c.blockCode === 'A')!.value
+    const b = cells.find((c) => c.blockCode === 'B')!.value
+    expect(a).toBe(1_000_000)
+    expect(b).toBeGreaterThan(0)
+    expect(b).toBeLessThan(a)
   })
 })
 

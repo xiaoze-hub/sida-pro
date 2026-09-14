@@ -7,6 +7,24 @@
 
 ## 2026-09-14
 
+### fix(heatmap): 板块热力图「面积:量能」不再静默空白(保底面积恒正 + 显式空态) + 色阶只把"空"当无数据
+
+**性质**: 纯前端防御纵深(1 个纯函数模块 + 1 个组件) + 10 条钉住用例。无接口契约变更。
+
+- **缺陷**(生产截图+DOM 巡检): `/heatmap` **默认视图「面积:量能」的 canvas(1007×560)整块空白, 页面上没有任何说明**; 切「面积:等权」才出图。载荷特征: 后端一整批 128 个板块 `volume: 0`(且 `change_pct: -100`)。page 自己的描述承诺「缺失板块以最小面积保底」。
+- **根因**(两段, 都在前端):
+  1. **0 面积时 ECharts treemap 整块不画**: 实测 echarts 6.1 SSR —— 128 个 `value=0` 的节点渲染出的 SVG 只剩背景(路径数 2, 文字 0), 而 `value=1` 的同样 128 个节点渲染出 128 块(路径数 257) ⇒ "空白灰框"就是 0 面积的直接后果。`toTreemapCells` 在"有正值"时用中位数 × minShare 保底, 但在**全部板块都缺/为 0** 这条分支上没有把"必须 > 0"钉死。
+  2. **画不出来时没有空态**: 组件只在 `items.length === 0` 时给文案; 保底面积让 cells "看起来非空"时直接走画布分支 ⇒ "画不出图"这件事在 UI 上完全不可见(静默空白)。
+- **修法**(`frontend/packages/biz-ui/src/lib/board-heatmap.ts` + `.../components/dashboard/BoardHeatmap.tsx`):
+  - 保底面积恒 > 0: 有正值 → 正值中位数 × minShare; **全缺/全 0 → 固定保底 `EMPTY_FLOOR=1`**, 并挡住 NaN/Infinity/非正值(旧行为落到 0 就会静默空白)。量能可用性判定走 `safeNum`(兼容 PG DECIMAL 经 JSON 变字符串的脏数), 不再裸 `typeof === 'number'`。
+  - 新增纯函数 `hasDrawableArea(cells)` / `hasUsableVolume(items)` / `usableVolumeCount(items)`: 画不出来(= 空 cells 或全部 value 非正)一律**不 `setOption`、不挂画布**, 改渲染显式空态。
+  - 量能视图**全部**板块成交额缺失时: 显式说明 `data-testid="heatmap-no-volume"`「N 个板块的成交额全部缺失, 面积无法区分板块 —— 已停绘, 避免把保底面积误读成量能」+ 一键切「面积:等权」(信息不丢)。**为什么这里停绘而不是铺一张等权保底图**: 全缺 + 保底面积 = 128 个一模一样的块, 挂在「面积:量能」标签下会被读成"量能都差不多", 比空白更容易误导; 混合场景(部分板块有量能)仍照旧出图, 零量能块走保底面积可见可点。
+- **色阶口径(故意不改的点, 写清理由)**: `change_pct` 只把 **null/undefined/NaN/Infinity** 当无数据染 neutral 灰, **不按量级猜哨兵**。`-100` 是哨兵还是真实深跌只有数据源知道, 前端按量级(a=100)猜会把真实深跌误染成灰 —— 那是另一种"不老实"。缺数据必须由后端返回 `null`(另一批在改后端守卫), 前端这一半只保证"空就老实说空 + 画不出来就说画不出来"。
+- **钉住(新增 10 例)**: 全 0/缺失量能 → 每块仍拿到正保底面积; `value=0` 必须判"画不出来"; 量能全缺 → 显式空态且**不**调 `setOption`、无画布; 空态一键切等权后恢复出图; 空列表 → 空态且不调 `setOption`; null/undefined/NaN/Infinity → neutral 灰; `-10%` 与 `-100%` 仍染 down 绿。
+- **门禁**(本机, 与另一并行 agent 共用工作树): `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK; 本次两个测试文件 **35/35 绿**(lib 24 + 组件 11); `vitest run` 全量 **412 passed / 3 failed**, 3 处红全部在 `tests/components/dashboard-phase-honesty.test.tsx`(并行 agent 的 WIP 文件, 只 import `KpiBand/MarketMainlineCard/MarketPhaseCard/Dashboard`, 与本批模块零交集, 本次未改其一行)。
+- **未验证**: 生产 `/boards/heatmap` 真实载荷(需后端守卫到位且盘中接口可用); 本次只做前端守卫 + 离线用例。证据与未验证项见 `.superpowers/sdd/ui-sweep-20260914/frontend-heatmap-darkfund-portfolio.md`。
+- [commit 待回填]
+
 ### release-v0.6.2: 修「指数正文手动刷新被 30s GET 缓存吞掉」(v0.6.1 部署后自检发现)
 
 **性质**: 单文件前端修复 + 1 条钉住用例。静态面部署, 不重启容器。
