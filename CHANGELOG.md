@@ -1,9 +1,30 @@
-# Changelog
+﻿# Changelog
 
 > **给 AI 协作者的读法**: 本文件是"别人改了什么"的唯一入口。接手前先读最近 3 个 `## 日期` 段。
 > 每条 entry 末尾 `[commit <hash>]` 可直接 `git show <hash>` 看完整 diff。
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
+
+## 2026-09-18
+
+### fix(ths): 同步 vendor 调用加并发上限 + 真硬超时 —— 修开盘线程膨胀(v0.6.3 留下的 P1)
+
+**性质**: 后端 3 文件(`src/core/thsdk_breaker.py` 核心 + `src/web/api/klines.py` 2 处 + `src/core/dark_l2.py` 1 处) + 1 个测试文件扩写。**需重启生效**。
+
+- **症状**(v0.6.3 日志治理批实测, 本次落实其"未做"项): 单 uvicorn worker **116-118 线程**, 其一累计烧 ~8 CPU 小时; 开盘后 app/PG 被打满(此前已先修日志噪音写库, 本条治的是**线程本身**)。
+- **根因(两处, 互相叠加)**:
+  1. **假硬超时**: `klines.py` orderbook/wencai 与 `dark_l2.py::_query_thsdk` 都用 `with ThreadPoolExecutor(max_workers=1)` + `fut.result(timeout=T)`。超时后 `with` 退出会 `shutdown(wait=True)` —— **仍阻塞到挂死的 thsdk 线程跑完**(单次卡 30s, 三轮退避 90s)。硬超时只让调用方"以为"返回了, 线程一个没少。
+  2. **并发槽无 acquire 超时**: `thsdk_breaker._slot()` 的 `Semaphore.acquire()` **无限排队**。开盘多路请求打进来时, 排队线程在槽上堆积, 直接推高 worker 线程数。
+- **修法**:
+  - `thsdk_breaker.py` 新增 `call_with_hard_timeout(fn, default, timeout_s, acquire_timeout_s)`: 专用线程执行 → `result(timeout)` → 超时**立刻**返回 default, `shutdown(wait=False)` **不等挂死线程**; 并发槽 `acquire` 带超时(默认 5s), 满了直接放弃。
+  - **挂死线程仍占并发槽**(关键语义): 超时后槽不立刻还, 挂到 `future.add_done_callback` 上 —— Python 杀不掉线程, 只能等它自己结束再回收槽。这样同时挂死的 thsdk 调用**上限 = SEMAPHORE(3)**, 不会"超时后又放行新调用"把挂死线程堆到 3 之上。
+  - `thsdk_call` 的 `acquire` 同步加超时; 传 `timeout_s` 时走硬超时路径(旧默认 `timeout_s=None` 保持"在调用方线程内跑"的旧行为, 兼容已在专用线程的调用方)。
+  - 三处假超时调用点全部改走 `call_with_hard_timeout`。
+- **钉住**(`tests/test_thsdk_breaker.py`, 8 例 → 14 例): ① 挂住 3s、超时 0.2s → 调用方 **<1s 返回**(去掉 `wait=False` 改回 `with` 会红); ② 挂死后 inflight 仍占满 SEMAPHORE, 第 4 路 acquire 超时快速放弃; ③ 线程结束后槽归还; ④ 成功路径立刻还槽; ⑤ 例外记熔断; ⑥ `thsdk_call(timeout_s=...)` 走硬超时路径。
+- **门禁**: 后端 `pytest -m "not network"` **2317 passed / 0 failed / 5 skipped**(基线 2311, 净 +6 = 本批)。前端未改。
+- **未做(如实留痕)**: `asyncio.to_thread` 默认池上的其它慢 vendor(非 thsdk)调用未逐个套硬超时 —— 那是另一条更大的面; 本批只钉死 thsdk 这条已实证打爆 worker 的路径。挂死线程本身仍会占内存直到进程重启/自然结束, 治标靠并发上限兜住, 根治要 thsdk 客户端自身支持取消。
+
+[commit 待回填]
 
 ## 2026-09-14
 
