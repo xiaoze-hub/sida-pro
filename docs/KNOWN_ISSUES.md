@@ -18,8 +18,8 @@
 
 | ID | 级别 | 标题 | 发现 | Owner |
 |---|---|---|---|---|
-| KI-001 | P1 | react-router-dom 开放重定向→XSS(唯一运行时可触达) | 2026-09-09 | TianXiang |
-| KI-002 | P2 | rollup 任意文件写/路径穿越(仅构建链) | 2026-09-09 | TianXiang |
+| KI-001 | P1 | ~~react-router-dom 开放重定向→XSS~~ ✅ 已关(→6.30.6) | 2026-09-09 | TianXiang |
+| KI-002 | P2 | ~~rollup 任意文件写/路径穿越~~ ✅ 已关(→4.59.0) | 2026-09-09 | TianXiang |
 | KI-003 | P2 | vite dev server fs.deny 绕过(跨大版本升级) | 2026-09-09 | TianXiang |
 | KI-005 | P2 | forecast 4g 限额沿用既定值, 未按实测推理峰值校准 | 2026-09-09 | TianXiang |
 | KI-006 | P2 | 构建/测试链传递依赖已知漏洞 18 条(不进产物) | 2026-09-09 | TianXiang |
@@ -356,8 +356,8 @@ pip-audit 结果见节末。
 
 | KI | # | 依赖 | 装机版本 | 问题 | 修复版本 | 暴露面 | Owner | 期限 |
 |----|---|------|---------|------|---------|--------|-------|------|
-| KI-001 | 1 | react-router-dom | 6.30.3 | 开放重定向→XSS (moderate, 5 条含 react-router/@remix-run/router) | >=6.30.6 (同大版本 patch) | **运行时**, 用户可触达 | TianXiang | 2026-09-30 |
-| KI-002 | 2 | rollup | 4.56.0 | 任意文件写/路径穿越 (high) | >=4.59.0 | 仅构建链, 不进产物 | TianXiang | 2026-09-30 |
+| KI-001 | 1 | ~~react-router-dom~~ ✅ | ~~6.30.3~~ → **6.30.6** | 开放重定向→XSS (moderate) | >=6.30.6 | **运行时**, 用户可触达 | TianXiang | 2026-09-30 **已关** |
+| KI-002 | 2 | ~~rollup~~ ✅ | ~~4.56.0~~ → **4.59.0** | 任意文件写/路径穿越 (high) | >=4.59.0 | 仅构建链, 不进产物 | TianXiang | 2026-09-30 **已关** |
 | KI-003 | 3 | vite | 5.4.21 | dev server fs.deny 绕过 (high) 等 3 条 | >=6.4.3 (跨大版本) | 仅 dev server | TianXiang | 2026-10-31 |
 | KI-006 | 4 | tailwind/babel 构建链传递依赖 (postcss/nanoid/picomatch/browserslist/@babel/core/esbuild 等) | 见 pnpm-lock | ReDoS/原型污染/文件读 等 17 条 | 均 patch/minor 可修 | 仅构建链/dev 依赖, 不进产物 | TianXiang | 2026-10-31 |
 
@@ -368,6 +368,7 @@ pip-audit 结果见节末。
 - 暴露面判定: 前端构建工具链 (vite/rollup/postcss/babel/tailwind) 只在本机
   dev/build 阶段执行, 产物是静态 bundle, 漏洞不影响线上用户; 真正运行时
   依赖里的已知漏洞当前只有 react-router-dom 一处。
+- ✅ **2026-09-18 KI-001/KI-002 已关闭**: react-router-dom 6.30.3→**6.30.6** + rollup 4.56.0→**4.59.0**。详见 CHANGELOG 同日条目。**运行时已知漏洞清零**; KI-003/KI-006 仍开启(构建链/dev, 期限 10-31)。
 - vitest 3.2.7 的 @vitest/mocker 路径穿越 (moderate) 仅测试环境, 随 W2.4
   引入的测试栈, 跟随 vitest 大版本升级处理(并入 KI-006 口径)。
 
@@ -429,3 +430,5 @@ forecast_server.py 独立部署(运行目录 forecast_lib/, 不含 src/), 其"�
 **2026-09-12(v0.5.78/79)**: 新增 **KI-056**(行情页大图还没有每 pane 信息栏, 注册表目前只覆盖 InteractiveKline 的副图集合), 台账 **35 条在册(P1×3/P2×18/P3×14)**; 同日修复并移入 CHANGELOG 的两项(行情页 marker 越界整页崩、前端报错上报恒 405)因从未登记过, 直接记在 CHANGELOG。
 
 **2026-09-14(v0.6.0 遗留清理第 4 批)**: **KI-055 关闭**(离线门禁存量红清零: 实测 `pytest -m "not network"` = **2280 passed / 0 failed / 5 skipped**, 三类处置见该条目 ✅ 段 —— 其中 ① 5 条日历敏感用例在工作日**自动转绿**, 未改代码); 新增 **KI-057**(「振幅」两套分母口径: 后端落库 `/low` vs 前端实时 `/prev_close`, 同一工作台页可同屏到达, 需老板先定口径且牵涉历史 `klines.amplitude` 是否回填) + **KI-058**(遗留③ 之后 `handleSetAlert` 成零生产调用方孤儿 ⇒ "绑定盘中监测提醒"自 v0.6.0 退役旧模态起**已无任何 UI 入口**; 补显式按钮=新功能 vs 删死代码, 待老板拍板); 另订正 **KI-056** 描述(其引用的 `/quote/:symbol` 已随 v0.6.0 退役, 条目仍开启)。台账 **36 条在册(P1×3/P2×19/P3×14)**; 同批复审另提出 Minor 5(封单额迁移后失去 30s 轮询与快照时钟)⇒ 新增 **KI-059**, 台账 **37 条在册(P1×3/P2×20/P3×14)**。
+
+**2026-09-18**: **KI-001/KI-002 关闭(依赖安全 patch)** —— react-router-dom 6.30.3→**6.30.6**(唯一运行时可触达漏洞清零) + rollup 4.56.0→**4.59.0**。详见 CHANGELOG 同日条目。台账 **35 条在册(P1×2/P2×19/P3×14)**。

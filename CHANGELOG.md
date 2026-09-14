@@ -5,6 +5,19 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18
+
+### chore(deps): 关闭 KI-001/KI-002 —— react-router-dom 6.30.3→6.30.6 + rollup 4.56.0→4.59.0
+
+**性质**: 依赖升级(`frontend/package.json` + `pnpm-lock.yaml`)。**关闭 KI-001(唯一运行时可触达漏洞)与 KI-002(构建链)**。静态面部署, 不重启容器。
+
+- **KI-001(P1, 期限 2026-09-30)**: `react-router-dom@6.30.3` 开放重定向→XSS(moderate, 含 react-router/@remix-run/router 共 5 条)。暴露面**运行时**, 用户可触达 —— 2026-09-09 依赖安全审计里唯一的运行时高危项。升级到 **6.30.6**(同大版本 patch, 修复版本 `>=6.30.6`), package.json 范围同步收成 `^6.30.6`。
+- **KI-002(P2, 期限 2026-09-30)**: `rollup@4.56.0` 任意文件写/路径穿越(high)。仅构建链、不进产物。升级到 **4.59.0**(`>=4.59.0`)。
+- **未动**: KI-003(vite 5→6 跨大版本, 期限 10-31, 需单独评估)、KI-006(tailwind/babel 传递依赖 17 条, 期限 10-31, 由 dependabot weekly 接管)。
+- **验证**: `pnpm typecheck` / `typecheck:tests` / `eslint` / UI-RULES 全 0; vitest **430/430(59 files)**; `pnpm build` 成功(rollup 4.59.0 真实跑通生产构建)。
+
+[commit 待回填]
+
 ## 2026-09-14
 
 ### fix(sched): 盘中监测每轮调度都崩 —— uid 串位到 `stock_agent_id`(潜伏 4 天的 P0)
