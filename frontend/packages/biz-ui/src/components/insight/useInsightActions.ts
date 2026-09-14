@@ -7,28 +7,8 @@ import type { useInsightData } from './useInsightData'
 import type { useInsightDerived } from './useInsightDerived'
 
 /**
- * `handleSetAlert` 的结果(Task 12 复审增量)。既有调用方(`InsightHeaderBar` 的 `onClick`)忽略
- * 返回值 ⇒ 行为逐字不变; 新增消费方(工作台「建议」标签)据此如实渲染**部分成功**。
- */
-export interface SetAlertOutcome {
-  /** `true` = 作业已提交(5s 轮询在跑); `false` = 未提交。 */
-  ok: boolean
-  /**
-   * 仅 `ok === false` 时有意义: 触发**之前**的两步写入是否已落库(已落库的部分**不会回滚**)。
-   * 调用方必须如实陈述(不得只报「未提交成功」而隐去已发生的持久化写入), 也不得夸大
-   * (未落库的步骤不许声称已写入)。例: 加自选成功但 `updateAgents` 失败 ⇒
-   * `watchlistEnsured=true, agentBound=false`。
-   *
-   * 该标的已在自选内(本次创建, 或本来就在)。
-   */
-  watchlistEnsured: boolean
-  /** 同上: 「盘中监测」Agent 绑定已写入。 */
-  agentBound: boolean
-}
-
-/**
  * `triggerIntradayOnce` 的结果(v0.6.0 遗留③): 该动作不做任何**前置**写入(不加自选、不绑 Agent),
- * 故不存在 `SetAlertOutcome` 那种"部分成功", 只有"提交成功/未成功"两态。
+ * 故只有"提交成功/未成功"两态。
  * 注: 这**不等于**"零副作用" —— 提交成功后那轮 Agent 运行本身仍会落运行记录与站内通知
  * (见 `triggerIntradayOnce` 头注的 ⚠️ 段)。
  * 调用方仍**不得**据此推断失败原因(错误原文由本 action 内部 toast; `symbol` 缺失的早退是静默的)。
@@ -222,97 +202,26 @@ const handleShareInsight = useCallback(async () => {
 }, [copyTextWithFallback, resolvedName, shareText, toast])
 
 /**
- * 手工触发「盘中监测」(恢复组件的「一键设提醒」按钮)。派生自 `intraday_monitor` 的实际链路:
- * `stocksApi.list()` → 未关注则 `create()` → `updateAgents` 确保绑定 → `triggerAgent(..., 'intraday_monitor')`。
+ * **无自选/绑定副作用**地手工触发「盘中监测」(v0.6.0 遗留③: 工作台「建议」标签的按钮用本动作)。
  *
- * **返回值**(Task 12 增量): `ok=true` = 作业已提交(5s 轮询在跑); `ok=false` = 未提交(附
- * `watchlistEnsured`/`agentBound` 如实回传"部分成功")。`ok=false` 的错误来源**不唯一**:
- * ① 前置写入或触发阶段抛错 ⇒ 已 toast 原始错误; ② `symbol` 缺失(早退)**不 toast**。
- * 故调用方文案**不得假定**存在错误提示(复审 Minor)。
- */
-const handleSetAlert = async (): Promise<SetAlertOutcome> => {
-  // 早退: 无标的 —— 静默(不 toast), 调用方不得声称"见错误提示"。
-  if (!symbol) return { ok: false, watchlistEnsured: false, agentBound: false }
-  // 前置两步写入的落库状态 —— 失败时用于如实陈述"部分成功"(不回滚)。
-  let watchlistEnsured = false
-  let agentBound = false
-  setAlerting(true)
-  try {
-    const stocks = await stocksApi.list()
-    let stock = (stocks || []).find(s => s.symbol === symbol && s.market === market) || null
-    if (!stock) {
-      stock = await stocksApi.create({ symbol, name: resolvedName || symbol, market })
-    }
-    watchlistEnsured = true // 自选已就绪(本次创建或本来就在)
-
-    const existingAgents = (stock.agents || []).map(a => ({
-      agent_name: a.agent_name,
-      schedule: a.schedule || '',
-      ai_model_id: a.ai_model_id ?? null,
-      notify_channel_ids: a.notify_channel_ids || [],
-    }))
-    const hasIntraday = existingAgents.some(a => a.agent_name === 'intraday_monitor')
-    const nextAgents = hasIntraday
-      ? existingAgents
-      : [...existingAgents, { agent_name: 'intraday_monitor', schedule: '', ai_model_id: null, notify_channel_ids: [] }]
-
-    await stocksApi.updateAgents(stock.id, { agents: nextAgents })
-    agentBound = true // 绑定已落库(此后的失败不回滚它)
-    await stocksApi.triggerAgent(stock.id, 'intraday_monitor', {
-      bypass_throttle: true,
-      bypass_market_hours: true,
-    })
-    toast('已设置提醒，AI 分析已提交', 'success')
-    // 轮询等待建议生成（最多 2 分钟，每 5 秒一次）
-    // Task 12 修复(既有缺陷, 与 Task 10 Finding 2 同形): 原实现持有**局部** `poll` 句柄 + 125s
-    // setTimeout 自停, **卸载时不清** —— 工作台切走「建议」标签后最长 ~2 分钟仍每 5s 打
-    // `/suggestions`。改为复用同文件既有的句柄管理(autoPollRef/autoPollStopRef/stopAutoPolling)
-    // + `mountedRef` 守卫: 卸载/被新一轮取代都会清; await 期间若已卸载则不再装轮询、不再 setState。
-    if (!mountedRef.current) return { ok: true, watchlistEnsured, agentBound }
-    stopAutoPolling() // 被新一轮触发取代时先清上一轮(防叠加)
-    const before = Date.now()
-    autoPollRef.current = setInterval(async () => {
-      if (Date.now() - before > 120_000) { stopAutoPolling(); return }
-      await loadSuggestions()
-    }, 5_000)
-    await loadSuggestions()
-    if (!mountedRef.current) return { ok: true, watchlistEnsured, agentBound }
-    // 到点自停(句柄记在 ref, 卸载/被取代时由 stopAutoPolling 一并清)
-    autoPollStopRef.current = setTimeout(() => stopAutoPolling(), 125_000)
-    return { ok: true, watchlistEnsured, agentBound }
-  } catch (e) {
-    if (mountedRef.current) toast(e instanceof Error ? e.message : '设置提醒失败', 'error')
-    return { ok: false, watchlistEnsured, agentBound }
-  } finally {
-    if (mountedRef.current) setAlerting(false)
-  }
-}
-
-/**
- * **无自选/绑定副作用**地手工触发「盘中监测」(v0.6.0 遗留③: 工作台「建议」标签的按钮改用本动作)。
- *
- * 与 `handleSetAlert`(「一键设提醒」)的差别是"要不要改**用户的自选/绑定状态**":
- *  - `handleSetAlert`: `list()` → 未关注则 `create()`(写入自选)→ `updateAgents()`(写入 Agent 绑定)
- *    → `triggerAgent(stock.id, …)`; 两步写入**不回滚**, 故调用方必须如实陈述"部分成功"。
- *  - 本动作: 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name })`
- *    —— **不动自选、不动绑定**(不 `list`/不 `create`/不 `updateAgents`)。
+ * 直接 `triggerAgent(0, 'intraday_monitor', { allow_unbound: true, symbol, market, name })`
+ * —— **不动自选、不动绑定**(不 `list`/不 `create`/不 `updateAgents`)。
  *
  * 后端证据(`src/web/api/stocks.py:461-533` `trigger_stock_agent`):
- *  - `stock_id <= 0` 时必须 `allow_unbound=true`, 否则 400「当 stock_id<=0 时，需设置 allow_unbound=true」(:508-509);
- *  - 该标的**不在**当前用户自选时走"不落库"分支: `trigger_stock = SimpleNamespace(id=0, …)`
- *    (:523-533 注释原文「不落库：用于详情弹窗未持仓且未关注股票的一次性分析」);
- *  - 已在自选时也只**读**既有 Stock/StockAgent 行(:515-522), 不新建、不改绑定。
+ *  - `stock_id <= 0` 时必须 `allow_unbound=true`, 否则 400;
+ *  - 该标的**不在**当前用户自选时走"不落库"分支(`SimpleNamespace(id=0, …)`);
+ *  - 已在自选时也只**读**既有 Stock/StockAgent 行, 不新建、不改绑定。
  *
- * ⚠️ **但这不是"零写入"** —— 一次真实的 Agent 运行本身就会落库, 本动作与 `handleSetAlert` 在这一点上**没有区别**:
- *  - `record_agent_run(...)`(`src/core/agent_runs.py:40` `db.add(AgentRun(...))`) ⇒ 一条**运行记录**;
- *  - API 层收尾 `_notify`(`stocks.py:589-630`, **无 `suppress_notify` 判断**) → `notify_task_done`
- *    (`src/core/notify_center.py:97-111` 恒 `db.add(Notification)` + `commit()`) ⇒ 一条**站内「任务完成」通知**;
- *    且它不传 `user_id`, 按 `notify_center.py:338-341` 会**兜底推给 owner 账号**。
- *  - `suppress_notify = stock_id <= 0`(:485)只影响 `trigger_agent_for_stock` 内部
- *    `channels = [] if suppress_notify else resolve_notify_channels(...)`(`src/bootstrap/runtime.py:790`)
- *    ⇒ 仅"**不外发 Agent 自己解析到的渠道**", **不等于**"不写站内通知"。
- *  ⇒ 允许/禁止的措辞只能是"不加入自选、不绑定 Agent", **不得**写成"无任何持久化写入/不发通知"
- *    (2026-09-14 复审 Finding 1: 原措辞是假的, 已按上述实况订正; 相关 UI 文案同步改)。
+ * ⚠️ **但这不是"零写入"** —— 一轮真实 Agent 运行本身就会落库:
+ *  - `record_agent_run(...)` ⇒ 一条**运行记录**;
+ *  - API 层收尾 `_notify` → `notify_task_done` ⇒ 一条**站内「任务完成」通知**
+ *    (且不传 `user_id` 时兜底推给 owner)。
+ *  - `suppress_notify = stock_id <= 0` 只影响**外发渠道**, **不等于**"不写站内通知"。
+ *  ⇒ 措辞只能是"不加入自选、不绑定 Agent", **不得**写成"无任何持久化写入/不发通知"。
+ *
+ * KI-058(2026-09-18): 旧 `handleSetAlert`(list→create→updateAgents→trigger)已删 ——
+ * v0.6.0 退役旧模态后它零生产调用方; 若将来要恢复「持久化设提醒」, 按产品设计重做入口,
+ * 不要直接把本动作改回会偷偷写自选/绑定的路径。
  *
  * 与自动路径 `triggerAutoAiSuggestion` 的关系: 线格式(stock_id=0 + allow_unbound + symbol/market/name)
  * **完全相同**(它早已在用这条无绑定链路), 差别只在门控 —— 自动路径要过 `suggestions` 键、
@@ -458,10 +367,7 @@ useEffect(() => {
     handleExportShareImage,
     handleCopyShareText,
     handleShareInsight,
-    handleSetAlert,
-    // v0.6.0 遗留③: 无自选/绑定副作用的一次性触发(工作台「建议」标签用)。
-    // `handleSetAlert` 原样保留但**当前零生产调用方**(旧入口随 v0.6.0 模态壳退役) ⇒ 全站暂无
-    // "持久化设提醒/绑定 Agent" 的 UI 入口, 见 KI-058(补按钮 vs 删死代码待拍板)。
+    // KI-058: 旧 handleSetAlert(持久化设提醒)已删(零生产调用方); 恢复能力需产品重做入口。
     triggerIntradayOnce,
     toggleWatch,
     triggerAutoAiSuggestion,

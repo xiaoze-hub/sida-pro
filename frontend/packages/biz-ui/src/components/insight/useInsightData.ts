@@ -13,6 +13,16 @@ import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import type { MainIntentStructured } from '@panwatch/biz-ui/components/InteractiveKline'
 import type { KlineSummary, SuggestionInfo } from '@panwatch/biz-ui/components/suggestion-badge'
+
+/** KI-045: 本地归一(不依赖 @panwatch/api mock 面) —— 信封 `{items,degraded,note}` 或旧裸 list。 */
+function normalizeNewsEnvelopeLocal<T = unknown>(raw: unknown): { items: T[]; degraded: boolean; note: string | null } {
+  if (Array.isArray(raw)) return { items: raw as T[], degraded: false, note: null }
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown }).items)) {
+    const o = raw as { items: T[]; degraded?: boolean; note?: string | null }
+    return { items: o.items, degraded: !!o.degraded, note: o.note ?? null }
+  }
+  return { items: [], degraded: false, note: null }
+}
 import { normalizeSuggestionAction, pickSuggestionText, parseToMs } from './helpers'
 import type {
   StockInsightModalProps,
@@ -281,7 +291,8 @@ const loadNews = useCallback(async () => {
     if (!opts.filterRelated) params.set('filter_related', 'false')
     if (opts.useName && resolvedName && resolvedName !== symbol) params.set('names', resolvedName)
     else params.set('symbols', symbol)
-    return insightApi.news<NewsItem[]>(Object.fromEntries(params.entries()))
+    const raw = await insightApi.news<unknown>(Object.fromEntries(params.entries()))
+    return normalizeNewsEnvelopeLocal<NewsItem>(raw).items
   }
 
   try {
@@ -296,10 +307,11 @@ const loadNews = useCallback(async () => {
       data = await runQuery({ useName: false, filterRelated: false })
     }
     if ((data || []).length === 0) {
-      const global = await insightApi.news<NewsItem[]>({
+      const raw = await insightApi.news<unknown>({
         hours: newsHours,
         limit: 80,
       }).catch(() => [])
+      const global = normalizeNewsEnvelopeLocal<NewsItem>(raw).items
       const upperSymbol = symbol.toUpperCase()
       const name = (resolvedName || '').trim()
       data = (global || []).filter((n) => {
@@ -364,7 +376,8 @@ const loadAnnouncements = useCallback(async () => {
       params.set('source', 'eastmoney')
       if (opts.useName && resolvedName && resolvedName !== symbol) params.set('names', resolvedName)
       else params.set('symbols', symbol)
-      return insightApi.news<NewsItem[]>(Object.fromEntries(params.entries()))
+      const raw = await insightApi.news<unknown>(Object.fromEntries(params.entries()))
+      return normalizeNewsEnvelopeLocal<NewsItem>(raw).items
     }
     let data: NewsItem[] = await runQuery({ useName: true, filterRelated: true })
     if ((data || []).length === 0 && resolvedName && resolvedName !== symbol) {
@@ -377,11 +390,12 @@ const loadAnnouncements = useCallback(async () => {
       data = await runQuery({ useName: false, filterRelated: false })
     }
     if ((data || []).length === 0) {
-      const global = await insightApi.news<NewsItem[]>({
+      const raw = await insightApi.news<unknown>({
         hours: announcementHours,
         limit: 80,
         source: 'eastmoney',
       }).catch(() => [])
+      const global = normalizeNewsEnvelopeLocal<NewsItem>(raw).items
       const upperSymbol = symbol.toUpperCase()
       const name = (resolvedName || '').trim()
       data = (global || []).filter((n) => {

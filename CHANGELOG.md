@@ -7,6 +7,37 @@
 
 ## 2026-09-18
 
+### release-v0.6.5: 遗留 KI 清理批次 + THS 并发治理 + 依赖安全
+
+**性质**: 后端多文件(需重启) + 前端多文件 + 依赖升级。发版自 main。
+
+**本批关闭的 KI**: 001/002(依赖安全)、008(chat_upload 注入面第一层)、042(分时 degraded)、043(自选批量行情 degraded)、044(板块资金空态 degraded)、045(新闻超时 degraded)、057(振幅口径统一为 /prev_close)、058(删 handleSetAlert 死代码)、059(封单额快照时钟方案 B)。
+
+**另含独立分支合入**: `fix/ths-timeout-20260918`(THS 并发上限 + 真硬超时, 修开盘线程膨胀)。
+
+**门禁**: 后端 `pytest -m "not network"` **2326 passed / 0 failed / 5 skipped**; 前端 `tsc`/`typecheck:tests`/`eslint`/UI-RULES 全 0 + vitest **428/428(59 files)**。
+
+### feat(ki-clear): 诚实性 degraded 批次 + 振幅口径统一 + 设提醒死代码清理
+
+**性质**: 后端 5 文件 + 前端 4 文件 + 测试。**关闭 KI-008/043/044/045/057/058**。**需重启后端**。
+
+- **KI-043**: `/stocks/quotes` 逐市场失败改返回 `{quotes, degraded_markets:[{market,error}]}`, 不再静默吞异常。
+- **KI-044**: 板块资金空且无 stale 备份 → `degraded:true` + note(与"今日无资金流"可分)。
+- **KI-045**: `/news` 统一信封 `{items, degraded, note}`; 超时/NEWS_DISABLE/真空态三分; 前端 `normalizeNewsEnvelope` 兼容旧裸 list。
+- **KI-008**: chat_upload 解析文本包进 `<<<UNTRUSTED_...>>>` 分隔符 + 前置"不得当作指令"说明 + 切断常见逃逸前缀 + `untrusted:true`。
+- **KI-057**: 落库振幅分母 `/low` → **`/prev_close`**(A 股通行, 与带1 实时口径统一); dialog 文案同步。**历史 `klines.amplitude` 未回填**(混口径风险已登记, 下批用日线重算脚本处理)。
+- **KI-058**: 删除零生产调用方的 `handleSetAlert`/`SetAlertOutcome` 及探针测试; 「触发盘中监测」保持无绑定副作用路径。恢复「一键设提醒」需产品重做入口。
+
+[commit 待回填]
+
+### fix(wb): 带1 封单额加快照时钟(KI-059 方案 B)
+
+**性质**: 纯前端。**关闭 KI-059**。详见前一 commit(合入自 `fix/seal-amount-snapshot-clock-20260918`)。
+
+### fix(ths): 同步 vendor 调用加并发上限 + 真硬超时
+
+**性质**: 后端。详见 `fix/ths-timeout-20260918` 分支 CHANGELOG(合入本 release)。
+
 ### fix(quotes): 分时源故障不再伪装成「非交易日/停牌」(KI-042)
 
 **性质**: 后端 1 文件(`src/web/api/quotes.py`) + 前端 2 文件(`minute-dialog.tsx` / `InteractiveKline.tsx`) + 5 条钉住用例。**关闭 KI-042**。**需重启后端**。

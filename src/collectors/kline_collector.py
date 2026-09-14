@@ -844,18 +844,23 @@ class KlineCollector:
         if len(closes) >= 21:
             change_20d = (closes[-1] - closes[-21]) / closes[-21] * 100
 
-        # 振幅
+        # 振幅(KI-057 2026-09-18 统一口径): **A 股通行口径 (high-low)/prev_close×100**。
+        # 此前落库用 /low, 与前端实时带1 (high-low)/prev_close 同屏可达且不相等。
+        # prev_close = 上一根 close(klines 按日期升序); 首根无昨收 → None(诚实缺值)。
         amplitude = None
         amplitude_avg5 = None
         if klines:
             curr = klines[-1]
-            if curr.low > 0:
-                amplitude = (curr.high - curr.low) / curr.low * 100
-            if len(klines) >= 5:
+            prev_close = klines[-2].close if len(klines) >= 2 else None
+            if prev_close and prev_close > 0 and curr.high is not None and curr.low is not None:
+                amplitude = (curr.high - curr.low) / prev_close * 100
+            if len(klines) >= 6:
                 amps = []
-                for k in klines[-5:]:
-                    if k.low > 0:
-                        amps.append((k.high - k.low) / k.low * 100)
+                for i in range(len(klines) - 5, len(klines)):
+                    pc = klines[i - 1].close if i >= 1 else None
+                    k = klines[i]
+                    if pc and pc > 0 and k.high is not None and k.low is not None:
+                        amps.append((k.high - k.low) / pc * 100)
                 if amps:
                     amplitude_avg5 = sum(amps) / len(amps)
 

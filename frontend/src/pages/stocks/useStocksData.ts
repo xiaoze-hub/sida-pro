@@ -17,7 +17,7 @@ import type { SchedulePreview } from './shared'
 import type { Stock } from './shared'
 import type { StockAgentInfo } from './shared'
 import type { StockContextTarget } from '@/components/StockContextMenu'
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI, normalizeNewsEnvelope } from '@panwatch/api'
 import { useQuoteStream, type QuoteTickMap } from '@/realtime/useQuoteStream'
 import { mergePortfolioQuotes } from './shared'
 import { parseServerTime } from '@/lib/utils'
@@ -404,8 +404,9 @@ const loadNews = useCallback(async (stockName?: string) => {
       // 直接传递股票名称，比代码更稳定
       params.set('names', stockName)
     }
-    const newsData = await fetchAPI<NewsItem[]>(`/news?${params}`)
-    setNews(newsData)
+    const newsData = await fetchAPI<unknown>(`/news?${params}`)
+    const env = normalizeNewsEnvelope<NewsItem>(newsData)
+    setNews(env.items)
   } catch (e) {
     console.error('加载新闻失败:', e)
   } finally {
