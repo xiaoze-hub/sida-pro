@@ -109,8 +109,10 @@ export default function ShadowAccountPage() {
       const blobUrl = URL.createObjectURL(blob)
       const w = window.open('', '_blank')
       if (!w) {
-        // 弹窗被拦截, 直接回退到新标签打开(用报告 URL, 走授权头失败再回退原 URL)
-        window.open(result.report_html, '_blank')
+        // 弹窗被拦截: **不再** window.open(report_html) —— 该 URL 需 Authorization 头,
+        // 裸开必 401(KI-010)。改为提示用户允许弹窗, 页面内预览仍可用。
+        setError('浏览器拦截了新窗口，请允许弹窗后重试（报告预览仍在本页可用）')
+        URL.revokeObjectURL(blobUrl)
         return
       }
       // 2) 在新窗口里写一段最小 HTML, 嵌入 sandbox iframe (不含 allow-same-origin,
@@ -126,7 +128,6 @@ iframe{width:100%;height:100%;border:0}
 </head><body>
 <div class="toolbar">
   <span>🔒 隔离沙箱内渲染的报告(不可访问上层存储)</span>
-  <a href="${result.report_html}" target="_self">在新窗口打开原始链接</a>
   <a href="${blobUrl}" target="_self" download="shadow-report-${result.shadow_id}.html">下载 HTML</a>
   <a href="${result.report_pdf || '#'}" target="_blank">下载 PDF</a>
 </div>
@@ -140,9 +141,8 @@ iframe{width:100%;height:100%;border:0}
         try { URL.revokeObjectURL(blobUrl) } catch { /* ignore */ }
       })
     } catch {
-      // 最终 fallback: 浏览器原生打开原始 URL(走 cookie / Authorization 头时已失效,
-      // 用户需自行登录后查看 — 与原行为一致).
-      window.open(result.report_html, '_blank')
+      // KI-010: 不再裸 window.open(需鉴权的 URL) → 必 401。改为明确失败提示。
+      setError('报告 HTML 拉取失败，请重试或检查登录态')
     }
   }
 
@@ -156,7 +156,10 @@ iframe{width:100%;height:100%;border:0}
       const a = document.createElement('a')
       a.href = url; a.download = `${result.shadow_id}.pdf`; a.click()
       URL.revokeObjectURL(url)
-    } catch { window.open(result.report_pdf, '_blank') }
+    } catch {
+      // KI-010: PDF 同样需鉴权, 裸 window.open 401; 走 fetch+blob 主路径, 失败显式报错
+      setError('PDF 下载失败，请重试或检查登录态')
+    }
   }
 
   return (

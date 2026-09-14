@@ -7,6 +7,17 @@
 
 ## 2026-09-18
 
+### fix(ki): 关闭 KI-010/030/046 + 台账对账 008/043/044/045
+
+**性质**: 后端 1 文件(auth_tokens 告警 + 删死文件) + 前端 1 文件(ShadowAccount)。**需重启后端**。
+
+- **KI-010**: ShadowAccount 三处 `window.open(需鉴权 URL)` 裸开必 401 —— 改为显式错误提示；工具栏去掉「原始链接」死链。
+- **KI-030**: `JWT_SECRET` env <32 字节时启动告警(RFC 7518)。DB 自动生成路径本就 `token_hex(32)`=32B；不强制轮换(会踢掉全部会话)。
+- **KI-046**: 删除零 import 死文件 `marketdata_authoritative_sources.py`。
+- **台账**: 总览补标 008/043/044/045 已关(v0.6.5 已做但总览未改)。
+
+[commit 待回填]
+
 ### fix(theme-mood): 矩阵板数列 sticky + 折叠只收左侧题材列表
 
 **性质**: 纯前端 2 文件 + 1 例钉住。静态面部署。

@@ -24,9 +24,9 @@
 | KI-005 | P2 | forecast 4g 限额沿用既定值, 未按实测推理峰值校准 | 2026-09-09 | TianXiang |
 | KI-006 | P2 | 构建/测试链传递依赖已知漏洞 18 条(不进产物) | 2026-09-09 | TianXiang |
 | KI-007 | P2 | forecast_lib 交易日按 weekday 计(法定节假日偏晚) | 2026-09-09 | TianXiang |
-| KI-008 | P1 | chat_upload 上传文本直喂 LLM(提示注入面) | 2026-09-08 | unassigned |
+| KI-008 | P1 | ~~chat_upload 提示注入面~~ ✅ 已关(分隔符+说明+前缀切断) | 2026-09-08 | TianXiang |
 | KI-009 | P3 | chat.py f-string 拼 SQL(已核实安全, 留痕) | 2026-09-09 | unassigned |
-| KI-010 | P2 | ShadowAccount window.open 兜底链接 401(缺鉴权头) | 2026-09-08 | TianXiang |
+| KI-010 | P2 | ~~ShadowAccount window.open 兜底 401~~ ✅ 已关(改显式报错) | 2026-09-08 | TianXiang |
 | KI-011 | P2 | 主板 K 线"不可能缺口"残留 10 条(vendor 源头级) | 2026-09-09 | TianXiang |
 | KI-012 | P3 | 港美市场无交易日历, 盘中判定维持周末口径 | 2026-09-09 | unassigned |
 | KI-013 | P3 | forecast 容器 PANWATCH_DB 指向不存在的 sqlite 文件 | 2026-09-08 | TianXiang |
@@ -42,13 +42,13 @@
 | KI-027 | P3 | 本地环境损坏测试文件 2 个(不进 CI, 本地基线 2 failed) | 2026-09-08 | TianXiang |
 | KI-028 | P1 | 交易日历静态表须在 2028 年初前补 2028 表 | 2026-09-09 | TianXiang |
 | KI-029 | P3 | dark-flow 冷缓存撞冒烟 1s 超时(重建后门禁误报) | 2026-09-09 | TianXiang |
-| KI-030 | P3 | JWT_SECRET 24 字节低于 RFC 7518 HS256 建议 32 字节 | 2026-09-09 | TianXiang |
+| KI-030 | P3 | ~~JWT_SECRET 24 字节~~ ✅ 已关(启动告警; DB 生成已是 32B) | 2026-09-09 | TianXiang |
 | KI-041 | P3 | 前端 toFixed 存量基线冷冻包干(14 文件 + Quote.tsx 8→11) | 2026-09-10 | TianXiang |
 | KI-042 | P2 | ~~分钟K线腾讯 ifzq 单源静默~~ ✅ 已关(degraded+note) | 2026-09-10 | TianXiang |
-| KI-043 | P2 | 自选批量行情 /stocks/quotes 逐市场吞异常(缺项无提示) | 2026-09-10 | TianXiang |
-| KI-044 | P2 | 板块资金 board-capital-flow 空列表静默(单源 ths_flow) | 2026-09-10 | TianXiang |
-| KI-045 | P2 | /news 8s 超时静默置空(超时与"无新闻"不可分) | 2026-09-10 | TianXiang |
-| KI-046 | P3 | marketdata_authoritative_sources.py 死配置(零 import, 待决议) | 2026-09-10 | TianXiang |
+| KI-043 | P2 | ~~自选批量行情吞异常~~ ✅ 已关(degraded_markets) | 2026-09-10 | TianXiang |
+| KI-044 | P2 | ~~板块资金空列表静默~~ ✅ 已关(degraded+note) | 2026-09-10 | TianXiang |
+| KI-045 | P2 | ~~新闻超时静默置空~~ ✅ 已关(信封 degraded) | 2026-09-10 | TianXiang |
+| KI-046 | P3 | ~~marketdata_authoritative_sources 死配置~~ ✅ 已关(文件已删) | 2026-09-10 | TianXiang |
 | KI-047 | P3 | 板块异动阈值为暂定值(涨速±0.5%/量比2.0)且仅盘中生效, 待实盘观察调优 | 2026-09-10 | TianXiang |
 | KI-048 | P3 | 通达信云数据(板块异动类型/轮动系数等)需客户端数据权限, TQ 接口当前返空 | 2026-09-10 | TianXiang |
 | KI-055 | P2 | 离线门禁存量 7 红(日历相关断言/缺包/用例间 mock 污染), 与 v0.5.76 无关 | 2026-09-12 | TianXiang |
