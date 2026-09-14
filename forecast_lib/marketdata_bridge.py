@@ -59,8 +59,17 @@ def get_dragon_tiger(date: str | None = None, symbol: str | None = None) -> list
 
 
 def _latest_trade_date() -> str:
-    """最近交易日(周末回退到周五, 简化版)。"""
+    """最近交易日(KI-007: 优先节假日日历; 无主应用时周末回退)。"""
     from datetime import datetime, timedelta
+
+    from forecast_lib.trading_days import is_trading_day
+
+    d = datetime.now()
+    for _ in range(30):
+        if is_trading_day(d):
+            return d.strftime("%Y%m%d")
+        d -= timedelta(days=1)
+    # 极端兜底: 再退 weekday
     d = datetime.now()
     while d.weekday() >= 5:
         d -= timedelta(days=1)

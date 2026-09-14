@@ -69,6 +69,8 @@ RUN set -eux; \
     tzdata \
     # git: requirements-lock.txt 中含 git+https 直链(tradingagents)
     git \
+    # KI-014: pg_dump —— 迁移前 schema 快照(W1.5/A5); 无它时 backup.py 仅 fail-soft 跳过
+    postgresql-client \
     # 中文字体
     fonts-noto-cjk \
     # Playwright Chromium 依赖

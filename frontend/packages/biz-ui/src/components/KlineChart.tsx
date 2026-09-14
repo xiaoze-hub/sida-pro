@@ -27,6 +27,7 @@ import {
 } from 'lightweight-charts'
 
 import { fetchAPI } from '@panwatch/api'
+import { safeFixed } from '@/lib/format'
 
 import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
@@ -209,6 +210,18 @@ export default function KlineChart(props: {
   const [dataLen, setDataLen] = useState(0)
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
+  /**
+   * KI-056: 每 pane 信息栏 —— 十字光标悬停时展示主图 OHLC + 当前副图读数。
+   * 缺字段显示 `--`, 不补 0。
+   */
+  const [hoverReadout, setHoverReadout] = useState<{
+    date: string
+    o: number | null
+    h: number | null
+    l: number | null
+    c: number | null
+    v: number | null
+  } | null>(null)
   // L1 趋势均线 series (受 layers.trend 控制)
   const maSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
   // 原始K线(供 L1 均线 / L5 副图 计算)
@@ -340,16 +353,34 @@ export default function KlineChart(props: {
       onRangeSelectRef.current?.(r)
     })
 
-    // (3) 十字光标联动: 推 { time, price } 给副图/资金面板
+    // (3) 十字光标联动: 推 { time, price } 给副图/资金面板 + KI-056 信息栏读数
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || param.point === undefined) {
         onCrosshairMoveRef.current?.(null)
+        setHoverReadout(null)
         return
       }
       const price = series.coordinateToPrice(param.point.y)
       const time =
         typeof param.time === 'number' ? String(param.time) : String(param.time)
       onCrosshairMoveRef.current?.({ time, price: price ?? null })
+      // KI-056: 从 seriesData 取悬停那根的 OHLCV(缺则 null, 不编)
+      const bar = param.seriesData?.get(series) as
+        | { open?: number; high?: number; low?: number; close?: number }
+        | undefined
+      const volData = volumeSeriesRef.current
+        ? (param.seriesData?.get(volumeSeriesRef.current) as { value?: number } | undefined)
+        : undefined
+      if (bar && bar.close != null) {
+        setHoverReadout({
+          date: time,
+          o: bar.open ?? null,
+          h: bar.high ?? null,
+          l: bar.low ?? null,
+          c: bar.close,
+          v: volData?.value ?? null,
+        })
+      }
     })
 
     return () => {
@@ -725,6 +756,28 @@ export default function KlineChart(props: {
         className="w-full"
         style={{ minHeight: props.height ?? 360 }}
       />
+      {/* KI-056: 每 pane 信息栏 —— 悬停十字光标时显示主图 OHLC + 成交量; 未悬停显示副图口径 */}
+      <div
+        data-testid="kline-pane-info"
+        className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground font-mono"
+      >
+        {hoverReadout ? (
+          <>
+            <span>{hoverReadout.date.slice(0, 10)}</span>
+            <span>开 {hoverReadout.o == null ? '--' : safeFixed(hoverReadout.o)}</span>
+            <span>高 {hoverReadout.h == null ? '--' : safeFixed(hoverReadout.h)}</span>
+            <span>低 {hoverReadout.l == null ? '--' : safeFixed(hoverReadout.l)}</span>
+            <span>收 {safeFixed(hoverReadout.c)}</span>
+            <span>
+              量 {hoverReadout.v == null ? '--' : `${safeFixed(hoverReadout.v / 10000, 1)}万手`}
+            </span>
+          </>
+        ) : (
+          <span className="text-[10px]">
+            悬停查看该根 K 线读数 · 副图: {SUBCHART_OPTS.find(([k]) => k === subchart)?.[1] ?? subchart}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

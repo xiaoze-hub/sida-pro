@@ -85,13 +85,11 @@ def kronos_predict(df: pd.DataFrame, pred_len: int = 5, n_samples: int = 30):
     x_df = df[["open", "high", "low", "close", "volume", "amount"]].copy()
     x_ts = pd.Series(df["timestamp"])
 
-    # 未来交易日
-    dates = []
-    cur = df["timestamp"].iloc[-1]
-    while len(dates) < pred_len:
-        cur += timedelta(days=1)
-        if cur.weekday() < 5:
-            dates.append(cur)
+    # 未来交易日(KI-007: 走 trading_days, 优先节假日日历; 无主应用时回落 weekday)
+    from forecast_lib.trading_days import next_trading_days
+
+    cur0 = df["timestamp"].iloc[-1]
+    dates = next_trading_days(pd.Timestamp(cur0).to_pydatetime(), pred_len)
     y_ts = pd.Series(pd.to_datetime(dates))
 
     # MC 采样

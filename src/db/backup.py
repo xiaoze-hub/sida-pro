@@ -54,7 +54,12 @@ def backup_pg_schema_before_migration() -> None:
 
     pg_dump = shutil.which("pg_dump")
     if not pg_dump:
-        logger.warning("pg_dump 不在 PATH(应用容器通常没有), 跳过迁移前 schema 快照")
+        # KI-014: 无 pg_dump 时不再只打日志跳过 —— 用 SQLAlchemy inspector 写一份
+        # 表/列清单(非完整 DDL, 但比“静默什么都不留”强), 仍 fail-soft。
+        logger.warning(
+            "pg_dump 不在 PATH —— 改用 SQLAlchemy inspector 写表列清单(KI-014 降级路径)"
+        )
+        _schema_fallback_via_inspector()
         return
     backup_dir = os.path.join(
         os.path.dirname(os.path.abspath(_dialect.DB_PATH)), "migrations_backup"
@@ -96,3 +101,33 @@ def backup_pg_schema_before_migration() -> None:
             )
     except Exception as e:  # noqa: BLE001 — 快照是尽力而为, 不阻断迁移
         logger.warning("pg_dump schema 快照失败(fail-soft): %s", e)
+
+
+def _schema_fallback_via_inspector() -> None:
+    """KI-014 降级: 无 pg_dump 时用 inspector 落表/列清单, 供人工比对迁移前后。"""
+    try:
+        from src.db import dialect as _dialect
+        from src.db.session import engine
+        from sqlalchemy import inspect as sa_inspect
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inspector 降级快照不可用: %s", e)
+        return
+    backup_dir = os.path.join(
+        os.path.dirname(os.path.abspath(_dialect.DB_PATH)), "migrations_backup"
+    )
+    os.makedirs(backup_dir, exist_ok=True)
+    out = os.path.join(
+        backup_dir, f"schema_inspect_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    )
+    try:
+        insp = sa_inspect(engine)
+        lines = [f"# schema inspect fallback @ {datetime.now().isoformat(timespec='seconds')}"]
+        for table in sorted(insp.get_table_names()):
+            cols = insp.get_columns(table)
+            col_desc = ", ".join(f"{c['name']}:{c['type']}" for c in cols)
+            lines.append(f"TABLE {table} ({col_desc})")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        logger.info("PG 迁移前 inspector 清单已写入 %s (%d 表)", out, len(lines) - 1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inspector schema 清单失败(fail-soft): %s", e)

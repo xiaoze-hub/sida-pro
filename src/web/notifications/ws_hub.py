@@ -237,6 +237,10 @@ def broadcast_global(payload: dict, *, category: str | None = None) -> int:
 
 # ── Redis Pub/Sub 跨进程兜底 ──────────────────────────────────────
 
+# KI-023: 进程内 origin 标记 —— PubSub 会回声到本进程, 不加标记会双投
+_ORIGIN_ID = f"{__import__('os').getpid()}-{__import__('uuid').uuid4().hex[:8]}"
+
+
 def _pubsub_publish(user_id: str | None, msg: dict) -> None:
     """发布到 Redis (biz:notif:channel:<user_id|*>) 让它们也广播到本地连接.
 
@@ -246,7 +250,8 @@ def _pubsub_publish(user_id: str | None, msg: dict) -> None:
     if client is None:
         raise RuntimeError("redis_unavailable")
     target = user_id or "*"
-    client.publish(f"{_PUBSUB_CHANNEL_PREFIX}{target}", json.dumps(msg, ensure_ascii=False))
+    body = {**msg, "origin": _ORIGIN_ID}
+    client.publish(f"{_PUBSUB_CHANNEL_PREFIX}{target}", json.dumps(body, ensure_ascii=False))
 
 
 def install_pubsub_listener() -> None:
@@ -275,6 +280,9 @@ def _pubsub_loop(pubsub) -> None:
             if isinstance(data, bytes):
                 data = data.decode("utf-8", errors="ignore")
             obj = json.loads(data or "{}")
+            # KI-023: 回声 —— 本进程已本地广播过, PubSub 再投一次会双推
+            if obj.get("origin") == _ORIGIN_ID:
+                continue
             inner_payload = obj.get("payload") or {}
             category = obj.get("category")
             ch = msg.get("channel", "")

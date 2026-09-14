@@ -42,9 +42,9 @@ class TestFailLoud:
             is_trading_day("2030-03-05")
 
     def test_add_trading_days_into_uncovered_year_raises(self):
-        # 2027-12-30 起算 3 个交易日会走进 2028 → 必须报错而不是当周末处理
+        # 2028 表已覆盖(KI-028) → 改测 2028-12-30 起算走进 2029
         with pytest.raises(TradingCalendarError):
-            add_trading_days("2027-12-30", 3)
+            add_trading_days("2028-12-30", 3)
 
     def test_anchor_into_uncovered_year_raises(self):
         # 2025-01-01 是节假日, 回看上一交易日会走进 2024
