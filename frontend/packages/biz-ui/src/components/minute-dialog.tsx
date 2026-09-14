@@ -14,6 +14,10 @@ interface MinuteResponse {
   symbol: string
   market: string
   points: MinutePoint[]
+  /** KI-042: true = 分时源故障(points 为空是故障, 不是"非交易日"); 与真空态可分。 */
+  degraded?: boolean
+  /** KI-042: 源故障时后端 note 原文(不本地编理由)。 */
+  note?: string | null
 }
 
 interface MinuteDialogProps {
@@ -32,15 +36,24 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
   const [points, setPoints] = useState<MinutePoint[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** KI-042: 源故障 note —— 与"非交易日/停牌"真空态可分, 不再误归因。 */
+  const [degradedNote, setDegradedNote] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
     setError(null)
+    setDegradedNote(null)
     // 2026-08-20: 原 `/quotes/minute?symbol=` 撞路由 `/{symbol}` 必 404。
     // 改为路径式 + 加 60s 超时(分钟接口冷启动可能 15s)。
     fetchAPI<MinuteResponse>(`/quotes/minute/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`, { timeoutMs: 60000 })
-      .then((d) => setPoints(d.points || []))
+      .then((d) => {
+        setPoints(d.points || [])
+        // 源故障: 后端 note 原文透传; 缺 note 时给固定口径(仍不写"非交易日")
+        if (d.degraded) {
+          setDegradedNote(d.note || '分时源暂不可用')
+        }
+      })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [open, symbol, market])
@@ -89,7 +102,13 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
 
         {loading && <div className="py-8 text-center text-muted-foreground">加载中…</div>}
         {error && <div className="py-8 text-center text-red-600">加载失败: {error}</div>}
-        {!loading && !error && points.length === 0 && (
+        {/* KI-042: 源故障 ≠ 非交易日 —— 故障显式说"源不可用", 绝不写成"非交易日或停牌" */}
+        {!loading && !error && degradedNote && points.length === 0 && (
+          <div className="py-8 text-center text-amber-600" data-testid="minute-degraded">
+            {degradedNote}
+          </div>
+        )}
+        {!loading && !error && !degradedNote && points.length === 0 && (
           <div className="py-8 text-center text-muted-foreground">暂无分时数据(非交易日或停牌)</div>
         )}
 

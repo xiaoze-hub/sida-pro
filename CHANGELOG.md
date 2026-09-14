@@ -7,6 +7,21 @@
 
 ## 2026-09-18
 
+### fix(quotes): 分时源故障不再伪装成「非交易日/停牌」(KI-042)
+
+**性质**: 后端 1 文件(`src/web/api/quotes.py`) + 前端 2 文件(`minute-dialog.tsx` / `InteractiveKline.tsx`) + 5 条钉住用例。**关闭 KI-042**。**需重启后端**。
+
+- **缺陷**(单源依赖审计 🔴): `GET /quotes/minute/{symbol}` 腾讯 ifzq 单源, 取数失败与"真无分时"**共用** `points: []`; 分时对话框固定文案「暂无分时数据(非交易日或停牌)」⇒ 源抖/风控被误归因为停牌。
+- **修法**:
+  - `_tencent_minute` 改三元组: `points=None` = **源故障**(带 note); `points=[]` = 接口成功但真无行。
+  - 响应加 `degraded: bool` + `note`(源故障时为「分时源(腾讯)暂不可用」原文); 真空态 `degraded=false` 且 note 为 null。缓存 5 元组, **TTL 内故障缓存命中仍带 degraded**(否则 60s 内故障被伪装成真空态)。
+  - 前端: `MinuteDialog` 故障态显式渲染 note(琥珀色), **不再**写"非交易日或停牌"; `InteractiveKline` 同款分流(故障=note 原文, 真空态才说非交易日/停牌)。
+- **钉住**(5 例): 源故障 → degraded+note; 真空态 → 非 degraded; 成功路径; **缓存命中仍带 degraded**; urlopen 异常 → points=None。**变异验证**: 把 `points is None` 改回恒 `[]` ⇒ 第 1、5 例红。
+- **门禁**: 后端本文件 5/5; 前端 `tsc`/`eslint`/UI-RULES 0 + vitest **430/430**。
+- **未做**: 1m 落库兜底(klines_ingestor 已有 1m 滚动入库, 但分钟对话框未接 PG 回查) —— 那是接链, 不在本批。
+
+[commit 待回填]
+
 ### chore(deps): 关闭 KI-001/KI-002 —— react-router-dom 6.30.3→6.30.6 + rollup 4.56.0→4.59.0
 
 **性质**: 依赖升级(`frontend/package.json` + `pnpm-lock.yaml`)。**关闭 KI-001(唯一运行时可触达漏洞)与 KI-002(构建链)**。静态面部署, 不重启容器。
