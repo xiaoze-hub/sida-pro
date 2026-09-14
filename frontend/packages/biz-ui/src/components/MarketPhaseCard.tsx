@@ -148,7 +148,7 @@ export default function MarketPhaseCard() {
   const load = useCallback(async () => {
     setError('')
     try {
-      const res = await fetchAPI<MarketPhaseResp>('/market/phase', { cacheMode: 'reload' })
+      const res = await fetchAPI<MarketPhaseResp>('/market/phase')
       if (mountedRef.current) setData(res)
       if (mountedRef.current) setUpdatedAt(new Date())
     } catch (e) {

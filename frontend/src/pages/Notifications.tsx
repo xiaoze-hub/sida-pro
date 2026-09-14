@@ -270,6 +270,40 @@ export default function NotificationsPage() {
     if (channelFilter && !channelFilter.startsWith('__') && !(item.push_channels || []).some(channel => channel.type === channelFilter)) return false
     return true
   }), [category, channelFilter, filter, items])
+  /**
+   * 走查 2026-09-18: 失败通知 24h 内可堆到 20+ 条同文案, 列表被噪音刷屏。
+   * 展示层折叠: 同 title+category+push_status 在 24h 内只保留**最新一条**, 计 `dupCount`。
+   * 不改后端/不删历史 —— 详情与已读状态仍按真实 id; 折叠只影响列表展示。
+   */
+  const displayList = useMemo(() => {
+    const DAY_MS = 24 * 3600 * 1000
+    const now = Date.now()
+    const keyOf = (it: NotificationItem) => `${it.push_status}|${it.category}|${it.title}`
+    const latest = new Map<string, NotificationItem & { dupCount?: number }>()
+    const order: string[] = []
+    // items 通常已按时间倒序; 仍按 id 降序兜底(最新在前)
+    const sorted = [...filtered].sort((a, b) => b.id - a.id)
+    for (const it of sorted) {
+      const ts = it.created_at ? Date.parse(it.created_at) : NaN
+      const inWindow = !Number.isNaN(ts) ? now - ts < DAY_MS : true
+      // 仅折叠失败推送 + 24h 窗口; 其它类型原样
+      if (it.push_status !== 'failed' || !inWindow) {
+        const k = `solo:${it.id}`
+        latest.set(k, it)
+        order.push(k)
+        continue
+      }
+      const k = keyOf(it)
+      const prev = latest.get(k)
+      if (prev) {
+        prev.dupCount = (prev.dupCount || 1) + 1
+      } else {
+        latest.set(k, { ...it, dupCount: 1 })
+        order.push(k)
+      }
+    }
+    return order.map(k => latest.get(k)!).filter(Boolean)
+  }, [filtered])
   const selected = items.find(item => item.id === selectedId) || null
   const selectedDetail = detail?.id === selectedId ? detail : null
   const task = selectedDetail?.task || null
@@ -410,15 +444,15 @@ export default function NotificationsPage() {
         <section className="border-b border-border/50 lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
             <span className="text-[12px] font-medium text-foreground">通知列表</span>
-            <span className="text-[11px] text-muted-foreground">{filtered.length} 条</span>
+            <span className="text-[11px] text-muted-foreground">{displayList.length} 条</span>
           </div>
           <div className="max-h-[420px] overflow-y-auto lg:max-h-[620px]">
             {loading && items.length === 0 ? (
               /* 首次加载骨架(列表已有数据时静默刷新,不闪 spinner) */
               <SkeletonRows rows={7} />
-            ) : filtered.length === 0 ? (
+            ) : displayList.length === 0 ? (
               <EmptyState filtered={items.length > 0} />
-            ) : filtered.map(item => {
+            ) : displayList.map(item => {
               const meta = LEVEL_META[item.level] || LEVEL_META.info
               const Icon = meta.icon
               const isSelected = selectedId === item.id
@@ -441,6 +475,14 @@ export default function NotificationsPage() {
                     <span className="flex items-center gap-2">
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />}
                       <span className={`truncate text-[12.5px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
+                      {(item as { dupCount?: number }).dupCount && (item as { dupCount?: number }).dupCount! > 1 ? (
+                        <span
+                          className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-medium text-rose-600"
+                          title="24h 内同文案失败通知已折叠, 此为最新一条"
+                        >
+                          ×{(item as { dupCount?: number }).dupCount}
+                        </span>
+                      ) : null}
                       {isSelected && (
                         <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-medium text-primary-foreground">正在查看</span>
                       )}
