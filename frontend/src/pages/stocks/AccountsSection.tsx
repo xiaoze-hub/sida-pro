@@ -15,6 +15,7 @@ import { SuggestionBadge } from '@panwatch/biz-ui/components/suggestion-badge'
 import { Trash2 } from 'lucide-react'
 import { dailyPnlDisplayLabel } from './shared'
 import { safeFixed } from '@/lib/format'
+import { safeMoneyUnsigned } from '@/lib/format'
 import { safeNum } from '@/lib/format'
 import { safePrice } from '@/lib/format'
 import { summarizeDailyPnlPeriod } from './shared'
@@ -93,12 +94,12 @@ export function AccountsSection() {
             <div className="flex items-center gap-2.5 md:gap-6 min-w-0">
               <div className="text-left md:text-right">
                 <div className="text-[10px] md:text-[11px] text-muted-foreground">市值</div>
-                <div className="text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums">{formatMoney(account.total_market_value)}</div>
+                <div className="text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.total_market_value)}</div>
               </div>
               <div className="text-left md:text-right">
                 <div className="text-[10px] md:text-[11px] text-muted-foreground">盈亏</div>
                 <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-                  {account.total_pnl >= 0 ? '+' : ''}{formatMoney(account.total_pnl)}
+                  {formatMoney(account.total_pnl)}
                   <span className="text-[10px] md:text-[11px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
                 </div>
               </div>
@@ -110,12 +111,12 @@ export function AccountsSection() {
                   {dailyPnlDisplayLabel(account, true)}
                 </div>
                 <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_daily_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-                  {account.total_daily_pnl >= 0 ? '+' : ''}{formatMoney(account.total_daily_pnl)}
+                  {formatMoney(account.total_daily_pnl)}
                 </div>
               </div>
               <div className="text-left md:text-right hidden sm:block">
                 <div className="text-[10px] md:text-[11px] text-muted-foreground">可用</div>
-                <div className="text-[12px] md:text-[13px] font-mono whitespace-nowrap tabular-nums">{formatMoney(account.available_funds)}</div>
+                <div className="text-[12px] md:text-[13px] font-mono whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.available_funds)}</div>
               </div>
             </div>
             <div className="flex items-center gap-0 md:gap-1 shrink-0" onClick={e => e.stopPropagation()}>
@@ -247,17 +248,17 @@ export function AccountsSection() {
                                 <div className="flex flex-col items-end">
                                   {isForeign ? (
                                     <>
-                                      <span>{formatMoney(pos.market_value)} {pos.market === 'HK' ? 'HKD' : 'USD'}</span>
-                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground/60">≈{formatMoney(pos.market_value_cny)}</span>}
+                                      <span>{safeMoneyUnsigned(pos.market_value)} {pos.market === 'HK' ? 'HKD' : 'USD'}</span>
+                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground/60">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
                                     </>
-                                  ) : <span>{formatMoney(pos.market_value)}</span>}
+                                  ) : <span>{safeMoneyUnsigned(pos.market_value)}</span>}
                                 </div>
                               ) : '—'}
                             </td>
                             <td className={`px-4 py-2.5 text-right font-mono tabular-nums text-[12px] ${pnlColor}`}>
                               {pos.pnl != null ? (
                                 <div className="flex flex-col items-end">
-                                  <span>{pos.pnl >= 0 ? '+' : ''}{formatMoney(pos.pnl)}</span>
+                                  <span>{formatMoney(pos.pnl)}</span>
                                   <span className="text-[10px] opacity-70">{pos.pnl_pct != null && Number.isFinite(Number(pos.pnl_pct)) ? `${pos.pnl_pct >= 0 ? '+' : ''}${Number(pos.pnl_pct).toFixed(2)}%` : ''}{isForeign && ' CNY'}</span>
                                 </div>
                               ) : '—'}
@@ -268,7 +269,7 @@ export function AccountsSection() {
                             >
                               {pos.daily_pnl != null ? (
                                 <div className="flex flex-col items-end">
-                                  <span>{pos.daily_pnl >= 0 ? '+' : ''}{formatMoney(pos.daily_pnl)}</span>
+                                  <span>{formatMoney(pos.daily_pnl)}</span>
                                   <span className="text-[10px] opacity-70">{pos.daily_pnl_pct != null && Number.isFinite(Number(pos.daily_pnl_pct)) ? `${pos.daily_pnl_pct >= 0 ? '+' : ''}${Number(pos.daily_pnl_pct).toFixed(2)}%` : ''}</span>
                                 </div>
                               ) : '—'}

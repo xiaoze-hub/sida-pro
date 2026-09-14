@@ -7,6 +7,153 @@
 
 ## 2026-09-14
 
+### release-v0.6.3: 全站走查修复批次 + 开盘日志噪音治理(含后端改动 ⇒ 需重启)
+
+**性质**: 后端 1 处(日志治理) + 前端 8 处。**含后端改动 ⇒ 走覆盖层 + dist + 重启**(不能再只换静态面)。重启前已确认容器内无 nohup 回填在跑(回填已完成 5822/5827), 并按约定做了改动前备份。
+
+**这批修了什么**(老板批「全修，然后发版重启」): 起因是「截图检查所有页面，看布局不合理/空白/数据不显示」的全站走查。
+
+**P0 —— 显示错误数据 / 系统被打满**
+- `944de9c` **板块热力图全市场显示 -100.00% 假暴跌**: `src/core/tdx_boards.py:283` 守卫 `now_px is not None and last` **漏了 `now_px > 0`** ⇒ 通达信无数据时返回 `Now=0`, 算出 `(0/last-1)*100 = -100`, 全市场板块同时"跌停"且着跌色。按本仓自有纪律(`tencent.py:4`「缺价→None, 绝不回退 0」)把 0 价/0 量按缺失处理。
+- `47d6142` **开盘后 app/PG 被日志打满**(本次最要紧的一条): `_ConsoleNoiseFilter` **只挂在控制台**, DB handler 无过滤器且恒 DEBUG ⇒ 每条 `httpx/httpcore/thsdk` 的 DEBUG 都被写进日志表。实测 **CPU 91-122% / 内存顶到 1500m / PG 50-95% + `too many clients already` / 单 worker 116-118 线程**, 用户侧表现为**所有查库接口超时、系统→Agent 页永久"加载中…"**(间歇性, 数分钟后自愈)。修法: 同一过滤器改名 `_TransportNoiseFilter` 并挂到**两个** handler; 补 `thsdk`(实证元凶)与 `hpack/h11`; **WARNING+ 与业务 DEBUG 一律保留**(日志板仍可用)。22 例新测试含"DB handler 上确实存在该 filter"这条要害断言。
+- `4205970` **热力图「面积:量能」静默全空白**: 所有 volume=0 ⇒ 面积全 0 ⇒ canvas 一个色块都不画且不给任何提示。补最小面积保底 + 显式空态; 色阶只把"空"当无数据。
+
+**P1/P2 —— 数据不显示 / 假空态 / 口径错**
+- `1a83cc1` **首页四处**: 情绪周期 `--`(`usePhaseLabel` 吞失败)、涨停/跌停 `--/暂无`(**`limitDown` 是个没有 setter 的死 `useState(null)`** + 硬编码 `'暂无'` 假装"没有跌停股")、常驻「阶段数据同步中」(吞 error 后留 140px 占位)、中部大块死白(三列网格行高被最长列撑起)。另核: 流入 7/流出 10 是**真数据**, 不改。
+- `9e9ca29` **个人中心** 账号/角色/注册时间一墙 `--` —— 不是响应结构问题, 是**取数失败被吞**; 现在失败有可见提示。
+- `cbf711a` **暗盘 TOP**: ①`.tck 对照`列全空即隐藏(页面自注"仅持仓股有数据"却放在全市场榜); ②**金额口径从元改回万元** —— 11.68 亿曾被显示成 `11.68万`(差一万倍)。
+- `ab93946` **持仓金额符号错**: 「可用资金/总资产」渲染成 `+4.50万`(存量读数不该有号); 顺带修掉**盈亏双写号** `++1.00万`(formatter 已加号 + 调用处又加一次, 负盈亏恰好正常所以一直没被发现)。新增 `safeMoneyUnsigned` 分层, 不是逐处打补丁。
+- `d1bb29e` + `e3859ed` **题材情绪**: 轮动数字行紧贴日期表头、10px 无标签(像表头的一部分)⇒ 独立容器 + 分隔线 + 11px + 口径 title; 矩阵与梯队面板的**横向滚动条**在暗色主题下是浏览器默认浅色 ⇒ 补 token 化工具类 `.scrollbar`(已核实该类真实存在, 不是空修复)。
+
+**门禁**: 前端 `tsc -b` 0 / `typecheck:tests` 0 / `eslint` 0 / `UI-RULES OK` / vitest **430/430(59 files)**; 后端 `pytest -m "not network"` **2302 passed / 0 failed / 5 skipped**(基线 2280)。
+
+**⚠️ 本次明确未做(如实留痕)**:
+- **盘前 0 价**(`/quotes` 把 `open/high/low/volume/turnover` 返成 `0` 而非 `null`, 盘前页面渲染「今开 0 / 成交量 0手」): 该现象**只在 09:30 前可见**, 本批修复窗口内市场已开盘无法复现验证; 与其仓促改口径, 留待下一版在盘前窗口修+验。
+- **THS 超时导致线程膨胀**(单 worker 116-118 线程、其一累计 ~8 CPU 小时): 需要给同步 vendor 调用加并发上限与硬超时, 属并发改造, 不宜在收盘前的窗口里赶工。日志治理已大幅降低其影响面, 该项留待后续。
+
+**过程留痕(值得记)**: 本批我用三个并行 subagent 改代码, 但它们**共用同一个工作目录**, 互相 `git checkout` 抢分支 ⇒ 提交散落在非预期分支上(收货时我按 commit 逐个核对, 未丢工作)。**教训: 同一批多路并发必须先给每路开独立 worktree。** 另: 我在题材情绪那个提交上**没跑测试就提交**, 门禁立刻抓出新用例失败(梯队面板还有两个裸滚动容器), 已在下个提交补齐 —— 再次印证"提交前必跑门禁"。
+
+
+### fix(theme-mood): 轮动行不再冒充表头 + 矩阵滚动条跟随暗色主题
+
+**性质**: 单页样式/结构修复(`frontend/src/pages/ThemeMood.tsx`) + 2 条钉住用例。纯前端。
+
+- **缺陷①**(走查截图): 「题材 × 日期」矩阵里那一行**轮动数字**(如 `-1.6 -5 -7 +4 …`)**紧贴日期表头正下方**, 且只有 10px 小字、无任何标签说明 ⇒ 读起来像表头的一部分, 不知道该行是什么。**修法**: 给它独立容器(`data-testid="thememood-rotation-row"`)+ 上分隔线(`border-t`)+ 上间距(`mt-2 pt-1.5`), 标签从 10px 升到 **11px** 并补 `title` 说明自身口径(轮动 = 每日新进/退出 Top N 的题材数), 消除"这行属于表头"的误导。
+- **缺陷②**(走查截图): 矩阵的**横向滚动条是浏览器默认浅色**, 在暗色主题下刺眼。**修法**: 滚动容器加已有的 token 化工具类 `.scrollbar`(`src/index.css:208`, `scrollbar-color: hsl(var(--muted-foreground) / 0.35)`)。
+  - **已核实 `.scrollbar` 真实存在且是 token 化实现**(不是空修复) —— 这一点专门查过: 若该类不存在, 改动只是加了个无效果的 class, 而断言"className 含 scrollbar"的测试照样会绿。
+- **钉住(2 例)**: 轮动行必须独立容器 + 含 `border-t`/`mt-2`/`pt-1.5` + 标签带"新进"口径说明; 矩阵内**所有** `overflow-x-auto` 容器都必须同时带 `scrollbar` 类(防后人新增裸滚动容器)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest 全绿。
+
+
+### perf(obs): 传输层日志噪音不再写库 —— 修开盘后 app/PG 被日志打满
+
+**性质**: 单文件后端修复(`src/bootstrap/env.py`) + 1 个新测试文件。**需重启生效**。
+
+- **实测现象**(2026-09-14 开盘后, 真机): 容器 **CPU 91-122%**、内存 1.395GiB/1.465GiB(顶到 1500m 上限); **Postgres 50-95% CPU** 且报 `FATAL: sorry, too many clients already`; 每个 uvicorn worker **116-118 线程**(其一累计烧 ~8 CPU 小时)。用户侧表现: **所有查库接口超时**, 而 `/api/health`、`/api/version` 仍 0.1s 返回 ⇒ 「系统 → Agent」等页面**永久停在"加载中…"**, 过几分钟又自己恢复(间歇性)。
+- **根因**: `setup_logging` 里 `_ConsoleNoiseFilter`(含 `httpx/httpcore/urllib3/...`)**只挂在控制台 handler 上**, 而 **DB handler 没有任何过滤器且恒 `level=DEBUG`** ⇒ 开盘时每条 `httpx/httpcore/thsdk` 的 DEBUG 都被**格式化并写进日志表**(`docker logs` 实证刷屏 `httpcore.http11 receive_response_body.complete` 与 `thsdk.base ❌ -6 请求超时`)。原 docstring 把这写成有意设计(「UI 日志板永远可以看到包括心跳/httpx 请求在内的完整记录」), 代价在开盘量级下不可接受。
+- **修法(最小、不牺牲排查能力)**: 把该过滤器改名为 `_TransportNoiseFilter` 并**同时挂到控制台与 DB 两个 handler**; 名单补 `thsdk`(日志实证刷屏的元凶)与 `hpack`/`h11`(同属 HTTP 传输细节)。语义保持: **WARNING+ 一律放行**(`thsdk` 的 `-6 请求超时` 是 ERROR, 必须留痕), **业务/Agent 自身的 DEBUG 不在名单里 ⇒ 照旧进日志板**, 所以「错误日志」页签仍然可用。同步订正 `setup_logging` 的 docstring(原文承诺"DB 全量收录"与新行为矛盾)。
+- **钉住**: 新增 `tests/test_log_noise_filter.py`(22 例) —— 8 个噪音库 × {DEBUG/INFO 被挡, WARNING/ERROR/CRITICAL 放行}、4 个业务 logger 的 DEBUG 放行、前缀匹配按标签段判定(不误伤 `httpx_utils`), 以及**最要紧的一条**: `setup_logging()` 之后 **DB handler 上确实存在该 filter**(只测过滤器本身发现不了"忘了挂")。
+- **变异验证**: 删掉 `db_handler.addFilter(...)` ⇒ 恰好 `test_setup_logging_attaches_filter_to_DB_handler` 变红, 其余 21 例仍绿; 还原后 22/22 绿。
+- **门禁**: 后端 `pytest -m "not network"` **2302 passed / 0 failed / 5 skipped**(基线 2280, 净 +22 = 本文件)。前端未改。
+- 注: 线程膨胀(单 worker 116-118 线程)与 THS 超时堆积属另一条 P1(调用并发上限+硬超时), **本次未做**, 已留痕待后续批次。
+
+
+### fix(portfolio): 持仓页存量金额不再带 '+' (可用资金/总资产/总市值) + 盈亏不再双写号("++1.00万")
+
+**性质**: 金额格式化**分层**(新增 1 个 `@/lib/format` 助手) + 持仓页取数处收敛 + 4 条钉住用例。
+
+- **缺陷**(走查): `/portfolio` 的「可用资金」「总资产」渲染成 `+4.50万` —— 这两个是**存量**读数("有多少"), 挂 '+' 会被读成"涨了"; 同时「总市值」渲染 `0`(无号) ⇒ 同一行内一个带 + 一个不带, 自相矛盾。
+- **根因**: 这些格子都走 `formatMoney`(= `useStocksActions.ts:463` → `safeMoney`), 而 `safeMoney` 的既定口径是**给正数加 '+'**(资金流/涨跌场景需要), 存量读数直接借用了它 ⇒ 符号语义错。
+- **修法(分层, 不是逐处补丁)**: `src/lib/format.ts` 新增 `safeMoneyUnsigned(v, fallback)` —— 与 `safeMoney` **同量级规则**(≥1e8→亿 / ≥1e4→万 / 小金额去尾零), 但**正数不加 '+'**, 负号保留(负存量如融资负债是真读数, 不许吞号), 缺失走 `--`。持仓页存量读数改走它:
+  - `PortfolioSummarySection.tsx`: 总市值 / 可用资金 / 总资产 / 「仓位占比」副标题的 `持仓市值 · 总资产`
+  - `AccountsSection.tsx`: 账户行 市值 / 可用 + 持仓行 市值(含港美股折算 CNY 那格)
+  - 盈亏/涨跌(`total_pnl` / `total_daily_pnl` / `pos.pnl` / `pos.daily_pnl`)**继续**走 `formatMoney` 带符号口径, 未动。
+- **顺手修掉一个真错(同一批 tile)**: 盈亏处原写 `{pnl >= 0 ? '+' : ''}{formatMoney(pnl)}`, 而 `formatMoney` 自己已经给正数加号 ⇒ 正盈亏渲染成 **`++1.00万`**(负盈亏恰好正常, 所以一直没被看见)。删掉冗余前缀共 6 处(总盈亏 / 当日盈亏 / 账户盈亏 / 账户当日盈亏 / 持仓行盈亏 / 持仓行当日盈亏), 符号只由 formatter 给一次。
+- **钉住(新增 4 例)**: 存量不带 +(45000→`4.50万`, 1234567→`123.46万`, 0→`0` 且全局无 `+0`); 盈亏保留负号(`-3.00万`/`-1.20万`/`(-2.50%)`); 盈亏为正仍带 `+`(`+1.00万`)且**不出现** `++1.00万`; 负存量保留负号(`-5000`)。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest **428/428(59 files)全绿**。
+- **顺带核过(无需改)**: `/paper-trading` 的总资产/可用资金走的是 `safeThousand`(本身不带号), 不受此缺陷影响。
+- [commit 待回填]
+
+### fix(ui): 个人中心「账号/角色/注册时间」拉取失败不再铺一排 `--`
+
+**性质**: 单页前端(`src/pages/Profile.tsx`) + 1 个钉住用例文件; 无接口契约变更、无后端改动。不部署、不重启容器。
+
+- **缺陷(2026-09-14 生产 UI 走查 B)**: 个人中心「安全中心 → 当前账号」三行(账号 / 角色 / 注册时间)恒显 `--`。
+- **先判形状再定性(按要求两选一查证)**: 该块读的是 `GET /api/profile`, 不是 `/api/auth/me`。两条路都读过:
+  - 信封: `src/web/response.py:63-100` 对 2xx 统一包成 `{code,success,data,message}`; `fetchAPI`(`packages/api/src/client.ts:135-147`)返回 `body.data`。`/api/auth/me` 的 data 是 `{user:{...}}`(`src/web/api/auth.py:536-538`), 但**本页没打这个端点**。
+  - 本页端点: `GET /api/profile`(`src/web/api/profile.py:200-203`)直接 `return _profile_to_dict(user)`, 字段名与 `ProfileInfo` 一一对应(缺 `user` 包裹层 ⇒ **不存在"读错层级"的 shape 错误**)。
+  - ⇒ 定性为 **(b) 被吞掉的拉取失败**: `useApiQuery` 的 error 只进了 `useEffect` 里的一次性 toast(5s 后消失), 页面随后照常渲染, 三个字段全走 `|| '--'` 兜底 ⇒ 用户看到一面 `--` 墙, 分不清"没拉到"和"本来就是空的"。
+- **修法**: 取 `useQuery` 的 `refetch`/`isFetching`; 「当前账号」块在 `profileError && !profile` 时渲染 `role="alert"` 的显式故障态 —— 文案 `账号信息加载失败: {profileError.message}`(**后端/传输层原文透传, 不在前端编造原因**) + 「重试」按钮; 只有拿到 profile 时才渲染三行真值。已登录用户的 username/role/created_at 恒存在, 这里**没有合法空态**, 故不保留任何 `--` 兜底展示路径。
+- **钉住**: `frontend/tests/components/profile-account-failure.test.tsx` 3 例(失败态可见且三个字段标签**不出现**、点重试成功回到真值、成功路径日期非 `--`)。**变异验证**: 把故障态分支短路(恒走三行) ⇒ 前 2 例红、成功路径例仍绿(已实测并复原)。
+- **未能验证**: 盘中后端间歇 stall(同一端点先 200 后 500), **未做真接口复验**; 失败分支由单测 + 代码路径钉住。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / `UI-RULES OK` / vitest 全绿(本批 +3 例)。
+- [commit 待回填]
+
+### fix(board): 热力图全市场 -100% 假暴跌 —— 0 价/0 量按「无数据」处理
+
+**性质**: 单文件后端守卫 + 5 条钉住用例。**需重启后端容器生效**(纯 Python 改动)。
+
+- **缺陷**(2026-09-14 UI 走查发现): `/api/boards/heatmap?live=auto` 返回 128 个板块**全部** `change_pct: -100`、`volume: 0`, 前端热力图整屏飘绿(跌幅色)。
+- **根因**: `src/core/tdx_boards.py:276-284` 批量实时函数里, `_num` 只拦 `None`/非有限值, **不拦 0**; 通达信客户端拿不到实时数据时返回 `Now=0`, 于是 `(0/last-1)*100 = -100.0` 被当真值下发; `Volume=0` 亦原样透传。这与本仓既定口径直接冲突(`packages/marketdata/src/marketdata/vendors/tencent.py:4` 原文:「解析层对缺失/空字段一律保留 None, 绝不回退 0(0 价参与涨跌幅算术会伪造 -100% 假暴跌)」)。
+- **修法**: 现价 `now_px > 0` 才写入 `price`; 昨收 `last > 0` 且现价 > 0 才计算 `change_pct`; 成交量 `vol > 0` 才写入 `volume`。不满足一律保持 `None`(诚实标缺失, 前端走空态)。`amount`/`fund_net` 不在此列 —— 资金净流入 0 是**真值**(净流入为零), 与"0 价"性质不同, 不动。
+- **钉住用例**(`tests/test_tdx_boards.py`): `test_board_quotes_now_zero_is_missing_not_crash`(Now=0 → price/change_pct/volume 全 None, 且**不是** -100)、`test_board_quotes_lastclose_zero_change_none`、`test_board_quotes_missing_keys_all_none`、`test_board_quotes_genuine_value_computes`(真实值照算)、`test_board_quotes_genuine_flat_move_not_nulled`(真实 0% 平盘保留 `0.0`, 不得被守卫误伤)。
+- **门禁**: `pytest -q -p no:warnings -m "not network"` **2285 passed / 0 failed / 5 skipped**(基线 2280, +5)。
+- [commit 待回填]
+
+### fix(ui): 首页情绪周期/涨停跌停「假空态」+ 市场温度常驻加载 + 市场全景大块死白
+
+**性质**: 纯前端(`packages/biz-ui` 三处 + `src/pages/Dashboard.tsx`) + 1 个钉住用例文件 + R6 棘轮收紧; **无接口契约变更、无后端改动**。不部署、不重启容器。
+
+- **缺陷来源**: 2026-09-14 生产 UI 走查(首页自上而下)。①「情绪周期」显 `--`; ②「涨停/跌停」显 `--/暂无`; ③ 市场温度卡旁常驻「阶段数据同步中…」永不消失; ④ 市场全景那一行下方一大块竖直空白。
+- **根因(逐条查证)**:
+  - **①③ = 拉取失败/`available:false` 被吞(本仓最重复的缺陷类)**: `KpiBand.tsx` 的 `usePhaseLabel` 与 `Dashboard.tsx` 的 `PhaseGaugeCard` 都是 `catch { /* 静默 */ }`; 且都只在 `available && current` 时才 setState ⇒ `/market/phase` 失败或后端返回 `available:false` 时组件状态恒为 null, 于是 ① 塌成 `--`, ③ 的 140px 占位文案「阶段数据同步中…」**永久驻留**。该文案还是前端**本地编造**的原因(后端 `note` 原文其实是"尚未同步阶段数据, 请调用 POST /api/market/phase/sync")。
+  - **② = 渲染 bug(死状态 + 误导字面量)**: `limitDown` 是 `useState(null)` 的**死状态**(全文件无 setter), 兜底写死字面量 `'暂无'` ⇒ 把"`/market/phase` 根本没有跌停家数字段"伪装成"今天没有跌停股", 与同格左侧 `--` 自相矛盾。
+  - **④ = 布局**: 市场全景是 `lg:grid-cols-3`(情绪周期阶段 | 市场主线 Top10 | 市场温度)。行高由最长的主线列表(~10 行)决定, 另两列内容只有它的 1/3~1/2 ⇒ 左/右列下方各留 ~200+px 死白; ③ 的假占位又让右列更矮, 叠加放大。
+  - **⑤(资金流入 7 行 / 流出 10 行)—— 查证为"真数据", 未改代码**: 后端 `src/web/api/market_data.py:290-307` 先按净流入排序取 `[:10]` 再按符号过滤(流入 >0 / 流出 <0)。单边市里"前 10 大里只有 7 个净流入"就会 7 vs 10, 属当日真实格局; 前端两个列表都是全量 `.map`, 无截断。补数据 = 编造, **不动**。
+- **修法**:
+  1. `usePhaseLabel` 改三态: `error`(失败原文) / `unavailableNote`(后端 `note` 原文透传) / 正常值; 去掉死状态 `limitDown` 与 `'暂无'` 字面量, 跌停一律按缺值约定 `--` 并在 `title` 说明"当前数据源未提供"。`useMainlineTop1` 同步补 `error`(同类静默, 顺手收口)。
+  2. `KpiBand`: 情绪周期/涨停跌停/主线 Top1 格在失败时渲染 **`加载失败`**(amber, 悬停带失败原文), 与 `--` 缺值态严格区分; 新增 `Cell.title`。
+  3. `PhaseGaugeCard` 改四态(loading / ready+`本次刷新失败` 标注 / unavailable 透传 note / error+重试), 各态**统一占满 154px**(与仪表盘等高) ⇒ ③ 不再常驻假加载、④ 右列不再矮一截。
+  4. `MarketPhaseCard`: `available:false` 时不再用 `phaseStyle` 兜底渲染「积累中」大字(那也是把"无数据"伪装成真阶段), 改为 note 原文 + 154px 空态。
+  5. `MarketMainlineCard`: Top10 列表 `lg:max-h-[300px] lg:overflow-y-auto`(仅 lg 起), 行高与同排两卡同量级, 消掉死白; 10 行数据仍在 DOM, 不丢行。
+  6. 顺带把本文件内 3 处裸 `.toFixed(` 换成 `@/lib/format` 的 `safeFixed`, `scripts/ui-rules-baseline.json` 的 KpiBand 计数 4 → 1(R6 棘轮只许降)。
+- **钉住**: `frontend/tests/components/dashboard-phase-honesty.test.tsx` 13 例(failure ≠ empty 的否定断言、note 原文透传、跌停不再出现"暂无"、154px 空态、Top10 限高)。**变异验证**: 把 ① 的失败态改回 `--` ⇒ 恰好 1 例红, 其余仍绿(已实测并复原)。
+- **未能验证**: 2026-09-14 盘中后端间歇 stall, 未做真接口复验(失败/`available:false` 两条分支靠单测钉); ④ 属视觉布局, 本机无浏览器(前后端不可用) ⇒ **未做像素测量**, 结论由布局代码推出, 需走查截图复核。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / `UI-RULES OK` / vitest 全绿(本批 +13 例)。
+- **注**: 本条 changelog 文本被并发会话一起带进了前一个 commit(`cbf711a` 的 stat 里含 35 行 CHANGELOG), 故本条目归属的代码 commit 是 `1a83cc1`(代码+用例), 文本在 `cbf711a` 落地。
+- [commit 1a83cc1]
+
+### fix(darkfund): 暗盘 TOP 榜 .tck 对照列全空即隐藏 + 金额口径从「元」改回「万元」(11.68亿 曾被显示成 11.68万)
+
+**性质**: 单页前端修复 + 1 个 `@/lib/format` 助手 + 6 条钉住用例。后端只读核对口径, **未改后端一行**。
+
+- **缺陷①(恒空列)**: 「.tck 暗盘对照」列在生产 20 行里全是 `-`, 页脚却只写「仅持仓股有数据」—— 全市场榜单里一整列恒空是噪声, 读起来像坏了。**修法(选"有数据才展示", 信息不丢)**: `hasTckData = top.some(r => r.tck_dark_net_wan != null)`; 全空 → **表头 + 单元格整列不渲染**, 页脚改为说清原因「.tck 暗盘对照仅持仓股有数据 —— 本榜 N 只都不是持仓股(或 .tck 缺失), 该列已隐藏」; 有数据 → 列照旧展示, 列头补口径范围「.tck 暗盘对照(仅持仓股)」+ title 说明, 非持仓股行显式 `--`(旧 `-` 统一成规则的 `--`)。
+- **缺陷②(总成交额大量 --)**: 结论是**上游真的没有**, **不是字段名对不上**: 前端字段名 `total_amount_wan` 与后端 `src/core/dark_fund_scan.py:141`、API 类型 `packages/api/src/marketScan.ts:30` 完全一致。`total_amt` 取自 thsdk 汇总的 `总金额`(元), 后端在 `dark_fund_scan.py:130-132` 把「非数值」与「|值| ≥ `INT32_SENTINEL`(=2_147_483_000)」**都置 None**(注释: 盘后无真实数据的次新股返回 2^31-1/2^31 占位), 前端拿到 null → 按规矩显式 `--`。**顺带发现一处越界(不属前端职责, 未改)**: 该哨兵阈值按**元**判定, 真实成交额 > 约 21.47 亿会被同样误判成哨兵而置 None ⇒ 已写入前端缺陷报告请后端同学收窄判定, 本轮不碰后端。
+- **顺手修掉的单位缺陷(同一批数据, 是真错)**: `main_net_wan` / `total_amount_wan` / `tck_dark_net_wan` 后端明确是**万元**, 旧代码却用 `toWan`(= `toAmount`, **元**口径, 内部再 /1e4)渲染 ⇒ `116836.13`(万元 = 11.68 亿)显示成 `+11.68万`, **小 10000 倍且单位错**; 万元口径的 `toAmountFromWan` 就在旁边, 是 2026-09-07 P3 收敛时换错的。现改为: 主力净流入/暗盘净额(有方向的净额) → `toAmountFromWan`(带符号); 总成交额(规模量) → 新增 `toAmountFromWanUnsigned`(不带 `+`, 负号保留, 缺失 `--`)。
+- **另一处顺手修**: `main_net_ratio` 原为裸 `r.main_net_ratio.toFixed(0)` —— PG DECIMAL 经 JSON 变字符串正是 R6 记载的崩溃模式(2026-08-21 `c.price.toFixed` 事故)。改走 `safeFixed(r.main_net_ratio, 0, '-')`, 该文件 `.toFixed(` 计数 1 → 0(门禁提示可从 baseline 下调)。
+- **钉住(新增 6 例)**: 全空 → 表头无该列 + 页脚"已隐藏"; 有数据 → 列头含"仅持仓股" + 万元口径 `+1.50亿`; 金额量级(`11.68亿` 在, `11.68万` / `+11.68亿` / `8.80万` 不在); 总成交额 null → `--` 且不塌成 `0.00万`; `main_net_ratio` 字符串脏数不崩; format 助手 7 个断言。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest **418/418(57 files)全绿**。
+- **未验证**: 生产 `/api/market-scan/dark-fund-top` 真实响应里 `total_amount_wan` 的缺失比例(需接口; 判断依据是后端源码而非生产响应, 已在报告中注明)。
+- [commit 待回填]
+
+### fix(heatmap): 板块热力图「面积:量能」不再静默空白(保底面积恒正 + 显式空态) + 色阶只把"空"当无数据
+
+**性质**: 纯前端防御纵深(1 个纯函数模块 + 1 个组件) + 10 条钉住用例。无接口契约变更。
+
+- **缺陷**(生产截图+DOM 巡检): `/heatmap` **默认视图「面积:量能」的 canvas(1007×560)整块空白, 页面上没有任何说明**; 切「面积:等权」才出图。载荷特征: 后端一整批 128 个板块 `volume: 0`(且 `change_pct: -100`)。page 自己的描述承诺「缺失板块以最小面积保底」。
+- **根因**(两段, 都在前端):
+  1. **0 面积时 ECharts treemap 整块不画**: 实测 echarts 6.1 SSR —— 128 个 `value=0` 的节点渲染出的 SVG 只剩背景(路径数 2, 文字 0), 而 `value=1` 的同样 128 个节点渲染出 128 块(路径数 257) ⇒ "空白灰框"就是 0 面积的直接后果。`toTreemapCells` 在"有正值"时用中位数 × minShare 保底, 但在**全部板块都缺/为 0** 这条分支上没有把"必须 > 0"钉死。
+  2. **画不出来时没有空态**: 组件只在 `items.length === 0` 时给文案; 保底面积让 cells "看起来非空"时直接走画布分支 ⇒ "画不出图"这件事在 UI 上完全不可见(静默空白)。
+- **修法**(`frontend/packages/biz-ui/src/lib/board-heatmap.ts` + `.../components/dashboard/BoardHeatmap.tsx`):
+  - 保底面积恒 > 0: 有正值 → 正值中位数 × minShare; **全缺/全 0 → 固定保底 `EMPTY_FLOOR=1`**, 并挡住 NaN/Infinity/非正值(旧行为落到 0 就会静默空白)。量能可用性判定走 `safeNum`(兼容 PG DECIMAL 经 JSON 变字符串的脏数), 不再裸 `typeof === 'number'`。
+  - 新增纯函数 `hasDrawableArea(cells)` / `hasUsableVolume(items)` / `usableVolumeCount(items)`: 画不出来(= 空 cells 或全部 value 非正)一律**不 `setOption`、不挂画布**, 改渲染显式空态。
+  - 量能视图**全部**板块成交额缺失时: 显式说明 `data-testid="heatmap-no-volume"`「N 个板块的成交额全部缺失, 面积无法区分板块 —— 已停绘, 避免把保底面积误读成量能」+ 一键切「面积:等权」(信息不丢)。**为什么这里停绘而不是铺一张等权保底图**: 全缺 + 保底面积 = 128 个一模一样的块, 挂在「面积:量能」标签下会被读成"量能都差不多", 比空白更容易误导; 混合场景(部分板块有量能)仍照旧出图, 零量能块走保底面积可见可点。
+- **色阶口径(故意不改的点, 写清理由)**: `change_pct` 只把 **null/undefined/NaN/Infinity** 当无数据染 neutral 灰, **不按量级猜哨兵**。`-100` 是哨兵还是真实深跌只有数据源知道, 前端按量级(a=100)猜会把真实深跌误染成灰 —— 那是另一种"不老实"。缺数据必须由后端返回 `null`(另一批在改后端守卫), 前端这一半只保证"空就老实说空 + 画不出来就说画不出来"。
+- **钉住(新增 10 例)**: 全 0/缺失量能 → 每块仍拿到正保底面积; `value=0` 必须判"画不出来"; 量能全缺 → 显式空态且**不**调 `setOption`、无画布; 空态一键切等权后恢复出图; 空列表 → 空态且不调 `setOption`; null/undefined/NaN/Infinity → neutral 灰; `-10%` 与 `-100%` 仍染 down 绿。
+- **门禁**(本机, 与另一并行 agent 共用工作树): `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK; 本次两个测试文件 **35/35 绿**(lib 24 + 组件 11); `vitest run` 全量 **412 passed / 3 failed**, 3 处红全部在 `tests/components/dashboard-phase-honesty.test.tsx`(并行 agent 的 WIP 文件, 只 import `KpiBand/MarketMainlineCard/MarketPhaseCard/Dashboard`, 与本批模块零交集, 本次未改其一行)。
+- **未验证**: 生产 `/boards/heatmap` 真实载荷(需后端守卫到位且盘中接口可用); 本次只做前端守卫 + 离线用例。证据与未验证项见 `.superpowers/sdd/ui-sweep-20260914/frontend-heatmap-darkfund-portfolio.md`。
+- [commit 待回填]
+
 ### release-v0.6.2: 修「指数正文手动刷新被 30s GET 缓存吞掉」(v0.6.1 部署后自检发现)
 
 **性质**: 单文件前端修复 + 1 条钉住用例。静态面部署, 不重启容器。

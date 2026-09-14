@@ -5,6 +5,8 @@ import { hslaVar, readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import {
   detectHeatAnomaly,
   formatHeatPct,
+  hasDrawableArea,
+  hasUsableVolume,
   toTreemapCells,
   type BoardHeatItem,
   type HeatAnomaly,
@@ -161,6 +163,17 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
 
   const liveMode = fresh && data ? Boolean(data.live) : false
   const liveClock = liveMode && data?.as_of ? fmtClock(data.as_of) : ''
+  /**
+   * 面积:量能视图的画不画得出来(2026-09-14 缺陷修复):
+   * - volumeUnavailable: 有板块但**全部**成交额缺失/为 0 ⇒ 面积不携带量能信息。此时
+   *   保底面积会把 128 个块铺成一模一样的等权图, 挂在「面积:量能」标签下就是误导
+   *   (生产实测这种载荷下画布曾整块空白且无任何说明)。
+   * - drawable: ECharts treemap 对全 0/NaN 面积整块不画 ⇒ 只要画不出来就必须给空态,
+   *   绝不允许留一个"静默空白灰框"(那是缺陷本体, 不是结果)。
+   */
+  const volumeUnavailable =
+    fresh && areaMetric === 'volume' && items.length > 0 && !hasUsableVolume(items)
+  const drawable = hasDrawableArea(cells)
   /** 实时异动清单: 按 |涨速| 降序, 仅高亮不推送 */
   const liveAnomalies = useMemo(() => {
     if (!liveMode) return []
@@ -173,7 +186,10 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
 
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !cells || cells.length === 0) return
+    // 画不出来(空/全 0 面积)时不 setOption: 否则 ECharts 画一张空图 + 旧图残留,
+    // 页面上就是一个没有说明的空白框。量能全缺(volumeUnavailable)同样不画 ——
+    // 那张"全等权保底面积"的图挂在「面积:量能」标签下会被读成量能。
+    if (!chart || volumeUnavailable || !hasDrawableArea(cells)) return
     chart.setOption(
       {
         tooltip: {
@@ -211,7 +227,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       const d = params?.data as unknown as TreemapCell | undefined
       if (d?.blockCode) onOpenRef.current(d.blockCode, d.name)
     })
-  }, [cells, chartRef])
+  }, [cells, chartRef, volumeUnavailable])
 
   const stale = Boolean(error) && fresh
   const noDataCount = fresh ? items.filter((i) => !i.has_daily).length : 0
@@ -314,8 +330,26 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
         </div>
       )}
 
-      {cells && cells.length > 0 ? (
-        <div ref={ref} style={{ height: CHART_HEIGHT }} className="w-full" />
+      {volumeUnavailable ? (
+        // 有板块但全部成交额缺失/为 0: 面积不携带量能信息, 保底面积会铺成一张等权图
+        // 挂在「面积:量能」标签下 ⇒ 与其静默画一张会误导的图, 不如明确说明并给出路。
+        <div
+          data-testid="heatmap-no-volume"
+          className="flex flex-col items-center justify-center gap-2 text-center text-[12px] text-muted-foreground"
+          style={{ height: CHART_HEIGHT }}
+        >
+          <span>{items.length} 个板块的成交额全部缺失，面积无法区分板块 —— 已停绘，避免把保底面积误读成量能。</span>
+          <span className="text-[11px]">可切到「面积:等权」看涨跌分布，或稍后点刷新重试。</span>
+          <button
+            type="button"
+            onClick={() => setAreaMetric('equal')}
+            className="rounded border border-border bg-secondary px-2.5 py-1 text-[11px] text-foreground transition-colors hover:bg-secondary/80"
+          >
+            切换面积:等权
+          </button>
+        </div>
+      ) : drawable ? (
+        <div ref={ref} data-testid="heatmap-canvas" style={{ height: CHART_HEIGHT }} className="w-full" />
       ) : loading && !fresh ? (
         <LoadingState rows={3} />
       ) : error && !fresh ? (
@@ -324,15 +358,9 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           onRetry={() => setReloadKey((k) => k + 1)}
           retrying={loading}
         />
-      ) : fresh && items.length === 0 ? (
-        <div
-          className="flex items-center justify-center text-[12px] text-muted-foreground"
-          style={{ height: CHART_HEIGHT }}
-        >
-          暂无板块数据（等待每日同步）
-        </div>
       ) : (
         <div
+          data-testid="heatmap-empty"
           className="flex items-center justify-center text-[12px] text-muted-foreground"
           style={{ height: CHART_HEIGHT }}
         >

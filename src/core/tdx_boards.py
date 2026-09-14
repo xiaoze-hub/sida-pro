@@ -278,9 +278,16 @@ def board_quotes(codes: list[str], *, with_fund: bool = True) -> dict[str, dict]
         p = pv.get(code) or {}
         now_px = _num(p.get("Now"))
         last = _num(p.get("LastClose"))
-        row["price"] = now_px
-        row["volume"] = _num(p.get("Volume"))
-        if now_px is not None and last:
+        # 2026-09-14 P0: 通达信客户端无实时数据时返回 Now=0 / Volume=0, 若直传会让
+        # (0/last-1)*100 算出 -100%, 全市场 128 个板块渲染成"假暴跌"(生产实测)。
+        # 0 价/0 量在本仓口径里 = 无数据而非真值(见 packages/marketdata/.../tencent.py:4
+        # 「绝不回退 0(0 价参与涨跌幅算术会伪造 -100% 假暴跌)」) → 一律归 None, 诚实标缺失。
+        if now_px is not None and now_px > 0:
+            row["price"] = now_px
+        vol = _num(p.get("Volume"))
+        if vol is not None and vol > 0:
+            row["volume"] = vol
+        if now_px is not None and now_px > 0 and last is not None and last > 0:
             row["change_pct"] = (now_px / last - 1.0) * 100.0
         am = _num((amounts.get(code) or {}).get("AMOW"))
         if am is not None:

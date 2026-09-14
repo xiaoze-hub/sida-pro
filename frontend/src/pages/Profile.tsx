@@ -1,7 +1,7 @@
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck } from 'lucide-react'
+import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck, AlertTriangle } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -76,7 +76,8 @@ export function Profile() {
   // ── 个人资料 ──
   // W3.7/D7: GET /profile 与 /profile/stats 交给 TanStack Query; 编辑态(nicknameDraft 等)仍是本地 state,
   // 由 data 变化同步; PUT 保存后用 setQueryData 就地更新缓存, 不整页重取。
-  const { data: profile, isLoading, error: profileError } = useApiQuery<ProfileInfo>(['profile'], '/profile')
+  const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
+    useApiQuery<ProfileInfo>(['profile'], '/profile')
   const { data: stats, error: statsError } = useApiQuery<ProfileStats>(['profile', 'stats'], '/profile/stats')
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
@@ -285,16 +286,39 @@ export function Profile() {
 
           {/* 当前账号 */}
           <div className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2">
-            {[
-              { k: '账号', v: profile?.username || '--' },
-              { k: '角色', v: ROLE_LABEL[profile?.role || ''] || profile?.role || '--' },
-              { k: '注册时间', v: profile?.created_at ? formatDateTime(profile.created_at) : '--' },
-            ].map(row => (
-              <div key={row.k} className="flex items-center justify-between gap-3 text-[12px]">
-                <span className="text-muted-foreground">{row.k}</span>
-                <span className="font-medium text-foreground truncate">{row.v}</span>
+            {/*
+              2026-09-14 走查 B: 账号/角色/注册时间此前无论加载失败还是真缺值都渲染 '--' —— 用户
+              分不清"没拉到"和"本来就是空的"。已登录用户的 username/role/created_at 恒存在,
+              这里不存在合法空态 ⇒ 拉取失败必须显式故障态 + 重试, 不得铺一排 '--'。
+            */}
+            {profileError && !profile ? (
+              <div className="space-y-2" role="alert">
+                <div className="flex items-start gap-1.5 text-[12px] text-amber-600 dark:text-amber-500">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {/* 后端/传输层原文透传, 不在前端编造失败原因 */}
+                  <span>账号信息加载失败: {profileError instanceof Error ? profileError.message : '未知错误'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refetchProfile()}
+                  disabled={profileFetching}
+                  className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary transition-colors hover:bg-accent/30 disabled:opacity-60"
+                >
+                  {profileFetching ? '重试中…' : '重试'}
+                </button>
               </div>
-            ))}
+            ) : (
+              [
+                { k: '账号', v: profile?.username || '--' },
+                { k: '角色', v: ROLE_LABEL[profile?.role || ''] || profile?.role || '--' },
+                { k: '注册时间', v: profile?.created_at ? formatDateTime(profile.created_at) : '--' },
+              ].map(row => (
+                <div key={row.k} className="flex items-center justify-between gap-3 text-[12px]">
+                  <span className="text-muted-foreground">{row.k}</span>
+                  <span className="font-medium text-foreground truncate">{row.v}</span>
+                </div>
+              ))
+            )}
           </div>
 
           {/* 修改密码(复用 /api/auth/change-password) */}

@@ -154,7 +154,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
   }, [cols])
   const shown = onlyBoard != null ? boards.filter((b) => b === onlyBoard) : boards
   return (
-    <div className="overflow-x-auto pb-1">
+    <div className="scrollbar overflow-x-auto pb-1">
       <div className="flex w-max gap-1">
         <div className="w-[64px] shrink-0">
           <div className="mb-1 text-[10px] text-muted-foreground">层级</div>
@@ -260,7 +260,7 @@ export default function LadderBoard(props: {
       ) : null}
       <div ref={ref}>
         {view === 'cols' ? (
-          <div className="overflow-x-auto pb-1">
+          <div className="scrollbar overflow-x-auto pb-1">
             <div className="flex w-max gap-1">
               {cols.map((d) => (
                 <DayColumn key={`${d.date}-${d.provisional ? 'live' : 'fin'}`} day={d} basis={d.provisional ? 'raw' : 'qfq'} />

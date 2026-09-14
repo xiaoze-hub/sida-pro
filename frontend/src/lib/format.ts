@@ -93,6 +93,24 @@ export function safePrice(v: unknown, maxDigits = 4, fallback = '--'): string {
 }
 
 /**
+ * 元 → 万/亿 的**无量值**(2026-09-14 持仓页缺陷修复):
+ * 与 safeMoney 同量级规则, 但**正数不加 '+'** —— 总资产/可用资金/总市值是"有多少",
+ * 不是"变化了多少", 前面挂个 '+' 会被读成涨跌; 负值是真读数(如融资负债), 负号保留。
+ *
+ * 只用于存量/规模读数(市值、可用资金、总资产); 涨跌/盈亏仍走 safeMoney(带符号)。
+ */
+export function safeMoneyUnsigned(v: unknown, fallback = '--'): string {
+  const n = safeNum(v)
+  if (n === null) return fallback
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1e8) return `${sign}${safeFixed(abs / 1e8, 2)}亿`
+  if (abs >= 1e4) return `${sign}${safeFixed(abs / 1e4, 2)}万`
+  const digits = abs < 1 ? 4 : 2
+  return `${sign}${Number(safeFixed(abs, digits))}`
+}
+
+/**
  * 安全整数显示：成交量/股本等。对非整数四舍五入，对无效值返回 fallback。
  */
 export function safeInt(v: unknown, fallback = '--'): string {
@@ -156,4 +174,18 @@ export function toAmountFromWan(wan: number | null | undefined, digits = 2): str
   const sign = wan > 0 ? '+' : wan < 0 ? '-' : ''
   if (Math.abs(wan) >= 1e4) return `${sign}${(Math.abs(wan) / 1e4).toFixed(digits)}亿`
   return `${sign}${Math.abs(wan).toFixed(digits)}万`
+}
+
+/**
+ * 万元口径的**无量值**(成交额/市值这类"规模"读数, 2026-09-14 暗盘 TOP 缺陷修复):
+ * 量级规则同 toAmountFromWan, 但**正数不加 '+'**(负号保留, 负数是有意义的读数, 不吞符号)。
+ * 成交额是"多少", 不是"涨跌多少", 带 '+' 会被读成变化量。
+ */
+export function toAmountFromWanUnsigned(wan: number | null | undefined, digits = 2): string {
+  const n = safeNum(wan)
+  if (n === null) return '--'
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1e4) return `${sign}${safeFixed(abs / 1e4, digits)}亿`
+  return `${sign}${safeFixed(abs, digits)}万`
 }

@@ -167,6 +167,67 @@ def test_board_quotes_fund_from_supamo(monkeypatch):
     assert q["881290.SH"]["fund_net"] == pytest.approx(28254.36 * 1e4)
 
 
+# ── P0 回归(2026-09-14): 0 价/0 量 = 无数据, 绝不伪造 -100% 假暴跌 ──────────
+
+def _rpc_from(mapping):
+    def _rpc(method, params, timeout=6.0):
+        return mapping[method]
+    return _rpc
+
+
+def test_board_quotes_now_zero_is_missing_not_crash(monkeypatch):
+    """Now=0(客户端无实时数据) → price/change_pct 均 None, 不得算出 -100%。"""
+    monkeypatch.setattr(tdx, "_rpc", _rpc_from({
+        "get_pricevol": {"881290.SH": {"LastClose": "1507.53", "Now": "0", "Volume": "0"}},
+    }))
+    row = tdx.board_quotes(["881290.SH"])["881290.SH"]
+    assert row["price"] is None
+    assert row["change_pct"] is None          # 关键: 不是 -100.0
+    assert row["volume"] is None
+    assert row["amount"] is None and row["fund_net"] is None
+
+
+def test_board_quotes_lastclose_zero_change_none(monkeypatch):
+    """LastClose=0(脏数据) → change_pct 为 None, 不除零/不编造。"""
+    monkeypatch.setattr(tdx, "_rpc", _rpc_from({
+        "get_pricevol": {"881290.SH": {"LastClose": "0", "Now": "1541.39", "Volume": "100"}},
+    }))
+    row = tdx.board_quotes(["881290.SH"])["881290.SH"]
+    assert row["price"] == pytest.approx(1541.39)   # 现价本身有值 → 保留
+    assert row["change_pct"] is None
+    assert row["volume"] == pytest.approx(100)
+
+
+def test_board_quotes_missing_keys_all_none(monkeypatch):
+    """报文缺 Now/LastClose/Volume 键 → 全 None, 不崩不猜。"""
+    monkeypatch.setattr(tdx, "_rpc", _rpc_from({
+        "get_pricevol": {"881290.SH": {}},
+    }))
+    row = tdx.board_quotes(["881290.SH"])["881290.SH"]
+    assert row["price"] is None and row["change_pct"] is None and row["volume"] is None
+
+
+def test_board_quotes_genuine_value_computes(monkeypatch):
+    """真实数值仍照常计算(守卫不得误伤正常路径)。"""
+    monkeypatch.setattr(tdx, "_rpc", _rpc_from({
+        "get_pricevol": {"881290.SH": {"LastClose": "1000", "Now": "1100", "Volume": "5000"}},
+    }))
+    row = tdx.board_quotes(["881290.SH"])["881290.SH"]
+    assert row["price"] == pytest.approx(1100.0)
+    assert row["change_pct"] == pytest.approx(10.0)
+    assert row["volume"] == pytest.approx(5000)
+
+
+def test_board_quotes_genuine_flat_move_not_nulled(monkeypatch):
+    """真实 0% 平盘(Now == LastClose > 0)必须保留 0.0, 不得被当缺失清成 None。"""
+    monkeypatch.setattr(tdx, "_rpc", _rpc_from({
+        "get_pricevol": {"881290.SH": {"LastClose": "1507.53", "Now": "1507.53", "Volume": "12"}},
+    }))
+    row = tdx.board_quotes(["881290.SH"])["881290.SH"]
+    assert row["change_pct"] == pytest.approx(0.0)
+    assert row["change_pct"] is not None
+
+
 def test_name_map_from_stock_list(monkeypatch):
     payloads = {
         "get_stock_list": [

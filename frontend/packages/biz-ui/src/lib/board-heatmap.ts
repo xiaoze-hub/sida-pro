@@ -6,7 +6,7 @@
  * 图表消费方(ECharts)无法吃 Tailwind 类, 走本模块返回的 rgba/hsla 字符串。
  */
 
-import { safeFixed } from '@/lib/format'
+import { safeFixed, safeNum } from '@/lib/format'
 import { withAlpha } from './stock-colors'
 
 export interface BoardHeatItem {
@@ -65,6 +65,8 @@ const DEFAULT_MIN_ALPHA = 0.12
 const DEFAULT_MAX_ALPHA = 0.9
 const LABEL_LIGHT_ALPHA = 0.45
 const DEFAULT_MIN_SHARE = 0.02
+/** 全部板块量能都缺失/为 0 时的保底面积: 固定 1(必须 > 0, ECharts treemap 对 0 面积整块不画) */
+const EMPTY_FLOOR = 1
 /** 与 safePercent 展示口径一致: 四舍五入到 0.00 的幅度视为平盘 */
 const FLAT_EPSILON = 0.005
 
@@ -110,7 +112,14 @@ export function detectHeatAnomaly(
   return { kinds, label: kinds.map((k) => ANOMALY_LABEL[k]).join(' · ') }
 }
 
-/** |pct|/clamp 归一 0~1; null/NaN → null(走 neutral)。 */
+/**
+ * |pct|/clamp 归一 0~1; null/NaN → null(走 neutral)。
+ *
+ * 口径(2026-09-14 定): **只把「空」当无数据** —— null/undefined/NaN/Infinity。
+ * 不按量级猜哨兵值: 后端把缺失写成 -100 时前端仍按"真跌 -100%"上色, 因为
+ * 「-100 是哨兵还是真值」只有数据源知道, 按量级猜会把真实深跌误染成灰。
+ * 缺数据必须由后端返回 null(`change_pct: null`), 前端这才染 neutral 灰。
+ */
 function heatRatio(pct: number | null | undefined, clampPct: number): number | null {
   if (pct === null || pct === undefined || !isFinite(pct)) return null
   return Math.min(Math.abs(pct) / clampPct, 1)
@@ -157,10 +166,49 @@ function median(nums: number[]): number {
 }
 
 /**
+ * 单板块可用成交额: **正有限数**才算(0/负/NaN/Infinity/空串/非数值字符串 → null)。
+ * 走 safeNum 兼容 PG DECIMAL 经 JSON 变字符串的脏数, 不裸 Number()。
+ */
+function usableVolume(v: unknown): number | null {
+  const n = safeNum(v)
+  return n !== null && n > 0 ? n : null
+}
+
+/**
+ * 有几个板块的成交额是可用的(面积:量能视图的信息量来源)。
+ * 0 ⇒ 该视图的面积不携带任何信息, 只能靠保底面积铺满 —— 调用方必须显式说明, 不许静默画。
+ */
+export function usableVolumeCount(items: BoardHeatItem[]): number {
+  let n = 0
+  for (const it of items) if (usableVolume(it.volume) !== null) n++
+  return n
+}
+
+/** 面积:量能视图是否有可用量能(至少一个板块成交额为正有限数)。 */
+export function hasUsableVolume(items: BoardHeatItem[]): boolean {
+  return usableVolumeCount(items) > 0
+}
+
+/**
+ * cells 能否被 ECharts treemap 画出来: 非空 **且** 至少一个 value 是正有限数。
+ *
+ * 为什么必须查: ECharts treemap 对全 0/NaN 的 value 会**整块不画**(实测 echarts 6.1:
+ * 128 个 value=0 的节点渲染出的 svg 只剩背景, 路径数 2), 页面表现为一个卡宽的空白灰框。
+ * 「画不出来」必须由调用方渲染显式空态, 不允许把空白当结果。
+ */
+export function hasDrawableArea(cells: TreemapCell[] | null | undefined): boolean {
+  if (!cells || cells.length === 0) return false
+  return cells.some((c) => Number.isFinite(c.value) && c.value > 0)
+}
+
+/**
  * 板块列表 → treemap cells。
  *
  * 面积口径 areaMetric:
- * - 'volume': 成交额(缺失/0 → 取正值中位数的 minShare 保底, 保证"无数据"块可见可点)
+ * - 'volume': 成交额(缺失/0/脏数 → 取正值中位数的 minShare 保底, 保证"无数据"块可见可点;
+ *   **全部板块都缺失/为 0 时** 退回固定保底面积 EMPTY_FLOOR>0 —— 面积为 0 会让 ECharts
+ *   整块不画, 那种"静默空白"是缺陷本体。此时面积已不代表量能, 调用方应显式说明
+ *   (见 BoardHeatmap 的 hasUsableVolume 空态), 不得让用户把保底面积误读成量能)
  * - 'equal':  等权(涨幅对比较场景)
  */
 export function toTreemapCells(
@@ -175,11 +223,12 @@ export function toTreemapCells(
   const { palette, areaMetric, clampPct = DEFAULT_CLAMP, minShare = DEFAULT_MIN_SHARE } = opts
   const raws: (number | null)[] = items.map((it) => {
     if (areaMetric === 'equal') return 1
-    const v = it.volume
-    return typeof v === 'number' && isFinite(v) && v > 0 ? v : null
+    return usableVolume(it.volume)
   })
   const positives = raws.filter((v): v is number => v !== null)
-  const floor = positives.length > 0 ? median(positives) * minShare : 1
+  // 保底面积必须恒 > 0: ECharts treemap 对 0 面积整块不画(空白灰框缺陷的根因)。
+  const measured = positives.length > 0 ? median(positives) * minShare : EMPTY_FLOOR
+  const floor = Number.isFinite(measured) && measured > 0 ? measured : EMPTY_FLOOR
 
   return items.map((it, i) => {
     const raw = raws[i]

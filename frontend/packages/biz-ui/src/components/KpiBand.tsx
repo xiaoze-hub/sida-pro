@@ -1,7 +1,8 @@
 import { useNavigate } from 'react-router-dom'
 import { Activity, Crown } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import { safeFixed } from '@/lib/format'
 
 /**
  * 首页 KPI 带(v0.4.6, 借鉴 TSP tick-stock-panel 设计)。
@@ -54,11 +55,14 @@ function Cell({
   value,
   sub,
   tone,
+  title,
 }: {
   label: React.ReactNode
   value: React.ReactNode
   sub?: string
   tone?: 'bull' | 'bear' | 'accent' | null
+  /** 悬停说明: 失败原因 / 缺值口径 —— 失败与缺值必须可区分(不本地编造原因, 后端 note 原文透传) */
+  title?: string
 }) {
   const toneCls =
     tone === 'bull'
@@ -69,7 +73,7 @@ function Cell({
           ? 'text-primary'
           : 'text-foreground'
   return (
-    <div className="min-w-0 px-2 py-1.5">
+    <div className="min-w-0 px-2 py-1.5" title={title}>
       <div className="truncate text-[10px] text-muted-foreground">{label}</div>
       <div className={`font-num tabular-nums text-[15px] font-semibold leading-tight ${toneCls}`}>
         {value}
@@ -79,36 +83,47 @@ function Cell({
   )
 }
 
+/** 失败态文案(与 '--' 缺值态严格区分: 拉取失败绝不能渲染成"没有数据") */
+const FAIL_TEXT = '加载失败'
+const FAIL_CLS = 'text-[13px] text-amber-600 dark:text-amber-500'
+/** 跌停家数: 现接线数据源(/market/phase)不提供该字段 —— 按仓库缺值约定渲染 '--', 不用"暂无"伪装成"今天没有跌停股" */
+const LIMIT_DOWN_MISSING_TITLE = '当前数据源(/market/phase)未提供跌停家数, 以 -- 表示缺值'
+
 export default function KpiBand({
   upCount,
   downCount,
   mainFlowYi,
   amountYi,
-  phaseLabel,
-  phaseLoading,
+  phase,
   mainlineTop1,
   mainlineLoading,
-  limitUp,
-  limitDown,
-  sealRate,
+  mainlineError,
 }: {
   upCount: number | null
   downCount: number | null
   mainFlowYi: number | null
   amountYi: number | null
-  phaseLabel: string | null
-  phaseLoading: boolean
+  /** /market/phase 快照(含加载/失败/无数据三态, 由 usePhaseLabel 提供) */
+  phase: PhaseKpi
   mainlineTop1: MainlineTop1 | null
   mainlineLoading: boolean
-  limitUp: number | null
-  limitDown: number | null
-  sealRate: number | null
+  /** 主线 Top1 拉取失败原文(有值时显式失败, 不渲染成 '--' 缺值) */
+  mainlineError: string | null
 }) {
   const navigate = useNavigate()
   const flowTone = mainFlowYi == null ? null : mainFlowYi >= 0 ? 'bull' : 'bear'
   // v0.4.7: 数字滚动动画
   const flowAnim = useCountUp(mainFlowYi)
   const amountAnim = useCountUp(amountYi)
+
+  // 情绪周期: 失败 → 显式"加载失败"; 数据源明确无数据 → '--' + 后端 note 原文做悬停说明
+  const phaseFailed = !!phase.error
+  const phaseValue = phaseFailed
+    ? FAIL_TEXT
+    : phase.loading && !phase.label && !phase.unavailableNote
+      ? '…'
+      : phase.label || '--'
+  const phaseTitle = phaseFailed ? `情绪周期数据加载失败: ${phase.error}` : phase.unavailableNote || undefined
 
   return (
     <div className="card grid grid-cols-3 divide-x divide-border/40 md:grid-cols-6">
@@ -124,10 +139,10 @@ export default function KpiBand({
       />
       <Cell
         label="主力净流入"
-        value={flowAnim == null ? '--' : `${mainFlowYi! >= 0 ? '+' : ''}${flowAnim.toFixed(0)}亿`}
+        value={flowAnim == null ? '--' : `${mainFlowYi! >= 0 ? '+' : ''}${safeFixed(flowAnim, 0)}亿`}
         tone={flowTone as 'bull' | 'bear' | null}
       />
-      <Cell label="两市成交额" value={amountAnim == null ? '--' : `${amountAnim.toFixed(0)}亿`} />
+      <Cell label="两市成交额" value={amountAnim == null ? '--' : `${safeFixed(amountAnim, 0)}亿`} />
       <button
         type="button"
         className="cursor-pointer text-left transition-colors hover:bg-accent/20"
@@ -140,8 +155,9 @@ export default function KpiBand({
               <Activity className="h-3 w-3" />情绪周期
             </span>
           }
-          value={phaseLoading ? '…' : phaseLabel || '--'}
+          value={phaseFailed ? <span className={FAIL_CLS}>{phaseValue}</span> : phaseValue}
           tone="accent"
+          title={phaseTitle}
         />
       </button>
       <button
@@ -156,90 +172,145 @@ export default function KpiBand({
               <Crown className="h-3 w-3" />主线 Top1
             </span>
           }
-          value={mainlineLoading ? '…' : mainlineTop1?.name || '--'}
+          value={
+            mainlineError ? (
+              <span className={FAIL_CLS}>{FAIL_TEXT}</span>
+            ) : mainlineLoading ? (
+              '…'
+            ) : (
+              mainlineTop1?.name || '--'
+            )
+          }
           sub={mainlineTop1 ? `涨停${mainlineTop1.limit_up_count}家 · 高度${mainlineTop1.max_boards}板` : undefined}
           tone="accent"
+          title={mainlineError ? `主线数据加载失败: ${mainlineError}` : undefined}
         />
       </button>
       {/* v0.4.7: 涨停/跌停 + 封板率(数据来自 /market/phase) */}
       <Cell
         label="涨停 / 跌停"
+        title={phaseFailed ? `涨停家数加载失败: ${phase.error}` : LIMIT_DOWN_MISSING_TITLE}
         value={
-          <>
-            <span className="text-stock-up">{limitUp ?? '--'}</span>
-            <span className="mx-0.5 text-muted-foreground">/</span>
-            <span className="text-stock-down">{limitDown ?? '暂无'}</span>
-          </>
+          phaseFailed ? (
+            <span className={FAIL_CLS}>{FAIL_TEXT}</span>
+          ) : (
+            <>
+              <span className="text-stock-up">{phase.limitUp ?? '--'}</span>
+              <span className="mx-0.5 text-muted-foreground">/</span>
+              <span className="text-stock-down">--</span>
+            </>
+          )
         }
-        sub={sealRate != null ? `封板率 ${(sealRate * 100).toFixed(0)}%` : undefined}
+        sub={phase.sealRate != null ? `封板率 ${safeFixed(phase.sealRate * 100, 0)}%` : undefined}
       />
     </div>
   )
 }
 
-/** 轻量拉取 phase 当前阶段标签(KpiBand 用; 完整卡在 MarketPhaseCard) */
+/** /api/market/phase 响应(前端只取本卡需要的字段) */
+export interface PhaseResp {
+  available: boolean
+  current: { label: string; ge2_count: number | null; first_board: number | null; seal_rate: number | null } | null
+  note?: string | null
+}
+
+/** 轻量拉取 phase 当前阶段标签(KpiBand 用; 完整卡在 MarketPhaseCard)
+ *
+ *  三态显式区分(2026-09-14 首页走查 ①②):
+ *   - error 非空   = 拉取失败 → 渲染"加载失败"(绝不塌成 '--' 缺值态)
+ *   - available=false = 数据源明确无数据 → '--' + unavailableNote(后端 note 原文, 不本地编造原因)
+ *   - 其余 = 正常值
+ */
 export interface PhaseKpi {
   label: string | null
   loading: boolean
+  error: string | null
+  unavailableNote: string | null
   limitUp: number | null
-  limitDown: number | null
   sealRate: number | null
+  reload: () => void
 }
 export function usePhaseLabel(): PhaseKpi {
   const [label, setLabel] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [unavailableNote, setUnavailableNote] = useState<string | null>(null)
   const [limitUp, setLimitUp] = useState<number | null>(null)
-  const [limitDown] = useState<number | null>(null)
   const [sealRate, setSealRate] = useState<number | null>(null)
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      try {
-        const res = await fetchAPI<{
-          available: boolean
-          current: { label: string; ge2_count: number | null; first_board: number | null; seal_rate: number | null } | null
-        }>('/market/phase')
-        if (!alive) return
-        setLabel(res?.current?.label ?? null)
-        // 涨停≈首板+≥2板(当日入池口径), 跌停接口无 — 显式 null 不编造
-        const cur = res?.current
-        if (cur) {
-          setLimitUp((cur.first_board ?? 0) + (cur.ge2_count ?? 0))
-          setSealRate(cur.seal_rate)
-        }
-      } catch {
-        /* 静默 — KPI 格显示 -- */
-      } finally {
-        if (alive) setLoading(false)
+  const aliveRef = useRef(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetchAPI<PhaseResp>('/market/phase', { cacheMode: 'reload' })
+      if (!aliveRef.current) return
+      const cur = res?.available ? res.current : null
+      if (cur) {
+        setLabel(cur.label ?? null)
+        // 涨停≈首板+≥2板(当日入池口径); 跌停该接口无此字段 → 由 Cell 用 '--' 表示缺值
+        setLimitUp((cur.first_board ?? 0) + (cur.ge2_count ?? 0))
+        setSealRate(cur.seal_rate)
+        setUnavailableNote(null)
+      } else {
+        setLabel(null)
+        setLimitUp(null)
+        setSealRate(null)
+        // 后端自己的 note 原样透传(如"尚未同步阶段数据…"), 不在前端编造原因
+        setUnavailableNote(res?.note || '阶段数据源暂无数据')
       }
-    })()
-    return () => {
-      alive = false
+    } catch (e) {
+      if (!aliveRef.current) return
+      setLabel(null)
+      setLimitUp(null)
+      setSealRate(null)
+      setError(e instanceof Error ? e.message : '加载失败')
+    } finally {
+      if (aliveRef.current) setLoading(false)
     }
   }, [])
-  return { label, loading, limitUp, limitDown, sealRate }
+
+  useEffect(() => {
+    aliveRef.current = true
+    void load()
+    return () => {
+      aliveRef.current = false
+    }
+  }, [load])
+
+  return { label, loading, error, unavailableNote, limitUp, sealRate, reload: load }
 }
 
 
 /** 轻量拉取主线 Top1(KpiBand 用; 完整榜在 MarketMainlineCard) */
-export function useMainlineTop1(): { top: MainlineTop1 | null; loading: boolean } {
+export interface MainlineKpi {
+  top: MainlineTop1 | null
+  loading: boolean
+  error: string | null
+}
+export function useMainlineTop1(): MainlineKpi {
   const [top, setTop] = useState<MainlineTop1 | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
+    aliveRef.current = true
     void (async () => {
       try {
-        const res = await fetchAPI<{ ranked_groups: MainlineTop1[] }>("/market/mainline")
-        if (alive) setTop(res?.ranked_groups?.[0] ?? null)
-      } catch {
-        /* 静默 */
+        const res = await fetchAPI<{ ranked_groups: MainlineTop1[] }>('/market/mainline')
+        if (!aliveRef.current) return
+        setTop(res?.ranked_groups?.[0] ?? null)
+        setError(null)
+      } catch (e) {
+        // 失败不再静默: 由 KpiBand 渲染"加载失败", 与 '--' 缺值态区分
+        if (aliveRef.current) setError(e instanceof Error ? e.message : '加载失败')
       } finally {
-        if (alive) setLoading(false)
+        if (aliveRef.current) setLoading(false)
       }
     })()
     return () => {
-      alive = false
+      aliveRef.current = false
     }
   }, [])
-  return { top, loading }
+  return { top, loading, error }
 }

@@ -127,6 +127,57 @@ describe('BoardHeatmap 板块热力图', () => {
     mocks.fetchAPI.mockResolvedValue({ type: 'industry', trade_date: null, count: 0, items: [] })
     render(<BoardHeatmap onOpenBoard={vi.fn()} />)
     expect(await screen.findByText('暂无板块数据（等待每日同步）')).toBeTruthy()
+    // 空列表不许画一张空图(静默空白画布是缺陷本体)
+    expect(mocks.setOption).not.toHaveBeenCalled()
+  })
+
+  // 2026-09-14 缺陷修复(生产截图: 默认「面积:量能」整块空白且无任何说明):
+  // 后端整批 volume=0 / change_pct=-100 的载荷下, 量能视图必须显式说明而不是留白。
+  it('量能视图: 全部板块成交额缺失/为 0 → 显式空态 + 不给画布(不是静默空白)', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      type: 'industry',
+      trade_date: '2026-09-11',
+      count: 2,
+      items: [
+        { block_code: 'BK1', name: '半导体', board_type: 'industry', change_pct: -100, fund_net: null, volume: 0, date: '2026-09-11', has_daily: false },
+        { block_code: 'BK2', name: '白酒', board_type: 'industry', change_pct: -100, fund_net: null, volume: null, date: '2026-09-11', has_daily: false },
+      ],
+    })
+    render(<BoardHeatmap onOpenBoard={vi.fn()} />)
+    const empty = await screen.findByTestId('heatmap-no-volume')
+    expect(empty.textContent).toContain('成交额全部缺失')
+    expect(empty.textContent).toContain('已停绘')
+    // 没有画布(没有"静默空白灰框"), 也没有对全 0 面积调 setOption
+    expect(screen.queryByTestId('heatmap-canvas')).toBeNull()
+    expect(mocks.setOption).not.toHaveBeenCalled()
+  })
+
+  it('量能视图空态可以一键切到「面积:等权」并恢复出图(信息不丢)', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      type: 'industry',
+      trade_date: '2026-09-11',
+      count: 1,
+      items: [
+        { block_code: 'BK1', name: '半导体', board_type: 'industry', change_pct: 1.5, fund_net: null, volume: 0, date: '2026-09-11', has_daily: false },
+      ],
+    })
+    render(<BoardHeatmap onOpenBoard={vi.fn()} />)
+    await screen.findByTestId('heatmap-no-volume')
+
+    fireEvent.click(screen.getByText('切换面积:等权'))
+    expect(await screen.findByTestId('heatmap-canvas')).toBeTruthy()
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    const cells = lastTreemapData()
+    expect(cells).toHaveLength(1)
+    expect(cells[0].value).toBeGreaterThan(0)
+  })
+
+  it('量能视图: 有可用成交额时照常出图(空态不误伤)', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<BoardHeatmap onOpenBoard={vi.fn()} />)
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    expect(screen.getByTestId('heatmap-canvas')).toBeTruthy()
+    expect(screen.queryByTestId('heatmap-no-volume')).toBeNull()
   })
 
   it('实时模式: 实时标注 + 异动清单 + 异动块警示环 + 点击下钻', async () => {
