@@ -7,6 +7,21 @@
 
 ## 2026-09-14
 
+### fix(ui): 个人中心「账号/角色/注册时间」拉取失败不再铺一排 `--`
+
+**性质**: 单页前端(`src/pages/Profile.tsx`) + 1 个钉住用例文件; 无接口契约变更、无后端改动。不部署、不重启容器。
+
+- **缺陷(2026-09-14 生产 UI 走查 B)**: 个人中心「安全中心 → 当前账号」三行(账号 / 角色 / 注册时间)恒显 `--`。
+- **先判形状再定性(按要求两选一查证)**: 该块读的是 `GET /api/profile`, 不是 `/api/auth/me`。两条路都读过:
+  - 信封: `src/web/response.py:63-100` 对 2xx 统一包成 `{code,success,data,message}`; `fetchAPI`(`packages/api/src/client.ts:135-147`)返回 `body.data`。`/api/auth/me` 的 data 是 `{user:{...}}`(`src/web/api/auth.py:536-538`), 但**本页没打这个端点**。
+  - 本页端点: `GET /api/profile`(`src/web/api/profile.py:200-203`)直接 `return _profile_to_dict(user)`, 字段名与 `ProfileInfo` 一一对应(缺 `user` 包裹层 ⇒ **不存在"读错层级"的 shape 错误**)。
+  - ⇒ 定性为 **(b) 被吞掉的拉取失败**: `useApiQuery` 的 error 只进了 `useEffect` 里的一次性 toast(5s 后消失), 页面随后照常渲染, 三个字段全走 `|| '--'` 兜底 ⇒ 用户看到一面 `--` 墙, 分不清"没拉到"和"本来就是空的"。
+- **修法**: 取 `useQuery` 的 `refetch`/`isFetching`; 「当前账号」块在 `profileError && !profile` 时渲染 `role="alert"` 的显式故障态 —— 文案 `账号信息加载失败: {profileError.message}`(**后端/传输层原文透传, 不在前端编造原因**) + 「重试」按钮; 只有拿到 profile 时才渲染三行真值。已登录用户的 username/role/created_at 恒存在, 这里**没有合法空态**, 故不保留任何 `--` 兜底展示路径。
+- **钉住**: `frontend/tests/components/profile-account-failure.test.tsx` 3 例(失败态可见且三个字段标签**不出现**、点重试成功回到真值、成功路径日期非 `--`)。**变异验证**: 把故障态分支短路(恒走三行) ⇒ 前 2 例红、成功路径例仍绿(已实测并复原)。
+- **未能验证**: 盘中后端间歇 stall(同一端点先 200 后 500), **未做真接口复验**; 失败分支由单测 + 代码路径钉住。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / `UI-RULES OK` / vitest 全绿(本批 +3 例)。
+- [commit 待回填]
+
 ### fix(board): 热力图全市场 -100% 假暴跌 —— 0 价/0 量按「无数据」处理
 
 **性质**: 单文件后端守卫 + 5 条钉住用例。**需重启后端容器生效**(纯 Python 改动)。
@@ -38,7 +53,8 @@
 - **钉住**: `frontend/tests/components/dashboard-phase-honesty.test.tsx` 13 例(failure ≠ empty 的否定断言、note 原文透传、跌停不再出现"暂无"、154px 空态、Top10 限高)。**变异验证**: 把 ① 的失败态改回 `--` ⇒ 恰好 1 例红, 其余仍绿(已实测并复原)。
 - **未能验证**: 2026-09-14 盘中后端间歇 stall, 未做真接口复验(失败/`available:false` 两条分支靠单测钉); ④ 属视觉布局, 本机无浏览器(前后端不可用) ⇒ **未做像素测量**, 结论由布局代码推出, 需走查截图复核。
 - **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / `UI-RULES OK` / vitest 全绿(本批 +13 例)。
-- [commit 待回填]
+- **注**: 本条 changelog 文本被并发会话一起带进了前一个 commit(`cbf711a` 的 stat 里含 35 行 CHANGELOG), 故本条目归属的代码 commit 是 `1a83cc1`(代码+用例), 文本在 `cbf711a` 落地。
+- [commit 1a83cc1]
 
 ### fix(darkfund): 暗盘 TOP 榜 .tck 对照列全空即隐藏 + 金额口径从「元」改回「万元」(11.68亿 曾被显示成 11.68万)
 
