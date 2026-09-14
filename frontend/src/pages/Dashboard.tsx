@@ -595,13 +595,10 @@ export default function DashboardPage() {
         downCount={marketFlow?.down_count ?? null}
         mainFlowYi={marketFlow?.total_main_flow ?? null}
         amountYi={marketFlow?.total_amount ?? null}
-        phaseLabel={phaseKpi.label}
-        phaseLoading={phaseKpi.loading}
+        phase={phaseKpi}
         mainlineTop1={mainlineKpi.top}
         mainlineLoading={mainlineKpi.loading}
-        limitUp={phaseKpi.limitUp}
-        limitDown={phaseKpi.limitDown}
-        sealRate={phaseKpi.sealRate}
+        mainlineError={mainlineKpi.error}
       />
       </div>
       )}
@@ -1214,34 +1211,93 @@ export default function DashboardPage() {
 }
 
 
-/** v0.4.7: 市场温度卡 — 拉 /market/phase 喂 SentimentGauge(30s 轮询) */
-function PhaseGaugeCard() {
-  const [phaseData, setPhaseData] = useState<{ phase: string; label: string; max_height: number | null; promo_rate: number | null; seal_rate: number | null } | null>(null)
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<{ available: boolean; current: { phase: string; label: string; max_height: number | null; promo_rate: number | null; seal_rate: number | null } | null }>('/market/phase')
-        if (alive && res?.available && res.current) setPhaseData(res.current)
-      } catch { /* 静默 */ }
+/** v0.4.7: 市场温度卡 — 拉 /market/phase 喂 SentimentGauge(30s 轮询)
+ *
+ *  2026-09-14 首页走查 ③④: 原实现 catch 静默 + phaseData 恒 null → 永久显示
+ *  "阶段数据同步中…"(本地编造的原因, 后端并未在同步), 右列始终是 140px 假占位,
+ *  同排 3 列网格的行高由市场主线 Top-N 决定 → 卡下方留下大块死白。
+ *  现按三态渲染且各态都占满一个仪表盘高度(154px), 行高不再被塌陷的占位拖垮:
+ *   - loading      = 真正在拉取(仅首次, 30s 轮询不闪)
+ *   - ready        = 仪表盘(轮询失败时保留旧值 + 显式标注"本次刷新失败")
+ *   - unavailable  = 后端 available:false, note 原文透传(如"尚未同步阶段数据…")
+ *   - error        = 拉取失败, 显式失败文案 + 重试
+ */
+type PhaseGaugeData = { phase: string; label: string; max_height: number | null; promo_rate: number | null; seal_rate: number | null }
+type PhaseGaugeResp = { available: boolean; current: PhaseGaugeData | null; note?: string | null }
+type PhaseGaugeState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; data: PhaseGaugeData; refreshError: string }
+  | { kind: 'unavailable'; note: string }
+  | { kind: 'error'; message: string }
+/** 仪表盘与各态占位共用高度: 空/失败态也占满一格, 不留死白也不跳版 */
+const GAUGE_BOX_CLS = 'flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground'
+
+/** 导出供单测覆盖三态(失败不得渲染成"无数据"/不得常驻"同步中") */
+export function PhaseGaugeCard() {
+  const [state, setState] = useState<PhaseGaugeState>({ kind: 'loading' })
+  const aliveRef = useRef(true)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchAPI<PhaseGaugeResp>('/market/phase', { cacheMode: 'reload' })
+      if (!aliveRef.current) return
+      if (res?.available && res.current) {
+        setState({ kind: 'ready', data: res.current, refreshError: '' })
+      } else {
+        // 后端自己的说明原文, 不在前端编造"同步中"之类原因
+        setState({ kind: 'unavailable', note: res?.note || '阶段数据源暂无数据' })
+      }
+    } catch (e) {
+      if (!aliveRef.current) return
+      const msg = e instanceof Error ? e.message : '加载失败'
+      // 已拿到过数据 → 保留旧值并显式标注本次刷新失败; 从未拿到 → 显式失败态(不伪装成无数据)
+      setState((prev) => (prev.kind === 'ready' ? { ...prev, refreshError: msg } : { kind: 'error', message: msg }))
     }
+  }, [])
+
+  useEffect(() => {
+    aliveRef.current = true
     void load()
     const t = window.setInterval(() => void load(), 30000)
-    return () => { alive = false; window.clearInterval(t) }
-  }, [])
+    return () => {
+      aliveRef.current = false
+      window.clearInterval(t)
+    }
+  }, [load])
+
   return (
     <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
         <span className="text-[13px] font-semibold">市场温度</span>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
-      {phaseData ? (
-        <SentimentGauge
-          phase={phaseData.phase}
-          metrics={{ max_height: phaseData.max_height, promo_rate: phaseData.promo_rate, seal_rate: phaseData.seal_rate }}
-        />
+      {state.kind === 'ready' ? (
+        <>
+          {state.refreshError && (
+            <div className="mb-1 text-[10px] text-amber-600 dark:text-amber-500">
+              本次刷新失败: {state.refreshError} — 仍展示上次成功数据
+            </div>
+          )}
+          <SentimentGauge
+            phase={state.data.phase}
+            metrics={{ max_height: state.data.max_height, promo_rate: state.data.promo_rate, seal_rate: state.data.seal_rate }}
+          />
+        </>
+      ) : state.kind === 'loading' ? (
+        <div className={GAUGE_BOX_CLS}>阶段数据加载中…</div>
+      ) : state.kind === 'error' ? (
+        <div className={`${GAUGE_BOX_CLS} flex-col gap-2`}>
+          <span>市场温度加载失败: {state.message}</span>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary hover:bg-accent/30"
+          >
+            重试
+          </button>
+        </div>
       ) : (
-        <div className="flex h-[140px] items-center justify-center text-[11px] text-muted-foreground">阶段数据同步中…</div>
+        <div className={GAUGE_BOX_CLS}>市场温度暂不可用: {state.note}</div>
       )}
     </div>
   )

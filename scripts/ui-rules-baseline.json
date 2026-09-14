@@ -5,7 +5,7 @@
   "frontend/packages/biz-ui/src/components/DarkFlowCards.tsx": 5,
   "frontend/packages/biz-ui/src/components/DecisionPioneerCard.tsx": 5,
   "frontend/packages/biz-ui/src/components/InteractiveKline.tsx": 25,
-  "frontend/packages/biz-ui/src/components/KpiBand.tsx": 4,
+  "frontend/packages/biz-ui/src/components/KpiBand.tsx": 1,
   "frontend/packages/biz-ui/src/components/MainFlowCompareCard.tsx": 3,
   "frontend/packages/biz-ui/src/components/MarketMainlineCard.tsx": 3,
   "frontend/packages/biz-ui/src/components/MarketPhaseCard.tsx": 3,

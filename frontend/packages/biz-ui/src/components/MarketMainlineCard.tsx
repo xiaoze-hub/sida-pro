@@ -300,7 +300,10 @@ export default function MarketMainlineCard() {
       ) : null}
 
       {/* 主线列表 */}
-      <div className="space-y-1">
+      {/* 2026-09-14 首页走查 ④: 本卡在同排 3 列「市场全景」里是最长的一列(Top10 行),
+          行高会被它顶到其它两列内容的 2 倍以上 → 卡下方留下大块死白。
+          lg 起限制可视高度(内部滚动), 让同排行高与情绪/温度卡同量级。 */}
+      <div className="space-y-1 lg:max-h-[300px] lg:overflow-y-auto">
         {top.map((g) => {
           const key = `${g.name}`
           return (

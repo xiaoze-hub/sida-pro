@@ -188,6 +188,34 @@ export default function MarketPhaseCard() {
     )
   }
 
+  // 数据源明确"暂无阶段数据"(available:false): 披露后端 note 原文,
+  // 不再用 phaseStyle 兜底渲染"积累中"大字 —— 那会把"没有数据"伪装成一个真实阶段。
+  if (data && !data.available) {
+    return (
+      <div className="border-t border-border/60 pt-2.5">
+        <SectionHeader
+          title="情绪周期阶段"
+          action={
+            <button
+              type="button"
+              title="刷新"
+              onClick={() => {
+                setLoading(true)
+                void load()
+              }}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          }
+        />
+        <div className="flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground">
+          暂无阶段数据: {data.note || '--'}
+        </div>
+      </div>
+    )
+  }
+
   const cur = data?.current ?? null
   const recent = (data as MarketPhaseResp & { recent_days?: MarketPhaseDay[] })?.recent_days ?? data?.recent_30d ?? []
   const dist = data?.distribution ?? []
