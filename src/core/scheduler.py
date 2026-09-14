@@ -30,8 +30,17 @@ class AgentScheduler:
         # M7(2026-09-10): 用户桶解析器(见 set_user_bucket_resolver)
         self.user_bucket_resolver: Callable[[str], list[str | None]] | None = None
 
-    def set_context_builder(self, builder: Callable[[str], AgentContext]):
-        """设置 context 构建函数（每次执行时动态构建）"""
+    def set_context_builder(
+        self, builder: Callable[..., AgentContext]
+    ):
+        """设置 context 构建函数（每次执行时动态构建）。
+
+        契约: 调用形如 `builder(agent_name, uid)` —— **第二个位置参数是 user_id(UUID)**。
+        接线方必须把 uid 送进 user_id, **不能**直接暴露 `build_context`(它的第 2 形参是
+        `stock_agent_id`, 会把 UUID 喂给 `StockAgent.id` 而崩) —— 生产事故见
+        `src/bootstrap/runtime.py::_scheduled_context_builder` 头注。
+        `_build_contexts` 对"旧签名(builder 只吃 agent_name)"留了 TypeError 兜底。
+        """
         self.context_builder = builder
 
     def set_user_bucket_resolver(self, resolver: Callable[[str], list[str | None]]):

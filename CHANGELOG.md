@@ -7,6 +7,42 @@
 
 ## 2026-09-14
 
+### fix(sched): 盘中监测每轮调度都崩 —— uid 串位到 `stock_agent_id`(潜伏 4 天的 P0)
+
+**性质**: 两处后端小改(`src/bootstrap/runtime.py` 接线 + `src/core/scheduler.py` 类型标注) + **需重启生效**(改的是启动期 scheduler 接线)。
+
+- **症状**(老板指出"盘中监测也要修"后查证): `intraday_monitor` **每 3 分钟一次的调度全部失败**。`agent_runs` 里累计 **464 条 failed**(另有 1439 条 success, 早期/手动路径)。错误:
+  ```
+  (psycopg2.errors.InvalidTextRepresentation) invalid input syntax for type integer:
+  "3a5a119b-125c-4946-9cd1-099c63a6367d"
+  LINE 3: WHERE stock_agents.id = '3a5a119b-...'
+  ```
+  而 `stock_agents.id` 是 **integer** —— 那个 UUID 是 **admin 的 user id**。
+- **根因**: v0.5.37(`eadb6f2` "定时/手动 Agent 多用户隔离 + 盘前简报重复推送(M7)") 的接线:
+  ```python
+  # runtime.py(事故版)
+  sched.set_context_builder(build_context)          # ← 裸函数交出去
+  # scheduler.py
+  ctx = self.context_builder(agent_name, uid)        # ← 位置传参, 第 2 个是 user_id(UUID)
+  # runtime.py
+  def build_context(agent_name, stock_agent_id=None, user_id=_UNSET)   # ← 第 2 形参却是 stock_agent_id
+  ```
+  ⇒ UUID 落进 `stock_agent_id` ⇒ `resolve_ai_model`/`resolve_notify_channels` 拿它去
+  `WHERE stock_agents.id = '<uuid>'` 崩。**时间线完全吻合**: 该错误首现 `2026-09-10 09:21`, 正是 M7 上线当天。
+- **为什么潜伏 4 天没被门禁/告警抓住**:
+  ① `_build_contexts` 只 `except TypeError` 兜底"旧签名", 而这是 **psycopg2 错误** ⇒ 兜不住, 直接冒泡到 `_run_agent` 的 except, 只写一条 `agent_runs(status=failed)` 就结束了 —— **没有通知、页面也不报错**(它只是看起来"没出建议");
+  ② 老板此前看到的"最近失败: 5"就是它的尾巴, 但**失败数是累计聚合**, 看不出"是同一个原因一直挂"。
+- **连带后果(比崩溃更隐蔽)**: `user_id` 停在 `_UNSET` ⇒ **M7 的多用户隔离根本没生效** —— 自选/持仓/通知渠道从未按用户收敛, 即 M7 想修的那个"多账号互相干扰"问题**一直在**。这次一并修好(适配层把 uid 送进 `user_id`)。
+- **修法**: 新增具名适配层 `runtime._scheduled_context_builder(agent_name, user_id=None)` →
+  `build_context(agent_name, user_id=user_id)`, 接线改用它; `stock_agent_id` 恒为 `None`
+  (定时运行不属于某个具体绑定, 本就不该传)。同时把 `set_context_builder` 那条**写错的类型标注**
+  (`Callable[[str], ...]`, 与实际两参调用不符)改正并写明"第 2 个位置参数是 user_id, 不能直接暴露 build_context"。
+- **影响面**: 所有走调度器且 `execution_mode == 'single'` 的 Agent 都受影响(盘中监测是其中之一); 批量模式走另一分支未受此串位影响, 这解释了"为什么只有部分 agent 挂"。
+- **钉住(4 例, 新增 `tests/test_scheduler_context_builder_contract.py`)**: ① 适配层把第 2 位置参送进 `user_id` 且 `stock_agent_id is None`; ② 无 uid 时能按单参调用; ③ **前提守卫** —— 断言 `build_context` 第 2 形参仍是 `stock_agent_id`(若将来签名顺序变了, 本文件的前提失效, 逼人重审适配层是否还需要); ④ **接线守卫** —— `build_scheduler()` 接的必须是适配层而非裸 `build_context`(只测适配层发现不了"接线又换回去")。
+- **变异验证**: 把接线换回裸 `build_context`(事故原状) ⇒ **恰好**第 ④ 条变红、其余 3 条绿; 还原后 4/4 绿。
+- **门禁**: 后端 `pytest -m "not network"` **2311 passed / 0 failed / 5 skipped**(基线 2307, 净 +4 = 本文件)。
+
+
 ### release-v0.6.3: 全站走查修复批次 + 开盘日志噪音治理(含后端改动 ⇒ 需重启)
 
 **性质**: 后端 1 处(日志治理) + 前端 8 处。**含后端改动 ⇒ 走覆盖层 + dist + 重启**(不能再只换静态面)。重启前已确认容器内无 nohup 回填在跑(回填已完成 5822/5827), 并按约定做了改动前备份。

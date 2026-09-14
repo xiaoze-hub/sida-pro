@@ -511,13 +511,31 @@ def build_context(
 
 
 
+def _scheduled_context_builder(agent_name: str, user_id: str | None = None) -> AgentContext:
+    """调度器 context_builder 适配层: `(agent_name, uid)` → `build_context(..., user_id=uid)`。
+
+    **为什么必须适配而不是直接把 `build_context` 交出去**(2026-09-10~14 生产事故):
+    `AgentScheduler._build_contexts` 按 `self.context_builder(agent_name, uid)` **位置传参**，
+    而 `build_context` 的第 2 个形参是 **`stock_agent_id`** —— 于是 UUID 落进 stock_agent_id，
+    `resolve_ai_model`/`resolve_notify_channels` 拿它去 `WHERE stock_agents.id = '<uuid>'`
+    ⇒ `psycopg2.errors.InvalidTextRepresentation: invalid input syntax for type integer`；
+    同时 `user_id` 保持 `_UNSET` ⇒ **M7 的多用户隔离根本没生效**(自选/持仓/通知渠道没收敛到本人)。
+    `_build_contexts` 里那个 `except TypeError` 兜底接不住这个错(它是 psycopg2 错, 不是 TypeError),
+    所以表现为**每轮调度都失败**且静默只在 agent_runs 里留痕。
+
+    定时运行本身不属于某一个 `StockAgent` 绑定, 故 `stock_agent_id` 恒为 `None`(不动)。
+    """
+    return build_context(agent_name, user_id=user_id)
+
+
 def build_scheduler() -> AgentScheduler:
     """构建调度器并注册已启用的 Agent"""
     settings = Settings()
     sched = AgentScheduler(timezone=settings.app_timezone)
 
     # 设置 context 构建函数（每次执行时动态获取最新配置）
-    sched.set_context_builder(build_context)
+    # 注意: 必须走适配层, 不能让 uid 串位到 stock_agent_id —— 见 `_scheduled_context_builder` 头注。
+    sched.set_context_builder(_scheduled_context_builder)
     # M7(2026-09-10 多用户隔离): 按绑定标的归属把 agent 拆成"每用户一次"执行
     sched.set_user_bucket_resolver(agent_user_buckets)
 
