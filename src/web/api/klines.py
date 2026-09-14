@@ -1,6 +1,5 @@
 import logging
 
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
 import time as _time
@@ -532,13 +531,16 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
             # thsdk 实时快照带重试退避, 行情服务不通时单次可卡 30s(实测 -6 超时),
             # 三轮退避就是 90s, 会把 summary 接口拖到反代超时。加硬超时护栏:
             # 超时即放弃并显式"无数据", 绝不阻塞主链路。
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                # fetch_snapshot 需 thsdk 代码(USZA/USHA), 不是腾讯 sz/sh 风格
-                fut = ex.submit(obe.fetch_snapshot, obe.to_ths_code(symbol) or "")
-                try:
-                    snap = fut.result(timeout=ORDERBOOK_TIMEOUT_S)
-                except Exception:  # noqa: BLE001  # 含 TimeoutError / thsdk 异常
-                    snap = None
+            # 2026-09-18: 走共享硬超时(并发槽+wait=False)。此前
+            # `with ThreadPoolExecutor(max_workers=1)` 在 result(timeout) 超时后
+            # 仍会 shutdown(wait=True) 等挂死线程, 硬超时形同虚设。
+            from src.core.thsdk_breaker import call_with_hard_timeout
+
+            snap = call_with_hard_timeout(
+                lambda: obe.fetch_snapshot(obe.to_ths_code(symbol) or ""),
+                default=None,
+                timeout_s=ORDERBOOK_TIMEOUT_S,
+            )
             out["orderbook"] = obe.order_book_queue(snap)
     except Exception as e:  # noqa: BLE001
         logger.debug("orderbook %s failed: %s", symbol, e)
@@ -715,14 +717,18 @@ def _build_events(symbol: str, bars: list[dict]) -> list[dict]:
         logger.debug(".tck 事件 %s failed: %s", symbol, e)
 
     # (3) 龙虎榜 / 公告(wencai)—— 加硬超时, 行情服务不通时不拖垮接口
+    # 2026-09-18: 同上, 走共享硬超时护栏(防 with-TPE 超时后仍等挂死线程)
     try:
+        from src.core.thsdk_breaker import call_with_hard_timeout
+
         today = datetime.now().strftime("%Y-%m-%d")
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_wencai_event_pairs, symbol, today)
-            try:
-                events.extend(fut.result(timeout=WENCAI_TIMEOUT_S))
-            except Exception:  # noqa: BLE001  # 含 TimeoutError / thsdk 异常
-                pass
+        pairs = call_with_hard_timeout(
+            lambda: _wencai_event_pairs(symbol, today),
+            default=None,
+            timeout_s=WENCAI_TIMEOUT_S,
+        )
+        if pairs:
+            events.extend(pairs)
     except Exception as e:  # noqa: BLE001
         logger.debug("wencai 事件 %s failed: %s", symbol, e)
 

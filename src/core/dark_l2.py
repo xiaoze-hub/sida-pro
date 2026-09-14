@@ -294,8 +294,6 @@ def _query_thsdk(method_name: str, code: str, timeout_s: float = THS_CALL_TIMEOU
     """
     import os as _os
     import time as _time
-    from concurrent.futures import ThreadPoolExecutor
-    from concurrent.futures import TimeoutError as FuturesTimeout
 
     _os.environ.setdefault("PYTHONUTF8", "1")
     try:
@@ -327,15 +325,21 @@ def _query_thsdk(method_name: str, code: str, timeout_s: float = THS_CALL_TIMEOU
         if attempt > 0:
             _time.sleep(1.0 * (2 ** (attempt - 1)))
         try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_call_once)
-                try:
-                    return fut.result(timeout=timeout_s)
-                except FuturesTimeout:
-                    last_err = TimeoutError(
-                        f"thsdk.{method_name}({code}) 单次调用超时 {timeout_s}s")
-                except Exception as e:  # noqa: BLE001
-                    last_err = e
+            # 2026-09-18 并发治理: 走共享硬超时护栏(并发槽 + wait=False),
+            # 不再 `with ThreadPoolExecutor(max_workers=1)` —— 那个写法在
+            # fut.result(timeout) 超时后, 上下文退出时 shutdown(wait=True)
+            # 仍会等挂死线程结束, 硬超时形同虚设(线程膨胀主因之一)。
+            from src.core.thsdk_breaker import call_with_hard_timeout
+
+            sentinel = object()
+            result = call_with_hard_timeout(
+                _call_once, default=sentinel, timeout_s=timeout_s,
+                acquire_timeout_s=5.0,
+            )
+            if result is not sentinel:
+                return result
+            last_err = TimeoutError(
+                f"thsdk.{method_name}({code}) 单次调用超时/并发槽满({timeout_s}s)")
         except Exception as e:  # noqa: BLE001
             last_err = e
     raise RuntimeError(f"thsdk.{method_name}({code}) 失败/超时 3 次: {str(last_err)[:100]}")
