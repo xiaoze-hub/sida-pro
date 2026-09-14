@@ -137,7 +137,10 @@ export function AccountsSection() {
         {expandedAccounts.has(account.id) && (
           <div className="border-t border-border/30">
             {account.positions.length === 0 ? (
-              <p className="text-[13px] text-muted-foreground text-center py-8">暂无持仓，点击 + 添加</p>
+              <div className="flex flex-col items-center gap-2 py-10 px-4">
+                <p className="text-[13px] text-muted-foreground">该账户暂无持仓</p>
+                <p className="text-[12px] text-muted-foreground/70">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
+              </div>
             ) : (
               <>
                 {/* Desktop Table */}
