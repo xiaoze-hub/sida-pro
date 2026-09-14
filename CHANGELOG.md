@@ -7,19 +7,22 @@
 
 ## 2026-09-18
 
-### fix(theme-mood): 题材情绪页整页空白 —— PG GROUP BY 补全列(500)
+### fix(theme-mood): 题材情绪页整页空白 —— PG GROUP BY 补全列 + OHLC 分批(500)
 
-**性质**: 后端 1 文件(`src/web/api/theme_mood.py`) + 1 例钉住。**需重启后端**。
+**性质**: 后端 1 文件(`src/web/api/theme_mood.py`) + 钉住用例。**需重启后端**。已热修生产。
 
-- **症状**: `/theme-mood` 榜单/矩阵/梯队全空; API `GET /api/theme-mood/board` **500**。
-- **根因**: 轮动补全查询 `SELECT block_code, block_name, block_type, MAX(trade_date) … GROUP BY block_code` —— SQLite 宽松可通过, **PG 严格模式 GroupingError**(非聚合列必须全部进 GROUP BY)。自迁 PG 后该路径未被盘中走查覆盖, 属方言分叉潜伏项。
-- **修法**: `GROUP BY block_code, block_name, block_type`; 同 code 多行时 Python 侧取 `last_d` 最新。
-- **钉住**: 源码断言 GROUP BY 含三列, 禁止回退到只 `GROUP BY block_code`。
-- **门禁**: 本文件 1/1; 全量 pytest 另跑。
+- **症状**: `/theme-mood` 榜单/矩阵/梯队全空。
+- **根因 1(500)**: 轮动补全查询 `GROUP BY block_code` 缺 `block_name/block_type` —— SQLite 宽松, **PG 严格 GroupingError**。
+- **根因 2(500)**: 梯队 `_read_ohlc` 对 20 日窗口 **1100+ 只**涨停股一次 `IN codes × IN dates`, 撞 PG `statement_timeout`(实测 8s)。
+- **修法**:
+  1. `GROUP BY block_code, block_name, block_type`; 同 code 多行 Python 取最新 `last_d`。
+  2. OHLC: 日期改 **BETWEEN 范围**(参数 20→2) + symbol **分批 200**; 失败/超时**不打 500**, 梯队继续无日K。
+- **钉住**: GROUP BY 三列源码断言; `_read_ohlc` 分批 200/200/100 用例; 旧 params 形状更新。
+- **验收**: `board` 200 / 517 items; `ladder` 200 / 20 days。相关 pytest **41/41**。
 
 [commit 待回填]
 
-### release-v0.6.6: UI 走查后续四项 —— phase 缓存 / 共振 Top20 / 工作台列高 / 通知折叠
+### fix(ui): phase 缓存 + 共振 Top20 + 工作台列高 + 通知 24h 折叠
 
 **性质**: 纯前端 5 文件。静态面部署, **不重启容器**。
 

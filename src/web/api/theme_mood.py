@@ -59,6 +59,10 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
     直接 IN 会因时区/格式不匹配而全空(v0.5.85 生产实测 with_candle=0) → 这里把入参转 ISO、
     用 CAST(ts AS date) 比较, 结果键再归一回紧凑格式。任一入参为空短路返回 {}。
     OHLC 任一为 None 的行丢弃(调用方落 candle=None, 不编)。
+
+    2026-09-18 性能: 梯队 20 日窗口可聚集 **1100+ 只**涨停股, 一次
+    `IN (1160 codes) × IN (20 dates)` 会撞 PG statement_timeout(实测 8s)→ 页面 500。
+    改为 ①日期改**范围** BETWEEN(参数从 20 降到 2) ②symbol **分批 200** 查询。
     """
     if not dates or not symbols:
         return {}
@@ -66,23 +70,28 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
 
     from src.db.session import engine
 
-    iso = [f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in dates]
+    iso = sorted(f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in dates)
     stmt = text(
         "SELECT ts, symbol, open, high, low, close, amount FROM klines "
-        "WHERE period = '1d' AND adjust = 'qfq' AND CAST(ts AS date) IN :dates AND symbol IN :codes"
-    ).bindparams(bindparam("dates", expanding=True), bindparam("codes", expanding=True))
+        "WHERE period = '1d' AND adjust = 'qfq' "
+        "AND CAST(ts AS date) BETWEEN :d0 AND :d1 AND symbol IN :codes"
+    ).bindparams(bindparam("codes", expanding=True))
+    out: dict = {}
+    codes_all = sorted(set(str(s) for s in symbols))
+    batch = 200
     with engine.begin() as conn:
-        raw = conn.execute(
-            stmt, {"dates": tuple(sorted(iso)), "codes": tuple(sorted(symbols))}
-        ).fetchall()
-    out = {}
-    for r in raw:
-        m = dict(r._mapping)
-        if None in (m["open"], m["high"], m["low"], m["close"]):
-            continue
-        out[(str(m["ts"])[:10].replace("-", ""), str(m["symbol"]))] = {
-            "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"],
-            "amount": m["amount"]}
+        for i in range(0, len(codes_all), batch):
+            chunk = tuple(codes_all[i:i + batch])
+            raw = conn.execute(
+                stmt, {"d0": iso[0], "d1": iso[-1], "codes": chunk}
+            ).fetchall()
+            for r in raw:
+                m = dict(r._mapping)
+                if None in (m["open"], m["high"], m["low"], m["close"]):
+                    continue
+                out[(str(m["ts"])[:10].replace("-", ""), str(m["symbol"]))] = {
+                    "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"],
+                    "amount": m["amount"]}
     return out
 
 
@@ -315,7 +324,12 @@ def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
     ladder = ladder_window(dates, events, names)
     marks = finalize_marks(dates, events)
     symbols = sorted({str(e["symbol"]) for e in events})
-    ohlc = _read_ohlc(dates, symbols)
+    try:
+        ohlc = _read_ohlc(dates, symbols)
+    except Exception as e:  # noqa: BLE001
+        # OHLC 只服务日K蜡烛标注, 超时/失败不得把整页打成 500
+        logger.warning("[theme-mood] OHLC 批量查询失败, 梯队继续无日K: %r", e)
+        ohlc = {}
     for day in ladder:
         for r in day["rows"]:
             r["stocks"] = attach_candles(
