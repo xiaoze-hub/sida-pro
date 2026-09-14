@@ -157,3 +157,17 @@ export function toAmountFromWan(wan: number | null | undefined, digits = 2): str
   if (Math.abs(wan) >= 1e4) return `${sign}${(Math.abs(wan) / 1e4).toFixed(digits)}亿`
   return `${sign}${Math.abs(wan).toFixed(digits)}万`
 }
+
+/**
+ * 万元口径的**无量值**(成交额/市值这类"规模"读数, 2026-09-14 暗盘 TOP 缺陷修复):
+ * 量级规则同 toAmountFromWan, 但**正数不加 '+'**(负号保留, 负数是有意义的读数, 不吞符号)。
+ * 成交额是"多少", 不是"涨跌多少", 带 '+' 会被读成变化量。
+ */
+export function toAmountFromWanUnsigned(wan: number | null | undefined, digits = 2): string {
+  const n = safeNum(wan)
+  if (n === null) return '--'
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1e4) return `${sign}${safeFixed(abs / 1e4, digits)}亿`
+  return `${sign}${safeFixed(abs, digits)}万`
+}

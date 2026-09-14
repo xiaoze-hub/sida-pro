@@ -24,9 +24,17 @@ import {
   type DarkFundTopUnavailable,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
-import { toWan } from '@/lib/format'
+import { safeFixed, toAmountFromWan, toAmountFromWanUnsigned } from '@/lib/format'
 
-/* toWan 统一走 @/lib/format(P3 收敛, 旧手抄版删除) */
+/*
+ * 万元口径收敛(2026-09-14 缺陷修复):
+ * - main_net_wan / total_amount_wan / tck_dark_net_wan 三个字段后端明确是**万元**
+ *   (packages/api/src/marketScan.ts:25/29/31 + src/core/dark_fund_scan.py:138-141)。
+ * - 旧代码误用 toWan(= toAmount, **元**口径, 内部再 /1e4): 116836.13(万元 = 11.68亿)
+ *   被渲染成 "11.68万", 小 10000 倍且单位错。
+ * - 现状: 主力净流入/暗盘净额是**有方向的净额** → toAmountFromWan(带符号);
+ *   总成交额是**规模量** → toAmountFromWanUnsigned(不带 +)。
+ */
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true
@@ -72,6 +80,17 @@ export default function DarkFundTopPage() {
   }, [data, sort])
   const sortMark = (key: 'main' | 'amount' | 'ratio') =>
     sort.key === key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''
+
+  /**
+   * .tck 暗盘对照列: 只有持仓股(且有 .tck 文件)才有数据。全榜都没有数据时
+   * **整列隐藏**而不是留一列 20 行 '-' —— 一个恒空的列在全市场榜单里是噪声,
+   * 读起来像坏了; 有数据时照旧展示(信息不丢, 列头明示口径范围)。
+   */
+  const hasTckData = useMemo(
+    () => (data && isSnapshot(data) ? (data.top || []).some((r) => r.tck_dark_net_wan != null) : false),
+    [data],
+  )
+  const rowCount = data && isSnapshot(data) ? (data.top?.length ?? 0) : 0
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -184,11 +203,18 @@ export default function DarkFundTopPage() {
                   <th
                     className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort('amount')}
-                    title="按总成交额排序"
+                    title="按总成交额排序(万元口径; 缺失为 --)"
                   >
                     总成交额(万/亿){sortMark('amount')}
                   </th>
-                  <th className="px-3 py-2 text-right font-medium">.tck 暗盘对照</th>
+                  {hasTckData ? (
+                    <th
+                      className="px-3 py-2 text-right font-medium"
+                      title="委托号级精确暗盘净额(万元): 仅持仓股且有 .tck 文件才有; 非持仓股显示 --"
+                    >
+                      .tck 暗盘对照<span className="font-normal text-muted-foreground">(仅持仓股)</span>
+                    </th>
+                  ) : null}
                   <th className="px-3 py-2 font-medium">数据源</th>
                 </tr>
               </thead>
@@ -218,31 +244,33 @@ export default function DarkFundTopPage() {
                           positive ? 'text-stock-up' : negative ? 'text-stock-down' : 'text-muted-foreground'
                         }`}
                       >
-                        {toWan(r.main_net_wan)}
+                        {toAmountFromWan(r.main_net_wan)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {r.main_net_ratio != null ? `${r.main_net_ratio.toFixed(0)}` : '-'}
+                        {safeFixed(r.main_net_ratio, 0, '-')}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {toWan(r.total_amount_wan)}
+                        {toAmountFromWanUnsigned(r.total_amount_wan)}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {r.tck_dark_net_wan != null ? (
-                          <span
-                            className={
-                              r.tck_dark_net_wan > 0
-                                ? 'text-stock-up'
-                                : r.tck_dark_net_wan < 0
-                                ? 'text-stock-down'
-                                : ''
-                            }
-                          >
-                            {toWan(r.tck_dark_net_wan)}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground/50">-</span>
-                        )}
-                      </td>
+                      {hasTckData ? (
+                        <td className="px-3 py-2 text-right font-mono text-muted-foreground">
+                          {r.tck_dark_net_wan != null ? (
+                            <span
+                              className={
+                                r.tck_dark_net_wan > 0
+                                  ? 'text-stock-up'
+                                  : r.tck_dark_net_wan < 0
+                                  ? 'text-stock-down'
+                                  : ''
+                              }
+                            >
+                              {toAmountFromWan(r.tck_dark_net_wan)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50">--</span>
+                          )}
+                        </td>
+                      ) : null}
                       <td className="px-3 py-2 font-mono text-[10px] text-muted-foreground">
                         {r.source}
                       </td>
@@ -253,8 +281,11 @@ export default function DarkFundTopPage() {
             </table>
           </div>
           <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
-            红 = 主力净流入(吸筹), 绿 = 主力净流出(派发) · .tck 暗盘对照仅持仓股有数据 ·{' '}
-            完整榜单见{' '}
+            红 = 主力净流入(吸筹), 绿 = 主力净流出(派发) · 金额口径=万元(榜单字段就是万元, 不是元) ·{' '}
+            {hasTckData
+              ? '.tck 暗盘对照(仅持仓股)有数据, 非持仓股显示 --'
+              : `.tck 暗盘对照仅持仓股有数据 —— 本榜 ${rowCount} 只都不是持仓股(或 .tck 缺失), 该列已隐藏`}
+            {' · '}总成交额缺失(上游 int32 哨兵/无数据)显式显示 -- · 完整榜单见{' '}
             <a href="/api/market-scan/dark-fund-top" className="text-primary hover:underline">
               /api/market-scan/dark-fund-top
             </a>

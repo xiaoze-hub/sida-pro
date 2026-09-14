@@ -7,6 +7,41 @@
 
 ## 2026-09-14
 
+### fix(ui): 首页情绪周期/涨停跌停「假空态」+ 市场温度常驻加载 + 市场全景大块死白
+
+**性质**: 纯前端(`packages/biz-ui` 三处 + `src/pages/Dashboard.tsx`) + 1 个钉住用例文件 + R6 棘轮收紧; **无接口契约变更、无后端改动**。不部署、不重启容器。
+
+- **缺陷来源**: 2026-09-14 生产 UI 走查(首页自上而下)。①「情绪周期」显 `--`; ②「涨停/跌停」显 `--/暂无`; ③ 市场温度卡旁常驻「阶段数据同步中…」永不消失; ④ 市场全景那一行下方一大块竖直空白。
+- **根因(逐条查证)**:
+  - **①③ = 拉取失败/`available:false` 被吞(本仓最重复的缺陷类)**: `KpiBand.tsx` 的 `usePhaseLabel` 与 `Dashboard.tsx` 的 `PhaseGaugeCard` 都是 `catch { /* 静默 */ }`; 且都只在 `available && current` 时才 setState ⇒ `/market/phase` 失败或后端返回 `available:false` 时组件状态恒为 null, 于是 ① 塌成 `--`, ③ 的 140px 占位文案「阶段数据同步中…」**永久驻留**。该文案还是前端**本地编造**的原因(后端 `note` 原文其实是"尚未同步阶段数据, 请调用 POST /api/market/phase/sync")。
+  - **② = 渲染 bug(死状态 + 误导字面量)**: `limitDown` 是 `useState(null)` 的**死状态**(全文件无 setter), 兜底写死字面量 `'暂无'` ⇒ 把"`/market/phase` 根本没有跌停家数字段"伪装成"今天没有跌停股", 与同格左侧 `--` 自相矛盾。
+  - **④ = 布局**: 市场全景是 `lg:grid-cols-3`(情绪周期阶段 | 市场主线 Top10 | 市场温度)。行高由最长的主线列表(~10 行)决定, 另两列内容只有它的 1/3~1/2 ⇒ 左/右列下方各留 ~200+px 死白; ③ 的假占位又让右列更矮, 叠加放大。
+  - **⑤(资金流入 7 行 / 流出 10 行)—— 查证为"真数据", 未改代码**: 后端 `src/web/api/market_data.py:290-307` 先按净流入排序取 `[:10]` 再按符号过滤(流入 >0 / 流出 <0)。单边市里"前 10 大里只有 7 个净流入"就会 7 vs 10, 属当日真实格局; 前端两个列表都是全量 `.map`, 无截断。补数据 = 编造, **不动**。
+- **修法**:
+  1. `usePhaseLabel` 改三态: `error`(失败原文) / `unavailableNote`(后端 `note` 原文透传) / 正常值; 去掉死状态 `limitDown` 与 `'暂无'` 字面量, 跌停一律按缺值约定 `--` 并在 `title` 说明"当前数据源未提供"。`useMainlineTop1` 同步补 `error`(同类静默, 顺手收口)。
+  2. `KpiBand`: 情绪周期/涨停跌停/主线 Top1 格在失败时渲染 **`加载失败`**(amber, 悬停带失败原文), 与 `--` 缺值态严格区分; 新增 `Cell.title`。
+  3. `PhaseGaugeCard` 改四态(loading / ready+`本次刷新失败` 标注 / unavailable 透传 note / error+重试), 各态**统一占满 154px**(与仪表盘等高) ⇒ ③ 不再常驻假加载、④ 右列不再矮一截。
+  4. `MarketPhaseCard`: `available:false` 时不再用 `phaseStyle` 兜底渲染「积累中」大字(那也是把"无数据"伪装成真阶段), 改为 note 原文 + 154px 空态。
+  5. `MarketMainlineCard`: Top10 列表 `lg:max-h-[300px] lg:overflow-y-auto`(仅 lg 起), 行高与同排两卡同量级, 消掉死白; 10 行数据仍在 DOM, 不丢行。
+  6. 顺带把本文件内 3 处裸 `.toFixed(` 换成 `@/lib/format` 的 `safeFixed`, `scripts/ui-rules-baseline.json` 的 KpiBand 计数 4 → 1(R6 棘轮只许降)。
+- **钉住**: `frontend/tests/components/dashboard-phase-honesty.test.tsx` 13 例(failure ≠ empty 的否定断言、note 原文透传、跌停不再出现"暂无"、154px 空态、Top10 限高)。**变异验证**: 把 ① 的失败态改回 `--` ⇒ 恰好 1 例红, 其余仍绿(已实测并复原)。
+- **未能验证**: 2026-09-14 盘中后端间歇 stall, 未做真接口复验(失败/`available:false` 两条分支靠单测钉); ④ 属视觉布局, 本机无浏览器(前后端不可用) ⇒ **未做像素测量**, 结论由布局代码推出, 需走查截图复核。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / `UI-RULES OK` / vitest 全绿(本批 +13 例)。
+- [commit 待回填]
+
+### fix(darkfund): 暗盘 TOP 榜 .tck 对照列全空即隐藏 + 金额口径从「元」改回「万元」(11.68亿 曾被显示成 11.68万)
+
+**性质**: 单页前端修复 + 1 个 `@/lib/format` 助手 + 6 条钉住用例。后端只读核对口径, **未改后端一行**。
+
+- **缺陷①(恒空列)**: 「.tck 暗盘对照」列在生产 20 行里全是 `-`, 页脚却只写「仅持仓股有数据」—— 全市场榜单里一整列恒空是噪声, 读起来像坏了。**修法(选"有数据才展示", 信息不丢)**: `hasTckData = top.some(r => r.tck_dark_net_wan != null)`; 全空 → **表头 + 单元格整列不渲染**, 页脚改为说清原因「.tck 暗盘对照仅持仓股有数据 —— 本榜 N 只都不是持仓股(或 .tck 缺失), 该列已隐藏」; 有数据 → 列照旧展示, 列头补口径范围「.tck 暗盘对照(仅持仓股)」+ title 说明, 非持仓股行显式 `--`(旧 `-` 统一成规则的 `--`)。
+- **缺陷②(总成交额大量 --)**: 结论是**上游真的没有**, **不是字段名对不上**: 前端字段名 `total_amount_wan` 与后端 `src/core/dark_fund_scan.py:141`、API 类型 `packages/api/src/marketScan.ts:30` 完全一致。`total_amt` 取自 thsdk 汇总的 `总金额`(元), 后端在 `dark_fund_scan.py:130-132` 把「非数值」与「|值| ≥ `INT32_SENTINEL`(=2_147_483_000)」**都置 None**(注释: 盘后无真实数据的次新股返回 2^31-1/2^31 占位), 前端拿到 null → 按规矩显式 `--`。**顺带发现一处越界(不属前端职责, 未改)**: 该哨兵阈值按**元**判定, 真实成交额 > 约 21.47 亿会被同样误判成哨兵而置 None ⇒ 已写入前端缺陷报告请后端同学收窄判定, 本轮不碰后端。
+- **顺手修掉的单位缺陷(同一批数据, 是真错)**: `main_net_wan` / `total_amount_wan` / `tck_dark_net_wan` 后端明确是**万元**, 旧代码却用 `toWan`(= `toAmount`, **元**口径, 内部再 /1e4)渲染 ⇒ `116836.13`(万元 = 11.68 亿)显示成 `+11.68万`, **小 10000 倍且单位错**; 万元口径的 `toAmountFromWan` 就在旁边, 是 2026-09-07 P3 收敛时换错的。现改为: 主力净流入/暗盘净额(有方向的净额) → `toAmountFromWan`(带符号); 总成交额(规模量) → 新增 `toAmountFromWanUnsigned`(不带 `+`, 负号保留, 缺失 `--`)。
+- **另一处顺手修**: `main_net_ratio` 原为裸 `r.main_net_ratio.toFixed(0)` —— PG DECIMAL 经 JSON 变字符串正是 R6 记载的崩溃模式(2026-08-21 `c.price.toFixed` 事故)。改走 `safeFixed(r.main_net_ratio, 0, '-')`, 该文件 `.toFixed(` 计数 1 → 0(门禁提示可从 baseline 下调)。
+- **钉住(新增 6 例)**: 全空 → 表头无该列 + 页脚"已隐藏"; 有数据 → 列头含"仅持仓股" + 万元口径 `+1.50亿`; 金额量级(`11.68亿` 在, `11.68万` / `+11.68亿` / `8.80万` 不在); 总成交额 null → `--` 且不塌成 `0.00万`; `main_net_ratio` 字符串脏数不崩; format 助手 7 个断言。
+- **门禁**: `tsc -b` 0 / `typecheck:tests` 0 / `eslint .` 0 / UI-RULES OK / vitest **418/418(57 files)全绿**。
+- **未验证**: 生产 `/api/market-scan/dark-fund-top` 真实响应里 `total_amount_wan` 的缺失比例(需接口; 判断依据是后端源码而非生产响应, 已在报告中注明)。
+- [commit 待回填]
+
 ### fix(heatmap): 板块热力图「面积:量能」不再静默空白(保底面积恒正 + 显式空态) + 色阶只把"空"当无数据
 
 **性质**: 纯前端防御纵深(1 个纯函数模块 + 1 个组件) + 10 条钉住用例。无接口契约变更。

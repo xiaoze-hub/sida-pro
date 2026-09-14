@@ -9,6 +9,7 @@ import {
   safeNetInflow,
   toAmount,
   toAmountFromWan,
+  toAmountFromWanUnsigned,
 } from '../../src/lib/format'
 
 // E3(2026-09-09) 前端门禁配套单测: format.ts 是全项目数值展示的统一口径层,
@@ -101,5 +102,16 @@ describe('toAmount 系列(元/万双口径)', () => {
     expect(toAmountFromWan(15000)).toBe('+1.50亿')
     expect(toAmountFromWan(500)).toBe('+500.00万')
     expect(toAmountFromWan(-20000)).toBe('-2.00亿')
+  })
+
+  // 2026-09-14 暗盘 TOP 缺陷: 成交额是"规模量", 带 '+' 会被读成变化量。
+  it('toAmountFromWanUnsigned 万口径无量值: 正数不带 +, 负号保留, 缺失 --', () => {
+    expect(toAmountFromWanUnsigned(116836.13)).toBe('11.68亿')
+    expect(toAmountFromWanUnsigned(15000)).toBe('1.50亿')
+    expect(toAmountFromWanUnsigned(500)).toBe('500.00万')
+    expect(toAmountFromWanUnsigned(0)).toBe('0.00万')
+    expect(toAmountFromWanUnsigned(-500)).toBe('-500.00万')
+    expect(toAmountFromWanUnsigned(null)).toBe('--')
+    expect(toAmountFromWanUnsigned(Number.NaN)).toBe('--')
   })
 })
