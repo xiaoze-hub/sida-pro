@@ -197,12 +197,18 @@ def _board_data(window: int, top: int) -> dict:
     union_codes = latest_codes | set(flags)
     meta: dict[str, dict] = {r["block_code"]: r for r in rows}
     if union_codes - latest_codes:
+        # PG 严格 GROUP BY: 非聚合列必须全部进 GROUP BY(SQLite 宽松, PG 会 GroupingError
+        # → 题材情绪页 500 整页空白, 2026-09-18 生产实测)。同名多行时在 Python 取最新。
         extra = _read_codes(
             "SELECT block_code, block_name, block_type, MAX(trade_date) AS last_d "
             "FROM theme_mood_daily WHERE trade_date >= :a AND block_code IN :codes "
-            "GROUP BY block_code", {"a": dates[0]}, tuple(sorted(union_codes - latest_codes)),
+            "GROUP BY block_code, block_name, block_type",
+            {"a": dates[0]}, tuple(sorted(union_codes - latest_codes)),
         )
         for e in extra:
+            prev = meta.get(e["block_code"])
+            if prev and str(prev.get("last_d") or "") >= str(e.get("last_d") or ""):
+                continue
             meta[e["block_code"]] = {**e, "score": None, "confidence": None, "core": 0,
                                      "s1": None, "s2": None, "s3": None, "s4": None, "s5": None,
                                      "limit_up_cnt": None, "max_boards": None, "core_stocks": None}
