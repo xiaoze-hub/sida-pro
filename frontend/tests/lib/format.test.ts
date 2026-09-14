@@ -7,6 +7,7 @@ import {
   safePrice,
   safeInt,
   safeNetInflow,
+  safeMoneyUnsigned,
   toAmount,
   toAmountFromWan,
   toAmountFromWanUnsigned,
@@ -67,6 +68,39 @@ describe('safeMoney 金额口径(元 → 亿/万)', () => {
   it('无效值 fallback', () => {
     expect(safeMoney(null)).toBe('--')
     expect(safeMoney('abc')).toBe('--')
+  })
+})
+
+// 2026-09-14 持仓页缺陷: 「可用资金/总资产/总市值」是**存量**读数, 带 '+' 会被读成变化量;
+// 涨跌/盈亏仍要走 safeMoney 的带符号口径(红涨绿跌需要方向)。
+describe('safeMoneyUnsigned 存量金额口径(元 → 亿/万, 不带 +)', () => {
+  it('正数不带 +, 负号保留(负数是真读数, 不吞符号), 缺失 --', () => {
+    expect(safeMoneyUnsigned(4.5e4)).toBe('4.50万')
+    expect(safeMoneyUnsigned(1.5e8)).toBe('1.50亿')
+    expect(safeMoneyUnsigned(-2.5e8)).toBe('-2.50亿')
+    expect(safeMoneyUnsigned(-30000)).toBe('-3.00万')
+    expect(safeMoneyUnsigned(null)).toBe('--')
+    expect(safeMoneyUnsigned(undefined)).toBe('--')
+    expect(safeMoneyUnsigned('abc')).toBe('--')
+    expect(safeMoneyUnsigned(Number.NaN)).toBe('--')
+  })
+
+  it('0 渲染 "0"(与 safeMoney 一致, 不带号): 总市值 0 不会显示成 "+0"', () => {
+    expect(safeMoneyUnsigned(0)).toBe('0')
+    expect(safeMoney('0')).toBe('0')
+  })
+
+  it('小金额去尾零, 与 safeMoney 的量级规则同源', () => {
+    expect(safeMoneyUnsigned(123.45)).toBe('123.45')
+    expect(safeMoneyUnsigned(100.0)).toBe('100')
+    expect(safeMoneyUnsigned(0.5)).toBe('0.5')
+  })
+
+  it('同值对照: safeMoney 带 +, safeMoneyUnsigned 不带(避免后人把两者合并)', () => {
+    expect(safeMoney(4.5e4)).toBe('+4.50万')
+    expect(safeMoneyUnsigned(4.5e4)).toBe('4.50万')
+    expect(safeMoney(-1e4)).toBe('-1.00万')
+    expect(safeMoneyUnsigned(-1e4)).toBe('-1.00万')
   })
 })
 

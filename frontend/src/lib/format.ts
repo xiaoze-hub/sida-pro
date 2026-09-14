@@ -93,6 +93,24 @@ export function safePrice(v: unknown, maxDigits = 4, fallback = '--'): string {
 }
 
 /**
+ * 元 → 万/亿 的**无量值**(2026-09-14 持仓页缺陷修复):
+ * 与 safeMoney 同量级规则, 但**正数不加 '+'** —— 总资产/可用资金/总市值是"有多少",
+ * 不是"变化了多少", 前面挂个 '+' 会被读成涨跌; 负值是真读数(如融资负债), 负号保留。
+ *
+ * 只用于存量/规模读数(市值、可用资金、总资产); 涨跌/盈亏仍走 safeMoney(带符号)。
+ */
+export function safeMoneyUnsigned(v: unknown, fallback = '--'): string {
+  const n = safeNum(v)
+  if (n === null) return fallback
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1e8) return `${sign}${safeFixed(abs / 1e8, 2)}亿`
+  if (abs >= 1e4) return `${sign}${safeFixed(abs / 1e4, 2)}万`
+  const digits = abs < 1 ? 4 : 2
+  return `${sign}${Number(safeFixed(abs, digits))}`
+}
+
+/**
  * 安全整数显示：成交量/股本等。对非整数四舍五入，对无效值返回 fallback。
  */
 export function safeInt(v: unknown, fallback = '--'): string {

@@ -7,9 +7,19 @@ import { Skeleton } from '@panwatch/base-ui/components/ui/skeleton'
 import { TrendingUp } from 'lucide-react'
 import { Wallet } from 'lucide-react'
 import { dailyPnlDisplayLabel } from './shared'
-import { safeFixed } from '@/lib/format'
+import { safeFixed, safeMoneyUnsigned } from '@/lib/format'
 import { safeNum } from '@/lib/format'
 import { useStocks } from './context'
+
+/**
+ * 持仓页金额口径(2026-09-14 走查缺陷修复):
+ * - **存量/规模读数**(总市值、可用资金、总资产、持仓市值/总资产明细) → `safeMoneyUnsigned`
+ *   (不带 '+'): 它们是"有多少", 旧代码走 formatMoney(= safeMoney) 会渲染出 `+4.50万`,
+ *   被读成变化量; 且总市值为 0 时旧代码渲染 `0`(无号) —— 同一行里一个带 + 一个不带,
+ *   自相矛盾。
+ * - **涨跌/盈亏读数**(总盈亏、当日盈亏) → 保留 `formatMoney` 的带符号口径(红涨绿跌需要方向)。
+ */
+const fmtAmount = (v: unknown) => safeMoneyUnsigned(v)
 
 export function PortfolioSummarySection() {
   const {
@@ -52,7 +62,7 @@ export function PortfolioSummarySection() {
         <span className="text-[12px]">总市值</span>
       </div>
       <div className="text-[20px] font-bold text-foreground font-num tabular-nums">
-        {formatMoney(portfolio.total.total_market_value)}
+        {fmtAmount(portfolio.total.total_market_value)}
       </div>
     </div>
     <div className="border-l border-border/40 pl-3">
@@ -65,7 +75,9 @@ export function PortfolioSummarySection() {
         <span className="text-[12px]">总盈亏</span>
       </div>
       <div className={`text-[20px] font-bold font-num tabular-nums ${portfolio.total.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-        {portfolio.total.total_pnl >= 0 ? '+' : ''}{formatMoney(portfolio.total.total_pnl)}
+        {/* 符号由 formatMoney(= safeMoney) 给出: 正数自带 '+'、负数自带 '-'。
+            旧代码外面又套了一个 `total_pnl >= 0 ? '+' : ''` ⇒ 正盈亏渲染成 "++1.00万"。 */}
+        {formatMoney(portfolio.total.total_pnl)}
         <span className="text-[13px] ml-1.5">
           ({safeNum(portfolio.total.total_pnl_pct) === null ? '--' : `${portfolio.total.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(portfolio.total.total_pnl_pct)}%`})
         </span>
@@ -94,7 +106,8 @@ export function PortfolioSummarySection() {
             )}
           </div>
           <div className={`text-[20px] font-bold font-mono tabular-nums ${isUp ? 'text-stock-up' : 'text-stock-down'}`}>
-            {isUp ? '+' : ''}{formatMoney(dayPnl)}
+            {/* 同上: 符号只由 formatMoney 给一次, 不再手写 '+' 前缀(否则正数变 "++") */}
+            {formatMoney(dayPnl)}
             <span className="text-[13px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
           </div>
         </div>
@@ -107,7 +120,7 @@ export function PortfolioSummarySection() {
         <span className="text-[12px]">可用资金</span>
       </div>
       <div className="text-[20px] font-bold text-foreground font-mono tabular-nums">
-        {formatMoney(portfolio.total.available_funds)}
+        {fmtAmount(portfolio.total.available_funds)}
       </div>
     </div>
     <div className="border-l border-border/40 pl-3">
@@ -116,7 +129,7 @@ export function PortfolioSummarySection() {
         <span className="text-[12px]">总资产</span>
       </div>
       <div className="text-[20px] font-bold text-foreground font-mono tabular-nums">
-        {formatMoney(portfolio.total.total_assets)}
+        {fmtAmount(portfolio.total.total_assets)}
       </div>
     </div>
 
@@ -129,7 +142,7 @@ export function PortfolioSummarySection() {
         {positionRatio && safeNum(positionRatio.pct) !== null ? `${positionRatio.pct.toFixed(1)}%` : '--'}
       </div>
       <div className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-        {positionRatio ? `持仓市值 ${formatMoney(positionRatio.mv)} / 总资产 ${formatMoney(positionRatio.assets)}` : '—'}
+        {positionRatio ? `持仓市值 ${fmtAmount(positionRatio.mv)} / 总资产 ${fmtAmount(positionRatio.assets)}` : '—'}
       </div>
     </div>
   </div>
