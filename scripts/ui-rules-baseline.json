@@ -42,7 +42,6 @@
   "frontend/src/lib/kline-scorer.ts": 3,
   "frontend/src/lib/trades.ts": 2,
   "frontend/src/pages/AnalysisDetail.tsx": 5,
-  "frontend/src/pages/DarkFundTop.tsx": 1,
   "frontend/src/pages/Dashboard.tsx": 6,
   "frontend/src/pages/DataSources.tsx": 13,
   "frontend/src/pages/Forecast.tsx": 1,
