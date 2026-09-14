@@ -290,8 +290,9 @@ export default function ThemeMoodPage() {
         {boardCollapsed ? '展开题材表' : '折叠题材表'}
       </button>
 
-      <div className={`flex flex-col gap-3 xl:flex-row ${boardCollapsed ? 'hidden' : ''}`}>
-        <div className="w-full shrink-0 xl:w-[420px]">
+      {/* 走查 2026-09-18: 折叠只收**左侧题材列表**, 右侧题材×日期矩阵保持可见(原先整块 hidden) */}
+      <div className="flex flex-col gap-3 xl:flex-row">
+        <div className={`w-full shrink-0 xl:w-[420px] ${boardCollapsed ? 'hidden xl:hidden' : ''}`}>
           <div className="mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 px-2 text-[10px] text-muted-foreground">
             <span>题材</span>
             <span className="text-right">情绪分</span>

@@ -156,7 +156,8 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
   return (
     <div className="scrollbar overflow-x-auto pb-1">
       <div className="flex w-max gap-1">
-        <div className="w-[64px] shrink-0">
+        {/* 走查 2026-09-18: 板数列必须 sticky —— 横向滑到右边后仍要看到「几板」 */}
+        <div className="sticky left-0 z-10 w-[64px] shrink-0 bg-background">
           <div className="mb-1 text-[10px] text-muted-foreground">层级</div>
           {shown.map((b) => (
             <div key={b} className="mb-1 flex h-[64px] flex-col justify-center">

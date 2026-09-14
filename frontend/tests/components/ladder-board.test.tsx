@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import LadderBoard from '@panwatch/biz-ui/components/thememood/LadderBoard'
 
@@ -39,5 +39,15 @@ describe('LadderBoard', () => {
   it('stale 横幅', () => {
     render(<LadderBoard ladder={[day]} liveDay={null} mode="live" stale lastOk="14:31" />)
     expect(screen.getByText(/实时源中断 14:31/)).toBeTruthy()
+  })
+  it('矩阵视图: 板数列 sticky left(横滑后仍能看到几板)', () => {
+    render(<LadderBoard ladder={[day]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
+    fireEvent.click(screen.getByRole('button', { name: '矩阵视图' }))
+    const label = screen.getByText('层级')
+    const col = label.parentElement as HTMLElement
+    expect(col.className).toContain('sticky')
+    expect(col.className).toContain('left-0')
+    // 板数按钮仍在
+    expect(screen.getByRole('button', { name: '2板' })).toBeTruthy()
   })
 })
