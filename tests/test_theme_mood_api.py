@@ -194,9 +194,29 @@ def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     monkeypatch.setattr("src.db.session.engine", fake_engine)
     out = api._read_ohlc(["20260911"], ["A", "B"])
     assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2, "amount": 1.5e8}}  # B 缺 high 被丢
-    assert conn.last_params == {"dates": ("2026-09-11",), "codes": ("A", "B")}  # 入参转 ISO
+    # 2026-09-18: 日期改 BETWEEN(2 参) + symbol 分批, 不再 20 日期 IN 列表
+    assert conn.last_params == {"d0": "2026-09-11", "d1": "2026-09-11", "codes": ("A", "B")}
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
+
+
+def test_read_ohlc_chunks_large_symbol_sets(monkeypatch):
+    """1100+ codes 必须分批(单次 IN 超长会撞 PG statement_timeout → 整页 500)。"""
+    calls = []
+    conn = _FakeConn([])
+    orig_execute = conn.execute
+
+    def execute(stmt, params):
+        calls.append(len(params["codes"]))
+        return orig_execute(stmt, params)
+
+    conn.execute = execute
+    fake_engine = type("E", (), {"begin": lambda self: _FakeBegin(conn)})()
+    monkeypatch.setattr("src.db.session.engine", fake_engine)
+    codes = [f"{i:06d}" for i in range(500)]
+    api._read_ohlc(["20260901", "20260911"], codes)
+    assert calls == [200, 200, 100]
+    assert sum(calls) == 500
 
 
 def test_ladder_contract_marks_stocks_and_mode(monkeypatch):
