@@ -7,6 +7,17 @@
 
 ## 2026-09-14
 
+### fix(board): 热力图全市场 -100% 假暴跌 —— 0 价/0 量按「无数据」处理
+
+**性质**: 单文件后端守卫 + 5 条钉住用例。**需重启后端容器生效**(纯 Python 改动)。
+
+- **缺陷**(2026-09-14 UI 走查发现): `/api/boards/heatmap?live=auto` 返回 128 个板块**全部** `change_pct: -100`、`volume: 0`, 前端热力图整屏飘绿(跌幅色)。
+- **根因**: `src/core/tdx_boards.py:276-284` 批量实时函数里, `_num` 只拦 `None`/非有限值, **不拦 0**; 通达信客户端拿不到实时数据时返回 `Now=0`, 于是 `(0/last-1)*100 = -100.0` 被当真值下发; `Volume=0` 亦原样透传。这与本仓既定口径直接冲突(`packages/marketdata/src/marketdata/vendors/tencent.py:4` 原文:「解析层对缺失/空字段一律保留 None, 绝不回退 0(0 价参与涨跌幅算术会伪造 -100% 假暴跌)」)。
+- **修法**: 现价 `now_px > 0` 才写入 `price`; 昨收 `last > 0` 且现价 > 0 才计算 `change_pct`; 成交量 `vol > 0` 才写入 `volume`。不满足一律保持 `None`(诚实标缺失, 前端走空态)。`amount`/`fund_net` 不在此列 —— 资金净流入 0 是**真值**(净流入为零), 与"0 价"性质不同, 不动。
+- **钉住用例**(`tests/test_tdx_boards.py`): `test_board_quotes_now_zero_is_missing_not_crash`(Now=0 → price/change_pct/volume 全 None, 且**不是** -100)、`test_board_quotes_lastclose_zero_change_none`、`test_board_quotes_missing_keys_all_none`、`test_board_quotes_genuine_value_computes`(真实值照算)、`test_board_quotes_genuine_flat_move_not_nulled`(真实 0% 平盘保留 `0.0`, 不得被守卫误伤)。
+- **门禁**: `pytest -q -p no:warnings -m "not network"` **2285 passed / 0 failed / 5 skipped**(基线 2280, +5)。
+- [commit 待回填]
+
 ### fix(ui): 首页情绪周期/涨停跌停「假空态」+ 市场温度常驻加载 + 市场全景大块死白
 
 **性质**: 纯前端(`packages/biz-ui` 三处 + `src/pages/Dashboard.tsx`) + 1 个钉住用例文件 + R6 棘轮收紧; **无接口契约变更、无后端改动**。不部署、不重启容器。
