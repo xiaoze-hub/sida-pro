@@ -5,6 +5,21 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-15
+
+### fix(ux): 全站走查 —— 空数据不 404 + phase 超时放宽
+
+**性质**: 后端 `quotes.py` 2 处 + 前端 phase timeout。需重启后端 + 静态面。
+
+- **走查**: Playwright 30 页截图，见 `docs/UX走查_20260915.md`。
+- **修复**:
+  1. `/quotes/{s}/dark-flow-tq`、`/more-info` 无数据时 **404→200 + available:false**（控制台不再报红，前端走诚实空态）。
+  2. `/market/phase` 前端 timeout 20s→**30s**（后端实测 20–60ms，超时是首页并发拥塞）。
+- **生产**: 本机临时 `WEB_WORKERS=1` 救活（workers=2 慢启动被 supervisor 杀）。下批根治启动竞态。
+- **门禁**: tsc/eslint 0。
+
+[commit 待回填]
+
 ## 2026-09-18
 
 ### release-v0.6.7: KI 全清批次 —— 日历2028 / pg_dump / forecast日历 / ws_hub / KlineChart信息栏

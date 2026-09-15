@@ -1239,7 +1239,7 @@ export function PhaseGaugeCard() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetchAPI<PhaseGaugeResp>('/market/phase')
+      const res = await fetchAPI<PhaseGaugeResp>('/market/phase', { timeoutMs: 30000 })
       if (!aliveRef.current) return
       if (res?.available && res.current) {
         setState({ kind: 'ready', data: res.current, refreshError: '' })
