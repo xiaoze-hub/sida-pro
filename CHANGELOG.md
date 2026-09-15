@@ -7,6 +7,13 @@
 
 ## 2026-09-18
 
+### release: v0.7.1
+
+**性质**: 版本发布。Pro 升级申请 + 权限清单全勾。
+
+- VERSION: v0.7.0 → v0.7.1
+- permission-tasks.md 全部项已勾(A/B/C + 联调验收)
+
 ### feat(profile): 个人中心 Pro 升级申请(B.1 收尾)
 
 **性质**: 前端 Profile 页 + 后端 `/api/profile/pro-apply`。**需重启后端**。
