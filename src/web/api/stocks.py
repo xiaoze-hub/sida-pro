@@ -180,12 +180,14 @@ def search(q: str = Query("", min_length=1), market: str = Query("")):
 
 
 @router.get("/{symbol}/l2")
-def get_stock_l2(symbol: str, user=Depends(get_current_user)):
-    """单股 L2 字段(v0.5.89): 通达信 snapshot(五档/开高低/内外盘/5分钟前价) + more_info(涨停价/封单/连板/逐笔)。
+def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """单股 L2 字段: 通达信 snapshot + more_info。
 
-    on-demand 单股接口(工作台打开时调, 30s 轮询可接受); 不做全市场批量。
-    源不可用 → 200 + 空 dict + note(不编数据)。
+    权限(2026-09-15): view_l2 — member 3次/天试用, pro/owner 全开。
     """
+    from src.core.permissions import PERM_VIEW_L2, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_L2, db)
     from src.core.stock_l2 import fetch_stock_l2
 
     data = fetch_stock_l2(symbol)
@@ -292,6 +294,10 @@ def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User =
         own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
         if own_count >= 1:
             raise HTTPException(403, "演示账号仅可添加 1 只自选股。请先删除当前自选,再添加其他股票体验。")
+    # 权限体系 2026-09-15: 普通账号自选≤10, pro/owner 无限
+    from src.core.permissions import check_watchlist_quota
+
+    check_watchlist_quota(db, user)
 
     existing = db.query(Stock).filter(
         Stock.symbol == stock.symbol, Stock.market == stock.market,

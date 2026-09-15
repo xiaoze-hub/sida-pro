@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 
 from src.web.database import get_db
 from src.web.models import DarkFundTopSnapshot, MarketScanRank
+from src.web.api.auth import get_current_user
+from src.db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +56,15 @@ def _latest_rank(db: Session, market: str = "CN"):
 
 
 @router.get("/ranks")
-def get_market_scan_ranks(market: str = "CN", db: Session = Depends(get_db)):
-    """读最新三榜快照(盘后 cron 落库; 无快照 → available=false)。"""
+def get_market_scan_ranks(
+    market: str = "CN",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """读最新三榜快照。权限: view_opportunities — member 3次/天试用。"""
+    from src.core.permissions import PERM_VIEW_OPPORTUNITIES, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_OPPORTUNITIES, db)
     row = _latest_rank(db, market)
     if not row:
         return {
@@ -128,8 +137,15 @@ class DarkFundTopRequest(BaseModel):
 
 
 @router.get("/dark-fund-top")
-def get_dark_fund_top(market: str = "CN", db: Session = Depends(get_db)):
-    """读最新暗盘资金 TOP 快照(thsdk DDE 真实主力资金流; 无快照 → available=false)。"""
+def get_dark_fund_top(
+    market: str = "CN",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """读最新暗盘资金 TOP 快照。权限: view_dark — member 3次/天试用。"""
+    from src.core.permissions import PERM_VIEW_DARK, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_DARK, db)
     row = (
         db.query(DarkFundTopSnapshot)
         .filter(DarkFundTopSnapshot.stock_market == market)

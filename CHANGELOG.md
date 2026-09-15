@@ -7,6 +7,24 @@
 
 ## 2026-09-15
 
+### feat(perm): 用户权限体系四档 —— guest/member/pro/owner + 试用额度
+
+**性质**: 后端 `src/core/permissions.py` + 路由接线。**需重启后端**。
+
+- **四档**: guest(只看首页) / member(行情/热力/持仓, 自选≤10 预警≤3) / pro(全功能) / owner(全功能+系统设置)。
+- **锁死+试用**: 机会/三指标/暗盘/L2 — member 各 **3次/天** 试用, 用完 403+`pro_guide`。
+- **接线**:
+  - `GET /stocks/{s}/l2` → `view_l2` 权限
+  - `GET /market-scan/ranks` → `view_opportunities`
+  - `GET /market-scan/dark-fund-top` → `view_dark`
+  - `POST /stocks` → `check_watchlist_quota`(member ≤10)
+- **防循环**: `enforce_perm(user, perm, db)` 纯函数 + 函数体内懒 import, 避开 `src/web/api/__init__.py` 循环。
+- **矩阵文档**: `docs/permission-matrix.md`
+- **前端**: 已有 `PermGuard` 路由守卫 + 导航隐藏(之前批次)。
+- **门禁**: 9/9 passed。
+
+[commit 待回填]
+
 ### release-v0.6.9: Gateway 并发优化 —— 4 worker + 令牌桶 + 热点缓存
 
 **性质**: 后端 server.py / skills_gateway.py / Dockerfile healthcheck。**需重启后端**。
