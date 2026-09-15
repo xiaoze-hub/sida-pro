@@ -7,6 +7,20 @@
 
 ## 2026-09-15
 
+### feat(skill-gateway): Phase 2.3+3.1+3.3 —— 红线词 + 突增冻结 + 管理接口
+
+**性质**: 后端 `skills_gateway.py` 扩展。**需重启后端**。
+
+- **3.1 红线词**: 扫描 `买入/卖出/稳赚/保证收益/无风险` 等, 命中追加合规提示 + `risk` 字段标注。
+- **2.3 突增冻结**: 5 分钟窗口内调用数 ≥ 基线×10 且 ≥30 次 → 自动 `frozen` + 通知中心告警。
+- **3.3 管理接口**(owner JWT):
+  - `GET /api/admin/skills/keys` Key 列表
+  - `POST /api/admin/skills/keys/action` freeze/unfreeze/disable/set_tier/set_limit
+  - `GET /api/admin/skills/usage` 近 N 天用量报表
+- **门禁**: 新测试 13/13。
+
+[commit 待回填]
+
 ### feat(skill-gateway): Phase 0+1 —— 对外开放 skill 的 Key 鉴权 + 限流 + 计量
 
 **性质**: 后端新增 `skills_gateway.py` + 模型/迁移 v166。**需重启后端**。
