@@ -7,6 +7,26 @@
 
 ## 2026-09-15
 
+### release-v0.6.9: Gateway 并发优化 —— 4 worker + 令牌桶 + 热点缓存
+
+**性质**: 后端 server.py / skills_gateway.py / Dockerfile healthcheck。**需重启后端**。
+
+**压测对比**（50 并发 `get_stock_quote`）：
+| 指标 | 优化前 | 优化后 |
+|---|---|---|
+| 成功率 | 40%（20成功+30×429） | **100%**（50/50） |
+| p50 | 7700ms | **1188ms** |
+| p95 | — | **1219ms** |
+
+200 并发：100 成功 / 100×429（burst 限流按设计生效，非故障）。
+
+**优化**：
+- `WEB_WORKERS=4`（新镜像 healthcheck start-period=90s 兜住慢启动）
+- 令牌桶：burst 50/trial·30/free·100/pro + 匀速补充；`Retry-After` 头
+- 热点缓存 4s TTL（同 symbol 并发只打一次上游）
+
+**发版**: main + tag v0.6.9 + 镜像 `panwatch:v0.6.9` + 容器重建。
+
 ### perf(gateway): 并发优化 —— 多 worker + 令牌桶限流 + 热点缓存
 
 **性质**: 后端 `server.py` / `skills_gateway.py` / `Dockerfile`。**需重启后端**。
