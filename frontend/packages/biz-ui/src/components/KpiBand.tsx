@@ -248,7 +248,8 @@ export function usePhaseLabel(): PhaseKpi {
     try {
       // 走 fetchAPI 默认 30s GET 缓存(与轮询同频): 首页多组件同打 /market/phase 时
       // 共享一份响应, 不再各自 cacheMode:reload 叠并发(2026-09-18 走查「请求超时」根因之一)。
-      const res = await fetchAPI<PhaseResp>('/market/phase')
+      // UX 走查 2026-09-15: 单 worker 下首页并发高峰时默认 20s 超时仍偶发; 显式 30s。
+      const res = await fetchAPI<PhaseResp>('/market/phase', { timeoutMs: 30000 })
       if (!aliveRef.current) return
       const cur = res?.available ? res.current : null
       if (cur) {

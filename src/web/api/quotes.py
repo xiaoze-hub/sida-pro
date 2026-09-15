@@ -144,8 +144,13 @@ async def get_more_info(symbol: str, market: str = "CN"):
         raise HTTPException(400, "more-info 仅支持 CN 市场(TQ 扩展指标)")
     rows = await asyncio.to_thread(md_more_info, [symbol], market_code.value)
     if not rows:
-        raise HTTPException(404, "扩展指标不存在(TQ 未连接或该股无数据)")
-    return rows[0]
+        # UX: 空数据不 404 — 前端按 available:false 空态处理
+        return {
+            "available": False,
+            "note": "扩展指标不存在(TQ 未连接或该股无数据)",
+            "symbol": symbol,
+        }
+    return {**(rows[0] or {}), "available": True}
 
 
 @router.get("/{symbol}/dark-flow-tq")
@@ -158,8 +163,16 @@ async def get_dark_flow_tq(symbol: str, market: str = "CN"):
         raise HTTPException(400, "dark-flow-tq 仅支持 CN 市场")
     data = await asyncio.to_thread(md_dark_flow_tq, symbol, market_code.value)
     if not data:
-        raise HTTPException(404, "暗盘资金无数据(TQ4 盘后采集未覆盖该股或尚未采集)")
-    return data
+        # UX 走查 2026-09-15: 空数据不再 404(前端按网络错误处理, 控制台也报红)
+        # 改为 200 + available:false, 由前端走诚实空态
+        return {
+            "available": False,
+            "note": "暗盘资金无数据(TQ4 盘后采集未覆盖该股或尚未采集)",
+            "symbol": symbol,
+        }
+    if isinstance(data, dict):
+        return {**data, "available": True}
+    return {"available": True, "data": data}
 
 
 # 公司简介内存缓存(避免每次详情页都调 zhitu 耗时 1.8s)
