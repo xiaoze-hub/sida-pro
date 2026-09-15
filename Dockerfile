@@ -188,7 +188,9 @@ ENV TZ=Asia/Shanghai
 EXPOSE 8000
 
 # 健康检查（使用 Python）
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# UX 走查 2026-09-15: 慢启动(依赖检查+迁移)时 5s start-period 会把容器打成 unhealthy,
+# 且 uvicorn workers=2 的 supervisor 在 worker 未就绪时反复杀子进程。放宽到 90s/30s。
+HEALTHCHECK --interval=30s --timeout=30s --start-period=90s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
 # 切换到非 root 用户(必须放在 ENTRYPOINT/CMD 之前)

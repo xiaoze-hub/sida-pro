@@ -7,6 +7,16 @@
 
 ## 2026-09-15
 
+### fix(ux): 板块空态引导 + WEB_WORKERS 启动竞态缓解
+
+**性质**: 前端 BoardBody + server.py 警告 + Dockerfile healthcheck。需重启 + 静态面。
+
+- **板块工作台**: 板块码无效/不存在时错误条附「去板块热力图选板块」链接(不再死路)。合法码形如 `URFI881175`(热力图入口已正确)。
+- **WEB_WORKERS=2 根治(缓解)**: Dockerfile healthcheck `start-period` 5s→**90s**、`timeout` 10s→**30s**; server.py workers>1 时打警告。小主机仍建议 `WEB_WORKERS=1`。
+- **门禁**: tsc/eslint 0。
+
+[commit 待回填]
+
 ### fix(ux): 全站走查 —— 空数据不 404 + phase 超时放宽
 
 **性质**: 后端 `quotes.py` 2 处 + 前端 phase timeout。需重启后端 + 静态面。
