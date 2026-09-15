@@ -5,6 +5,26 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18
+
+### feat(perm): 权限体系合并 RBAC+四档, 补齐缺口, 设备限制, 高价值审计
+
+**性质**: 后端权限核心 + 路由接线 + 迁移。**需重启后端**。34/34 权限测试通过。
+
+- **合并 RBAC+四档**(修关键 bug): 原 `c18f333` 四档提交覆盖丢失了 `get_role_permissions`/`PERMISSION_LABELS`/`ALL_PERMISSIONS` 等函数, 导致 `app.py` 中间件和 `users.py` 导入必炸。现合并两套体系:
+  - 保留原 RBAC 权限点(view_*/manage_*/edit_*)供中间件/前端导航继续用
+  - 新增四档角色(guest/member/pro/owner) + 试用功能(3次/天)
+  - guest 无权限(点功能弹注册); demo 账号由中间件单独处理
+- **前端 perm key 修正**: heatmap→`view_heatmap`, stocks→`view_quotes`, dark→`view_dark`(原错用 `view_forecast`/`view_opportunities`)
+- **后端接线补齐**: `decision_pioneer.py`/`decision.py` 接 `enforce_perm(PERM_VIEW_FORECAST)`
+- **member 试用进 effective**: `/users/me/permissions` 返回 `trial` 字段(剩余次数), 前端可展示入口
+- **设备限制落地**: `UserSession` 模型 + 迁移 167; 登录时 `record_session` 超 2 台踢最早
+- **设置审计**(B.6): `update_setting` 记改前改后(敏感值掩码), 落 `audit_logs`
+- **高价值接口审计**(C.1): `HighValueApiLog` 表 + 迁移 168; L2/暗盘/机会/预测接 `log_high_value_call`; 突增检测 helper
+- **后台用量报表**(C.2): `GET /users/admin/usage-report` 按用户/接口/天聚合
+
+**测试**: `pytest tests/test_permissions.py tests/test_permissions_rbac.py` → 34 passed
+
 ## 2026-09-15
 
 ### feat(perm): 用户权限体系四档 —— guest/member/pro/owner + 试用额度

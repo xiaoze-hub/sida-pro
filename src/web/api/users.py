@@ -196,16 +196,33 @@ def _read_permission_list(perms) -> list[str]:
 @router.get("/me/permissions")
 def get_my_permissions(
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """当前用户自己的模块权限(前端导航过滤用)。
 
     返回 role_defaults(角色自带)+ granted(额外授权)的并集,
     前端据此隐藏未授权模块的导航入口。
+    member 的试用功能(view_opportunities 等)也进 effective, 前端展示入口,
+    后端 enforce_perm 仍按 3 次/天限流。
     """
-    from src.core.permissions import PERMISSION_LABELS, get_role_permissions
+    from src.core.permissions import (
+        PERMISSION_LABELS,
+        TRIAL_FEATURES,
+        TRIAL_DAILY_LIMIT,
+        get_role_permissions,
+        get_trial_remaining,
+        normalize_role,
+    )
 
     role_defaults = sorted(get_role_permissions(user.role))
     granted = _read_permission_list(user.permissions)
+    # member 试用功能: 进 effective 让前端显示入口, trial_remaining 供 UI 展示
+    trial_info: dict[str, int] = {}
+    role = normalize_role(user.role)
+    if role == "member":
+        for feat in TRIAL_FEATURES:
+            trial_info[feat] = get_trial_remaining(db, user.id, feat)
+    effective = set(role_defaults) | set(granted) | set(trial_info.keys())
     all_permissions = [
         {"key": k, "label": v[0], "group": v[1]} for k, v in PERMISSION_LABELS.items()
     ]
@@ -214,7 +231,9 @@ def get_my_permissions(
         "role": user.role,
         "granted": granted,
         "role_defaults": role_defaults,
-        "effective": sorted(set(role_defaults) | set(granted)),
+        "effective": sorted(effective),
+        "trial": trial_info,
+        "trial_daily_limit": TRIAL_DAILY_LIMIT,
         "all_permissions": all_permissions,
     }
 
@@ -279,3 +298,67 @@ def update_user_permissions(
     db.commit()
     logger.info(f"更新用户 {target.username}({target.id}) 模块权限: {merged['permissions']}")
     return {"permissions": merged["permissions"]}
+
+
+@router.get("/admin/usage-report")
+def admin_usage_report(
+    days: int = 7,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """后台用量报表(2026-09-15 C.2): 按用户/按接口/按天聚合高价值接口调用。"""
+    del owner
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func
+
+    from src.db.models import HighValueApiLog
+
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 90)))
+
+    # 按用户+接口聚合
+    rows = (
+        db.query(
+            HighValueApiLog.user_id,
+            HighValueApiLog.username,
+            HighValueApiLog.api_name,
+            func.count(HighValueApiLog.id).label("calls"),
+            func.max(HighValueApiLog.created_at).label("last_at"),
+        )
+        .filter(HighValueApiLog.created_at >= since)
+        .group_by(HighValueApiLog.user_id, HighValueApiLog.username, HighValueApiLog.api_name)
+        .order_by(func.count(HighValueApiLog.id).desc())
+        .all()
+    )
+
+    # 按天聚合
+    daily_rows = (
+        db.query(
+            func.date(HighValueApiLog.created_at).label("day"),
+            HighValueApiLog.api_name,
+            func.count(HighValueApiLog.id).label("calls"),
+        )
+        .filter(HighValueApiLog.created_at >= since)
+        .group_by(func.date(HighValueApiLog.created_at), HighValueApiLog.api_name)
+        .order_by(func.date(HighValueApiLog.created_at).desc())
+        .all()
+    )
+
+    return {
+        "since": since.isoformat(),
+        "days": days,
+        "by_user_api": [
+            {
+                "user_id": r.user_id,
+                "username": r.username,
+                "api_name": r.api_name,
+                "calls": r.calls,
+                "last_at": r.last_at.isoformat() if r.last_at else None,
+            }
+            for r in rows
+        ],
+        "by_day": [
+            {"day": str(r.day), "api_name": r.api_name, "calls": r.calls}
+            for r in daily_rows
+        ],
+    }

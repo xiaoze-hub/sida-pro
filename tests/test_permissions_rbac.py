@@ -18,6 +18,8 @@ from src.core.permissions import (
     ALL_PERMISSIONS,
     GUEST_STRATEGY,
     MANAGE_PERMISSIONS,
+    MEMBER_EXTRA_PERMISSIONS,
+    VIEW_PERMISSIONS,
     get_role_permissions,
     has_permission,
 )
@@ -34,27 +36,28 @@ def test_owner_has_all_permissions():
 
 
 def test_member_view_and_actions_but_no_manage():
-    """member: 浏览全部 + 自选/持仓/预测/聊天/上传, 无 manage_*。"""
+    """member: 行情/热力/持仓/报告 + 自选/持仓编辑/预测/聊天/上传; 无 manage_*; 锁死功能不在基础集。"""
     perms = get_role_permissions("member")
     for p in (
-        "view_dashboard", "view_quotes", "view_forecast", "view_reports",
-        "view_opportunities", "edit_watchlist", "edit_portfolio",
+        "view_dashboard", "view_quotes", "view_heatmap", "view_reports",
+        "edit_watchlist", "edit_portfolio",
         "run_prediction", "use_chat", "upload_files",
     ):
-        assert p in perms
+        assert p in perms, f"member 应有 {p}"
+    # 锁死功能(试用)不在基础权限集
+    for p in ("view_opportunities", "view_forecast", "view_l2", "view_dark"):
+        assert p not in perms, f"member 基础集不应含锁死功能 {p}"
     for p in MANAGE_PERMISSIONS:
         assert p not in perms
 
 
 def test_guest_view_only():
-    """guest: 仅浏览, 无 manage_*/edit/run/use/upload。"""
+    """guest: 四档体系下无权限(未登录只看首页); demo 账号由中间件单独处理。"""
     perms = get_role_permissions("guest")
-    for p in ("view_dashboard", "view_quotes", "view_forecast", "view_reports", "view_opportunities"):
-        assert p in perms
-    for p in MANAGE_PERMISSIONS | {
-        "edit_watchlist", "edit_portfolio", "run_prediction", "use_chat", "upload_files",
-    }:
-        assert p not in perms
+    # 2026-09-15 四档: guest 无任何权限点(点功能弹注册)
+    assert perms == set()
+    for p in MANAGE_PERMISSIONS | VIEW_PERMISSIONS | MEMBER_EXTRA_PERMISSIONS:
+        assert p not in perms, f"guest 不应有 {p}"
 
 
 def test_guest_strategy_constants():

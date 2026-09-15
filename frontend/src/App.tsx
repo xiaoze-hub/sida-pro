@@ -62,14 +62,14 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
   // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
   // 「行情」默认落上证指数(000001, type=index); 「盘口」项撤除(内容进工作台「盘口资金」标签)。
-  { to: '/stocks/000001?type=index', icon: LineChart, label: '行情', perm: 'view_forecast' },
+  { to: '/stocks/000001?type=index', icon: LineChart, label: '行情', perm: 'view_quotes' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
-  { to: '/heatmap', icon: LayoutGrid, label: '板块热力', perm: 'view_forecast' },
+  { to: '/heatmap', icon: LayoutGrid, label: '板块热力', perm: 'view_heatmap' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
-  { to: '/theme-mood', icon: Activity, label: '题材情绪', perm: 'view_forecast' },
+  { to: '/theme-mood', icon: Activity, label: '题材情绪', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
-  { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_opportunities' },
+  { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_dark' },
   { to: '/reports', icon: FileText, label: '报告', perm: 'view_reports' },
   { to: '/history', icon: Clock, label: '历史' },
   { to: '/portfolio', icon: List, label: '持仓', perm: 'edit_portfolio' },
@@ -490,23 +490,23 @@ function App() {
 
               <Route path="/" element={<DashboardPage />} />
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
-              {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流;复用 view_opportunities 权限) */}
-              <Route path="/dark-fund-top" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
+              {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
+              <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
                   旧路由 redirect 到 /stocks/:symbol(工作台), 内容并入「盘口资金/预测」等标签 */}
               <Route path="/forecast" element={<LegacyForecastRedirect />} />
               <Route path="/quote" element={<LegacyForecastRedirect />} />
               <Route path="/quote/:symbol" element={<LegacyQuoteSymbolRedirect />} />
               <Route path="/l2" element={<LegacyL2Redirect />} />
-              {/* P1-1: 板块热力图(复用 view_forecast 权限, 与行情域一致) */}
-              <Route path="/heatmap" element={<PermGuard perm="view_forecast" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
-              <Route path="/theme-mood" element={<PermGuard perm="view_forecast" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
+              {/* P1-1: 板块热力图(view_heatmap 权限) */}
+              <Route path="/heatmap" element={<PermGuard perm="view_heatmap" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
+              <Route path="/theme-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情并入工作台
                   (同路由内切 ?type=index|board); 正文由 Task 7 抽成 IndexBody/BoardBody */}
               <Route path="/index/:symbol" element={<LegacyIndexRedirect type="index" />} />
               <Route path="/boards/:blockCode" element={<LegacyIndexRedirect type="board" />} />
               <Route path="/portfolio" element={<PermGuard perm="edit_portfolio" myPerms={myPerms}><StocksPage /></PermGuard>} />
-              <Route path="/stocks/:symbol" element={<PermGuard perm="view_forecast" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
+              <Route path="/stocks/:symbol" element={<PermGuard perm="view_quotes" myPerms={myPerms}><StockWorkbenchPage /></PermGuard>} />
               <Route path="/stocks" element={<LegacyStocksRedirect />} />
               {/* §4.3: Agent + 数据源 → /system 二级页 */}
               <Route path="/system" element={<SystemPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />

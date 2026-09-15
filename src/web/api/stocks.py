@@ -184,10 +184,14 @@ def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Sessio
     """单股 L2 字段: 通达信 snapshot + more_info。
 
     权限(2026-09-15): view_l2 — member 3次/天试用, pro/owner 全开。
+    调用日志(2026-09-15 C.1): 每次调用落 high_value_api_logs。
     """
     from src.core.permissions import PERM_VIEW_L2, enforce_perm
 
     enforce_perm(user, PERM_VIEW_L2, db)
+    from src.core.hv_api_log import log_high_value_call
+
+    log_high_value_call(db, user, "l2", symbol)
     from src.core.stock_l2 import fetch_stock_l2
 
     data = fetch_stock_l2(symbol)

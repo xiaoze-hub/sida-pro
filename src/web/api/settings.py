@@ -1,11 +1,11 @@
 import base64
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
-from src.web.models import AppSettings
+from src.web.models import AppSettings, User
 from src.config import Settings
 from src.core.update_checker import check_update
 
@@ -209,22 +209,36 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
 
 
 @router.put("/{key}", response_model=SettingResponse)
-def update_setting(key: str, update: SettingUpdate, db: Session = Depends(get_db)):
+def update_setting(
+    key: str,
+    update: SettingUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from src.web.api.auth import get_current_user
+
+    # 懒 import 避开循环; 从 header 解 JWT 拿 user(审计用)
+    user = None
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            from src.web.api.auth import decode_token, principal_from_payload
+            payload = decode_token(auth[7:])
+            if payload:
+                user = principal_from_payload(payload)
+        except Exception:
+            pass
+
     # P2-1 (2026-09-05 28号审计): key 白名单, 系统保留键拒绝直写
     if key not in SETTING_KEYS:
-        from fastapi import HTTPException
-
         raise HTTPException(400, f"未知设置键: {key}")
     if key in ("jwt_secret", "allow_register"):
-        from fastapi import HTTPException
-
         raise HTTPException(403, "系统保留键, 拒绝直写")
     # P1-7: 掩码值拒收兜底, 防前端把 "********" 写回毁凭证
     if key in SECRET_SETTING_KEYS and (update.value or "") == SECRET_MASK:
-        from fastapi import HTTPException
-
         raise HTTPException(400, "敏感值未变更(掩码占位), 拒绝写入")
     setting = db.query(AppSettings).filter(AppSettings.key == key).first()
+    old_value = (setting.value if setting else "") or ""
     if not setting:
         desc = SETTING_DESCRIPTIONS.get(key, "")
         setting = AppSettings(key=key, value=update.value, description=desc)
@@ -234,6 +248,23 @@ def update_setting(key: str, update: SettingUpdate, db: Session = Depends(get_db
 
     db.commit()
     db.refresh(setting)
+
+    # B.6 系统设置审计: 记改前改后(敏感值记掩码, 不记明文)
+    if user:
+        try:
+            from src.web.api.audit import log_audit
+
+            def _mask(v: str) -> str:
+                if key in SECRET_SETTING_KEYS and v:
+                    return SECRET_MASK
+                return v[:50] + ("…" if len(v) > 50 else "")
+
+            log_audit(
+                db, user, f"settings_update:{key}",
+                detail=f"改前={_mask(old_value)!r} 改后={_mask(update.value or '')!r}",
+            )
+        except Exception:
+            pass
 
     # http_proxy 改动立刻反映到进程 env,所有 httpx(trust_env=True)免重启即走新代理
     if key == "http_proxy":
