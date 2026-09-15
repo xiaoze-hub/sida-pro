@@ -21,8 +21,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src.collectors.klines_ingestor import ingest_batch, get_default_symbols, ingest_symbol
 from src.models.market import MarketCode
-from sqlalchemy import create_engine
-from src.db.dialect import DB_URL
 from src.db.streams import publish_kline_backfill  # 2026-08-17 v0.2.65 (Phase 1)
 
 logger = logging.getLogger(__name__)
@@ -59,36 +57,35 @@ def _backfill_in_worker(days: int) -> dict:
 
     # 简单判断当前是否在交易时段后(>= 16:00 Asia/Shanghai)
     # 18:00 跑一般收盘后 3 小时, 数据稳定
-    engine = create_engine(DB_URL, pool_pre_ping=True)
-    try:
-        symbols = get_default_symbols()
-        logger.info(
-            f"[kline backfill] 开始: {len(symbols)} 只股, days={days}, "
-            f"concurrent={CONCURRENCY}"
+    # P0(2026-09-18): 模块级复用主引擎单例(build_engine 统一池参数),
+    # 禁止每次 backfill 新建引擎(原先 create_engine+dispose 打满连接池)。
+    from src.db.session import engine
+    symbols = get_default_symbols()
+    logger.info(
+        f"[kline backfill] 开始: {len(symbols)} 只股, days={days}, "
+        f"concurrent={CONCURRENCY}"
+    )
+    start = time.time()
+    result = asyncio.run(
+        ingest_batch(
+            engine,
+            symbols,
+            period="1d",
+            days=days,
+            concurrency=CONCURRENCY,
         )
-        start = time.time()
-        result = asyncio.run(
-            ingest_batch(
-                engine,
-                symbols,
-                period="1d",
-                days=days,
-                concurrency=CONCURRENCY,
-            )
-        )
-        elapsed = time.time() - start
-        rate = result["total_ingested"] / max(elapsed, 0.1)
-        logger.info(
-            f"[kline backfill] 完成: {result['total_ingested']} 行 / "
-            f"{elapsed:.1f}s / {rate:.0f} 行/秒"
-        )
-        return {
-            "ingested": result["total_ingested"],
-            "elapsed": elapsed,
-            "rate": rate,
-        }
-    finally:
-        engine.dispose()
+    )
+    elapsed = time.time() - start
+    rate = result["total_ingested"] / max(elapsed, 0.1)
+    logger.info(
+        f"[kline backfill] 完成: {result['total_ingested']} 行 / "
+        f"{elapsed:.1f}s / {rate:.0f} 行/秒"
+    )
+    return {
+        "ingested": result["total_ingested"],
+        "elapsed": elapsed,
+        "rate": rate,
+    }
 
 
 def _ingest_one_in_worker(engine, symbol: str, market: MarketCode) -> dict:
@@ -267,7 +264,8 @@ class KlineBackfillScheduler:
             return
         self._running = True
         try:
-            engine = create_engine(DB_URL, pool_pre_ping=True)
+            # P0(2026-09-18): 复用主引擎单例, 禁止 per-call create_engine(原实现还不 dispose, 泄漏)。
+            from src.db.session import engine
             try:
                 mc = MarketCode(market)
             except ValueError:

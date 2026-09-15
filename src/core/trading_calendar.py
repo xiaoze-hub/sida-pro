@@ -346,3 +346,13 @@ def trading_day_anchor(d: date | datetime | str) -> date:
     if is_trading_day(d):
         return d
     return prev_trading_day(d)
+
+
+def cache_day() -> str:
+    """当前自然日 ISO 字符串(缓存/存档键用, Asia/Shanghai 日期)。
+
+    P0(2026-09-18): 原实现挂在 dark_flow._cache_day, 被 tick_archive 反向 import,
+    形成 dark_flow ↔ tick_archive 循环依赖。收口到本模块(纯日期工具, 无业务依赖),
+    两边都改为 import 本函数。必须用 CST 日期 —— UTC 宿主 date.today() 在晚间会错位。
+    """
+    return datetime.now(_CN_TZ).date().isoformat()

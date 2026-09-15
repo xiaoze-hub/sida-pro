@@ -103,3 +103,6 @@ def run_dark_fund_top_job() -> dict:
     except Exception as e:  # noqa: BLE001
         db.rollback()
         logger.exception("暗盘资金 TOP 快照落库失败: %s", e)
+        return {"ok": False, "error": f"落库失败: {e}"}
+    finally:
+        db.close()  # P0: 异常路径也释放 session, 防泄漏

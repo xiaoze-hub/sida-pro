@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from src.web.database import get_db
 from src.web.models import DarkFundTopSnapshot, MarketScanRank
-from src.web.api.auth import get_current_user
+from src.web.api.auth import get_current_user, require_owner
 from src.db.models import User
 
 logger = logging.getLogger(__name__)
@@ -85,8 +85,9 @@ def get_market_scan_ranks(
     }
 
 
+# 安全审计 2026-09-15: 全市场扫描耗时~60s, 仅 owner 可手动触发(防 DoS)
 @router.post("/refresh")
-def refresh_market_scan(req: RefreshRequest, db: Session = Depends(get_db)):
+def refresh_market_scan(req: RefreshRequest, db: Session = Depends(get_db), _owner: User = Depends(require_owner)):
     """手动触发三榜扫描(同步, 全市场约 60s)。
 
     限池: 传 symbols(6 位代码列表)可快速测试/局部刷新。
@@ -175,8 +176,9 @@ def get_dark_fund_top(
     }
 
 
+# 安全审计 2026-09-15: 全市场暗盘扫描耗时~16s, 仅 owner 可手动触发(防 DoS)
 @router.post("/dark-fund-top/refresh")
-def refresh_dark_fund_top(req: DarkFundTopRequest, db: Session = Depends(get_db)):
+def refresh_dark_fund_top(req: DarkFundTopRequest, db: Session = Depends(get_db), _owner: User = Depends(require_owner)):
     """手动触发暗盘资金 TOP 扫描(同步, 全市场约 16s)。
 
     with_tck=True 时对持仓股附加 .tck 委托号级精确暗盘(并列 tck_dark_net_wan,

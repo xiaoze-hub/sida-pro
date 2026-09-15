@@ -156,8 +156,12 @@ async def ingest_symbol(
             except Exception:
                 try:
                     ts = datetime.fromisoformat(str(k.date)).replace(tzinfo=timezone.utc)
-                except Exception:
-                    ts = datetime.now(timezone.utc)
+                except Exception as e:
+                    # 解析失败 skip 该 bar: 用 now 兜底会写入错误时间戳污染时序
+                    logger.warning(
+                        "K线日期解析失败, skip %s %s date=%r: %s", symbol, period, k.date, e)
+                    fail_details.append({"source": source, "error": f"bad_date:{k.date!r}"})
+                    continue
             rows.append(
                 _to_db_row(
                     symbol, market.value, period, source, k, ts, adjust="qfq",

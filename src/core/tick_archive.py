@@ -75,7 +75,9 @@ def upsert_day(conn, tcode: str, symbol6: str, day: str, ticks: list, result: di
 def maybe_archive_day(tcode: str, symbol6: str, ticks: list, result: dict) -> bool:
     """收盘后快照一次。返回 True=本次写入。任何异常吞掉(False)。"""
     try:
-        from src.core.dark_flow import _cache_day
+        # P0(2026-09-18): 改从 trading_calendar 取 cache_day, 不再 import dark_flow
+        # (原先 dark_flow → tick_archive → dark_flow 循环依赖)。
+        from src.core.trading_calendar import cache_day as _cache_day
         day = _cache_day()
         if (tcode, day) in _ARCHIVED:
             return False

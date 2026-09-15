@@ -153,7 +153,9 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
             structured["ai_verdict"] = _ai_counter_check(symbol, dark)
             structured["board"] = _board_snapshot(symbol)
         return summary_str, structured
-    except Exception:
+    except Exception as e:
+        # P0: 静默失败加日志, 便于排查主力意图结构化异常
+        logger.warning("主力意图结构化计算失败 %s: %s", symbol, e)
         return "", None
 
 

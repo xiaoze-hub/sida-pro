@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -269,10 +270,16 @@ async def market_capital_flow_proxy():
     """
     try:
         import requests as _req
+
+        def _fetch_overview():
+            # P0(2026-09-18): 同步 requests 不得在 async def 内直接调用(会阻塞事件循环),
+            # 包一层 asyncio.to_thread 交给线程池。
+            return _req.get(
+                "http://115.190.177.213:8100/cn/market-overview", timeout=6
+            ).json()
+
         # 1. 国内网关: 两市主力净流入 + 成交额 + 涨跌家数
-        ov = _req.get(
-            "http://115.190.177.213:8100/cn/market-overview", timeout=6
-        ).json()
+        ov = await asyncio.to_thread(_fetch_overview)
         if ov.get("error"):
             # C2: 网关显式报错同属"源不可用" → 有备份则回退旧快照+标注
             stale = _stale_take("market-flow")
@@ -512,7 +519,12 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
     d = date.today()
     for _ in range(scanned):
         ds = d.strftime("%Y%m%d")
+        # P0(2026-09-18): 周末跳过 —— 龙虎榜仅交易日发布, 周末调外部 API 必空,
+        # 回溯窗口语义(自然日)不变, 只减少无谓外部调用次数。
+        is_weekend = d.weekday() >= 5
         d -= timedelta(days=1)
+        if is_weekend:
+            continue
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
         except Exception as e:

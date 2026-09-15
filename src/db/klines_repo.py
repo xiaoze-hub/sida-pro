@@ -25,13 +25,13 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
 
     查库失败返回 [] (调用方决定是否联网兜底), 不抛异常。
     """
-    from sqlalchemy import create_engine, text
-
-    from src.web.database import DB_URL
+    from sqlalchemy import text
 
     try:
         mc_str = _norm_market(market)
-        engine = create_engine(DB_URL, pool_pre_ping=True)
+        # P0(2026-09-18): 复用主引擎单例(src/db/session.py, 与主引擎同一连接池/参数),
+        # 禁止 per-call create_engine+dispose。
+        from src.db.session import engine
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         with engine.connect() as conn:
             rows = conn.execute(
@@ -44,7 +44,6 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
                 ),
                 {"s": symbol, "m": mc_str, "c": cutoff},
             ).fetchall()
-        engine.dispose()
         return [
             {
                 "date": str(r[0])[:10],

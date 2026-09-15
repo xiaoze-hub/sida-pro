@@ -18,10 +18,14 @@ from __future__ import annotations
 import logging
 import re
 import urllib.request
+from zoneinfo import ZoneInfo
 
 from marketdata.symbol import Symbol
 
 logger = logging.getLogger(__name__)
+
+# A股交易时段/缓存日键统一用上海时区(UTC 宿主 naive now 会错 8h, 跨日错位)
+_CST = ZoneInfo("Asia/Shanghai")
 
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
 
@@ -102,9 +106,13 @@ _TICKS_TTL = 90.0
 
 
 def _cache_day() -> str:
-    """当前交易日字符串(本地日期; 腾讯逐笔页码按自然日重置, 与本地日对齐足够)。"""
-    import datetime
-    return datetime.date.today().isoformat()
+    """当前交易日字符串(CST 日期; UTC 宿主 date.today() 会错位)。
+
+    P0(2026-09-18): 实现迁到 trading_calendar.cache_day, 本函数仅 re-export
+    兼容旧调用方(含 web/api/darkflow), 打破与 tick_archive 的循环依赖。
+    """
+    from src.core.trading_calendar import cache_day
+    return cache_day()
 
 
 def _cache_put(code: str, now: float, ticks: list[dict], last_page: int, last_seq: int) -> None:
@@ -157,7 +165,7 @@ def _drop_future_ticks(ticks: list[dict], now=None) -> list[dict]:
         return int(h) * 3600 + int(m) * 60 + int(s)
 
     try:
-        _now = now if now is not None else _dt.datetime.now()
+        _now = now if now is not None else _dt.datetime.now(_CST)
         now_s = _s(_now.strftime("%H:%M:%S"))
         limit = now_s + 60
     except Exception:  # noqa: BLE001
@@ -266,7 +274,7 @@ def _in_trading_hours() -> bool:
     import datetime as _dt
     from src.core.trading_calendar import is_trading_day
     try:
-        now = _dt.datetime.now()
+        now = _dt.datetime.now(_CST)
         # W2.6(B6): 交易日走日历 —— 旧 weekday<5 会在法定节假日空拉时误告警
         if not is_trading_day(now.date()):
             return False
@@ -440,7 +448,7 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
             _stale_data = True
             if old_ticks:
                 _last_t = old_ticks[-1].get("t", "")
-                _now_t = _dt.datetime.now().strftime("%H:%M:%S")
+                _now_t = _dt.datetime.now(_CST).strftime("%H:%M:%S")
                 if _last_t:
                     if _now_t >= "09:25:00" and _last_t < "09:25:00":
                         _stale_data = True          # 已开盘但数据停在开盘前(残留)
@@ -1405,7 +1413,7 @@ def compute_tck_active_ratio(symbol: str, tck_dir: str | None = None) -> float |
     if not tck_dir:
         tck_dir = os.environ.get("PANWATCH_TCK_DIR", "/app/data/tck")
     # 文件名规则: {sh|sz}{code}_{yyyymmdd}.tck
-    today = datetime.now().strftime("%Y%m%d")
+    today = datetime.now(_CST).strftime("%Y%m%d")  # CST 日期, UTC 宿主不错位
     # 判断市场: 6 开头 sh, 其他 sz
     market_prefix = "sh" if str(symbol).startswith("6") else "sz"
     fname = f"{market_prefix}{symbol}_{today}.tck"

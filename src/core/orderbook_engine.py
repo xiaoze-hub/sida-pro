@@ -46,8 +46,12 @@ import os
 import time
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# A股盘口时段判定统一用上海时区(UTC 宿主 naive now 会错 8h)
+_CST = ZoneInfo("Asia/Shanghai")
 
 try:
     from thsdk import THS  # 模块级软依赖: 无 thsdk 环境(如纯导入分析)不报错
@@ -85,7 +89,7 @@ def _now() -> float:
 
 def _is_trading_time(dt: datetime | None = None) -> bool:
     """是否处于 A 股连续竞价时段(不含尾盘特殊段)。"""
-    dt = dt or datetime.now()
+    dt = dt or datetime.now(_CST)
     h, m = dt.hour, dt.minute
     for (hs, ms, he, me) in SESSION_SEGMENTS:
         if (h, m) >= (hs, ms) and (h, m) < (he, me):
@@ -95,7 +99,7 @@ def _is_trading_time(dt: datetime | None = None) -> bool:
 
 def _is_tail_session(dt: datetime | None = None) -> bool:
     """是否处于尾盘段(>=14:55): 该时段的撤单多为自然撤单, 可忽略。"""
-    dt = dt or datetime.now()
+    dt = dt or datetime.now(_CST)
     if _is_trading_time(dt):
         return (dt.hour, dt.minute) >= TAIL_MINUTE
     return False
@@ -130,7 +134,7 @@ def fetch_snapshot(ths_code: str) -> dict[str, Any]:
             ts = _now()
             return {
                 "ts": ts,
-                "dt": datetime.now().isoformat(timespec="seconds"),
+                "dt": datetime.now(_CST).isoformat(timespec="seconds"),
                 "bid_levels": bid_levels,
                 "ask_levels": ask_levels,
                 "bid": {float(lv["price"]): int(sum(lv["ordersque"])) for lv in bid_levels},
@@ -803,7 +807,7 @@ if __name__ == "__main__":
         reason = (
             "盘口无事件: 当前为" + ("交易时段" if _is_trading_time() else "非交易时段") +
             ", 多次采样盘口完全静止(收盘静态快照), 无档位手数变化可检测。" +
-            f"本机时间 {_dt.now().strftime('%H:%M:%S')}, " +
+            f"本机时间 {_dt.now(_CST).strftime('%H:%M:%S')}, " +
             "若在 9:30-11:30/13:00-15:00 运行, 应能检测到托单/压单/撤单/幽灵单。"
         )
         print(f"  说明: {reason}")

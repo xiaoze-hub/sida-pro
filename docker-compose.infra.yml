@@ -17,13 +17,21 @@ services:
     container_name: panwatch-redis
     restart: unless-stopped
     profiles: ["infra"]
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    # 安全审计 2026-09-15: 加 requirepass(密码从 .env 必读) + 127.0.0.1 绑定,
+    # 与 docker-compose.yml T10 对齐; 原本无密码任意主机可直读全部缓存。
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru",
+              "--requirepass", "${REDIS_PASSWORD:?请在 .env 设置 REDIS_PASSWORD}"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - TZ=Asia/Shanghai
+    ports:
+      - "127.0.0.1:6379:6379"   # 只本机,经 SSH 访问; compose 内经 panwatch-redis:6379 + 密码
     volumes:
       - redis_data:/data
     networks:
       - panwatch-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 30s
       timeout: 5s
       retries: 3

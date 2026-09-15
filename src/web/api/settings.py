@@ -70,7 +70,8 @@ SETTING_DESCRIPTIONS = {
 }
 
 # 敏感 key:列表接口不回显完整值,只返回是否已配置
-SECRET_SETTING_KEYS = {"wudao_mcp_token", "zhitu_token", "tdx_api_key", "ths_password", "ths_sdk_password"}
+# 安全审计 2026-09-15: http_proxy 可含内网凭证, ths_username 为账号标识, 一并掩码
+SECRET_SETTING_KEYS = {"wudao_mcp_token", "zhitu_token", "tdx_api_key", "ths_password", "ths_sdk_password", "http_proxy", "ths_username"}
 SECRET_MASK = "********"
 
 SETTING_KEYS = list(SETTING_DESCRIPTIONS.keys())

@@ -62,14 +62,16 @@ def _rpc_more(symbol: str) -> dict:
 
 
 def fetch_snapshot(symbol: str) -> dict:
-    """snapshot 映射; 缺字段 None。"""
+    """snapshot 映射; 缺字段 None。Amount 源为万元 → ×1e4 归元(与 FCAmo/OpenAmo 同口径)。"""
     s = _rpc_snap(symbol)
     if not s:
         return {}
+    amount = _f(s.get("Amount"))
     return {
         "now": _f(s.get("Now")), "last_close": _f(s.get("LastClose")),
         "open": _f(s.get("Open")), "high": _f(s.get("Max")), "low": _f(s.get("Min")),
-        "volume": _f(s.get("Volume")), "amount": _f(s.get("Amount")),
+        "volume": _f(s.get("Volume")),
+        "amount": (amount * 1e4) if amount is not None else None,  # 万元→元
         "inside": _f(s.get("Inside")), "outside": _f(s.get("Outside")),
         "before5min": _f(s.get("Before5MinNow")), "average": _f(s.get("Average")),
         "buyp": _lst(s.get("Buyp")), "buyv": _lst(s.get("Buyv")),

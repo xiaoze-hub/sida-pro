@@ -11,6 +11,8 @@
     app.include_router(my_ai_services.router, prefix="/api/my-ai-services", tags=["my-ai-services"])
 """
 import json
+import ipaddress
+import urllib.parse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -26,6 +28,44 @@ SECRET_MASK = "********"
 
 # 场景下拉(与 providers.SCENES 对齐, 仅用于前端下拉提示; 后端宽松存储, 不校验枚举)
 SCENES = ("chat", "trading_agents", "reports", "referee", "selfcheck", "insights", "vision")
+
+
+def _validate_base_url(base_url: str) -> str:
+    """安全审计 2026-09-15: BYOK base_url 拒绝内网/云 metadata 地址(SSRF 防护)。
+
+    用户自定义 LLM 服务商的 base_url 若指向 169.254.169.254 / 10.x / 192.168.x
+    等私网段, 可借服务器发起内网请求。此处拒绝私网/环回/链路本地/保留地址。
+    """
+    url = (base_url or "").strip()
+    if not url:
+        return url
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        raise HTTPException(400, "base_url 格式非法")
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        raise HTTPException(400, "base_url 缺少主机名")
+    # IP 直连: 拒绝私网/环回/链路本地/保留/组播
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise HTTPException(400, f"base_url 不允许指向内网/本地地址: {host}")
+    except ValueError:
+        pass  # 非 IP 形式, 继续走域名解析校验
+    # 域名解析: 命中内网段也拒绝(防 DNS 指向内网)
+    import socket
+    try:
+        for info in socket.getaddrinfo(host, None):
+            try:
+                resolved = ipaddress.ip_address(info[4][0])
+                if resolved.is_private or resolved.is_loopback or resolved.is_link_local:
+                    raise HTTPException(400, f"base_url 域名解析到内网地址, 已拒绝: {host}")
+            except ValueError:
+                continue
+    except (socket.gaierror, OSError):
+        pass  # 解析失败不阻断, 交给后续请求报错
+    return url
 
 
 def _require_not_guest(user: User) -> User:
@@ -106,6 +146,8 @@ def create_my_service(
 ):
     """创建服务商(归属当前登录 user.id)。"""
     _require_not_guest(user)
+    # 安全审计 2026-09-15: 校验 base_url 不指向内网
+    _validate_base_url(body.base_url)
     svc = UserAIService(
         user_id=user.id,
         name=body.name.strip(),
@@ -139,6 +181,9 @@ def update_my_service(
         raise HTTPException(404, "服务商不存在")
 
     data = body.model_dump(exclude_unset=True)
+    # 安全审计 2026-09-15: 更新 base_url 时同样校验内网地址
+    if data.get("base_url"):
+        _validate_base_url(data["base_url"])
     # 掩码占位(编辑未修改时回传 "********")/空串/None 不覆盖真 key
     if data.get("api_key") in (SECRET_MASK, "", None):
         data.pop("api_key", None)

@@ -201,9 +201,17 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 // 模块权限路由守卫(2026-08-16): 未授权模块直接跳首页。
 // 配合后端 403 + 导航过滤, 三层防"未授权模块可见"。
-// myPerms 尚未加载(null)时不拦截(避免闪跳), 加载完成后才生效。
+// 安全审计 2026-09-15: myPerms 尚未加载(null)时不再放行(fail-open),
+// 改为渲染 loading, 加载完成后再判定 —— 防止权限未就绪期间短暂可见未授权内容。
 function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<string> | null; children: React.ReactNode }) {
-  if (!perm || !myPerms) return <>{children}</>
+  if (!perm) return <>{children}</>
+  if (!myPerms) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <span className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    )
+  }
   if (!myPerms.has(perm)) return <Navigate to="/" replace />
   return <>{children}</>
 }
@@ -530,7 +538,8 @@ function App() {
               <Route path="/audit" element={<LegacyTabRedirect to="/settings?tab=audit" />} />
               <Route path="/help" element={<LegacyTabRedirect to="/settings?tab=help" />} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
-              <Route path="/analysis/:symbol/:date" element={<AnalysisDetailPage />} />
+              {/* 安全审计 2026-09-15: /analysis 详情页原本无权限守卫, 补 PermGuard */}
+              <Route path="/analysis/:symbol/:date" element={<PermGuard perm="view_reports" myPerms={myPerms}><AnalysisDetailPage /></PermGuard>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </AppErrorBoundary>

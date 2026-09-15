@@ -185,7 +185,9 @@ def _fetch_cn_gateway_flow(symbol: str) -> CapitalFlow | None:
             main_net_5d=None,
             date=_today_cn(),  # 今日实时
         )
-    except Exception:
+    except Exception as e:
+        # P0: 静默失败加日志, 便于排查网关资金流异常
+        logger.warning("资金流向网关采集失败 %s: %s", symbol, e)
         return None
 
 

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.web.database import get_db
-from src.web.models import LogEntry
+from src.web.models import LogEntry, User
 from src.web.log_handler import get_log_handler_stats
 from src.core.timezone import format_app_tz
 from src.web.api.auth import get_current_user, require_owner
@@ -68,6 +68,7 @@ class LogListResponse(BaseModel):
     next_before_id: int | None = None
 
 
+# 安全审计 2026-09-15: 全站日志含敏感路径/错误栈, 仅 owner 可读取
 @router.get("", response_model=LogListResponse)
 def list_logs(
     level: str = Query("", description="日志级别过滤，逗号分隔"),
@@ -85,6 +86,7 @@ def list_logs(
     offset: int = Query(0, ge=0),
     before_id: int = Query(0, ge=0, description="cursor 分页: 取该 id 之前的日志"),
     db: Session = Depends(get_db),
+    _owner: User = Depends(require_owner),
 ):
     query = db.query(LogEntry)
 
@@ -203,8 +205,9 @@ def list_logs(
     )
 
 
+# 安全审计 2026-09-15: 清空全站日志属破坏性操作, 仅 owner 可执行
 @router.delete("")
-def clear_logs(db: Session = Depends(get_db)):
+def clear_logs(db: Session = Depends(get_db), _owner: User = Depends(require_owner)):
     count = db.query(LogEntry).delete()
     db.commit()
     return {"deleted": count}
