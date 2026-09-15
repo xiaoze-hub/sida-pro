@@ -170,7 +170,7 @@ def get_dark_fund_top(
         "available": True,
         "snapshot_date": row.snapshot_date,
         "market": row.stock_market,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "updated_at": row.created_at.isoformat() if row.created_at else None,
         **payload,
     }
 
