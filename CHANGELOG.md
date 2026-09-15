@@ -7,6 +7,19 @@
 
 ## 2026-09-15
 
+### release-v0.6.8: Skill Gateway 对外开放 + UX 走查修复
+
+**性质**: 后端 Gateway/迁移 v166 + UX 修复。**需重启后端**。发版 v0.6.8。
+
+**本批**:
+- **Skill Gateway Phase 0–3**: AppKey 鉴权 / 限流 / 计量 / trial / Pro 申请 / 红线词 / 突增冻结 / owner 管理接口。详见 `docs/skill-gateway-phase0.md`。
+- **UX 走查修复**: dark-flow-tq/more-info 空数据不 404；phase 前端 timeout 30s；板块空态引导；healthcheck 放宽。
+- **生产**: 容器 `WEB_WORKERS=1`（workers=2 慢启动竞态，Dockerfile healthcheck 已放宽待下次镜像）。
+
+**门禁**: Gateway 13/13；后端 2326+ passed；前端 tsc/eslint/vitest 全绿。
+
+**发版**: main + tag v0.6.8 + 镜像 `panwatch:v0.6.8` + 容器重建。
+
 ### feat(skill-gateway): Phase 2.3+3.1+3.3 —— 红线词 + 突增冻结 + 管理接口
 
 **性质**: 后端 `skills_gateway.py` 扩展。**需重启后端**。
