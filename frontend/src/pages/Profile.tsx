@@ -1,7 +1,7 @@
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck, AlertTriangle } from 'lucide-react'
+import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -15,7 +15,7 @@ interface ProfileInfo {
   username: string
   nickname: string
   avatar: string
-  role: 'owner' | 'member'
+  role: 'owner' | 'pro' | 'member'
   created_at: string | null
 }
 
@@ -390,7 +390,75 @@ export function Profile() {
             />
           </div>
         </section>
+
+        {/* ④ Pro 升级(B.1) */}
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+          <div className="flex items-center gap-2 mb-4">
+            <Crown className="w-4 h-4 text-amber-500" />
+            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">Pro 升级</h3>
+          </div>
+          {profile?.role === 'owner' || profile?.role === 'pro' ? (
+            <div className="rounded-md border border-emerald-700/25 bg-emerald-500/10 p-3.5 text-[12px] text-emerald-700 dark:text-emerald-400">
+              您已是 {profile.role === 'owner' ? '管理员' : 'Pro 用户'}，可使用全部功能。
+            </div>
+          ) : (
+            <ProApplyCard />
+          )}
+        </section>
       </div>
+    </div>
+  )
+}
+
+function ProApplyCard() {
+  const { toast } = useToast()
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [applied, setApplied] = useState(false)
+
+  const submit = async () => {
+    setSubmitting(true)
+    try {
+      const r = await fetchAPI<{ status: string; message: string }>('/profile/pro-apply', {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      })
+      toast(r.message || '申请已提交', 'success')
+      setApplied(true)
+    } catch (e: any) {
+      toast(e?.message || '提交失败，请稍后重试', 'error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (applied) {
+    return (
+      <div className="rounded-md border border-primary/25 bg-primary/5 p-3.5 text-[12px] text-foreground">
+        申请已提交，等待管理员审核。审核通过后您的账号将升级为 Pro。
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-border/50 bg-accent/20 p-3.5 text-[12px] text-muted-foreground">
+        Pro 账号可使用全部功能：机会页、数智决策三指标、暗盘资金、L2资金（不限试用次数）。
+      </div>
+      <div>
+        <Label className="text-[11px]">申请理由（可选）</Label>
+        <Input
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="简述您的使用场景..."
+          className="mt-1.5 h-9"
+          maxLength={200}
+        />
+      </div>
+      <Button className="h-8 w-full" onClick={submit} disabled={submitting}>
+        <Crown className="w-3.5 h-3.5" />
+        {submitting ? '提交中...' : '申请升级 Pro'}
+      </Button>
     </div>
   )
 }

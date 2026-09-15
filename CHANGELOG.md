@@ -7,6 +7,14 @@
 
 ## 2026-09-18
 
+### feat(profile): 个人中心 Pro 升级申请(B.1 收尾)
+
+**性质**: 前端 Profile 页 + 后端 `/api/profile/pro-apply`。**需重启后端**。
+
+- `POST /api/profile/pro-apply`: member 提交升级申请, 落 `audit_logs` + 站内通知 admin
+- Profile 页新增「Pro 升级」区块: member 可填理由提交申请; pro/owner 显示已升级徽章
+- B.3/B.5 确认已有: BYOK 优先 → 平台授权(inherit/granted/deny_all) → 全局 fallback
+
 ### release: v0.7.0
 
 **性质**: 版本发布。权限体系四档落地。
