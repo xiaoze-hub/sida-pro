@@ -84,6 +84,66 @@ RISK_DISCLAIMER = (
     "股市有风险, 入市需谨慎。"
 )
 
+# 投顾红线词(Phase 3.1): 输出含这些词时强制追加免责 + 记录
+# 只做"追加提示+审计", 不改写业务结论(避免误伤技术指标描述)
+_ADVISORY_RED_FLAGS = (
+    "买入", "卖出", "建议买", "建议卖", "必涨", "必跌", "稳赚",
+    "保证收益", "稳赚不赔", "翻倍", "翻几倍", "无风险",
+    "满仓", "清仓", "抄底", "逃顶", "跟单",
+)
+_RED_LINE_NOTE = (
+    "【合规提示】结果含可能被理解为投资建议的表述, 已按投顾红线处理: "
+    "本内容仅为数据/算法输出, 不构成买卖建议。"
+)
+
+
+def _compliance_wrap(result: str) -> tuple[str, list[str]]:
+    """扫描红线词, 命中则追加合规提示; 返回 (结果, 命中词列表)。"""
+    hits = [w for w in _ADVISORY_RED_FLAGS if w in (result or "")]
+    if not hits:
+        return result, []
+    wrapped = f"{result}\n\n{_RED_LINE_NOTE}"
+    return wrapped, hits
+
+
+# 异常冻结(Phase 2.3): 单 key 突增超阈值自动冻结
+_FREEZE_WINDOW_S = 300  # 5 分钟窗口
+_FREEZE_MULTIPLIER = 10
+_RECENT_CALLS: dict[str, list[float]] = {}  # key_hash -> [timestamps]
+
+
+def _detect_spike_and_freeze(db: Session, row: SkillApiKey) -> None:
+    """5 分钟内调用次数突增超 10× 基线 → 冻结 + 告警。"""
+    now = time.time()
+    hist = _RECENT_CALLS.setdefault(row.key_hash, [])
+    hist.append(now)
+    # 保留窗口内
+    cutoff = now - _FREEZE_WINDOW_S
+    hist[:] = [t for t in hist if t >= cutoff]
+    if len(hist) < 20:  # 样本太少不判
+        return
+    # 基线: 前一窗口(5分钟前~10分钟前)调用数
+    prev_cutoff = now - 2 * _FREEZE_WINDOW_S
+    prev = [t for t in hist if prev_cutoff <= t < cutoff]
+    prev_n = max(len(prev), 1)
+    if len(hist) >= prev_n * _FREEZE_MULTIPLIER and len(hist) >= 30:
+        row.status = "frozen"
+        row.frozen_reason = f"调用突增({len(hist)}/5min, 基线 {prev_n})"
+        db.commit()
+        logger.warning(
+            "skill key %s 自动冻结: %s", row.key_prefix, row.frozen_reason,
+        )
+        # 告警: 通知中心站内(若有 admin 用户)
+        try:
+            from src.core.notify_center import notify_task_done
+
+            notify_task_done(
+                "skill_gateway_freeze",
+                f"Skill Key {row.key_prefix} 因调用突增自动冻结: {row.frozen_reason}",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("冻结告警发送失败: %r", e)
+
 
 # ── Key 工具 ────────────────────────────────────────────────────────
 
@@ -270,6 +330,8 @@ async def run_skill(
         result = await tool.handler(db, body.args or {}, None)
         if not isinstance(result, str):
             result = str(result)
+        # Phase 3.1: 投顾红线词扫描
+        result, red_hits = _compliance_wrap(result)
         duration_ms = int((time.monotonic() - t0) * 1000)
     except Exception as e:  # noqa: BLE001
         status_code = 500
@@ -280,12 +342,18 @@ async def run_skill(
     _log_usage(db, row.id, name, status_code, duration_ms)
     row.last_used_at = datetime.now(timezone.utc)
     db.commit()
+    # Phase 2.3: 突增检测
+    _detect_spike_and_freeze(db, row)
+
+    risk = RISK_DISCLAIMER
+    if red_hits:
+        risk = f"{RISK_DISCLAIMER} | 合规: 命中红线词 {red_hits}"
 
     return SkillRunResponse(
         skill=name,
         result=result,
         caliber=tool.caliber,
-        risk=RISK_DISCLAIMER,
+        risk=risk,
         duration_ms=duration_ms,
     )
 
@@ -379,4 +447,135 @@ def apply_pro(
     return {
         "status": "pending_review",
         "message": "申请已提交, 请等待人工审核(1-2 个工作日)。审核通过后额度自动升至 5000 次/天。",
+    }
+
+
+# ── 后台管理(Phase 3.3): 仅 owner(JWT)可操作 ────────────────────────
+
+from fastapi import Depends as _Dep  # noqa: E402  (避免文件头过长)
+from src.web.api.auth import get_current_user as _get_current_user  # noqa: E402
+from src.db.models import User as _User  # noqa: E402
+
+
+async def _require_owner_admin(user: _User = _Dep(_get_current_user)) -> _User:
+    if user.role != "owner":
+        raise HTTPException(403, "仅 owner 可管理 Skill Key")
+    return user
+
+
+@router.get("/admin/skills/keys")
+def admin_list_keys(
+    db: Session = Depends(get_db),
+    user: _User = Depends(_require_owner_admin),
+) -> dict:
+    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。"""
+    rows = db.query(SkillApiKey).order_by(SkillApiKey.created_at.desc()).limit(200).all()
+    return {
+        "keys": [
+            {
+                "id": r.id,
+                "key_prefix": r.key_prefix,
+                "owner_label": r.owner_label,
+                "tier": r.tier,
+                "status": r.status,
+                "daily_limit": r.daily_limit,
+                "frozen_reason": r.frozen_reason or "",
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+class AdminKeyAction(BaseModel):
+    key_id: int
+    action: str = Field(..., description="freeze | unfreeze | disable | set_tier | set_limit")
+    tier: str = Field(default="", description="set_tier 时: free/trial/pro")
+    daily_limit: int = Field(default=0, description="set_limit 时: 新额度")
+    reason: str = Field(default="", max_length=200)
+
+
+@router.post("/admin/skills/keys/action")
+def admin_key_action(
+    body: AdminKeyAction,
+    db: Session = Depends(get_db),
+    user: _User = Depends(_require_owner_admin),
+) -> dict:
+    """冻结/解冻/禁用/调档/调额度。"""
+    row = db.query(SkillApiKey).filter(SkillApiKey.id == body.key_id).first()
+    if not row:
+        raise HTTPException(404, "Key 不存在")
+    act = body.action.strip().lower()
+    if act == "freeze":
+        row.status = "frozen"
+        row.frozen_reason = body.reason or "人工冻结"
+    elif act == "unfreeze":
+        row.status = "active"
+        row.frozen_reason = ""
+    elif act == "disable":
+        row.status = "disabled"
+        row.frozen_reason = body.reason or "人工禁用"
+    elif act == "set_tier":
+        t = body.tier.strip().lower()
+        if t not in TIER_DAILY_LIMIT:
+            raise HTTPException(400, "tier 必须是 free/trial/pro")
+        row.tier = t
+        row.daily_limit = TIER_DAILY_LIMIT[t]
+        if t == "trial" and not row.expires_at:
+            row.expires_at = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
+    elif act == "set_limit":
+        if body.daily_limit <= 0 or body.daily_limit > 100000:
+            raise HTTPException(400, "daily_limit 需在 1..100000")
+        row.daily_limit = int(body.daily_limit)
+    else:
+        raise HTTPException(400, f"未知 action: {body.action}")
+    db.commit()
+    logger.info("admin key action %s id=%s by %s", act, row.id, getattr(user, "username", "?"))
+    return {
+        "id": row.id,
+        "status": row.status,
+        "tier": row.tier,
+        "daily_limit": row.daily_limit,
+        "frozen_reason": row.frozen_reason or "",
+    }
+
+
+@router.get("/admin/skills/usage")
+def admin_usage_report(
+    days: int = Query(default=7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    user: _User = Depends(_require_owner_admin),
+) -> dict:
+    """用量报表: 按 key 聚合近 N 天调用次数。"""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(
+            SkillUsage.api_key_id,
+            SkillUsage.skill_name,
+            SkillUsage.status_code,
+        )
+        .filter(SkillUsage.created_at >= since)
+        .all()
+    )
+    by_key: dict[int, dict] = {}
+    for r in rows:
+        rec = by_key.setdefault(r.api_key_id, {"total": 0, "skills": {}, "errors": 0})
+        rec["total"] += 1
+        rec["skills"][r.skill_name] = rec["skills"].get(r.skill_name, 0) + 1
+        if r.status_code >= 400:
+            rec["errors"] += 1
+    keys = {k.id: k for k in db.query(SkillApiKey).filter(SkillApiKey.id.in_(list(by_key))).all()} if by_key else {}
+    return {
+        "days": days,
+        "report": [
+            {
+                "key_prefix": keys[kid].key_prefix if kid in keys else str(kid),
+                "tier": keys[kid].tier if kid in keys else "",
+                "total": rec["total"],
+                "errors": rec["errors"],
+                "top_skills": sorted(rec["skills"].items(), key=lambda x: -x[1])[:5],
+            }
+            for kid, rec in sorted(by_key.items(), key=lambda x: -x[1]["total"])
+        ],
     }
