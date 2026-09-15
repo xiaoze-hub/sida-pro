@@ -7,6 +7,17 @@
 
 ## 2026-09-15
 
+### perf(gateway): 并发优化 —— 多 worker + 令牌桶限流 + 热点缓存
+
+**性质**: 后端 `server.py` / `skills_gateway.py` / `Dockerfile`。**需重启后端**。
+
+- **任务1 多 worker**: 默认 `WEB_WORKERS=4`(小主机 1.5c/1.5G 可 env 降为 1); Dockerfile healthcheck 已放宽 90s。
+- **任务3 令牌桶限流**: burst 50/trial·30/free·100/pro + 匀速补充 20·15·60/分; 日配额仍单独计; 超限返回 `Retry-After`。
+- **任务2 热点缓存**: quote 类 skill 4s TTL, 同 symbol 并发只打一次上游。
+- **门禁**: 新测试 19/19。
+
+[commit 待回填]
+
 ### release-v0.6.8: Skill Gateway 对外开放 + UX 走查修复
 
 **性质**: 后端 Gateway/迁移 v166 + UX 修复。**需重启后端**。发版 v0.6.8。
