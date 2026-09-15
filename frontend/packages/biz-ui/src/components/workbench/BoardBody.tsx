@@ -191,7 +191,17 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
 
   return (
     <div className="page-container sida-page-enter pb-10">
-      {error && <div className="card p-3 mb-4 text-[12px] text-amber-700 dark:text-amber-500">{error}</div>}
+      {error && (
+        <div className="card p-3 mb-4 text-[12px] text-amber-700 dark:text-amber-500">
+          {error}
+          {/* UX 走查 2026-09-15: 板块码无效/不存在时给下一步, 不留死路 */}
+          {/不存在|不可用|无数据/.test(error) ? (
+            <a href="/heatmap" className="ml-2 underline text-primary">
+              去板块热力图选板块
+            </a>
+          ) : null}
+        </div>
+      )}
       {loading && !detail ? (
         <div className="grid gap-3">
           <div className="h-[92px] rounded-md border border-border/50 animate-pulse bg-accent/20" />
