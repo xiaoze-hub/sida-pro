@@ -748,6 +748,19 @@ try:
 except ImportError:
     pass
 
+# Skill Gateway(2026-09-15): 对外开放 skill 的 Key 鉴权 + 限流 + 计量
+# **不挂 protected** —— 外部开发者用 X-API-Key, 无系统 JWT
+try:
+    from src.web.api import skills_gateway
+
+    app.include_router(
+        skills_gateway.router,
+        prefix="/api",
+        tags=["skill-gateway"],
+    )
+except ImportError:
+    pass
+
 
 @app.get("/api/version")
 async def version():

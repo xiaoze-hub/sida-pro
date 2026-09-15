@@ -4135,6 +4135,55 @@ CREATE TABLE app_jobs (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_app_jobs_status ON app_jobs(status)"))
 
 
+def _m166_skill_gateway_tables(conn: Connection) -> None:
+    """Skill Gateway: AppKey + 用量表(2026-09-15)。
+
+    对外开放 skill 的鉴权与计量落库; key 只存 hash, 明文创建时返回一次。
+    """
+    if _has_table(conn, "skill_api_keys"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE skill_api_keys (
+  id {pk},
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL DEFAULT '',
+  owner_label TEXT DEFAULT '',
+  tier TEXT NOT NULL DEFAULT 'free',
+  status TEXT NOT NULL DEFAULT 'active',
+  daily_limit INTEGER NOT NULL DEFAULT 100,
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at {ts},
+  last_used_at {ts},
+  frozen_reason TEXT DEFAULT ''
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE skill_usage (
+  id {pk},
+  api_key_id INTEGER NOT NULL,
+  skill_name TEXT NOT NULL,
+  status_code INTEGER NOT NULL DEFAULT 200,
+  duration_ms INTEGER DEFAULT 0,
+  input_tokens INTEGER DEFAULT 0,
+  output_tokens INTEGER DEFAULT 0,
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_skill_usage_key_created ON skill_usage(api_key_id, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_skill_usage_created ON skill_usage(created_at)"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4236,6 +4285,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(163, "theme_mood_table", _m163_theme_mood_table),
     Migration(164, "market_phase_extra_columns", _m164_market_phase_extra_columns),
     Migration(165, "app_jobs_table", _m165_app_jobs_table),
+    Migration(166, "skill_gateway_tables", _m166_skill_gateway_tables),
 )
 
 
