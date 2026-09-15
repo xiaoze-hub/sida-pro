@@ -7,6 +7,24 @@
 
 ## 2026-09-15
 
+### feat(skill-gateway): Phase 0+1 —— 对外开放 skill 的 Key 鉴权 + 限流 + 计量
+
+**性质**: 后端新增 `skills_gateway.py` + 模型/迁移 v166。**需重启后端**。
+
+- **Phase 0 摸底**: 30 个 chat 工具清单 + 开放白名单 23 个 + 禁放 7 个(个人数据/SSRF/账号)。见 `docs/skill-gateway-phase0.md`。
+- **Phase 1 MVP**:
+  - `POST /api/keys` 领 AppKey(`sk_` 前缀, 明文只返回一次, 服务端只存 sha256+盐)
+  - `GET /api/skills` 列出可调用 skill(含 schema/tier)
+  - `POST /api/skills/{name}/run` `X-API-Key` 鉴权后执行, 返回 result + caliber + **风险提示**
+  - 限流: Redis `skill_quota:{key}:{day}` + `skill_burst:{key}:{minute}`, 失败回退内存; 免费 100/天、trial 500/天、20/分
+  - 计量: `skill_usage` 表落库
+  - trial: 10 天自动降 free
+  - `GET /api/usage` 查剩余额度; `POST /api/pro/apply` 申请 Pro(人工审核)
+- **红线**: 密钥不进代码/日志; skill 原文不外泄; 个人数据类工具禁止; LLM 只回结构化结果。
+- **门禁**: 新测试 7/7。
+
+[commit 待回填]
+
 ### fix(ux): 板块空态引导 + WEB_WORKERS 启动竞态缓解
 
 **性质**: 前端 BoardBody + server.py 警告 + Dockerfile healthcheck。需重启 + 静态面。

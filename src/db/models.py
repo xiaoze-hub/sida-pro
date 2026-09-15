@@ -1572,4 +1572,47 @@ class DarkFundTopSnapshot(Base):
     stock_market = Column(String, nullable=False, default="CN")
     payload = Column(JSON, default={})  # scan_dark_fund_top() 的完整返回
     created_at = Column(DateTime, server_default=func.now())
+
+
+class SkillApiKey(Base):
+    """Skill Gateway 对外开放 AppKey(2026-09-15)。
+
+    - key_hash: sha256(salt+raw_key), 明文只在创建时返回一次
+    - tier: free | trial | pro
+    - status: active | frozen | disabled
+    - daily_limit: 当日调用上限(trial 500 / free 100 / pro 5000)
+    """
+
+    __tablename__ = "skill_api_keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key_hash = Column(String, unique=True, nullable=False, index=True)
+    key_prefix = Column(String, nullable=False, default="")  # 前 8 位, 供展示
+    owner_label = Column(String, default="")  # 手机号/微信标识(可空)
+    tier = Column(String, nullable=False, default="free")  # free/trial/pro
+    status = Column(String, nullable=False, default="active")  # active/frozen/disabled
+    daily_limit = Column(Integer, nullable=False, default=100)
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=True)  # trial 到期
+    last_used_at = Column(DateTime, nullable=True)
+    frozen_reason = Column(String, default="")
+
+
+class SkillUsage(Base):
+    """Skill Gateway 调用计量(2026-09-15)。"""
+
+    __tablename__ = "skill_usage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_key_id = Column(Integer, nullable=False, index=True)
+    skill_name = Column(String, nullable=False)
+    status_code = Column(Integer, nullable=False, default=200)
+    duration_ms = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("ix_skill_usage_key_created", "api_key_id", "created_at"),
+    )
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
