@@ -207,7 +207,9 @@ def _calculate_atr(klines: list[KlineData], period: int = 14) -> float | None:
 
     try:
         return atr([(k.high, k.low, k.close) for k in klines], period)
-    except Exception:
+    except Exception as e:
+        # P0: 静默失败加日志
+        logger.warning("ATR 计算失败: %s", e)
         return None
 
 
@@ -325,7 +327,9 @@ def _detect_combined_patterns(klines: list[KlineData]) -> str | None:
             return None
         # 按信号强度排序: 看涨形态按出现顺序返回第一个(金针/双针=强底部信号优先)
         return hits[0].name
-    except Exception:
+    except Exception as e:
+        # P0: 静默失败加日志
+        logger.warning("组合K线形态识别失败: %s", e)
         return None
 
 
@@ -506,7 +510,9 @@ def _get_combined_patterns(klines: list[KlineData]) -> list[dict]:
         # 看涨在前,看跌在后
         result.sort(key=lambda x: 0 if x["signal"] == "看涨" else 1)
         return result
-    except Exception:
+    except Exception as e:
+        # P0: 静默失败加日志
+        logger.warning("组合K线形态列表识别失败: %s", e)
         return []
 
 
@@ -688,9 +694,10 @@ class KlineCollector:
         try:
             from datetime import datetime
             from zoneinfo import ZoneInfo
-            from sqlalchemy import create_engine, text as _text
-            from src.db.dialect import DB_URL
-            engine = create_engine(DB_URL, pool_pre_ping=True)
+            from sqlalchemy import text as _text
+            # P0(2026-09-18): 复用主引擎单例(src/db/session.py, build_engine 统一池参数),
+            # 禁止 per-call create_engine+dispose(每次落 K 线都新建连接池, 高频时打爆 FD/池)。
+            from src.db.session import engine
             with engine.begin() as conn:
                 for b in bars:
                     try:
@@ -713,7 +720,6 @@ class KlineCollector:
                          "open": float(b.open), "high": float(b.high), "low": float(b.low),
                          "close": float(b.close), "volume": int(b.volume or 0)},
                     )
-            engine.dispose()
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[kline-persist] {self.market.value}:{symbol}: {e!r}")
 
@@ -726,9 +732,9 @@ class KlineCollector:
         """
         try:
             from datetime import datetime, timedelta, timezone
-            from sqlalchemy import create_engine, text
-            from src.db.dialect import DB_URL
-            engine = create_engine(DB_URL, pool_pre_ping=True)
+            from sqlalchemy import text
+            # P0(2026-09-18): 复用主引擎单例, 禁止 per-call create_engine+dispose。
+            from src.db.session import engine
             cutoff = datetime.now(timezone.utc) - timedelta(days=max(days, 5) * 2)
             with engine.connect() as conn:
                 rows = conn.execute(
@@ -741,7 +747,6 @@ class KlineCollector:
                     ),
                     {"s": symbol, "m": self.market.value, "adj": adjust, "c": cutoff},
                 ).fetchall()
-            engine.dispose()
             out = [
                 KlineData(date=str(r[0])[:10], open=float(r[1]), high=float(r[2]),
                           low=float(r[3]), close=float(r[4]), volume=float(r[5] or 0))

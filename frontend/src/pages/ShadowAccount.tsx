@@ -117,6 +117,13 @@ export default function ShadowAccountPage() {
       }
       // 2) 在新窗口里写一段最小 HTML, 嵌入 sandbox iframe (不含 allow-same-origin,
       //    保证内层 iframe 拿不到 parent.localStorage / cookies).
+      // 安全审计 2026-09-15: 插值做 HTML 实体编码, 防 shadow_id/report_pdf 含引号或标签导致 XSS
+      const escapeHtml = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+      const safeBlobUrl = escapeHtml(blobUrl)
+      const safeShadowId = escapeHtml(String(result.shadow_id ?? ''))
+      const safeReportPdf = escapeHtml(result.report_pdf || '#')
       const safeWrapper = `<!doctype html><html><head><meta charset="utf-8"><title>影子账户报告</title>
 <style>html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;background:#f7f8fa}
 .toolbar{position:fixed;top:0;left:0;right:0;height:40px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px;padding:0 12px;z-index:10;font-size:12px}
@@ -128,10 +135,10 @@ iframe{width:100%;height:100%;border:0}
 </head><body>
 <div class="toolbar">
   <span>🔒 隔离沙箱内渲染的报告(不可访问上层存储)</span>
-  <a href="${blobUrl}" target="_self" download="shadow-report-${result.shadow_id}.html">下载 HTML</a>
-  <a href="${result.report_pdf || '#'}" target="_blank">下载 PDF</a>
+  <a href="${safeBlobUrl}" target="_self" download="shadow-report-${safeShadowId}.html">下载 HTML</a>
+  <a href="${safeReportPdf}" target="_blank">下载 PDF</a>
 </div>
-<iframe class="frame-host" sandbox="allow-scripts" src="${blobUrl}"></iframe>
+<iframe class="frame-host" sandbox="allow-scripts" src="${safeBlobUrl}"></iframe>
 </body></html>`
       w.document.open()
       w.document.write(safeWrapper)

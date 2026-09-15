@@ -629,20 +629,44 @@ def get_web_content(url: str) -> str:
         }
         raw = b""
         encoding = "utf-8"
-        with httpx.Client(timeout=_WEB_FETCH_TIMEOUT, follow_redirects=True, headers=headers) as client:
-            with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                ctype = (resp.headers.get("content-type") or "").lower()
-                if ctype and not any(k in ctype for k in ("text/", "html", "xhtml", "xml", "json")):
-                    return (
-                        "抓取失败: 目标链接返回的不是网页内容"
-                        f"(Content-Type: {ctype.split(';')[0].strip()}), 无法提取正文。"
-                    )
-                for chunk in resp.iter_bytes():
-                    raw += chunk
-                    if len(raw) > _WEB_CONTENT_MAX_BYTES:
-                        return "抓取失败: 页面超过 2MB 读取上限, 已放弃抓取(可能为异常大页面)。"
-                encoding = resp.encoding or "utf-8"
+        # 安全审计 2026-09-15: follow_redirects=False 防 3xx 跳转绕过内网校验;
+        # 手动跟随跳转并重新校验 Location 目标(最多 3 次, 每次均过 _is_internal_target)
+        redirect_hops = 0
+        current_url = url
+        while True:
+            with httpx.Client(timeout=_WEB_FETCH_TIMEOUT, follow_redirects=False, headers=headers) as client:
+                with client.stream("GET", current_url) as resp:
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        redirect_hops += 1
+                        if redirect_hops > 3:
+                            return "抓取失败: 跳转次数过多(>3), 已放弃抓取。"
+                        location = resp.headers.get("location")
+                        if not location:
+                            return "抓取失败: 3xx 响应缺少 Location 头, 无法继续。"
+                        next_url = urllib.parse.urljoin(current_url, location)
+                        try:
+                            next_parsed = urllib.parse.urlparse(next_url)
+                        except ValueError:
+                            return "抓取失败: 跳转目标 URL 格式非法, 已拒绝。"
+                        if next_parsed.scheme not in ("http", "https") or not next_parsed.netloc:
+                            return "抓取失败: 跳转目标非 http/https, 已拒绝。"
+                        if _is_internal_target(next_parsed):
+                            return "抓取失败: 跳转目标为内网/本地地址, 已拒绝访问。"
+                        current_url = next_url
+                        continue
+                    resp.raise_for_status()
+                    ctype = (resp.headers.get("content-type") or "").lower()
+                    if ctype and not any(k in ctype for k in ("text/", "html", "xhtml", "xml", "json")):
+                        return (
+                            "抓取失败: 目标链接返回的不是网页内容"
+                            f"(Content-Type: {ctype.split(';')[0].strip()}), 无法提取正文。"
+                        )
+                    for chunk in resp.iter_bytes():
+                        raw += chunk
+                        if len(raw) > _WEB_CONTENT_MAX_BYTES:
+                            return "抓取失败: 页面超过 2MB 读取上限, 已放弃抓取(可能为异常大页面)。"
+                    encoding = resp.encoding or "utf-8"
+                    break
         try:
             html_text = raw.decode(encoding, errors="replace")
         except (LookupError, UnicodeDecodeError):

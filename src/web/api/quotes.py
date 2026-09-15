@@ -251,9 +251,11 @@ async def get_company_info(symbol: str, market: str = "CN"):
                 from src.web.database import SessionLocal
                 from src.web.models import AppSettings
                 db = SessionLocal()
-                row = db.query(AppSettings).filter(AppSettings.key == "zhitu_token").first()
-                token = (row.value if row and row.value and row.value != "********" else "") or ""
-                db.close()
+                try:
+                    row = db.query(AppSettings).filter(AppSettings.key == "zhitu_token").first()
+                    token = (row.value if row and row.value and row.value != "********" else "") or ""
+                finally:
+                    db.close()  # P0: 异常路径也关闭, 防 session 泄漏
             except Exception:
                 pass
         if not token:
@@ -413,7 +415,9 @@ async def get_minute(symbol: str, market: str = "CN"):
         return {"symbol": symbol, "market": market, "points": cached[1],
                 "prev_close": cached[2], "is_index": is_index, "swings": swings_old or None,
                 "degraded": bool(note_old), "note": note_old}
-    points, prev_close, src_note = _tencent_minute(symbol, market)
+    # P0(2026-09-18): _tencent_minute 内是同步 urllib, 直接在 async def 调会阻塞事件循环,
+    # 包 asyncio.to_thread 交给线程池; 返回三元组语义不变。
+    points, prev_close, src_note = await asyncio.to_thread(_tencent_minute, symbol, market)
     degraded = points is None
     if points is None:
         points = []

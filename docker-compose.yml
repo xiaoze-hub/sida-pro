@@ -180,8 +180,10 @@ services:
     image: crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
     container_name: panwatch
     restart: unless-stopped
+    # 安全审计 2026-09-15: 主服务 8000 绑 127.0.0.1 而非 0.0.0.0,
+    # 防止容器外网卡直接暴露; 外部访问需经前置反代(nginx 等)。
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       # 指向同 compose 网络内的 forecast 服务(Docker DNS 自动解析)
       - FORECAST_ENGINE_URL=http://forecast:8010

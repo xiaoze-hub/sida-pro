@@ -75,6 +75,8 @@ def ticks_from_tck(trades: list[dict], min_price: float = 5.0,
     过滤(对齐 dark_fund.ohlcv_from_trades):
       ① 连续竞价(t >= 9:30)剔除集合竞价虚拟撮合(方向不可信)
       ② price >= min_price 剔除修正行(price=0)和噪声行(price=1.0)
+    单位: parse_tck 的 vol 是「股」, dark_l2 契约约定「手」→ 此处 ÷100
+    (thsdk 路径已有 ÷100, 见 dark_l2.py; tdx_tck 路径此修复补齐, 防量级差 100 倍)。
     """
     ticks: list[dict] = []
     for t in trades:
@@ -85,7 +87,7 @@ def ticks_from_tck(trades: list[dict], min_price: float = 5.0,
         ticks.append({
             "d": t["dir"],
             "amt": t["amt"],
-            "vol": t["vol"],
+            "vol": t["vol"] / 100.0,  # 股 → 手(dark_l2 契约)
             "price": t["price"],
             "t": _tck_t_to_hms(t["t"]),
             "seq": t["seq"],

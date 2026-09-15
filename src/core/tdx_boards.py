@@ -349,9 +349,10 @@ def stock_blocks(symbol: str) -> list[dict] | None:
     注: get_block_name  MCP 不支持, 板块名用 get_relation 返回的 BlockName。
     按日缓存(板块归属日内不变)。
     """
-    from datetime import date
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    today = date.today().isoformat()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()  # CST 日, UTC 宿主不错位
     if _stock_blocks_cache.get("date") != today:
         _stock_blocks_cache["date"] = today
         _stock_blocks_cache["data"] = {}
@@ -381,9 +382,10 @@ def stock_blocks(symbol: str) -> list[dict] | None:
 
 def amount_baseline(codes: list[str]) -> dict[str, float]:
     """每码"前 5 个交易日日均成交额(元)" — 当日缓存(盘中不变), 量比代理的基准。"""
-    from datetime import date
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    today = date.today().isoformat()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()  # CST 日, UTC 宿主不错位
     cached = _baseline_cache.get("amounts")
     if _baseline_cache.get("date") == today and isinstance(cached, dict) and set(codes) <= set(cached):
         return {c: cached[c] for c in codes if c in cached}

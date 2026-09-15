@@ -5,7 +5,47 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
-## 2026-09-18
+## 2026-09-15
+
+### fix(audit): 全代码审计修复(29项: 口径/错误处理/性能/安全/前端/配置)
+
+**性质**: 多维度 P0/P1 修复。**需重启后端**。审计报告见 `docs/audit_report_20260915.md`。
+
+**数据口径(5项)**:
+- `tdx_tick_parser.py`: tdx_tck 逐笔 vol 股→手(÷100), 修复明盘暗盘分层失真
+- `stock_l2.py`: Amount 万元→元(×1e4), 与 FCAmo/OpenAmo 一致
+- `dark_flow.py`/`orderbook_engine.py`: 时区统一 Asia/Shanghai, 修复 UTC 宿主时段判定错位
+- `tdx_boards.py`: 缓存日键用 CST 日期
+
+**错误处理(7项)**:
+- `klines_ingestor.py`: 日期解析失败 skip 而非 fallback 到 now, 防 K线污染
+- `market_scan_jobs.py`/`quotes.py`: DB session try/finally 防泄漏
+- `intraday_monitor.py`/`kline_collector.py`/`capital_flow_collector.py`: 静默失败加 logger.warning
+
+**性能(7项)**:
+- `kline_collector`/`klines_repo`/`kline_backfill_scheduler`: 引擎复用全局单例, 去掉 per-call create+dispose
+- `market_data.py`/`quotes.py`: async 端点内同步 IO 包 asyncio.to_thread
+- 龙虎榜回溯跳过周末, 减少 2/7 外部调用
+
+**安全(5项)**:
+- `logs.py`: GET/DELETE 加 require_owner
+- `chat.py`: SSRF 重定向防护(follow_redirects=False + 手动校验)
+- `my_ai_services.py`: BYOK base_url 内网黑名单
+- `market_scan.py`: refresh 端点加 require_owner
+- `settings.py`: http_proxy/ths_username 加入掩码
+
+**前端(3项)**:
+- `ShadowAccount.tsx`: document.write 插值 HTML 转义
+- `App.tsx`: PermGuard fail-open → loading; /analysis 路由加守卫
+
+**配置(3项)**:
+- `.env.example`: 补 JWT_SECRET/AUTH_*/JWT_EXPIRE_HOURS
+- `docker-compose.yml`: 主服务绑 127.0.0.1
+- `docker-compose.infra.yml`: Redis 加 requirepass
+
+**循环依赖**: dark_flow↔tick_archive 拆解, 新增 trading_calendar.cache_day()
+
+**测试**: 权限/网关 40/40 通过; 全量 2455 passed(25 个已有失败与本次无关)
 
 ### feat(tdx): 通达信 TQ 暗盘资金接口
 
