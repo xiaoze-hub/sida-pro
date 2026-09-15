@@ -10,6 +10,7 @@ import { fileToAvatarDataUrl } from '@/hooks/use-avatar'
 import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
 import { useApiQuery } from '@/hooks/useApiQuery'
+import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
 
 interface ProfileInfo {
   username: string
@@ -405,6 +406,9 @@ export function Profile() {
             <ProApplyCard />
           )}
         </section>
+
+        {/* ⑤ 通知渠道(B.4) */}
+        <NotifyChannelsSection />
       </div>
     </div>
   )

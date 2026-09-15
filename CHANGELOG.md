@@ -7,6 +7,14 @@
 
 ## 2026-09-18
 
+### feat(profile): 通知渠道进个人中心(B.4)
+
+**性质**: 前端。个人中心新增「通知渠道」区块, 自包含不依赖 SettingsContext。
+
+- 新增 `components/profile/NotifyChannelsSection.tsx`: 自拉 `/api/channels`, 支持测试/启停/默认/删除
+- 添加/编辑跳转 `/settings?tab=settings`(复用既有对话框)
+- Profile 页嵌入该区块(Pro 升级之后)
+
 ### fix(market-scan): 暗盘接口 500 — updated_at→created_at
 
 **性质**: 热修复(覆盖层)。`DarkFundTopSnapshot` 模型无 `updated_at` 字段, 接口误用导致 500。
