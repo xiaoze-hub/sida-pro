@@ -7,6 +7,13 @@
 
 ## 2026-09-18
 
+### fix(market-scan): 暗盘接口 500 — updated_at→created_at
+
+**性质**: 热修复(覆盖层)。`DarkFundTopSnapshot` 模型无 `updated_at` 字段, 接口误用导致 500。
+
+- `market_scan.py` dark-fund-top: `row.updated_at` → `row.created_at`
+- 已覆盖层部署, 接口恢复正常(200)
+
 ### release: v0.7.1
 
 **性质**: 版本发布。Pro 升级申请 + 权限清单全勾。
