@@ -490,6 +490,10 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
     success(ip, data.username.strip())
     token, expires_at = create_token(user)
 
+    # 设备限制(2026-09-15): 同账号同时在线 ≤2, 超了踢最早
+    from src.core.permissions import record_session
+    record_session(db, user, session_id=token[:32], expires_at=expires_at)
+
     # 操作审计: 登录成功
     # 修复 2026-08-21: audit.py 已用独立 session + best-effort,不再需要这里吞错
     from src.web.api.audit import log_audit

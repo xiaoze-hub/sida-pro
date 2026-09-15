@@ -61,10 +61,14 @@ def get_market_scan_ranks(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """读最新三榜快照。权限: view_opportunities — member 3次/天试用。"""
+    """读最新三榜快照。权限: view_opportunities — member 3次/天试用。
+    调用日志(2026-09-15 C.1): 每次调用落 high_value_api_logs。"""
     from src.core.permissions import PERM_VIEW_OPPORTUNITIES, enforce_perm
 
     enforce_perm(user, PERM_VIEW_OPPORTUNITIES, db)
+    from src.core.hv_api_log import log_high_value_call
+
+    log_high_value_call(db, user, "opportunities")
     row = _latest_rank(db, market)
     if not row:
         return {
@@ -142,10 +146,14 @@ def get_dark_fund_top(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """读最新暗盘资金 TOP 快照。权限: view_dark — member 3次/天试用。"""
+    """读最新暗盘资金 TOP 快照。权限: view_dark — member 3次/天试用。
+    调用日志(2026-09-15 C.1): 每次调用落 high_value_api_logs。"""
     from src.core.permissions import PERM_VIEW_DARK, enforce_perm
 
     enforce_perm(user, PERM_VIEW_DARK, db)
+    from src.core.hv_api_log import log_high_value_call
+
+    log_high_value_call(db, user, "dark_fund")
     row = (
         db.query(DarkFundTopSnapshot)
         .filter(DarkFundTopSnapshot.stock_market == market)

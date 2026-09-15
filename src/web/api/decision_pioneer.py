@@ -4,15 +4,20 @@ GET /api/decision-pioneer/002361?market=CN
 → {symbol, market, institution_activity, gs, l2, main_intent, data_time}
 
 进程内 30s 缓存(盘中多用户/多轮询防重复重算)。
+权限(2026-09-15): view_forecast — member 3次/天试用, pro/owner 全开。
 """
 from __future__ import annotations
 
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from src.core.decision_pioneer import fetch_decision_pioneer
+from src.web.api.auth import get_current_user
+from src.web.database import get_db
+from src.web.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +54,17 @@ def _get(symbol: str, market: str) -> dict:
 
 
 @router.get("/{symbol}/history")
-def get_decision_pioneer_history(symbol: str, market: str = "CN", days: int = 30):
+def get_decision_pioneer_history(
+    symbol: str,
+    market: str = "CN",
+    days: int = 30,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """数智决策历史快照(09-03 落库回查; 空=该股尚无落库, 不编造)。"""
+    from src.core.permissions import PERM_VIEW_FORECAST, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_FORECAST, db)
     code = _valid_symbol(symbol)
     if market.upper() not in ("CN",):
         raise HTTPException(400, "decision-pioneer 仅支持 CN 市场")
@@ -60,8 +74,20 @@ def get_decision_pioneer_history(symbol: str, market: str = "CN", days: int = 30
 
 
 @router.get("/{symbol}")
-def get_decision_pioneer(symbol: str, market: str = "CN"):
-    """数智决策三指标 + L2 主力净流入 + 主力意图(盘中实时)。"""
+def get_decision_pioneer(
+    symbol: str,
+    market: str = "CN",
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """数智决策三指标 + L2 主力净流入 + 主力意图(盘中实时)。
+    调用日志(2026-09-15 C.1): 每次调用落 high_value_api_logs。"""
+    from src.core.permissions import PERM_VIEW_FORECAST, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_FORECAST, db)
+    from src.core.hv_api_log import log_high_value_call
+
+    log_high_value_call(db, user, "forecast", symbol)
     code = _valid_symbol(symbol)
     if market.upper() not in ("CN",):
         raise HTTPException(400, "decision-pioneer 仅支持 CN 市场")

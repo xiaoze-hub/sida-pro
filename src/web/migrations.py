@@ -4184,6 +4184,55 @@ CREATE TABLE skill_usage (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_skill_usage_created ON skill_usage(created_at)"))
 
 
+def _m167_user_sessions_table(conn: Connection) -> None:
+    """用户会话表(2026-09-15): 设备限制, 同账号同时在线 ≤2。"""
+    if _has_table(conn, "user_sessions"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE user_sessions (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at {ts} NOT NULL,
+  ip TEXT,
+  user_agent TEXT
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_sessions_user_expires ON user_sessions(user_id, expires_at)"))
+
+
+def _m168_high_value_api_logs(conn: Connection) -> None:
+    """高价值接口调用日志(2026-09-15 C.1): L2/暗盘等, 记用户/时间/标的。"""
+    if _has_table(conn, "high_value_api_logs"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE high_value_api_logs (
+  id {pk},
+  user_id TEXT NOT NULL,
+  username TEXT DEFAULT '',
+  api_name TEXT NOT NULL,
+  symbol TEXT DEFAULT '',
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hv_api_user_created ON high_value_api_logs(user_id, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hv_api_name_created ON high_value_api_logs(api_name, created_at)"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4286,6 +4335,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(164, "market_phase_extra_columns", _m164_market_phase_extra_columns),
     Migration(165, "app_jobs_table", _m165_app_jobs_table),
     Migration(166, "skill_gateway_tables", _m166_skill_gateway_tables),
+    Migration(167, "user_sessions_table", _m167_user_sessions_table),
+    Migration(168, "high_value_api_logs", _m168_high_value_api_logs),
 )
 
 

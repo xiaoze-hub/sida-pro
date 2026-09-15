@@ -1616,3 +1616,45 @@ class SkillUsage(Base):
         Index("ix_skill_usage_key_created", "api_key_id", "created_at"),
     )
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class UserSession(Base):
+    """用户会话(设备限制, 2026-09-15): 同账号同时在线 ≤2, 超了踢最早。
+
+    登录时写入/更新, JWT 过期时自然失效(不主动清理, 定时任务可清过期行)。
+    """
+
+    __tablename__ = "user_sessions"
+
+    session_id = Column(String(64), primary_key=True)  # JWT jti 或随机 UUID
+    user_id = Column(String(36), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    last_seen = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    expires_at = Column(DateTime, nullable=False)
+    ip = Column(String(64), nullable=True)
+    user_agent = Column(String(256), nullable=True)
+
+    __table_args__ = (
+        Index("ix_user_sessions_user_expires", "user_id", "expires_at"),
+    )
+
+
+class HighValueApiLog(Base):
+    """高价值接口调用日志(2026-09-15 C.1): L2/暗盘等, 记用户/时间/标的。
+
+    供后台用量报表(C.2)和异常检测(单 key 突增 10 倍自动冻结)使用。
+    """
+
+    __tablename__ = "high_value_api_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    username = Column(String(64), default="")
+    api_name = Column(String(64), nullable=False)  # l2 | dark_fund | opportunities | forecast
+    symbol = Column(String(16), default="")  # 标的(可空, 如快照类接口)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("ix_hv_api_user_created", "user_id", "created_at"),
+        Index("ix_hv_api_name_created", "api_name", "created_at"),
+    )
