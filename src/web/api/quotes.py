@@ -175,6 +175,41 @@ async def get_dark_flow_tq(symbol: str, market: str = "CN"):
     return {"available": True, "data": data}
 
 
+@router.get("/{symbol}/dark-fund-tdx")
+async def get_dark_fund_tdx(symbol: str, market: str = "CN", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """通达信 TQ 暗盘资金接口(2026-09-15): L2 汇总 + 四档分档 + 暗盘拆单融合。
+
+    数据源:
+    - TQ get_more_info: Zjl_HB / L2TicNum / BCancel / SCancel
+    - TQ L2_AMO 公式: 超大/大/中/小 四档买卖额
+    - 腾讯逐笔拆单: dark_flow._detect_split_orders
+    - thsdk big_order_flow: 明盘净额(≥30万)
+
+    权限: view_dark — member 3次/天试用, pro/owner 全开。
+    调用日志: 每次调用落 high_value_api_logs。
+    """
+    from src.core.permissions import PERM_VIEW_DARK, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_DARK, db)
+    from src.core.hv_api_log import log_high_value_call
+
+    log_high_value_call(db, user, "dark_fund_tdx", symbol)
+    market_code = _parse_market(market)
+    if market_code != MarketCode.CN:
+        raise HTTPException(400, "dark-fund-tdx 仅支持 CN 市场")
+
+    from src.core.tdx_dark_fund import compute_tdx_dark_fund
+
+    data = await asyncio.to_thread(compute_tdx_dark_fund, symbol)
+    if not data:
+        return {
+            "available": False,
+            "note": "TQ 网关不可达或数据缺失",
+            "symbol": symbol,
+        }
+    return data
+
+
 # 公司简介内存缓存(避免每次详情页都调 zhitu 耗时 1.8s)
 _COMPANY_CACHE: dict = {}  # {(symbol, market): (ts, payload)}
 _COMPANY_CACHE_TTL = 3600  # 1 小时
