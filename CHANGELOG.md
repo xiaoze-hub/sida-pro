@@ -7,6 +7,20 @@
 
 ## 2026-09-18
 
+### feat(tdx): 通达信 TQ 暗盘资金接口
+
+**性质**: 新增模块 + API 端点。**需重启后端**。
+
+- 新增 `src/core/tdx_dark_fund.py`:
+  - `fetch_tq_l2_summary`: TQ get_more_info → Zjl_HB / L2TicNum / BCancel / SCancel
+  - `fetch_tq_l2_amo`: TQ L2_AMO 公式 → 超大/大/中/小四档买卖额(需客户端定义公式)
+  - `compute_tdx_dark_fund`: 融合 TQ L2 + 腾讯逐笔拆单 + thsdk 明盘
+- 新增 `GET /api/quotes/{symbol}/dark-fund-tdx` 端点:
+  - 权限: view_dark(member 3次/天试用)
+  - 调用日志: 落 high_value_api_logs
+  - TQ 不可达时返回 available:false
+- 实测: TQ L2 汇总正常(Zjl_HB=-9409万, L2TicNum=64754); L2_AMO 公式需客户端配置
+
 ### feat(profile): 通知渠道进个人中心(B.4)
 
 **性质**: 前端。个人中心新增「通知渠道」区块, 自包含不依赖 SettingsContext。
