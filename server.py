@@ -35,16 +35,15 @@ if __name__ == "__main__":
     print("API 文档: 已关闭(生产安全策略, 防接口地图泄露)")
     # 生产(Docker)不开 reload; 本地热重载用 `make dev-api` 或 DEV_RELOAD=1。
     _dev_reload = os.environ.get("DEV_RELOAD", "").lower() in ("1", "true", "yes")
-    # UX 走查 2026-09-15: workers=2 + 慢启动 → uvicorn supervisor 反复杀 worker
-    # (Child process died / health 超时)。小主机(1.5c/1.5G)建议 WEB_WORKERS=1;
-    # 多 worker 仅在启动 import 面显著变快后再开。
-    _workers = int(os.environ.get("WEB_WORKERS", "2"))
+    # 并发优化 2026-09-15(Skill Gateway 压测): 默认 4 worker。
+    # 慢启动由 Dockerfile healthcheck start-period=90s 兜住; 内存紧张可 WEB_WORKERS=1。
+    _workers = int(os.environ.get("WEB_WORKERS", "4"))
     if _workers > 1:
         import logging as _logging
 
-        _logging.getLogger("server").warning(
-            "WEB_WORKERS=%d: 若启动期出现 Child process died / health 超时, "
-            "改设 WEB_WORKERS=1(见 UX走查_20260915.md)", _workers,
+        _logging.getLogger("server").info(
+            "WEB_WORKERS=%d: 多进程并行(Skill Gateway 并发)。若启动期 Child process died, "
+            "改设 WEB_WORKERS=1 并检查 healthcheck start-period。", _workers,
         )
     _host = os.environ.get("WEB_HOST", "127.0.0.1")  # 公网须显式 0.0.0.0 + 前置反代
     import uvicorn

@@ -157,10 +157,16 @@ def _gen_key() -> str:
     return "sk_" + secrets.token_urlsafe(32)
 
 
-# ── 限流 ────────────────────────────────────────────────────────────
+# ── 限流(令牌桶, 2026-09-15 并发优化) ──────────────────────────────
+# 旧版: 分钟 20 次硬顶, 压测 50 并发 30 个 429 误伤正常 burst。
+# 新版: 令牌桶 — burst 桶容量 + 匀速补充, 日配额单独计。
 
+_TOKEN_BUCKET: dict[str, tuple[float, float]] = {}  # key_hash -> (tokens, last_ts)
 _MEM_DAY: dict[str, tuple[str, int]] = {}  # (day, count)
-_MEM_MIN: dict[str, tuple[int, int]] = {}  # (minute_bucket, count)
+
+# 档位 burst / 匀速(次/分) — 配置化, 不硬编码在逻辑里
+TIER_BURST = {"trial": 50, "free": 30, "pro": 100}
+TIER_REFILL_PER_MIN = {"trial": 20, "free": 15, "pro": 60}
 
 
 def _redis_client():
@@ -181,13 +187,24 @@ def _redis_client():
         return None
 
 
-def _check_rate_limit(key_hash: str, daily_limit: int, minute_limit: int = 20) -> None:
-    """超限抛 HTTPException 429。Redis 失败时回退进程内存(单机兜底)。"""
+def _check_rate_limit(
+    key_hash: str,
+    daily_limit: int,
+    *,
+    tier: str = "free",
+    minute_limit: int | None = None,
+) -> None:
+    """令牌桶限流 + 日配额。超限抛 HTTPException 429, 响应头带 Retry-After。"""
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
-    minute = int(time.time() // 60)
-    day_key = f"skill_quota:{key_hash[:16]}:{day}"
-    min_key = f"skill_burst:{key_hash[:16]}:{minute}"
+    now = time.time()
+    burst = TIER_BURST.get(tier, 30)
+    refill_per_min = TIER_REFILL_PER_MIN.get(tier, 15)
+    # 允许调用方覆盖(测试/特殊场景)
+    if minute_limit is not None:
+        refill_per_min = minute_limit
 
+    # 1) 日配额(Redis 优先)
+    day_key = f"skill_quota:{key_hash[:16]}:{day}"
     rc = _redis_client()
     if rc is not None:
         try:
@@ -195,37 +212,90 @@ def _check_rate_limit(key_hash: str, daily_limit: int, minute_limit: int = 20) -
             if d == 1:
                 rc.expire(day_key, 86400)
             if d > daily_limit:
-                raise HTTPException(429, f"日配额已用尽({daily_limit} 次/天), 请升级 Pro 或明日再试")
-            m = int(rc.incr(min_key))
-            if m == 1:
-                rc.expire(min_key, 60)
-            if m > minute_limit:
-                raise HTTPException(429, f"触发频率限制({minute_limit} 次/分), 请稍后重试")
-            return
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"日配额已用尽({daily_limit} 次/天), 请升级 Pro 或明日再试",
+                    headers={"Retry-After": "3600"},
+                )
         except HTTPException:
             raise
         except Exception as e:  # noqa: BLE001
-            logger.debug("redis 限流失败, 回退内存: %r", e)
+            logger.debug("redis 日配额失败, 回退内存: %r", e)
+            # fall through to memory
+            d_n = None
+        else:
+            d_n = d
+    else:
+        d_n = None
 
-    # 内存兜底
-    d_count = _MEM_DAY.get(key_hash)
-    if not d_count or d_count[0] != day:
-        _MEM_DAY[key_hash] = (day, 1)
-        d_n = 1
-    else:
-        d_n = d_count[1] + 1
-        _MEM_DAY[key_hash] = (day, d_n)
-    if d_n > daily_limit:
-        raise HTTPException(429, f"日配额已用尽({daily_limit} 次/天)")
-    m_count = _MEM_MIN.get(key_hash)
-    if not m_count or m_count[0] != minute:
-        _MEM_MIN[key_hash] = (minute, 1)
-        m_n = 1
-    else:
-        m_n = m_count[1] + 1
-        _MEM_MIN[key_hash] = (minute, m_n)
-    if m_n > minute_limit:
-        raise HTTPException(429, f"触发频率限制({minute_limit} 次/分)")
+    if d_n is None:
+        # 内存日配额兜底
+        d_count = _MEM_DAY.get(key_hash)
+        if not d_count or d_count[0] != day:
+            _MEM_DAY[key_hash] = (day, 1)
+            d_n = 1
+        else:
+            d_n = d_count[1] + 1
+            _MEM_DAY[key_hash] = (day, d_n)
+        if d_n > daily_limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"日配额已用尽({daily_limit} 次/天)",
+                headers={"Retry-After": "3600"},
+            )
+
+    # 2) 令牌桶(进程内存; 多 worker 时每进程各有一份, 实际总量≈workers×burst,
+    #    日配额仍是全局上限, 可接受)
+    with _TB_LOCK:
+        tokens, last = _TOKEN_BUCKET.get(key_hash, (float(burst), now))
+        # 匀速补充
+        elapsed = max(0.0, now - last)
+        refill = elapsed * (refill_per_min / 60.0)
+        tokens = min(float(burst), tokens + refill)
+        if tokens < 1.0:
+            # 需等待的秒数(约到 1 个 token)
+            wait_s = max(1, int((1.0 - tokens) / (refill_per_min / 60.0)) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail=f"触发频率限制(burst {burst}, 匀速 {refill_per_min}/分), {wait_s}s 后重试",
+                headers={"Retry-After": str(wait_s)},
+            )
+        _TOKEN_BUCKET[key_hash] = (tokens - 1.0, now)
+
+
+_TB_LOCK = __import__("threading").Lock()
+
+# ── 热点缓存(并发优化任务2, 2026-09-15) ──────────────────────────────
+# quote 类读多写少, 3-5s 短 TTL; 同 symbol 并发只打一次上游。
+# 多 worker 时每进程各一份 L1, 只影响命中率不影响正确性(可接受)。
+
+_HOT_CACHE_TTL_S = 4.0
+_HOT_CACHE: dict[str, tuple[float, Any]] = {}
+_HOT_LOCK = __import__("threading").Lock()
+
+
+def _hot_cache_get(key: str) -> Any | None:
+    with _HOT_LOCK:
+        ent = _HOT_CACHE.get(key)
+        if not ent:
+            return None
+        ts, val = ent
+        if time.time() - ts > _HOT_CACHE_TTL_S:
+            _HOT_CACHE.pop(key, None)
+            return None
+        return val
+
+
+def _hot_cache_set(key: str, val: Any) -> None:
+    with _HOT_LOCK:
+        # 简单淘汰: 超 2000 条清最旧
+        if len(_HOT_CACHE) > 2000:
+            now = time.time()
+            for k in list(_HOT_CACHE.keys())[:200]:
+                ent = _HOT_CACHE.get(k)
+                if ent and now - ent[0] > _HOT_CACHE_TTL_S:
+                    _HOT_CACHE.pop(k, None)
+        _HOT_CACHE[key] = (time.time(), val)
 
 
 # ── 鉴权 ────────────────────────────────────────────────────────────
@@ -317,11 +387,20 @@ async def run_skill(
 ) -> SkillRunResponse:
     """执行开放 skill。只返回 handler 输出字符串 + 口径 + 风险提示。"""
     _check_skill_tier(name, row)
-    _check_rate_limit(row.key_hash, row.daily_limit, minute_limit=20)
+    _check_rate_limit(row.key_hash, row.daily_limit, tier=row.tier)
 
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         raise HTTPException(404, f"未知 skill: {name}")
+
+    # 热点缓存(并发优化任务2): quote/技术类短 TTL, 同 symbol 并发只打一次上游
+    cache_key = f"skill_cache:{name}:{hash(frozenset((body.args or {}).items()))}"
+    cached = _hot_cache_get(cache_key)
+    if cached is not None:
+        _log_usage(db, row.id, name, 200, 0)
+        row.last_used_at = datetime.now(timezone.utc)
+        db.commit()
+        return cached
 
     t0 = time.monotonic()
     status_code = 200
@@ -349,13 +428,16 @@ async def run_skill(
     if red_hits:
         risk = f"{RISK_DISCLAIMER} | 合规: 命中红线词 {red_hits}"
 
-    return SkillRunResponse(
+    resp = SkillRunResponse(
         skill=name,
         result=result,
         caliber=tool.caliber,
         risk=risk,
         duration_ms=duration_ms,
     )
+    # 热点缓存: 3-5s TTL, key 含 skill+args
+    _hot_cache_set(cache_key, resp)
+    return resp
 
 
 def _log_usage(db: Session, key_id: int, skill: str, code: int, duration_ms: int) -> None:

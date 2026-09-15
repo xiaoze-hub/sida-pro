@@ -21,17 +21,14 @@ def test_hash_key_stable():
 
 def test_rate_limit_memory_fallback():
     gw._MEM_DAY.clear()
-    gw._MEM_MIN.clear()
+    gw._TOKEN_BUCKET.clear()
     with patch.object(gw, "_redis_client", return_value=None):
-        # 3 次成功
-        for _ in range(3):
-            gw._check_rate_limit("k1", daily_limit=5, minute_limit=10)
-        # 第 4 次仍 ok
-        gw._check_rate_limit("k1", daily_limit=5, minute_limit=10)
-        # 日限
+        # burst 30, 日限 5 → 前 5 次通过
+        for _ in range(5):
+            gw._check_rate_limit("k1", daily_limit=5, tier="free")
+        # 日限触发
         with pytest.raises(Exception) as ei:
-            for _ in range(5):
-                gw._check_rate_limit("k1", daily_limit=4, minute_limit=10)
+            gw._check_rate_limit("k1", daily_limit=5, tier="free")
         assert "429" in str(ei.value) or "配额" in str(ei.value)
 
 

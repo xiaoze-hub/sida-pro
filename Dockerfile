@@ -197,4 +197,6 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=90s --retries=3 \
 USER app
 
 # 启动命令
+# 并发优化 2026-09-15: 默认 4 worker(Skill Gateway 压测 p50 7.7s→多进程并行)。
+# 慢启动由 healthcheck start-period=90s 兜住; 小主机内存紧张可 env WEB_WORKERS=1。
 CMD ["python", "server.py"]
