@@ -165,7 +165,7 @@ export default function LandingPage() {
 
       {/* 导航 */}
       <header className="relative z-10">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+        <div className="flex items-center justify-between px-8 py-5 lg:px-16">
           <Link to="/" className="flex items-center gap-2.5">
             <BrandMark />
             <span className="text-[15px] font-semibold tracking-tight">SIDA</span>
@@ -190,57 +190,63 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="relative z-10 mx-auto max-w-6xl px-6 pt-20 pb-24 text-center md:pt-28">
-        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1 text-[12px] text-zinc-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          开发者预览版已开放
-        </div>
+      <section className="relative z-10 px-8 pt-20 pb-24 lg:px-16">
+        <div className="flex flex-col items-start gap-10 lg:flex-row lg:items-center lg:gap-20">
+          <div className="flex-1">
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1 text-[12px] text-zinc-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              开发者预览版已开放
+            </div>
 
-        <h1 className="mx-auto max-w-3xl text-[36px] font-bold leading-[1.15] tracking-tight md:text-[56px]">
-          <span className="text-white">一切皆</span>
-          <span className="bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent">接口</span>
-        </h1>
+            <h1 className="text-[36px] font-bold leading-[1.1] tracking-tight md:text-[56px] lg:text-[64px]">
+              <span className="text-white">一切皆</span>
+              <span className="bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent">接口</span>
+            </h1>
 
-        <p className="mx-auto mt-5 max-w-xl text-[15px] leading-relaxed text-zinc-400 md:text-[16px]">
-          <Typewriter text="AI 驱动的 A 股智能分析平台 — 行情 · 资金 · 情报 · 决策，全部通过 API 开放。" speed={40} />
-        </p>
+            <p className="mt-5 max-w-lg text-[15px] leading-relaxed text-zinc-400 md:text-[16px]">
+              <Typewriter text="AI 驱动的 A 股智能分析平台 — 行情 · 资金 · 情报 · 决策，全部通过 API 开放。" speed={40} />
+            </p>
 
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            to="/login?mode=register"
-            className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-2.5 text-[14px] font-medium text-black transition-colors hover:bg-zinc-200"
-          >
-            开始使用 <ArrowRight className="h-4 w-4" />
-          </Link>
-          <Link
-            to="/developers"
-            className="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.03] px-6 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-white/[0.06]"
-          >
-            <Code2 className="h-4 w-4" /> 查看文档
-          </Link>
-        </div>
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link
+                to="/login?mode=register"
+                className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-2.5 text-[14px] font-medium text-black transition-colors hover:bg-zinc-200"
+              >
+                开始使用 <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/developers"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.03] px-6 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-white/[0.06]"
+              >
+                <Code2 className="h-4 w-4" /> 查看文档
+              </Link>
+            </div>
+          </div>
 
-        {/* 统计 */}
-        <div className="mt-16 flex flex-wrap items-center justify-center gap-12 md:gap-20">
-          <Stat value="30+" label="Skill 接口" />
-          <Stat value="5000+" label="A 股覆盖" />
-          <Stat value="<2s" label="P95 延迟" />
-          <Stat value="99.9%" label="可用性" />
+          {/* 右侧统计 */}
+          <div className="grid grid-cols-2 gap-6 lg:shrink-0">
+            <Stat value="30+" label="Skill 接口" />
+            <Stat value="5000+" label="A 股覆盖" />
+            <Stat value="<2s" label="P95 延迟" />
+            <Stat value="99.9%" label="可用性" />
+          </div>
         </div>
       </section>
 
       {/* 代码展示 */}
-      <section className="relative z-10 mx-auto max-w-4xl px-6 pb-20">
-        <CodeShowcase />
+      <section className="relative z-10 px-8 pb-20 lg:px-16">
+        <div className="max-w-4xl">
+          <CodeShowcase />
+        </div>
       </section>
 
       {/* 核心功能 */}
-      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-20">
-        <div className="mb-10 text-center">
+      <section className="relative z-10 px-8 pb-20 lg:px-16">
+        <div className="mb-10">
           <h2 className="text-[24px] font-bold tracking-tight text-white md:text-[30px]">核心能力</h2>
           <p className="mt-2 text-[14px] text-zinc-500">一套 API，覆盖 A 股分析全链路</p>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
           {FEATURES.map((f, i) => (
             <FeatureCard key={i} {...f} />
           ))}
@@ -248,20 +254,20 @@ export default function LandingPage() {
       </section>
 
       {/* 快速开始 */}
-      <section className="relative z-10 mx-auto max-w-4xl px-6 pb-24">
-        <div className="mb-10 text-center">
+      <section className="relative z-10 px-8 pb-24 lg:px-16">
+        <div className="mb-10">
           <h2 className="text-[24px] font-bold tracking-tight text-white md:text-[30px]">快速开始</h2>
           <p className="mt-2 text-[14px] text-zinc-500">三步接入，10 分钟完成第一次调用</p>
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
           {STEPS.map((s, i) => (
             <div key={i} className="relative rounded-2xl border border-white/[0.06] bg-[#0f1117] p-6">
               <div className="mb-3 font-mono text-[32px] font-bold text-white/[0.06]">{s.num}</div>
               <h3 className="mb-1.5 text-[15px] font-semibold text-white">{s.title}</h3>
               <p className="text-[13px] text-zinc-500">{s.desc}</p>
               {i < 2 && (
-                <div className="absolute -right-2.5 top-1/2 hidden -translate-y-1/2 md:block">
-                  <ArrowRight className="h-4 w-4 text-white/[0.1]" />
+                <div className="absolute -right-3 top-1/2 hidden -translate-y-1/2 md:block">
+                  <ArrowRight className="h-4 w-4 text-white/[0.15]" />
                 </div>
               )}
             </div>
@@ -270,32 +276,36 @@ export default function LandingPage() {
       </section>
 
       {/* CTA */}
-      <section className="relative z-10 mx-auto max-w-4xl px-6 pb-24">
-        <div className="rounded-2xl border border-white/[0.06] bg-gradient-to-b from-[#0f1117] to-[#0a0b0f] p-10 text-center">
-          <h2 className="text-[22px] font-bold text-white md:text-[26px]">准备好了吗？</h2>
-          <p className="mx-auto mt-2 max-w-md text-[14px] text-zinc-500">
-            注册账号，获取 API Key，立即开始使用 SIDA 的全部分析能力。
-          </p>
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-            <Link
-              to="/login?mode=register"
-              className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-2.5 text-[14px] font-medium text-black transition-colors hover:bg-zinc-200"
-            >
-              免费注册 <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              to="/developers"
-              className="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] px-6 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-white/[0.06]"
-            >
-              阅读文档
-            </Link>
+      <section className="relative z-10 px-8 pb-24 lg:px-16">
+        <div className="rounded-2xl border border-white/[0.06] bg-gradient-to-r from-[#0f1117] via-[#0d0f16] to-[#0a0b0f] p-10 lg:p-14">
+          <div className="flex flex-col items-start justify-between gap-6 lg:flex-row lg:items-center">
+            <div>
+              <h2 className="text-[22px] font-bold text-white md:text-[26px]">准备好了吗？</h2>
+              <p className="mt-2 max-w-md text-[14px] text-zinc-500">
+                注册账号，获取 API Key，立即开始使用 SIDA 的全部分析能力。
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-3">
+              <Link
+                to="/login?mode=register"
+                className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-2.5 text-[14px] font-medium text-black transition-colors hover:bg-zinc-200"
+              >
+                免费注册 <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                to="/developers"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] px-6 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-white/[0.06]"
+              >
+                阅读文档
+              </Link>
+            </div>
           </div>
         </div>
       </section>
 
       {/* Footer */}
       <footer className="relative z-10 border-t border-white/[0.04]">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-8 md:flex-row">
+        <div className="flex flex-col items-center justify-between gap-4 px-8 py-8 lg:flex-row lg:px-16">
           <div className="flex items-center gap-2.5">
             <BrandMark />
             <span className="text-[13px] text-zinc-600">© 2026 SIDA</span>
