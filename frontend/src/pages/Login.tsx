@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
-import { Lock, Eye, EyeOff, User } from 'lucide-react'
+import { Lock, Eye, EyeOff, User, Mail } from 'lucide-react'
 import { authApi, fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 
+// 邮箱注册(2026-09-16): 前端格式校验(与后端 EMAIL_RE 同口径)
+const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { toast } = useToast()
+  const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -45,11 +49,20 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!username || !password) return
+    if (registerMode) {
+      if (!email || !password) return
+    } else if (!username || !password) {
+      return
+    }
 
     if (registerMode) {
-      // 注册表单校验: 用户名 2-20 位字母数字, 密码 ≥8 位, 两次一致
-      if (!/^[A-Za-z0-9]{2,20}$/.test(username)) {
+      // 注册表单校验: 邮箱必填; 用户名可选(2-20 位字母数字); 密码 ≥8 位, 两次一致
+      if (!EMAIL_RE.test(email.trim())) {
+        toast('请输入有效的邮箱地址', 'error')
+        return
+      }
+      const uname = username.trim()
+      if (uname && !/^[A-Za-z0-9]{2,20}$/.test(uname)) {
         toast('用户名需为 2-20 位字母或数字', 'error')
         return
       }
@@ -76,12 +89,19 @@ export default function LoginPage() {
     try {
       if (registerMode) {
         // 注册(member 账号); 失败时 fetchAPI 抛出后端 message
-        await fetchAPI<{ message?: string; api_key?: string | null }>('/auth/register', {
+        // username 可选: 不传则后端用邮箱前缀生成
+        const uname = username.trim()
+        const reg = await fetchAPI<{ message?: string; api_key?: string | null; username?: string }>('/auth/register', {
           method: 'POST',
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({
+            email: email.trim(),
+            password,
+            ...(uname ? { username: uname } : {}),
+          }),
         })
-        // 注册成功后自动登录并跳转首页
-        await doLogin(username, password)
+        // 注册成功后自动登录并跳转首页(用后端回传的实际用户名, 兼容自动生成场景)
+        const loginName = reg.username || uname || email.trim()
+        await doLogin(loginName, password)
         toast('注册成功, 已自动登录', 'success')
         navigate('/')
         return
@@ -133,17 +153,38 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {registerMode && (
+              <div>
+                <Label>邮箱</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="请输入邮箱地址"
+                    className="pl-10"
+                    autoFocus
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+            )}
+
             <div>
-              <Label>{registerMode ? '用户名(2-20 位字母数字)' : '用户名'}</Label>
+              <Label>
+                {registerMode ? '用户名(可选)' : '用户名'}
+              </Label>
               <div className="relative">
                 <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   type="text"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  placeholder="请输入用户名"
+                  placeholder={registerMode ? '可选, 不填则用邮箱前缀' : '请输入用户名'}
                   className="pl-10"
-                  autoFocus
+                  autoFocus={!registerMode}
+                  autoComplete="username"
                 />
               </div>
             </div>
@@ -158,6 +199,7 @@ export default function LoginPage() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder={registerMode || isSetup ? '至少 8 位' : '请输入密码'}
                   className="pl-10 pr-10"
+                  autoComplete={registerMode || isSetup ? 'new-password' : 'current-password'}
                 />
                 <Button
                   type="button"
@@ -179,6 +221,7 @@ export default function LoginPage() {
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   placeholder="再次输入密码"
+                  autoComplete="new-password"
                 />
               </div>
             )}

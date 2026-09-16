@@ -1097,6 +1097,185 @@ def get_usage(
 # 原 /api/pro/apply 仅打日志的 stub 已删除, 避免与新路由冲突。
 
 
+# ── 用户侧 Key 控制台(2026-09-16): JWT 鉴权, 只操作本人 key ─────────
+# 前端 /api-keys 页调用。明文 key 只在创建/重置响应返回一次。
+
+def _require_jwt_user(request: Request, db: Session) -> _User:
+    user = _optional_jwt_user(_header_str(request, "Authorization"), db)
+    if user is None:
+        raise HTTPException(401, "请先登录")
+    return user
+
+
+def _key_to_dict(r: SkillApiKey) -> dict:
+    return {
+        "id": r.id,
+        "key_prefix": r.key_prefix,
+        "owner_label": r.owner_label or "",
+        "tier": r.tier,
+        "status": r.status,
+        "daily_limit": r.daily_limit,
+        "frozen_reason": r.frozen_reason or "",
+        "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+    }
+
+
+@router.get("/keys/my")
+def list_my_keys(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """当前用户名下全部 API Key(不含明文, 只有 prefix)。"""
+    user = _require_jwt_user(request, db)
+    refresh_tier_configs(db)
+    rows = (
+        db.query(SkillApiKey)
+        .filter(SkillApiKey.user_id == str(user.id))
+        .order_by(SkillApiKey.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    for r in rows:
+        _downgrade_if_expired(r, db)
+    return {"keys": [_key_to_dict(r) for r in rows]}
+
+
+class MyKeyCreateRequest(BaseModel):
+    trial: bool = Field(default=False, description="True 则领 trial 档(限时)")
+    owner_label: str = Field(default="", max_length=64)
+
+
+@router.post("/keys/my")
+def create_my_key(
+    body: MyKeyCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """为当前登录用户创建新 Key。明文只在本次响应返回一次。"""
+    user = _require_jwt_user(request, db)
+    ip = request.client.host if request.client else "unknown"
+    _check_key_register_rate(ip)
+    refresh_tier_configs(db)
+    raw = _gen_key()
+    tier = "trial" if body.trial else "free"
+    expires = None
+    if tier == "trial":
+        expires = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
+    row = SkillApiKey(
+        key_hash=_hash_key(raw),
+        key_prefix=raw[:11],
+        owner_label=(body.owner_label or user.username or "")[:64],
+        user_id=str(user.id),
+        tier=tier,
+        status="active",
+        daily_limit=TIER_DAILY_LIMIT[tier],
+        expires_at=expires,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    logger.info("user %s created skill key %s tier=%s", user.username, row.key_prefix, tier)
+    return {
+        "api_key": raw,  # 仅此一次
+        "key": _key_to_dict(row),
+        "note": "请妥善保存 API Key, 服务端不会再次展示明文。",
+        "risk": RISK_DISCLAIMER,
+    }
+
+
+def _get_owned_key(db: Session, user: _User, key_id: int) -> SkillApiKey:
+    row = (
+        db.query(SkillApiKey)
+        .filter(SkillApiKey.id == key_id, SkillApiKey.user_id == str(user.id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Key 不存在")
+    return row
+
+
+@router.post("/keys/my/{key_id}/reset")
+def reset_my_key(
+    key_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """重置 Key: 原地换新明文(hash/prefix 更新), 档位/额度/状态保留。
+
+    旧明文立即失效。新明文只在本次响应返回一次。
+    """
+    user = _require_jwt_user(request, db)
+    ip = request.client.host if request.client else "unknown"
+    _check_key_register_rate(ip)
+    row = _get_owned_key(db, user, key_id)
+    raw = _gen_key()
+    row.key_hash = _hash_key(raw)
+    row.key_prefix = raw[:11]
+    row.frozen_reason = ""
+    if row.status == "frozen":
+        row.status = "active"
+    db.commit()
+    db.refresh(row)
+    logger.info("user %s reset skill key id=%s prefix=%s", user.username, row.id, row.key_prefix)
+    return {
+        "api_key": raw,  # 仅此一次
+        "key": _key_to_dict(row),
+        "note": "旧 Key 已失效, 请妥善保存新 Key, 服务端不会再次展示明文。",
+    }
+
+
+@router.delete("/keys/my/{key_id}")
+def delete_my_key(
+    key_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """删除自己的 Key(硬删)。用量流水(skill_usage)保留, 仅解除关联。"""
+    user = _require_jwt_user(request, db)
+    row = _get_owned_key(db, user, key_id)
+    prefix = row.key_prefix
+    db.delete(row)
+    db.commit()
+    logger.info("user %s deleted skill key id=%s prefix=%s", user.username, key_id, prefix)
+    return {"deleted": True, "id": key_id}
+
+
+@router.get("/keys/my/{key_id}/usage")
+def my_key_usage(
+    key_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """单 Key 用量: 今日 / 本周(近7天) / 本月(近30天)。"""
+    user = _require_jwt_user(request, db)
+    row = _get_owned_key(db, user, key_id)
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=7)
+    month_start = now - timedelta(days=30)
+
+    def _count(since: datetime) -> int:
+        return (
+            db.query(SkillUsage)
+            .filter(SkillUsage.api_key_id == row.id, SkillUsage.created_at >= since)
+            .count()
+        )
+
+    today = _count(day_start)
+    return {
+        "key_id": row.id,
+        "key_prefix": row.key_prefix,
+        "tier": row.tier,
+        "daily_limit": row.daily_limit,
+        "used_today": today,
+        "remaining_today": max(0, row.daily_limit - today),
+        "used_7d": _count(week_start),
+        "used_30d": _count(month_start),
+    }
+
+
 # ── 后台管理(Phase 3.3): 仅 owner(JWT)可操作 ────────────────────────
 
 from fastapi import Depends as _Dep  # noqa: E402  (避免文件头过长)

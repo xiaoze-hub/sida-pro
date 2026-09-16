@@ -4423,6 +4423,28 @@ VALUES (:t, :d, :b, :s, :def)
         )
 
 
+def _m172_users_email(conn: Connection) -> None:
+    """users 表加 email 列 + 唯一索引(2026-09-16 邮箱注册)。
+
+    - nullable: 兼容迁移前存量账号(无邮箱)
+    - 唯一索引: PG/SQLite 均允许多个 NULL, 不会误伤旧账号
+    - 幂等可重跑
+    """
+    if not _has_table(conn, "users"):
+        return
+    _add_column_if_missing(
+        conn,
+        "users",
+        "email",
+        "ALTER TABLE users ADD COLUMN email VARCHAR(128)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_users_email",
+        "CREATE UNIQUE INDEX ix_users_email ON users(email)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4531,6 +4553,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     # Pro 付费系统(2026-09-16): 申请审核 + 档位配置 + 到期降级日志
     Migration(170, "pro_applications", _m170_pro_applications),
     Migration(171, "tier_configs", _m171_tier_configs),
+    # 邮箱注册(2026-09-16): users.email + 唯一索引
+    Migration(172, "users_email", _m172_users_email),
 )
 
 

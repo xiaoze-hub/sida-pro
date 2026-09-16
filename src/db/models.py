@@ -31,6 +31,8 @@ class User(Base):
 
     id = Column(String(36), primary_key=True)  # UUID
     username = Column(String(64), unique=True, nullable=False, index=True)
+    # 邮箱注册(2026-09-16): 可空(兼容旧账号), 唯一索引; NULL 在 PG/SQLite 唯一索引下可重复
+    email = Column(String(128), nullable=True, unique=True, index=True)
     password_hash = Column(String(256), nullable=False)
     role = Column(String(16), default="member", nullable=False)  # owner | member
     permissions = Column(JSON, default=list)  # 预留: ["user:manage", ...]

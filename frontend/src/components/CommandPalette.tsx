@@ -35,6 +35,7 @@ const PAGE_COMMANDS: PageCommand[] = [
   { to: '/shadow?tab=shadow', label: '影子账户', group: '我的' },
   { to: '/shadow?tab=paper', label: '模拟盘', group: '我的' },
   { to: '/profile', label: '个人中心', group: '我的' },
+  { to: '/api-keys', label: 'API Key 控制台', group: '我的' },
   // §4.3: 指向收纳后的新地址(带 ?tab= 直达对应页签)
   { to: '/system?tab=agents', label: 'Agent 管理', group: '系统' },
   { to: '/system?tab=datasources', label: '数据源', group: '系统' },
