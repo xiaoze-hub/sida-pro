@@ -1575,12 +1575,14 @@ class DarkFundTopSnapshot(Base):
 
 
 class SkillApiKey(Base):
-    """Skill Gateway 对外开放 AppKey(2026-09-15)。
+    """Skill Gateway 对外开放 AppKey(2026-09-15; 统一身份 2026-09-16)。
 
     - key_hash: sha256(salt+raw_key), 明文只在创建时返回一次
     - tier: free | trial | pro
     - status: active | frozen | disabled
     - daily_limit: 当日调用上限(trial 500 / free 100 / pro 5000)
+    - user_id: 关联 users.id(统一身份); 为 NULL 的旧 key 仍可用(向后兼容)
+    - 调用来源 channel(api/web/guest)记在 SkillUsage, 默认 'api'
     """
 
     __tablename__ = "skill_api_keys"
@@ -1588,7 +1590,8 @@ class SkillApiKey(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     key_hash = Column(String, unique=True, nullable=False, index=True)
     key_prefix = Column(String, nullable=False, default="")  # 前 8 位, 供展示
-    owner_label = Column(String, default="")  # 手机号/微信标识(可空)
+    owner_label = Column(String, default="")  # 手机号/微信标识/用户名(可空)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)  # 关联用户
     tier = Column(String, nullable=False, default="free")  # free/trial/pro
     status = Column(String, nullable=False, default="active")  # active/frozen/disabled
     daily_limit = Column(Integer, nullable=False, default=100)
@@ -1599,7 +1602,11 @@ class SkillApiKey(Base):
 
 
 class SkillUsage(Base):
-    """Skill Gateway 调用计量(2026-09-15)。"""
+    """Skill Gateway 调用计量(2026-09-15; 统一身份 2026-09-16)。
+
+    - channel: 调用来源, 默认 'api'(api/web/guest)
+    - user_id: 冗余自 skill_api_keys, 方便按用户统计; 旧数据可为 NULL
+    """
 
     __tablename__ = "skill_usage"
 
@@ -1610,10 +1617,13 @@ class SkillUsage(Base):
     duration_ms = Column(Integer, default=0)
     input_tokens = Column(Integer, default=0)
     output_tokens = Column(Integer, default=0)
+    channel = Column(String(16), default="api", nullable=False)  # api/web/guest
+    user_id = Column(String(36), nullable=True, index=True)  # 冗余, 方便按用户统计
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
     __table_args__ = (
         Index("ix_skill_usage_key_created", "api_key_id", "created_at"),
+        Index("ix_skill_usage_user", "user_id", "created_at"),
     )
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -5,7 +5,33 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
-## 2026-09-15
+## 2026-09-16
+
+### feat(identity): 单1 统一身份(注册发JWT+sk/游客试用/web计量/迁移)
+
+**性质**: 核心架构改造。**需重启后端**。迁移 169 自动执行。
+
+**1.1 统一身份**:
+- `SkillApiKey` 加 `user_id` 关联 `users` 表
+- 注册自动创建 API key(tier=free), 明文仅返回一次
+- 登录返回 `api_key_prefix` 供展示
+- JWT 与 sk 共享同一用户配额池
+
+**1.2 游客试用**:
+- 未登录可调 free 级 skill, IP 限流 10 次/天
+- 超限 429 + "请注册获取 API Key"
+- usage 记 channel='guest'
+
+**1.3 Web 计量**:
+- `SkillUsage` 加 `channel`(api/web/guest) 和 `user_id`
+- JWT 调用 channel='web', 与 API key 共享配额
+- 用量查询返回 by_channel 统计
+
+**1.4 迁移**:
+- 迁移 169: 加列+索引+回填(owner_label=users.username)
+- 幂等可重跑, 旧 key(user_id=NULL)向后兼容
+
+**测试**: 31/31 gateway 测试通过(含 11 个新增); 8/8 auth 测试通过
 
 ### fix(audit-p2): P2 批量修复(27项: 魔法数字/TODO/sanitize/类型注解/杂项)
 

@@ -1,11 +1,13 @@
 """Skill Gateway — 对外开放 skill 的 HTTP API(2026-09-15)。
 
-设计(任务清单 Phase 1):
+设计(任务清单 Phase 1 + 统一身份 2026-09-16):
 - `POST /api/keys` 手机号/微信标识领 AppKey(PG 落库, key_hash + 额度 + 状态)
-- `POST /api/skills/{name}/run` 鉴权后执行 skill, **只返回结果字段, skill 原文绝不外泄**
-- `X-API-Key` 鉴权: 无 key→401, 禁用/欠费→403
+- `POST /api/skills/{name}/run` 三通道鉴权后执行 skill, **只返回结果字段, skill 原文绝不外泄**
+  - API Key(`X-API-Key`): channel='api'
+  - JWT(`Authorization: Bearer`, 无 API Key 时): channel='web', 与该用户 key 共享配额
+  - 游客(无 key 无 JWT): channel='guest', IP 24h 滑动窗口 10 次, 仅 free 档 skill
 - Redis 限流: `skill_quota:{key}:{day}` 免费 100/天, `skill_burst:{key}:{minute}` 20/分
-- 计量: `skill_usage` 表
+- 计量: `skill_usage` 表(channel + user_id)
 - 新人 trial: 10 天 500 次/天
 
 红线:
@@ -22,6 +24,7 @@ import os
 import secrets
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -65,6 +68,32 @@ def _check_key_register_rate(ip: str) -> None:
             raise HTTPException(429, f"注册过于频繁, 请 {retry_in} 秒后重试")
         hits.append(now)
         _key_reg_hits[ip] = hits
+
+
+# ── 游客试用(统一身份 2026-09-16): IP 级限流, 每天最多 10 次 ──────────
+_guest_ip_counts: dict[str, list[float]] = {}
+_guest_lock = threading.Lock()
+GUEST_DAILY_LIMIT = 10
+_GUEST_WINDOW_SEC = 86400  # 24h 滑动窗口
+
+
+def _check_guest_rate(ip: str) -> None:
+    """游客 IP 24h 滑动窗口, 每 IP 最多 GUEST_DAILY_LIMIT 次。超限 429。
+
+    复用 _check_key_register_rate 的内存滑动窗口模式; 线程安全; 重启清零可接受。
+    """
+    now = time.monotonic()
+    with _guest_lock:
+        hits = [t for t in _guest_ip_counts.get(ip, []) if now - t < _GUEST_WINDOW_SEC]
+        if len(hits) >= GUEST_DAILY_LIMIT:
+            _guest_ip_counts[ip] = hits
+            raise HTTPException(
+                429,
+                "请注册获取 API Key",
+                headers={"Retry-After": str(_GUEST_WINDOW_SEC)},
+            )
+        hits.append(now)
+        _guest_ip_counts[ip] = hits
 
 # ── 开放白名单 ──────────────────────────────────────────────────────
 # Phase 1: 只开放行情/技术/资金/新闻类; 个人数据与 SSRF 面一律禁止
@@ -328,7 +357,8 @@ def _hot_cache_set(key: str, val: Any) -> None:
 
 # ── 鉴权 ────────────────────────────────────────────────────────────
 
-def _get_api_key(x_api_key: str = Header(default="", alias="X-API-Key"), db: Session = Depends(get_db)) -> SkillApiKey:
+def _validate_api_key_row(x_api_key: str, db: Session) -> SkillApiKey:
+    """校验 X-API-Key 并返回行; 无效抛 401, 禁用/冻结抛 403。"""
     if not x_api_key or not x_api_key.startswith("sk_"):
         raise HTTPException(401, "缺少或无效的 X-API-Key(格式 sk_...)。请先 POST /api/keys 领取。")
     h = _hash_key(x_api_key)
@@ -351,6 +381,153 @@ def _get_api_key(x_api_key: str = Header(default="", alias="X-API-Key"), db: Ses
     return row
 
 
+def _get_api_key(x_api_key: str = Header(default="", alias="X-API-Key"), db: Session = Depends(get_db)) -> SkillApiKey:
+    return _validate_api_key_row(x_api_key, db)
+
+
+def _header_str(request: Request, name: str) -> str:
+    """安全读 header(Mock/异常一律回落空串)。"""
+    try:
+        v = request.headers.get(name) or ""
+        return v if isinstance(v, str) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _optional_jwt_user(authorization: str, db: Session) -> _User | None:
+    """从 Authorization: Bearer 解 JWT; 缺失/无效/禁用返回 None(降级 guest)。"""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization[7:].strip()
+    if not token:
+        return None
+    try:
+        from src.core.auth_tokens import decode_token as _decode
+
+        payload = _decode(token)
+        if not payload:
+            return None
+        user = db.query(_User).filter(_User.id == payload.get("sub", "")).first()
+        if not user or not user.is_active:
+            return None
+        if user.token_version != int(payload.get("ver", 0)):
+            return None
+        return user
+    except Exception as e:  # noqa: BLE001
+        logger.debug("skill gateway JWT 解析失败, 降级 guest: %r", e)
+        return None
+
+
+@dataclass
+class _CallIdentity:
+    """run_skill 三通道鉴权结果(统一身份 2026-09-16)。
+
+    channel: api | web | guest
+    api_key_id: 游客 / 未关联 key 的 web 为 0
+    rate_key: 限流标识 —— API/web 关联 key 共用 key_hash 实现同用户共享配额
+    """
+
+    channel: str
+    api_key_id: int
+    user_id: str | None
+    rate_key: str
+    tier: str
+    daily_limit: int
+    key_row: SkillApiKey | None
+
+
+def _best_active_key_for_user(db: Session, user_id: str) -> SkillApiKey | None:
+    """该用户名下最优 active key(档位优先, 同档看额度)。用于 web/API 共享配额。"""
+    keys = (
+        db.query(SkillApiKey)
+        .filter(
+            SkillApiKey.user_id == user_id,
+            SkillApiKey.status == "active",
+        )
+        .all()
+    )
+    best: SkillApiKey | None = None
+    for k in keys:
+        k_rank = TIER_RANK.get(k.tier or "free", 0)
+        b_rank = TIER_RANK.get(best.tier or "free", 0) if best else -1
+        if best is None or k_rank > b_rank:
+            best = k
+        elif k_rank == b_rank and best is not None and (k.daily_limit or 0) > (best.daily_limit or 0):
+            best = k
+    return best
+
+
+def _web_call_identity(user: _User, db: Session) -> _CallIdentity:
+    """JWT 登录用户: channel=web; 有关联 key 则共享其配额, 否则 free 档按 user 限流。"""
+    uid = str(user.id)
+    best = _best_active_key_for_user(db, uid)
+    if best is not None:
+        # trial 到期降 free(与 _validate_api_key_row 同口径)
+        if best.tier == "trial" and best.expires_at:
+            exp = best.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                best.tier = "free"
+                best.daily_limit = TIER_DAILY_LIMIT["free"]
+                db.commit()
+        return _CallIdentity(
+            channel="web",
+            api_key_id=best.id,
+            user_id=uid,
+            rate_key=best.key_hash,  # 与该 key 的 API 调用共享配额
+            tier=best.tier,
+            daily_limit=best.daily_limit,
+            key_row=best,
+        )
+    return _CallIdentity(
+        channel="web",
+        api_key_id=0,
+        user_id=uid,
+        rate_key=f"web_user:{uid}",
+        tier="free",
+        daily_limit=TIER_DAILY_LIMIT["free"],
+        key_row=None,
+    )
+
+
+def _resolve_call_identity(
+    x_api_key: str,
+    authorization: str,
+    request: Request,
+    db: Session,
+) -> _CallIdentity:
+    """三通道: API Key 优先 → JWT → 游客。游客在此完成 IP 限流。"""
+    # 1) API Key(原路径不破坏)
+    if x_api_key and x_api_key.startswith("sk_"):
+        row = _validate_api_key_row(x_api_key, db)
+        return _CallIdentity(
+            channel="api",
+            api_key_id=row.id,
+            user_id=(str(row.user_id) if row.user_id else None),
+            rate_key=row.key_hash,
+            tier=row.tier,
+            daily_limit=row.daily_limit,
+            key_row=row,
+        )
+    # 2) JWT 登录(web)
+    user = _optional_jwt_user(authorization, db)
+    if user is not None:
+        return _web_call_identity(user, db)
+    # 3) 游客: IP 限流 + 仅 free skill
+    ip = request.client.host if request.client else "unknown"
+    _check_guest_rate(ip)
+    return _CallIdentity(
+        channel="guest",
+        api_key_id=0,
+        user_id=None,
+        rate_key=f"guest:{ip}",
+        tier="free",
+        daily_limit=GUEST_DAILY_LIMIT,
+        key_row=None,
+    )
+
+
 def _check_skill_tier(name: str, row: SkillApiKey) -> None:
     meta = OPEN_SKILLS.get(name)
     if not meta:
@@ -360,6 +537,22 @@ def _check_skill_tier(name: str, row: SkillApiKey) -> None:
     need = meta["tier_min"]
     if TIER_RANK[row.tier] < TIER_RANK[need]:
         raise HTTPException(403, f"skill {name} 需要 {need} 档位(当前 {row.tier})")
+
+
+def _check_call_tier(name: str, ident: _CallIdentity) -> None:
+    """按调用身份校验 skill 档位; 游客只放行 tier_min=free。"""
+    meta = OPEN_SKILLS.get(name)
+    if not meta:
+        if name in BLOCKED_SKILLS:
+            raise HTTPException(403, f"该 skill 不对外开放: {name}")
+        raise HTTPException(404, f"未知 skill: {name}")
+    if ident.channel == "guest":
+        if meta["tier_min"] != "free":
+            raise HTTPException(403, f"游客仅可调用免费 skill, 请注册获取 API Key: {name}")
+        return
+    need = meta["tier_min"]
+    if TIER_RANK.get(ident.tier, 0) < TIER_RANK[need]:
+        raise HTTPException(403, f"skill {name} 需要 {need} 档位(当前 {ident.tier})")
 
 
 # ── 请求/响应模型 ────────────────────────────────────────────────────
@@ -410,12 +603,21 @@ def list_skills(row: SkillApiKey = Depends(_get_api_key)) -> dict:
 async def run_skill(
     name: str,
     body: SkillRunRequest,
-    row: SkillApiKey = Depends(_get_api_key),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> SkillRunResponse:
-    """执行开放 skill。只返回 handler 输出字符串 + 口径 + 风险提示。"""
-    _check_skill_tier(name, row)
-    _check_rate_limit(row.key_hash, row.daily_limit, tier=row.tier)
+    """执行开放 skill。三通道: API Key / JWT(web) / 游客。
+
+    只返回 handler 输出字符串 + 口径 + 风险提示。
+    """
+    x_api_key = _header_str(request, "X-API-Key")
+    authorization = _header_str(request, "Authorization")
+    ident = _resolve_call_identity(x_api_key, authorization, request, db)
+
+    _check_call_tier(name, ident)
+    # 游客 IP 限流已在 _resolve_call_identity 完成; api/web 走令牌桶+日配额
+    if ident.channel != "guest":
+        _check_rate_limit(ident.rate_key, ident.daily_limit, tier=ident.tier)
 
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
@@ -425,9 +627,13 @@ async def run_skill(
     cache_key = f"skill_cache:{name}:{hash(frozenset((body.args or {}).items()))}"
     cached = _hot_cache_get(cache_key)
     if cached is not None:
-        _log_usage(db, row.id, name, 200, 0)
-        row.last_used_at = datetime.now(timezone.utc)
-        db.commit()
+        _log_usage(
+            db, ident.api_key_id, name, 200, 0,
+            channel=ident.channel, user_id=ident.user_id,
+        )
+        if ident.key_row is not None:
+            ident.key_row.last_used_at = datetime.now(timezone.utc)
+            db.commit()
         return cached
 
     t0 = time.monotonic()
@@ -443,14 +649,21 @@ async def run_skill(
     except Exception as e:  # noqa: BLE001
         status_code = 500
         duration_ms = int((time.monotonic() - t0) * 1000)
-        _log_usage(db, row.id, name, status_code, duration_ms)
+        _log_usage(
+            db, ident.api_key_id, name, status_code, duration_ms,
+            channel=ident.channel, user_id=ident.user_id,
+        )
         raise HTTPException(500, f"skill 执行失败: {e!r}")
 
-    _log_usage(db, row.id, name, status_code, duration_ms)
-    row.last_used_at = datetime.now(timezone.utc)
-    db.commit()
-    # Phase 2.3: 突增检测
-    _detect_spike_and_freeze(db, row)
+    _log_usage(
+        db, ident.api_key_id, name, status_code, duration_ms,
+        channel=ident.channel, user_id=ident.user_id,
+    )
+    if ident.key_row is not None:
+        ident.key_row.last_used_at = datetime.now(timezone.utc)
+        db.commit()
+        # Phase 2.3: 突增检测(仅 API Key 路径)
+        _detect_spike_and_freeze(db, ident.key_row)
 
     risk = RISK_DISCLAIMER
     if red_hits:
@@ -468,10 +681,24 @@ async def run_skill(
     return resp
 
 
-def _log_usage(db: Session, key_id: int, skill: str, code: int, duration_ms: int) -> None:
+def _log_usage(
+    db: Session,
+    key_id: int,
+    skill: str,
+    code: int,
+    duration_ms: int,
+    *,
+    channel: str = "api",
+    user_id: str | None = None,
+) -> None:
     try:
         db.add(SkillUsage(
-            api_key_id=key_id, skill_name=skill, status_code=code, duration_ms=duration_ms,
+            api_key_id=key_id,
+            skill_name=skill,
+            status_code=code,
+            duration_ms=duration_ms,
+            channel=channel or "api",
+            user_id=user_id,
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
@@ -489,9 +716,14 @@ def register_key(
     """领取 AppKey。明文 key 只在本次响应返回一次, 服务端只存 hash。
 
     P1(audit-20260915): 此前完全免鉴权易被刷号, 加 IP 级限流(每小时 5 次)。
+    统一身份(2026-09-16): 若带 JWT, 绑定 user_id, 便于 web/API 共享配额。
     """
     ip = request.client.host if request.client else "unknown"
     _check_key_register_rate(ip)
+    linked_user_id = None
+    jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
+    if jwt_user is not None:
+        linked_user_id = str(jwt_user.id)
     raw = _gen_key()
     h = _hash_key(raw)
     tier = "trial" if body.trial else "free"
@@ -503,6 +735,7 @@ def register_key(
         key_hash=h,
         key_prefix=raw[:11],
         owner_label=(body.owner_label or "").strip()[:64],
+        user_id=linked_user_id,
         tier=tier,
         status="active",
         daily_limit=daily,
@@ -522,25 +755,77 @@ def register_key(
     }
 
 
+def _usage_by_channel(db: Session, base_filters: list, day_start: datetime) -> dict[str, int]:
+    """当日用量按 channel 聚合(旧数据 channel 可能为空, 归入 api)。"""
+    rows = (
+        db.query(SkillUsage.channel, SkillUsage.id)
+        .filter(*base_filters, SkillUsage.created_at >= day_start)
+        .all()
+    )
+    out: dict[str, int] = {}
+    for ch, _rid in rows:
+        key = (ch or "api").strip() or "api"
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 @router.get("/usage")
 def get_usage(
-    row: SkillApiKey = Depends(_get_api_key),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """自查当日用量与剩余配额。"""
+    """自查当日用量与剩余配额。
+
+    - 带 X-API-Key: 按 key 查(兼容旧路径)
+    - 仅 JWT: 按 user_id 查该用户全部 channel 用量(不分 channel 汇总)
+    - 响应含 by_channel 统计
+    """
+    x_api_key = _header_str(request, "X-API-Key")
+    authorization = _header_str(request, "Authorization")
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if x_api_key and x_api_key.startswith("sk_"):
+        row = _validate_api_key_row(x_api_key, db)
+        today = db.query(SkillUsage).filter(
+            SkillUsage.api_key_id == row.id,
+            SkillUsage.created_at >= day_start,
+        ).count()
+        by_channel = _usage_by_channel(db, [SkillUsage.api_key_id == row.id], day_start)
+        remaining = max(0, row.daily_limit - today)
+        return {
+            "tier": row.tier,
+            "status": row.status,
+            "daily_limit": row.daily_limit,
+            "used_today": today,
+            "remaining_today": remaining,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "by_channel": by_channel,
+        }
+
+    user = _optional_jwt_user(authorization, db)
+    if user is None:
+        raise HTTPException(
+            401,
+            "缺少 API Key 或登录凭证。请先登录或 POST /api/keys 领取。",
+        )
+    uid = str(user.id)
+    # 按 user_id 查该用户全部 channel 用量(不分 channel)
     today = db.query(SkillUsage).filter(
-        SkillUsage.api_key_id == row.id,
+        SkillUsage.user_id == uid,
         SkillUsage.created_at >= day_start,
     ).count()
-    remaining = max(0, row.daily_limit - today)
+    by_channel = _usage_by_channel(db, [SkillUsage.user_id == uid], day_start)
+    best = _best_active_key_for_user(db, uid)
+    daily_limit = best.daily_limit if best is not None else TIER_DAILY_LIMIT["free"]
+    tier = best.tier if best is not None else "free"
     return {
-        "tier": row.tier,
-        "status": row.status,
-        "daily_limit": row.daily_limit,
+        "tier": tier,
+        "status": "active",
+        "daily_limit": daily_limit,
         "used_today": today,
-        "remaining_today": remaining,
-        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "remaining_today": max(0, daily_limit - today),
+        "expires_at": best.expires_at.isoformat() if best is not None and best.expires_at else None,
+        "by_channel": by_channel,
     }
 
 
