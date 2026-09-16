@@ -5,6 +5,32 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-16 (email-verify)
+
+### feat(email-verify): 邮箱验证码注册 + 验证码登录
+
+**性质**: 用户-facing 功能。**需重启后端 + 前端更新**。分支 `feat/email-verify-20260916`。
+
+**后端**:
+- 新文件 `src/web/api/email_verify.py`:
+  - `POST /api/auth/send-code`: 发送 6 位数字验证码(purpose=register|login)
+  - `POST /api/auth/login-by-email`: 邮箱+验证码登录, 返回 JWT(格式同 `/login`); 用户不存在 404
+  - 存储: 进程内 dict + `threading.Lock`(不依赖 Redis); 每条含 code/email/purpose/created_at/used
+  - 5 分钟过期; 每邮箱每分钟最多 1 次(429)
+  - SMTP 从 env 读 `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS`(可选 `SMTP_SSL`); 未配置时开发模式打印验证码日志
+- `src/web/api/auth.py`:
+  - `RegisterRequest` 新增必填 `code` 字段; 注册前校验 purpose=register 验证码, 错误/过期 400
+- `src/web/app.py`: 挂载 `email_verify` router 到 `/api/auth` 前缀(免登录)
+
+**前端** (`frontend/src/pages/Login.tsx` + `packages/api/src/auth.ts`):
+- 三种模式 Tab 切换: 密码登录(默认) / 注册 / 验证码登录
+- 注册与验证码登录均有「验证码」输入框 + 「发送验证码」按钮(60 秒倒计时)
+- 注册提交带 `code`; 验证码登录调用 `/api/auth/login-by-email`
+- `authApi` 新增 `sendCode(email, purpose)` / `loginByEmail(email, code)`
+- 密码登录逻辑未改动
+
+**测试**: 后端 TestClient E2E 13 项通过(发送/冷却/错误码/注册/重放拒绝/重复邮箱/验证码登录/未知用户 404/密码登录回归); 存储单测(过期/一次性/purpose 隔离)通过; 前端 `tsc -b` 通过。
+
 ## 2026-09-16
 
 ### feat(email-reg-key-console): 邮箱注册 + API Key 控制台 + 智能体一键安装

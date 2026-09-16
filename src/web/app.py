@@ -302,6 +302,10 @@ async def demo_isolation_middleware(request: Request, call_next):
 
 # 认证路由（无需登录）
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+# 邮箱验证码(2026-09-16): send-code / login-by-email, 免登录
+from src.web.api import email_verify as email_verify_router
+
+app.include_router(email_verify_router.router, prefix="/api/auth", tags=["email-verify"])
 # 回测只读端点(B2.4): 需登录, 入参有界, 无写操作
 from src.web.api import backtest as backtest_api
 

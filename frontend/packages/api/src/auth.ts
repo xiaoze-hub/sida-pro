@@ -38,6 +38,17 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // 邮箱验证码(2026-09-16)
+  sendCode: (email: string, purpose: 'register' | 'login') =>
+    fetchAPI<{ sent: boolean; expire_in: number }>('/auth/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ email, purpose }),
+    }),
+  loginByEmail: (email: string, code: string) =>
+    fetchAPI<AuthTokenPayload>('/auth/login-by-email', {
+      method: 'POST',
+      body: JSON.stringify({ email, code }),
+    }),
   me: () => fetchAPI<{ user: UserInfo }>('/auth/me'),
   changePassword: (oldPassword: string, newPassword: string) =>
     fetchAPI<{ message: string }>('/auth/change-password', {
