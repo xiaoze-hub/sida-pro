@@ -78,7 +78,16 @@ export default function ApiKeysPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const { data: keys, refetch } = useApiQuery<MyApiKey[]>(['my-api-keys'], '/keys/my')
-  const keyList = useMemo(() => keys ?? [], [keys])
+  const keyList = useMemo((): MyApiKey[] => {
+    if (Array.isArray(keys)) return keys
+    if (keys && typeof keys === 'object') {
+      const k = keys as any
+      if (Array.isArray(k.data)) return k.data
+      if (Array.isArray(k.keys)) return k.keys
+      if (Array.isArray(k.items)) return k.items
+    }
+    return []
+  }, [keys])
 
   // ── 操作 ──
   const createKey = async () => {
