@@ -1,22 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  Code2,
   KeyRound,
   ShieldCheck,
   Gauge,
-  BookOpen,
   Play,
   AlertTriangle,
-  Copy,
-  Check,
   Terminal,
-  Lock,
+  Rocket,
+  ListTree,
+  Bug,
+  Loader2,
 } from 'lucide-react'
-import { fetchAPI, getToken, isAuthenticated } from '@panwatch/api'
+import { fetchAPI, getToken } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
-import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import {
   Select,
   SelectContent,
@@ -24,16 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@panwatch/base-ui/components/ui/select'
+import { DevPageLayout, Section, InfoCard, CodeBlock, type SideMenuItem } from '@/components/dev/DevPageLayout'
 
 /**
- * 开发者文档页(2026-09-16, 任务 2.1-2.3)。
- * - 公开可访问(无需登录), Skill 目录从 GET /api/skills/catalog 拉取, 不硬编码
- * - 在线调试台: API Key 仅存组件 state(不写 localStorage)
- * - 错误码表: 401/403/429/500 + 退避建议
+ * 开发者文档页 v2(2026-09-16)。
+ * 侧边栏导航 + 章节化布局 + 在线调试台。
  */
 
-// ── 目录类型(与后端 /api/skills/catalog 对齐) ───────────────────────
-
+// ── 目录类型 ──
 interface SkillParamSchema {
   type?: string
   description?: string
@@ -59,651 +55,211 @@ interface TierLimit {
 
 interface CatalogResp {
   skills: CatalogSkill[]
-  tiers: {
-    guest?: TierLimit
-    free?: TierLimit
-    trial?: TierLimit
-    pro?: TierLimit
-  }
-  endpoint?: string
+  tiers: Record<string, TierLimit>
+  guest?: { daily_limit: number }
 }
 
-type RunOutcome = {
-  status: number
-  ok: boolean
-  message: string
-  data: unknown
-  retryAfter: string | null
-  durationMs: number
-}
-
-// ── 静态文档内容(与后端行为一致; 限流数字优先用 catalog 回传) ────────
-
-const QUICK_START_STEPS = [
-  {
-    title: '1. 注册 / 领取 API Key',
-    desc: '调用 POST /api/keys 领取 sk_ 前缀密钥。明文只返回一次, 服务端只存 hash, 请立即妥善保存。',
-    code: `curl -X POST https://<your-host>/api/keys \\
-  -H 'Content-Type: application/json' \\
-  -d '{"trial": true, "owner_label": "my-app"}'`,
-  },
-  {
-    title: '2. 保存 Key 并查配额',
-    desc: '把 Key 放进环境变量或密钥管理, 不要提交到仓库。用 GET /api/usage 查当日用量。',
-    code: `export SIDA_API_KEY='sk_...'   # 仅本机环境变量
-
-curl https://<your-host>/api/usage \\
-  -H "X-API-Key: $SIDA_API_KEY"`,
-  },
-  {
-    title: '3. 第一次调用',
-    desc: 'POST /api/skills/{name}/run, body 为 {"args": {...}}。响应含 result / caliber / risk。',
-    code: `curl -X POST https://<your-host>/api/skills/get_stock_quote/run \\
-  -H "X-API-Key: $SIDA_API_KEY" \\
-  -H 'Content-Type: application/json' \\
-  -d '{"args": {"symbol": "600519", "market": "CN"}}'`,
-  },
+// ── 菜单 ──
+const MENU: SideMenuItem[] = [
+  { id: 'quickstart', label: '快速开始', icon: <Rocket className="h-3.5 w-3.5" />, anchor: 'sec-quickstart' },
+  { id: 'auth', label: '鉴权方式', icon: <ShieldCheck className="h-3.5 w-3.5" />, anchor: 'sec-auth' },
+  { id: 'ratelimit', label: '限流说明', icon: <Gauge className="h-3.5 w-3.5" />, anchor: 'sec-ratelimit' },
+  { id: 'catalog', label: 'Skill 目录', icon: <ListTree className="h-3.5 w-3.5" />, anchor: 'sec-catalog' },
+  { id: 'playground', label: '在线调试', icon: <Play className="h-3.5 w-3.5" />, anchor: 'sec-playground' },
+  { id: 'errors', label: '错误码', icon: <Bug className="h-3.5 w-3.5" />, anchor: 'sec-errors' },
 ]
 
-const AUTH_CHANNELS = [
-  {
-    tag: 'X-API-Key',
-    title: 'API Key 通道 (channel=api)',
-    desc: '外部集成首选。请求头带 X-API-Key: sk_...。按 Key 计量与限流, 不依赖登录态。',
-    example: `-H "X-API-Key: $SIDA_API_KEY"`,
-  },
-  {
-    tag: 'JWT',
-    title: 'JWT 通道 (channel=web)',
-    desc: '已登录用户可用 Authorization: Bearer <token> 调用, 与该用户名下最优 Key 共享配额。未带 Key 时自动走此通道。',
-    example: `-H "Authorization: Bearer <jwt>"`,
-  },
-  {
-    tag: 'guest',
-    title: '游客通道 (channel=guest)',
-    desc: '无 Key 且无 JWT 时按来源 IP 限流, 仅可调用 tier_min=free 的 skill, 适合文档页试玩。',
-    example: `# 无需鉴权头(受限, 勿用于生产)`,
-  },
-]
-
-const ERROR_ROWS = [
-  {
-    code: 401,
-    title: '缺少或无效的 API Key',
-    desc: 'X-API-Key 缺失、格式不是 sk_ 前缀, 或 hash 未命中任何已签发 Key。',
-    example: `{"code":401,"success":false,"data":null,"message":"无效的 API Key"}`,
-    advice: '核对 Key 是否完整复制; 从 POST /api/keys 重新领取。不要自动重试, 先修凭证。',
-  },
-  {
-    code: 403,
-    title: '权限不足 / 档位不够 / Key 异常',
-    desc: '当前档位低于 skill 的 tier_min, 或 Key 已 disabled/frozen, 或游客调用非 free skill。',
-    example: `{"code":403,"success":false,"data":null,"message":"skill get_forecast 需要 pro 档位(当前 free)"}`,
-    advice: '升级档位或改用 free skill; 若 Key 被冻结/禁用, 联系管理员。不要盲目重试。',
-  },
-  {
-    code: 429,
-    title: '限流',
-    desc: '日配额用尽、触发令牌桶 burst/匀速限制, 或游客 IP 超出每日次数。响应头带 Retry-After(秒)。',
-    example: `# 响应头: Retry-After: 37
-{"code":429,"success":false,"data":null,"message":"触发频率限制(burst 30, 匀速 15/分), 37s 后重试"}`,
-    advice:
-      '必须遵守 Retry-After; 自实现退避: 首次等 max(Retry-After, 1s), 之后指数退避(1s→2s→4s→8s…)并加随机抖动, 最多 3-5 次。日配额类 429 建议等到次日 UTC 零点或升级档位。',
-  },
-  {
-    code: 500,
-    title: '服务器内部错误',
-    desc: 'skill handler 执行异常(上游数据源超时、解析失败等)。非参数问题。',
-    example: `{"code":500,"success":false,"data":null,"message":"skill 执行失败: ..."}`,
-    advice:
-      '可退避重试 1-2 次(建议 2s、8s); 持续 500 记录 skill 名与时间戳并反馈, 勿在 tight loop 重试。',
-  },
-]
-
-// ── 工具 ────────────────────────────────────────────────────────────
-
-function SectionHead({
-  icon: Icon,
-  title,
-  hint,
-}: {
-  icon: typeof Code2
-  title: string
-  hint?: string
-}) {
-  return (
-    <div className="flex items-center gap-2.5 mb-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
-        <Icon className="h-4 w-4" />
-      </div>
-      <h3 className="text-[13px] font-semibold text-foreground">{title}</h3>
-      {hint && <span className="text-[10px] text-muted-foreground ml-auto hidden sm:inline">{hint}</span>}
-    </div>
-  )
+const TIER_BADGE: Record<string, string> = {
+  free: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+  trial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  pro: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
 }
-
-function CodeBlock({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      /* clipboard 不可用时静默 */
-    }
-  }
-  return (
-    <div className="relative group">
-      <pre className="overflow-x-auto rounded-lg border border-border/50 bg-accent/20 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-foreground/85 whitespace-pre">
-        {code}
-      </pre>
-      <button
-        type="button"
-        onClick={copy}
-        className="absolute top-1.5 right-1.5 rounded-md p-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-accent transition-opacity"
-        title="复制"
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  )
-}
-
-function tierBadgeVariant(tier: string) {
-  if (tier === 'pro') return 'default' as const
-  if (tier === 'trial') return 'success' as const
-  return 'secondary' as const
-}
-
-/** 按 skill 参数 schema 生成调试台默认 args(只填有 default 或常见必填占位)。 */
-function buildDefaultArgs(skill: CatalogSkill | null): string {
-  if (!skill) return '{}'
-  const args: Record<string, unknown> = {}
-  const props = skill.params || {}
-  for (const key of Object.keys(props)) {
-    const p = props[key]
-    const isRequired = (skill.required || []).includes(key)
-    if (p && typeof p === 'object' && 'default' in p && p.default !== undefined && p.default !== null && p.default !== '') {
-      args[key] = p.default
-      continue
-    }
-    if (!isRequired) continue
-    if (key === 'symbol') args[key] = '600519'
-    else if (key === 'market') args[key] = 'CN'
-    else if (key === 'question') args[key] = '今日主力净流入前10的A股'
-    else if (key === 'scene') args[key] = 'overview'
-    else if (p?.type === 'integer' || p?.type === 'number') args[key] = 10
-    else if (p?.type === 'boolean') args[key] = false
-    else args[key] = ''
-  }
-  return JSON.stringify(args, null, 2)
-}
-
-/**
- * 调试台专用请求: 不用 fetchAPI —— 其 401 分支会强制 logout() 跳登录,
- * 而开发者页要求未登录也能看文档/试 free skill。
- */
-async function callSkillRun(
-  name: string,
-  args: Record<string, unknown>,
-  opts: { apiKey: string; useJwt: boolean },
-): Promise<RunOutcome> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (opts.apiKey.trim()) {
-    headers['X-API-Key'] = opts.apiKey.trim()
-  } else if (opts.useJwt) {
-    const t = getToken()
-    if (t) headers['Authorization'] = `Bearer ${t}`
-  }
-  const t0 = performance.now()
-  try {
-    const res = await fetch(`/api/skills/${encodeURIComponent(name)}/run`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ args }),
-    })
-    const durationMs = Math.round(performance.now() - t0)
-    const retryAfter = res.headers.get('Retry-After')
-    let body: any = null
-    try {
-      body = await res.json()
-    } catch {
-      body = null
-    }
-    // 响应经 ResponseWrapperMiddleware: {code, success, data, message}
-    const ok = !!body?.success && res.ok
-    return {
-      status: res.status,
-      ok,
-      message: String(body?.message || (ok ? '' : `HTTP ${res.status}`)),
-      data: body?.data ?? body,
-      retryAfter,
-      durationMs,
-    }
-  } catch (e: any) {
-    return {
-      status: 0,
-      ok: false,
-      message: String(e?.message || e || '网络错误'),
-      data: null,
-      retryAfter: null,
-      durationMs: Math.round(performance.now() - t0),
-    }
-  }
-}
-
-// ── 调试台 ──────────────────────────────────────────────────────────
-
-function SkillPlayground({ skills }: { skills: CatalogSkill[] }) {
-  const loggedIn = isAuthenticated()
-  const [apiKey, setApiKey] = useState('')
-  const [authMode, setAuthMode] = useState<'key' | 'session' | 'guest'>(loggedIn ? 'session' : 'guest')
-  const [skillName, setSkillName] = useState('')
-  const [argsText, setArgsText] = useState('{}')
-  const [running, setRunning] = useState(false)
-  const [outcome, setOutcome] = useState<RunOutcome | null>(null)
-
-  const selected = useMemo(
-    () => skills.find(s => s.name === skillName) || null,
-    [skills, skillName],
-  )
-
-  // 列表加载后自动选中第一个 free skill, 并预填参数
-  useEffect(() => {
-    if (!skillName && skills.length > 0) {
-      const first = skills.find(s => s.tier_min === 'free') || skills[0]
-      setSkillName(first.name)
-      setArgsText(buildDefaultArgs(first))
-    }
-  }, [skills, skillName])
-
-  const onSkillChange = (name: string) => {
-    setSkillName(name)
-    const sk = skills.find(s => s.name === name) || null
-    setArgsText(buildDefaultArgs(sk))
-    setOutcome(null)
-  }
-
-  const run = useCallback(async () => {
-    if (!skillName || running) return
-    let args: Record<string, unknown>
-    try {
-      const parsed = JSON.parse(argsText || '{}')
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        setOutcome({
-          status: 0,
-          ok: false,
-          message: '参数必须是 JSON 对象, 例如 {"symbol": "600519"}',
-          data: null,
-          retryAfter: null,
-          durationMs: 0,
-        })
-        return
-      }
-      args = parsed as Record<string, unknown>
-    } catch {
-      setOutcome({
-        status: 0,
-        ok: false,
-        message: '参数 JSON 解析失败, 请检查括号/引号',
-        data: null,
-        retryAfter: null,
-        durationMs: 0,
-      })
-      return
-    }
-    setRunning(true)
-    setOutcome(null)
-    const result = await callSkillRun(skillName, args, {
-      apiKey: authMode === 'key' ? apiKey : '',
-      useJwt: authMode === 'session',
-    })
-    setOutcome(result)
-    setRunning(false)
-  }, [apiKey, argsText, authMode, running, skillName])
-
-  return (
-    <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
-      <SectionHead
-        icon={Play}
-        title="在线调试台"
-        hint="Key 仅存于当前页面内存, 刷新即失, 不写 localStorage"
-      />
-
-      <div className="rounded-xl border border-border/50 bg-accent/10 p-4 space-y-4">
-        {/* 鉴权方式 */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <Label>鉴权方式</Label>
-            <Select value={authMode} onValueChange={(v) => setAuthMode(v as typeof authMode)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="session" disabled={!loggedIn}>
-                  当前登录会话 (JWT){!loggedIn && ' — 未登录'}
-                </SelectItem>
-                <SelectItem value="key">API Key</SelectItem>
-                <SelectItem value="guest">游客 (无鉴权)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="md:col-span-2">
-            <Label>
-              API Key
-              {authMode === 'key' && (
-                <span className="ml-2 text-[10px] font-normal text-amber-600">仅内存, 不持久化</span>
-              )}
-            </Label>
-            <Input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={authMode === 'key' ? 'sk_...' : '选择「API Key」后在此粘贴'}
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              disabled={authMode !== 'key'}
-            />
-          </div>
-        </div>
-
-        {/* Skill + 参数 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <Label>Skill</Label>
-            <Select value={skillName} onValueChange={onSkillChange}>
-              <SelectTrigger>
-                <SelectValue placeholder={skills.length ? '选择 skill' : '目录加载中…'} />
-              </SelectTrigger>
-              <SelectContent>
-                {skills.map(s => (
-                  <SelectItem key={s.name} value={s.name}>
-                    {s.name} · {s.tier_min}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selected && (
-              <p className="mt-1.5 text-[11px] text-muted-foreground line-clamp-2">
-                {selected.description || '（无描述）'}
-                {selected.caliber ? ` · 口径: ${selected.caliber}` : ''}
-              </p>
-            )}
-          </div>
-          <div>
-            <Label>参数 (JSON)</Label>
-            <textarea
-              className="flex min-h-[88px] w-full rounded-xl border border-border bg-card px-3 py-2.5 font-mono text-[12px] leading-relaxed shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
-              spellCheck={false}
-              value={argsText}
-              onChange={e => setArgsText(e.target.value)}
-              placeholder='{"symbol": "600519", "market": "CN"}'
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button onClick={run} disabled={running || !skillName} size="sm">
-            {running ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                运行中…
-              </>
-            ) : (
-              <>
-                <Play className="h-3.5 w-3.5" />
-                Run
-              </>
-            )}
-          </Button>
-          <span className="text-[11px] text-muted-foreground">
-            POST /api/skills/{'{name}'}/run
-            {outcome && (
-              <span className="ml-2">
-                {outcome.status > 0 ? `HTTP ${outcome.status}` : '网络错误'} · {outcome.durationMs}ms
-                {outcome.retryAfter ? ` · Retry-After ${outcome.retryAfter}s` : ''}
-              </span>
-            )}
-          </span>
-        </div>
-
-        {outcome && (
-          <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span
-                className={`text-[11px] font-medium ${outcome.ok ? 'text-emerald-600' : 'text-destructive'}`}
-              >
-                {outcome.ok ? '成功' : '失败'}
-              </span>
-              {!outcome.ok && outcome.message && (
-                <span className="text-[11px] text-muted-foreground truncate">{outcome.message}</span>
-              )}
-            </div>
-            <pre className="max-h-80 overflow-auto rounded-lg border border-border/50 bg-accent/20 px-3 py-2.5 font-mono text-[11px] leading-relaxed text-foreground/85 whitespace-pre-wrap break-all">
-              {(() => {
-                try {
-                  return JSON.stringify(outcome.data, null, 2)
-                } catch {
-                  return String(outcome.data)
-                }
-              })()}
-            </pre>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-// ── 主页面 ──────────────────────────────────────────────────────────
 
 export default function DevelopersPage() {
+  const [activeSection, setActiveSection] = useState('quickstart')
   const [catalog, setCatalog] = useState<CatalogResp | null>(null)
-  const [catalogErr, setCatalogErr] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [catLoading, setCatLoading] = useState(true)
+
+  // 调试台状态
+  const [authMode, setAuthMode] = useState<'jwt' | 'apikey' | 'guest'>('apikey')
+  const [apiKey, setApiKey] = useState('')
+  const [selectedSkill, setSelectedSkill] = useState('')
+  const [paramsJson, setParamsJson] = useState('{}')
+  const [runResult, setRunResult] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-    fetchAPI<CatalogResp>('/skills/catalog', { cacheMode: 300 })
-      .then(data => {
-        if (cancelled) return
-        setCatalog(data)
-        setCatalogErr('')
-      })
-      .catch((e: any) => {
-        if (cancelled) return
-        setCatalogErr(String(e?.message || e || '目录加载失败'))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
+    fetchAPI<CatalogResp>('/skills/catalog')
+      .then(d => { setCatalog(d); setCatLoading(false) })
+      .catch(() => setCatLoading(false))
   }, [])
 
-  const skills = catalog?.skills || []
-  const tiers = catalog?.tiers || {}
+  const skills = useMemo(() => catalog?.skills ?? [], [catalog])
+  const selected = useMemo(() => skills.find(s => s.name === selectedSkill), [skills, selectedSkill])
 
-  const rateRows = useMemo(() => {
-    const t = tiers
-    return [
-      {
-        tier: 'guest',
-        label: '游客',
-        limit: t.guest?.daily_limit ?? 10,
-        burst: undefined as number | undefined,
-        refill: undefined as number | undefined,
-        note: '按来源 IP 24h 滑动窗口; 仅 tier_min=free 的 skill',
-      },
-      {
-        tier: 'free',
-        label: 'free',
-        limit: t.free?.daily_limit ?? 100,
-        burst: t.free?.burst,
-        refill: t.free?.refill_per_min,
-        note: 'POST /api/keys 默认可领; trial 到期自动降为 free',
-      },
-      {
-        tier: 'trial',
-        label: 'trial',
-        limit: t.trial?.daily_limit ?? 500,
-        burst: t.trial?.burst,
-        refill: t.trial?.refill_per_min,
-        note: `新人试用 ${t.trial?.days ?? 10} 天, 到期降 free`,
-      },
-      {
-        tier: 'pro',
-        label: 'pro',
-        limit: t.pro?.daily_limit ?? 5000,
-        burst: t.pro?.burst,
-        refill: t.pro?.refill_per_min,
-        note: '人工审核开通; 可调用全部开放 skill(含 slow)',
-      },
-    ]
-  }, [tiers])
+  // 自动填默认参数
+  useEffect(() => {
+    if (!selected) return
+    const defaults: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(selected.params || {})) {
+      if (v.default !== undefined) defaults[k] = v.default
+    }
+    setParamsJson(JSON.stringify(defaults, null, 2))
+  }, [selected])
+
+  const runSkill = async () => {
+    if (!selectedSkill) return
+    setRunning(true)
+    setRunResult(null)
+    try {
+      let params: Record<string, unknown>
+      try { params = JSON.parse(paramsJson) } catch { setRunResult('参数 JSON 格式错误'); return }
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (authMode === 'apikey' && apiKey) headers['X-API-Key'] = apiKey
+      else if (authMode === 'jwt') {
+        const t = getToken()
+        if (t) headers['Authorization'] = `Bearer ${t}`
+      }
+
+      const resp = await fetch(`${window.location.origin}/api/skills/${selectedSkill}/run`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(params),
+      })
+      const data = await resp.json()
+      setRunResult(JSON.stringify(data, null, 2))
+    } catch (e: any) {
+      setRunResult(`请求失败: ${e?.message || e}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const base = typeof window !== 'undefined' ? window.location.origin : ''
 
   return (
-    <div className="page-container sida-page-enter pb-10 max-w-5xl">
-      {/* Hero */}
-      <div className="border-b border-border/40 p-5 md:p-7">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/40 text-primary ring-1 ring-border/40">
-            <Code2 className="h-4.5 w-4.5" />
-          </div>
-          <div>
-            <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">开发者文档</h1>
-            <p className="text-[12px] text-muted-foreground mt-1">
-              Skill Gateway HTTP API：快速开始、鉴权与限流、公开 Skill 目录、在线调试台与错误码
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 快速开始 */}
-      <section className="mt-6">
-        <SectionHead icon={Terminal} title="快速开始" hint="注册 → 拿 Key → 第一次调用" />
+    <DevPageLayout
+      title="开发者文档"
+      subtitle="SIDA Skill API 接入指南 — 从零到第一次调用"
+      badge="v1.0"
+      menu={MENU}
+      activeId={activeSection}
+      onNav={setActiveSection}
+      headerExtra={
+        <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => window.location.href = '/api-keys'}>
+          <KeyRound className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">API Key</span>
+        </Button>
+      }
+    >
+      {/* ── 快速开始 ── */}
+      <Section id="sec-quickstart" title="快速开始" description="三步接入 SIDA Skill API" icon={<Rocket className="h-4 w-4" />}>
         <div className="space-y-4">
-          {QUICK_START_STEPS.map(s => (
-            <div key={s.title} className="border-t border-border/40 pt-3">
-              <h4 className="text-[13px] font-semibold text-foreground mb-1">{s.title}</h4>
-              <p className="text-[12px] text-foreground/80 leading-relaxed mb-2">{s.desc}</p>
-              <CodeBlock code={s.code} />
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 鉴权 */}
-      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
-        <SectionHead icon={ShieldCheck} title="鉴权说明" hint="X-API-Key / JWT 双通道, 无凭证降级游客" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {AUTH_CHANNELS.map(ch => (
-            <div key={ch.tag} className="rounded-lg border border-border/50 bg-accent/10 p-3">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Badge variant="outline">{ch.tag}</Badge>
-                <span className="text-[12px] font-medium text-foreground">{ch.title}</span>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            {[
+              { step: '01', title: '注册账号', desc: '邮箱注册，自动签发 API Key', icon: <KeyRound className="h-4 w-4" /> },
+              { step: '02', title: '获取 Key', desc: '在控制台查看/管理你的 Key', icon: <ShieldCheck className="h-4 w-4" /> },
+              { step: '03', title: '发起调用', desc: '一行 curl 即可验证连通', icon: <Terminal className="h-4 w-4" /> },
+            ].map(s => (
+              <div key={s.step} className="rounded-xl border border-white/5 bg-white/[0.02] p-4 text-center">
+                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500/10 text-cyan-400">
+                  {s.icon}
+                </div>
+                <div className="font-mono text-[10px] text-cyan-500/50">{s.step}</div>
+                <div className="text-[13px] font-medium text-white">{s.title}</div>
+                <div className="mt-0.5 text-[11px] text-slate-500">{s.desc}</div>
               </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed mb-2">{ch.desc}</p>
-              <CodeBlock code={ch.example} />
-            </div>
+            ))}
+          </div>
+
+          <InfoCard>
+            <div className="mb-2 text-[13px] font-medium text-white">第一次调用</div>
+            <CodeBlock
+              code={`curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "X-API-Key: sk_YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"symbol": "000001"}'`}
+              language="bash"
+            />
+          </InfoCard>
+        </div>
+      </Section>
+
+      {/* ── 鉴权方式 ── */}
+      <Section id="sec-auth" title="鉴权方式" description="三种方式调用 Skill API" icon={<ShieldCheck className="h-4 w-4" />}>
+        <div className="space-y-3">
+          {[
+            {
+              title: 'API Key（推荐）',
+              desc: '服务端调用首选，通过 X-API-Key 请求头传递',
+              code: `curl -H "X-API-Key: sk_YOUR_KEY" "${base}/api/skills/get_stock_quote/run"`,
+              badge: '推荐',
+            },
+            {
+              title: 'JWT Token',
+              desc: '网页端登录后自动携带，与 API Key 共享配额',
+              code: `curl -H "Authorization: Bearer YOUR_JWT" "${base}/api/skills/get_stock_quote/run"`,
+              badge: '网页',
+            },
+            {
+              title: '游客模式',
+              desc: '无需认证，仅限 free 级 Skill，每 IP 每天 10 次',
+              code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "Content-Type: application/json" \\
+  -d '{"symbol": "000001"}'`,
+              badge: '受限',
+            },
+          ].map((a, i) => (
+            <InfoCard key={i}>
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-[13px] font-medium text-white">{a.title}</span>
+                <span className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-mono text-cyan-400">{a.badge}</span>
+              </div>
+              <p className="mb-2 text-[11px] text-slate-500">{a.desc}</p>
+              <CodeBlock code={a.code} language="bash" />
+            </InfoCard>
           ))}
         </div>
-        <p className="mt-3 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-          <Lock className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          <span>
-            优先级：带 sk_ 前缀的 X-API-Key &gt; Authorization: Bearer JWT &gt; 游客。Key 明文只在创建响应出现一次，服务端仅存 sha256+盐。
-          </span>
-        </p>
-      </section>
+      </Section>
 
-      {/* 限流 */}
-      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
-        <SectionHead icon={Gauge} title="限流说明" hint="日配额 + 令牌桶(burst / 匀速补充)" />
-        <div className="overflow-x-auto rounded-lg border border-border/50">
-          <table className="w-full text-[12px]">
-            <thead>
-              <tr className="border-b border-border/50 bg-accent/20 text-left text-[11px] text-muted-foreground">
-                <th className="px-3 py-2 font-medium">档位</th>
-                <th className="px-3 py-2 font-medium">日配额</th>
-                <th className="px-3 py-2 font-medium">Burst</th>
-                <th className="px-3 py-2 font-medium">匀速(次/分)</th>
-                <th className="px-3 py-2 font-medium">说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rateRows.map(r => (
-                <tr key={r.tier} className="border-b border-border/30 last:border-0">
-                  <td className="px-3 py-2">
-                    <Badge variant={r.tier === 'guest' ? 'outline' : tierBadgeVariant(r.tier)}>{r.label}</Badge>
-                  </td>
-                  <td className="px-3 py-2 font-num">{r.limit}</td>
-                  <td className="px-3 py-2 font-num">{r.burst ?? '—'}</td>
-                  <td className="px-3 py-2 font-num">{r.refill ?? '—'}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{r.note}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          超限返回 429，响应头带 <code className="font-mono">Retry-After</code>（秒）。日配额按 UTC 日重置；
-          令牌桶按 key 进程内维护，多 worker 时实际 burst 可能略高，日配额仍是硬顶。
-        </p>
-      </section>
-
-      {/* Skill 目录 */}
-      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
-        <SectionHead
-          icon={BookOpen}
-          title="Skill 目录"
-          hint={loading ? '加载中…' : `${skills.length} 个开放 skill · 来自 GET /api/skills/catalog`}
-        />
-        {catalogErr && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive mb-3">
-            目录加载失败: {catalogErr}
-          </div>
-        )}
-        {loading && !skills.length && (
-          <div className="flex items-center gap-2 text-[12px] text-muted-foreground py-4">
-            <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-            正在拉取公开目录…
-          </div>
-        )}
-        {!loading && !catalogErr && skills.length === 0 && (
-          <div className="text-[12px] text-muted-foreground py-4">暂无开放 skill。</div>
-        )}
-        {skills.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border border-border/50">
-            <table className="w-full text-[12px]">
+      {/* ── 限流说明 ── */}
+      <Section id="sec-ratelimit" title="限流说明" description="各档位的调用限制" icon={<Gauge className="h-4 w-4" />}>
+        {catLoading ? (
+          <div className="text-[12px] text-slate-600">加载中...</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-border/50 bg-accent/20 text-left text-[11px] text-muted-foreground">
-                  <th className="px-3 py-2 font-medium">名称</th>
-                  <th className="px-3 py-2 font-medium">最低档位</th>
-                  <th className="px-3 py-2 font-medium">说明</th>
-                  <th className="px-3 py-2 font-medium">口径</th>
+                <tr className="border-b border-white/10 text-slate-500">
+                  <th className="pb-2 pr-4 font-medium">档位</th>
+                  <th className="pb-2 pr-4 font-medium">日限</th>
+                  <th className="pb-2 pr-4 font-medium">突发</th>
+                  <th className="pb-2 font-medium">说明</th>
                 </tr>
               </thead>
               <tbody>
-                {skills.map(s => (
-                  <tr key={s.name} className="border-b border-border/30 last:border-0 align-top">
-                    <td className="px-3 py-2 font-mono text-[11px] whitespace-nowrap">
-                      {s.name}
-                      {s.slow && (
-                        <span className="ml-1.5 text-[10px] text-amber-600" title="慢接口">
-                          slow
-                        </span>
-                      )}
+                {catalog?.guest && (
+                  <tr className="border-b border-white/5">
+                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">游客</span></td>
+                    <td className="py-2 pr-4 font-mono text-white">{catalog.guest.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-slate-500">-</td>
+                    <td className="py-2 text-slate-500">仅 free 级 Skill，按 IP 限流</td>
+                  </tr>
+                )}
+                {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
+                  <tr key={tier} className="border-b border-white/5">
+                    <td className="py-2 pr-4">
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
+                        {tier}
+                      </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <Badge variant={tierBadgeVariant(s.tier_min)}>{s.tier_min}</Badge>
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground max-w-md">
-                      <span className="line-clamp-2">{s.description || '—'}</span>
-                    </td>
-                    <td className="px-3 py-2 text-[11px] text-muted-foreground max-w-[180px]">
-                      {s.caliber || '—'}
+                    <td className="py-2 pr-4 font-mono text-white">{limit.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-slate-500">{limit.burst ?? '-'}</td>
+                    <td className="py-2 text-slate-500">
+                      {tier === 'free' && '注册即得，基础配额'}
+                      {tier === 'trial' && `试用 ${limit.days ?? 7} 天`}
+                      {tier === 'pro' && 'Pro 付费，全量开放'}
                     </td>
                   </tr>
                 ))}
@@ -711,34 +267,171 @@ export default function DevelopersPage() {
             </table>
           </div>
         )}
-      </section>
 
-      {/* 在线调试台 */}
-      <SkillPlayground skills={skills} />
+        <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <div className="text-[11px] text-amber-300/80">
+              <strong>429 限流响应</strong> 会携带 <code className="font-mono">Retry-After</code> 头（秒）。
+              建议实现指数退避 + 抖动：首次等待 Retry-After，后续每次翻倍，上限 60s。
+            </div>
+          </div>
+        </div>
+      </Section>
 
-      {/* 错误码 */}
-      <section className="border-t border-border/40 pt-4 md:pt-5 mt-4">
-        <SectionHead icon={AlertTriangle} title="错误码表" hint="含示例响应与退避建议" />
-        <div className="space-y-3">
-          {ERROR_ROWS.map(row => (
-            <div key={row.code} className="rounded-lg border border-border/50 bg-accent/10 p-3">
-              <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                <span className="font-num text-[14px] font-bold text-foreground">{row.code}</span>
-                <span className="text-[13px] font-medium text-foreground">{row.title}</span>
+      {/* ── Skill 目录 ── */}
+      <Section
+        id="sec-catalog"
+        title="Skill 目录"
+        description={`共 ${skills.length} 个可用接口`}
+        icon={<ListTree className="h-4 w-4" />}
+      >
+        {catLoading ? (
+          <div className="text-[12px] text-slate-600">加载中...</div>
+        ) : (
+          <div className="space-y-2">
+            {skills.map(s => (
+              <div key={s.name} className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <code className="font-mono text-[12px] text-cyan-300">{s.name}</code>
+                  <span className={`rounded border px-1.5 py-0.5 text-[9px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
+                    {s.tier_min}
+                  </span>
+                  {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] text-orange-400">慢</span>}
+                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-400">{s.caliber}</span>}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">{s.description}</p>
+                {Object.keys(s.params || {}).length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {Object.entries(s.params).map(([k, v]) => (
+                      <span key={k} className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">
+                        {k}{v.default !== undefined ? `=${v.default}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
-              <p className="text-[12px] text-foreground/80 leading-relaxed mb-2">{row.desc}</p>
-              <CodeBlock code={row.example} />
-              <p className="mt-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                <KeyRound className="h-3.5 w-3.5 mt-0.5 shrink-0 opacity-60" />
-                <span>
-                  <span className="font-medium text-foreground/70">退避建议：</span>
-                  {row.advice}
-                </span>
-              </p>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* ── 在线调试 ── */}
+      <Section id="sec-playground" title="在线调试台" description="选择 Skill、填参数、一键运行" icon={<Play className="h-4 w-4" />}>
+        <div className="space-y-4">
+          <InfoCard>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <Label className="text-[11px] text-slate-400">鉴权方式</Label>
+                <Select value={authMode} onValueChange={(v: any) => setAuthMode(v)}>
+                  <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="apikey">API Key</SelectItem>
+                    <SelectItem value="jwt">JWT（需登录）</SelectItem>
+                    <SelectItem value="guest">游客（受限）</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {authMode === 'apikey' && (
+                <div>
+                  <Label className="text-[11px] text-slate-400">API Key</Label>
+                  <Input
+                    type="password"
+                    className="mt-1 h-8 font-mono text-[12px]"
+                    placeholder="sk_..."
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+              )}
+            </div>
+          </InfoCard>
+
+          <InfoCard>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <Label className="text-[11px] text-slate-400">选择 Skill</Label>
+                <Select value={selectedSkill} onValueChange={setSelectedSkill}>
+                  <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue placeholder="请选择" /></SelectTrigger>
+                  <SelectContent>
+                    {skills.map(s => (
+                      <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selected && (
+                <div className="flex items-end">
+                  <p className="text-[11px] text-slate-500">{selected.description}</p>
+                </div>
+              )}
+            </div>
+            <div className="mt-3">
+              <Label className="text-[11px] text-slate-400">参数 (JSON)</Label>
+              <textarea
+                className="mt-1 h-24 w-full rounded-lg border border-white/10 bg-[#0d0d18] p-2.5 font-mono text-[11px] text-cyan-100/80 focus:border-cyan-500/30 focus:outline-none"
+                value={paramsJson}
+                onChange={e => setParamsJson(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+            <div className="mt-3 flex justify-end">
+              <Button size="sm" className="h-8" onClick={runSkill} disabled={running || !selectedSkill}>
+                {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                运行
+              </Button>
+            </div>
+          </InfoCard>
+
+          {runResult && (
+            <InfoCard>
+              <div className="mb-2 text-[13px] font-medium text-white">响应结果</div>
+              <CodeBlock code={runResult} language="json" />
+            </InfoCard>
+          )}
+        </div>
+      </Section>
+
+      {/* ── 错误码 ── */}
+      <Section id="sec-errors" title="错误码" description="常见错误及处理方式" icon={<Bug className="h-4 w-4" />}>
+        <div className="space-y-2">
+          {[
+            { code: 401, title: '未认证', desc: '缺少或无效的 API Key / JWT', fix: '检查 X-API-Key 头是否正确，或重新登录获取 JWT' },
+            { code: 403, title: '权限不足', desc: '当前档位无法访问该 Skill', fix: '升级到更高档位（trial/pro），或选择 free 级 Skill' },
+            { code: 429, title: '限流', desc: '超过当日/当分钟调用限制', fix: '读取 Retry-After 头，指数退避后重试；或升级档位' },
+            { code: 500, title: '服务器错误', desc: '内部处理异常', fix: '稍后重试；若持续出现请联系管理员' },
+          ].map(e => (
+            <div key={e.code} className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <div className="flex items-center gap-2">
+                <span className={`font-mono text-[14px] font-bold ${
+                  e.code === 401 ? 'text-amber-400' : e.code === 403 ? 'text-orange-400' : e.code === 429 ? 'text-red-400' : 'text-red-500'
+                }`}>{e.code}</span>
+                <span className="text-[13px] font-medium text-white">{e.title}</span>
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">{e.desc}</p>
+              <p className="mt-1 text-[11px] text-cyan-400/60">→ {e.fix}</p>
             </div>
           ))}
         </div>
-      </section>
-    </div>
+
+        <div className="mt-4">
+          <div className="mb-2 text-[13px] font-medium text-white">429 退避示例</div>
+          <CodeBlock
+            code={`import time, random
+
+def call_with_retry(fn, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except RateLimitError as e:
+            wait = e.retry_after or (2 ** attempt + random.uniform(0, 1))
+            time.sleep(min(wait, 60))
+    raise Exception("Max retries exceeded")`}
+            language="python"
+          />
+        </div>
+      </Section>
+    </DevPageLayout>
   )
 }

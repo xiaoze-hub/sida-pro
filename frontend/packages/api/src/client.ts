@@ -32,7 +32,8 @@ export function logout() {
       sessionStorage.setItem('postLoginReturnUrl', here)
     }
   } catch { /* sessionStorage 不可用就略过 */ }
-  window.location.href = '/login'
+  // 2026-09-16: 退出登录跳落地页(官网), 不再跳 /login
+  window.location.href = '/'
 }
 
 // 修复(L-4, 2026-08-23): 原 `new Date(string) < new Date()` 受本地时区影响(后端 UTC / 前端 CST
