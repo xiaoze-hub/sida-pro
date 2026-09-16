@@ -407,7 +407,8 @@ def test_build_symbol_contexts_injects_new_keys(monkeypatch):
         },
     )
     # 历史新闻 / 快照持久化 / 主题快照都打桩,避免触库
-    monkeypatch.setattr(ContextBuilder, "_load_history_news", staticmethod(lambda *a, **k: []))
+    # P1: _load_history_news 已拆为 _load_history_rows + _filter_history_news
+    monkeypatch.setattr(ContextBuilder, "_load_history_rows", staticmethod(lambda *a, **k: []))
     monkeypatch.setattr(context_builder, "save_stock_context_snapshot", lambda **k: None)
     monkeypatch.setattr(context_builder, "save_news_topic_snapshot", lambda **k: None)
 
@@ -457,7 +458,8 @@ def test_build_symbol_contexts_failsoft_when_index_missing(monkeypatch):
         ContextBuilder, "_fetch_index_context", lambda self, symbol, market: {"available": False}
     )
     monkeypatch.setattr(context_builder, "get_latest_ta_verdict", lambda symbol, within_days=14: None)
-    monkeypatch.setattr(ContextBuilder, "_load_history_news", staticmethod(lambda *a, **k: []))
+    # P1: _load_history_news 已拆为 _load_history_rows + _filter_history_news
+    monkeypatch.setattr(ContextBuilder, "_load_history_rows", staticmethod(lambda *a, **k: []))
 
     cb = ContextBuilder()
     result = asyncio.run(

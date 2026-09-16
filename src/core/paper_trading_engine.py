@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.core.marketdata_client import md_quote_rows
 from src.core.money import q2, q4, to_dec
-from src.models.market import MarketCode, MARKETS
+from src.models.market import MarketCode
 from src.db.session import SessionLocal
 from src.db.models import (
     PaperTradingAccount,
@@ -29,6 +29,8 @@ from src.db.models import (
 from src.core.backtest.cost_model import CostModel
 from src.core.risk_limits import check_entry, load_risk_limits
 from src.core.timezone import to_utc
+# P1(audit-20260915): _safe_float 统一到 numutil(原本地重复实现已删)
+from src.core.numutil import safe_float as _safe_float  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,10 @@ MIN_PROFIT_FOR_TRAILING = 0.05
 TRAILING_STOP_PCT = 0.10
 # 时间止损:无 signal.holding_days 时的默认最大持有自然日
 DEFAULT_TIME_STOP_DAYS = 20
+# P1(audit-20260915): 默认止损/止盈比例(信号未提供或不合理时的开仓兜底)
+# 止损 -8% / 止盈 +15% — 与历史行为 entry*0.92 / entry*1.15 完全一致
+DEFAULT_STOP_LOSS_PCT = 0.92
+DEFAULT_TAKE_PROFIT_PCT = 1.15
 
 
 def _position_weight(rank_score: float) -> float:
@@ -127,21 +133,9 @@ def _to_market(market: str) -> MarketCode:
         return MarketCode.CN
 
 
-def _is_trading_time(market: str) -> bool:
-    mc = _to_market(market)
-    market_def = MARKETS.get(mc)
-    if not market_def:
-        return False
-    return market_def.is_trading_time()
-
-
-def _safe_float(v: Any) -> float | None:
-    try:
-        if v is None:
-            return None
-        return float(v)
-    except Exception:
-        return None
+# P1(audit-20260915): 本地 _is_trading_time 包装已删, 交易时段统一走
+# src.models.market.is_market_trading_time()(内部委托 MarketDef.is_trading_time)。
+# 原 _safe_float 亦已迁至 src.core.numutil。
 
 
 # ---------------------------------------------------------------------------
@@ -490,15 +484,16 @@ class PaperTradingEngine:
                 orig_mid = (sig.entry_low + (sig.entry_high or sig.entry_low)) / 2
                 if orig_mid > 0:
                     stop_ratio = (stop_loss - orig_mid) / orig_mid
-                    target_ratio = ((target_price - orig_mid) / orig_mid) if target_price else 0.15
+                    # P1(audit-20260915): 信号无止盈时沿用默认 +15% 比例
+                    target_ratio = ((target_price - orig_mid) / orig_mid) if target_price else (DEFAULT_TAKE_PROFIT_PCT - 1.0)
                     stop_loss = round(entry_price * (1 + stop_ratio), 4)
                     target_price = round(entry_price * (1 + target_ratio), 4) if target_price else None
             # 兜底：止损不合理时用默认 -8%
             if not stop_loss or stop_loss <= 0 or stop_loss >= entry_price:
-                stop_loss = round(entry_price * 0.92, 4)
+                stop_loss = round(entry_price * DEFAULT_STOP_LOSS_PCT, 4)
             # 兜底：止盈不合理时用默认 +15%
             if not target_price or target_price <= 0 or target_price <= entry_price:
-                target_price = round(entry_price * 1.15, 4)
+                target_price = round(entry_price * DEFAULT_TAKE_PROFIT_PCT, 4)
 
             pos = PaperTradingPosition(
                 stock_symbol=sig.stock_symbol,

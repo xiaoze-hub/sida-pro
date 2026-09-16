@@ -73,7 +73,9 @@ def compute_delta_series(
 
     # 1) 按秒聚合
     #    sec -> {buy, sell, price(取该秒最后一笔), vol}
+    # P1(audit-20260915): amt 缺失的 tick 记 skipped, 不按 0 计入(会稀释净额)
     agg: dict[int, dict] = {}
+    skipped = 0
     for tk in ticks:
         if not isinstance(tk, dict) or "d" not in tk or "t" not in tk:
             raise ValueError(f"非法 tick 行: {tk!r}, 需要 d/amt/vol/price/t 字段")
@@ -82,10 +84,15 @@ def compute_delta_series(
         # 同一秒内多笔: 价格取最后一笔
         a["price"] = float(tk.get("price") or 0.0)
         a["vol"] += float(tk.get("vol") or 0.0)
+        amt_raw = tk.get("amt")
+        if amt_raw is None:
+            skipped += 1  # amt 缺失 → 跳过, 不贡献 buy/sell
+            continue
+        amt = float(amt_raw)
         if tk["d"] == "B":
-            a["buy"] += float(tk.get("amt") or 0.0)
+            a["buy"] += amt
         elif tk["d"] == "S":
-            a["sell"] += float(tk.get("amt") or 0.0)
+            a["sell"] += amt
 
     secs = sorted(agg.keys())
     n = len(secs)
@@ -198,8 +205,9 @@ def compute_delta_series(
         "seconds": n,
         "total_buy_yuan": round(total_buy, 2),
         "total_sell_yuan": round(total_sell, 2),
+        # P1: amt 缺失的 M 行跳过, 不按 0 计入
         "total_neutral_yuan": round(
-            sum(t["amt"] for t in ticks if t["d"] == "M"), 2
+            sum(float(t["amt"]) for t in ticks if t["d"] == "M" and t.get("amt") is not None), 2
         ),
         "net_yuan": round(total_buy - total_sell, 2),
         "cum_net_last": round(cum, 2),
@@ -208,6 +216,8 @@ def compute_delta_series(
         "hi_price": hi,
         "lo_price": lo,
         "signals": len(signals),
+        # P1: amt 缺失被跳过的 tick 条数(显式标注, 便于下游判断数据完整度)
+        "skipped": skipped,
     }
 
     return {

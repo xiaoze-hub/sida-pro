@@ -79,11 +79,17 @@ class ContextBuilder:
         self._index_cache: dict[str, dict | None] = {}
 
     @staticmethod
-    def _load_history_news(symbol: str, stock_name: str, days: int = 7) -> list[dict]:
+    def _load_history_rows(days: int = 7) -> list:
+        """P1 性能修复: 一次性批量拉取历史分析行(供多 symbol 复用), 避免 N+1。
+
+        原实现逐股开 SessionLocal + 查同一张表(SQL 本身不按 symbol 过滤),
+        N 只股票 = N 次 DB 往返。现在 build_symbol_contexts 循环前调用一次,
+        内存中按 symbol/name 过滤。
+        """
         cutoff = (date.today() - timedelta(days=max(1, days))).strftime("%Y-%m-%d")
         db = SessionLocal()
         try:
-            rows = (
+            return (
                 db.query(AnalysisHistory)
                 .filter(
                     AnalysisHistory.agent_name.in_(
@@ -95,57 +101,63 @@ class ContextBuilder:
                 .limit(30)
                 .all()
             )
-            out: list[dict] = []
-            for row in rows:
-                raw = row.raw_data or {}
-                items = raw.get("news") or []
-                if not isinstance(items, list):
-                    items = []
-                if not items:
-                    # 新版本盘前/盘后将新闻放在 context_payload.<symbol>.news.*
-                    ctx_payload = raw.get("context_payload") or {}
-                    if isinstance(ctx_payload, dict):
-                        sym_payload = ctx_payload.get(symbol) or {}
-                        if isinstance(sym_payload, dict):
-                            layered = sym_payload.get("news") or {}
-                            if isinstance(layered, dict):
-                                for bucket in ("realtime", "extended", "history"):
-                                    rows_bucket = layered.get(bucket) or []
-                                    if isinstance(rows_bucket, list):
-                                        items.extend(rows_bucket)
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    symbols = it.get("symbols") or []
-                    title = str(it.get("title") or "")
-                    content = str(it.get("content") or "")
-                    matched = False
-                    if symbol and symbol in symbols:
-                        matched = True
-                    if not matched and symbol and symbol in title:
-                        matched = True
-                    if not matched and stock_name and stock_name in f"{title} {content}":
-                        matched = True
-                    if not matched:
-                        continue
-                    out.append(
-                        {
-                            "source": it.get("source") or "news_digest",
-                            "external_id": it.get("external_id") or "",
-                            "title": title,
-                            "content": content,
-                            "time": it.get("publish_time") or it.get("time") or "",
-                            "importance": it.get("importance") or 0,
-                            "url": it.get("url") or "",
-                            "symbols": symbols if isinstance(symbols, list) else [symbol],
-                        }
-                    )
-            return dedupe_news_items(out)
         except Exception as e:
-            logger.warning(f"读取历史新闻失败: {symbol} - {e}")
+            logger.warning(f"批量读取历史新闻行失败: {e}")
             return []
         finally:
             db.close()
+
+    @staticmethod
+    def _filter_history_news(
+        rows: list, symbol: str, stock_name: str
+    ) -> list[dict]:
+        """P1: 从预取的 AnalysisHistory 行中过滤出匹配某 symbol 的新闻(不再开 Session)。"""
+        out: list[dict] = []
+        for row in rows:
+            raw = row.raw_data or {}
+            items = raw.get("news") or []
+            if not isinstance(items, list):
+                items = []
+            if not items:
+                # 新版本盘前/盘后将新闻放在 context_payload.<symbol>.news.*
+                ctx_payload = raw.get("context_payload") or {}
+                if isinstance(ctx_payload, dict):
+                    sym_payload = ctx_payload.get(symbol) or {}
+                    if isinstance(sym_payload, dict):
+                        layered = sym_payload.get("news") or {}
+                        if isinstance(layered, dict):
+                            for bucket in ("realtime", "extended", "history"):
+                                rows_bucket = layered.get(bucket) or []
+                                if isinstance(rows_bucket, list):
+                                    items.extend(rows_bucket)
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                symbols = it.get("symbols") or []
+                title = str(it.get("title") or "")
+                content = str(it.get("content") or "")
+                matched = False
+                if symbol and symbol in symbols:
+                    matched = True
+                if not matched and symbol and symbol in title:
+                    matched = True
+                if not matched and stock_name and stock_name in f"{title} {content}":
+                    matched = True
+                if not matched:
+                    continue
+                out.append(
+                    {
+                        "source": it.get("source") or "news_digest",
+                        "external_id": it.get("external_id") or "",
+                        "title": title,
+                        "content": content,
+                        "time": it.get("publish_time") or it.get("time") or "",
+                        "importance": it.get("importance") or 0,
+                        "url": it.get("url") or "",
+                        "symbols": symbols if isinstance(symbols, list) else [symbol],
+                    }
+                )
+        return dedupe_news_items(out)
 
     @staticmethod
     def _build_portfolio_constraints(portfolio, symbol: str) -> dict:
@@ -439,6 +451,9 @@ class ContextBuilder:
         all_news_for_topic: list[dict] = []
         snapshot_date = _iso_today()
 
+        # P1 性能修复: 历史新闻一次批量查出(原先逐股开 Session = N+1)
+        hist_rows = self._load_history_rows(days=history_days)
+
         for stock in context.watchlist:
             symbol = stock.symbol
             market = stock.market
@@ -448,7 +463,8 @@ class ContextBuilder:
             pack_news = list((pack.news.items if (pack and pack.news) else []) or [])
             realtime_news = _cut_by_hours(pack_news, realtime_hours)
             extended_news = _cut_by_hours(pack_news, extended_hours)
-            hist_news = self._load_history_news(symbol, stock_name, days=history_days)
+            # P1: 复用预取行, 不再逐股开 Session
+            hist_news = self._filter_history_news(hist_rows, symbol, stock_name)
 
             realtime_ranked = rank_news_items(dedupe_news_items(realtime_news), symbol=symbol)
             extended_ranked = rank_news_items(dedupe_news_items(extended_news), symbol=symbol)

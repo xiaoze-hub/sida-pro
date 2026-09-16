@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional, Sequence
 
@@ -180,40 +181,34 @@ def resonance_pick(
     else:
         symbols = _valid_symbols(symbols)
 
-    picks: list[dict] = []
-    skipped = 0
-    computed = 0
-    for sym in symbols:
+    # P1 性能修复: 全市场串行拉 K 线 → ThreadPoolExecutor 并发(10 线程)。
+    # fetch_bars 是网络 I/O 瓶颈; 计算部分(GS/活跃度/共振)为纯 CPU, 线程安全。
+    def _process_one(sym: str) -> tuple[str, dict | None]:
+        """返回 (status, payload): status ∈ pick/empty/skip/computed/error。"""
         try:
             from src.core.decision_pioneer import fetch_bars
 
             bars = fetch_bars(sym, "CN", days=bars_days)
             if not bars:
-                skipped += 1
-                continue
+                return "empty", None
 
             gs_eval = gs_strategy.eval_gs(bars)
             trend = gs_strategy.trend_label(gs_eval)
             if trend in ("无数据",):
-                skipped += 1
-                continue
+                return "empty", None
             if require_new_g and trend != "G信号":
-                computed += 1
-                continue
+                return "computed", None
             if not require_new_g and trend not in ("G信号", "G区间"):
-                computed += 1
-                continue
+                return "computed", None
 
             act_eval = ai_activity.eval_activity(bars)
             activity = act_eval.get("activity")
             if not isinstance(activity, (int, float)) or activity < activity_line:
-                computed += 1
-                continue
+                return "computed", None
 
             fund_net, approx = _fund_net_of(sym, bars, fund_source)
             if not isinstance(fund_net, (int, float)):
-                computed += 1
-                continue
+                return "computed", None
 
             # 前一日值(判"较前一日翻倍" → 拐点态); 关掉时传 None, 按不满足处理
             act_prev = None
@@ -227,11 +222,9 @@ def resonance_pick(
 
             st = resonance.evaluate_state(trend, activity, act_prev, fund_net, fund_prev)
             if st.get("phase") not in ("向好", "拐点"):
-                computed += 1
-                continue
+                return "computed", None
 
-            computed += 1
-            picks.append({
+            return "pick", {
                 "symbol": sym,
                 "close": bars[-1].get("close"),
                 "trend": trend,
@@ -244,11 +237,26 @@ def resonance_pick(
                 "action": st.get("action"),
                 "backtest": st.get("backtest"),
                 "approximation": approx,   # True = 资金维用的是 OHLC 对照项(非真值)
-            })
+            }
         except Exception as e:  # noqa: BLE001
             logger.warning("resonance_pick %s failed: %s", sym, e)
-            skipped += 1
-            continue
+            return "error", None
+
+    picks: list[dict] = []
+    skipped = 0
+    computed = 0
+    # 10 线程并发: 全市场 5000+ 只时, 网络 I/O 并发收益显著; 计算部分无共享可变状态
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_process_one, sym): sym for sym in symbols}
+        for fut in as_completed(futures):
+            status, payload = fut.result()
+            if status == "pick" and payload is not None:
+                picks.append(payload)
+                computed += 1
+            elif status == "computed":
+                computed += 1
+            else:  # empty / error
+                skipped += 1
 
     # 排序: 资金净额降序(同等共振下, 资金更强的靠前)
     picks.sort(key=lambda r: -r["fund_net"])

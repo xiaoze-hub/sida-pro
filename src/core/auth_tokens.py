@@ -35,19 +35,21 @@ def get_jwt_secret() -> str:
     if _jwt_secret:
         return _jwt_secret
 
-    # 环境变量优先
-    if os.getenv("JWT_SECRET"):
-        _jwt_secret = os.getenv("JWT_SECRET")
-        # KI-030: RFC 7518 HS256 建议 >=32 字节; 短密钥只告警不拦启动(轮换会踢掉全部会话)
-        if len(_jwt_secret.encode("utf-8")) < 32:
-            import logging
-            logging.getLogger(__name__).warning(
-                "JWT_SECRET 仅 %d 字节 (<32, RFC 7518 HS256 建议); 建议择机轮换为 32+ 字节",
-                len(_jwt_secret.encode("utf-8")),
-            )
-        return _jwt_secret
+    # 环境变量优先(仅当长度足够)
+    env_secret = os.getenv("JWT_SECRET")
+    if env_secret:
+        # P1(audit-20260915): RFC 7518 HS256 建议 >=32 字节; 短密钥不安全,
+        # 忽略并走下方随机生成路径(既有短密钥会话将失效, 请尽快配置 32+ 字节)。
+        if len(env_secret.encode("utf-8")) >= 32:
+            _jwt_secret = env_secret
+            return _jwt_secret
+        logger.warning(
+            "JWT_SECRET 仅 %d 字节 (<32, RFC 7518 HS256 建议), 已忽略并自动生成随机密钥; "
+            "请尽快配置 32+ 字节 JWT_SECRET",
+            len(env_secret.encode("utf-8")),
+        )
 
-    # 从数据库读取或首次生成
+    # 从数据库读取或首次生成(随机 32 字节 hex 密钥)
     db = SessionLocal()
     try:
         setting = db.query(AppSettings).filter(AppSettings.key == JWT_SECRET_KEY).first()

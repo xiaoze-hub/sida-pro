@@ -25,6 +25,10 @@ class WudaoMCPClient:
     """wudao MCP 客户端:initialize + tools/call。
 
     配置优先级:显式参数 > 环境变量 WUDAO_MCP_URL / WUDAO_MCP_TOKEN。
+
+    P1 注意: 本类内部使用同步 requests.post(阻塞 I/O)。在 async 路径中
+    调用方必须确保通过 `asyncio.to_thread()` / `run_in_executor` 包装执行,
+    禁止在事件循环线程直接调用, 否则会阻塞整个 loop。
     """
 
     def __init__(self, url: str | None = None, token: str | None = None):
@@ -157,7 +161,10 @@ class WudaoMCPClient:
         self._initialized = True
 
     def call_tool(self, name: str, arguments: dict | None = None) -> dict:
-        """调用 wudao 工具,返回解析后的 data 对象。"""
+        """调用 wudao 工具,返回解析后的 data 对象。
+
+        P1 注意: 同步阻塞(requests.post), async 调用方须用 asyncio.to_thread 包装。
+        """
         self._initialize()
         payload = {
             "jsonrpc": "2.0",
@@ -165,6 +172,7 @@ class WudaoMCPClient:
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments or {}},
         }
+        # P1: 同步阻塞 I/O — 调用方在 async 路径中必须 to_thread 包装
         r = requests.post(self.url, headers=self._headers, json=payload, timeout=(5, 25))
         r.raise_for_status()
         result = r.json()

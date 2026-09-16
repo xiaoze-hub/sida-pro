@@ -138,17 +138,8 @@ def _has_real_signal(signal: str | None) -> bool:
     return bool(s) and s not in NO_SIGNAL_MARKERS
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
-
-
-def _safe_float(value) -> float | None:
-    try:
-        if value is None:
-            return None
-        return float(value)
-    except Exception:
-        return None
+# P1(audit-20260915): 统一到 src/core/numutil, 保留原私有名以免改动全部调用点
+from src.core.numutil import clamp as _clamp, safe_float as _safe_float  # noqa: E402
 
 
 def _to_market(value: str | None) -> MarketCode:

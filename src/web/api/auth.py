@@ -180,8 +180,9 @@ def _audit_owner_init(action: str, source: str, username: str) -> None:
             detail=f"source={source}, username={username}",
             ip="",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        # P1: 审计写失败属异常路径, 需留痕(仅审计缺失, 不影响 owner 初始化)
+        logger.warning(f"owner 初始化审计写入失败: {e}")
 
 
 def get_or_create_owner(db: Session) -> User:
@@ -446,13 +447,12 @@ def user_to_dict(user: User) -> dict:
 
 @router.get("/status")
 async def auth_status(db: Session = Depends(get_db)):
-    """获取认证状态(前端判断是否需要初始化)。"""
-    owner = get_or_create_owner(db)
-    return {
-        "initialized": True,
-        "user": user_to_dict(owner),
-        "multi_user": True,
-    }
+    """获取认证状态(前端判断是否需要初始化)。
+
+    P1(audit-20260915): 未鉴权端点, 不得泄露用户名/角色/创建时间等用户信息。
+    """
+    get_or_create_owner(db)  # 保持首次部署兼容(owner 落库)
+    return {"initialized": True}
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -277,11 +277,17 @@ export default function AgentsPage() {
   }, [scheduleDialogAgent, scheduleConfig])
 
   const toggleAgent = async (agent: AgentConfig) => {
-    await fetchAPI(`/agents/${agent.name}`, {
-      method: 'PUT',
-      body: JSON.stringify({ enabled: !agent.enabled }),
-    })
-    load()
+    // P1(audit-20260915): fetchAPI 失败必须 toast, 成功才 load(); 原裸 await 会静默吞错
+    try {
+      await fetchAPI(`/agents/${agent.name}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !agent.enabled }),
+      })
+      toast(agent.enabled ? `${agent.display_name || agent.name} 已停用` : `${agent.display_name || agent.name} 已启用`, 'success')
+      load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '切换 Agent 状态失败', 'error')
+    }
   }
 
   const openBindDialog = (agent: AgentConfig) => {

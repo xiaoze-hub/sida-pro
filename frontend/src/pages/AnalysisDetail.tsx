@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { safeFixed, safeNum } from '@/lib/format'
@@ -122,6 +122,8 @@ export default function AnalysisDetailPage() {
   })
   const [pdfBusy, setPdfBusy] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  // P1(audit-20260915): 请求序号 — 只接受最近一次 effect 发起的响应
+  const loadSeqRef = useRef(0)
 
   const handleExportPdf = async () => {
     if (pdfBusy) return
@@ -136,16 +138,23 @@ export default function AnalysisDetailPage() {
   }
 
   useEffect(() => {
+    // P1(audit-20260915): alive/seq 竞态守卫 — symbol/date 切换或卸载后丢弃过期响应
+    let alive = true
+    const mySeq = ++loadSeqRef.current
+    const current = () => alive && mySeq === loadSeqRef.current
     setLoading(true)
     tradingAgentsApi
       .getAnalysisByDate(symbol, date)
-      .then(setResult)
-      .catch(() => setResult(null))
-      .finally(() => setLoading(false))
+      .then((r) => { if (current()) setResult(r) })
+      .catch(() => { if (current()) setResult(null) })
+      .finally(() => { if (current()) setLoading(false) })
     tradingAgentsApi
       .getHistoryComparison(symbol, inferMarket(symbol), 90)
-      .then(setHistory)
-      .catch(() => setHistory(null))
+      .then((h) => { if (current()) setHistory(h) })
+      .catch(() => { if (current()) setHistory(null) })
+    return () => {
+      alive = false
+    }
   }, [symbol, date])
 
   // 记住二级目录开关

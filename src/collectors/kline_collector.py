@@ -122,7 +122,8 @@ class KlineData:
     close: float
     high: float
     low: float
-    volume: float
+    # P1(audit-20260915): volume 缺失写 None(禁止 or 0 把"无数据"当成"零成交")
+    volume: float | None = None
 
 
 @dataclass
@@ -678,7 +679,8 @@ class KlineCollector:
             out = [
                 KlineData(date=r["day"], open=float(r["open"]), high=float(r["high"]),
                           low=float(r["low"]), close=float(r["close"]),
-                          volume=float(r.get("volume") or 0))
+                          # P1: volume 缺失写 None
+                          volume=float(r["volume"]) if r.get("volume") is not None else None)
                 for r in (rows or []) if isinstance(r, dict) and r.get("day")
             ]
             if out:
@@ -718,7 +720,9 @@ class KlineCollector:
                         {"ts": ts, "symbol": symbol, "market": self.market.value,
                          "period": "1d", "source": source, "adjust": adjust,
                          "open": float(b.open), "high": float(b.high), "low": float(b.low),
-                         "close": float(b.close), "volume": int(b.volume or 0)},
+                         # P1: volume 缺失写 None, 不编造成 0
+                         "close": float(b.close),
+                         "volume": int(b.volume) if b.volume is not None else None},
                     )
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[kline-persist] {self.market.value}:{symbol}: {e!r}")
@@ -749,7 +753,9 @@ class KlineCollector:
                 ).fetchall()
             out = [
                 KlineData(date=str(r[0])[:10], open=float(r[1]), high=float(r[2]),
-                          low=float(r[3]), close=float(r[4]), volume=float(r[5] or 0))
+                          low=float(r[3]), close=float(r[4]),
+                          # P1: volume 缺失保持 None
+                          volume=float(r[5]) if r[5] is not None else None)
                 for r in rows
             ]
             if out:
@@ -770,7 +776,8 @@ class KlineCollector:
             return TechnicalIndicators()
 
         closes = [k.close for k in klines]
-        volumes = [k.volume for k in klines]
+        # P1: volume 可能为 None, 量能指标只用有值的柱
+        volumes = [k.volume for k in klines if k.volume is not None]
 
         # 均线
         ma5 = _calculate_ma(closes, 5)

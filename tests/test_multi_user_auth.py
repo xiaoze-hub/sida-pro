@@ -56,13 +56,17 @@ def _create_member(client, token, username="alice"):
 
 
 def test_owner_auto_created(client):
-    """首次访问自动创建 owner。"""
+    """首次访问自动创建 owner。
+
+    P1(audit-20260915): status 不再返回 user/multi_user(未鉴权信息泄露),
+    只回 initialized。
+    """
     r = client.get("/api/auth/status")
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["initialized"] is True
-    assert data["user"]["role"] == "owner"
-    assert data["multi_user"] is True
+    assert "user" not in data
+    assert "multi_user" not in data
 
 
 def test_login_and_me(client):

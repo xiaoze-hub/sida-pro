@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TrendingUp, LineChart, RefreshCw, Activity, Download, History, FileText, Send } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { fetchAPI, getToken, stocksApi, type StockItem } from '@panwatch/api'
@@ -207,6 +207,8 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const [detail, setDetail] = useState<ForecastHistoryItem | null>(null)
   const [report, setReport] = useState<PredictionReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  // P1(audit-20260915): 组件卸载守卫 — runPredict 的 while 轮询循环依赖此标志退出
+  const pageCancelledRef = useRef(false)
   const [backtestReport, setBacktestReport] = useState<BacktestReport | null>(null)
   const [showDetail, setShowDetail] = useState(false)
   const [modelWeights, setModelWeights] = useState<Record<string, number> | null>(null)
@@ -314,6 +316,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
     }
   }
 
+  useEffect(() => {
+    // P1(audit-20260915): 挂载时复位, 卸载时置位 — 供 runPredict 轮询/异步回调提前退出
+    pageCancelledRef.current = false
+    return () => { pageCancelledRef.current = true }
+  }, [])
+
   useEffect(() => { loadHistory() }, [])
 
   // 运行时拉取模型权重(权重透明度: 后端按历史回测命中率动态调整)
@@ -359,9 +367,15 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
 
   // 下载预测卡片图片
   const downloadCard = async () => {
+    // P1(audit-20260915): 统一走 getToken(), 空 token 中止避免 Bearer null; symbol 必须编码
+    const token = getToken()
+    if (!token) {
+      toast('未登录或登录已过期,请重新登录', 'error')
+      return
+    }
     try {
-      const res = await fetch(`/api/forecast/card?symbol=${symbol}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      const res = await fetch(`/api/forecast/card?symbol=${encodeURIComponent(symbol)}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
       })
       if (!res.ok) throw new Error('卡片生成失败')
       const blob = await res.blob()
@@ -398,9 +412,13 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       let pollDone = false
       void (async () => {
         while (!pollDone) {
+          // P1(audit-20260915): 组件卸载后停止轮询, 避免 setState on unmounted
+          if (pageCancelledRef.current) return
           await new Promise(res => setTimeout(res, 1500))
+          if (pageCancelledRef.current) return
           try {
             const s = await fetchAPI<any>(`/forecast/predict/status?task_id=${tid}`)
+            if (pageCancelledRef.current) return
             if (s?.logs) setTaskLogs([...s.logs])
             if (s?.status === 'done') {
               setTaskStatus('done')
@@ -417,14 +435,19 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       })()
       const d = await predictPromise
       pollDone = true
-      setResult(d)
-      setTaskStatus('done')
-      loadHistory()
+      if (!pageCancelledRef.current) {
+        setResult(d)
+        setTaskStatus('done')
+        loadHistory()
+      }
     } catch (e: any) {
-      toast(e?.message || '预测失败(请检查股票代码是否正确)', 'error')
-      setTaskStatus('error')
+      // P1(audit-20260915): 卸载后不再 toast/setState
+      if (!pageCancelledRef.current) {
+        toast(e?.message || '预测失败(请检查股票代码是否正确)', 'error')
+        setTaskStatus('error')
+      }
     } finally {
-      setLoading(false)
+      if (!pageCancelledRef.current) setLoading(false)
     }
   }
 

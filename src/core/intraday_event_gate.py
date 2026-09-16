@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.core.json_store import read_json, write_json_atomic
+# P1(audit-20260915): _safe_float 统一到 numutil(原本地重复实现已删)
+from src.core.numutil import safe_float as _safe_float  # noqa: E402
 
 
 def _data_dir() -> str:
@@ -25,15 +27,6 @@ def _state_path() -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _safe_float(v: Any) -> float | None:
-    try:
-        if v is None:
-            return None
-        return float(v)
-    except Exception:
-        return None
 
 
 # ATR 自适应异动默认倍数:涨跌幅 >= k×ATR% 视为相对个股自身波动的异动。

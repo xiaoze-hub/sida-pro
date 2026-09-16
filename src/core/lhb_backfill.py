@@ -37,6 +37,16 @@ _COLS = (
     "free_market_cap", "source", "created_at",
 )
 
+# P1(audit-20260915): 榜单新行后的因子重算回调(demon_factors/startup 注入),
+# 解除 lhb_backfill ↔ demon_factors 循环 import。
+_RECOMPUTE_HOOK = None
+
+
+def set_recompute_hook(fn) -> None:
+    """注册因子重算回调 fn(symbols: list[str]) -> dict。由 startup 接线。"""
+    global _RECOMPUTE_HOOK
+    _RECOMPUTE_HOOK = fn
+
 
 def _engine():
     from src.db.session import engine
@@ -218,14 +228,21 @@ def daily_recent(days: int = 3) -> dict:
 
 
 def daily_job(days: int = 3, recompute: bool = True) -> dict:
-    """cron 入口(交易日 17:45): 增量落库 → 有新行的股票因子重算。永不抛异常。"""
+    """cron 入口(交易日 17:45): 增量落库 → 有新行的股票因子重算。永不抛异常。
+
+    P1(audit-20260915): 因子重算触发改为回调注入(set_recompute_hook),
+    解除 ↔ demon_factors 循环 import; 未接线时懒 import 兜底(单测 monkeypatch 仍有效)。
+    """
     try:
         inc = daily_recent(days=days)
         rec: dict = {}
         if recompute and inc.get("touched"):
-            from src.core.demon_factors import recompute_factors
+            if _RECOMPUTE_HOOK is not None:
+                rec = _RECOMPUTE_HOOK(inc["touched"])
+            else:
+                from src.core.demon_factors import recompute_factors
 
-            rec = recompute_factors(inc["touched"])
+                rec = recompute_factors(inc["touched"])
         out = {"lhb": inc, "factors": rec}
         logger.info("龙虎榜每日增量完成: rows=%s, 因子重算=%s", inc.get("rows_saved"), rec.get("updated"))
         return out

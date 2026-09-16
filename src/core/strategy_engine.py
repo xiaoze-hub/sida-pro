@@ -216,18 +216,64 @@ MAX_HIGH_RISK_RATIO_BY_MARKET = {
 
 MAX_SINGLE_STRATEGY_SHARE = 0.42
 
+# ── 因子分解标定常量(audit P1, 2026-09-15): 原 _compute_factor_breakdown 内裸数字 ──
+# 依据: 与 factor_calibration / 历史 IC 回归对齐的启发式刻度; 改动须对照快照口径
+# alpha: 候选原始分以 50 为中性锚, ×0.45 压缩到因子分; 上下限防单因子主导
+ALPHA_BASE_MID = 50.0
+ALPHA_BASE_SCALE = 0.45
+ALPHA_BASE_LO, ALPHA_BASE_HI = -12.0, 18.0
+# 相对强度 → alpha: 50 为中位, 每 15pct 一档
+RS_ALPHA_MID, RS_ALPHA_SPAN = 50.0, 15.0
+RS_ALPHA_LO, RS_ALPHA_HI = -2.0, 4.0
+# 相对强度 → catalyst: 60 为强势线, 每 12pct 一档
+RS_CAT_MID, RS_CAT_SPAN = 60.0, 12.0
+RS_CAT_LO, RS_CAT_HI = -2.5, 4.5
+# catalyst 加减分(事件/形态/涨跌幅分段)
+CAT_MARKET_SCAN = 2.5          # 市场池来源基础加分
+CAT_QUIET_RALLY = 4.0          # 温和上涨 1%~7%
+CAT_FROTHY_RALLY = 1.5         # 过热上涨 >9%
+CAT_SHARP_DROP = -2.5          # 急跌 <-4%
+CAT_BREAKOUT = 2.5             # 突破信号
+CAT_PULLBACK = 1.5             # 回踩信号
+CAT_OVERSOLD = 1.0             # 超跌信号
+CAT_EVENT_SCALE, CAT_EVENT_LO, CAT_EVENT_HI = 0.55, -3.0, 6.5
+CAT_EVENT_BIAS_TH, CAT_EVENT_BIAS_BONUS = 0.8, 1.2
+# quality: plan_quality 以 50 为锚, 每 5 分一档
+QUALITY_MID, QUALITY_SPAN = 50.0, 5.0
+QUALITY_LO, QUALITY_HI = -8.0, 10.0
+QUALITY_NEWS_BONUS = 0.8       # ≥3 条事件
+QUALITY_NEWS_TH = 3
+# risk / crowd 惩罚
+RISK_HIGH_LEVEL = 1.5
+RISK_WIDE_MOVE_PCT, RISK_WIDE_MOVE = 8.0, 2.0
+RISK_INACTIVE = 2.5
+RISK_LOW_PLAN_Q, RISK_LOW_PLAN_PEN = 70, 1.5
+RISK_NEG_EVENT_BIAS_TH, RISK_NEG_EVENT_BIAS = -0.9, 2.2
+CROWD_FROTHY_PCT, CROWD_FROTHY_PEN = 9.0, 2.5
+CROWD_VOL_RATIO_TH, CROWD_VOL_RATIO_PEN = 3.0, 1.5
+CROWD_TURNOVER_YUAN, CROWD_TURNOVER_PEN = 8_000_000_000, 1.0  # 80亿元
+CROWD_RISK_CAP = 6.0
+# source bonus
+SRC_AGENT_BONUS = 1.0
+SRC_STRATEGY_BONUS = 0.8
+SRC_RS_STRONG_TH, SRC_RS_STRONG_BONUS = 80, 0.8
+# regime 乘数
+REGIME_BULL_BUY, REGIME_BULL_OTHER = 1.06, 1.01
+REGIME_BEAR_BUY, REGIME_BEAR_OTHER = 0.90, 0.97
+REGIME_CONF_MID, REGIME_CONF_SCALE = 0.5, 0.06
+REGIME_CONF_LO, REGIME_CONF_HI = -0.03, 0.03
+REGIME_MULT_LO, REGIME_MULT_HI = 0.85, 1.12
+# 合成后的可执行性封顶/扣分
+SCORE_NO_ENTRY_PEN = 8.0
+SCORE_LOW_PLAN_PEN = 6.0
+SCORE_LOW_PLAN_TH = 90
+SCORE_CAP_INACTIVE = 69.0
+SCORE_CAP_HOLD, SCORE_CAP_WATCH = 78.0, 65.0
+SCORE_CAP_NO_ENTRY = 66.0
 
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
 
-
-def _safe_float(value) -> float | None:
-    try:
-        if value is None:
-            return None
-        return float(value)
-    except Exception:
-        return None
+# P1(audit-20260915): 统一到 src/core/numutil, 保留原私有名以免改动全部调用点
+from src.core.numutil import clamp as _clamp, safe_float as _safe_float  # noqa: E402
 
 
 def _to_market(value: str | None) -> MarketCode:
@@ -817,73 +863,73 @@ def _compute_factor_breakdown(
     event_bias = float(_safe_float(nm.get("event_bias")) or 0.0)
     event_count = int(nm.get("news_count") or 0)
 
-    alpha_score = _clamp((base_score - 50.0) * 0.45, -12.0, 18.0)
+    alpha_score = _clamp((base_score - ALPHA_BASE_MID) * ALPHA_BASE_SCALE, ALPHA_BASE_LO, ALPHA_BASE_HI)
     if relative_strength_pct is not None:
-        alpha_score += _clamp((relative_strength_pct - 50.0) / 15.0, -2.0, 4.0)
+        alpha_score += _clamp((relative_strength_pct - RS_ALPHA_MID) / RS_ALPHA_SPAN, RS_ALPHA_LO, RS_ALPHA_HI)
     catalyst_score = 0.0
     if is_market_scan:
-        catalyst_score += 2.5
+        catalyst_score += CAT_MARKET_SCAN
     if quote_change_pct is not None:
         if 1.0 <= quote_change_pct <= 7.0:
-            catalyst_score += 4.0
+            catalyst_score += CAT_QUIET_RALLY
         elif quote_change_pct > 9.0:
-            catalyst_score += 1.5
+            catalyst_score += CAT_FROTHY_RALLY
         elif quote_change_pct < -4.0:
-            catalyst_score -= 2.5
+            catalyst_score += CAT_SHARP_DROP
     if ("突破" in signal_text) or ("breakout" in signal_text):
-        catalyst_score += 2.5
+        catalyst_score += CAT_BREAKOUT
     if "回踩" in signal_text:
-        catalyst_score += 1.5
+        catalyst_score += CAT_PULLBACK
     if "超跌" in signal_text:
-        catalyst_score += 1.0
-    catalyst_score += _clamp(event_score * 0.55, -3.0, 6.5)
-    if event_bias > 0.8:
-        catalyst_score += 1.2
+        catalyst_score += CAT_OVERSOLD
+    catalyst_score += _clamp(event_score * CAT_EVENT_SCALE, CAT_EVENT_LO, CAT_EVENT_HI)
+    if event_bias > CAT_EVENT_BIAS_TH:
+        catalyst_score += CAT_EVENT_BIAS_BONUS
     if relative_strength_pct is not None:
-        catalyst_score += _clamp((relative_strength_pct - 60.0) / 12.0, -2.5, 4.5)
+        catalyst_score += _clamp((relative_strength_pct - RS_CAT_MID) / RS_CAT_SPAN, RS_CAT_LO, RS_CAT_HI)
 
-    quality_score = _clamp((plan_quality - 50.0) / 5.0, -8.0, 10.0)
-    if event_count >= 3:
-        quality_score += 0.8
+    quality_score = _clamp((plan_quality - QUALITY_MID) / QUALITY_SPAN, QUALITY_LO, QUALITY_HI)
+    if event_count >= QUALITY_NEWS_TH:
+        quality_score += QUALITY_NEWS_BONUS
 
     risk_penalty = 0.0
     if risk_level == "high":
-        risk_penalty += 1.5
-    if quote_change_pct is not None and abs(quote_change_pct) >= 8.0:
-        risk_penalty += 2.0
+        risk_penalty += RISK_HIGH_LEVEL
+    if quote_change_pct is not None and abs(quote_change_pct) >= RISK_WIDE_MOVE_PCT:
+        risk_penalty += RISK_WIDE_MOVE
     if (row.status or "inactive") != "active":
-        risk_penalty += 2.5
-    if plan_quality < 70:
-        risk_penalty += 1.5
-    if event_bias < -0.9:
-        risk_penalty += 2.2
+        risk_penalty += RISK_INACTIVE
+    if plan_quality < RISK_LOW_PLAN_Q:
+        risk_penalty += RISK_LOW_PLAN_PEN
+    if event_bias < RISK_NEG_EVENT_BIAS_TH:
+        risk_penalty += RISK_NEG_EVENT_BIAS
 
     crowd_penalty = 0.0
-    if quote_change_pct is not None and quote_change_pct >= 9.0:
-        crowd_penalty += 2.5
-    if volume_ratio is not None and volume_ratio >= 3.0:
-        crowd_penalty += 1.5
-    if turnover is not None and turnover >= 8_000_000_000:
-        crowd_penalty += 1.0
-    crowd_penalty += _clamp(crowding_risk, 0.0, 6.0)
+    if quote_change_pct is not None and quote_change_pct >= CROWD_FROTHY_PCT:
+        crowd_penalty += CROWD_FROTHY_PEN
+    if volume_ratio is not None and volume_ratio >= CROWD_VOL_RATIO_TH:
+        crowd_penalty += CROWD_VOL_RATIO_PEN
+    if turnover is not None and turnover >= CROWD_TURNOVER_YUAN:
+        crowd_penalty += CROWD_TURNOVER_PEN
+    crowd_penalty += _clamp(crowding_risk, 0.0, CROWD_RISK_CAP)
 
     source_bonus = 0.0
     if (row.source_agent or "") in ("premarket_outlook", "intraday_monitor"):
-        source_bonus += 1.0
+        source_bonus += SRC_AGENT_BONUS
     if strategy_code in ("trend_follow", "volume_breakout", "macd_golden"):
-        source_bonus += 0.8
-    if relative_strength_pct is not None and relative_strength_pct >= 80:
-        source_bonus += 0.8
+        source_bonus += SRC_STRATEGY_BONUS
+    if relative_strength_pct is not None and relative_strength_pct >= SRC_RS_STRONG_TH:
+        source_bonus += SRC_RS_STRONG_BONUS
 
     regime = (regime_info or {}).get("regime") or "neutral"
     regime_confidence = float((regime_info or {}).get("confidence") or 0.0)
     regime_multiplier = 1.0
     if regime == "bullish":
-        regime_multiplier = 1.06 if action in ("buy", "add") else 1.01
+        regime_multiplier = REGIME_BULL_BUY if action in ("buy", "add") else REGIME_BULL_OTHER
     elif regime == "bearish":
-        regime_multiplier = 0.90 if action in ("buy", "add") else 0.97
-    regime_multiplier += _clamp((regime_confidence - 0.5) * 0.06, -0.03, 0.03)
-    regime_multiplier = _clamp(regime_multiplier, 0.85, 1.12)
+        regime_multiplier = REGIME_BEAR_BUY if action in ("buy", "add") else REGIME_BEAR_OTHER
+    regime_multiplier += _clamp((regime_confidence - REGIME_CONF_MID) * REGIME_CONF_SCALE, REGIME_CONF_LO, REGIME_CONF_HI)
+    regime_multiplier = _clamp(regime_multiplier, REGIME_MULT_LO, REGIME_MULT_HI)
 
     # 每因子外置权重(默认 1.0 → 行为 = 现状,零回归)。snapshot 仍存 raw 因子分,
     # 权重只作用于合成,确保 IC 测在原始因子上(见 factor_calibration 设计要点)。
@@ -900,17 +946,17 @@ def _compute_factor_breakdown(
     has_entry = row.entry_low is not None or row.entry_high is not None
     if action in ("buy", "add") and not has_entry:
         # No entry window means this is not executable; force into watch semantics.
-        raw_score -= 8.0
-    if action in ("buy", "add") and plan_quality < 90:
-        raw_score -= 6.0
+        raw_score -= SCORE_NO_ENTRY_PEN
+    if action in ("buy", "add") and plan_quality < SCORE_LOW_PLAN_TH:
+        raw_score -= SCORE_LOW_PLAN_PEN
     final_score = _clamp(raw_score * float(weight or 1.0) * regime_multiplier, 0.0, 100.0)
     # Keep score semantics aligned with action/status: high scores should be actionable.
     if (row.status or "inactive") != "active":
-        final_score = min(final_score, 69.0)
+        final_score = min(final_score, SCORE_CAP_INACTIVE)
     if action in ("hold", "watch"):
-        final_score = min(final_score, 78.0 if is_holding else 65.0)
+        final_score = min(final_score, SCORE_CAP_HOLD if is_holding else SCORE_CAP_WATCH)
     if action in ("buy", "add") and not has_entry:
-        final_score = min(final_score, 66.0)
+        final_score = min(final_score, SCORE_CAP_NO_ENTRY)
 
     return {
         "base_score": round(base_score, 4),

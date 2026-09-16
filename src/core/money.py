@@ -16,9 +16,13 @@ _P6 = Decimal("0.000001")
 
 
 def to_dec(v: float | int | str | Decimal | None) -> Decimal:
-    """float/str → Decimal(经 str, 避免 0.1 二进制漂移)。None 视为 0。"""
+    """float/str → Decimal(经 str, 避免 0.1 二进制漂移)。
+
+    P1(audit-20260915): None 时抛 ValueError — 金额缺失必须由调用方显式处理,
+    禁止静默按 0 结算(会把"无数据"伪装成"盈亏为零")。
+    """
     if v is None:
-        return Decimal(0)
+        raise ValueError("to_dec(None): 金额缺失, 调用方需显式处理(禁止静默按 0 结算)")
     if isinstance(v, Decimal):
         return v
     return Decimal(str(v))

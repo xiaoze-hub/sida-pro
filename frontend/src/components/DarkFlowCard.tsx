@@ -19,7 +19,8 @@ export default function DarkFlowCard({ symbol }: { symbol: string }) {
     async function load() {
       try {
         const token = localStorage.getItem("token") || ""
-        const res = await fetch(`/api/dark-flow?symbol=${symbol}`, {
+        // P1(audit-20260915): symbol 必须 URL 编码, 防特殊字符截断查询
+        const res = await fetch(`/api/dark-flow?symbol=${encodeURIComponent(symbol)}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
         const j = await res.json()

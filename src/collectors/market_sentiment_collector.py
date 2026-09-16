@@ -15,6 +15,8 @@ from datetime import datetime
 _LIMITUP_TOTAL_BUDGET_S = 30.0
 
 from src.collectors.market_http import market_get
+# P1(audit-20260915): 核心 safe_float 统一到 numutil; 本模块历史默认值为 0.0(展示层), 保留薄包装
+from src.core.numutil import safe_float as _num_safe_float  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +30,8 @@ _ZT_HEADERS = {
 
 
 def _safe_float(v, default=0.0):
-    try:
-        return float(v) if v is not None else default
-    except (TypeError, ValueError):
-        return default
+    """展示层安全转 float: 缺失/非法回退 default(历史口径 0.0)。委托 numutil。"""
+    return _num_safe_float(v, default)
 
 
 class MarketSentimentCollector:

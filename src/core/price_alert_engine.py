@@ -15,24 +15,17 @@ from src.collectors.kline_collector import KlineCollector, kline_source
 from src.core.notifier import NotifierManager
 from src.core.marketdata_client import md_quote_rows
 from src.core.timezone import to_utc
-from src.models.market import MarketCode, MARKETS
+from src.models.market import MarketCode, is_market_trading_time
 from src.db.session import SessionLocal
 from src.db.models import NotifyChannel, PriceAlertHit, PriceAlertRule, Stock
+# P1(audit-20260915): _safe_float 统一到 numutil(原本地重复实现已删)
+from src.core.numutil import safe_float as _safe_float  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _safe_float(v: Any) -> float | None:
-    try:
-        if v is None:
-            return None
-        return float(v)
-    except Exception:
-        return None
 
 
 def _to_market(market: str) -> MarketCode:
@@ -42,11 +35,8 @@ def _to_market(market: str) -> MarketCode:
         return MarketCode.CN
 
 
-def _is_trading_time(market: MarketCode) -> bool:
-    market_def = MARKETS.get(market)
-    if not market_def:
-        return False
-    return market_def.is_trading_time()
+# P1(audit-20260915): 本地 _is_trading_time 包装已删,
+# 统一调用 src.models.market.is_market_trading_time()(委托 MarketDef.is_trading_time)。
 
 
 def _day_key(now: datetime) -> str:
@@ -234,7 +224,7 @@ class PriceAlertEngine:
                 return False, "expired"
 
         if rule.market_hours_mode == "trading_only" and not bypass_market_hours:
-            if not _is_trading_time(_to_market(rule.stock.market)):
+            if not is_market_trading_time(_to_market(rule.stock.market)):
                 return False, "non_trading"
 
         today = _day_key(now)

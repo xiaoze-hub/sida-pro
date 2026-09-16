@@ -55,9 +55,13 @@ def test_gate_allows_explicit_sqlite_url(monkeypatch):
     assert "SQLite" in msg
 
 
-def test_health_exposes_dialect_field():
+def test_health_exposes_dialect_field(monkeypatch):
+    from src.web.api import health as health_api
     from src.web.app import app
 
+    # P1(audit-20260915): 非内网来源 /api/health 裁剪细节; TestClient 的
+    # client host="testclient" 非 IP, 此处模拟内网探针以读取全量 components。
+    monkeypatch.setattr(health_api, "_request_from_internal", lambda req: True)
     client = TestClient(app)
     r = client.get("/api/health")
     assert r.status_code == 200
