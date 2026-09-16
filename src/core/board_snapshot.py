@@ -83,11 +83,11 @@ def _tencent_code(code: str) -> str | None:
 
 
 def _to_float(v) -> float:
-    """安全转 float: 空串/非法值返回 0.0。"""
-    try:
-        return float(str(v).strip())
-    except (ValueError, TypeError):
-        return 0.0
+    """安全转 float: 空串/非法值返回 0.0。P1(audit-20260915): 委托 numutil.safe_float。"""
+    from src.core.numutil import safe_float
+
+    result = safe_float(v, default=0.0)
+    return 0.0 if result is None else result
 
 
 def _fetch_board(code: str) -> dict | None:

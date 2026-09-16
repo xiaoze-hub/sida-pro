@@ -15,6 +15,7 @@ scope=global。命中定义: outcome_status='evaluated' 且有收益的记录中
 收益>0、reduce/sell/avoid 且收益<0 记命中; watch/hold/alert 等中性动作不计入分母。
 """
 import base64
+import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +26,8 @@ from sqlalchemy.orm import Session
 from src.web.api.auth import get_current_user
 from src.web.database import get_db
 from src.web.models import AgentPredictionOutcome, Position, Stock, User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -233,8 +236,9 @@ def update_profile(
             parts.append("头像")
         if parts:
             log_audit(db, user, "update_profile", detail="更新" + "/".join(parts), ip="")
-    except Exception:
-        pass
+    except Exception as e:
+        # P1: 审计写失败属异常路径, 需留痕(业务已成功, 仅审计缺失)
+        logger.warning(f"profile 审计写入失败: {e}")
     return _profile_to_dict(user)
 
 

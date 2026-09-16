@@ -9,27 +9,52 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
 from marketdata import MarketData, Quote, SourceConfig
 
 logger = logging.getLogger(__name__)
 
+# P1: DataSource 配置变更频率低, 60s TTL 缓存避免每次查询都新建 Session
+_CFG_CACHE_TTL = 60.0
+
 
 class DbConfigProvider:
-    """ConfigProvider 端口实现:从 DataSource 表按 priority 读某类型的启用源。"""
+    """ConfigProvider 端口实现:从 DataSource 表按 priority 读某类型的启用源。
+
+    P1 性能修复: 加 TTL 缓存(60s), DataSource 配置变更频率低;
+    线程安全用 RLock 保护缓存读写(多 worker / 线程池并发调用)。
+    """
+
+    def __init__(self) -> None:
+        # {datatype: (timestamp, rows)}; rows 为 ORM 对象列表的浅拷贝快照
+        self._cache: dict[str, tuple[float, list]] = {}
+        self._lock = threading.RLock()
 
     def _query_rows(self, datatype: str) -> list:
+        # P1: TTL 缓存命中直接返回, 未命中才开 Session
+        with self._lock:
+            hit = self._cache.get(datatype)
+            if hit is not None and time.monotonic() - hit[0] < _CFG_CACHE_TTL:
+                return hit[1]
+
         from src.db.session import SessionLocal
         from src.db.models import DataSource
 
         db = SessionLocal()
         try:
-            return (
+            rows = (
                 db.query(DataSource)
                 .filter(DataSource.type == datatype, DataSource.enabled == True)  # noqa: E712
                 .order_by(DataSource.priority)
                 .all()
             )
+            # detach: 提取为普通 list, 避免 session 关闭后 ORM 对象失效
+            snapshot = list(rows)
+            with self._lock:
+                self._cache[datatype] = (time.monotonic(), snapshot)
+            return snapshot
         finally:
             db.close()
 

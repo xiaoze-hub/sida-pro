@@ -47,11 +47,15 @@ def fetch_financial_abstract(symbol: str) -> dict | None:
         logger.warning(f"[TA fin] stock_financial_abstract({symbol}) 失败: {e}")
         return None
     if df is None or df.empty:
+        # P1: 数据为空属可选降级路径, debug 留痕
+        logger.debug(f"[TA fin] stock_financial_abstract({symbol}) 返回空")
         return None
 
     # 列结构:[选项, 指标, 20260331, 20251231, ...] —— 取最近 N 期
     period_cols = [c for c in df.columns if str(c).isdigit() and len(str(c)) == 8]
     if not period_cols:
+        # P1: 列结构不符属可选降级路径, debug 留痕
+        logger.debug(f"[TA fin] stock_financial_abstract({symbol}) 无期间列, 列={list(df.columns)[:8]}")
         return None
     recent_periods = period_cols[:6]  # 最多 6 期(1.5 年)
 

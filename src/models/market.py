@@ -120,3 +120,20 @@ class IndexData:
     volume: float
     turnover: float
     timestamp: datetime = field(default_factory=datetime.now)
+
+
+def is_market_trading_time(market: str | MarketCode, dt: datetime | None = None) -> bool:
+    """统一交易时段判定入口(audit P1, 2026-09-15)。
+
+    替代各 core 模块本地的 _is_trading_hours / _is_trading_time 包装;
+    内部委托 MarketDef.is_trading_time(含 A 股交易日历)。
+    未知市场/非法 code 返回 False(与历史包装行为一致)。
+    """
+    try:
+        code = market if isinstance(market, MarketCode) else MarketCode(str(market).strip().upper())
+    except Exception:
+        return False
+    mdef = MARKETS.get(code)
+    if not mdef:
+        return False
+    return mdef.is_trading_time(dt)

@@ -7,6 +7,10 @@
 节流: 复用 darkflow_alerts.should_alert(同股同日同类一次, DiskCache 24h)。
 推送: 全局默认渠道(enabled + user_id IS NULL), WeCom/Telegram/webhook 等, 失败静默。
 评估入口 eval_tick(symbols) 由 seal_sampler.sample_tick 顺带调用(盘中 60s)。
+
+P1(audit-20260915): 与 seal_sampler 的循环依赖已解除 — 本模块单向读
+seal_sampler.get_recent_samples; seal_sampler 侧通过 set_event_eval_hook
+接收本模块的 eval_tick 回调(install() 或 startup 接线), 不再互相 import。
 """
 from __future__ import annotations
 
@@ -24,6 +28,13 @@ _EVENT_TITLES = {
     "dark_cluster": "【L2事件流】暗盘聚簇",
     "seal_anomaly": "【L2事件流】封单成色异常",
 }
+
+
+def install() -> None:
+    """向 seal_sampler 注入 eval_tick 回调(解耦反向依赖)。startup 启动时调用一次。"""
+    from src.core.seal_sampler import set_event_eval_hook
+
+    set_event_eval_hook(eval_tick)
 
 
 def evaluate_dark_cluster(split_order: dict | None) -> tuple[bool, str]:

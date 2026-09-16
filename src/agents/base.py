@@ -33,7 +33,9 @@ def _scene_db(context) -> tuple[Any, bool]:
         from src.db.session import SessionLocal
 
         return SessionLocal(), True
-    except Exception:
+    except Exception as e:
+        # P1: SessionLocal 失败属异常路径, 需留痕(调用方将跳过场景绑定)
+        logger.warning(f"场景绑定 SessionLocal 创建失败, 跳过场景绑定: {e}")
         return None, False
 
 
@@ -131,7 +133,9 @@ def resolve_scene_model(db, scene: str, default_model: str | None = None, user=N
 
         bound = _coerce_bound_model(get_model_for_scene(db, scene, user=user))
         return bound or default_model
-    except Exception:
+    except Exception as e:
+        # P1: 场景模型解析失败属异常路径, 回落 default_model 前留痕
+        logger.warning(f"场景模型解析失败 scene={scene}, 回落 default: {e}")
         return default_model
 
 

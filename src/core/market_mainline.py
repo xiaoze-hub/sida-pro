@@ -98,17 +98,26 @@ def _to_int_days(v) -> int:
         return 0
 
 
-def _to_float_amount(v) -> float:
-    """amount 字段安全转 float(非数 → 0.0)。成交额单位: 元。"""
+def _to_float_amount(v) -> float | None:
+    """amount 字段安全转 float(缺失/非数 → None)。成交额单位: 元。
+
+    P1(audit-20260915): 缺失返回 None, 不编造成 0.0(0 是合法成交额, 与"无数据"不同)。
+    """
     try:
         if v is None:
-            return 0.0
+            return None
         f = float(v)
         if math.isnan(f):
-            return 0.0
+            return None
         return f
     except (TypeError, ValueError):
-        return 0.0
+        return None
+
+
+def _amount_sort_key(v) -> float:
+    """排序用: None 按 0 处理(仅用于比较, 输出仍保持 None)。"""
+    a = _to_float_amount(v)
+    return a if a is not None else 0.0
 
 
 def _resolve_group_name(item: dict) -> str:
@@ -158,7 +167,7 @@ def _pick_leader(group_items: list[dict]) -> dict | None:
         items,
         key=lambda p: (
             -_to_int_days(p.get("days")),
-            -_to_float_amount(p.get("amount")),
+            -_amount_sort_key(p.get("amount")),
             str(p.get("name") or ""),
         ),
     )
@@ -181,7 +190,7 @@ def _aggregate_one(group_name: str, items: list[dict]) -> dict:
         items,
         key=lambda p: (
             -_to_int_days(p.get("days")),
-            -_to_float_amount(p.get("amount")),
+            -_amount_sort_key(p.get("amount")),
             str(p.get("name") or ""),
         ),
     )[:12]

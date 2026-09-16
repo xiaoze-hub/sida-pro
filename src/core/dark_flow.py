@@ -270,16 +270,15 @@ def _verdict_cache():
 
 
 def _in_trading_hours() -> bool:
-    """是否在交易时段(交易日 09:25-15:05)。空拉取此时段才值得重试+告警。"""
-    import datetime as _dt
-    from src.core.trading_calendar import is_trading_day
+    """是否在交易时段。空拉取此时段才值得重试+告警。
+
+    P1(audit-20260915): 本地日历+字符串时间窗包装已删, 统一走
+    models/market.py::is_market_trading_time()(委托 MarketDef.is_trading_time, 含交易日历)。
+    """
+    from src.models.market import is_market_trading_time
+
     try:
-        now = _dt.datetime.now(_CST)
-        # W2.6(B6): 交易日走日历 —— 旧 weekday<5 会在法定节假日空拉时误告警
-        if not is_trading_day(now.date()):
-            return False
-        t = now.strftime("%H:%M:%S")
-        return "09:25:00" <= t <= "15:05:00"
+        return is_market_trading_time("CN")
     except Exception:  # noqa: BLE001
         return False
 
@@ -320,8 +319,9 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
                 _cache_put(code, now, ticks, 0, 0)
                 _ticks_persist()  # 2026-08-12: 快照落盘
             return ticks
-        except Exception:
-            pass  # L2 未接入/异常, 回退腾讯逐笔
+        except Exception as e:
+            # P1: L2 tick 拉取失败属可选降级路径, debug 留痕后回退腾讯逐笔
+            logger.debug("L2 tick 拉取失败(回退腾讯逐笔) src=%s code=%s: %s", _src, code, e)
 
     def _fetch_page(p: int) -> tuple[int, list[dict]]:
         """拉单页, 返回 (页码, ticks)。失败/空页返回 (p, [])。"""
@@ -1011,7 +1011,8 @@ def _detect_rhythm(segments: dict) -> dict | None:
     """时段节奏模式检测(早吸尾抛 / 早压尾拉 / 尾盘异动)。
 
     segments: {morning, mid, afternoon, tail} 四段净额(单位: 元)。
-    值可能为 0 或 None(数据缺失), 统一容错为 0.0。
+    P1(audit-20260915): 值为 None 表示该段数据缺失 —— 缺失段不触发节奏信号
+    (此前 None 被容错为 0.0, 会把"没数据"当成"净额为零"参与阈值判定, 产生假信号)。
     - 早吸尾抛: 早盘净买(≥300万) + 尾盘净卖(≤-300万) → 拉高出货特征
     - 早压尾拉: 早盘净卖(≤-300万) + 尾盘净买(≥300万) → 洗盘特征
     - 尾盘异动: 全天四段合计 |净额| > 500万 且 (尾盘 |净额| > 40%*四段绝对值之和
@@ -1024,7 +1025,10 @@ def _detect_rhythm(segments: dict) -> dict | None:
     vals: dict[str, float] = {}
     for k in keys:
         v = _num((segments or {}).get(k))
-        vals[k] = 0.0 if v is None else v
+        if v is None:
+            # P1: 缺失段直接不触发, 不把 None 当 0
+            return None
+        vals[k] = v
     morning, tail = vals["morning"], vals["tail"]
     # 早吸尾抛: 早盘吸筹 + 尾盘抛压
     if morning > _RHYTHM_SEG_NET and tail < -_RHYTHM_SEG_NET:

@@ -96,8 +96,9 @@ def _main_intent_both_inner(symbol: str) -> tuple[str, dict | None]:
                 band = chips.get("cost_band")
                 bstr = f" 成本带{band['low']}-{band['high']}" if band else ""
                 parts.append(f"筹码峰{chips['peak_price']} 获利{chips['profit_ratio'] * 100:.0f}%{bstr}")
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: 筹码辅助数据降级路径, 不静默
+            logger.debug("筹码分布获取失败(降级跳过) %s: %s", symbol, e)
         summary_str = " | ".join(parts)
 
         # ---- 结构化(与原 _main_intent_structured 同逻辑) ----
@@ -193,8 +194,9 @@ def _main_intent_summary(symbol: str) -> str:
                 band = chips.get("cost_band")
                 bstr = f" 成本带{band['low']}-{band['high']}" if band else ""
                 parts.append(f"筹码峰{chips['peak_price']} 获利{chips['profit_ratio'] * 100:.0f}%{bstr}")
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: 筹码辅助数据降级路径, 不静默
+            logger.debug("筹码分布获取失败(降级跳过) %s: %s", symbol, e)
         return " | ".join(parts)
     except Exception:
         return ""
@@ -292,8 +294,9 @@ def _main_intent_structured(symbol: str) -> dict | None:
                 if band:
                     out["chip_band"] = {"low": band["low"], "high": band["high"]}
                 out["profit_ratio"] = chips.get("profit_ratio")
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: 筹码辅助数据降级路径, 不静默
+            logger.debug("筹码分布获取失败(降级跳过) %s: %s", symbol, e)
         # ---- AI 反证层(算法5, 2026-08-14): 算法结论 + 当日事件 → LLM 综合评级+置信度 ----
         # 防对倒/拆单骗过纯算法; LLM 失败/超时/解析失败 → None(静默降级, 不影响算法结论)
         out["ai_verdict"] = _ai_counter_check(symbol, dark)
@@ -676,8 +679,9 @@ def _append_main_intent(lines: list, symbol: str) -> None:
                     f"- 筹码面({src_tag}): 峰{chips['peak_price']}({pos}) 获利盘{profit:.0f}% "
                     f"COST50={chips['cost_50']}{band_str}"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: 筹码辅助数据降级路径, 不静默
+            logger.debug("筹码面段获取失败(降级跳过) %s: %s", symbol, e)
         # 股东户数(2026-08-11): 筹码集中度交叉验证
         try:
             from marketdata.vendors.tencent_info import fetch_stock_brief
@@ -688,8 +692,9 @@ def _append_main_intent(lines: list, symbol: str) -> None:
                     chg = g["gdrshb"]
                     tag = "集中(吸筹)" if chg < 0 else ("分散(派发)" if chg > 0 else "持平")
                     lines.append(f"- 股东户数：{g.get('gdrs', '--')}户，变化{chg}%({tag})")
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: 股东户数辅助数据降级路径, 不静默
+            logger.debug("股东户数获取失败(降级跳过) %s: %s", symbol, e)
     except Exception as e:
         logger.debug(f"主力意图段获取失败(不影响其他段): {e}")
 

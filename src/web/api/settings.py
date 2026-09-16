@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from src.config import Settings
 from src.core.update_checker import check_update
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def get_app_version() -> str:
@@ -227,8 +229,9 @@ def update_setting(
             payload = decode_token(auth[7:])
             if payload:
                 user = principal_from_payload(payload)
-        except Exception:
-            pass
+        except Exception as e:
+            # P1: JWT 解析失败属可选降级路径(audit 将以 user=None 记), debug 留痕
+            logger.debug(f"settings audit JWT 解析失败: {e}")
 
     # P2-1 (2026-09-05 28号审计): key 白名单, 系统保留键拒绝直写
     if key not in SETTING_KEYS:

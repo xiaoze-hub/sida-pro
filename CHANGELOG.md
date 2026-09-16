@@ -7,6 +7,47 @@
 
 ## 2026-09-15
 
+### fix(audit-p1): P1 批量修复(44项: 安全/口径/错误处理/性能/前端/代码质量)
+
+**性质**: P1 批量修复。**需重启后端**。
+
+**安全(7项)**:
+- skills_gateway 注册 IP 限流(每小时 5 次)
+- jobs/paper_trading scan 加 require_owner
+- auth/status 只返回 initialized
+- JWT_SECRET 短于 32 字节自动忽略并 warning
+- health 非内网裁剪细节
+- forecast engine URL 内网校验
+
+**数据口径(8项)**:
+- to_dec(None) 抛 ValueError, 调用方显式兜底
+- capital_flow/dark_flow/delta_engine/kline_collector 缺失字段保持 None
+- market_data/market_mainline 缺失不参与排序
+- dark_fund_scan 加 caliber="ths" 标签
+
+**错误处理(10项)**:
+- 10 处 except:pass → logger.debug/warning
+- notifier httpx.AsyncClient 统一 timeout=30
+
+**性能(5项)**:
+- marketdata_client DbConfigProvider 加 60s TTL 缓存
+- context_builder N+1 → 批量查询
+- news.py 只查需要的列
+- market_scan 串行 → ThreadPoolExecutor(10)
+
+**前端(7项)**:
+- Agents/Forecast/Opportunities/Dashboard/AnalysisDetail 异步卸载守卫
+- downloadCard 用 getToken() + encodeURIComponent
+- DarkFlowCard URL 编码
+
+**代码质量(7项)**:
+- 新建 numutil.py 统一 safe_float/clamp(7处重复)
+- 4处 _in_trading_hours 统一委托 MarketDef
+- 2个循环依赖拆解(回调注入)
+- 魔法数字提取为命名常量
+
+**测试**: 48/48 关键测试通过; 全量 2407 passed(26 个已有失败与本次无关)
+
 ### fix(audit): 全代码审计修复(29项: 口径/错误处理/性能/安全/前端/配置)
 
 **性质**: 多维度 P0/P1 修复。**需重启后端**。审计报告见 `docs/audit_report_20260915.md`。

@@ -687,9 +687,12 @@ export default function OpportunitiesPage() {
     const maxPolls = 12
     try {
       for (let i = 0; i < maxPolls; i += 1) {
+        // P1(audit-20260915): 卸载后立即退出, 避免对已卸载组件 setState
+        if (!oppMountedRef.current) return
         try {
           const state = await recommendationsApi.getStrategyRefreshStatus()
           if (!state.running) {
+            if (!oppMountedRef.current) return
             if (state.last_error) {
               setError(`后台刷新失败: ${state.last_error}`)
               toast(`后台刷新失败: ${state.last_error}`, 'error')
@@ -705,6 +708,7 @@ export default function OpportunitiesPage() {
         }
         await sleep(10000)
       }
+      if (!oppMountedRef.current) return
       // 2 分钟仍未完成:提示任务仍在后台,恢复按钮让用户稍后手动刷新
       await Promise.all([load(), loadStats()])
       setError((prev) => prev || '刷新任务仍在后台执行,全市场扫描约需 1-3 分钟,请稍后手动刷新查看')
@@ -712,7 +716,7 @@ export default function OpportunitiesPage() {
     } finally {
       // 轮询结束:无论成功/失败/超时都恢复按钮,允许再次提交
       refreshingRef.current = false
-      setRefreshing(false)
+      if (oppMountedRef.current) setRefreshing(false)
     }
   }, [load, loadStats, toast])
 

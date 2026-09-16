@@ -22,6 +22,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from src.core.caliber import DIRECTION_THS
+
 logger = logging.getLogger(__name__)
 
 # 全市场扫描默认市场(北交所 USTM 在代码表里 0 只, 不扫)
@@ -140,6 +142,8 @@ def scan_dark_fund_top(
                 # 总金额溢出/缺失 → None(不编造成 0)
                 "total_amount_wan": round(total_amt / 1e4, 2) if total_amt is not None else None,
                 "source": "thsdk_dde",
+                # P1(audit-20260915): 口径标签 — thsdk DDE 同花顺大单口径, 禁用于主力意图判定
+                "caliber": "ths",
             }
         )
 
@@ -151,6 +155,9 @@ def scan_dark_fund_top(
         "universe": universe,
         "computed": len(top_rows),
         "top": top,
+        # P1: 返回值带 caliber(B3/3.4), 下游不得据此做主力意图/方向性判定
+        "caliber": "ths",
+        "direction_semantics": DIRECTION_THS,
     }
 
 

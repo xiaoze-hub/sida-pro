@@ -21,12 +21,40 @@ router = APIRouter()
 
 # 预测引擎地址: 优先环境变量,否则自动探测主机 IP
 # (容器内 127.0.0.1 是容器自己,必须用主机 IP;Linux Docker 无 host.docker.internal)
+def _is_internal_engine_url(url: str) -> bool:
+    """P1(audit-20260915): 引擎 URL 必须指向内网/localhost, 防 SSRF 外带。
+
+    仅允许 loopback / 私网 IPv4 / host.docker.internal; 公网地址一律拒绝。
+    """
+    import ipaddress as _ip
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host in ("localhost", "host.docker.internal"):
+        return True
+    try:
+        return _ip.ip_address(host).is_private or _ip.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _detect_engine_url() -> str:
     import os
 
     env = os.getenv("FORECAST_ENGINE_URL")
     if env:
-        return env
+        # P1: 校验 engine URL 必须为内网/localhost; 公网地址拒绝并回退默认
+        if _is_internal_engine_url(env):
+            return env
+        logger.warning(
+            "FORECAST_ENGINE_URL=%s 非内网/localhost, 已拒绝(SSRF 防护), 回退默认探测地址",
+            env,
+        )
     # 从默认网关推断主机 IP(容器内 /proc/net/route)
     try:
         with open("/proc/net/route") as f:

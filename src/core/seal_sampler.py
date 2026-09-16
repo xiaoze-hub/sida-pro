@@ -25,6 +25,17 @@ _CST = ZoneInfo("Asia/Shanghai")
 _MAX_SYMBOLS_PER_TICK = 30
 _TABLE = "seal_quality_samples"
 
+# P1(audit-20260915): 采样完成后事件评估回调(l2_event_stream.install() 注入)。
+# 原 sample_tick 内 `from src.core.l2_event_stream import eval_tick` 与
+# l2_event_stream→seal_sampler 形成循环依赖, 改为单向回调注入。
+_EVENT_EVAL_HOOK = None
+
+
+def set_event_eval_hook(fn) -> None:
+    """注册采样后回调: fn(symbols: list[str]) -> dict。由 startup/l2_event_stream 接线。"""
+    global _EVENT_EVAL_HOOK
+    _EVENT_EVAL_HOOK = fn
+
 
 def _now_cst() -> datetime:
     return datetime.now(_CST)
@@ -190,12 +201,14 @@ def sample_tick(symbols: list[str] | None = None) -> dict:
     if rows:
         logger.info("封单成色采样: %s/%s 写入", out["stored"], len(items))
     # F2 L2 事件流(2026-09-06): 暗盘聚簇≥100万 / 封单成色异常 → 全局渠道推送(节流一次/日)
-    try:
-        from src.core.l2_event_stream import eval_tick
-
-        out["events"] = eval_tick([r["symbol"] for r in rows] or [it.get("symbol") for it in items])
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"L2 事件流评估失败(不影响采样): {e}")
+    # P1(audit-20260915): 走回调注入, 不再 import l2_event_stream(解除循环依赖)
+    if _EVENT_EVAL_HOOK is not None:
+        try:
+            out["events"] = _EVENT_EVAL_HOOK(
+                [r["symbol"] for r in rows] or [it.get("symbol") for it in items]
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"L2 事件流评估失败(不影响采样): {e}")
     return out
 
 

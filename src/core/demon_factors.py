@@ -33,6 +33,16 @@ _WINDOW_DAYS = 260
 _LOOKBACK_BARS = 15  # 增量回取 K 线根数(覆盖长假期停牌)
 _TQ_WORKERS = 4
 
+# P1(audit-20260915): lhb_stats 依赖改为回调注入, 解除 demon_factors ↔ lhb_backfill
+# 循环 import。startup 接线后走 hook; 未接线时懒 import 兜底(单测/脚本路径)。
+_LHB_STATS_HOOK = None
+
+
+def set_lhb_stats_hook(fn) -> None:
+    """注册龙虎榜统计提供方 fn(symbols=...) -> dict。由 startup 从 lhb_backfill 接线。"""
+    global _LHB_STATS_HOOK
+    _LHB_STATS_HOOK = fn
+
 
 def _now_cst_iso() -> str:
     return datetime.now(_CST).isoformat(timespec="seconds")
@@ -163,7 +173,6 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
     与 circ_mv(流通市值加分)不再恒缺数据; 榜单未覆盖的股票 n_lhb=0(真实 0)。
     """
     from src.core.demon_score import demon_score_from_events
-    from src.core.lhb_backfill import lhb_stats
     from src.db.session import SessionLocal
 
     cutoff = _year_ago()
@@ -189,7 +198,13 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
     else:
         targets = by_symbol
     try:
-        lhb = lhb_stats(symbols=None if symbols is None else list(targets.keys()))
+        # P1(audit-20260915): 优先走注入回调; 未接线时懒 import 兜底(保持脚本/单测可用)
+        if _LHB_STATS_HOOK is not None:
+            lhb = _LHB_STATS_HOOK(symbols=None if symbols is None else list(targets.keys()))
+        else:
+            from src.core.lhb_backfill import lhb_stats
+
+            lhb = lhb_stats(symbols=None if symbols is None else list(targets.keys()))
     except Exception as e:  # noqa: BLE001
         logger.warning("龙虎榜统计失败, lhb 维退回缺数据口径: %s", e)
         lhb = {}

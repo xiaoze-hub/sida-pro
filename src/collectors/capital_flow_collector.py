@@ -30,12 +30,13 @@ class CapitalFlow:
     name: str
 
     # 今日资金流（单位：元）
-    main_net_inflow: float      # 主力净流入
-    main_net_inflow_pct: float  # 主力净流入占比
-    super_net_inflow: float     # 超大单净流入
-    big_net_inflow: float       # 大单净流入
-    mid_net_inflow: float       # 中单净流入
-    small_net_inflow: float     # 小单净流入
+    # P1(audit-20260915): 缺失字段保持 None(禁止 or 0 把"无数据"伪装成 0)
+    main_net_inflow: float | None = None      # 主力净流入
+    main_net_inflow_pct: float | None = None  # 主力净流入占比
+    super_net_inflow: float | None = None     # 超大单净流入
+    big_net_inflow: float | None = None       # 大单净流入
+    mid_net_inflow: float | None = None       # 中单净流入
+    small_net_inflow: float | None = None     # 小单净流入
 
     # 5日资金流
     main_net_5d: float | None = None  # 5日主力净流入
@@ -139,13 +140,14 @@ def _fetch_direct_flow(symbol: str) -> CapitalFlow | None:
         return CapitalFlow(
             symbol=symbol,
             name=it.get("f14") or "",
-            main_net_inflow=float(f62 or 0),
+            # P1: 缺失字段保持 None, 不 or 0
+            main_net_inflow=float(f62) if f62 is not None else None,
             # P1-13 (2026-09-05): 百分点口径(f184 已是百分数, 不除100), 与腾讯源/消费端阈值对齐
-            main_net_inflow_pct=float(f184 or 0),
-            super_net_inflow=float(f66 or 0),
-            big_net_inflow=float(f72 or 0),
-            mid_net_inflow=float(it.get("f78") or 0),
-            small_net_inflow=float(it.get("f84") or 0),
+            main_net_inflow_pct=float(f184) if f184 is not None else None,
+            super_net_inflow=float(f66) if f66 is not None else None,
+            big_net_inflow=float(f72) if f72 is not None else None,
+            mid_net_inflow=float(it.get("f78")) if it.get("f78") is not None else None,
+            small_net_inflow=float(it.get("f84")) if it.get("f84") is not None else None,
             main_net_5d=None,
             date=_today_cn(),  # L-1: 统一 YYYY-MM-DD 口径, 与 _today_cn() 同
         )
@@ -175,13 +177,14 @@ def _fetch_cn_gateway_flow(symbol: str) -> CapitalFlow | None:
         return CapitalFlow(
             symbol=symbol,
             name=d.get("name") or "",
-            main_net_inflow=float(d.get("main_net_inflow") or 0),
+            # P1: 缺失字段保持 None, 不 or 0
+            main_net_inflow=float(d.get("main_net_inflow")) if d.get("main_net_inflow") is not None else None,
             # P1-13 (2026-09-05): 百分点口径(网关 main_net_pct 已是百分数), 与消费端阈值对齐
-            main_net_inflow_pct=float(d.get("main_net_pct") or 0),
-            super_net_inflow=float(d.get("super_net_inflow") or 0),
-            big_net_inflow=float(d.get("big_net_inflow") or 0),
-            mid_net_inflow=float(d.get("mid_net_inflow") or 0),
-            small_net_inflow=float(d.get("small_net_inflow") or 0),
+            main_net_inflow_pct=float(d.get("main_net_pct")) if d.get("main_net_pct") is not None else None,
+            super_net_inflow=float(d.get("super_net_inflow")) if d.get("super_net_inflow") is not None else None,
+            big_net_inflow=float(d.get("big_net_inflow")) if d.get("big_net_inflow") is not None else None,
+            mid_net_inflow=float(d.get("mid_net_inflow")) if d.get("mid_net_inflow") is not None else None,
+            small_net_inflow=float(d.get("small_net_inflow")) if d.get("small_net_inflow") is not None else None,
             main_net_5d=None,
             date=_today_cn(),  # 今日实时
         )
@@ -313,17 +316,20 @@ class CapitalFlowCollector:
             return {"error": "无资金流向数据"}
 
         # 判断资金状态
-        if flow.main_net_inflow > 0:
-            if flow.main_net_inflow_pct > 10:
+        # P1: main_net_inflow 可能为 None(缺失), 不能直接比较
+        if flow.main_net_inflow is None:
+            status = "无数据"
+        elif flow.main_net_inflow > 0:
+            if (flow.main_net_inflow_pct or 0) > 10:
                 status = "主力大幅流入"
-            elif flow.main_net_inflow_pct > 5:
+            elif (flow.main_net_inflow_pct or 0) > 5:
                 status = "主力明显流入"
             else:
                 status = "主力小幅流入"
         elif flow.main_net_inflow < 0:
-            if flow.main_net_inflow_pct < -10:
+            if (flow.main_net_inflow_pct or 0) < -10:
                 status = "主力大幅流出"
-            elif flow.main_net_inflow_pct < -5:
+            elif (flow.main_net_inflow_pct or 0) < -5:
                 status = "主力明显流出"
             else:
                 status = "主力小幅流出"

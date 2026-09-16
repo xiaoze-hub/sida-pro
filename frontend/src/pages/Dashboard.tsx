@@ -237,9 +237,16 @@ export default function DashboardPage() {
   const openOnboarding = useCallback(() => setShowOnboarding(true), [])
 
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
+  // P1(audit-20260915): Promise.allSettled 回调需 alive 守卫(仿下方 curate 模式), 卸载后不再 setState
+  const benchAliveRef = useRef(true)
+  useEffect(() => {
+    benchAliveRef.current = true
+    return () => { benchAliveRef.current = false }
+  }, [])
   const loadBench = useCallback(() => {
     setBenchState('loading')
     Promise.allSettled([portfolioApi.benchmark({ days: 60 }), portfolioApi.attribution(60)]).then(([bn, at]) => {
+      if (!benchAliveRef.current) return
       if (bn.status === 'fulfilled') {
         setBench(bn.value)
         setBenchState(!bn.value?.empty && (bn.value?.curve?.length ?? 0) >= 2 ? 'ready' : 'empty')

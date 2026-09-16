@@ -236,6 +236,10 @@ async def lifespan(app):
         # 封单成色盘中采样(批次A, 2026-09-06): 60s 一次, 交易时段判断在任务内
         try:
             from src.core.seal_sampler import sample_tick
+            # P1(audit-20260915): 注入 L2 事件流评估回调, 解除 seal_sampler ↔ l2_event_stream循环 import
+            from src.core.l2_event_stream import install as install_l2_events
+
+            install_l2_events()
 
             rt.scheduler.scheduler.add_job(
                 sample_tick,
@@ -275,7 +279,12 @@ async def lifespan(app):
         # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
         # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
         try:
-            from src.core.lhb_backfill import daily_job
+            from src.core.lhb_backfill import daily_job, lhb_stats, set_recompute_hook
+            from src.core.demon_factors import recompute_factors, set_lhb_stats_hook
+
+            # P1(audit-20260915): 双向回调接线, 解除 demon_factors ↔ lhb_backfill 循环 import
+            set_recompute_hook(recompute_factors)
+            set_lhb_stats_hook(lhb_stats)
 
             rt.scheduler.scheduler.add_job(
                 daily_job,

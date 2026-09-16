@@ -503,7 +503,8 @@ class NotifierManager:
         text = f"## {title}\n\n{content}" if title else content
         payload = {"msgtype": "markdown", "markdown": {"content": text}}
 
-        async with httpx.AsyncClient() as client:
+        # P1: 构造器统一 timeout=30, 防无默认超时挂死
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, timeout=30)
             data = resp.json()
             if data.get("errcode") != 0:
@@ -530,7 +531,8 @@ class NotifierManager:
             sig = hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
             headers["X-Hub-Signature-256"] = f"sha256={sig}"
 
-        async with httpx.AsyncClient() as client:
+        # P1: 构造器统一 timeout=30, 防无默认超时挂死
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, content=raw, headers=headers, timeout=30)
             if resp.status_code != 200:
                 raise RuntimeError(
@@ -624,7 +626,8 @@ class NotifierManager:
         url = f"https://sctapi.ftqq.com/{sendkey}.send"
         payload = {"title": title or "通知", "desp": content}
 
-        async with httpx.AsyncClient() as client:
+        # P1: 构造器统一 timeout=30, 防无默认超时挂死
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=payload, timeout=30)
             data = resp.json()
             if data.get("code") != 0:
@@ -650,7 +653,8 @@ class NotifierManager:
 
         proxy = get_global_proxy()
         transport = httpx.AsyncHTTPTransport(proxy=proxy) if proxy else None
-        async with httpx.AsyncClient(transport=transport) as client:
+        # P1: 构造器统一 timeout=30, 防无默认超时挂死
+        async with httpx.AsyncClient(transport=transport, timeout=30) as client:
             resp = await client.post(url, json=payload, timeout=30)
             resp.raise_for_status()
             try:

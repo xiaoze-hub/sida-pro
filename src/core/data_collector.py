@@ -293,7 +293,10 @@ class DataCollectorManager:
                 "资金流向",
                 "capital_flow",
                 "success",
-                f"获取成功，主力净流入 {data.main_net_inflow / 10000:.2f}万",
+                # P1: main_net_inflow 可能为 None(缺失), 显式标注不编造
+                f"获取成功，主力净流入 {data.main_net_inflow / 10000:.2f}万"
+                if data.main_net_inflow is not None
+                else "获取成功，主力净流入 无数据",
                 duration_ms=duration_ms,
             )
 

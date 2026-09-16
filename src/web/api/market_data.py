@@ -299,26 +299,29 @@ async def market_capital_flow_proxy():
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         boards = md.board_capital_flow(board_type="industry") or []
+        # P1(audit-20260915): net_inflow 缺失的板块不参与排序
+        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置)
+        boards_valid = [b for b in boards if b.net_inflow is not None]
         boards_sorted = sorted(
-            boards, key=lambda b: (b.net_inflow or 0.0), reverse=True
+            boards_valid, key=lambda b: b.net_inflow, reverse=True
         )
         inflow_boards = [
             {
                 "name": b.board_name,
-                "net_inflow": round(b.net_inflow or 0.0, 2),  # 亿
+                "net_inflow": round(b.net_inflow, 2),  # 亿
                 "change_pct": b.change_pct,
             }
             for b in boards_sorted[:10]
-            if (b.net_inflow or 0.0) > 0
+            if b.net_inflow > 0
         ]
         outflow_boards = [
             {
                 "name": b.board_name,
-                "net_inflow": round(b.net_inflow or 0.0, 2),  # 亿(负=流出)
+                "net_inflow": round(b.net_inflow, 2),  # 亿(负=流出)
                 "change_pct": b.change_pct,
             }
             for b in reversed(boards_sorted[-10:])
-            if (b.net_inflow or 0.0) < 0
+            if b.net_inflow < 0
         ]
         result = {
             # 两市主力净流入(对齐同花顺APP)

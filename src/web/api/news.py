@@ -58,7 +58,8 @@ async def get_news(
     if os.getenv("NEWS_DISABLE", "").strip() in {"1", "true", "yes"}:
         return {"items": [], "degraded": True, "note": "新闻源已被 NEWS_DISABLE 开关关闭"}
     # 获取自选股(自己的 + 全局共享) 用于匹配; C3(2026-09-09): 此前拉全库所有用户自选
-    all_stocks = scoped(db.query(Stock), user).all()
+    # P1 性能修复: 只查需要的列(symbol, name), 避免全表 ORM 实体加载
+    all_stocks = scoped(db.query(Stock.symbol, Stock.name), user).all()
     stock_map = {s.symbol: s.name for s in all_stocks}
     name_to_symbol = {s.name: s.symbol for s in all_stocks}
 

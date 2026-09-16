@@ -91,7 +91,9 @@ def _fetch_ta_capital_flow(symbol: str, market: str = "CN"):
     # 2. 回退 marketdata 引擎(T-1)
     try:
         return get_market_data().capital_flow(symbol, market=market)
-    except Exception:
+    except Exception as e:
+        # P1: fallback 也失败属异常路径, 需留痕(下游将得到 None)
+        logger.warning(f"[TA] 资金流 fallback 也失败 {symbol}: {e}")
         return None
 
 

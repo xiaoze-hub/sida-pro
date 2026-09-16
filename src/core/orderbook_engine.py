@@ -88,13 +88,14 @@ def _now() -> float:
 
 
 def _is_trading_time(dt: datetime | None = None) -> bool:
-    """是否处于 A 股连续竞价时段(不含尾盘特殊段)。"""
-    dt = dt or datetime.now(_CST)
-    h, m = dt.hour, dt.minute
-    for (hs, ms, he, me) in SESSION_SEGMENTS:
-        if (h, m) >= (hs, ms) and (h, m) < (he, me):
-            return True
-    return False
+    """是否处于 A 股连续竞价时段(不含尾盘特殊段)。
+
+    P1(audit-20260915): 本地 SESSION_SEGMENTS 包装已删, 统一走
+    models/market.py::is_market_trading_time()(委托 MarketDef.is_trading_time, 含交易日历)。
+    """
+    from src.models.market import is_market_trading_time
+
+    return is_market_trading_time("CN", dt)
 
 
 def _is_tail_session(dt: datetime | None = None) -> bool:

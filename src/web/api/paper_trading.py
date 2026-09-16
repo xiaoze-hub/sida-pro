@@ -542,8 +542,11 @@ def update_settings(
 
 
 @router.post("/scan")
-async def manual_scan():
-    """手动触发一次模拟盘扫描（建仓 + 平仓检查）。"""
+async def manual_scan(_owner: User = Depends(require_owner)):
+    """手动触发一次模拟盘扫描（建仓 + 平仓检查）。
+
+    P1(audit-20260915): 全账户扫描属高权限写操作, 仅 owner 可触发。
+    """
     result = await ENGINE.scan_once()
     return result
 

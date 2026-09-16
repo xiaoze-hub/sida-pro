@@ -68,6 +68,12 @@ def test_register_key_returns_raw_once():
         def first(self):
             return None
 
+    # P1(audit-20260915): register_key 现需要 Request(IP 限流)
+    req = MagicMock()
+    req.client.host = "127.0.0.1"
+    # 独立 IP, 避免与其他用例共享限流窗口
+    gw._key_reg_hits.pop("127.0.0.1", None)
+
     with patch.object(gw.SkillApiKey, "__init__", return_value=None):
         with patch.object(gw.db, "add") if False else patch("src.web.api.skills_gateway.SkillApiKey") as MockKey:
             inst = MagicMock()
@@ -76,9 +82,33 @@ def test_register_key_returns_raw_once():
             inst.daily_limit = 500
             inst.expires_at = None
             MockKey.return_value = inst
-            out = gw.register_key(gw.KeyRegisterRequest(owner_label="test"), db=db)
+            out = gw.register_key(gw.KeyRegisterRequest(owner_label="test"), request=req, db=db)
     assert out["api_key"].startswith("sk_")
     assert out["tier"] == "trial"
     assert out["daily_limit"] == 500
     assert "明文" in out["note"] or "保存" in out["note"]
     assert out["risk"]
+
+
+def test_register_key_ip_rate_limit():
+    """P1: 同 IP 每小时最多 5 次注册, 第 6 次 429。"""
+    from fastapi import HTTPException
+
+    ip = "203.0.113.99"
+    gw._key_reg_hits.pop(ip, None)
+    req = MagicMock()
+    req.client.host = ip
+    db = MagicMock()
+    with patch("src.web.api.skills_gateway.SkillApiKey") as MockKey:
+        inst = MagicMock()
+        inst.key_prefix = "sk_x"
+        inst.tier = "free"
+        inst.daily_limit = 100
+        inst.expires_at = None
+        MockKey.return_value = inst
+        for _ in range(5):
+            gw.register_key(gw.KeyRegisterRequest(owner_label="t"), request=req, db=db)
+        with pytest.raises(HTTPException) as ei:
+            gw.register_key(gw.KeyRegisterRequest(owner_label="t"), request=req, db=db)
+        assert ei.value.status_code == 429
+    gw._key_reg_hits.pop(ip, None)

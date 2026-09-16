@@ -277,10 +277,13 @@ def _request_from_internal(req: Request) -> bool:
 
 
 @router.get("/health")
-async def health() -> dict[str, Any]:
+async def health(request: Request) -> dict[str, Any]:
     """深度健康检查 — 返回各组件状态
 
-    返回结构:
+    P1(audit-20260915): 非内网来源裁剪细节(组件 URL/调度器名/错误串等运营信息),
+    仅回 status + version; 内网(容器网络/回环)仍看全量, 便于运维与 Docker healthcheck。
+
+    返回结构(内网):
     {
       "status": "ok" | "degraded" | "down",
       "version": "v0.2.65",
@@ -293,6 +296,7 @@ async def health() -> dict[str, Any]:
       },
       "service": {"name": "SIDA", "python": "3.11.4", "platform": "linux"}
     }
+    外部来源: {"status": ..., "version": ...}
     """
 
     HEALTH_TIMEOUT = 5.0  # 防 thsdk 等外部故障拖垮 health 端点(Docker healthcheck 10s)
@@ -457,16 +461,27 @@ async def health() -> dict[str, Any]:
                 "platform": platform.platform(),
             },
         }
+
+    def _strip_external(payload: dict[str, Any]) -> dict[str, Any]:
+        # P1(audit-20260915): 外部匿名请求只回存活态, 不泄组件细节
+        return {
+            "status": payload.get("status", "down"),
+            "version": payload.get("version", "unknown"),
+        }
+
     try:
-        return await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT)
+        result = await asyncio.wait_for(_check(), timeout=HEALTH_TIMEOUT)
+        return result if _request_from_internal(request) else _strip_external(result)
     except asyncio.TimeoutError:
         logging.getLogger(__name__).warning(
             "health check 超时(>%.1fs), 触发节流返回 down 防止 healthcheck 进程堆积", HEALTH_TIMEOUT)
-        return {"status": "down", "version": "unknown",
-                "components": {"timeout": True},
-                "error": "health_check_timeout"}
+        payload = {"status": "down", "version": "unknown",
+                   "components": {"timeout": True},
+                   "error": "health_check_timeout"}
+        return payload if _request_from_internal(request) else _strip_external(payload)
     except Exception as e:
         logging.getLogger(__name__).exception("health check 异常: %s", e)
-        return {"status": "down", "version": "unknown",
-                "components": {"exception": True},
-                "error": str(e)[:120]}
+        payload = {"status": "down", "version": "unknown",
+                   "components": {"exception": True},
+                   "error": str(e)[:120]}
+        return payload if _request_from_internal(request) else _strip_external(payload)

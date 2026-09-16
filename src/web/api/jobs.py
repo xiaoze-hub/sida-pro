@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.core.jobs import jobs
+from src.web.api.auth import require_owner
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ def get_job(job_id: str) -> dict:
 
 
 @router.post("/{job_id}/cancel")
-def cancel_job(job_id: str) -> dict:
+def cancel_job(job_id: str, _owner=Depends(require_owner)) -> dict:
+    # P1(audit-20260915): 取消任务属写操作, 必须 owner 鉴权
     row = jobs.get(job_id)
     if not row:
         raise HTTPException(404, f"无此任务: {job_id}")

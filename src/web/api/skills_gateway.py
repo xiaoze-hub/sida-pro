@@ -20,11 +20,12 @@ import hashlib
 import logging
 import os
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -37,6 +38,26 @@ router = APIRouter(tags=["skill-gateway"])
 
 # 盐: 环境变量优先, 缺省用随机(每次进程重启会换, 只影响新 key 校验 — 生产必须设)
 _KEY_SALT = os.getenv("SKILL_KEY_SALT", "")
+
+# ── 注册防刷(P1, audit-20260915): IP 级限流, 每小时最多 5 次 ─────────
+_KEY_REG_MAX_PER_HOUR = 5
+_KEY_REG_WINDOW_SEC = 3600
+# {ip: [ts, ...]} 进程内滑动窗口; 单实例部署足够, 多实例需换 Redis
+_key_reg_hits: dict[str, list[float]] = {}
+_key_reg_lock = threading.Lock()
+
+
+def _check_key_register_rate(ip: str) -> None:
+    """超过每小时 5 次则 429。内存滑动窗口, 重启清零可接受。"""
+    now = time.monotonic()
+    with _key_reg_lock:
+        hits = [t for t in _key_reg_hits.get(ip, []) if now - t < _KEY_REG_WINDOW_SEC]
+        if len(hits) >= _KEY_REG_MAX_PER_HOUR:
+            _key_reg_hits[ip] = hits
+            retry_in = int(_KEY_REG_WINDOW_SEC - (now - hits[0])) + 1
+            raise HTTPException(429, f"注册过于频繁, 请 {retry_in} 秒后重试")
+        hits.append(now)
+        _key_reg_hits[ip] = hits
 
 # ── 开放白名单 ──────────────────────────────────────────────────────
 # Phase 1: 只开放行情/技术/资金/新闻类; 个人数据与 SSRF 面一律禁止
@@ -455,9 +476,15 @@ def _log_usage(db: Session, key_id: int, skill: str, code: int, duration_ms: int
 @router.post("/keys")
 def register_key(
     body: KeyRegisterRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """领取 AppKey。明文 key 只在本次响应返回一次, 服务端只存 hash。"""
+    """领取 AppKey。明文 key 只在本次响应返回一次, 服务端只存 hash。
+
+    P1(audit-20260915): 此前完全免鉴权易被刷号, 加 IP 级限流(每小时 5 次)。
+    """
+    ip = request.client.host if request.client else "unknown"
+    _check_key_register_rate(ip)
     raw = _gen_key()
     h = _hash_key(raw)
     tier = "trial" if body.trial else "free"
