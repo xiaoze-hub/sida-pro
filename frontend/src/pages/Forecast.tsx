@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { TrendingUp, LineChart, RefreshCw, Activity, Download, History, FileText, Send } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import SafeMarkdown from '@/components/SafeMarkdown'
 import { fetchAPI, getToken, stocksApi, type StockItem } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -897,7 +897,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
           <div className="border border-border/50 p-4">
             <div className="text-xs text-muted-foreground mb-2">精简版（Dashboard）</div>
             <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
-              <ReactMarkdown>{report.dashboard_md}</ReactMarkdown>
+              <SafeMarkdown>{report.dashboard_md}</SafeMarkdown>
             </div>
           </div>
           {/* Detail 完整版（可折叠） */}
@@ -905,7 +905,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
             <div className="rounded-md border border-border/50 p-4">
               <div className="text-xs text-muted-foreground mb-2">完整版（Detail）</div>
               <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
-                <ReactMarkdown>{report.detail_md}</ReactMarkdown>
+                <SafeMarkdown>{report.detail_md}</SafeMarkdown>
               </div>
             </div>
           )}
@@ -990,13 +990,13 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               </div>
               <div className="border border-border/50 p-4">
                 <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-table:my-2 prose-th:px-2 prose-th:py-1 prose-td:px-2 prose-td:py-1 prose-table:text-[12px] prose-strong:text-foreground">
-                  <ReactMarkdown>{backtestReport.dashboard_md}</ReactMarkdown>
+                  <SafeMarkdown>{backtestReport.dashboard_md}</SafeMarkdown>
                 </div>
               </div>
               <details className="rounded-md border border-border/50 p-4">
                 <summary className="cursor-pointer text-sm text-muted-foreground">查看完整版回测报告</summary>
                 <div className="mt-3 prose prose-sm dark:prose-invert max-w-none prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-table:text-[12px] prose-strong:text-foreground">
-                  <ReactMarkdown>{backtestReport.detail_md}</ReactMarkdown>
+                  <SafeMarkdown>{backtestReport.detail_md}</SafeMarkdown>
                 </div>
               </details>
             </div>

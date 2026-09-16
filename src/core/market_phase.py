@@ -142,7 +142,7 @@ class DailyMetrics:
     seal_rate: float | None = None   # 数据源不可得时 None
     sh_index_pct: float | None = None  # 上证当日涨跌幅, 由 API 层注入
 
-    def to_row_dict(self, d):
+    def to_row_dict(self, d) -> dict:
         """转 dict, 供 classify_phase_series 入参使用。"""
         return {
             "date": d,

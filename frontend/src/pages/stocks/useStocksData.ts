@@ -25,6 +25,7 @@ import { stocksApi } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import type { useStocksState } from './useStocksState'
+import { logger } from '@/lib/logger'
 
 export function useStocksData(state: ReturnType<typeof useStocksState>) {
   const {
@@ -183,7 +184,7 @@ const loadConfigAsync = useCallback(async () => {
     setServices(servicesData)
     setChannels(channelsData)
   } catch (e) {
-    console.warn('加载配置数据失败:', e)
+    logger.warn('加载配置数据失败:', e)
   }
 }, [setAgents, setChannels, setServices])
 
@@ -200,7 +201,7 @@ const load = useCallback(async () => {
     // 默认展开所有账户
     setExpandedAccounts(new Set(accountData.map((a: Account) => a.id)))
   } catch (e) {
-    console.error(e)
+    logger.error(e)
     setLoadError(e instanceof Error ? e.message : '加载失败')
   } finally {
     setLoading(false)  // 提前解除阻塞
@@ -214,7 +215,7 @@ const load = useCallback(async () => {
     const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
     setMarketStatus(marketStatusData)
   } catch (e) {
-    console.warn('获取市场状态失败:', e)
+    logger.warn('获取市场状态失败:', e)
   }
 }, [loadConfigAsync, setAccounts, setExpandedAccounts, setLoadError, setLoading, setMarketStatus, setStocks])
 
@@ -235,10 +236,10 @@ const loadPortfolio = useCallback(async () => {
       const marketStatusData = await fetchAPI<MarketStatus[]>('/stocks/markets/status')
       setMarketStatus(marketStatusData)
     } catch (e) {
-      console.warn('获取市场状态失败:', e)
+      logger.warn('获取市场状态失败:', e)
     }
   } catch (e) {
-    console.error(e)
+    logger.error(e)
     setLoadError(e instanceof Error ? e.message : '加载失败')
   } finally {
     setPortfolioLoading(false)
@@ -295,7 +296,7 @@ const refreshQuotes = useCallback(async () => {
     setQuotes(map)
     setLastRefreshTime(new Date())
   } catch (e) {
-    console.warn('刷新行情失败:', e)
+    logger.warn('刷新行情失败:', e)
   } finally {
     setQuotesLoading(false)
   }
@@ -373,7 +374,7 @@ const loadPoolSuggestions = useCallback(async () => {
     const data = await fetchAPI<Record<string, PoolSuggestion>>('/suggestions?include_expired=true')
     setPoolSuggestions(data)
   } catch (e) {
-    console.warn('加载建议池失败:', e)
+    logger.warn('加载建议池失败:', e)
   } finally {
     setPoolSuggestionsLoading(false)
   }
@@ -391,7 +392,7 @@ const loadPriceAlertSummaries = useCallback(async () => {
     }
     setPriceAlertSummaryMap(map)
   } catch (e) {
-    console.warn('加载提醒摘要失败:', e)
+    logger.warn('加载提醒摘要失败:', e)
   }
 }, [setPriceAlertSummaryMap])
 
@@ -408,7 +409,7 @@ const loadNews = useCallback(async (stockName?: string) => {
     const env = normalizeNewsEnvelope<NewsItem>(newsData)
     setNews(env.items)
   } catch (e) {
-    console.error('加载新闻失败:', e)
+    logger.error('加载新闻失败:', e)
   } finally {
     setNewsLoading(false)
   }
@@ -623,7 +624,7 @@ const scanAndReload = useCallback(async (analyze = false) => {
     await refreshKlines()
     setLastRefreshTime(new Date())
   } catch (e) {
-    console.error('扫描失败:', e)
+    logger.error('扫描失败:', e)
     toast(e instanceof Error ? e.message : '扫描失败', 'error')
   } finally {
     setScanning(false)

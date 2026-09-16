@@ -4,8 +4,7 @@ import { type ReportItem, type ReportListResponse, reportsApi } from '@panwatch/
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import SafeMarkdown from '@/components/SafeMarkdown'
 import ErrorBanner from '@/components/ErrorBanner'
 import { useApiQuery } from '@/hooks/useApiQuery'
 
@@ -211,7 +210,7 @@ export default function ReportsPage() {
               </div>
             ) : (
               <div className="report-content overflow-x-auto prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-h2:text-base prose-h3:text-sm prose-h3:mt-4 prose-h3:mb-2 prose-table:text-xs prose-th:bg-accent/30 prose-th:p-1.5 prose-td:p-1.5 prose-td:border-border prose-th:border-border prose-code:bg-accent/30 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected?.content || ''}</ReactMarkdown>
+                <SafeMarkdown>{selected?.content || ''}</SafeMarkdown>
               </div>
             )}
           </div>

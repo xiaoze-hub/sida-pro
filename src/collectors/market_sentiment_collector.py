@@ -29,7 +29,7 @@ _ZT_HEADERS = {
 }
 
 
-def _safe_float(v, default=0.0):
+def _safe_float(v, default: float = 0.0) -> float:
     """展示层安全转 float: 缺失/非法回退 default(历史口径 0.0)。委托 numutil。"""
     return _num_safe_float(v, default)
 
@@ -37,7 +37,7 @@ def _safe_float(v, default=0.0):
 class MarketSentimentCollector:
     """市场情绪采集器:涨停池 / 涨跌家数 / 连板梯队。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cache: dict | None = None
         self._cache_ts: float = 0.0
         self._cache_ttl = 300  # 5 分钟缓存
@@ -69,7 +69,7 @@ class MarketSentimentCollector:
             name = str(item.get("name") or "").strip()
             if not code:
                 continue
-            def _f(v):
+            def _f(v) -> float:
                 try:
                     return float(v) if v is not None else 0.0
                 except (TypeError, ValueError):

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import SafeMarkdown from '@/components/SafeMarkdown'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
 import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import {
@@ -1047,7 +1046,7 @@ export default function DashboardPage() {
               </button>
               {aiReview?.content && (
                 <div className="prose prose-sm dark:prose-invert mt-1 max-w-none break-words text-[12px] [&_p]:my-1 [&_ul]:my-1">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiReview.content}</ReactMarkdown>
+                  <SafeMarkdown>{aiReview.content}</SafeMarkdown>
                 </div>
               )}
             </div>

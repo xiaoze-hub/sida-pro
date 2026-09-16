@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageCircle, X, Plus, Trash2, Send, ChevronLeft, XCircle, Settings2, Check, GripHorizontal, Newspaper, Paperclip, Loader2 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import SafeMarkdown from '@/components/SafeMarkdown'
 import { chatApi, fetchAPI, type ChatConversation, type ChatMessage } from '@panwatch/api'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { parseServerTime } from '@/lib/utils'
@@ -801,8 +800,7 @@ export default function ChatWidget() {
                 >
                   {msg.role === 'assistant' ? (
                     <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-[15px] [&_h2]:text-[14px] [&_h3]:text-[13px] [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:text-[11px] [&_code]:break-words">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
+                      <SafeMarkdown
                         components={{
                           table: ({ children }) => (
                             <div className="my-2 max-w-full overflow-x-auto rounded-lg border border-border/60">
@@ -819,15 +817,10 @@ export default function ChatWidget() {
                               {children}
                             </td>
                           ),
-                          a: ({ children, href }) => (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className="break-all text-primary underline underline-offset-2">
-                              {children}
-                            </a>
-                          ),
                         }}
                       >
                         {msg.content}
-                      </ReactMarkdown>
+                      </SafeMarkdown>
                     </div>
                   ) : (
                     msg.content

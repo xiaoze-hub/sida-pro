@@ -17,7 +17,7 @@ from src.core.paper_trading_notifier import (
     _format_daily_summary,
     _strategy_label,
 )
-from src.core.stock_link import stock_url
+from src.core.stock_link import stock_link_markdown
 
 
 def _make_signal(**kwargs):
@@ -309,23 +309,23 @@ class TestHelpers(unittest.TestCase):
 
     def test_stock_url_cn(self):
         """股票链接 — 深圳股票"""
-        url = stock_url("002837", "CN", platform="xueqiu")
-        self.assertIn("xueqiu.com/S/SZ002837", url)
+        md = stock_link_markdown("002837", "CN", platform="xueqiu")
+        self.assertIn("xueqiu.com/S/SZ002837", md)
 
     def test_stock_url_cn_sh(self):
         """股票链接 — 上海股票"""
-        url = stock_url("600519", "CN", platform="xueqiu")
-        self.assertIn("xueqiu.com/S/SH600519", url)
+        md = stock_link_markdown("600519", "CN", platform="xueqiu")
+        self.assertIn("xueqiu.com/S/SH600519", md)
 
     def test_stock_url_us(self):
         """股票链接 — 美股"""
-        url = stock_url("AAPL", "US", platform="xueqiu")
-        self.assertEqual(url, "https://xueqiu.com/S/AAPL")
+        md = stock_link_markdown("AAPL", "US", platform="xueqiu")
+        self.assertIn("https://xueqiu.com/S/AAPL", md)
 
     def test_stock_url_hk(self):
         """股票链接 — 港股"""
-        url = stock_url("00883", "HK", platform="xueqiu")
-        self.assertEqual(url, "https://xueqiu.com/S/00883")
+        md = stock_link_markdown("00883", "HK", platform="xueqiu")
+        self.assertIn("https://xueqiu.com/S/00883", md)
 
 
 if __name__ == "__main__":

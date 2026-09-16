@@ -17,8 +17,12 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# A股业务日统一用上海时区(UTC 宿主 astimezone() 跟随主机时区, 跨日会错位)
+_CST = ZoneInfo("Asia/Shanghai")
 
 RECON_DAYS = 20  # 每股抽最近 20 根不复权日K
 _FALLBACK_POOL = [
@@ -109,7 +113,7 @@ def run_unit_reconciliation(sample_n: int = 20) -> dict[str, Any]:
                 max_dev_at = {"symbol": symbol, "date": p[0], "dev_pct": round(dev, 4)}
 
     report = {
-        "date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d"),
+        "date": datetime.now(_CST).strftime("%Y-%m-%d"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "sample_pool": [s for s, _ in pool],
         "sample_n": len(pool),

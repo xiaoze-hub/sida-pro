@@ -242,7 +242,7 @@ def is_core(*, score: float, confidence: int, recent_scores: list, recent_sealed
 
 def rank_items(items: list[dict]) -> list[dict]:
     """排序: 情绪分 → 近3日均分 → 置信度 → 当日封住家数 → 板块代码(稳定序)。"""
-    def key(it: dict):
+    def key(it: dict) -> tuple[float, float, int, int, str]:
         return (
             -float(it.get("score") or 0.0),
             -float(it.get("score3_avg") or 0.0),
@@ -344,7 +344,8 @@ KLINE_WINDOW = 60          # 取数窗口(交易日), 提供 60 日自身分位
 _CHUNK = 100               # TDX get_market_data 单次代码上限
 
 
-def _f(v):
+def _f(v) -> float | None:
+    """安全转 float; 缺失/非法返回 None。"""
     try:
         return float(v)
     except (TypeError, ValueError):

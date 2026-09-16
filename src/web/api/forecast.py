@@ -98,11 +98,21 @@ def _forecast_llm_payload(db: Session) -> dict:
 
     8010 不再回调 8000 取配置(原 forecast_sentiment 经 /api/providers/services
     拉默认模型已删), 依赖单向: 8000 编排方 → 8010 被调用方。
+
+    P2(audit-20260915): api_key 仅随请求体发给内网引擎, **绝不写入日志**。
     """
     keys = ("forecast_llm_base_url", "forecast_llm_model", "forecast_llm_api_key")
     rows = db.query(AppSettings).filter(AppSettings.key.in_(keys)).all()
     merged = {r.key.removeprefix("forecast_llm_"): (r.value or "") for r in rows}
     return {k: merged.get(k, "") for k in ("base_url", "model", "api_key")}
+
+
+def _mask_llm_config(cfg: dict) -> dict:
+    """P2(audit-20260915): 日志用掩码副本 —— api_key 绝不落日志。"""
+    masked = dict(cfg or {})
+    if masked.get("api_key"):
+        masked["api_key"] = "***"
+    return masked
 
 
 @router.get("/forecast/predict")

@@ -36,8 +36,15 @@ from src.web.models import SkillApiKey, SkillUsage
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["skill-gateway"])
 
-# 盐: 环境变量优先, 缺省用随机(每次进程重启会换, 只影响新 key 校验 — 生产必须设)
+# 盐: 环境变量优先; 未配置时生成随机盐(仅本进程有效)并告警。
+# P2(audit-20260915): 禁止回落硬编码常量 —— 硬编码盐等于 key_hash 可被离线彩虹表碰撞。
 _KEY_SALT = os.getenv("SKILL_KEY_SALT", "")
+if not _KEY_SALT:
+    _KEY_SALT = secrets.token_hex(16)
+    logger.warning(
+        "SKILL_KEY_SALT 未配置, 已生成随机盐(仅本进程有效)。"
+        "生产环境必须设置 SKILL_KEY_SALT, 否则进程重启后已签发 key 校验会失效。"
+    )
 
 # ── 注册防刷(P1, audit-20260915): IP 级限流, 每小时最多 5 次 ─────────
 _KEY_REG_MAX_PER_HOUR = 5
@@ -169,8 +176,8 @@ def _detect_spike_and_freeze(db: Session, row: SkillApiKey) -> None:
 # ── Key 工具 ────────────────────────────────────────────────────────
 
 def _hash_key(raw_key: str) -> str:
-    salt = _KEY_SALT or "sida-skill-gw"
-    return hashlib.sha256(f"{salt}:{raw_key}".encode("utf-8")).hexdigest()
+    # P2(audit-20260915): _KEY_SALT 已保证非空(无 env 时随机生成), 不再回落硬编码
+    return hashlib.sha256(f"{_KEY_SALT}:{raw_key}".encode("utf-8")).hexdigest()
 
 
 def _gen_key() -> str:

@@ -131,6 +131,13 @@ MARKET_SCAN_TARGET_MARKETS: tuple[str, ...] = ("CN",)
 # 无明确信号的占位文案: 入库时直接过滤, 不占候选池位。
 NO_SIGNAL_MARKERS: frozenset[str] = frozenset({"", "暂无明确信号", "无明确信号"})
 
+# _plan_quality 评分权重(audit P2 2026-09-15): 四项关键字段合计 100 分
+# 依据: 入场/止损/目标价为可执行三要素, 各 30 分; 失效条件为文本辅助, 10 分
+WEIGHT_ENTRY = 30          # 入场区间(entry_low/entry_high)
+WEIGHT_STOP = 30           # 止损位
+WEIGHT_TARGET = 30         # 目标价
+WEIGHT_INVALIDATION = 10   # 失效条件(文本)
+
 
 def _has_real_signal(signal: str | None) -> bool:
     """判断是否携带明确信号(排除空串与"暂无明确信号"占位)。"""
@@ -584,13 +591,13 @@ def _plan_quality(plan: dict | None) -> int:
     p = plan if isinstance(plan, dict) else {}
     score = 0
     if _safe_float(p.get("entry_low")) is not None or _safe_float(p.get("entry_high")) is not None:
-        score += 30
+        score += WEIGHT_ENTRY
     if _safe_float(p.get("stop_loss")) is not None:
-        score += 30
+        score += WEIGHT_STOP
     if _safe_float(p.get("target_price")) is not None:
-        score += 30
+        score += WEIGHT_TARGET
     if str(p.get("invalidation") or "").strip():
-        score += 10
+        score += WEIGHT_INVALIDATION
     return int(_clamp(float(score), 0, 100))
 
 

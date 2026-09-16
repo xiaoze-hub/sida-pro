@@ -173,16 +173,13 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking')
   const location = useLocation()
 
+  // P2 修复(2026-09-15): 原先仅 mount 时校验一次, 会话过期后路由切换不再复检。
+  // 改为挂载 + 每次路由变化(location.key)都重新 isAuthenticated()
+  // (内部识别 token_expires 过期并触发 logout)。
+  // 401 统一登出已由 packages/api fetchAPI 在 res.status===401 时调用 logout()。
   useEffect(() => {
-    // 检查本地 token
-    if (isAuthenticated()) {
-      setAuthState('authenticated')
-      return
-    }
-
-    // 没有 token，需要去登录页（设置密码或登录）
-    setAuthState('unauthenticated')
-  }, [])
+    setAuthState(isAuthenticated() ? 'authenticated' : 'unauthenticated')
+  }, [location.key])
 
   if (authState === 'checking') {
     return (

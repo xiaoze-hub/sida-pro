@@ -138,8 +138,17 @@ class AIClient:
             "base_url": base_url,
             "api_key": api_key,
         }
-        if proxy:
-            kwargs["http_client"] = None  # TODO: 如需代理，用 httpx 配置
+        # 代理支持(audit P2 2026-09-15): 显式 proxy 优先, 否则读环境变量
+        # HTTP_PROXY / HTTPS_PROXY。httpx.AsyncClient 接受 proxy=URL 字符串。
+        _proxy = (proxy or "").strip() or (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("http_proxy")
+            or ""
+        ).strip()
+        if _proxy:
+            kwargs["http_client"] = httpx.AsyncClient(proxy=_proxy)
         # v0.4.9: 关闭 SDK 自动重试 — 429 时由上层限速/冷却控制, 避免 retry 放大风暴
         kwargs.setdefault("max_retries", 0)
         # 0.3(2026-09-08): 显式超时, 杜绝走 SDK 默认(~600s)把 agent 卡死十分钟。

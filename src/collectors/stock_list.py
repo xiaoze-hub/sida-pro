@@ -73,7 +73,7 @@ def _load_cache() -> list[dict] | None:
     return None
 
 
-def _save_cache(stocks: list[dict]):
+def _save_cache(stocks: list[dict]) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump({"ts": time.time(), "stocks": stocks}, f, ensure_ascii=False)

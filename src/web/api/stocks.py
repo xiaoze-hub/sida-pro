@@ -202,8 +202,14 @@ def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Sessio
 
 
 @router.get("/{symbol}/blocks")
-def get_stock_blocks(symbol: str, user=Depends(get_current_user)):
-    """个股→所属板块反查(P1, get_relation): [{code,name,type}]; 源不可用 → 空列表+note(不编)。"""
+def get_stock_blocks(symbol: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """个股→所属板块反查(P1, get_relation): [{code,name,type}]; 源不可用 → 空列表+note(不编)。
+
+    权限(P2, audit-20260915): view_quotes — 与行情接口一致(板块归属属行情面数据)。
+    """
+    from src.core.permissions import PERM_VIEW_QUOTE, enforce_perm
+
+    enforce_perm(user, PERM_VIEW_QUOTE, db)
     from src.core.tdx_boards import stock_blocks
 
     blocks = stock_blocks(symbol)
