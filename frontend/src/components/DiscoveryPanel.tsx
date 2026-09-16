@@ -42,6 +42,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
     boards: Record<string, { ts: number; data: HotBoardItem[] }>
     stocks: Record<string, { ts: number; data: HotStockItem[] }>
   }>({ boards: {}, stocks: {} })
+  // P2(audit-20260915): 请求序号, 防止过期响应覆盖新结果(替代原先无清理的 setTimeout)
+  const discoverSeqRef = useRef(0)
 
   useEffect(() => {
     dashboardApi.watchlist().then(setWatchlist).catch(() => {})
@@ -68,6 +70,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
   }, [portfolioRaw])
 
   const loadDiscovery = async (which?: 'boards' | 'stocks', opts?: { silent?: boolean; force?: boolean }) => {
+    const seq = ++discoverSeqRef.current  // P2: 序号自增, 过期响应丢弃
     const tab = which || discoverTab
     const silent = !!opts?.silent
     const force = !!opts?.force
@@ -87,6 +90,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
     try {
       if (tab === 'boards') {
         const items = (await discoveryApi.listHotBoards({ market: discoverMarket, mode: boardsMode, limit: 12 })) || []
+        if (seq !== discoverSeqRef.current) return  // P2: 已有更新的请求, 丢弃本次结果
         setHotBoards(items)
         discoveryCacheRef.current.boards[cacheKey] = { ts: now, data: items }
       } else if (stocksMode === 'for_you') {
@@ -94,6 +98,7 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
           discoveryApi.listHotStocks({ market: discoverMarket, mode: 'turnover', limit: 20 }),
           discoveryApi.listHotStocks({ market: discoverMarket, mode: 'gainers', limit: 20 }),
         ])
+        if (seq !== discoverSeqRef.current) return
         const map = new Map<string, HotStockItem>()
         for (const item of [...(turnoverItems || []), ...(gainerItems || [])]) map.set(item.symbol, item)
         const items = Array.from(map.values())
@@ -101,17 +106,19 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
         discoveryCacheRef.current.stocks[cacheKey] = { ts: now, data: items }
       } else {
         const items = (await discoveryApi.listHotStocks({ market: discoverMarket, mode: stocksMode, limit: 20 })) || []
+        if (seq !== discoverSeqRef.current) return
         setHotStocks(items)
         discoveryCacheRef.current.stocks[cacheKey] = { ts: now, data: items }
       }
     } catch (e) {
+      if (seq !== discoverSeqRef.current) return  // P2: 过期请求的错误也不覆盖
       if (!silent) {
         setDiscoverError(e instanceof Error ? e.message : '加载失败')
         if (tab === 'boards') setHotBoards([])
         else setHotStocks([])
       }
     } finally {
-      if (!silent) setDiscoverLoading(false)
+      if (seq === discoverSeqRef.current && !silent) setDiscoverLoading(false)
     }
   }
 
@@ -235,7 +242,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
             </button>
             <div className="ml-auto flex items-center gap-2">
               {discoverTab === 'boards' ? (
-                <Select value={boardsMode} onValueChange={(v) => { setBoardsMode(v as 'gainers' | 'turnover'); setTimeout(() => loadDiscovery('boards'), 0) }}>
+                /* P2(audit-20260915): 去掉 setTimeout —— 依赖下方 useEffect([boardsMode]) 触发刷新 */
+                <Select value={boardsMode} onValueChange={(v) => setBoardsMode(v as 'gainers' | 'turnover')}>
                   <SelectTrigger className="h-7 w-[110px] text-[12px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -245,7 +253,8 @@ export default function DiscoveryPanel({ monitorStocks, onOpenStock }: Props) {
                   </SelectContent>
                 </Select>
               ) : (
-                <Select value={stocksMode} onValueChange={(v) => { setStocksMode(v as 'turnover' | 'gainers' | 'for_you'); setTimeout(() => loadDiscovery('stocks'), 0) }}>
+                /* P2(audit-20260915): 同上, 去掉 setTimeout */
+                <Select value={stocksMode} onValueChange={(v) => setStocksMode(v as 'turnover' | 'gainers' | 'for_you')}>
                   <SelectTrigger className="h-7 w-[110px] text-[12px]">
                     <SelectValue />
                   </SelectTrigger>

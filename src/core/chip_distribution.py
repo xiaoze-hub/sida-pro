@@ -28,18 +28,31 @@ _NEAR_CHIPS_DISK = None
 
 
 def _chips_persist(load_only: bool = False):
-    """筹码快照写盘(惰性初始化)。load_only=True 只加载不写盘。"""
+    """筹码快照写盘(惰性初始化)。load_only=True 只加载不写盘。
+
+    audit P2 2026-09-15: disk key 加交易日(all:YYYY-MM-DD), 对齐 dark_flow
+    的按日分 key 做法, 避免跨日读到昨日快照。
+    """
     global _NEAR_CHIPS_DISK
     try:
         if _NEAR_CHIPS_DISK is None:
             from src.core.disk_cache import DiskCache, register
+            from src.core.trading_calendar import cache_day
             _NEAR_CHIPS_DISK = DiskCache("near_term_chips", ttl=86400.0, flush_interval=120.0)
-            snap = _NEAR_CHIPS_DISK.get("all")
+            key = f"all:{cache_day()}"
+            snap = _NEAR_CHIPS_DISK.get(key)
             if isinstance(snap, dict) and snap:
                 _NEAR_CHIPS_CACHE.update(snap)
+            else:
+                # 脏 key 迁移: 删掉无日期旧 key, 避免未来某天被误读(对齐 dark_flow P0-1)
+                try:
+                    _NEAR_CHIPS_DISK.delete("all")
+                except Exception:  # noqa: BLE001
+                    pass
             register(_NEAR_CHIPS_DISK)
         if not load_only:
-            _NEAR_CHIPS_DISK.set("all", dict(_NEAR_CHIPS_CACHE))
+            from src.core.trading_calendar import cache_day
+            _NEAR_CHIPS_DISK.set(f"all:{cache_day()}", dict(_NEAR_CHIPS_CACHE))
     except Exception:
         pass
 

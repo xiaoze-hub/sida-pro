@@ -44,11 +44,14 @@ RATE_LIMIT_WINDOW = 60  # 60 秒滑动窗口
 RATE_LIMIT_BURST = _env_int("RATE_LIMIT_BURST", 10)  # 突发容忍 10 个
 # 敏感端点单独严格档(防爆破/防滥用): 登录/改密等写操作
 RATE_LIMIT_SENSITIVE = _env_int("RATE_LIMIT_SENSITIVE", 20)  # 20 req / min
+# P2(audit-20260915): webhook 免登录仅靠共享 secret, 单独更严限流(10/min)
+RATE_LIMIT_WEBHOOK = _env_int("RATE_LIMIT_WEBHOOK", 10)  # 10 req / min
 _SENSITIVE_PATHS = (
     "/api/auth/login",
     "/api/auth/change-password",
     "/api/auth/reset-password",
 )
+_WEBHOOK_PATHS = ("/api/webhooks/",)
 
 # 例外路径 (跳过限流和日志)
 # v0.4.9: 加 /api/quotes/ws — WebSocket 行情轮询被自家限流挡(429), 前端反复重连风暴
@@ -164,8 +167,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # 2026-08-21 分级限流: 敏感端点(login等)> 写操作 > GET
+        # P2(audit-20260915): /api/webhooks/* 免登录, 独立更严限流(10/min)
         method = request.method
-        if path.startswith(_SENSITIVE_PATHS):
+        if path.startswith(_WEBHOOK_PATHS):
+            limit = RATE_LIMIT_WEBHOOK  # 10/min — 无登录态, 防 secret 爆破/滥用
+        elif path.startswith(_SENSITIVE_PATHS):
             limit = RATE_LIMIT_SENSITIVE  # 登录/改密防爆破: 20/min
         elif method == "GET":
             limit = _env_int("RATE_LIMIT_GET", RATE_LIMIT_DEFAULT)  # 300 / min

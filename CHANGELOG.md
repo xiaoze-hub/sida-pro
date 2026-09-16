@@ -7,6 +7,39 @@
 
 ## 2026-09-15
 
+### fix(audit-p2): P2 批量修复(27项: 魔法数字/TODO/sanitize/类型注解/杂项)
+
+**性质**: P2 批量修复。**需重启后端**。
+
+**魔法数字(3项)**:
+- strategy_engine: catalyst阈值/RS权重/群众阈值/排名常量提取为命名常量
+- entry_candidates: _plan_quality 权重提取(WEIGHT_ENTRY/STOP/TARGET/INVALIDATION)
+- dark_flow: 主力阈值/数据异常比率/区域常量提取
+
+**TODO处理(2项)**:
+- ai_client: 实现代理支持(HTTPS_PROXY/HTTP_PROXY 环境变量)
+- backtest/engine: 涨跌停限制从 TODO 改为结构化「已知限制」文档
+
+**前端(9项)**:
+- 新建 SafeMarkdown 组件(urlTransform + 外链 noopener)
+- 6 处 ReactMarkdown 替换为 SafeMarkdown
+- 新建 logger 工具(生产剥离 payload), 9 处 console 替换
+- RequireAuth 路由变化时复检 token
+
+**杂项(10项)**:
+- stock_link 删除死函数(get_platform/stock_url)
+- chip_distribution 缓存 key 加交易日维度
+- unit_recon 时区固定 Asia/Shanghai
+- profile/settings 头像路径 basename 净化
+- skills_gateway 硬编码盐改为随机生成
+- tradingview_webhook 独立限流(10/min)
+- stocks blocks 加 view_quotes 权限
+- DiscoveryPanel setTimeout 改请求序号
+- dark_flow_fusion docstring 修正
+- 类型注解补齐(market_phase/theme_mood/collectors)
+
+**测试**: 75/75 关键测试通过; 前端 tsc 通过
+
 ### fix(audit-p1): P1 批量修复(44项: 安全/口径/错误处理/性能/前端/代码质量)
 
 **性质**: P1 批量修复。**需重启后端**。

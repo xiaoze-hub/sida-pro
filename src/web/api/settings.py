@@ -142,6 +142,15 @@ def _avatar_dir() -> str:
     return d
 
 
+def _safe_avatar_fname(fname: str) -> str:
+    """P2(audit-20260915): DB 中的头像文件名须经 basename 净化, 防路径穿越。"""
+    safe = os.path.basename(fname)
+    if not safe or safe != fname or "/" in fname or "\\" in fname:
+        logger.warning("头像文件名非法, 忽略: %r", fname)
+        return ""
+    return safe
+
+
 @router.get("/avatar")
 def get_avatar(db: Session = Depends(get_db)):
     """读取用户头像:DB 存文件名,图片本体在 data/avatars/,读取后以 data URL 返回。
@@ -149,7 +158,7 @@ def get_avatar(db: Session = Depends(get_db)):
     GET /avatar 无同名 GET /{key},不存在路由抢匹配问题。
     """
     row = db.query(AppSettings).filter(AppSettings.key == AVATAR_KEY).first()
-    fname = (row.value if row and row.value else "").strip()
+    fname = _safe_avatar_fname((row.value if row and row.value else "").strip())
     if not fname:
         return {"value": ""}
     path = os.path.join(_avatar_dir(), fname)
@@ -171,7 +180,8 @@ def set_avatar(update: SettingUpdate, db: Session = Depends(get_db)):
     需在 /{key} 之前注册以优先匹配。传空字符串即清空(删文件 + 清记录)。
     """
     row = db.query(AppSettings).filter(AppSettings.key == AVATAR_KEY).first()
-    old = (row.value if row else "") or ""
+    # P2(audit-20260915): old 来自 DB, 删除前须 basename 净化
+    old = _safe_avatar_fname((row.value if row else "") or "")
     value = (update.value or "").strip()
 
     if not value:

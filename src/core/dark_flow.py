@@ -33,6 +33,18 @@ _HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
 BIG_AMOUNT = 100e4   # 100万元
 BIG_VOLUME = 1000    # 1000手
 
+# 主力/散户分界(腾讯官方口径, audit P2 2026-09-15): 成交金额≥20万 或 股数≥6万股(600手)
+MAIN_AMOUNT = 20e4   # 主力成交额阈值: 20万元
+MAIN_VOLUME = 600    # 主力成交量阈值: 600手(6万股)
+
+# 数据异常守卫: 主力成交额(买+卖)超全日总成交额此倍数 → 数据可疑(缓存重复计数等)
+DATA_SUSPECT_RATIO = 1.30
+
+# 价位级承接分析阈值(audit P2 2026-09-15)
+ZONE_MIN_TURNOVER = 1000e4  # 只留 1000万以上成交的价位
+ZONE_BIG_NET_TH = 800e4     # 价位级大单净额阈值: ±800万
+ZONE_SMALL_NET_TH = 300e4   # 价位级中小单净额阈值: ±300万
+
 # ── 主力意图增强算法阈值(2026-08-14, 全部为经验值, 可调)──────────────────
 # 三个纯函数: _detect_big_mid_divergence / _detect_price_divergence / _detect_rhythm。
 # 单位: 金额阈值一律为"元", 百分比阈值为"涨跌幅%"。调参只改这里, 函数内不写死。
@@ -1143,13 +1155,13 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
     # 主力 = 成交金额≥20万 或 股数≥6万股(600手); 超大单≥100万; 大单=主力-超大单
     # ⚠️ 必须剔除竞价单(9:25-9:30 撮合非主动买卖), 否则主力净额被竞价B污染
     non_auction = [t for t in ticks if t["t"] >= "09:30"]
-    main_buy_amt = sum(t["amt"] for t in non_auction if (t["amt"] >= 20e4 or t["vol"] >= 600) and t["d"] == "B")
-    main_sell_amt = sum(t["amt"] for t in non_auction if (t["amt"] >= 20e4 or t["vol"] >= 600) and t["d"] == "S")
+    main_buy_amt = sum(t["amt"] for t in non_auction if (t["amt"] >= MAIN_AMOUNT or t["vol"] >= MAIN_VOLUME) and t["d"] == "B")
+    main_sell_amt = sum(t["amt"] for t in non_auction if (t["amt"] >= MAIN_AMOUNT or t["vol"] >= MAIN_VOLUME) and t["d"] == "S")
     main_net = main_buy_amt - main_sell_amt           # 主力净额(≥20万, 剔除竞价)
     big_net = big_buy_amt - big_sell_amt               # 超大单净额(≥100万, 已剔除竞价)
     mid_net = main_net - big_net                        # 大单净额(20万-100万)
-    retail_buy_amt = sum(t["amt"] for t in non_auction if not (t["amt"] >= 20e4 or t["vol"] >= 600) and t["d"] == "B")
-    retail_sell_amt = sum(t["amt"] for t in non_auction if not (t["amt"] >= 20e4 or t["vol"] >= 600) and t["d"] == "S")
+    retail_buy_amt = sum(t["amt"] for t in non_auction if not (t["amt"] >= MAIN_AMOUNT or t["vol"] >= MAIN_VOLUME) and t["d"] == "B")
+    retail_sell_amt = sum(t["amt"] for t in non_auction if not (t["amt"] >= MAIN_AMOUNT or t["vol"] >= MAIN_VOLUME) and t["d"] == "S")
     retail_net = retail_buy_amt - retail_sell_amt      # 散户净额(<20万, 剔除竞价)
     main_intensity = (main_buy_amt + main_sell_amt) / (buy_amt + sell_amt) * 100 if (buy_amt + sell_amt) else None  # 主力参与度%
     main_buy_ratio = main_buy_amt / (main_buy_amt + main_sell_amt) * 100 if (main_buy_amt + main_sell_amt) else None  # 主力买占主力成交%
@@ -1161,7 +1173,7 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
     _quote_turnover = _num((quote_dict or {}).get("turnover")) or 0.0
     data_suspect = bool(
         _quote_turnover > 0
-        and (main_buy_amt + main_sell_amt) > _quote_turnover * 1.30
+        and (main_buy_amt + main_sell_amt) > _quote_turnover * DATA_SUSPECT_RATIO
     )
 
     result = {
@@ -1315,13 +1327,13 @@ def compute_dark_flow(symbol: Symbol) -> dict | None:
         absorb_zones, distribute_zones = [], []
         for p, d in by_price.items():
             total = d["big_buy"] + d["big_sell"] + d["small_buy"] + d["small_sell"]
-            if total < 1000e4:  # 只留 1000万以上成交的价位
+            if total < ZONE_MIN_TURNOVER:  # 只留 1000万以上成交的价位
                 continue
             big_net = d["big_buy"] - d["big_sell"]
             small_net = d["small_buy"] - d["small_sell"]
-            if big_net > 800e4 and small_net < -300e4:
+            if big_net > ZONE_BIG_NET_TH and small_net < -ZONE_SMALL_NET_TH:
                 absorb_zones.append({"price": p, "big_net": round(big_net), "small_net": round(small_net)})
-            elif big_net < -800e4 and small_net > 300e4:
+            elif big_net < -ZONE_BIG_NET_TH and small_net > ZONE_SMALL_NET_TH:
                 distribute_zones.append({"price": p, "big_net": round(big_net), "small_net": round(small_net)})
         result["absorb_zones"] = sorted(absorb_zones, key=lambda x: -x["big_net"])[:6]
         result["distribute_zones"] = sorted(distribute_zones, key=lambda x: x["big_net"])[:6]

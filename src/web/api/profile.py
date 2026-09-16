@@ -50,8 +50,13 @@ def _avatar_dir() -> str:
 def _remove_avatar_file(fname: str | None) -> None:
     if not fname:
         return
+    # P2(audit-20260915): DB 中的 fname 须经 basename 白名单, 防路径穿越删除任意文件
+    safe = os.path.basename(fname)
+    if not safe or safe != fname or "/" in fname or "\\" in fname:
+        logger.warning("头像文件名非法, 跳过删除: %r", fname)
+        return
     try:
-        os.remove(os.path.join(_avatar_dir(), fname))
+        os.remove(os.path.join(_avatar_dir(), safe))
     except OSError:
         pass
 
@@ -60,7 +65,12 @@ def _read_avatar_data_url(fname: str | None) -> str:
     """从文件名读回 data URL; 无头像/文件丢失返回空串。"""
     if not fname:
         return ""
-    path = os.path.join(_avatar_dir(), fname)
+    # P2(audit-20260915): 读路径同样做 basename 净化, 防路径穿越读任意文件
+    safe = os.path.basename(fname)
+    if not safe or safe != fname or "/" in fname or "\\" in fname:
+        logger.warning("头像文件名非法, 跳过读取: %r", fname)
+        return ""
+    path = os.path.join(_avatar_dir(), safe)
     if not os.path.isfile(path):
         return ""
     try:
@@ -68,7 +78,7 @@ def _read_avatar_data_url(fname: str | None) -> str:
             raw = f.read()
     except OSError:
         return ""
-    mime = "image/png" if fname.lower().endswith(".png") else "image/jpeg"
+    mime = "image/png" if safe.lower().endswith(".png") else "image/jpeg"
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 

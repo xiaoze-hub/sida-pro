@@ -14,8 +14,7 @@ import {
   Send,
   Trash2,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import SafeMarkdown from '@/components/SafeMarkdown'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import SkeletonRows from '@/components/SkeletonRows'
@@ -128,13 +127,11 @@ function normalizeInternalLink(link: string): string {
 function MarkdownBlock({ content }: { content: string }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border/40 bg-background/40 p-4 text-[13px] leading-6 text-foreground">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <SafeMarkdown
         components={{
           table: ({ children }) => <table className="my-3 min-w-full border-collapse text-[12px]">{children}</table>,
           th: ({ children }) => <th className="border border-border/50 bg-accent/50 px-3 py-2 text-left font-medium">{children}</th>,
           td: ({ children }) => <td className="border border-border/50 px-3 py-2 align-top">{children}</td>,
-          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">{children}</a>,
           code: ({ children }) => <code className="rounded bg-accent/70 px-1 py-0.5 text-[12px]">{children}</code>,
           ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
@@ -142,7 +139,7 @@ function MarkdownBlock({ content }: { content: string }) {
         }}
       >
         {content}
-      </ReactMarkdown>
+      </SafeMarkdown>
     </div>
   )
 }

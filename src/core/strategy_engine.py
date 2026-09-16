@@ -270,6 +270,24 @@ SCORE_LOW_PLAN_TH = 90
 SCORE_CAP_INACTIVE = 69.0
 SCORE_CAP_HOLD, SCORE_CAP_WATCH = 78.0, 65.0
 SCORE_CAP_NO_ENTRY = 66.0
+# catalyst 涨跌幅分段阈值(audit P2 2026-09-15): 与 CAT_QUIET_RALLY/CAT_FROTHY_RALLY/
+# CAT_SHARP_DROP 配套使用, 单位为涨跌幅百分比
+CAT_QUIET_RALLY_LO, CAT_QUIET_RALLY_HI = 1.0, 7.0  # 温和上涨区间 [1%, 7%]
+CAT_FROTHY_RALLY_TH = 9.0                          # 过热上涨下限 >9%
+CAT_SHARP_DROP_TH = -4.0                           # 急跌上限 <-4%
+# 横截面相对强度权重(audit P2 2026-09-15): 四分位加权合成 relative_strength_pct
+# score 为主锚, 涨跌幅/成交额/量比为辅; 合计 1.0
+RS_W_SCORE, RS_W_CHANGE, RS_W_TURNOVER, RS_W_VOL = 0.45, 0.25, 0.20, 0.10
+# 横截面拥挤惩罚(audit P2 2026-09-15): RS 极高/成交额+涨幅双热 → 加拥挤分
+CROWD_XS_RS_STRONG_TH, CROWD_XS_RS_STRONG_PEN = 92, 2.5   # RS ≥92 分位
+CROWD_XS_RS_ELEVATED_TH, CROWD_XS_RS_ELEVATED_PEN = 85, 1.5  # RS ≥85 分位
+CROWD_XS_HOT_TURNOVER_TH, CROWD_XS_HOT_CHANGE_TH = 95.0, 92.0  # 成交额+涨幅双热
+CROWD_XS_HOT_PEN = 1.5
+# rank_score 加减分(audit P2 2026-09-15): _compute_rank_score 内裸数字
+RANK_QUALITY_CAP, RANK_QUALITY_DIV = 12.0, 12.0  # plan_quality/12 封顶 12 分
+RANK_SRC_MARKET_SCAN, RANK_SRC_MIXED = 2.0, 1.2  # 来源加分
+RANK_STATUS_INACTIVE_PEN = -14.0                 # 非 active 状态重罚
+RANK_RISK_HIGH_PEN = -1.0                        # 高风险轻罚
 
 
 # P1(audit-20260915): 统一到 src/core/numutil, 保留原私有名以免改动全部调用点
@@ -352,14 +370,14 @@ def _compute_rank_score(
     risk_level: str,
 ) -> float:
     base = float(row.score or 0.0)
-    quality_bonus = min(12.0, max(0.0, float(row.plan_quality or 0) / 12.0))
+    quality_bonus = min(RANK_QUALITY_CAP, max(0.0, float(row.plan_quality or 0) / RANK_QUALITY_DIV))
     source_bonus = (
-        2.0 if (row.candidate_source or "") == "market_scan" else 1.2 if (row.candidate_source or "") == "mixed" else 0.0
+        RANK_SRC_MARKET_SCAN if (row.candidate_source or "") == "market_scan" else RANK_SRC_MIXED if (row.candidate_source or "") == "mixed" else 0.0
     )
-    status_penalty = -14.0 if (row.status or "inactive") != "active" else 0.0
+    status_penalty = RANK_STATUS_INACTIVE_PEN if (row.status or "inactive") != "active" else 0.0
     risk_penalty = 0.0
     if risk_level == "high":
-        risk_penalty = -1.0
+        risk_penalty = RANK_RISK_HIGH_PEN
     rank = base * float(weight or 1.0) + quality_bonus + source_bonus + status_penalty + risk_penalty
     return _clamp(rank, 0.0, 100.0)
 
@@ -713,18 +731,18 @@ def _build_cross_section_features(candidates: list[EntryCandidate]) -> dict[int,
                 continue
             cid = int(c.id)
             rs = (
-                0.45 * float(score_pct.get(cid, 50.0))
-                + 0.25 * float(change_pct.get(cid, 50.0))
-                + 0.20 * float(turnover_pct.get(cid, 50.0))
-                + 0.10 * float(vol_pct.get(cid, 50.0))
+                RS_W_SCORE * float(score_pct.get(cid, 50.0))
+                + RS_W_CHANGE * float(change_pct.get(cid, 50.0))
+                + RS_W_TURNOVER * float(turnover_pct.get(cid, 50.0))
+                + RS_W_VOL * float(vol_pct.get(cid, 50.0))
             )
             crowd = 0.0
-            if rs >= 92:
-                crowd += 2.5
-            elif rs >= 85:
-                crowd += 1.5
-            if (turnover_pct.get(cid, 0.0) >= 95.0) and (change_pct.get(cid, 0.0) >= 92.0):
-                crowd += 1.5
+            if rs >= CROWD_XS_RS_STRONG_TH:
+                crowd += CROWD_XS_RS_STRONG_PEN
+            elif rs >= CROWD_XS_RS_ELEVATED_TH:
+                crowd += CROWD_XS_RS_ELEVATED_PEN
+            if (turnover_pct.get(cid, 0.0) >= CROWD_XS_HOT_TURNOVER_TH) and (change_pct.get(cid, 0.0) >= CROWD_XS_HOT_CHANGE_TH):
+                crowd += CROWD_XS_HOT_PEN
 
             out[cid] = {
                 "market": market,
@@ -743,7 +761,7 @@ def _demote_signal(row: StrategySignalRun, *, reason: str) -> None:
     row.action = "watch"
     row.action_label = "观望"
     payload = row.payload if isinstance(row.payload, dict) else {}
-    demoted_cap = 69.0 if bool(row.is_holding_snapshot) else 65.0
+    demoted_cap = SCORE_CAP_INACTIVE if bool(row.is_holding_snapshot) else SCORE_CAP_WATCH
     row.rank_score = min(float(row.rank_score or 0.0), demoted_cap)
     if row.confidence is not None:
         row.confidence = min(float(row.confidence or 0.0), demoted_cap / 100.0)
@@ -870,11 +888,11 @@ def _compute_factor_breakdown(
     if is_market_scan:
         catalyst_score += CAT_MARKET_SCAN
     if quote_change_pct is not None:
-        if 1.0 <= quote_change_pct <= 7.0:
+        if CAT_QUIET_RALLY_LO <= quote_change_pct <= CAT_QUIET_RALLY_HI:
             catalyst_score += CAT_QUIET_RALLY
-        elif quote_change_pct > 9.0:
+        elif quote_change_pct > CAT_FROTHY_RALLY_TH:
             catalyst_score += CAT_FROTHY_RALLY
-        elif quote_change_pct < -4.0:
+        elif quote_change_pct < CAT_SHARP_DROP_TH:
             catalyst_score += CAT_SHARP_DROP
     if ("突破" in signal_text) or ("breakout" in signal_text):
         catalyst_score += CAT_BREAKOUT

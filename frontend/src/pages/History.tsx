@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, Trash2, FileText, ArrowLeft } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import SafeMarkdown from '@/components/SafeMarkdown'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Badge } from '@panwatch/base-ui/components/ui/badge'
@@ -325,7 +325,7 @@ export default function HistoryPage() {
                   </div>
                 ) : (
                   <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
-                    <ReactMarkdown>{selectedRecord.content}</ReactMarkdown>
+                    <SafeMarkdown>{selectedRecord.content}</SafeMarkdown>
                   </div>
                 )}
               </div>
@@ -353,7 +353,7 @@ export default function HistoryPage() {
             {detailRecord && detailRecord.status && detailRecord.status !== 'success' ? (
               <div className="text-[13px] font-medium text-destructive">本条报告未生成（{detailRecord.status}）{detailRecord.error ? `：${detailRecord.error}` : ''}</div>
             ) : (
-              detailRecord && <ReactMarkdown>{detailRecord.content}</ReactMarkdown>
+              detailRecord && <SafeMarkdown>{detailRecord.content}</SafeMarkdown>
             )}
           </div>
           {detailRecord?.prompt_stats ? (

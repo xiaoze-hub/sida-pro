@@ -1,14 +1,13 @@
 """股票外部链接生成工具：根据股票代码、市场和用户选择的平台生成行情页 URL。
 
 全局设置 key: stock_link_platform (默认 xueqiu)
+audit P2 2026-09-15: 删除死函数 get_platform / stock_url(无生产调用),
+URL 生成收敛到 _xueqiu_url, 对外只暴露 stock_link_markdown。
 """
 
 from __future__ import annotations
 
 import logging
-
-from src.db.session import SessionLocal
-from src.db.models import AppSettings
 
 logger = logging.getLogger(__name__)
 
@@ -21,40 +20,13 @@ DEFAULT_PLATFORM = "xueqiu"
 SETTING_KEY = "stock_link_platform"
 
 
-def get_platform() -> str:
-    """从 AppSettings 读取当前配置的平台代码。"""
-    db = SessionLocal()
-    try:
-        row = db.query(AppSettings).filter(AppSettings.key == SETTING_KEY).first()
-        return (row.value if row and row.value else DEFAULT_PLATFORM)
-    finally:
-        db.close()
-
-
-def stock_url(symbol: str, market: str, platform: str = "") -> str:
-    """生成股票行情页 URL。
-
-    Args:
-        symbol: 股票代码，如 "002837", "AAPL", "00883"
-        market: 市场代码，如 "CN", "US", "HK"
-        platform: 平台代码，为空时从全局设置读取
-    """
-    if not platform:
-        platform = get_platform()
-
-    m = market.upper()
-
-    if platform == "xueqiu":
-        return _xueqiu_url(symbol, m)
-
-    # 兜底
-    return _xueqiu_url(symbol, m)
-
-
 def stock_link_markdown(symbol: str, market: str, platform: str = "") -> str:
-    """生成 Markdown 格式的股票链接: [002837.CN](https://xueqiu.com/S/SZ002837)"""
+    """生成 Markdown 格式的股票链接: [002837.CN](https://xueqiu.com/S/SZ002837)
+
+    platform 参数保留用于向后兼容(当前仅支持 xueqiu, 传入其他值也走雪球兜底)。
+    """
     code = f"{symbol}.{market}"
-    url = stock_url(symbol, market, platform)
+    url = _xueqiu_url(symbol, market.upper())
     return f"[{code}]({url})"
 
 
