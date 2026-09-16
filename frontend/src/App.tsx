@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2 } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -39,6 +39,8 @@ const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
 const ReportsHubPage = lazy(() => import('@/pages/ReportsHub'))
 const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
 const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
+// 开发者文档(任务 2.1, 2026-09-16): /developers 公开可访问(未登录时走独立壳层)
+const DevelopersPage = lazy(() => import('@/pages/Developers'))
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
@@ -82,6 +84,8 @@ const navItems = [
   { to: '/alerts', icon: BellRing, label: '提醒' },
   // §4.3: 审计 + 帮助 收纳进「设置」页签(/audit /help 保留为重定向)
   { to: '/settings', icon: Settings, label: '设置' },
+  // 开发者文档(2026-09-16): Skill Gateway API 文档 + 调试台; 公开页, 紧挨设置
+  { to: '/developers', icon: Code2, label: '开发者' },
 ]
 // 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
@@ -94,7 +98,7 @@ const desktopNavGroups = [
   { key: 'research', label: '投研', items: navItems.filter(n => ['/reports'].includes(n.to)) },
   { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile'].includes(n.to)) },
   // §4.3: 系统域从 7 项瘦身到 3 项(Agent/数据源→系统页, 审计/帮助→设置页签, 提醒→通知页签)
-  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/settings'].includes(n.to)) },
+  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/settings', '/developers'].includes(n.to)) },
 ]
 // 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/通知(2026-09-01 §4.3 补齐:
 // 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
@@ -319,6 +323,20 @@ function App() {
     )
   }
 
+  // /developers 公开可访问(任务 2.1): 未登录时独立渲染(无侧栏/底栏),
+  // 已登录时落入下方正常壳层(侧栏「系统」组可见「开发者」入口)。
+  if (location.pathname === '/developers' && !isAuthenticated()) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/developers" element={<DevelopersPage />} />
+          </Routes>
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <RequireAuth>
     <div className="min-h-screen pb-16 md:pb-0 relative overflow-x-clip bg-background">
@@ -534,6 +552,8 @@ function App() {
               <Route path="/settings" element={<SettingsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/audit" element={<LegacyTabRedirect to="/settings?tab=audit" />} />
               <Route path="/help" element={<LegacyTabRedirect to="/settings?tab=help" />} />
+              {/* 开发者文档: 已登录走正常壳层; 未登录已在上方 early-return 公开渲染 */}
+              <Route path="/developers" element={<DevelopersPage />} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
               {/* 安全审计 2026-09-15: /analysis 详情页原本无权限守卫, 补 PermGuard */}
               <Route path="/analysis/:symbol/:date" element={<PermGuard perm="view_reports" myPerms={myPerms}><AnalysisDetailPage /></PermGuard>} />

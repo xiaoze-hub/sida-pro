@@ -576,6 +576,56 @@ class SkillRunResponse(BaseModel):
 
 # ── 路由 ────────────────────────────────────────────────────────────
 
+@router.get("/skills/catalog")
+def skill_catalog() -> dict:
+    """公开 skill 目录(无需鉴权, 2026-09-16 开发者文档页)。
+
+    只返回文档/调试台所需公开字段: name / description / tier_min / slow /
+    caliber / params(JSON Schema properties) / required。
+    **不返回** 密钥、用量、内部配置、黑名单明细 —— 敏感信息仍走鉴权后的 list_skills。
+    档位限流数字一并回传, 前端文档不再硬编码。
+    """
+    skills: list[dict[str, Any]] = []
+    for name, meta in OPEN_SKILLS.items():
+        tool = CHAT_TOOL_REGISTRY.get(name)
+        schema_fn = (tool.schema or {}).get("function", {}) if tool and tool.schema else {}
+        parameters = schema_fn.get("parameters") or {}
+        props = parameters.get("properties") or {}
+        required = parameters.get("required") or []
+        skills.append({
+            "name": name,
+            "description": schema_fn.get("description") or "",
+            "tier_min": meta["tier_min"],
+            "slow": bool(meta.get("slow")),
+            "caliber": tool.caliber if tool else "",
+            "params": props,
+            "required": required,
+        })
+    return {
+        "skills": skills,
+        "tiers": {
+            "guest": {"daily_limit": GUEST_DAILY_LIMIT},
+            "free": {
+                "daily_limit": TIER_DAILY_LIMIT["free"],
+                "burst": TIER_BURST["free"],
+                "refill_per_min": TIER_REFILL_PER_MIN["free"],
+            },
+            "trial": {
+                "daily_limit": TIER_DAILY_LIMIT["trial"],
+                "burst": TIER_BURST["trial"],
+                "refill_per_min": TIER_REFILL_PER_MIN["trial"],
+                "days": TRIAL_DAYS,
+            },
+            "pro": {
+                "daily_limit": TIER_DAILY_LIMIT["pro"],
+                "burst": TIER_BURST["pro"],
+                "refill_per_min": TIER_REFILL_PER_MIN["pro"],
+            },
+        },
+        "endpoint": "POST /api/skills/{name}/run",
+    }
+
+
 @router.get("/skills")
 def list_skills(row: SkillApiKey = Depends(_get_api_key)) -> dict:
     """列出当前 key 可调用的 skill(含 schema)。"""
