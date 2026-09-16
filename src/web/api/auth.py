@@ -528,18 +528,19 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
 async def register(data: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     """自助注册(member 账号)。
 
-    - 是否开放由 app_settings.allow_register 控制(默认关闭), 关闭时 403
+    - 是否开放由 app_settings.allow_register 控制(默认开放), 显式关闭时 403
     - 校验: 用户名 2-20 位字母数字; 密码 ≥8 位; 用户名唯一
     """
     from src.web.api.audit import log_audit
 
     ip = request.client.host if request.client else "unknown"
 
-    # 注册开关: app_settings.allow_register, 默认关闭(无记录或非真值均视为关闭)
+    # 注册开关: app_settings.allow_register, 默认开放(无记录/空值视为开放,
+    # 仅当显式配置为 false/off/0/no 等时才拒绝)
     setting = db.query(AppSettings).filter(AppSettings.key == "allow_register").first()
     raw = getattr(setting, "value", None)
     allow_value = str(raw).strip().lower() if raw else ""
-    if allow_value not in ("1", "true", "yes", "on"):
+    if allow_value and allow_value not in ("1", "true", "yes", "on"):
         raise HTTPException(403, "注册未开放, 请联系管理员")
 
     username = data.username.strip()

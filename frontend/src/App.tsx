@@ -41,6 +41,8 @@ const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
 const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
 // 开发者文档(任务 2.1, 2026-09-16): /developers 公开可访问(未登录时走独立壳层)
 const DevelopersPage = lazy(() => import('@/pages/Developers'))
+// 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
+const LandingPage = lazy(() => import('@/pages/Landing'))
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
@@ -194,6 +196,14 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   }
 
   if (authState === 'unauthenticated') {
+    // 官网落地页(2026-09-16): 未登录访问 / 直接展示 Landing(不再跳 /login)
+    if (location.pathname === '/') {
+      return (
+        <Suspense fallback={<PageFallback />}>
+          <LandingPage />
+        </Suspense>
+      )
+    }
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 

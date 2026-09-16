@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { Lock, Eye, EyeOff, User } from 'lucide-react'
 import { authApi, fetchAPI } from '@panwatch/api'
@@ -10,6 +10,7 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { toast } = useToast()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -17,8 +18,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [isSetup, setIsSetup] = useState(false)
-  // 2026-08-17 注册功能已关闭(只允许 owner 手动建号, 后端 app_settings.allow_register=false)
-  const registerMode = false
+  // 开放注册(2026-09-16): 注册模式可用, 支持 ?mode=register 直达
+  const [registerMode, setRegisterMode] = useState(() => searchParams.get('mode') === 'register')
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
@@ -31,11 +32,27 @@ export default function LoginPage() {
       .catch(() => setChecking(false))
   }, [])
 
+  const doLogin = async (uname: string, pwd: string) => {
+    const data = await authApi.login({ username: uname, password: pwd })
+    // 保存 token
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('token_expires', data.expires_at)
+    // 保存用户信息(多用户)
+    if (data.user) {
+      localStorage.setItem('user', JSON.stringify(data.user))
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!username || !password) return
 
-    if (false) { // 注册模式已永久关闭
+    if (registerMode) {
+      // 注册表单校验: 用户名 2-20 位字母数字, 密码 ≥8 位, 两次一致
+      if (!/^[A-Za-z0-9]{2,20}$/.test(username)) {
+        toast('用户名需为 2-20 位字母或数字', 'error')
+        return
+      }
       if (password !== confirmPassword) {
         toast('两次密码不一致', 'error')
         return
@@ -57,26 +74,20 @@ export default function LoginPage() {
 
     setLoading(true)
     try {
-      if (false) { // 注册模式已永久关闭
-        // 注册(member 账号); 失败时 fetchAPI 抛出后端 message(如 403 注册未开放)
-        const data = await fetchAPI<{ message?: string }>('/auth/register', {
+      if (registerMode) {
+        // 注册(member 账号); 失败时 fetchAPI 抛出后端 message
+        await fetchAPI<{ message?: string; api_key?: string | null }>('/auth/register', {
           method: 'POST',
           body: JSON.stringify({ username, password }),
         })
-        toast(data?.message || '注册成功, 请登录', 'success')
+        // 注册成功后自动登录并跳转首页
+        await doLogin(username, password)
+        toast('注册成功, 已自动登录', 'success')
+        navigate('/')
         return
       }
 
-      const data = await authApi.login({ username, password })
-
-      // 保存 token
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('token_expires', data.expires_at)
-      // 保存用户信息(多用户)
-      if (data.user) {
-        localStorage.setItem('user', JSON.stringify(data.user))
-      }
-
+      await doLogin(username, password)
       toast(isSetup ? '密码设置成功' : '登录成功', 'success')
       navigate('/')
     } catch (e) {
@@ -138,7 +149,7 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <Label>{registerMode || isSetup ? '密码' : '密码'}</Label>
+              <Label>密码</Label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
@@ -185,7 +196,34 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* 2026-08-17: 注册入口已关闭(只允许 owner 手动建号),后端 app_settings.allow_register=false */}
+          {/* 登录/注册切换 */}
+          {!isSetup && (
+            <div className="mt-4 text-center text-sm">
+              {registerMode ? (
+                <span className="text-muted-foreground">
+                  已有账号？{' '}
+                  <button
+                    type="button"
+                    className="text-primary hover:underline font-medium"
+                    onClick={() => setRegisterMode(false)}
+                  >
+                    去登录
+                  </button>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">
+                  还没有账号？{' '}
+                  <button
+                    type="button"
+                    className="text-primary hover:underline font-medium"
+                    onClick={() => setRegisterMode(true)}
+                  >
+                    注册账号
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-6">
