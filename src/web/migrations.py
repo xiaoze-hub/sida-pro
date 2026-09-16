@@ -4233,6 +4233,69 @@ CREATE TABLE high_value_api_logs (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hv_api_name_created ON high_value_api_logs(api_name, created_at)"))
 
 
+def _m169_unified_identity_columns(conn: Connection) -> None:
+    """统一身份(2026-09-16): skill_api_keys / skill_usage 关联用户。
+
+    - skill_api_keys.user_id: 关联 users.id, nullable(旧 key 为 NULL 仍可用)
+    - skill_usage.channel: 调用来源, 默认 'api'(api/web/guest)
+    - skill_usage.user_id: 冗余列, 方便按用户统计
+    - 回填: skill_api_keys.user_id 按 owner_label = users.username 匹配
+    - 幂等可重跑
+    """
+    if _has_table(conn, "skill_api_keys"):
+        _add_column_if_missing(
+            conn,
+            "skill_api_keys",
+            "user_id",
+            "ALTER TABLE skill_api_keys ADD COLUMN user_id TEXT",
+        )
+        _create_index_if_missing(
+            conn,
+            "ix_skill_api_keys_user",
+            "CREATE INDEX ix_skill_api_keys_user ON skill_api_keys(user_id)",
+        )
+        # 回填: owner_label 匹配 users.username
+        conn.execute(
+            text(
+                """
+UPDATE skill_api_keys
+SET user_id = (
+    SELECT u.id FROM users u WHERE u.username = skill_api_keys.owner_label
+)
+WHERE user_id IS NULL
+  AND owner_label IS NOT NULL
+  AND TRIM(owner_label) != ''
+  AND EXISTS (
+    SELECT 1 FROM users u2 WHERE u2.username = skill_api_keys.owner_label
+)
+"""
+            )
+        )
+
+    if _has_table(conn, "skill_usage"):
+        _add_column_if_missing(
+            conn,
+            "skill_usage",
+            "channel",
+            "ALTER TABLE skill_usage ADD COLUMN channel TEXT DEFAULT 'api'",
+        )
+        _add_column_if_missing(
+            conn,
+            "skill_usage",
+            "user_id",
+            "ALTER TABLE skill_usage ADD COLUMN user_id TEXT",
+        )
+        # 存量行 channel 兜底(部分方言 ADD COLUMN DEFAULT 不回填已有行)
+        conn.execute(
+            text("UPDATE skill_usage SET channel = 'api' WHERE channel IS NULL OR TRIM(channel) = ''")
+        )
+        _create_index_if_missing(
+            conn,
+            "ix_skill_usage_user",
+            "CREATE INDEX ix_skill_usage_user ON skill_usage(user_id, created_at)",
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4337,6 +4400,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(166, "skill_gateway_tables", _m166_skill_gateway_tables),
     Migration(167, "user_sessions_table", _m167_user_sessions_table),
     Migration(168, "high_value_api_logs", _m168_high_value_api_logs),
+    Migration(169, "unified_identity_columns", _m169_unified_identity_columns),
 )
 
 

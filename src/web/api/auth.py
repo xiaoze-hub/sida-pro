@@ -87,6 +87,8 @@ class TokenResponse(BaseModel):
     token: str
     expires_at: str
     user: Optional[dict] = None
+    # 统一身份(2026-09-16): 用户绑定的 Skill API Key 前缀(供展示; 无 key 为 None)
+    api_key_prefix: Optional[str] = None
 
 
 # P1-6 (2026-08-23 审计): scrypt 提参到 n=2^15 (中等强度, 单机 ~120ms/次)
@@ -499,10 +501,26 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
     from src.web.api.audit import log_audit
     log_audit(db, user, "login", detail="登录成功", ip=ip)
 
+    # 统一身份(2026-09-16): 返回该用户绑定的 API key 前缀(供前端展示, 不回明文)
+    api_key_prefix: Optional[str] = None
+    try:
+        from src.web.models import SkillApiKey
+        key_row = (
+            db.query(SkillApiKey)
+            .filter(SkillApiKey.user_id == user.id, SkillApiKey.status == "active")
+            .order_by(SkillApiKey.created_at.desc())
+            .first()
+        )
+        if key_row:
+            api_key_prefix = key_row.key_prefix
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[auth] 查询用户 API key 前缀失败(不阻断登录): %s", e)
+
     return TokenResponse(
         token=token,
         expires_at=expires_at.isoformat(),
         user=user_to_dict(user),
+        api_key_prefix=api_key_prefix,
     )
 
 
@@ -533,8 +551,37 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
         raise HTTPException(400, "用户名已存在")
 
     user = create_user(db, username, data.password, "member")  # 默认 is_active=True
+
+    # 统一身份(2026-09-16): 注册成功自动创建 Skill API Key(tier=free)。
+    # 创建失败不阻断注册(旧 key 体系仍可用), api_key 返回 null。
+    api_key_raw: Optional[str] = None
+    try:
+        from src.web.api.skills_gateway import TIER_DAILY_LIMIT, _gen_key, _hash_key
+        from src.web.models import SkillApiKey
+
+        api_key_raw = _gen_key()
+        key_row = SkillApiKey(
+            key_hash=_hash_key(api_key_raw),
+            key_prefix=api_key_raw[:11],
+            owner_label=username,  # 与迁移回填口径一致: owner_label = users.username
+            user_id=user.id,
+            tier="free",
+            status="active",
+            daily_limit=TIER_DAILY_LIMIT["free"],
+        )
+        db.add(key_row)
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        api_key_raw = None
+        logger.warning("[auth] 注册后自动创建 API key 失败(不阻断注册): %s", e)
+
     log_audit(db, user, "register", detail=f"注册账号 {username}", ip=ip)
-    return {"success": True, "message": "注册成功, 请登录"}
+    return {
+        "success": True,
+        "message": "注册成功, 请登录",
+        "api_key": api_key_raw,
+    }
 
 
 @router.get("/me")
