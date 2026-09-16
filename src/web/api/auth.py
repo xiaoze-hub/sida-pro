@@ -90,9 +90,10 @@ class ChangePasswordRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    email: str  # 必填, 简单正则校验(不需要发验证邮件)
+    email: str  # 必填, 简单正则校验
     username: Optional[str] = None  # 可选; 不传则用 email 前缀生成
     password: str
+    code: str  # 邮箱验证码(2026-09-16); purpose=register, 必填
 
 
 # 简单邮箱正则(2026-09-16 邮箱注册): local@domain.tld, 不发验证邮件仅格式校验
@@ -602,6 +603,12 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
         raise HTTPException(400, "邮箱格式不正确")
     if get_user_by_email(db, email):
         raise HTTPException(400, "该邮箱已注册")
+
+    # 邮箱验证码校验(2026-09-16): purpose=register, 未过期/未使用/匹配
+    from src.web.api.email_verify import verify_code
+
+    if not verify_code(email, "register", (data.code or "").strip()):
+        raise HTTPException(400, "验证码错误或已过期")
 
     # username 可选: 不传则用 email 前缀生成; 冲突时加随机后缀重试
     username_raw = (data.username or "").strip()

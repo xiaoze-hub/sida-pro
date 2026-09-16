@@ -26,7 +26,17 @@ def client():
 
 
 def _register(client, email, password="password123", username=None):
-    payload = {"email": email, "password": password}
+    # 先发验证码(开发模式: SMTP 未配置时验证码打印到日志)
+    from src.web.api.email_verify import _store, _lock, _store_key, EmailCode
+    import secrets, time as _time
+    code = f"{secrets.randbelow(1000000):06d}"
+    email_n = email.lower().strip()
+    with _lock:
+        _store[_store_key(email_n, "register")] = EmailCode(
+            code=code, email=email_n, purpose="register",
+            created_at=_time.time(), used=False,
+        )
+    payload = {"email": email, "password": password, "code": code}
     if username is not None:
         payload["username"] = username
     return client.post("/api/auth/register", json=payload)
