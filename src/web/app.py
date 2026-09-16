@@ -761,6 +761,34 @@ try:
 except ImportError:
     pass
 
+# 智能体一键安装(2026-09-16): install.sh 脚本 + 用户 skill 配置 JSON
+# install.sh 公开可访问(key 由 bash 参数传入); /skills/config 内部走 JWT
+try:
+    from src.web.api import skill_install
+
+    app.include_router(
+        skill_install.router,
+        prefix="/api",
+        tags=["skill-install"],
+    )
+except ImportError:
+    pass
+
+# API Key 管理控制台(2026-09-16): 登录用户自助 list/create/reset/delete/usage
+# **必须挂在 skills_gateway 之后** —— 同路径 POST /api/keys 仍由
+# skills_gateway.register_key 优先匹配(guest 领取 + JWT 绑定, 向后兼容);
+# 本模块提供 GET 列表 / reset / 软删 / 用量等管理端点。
+try:
+    from src.web.api import api_keys
+
+    app.include_router(
+        api_keys.router,
+        prefix="/api/keys",
+        tags=["api-keys"],
+    )
+except ImportError:
+    pass
+
 # Pro 付费(2026-09-16 任务3.1/3.3): 申请审核 + 到期降级查询
 # admin 接口内部用 require_owner; 用户侧用 get_current_user
 try:

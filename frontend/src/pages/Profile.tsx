@@ -1,5 +1,6 @@
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -344,7 +345,10 @@ export function Profile() {
           </div>
         </section>
 
-        {/* ③ 我的数据 */}
+        {/* ③ 我的 API Key(2026-09-16 控制台) */}
+        <MyApiKeyCard />
+
+        {/* ④ 我的数据 */}
         <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
           <div className="flex items-center gap-2 mb-4">
             <Target className="w-4 h-4 text-primary" />
@@ -392,7 +396,7 @@ export function Profile() {
           </div>
         </section>
 
-        {/* ④ Pro 升级(B.1) */}
+        {/* ⑤ Pro 升级(B.1) */}
         <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
           <div className="flex items-center gap-2 mb-4">
             <Crown className="w-4 h-4 text-amber-500" />
@@ -407,10 +411,59 @@ export function Profile() {
           )}
         </section>
 
-        {/* ⑤ 通知渠道(B.4) */}
+        {/* ⑥ 通知渠道(B.4) */}
         <NotifyChannelsSection />
       </div>
     </div>
+  )
+}
+
+/** 我的 API Key 卡片(2026-09-16): 显示当前 key 前缀 + 跳转控制台。 */
+function MyApiKeyCard() {
+  const navigate = useNavigate()
+  const { data, isLoading } = useApiQuery<{ keys: Array<{ key_prefix: string; status: string; tier: string }> }>(
+    ['api-keys', 'my'],
+    '/keys/my',
+  )
+  const keys = data?.keys ?? []
+  const current = keys.find(k => k.status === 'active') || keys[0] || null
+
+  return (
+    <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+      <div className="flex items-center gap-2 mb-4">
+        <KeyRound className="w-4 h-4 text-primary" />
+        <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">我的 API Key</h3>
+      </div>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-border/40 bg-accent/20 p-3.5">
+        <div className="min-w-0 flex-1">
+          {isLoading ? (
+            <div className="text-[12px] text-muted-foreground">加载中…</div>
+          ) : current ? (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <code className="font-mono text-[13px] text-foreground font-medium">{current.key_prefix}...</code>
+                <span className="text-[10px] rounded border border-border/60 bg-background/50 px-1.5 py-0.5 text-muted-foreground">
+                  {current.tier === 'pro' ? 'Pro' : current.tier === 'trial' ? '试用' : '免费'}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  共 {keys.length} 个 Key
+                </span>
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-1">
+                用于 Skill Gateway / 智能体接入; 完整明文仅创建时可见一次
+              </div>
+            </>
+          ) : (
+            <div className="text-[12px] text-muted-foreground">
+              尚未创建 API Key — 前往控制台创建后即可接入智能体
+            </div>
+          )}
+        </div>
+        <Button size="sm" className="h-8 shrink-0" onClick={() => navigate('/api-keys')}>
+          管理
+        </Button>
+      </div>
+    </section>
   )
 }
 

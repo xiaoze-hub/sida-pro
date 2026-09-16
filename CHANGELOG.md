@@ -7,6 +7,43 @@
 
 ## 2026-09-16
 
+### feat(email-reg-key-console): 邮箱注册 + API Key 控制台 + 智能体一键安装
+
+**性质**: 用户-facing 功能。**需重启后端 + 前端更新**。迁移 172 自动执行。
+
+**邮箱注册**:
+- `users.email` 列 + 唯一索引(迁移 172); 旧账号无邮箱不受影响
+- 注册: email 必填, username 可选(不填则用邮箱前缀生成, 冲突自动加后缀)
+- 登录: username 或 email 均可
+- 前端 Login 注册模式: 邮箱输入框 + 前端格式校验; username placeholder「可选, 不填则用邮箱前缀」
+
+**API Key 控制台** (`/api-keys`):
+- 新页 `frontend/src/pages/ApiKeys.tsx`: 列出本人全部 Key(prefix/tier/status/创建/最后使用)
+- 操作: 复制 / 重置 / 删除(均 confirm 二次确认); 用量展开(今日/7天/30天)
+- 明文 key 只在创建/重置响应返回一次, 前端暂存展示, 刷新即丢
+- 导航「我的」组 + 个人中心卡片 + 命令面板入口
+- 后端用户侧接口 1(skills_gateway, `/keys/my/*` 路径):
+  - `GET /api/keys/my` 列表
+  - `POST /api/keys/my` 创建
+  - `POST /api/keys/my/{id}/reset` 重置(原地换新明文)
+  - `DELETE /api/keys/my/{id}` 删除
+  - `GET /api/keys/my/{id}/usage` 今日/7天/30天用量
+- 后端用户侧接口 2(新 `src/web/api/api_keys.py`, 挂 `/api/keys` 前缀, 全部 JWT):
+  - `GET /api/keys` 列表(不含明文)
+  - `POST /api/keys/{id}/reset` 重置(旧 hash 立即失效; frozen 一并解冻)
+  - `DELETE /api/keys/{id}` **软删**(status=disabled, 行保留供用量审计)
+  - `GET /api/keys/{id}/usage` 今日/近7天按日/按 channel 用量
+  - 与 skills_gateway 的 `POST /api/keys`(guest 领取+JWT 绑定) 共存: 本模块挂在其后, 同路径 POST 仍由 register_key 处理, 不破坏旧功能
+  - 全部操作 user_id 隔离, 他人 key 一律 404
+
+**智能体一键安装**:
+- 新文件 `src/web/api/skill_install.py`:
+  - `GET /api/skills/install.sh` 公开脚本(text/plain, 可直接 pipe bash; key 以 $1 传入不进 URL)
+  - `GET /api/skills/config` JWT 用户 skill 配置(只回 prefix, 不回明文)
+- 前端「智能体安装」区块: curl 一键命令 + 配置 JSON, 均可一键复制; 创建/重置后自动填入明文
+
+**测试**: `tsc --noEmit` 通过; TestClient: install.sh 200 text/plain, /keys/my 与 /skills/config 未登录 401, register 缺 password 422。后端: `tests/test_email_reg_api_keys.py` 3 项通过(邮箱注册/登录双通道、`/api/keys` 列表/重置失效/软删/用户隔离、迁移 172 email 列+唯一索引)。
+
 ### feat(auth): 开放注册 + 官网落地页
 
 **性质**: 用户-facing 功能。**需重启后端 + 前端更新**。

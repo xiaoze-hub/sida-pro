@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2 } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
@@ -27,6 +27,8 @@ const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
 const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
 const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
 const ProfilePage = lazy(() => import('@/pages/Profile'))
+// API Key 控制台(2026-09-16): 个人中心 → 密钥管理 + 智能体一键安装
+const ApiKeysPage = lazy(() => import('@/pages/ApiKeys'))
 // 设计稿 v2.0 §4.3 (2026-09-01): 两个收纳枢纽页
 // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
 // 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
@@ -80,6 +82,8 @@ const navItems = [
   { to: '/shadow', icon: Shield, label: '影子账户', perm: 'manage_shadow' },
   { to: '/paper-trading', icon: Activity, label: '模拟盘', perm: 'manage_paper_trading' },
   { to: '/profile', icon: User, label: '个人中心' },
+  // API Key 控制台(2026-09-16): 个人中心组
+  { to: '/api-keys', icon: KeyRound, label: 'API Key' },
   // §4.3: Agent + 数据源 收纳进「系统」二级页(/agents /datasources 保留为重定向)
   { to: '/system', icon: ServerCog, label: '系统' },
   { to: '/notifications', icon: Bell, label: '通知' },
@@ -98,7 +102,7 @@ const desktopNavGroups = [
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
   { key: 'research', label: '投研', items: navItems.filter(n => ['/reports'].includes(n.to)) },
-  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile'].includes(n.to)) },
+  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile', '/api-keys'].includes(n.to)) },
   // §4.3: 系统域从 7 项瘦身到 3 项(Agent/数据源→系统页, 审计/帮助→设置页签, 提醒→通知页签)
   { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/settings', '/developers'].includes(n.to)) },
 ]
@@ -558,6 +562,8 @@ function App() {
               <Route path="/notifications" element={<NotificationsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/alerts" element={<LegacyTabRedirect to="/notifications?tab=alerts" />} />
               <Route path="/profile" element={<ProfilePage />} />
+              {/* API Key 控制台(2026-09-16): 个人中心组 */}
+              <Route path="/api-keys" element={<ApiKeysPage />} />
               {/* §4.3: 审计 + 帮助 → /settings 页签 */}
               <Route path="/settings" element={<SettingsHubPage myPerms={myPerms} isOwner={() => getJwtRole() === 'owner'} />} />
               <Route path="/audit" element={<LegacyTabRedirect to="/settings?tab=audit" />} />

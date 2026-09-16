@@ -64,8 +64,19 @@ _jwt_secret: str | None = None
 # 已下沉 src/core/auth_tokens.py(KI-039 第二阶段); 见文件顶部 import。
 
 class LoginRequest(BaseModel):
-    username: str
+    username: str  # 兼容旧字段名: 同时接受 username 或 email
     password: str
+
+
+def _find_user_by_login_id(db: Session, login_id: str) -> User | None:
+    """按登录标识查用户: 先 username, 再 email(两者都试)。"""
+    ident = (login_id or "").strip()
+    if not ident:
+        return None
+    user = get_user_by_username(db, ident)
+    if user:
+        return user
+    return get_user_by_email(db, ident)
 
 
 class SetupRequest(BaseModel):
@@ -79,8 +90,40 @@ class ChangePasswordRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    username: str
+    email: str  # 必填, 简单正则校验(不需要发验证邮件)
+    username: Optional[str] = None  # 可选; 不传则用 email 前缀生成
     password: str
+
+
+# 简单邮箱正则(2026-09-16 邮箱注册): local@domain.tld, 不发验证邮件仅格式校验
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+
+def normalize_email(email: str) -> str:
+    """邮箱规范化: 去空白 + 小写(唯一性/登录匹配口径)。"""
+    return (email or "").strip().lower()
+
+
+def username_from_email(email: str) -> str:
+    """从邮箱前缀生成用户名(2-20 位字母数字, 与注册校验口径一致)。
+
+    - 取 @ 前本地部分, 去掉非字母数字
+    - 过短则补随机后缀; 过长截断到 20
+    """
+    local = (email or "").split("@", 1)[0]
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", local)
+    if len(cleaned) < 2:
+        cleaned = f"user{secrets.token_hex(4)}"[:20]
+    elif len(cleaned) > 20:
+        cleaned = cleaned[:20]
+    return cleaned
+
+
+def get_user_by_email(db: Session, email: str) -> User | None:
+    em = normalize_email(email)
+    if not em:
+        return None
+    return db.query(User).filter(User.email == em).first()
 
 
 class TokenResponse(BaseModel):
@@ -270,11 +313,18 @@ def get_user_by_id(db: Session, user_id: str) -> User | None:
     return db.query(User).filter(User.id == user_id).first()
 
 
-def create_user(db: Session, username: str, password: str, role: str = "member") -> User:
-    """创建用户(owner 调用)。"""
+def create_user(
+    db: Session,
+    username: str,
+    password: str,
+    role: str = "member",
+    email: str | None = None,
+) -> User:
+    """创建用户(owner 调用 / 自助注册)。"""
     user = User(
         id=str(uuid.uuid4()),
         username=username,
+        email=normalize_email(email) if email else None,
         password_hash=hash_password(password),
         role=role,
     )
@@ -439,6 +489,7 @@ def user_to_dict(user: User) -> dict:
     return {
         "id": user.id,
         "username": user.username,
+        "email": getattr(user, "email", None),
         "role": user.role,
         "is_active": user.is_active,
         "created_at": user.created_at.isoformat() if user.created_at else None,
@@ -459,7 +510,10 @@ async def auth_status(db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    """登录(多用户)。带暴力破解限速: 同 IP+用户名 5 次失败锁 10 分钟。"""
+    """登录(多用户)。带暴力破解限速: 同 IP+用户名 5 次失败锁 10 分钟。
+
+    2026-09-16: 支持用 email 或 username 登录(两者都试)。
+    """
     ip = request.client.host if request.client else "unknown"
     from src.core.login_ratelimit import check, fail, success
     locked = check(ip, data.username.strip())
@@ -467,10 +521,10 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
         raise HTTPException(429, locked)
 
     get_or_create_owner(db)  # 确保 owner 存在(兼容首次部署)
-    user = get_user_by_username(db, data.username.strip())
+    user = _find_user_by_login_id(db, data.username)
     if not user or not verify_password(data.password, user.password_hash):
         fail(ip, data.username.strip())
-        raise HTTPException(401, "用户名或密码错误")
+        raise HTTPException(401, "用户名/邮箱或密码错误")
     if not user.is_active:
         raise HTTPException(403, "账号已禁用")
 
@@ -526,10 +580,10 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
 
 @router.post("/register")
 async def register(data: RegisterRequest, request: Request, db: Session = Depends(get_db)):
-    """自助注册(member 账号)。
+    """自助注册(member 账号)。2026-09-16: 邮箱必填 + 可选用户名。
 
     - 是否开放由 app_settings.allow_register 控制(默认开放), 显式关闭时 403
-    - 校验: 用户名 2-20 位字母数字; 密码 ≥8 位; 用户名唯一
+    - 校验: email 格式 + 唯一; 用户名 2-20 位字母数字(不传则用 email 前缀生成); 密码 ≥8 位
     """
     from src.web.api.audit import log_audit
 
@@ -543,15 +597,35 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
     if allow_value and allow_value not in ("1", "true", "yes", "on"):
         raise HTTPException(403, "注册未开放, 请联系管理员")
 
-    username = data.username.strip()
-    if not re.fullmatch(r"[A-Za-z0-9]{2,20}", username):
-        raise HTTPException(400, "用户名需为 2-20 位字母或数字")
+    email = normalize_email(data.email)
+    if not EMAIL_RE.fullmatch(email):
+        raise HTTPException(400, "邮箱格式不正确")
+    if get_user_by_email(db, email):
+        raise HTTPException(400, "该邮箱已注册")
+
+    # username 可选: 不传则用 email 前缀生成; 冲突时加随机后缀重试
+    username_raw = (data.username or "").strip()
+    if username_raw:
+        username = username_raw
+        if not re.fullmatch(r"[A-Za-z0-9]{2,20}", username):
+            raise HTTPException(400, "用户名需为 2-20 位字母或数字")
+        if get_user_by_username(db, username):
+            raise HTTPException(400, "用户名已存在")
+    else:
+        base = username_from_email(email)
+        username = base
+        for _ in range(8):
+            if not get_user_by_username(db, username):
+                break
+            suffix = secrets.token_hex(2)
+            username = f"{base[: 20 - len(suffix)]}{suffix}"
+        else:
+            username = f"user{secrets.token_hex(6)}"[:20]
+
     if len(data.password) < 8:
         raise HTTPException(400, "密码长度至少 8 位")
-    if get_user_by_username(db, username):
-        raise HTTPException(400, "用户名已存在")
 
-    user = create_user(db, username, data.password, "member")  # 默认 is_active=True
+    user = create_user(db, username, data.password, "member", email=email)  # 默认 is_active=True
 
     # 统一身份(2026-09-16): 注册成功自动创建 Skill API Key(tier=free)。
     # 创建失败不阻断注册(旧 key 体系仍可用), api_key 返回 null。
@@ -583,10 +657,12 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
         api_key_raw = None
         logger.warning("[auth] 注册后自动创建 API key 失败(不阻断注册): %s", e)
 
-    log_audit(db, user, "register", detail=f"注册账号 {username}", ip=ip)
+    log_audit(db, user, "register", detail=f"注册账号 {username} <{email}>", ip=ip)
     return {
         "success": True,
         "message": "注册成功, 请登录",
+        "email": user.email,
+        "username": user.username,
         "api_key": api_key_raw,
     }
 
