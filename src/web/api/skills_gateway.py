@@ -130,10 +130,75 @@ BLOCKED_SKILLS = {
     "get_web_content", "tdx_wenda", "get_irm_qa",
 }
 
-# 档位默认日限
+# 档位默认日限/突发/匀速 —— 硬编码兜底; 生产以 tier_configs 表为准(任务3.2)。
+# refresh_tier_configs(db) 会按表覆盖这些 dict(30s 缓存, 改表后新请求热生效)。
 TIER_DAILY_LIMIT = {"trial": 500, "free": 100, "pro": 5000}
 TIER_RANK = {"free": 0, "trial": 1, "pro": 2}
 TRIAL_DAYS = 10
+
+# 档位 burst / 匀速(次/分) — 同上, 可被 tier_configs 热更新
+TIER_BURST = {"trial": 50, "free": 30, "pro": 100}
+TIER_REFILL_PER_MIN = {"trial": 20, "free": 15, "pro": 60}
+
+# ── 档位配置热更新(任务3.2) ─────────────────────────────────────────
+_TIER_CFG_TTL_S = 30.0  # 改表后最多 30s 新请求生效
+_tier_cfg_lock = threading.Lock()
+_tier_cfg_loaded_at = 0.0
+
+
+def refresh_tier_configs(db: Session | None = None) -> None:
+    """从 tier_configs 表刷新 TIER_* 常量(带短 TTL 缓存)。
+
+    - 表空/异常时保持当前(硬编码默认)值, 不阻断请求
+    - db=None 时自建 SessionLocal; 失败静默
+    - 本函数可在任意有/无 db 的路径调用, 是热更新的唯一入口
+    """
+    global _tier_cfg_loaded_at
+    now = time.time()
+    with _tier_cfg_lock:
+        if now - _tier_cfg_loaded_at < _TIER_CFG_TTL_S:
+            return
+        own = None
+        if db is None:
+            try:
+                from src.db.session import SessionLocal as _SL
+
+                own = _SL()
+                db = own
+            except Exception as e:  # noqa: BLE001
+                logger.debug("refresh_tier_configs: 无法建 session, 用默认: %r", e)
+                return
+        try:
+            from src.db.models import TierConfig
+
+            rows = db.query(TierConfig).all()
+            if not rows:
+                # 表存在但空: 也记时间戳, 避免每次请求都打库
+                _tier_cfg_loaded_at = now
+                return
+            for r in rows:
+                t = (r.tier_name or "").strip().lower()
+                if t not in TIER_DAILY_LIMIT:
+                    continue
+                try:
+                    if r.daily_limit and int(r.daily_limit) > 0:
+                        TIER_DAILY_LIMIT[t] = int(r.daily_limit)
+                    if r.burst_limit and int(r.burst_limit) > 0:
+                        TIER_BURST[t] = int(r.burst_limit)
+                    scope = r.skill_scope or {}
+                    if isinstance(scope, dict) and scope.get("refill_per_min"):
+                        TIER_REFILL_PER_MIN[t] = int(scope["refill_per_min"])
+                except (TypeError, ValueError) as ve:
+                    logger.warning("tier_configs 行非法 tier=%s: %r", t, ve)
+            _tier_cfg_loaded_at = now
+        except Exception as e:  # noqa: BLE001
+            logger.debug("refresh_tier_configs 失败, 保持硬编码默认: %r", e)
+        finally:
+            if own is not None:
+                try:
+                    own.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
 # 风险提示(合规: 所有返回强制带)
 RISK_DISCLAIMER = (
@@ -220,10 +285,7 @@ def _gen_key() -> str:
 
 _TOKEN_BUCKET: dict[str, tuple[float, float]] = {}  # key_hash -> (tokens, last_ts)
 _MEM_DAY: dict[str, tuple[str, int]] = {}  # (day, count)
-
-# 档位 burst / 匀速(次/分) — 配置化, 不硬编码在逻辑里
-TIER_BURST = {"trial": 50, "free": 30, "pro": 100}
-TIER_REFILL_PER_MIN = {"trial": 20, "free": 15, "pro": 60}
+# TIER_BURST / TIER_REFILL_PER_MIN 已上移与 TIER_DAILY_LIMIT 并列(任务3.2 热更新)
 
 
 def _redis_client():
@@ -355,10 +417,172 @@ def _hot_cache_set(key: str, val: Any) -> None:
         _HOT_CACHE[key] = (time.time(), val)
 
 
+# ── 到期降级(任务3.3) ───────────────────────────────────────────────
+
+def _aware(dt: datetime | None) -> datetime | None:
+    """naive datetime 按 UTC 解释(库中多为 naive UTC)。"""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _downgrade_if_expired(row: SkillApiKey, db: Session) -> bool:
+    """trial/pro key 过期 → 降为 free + 写降级日志。返回是否发生降级。"""
+    if row.tier not in ("trial", "pro"):
+        return False
+    exp = _aware(row.expires_at)
+    if exp is None or exp >= datetime.now(timezone.utc):
+        return False
+    from_tier = row.tier
+    from_limit = int(row.daily_limit or 0)
+    row.tier = "free"
+    row.daily_limit = TIER_DAILY_LIMIT["free"]
+    db.commit()
+    _record_downgrade(
+        db,
+        api_key_id=row.id,
+        key_prefix=row.key_prefix or "",
+        user_id=str(row.user_id) if row.user_id else None,
+        from_tier=from_tier,
+        from_daily_limit=from_limit,
+        reason="expires_at 已过期, 自动降级",
+    )
+    logger.info(
+        "skill key %s 到期降级: %s → free (limit %s → %s)",
+        row.key_prefix, from_tier, from_limit, row.daily_limit,
+    )
+    return True
+
+
+def _record_downgrade(
+    db: Session,
+    *,
+    api_key_id: int,
+    key_prefix: str,
+    user_id: str | None,
+    from_tier: str,
+    from_daily_limit: int,
+    reason: str,
+) -> None:
+    """写 tier_downgrade_logs + audit_logs(best-effort, 不阻断主流程)。"""
+    try:
+        from src.db.models import TierDowngradeLog
+
+        db.add(TierDowngradeLog(
+            api_key_id=api_key_id,
+            key_prefix=key_prefix or "",
+            user_id=user_id,
+            from_tier=from_tier,
+            to_tier="free",
+            from_daily_limit=from_daily_limit,
+            to_daily_limit=TIER_DAILY_LIMIT["free"],
+            reason=reason or "",
+        ))
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tier_downgrade_logs 落库失败: %r", e)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        from src.web.api.audit import log_audit
+
+        log_audit(
+            db,
+            None,
+            "tier_downgrade",
+            detail=f"key={key_prefix} {from_tier}→free: {reason}",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("降级 audit 写入失败: %r", e)
+
+
+def downgrade_expired_keys(db: Session | None = None) -> int:
+    """扫描 expires_at < now 的 trial/pro key, 自动降为 free。返回降级数量。
+
+    由后台线程周期调用; 也可手动触发(测试/运维)。幂等: 已 free 的不会再动。
+    """
+    own = None
+    if db is None:
+        try:
+            from src.db.session import SessionLocal as _SL
+
+            own = _SL()
+            db = own
+        except Exception as e:  # noqa: BLE001
+            logger.warning("downgrade_expired_keys: 无法建 session: %r", e)
+            return 0
+    try:
+        refresh_tier_configs(db)
+        now = datetime.now(timezone.utc)
+        rows = (
+            db.query(SkillApiKey)
+            .filter(
+                SkillApiKey.tier.in_(["trial", "pro"]),
+                SkillApiKey.expires_at.isnot(None),
+            )
+            .all()
+        )
+        n = 0
+        for row in rows:
+            exp = _aware(row.expires_at)
+            if exp is not None and exp < now:
+                if _downgrade_if_expired(row, db):
+                    n += 1
+        if n:
+            logger.info("到期降级任务完成: %s 个 key 降为 free", n)
+        return n
+    except Exception as e:  # noqa: BLE001
+        logger.warning("downgrade_expired_keys 失败: %r", e)
+        return 0
+    finally:
+        if own is not None:
+            try:
+                own.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+# 后台定时降级线程(每小时扫一次; 首次由 ensure_downgrade_scheduler 触发)
+_downgrade_thread: threading.Thread | None = None
+_downgrade_stop = threading.Event()
+_DOWNGRADE_INTERVAL_S = 3600
+
+
+def ensure_downgrade_scheduler(interval_sec: int = _DOWNGRADE_INTERVAL_S) -> None:
+    """启动到期降级后台线程(幂等, 只启一次)。进程内 daemon, 退出即停。"""
+    global _downgrade_thread
+    if _downgrade_thread is not None and _downgrade_thread.is_alive():
+        return
+    _downgrade_stop.clear()
+
+    def _loop() -> None:
+        # 启动即扫一次, 之后按 interval
+        while not _downgrade_stop.is_set():
+            try:
+                downgrade_expired_keys()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("到期降级循环异常: %r", e)
+            if _downgrade_stop.wait(interval_sec):
+                break
+
+    _downgrade_thread = threading.Thread(
+        target=_loop, name="tier-downgrade", daemon=True,
+    )
+    _downgrade_thread.start()
+    logger.info("到期降级定时任务已启动(interval=%ss)", interval_sec)
+
+
+def stop_downgrade_scheduler() -> None:
+    _downgrade_stop.set()
+
+
 # ── 鉴权 ────────────────────────────────────────────────────────────
 
 def _validate_api_key_row(x_api_key: str, db: Session) -> SkillApiKey:
     """校验 X-API-Key 并返回行; 无效抛 401, 禁用/冻结抛 403。"""
+    refresh_tier_configs(db)
     if not x_api_key or not x_api_key.startswith("sk_"):
         raise HTTPException(401, "缺少或无效的 X-API-Key(格式 sk_...)。请先 POST /api/keys 领取。")
     h = _hash_key(x_api_key)
@@ -369,15 +593,8 @@ def _validate_api_key_row(x_api_key: str, db: Session) -> SkillApiKey:
         raise HTTPException(403, "该 Key 已被禁用")
     if row.status == "frozen":
         raise HTTPException(403, f"该 Key 已被冻结: {row.frozen_reason or '异常用量'}")
-    # trial 到期自动降 free
-    if row.tier == "trial" and row.expires_at:
-        exp = row.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp < datetime.now(timezone.utc):
-            row.tier = "free"
-            row.daily_limit = TIER_DAILY_LIMIT["free"]
-            db.commit()
+    # trial/pro 到期自动降 free(与定时任务同口径)
+    _downgrade_if_expired(row, db)
     return row
 
 
@@ -459,18 +676,12 @@ def _best_active_key_for_user(db: Session, user_id: str) -> SkillApiKey | None:
 
 def _web_call_identity(user: _User, db: Session) -> _CallIdentity:
     """JWT 登录用户: channel=web; 有关联 key 则共享其配额, 否则 free 档按 user 限流。"""
+    refresh_tier_configs(db)
     uid = str(user.id)
     best = _best_active_key_for_user(db, uid)
     if best is not None:
-        # trial 到期降 free(与 _validate_api_key_row 同口径)
-        if best.tier == "trial" and best.expires_at:
-            exp = best.expires_at
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            if exp < datetime.now(timezone.utc):
-                best.tier = "free"
-                best.daily_limit = TIER_DAILY_LIMIT["free"]
-                db.commit()
+        # trial/pro 到期降 free(与 _validate_api_key_row 同口径)
+        _downgrade_if_expired(best, db)
         return _CallIdentity(
             channel="web",
             api_key_id=best.id,
@@ -577,14 +788,15 @@ class SkillRunResponse(BaseModel):
 # ── 路由 ────────────────────────────────────────────────────────────
 
 @router.get("/skills/catalog")
-def skill_catalog() -> dict:
+def skill_catalog(db: Session = Depends(get_db)) -> dict:
     """公开 skill 目录(无需鉴权, 2026-09-16 开发者文档页)。
 
     只返回文档/调试台所需公开字段: name / description / tier_min / slow /
     caliber / params(JSON Schema properties) / required。
     **不返回** 密钥、用量、内部配置、黑名单明细 —— 敏感信息仍走鉴权后的 list_skills。
-    档位限流数字一并回传, 前端文档不再硬编码。
+    档位限流数字一并回传(读 tier_configs, 热更新), 前端文档不再硬编码。
     """
+    refresh_tier_configs(db)
     skills: list[dict[str, Any]] = []
     for name, meta in OPEN_SKILLS.items():
         tool = CHAT_TOOL_REGISTRY.get(name)
@@ -770,6 +982,7 @@ def register_key(
     """
     ip = request.client.host if request.client else "unknown"
     _check_key_register_rate(ip)
+    refresh_tier_configs(db)
     linked_user_id = None
     jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
     if jwt_user is not None:
@@ -830,6 +1043,7 @@ def get_usage(
     - 仅 JWT: 按 user_id 查该用户全部 channel 用量(不分 channel 汇总)
     - 响应含 by_channel 统计
     """
+    refresh_tier_configs(db)
     x_api_key = _header_str(request, "X-API-Key")
     authorization = _header_str(request, "Authorization")
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -879,26 +1093,8 @@ def get_usage(
     }
 
 
-class ProApplyRequest(BaseModel):
-    contact: str = Field(..., max_length=64, description="联系方式(手机/微信)")
-    reason: str = Field(default="", max_length=200)
-
-
-@router.post("/pro/apply")
-def apply_pro(
-    body: ProApplyRequest,
-    row: SkillApiKey = Depends(_get_api_key),
-    db: Session = Depends(get_db),
-) -> dict:
-    """Pro 申请(Phase 2: 第一批人工审核, 不自动升级)。"""
-    logger.info(
-        "Pro 申请 key=%s contact=%s reason=%s",
-        row.key_prefix, body.contact[:20], body.reason[:50],
-    )
-    return {
-        "status": "pending_review",
-        "message": "申请已提交, 请等待人工审核(1-2 个工作日)。审核通过后额度自动升至 5000 次/天。",
-    }
+# Pro 申请已迁至 src/web/api/pro_billing.py(任务3.1: 落库 + owner 人工审核)。
+# 原 /api/pro/apply 仅打日志的 stub 已删除, 避免与新路由冲突。
 
 
 # ── 后台管理(Phase 3.3): 仅 owner(JWT)可操作 ────────────────────────
@@ -954,6 +1150,7 @@ def admin_key_action(
     user: _User = Depends(_require_owner_admin),
 ) -> dict:
     """冻结/解冻/禁用/调档/调额度。"""
+    refresh_tier_configs(db)
     row = db.query(SkillApiKey).filter(SkillApiKey.id == body.key_id).first()
     if not row:
         raise HTTPException(404, "Key 不存在")

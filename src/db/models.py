@@ -1668,3 +1668,67 @@ class HighValueApiLog(Base):
         Index("ix_hv_api_user_created", "user_id", "created_at"),
         Index("ix_hv_api_name_created", "api_name", "created_at"),
     )
+
+
+class ProApplication(Base):
+    """Pro 付费申请(2026-09-16 任务3.1): 用户提交, owner 人工审核。
+
+    - status: pending(待审) / approved(通过) / rejected(拒绝)
+    - 审核通过时: users.role → pro, 该用户名下 skill_api_keys.tier → pro
+    """
+
+    __tablename__ = "pro_applications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    username = Column(String(64), default="")
+    reason = Column(Text, default="")
+    status = Column(String(16), default="pending", nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(String(64), default="")  # 审核人 username
+    review_note = Column(String(255), default="")
+
+    __table_args__ = (
+        Index("ix_pro_applications_status_created", "status", "created_at"),
+    )
+
+
+class TierConfig(Base):
+    """档位配置(2026-09-16 任务3.2): free/trial/pro 的日限/突发可热更新。
+
+    - skill_scope: JSON, 预留该档位可用 skill 范围; 亦可放 refill_per_min 等扩展
+    - is_default: 是否系统默认档(free=True)
+    - skills_gateway 启动/请求时读取(带短 TTL 缓存), 改表后新请求生效
+    """
+
+    __tablename__ = "tier_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tier_name = Column(String(16), unique=True, nullable=False)  # free/trial/pro
+    daily_limit = Column(Integer, nullable=False, default=100)
+    burst_limit = Column(Integer, nullable=False, default=30)
+    skill_scope = Column(JSON, default=dict)  # {"refill_per_min": N} 或 skill 列表
+    is_default = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class TierDowngradeLog(Base):
+    """档位到期降级日志(2026-09-16 任务3.3): trial/pro key 过期自动降 free 的留痕。
+
+    供 GET /api/pro/admin/expired 查询; 与 audit_logs 互补(这里是结构化 key 维度)。
+    """
+
+    __tablename__ = "tier_downgrade_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    api_key_id = Column(Integer, nullable=False, index=True)
+    key_prefix = Column(String(16), default="")
+    user_id = Column(String(36), nullable=True, index=True)
+    from_tier = Column(String(16), nullable=False)
+    to_tier = Column(String(16), nullable=False, default="free")
+    from_daily_limit = Column(Integer, default=0)
+    to_daily_limit = Column(Integer, default=0)
+    reason = Column(String(255), default="")
+    created_at = Column(DateTime, server_default=func.now(), index=True)

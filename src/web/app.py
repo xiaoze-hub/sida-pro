@@ -761,6 +761,19 @@ try:
 except ImportError:
     pass
 
+# Pro 付费(2026-09-16 任务3.1/3.3): 申请审核 + 到期降级查询
+# admin 接口内部用 require_owner; 用户侧用 get_current_user
+try:
+    from src.web.api import pro_billing
+
+    app.include_router(
+        pro_billing.router,
+        prefix="/api",
+        tags=["pro-billing"],
+    )
+except ImportError:
+    pass
+
 
 @app.get("/api/version")
 async def version():

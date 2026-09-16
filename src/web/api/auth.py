@@ -556,9 +556,15 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
     # 创建失败不阻断注册(旧 key 体系仍可用), api_key 返回 null。
     api_key_raw: Optional[str] = None
     try:
-        from src.web.api.skills_gateway import TIER_DAILY_LIMIT, _gen_key, _hash_key
+        from src.web.api.skills_gateway import (
+            TIER_DAILY_LIMIT,
+            _gen_key,
+            _hash_key,
+            refresh_tier_configs,
+        )
         from src.web.models import SkillApiKey
 
+        refresh_tier_configs(db)  # 任务3.2: 日限从 tier_configs 读(热更新)
         api_key_raw = _gen_key()
         key_row = SkillApiKey(
             key_hash=_hash_key(api_key_raw),

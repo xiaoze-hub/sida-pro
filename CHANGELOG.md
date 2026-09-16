@@ -7,6 +7,34 @@
 
 ## 2026-09-16
 
+### feat(pro-billing): Pro 付费系统(申请审核 + 档位配置化 + 到期降级)
+
+**性质**: 新功能。**需重启后端**。迁移 170/171 自动执行。
+
+**3.1 Pro 申请 + 人工审核**:
+- 新表 `pro_applications`(迁移 170): user_id/username/reason/status/reviewed_*
+- 新路由 `src/web/api/pro_billing.py`:
+  - `POST /api/pro/apply` 登录用户提交, 同人仅一条 pending
+  - `GET /api/pro/apply/status` 查自己最近申请
+  - `GET /api/pro/admin/applications` owner 列表(status 过滤)
+  - `POST /api/pro/admin/approve` owner 批准 → users.role=pro + active key tier=pro
+  - `POST /api/pro/admin/reject` owner 拒绝(不改 role/key)
+- admin 接口一律 `require_owner`; 原 skills_gateway 的 `/pro/apply` 日志 stub 删除防路由冲突
+
+**3.2 档位配置化**:
+- 新表 `tier_configs`(迁移 171): tier_name/daily_limit/burst_limit/skill_scope/is_default
+- 默认: free 100/30, trial 500/50, pro 5000/100(skill_scope 含 refill_per_min)
+- `skills_gateway.refresh_tier_configs(db)` 30s 缓存热更新 TIER_DAILY_LIMIT/TIER_BURST/TIER_REFILL
+- 注: create_all 先建空表, 迁移改为"表在也补默认行", 全新库必有三档
+
+**3.3 到期降级**:
+- 新表 `tier_downgrade_logs`(迁移 170): from_tier/to_tier/limits/reason
+- trial+pro key `expires_at` 过期 → 自动降 free + 写日志 + audit
+- 后台 daemon 线程每小时扫一次(`ensure_downgrade_scheduler`)
+- `GET /api/pro/admin/expired` owner 查近 N 天降级记录
+
+**测试**: 31/31 gateway 测试通过; 本地 e2e(apply/approve/reject/热更新/降级/expired)全部通过
+
 ### feat(identity): 单1 统一身份(注册发JWT+sk/游客试用/web计量/迁移)
 
 **性质**: 核心架构改造。**需重启后端**。迁移 169 自动执行。

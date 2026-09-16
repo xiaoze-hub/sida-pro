@@ -4296,6 +4296,133 @@ WHERE user_id IS NULL
         )
 
 
+def _m170_pro_applications(conn: Connection) -> None:
+    """Pro 申请 + 到期降级日志表(2026-09-16 任务3.1/3.3)。
+
+    - pro_applications: 用户 Pro 申请(owner 人工审核)
+    - tier_downgrade_logs: trial/pro key 过期自动降 free 的结构化留痕
+    """
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    bool_t = "BOOLEAN" if is_pg else "INTEGER"
+
+    if not _has_table(conn, "pro_applications"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE pro_applications (
+  id {pk},
+  user_id TEXT NOT NULL,
+  username TEXT DEFAULT '',
+  reason TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at {ts},
+  reviewed_by TEXT DEFAULT '',
+  review_note TEXT DEFAULT ''
+)
+"""
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_pro_applications_user ON pro_applications(user_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_pro_applications_status_created ON pro_applications(status, created_at)")
+        )
+
+    if not _has_table(conn, "tier_downgrade_logs"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE tier_downgrade_logs (
+  id {pk},
+  api_key_id INTEGER NOT NULL,
+  key_prefix TEXT DEFAULT '',
+  user_id TEXT,
+  from_tier TEXT NOT NULL,
+  to_tier TEXT NOT NULL DEFAULT 'free',
+  from_daily_limit INTEGER DEFAULT 0,
+  to_daily_limit INTEGER DEFAULT 0,
+  reason TEXT DEFAULT '',
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_tier_downgrade_key ON tier_downgrade_logs(api_key_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_tier_downgrade_user ON tier_downgrade_logs(user_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_tier_downgrade_created ON tier_downgrade_logs(created_at)")
+        )
+    _ = bool_t  # 本迁移暂未用到布尔列, 保留方言工具一致性
+
+
+def _m171_tier_configs(conn: Connection) -> None:
+    """档位配置表 + 默认数据(2026-09-16 任务3.2)。
+
+    free: 100/天 burst 30; trial: 500/天 burst 50; pro: 5000/天 burst 100。
+    skills_gateway 读此表(短 TTL 缓存)实现热更新; 改表后新请求生效。
+
+    注意: init_db 的 create_all 会先按 ORM 建出空表, 本迁移必须在表已存在时
+    仍补齐默认行(否则全新库 tier_configs 为空, 限流回落硬编码且无处可改)。
+    """
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    bool_false = "FALSE" if is_pg else "0"
+    bool_true = "TRUE" if is_pg else "1"
+    if not _has_table(conn, "tier_configs"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE tier_configs (
+  id {pk},
+  tier_name TEXT NOT NULL UNIQUE,
+  daily_limit INTEGER NOT NULL DEFAULT 100,
+  burst_limit INTEGER NOT NULL DEFAULT 30,
+  skill_scope TEXT,
+  is_default {('BOOLEAN' if is_pg else 'INTEGER')} NOT NULL DEFAULT {bool_false},
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+            )
+        )
+    # 默认数据: skill_scope 里放 refill_per_min, 与 skills_gateway 硬编码默认对齐。
+    # 只补缺失档位, 不覆盖已存在的(运维可能已改过)。
+    defaults = (
+        ("free", 100, 30, '{"refill_per_min": 15}', True),
+        ("trial", 500, 50, '{"refill_per_min": 20}', False),
+        ("pro", 5000, 100, '{"refill_per_min": 60}', False),
+    )
+    for tier, daily, burst, scope, is_def in defaults:
+        try:
+            row = conn.execute(
+                text("SELECT id FROM tier_configs WHERE tier_name = :t LIMIT 1"),
+                {"t": tier},
+            ).first()
+        except Exception:
+            conn.rollback()
+            row = None
+        if row:
+            continue
+        conn.execute(
+            text(
+                """
+INSERT INTO tier_configs (tier_name, daily_limit, burst_limit, skill_scope, is_default)
+VALUES (:t, :d, :b, :s, :def)
+"""
+            ),
+            {"t": tier, "d": daily, "b": burst, "s": scope, "def": is_def},
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4401,6 +4528,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(167, "user_sessions_table", _m167_user_sessions_table),
     Migration(168, "high_value_api_logs", _m168_high_value_api_logs),
     Migration(169, "unified_identity_columns", _m169_unified_identity_columns),
+    # Pro 付费系统(2026-09-16): 申请审核 + 档位配置 + 到期降级日志
+    Migration(170, "pro_applications", _m170_pro_applications),
+    Migration(171, "tier_configs", _m171_tier_configs),
 )
 
 
