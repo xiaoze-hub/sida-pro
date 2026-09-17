@@ -26,6 +26,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install system libs for WeasyPrint + CJK fonts (PDF export tests)
+        # 2026-09-18: 与 build-push-acr.yml 同一根因 —— 缺 pango/cairo/noto-cjk 时
+        # WeasyPrint 渲染不出中文, test_pdf_export 断言 "广汽集团"/正文文本 命中二进制乱码而红。
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+            libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
+
       - name: Backend pytest
         run: |
           set -o pipefail
