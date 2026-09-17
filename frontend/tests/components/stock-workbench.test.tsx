@@ -96,8 +96,22 @@ vi.mock('@/pages/workbench/tabs/ResearchTab', makeTabMock('research'))
 vi.mock('@/pages/workbench/tabs/ForecastTab', makeTabMock('forecast'))
 
 vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
-  default: (p: { symbol: string; market: string; height?: number; initialInterval?: string; initialDays?: number }) => (
-    <div data-testid="kline">{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
+  default: (p: {
+    symbol: string
+    market: string
+    height?: number
+    initialInterval?: string
+    initialDays?: number
+    /** §12: 数据源健康裁决(页面必须把 useSourceHealth 的 isReady/reasonOf 接进来) */
+    sourceReady?: (icon: string) => boolean
+    sourceReason?: (icon: string) => string
+  }) => (
+    <div
+      data-testid="kline"
+      /* §12 观测点: 把裁决函数**真调用一次**并渲染结果 —— 证明"页面→图表"这条线通了, 且
+         tck(拆/⚠撤) 不可用时确实判 false(灰显), wencai(涨) 可用时判 true。 */
+      data-gate={`tck=${String(p.sourceReady?.('拆'))};wencai=${String(p.sourceReady?.('涨'))};reason=${p.sourceReason?.('拆') ?? ''}`}
+    >{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
   ),
 }))
 
@@ -111,6 +125,19 @@ vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
 // 遗留⑦: 真组件新增了可选 `refreshToken`(页面级刷新不再靠 `key` 重挂载)——替身同形:
 // 取数 effect 依赖 `[symbol, refreshToken]`(token 变即重取), 另用 `bodyMount` 记**挂载次数**
 // (挂载副作用只跑一次 ⇒ 刷新后仍是 1 即证明"没有重挂载")。
+/**
+ * §12: 数据源健康 hook 的测试替身 —— tck 不可用(模拟 .tck 未连), 其余源可用。
+ * 真 hook 会在请求失败时把整表置空("未知"一律按不可用), 这里不模拟网络, 只固定裁决结果。
+ */
+vi.mock('@/hooks/useSourceHealth', () => ({
+  useSourceHealth: () => ({
+    health: {},
+    loading: false,
+    isReady: (icon: string) => icon !== '拆' && icon !== '⚠撤',
+    reasonOf: (icon: string) => (icon === '拆' ? 'tck 不可用(down)' : ''),
+  }),
+}))
+
 vi.mock('@/pages/workbench/IndexBody', async () => {
   const { useEffect } = await import('react')
   function IndexBodyMock(p: { symbol: string; refreshToken?: number }) {
@@ -298,6 +325,10 @@ describe('StockWorkbench 三带骨架', () => {
 
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
     expect(screen.getByTestId('kline').textContent).toBe('kline:002636:CN:420:1d:120')
+    // §12: 事件图标的数据源裁决已从 useSourceHealth 接到图上(tck 不可用 → 拆 判 false)
+    expect(screen.getByTestId('kline').getAttribute('data-gate')).toBe(
+      'tck=false;wencai=true;reason=tck 不可用(down)',
+    )
     expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
     // 主图面板外壳: `min-w-0` 是**承重**类 —— 没有它, echarts canvas 会撑破与固定
     // `w-[320px]` 右栏并排的 flex 行(overflow);`flex-1` 让它吃掉剩余宽度。

@@ -147,6 +147,18 @@ const EMPTY_EVENTS: KlineEventPoint[] = []
 const EMPTY_LINES: KlinePriceLine[] = []
 const EMPTY_ACTIVITY: ActivityPoint[] = []
 
+/**
+ * v2.1 §12: 把 `#RRGGBB` 压暗成半透明色 —— 用于"数据源不可用"的事件图标灰显。
+ * Lightweight Charts 的 marker color 直接透传 canvas, 认 `rgba()`;
+ * 非 6 位 hex(已是 rgba/颜色名) 原样返回, 不硬造。
+ */
+function dimHex(hex: string, alpha = 0.35): string {
+  const m = /^#([0-9a-f]{6})$/i.exec((hex || '').trim())
+  if (!m) return hex
+  const n = parseInt(m[1], 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+}
+
 function sma(values: number[], period: number): Array<number | null> {
   if (period <= 1) return values.map((v) => v)
   const out: Array<number | null> = new Array(values.length).fill(null)
@@ -241,6 +253,17 @@ export default function KlineChart(props: {
    */
   onRangeStats?: (stats: KlineRangeStats | null) => void
   /**
+   * v2.1 §12: **数据源健康裁决** —— 事件图标所属数据源不可用时, 该 marker **灰显**(压暗)而不是
+   * 装作有数据; 悬停读数同时标"(数据源不可用)"。
+   *
+   * 未传 = 不裁决(保持旧行为: 全部按可用渲染)。裁决表见 `@/hooks/useSourceHealth` 的
+   * ICON_SOURCE(拆/⚠撤→tck, 🛡托/🔒压→img, 涨→wencai, 我→shadow, 明盘→tq_moreinfo)。
+   * 诚实口径: 请求失败/状态未知一律按不可用处理, 不假设"接口挂了但数据还在"。
+   */
+  sourceReady?: (icon: string) => boolean
+  /** v2.1 §12: 灰显原因(悬停 tooltip 用) —— sourceReady 判不可用时给一句人话说明 */
+  sourceReason?: (icon: string) => string
+  /**
    * v2.1 §10.2③: 十字光标联动回调 —— 除 time/price 外, 追加**该时刻**的明盘/暗盘净额
    * 与事件标签(资金面板据此显示"该时刻"读数, 而不是只有价格)。
    * 缺数据一律 null/[] —— 消费方显示 `--`, 不补 0。
@@ -333,6 +356,9 @@ export default function KlineChart(props: {
   onRangeSelectRef.current = props.onRangeSelect
   const onCrosshairMoveRef = useRef(props.onCrosshairMove)
   onCrosshairMoveRef.current = props.onCrosshairMove
+  // §12: 数据源裁决也用 ref —— 十字光标订阅 effect 只建一次, 直接读 props 会拿到旧闭包
+  const sourceReadyRef = useRef(props.sourceReady)
+  sourceReadyRef.current = props.sourceReady
 
   // ── Lightweight Charts 实例化 ─────────────────────────────
   useEffect(() => {
@@ -473,7 +499,14 @@ export default function KlineChart(props: {
         ? fundRef.current.find((f) => String(f?.date ?? '').slice(0, 10) === hitDate)
         : undefined
       const hitEvents = hitDate
-        ? eventsRef.current.filter((e) => e.date.slice(0, 10) === hitDate).map((e) => e.label)
+        ? eventsRef.current
+            .filter((e) => e.date.slice(0, 10) === hitDate)
+            .map((e) => {
+              // §12: 该事件的数据源不可用 → 读数里显式标注, 不让人以为"有图标就是有数据"
+              const icon = KIND_ICON[e.kind]
+              const ready = sourceReadyRef.current
+              return icon && ready && !ready(icon) ? `${e.label}(数据源不可用)` : e.label
+            })
         : []
       const mingNet = hitFund
         ? (typeof hitFund.ming_net === 'number' && Number.isFinite(hitFund.ming_net)
@@ -692,10 +725,16 @@ export default function KlineChart(props: {
       }
       for (const { ev, n } of grouped.values()) {
         const base = KIND_ICON[ev.kind] || KIND_LABEL[ev.kind] || ev.kind
+        // §12: 数据源不可用 → 压暗(灰显), 但仍标出位置(不隐藏, 免得看图像"当天没事发生")
+        const icon = KIND_ICON[ev.kind]
+        const ready = props.sourceReady
+        const dimmed = !!icon && !!ready && !ready(icon)
+        const toneColor =
+          ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : readChartTheme().neutral
         markers.push({
           time: toChartTime(ev.date, interval),
           position: ev.tone === 'down' ? ('belowBar' as const) : ('aboveBar' as const),
-          color: ev.tone === 'down' ? sc.down : ev.tone === 'up' ? sc.up : readChartTheme().neutral,
+          color: dimmed ? dimHex(toneColor, 0.35) : toneColor,
           shape: 'circle' as const,
           text: n > 1 ? `${base}×${n}` : base,
         })
@@ -831,7 +870,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。

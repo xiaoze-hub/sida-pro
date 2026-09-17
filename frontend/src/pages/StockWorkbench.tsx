@@ -9,6 +9,8 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+// v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
+import { useSourceHealth } from '@/hooks/useSourceHealth'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
 import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
@@ -234,6 +236,8 @@ export default function StockWorkbench() {
    * 统计由 `KlineChart` 算好回调上来(它同时持有 K线/资金柱/事件), 本页只决定渲染位置与收起。
    */
   const [rangeStats, setRangeStats] = useState<KlineRangeStats | null>(null)
+  // §12: 数据源健康(60s 轮询; 失败/未知一律按不可用 → 灰显, 不假装有数据)
+  const { isReady: sourceReady, reasonOf: sourceReason } = useSourceHealth()
   const [statsDismissed, setStatsDismissed] = useState(false)
 
   /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。 */
@@ -289,6 +293,9 @@ export default function StockWorkbench() {
                   // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
                   if (s) setStatsDismissed(false)
                 }}
+                /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
+                sourceReady={sourceReady}
+                sourceReason={sourceReason}
               />
             </div>
             <div className="flex w-[320px] shrink-0 flex-col gap-2">

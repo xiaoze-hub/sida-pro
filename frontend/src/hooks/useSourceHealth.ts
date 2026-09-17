@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { datasourcesApi } from '@panwatch/api'
 
@@ -72,23 +72,33 @@ export function useSourceHealth(pollMs: number = POLL_MS) {
     }
   }, [pollMs])
 
-  /** 某个图标是否可用: 只有 connected 才算可用 */
-  const isReady = (icon: string): boolean => {
-    const src = ICON_SOURCE[icon]
-    if (!src) return true // 未纳入健康检查的图标(如解套盘位/支撑压力)按 §5.3 走"不显示", 不灰显
-    return health[src]?.status === 'connected'
-  }
+  /**
+   * 某个图标是否可用: 只有 connected 才算可用。
+   * 2026-09-18: 用 useCallback 稳定引用 —— 消费方(K线事件图标)会把它放进 effect 依赖,
+   * 每次渲染都换新函数会导致 marker 层反复重建(与"取数风暴"同类问题)。
+   */
+  const isReady = useCallback(
+    (icon: string): boolean => {
+      const src = ICON_SOURCE[icon]
+      if (!src) return true // 未纳入健康检查的图标(如解套盘位/支撑压力)按 §5.3 走"不显示", 不灰显
+      return health[src]?.status === 'connected'
+    },
+    [health],
+  )
 
   /** 灰显 tooltip 文案 */
-  const reasonOf = (icon: string): string => {
-    const src = ICON_SOURCE[icon]
-    if (!src) return ''
-    const item = health[src]
-    if (!item) return '数据源健康状态未知'
-    if (item.status === 'connected') return ''
-    const why = item.detail ? ` — ${item.detail}` : ''
-    return `${item.name || src} 不可用(${item.status})${why}`
-  }
+  const reasonOf = useCallback(
+    (icon: string): string => {
+      const src = ICON_SOURCE[icon]
+      if (!src) return ''
+      const item = health[src]
+      if (!item) return '数据源健康状态未知'
+      if (item.status === 'connected') return ''
+      const why = item.detail ? ` — ${item.detail}` : ''
+      return `${item.name || src} 不可用(${item.status})${why}`
+    },
+    [health],
+  )
 
   return { health, loading, isReady, reasonOf }
 }
