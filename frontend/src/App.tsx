@@ -379,7 +379,7 @@ function App() {
 
   return (
     <RequireAuth>
-    <div className="min-h-screen pb-16 md:pb-0 relative overflow-x-clip bg-background">
+    <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
       <BrowserNotificationBridge />
       <AmbientBackground />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}

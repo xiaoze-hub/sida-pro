@@ -293,3 +293,14 @@
 @media (prefers-reduced-motion: reduce) {
   .sida-flash, .sida-page-enter { animation: none; }
 }
+
+/* ── 2026-09-18 UI 走查 P0-1: 固定免责条为自身留出空间 ──────────────────────
+   免责条是 `position: fixed`(合规要求常驻可见), 但它**不在文档流里**, 原先页面末行/右侧详情
+   会被它压住(dark-fund-top 表格末行、history 详情、reports 卡片… 走查里 9 页复现)。
+   这里把它的高度暴露成变量, 由 App 外壳的主内容区用 padding 补偿 —— 内容不再被遮挡。 */
+:root { --disclaimer-h: 0px; }
+html.has-disclaimer { --disclaimer-h: 2.5rem; }
+@media (max-width: 767px) {
+  /* 移动端免责条上抬到 14(56px 底部导航) 之上, 总占位 = 导航 + 条 */
+  html.has-disclaimer { --disclaimer-h: 6rem; }
+}

@@ -15,6 +15,12 @@
  *    只许降不许升; 新文件出现 .toFixed( 直接失败。新代码一律走 @/lib/format safe* 系列。
  * R7 禁 null→0 三元(2026-09-09 E3): `x == null ? 0 : ...` 会把缺数据渲染成 "+0.00%"
  *    掩盖缺失, 应走 safeNum()/safePercent() 的 '--' fallback。
+ * R8 固定底部条必须预留空间(2026-09-18 UI 走查): `fixed inset-x-0 bottom*` 的常驻条会压住
+ *    页面最后一行(走查 9 页复现)。该文件必须同时出现 `--disclaimer-h`(或自行补偿 padding),
+ *    否则 CI 失败 —— 防止以后再加一条固定条重犯。
+ * R9 禁外部 CDN 脚本(2026-09-18 UI 走查): index.html 不许再引 unpkg/jsdelivr 之类外部域。
+ *    生产实测 CSP/国内网络任一环节拦掉 CDN, 图表库直接加载失败、主视觉区空白。
+ *    图表库已随 biz-ui 依赖打包(localhost 自托管), 无需 CDN。
  */
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, extname } from 'path'
@@ -109,6 +115,26 @@ for (const f of files) {
   else if (c < base) console.log(`[R6] ${key}: ${c} < baseline ${base} — 可调低 baseline`)
 }
 for (const k of Object.keys(baseline)) if (!seen.has(k)) console.log(`[R6] ${k}: 0 — 可从 baseline 删除`)
+
+// R8: 固定底部条必须预留空间(见文件头 R8 说明)
+for (const f of files) {
+  const lines = readFileSync(f, 'utf8').split(/\r?\n/)
+  const hitIdx = lines.findIndex((ln) => /fixed[^"'`]*inset-x-0[^"'`]*bottom/.test(ln))
+  if (hitIdx < 0) continue
+  const whole = lines.join('\n')
+  // 预留机制二选一: 直接引用高度变量(--disclaimer-h), 或声明占用标记(has-disclaimer)
+  if (!whole.includes('disclaimer-h') && !whole.includes('has-disclaimer')) {
+    bad('R8-FIXED-BOTTOM-NO-RESERVE', rel(f), hitIdx + 1,
+        'fixed bottom bar 未为自身预留空间: 请给内容区加 pb-[var(--disclaimer-h)] 补偿(见 index.css)')
+  }
+}
+
+// R9: index.html 禁外部 CDN 脚本
+try {
+  const html = readFileSync(join(ROOT, 'frontend', 'index.html'), 'utf8')
+  const cdn = html.match(/(?:src|href)=["']https?:\/\/(?:unpkg\.com|cdn\.jsdelivr\.net)[^"']*/g) || []
+  for (const c of cdn) bad('R9-EXTERNAL-CDN', 'frontend/index.html', 1, c)
+} catch { /* index.html 不存在则跳过 */ }
 
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)

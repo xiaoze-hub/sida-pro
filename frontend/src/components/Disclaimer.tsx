@@ -30,6 +30,15 @@ export default function Disclaimer() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
+  // 2026-09-18(UI 走查 P0-1): 告诉外层"底部被占了多少" —— App 主内容区据此加 padding-bottom,
+  // 否则这个 fixed 条会压住页面最后一行(走查 9 页复现)。
+  useEffect(() => {
+    const root = document.documentElement
+    if (visible) root.classList.add('has-disclaimer')
+    else root.classList.remove('has-disclaimer')
+    return () => root.classList.remove('has-disclaimer')
+  }, [visible])
+
   if (!visible) return null
 
   const dismiss = () => {

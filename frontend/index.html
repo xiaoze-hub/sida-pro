@@ -32,10 +32,10 @@
     -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net;
+      script-src 'self' 'unsafe-inline';
       style-src 'self' 'unsafe-inline';
       img-src 'self' data: blob: https:;
-      font-src 'self' data: https://unpkg.com https://cdn.jsdelivr.net;
+      font-src 'self' data:;
       connect-src 'self' ws: wss: http://127.0.0.1:8000 http://localhost:8000 https://stock.quicktiny.cn https://np-cnotice-stock.eastmoney.com https://push2.eastmoney.com https://push2delay.eastmoney.com https://push2ex.eastmoney.com https://qt.gtimg.cn;
       worker-src 'self' blob:;
       frame-src 'self' blob:;
@@ -61,9 +61,9 @@
       })();
     </script>
 
-    <!-- Lightweight Charts (CDN) -->
-    <script defer src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"
-      onerror="(function(){var s=document.createElement('script');s.defer=true;s.src='https://cdn.jsdelivr.net/npm/lightweight-charts/dist/lightweight-charts.standalone.production.js';document.head.appendChild(s);}())"></script>
+    <!-- Lightweight Charts: 2026-09-18 起**不再从 CDN 加载** —— 图表库由 biz-ui 依赖打包进
+         bundle(见 InteractiveKline/MinuteLwcChart 的 getLW 优先取打包版)。
+         原因: 生产实测 CDN(unpkg/jsdelivr)被 CSP/网络拦掉时整页图表不渲染。 -->
   </head>
   <body>
     <div id="root"></div>

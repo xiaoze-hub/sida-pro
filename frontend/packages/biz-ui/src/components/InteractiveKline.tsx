@@ -7,6 +7,7 @@ import MinuteLwcChart from './MinuteLwcChart'
 import DarkFlowCards from './DarkFlowCards'
 import AuctionSnapshotCard from './AuctionSnapshotCard'
 import FlashValue from './FlashValue'
+import * as LW from 'lightweight-charts'
 import { readStockColors, withAlpha, readGsColors, readChartTheme } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
 import { subChartReadouts, visibleSubCharts, type SubChartRow } from '../lib/subcharts'
@@ -217,7 +218,18 @@ function computeRsi(closes: number[], period = 6): Array<number | null> {
   return rsiCutlerSeries(closes, period)
 }
 
-function getLW() {
+/**
+ * 取 Lightweight Charts 命名空间。
+ *
+ * 2026-09-18 修(生产实测): 原先只认 `window.LightweightCharts` —— 那是 index.html 从
+ * **unpkg / jsdelivr CDN** 拉的全局脚本。CSP/国内网络任一环节拦掉 CDN, 图表就直接不渲染
+ * (生产截图实测报「图表库加载失败（网络受限时可能发生）」)。本仓 `lightweight-charts` 本来
+ * 就是 biz-ui 的依赖(打包进 main bundle), 所以优先用**打包版**, 全局只作兜底:
+ * 图表渲染不再依赖任何外部 CDN。
+ */
+function getLW(): any {
+  const bundled = LW as any
+  if (bundled && typeof bundled.createChart === 'function') return bundled
   return (window as any)?.LightweightCharts || null
 }
 

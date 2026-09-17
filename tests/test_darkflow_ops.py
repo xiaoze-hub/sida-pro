@@ -42,6 +42,13 @@ def test_clear_all():
     assert df._TICKS_CACHE == {}
 
 
+def _df_cache_day() -> str:
+    """应用口径的"当日"(CST) —— 与 dark_flow._cache_day() 同源, 不用跑测机器本地时区。"""
+    from src.core.dark_flow import _cache_day
+
+    return _cache_day()
+
+
 def test_diag_forwarded(monkeypatch):
     import src.web.api.darkflow as api
 
@@ -74,13 +81,16 @@ def test_diag_forwarded(monkeypatch):
     assert resp["diag"] == {
         "tick_count": 1234,
         "last_tick_t": "10:30:00",
-        "trade_date": datetime.date.today().isoformat(),
+        # 2026-09-18: **不能**用 date.today() —— 容器 TZ=UTC 而应用的"交易日"是 CST
+        # (dark_flow._CST), 在 00:00–08:00 CST 这段窗口里两边差一天, CI 必红(本地因时区相同而通过)。
+        # 断言应用自己的口径: diag.trade_date 就是 _cache_day()。
+        "trade_date": _df_cache_day(),
         "tick_pages": 18,
         "stale": False,
         "tick_lag_sec": 5,
         "source": "tencent_ticks",
     }
-    assert resp["dark_order"]["trade_date"] == datetime.date.today().isoformat()
+    assert resp["dark_order"]["trade_date"] == _df_cache_day()
 
 
 def test_clear_endpoint_single(monkeypatch):

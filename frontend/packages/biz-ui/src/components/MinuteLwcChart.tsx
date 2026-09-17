@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MinuteSwings } from './InteractiveKline'
+import * as LW from 'lightweight-charts'
 import { readStockColors, withAlpha } from '../lib/stock-colors'
 
 export interface MinutePoint {
@@ -42,7 +43,13 @@ interface SwingMark {
   spread?: number
 }
 
+/**
+ * 同 InteractiveKline: 优先用**打包进来的** lightweight-charts(不依赖 CDN 全局),
+ * 避免国内网络/CSP 拦掉 unpkg·jsdelivr 时分时图直接不渲染(2026-09-18 生产实测)。
+ */
 function getLW(): any {
+  const bundled = LW as any
+  if (bundled && typeof bundled.createChart === 'function') return bundled
   return (window as any)?.LightweightCharts || null
 }
 

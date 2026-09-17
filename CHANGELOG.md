@@ -5,6 +5,45 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (UI 走查 · P0 遮挡 + 图表自托管 + 全景/未来方向)
+
+### fix(ui): 固定免责条遮挡内容(9 页复现) + 图表库不再依赖外部 CDN
+
+**性质**: UI 缺陷修复(P0) + 架构健壮性。tag `v0.10.12`。依据 `docs/UI走查_20260918.md`
+(22 路由截图 + DOM 探针 + 视觉逐页评审, 视觉均分 6.3/10)。
+
+**P0-1 固定免责条遮挡内容**（走查里 9 页复现: dark-fund-top 表格末行被盖 / history 详情 / reports 卡片 /
+notifications 列表 / opportunities 数据行 / profile 面板 / stocks-002361 标题 / system 卡片 / home 文案截断）:
+- 根因: 免责条是 `position: fixed`(合规要求常驻), 但**不在文档流内**, 页面没有为它的高度补偿。
+- 修: `index.html` 侧定义 `--disclaimer-h`(桌面 2.5rem / 移动 6rem, 移动端叠加底部导航), `Disclaimer`
+  显示时给 `<html>` 打 `has-disclaimer`; App 外壳主内容区 `pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]`。
+- 防复发: `scripts/check_ui_rules.mjs` 新增 **R8**(`fixed inset-x-0 bottom*` 的条必须引用
+  `--disclaimer-h`/`has-disclaimer`, 否则 CI 失败)。
+
+**P0-2 图表库依赖外部 CDN → 国内网络/CSP 一拦就整页无图**:
+- 实证: 网络探针抓到 `unpkg.com`/`cdn.jsdelivr.net` 的 `lightweight-charts` 均被 **CSP 拦掉**,
+  `stocks-index` 因此渲染出「图表库加载失败（网络受限时可能发生）」, 主视觉区整块空白(视觉分 5/10)。
+- 修: `InteractiveKline`/`MinuteLwcChart` 的 `getLW()` 改为**优先取打包版**
+  (`import * as LW from 'lightweight-charts'` —— 该依赖本来就在 biz-ui 里、已进 bundle), 全局只作兜底;
+  `index.html` 删除 CDN `<script>`, CSP `script-src`/`font-src` 收紧回 `'self'`。
+- 防复发: ui-rules 新增 **R9**(`index.html` 不许再引 unpkg/jsdelivr), 并有 7 例 vitest 钉住(含"两个图表组件必须 import 打包版")。
+
+### fix(tests): 暗盘 diag 用例的"跨午夜"时区坑(CI 必红)
+
+`tests/test_darkflow_ops.py::test_diag_forwarded` 断言 `trade_date == date.today()` —— 而 CI 容器
+`TZ=UTC`、应用的"交易日"是 **CST**(`dark_flow._CST`): 在 00:00–08:00 CST 窗口两边差一天, v0.10.10/v0.10.11
+的流水线因此红(本地时区相同所以永远绿)。修法: 断言应用自己的口径 `_cache_day()`; 本地与 `TZ=UTC` 两种
+环境各跑一遍均 15 passed。同批把上一条"暗盘默认源来自环境变量"的隐含假设也一并钉死。
+
+### docs: 项目全景 + UI 走查 + 未来方向执行方案
+
+- `docs/项目全景_20260918.md`: 规模(455 py/12.8 万行、301 测试/4.5 万行、292 前端文件、371 端点、68 表、
+  14 调度任务、28 AI 工具/22 开放 skill)、分层、数据源矩阵、能力面、交付链路、设计稿覆盖、风险债务。
+- `docs/UI走查_20260918.md`: 22 页逐页得分 + 四个系统性缺陷(遮挡 P0 / 空态占巨幅空白 P1 /
+  theme-mood·heatmap 信息设计 P1 / 卡片-vs-hairline 一致性 P2) + 实施批次 B1–B4。
+- `docs/未来方向与创新执行方案_20260918.md`: 五个方向(口径可信度 / 决策闭环 / Agent·API 经济 /
+  终端体验 / 数据资产化) + 自主循环排期 B1–B8(每批 = 一个 tag, 含验收与环比走查机制)。
+
 ## 2026-09-18 (口径对照页 · A2 第一步)
 
 ### feature: 「口径对照」页 —— 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排(消歧不合并)
