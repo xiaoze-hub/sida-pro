@@ -47,27 +47,27 @@ export function DevPageLayout({
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a12] text-white">
+    <div className="min-h-screen bg-background text-foreground dark:bg-[#0a0a12] dark:text-white">
       {/* 顶部标题栏 */}
-      <header className="sticky top-0 z-30 border-b border-white/5 bg-[#0a0a12]/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border/50 dark:border-white/5 bg-background/80 dark:bg-[#0a0a12]/80 backdrop-blur-xl">
         <div className="flex items-center gap-4 px-4 py-4 md:px-8">
           {/* 移动端菜单按钮 */}
           <button
-            className="rounded-md p-1.5 text-slate-400 hover:bg-white/5 hover:text-white md:hidden"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white md:hidden"
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
-              <h1 className="text-[18px] font-bold tracking-tight text-white md:text-[20px]">{title}</h1>
+              <h1 className="text-[18px] font-bold tracking-tight text-foreground dark:text-white md:text-[20px]">{title}</h1>
               {badge && (
-                <span className="rounded-full bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 text-[10px] font-mono text-cyan-400">
+                <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-mono text-primary dark:bg-cyan-500/10 dark:border-cyan-500/20 dark:text-cyan-400">
                   {badge}
                 </span>
               )}
             </div>
-            <p className="mt-0.5 text-[12px] text-slate-500">{subtitle}</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground dark:text-slate-500">{subtitle}</p>
           </div>
           {headerExtra}
         </div>
@@ -77,7 +77,7 @@ export function DevPageLayout({
         {/* 侧边栏 */}
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-20 w-56 border-r border-white/5 bg-[#0c0c16] pt-[73px] transition-transform md:sticky md:top-[73px] md:z-0 md:h-[calc(100vh-73px)] md:translate-x-0 md:pt-0',
+            'fixed inset-y-0 left-0 z-20 w-56 border-r border-border/50 dark:border-white/5 bg-card/80 dark:bg-[#0c0c16] pt-[73px] transition-transform md:sticky md:top-[73px] md:z-0 md:h-[calc(100vh-73px)] md:translate-x-0 md:pt-0',
             sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           )}
         >
@@ -92,8 +92,8 @@ export function DevPageLayout({
                     className={cn(
                       'flex items-center gap-2.5 rounded-lg px-3 py-2 text-[12px] transition-colors',
                       isActive
-                        ? 'bg-cyan-500/10 text-cyan-300 font-medium'
-                        : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                        ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white'
                     )}
                     onClick={() => setSidebarOpen(false)}
                   >
@@ -108,8 +108,8 @@ export function DevPageLayout({
                   className={cn(
                     'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12px] transition-colors',
                     isActive
-                      ? 'bg-cyan-500/10 text-cyan-300 font-medium'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                      ? 'bg-primary/10 text-primary font-medium dark:bg-cyan-500/10 dark:text-cyan-300'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white'
                   )}
                   onClick={() => handleClick(item)}
                 >
@@ -156,10 +156,10 @@ export function Section({
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            {icon && <span className="text-cyan-400">{icon}</span>}
-            <h2 className="text-[15px] font-semibold text-white">{title}</h2>
+            {icon && <span className="text-primary dark:text-cyan-400">{icon}</span>}
+            <h2 className="text-[15px] font-semibold text-foreground dark:text-white">{title}</h2>
           </div>
-          {description && <p className="mt-1 text-[12px] text-slate-500">{description}</p>}
+          {description && <p className="mt-1 text-[12px] text-muted-foreground dark:text-slate-500">{description}</p>}
         </div>
         {action}
       </div>
@@ -171,7 +171,7 @@ export function Section({
 /* ── 信息卡片 ── */
 export function InfoCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn('rounded-xl border border-white/5 bg-white/[0.02] p-4 backdrop-blur-sm', className)}>
+    <div className={cn('rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4 backdrop-blur-sm', className)}>
       {children}
     </div>
   )
@@ -187,31 +187,22 @@ export function CodeBlock({ code, language = 'bash', onCopy }: { code: string; l
     onCopy?.()
   }
   return (
-    <div className="group relative rounded-lg border border-white/5 bg-[#0d0d18]">
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
-        <span className="font-mono text-[10px] text-slate-600">{language}</span>
+    <div className="group relative rounded-lg border border-border/50 dark:border-white/5 bg-muted/40 dark:bg-[#0d0d18]">
+      <div className="flex items-center justify-between border-b border-border/40 dark:border-white/5 px-3 py-1.5">
+        <span className="font-mono text-[10px] text-muted-foreground/70 dark:text-slate-600">{language}</span>
         <button
-          className="rounded px-1.5 py-0.5 text-[10px] text-slate-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-cyan-400"
+          className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-primary dark:text-slate-500 dark:hover:text-cyan-400"
           onClick={handleCopy}
         >
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-cyan-100/80">
+      <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-foreground/90 dark:text-cyan-100/80">
         {code}
       </pre>
     </div>
   )
 }
 
-/* ── 空状态 ── */
-export function EmptyState({ icon, title, desc, action }: { icon?: ReactNode; title: string; desc?: string; action?: ReactNode }) {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-white/[0.01] py-12">
-      {icon && <div className="mb-3 text-slate-600">{icon}</div>}
-      <p className="text-[13px] font-medium text-slate-400">{title}</p>
-      {desc && <p className="mt-1 text-[11px] text-slate-600">{desc}</p>}
-      {action && <div className="mt-4">{action}</div>}
-    </div>
-  )
-}
+/* ── 空状态：统一走全局 EmptyState（主题感知） ── */
+export { EmptyState } from '@/components/EmptyState'

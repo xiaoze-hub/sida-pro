@@ -32,6 +32,8 @@ import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
 import AuctionAnomalyTab from '@panwatch/biz-ui/components/AuctionAnomalyTab'
 import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
+import { EmptyState } from '@/components/EmptyState'
+import { SkeletonTable } from '@/components/Skeleton'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -1949,6 +1951,22 @@ export default function OpportunitiesPage() {
         </div>
       )}
 
+      {loading && groupedItems.length === 0 ? (
+        /* 首次加载：机会列表骨架屏（已有数据时静默刷新，不闪） */
+        <div className="border-t border-border/60 pt-2">
+          <SkeletonTable rows={6} />
+        </div>
+      ) : !loading && groupedItems.length === 0 ? (
+        <EmptyState
+          className="mt-4"
+          title={error ? '暂无满足条件的机会' : '暂无机会快照'}
+          description={
+            error
+              ? '当前筛选条件下没有匹配结果，可放宽条件或稍后重试'
+              : '点击右上角「刷新」生成一次全市场扫描'
+          }
+        />
+      ) : (
       <div className="border-t border-border/60">
         {/* W3.7/D7 去卡片化: 表头(桌面端), 与扫读行列对齐 */}
         <div className="hidden md:grid grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] gap-x-3 px-1 py-1.5 text-[10px] font-medium text-muted-foreground border-b border-border/40">
@@ -2167,9 +2185,6 @@ export default function OpportunitiesPage() {
           )
         })}
       </div>
-
-      {!loading && groupedItems.length === 0 && (
-        <div className="py-8 text-center text-[12px] text-muted-foreground mt-4">暂无满足条件的机会</div>
       )}
 
       <details className="mt-6 group">

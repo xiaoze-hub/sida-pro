@@ -251,6 +251,21 @@
   100% { background-position: -200% 0; }
 }
 
+/* 通用骨架屏扫光（Skeleton.tsx）：亮/暗均可用，叠加在 bg-muted 上 */
+.sida-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--foreground) / 0.06) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sida-shimmer { animation: none; }
+}
+
 /* v0.5.0 UI 全量改造 Wave1: 涨跌闪 + 页面进场 */
 @keyframes sida-flash-up {
   0% { background-color: hsl(var(--stock-up) / 0.22); }

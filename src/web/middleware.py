@@ -4,6 +4,8 @@
 - RequestLoggerMiddleware: 每个请求打日志(方法 + 路径 + 状态码 + 耗时)
 - RateLimitMiddleware: 基于 IP+endpoint 的限流(Redis token bucket,降级内存)
 - JWTDecodeMiddleware: 解码 JWT payload 存到 request.state(避免重复解码)
+- SecurityHeadersMiddleware (tier2): CSP + 安全响应头
+- CSRFProtectionMiddleware (tier2): 双提交 Cookie CSRF 防护
 
 设计要点:
 - 用 BaseHTTPMiddleware, FastAPI 0.104+ 标准
@@ -11,8 +13,10 @@
 - 例外: /health /metrics /static 跳过限流(避免监控系统被自己限流)
 """
 
+import hmac
 import json
 import logging
+import secrets
 import time
 import os
 import asyncio
@@ -371,3 +375,123 @@ class AuditMiddleware(BaseHTTPMiddleware):
         except Exception:
             pass  # 审计失败绝不影响主请求
         return response
+
+
+# ─── 安全响应头 + CSP (tier2-stability 2026-09-18) ───
+# CSP 兼容 Vite/React: script/style 允许 unsafe-inline/eval(dev HMR + 生产 inline runtime);
+# connect-src 'self' 覆盖同源 API + WS(Vite HMR 在 dev 经同源代理)。
+# object/frame-ancestors/base-uri/form-action 收紧到最小面。
+CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-XSS-Protection": "1; mode=block",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """给所有响应挂 CSP + 常见安全头。外层最外(最后 add), 保证 4xx/5xx 也带头。"""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        # setdefault 不覆盖上游(如 CORS 自带)已有值? 安全头一律由本中间件定口径, 直接覆盖
+        for key, value in SECURITY_HEADERS.items():
+            response.headers[key] = value
+        response.headers["Content-Security-Policy"] = CSP_POLICY
+        return response
+
+
+# ─── CSRF 双提交 Cookie 防护 (tier2-stability 2026-09-18) ───
+# 模式: 登录/注册时下发 HttpOnly csrf_token Cookie; 客户端写请求需带
+# X-CSRF-Token 头, 与 Cookie 值一致才放行。
+# 与现有 JWT 兼容: Authorization Bearer 不会被浏览器自动附带, 天然免疫 CSRF,
+# 故带 Bearer 的请求跳过校验(现前端全量走 Bearer, 零破坏)。
+# Cookie 鉴权路径(或将来纯 Cookie 会话)才强制双提交匹配。
+CSRF_COOKIE_NAME = "csrf_token"
+CSRF_HEADER_NAME = "x-csrf-token"
+CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# 登录前无 token; webhook 服务端调用无浏览器 Cookie
+CSRF_EXEMPT_PREFIXES = (
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/webhooks/",
+)
+
+
+def issue_csrf_token(response: Response, max_age_seconds: int = 12 * 3600) -> str:
+    """生成 32 字节 hex CSRF token, 写入 HttpOnly Cookie, 返回明文(供响应体下发)。
+
+    SameSite=Strict + Path=/; 不设 Secure(本地 http 开发可用, 生产反代可再加)。
+    响应体同时返回, 便于前端把值放进 X-CSRF-Token(HttpOnly 时 JS 读不到 Cookie)。
+    """
+    token = secrets.token_hex(32)
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=token,
+        max_age=max_age_seconds,
+        path="/",
+        httponly=True,
+        samesite="strict",
+    )
+    return token
+
+
+class CSRFProtectionMiddleware(BaseHTTPMiddleware):
+    """写操作 CSRF 校验: Cookie csrf_token == Header X-CSRF-Token。
+
+    跳过: 安全方法 / 豁免路径 / Bearer JWT / X-Service-Token。
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        method = request.method.upper()
+        if method in CSRF_SAFE_METHODS:
+            return await call_next(request)
+
+        path = request.url.path
+        if path.startswith(CSRF_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # JWT Bearer: 浏览器跨站不会自动带 Authorization 头 → 免 CSRF(与现前端兼容)
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            return await call_next(request)
+
+        # 服务间调用: X-Service-Token, 无浏览器上下文
+        if (request.headers.get("x-service-token") or "").strip():
+            return await call_next(request)
+
+        cookie_token = request.cookies.get(CSRF_COOKIE_NAME, "") or ""
+        header_token = request.headers.get(CSRF_HEADER_NAME, "") or ""
+        if not cookie_token or not header_token:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "code": 403,
+                    "success": False,
+                    "message": "CSRF token 缺失, 请重新登录",
+                },
+            )
+        if not hmac.compare_digest(cookie_token, header_token):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "code": 403,
+                    "success": False,
+                    "message": "CSRF token 校验失败",
+                },
+            )
+        return await call_next(request)

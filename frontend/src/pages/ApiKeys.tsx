@@ -19,6 +19,8 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { formatDateTime } from '@/lib/utils'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import { DevPageLayout, Section, InfoCard, CodeBlock, EmptyState, type SideMenuItem } from '@/components/dev/DevPageLayout'
+import { ErrorState } from '@/components/ErrorState'
+import { SkeletonTable } from '@/components/Skeleton'
 
 /**
  * API Key 控制台 v2(2026-09-16)。
@@ -77,7 +79,7 @@ export default function ApiKeysPage() {
   const [resettingId, setResettingId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
-  const { data: keys, refetch } = useApiQuery<MyApiKey[]>(['my-api-keys'], '/keys/my')
+  const { data: keys, isLoading: keysLoading, isError: keysError, refetch } = useApiQuery<MyApiKey[]>(['my-api-keys'], '/keys/my')
   const keyList = useMemo((): MyApiKey[] => {
     if (Array.isArray(keys)) return keys
     if (keys && typeof keys === 'object') {
@@ -169,14 +171,14 @@ export default function ApiKeysPage() {
     >
       {/* 明文 Key 提示 */}
       {plaintext && (
-        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+        <div className="mb-6 rounded-xl border border-amber-600/30 dark:border-amber-500/30 bg-amber-500/5 p-4">
           <div className="mb-2 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400" />
-            <span className="text-[13px] font-semibold text-amber-300">请立即复制保存你的 API Key</span>
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <span className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">请立即复制保存你的 API Key</span>
           </div>
-          <p className="mb-3 text-[11px] text-amber-400/70">此 Key 仅显示一次，关闭或刷新后将无法再次查看。</p>
+          <p className="mb-3 text-[11px] text-amber-700/80 dark:text-amber-400/70">此 Key 仅显示一次，关闭或刷新后将无法再次查看。</p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg bg-black/30 px-3 py-2 font-mono text-[12px] text-cyan-300">
+            <code className="flex-1 overflow-x-auto rounded-lg bg-muted/60 dark:bg-black/30 px-3 py-2 font-mono text-[12px] text-primary dark:text-cyan-300">
               {plaintext}
             </code>
             <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={() => copyText(plaintext)}>
@@ -196,7 +198,16 @@ export default function ApiKeysPage() {
         description="每个 Key 独立计量，可随时重置或删除"
         icon={<KeyRound className="h-4 w-4" />}
       >
-        {keyList.length === 0 ? (
+        {keysLoading ? (
+          <SkeletonTable rows={3} />
+        ) : keysError ? (
+          <ErrorState
+            type="server"
+            title="API Key 列表加载失败"
+            onRetry={() => void refetch()}
+            compact
+          />
+        ) : keyList.length === 0 ? (
           <EmptyState
             icon={<KeyRound className="h-8 w-8" />}
             title="还没有 API Key"
@@ -210,28 +221,28 @@ export default function ApiKeysPage() {
         ) : (
           <div className="space-y-2">
             {keyList.map(k => (
-              <div key={k.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
+              <div key={k.id} className="rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <code className="font-mono text-[13px] text-cyan-300">{k.key_prefix}...</code>
+                      <code className="font-mono text-[13px] text-primary dark:text-cyan-300">{k.key_prefix}...</code>
                       <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TIER_COLOR[k.tier] || TIER_COLOR.free}`}>
                         {TIER_LABEL[k.tier] || k.tier}
                       </span>
                       {k.status !== 'active' && (
-                        <span className="inline-flex items-center rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-[10px] text-red-400">
+                        <span className="inline-flex items-center rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-[10px] text-red-600 dark:text-red-400">
                           {k.status === 'frozen' ? '已冻结' : '已禁用'}
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-slate-600">
+                    <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-muted-foreground dark:text-slate-600">
                       <span>日限 {k.daily_limit}</span>
                       {k.created_at && <span>创建 {formatDateTime(k.created_at)}</span>}
                       {k.last_used_at && <span>最后使用 {formatDateTime(k.last_used_at)}</span>}
                       {k.expires_at && <span>到期 {formatDateTime(k.expires_at)}</span>}
                     </div>
                     {k.frozen_reason && (
-                      <p className="mt-1 text-[10px] text-red-400/70">冻结原因: {k.frozen_reason}</p>
+                      <p className="mt-1 text-[10px] text-red-600/80 dark:text-red-400/70">冻结原因: {k.frozen_reason}</p>
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -274,28 +285,28 @@ export default function ApiKeysPage() {
         <div className="space-y-4">
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <Zap className="h-4 w-4 text-cyan-400" />
-              <span className="text-[13px] font-medium text-white">方式一：Shell 脚本</span>
+              <Zap className="h-4 w-4 text-primary dark:text-cyan-400" />
+              <span className="text-[13px] font-medium text-foreground dark:text-white">方式一：Shell 脚本</span>
             </div>
-            <p className="mb-3 text-[11px] text-slate-500">复制以下命令到终端执行，自动配置环境变量和客户端。</p>
+            <p className="mb-3 text-[11px] text-muted-foreground dark:text-slate-500">复制以下命令到终端执行，自动配置环境变量和客户端。</p>
             <CodeBlock code={installCmd} language="bash" />
           </InfoCard>
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <FileJson className="h-4 w-4 text-cyan-400" />
-              <span className="text-[13px] font-medium text-white">方式二：配置 JSON</span>
+              <FileJson className="h-4 w-4 text-primary dark:text-cyan-400" />
+              <span className="text-[13px] font-medium text-foreground dark:text-white">方式二：配置 JSON</span>
             </div>
-            <p className="mb-3 text-[11px] text-slate-500">适用于支持 JSON 配置的 AI 框架（LangChain、AutoGPT 等）。</p>
+            <p className="mb-3 text-[11px] text-muted-foreground dark:text-slate-500">适用于支持 JSON 配置的 AI 框架（LangChain、AutoGPT 等）。</p>
             <CodeBlock code={configJson} language="json" />
           </InfoCard>
 
           <InfoCard>
             <div className="mb-2 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-cyan-400" />
-              <span className="text-[13px] font-medium text-white">安全提示</span>
+              <ShieldCheck className="h-4 w-4 text-primary dark:text-cyan-400" />
+              <span className="text-[13px] font-medium text-foreground dark:text-white">安全提示</span>
             </div>
-            <ul className="space-y-1 text-[11px] text-slate-500">
+            <ul className="space-y-1 text-[11px] text-muted-foreground dark:text-slate-500">
               <li>• 不要将 API Key 提交到代码仓库</li>
               <li>• 不要在客户端 JavaScript 中暴露 Key</li>
               <li>• 怀疑 Key 泄露时立即重置</li>

@@ -29,7 +29,7 @@ import {
   fetchAPI,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
-import { Skeleton } from '@panwatch/base-ui/components/ui/skeleton'
+import { Skeleton } from '@/components/Skeleton'
 import { Onboarding } from '@panwatch/biz-ui/components/onboarding'
 import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
 import MarketPhaseCard from '@panwatch/biz-ui/components/MarketPhaseCard'

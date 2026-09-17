@@ -24,6 +24,8 @@ import {
   SelectValue,
 } from '@panwatch/base-ui/components/ui/select'
 import { DevPageLayout, Section, InfoCard, CodeBlock, type SideMenuItem } from '@/components/dev/DevPageLayout'
+import { EmptyState } from '@/components/EmptyState'
+import { ErrorState } from '@/components/ErrorState'
 
 /**
  * 开发者文档页 v2(2026-09-16)。
@@ -80,7 +82,7 @@ const DATA_SOURCES: { name: string; caliber: string; note: string }[] = [
 ]
 
 const TIER_BADGE: Record<string, string> = {
-  free: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+  free: 'bg-slate-500/10 text-muted-foreground dark:text-slate-400 border-slate-500/20',
   trial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
   pro: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
 }
@@ -89,6 +91,7 @@ export default function DevelopersPage() {
   const [activeSection, setActiveSection] = useState('quickstart')
   const [catalog, setCatalog] = useState<CatalogResp | null>(null)
   const [catLoading, setCatLoading] = useState(true)
+  const [catError, setCatError] = useState<Error | null>(null)
 
   // 调试台状态
   const [authMode, setAuthMode] = useState<'jwt' | 'apikey' | 'guest'>('apikey')
@@ -98,11 +101,18 @@ export default function DevelopersPage() {
   const [runResult, setRunResult] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
 
-  useEffect(() => {
+  const loadCatalog = () => {
+    setCatLoading(true)
+    setCatError(null)
     fetchAPI<CatalogResp>('/skills/catalog')
       .then(d => { setCatalog(d); setCatLoading(false) })
-      .catch(() => setCatLoading(false))
-  }, [])
+      .catch((e: unknown) => {
+        setCatError(e instanceof Error ? e : new Error(String(e)))
+        setCatLoading(false)
+      })
+  }
+
+  useEffect(() => { loadCatalog() }, [])
 
   const skills = useMemo(() => catalog?.skills ?? [], [catalog])
   const selected = useMemo(() => skills.find(s => s.name === selectedSkill), [skills, selectedSkill])
@@ -172,19 +182,19 @@ export default function DevelopersPage() {
               { step: '02', title: '获取 Key', desc: '在控制台查看/管理你的 Key', icon: <ShieldCheck className="h-4 w-4" /> },
               { step: '03', title: '发起调用', desc: '一行 curl 即可验证连通', icon: <Terminal className="h-4 w-4" /> },
             ].map(s => (
-              <div key={s.step} className="rounded-xl border border-white/5 bg-white/[0.02] p-4 text-center">
-                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500/10 text-cyan-400">
+              <div key={s.step} className="rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-4 text-center">
+                <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary dark:bg-cyan-500/10 dark:text-cyan-400">
                   {s.icon}
                 </div>
-                <div className="font-mono text-[10px] text-cyan-500/50">{s.step}</div>
-                <div className="text-[13px] font-medium text-white">{s.title}</div>
-                <div className="mt-0.5 text-[11px] text-slate-500">{s.desc}</div>
+                <div className="font-mono text-[10px] text-primary/60 dark:text-cyan-500/50">{s.step}</div>
+                <div className="text-[13px] font-medium text-foreground dark:text-white">{s.title}</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">{s.desc}</div>
               </div>
             ))}
           </div>
 
           <InfoCard>
-            <div className="mb-2 text-[13px] font-medium text-white">第一次调用</div>
+            <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">第一次调用</div>
             <CodeBlock
               code={`curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "X-API-Key: sk_YOUR_KEY" \\
@@ -223,10 +233,10 @@ export default function DevelopersPage() {
           ].map((a, i) => (
             <InfoCard key={i}>
               <div className="mb-1.5 flex items-center gap-2">
-                <span className="text-[13px] font-medium text-white">{a.title}</span>
-                <span className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-mono text-cyan-400">{a.badge}</span>
+                <span className="text-[13px] font-medium text-foreground dark:text-white">{a.title}</span>
+                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-mono text-primary dark:bg-cyan-500/10 dark:text-cyan-400">{a.badge}</span>
               </div>
-              <p className="mb-2 text-[11px] text-slate-500">{a.desc}</p>
+              <p className="mb-2 text-[11px] text-muted-foreground">{a.desc}</p>
               <CodeBlock code={a.code} language="bash" />
             </InfoCard>
           ))}
@@ -236,12 +246,22 @@ export default function DevelopersPage() {
       {/* ── 限流说明 ── */}
       <Section id="sec-ratelimit" title="限流说明" description="各档位的调用限制" icon={<Gauge className="h-4 w-4" />}>
         {catLoading ? (
-          <div className="text-[12px] text-slate-600">加载中...</div>
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground dark:text-slate-600">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中...
+          </div>
+        ) : catError ? (
+          <ErrorState
+            error={catError}
+            type="server"
+            title="限流信息加载失败"
+            onRetry={loadCatalog}
+            compact
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-white/10 text-slate-500">
+                <tr className="border-b border-border/40 dark:border-white/10 text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">档位</th>
                   <th className="pb-2 pr-4 font-medium">日限</th>
                   <th className="pb-2 pr-4 font-medium">突发</th>
@@ -250,23 +270,23 @@ export default function DevelopersPage() {
               </thead>
               <tbody>
                 {catalog?.guest && (
-                  <tr className="border-b border-white/5">
-                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">游客</span></td>
-                    <td className="py-2 pr-4 font-mono text-white">{catalog.guest.daily_limit}</td>
-                    <td className="py-2 pr-4 font-mono text-slate-500">-</td>
-                    <td className="py-2 text-slate-500">仅 free 级 Skill，按 IP 限流</td>
+                  <tr className="border-b border-border/40 dark:border-white/5">
+                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:text-slate-400">游客</span></td>
+                    <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{catalog.guest.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-muted-foreground dark:text-slate-500">-</td>
+                    <td className="py-2 text-muted-foreground dark:text-slate-500">仅 free 级 Skill，按 IP 限流</td>
                   </tr>
                 )}
                 {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
-                  <tr key={tier} className="border-b border-white/5">
+                  <tr key={tier} className="border-b border-border/40 dark:border-white/5">
                     <td className="py-2 pr-4">
                       <span className={`rounded border px-1.5 py-0.5 text-[10px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
                         {tier}
                       </span>
                     </td>
-                    <td className="py-2 pr-4 font-mono text-white">{limit.daily_limit}</td>
-                    <td className="py-2 pr-4 font-mono text-slate-500">{limit.burst ?? '-'}</td>
-                    <td className="py-2 text-slate-500">
+                    <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{limit.daily_limit}</td>
+                    <td className="py-2 pr-4 font-mono text-muted-foreground dark:text-slate-500">{limit.burst ?? '-'}</td>
+                    <td className="py-2 text-muted-foreground dark:text-slate-500">
                       {tier === 'free' && '注册即得，基础配额'}
                       {tier === 'trial' && `试用 ${limit.days ?? 7} 天`}
                       {tier === 'pro' && 'Pro 付费，全量开放'}
@@ -297,24 +317,41 @@ export default function DevelopersPage() {
         icon={<ListTree className="h-4 w-4" />}
       >
         {catLoading ? (
-          <div className="text-[12px] text-slate-600">加载中...</div>
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground dark:text-slate-600">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> 加载中...
+          </div>
+        ) : catError ? (
+          <ErrorState
+            error={catError}
+            type="server"
+            title="Skill 目录加载失败"
+            description="无法获取接口列表，请检查网络后重试"
+            onRetry={loadCatalog}
+            compact
+          />
+        ) : skills.length === 0 ? (
+          <EmptyState
+            title="暂无可用 Skill"
+            description="目录为空，请稍后刷新或联系管理员"
+            compact
+          />
         ) : (
           <div className="space-y-2">
             {skills.map(s => (
-              <div key={s.name} className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <div key={s.name} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/50 dark:bg-white/[0.02] p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <code className="font-mono text-[12px] text-cyan-300">{s.name}</code>
+                  <code className="font-mono text-[12px] text-primary dark:text-cyan-300">{s.name}</code>
                   <span className={`rounded border px-1.5 py-0.5 text-[9px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
                     {s.tier_min}
                   </span>
-                  {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] text-orange-400">慢</span>}
-                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-400">{s.caliber}</span>}
+                  {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] text-orange-600 dark:text-orange-400">慢</span>}
+                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
                 </div>
-                <p className="mt-1 text-[11px] text-slate-500">{s.description}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{s.description}</p>
                 {Object.keys(s.params || {}).length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {Object.entries(s.params).map(([k, v]) => (
-                      <span key={k} className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">
+                      <span key={k} className="rounded bg-muted/60 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
                         {k}{v.default !== undefined ? `=${v.default}` : ''}
                       </span>
                     ))}
@@ -332,7 +369,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[11px] text-slate-400">鉴权方式</Label>
+                <Label className="text-[11px] text-muted-foreground dark:text-slate-400">鉴权方式</Label>
                 <Select value={authMode} onValueChange={(v: any) => setAuthMode(v)}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -344,7 +381,7 @@ export default function DevelopersPage() {
               </div>
               {authMode === 'apikey' && (
                 <div>
-                  <Label className="text-[11px] text-slate-400">API Key</Label>
+                  <Label className="text-[11px] text-muted-foreground dark:text-slate-400">API Key</Label>
                   <Input
                     type="password"
                     className="mt-1 h-8 font-mono text-[12px]"
@@ -361,7 +398,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[11px] text-slate-400">选择 Skill</Label>
+                <Label className="text-[11px] text-muted-foreground dark:text-slate-400">选择 Skill</Label>
                 <Select value={selectedSkill} onValueChange={setSelectedSkill}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue placeholder="请选择" /></SelectTrigger>
                   <SelectContent>
@@ -373,14 +410,14 @@ export default function DevelopersPage() {
               </div>
               {selected && (
                 <div className="flex items-end">
-                  <p className="text-[11px] text-slate-500">{selected.description}</p>
+                  <p className="text-[11px] text-muted-foreground dark:text-slate-500">{selected.description}</p>
                 </div>
               )}
             </div>
             <div className="mt-3">
-              <Label className="text-[11px] text-slate-400">参数 (JSON)</Label>
+              <Label className="text-[11px] text-muted-foreground dark:text-slate-400">参数 (JSON)</Label>
               <textarea
-                className="mt-1 h-24 w-full rounded-lg border border-white/10 bg-[#0d0d18] p-2.5 font-mono text-[11px] text-cyan-100/80 focus:border-cyan-500/30 focus:outline-none"
+                className="mt-1 h-24 w-full rounded-lg border border-border/60 dark:border-white/10 bg-muted/40 dark:bg-[#0d0d18] p-2.5 font-mono text-[11px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
                 value={paramsJson}
                 onChange={e => setParamsJson(e.target.value)}
                 spellCheck={false}
@@ -396,7 +433,7 @@ export default function DevelopersPage() {
 
           {runResult && (
             <InfoCard>
-              <div className="mb-2 text-[13px] font-medium text-white">响应结果</div>
+              <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">响应结果</div>
               <CodeBlock code={runResult} language="json" />
             </InfoCard>
           )}
@@ -414,7 +451,7 @@ export default function DevelopersPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead>
-                <tr className="border-b border-white/10 text-slate-500">
+                <tr className="border-b border-border/40 dark:border-white/10 text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">数据源</th>
                   <th className="pb-2 pr-4 font-medium">口径</th>
                   <th className="pb-2 font-medium">说明</th>
@@ -422,14 +459,14 @@ export default function DevelopersPage() {
               </thead>
               <tbody>
                 {DATA_SOURCES.map(s => (
-                  <tr key={s.name} className="border-b border-white/5">
-                    <td className="py-2 pr-4 text-white">{s.name}</td>
+                  <tr key={s.name} className="border-b border-border/40 dark:border-white/5">
+                    <td className="py-2 pr-4 text-foreground dark:text-white">{s.name}</td>
                     <td className="py-2 pr-4">
                       <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-400">
                         {s.caliber}
                       </span>
                     </td>
-                    <td className="py-2 text-slate-500">{s.note}</td>
+                    <td className="py-2 text-muted-foreground dark:text-slate-500">{s.note}</td>
                   </tr>
                 ))}
               </tbody>
@@ -466,21 +503,21 @@ export default function DevelopersPage() {
             { code: 429, title: '限流', desc: '超过当日/当分钟调用限制', fix: '读取 Retry-After 头，指数退避后重试；或升级档位' },
             { code: 500, title: '服务器错误', desc: '内部处理异常', fix: '稍后重试；若持续出现请联系管理员' },
           ].map(e => (
-            <div key={e.code} className="rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <div key={e.code} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-3">
               <div className="flex items-center gap-2">
                 <span className={`font-mono text-[14px] font-bold ${
-                  e.code === 401 ? 'text-amber-400' : e.code === 403 ? 'text-orange-400' : e.code === 429 ? 'text-red-400' : 'text-red-500'
+                  e.code === 401 ? 'text-amber-600 dark:text-amber-400' : e.code === 403 ? 'text-orange-600 dark:text-orange-400' : e.code === 429 ? 'text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-500'
                 }`}>{e.code}</span>
-                <span className="text-[13px] font-medium text-white">{e.title}</span>
+                <span className="text-[13px] font-medium text-foreground dark:text-white">{e.title}</span>
               </div>
-              <p className="mt-1 text-[11px] text-slate-500">{e.desc}</p>
-              <p className="mt-1 text-[11px] text-cyan-400/60">→ {e.fix}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{e.desc}</p>
+              <p className="mt-1 text-[11px] text-primary/70 dark:text-cyan-400/60">→ {e.fix}</p>
             </div>
           ))}
         </div>
 
         <div className="mt-4">
-          <div className="mb-2 text-[13px] font-medium text-white">429 退避示例</div>
+          <div className="mb-2 text-[13px] font-medium text-foreground dark:text-white">429 退避示例</div>
           <CodeBlock
             code={`import time, random
 

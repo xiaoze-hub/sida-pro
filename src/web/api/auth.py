@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -133,6 +133,9 @@ class TokenResponse(BaseModel):
     user: Optional[dict] = None
     # 统一身份(2026-09-16): 用户绑定的 Skill API Key 前缀(供展示; 无 key 为 None)
     api_key_prefix: Optional[str] = None
+    # CSRF 双提交 token(2026-09-18 tier2): 同时写入 HttpOnly Cookie; 响应体给前端
+    # 放入 X-CSRF-Token 头(HttpOnly 时 JS 读不到 Cookie)。Bearer JWT 路径不受影响。
+    csrf_token: Optional[str] = None
 
 
 # P1-6 (2026-08-23 审计): scrypt 提参到 n=2^15 (中等强度, 单机 ~120ms/次)
@@ -510,7 +513,7 @@ async def auth_status(db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
+async def login(data: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """登录(多用户)。带暴力破解限速: 同 IP+用户名 5 次失败锁 10 分钟。
 
     2026-09-16: 支持用 email 或 username 登录(两者都试)。
@@ -571,16 +574,21 @@ async def login(data: LoginRequest, request: Request, db: Session = Depends(get_
     except Exception as e:  # noqa: BLE001
         logger.warning("[auth] 查询用户 API key 前缀失败(不阻断登录): %s", e)
 
+    # CSRF (tier2 2026-09-18): 下发 HttpOnly csrf_token Cookie + 响应体明文
+    from src.web.middleware import issue_csrf_token
+    csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)
+
     return TokenResponse(
         token=token,
         expires_at=expires_at.isoformat(),
         user=user_to_dict(user),
         api_key_prefix=api_key_prefix,
+        csrf_token=csrf_token,
     )
 
 
 @router.post("/register")
-async def register(data: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+async def register(data: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """自助注册(member 账号)。2026-09-16: 邮箱必填 + 可选用户名。
 
     - 是否开放由 app_settings.allow_register 控制(默认开放), 显式关闭时 403
@@ -665,12 +673,16 @@ async def register(data: RegisterRequest, request: Request, db: Session = Depend
         logger.warning("[auth] 注册后自动创建 API key 失败(不阻断注册): %s", e)
 
     log_audit(db, user, "register", detail=f"注册账号 {username} <{email}>", ip=ip)
+    # CSRF (tier2 2026-09-18): 注册后即下发 csrf_token, 减少登录前写请求摩擦
+    from src.web.middleware import issue_csrf_token
+    csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)
     return {
         "success": True,
         "message": "注册成功, 请登录",
         "email": user.email,
         "username": user.username,
         "api_key": api_key_raw,
+        "csrf_token": csrf_token,
     }
 
 

@@ -20,6 +20,8 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import SkeletonRows from '@/components/SkeletonRows'
 import { parseServerTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
+import { EmptyState } from '@/components/EmptyState'
+import { ErrorState } from '@/components/ErrorState'
 
 interface NotificationItem {
   id: number
@@ -144,15 +146,14 @@ function MarkdownBlock({ content }: { content: string }) {
   )
 }
 
-function EmptyState({ filtered }: { filtered: boolean }) {
+function ListEmptyState({ filtered }: { filtered: boolean }) {
   return (
-    <div className="flex min-h-[280px] flex-col items-center justify-center px-6 text-center">
-      <span className="mb-3 inline-flex h-12 w-12 items-center justify-center rounded-full bg-accent/60 text-muted-foreground">
-        <Inbox className="h-5 w-5" />
-      </span>
-      <div className="text-[14px] font-medium text-foreground">{filtered ? '没有符合条件的通知' : '暂无通知'}</div>
-      <div className="mt-1 text-[12px] text-muted-foreground">后台任务、策略与提醒的结果会集中显示在这里。</div>
-    </div>
+    <EmptyState
+      icon={<Inbox className="h-6 w-6" />}
+      title={filtered ? '没有符合条件的通知' : '暂无通知'}
+      description="后台任务、策略与提醒的结果会集中显示在这里。"
+      className="m-4 min-h-[240px] border-0 bg-transparent"
+    />
   )
 }
 
@@ -447,8 +448,16 @@ export default function NotificationsPage() {
             {loading && items.length === 0 ? (
               /* 首次加载骨架(列表已有数据时静默刷新,不闪 spinner) */
               <SkeletonRows rows={7} />
+            ) : error && items.length === 0 ? (
+              /* 加载失败且无历史数据: 整块错误态 + 重试 */
+              <ErrorState
+                error={error}
+                onRetry={() => void load()}
+                className="m-4"
+                compact
+              />
             ) : displayList.length === 0 ? (
-              <EmptyState filtered={items.length > 0} />
+              <ListEmptyState filtered={items.length > 0} />
             ) : displayList.map(item => {
               const meta = LEVEL_META[item.level] || LEVEL_META.info
               const Icon = meta.icon

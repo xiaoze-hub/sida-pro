@@ -186,7 +186,7 @@ export default function TermsPage() {
         </div>
 
         {/* 正文卡片 */}
-        <div className="rounded-2xl border border-border bg-card p-5 md:p-6">
+        <div className="card rounded-2xl border border-border bg-card p-5 md:p-6 shadow-sm">
           <div className="mb-5 border-b border-border pb-4">
             <h2 className="text-[15px] font-semibold text-foreground">
               {tab === 'agreement' ? '用户协议' : '隐私政策'}
