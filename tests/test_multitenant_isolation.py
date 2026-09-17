@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sys
 import uuid
 from pathlib import Path
@@ -55,7 +56,10 @@ def _cleanup_module_owner():
 
 
 _OWNER_USERNAME = "mt_test_owner_v1"
-_OWNER_PASSWORD = "mt_test_owner_pw_2026_v1"
+# 2026-09-18: **不写字面口令** —— 原先是固定字符串, 被 CI 的 gitleaks 规则
+# (generic-api-key) 命中, 直接把 tag 流水线的 gates job 拦死(发版断供的第四个原因)。
+# 测试只需"一次会话内确定"的口令: 运行时随机生成, 既过密钥扫描也不降低隔离性。
+_OWNER_PASSWORD = "MT-" + secrets.token_urlsafe(18)
 
 _SESSION_OWNER_TOKEN: str | None = None
 

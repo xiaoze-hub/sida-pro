@@ -5,6 +5,23 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · 密钥扫描)
+
+### fix(tests): 测试里的固定口令被 gitleaks 拦截 → 改运行时随机(发版断供第四个原因)
+
+**性质**: 门禁转绿。分支 `feat/audit-fix-20260918`(tag v0.10.2)。
+
+v0.10.1 打 tag 后 gates job 走到第 3 步 —— `bash -n` ✅、deploy stub **15/15** ✅、
+**gitleaks `leaks found: 1` ✗**: `tests/test_multitenant_isolation.py:58` 的
+`_OWNER_PASSWORD = "mt_test_owner_pw_2026_v1"` 命中 `generic-api-key` 规则。
+
+- 修: 该常量改 `"MT-" + secrets.token_urlsafe(18)`(运行时随机, 一次会话内确定即可);
+  既过密钥扫描, 也不影响多租户隔离用例的语义。
+- 本地复扫(gitleaks v8.18.4, SHA256 pinned 同版本): **no leaks found**;
+  该文件 16 例仍全绿。
+- 备注: 这条也是"v0.9.0 起 tag 全断"的第四个叠加原因 —— 前三个是 deploy stub 断言、
+  scoped-queries、ruff; 四个都清掉后 tag 流水线才有机会真正走完。
+
 ## 2026-09-18 (测试夹具 · 全局态解耦 + SQLite 锁)
 
 ### fix(tests): 最后 2 红(全局回调/事件循环污染) + teardown"database is locked"
