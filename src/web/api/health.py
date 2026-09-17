@@ -334,6 +334,13 @@ async def health(request: Request) -> dict[str, Any]:
                 "error": str(e)[:100],
             }
             record_component_status("database", False)  # P4: 喂 Prometheus 告警
+            # 告警(2026-09-18 tier1): DB 连接失败 → db_connection_error
+            try:
+                from src.core.alerting import notify_db_connection_error
+
+                notify_db_connection_error(str(e)[:300])
+            except Exception:
+                pass
             overall_ok = False
 
         # ─── Redis 检查 ───

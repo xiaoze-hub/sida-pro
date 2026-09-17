@@ -5,6 +5,40 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (tier1-compliance)
+
+### feat(alerting-backup): 运维告警体系 + 数据库自动备份
+
+**性质**: 运维/稳定性。**需重启后端**。分支 `feat/tier1-compliance-20260916`。
+
+**告警体系** (`src/core/alerting.py` 新建):
+- `AlertLevel` info/warning/critical; 企业微信群机器人 webhook(`WECHAT_WEBHOOK_URL`), 未配置只打日志
+- 同 key 冷却去重(`ALERT_COOLDOWN_MINUTES` 默认 30 分钟), 幂等
+- markdown 卡片: 标题+级别+时间+详情
+- 类型: `api_error_5xx`(5 分钟 >10 次) / `disk_high`(>85%) / `llm_rate_limit`(429 风暴) /
+  `db_connection_error` / `data_source_down`(连续失败) / `backup_failed`
+- `check_disk_usage()` + APScheduler 每小时磁盘检查
+
+**集成**:
+- `src/web/middleware.py`: RequestLoggerMiddleware 记录 5xx → 突增告警
+- `src/core/ai_client.py`: 429 时 `record_llm_429`
+- `src/core/datasource_failures.py`: 失败时累计连续失败; `md_metrics_sink` 成功清零
+- `src/web/api/health.py`: DB 检查失败 → `db_connection_error`
+- `src/bootstrap/runtime.py` `build_scheduler()`: 注册磁盘检查 + 每日 03:00 备份
+
+**备份自动化** (`src/core/db_backup_auto.py` + scripts):
+- `scripts/backup_auto.py`: pg_dump(SQLite 文件复制)→ gzip → `DATA_DIR/backups/backup_YYYYMMDD_HHMMSS_ffffff.sql.gz`
+- gzip 完整性校验; 保留 30 天自动清理; 失败发 `backup_failed` 告警
+- `scripts/restore_backup.py`: 列出/恢复指定备份, 恢复前自动备份当前库
+- 同秒文件名带微秒防覆盖(恢复 pre-backup 与源备份同秒冲突)
+
+**配置** (`.env.example`): `WECHAT_WEBHOOK_URL` / `ALERT_COOLDOWN_MINUTES` /
+`ALERT_5XX_THRESHOLD` / `ALERT_LLM_429_THRESHOLD` / `ALERT_DISK_THRESHOLD_PCT` /
+`ALERT_DS_FAIL_THRESHOLD` / `BACKUP_RETENTION_DAYS`
+
+**测试**: `tests/test_alerting.py` 19 项 + `tests/test_backup_auto.py` 10 项全部通过;
+`test_ai_client_degradation` / `test_source_health` / `test_startup_check` 回归 65 项通过。
+
 ## 2026-09-16 (email-verify)
 
 ### feat(email-verify): 邮箱验证码注册 + 验证码登录

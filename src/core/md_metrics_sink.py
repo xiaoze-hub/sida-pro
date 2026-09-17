@@ -117,6 +117,14 @@ class DbCountingMetricsSink:
                          "last_used_at = :ts WHERE provider = :p"),
                     {"s": succ, "e": errs, "p": prov, "ts": _now()},
                 )
+                # 告警(2026-09-18 tier1): 有成功即清零连续失败计数
+                if succ > 0:
+                    try:
+                        from src.core.alerting import record_data_source_success
+
+                        record_data_source_success(prov)
+                    except Exception:
+                        pass
                 n += 1
             db.commit()
         except Exception:

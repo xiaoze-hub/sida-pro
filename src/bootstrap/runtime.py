@@ -590,6 +590,22 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001 - 注册失败不阻断调度器构建
         logger.warning(f"数据质量哨兵注册失败: {e}")
 
+    # 磁盘使用率检查(2026-09-18 tier1): 每小时, >85% 发 disk_high 告警
+    try:
+        from src.core.alerting import register_disk_check_job
+
+        register_disk_check_job(sched.scheduler)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"磁盘检查 job 注册失败: {e}")
+
+    # 每日数据库自动备份(2026-09-18 tier1): 凌晨 3 点 pg_dump → gzip
+    try:
+        from src.core.db_backup_auto import register_daily_backup_job
+
+        register_daily_backup_job(sched.scheduler, hour=3, minute=0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"每日备份 job 注册失败: {e}")
+
     return sched
 
 

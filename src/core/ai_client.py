@@ -237,6 +237,13 @@ class AIClient:
                         f"429 限流(service={self.scene}), "
                         f"冷却 {self._cb.cooldown}s"
                     )
+                    # 告警(2026-09-18 tier1): 429 风暴窗口计数, 超阈值发 llm_rate_limit
+                    try:
+                        from src.core.alerting import record_llm_429
+
+                        record_llm_429(self.scene)
+                    except Exception:
+                        pass
                     raise  # 让调用方捕获并降级
                 if _is_retryable_error(e) and attempt < _CB_RETRY_MAX:
                     delay = _CB_BASE_DELAY * (2 ** attempt) + random.random() * 0.5
