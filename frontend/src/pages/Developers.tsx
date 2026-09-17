@@ -10,6 +10,7 @@ import {
   ListTree,
   Bug,
   Loader2,
+  Database,
 } from 'lucide-react'
 import { fetchAPI, getToken } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -66,7 +67,16 @@ const MENU: SideMenuItem[] = [
   { id: 'ratelimit', label: '限流说明', icon: <Gauge className="h-3.5 w-3.5" />, anchor: 'sec-ratelimit' },
   { id: 'catalog', label: 'Skill 目录', icon: <ListTree className="h-3.5 w-3.5" />, anchor: 'sec-catalog' },
   { id: 'playground', label: '在线调试', icon: <Play className="h-3.5 w-3.5" />, anchor: 'sec-playground' },
+  { id: 'datasources', label: '数据来源', icon: <Database className="h-3.5 w-3.5" />, anchor: 'sec-datasources' },
   { id: 'errors', label: '错误码', icon: <Bug className="h-3.5 w-3.5" />, anchor: 'sec-errors' },
+]
+
+// 主要数据源与口径标签(合规: 资金类指标必须声明方向语义)
+const DATA_SOURCES: { name: string; caliber: string; note: string }[] = [
+  { name: '腾讯行情', caliber: 'tick', note: '逐笔成交/主动买卖方向, 主力意图判定唯一采信口径' },
+  { name: '同花顺 DDE', caliber: 'ths', note: 'DDE 资金流, 适合大单净流入等横截面对比' },
+  { name: '通达信 TQ', caliber: 'tick', note: 'L2 盘口主力净流入, 聚合逐笔后按方向汇总' },
+  { name: '东方财富', caliber: 'eastmoney4', note: '按单金额四档归类(超大/大/中/小), 非逐笔' },
 ]
 
 const TIER_BADGE: Record<string, string> = {
@@ -390,6 +400,60 @@ export default function DevelopersPage() {
               <CodeBlock code={runResult} language="json" />
             </InfoCard>
           )}
+        </div>
+      </Section>
+
+      {/* ── 数据来源与口径 ── */}
+      <Section
+        id="sec-datasources"
+        title="数据来源与口径"
+        description="主要数据源、口径标签与方向语义约定"
+        icon={<Database className="h-4 w-4" />}
+      >
+        <div className="space-y-3">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[12px]">
+              <thead>
+                <tr className="border-b border-white/10 text-slate-500">
+                  <th className="pb-2 pr-4 font-medium">数据源</th>
+                  <th className="pb-2 pr-4 font-medium">口径</th>
+                  <th className="pb-2 font-medium">说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                {DATA_SOURCES.map(s => (
+                  <tr key={s.name} className="border-b border-white/5">
+                    <td className="py-2 pr-4 text-white">{s.name}</td>
+                    <td className="py-2 pr-4">
+                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-400">
+                        {s.caliber}
+                      </span>
+                    </td>
+                    <td className="py-2 text-slate-500">{s.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <div className="space-y-1 text-[11px] text-amber-300/80">
+                <p>
+                  <strong>方向语义必须声明。</strong>
+                  资金类指标返回值须携带 <code className="font-mono">caliber</code>（tick / eastmoney4 / ths / unknown）
+                  与 <code className="font-mono">direction_semantics</code>。
+                  拿不到标签时按 unknown 处理，不得用于方向性判定。
+                </p>
+                <p>
+                  两口径方向冲突时须说明差异（逐笔主动买卖 vs 按单金额归类），并
+                  <strong>优先采信逐笔（tick）</strong>。
+                  禁止混用口径做主力意图/吸筹派发判断。
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </Section>
 

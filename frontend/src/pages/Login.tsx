@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { Lock, Eye, EyeOff, User, Mail, ShieldCheck } from 'lucide-react'
 import { authApi, fetchAPI, type AuthTokenPayload } from '@panwatch/api'
@@ -29,6 +29,8 @@ export default function LoginPage() {
   const [countdown, setCountdown] = useState(0)
   const [showPassword, setShowPassword] = useState(false)
   const [isSetup, setIsSetup] = useState(false)
+  // 合规(2026-09-16): 注册须勾选同意用户协议/隐私政策, 否则禁用注册按钮
+  const [agreed, setAgreed] = useState(false)
   // 三种模式(2026-09-16): password(默认) / register / email-code
   const [mode, setMode] = useState<AuthMode>(() =>
     searchParams.get('mode') === 'register' ? 'register' : 'password',
@@ -130,6 +132,10 @@ export default function LoginPage() {
 
     if (mode === 'register') {
       if (!email || !password || !code) return
+      if (!agreed) {
+        toast('请先阅读并同意《用户协议》和《隐私政策》', 'error')
+        return
+      }
     } else if (!username || !password) {
       return
     }
@@ -387,7 +393,39 @@ export default function LoginPage() {
               </div>
             )}
 
-            <Button type="submit" className="w-full" disabled={loading}>
+            {/* 合规(2026-09-16): 注册必勾用户协议 + 隐私政策 */}
+            {isRegister && (
+              <label className="flex cursor-pointer items-start gap-2 select-none">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-border accent-[hsl(var(--primary))]"
+                  checked={agreed}
+                  onChange={e => setAgreed(e.target.checked)}
+                />
+                <span className="text-[12px] leading-relaxed text-muted-foreground">
+                  我已阅读并同意
+                  <Link
+                    to="/terms?tab=agreement"
+                    className="mx-0.5 text-primary hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    《用户协议》
+                  </Link>
+                  和
+                  <Link
+                    to="/terms?tab=privacy"
+                    className="mx-0.5 text-primary hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    《隐私政策》
+                  </Link>
+                </span>
+              </label>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading || (isRegister && !agreed)}>
               {loading ? (
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : isRegister ? (

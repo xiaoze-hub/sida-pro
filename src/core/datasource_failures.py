@@ -43,6 +43,13 @@ def record(
     try:
         prov = str(provider or "").strip() or "unknown"
         k = kind if kind in _KINDS else "fetch"
+        # 告警(2026-09-18 tier1): 连续失败计数(不受 60s 落库限流影响, 每次都记)
+        try:
+            from src.core.alerting import record_data_source_failure
+
+            record_data_source_failure(prov, detail)
+        except Exception:
+            pass
         if not _should_persist(prov, k):
             return False
         own = db is None

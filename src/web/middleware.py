@@ -252,6 +252,15 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                 record_request_metrics(request.method, request.url.path, status, duration_ms)
             except Exception:
                 pass
+            # 告警(2026-09-18 tier1): 5xx 滑动窗口计数, 超阈值发 api_error_5xx
+            # fail-soft: 告警失败绝不影响请求
+            if status >= 500:
+                try:
+                    from src.core.alerting import record_http_status
+
+                    record_http_status(status, request.url.path)
+                except Exception:
+                    pass
             # 结构化日志(INFO 级 — 让运维聚合)
             try:
                 logger.info(json.dumps({

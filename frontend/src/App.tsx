@@ -43,6 +43,8 @@ const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
 const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
 // 开发者文档(任务 2.1, 2026-09-16): /developers 公开可访问(未登录时走独立壳层)
 const DevelopersPage = lazy(() => import('@/pages/Developers'))
+// 用户协议/隐私政策(合规落地, 2026-09-16): /terms 公开可访问
+const TermsPage = lazy(() => import('@/pages/Terms'))
 // 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
 const LandingPage = lazy(() => import('@/pages/Landing'))
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
@@ -65,6 +67,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
 import { reportFrontendError } from '@/lib/error-report'
+import Disclaimer from '@/components/Disclaimer'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
@@ -355,6 +358,19 @@ function App() {
     )
   }
 
+  // /terms 公开可访问(合规, 2026-09-16): 未登录注册/落地页可直接阅读协议
+  if (location.pathname === '/terms' && !isAuthenticated()) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/terms" element={<TermsPage />} />
+          </Routes>
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <RequireAuth>
     <div className="min-h-screen pb-16 md:pb-0 relative overflow-x-clip bg-background">
@@ -574,6 +590,8 @@ function App() {
               <Route path="/help" element={<LegacyTabRedirect to="/settings?tab=help" />} />
               {/* 开发者文档: 已登录走正常壳层; 未登录已在上方 early-return 公开渲染 */}
               <Route path="/developers" element={<DevelopersPage />} />
+              {/* 用户协议/隐私政策(合规, 2026-09-16): 已登录也可从设置等处回看 */}
+              <Route path="/terms" element={<TermsPage />} />
               {/* Admin 管理后台(2026-09-16): PermGuard(manage_users) + 后端 require_owner 双重 */}
               <Route path="/admin" element={<PermGuard perm="manage_users" myPerms={myPerms}><AdminPage /></PermGuard>} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
@@ -586,6 +604,8 @@ function App() {
         </Suspense>
       </main>
       <ChatWidget />
+      {/* 全局免责声明底部条(合规, 2026-09-16): 仅登录后壳层; 关闭后 localStorage 记住 */}
+      <Disclaimer />
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       <LogsModal open={logsOpen} onOpenChange={setLogsOpen} />
       <SelfCheckModal open={selfCheckOpen} onClose={() => setSelfCheckOpen(false)} />
