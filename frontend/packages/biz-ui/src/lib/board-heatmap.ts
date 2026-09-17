@@ -66,6 +66,10 @@ const DEFAULT_MAX_ALPHA = 0.9
 const LABEL_LIGHT_ALPHA = 0.45
 const DEFAULT_MIN_SHARE = 0.02
 /** 全部板块量能都缺失/为 0 时的保底面积: 固定 1(必须 > 0, ECharts treemap 对 0 面积整块不画) */
+// 2026-09-18 UI 走查 B3: 面积小于总量此比例的块**不画标签文字**(只留 tooltip)。
+// 原先小块被 ECharts 压成 `半导…` 之类不可读碎片, 视觉噪声大于信息量。
+// 注意: 这里只控制**文字显不显示**, 不改面积口径(面积仍=量能, 见文件头口径说明)。
+export const MIN_LABEL_SHARE = 0.008
 const EMPTY_FLOOR = 1
 /** 与 safePercent 展示口径一致: 四舍五入到 0.00 的幅度视为平盘 */
 const FLAT_EPSILON = 0.005
@@ -230,12 +234,18 @@ export function toTreemapCells(
   const measured = positives.length > 0 ? median(positives) * minShare : EMPTY_FLOOR
   const floor = Number.isFinite(measured) && measured > 0 ? measured : EMPTY_FLOOR
 
+  const values = items.map((_, i) => (raws[i] === null ? floor : raws[i]))
+  const total = values.reduce((a, b) => a + b, 0)
+  // 面积口径不变(raw volume); 只按占比决定"这块放不放得下文字"。
+  const showLabelFor = (v: number) => (total > 0 ? v / total >= MIN_LABEL_SHARE : true)
+
   return items.map((it, i) => {
     const raw = raws[i]
     const anomaly = detectHeatAnomaly(it)
+    const value = raw === null ? floor : raw
     return {
       name: it.name || it.block_code,
-      value: raw === null ? floor : raw,
+      value,
       blockCode: it.block_code,
       changePct: it.change_pct,
       fundNet: it.fund_net,
@@ -251,7 +261,11 @@ export function toTreemapCells(
           ? { borderColor: palette.ring || DEFAULT_ANOMALY_RING, borderWidth: 2 }
           : {}),
       },
-      label: { color: heatLabelColor(it.change_pct, palette, clampPct) },
+      label: {
+        color: heatLabelColor(it.change_pct, palette, clampPct),
+        // 小块不画文字(保留 tooltip), 避免"…"碎片堆叠
+        show: showLabelFor(value),
+      },
     }
   })
 }

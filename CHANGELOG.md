@@ -5,6 +5,26 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (UI 走查 B3 · 热力图标签降级 + theme-mood 密度)
+
+### fix(ui): theme-mood 单页 16456px(≈18 屏) 与热力图小块标签碎片
+
+**性质**: UI 可用性修复(P1, 视觉 4/10 与 5/10 两页)。**实测取证**: Playwright DOM 探针
+(1600×900) 量出 theme-mood 页面总高 **16456px**, 其中右侧题材列表 **16028px** —— 全市场板块
+(数百行)没有限高, 把整页连同题材×日期矩阵一起拉长(flex 拉伸); 不是"看着有点挤", 是量出来的。
+
+- `ThemeMood`: 右侧题材列改 **列内滚动 + `xl:sticky`**(`max-h-[calc(100vh-160px)]`), 表头 sticky;
+  页面总高回到 2 屏量级, 左侧列表自己滚。折叠按钮语义不变(只收左列表, 不整块隐藏矩阵)。
+- `board-heatmap.ts`: 新增 `MIN_LABEL_SHARE = 0.008` —— 面积占比低于此值的块**不画标签文字**
+  (保留 tooltip)。原先 ECharts 把小块压成 `半导…` 碎片, 视觉噪声大于信息量。
+  **面积口径不变**(仍 = 量能原值, 只改"文字显不显示"这一层), 这条也写进了测试。
+- 回归: `frontend/tests/lib/board-heatmap-label.test.ts` 4 例(大小块标签可见性、阈值边界、
+  **面积仍是原值**、无当日数据的保底块仍 >0) + `frontend/tests/components/theme-mood-density.test.ts` 4 例(限高/粘性/sticky 表头/折叠语义)。
+
+> 本轮 B3 未单独打 tag: B1/B2 的镜像(v0.10.12/v0.10.13)还在 ACR 队列里, 与其为 2 个文件再排一次
+> 30~60 分钟的构建, 不如把 B3 并入下一批 tag(部署节奏见 `docs/未来方向与创新执行方案_20260918.md`)。
+> theme-mood 高度修复的**部署后实测**(探针 `python3 /tmp/theme_mood_probe.py`)在下一批回填。
+
 ## 2026-09-18 (UI 走查 B2 · 空态压缩)
 
 ### fix(ui): 无数据时不再占巨幅空白(5 页复现)

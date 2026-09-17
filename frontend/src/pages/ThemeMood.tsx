@@ -292,8 +292,15 @@ export default function ThemeMoodPage() {
 
       {/* 走查 2026-09-18: 折叠只收**左侧题材列表**, 右侧题材×日期矩阵保持可见(原先整块 hidden) */}
       <div className="flex flex-col gap-3 xl:flex-row">
-        <div className={`w-full shrink-0 xl:w-[420px] ${boardCollapsed ? 'hidden xl:hidden' : ''}`}>
-          <div className="mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 px-2 text-[10px] text-muted-foreground">
+        {/* B3(2026-09-18): 这个题材列表是全市场板块(数百行), 没有限高时把整页撑到
+            16456px(≈18 屏, 实测) —— 矩阵也被 flex 拉伸成同高。改为**列内滚动 + 粘性**:
+            页面回到 2 屏左右, 列表自己滚。 */}
+        <div
+          className={`w-full shrink-0 xl:sticky xl:top-2 xl:max-h-[calc(100vh-160px)] xl:w-[420px] xl:overflow-y-auto ${
+            boardCollapsed ? 'hidden xl:hidden' : ''
+          }`}
+        >
+          <div className="sticky top-0 z-10 mb-1 grid grid-cols-[1fr_56px_56px_44px] gap-1 bg-background px-2 py-1 text-[10px] text-muted-foreground">
             <span>题材</span>
             <span className="text-right">情绪分</span>
             <span className="text-right">日变化</span>
