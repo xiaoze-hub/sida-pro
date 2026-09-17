@@ -31,6 +31,7 @@ from src.db.models import (
     User,
 )
 from src.web.api.auth import get_current_user, require_owner
+from src.web.api._scope import allow_cross_user  # C3(2026-09-18): owner-only 端点的显式跨用户豁免标记
 from src.web.api.skills_gateway import (
     TIER_DAILY_LIMIT,
     ensure_downgrade_scheduler,
@@ -173,6 +174,7 @@ def apply_status(
 # ── admin(owner only) ──────────────────────────────────────────────
 
 @router.get("/pro/admin/applications")
+@allow_cross_user  # C3(2026-09-18): owner-only(Depends(require_owner)) 的申请审核列表, 有意跨用户
 def admin_list_applications(
     status: str = Query(default="", description="pending/approved/rejected, 空=全部"),
     limit: int = Query(default=100, ge=1, le=500),
@@ -251,6 +253,7 @@ def admin_approve(
 
 
 @router.post("/pro/admin/reject")
+@allow_cross_user  # C3(2026-09-18): owner-only(Depends(require_owner)) 的申请驳回, 按 application_id 定位, 有意跨用户
 def admin_reject(
     body: ReviewRequest,
     owner: User = Depends(require_owner),

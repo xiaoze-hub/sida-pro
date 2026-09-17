@@ -5,6 +5,26 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · 越权静态扫描)
+
+### fix(scope): `check_scoped_queries` 8 处未过滤查询 → 逐一核实后显式豁免
+
+**性质**: 门禁转绿(安全门禁)。**需重启后端**(纯标记 + 一处等价改写)。分支 `feat/audit-fix-20260918`。
+
+`scripts/check_scoped_queries.py` 是 tag 流水线 gates 里的多租户越权静态门禁, 当时 **8 处红**,
+是 v0.9.0 起 tag 流水线全断的第二个原因。逐处核实**不是越权面**后才豁免(每处附理由):
+
+| 位置 | 判定 |
+|---|---|
+| `pro_billing.py` `admin_list_applications` / `admin_reject` | `Depends(require_owner)` owner-only ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `_validate_api_key_row` | 按 `key_hash` 反查持有者, 此时 user 尚不存在 —— 跨用户是鉴权本身的语义 ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `downgrade_expired_keys` | 后台调度器(系统作用域), 无 user 上下文 ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `admin_key_action` / `admin_usage_report` | `_require_owner_admin` owner-only ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `my_key_usage._count` | 只按 `api_key_id` 过滤, 而 row 来自 `_get_owned_key(db, user, key_id)`(归属上游已校验) ⇒ 行尾 `# scoped-check: allow`(检查器只认查询行尾注释, 故原多行 return 改为先取 `q` 再过滤) |
+
+- 现状: `python scripts/check_scoped_queries.py` → **OK**, `import src.web.app` 正常。
+- 注: 豁免是**显式标记 + 理由**, 不是关掉门禁; 新增同类查询仍会被拦。
+
 ## 2026-09-18 (门禁转绿 · 前端)
 
 ### fix(i18n): 无 Provider 时的兜底上下文引用不稳定 → 页面 effect 无限重跑(取数风暴)

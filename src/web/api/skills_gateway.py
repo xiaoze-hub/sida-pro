@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
 
@@ -498,6 +499,7 @@ def _record_downgrade(
         logger.debug("降级 audit 写入失败: %r", e)
 
 
+@allow_cross_user  # C3(2026-09-18): 后台调度器(系统作用域)按 expires_at 扫描全量 key, 无 user 上下文
 def downgrade_expired_keys(db: Session | None = None) -> int:
     """扫描 expires_at < now 的 trial/pro key, 自动降为 free。返回降级数量。
 
@@ -580,6 +582,7 @@ def stop_downgrade_scheduler() -> None:
 
 # ── 鉴权 ────────────────────────────────────────────────────────────
 
+@allow_cross_user  # C3(2026-09-18): 按 key_hash 反查持有者, 此时 user 尚不存在 —— 跨用户是鉴权本身的语义
 def _validate_api_key_row(x_api_key: str, db: Session) -> SkillApiKey:
     """校验 X-API-Key 并返回行; 无效抛 401, 禁用/冻结抛 403。"""
     refresh_tier_configs(db)
@@ -1257,11 +1260,10 @@ def my_key_usage(
     month_start = now - timedelta(days=30)
 
     def _count(since: datetime) -> int:
-        return (
-            db.query(SkillUsage)
-            .filter(SkillUsage.api_key_id == row.id, SkillUsage.created_at >= since)
-            .count()
-        )
+        # 只按 api_key_id 过滤, 而 row 来自 _get_owned_key(db, user, key_id)(归属已在上游校验),
+        # 非跨用户读面 ⇒ 单行豁免(检查器只认查询行尾注释, 故注释放本行)。
+        q = db.query(SkillUsage)  # scoped-check: allow (api_key_id 归属已由 _get_owned_key 校验)
+        return q.filter(SkillUsage.api_key_id == row.id, SkillUsage.created_at >= since).count()
 
     today = _count(day_start)
     return {
@@ -1344,6 +1346,7 @@ class AdminKeyAction(BaseModel):
 
 
 @router.post("/admin/skills/keys/action")
+@allow_cross_user  # C3(2026-09-18): owner-only(_require_owner_admin) 的后台 Key 处置, 按 key_id 定位, 有意跨用户
 def admin_key_action(
     body: AdminKeyAction,
     db: Session = Depends(get_db),
@@ -1390,6 +1393,7 @@ def admin_key_action(
 
 
 @router.get("/admin/skills/usage")
+@allow_cross_user  # C3(2026-09-18): owner-only(_require_owner_admin) 的全局用量报表, 有意跨用户
 def admin_usage_report(
     days: int = Query(default=7, ge=1, le=90),
     db: Session = Depends(get_db),
