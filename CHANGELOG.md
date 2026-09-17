@@ -5,6 +5,31 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (ghcr/ACR 构建 · arm64 QEMU 段错误)
+
+### fix(docker): 前端构建阶段固定 `$BUILDPLATFORM` —— 修 arm64 分支 QEMU 段错误
+
+**性质**: 构建链路修复。分支 `feat/audit-fix-20260918`(tag v0.10.6)。
+
+v0.10.5 的 tag 跑出**决定性进展**: `build-and-push-image` 的 **`test` job 全绿**
+(发版门禁本身已经通了), 卡在 **`build` job** —— 且只有 arm64 分支:
+
+```
+#26 [linux/amd64 frontend-builder 8/11] RUN pnpm install --frozen-lockfile
+#26 17.81 Done in 13.2s using pnpm v11.25.0        ← amd64 正常
+#36 [linux/arm64 frontend-builder 8/11] RUN pnpm install --frozen-lockfile
+#36 17.78 qemu: uncaught target signal 11 (Segmentation fault) - core dumped   ← arm64 崩
+ERROR: failed to build: process "/bin/sh -c pnpm install --frozen-lockfile" did not complete
+```
+
+- 根因: 前端阶段用 `FROM ${NODE_IMAGE}`(跟随目标平台), arm64 那一支要在 **QEMU 模拟**下跑
+  node/pnpm → 模拟器段错误。**与产品代码无关**, 是模拟器稳定性问题。
+- 修: 前端产物(纯 JS/CSS)与架构无关 ⇒ 该阶段改
+  `FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder`,
+  统一在**构建机原生架构**上跑 node/tsc, dist 再 COPY 进各目标镜像。
+  副作用: arm64 构建更快(不再模拟 JS 工具链)。
+- 同类既有做法: 同文件 thsdk vendor 阶段早已 `--platform=linux/amd64` 固定。
+
 ## 2026-09-18 (真 bug · 缓存目录不认 DATA_DIR)
 
 ### fix(collectors): `stock_list` 写死仓库 data/ → 改为运行时读 `DATA_DIR`

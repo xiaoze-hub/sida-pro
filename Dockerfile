@@ -15,7 +15,12 @@ ARG THSDK_IMAGE=ghcr.io/xiaoze-hub/thsdk-vendor:v1.7.18
 FROM --platform=linux/amd64 ${THSDK_IMAGE} AS thsdk-vendor
 
 # ===== Stage 1: 前端构建 =====
-FROM ${NODE_IMAGE} AS frontend-builder
+# 2026-09-18: 前端产物与架构无关(纯 JS/CSS), 固定用 **构建机架构**(=amd64 原生)跑 node/tsc,
+# 结果 COPY 进各目标架构镜像即可。原先是 `FROM ${NODE_IMAGE}`(跟随目标平台), arm64 那一支
+# 要在 QEMU 模拟下跑 `pnpm install` → qemu 段错误("/bin/sh -c pnpm install --frozen-lockfile"
+# did not complete successfully, 日志里 qemu: uncaught target signal 11 (Segmentation fault)),
+# 直接把 build job 干红 —— 与 buildx/QEMU 稳定性有关, 不是产品代码问题。
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder
 
 # 版本号（构建时传入,注入 sw.js 缓存名,发版后浏览器自动清旧缓存防白屏）
 # 优先级: build-arg VERSION(ghcr 发布显式传) > 仓库根 VERSION 文件(ACR 国内构建
