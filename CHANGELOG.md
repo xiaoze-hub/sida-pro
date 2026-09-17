@@ -5,6 +5,17 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (release v0.10.7 · forecast 门禁对齐验证)
+
+### release: v0.10.7 —— 与 main HEAD 对齐, 验证最后一条红线流水线
+
+**性质**: 发版。tag `v0.10.7`(= main HEAD `5dc9f03`)。**产品代码与 v0.10.6 完全相同**, 本版只含 CI 配置修复, 目的是把 main HEAD 与最新 tag 对齐并让 `build-push-acr-forecast` 走一次干净构建。
+
+- `build-push-acr-forecast` gates job 两处漂移修复(v0.10.6 之后提交):
+  ① 去掉全局 `--timeout=60` —— 慢跑机上 scrypt(n=2^15) 密集的认证用例与 tradingagents 采集用例被误杀(本地各 ~5s);
+  ② 补 WeasyPrint 系统库 + `fonts-noto-cjk` —— 缺 CJK 字体时中文 PDF 渲染成二进制乱码, `test_pdf_export` 断言"广汽集团"/正文文本必红。
+- 与 `build-push-acr.yml` / `build-and-push-image.yml` 的门禁配置现已三线一致(同一批用例只有一个答案)。
+
 ## 2026-09-18 (ghcr/ACR 构建 · arm64 QEMU 段错误)
 
 ### fix(docker): 前端构建阶段固定 `$BUILDPLATFORM` —— 修 arm64 分支 QEMU 段错误
