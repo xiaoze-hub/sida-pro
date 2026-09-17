@@ -25,7 +25,9 @@ def client(monkeypatch):
 
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username == "admin").delete()
+        from tests.conftest import purge_users
+
+        purge_users(db, only_username="admin")
         db.commit()
     finally:
         db.close()

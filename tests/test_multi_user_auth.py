@@ -22,8 +22,10 @@ def client(monkeypatch):
     # 清掉库中已有 admin, 强制本次走 env 引导路径(密码确定)
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username == ADMIN_USER).delete()
-        db.commit()
+        # 2026-09-18: 走 purge_users(先删子表行) —— 直接 DELETE 会撞 users 的 FK
+        from tests.conftest import purge_users
+
+        purge_users(db, only_username=ADMIN_USER)
     finally:
         db.close()
     from src.web.app import app
@@ -36,8 +38,10 @@ def clean_users():
     yield
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username != "admin").delete()
-        db.commit()
+        # 同上: 多用户之后 users 被多张表 FK 引用, 裸删必炸
+        from tests.conftest import purge_users
+
+        purge_users(db, exclude_username="admin")
     finally:
         db.close()
 

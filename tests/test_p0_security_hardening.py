@@ -136,10 +136,16 @@ def test_set_auth_cookie_no_secure_on_http():
 # ─── extract_token_from_request ───────────────────────────────────────
 
 
-def test_extract_token_cookie_wins_over_bearer():
+def test_extract_token_bearer_wins_over_cookie():
+    """**Bearer 优先于 Cookie**(2026-09-18 老板拍板改口径; 原为 Cookie 优先)。
+
+    原口径的副作用是身份静默错位: 浏览器残留上一个账号的 Cookie 时, 显式带了 Bearer 的请求
+    会被按另一个用户执行。新口径: 有 Authorization header ⇒ 它就是权威身份
+    (验不过直接 401, 不回退 Cookie —— 见 tests/test_auth_bearer_priority.py)。
+    """
     from starlette.requests import Request
 
-    from src.web.api.auth import AUTH_COOKIE_NAME, extract_token_from_request
+    from src.web.api.auth import AUTH_COOKIE_NAME, extract_token_from_request, token_from_request
 
     scope = {
         "type": "http",
@@ -157,7 +163,9 @@ def test_extract_token_cookie_wins_over_bearer():
     request = Request(scope)
     # Starlette Request.cookies 从 header 解析
     assert request.cookies.get(AUTH_COOKIE_NAME) == "cookie-token"
-    assert extract_token_from_request(request) == "cookie-token"
+    assert extract_token_from_request(request) == "header-token"
+    # 中间件/审计侧同源裁决函数必须给出同一答案(单一真源)
+    assert token_from_request(request) == "header-token"
 
 
 def test_extract_token_fallback_bearer():

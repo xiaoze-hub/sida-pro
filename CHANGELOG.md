@@ -5,6 +5,33 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (测试夹具 · FK 清理 + 守卫重定向)
+
+### fix(tests): 夹具删用户撞 FK(全量跑 22 errors 根因) + 安全守卫指向新落点
+
+**性质**: 测试基础设施 + 守卫重定向(无产品行为变更)。分支 `feat/audit-fix-20260918`。
+
+**① 夹具 FK 违规(全量跑的 22 errors + 3 个登录态用例连坐红的真根因)**:
+`DELETE FROM users WHERE username != 'admin'` 在多用户改造后必炸 —— `users.id` 已被
+`user_sessions` / `skill_api_keys` / `pro_applications` / `high_value_api_logs` 等表 FK 引用。
+夹具在 teardown 抛 `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, 库留脏数据,
+后面的用例按脏状态跑 → 单跑全绿、合跑连坐红。
+
+- 新增 `tests/conftest.py:purge_users(db, only_username=…, exclude_username=…)`:
+  按 `Base.metadata.sorted_tables` 的拓扑序**反序**遍历所有表, 先把"FK 指向 users"的列里
+  命中目标 id 的行删干净, 再删 users; **未来新增引用 users 的表自动覆盖**, 不用回来改。
+- 6 个直接删用户的测试文件统一改走该助手: `test_multi_user_auth`(两处) / `test_auth_bearer_priority` /
+  `test_auth_change_password` / `test_chat_stream` / `test_entry_candidate_feedback_api` / `test_permissions_rbac`。
+
+**② 安全守卫指向新落点(判据不变, 只是被扫文件变了)**:
+- `test_security_20260823` 的 4 条源码守卫(host 默认 127 / 不打印诱导的 /docs / reload 不含根目录)
+  原先扫 `server.py`; 而 server.py 已瘦身为 ≤50 行 shim, `__main__` 搬进 `src/bootstrap/cli.py`
+  ⇒ 改扫 `server.py + src/bootstrap/cli.py` 合并源码(判据一字不改)。
+- 同文件的 JWT TTL 守卫改为钉"单一真源"结构: env 驱动定义必须在 `src/core/auth_tokens.py`,
+  且 `src/web/api/auth.py` **不得**再本地重复定义(同值重复定义正是 ruff F811 红过的坏味道)。
+- `test_p0_security_hardening::test_extract_token_cookie_wins_over_bearer` 按新口径改写为
+  `test_extract_token_bearer_wins_over_cookie`(Bearer 优先; 并断言中间件侧同源函数给出同一答案)。
+
 ## 2026-09-18 (门禁转绿 · pytest 尾盘 5 红)
 
 ### fix(tests/migrations): 清掉 pytest 最后 5 红(2 处产品真 bug + 3 处测试陈旧)
