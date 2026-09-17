@@ -103,12 +103,15 @@ OPEN_SKILLS: dict[str, dict[str, Any]] = {
     "get_stock_quote": {"tier_min": "free", "slow": False},
     "get_technical_analysis": {"tier_min": "free", "slow": False},
     "get_main_intent": {"tier_min": "free", "slow": False},
-    "get_decision_pioneer": {"tier_min": "free", "slow": False},
+    # 2026-09-18 老板口径: 数智决策三指标(机构活跃度+GS+L2主力净流入 TQ口径)为 pro 档,
+    # **不在免费层级**(游客/免费 key 一律 403)。可用 owner 的「免费档」面板下调回来。
+    "get_decision_pioneer": {"tier_min": "pro", "slow": False},
     "get_rally_analysis": {"tier_min": "free", "slow": False},
     "get_capital_flow": {"tier_min": "free", "slow": False},
     "get_market_news": {"tier_min": "free", "slow": False},
     "get_kline_patterns": {"tier_min": "free", "slow": False},
-    "get_auction_data": {"tier_min": "free", "slow": False},
+    # 2026-09-18: 集合竞价池(9:25 竞价数据)同为 pro 档, 不在免费层级
+    "get_auction_data": {"tier_min": "pro", "slow": False},
     "get_sentiment_cycle": {"tier_min": "free", "slow": False},
     "get_market_anomalies": {"tier_min": "free", "slow": False},
     "get_northbound": {"tier_min": "free", "slow": False},
@@ -742,13 +745,29 @@ def _resolve_call_identity(
     )
 
 
+def _effective_tier_min(name: str, meta: dict[str, Any], db=None) -> str:
+    """skill 实际最低档位 = 运行时免费档覆盖优先, 否则 OPEN_SKILLS 内置档位。
+
+    2026-09-18: 让 owner 能在「免费档」面板里把某个 skill 调回 free(或提到 pro),
+    不用改代码发版; 配置读取失败时回落内置档位(宁可严一点, 不放行)。
+    """
+    builtin = str(meta.get("tier_min") or "free")
+    try:
+        from src.core import free_tier
+
+        return free_tier.skill_tier_min(name, builtin, db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取 skill 档位覆盖失败, 用内置档位 %s: %r", builtin, exc)
+        return builtin
+
+
 def _check_skill_tier(name: str, row: SkillApiKey) -> None:
     meta = OPEN_SKILLS.get(name)
     if not meta:
         if name in BLOCKED_SKILLS:
             raise HTTPException(403, f"该 skill 不对外开放: {name}")
         raise HTTPException(404, f"未知 skill: {name}")
-    need = meta["tier_min"]
+    need = _effective_tier_min(name, meta)
     if TIER_RANK[row.tier] < TIER_RANK[need]:
         raise HTTPException(403, f"skill {name} 需要 {need} 档位(当前 {row.tier})")
 
@@ -760,11 +779,11 @@ def _check_call_tier(name: str, ident: _CallIdentity) -> None:
         if name in BLOCKED_SKILLS:
             raise HTTPException(403, f"该 skill 不对外开放: {name}")
         raise HTTPException(404, f"未知 skill: {name}")
+    need = _effective_tier_min(name, meta)
     if ident.channel == "guest":
-        if meta["tier_min"] != "free":
+        if need != "free":
             raise HTTPException(403, f"游客仅可调用免费 skill, 请注册获取 API Key: {name}")
         return
-    need = meta["tier_min"]
     if TIER_RANK.get(ident.tier, 0) < TIER_RANK[need]:
         raise HTTPException(403, f"skill {name} 需要 {need} 档位(当前 {ident.tier})")
 

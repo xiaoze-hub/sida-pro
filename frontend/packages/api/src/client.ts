@@ -8,12 +8,24 @@ interface ApiResponse<T> {
   message: string
 }
 
+/** fetchAPI 抛出的错误(2026-09-18): 带状态码与"权限类拒绝"的结构化标记 */
+export interface ApiError extends Error {
+  status?: number
+  code?: number
+  /**
+   * 权限类拒绝标记 —— 后端标记 pro 专属/需升级时带上, 页面据此弹升级引导,
+   * 不用去猜错误文案(文案会改, 标记不会)。
+   */
+  proGate?: { proOnly: boolean; feature?: string }
+}
+
 /**
  * P0(2026-09-18) JWT httpOnly Cookie 迁移:
  * - 后端登录时同时下发 HttpOnly Cookie `sida_token`(JS 读不到) + 响应体 token
  * - fetchAPI 统一 credentials:'include' → 浏览器自动携带 Cookie
  * - getToken() 仍从 localStorage 读, 用于 Authorization header(旧路径兼容)
- * - 后端 get_current_user: Cookie 优先, Bearer fallback → 双轨并存, 旧 token 有效
+ * - 后端 get_current_user: **显式 Bearer 优先, Cookie 兜底**(2026-09-18 老板拍板) ——
+ *   双轨并存, 旧 token 有效; 但浏览器里残留的旧账号 Cookie **不会**再盖掉显式 Bearer 身份。
  */
 export function getToken(): string | null {
   // localStorage fallback(兼容旧会话 + 非浏览器客户端)
@@ -160,7 +172,19 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     message: `HTTP ${res.status}`,
   }))
   if (body.code !== 0 || body.success === false) {
-    throw new Error(body.message || `HTTP ${res.status}`)
+    // 2026-09-18: 权限类拒绝带结构化标记(后端 ResponseWrapper 透传) —— 附到 error 上,
+    // 页面据此弹"升级 Pro"引导而不是当成普通报错(靠文案猜字符串太脆)。
+    const err = new Error(body.message || `HTTP ${res.status}`) as ApiError
+    const anyBody = body as any
+    if (anyBody.pro_guide || anyBody.pro_only || anyBody.feature) {
+      err.proGate = {
+        proOnly: !!anyBody.pro_only,
+        feature: typeof anyBody.feature === 'string' ? anyBody.feature : undefined,
+      }
+    }
+    err.status = res.status
+    err.code = body.code
+    throw err
   }
   // 2026-08-12: GET 成功后写缓存
   if (ckey && options?.cacheMode !== false) {

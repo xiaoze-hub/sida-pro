@@ -336,6 +336,14 @@ app.include_router(tradingview_webhook.router, prefix="/api/webhooks", tags=["we
 
 # 需要登录的路由
 protected = [Depends(get_current_user)]
+# 权限点依赖(2026-09-18): 把 pro 专属功能的收口做成路由级依赖, 三条入口(HTTP API /
+# 外部 skill / 聊天工具)同一套判定。免费档可运行时调整, 见 src/core/free_tier.py。
+from src.core.permissions import (  # noqa: E402
+    PERM_VIEW_AUCTION,
+    PERM_VIEW_FORECAST,
+)
+from src.web.api._authz import require_perm  # noqa: E402
+from src.web.api import admin_free_tier  # noqa: E402
 # 纯读行情口(2026-09-07 P1): 用户 JWT 或服务 token 双轨, 供监控/回填/Hub回调。
 # 写链路一律保持 protected; 服务 token 进 require_owner 永远 403。
 from src.web.api.auth import get_user_or_service  # noqa: E402
@@ -619,6 +627,15 @@ app.include_router(
     decision_pioneer.router,
     prefix="/api/decision-pioneer",
     tags=["decision-pioneer"],
+    # 数智决策三指标(机构活跃度 + GS + L2主力净流入 TQ 口径): pro 专属
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 免费档管理(2026-09-18): owner 运行时调整 member 能试用什么/日限/skill 档位,
+# 30s 热生效, 不用发版。判定口径与 API/skill/聊天工具同源。
+app.include_router(
+    admin_free_tier.router,
+    prefix="/api",
+    tags=["admin-free-tier"],
     dependencies=protected,
 )
 # 决策合成(2026-09-08 方向2): 三信号 → 动手/看看/别碰 + 一行理由
@@ -640,7 +657,8 @@ app.include_router(
     resonance.router,
     prefix="/api/resonance",
     tags=["resonance"],
-    dependencies=protected,
+    # 数智决策三指标(机构活跃度/GS/主力净流入)扫描与明细: pro 专属(默认不在免费档)
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
 )
 # 题材情绪分(2026-09-12, 老板口径): 榜单/20日矩阵/详情, 收盘确认口径
 app.include_router(
@@ -697,7 +715,8 @@ app.include_router(
     auction_pool.router,
     prefix="/api/auction",
     tags=["auction-pool"],
-    dependencies=protected,
+    # 集合竞价池(9:25 竞价数据/异动池): pro 专属
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_AUCTION))],
 )
 # 异动接近度监控(任务 C, 2026-08-24): 交易所异常波动规则 60s 扫描
 app.include_router(
@@ -751,7 +770,8 @@ try:
         auction.router,
         prefix="/api/auction-snapshot",
         tags=["auction-snapshot"],
-        dependencies=protected,
+        # 竞价快照(9:25 撮合价/撤单率): pro 专属
+        dependencies=protected + [Depends(require_perm(PERM_VIEW_AUCTION))],
     )
 except ImportError:
     pass

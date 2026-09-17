@@ -5,6 +5,50 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (免费档 · 数智决策/集合竞价池 pro 收口 + 免费级别可调)
+
+### feature: 数智决策三指标 & 集合竞价池收 pro 档 + 「免费档」可运行时调整
+
+**性质**: 权限模型重构 + 新功能(老板需求)。分支 `feat/audit-fix-20260918`(tag v0.10.10)。
+
+#### ① 口径(老板拍板 2026-09-18)
+
+**数智决策三指标**(机构活跃度 + GS + L2主力净流入 TQ口径, 权限点 `view_forecast`)与
+**集合竞价池**(9:25 竞价数据, 新增权限点 `view_auction`)**一律 pro 档, 不在免费层级**。
+三条入口统一收口, 不会出现"某条路漏判":
+
+| 入口 | 收口方式 |
+|---|---|
+| HTTP API | `resonance` / `decision-pioneer` → `require_perm(view_forecast)`; `auction`(异动池) / `auction-snapshot` → `require_perm(view_auction)`(路由级依赖) |
+| 外部 skill | `skills_gateway.OPEN_SKILLS`: `get_decision_pioneer` / `get_auction_data` 的 `tier_min` 由 ~~free~~ 改 **pro**; 游客与免费 key 一律 403 |
+| 聊天工具 | `chat/registry`: 两个工具入口调用 `_perm_denied()` 做同一套判定, 无可读权限时返回升级提示而**不是**数据 |
+
+权限模型顺带修正一处**结构性隐患**: 旧实现 `_MEMBER_BASE = VIEW_PERMISSIONS - TRIAL_FEATURES`,
+意味着"从试用清单里移出一个功能"会**悄悄把它变成 member 基础权限**(授权方向反了)。
+现在改成显式 `PRO_ONLY_PERMS`, member 基础 = 通用浏览权 - pro 专属, 移出试用只会回到 pro 专属。
+
+#### ② 新功能: 「免费档」可运行时调整(owner)
+
+原来"member 能试用什么、每天几次、哪个 skill 免费"硬编码在 `core/permissions.py`, 改一次要发版。
+现在是一份配置:
+
+- 存储: `app_settings.free_tier_config`(KV, JSON); 读有 30s 缓存, **写后立即失效** → 改完 30s 内全节点热生效;
+- 端点: `GET/PUT /api/admin/free-tier`(owner-only, 带校验: 只认 pro 专属功能点 / 已开放 skill / 合法档位),
+  审计落 `free_tier_update`;
+- 可调项: 试用功能清单(逐个勾)、试用日限(0=不给试用)、member 自选/预警上限、**每个 skill 的最低档位**
+  (free/trial/pro, 与内置一致=不写覆盖);
+- UI: 系统设置页新增「免费档」面板(非 owner 整块不渲染; 展示"默认口径"供对照; 保存后提示 30s 热生效)。
+
+#### ③ 配套
+
+- 权限拒绝的结构化标记(`pro_guide` / `pro_only` / `feature`)从 `detail` **透传到响应顶层**
+  (`src/web/response.py`) —— 原先被压成一句 message, 前端只能靠文案猜; 现在 `fetchAPI` 把它挂到
+  `error.proGate` 上, 页面可干净地弹升级引导。
+- `api/client.ts` 里"后端 Cookie 优先"的过时注释同步更正为 **Bearer 优先**(2026-09-18 决策)。
+- 测试: `tests/test_free_tier_gating.py` **25 例**(默认拒绝 + 升级引导 / pro·owner 放行 / 免费档放开后日限真生效 /
+  撤销试用即回 pro 专属 / 配置往返与脏数据回落 / 缓存返回深拷贝 / skill 默认档位与覆盖 / HTTP 403 收口 /
+  admin 端点 owner-only 与校验); `tests/components/free-tier-section.test.tsx` **5 例**。
+
 ## 2026-09-18 (release v0.10.9 · §6.2)
 
 ### release: v0.10.9 —— §6.2「交割单标 K 线」

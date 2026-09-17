@@ -119,6 +119,13 @@ class ResponseWrapperMiddleware:
             if code == 0:
                 code = status_code if status_code != 0 else 1
             wrapped = {"code": code, "success": False, "data": None, "message": message}
+            # 2026-09-18: 把权限拒绝的**结构化标记**透到顶层 —— 原先它们嵌在 detail 里被压成
+            # message 文本, 前端只能靠"文案里有没有 Pro"猜, 没法干净地弹升级引导。
+            # 只透这几个非敏感标记(不回传 detail 全文, 免得把内部信息带出去)。
+            if isinstance(detail, dict):
+                for key in ("pro_guide", "pro_only", "feature"):
+                    if key in detail:
+                        wrapped[key] = detail[key]
 
         new_body = json.dumps(wrapped, ensure_ascii=False).encode()
 

@@ -207,12 +207,16 @@ def get_my_permissions(
     """
     from src.core.permissions import (
         PERMISSION_LABELS,
-        TRIAL_FEATURES,
-        TRIAL_DAILY_LIMIT,
+        effective_trial_features,
+        effective_trial_limit,
         get_role_permissions,
         get_trial_remaining,
         normalize_role,
     )
+
+    # 2026-09-18: 试用功能/日限改为**运行时可调**(free_tier 配置), 不再读模块常量
+    trial_features = effective_trial_features(db)
+    trial_limit = effective_trial_limit(db)
 
     role_defaults = sorted(get_role_permissions(user.role))
     granted = _read_permission_list(user.permissions)
@@ -220,7 +224,7 @@ def get_my_permissions(
     trial_info: dict[str, int] = {}
     role = normalize_role(user.role)
     if role == "member":
-        for feat in TRIAL_FEATURES:
+        for feat in trial_features:
             trial_info[feat] = get_trial_remaining(db, user.id, feat)
     effective = set(role_defaults) | set(granted) | set(trial_info.keys())
     all_permissions = [
@@ -233,7 +237,7 @@ def get_my_permissions(
         "role_defaults": role_defaults,
         "effective": sorted(effective),
         "trial": trial_info,
-        "trial_daily_limit": TRIAL_DAILY_LIMIT,
+        "trial_daily_limit": trial_limit,
         "all_permissions": all_permissions,
     }
 

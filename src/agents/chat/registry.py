@@ -86,6 +86,34 @@ def _filter_tool_args(handler: Callable, args: dict) -> dict:
 # ──────────────── 核心工具(原 chat.py 内联实现, 顺序 = 原 CHAT_TOOLS) ────────────────
 
 
+def _perm_denied(user, db, perm: str) -> str | None:
+    """聊天工具的权限收口(2026-09-18)。
+
+    返回 None = 放行; 否则返回**直接给用户看的拒绝文案**。
+
+    口径与 HTTP API / 外部 skill **完全同源**(`core.permissions.enforce_perm`, 含可调免费档的
+    试用计数), 不另起一套 —— 避免"API 拦了聊天没拦"这类漏判。
+    `user is None` 视为内部/系统调用(定时任务等无用户上下文), 不受商业档位限制; 网页聊天路径
+    一定带 user, 所以不会成为绕过口子。
+    """
+    if user is None:
+        return None
+    try:
+        from fastapi import HTTPException
+
+        from src.core.permissions import enforce_perm
+
+        enforce_perm(user, perm, db)
+        return None
+    except HTTPException as exc:
+        detail = exc.detail
+        msg = detail.get("message") if isinstance(detail, dict) else str(detail)
+        return f"{msg}（升级 Pro 后可用；也可由管理员在「系统设置 · 免费档」里调整试用范围）"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("聊天工具权限校验异常, 保守拒绝 perm=%s: %r", perm, exc)
+        return "权限校验失败，已保守拒绝本次调用。"
+
+
 @register_chat_tool(
     "get_portfolio",
     schema={
@@ -217,6 +245,12 @@ async def _tool_get_main_intent(db: Session, args: dict, user: User | None = Non
     caliber="数智决策三指标·机构活跃度+GS+L2主力净流入(TQ口径)",
 )
 async def _tool_get_decision_pioneer(db: Session, args: dict, user: User | None = None) -> str:
+    # 2026-09-18: 数智决策三指标(机构活跃度+GS+L2主力净流入 TQ口径)为 pro 专属 —— 聊天入口同样收口
+    from src.core.permissions import PERM_VIEW_FORECAST
+
+    denied = _perm_denied(user, db, PERM_VIEW_FORECAST)
+    if denied:
+        return denied
     symbol = args.get("symbol", "")
     market = args.get("market", "CN")
     if market != "CN":
@@ -541,6 +575,12 @@ async def _tool_get_kline_patterns(db: Session, args: dict, user: User | None = 
     caliber="集合竞价池(9:25 竞价数据)",
 )
 async def _tool_get_auction_data(db: Session, args: dict, user: User | None = None) -> str:
+    # 2026-09-18: 集合竞价池(9:25 竞价数据)为 pro 专属 —— 聊天入口同样收口
+    from src.core.permissions import PERM_VIEW_AUCTION
+
+    denied = _perm_denied(user, db, PERM_VIEW_AUCTION)
+    if denied:
+        return denied
     from src.web.api.chat import _fetch_auction_context
 
     scene = args.get("scene", "overview")
