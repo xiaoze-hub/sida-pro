@@ -18,6 +18,10 @@
  * R8 固定底部条必须预留空间(2026-09-18 UI 走查): `fixed inset-x-0 bottom*` 的常驻条会压住
  *    页面最后一行(走查 9 页复现)。该文件必须同时出现 `--disclaimer-h`(或自行补偿 padding),
  *    否则 CI 失败 —— 防止以后再加一条固定条重犯。
+ * R10 字阶棘轮(2026-09-18 UI 走查 B4): 全站曾出现 12 种 px 字号(9/10/11/12/13/14/15/16/17/18/20/22),
+ *    "层级平淡"其实是"级数失控"。规范只留 6 级: 10 辅助 / 11 次要 / 12 正文 / 13 区块标题 /
+ *    16 页面标题 / 20 大数字。**已有文件按 baseline 只降不升**, 新文件一律 0(基线见
+ *    scripts/ui-rules-font-baseline.json)。
  * R9 禁外部 CDN 脚本(2026-09-18 UI 走查): index.html 不许再引 unpkg/jsdelivr 之类外部域。
  *    生产实测 CSP/国内网络任一环节拦掉 CDN, 图表库直接加载失败、主视觉区空白。
  *    图表库已随 biz-ui 依赖打包(localhost 自托管), 无需 CDN。
@@ -135,6 +139,33 @@ try {
   const cdn = html.match(/(?:src|href)=["']https?:\/\/(?:unpkg\.com|cdn\.jsdelivr\.net)[^"']*/g) || []
   for (const c of cdn) bad('R9-EXTERNAL-CDN', 'frontend/index.html', 1, c)
 } catch { /* index.html 不存在则跳过 */ }
+
+// R10: 字阶棘轮(见文件头说明)
+const FONT_ALLOWED = new Set([10, 11, 12, 13, 16, 20])
+const FONT_BASELINE_FILE = join(ROOT, 'scripts', 'ui-rules-font-baseline.json')
+let fontBaseline = {}
+try { fontBaseline = JSON.parse(readFileSync(FONT_BASELINE_FILE, 'utf8')) } catch { /* 无基线 → 全量新规 */ }
+const fontSeen = new Set()
+for (const f of files) {
+  const src = readFileSync(f, 'utf8')
+  // 注意: 变量名不能叫 bad —— 会遮蔽上报函数 bad()
+  const badSizes = (src.match(/text-\[(\d+)px\]/g) || [])
+    .map((m) => Number(/(\d+)/.exec(m)[1]))
+    .filter((n) => !FONT_ALLOWED.has(n))
+  const key = f.replace(/\\/g, '/').split('/frontend/')[1] || rel(f)
+  if (badSizes.length === 0) continue
+  fontSeen.add(key)
+  const base = fontBaseline[key]
+  const where = `非标准字号 ${[...new Set(badSizes)].join(',')}px (允许 ${[...FONT_ALLOWED].join('/')})`
+  if (base === undefined) {
+    bad('R10-FONT-SCALE', rel(f), 1, `${badSizes.length} 处${where} 且无 baseline`)
+  } else if (badSizes.length > base) {
+    bad('R10-FONT-SCALE', rel(f), 1, `${badSizes.length} > baseline ${base} — ${where}`)
+  } else if (badSizes.length < base) {
+    console.log(`[R10] ${key}: ${badSizes.length} < baseline ${base} — 可调低 baseline`)
+  }
+}
+for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R10] ${k}: 0 — 可从 baseline 删除`)
 
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)
