@@ -138,21 +138,18 @@ class JWTDecodeMiddleware(BaseHTTPMiddleware):
     不强制鉴权 — 鉴权由各路由的 Depends(get_current_user) 决定
     这里是性能优化: 让依赖能直接读 request.state.user 避免重复解码
 
-    P0(2026-09-18): 优先 httpOnly Cookie `sida_token`, fallback Authorization Bearer。
+    2026-09-18: token 来源裁决统一走 `auth.token_from_request`
+    (**Authorization Bearer 优先, 无 header 时回退 Cookie**), 本中间件不再自己写一份优先级。
     """
     async def dispatch(self, request: Request, call_next):
         request.state.user = None
         try:
             from src.web.api.auth import (
-                AUTH_COOKIE_NAME,
                 decode_token as _decode_token,
                 principal_from_payload,
+                token_from_request,
             )
-            raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
-            if not raw:
-                auth = request.headers.get("authorization", "")
-                if auth.lower().startswith("bearer "):
-                    raw = auth[7:]
+            raw = token_from_request(request) or ""
             if raw:
                 payload = _decode_token(raw)
                 if payload:
@@ -357,19 +354,16 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 return response
 
             # 自己解析 JWT(避免依赖 JWTDecodeMiddleware 的外层/内层顺序)
-            # P0(2026-09-18): Cookie 优先, fallback Bearer
+            # 2026-09-18: 与 HTTP 依赖同源裁决(Bearer 优先 → Cookie), 保证审计归属的用户
+            # 就是请求真正以之执行的那个用户。
             user = None
             try:
                 from src.web.api.auth import (
-                    AUTH_COOKIE_NAME,
                     decode_token as _decode_token,
                     principal_from_payload,
+                    token_from_request,
                 )
-                raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
-                if not raw:
-                    auth = request.headers.get("authorization", "")
-                    if auth.lower().startswith("bearer "):
-                        raw = auth[7:]
+                raw = token_from_request(request) or ""
                 if raw:
                     payload = _decode_token(raw)
                     if payload:

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import { useKlineLayer } from '@/hooks/useKlineLayer'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
 import { describeApiError } from '@/lib/api-error'
@@ -70,6 +71,28 @@ interface IndexDetail {
 }
 
 // 成交额柱状图(大盘资金流替代: 近20日成交额)
+
+/**
+ * 设计稿 v2.1 §5 接线(2026-09-18 审计断链修复): 指数正文的 K 线同样接上图层数据
+ * (原先注释写"图层开关由 InteractiveKline 内部 DEFAULT_LAYERS 控制", 但数据没人传,
+ * 开关开着也是空的)。指数用 GS 交叉/资金柱/事件标注同一口径, 取不到就不画。
+ */
+function IndexKline({ symbol, market }: { symbol: string; market: string }) {
+  const layer = useKlineLayer(symbol, market)
+  return (
+    <InteractiveKline
+      symbol={symbol}
+      market={market}
+      initialInterval="1d"
+      initialDays="120"
+      gsSignals={layer.gsSignals}
+      fundFlow={layer.fundFlow}
+      events={layer.events}
+      supportPressure={layer.supportPressure}
+    />
+  )
+}
+
 function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
   // B5 三态审计修复(2026-09-10): 空数据显式给文案 —— 标题下静默消失会被误读为渲染失败
   if (trend.length === 0) {
@@ -196,7 +219,7 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
               title="K线走势"
               action={<span className="text-[10px] text-muted-foreground">MA/成交量/MACD/RSI · 日K/周K/月K 切换</span>}
             />
-            <InteractiveKline symbol={symbol || ''} market={data.market || 'CN'} initialInterval="1d" initialDays="120" /* SIDA Pro v2.0: 图层开关由 InteractiveKline 内部 DEFAULT_LAYERS 控制 */ />
+            <IndexKline symbol={symbol || ''} market={data.market || 'CN'} />
           </div>
 
           {/* 大盘资金流(东财两市主力净流入, 对齐同花顺APP) */}

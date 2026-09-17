@@ -24,7 +24,9 @@ def client(monkeypatch):
     # 清掉库中已有 admin, 强制本次走 env 引导路径(密码确定)
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username == ADMIN_USER).delete()
+        from tests.conftest import purge_users
+
+        purge_users(db, only_username=ADMIN_USER)
         db.commit()
     finally:
         db.close()

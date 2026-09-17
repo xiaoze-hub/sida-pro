@@ -5,6 +5,255 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (测试夹具 · 全局态解耦 + SQLite 锁)
+
+### fix(tests): 最后 2 红(全局回调/事件循环污染) + teardown"database is locked"
+
+**性质**: 测试基础设施。分支 `feat/audit-fix-20260918`。
+
+- `test_lhb_backfill`: `daily_job` 的重算触发走**模块级回调** `_RECOMPUTE_HOOK`
+  (`set_recompute_hook`, 生产在 `bootstrap/startup.py` 注入)。别的用例先注入过 hook 时,
+  本文件 monkeypatch 的 `recompute_factors` 根本不会被调到 ⇒ 单跑绿、全量跑红(`calls` 恒空)。
+  加 autouse fixture: 每个用例前 `set_recompute_hook(None)`, 用例结束恢复原值。
+- `test_skill_gateway_p2p3::test_admin_require_owner`: 原用 `asyncio.get_event_loop()`,
+  全量跑时前面的用例已消费/关闭默认 loop ⇒ 抛 `There is no current event loop in thread 'MainThread'`,
+  `ei.value` 变成 RuntimeError 而不是要断言的 403。改 `asyncio.run`(自建并收尾 loop)。
+- `tests/conftest.py:purge_users`: 连删十几张表时 SQLite 会撞 `database is locked`(别的连接在写,
+  全量跑里的 14 个 teardown ERROR)。加 `PRAGMA busy_timeout=15000` + 命中 "locked" 时短重试,
+  让它**等锁**而不是立刻失败。
+
+## 2026-09-18 (测试夹具 · isolation 清理收口)
+
+### fix(tests): 两个 isolation 套件的手写清理清单改走 purge_users(14 个 teardown ERROR 的来源)
+
+**性质**: 测试基础设施。分支 `feat/audit-fix-20260918`。
+
+`test_user_isolation_api` / `test_multitenant_isolation` 各自维护一份"逐表按依赖顺序删"的
+手写清单 —— 多用户改造后又加了 `user_sessions` / `skill_api_keys` / `pro_applications` /
+`high_value_api_logs` 等引用 `users.id` 的表, 清单没跟上 ⇒ teardown 撞 FK, 全量跑里表现为
+**14 个 `ERROR at teardown of …isolation`**, 并留下脏数据连坐后面两个用例。
+
+- 两个套件的 `_cleanup_user_data(user_ids)` 统一改为 `tests.conftest.purge_users(db, ids=…)`;
+  `purge_users` 增加 `ids=` 入参(原只有 username 维度)。
+- 清单不再需要维护: 新增任何引用 users 的表都被 metadata 拓扑自动覆盖。
+
+## 2026-09-18 (测试夹具 · FK 清理 + 守卫重定向)
+
+### fix(tests): 夹具删用户撞 FK(全量跑 22 errors 根因) + 安全守卫指向新落点
+
+**性质**: 测试基础设施 + 守卫重定向(无产品行为变更)。分支 `feat/audit-fix-20260918`。
+
+**① 夹具 FK 违规(全量跑的 22 errors + 3 个登录态用例连坐红的真根因)**:
+`DELETE FROM users WHERE username != 'admin'` 在多用户改造后必炸 —— `users.id` 已被
+`user_sessions` / `skill_api_keys` / `pro_applications` / `high_value_api_logs` 等表 FK 引用。
+夹具在 teardown 抛 `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, 库留脏数据,
+后面的用例按脏状态跑 → 单跑全绿、合跑连坐红。
+
+- 新增 `tests/conftest.py:purge_users(db, only_username=…, exclude_username=…)`:
+  按 `Base.metadata.sorted_tables` 的拓扑序**反序**遍历所有表, 先把"FK 指向 users"的列里
+  命中目标 id 的行删干净, 再删 users; **未来新增引用 users 的表自动覆盖**, 不用回来改。
+- 6 个直接删用户的测试文件统一改走该助手: `test_multi_user_auth`(两处) / `test_auth_bearer_priority` /
+  `test_auth_change_password` / `test_chat_stream` / `test_entry_candidate_feedback_api` / `test_permissions_rbac`。
+
+**② 安全守卫指向新落点(判据不变, 只是被扫文件变了)**:
+- `test_security_20260823` 的 4 条源码守卫(host 默认 127 / 不打印诱导的 /docs / reload 不含根目录)
+  原先扫 `server.py`; 而 server.py 已瘦身为 ≤50 行 shim, `__main__` 搬进 `src/bootstrap/cli.py`
+  ⇒ 改扫 `server.py + src/bootstrap/cli.py` 合并源码(判据一字不改)。
+- 同文件的 JWT TTL 守卫改为钉"单一真源"结构: env 驱动定义必须在 `src/core/auth_tokens.py`,
+  且 `src/web/api/auth.py` **不得**再本地重复定义(同值重复定义正是 ruff F811 红过的坏味道)。
+- `test_p0_security_hardening::test_extract_token_cookie_wins_over_bearer` 按新口径改写为
+  `test_extract_token_bearer_wins_over_cookie`(Bearer 优先; 并断言中间件侧同源函数给出同一答案)。
+
+## 2026-09-18 (门禁转绿 · pytest 尾盘 5 红)
+
+### fix(tests/migrations): 清掉 pytest 最后 5 红(2 处产品真 bug + 3 处测试陈旧)
+
+**性质**: 门禁转绿 + 迁移健壮性。**需重启后端**(迁移守卫/可选依赖改动)。分支 `feat/audit-fix-20260918`。
+
+1. **`test_w31_db_dialect` + 迁移 v169 真 bug**: `_m169_unified_identity_columns` 的回填 UPDATE
+   假定 `users.username` 存在, 但极老的**单用户库没有该列** ⇒ `no such column: u.username`,
+   把整条迁移链打断(跑测时日志里那条 `Migration v169 failed: unified_identity_columns`)。
+   按本仓纪律补 `_has_column(conn, "users", "username")` 守卫: 缺列就跳过回填(回填是"能给就补",
+   不是升级前提); 新库/生产库该列恒在, 行为不变。
+2. **`src/core/thsdk_alert.py` 可选依赖**: 原先模块级 `from thsdk import THS, Response` ——
+   thsdk 是可选私有依赖(CI/开发机没有), 缺包时连 import 都炸, 把整条"竞价/暗盘**降级**链"
+   一起带走(降级链本意就是"源不可用也要能跑")。改为可选导入 + 调用点显式报"源不可用"。
+3. **`test_kline_adjust_dimension` 契约过期**: `_persist_bars` 已改为**复用主引擎单例**
+   (`src.db.session.engine`, P0 性能修复: 原先每次落 K 线 create_engine+dispose),
+   测试还在"改 `DB_URL` 再落库" ⇒ 写去了真库、临时库断言为空。测试改为直接替换单例,
+   把"落库必须走主引擎单例"这条契约钉住。
+4. **`test_market_archive_api` 时间依赖**: 龙虎榜造数写死 `20260909/20260910`, 而路由的
+   `symbol+days` 走 `start = today - days` ⇒ 过几天窗口漂出去必红。改为**相对今天**造数。
+5. `test_email_reg_api_keys` 的 404 是上面"Cookie 优先"身份错位的连带(控制台操作打到别的用户账下),
+   随 Bearer 优先口径修复自然转绿 —— 未改该文件一行。
+
+- 结果: 上述 5 个文件 6+8+18+6+3 例全绿; ruff / scoped-queries / migrations 门禁同时为绿。
+
+## 2026-09-18 (鉴权口径 · Bearer 优先)
+
+### fix(auth): token 来源裁决改为 **Authorization Bearer 优先 → Cookie 兜底**(老板拍板)
+
+**性质**: 安全语义变更。**需重启后端**。分支 `feat/audit-fix-20260918`。
+
+**原口径与副作用**: P0 加固时定的"Cookie 优先, Bearer fallback"(为 httpOnly 迁移期零破坏)。
+副作用是**身份静默错位**: 浏览器里只要残留上一个账号的 `sida_token`, 显式带了 Bearer 的请求
+会被按**另一个用户**执行(本仓踩到的是测试里 owner 的 PATCH 被当成 member → 403)。
+
+**新口径**(`src/web/api/auth.py:token_from_request`, 单一真源):
+
+| 请求形态 | 判定 |
+|---|---|
+| 有 `Authorization: Bearer xxx` | **它就是权威身份**; 验不过 → 401, **不回退 Cookie** |
+| 无 Authorization 头 | 走 httpOnly Cookie(浏览器默认路径, 前端零改动) |
+| 都无 | 401 |
+
+为什么"验不过也不回退 Cookie": 显式带错 token 却以 Cookie 里的身份通过, 比直接拒绝更危险
+(调用方以为自己在用 A 身份, 实际执行的是 B)。
+
+**四处读取点统一走同一函数**(避免"三处各写一份优先级"再分叉):
+`extract_token_from_request`(HTTP 依赖) / `JWTDecodeMiddleware` / 审计中间件(`app.py`) /
+settings 审计(`api/settings.py`)。审计归属的用户从此与请求真正以之执行的身份一致。
+
+**测什么**: 新增 `tests/test_auth_bearer_priority.py` 5 例 —— owner 的 Bearer + member 的 Cookie
+→ 按 owner 执行(旧口径会 403) / 仅 Cookie 仍可用 / 无效 Bearer **不**被 Cookie 兜住(401) /
+无凭据 401 / 三个中间件侧文件不得再出现"先读 Cookie"的旧写法(源码级断言)。
+`test_multi_user_auth.py` **删掉了先前为绕开该 bug 加的"登录后清 Cookie"hack** —— 恢复原样即通过,
+证明修的是产品而非测试。
+
+**兼容**: 前端 `fetchAPI` 同时带 Cookie 与 Authorization(localStorage); localStorage 里 token 过期时
+会 401 → 既有单飞 `logout()` 清 localStorage + best-effort 清服务端 Cookie → 引导重新登录(不循环)。
+
+## 2026-09-18 (门禁转绿 · ruff)
+
+### fix(lint): ruff `E9,F821,F601,F811` 8 处 → 清空(含 1 个真 NameError)
+
+**性质**: 门禁转绿(ruff 真 bug 类) + 1 个运行时真 bug 修复。**需重启后端**。
+分支 `feat/audit-fix-20260918`。
+
+tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断的第三个原因)。逐条处理:
+
+- **真 bug(`limit_ladder_live.py:305` F821)**: `fetch_stock_l2_batch` 只在 `scan_tick()` 内
+  **局部 import**, 而 `_default_deps()`(另一个函数)也引用它 ⇒ 局部名不跨函数, 走到
+  `l2_fn=fetch_stock_l2_batch` 那行必 `NameError` —— **连板梯队实时化(60s 调度)默认依赖路径直接崩**。
+  修: `_default_deps()` 内补同样的局部 import(保持原有惰性导入意图, 不引模块级循环依赖);
+  新增 `tests/test_limit_ladder_live_deps.py` 2 例钉住(`l2_fn is fetch_stock_l2_batch` + 七件齐全)。
+- `bootstrap/runtime.py:48` F821: `paper_trading_scheduler` 的类型注解引用了未导入的
+  `PaperTradingScheduler`(因 `from __future__ import annotations` 才没在运行时炸, 类型层是缺的)。
+  修: 与其它 scheduler 一致补 import。
+- `core/market_scan_jobs.py` ×2 F811: 函数内 `SessionLocal` 重复 import(模块级已有) → 删除局部重复。
+- `web/api/auth.py` ×4 F811: KI-039 把 JWT 原语下沉 `core.auth_tokens` 后, 本模块仍保留
+  **同值**的本地重复定义(会掩盖"改一处以为生效"的隐患) → 删除本地重复, 统一用 core 的导入。
+  值完全相同, 行为零变化; `import src.web.api.auth` 正常。
+
+- 现状: `ruff check src/ server.py forecast_server.py scripts/ packages/marketdata/src
+  --select E9,F821,F601,F811` → **All checks passed**。
+- 回归: `tests/test_limit_ladder_live_deps.py` 2 例通过; `test_limit_ladder_live.py` 等 33 例通过。
+
+## 2026-09-18 (门禁转绿 · 越权静态扫描)
+
+### fix(scope): `check_scoped_queries` 8 处未过滤查询 → 逐一核实后显式豁免
+
+**性质**: 门禁转绿(安全门禁)。**需重启后端**(纯标记 + 一处等价改写)。分支 `feat/audit-fix-20260918`。
+
+`scripts/check_scoped_queries.py` 是 tag 流水线 gates 里的多租户越权静态门禁, 当时 **8 处红**,
+是 v0.9.0 起 tag 流水线全断的第二个原因。逐处核实**不是越权面**后才豁免(每处附理由):
+
+| 位置 | 判定 |
+|---|---|
+| `pro_billing.py` `admin_list_applications` / `admin_reject` | `Depends(require_owner)` owner-only ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `_validate_api_key_row` | 按 `key_hash` 反查持有者, 此时 user 尚不存在 —— 跨用户是鉴权本身的语义 ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `downgrade_expired_keys` | 后台调度器(系统作用域), 无 user 上下文 ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `admin_key_action` / `admin_usage_report` | `_require_owner_admin` owner-only ⇒ `@allow_cross_user` |
+| `skills_gateway.py` `my_key_usage._count` | 只按 `api_key_id` 过滤, 而 row 来自 `_get_owned_key(db, user, key_id)`(归属上游已校验) ⇒ 行尾 `# scoped-check: allow`(检查器只认查询行尾注释, 故原多行 return 改为先取 `q` 再过滤) |
+
+- 现状: `python scripts/check_scoped_queries.py` → **OK**, `import src.web.app` 正常。
+- 注: 豁免是**显式标记 + 理由**, 不是关掉门禁; 新增同类查询仍会被拦。
+
+## 2026-09-18 (门禁转绿 · 前端)
+
+### fix(i18n): 无 Provider 时的兜底上下文引用不稳定 → 页面 effect 无限重跑(取数风暴)
+
+**性质**: 真 bug(仅无 Provider 路径)。**纯前端**。分支 `feat/audit-fix-20260918`。
+
+**现象**: 暗盘资金 TOP 榜 5 个用例全红, 但报的是"找不到 贵州茅台"—— 实测 DOM 停在骨架屏。
+
+**根因**: `useI18n()` 在**没有挂 `I18nProvider`** 时每次调用都新建 `{t, dict, ...}`, 而页面普遍把
+`t` 放进依赖(`DarkFundTop`: `load = useCallback(..., [t])` + `useEffect(..., [load])`)⇒ 依赖每帧都变
+⇒ **effect 无限重跑**: `setLoading(true)` 每轮重置, 界面永远停在骨架屏; 卸载后 promise 才落地,
+表现为 `window is not defined` 的 unhandled error。挂 Provider 时 `t` 由 `useMemo([locale])` 稳定,
+所以只有"无 Provider"这条路径炸 —— 恰好是全部组件测试的路径。
+
+- 修: 兜底上下文提为**模块级常量**(`FALLBACK_I18N` / `FALLBACK_T`), 引用恒定。
+- 副作用: 该兜底本就是"开发/测试可用"的承诺, 之前实际不可用(任何把 t 进 deps 的组件都会风暴)。
+
+**测试对齐**(页面结构变了, 断言没跟上 —— 两处都是"测试旧"而非产品坏):
+- `tests/components/dark-fund-top.test.tsx`: 页面同时渲染桌面表格与移动端卡片(`hidden md:block` /
+  `md:hidden`), jsdom 不套 CSS ⇒ 同一行文字命中两次。断言一律 `within(桌面表格)` 收窄。
+- `tests/components/profile-account-failure.test.tsx`: `Profile` 现在用 `useNavigate()`, 用例宿主
+  必须包 `MemoryRouter`, 否则 render 阶段就抛(报出来的却是"找不到 role=alert", 误导)。
+- 结果: 这 8 个用例全绿(vitest 434 → 460 用例, 全绿)。
+
+## 2026-09-18 (部署门禁)
+
+### fix(deploy): 全新安装路径 `set -u` 崩溃(CLONE_SWAP/CLONE_NANOCPUS 未初始化) + 门禁回归断言
+
+**性质**: 部署脚本真 bug + 门禁补强。分支 `feat/audit-fix-20260918`。
+
+**真故障(不是测试过时)**: `deploy/deploy_panwatch.sh` 的 `default_config()` 只初始化了
+`CLONE_ENV/VOL/PORT/NET/RESTART/MEM`, 而 `compose_run_args()` 还会读 `CLONE_SWAP` /
+`CLONE_NANOCPUS`(只在 `harvest_existing_config()` 里赋值)。脚本头是 `set -euo pipefail`
+⇒ **无现有容器时(全新安装 / 容器被删后重建)在 `docker create` 之前就 "unbound variable" 退出**,
+一台新机器都装不起来。生产一直有旧容器(走 harvest 分支), 故线上从未暴露。
+
+- 修: `default_config()` 显式置 `CLONE_SWAP="0"` / `CLONE_NANOCPUS="0"`(0 = 不注入,
+  与 `compose_run_args()` 的"空或 0 都跳过"判据一致)。
+- 门禁: `scripts/tests/test_deploy_script.sh` 增两条断言 —— 输出不得含 `unbound variable`,
+  且必须走到「▶ 重建容器」; 把"提前退出"这种失败模式直接点名, 不再表现为 9 条参数缺失的噪声。
+- 现状: 该 stub 测试 **15 passed / 0 failed**(修复前 4 passed / 9 failed)。
+  注意这是 tag 流水线 `gates` job 的第一步, 它红 ⇒ v0.9.0 起每个 tag 的 4 条流水线全部在
+  gates 处短路, 镜像与 Release 都出不来(与本次审计同时发现)。
+
+## 2026-09-18 (K线图层接线 · 审计断链修复)
+
+### fix(kline-layers): 六图层从"建好了没人接"接线到生产页面 + §10.2 交互规范补齐 3 项
+
+**性质**: 功能接线(设计稿 §5 / §10.2)。**纯前端**。分支 `feat/audit-fix-20260918`。
+
+**背景(审计发现的最大断链)**: 后端 `src/web/api/klines.py:_build_layer_data` 早已产出
+`gs_signals / fund_flow / events / unlock_levels / activity_series`, 图表组件也实现了 L2/L3/L4
+图层与开关 UI, 但**没有任何页面把数据传进去** —— 生产里 K 线只有蜡烛 + 均线, 设计稿 §5
+"核心新增: K线图层标注"等于没落地。同批补齐 §10.2 交互规范里缺的 3 项。
+
+- `KlineChart` **图层数据自取**: 父未接管的分量(gsSignals/fundFlow/events/supportPressure/
+  activitySeries)在组件内按需取一次 `/klines/{symbol}/summary`, 事件走 `normalizeKlineEvents`、
+  价位线走 `normalizePriceLines` 白名单过滤(脏点不入图); 取不到 = 整层不画, 不编造。
+  父传了就不取(布尔入 deps, 避免内联数组身份变化导致无限取数)。
+- `src/hooks/useKlineLayer.ts` **新建**: 给 `InteractiveKline`(图层全靠 props)用的一次性取数 hook;
+  `AnalysisDetail`(每股分析页)与 `IndexBody`(指数正文)接上 —— 这两处此前图层开关是空的。
+- §10.2① **周期写 URL**: `KlineChart` 新增 `onIntervalChange`; `src/lib/kline-period.ts` 新建
+  (`?period=m1|m5|m15|m30|m60|d1|w1|mn` ↔ `KlineInterval` 双向表); `StockWorkbench` 读写
+  `?period=`, 刷新/分享不丢。`intra`(分时)不在表内 → 返回 `undefined` 落回默认周期, 不假装支持。
+- §10.2③ **十字光标联动**: `onCrosshairMove` 载荷追加该时刻的明盘/暗盘净额与同日事件标签;
+  图表内读数栏(KI-056)同步显示, 缺数据一律 `--`。按"K 线 time 完全相等"定位当日,
+  不用 ISO 反推(分钟级时间戳是本地解析, UTC 反推会错位)。
+- §10.2④ **区间统计**: `src/lib/range-stats.ts` 新建纯函数 `computeRangeStats`(首末价/涨跌幅/
+  振幅/累计明暗盘+有值天数/事件计数/区间内价位线), 图表算出后经 `onRangeStats` 上报,
+  `src/components/RangeStatsCard.tsx` 新建卡片渲染在**资金面板顶部**(§10.2④ 规定的落位),
+  可手动收起, 区间变化后重新出现。明暗盘无数据时显示 `--`(不是 0)。
+
+**测什么**: `tests/lib/range-stats.test.ts` 11 例(空区间→null / 区间外日期不入账 / 全 null 时累计
+必须是 null 而非 0 / 脏值不当数字 / 事件与价位线按区间过滤)、`tests/lib/kline-period.test.ts` 8 例
+(双向可逆 / `intra` 与图表字面量不认 / 大小写容错)、`tests/components/range-stats-card.test.tsx`
+7 例(涨红跌绿 / `--` 与「无数据」/ 事件 0 次照实显示 / 收起回调)。`tsc -b` 0 error, `eslint` 0 error,
+`vite build` 通过。
+
+**约束/兼容**:
+- `KlineChart` 的 `GsSignalPoint` 增加可选 `price`(后端本就下发, `gs_strategy.py:210`)——
+  `InteractiveKline` 的同名类型要求该字段, 同一次取数才能同时喂两张图。
+- 图表仍可在父组件接管时完全受控(全部 props 保持可选, 默认行为不变)。
+- 未做(留待下批, 不在本批承诺): `?subchart=` 副图写 URL、右栏资金面板逐项联动(本批只在图表
+  读数栏联动)、§4.1 左自选栏 200px 形态、§12 灰图标缺位视觉规范。
+
 ## 2026-09-18 (P1 稳定性)
 
 ### feat(stability): Loki 日志聚合 + APM 深度集成 + 慢接口异步化 + 读写分离准备

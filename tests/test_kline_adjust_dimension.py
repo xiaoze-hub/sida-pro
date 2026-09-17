@@ -364,10 +364,16 @@ class MagicMockLikeEngine:
 
 class TestPersistBars:
     def test_sina_fallback_persists_none_partition(self, tmp_path, monkeypatch):
-        """新浪兜底数据诚实落 PG(source='sina', adjust='none'), 供后续 none 读。"""
+        """新浪兜底数据诚实落 PG(source='sina', adjust='none'), 供后续 none 读。
+
+        2026-09-18 修: `_persist_bars` 现在**复用主引擎单例**(`src.db.session.engine`,
+        P0 性能修复: 原先每次落 K 线都 create_engine+dispose, 高频打爆 FD/池),
+        所以"改 DB_URL 再落库"的老办法不再生效(引擎在 import 期就绑定了)。
+        测试改为直接替换那个单例 —— 同时把"落库必须走主引擎单例"这条新契约钉住。
+        """
         engine = _mk_sqlite_db(tmp_path, name="p.db")
-        url = f"sqlite:///{tmp_path / 'p.db'}"
-        monkeypatch.setattr("src.db.dialect.DB_URL", url)
+        monkeypatch.setattr("src.db.session.engine", engine, raising=False)
+        monkeypatch.setattr("src.db.dialect.DB_URL", f"sqlite:///{tmp_path / 'p.db'}")
         c = kc.KlineCollector(MarketCode.CN)
         bars = [kc.KlineData(date="2026-09-05", open=10, high=11, low=9,
                              close=10.5, volume=100)]
@@ -376,7 +382,9 @@ class TestPersistBars:
 
     def test_persist_bars_fail_soft_on_bad_db(self, monkeypatch, tmp_path):
         """库不可达时 fail-soft 不抛(兜底路径不能反过来打死采集)。"""
-        monkeypatch.setattr("src.db.dialect.DB_URL", f"sqlite:///{tmp_path / 'nope.db'}")
+        # 同上: 主引擎单例才是落库出口; 指向一个**建不出来的库**(父目录不存在)让它连接期失败。
+        bad = create_engine(f"sqlite:///{tmp_path / 'nope'} /x.db", connect_args={"timeout": 1})
+        monkeypatch.setattr("src.db.session.engine", bad, raising=False)
         c = kc.KlineCollector(MarketCode.CN)
         bars = [kc.KlineData(date="2026-09-05", open=10, high=11, low=9,
                              close=10.5, volume=100)]

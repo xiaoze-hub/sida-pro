@@ -35,6 +35,18 @@ def test_endpoint_never_500(monkeypatch):
 
     app = FastAPI()
     app.include_router(mod.router, prefix="/d")
+    # 2026-09-18: /d/{symbol} 现在强制鉴权(Depends(get_current_user) + enforce_perm),
+    # 用例只验"取数抛错 → 500 / 正常 → 200", 故用替身 owner 覆盖鉴权层(本文件不测鉴权)。
+    from src.web.api.auth import get_current_user
+
+    class _FakeOwner:
+        id = "test-owner"
+        username = "test-owner"
+        role = "owner"
+        is_active = True
+        token_version = 0
+
+    app.dependency_overrides[get_current_user] = lambda: _FakeOwner()
     c = TestClient(app, raise_server_exceptions=False)
     monkeypatch.setattr(core_mod, "decide", _boom)
     r = c.get("/d/600519")

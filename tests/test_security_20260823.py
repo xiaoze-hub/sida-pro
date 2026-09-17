@@ -134,10 +134,24 @@ def test_p0_3_llm_adapter_only_openrouter_env(monkeypatch):
 # P1-1: server.py / forecast_server 默认绑定 127.0.0.1
 # ────────────────────────────────────────────────────────────────────────────
 
+def _launcher_sources() -> str:
+    """启动链源码 = server.py(shim) + src/bootstrap/cli.py(真正的 uvicorn 入口)。
+
+    2026-09-18: server.py 瘦身成 ≤50 行 shim(`tests/test_w32_bootstrap.py` 钉住),
+    `__main__` 里的 host/reload/print 全部搬进 `src/bootstrap/cli.py`。本文件这几条
+    是**安全守卫**(别硬编码 0.0.0.0 / 别打印诱导的 /docs 链接 / reload 别含根目录),
+    判据仍在, 只是被扫的目标文件变了 —— 合并读, 守卫不放过任何一处。
+    """
+    return (
+        (PROJECT_ROOT / "server.py").read_text(encoding="utf-8")
+        + "\n# ---- src/bootstrap/cli.py ----\n"
+        + (PROJECT_ROOT / "src" / "bootstrap" / "cli.py").read_text(encoding="utf-8")
+    )
+
 def test_p1_1_server_host_default_127(monkeypatch):
     """server.py 默认 host 应读 WEB_HOST 环境变量, 缺省 127.0.0.1 (不再硬编码 0.0.0.0)。"""
     monkeypatch.delenv("WEB_HOST", raising=False)
-    src = open(str(PROJECT_ROOT / "server.py")).read()
+    src = _launcher_sources()
     # 必须用环境变量驱动, 不再硬编码 0.0.0.0
     assert 'os.environ.get("WEB_HOST"' in src
     # 默认值必须是 127.0.0.1
@@ -521,7 +535,7 @@ def test_p1_11_ws_token_extraction_priority():
 
 def test_p2_1_no_misleading_docs_url_print():
     """server.py 启动 print 不再诱导用户访问 /docs (已关闭)。"""
-    src = open(str(PROJECT_ROOT / "server.py")).read()
+    src = _launcher_sources()
     # 不允许硬编码 http://127.0.0.1:8000/docs (诱导运维以为 API 文档开放)
     assert "http://127.0.0.1:8000/docs" not in src, \
         "API 文档已关闭, 不应打印诱导链接"
@@ -535,7 +549,7 @@ def test_p2_1_no_misleading_docs_url_print():
 
 def test_p2_2_reload_dirs_no_root():
     """reload_dirs 不应包含 ".", 防根目录文件变更误触发重启。"""
-    src = open(str(PROJECT_ROOT / "server.py")).read()
+    src = _launcher_sources()
     # 必须不含 ["src", "."] 这种带根目录的
     assert 'reload_dirs=["src", "."]' not in src
     assert 'reload_dirs=["src"]' in src
@@ -550,10 +564,16 @@ def test_p2_3_jwt_expire_hours_env_keeps_12h_default():
     from src.web.api import auth as auth_mod
     # 默认 12h
     assert auth_mod.JWT_EXPIRE_HOURS == 12, f"默认 TTL 必须是 12h, 实际 {auth_mod.JWT_EXPIRE_HOURS}"
-    # 必须从 env 读取
-    src = open(str(PROJECT_ROOT / "src/web/api/auth.py")).read()
-    m = re.search(r'JWT_EXPIRE_HOURS\s*=\s*int\(os\.getenv\(\s*"JWT_EXPIRE_HOURS"\s*,\s*"12"\s*\)\)', src)
-    assert m, "JWT_EXPIRE_HOURS 必须 env 驱动且默认 12h"
+    # 必须从 env 读取 —— 2026-09-18 起这里断言"单一真源"结构:
+    #   ① env 驱动的定义必须在 `src/core/auth_tokens.py`(KI-039 下沉后的唯一真源);
+    #   ② `src/web/api/auth.py` **不得**再本地重复定义(同值重复定义会掩盖"改一处以为生效",
+    #      门禁 ruff F811 当时就是这么红的)。
+    core_src = (PROJECT_ROOT / "src" / "core" / "auth_tokens.py").read_text(encoding="utf-8")
+    m = re.search(r'JWT_EXPIRE_HOURS\s*=\s*int\(os\.getenv\(\s*"JWT_EXPIRE_HOURS"\s*,\s*"12"\s*\)\)', core_src)
+    assert m, "JWT_EXPIRE_HOURS 必须 env 驱动且默认 12h(真源在 src/core/auth_tokens.py)"
+    api_src = (PROJECT_ROOT / "src" / "web" / "api" / "auth.py").read_text(encoding="utf-8")
+    assert not re.search(r'^JWT_EXPIRE_HOURS\s*=', api_src, re.M), \
+        "auth.py 不得本地重复定义 JWT_EXPIRE_HOURS(真源在 core, 改这里不会生效)"
 
 
 # ────────────────────────────────────────────────────────────────────────────

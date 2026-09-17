@@ -83,6 +83,83 @@ def _init_test_db():
     init_db()
 
 
+def _is_sqlite(db) -> bool:
+    try:
+        return db.get_bind().dialect.name == "sqlite"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def purge_users(db, *, ids=None, only_username=None, exclude_username=None) -> int:
+    """删除用户时**先删引用它们的子表行**(否则撞 FK), 返回删掉的子表行数。
+
+    2026-09-18: 多用户之后 `users.id` 被 `user_sessions` / `skill_api_keys` /
+    `pro_applications` / `high_value_api_logs` 等表 FK 引用, 于是
+    `DELETE FROM users WHERE username != 'admin'` 直接
+    "FOREIGN KEY constraint failed" —— 夹具在 teardown 炸掉, 库留脏数据, 后续用例连坐
+    (全量跑时表现为 22 errors + 3 个登录态用例红, 单跑却绿)。
+
+    做法: 按 `Base.metadata.sorted_tables` 的依赖拓扑序(父在前) **反序**遍历所有表,
+    把"FK 指向 users"的列里命中目标 id 的行先删干净, 再删 users 本身。
+    以后新增任何引用 users 的表都自动被覆盖, 不用回来改这个函数。
+    """
+    import time
+
+    from sqlalchemy import text
+
+    from src.web.database import Base
+    from src.web.models import User
+
+    if ids is not None:
+        target_ids = [str(i) for i in ids]
+    else:
+        q = db.query(User.id)
+        if only_username is not None:
+            q = q.filter(User.username == only_username)
+        if exclude_username is not None:
+            q = q.filter(User.username != exclude_username)
+        target_ids = [str(row[0]) for row in q.all()]
+    ids = target_ids
+    if not ids:
+        return 0
+
+    # SQLite 并发: 本函数要连删十几张表, 而库里可能还有别的连接在跑(被测接口自己的 session /
+    # 后台线程)。先调大 busy_timeout 让它**等锁**而不是立刻 `database is locked`
+    # (2026-09-18: 全量跑时 14 个 teardown ERROR 就是这个锁)。
+    if _is_sqlite(db):
+        try:
+            db.execute(text("PRAGMA busy_timeout=15000"))
+        except Exception:  # noqa: BLE001 - 方言差异, 失败就按原行为走
+            pass
+
+    users_table = User.__table__
+    removed = 0
+    for table in reversed(Base.metadata.sorted_tables):
+        if table is users_table:
+            continue
+        for col in table.columns:
+            for fk in col.foreign_keys:
+                try:
+                    target = fk.column.table
+                except Exception:  # noqa: BLE001 - 解析不到的 FK 跳过(不猜)
+                    continue
+                if target is users_table:
+                    for attempt in range(3):
+                        try:
+                            res = db.execute(table.delete().where(col.in_(ids)))
+                            removed += res.rowcount or 0
+                            break
+                        except Exception as e:  # noqa: BLE001
+                            if "locked" in str(e).lower() and attempt < 2:
+                                time.sleep(0.5 * (attempt + 1))  # 等锁(别的连接在写)
+                                continue
+                            raise
+                    break
+    db.query(User).filter(User.id.in_(ids)).delete(synchronize_session=False)
+    db.commit()
+    return removed
+
+
 @pytest.fixture(autouse=True)
 def _clear_module_caches():
     """缓存类测试隔离(2026-08-21): kline_collector / marketdata 的模块级

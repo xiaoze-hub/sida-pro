@@ -200,6 +200,12 @@ default_config() {
   CLONE_NET=""
   CLONE_RESTART="unless-stopped"
   CLONE_MEM="1073741824"
+  # 2026-09-18 修: 这两个变量原先只在 harvest_existing_config 里赋值, 而 `set -u` 下
+  # compose_run_args 会读它们 ⇒ **无现有容器(全新安装/容器被删)时脚本在 create 之前就
+  # "unbound variable" 退出**, 一次都装不起来(生产一直有旧容器, 故从未暴露)。
+  # 0 = 不注入(与 compose_run_args 的判据一致: 空或 0 都跳过)。
+  CLONE_SWAP="0"
+  CLONE_NANOCPUS="0"
 }
 
 compose_run_args() {

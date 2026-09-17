@@ -26,6 +26,7 @@ import {
 } from '@panwatch/api'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import { useKlineLayer } from '@/hooks/useKlineLayer'
 import { buildAnalysisSections } from '@panwatch/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
 
@@ -50,6 +51,30 @@ const SECTION_ICON: Record<string, LucideIcon> = {
 const TOC_SUB_KEY = 'panwatch_toc_show_sub'
 
 /** 从代码粗略推断市场:6 位数字=A股, 5 位数字=港股, 其余=美股 */
+
+/**
+ * 设计稿 v2.1 §5 接线(2026-09-18 审计断链修复):
+ * `InteractiveKline` 的 L2/L3/L4 图层全靠 props, 而页面此前一个都不传 ⇒ 六图层是死的。
+ * 这里用 `useKlineLayer` 取一次 summary 图层数据并透传, 让分析详情页真正画出
+ * GS 买卖点(L2)/ 资金柱(L3)/ 事件标注(L4)/ 支撑压力位。
+ * 取不到 = 空数组(不编造), 图表自然不画, 页面不假报。
+ */
+function LayerKline({ symbol, market }: { symbol: string; market: string }) {
+  const layer = useKlineLayer(symbol, market)
+  return (
+    <InteractiveKline
+      symbol={symbol}
+      market={market}
+      initialInterval="1d"
+      initialDays="120"
+      gsSignals={layer.gsSignals}
+      fundFlow={layer.fundFlow}
+      events={layer.events}
+      supportPressure={layer.supportPressure}
+    />
+  )
+}
+
 function inferMarket(symbol: string): string {
   if (/^\d{6}$/.test(symbol)) return 'CN'
   if (/^\d{5}$/.test(symbol)) return 'HK'
@@ -356,7 +381,7 @@ export default function AnalysisDetailPage() {
 
           {/* K线主图(P1-7 终端化: 主图 + 副图在上, 长文在下; 与 IndexDetail 同款组件, 非 Quote/KlineChart scope) */}
           <div className="mb-10 border-b border-border/40 pb-4">
-            <InteractiveKline symbol={symbol} market={inferMarket(symbol)} initialInterval="1d" initialDays="120" />
+            <LayerKline symbol={symbol} market={inferMarket(symbol)} />
           </div>
 
           {/* 各部分长文 */}

@@ -261,8 +261,24 @@ def rotate_jwt_secret(
         f"旧密钥可验证至 {_iso(expires_at) if grace > 0 else '(立即失效)'}"
     )
     try:
-        from src.web.api.audit import log_audit
-        log_audit(db=None, user=None, action="rotate_jwt_secret", detail=detail, ip="")
+        # 2026-09-18(B4.1 棘轮): 原走 `src.web.api.audit.log_audit`(core→web 反向依赖)。
+        # 这里按同一语义就地写审计: **独立 session**(不污染调用方) + best-effort(失败只 log),
+        # 与 web 层 log_audit 的"审计失败不阻塞业务"口径一致。
+        from src.db.models import AuditLog
+        from src.db.session import SessionLocal
+
+        audit_db = SessionLocal()
+        try:
+            audit_db.add(AuditLog(
+                user_id=None,
+                username="",
+                action="rotate_jwt_secret",
+                detail=detail,
+                ip="",
+            ))
+            audit_db.commit()
+        finally:
+            audit_db.close()
     except Exception as e:  # noqa: BLE001
         logger.warning("[secret_rotation] 审计写入失败: %s", e)
 

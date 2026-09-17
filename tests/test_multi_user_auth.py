@@ -22,8 +22,10 @@ def client(monkeypatch):
     # 清掉库中已有 admin, 强制本次走 env 引导路径(密码确定)
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username == ADMIN_USER).delete()
-        db.commit()
+        # 2026-09-18: 走 purge_users(先删子表行) —— 直接 DELETE 会撞 users 的 FK
+        from tests.conftest import purge_users
+
+        purge_users(db, only_username=ADMIN_USER)
     finally:
         db.close()
     from src.web.app import app
@@ -36,13 +38,19 @@ def clean_users():
     yield
     db = SessionLocal()
     try:
-        db.query(User).filter(User.username != "admin").delete()
-        db.commit()
+        # 同上: 多用户之后 users 被多张表 FK 引用, 裸删必炸
+        from tests.conftest import purge_users
+
+        purge_users(db, exclude_username="admin")
     finally:
         db.close()
 
 
 def _login(client, username, password):
+    # 本文件用**显式 Bearer 头**表达身份; 登录响应会把该账号的 `sida_token` 写进 client 的
+    # Cookie jar, 但 2026-09-18 起 token 来源裁决是 **Authorization Bearer 优先 → Cookie 兜底**
+    # (`auth.token_from_request`), 所以同一个 TestClient 连续登录两个账号时, 显式 Bearer
+    # 仍然作数(旧口径 Cookie 优先会把它按"最后登录的账号"执行, 见 tests/test_auth_bearer_priority.py)。
     r = client.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return r.json()["data"]["token"]

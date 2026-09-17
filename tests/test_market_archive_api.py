@@ -23,6 +23,14 @@ from src.web.migrations import (
 )
 
 
+def _day(days_ago: int) -> str:
+    """今天往前 days_ago 天的 YYYYMMDD(东方时区) —— 造"近 N 日"数据用, 避免写死日期。"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    return (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=days_ago)).strftime("%Y%m%d")
+
+
 def _mk_engine():
     eng = create_engine(
         "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -69,17 +77,22 @@ def _seed(eng):
                 " VALUES ('20260910', '002361', 'CN', 9.8, 0.12)"
             )
         )
+        # 2026-09-18: 龙虎榜两行改为**相对今天**造数 —— 路由的 `symbol+days` 走
+        # `start = today - days`, 写死 '20260909/20260910' 的话窗口会随时间漂出去,
+        # 用例过几天必红(原来就是这么红的)。相对造数让"近 7 日"这条语义永远成立。
         conn.execute(
             text(
                 "INSERT INTO dragon_tiger_events (trade_date, symbol, name, reason, close, change_pct, source)"
-                " VALUES ('20260909', '603843', '正平股份', '日涨幅偏离', 10.0, 10.0, 'eastmoney')"
-            )
+                " VALUES (:d1, '603843', '正平股份', '日涨幅偏离', 10.0, 10.0, 'eastmoney')"
+            ),
+            {"d1": _day(1)},
         )
         conn.execute(
             text(
                 "INSERT INTO dragon_tiger_events (trade_date, symbol, name, reason, close, change_pct, source)"
-                " VALUES ('20260910', '603843', '正平股份', '换手率达20%', 11.0, 10.0, 'eastmoney')"
-            )
+                " VALUES (:d0, '603843', '正平股份', '换手率达20%', 11.0, 10.0, 'eastmoney')"
+            ),
+            {"d0": _day(0)},
         )
 
 
@@ -104,7 +117,8 @@ def test_overview_freshness(monkeypatch):
     assert by_name["quote_snapshots"]["earliest_date"] == "20260910"  # 不能误取 COUNT
     assert by_name["quote_snapshots"]["latest_date"] == "20260910"
     assert by_name["dragon_tiger_events"]["rows"] == 2
-    assert by_name["dragon_tiger_events"]["earliest_date"] == "20260909"
+    # 2026-09-18: 这两行的造数日期改为相对今天(见 _seed), 断言同步用 _day()
+    assert by_name["dragon_tiger_events"]["earliest_date"] == _day(1)
 
 
 def test_quote_snapshots_route(monkeypatch):
@@ -147,13 +161,13 @@ def test_chip_route(monkeypatch):
 def test_dragon_tiger_route(monkeypatch):
     client, _ = _client(monkeypatch)
     # 按日全榜
-    r = client.get("/api/archive/dragon-tiger", params={"date": "20260910"})
+    r = client.get("/api/archive/dragon-tiger", params={"date": _day(0)})
     assert r.status_code == 200 and r.json()["count"] == 1
     # 按股近 7 日
     r2 = client.get("/api/archive/dragon-tiger", params={"symbol": "603843", "days": 7})
     assert r2.json()["count"] == 2
-    # 日期降序在前
-    assert [i["trade_date"] for i in r2.json()["items"]] == ["20260910", "20260909"]
+    # 日期降序在前(今天 → 昨天)
+    assert [i["trade_date"] for i in r2.json()["items"]] == [_day(0), _day(1)]
     # 缺参 → 400
     assert client.get("/api/archive/dragon-tiger").status_code == 400
 

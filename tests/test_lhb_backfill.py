@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import src.db.session as dbs
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
@@ -130,6 +132,20 @@ def test_backfill_history_pipeline_no_network(monkeypatch):
     d = lhb.daily_recent(days=3)
     assert d["rows_saved"] == 0  # 已在库
     assert "603186" not in (d["touched"] or [])
+
+
+@pytest.fixture(autouse=True)
+def _reset_recompute_hook():
+    """2026-09-18: `daily_job` 的重算触发走**模块级回调** `_RECOMPUTE_HOOK`
+    (`set_recompute_hook`, 生产在 bootstrap/startup.py 里注入)。若别的用例先注入过 hook,
+    本文件 monkeypatch 的 `recompute_factors` 就不会被调到 —— 单跑绿、全量跑红
+    (`calls` 恒空)。每个用例前显式清空, 让用例只依赖自己的 monkeypatch。"""
+    import src.core.lhb_backfill as _lhb
+
+    prev = getattr(_lhb, "_RECOMPUTE_HOOK", None)
+    _lhb.set_recompute_hook(None)
+    yield
+    _lhb.set_recompute_hook(prev)
 
 
 def test_daily_job_triggers_recompute_for_touched(monkeypatch):

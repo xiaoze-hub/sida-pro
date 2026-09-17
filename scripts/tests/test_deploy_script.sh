@@ -31,6 +31,17 @@ echo "$OUT" | grep -q -- "-e AUTH_PASSWORD=stubpass" && ok "AUTH_PASSWORD 注入
 echo "$OUT" | grep -q -- "-v panwatch-data:/app/data" && ok "数据卷为生产同款连字符命名 panwatch-data" || bad "数据卷名不是 panwatch-data(生产实测卷名)"
 echo "$OUT" | grep -q -- "-e: command not found" && bad "出现续行断裂(-e: command not found)" || ok "无续行断裂"
 
+# 场景1-pre (2026-09-18 回归): 全新安装路径(无现有容器)不得在 create 之前就退出。
+# 真故障: default_config 未初始化 CLONE_SWAP/CLONE_NANOCPUS, `set -u` 下 compose_run_args
+# 读到未绑定变量 → 脚本在 create 前 "unbound variable" 退出 ⇒ 新机器一次都装不起来。
+# 生产一直有旧容器(走 harvest 分支), 所以这条只有本 stub 测试能挡住。
+if echo "$OUT" | grep -q "unbound variable"; then
+  bad "全新安装路径崩在未绑定变量(unbound variable) —— create 根本没执行"
+else
+  ok "全新安装路径未崩(unbound variable 已消)"
+fi
+echo "$OUT" | grep -q "▶ 重建容器" && ok "全新安装路径走到了重建容器" || bad "未走到重建容器(脚本提前退出)"
+
 # 场景1 补充: 旧容器删除(rm -f panwatch)只允许发生在临时容器健康验证之后
 LINE_NEW_OK=$(echo "$OUT" | grep -n "新容器(端口 8001)健康" | head -1 | cut -d: -f1)
 LINE_RM_OLD=$(echo "$OUT" | grep -n "rm -f panwatch$" | head -1 | cut -d: -f1)

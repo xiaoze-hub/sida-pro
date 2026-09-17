@@ -15,7 +15,6 @@ import logging
 from datetime import datetime
 
 from src.db.models import DarkFundTopSnapshot, MarketScanRank
-from src.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +24,8 @@ def run_market_scan_job() -> dict:
 
     与 POST /refresh 同逻辑, 但不用 FastAPI 依赖, 内部自开 DB session。
     """
+    # SessionLocal 必须**函数内** import: 用例 monkeypatch `src.db.session.SessionLocal`,
+    # 模块级 from-import 会在 import 期就把名字绑死, 补丁打不进去(2026-09-18 回归)。
     from src.core.market_scan import scan
     from src.db.session import SessionLocal
 
@@ -70,7 +71,7 @@ def run_market_scan_job() -> dict:
 def run_dark_fund_top_job() -> dict:
     """盘后 cron 入口: 扫描 + 落库(内部自开 session, 失败不抛)。"""
     from src.core.dark_fund_scan import scan_dark_fund_top
-    from src.db.session import SessionLocal
+    from src.db.session import SessionLocal  # 同上: 函数内 import 才吃 monkeypatch
 
     try:
         result = scan_dark_fund_top()

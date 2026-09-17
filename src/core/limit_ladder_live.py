@@ -249,6 +249,10 @@ def scan_tick(now=None, deps=None):
 
 
 def _default_deps():
+    # 2026-09-18 修(ruff F821 抓到的真 bug): `fetch_stock_l2_batch` 原先只在 `scan_tick()` 内
+    # 局部 import, 而本函数在另一函数里引用它 ⇒ 走到 l2_fn 赋值那行必 NameError(运行时崩)。
+    # 这里同样局部 import(保持原有的惰性导入意图, 不引入模块级循环依赖)。
+    from src.core.stock_l2 import fetch_stock_l2_batch
     from types import SimpleNamespace
 
     from src.core import ladder_live_state as rst
