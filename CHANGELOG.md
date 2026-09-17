@@ -5,6 +5,13 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (release v0.10.9 · §6.2)
+
+### release: v0.10.9 —— §6.2「交割单标 K 线」
+
+**性质**: 发版(tag `v0.10.9`)。门禁全绿: 后端 pytest **2465 passed / 0 failed / 0 errors**;
+前端 tsc 0 / eslint 0 / vitest **466 passed** / vite build ✅; ruff 0 / check_scoped_queries OK。
+
 ## 2026-09-18 (§6.2 交割单标 K 线)
 
 ### feature: §6.2「交割单标 K 线」—— 真实成交标在该股 K 线上
