@@ -159,22 +159,19 @@ def _get_or_create_owner_token(client: TestClient) -> str:
 
 
 def _cleanup_user_data(user_ids: list[str]):
-    """测试结束清理两用户的私有数据 + 用户本身。"""
+    """测试结束清理两用户的私有数据 + 用户本身。
+
+    2026-09-18: 改为走 `tests.conftest.purge_users` —— 原先手写"逐表按依赖顺序删"的清单
+    会随新表(多用户改造后又加了 user_sessions/skill_api_keys/pro_applications/
+    high_value_api_logs…)腐烂, 漏一张就在 teardown 撞 FK, 全量跑时表现为 14 个
+    "ERROR at teardown of …isolation" 且库留脏数据。purge_users 按 metadata 拓扑反序
+    自动覆盖所有引用 users 的表, 不用再维护清单。
+    """
+    from tests.conftest import purge_users
+
     db = SessionLocal()
     try:
-        for uid in user_ids:
-            db.execute(text("DELETE FROM analysis_history WHERE user_id = :uid"), {"uid": uid})
-            db.execute(
-                text("DELETE FROM chat_messages WHERE conversation_id IN "
-                     "(SELECT id FROM chat_conversations WHERE user_id = :uid)"),
-                {"uid": uid},
-            )
-            db.execute(text("DELETE FROM chat_conversations WHERE user_id = :uid"), {"uid": uid})
-            db.execute(text("DELETE FROM notifications WHERE user_id = :uid"), {"uid": uid})
-            db.execute(text("DELETE FROM price_alert_rules WHERE user_id = :uid"), {"uid": uid})
-            db.execute(text("DELETE FROM stock_suggestions WHERE user_id = :uid"), {"uid": uid})
-            db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": uid})
-        db.commit()
+        purge_users(db, ids=user_ids)
     finally:
         db.close()
 

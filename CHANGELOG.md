@@ -5,6 +5,21 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (测试夹具 · isolation 清理收口)
+
+### fix(tests): 两个 isolation 套件的手写清理清单改走 purge_users(14 个 teardown ERROR 的来源)
+
+**性质**: 测试基础设施。分支 `feat/audit-fix-20260918`。
+
+`test_user_isolation_api` / `test_multitenant_isolation` 各自维护一份"逐表按依赖顺序删"的
+手写清单 —— 多用户改造后又加了 `user_sessions` / `skill_api_keys` / `pro_applications` /
+`high_value_api_logs` 等引用 `users.id` 的表, 清单没跟上 ⇒ teardown 撞 FK, 全量跑里表现为
+**14 个 `ERROR at teardown of …isolation`**, 并留下脏数据连坐后面两个用例。
+
+- 两个套件的 `_cleanup_user_data(user_ids)` 统一改为 `tests.conftest.purge_users(db, ids=…)`;
+  `purge_users` 增加 `ids=` 入参(原只有 username 维度)。
+- 清单不再需要维护: 新增任何引用 users 的表都被 metadata 拓扑自动覆盖。
+
 ## 2026-09-18 (测试夹具 · FK 清理 + 守卫重定向)
 
 ### fix(tests): 夹具删用户撞 FK(全量跑 22 errors 根因) + 安全守卫指向新落点

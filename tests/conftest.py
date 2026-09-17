@@ -83,7 +83,7 @@ def _init_test_db():
     init_db()
 
 
-def purge_users(db, *, only_username=None, exclude_username=None) -> int:
+def purge_users(db, *, ids=None, only_username=None, exclude_username=None) -> int:
     """删除用户时**先删引用它们的子表行**(否则撞 FK), 返回删掉的子表行数。
 
     2026-09-18: 多用户之后 `users.id` 被 `user_sessions` / `skill_api_keys` /
@@ -99,12 +99,16 @@ def purge_users(db, *, only_username=None, exclude_username=None) -> int:
     from src.web.database import Base
     from src.web.models import User
 
-    q = db.query(User.id)
-    if only_username is not None:
-        q = q.filter(User.username == only_username)
-    if exclude_username is not None:
-        q = q.filter(User.username != exclude_username)
-    ids = [row[0] for row in q.all()]
+    if ids is not None:
+        target_ids = [str(i) for i in ids]
+    else:
+        q = db.query(User.id)
+        if only_username is not None:
+            q = q.filter(User.username == only_username)
+        if exclude_username is not None:
+            q = q.filter(User.username != exclude_username)
+        target_ids = [str(row[0]) for row in q.all()]
+    ids = target_ids
     if not ids:
         return 0
 
