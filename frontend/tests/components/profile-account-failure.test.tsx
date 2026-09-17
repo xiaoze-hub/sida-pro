@@ -6,6 +6,7 @@
 // 本文件的作用: 把"失败静默成 --"钉死(去掉故障态分支 ⇒ 第 1 例必红)。
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ fail: null as string | null, resp: null as unknown }))
@@ -28,14 +29,21 @@ const PROFILE = {
   created_at: '2026-01-02T03:04:05',
 }
 
+/**
+ * 2026-09-18: `Profile` 现在用 `useNavigate()`(个人中心页内跳转), 用例必须把宿主放进
+ * Router 里 —— 否则 render 阶段就抛 "useNavigate() may be used only in the context of
+ * a <Router>", 三个用例全红且报的是 "Unable to find role=alert"(与真实故障态无关)。
+ */
 function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
   return render(
-    <QueryClientProvider client={client}>
-      <Profile />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <Profile />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
 }
 

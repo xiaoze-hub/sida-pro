@@ -5,6 +5,30 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · 前端)
+
+### fix(i18n): 无 Provider 时的兜底上下文引用不稳定 → 页面 effect 无限重跑(取数风暴)
+
+**性质**: 真 bug(仅无 Provider 路径)。**纯前端**。分支 `feat/audit-fix-20260918`。
+
+**现象**: 暗盘资金 TOP 榜 5 个用例全红, 但报的是"找不到 贵州茅台"—— 实测 DOM 停在骨架屏。
+
+**根因**: `useI18n()` 在**没有挂 `I18nProvider`** 时每次调用都新建 `{t, dict, ...}`, 而页面普遍把
+`t` 放进依赖(`DarkFundTop`: `load = useCallback(..., [t])` + `useEffect(..., [load])`)⇒ 依赖每帧都变
+⇒ **effect 无限重跑**: `setLoading(true)` 每轮重置, 界面永远停在骨架屏; 卸载后 promise 才落地,
+表现为 `window is not defined` 的 unhandled error。挂 Provider 时 `t` 由 `useMemo([locale])` 稳定,
+所以只有"无 Provider"这条路径炸 —— 恰好是全部组件测试的路径。
+
+- 修: 兜底上下文提为**模块级常量**(`FALLBACK_I18N` / `FALLBACK_T`), 引用恒定。
+- 副作用: 该兜底本就是"开发/测试可用"的承诺, 之前实际不可用(任何把 t 进 deps 的组件都会风暴)。
+
+**测试对齐**(页面结构变了, 断言没跟上 —— 两处都是"测试旧"而非产品坏):
+- `tests/components/dark-fund-top.test.tsx`: 页面同时渲染桌面表格与移动端卡片(`hidden md:block` /
+  `md:hidden`), jsdom 不套 CSS ⇒ 同一行文字命中两次。断言一律 `within(桌面表格)` 收窄。
+- `tests/components/profile-account-failure.test.tsx`: `Profile` 现在用 `useNavigate()`, 用例宿主
+  必须包 `MemoryRouter`, 否则 render 阶段就抛(报出来的却是"找不到 role=alert", 误导)。
+- 结果: 这 8 个用例全绿(vitest 434 → 460 用例, 全绿)。
+
 ## 2026-09-18 (部署门禁)
 
 ### fix(deploy): 全新安装路径 `set -u` 崩溃(CLONE_SWAP/CLONE_NANOCPUS 未初始化) + 门禁回归断言
