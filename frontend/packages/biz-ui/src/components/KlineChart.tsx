@@ -30,7 +30,7 @@ import { fetchAPI } from '@panwatch/api'
 import { safeFixed, toAmount } from '@/lib/format'
 
 import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
-import { filterMarkersInBarsRange } from '../lib/chart-markers'
+import { dayKey, filterMarkersInBarsRange } from '../lib/chart-markers'
 // L3 资金柱的**唯一**净额/分色/时间口径(与 InteractiveKline 共用, 见 lib/fund-bar.ts)
 import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInterval } from '../lib/fund-bar'
 
@@ -260,6 +260,14 @@ export default function KlineChart(props: {
    * ICON_SOURCE(拆/⚠撤→tck, 🛡托/🔒压→img, 涨→wencai, 我→shadow, 明盘→tq_moreinfo)。
    * 诚实口径: 请求失败/状态未知一律按不可用处理, 不假设"接口挂了但数据还在"。
    */
+  /**
+   * v2.1 §6.2「交割单标 K 线」: 本人真实成交买卖点(数据来自 `/api/shadow/trades`)。
+   * 买=红箭头标在下方, 卖=绿箭头标在上方(与 §5.2 GS 买卖点同色语义)。
+   *
+   * **严格口径**: 该日期必须**真有 K 线**才画 —— 周末/节假日的成交不贴到别的柱子上(不给假定位),
+   * 也不隐藏(事件仍在列表里可见)。未传 = 不画。
+   */
+  tradeMarkers?: Array<{ date: string; side: 'buy' | 'sell'; text?: string }>
   sourceReady?: (icon: string) => boolean
   /** v2.1 §12: 灰显原因(悬停 tooltip 用) —— sourceReady 判不可用时给一句人话说明 */
   sourceReason?: (icon: string) => string
@@ -758,6 +766,30 @@ export default function KlineChart(props: {
         })
       }
     }
+    // §6.2: 本人交割单买卖点(买卖方向来自真实成交, 不是推测)
+    if (showSignal && props.tradeMarkers && props.tradeMarkers.length > 0) {
+      const gs = readGsColors()
+      const bars = rawKlinesRef.current
+      const inBars = new Set<number>()
+      for (const b of bars) {
+        const k = dayKey(b.time)
+        if (k !== null) inBars.add(k)
+      }
+      for (const t of props.tradeMarkers) {
+        const time = toChartTime(t.date, interval)
+        const k = dayKey(time)
+        if (k === null || !inBars.has(k)) continue // 非交易日成交: 不画(不贴柱)
+        const isBuy = t.side === 'buy'
+        markers.push({
+          time,
+          position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
+          color: isBuy ? gs.go : gs.stop,
+          shape: isBuy ? ('arrowUp' as const) : ('arrowDown' as const),
+          size: 1,
+          text: t.text || (isBuy ? '买' : '卖'),
+        })
+      }
+    }
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
@@ -870,7 +902,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady, props.tradeMarkers])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。

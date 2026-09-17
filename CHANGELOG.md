@@ -5,6 +5,33 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (§6.2 交割单标 K 线)
+
+### feature: §6.2「交割单标 K 线」—— 真实成交标在该股 K 线上
+
+**性质**: 功能补齐(设计稿 §6.2 最后一项缺口)。分支 `feat/audit-fix-20260918`(tag v0.10.9)。
+
+**后端**(`src/web/api/shadow.py`, **不建表不迁移**):
+- `/shadow/analyze` 落库画像时**顺带**把成交明细写进 `users.shadow_profile_json.trades`
+  (复用同一次解析结果, 不二次 parse; 明细落库失败**不影响**画像落库与分析结果)。
+- 只留**最近** `MAX_STORED_TRADES = 400` 笔并置 `trades_capped` —— 上千笔 PDF 全量塞 JSON 列会明显撑大行;
+  响应带 `capped` 明示"被截断", **不假装是全量**。
+- 新端点 `GET /api/shadow/trades?symbol=...`: 只读调用者自己那一列 ⇒ **归属天然隔离**(签名里根本没有
+  指定他人 user_id 的参数)。无上传 → 空表 + `saved=false` + 一句可执行的 note(**不编造**记录)。
+- 数值缺失保持 `None`(前端显示 `--`), 不补 0。
+
+**前端**:
+- `KlineChart` 新增 `tradeMarkers` prop: 买=红箭头标下方 / 卖=绿箭头标上方(与 §5.2 GS 买卖点同色语义);
+  **严格口径** —— 该日期必须**真有 K 线**才画(周末/节假日的成交不贴到别的柱子上, 不给假定位)。
+- `ShadowAccount` 新增「交割单复盘 · 标在 K 线上」区: 标的下拉(来自 `/shadow/trades` 的 `symbols`) +
+  120 天 K 线 + 成交标记; 无明细时给"先上传交割单"的说明**而不是空图**; `capped` 时页脚显式提示。
+- 纯函数 `tradesToMarkers` 收口映射(便于单测)。
+
+**测试**: 后端 `tests/test_shadow_trades.py` 8 例(空态/过滤去重保序/**用户隔离**/截断留尾部+只留必需字段/缺值不补 0);
+前端 `tests/components/shadow-trades-markers.test.tsx` 6 例(纯映射 3 + 页面接线 3: 只传选中标的、无明细不画图、capped 提示)。
+踩坑记录: 本仓 vitest 未开 `globals`, RTL 自动 cleanup 不生效 —— 不显式 `afterEach(cleanup)` 会让上个用例的 DOM 残留,
+"无明细不该有图" 会被上个用例的图命中(已按 `range-stats-card.test.tsx` 的既有写法对齐)。
+
 ## 2026-09-18 (release v0.10.8 · §12 + 验收线留痕)
 
 ### release: v0.10.8 —— §12 数据源兜底落 K 线 + §11.5 验收线实测

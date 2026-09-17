@@ -3,6 +3,47 @@ import { Upload, FileText, Download, TrendingUp, Activity, Target, Shield, Alert
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { formatDateTime } from '@/lib/utils'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+
+/** §6.2: /api/shadow/trades 的成交明细(落库版, 上限见后端 MAX_STORED_TRADES) */
+interface ShadowTrade {
+  datetime: string
+  symbol: string
+  name: string | null
+  side: 'buy' | 'sell'
+  quantity: number | null
+  price: number | null
+  amount: number | null
+  market: string | null
+}
+
+interface ShadowTradesResp {
+  saved: boolean
+  symbols: string[]
+  trades: ShadowTrade[]
+  total: number
+  capped: boolean
+  note: string
+}
+
+/** 成交明细 → K 线买卖点标记(纯函数, 便于单测)。
+ *  只映射方向与文案, **不做日期兜底** —— 非交易日的成交由图表端按"那天没有 K 线"丢弃。 */
+export function tradesToMarkers(
+  trades: ShadowTrade[],
+): Array<{ date: string; side: 'buy' | 'sell'; text: string }> {
+  return trades
+    .filter((t) => !!t && typeof t.datetime === 'string' && t.datetime.length >= 10)
+    .map((t) => {
+      const isBuy = t.side === 'buy'
+      const px = t.price == null ? '--' : String(t.price)
+      const qty = t.quantity == null ? '--' : String(t.quantity)
+      return {
+        date: t.datetime.slice(0, 10),
+        side: isBuy ? ('buy' as const) : ('sell' as const),
+        text: `${isBuy ? '买' : '卖'}${px}×${qty}`,
+      }
+    })
+}
 
 interface ShadowResult {
   shadow_id: string
@@ -71,7 +112,30 @@ export default function ShadowAccountPage() {
     }
   }
 
+  // §6.2「交割单标 K 线」: 成交明细(本人, 落库版) + 选中标的
+  const [trades, setTrades] = useState<ShadowTradesResp | null>(null)
+  const [tradesLoading, setTradesLoading] = useState(true)
+  const [pickSymbol, setPickSymbol] = useState<string>('')
+
+  const loadTrades = async () => {
+    try {
+      const d = await fetchAPI<ShadowTradesResp>('/shadow/trades', { cacheMode: 'reload' })
+      setTrades(d)
+      setPickSymbol((cur) => cur || d?.symbols?.[0] || '')
+    } catch {
+      // 静默失败: 复盘区显式说"取不到", 不假装没有成交记录
+      setTrades(null)
+    } finally {
+      setTradesLoading(false)
+    }
+  }
+
   useEffect(() => { loadProfile() }, [])
+  useEffect(() => { loadTrades() }, [])
+
+  /** 当前选中标的的成交 → K 线买卖点标记 */
+  const pickedTrades = (trades?.trades || []).filter((t) => t.symbol === pickSymbol)
+  const pickedMarkers = tradesToMarkers(pickedTrades)
 
   const upload = async (file: File) => {
     setLoading(true)
@@ -85,8 +149,9 @@ export default function ShadowAccountPage() {
         timeoutMs: 180000, // 交割单解析+画像可能 60-120s(586笔实测75s), 默认20s不够
       })
       setResult((d as any)?.data ?? d)
-      // 分析完成落库后, 刷新"我的画像"区
+      // 分析完成落库后, 刷新"我的画像"区 + 成交明细(§6.2 复盘区跟着换)
       loadProfile()
+      void loadTrades()
     } catch (e: any) {
       setError(e?.message || '分析失败，请检查交割单格式')
     } finally {
@@ -180,6 +245,47 @@ iframe{width:100%;height:100%;border:0}
         <p className="text-[12px] text-muted-foreground mt-1">
           上传你的交易交割单（同花顺 / 东财 / 富途 / 通用 CSV），AI 提炼你的真实交易行为画像、盈利模式与风险习惯。
         </p>
+      </div>
+
+      {/* §6.2 交割单标 K 线: 把你的真实成交标在该股 K 线上(买↓红箭头 / 卖↑绿箭头) */}
+      <div className="border-b border-border/40 pb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-primary" /> 交割单复盘 · 标在 K 线上
+          </h2>
+          {trades && trades.symbols.length > 0 && (
+            <select
+              value={pickSymbol}
+              onChange={(e) => setPickSymbol(e.target.value)}
+              className="h-7 rounded border border-border/60 bg-transparent px-2 text-[11px] text-foreground"
+              aria-label="选择标的"
+            >
+              {trades.symbols.map((sm) => (
+                <option key={sm} value={sm}>{sm}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {tradesLoading ? (
+          <div className="text-[12px] text-muted-foreground flex items-center gap-2">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> 正在读取成交明细...
+          </div>
+        ) : !trades || trades.symbols.length === 0 ? (
+          <div className="text-[12px] text-muted-foreground">
+            {/* 诚实口径: 没数据就说没数据并给出下一步, 不画空图假装 */}
+            {trades?.note || '还没有可复盘的成交明细，先在上方上传交割单。'}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <KlineChart symbol={pickSymbol} market="CN" height={320} initialDays={120} tradeMarkers={pickedMarkers} />
+            <div className="text-[11px] text-muted-foreground">
+              本标的 {pickedMarkers.length} 笔成交已标在图上（买=红箭头在下 / 卖=绿箭头在上）；
+              非交易日的成交不画（那天没有 K 线，不给假定位）。
+              {trades.capped && ' 成交明细仅保留最近 400 笔，更早的未展示。'}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 我的画像: 进页面自动加载已存画像(users.shadow_profile_json 落库版), 不用重新上传 */}

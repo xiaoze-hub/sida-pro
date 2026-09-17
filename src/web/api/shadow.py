@@ -2,6 +2,7 @@
 
 端点:
     POST /api/shadow/analyze   上传交割单 CSV/Excel → 画像 + 行为 + 规则
+    GET  /api/shadow/trades    本人交割单明细(按标的) —— 供 §6.2「交割单标 K 线」复盘
     GET  /api/shadow/report/{shadow_id}  → HTML 报告
     GET  /api/shadow/report/{shadow_id}/pdf → PDF 报告(weasyprint 可用时)
 """
@@ -40,6 +41,13 @@ _REPORT_DIR = Path("/app/data/shadow_reports") if Path("/app/data").exists() els
 
 _ALLOWED_SUFFIX = {".csv", ".xlsx", ".xls", ".pdf"}
 
+# §6.2「交割单标 K 线」: 分析时把成交明细**一并落库**(存进 users.shadow_profile_json 的
+# `trades` 键, 无需新建表/迁移)。只保留**最近** MAX_STORED_TRADES 笔 —— 上千笔 PDF 若全量
+# 塞 JSON 列会明显撑大行; 复盘只看近期够用, 且响应里带 `capped` 明示"被截断", 不假装是全量。
+MAX_STORED_TRADES = 400
+#: 单笔明细只留复盘必需字段(时间/标的/方向/价/量/额), 不带费用明细等冗余
+_TRADE_KEYS = ("datetime", "symbol", "name", "side", "quantity", "price", "amount", "market")
+
 
 @router.post("/analyze")
 def analyze_journal(
@@ -73,6 +81,7 @@ def analyze_journal(
 
     behavior = None
     profile_stats = None
+    records = None  # §6.2: 复用同一次解析结果做成交明细落库, 不再二次 parse
     try:
         from src.core.shadow_account.parsers import parse_file, records_to_dataframe
 
@@ -98,7 +107,20 @@ def analyze_journal(
     # 画像落库(A 方案): 存当前登录用户的 shadow_profile_json, 供 AI 对话助手使用
     saved = False
     try:
-        user.shadow_profile_json = profile.to_dict()
+        payload = profile.to_dict()
+        # §6.2: 顺便把成交明细落库(同一列, 免迁移) —— 供 /shadow/trades 做「交割单标 K 线」复盘
+        try:
+            _records = records
+            if _records is None:  # 上面那次解析失败(behavior 计算异常)时才重试一次
+                from src.core.shadow_account.parsers import parse_file as _parse_file
+
+                _, _records = _parse_file(dest)
+            compact, capped = _compact_trades(_records)
+            payload["trades"] = compact
+            payload["trades_capped"] = capped
+        except Exception as _exc:  # 明细落库失败不该影响画像落库/分析结果
+            logger.warning("shadow trades 落库失败(画像仍保存): %s", _exc)
+        user.shadow_profile_json = payload
         db.add(user)
         db.commit()
         saved = True
@@ -115,6 +137,55 @@ def analyze_journal(
         "report_html": f"/api/shadow/report/{profile.shadow_id}",
         "report_pdf": f"/api/shadow/report/{profile.shadow_id}/pdf" if pdf_path else None,
         "saved": saved,
+    }
+
+
+def _compact_trades(records) -> tuple[list[dict], bool]:
+    """TradeRecord 列表 → 落库用紧凑字典列表(最近 MAX_STORED_TRADES 笔)。
+
+    返回 (trades, capped)。`capped=True` 表示原明细更多、此处只留了尾部 —— 前端据此**显式标注**
+    "仅展示最近 N 笔", 不让人误以为交割单只有这么点。
+    """
+    recs = list(records or [])
+    capped = len(recs) > MAX_STORED_TRADES
+    tail = recs[-MAX_STORED_TRADES:]
+    out: list[dict] = []
+    for r in tail:
+        item = {k: getattr(r, k, None) for k in _TRADE_KEYS}
+        # 数值统一成 float/int(JSON 可序列化), 缺失保持 None(前端显示 `--`, 不补 0)
+        for k in ("quantity", "price", "amount"):
+            v = item.get(k)
+            item[k] = float(v) if isinstance(v, (int, float)) else None
+        out.append(item)
+    return out, capped
+
+
+@router.get("/trades")
+def get_my_trades(symbol: str | None = None, user: User = Depends(get_current_user)):
+    """取**本人**交割单成交明细(设计稿 §6.2「交割单标 K 线」的数据源)。
+
+    - 数据来自 `users.shadow_profile_json.trades`(上传分析时一并落库), 无上传 → 空表 + `saved=False`,
+      **不编造**任何记录。
+    - `?symbol=600519.SH` 可按标的过滤; 不传 = 全量(受 MAX_STORED_TRADES 截断, 见 `capped`)。
+    - 归属天然隔离: 只读调用者自己那一列, 不存在越权读他人交割单的路径。
+    """
+    payload = user.shadow_profile_json or {}
+    raw = payload.get("trades") or []
+    trades = [t for t in raw if isinstance(t, dict)]
+    symbols: list[str] = []
+    for t in trades:
+        sym = t.get("symbol")
+        if isinstance(sym, str) and sym and sym not in symbols:
+            symbols.append(sym)
+    if symbol:
+        trades = [t for t in trades if t.get("symbol") == symbol]
+    return {
+        "saved": bool(raw) or bool(payload.get("shadow_id")),
+        "symbols": symbols,
+        "trades": trades,
+        "total": len(trades),
+        "capped": bool(payload.get("trades_capped")),
+        "note": "" if raw else "尚未上传交割单, 或该次分析早于成交明细落库(重新上传一次即可)",
     }
 
 
