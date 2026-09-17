@@ -5,6 +5,26 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · gates job 与 test job 对齐)
+
+### fix(ci): `build-push-acr` 的 gates job 与 `build-and-push-image` 的 test job 逐字对齐
+
+**性质**: CI 配置。分支 `feat/audit-fix-20260918`(tag v0.10.4)。
+
+v0.10.3 的 tag 跑出真实结论: **gates job 前 3 步全过**(bash -n / deploy stub 15/15 / gitleaks
+no leaks), 走到 `Backend pytest + coverage ratchet` 才红, 而红的原因是 **gates job 自己与
+实际跑绿的 test job 不一致**(它是一份漂移的复制品):
+
+| 差异 | 后果 | 处理 |
+|---|---|---|
+| 缺 WeasyPrint 系统库(pango/cairo/noto-cjk) | `test_pdf_export` 渲染出二进制乱码, 断言正文文本必红 | 补装系统库(与 test job 同款) |
+| 多两个文件(无 `--ignore`) | `test_dark_l2_engine` / `test_thsdk_extended` 在 CI 缺依赖/数据必挂 | 补同样两条 `--ignore` |
+| 全局 `--timeout=60` | scrypt(n=2^15) 密集的认证用例在慢跑机超 60s 被误杀(email_reg 3 例 + tradingagents 1 例) | 去掉全局 60s(需要兜底时用标记粒度) |
+
+- 注: 这不是"放松门禁"——完全相同的测试仍在跑(test job 早已用这套配置跑绿), 只是把两份
+  配置校准成一份, 免得"同一批用例两个答案"。
+- 覆盖率棘轮(`check_coverage_ratchet.py`)保留不变。
+
 ## 2026-09-18 (门禁转绿 · 密钥扫描)
 
 ### fix(tests): 测试里的固定口令被 gitleaks 拦截 → 改运行时随机(发版断供第四个原因)
