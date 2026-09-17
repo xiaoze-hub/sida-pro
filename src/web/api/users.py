@@ -300,6 +300,156 @@ def update_user_permissions(
     return {"permissions": merged["permissions"]}
 
 
+# ── Admin 管理后台(2026-09-16): 用户列表/启停/改角色/注册统计 ────────
+
+ROLE_CHOICES = ("member", "pro", "owner")
+
+
+def _admin_user_row(db: Session, u: User) -> dict:
+    """用户列表行: 基础字段 + last_login(audit login 最近一条)。"""
+    last_login = None
+    try:
+        from src.web.models import AuditLog
+
+        row = (
+            db.query(AuditLog.created_at)
+            .filter(AuditLog.user_id == str(u.id), AuditLog.action == "login")
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+        if row and row[0]:
+            last_login = row[0].isoformat()
+    except Exception:  # noqa: BLE001
+        last_login = None
+    return {
+        "id": str(u.id),
+        "username": u.username or "",
+        "email": getattr(u, "email", None),
+        "role": u.role or "member",
+        "is_active": bool(u.is_active),
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "last_login": last_login,
+    }
+
+
+@router.get("/admin/list")
+def admin_list_users(
+    _owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """列出全部用户(仅 owner)。按创建时间倒序。"""
+    rows = db.query(User).order_by(User.created_at.desc()).all()
+    return {"users": [_admin_user_row(db, u) for u in rows]}
+
+
+class AdminToggleActiveRequest(BaseModel):
+    is_active: Optional[bool] = None  # None = 取反
+
+
+class AdminChangeRoleRequest(BaseModel):
+    role: str
+
+
+@router.post("/admin/{uid}/toggle-active")
+def admin_toggle_active(
+    uid: str,
+    body: AdminToggleActiveRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """启用/禁用用户(仅 owner)。不能禁用自己。"""
+    target = get_user_by_id(db, uid)
+    if not target:
+        raise HTTPException(404, "用户不存在")
+    if str(target.id) == str(owner.id) and body.is_active is False:
+        raise HTTPException(400, "不能禁用自己")
+    if body.is_active is None:
+        target.is_active = not bool(target.is_active)
+    else:
+        target.is_active = bool(body.is_active)
+    if not target.is_active:
+        target.token_version = (target.token_version or 1) + 1  # 踢掉旧 token
+    db.commit()
+    logger.info(f"admin toggle-active user={target.username}({target.id}) active={target.is_active}")
+    return {"id": str(target.id), "is_active": bool(target.is_active)}
+
+
+@router.post("/admin/{uid}/change-role")
+def admin_change_role(
+    uid: str,
+    body: AdminChangeRoleRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """修改用户角色 member/pro/owner(仅 owner)。不能取消自己的 owner。"""
+    target = get_user_by_id(db, uid)
+    if not target:
+        raise HTTPException(404, "用户不存在")
+    role = (body.role or "").strip().lower()
+    if role not in ROLE_CHOICES:
+        raise HTTPException(400, f"role 必须是 {', '.join(ROLE_CHOICES)} 之一")
+    if str(target.id) == str(owner.id) and role != "owner":
+        raise HTTPException(400, "不能取消自己的 owner 角色")
+    target.role = role
+    db.commit()
+    logger.info(f"admin change-role user={target.username}({target.id}) role={role}")
+    return {"id": str(target.id), "role": target.role}
+
+
+@router.get("/admin/stats")
+def admin_registration_stats(
+    _owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """注册统计(仅 owner): 总量/活跃/新增/按角色/最近注册。"""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import func
+
+    now = datetime.now()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    d7 = now - timedelta(days=7)
+    d30 = now - timedelta(days=30)
+
+    total_users = db.query(func.count(User.id)).scalar() or 0
+    active_users = db.query(func.count(User.id)).filter(User.is_active.is_(True)).scalar() or 0
+    new_today = db.query(func.count(User.id)).filter(User.created_at >= day_start).scalar() or 0
+    new_7d = db.query(func.count(User.id)).filter(User.created_at >= d7).scalar() or 0
+    new_30d = db.query(func.count(User.id)).filter(User.created_at >= d30).scalar() or 0
+
+    by_role: dict[str, int] = {"member": 0, "pro": 0, "owner": 0}
+    for role, n in db.query(User.role, func.count(User.id)).group_by(User.role).all():
+        key = (role or "member").strip().lower()
+        if key == "admin":
+            key = "owner"
+        if key not in by_role:
+            by_role[key] = 0
+        by_role[key] = by_role.get(key, 0) + int(n or 0)
+
+    recent = (
+        db.query(User)
+        .order_by(User.created_at.desc(), User.id.desc())
+        .limit(10)
+        .all()
+    )
+    return {
+        "total_users": int(total_users),
+        "active_users": int(active_users),
+        "new_today": int(new_today),
+        "new_7d": int(new_7d),
+        "new_30d": int(new_30d),
+        "by_role": by_role,
+        "recent_registrations": [
+            {
+                "username": u.username or "",
+                "email": getattr(u, "email", None),
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+            }
+            for u in recent
+        ],
+    }
+
+
 @router.get("/admin/usage-report")
 def admin_usage_report(
     days: int = 7,

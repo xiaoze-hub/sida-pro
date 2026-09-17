@@ -1294,17 +1294,38 @@ def admin_list_keys(
     db: Session = Depends(get_db),
     user: _User = Depends(_require_owner_admin),
 ) -> dict:
-    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。"""
+    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。含今日用量与关联用户名。"""
+    from sqlalchemy import func as _func
+
     rows = db.query(SkillApiKey).order_by(SkillApiKey.created_at.desc()).limit(200).all()
+
+    # 今日用量聚合(skill_usage.created_at 与 server_default 同源)
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    usage_today = dict(
+        db.query(SkillUsage.api_key_id, _func.count(SkillUsage.id))
+        .filter(SkillUsage.created_at >= today_start)
+        .group_by(SkillUsage.api_key_id)
+        .all()
+    )
+    # 关联用户名(user_id 可为 NULL 的旧 key 保留 owner_label)
+    user_ids = {r.user_id for r in rows if r.user_id}
+    users_map: dict[str, str] = {}
+    if user_ids:
+        for u in db.query(_User).filter(_User.id.in_(user_ids)).all():
+            users_map[str(u.id)] = u.username or ""
+
     return {
         "keys": [
             {
                 "id": r.id,
                 "key_prefix": r.key_prefix,
                 "owner_label": r.owner_label,
+                "username": users_map.get(str(r.user_id), "") if r.user_id else "",
+                "user_id": str(r.user_id) if r.user_id else None,
                 "tier": r.tier,
                 "status": r.status,
                 "daily_limit": r.daily_limit,
+                "used_today": int(usage_today.get(r.id, 0)),
                 "frozen_reason": r.frozen_reason or "",
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
