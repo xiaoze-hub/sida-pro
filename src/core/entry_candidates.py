@@ -1558,15 +1558,18 @@ def _load_latest_suggestions(limit: int = 300) -> list[StockSuggestion]:
         db.close()
 
 
-def refresh_entry_candidates(
+def _load_candidate_data(
     *,
+    snapshot: str,
     max_inputs: int = 300,
-    snapshot_date: str | None = None,
     market_scan_limit: int = 60,
     max_kline_symbols: int = 72,
     skip_market_scan: bool = False,
 ) -> dict:
-    snapshot = (snapshot_date or date.today().strftime("%Y-%m-%d")).strip()
+    """加载候选入池数据(P3 拆分, 行为与原 refresh_entry_candidates 前半一致)。
+
+    返回: {input_map, holding_keys, quotes, kline_summary_map}
+    """
     suggestions = _load_latest_suggestions(limit=max_inputs)
     # skip_market_scan(2026-08-22 共振查询联动): 交互查询落库后秒级重算共振,
     # 跳过东财榜单抓取(全量重算的重头); 市场池沿用 7 日内已持久化的快照, 不清空
@@ -1645,7 +1648,12 @@ def refresh_entry_candidates(
     }
 
     if not input_map:
-        return {"snapshot_date": snapshot, "count": 0, "items": [], "filtered": 0}
+        return {
+            "input_map": {},
+            "holding_keys": holding_keys,
+            "quotes": {},
+            "kline_summary_map": {},
+        }
 
     key_set = set(input_map.keys())
     by_market: dict[MarketCode, list[str]] = {}
@@ -1710,9 +1718,172 @@ def refresh_entry_candidates(
         if key not in kline_summary_map:
             kline_summary_map[key] = {}
 
+    return {
+        "input_map": input_map,
+        "holding_keys": holding_keys,
+        "quotes": quotes,
+        "kline_summary_map": kline_summary_map,
+    }
+
+
+def _score_candidates(
+    *,
+    input_map: dict[str, dict],
+    holding_keys: set,
+    quotes: dict[str, dict],
+    kline_summary_map: dict[str, dict],
+) -> tuple[list[dict], int]:
+    """对入池输入逐个评分(P3 拆分, 行为与原评分循环一致)。
+
+    返回 (scored_items, filtered_count)。scored_items 元素包含持久化所需全部字段。
+    """
+    scored_items: list[dict] = []
+    filtered_count = 0
+    for key, inp in input_map.items():
+        market, symbol = key.split(":", 1)
+        quote = dict(quotes.get(key, {}) or {})
+        if _safe_float(quote.get("current_price")) is None:
+            quote.update(
+                {
+                    k: v
+                    for k, v in _extract_price_from_meta(inp.get("meta") or {}).items()
+                    if v is not None and quote.get(k) is None
+                }
+            )
+        kline = kline_summary_map.get(key, {}) or {}
+        candidate_source = (inp.get("candidate_source") or "watchlist").strip()
+        is_holding = key in holding_keys
+
+        suggestion_obj = inp.get("suggestion_obj")
+        strategy_tags: list[str] = list(inp.get("strategy_tags_seed") or [])
+        if suggestion_obj is not None:
+            action = (inp.get("action") or "watch").strip().lower()
+            action_label = (inp.get("action_label") or "观望").strip()
+            signal = (inp.get("signal") or "").strip()
+            reason = (inp.get("reason") or "").strip()
+            score, evidence = _score_suggestion(
+                action=action,
+                suggestion=suggestion_obj,
+                quote=quote,
+                kline=kline,
+                resonance_meta=inp.get("meta") or {},
+            )
+            if (kline.get("trend") or "").strip() == "多头排列":
+                strategy_tags.append("trend_follow")
+            if (kline.get("macd_cross") or "").strip() == "金叉":
+                strategy_tags.append("macd_golden")
+            if (_safe_float(kline.get("volume_ratio")) or 0) >= 1.8:
+                strategy_tags.append("volume_breakout")
+        else:
+            seeded_action = (inp.get("action") or "").strip().lower()
+            decision = _derive_market_scan_decision(quote=quote, kline=kline)
+            if seeded_action in ACTION_BASE_SCORE:
+                action = seeded_action
+                action_label = (inp.get("action_label") or decision.get("action_label") or "观望").strip()
+                signal = (inp.get("signal") or decision.get("signal") or "").strip()
+                reason = (inp.get("reason") or decision.get("reason") or "").strip()
+                strategy_tags = list(
+                    dict.fromkeys(
+                        [
+                            x
+                            for x in (
+                                inp.get("strategy_tags_seed")
+                                or decision.get("strategy_tags")
+                                or []
+                            )
+                            if x
+                        ]
+                    )
+                )
+            else:
+                action = decision["action"]
+                action_label = decision["action_label"]
+                signal = decision["signal"]
+                reason = decision["reason"]
+                strategy_tags = list(decision.get("strategy_tags") or [])
+            score, evidence = _score_market_scan_candidate(
+                action=action,
+                quote=quote,
+                kline=kline,
+                strategy_tags=strategy_tags,
+                resonance_meta=inp.get("meta") or {},
+            )
+
+        if is_holding and action == "buy":
+            action = "add"
+            action_label = "准备加仓"
+        if (not is_holding) and action == "add":
+            action = "buy"
+            action_label = "建仓"
+
+        strategy_tags = list(dict.fromkeys([x for x in strategy_tags if x]))
+        plan = _build_plan(
+            action=action,
+            quote=quote,
+            kline=kline,
+            suggestion_meta=(inp.get("meta") or {}),
+        )
+        seed_plan = inp.get("plan_seed") if isinstance(inp.get("plan_seed"), dict) else {}
+        if seed_plan and _plan_quality(plan) < 90:
+            merged = dict(seed_plan)
+            for k, v in (plan or {}).items():
+                if v is None:
+                    continue
+                if isinstance(v, str) and not v.strip():
+                    continue
+                merged[k] = v
+            plan = merged
+        quality = _plan_quality(plan)
+        confidence = round(score / 100.0, 3)
+
+        status = "inactive"
+        threshold = 62 if candidate_source in ("market_scan", "mixed") else 55
+        if action in ("buy", "add") and quality >= 90 and score >= threshold:
+            status = "active"
+
+        # 精选池: 只落库 active 且有明确信号的记录。无明确信号(空/"暂无明确信号")
+        # 或未达 active 门槛的观望占位一律不落库, 避免稀释真信号。
+        # (entry_candidate_outcomes 只评估 active 候选, 关联不受影响)
+        if status != "active" or not _has_real_signal(signal):
+            filtered_count += 1
+            continue
+
+        scored_items.append(
+            {
+                "market": market,
+                "symbol": symbol,
+                "inp": inp,
+                "quote": quote,
+                "kline": kline,
+                "candidate_source": candidate_source,
+                "is_holding": is_holding,
+                "action": action,
+                "action_label": action_label,
+                "signal": signal,
+                "reason": reason,
+                "strategy_tags": strategy_tags,
+                "score": score,
+                "evidence": evidence,
+                "plan": plan,
+                "quality": quality,
+                "confidence": confidence,
+                "status": status,
+            }
+        )
+    return scored_items, filtered_count
+
+
+def _persist_candidates(
+    *,
+    snapshot: str,
+    scored_items: list[dict],
+) -> list[dict]:
+    """幂等 upsert 候选行 + 退役当轮消失候选(P3 拆分, 行为与原持久化段一致)。
+
+    返回排序前的 _format_candidate_row 列表。
+    """
     db = SessionLocal()
     items: list[dict] = []
-    filtered_count = 0
     try:
         # 幂等 upsert(2026-08-23 P1 修复): 按 (market, symbol) 原行更新保持 ID 稳定,
         # EntryCandidateOutcome 外键不再因每日 3 次全量重建而级联删除;
@@ -1728,114 +1899,25 @@ def refresh_entry_candidates(
         }
         touched_keys: set[tuple[str, str]] = set()
 
-        for key, inp in input_map.items():
-            market, symbol = key.split(":", 1)
-            quote = dict(quotes.get(key, {}) or {})
-            if _safe_float(quote.get("current_price")) is None:
-                quote.update(
-                    {
-                        k: v
-                        for k, v in _extract_price_from_meta(inp.get("meta") or {}).items()
-                        if v is not None and quote.get(k) is None
-                    }
-                )
-            kline = kline_summary_map.get(key, {}) or {}
-            candidate_source = (inp.get("candidate_source") or "watchlist").strip()
-            is_holding = key in holding_keys
-
-            suggestion_obj = inp.get("suggestion_obj")
-            strategy_tags: list[str] = list(inp.get("strategy_tags_seed") or [])
-            if suggestion_obj is not None:
-                action = (inp.get("action") or "watch").strip().lower()
-                action_label = (inp.get("action_label") or "观望").strip()
-                signal = (inp.get("signal") or "").strip()
-                reason = (inp.get("reason") or "").strip()
-                score, evidence = _score_suggestion(
-                    action=action,
-                    suggestion=suggestion_obj,
-                    quote=quote,
-                    kline=kline,
-                    resonance_meta=inp.get("meta") or {},
-                )
-                if (kline.get("trend") or "").strip() == "多头排列":
-                    strategy_tags.append("trend_follow")
-                if (kline.get("macd_cross") or "").strip() == "金叉":
-                    strategy_tags.append("macd_golden")
-                if (_safe_float(kline.get("volume_ratio")) or 0) >= 1.8:
-                    strategy_tags.append("volume_breakout")
-            else:
-                seeded_action = (inp.get("action") or "").strip().lower()
-                decision = _derive_market_scan_decision(quote=quote, kline=kline)
-                if seeded_action in ACTION_BASE_SCORE:
-                    action = seeded_action
-                    action_label = (inp.get("action_label") or decision.get("action_label") or "观望").strip()
-                    signal = (inp.get("signal") or decision.get("signal") or "").strip()
-                    reason = (inp.get("reason") or decision.get("reason") or "").strip()
-                    strategy_tags = list(
-                        dict.fromkeys(
-                            [
-                                x
-                                for x in (
-                                    inp.get("strategy_tags_seed")
-                                    or decision.get("strategy_tags")
-                                    or []
-                                )
-                                if x
-                            ]
-                        )
-                    )
-                else:
-                    action = decision["action"]
-                    action_label = decision["action_label"]
-                    signal = decision["signal"]
-                    reason = decision["reason"]
-                    strategy_tags = list(decision.get("strategy_tags") or [])
-                score, evidence = _score_market_scan_candidate(
-                    action=action,
-                    quote=quote,
-                    kline=kline,
-                    strategy_tags=strategy_tags,
-                    resonance_meta=inp.get("meta") or {},
-                )
-
-            if is_holding and action == "buy":
-                action = "add"
-                action_label = "准备加仓"
-            if (not is_holding) and action == "add":
-                action = "buy"
-                action_label = "建仓"
-
-            strategy_tags = list(dict.fromkeys([x for x in strategy_tags if x]))
-            plan = _build_plan(
-                action=action,
-                quote=quote,
-                kline=kline,
-                suggestion_meta=(inp.get("meta") or {}),
-            )
-            seed_plan = inp.get("plan_seed") if isinstance(inp.get("plan_seed"), dict) else {}
-            if seed_plan and _plan_quality(plan) < 90:
-                merged = dict(seed_plan)
-                for k, v in (plan or {}).items():
-                    if v is None:
-                        continue
-                    if isinstance(v, str) and not v.strip():
-                        continue
-                    merged[k] = v
-                plan = merged
-            quality = _plan_quality(plan)
-            confidence = round(score / 100.0, 3)
-
-            status = "inactive"
-            threshold = 62 if candidate_source in ("market_scan", "mixed") else 55
-            if action in ("buy", "add") and quality >= 90 and score >= threshold:
-                status = "active"
-
-            # 精选池: 只落库 active 且有明确信号的记录。无明确信号(空/"暂无明确信号")
-            # 或未达 active 门槛的观望占位一律不落库, 避免稀释真信号。
-            # (entry_candidate_outcomes 只评估 active 候选, 关联不受影响)
-            if status != "active" or not _has_real_signal(signal):
-                filtered_count += 1
-                continue
+        for it in scored_items:
+            market = it["market"]
+            symbol = it["symbol"]
+            inp = it["inp"]
+            quote = it["quote"]
+            kline = it["kline"]
+            candidate_source = it["candidate_source"]
+            is_holding = it["is_holding"]
+            action = it["action"]
+            action_label = it["action_label"]
+            signal = it["signal"]
+            reason = it["reason"]
+            strategy_tags = it["strategy_tags"]
+            score = it["score"]
+            evidence = it["evidence"]
+            plan = it["plan"]
+            quality = it["quality"]
+            confidence = it["confidence"]
+            status = it["status"]
 
             row_key = (market, symbol)
             row = existing_map.get(row_key)
@@ -1913,6 +1995,37 @@ def refresh_entry_candidates(
         raise
     finally:
         db.close()
+    return items
+
+
+def refresh_entry_candidates(
+    *,
+    max_inputs: int = 300,
+    snapshot_date: str | None = None,
+    market_scan_limit: int = 60,
+    max_kline_symbols: int = 72,
+    skip_market_scan: bool = False,
+) -> dict:
+    """刷新入场候选(P3 拆分): 加载 → 评分 → 持久化。行为与原单体函数一致。"""
+    snapshot = (snapshot_date or date.today().strftime("%Y-%m-%d")).strip()
+    loaded = _load_candidate_data(
+        snapshot=snapshot,
+        max_inputs=max_inputs,
+        market_scan_limit=market_scan_limit,
+        max_kline_symbols=max_kline_symbols,
+        skip_market_scan=skip_market_scan,
+    )
+    input_map = loaded["input_map"]
+    if not input_map:
+        return {"snapshot_date": snapshot, "count": 0, "items": [], "filtered": 0}
+
+    scored_items, filtered_count = _score_candidates(
+        input_map=input_map,
+        holding_keys=loaded["holding_keys"],
+        quotes=loaded["quotes"],
+        kline_summary_map=loaded["kline_summary_map"],
+    )
+    items = _persist_candidates(snapshot=snapshot, scored_items=scored_items)
 
     items.sort(
         key=lambda x: (

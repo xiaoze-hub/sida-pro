@@ -50,6 +50,11 @@ export const authApi = {
       body: JSON.stringify({ email, code }),
     }),
   me: () => fetchAPI<{ user: UserInfo }>('/auth/me'),
+  // P0(2026-09-18): 登出清 httpOnly Cookie(前端 logout() 会调用)
+  logout: () =>
+    fetchAPI<{ message: string }>('/auth/logout', {
+      method: 'POST',
+    }),
   changePassword: (oldPassword: string, newPassword: string) =>
     fetchAPI<{ message: string }>('/auth/change-password', {
       method: 'POST',

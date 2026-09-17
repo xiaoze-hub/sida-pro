@@ -2,7 +2,7 @@ import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { UserCog, Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, ShieldCheck, AlertTriangle, Crown } from 'lucide-react'
+import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -12,6 +12,8 @@ import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
+import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
+import { useI18n } from '@/hooks/useI18n'
 
 interface ProfileInfo {
   username: string
@@ -33,8 +35,6 @@ interface ProfileStats {
   position_count: number
   has_shadow_profile: boolean
 }
-
-const ROLE_LABEL: Record<string, string> = { owner: '管理员', member: '普通成员' }
 
 /** 头像首字母圆形色块(无头像时兜底); 240 色相实底, 不用渐变。 */
 function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: string; size?: 'lg' | 'sm' }) {
@@ -72,6 +72,7 @@ function StatTile({ icon: Icon, label, value, sub, accent }: { icon: any; label:
  */
 export function Profile() {
   const { toast } = useToast()
+  const { t } = useI18n()
   const fileRef = useRef<HTMLInputElement | null>(null)
   const queryClient = useQueryClient()
 
@@ -204,8 +205,8 @@ export function Profile() {
       <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-[16px] md:text-[18px] font-bold text-foreground">个人中心</h1>
-            <p className="text-[12px] text-muted-foreground mt-1">管理个人资料、账号安全与我的数据</p>
+            <h1 className="text-[16px] md:text-[18px] font-bold text-foreground">{t('profile.title')}</h1>
+            <p className="text-[12px] text-muted-foreground mt-1">{t('profile.subtitle')}</p>
           </div>
         </div>
       </div>
@@ -213,10 +214,7 @@ export function Profile() {
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* ① 个人资料 */}
         <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-7">
-          <div className="flex items-center gap-2 mb-4">
-            <UserCog className="w-4 h-4 text-primary" />
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">个人资料</h3>
-          </div>
+          <SectionHeader title={t('profile.personalInfo')} className="mb-4" />
 
           <div className="flex items-start gap-4">
             {/* 头像: 默认用户名首字母色块; 可上传或粘贴 data URL */}
@@ -281,11 +279,8 @@ export function Profile() {
 
         {/* ② 安全中心 */}
         <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-5">
-          <div className="flex items-center gap-2 mb-4">
-            <ShieldCheck className="w-4 h-4 text-primary" />
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">安全中心</h3>
-          </div>
-
+          <SectionHeader title={t('profile.security')} className="mb-4" />
+          
           {/* 当前账号 */}
           <div className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2">
             {/*
@@ -311,9 +306,9 @@ export function Profile() {
               </div>
             ) : (
               [
-                { k: '账号', v: profile?.username || '--' },
-                { k: '角色', v: ROLE_LABEL[profile?.role || ''] || profile?.role || '--' },
-                { k: '注册时间', v: profile?.created_at ? formatDateTime(profile.created_at) : '--' },
+                { k: t('profile.username'), v: profile?.username || '--' },
+                { k: t('profile.role'), v: t(`profile.roles.${profile?.role || 'member'}`) },
+                { k: t('profile.createdAt'), v: profile?.created_at ? formatDateTime(profile.created_at) : '--' },
               ].map(row => (
                 <div key={row.k} className="flex items-center justify-between gap-3 text-[12px]">
                   <span className="text-muted-foreground">{row.k}</span>
@@ -326,21 +321,21 @@ export function Profile() {
           {/* 修改密码(复用 /api/auth/change-password) */}
           <div className="space-y-3">
             <div>
-              <Label className="text-[11px]">旧密码</Label>
-              <Input type="password" value={oldPwd} onChange={e => { setOldPwd(e.target.value); setPwdError(null) }} placeholder="当前使用的密码" autoComplete="current-password" className="mt-1.5 h-9" />
+              <Label className="text-[11px]">{t('profile.oldPassword')}</Label>
+              <Input type="password" value={oldPwd} onChange={e => { setOldPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.oldPwdPlaceholder')} autoComplete="current-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             <div>
-              <Label className="text-[11px]">新密码(至少 8 位)</Label>
-              <Input type="password" value={newPwd} onChange={e => { setNewPwd(e.target.value); setPwdError(null) }} placeholder="设置新密码" autoComplete="new-password" className="mt-1.5 h-9" />
+              <Label className="text-[11px]">{t('profile.newPassword')}</Label>
+              <Input type="password" value={newPwd} onChange={e => { setNewPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.newPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             <div>
-              <Label className="text-[11px]">确认新密码</Label>
-              <Input type="password" value={confirmPwd} onChange={e => { setConfirmPwd(e.target.value); setPwdError(null) }} placeholder="再次输入新密码" autoComplete="new-password" className="mt-1.5 h-9" />
+              <Label className="text-[11px]">{t('profile.confirmPassword')}</Label>
+              <Input type="password" value={confirmPwd} onChange={e => { setConfirmPwd(e.target.value); setPwdError(null) }} placeholder={t('accountMenu.confirmPwdPlaceholder')} autoComplete="new-password" className="mt-1.5 h-9 min-h-[44px]" />
             </div>
             {pwdError && <div className="text-[12px] text-destructive">{pwdError}</div>}
-            <Button className="h-8 w-full" onClick={handleChangePassword} disabled={changingPwd}>
+            <Button className="h-8 w-full min-h-[44px]" onClick={handleChangePassword} disabled={changingPwd}>
               <KeyRound className="w-3.5 h-3.5" />
-              {changingPwd ? '提交中...' : '修改密码'}
+              {changingPwd ? t('accountMenu.submitting') : t('profile.changePassword')}
             </Button>
           </div>
         </section>

@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
+import { I18nProvider } from './hooks/useI18n'
 import { registerQueryClient } from './hooks/useApiQuery'
 import { installGlobalErrorReporting } from './lib/error-report'
 import './index.css'
@@ -27,11 +28,13 @@ registerQueryClient(queryClient)
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
-      </BrowserRouter>
+      <I18nProvider>
+        <BrowserRouter>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </BrowserRouter>
+      </I18nProvider>
     </QueryClientProvider>
   </React.StrictMode>
 )

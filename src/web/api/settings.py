@@ -230,18 +230,26 @@ def update_setting(
 ):
     from src.web.api.auth import get_current_user
 
-    # 懒 import 避开循环; 从 header 解 JWT 拿 user(审计用)
+    # 懒 import 避开循环; Cookie 优先 / fallback Bearer 解 JWT 拿 user(审计用)
     user = None
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        try:
-            from src.web.api.auth import decode_token, principal_from_payload
-            payload = decode_token(auth[7:])
+    try:
+        from src.web.api.auth import (
+            AUTH_COOKIE_NAME,
+            decode_token,
+            principal_from_payload,
+        )
+        raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
+        if not raw:
+            auth = request.headers.get("authorization", "")
+            if auth.lower().startswith("bearer "):
+                raw = auth[7:]
+        if raw:
+            payload = decode_token(raw)
             if payload:
                 user = principal_from_payload(payload)
-        except Exception as e:
-            # P1: JWT 解析失败属可选降级路径(audit 将以 user=None 记), debug 留痕
-            logger.debug(f"settings audit JWT 解析失败: {e}")
+    except Exception as e:
+        # P1: JWT 解析失败属可选降级路径(audit 将以 user=None 记), debug 留痕
+        logger.debug(f"settings audit JWT 解析失败: {e}")
 
     # P2-1 (2026-09-05 28号审计): key 白名单, 系统保留键拒绝直写
     if key not in SETTING_KEYS:

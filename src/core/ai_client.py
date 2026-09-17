@@ -225,9 +225,16 @@ class AIClient:
         for attempt in range(_CB_RETRY_MAX + 1):
             try:
                 _t0 = time.perf_counter()
-                response = await self.client.chat.completions.create(
-                    **create_kwargs
-                )
+                try:
+                    from src.core.apm import trace_llm
+                    _apm_ctx = trace_llm(self.model, self.scene or "")
+                except Exception:  # noqa: BLE001
+                    from contextlib import nullcontext
+                    _apm_ctx = nullcontext()
+                with _apm_ctx:
+                    response = await self.client.chat.completions.create(
+                        **create_kwargs
+                    )
                 _latency_ms = (time.perf_counter() - _t0) * 1000
                 return response, _latency_ms
             except Exception as e:

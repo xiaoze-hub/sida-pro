@@ -45,6 +45,10 @@ class User(Base):
     # 个人中心(2026-08-15): 昵称/头像
     nickname = Column(String(64), nullable=True)
     avatar = Column(String(255), nullable=True)  # 头像(base64 data URL 或路径)
+    # GDPR 用户数据删除(P3, 2026-09-18): 软删除标记 + 请求时间; 30 天后物理清除
+    # server_default: 兼容不带该列的 raw SQL INSERT(测试种子/历史脚本)
+    is_deleted = Column(Boolean, default=False, nullable=False, server_default=text("0"))
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

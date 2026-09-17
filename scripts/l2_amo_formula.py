@@ -176,13 +176,10 @@ def get_l2_fund_flow(code: str, verbose: bool = False) -> dict:
 
 
 def _safe_float(v) -> Optional[float]:
-    """安全转换字符串为 float，None/空返回 None。"""
-    if v is None or v == "" or v == "N/A":
-        return None
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return None
+    """安全转换字符串为 float，None/空返回 None。委托 numutil(P3 统一)。"""
+    from src.core.numutil import safe_float
+
+    return safe_float(v)
 
 
 # ── 主入口：命令行测试 ──────────────────────────────────────

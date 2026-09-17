@@ -606,6 +606,14 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"每日备份 job 注册失败: {e}")
 
+    # P0(2026-09-18): JWT 密钥每 90 天自动轮换(旧密钥 grace 7 天内仍可验签)
+    try:
+        from src.core.secret_rotation import register_rotation_job
+
+        register_rotation_job(sched.scheduler)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"JWT 密钥轮换 job 注册失败: {e}")
+
     return sched
 
 

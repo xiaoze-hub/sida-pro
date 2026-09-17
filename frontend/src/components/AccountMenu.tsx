@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { Moon, Sun, Monitor, Check, LogOut, User, Stethoscope, KeyRound, UserCog, type LucideIcon } from 'lucide-react'
+import { Moon, Sun, Monitor, Check, LogOut, User, Stethoscope, KeyRound, UserCog, Languages, type LucideIcon } from 'lucide-react'
 import { isAuthenticated, logout } from '@panwatch/api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -9,6 +9,7 @@ import { Label } from '@panwatch/base-ui/components/ui/label'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import type { ThemeMode } from '@/hooks/use-theme'
 import { useAvatar } from '@/hooks/use-avatar'
+import { useI18n, type Locale } from '@/hooks/useI18n'
 import { submitChangePassword } from '@/lib/change-password'
 
 export interface AccountNavItem {
@@ -17,10 +18,15 @@ export interface AccountNavItem {
   label: string
 }
 
-const THEME_OPTIONS: { value: ThemeMode; icon: LucideIcon; label: string }[] = [
-  { value: 'light', icon: Sun, label: '亮色' },
-  { value: 'dark', icon: Moon, label: '暗色' },
-  { value: 'system', icon: Monitor, label: '跟随系统' },
+const THEME_OPTIONS: { value: ThemeMode; icon: LucideIcon; labelKey: string }[] = [
+  { value: 'light', icon: Sun, labelKey: 'theme.light' },
+  { value: 'dark', icon: Moon, labelKey: 'theme.dark' },
+  { value: 'system', icon: Monitor, labelKey: 'theme.system' },
+]
+
+const LOCALE_OPTIONS: { value: Locale; label: string }[] = [
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'en-US', label: 'English' },
 ]
 
 interface AccountMenuProps {
@@ -57,6 +63,7 @@ export default function AccountMenu({
   const location = useLocation()
   const avatar = useAvatar()
   const { toast } = useToast()
+  const { t, locale, setLocale } = useI18n()
   // 修改密码弹窗
   const [changePwdOpen, setChangePwdOpen] = useState(false)
   const [oldPwd, setOldPwd] = useState('')
@@ -84,7 +91,7 @@ export default function AccountMenu({
       oldPwd, newPwd, confirmPwd,
       onError: setPwdError,
       onSuccess: () => {
-        toast('密码已更新', 'success')
+        toast(t('accountMenu.passwordUpdated'), 'success')
         setChangePwdOpen(false)
         setOldPwd('')
         setNewPwd('')
@@ -169,33 +176,57 @@ export default function AccountMenu({
           <NavLink
             to="/profile"
             onClick={() => setOpen(false)}
-            className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] transition-colors ${
+            className={`flex items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
               location.pathname.startsWith('/profile')
                 ? 'bg-primary/10 text-primary'
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
             }`}
           >
             <UserCog className="w-3.5 h-3.5" />
-            个人中心
+            {t('accountMenu.profile')}
           </NavLink>
 
           <div className="my-1 h-px bg-border/50" />
 
           {/* 主题色:亮 / 暗 / 跟随系统 */}
-          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">主题</div>
-          {THEME_OPTIONS.map(({ value, icon: Icon, label }) => {
+          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground">{t('accountMenu.theme')}</div>
+          {THEME_OPTIONS.map(({ value, icon: Icon, labelKey }) => {
             const active = mode === value
             return (
               <button
                 key={value}
                 onClick={() => onSetMode(value)}
-                className={`flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] transition-colors ${
+                className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
                   active
                     ? 'text-foreground bg-accent/40'
                     : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
+                {t(labelKey)}
+                {active && <Check className="w-3.5 h-3.5 ml-auto text-primary" />}
+              </button>
+            )
+          })}
+
+          <div className="my-1 h-px bg-border/50" />
+          {/* 语言切换 (P2 i18n) */}
+          <div className="px-2.5 pt-0.5 pb-1 text-[11px] text-muted-foreground flex items-center gap-1.5">
+            <Languages className="w-3 h-3" />
+            {t('accountMenu.language')}
+          </div>
+          {LOCALE_OPTIONS.map(({ value, label }) => {
+            const active = locale === value
+            return (
+              <button
+                key={value}
+                onClick={() => setLocale(value)}
+                className={`flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] transition-colors ${
+                  active
+                    ? 'text-foreground bg-accent/40'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                }`}
+              >
                 {label}
                 {active && <Check className="w-3.5 h-3.5 ml-auto text-primary" />}
               </button>
@@ -209,10 +240,10 @@ export default function AccountMenu({
               setOpen(false)
               onOpenSelfCheck()
             }}
-            className="flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+            className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
           >
             <Stethoscope className="w-3.5 h-3.5" />
-            系统自检
+            {t('accountMenu.selfCheck')}
           </button>
 
           {isAuthenticated() && (
@@ -220,18 +251,18 @@ export default function AccountMenu({
               <div className="my-1 h-px bg-border/50" />
               <button
                 onClick={openChangePwd}
-                className="flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
               >
                 <KeyRound className="w-3.5 h-3.5" />
-                修改密码
+                {t('profile.changePassword')}
               </button>
               <div className="my-1 h-px bg-border/50" />
               <button
                 onClick={logout}
-                className="flex w-full items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                className="flex w-full items-center gap-2.5 px-2.5 py-2 min-h-[44px] rounded-lg text-[12px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                退出登录
+                {t('accountMenu.logout')}
               </button>
             </>
           )}
@@ -249,12 +280,12 @@ export default function AccountMenu({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>修改密码</DialogTitle>
-            <DialogDescription>输入旧密码并设置新密码(至少 8 位)</DialogDescription>
+            <DialogTitle>{t('accountMenu.changePwdTitle')}</DialogTitle>
+            <DialogDescription>{t('accountMenu.changePwdDesc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 mt-2">
             <div>
-              <Label>旧密码</Label>
+              <Label>{t('profile.oldPassword')}</Label>
               <Input
                 type="password"
                 value={oldPwd}
@@ -262,12 +293,12 @@ export default function AccountMenu({
                   setOldPwd(e.target.value)
                   setPwdError(null)
                 }}
-                placeholder="当前使用的密码"
+                placeholder={t('accountMenu.oldPwdPlaceholder')}
                 autoComplete="current-password"
               />
             </div>
             <div>
-              <Label>新密码</Label>
+              <Label>{t('profile.newPassword')}</Label>
               <Input
                 type="password"
                 value={newPwd}
@@ -275,12 +306,12 @@ export default function AccountMenu({
                   setNewPwd(e.target.value)
                   setPwdError(null)
                 }}
-                placeholder="至少 8 位"
+                placeholder={t('accountMenu.newPwdPlaceholder')}
                 autoComplete="new-password"
               />
             </div>
             <div>
-              <Label>确认新密码</Label>
+              <Label>{t('profile.confirmPassword')}</Label>
               <Input
                 type="password"
                 value={confirmPwd}
@@ -288,17 +319,17 @@ export default function AccountMenu({
                   setConfirmPwd(e.target.value)
                   setPwdError(null)
                 }}
-                placeholder="再次输入新密码"
+                placeholder={t('accountMenu.confirmPwdPlaceholder')}
                 autoComplete="new-password"
               />
             </div>
             {pwdError && <div className="text-[12px] text-destructive">{pwdError}</div>}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setChangePwdOpen(false)} disabled={submitting}>
-                取消
+                {t('common.cancel')}
               </Button>
               <Button onClick={handleChangePassword} disabled={submitting}>
-                {submitting ? '提交中...' : '确认'}
+                {submitting ? t('accountMenu.submitting') : t('common.confirm')}
               </Button>
             </div>
           </div>

@@ -128,7 +128,11 @@ def setup_logging():
 
     # reload/server restart 时避免重复 handler 导致日志放大。
     for h in list(root.handlers):
-        if isinstance(h, DBLogHandler) or getattr(h, "_panwatch_console", False):
+        if (
+            isinstance(h, DBLogHandler)
+            or getattr(h, "_panwatch_console", False)
+            or type(h).__name__ == "LokiLogHandler"
+        ):
             root.removeHandler(h)
             try:
                 h.close()
@@ -154,6 +158,17 @@ def setup_logging():
     db_handler.addFilter(_TransportNoiseFilter())
     db_handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(db_handler)
+
+    # Loki 日志聚合(P1 稳定性 2026-09-18): 配置 LOKI_URL 时挂批量推送 handler;
+    # 未配置时 ensure_loki_handler 返回 None, 控制台/DB 行为完全不变。
+    try:
+        from src.core.loki_logger import ensure_loki_handler
+
+        loki = ensure_loki_handler(root)
+        if loki is not None:
+            loki.addFilter(_TransportNoiseFilter())  # 与控制台同噪音策略
+    except Exception as e:  # noqa: BLE001 — Loki 挂载失败绝不影响启动
+        logging.getLogger(__name__).debug(f"Loki handler 挂载失败(忽略): {e}")
 
     # uvicorn 默认给自己挂了 stderr handler 并且 propagate=False,导致 access log
     # 走自己的链路(`INFO: 127.0.0.1 - "GET /api/..."`)不被我们的 filter 拦截。

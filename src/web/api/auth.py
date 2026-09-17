@@ -42,6 +42,10 @@ security = HTTPBearer(auto_error=False)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
 
+# P0(2026-09-18): JWT httpOnly Cookie — 浏览器自动携带, JS 读不到(XSS 防护)
+# 与 Authorization Bearer 双轨: Cookie 优先, Bearer fallback(旧客户端零破坏)
+AUTH_COOKIE_NAME = "sida_token"
+
 # 环境变量配置（Docker 部署用）— 惰性读取: 允许测试/调用方在 import 后注入 env
 ENV_AUTH_USERNAME_KEY = "AUTH_USERNAME"
 ENV_AUTH_PASSWORD_KEY = "AUTH_PASSWORD"
@@ -337,25 +341,91 @@ def create_user(
     return user
 
 
-# ── Token ─────────────────────────────────────────────────────────────
+# ── Token / Cookie ────────────────────────────────────────────────────
+
+def _is_https_request(request: Request) -> bool:
+    """判断请求是否 HTTPS(反代场景看 X-Forwarded-Proto, 直连看 url.scheme)。"""
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto:
+        return proto == "https"
+    try:
+        return (request.url.scheme or "").lower() == "https"
+    except Exception:
+        return False
+
+
+def set_auth_cookie(response: Response, request: Request, token: str) -> None:
+    """下发 JWT httpOnly Cookie(与响应体 token 并存, 向后兼容)。
+
+    属性: HttpOnly + SameSite=Strict + Path=/ + Max-Age=JWT_EXPIRE_HOURS*3600;
+    HTTPS 时附加 Secure。JS 读不到 → XSS 窃 token 面收窄; SameSite=Strict → CSRF 面收窄。
+    """
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=JWT_EXPIRE_HOURS * 3600,
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=_is_https_request(request),
+    )
+
+
+def clear_auth_cookie(response: Response, request: Request) -> None:
+    """登出时清除 JWT Cookie(与 localStorage 清理并行)。"""
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="strict",
+        secure=_is_https_request(request),
+    )
+
+
+def extract_token_from_request(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+) -> Optional[str]:
+    """提取 JWT: Cookie 优先, fallback Authorization Bearer。
+
+    Cookie 由浏览器自动携带(credentials:include), 优先级高于 header —
+    保证 httpOnly 迁移后 Cookie 路径生效, 同时旧客户端 Bearer 继续可用。
+    """
+    cookie = request.cookies.get(AUTH_COOKIE_NAME)
+    if cookie:
+        return cookie
+    if credentials and getattr(credentials, "credentials", None):
+        return credentials.credentials
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return None
+
 
 # ── 权限依赖 ──────────────────────────────────────────────────────────
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
-    """验证当前用户(用作依赖), 返回 User 对象。"""
+    """验证当前用户(用作依赖), 返回 User 对象。
+
+    P0(2026-09-18): 优先读 httpOnly Cookie `sida_token`, fallback Authorization Bearer。
+    两种通道共用同一 JWT 验签与 token_version / is_active 校验, 旧 token 仍有效。
+    """
     owner = get_or_create_owner(db)  # 确保 owner 存在
 
-    if not credentials:
+    raw_token = extract_token_from_request(request, credentials)
+
+    if not raw_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_token(credentials.credentials)
+    payload = decode_token(raw_token)
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -368,6 +438,8 @@ async def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户不存在")
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已禁用")
+    if getattr(user, "is_deleted", False):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已申请注销")
     if user.token_version != int(payload.get("ver", 0)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录已失效, 请重新登录")
 
@@ -460,12 +532,12 @@ async def get_user_or_service(
     顺序: 先试 Bearer 用户 JWT(保持现有行为), 再试 X-Service-Token。
     服务 token 对 require_owner 永远 403, 写链路不受影响。
     """
-    if credentials:
+    if credentials or request.cookies.get(AUTH_COOKIE_NAME):
         try:
-            user = await get_current_user(credentials, db)
+            user = await get_current_user(request, credentials, db)
             return user
         except HTTPException:
-            pass  # Bearer 无效 → 落到服务 token 再试一次, 避免误杀
+            pass  # Bearer/Cookie 无效 → 落到服务 token 再试一次, 避免误杀
     svc = (request.headers.get(SERVICE_TOKEN_HEADER) or "").strip()
     if svc and hmac.compare_digest(svc, get_service_token()):
         return ServicePrincipal()
@@ -578,6 +650,9 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
     from src.web.middleware import issue_csrf_token
     csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)
 
+    # P0(2026-09-18): JWT 同时下发 httpOnly Cookie(响应体 token 保留, 旧前端零破坏)
+    set_auth_cookie(response, request, token)
+
     return TokenResponse(
         token=token,
         expires_at=expires_at.isoformat(),
@@ -676,6 +751,17 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
     # CSRF (tier2 2026-09-18): 注册后即下发 csrf_token, 减少登录前写请求摩擦
     from src.web.middleware import issue_csrf_token
     csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)
+
+    # P0(2026-09-18): 注册成功同步签发 JWT + httpOnly Cookie(与登录口径一致;
+    # 响应体仍提示"请登录", 旧前端流程不变; 带 Cookie 的请求可直接鉴权)。
+    token, expires_at = create_token(user)
+    try:
+        from src.core.permissions import record_session
+        record_session(db, user, session_id=token[:32], expires_at=expires_at)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[auth] 注册后 record_session 失败(不阻断): %s", e)
+    set_auth_cookie(response, request, token)
+
     return {
         "success": True,
         "message": "注册成功, 请登录",
@@ -683,6 +769,8 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
         "username": user.username,
         "api_key": api_key_raw,
         "csrf_token": csrf_token,
+        "token": token,
+        "expires_at": expires_at.isoformat(),
     }
 
 
@@ -690,6 +778,37 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
 async def get_me(user: User = Depends(get_current_user)):
     """获取当前用户信息。"""
     return {"user": user_to_dict(user)}
+
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+    response: Response,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+):
+    """登出: 清除 httpOnly JWT Cookie(前端同时清 localStorage)。
+
+    宽容处理: 无有效 token 也返回 200(幂等); 不强制踢全端设备(改密路径已 token_version+1)。
+    """
+    raw = extract_token_from_request(request, credentials)
+    if raw:
+        try:
+            payload = decode_token(raw)
+            if payload and payload.get("sub"):
+                from src.web.api.audit import log_audit
+                user = get_user_by_id(db, str(payload["sub"]))
+                ip = request.client.host if request.client else ""
+                log_audit(db, user, "logout", detail="用户登出", ip=ip)
+        except Exception:  # noqa: BLE001
+            pass
+    clear_auth_cookie(response, request)
+    # 同时清 CSRF Cookie, 避免登出后残留可用双提交对
+    try:
+        response.delete_cookie("csrf_token", path="/", httponly=True, samesite="strict")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"message": "已登出"}
 
 
 @router.post("/change-password")

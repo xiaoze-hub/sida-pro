@@ -5,6 +5,74 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P1 稳定性)
+
+### feat(stability): Loki 日志聚合 + APM 深度集成 + 慢接口异步化 + 读写分离准备
+
+**性质**: 稳定性/可观测性。**需重启后端**。分支 `feat/p0p1p2p3-all-20260917`。
+
+**Loki 日志聚合** (`src/core/loki_logger.py` 新建 + `src/bootstrap/env.py`):
+- `LokiLogHandler`: 批量推送(100 条 / 10s), 标签 `job=sida, level, module`
+- 环境变量 `LOKI_URL`; **未配置时不挂 handler**, 控制台/DB 行为完全不变
+- emit 只入队, 后台 daemon 线程推送, 失败静默丢弃(不阻塞业务)
+- setup_logging 幂等挂载 + reload 时清理; 与控制台共用 `_TransportNoiseFilter`
+
+**APM 深度集成** (`src/core/apm.py` 新建):
+- 请求级 trace_id: `RequestLoggerMiddleware` 生成/透传(`X-Trace-Id` 响应头), 与 `log_context` 打通
+- 耗时统计: DB(SQLAlchemy cursor 事件)/ HTTP(httpx send 包装)/ LLM(`trace_llm` 埋点)
+- 慢操作告警: 默认 >1s(`APM_SLOW_MS`)打 WARNING; Prometheus `sida_apm_op_duration_seconds` / `sida_apm_ops_total`
+- 低开销: `APM_ENABLED=0` 全关; `APM_SAMPLE_RATE` 采样; 失败静默
+- 集成点: `session.py` 引擎挂载 + `startup.py` install_all + `ai_client._call_with_retry`
+
+**慢接口异步化** (`src/web/api/market_data.py`):
+- `breadth-distribution`: 同步 32s → 后台任务 + 立即返回缓存/空; 新增 `GET /breadth-distribution/status`
+- 龙虎榜 `dragon-tiger/{date}`: 结果 biz_cache 1h + 后台抓取; 新增 `GET /dragon-tiger/{date}/status`; `wait=N` 兼容旧同步期望
+- 龙虎榜逐日循环(fundamentals-detail): 市场级多日范围后台化(`mkt:lhb_range:*`), 新增 `GET /dragon-tiger/range/status`; 冷启动 `lhb_pending=True` 不再阻塞 12-17s
+
+**数据库读写分离准备** (`src/db/dialect.py` + `src/db/session.py` + `src/web/database.py`):
+- `DATABASE_URL_WRITE` 主库 / `DATABASE_URL_READ` 只读副本(可选)
+- 未配置副本时 `read_engine is write_engine`, **单库行为完全不变**
+- `RoutingSession`: SELECT(无 FOR UPDATE)→读库, 其余→写库; 事务内不切换
+- re-export: `write_engine` / `read_engine` / `RoutingSession` / `WriteSessionLocal` / `ReadSessionLocal`; `engine` 仍指向写库
+
+**配置** (`.env.example`): `LOKI_URL` / `APM_ENABLED` / `APM_SLOW_MS` / `APM_SAMPLE_RATE` / `DATABASE_URL_WRITE` / `DATABASE_URL_READ`
+
+**测试**: `tests/test_p1_stability.py` 17 项通过(Loki 幂等/APM span/is_read_sql/单库兼容/后台任务单飞/路由注册)。
+
+## 2026-09-18 (p0-security-hardening)
+
+### feat(security): P0 加固 — JWT httpOnly Cookie + HSTS + 密钥自动轮换
+
+**性质**: 安全加固(P0)。**需重启后端**; 前端建议重建。分支 `feat/p0p1p2p3-all-20260917`。
+
+**JWT → httpOnly Cookie** (`src/web/api/auth.py` + `src/web/api/email_verify.py` + `frontend/packages/api/src/client.ts`):
+- login / register / login-by-email 成功时, 除响应体 token 外同时下发 `Set-Cookie: sida_token=<jwt>; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`(HTTPS 附加 Secure)
+- `get_current_user`: Cookie 优先, fallback Authorization Bearer(旧客户端/旧 token 零破坏)
+- `JWTDecodeMiddleware` / `AuditMiddleware` / `demo_isolation_middleware` / settings 审计同步支持 Cookie
+- 前端 `fetchAPI` 统一 `credentials:'include'`; `getToken()` 仍读 localStorage 作 Authorization header(双轨)
+- 新增 `POST /api/auth/logout`: 清 httpOnly JWT Cookie + CSRF Cookie(幂等); 前端 `logout()` best-effort 调用
+- 前端 `isAuthenticated()` UI 门禁仍看 localStorage(与既有路由守卫兼容)
+
+**HSTS** (`src/web/middleware.py`):
+- `SecurityHeadersMiddleware` 在 HTTPS 时下发 `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+- HTTPS 判定: `X-Forwarded-Proto` 优先(反代), 直连看 `request.url.scheme`; HTTP 不下发(避免本地被 HSTS 锁死)
+- `HSTS_MAX_AGE` 可用 env 覆盖(默认 31536000)
+
+**密钥自动轮换** (`src/core/secret_rotation.py` 新建 + `src/core/auth_tokens.py` + `src/web/api/admin_secrets.py`):
+- 每 90 天自动轮换 `JWT_SECRET`(env 可调 `SECRET_ROTATION_INTERVAL_DAYS` / `SECRET_ROTATION_GRACE_DAYS`)
+- 旧 secret 进 grace 环(AppSettings `jwt_secret_previous` JSON, 默认 7 天)仍可验签; `decode_token` 依次尝试当前+grace 旧密钥
+- 轮换记录落 `audit_logs`(action=`rotate_jwt_secret`); 启动时到期检查补跑
+- 手动: `POST /api/admin/rotate-secrets`(owner only) + `GET /api/admin/secrets/status`
+- env `JWT_SECRET`(>=32B) pin 时轮换跳过并返回原因(签发密钥不可被 DB 轮换覆盖)
+- 挂到主 AgentScheduler(`src/bootstrap/runtime.py`), 防并发参数对齐既有 job
+
+**测试**: `tests/test_p0_security_hardening.py` 8 项 + 既有 `tests/test_security_headers_csrf.py` 9 项 + `test_p1_service_token.py` / `test_syslog.py` 全部通过。
+
+**约束/兼容**:
+- 旧 Bearer token 仍有效; 响应体继续返回 token
+- HSTS 仅 HTTPS; Cookie Secure 仅 HTTPS
+- 轮换 grace period ≥ 会话 TTL, 在线用户不掉线
+
 ## 2026-09-18 (tier2-stability)
 
 ### feat(security): CSP + CSRF 防护 + 依赖漏洞扫描

@@ -1,15 +1,12 @@
 import ErrorBanner from '@/components/ErrorBanner'
-import { ArrowDownRight } from 'lucide-react'
-import { ArrowUpRight } from 'lucide-react'
-import { Bell } from 'lucide-react'
-import { PiggyBank } from 'lucide-react'
 import { Skeleton } from '@panwatch/base-ui/components/ui/skeleton'
-import { TrendingUp } from 'lucide-react'
-import { Wallet } from 'lucide-react'
+import { Card } from '@panwatch/base-ui/components/ui/card'
+import Stat from '@panwatch/biz-ui/components/Stat'
 import { dailyPnlDisplayLabel } from './shared'
 import { safeFixed, safeMoneyUnsigned } from '@/lib/format'
 import { safeNum } from '@/lib/format'
 import { useStocks } from './context'
+import { useI18n } from '@/hooks/useI18n'
 
 /**
  * 持仓页金额口径(2026-09-14 走查缺陷修复):
@@ -22,6 +19,7 @@ import { useStocks } from './context'
 const fmtAmount = (v: unknown) => safeMoneyUnsigned(v)
 
 export function PortfolioSummarySection() {
+  const { t } = useI18n()
   const {
     loadError,
     setLoadError,
@@ -38,7 +36,7 @@ export function PortfolioSummarySection() {
 {/* Portfolio Total Summary */}
 {/* 2026-08-17: 加载失败横幅统一为 ErrorBanner(闭环修正 P0-3: 错误体系统一) */}
 <ErrorBanner
-  errors={loadError ? [{ source: '持仓/账户', message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
+  errors={loadError ? [{ source: t('stocks.loadError'), message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
   onDismiss={() => setLoadError && setLoadError(null)}
 />
 {portfolioLoading && !portfolio ? (
@@ -56,33 +54,28 @@ export function PortfolioSummarySection() {
   </div>
 ) : portfolio ? (
   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 md:gap-4 mb-6">
-    <div className="border-l border-border/40 pl-3">
-      <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        <TrendingUp className="w-4 h-4" />
-        <span className="text-[12px]">总市值</span>
-      </div>
-      <div className="text-[20px] font-bold text-foreground font-num tabular-nums">
-        {fmtAmount(portfolio.total.total_market_value)}
-      </div>
-    </div>
-    <div className="border-l border-border/40 pl-3">
-      <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        {portfolio.total.total_pnl >= 0 ? (
-          <ArrowUpRight className="w-4 h-4 text-stock-up" />
-        ) : (
-          <ArrowDownRight className="w-4 h-4 text-stock-down" />
-        )}
-        <span className="text-[12px]">总盈亏</span>
-      </div>
-      <div className={`text-[20px] font-bold font-num tabular-nums ${portfolio.total.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-        {/* 符号由 formatMoney(= safeMoney) 给出: 正数自带 '+'、负数自带 '-'。
-            旧代码外面又套了一个 `total_pnl >= 0 ? '+' : ''` ⇒ 正盈亏渲染成 "++1.00万"。 */}
-        {formatMoney(portfolio.total.total_pnl)}
-        <span className="text-[13px] ml-1.5">
-          ({safeNum(portfolio.total.total_pnl_pct) === null ? '--' : `${portfolio.total.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(portfolio.total.total_pnl_pct)}%`})
-        </span>
-      </div>
-    </div>
+    <Card variant="plain" className="border-l border-l-border/40 p-3">
+      <Stat
+        label={t('stocks.totalMarketValue')}
+        value={fmtAmount(portfolio.total.total_market_value)}
+        className="[&>div:nth-child(2)]:text-[20px]"
+      />
+    </Card>
+    <Card variant="plain" className="border-l border-l-border/40 p-3">
+      <Stat
+        label={t('stocks.totalPnl')}
+        value={
+          <>
+            {formatMoney(portfolio.total.total_pnl)}
+            <span className="text-[13px] ml-1.5">
+              ({safeNum(portfolio.total.total_pnl_pct) === null ? '--' : `${portfolio.total.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(portfolio.total.total_pnl_pct)}%`})
+            </span>
+          </>
+        }
+        tone={portfolio.total.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}
+        className="[&>div:nth-child(2)]:text-[20px]"
+      />
+    </Card>
 
     {(() => {
       const dayPnl = portfolio.total.total_daily_pnl
@@ -91,60 +84,38 @@ export function PortfolioSummarySection() {
       const pct = prevMv > 0 ? (dayPnl / prevMv * 100) : 0
       const isUp = dayPnl >= 0
       return (
-        <div className="border-l border-border/40 pl-3">
-          <div className="flex flex-wrap items-center gap-2 text-muted-foreground mb-1">
-            {isUp ? (
-              <ArrowUpRight className="w-4 h-4 text-stock-up" />
-            ) : (
-              <ArrowDownRight className="w-4 h-4 text-stock-down" />
-            )}
-            <span className="text-[12px]">{dailyPnlDisplayLabel(portfolio.total)}</span>
-            {portfolioMarketStatusLabel && (
-              <span className="rounded-full bg-accent/60 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-                {portfolioMarketStatusLabel}
-              </span>
-            )}
-          </div>
-          <div className={`text-[20px] font-bold font-mono tabular-nums ${isUp ? 'text-stock-up' : 'text-stock-down'}`}>
-            {/* 同上: 符号只由 formatMoney 给一次, 不再手写 '+' 前缀(否则正数变 "++") */}
-            {formatMoney(dayPnl)}
-            <span className="text-[13px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
-          </div>
-        </div>
+        <Card variant="plain" className="border-l border-l-border/40 p-3">
+          <Stat
+            label={dailyPnlDisplayLabel(portfolio.total)}
+            value={
+              <>
+                {formatMoney(dayPnl)}
+                <span className="text-[13px] ml-1.5">({pct != null && Number.isFinite(pct) ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : '--'})</span>
+              </>
+            }
+            sub={portfolioMarketStatusLabel || undefined}
+            tone={isUp ? 'text-stock-up' : 'text-stock-down'}
+            className="[&>div:nth-child(2)]:text-[20px]"
+          />
+        </Card>
       )
     })()}
 
-    <div className="border-l border-border/40 pl-3">
-      <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        <Wallet className="w-4 h-4" />
-        <span className="text-[12px]">可用资金</span>
-      </div>
-      <div className="text-[20px] font-bold text-foreground font-mono tabular-nums">
-        {fmtAmount(portfolio.total.available_funds)}
-      </div>
-    </div>
-    <div className="border-l border-border/40 pl-3">
-      <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        <PiggyBank className="w-4 h-4" />
-        <span className="text-[12px]">总资产</span>
-      </div>
-      <div className="text-[20px] font-bold text-foreground font-mono tabular-nums">
-        {fmtAmount(portfolio.total.total_assets)}
-      </div>
-    </div>
+    <Card variant="plain" className="border-l border-l-border/40 p-3">
+      <Stat label={t('stocks.availableCash')} value={fmtAmount(portfolio.total.available_funds)} className="[&>div:nth-child(2)]:text-[20px]" />
+    </Card>
+    <Card variant="plain" className="border-l border-l-border/40 p-3">
+      <Stat label={t('stocks.totalAssets')} value={fmtAmount(portfolio.total.total_assets)} className="[&>div:nth-child(2)]:text-[20px]" />
+    </Card>
 
-    <div className="border-l border-border/40 pl-3">
-      <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        <Bell className="w-4 h-4" />
-        <span className="text-[12px]">仓位占比</span>
-      </div>
-      <div className="text-[20px] font-bold text-foreground font-mono tabular-nums">
-        {positionRatio && safeNum(positionRatio.pct) !== null ? `${positionRatio.pct.toFixed(1)}%` : '--'}
-      </div>
-      <div className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-        {positionRatio ? `持仓市值 ${fmtAmount(positionRatio.mv)} / 总资产 ${fmtAmount(positionRatio.assets)}` : '—'}
-      </div>
-    </div>
+    <Card variant="plain" className="border-l border-l-border/40 p-3">
+      <Stat
+        label={t('stocks.positionRatio')}
+        value={positionRatio && safeNum(positionRatio.pct) !== null ? `${positionRatio.pct.toFixed(1)}%` : '--'}
+        sub={positionRatio ? `${t('stocks.portfolio')} ${fmtAmount(positionRatio.mv)} / ${t('stocks.totalAssets')} ${fmtAmount(positionRatio.assets)}` : '—'}
+        className="[&>div:nth-child(2)]:text-[20px]"
+      />
+    </Card>
   </div>
 ) : null}
     </>

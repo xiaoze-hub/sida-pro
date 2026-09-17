@@ -1147,47 +1147,21 @@ class PremarketOutlookAgent(BaseAgent):
             }
         return suggestions
 
-    async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
-        """调用 AI 分析并保存到历史/建议池"""
-        trace_id = str(data.get("run_trace_id") or datetime.now().strftime("%m%d%H%M%S%f")[-10:])
-        start_ts = time.monotonic()
-        logger.info(
-            "[%s] 盘前分析开始: watchlist=%s model=%s",
-            trace_id,
-            len(context.watchlist),
-            context.model_label or "default",
-        )
+    def _build_analysis_prompt(
+        self, data: dict, context: AgentContext
+    ) -> tuple[str, str]:
+        """构建 system/user prompt + 场景模型绑定(P3 拆分, 行为与原 analyze 前段一致)。"""
         system_prompt, user_content = self.build_prompt(data, context)
         # 统一 LLM 配置中心: reports 场景模型绑定 + 画像注入(无 db/绑定失败则原样)
         system_prompt = apply_scene_binding(context, "reports", system_prompt)
-        logger.info(
-            "[%s] Prompt构建完成: system_chars=%s user_chars=%s lines=%s",
-            trace_id,
-            len(system_prompt or ""),
-            len(user_content or ""),
-            (user_content.count("\n") + 1) if user_content else 0,
-        )
+        return system_prompt, user_content
+
+    async def _call_llm_analysis(
+        self, context: AgentContext, system_prompt: str, user_content: str, trace_id: str
+    ) -> str:
+        """调用 LLM 并注入模型标签(P3 拆分)。降级异常向上抛由 analyze 处理。"""
         logger.info("[%s] AI请求开始", trace_id)
-        try:
-            content = await context.ai_client.chat(system_prompt, user_content)
-        except LLMDegradedError as e:
-            # 0.3: 降级显式失败, 历史留 degraded 记录, 不再走建议/推送链路
-            result = self._degraded_result(e)
-            save_analysis(
-                agent_name=self.name,
-                stock_symbol="*",
-                content=result.content,
-                title=result.title,
-                user_id=_resolve_user_id(context),
-                raw_data={
-                    "status": "degraded",
-                    "error": result.error,
-                    "timestamp": data.get("timestamp"),
-                },
-                status="degraded",
-                error=result.error,
-            )
-            return result
+        content = await context.ai_client.chat(system_prompt, user_content)
         logger.info("[%s] AI请求完成: response_chars=%s", trace_id, len(content or ""))
 
         if context.model_label:
@@ -1200,7 +1174,12 @@ class PremarketOutlookAgent(BaseAgent):
                 )
             else:
                 content = content.rstrip() + f"\n\n---\nAI: {context.model_label}"
+        return content
 
+    def _parse_analysis_result(
+        self, content: str, context: AgentContext, data: dict
+    ) -> tuple[AnalysisResult, dict, list]:
+        """解析 LLM 输出 → AnalysisResult + structured JSON + suggestions(P3 拆分)。"""
         structured = try_extract_tagged_json(content) or {}
         display_content = strip_tagged_json(content)
 
@@ -1229,11 +1208,56 @@ class PremarketOutlookAgent(BaseAgent):
         result.raw_data["suggestions"] = suggestions
         action_dist = Counter((s.get("action") or "unknown") for s in suggestions.values())
         logger.info(
-            "[%s] 建议解析完成: source=%s count=%s action_dist=%s",
-            trace_id,
+            "建议解析完成: source=%s count=%s action_dist=%s",
             suggestion_source,
             len(suggestions),
             dict(action_dist),
+        )
+        return result, structured, suggestions
+
+    async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
+        """调用 AI 分析并保存到历史/建议池"""
+        trace_id = str(data.get("run_trace_id") or datetime.now().strftime("%m%d%H%M%S%f")[-10:])
+        start_ts = time.monotonic()
+        logger.info(
+            "[%s] 盘前分析开始: watchlist=%s model=%s",
+            trace_id,
+            len(context.watchlist),
+            context.model_label or "default",
+        )
+        system_prompt, user_content = self._build_analysis_prompt(data, context)
+        logger.info(
+            "[%s] Prompt构建完成: system_chars=%s user_chars=%s lines=%s",
+            trace_id,
+            len(system_prompt or ""),
+            len(user_content or ""),
+            (user_content.count("\n") + 1) if user_content else 0,
+        )
+        try:
+            content = await self._call_llm_analysis(
+                context, system_prompt, user_content, trace_id
+            )
+        except LLMDegradedError as e:
+            # 0.3: 降级显式失败, 历史留 degraded 记录, 不再走建议/推送链路
+            result = self._degraded_result(e)
+            save_analysis(
+                agent_name=self.name,
+                stock_symbol="*",
+                content=result.content,
+                title=result.title,
+                user_id=_resolve_user_id(context),
+                raw_data={
+                    "status": "degraded",
+                    "error": result.error,
+                    "timestamp": data.get("timestamp"),
+                },
+                status="degraded",
+                error=result.error,
+            )
+            return result
+
+        result, _structured, suggestions = self._parse_analysis_result(
+            content, context, data
         )
 
         # 保存各股票建议到建议池

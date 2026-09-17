@@ -12,6 +12,8 @@
  * 集成路径:
  *   GET  /api/market-scan/dark-fund-top → DarkFundTopResp
  *   POST /api/market-scan/dark-fund-top/refresh → 手动触发扫描(同步 ~16s)
+ *
+ * P2 (2026-09-18): i18n + Card 组件 + 窄屏表格转卡片 + 骨架屏
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -24,17 +26,11 @@ import {
   type DarkFundTopUnavailable,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { Card } from '@panwatch/base-ui/components/ui/card'
+import { Badge } from '@panwatch/base-ui/components/ui/badge'
+import { Skeleton } from '@/components/Skeleton'
 import { safeFixed, toAmountFromWan, toAmountFromWanUnsigned } from '@/lib/format'
-
-/*
- * 万元口径收敛(2026-09-14 缺陷修复):
- * - main_net_wan / total_amount_wan / tck_dark_net_wan 三个字段后端明确是**万元**
- *   (packages/api/src/marketScan.ts:25/29/31 + src/core/dark_fund_scan.py:138-141)。
- * - 旧代码误用 toWan(= toAmount, **元**口径, 内部再 /1e4): 116836.13(万元 = 11.68亿)
- *   被渲染成 "11.68万", 小 10000 倍且单位错。
- * - 现状: 主力净流入/暗盘净额是**有方向的净额** → toAmountFromWan(带符号);
- *   总成交额是**规模量** → toAmountFromWanUnsigned(不带 +)。
- */
+import { useI18n } from '@/hooks/useI18n'
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true
@@ -44,19 +40,25 @@ function isUnavailable(r: DarkFundTopResp): r is DarkFundTopUnavailable {
   return r.available === false
 }
 
-// 简约 loading / error / empty panel (与 Quote.tsx 同款, 不引入新组件)
-function SimpleLoading({ text }: { text: string }) {
-  return <div className="p-8 text-center text-[12px] text-muted-foreground">{text}</div>
-}
-function SimpleError({ text }: { text: string }) {
-  return <div className="p-8 text-center text-[12px] text-rose-500">{text}</div>
-}
-function SimpleEmpty({ text }: { text: string }) {
-  return <div className="p-8 text-center text-[12px] text-muted-foreground">{text}</div>
+function DarkFundTopSkeleton() {
+  return (
+    <div className="sida-page-enter space-y-4" aria-busy aria-live="polite">
+      <div className="border-b border-border/40 pb-3">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="mt-2 h-3 w-72" />
+      </div>
+      <div className="space-y-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full" />
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export default function DarkFundTopPage() {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const [data, setData] = useState<DarkFundTopResp | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -81,11 +83,6 @@ export default function DarkFundTopPage() {
   const sortMark = (key: 'main' | 'amount' | 'ratio') =>
     sort.key === key ? (sort.dir === -1 ? ' ▼' : ' ▲') : ''
 
-  /**
-   * .tck 暗盘对照列: 只有持仓股(且有 .tck 文件)才有数据。全榜都没有数据时
-   * **整列隐藏**而不是留一列 20 行 '-' —— 一个恒空的列在全市场榜单里是噪声,
-   * 读起来像坏了; 有数据时照旧展示(信息不丢, 列头明示口径范围)。
-   */
   const hasTckData = useMemo(
     () => (data && isSnapshot(data) ? (data.top || []).some((r) => r.tck_dark_net_wan != null) : false),
     [data],
@@ -99,11 +96,11 @@ export default function DarkFundTopPage() {
       const r = await marketScanApi.darkFundTop()
       setData(r)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '加载失败')
+      setError(e instanceof Error ? e.message : t('common.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     load()
@@ -115,107 +112,108 @@ export default function DarkFundTopPage() {
       const r = await marketScanApi.refreshDarkFundTop({ top_n: 20 })
       setData(r)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '刷新失败')
+      setError(e instanceof Error ? e.message : t('darkFundTop.refreshFailed'))
     } finally {
       setRefreshing(false)
     }
-  }, [])
+  }, [t])
 
-  if (loading) return <SimpleLoading text="加载暗盘资金 TOP 榜…" />
-  if (error) return <SimpleError text={error} />
+  if (loading) return <DarkFundTopSkeleton />
+  if (error) return <div className="p-8 text-center text-[12px] text-rose-500">{error}</div>
 
-  if (!data) return <SimpleEmpty text="暂无暗盘资金榜单 —— 盘后 15:30 快照任务未跑或今日休市，可点右上「刷新」" />
+  if (!data) {
+    return <div className="p-8 text-center text-[12px] text-muted-foreground">{t('darkFundTop.empty')}</div>
+  }
 
-  // 场景 1: 无快照(盘后 15:30 cron 还没跑 / 首次部署 / 刷新失败)
   if (isUnavailable(data)) {
     return (
       <div className="space-y-4">
-        <div className="p-6 text-center border-b border-border/40">
+        <Card className="p-6 text-center">
           <AlertTriangle className="mx-auto h-8 w-8 text-amber-500" />
-          <div className="mt-3 text-[14px] font-medium text-foreground">暂无暗盘资金 TOP 快照</div>
+          <div className="mt-3 text-[14px] font-medium text-foreground">{t('darkFundTop.noSnapshot')}</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{data.note}</p>
           <div className="mt-4">
-            <Button onClick={refresh} disabled={refreshing} size="sm">
+            <Button onClick={refresh} disabled={refreshing} size="sm" className="min-h-[44px]">
               <RefreshCw className={`mr-1.5 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              立即扫描(全市场约 16s)
+              {t('darkFundTop.scanNow')}
             </Button>
           </div>
-        </div>
+        </Card>
       </div>
     )
   }
 
-  // 场景 2: 有快照
   if (isSnapshot(data)) {
     return (
       <div className="sida-page-enter space-y-4">
         {/* 顶部摘要 + 操作栏 */}
         <div className="border-b border-border/40 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-stock-up" />
-                <h2 className="text-[14px] font-medium text-foreground">暗盘资金 TOP 榜(全市场)</h2>
+                <h2 className="text-[14px] font-medium text-foreground">{t('darkFundTop.title')}</h2>
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                快照日 <span className="font-mono">{data.snapshot_date}</span>
-                {' · '}宇宙股票 <span className="font-mono">{data.universe ?? '-'}</span> 只
-                {' · '}实际计算 <span className="font-mono">{data.computed ?? '-'}</span> 只
-                {' · '}TOP <span className="font-mono">{data.top?.length ?? 0}</span> 条
-                {' · '}数据源 <span className="font-mono">thsdk_dde</span>(同花顺官方主力资金流)
-                {/* B3/3.4 口径标签: DDE 大单口径, 禁用于主力意图判定 */}
-                {' · '}<span
+                {t('common.snapshotDate')} <span className="font-mono">{data.snapshot_date}</span>
+                {' · '}{t('darkFundTop.universe')} <span className="font-mono">{data.universe ?? '-'}</span>
+                {' · '}{t('darkFundTop.computed')} <span className="font-mono">{data.computed ?? '-'}</span>
+                {' · '}{t('darkFundTop.topCount')} <span className="font-mono">{data.top?.length ?? 0}</span>
+                {' · '}{t('common.source')} <span className="font-mono">thsdk_dde</span>({t('darkFundTop.sourceNote')})
+                {' · '}<Badge
+                  variant="outline"
                   className="cursor-help underline decoration-dotted underline-offset-2"
-                  title="同花顺 DDE 大单口径, 非逐笔主动买卖方向 —— 仅作资金面参考, 禁用于主力意图判定(AGENTS.md 口径红线)"
-                >DDE口径 · 资金面参考</span>
-                {' · '}更新 <span className="font-mono">{data.updated_at ?? '-'}</span>
+                  title={t('darkFundTop.caliberHint')}
+                >{t('darkFundTop.caliberTag')}</Badge>
+                {' · '}{t('common.updatedAt')} <span className="font-mono">{data.updated_at ?? '-'}</span>
               </p>
             </div>
-            <Button onClick={refresh} disabled={refreshing} size="sm" variant="outline">
+            <Button onClick={refresh} disabled={refreshing} size="sm" variant="outline" className="min-h-[44px] min-w-[44px]">
               <RefreshCw className={`mr-1.5 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? '扫描中…' : '重新扫描'}
+              {refreshing ? t('common.scanning') : t('darkFundTop.rescan')}
             </Button>
           </div>
         </div>
 
         <div className="overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* 桌面端: 表格 */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-[12px]">
               <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                 <tr className="border-b border-border/60 text-[11px] text-muted-foreground">
-                  <th className="px-3 py-2 font-medium">#</th>
-                  <th className="px-3 py-2 font-medium">代码</th>
-                  <th className="px-3 py-2 font-medium">名称</th>
+                  <th className="px-3 py-2 font-medium">{t('darkFundTop.rank')}</th>
+                  <th className="px-3 py-2 font-medium">{t('darkFundTop.code')}</th>
+                  <th className="px-3 py-2 font-medium">{t('darkFundTop.name')}</th>
                   <th
-                    className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
+                    className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground min-h-[44px]"
                     onClick={() => toggleSort('main')}
-                    title="按主力净流入排序"
+                    title={t('darkFundTop.mainNetSort')}
                   >
-                    主力净流入(万/亿){sortMark('main')}
+                    {t('darkFundTop.mainNet')}{sortMark('main')}
                   </th>
                   <th
                     className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort('ratio')}
-                    title="同花顺主力净量(股数口径, 非百分比)"
+                    title={t('darkFundTop.mainNetRatioHint')}
                   >
-                    主力净量{sortMark('ratio')}
+                    {t('darkFundTop.mainNetRatio')}{sortMark('ratio')}
                   </th>
                   <th
                     className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground"
                     onClick={() => toggleSort('amount')}
-                    title="按总成交额排序(万元口径; 缺失为 --)"
+                    title={t('darkFundTop.totalAmountSort')}
                   >
-                    总成交额(万/亿){sortMark('amount')}
+                    {t('darkFundTop.totalAmount')}{sortMark('amount')}
                   </th>
                   {hasTckData ? (
                     <th
                       className="px-3 py-2 text-right font-medium"
-                      title="委托号级精确暗盘净额(万元): 仅持仓股且有 .tck 文件才有; 非持仓股显示 --"
+                      title={t('darkFundTop.tckHint')}
                     >
-                      .tck 暗盘对照<span className="font-normal text-muted-foreground">(仅持仓股)</span>
+                      {t('darkFundTop.tckDark')}<span className="font-normal text-muted-foreground">{t('darkFundTop.tckOnlyHeld')}</span>
                     </th>
                   ) : null}
-                  <th className="px-3 py-2 font-medium">数据源</th>
+                  <th className="px-3 py-2 font-medium">{t('common.source')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
@@ -226,17 +224,12 @@ export default function DarkFundTopPage() {
                     <tr
                       key={`${r.symbol}-${i}`}
                       className="hover:bg-accent/20 cursor-pointer"
-                      onClick={() => navigate(`/quote?type=stock&symbol=${r.symbol}`)}
-                      title={`${r.symbol} → 行情`}
+                      onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`)}
+                      title={`${r.symbol} → ${t('nav.stocks')}`}
                     >
                       <td className="px-3 py-2 font-mono text-muted-foreground">{i + 1}</td>
                       <td className="px-3 py-2 font-mono">
-                        <a
-                          href={`/quote?type=stock&symbol=${r.symbol}`}
-                          className="text-primary hover:underline"
-                        >
-                          {r.symbol}
-                        </a>
+                        <span className="text-primary">{r.symbol}</span>
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{r.name ?? '-'}</td>
                       <td
@@ -280,13 +273,54 @@ export default function DarkFundTopPage() {
               </tbody>
             </table>
           </div>
+
+          {/* 移动端: 卡片列表 */}
+          <div className="md:hidden space-y-2">
+            {sortedTop.map((r: DarkFundTopRow, i: number) => {
+              const positive = (r.main_net_wan ?? 0) > 0
+              const negative = (r.main_net_wan ?? 0) < 0
+              return (
+                <Card
+                  key={`${r.symbol}-${i}`}
+                  variant="hover"
+                  className="p-3 min-h-[44px] cursor-pointer"
+                  onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] text-muted-foreground">#{i + 1}</span>
+                        <span className="font-mono text-[13px] text-primary font-medium">{r.symbol}</span>
+                        <span className="text-[12px] text-foreground truncate">{r.name ?? '-'}</span>
+                      </div>
+                      <div className="mt-1 text-[10px] text-muted-foreground">{r.source}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className={`font-mono text-[13px] font-semibold ${positive ? 'text-stock-up' : negative ? 'text-stock-down' : 'text-muted-foreground'}`}>
+                        {toAmountFromWan(r.main_net_wan)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground font-mono">
+                        {toAmountFromWanUnsigned(r.total_amount_wan)}
+                      </div>
+                    </div>
+                  </div>
+                  {hasTckData && r.tck_dark_net_wan != null && (
+                    <div className="mt-1.5 text-[10px] text-muted-foreground">
+                      {t('darkFundTop.tckDark')}: <span className={`font-mono ${r.tck_dark_net_wan > 0 ? 'text-stock-up' : r.tck_dark_net_wan < 0 ? 'text-stock-down' : ''}`}>{toAmountFromWan(r.tck_dark_net_wan)}</span>
+                    </div>
+                  )}
+                </Card>
+              )
+            })}
+          </div>
+
           <div className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
-            红 = 主力净流入(吸筹), 绿 = 主力净流出(派发) · 金额口径=万元(榜单字段就是万元, 不是元) ·{' '}
+            {t('darkFundTop.footerLegend')} ·{' '}
             {hasTckData
-              ? '.tck 暗盘对照(仅持仓股)有数据, 非持仓股显示 --'
-              : `.tck 暗盘对照仅持仓股有数据 —— 本榜 ${rowCount} 只都不是持仓股(或 .tck 缺失), 该列已隐藏`}
-            {' · '}总成交额缺失(上游 int32 哨兵/无数据)显式显示 -- · 完整榜单见{' '}
-            <a href="/api/market-scan/dark-fund-top" className="text-primary hover:underline">
+              ? t('darkFundTop.tckHasData')
+              : t('darkFundTop.tckHidden', { n: rowCount })}
+            {' · '}{t('darkFundTop.amountMissing')}{' '}
+            <a href="/api/market-scan/dark-fund-top" className="text-primary hover:underline min-h-[44px] inline-flex items-center">
               /api/market-scan/dark-fund-top
             </a>
           </div>
@@ -295,6 +329,5 @@ export default function DarkFundTopPage() {
     )
   }
 
-  // 兜底(理论上 type narrowing 已穷尽)
-  return <SimpleEmpty text="数据格式异常" />
+  return <div className="p-8 text-center text-[12px] text-muted-foreground">{t('common.dataAbnormal')}</div>
 }

@@ -6,8 +6,10 @@ import { Search } from 'lucide-react'
 import { Upload } from 'lucide-react'
 import { User } from 'lucide-react'
 import { useSettings } from './context'
+import { useI18n } from '@/hooks/useI18n'
 
 export function SettingsHero() {
+  const { t } = useI18n()
   const {
     services,
     channels,
@@ -99,9 +101,9 @@ export function SettingsHero() {
     <Input
       value={globalQuery}
       onChange={e => setGlobalQuery(e.target.value)}
-      placeholder="全局搜索设置项 / 数据源 / AI 服务..."
+      placeholder={t('settings.searchPlaceholder')}
       className="h-9 w-full md:max-w-md pl-9"
-     aria-label="全局搜索设置项 / 数据源 / AI 服务..."/>
+     aria-label={t('settings.searchPlaceholder')}/>
     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
     {/* 2026-08-17: end 添加搜索图标与清空按钮 */}
     {globalQuery.trim() && (

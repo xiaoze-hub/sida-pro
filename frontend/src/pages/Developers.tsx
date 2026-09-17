@@ -26,6 +26,7 @@ import {
 import { DevPageLayout, Section, InfoCard, CodeBlock, type SideMenuItem } from '@/components/dev/DevPageLayout'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
+import { useI18n } from '@/hooks/useI18n'
 
 /**
  * 开发者文档页 v2(2026-09-16)。
@@ -88,6 +89,7 @@ const TIER_BADGE: Record<string, string> = {
 }
 
 export default function DevelopersPage() {
+  const { t } = useI18n()
   const [activeSection, setActiveSection] = useState('quickstart')
   const [catalog, setCatalog] = useState<CatalogResp | null>(null)
   const [catLoading, setCatLoading] = useState(true)
@@ -160,8 +162,8 @@ export default function DevelopersPage() {
 
   return (
     <DevPageLayout
-      title="开发者文档"
-      subtitle="SIDA Skill API 接入指南 — 从零到第一次调用"
+      title={t('developers.title')}
+      subtitle={t('developers.subtitle')}
       badge="v1.0"
       menu={MENU}
       activeId={activeSection}

@@ -34,6 +34,9 @@ import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { SkeletonTable } from '@/components/Skeleton'
+import { Card } from '@panwatch/base-ui/components/ui/card'
+import Stat from '@panwatch/biz-ui/components/Stat'
+import { useI18n } from '@/hooks/useI18n'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -336,6 +339,7 @@ const regimeToneClass = (regime?: string) => {
 }
 
 export default function OpportunitiesPage() {
+  const { t } = useI18n()
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   // 防重复提交锁:提交/轮询期间置 true,轮询结束或同步失败后复位
@@ -1090,48 +1094,48 @@ export default function OpportunitiesPage() {
         <div>
           <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
-            机会页
+            {t('opportunities.title')}
           </h1>
           <p className="text-[12px] text-muted-foreground mt-1">
-            市场池优先，候选必须具备可执行入场计划
+            {t('opportunities.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">{snapshotDate || '最新快照'}</span>
+          <span className="text-[11px] text-muted-foreground">{snapshotDate || t('opportunities.latestSnapshot')}</span>
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px]"
+            className="h-8 text-[12px] min-h-[44px]"
             onClick={() => setStrategyLibOpen(true)}
           >
             <BookOpen className="w-3.5 h-3.5 mr-1" />
-            策略库
+            {t('opportunities.strategyLib')}
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px]"
+            className="h-8 text-[12px] min-h-[44px]"
             onClick={exportOpportunities}
           >
             <Download className="w-3.5 h-3.5 mr-1" />
-            导出
+            {t('common.export')}
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            className="h-8 text-[12px]"
+            className="h-8 text-[12px] min-h-[44px]"
             onClick={handleRefresh}
             disabled={refreshing}
           >
             {refreshing ? (
               <>
                 <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin mr-1" />
-                刷新中…
+                {t('opportunities.refreshing')}
               </>
             ) : (
               <>
                 <RefreshCw className="w-3.5 h-3.5 mr-1" />
-                刷新
+                {t('common.refresh')}
               </>
             )}
           </Button>
@@ -1143,42 +1147,42 @@ export default function OpportunitiesPage() {
         <div className="border-b border-border/60 px-1 py-2 mb-4 flex items-center gap-2 text-[12px] text-primary">
           <span className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0" />
           <div className="flex-1">
-            <span className="font-medium">后台刷新中…</span>
-            <span className="text-muted-foreground ml-1">全市场扫描约需 1-3 分钟,完成后将自动更新列表</span>
+            <span className="font-medium">{t('opportunities.bgRefresh')}</span>
+            <span className="text-muted-foreground ml-1">{t('opportunities.bgRefreshHint')}</span>
           </div>
-          <span className="text-[11px] text-muted-foreground">已提交,请稍候</span>
+          <span className="text-[11px] text-muted-foreground">{t('opportunities.submitted')}</span>
         </div>
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div className="border-l-2 border-l-primary pl-3 py-1">
-          <div className="text-[11px] font-semibold text-foreground/80">当前候选(全局)</div>
-          <div className="text-[24px] font-bold mt-1 font-num tabular-nums">{globalCoverage?.total_signals ?? '--'}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">
-            可执行: {globalCoverage?.active_signals ?? '--'}，观察: {(globalCoverage?.total_signals != null && globalCoverage?.active_signals != null) ? Math.max(0, globalCoverage.total_signals - globalCoverage.active_signals) : '--'}
-          </div>
-        </div>
-        <div className="border-l border-border/40 pl-3 py-1">
-          <div className="text-[11px] text-muted-foreground">市场池占比</div>
-          <div className="text-[18px] font-bold mt-1">{globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">
-            市场池: {globalCoverage?.market_scan_signals ?? '--'}，关注池: {globalCoverage?.watchlist_signals ?? '--'}，融合: {globalCoverage?.mixed_signals ?? '--'}
-          </div>
-        </div>
-        <div className="border-l border-border/40 pl-3 py-1">
-          <div className="text-[11px] text-muted-foreground">本次筛选结果</div>
-          <div className="text-[18px] font-bold mt-1">{filteredSummary.total}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">
-            未持仓: {filteredSummary.unheld}，市场池: {filteredSummary.marketPool}
-          </div>
-        </div>
-        <div className="border-l border-border/40 pl-3 py-1">
-          <div className="text-[11px] text-muted-foreground">3日胜率(自动评估)</div>
-          <div className="text-[18px] font-bold mt-1">{outcome3d ? `${outcome3d.win_rate.toFixed(1)}%` : '--'}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">
-            自动样本: {outcome3d ? `${outcome3d.total}` : '--'}
-          </div>
-        </div>
+        <Card className="border-l-2 border-l-primary pl-3 py-1 p-3">
+          <Stat
+            label={t('opportunities.currentCandidates')}
+            value={globalCoverage?.total_signals ?? '--'}
+            sub={`${t('opportunities.executable')}: ${globalCoverage?.active_signals ?? '--'}，${t('opportunities.watch')}: ${(globalCoverage?.total_signals != null && globalCoverage?.active_signals != null) ? Math.max(0, globalCoverage.total_signals - globalCoverage.active_signals) : '--'}`}
+          />
+        </Card>
+        <Card variant="plain" className="pl-3 py-1 p-3">
+          <Stat
+            label={t('opportunities.marketShare')}
+            value={globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}
+            sub={`${t('opportunities.marketPool')}: ${globalCoverage?.market_scan_signals ?? '--'}，${t('opportunities.watchPool')}: ${globalCoverage?.watchlist_signals ?? '--'}，${t('opportunities.mixed')}: ${globalCoverage?.mixed_signals ?? '--'}`}
+          />
+        </Card>
+        <Card variant="plain" className="pl-3 py-1 p-3">
+          <Stat
+            label={t('opportunities.filterResult')}
+            value={filteredSummary.total}
+            sub={`${t('opportunities.unheld')}: ${filteredSummary.unheld}，${t('opportunities.marketPool')}: ${filteredSummary.marketPool}`}
+          />
+        </Card>
+        <Card variant="plain" className="pl-3 py-1 p-3">
+          <Stat
+            label={t('opportunities.winRate3d')}
+            value={outcome3d ? `${outcome3d.win_rate.toFixed(1)}%` : '--'}
+            sub={`${t('opportunities.autoSample')}: ${outcome3d ? `${outcome3d.total}` : '--'}`}
+          />
+        </Card>
       </div>
 
       {/* 机会页 Tab(2026-08-20): 候选池 / 竞价异动 */}
@@ -1186,29 +1190,29 @@ export default function OpportunitiesPage() {
         <button
           type="button"
           onClick={() => setViewMode('candidates')}
-          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
             viewMode === 'candidates' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
-          候选池
+          {t('opportunities.candidates')}
         </button>
         <button
           type="button"
           onClick={() => setViewMode('auction')}
-          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
             viewMode === 'auction' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
-          竞价异动
+          {t('opportunities.auction')}
         </button>
         <button
           type="button"
           onClick={() => setViewMode('abnormal')}
-          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
             viewMode === 'abnormal' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
           }`}
         >
-          异动预警
+          {t('opportunities.abnormal')}
         </button>
       </div>
 

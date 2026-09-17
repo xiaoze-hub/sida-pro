@@ -221,7 +221,7 @@ def require_perm(perm: str) -> Callable:
         creds = await security(request)
         db = SessionLocal()
         try:
-            user = await get_current_user(credentials=creds, db=db)
+            user = await get_current_user(request=request, credentials=creds, db=db)
             enforce_perm(user, perm, db)
             return user
         finally:
