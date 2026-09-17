@@ -768,9 +768,10 @@ async def hot_stocks_proxy(
 
 # ──────────── 全市场涨跌幅 9 档分桶(v0.4.7) ────────────
 # 数据源: 东财 push2 clist 全 A 股列表(沪深京A), 字段 f2=最新价(元), f3=涨跌幅%。
-# 仅一次性 HTTP 拉一页拿到 ~5000 行即可覆盖全 A; 加 60s biz_cache 防止高频轮询撞东财限流。
+# 仅一次性 HTTP 拉一页拿到 ~5000 行即可覆盖全 A; 加 300s biz_cache 防止高频轮询撞东财限流。
+# 2026-09-16: TTL 60s→300s — 首次计算耗时 32s(新浪 79 页), 60s TTL 导致频繁重算超时。
 _BREADTH_CACHE_KEY = "breadth:distribution:v1"
-_BREADTH_CACHE_TTL = 60
+_BREADTH_CACHE_TTL = 300
 
 # 9 档分桶定义(从弱到强, 与涨停/跌停并列两极)
 _BUCKET_BOUNDS = [
