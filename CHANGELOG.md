@@ -5,6 +5,32 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · ruff)
+
+### fix(lint): ruff `E9,F821,F601,F811` 8 处 → 清空(含 1 个真 NameError)
+
+**性质**: 门禁转绿(ruff 真 bug 类) + 1 个运行时真 bug 修复。**需重启后端**。
+分支 `feat/audit-fix-20260918`。
+
+tag 流水线 `gates` 的 ruff 门禁当时 **8 处红**(v0.9.0 起 tag 全断的第三个原因)。逐条处理:
+
+- **真 bug(`limit_ladder_live.py:305` F821)**: `fetch_stock_l2_batch` 只在 `scan_tick()` 内
+  **局部 import**, 而 `_default_deps()`(另一个函数)也引用它 ⇒ 局部名不跨函数, 走到
+  `l2_fn=fetch_stock_l2_batch` 那行必 `NameError` —— **连板梯队实时化(60s 调度)默认依赖路径直接崩**。
+  修: `_default_deps()` 内补同样的局部 import(保持原有惰性导入意图, 不引模块级循环依赖);
+  新增 `tests/test_limit_ladder_live_deps.py` 2 例钉住(`l2_fn is fetch_stock_l2_batch` + 七件齐全)。
+- `bootstrap/runtime.py:48` F821: `paper_trading_scheduler` 的类型注解引用了未导入的
+  `PaperTradingScheduler`(因 `from __future__ import annotations` 才没在运行时炸, 类型层是缺的)。
+  修: 与其它 scheduler 一致补 import。
+- `core/market_scan_jobs.py` ×2 F811: 函数内 `SessionLocal` 重复 import(模块级已有) → 删除局部重复。
+- `web/api/auth.py` ×4 F811: KI-039 把 JWT 原语下沉 `core.auth_tokens` 后, 本模块仍保留
+  **同值**的本地重复定义(会掩盖"改一处以为生效"的隐患) → 删除本地重复, 统一用 core 的导入。
+  值完全相同, 行为零变化; `import src.web.api.auth` 正常。
+
+- 现状: `ruff check src/ server.py forecast_server.py scripts/ packages/marketdata/src
+  --select E9,F821,F601,F811` → **All checks passed**。
+- 回归: `tests/test_limit_ladder_live_deps.py` 2 例通过; `test_limit_ladder_live.py` 等 33 例通过。
+
 ## 2026-09-18 (门禁转绿 · 越权静态扫描)
 
 ### fix(scope): `check_scoped_queries` 8 处未过滤查询 → 逐一核实后显式豁免

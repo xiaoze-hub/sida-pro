@@ -21,6 +21,7 @@ from src.core.log_context import log_context
 from src.core.context_scheduler import ContextMaintenanceScheduler
 from src.core.kline_backfill_scheduler import KlineBackfillScheduler
 from src.core.notifier import NotifierManager
+from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
 from src.core.scheduler import AgentScheduler

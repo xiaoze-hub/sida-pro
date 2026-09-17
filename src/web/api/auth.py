@@ -38,9 +38,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
-# JWT 配置
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+# JWT 配置: 单一真源已下沉 `src.core.auth_tokens`(KI-039), 本模块直接用上面的 import,
+# 不再本地重复定义 —— 同值重复定义会让"改一处生效在另一处"成为隐患(2026-09-18 门禁 F811)。
 
 # P0(2026-09-18): JWT httpOnly Cookie — 浏览器自动携带, JS 读不到(XSS 防护)
 # 与 Authorization Bearer 双轨: Cookie 优先, Bearer fallback(旧客户端零破坏)
@@ -57,8 +56,6 @@ def _env_credentials() -> tuple[str | None, str | None]:
 # 设置项 key(旧单用户兼容)
 AUTH_USERNAME_KEY = "auth_username"
 PASSWORD_HASH_KEY = "auth_password_hash"
-JWT_SECRET_KEY = "jwt_secret"
-AUTH_TOKEN_VERSION_KEY = "auth_token_version"
 
 # JWT Secret 缓存
 _jwt_secret: str | None = None
