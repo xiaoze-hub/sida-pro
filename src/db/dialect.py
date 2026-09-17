@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import threading as _threading
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.pool import NullPool
@@ -35,10 +36,11 @@ else:
 if (
     os.environ.get("DOCKER") == "1"
     and not os.environ.get("SIDA_DB_URL")
+    and not os.environ.get("DATABASE_URL_WRITE")
     and os.environ.get("SIDA_ALLOW_SQLITE") != "1"
 ):
     raise RuntimeError(
-        "DOCKER=1 但未设置 SIDA_DB_URL: 容器内禁止默认 SQLite,"
+        "DOCKER=1 但未设置 SIDA_DB_URL/DATABASE_URL_WRITE: 容器内禁止默认 SQLite,"
         "请在 compose/deploy 中注入 postgresql 连接串;"
         "如确需容器内 SQLite(仅本地开发/测试), 显式设 SIDA_ALLOW_SQLITE=1"
     )
@@ -46,6 +48,16 @@ if (
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 DB_URL = os.environ.get("SIDA_DB_URL", f"sqlite:///{DB_PATH}")
+
+# ── 读写分离(P1 稳定性 2026-09-18) ─────────────────────────────────────
+# 写库(主库): DATABASE_URL_WRITE 优先, 否则回落 SIDA_DB_URL / 默认 SQLite。
+# 读库(只读副本): DATABASE_URL_READ 可选; 未配置时读写都走主库(向后兼容)。
+# 历史代码一律读 DB_URL / build_engine() → 拿到的都是写库, 行为不变。
+DATABASE_URL_WRITE = os.environ.get("DATABASE_URL_WRITE") or DB_URL
+DATABASE_URL_READ = (os.environ.get("DATABASE_URL_READ") or "").strip() or None
+
+# 兼容: DB_URL 始终指向写库(主库), 任何旧 import 不受影响。
+DB_URL = DATABASE_URL_WRITE
 
 IS_PG = DB_URL.startswith("postgresql")
 
@@ -58,6 +70,79 @@ def is_postgres() -> bool:
 def declared_backend() -> str:
     """方言标签(sqlite/postgresql), 健康检查/日志展示用。"""
     return "postgresql" if IS_PG else "sqlite"
+
+
+def has_read_replica() -> bool:
+    """是否配置了独立只读副本(未配置时读写同库, 行为与历史一致)。"""
+    if not DATABASE_URL_READ:
+        return False
+    # 同一连接串视为未分离(避免误建两个 engine 指向同一 PG)
+    return DATABASE_URL_READ != DATABASE_URL_WRITE
+
+
+def read_db_url() -> str:
+    """读路径使用的 URL; 无副本时回落写库。"""
+    if has_read_replica():
+        assert DATABASE_URL_READ is not None
+        return DATABASE_URL_READ
+    return DATABASE_URL_WRITE
+
+
+_WRITE_PREFIXES = (
+    "INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT",
+    "CREATE", "ALTER", "DROP", "TRUNCATE", "REINDEX", "VACUUM",
+    "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE",
+    "SET ", "PRAGMA", "LOCK ", "GRANT", "REVOKE", "COPY ",
+    "MERGE", "CALL", "REFRESH",
+)
+
+
+def is_read_sql(statement: str | None) -> bool:
+    """粗判 SQL 是否只读(可路由到只读副本)。
+
+    保守策略: 任何不确定的一律当写(回主库), 保证正确性优先于分流率。
+    - 纯 SELECT(且无 FOR UPDATE/SHARE) → 读
+    - WITH ... SELECT(CTE 纯读, 不含 DML 关键字) → 读
+    - 其余 → 写
+    """
+    if not statement:
+        return False
+    try:
+        s = statement.lstrip()
+        if not s:
+            return False
+        up = s[:200].upper()
+        # 显式写语句
+        for p in _WRITE_PREFIXES:
+            if up.startswith(p) or up.startswith(p.strip()):
+                return False
+        # SELECT ... FOR UPDATE / FOR SHARE 必须走主库(要锁)
+        upper_all = s.upper()
+        if "FOR UPDATE" in upper_all or "FOR SHARE" in upper_all:
+            return False
+        if up.startswith("SELECT"):
+            return True
+        if up.startswith("WITH"):
+            # CTE 里混了 DML 一律当写
+            if any(
+                kw in upper_all
+                for kw in (" INSERT ", " UPDATE ", " DELETE ", "INSERT INTO", "DELETE FROM")
+            ):
+                return False
+            return True
+    except Exception:  # noqa: BLE001 — 解析失败按写处理
+        return False
+    return False
+
+
+def is_read_clause(clause: Any) -> bool:
+    """SQLAlchemy clause/TextClause → 是否只读。失败按写处理。"""
+    if clause is None:
+        return False
+    try:
+        return is_read_sql(str(clause))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ── 引擎构造 ──────────────────────────────────────────────────────────────

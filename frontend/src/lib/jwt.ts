@@ -2,6 +2,10 @@
  *
  * 从 App.tsx 抽出(2026-09-12), 供"角色决定可见操作"的组件复用(如情绪周期回填按钮)。
  * 容错要点(原 M-2 修复): 非法 base64 / 只有两段 / payload 非对象 → 一律返回 null。
+ *
+ * P0(2026-09-18): 后端另下发 httpOnly Cookie `sida_token`(JS 读不到)。
+ * 前端 UI 角色展示仍读 localStorage.token(登录时同步写入); API 鉴权由 Cookie
+ * 自动携带 + Authorization header 双轨, 后端 Cookie 优先。
  */
 export function safeJwtPayload(token: string): Record<string, unknown> | null {
   try {

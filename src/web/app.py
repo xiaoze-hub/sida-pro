@@ -57,6 +57,7 @@ from src.web.api import (
     llm_usage,
     profile,
     export as export_data,
+    user_data,
     audit,
     market_mainline,
     market_scan,
@@ -194,6 +195,8 @@ _ADMIN_PREFIX_PERMISSIONS = {
     "/api/paper-trading": "manage_paper_trading",
     "/api/forecast/predict": "run_prediction",
     "/api/upload": "upload_files",
+    # P0(2026-09-18): 密钥轮换仅 owner(端点内还有 require_owner 双保险)
+    "/api/admin": "manage_settings",
 }
 # 管理区中允许 GET 浏览的路径(敏感 key 已掩码, 只读无风险)
 _READABLE_ADMIN_PREFIXES = ("/api/settings", "/api/providers", "/api/agents")
@@ -239,15 +242,20 @@ async def demo_isolation_middleware(request: Request, call_next):
 
     username = None
     payload = None
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        try:
-            from src.web.api.auth import decode_token
-            payload = decode_token(auth[7:])
+    # P0(2026-09-18): Cookie 优先, fallback Bearer
+    try:
+        from src.web.api.auth import AUTH_COOKIE_NAME, decode_token
+        raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
+        if not raw:
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                raw = auth[7:]
+        if raw:
+            payload = decode_token(raw)
             if payload:
                 username = payload.get("username")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # 未认证 / CORS 预检: 放行(各路由自行鉴权)
     if not username or method == "OPTIONS":
@@ -469,6 +477,13 @@ app.include_router(
     export_data.router,
     prefix="/api",
     tags=["export"],
+    dependencies=protected,
+)
+# GDPR 用户数据导出/删除(P3, 2026-09-18): /api/user/data/*
+app.include_router(
+    user_data.router,
+    prefix="/api/user",
+    tags=["user-data"],
     dependencies=protected,
 )
 app.include_router(
@@ -807,6 +822,18 @@ try:
         pro_billing.router,
         prefix="/api",
         tags=["pro-billing"],
+    )
+except ImportError:
+    pass
+
+# P0(2026-09-18): 密钥轮换管理(owner only)
+try:
+    from src.web.api import admin_secrets
+
+    app.include_router(
+        admin_secrets.router,
+        prefix="/api/admin",
+        tags=["admin-secrets"],
     )
 except ImportError:
     pass

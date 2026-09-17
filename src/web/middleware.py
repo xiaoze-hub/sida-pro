@@ -137,19 +137,28 @@ class JWTDecodeMiddleware(BaseHTTPMiddleware):
 
     不强制鉴权 — 鉴权由各路由的 Depends(get_current_user) 决定
     这里是性能优化: 让依赖能直接读 request.state.user 避免重复解码
+
+    P0(2026-09-18): 优先 httpOnly Cookie `sida_token`, fallback Authorization Bearer。
     """
     async def dispatch(self, request: Request, call_next):
         request.state.user = None
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            try:
-                # 使用 auth 模块的解码函数(共享配置 + 异常处理)
-                from src.web.api.auth import decode_token as _decode_token, principal_from_payload
-                payload = _decode_token(auth[7:])
+        try:
+            from src.web.api.auth import (
+                AUTH_COOKIE_NAME,
+                decode_token as _decode_token,
+                principal_from_payload,
+            )
+            raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
+            if not raw:
+                auth = request.headers.get("authorization", "")
+                if auth.lower().startswith("bearer "):
+                    raw = auth[7:]
+            if raw:
+                payload = _decode_token(raw)
                 if payload:
                     request.state.user = principal_from_payload(payload)
-            except Exception:
-                pass  # 鉴权失败路由自己返回 401
+        except Exception:
+            pass  # 鉴权失败路由自己返回 401
         return await call_next(request)
 
 
@@ -237,9 +246,27 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start = time.perf_counter()
         status: int = 0  # 默认值, finally 块用到
+        # APM(P1 2026-09-18): 请求级 trace_id, 贯穿日志/APM/Loki
+        trace_token = None
+        try:
+            from src.core.apm import new_trace_id, set_trace_id, clear_trace_id
+            from src.core.log_context import bind_log_context
+
+            incoming = request.headers.get("x-trace-id") or request.headers.get("x-request-id")
+            tid = set_trace_id(incoming)
+            bind_log_context(trace_id=tid)
+            trace_token = tid
+            request.state.trace_id = tid
+        except Exception:
+            pass
         try:
             response = await call_next(request)
             status = response.status_code
+            if trace_token:
+                try:
+                    response.headers["X-Trace-Id"] = trace_token
+                except Exception:
+                    pass
             return response
         except Exception as e:
             status = 500
@@ -274,8 +301,16 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                     "duration_ms": duration_ms,
                     "client_ip": _get_client_ip(request),
                     "user_id": user_id,
+                    "trace_id": trace_token or "",
                     "ua": (request.headers.get("user-agent", "")[:60]),
                 }, ensure_ascii=False))
+            except Exception:
+                pass
+            # 清理 trace 上下文(避免 contextvar 泄漏到线程池)
+            try:
+                if trace_token:
+                    from src.core.apm import clear_trace_id
+                    clear_trace_id()
             except Exception:
                 pass
 
@@ -322,16 +357,25 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 return response
 
             # 自己解析 JWT(避免依赖 JWTDecodeMiddleware 的外层/内层顺序)
+            # P0(2026-09-18): Cookie 优先, fallback Bearer
             user = None
-            auth = request.headers.get("authorization", "")
-            if auth.lower().startswith("bearer "):
-                try:
-                    from src.web.api.auth import decode_token as _decode_token, principal_from_payload
-                    payload = _decode_token(auth[7:])
+            try:
+                from src.web.api.auth import (
+                    AUTH_COOKIE_NAME,
+                    decode_token as _decode_token,
+                    principal_from_payload,
+                )
+                raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
+                if not raw:
+                    auth = request.headers.get("authorization", "")
+                    if auth.lower().startswith("bearer "):
+                        raw = auth[7:]
+                if raw:
+                    payload = _decode_token(raw)
                     if payload:
                         user = principal_from_payload(payload)
-                except Exception:
-                    pass
+            except Exception:
+                pass
             if not user or not user.get("user_id"):
                 return response
 
@@ -402,9 +446,31 @@ SECURITY_HEADERS: dict[str, str] = {
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
 
+# P0(2026-09-18): HSTS — 仅 HTTPS 时下发(见 _request_is_https)
+HSTS_MAX_AGE = _env_int("HSTS_MAX_AGE", 31536000)  # 1 年
+HSTS_VALUE = f"max-age={HSTS_MAX_AGE}; includeSubDomains"
+
+
+def _request_is_https(request: Request) -> bool:
+    """HTTPS 判定: 反代场景优先 X-Forwarded-Proto, 直连看 request.url.scheme。
+
+    注意: 仅当反代正确回写 X-Forwarded-Proto 时 HSTS 才会下发 —
+    错误配置下不会误标 HTTP 为 HTTPS(宁缺勿错, 避免本地 http 被 HSTS 锁死)。
+    """
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto:
+        return proto == "https"
+    try:
+        return (request.url.scheme or "").lower() == "https"
+    except Exception:
+        return False
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """给所有响应挂 CSP + 常见安全头。外层最外(最后 add), 保证 4xx/5xx 也带头。"""
+    """给所有响应挂 CSP + 常见安全头。外层最外(最后 add), 保证 4xx/5xx 也带头。
+
+    P0(2026-09-18): HTTPS 请求额外挂 Strict-Transport-Security。
+    """
 
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
@@ -412,6 +478,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         for key, value in SECURITY_HEADERS.items():
             response.headers[key] = value
         response.headers["Content-Security-Policy"] = CSP_POLICY
+        if _request_is_https(request):
+            response.headers["Strict-Transport-Security"] = HSTS_VALUE
         return response
 
 
@@ -425,9 +493,11 @@ CSRF_COOKIE_NAME = "csrf_token"
 CSRF_HEADER_NAME = "x-csrf-token"
 CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # 登录前无 token; webhook 服务端调用无浏览器 Cookie
+# logout: 清 Cookie 的幂等端点, 无 Bearer 时也须放行(Cookie-only 客户端)
 CSRF_EXEMPT_PREFIXES = (
     "/api/auth/login",
     "/api/auth/register",
+    "/api/auth/logout",
     "/api/webhooks/",
 )
 

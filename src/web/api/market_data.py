@@ -7,14 +7,17 @@
 - 供 8010 预测引擎在宿主机调用(宿主机无 marketdata 包, 经 8000 HTTP 取数)
 
 暴露:
-- GET /api/market-data/dragon-tiger/{date}  龙虎榜(ftshare vendor)
+- GET /api/market-data/dragon-tiger/{date}  龙虎榜(ftshare vendor; P1 后台化+缓存)
+- GET /api/market-data/dragon-tiger/{date}/status  龙虎榜单日抓取状态
+- GET /api/market-data/dragon-tiger/range/status  龙虎榜多日范围抓取状态
 - GET /api/market-data/capital-flow/{symbol}  资金流(经 MarketData Engine, 走 UI 配置 vendor)
 - GET /api/market-data/fundamentals-detail/{symbol}  个股基本面明细合并端点(龙虎榜/两融/股东户数/分红/事件日历)
 - GET /api/market-data/anomalies  东财异动池(交易所「严重异常波动」口径, 供首页 Dashboard)
 - GET /api/market-data/hot-stocks  同花顺热榜(小时榜/日榜, 含 AI 归因, 供首页 Dashboard)
 - GET /api/market-data/market-capital-flow  大盘资金(对齐同花顺APP口径, 顺手写 30s 快照入 DB)
 - GET /api/market-data/market-capital-flow/history?hours=4  当日大盘资金快照序列
-- GET /api/market-data/breadth-distribution  全市场涨跌幅 9 档分桶(60s biz_cache)
+- GET /api/market-data/breadth-distribution  全市场涨跌幅 9 档分桶(P1 后台化, 立即返回缓存/空)
+- GET /api/market-data/breadth-distribution/status  涨跌幅分布后台计算状态(前端轮询)
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
@@ -32,6 +36,88 @@ from src.web.cache.biz_cache import biz_cache
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ──────────── P1 后台任务框架(慢接口异步化, 2026-09-18) ────────────
+# 目标: 32s+ 的同步计算改为「立即返回缓存/空结果 + 后台任务计算 + 前端轮询」。
+# 状态存进程内 dict(与 snapshot 节流同风格); 重启后自动重建, 无需落库。
+# 单飞: 同一 job_key 已有 running 时不重复起线程。
+class _BgJob:
+    __slots__ = ("key", "status", "started_at", "finished_at", "error", "result_key", "lock")
+
+    def __init__(self, key: str, result_key: str = ""):
+        self.key = key
+        self.result_key = result_key or key
+        self.status = "running"  # running | succeeded | failed
+        self.started_at = time.time()
+        self.finished_at: float | None = None
+        self.error = ""
+        self.lock = threading.Lock()
+
+
+_bg_jobs: dict[str, _BgJob] = {}
+_bg_jobs_lock = threading.Lock()
+
+
+def _bg_job_status(key: str) -> dict:
+    with _bg_jobs_lock:
+        job = _bg_jobs.get(key)
+    if job is None:
+        return {"status": "idle", "key": key}
+    with job.lock:
+        return {
+            "key": job.key,
+            "status": job.status,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+            "elapsed_s": round(
+                (job.finished_at or time.time()) - job.started_at, 2
+            ),
+            "error": job.error,
+            "result_key": job.result_key,
+        }
+
+
+def _bg_start(key: str, fn: Callable[[], dict], *, result_key: str = "",
+              cache_ttl: int | None = None) -> bool:
+    """启动后台计算(单飞)。返回 True=本次新起了线程, False=已在跑或刚完成。"""
+    with _bg_jobs_lock:
+        job = _bg_jobs.get(key)
+        if job is not None and job.status == "running":
+            return False
+        job = _BgJob(key, result_key=result_key)
+        _bg_jobs[key] = job
+
+    def _runner() -> None:
+        try:
+            result = fn()
+            if cache_ttl and result_key:
+                try:
+                    biz_cache.set_json(result_key, result, ttl=cache_ttl)
+                except Exception:
+                    pass
+            with job.lock:
+                job.status = "succeeded"
+                job.finished_at = time.time()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"后台任务 {key} 失败: {e}")
+            with job.lock:
+                job.status = "failed"
+                job.error = str(e)[:300]
+                job.finished_at = time.time()
+
+    threading.Thread(target=_runner, name=f"bg-{key[:40]}", daemon=True).start()
+    return True
+
+
+def _empty_breadth() -> dict:
+    return {
+        "count": 0,
+        "total": 0,
+        "items": [{"bucket": b[2], "count": 0} for b in _BUCKET_BOUNDS],
+        "note": "后台计算中, 请轮询 /breadth-distribution 或 /breadth-distribution/status",
+        "pending": True,
+    }
 
 
 # ──────────── Task 1: 大盘资金快照(双方言兼容, v0.4.7) ────────────
@@ -87,20 +173,57 @@ def _try_write_snapshot_async(payload: dict) -> None:
     t.start()
 
 
+@router.get("/dragon-tiger/range/status")
+async def dragon_tiger_range_status(
+    market: str = Query("CN", description="市场"),
+    days: int = Query(10, ge=1, le=30, description="回溯天数(自然日)"),
+):
+    """龙虎榜多日范围后台抓取状态(供 fundamentals-detail 冷启动轮询)。
+
+    注意: 必须注册在 /dragon-tiger/{trade_date} 之前, 否则 "range" 会被当成 trade_date。
+    """
+    key = _lhb_range_cache_key(market, days)
+    job_key = f"lhb_range:{market}:{max(1, min(int(days), 30))}"
+    cached = biz_cache.get_json(key)
+    st = _bg_job_status(job_key)
+    return {
+        "market": market,
+        "days": days,
+        "job": st,
+        "ready": cached is not None,
+        "date_count": len((cached or {}).get("by_date") or {}) if cached else 0,
+    }
+
+
 @router.get("/dragon-tiger/{trade_date}")
 async def dragon_tiger_proxy(
     trade_date: str,
     market: str = Query("CN", description="市场"),
+    wait: int = Query(0, ge=0, le=15, description="缓存未命中时最多等待秒数(0=立即返回)"),
 ):
     """龙虎榜(经 marketdata dragon_tiger vendor, 主源东财 + ftshare 补席位)。
 
     trade_date: YYYYMMDD
     key 来自「设置→接口Key」配置的 data_sources(type=dragon_tiger), 实时生效。
 
+    P1 异步化(2026-09-18):
+    - 结果写入 biz_cache(默认 1h, 交易日数据日终不变)
+    - 缓存未命中 → 启动后台任务抓取, 立即返回空 + pending=True
+    - wait>0 时最多阻塞等待 wait 秒(兼容旧前端同步期望)
+    - 轮询状态: GET /dragon-tiger/{date}/status
+
     2026-08-20: 东财 datacenter 有汇总(净买/原因/上榜明细)无席位, ftshare 有席位
     但需全市场翻页。合并:东财做主, ftshare 补同 symbol 行的席位字段。
     """
-    try:
+    cache_key = f"mkt:dragon_tiger:{market}:{trade_date}"
+    job_key = f"dragon_tiger:{market}:{trade_date}"
+    cache_ttl = 3600  # 龙虎榜日终不变, 1h 足够
+
+    cached = biz_cache.get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    def _compute() -> dict:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         rows = md.dragon_tiger(date=trade_date, market=market) or []
@@ -137,10 +260,55 @@ async def dragon_tiger_proxy(
             "market": market,
             "count": len(items),
             "items": items,
+            "pending": False,
         }
-    except Exception as e:
-        logger.warning(f"龙虎榜代理失败 [{trade_date}]: {e}")
-        raise HTTPException(502, f"数据源调用失败: {e}")
+
+    started = _bg_start(job_key, _compute, result_key=cache_key, cache_ttl=cache_ttl)
+
+    # 兼容路径: wait>0 时短暂等待后台完成(旧前端无需改造); 用 asyncio.sleep 不卡事件循环
+    if wait > 0:
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            done = biz_cache.get_json(cache_key)
+            if done is not None:
+                return done
+            st = _bg_job_status(job_key)
+            if st.get("status") == "failed":
+                raise HTTPException(502, f"数据源调用失败: {st.get('error', '')}")
+            if st.get("status") == "idle" and not started:
+                break
+            await asyncio.sleep(0.3)
+        cached = biz_cache.get_json(cache_key)
+        if cached is not None:
+            return cached
+
+    return {
+        "trade_date": trade_date,
+        "market": market,
+        "count": 0,
+        "items": [],
+        "pending": True,
+        "note": "后台抓取中, 请轮询本接口或 /status",
+    }
+
+
+@router.get("/dragon-tiger/{trade_date}/status")
+async def dragon_tiger_status(
+    trade_date: str,
+    market: str = Query("CN", description="市场"),
+):
+    """龙虎榜后台抓取状态(pending/succeeded/failed + 是否已有缓存)。"""
+    cache_key = f"mkt:dragon_tiger:{market}:{trade_date}"
+    job_key = f"dragon_tiger:{market}:{trade_date}"
+    cached = biz_cache.get_json(cache_key)
+    st = _bg_job_status(job_key)
+    return {
+        "trade_date": trade_date,
+        "market": market,
+        "job": st,
+        "ready": cached is not None,
+        "count": (cached or {}).get("count", 0) if cached else 0,
+    }
 
 
 @router.get("/capital-flow/{symbol}")
@@ -488,42 +656,39 @@ async def market_capital_flow_history(
 
 # ──────────────── 个股基本面明细合并(龙虎榜/两融/股东户数/分红/事件日历) ────────────────
 
+# P1(2026-09-18): 龙虎榜逐日循环后台化。
+# 原实现: fetch_fundamentals_detail 内 for 每个交易日调 md.dragon_tiger + ftshare,
+# 冷启动 12-17s 直接拖死请求。现改为:
+# - 市场级(与 symbol 无关)多日抓取结果缓存 `mkt:lhb_range:{market}:{days}`
+# - 未命中 → 后台任务抓取, 请求侧只读缓存(可空)
+# - 状态查询: GET /dragon-tiger/range/status?market=&days=
+_LHB_RANGE_TTL = 3600  # 1h: 交易日内多次请求复用; 日终后自然过期
 
-def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
-    """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
 
-    - dragon_tiger: 市场级按日接口, 回溯最近 dt_days 个自然日并按 symbol 过滤
-    - margin / shareholders / dividend / events: 按 symbol 批量接口
-    每类独立容错: 单类 vendor 失败只记日志、该类别返回空数组, 不拖垮整体。
-    """
+def _lhb_range_cache_key(market: str, days: int) -> str:
+    return f"mkt:lhb_range:{market}:{max(1, min(int(days), 30))}"
+
+
+def _compute_lhb_range(market: str, days: int) -> dict:
+    """后台任务: 逐日抓龙虎榜 + ftshare 席位, 按日期缓存行(与 symbol 无关)。"""
     from datetime import date, timedelta
 
     from src.core.marketdata_client import get_market_data
 
     md = get_market_data()
-    out: dict = {
-        "symbol": symbol,
-        "market": market,
-        "dragon_tiger": [],
-        "margin": [],
-        "shareholders": [],
-        "dividend": [],
-        "events": [],
-    }
-
-    # 1) 龙虎榜(市场级按日, 回溯 dt_days 天按 symbol 过滤; 引擎内存缓存, 重复日期不重复抓)
-    # 2026-08-20: 同时拉 ftshare 补席位明细(东财 datacenter 不公开席位)
     try:
         from marketdata.vendors.ftshare import FtshareDragonTigerVendor
         _ft = FtshareDragonTigerVendor()
     except Exception:
         _ft = None
-    scanned = max(1, min(int(dt_days), 30))
+
+    scanned = max(1, min(int(days), 30))
+    by_date: dict[str, list[dict]] = {}
     d = date.today()
+    errors: list[str] = []
     for _ in range(scanned):
         ds = d.strftime("%Y%m%d")
-        # P0(2026-09-18): 周末跳过 —— 龙虎榜仅交易日发布, 周末调外部 API 必空,
-        # 回溯窗口语义(自然日)不变, 只减少无谓外部调用次数。
+        # P0(2026-09-18): 周末跳过 —— 龙虎榜仅交易日发布
         is_weekend = d.weekday() >= 5
         d -= timedelta(days=1)
         if is_weekend:
@@ -531,9 +696,9 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
         except Exception as e:
-            logger.warning(f"基本面明细-龙虎榜[{ds}]查询失败(跳过): {e}")
+            errors.append(f"{ds}:{e}")
+            logger.warning(f"龙虎榜范围抓取[{ds}]失败(跳过): {e}")
             continue
-        # ftshare 旁路补席位(只在该日期有上榜记录时调, 避免空查)
         ft_by_sym: dict = {}
         if _ft and rows:
             try:
@@ -541,14 +706,14 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
                 ft_by_sym = {r.symbol: r for r in ft_rows if r.symbol}
             except Exception:
                 pass
+        day_items: list[dict] = []
         for i in rows:
-            if getattr(i, "symbol", "") != symbol:
-                continue
-            ft = ft_by_sym.get(symbol)
-            out["dragon_tiger"].append(
+            sym = getattr(i, "symbol", "")
+            ft = ft_by_sym.get(sym)
+            day_items.append(
                 {
                     "trade_date": getattr(i, "trade_date", ds),
-                    "symbol": getattr(i, "symbol", symbol),
+                    "symbol": sym,
                     "name": getattr(i, "name", ""),
                     "reason": getattr(i, "reason", None),
                     "close": getattr(i, "close", None),
@@ -561,8 +726,70 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
                     "top_sellers": list(getattr(ft, "top_sellers", []) or []) if ft else [],
                 }
             )
+        if day_items:
+            by_date[ds] = day_items
+    return {
+        "market": market,
+        "days": scanned,
+        "by_date": by_date,
+        "errors": errors,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _get_lhb_range(market: str, days: int) -> dict | None:
+    """读多日龙虎榜缓存; 未命中则启动后台任务并返回 None。"""
+    key = _lhb_range_cache_key(market, days)
+    cached = biz_cache.get_json(key)
+    if cached is not None:
+        return cached
+    job_key = f"lhb_range:{market}:{max(1, min(int(days), 30))}"
+    _bg_start(
+        job_key,
+        lambda: _compute_lhb_range(market, days),
+        result_key=key,
+        cache_ttl=_LHB_RANGE_TTL,
+    )
+    return None
+
+
+def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
+    """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
+
+    - dragon_tiger: P1(2026-09-18) 改为读市场级多日缓存(后台预取);
+      冷启动时 dragon_tiger 返回空 + lhb_pending=True, 不再同步逐日阻塞。
+    - margin / shareholders / dividend / events: 按 symbol 批量接口
+    每类独立容错: 单类 vendor 失败只记日志、该类别返回空数组, 不拖垮整体。
+    """
+    from src.core.marketdata_client import get_market_data
+
+    md = get_market_data()
+    out: dict = {
+        "symbol": symbol,
+        "market": market,
+        "dragon_tiger": [],
+        "margin": [],
+        "shareholders": [],
+        "dividend": [],
+        "events": [],
+        "lhb_pending": False,
+    }
+
+    # 1) 龙虎榜(P1): 市场级多日范围后台化, 本请求只做过滤
+    lhb_range = _get_lhb_range(market, dt_days)
+    if lhb_range is None:
+        out["lhb_pending"] = True
+        out["lhb_note"] = "龙虎榜多日数据后台抓取中, 请稍后重试或轮询 /dragon-tiger/range/status"
+    else:
+        by_date: dict[str, list[dict]] = lhb_range.get("by_date") or {}
+        matched: list[dict] = []
+        for ds in sorted(by_date.keys(), reverse=True):
+            for row in by_date[ds]:
+                if row.get("symbol") == symbol:
+                    matched.append(row)
+        out["dragon_tiger"] = matched
     # 龙虎榜按交易日倒序(新→旧)
-    out["dragon_tiger"].sort(key=lambda r: r["trade_date"] or "", reverse=True)
+    out["dragon_tiger"].sort(key=lambda r: r.get("trade_date") or "", reverse=True)
 
     # 2) 融资融券(按 symbol, 取最新快照)
     try:
@@ -899,10 +1126,19 @@ def _fetch_breadth_change_pcts() -> list[float]:
 
 
 @router.get("/breadth-distribution")
-async def breadth_distribution():
-    """全市场 A 股涨跌幅 9 档分桶(60s biz_cache)。
+async def breadth_distribution(
+    wait: int = Query(0, ge=0, le=20, description="缓存未命中时最多等待秒数(0=立即返回)"),
+):
+    """全市场 A 股涨跌幅 9 档分桶(P1 异步化, 2026-09-18)。
 
-    返回格式:
+    原实现: 同步计算 ~32s(新浪 79 页分页), 直接把请求线程/事件循环拖死。
+    现在:
+    - 命中 biz_cache → 立即返回
+    - 未命中 → 启动后台任务计算, 立即返回全 0 + pending=True
+    - 前端轮询本接口或 GET /breadth-distribution/status 获取结果
+    - wait>0 时最多阻塞等待(兼容旧同步期望; 用 asyncio.sleep 不卡事件循环)
+
+    返回格式(与历史兼容):
       [{"bucket": "跌停", "count": n}, {"bucket": "<-5%", "count": n}, ...]
     数据缺失: 返回全 0 计数 + note(明示数据源不可用)。
     """
@@ -916,6 +1152,7 @@ async def breadth_distribution():
                 "total": 0,
                 "items": [{"bucket": b[2], "count": 0} for b in _BUCKET_BOUNDS],
                 "note": f"数据源不可用: {e}",
+                "pending": False,
             }
         # 分桶
         buckets: dict[str, int] = {b[2]: 0 for b in _BUCKET_BOUNDS}
@@ -932,7 +1169,46 @@ async def breadth_distribution():
             "total": len(pcts),
             "items": items,
             "note": "" if valid else "数据源返回为空(可能非交易日)",
+            "pending": False,
         }
 
-    cached = biz_cache.get_or_fetch(_BREADTH_CACHE_KEY, ttl=_BREADTH_CACHE_TTL, fetch=_compute)
-    return cached
+    cached = biz_cache.get_json(_BREADTH_CACHE_KEY)
+    if cached is not None:
+        return cached
+
+    job_key = "breadth:distribution"
+    _bg_start(
+        job_key, _compute,
+        result_key=_BREADTH_CACHE_KEY, cache_ttl=_BREADTH_CACHE_TTL,
+    )
+
+    if wait > 0:
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            done = biz_cache.get_json(_BREADTH_CACHE_KEY)
+            if done is not None:
+                return done
+            await asyncio.sleep(0.4)
+        cached = biz_cache.get_json(_BREADTH_CACHE_KEY)
+        if cached is not None:
+            return cached
+
+    return _empty_breadth()
+
+
+@router.get("/breadth-distribution/status")
+async def breadth_distribution_status():
+    """涨跌幅分布后台计算状态(供前端轮询)。
+
+    返回: status(idle/running/succeeded/failed) + ready(是否已有缓存) + elapsed。
+    """
+    job_key = "breadth:distribution"
+    cached = biz_cache.get_json(_BREADTH_CACHE_KEY)
+    st = _bg_job_status(job_key)
+    return {
+        "job": st,
+        "ready": cached is not None,
+        "cache_ttl_s": _BREADTH_CACHE_TTL,
+        # ready=True 时前端可直接再调 /breadth-distribution 拿数据
+        "hint": "ready=true 后 GET /api/market-data/breadth-distribution",
+    }

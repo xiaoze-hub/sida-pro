@@ -22,6 +22,7 @@ import { parseServerTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
+import { useI18n } from '@/hooks/useI18n'
 
 interface NotificationItem {
   id: number
@@ -61,55 +62,57 @@ interface ConfiguredChannel {
 
 type FilterKey = 'all' | 'unread' | 'failed'
 
-const CATEGORY_LABELS: Record<string, string> = {
-  agent_run: 'Agent 任务',
-  report: '报告',
-  strategy: '策略',
-  price_alert: '价格提醒',
-  system: '系统',
+const CATEGORY_KEYS: Record<string, string> = {
+  agent_run: 'notifications.categories.agent_run',
+  report: 'notifications.categories.report',
+  strategy: 'notifications.categories.strategy',
+  price_alert: 'notifications.categories.price_alert',
+  system: 'notifications.categories.system',
 }
 
 const LEVEL_META = {
-  success: { label: '成功', icon: CheckCircle2, className: 'text-emerald-700 dark:text-emerald-700 bg-emerald-500/10' },
-  error: { label: '失败', icon: AlertCircle, className: 'text-rose-600 dark:text-rose-600 bg-rose-500/10' },
-  warning: { label: '警告', icon: AlertTriangle, className: 'text-amber-700 dark:text-amber-500 bg-amber-500/10' },
-  info: { label: '信息', icon: Info, className: 'text-primary bg-primary/10' },
+  success: { labelKey: 'notifications.levels.success', icon: CheckCircle2, className: 'text-emerald-700 dark:text-emerald-700 bg-emerald-500/10' },
+  error: { labelKey: 'notifications.levels.error', icon: AlertCircle, className: 'text-rose-600 dark:text-rose-600 bg-rose-500/10' },
+  warning: { labelKey: 'notifications.levels.warning', icon: AlertTriangle, className: 'text-amber-700 dark:text-amber-500 bg-amber-500/10' },
+  info: { labelKey: 'notifications.levels.info', icon: Info, className: 'text-primary bg-primary/10' },
 }
 
-const PUSH_META: Record<string, { label: string; className: string }> = {
-  sent: { label: '已外部推送', className: 'text-emerald-700 dark:text-emerald-700 bg-emerald-500/10' },
-  failed: { label: '外部推送失败', className: 'text-rose-600 dark:text-rose-600 bg-rose-500/10' },
-  skipped: { label: '仅站内通知', className: 'text-muted-foreground bg-accent/60' },
-  pending: { label: '正在推送', className: 'text-amber-700 dark:text-amber-500 bg-amber-500/10' },
+const PUSH_META: Record<string, { labelKey: string; className: string }> = {
+  sent: { labelKey: 'notifications.push.sent', className: 'text-emerald-700 dark:text-emerald-700 bg-emerald-500/10' },
+  failed: { labelKey: 'notifications.push.failed', className: 'text-rose-600 dark:text-rose-600 bg-rose-500/10' },
+  skipped: { labelKey: 'notifications.push.skipped', className: 'text-muted-foreground bg-accent/60' },
+  pending: { labelKey: 'notifications.push.pending', className: 'text-amber-700 dark:text-amber-500 bg-amber-500/10' },
 }
 
-const CHANNEL_TYPE_LABELS: Record<string, string> = {
+const CHANNEL_TYPE_KEYS: Record<string, string> = {
   pushplus: 'PushPlus',
   telegram: 'Telegram',
   bark: 'Bark',
-  dingtalk: '钉钉',
-  wecom: '企业微信',
+  dingtalk: 'notifications.channels.dingtalk',
+  wecom: 'notifications.channels.wecom',
   hermes: 'Hermes',
-  wechat_ilink: '个人微信',
-  lark: '飞书',
-  serverchan: 'Server酱',
+  wechat_ilink: 'notifications.channels.wechat_ilink',
+  lark: 'notifications.channels.lark',
+  serverchan: 'notifications.channels.serverchan',
   discord: 'Discord',
   pushover: 'Pushover',
 }
 
-function channelName(channel: NotificationItem['push_channels'][number]): string {
-  return channel.name || CHANNEL_TYPE_LABELS[channel.type] || channel.type || '未命名渠道'
+function channelName(channel: NotificationItem['push_channels'][number], t: (k: string) => string): string {
+  const mapped = CHANNEL_TYPE_KEYS[channel.type]
+  return channel.name || (mapped ? (mapped.startsWith('notifications.') ? t(mapped) : mapped) : channel.type) || t('notifications.channels.unnamed')
 }
 
-function channelSummary(item: NotificationItem): string {
-  const names = (item.push_channels || []).map(channelName)
-  if (names.length > 0) return `${names.join('、')} · ${PUSH_META[item.push_status]?.label || item.push_status}`
-  if (item.push_status === 'sent' || item.push_status === 'failed') return '历史记录未记录渠道'
-  return PUSH_META[item.push_status]?.label || item.push_status
+function channelSummary(item: NotificationItem, t: (k: string) => string): string {
+  const names = (item.push_channels || []).map(c => channelName(c, t))
+  const pushLabel = PUSH_META[item.push_status]?.labelKey ? t(PUSH_META[item.push_status].labelKey) : item.push_status
+  if (names.length > 0) return `${names.join('、')} · ${pushLabel}`
+  if (item.push_status === 'sent' || item.push_status === 'failed') return t('notifications.push.noChannelRecord')
+  return pushLabel
 }
 
 function formatDateTime(iso: string): string {
-  if (!iso) return '时间未知'
+  if (!iso) return ''
   const value = parseServerTime(iso)
   if (Number.isNaN(value.getTime())) return iso
   return value.toLocaleString('zh-CN', {
@@ -147,11 +150,12 @@ function MarkdownBlock({ content }: { content: string }) {
 }
 
 function ListEmptyState({ filtered }: { filtered: boolean }) {
+  const { t } = useI18n()
   return (
     <EmptyState
       icon={<Inbox className="h-6 w-6" />}
-      title={filtered ? '没有符合条件的通知' : '暂无通知'}
-      description="后台任务、策略与提醒的结果会集中显示在这里。"
+      title={filtered ? t('notifications.emptyFiltered') : t('notifications.empty')}
+      description={t('notifications.subtitle')}
       className="m-4 min-h-[240px] border-0 bg-transparent"
     />
   )
@@ -159,6 +163,7 @@ function ListEmptyState({ filtered }: { filtered: boolean }) {
 
 export default function NotificationsPage() {
   const nav = useNavigate()
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const [items, setItems] = useState<NotificationItem[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -248,15 +253,15 @@ export default function NotificationsPage() {
   const channelOptions = useMemo(() => {
     const options = new Map<string, string>()
     for (const channel of configuredChannels) {
-      if (channel.type) options.set(channel.type, channel.name || CHANNEL_TYPE_LABELS[channel.type] || channel.type)
+      if (channel.type) options.set(channel.type, channel.name || (CHANNEL_TYPE_KEYS[channel.type]?.startsWith('notifications.') ? t(CHANNEL_TYPE_KEYS[channel.type]) : CHANNEL_TYPE_KEYS[channel.type]) || channel.type)
     }
     for (const item of items) {
       for (const channel of item.push_channels || []) {
-        if (channel.type) options.set(channel.type, channelName(channel))
+        if (channel.type) options.set(channel.type, channelName(channel, t))
       }
     }
     return Array.from(options.entries()).map(([value, label]) => ({ value, label }))
-  }, [configuredChannels, items])
+  }, [configuredChannels, items, t])
   const filtered = useMemo(() => items.filter(item => {
     if (filter === 'unread' && item.read) return false
     if (filter === 'failed' && item.push_status !== 'failed') return false
@@ -348,41 +353,41 @@ export default function NotificationsPage() {
         <div>
           <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight text-foreground md:text-[22px]">
             <BellRing className="h-5 w-5 text-primary" />
-            通知管理中心
+            {t('notifications.title')}
           </h1>
-          <p className="mt-1 text-[12px] text-muted-foreground">集中查看站内消息、外部推送结果与任务详细信息。</p>
+          <p className="mt-1 text-[12px] text-muted-foreground">{t('notifications.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
+          <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading} className="min-h-[44px] min-w-[44px]">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            刷新
+            {t('common.refresh')}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => void markAll()} disabled={unread === 0}>
+          <Button variant="secondary" size="sm" onClick={() => void markAll()} disabled={unread === 0} className="min-h-[44px]">
             <CheckCheck className="h-3.5 w-3.5" />
-            全部已读
+            {t('notifications.markAllRead')}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => void clearRead()} disabled={!items.some(item => item.read)}>
+          <Button variant="secondary" size="sm" onClick={() => void clearRead()} disabled={!items.some(item => item.read)} className="min-h-[44px]">
             <Trash2 className="h-3.5 w-3.5" />
-            清空已读
+            {t('common.delete')}
           </Button>
         </div>
       </div>
 
-      <ErrorBanner errors={error ? [{ source: '通知', message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
+      <ErrorBanner errors={error ? [{ source: t('nav.notifications'), message: error, retry: () => void load() }] : []} onDismiss={() => setError('')} />
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2">
         <div className="flex shrink-0 items-center gap-1 rounded-md bg-background/45 p-1">
           {([
-            ['all', '全部', items.length],
-            ['unread', '未读', unread],
-            ['failed', '推送失败', failed],
+            ['all', t('notifications.all'), items.length],
+            ['unread', t('notifications.unread'), unread],
+            ['failed', t('notifications.failed'), failed],
           ] as [FilterKey, string, number][]).map(([key, label, value]) => (
             <button
               key={key}
               type="button"
-              title={key === 'all' ? '全部通知' : label}
+              title={label}
               onClick={() => setFilter(key)}
-              className={`inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[11px] font-medium transition-colors ${
+              className={`inline-flex h-9 min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[11px] font-medium transition-colors ${
                 filter === key
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
@@ -402,9 +407,9 @@ export default function NotificationsPage() {
           <button
             type="button"
             onClick={() => setCategory('')}
-            className={`h-7 whitespace-nowrap rounded-md px-2.5 text-[11px] transition-colors ${!category ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+            className={`h-9 min-h-[44px] whitespace-nowrap rounded-md px-2.5 text-[11px] transition-colors ${!category ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
           >
-            全部类型
+            {t('common.all')}
           </button>
           {categories.map(value => (
             <button
@@ -413,7 +418,7 @@ export default function NotificationsPage() {
               onClick={() => setCategory(value)}
               className={`h-7 whitespace-nowrap rounded-md px-2.5 text-[11px] transition-colors ${category === value ? 'bg-primary/12 font-medium text-primary' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
             >
-              {CATEGORY_LABELS[value] || value}
+              {CATEGORY_KEYS[value] ? t(CATEGORY_KEYS[value]) : value}
             </button>
           ))}
         </div>
@@ -468,7 +473,7 @@ export default function NotificationsPage() {
                   type="button"
                   onClick={() => void selectItem(item)}
                   aria-pressed={isSelected}
-                  className={`group relative flex w-full gap-3 border-b border-l-[3px] px-4 py-3.5 text-left transition-[border-color,background-color,box-shadow] last:border-b-0 ${
+                  className={`group relative flex w-full gap-3 border-b border-l-[3px] px-4 py-3.5 min-h-[44px] text-left transition-[border-color,background-color,box-shadow] last:border-b-0 ${
                     isSelected
                       ? 'border-b-primary/20 border-l-primary bg-primary/12 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.18)]'
                       : 'border-b-border/30 border-l-transparent hover:border-l-primary/35 hover:bg-accent/35'
@@ -496,7 +501,7 @@ export default function NotificationsPage() {
                     <span className="mt-1 block line-clamp-2 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
                     <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground/70">
                       <span className="shrink-0">{formatDateTime(item.created_at)}</span>
-                      {item.push_status && <span className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item)}</span>}
+                      {item.push_status && <span className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item, t)}</span>}
                     </span>
                   </span>
                   <span className={`mt-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${isSelected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground/50 group-hover:bg-accent group-hover:text-foreground'}`}>
@@ -529,7 +534,7 @@ export default function NotificationsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-[17px] font-semibold text-foreground">{selected.title || '未命名通知'}</h2>
-                      <span className="rounded-full bg-accent/60 px-2 py-0.5 text-[10px] text-muted-foreground">{CATEGORY_LABELS[selected.category] || selected.category || '系统'}</span>
+                      <span className="rounded-full bg-accent/60 px-2 py-0.5 text-[10px] text-muted-foreground">{CATEGORY_KEYS[selected.category] ? t(CATEGORY_KEYS[selected.category]) : selected.category || t('notifications.categories.system')}</span>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] ${selected.read ? 'bg-accent/60 text-muted-foreground' : 'bg-rose-500/10 text-rose-600 dark:text-rose-600'}`}>{selected.read ? '已读' : '未读'}</span>
                     </div>
                     <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(selected.created_at)}</div>
@@ -565,7 +570,7 @@ export default function NotificationsPage() {
                           }`}
                         >
                           <Send className="h-3 w-3" />
-                          {channelName(channel)}
+                          {channelName(channel, t)}
                           <span>· {channel.status === 'sent' ? '已发送' : channel.status === 'failed' ? '失败' : '发送中'}</span>
                         </span>
                       ))}
@@ -574,11 +579,11 @@ export default function NotificationsPage() {
                     <div className="mt-1.5 space-y-1.5">
                       <div className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${selectedPush?.className || 'bg-accent text-muted-foreground'}`}>
                         <Send className="h-3 w-3" />
-                        {selected.push_status === 'sent' || selected.push_status === 'failed' ? '历史记录未记录渠道' : selectedPush?.label || '未记录'}
+                        {selected.push_status === 'sent' || selected.push_status === 'failed' ? t('notifications.push.noChannelRecord') : (selectedPush?.labelKey ? t(selectedPush.labelKey) : t('common.notSet'))}
                       </div>
                       {(selected.push_status === 'sent' || selected.push_status === 'failed') && configuredChannels.length > 0 && (
                         <div className="text-[9px] leading-4 text-muted-foreground" title="当前配置不代表该条历史通知当时实际使用的渠道">
-                          当前启用：{configuredChannels.map(channel => channel.name || CHANNEL_TYPE_LABELS[channel.type] || channel.type).join('、')}（仅供参考）
+                          {configuredChannels.map(channel => channel.name || (CHANNEL_TYPE_KEYS[channel.type]?.startsWith('notifications.') ? t(CHANNEL_TYPE_KEYS[channel.type]) : CHANNEL_TYPE_KEYS[channel.type]) || channel.type).join('、')}
                         </div>
                       )}
                     </div>
@@ -590,7 +595,7 @@ export default function NotificationsPage() {
                 </div>
                 <div className="rounded-md bg-accent/30 p-3">
                   <div className="text-[10px] text-muted-foreground">级别</div>
-                  <div className="mt-1 text-[12px] font-medium text-foreground">{selectedLevel.label}</div>
+                  <div className="mt-1 text-[12px] font-medium text-foreground">{t(selectedLevel.labelKey)}</div>
                 </div>
               </div>
 

@@ -23,6 +23,7 @@ import {
   EmptyState,
   type SideMenuItem,
 } from '@/components/dev/DevPageLayout'
+import { useI18n } from '@/hooks/useI18n'
 
 /**
  * Admin 管理后台(2026-09-16)。
@@ -169,6 +170,7 @@ function Td({ children, className = '' }: { children: React.ReactNode; className
 
 export default function AdminPage() {
   const { toast } = useToast()
+  const { t } = useI18n()
   const [activeSection, setActiveSection] = useState('users')
   const [keyActionId, setKeyActionId] = useState<number | null>(null)
   const [userActionId, setUserActionId] = useState<string | null>(null)
@@ -304,7 +306,7 @@ export default function AdminPage() {
 
   return (
     <DevPageLayout
-      title="管理后台"
+      title={t('admin.title')}
       subtitle="用户、API Key、用量与 Pro 申请统一管理（仅 owner）"
       badge={pendingCount > 0 ? `${pendingCount} 待审` : 'owner'}
       menu={MENU}

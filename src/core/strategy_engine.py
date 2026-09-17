@@ -1295,6 +1295,295 @@ def _format_signal(
     }
 
 
+def _load_signal_candidates(
+    db,
+    *,
+    snapshot: str,
+    limit_candidates: int,
+) -> tuple[str, list, datetime | None]:
+    """解析快照日并加载 active 候选(P3 拆分)。
+
+    返回 (snapshot, candidates, as_of_dt)。snapshot 为空串表示无数据。
+    """
+    if not snapshot:
+        latest = (
+            db.query(EntryCandidate.snapshot_date)
+            .order_by(EntryCandidate.snapshot_date.desc())
+            .first()
+        )
+        snapshot = latest[0] if latest else ""
+    if not snapshot:
+        return "", [], None
+
+    candidates = (
+        db.query(EntryCandidate)
+        .filter(
+            EntryCandidate.snapshot_date == snapshot,
+            # 2026-08-23 P1: 只用当前代候选生成信号, retired(历史代)不再触发
+            EntryCandidate.status == "active",
+        )
+        .order_by(EntryCandidate.score.desc(), EntryCandidate.updated_at.desc())
+        .limit(max(20, int(limit_candidates)))
+        .all()
+    )
+    if not candidates:
+        return snapshot, [], None
+
+    # B0.5(2026-09-09): 历史快照重算必须用「当时」的信息 —— 新闻窗口与权重都按
+    # 快照日 as-of, 否则等于拿今天的新闻/当前权重给历史日打分(前视污染)。
+    snap_day = _parse_day(snapshot)
+    as_of_dt = None
+    if snap_day is not None:
+        as_of_dt = datetime.combine(
+            snap_day, time(23, 59, 59), tzinfo=utc_now().tzinfo
+        )
+        if as_of_dt > utc_now():
+            as_of_dt = utc_now()
+    return snapshot, candidates, as_of_dt
+
+
+def _compute_signal_scores(
+    db,
+    *,
+    snapshot: str,
+    candidates: list,
+    as_of_dt: datetime | None,
+) -> tuple[dict[tuple[int, str], StrategySignalRun], set[tuple[int, str]], dict]:
+    """对候选 × 策略计算信号得分并 upsert 行(P3 拆分)。
+
+    返回 (existing_map, touched_keys, constraint_stats)。
+    """
+    profile_map = get_strategy_profile_map()
+    regime_rows = _upsert_market_regime_snapshots(
+        db=db,
+        snapshot=snapshot,
+        candidates=candidates,
+    )
+    cross_features = _build_cross_section_features(candidates)
+    news_metrics = _load_news_metrics(
+        db=db,
+        candidates=candidates,
+        as_of=as_of_dt,
+        lookback_hours=72,
+        max_rows=5000,
+    )
+    existing_rows = (
+        db.query(StrategySignalRun)
+        .filter(StrategySignalRun.snapshot_date == snapshot)
+        .all()
+    )
+    existing: dict[tuple[int, str], StrategySignalRun] = {}
+    for row in existing_rows:
+        cand_id = row.source_candidate_id
+        code = row.strategy_code
+        if cand_id is None:
+            continue
+        existing[(int(cand_id), str(code or ""))] = row
+
+    weight_cache: dict[str, dict[str, float]] = {}
+    factor_weight_cache: dict[str, dict[str, float]] = {}
+    touched_keys: set[tuple[int, str]] = set()
+    touched_rows: list[StrategySignalRun] = []
+
+    for c in candidates:
+        market = (c.stock_market or "CN").strip().upper() or "CN"
+        weights = weight_cache.get(market)
+        if weights is None:
+            weights = get_effective_weight_map(
+                market=market, regime="default", as_of=as_of_dt
+            )
+            weight_cache[market] = weights
+        factor_weights = factor_weight_cache.get(market)
+        if factor_weights is None:
+            factor_weights = get_factor_weights(market, as_of=as_of_dt, db=db)
+            factor_weight_cache[market] = factor_weights
+        codes = _strategy_codes_for_candidate(c)
+        for code in codes:
+            profile = profile_map.get(code) or profile_map.get("watchlist_agent") or {}
+            weight = float(weights.get(code, profile.get("default_weight", 1.0)))
+            risk_level = (profile.get("risk_level") or "medium").strip() or "medium"
+            strategy_name = profile.get("name") or code
+            strategy_version = profile.get("version") or "v1"
+            horizon_days = 3
+            params = profile.get("params") or {}
+            if isinstance(params, dict):
+                horizon_days = max(1, int(params.get("horizon_days", 3) or 3))
+
+            regime_info = regime_rows.get(market) or {
+                "regime": "neutral",
+                "confidence": 0.0,
+            }
+            symbol_key = (c.stock_symbol or "").strip().upper()
+            normalized_news_metric = _normalize_news_metric(news_metrics.get(symbol_key))
+            score_breakdown = _compute_factor_breakdown(
+                row=c,
+                strategy_code=code,
+                weight=weight,
+                risk_level=risk_level,
+                regime_info=regime_info,
+                cross_feature=cross_features.get(int(c.id)) if c.id is not None else None,
+                news_metric=normalized_news_metric,
+                factor_weights=factor_weights,
+            )
+            rank_score = float(score_breakdown.get("weighted_score") or 0.0)
+            confidence = c.confidence if c.confidence is not None else round(rank_score / 100.0, 3)
+            cmeta = c.meta if isinstance(c.meta, dict) else {}
+            source_meta = cmeta.get("source_meta") if isinstance(cmeta.get("source_meta"), dict) else {}
+            context_quality_score = _safe_float(source_meta.get("context_quality_score"))
+            compact_source_meta = _compact_source_meta(source_meta)
+            action = (c.action or "watch").strip().lower() or "watch"
+            action_label = (c.action_label or "观望").strip() or "观望"
+            if bool(c.is_holding_snapshot):
+                if action == "buy":
+                    action = "add"
+                    action_label = "准备加仓"
+            else:
+                if action == "add":
+                    action = "buy"
+                    action_label = "建仓"
+                elif action == "hold":
+                    action_label = "观望"
+            payload = {
+                "entry_candidate_id": c.id,
+                "entry_candidate_snapshot": c.snapshot_date,
+                "strategy_tags": c.strategy_tags or [],
+                "strategy_weight": weight,
+                "source_meta": compact_source_meta,
+                "score_breakdown": score_breakdown,
+                "market_regime": {
+                    "regime": regime_info.get("regime") or "neutral",
+                    "regime_label": regime_info.get("regime_label") or _regime_label(regime_info.get("regime") or "neutral"),
+                    "confidence": regime_info.get("confidence") or 0.0,
+                    "regime_score": regime_info.get("regime_score") or 0.0,
+                },
+                "cross_feature": cross_features.get(int(c.id)) if c.id is not None else {},
+                "news_metric": normalized_news_metric,
+            }
+            key = (int(c.id), str(code))
+            row = existing.get(key)
+            if not row:
+                row = StrategySignalRun(
+                    snapshot_date=snapshot,
+                    stock_symbol=c.stock_symbol,
+                    stock_market=market,
+                    stock_name=c.stock_name or c.stock_symbol,
+                    strategy_code=code,
+                    source_candidate_id=c.id,
+                )
+                db.add(row)
+                existing[key] = row
+
+            row.strategy_name = strategy_name
+            row.strategy_version = strategy_version
+            row.risk_level = risk_level
+            row.source_pool = c.candidate_source or "watchlist"
+            row.score = float(c.score or 0)
+            row.rank_score = float(rank_score)
+            row.confidence = float(confidence or 0)
+            row.status = c.status or "inactive"
+            row.action = action
+            row.action_label = action_label
+            row.signal = c.signal or ""
+            row.reason = c.reason or ""
+            row.evidence = to_jsonable(c.evidence or [])
+            row.holding_days = int(horizon_days)
+            row.entry_low = c.entry_low
+            row.entry_high = c.entry_high
+            row.stop_loss = c.stop_loss
+            row.target_price = c.target_price
+            row.invalidation = c.invalidation or ""
+            row.plan_quality = int(c.plan_quality or 0)
+            row.source_agent = c.source_agent or ""
+            row.source_suggestion_id = c.source_suggestion_id
+            row.trace_id = c.source_trace_id or ""
+            row.is_holding_snapshot = bool(c.is_holding_snapshot)
+            row.context_quality_score = context_quality_score
+            row.payload = to_jsonable(payload)
+            row.updated_at = utc_now()
+            touched_keys.add(key)
+            touched_rows.append(row)
+
+    constraint_stats = _apply_portfolio_constraints(rows=touched_rows)
+    if constraint_stats.get("demoted", 0) > 0:
+        logger.info(
+            "[策略层] 组合约束生效: snapshot=%s demoted=%s details=%s",
+            snapshot,
+            constraint_stats.get("demoted", 0),
+            constraint_stats.get("by_reason", {}),
+        )
+    return existing, touched_keys, constraint_stats
+
+
+def _persist_signal_snapshot(
+    db,
+    *,
+    snapshot: str,
+    existing: dict,
+    touched_keys: set[tuple[int, str]],
+    constraint_stats: dict,
+) -> dict:
+    """提交信号快照 + 退役 stale + 同步因子/风险快照(P3 拆分)。"""
+    # 2026-08-23 P1 修复: 当轮未命中的信号行不再物理删除 —
+    # StrategyOutcome/StrategyFactorSnapshot 外键 CASCADE 会连坐删,
+    # 摧毁后验样本; 改标 inactive 保留历史(GET 默认只返回 active)
+    stale_ids = [
+        int(row.id)
+        for key, row in existing.items()
+        if row.id is not None and key not in touched_keys and (row.status or "") != "inactive"
+    ]
+    if stale_ids:
+        db.query(StrategySignalRun).filter(
+            StrategySignalRun.id.in_(stale_ids)
+        ).update({"status": "inactive", "updated_at": utc_now()}, synchronize_session=False)
+        logger.info(
+            "[策略层] %s 本轮退役 %d 条信号(标 inactive 保留历史)", snapshot, len(stale_ids)
+        )
+
+    db.commit()
+
+    rows = (
+        db.query(StrategySignalRun)
+        .filter(StrategySignalRun.snapshot_date == snapshot)
+        .order_by(StrategySignalRun.rank_score.desc(), StrategySignalRun.updated_at.desc())
+        .all()
+    )
+    _sync_factor_and_risk_snapshots(
+        db=db,
+        snapshot=snapshot,
+        signals=rows,
+    )
+    db.commit()
+    factor_map: dict[int, StrategyFactorSnapshot] = {}
+    run_ids = [int(x.id) for x in rows if x.id is not None]
+    if run_ids:
+        factors = (
+            db.query(StrategyFactorSnapshot)
+            .filter(
+                StrategyFactorSnapshot.snapshot_date == snapshot,
+                StrategyFactorSnapshot.signal_run_id.in_(run_ids),
+            )
+            .all()
+        )
+        factor_map = {int(f.signal_run_id): f for f in factors if f.signal_run_id is not None}
+    # 2026-08-23 P1: 全量行(含 inactive)交给快照同步以保留历史因子快照,
+    # 返回结果只取当前代(active)
+    active_rows = [x for x in rows if (x.status or "inactive") == "active"]
+    items = [
+        _format_signal(
+            x,
+            include_payload=False,
+            factor_snapshot=factor_map.get(int(x.id)) if (x.id is not None) else None,
+        )
+        for x in active_rows[:3000]
+    ]
+    return {
+        "snapshot_date": snapshot,
+        "count": len(active_rows),
+        "items": items,
+        "constraints": constraint_stats,
+    }
+
+
 def refresh_strategy_signals(
     *,
     snapshot_date: str = "",
@@ -1305,6 +1594,7 @@ def refresh_strategy_signals(
     limit_candidates: int = 2000,
     skip_market_scan: bool = False,
 ) -> dict:
+    """刷新策略信号(P3 拆分): 加载候选 → 计算得分 → 写入快照。行为不变。"""
     ensure_strategy_catalog()
     if rebuild_candidates:
         refresh_entry_candidates(
@@ -1317,260 +1607,27 @@ def refresh_strategy_signals(
 
     db = SessionLocal()
     try:
-        snapshot = (snapshot_date or "").strip()
-        if not snapshot:
-            latest = (
-                db.query(EntryCandidate.snapshot_date)
-                .order_by(EntryCandidate.snapshot_date.desc())
-                .first()
-            )
-            snapshot = latest[0] if latest else ""
-        if not snapshot:
-            return {"snapshot_date": "", "count": 0, "items": []}
-
-        candidates = (
-            db.query(EntryCandidate)
-            .filter(
-                EntryCandidate.snapshot_date == snapshot,
-                # 2026-08-23 P1: 只用当前代候选生成信号, retired(历史代)不再触发
-                EntryCandidate.status == "active",
-            )
-            .order_by(EntryCandidate.score.desc(), EntryCandidate.updated_at.desc())
-            .limit(max(20, int(limit_candidates)))
-            .all()
+        snapshot, candidates, as_of_dt = _load_signal_candidates(
+            db,
+            snapshot=(snapshot_date or "").strip(),
+            limit_candidates=limit_candidates,
         )
-        if not candidates:
-            return {"snapshot_date": snapshot, "count": 0, "items": []}
+        if not snapshot or not candidates:
+            return {"snapshot_date": snapshot or "", "count": 0, "items": []}
 
-        # B0.5(2026-09-09): 历史快照重算必须用「当时」的信息 —— 新闻窗口与权重都按
-        # 快照日 as-of, 否则等于拿今天的新闻/当前权重给历史日打分(前视污染)。
-        snap_day = _parse_day(snapshot)
-        as_of_dt = None
-        if snap_day is not None:
-            as_of_dt = datetime.combine(
-                snap_day, time(23, 59, 59), tzinfo=utc_now().tzinfo
-            )
-            if as_of_dt > utc_now():
-                as_of_dt = utc_now()
-
-        profile_map = get_strategy_profile_map()
-        regime_rows = _upsert_market_regime_snapshots(
-            db=db,
+        existing, touched_keys, constraint_stats = _compute_signal_scores(
+            db,
             snapshot=snapshot,
             candidates=candidates,
+            as_of_dt=as_of_dt,
         )
-        cross_features = _build_cross_section_features(candidates)
-        news_metrics = _load_news_metrics(
-            db=db,
-            candidates=candidates,
-            as_of=as_of_dt,
-            lookback_hours=72,
-            max_rows=5000,
-        )
-        existing_rows = (
-            db.query(StrategySignalRun)
-            .filter(StrategySignalRun.snapshot_date == snapshot)
-            .all()
-        )
-        existing: dict[tuple[int, str], StrategySignalRun] = {}
-        for row in existing_rows:
-            cand_id = row.source_candidate_id
-            code = row.strategy_code
-            if cand_id is None:
-                continue
-            existing[(int(cand_id), str(code or ""))] = row
-
-        weight_cache: dict[str, dict[str, float]] = {}
-        factor_weight_cache: dict[str, dict[str, float]] = {}
-        touched_keys: set[tuple[int, str]] = set()
-        touched_rows: list[StrategySignalRun] = []
-
-        for c in candidates:
-            market = (c.stock_market or "CN").strip().upper() or "CN"
-            weights = weight_cache.get(market)
-            if weights is None:
-                weights = get_effective_weight_map(
-                    market=market, regime="default", as_of=as_of_dt
-                )
-                weight_cache[market] = weights
-            factor_weights = factor_weight_cache.get(market)
-            if factor_weights is None:
-                factor_weights = get_factor_weights(market, as_of=as_of_dt, db=db)
-                factor_weight_cache[market] = factor_weights
-            codes = _strategy_codes_for_candidate(c)
-            for code in codes:
-                profile = profile_map.get(code) or profile_map.get("watchlist_agent") or {}
-                weight = float(weights.get(code, profile.get("default_weight", 1.0)))
-                risk_level = (profile.get("risk_level") or "medium").strip() or "medium"
-                strategy_name = profile.get("name") or code
-                strategy_version = profile.get("version") or "v1"
-                horizon_days = 3
-                params = profile.get("params") or {}
-                if isinstance(params, dict):
-                    horizon_days = max(1, int(params.get("horizon_days", 3) or 3))
-
-                regime_info = regime_rows.get(market) or {
-                    "regime": "neutral",
-                    "confidence": 0.0,
-                }
-                symbol_key = (c.stock_symbol or "").strip().upper()
-                normalized_news_metric = _normalize_news_metric(news_metrics.get(symbol_key))
-                score_breakdown = _compute_factor_breakdown(
-                    row=c,
-                    strategy_code=code,
-                    weight=weight,
-                    risk_level=risk_level,
-                    regime_info=regime_info,
-                    cross_feature=cross_features.get(int(c.id)) if c.id is not None else None,
-                    news_metric=normalized_news_metric,
-                    factor_weights=factor_weights,
-                )
-                rank_score = float(score_breakdown.get("weighted_score") or 0.0)
-                confidence = c.confidence if c.confidence is not None else round(rank_score / 100.0, 3)
-                cmeta = c.meta if isinstance(c.meta, dict) else {}
-                source_meta = cmeta.get("source_meta") if isinstance(cmeta.get("source_meta"), dict) else {}
-                context_quality_score = _safe_float(source_meta.get("context_quality_score"))
-                compact_source_meta = _compact_source_meta(source_meta)
-                action = (c.action or "watch").strip().lower() or "watch"
-                action_label = (c.action_label or "观望").strip() or "观望"
-                if bool(c.is_holding_snapshot):
-                    if action == "buy":
-                        action = "add"
-                        action_label = "准备加仓"
-                else:
-                    if action == "add":
-                        action = "buy"
-                        action_label = "建仓"
-                    elif action == "hold":
-                        action_label = "观望"
-                payload = {
-                    "entry_candidate_id": c.id,
-                    "entry_candidate_snapshot": c.snapshot_date,
-                    "strategy_tags": c.strategy_tags or [],
-                    "strategy_weight": weight,
-                    "source_meta": compact_source_meta,
-                    "score_breakdown": score_breakdown,
-                    "market_regime": {
-                        "regime": regime_info.get("regime") or "neutral",
-                        "regime_label": regime_info.get("regime_label") or _regime_label(regime_info.get("regime") or "neutral"),
-                        "confidence": regime_info.get("confidence") or 0.0,
-                        "regime_score": regime_info.get("regime_score") or 0.0,
-                    },
-                    "cross_feature": cross_features.get(int(c.id)) if c.id is not None else {},
-                    "news_metric": normalized_news_metric,
-                }
-                key = (int(c.id), str(code))
-                row = existing.get(key)
-                if not row:
-                    row = StrategySignalRun(
-                        snapshot_date=snapshot,
-                        stock_symbol=c.stock_symbol,
-                        stock_market=market,
-                        stock_name=c.stock_name or c.stock_symbol,
-                        strategy_code=code,
-                        source_candidate_id=c.id,
-                    )
-                    db.add(row)
-                    existing[key] = row
-
-                row.strategy_name = strategy_name
-                row.strategy_version = strategy_version
-                row.risk_level = risk_level
-                row.source_pool = c.candidate_source or "watchlist"
-                row.score = float(c.score or 0)
-                row.rank_score = float(rank_score)
-                row.confidence = float(confidence or 0)
-                row.status = c.status or "inactive"
-                row.action = action
-                row.action_label = action_label
-                row.signal = c.signal or ""
-                row.reason = c.reason or ""
-                row.evidence = to_jsonable(c.evidence or [])
-                row.holding_days = int(horizon_days)
-                row.entry_low = c.entry_low
-                row.entry_high = c.entry_high
-                row.stop_loss = c.stop_loss
-                row.target_price = c.target_price
-                row.invalidation = c.invalidation or ""
-                row.plan_quality = int(c.plan_quality or 0)
-                row.source_agent = c.source_agent or ""
-                row.source_suggestion_id = c.source_suggestion_id
-                row.trace_id = c.source_trace_id or ""
-                row.is_holding_snapshot = bool(c.is_holding_snapshot)
-                row.context_quality_score = context_quality_score
-                row.payload = to_jsonable(payload)
-                row.updated_at = utc_now()
-                touched_keys.add(key)
-                touched_rows.append(row)
-
-        constraint_stats = _apply_portfolio_constraints(rows=touched_rows)
-        if constraint_stats.get("demoted", 0) > 0:
-            logger.info(
-                "[策略层] 组合约束生效: snapshot=%s demoted=%s details=%s",
-                snapshot,
-                constraint_stats.get("demoted", 0),
-                constraint_stats.get("by_reason", {}),
-            )
-
-        # 2026-08-23 P1 修复: 当轮未命中的信号行不再物理删除 —
-        # StrategyOutcome/StrategyFactorSnapshot 外键 CASCADE 会连坐删,
-        # 摧毁后验样本; 改标 inactive 保留历史(GET 默认只返回 active)
-        stale_ids = [
-            int(row.id)
-            for key, row in existing.items()
-            if row.id is not None and key not in touched_keys and (row.status or "") != "inactive"
-        ]
-        if stale_ids:
-            db.query(StrategySignalRun).filter(
-                StrategySignalRun.id.in_(stale_ids)
-            ).update({"status": "inactive", "updated_at": utc_now()}, synchronize_session=False)
-            logger.info(
-                "[策略层] %s 本轮退役 %d 条信号(标 inactive 保留历史)", snapshot, len(stale_ids)
-            )
-
-        db.commit()
-
-        rows = (
-            db.query(StrategySignalRun)
-            .filter(StrategySignalRun.snapshot_date == snapshot)
-            .order_by(StrategySignalRun.rank_score.desc(), StrategySignalRun.updated_at.desc())
-            .all()
-        )
-        _sync_factor_and_risk_snapshots(
-            db=db,
+        return _persist_signal_snapshot(
+            db,
             snapshot=snapshot,
-            signals=rows,
+            existing=existing,
+            touched_keys=touched_keys,
+            constraint_stats=constraint_stats,
         )
-        db.commit()
-        factor_map: dict[int, StrategyFactorSnapshot] = {}
-        run_ids = [int(x.id) for x in rows if x.id is not None]
-        if run_ids:
-            factors = (
-                db.query(StrategyFactorSnapshot)
-                .filter(
-                    StrategyFactorSnapshot.snapshot_date == snapshot,
-                    StrategyFactorSnapshot.signal_run_id.in_(run_ids),
-                )
-                .all()
-            )
-            factor_map = {int(f.signal_run_id): f for f in factors if f.signal_run_id is not None}
-        # 2026-08-23 P1: 全量行(含 inactive)交给快照同步以保留历史因子快照,
-        # 返回结果只取当前代(active)
-        active_rows = [x for x in rows if (x.status or "inactive") == "active"]
-        items = [
-            _format_signal(
-                x,
-                include_payload=False,
-                factor_snapshot=factor_map.get(int(x.id)) if (x.id is not None) else None,
-            )
-            for x in active_rows[:3000]
-        ]
-        return {
-            "snapshot_date": snapshot,
-            "count": len(active_rows),
-            "items": items,
-            "constraints": constraint_stats,
-        }
     finally:
         db.close()
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -220,6 +220,7 @@ async def send_code(data: SendCodeRequest, request: Request):
 async def login_by_email(
     data: LoginByEmailRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """邮箱验证码登录。验证通过后签发 JWT(格式同 /login)。用户不存在 404。"""
@@ -228,6 +229,7 @@ async def login_by_email(
         create_token,
         get_user_by_email,
         normalize_email,
+        set_auth_cookie,
         user_to_dict,
     )
 
@@ -280,6 +282,9 @@ async def login_by_email(
             api_key_prefix = key_row.key_prefix
     except Exception as e:  # noqa: BLE001
         logger.warning("[email_verify] 查询用户 API key 前缀失败(不阻断登录): %s", e)
+
+    # P0(2026-09-18): 与密码登录一致, 同步下发 httpOnly JWT Cookie
+    set_auth_cookie(response, request, token)
 
     return {
         "token": token,

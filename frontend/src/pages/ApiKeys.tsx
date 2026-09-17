@@ -21,6 +21,7 @@ import { useApiQuery } from '@/hooks/useApiQuery'
 import { DevPageLayout, Section, InfoCard, CodeBlock, EmptyState, type SideMenuItem } from '@/components/dev/DevPageLayout'
 import { ErrorState } from '@/components/ErrorState'
 import { SkeletonTable } from '@/components/Skeleton'
+import { useI18n } from '@/hooks/useI18n'
 
 /**
  * API Key 控制台 v2(2026-09-16)。
@@ -72,6 +73,7 @@ const MENU: SideMenuItem[] = [
 
 export default function ApiKeysPage() {
   const { toast } = useToast()
+  const { t } = useI18n()
   const [activeSection, setActiveSection] = useState('keys')
   const [plaintext, setPlaintext] = useState<string | null>(null)
   const [expandedUsage, setExpandedUsage] = useState<number | null>(null)
@@ -156,8 +158,8 @@ export default function ApiKeysPage() {
 
   return (
     <DevPageLayout
-      title="API Key 控制台"
-      subtitle="管理你的 API Key、查看用量、配置智能体接入"
+      title={t('apiKeys.title')}
+      subtitle={t('apiKeys.subtitle')}
       badge={`${keyList.length} 个 Key`}
       menu={MENU}
       activeId={activeSection}

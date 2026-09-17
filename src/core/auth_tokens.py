@@ -4,6 +4,9 @@
 是纯认证原语, core 侧(startup_check / wechat_bot_worker)也要用, 不应依赖 Web 层。
 
 密钥解析顺序: env `JWT_SECRET` → `AppSettings.jwt_secret`(缺则生成并落库)。
+
+P0(2026-09-18)密钥轮换: decode 支持多 secret 验证(当前 + grace period 内的旧密钥)。
+新 token 一律用当前 secret 签发; 旧 token 在旧 secret 过期前仍可验证。
 """
 
 from __future__ import annotations
@@ -29,8 +32,14 @@ AUTH_TOKEN_VERSION_KEY = "auth_token_version"
 _jwt_secret: str | None = None
 
 
+def invalidate_jwt_secret_cache() -> None:
+    """清空进程内 secret 缓存(密钥轮换后必须调用, 否则继续用旧值签发/验签)。"""
+    global _jwt_secret
+    _jwt_secret = None
+
+
 def get_jwt_secret() -> str:
-    """获取 JWT Secret(env 优先, 否则持久化到数据库)。"""
+    """获取当前 JWT Secret(env 优先, 否则持久化到数据库)。"""
     global _jwt_secret
     if _jwt_secret:
         return _jwt_secret
@@ -70,8 +79,25 @@ def get_jwt_secret() -> str:
         db.close()
 
 
+def get_verification_secrets() -> list[str]:
+    """返回所有可用于验签的 secret(当前优先, 之后是 grace period 内的旧密钥)。
+
+    失败降级为仅当前 secret, 不阻断鉴权。
+    """
+    secrets_list: list[str] = [get_jwt_secret()]
+    try:
+        from src.core.secret_rotation import get_grace_secrets
+
+        for old in get_grace_secrets():
+            if old and old not in secrets_list:
+                secrets_list.append(old)
+    except Exception as e:  # noqa: BLE001 - 轮换模块缺失/DB 异常不阻断验签
+        logger.debug("[auth_tokens] 读取轮换旧密钥失败(仅用当前 secret): %s", e)
+    return secrets_list
+
+
 def create_token(user: User, expires_hours: int = JWT_EXPIRE_HOURS) -> tuple[str, datetime]:
-    """创建 JWT token, 含 user_id + role + ver(踢人用)。"""
+    """创建 JWT token, 含 user_id + role + ver(踢人用)。始终用当前 secret 签发。"""
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=expires_hours)
     payload = {
@@ -88,13 +114,21 @@ def create_token(user: User, expires_hours: int = JWT_EXPIRE_HOURS) -> tuple[str
 
 
 def decode_token(token: str) -> dict | None:
-    """解码 JWT, 失败返回 None。"""
-    try:
-        return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
+    """解码 JWT, 失败返回 None。
+
+    P0(2026-09-18): 依次尝试当前 secret 与 grace period 内的旧 secret,
+    保证轮换窗口内已签发 token 不掉线。过期 token 直接返回 None(与 secret 无关)。
+    """
+    if not token:
         return None
-    except jwt.InvalidTokenError:
-        return None
+    for secret in get_verification_secrets():
+        try:
+            return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            continue
+    return None
 
 
 def principal_from_payload(payload: dict | None) -> dict:

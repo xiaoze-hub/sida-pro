@@ -4445,6 +4445,29 @@ def _m172_users_email(conn: Connection) -> None:
     )
 
 
+def _m173_users_soft_delete(conn: Connection) -> None:
+    """users 表加 is_deleted / deleted_at(P3 GDPR 用户数据删除, 2026-09-18)。
+
+    - is_deleted: 软删除标记, 请求删除后置 True, 登录被拒
+    - deleted_at: 请求删除的时间戳; 30 天后物理清除任务据此筛选
+    - 幂等可重跑
+    """
+    if not _has_table(conn, "users"):
+        return
+    _add_column_if_missing(
+        conn,
+        "users",
+        "is_deleted",
+        "ALTER TABLE users ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    _add_column_if_missing(
+        conn,
+        "users",
+        "deleted_at",
+        "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4555,6 +4578,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(171, "tier_configs", _m171_tier_configs),
     # 邮箱注册(2026-09-16): users.email + 唯一索引
     Migration(172, "users_email", _m172_users_email),
+    # GDPR 用户数据删除(P3, 2026-09-18): 软删除标记 + 请求时间
+    Migration(173, "users_soft_delete", _m173_users_soft_delete),
 )
 
 

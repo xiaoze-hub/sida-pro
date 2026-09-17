@@ -3,6 +3,7 @@ import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate }
 import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
+import { useI18n } from '@/hooks/useI18n'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
 // 2026-08-12 性能优化: 路由懒加载 — 17 个页面原本静态 import 打进单 bundle 1.2MB,
 // 点任意路由都要下载/解析整个应用。改为 React.lazy 按需加载, 首屏只下载登录页+当前页。
@@ -70,48 +71,48 @@ import { reportFrontendError } from '@/lib/error-report'
 import Disclaimer from '@/components/Disclaimer'
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: '首页', perm: 'view_dashboard' },
+  { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
   // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
   // 「行情」默认落上证指数(000001, type=index); 「盘口」项撤除(内容进工作台「盘口资金」标签)。
-  { to: '/stocks/000001?type=index', icon: LineChart, label: '行情', perm: 'view_quotes' },
+  { to: '/stocks/000001?type=index', icon: LineChart, labelKey: 'nav.stocks', perm: 'view_quotes' },
   // P1-1 (2026-09-10): 板块热力图(行业/概念 treemap, 点击下钻成分股)
-  { to: '/heatmap', icon: LayoutGrid, label: '板块热力', perm: 'view_heatmap' },
+  { to: '/heatmap', icon: LayoutGrid, labelKey: 'nav.heatmap', perm: 'view_heatmap' },
   // 题材情绪(2026-09-12): 收盘确认口径的情绪周期表(题材×日矩阵 + 核心股)
-  { to: '/theme-mood', icon: Activity, label: '题材情绪', perm: 'view_quotes' },
-  { to: '/opportunities', icon: Sparkles, label: '机会', perm: 'view_opportunities' },
+  { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
+  { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
-  { to: '/dark-fund-top', icon: TrendingUp, label: '暗盘 TOP', perm: 'view_dark' },
-  { to: '/reports', icon: FileText, label: '报告', perm: 'view_reports' },
-  { to: '/history', icon: Clock, label: '历史' },
-  { to: '/portfolio', icon: List, label: '持仓', perm: 'edit_portfolio' },
-  { to: '/shadow', icon: Shield, label: '影子账户', perm: 'manage_shadow' },
-  { to: '/paper-trading', icon: Activity, label: '模拟盘', perm: 'manage_paper_trading' },
-  { to: '/profile', icon: User, label: '个人中心' },
+  { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
+  { to: '/reports', icon: FileText, labelKey: 'nav.reports', perm: 'view_reports' },
+  { to: '/history', icon: Clock, labelKey: 'nav.history' },
+  { to: '/portfolio', icon: List, labelKey: 'nav.portfolio', perm: 'edit_portfolio' },
+  { to: '/shadow', icon: Shield, labelKey: 'nav.shadow', perm: 'manage_shadow' },
+  { to: '/paper-trading', icon: Activity, labelKey: 'nav.paperTrading', perm: 'manage_paper_trading' },
+  { to: '/profile', icon: User, labelKey: 'nav.profile' },
   // API Key 控制台(2026-09-16): 个人中心组
-  { to: '/api-keys', icon: KeyRound, label: 'API Key' },
+  { to: '/api-keys', icon: KeyRound, labelKey: 'nav.apiKeys' },
   // §4.3: Agent + 数据源 收纳进「系统」二级页(/agents /datasources 保留为重定向)
-  { to: '/system', icon: ServerCog, label: '系统' },
-  { to: '/notifications', icon: Bell, label: '通知' },
-  { to: '/alerts', icon: BellRing, label: '提醒' },
+  { to: '/system', icon: ServerCog, labelKey: 'nav.system' },
+  { to: '/notifications', icon: Bell, labelKey: 'nav.notifications' },
+  { to: '/alerts', icon: BellRing, labelKey: 'nav.alerts' },
   // §4.3: 审计 + 帮助 收纳进「设置」页签(/audit /help 保留为重定向)
-  { to: '/settings', icon: Settings, label: '设置' },
+  { to: '/settings', icon: Settings, labelKey: 'nav.settings' },
   // 开发者文档(2026-09-16): Skill Gateway API 文档 + 调试台; 公开页, 紧挨设置
-  { to: '/developers', icon: Code2, label: '开发者' },
+  { to: '/developers', icon: Code2, labelKey: 'nav.developers' },
   // Admin 管理后台(2026-09-16): owner 专属入口(用户/Key/用量/Pro 审核)
-  { to: '/admin', icon: ShieldCheck, label: '管理后台', ownerOnly: true, perm: 'manage_users' },
+  { to: '/admin', icon: ShieldCheck, labelKey: 'nav.admin', ownerOnly: true, perm: 'manage_users' },
 ]
 // 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
 const desktopNavGroups = [
-  { key: 'cockpit', label: '驾驶舱', items: navItems.filter(n => n.to === '/') },
-  { key: 'market', label: '行情', items: navItems.filter(n => ['/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
-  { key: 'opportunity', label: '机会', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
+  { key: 'cockpit', labelKey: 'dashboard.title', items: navItems.filter(n => n.to === '/') },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
-  { key: 'research', label: '投研', items: navItems.filter(n => ['/reports'].includes(n.to)) },
-  { key: 'mine', label: '我的', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile', '/api-keys'].includes(n.to)) },
+  { key: 'research', labelKey: 'nav.reports', items: navItems.filter(n => ['/reports'].includes(n.to)) },
+  { key: 'mine', labelKey: 'nav.profile', items: navItems.filter(n => ['/portfolio', '/shadow', '/profile', '/api-keys'].includes(n.to)) },
   // §4.3: 系统域从 7 项瘦身到 3 项(Agent/数据源→系统页, 审计/帮助→设置页签, 提醒→通知页签)
-  { key: 'system', label: '系统', items: navItems.filter(n => ['/system', '/notifications', '/settings', '/developers', '/admin'].includes(n.to)) },
+  { key: 'system', labelKey: 'nav.system', items: navItems.filter(n => ['/system', '/notifications', '/settings', '/developers', '/admin'].includes(n.to)) },
 ]
 // 移动端底部 5 槽位按 to 路径挑选: 首页/持仓/机会/预测/通知(2026-09-01 §4.3 补齐:
 // 提醒并入通知后底栏由 /alerts 改指 /notifications; 提醒 Tab 在通知页内直达,
@@ -240,11 +241,12 @@ function PermGuard({ perm, myPerms, children }: { perm?: string; myPerms: Set<st
 
 /** 懒加载路由的轻量占位(2026-08-12): 纯静态骨架, 不依赖任何懒加载模块 */
 function PageFallback() {
+  const { t } = useI18n()
   return (
     <div className="w-full h-[60vh] flex items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-muted-foreground">
         <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-        <span className="text-[12px]">加载中…</span>
+        <span className="text-[12px]">{t('common.loading')}</span>
       </div>
     </div>
   )
@@ -252,6 +254,7 @@ function PageFallback() {
 
 function App() {
   const { mode, setMode } = useTheme()
+  const { t } = useI18n()
   const location = useLocation()
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
@@ -411,10 +414,11 @@ function App() {
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
-                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{group.label}</div>}
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{t(group.labelKey)}</div>}
                 <div className="space-y-0.5">
-                  {items.map(({ to, icon: Icon, label }) => {
+                  {items.map(({ to, icon: Icon, labelKey }) => {
                     const isActive = isNavItemActive(to, location.pathname)
+                    const label = t(labelKey)
                     return (
                       <NavLink
                         key={to}
@@ -500,7 +504,7 @@ function App() {
               <NotificationBell size="sm" />
               <AccountMenu
                 size="sm"
-                navItems={isGuestUser() ? mobileMoreNavItems.filter(n => !isNavHiddenForGuest(n.to) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)) : mobileMoreNavItems.filter(n => !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))}
+                navItems={(isGuestUser() ? mobileMoreNavItems.filter(n => !isNavHiddenForGuest(n.to) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)) : mobileMoreNavItems.filter(n => !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))).map(n => ({ ...n, label: t(n.labelKey) }))}
                 mode={mode}
                 onSetMode={setMode}
                 onOpenSelfCheck={() => setSelfCheckOpen(true)}
@@ -513,20 +517,20 @@ function App() {
       {/* Mobile Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-card border-t border-border px-2 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around h-14">
-          {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, label }) => {
+          {mobilePrimaryNavItems.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms)).map(({ to, icon: Icon, labelKey }) => {
             const isActive = isNavItemActive(to, location.pathname)
             return (
               <NavLink
                 key={to}
                 to={to}
-                className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl transition-[background-color,color,box-shadow] min-w-[56px] ${
+                className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl transition-[background-color,color,box-shadow] min-w-[56px] min-h-[44px] ${
                   isActive
                     ? 'text-primary bg-primary/8 ring-1 ring-primary/15'
                     : 'text-muted-foreground hover:bg-accent/30'
                 }`}
               >
                 <Icon className="w-5 h-5" />
-                <span className="text-[10px] font-medium">{label}</span>
+                <span className="text-[10px] font-medium">{t(labelKey)}</span>
               </NavLink>
             )
           })}

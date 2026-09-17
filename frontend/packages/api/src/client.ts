@@ -8,7 +8,16 @@ interface ApiResponse<T> {
   message: string
 }
 
+/**
+ * P0(2026-09-18) JWT httpOnly Cookie 迁移:
+ * - 后端登录时同时下发 HttpOnly Cookie `sida_token`(JS 读不到) + 响应体 token
+ * - fetchAPI 统一 credentials:'include' → 浏览器自动携带 Cookie
+ * - getToken() 仍从 localStorage 读, 用于 Authorization header(旧路径兼容)
+ * - 后端 get_current_user: Cookie 优先, Bearer fallback → 双轨并存, 旧 token 有效
+ */
 export function getToken(): string | null {
+  // localStorage fallback(兼容旧会话 + 非浏览器客户端)
+  // httpOnly Cookie 无法用 document.cookie 读取, 依赖 credentials:'include' 自动携带
   return localStorage.getItem('token')
 }
 
@@ -24,6 +33,14 @@ export function logout() {
   _logoutInProgress = true
   localStorage.removeItem('token')
   localStorage.removeItem('token_expires')
+  // P0(2026-09-18): best-effort 清服务端 httpOnly Cookie(JS 清不掉, 须走 API)
+  try {
+    void fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+    }).catch(() => undefined)
+  } catch { /* 忽略 */ }
   // 修复(M-1, 2026-08-23): 在 login 后 returnUrl 回跳, 避免被踢后失去当前页面.
   // 仅在已登录页(非 /login)时记录, 避免自己跳自己时把 returnUrl 写成 /login.
   try {
@@ -42,6 +59,8 @@ export function logout() {
 // - 后端应继续保证 expires_at 是 ISO 8601(如 '2026-08-23T12:00:00Z')
 export function isAuthenticated(): boolean {
   const token = getToken()
+  // UI 门禁仍看 localStorage(与既有路由守卫兼容); httpOnly Cookie 是 API 鉴权双轨,
+  // 不单独作为"已登录"UI 依据(无 localStorage 时走登录页重新建立双写)。
   if (!token) return false
 
   const expires = localStorage.getItem('token_expires')
@@ -110,6 +129,8 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
   try {
     const { timeoutMs: _timeoutMs, cacheMode: _cacheMode, ...requestOptions } = options || {}
     res = await fetch(`${API_BASE}${path}`, {
+      // P0(2026-09-18): 始终携带 Cookie(httpOnly sida_token + csrf_token)
+      credentials: 'include',
       ...requestOptions,
       headers: {
         ...headers,

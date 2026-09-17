@@ -78,6 +78,18 @@ async def lifespan(app):
     setup_ssl()
     setup_playwright()
 
+    # APM(P1 稳定性 2026-09-18): 挂 httpx + DB 引擎耗时追踪。低开销, 失败静默。
+    try:
+        from src.core.apm import install_all
+        from src.db.session import read_engine, write_engine
+
+        engines = [write_engine]
+        if read_engine is not write_engine:
+            engines.append(read_engine)
+        install_all(engines)
+    except Exception as _apm_e:  # noqa: BLE001
+        logger.debug(f"APM 初始化失败(忽略): {_apm_e}")
+
     # 从环境变量初始化认证（Docker 部署用）
     from src.web.api.auth import init_auth_from_env
 
@@ -564,6 +576,25 @@ async def lifespan(app):
             logger.info("信号对账任务已注册(交易日 18:30)")
         except Exception as e:
             logger.error(f"信号对账任务注册失败: {e}")
+
+        # GDPR 用户数据物理清除(P3, 2026-09-18): 每日 03:20 清除软删除满 30 天的账号
+        try:
+            from src.web.api.user_data import purge_expired_deletions
+
+            rt.scheduler.scheduler.add_job(
+                purge_expired_deletions,
+                "cron",
+                hour=3,
+                minute=20,
+                id="user-data-purge",
+                name="注销用户数据物理清除",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("注销用户数据物理清除已注册(每日 03:20)")
+        except Exception as e:
+            logger.error(f"注销用户数据物理清除注册失败: {e}")
 
         # 微信数智分析BOT worker: 长轮询 getupdates, 微信消息 → AI 回复 → 回微信
         try:
