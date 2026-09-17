@@ -64,6 +64,7 @@ const zhCN = {
     themeMood: '题材情绪',
     opportunities: '机会',
     darkFundTop: '暗盘 TOP',
+    caliberCompare: '口径对照',
     reports: '报告',
     history: '历史',
     portfolio: '持仓',

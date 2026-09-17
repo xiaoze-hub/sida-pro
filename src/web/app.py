@@ -344,6 +344,7 @@ from src.core.permissions import (  # noqa: E402
 )
 from src.web.api._authz import require_perm  # noqa: E402
 from src.web.api import admin_free_tier  # noqa: E402
+from src.web.api import caliber_compare  # noqa: E402
 # 纯读行情口(2026-09-07 P1): 用户 JWT 或服务 token 双轨, 供监控/回填/Hub回调。
 # 写链路一律保持 protected; 服务 token 进 require_owner 永远 403。
 from src.web.api.auth import get_user_or_service  # noqa: E402
@@ -628,6 +629,14 @@ app.include_router(
     prefix="/api/decision-pioneer",
     tags=["decision-pioneer"],
     # 数智决策三指标(机构活跃度 + GS + L2主力净流入 TQ 口径): pro 专属
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排, 消歧不合并。
+# 三个源都属于 pro 档数据 → 同样按 view_forecast 收口。
+app.include_router(
+    caliber_compare.router,
+    prefix="/api/caliber-compare",
+    tags=["caliber-compare"],
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
 )
 # 免费档管理(2026-09-18): owner 运行时调整 member 能试用什么/日限/skill 档位,

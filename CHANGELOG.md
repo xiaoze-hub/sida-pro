@@ -5,6 +5,45 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (口径对照页 · A2 第一步)
+
+### feature: 「口径对照」页 —— 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排(消歧不合并)
+
+**性质**: 新功能(遗留项 A2 第一步, 零风险: 只读、不碰主链路)。tag `v0.10.11`。
+
+**要解决的问题**: 同一只票、同一时刻, 三套"主力资金"数字**本来就不同**(对"主力"的定义、覆盖范围、
+时间窗、基准日都不同)。混用会得出相反结论 —— 上一轮审计把它列为遗留项 A2, 第一步就是**把差异显式摆出来**,
+而不是合成一个"权威数字"。
+
+**后端** `GET /api/caliber-compare/{symbol}`(`src/web/api/caliber_compare.py`, 新):
+- 三源并排, 每源带 `name` / `caliber`(口径说明) / `unit` / `fields` / `note` / `available`:
+  - `thsdk_l2` 明盘 L2(TQ `get_more_info` 的 `zjl_hb` 等)
+  - `tencent_dark` 暗盘(腾讯逐笔 v6: 全量主动净额 / 主力≥20万 / 超大单≥100万 / 竞价撮合额 / 参与度)
+  - `eastmoney_flow` 东财四档(含**基准日** `date`, 盘中常为 T-1)
+- **诚实口径**: 任一源失败/无数据 → `available=false` + `note` 原因, **不补 0、不编字段**;
+  源函数自身抛异常也只是那一列降级(`取数异常：XxxError`), **不让整页 500** —— 对照页的价值就是"哪个源不行"也能看见。
+- 源自标"数据可疑"(如逐笔重复计数)如实透传为 note, 不吞。
+- 权限: `view_forecast`(对照的正是 pro 档那批数据)。
+
+**前端** `/caliber-compare`(`src/pages/CaliberCompare.tsx`, 新 + 导航「口径对照」):
+- 代码输入 → 三列并排(涨红跌绿、单位自动折 亿/万、净流入带 `+`);
+- 无数据的源显示「无数据 + 原因」且**整列不渲染数值行**(不是画一行 `--`, 更不是 0);
+- 底部「为什么三个数字不一样」四条静态解释: 定义不同 / 覆盖范围不同 / 时间窗与基准日不同 / **正确用法**(方向一致才下结论, 方向相反先看明细, 禁止取平均或互相校准)。
+
+**测试**: 后端 `tests/test_caliber_compare.py` **12 例**(三源齐备 / available_count 一致 / 差异说明齐 /
+无数据不补 0 / 源异常降级不 500 / 金额保持"元"不在后端二次换算 / 可疑标记透传 / 非法代码 400);
+前端 `tests/components/caliber-compare.test.tsx` **4 例**(三列与说明渲染 / 无数据列不画 0 与 `--` /
+亿万折算与涨红跌绿 / 非法代码不发请求)。
+
+### fix(tests): 暗盘两个用例改为"不依赖跑测机器环境"
+
+`tests/test_darkflow_ops.py` 里 `test_diag_forwarded` 与 `test_gray_bypasses_shared_cache` 都隐含假设
+"默认暗盘源 = tencent_ticks"。而默认源来自环境变量 `PANWATCH_DARK_SOURCE`, CI 上设成了别的值 ——
+v0.10.10 的 ghcr 流水线因此红(本地因默认值恰好相同而通过, 是典型的"只有 CI 才复现")。
+修法: 用例内**固定** `_active_source` / `DARK_SOURCE`, 让断言与"灰度=非默认源"的语义都不随环境漂移;
+在 `PANWATCH_DARK_SOURCE` = thsdk / tdx_tck / tencent_ticks 三种取值下各跑一遍均 15 passed。
+
+
 ## 2026-09-18 (免费档 · 数智决策/集合竞价池 pro 收口 + 免费级别可调)
 
 ### feature: 数智决策三指标 & 集合竞价池收 pro 档 + 「免费档」可运行时调整

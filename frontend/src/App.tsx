@@ -67,6 +67,7 @@ import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
+import CaliberComparePage from '@/pages/CaliberCompare'
 import { reportFrontendError } from '@/lib/error-report'
 import Disclaimer from '@/components/Disclaimer'
 
@@ -82,6 +83,8 @@ const navItems = [
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
+  // 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排; 属 pro 档数据 → view_forecast
+  { to: '/caliber-compare', icon: Activity, labelKey: 'nav.caliberCompare', perm: 'view_forecast' },
   { to: '/reports', icon: FileText, labelKey: 'nav.reports', perm: 'view_reports' },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/portfolio', icon: List, labelKey: 'nav.portfolio', perm: 'edit_portfolio' },
@@ -561,6 +564,8 @@ function App() {
               <Route path="/l2" element={<LegacyL2Redirect />} />
               {/* P1-1: 板块热力图(view_heatmap 权限) */}
               <Route path="/heatmap" element={<PermGuard perm="view_heatmap" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
+              {/* 口径对照(2026-09-18): 三套主力资金口径并排, 消歧不合并(pro 档) */}
+              <Route path="/caliber-compare" element={<PermGuard perm="view_forecast" myPerms={myPerms}><CaliberComparePage /></PermGuard>} />
               <Route path="/theme-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情并入工作台
                   (同路由内切 ?type=index|board); 正文由 Task 7 抽成 IndexBody/BoardBody */}

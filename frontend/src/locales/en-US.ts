@@ -65,6 +65,7 @@ const enUS: Messages = {
     themeMood: 'Theme Mood',
     opportunities: 'Opportunities',
     darkFundTop: 'Dark Fund TOP',
+    caliberCompare: 'Caliber Compare',
     reports: 'Reports',
     history: 'History',
     portfolio: 'Portfolio',
