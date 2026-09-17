@@ -11,6 +11,7 @@ import {
   Bug,
   Loader2,
   Database,
+  BookOpen,
 } from 'lucide-react'
 import { fetchAPI, getToken } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -70,8 +71,73 @@ const MENU: SideMenuItem[] = [
   { id: 'ratelimit', label: '限流说明', icon: <Gauge className="h-3.5 w-3.5" />, anchor: 'sec-ratelimit' },
   { id: 'catalog', label: 'Skill 目录', icon: <ListTree className="h-3.5 w-3.5" />, anchor: 'sec-catalog' },
   { id: 'playground', label: '在线调试', icon: <Play className="h-3.5 w-3.5" />, anchor: 'sec-playground' },
+  { id: 'api-ref', label: 'API 参考', icon: <BookOpen className="h-3.5 w-3.5" />, anchor: 'sec-api-ref' },
   { id: 'datasources', label: '数据来源', icon: <Database className="h-3.5 w-3.5" />, anchor: 'sec-datasources' },
   { id: 'errors', label: '错误码', icon: <Bug className="h-3.5 w-3.5" />, anchor: 'sec-errors' },
+]
+
+// ── API 参考数据 ──
+const API_GROUPS = [
+  {
+    title: '账号与认证',
+    apis: [
+      { method: 'POST', path: '/api/auth/register', auth: '公开', desc: '邮箱注册(需验证码), 自动签发 API Key' },
+      { method: 'POST', path: '/api/auth/login', auth: '公开', desc: '用户名/邮箱 + 密码登录' },
+      { method: 'POST', path: '/api/auth/send-code', auth: '公开', desc: '发送邮箱验证码(5分钟过期)' },
+      { method: 'POST', path: '/api/auth/login-by-email', auth: '公开', desc: '邮箱 + 验证码登录' },
+      { method: 'POST', path: '/api/auth/logout', auth: '登录', desc: '登出(清除 Cookie)' },
+    ],
+  },
+  {
+    title: 'API Key 管理',
+    apis: [
+      { method: 'GET', path: '/api/keys/my', auth: '登录', desc: '列出我的 API Key' },
+      { method: 'POST', path: '/api/keys/my', auth: '登录', desc: '创建新 Key' },
+      { method: 'POST', path: '/api/keys/my/{id}/reset', auth: '登录', desc: '重置 Key(旧 Key 立即失效)' },
+      { method: 'DELETE', path: '/api/keys/my/{id}', auth: '登录', desc: '删除 Key(软删)' },
+      { method: 'GET', path: '/api/keys/my/{id}/usage', auth: '登录', desc: '查看单 Key 用量' },
+    ],
+  },
+  {
+    title: 'Pro 付费',
+    apis: [
+      { method: 'POST', path: '/api/pro/apply', auth: '登录', desc: '提交 Pro 升级申请' },
+      { method: 'GET', path: '/api/pro/apply/status', auth: '登录', desc: '查询申请状态' },
+      { method: 'GET', path: '/api/pro/admin/applications', auth: 'owner', desc: '审核列表' },
+      { method: 'POST', path: '/api/pro/admin/approve', auth: 'owner', desc: '批准申请' },
+      { method: 'POST', path: '/api/pro/admin/reject', auth: 'owner', desc: '拒绝申请' },
+    ],
+  },
+  {
+    title: '用户数据 (GDPR)',
+    apis: [
+      { method: 'GET', path: '/api/user/data/export', auth: '登录', desc: '导出我的全部数据(JSON)' },
+      { method: 'POST', path: '/api/user/data/delete', auth: '登录', desc: '请求删除账号(30天缓冲)' },
+      { method: 'GET', path: '/api/user/data/delete/status', auth: '登录', desc: '查询删除状态' },
+    ],
+  },
+  {
+    title: '管理后台 (owner)',
+    apis: [
+      { method: 'GET', path: '/api/users/admin/list', auth: 'owner', desc: '全部用户列表' },
+      { method: 'POST', path: '/api/users/admin/{uid}/toggle-active', auth: 'owner', desc: '启用/禁用用户' },
+      { method: 'POST', path: '/api/users/admin/{uid}/change-role', auth: 'owner', desc: '修改用户角色' },
+      { method: 'GET', path: '/api/users/admin/stats', auth: 'owner', desc: '注册统计' },
+      { method: 'GET', path: '/api/admin/skills/keys', auth: 'owner', desc: '全部 API Key' },
+      { method: 'POST', path: '/api/admin/skills/keys/action', auth: 'owner', desc: '冻结/解冻/禁用 Key' },
+      { method: 'GET', path: '/api/admin/skills/usage', auth: 'owner', desc: '用量报表' },
+      { method: 'POST', path: '/api/admin/rotate-secrets', auth: 'owner', desc: '手动轮换 JWT 密钥' },
+    ],
+  },
+  {
+    title: '智能体接入',
+    apis: [
+      { method: 'GET', path: '/api/skills/catalog', auth: '公开', desc: 'Skill 目录(含限流配置)' },
+      { method: 'GET', path: '/api/skills/install.sh', auth: '公开', desc: '智能体安装脚本' },
+      { method: 'GET', path: '/api/skills/config', auth: '登录', desc: '我的 Skill 配置 JSON' },
+      { method: 'POST', path: '/api/skills/{name}/run', auth: 'Key/JWT/游客', desc: '调用 Skill' },
+    ],
+  },
 ]
 
 // 主要数据源与口径标签(合规: 资金类指标必须声明方向语义)
@@ -439,6 +505,56 @@ export default function DevelopersPage() {
               <CodeBlock code={runResult} language="json" />
             </InfoCard>
           )}
+        </div>
+      </Section>
+
+      {/* ── API 参考 ── */}
+      <Section
+        id="sec-api-ref"
+        title="API 参考"
+        description="全部 REST 端点一览"
+        icon={<BookOpen className="h-4 w-4" />}
+      >
+        <div className="space-y-6">
+          {API_GROUPS.map((group, gi) => (
+            <div key={gi}>
+              <h3 className="mb-3 text-[14px] font-semibold text-foreground">{group.title}</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[12px]">
+                  <thead>
+                    <tr className="border-b border-border text-muted-foreground">
+                      <th className="pb-2 pr-3 font-medium">方法</th>
+                      <th className="pb-2 pr-3 font-medium">路径</th>
+                      <th className="pb-2 pr-3 font-medium">鉴权</th>
+                      <th className="pb-2 font-medium">说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.apis.map((api, ai) => (
+                      <tr key={ai} className="border-b border-border/50">
+                        <td className="py-2 pr-3">
+                          <span className={`font-mono text-[11px] font-semibold ${
+                            api.method === 'GET' ? 'text-emerald-500' :
+                            api.method === 'POST' ? 'text-blue-500' :
+                            api.method === 'DELETE' ? 'text-red-500' : 'text-amber-500'
+                          }`}>{api.method}</span>
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-[11px] text-foreground">{api.path}</td>
+                        <td className="py-2 pr-3">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                            api.auth === '公开' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                            api.auth === 'owner' ? 'bg-red-500/10 text-red-600 dark:text-red-400' :
+                            'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                          }`}>{api.auth}</span>
+                        </td>
+                        <td className="py-2 text-muted-foreground">{api.desc}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
       </Section>
 
