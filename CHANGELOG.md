@@ -13,7 +13,7 @@
 
 v0.10.1 打 tag 后 gates job 走到第 3 步 —— `bash -n` ✅、deploy stub **15/15** ✅、
 **gitleaks `leaks found: 1` ✗**: `tests/test_multitenant_isolation.py:58` 的
-`_OWNER_PASSWORD = "mt_test_owner_pw_2026_v1"` 命中 `generic-api-key` 规则。
+`_OWNER_PASSWORD`(固定口令字面量)命中 `generic-api-key` 规则。
 
 - 修: 该常量改 `"MT-" + secrets.token_urlsafe(18)`(运行时随机, 一次会话内确定即可);
   既过密钥扫描, 也不影响多租户隔离用例的语义。
