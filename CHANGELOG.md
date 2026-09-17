@@ -5,6 +5,27 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (真 bug · 缓存目录不认 DATA_DIR)
+
+### fix(collectors): `stock_list` 写死仓库 data/ → 改为运行时读 `DATA_DIR`
+
+**性质**: 真 bug(部署侧 + 测试隔离)。分支 `feat/audit-fix-20260918`(tag v0.10.5)。
+
+`src/collectors/stock_list.py` 的缓存路径原先是
+`os.path.dirname(__file__)/../../data/stock_list_cache.json` —— **写死的仓库相对路径**,
+不看 `DATA_DIR`。两个后果:
+
+1. **部署侧**: 配了 `DATA_DIR`(容器持久卷)也不生效 —— 股票列表缓存写进镜像里的仓库目录,
+   容器重建即丢(若目录只读还会写失败)。与全仓 `os.environ.get("DATA_DIR", …)` 口径不符。
+2. **测试侧**: 违反 W2.2/E4"测试绝不碰真实 data/", 全量跑把
+   `data/stock_list_cache.json` 写进仓库 → 会话级守卫
+   `_verify_real_data_untouched` 报错(CI 里那条
+   "测试会话改动了真实数据目录 … 新增=['stock_list_cache.json']" 就是它), 本地全量跑亦复现。
+
+- 修: 新增 `_data_dir()` / `_cache_file()`, **调用时**解析 `DATA_DIR`(未配置回落仓库 data/);
+  `_load_cache` / `_save_cache` 改走 `_cache_file()`。模块级 `CACHE_FILE` 常量保留只为向后兼容。
+- 验证: 删掉仓库 `data/stock_list_cache.json` 后跑相关用例 → 不再回写仓库; 全量跑会话守卫不再报错。
+
 ## 2026-09-18 (门禁转绿 · gates job 与 test job 对齐)
 
 ### fix(ci): `build-push-acr` 的 gates job 与 `build-and-push-image` 的 test job 逐字对齐

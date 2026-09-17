@@ -9,8 +9,31 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
-CACHE_FILE = os.path.join(DATA_DIR, "stock_list_cache.json")
+def _data_dir() -> str:
+    """缓存目录: **运行时**读 `DATA_DIR`(与全仓口径一致), 未配置时回落仓库 data/。
+
+    2026-09-18 修: 原先写死 `os.path.dirname(__file__)/../../data`, 后果有两个 ——
+      ① 部署侧: 配了 DATA_DIR(容器持久卷)也**不生效**, 缓存写进镜像里的仓库目录
+         (容器重建即丢, 且可能只读);
+      ② 测试侧: 违反 W2.2/E4 的"测试绝不碰真实 data/"约定 —— 全量跑会把
+         `data/stock_list_cache.json` 写进仓库, 触发会话级守卫
+         (`_verify_real_data_untouched`) 在 CI 报错, 也解释了 CI 里那条
+         "测试会话改动了真实数据目录 data: 新增=['stock_list_cache.json']"。
+    路径在**调用时**解析, 这样 monkeypatch DATA_DIR 的测试也能被正确隔离。
+    """
+    return os.environ.get("DATA_DIR") or os.path.join(
+        os.path.dirname(__file__), "..", "..", "data"
+    )
+
+
+def _cache_file() -> str:
+    return os.path.join(_data_dir(), "stock_list_cache.json")
+
+
+# 向后兼容: 既有代码/脚本可能 import 这个常量。读写一律走 `_cache_file()`(运行时解析),
+# 不要用本常量做判断 —— 它的值只在 import 那一刻有效(测试会 monkeypatch DATA_DIR)。
+DATA_DIR = _data_dir()
+CACHE_FILE = _cache_file()
 CACHE_TTL = 86400 * 7  # 7 days
 
 # 东方财富 A 股（使用 push2delay 域名，避免重定向）
@@ -61,10 +84,11 @@ PAGE_SIZE = 100
 
 
 def _load_cache() -> list[dict] | None:
-    if not os.path.exists(CACHE_FILE):
+    cache_file = _cache_file()
+    if not os.path.exists(cache_file):
         return None
     try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(cache_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         if time.time() - data.get("ts", 0) < CACHE_TTL:
             return data["stocks"]
@@ -74,8 +98,8 @@ def _load_cache() -> list[dict] | None:
 
 
 def _save_cache(stocks: list[dict]) -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+    os.makedirs(_data_dir(), exist_ok=True)
+    with open(_cache_file(), "w", encoding="utf-8") as f:
         json.dump({"ts": time.time(), "stocks": stocks}, f, ensure_ascii=False)
 
 
