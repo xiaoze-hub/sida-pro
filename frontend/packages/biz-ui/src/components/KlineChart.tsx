@@ -27,7 +27,7 @@ import {
 } from 'lightweight-charts'
 
 import { fetchAPI } from '@panwatch/api'
-import { safeFixed } from '@/lib/format'
+import { safeFixed, toAmount } from '@/lib/format'
 
 import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
 import { filterMarkersInBarsRange } from '../lib/chart-markers'
@@ -37,10 +37,16 @@ import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInt
 import {
   KIND_ICON,
   KIND_LABEL,
+  normalizeKlineEvents,
+  normalizePriceLines,
   type KlineEventKind,
   type KlineEventPoint,
   type KlinePriceLine,
 } from '../klineEvents'
+// v2.1 §10.2④: 区间统计纯函数(可视区间 → 首末价/涨跌幅/振幅/累计明暗盘/事件数)
+import { computeRangeStats, type KlineRangeStats, type RangeBar } from '../lib/range-stats'
+
+export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 
 // 重导出共享模块的类型/纯函数 —— 既有调用方(`import { fundBarPoint } from '.../KlineChart'`)
 // 与既有测试导入路径零改动; 真源统一在 `../lib/fund-bar`。
@@ -63,6 +69,30 @@ export interface KlinesResponse {
   source?: string
 }
 
+/**
+ * `GET /klines/{symbol}/summary` 的**图层子集**(后端 `_build_layer_data` 的输出)。
+ *
+ * 存在意义(2026-09-18 审计断链修复): 图层数据的唯一真源是 summary 接口, 而 KlineChart
+ * 此前只吃**父组件 props** —— 结果是"后端算了、组件画得了、页面没传"(设计稿 §5 落空)。
+ * 现在组件自己按需取这一次 summary, 父传了就以父为准(不重复取数)。
+ *
+ * 诚实约束: 数组元素脏值一律走 `normalizeKlineEvents` / `normalizePriceLines` 过滤,
+ * 取不到就整层不画(不编造、不留空壳)。
+ */
+export interface KlineSummaryLayer {
+  gs_signals?: Array<{ date: string; side: 'G' | 'S'; confirmed?: boolean; price?: number | null }> | null
+  fund_flow?: FundFlowBar[] | null
+  events?: Array<{
+    date?: string | null
+    kind?: string | null
+    label?: string | null
+    price?: number | null
+  }> | null
+  /** 解套/套牢价位线(后端 `unlock_levels_from_chips`); 映射为 §5.3 的支撑/压力虚线 */
+  unlock_levels?: Array<{ price?: number | null; kind?: string | null; label?: string | null }> | null
+  activity_series?: ActivityPoint[] | null
+}
+
 const INTERVAL_OPTIONS: Array<{ key: KlineInterval; label: string }> = [
   { key: '1m', label: '1分' },
   { key: '5m', label: '5分' },
@@ -82,6 +112,12 @@ export interface GsSignalPoint {
   side: 'G' | 'S'
   /** 收盘确认=实心(true), 盘中疑似=空心(false). 防"把疑似当确认" */
   confirmed?: boolean
+  /**
+   * 交叉当日收盘价(后端 `compute_gs_signals` 产出, 见 src/core/gs_strategy.py:210)。
+   * 本组件画 marker 不读它, 但 `InteractiveKline` 的同名类型**要求**该字段 —— 让同一次取数
+   * 能同时喂两张图, 故在此保留(可选: 缺失时仍可画, 由消费方决定)。
+   */
+  price?: number | null
 }
 
 /** 活跃度序列点 (后端 klines.layer_data.activity_series, 日级, 与 klines 对齐) */
@@ -103,6 +139,13 @@ const SUBCHART_OPTS = [
   ['phase', '情绪'],
   ['activity', '活跃度'],
 ] as const
+
+/** 稳定空数组常量: 图层缺数据时复用同一引用, 避免每帧新数组触发 effect 重跑。 */
+const EMPTY_GS: GsSignalPoint[] = []
+const EMPTY_FUND: FundFlowBar[] = []
+const EMPTY_EVENTS: KlineEventPoint[] = []
+const EMPTY_LINES: KlinePriceLine[] = []
+const EMPTY_ACTIVITY: ActivityPoint[] = []
 
 function sma(values: number[], period: number): Array<number | null> {
   if (period <= 1) return values.map((v) => v)
@@ -169,6 +212,8 @@ export default function KlineChart(props: {
   subchart?: KlineSubchart
   /** L5 副图切换回调 (父组件持久化到 URL) */
   onSubchartChange?: (s: KlineSubchart) => void
+  /** 周期切换回调 (v2.1 §10.2①: 父组件写进 URL ?period=, 刷新/分享不丢状态) */
+  onIntervalChange?: (i: KlineInterval) => void
   /** 支撑/压力位 (阶段二: 解套盘位等价位线) */
   supportPressure?: KlinePriceLine[]
   /** 持仓成本线 (Phase 0: portfolio 持仓成本画进 K 线, 替代 ContextCard 占位; 无持仓不传) */
@@ -189,8 +234,29 @@ export default function KlineChart(props: {
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
   onRangeSelect?: (range: { from: string; to: string } | null) => void
-  /** v2.1 §10.2: 十字光标联动回调 (副图/资金面板同步高亮) */
-  onCrosshairMove?: (param: { time: string; price: number | null } | null) => void
+  /**
+   * v2.1 §10.2④: 区间统计回调 —— 可视区间变化时上报统计读数(或 null = 无区间/无数据)。
+   * 计算在组件内做(只有它同时持有 K线/资金柱/事件三份数据), 父组件只负责渲染位置。
+   * 父不传 → 不做任何计算。
+   */
+  onRangeStats?: (stats: KlineRangeStats | null) => void
+  /**
+   * v2.1 §10.2③: 十字光标联动回调 —— 除 time/price 外, 追加**该时刻**的明盘/暗盘净额
+   * 与事件标签(资金面板据此显示"该时刻"读数, 而不是只有价格)。
+   * 缺数据一律 null/[] —— 消费方显示 `--`, 不补 0。
+   */
+  onCrosshairMove?: (
+    param: {
+      time: string
+      price: number | null
+      /** 该时刻所在 K 线的明盘净额(元); 该日无数据 = null */
+      mingNet?: number | null
+      /** 该时刻所在 K 线的暗盘净额(元); 该日无数据 = null */
+      darkNet?: number | null
+      /** 该时刻(同日)的事件标签, 如 ['涨停'] */
+      events?: string[]
+    } | null,
+  ) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -208,6 +274,33 @@ export default function KlineChart(props: {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
+
+  // ── 图层数据自取(2026-09-18 审计断链修复) ─────────────────────
+  // 背景: 后端 /klines/{symbol}/summary 已产出 gs_signals / fund_flow / events /
+  // unlock_levels / activity_series, 组件也有图层实现与开关, 但**没有任何页面传这些 props**
+  // ⇒ 设计稿 §5 六图层在生产里一根都没画出来(审计发现的最大断链)。
+  // 修法: 组件按"父传了就不取"的原则自取一次 summary, 任何使用 KlineChart 的页面自动获得图层。
+  const [layer, setLayer] = useState<{
+    gsSignals: GsSignalPoint[]
+    fundFlow: FundFlowBar[]
+    events: KlineEventPoint[]
+    priceLines: KlinePriceLine[]
+    activitySeries: ActivityPoint[]
+  } | null>(null)
+  // 父是否接管该分量。用**布尔**入 deps: 内联数组 props 每帧都是新身份, 直接进 deps 会无限取数。
+  const ownGs = props.gsSignals === undefined
+  const ownFund = props.fundFlow === undefined
+  const ownEvents = props.events === undefined
+  const ownLines = props.supportPressure === undefined
+  const ownActivity = props.activitySeries === undefined
+  const needLayer = ownGs || ownFund || ownEvents || ownLines || ownActivity
+  // v2.1 §10.2④: 可视区间(订阅只注册一次, 结果落 state 再由纯函数算统计)
+  const [visibleRange, setVisibleRange] = useState<{ from: number; to: number } | null>(null)
+  // 统计回调走 latest-ref: 父组件内联箭头函数身份每帧变, 进 deps 会造成重复上报
+  const onRangeStatsRef = useRef(props.onRangeStats)
+  onRangeStatsRef.current = props.onRangeStats
+  // 带日期的 K 线(区间统计要按日期与资金柱/事件求交, rawKlinesRef 只有 time/close/volume)
+  const rangeBarsRef = useRef<RangeBar[]>([])
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
   /**
@@ -221,6 +314,12 @@ export default function KlineChart(props: {
     l: number | null
     c: number | null
     v: number | null
+    /** §10.2③: 该根 K 线的明盘净额(元); 无数据 = null */
+    mingNet?: number | null
+    /** §10.2③: 该根 K 线的暗盘净额(元); 无数据 = null */
+    darkNet?: number | null
+    /** §10.2③: 该根 K 线同日事件标签 */
+    events?: string[]
   } | null>(null)
   // L1 趋势均线 series (受 layers.trend 控制)
   const maSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
@@ -339,18 +438,20 @@ export default function KlineChart(props: {
     // (2) 选段时间: v5 lightweight-charts 用 subscribeVisibleTimeRangeChange
     // (subscribeSelection 是 v4 API, v5 已移除). 推给父组件 → Quote.tsx 反查资金面板.
     chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+      const numOf = (v: unknown): number | null => {
+        if (typeof v === 'number' && Number.isFinite(v)) return v
+        const ts = (v as { timestamp?: unknown })?.timestamp
+        return typeof ts === 'number' && Number.isFinite(ts) ? ts : null
+      }
+      const nf = range ? numOf(range.from) : null
+      const nt = range ? numOf(range.to) : null
       const r =
         range && range.from !== undefined && range.to !== undefined
-          ? {
-              from: String(
-                typeof range.from === 'number' ? range.from : (range.from as { timestamp?: number })?.timestamp ?? range.from
-              ),
-              to: String(
-                typeof range.to === 'number' ? range.to : (range.to as { timestamp?: number })?.timestamp ?? range.to
-              ),
-            }
+          ? { from: String(nf ?? range.from), to: String(nt ?? range.to) }
           : null
       onRangeSelectRef.current?.(r)
+      // §10.2④: 同一区间喂给统计(数值时间戳; 拿不到数值就置 null → 不报统计)
+      setVisibleRange(nf !== null && nt !== null ? { from: nf, to: nt } : null)
     })
 
     // (3) 十字光标联动: 推 { time, price } 给副图/资金面板 + KI-056 信息栏读数
@@ -363,7 +464,29 @@ export default function KlineChart(props: {
       const price = series.coordinateToPrice(param.point.y)
       const time =
         typeof param.time === 'number' ? String(param.time) : String(param.time)
-      onCrosshairMoveRef.current?.({ time, price: price ?? null })
+      // §10.2③: 该时刻的资金/事件读数 —— 按"K 线 time 完全相等"定位当日, 不用 ISO 反推
+      // (分钟级 K 线的时间戳是本地解析, 用 UTC 反推会错位)。
+      const tNum = typeof param.time === 'number' ? param.time : null
+      const hitBar = tNum === null ? undefined : rangeBarsRef.current.find((b) => b.time === tNum)
+      const hitDate = hitBar?.date ?? null
+      const hitFund = hitDate
+        ? fundRef.current.find((f) => String(f?.date ?? '').slice(0, 10) === hitDate)
+        : undefined
+      const hitEvents = hitDate
+        ? eventsRef.current.filter((e) => e.date.slice(0, 10) === hitDate).map((e) => e.label)
+        : []
+      const mingNet = hitFund
+        ? (typeof hitFund.ming_net === 'number' && Number.isFinite(hitFund.ming_net)
+            ? hitFund.ming_net
+            : typeof hitFund.open_net === 'number' && Number.isFinite(hitFund.open_net)
+              ? hitFund.open_net
+              : null)
+        : null
+      const darkNet =
+        hitFund && typeof hitFund.dark_net === 'number' && Number.isFinite(hitFund.dark_net)
+          ? hitFund.dark_net
+          : null
+      onCrosshairMoveRef.current?.({ time, price: price ?? null, mingNet, darkNet, events: hitEvents })
       // KI-056: 从 seriesData 取悬停那根的 OHLCV(缺则 null, 不编)
       const bar = param.seriesData?.get(series) as
         | { open?: number; high?: number; low?: number; close?: number }
@@ -373,12 +496,15 @@ export default function KlineChart(props: {
         : undefined
       if (bar && bar.close != null) {
         setHoverReadout({
-          date: time,
+          date: hitDate ?? time,
           o: bar.open ?? null,
           h: bar.high ?? null,
           l: bar.low ?? null,
           c: bar.close,
           v: volData?.value ?? null,
+          mingNet,
+          darkNet,
+          events: hitEvents,
         })
       }
     })
@@ -435,6 +561,15 @@ export default function KlineChart(props: {
           close: it.close,
           volume: it.volume || 0,
         }))
+        // v2.1 §10.2④: 区间统计的取数源(带日期 + OHLC)
+        rangeBarsRef.current = valid.map((it: KlineItem) => ({
+          time: toChartTime(it.date, interval) as unknown as number,
+          date: String(it.date).slice(0, 10),
+          open: it.open,
+          high: it.high,
+          low: it.low,
+          close: it.close,
+        }))
         chartRef.current?.timeScale().fitContent()
         setDataLen(valid.length)
       } catch (e) {
@@ -452,6 +587,75 @@ export default function KlineChart(props: {
       cancelled = true
     }
   }, [props.symbol, props.market, interval, props.initialDays])
+
+  // ── 图层数据: 按需自取 summary(仅父未接管的分量才发请求) ────────
+  useEffect(() => {
+    if (!needLayer) {
+      setLayer(null)
+      return
+    }
+    let cancelled = false
+    const url = `/klines/${encodeURIComponent(props.symbol)}/summary?market=${encodeURIComponent(props.market)}`
+    fetchAPI<KlineSummaryLayer>(url)
+      .then((res: KlineSummaryLayer | null | undefined) => {
+        if (cancelled) return
+        const rawGs = Array.isArray(res?.gs_signals) ? res.gs_signals : []
+        const gs = rawGs.filter(
+          (g): g is GsSignalPoint =>
+            !!g && typeof g.date === 'string' && (g.side === 'G' || g.side === 'S'),
+        )
+        setLayer({
+          gsSignals: gs,
+          fundFlow: Array.isArray(res?.fund_flow) ? res.fund_flow : [],
+          events: normalizeKlineEvents(res?.events),
+          priceLines: normalizePriceLines(res?.unlock_levels),
+          activitySeries: Array.isArray(res?.activity_series) ? res.activity_series : [],
+        })
+      })
+      .catch(() => {
+        // 取不到 = 本次不画图层(降级), 不编造; summary 侧已有自身降级与缓存
+        if (!cancelled) setLayer(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [props.symbol, props.market, needLayer])
+
+  // 有效图层值: 父传优先 → 自取 → 稳定空数组(fetch 用回调整体覆盖, 不用偏函数风格)
+  const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
+  const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
+  const effEvents = props.events ?? layer?.events ?? EMPTY_EVENTS
+  const effPriceLines = props.supportPressure ?? layer?.priceLines ?? EMPTY_LINES
+  const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
+  // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
+  const fundRef = useRef<FundFlowBar[]>(effFundFlow)
+  fundRef.current = effFundFlow
+  const eventsRef = useRef<KlineEventPoint[]>(effEvents)
+  eventsRef.current = effEvents
+  // §10.2④ 统计也要价位线(区间内出现的支撑/压力), 同样用 ref 供注册一次的回调读取
+  const layersPriceLinesRef = useRef<KlinePriceLine[]>(effPriceLines)
+  layersPriceLinesRef.current = effPriceLines
+
+  // ── v2.1 §10.2④: 可视区间 → 区间统计(纯计算, 不发请求) ──────────
+  // 说明: LWC v5 没有"选段完成"事件, 用 visibleTimeRange 变化作为触发(缩放/拖拽同源),
+  // 故本行展示的是"当前可视区间"的统计 —— 与设计稿"拖拽选段"语义一致, 缩放时同样成立。
+  const hasStatsCb = props.onRangeStats !== undefined
+  useEffect(() => {
+    if (!hasStatsCb) return
+    if (!visibleRange) {
+      onRangeStatsRef.current?.(null)
+      return
+    }
+    const stats = computeRangeStats(
+      rangeBarsRef.current,
+      fundRef.current,
+      eventsRef.current,
+      layersPriceLinesRef.current,
+      visibleRange.from,
+      visibleRange.to,
+    )
+    onRangeStatsRef.current?.(stats)
+  }, [hasStatsCb, visibleRange, effFundFlow, effEvents, effPriceLines, dataLen])
 
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
@@ -479,7 +683,7 @@ export default function KlineChart(props: {
       // 2026-09-03 撤单重叠修复: 同 date+kind 多条事件聚合为一个 marker(×N),
       // 避免同一根 K 线上 N 个 marker 完全重合(与 InteractiveKline 同策略)。
       const grouped = new Map<string, { ev: KlineEventPoint; n: number }>()
-      for (const ev of props.events || []) {
+      for (const ev of effEvents) {
         if (visible[ev.kind] === false) continue
         const k = `${ev.date}|${ev.kind}`
         const g = grouped.get(k)
@@ -503,7 +707,7 @@ export default function KlineChart(props: {
     // LC v5 无 circleOutline 形状, 用 size 区分: 实心 size=2(大), 空心 size=0(小) + 文字 ○ 前缀。
     if (showSignal) {
       const gs = readGsColors()
-      for (const g of props.gsSignals || []) {
+      for (const g of effGsSignals) {
         const isBuy = g.side === 'G'
         markers.push({
           time: toChartTime(g.date, interval),
@@ -527,7 +731,7 @@ export default function KlineChart(props: {
     priceLinesRef.current = []
     const plv = props.priceLinesVisible || {}
     if (showSignal) {
-      for (const line of props.supportPressure || []) {
+      for (const line of effPriceLines) {
         if (line.kind === 'support' && plv.support === false) continue
         if (line.kind === 'pressure' && plv.pressure === false) continue
         priceLinesRef.current.push(
@@ -572,8 +776,8 @@ export default function KlineChart(props: {
         try { volSeries.removePriceLine(line) } catch { /* noop */ }
       }
       activityLinesRef.current = []
-      if (subchart === 'activity' && props.activitySeries && props.activitySeries.length > 0) {
-        const histData = props.activitySeries
+      if (subchart === 'activity' && effActivitySeries.length > 0) {
+        const histData = effActivitySeries
           .filter((p) => p.activity != null && Number.isFinite(p.activity))
           .map((p) => ({
             time: toChartTime(p.date, interval),
@@ -616,10 +820,10 @@ export default function KlineChart(props: {
       // 关 L3 / 无数据 / 非成交量档 → 清空 + 藏轴, 不留残柱。
       const fs = fundSeriesRef.current
       if (fs) {
-        if (showCapital && subchart === 'vol' && props.fundFlow && props.fundFlow.length > 0) {
+        if (showCapital && subchart === 'vol' && effFundFlow.length > 0) {
           // 净额与分色由纯函数算(T19 抽出以便单测: 明盘字段名 `ming_net` 曾误读 `open_net`)。
           const theme = readChartTheme()
-          fs.setData(props.fundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
+          fs.setData(effFundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
           fs.setData([])
@@ -627,7 +831,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [props.events, props.supportPressure, props.costLines, props.fundFlow, props.activitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, props.gsSignals, interval])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -707,7 +911,11 @@ export default function KlineChart(props: {
         {INTERVAL_OPTIONS.map((opt) => (
           <button
             key={opt.key}
-            onClick={() => setInterval(opt.key)}
+            onClick={() => {
+              setInterval(opt.key)
+              // §10.2①: 父组件把周期写进 URL(?period=), 刷新/分享不丢状态
+              props.onIntervalChange?.(opt.key)
+            }}
             className={`px-2 py-1 text-xs rounded ${
               interval === opt.key
                 ? 'bg-primary text-primary-foreground'
@@ -771,6 +979,12 @@ export default function KlineChart(props: {
             <span>
               量 {hoverReadout.v == null ? '--' : `${safeFixed(hoverReadout.v / 10000, 1)}万手`}
             </span>
+            {/* §10.2③ 光标联动: 该时刻的资金/事件读数(与资金面板同一口径, 缺数据 = --) */}
+            <span>明盘 {toAmount(hoverReadout.mingNet)}</span>
+            <span>暗盘 {toAmount(hoverReadout.darkNet)}</span>
+            {hoverReadout.events && hoverReadout.events.length > 0 && (
+              <span className="text-foreground">{hoverReadout.events.join(' · ')}</span>
+            )}
           </>
         ) : (
           <span className="text-[10px]">

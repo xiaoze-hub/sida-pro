@@ -307,9 +307,16 @@ describe('StockWorkbench 三带骨架', () => {
     expect(klineBox.className).toContain('rounded')
     expect(klineBox.className).toContain('border-border/60')
     expect(klineBox.className).toContain('p-2')
+    // 右栏列固定 320px。
+    // 2026-09-18: 右栏列里多了 §10.2④ 的「区间统计」卡位, rail 的**直系父**改为滚动容器,
+    // 固定宽落在它上一层的**列容器**上 —— 用 closest('[class*=…]') 定位该列, 不写死层数,
+    // 免得下次再插一层卡就误报(断言的是"rail 所在的列宽 320px 且不被压扁")。
+    const railColumn = screen.getByTestId('rail').closest('[class*="w-[320px]"]') as HTMLElement
+    expect(railColumn).toBeTruthy()
+    expect(railColumn.className).toContain('shrink-0')
+    // rail 自身仍在可滚动容器里(长速览卡不撑破列高)
     const railBox = screen.getByTestId('rail').parentElement as HTMLElement
-    expect(railBox.className).toContain('w-[320px]')
-    expect(railBox.className).toContain('shrink-0')
+    expect(railBox.className).toContain('overflow-y-auto')
 
     // 带3: 6 键(顺序 = WORKBENCH_TABS)+ 默认选中「盘口资金」+ **真实 L2Tab**(Task 17)
     const tabs = screen.getAllByRole('tab')

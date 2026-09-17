@@ -5,6 +5,47 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (K线图层接线 · 审计断链修复)
+
+### fix(kline-layers): 六图层从"建好了没人接"接线到生产页面 + §10.2 交互规范补齐 3 项
+
+**性质**: 功能接线(设计稿 §5 / §10.2)。**纯前端**。分支 `feat/audit-fix-20260918`。
+
+**背景(审计发现的最大断链)**: 后端 `src/web/api/klines.py:_build_layer_data` 早已产出
+`gs_signals / fund_flow / events / unlock_levels / activity_series`, 图表组件也实现了 L2/L3/L4
+图层与开关 UI, 但**没有任何页面把数据传进去** —— 生产里 K 线只有蜡烛 + 均线, 设计稿 §5
+"核心新增: K线图层标注"等于没落地。同批补齐 §10.2 交互规范里缺的 3 项。
+
+- `KlineChart` **图层数据自取**: 父未接管的分量(gsSignals/fundFlow/events/supportPressure/
+  activitySeries)在组件内按需取一次 `/klines/{symbol}/summary`, 事件走 `normalizeKlineEvents`、
+  价位线走 `normalizePriceLines` 白名单过滤(脏点不入图); 取不到 = 整层不画, 不编造。
+  父传了就不取(布尔入 deps, 避免内联数组身份变化导致无限取数)。
+- `src/hooks/useKlineLayer.ts` **新建**: 给 `InteractiveKline`(图层全靠 props)用的一次性取数 hook;
+  `AnalysisDetail`(每股分析页)与 `IndexBody`(指数正文)接上 —— 这两处此前图层开关是空的。
+- §10.2① **周期写 URL**: `KlineChart` 新增 `onIntervalChange`; `src/lib/kline-period.ts` 新建
+  (`?period=m1|m5|m15|m30|m60|d1|w1|mn` ↔ `KlineInterval` 双向表); `StockWorkbench` 读写
+  `?period=`, 刷新/分享不丢。`intra`(分时)不在表内 → 返回 `undefined` 落回默认周期, 不假装支持。
+- §10.2③ **十字光标联动**: `onCrosshairMove` 载荷追加该时刻的明盘/暗盘净额与同日事件标签;
+  图表内读数栏(KI-056)同步显示, 缺数据一律 `--`。按"K 线 time 完全相等"定位当日,
+  不用 ISO 反推(分钟级时间戳是本地解析, UTC 反推会错位)。
+- §10.2④ **区间统计**: `src/lib/range-stats.ts` 新建纯函数 `computeRangeStats`(首末价/涨跌幅/
+  振幅/累计明暗盘+有值天数/事件计数/区间内价位线), 图表算出后经 `onRangeStats` 上报,
+  `src/components/RangeStatsCard.tsx` 新建卡片渲染在**资金面板顶部**(§10.2④ 规定的落位),
+  可手动收起, 区间变化后重新出现。明暗盘无数据时显示 `--`(不是 0)。
+
+**测什么**: `tests/lib/range-stats.test.ts` 11 例(空区间→null / 区间外日期不入账 / 全 null 时累计
+必须是 null 而非 0 / 脏值不当数字 / 事件与价位线按区间过滤)、`tests/lib/kline-period.test.ts` 8 例
+(双向可逆 / `intra` 与图表字面量不认 / 大小写容错)、`tests/components/range-stats-card.test.tsx`
+7 例(涨红跌绿 / `--` 与「无数据」/ 事件 0 次照实显示 / 收起回调)。`tsc -b` 0 error, `eslint` 0 error,
+`vite build` 通过。
+
+**约束/兼容**:
+- `KlineChart` 的 `GsSignalPoint` 增加可选 `price`(后端本就下发, `gs_strategy.py:210`)——
+  `InteractiveKline` 的同名类型要求该字段, 同一次取数才能同时喂两张图。
+- 图表仍可在父组件接管时完全受控(全部 props 保持可选, 默认行为不变)。
+- 未做(留待下批, 不在本批承诺): `?subchart=` 副图写 URL、右栏资金面板逐项联动(本批只在图表
+  读数栏联动)、§4.1 左自选栏 200px 形态、§12 灰图标缺位视觉规范。
+
 ## 2026-09-18 (P1 稳定性)
 
 ### feat(stability): Loki 日志聚合 + APM 深度集成 + 慢接口异步化 + 读写分离准备

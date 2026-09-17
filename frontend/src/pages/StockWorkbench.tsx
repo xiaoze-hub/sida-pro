@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi } from '@panwatch/api'
-import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart, { type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
 import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
+import RangeStatsCard from '@/components/RangeStatsCard'
+import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
 import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
@@ -221,8 +223,21 @@ export default function StockWorkbench() {
    */
   const hasPosition = useHasPosition(symbol, MARKET, type === 'stock')
 
-  /** 写单个 query(保留其它键, 如 ?type / ?tab 并存), 不跳页。 */
-  const setQuery = (key: 'type' | 'tab', value: string) =>
+  /**
+   * 设计稿 v2.1 §10.2①: K 线周期落在 URL(`?period=d1`), 刷新/分享不丢。
+   * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
+   */
+  const periodFromUrl = periodToInterval(sp.get('period'))
+
+  /**
+   * 设计稿 v2.1 §10.2④: 区间统计(拖拽选段/缩放后, 资金面板顶部那一行)。
+   * 统计由 `KlineChart` 算好回调上来(它同时持有 K线/资金柱/事件), 本页只决定渲染位置与收起。
+   */
+  const [rangeStats, setRangeStats] = useState<KlineRangeStats | null>(null)
+  const [statsDismissed, setStatsDismissed] = useState(false)
+
+  /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。 */
+  const setQuery = (key: 'type' | 'tab' | 'period', value: string) =>
     setSp((prev) => ({ ...Object.fromEntries(prev), [key]: value }))
 
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
@@ -262,13 +277,28 @@ export default function StockWorkbench() {
               <KlineChart
                 symbol={symbol}
                 market={MARKET}
-                initialInterval="1d"
+                /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
+                initialInterval={periodFromUrl ?? '1d'}
                 initialDays={120}
                 height={420}
+                /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
+                onIntervalChange={(i) => setQuery('period', intervalToPeriod(i))}
+                /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
+                onRangeStats={(s) => {
+                  setRangeStats(s)
+                  // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
+                  if (s) setStatsDismissed(false)
+                }}
               />
             </div>
-            <div className="scrollbar w-[320px] shrink-0 max-h-[436px] overflow-y-auto">
-              <QuickRail symbol={symbol} market={MARKET} />
+            <div className="flex w-[320px] shrink-0 flex-col gap-2">
+              {/* §10.2④: 区间统计(资金面板顶部那一行) */}
+              {rangeStats && !statsDismissed && (
+                <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
+              )}
+              <div className="scrollbar max-h-[436px] overflow-y-auto">
+                <QuickRail symbol={symbol} market={MARKET} />
+              </div>
             </div>
           </div>
           {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
