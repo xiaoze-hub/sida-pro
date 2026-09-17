@@ -5,6 +5,31 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (门禁转绿 · pytest 尾盘 5 红)
+
+### fix(tests/migrations): 清掉 pytest 最后 5 红(2 处产品真 bug + 3 处测试陈旧)
+
+**性质**: 门禁转绿 + 迁移健壮性。**需重启后端**(迁移守卫/可选依赖改动)。分支 `feat/audit-fix-20260918`。
+
+1. **`test_w31_db_dialect` + 迁移 v169 真 bug**: `_m169_unified_identity_columns` 的回填 UPDATE
+   假定 `users.username` 存在, 但极老的**单用户库没有该列** ⇒ `no such column: u.username`,
+   把整条迁移链打断(跑测时日志里那条 `Migration v169 failed: unified_identity_columns`)。
+   按本仓纪律补 `_has_column(conn, "users", "username")` 守卫: 缺列就跳过回填(回填是"能给就补",
+   不是升级前提); 新库/生产库该列恒在, 行为不变。
+2. **`src/core/thsdk_alert.py` 可选依赖**: 原先模块级 `from thsdk import THS, Response` ——
+   thsdk 是可选私有依赖(CI/开发机没有), 缺包时连 import 都炸, 把整条"竞价/暗盘**降级**链"
+   一起带走(降级链本意就是"源不可用也要能跑")。改为可选导入 + 调用点显式报"源不可用"。
+3. **`test_kline_adjust_dimension` 契约过期**: `_persist_bars` 已改为**复用主引擎单例**
+   (`src.db.session.engine`, P0 性能修复: 原先每次落 K 线 create_engine+dispose),
+   测试还在"改 `DB_URL` 再落库" ⇒ 写去了真库、临时库断言为空。测试改为直接替换单例,
+   把"落库必须走主引擎单例"这条契约钉住。
+4. **`test_market_archive_api` 时间依赖**: 龙虎榜造数写死 `20260909/20260910`, 而路由的
+   `symbol+days` 走 `start = today - days` ⇒ 过几天窗口漂出去必红。改为**相对今天**造数。
+5. `test_email_reg_api_keys` 的 404 是上面"Cookie 优先"身份错位的连带(控制台操作打到别的用户账下),
+   随 Bearer 优先口径修复自然转绿 —— 未改该文件一行。
+
+- 结果: 上述 5 个文件 6+8+18+6+3 例全绿; ruff / scoped-queries / migrations 门禁同时为绿。
+
 ## 2026-09-18 (鉴权口径 · Bearer 优先)
 
 ### fix(auth): token 来源裁决改为 **Authorization Bearer 优先 → Cookie 兜底**(老板拍板)

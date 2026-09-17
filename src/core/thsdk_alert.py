@@ -36,7 +36,15 @@ import time
 from datetime import datetime, time as dtime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from thsdk import THS, Response
+try:
+    from thsdk import THS, Response
+except ModuleNotFoundError:  # pragma: no cover - 取决于部署环境
+    # 2026-09-18: thsdk 是**可选私有依赖**(生产容器内装了; CI / 开发机 / 纯净部署没有)。
+    # 原先是模块级硬 import ⇒ 缺包时连 `import src.core.thsdk_alert` 都炸, 把整条
+    # "竞价/暗盘降级链"一起带走(降级链本意就是"源不可用也要能跑")。
+    # 现在只让**真正调用 thsdk 的那一步**失败, import 与降级路径照常。
+    THS = None  # type: ignore[assignment]
+    Response = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # 全局常量
@@ -537,6 +545,11 @@ def run(symbol: str, date: Optional[str] = None, prev_close: Optional[float] = N
     Returns:
         {"close_surge": {...}, "auction": {...}, "wencai_pool": {...}}
     """
+    if THS is None:  # 可选依赖缺失: 显式报"源不可用", 不假装能跑
+        raise RuntimeError(
+            "thsdk 未安装(可选私有依赖): 本机无法走同花顺 L2/竞价链路, "
+            "请改用降级源或安装 thsdk 后重试"
+        )
     with THS() as ths:
         # 1) 尾盘大单
         bof_rows = _fetch_big_order_flow(ths, symbol)

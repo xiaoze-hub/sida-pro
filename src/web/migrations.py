@@ -4255,9 +4255,15 @@ def _m169_unified_identity_columns(conn: Connection) -> None:
             "CREATE INDEX ix_skill_api_keys_user ON skill_api_keys(user_id)",
         )
         # 回填: owner_label 匹配 users.username
-        conn.execute(
-            text(
-                """
+        #
+        # 2026-09-18 修(legacy 升级路径): 极老的单用户库 `users` 表可能**还没有 username 列**
+        # (多用户改造之前的 schema), 此时上面的 UPDATE 直接 "no such column: u.username" 抛错,
+        # 把整条迁移链打断(v169 失败)。按本仓纪律: 数据迁移必须 `_has_column` 守卫, 缺列就跳过
+        # —— 回填是"能给就补", 不是升级成败的前提; 且新库/生产库该列恒在, 行为不变。
+        if _has_column(conn, "users", "username"):
+            conn.execute(
+                text(
+                    """
 UPDATE skill_api_keys
 SET user_id = (
     SELECT u.id FROM users u WHERE u.username = skill_api_keys.owner_label
@@ -4269,8 +4275,8 @@ WHERE user_id IS NULL
     SELECT 1 FROM users u2 WHERE u2.username = skill_api_keys.owner_label
 )
 """
+                )
             )
-        )
 
     if _has_table(conn, "skill_usage"):
         _add_column_if_missing(
