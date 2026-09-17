@@ -5,6 +5,29 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (tier2-stability)
+
+### feat(security): CSP + CSRF 防护 + 依赖漏洞扫描
+
+**性质**: 安全加固。**需重启后端**。分支 `feat/tier2-stability-20260916`。
+
+**CSP / 安全头** (`src/web/middleware.py` + `src/web/app.py`):
+- `SecurityHeadersMiddleware`: 全响应挂 `Content-Security-Policy`(default-src 'self'; script/style 兼容 Vite unsafe-inline/eval; img data/blob; object/frame-ancestors none 等)
+- 同时下发 `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `X-XSS-Protection` / `Referrer-Policy` / `Permissions-Policy`
+- 中间件 add 在 CORS 之后(最外层), 4xx/5xx 也带头
+
+**CSRF 双提交 Cookie** (`src/web/middleware.py` + `src/web/api/auth.py`):
+- `CSRFProtectionMiddleware`: POST/PUT/DELETE/PATCH 校验 Cookie `csrf_token` == Header `X-CSRF-Token`
+- 跳过: GET/HEAD/OPTIONS、`/api/auth/login`、`/api/auth/register`、`/api/webhooks/*`
+- **与现 JWT 兼容**: 带 `Authorization: Bearer` 的请求直接放行(浏览器不会自动附带 Authorization, 天然免疫 CSRF); 现前端全量 Bearer → 零破坏
+- `login`/`register` 成功时 `issue_csrf_token()` 下发 HttpOnly + SameSite=Strict + Path=/ 的 Cookie, 响应体同时返回 `csrf_token`(供前端放进 X-CSRF-Token)
+
+**依赖漏洞扫描**:
+- `scripts/audit_deps.py`: 读 requirements*.txt + frontend/package.json, 对比内置简化漏洞库, 支持 `--json` / `--fail-on high`
+- `.github/workflows/audit.yml`: 每周一 pip-audit + npm audit + 离线扫描, high/critical 自动建 Issue
+
+**测试**: `tests/test_security_headers_csrf.py` 9 项通过(CSP 头/CSRF 跳过与拦截/Cookie 属性)。
+
 ## 2026-09-18 (tier1-compliance)
 
 ### feat(alerting-backup): 运维告警体系 + 数据库自动备份

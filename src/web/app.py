@@ -121,17 +121,22 @@ from src.web.middleware import (
     RateLimitMiddleware,
     RequestLoggerMiddleware,
     AuditMiddleware,
+    SecurityHeadersMiddleware,
+    CSRFProtectionMiddleware,
 )
 app.add_middleware(AuditMiddleware)        # innermost: add first
 app.add_middleware(JWTDecodeMiddleware)    # user state for downstream
 app.add_middleware(RateLimitMiddleware)    # rejects before JWT decode cost on attacks
 app.add_middleware(RequestLoggerMiddleware)  # sees rate-limited requests too
+app.add_middleware(CSRFProtectionMiddleware)  # 写操作双提交 Cookie 校验(Bearer 跳过)
 app.add_middleware(CORSMiddleware,         # outermost: CORS headers even on 429/401
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 安全头最外: 4xx/5xx/CSRF 拒绝响应也带 CSP
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 轻量错误追踪(2026-08-21): 捕获未处理异常 → JSONL 落盘 + 高频聚合告警
 # 尽量内层(最后 add)以贴近路由, 捕获路由/处理器抛出的未处理异常, 原样 re-raise 不吞。
