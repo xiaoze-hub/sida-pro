@@ -5,6 +5,26 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (部署门禁)
+
+### fix(deploy): 全新安装路径 `set -u` 崩溃(CLONE_SWAP/CLONE_NANOCPUS 未初始化) + 门禁回归断言
+
+**性质**: 部署脚本真 bug + 门禁补强。分支 `feat/audit-fix-20260918`。
+
+**真故障(不是测试过时)**: `deploy/deploy_panwatch.sh` 的 `default_config()` 只初始化了
+`CLONE_ENV/VOL/PORT/NET/RESTART/MEM`, 而 `compose_run_args()` 还会读 `CLONE_SWAP` /
+`CLONE_NANOCPUS`(只在 `harvest_existing_config()` 里赋值)。脚本头是 `set -euo pipefail`
+⇒ **无现有容器时(全新安装 / 容器被删后重建)在 `docker create` 之前就 "unbound variable" 退出**,
+一台新机器都装不起来。生产一直有旧容器(走 harvest 分支), 故线上从未暴露。
+
+- 修: `default_config()` 显式置 `CLONE_SWAP="0"` / `CLONE_NANOCPUS="0"`(0 = 不注入,
+  与 `compose_run_args()` 的"空或 0 都跳过"判据一致)。
+- 门禁: `scripts/tests/test_deploy_script.sh` 增两条断言 —— 输出不得含 `unbound variable`,
+  且必须走到「▶ 重建容器」; 把"提前退出"这种失败模式直接点名, 不再表现为 9 条参数缺失的噪声。
+- 现状: 该 stub 测试 **15 passed / 0 failed**(修复前 4 passed / 9 failed)。
+  注意这是 tag 流水线 `gates` job 的第一步, 它红 ⇒ v0.9.0 起每个 tag 的 4 条流水线全部在
+  gates 处短路, 镜像与 Release 都出不来(与本次审计同时发现)。
+
 ## 2026-09-18 (K线图层接线 · 审计断链修复)
 
 ### fix(kline-layers): 六图层从"建好了没人接"接线到生产页面 + §10.2 交互规范补齐 3 项
