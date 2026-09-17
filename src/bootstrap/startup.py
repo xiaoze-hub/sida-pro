@@ -501,6 +501,48 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"共振 AI 批量判定注册失败: {e}")
 
+        # 口径快照留痕(B5, 2026-09-18): 交易日 15:55 —— 三源逐日留痕, 供"口径漂移曲线"与数字可溯源。
+        # 放在 15:45 题材情绪分之后, 让当日的涨停/成交都已落定; 只采小样本(上限 40 只/次)。
+        try:
+            from src.web.api.caliber_archive import record_symbol as _caliber_record
+            from src.web.api.caliber_archive import get_archive_symbols as _caliber_symbols
+
+            def _caliber_archive_job() -> None:
+                from datetime import date
+
+                from src.core.trading_calendar import is_trading_day
+                from src.db.session import get_write_engine
+
+                if not is_trading_day(date.today()):
+                    logger.info("口径快照留痕: 非交易日, 跳过")
+                    return
+                eng = get_write_engine()
+                ok = 0
+                for code in _caliber_symbols(eng):
+                    try:
+                        res = _caliber_record(eng, code)
+                        ok += 1
+                        logger.info("口径快照留痕 %s: %s 行 %s", code, res.get("rows"), res.get("available_by_source"))
+                    except Exception as e:  # noqa: BLE001 —— 单票失败不拖垮整批
+                        logger.warning("口径快照留痕 %s 失败: %r", code, e)
+                logger.info("口径快照留痕完成: %s 只", ok)
+
+            rt.scheduler.scheduler.add_job(
+                _caliber_archive_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=55,
+                id="caliber-archive-daily",
+                name="口径快照留痕",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("口径快照留痕已注册(交易日 15:55)")
+        except Exception as e:
+            logger.error(f"口径快照留痕注册失败: {e}")
+
         # 题材情绪分(2026-09-12 老板口径): 交易日 15:45(在 demon 15:35 落涨停事件之后)
         try:
             from src.core.theme_mood import daily_job as theme_mood_job

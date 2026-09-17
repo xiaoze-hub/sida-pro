@@ -25,6 +25,11 @@ from src.core.caliber import (  # noqa: E402
     require_directional,
 )
 
+from typing import TYPE_CHECKING  # noqa: E402
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型注解
+    from src.collectors.capital_flow_collector import CapitalFlow
+
 TICK = CaliberTag(
     caliber="tick",
     direction_semantics=DIRECTION_TICK,

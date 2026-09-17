@@ -589,7 +589,6 @@ class TestMarketPhaseApi:
 
         # 注入 4 天历史(让 sync 后总数 = 5, 达到 ACCUMULATING_MIN_DAYS).
         # 历史值用 rally 阈值附近的指标, 让今日高值经 EMA 后能触发 rally/climax。
-        from datetime import timedelta
         from src.web.models import MarketPhaseDaily
         from src.web.database import SessionLocal
 

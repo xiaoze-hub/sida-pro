@@ -4233,6 +4233,50 @@ CREATE TABLE high_value_api_logs (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hv_api_name_created ON high_value_api_logs(api_name, created_at)"))
 
 
+def _m174_caliber_snapshots(conn: Connection) -> None:
+    """口径快照档案(2026-09-18 B5): 明盘 L2 / 暗盘逐笔 / 东财四档 的**逐日留痕**。
+
+    为什么需要: 三个源对同一个"主力净额"天然给出不同数字(口径不同), 但**差异本身**是资产 ——
+    留痕后才能回答"哪家源在什么行情下偏离多少", 也才能让页面上的数字点得开(可溯源)。
+    诚实口径: 取不到就 `available=0` + reason, `value` 写 **NULL(不是 0)** —— 0 是一个真实数字, 不能冒充"没有"。
+    """
+    if _has_table(conn, "caliber_snapshots"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE caliber_snapshots (
+  id {pk},
+  symbol TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  source TEXT NOT NULL,
+  field_key TEXT NOT NULL DEFAULT '',
+  caliber TEXT DEFAULT '',
+  unit TEXT DEFAULT '',
+  value REAL,
+  available INTEGER NOT NULL DEFAULT 0,
+  reason TEXT DEFAULT '',
+  quality TEXT DEFAULT '',
+  captured_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    # 幂等键: 同标的+同交易日+同源 只留一行(重复采集走 UPDATE)
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_caliber_snap_key "
+            "ON caliber_snapshots(symbol, trade_date, source, field_key)"
+        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_caliber_snap_date ON caliber_snapshots(trade_date)")
+    )
+
+
 def _m169_unified_identity_columns(conn: Connection) -> None:
     """统一身份(2026-09-16): skill_api_keys / skill_usage 关联用户。
 
@@ -4586,6 +4630,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(172, "users_email", _m172_users_email),
     # GDPR 用户数据删除(P3, 2026-09-18): 软删除标记 + 请求时间
     Migration(173, "users_soft_delete", _m173_users_soft_delete),
+    # 口径快照档案(B5, 2026-09-18): 三源逐日留痕, 支撑"口径漂移曲线"与数字可溯源
+    Migration(174, "caliber_snapshots", _m174_caliber_snapshots),
 )
 
 

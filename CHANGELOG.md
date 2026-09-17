@@ -5,6 +5,36 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (B5 口径可信度 · 三源逐日留痕 + 漂移)
+
+### feat(caliber): 口径快照档案(v174) + 漂移端点 —— 把"数字为什么不同"变成可追溯资产
+
+**性质**: 新能力(方向 A 第一步落地)。依据 `docs/未来方向与创新执行方案_20260918.md` 方向 A:
+口径对照页解决"此刻三家各说各的", 但**差异的时间维度**没人留痕 —— 留痕后才能回答
+"哪家源在什么行情下偏离多少", 页面上的数字也才能点得开(可溯源)。
+
+- 迁移 **v174 `caliber_snapshots`**: 每标的/每交易日/每源/每字段一行, 唯一键
+  `(symbol, trade_date, source, field_key)` → 重复采集走 UPDATE(幂等)。
+- `src/web/api/caliber_archive.py`:
+  - `record_symbol()`: 采集三源并落库。**源不可用也留痕**(value=NULL + available=0 + reason ——
+    "这天这个源没数据"本身就是信息), **绝不写 0**; 源自标"数据可疑"如实记为 `quality=suspect`。
+  - 跨源对比字段**显式声明**(`DRIFT_FIELD_BY_SOURCE`: 明盘「主力净流入」/ 暗盘「主力净额（≥20万）」/
+    东财「主力净流入」) —— 不自动猜, 因为三家对"主力"的定义本来就不同。
+  - `drift_series()`: 每源一条序列 + 两两差异(mean/max abs diff, 只算两端都 available 的日),
+    返回里**没有顶层"权威数字"**, 每条比较都写明比的是哪两个字段并标注"这是**口径差异**不是误差";
+    没留痕的日期如实「该日未留痕」, 不插值、不补 0。
+- 端点 `GET /api/caliber-compare/{symbol}/drift?days=30`(Bearer/Cookie 同源裁决, 与对照页同一守卫口径)。
+- 调度: 交易日 **15:55** 留痕小样本(默认 5 只, `app_settings.caliber_archive_symbols` 可覆盖, 单次上限 40),
+  单票失败不拖垮整批; 以 `is_trading_day` 守卫, 非交易日跳过。
+- 回归 7 例: 迁移幂等、**源不可用写 NULL 不写 0**、重复采集是 UPDATE 不堆行、suspect 透传、
+  漂移**不合成单一数字**(100/150/200 原样并存, 顶层无 `value`)、无数据时差异统计为 `None` 而非 0。
+- 顺手清理: `tests/` 里 3 处 ruff 真问题(F811 `timedelta` 重定义 ×2、F821 `CapitalFlow` 前向注解)——
+  注: CI 的 ruff 口径只扫 `src/ server.py forecast_server.py scripts/ packages/marketdata/src`, 不含 `tests/`,
+  所以它们在 CI 是绿的, 但确实是真 bug, 一并修掉。
+
+**未做(下一轮 B5b)**: 前端 `/caliber-compare` 的"漂移曲线"区块 —— 后端与测试先落地, UI 随后接,
+避免一次改太多面。
+
 ## 2026-09-18 (UI 走查 B4 · 规范落地 + 字阶棘轮)
 
 ### chore(ui): 分隔/字阶立规并加入 CI 门禁(R10) + B3/B4 合并发版

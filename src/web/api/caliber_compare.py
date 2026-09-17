@@ -195,3 +195,20 @@ def build_caliber_compare(symbol: str) -> dict:
 def caliber_compare(symbol: str, _: User = Depends(get_current_user)):
     """三口径对照: 明盘 L2 / 暗盘逐笔 / 东财四档（同一票同一时刻并排, 不合成为单一数字）。"""
     return build_caliber_compare(symbol)
+
+
+@router.get("/{symbol}/drift")
+def caliber_drift(symbol: str, days: int = 30, _: User = Depends(get_current_user)):
+    """口径漂移(B5): 每源逐日留痕 + 跨源差异。
+
+    **口径声明**: 逐日留痕由收盘后的定时采集写入(见 `caliber_archive.record_symbol`);
+    跨源差异比的是**各源自己那个"主力"字段**(定义不同), 所以那是**口径差异不是误差** ——
+    本端点不取平均、不互相校准、不产出单一"权威数字"; 没留痕的日期如实返回「该日未留痕」。
+    """
+    code = (symbol or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, f"非法股票代码: {symbol!r}(需要6位A股代码)")
+    from src.db.session import get_read_engine
+    from src.web.api.caliber_archive import drift_series
+
+    return drift_series(get_read_engine(), code, days=days)
