@@ -242,14 +242,10 @@ async def demo_isolation_middleware(request: Request, call_next):
 
     username = None
     payload = None
-    # P0(2026-09-18): Cookie 优先, fallback Bearer
+    # 2026-09-18: 与 HTTP 依赖同源裁决(Bearer 优先 → Cookie) —— 审计归属与真实执行身份一致
     try:
-        from src.web.api.auth import AUTH_COOKIE_NAME, decode_token
-        raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
-        if not raw:
-            auth = request.headers.get("Authorization", "")
-            if auth.startswith("Bearer "):
-                raw = auth[7:]
+        from src.web.api.auth import decode_token, token_from_request
+        raw = token_from_request(request) or ""
         if raw:
             payload = decode_token(raw)
             if payload:

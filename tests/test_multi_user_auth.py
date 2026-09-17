@@ -43,6 +43,10 @@ def clean_users():
 
 
 def _login(client, username, password):
+    # 本文件用**显式 Bearer 头**表达身份; 登录响应会把该账号的 `sida_token` 写进 client 的
+    # Cookie jar, 但 2026-09-18 起 token 来源裁决是 **Authorization Bearer 优先 → Cookie 兜底**
+    # (`auth.token_from_request`), 所以同一个 TestClient 连续登录两个账号时, 显式 Bearer
+    # 仍然作数(旧口径 Cookie 优先会把它按"最后登录的账号"执行, 见 tests/test_auth_bearer_priority.py)。
     r = client.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return r.json()["data"]["token"]

@@ -379,23 +379,55 @@ def clear_auth_cookie(response: Response, request: Request) -> None:
     )
 
 
+def _bearer_from_header(request: Request) -> Optional[str]:
+    """从 `Authorization: Bearer xxx` 里取 token(没有/格式不对 → None)。"""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    token = auth[7:].strip()
+    return token or None
+
+
+def token_from_request(request: Request) -> Optional[str]:
+    """**唯一的 token 来源裁决**: Authorization Bearer 优先, 无 header 时回退 Cookie。
+
+    2026-09-18 决策(老板拍板改口径, 原为 Cookie 优先):
+      - **有 Authorization header ⇒ 它就是权威身份**。验不过直接 401, **不静默回退 Cookie** ——
+        否则"显式带错了 token 反而以 Cookie 里的另一个身份通过", 比拒绝更危险。
+      - 没有 header ⇒ 走 httpOnly Cookie(浏览器自动携带, 即前端默认路径)。
+    原来的 Cookie 优先是为了 httpOnly 迁移期"零破坏", 但副作用是: 浏览器里只要残留上一个
+    账号的 Cookie, 显式带了 Bearer 的请求会被按**另一个用户**执行(身份静默错位)。
+
+    单一真源: HTTP 依赖(`extract_token_from_request`)、JWTDecodeMiddleware、
+    审计中间件都走本函数, 避免"三处各写一份优先级"再次分叉。
+    """
+    bearer = _bearer_from_header(request)
+    if bearer:
+        return bearer
+    cookie = request.cookies.get(AUTH_COOKIE_NAME)
+    if cookie:
+        return cookie
+    return None
+
+
 def extract_token_from_request(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = None,
 ) -> Optional[str]:
-    """提取 JWT: Cookie 优先, fallback Authorization Bearer。
+    """提 JWT(依赖注入版): Authorization Bearer 优先, 无 header 时回退 Cookie。
 
-    Cookie 由浏览器自动携带(credentials:include), 优先级高于 header —
-    保证 httpOnly 迁移后 Cookie 路径生效, 同时旧客户端 Bearer 继续可用。
+    `credentials` 是 FastAPI `HTTPBearer` 解析出的同一份 header, 仅为兼容既有调用方保留;
+    真正的裁决在 `token_from_request`(单一真源)。
     """
+    bearer = _bearer_from_header(request)
+    if bearer:
+        return bearer
+    if credentials and getattr(credentials, "credentials", None):
+        # HTTPBearer 解析到了值但 header 不是 "bearer " 前缀的极端情形 → 同样尊重显式凭据
+        return credentials.credentials
     cookie = request.cookies.get(AUTH_COOKIE_NAME)
     if cookie:
         return cookie
-    if credentials and getattr(credentials, "credentials", None):
-        return credentials.credentials
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
     return None
 
 

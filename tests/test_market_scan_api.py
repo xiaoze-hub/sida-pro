@@ -16,6 +16,27 @@ sys.path.insert(0, str(ROOT))
 
 from src.web.api import market_scan as ms  # noqa: E402
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-09-18: 这些端点现在**强制鉴权**(`Depends(get_current_user)` / `require_owner`),
+# 而用例自建 FastAPI 只 include 了业务 router ⇒ 不覆盖依赖就一律 401, 与用例本意
+# (验取数/落库/降级逻辑)无关。这里用替身覆盖鉴权层, 显式声明"本文件不测鉴权"。
+# ─────────────────────────────────────────────────────────────────────────────
+class _FakeOwner:
+    id = "test-owner"
+    username = "test-owner"
+    role = "owner"
+    is_active = True
+    token_version = 0
+
+
+def _override_auth(app):
+    from src.web.api.auth import get_current_user, require_owner
+
+    app.dependency_overrides[get_current_user] = lambda: _FakeOwner()
+    app.dependency_overrides[require_owner] = lambda: _FakeOwner()
+    return app
+
+
 
 # ---------------------------------------------------------------------------
 # 工具: 构造 FastAPI TestClient(带 DB override)
@@ -57,6 +78,7 @@ def _make_client(db_rows=None):
     app = FastAPI()
     app.include_router(ms.router, prefix="/api/market-scan")
     app.dependency_overrides[ms.get_db] = lambda: FakeDB(db_rows or [])
+    _override_auth(app)
     return TestClient(app)
 
 

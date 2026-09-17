@@ -207,27 +207,9 @@ def enforce_perm(user, perm: str, db: Session | None = None) -> None:
     raise HTTPException(403, f"无权限: {perm}")
 
 
-def require_perm(perm: str) -> Callable:
-    """FastAPI 依赖版; 内部走 enforce_perm。"""
-    from fastapi import Request
-
-    async def _dep(request: Request):
-        from fastapi.security import HTTPBearer
-
-        from src.web.api.auth import get_current_user
-        from src.web.database import SessionLocal
-
-        security = HTTPBearer(auto_error=False)
-        creds = await security(request)
-        db = SessionLocal()
-        try:
-            user = await get_current_user(request=request, credentials=creds, db=db)
-            enforce_perm(user, perm, db)
-            return user
-        finally:
-            db.close()
-
-    return _dep
+# 2026-09-18(B4.1 棘轮): 原 `require_perm`(FastAPI 依赖版)已删 —— 全仓零引用,
+# 且它把 FastAPI/HTTPBearer + src.web.api.auth 拖进 core 层。core 层的权限判定入口是
+# `enforce_perm(user, perm, db)`; 需要 FastAPI 依赖的调用点请写在 web 层。
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -256,7 +238,7 @@ def _trial_incr(db: Session, user_id: str, feature: str) -> None:
         _TRIAL_MEM[key] = _TRIAL_MEM.get(key, 0) + 1
         count = _TRIAL_MEM[key]
     try:
-        from src.web.models import AuditLog
+        from src.db.models import AuditLog
 
         db.add(AuditLog(
             user_id=user_id,
@@ -283,7 +265,7 @@ def check_watchlist_quota(db: Session, user) -> None:
     role = normalize_role(getattr(user, "role", None))
     if role in (ROLE_PRO, ROLE_OWNER):
         return
-    from src.web.models import Stock
+    from src.db.models import Stock
 
     n = db.query(Stock).filter(Stock.user_id == user.id).count()
     if n >= MEMBER_WATCHLIST_MAX:
@@ -296,7 +278,7 @@ def check_alert_quota(db: Session, user) -> None:
     if role in (ROLE_PRO, ROLE_OWNER):
         return
     try:
-        from src.web.models import PriceAlertRule
+        from src.db.models import PriceAlertRule
 
         n = db.query(PriceAlertRule).filter(PriceAlertRule.user_id == user.id).count()
         if n >= MEMBER_ALERT_MAX:
@@ -311,7 +293,7 @@ def check_alert_quota(db: Session, user) -> None:
 def enforce_device_limit(db: Session, user, session_id: str) -> None:
     """登录时: 超过 2 台踢最早。"""
     try:
-        from src.web.models import UserSession
+        from src.db.models import UserSession
 
         rows = (
             db.query(UserSession)
@@ -335,7 +317,7 @@ def enforce_device_limit(db: Session, user, session_id: str) -> None:
 def record_session(db: Session, user, session_id: str, expires_at: datetime) -> None:
     """登录成功后记录会话(设备限制用)。"""
     try:
-        from src.web.models import UserSession
+        from src.db.models import UserSession
 
         existing = db.query(UserSession).filter(UserSession.session_id == session_id).first()
         if existing:

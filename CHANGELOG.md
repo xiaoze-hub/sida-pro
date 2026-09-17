@@ -5,6 +5,40 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (鉴权口径 · Bearer 优先)
+
+### fix(auth): token 来源裁决改为 **Authorization Bearer 优先 → Cookie 兜底**(老板拍板)
+
+**性质**: 安全语义变更。**需重启后端**。分支 `feat/audit-fix-20260918`。
+
+**原口径与副作用**: P0 加固时定的"Cookie 优先, Bearer fallback"(为 httpOnly 迁移期零破坏)。
+副作用是**身份静默错位**: 浏览器里只要残留上一个账号的 `sida_token`, 显式带了 Bearer 的请求
+会被按**另一个用户**执行(本仓踩到的是测试里 owner 的 PATCH 被当成 member → 403)。
+
+**新口径**(`src/web/api/auth.py:token_from_request`, 单一真源):
+
+| 请求形态 | 判定 |
+|---|---|
+| 有 `Authorization: Bearer xxx` | **它就是权威身份**; 验不过 → 401, **不回退 Cookie** |
+| 无 Authorization 头 | 走 httpOnly Cookie(浏览器默认路径, 前端零改动) |
+| 都无 | 401 |
+
+为什么"验不过也不回退 Cookie": 显式带错 token 却以 Cookie 里的身份通过, 比直接拒绝更危险
+(调用方以为自己在用 A 身份, 实际执行的是 B)。
+
+**四处读取点统一走同一函数**(避免"三处各写一份优先级"再分叉):
+`extract_token_from_request`(HTTP 依赖) / `JWTDecodeMiddleware` / 审计中间件(`app.py`) /
+settings 审计(`api/settings.py`)。审计归属的用户从此与请求真正以之执行的身份一致。
+
+**测什么**: 新增 `tests/test_auth_bearer_priority.py` 5 例 —— owner 的 Bearer + member 的 Cookie
+→ 按 owner 执行(旧口径会 403) / 仅 Cookie 仍可用 / 无效 Bearer **不**被 Cookie 兜住(401) /
+无凭据 401 / 三个中间件侧文件不得再出现"先读 Cookie"的旧写法(源码级断言)。
+`test_multi_user_auth.py` **删掉了先前为绕开该 bug 加的"登录后清 Cookie"hack** —— 恢复原样即通过,
+证明修的是产品而非测试。
+
+**兼容**: 前端 `fetchAPI` 同时带 Cookie 与 Authorization(localStorage); localStorage 里 token 过期时
+会 401 → 既有单飞 `logout()` 清 localStorage + best-effort 清服务端 Cookie → 引导重新登录(不循环)。
+
 ## 2026-09-18 (门禁转绿 · ruff)
 
 ### fix(lint): ruff `E9,F821,F601,F811` 8 处 → 清空(含 1 个真 NameError)

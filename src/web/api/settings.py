@@ -230,19 +230,13 @@ def update_setting(
 ):
     from src.web.api.auth import get_current_user
 
-    # 懒 import 避开循环; Cookie 优先 / fallback Bearer 解 JWT 拿 user(审计用)
+    # 懒 import 避开循环; 2026-09-18: 与 HTTP 依赖同源裁决(Bearer 优先 → Cookie),
+    # 保证审计记的就是请求真正以之执行的那个用户。
     user = None
     try:
-        from src.web.api.auth import (
-            AUTH_COOKIE_NAME,
-            decode_token,
-            principal_from_payload,
-        )
-        raw = request.cookies.get(AUTH_COOKIE_NAME) or ""
-        if not raw:
-            auth = request.headers.get("authorization", "")
-            if auth.lower().startswith("bearer "):
-                raw = auth[7:]
+        from src.web.api.auth import decode_token, principal_from_payload, token_from_request
+
+        raw = token_from_request(request) or ""
         if raw:
             payload = decode_token(raw)
             if payload:

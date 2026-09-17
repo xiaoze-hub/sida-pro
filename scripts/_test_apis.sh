@@ -1,7 +1,7 @@
 #!/bin/bash
 TOKEN=$(curl -s -X POST http://100.91.30.35:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"xz.170530"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+  -d "{\"username\":\"${SIDA_TEST_USER:-admin}\",\"password\":\"${SIDA_TEST_PASSWORD:?请先 export SIDA_TEST_PASSWORD=<测试口令>}\"}" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
 
 echo "=== /api/datasources/capabilities ==="
 curl -s -w "\nHTTP:%{http_code}\n" -H "Authorization: Bearer $TOKEN" \
