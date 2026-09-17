@@ -46,8 +46,13 @@ def test_admin_require_owner():
     user = MagicMock()
     user.role = "member"
     import asyncio
+
+    # 2026-09-18: 原用 `asyncio.get_event_loop()`, 在全量跑里会抛
+    # "There is no current event loop in thread 'MainThread'"(前面的用例消费/关闭了默认 loop),
+    # 于是 `ei.value` 是 RuntimeError 而不是要断言的 403。改 `asyncio.run` —— 每次自建并收尾 loop,
+    # 与全局 loop 状态解耦。
     with pytest.raises(Exception) as ei:
-        asyncio.get_event_loop().run_until_complete(gw._require_owner_admin(user))
+        asyncio.run(gw._require_owner_admin(user))
     assert "owner" in str(ei.value).lower() or "403" in str(ei.value)
 
 

@@ -5,6 +5,23 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (测试夹具 · 全局态解耦 + SQLite 锁)
+
+### fix(tests): 最后 2 红(全局回调/事件循环污染) + teardown"database is locked"
+
+**性质**: 测试基础设施。分支 `feat/audit-fix-20260918`。
+
+- `test_lhb_backfill`: `daily_job` 的重算触发走**模块级回调** `_RECOMPUTE_HOOK`
+  (`set_recompute_hook`, 生产在 `bootstrap/startup.py` 注入)。别的用例先注入过 hook 时,
+  本文件 monkeypatch 的 `recompute_factors` 根本不会被调到 ⇒ 单跑绿、全量跑红(`calls` 恒空)。
+  加 autouse fixture: 每个用例前 `set_recompute_hook(None)`, 用例结束恢复原值。
+- `test_skill_gateway_p2p3::test_admin_require_owner`: 原用 `asyncio.get_event_loop()`,
+  全量跑时前面的用例已消费/关闭默认 loop ⇒ 抛 `There is no current event loop in thread 'MainThread'`,
+  `ei.value` 变成 RuntimeError 而不是要断言的 403。改 `asyncio.run`(自建并收尾 loop)。
+- `tests/conftest.py:purge_users`: 连删十几张表时 SQLite 会撞 `database is locked`(别的连接在写,
+  全量跑里的 14 个 teardown ERROR)。加 `PRAGMA busy_timeout=15000` + 命中 "locked" 时短重试,
+  让它**等锁**而不是立刻失败。
+
 ## 2026-09-18 (测试夹具 · isolation 清理收口)
 
 ### fix(tests): 两个 isolation 套件的手写清理清单改走 purge_users(14 个 teardown ERROR 的来源)
