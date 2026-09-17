@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
+import { ChartEmpty } from '@/components/ChartEmpty'
 import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
 import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
@@ -49,7 +50,13 @@ function PnlPctText({ value }: { value: unknown }) {
 
 function EquityChart({ data }: { data: EquityCurvePoint[] }) {
   if (data.length < 2) {
-    return <div className="h-48 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制曲线</div>
+    // 2026-09-18 UI 走查 B2: 无数据时把图表容器压到 132px, 并说明"怎么才能有数据"
+    return (
+      <ChartEmpty
+        title="暂无足够数据绘制曲线"
+        description="完成一笔模拟交易(或等待持仓产生净值)后, 这里会画出与基准的对比曲线"
+      />
+    )
   }
 
   const width = 600

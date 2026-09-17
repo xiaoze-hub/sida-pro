@@ -5,6 +5,25 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (UI 走查 B2 · 空态压缩)
+
+### fix(ui): 无数据时不再占巨幅空白(5 页复现)
+
+**性质**: UI 可用性修复(P1)。依据 `docs/UI走查_20260918.md` —— 视觉评审里"无数据仍占巨幅空白"
+是第二大类问题(`heatmap` 5/10「主视觉区沦为大片空白」、`paper-trading` 5/10、`portfolio`/`api-keys`/`shadow` 同题)。
+
+- 新增 `src/components/ChartEmpty.tsx`: **集中定义"图表没有数据时长什么样"** —— 默认 `minHeight: 132px`
+  的紧凑块、写明"为什么没有 + 怎么才会有"、给一个可点的下一步; 铁律是**只说"没有", 绝不显示 0**。
+- `BoardHeatmap`: 有数据才配 `CHART_HEIGHT = 560`; 空态原先也吃 560px(整块空白) → 改 `CHART_EMPTY_HEIGHT = 168`,
+  并补一行"每日 15:30 后同步; 长期为空请查数据源页"的可执行指引。
+- `PaperTrading`: 空曲线由 `h-48`(192px) 死空白 → `ChartEmpty`(带"完成一笔模拟交易后出现"的下一步提示)。
+- `ApiKeys`: 空态改 `compact`。
+- 回归: `frontend/tests/components/chart-empty.test.tsx` 6 例(紧凑高度、文案、下一步、**不出现 0**、
+  以及源级钉住"空态高度必须远小于有数据高度 / PaperTrading 不许再写死 h-48 空白 / ApiKeys 必须 compact")。
+
+> 未做(留给下一批): `theme-mood` 4/10 与 `heatmap` 5/10 的**信息设计**(Top N + 右侧详情主从、treemap 面积压缩与标签降级)
+> 属 B3; 卡片-vs-hairline 一致性属 B4。视觉分环比要在部署后重跑 `/tmp/ui_sweep.py` + `/tmp/ui_vision.py`。
+
 ## 2026-09-18 (UI 走查 · P0 遮挡 + 图表自托管 + 全景/未来方向)
 
 ### fix(ui): 固定免责条遮挡内容(9 页复现) + 图表库不再依赖外部 CDN

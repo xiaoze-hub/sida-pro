@@ -214,6 +214,7 @@ export default function ApiKeysPage() {
             icon={<KeyRound className="h-8 w-8" />}
             title="还没有 API Key"
             desc="创建一个 Key 即可开始调用 Skill API"
+            compact
             action={
               <Button size="sm" onClick={createKey} disabled={creating}>
                 <Plus className="h-3.5 w-3.5" /> 创建 Key

@@ -50,6 +50,9 @@ type BoardType = 'industry' | 'concept'
 
 const POLL_MS = 60_000
 const CHART_HEIGHT = 560
+// 2026-09-18 UI 走查 B2: 图表**有数据**才配 560px; 没数据时用紧凑高度,
+// 否则整块空白(走查: heatmap 5/10「主视觉区沦为大片空白」)。
+const CHART_EMPTY_HEIGHT = 168
 /** 异动清单最多展示条数(超出截断, 避免横条刷屏) */
 const MAX_ANOMALY_CHIPS = 8
 /** 稳定引用: 避免 useMemo 依赖每次渲染都变 (react-hooks/exhaustive-deps) */
@@ -361,10 +364,14 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       ) : (
         <div
           data-testid="heatmap-empty"
-          className="flex items-center justify-center text-[12px] text-muted-foreground"
-          style={{ height: CHART_HEIGHT }}
+          data-compact="1"
+          className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/60 bg-muted/10 text-center"
+          style={{ minHeight: `${CHART_EMPTY_HEIGHT}px` }}
         >
-          暂无板块数据（等待每日同步）
+          <span className="text-[12px] text-muted-foreground">暂无板块数据（等待每日同步）</span>
+          <span className="text-[11px] text-muted-foreground/80">
+            每日 15:30 后同步板块行情；若长期为空，请在「数据源」页检查东财板块源
+          </span>
         </div>
       )}
     </div>
