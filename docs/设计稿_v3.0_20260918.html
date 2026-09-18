@@ -168,7 +168,13 @@ v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右
     <strong>事实更正（2026-09-18）</strong>：实测 `DevPageLayout` <strong>已有 sticky 左目录</strong>（8 章锚点，`md:sticky`）——
     上一版把"页高 7281px"读成了"单栏无目录"，属于<strong>用度量推断功能缺失</strong>。
     真实缺口只剩两条：① <strong>调试台非常驻</strong>（是正文里的一个 Section，不是随读随试的右栏）；
-    ② <strong>没有档位/定价对比</strong>（free/pro 只散在限流表里）。</li>
+    ② <strong>没有档位/定价对比</strong>（free/pro 只散在限流表里）。
+    <br><strong>第二次事实更正（2026-09-18，P2-4 期间）</strong>：① 条也<strong>取消</strong> —— 匿名实测
+    <code>/developers</code>：<code>#sec-playground</code> <strong>可见可交互</strong>（2 个下拉 + 1 个输入 + 1 个「运行」按钮，
+    游客模式也能试），左目录 sticky 在、字阶 6 档。所谓「非常驻」是我拿"它在正文而非右栏"当成了"缺失"——
+    这是同一个错误模式的<strong>第 4 次</strong>（前三次：文档页"无目录"、榜单页"缺结论行"、用页高推断单栏）。
+    ② 条已由 <strong>P2-4 档位页</strong>补齐（<code>/tiers</code>，清单由后端按权限定义实时生成）。
+    结论：公开面**已知缺口清零**。</li>
 <li><strong>转化路径 ≤2 步</strong>：落地页 → 免费注册 → 立即拿到 Key（现状已满足，视作回归线：任何改版不得让它变长）；</li>
 <li><strong>两条线口径必须一致</strong>：文档示例里的数字与终端里同一指标<strong>不能是两个值</strong>——口径徽标（tick / eastmoney4 / ths）同样适用于文档示例；</li>
 <li>公开面同样<strong>禁外部 CDN</strong>（唯一匹配是一次误报：命中的是 <code>index.html</code> 里"为什么去掉 CDN"的注释，已查证非依赖），
@@ -375,7 +381,8 @@ v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右
   ① 口径差异解释器（方向 A）；<br>
   ② 导航信息架构落地（一级 ≤6 + 决策入口）；<br>
   ③ 数据源健康与降级可视化收口（方向 E）；<br>
-  ④ <strong>公开面</strong>：文档页三栏化（左目录 sticky + 右调试台常驻）+ 档位/定价对比页</td>
+  ④ <strong>公开面</strong>：档位/定价对比页 <strong>✅ P2-4 已做（<code>/tiers</code>）</strong>;
+     文档页三栏化的"右栏常驻调试台"降级为**可选优化**（实测左目录已在、调试台已可见可交互, 不是缺口）</td>
   <td>一级导航 ≤6；口径差异每对给归因；数据源"缺位→替代→降级"三态可见</td></tr>
 </tbody>
 </table>
