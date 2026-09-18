@@ -15,10 +15,10 @@
                                                 "用 0 冒充无数据"(诚实口径红线), 需人工核对
 
 用法:
-  python scripts/terminal_audit.py                       # 默认打生产 + 全部页面
+  SIDA_SHOT_PW=*** python scripts/terminal_audit.py      # 默认打生产 + 全部页面(必须给密码)
   python scripts/terminal_audit.py --base http://localhost:8000
   python scripts/terminal_audit.py --json /tmp/audit.json
-  SIDA_SHOT_PW=xxx python scripts/terminal_audit.py      # 用别的密码登录
+  SIDA_SHOT_PW=*** python scripts/terminal_audit.py      # 登录密码只从环境变量读(仓库不留凭据)
 
 退出码: 0 = 全部达标; 1 = 有指标越线(打印越线明细)。**发版前跑一次, 数据回填到设计稿**。
 """
@@ -180,7 +180,12 @@ def main() -> int:
         print("需要 playwright: pip install playwright && playwright install chromium", file=sys.stderr)
         return 2
 
-    pw_env = os.environ.get("SIDA_SHOT_PW", "xz.170530")
+    # 密码只从环境变量读 —— **仓库里不留任何凭据字面量**(tests/test_auth_no_default_password.py 门禁)。
+    pw_env = os.environ.get("SIDA_SHOT_PW") or ""
+    if not pw_env:
+        print("需要 SIDA_SHOT_PW 环境变量(登录密码不入库): SIDA_SHOT_PW=*** python scripts/terminal_audit.py",
+              file=sys.stderr)
+        return 2
     rows: list[dict] = []
     if args.anon:  # 公开面: 一律不带凭据, 且要验"匿名到底能不能看到"
         anon_rows: list[dict] = []
