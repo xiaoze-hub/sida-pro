@@ -165,6 +165,9 @@ export default function ThemeMoodPage() {
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [showAllRows, setShowAllRows] = useState(false)
+  // P1-1(2026-09-18): 右侧题材列表默认只给**主线 12 条**(分层第一层)。
+  // 实测该列原先一次渲染 516 行且逐行画 1px 分隔线 → hairline 526、密度 9680, 是典型"表格墙"。
+  const [showAllThemes, setShowAllThemes] = useState(false)
   const [boardCollapsed, setBoardCollapsed] = useState(
     () => localStorage.getItem('tm-board-collapsed') === '1',
   )
@@ -219,6 +222,8 @@ export default function ThemeMoodPage() {
     [resp],
   )
   const visibleItems = showAllRows ? items : items.slice(0, 15)
+  /** 右列可见题材(默认主线 12 条; 展开后才是全量) */
+  const visibleThemes = showAllThemes ? items : items.slice(0, 12)
   const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
   const bands = monthBands(axis)
   const labels = dayLabels(axis)
@@ -306,13 +311,14 @@ export default function ThemeMoodPage() {
             <span className="text-right">日变化</span>
             <span className="text-right">置信</span>
           </div>
-          <div className="divide-y divide-border/40 rounded border border-border/60">
-            {(resp?.items ?? []).map((it) => (
+          {/* 留白分隔取代逐行 1px 线(设计稿 v3.0 §七 6.3): 行线由 516 条降到 0 条, 层级交给分组与间距 */}
+          <div className="rounded border border-border/60">
+            {visibleThemes.map((it) => (
               <button
                 key={it.block_code}
                 type="button"
                 onClick={() => setActive(it.block_code)}
-                className={`grid w-full grid-cols-[1fr_56px_56px_44px] items-center gap-1 px-2 py-1.5 text-left text-[12px] hover:bg-accent/40 ${
+                className={`grid w-full grid-cols-[1fr_56px_56px_44px] items-center gap-1 px-2 py-2 text-left text-[12px] hover:bg-accent/40 ${
                   active === it.block_code ? 'bg-accent/60' : ''
                 }`}
               >
@@ -333,6 +339,15 @@ export default function ThemeMoodPage() {
             ))}
             {resp && resp.items.length === 0 ? (
               <div className="py-6 text-center text-[11px] text-muted-foreground">暂无题材情绪数据(等待盘后扫描)</div>
+            ) : null}
+            {items.length > 12 ? (
+              <button
+                type="button"
+                onClick={() => setShowAllThemes((v) => !v)}
+                className="w-full px-2 py-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                {showAllThemes ? '收起(只看主线 12 条)' : `展开全部 ${items.length} 条题材`}
+              </button>
             ) : null}
           </div>
         </div>
