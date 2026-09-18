@@ -8,7 +8,7 @@
 
 | key | 源 | 口径要点 |
 |---|---|---|
-| `thsdk_l2` | 明盘 L2(TQ/同花顺 `get_more_info` 的 `zjl_hb`) | 按**单笔成交金额分档**汇总的特大/大单净额, 同花顺官方"主力净额"明盘口径 |
+| `thsdk_l2` | 明盘 L2(TQ/同花顺 `get_more_info` 的 `zjl_hb`) | 按**单笔成交金额分档**汇总的特大/大单净额, 同花顺官方"主力净额"明盘口径; **TQ 原值是万元 → 本端点归一到元** |
 | `tencent_dark` | 暗盘(腾讯逐笔 v6, `compute_dark_flow`) | 逐笔主动成交 + **拆单识别**; 字段区分 全量主动净额 / 主力(≥20万) / 超大单(≥100万) |
 | `eastmoney_flow` | 东财四档资金流(`capital_flow_collector`) | 公开 Level-1 衍生, **按单金额四档归类**(超大/大/中/小), 盘中可能为 T-1 基准日 |
 
@@ -36,7 +36,8 @@ _CST = ZoneInfo("Asia/Shanghai")
 SOURCE_META: dict[str, dict[str, str]] = {
     "thsdk_l2": {
         "name": "明盘 L2 主力净流入（TQ / 同花顺口径）",
-        "caliber": "按单笔成交金额分档汇总的特大单+大单净额；同花顺官方「主力净额」的明盘口径。",
+        "caliber": "按单笔成交金额分档汇总的特大单+大单净额；同花顺官方「主力净额」的明盘口径。"
+                  "（TQ 原值单位为万元，本页已 ×1e4 归一到元，便于与另两源同单位对照）",
         "unit": "元",
     },
     "tencent_dark": {
@@ -104,11 +105,24 @@ def _thsdk_l2(symbol: str) -> dict:
         return _wrap("thsdk_l2", fields=None, note=f"取数异常：{type(exc).__name__}")
     if not l2:
         return _wrap("thsdk_l2", fields=None, note="TQ 未返回数据（未配正式账户 / 非交易时段 / 该票无 L2 摘要）")
+    # ── 单位归一: TQ `get_more_info` 的**金额**字段是「万元」(不是元) ──────────────
+    # 依据: ① `src/core/mainflow_tri.py` 文件头("腾讯四档(元) + 同花顺DDE官方(万元) + TQ Zjl_HB(万元) → 统一万元")
+    #       ② 前端同一批字段都按万元格式化(L2Tab「万元口径」注释 / DecisionPioneerCard 的 fmtWan)。
+    # 2026-09-18 由口径留痕发现: 本页曾把它们当「元」直接展示 → 明盘 L2 那列小 1e4 倍
+    # (002361 实测原值 3992.67, 实为 3992.67万元 = 3.99e7 元), 也让漂移页的三源可比性失真。
+    # 这里**统一归一到元**, 与另两列同单位; 笔数类字段不做换算。
+    _WAN_TO_YUAN = 10_000.0
+
+    def _yuan(v: object) -> float | None:
+        if isinstance(v, (int, float)):
+            return float(v) * _WAN_TO_YUAN
+        return None
+
     fields = [
-        {"label": "主力净流入", "value": l2.get("zjl_hb")},
-        {"label": "主力净额（含主动买卖口径）", "value": l2.get("zjl")},
-        {"label": "撤买额", "value": l2.get("cancel_buy")},
-        {"label": "撤卖额", "value": l2.get("cancel_sell")},
+        {"label": "主力净流入", "value": _yuan(l2.get("zjl_hb"))},
+        {"label": "主力净额（含主动买卖口径）", "value": _yuan(l2.get("zjl"))},
+        {"label": "撤买额", "value": _yuan(l2.get("cancel_buy"))},
+        {"label": "撤卖额", "value": _yuan(l2.get("cancel_sell"))},
         {"label": "L2 逐笔笔数", "value": l2.get("l2_tick_num"), "unit": "笔"},
         {"label": "L2 委托笔数", "value": l2.get("l2_order_num"), "unit": "笔"},
     ]

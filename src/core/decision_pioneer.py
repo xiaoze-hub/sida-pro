@@ -353,7 +353,11 @@ def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
 def fetch_tq_l2(symbol: str, market: str = "CN") -> dict | None:
     """TQ get_more_info 的 L2 成品字段(盘中实时)。失败返回 None。
 
-    返回: {zjl_hb(主力净流入,元), zjl, cancel_buy, cancel_sell,
+    ⚠️ 单位: 金额类字段是**万元**(不是元) —— 见 `src/core/mainflow_tri.py` 文件头
+    ("腾讯四档(元) + 同花顺DDE官方(万元) + TQ Zjl_HB(万元) → 统一万元")与前端同口径
+    格式化(L2Tab/DecisionPioneerCard 的 fmtWan)。消费方要元自行 ×1e4。
+
+    返回: {zjl_hb(主力净流入,**万元**), zjl(万元), cancel_buy(万元), cancel_sell(万元),
            l2_tick_num, l2_order_num, total_buy_vol, total_sell_vol}
     """
     from src.core.marketdata_client import get_market_data
