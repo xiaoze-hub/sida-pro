@@ -130,7 +130,7 @@ export default function DarkFundTopPage() {
       <div className="space-y-4">
         <Card className="p-6 text-center">
           <AlertTriangle className="mx-auto h-8 w-8 text-amber-500" />
-          <div className="mt-3 text-[14px] font-medium text-foreground">{t('darkFundTop.noSnapshot')}</div>
+          <div className="mt-3 text-[13px] font-medium text-foreground">{t('darkFundTop.noSnapshot')}</div>
           <p className="mt-1.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{data.note}</p>
           <div className="mt-4">
             <Button onClick={refresh} disabled={refreshing} size="sm" className="min-h-[44px]">
@@ -152,7 +152,7 @@ export default function DarkFundTopPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-stock-up" />
-                <h2 className="text-[14px] font-medium text-foreground">{t('darkFundTop.title')}</h2>
+                <h2 className="text-[13px] font-medium text-foreground">{t('darkFundTop.title')}</h2>
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {t('common.snapshotDate')} <span className="font-mono">{data.snapshot_date}</span>

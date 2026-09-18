@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig({
+  // 测试: 只放宽**等待上限**(见 tests/setup.ts), 不动断言语义; environment 仍由各文件 docblock 决定。
+  test: {
+    setupFiles: ['tests/setup.ts'],
+    testTimeout: 20000,
+    hookTimeout: 20000,
+  },
   plugins: [react()],
   resolve: {
     alias: {

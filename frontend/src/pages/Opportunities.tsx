@@ -1092,7 +1092,7 @@ export default function OpportunitiesPage() {
     <div className="page-container sida-page-enter pb-10">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
         <div>
-          <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight flex items-center gap-2">
+          <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" />
             {t('opportunities.title')}
           </h1>
@@ -1904,26 +1904,26 @@ export default function OpportunitiesPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均Alpha因子</div>
-            <div className="text-[18px] font-bold mt-1">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
+            <div className="text-[16px] font-bold mt-1">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
             <div className="text-[10px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
           </div>
           <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均事件催化</div>
-            <div className="text-[18px] font-bold mt-1">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
+            <div className="text-[16px] font-bold mt-1">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
             <div className="text-[10px] text-muted-foreground mt-1">
               拥挤惩罚 {factorStats ? factorStats.avg_crowd_penalty.toFixed(1) : '--'}
             </div>
           </div>
           <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">平均质量/风险</div>
-            <div className="text-[18px] font-bold mt-1">
+            <div className="text-[16px] font-bold mt-1">
               {factorStats ? `${factorStats.avg_quality_score.toFixed(1)} / ${factorStats.avg_risk_penalty.toFixed(1)}` : '--'}
             </div>
             <div className="text-[10px] text-muted-foreground mt-1">质量分越高越好</div>
           </div>
           <div className="border-l border-border/40 pl-3 py-1">
             <div className="text-[11px] text-muted-foreground">组合约束降级</div>
-            <div className="text-[18px] font-bold mt-1">{constraintStats?.constrained_top20 ?? 0}</div>
+            <div className="text-[16px] font-bold mt-1">{constraintStats?.constrained_top20 ?? 0}</div>
             <div className="text-[10px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
           </div>
         </div>
@@ -2040,7 +2040,7 @@ export default function OpportunitiesPage() {
               >
                 <span className={`text-[10px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
                 <div className="min-w-0">
-                  <div className="text-[14px] font-semibold truncate flex items-center gap-1.5">
+                  <div className="text-[13px] font-semibold truncate flex items-center gap-1.5">
                     <span className="truncate">{item.stock_name || item.stock_symbol}</span>
                     {/* P1: 多源共振火焰 */}
                     {resCount >= 2 && (
