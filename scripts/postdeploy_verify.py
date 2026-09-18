@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 import time
 import urllib.request
 
@@ -51,6 +52,8 @@ def main() -> int:
     ap.add_argument("tag", help="目标版本, 如 v0.10.32")
     ap.add_argument("--skip-ssh", action="store_true")
     ap.add_argument("--skip-audit", action="store_true")
+    ap.add_argument("--skip-anon", action="store_true",
+                    help="跳过公开面实证(必跑: 档位页曾因客户端双 /api 前缀在生产 404, 后端测试查不出)")
     args = ap.parse_args()
 
     hard_fail = 0
@@ -130,6 +133,19 @@ def main() -> int:
                 b.close()
     except ImportError:
         print("④ smoke 跳过: 无 playwright")
+
+    if not args.skip_anon:
+        print("\n⑤ 公开面(未登录)实证: scripts/anon_probe.py")
+        r = subprocess.run([sys.executable, str(Path(__file__).with_name("anon_probe.py"))],
+                           capture_output=True, text=True)
+        out = (r.stdout or "") + (r.stderr or "")
+        for line in out.strip().splitlines()[-8:]:
+            print("   " + line)
+        if "ModuleNotFoundError" in out or "No module named 'playwright'" in out:
+            print("   ⚠ 跳过: 当前解释器没有 playwright(用项目 venv 或装 playwright 后重跑)")
+        elif r.returncode != 0:
+            print("   ✗ 公开面实证有失败项")
+            hard_fail += 1
 
     print()
     if hard_fail:
