@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { TrendingUp, BarChart3, Flame, Droplets } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
-import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { useKlineLayer } from '@/hooks/useKlineLayer'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import ErrorBanner from '@/components/ErrorBanner'
@@ -79,16 +79,19 @@ interface IndexDetail {
  */
 function IndexKline({ symbol, market }: { symbol: string; market: string }) {
   const layer = useKlineLayer(symbol, market)
+  // P2(2026-09-18): 由 InteractiveKline 迁到 KlineChart —— props 一一对应
+  // (只把 initialDays 从字符串改数字); enableMinute 保留原有的「分时」视图。
   return (
-    <InteractiveKline
+    <KlineChart
       symbol={symbol}
       market={market}
       initialInterval="1d"
-      initialDays="120"
+      initialDays={120}
       gsSignals={layer.gsSignals}
       fundFlow={layer.fundFlow}
       events={layer.events}
       supportPressure={layer.supportPressure}
+      enableMinute
     />
   )
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
 import { ChartEmpty } from '@/components/ChartEmpty'
 import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
-import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { RefreshCw, Power, RotateCcw, X, TrendingUp, TrendingDown, Trophy, BarChart3, Wallet, Activity, Play, Bell, SlidersHorizontal } from 'lucide-react'
 import {
   paperTradingApi,
@@ -827,16 +827,31 @@ export default function PaperTradingPage() {
             <DialogTitle>{klineTrade ? `${klineTrade.stock_name || klineTrade.stock_symbol} 成交点` : '成交点'}</DialogTitle>
             <DialogDescription>K 线上的「我的买卖点」标记 = 本次模拟成交的买入/卖出</DialogDescription>
           </DialogHeader>
+          {/* P2(2026-09-18): IK → KlineChart。买卖点改用 KC 既有的 `tradeMarkers`
+              (§6.2 交割单标 K 线那套语义: side=buy/sell + text), 与交割单复盘保持同一套标记语言。 */}
           {klineTrade && (
-            <InteractiveKline
+            <KlineChart
               symbol={klineTrade.stock_symbol}
               market={klineTrade.stock_market}
-              events={[
+              enableMinute
+              tradeMarkers={[
                 ...(klineTrade.opened_at
-                  ? [{ date: klineTrade.opened_at.slice(0, 10), kind: 'my_trade' as const, label: `买入 ¥${safeFixed(klineTrade.entry_price)}` }]
+                  ? [
+                      {
+                        date: klineTrade.opened_at.slice(0, 10),
+                        side: 'buy' as const,
+                        text: `买入 ¥${safeFixed(klineTrade.entry_price)}`,
+                      },
+                    ]
                   : []),
                 ...(klineTrade.closed_at
-                  ? [{ date: klineTrade.closed_at.slice(0, 10), kind: 'my_trade' as const, label: `卖出 ¥${safeFixed(klineTrade.exit_price)}（${EXIT_REASON_MAP[klineTrade.exit_reason] || klineTrade.exit_reason}）` }]
+                  ? [
+                      {
+                        date: klineTrade.closed_at.slice(0, 10),
+                        side: 'sell' as const,
+                        text: `卖出 ¥${safeFixed(klineTrade.exit_price)}（${EXIT_REASON_MAP[klineTrade.exit_reason] || klineTrade.exit_reason}）`,
+                      },
+                    ]
                   : []),
               ]}
             />
