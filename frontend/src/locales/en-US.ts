@@ -66,6 +66,7 @@ const enUS: Messages = {
     opportunities: 'Opportunities',
     darkFundTop: 'Dark Fund TOP',
     caliberCompare: 'Caliber Compare',
+    decisionLedger: 'Decision Ledger',
     reports: 'Reports',
     history: 'History',
     portfolio: 'Portfolio',

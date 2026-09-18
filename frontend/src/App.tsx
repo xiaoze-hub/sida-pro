@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
@@ -68,6 +68,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
 import CaliberComparePage from '@/pages/CaliberCompare'
+import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
 import Disclaimer from '@/components/Disclaimer'
 
@@ -85,6 +86,9 @@ const navItems = [
   { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
   // 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排; 属 pro 档数据 → view_forecast
   { to: '/caliber-compare', icon: Activity, labelKey: 'nav.caliberCompare', perm: 'view_forecast' },
+  // 决策账本(2026-09-18, B6 前端 / 设计稿 v3.0 §六 新增"决策"一级入口): 信号→结果的账。
+  // 后端只要求登录(不含 pro 数据), 故用通用权限点, 不挡普通用户看自己的账。
+  { to: '/decision-ledger', icon: ClipboardList, labelKey: 'nav.decisionLedger', perm: 'view_quotes' },
   { to: '/reports', icon: FileText, labelKey: 'nav.reports', perm: 'view_reports' },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/portfolio', icon: List, labelKey: 'nav.portfolio', perm: 'edit_portfolio' },
@@ -572,6 +576,8 @@ function App() {
               <Route path="/heatmap" element={<PermGuard perm="view_heatmap" myPerms={myPerms}><HeatmapPage /></PermGuard>} />
               {/* 口径对照(2026-09-18): 三套主力资金口径并排, 消歧不合并(pro 档) */}
               <Route path="/caliber-compare" element={<PermGuard perm="view_forecast" myPerms={myPerms}><CaliberComparePage /></PermGuard>} />
+              {/* 决策账本(2026-09-18): 登录即可看 —— 后端 /api/decisions/* 也只要求登录 */}
+              <Route path="/decision-ledger" element={<DecisionLedgerPage />} />
               <Route path="/theme-mood" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ThemeMoodPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情并入工作台
                   (同路由内切 ?type=index|board); 正文由 Task 7 抽成 IndexBody/BoardBody */}
