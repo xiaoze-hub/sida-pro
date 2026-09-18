@@ -352,7 +352,6 @@ class TestStockAttributionS5:
         from src.config import Settings
         settings = Settings()
         from src.core.ai_client import AIClient
-        from src.models.market import MarketCode
 
         # build_prompt 不依赖 ai_client/notifier, 只读 data
         ctx = AgentContext(
