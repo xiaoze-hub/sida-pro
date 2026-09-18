@@ -254,9 +254,9 @@ export default function DevelopersPage() {
                 <div className="mx-auto mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary dark:bg-cyan-500/10 dark:text-cyan-400">
                   {s.icon}
                 </div>
-                <div className="font-mono text-[10px] text-primary/60 dark:text-cyan-500/50">{s.step}</div>
+                <div className="font-mono text-[12px] text-primary/60 dark:text-cyan-500/50">{s.step}</div>
                 <div className="text-[13px] font-medium text-foreground dark:text-white">{s.title}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">{s.desc}</div>
+                <div className="mt-0.5 text-[12px] text-muted-foreground">{s.desc}</div>
               </div>
             ))}
           </div>
@@ -302,9 +302,9 @@ export default function DevelopersPage() {
             <InfoCard key={i}>
               <div className="mb-1.5 flex items-center gap-2">
                 <span className="text-[13px] font-medium text-foreground dark:text-white">{a.title}</span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-mono text-primary dark:bg-cyan-500/10 dark:text-cyan-400">{a.badge}</span>
+                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[12px] font-mono text-primary dark:bg-cyan-500/10 dark:text-cyan-400">{a.badge}</span>
               </div>
-              <p className="mb-2 text-[11px] text-muted-foreground">{a.desc}</p>
+              <p className="mb-2 text-[12px] text-muted-foreground">{a.desc}</p>
               <CodeBlock code={a.code} language="bash" />
             </InfoCard>
           ))}
@@ -339,7 +339,7 @@ export default function DevelopersPage() {
               <tbody>
                 {catalog?.guest && (
                   <tr className="border-b border-border/40 dark:border-white/5">
-                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-muted-foreground dark:text-slate-400">游客</span></td>
+                    <td className="py-2 pr-4"><span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[12px] text-muted-foreground dark:text-slate-400">游客</span></td>
                     <td className="py-2 pr-4 font-mono text-foreground dark:text-white">{catalog.guest.daily_limit}</td>
                     <td className="py-2 pr-4 font-mono text-muted-foreground dark:text-slate-500">-</td>
                     <td className="py-2 text-muted-foreground dark:text-slate-500">仅 free 级 Skill，按 IP 限流</td>
@@ -348,7 +348,7 @@ export default function DevelopersPage() {
                 {Object.entries(catalog?.tiers ?? {}).map(([tier, limit]) => (
                   <tr key={tier} className="border-b border-border/40 dark:border-white/5">
                     <td className="py-2 pr-4">
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
+                      <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[tier] || TIER_BADGE.free}`}>
                         {tier}
                       </span>
                     </td>
@@ -369,7 +369,7 @@ export default function DevelopersPage() {
         <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <div className="text-[11px] text-amber-300/80">
+            <div className="text-[12px] text-amber-300/80">
               <strong>429 限流响应</strong> 会携带 <code className="font-mono">Retry-After</code> 头（秒）。
               建议实现指数退避 + 抖动：首次等待 Retry-After，后续每次翻倍，上限 60s。
             </div>
@@ -409,17 +409,17 @@ export default function DevelopersPage() {
               <div key={s.name} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/50 dark:bg-white/[0.02] p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <code className="font-mono text-[12px] text-primary dark:text-cyan-300">{s.name}</code>
-                  <span className={`rounded border px-1.5 py-0.5 text-[9px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
+                  <span className={`rounded border px-1.5 py-0.5 text-[12px] ${TIER_BADGE[s.tier_min] || TIER_BADGE.free}`}>
                     {s.tier_min}
                   </span>
-                  {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] text-orange-600 dark:text-orange-400">慢</span>}
-                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
+                  {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[12px] text-orange-600 dark:text-orange-400">慢</span>}
+                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[12px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
                 </div>
-                <p className="mt-1 text-[11px] text-muted-foreground">{s.description}</p>
+                <p className="mt-1 text-[12px] text-muted-foreground">{s.description}</p>
                 {Object.keys(s.params || {}).length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {Object.entries(s.params).map(([k, v]) => (
-                      <span key={k} className="rounded bg-muted/60 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+                      <span key={k} className="rounded bg-muted/60 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground">
                         {k}{v.default !== undefined ? `=${v.default}` : ''}
                       </span>
                     ))}
@@ -437,7 +437,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[11px] text-muted-foreground dark:text-slate-400">鉴权方式</Label>
+                <Label className="text-[12px] text-muted-foreground dark:text-slate-400">鉴权方式</Label>
                 <Select value={authMode} onValueChange={(v: any) => setAuthMode(v)}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -449,7 +449,7 @@ export default function DevelopersPage() {
               </div>
               {authMode === 'apikey' && (
                 <div>
-                  <Label className="text-[11px] text-muted-foreground dark:text-slate-400">API Key</Label>
+                  <Label className="text-[12px] text-muted-foreground dark:text-slate-400">API Key</Label>
                   <Input
                     type="password"
                     className="mt-1 h-8 font-mono text-[12px]"
@@ -466,7 +466,7 @@ export default function DevelopersPage() {
           <InfoCard>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
-                <Label className="text-[11px] text-muted-foreground dark:text-slate-400">选择 Skill</Label>
+                <Label className="text-[12px] text-muted-foreground dark:text-slate-400">选择 Skill</Label>
                 <Select value={selectedSkill} onValueChange={setSelectedSkill}>
                   <SelectTrigger className="mt-1 h-8 text-[12px]"><SelectValue placeholder="请选择" /></SelectTrigger>
                   <SelectContent>
@@ -478,14 +478,14 @@ export default function DevelopersPage() {
               </div>
               {selected && (
                 <div className="flex items-end">
-                  <p className="text-[11px] text-muted-foreground dark:text-slate-500">{selected.description}</p>
+                  <p className="text-[12px] text-muted-foreground dark:text-slate-500">{selected.description}</p>
                 </div>
               )}
             </div>
             <div className="mt-3">
-              <Label className="text-[11px] text-muted-foreground dark:text-slate-400">参数 (JSON)</Label>
+              <Label className="text-[12px] text-muted-foreground dark:text-slate-400">参数 (JSON)</Label>
               <textarea
-                className="mt-1 h-24 w-full rounded-lg border border-border/60 dark:border-white/10 bg-muted/40 dark:bg-[#0d0d18] p-2.5 font-mono text-[11px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
+                className="mt-1 h-24 w-full rounded-lg border border-border/60 dark:border-white/10 bg-muted/40 dark:bg-[#0d0d18] p-2.5 font-mono text-[12px] text-foreground dark:text-cyan-100/80 focus:border-primary/40 dark:focus:border-cyan-500/30 focus:outline-none"
                 value={paramsJson}
                 onChange={e => setParamsJson(e.target.value)}
                 spellCheck={false}
@@ -518,7 +518,7 @@ export default function DevelopersPage() {
         <div className="space-y-6">
           {API_GROUPS.map((group, gi) => (
             <div key={gi}>
-              <h3 className="mb-3 text-[14px] font-semibold text-foreground">{group.title}</h3>
+              <h3 className="mb-3 text-[13px] font-semibold text-foreground">{group.title}</h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-[12px]">
                   <thead>
@@ -533,15 +533,15 @@ export default function DevelopersPage() {
                     {group.apis.map((api, ai) => (
                       <tr key={ai} className="border-b border-border/50">
                         <td className="py-2 pr-3">
-                          <span className={`font-mono text-[11px] font-semibold ${
+                          <span className={`font-mono text-[12px] font-semibold ${
                             api.method === 'GET' ? 'text-emerald-500' :
                             api.method === 'POST' ? 'text-blue-500' :
                             api.method === 'DELETE' ? 'text-red-500' : 'text-amber-500'
                           }`}>{api.method}</span>
                         </td>
-                        <td className="py-2 pr-3 font-mono text-[11px] text-foreground">{api.path}</td>
+                        <td className="py-2 pr-3 font-mono text-[12px] text-foreground">{api.path}</td>
                         <td className="py-2 pr-3">
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                          <span className={`rounded px-1.5 py-0.5 text-[12px] ${
                             api.auth === '公开' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
                             api.auth === 'owner' ? 'bg-red-500/10 text-red-600 dark:text-red-400' :
                             'bg-blue-500/10 text-blue-600 dark:text-blue-400'
@@ -580,7 +580,7 @@ export default function DevelopersPage() {
                   <tr key={s.name} className="border-b border-border/40 dark:border-white/5">
                     <td className="py-2 pr-4 text-foreground dark:text-white">{s.name}</td>
                     <td className="py-2 pr-4">
-                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-400">
+                      <span className="rounded bg-blue-500/10 px-1.5 py-0.5 font-mono text-[12px] text-blue-400">
                         {s.caliber}
                       </span>
                     </td>
@@ -594,7 +594,7 @@ export default function DevelopersPage() {
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <div className="space-y-1 text-[11px] text-amber-300/80">
+              <div className="space-y-1 text-[12px] text-amber-300/80">
                 <p>
                   <strong>方向语义必须声明。</strong>
                   资金类指标返回值须携带 <code className="font-mono">caliber</code>（tick / eastmoney4 / ths / unknown）
@@ -623,13 +623,13 @@ export default function DevelopersPage() {
           ].map(e => (
             <div key={e.code} className="rounded-lg border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] p-3">
               <div className="flex items-center gap-2">
-                <span className={`font-mono text-[14px] font-bold ${
+                <span className={`font-mono text-[13px] font-bold ${
                   e.code === 401 ? 'text-amber-600 dark:text-amber-400' : e.code === 403 ? 'text-orange-600 dark:text-orange-400' : e.code === 429 ? 'text-red-600 dark:text-red-400' : 'text-red-600 dark:text-red-500'
                 }`}>{e.code}</span>
                 <span className="text-[13px] font-medium text-foreground dark:text-white">{e.title}</span>
               </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">{e.desc}</p>
-              <p className="mt-1 text-[11px] text-primary/70 dark:text-cyan-400/60">→ {e.fix}</p>
+              <p className="mt-1 text-[12px] text-muted-foreground">{e.desc}</p>
+              <p className="mt-1 text-[12px] text-primary/70 dark:text-cyan-400/60">→ {e.fix}</p>
             </div>
           ))}
         </div>

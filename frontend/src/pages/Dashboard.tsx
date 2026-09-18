@@ -650,11 +650,15 @@ export default function DashboardPage() {
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
               <span className="text-muted-foreground">{t('dashboard.mainNetInflow')}
-                <b className={`font-mono text-[16px] font-semibold ${(marketFlow.total_main_flow ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                <b className={`font-mono text-[16px] font-semibold ${marketFlow.total_main_flow == null
+                  ? 'text-muted-foreground'
+                  : marketFlow.total_main_flow >= 0
+                    ? 'text-stock-up'
+                    : 'text-stock-down'}`}>
                   <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
                 </b>
               </span>
-              <span className="text-muted-foreground">{t('dashboard.amount')} <b className="font-mono">{safeFixed(marketFlow.total_amount, 0, '0')}亿</b></span>
+              <span className="text-muted-foreground">{t('dashboard.amount')} <b className="font-mono">{marketFlow.total_amount == null ? '--' : `${safeFixed(marketFlow.total_amount, 0)}亿`}</b></span>
               <span className="text-muted-foreground">{t('dashboard.up')} <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
                 <span className="mx-1">/</span>{t('dashboard.down')} <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
               <span className="text-muted-foreground">{t('dashboard.sh')} <b className="font-mono">{safeFixed(marketFlow.sh_flow, 1)}亿</b>
