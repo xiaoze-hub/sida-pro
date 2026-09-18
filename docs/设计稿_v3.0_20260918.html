@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数智分析 Pro（SIDA Pro）设计稿 v3.0 · 2026-09-18</title>
+<style>
+  :root{
+    --bg:#f2f2f4; --paper:#fcfcfe; --ink:#18181b; --ink2:#3f3f46; --muted:#75757f;
+    --line:#e3e3ea; --line2:#cfcfd8; --up:#E53935; --down:#43A047;
+    --brand:#2b2bd0; --warn:#b45309; --ok:#0f766e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 90px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:22px}
+  h2{font-size:17px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
+  h3{font-size:14px;margin:20px 0 6px}
+  h4{font-size:13px;margin:14px 0 4px;color:var(--ink2)}
+  p,li{font-size:12.5px;color:var(--ink2)}
+  code,.mono{font-family:var(--mono);font-size:12px;background:#ececf2;padding:1px 4px;border-radius:3px}
+  table{width:100%;border-collapse:collapse;margin:8px 0 4px;background:var(--paper)}
+  th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;font-size:12px;vertical-align:top}
+  th{background:#f7f7fa;font-weight:600;color:var(--ink)}
+  td.num,th.num{text-align:right;font-family:var(--mono)}
+  .bad{color:var(--up);font-weight:600}
+  .good{color:var(--down);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .box{background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--brand);
+       padding:10px 12px;margin:10px 0;border-radius:3px}
+  .box.warn{border-left-color:var(--warn)}
+  .box.ok{border-left-color:var(--ok)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border:1px solid var(--line2);
+       border-radius:2px;color:var(--muted);margin-right:4px}
+  .scene{display:flex;height:210px;background:var(--paper);border:1px solid var(--line2);border-radius:3px;overflow:hidden;margin:8px 0}
+  .scene .col{border-right:1px solid var(--line);padding:6px;font-size:11px;color:var(--muted);position:relative}
+  .scene .k{flex:1;background:linear-gradient(90deg,rgba(43,43,208,.05),rgba(43,43,208,.12));border-right:none}
+  .scene .cap{position:absolute;bottom:4px;left:6px;font-size:10px;color:#9a9aa5}
+  pre{background:#f7f7fa;border:1px solid var(--line);border-radius:3px;padding:10px;overflow:auto;
+      font-family:var(--mono);font-size:11.5px;line-height:1.5;color:#27272a}
+  ul{margin:6px 0 6px 18px;padding:0}
+  .kpi{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  .kpi div{flex:1 1 150px;background:var(--paper);border:1px solid var(--line);border-radius:3px;padding:8px 10px}
+  .kpi b{display:block;font-size:19px;font-family:var(--mono);letter-spacing:-.02em}
+  .kpi span{font-size:11px;color:var(--muted)}
+  .foot{margin-top:36px;padding-top:10px;border-top:1px solid var(--line2);font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>数智分析 Pro · 设计稿 v3.0</h1>
+<div class="sub">
+  <span class="tag">2026-09-18</span>
+  <span class="tag">基线 commit 21de536 / 生产 v0.10.24</span>
+  <span class="tag">替代 v2.1（功能面已达成，本稿转向「终端度与可测质量」）</span>
+</div>
+
+<div class="box">
+<b>一句话定位</b>：SIDA Pro 是<strong>给一个人用的 A 股行情终端</strong>——打开就是 K 线，看的是决策，
+不是数据仓库。所有设计决策以三条铁律裁决：<br>
+① <strong>K 线是主角</strong>（个股/指数页 K 线宽度 ≥ 80% 屏宽，无卡片包裹）；<br>
+② <strong>不堆数据</strong>（只留"决策需要"的字段；缺数据不占位）；<br>
+③ <strong>诚实口径</strong>（涨红跌绿、单位自动亿/万、缺失显 <code>--</code> 且与 0 视觉可分、资金数字必带口径徽标）。
+</div>
+
+<h2>一、为什么现在出 v3.0：v2.1 的账已经结清</h2>
+<p>v2.1（2026-09）定义的是<strong>功能超集</strong>：21 页面全部保留、K 线六图层、§10.2 交互、§11 通知协议、
+§12 数据源兜底、§13 持仓跳路由。截至 v0.10.24 这些<strong>功能面已 100% 落地</strong>，且刚完成三件收尾：
+InteractiveKline 退役（删 1280 行，全仓只剩一个图表内核 + 一个分时部件）、口径对照页与口径档案（漂移留痕）、
+决策日志（信号 → T+1/3/5 结果的账）。</p>
+<p>所以 v3.0 不再列功能，而是回答一个更硬的问题：
+<strong>「东西都有了，为什么看起来还不像专业终端？」</strong>——并把答案变成<strong>可测的数字</strong>。</p>
+
+<h2>二、现状体检（实测，不是印象）</h2>
+<p>口径：生产 v0.10.24，1600×900 视口，DOM 探针（<code>scripts</code> 同级工具 <code>terminal_audit</code>，
+只读不改）。<em>产品铁律里唯一有明确数字的一条是「K 线 ≥80% 屏宽」，我们拿它当第一把尺子。</em></p>
+
+<table>
+<thead><tr>
+  <th>页面</th><th class="num">K线占屏</th><th class="num">卡片块</th><th class="num">hairline</th>
+  <th class="num">字号种类</th><th class="num">缺数 <code>--</code></th><th class="num">页高px</th><th class="num">密度</th>
+</tr></thead>
+<tbody>
+<tr><td>个股 <code>/stocks/002361</code></td><td class="num bad">0.552</td><td class="num">0</td><td class="num">45</td><td class="num warn">7</td><td class="num bad">73</td><td class="num">2082</td><td class="num">1212</td></tr>
+<tr><td>指数 <code>/stocks/000001?type=index</code></td><td class="num warn">0.767</td><td class="num">0</td><td class="num">5</td><td class="num">9</td><td class="num good">0</td><td class="num good">1154</td><td class="num">704</td></tr>
+<tr><td>热力图 <code>/heatmap</code></td><td class="num good">0.809</td><td class="num">1</td><td class="num">4</td><td class="num">6</td><td class="num">0</td><td class="num good">900</td><td class="num">336</td></tr>
+<tr><td>首页 <code>/</code></td><td class="num">—</td><td class="num">1</td><td class="num">68</td><td class="num bad">11</td><td class="num">6</td><td class="num">2606</td><td class="num">1099</td></tr>
+<tr><td>题材 <code>/theme-mood</code></td><td class="num">—</td><td class="num">0</td><td class="num bad">526</td><td class="num good">5</td><td class="num">6</td><td class="num good">1189</td><td class="num bad">9680</td></tr>
+<tr><td>暗盘榜 <code>/dark-fund-top</code></td><td class="num">—</td><td class="num">0</td><td class="num">24</td><td class="num good">6</td><td class="num warn">21</td><td class="num good">1001</td><td class="num">1289</td></tr>
+<tr><td>机会 <code>/opportunities</code></td><td class="num">—</td><td class="num">1</td><td class="num">27</td><td class="num">8</td><td class="num">0</td><td class="num">1281</td><td class="num">890</td></tr>
+<tr><td>持仓 <code>/portfolio</code></td><td class="num">—</td><td class="num">0</td><td class="num">13</td><td class="num">7</td><td class="num">0</td><td class="num good">900</td><td class="num">442</td></tr>
+</tbody>
+</table>
+
+<div class="box ok"><b>先记好的</b>：① <strong>卡片化已经消灭</strong>（8 页卡片块 0~1，说明"不卡片化"这条已成事实，
+该把它<strong>固化成门禁</strong>而不是继续讨论）；② 横向溢出 8/8 页为 <code>false</code>；③ B1 的固定条遮挡修复后，
+探针口径下不再复现遮挡（<code>fixedBottom=0</code>）；④ 缺数用 <code>--</code> 而非 0（诚实口径在跑）。</p></div>
+
+<h3>诊断一：K 线主角度不够 —— 这是铁律唯一被违反的地方</h3>
+<p>个股页 K 线只占 <strong>55.2%</strong> 屏宽，指数页 76.7%。也就是说：<strong>我们最核心的页面，主角占了不到六成屏。</strong>
+v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右栏决策信息，两栏固定宽度把 K 线挤成夹心。</p>
+
+<h3>诊断二：字阶碎片化 —— 首页"乱"的可测根因</h3>
+<p>首页同时使用 <strong>11 种字号</strong>（9/10/11/12/13/14/15/17/20/22/30），其中 9、15、17、22、30 都在标准集之外。
+<strong>字号种类每多一种，视觉层级就多碎一层</strong>；首页"乱"不是配色问题，是层级问题。</p>
+
+<h3>诊断三：信息堆砌 —— 两个极端同时存在</h3>
+<ul>
+<li><strong>题材页</strong>：526 条 1px 线 + 密度 9680 字/千像素（表格塞到几乎没有呼吸感）；</li>
+<li><strong>个股页</strong>：73 处 <code>--</code> —— 诚实标注是对的，但<strong>一屏 73 个"没有数据"是噪声</strong>：
+缺数据的字段<strong>不该占位</strong>，应该聚合成一行「本页缺 N 项（点击展开）」。</li>
+</ul>
+
+<h3>待查（本稿不妄下结论）</h3>
+<p>持仓页出现 4 处 <code>0.00</code> 形式数字，需人工逐条确认是<strong>真实 0</strong>还是<strong>用 0 冒充无数据</strong>
+（后者触犯诚实口径红线）。列入 P0 核查项，不默认它是 bug。</p>
+
+<h2>三、视觉系统 v3（把铁律变成 token 与规则）</h2>
+
+<h3>3.1 色彩：一份调色板，只有一个强调色</h3>
+<table>
+<thead><tr><th>用途</th><th>token</th><th>值</th><th>规则</th></tr></thead>
+<tbody>
+<tr><td>涨 / 买</td><td class="mono">--stock-up</td><td class="mono">#E53935</td><td>国内惯例：<strong>涨红</strong>（含 GS 买点、涨停、红三兵）</td></tr>
+<tr><td>跌 / 卖</td><td class="mono">--stock-down</td><td class="mono">#43A047</td><td><strong>跌绿</strong>（含 GS 卖点、跌停）</td></tr>
+<tr><td>品牌 / 交互</td><td class="mono">--primary</td><td class="mono">hsl(240 70% 45%)</td><td>仅用于可点击元素与选中态，<strong>不用于数据</strong></td></tr>
+<tr><td>底 / 纸面</td><td class="mono">--background / --card</td><td class="mono">240 20% 95.5% / 99%</td><td>浅灰底 + 近白纸面；<strong>无渐变、无投影堆叠</strong></td></tr>
+<tr><td>分隔</td><td class="mono">--border</td><td class="mono">240 15% 90%</td><td>一律 <strong>1px hairline</strong>，表格只用横线不用竖线</td></tr>
+<tr><td>次级文字</td><td class="mono">--muted-foreground</td><td class="mono">240 10% 48%</td><td>对比度 4.9:1（已满足无障碍余量）</td></tr>
+<tr><td>警示 / 缺数</td><td class="mono">--warn</td><td class="mono">#b45309</td><td>口径存疑、数据降级、样本不足</td></tr>
+</tbody>
+</table>
+
+<h3>3.2 字阶：锁 6 档，禁止第 7 档</h3>
+<table>
+<thead><tr><th class="num">px</th><th>用途</th><th>字重</th><th>例</th></tr></thead>
+<tbody>
+<tr><td class="num">20</td><td>主数字（大屏读数）</td><td>600 mono</td><td>最新价、涨跌幅</td></tr>
+<tr><td class="num">16</td><td>页面/区块标题</td><td>600</td><td>"主力意图""三源口径对照"</td></tr>
+<tr><td class="num">13</td><td>强调正文 / 表头</td><td>500</td><td>列名、结论行</td></tr>
+<tr><td class="num">12</td><td>正文 / 表体</td><td>400</td><td>说明文字、表格单元</td></tr>
+<tr><td class="num">11</td><td>次级 / 时间戳</td><td>400</td><td>更新时间、来源</td></tr>
+<tr><td class="num">10</td><td>辅助 / 徽标</td><td>400</td><td>口径徽标 tick / eastmoney4</td></tr>
+</tbody>
+</table>
+<div class="box warn"><b>违规清单（现有代码）</b>：<code>9px</code>（首页/个股/指数）、<code>8px</code>（指数）、
+<code>14/15/17/18/22/30px</code> 多处。收口目标：<strong>首页字号种类 11 → ≤6</strong>，全仓只允许上表 6 档
+（现有 <code>R10 字阶棘轮</code>已拦新增，v3.0 要求<strong>存量也降下来</strong>）。</div>
+
+<h3>3.3 数字排版规则（终端的脸面）</h3>
+<ul>
+<li><strong>等宽对齐</strong>：所有数字列 <code>font-variant-numeric: tabular-nums</code> + 右对齐，小数点必须列对齐；</li>
+<li><strong>单位自动</strong>：<code>|v| ≥ 1e8 → 亿</code>，否则 <code>万</code>；单位后缀用 10px 灰字，不参与对齐；</li>
+<li><strong>0 与无数据必须可分</strong>：真实 0 → <code>0.00</code>；无数据 → <code>--</code>（灰）；<strong>禁止用 0 表示"没有数据"</strong>；</li>
+<li><strong>口径徽标</strong>：所有资金类数字（净流入/净额/净占比）右侧跟 10px 徽标（<code>tick</code>/<code>eastmoney4</code>/<code>ths</code>），
+悬停显示口径差异一句解释；两口径冲突时<strong>并列不合并</strong>，且优先采信逐笔。</li>
+</ul>
+
+<h3>3.4 密度与间距</h3>
+<ul>
+<li>基准行高 <strong>24px</strong>（表格）/ 28px（列表）；区块间距 12 / 18 / 24 三档，不出现第四档；</li>
+<li><strong>密度目标区间：1500~3500 字/千像素</strong>。低于 1500 = 空白浪费（首屏看不到结论）；高于 4000 = 堆砌（题材页现状 9680）；</li>
+<li>一屏（900px 视口）必须能看到<strong>结论 + 证据 + 动作提示</strong>三件事，超出的信息按需下钻。</li>
+</ul>
+
+<h2>四、页面范式：四类，各有验收线</h2>
+
+<h3>范式 A · 行情终端页（个股 / 指数 / 合约）</h3>
+<div class="scene">
+  <div class="col" style="width:56px">自选<br>条<div class="cap">56px 图标条（可展开 240px）</div></div>
+  <div class="col k"><b style="color:#2b2bd0">K 线主区 ≥80%</b><div class="cap">主图 + 量副图 + 六图层；读数走 overlay 条（不占宽）</div></div>
+  <div class="col" style="width:64px">决策<br>层<div class="cap">默认折叠 64px，展开 320px</div></div>
+</div>
+<table>
+<thead><tr><th>验收线</th><th class="num">现状</th><th class="num">目标</th></tr></thead>
+<tbody>
+<tr><td>K 线占屏比</td><td class="num bad">0.552</td><td class="num"><b>≥0.80</b></td></tr>
+<tr><td>图例/读数位置</td><td>右侧面板占宽</td><td>K 线内 overlay bar（hairline 分隔）</td></tr>
+<tr><td>缺数据字段</td><td class="num bad">73 处 <code>--</code> 平铺</td><td class="num">折叠为「缺 N 项」≤1 行</td></tr>
+<tr><td>卡片块</td><td class="num">0</td><td class="num">0</td></tr>
+</tbody>
+</table>
+
+<h3>范式 B · 榜单 / 扫描页（暗盘榜 / 机会 / 热力图 / 涨停梯队）</h3>
+<ul>
+<li>表格为主体：<strong>只用横线</strong>（1px hairline），无竖线、无斑马底；</li>
+<li>列数 ≤7；超出走"展开行"而非横向滚动；</li>
+<li>排序/筛选固定在表头（sticky），首屏必须含"当日结论"一行（不是纯列表）；</li>
+<li>验收线：hairline 密度适中（<strong>≤80 条/页</strong>），密度落在 1200~2500。</li>
+</ul>
+
+<h3>范式 C · 工作台 / 三栏页（个股详情深页、决策账本）</h3>
+<ul>
+<li>左：导航/对象列表（可折叠）；中：<strong>图或结论</strong>；右：上下文（口径、来源、时间、动作提示）；</li>
+<li>任何一栏折叠后，中间主区必须能占满 80% 屏宽；</li>
+<li>跨栏滚动各自独立，页面整体不出现两条以上滚动条同屏。</li>
+</ul>
+
+<h3>范式 D · 表单 / 设置 / 系统页</h3>
+<ul>
+<li>单列布局，最大宽 720px，字段间距 18px；危险操作必须二次确认 + 明确后果文案；</li>
+<li>不出现"仪表盘式"指标卡堆叠（设置页不是数据页）。</li>
+</ul>
+
+<h2>五、导航信息架构 v3：34 页 → 8 个高频位 + 6 组</h2>
+<p>判据只有一条：<strong>「这个页面一周开几次？」</strong>天天用 → 一级；盘前盘后 → 二级；偶尔配一次 → 收进设置。</p>
+<table>
+<thead><tr><th>分组</th><th>包含</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><b>行情</b>（一级）</td><td>首页、个股/指数、热力图、题材</td><td>天天用；首页必须是"今日结论"而非仪表盘</td></tr>
+<tr><td><b>机会</b>（一级）</td><td>机会池、暗盘榜、涨停梯队、共振扫描</td><td>盘前盘后各一次</td></tr>
+<tr><td><b>决策</b>（一级，<b>新增</b>）</td><td><b>决策账本</b>（B6 前端）、口径对照、模拟盘、影子账</td><td>"信号 → 结果"的账，v3.0 新增的一级入口</td></tr>
+<tr><td><b>持仓</b>（一级）</td><td>持仓、自选、成交/交割单</td><td>盘中高频</td></tr>
+<tr><td><b>投研</b>（二级）</td><td>研报、公告、新闻、研报评级一致预期</td><td>按需</td></tr>
+<tr><td><b>系统</b>（二级）</td><td>数据源健康、通知、API Keys、开发者、管理、设置、个人</td><td>配置类，收起来</td></tr>
+</tbody>
+</table>
+<div class="box">归并原则：<strong>一级入口 ≤6</strong>；同一个决策动作的页面不拆成两个入口；
+同类页面（如"日报/周报/复盘"）合并为一页多 Tab，而不是各占一个菜单项。</div>
+
+<h2>六、三个核心页的重设计（v3.0 的主要工作量）</h2>
+
+<h3>6.1 个股页：把主角还给 K 线（0.552 → ≥0.80）</h3>
+<pre>
+改前 ─ 三栏固定, K 线被夹心 55%
+┌────┬────────────────────────┬──────────┐
+│自选│        K 线 55%         │  决策层   │
+│240 │  (图例/读数在右侧面板)   │   320    │
+└────┴────────────────────────┴──────────┘
+
+改后 ─ 两侧可折叠, 默认收起, K 线 ≥80%
+┌──┬──────────────────────────────────┬─┐
+│56│        K 线 84%                   │6│ ← 图标条, 悬停展开
+│  │  ┌ overlay: MA5/10/20 · OHLC ─┐   │4│
+│  │  └────────────────────────────┘   │ │
+├──┴──────────────────────────────────┴─┤
+│ 结论行(一句话) · 口径徽标 · 更新时间       │ ← 1 行, hairline 分隔
+└──────────────────────────────────────┘
+</pre>
+<ul>
+<li><strong>读数与图例进 K 线内 overlay bar</strong>（悬停跟手，不占宽度）——这也顺手解决了"MA 值在哪看"的一致性问题；</li>
+<li>右侧决策层默认折叠成 64px 图标条（点击/悬停展开 320px，<strong>展开时 K 线让宽但页不跳</strong>）；</li>
+<li>缺数据字段聚合：底部一行「本页缺 12 项：龙虎榜/大宗/两融…（展开）」；</li>
+<li>完成判据：探针 <code>klineShare ≥ 0.80</code> 且 <code>dash ≤ 12</code>。</li>
+</ul>
+
+<h3>6.2 首页：从仪表盘改为"今日作战页"（字号 11 种 → ≤6）</h3>
+<ul>
+<li>首屏三块，从上到下：<strong>① 市场结论行</strong>（指数 + 涨跌家数 + 情绪温度，一行读完）
+<strong>② 我的持仓/自选盘面</strong>（带 K 线缩略 + 主力意图标记）<strong>③ 今日机会</strong>（榜单前 5 + 动作提示一行）；</li>
+<li>字阶只允许 20 / 16 / 13 / 12 / 11 / 10 六档，删除 9px 与 >20px；</li>
+<li>KPI 数字块 <strong>≤6 个</strong>（现在偏多），其余指标下沉到"更多"；</li>
+<li>完成判据：<code>fontCount ≤ 6</code>、首屏出现"结论 + 动作提示"、密度 1500~3000。</li>
+</ul>
+
+<h3>6.3 题材页：从"表格墙"改为"分层表格"（hairline 526 → ≤80）</h3>
+<ul>
+<li>层级化：<strong>主线题材（≤12 行）→ 分支题材（可展开）→ 全部题材（下钻页）</strong>；</li>
+<li>用<strong>留白 + 分组标题</strong>代替一条条边框线；数字列等宽对齐，涨跌用色不带底色块；</li>
+<li>每行给"一句话状态"（如"高位分歧/情绪退潮第 2 天"），而不是只堆 8 个数字；</li>
+<li>完成判据：<code>hairline ≤ 80</code>、密度落到 <strong>1500~3500</strong>。</li>
+</ul>
+
+<h2>七、新增能力（v3.0 要长出来的东西）</h2>
+<table>
+<thead><tr><th>能力</th><th>为什么是现在</th><th>交付物</th></tr></thead>
+<tbody>
+<tr><td><b>决策账本页</b>（B6 前端）</td><td>后端 v0.10.24 已上线，信号开始按自然日累积样本；页面不来，"有账可查"就只是接口</td><td>命中率表（T+1/3/5）+ <strong>样本不足显式标注</strong> + 信号明细（当时价/证据快照）</td></tr>
+<tr><td><b>口径差异解释器</b>（方向 A 升级）</td><td>现有三源并排已能"看到差"，但用户仍需自己判断；且实测明盘 L2 与东财四档只差 ~1.2%，而暗盘是 2.75 倍</td><td>每对口径给"差异归因"一句（拆单还原/竞价段/分档口径）+ 阈值告警（差 >X% 标黄）</td></tr>
+<tr><td><b>缺数据折叠组件</b></td><td>个股页 73 处 <code>--</code> 是噪声；诚实口径不等于"平铺展示缺失"</td><td><code>&lt;MissingFields/&gt;</code> 组件：缺项计数 + 展开 + 每项原因</td></tr>
+<tr><td><b>终端度巡检脚本</b>（本稿体检脚本产品化）</td><td>本稿所有验收线都要可复测，否则会退化成口号</td><td><code>scripts/terminal_audit.py</code>：输出上述 8 个指标 + 与阈值比对，<strong>发版前必跑、数据回填</strong></td></tr>
+</tbody>
+</table>
+
+<h2>八、验收线总表（可测，v3.0 的定义）</h2>
+<table>
+<thead><tr><th>指标</th><th class="num">现状</th><th class="num">目标</th><th>测法</th></tr></thead>
+<tbody>
+<tr><td>个股页 K 线占屏</td><td class="num bad">0.552</td><td class="num"><b>≥0.80</b></td><td rowspan="8">终端度巡检脚本<br>（DOM 探针，1600×900）</td></tr>
+<tr><td>指数页 K 线占屏</td><td class="num warn">0.767</td><td class="num"><b>≥0.80</b></td></tr>
+<tr><td>首页字号种类</td><td class="num bad">11</td><td class="num"><b>≤6</b></td></tr>
+<tr><td>个股页平铺缺数</td><td class="num bad">73</td><td class="num"><b>≤12</b></td></tr>
+<tr><td>题材页 hairline</td><td class="num bad">526</td><td class="num"><b>≤80</b></td></tr>
+<tr><td>题材页密度</td><td class="num bad">9680</td><td class="num"><b>1500~3500</b></td></tr>
+<tr><td>终端页卡片块</td><td class="num good">0~1</td><td class="num"><b>0</b>（固化门禁）</td></tr>
+<tr><td>横向溢出</td><td class="num good">8/8 false</td><td class="num"><b>false</b></td></tr>
+<tr><td>0 与无数据可分</td><td class="num warn">持仓页 4 处待查</td><td class="num">逐条确认，无"0 冒充缺数"</td><td>人工核查 + 单测</td></tr>
+<tr><td>资金数字带口径徽标</td><td class="num">已部分具备</td><td class="num">100% 覆盖</td><td>ui-rules 新门禁</td></tr>
+</tbody>
+</table>
+
+<h2>九、分阶段路线（每批 = 一个 tag = 一次三重验证）</h2>
+<table>
+<thead><tr><th>批次</th><th>内容</th><th>验收</th></tr></thead>
+<tbody>
+<tr><td><b>P0</b><br>v0.10.25~27</td><td>
+  ① 个股/指数页三栏折叠，K 线 overlay 读数条；<br>
+  ② 首页字阶收口 6 档 + 首屏"结论行"；<br>
+  ③ <code>&lt;MissingFields/&gt;</code> 缺数折叠（个股页落地）；<br>
+  ④ 持仓页 4 处 <code>0.00</code> 性质核查 + 修正</td>
+  <td>个股 0.552→≥0.80；指数 0.767→≥0.80；首页 11→≤6；个股 dash 73→≤12</td></tr>
+<tr><td><b>P1</b><br>v0.10.28~30</td><td>
+  ① 题材页分层表格化；<br>
+  ② 榜单页范式统一（暗盘榜/机会/热力图）；<br>
+  ③ 决策账本页上线（B6 前端）；<br>
+  ④ 终端度巡检脚本进发版清单</td>
+  <td>题材 hairline 526→≤80、密度→1500~3500；账本页"样本不足"显式；巡检表回填</td></tr>
+<tr><td><b>P2</b><br>v0.11.x</td><td>
+  ① 口径差异解释器（方向 A）；<br>
+  ② 导航信息架构落地（一级 ≤6 + 决策入口）；<br>
+  ③ 数据源健康与降级可视化收口（方向 E）</td>
+  <td>一级导航 ≤6；口径差异每对给归因；数据源"缺位→替代→降级"三态可见</td></tr>
+</tbody>
+</table>
+
+<div class="box warn"><b>本稿明确"不做"的事</b><br>
+① 不重写功能页面结构（v2.1 的功能面已落地，v3.0 只动<strong>布局/层级/密度</strong>）；<br>
+② 不引入新的图表库或 UI 框架（K 线内核已收敛为一个，不折腾）；<br>
+③ 不做"通用看板式仪表盘"（与第一条铁律冲突）；<br>
+④ 不加动效炫技（终端要"稳"，微交互只用 120~160ms 的透明/位移）。
+</div>
+
+<h2>十、与既有工程门禁的关系</h2>
+<table>
+<thead><tr><th>门禁</th><th>现状</th><th>v3.0 要求</th></tr></thead>
+<tbody>
+<tr><td>R6 <code>toFixed</code> 棘轮</td><td>拦裸 <code>toFixed</code>，走 <code>safeFixed</code></td><td>不变（缺数显示 <code>--</code> 的既有通道）</td></tr>
+<tr><td>R8 <code>disclaimer-h</code></td><td>固定条必须留高</td><td>不变</td></tr>
+<tr><td>R9 禁止外部 CDN</td><td>图表库自托管</td><td>不变</td></tr>
+<tr><td>R10 字阶棘轮</td><td>只拦新增</td><td><b>升级：存量超标也报</b>（配合本稿字阶表）</td></tr>
+<tr><td>R11 单图表内核</td><td><code>createChart</code> 只允许两处</td><td>不变</td></tr>
+<tr><td>—（新）</td><td></td><td><b>R12 终端度巡检</b>：发版前跑脚本，8 项指标任一越线即需书面说明（不是硬失败，防止误伤）</td></tr>
+</tbody>
+</table>
+
+<div class="foot">
+编制：Hermes（2026-09-18）。基线：commit <code>21de536</code> / 生产 <code>v0.10.24</code>。
+数据来源：生产 DOM 探针实测（1600×900，8 页）+ 代码库实测（后端 375 文件/113,389 行、REST 411 端点、
+迁移 75 个、前端 295 文件/60,797 行、页面 34 个、后端测试 303 文件、前端测试 74 文件）。
+本稿取代 v2.1 的"功能超集"定位：功能面已完成，v3.0 是<strong>质量与终端度</strong>的规格书。
+</div>
+
+</div>
+</body>
+</html>
