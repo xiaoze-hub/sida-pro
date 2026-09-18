@@ -207,6 +207,7 @@ PROBE_JS = r"""() => {
     fontCount: Object.keys(sizes).length,
     dash: (txt.match(/--/g) || []).length,
     zeroish: (txt.match(/\b0\.0+\b/g) || []).length,
+    textLen: txt.length,   // 页面是否"渲染上来了"的粗判据(见 judge 的未就绪短路)
     docH,
     density: docH ? +(txt.length / (docH / 1000)).toFixed(0) : 0,
     densityNoChart: docH - Math.round(canvasH) > 200
@@ -231,9 +232,16 @@ def _login(base: str, user: str, pw: str) -> str:
 
 
 def judge(row: dict) -> list[str]:
-    """按阈值判定单页越线项。只报**适用该页**的指标, 避免误伤。"""
+    """按阈值判定单页越线项。只报**适用该页**的指标, 避免误伤。
+
+    2026-09-19: 加"页面未就绪"短路 —— 文本量过小(默认 <200 字)说明数据还没渲染上来,
+    此时判 `conclusionRow`/`cards`/字号 只会产出**假越线**(实测踩过: 同一版本两次跑结论相反)。
+    未就绪一律不判, 由调用方打印"未就绪"提示, 避免拿"没加载完"当"页面改坏了"。
+    """
     bad: list[str] = []
     label = row["name"]
+    if int(row.get("textLen") or 0) < 200:
+        return []
     for key, spec in TARGETS.items():
         pages = spec.get("pages")
         if pages is not None and label not in pages:  # type: ignore[operator]
@@ -341,10 +349,22 @@ def main() -> int:
             try:
                 page.goto(args.base + route, timeout=60000, wait_until="domcontentloaded")
                 page.wait_for_timeout(settle * 1000)
+                # 2026-09-19: 首页的**结构性判据**(结论行)依赖数据到位 —— 固定等待会偶发
+                # "页面还空着就量", 报出 conclusionRow=false 的**假越线**(实测: 同一版本两次跑,
+                # 一次 hairline=16/fonts=6, 一次 hairline=2/fonts=5 且判越线)。所以额外等一等,
+                # 最多 8s; 等不到就交给下面的 unsettled 分支, 不硬判。
+                if route == "/":
+                    try:
+                        page.wait_for_selector("[data-testid=market-conclusion]", timeout=8000)
+                    except Exception:  # noqa: BLE001
+                        pass
                 rec.update(page.evaluate(PROBE_JS))
             except Exception as exc:  # noqa: BLE001
                 rec["error"] = f"{type(exc).__name__}: {exc}"[:160]
             rec["violations"] = judge(rec) if "error" not in rec else ["probe-failed"]
+            # 未就绪(文本量过小)→ 明确标注, 而不是显示成 OK(否则等于把"没加载完"当成"合格")
+            if "error" not in rec and int(rec.get("textLen") or 0) < 200:
+                rec["unsettled"] = True
             rows.append(rec)
         b.close()
 
@@ -361,7 +381,10 @@ def main() -> int:
         dnc = r.get("densityNoChart")
         viol = r["violations"]
         n_bad += 1 if viol else 0
-        mark = "OK" if not viol else "越线: " + "; ".join(viol)
+        if r.get("unsettled") and not viol:
+            mark = "未就绪(文本<200字, 已跳过判定) —— 复跑一次再下结论"
+        else:
+            mark = "OK" if not viol else "越线: " + "; ".join(viol)
         print(
             f"{r['name']:<8}{ks:>9.3f}{r['cards']:>6}{r['hairline']:>10}{r['fontCount']:>6}"
             f"{r['dash']:>6}{dnc if dnc is not None else r['density']:>7}  {mark}"
