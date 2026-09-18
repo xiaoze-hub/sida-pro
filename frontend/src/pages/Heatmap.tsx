@@ -16,7 +16,9 @@ export default function HeatmapPage() {
           面积=量能(成交额口径，缺失板块以最小面积保底)或等权；颜色=当日涨跌幅(±3% 夹紧，平盘/无数据为灰)。点击色块查看成分股。
         </p>
       </div>
-      <div className="card p-3">
+      {/* 主内容面板不用 .card(12px 圆角+阴影 = "卡片包")——铁律: 主内容不该被卡片包住;
+          改为 4px 圆角 + hairline 边框, 视觉几乎不变但不再是"卡片" */}
+      <div className="rounded border border-border/60 bg-card p-3">
         <BoardHeatmap
           onOpenBoard={(blockCode) => navigate(`/boards/${encodeURIComponent(blockCode)}`)}
         />

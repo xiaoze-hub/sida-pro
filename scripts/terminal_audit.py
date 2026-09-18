@@ -14,6 +14,10 @@
   zeroish     "0.00" 形式出现次数             —— **只提示不判定**: 可能是真 0, 也可能是
                                                 "用 0 冒充无数据"(诚实口径红线), 需人工核对
 
+**指标分三类(2026-09-18 定稿)**: ① **结构指标**(随时可比): klineShare / hairline / cards / fontCount;
+② **结构判据**(布尔, 比统计型稳): 首页是否含"结论行"; ③ **数据/状态指标**(须固定时点 + 只对表格页判):
+dash / zeroish / densityNoChart(**剔除图表占高**, 且不判图表页与混合看板)。
+
 **测量基准(2026-09-18 实测教训)**: `dash`(缺数)与 `zeroish`(0.00 类)是**数据状态依赖**的 ——
 同一天 18:50 测个股页 `dash=46`(部分数据源未补齐), 19:30 复测 **0**。所以:
   · 这两项**必须在固定时点比**(建议盘后 16:00 数据回流之后), 否则前后两次数字会互相矛盾;
@@ -45,7 +49,11 @@ TARGETS: dict[str, dict[str, object]] = {
     "hairline": {"max": 80, "pages": None},
     "fontCount": {"max": 6, "pages": None},
     "dash": {"max": 12, "pages": {"个股页"}},
-    "density": {"min": 1500, "max": 3500, "pages": {"首页", "题材页"}},
+    # 密度**只报告、不做目标**(2026-09-18 定稿): 它随数据状态剧烈变化 —— 同一天首页 765/1183/1344,
+    # 空态页(持仓/机会)文字少自然也低。真正的问题是"表格墙"(题材页 9680) → 修完 1882 ✅。
+    # 拿一个"状态依赖"的数字当全站硬指标, 只会制造噪声(这条已写进设计稿方法论)。
+    # 首页改用**结构性判据**: 首屏必须有"结论行"(统计型密度对看板不稳, 结构型可判定)
+    "conclusionRow": {"must": True, "pages": {"首页"}},
 }
 
 # (标签, 路由, 稳定等待秒)
@@ -120,8 +128,79 @@ PROBE_JS = r"""() => {
     if (hasText) { const fs = Math.round(parseFloat(cs.fontSize)); sizes[fs] = (sizes[fs] || 0) + 1; }
   }
   const docH = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+  // 2026-09-18: 图表占高用"区间并集"量 —— 直接累加会把卡片里的多个小 canvas(迷你走势图)
+  // 重复计入, 把整页高度算穿(实测 首页 出现 canvasH > docH)。并集才是"图表真正占掉的高度"。
+  // 用 **canvas 自身的盒子**量图表占高(最无歧义): 向上找祖先会把"图表+其他内容"的大容器
+  // 也算进去(实测把整页算成图表)。canvas 自己就是图表本体, 容器只多一层内边距。
+  const spans = [];
+  document.querySelectorAll('canvas').forEach(c => {
+    const r = c.getBoundingClientRect();
+    if (r.height > 8 && r.width > 8) spans.push([r.top + window.scrollY, r.bottom + window.scrollY]);
+  });
+  spans.sort((x, y) => x[0] - y[0]);
+  let canvasH = 0, curS = -1, curE = -1;
+  for (const [st, en] of spans) {
+    if (st > curE) { if (curE > curS) canvasH += curE - curS; curS = st; curE = en; }
+    else curE = Math.max(curE, en);
+  }
+  if (curE > curS) canvasH += curE - curS;
+  canvasH = Math.min(canvasH, docH * 0.9);   // 兜底: 不允许超过页高 90%
   const txt = document.body.innerText || '';
   return {
+    fontSizes: Object.keys(sizes).map(Number).sort((a, b) => a - b),
+    fontCount: Object.keys(sizes).length,
+    cdnRefs,
+    docH: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight),
+    textLen: txt.length,
+    hasPricing: /档位|定价|免费|价格/.test(txt),
+    ctaCount: [...document.querySelectorAll('a,button')].filter(vis)
+        .filter(e => /注册|开始|快速体验|免费/.test(e.innerText || '')).length,
+  };
+}"""
+
+PROBE_JS = r"""() => {
+  const vis = e => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
+  const vw = window.innerWidth;
+  let maxCanvas = 0;
+  document.querySelectorAll('canvas').forEach(c => {
+    const w = c.getBoundingClientRect().width; if (w > maxCanvas) maxCanvas = w;
+  });
+  let cards = 0, hairline = 0;
+  const sizes = {};
+  const all = [...document.querySelectorAll('body *')].filter(vis);
+  for (const e of all) {
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    const rad = parseFloat(cs.borderTopLeftRadius || '0');
+    const bw = parseFloat(cs.borderTopWidth || '0');
+    const shadow = cs.boxShadow && cs.boxShadow !== 'none';
+    if (rad >= 8 && (bw > 0 || shadow) && r.width > 200 && r.height > 80) cards++;
+    if (bw > 0 && bw <= 1.2 && cs.borderTopStyle === 'solid') hairline++;
+    const hasText = [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim().length > 0);
+    if (hasText) { const fs = Math.round(parseFloat(cs.fontSize)); sizes[fs] = (sizes[fs] || 0) + 1; }
+  }
+  const docH = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+  // 2026-09-18: 图表画布高度单独量出来 —— 图表占高而文字少, 不剔除它 "密度" 会系统性冤枉图表页。
+  // 用 **canvas 自身盒子** + **区间并集**量图表占高:
+  //  · 向上找祖先会把"图表+其他内容"的大容器也算进去(实测把整页算成图表);
+  //  · 直接累加会把 lightweight-charts 的多个重叠 canvas(主图/价格轴/量副图)重复计入。
+  const spans = [];
+  document.querySelectorAll('canvas').forEach(c => {
+    const r = c.getBoundingClientRect();
+    if (r.height > 8 && r.width > 8) spans.push([r.top + window.scrollY, r.bottom + window.scrollY]);
+  });
+  spans.sort((x, y) => x[0] - y[0]);
+  let canvasH = 0, curS = -1, curE = -1;
+  for (const [st, en] of spans) {
+    if (st > curE) { if (curE > curS) canvasH += curE - curS; curS = st; curE = en; }
+    else curE = Math.max(curE, en);
+  }
+  if (curE > curS) canvasH += curE - curS;
+  canvasH = Math.min(canvasH, docH * 0.9);
+  const txt = document.body.innerText || '';
+  return {
+    canvasH: Math.round(canvasH),
+    // 结构性判据(比统计型指标稳): 首页首屏的"结论行"在不在
+    conclusionRow: !!document.querySelector('[data-testid=\"market-conclusion\"]'),
     klineShare: maxCanvas ? +(maxCanvas / vw).toFixed(3) : 0,
     cards, hairline,
     fontSizes: Object.keys(sizes).map(Number).sort((a, b) => a - b),
@@ -130,6 +209,8 @@ PROBE_JS = r"""() => {
     zeroish: (txt.match(/\b0\.0+\b/g) || []).length,
     docH,
     density: docH ? +(txt.length / (docH / 1000)).toFixed(0) : 0,
+    densityNoChart: docH - Math.round(canvasH) > 200
+      ? +(txt.length / ((docH - Math.round(canvasH)) / 1000)).toFixed(0) : 0,
     overflowX: document.documentElement.scrollWidth > vw + 2,
   };
 }"""
@@ -161,6 +242,10 @@ def judge(row: dict) -> list[str]:
             continue  # 该页没有 K 线(列表/工作台页), 不判
         v = row.get(key)
         if v is None:
+            continue
+        if spec.get("must") is True:
+            if not v:
+                bad.append(f"{key}=false(结构性判据未满足)")
             continue
         lo, hi = spec.get("min"), spec.get("max")
         if lo is not None and v < lo:  # type: ignore[operator]
@@ -273,12 +358,13 @@ def main() -> int:
             n_bad += 1
             continue
         ks = r.get("klineShare") or 0
+        dnc = r.get("densityNoChart")
         viol = r["violations"]
         n_bad += 1 if viol else 0
         mark = "OK" if not viol else "越线: " + "; ".join(viol)
         print(
             f"{r['name']:<8}{ks:>9.3f}{r['cards']:>6}{r['hairline']:>10}{r['fontCount']:>6}"
-            f"{r['dash']:>6}{r['density']:>7}  {mark}"
+            f"{r['dash']:>6}{dnc if dnc is not None else r['density']:>7}  {mark}"
         )
         if r.get("zeroish"):
             print(f"{'':<8}  ⚠ 出现 {r['zeroish']} 处 0.00 形式数字 —— 需人工确认是真 0 还是用 0 冒充无数据")
