@@ -5,6 +5,31 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (B5c-P0 · K 线类型收口 → v0.10.15)
+
+### refactor(kline): K 线事件/价位线类型收口到单一事实来源
+
+**性质**: 类型收口(纯类型层, 不改变任何调用方入参形状)。依据 `docs/K线引擎评估_20260918.md` 的 P0 步。
+
+**收口了什么**
+- `KlineEventKind`(10 种 kind 白名单)原先在 `klineEvents.ts` 与 `InteractiveKline.tsx` **各定义一份** ——
+  后端 `l4_events.py` 加新 kind 时极易只改一边(另一边静默过滤事件)。现在 IK 从 `../klineEvents` 引入,
+  `git grep` 验证全仓**只剩一处定义**(`klineEvents.ts`)。
+- `SupportPressureLine` 收口为 `klineEvents.KlinePriceLine` 的**别名**(字段一致, 后者只多一个可选 `ratio`,
+  别名不改变任何调用方形状)。
+
+**没合什么(以及为什么)**
+- `KlineEvent`(IK, `label?` 可选)与标准化的 `KlineEventPoint`(`label`/`tone` 必填)**不合并** ——
+  强行合并等于让所有调用方补必填字段, 是破坏性改动; 故本轮只收口 `kind`, 并在源码注释里写明理由。
+- 两个组件的 `GsSignalPoint` **不合并** —— IK 侧 `confirmed: boolean`/`price: number` 必填,
+  KC 侧两者可选(来自后端可能缺字段的取数)。合并任一侧都是破坏性改动, 留待 P1 用"补齐能力"而非"改形状"解决。
+
+**回归**: `frontend/tests/components/kline-types-consolidation.test.ts` 4 例(source 级断言:
+kind 白名单只一处、IK 从 klineEvents 引入、SupportPressureLine 是别名、
+以及"该合的合了/不该合的有注释可查"——避免后人又抄一份, 也避免后人误以为该强行统一)。
+
+**门禁**: tsc 0 / eslint 0 / vitest **500 passed(70 文件)** / vite build ✅ / ui-rules OK。
+
 ## 2026-09-18 (K 线引擎评估 · 老板拍板三件事落地)
 
 ### docs: K 线引擎评估（合并 or 优胜劣汰）+ 排期按拍板结果定稿

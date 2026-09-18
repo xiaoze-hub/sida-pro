@@ -15,6 +15,7 @@ import { subChartReadouts, visibleSubCharts, type SubChartRow } from '../lib/sub
 import { capitalBarRows, type FundFlowBar } from '../lib/fund-bar'
 // 重导出本组件既有公开名(实为同一类型, 真源在 lib/fund-bar)
 export type { FundFlowBar }
+import { type KlineEventKind, type KlinePriceLine } from '../klineEvents'
 import {
   smaSeries,
   macd as macdSeries,
@@ -150,29 +151,19 @@ export type GsSignalPoint = {
 // 与 `KlineChart` 共用 `lib/fund-bar` 的**同一** `FundFlowBar` 类型与 `capitalBarRows` 净额定义
 // (T19 Finding 2: 同名同源字段不得在两图各算一套 net)。`FundFlowBar` 已由本文件顶部的
 // `export type { FundFlowBar }` 以既有公开名转发。
-/** K线事件标注 */
-export type KlineEventKind =
-  | 'limit_up' // 涨停
-  | 'limit_down' // 跌停
-  | 'dragon_tiger' // 龙虎榜
-  | 'announcement' // 公告
-  | 'split_cluster' // 拆单簇(.tck)
-  | 'cancel_anomaly' // 撤单异常
-  | 'support' // 托盘
-  | 'pressure' // 压盘
-  | 'unlock' // 解套盘位
-  | 'my_trade' // 我的买卖点
+/** K线事件标注 —— **kind 白名单来自 `../klineEvents`**(单一事实来源, 见其文件头:
+ *  后端 l4_events 与前端契约一一对应, 未登记的新 kind 应被显式过滤而不是渲染成空壳)。
+ *  B5c-P0(2026-09-18): 原先本文件又抄了一份 10 种 kind, 与 `klineEvents.ts` 重复, 现已收口。
+ *  注意 `KlineEvent` **保持宽松输入形状**(label 可选) —— 它比标准化的 `KlineEventPoint`
+ *  (label/tone 必填)更松, 强行合并会变成破坏性改动, 故此处只收口 kind。 */
 export type KlineEvent = {
   date: string
   kind: KlineEventKind
   label?: string
 }
-/** 支撑/压力位 (横向价线) */
-export type SupportPressureLine = {
-  price: number
-  kind: 'support' | 'pressure'
-  label?: string
-}
+/** 支撑/压力位(横向价线) —— 收口到 `../klineEvents` 的 `KlinePriceLine`
+ *  (字段一致, 后者只多一个可选 `ratio`; 别名不改变任何调用方的入参形状)。 */
+export type SupportPressureLine = KlinePriceLine
 /** 4 个图层开关状态(副图不在这里 —— 副图身份见 `../lib/subcharts` 注册表) */
 export type LayerState = {
   trend: boolean // L1 MA5/10/20/60 + 牛/马线
