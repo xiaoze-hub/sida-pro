@@ -6,6 +6,7 @@ import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@panwatch/biz-ui/components/insight/types'
 import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
 import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
+import MissingFields from '@/components/MissingFields'
 
 /**
  * 工作台标签「盘口资金」(工作台 v2 三合一, Task 11)。
@@ -725,6 +726,15 @@ function IntentSealSection({
 
 function FundFlowSection({ rows }: { rows: FundFlowRow[] }) {
   const recent = rows.slice(-FUND_ROWS).reverse()
+  // P0-3(2026-09-18): **整列都缺就不摆一列 `--`**。实测该表 30 行日期全缺 → 一屏 30 个 `--`;
+  // 折叠成一行说明(原因照写), 信息不丢、噪声归零。个别缺仍照旧显示 `--`(决策关键位留在原位)。
+  const hasDate = recent.some((r) => !!r.date)
+  const hasMing = recent.some((r) => safeNum(r.ming_net) != null || safeNum(r.open_net) != null)
+  const hasDark = recent.some((r) => safeNum(r.dark_net) != null)
+  const missingCols: { label: string; reason: string }[] = []
+  if (recent.length > 0 && !hasDate) missingCols.push({ label: '日期列', reason: '本源未输出日期(行序即最近 N 日)' })
+  if (recent.length > 0 && !hasMing) missingCols.push({ label: '明盘净额列', reason: '后端未输出该日净额' })
+  if (recent.length > 0 && !hasDark) missingCols.push({ label: '暗盘净额列', reason: '暗盘源不可用/未输出' })
 
   return (
     <Section
@@ -739,31 +749,51 @@ function FundFlowSection({ rows }: { rows: FundFlowRow[] }) {
     >
       {recent.length === 0 ? (
         <div className="text-[12px] text-muted-foreground">暂无资金流水(-- 表示后端未输出该日净额)</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[11px]">
-            <thead>
-              <tr className="border-b border-border/40 text-muted-foreground">
-                <th className="px-2 py-1 font-medium">日期</th>
-                <th className="px-2 py-1 text-right font-medium">明盘净额</th>
-                <th className="px-2 py-1 text-right font-medium">暗盘净额</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {recent.map((r, i) => {
-                const ming = safeNum(r.ming_net) ?? safeNum(r.open_net)
-                const dark = safeNum(r.dark_net)
-                return (
-                  <tr key={`${r.date ?? 'row'}-${i}`}>
-                    <td className="px-2 py-1 font-mono text-muted-foreground">{r.date ?? '--'}</td>
-                    <td className={`px-2 py-1 text-right font-mono ${dirClass(ming)}`}>{toAmount(ming)}</td>
-                    <td className={`px-2 py-1 text-right font-mono ${dirClass(dark)}`}>{toAmount(dark)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      ) : hasDate || hasMing || hasDark ? (
+        <div>
+          {missingCols.length > 0 && (
+            <MissingFields title="资金流水" items={missingCols} className="mb-1" />
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-border/40 text-muted-foreground">
+                  {hasDate && <th className="px-2 py-1 font-medium">日期</th>}
+                  {hasMing && <th className="px-2 py-1 text-right font-medium">明盘净额</th>}
+                  {hasDark && <th className="px-2 py-1 text-right font-medium">暗盘净额</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/40">
+                {recent.map((r, i) => {
+                  const ming = safeNum(r.ming_net) ?? safeNum(r.open_net)
+                  const dark = safeNum(r.dark_net)
+                  return (
+                    <tr key={`${r.date ?? 'row'}-${i}`}>
+                      {hasDate && <td className="px-2 py-1 font-mono text-muted-foreground">{r.date}</td>}
+                      {hasMing && (
+                        <td className={`px-2 py-1 text-right font-mono ${dirClass(ming)}`}>{toAmount(ming)}</td>
+                      )}
+                      {hasDark && (
+                        <td className={`px-2 py-1 text-right font-mono ${dirClass(dark)}`}>{toAmount(dark)}</td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
+      ) : (
+        /* 三列全缺: 不摆空表, 只留一行如实说明(不补 0, 不装无事发生) */
+        <MissingFields
+          title="资金流水"
+          items={
+            missingCols.length > 0
+              ? missingCols
+              : [{ label: '资金流水', reason: '最近 N 日三列均无数据' }]
+          }
+          defaultOpen
+        />
       )}
     </Section>
   )

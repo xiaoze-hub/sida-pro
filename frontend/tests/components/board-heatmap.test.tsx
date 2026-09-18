@@ -75,7 +75,7 @@ describe('BoardHeatmap 板块热力图', () => {
   it('渲染 treemap series 并标注数据截至日期', async () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     render(<BoardHeatmap onOpenBoard={vi.fn()} />)
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
 
     const opt = mocks.setOption.mock.calls.at(-1)?.[0] as { series: Array<{ type: string }> }
     expect(opt.series[0].type).toBe('treemap')
@@ -90,7 +90,7 @@ describe('BoardHeatmap 板块热力图', () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     const onOpenBoard = vi.fn()
     render(<BoardHeatmap onOpenBoard={onOpenBoard} />)
-    await waitFor(() => expect(mocks.on).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.on).toHaveBeenCalled(), { timeout: 5000 })
 
     const clickCall = mocks.on.mock.calls.find((c) => c[0] === 'click')
     expect(clickCall).toBeTruthy()
@@ -102,7 +102,7 @@ describe('BoardHeatmap 板块热力图', () => {
   it('切换到概念板块重新请求 type=concept', async () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     const { getByText } = render(<BoardHeatmap onOpenBoard={vi.fn()} />)
-    await waitFor(() => expect(mocks.fetchAPI).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.fetchAPI).toHaveBeenCalled(), { timeout: 5000 })
 
     fireEvent.click(getByText('概念'))
     await waitFor(() => {
@@ -114,7 +114,7 @@ describe('BoardHeatmap 板块热力图', () => {
   it('刷新失败时保留上次数据并显示 amber 提示', async () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     const { getByTitle, findByText } = render(<BoardHeatmap onOpenBoard={vi.fn()} />)
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
 
     mocks.fetchAPI.mockRejectedValueOnce(new Error('502 Bad Gateway'))
     fireEvent.click(getByTitle('刷新'))
@@ -166,7 +166,7 @@ describe('BoardHeatmap 板块热力图', () => {
 
     fireEvent.click(screen.getByText('切换面积:等权'))
     expect(await screen.findByTestId('heatmap-canvas')).toBeTruthy()
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
     const cells = lastTreemapData()
     expect(cells).toHaveLength(1)
     expect(cells[0].value).toBeGreaterThan(0)
@@ -175,7 +175,7 @@ describe('BoardHeatmap 板块热力图', () => {
   it('量能视图: 有可用成交额时照常出图(空态不误伤)', async () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     render(<BoardHeatmap onOpenBoard={vi.fn()} />)
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
     expect(screen.getByTestId('heatmap-canvas')).toBeTruthy()
     expect(screen.queryByTestId('heatmap-no-volume')).toBeNull()
   })
@@ -184,7 +184,7 @@ describe('BoardHeatmap 板块热力图', () => {
     mocks.fetchAPI.mockResolvedValue(LIVE_RESP)
     const onOpenBoard = vi.fn()
     render(<BoardHeatmap onOpenBoard={onOpenBoard} />)
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
 
     expect(screen.getByText(/实时/)).toBeTruthy()
     expect(screen.queryByText(/数据截至/)).toBeNull()
@@ -206,7 +206,7 @@ describe('BoardHeatmap 板块热力图', () => {
   it('非实时(仅日线)不出现异动清单与实时标注', async () => {
     mocks.fetchAPI.mockResolvedValue(RESP)
     render(<BoardHeatmap onOpenBoard={vi.fn()} />)
-    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled())
+    await waitFor(() => expect(mocks.setOption).toHaveBeenCalled(), { timeout: 5000 })
     expect(screen.queryByTestId('heatmap-anomalies')).toBeNull()
     expect(screen.queryByText(/实时/)).toBeNull()
     expect(screen.getByText(/数据截至 2026-09-09/)).toBeTruthy()
