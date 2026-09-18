@@ -104,7 +104,7 @@ export default function ReportsPage() {
             <FileText className="w-5 h-5 text-primary" />
             {t('reports.title')}
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <p className="text-[13px] text-muted-foreground mt-0.5">
             {t('reports.subtitle')} — <code className="text-xs">~/.hermes/cron/output/&lt;job&gt;/</code>
           </p>
         </div>
@@ -129,7 +129,7 @@ export default function ReportsPage() {
         <select
           value={jobFilter}
           onChange={e => setJobFilter(e.target.value)}
-          className="h-11 min-h-[44px] rounded-md border border-input bg-background px-3 text-sm"
+          className="h-11 min-h-[44px] rounded-md border border-input bg-background px-3 text-[13px]"
         >
           <option value="">{t('reports.allJobs', { n: jobs.length })}</option>
           {jobs.map(j => (
@@ -150,7 +150,7 @@ export default function ReportsPage() {
           onDismiss={() => setDismissed(true)}
         />
       ) : grouped.size === 0 ? (
-        <div className="py-8 text-center text-sm text-muted-foreground">
+        <div className="py-8 text-center text-[13px] text-muted-foreground">
           {t('reports.empty')}
           {search || jobFilter ? t('reports.emptyMatch') : ''}
         </div>
@@ -163,7 +163,7 @@ export default function ReportsPage() {
               <Card key={jobId} variant="plain" className="p-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <div className="min-w-0">
-                    <h3 className="font-medium text-sm truncate">{jobName}</h3>
+                    <h3 className="font-medium text-[13px] truncate">{jobName}</h3>
                     <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-3">
                       <span className="flex items-center gap-1"><Hash className="w-3 h-3" />{t('reports.files', { n: files.length })}</span>
                       <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />
@@ -181,7 +181,7 @@ export default function ReportsPage() {
                     >
                       <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm truncate">
+                        <div className="text-[13px] truncate">
                           {it.title_preview || it.file}
                         </div>
                         <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5 min-w-0">
@@ -227,7 +227,7 @@ export default function ReportsPage() {
                 <Loader2 className="w-5 h-5 animate-spin mr-2" /> {t('common.loading')}
               </div>
             ) : (
-              <div className="report-content overflow-x-auto prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-h2:text-base prose-h3:text-sm prose-h3:mt-4 prose-h3:mb-2 prose-table:text-xs prose-th:bg-accent/30 prose-th:p-1.5 prose-td:p-1.5 prose-td:border-border prose-th:border-border prose-code:bg-accent/30 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
+              <div className="report-content overflow-x-auto prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-h2:text-base prose-h3:text-[13px] prose-h3:mt-4 prose-h3:mb-2 prose-table:text-xs prose-th:bg-accent/30 prose-th:p-1.5 prose-td:p-1.5 prose-td:border-border prose-th:border-border prose-code:bg-accent/30 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
                 <SafeMarkdown>{selected?.content || ''}</SafeMarkdown>
               </div>
             )}

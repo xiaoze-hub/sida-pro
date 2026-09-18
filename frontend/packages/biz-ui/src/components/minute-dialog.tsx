@@ -96,7 +96,7 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
         <DialogHeader>
           <DialogTitle>
             分时 · {stockName || symbol}
-            <span className="ml-2 text-sm text-muted-foreground">{symbol}</span>
+            <span className="ml-2 text-[13px] text-muted-foreground">{symbol}</span>
           </DialogTitle>
         </DialogHeader>
 
@@ -114,7 +114,7 @@ export function MinuteDialog({ open, onOpenChange, symbol, market, stockName }: 
 
         {!loading && !error && points.length > 1 && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center justify-between text-[13px]">
               <span className={up ? 'text-stock-up' : 'text-stock-down'}>
                 现价 {last?.price?.toFixed(2)} {up ? '↑' : '↓'}
               </span>

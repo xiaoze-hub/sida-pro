@@ -33,7 +33,7 @@ export default function DarkFlowCard({ symbol }: { symbol: string }) {
   }, [symbol])
 
   if (loading) return <div className="rounded-lg border p-3 animate-pulse h-24 bg-muted/30" />
-  if (!data) return <div className="rounded-lg border p-3 text-sm text-muted-foreground">暂无暗盘数据</div>
+  if (!data) return <div className="rounded-lg border p-3 text-[13px] text-muted-foreground">暂无暗盘数据</div>
 
   const outer = data.outer_pct ?? 0
   const inner = data.inner_pct ?? 0
@@ -41,8 +41,8 @@ export default function DarkFlowCard({ symbol }: { symbol: string }) {
   return (
     <div className="rounded-lg border bg-card p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">主力意图</span>
-        <span className="text-sm font-semibold">{data.main_intent || "--"}</span>
+        <span className="text-[13px] font-medium">主力意图</span>
+        <span className="text-[13px] font-semibold">{data.main_intent || "--"}</span>
       </div>
       <div className="flex items-center gap-2 text-xs">
         <span className="text-stock-up">外盘 {outer.toFixed(1)}%</span>

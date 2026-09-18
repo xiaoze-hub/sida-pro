@@ -60,7 +60,7 @@ export default function AuditPage() {
             <ScrollText className="w-4 h-4 md:w-5 md:h-5 text-foreground" />
           </div>
           <div>
-            <h1 className="text-lg md:text-xl font-bold">操作审计</h1>
+            <h1 className="text-[16px] md:text-xl font-bold">操作审计</h1>
             <p className="text-[12px] md:text-[13px] text-muted-foreground">关键写操作记录(最近 200 条, 倒序)</p>
           </div>
           <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">

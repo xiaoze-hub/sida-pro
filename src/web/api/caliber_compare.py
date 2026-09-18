@@ -53,6 +53,27 @@ SOURCE_META: dict[str, dict[str, str]] = {
 }
 
 #: 三条"为什么数字不一样"的静态解释(不编数字, 只讲口径)
+# P2-1(2026-09-18): 三源"主力净流入"的可比字段 —— **字段名不同, 显式映射, 不猜**。
+# 暗盘取"主力净额(≥20万)"档, 它是与另外两家"按单金额分档"最接近的口径。
+MAIN_NET_LABEL: dict[str, str] = {
+    "thsdk_l2": "主力净流入",
+    "eastmoney_flow": "主力净流入",
+    "tencent_dark": "主力净额（≥20万）",
+}
+
+
+def _main_net_of(src: dict) -> float | None:
+    """从某源的 fields 里取"主力净流入"数值; 取不到就 None(**不拿 0 顶上**)。"""
+    label = MAIN_NET_LABEL.get(src.get("key", ""), "")
+    if not label:
+        return None
+    for f in src.get("fields") or []:
+        if f.get("label") == label:
+            v = f.get("value")
+            return float(v) if isinstance(v, (int, float)) else None
+    return None
+
+
 DIFFERENCES: list[dict[str, str]] = [
     {
         "topic": "「主力」定义不同",
@@ -181,6 +202,28 @@ def _eastmoney_flow(symbol: str) -> dict:
     return _wrap("eastmoney_flow", fields=fields, note=note, extra={"date": summary.get("date")})
 
 
+def _pair_diffs(sources: list[dict]) -> list[dict]:
+    """按实测预期带比三对口径(缺数走 unknown)。"""
+    from src.core.caliber_diff import build_pair_diffs
+
+    return build_pair_diffs({src.get("key", ""): _main_net_of(src) for src in sources})
+
+
+def _diff_conclusion(sources: list[dict]) -> dict:
+    """整页一句结论 + 是否要人工看一眼。**不合成单一数字**, 只给级别与提示。"""
+    from src.core.caliber_diff import conclusion_level
+
+    diffs = _pair_diffs(sources)
+    level = conclusion_level(diffs)
+    hint = {
+        "ok": "三源差值均落在实测预期带内(口径不同, 数字本来就不等)。",
+        "warn": "有一对差略出预期带 —— 建议先看方向是否一致, 再决定要不要深究。",
+        "alert": "有一对差远离预期带(或方向冲突)—— 优先核对基准日/时间窗; 方向冲突时**以逐笔口径为准**。",
+        "unknown": "数据不足(有的源未取到) —— 不比较, 也不用 0 顶上。",
+    }[level]
+    return {"level": level, "hint": hint}
+
+
 def build_caliber_compare(symbol: str) -> dict:
     """三源并排(供端点与测试直接调用)。"""
     code = (symbol or "").strip()
@@ -202,6 +245,9 @@ def build_caliber_compare(symbol: str) -> dict:
         "sources": sources,
         "available_count": sum(1 for s in sources if s["available"]),
         "differences": DIFFERENCES,
+        # P2-1: **成对差异 + 归因**(看到差之后, 告诉你这个差是"正常口径差"还是"值得看一眼")
+        "pair_diffs": _pair_diffs(sources),
+        "diff_conclusion": _diff_conclusion(sources),
     }
 
 

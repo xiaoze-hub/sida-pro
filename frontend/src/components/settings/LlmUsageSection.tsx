@@ -45,7 +45,7 @@ export function LlmUsageSection() {
   return (
     <section id="sec-llm-usage" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
+        <h2 className="flex items-center gap-2 text-[13px] font-semibold">
           <Activity className="h-4 w-4 text-primary" />
           AI 调用统计
         </h2>

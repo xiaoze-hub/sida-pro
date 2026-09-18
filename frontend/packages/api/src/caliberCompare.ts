@@ -26,6 +26,24 @@ export interface CaliberSource {
   date?: string | null
 }
 
+/** P2-1: 一对口径的差异结论(后端 src/core/caliber_diff.py)。 */
+export interface CaliberPairDiff {
+  a: string
+  b: string
+  label_a: string
+  label_b: string
+  value_a: number | null
+  value_b: number | null
+  abs_diff: number | null
+  rel_diff: number | null
+  ratio: number | null
+  level: 'ok' | 'warn' | 'alert' | 'unknown'
+  expected: boolean
+  sign_conflict: boolean
+  prefer: string
+  note: string
+}
+
 export interface CaliberDifference {
   topic: string
   detail: string
@@ -38,6 +56,9 @@ export interface CaliberCompareResponse {
   sources: CaliberSource[]
   available_count: number
   differences: CaliberDifference[]
+  /** P2-1: 成对差异 + 归因(看到差之后告诉你"这个差正不正常") */
+  pair_diffs?: CaliberPairDiff[]
+  diff_conclusion?: { level: 'ok' | 'warn' | 'alert' | 'unknown'; hint: string }
 }
 
 export const caliberCompareApi = {

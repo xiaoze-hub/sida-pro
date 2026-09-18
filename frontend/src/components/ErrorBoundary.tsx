@@ -57,8 +57,8 @@ export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundar
             <AlertTriangle className="w-6 h-6 text-amber-600" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">页面遇到了问题</h1>
-            <p className="text-sm text-muted-foreground mt-1.5">
+            <h1 className="text-[16px] font-semibold">页面遇到了问题</h1>
+            <p className="text-[13px] text-muted-foreground mt-1.5">
               渲染时发生了一个意外错误, 已阻止整页崩溃。
             </p>
             {/* 2026-09-04: 生产也显示错误摘要 + 一键复制(此前只在 DEV 显示,
