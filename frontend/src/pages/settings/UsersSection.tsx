@@ -15,7 +15,7 @@ export function UsersSection() {
   {/* 多用户: 定时报告订阅 + 用户管理(2026-08-10 阶段5) */}
   <section id="sec-subscriptions" className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12" style={{ display: sectionMatches('sec-subscriptions') ? undefined : 'none' }}>
     <div className="mb-3 flex items-center gap-2">
-      <h2 className="flex items-center gap-2 text-sm font-semibold">
+      <h2 className="flex items-center gap-2 text-[13px] font-semibold">
         <MailCheck className="h-4 w-4 text-primary" />
         定时报告订阅
       </h2>

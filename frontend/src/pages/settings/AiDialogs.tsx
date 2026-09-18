@@ -453,7 +453,7 @@ export function AiDialogs() {
               }`}>
                 {checked && <Check className="h-3 w-3" strokeWidth={3} />}
               </span>
-              <span className="truncate font-mono text-sm">{id}</span>
+              <span className="truncate font-mono text-[13px]">{id}</span>
             </div>
             <button
               type="button"

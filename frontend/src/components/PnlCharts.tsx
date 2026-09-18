@@ -7,7 +7,7 @@ import { computeRealizedPnlSeries, type TradeLike } from '@/lib/trades'
 export function DrawdownChart({ data }: { data: EquityPoint[] }) {
   const series = computeDrawdownSeries(data)
   if (series.length < 2) {
-    return <div className="h-40 flex items-center justify-center text-muted-foreground text-sm">暂无足够数据绘制回撤</div>
+    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[13px]">暂无足够数据绘制回撤</div>
   }
 
   const width = 600
@@ -52,7 +52,7 @@ export function DrawdownChart({ data }: { data: EquityPoint[] }) {
 export function RealizedPnlChart({ trades }: { trades: TradeLike[] }) {
   const series = computeRealizedPnlSeries(trades)
   if (series.length < 2) {
-    return <div className="h-40 flex items-center justify-center text-muted-foreground text-sm">暂无足够成交绘制已实现盈亏</div>
+    return <div className="h-40 flex items-center justify-center text-muted-foreground text-[13px]">暂无足够成交绘制已实现盈亏</div>
   }
   const width = 600
   const height = 140

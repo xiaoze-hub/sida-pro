@@ -112,7 +112,7 @@ function AmountChart({ trend }: { trend: { date: string; amount: number }[] }) {
           <g key={t.date}>
             <rect x={i * bw + bw * 0.2} y={H - 8 - h} width={bw * 0.6} height={h} fill="var(--primary)" opacity={0.7} rx={1} />
             {i % 5 === 0 && (
-              <text x={i * bw + bw / 2} y={H - 2} fontSize={8} fill="currentColor" textAnchor="middle">
+              <text x={i * bw + bw / 2} y={H - 2} fontSize={10} fill="currentColor" textAnchor="middle">
                 {t.date.slice(5)}
               </text>
             )}
@@ -187,12 +187,12 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
           <div className="border-b border-border/40 pb-3">
             <div className="flex items-end gap-4 flex-wrap">
               <div>
-                <div className="text-3xl font-num font-bold tabular-nums">{safeFixed(q?.current_price)}</div>
-                <div className={`text-sm font-num tabular-nums ${up ? 'text-stock-up' : 'text-stock-down'}`}>
+                <div className="text-[20px] font-num font-bold tabular-nums">{safeFixed(q?.current_price)}</div>
+                <div className={`text-[13px] font-num tabular-nums ${up ? 'text-stock-up' : 'text-stock-down'}`}>
                   {safeNum(q?.change_amount) !== null && Number(q?.change_amount) > 0 ? '+' : ''}{safeFixed(q?.change_amount)} ({safeFixed(q?.change_pct)}%)
                 </div>
               </div>
-              <div className="flex gap-6 text-sm text-muted-foreground">
+              <div className="flex gap-6 text-[13px] text-muted-foreground">
                 <div><span className="block text-[10px]">昨收</span><span className="font-mono text-foreground tabular-nums">{safeFixed(q?.prev_close)}</span></div>
                 {/* 走查 2026-09-18: 腾讯指数 quote 对 open/high/low 常返 null —— 用**当日**最后一根日K回填, 不编造 */}
                 {(() => {

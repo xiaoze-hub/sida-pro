@@ -155,7 +155,7 @@ export default function StrategyLibraryDialog({
           <select
             value={categoryFilter}
             onChange={e => setCategoryFilter(e.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className="h-9 rounded-md border border-input bg-background px-3 text-[13px]"
           >
             <option value="">全部分类</option>
             {categories.map(c => (
@@ -181,7 +181,7 @@ export default function StrategyLibraryDialog({
                   className="card-subtle p-4 text-left hover:border-primary/40 transition-colors"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <h3 className="font-semibold text-sm flex-1">{it.display_name}</h3>
+                    <h3 className="font-semibold text-[13px] flex-1">{it.display_name}</h3>
                     <span className={`text-[10px] px-2 py-0.5 rounded-full border ${badgeCls}`}>
                       {it.ui_badge}
                     </span>
@@ -324,23 +324,23 @@ export default function StrategyLibraryDialog({
                   {applyResult && (
                     <div className={`card-subtle p-4 ${applyResult.passed ? 'border-emerald-500/30' : 'border-amber-500/30'}`}>
                       {applyResult.error ? (
-                        <div className="text-red-600 text-sm flex items-center gap-1.5"><XCircle className="w-4 h-4 shrink-0" />{applyResult.error}</div>
+                        <div className="text-red-600 text-[13px] flex items-center gap-1.5"><XCircle className="w-4 h-4 shrink-0" />{applyResult.error}</div>
                       ) : (
                         <>
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-3">
-                              <div className={`text-3xl font-bold ${scoreColor(applyResult.score)}`}>
+                              <div className={`text-[20px] font-bold ${scoreColor(applyResult.score)}`}>
                                 {applyResult.score.toFixed(1)}
                               </div>
                               <div>
-                                <div className={`text-sm font-medium inline-flex items-center gap-1.5 ${applyResult.passed ? 'text-emerald-700 dark:text-emerald-500' : 'text-amber-700 dark:text-amber-500'}`}>
+                                <div className={`text-[13px] font-medium inline-flex items-center gap-1.5 ${applyResult.passed ? 'text-emerald-700 dark:text-emerald-500' : 'text-amber-700 dark:text-amber-500'}`}>
                                   {applyResult.passed ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
                                   {applyResult.passed ? '通过' : '未通过'}
                                 </div>
                                 <div className="text-xs text-muted-foreground">{applyResult.symbol} @ {applyResult.market}</div>
                               </div>
                             </div>
-                            <div className={`px-3 py-1.5 rounded-lg border text-sm font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>
+                            <div className={`px-3 py-1.5 rounded-lg border text-[13px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>
                               {applyResult.score >= 75 ? '强推荐' : applyResult.score >= 50 ? '中性' : '弱'}
                             </div>
                           </div>

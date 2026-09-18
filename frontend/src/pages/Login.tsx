@@ -237,15 +237,15 @@ export default function LoginPage() {
           <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mb-4">
             <BrandMark className="w-9 h-9 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground">数智分析 SIDA</h1>
-          <p className="text-sm text-muted-foreground mt-1">A股智能分析 · AI 全链路打通</p>
+          <h1 className="text-[20px] font-bold text-foreground">数智分析 SIDA</h1>
+          <p className="text-[13px] text-muted-foreground mt-1">A股智能分析 · AI 全链路打通</p>
         </div>
 
         {/* Form(P2 轻量化: card 底 → hairline, 零逻辑改动) */}
         <div className="border-t border-border/40 pt-6">
           <div className="flex items-center gap-2 mb-4">
             <Lock className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-semibold">
+            <h2 className="text-[16px] font-semibold">
               {isRegister ? '注册账号' : isEmailCode ? '验证码登录' : isSetup ? '设置访问密码' : '登录'}
             </h2>
           </div>
@@ -263,7 +263,7 @@ export default function LoginPage() {
                   type="button"
                   onClick={() => switchMode(tab.key)}
                   className={
-                    'flex-1 py-1.5 text-sm rounded-md transition-colors ' +
+                    'flex-1 py-1.5 text-[13px] rounded-md transition-colors ' +
                     (mode === tab.key
                       ? 'bg-background text-foreground font-medium shadow-sm'
                       : 'text-muted-foreground hover:text-foreground')
@@ -276,7 +276,7 @@ export default function LoginPage() {
           )}
 
           {isSetup && !isRegister && !isEmailCode && (
-            <p className="text-sm text-muted-foreground mb-4">
+            <p className="text-[13px] text-muted-foreground mb-4">
               首次使用，请设置访问密码以保护您的数据
             </p>
           )}
@@ -442,7 +442,7 @@ export default function LoginPage() {
 
           {/* 模式切换链接(Tab 备用, 保持轻量入口) */}
           {showModeTabs && (
-            <div className="mt-4 text-center text-sm">
+            <div className="mt-4 text-center text-[13px]">
               {isRegister ? (
                 <span className="text-muted-foreground">
                   已有账号？{' '}

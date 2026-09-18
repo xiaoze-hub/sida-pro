@@ -353,7 +353,7 @@ export default function PaperTradingPage() {
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shrink-0">
             <Activity className="w-4 h-4 text-white" />
           </div>
-          <h1 className="text-lg font-bold">模拟盘</h1>
+          <h1 className="text-[16px] font-bold">模拟盘</h1>
           {account && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${account.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'}`}>
               {account.enabled ? '运行中' : '已暂停'}
@@ -395,7 +395,7 @@ export default function PaperTradingPage() {
       {/* Market View Filter + 资金配置 */}
       {account && (
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-[13px]">
             <span className="text-muted-foreground text-xs">交易市场:</span>
             {(['ALL', 'CN', 'HK', 'US'] as const).map(m => {
               const label = m === 'ALL' ? '全部' : m === 'CN' ? 'A股' : m === 'HK' ? '港股' : '美股'
@@ -441,14 +441,14 @@ export default function PaperTradingPage() {
               {account.total_pnl >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               总收益
             </div>
-            <div className="text-lg font-bold"><PnlText value={account.total_pnl} /></div>
+            <div className="text-[16px] font-bold"><PnlText value={account.total_pnl} /></div>
           </div>
           <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="胜率 = 盈利平仓笔数 / 已平仓笔数">
               <Trophy className="w-3.5 h-3.5" />
               胜率
             </div>
-            <div className="text-lg font-bold">{safeFixed(account.win_rate, 1)}%</div>
+            <div className="text-[16px] font-bold">{safeFixed(account.win_rate, 1)}%</div>
             <div className="text-xs text-muted-foreground">{account.winning_trades}/{account.total_trades} 笔</div>
           </div>
           <div className="border-l border-border/40 pl-3">
@@ -456,27 +456,27 @@ export default function PaperTradingPage() {
               <BarChart3 className="w-3.5 h-3.5" />
               最大回撤
             </div>
-            <div className="text-lg font-bold text-emerald-500">{safeFixed(account.max_drawdown_pct)}%</div>
+            <div className="text-[16px] font-bold text-emerald-500">{safeFixed(account.max_drawdown_pct)}%</div>
           </div>
           <div className="border-l border-border/40 pl-3">
             <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1" title="当前可用于开新仓的现金">
               <Wallet className="w-3.5 h-3.5" />
               可用资金
             </div>
-            <div className="text-lg font-bold">{formatCurrency(account.current_capital)}</div>
+            <div className="text-[16px] font-bold">{formatCurrency(account.current_capital)}</div>
           </div>
         </div>
       )}
 
       {/* Equity Curve */}
       <div className="border-b border-border/40 pb-4">
-        <h2 className="text-sm font-semibold mb-3">收益曲线</h2>
+        <h2 className="text-[13px] font-semibold mb-3">收益曲线</h2>
         <EquityChart data={equityCurve} />
       </div>
 
       {/* Drawdown Curve (B5.1) */}
       <div className="border-b border-border/40 pb-4">
-        <h2 className="text-sm font-semibold mb-3">
+        <h2 className="text-[13px] font-semibold mb-3">
           回撤曲线
           <span className="ml-2 text-xs font-normal text-muted-foreground">从峰值回撤(%), 越深风险越大</span>
         </h2>
@@ -485,7 +485,7 @@ export default function PaperTradingPage() {
 
       {/* Realized PnL (B5.2) */}
       <div className="border-b border-border/40 pb-4">
-        <h2 className="text-sm font-semibold mb-3">
+        <h2 className="text-[13px] font-semibold mb-3">
           已实现盈亏
           <span className="ml-2 text-xs font-normal text-muted-foreground">按平仓日累计(元)</span>
         </h2>
@@ -495,9 +495,9 @@ export default function PaperTradingPage() {
       {/* Strategy Performance */}
       {strategyPerf.length > 0 && (
         <div className="border-b border-border/40 pb-4">
-          <h2 className="text-sm font-semibold mb-3">策略绩效</h2>
+          <h2 className="text-[13px] font-semibold mb-3">策略绩效</h2>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground text-xs">
                   <th className="text-left py-2 pr-3">策略</th>
@@ -539,12 +539,12 @@ export default function PaperTradingPage() {
 
       {/* Open Positions */}
       <div className="border-b border-border/40 pb-4">
-        <h2 className="text-sm font-semibold mb-3">当前持仓 ({positions.length})</h2>
+        <h2 className="text-[13px] font-semibold mb-3">当前持仓 ({positions.length})</h2>
         {positions.length === 0 ? (
-          <div className="text-center text-muted-foreground text-sm py-8">暂无持仓</div>
+          <div className="text-center text-muted-foreground text-[13px] py-8">暂无持仓</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground text-xs">
                   <th className="text-left py-2 pr-3">股票</th>
@@ -602,11 +602,11 @@ export default function PaperTradingPage() {
             <DialogDescription>历史交易详情</DialogDescription>
           </DialogHeader>
           {trades.length === 0 ? (
-            <div className="text-center text-muted-foreground text-sm py-8">暂无交易记录</div>
+            <div className="text-center text-muted-foreground text-[13px] py-8">暂无交易记录</div>
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-[13px]">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground text-xs">
                       <th className="text-left py-2 pr-3">股票</th>
@@ -681,18 +681,18 @@ export default function PaperTradingPage() {
 
           <div className="space-y-4">
             <div>
-              <div className="text-sm font-medium mb-1">总资金</div>
+              <div className="text-[13px] font-medium mb-1">总资金</div>
               <input
                 type="number"
                 value={cfgTotal}
                 onChange={e => setCfgTotal(e.target.value)}
-                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm"
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-[13px]"
                 placeholder="如 1000000"
               />
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm font-medium">
+              <div className="flex items-center justify-between text-[13px] font-medium">
                 <span>各市场投资比例</span>
                 <span className={`text-xs ${ratioSum > 100 ? 'text-destructive' : 'text-muted-foreground'}`}>
                   合计 {ratioSum}%{ratioSum > 100 ? '（超过 100%）' : ''}
@@ -704,16 +704,16 @@ export default function PaperTradingPage() {
                 const amount = ((Number(cfgTotal) || 0) * pct) / 100
                 return (
                   <div key={m} className="flex items-center gap-3">
-                    <span className="w-12 text-sm">{label}</span>
+                    <span className="w-12 text-[13px]">{label}</span>
                     <input
                       type="number"
                       min={0}
                       max={100}
                       value={cfgRatios[m]}
                       onChange={e => setCfgRatios(prev => ({ ...prev, [m]: e.target.value }))}
-                      className="w-20 h-9 px-2 rounded-md border border-border bg-background text-sm text-right"
+                      className="w-20 h-9 px-2 rounded-md border border-border bg-background text-[13px] text-right"
                     />
-                    <span className="text-sm text-muted-foreground">%</span>
+                    <span className="text-[13px] text-muted-foreground">%</span>
                     <span className="text-xs text-muted-foreground ml-auto">≈ {formatCurrency(amount)}</span>
                   </div>
                 )
@@ -742,7 +742,7 @@ export default function PaperTradingPage() {
             {/* 总开关 */}
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium">启用通知</div>
+                <div className="text-[13px] font-medium">启用通知</div>
                 <div className="text-xs text-muted-foreground">开启后将通过所选渠道推送交易通知</div>
               </div>
               <Switch checked={notifyEnabled} onCheckedChange={setNotifyEnabled} />
@@ -752,7 +752,7 @@ export default function PaperTradingPage() {
               <>
                 {/* 通知渠道选择 */}
                 <div>
-                  <div className="text-sm font-medium mb-2">通知渠道</div>
+                  <div className="text-[13px] font-medium mb-2">通知渠道</div>
                   {notifyChannels.length === 0 ? (
                     <div className="text-xs text-muted-foreground">暂无可用渠道，请先在设置中配置通知渠道</div>
                   ) : (
@@ -779,24 +779,24 @@ export default function PaperTradingPage() {
 
                 {/* 通知模式 */}
                 <div className="space-y-3">
-                  <div className="text-sm font-medium">通知模式</div>
+                  <div className="text-[13px] font-medium">通知模式</div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-sm">实时交易信号</div>
+                      <div className="text-[13px]">实时交易信号</div>
                       <div className="text-xs text-muted-foreground">建仓/平仓时立即推送</div>
                     </div>
                     <Switch checked={notifyRealtime} onCheckedChange={setNotifyRealtime} />
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-sm">盘前计划</div>
+                      <div className="text-[13px]">盘前计划</div>
                       <div className="text-xs text-muted-foreground">每天 09:00 推送当日候选列表</div>
                     </div>
                     <Switch checked={notifyPremarket} onCheckedChange={setNotifyPremarket} />
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-sm">日终摘要</div>
+                      <div className="text-[13px]">日终摘要</div>
                       <div className="text-xs text-muted-foreground">每天 15:30 推送当日操作汇总</div>
                     </div>
                     <Switch checked={notifySummary} onCheckedChange={setNotifySummary} />

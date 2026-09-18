@@ -162,9 +162,18 @@ for (const f of files) {
   // 注意: 变量名不能叫 bad —— 会遮蔽上报函数 bad()
   const key = f.replace(/\\/g, '/').split('/frontend/')[1] || rel(f)
   const allowed = allowedFor(`frontend/${key}`)
+  // 2026-09-18 补两个盲区(实测踩到): ① Tailwind 命名字号(text-sm=14/lg=18/2xl=24/3xl=30);
+  // ② JSX 内联 SVG 字号 `fontSize={N}`(注意: ECharts 选项里的 `fontSize: N` **不拦** ——
+  // 那是画布内文字, 不参与 DOM 字阶体系)。
+  const named = (src.match(/(?<![-\w])text-(sm|lg|2xl|3xl|4xl|5xl)(?![-\w])/g) || []);
+  const inline = (src.match(/fontSize=\{(\d+)\}/g) || [])
+    .map((m) => Number(/(\d+)/.exec(m)[1]))
+    .filter((n) => !allowed.has(n));
   const badSizes = (src.match(/text-\[(\d+)px\]/g) || [])
     .map((m) => Number(/(\d+)/.exec(m)[1]))
     .filter((n) => !allowed.has(n))
+    .concat(named.map(() => -1))
+    .concat(inline)
   if (badSizes.length === 0) continue
   fontSeen.add(key)
   const base = fontBaseline[key]

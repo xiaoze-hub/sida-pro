@@ -170,7 +170,7 @@ export default function HistoryPage() {
             <Clock className="w-4 h-4 md:w-5 md:h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-lg md:text-xl font-bold">分析历史</h1>
+            <h1 className="text-[16px] md:text-xl font-bold">分析历史</h1>
             <p className="text-[12px] md:text-[13px] text-muted-foreground">报告式阅读：目录 + 正文</p>
           </div>
           <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">

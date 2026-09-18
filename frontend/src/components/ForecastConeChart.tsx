@@ -178,7 +178,7 @@ export default function ForecastConeChart({ symbol, lastClose, lastDate, predict
   return (
     <div>
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-sm font-medium">预测锥图</span>
+        <span className="text-[13px] font-medium">预测锥图</span>
         <span className="text-[11px] text-muted-foreground">
           灰线历史收盘{hist.length > 0 ? `(${hist.length}日)` : '(历史暂不可用)'} · 彩线模型预测
           {prediction.length > 0 && p5 && p95 ? ' · 阴影 P5-P95' : ''}

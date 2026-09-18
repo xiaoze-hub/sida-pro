@@ -153,3 +153,35 @@ def test_thsdk_l2_missing_money_stays_none(monkeypatch):
     got = {f["label"]: f for f in out["fields"]}
     assert got["主力净流入"]["value"] is None
     assert got["主力净额（含主动买卖口径）"]["value"] is None
+
+
+def test_compare_exposes_pair_diffs_and_conclusion(monkeypatch):
+    """P2-1: 对照响应必须带**成对差异 + 归因**, 且不合成单一数字。"""
+    from src.web.api import caliber_compare as cc
+
+    # 三源各给一个"主力净流入": 暗盘 2.75x、东财 1.01x —— 都该落在预期带(ok)
+    fake_sources = [
+        {"key": "thsdk_l2", "fields": [{"label": "主力净流入", "value": 1.0e7}]},
+        {"key": "tencent_dark", "fields": [{"label": "主力净额（≥20万）", "value": 2.75e7}]},
+        {"key": "eastmoney_flow", "fields": [{"label": "主力净流入", "value": 1.01e7}]},
+    ]
+    diffs = cc._pair_diffs(fake_sources)
+    assert len(diffs) == 3
+    assert all(d["level"] == "ok" for d in diffs), diffs
+    assert all(d["note"] for d in diffs)          # 每对都要有"为什么差"的解释
+
+    concl = cc._diff_conclusion(fake_sources)
+    assert concl["level"] == "ok" and concl["hint"]
+    # 不合成单一数字: 返回里不许出现"校准后/权威值"这类键
+    for k in ("calibrated", "consensus", "authoritative"):
+        assert k not in concl
+
+
+def test_compare_pair_diffs_unknown_when_source_missing():
+    """缺源 → unknown(不比较、不补 0)。"""
+    from src.web.api import caliber_compare as cc
+
+    srcs = [{"key": "thsdk_l2", "fields": [{"label": "主力净流入", "value": 1.0e7}]}]
+    diffs = cc._pair_diffs(srcs)
+    assert all(d["level"] == "unknown" for d in diffs)
+    assert cc._diff_conclusion(srcs)["level"] == "unknown"

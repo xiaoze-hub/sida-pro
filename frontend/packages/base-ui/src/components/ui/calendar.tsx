@@ -18,7 +18,7 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
           months: 'flex flex-col gap-4',
           month: 'space-y-4',
           month_caption: 'flex justify-center pt-1 relative items-center',
-          caption_label: 'text-sm font-medium',
+          caption_label: 'text-[13px] font-medium',
           nav: 'flex items-center gap-1',
           button_previous: cn(
             buttonVariants({ variant: 'outline' }),
@@ -31,14 +31,14 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
           dropdowns: 'flex items-center justify-center gap-1.5',
           dropdown_root:
             'relative has-[select:focus-visible]:border-ring has-[select:focus-visible]:ring-ring/40 has-[select:focus-visible]:ring-[3px] rounded-md border border-border bg-background/60',
-          dropdown: 'appearance-none bg-transparent px-2 py-1.5 text-sm pr-7',
+          dropdown: 'appearance-none bg-transparent px-2 py-1.5 text-[13px] pr-7',
           chevron: 'w-4 h-4 text-muted-foreground',
           month_grid: 'w-full border-collapse',
           weekdays: 'flex',
           weekday: 'w-9 text-center text-[0.8rem] text-muted-foreground font-normal',
           weeks: 'mt-1',
           week: 'flex w-full',
-          day: 'h-9 w-9 p-0 text-center text-sm relative',
+          day: 'h-9 w-9 p-0 text-center text-[13px] relative',
           day_button: cn(buttonVariants({ variant: 'ghost' }), 'h-9 w-9 p-0 font-normal'),
           selected:
             'bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground',

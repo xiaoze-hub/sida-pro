@@ -8,7 +8,7 @@ import {
   type CaliberSource,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
-import { safeMoney, safePercent, safeInt } from '@/lib/format'
+import { safeMoney, safePercent, safeInt, safeFixed } from '@/lib/format'
 
 /**
  * 口径对照页(2026-09-18, 老板需求 A2 第一步)。
@@ -290,7 +290,7 @@ export default function CaliberComparePage() {
             <Search className="w-4 h-4 text-primary" /> 口径对照
           </h1>
           <p className="text-[11px] text-muted-foreground mt-1">
-            同一只票同一时刻, 明盘 L2 / 暗盘逐笔 / 东财四档 并排看 —— 数字不一样是**口径不一样**,
+            同一只票同一时刻, 明盘 L2 / 暗盘逐笔 / 东财四档 并排看 —— 数字不一样是「口径不一样」,
             不合成单一“权威数字”。
           </p>
         </div>
@@ -333,6 +333,81 @@ export default function CaliberComparePage() {
               <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
             </h2>
             <div className="space-y-2">
+              {/* P2-1(2026-09-18): 成对差异 + 归因 —— 三源并排能"看到差", 这块回答"这个差正不正常" */}
+              {(data.pair_diffs ?? []).length > 0 && (
+                <div className="mt-4">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                    <span className="text-[13px] font-medium text-foreground">差异归因</span>
+                    {data.diff_conclusion && (
+                      <span
+                        data-testid="diff-conclusion"
+                        className={`rounded px-1.5 py-0.5 text-[11px] ${
+                          data.diff_conclusion.level === 'alert'
+                            ? 'bg-destructive/10 text-destructive'
+                            : data.diff_conclusion.level === 'warn'
+                              ? 'bg-amber-500/10 text-amber-600'
+                              : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {data.diff_conclusion.level === 'ok'
+                          ? '差在预期带内'
+                          : data.diff_conclusion.level === 'warn'
+                            ? '略出预期带'
+                            : data.diff_conclusion.level === 'alert'
+                              ? '远离预期带 / 方向冲突'
+                              : '数据不足'}
+                      </span>
+                    )}
+                  </div>
+                  {data.diff_conclusion && (
+                    <p className="mb-2 text-[11px] text-muted-foreground">{data.diff_conclusion.hint}</p>
+                  )}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[11px]">
+                      <thead>
+                        <tr className="border-b border-border/60 text-muted-foreground">
+                          <th className="px-2 py-1 font-medium">对比</th>
+                          <th className="px-2 py-1 text-right font-medium">差值</th>
+                          <th className="px-2 py-1 text-right font-medium">相对差</th>
+                          <th className="px-2 py-1 text-right font-medium">比值</th>
+                          <th className="px-2 py-1 font-medium">判定与归因</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/40">
+                        {(data.pair_diffs ?? []).map((d) => (
+                          <tr key={`${d.a}-${d.b}`}>
+                            <td className="px-2 py-1 whitespace-nowrap">
+                              {d.label_a} <span className="text-muted-foreground">vs</span> {d.label_b}
+                            </td>
+                            <td className="px-2 py-1 text-right font-mono">{safeMoney(d.abs_diff)}</td>
+                            <td className="px-2 py-1 text-right font-mono">
+                              {d.rel_diff == null ? '--' : `${safeFixed(d.rel_diff * 100, 1)}%`}
+                            </td>
+                            <td className="px-2 py-1 text-right font-mono">
+                              {d.ratio == null ? '--' : `${safeFixed(d.ratio, 2)}×`}
+                            </td>
+                            <td className="px-2 py-1">
+                              <span
+                                className={`mr-1 ${
+                                  d.level === 'alert'
+                                    ? 'text-destructive'
+                                    : d.level === 'warn'
+                                      ? 'text-amber-600'
+                                      : 'text-muted-foreground'
+                                }`}
+                              >
+                                {d.level === 'ok' ? '预期' : d.level === 'warn' ? '留意' : d.level === 'alert' ? '需核对' : '缺数据'}
+                              </span>
+                              <span className="text-muted-foreground">{d.note}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {data.differences.map((d) => (
                 <div key={d.topic} className="border-l-2 border-border/50 pl-3">
                   <div className="text-[12px] text-foreground">{d.topic}</div>
