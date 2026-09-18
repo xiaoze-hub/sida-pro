@@ -151,7 +151,7 @@ export interface KlineSummaryResponse {
   symbol: string
   market: string
   summary: KlineSummary
-  /** 2026-08-12 预热优化: 主力意图结构化(逐笔口径), 供 K线 tab 的 InteractiveKline 秒显图例卡 */
+  /** 2026-08-12 预热优化: 主力意图结构化(逐笔口径), 供 K线 tab 的 KlineChart 秒显图例卡(P3: InteractiveKline 已删) */
   main_intent_structured?: MainIntentStructured | null
   // ============== SIDA Pro 设计稿 v2.0: K线图层标注数据 (2026-09-01) ==============
   /** L2 GS 买卖点序列 (.tck 盘后/日线算法). 后端 P2 阶段输出 */
@@ -174,7 +174,7 @@ export interface KlineSummaryResponse {
    */
   orderbook?: SummaryOrderbook | null
 }
-// 镜像 InteractiveKline 的新图层类型, 避免循环 import (组件已 export 同名 type)
+// 镜像 KlineChart 的新图层类型, 避免循环 import (组件已 export 同名 type)
 export type GsSignalLike = { date: string; side: 'G' | 'S'; confirmed: boolean; price: number }
 // `ming_net` 是后端真实字段(明盘); `open_net` 是早期误写的别名, 保留兼容(见 KlineChart FundFlowBar)。
 export type FundFlowBarLike = {
