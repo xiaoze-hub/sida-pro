@@ -41,55 +41,14 @@ type KlinesResponse = {
   klines: KlineItem[]
 }
 
-type MinutePoint = {
-  t: string
-  price: number
-  avg: number
-  volume: number
-}
 
-/** 拉升/下探段(2026-08-12): 后端 minute 接口 swings 字段, 供分时K区间标记 */
-export interface SwingSegment {
-  start: string
-  end: string
-  price_up?: number
-  price_down?: number
-  amt: number
-  main_net: number
-  main_buy?: number
-  main_sell?: number
-  retail_net: number
-  retail_buy?: number
-  retail_sell?: number
-  buy_ratio?: number
-  sell_ratio?: number
-  verdict: string
-  score: number
-  signals?: string[]
-  post?: { main_net: number; price_change: number } | null
-  spread?: number
-}
 
-export interface MinuteSwings {
-  symbol: string
-  current_price: number
-  rallies: SwingSegment[]
-  dips: SwingSegment[]
-  flats?: SwingSegment[]
-  summary?: { n_rallies?: number; n_dips?: number; true_rallies?: number; true_dips?: number; main_net_total?: number }
-}
 
-type MinuteResponse = {
-  symbol: string
-  market: string
-  points: MinutePoint[]
-  prev_close?: number | null
-  is_index?: boolean
-  swings?: MinuteSwings | null
-  /** KI-042: true = 分时源故障(空列表是故障, 不是停牌); note 为后端原文。 */
-  degraded?: boolean
-  note?: string | null
-}
+// 分时相关类型统一来自 lib/minute-types(单一来源; 原先分散在本文件与 MinuteLwcChart 互相 import,
+// 淘汰 IK 时会连带打断 MinuteLwcChart —— P1 已收口)。既有导出名保持不变。
+import type { MinutePoint, MinuteResponse, MinuteSwings } from '../lib/minute-types'
+
+export type { MinutePoint, MinuteResponse, MinuteSwings, SwingSegment } from '../lib/minute-types'
 
 /** 主力意图结构化数据(2026-08-12): 后端 klines summary API 返回, 供 K线 markers/筹码叠加 */
 export interface MainIntentStructured {

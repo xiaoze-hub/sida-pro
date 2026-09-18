@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { MinuteSwings } from './InteractiveKline'
+import type { MinutePoint, MinuteSwings } from '../lib/minute-types'
 import * as LW from 'lightweight-charts'
 import { readStockColors, withAlpha } from '../lib/stock-colors'
 
-export interface MinutePoint {
-  t: string
-  price: number
-  avg: number
-  volume: number
-}
+export type { MinutePoint } from '../lib/minute-types'
 
 interface Props {
   points: MinutePoint[]
