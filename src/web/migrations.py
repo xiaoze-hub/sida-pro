@@ -4233,6 +4233,54 @@ CREATE TABLE high_value_api_logs (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_hv_api_name_created ON high_value_api_logs(api_name, created_at)"))
 
 
+def _m175_decision_log(conn: Connection) -> None:
+    """决策日志(B6, 2026-09-18): "看图之后呢" —— 把每个信号连同**当时的证据与价格**留痕, 事后回填 T+1/3/5。
+
+    为什么需要: 共振/GS/竞价池这些信号一直能"看", 但没有"看了之后结果如何"的账。
+    没有账 → 无法证明也无法证伪 → 只能靠感觉调参数。这张表把"信号 → 结果"变成可统计的样本。
+
+    诚实口径: 价格/收益/命中**取不到就 NULL**(绝不补 0 —— 0 是真实收益, 不能冒充"没有数据");
+    回填只在**未来那根 K 线真的存在**时才写(不许拿之后的数据推算)。
+    """
+    if _has_table(conn, "decision_log"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE decision_log (
+  id {pk},
+  signal_kind TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  trade_date TEXT NOT NULL,
+  price_at_signal REAL,
+  context_json TEXT DEFAULT '',
+  source TEXT DEFAULT '',
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ret_t1 REAL,
+  ret_t3 REAL,
+  ret_t5 REAL,
+  hit_t1 INTEGER,
+  hit_t3 INTEGER,
+  hit_t5 INTEGER,
+  filled_at {ts}
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_decision_log_key "
+            "ON decision_log(signal_kind, symbol, trade_date)"
+        )
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_decision_log_kind_date ON decision_log(signal_kind, trade_date)")
+    )
+
+
 def _m174_caliber_snapshots(conn: Connection) -> None:
     """口径快照档案(2026-09-18 B5): 明盘 L2 / 暗盘逐笔 / 东财四档 的**逐日留痕**。
 
@@ -4632,6 +4680,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(173, "users_soft_delete", _m173_users_soft_delete),
     # 口径快照档案(B5, 2026-09-18): 三源逐日留痕, 支撑"口径漂移曲线"与数字可溯源
     Migration(174, "caliber_snapshots", _m174_caliber_snapshots),
+    # 决策日志(B6, 2026-09-18): 信号 + 当时证据/价格留痕, 事后回填 T+1/3/5
+    Migration(175, "decision_log", _m175_decision_log),
 )
 
 
