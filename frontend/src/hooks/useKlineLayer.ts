@@ -23,8 +23,18 @@ import {
 } from '@panwatch/biz-ui/klineEvents'
 import type { ActivityPoint } from '@panwatch/biz-ui/components/KlineChart'
 import type { FundFlowBar } from '@panwatch/biz-ui/components/KlineChart'
-// GS 点用 InteractiveKline 的类型(要求 price) —— 本 hook 的消费方是 InteractiveKline
-import type { GsSignalPoint } from '@panwatch/biz-ui/components/InteractiveKline'
+/**
+ * GS 买卖点(hook 的输出契约): **price 必填** —— 本 hook 负责"缺价格的点不喂图"(不补 0),
+ * 所以这里比 `KlineChart` 的宽松版(price 可选)更严。原先借用 InteractiveKline 的类型,
+ * 该组件已按评估退役(P3, 2026-09-18), 故把契约就地声明清楚。
+ */
+export type LayeredGsSignal = {
+  date: string
+  /** 'G' = 买入(MA5 上穿), 'S' = 卖出(MA5 下穿) */
+  side: 'G' | 'S'
+  confirmed: boolean
+  price: number
+}
 
 interface SummaryLayerResponse {
   gs_signals?: Array<{ date: string; side: 'G' | 'S'; confirmed?: boolean; price?: number | null }> | null
@@ -35,7 +45,7 @@ interface SummaryLayerResponse {
 }
 
 export interface KlineLayerProps {
-  gsSignals: GsSignalPoint[]
+  gsSignals: LayeredGsSignal[]
   fundFlow: FundFlowBar[]
   events: KlineEventPoint[]
   supportPressure: KlinePriceLine[]
@@ -77,11 +87,11 @@ export function useKlineLayer(symbol: string, market: string, enabled = true): K
         const rawGs = Array.isArray(res?.gs_signals) ? res.gs_signals : []
         setLayer({
           gsSignals: rawGs.filter(
-            (g): g is GsSignalPoint =>
+            (g): g is LayeredGsSignal =>
               !!g &&
               typeof g.date === 'string' &&
               (g.side === 'G' || g.side === 'S') &&
-              // price 必填(InteractiveKline 契约) —— 缺失的点不喂图, 不补 0
+              // price 必填(本 hook 的输出契约) —— 缺失的点不喂图, 不补 0
               typeof g.price === 'number' &&
               Number.isFinite(g.price),
           ),

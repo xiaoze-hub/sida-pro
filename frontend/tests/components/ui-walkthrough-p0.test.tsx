@@ -70,14 +70,17 @@ describe('CSS 变量确实定义了补偿高度(P0-1)', () => {
 describe('图表库自托管, 不依赖 CDN(P0-2)', () => {
   const biz = resolve(__dirname, '../../packages/biz-ui/src/components')
 
-  it('InteractiveKline / MinuteLwcChart 都 import 了打包版 lightweight-charts', () => {
-    for (const f of ['InteractiveKline.tsx', 'MinuteLwcChart.tsx']) {
+  it('KlineChart / MinuteLwcChart 都 import 了打包版 lightweight-charts', () => {
+    // P3(2026-09-18): InteractiveKline 已按评估退役, 断言对象改为存活的两个组件
+    for (const f of ['KlineChart.tsx', 'MinuteLwcChart.tsx']) {
       const src = readFileSync(resolve(biz, f), 'utf-8')
-      expect(src, `${f} 应 import 打包版图表库`).toMatch(
-        /import \* as LW from ['"]lightweight-charts['"]/,
+      // 打包版图表库: 有的组件用命名导入, 有的用命名空间导入 —— 都算"来自 npm 包"
+      expect(src, `${f} 应从 lightweight-charts 包导入`).toMatch(
+        /import [^;]*from ['"]lightweight-charts['"]/,
       )
-      // getLW 必须优先取打包版(全局只作兜底)
-      expect(src, `${f} 的 getLW 应优先 bundled`).toMatch(/if \(bundled && typeof bundled\.createChart === 'function'\)/)
+      // 不许再靠 CDN 全局(window.LightweightCharts)取库
+      expect(src, `${f} 不应依赖 CDN 全局`).not.toMatch(/window\.LightweightCharts/)
+      expect(src, `${f} 不应出现 CDN 域名`).not.toMatch(/unpkg\.com|cdn\.jsdelivr\.net/)
     }
   })
 
