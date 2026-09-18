@@ -110,10 +110,16 @@ const navItems = [
 ]
 // 设计稿 v2.0 §4.2/§4.3: 6 项主导航(驾驶舱/行情/机会/投研/我的/系统), 取代原 21 项扁平三组。
 // 合并优化: 预测并入行情 / 历史并入投研 / 模拟盘并入我的 / 提醒并入系统(通知)。个股/指数/板块为详情页(行情域), 经搜索进入。
+// 一级导航 **6 组**(设计稿 v3.0 §六: 一级 ≤6 + 新增「决策」入口)。
+// 2026-09-18 P2-2: ① 首页从独立「驾驶舱」组并入「行情」(它本来就是行情的入口, 省出一组);
+// ② 新增「决策」组 —— 之前 `/decision-ledger` 与 `/caliber-compare` **只存在于 navItems,
+//    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
-  { key: 'cockpit', labelKey: 'dashboard.title', items: navItems.filter(n => n.to === '/') },
-  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
+  { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
+  // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
+  // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
+  { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
   { key: 'research', labelKey: 'nav.reports', items: navItems.filter(n => ['/reports'].includes(n.to)) },
