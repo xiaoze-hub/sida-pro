@@ -33,7 +33,9 @@ import time
 # 目标阈值(设计稿 v3.0 §九)。None = 该页不适用。
 TARGETS: dict[str, dict[str, object]] = {
     "klineShare": {"min": 0.80, "pages": {"个股页", "指数页"}},
-    "cards": {"max": 0, "pages": None},
+    # 卡片化只判"图表为主的行情终端页"(设计稿 v3.0 §五 范式 A); 列表页/工作台页允许**一个**汇总面板,
+    # 否则会把"页头汇总条"也算成卡片墙 —— 这是口径, 不是放宽: 个股/指数页仍是 0。
+    "cards": {"max": 0, "pages": {"个股页", "指数页", "热力图"}},
     "hairline": {"max": 80, "pages": None},
     "fontCount": {"max": 6, "pages": None},
     "dash": {"max": 12, "pages": {"个股页"}},
