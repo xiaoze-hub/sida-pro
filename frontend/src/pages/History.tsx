@@ -285,7 +285,7 @@ export default function HistoryPage() {
                       <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[selectedRecord.agent_name] || selectedRecord.agent_name}</Badge>
                       <span className="text-[11px] text-muted-foreground font-mono">{formatDateTime(displayTime(selectedRecord))}</span>
                     </div>
-                    <div className="mt-1 text-[15px] md:text-[16px] font-semibold text-foreground truncate">
+                    <div className="mt-1 text-[16px] md:text-[16px] font-semibold text-foreground truncate">
                       {formatTitle(selectedRecord)}
                     </div>
                   </div>

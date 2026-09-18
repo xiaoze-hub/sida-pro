@@ -486,7 +486,7 @@ export default function UserManagement({ currentUser }: Props) {
                           />
                           <span className="flex-1 min-w-0 truncate">{p.label}</span>
                           {isDefault && (
-                            <span className="flex-shrink-0 rounded-full border border-border/50 px-1.5 py-px text-[9px] text-muted-foreground">
+                            <span className="flex-shrink-0 rounded-full border border-border/50 px-1.5 py-px text-[10px] text-muted-foreground">
                               角色默认
                             </span>
                           )}

@@ -76,7 +76,7 @@ export default function HelpPage() {
             <HelpCircle className="h-4.5 w-4.5" />
           </div>
           <div>
-            <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">帮助中心</h1>
+            <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">帮助中心</h1>
             <p className="text-[12px] text-muted-foreground mt-1">
               PanWatch 功能速览与操作提示，数据导出与快捷键一览
             </p>

@@ -163,14 +163,14 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           <div className="text-muted-foreground mb-0.5">AI机构活跃度</div>
           {act ? (
             <>
-              <div className="font-mono text-[15px] font-semibold" style={{ color: activityColor(act.level) }}>
+              <div className="font-mono text-[16px] font-semibold" style={{ color: activityColor(act.level) }}>
                 {act.activity != null ? act.activity.toFixed(2) : '--'}
                 <span className="text-[10px] ml-1">{act.level}</span>
               </div>
               <div className="text-muted-foreground mt-0.5">
                 连强{act.streak_days}日{act.ma5 != null ? ` · 5日均${act.ma5.toFixed(2)}` : ''}
               </div>
-              <div className="text-[9px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
                 生命1.56/强势3/大牛6
               </div>
             </>
@@ -184,11 +184,11 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           <div className="text-muted-foreground mb-0.5">GS策略(趋势过滤)</div>
           {gs ? (
             <>
-              <div className="font-mono text-[15px] font-semibold text-foreground">{gs.state}</div>
+              <div className="font-mono text-[16px] font-semibold text-foreground">{gs.state}</div>
               <div className="text-muted-foreground mt-0.5">
                 快线{gs.a0?.toFixed(2)} / 慢线{gs.bb0?.toFixed(2)}
               </div>
-              <div className="text-[9px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
                 方向过滤 · 买卖点滞后仅参考
               </div>
             </>
@@ -202,11 +202,11 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           <div className="text-muted-foreground mb-0.5">主力净流入(L2·TQ)</div>
           {l2?.available && l2.zjl_hb != null ? (
             <>
-              <div className={`font-mono text-[15px] font-semibold ${upColor(l2.zjl_hb)}`}>
+              <div className={`font-mono text-[16px] font-semibold ${upColor(l2.zjl_hb)}`}>
                 {fmtWan(l2.zjl_hb)}
               </div>
               <div className="text-muted-foreground mt-0.5">{l2.direction ?? '平衡'}</div>
-              <div className="text-[9px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
                 逐笔{l2.l2_tick_num ?? 0}笔 · 委托{l2.l2_order_num ?? 0}笔
               </div>
             </>
@@ -225,12 +225,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       {bare ? (
         <div className="mt-2 flex items-center justify-end gap-2">
           {data?.data_time ? (
-            <span className="font-mono text-[9px] text-muted-foreground/60">更新于 {data.data_time}</span>
+            <span className="font-mono text-[10px] text-muted-foreground/60">更新于 {data.data_time}</span>
           ) : null}
           {refreshButton}
         </div>
       ) : data?.data_time ? (
-        <div className="text-[9px] text-muted-foreground/60 mt-2 text-right font-mono">
+        <div className="text-[10px] text-muted-foreground/60 mt-2 text-right font-mono">
           更新于 {data.data_time}
         </div>
       ) : null}

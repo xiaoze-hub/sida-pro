@@ -60,7 +60,7 @@ export function DevPageLayout({
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
-              <h1 className="text-[18px] font-bold tracking-tight text-foreground dark:text-white md:text-[20px]">{title}</h1>
+              <h1 className="text-[16px] font-bold tracking-tight text-foreground dark:text-white md:text-[20px]">{title}</h1>
               {badge && (
                 <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-mono text-primary dark:bg-cyan-500/10 dark:border-cyan-500/20 dark:text-cyan-400">
                   {badge}
@@ -157,7 +157,7 @@ export function Section({
         <div>
           <div className="flex items-center gap-2">
             {icon && <span className="text-primary dark:text-cyan-400">{icon}</span>}
-            <h2 className="text-[15px] font-semibold text-foreground dark:text-white">{title}</h2>
+            <h2 className="text-[16px] font-semibold text-foreground dark:text-white">{title}</h2>
           </div>
           {description && <p className="mt-1 text-[12px] text-muted-foreground dark:text-slate-500">{description}</p>}
         </div>

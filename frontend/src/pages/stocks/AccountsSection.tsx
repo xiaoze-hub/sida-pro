@@ -66,7 +66,7 @@ export function AccountsSection() {
       <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
         <Building2 className="w-6 h-6 text-primary" />
       </div>
-      <p className="text-[15px] font-semibold text-foreground">还没有账户</p>
+      <p className="text-[16px] font-semibold text-foreground">还没有账户</p>
       <p className="text-[13px] text-muted-foreground mt-1.5">点击"添加账户"创建你的第一个交易账户</p>
     </div>
   ) : (
@@ -85,7 +85,7 @@ export function AccountsSection() {
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
             )}
             <Building2 className="w-4 h-4 text-primary" />
-            <span className="text-[14px] md:text-[15px] font-semibold text-foreground">{account.name}</span>
+            <span className="text-[13px] md:text-[16px] font-semibold text-foreground">{account.name}</span>
             <span className="text-[11px] md:text-[12px] text-muted-foreground">
               {account.positions.length} 只
             </span>
@@ -212,7 +212,7 @@ export function AccountsSection() {
                             className={`group hover:bg-accent/30 transition-colors ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
                           >
                             <td className="px-4 py-2.5">
-                              <span className={`text-[9px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>
+                              <span className={`text-[10px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>
                               <span className="font-mono text-[12px] font-semibold text-foreground">
                                 {pos.symbol}
                               </span>
@@ -392,7 +392,7 @@ export function AccountsSection() {
                         {/* Row 1: Stock info + Current price */}
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded ${badge.style}`}>{badge.label}</span>
+                            <span className={`shrink-0 text-[10px] px-1 py-0.5 rounded ${badge.style}`}>{badge.label}</span>
                             <span className="shrink-0 font-mono text-[12px] font-semibold text-foreground">
                               {pos.symbol}
                             </span>
@@ -403,7 +403,7 @@ export function AccountsSection() {
                               {pos.name}
                             </button>
                             {pos.trading_style && (
-                              <span className={`shrink-0 text-[9px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
+                              <span className={`shrink-0 text-[10px] px-1 py-0.5 rounded ${pos.trading_style === 'short' ? 'bg-rose-500/10 text-rose-600' : pos.trading_style === 'long' ? 'bg-blue-500/10 text-blue-600' : 'bg-amber-500/10 text-amber-600'}`}>
                                 {pos.trading_style === 'short' ? '短' : pos.trading_style === 'long' ? '长' : '波'}
                               </span>
                             )}
@@ -471,7 +471,7 @@ export function AccountsSection() {
                                   const isRunning = runningAgents[stock.id] === sa.agent_name
                                   return (
                                     <span key={sa.agent_name} className="inline-flex items-center gap-1">
-                                      <Badge variant="secondary" className="text-[9px]">{agent?.display_name || sa.agent_name}</Badge>
+                                      <Badge variant="secondary" className="text-[10px]">{agent?.display_name || sa.agent_name}</Badge>
                                       {isRunning && (
                                         <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
                                           <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />

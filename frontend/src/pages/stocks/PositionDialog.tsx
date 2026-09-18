@@ -65,7 +65,7 @@ export function PositionDialog() {
     <div className="space-y-4 mt-2">
       {editPositionId ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-accent/30">
-          <span className={`text-[9px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
             {marketBadge(positionForm.stock_market).label}
           </span>
           <span className="font-mono text-[12px] text-muted-foreground">{positionForm.stock_symbol}</span>
@@ -117,7 +117,7 @@ export function PositionDialog() {
                     onClick={() => selectPositionStock(item)}
                     className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-accent/50 text-left transition-colors"
                   >
-                    <span className={`text-[9px] px-1 py-0.5 rounded ${marketBadge(item.market).style}`}>
+                    <span className={`text-[10px] px-1 py-0.5 rounded ${marketBadge(item.market).style}`}>
                       {marketBadge(item.market).label}
                     </span>
                     <span className="font-mono text-muted-foreground text-[12px]">{item.symbol}</span>
@@ -129,7 +129,7 @@ export function PositionDialog() {
           </div>
           {positionForm.stock_symbol && (
             <div className="mt-2 flex items-center gap-2">
-              <span className={`text-[9px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${marketBadge(positionForm.stock_market).style}`}>
                 {marketBadge(positionForm.stock_market).label}
               </span>
               <span className="font-mono text-[12px] text-muted-foreground">{positionForm.stock_symbol}</span>

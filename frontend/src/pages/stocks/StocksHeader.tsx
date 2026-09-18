@@ -38,7 +38,7 @@ export function StocksHeader() {
 {/* Header */}
 <div className="flex flex-col gap-2 md:gap-3 mb-5 md:mb-6">
   <div className="flex items-center justify-between gap-2">
-    <h1 className="text-[18px] md:text-[22px] font-bold text-foreground tracking-tight shrink-0">持仓</h1>
+    <h1 className="text-[16px] md:text-[20px] font-bold text-foreground tracking-tight shrink-0">持仓</h1>
     {/* Desktop buttons + controls */}
     <div className="hidden md:flex items-center gap-3">
       {/* Controls */}

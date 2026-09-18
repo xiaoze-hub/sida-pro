@@ -110,7 +110,7 @@ export function FreeTierSection() {
   return (
     <div className="lg:col-span-12 border border-border/50 rounded-lg p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
           <SlidersHorizontal className="w-4 h-4 text-primary" /> 免费档（免费级别）
         </h3>
         <div className="flex items-center gap-2">

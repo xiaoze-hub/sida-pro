@@ -92,7 +92,7 @@ function ConsistencyRing({ value }: { value: number | null | undefined }) {
         />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className={`font-mono tabular-nums text-[9px] ${c.text}`}>
+        <span className={`font-mono tabular-nums text-[10px] ${c.text}`}>
           {value != null && Number.isFinite(value) ? `${Math.round(value)}` : '--'}
         </span>
       </div>
@@ -106,7 +106,7 @@ function SourceCol({ label, tag, net }: { label: string; tag: string; net: numbe
     <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] text-muted-foreground">{label}</span>
-        <span className="text-[9px] text-muted-foreground/70 border border-border/50 rounded px-1 py-px">{tag}</span>
+        <span className="text-[10px] text-muted-foreground/70 border border-border/50 rounded px-1 py-px">{tag}</span>
       </div>
       <div className={`font-mono tabular-nums text-[13px] font-semibold mt-0.5 ${upColor(net)}`}>{fmtYi(net)}</div>
     </div>
@@ -198,7 +198,7 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
               <ConsistencyRing value={consistency} />
               <span className="leading-tight">
                 <span className={`block text-[11px] font-semibold ${cn.text}`}>一致性 {fmtSignedPct(consistency)}</span>
-                <span className="block text-[9px] text-muted-foreground">双源对比</span>
+                <span className="block text-[10px] text-muted-foreground">双源对比</span>
               </span>
             </span>
           }

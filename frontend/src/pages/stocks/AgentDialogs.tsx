@@ -67,7 +67,7 @@ export function AgentDialogs() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-[13px] font-medium text-foreground">{agent.display_name}</span>
-                      <Badge variant="secondary" className="text-[9px]">
+                      <Badge variant="secondary" className="text-[10px]">
                         {isBatchMode ? '批量' : '逐只'}
                       </Badge>
                     </div>

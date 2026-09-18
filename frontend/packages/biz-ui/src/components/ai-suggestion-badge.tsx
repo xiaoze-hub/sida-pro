@@ -47,7 +47,7 @@ export function AiSuggestionBadge({
       >
         <AlarmClock className={iconSize} />
         {isAI && (
-          <span className="absolute -right-1 -top-1 rounded-full bg-indigo-600 px-1 text-[7px] font-bold leading-[12px] text-white ring-1 ring-card">
+          <span className="absolute -right-1 -top-1 rounded-full bg-indigo-600 px-1 text-[10px] font-bold leading-[12px] text-white ring-1 ring-card">
             AI
           </span>
         )}

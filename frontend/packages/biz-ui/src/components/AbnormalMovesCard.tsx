@@ -193,7 +193,7 @@ function Row({ row, onOpen }: RowProps) {
         <div className="text-[10px] text-muted-foreground flex items-center gap-1">
           <span>{row.board_name || '—'}</span>
           {row.source && row.source !== 'watchlist' ? (
-            <span className="px-1 rounded bg-accent/40 text-[9px]">竞池</span>
+            <span className="px-1 rounded bg-accent/40 text-[10px]">竞池</span>
           ) : null}
         </div>
       </div>

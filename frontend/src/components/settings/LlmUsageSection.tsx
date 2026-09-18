@@ -104,7 +104,7 @@ export function LlmUsageSection() {
             ].map(([label, val, suffix]) => (
               <div key={label} className="rounded-md border border-border/40 bg-accent/20 px-3 py-2.5">
                 <div className="text-[10px] text-muted-foreground">{label}</div>
-                <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
+                <div className="font-mono text-[13px] font-semibold text-foreground tabular-nums">
                   {val}
                   {suffix && <span className="ml-1 text-[10px] font-normal text-muted-foreground">{suffix}</span>}
                 </div>
@@ -118,7 +118,7 @@ export function LlmUsageSection() {
             ].map(([label, val, suffix]) => (
               <div key={label} className="rounded-md border border-border/40 bg-accent/20 px-3 py-2.5">
                 <div className="text-[10px] text-muted-foreground">{label}</div>
-                <div className="font-mono text-[14px] font-semibold text-foreground tabular-nums">
+                <div className="font-mono text-[13px] font-semibold text-foreground tabular-nums">
                   {val}
                   {suffix && <span className="ml-1 text-[10px] font-normal text-muted-foreground">{suffix}</span>}
                 </div>

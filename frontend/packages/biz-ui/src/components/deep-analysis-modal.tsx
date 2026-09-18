@@ -655,7 +655,7 @@ function DoneView({
 
       {/* 顶层摘要(精简成一行:决策 + 置信度 + 成本;完整理由在"最终决策" tab) */}
       <div className="rounded-lg bg-accent/30 px-4 py-2.5 flex items-center gap-3 flex-wrap">
-        <span className={`text-[18px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
+        <span className={`text-[16px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
           {sug.action_label}
         </span>
         <span className="text-[12px] text-muted-foreground">

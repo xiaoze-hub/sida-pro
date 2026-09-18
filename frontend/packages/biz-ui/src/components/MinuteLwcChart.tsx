@@ -390,7 +390,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
             <span>横盘压盘吸筹</span>
           </div>
           <button
-            className="mt-0.5 text-[9px] text-muted-foreground hover:text-foreground text-left"
+            className="mt-0.5 text-[10px] text-muted-foreground hover:text-foreground text-left"
             onClick={() => setShowLegend(false)}
           >
             收起图例 ✕

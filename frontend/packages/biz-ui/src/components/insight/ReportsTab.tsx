@@ -37,7 +37,7 @@ export function ReportsTab() {
           <div className="text-[11px] text-muted-foreground">
             {AGENT_LABELS[activeReport.agent_name] || activeReport.agent_name} · {activeReport.analysis_date}
           </div>
-          <div className="text-[15px] font-medium">{activeReport.title || '报告摘要'}</div>
+          <div className="text-[16px] font-medium">{activeReport.title || '报告摘要'}</div>
           {activeReport.suggestions && (activeReport.suggestions as any)?.[symbol]?.action_label && (
             <div className="text-[11px] inline-flex px-2 py-0.5 rounded bg-primary/10 text-primary">
               {(activeReport.suggestions as any)[symbol].action_label}

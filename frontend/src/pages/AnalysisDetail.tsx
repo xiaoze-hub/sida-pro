@@ -319,7 +319,7 @@ export default function AnalysisDetailPage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <h1 className="text-[20px] md:text-[22px] font-bold truncate min-w-0">{result.title || `${symbol} 深度分析`}</h1>
+            <h1 className="text-[20px] md:text-[20px] font-bold truncate min-w-0">{result.title || `${symbol} 深度分析`}</h1>
             <span className="text-[12px] text-muted-foreground shrink-0">{date}</span>
             <button
               onClick={() => setShareOpen(true)}
@@ -345,7 +345,7 @@ export default function AnalysisDetailPage() {
           {/* 决策摘要(移动端在正文顶部;桌面端移到右侧目录区,见下方 aside) */}
           {sug && (
             <div className="lg:hidden border-b border-border/40 pb-3 mb-6 flex items-center gap-3 flex-wrap">
-              <span className={`text-[24px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
+              <span className={`text-[20px] font-bold ${DECISION_COLOR[sug.action] || ''}`}>
                 {sug.action_label}
               </span>
               <span className="text-[13px] text-muted-foreground">
@@ -392,11 +392,11 @@ export default function AnalysisDetailPage() {
             const Icon = SECTION_ICON[s.id]
             return (
               <section key={s.id} id={`sec-${s.id}`} className="mb-12 scroll-mt-24">
-                <h2 className="flex items-center gap-2 text-[18px] font-bold mb-4 pb-2 border-b border-border/40">
+                <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
                   {Icon && <Icon className="w-[18px] h-[18px] text-primary/70 shrink-0" />}
                   {s.title}
                 </h2>
-                <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[15px] prose-h4:text-[14px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground/90 prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
+                <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground/90 prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={headingComponents(s.id)}>
                     {s.markdown}
                   </ReactMarkdown>
@@ -407,7 +407,7 @@ export default function AnalysisDetailPage() {
 
           {/* 历史决策对比 */}
           <section id="sec-history" className="mb-10 scroll-mt-24">
-            <h2 className="flex items-center gap-2 text-[18px] font-bold mb-4 pb-2 border-b border-border/40">
+            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
               <History className="w-[18px] h-[18px] text-primary/70 shrink-0" />
               历史决策 vs 实际涨跌
             </h2>
@@ -479,7 +479,7 @@ export default function AnalysisDetailPage() {
             {sug && (
               <div className="pb-3 border-b border-border/40">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className={`text-[22px] font-bold leading-none ${DECISION_COLOR[sug.action] || ''}`}>
+                  <span className={`text-[20px] font-bold leading-none ${DECISION_COLOR[sug.action] || ''}`}>
                     {sug.action_label}
                   </span>
                   <span className="text-[11px] text-muted-foreground shrink-0">

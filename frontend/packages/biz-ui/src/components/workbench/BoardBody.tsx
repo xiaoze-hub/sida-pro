@@ -224,7 +224,7 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
             {/* 成分股表 */}
             <div className="lg:col-span-2 border-b border-border/40 pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-[14px] font-semibold text-foreground">成分股</h2>
+                <h2 className="text-[13px] font-semibold text-foreground">成分股</h2>
                 <span className="text-[11px] text-muted-foreground">
                   共 {constituents?.count ?? 0} 只 · 口径 {constituents?.source === 'tdx' ? '通达信实时' : 'thsdk 实时'}
                 </span>
@@ -282,7 +282,7 @@ export default function BoardBody({ code, refreshToken }: { code: string; refres
             {/* 板块轮动 Top5 横条 */}
             <div className="border-b border-border/40 pb-3 md:pb-4">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[14px] font-semibold text-foreground">板块轮动 Top 5</h2>
+                <h2 className="text-[13px] font-semibold text-foreground">板块轮动 Top 5</h2>
                 <span className="text-[10px] text-muted-foreground">近{rotation?.days ?? 5}日 · click进入详情</span>
               </div>
               {rotItemsTop.length === 0 ? (

@@ -242,15 +242,15 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
             <div>
-              <div className="text-[22px] font-bold leading-none tabular-nums">{total}</div>
+              <div className="text-[20px] font-bold leading-none tabular-nums">{total}</div>
               <div className="mt-1 text-[11px] opacity-80">总数</div>
             </div>
             <div>
-              <div className="text-[22px] font-bold leading-none tabular-nums">{okCount}</div>
+              <div className="text-[20px] font-bold leading-none tabular-nums">{okCount}</div>
               <div className="mt-1 text-[11px] opacity-80">正常</div>
             </div>
             <div>
-              <div className="text-[22px] font-bold leading-none tabular-nums">{failCount}</div>
+              <div className="text-[20px] font-bold leading-none tabular-nums">{failCount}</div>
               <div className="mt-1 text-[11px] opacity-80">异常</div>
             </div>
           </div>

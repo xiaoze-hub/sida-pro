@@ -113,7 +113,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
       {!embedded && (
         <div className="flex items-center gap-2 mb-3">
           <Sparkles className="w-4 h-4 text-primary" />
-          <h2 className="text-[14px] font-semibold text-foreground">问财选股</h2>
+          <h2 className="text-[13px] font-semibold text-foreground">问财选股</h2>
           <span className="text-[11px] text-muted-foreground">同花顺 AI 自然语言选股(需 L2 问财数据源)</span>
         </div>
       )}

@@ -246,7 +246,7 @@ export default function ThemeMoodPage() {
   return (
     <div className="mx-auto max-w-[1400px] p-4">
       <div className="mb-3 flex items-center gap-3">
-        <h1 className="text-[15px] font-semibold">题材情绪</h1>
+        <h1 className="text-[16px] font-semibold">题材情绪</h1>
         <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">收盘确认口径</span>
         {resp?.trade_date ? <span className="text-[11px] text-muted-foreground">{resp.trade_date}</span> : null}
         <div className="ml-auto flex items-center gap-1">
