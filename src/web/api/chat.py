@@ -1424,7 +1424,7 @@ async def _fetch_capital_flow_context(symbol: str, market: str) -> str:
         main = float(summary.get("main_net_inflow") or 0)
         direction = "净流入" if main > 0 else ("净流出" if main < 0 else "平衡")
         pct = summary.get("main_net_inflow_pct")
-        # collector 已归一化为 %(f184 ×100 → %); None 显示 --
+        # collector 已归一到百分数(东财 f184 是 0.01% 单位 → /100, 见 normalize_net_pct); None 显示 --
         pct_str = f"{float(pct):+.1f}%" if pct is not None else "--"
         flow_date = summary.get("date") or "最近交易日"
 

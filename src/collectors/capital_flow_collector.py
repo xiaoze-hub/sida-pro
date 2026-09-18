@@ -23,6 +23,38 @@ logger = logging.getLogger(__name__)
 _FLOW_CACHE = TTLCache(default_ttl_sec=120.0)
 
 
+#: 东财 `fflow/kline` 的 f184 单位是 **0.01%**(1/100 个百分点), **不是**百分数。
+#: 实证(2026-09-18, 002361 神剑股份, 盘中):
+#:   主力净流入 f62 = 41,432,601 元(与 超大单 f66 26,804,246 + 大单 f72 14,628,355 精确相等 ✅)
+#:   成交额 f48 = 455,662,498.5 元  →  实测占比 = 9.0928%
+#:   f184 = 909  →  909 × 0.01% = 9.09% ✅
+#: 若按"f184 已是百分数"解读会得到 **909%** —— 主力净流入占比在算术上不可能超过 100%
+#: (那意味着净流入超过当日成交额), 故原 P1-13 的假设是错的。
+_FFLOW_PCT_DIVISOR = 100.0
+
+
+def normalize_net_pct(raw: float | int | None, *, source: str) -> float | None:
+    """把上游"主力净占比"归一到**百分数(%)**。
+
+    - `eastmoney_fflow`: 除以 100(该口径是 0.01% 单位, 见上方实证)
+    - 其它(source 网关回退等): 按已归一化透传
+    - 任何 |v| > 100 的值都会打 WARNING —— 那是算术上不可能的占比, 便于及早发现单位回归
+    """
+    if raw is None:
+        return None
+    v = float(raw)
+    if source == "eastmoney_fflow":
+        v = v / _FFLOW_PCT_DIVISOR
+    if abs(v) > 100:
+        logger.warning(
+            "主力净占比超出算术上限(|%.2f%%| > 100%%), 源=%s, 原值=%s —— 疑似单位回归, 请核对量纲",
+            v,
+            source,
+            raw,
+        )
+    return v
+
+
 @dataclass
 class CapitalFlow:
     """资金流向数据(按单金额四档归类口径, 非逐笔 —— AGENTS.md 口径红线)"""
@@ -142,8 +174,9 @@ def _fetch_direct_flow(symbol: str) -> CapitalFlow | None:
             name=it.get("f14") or "",
             # P1: 缺失字段保持 None, 不 or 0
             main_net_inflow=float(f62) if f62 is not None else None,
-            # P1-13 (2026-09-05): 百分点口径(f184 已是百分数, 不除100), 与腾讯源/消费端阈值对齐
-            main_net_inflow_pct=float(f184) if f184 is not None else None,
+            # 2026-09-18 修正(P1-13 的假设是错的): f184 是 0.01% 单位 → 归一到百分数。
+            # 实证见 normalize_net_pct 上方注释(f184=909 ↔ 实测 9.09%)。
+            main_net_inflow_pct=normalize_net_pct(f184, source="eastmoney_fflow"),
             super_net_inflow=float(f66) if f66 is not None else None,
             big_net_inflow=float(f72) if f72 is not None else None,
             mid_net_inflow=float(it.get("f78")) if it.get("f78") is not None else None,
@@ -179,8 +212,8 @@ def _fetch_cn_gateway_flow(symbol: str) -> CapitalFlow | None:
             name=d.get("name") or "",
             # P1: 缺失字段保持 None, 不 or 0
             main_net_inflow=float(d.get("main_net_inflow")) if d.get("main_net_inflow") is not None else None,
-            # P1-13 (2026-09-05): 百分点口径(网关 main_net_pct 已是百分数), 与消费端阈值对齐
-            main_net_inflow_pct=float(d.get("main_net_pct")) if d.get("main_net_pct") is not None else None,
+            # 网关回退路径按"已是百分数"透传; 同样过一遍越界守卫(单位回归时能看出来)
+            main_net_inflow_pct=normalize_net_pct(d.get("main_net_pct"), source="gateway"),
             super_net_inflow=float(d.get("super_net_inflow")) if d.get("super_net_inflow") is not None else None,
             big_net_inflow=float(d.get("big_net_inflow")) if d.get("big_net_inflow") is not None else None,
             mid_net_inflow=float(d.get("mid_net_inflow")) if d.get("mid_net_inflow") is not None else None,
