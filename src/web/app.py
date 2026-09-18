@@ -345,6 +345,7 @@ from src.core.permissions import (  # noqa: E402
 from src.web.api._authz import require_perm  # noqa: E402
 from src.web.api import admin_free_tier  # noqa: E402
 from src.web.api import caliber_compare  # noqa: E402
+from src.web.api import decisions  # noqa: E402
 # 纯读行情口(2026-09-07 P1): 用户 JWT 或服务 token 双轨, 供监控/回填/Hub回调。
 # 写链路一律保持 protected; 服务 token 进 require_owner 永远 403。
 from src.web.api.auth import get_user_or_service  # noqa: E402
@@ -638,6 +639,14 @@ app.include_router(
     prefix="/api/caliber-compare",
     tags=["caliber-compare"],
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 决策日志(B6, 2026-09-18): "信号→结果"的账。**只读**;
+# 命中率在样本不足时如实返回 insufficient, 由页面显示"样本不足" —— 不拿小样本算百分比。
+app.include_router(
+    decisions.router,
+    prefix="/api/decisions",
+    tags=["decisions"],
+    dependencies=protected,
 )
 # 免费档管理(2026-09-18): owner 运行时调整 member 能试用什么/日限/skill 档位,
 # 30s 热生效, 不用发版。判定口径与 API/skill/聊天工具同源。

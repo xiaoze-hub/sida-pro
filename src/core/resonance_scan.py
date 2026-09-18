@@ -292,9 +292,35 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     report(0.95, f"落库 {len(rows)} 行")
     inserted = _upsert(rows)
     n_res = sum(1 for r in rows if r["resonance"])
+    # B6(2026-09-18): 把"三指标共振"信号写进**决策日志** —— 从此这类信号有账可查
+    # (T+1/3/5 收益由 decision_log.backfill_outcomes 事后回填; 平盘记未命中, 缺数据留 NULL)。
+    # 失败只记 warning, 绝不影响扫描主链路。
+    n_logged = 0
+    try:
+        from src.core.decision_log import record_many
+        from src.db.session import get_write_engine
+
+        payload = [
+            {
+                "signal_kind": "resonance3",
+                "symbol": r["symbol"],
+                "trade_date": r["trade_date"],
+                "price": r.get("close"),
+                "context": {
+                    k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")
+                },
+            }
+            for r in rows
+            if r.get("resonance")
+        ]
+        n_logged = record_many(get_write_engine(), payload, source="resonance_scan")
+        if payload:
+            logger.info("决策日志: 三指标共振 %s/%s 只已留痕", n_logged, len(payload))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("决策日志留痕失败(不影响扫描): %r", e)
     n_near = sum(1 for r in rows if r["near"])
     logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s", len(rows), n_res, n_near)
-    return {"ok": True, "trade_date": day, "scanned": len(rows), "resonance": n_res, "near": n_near, "inserted": inserted}
+    return {"ok": True, "trade_date": day, "scanned": len(rows), "resonance": n_res, "near": n_near, "inserted": inserted, "logged": n_logged}
 
 
 def _upsert(rows: list[dict]) -> int:

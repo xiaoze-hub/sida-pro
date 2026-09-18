@@ -5,6 +5,37 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (B6 决策闭环 · 后端切片 → v0.10.24)
+
+### feat(decisions): 决策日志 (v175) + T+1/3/5 回填 + 命中率统计 + 共振信号接线
+
+**性质**: 新能力(方向 B 第一刀)。此前共振/GS/竞价池这些信号**只能"看"、没有账** —— 哪个信号在什么
+状态下真管用、参数调了到底变好还是变坏, 全靠感觉。这一版把"信号 → 结果"变成可统计的样本。
+
+- **迁移 v175 `decision_log`**: 每 (信号类型, 标的, 信号日) 一行, 存**当时的证据快照**(命中项/分值/来源)
+  与**当时价格**; 事后回填 T+1/T+3/T+5 收益与命中。唯一键 `ux_decision_log_key` → 重复扫描幂等(UPDATE)。
+- **`src/core/decision_log.py`**: `record_signal` / `record_many` / `backfill_outcomes` / `stats`。
+- **生产者接线**: 共振扫描 `scan()` 落库后, 把当日**三指标共振**的标的写进决策日志(`signal_kind=resonance3`,
+  context 存 trend/activity/level/fund_net/hits)。**失败只 warning, 绝不影响扫描主链路**。
+- **API**(只读, 需登录): `GET /api/decisions/stats?days&min_sample`、`GET /api/decisions/log?kind&limit`。
+  已注册核验: `app.openapi()` 中 `/api/decisions/stats`、`/api/decisions/log` 均在册(共 374 路径)。
+
+**三条不编造的口径(全部有测试钉住)**:
+1. **取不到就 NULL**: 当时价格 / 收益 / 命中缺失一律 NULL, **绝不补 0**(0 是真实收益, 不能冒充"没有数据")。
+   连"二次写入没给价"也不许把已有的价抹掉(COALESCE 保留原值)。
+2. **只用真实存在的未来 K 线回填**: 不足 T+n 就只填得出来的档; 信号日当天没有 K 线(停牌/非交易日)
+   **一档都不填**; 当时没价 → 不拿今天的价冒充。
+3. **样本不足不给结论**: `n < min_sample`(默认 30)时返回 `insufficient=true` 且 `hit_rate=None`,
+   页面显示"样本不足" —— 不拿 3 个样本算出 67% 去指导决策。命中定义: 收益 > 0 记 1, **平盘记 0**。
+
+**为什么要先发后端**: 命中率样本只能**按自然日累积**(T+5 要等一周), 页面上线不解决"没有样本"。
+先把留痕跑起来, 页面上线时才有账可看。
+
+**回归**: 新增 `tests/test_decision_log.py` 9 例(迁移幂等 / 写幂等且保价 / 只填真实存在的档 /
+未到的档留 NULL / 平盘不算赢 / 停牌或无价不填 / 小样本拒答 / 未回填不进分母 / 空库说明)。
+现有 `test_resonance_scan.py` 5 例不受接线影响。
+门禁: ruff 0 / `check_scoped_queries` OK / 迁移校验 75 个通过 / 相关 35 passed。
+
 ## 2026-09-18 (P3 · 淘汰 InteractiveKline → v0.10.23)
 
 ### refactor(kline): 删除 InteractiveKline(1280 行)与死代码 KlineModal + 加 R11 单内核门禁
