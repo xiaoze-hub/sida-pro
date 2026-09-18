@@ -44,3 +44,52 @@ export const caliberCompareApi = {
   get: (symbol: string) =>
     fetchAPI<CaliberCompareResponse>(`/caliber-compare/${symbol}`, { cacheMode: 'reload' }),
 }
+
+// ── 口径漂移(B5, 2026-09-18) ────────────────────────────────────────────────
+// 后端 `GET /api/caliber-compare/{symbol}/drift?days=N`。逐日留痕来自收盘后的定时采集。
+// 纪律: 每源一条序列(**不取平均、不合成单一权威数字**); 跨源比较必须写明比的是哪两个字段,
+// 并标注那是**口径差异不是误差**; 没留痕的日期如实返回「该日未留痕」。
+
+/** 某一源在某一天的留痕值(缺失就是缺失, 不补 0) */
+export interface CaliberDriftPoint {
+  value: number | null
+  available: boolean
+  /** 不可用原因(如「该日未留痕」), 照实显示 */
+  reason: string
+  /** 'suspect' = 源自标可疑 */
+  quality: string
+  unit: string
+}
+
+export interface CaliberDriftDay {
+  trade_date: string
+  sources: Record<string, CaliberDriftPoint>
+}
+
+export interface CaliberDriftComparison {
+  left: { source: string; field: string }
+  right: { source: string; field: string }
+  /** 两端都 available 的天数 —— 样本量, 不插值凑数 */
+  both_available_days: number
+  mean_abs_diff: number | null
+  max_abs_diff: number | null
+  note: string
+}
+
+export interface CaliberDriftResponse {
+  symbol: string
+  days: number
+  /** 每个源用于跨源对比的那个字段(显式声明, 不自动猜) */
+  field_by_source: Record<string, string>
+  series: CaliberDriftDay[]
+  comparisons: CaliberDriftComparison[]
+  archived_days: number
+  note: string
+}
+
+export const caliberDriftApi = {
+  get: (symbol: string, days = 30) =>
+    fetchAPI<CaliberDriftResponse>(`/caliber-compare/${symbol}/drift?days=${days}`, {
+      cacheMode: 'reload',
+    }),
+}

@@ -237,7 +237,7 @@ ORDER BY trade_date ASC
                     "both_available_days": len(pairs),
                     "mean_abs_diff": (sum(diffs) / len(diffs)) if diffs else None,
                     "max_abs_diff": max(diffs) if diffs else None,
-                    "note": "两端定义不同, 这是**口径差异**不是误差; 不取平均、不互相校准。",
+                    "note": "两端定义不同, 这是口径差异不是误差; 不取平均、不互相校准。",
                 }
             )
 

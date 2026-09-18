@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw, Search } from 'lucide-react'
-import { caliberCompareApi, type CaliberCompareResponse, type CaliberSource } from '@panwatch/api'
+import {
+  caliberCompareApi,
+  caliberDriftApi,
+  type CaliberCompareResponse,
+  type CaliberDriftResponse,
+  type CaliberSource,
+} from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { safeMoney, safePercent, safeInt } from '@/lib/format'
 
@@ -72,6 +78,175 @@ function SourceColumn({ s }: { s: CaliberSource }) {
         <div className="text-[10px] text-amber-500/90 mt-2 leading-relaxed flex gap-1">
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           <span>{s.note}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+/** 源的短名(与对照页一致, 便于同一屏里对照) */
+const SOURCE_SHORT: Record<string, string> = {
+  thsdk_l2: '明盘 L2',
+  tencent_dark: '暗盘逐笔',
+  eastmoney_flow: '东财四档',
+}
+
+/**
+ * 口径漂移(B5, 2026-09-18): 逐日留痕 + 跨源差异。
+ *
+ * 硬规则:
+ * - 每源一条序列, **不取平均、不互相校准、不合成单一"权威数字"**;
+ * - 没留痕的日期显示「该日未留痕」, 不插值、不补 0;
+ * - 跨源差异必须写明**比的是哪两个字段**, 并标注"口径差异不是误差"(字段含义本来就不同)。
+ */
+function DriftSection({ symbol }: { symbol: string }) {
+  const [days, setDays] = useState(30)
+  const [data, setData] = useState<CaliberDriftResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setErr('')
+    caliberDriftApi
+      .get(symbol, days)
+      .then((d) => {
+        if (alive) setData(d)
+      })
+      .catch((e: unknown) => {
+        if (alive) setErr(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [symbol, days])
+
+  const series = data?.series ?? []
+  const sources = Object.keys(data?.field_by_source ?? {})
+
+  return (
+    <div className="mt-6 border-t border-border/40 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
+          <Info className="w-3.5 h-3.5 text-primary" /> 口径漂移（逐日留痕）
+        </h2>
+        <div className="flex items-center gap-1">
+          {[7, 30, 90].map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setDays(d)}
+              data-drift-days={d}
+              className={`text-[11px] px-2 py-0.5 rounded border ${
+                days === d
+                  ? 'border-primary/50 text-foreground bg-primary/10'
+                  : 'border-border/50 text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              近 {d} 天
+            </button>
+          ))}
+          {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+        </div>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
+        逐日留痕来自收盘后定时采集（交易日 15:55）。每源各说各的 —— 这里<span className="text-foreground">不取平均、不互相校准</span>；
+        跨源差异是<span className="text-foreground">口径差异，不是误差</span>（两家对"主力"的定义本来就不同）。
+      </p>
+
+      {err && <div className="text-[12px] text-red-500 mb-2">漂移数据加载失败：{err}</div>}
+
+      {!err && series.length === 0 && !loading && (
+        <div data-drift-empty className="rounded-md border border-dashed border-border/60 bg-muted/10 px-3 py-4">
+          <div className="text-[12px] text-muted-foreground">暂无留痕（近 {days} 天）</div>
+          <div className="text-[11px] text-muted-foreground/80 mt-1">
+            交易日 15:55 自动采集三源口径；采集后次日即可在此对比。留痕缺失时这里不会用 0 或推算值填补。
+          </div>
+        </div>
+      )}
+
+      {series.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px] tabular-nums">
+            <thead>
+              <tr className="text-[10px] text-muted-foreground">
+                <th className="text-left font-normal py-1 pr-3">交易日</th>
+                {sources.map((k) => (
+                  <th key={k} className="text-right font-normal py-1 px-3">
+                    {SOURCE_SHORT[k] ?? k}
+                    <span className="block text-[10px] text-muted-foreground/70">
+                      {data?.field_by_source?.[k]}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {series.map((row) => (
+                <tr key={row.trade_date} className="border-t border-border/30">
+                  <td className="py-1 pr-3 text-muted-foreground">{row.trade_date}</td>
+                  {sources.map((k) => {
+                    const pt = row.sources?.[k]
+                    const ok = pt?.available && pt.value !== null && Number.isFinite(pt.value)
+                    return (
+                      <td key={k} className="py-1 px-3 text-right">
+                        {ok ? (
+                          <span className={valueColor(pt.value as number)}>
+                            {safeMoney(pt.value as number)}
+                            {pt.quality === 'suspect' && (
+                              <span className="ml-1 text-[10px] text-amber-500" title="该源自标数据可疑">
+                                ⚠
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground" title={pt?.reason || '该日未留痕'}>
+                            {pt && pt.value === null && !pt.available ? '该日未留痕' : '--'}
+                          </span>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(data?.comparisons?.length ?? 0) > 0 && (
+        <div className="mt-3 space-y-1.5">
+          <div className="text-[11px] text-muted-foreground">
+            跨源差异（只统计两端都有留痕的天；样本不足时如实显示 0 天）
+          </div>
+          {data!.comparisons.map((c) => (
+            <div
+              key={`${c.left.source}-${c.right.source}`}
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]"
+            >
+              <span className="text-foreground">
+                {SOURCE_SHORT[c.left.source] ?? c.left.source}「{c.left.field}」
+                <span className="text-muted-foreground"> vs </span>
+                {SOURCE_SHORT[c.right.source] ?? c.right.source}「{c.right.field}」
+              </span>
+              <span className="text-muted-foreground">· 两端都有 {c.both_available_days} 天</span>
+              {c.mean_abs_diff !== null ? (
+                <span className="text-muted-foreground">
+                  · 平均绝对差 <span className="text-foreground">{safeMoney(c.mean_abs_diff)}</span>
+                  {c.max_abs_diff !== null && <> · 最大 {safeMoney(c.max_abs_diff)}</>}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">· 样本不足，暂不给差异统计</span>
+              )}
+              <span className="text-muted-foreground/70 w-full">{c.note}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -166,6 +341,8 @@ export default function CaliberComparePage() {
               ))}
             </div>
           </div>
+
+          <DriftSection symbol={data.symbol} />
         </>
       )}
     </div>

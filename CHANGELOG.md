@@ -5,6 +5,27 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (B5b · 口径漂移前端)
+
+### feat(caliber): /caliber-compare 接入"口径漂移"区块
+
+**性质**: 新功能(把 B5 后端落地的逐日留痕接到页面上)。backend 已在 v0.10.15 上线。
+
+- API 客户端 `packages/api/src/caliberCompare.ts` 增 `caliberDriftApi.get(symbol, days)` +
+  `CaliberDriftResponse/CaliberDriftDay/CaliberDriftComparison` 类型(经 `export *` 自动对外)。
+- 页面 `CaliberCompare.tsx` 增 `DriftSection`: 近 7/30/90 天切换; 每源一列(表头写明**该源用于对比的字段名**);
+  缺失显示「该日未留痕」/`--`(**绝不显示 0**); 源自标可疑打 ⚠; 跨源差异逐对列出
+  "A「字段」vs B「字段」· 两端都有 N 天 · 平均绝对差/最大差", 并注明"这是口径差异不是误差";
+  样本 0 天时只写"样本不足, 暂不给差异统计", **不给 0**; 空留痕时说明"交易日 15:55 采集"并声明不用 0/推算值填补。
+- 顺手修两处自产文案瑕疵: 页面里 `**强调**` 会**原样显示星号**(前端不渲染 markdown) → 去掉星号;
+  后端 `drift_series` 的 note 同样含字面量 `**` → 一并去掉(UI 面向文案不用 markdown 标记)。
+- **R10 字阶门禁当场拦下我自己**: 新代码用了 `text-[9px]`(规范只允许 10/11/12/13/16/20) → CI 红,
+  改 `text-[10px]` 后通过。这条门禁按设计生效。
+
+**回归**: `frontend/tests/components/caliber-drift.test.tsx` 5 例(三源原值并存**不被平均**、
+未留痕显「该日未留痕」且不出现 0、空留痕文案、比较项写明字段+"口径差异不是误差"、样本 0 天不给统计);
+既有 `caliber-compare.test.tsx` 同步补 drift mock 保持绿色。
+
 ## 2026-09-18 (B5c-P0 · K 线类型收口 → v0.10.15)
 
 ### refactor(kline): K 线事件/价位线类型收口到单一事实来源
