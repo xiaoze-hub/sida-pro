@@ -151,7 +151,7 @@ v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右
     <td>邮箱 + 6 位验证码 + 用户名(可选) + 密码 + 同意用户协议/隐私政策</td><td class="num">4 个字段</td></tr>
 <tr><td><code>/developers</code> 文档+调试台</td><td class="good">✅ 可见</td>
     <td>快速开始 / 鉴权 / 限流 / Skill 目录 / <strong>在线调试台</strong> / API 参考 / 数据来源 / 错误码</td>
-    <td class="num">页高 <span class="warn">7281</span><br>卡片 9 · 字号 8</td></tr>
+    <td class="num">页高 <span class="warn">7281</span><br>卡片 9 · 字号 8<br><em>左目录已是 sticky(实测)</em></td></tr>
 <tr><td><code>/api-keys</code> · <code>/admin</code></td><td>🔒 弹回 <code>/login</code></td><td>受保护（符合预期）</td><td class="num">—</td></tr>
 </tbody>
 </table>
@@ -164,7 +164,11 @@ v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右
 但要有上限 —— 落地页现状 <strong>13 种</strong>，收口到 ≤7；</li>
 <li><strong>落地页固定 6 段</strong>：① 一句话价值（给谁用 · 解决什么）② 三能力卡 ③ 证据（数据/示例/真实截图）
 ④ 调用示例（可复制）⑤ 档位与差异 ⑥ CTA。现状缺 ①（首屏只有 hero + 两个按钮，没回答"给谁用/解决什么"）；</li>
-<li><strong>文档页三栏</strong>：左目录 sticky（跳任一章节）／中正文／右「在线调试台」常驻。现状单栏 7281px —— 首屏必须能跳到任意章节；</li>
+<li><strong>文档页三栏</strong>：左目录 sticky（跳任一章节）／中正文／右「在线调试台」常驻。
+    <strong>事实更正（2026-09-18）</strong>：实测 `DevPageLayout` <strong>已有 sticky 左目录</strong>（8 章锚点，`md:sticky`）——
+    上一版把"页高 7281px"读成了"单栏无目录"，属于<strong>用度量推断功能缺失</strong>。
+    真实缺口只剩两条：① <strong>调试台非常驻</strong>（是正文里的一个 Section，不是随读随试的右栏）；
+    ② <strong>没有档位/定价对比</strong>（free/pro 只散在限流表里）。</li>
 <li><strong>转化路径 ≤2 步</strong>：落地页 → 免费注册 → 立即拿到 Key（现状已满足，视作回归线：任何改版不得让它变长）；</li>
 <li><strong>两条线口径必须一致</strong>：文档示例里的数字与终端里同一指标<strong>不能是两个值</strong>——口径徽标（tick / eastmoney4 / ths）同样适用于文档示例；</li>
 <li>公开面同样<strong>禁外部 CDN</strong>（唯一匹配是一次误报：命中的是 <code>index.html</code> 里"为什么去掉 CDN"的注释，已查证非依赖），
@@ -375,6 +379,13 @@ v2.1 的「核心三栏布局」是罪魁——左栏自选 + 中栏 K 线 + 右
   <td>一级导航 ≤6；口径差异每对给归因；数据源"缺位→替代→降级"三态可见</td></tr>
 </tbody>
 </table>
+
+<div class="box warn"><b>方法论教训（写进本稿）</b><br>
+① <strong>不要用度量推断功能缺失</strong>：文档页"页高 7281px"被读成"无目录"，实际已有 sticky 左目录 ——
+   DOM 探针能测"多长/多密/多少种字号"，<strong>测不出"有没有某功能"</strong>，后者必须看代码或交互；
+② <strong>数据指标要固定时点比</strong>：`dash`(缺数) 实测同日 18:50=46、19:30=0（数据回流差异），
+   不加时点约束地比会把"数据没回来"误读成"代码改坏了"；只有结构指标（K线占屏 / hairline / 卡片 / 字号）可随时比。
+</div>
 
 <div class="box warn"><b>本稿明确"不做"的事</b><br>
 ① 不重写功能页面结构（v2.1 的功能面已落地，v3.0 只动<strong>布局/层级/密度</strong>）；<br>
