@@ -207,33 +207,33 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
     <div className="rounded border border-border/60 p-2">
       <div className="mb-1 flex items-baseline justify-between">
         <span className="text-[12px] font-semibold">盘口速览</span>
-        {clock ? <span className="font-mono text-[9px] text-muted-foreground">快照 {clock}</span> : null}
+        {clock ? <span className="font-mono text-[10px] text-muted-foreground">快照 {clock}</span> : null}
       </div>
       {l2?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{l2.note}</div> : null}
       {/* 去重: 现价/涨停价/封单额 归带1 HeaderBand, 此处不渲染(见本组件头注) */}
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
-      <div className="mt-1 grid grid-cols-5 gap-0.5 text-[9px]">
+      <div className="mt-1 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyp ?? []).slice(0, 5).map((p, i) => (
           <div key={`b${i}`} className="truncate text-center text-[--stock-up]">
             {lvl(p)}
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[9px]">
+      <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyv ?? []).slice(0, 5).map((v, i) => (
           <div key={`bv${i}`} className="truncate text-center text-muted-foreground">
             {lvl(v)}
           </div>
         ))}
       </div>
-      <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[9px]">
+      <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellp ?? []).slice(0, 5).map((p, i) => (
           <div key={`s${i}`} className="truncate text-center text-[--stock-down]">
             {lvl(p)}
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-5 gap-0.5 text-[9px]">
+      <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellv ?? []).slice(0, 5).map((v, i) => (
           <div key={`sv${i}`} className="truncate text-center text-muted-foreground">
             {lvl(v)}
@@ -275,7 +275,7 @@ function FundamentalCard({ symbol, market, more }: { symbol: string; market: str
       <div className="mb-1 flex items-center gap-1 text-[12px] font-semibold">
         基本面 / 股本
         {fund?.sub_new ? (
-          <span className="rounded bg-[--stock-up]/20 px-1 text-[9px] text-[--stock-up]">次新</span>
+          <span className="rounded bg-[--stock-up]/20 px-1 text-[10px] text-[--stock-up]">次新</span>
         ) : null}
       </div>
       {fund?.note ? <div className="mb-1 text-[10px] text-muted-foreground">{fund.note}</div> : null}
@@ -322,7 +322,7 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
             className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80"
           >
             {b.name}
-            <span className="ml-0.5 text-[9px] text-muted-foreground">{b.type}</span>
+            <span className="ml-0.5 text-[10px] text-muted-foreground">{b.type}</span>
           </span>
         ))}
         {/* 320px 速览卡: 板块实测可达 22 条 ⇒ 截断首屏, 余量折成 +N(悬停 title 列全名)。 */}

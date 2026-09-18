@@ -180,7 +180,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="搜索股票(代码/名称) 或 功能…"
-            className="flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted-foreground/60"
+            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60"
             data-search-input
           />
           <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>

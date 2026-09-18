@@ -269,7 +269,7 @@ export default function StockPriceAlertPanel(props: {
     >
       <AlarmClock className="h-4 w-4" />
       {shownSummary.total > 0 && (
-        <span className="absolute -right-1 -top-1 h-[15px] min-w-[15px] rounded-full bg-primary px-1 text-center text-[9px] leading-[15px] text-primary-foreground ring-1 ring-card">
+        <span className="absolute -right-1 -top-1 h-[15px] min-w-[15px] rounded-full bg-primary px-1 text-center text-[10px] leading-[15px] text-primary-foreground ring-1 ring-card">
           {shownSummary.enabled}
         </span>
       )}

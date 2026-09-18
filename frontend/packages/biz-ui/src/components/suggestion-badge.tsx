@@ -258,7 +258,7 @@ export function SuggestionBadge({
                 />
                 {/* AI 标签已前置到按钮文案，不再重复 */}
                 {stockName && (
-                  <span className="text-[14px] font-normal text-muted-foreground">
+                  <span className="text-[13px] font-normal text-muted-foreground">
                     {stockName} {stockSymbol && `(${stockSymbol})`}
                   </span>
                 )}
@@ -467,7 +467,7 @@ export function SuggestionBadge({
                 size="md"
               />
               {stockName && (
-                <span className="text-[14px] font-normal text-muted-foreground">
+                <span className="text-[13px] font-normal text-muted-foreground">
                   {stockName} {stockSymbol && `(${stockSymbol})`}
                 </span>
               )}

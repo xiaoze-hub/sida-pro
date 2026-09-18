@@ -286,7 +286,7 @@ export default function CaliberComparePage() {
     <div className="sida-page-enter max-w-6xl mx-auto px-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h1 className="text-[17px] font-semibold text-foreground flex items-center gap-2">
+          <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
             <Search className="w-4 h-4 text-primary" /> 口径对照
           </h1>
           <p className="text-[11px] text-muted-foreground mt-1">

@@ -509,7 +509,7 @@ export default function AgentsPage() {
         onDismiss={() => setLoadError(null)}
       />
       <div className="mb-4 md:mb-8">
-        <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">Agent</h1>
+        <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">Agent</h1>
         <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">自动化任务管理与调度</p>
       </div>
 
@@ -554,7 +554,7 @@ export default function AgentsPage() {
           <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
             <Bot className="w-6 h-6 text-primary" />
           </div>
-          <p className="text-[15px] font-semibold text-foreground">暂无 Agent</p>
+          <p className="text-[16px] font-semibold text-foreground">暂无 Agent</p>
           <p className="text-[13px] text-muted-foreground mt-1.5">启动后台服务后 Agent 会自动注册</p>
         </div>
       ) : (
@@ -572,7 +572,7 @@ export default function AgentsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
-                      <h3 className="text-[15px] font-semibold text-foreground">{agent.display_name}</h3>
+                      <h3 className="text-[16px] font-semibold text-foreground">{agent.display_name}</h3>
                       <Badge variant="secondary" className="text-[10px]">{modeLabel}</Badge>
                       <button
                         type="button"

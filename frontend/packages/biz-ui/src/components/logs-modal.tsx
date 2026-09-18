@@ -351,7 +351,7 @@ export default function LogsModal({ open, onOpenChange }: { open: boolean, onOpe
               <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
                 <ScrollText className="w-6 h-6 text-primary" />
               </div>
-              <p className="text-[15px] font-semibold text-foreground">暂无日志</p>
+              <p className="text-[16px] font-semibold text-foreground">暂无日志</p>
               <p className="text-[13px] text-muted-foreground mt-1.5">后台运行后日志会自动出现在这里</p>
             </div>
           ) : (

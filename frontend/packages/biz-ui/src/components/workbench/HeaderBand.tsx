@@ -484,9 +484,9 @@ export default function HeaderBand({
         {isStock ? (
           // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
           <>
-            <span className="text-[15px] font-semibold">{quote?.name || symbol}</span>
+            <span className="text-[16px] font-semibold">{quote?.name || symbol}</span>
             <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
-            <span className={cn('font-mono text-[18px] font-semibold', toneClass)}>
+            <span className={cn('font-mono text-[16px] font-semibold', toneClass)}>
               {safePrice(quote?.current_price, 2)}
             </span>
             <span className={cn('font-mono text-[12px]', toneClass)}>
@@ -551,7 +551,7 @@ export default function HeaderBand({
               <span
                 data-testid="band1-l2-snapshot-clock"
                 title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
-                className="font-mono text-[9px] text-muted-foreground"
+                className="font-mono text-[10px] text-muted-foreground"
               >
                 快照 {clock}
               </span>

@@ -351,7 +351,7 @@ export default function NotificationsPage() {
     <div className="sida-page-enter mx-auto w-full max-w-[1480px] space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight text-foreground md:text-[22px]">
+          <h1 className="flex items-center gap-2 text-[20px] font-bold tracking-tight text-foreground md:text-[20px]">
             <BellRing className="h-5 w-5 text-primary" />
             {t('notifications.title')}
           </h1>
@@ -394,7 +394,7 @@ export default function NotificationsPage() {
               }`}
             >
               <span>{label}</span>
-              <span className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[9px] leading-3 ${filter === key ? 'bg-white/18 text-white' : 'bg-accent text-foreground'}`}>
+              <span className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] leading-3 ${filter === key ? 'bg-white/18 text-white' : 'bg-accent text-foreground'}`}>
                 {value}
               </span>
             </button>
@@ -488,14 +488,14 @@ export default function NotificationsPage() {
                       <span className={`truncate text-[12.5px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
                       {(item as { dupCount?: number }).dupCount && (item as { dupCount?: number }).dupCount! > 1 ? (
                         <span
-                          className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-medium text-rose-600"
+                          className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-600"
                           title="24h 内同文案失败通知已折叠, 此为最新一条"
                         >
                           ×{(item as { dupCount?: number }).dupCount}
                         </span>
                       ) : null}
                       {isSelected && (
-                        <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-medium text-primary-foreground">正在查看</span>
+                        <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">正在查看</span>
                       )}
                     </span>
                     <span className="mt-1 block line-clamp-2 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
@@ -533,7 +533,7 @@ export default function NotificationsPage() {
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-[17px] font-semibold text-foreground">{selected.title || '未命名通知'}</h2>
+                      <h2 className="text-[16px] font-semibold text-foreground">{selected.title || '未命名通知'}</h2>
                       <span className="rounded-full bg-accent/60 px-2 py-0.5 text-[10px] text-muted-foreground">{CATEGORY_KEYS[selected.category] ? t(CATEGORY_KEYS[selected.category]) : selected.category || t('notifications.categories.system')}</span>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] ${selected.read ? 'bg-accent/60 text-muted-foreground' : 'bg-rose-500/10 text-rose-600 dark:text-rose-600'}`}>{selected.read ? '已读' : '未读'}</span>
                     </div>
@@ -582,7 +582,7 @@ export default function NotificationsPage() {
                         {selected.push_status === 'sent' || selected.push_status === 'failed' ? t('notifications.push.noChannelRecord') : (selectedPush?.labelKey ? t(selectedPush.labelKey) : t('common.notSet'))}
                       </div>
                       {(selected.push_status === 'sent' || selected.push_status === 'failed') && configuredChannels.length > 0 && (
-                        <div className="text-[9px] leading-4 text-muted-foreground" title="当前配置不代表该条历史通知当时实际使用的渠道">
+                        <div className="text-[10px] leading-4 text-muted-foreground" title="当前配置不代表该条历史通知当时实际使用的渠道">
                           {configuredChannels.map(channel => channel.name || (CHANNEL_TYPE_KEYS[channel.type]?.startsWith('notifications.') ? t(CHANNEL_TYPE_KEYS[channel.type]) : CHANNEL_TYPE_KEYS[channel.type]) || channel.type).join('、')}
                         </div>
                       )}

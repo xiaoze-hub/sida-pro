@@ -79,7 +79,7 @@ function StatCard({ icon: Icon, label, value, sub, color, hint }: { icon: any; l
         <Icon className={`w-3.5 h-3.5 ${color}`} />
         <span className="text-[11px] text-muted-foreground">{label}</span>
       </div>
-      <div className="text-[15px] font-semibold text-foreground">{value}</div>
+      <div className="text-[16px] font-semibold text-foreground">{value}</div>
       {sub && <div className="text-[10px] text-muted-foreground mt-0.5">{sub}</div>}
     </div>
   )
@@ -238,7 +238,7 @@ iframe{width:100%;height:100%;border:0}
     <div className="sida-page-enter max-w-5xl mx-auto px-4 py-6 space-y-6">
       {/* 页头 */}
       <div>
-        <h1 className="text-[17px] font-semibold text-foreground flex items-center gap-2">
+        <h1 className="text-[16px] font-semibold text-foreground flex items-center gap-2">
           <Shield className="w-4.5 h-4.5 text-primary" />
           影子账户 Shadow Account
         </h1>
@@ -250,7 +250,7 @@ iframe{width:100%;height:100%;border:0}
       {/* §6.2 交割单标 K 线: 把你的真实成交标在该股 K 线上(买↓红箭头 / 卖↑绿箭头) */}
       <div className="border-b border-border/40 pb-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-primary" /> 交割单复盘 · 标在 K 线上
           </h2>
           {trades && trades.symbols.length > 0 && (
@@ -291,7 +291,7 @@ iframe{width:100%;height:100%;border:0}
       {/* 我的画像: 进页面自动加载已存画像(users.shadow_profile_json 落库版), 不用重新上传 */}
       <div className="border-b border-border/40 pb-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
             <UserRound className="w-4 h-4 text-primary" /> 我的画像
           </h2>
           <Button
@@ -427,7 +427,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 行为画像 */}
           {result.profile && (
             <div className="space-y-4">
-              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-primary" /> 行为画像
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -454,7 +454,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 行为诊断 */}
           {result.behavior && (
             <div className="space-y-4">
-              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
                 <Target className="w-4 h-4 text-primary" /> 行为诊断
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -468,7 +468,7 @@ iframe{width:100%;height:100%;border:0}
           {/* 归因结果 */}
           {result.attribution && (
             <div className="space-y-4">
-              <h2 className="text-[14px] font-semibold text-foreground flex items-center gap-2">
+              <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-2">
                 <Shield className="w-4 h-4 text-primary" /> 归因分析
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

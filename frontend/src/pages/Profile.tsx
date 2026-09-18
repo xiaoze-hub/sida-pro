@@ -38,7 +38,7 @@ interface ProfileStats {
 
 /** 头像首字母圆形色块(无头像时兜底); 240 色相实底, 不用渐变。 */
 function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: string; size?: 'lg' | 'sm' }) {
-  const cls = size === 'lg' ? 'w-16 h-16 text-[22px]' : 'w-9 h-9 text-[13px]'
+  const cls = size === 'lg' ? 'w-16 h-16 text-[20px]' : 'w-9 h-9 text-[13px]'
   if (avatar) {
     return (
       <div className={`${cls} rounded-full overflow-hidden shrink-0 ring-1 ring-border/40 bg-background`}>
@@ -205,7 +205,7 @@ export function Profile() {
       <div className="relative overflow-hidden border-b border-border/40 p-5 md:p-7">
         <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-[16px] md:text-[18px] font-bold text-foreground">{t('profile.title')}</h1>
+            <h1 className="text-[16px] md:text-[16px] font-bold text-foreground">{t('profile.title')}</h1>
             <p className="text-[12px] text-muted-foreground mt-1">{t('profile.subtitle')}</p>
           </div>
         </div>

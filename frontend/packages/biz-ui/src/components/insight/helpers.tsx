@@ -69,7 +69,7 @@ export function InfoTip({ k }: { k: string }) {
   if (!tip) return null
   return (
     <span
-      className="ml-1 inline-flex h-3 w-3 items-center justify-center rounded-full bg-muted-foreground/15 text-[8px] text-muted-foreground cursor-help"
+      className="ml-1 inline-flex h-3 w-3 items-center justify-center rounded-full bg-muted-foreground/15 text-[10px] text-muted-foreground cursor-help"
       title={tip}
     >
       ?

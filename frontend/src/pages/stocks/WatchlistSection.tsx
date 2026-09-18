@@ -147,7 +147,7 @@ export function WatchlistSection() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className={`text-[9px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
+                    <span className={`text-[10px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
                       {marketBadge(stock.market).label}
                     </span>
                     <button
@@ -165,7 +165,7 @@ export function WatchlistSection() {
                   </div>
                 </div>
                 <div className="text-right shrink-0 whitespace-nowrap">
-                  <div className={`font-mono text-[14px] font-bold leading-tight tabular-nums ${changeColor}`}>
+                  <div className={`font-mono text-[13px] font-bold leading-tight tabular-nums ${changeColor}`}>
                     {/* A3: 自选行现价 WS 实时变动闪色(红涨绿跌); 非有限值传 null 不闪 */}
                     <FlashValue
                       value={quote?.current_price != null && Number.isFinite(Number(quote.current_price)) ? Number(quote.current_price) : null}

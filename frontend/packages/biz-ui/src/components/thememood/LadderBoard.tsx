@@ -69,15 +69,15 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
     >
       <DayCandle candle={s.candle} basis={basis} />
       <span className="w-full truncate text-center text-[10px] text-foreground/80">{s.name}</span>
-      <span className={`text-[9px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+      <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
       {s.tag ? (
-        <span className="rounded bg-accent/50 px-0.5 text-[8px] text-muted-foreground">{s.tag}</span>
+        <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
       ) : null}
       {s.seal_tag && s.seal_tag !== s.tag ? (
-        <span className="rounded bg-accent/40 px-0.5 text-[8px] text-muted-foreground">{s.seal_tag}</span>
+        <span className="rounded bg-accent/40 px-0.5 text-[10px] text-muted-foreground">{s.seal_tag}</span>
       ) : null}
       {s.dive ? (
-        <span className="rounded bg-[--stock-down]/20 px-0.5 text-[8px] text-[--stock-down]">跳水</span>
+        <span className="rounded bg-[--stock-down]/20 px-0.5 text-[10px] text-[--stock-down]">跳水</span>
       ) : null}
     </span>
   )
@@ -113,7 +113,7 @@ function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
         <span className="text-[10px] text-muted-foreground">封 {sealed}</span>
       </div>
       {day.provisional ? (
-        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[9px] text-primary">盘中</div>
+        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">盘中</div>
       ) : null}
       {day.rows.length === 0 && day.blown.length === 0 && day.broken.length === 0 ? (
         <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
@@ -123,7 +123,7 @@ function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
             <div className="text-[10px] font-medium text-primary">
               {r.boards}板
               {r.tag ?? boardTag(r.boards)
-                ? <span className="ml-1 rounded bg-primary/15 px-0.5 text-[9px]">{r.tag ?? boardTag(r.boards)}</span>
+                ? <span className="ml-1 rounded bg-primary/15 px-0.5 text-[10px]">{r.tag ?? boardTag(r.boards)}</span>
                 : null}
             </div>
             <div className="flex flex-wrap gap-1">
@@ -174,7 +174,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
               <button
                 type="button"
                 onClick={() => onToggleRow(b)}
-                className="mt-0.5 text-[9px] text-muted-foreground"
+                className="mt-0.5 text-[10px] text-muted-foreground"
               >
                 {collapsed.has(b) ? '展开' : '收起'}
               </button>
@@ -243,7 +243,7 @@ export default function LadderBoard(props: {
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-2">
-          {asOf ? <span className="text-[9px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
+          {asOf ? <span className="text-[10px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
           <button
             type="button"
             onClick={() => setView(view === 'cols' ? 'matrix' : 'cols')}

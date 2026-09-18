@@ -402,7 +402,7 @@ function App() {
             </div>
             {!sidebarCollapsed && (
               <>
-                <span className="text-[15px] font-bold text-foreground truncate">数智分析</span>
+                <span className="text-[16px] font-bold text-foreground truncate">数智分析</span>
                 {version && <span className="text-[11px] text-muted-foreground/60 font-normal shrink-0">v{version}</span>}
                 {isDemoUser() && (
                   <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
@@ -496,7 +496,7 @@ function App() {
               <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
                 <BrandMark className="w-3.5 h-3.5 text-white" />
               </div>
-              <span className="text-[14px] font-bold text-foreground">数智分析</span>
+              <span className="text-[13px] font-bold text-foreground">数智分析</span>
               {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
             </NavLink>
             <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-2xl bg-accent/20 border border-border/40">

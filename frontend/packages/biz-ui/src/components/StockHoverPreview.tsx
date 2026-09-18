@@ -51,7 +51,7 @@ export default function StockHoverPreview({
         {data.name || data.symbol}
         <span className="text-[10px] font-normal text-muted-foreground">{data.symbol}</span>
         {m.ever_zt_count ? (
-          <span className="rounded bg-[--stock-up]/20 px-0.5 text-[9px] text-[--stock-up]">{m.ever_zt_count}板</span>
+          <span className="rounded bg-[--stock-up]/20 px-0.5 text-[10px] text-[--stock-up]">{m.ever_zt_count}板</span>
         ) : null}
       </div>
       <div className="flex justify-between text-[11px]">
@@ -75,11 +75,11 @@ export default function StockHoverPreview({
       {blocks.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-0.5">
           {blocks.slice(0, 4).map((b) => (
-            <span key={b.name} className="rounded bg-accent/50 px-0.5 text-[9px] text-foreground/80">{b.name}</span>
+            <span key={b.name} className="rounded bg-accent/50 px-0.5 text-[10px] text-foreground/80">{b.name}</span>
           ))}
         </div>
       ) : null}
-      <div className="mt-1 text-[9px] text-muted-foreground">点击进个股工作台</div>
+      <div className="mt-1 text-[10px] text-muted-foreground">点击进个股工作台</div>
     </div>
   )
 }
