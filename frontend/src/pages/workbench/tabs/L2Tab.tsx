@@ -4,7 +4,7 @@ import { RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@panwatch/biz-ui/components/insight/types'
-import type { MainIntentStructured } from '@panwatch/biz-ui/components/InteractiveKline'
+import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
 import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
 
 /**

@@ -41,3 +41,26 @@ describe('KlineChart 分时接线(P1)', () => {
     expect(pane).toContain('data-minute-empty') // 空态显式说明, 不补 0
   })
 })
+
+// ── P2 补搬(2026-09-18): 主力意图接线 ─────────────────────────────────────────
+describe('KlineChart 主力意图接线(P2 补搬)', () => {
+  it('支持 mainIntent prop, 且没给时会自取 summary(与 IK 原行为一致)', () => {
+    expect(KC).toMatch(/mainIntent\?: MainIntentStructured \| null/)
+    expect(KC).toMatch(/\/klines\/\$\{encodeURIComponent\(props\.symbol\)\}\/summary\?market=CN/)
+    expect(KC).toMatch(/const intent = props\.mainIntent \?\? intentFetched/)
+  })
+
+  it('三种渲染都接上了: 箭头(markers)/筹码线(priceLine)/图例卡', () => {
+    expect(KC).toContain('intentMarkersFor(')
+    expect(KC).toContain('limitMoveMarkers(')
+    expect(KC).toContain('intentPriceLinesFor(')
+    expect(KC).toMatch(/data-testid="main-intent-legend"/)
+    expect(KC).toMatch(/intentRenderable\(intent\) && intentLegend/)
+  })
+
+  it('数据不足时不给方向(图例只在 renderable 时出现, 文案逻辑在 lib 单测里钉死)', () => {
+    expect(KC).toMatch(/intentRenderable\(intent\) && intentLegend/)
+    // 重绘依赖必须带 intent, 否则切股后箭头不刷新
+    expect(KC).toMatch(/props\.tradeMarkers, intent\]\)/)
+  })
+})

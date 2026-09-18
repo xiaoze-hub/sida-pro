@@ -5,6 +5,33 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P2 补搬 · 主力意图进 KlineChart → v0.10.20)
+
+### feat(kline): KlineChart 补上"主力意图"(取数 + 图例 + 箭头 + 筹码线), 补回 P2 漏搬的用户可见能力
+
+**性质**: 能力补搬(P2 自查修正的落地)。上一批我发现 §八 的范围判断**只看 props**、
+漏了 IK 的"自取数"行为 —— IK 未收到 `mainIntent` prop 时会自己调 `/klines/{symbol}/summary`,
+渲染「主力意图」图例 + 最后一根 K 线的意图箭头 + 涨停/跌停箭头 + 筹码峰/成本带价位线。
+个股页(`AnalysisDetail`/`PaperTrading`)迁到 KC 后因此**暂时缺了这些视觉**。
+
+- 新增 `packages/biz-ui/src/lib/main-intent-types.ts`(类型单一来源)与 `lib/main-intent.ts`(**纯渲染逻辑**):
+  `intentLabelFor`(五方向文案 + **数据不足优先**: 显示"数据不足(N笔)"而不编方向)、
+  `intentMarkersFor`(吸筹↑/洗盘吸筹↑/疑似吸筹↑/派发↓; neutral 不标)、
+  `limitMoveMarkers`(近 60 根, ±9.8% 阈值, 与 IK 同含等号)、
+  `intentPriceLinesFor`(筹码峰 + 成本带上/下沿; 缺失**不补 0 线**)。
+- `KlineChart` 增可选 `mainIntent` prop + **自取数**(A 股且未传 prop 时, 失败静默);
+  箭头并入既有 marker 管线、筹码线并入既有 priceLine 管线(切股会随依赖数组 `intent` 重绘);
+  图例卡与 IK 同文案同口径(safeFixed 输出, 不裸 toFixed)。
+- 类型消费方 `insight/types.ts`、`insight/useInsightData.ts`、`workbench/tabs/L2Tab.tsx` 改从 lib 取;
+  IK 改为 re-export(既有导出名不变) —— 为 P3 删 IK 扫清连坐。
+
+**门禁当场拦下我自己**: ui-rules **R6(toFixed 棘轮)** 报 `KlineChart.tsx: 4 toFixed in file without baseline`
+—— 图例卡里裸用了 3 处 `.toFixed`。改走 `@/lib/format` 的 `safeFixed`(顺带获得"缺失显示 `--`"的诚实口径)。
+
+**回归**: `tests/lib/main-intent.test.ts` 11 例(数据不足优先于方向 / 五方向文案 / 各方向箭头配色与位置 /
+neutral 与数据不足不画 / ±9.8% 含等号阈值 / 只看近 60 根且跳过首根 / 筹码线缺失不补 0) +
+`kline-minute-mode.test.tsx` 增 3 例源级断言(prop+自取数、三处渲染都接上、重绘依赖含 intent)。
+
 ## 2026-09-18 (P2 自查修正 · 主力意图能力漏搬)
 
 ### docs: 修正 P1 范围判断 —— 漏了 IK 的"自取数"能力(主力意图)

@@ -11,7 +11,7 @@ import {
 import { useLocalStorage } from '@/lib/utils'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
-import type { MainIntentStructured } from '@panwatch/biz-ui/components/InteractiveKline'
+import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
 import type { KlineSummary, SuggestionInfo } from '@panwatch/biz-ui/components/suggestion-badge'
 
 /** KI-045: 本地归一(不依赖 @panwatch/api mock 面) —— 信封 `{items,degraded,note}` 或旧裸 list。 */
