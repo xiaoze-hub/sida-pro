@@ -145,6 +145,14 @@ try {
 
 // R10: 字阶棘轮(见文件头说明)
 const FONT_ALLOWED = new Set([10, 11, 12, 13, 16, 20])
+// 公开面(官网/开发者文档)是营销与文档场景, 允许比终端宽的字阶 —— 上限 7 档
+// (设计稿 v3.0 §三 3.2)。判定按**文件**分流, 不是放宽终端口径。
+const FONT_ALLOWED_PUBLIC = new Set([12, 13, 16, 20, 28, 36, 48])
+const PUBLIC_SURFACE = [
+  'frontend/src/pages/Landing.tsx',
+  'frontend/src/pages/Developers.tsx',
+]
+const allowedFor = (key) => (PUBLIC_SURFACE.includes(key) ? FONT_ALLOWED_PUBLIC : FONT_ALLOWED)
 const FONT_BASELINE_FILE = join(ROOT, 'scripts', 'ui-rules-font-baseline.json')
 let fontBaseline = {}
 try { fontBaseline = JSON.parse(readFileSync(FONT_BASELINE_FILE, 'utf8')) } catch { /* 无基线 → 全量新规 */ }
@@ -152,14 +160,15 @@ const fontSeen = new Set()
 for (const f of files) {
   const src = readFileSync(f, 'utf8')
   // 注意: 变量名不能叫 bad —— 会遮蔽上报函数 bad()
+  const key = f.replace(/\\/g, '/').split('/frontend/')[1] || rel(f)
+  const allowed = allowedFor(`frontend/${key}`)
   const badSizes = (src.match(/text-\[(\d+)px\]/g) || [])
     .map((m) => Number(/(\d+)/.exec(m)[1]))
-    .filter((n) => !FONT_ALLOWED.has(n))
-  const key = f.replace(/\\/g, '/').split('/frontend/')[1] || rel(f)
+    .filter((n) => !allowed.has(n))
   if (badSizes.length === 0) continue
   fontSeen.add(key)
   const base = fontBaseline[key]
-  const where = `非标准字号 ${[...new Set(badSizes)].join(',')}px (允许 ${[...FONT_ALLOWED].join('/')})`
+  const where = `非标准字号 ${[...new Set(badSizes)].join(',')}px (允许 ${[...allowed].join('/')})`
   if (base === undefined) {
     bad('R10-FONT-SCALE', rel(f), 1, `${badSizes.length} 处${where} 且无 baseline`)
   } else if (badSizes.length > base) {

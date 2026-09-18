@@ -85,7 +85,7 @@ const ATOMS = [
 function AsciiAtom() {
   const [f, setF] = useState(0)
   useEffect(() => { const t = setInterval(() => setF(v => (v + 1) % ATOMS.length), 700); return () => clearInterval(t) }, [])
-  return <pre className="select-none font-mono text-[10px] leading-[1.15] text-cyan-400/20 dark:text-cyan-400/20 text-primary/25 md:text-[11px]">{ATOMS[f]}</pre>
+  return <pre className="select-none font-mono text-[12px] leading-[1.15] text-cyan-400/20 dark:text-cyan-400/20 text-primary/25 md:text-[12px]">{ATOMS[f]}</pre>
 }
 
 /* ── 打字机 ── */
@@ -100,8 +100,8 @@ function Glass({ tag, title, desc }: { tag: string; title: string; desc: string 
   return (
     <div className="group relative overflow-hidden rounded-2xl border border-border/60 dark:border-cyan-400/10 bg-card/60 dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 hover:border-primary/30 dark:hover:border-cyan-400/25">
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 dark:via-cyan-400/25 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-      <span className="mb-4 inline-block font-mono text-[10px] uppercase tracking-[0.2em] text-primary/70 dark:text-cyan-400/70">{tag}</span>
-      <h3 className="mb-2.5 text-[17px] font-semibold text-foreground dark:text-white/90">{title}</h3>
+      <span className="mb-4 inline-block font-mono text-[12px] uppercase tracking-[0.2em] text-primary/70 dark:text-cyan-400/70">{tag}</span>
+      <h3 className="mb-2.5 text-[16px] font-semibold text-foreground dark:text-white/90">{title}</h3>
       <p className="text-[13px] leading-relaxed text-muted-foreground dark:text-slate-400">{desc}</p>
     </div>
   )
@@ -128,7 +128,7 @@ function Div() {
   return (
     <div className="flex items-center justify-center gap-3 py-1">
       <span className="h-px flex-1 bg-gradient-to-r from-transparent to-primary/20 dark:to-cyan-500/15" />
-      <span className="font-mono text-[10px] text-primary/30 dark:text-cyan-500/25">◆</span>
+      <span className="font-mono text-[12px] text-primary/30 dark:text-cyan-500/25">◆</span>
       <span className="h-px flex-1 bg-gradient-to-l from-transparent to-primary/20 dark:to-cyan-500/15" />
     </div>
   )
@@ -150,8 +150,8 @@ export default function LandingPage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <Link to="/" className="flex items-center gap-2">
             <BrandMark />
-            <span className="text-[15px] font-semibold tracking-wide">SIDA</span>
-            <span className="hidden font-mono text-[9px] text-primary/50 dark:text-cyan-500/40 sm:inline">v1.0</span>
+            <span className="text-[16px] font-semibold tracking-wide">SIDA</span>
+            <span className="hidden font-mono text-[12px] text-primary/50 dark:text-cyan-500/40 sm:inline">v1.0</span>
           </Link>
           <nav className="flex items-center gap-5">
             <Link to="/developers" className="font-mono text-[12px] text-muted-foreground dark:text-slate-500 hover:text-primary dark:hover:text-cyan-300 transition-colors">docs</Link>
@@ -164,11 +164,16 @@ export default function LandingPage() {
       {/* Hero */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 pt-24 pb-16 text-center">
         <div className="mb-4 flex justify-center opacity-50"><AsciiAtom /></div>
-        <div className="mb-4 font-mono text-[10px] tracking-[0.3em] text-primary/60 dark:text-cyan-400/50">[ AI-POWERED ANALYSIS PLATFORM ]</div>
-        <h1 className="text-[32px] font-bold leading-tight tracking-tight md:text-[48px]">
+        <div className="mb-4 font-mono text-[12px] tracking-[0.3em] text-primary/60 dark:text-cyan-400/50">[ AI-POWERED ANALYSIS PLATFORM ]</div>
+        <h1 className="text-[36px] font-bold leading-tight tracking-tight md:text-[48px]">
           一切皆<span className="bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-300 dark:to-blue-500 bg-clip-text text-transparent">接口</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-xl text-[14px] leading-relaxed text-muted-foreground dark:text-slate-400 md:text-[15px]">
+        {/* 首屏必须回答"给谁用 · 解决什么"(设计稿 v3.0 §三): 原文只有"面向开发者开放", 没说给谁。 */}
+        <p className="mx-auto mt-4 max-w-xl text-[16px] font-medium text-foreground/90 dark:text-white/90">
+          给盯 A 股的开发者与操盘手：<span className="text-primary dark:text-cyan-300">一次注册</span>就能用
+          行情、资金、情报、决策四类能力，接口直接调、也能在终端里看。
+        </p>
+        <p className="mx-auto mt-4 max-w-xl text-[13px] leading-relaxed text-muted-foreground dark:text-slate-400 md:text-[16px]">
           <TW t="SIDA 开发者预览版面向全球开发者开放。行情、资金、情报、决策等全部分析能力均通过标准 REST API 开放，可自由组合与集成。" />
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -182,14 +187,14 @@ export default function LandingPage() {
 
       {/* 安装区 */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
-        <h2 className="mb-6 text-center text-[18px] font-semibold text-foreground dark:text-white/90">一键使用</h2>
+        <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">一键使用</h2>
         <div className="mb-4 flex justify-center gap-1">
           {([['quick', '快速体验'], ['source', '源码安装']] as const).map(([k, l]) => (
             <button key={k} className={`rounded-lg px-4 py-1.5 font-mono text-[12px] transition-colors ${tab === k ? 'bg-primary/10 dark:bg-cyan-500/10 text-primary dark:text-cyan-300 border border-primary/20 dark:border-cyan-500/20' : 'text-muted-foreground dark:text-slate-600 hover:text-foreground dark:hover:text-slate-400'}`} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>
         <Term cmd={tab === 'quick' ? `curl -sL ${base}/api/skills/install.sh | bash -s -- YOUR_API_KEY` : 'git clone https://github.com/your-org/sida-pro.git'} />
-        <div className="mt-4 flex justify-center gap-4 font-mono text-[11px]">
+        <div className="mt-4 flex justify-center gap-4 font-mono text-[12px]">
           <Link to="/developers" className="text-muted-foreground dark:text-slate-600 hover:text-primary dark:hover:text-cyan-400 transition-colors">查看文档</Link>
           <Link to="/api-keys" className="text-muted-foreground dark:text-slate-600 hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
           <Link to="/developers" className="text-muted-foreground dark:text-slate-600 hover:text-primary dark:hover:text-cyan-400 transition-colors">Skill 目录</Link>
@@ -221,7 +226,7 @@ export default function LandingPage() {
 
       {/* 设计思路 */}
       <section className="relative z-10 mx-auto max-w-5xl px-6 py-16">
-        <h2 className="mb-10 text-center text-[22px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">设计思路</h2>
+        <h2 className="mb-10 text-center text-[20px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">设计思路</h2>
         <div className="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-16">
           <div>
             <h3 className="mb-3 text-[16px] font-semibold text-primary dark:text-cyan-300">一切皆接口</h3>
@@ -242,7 +247,7 @@ export default function LandingPage() {
 
       {/* 代码示例 */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
-        <h2 className="mb-6 text-center text-[18px] font-semibold text-foreground dark:text-white/90">调用示例</h2>
+        <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">调用示例</h2>
         <div className="overflow-hidden rounded-2xl border border-border/60 dark:border-cyan-400/10 bg-card/80 dark:bg-[#080c18]/80 backdrop-blur-sm">
           <div className="flex items-center gap-2 border-b border-border/50 dark:border-cyan-400/10 px-4 py-2.5">
             <div className="flex gap-1.5">
@@ -250,7 +255,7 @@ export default function LandingPage() {
               <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/50" />
               <div className="h-2.5 w-2.5 rounded-full bg-green-500/50" />
             </div>
-            <span className="ml-2 font-mono text-[10px] text-primary/50 dark:text-cyan-500/40">bash</span>
+            <span className="ml-2 font-mono text-[12px] text-primary/50 dark:text-cyan-500/40">bash</span>
           </div>
           <pre className="overflow-x-auto p-5 font-mono text-[12px] leading-[1.9]">
             <code>
@@ -274,7 +279,7 @@ export default function LandingPage() {
 
       {/* CTA */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16 text-center">
-        <h2 className="text-[22px] font-bold tracking-tight md:text-[26px] text-foreground dark:text-white/90">开始构建</h2>
+        <h2 className="text-[20px] font-bold tracking-tight md:text-[28px] text-foreground dark:text-white/90">开始构建</h2>
         <p className="mx-auto mt-3 max-w-md text-[13px] text-muted-foreground dark:text-slate-500">
           注册账号，获取 API Key，立即接入 SIDA 的全部分析能力。
         </p>
@@ -282,7 +287,7 @@ export default function LandingPage() {
           <Link to="/login?mode=register" className="rounded-lg bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-500 dark:to-blue-600 px-5 py-2 text-[13px] font-semibold text-primary-foreground dark:text-white shadow-[0_0_18px_rgba(34,211,238,0.15)] dark:shadow-[0_0_18px_rgba(34,211,238,0.2)] hover:shadow-[0_0_28px_rgba(34,211,238,0.25)] dark:hover:shadow-[0_0_28px_rgba(34,211,238,0.35)] transition-all">免费注册</Link>
           <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card/40 dark:bg-white/[0.03] px-5 py-2 text-[13px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">阅读文档</Link>
         </div>
-        <div className="mt-6 flex justify-center gap-4 font-mono text-[11px]">
+        <div className="mt-6 flex justify-center gap-4 font-mono text-[12px]">
           <Link to="/developers" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">开发者文档</Link>
           <Link to="/api-keys" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
           <Link to="/login" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">登录</Link>
@@ -294,15 +299,15 @@ export default function LandingPage() {
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-3 md:flex-row">
           <div className="flex items-center gap-2">
             <BrandMark />
-            <span className="font-mono text-[11px] text-muted-foreground dark:text-slate-700">开源 · © 2026 SIDA</span>
+            <span className="font-mono text-[12px] text-muted-foreground dark:text-slate-700">开源 · © 2026 SIDA</span>
           </div>
-          <div className="flex items-center gap-4 font-mono text-[11px] text-muted-foreground dark:text-slate-700">
+          <div className="flex items-center gap-4 font-mono text-[12px] text-muted-foreground dark:text-slate-700">
             <Link to="/developers" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">docs</Link>
             <Link to="/login" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">login</Link>
             <Link to="/login?mode=register" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">register</Link>
           </div>
         </div>
-        <p className="mt-4 text-center font-mono text-[10px] text-muted-foreground/60 dark:text-slate-800">
+        <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground/60 dark:text-slate-800">
           本平台不构成投资建议 · market involves risk · invest with caution
         </p>
       </footer>
