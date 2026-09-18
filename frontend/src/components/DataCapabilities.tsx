@@ -51,7 +51,13 @@ export function useCapabilities(): { data: CapabilitiesResp | null; loading: boo
 
 function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }) {
   const eff = effectiveSource(item)
+  // P2-3(2026-09-18): 只有**非正常**的能力才展开"影响面" —— 正常行保持可扫,
+  // 出问题时才告诉你"这会影响哪个页面、看到的是缺数还是有替代"。
+  const [open, setOpen] = useState(false)
+  const imp = item.impact
+  const showImpact = item.status !== 'ok' && !!imp
   return (
+    <div>
     <div className="flex items-center gap-2 py-1 text-[12px]" title={`${item.reason}${eff ? ` · 路由生效源 ${eff.provider}` : ''}`}>
       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[item.status]}`} />
       <span className="w-[92px] shrink-0 truncate">{item.label}</span>
@@ -65,6 +71,24 @@ function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }
       <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
         {item.age_days == null ? '' : `数据滞后 ${item.age_days} 天`}
       </span>
+      {showImpact && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          data-testid="impact-toggle"
+          className="shrink-0 rounded border border-border/60 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          {open ? '收起影响' : '影响面'}
+        </button>
+      )}
+    </div>
+    {showImpact && open && (
+      <div className="mb-1 ml-4 border-l border-border/60 pl-2 text-[11px] text-muted-foreground" data-testid="impact-detail">
+        <div>受影响页面：{imp.pages.length ? imp.pages.join(' · ') : '未登记'}</div>
+        <div>降级时：{imp.effect}</div>
+        <div>替代源：{imp.fallback}</div>
+      </div>
+    )}
     </div>
   )
 }

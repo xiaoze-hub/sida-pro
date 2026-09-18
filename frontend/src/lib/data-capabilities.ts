@@ -39,6 +39,14 @@ export interface CapabilityItem {
   enabled_count: number
   latest_date: string | null
   age_days: number | null
+  /** P2-3: 影响面 —— "降级会影响我哪个页面 / 看到的是缺的还是有替代"(后端 data_impact.py) */
+  impact?: CapabilityImpact
+}
+
+export interface CapabilityImpact {
+  pages: string[]
+  effect: string
+  fallback: string
 }
 
 export interface CapabilitySummary {
