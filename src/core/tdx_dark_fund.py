@@ -77,7 +77,7 @@ def fetch_tq_l2_summary(symbol: str) -> Optional[dict]:
 
     Returns:
         {
-            "zjl_hb": 主力净额(元),           # Zjl_HB
+            "zjl_hb": 主力净额(万元),          # Zjl_HB —— 单位万元(见 mainflow_tri 文件头)
             "l2_tick_num": L2逐笔成交数,
             "l2_order_num": L2逐笔委托数,
             "cancel_buy": 总撤买量(股),

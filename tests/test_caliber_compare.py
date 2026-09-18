@@ -110,3 +110,46 @@ def test_invalid_symbol_rejected(bad):
     with pytest.raises(HTTPException) as ei:
         cc.build_caliber_compare(bad)
     assert ei.value.status_code == 400
+
+
+def test_thsdk_l2_money_fields_are_wan_normalized_to_yuan(monkeypatch):
+    """TQ `get_more_info` 的**金额**字段是万元 → 本端点必须归一到元, 笔数不换算。
+
+    2026-09-18 由口径留痕发现: 本页曾把 zjl_hb 当"元"直接展示, 002361 实测原值 3992.67
+    (实为 3992.67 万元 = 3.99e7 元) → 明盘那列小 1e4 倍, 漂移页三源可比性也随之失真。
+    依据: mainflow_tri 文件头("TQ Zjl_HB(万元)") + 前端 L2Tab/DecisionPioneerCard 的万元口径。
+    """
+    monkeypatch.setattr(
+        "src.core.decision_pioneer.fetch_tq_l2",
+        lambda symbol, market="CN": {
+            "zjl_hb": 3992.67,
+            "zjl": 11485.27,
+            "cancel_buy": 12.5,
+            "cancel_sell": -3.25,
+            "l2_tick_num": 8888,
+            "l2_order_num": 777,
+        },
+    )
+    out = cc._thsdk_l2("002361")
+    got = {f["label"]: f for f in out["fields"]}
+    assert got["主力净流入"]["value"] == pytest.approx(3992.67 * 1e4)
+    assert got["主力净额（含主动买卖口径）"]["value"] == pytest.approx(11485.27 * 1e4)
+    assert got["撤买额"]["value"] == pytest.approx(12.5 * 1e4)
+    assert got["撤卖额"]["value"] == pytest.approx(-3.25 * 1e4)
+    # 笔数类字段不能被 ×1e4
+    assert got["L2 逐笔笔数"]["value"] == 8888
+    assert got["L2 逐笔笔数"]["unit"] == "笔"
+    assert got["L2 委托笔数"]["value"] == 777
+    assert out["unit"] == "元", "归一后单位应声明为元"
+
+
+def test_thsdk_l2_missing_money_stays_none(monkeypatch):
+    """缺失保持 None(不补 0), 不能因为 ×1e4 变成 0。"""
+    monkeypatch.setattr(
+        "src.core.decision_pioneer.fetch_tq_l2",
+        lambda symbol, market="CN": {"zjl_hb": None, "zjl": None, "l2_tick_num": 10, "l2_order_num": None},
+    )
+    out = cc._thsdk_l2("002361")
+    got = {f["label"]: f for f in out["fields"]}
+    assert got["主力净流入"]["value"] is None
+    assert got["主力净额（含主动买卖口径）"]["value"] is None
