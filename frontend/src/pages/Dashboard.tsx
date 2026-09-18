@@ -516,7 +516,7 @@ export default function DashboardPage() {
       {/* 顶部:标题 + 刷新 + 日期/市场状态 pills */}
       <div className="mb-3 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:justify-between">
         <div className="flex shrink-0 items-center gap-2">
-          <h1 className="text-[20px] font-bold tracking-tight text-foreground md:text-[22px]">{t('dashboard.subtitle')}</h1>
+          <h1 className="text-[20px] font-bold tracking-tight text-foreground">{t('dashboard.subtitle')}</h1>
           <Button onClick={() => load()} disabled={loading} size="sm" variant="ghost" className="h-7 px-2 min-h-[44px] min-w-[44px]" aria-label={t('common.refresh')}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
           </Button>
@@ -577,7 +577,7 @@ export default function DashboardPage() {
                 <Stat
                   label={ix.name}
                   value={<AnimatedNumber value={ix.current_price} format={(v) => safeFixed(v, 2)} />}
-                  className="[&>div:nth-child(2)]:text-[17px]"
+                  className="[&>div:nth-child(2)]:text-[20px]"
                 />
               </div>
               <FlashValue value={ix.change_pct}>
@@ -650,7 +650,7 @@ export default function DashboardPage() {
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
               <span className="text-muted-foreground">{t('dashboard.mainNetInflow')}
-                <b className={`font-mono text-[15px] font-semibold ${(marketFlow.total_main_flow ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                <b className={`font-mono text-[16px] font-semibold ${(marketFlow.total_main_flow ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
                 </b>
               </span>
@@ -762,7 +762,7 @@ export default function DashboardPage() {
                         <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
-                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">{t('dashboard.todayTag')}</span>
+                          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">{t('dashboard.todayTag')}</span>
                         )}
                       </div>
                       {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
@@ -836,7 +836,7 @@ export default function DashboardPage() {
                       openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
                     }}
                   >
-                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] text-amber-500">
+                    <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
                     <span className="truncate">{t.message}</span>
@@ -865,7 +865,7 @@ export default function DashboardPage() {
                       })
                     }}
                   >
-                    <span className={`shrink-0 rounded px-1 text-[9px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
+                    <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
                       {it.why && <div className="truncate text-[11px] text-muted-foreground">{it.why}</div>}
@@ -886,7 +886,7 @@ export default function DashboardPage() {
         <div style={{ order: orderIndex(layout, 'portfolio') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-6">
           <div className="mb-2 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">组合体检</h2>
+            <h2 className="text-[13px] font-semibold">组合体检</h2>
             {(benchReady || hasHoldings) && (
               /* v0.4.7: 两个分享入口合并为一个下拉, 减少头部按钮拥挤 */
               <details className="relative ml-auto">
@@ -1096,7 +1096,7 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
-                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">{o.action_label}</span>}
+                        {o.action_label && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">{o.action_label}</span>}
                       </div>
                       {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground">{o.signal || o.reason}</div>}
                     </div>

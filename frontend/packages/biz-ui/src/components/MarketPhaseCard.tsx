@@ -259,7 +259,7 @@ export default function MarketPhaseCard() {
       <div className={`border-l-2 ${style.border} pl-3 py-1 mb-3`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className={`text-[26px] md:text-[30px] font-bold ${style.text} leading-none tracking-tight truncate`}>
+            <div className={`text-[20px] font-bold ${style.text} leading-none tracking-tight truncate`}>
               {cur?.label || '积累中'}
             </div>
             {cur?.date ? (
@@ -361,7 +361,7 @@ export default function MarketPhaseCard() {
 function Mini({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <div className="text-right">
-      <div className="text-muted-foreground text-[9px] leading-none">{label}</div>
+      <div className="text-muted-foreground text-[10px] leading-none">{label}</div>
       <div className={`font-mono tabular-nums text-[12px] font-semibold leading-tight ${tone}`}>
         {value}
       </div>

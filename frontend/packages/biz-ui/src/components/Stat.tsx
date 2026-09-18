@@ -31,7 +31,7 @@ export default function Stat({
       )}
     >
       <div className="truncate text-[10px] leading-tight text-muted-foreground">{label}</div>
-      <div className={cn('truncate font-num text-[15px] font-semibold leading-snug tabular-nums', tone)}>
+      <div className={cn('truncate font-num text-[16px] font-semibold leading-snug tabular-nums', tone)}>
         {value}
       </div>
       {sub ? <div className="truncate text-[10px] leading-tight text-muted-foreground">{sub}</div> : null}
