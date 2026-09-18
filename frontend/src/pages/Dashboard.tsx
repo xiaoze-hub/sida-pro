@@ -549,6 +549,27 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* P0-2 收尾(2026-09-18): 首屏「结论行」—— 一行读完市场状态(情绪阶段/涨跌家数/成交/主力净流入/口径)。
+          为什么: 首页此前是"一堆碎片各自成块", 首屏读完说不出结论; 密度实测 784 也偏低。
+          数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
+      <div
+        data-testid="market-conclusion"
+        className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground"
+      >
+        <span className="font-medium text-foreground">市场情绪</span>
+        <b className="font-mono text-foreground">{phaseKpi.label ?? (phaseKpi.loading ? '加载中' : '--')}</b>
+        {phaseKpi.unavailableNote ? <span className="text-muted-foreground/80">({phaseKpi.unavailableNote})</span> : null}
+        <span className="text-border">|</span>
+        <span>涨停 <b className="font-mono text-stock-up">{phaseKpi.limitUp ?? '--'}</b></span>
+        <span>封板率 <b className="font-mono">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
+        <span className="text-border">|</span>
+        <span>涨 <b className="font-mono text-stock-up">{marketFlow?.up_count ?? '--'}</b>
+          <span className="mx-0.5">/</span>跌 <b className="font-mono text-stock-down">{marketFlow?.down_count ?? '--'}</b></span>
+        <span>成交 <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
+        <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
+        <span className="ml-auto text-[11px] text-muted-foreground/80">口径 {marketFlow?.caliber_label || '未标注'}</span>
+      </div>
+
       {/* 核心接口失败横幅:失败≠空态,给出重试入口 */}
       {/* 2026-08-17: 数据源失败显式标识 — ErrorBanner 组件,展示具体哪个源挂了 */}
       <ErrorBanner errors={sourceErrors} onDismiss={(id) => setSourceErrors(prev => prev.filter(e => e.id !== id))} retryAll={load} />
@@ -658,7 +679,7 @@ export default function DashboardPage() {
                   <span className="text-muted-foreground">{safeFlow(marketFlow.total_main_flow)}</span>
                 </b>
               </span>
-              <span className="text-muted-foreground">{t('dashboard.amount')} <b className="font-mono">{marketFlow.total_amount == null ? '--' : `${safeFixed(marketFlow.total_amount, 0)}亿`}</b></span>
+              <span className="text-muted-foreground">{t('dashboard.amount')} <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
               <span className="text-muted-foreground">{t('dashboard.up')} <b className="text-stock-up font-mono">{marketFlow.up_count ?? '--'}</b>
                 <span className="mx-1">/</span>{t('dashboard.down')} <b className="text-stock-down font-mono">{marketFlow.down_count ?? '--'}</b></span>
               <span className="text-muted-foreground">{t('dashboard.sh')} <b className="font-mono">{safeFixed(marketFlow.sh_flow, 1)}亿</b>
