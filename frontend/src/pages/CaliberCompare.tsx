@@ -9,6 +9,8 @@ import {
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { safeMoney, safePercent, safeInt, safeFixed } from '@/lib/format'
+// 口径词典(单一来源, 见 packages/biz-ui/src/lib/caliber-glossary.ts): 官方投教口径, 各页共用
+import { ANPAN, GS_SIGNAL, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 
 /**
  * 口径对照页(2026-09-18, 老板需求 A2 第一步)。
@@ -294,6 +296,26 @@ export default function CaliberComparePage() {
             不合成单一“权威数字”。
           </p>
         </div>
+      {/* 口径词典(2026-09-18 官方投教口径): 这三个词在页面上反复出现, 就地解释一次,
+          避免读者把明盘/暗盘当成同一件事的两个说法。文案来自 caliber-glossary(单一来源)。 */}
+      <div className="mt-3 rounded border border-border/60 px-3 py-2" data-testid="caliber-glossary">
+        <div className="text-[11px] font-medium text-muted-foreground">口径词典</div>
+        <div className="mt-1 space-y-0.5 text-[11px]">
+          <div title={glossaryTooltip(MINGPAN)}>
+            <span className="text-foreground">{MINGPAN.name}</span>
+            <span className="text-muted-foreground"> —— {MINGPAN.oneLine}（单笔 &gt;30 万，散户也计入，不代表真正主力）</span>
+          </div>
+          <div title={glossaryTooltip(ANPAN)}>
+            <span className="text-foreground">{ANPAN.name}</span>
+            <span className="text-muted-foreground"> —— {ANPAN.oneLine}（大单拆成 30 万以下 → 明盘看不到，同一账户买入记为暗盘）</span>
+          </div>
+          <div title={glossaryTooltip(GS_SIGNAL)}>
+            <span className="text-foreground">{GS_SIGNAL.name}</span>
+            <span className="text-muted-foreground"> —— {GS_SIGNAL.oneLine} G=机会+防卖飞 · S=震荡或下跌+避深套</span>
+          </div>
+        </div>
+      </div>
+
         <div className="flex items-center gap-2">
           <input
             value={code}

@@ -1,3 +1,4 @@
+import { ANPAN, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { insightApi } from '@panwatch/api'
 import { RefreshCw } from 'lucide-react'
@@ -759,8 +760,13 @@ function FundFlowSection({ rows }: { rows: FundFlowRow[] }) {
               <thead>
                 <tr className="border-b border-border/40 text-muted-foreground">
                   {hasDate && <th className="px-2 py-1 font-medium">日期</th>}
-                  {hasMing && <th className="px-2 py-1 text-right font-medium">明盘净额</th>}
-                  {hasDark && <th className="px-2 py-1 text-right font-medium">暗盘净额</th>}
+                  {/* 表头挂官方口径(2026-09-18 用户给定): 明盘/暗盘是两套口径, 不许互相校准 */}
+                  {hasMing && (
+                    <th className="px-2 py-1 text-right font-medium" title={glossaryTooltip(MINGPAN)}>明盘净额</th>
+                  )}
+                  {hasDark && (
+                    <th className="px-2 py-1 text-right font-medium" title={glossaryTooltip(ANPAN)}>暗盘净额</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">

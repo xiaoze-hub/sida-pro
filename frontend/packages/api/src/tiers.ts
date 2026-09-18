@@ -2,10 +2,13 @@
  * 档位对比 API 客户端(P2-4, 2026-09-18)。
  *
  * 后端契约:
- *  · `GET  /api/tiers`          —— **公开**(无需登录); 内容由后端从权限定义现读现拼,
+ *  · `GET  /tiers`(完整路径 `/api/tiers`) —— **公开**(无需登录); 内容由后端从权限定义现读现拼,
  *                                前端**不许**硬编码权限清单(会漂移)。
- *  · `POST /api/pro/apply`      —— 提交 Pro 申请(需登录; 同一用户仅一条 pending)。
- *  · `GET  /api/pro/apply/status` —— 查自己的申请状态。
+ *  · `POST /pro/apply`(完整路径 `/api/pro/apply`) —— 提交 Pro 申请(需登录; 同一用户仅一条 pending)。
+ *  · `GET  /pro/apply/status`(完整路径) —— 查自己的申请状态。
+ *
+ * ⚠️ **路径不带 `/api` 前缀**: `fetchAPI` 的 baseURL 已经是 `…/api`, 再写 `/api/xxx` 会变成
+ * `/api/api/xxx` → 404(**生产实测踩过**: 页面因此一直显示"档位信息暂时取不到")。
  *
  * 诚实口径: 内测期不收费 → 响应里**没有**价格字段(`billing_enabled: false`),
  * 页面因此不能也不该显示任何金额。
@@ -62,16 +65,16 @@ export interface ProApplyStatus {
 }
 
 export function fetchTiers() {
-  return fetchAPI<TiersResp>('/api/tiers')
+  return fetchAPI<TiersResp>('/tiers')
 }
 
 export function applyPro(reason = '', contact = '') {
-  return fetchAPI<{ id?: number; status?: string }>('/api/pro/apply', {
+  return fetchAPI<{ id?: number; status?: string }>('/pro/apply', {
     method: 'POST',
     body: JSON.stringify({ reason, contact }),
   })
 }
 
 export function fetchProApplyStatus() {
-  return fetchAPI<ProApplyStatus>('/api/pro/apply/status')
+  return fetchAPI<ProApplyStatus>('/pro/apply/status')
 }

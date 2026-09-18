@@ -79,7 +79,7 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
     // 加载态(裸骨架): 子卡壳已让位, 只剩外层那一层
     expect(cardShells(container).length).toBe(1)
 
-    await waitFor(() => expect(screen.getByText('GS策略(趋势过滤)')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('GS 信号（机会/风险）')).toBeTruthy())
 
     // 数据态: 仍然只有一层边框 —— 不存在"卡中卡"
     const shells = cardShells(container)
@@ -106,13 +106,13 @@ describe('DecisionCard 合并卡 · 单卡外观', () => {
 
   it('默认路径不变: 不传 bare 时 DecisionPioneerCard 仍出自己的卡壳 + 标题 + 刷新', async () => {
     const { container } = render(<DecisionPioneerCard symbol="002636" market="CN" />)
-    await waitFor(() => expect(screen.getByText('GS策略(趋势过滤)')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('GS 信号（机会/风险）')).toBeTruthy())
 
     const shells = cardShells(container)
     expect(shells.length).toBe(1)
     expect(shells[0].getAttribute('class')).toContain('mt-3 rounded-xl border border-border/50 bg-card p-3')
     expect(screen.getByText('🧭 数智决策三指标')).toBeTruthy()
-    expect(screen.getByText('GS趋势 × 机构活跃度 × L2资金')).toBeTruthy()
+    expect(screen.getByText('GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）')).toBeTruthy()
     expect(screen.getAllByTitle('刷新').length).toBe(1)
   })
 })

@@ -70,9 +70,10 @@ describe('资金流水表: 整列缺失不摆一列 --', () => {
   const src = read('src/pages/workbench/tabs/L2Tab.tsx')
 
   it('按列存在性渲染: 缺的列不渲染表头与单元格', () => {
-    expect(src).toMatch(/\{hasDate && <th[^>]*>日期<\/th>\}/)
-    expect(src).toMatch(/\{hasMing && <th[^>]*>明盘净额<\/th>\}/)
-    expect(src).toMatch(/\{hasDark && <th[^>]*>暗盘净额<\/th>\}/)
+    // 断言**结构语义**(表头由 hasMing/hasDark 条件渲染), 不绑定单行写法 ——
+    // 2026-09-18 给表头加了官方口径 tooltip, 写法由单行变多行, 语义没变。
+    expect(src).toMatch(/\{hasMing &&[\s\S]{0,200}明盘净额<\/th>/)
+    expect(src).toMatch(/\{hasDark &&[\s\S]{0,200}暗盘净额<\/th>/)
     expect(src).toMatch(/\{hasDate && <td[^>]*>\{r\.date\}<\/td>\}/)
   })
 
