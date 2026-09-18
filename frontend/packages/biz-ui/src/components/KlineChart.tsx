@@ -28,6 +28,14 @@ import {
 
 import { fetchAPI } from '@panwatch/api'
 import MinutePane from './MinutePane'
+import {
+  intentLabelFor,
+  intentMarkersFor,
+  intentPriceLinesFor,
+  intentRenderable,
+  limitMoveMarkers,
+} from '../lib/main-intent'
+import type { MainIntentStructured } from '../lib/main-intent-types'
 import { safeFixed, toAmount } from '@/lib/format'
 
 import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
@@ -218,6 +226,12 @@ export default function KlineChart(props: {
    * 旗舰页 StockWorkbench 行为不受影响。
    */
   enableMinute?: boolean
+  /**
+   * 主力意图(2026-09-18 P2 补搬): 传了就用传入的; 不传且 `market === 'CN'` 时**自取**
+   * `/klines/{symbol}/summary` 的 main_intent_structured —— 与 InteractiveKline 原行为一致
+   * (原先靠这个自取渲染"主力意图"图例与箭头, 只看 props 会误判为"无人使用")。
+   */
+  mainIntent?: MainIntentStructured | null
   initialInterval?: KlineInterval
   /** 初始回看天数; 默认 120 */
   initialDays?: number
@@ -312,6 +326,35 @@ export default function KlineChart(props: {
 
   // ── 分时模式(P1): 只保留 "分时/K线" 切换; 取数与四种状态由 MinutePane 自持 ──
   const [mode, setMode] = useState<'kline' | 'minute'>('kline')
+
+  // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
+  const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
+  useEffect(() => {
+    if (props.mainIntent) {
+      setIntentFetched(null)
+      return
+    }
+    if (!props.symbol || props.market !== 'CN') {
+      setIntentFetched(null)
+      return
+    }
+    let cancelled = false
+    fetchAPI<{ main_intent_structured?: MainIntentStructured | null }>(
+      `/klines/${encodeURIComponent(props.symbol)}/summary?market=CN`,
+    )
+      .then((res) => {
+        if (!cancelled) setIntentFetched(res.main_intent_structured ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setIntentFetched(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [props.symbol, props.market, props.mainIntent])
+  const intent = props.mainIntent ?? intentFetched
+  const intentLegend = intentLabelFor(intent)
+  const intentLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
@@ -801,6 +844,19 @@ export default function KlineChart(props: {
         })
       }
     }
+    // P2 补搬(2026-09-18): 主力意图箭头 + 涨停/跌停箭头(与 InteractiveKline 同语义/同阈值)
+    if (intent) {
+      const lastBar = rawKlinesRef.current[rawKlinesRef.current.length - 1]
+      markers.push(...(intentMarkersFor(intent, lastBar?.time ?? null, sc.up, sc.down) as never[]))
+      markers.push(
+        ...(limitMoveMarkers(
+          rangeBarsRef.current,
+          (d) => toChartTime(d, interval),
+          sc.up,
+          sc.down,
+        ) as never[]),
+      )
+    }
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
@@ -826,6 +882,15 @@ export default function KlineChart(props: {
             title: line.label || line.kind,
           }),
         )
+      }
+    }
+
+    // 2a-2) 主力意图筹码线(P2 补搬): 筹码峰 + 成本带上/下沿
+    for (const line of intentLinesRef.current) series.removePriceLine(line)
+    intentLinesRef.current = []
+    if (showSignal) {
+      for (const line of intentPriceLinesFor(intent)) {
+        intentLinesRef.current.push(series.createPriceLine(line))
       }
     }
 
@@ -913,7 +978,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady, props.tradeMarkers])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady, props.tradeMarkers, intent])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -1062,6 +1127,42 @@ export default function KlineChart(props: {
       />
       {props.enableMinute && mode === 'minute' && (
         <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
+      )}
+
+      {/* 主力意图图例(P2 补搬, 与 InteractiveKline 同口径): 数据不足时显示笔数, 不给方向 */}
+      {intentRenderable(intent) && intentLegend && (
+        <div
+          data-testid="main-intent-legend"
+          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[11px] text-foreground/80"
+        >
+          <span className="mr-2 font-medium text-rose-700 dark:text-rose-400">主力意图</span>
+          <span className={intentLegend.cls}>{intentLegend.text}</span>
+          {typeof intent?.main_net === 'number' && (
+            <span className="ml-2 font-mono">
+              {toAmount(intent.main_net)}
+              {typeof intent.big_net === 'number' &&
+                ` (超大${toAmount(intent.big_net)}/大${toAmount(intent.mid_net ?? 0)})`}
+            </span>
+          )}
+          {intent?.chip_peak != null && (
+            <span className="ml-2">
+              筹码峰 <span className="font-mono">{safeFixed(intent.chip_peak, 2)}</span>
+            </span>
+          )}
+          {intent?.chip_band && (
+            <span className="ml-2">
+              成本带{' '}
+              <span className="font-mono">
+                {safeFixed(intent.chip_band.low, 2)}-{safeFixed(intent.chip_band.high, 2)}
+              </span>
+            </span>
+          )}
+          {typeof intent?.profit_ratio === 'number' && (
+            <span className="ml-2">
+              获利 <span className="font-mono">{safeFixed(intent.profit_ratio * 100, 0)}%</span>
+            </span>
+          )}
+        </div>
       )}
 
       {/* KI-056: 每 pane 信息栏 —— 悬停十字光标时显示主图 OHLC + 成交量; 未悬停显示副图口径 */}

@@ -47,28 +47,12 @@ type KlinesResponse = {
 // 分时相关类型统一来自 lib/minute-types(单一来源; 原先分散在本文件与 MinuteLwcChart 互相 import,
 // 淘汰 IK 时会连带打断 MinuteLwcChart —— P1 已收口)。既有导出名保持不变。
 import type { MinutePoint, MinuteResponse, MinuteSwings } from '../lib/minute-types'
+import type { MainIntentStructured } from '../lib/main-intent-types'
 
 export type { MinutePoint, MinuteResponse, MinuteSwings, SwingSegment } from '../lib/minute-types'
 
-/** 主力意图结构化数据(2026-08-12): 后端 klines summary API 返回, 供 K线 markers/筹码叠加 */
-export interface MainIntentStructured {
-  direction: 'buy' | 'sell' | 'neutral' | 'wash' | 'absorb'
-  main_net: number
-  big_net?: number
-  mid_net?: number
-  participation?: number | null
-  buy_ratio?: number | null
-  auction_amt?: number
-  phase?: string | null
-  signal?: string | null
-  chip_peak?: number | null
-  chip_band?: { low: number; high: number } | null
-  profit_ratio?: number | null
-  tail_net?: number
-  /** 2026-08-12: 竞价/开盘初期数据不足标记 */
-  data_status?: 'ok' | 'insufficient'
-  tick_count?: number
-}
+// 主力意图类型统一来自 lib/main-intent-types(单一来源, 2026-09-18 P2 补搬)
+export type { MainIntentStructured } from '../lib/main-intent-types'
 
 type HoverTipRow = {
   date: string
