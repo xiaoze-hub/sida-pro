@@ -405,7 +405,17 @@ export default function KlineChart(props: {
     darkNet?: number | null
     /** §10.2③: 该根 K 线同日事件标签 */
     events?: string[]
+    /** P2 补搬(2026-09-18): 该根 K 线的均线读数(IK 曾常显, 迁移后补回; 缺失 null → `--`) */
+    ma5?: number | null
+    ma10?: number | null
+    ma20?: number | null
   } | null>(null)
+  /** 均线数组(绘制时算好存这里, 供光标读数取值; 不重复算一遍) */
+  const maValuesRef = useRef<{
+    ma5: Array<number | null>
+    ma10: Array<number | null>
+    ma20: Array<number | null>
+  }>({ ma5: [], ma10: [], ma20: [] })
   // L1 趋势均线 series (受 layers.trend 控制)
   const maSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
   // 原始K线(供 L1 均线 / L5 副图 计算)
@@ -590,6 +600,9 @@ export default function KlineChart(props: {
         ? (param.seriesData?.get(volumeSeriesRef.current) as { value?: number } | undefined)
         : undefined
       if (bar && bar.close != null) {
+        // 该根 K 线在序列里的序号 → 取同一位置的均线值(算过就复用, 没算过(left null)显示 --)
+        const barIdx = rangeBarsRef.current.findIndex((b) => b.time === (tNum as number))
+        const mv = maValuesRef.current
         setHoverReadout({
           date: hitDate ?? time,
           o: bar.open ?? null,
@@ -600,6 +613,9 @@ export default function KlineChart(props: {
           mingNet,
           darkNet,
           events: hitEvents,
+          ma5: barIdx >= 0 ? (mv.ma5[barIdx] ?? null) : null,
+          ma10: barIdx >= 0 ? (mv.ma10[barIdx] ?? null) : null,
+          ma20: barIdx >= 0 ? (mv.ma20[barIdx] ?? null) : null,
         })
       }
     })
@@ -998,6 +1014,7 @@ export default function KlineChart(props: {
       const ma10 = sma(closes, 10)
       const ma20 = sma(closes, 20)
       const ma60 = sma(closes, 60)
+      maValuesRef.current = { ma5, ma10, ma20 } // 光标读数复用(见 setHoverReadout)
       const defs: Array<{ v: Array<number | null>; color: string; w: 1 | 2 | 3; title: string }> = [
         { v: ma5, color: maShade(0.9), w: 1, title: 'MA5' },
         { v: ma10, color: maShade(0.75), w: 1, title: 'MA10' },
@@ -1179,6 +1196,16 @@ export default function KlineChart(props: {
             <span>收 {safeFixed(hoverReadout.c)}</span>
             <span>
               量 {hoverReadout.v == null ? '--' : `${safeFixed(hoverReadout.v / 10000, 1)}万手`}
+            </span>
+            {/* P2 补搬(2026-09-18): 均线读数(IS 原先常显, 迁移后补回; 缺值显 --) */}
+            <span>
+              MA5 {hoverReadout.ma5 == null ? '--' : safeFixed(hoverReadout.ma5)}
+            </span>
+            <span>
+              MA10 {hoverReadout.ma10 == null ? '--' : safeFixed(hoverReadout.ma10)}
+            </span>
+            <span>
+              MA20 {hoverReadout.ma20 == null ? '--' : safeFixed(hoverReadout.ma20)}
             </span>
             {/* §10.2③ 光标联动: 该时刻的资金/事件读数(与资金面板同一口径, 缺数据 = --) */}
             <span>明盘 {toAmount(hoverReadout.mingNet)}</span>
