@@ -5,6 +5,29 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P1 · KlineChart 分时模式 → v0.10.17)
+
+### feat(kline): KlineChart 支持分时模式(可开关) + 分时类型收口到单一来源
+
+**性质**: 新能力(P1, K 线引擎合并的**唯一**真实缺口)。依据 `docs/K线引擎评估_20260918.md` §八。
+
+- 新组件 `packages/biz-ui/src/components/MinutePane.tsx`: 把 `InteractiveKline` 的分时逻辑**原样搬来**
+  —— 请求序号守卫(切股旧响应丢弃) / 冷启动 `timeoutMs: 60000`(swings 全量逐笔翻页) / **30s 轮询** /
+  KJ-042「空列表是**故障**不是停牌」/ 四种状态显式呈现(加载中 / 失败原因 / 源异常 / 暂无数据)。
+  空态**绝不画一条假平的 0 线**。
+- `KlineChart` 增可选 `enableMinute`(**默认关** —— 旗舰页 StockWorkbench 行为不变)与「分时」切换按钮;
+  分时模式下隐藏 K 线容器而**不卸载**(避免图表实例销毁/重建竞态), 挂载 `MinutePane`。
+- 类型收口: 新增 `packages/biz-ui/src/lib/minute-types.ts`, 把 `MinutePoint/SwingSegment/MinuteSwings/MinuteResponse`
+  从 `InteractiveKline` 提出 —— 原先 `MinuteLwcChart` 反向 `import ... from './InteractiveKline'`,
+  淘汰 IK 会**连带打断** MinuteLwcChart; 现在 IK 只做 re-export(既有导出名不变, 无破坏性改动)。
+- **P1 范围实测收窄**: 评估原计划还要搬 `mainIntent`/`LayerState`, 实测**没有任何页面在用**这两个 prop
+  (L2Tab 里同名者是别的组件) → 不搬, 免得变死代码; 而 IndexBody/AnalysisDetail/KlineModal 的 props
+  KC 已全支持, PaperTrading 的 `my_trade` 正对应 KC 既有 `tradeMarkers`。**故 P1 = 分时一项**。
+
+**回归**: `MinutePane` 5 例(渲染带昨收基准 / degraded 说明"空列表是故障不等于停牌" / 失败显示原因 /
+空点集显式空态且无 0 / 按 `pollMs` 轮询) + `KlineChart` 接线 4 例源级断言(enableMinute 默认关、
+按钮仅在开启时出现、分时挂 MinutePane 且隐藏 K 线容器、KC 不再直接 fetch 分时接口)。
+
 ## 2026-09-18 (K 线引擎 P1 范围修正)
 
 ### docs: P1 范围实测收窄到 1 项(分时模式), 砍掉 mainIntent/LayerState 的无谓搬迁

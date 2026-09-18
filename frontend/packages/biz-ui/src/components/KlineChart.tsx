@@ -27,6 +27,7 @@ import {
 } from 'lightweight-charts'
 
 import { fetchAPI } from '@panwatch/api'
+import MinutePane from './MinutePane'
 import { safeFixed, toAmount } from '@/lib/format'
 
 import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
@@ -211,6 +212,12 @@ export default function KlineChart(props: {
   symbol: string
   market: string
   /** 初始周期; 切换后写回 (留给父组件保存 URL 用) */
+  /**
+   * 开启「分时 / K线」切换(P1, 2026-09-18)。
+   * 默认 **false**: 只有原先用 InteractiveKline 的页面(指数页/分析详情/模拟盘)才开,
+   * 旗舰页 StockWorkbench 行为不受影响。
+   */
+  enableMinute?: boolean
   initialInterval?: KlineInterval
   /** 初始回看天数; 默认 120 */
   initialDays?: number
@@ -302,6 +309,10 @@ export default function KlineChart(props: {
   // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
+
+  // ── 分时模式(P1): 只保留 "分时/K线" 切换; 取数与四种状态由 MinutePane 自持 ──
+  const [mode, setMode] = useState<'kline' | 'minute'>('kline')
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [dataLen, setDataLen] = useState(0)
@@ -1028,13 +1039,31 @@ export default function KlineChart(props: {
             </button>
           )
         })}
+        {props.enableMinute && (
+          <button
+            type="button"
+            data-testid="minute-toggle"
+            onClick={() => setMode((m) => (m === 'minute' ? 'kline' : 'minute'))}
+            className={`px-2 py-1 text-xs rounded ${
+              mode === 'minute'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+            }`}
+          >
+            分时
+          </button>
+        )}
       </div>
       {/* 图表容器(终端化: 主图裸放, 无框) */}
       <div
         ref={containerRef}
-        className="w-full"
+        className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
         style={{ minHeight: props.height ?? 360 }}
       />
+      {props.enableMinute && mode === 'minute' && (
+        <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
+      )}
+
       {/* KI-056: 每 pane 信息栏 —— 悬停十字光标时显示主图 OHLC + 成交量; 未悬停显示副图口径 */}
       <div
         data-testid="kline-pane-info"
