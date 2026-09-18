@@ -28,17 +28,36 @@ describe('首页市场资金带: 缺数不许冒充 0', () => {
 
   it('主力净流入缺数走中性色 —— 不给"涨红"(0 与缺数在视觉上必须可分)', () => {
     expect(src).not.toMatch(/\(marketFlow\.total_main_flow \?\? 0\) >= 0 \? 'text-stock-up'/)
-    expect(src).toMatch(/marketFlow\.total_main_flow == null\s*\n?\s*\? 'text-muted-foreground'/)
+    expect(src).toMatch(/marketFlow\??\.total_main_flow == null\s*\n?\s*\? 'text-muted-foreground'/)
   })
 
   it('成交额缺数显示 "--", 不许显示 "0亿"', () => {
     expect(src).not.toMatch(/safeFixed\(marketFlow\.total_amount, 0, '0'\)/)
-    expect(src).toMatch(/marketFlow\.total_amount == null \? '--'/)
+    expect(src).toMatch(/marketFlow\??\.total_amount == null \? '--'/)
   })
 
   it('全仓不再有"缺数回退到 0"的金额写法(抽查 safeFixed 第三参为 0 的写法)', () => {
     for (const f of ['src/pages/Dashboard.tsx', 'src/pages/stocks/AccountsSection.tsx']) {
       expect(read(f)).not.toMatch(/safeFixed\([^)]*,\s*'0'\s*\)/)
     }
+  })
+})
+
+describe('P0-2 收尾: 首页「结论行」', () => {
+  const src = read('src/pages/Dashboard.tsx')
+
+  it('首屏有结论行(一行读完市场状态, 而不是一堆碎片)', () => {
+    expect(src).toContain('data-testid="market-conclusion"')
+    for (const k of ['市场情绪', '涨停', '封板率', '成交', '主力净流入', '口径']) {
+      expect(src).toContain(k)
+    }
+  })
+
+  it('结论行的每个数都走 `--` 兜底, 且**不新增请求**(只用本页已有 state)', () => {
+    expect(src).toMatch(/phaseKpi\.limitUp \?\? '--'/)
+    expect(src).toMatch(/marketFlow\?\.up_count \?\? '--'/)
+    expect(src).toMatch(/marketFlow\?\.total_amount == null \? '--'/)
+    expect(src).toMatch(/口径 \{marketFlow\?\.caliber_label \|\| '未标注'\}/)
+    expect(src).not.toMatch(/market-conclusion[\s\S]{0,600}\?\? 0/)
   })
 })
