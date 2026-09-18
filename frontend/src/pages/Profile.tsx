@@ -1,6 +1,6 @@
 import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -494,8 +494,12 @@ function ProApplyCard() {
 
   return (
     <div className="space-y-3">
+      {/* P2-4(2026-09-18): 这里原来**硬编码**了一串 Pro 能力清单 —— 权限一改就变成假话。
+          改成指向档位页, 由后端 `GET /api/tiers` 从权限定义实时生成(单一来源)。 */}
       <div className="rounded-md border border-border/50 bg-accent/20 p-3.5 text-[12px] text-muted-foreground">
-        Pro 账号可使用全部功能：机会页、数智决策三指标、暗盘资金、L2资金（不限试用次数）。
+        Pro 可使用全部功能。完整对比见
+        <Link to="/tiers" className="mx-1 underline underline-offset-4 hover:text-foreground">档位页</Link>
+        （清单由服务端按当前权限实时生成）。
       </div>
       <div>
         <Label className="text-[11px]">申请理由（可选）</Label>

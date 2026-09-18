@@ -151,6 +151,8 @@ const FONT_ALLOWED_PUBLIC = new Set([12, 13, 16, 20, 28, 36, 48])
 const PUBLIC_SURFACE = [
   'frontend/src/pages/Landing.tsx',
   'frontend/src/pages/Developers.tsx',
+  // P2-4(2026-09-18): 档位页是**公开面**(未登录可见, 营销/转化场景), 与落地页同档位口径。
+  'frontend/src/pages/Tiers.tsx',
 ]
 const allowedFor = (key) => (PUBLIC_SURFACE.includes(key) ? FONT_ALLOWED_PUBLIC : FONT_ALLOWED)
 const FONT_BASELINE_FILE = join(ROOT, 'scripts', 'ui-rules-font-baseline.json')
