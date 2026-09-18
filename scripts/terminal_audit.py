@@ -1,4 +1,4 @@
-"""终端度巡检 (设计稿 v3.0 §八 验收线的可执行版)。
+"""终端度巡检 + 公开面巡检 (设计稿 v3.0 §九 验收线的可执行版)。
 
 产品铁律里只有一条是带数字的 —— **"K 线是绝对主角(≥80% 屏宽)"** —— 本脚本把铁律连同
 "不堆数据/字阶纪律/不卡片化"一起变成 DOM 指标, 让"设计有没有达标"可以复测而不是靠印象。
@@ -30,7 +30,7 @@ import os
 import sys
 import time
 
-# 目标阈值(设计稿 v3.0 §八)。None = 该页不适用。
+# 目标阈值(设计稿 v3.0 §九)。None = 该页不适用。
 TARGETS: dict[str, dict[str, object]] = {
     "klineShare": {"min": 0.80, "pages": {"个股页", "指数页"}},
     "cards": {"max": 0, "pages": None},
@@ -51,6 +51,45 @@ ROUTES: list[tuple[str, str, int]] = [
     ("热力图", "/heatmap", 7),
     ("持仓页", "/portfolio", 6),
 ]
+
+# 公开面(匿名可达): 设计稿 v3.0 §三。营销页允许比终端宽的字阶, 上限 7 档。
+ROUTES_ANON: list[tuple[str, str, int]] = [
+    ("落地页", "/", 6),
+    ("登录页", "/login", 4),
+    ("注册页", "/login?mode=register", 5),
+    ("开发者文档", "/developers", 6),
+]
+
+TARGETS_ANON: dict[str, dict[str, object]] = {
+    "fontCount": {"max": 7, "pages": None},
+    "cdnRefs": {"max": 0, "pages": None},
+}
+
+PROBE_ANON_JS = r"""() => {
+  const vis = e => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
+  const sizes = {};
+  for (const e of [...document.querySelectorAll('body *')].filter(vis)) {
+    const hasText = [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim().length > 0);
+    if (hasText) { const fs = Math.round(parseFloat(getComputedStyle(e).fontSize)); sizes[fs] = (sizes[fs] || 0) + 1; }
+  }
+  // 只找**真依赖**(script/link 指向外部域名); 注释里的字样不算, 避免像上一版那样误报。
+  let cdnRefs = 0;
+  document.querySelectorAll('script[src], link[href], img[src]').forEach(el => {
+    const u = el.getAttribute('src') || el.getAttribute('href') || '';
+    if (/^(https?:)?\/\//.test(u) && !u.includes(location.host)) cdnRefs++;
+  });
+  const txt = document.body.innerText || '';
+  return {
+    fontSizes: Object.keys(sizes).map(Number).sort((a, b) => a - b),
+    fontCount: Object.keys(sizes).length,
+    cdnRefs,
+    docH: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight),
+    textLen: txt.length,
+    hasPricing: /档位|定价|免费|价格/.test(txt),
+    ctaCount: [...document.querySelectorAll('a,button')].filter(vis)
+        .filter(e => /注册|开始|快速体验|免费/.test(e.innerText || '')).length,
+  };
+}"""
 
 PROBE_JS = r"""() => {
   const vis = e => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
@@ -131,6 +170,8 @@ def main() -> int:
     ap.add_argument("--user", default="admin")
     ap.add_argument("--json", dest="json_out", default="")
     ap.add_argument("--headed", action="store_true", help="显示浏览器窗口(调试用)")
+    ap.add_argument("--anon", action="store_true",
+                    help="公开面模式: 不带凭据访问落地页/登录/注册/文档(设计稿 v3.0 §三)")
     args = ap.parse_args()
 
     try:
@@ -141,6 +182,52 @@ def main() -> int:
 
     pw_env = os.environ.get("SIDA_SHOT_PW", "xz.170530")
     rows: list[dict] = []
+    if args.anon:  # 公开面: 一律不带凭据, 且要验"匿名到底能不能看到"
+        anon_rows: list[dict] = []
+        with sync_playwright() as pw:
+            b = pw.chromium.launch(headless=not args.headed,
+                                   args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            pg = b.new_context(viewport={"width": 1600, "height": 900}).new_page()
+            for name, route, settle in ROUTES_ANON:
+                rec: dict = {"name": name, "route": route}
+                try:
+                    pg.goto(args.base + route, timeout=60000, wait_until="domcontentloaded")
+                    pg.wait_for_timeout(settle * 1000)
+                    rec.update(pg.evaluate(PROBE_ANON_JS))
+                    rec["landed"] = pg.url.replace(args.base, "")
+                except Exception as exc:  # noqa: BLE001
+                    rec["error"] = f"{type(exc).__name__}: {exc}"[:160]
+                anon_rows.append(rec)
+            b.close()
+        print(f"{'页面':<10}{'匿名落点':<26}{'字号':>5}{'外部依赖':>9}{'页高':>7}  判定")
+        print("-" * 92)
+        bad_n = 0
+        for r in anon_rows:
+            if "error" in r:
+                print(f"{r['name']:<10}{'探针失败':<26}{'—':>5}{'—':>9}{'—':>7}  {r['error']}")
+                bad_n += 1
+                continue
+            viol: list[str] = []
+            for k, spec in TARGETS_ANON.items():
+                v = r.get(k)
+                hi = spec.get("max")
+                if v is not None and hi is not None and v > hi:  # type: ignore[operator]
+                    viol.append(f"{k}={v} > {hi}")
+            bad_n += 1 if viol else 0
+            landed = str(r.get("landed", ""))
+            # 注册页本身就在 /login?mode=register 上, 别把它误判成"弹回登录"
+            bounced = ("→弹回登录" if "/login" in landed and "mode=register" not in landed
+                       and r["route"] not in ("/login", "/login?mode=register") else "")
+            print(f"{r['name']:<10}{landed[:24]:<26}{r['fontCount']:>5}{r['cdnRefs']:>9}{r['docH']:>7}"
+                  f"  {('OK' if not viol else '越线: ' + '; '.join(viol))}{bounced}")
+        print(f"\n公开面 {len(anon_rows)} 页, 越线 {bad_n}")
+        if args.json_out:
+            with open(args.json_out, "w", encoding="utf-8") as fh:
+                json.dump({"base": args.base, "at": time.strftime("%F %T"), "anon": True, "rows": anon_rows},
+                          fh, ensure_ascii=False, indent=1)
+            print("SAVED", args.json_out)
+        return 1 if bad_n else 0
+
     with sync_playwright() as pw:
         b = pw.chromium.launch(
             headless=not args.headed,
@@ -185,7 +272,7 @@ def main() -> int:
 
     print()
     print(f"共 {len(rows)} 页, 达标 {len(rows) - n_bad}, 越线/失败 {n_bad}  ({time.strftime('%F %T')})")
-    print("说明: 越线不阻断发版, 但需书面说明(设计稿 v3.0 §十); 逐页明细见 --json 输出。")
+    print("说明: 越线不阻断发版, 但需书面说明(设计稿 v3.0 §十一); 逐页明细见 --json 输出。")
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
             json.dump({"base": args.base, "at": time.strftime("%F %T"), "rows": rows}, fh,
