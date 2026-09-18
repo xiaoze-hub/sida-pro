@@ -25,7 +25,7 @@ import {
   type HistoryComparisonResponse,
 } from '@panwatch/api'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
-import InteractiveKline from '@panwatch/biz-ui/components/InteractiveKline'
+import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { useKlineLayer } from '@/hooks/useKlineLayer'
 import { buildAnalysisSections } from '@panwatch/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
@@ -61,16 +61,19 @@ const TOC_SUB_KEY = 'panwatch_toc_show_sub'
  */
 function LayerKline({ symbol, market }: { symbol: string; market: string }) {
   const layer = useKlineLayer(symbol, market)
+  // P2(2026-09-18): 由 InteractiveKline 迁到 KlineChart —— props 一一对应
+  // (只把 initialDays 从字符串改数字); enableMinute 保留原有的「分时」视图。
   return (
-    <InteractiveKline
+    <KlineChart
       symbol={symbol}
       market={market}
       initialInterval="1d"
-      initialDays="120"
+      initialDays={120}
       gsSignals={layer.gsSignals}
       fundFlow={layer.fundFlow}
       events={layer.events}
       supportPressure={layer.supportPressure}
+      enableMinute
     />
   )
 }

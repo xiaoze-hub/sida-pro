@@ -5,6 +5,27 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P2 · 三个页面迁到 KlineChart → v0.10.18)
+
+### refactor(kline): IndexBody / AnalysisDetail / PaperTrading 迁到 KlineChart
+
+**性质**: 迁移(P2, K 线引擎合并第二步)。依据 `docs/K线引擎评估_20260918.md`。
+**动之前先把基线整份备份**(`/tmp/ui_migrate/before` + `before_SAFE` 双份), 避免重犯上次覆盖基线的错。
+
+- `workbench/IndexBody.tsx` 与 `AnalysisDetail.tsx`: `InteractiveKline` → `KlineChart`, props **一一对应**
+  (唯一变化 `initialDays="120"` → `{120}`), 并加 `enableMinute` 保留原有「分时」视图。
+- `PaperTrading.tsx`: 买卖点由 IK 的 `events=[{kind:'my_trade'}]` 改为 KC 既有的 **`tradeMarkers`**
+  (`side: buy/sell` + `text`) —— 与 §6.2 交割单标 K 线**同一套标记语言**, 不再两套语义并存。
+- 测试同步: `workbench-body-refresh-token.test.tsx` 的 mock 目标由 `InteractiveKline` 换成 `KlineChart`
+  (否则真渲染 KC 会创建 lightweight-charts 实例, jsdom 无 canvas → 4 例红)。
+- **发现**: `packages/biz-ui/src/components/KlineModal.tsx` **全仓无人引用**(连 `biz-ui/index.ts` 都没导出)
+  —— 原计划里的"迁移 KlineModal"其实是**死代码**, 归到 P3 直接删, 不迁移。
+
+**这一步之后仅剩 `KlineModal`(死代码)引用 IK**; 待部署后用 `migrate_shot.py` 对三条路由做 before/after
+截图 + DOM 探针比对, 通过即进入 P3(删 IK / MinuteLwcChart 收进 KC / 加"只允许一个 createChart 引导模块"门禁)。
+
+**门禁**: tsc 0 / eslint 0 / vitest **514 passed(73 文件)** / vite build ✅ / ui-rules OK。
+
 ## 2026-09-18 (P1 · KlineChart 分时模式 → v0.10.17)
 
 ### feat(kline): KlineChart 支持分时模式(可开关) + 分时类型收口到单一来源

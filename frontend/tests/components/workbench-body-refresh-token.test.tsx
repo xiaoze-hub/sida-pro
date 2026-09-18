@@ -27,7 +27,8 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 // IndexBody 的 K线主图与本守卫无关(它自己另有取数), 用替身避免拉入 echarts。
-vi.mock('@panwatch/biz-ui/components/InteractiveKline', () => ({
+// P2(2026-09-18): IndexBody 已由 InteractiveKline 迁到 KlineChart → mock 目标跟着换
+vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
   default: (p: { symbol: string }) => <div data-testid="kline-stub">{`kline:${p.symbol}`}</div>,
 }))
 
