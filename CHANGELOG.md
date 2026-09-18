@@ -5,6 +5,20 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P1-4 · 发版前门禁一条命令 → v0.10.32)
+
+### chore(release): `scripts/pre_release.sh` 把门禁与设计验收拉成一条命令
+
+**性质**: 流程工具(P1-4)。起因是今天连踩两次: ①只跑前端门禁就推 tag → **CI 的后端 pytest 红**
+(凭据扫描 + 真实数据断言都只在那里); ②设计稿 v3.0 的验收线若不每次复跑就会退化成口号。
+
+- `scripts/pre_release.sh`: `tsc -b` → `eslint` → `vitest` → `vite build` → `ui-rules` / `check_migrations` /
+  `check_scoped_queries` / `check_is_pg_scope` → **后端 pytest(凭据+契约+真实数据)** → 设计验收巡检
+  (`terminal_audit.py` 终端 8 页 + `--anon` 公开面 4 页, 带 `--json`);
+- 密码只从 `SIDA_SHOT_PW` 环境变量读(**仓库不留凭据**); `SKIP_AUDIT=1` 可只跑门禁;
+- 门禁失败 → 退出码 1(**不要推 tag**); 巡检越线 → 0 但打印明细(设计稿 §十一: 越线需书面说明, 不硬拦);
+- 同步更新 `docs/开发计划_v3.0_20260918.md`(台账补已发批次 + 门禁条目)与 `sida-release-flow` skill。
+
 ## 2026-09-18 (P1-1 · 题材页去"表格墙": 默认分层 + 去逐行线 → v0.10.31)
 
 ### style(ui): 题材页右列默认主线 12 条 + 去掉逐行 1px 线(hairline 526 → 目标 ≤80)
