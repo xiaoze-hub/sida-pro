@@ -164,7 +164,7 @@ function MainlineRow({
                 >
                   <span className="font-medium truncate max-w-[64px]">{c.name}</span>
                   {c.days > 1 ? (
-                    <span className="text-[9px] font-mono text-stock-up shrink-0">
+                    <span className="text-[10px] font-mono text-stock-up shrink-0">
                       {c.days}B
                     </span>
                   ) : null}

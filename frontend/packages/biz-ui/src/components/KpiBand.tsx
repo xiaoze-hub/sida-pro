@@ -75,7 +75,7 @@ function Cell({
   return (
     <div className="min-w-0 px-2 py-1.5" title={title}>
       <div className="truncate text-[10px] text-muted-foreground">{label}</div>
-      <div className={`font-num tabular-nums text-[15px] font-semibold leading-tight ${toneCls}`}>
+      <div className={`font-num tabular-nums text-[16px] font-semibold leading-tight ${toneCls}`}>
         {value}
       </div>
       {sub && <div className="truncate text-[9.5px] text-muted-foreground">{sub}</div>}

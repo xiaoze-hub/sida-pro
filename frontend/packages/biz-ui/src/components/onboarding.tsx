@@ -68,7 +68,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 欢迎使用数智分析 SIDA
               </h2>
-              <p className="text-[14px] text-muted-foreground mb-6">
+              <p className="text-[13px] text-muted-foreground mb-6">
                 {hasStocks
                   ? '你的自选股已就绪，可以开始使用了'
                   : '我们已为你添加了 5 只热门股票作为示例，你可以立即查看实时行情'
@@ -127,7 +127,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 配置 AI 分析
               </h2>
-              <p className="text-[14px] text-muted-foreground mb-4">
+              <p className="text-[13px] text-muted-foreground mb-4">
                 连接 AI 服务后，可获得智能分析功能
               </p>
 
@@ -169,7 +169,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 配置通知渠道
               </h2>
-              <p className="text-[14px] text-muted-foreground mb-4">
+              <p className="text-[13px] text-muted-foreground mb-4">
                 配置后可收到实时推送通知
               </p>
 
@@ -211,7 +211,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
               <h2 className="text-[20px] font-bold text-foreground mb-2">
                 设置完成
               </h2>
-              <p className="text-[14px] text-muted-foreground mb-6">
+              <p className="text-[13px] text-muted-foreground mb-6">
                 你可以随时在「设置」页面修改配置
               </p>
 

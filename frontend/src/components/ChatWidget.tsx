@@ -592,7 +592,7 @@ export default function ChatWidget() {
               <ChevronLeft className="w-4 h-4" />
             </button>
           )}
-          <span className="text-[14px] font-semibold text-foreground">AI 助手</span>
+          <span className="text-[13px] font-semibold text-foreground">AI 助手</span>
           {view === 'chat' && stockContext && (
             <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
               {stockContext.market}:{stockContext.symbol}
@@ -650,7 +650,7 @@ export default function ChatWidget() {
 
                 <div className="mb-2 mt-3 flex items-center justify-between text-[11px] font-medium text-muted-foreground">
                   <span>停靠位置</span>
-                  {desktopDragPosition && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] text-primary">自由位置</span>}
+                  {desktopDragPosition && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">自由位置</span>}
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
                   {DESKTOP_POSITION_OPTIONS.map((option) => {
@@ -799,7 +799,7 @@ export default function ChatWidget() {
                   }`}
                 >
                   {msg.role === 'assistant' ? (
-                    <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-[15px] [&_h2]:text-[14px] [&_h3]:text-[13px] [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:text-[11px] [&_code]:break-words">
+                    <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-[16px] [&_h2]:text-[13px] [&_h3]:text-[13px] [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:text-[11px] [&_code]:break-words">
                       <SafeMarkdown
                         components={{
                           table: ({ children }) => (
