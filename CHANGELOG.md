@@ -5,6 +5,17 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (K 线引擎 P1 范围修正)
+
+### docs: P1 范围实测收窄到 1 项(分时模式), 砍掉 mainIntent/LayerState 的无谓搬迁
+
+**性质**: 评估修正(无代码行为变更)。把四个待迁移页面**实际传的 props** 取出来核对后发现:
+IndexBody / AnalysisDetail / KlineModal 的 props **KC 已全支持**(仅 `initialDays` 由字符串改数字);
+PaperTrading 的 `my_trade` 事件正好对应 KC 既有的 `tradeMarkers`;
+而 `mainIntent` / `LayerState` **全仓没有任何页面在用**(L2Tab 里同名字段属于别的组件) → 不搬, 免得变死代码。
+**唯一真实缺口是分时模式**(IK 内建、用户可见的「分时/K线」切换 + `/quotes/minute` 取数 + KJ-042 故障语义),
+故 P1 = 只补这一项(可选 `enableMinute`, 默认关, 不影响旗舰页)。
+
 ## 2026-09-18 (B5b · 口径漂移前端)
 
 ### feat(caliber): /caliber-compare 接入"口径漂移"区块
