@@ -8,7 +8,7 @@ import DecisionPioneerCard from './DecisionPioneerCard'
 
 /**
  * 主力意图 + 内盘外盘 双卡片(2026-08-13)
- * 挂在 InteractiveKline 分时模式图表下方。数据来自 GET /api/dark-flow?symbol=XXX
+ * 挂在分时模式(MinutePane)图表下方。数据来自 GET /api/dark-flow?symbol=XXX
  * (fetchAPI 自动补 /api 前缀, 这里传 /dark-flow)。盘中每 30 秒自动刷新, 与分时图节奏一致。
  */
 

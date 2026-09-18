@@ -3,7 +3,7 @@ import { fetchAPI } from '@panwatch/api'
 
 /**
  * 竞价快览单行卡(2026-08-19)
- * 挂在 InteractiveKline 分时模式 DarkFlowCards 上方。数据来自
+ * 挂在分时模式(MinutePane)的 DarkFlowCards 上方。数据来自
  * GET /api/auction-snapshot?symbol=XXX (fetchAPI 自动补 /api 前缀)。
  * 展示: 今日竞价 高开+3.38% | 撤单率 24.3% | 操作量 535.75万股 | 成交 5357.5万
  * available=false / 请求失败 -> 渲染 null(不占位不报错); 加载中显示暗色骨架。

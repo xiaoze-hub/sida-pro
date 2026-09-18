@@ -1,5 +1,5 @@
 /**
- * 设计稿 v2.1 §5 —— K 线图层数据取数 hook(供 `InteractiveKline` 这类"图层全靠 props"的图表用)。
+ * 设计稿 v2.1 §5 —— K 线图层数据取数 hook(供 `KlineChart` 这类"图层全靠 props"的图表用; P3: InteractiveKline 已删)。
  *
  * 背景(2026-09-18 审计断链): 后端 `/klines/{symbol}/summary` 早就产出
  * `gs_signals / fund_flow / events / unlock_levels / activity_series`, 图表组件也实现了
