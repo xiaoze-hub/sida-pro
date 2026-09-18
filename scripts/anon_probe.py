@@ -60,12 +60,21 @@ def main() -> int:
         if fonts > 7:
             fails.append(f"/tiers 字号 {fonts} 档 > 公开面上限 7 档")
 
-        bad_paths = [c for c in api_calls if " 200 " not in c and "/api/version" not in c]
-        for c in bad_paths:
-            fails.append(f"/tiers 发起了失败请求: {c}")
+        # 注意: 记录格式是 "状态码 url"(状态码在行首) —— 用子串 " 200 " 判断会**全部误判**,
+        # 必须按空白切分取第一段解析状态码(2026-09-19 这个坑让脚本自己报了假失败)。
+        def _status_of(rec: str) -> int:
+            try:
+                return int(rec.split(" ", 1)[0])
+            except (ValueError, IndexError):
+                return 0
+
+        for rec in api_calls:
+            st = _status_of(rec)
+            if st and st >= 400 and "/api/version" not in rec:
+                fails.append(f"/tiers 发起了失败请求: {rec}")
         if any("/api/api/" in c for c in api_calls):
             fails.append("/tiers 请求出现双前缀 /api/api/ —— fetchAPI 的 baseURL 已含 /api")
-        if not any(c.endswith("/api/tiers") and c.startswith("200") for c in api_calls):
+        if not any(c.endswith("/api/tiers") and _status_of(c) == 200 for c in api_calls):
             fails.append("/tiers 没有成功拉到 /api/tiers")
         notes.append(f"/tiers API 请求: {[c.split(' ')[1] for c in api_calls if '/api/' in c][:4]}")
 
