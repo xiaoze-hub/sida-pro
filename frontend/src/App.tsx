@@ -46,6 +46,7 @@ const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
 const DevelopersPage = lazy(() => import('@/pages/Developers'))
 // 用户协议/隐私政策(合规落地, 2026-09-16): /terms 公开可访问
 const TermsPage = lazy(() => import('@/pages/Terms'))
+const TiersPage = lazy(() => import('@/pages/Tiers'))   // P2-4: 公开档位对比(未登录可看)
 // 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
 const LandingPage = lazy(() => import('@/pages/Landing'))
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
@@ -393,6 +394,20 @@ function App() {
     )
   }
 
+  // /tiers 公开可访问(P2-4, 2026-09-18): 档位对比是**公开面**, 未登录也能看,
+  // 转化路径 = 注册(1 步) → 申请 Pro(2 步)。
+  if (location.pathname === '/tiers' && !isAuthenticated()) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/tiers" element={<TiersPage />} />
+          </Routes>
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <RequireAuth>
     <div className="min-h-screen relative overflow-x-clip bg-background pb-[calc(4rem+var(--disclaimer-h,0px))] md:pb-[var(--disclaimer-h,0px)]">
@@ -619,6 +634,7 @@ function App() {
               <Route path="/developers" element={<DevelopersPage />} />
               {/* 用户协议/隐私政策(合规, 2026-09-16): 已登录也可从设置等处回看 */}
               <Route path="/terms" element={<TermsPage />} />
+              <Route path="/tiers" element={<TiersPage />} />
               {/* Admin 管理后台(2026-09-16): PermGuard(manage_users) + 后端 require_owner 双重 */}
               <Route path="/admin" element={<PermGuard perm="manage_users" myPerms={myPerms}><AdminPage /></PermGuard>} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />

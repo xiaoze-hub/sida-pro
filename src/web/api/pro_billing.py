@@ -100,6 +100,63 @@ def _upgrade_user_keys_to_pro(db: Session, user_id: str) -> int:
     return n
 
 
+# ── 公开档位对比(P2-4, 2026-09-18) ────────────────────────────────────
+
+#: 档位展示顺序与中文名(goest→owner; 权限点来自 permissions.ROLE_PERMISSIONS, 不在这里重复定义)
+#: **只列用户可选档位** —— guest(体验账号)权限集是空的(`ROLE_PERMISSIONS[guest]=frozenset()`),
+#: 摆一列空的会让人以为页面坏了; owner 是管理角色, 不是可购档位。体验账号的受限说明走 `demo_note`。
+_TIER_ORDER = (("member", "免费"), ("pro", "Pro"))
+
+
+@router.get("/tiers")
+def list_tiers(db: Session = Depends(get_db)) -> dict:
+    """公开档位对比(**无需登录**; 落地页/档位页用)。
+
+    **为什么由后端生成**: 权限点与免费档上限都是运行时可调的(`free_tier` 存 app_settings),
+    前端硬编码一份必然漂移 —— 这里直接从 `permissions.get_role_permissions` + `PERMISSION_LABELS`
+    + `free_tier` 现读现拼, 前端只负责排版。
+
+    **诚实口径**: 内测期**不收费**, 所以不返回任何价格字段(只返回 `billing_enabled=false`);
+    Pro 走"申请 → 管理员开通"; 免费档上限是**运行时真值**(不是文档里的旧数字)。
+    """
+    from src.core import free_tier
+    from src.core.permissions import PERMISSION_LABELS, get_role_permissions
+
+    rows: list[dict] = []
+    for role, label in _TIER_ORDER:
+        perms = get_role_permissions(role)
+        groups: dict[str, list[str]] = {}
+        for key in sorted(perms, key=lambda k: (PERMISSION_LABELS.get(k, ("", ""))[1], k)):
+            name, group = PERMISSION_LABELS.get(key, (key, "其他"))
+            groups.setdefault(group, []).append(name)
+        rows.append({
+            "key": role,
+            "label": label,
+            "groups": [{"group": g, "items": items} for g, items in sorted(groups.items())],
+            "count": len(perms),
+        })
+
+    # 免费档的运行时可调上限(现读, 30s 缓存由 free_tier 内部管)
+    try:
+        limits = {
+            "watchlist_max": free_tier.member_watchlist_max(db),
+            "alert_max": free_tier.member_alert_max(db),
+            "trial_daily_limit": free_tier.trial_daily_limit(db),
+        }
+    except Exception:  # noqa: BLE001  —— 读不到就如实说"暂不可读", 不编数字
+        limits = None
+
+    return {
+        "tiers": rows,
+        "member_limits": limits,
+        "billing_enabled": False,
+        "note": "内测期不收费。Pro 需提交申请, 由管理员开通。",
+        "apply_endpoint": "/api/pro/apply",
+        "limits_note": "免费档上限由管理员在设置页调整, 此处为实时值。" if limits else "免费档上限暂时读不到(数据库不可用)。",
+        "demo_note": "另有时限体验账号(受限较多), 由管理员按需开通。",
+    }
+
+
 # ── 用户侧 ──────────────────────────────────────────────────────────
 
 @router.post("/pro/apply")

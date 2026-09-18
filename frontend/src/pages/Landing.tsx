@@ -154,6 +154,7 @@ export default function LandingPage() {
             <span className="hidden font-mono text-[12px] text-primary/50 dark:text-cyan-500/40 sm:inline">v1.0</span>
           </Link>
           <nav className="flex items-center gap-5">
+            <Link to="/tiers" className="font-mono text-[12px] text-muted-foreground dark:text-slate-500 hover:text-primary dark:hover:text-cyan-300 transition-colors">tiers</Link>
             <Link to="/developers" className="font-mono text-[12px] text-muted-foreground dark:text-slate-500 hover:text-primary dark:hover:text-cyan-300 transition-colors">docs</Link>
             <Link to="/login" className="font-mono text-[12px] text-muted-foreground dark:text-slate-500 hover:text-primary dark:hover:text-cyan-300 transition-colors">login</Link>
             <Link to="/login?mode=register" className="rounded-lg border border-primary/25 dark:border-cyan-400/25 bg-primary/10 dark:bg-cyan-500/10 px-4 py-1.5 font-mono text-[12px] text-primary dark:text-cyan-300 hover:bg-primary/20 dark:hover:bg-cyan-500/20 transition-all">register</Link>
