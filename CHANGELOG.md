@@ -5,6 +5,31 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (P3 · 淘汰 InteractiveKline → v0.10.23)
+
+### refactor(kline): 删除 InteractiveKline(1280 行)与死代码 KlineModal + 加 R11 单内核门禁
+
+**性质**: 收尾(P3, 合并第三步)。前置: P2 三页迁移完成且**验收通过**(DOM 逐项核实 + 并排视觉评审 +
+补回 MA 读数 v0.10.22)。
+
+- **删** `packages/biz-ui/src/components/InteractiveKline.tsx`(1280 行)与
+  `packages/biz-ui/src/components/KlineModal.tsx`(**全仓无人引用**的死代码, 连 `biz-ui/index.ts` 都没导出)。
+- `useKlineLayer` 不再借用 IK 的 `GsSignalPoint`, 就地声明本 hook 的输出契约
+  **`LayeredGsSignal`**(`price` 必填 —— 本 hook 负责"缺价格的点不喂图", 比 KlineChart 的宽松版更严;
+  两套形状**有意并存**, 测试里写明了理由)。
+- 新增 ui-rules **R11**: 全仓 `createChart(` 只允许出现在 `KlineChart.tsx` / `MinuteLwcChart.tsx`
+  —— 历史上三套组件各自建图, 任何全局能力(图表库升级 / 数据源裁决 / 成交标记)都得改三遍, 这条把它锁成单内核。
+  **双向验证**: 临时在别处写 `c.createChart({})` → CI 红; 删掉 → 绿。
+- 棘轮基线清理: 从 `ui-rules-baseline.json` 清掉已删组件的条目(54→53), 保持"只降不升"的口径干净。
+
+**至此**: K 线渲染 = **一个内核(KlineChart) + 一个分时部件(MinuteLwcChart) + 一个分时面板(MinutePane)**,
+六图层 / §10.2 交互 / §12 数据源裁决 / §6.2 成交标记 / 主力意图 / 分时 —— 全部收敛在这一套里。
+
+**回归**: `kline-types-consolidation.test.ts` 重写为"P3 后的现状"(类型单一来源 + 两套 GsSignalPoint 有意并存 +
+**全仓不再 import/渲染 InteractiveKline**); `ui-walkthrough-p0.test.tsx` 的断言对象改为存活的两个组件,
+并新增"不得依赖 CDN 全局(window.LightweightCharts)与 CDN 域名"两条。
+全量: tsc 0 / eslint 0 / vitest **531 passed(74 文件)** / build ✅ / ui-rules OK。
+
 ## 2026-09-18 (P2 验收发现并补回 · 光标均线读数 → v0.10.22)
 
 ### fix(kline): 光标读数补回 MA5/10/20(迁移验收发现的可见能力差异)

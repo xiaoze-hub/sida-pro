@@ -18,6 +18,9 @@
  * R8 固定底部条必须预留空间(2026-09-18 UI 走查): `fixed inset-x-0 bottom*` 的常驻条会压住
  *    页面最后一行(走查 9 页复现)。该文件必须同时出现 `--disclaimer-h`(或自行补偿 padding),
  *    否则 CI 失败 —— 防止以后再加一条固定条重犯。
+ * R11 只允许两个 K 线引导模块(2026-09-18 K 线引擎合并 P3): 全仓 `createChart(` 只许出现在
+ *    `KlineChart.tsx` / `MinuteLwcChart.tsx`。历史上 IK/KC/MinuteLwcChart 三套各自建图,
+ *    任何全局能力(图表库升级、数据源裁决、成交标记)都要改三遍 —— 这条门禁把它锁死为单核。
  * R10 字阶棘轮(2026-09-18 UI 走查 B4): 全站曾出现 12 种 px 字号(9/10/11/12/13/14/15/16/17/18/20/22),
  *    "层级平淡"其实是"级数失控"。规范只留 6 级: 10 辅助 / 11 次要 / 12 正文 / 13 区块标题 /
  *    16 页面标题 / 20 大数字。**已有文件按 baseline 只降不升**, 新文件一律 0(基线见
@@ -166,6 +169,23 @@ for (const f of files) {
   }
 }
 for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R10] ${k}: 0 — 可从 baseline 删除`)
+
+// R11: 只允许两个 K 线引导模块(见文件头 R11 说明)
+{
+  const ALLOWED_BOOTSTRAP = new Set([
+    'frontend/packages/biz-ui/src/components/KlineChart.tsx',
+    'frontend/packages/biz-ui/src/components/MinuteLwcChart.tsx',
+  ])
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    if (!/\bcreateChart\s*\(/.test(src)) continue
+    const key = normKey(f)
+    if (!ALLOWED_BOOTSTRAP.has(key)) {
+      bad('R11-MULTIPLE-CHART-BOOTSTRAP', rel(f), 1,
+          `createChart 只允许出现在 ${[...ALLOWED_BOOTSTRAP].map((x) => x.split('/').pop()).join(' / ')}`)
+    }
+  }
+}
 
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)
