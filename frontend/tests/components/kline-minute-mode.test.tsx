@@ -64,3 +64,17 @@ describe('KlineChart 主力意图接线(P2 补搬)', () => {
     expect(KC).toMatch(/props\.tradeMarkers, intent\]\)/)
   })
 })
+
+// ── P2 验收补回(2026-09-18): 均线读数 ──────────────────────────────────────────
+describe('KlineChart 光标均线读数(迁移验收发现缺失后补回)', () => {
+  it('光标读数含 MA5/MA10/MA20 三档, 且缺值显 --(不补数)', () => {
+    expect(KC).toMatch(/ma5\?: number \| null/)
+    expect(KC).toMatch(/MA5 \{hoverReadout\.ma5 == null \? '--' : safeFixed\(hoverReadout\.ma5\)\}/)
+    expect(KC).toMatch(/MA20 \{hoverReadout\.ma20 == null \? '--'/)
+  })
+
+  it('均线值复用绘制时算好的数组, 不重复计算', () => {
+    expect(KC).toMatch(/maValuesRef\.current = \{ ma5, ma10, ma20 \}/)
+    expect(KC).toMatch(/const mv = maValuesRef\.current/)
+  })
+})
