@@ -14,8 +14,21 @@ import CaliberComparePage from '@/pages/CaliberCompare'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
 
+// 页面现在还会拉「口径漂移」(B5): 这里给它一个空留痕的稳定返回值,
+// 让原有 4 条断言只针对对照区(漂移区另有专门测试文件)。
 vi.mock('@panwatch/api', () => ({
   caliberCompareApi: { get: getMock },
+  caliberDriftApi: {
+    get: vi.fn().mockResolvedValue({
+      symbol: '002361',
+      days: 30,
+      field_by_source: { thsdk_l2: '主力净流入', tencent_dark: '主力净额（≥20万）', eastmoney_flow: '主力净流入' },
+      series: [],
+      comparisons: [],
+      archived_days: 0,
+      note: '',
+    }),
+  },
 }))
 
 const RESPONSE = {
