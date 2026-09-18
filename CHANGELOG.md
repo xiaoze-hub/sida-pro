@@ -5,6 +5,25 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-18 (CI 红修复 · 凭据脱敏 + 量纲防线 → v0.10.28)
+
+### fix(ci): 巡检脚本去掉硬编码密码 + 拉升分析断言降为量纲防线
+
+**性质**: 修复 CI 门禁红(两个都拦在 **真实问题上**, 不是误报)。v0.10.26 的 ACR 流水线由此 fail。
+
+1. **`scripts/terminal_audit.py` 硬编码生产密码** —— `SIDA_SHOT_PW` 的默认值写了历史固定密码,
+   被 `tests/test_auth_no_default_password.py::test_no_fixed_admin_password_anywhere` 当场拦下
+   (「固定密码残留: ['scripts/terminal_audit.py']」)。这是**我在设计稿 v3.0 那批(6763299)引入的真回归** ——
+   仓库铁律"凭据一律走环境变量、不留字面量"我自己写进了设计稿却在脚本里违规。
+   修法: **密码只从环境变量读**, 不给默认值; 缺变量时明确报错并退出(2), 不回退到任何内置值。实测残留 0 处。
+2. **`tests/test_rally_analysis.py` 断言被真实行情顶破** —— 原断言 `main_net_total < 2e8`(防口径错乱),
+   2026-09-18 实测 002361 拉升窗口为 **2.03e8**, 超上限。
+   判断: 这是**真实市场值**, 不是口径错 —— 该断言的本意是**防量纲错**(万元/元混淆会差 1e4 倍 → ~1e12),
+   所以上限松到 **5e9**(< 50 亿), 既不再被真实数据顶破, 又仍能拦住 1e4 量纲错(相差 3 个数量级)。
+   改动处写明依据与实测值, 不做"静默改断言"。
+
+**回归**: `pytest tests/test_auth_no_default_password.py tests/test_rally_analysis.py` → **10 passed**。
+
 ## 2026-09-18 (P0-3 · 缺数折叠组件 + 资金流水整列缺失收口 → v0.10.27)
 
 ### feat(ui): `MissingFields` 缺数折叠 + 资金流水"整列全缺不摆一列 --"

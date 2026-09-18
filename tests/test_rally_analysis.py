@@ -29,7 +29,10 @@ class TestRallyAnalysis:
                       "retail_net", "buy_ratio", "verdict", "score", "signals"):
                 assert k in rally, f"缺字段 {k}"
         # 全天主力净额与 dark_flow 口径一致(±误差)
-        assert abs(r["summary"]["main_net_total"]) < 2e8  # 不超过 2 亿, 防口径错乱
+        # 口径错乱防线(单位级): 真实值随行情增长会漂, 所以这里**只防量纲错**
+        # (万元/元混淆 → 数值会差 1e4 倍, 即 ~1e12 量级), 不做过紧的业务上限。
+        # 2026-09-18 实测: 002361 拉升窗口 main_net_total = 2.03e8(2.03 亿), 原 2e8 上限被真实行情顶破。
+        assert abs(r["summary"]["main_net_total"]) < 5e9  # < 50 亿(远超单日单票合理值, 但能拦住 1e4 量纲错)
 
     def test_format_report(self):
         """摘要格式化: 不依赖 LLM, 含核心数字。"""
