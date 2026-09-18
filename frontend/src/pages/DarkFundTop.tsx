@@ -15,6 +15,7 @@
  *
  * P2 (2026-09-18): i18n + Card 组件 + 窄屏表格转卡片 + 骨架屏
  */
+import { ANPAN, MINGPAN } from '@panwatch/biz-ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, RefreshCw, TrendingUp } from 'lucide-react'
@@ -187,7 +188,7 @@ export default function DarkFundTopPage() {
                   <th
                     className="px-3 py-2 text-right font-medium cursor-pointer select-none hover:text-foreground min-h-[44px]"
                     onClick={() => toggleSort('main')}
-                    title={t('darkFundTop.mainNetSort')}
+                    title={`${t('darkFundTop.mainNetSort')}\n本列 = 同花顺官方主力净流入；与明盘（${MINGPAN.oneLine}）不是同一口径，也不冒充暗盘（${ANPAN.oneLine}）`}
                   >
                     {t('darkFundTop.mainNet')}{sortMark('main')}
                   </th>

@@ -3,6 +3,7 @@ import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { activityLevelColor } from '../lib/stock-colors'
 import ActivitySparkline from './ActivitySparkline'
+import { GS_SIGNAL, glossaryTooltip } from '../lib/caliber-glossary'
 
 /**
  * 数智决策三指标卡片(2026-08-30)
@@ -151,7 +152,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
             <div className="text-[13px] font-semibold text-foreground">🧭 数智决策三指标</div>
-            <span className="text-[10px] text-muted-foreground">GS趋势 × 机构活跃度 × L2资金</span>
+            <span className="text-[10px] text-muted-foreground">GS 信号 × 机构活跃度 × L2 主力净流入（明盘口径）</span>
           </div>
           {refreshButton}
         </div>
@@ -179,9 +180,9 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           )}
         </div>
 
-        {/* GS策略(趋势过滤) */}
-        <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
-          <div className="text-muted-foreground mb-0.5">GS策略(趋势过滤)</div>
+        {/* GS 信号(AI 大数据多因子机会/风险, 盘中实时) —— 口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
+        <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={glossaryTooltip(GS_SIGNAL)}>
+          <div className="text-muted-foreground mb-0.5">GS 信号（机会/风险）</div>
           {gs ? (
             <>
               <div className="font-mono text-[16px] font-semibold text-foreground">{gs.state}</div>
@@ -189,7 +190,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 快线{gs.a0?.toFixed(2)} / 慢线{gs.bb0?.toFixed(2)}
               </div>
               <div className="text-[10px] text-muted-foreground/70 mt-0.5">
-                方向过滤 · 买卖点滞后仅参考
+                G={GS_SIGNAL.g.meaning} · S={GS_SIGNAL.s.meaning}
               </div>
             </>
           ) : (
