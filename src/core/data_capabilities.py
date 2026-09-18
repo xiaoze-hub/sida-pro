@@ -139,6 +139,8 @@ def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = 
         if t:
             by_type.setdefault(t, []).append(r)
 
+    from src.core.data_impact import impact_of
+
     items = []
     for t in sorted(by_type):
         sources = sorted((_source_view(r, health) for r in by_type[t]),
@@ -160,6 +162,8 @@ def build_capabilities(rows: list[dict], health: dict, freshness: dict | None = 
                 "samples": verdict["samples"],
                 "basis": verdict.get("basis") or "none",
             },
+            # P2-3(2026-09-18): 影响面 —— "降级会影响我哪个页面 / 看到的是缺的还是有替代"
+            "impact": impact_of(t),
             "enabled_count": sum(1 for s in sources if s["enabled"]),
             "latest_date": latest,
             "age_days": _age_days(latest, today),
