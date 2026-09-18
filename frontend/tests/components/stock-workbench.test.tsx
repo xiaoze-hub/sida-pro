@@ -317,10 +317,11 @@ describe('StockWorkbench 三带骨架', () => {
 
     // 带1
     expect(screen.getByTestId('band1').textContent).toContain('band1:002636:CN:stock')
-    // 外壳(mx-auto max-w-[1500px] p-3 —— 与改版前同惯例)
+    // 外壳(mx-auto max-w-none p-3 —— P0-1(2026-09-18): 工作台放开 1500px 上限,
+    // 配合侧栏默认折叠, 把屏宽交给 K 线(铁律: K线是主角, ≥80% 屏宽))
     const root = screen.getByTestId('band1').parentElement as HTMLElement
     expect(root.className).toContain('mx-auto')
-    expect(root.className).toContain('max-w-[1500px]')
+    expect(root.className).toContain('max-w-none')
     expect(root.className).toContain('p-3')
 
     // 带2: 主图(日线 / 120 天 / 高 420)+ 右栏固定 320px
@@ -329,7 +330,9 @@ describe('StockWorkbench 三带骨架', () => {
     expect(screen.getByTestId('kline').getAttribute('data-gate')).toBe(
       'tck=false;wencai=true;reason=tck 不可用(down)',
     )
-    expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
+    // P0-1: 右栏**默认折叠** —— 默认看不到速览内容, 只有一个展开入口(把宽度还给 K 线)
+    expect(screen.queryByTestId('rail')).toBeNull()
+    const railToggle = screen.getByTestId('rail-toggle')
     // 主图面板外壳: `min-w-0` 是**承重**类 —— 没有它, echarts canvas 会撑破与固定
     // `w-[320px]` 右栏并排的 flex 行(overflow);`flex-1` 让它吃掉剩余宽度。
     const klineBox = screen.getByTestId('kline').parentElement as HTMLElement
@@ -342,12 +345,18 @@ describe('StockWorkbench 三带骨架', () => {
     // 2026-09-18: 右栏列里多了 §10.2④ 的「区间统计」卡位, rail 的**直系父**改为滚动容器,
     // 固定宽落在它上一层的**列容器**上 —— 用 closest('[class*=…]') 定位该列, 不写死层数,
     // 免得下次再插一层卡就误报(断言的是"rail 所在的列宽 320px 且不被压扁")。
+    // 展开后: 速览内容原样回来(折叠只改展示, 不删功能)
+    fireEvent.click(railToggle)
+    expect(screen.getByTestId('rail').textContent).toBe('rail:002636:CN')
     const railColumn = screen.getByTestId('rail').closest('[class*="w-[320px]"]') as HTMLElement
     expect(railColumn).toBeTruthy()
     expect(railColumn.className).toContain('shrink-0')
     // rail 自身仍在可滚动容器里(长速览卡不撑破列高)
     const railBox = screen.getByTestId('rail').parentElement as HTMLElement
     expect(railBox.className).toContain('overflow-y-auto')
+    // 再点一次收起 → 回到折叠态(开关可逆)
+    fireEvent.click(screen.getByTestId('rail-toggle'))
+    expect(screen.queryByTestId('rail')).toBeNull()
 
     // 带3: 6 键(顺序 = WORKBENCH_TABS)+ 默认选中「盘口资金」+ **真实 L2Tab**(Task 17)
     const tabs = screen.getAllByRole('tab')
@@ -549,6 +558,8 @@ describe('StockWorkbench 三带骨架', () => {
 
   it('Finding 1 刷新: 个股带2(主图 + 右栏 + 激活标签)重挂载, ?tab= 不丢', async () => {
     renderAt('/stocks/002636?tab=news')
+    // P0-1: 右栏默认折叠, 本用例要验"右栏随刷新重挂载" → 先展开(展开态才是它被渲染的前提)
+    fireEvent.click(screen.getByTestId('rail-toggle'))
     const klineBefore = screen.getByTestId('kline')
     const railBefore = screen.getByTestId('rail')
     // 刷新前: 标签挂载 1 次(research 从未出现), 无卸载

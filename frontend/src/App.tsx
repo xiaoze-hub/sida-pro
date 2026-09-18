@@ -264,7 +264,13 @@ function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   // 设计稿 v2.0 §4.2 可折叠侧边栏: 折叠态持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem('sida_sidebar_collapsed') === '1' } catch { return false }
+    try {
+      const saved = localStorage.getItem('sida_sidebar_collapsed')
+      if (saved === '1' || saved === '0') return saved === '1'   // 用户显式选择永远优先
+      // P0-1(2026-09-18): **没表过态的**用户在行情终端页(个股/指数/板块工作台)默认折叠侧栏 ——
+      // 铁律是"K 线是绝对主角(≥80% 屏宽)", 第一屏就该把宽度让给它; 展开一次即被记住。
+      return /^\/stocks\//.test(window.location.pathname)
+    } catch { return false }
   })
   const toggleSidebar = () => setSidebarCollapsed((c) => {
     try { localStorage.setItem('sida_sidebar_collapsed', c ? '0' : '1') } catch {}

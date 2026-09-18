@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi } from '@panwatch/api'
 import KlineChart, { type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
@@ -239,6 +240,16 @@ export default function StockWorkbench() {
   // §12: 数据源健康(60s 轮询; 失败/未知一律按不可用 → 灰显, 不假装有数据)
   const { isReady: sourceReady, reasonOf: sourceReason } = useSourceHealth()
   const [statsDismissed, setStatsDismissed] = useState(false)
+  /** P0-1(2026-09-18): 右栏可折叠 —— 默认折叠, 把屏宽让给 K 线(铁律: K线是绝对主角, ≥80% 屏宽)。
+   *  用户显式点过就记住他的选择(与侧边栏同一个套路), 不跟用户较劲。 */
+  const [railOpen, setRailOpen] = useState(() => {
+    try { return localStorage.getItem('sida_workbench_rail') === '1' } catch { return false }
+  })
+  const toggleRail = () =>
+    setRailOpen((v) => {
+      try { localStorage.setItem('sida_workbench_rail', v ? '0' : '1') } catch { /* 隐私模式忽略 */ }
+      return !v
+    })
 
   /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。 */
   const setQuery = (key: 'type' | 'tab' | 'period', value: string) =>
@@ -247,7 +258,7 @@ export default function StockWorkbench() {
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="mx-auto max-w-[1500px] p-3">
+    <div className="mx-auto max-w-none p-3">
       {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
       <HeaderBand
         symbol={symbol}
@@ -298,15 +309,47 @@ export default function StockWorkbench() {
                 sourceReason={sourceReason}
               />
             </div>
-            <div className="flex w-[320px] shrink-0 flex-col gap-2">
-              {/* §10.2④: 区间统计(资金面板顶部那一行) */}
-              {rangeStats && !statsDismissed && (
-                <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
-              )}
-              <div className="scrollbar max-h-[436px] overflow-y-auto">
-                <QuickRail symbol={symbol} market={MARKET} />
+            {railOpen ? (
+              <div className="flex w-[320px] shrink-0 flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-muted-foreground">速览</span>
+                  <button
+                    type="button"
+                    onClick={toggleRail}
+                    title="收起速览栏(把宽度还给 K 线)"
+                    aria-label="收起速览栏"
+                    data-testid="rail-toggle"
+                    className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronRight className="h-3 w-3" />
+                  </button>
+                </div>
+                {/* §10.2④: 区间统计(资金面板顶部那一行) */}
+                {rangeStats && !statsDismissed && (
+                  <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
+                )}
+                <div className="scrollbar max-h-[436px] overflow-y-auto">
+                  <QuickRail symbol={symbol} market={MARKET} />
+                </div>
               </div>
-            </div>
+            ) : (
+              /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
+              <div className="flex w-14 shrink-0 flex-col items-center gap-2 rounded border border-border/60 py-2">
+                <button
+                  type="button"
+                  onClick={toggleRail}
+                  title="展开速览栏"
+                  aria-label="展开速览栏"
+                  data-testid="rail-toggle"
+                  className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
+                  速览
+                </span>
+              </div>
+            )}
           </div>
           {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
           <TabBar value={tab} onChange={(t) => setQuery('tab', t)} />
