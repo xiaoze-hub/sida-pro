@@ -94,6 +94,9 @@ PROBE_ANON_JS = r"""() => {
     const u = el.getAttribute('src') || el.getAttribute('href') || '';
     if (/^(https?:)?\/\//.test(u) && !u.includes(location.host)) cdnRefs++;
   });
+  // G/S 颜色验收(2026-09-19): canvas 画不进 DOM, KlineChart 把**解析后的颜色**挂在容器上,
+  // 这里读出来在 Python 侧判色相 —— 生产上真拦住"token 被改成绿/红互换"。
+  const gsEl = document.querySelector('[data-gs-go]');
   const txt = document.body.innerText || '';
   return {
     fontSizes: Object.keys(sizes).map(Number).sort((a, b) => a - b),
@@ -208,6 +211,8 @@ PROBE_JS = r"""() => {
     dash: (txt.match(/--/g) || []).length,
     zeroish: (txt.match(/\b0\.0+\b/g) || []).length,
     textLen: txt.length,   // 页面是否"渲染上来了"的粗判据(见 judge 的未就绪短路)
+    gsGo: gsEl ? gsEl.getAttribute('data-gs-go') : null,
+    gsStop: gsEl ? gsEl.getAttribute('data-gs-stop') : null,
     docH,
     density: docH ? +(txt.length / (docH / 1000)).toFixed(0) : 0,
     densityNoChart: docH - Math.round(canvasH) > 200
@@ -231,6 +236,49 @@ def _login(base: str, user: str, pw: str) -> str:
     return (body.get("data") or {}).get("token") or ""
 
 
+def _hue(color: str | None) -> float | None:
+    """#rrggbb / #rgb → 色相(0-360); 解析不了返回 None(如实说"量不出", 不猜)。"""
+    if not color:
+        return None
+    c = color.strip().lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    if len(c) != 6:
+        return None
+    try:
+        r, g, b = (int(c[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return None
+    mx, mn = max(r, g, b), min(r, g, b)
+    d = mx - mn
+    if d == 0:
+        return 0.0
+    if mx == r:
+        h = ((g - b) / d) % 6
+    elif mx == g:
+        h = (b - r) / d + 2
+    else:
+        h = (r - g) / d + 4
+    return (h * 60) % 360
+
+
+def gs_color_violation(go: str | None, stop: str | None) -> str | None:
+    """G/S 颜色验收线: **G(机会)=红系, S(风险)=绿系**(A 股惯例)。
+
+    注意判**色相**而不是字符串相等 —— 换个同色系的红/绿都算过, 只有"红绿互换/变成灰蓝"才判越线。
+    量不到(元素不存在/颜色解析失败)返回 None 表示**不判**(该页没画 K 线是正常的)。
+    """
+    hgo, hstop = _hue(go), _hue(stop)
+    if hgo is None or hstop is None:
+        return None
+    go_red = hgo <= 25 or hgo >= 330
+    stop_green = 90 < hstop < 170
+    if not go_red or not stop_green:
+        return (f"GS 颜色不符(G 应红系 got {go}/hue {hgo:.0f}; "
+                f"S 应绿系 got {stop}/hue {hstop:.0f})")
+    return None
+
+
 def judge(row: dict) -> list[str]:
     """按阈值判定单页越线项。只报**适用该页**的指标, 避免误伤。
 
@@ -242,6 +290,9 @@ def judge(row: dict) -> list[str]:
     label = row["name"]
     if int(row.get("textLen") or 0) < 200:
         return []
+    viol = gs_color_violation(row.get("gsGo"), row.get("gsStop"))
+    if viol:
+        bad.append(viol)
     for key, spec in TARGETS.items():
         pages = spec.get("pages")
         if pages is not None and label not in pages:  # type: ignore[operator]

@@ -5,6 +5,32 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-19 (G/S 颜色做成可测验收线 → v0.10.47)
+
+### test(colors): G/S 颜色规则单一来源 + 三层验收线(规则 / token / 生产 DOM)
+
+**性质**: 按用户要求把"G/S 颜色"从**约定**变成**可测**(老板拍板项)。不改视觉, 改的是"以后不许改错"。
+
+**规则**: **A 股惯例 —— G(机会方向)= 红, S(风险方向)= 绿**。
+背景: 同花顺原版是 G 绿 S 红, SIDA 按国内惯例做了反转; 此前这条只写在注释里, 没有任何机器判据。
+
+**三层验收线**:
+1. **规则层(单一来源)**: `stock-colors.ts` 新增 `GS_COLOR_KIND` / `DIRECTION_COLOR_KIND`
+   (`G/S` 与交割单 `buy/sell` 共用一张表), `gsColorFor()` / `directionColorFor()`;
+   **调用点不许再手写 `isBuy ? go : stop` 三元** —— KlineChart 两处已改走函数
+   (顺带修掉一处隐患: 交割单 marker 与 K 线 marker 各写各的, 容易改一处漏一处)。
+2. **token 层**: 测试读 `index.css`, 断言 `--gs-go` 指向 `--stock-up`(红系)、`--gs-stop` 指向
+   `--stock-down`(绿系), 且**不许对调**; 连 `readGsColors()` 的兜底常量也验色相。
+   判**色相**而非字符串相等: 换个同色系的红/绿算过, 红绿互换才算越线(避免误报, 也避免被绕过)。
+3. **生产层**: K 线 marker 画在 canvas 上, DOM 查不到 —— 所以 KlineChart 把**解析后的实际颜色**
+   挂到容器(`data-gs-go` / `data-gs-stop`); `scripts/terminal_audit.py` 在个股页读出并判色相,
+   越线即报"GS 颜色不符(G 应红系...)"。**这样连"有人把 CSS token 改成绿/红"也拦得住。**
+
+**反向验证(证明它真的会红)**: 故意把 `GS_COLOR_KIND` 改成 `{G:'down',S:'up'}` → 前端用例立刻失败;
+恢复 → 全绿。巡检侧同样验证: 互换色值 → `gs_color_violation` 返回明确越线文案; 传 None → **不判**(量不到不猜)。
+
+**测试**: 前端 `tests/lib/gs-color-rule.test.ts` 10 例; 后端 `tests/test_gs_color_audit.py` 6 例。
+
 ## 2026-09-19 (修: core→web 反向依赖被门禁拦下 → v0.10.46)
 
 ### fix(core): IC 时序模块改用 src/db/session; 并记一条"本地只跑部分后端测试 = 没跑门禁"的教训
