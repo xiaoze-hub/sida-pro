@@ -5,6 +5,21 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-19 (公开面实证补两条判据 → v0.10.50)
+
+`scripts/anon_probe.py`(部署验收第 ⑤ 步, 每次发版都跑) 增加两条**专门针对本次事故**的判据:
+
+1. **公开面不许泄露管理员端点** —— 匿名访问 `/developers`, 页面文本里不得出现
+   `/api/users/admin/list`、`/api/admin/skills/keys`、`/api/admin/rotate-secrets`、
+   `/api/pro/admin/applications` 等 6 条路径;
+2. **登录前端点不许被 CSRF 拦死** —— 匿名上下文直接 `POST /api/auth/send-code`,
+   允许 4xx 业务错(如"邮件服务未配置"), 但**不许**是 403「CSRF token 缺失」。
+
+**反向验证(在修复前的 v0.10.46 上实跑)**: 两条判据**同时命中**, 输出
+`✗ /developers 公开面泄露管理员端点: [...6 条...]` 与
+`✗ POST /api/auth/send-code 被 CSRF 拦死: {"code":403,...,"message":"CSRF token 缺失, 请重新登录"}` ——
+证明判据抓的正是用户报的这个故障, 不是摆设。修复上线后再跑应转为通过。
+
 ## 2026-09-19 (注册页提前告知"邮件服务未开通" → v0.10.49)
 
 **性质**: 承接 v0.10.48(邮箱注册 403 修复)的**诚实性收尾**。用户侧反馈"邮箱注册报错",

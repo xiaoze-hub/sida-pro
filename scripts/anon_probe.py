@@ -99,6 +99,40 @@ def main() -> int:
             fails.append("/developers 调试台没有可点的运行按钮")
         notes.append(f"/developers 调试台控件数={dev['inputs']} 运行按钮={dev['runBtn']}")
 
+        # ── 公开面不许透露管理员端点(2026-09-19 用户报障) ─────────────
+        # /developers 是匿名可见的, 但"API 参考"曾列出 12 个 owner 专用端点
+        # (用户列表/改角色/全部 API Key/轮换密钥/申请审核) —— 信息暴露。
+        # 判据: 匿名访客看到的页面文本里**不得出现**这些路径。
+        OWNER_PATHS = (
+            "/api/users/admin/list", "/api/users/admin/stats",
+            "/api/admin/skills/keys", "/api/admin/rotate-secrets",
+            "/api/pro/admin/applications", "/api/users/admin/",
+        )
+        dev_text = pg.evaluate("() => document.body.innerText || ''") or ""
+        leaked = [p for p in OWNER_PATHS if p in dev_text]
+        if leaked:
+            fails.append(f"/developers 公开面泄露管理员端点: {leaked}")
+        else:
+            notes.append(f"/developers 管理员端点未泄露(检查 {len(OWNER_PATHS)} 条路径)")
+
+        # ── 登录前端点不许被 CSRF 拦成 403(2026-09-19 事故) ───────────
+        # 匿名浏览器**没有** csrf_token cookie; send-code 是注册/验证码登录第一步,
+        # 必须可访问(允 4xx 业务错如"未配置邮件服务", 但不许是 CSRF 403)。
+        sc = pg.evaluate("""async () => {
+          try {
+            const r = await fetch('/api/auth/send-code', {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: 'anon-probe@example.com', purpose: 'register' }),
+            });
+            return { status: r.status, text: (await r.text()).slice(0, 200) };
+          } catch (e) { return { status: -1, text: String(e) }; }
+        }""") or {}
+        if sc.get("status") == 403 and "CSRF" in (sc.get("text") or ""):
+            fails.append(f"POST /api/auth/send-code 被 CSRF 拦死(匿名注册第一步走不通): {sc.get('text')}")
+        else:
+            notes.append(f"/api/auth/send-code 匿名 POST 未被 CSRF 拦(HTTP {sc.get('status')})")
+
         # ── 落地页: 首屏必须答"给谁用", 且不引外部 CDN ───────────────
         pg.goto(f"{base}/", wait_until="networkidle", timeout=60000)
         pg.wait_for_timeout(2000)
