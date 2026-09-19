@@ -489,9 +489,14 @@ CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # 登录前无 token; webhook 服务端调用无浏览器 Cookie
 # logout: 清 Cookie 的幂等端点, 无 Bearer 时也须放行(Cookie-only 客户端)
 CSRF_EXEMPT_PREFIXES = (
-    "/api/auth/login",
+    "/api/auth/login",          # 含 /api/auth/login-by-email(前缀命中)
     "/api/auth/register",
     "/api/auth/logout",
+    # 2026-09-19 修: 邮箱验证码是**登录前**就要用的端点(注册/验证码登录第一步),
+    # 此时浏览器**还没有** csrf_token cookie → 必被拦成 403「CSRF token 缺失」,
+    # 表现就是"点了发送验证码没反应/报错", 邮箱注册整条流程走不通。
+    # 安全性: 该端点自带发送冷却(check_send_cooldown)+ 全局限流, 与 login 同级对待。
+    "/api/auth/send-code",
     "/api/webhooks/",
 )
 
