@@ -95,6 +95,8 @@ class RegisterRequest(BaseModel):
     username: Optional[str] = None  # 可选; 不传则用 email 前缀生成
     password: str
     code: str  # 邮箱验证码(2026-09-16); purpose=register, 必填
+    #: 邀请码(2026-09-19 内部使用模式); REGISTER_MODE=invite 时必填
+    invite_code: Optional[str] = None
 
 
 # 简单邮箱正则(2026-09-16 邮箱注册): local@domain.tld, 不发验证邮件仅格式校验
@@ -615,7 +617,14 @@ async def auth_status(db: Session = Depends(get_db)):
     # 只暴露布尔配置态, 不含任何用户信息(该端点是未鉴权的, 不得泄露用户数据)。
     import os as _os
     _smtp_ready = all(_os.getenv(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS"))
-    return {"initialized": True, "email_configured": bool(_smtp_ready)}
+    # 2026-09-19 内部使用模式: 告知前端注册模式(仅"是否开放/是否需邀请码", 不含任何凭证)
+    from src.core.invite_codes import get_register_mode
+
+    return {
+        "initialized": True,
+        "email_configured": bool(_smtp_ready),
+        "register_mode": get_register_mode(db),
+    }
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -707,6 +716,19 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
 
     ip = request.client.host if request.client else "unknown"
 
+    # 注册模式(2026-09-19 内部使用): DB > env > 默认 invite
+    #   closed → 一律拒绝; invite → 必须有有效邀请码; open → 历史行为(仅自测用)
+    from src.core.invite_codes import (
+        InviteCodeError,
+        check_redeemable,
+        get_register_mode,
+        redeem,
+    )
+
+    mode = get_register_mode(db)
+    if mode == "closed":
+        raise HTTPException(403, "注册未开放, 请联系管理员")
+
     # 注册开关: app_settings.allow_register, 默认开放(无记录/空值视为开放,
     # 仅当显式配置为 false/off/0/no 等时才拒绝)
     setting = db.query(AppSettings).filter(AppSettings.key == "allow_register").first()
@@ -714,6 +736,13 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
     allow_value = str(raw).strip().lower() if raw else ""
     if allow_value and allow_value not in ("1", "true", "yes", "on"):
         raise HTTPException(403, "注册未开放, 请联系管理员")
+
+    if mode == "invite":
+        # 预检放在邮箱验证码之前: 明显无效的码不该把用户的邮箱验证码烧掉
+        try:
+            check_redeemable(db, data.invite_code or "")
+        except InviteCodeError as e:
+            raise HTTPException(400, e.message)
 
     email = normalize_email(data.email)
     if not EMAIL_RE.fullmatch(email):
@@ -749,6 +778,15 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
     if len(data.password) < 8:
         raise HTTPException(400, "密码长度至少 8 位")
 
+    # 邀请码**核销**(2026-09-19): 放在所有校验之后、建用户之前 ——
+    # ① 前面任何一步失败都不消耗邀请码; ② 核销用的是单条条件 UPDATE, 并发不超发。
+    invite_info: Optional[dict] = None
+    if mode == "invite":
+        try:
+            invite_info = redeem(db, data.invite_code or "", username=username, client_ip=ip)
+        except InviteCodeError as e:
+            raise HTTPException(400, e.message)
+
     user = create_user(db, username, data.password, "member", email=email)  # 默认 is_active=True
 
     # 统一身份(2026-09-16): 注册成功自动创建 Skill API Key(tier=free)。
@@ -781,7 +819,12 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
         api_key_raw = None
         logger.warning("[auth] 注册后自动创建 API key 失败(不阻断注册): %s", e)
 
-    log_audit(db, user, "register", detail=f"注册账号 {username} <{email}>", ip=ip)
+    _invite_part = ""
+    if invite_info:
+        from src.core.invite_codes import mask_code
+
+        _invite_part = f" 邀请码={mask_code(invite_info.get('code', ''))}"  # 只记后 4 位, 不留明文
+    log_audit(db, user, "register", detail=f"注册账号 {username} <{email}>{_invite_part}", ip=ip)
     # CSRF (tier2 2026-09-18): 注册后即下发 csrf_token, 减少登录前写请求摩擦
     from src.web.middleware import issue_csrf_token
     csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)

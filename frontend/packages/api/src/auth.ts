@@ -6,6 +6,8 @@ export interface AuthStatus {
   user?: UserInfo | null
   /** 邮件服务是否已配置(2026-09-19): false 时邮箱注册/验证码登录发不出验证码 —— 前端要明说 */
   email_configured?: boolean
+  /** 注册模式(2026-09-19): invite=需邀请码(内部使用默认) / open / closed */
+  register_mode?: 'invite' | 'open' | 'closed'
 }
 
 export interface UserInfo {

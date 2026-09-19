@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
-import { Lock, Eye, EyeOff, User, Mail, ShieldCheck } from 'lucide-react'
+import { Lock, Eye, EyeOff, User, Mail, ShieldCheck, Ticket } from 'lucide-react'
 import { authApi, fetchAPI, type AuthTokenPayload } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
@@ -37,6 +37,9 @@ export default function LoginPage() {
   )
   const [checking, setChecking] = useState(true)
   // 邮件服务可用性(来自 /api/auth/status): 默认按"可用"渲染, 只有明确 false 才提示
+  // 注册模式(2026-09-19 内部使用): invite 需邀请码 / open / closed
+  const [registerMode, setRegisterMode] = useState<'invite' | 'open' | 'closed'>('invite')
+  const [inviteCode, setInviteCode] = useState('')
   const [emailReady, setEmailReady] = useState(true)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -48,6 +51,8 @@ export default function LoginPage() {
         // 未配置邮件服务时, 邮箱注册/验证码登录这条路径**发不出验证码** —— 提前告知,
         // 别让用户填完表单才撞 503(以前还会显示"已发送", 更误导)。
         setEmailReady(data.email_configured !== false)
+        // 内部使用模式(2026-09-19): 后端告知注册模式, 前端据此渲染邀请码/关闭态
+        if (data.register_mode) setRegisterMode(data.register_mode)
         setChecking(false)
       })
       .catch(() => setChecking(false))
@@ -179,6 +184,12 @@ export default function LoginPage() {
       }
     }
 
+    // 邀请制(2026-09-19): 没填邀请码就别发请求 —— 后端会 400, 但前端先说更省事
+    if (mode === 'register' && registerMode === 'invite' && !inviteCode.trim()) {
+      toast('请填写邀请码（内测邀请制）', 'error')
+      return
+    }
+
     setLoading(true)
     try {
       if (mode === 'register') {
@@ -191,6 +202,8 @@ export default function LoginPage() {
             email: email.trim(),
             password,
             code: code.trim(),
+            // 邀请码(2026-09-19): invite 模式后端强制校验, 不传会被 400 拒
+            ...(inviteCode.trim() ? { invite_code: inviteCode.trim() } : {}),
             ...(uname ? { username: uname } : {}),
           }),
         })
@@ -232,7 +245,13 @@ export default function LoginPage() {
 
   const isRegister = mode === 'register'
   const isEmailCode = mode === 'email-code'
+  // 注册关闭(closed)时不给"注册"入口 —— 点了也只会被 403, 不如不显示
   const showModeTabs = !isSetup
+  const modeTabs = [
+    { key: 'password' as AuthMode, label: '密码登录' },
+    ...(registerMode === 'closed' ? [] : [{ key: 'register' as AuthMode, label: '注册' }]),
+    { key: 'email-code' as AuthMode, label: '验证码登录' },
+  ]
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
@@ -258,11 +277,7 @@ export default function LoginPage() {
           {/* 三种模式切换 Tab */}
           {showModeTabs && (
             <div className="flex gap-1 mb-6 p-1 rounded-lg bg-muted/50">
-              {([
-                { key: 'password' as AuthMode, label: '密码登录' },
-                { key: 'register' as AuthMode, label: '注册' },
-                { key: 'email-code' as AuthMode, label: '验证码登录' },
-              ]).map(tab => (
+              {modeTabs.map(tab => (
                 <button
                   key={tab.key}
                   type="button"
@@ -287,6 +302,27 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* 邀请制(2026-09-19 内部使用): 注册需管理员发放的邀请码; closed 模式直接不给填 */}
+            {isRegister && registerMode === 'invite' && (
+              <div>
+                <Label>邀请码</Label>
+                <div className="relative">
+                  <Ticket className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    value={inviteCode}
+                    onChange={e => setInviteCode(e.target.value.toUpperCase())}
+                    placeholder="请输入管理员发放的邀请码"
+                    className="pl-10 tracking-widest"
+                    autoFocus
+                    autoComplete="off"
+                  />
+                </div>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  本平台为内测邀请制，邀请码由管理员发放。
+                </p>
+              </div>
+            )}
             {(isRegister || isEmailCode) && (
               <div>
                 <Label>邮箱</Label>

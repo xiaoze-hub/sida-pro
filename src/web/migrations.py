@@ -4621,6 +4621,60 @@ CREATE TABLE factor_ic_snapshots (
     )
 
 
+
+def _m177_invite_codes(conn: Connection) -> None:
+    """邀请码注册(2026-09-19 用户拍板: 内部使用 + 邀请制)。
+
+    为什么需要: 产品定位内部使用, 而"公开自助注册"是形式上**唯一还面向公众**的口子
+    (合规红线是"向公众提供分析预测建议", 不以收费为要件)。邀请码把准入收回到管理员手里。
+
+    两张表分工明确:
+      - `invite_codes`   —— 凭证本身(可用次数/过期/停用), 核销就是 used_count+1;
+      - `invite_code_uses` —— **审计流水**(谁/何时/什么 IP 用了哪个码), 凭证类操作必须可回溯。
+    核销走单条条件 UPDATE(`used_count < max_uses` 写进 WHERE), 因此**并发不超发**。
+    """
+    if _has_table(conn, "invite_codes") and _has_table(conn, "invite_code_uses"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    f = "false" if is_pg else "0"
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+    if not _has_table(conn, "invite_codes"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE invite_codes (
+  code TEXT PRIMARY KEY,
+  note TEXT NOT NULL DEFAULT '',
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  used_count INTEGER NOT NULL DEFAULT 0,
+  expires_at {ts} NULL,
+  disabled BOOLEAN NOT NULL DEFAULT {f},
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at {ts} NOT NULL
+)
+"""
+            )
+        )
+    if not _has_table(conn, "invite_code_uses"):
+        conn.execute(
+            text(
+                f"""
+CREATE TABLE invite_code_uses (
+  id {pk},
+  code TEXT NOT NULL,
+  user_id INTEGER NULL,
+  username TEXT NOT NULL DEFAULT '',
+  client_ip TEXT NOT NULL DEFAULT '',
+  used_at {ts} NOT NULL
+)
+"""
+            )
+        )
+        conn.execute(text("CREATE INDEX ix_invite_code_uses_code ON invite_code_uses (code)"))
+    logger.info("[migration 177] invite_codes + invite_code_uses 就绪(邀请码注册)")
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4738,6 +4792,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 决策日志(B6, 2026-09-18): 信号 + 当时证据/价格留痕, 事后回填 T+1/3/5
     Migration(175, "decision_log", _m175_decision_log),
     Migration(176, "factor_ic_snapshots", _m176_factor_ic_snapshots),
+    # 邀请码注册(2026-09-19): 内部使用模式下收回"面向公众"的自助注册口
+    Migration(177, "invite_codes", _m177_invite_codes),
 )
 
 

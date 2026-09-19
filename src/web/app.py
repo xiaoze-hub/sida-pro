@@ -873,6 +873,19 @@ except ImportError:
     pass
 
 
+# 邀请码注册(2026-09-19 内部使用模式): 准入控制台, owner only
+try:
+    from src.web.api import invite_codes as invite_codes_api
+
+    app.include_router(
+        invite_codes_api.router,
+        prefix="/api/admin",
+        tags=["admin-invite-codes"],
+    )
+except ImportError:
+    pass
+
+
 @app.get("/api/version")
 async def version():
     """获取应用版本号（公开接口）"""
