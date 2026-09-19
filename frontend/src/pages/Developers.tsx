@@ -109,6 +109,17 @@ const API_GROUPS = [
     ],
   },
   {
+    // B9(2026-09-19): 因子有效性 —— 后端早就有 IC/IR/分层回测, 但**文档里一直没列**,
+    // 外部接 API 的人根本发现不了。这里补上, 并把口径写清(横截面 IC 为主口径 / pooled 仅参考)。
+    title: '因子有效性 (IC)',
+    apis: [
+      { method: 'GET', path: '/api/recommendations/strategy-factor-ic?days=90&horizon=5', auth: '登录', desc: '各因子横截面 IC / t / IR / 样本外 IC(pooled 仅参考)' },
+      { method: 'GET', path: '/api/factors/weights', auth: '登录', desc: '因子权重(按市场区分, 含最近标定 IC/IR)' },
+      { method: 'POST', path: '/api/factors/weights/{factor_code}/{market}', auth: 'owner', desc: '调整因子权重 / 锁定 / 自动标定开关' },
+      { method: 'GET', path: '/api/recommendations/strategy-factors/{signal_run_id}', auth: '登录', desc: '单次信号运行的因子明细' },
+    ],
+  },
+  {
     title: '用户数据 (GDPR)',
     apis: [
       { method: 'GET', path: '/api/user/data/export', auth: '登录', desc: '导出我的全部数据(JSON)' },
