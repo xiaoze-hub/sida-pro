@@ -2299,6 +2299,7 @@ def evaluate_entry_candidate_outcomes(
     horizons: tuple[int, ...] = (1, 3, 5, 10),
     snapshot_days: int = 45,
     limit: int = 400,
+    today: date | None = None,
 ) -> dict:
     """评估 active 入场候选的到期后验。
 
@@ -2313,7 +2314,12 @@ def evaluate_entry_candidate_outcomes(
       2. 只处理"至少有一个到期且未验证 horizon"的候选(今日新增不可能到期, 不拉K线);
       3. 已有 no_base_price outcome 的 (候选,horizon) 原地更新重试, 不再永久跳过;
       4. K线拉取失败计数并告警, 不再静默吞掉(失败留待下轮重试)。
+
+    `today` 可注入(2026-09-19): 默认 `date.today()`。**测试必须传固定日期** ——
+    原测试锚在"今天", 而 CI 跑在 UTC: 同一份代码在 CST 白天通过、UTC 跨到周末就失败,
+    发版被"什么时候跑"卡住(2026-09-19 v0.10.42 实测)。补数/回放场景也用得上。
     """
+    today = today or date.today()
     stats = {
         "total_candidates": 0,
         "eligible": 0,
@@ -2330,7 +2336,7 @@ def evaluate_entry_candidate_outcomes(
 
     db = SessionLocal()
     try:
-        today = date.today()
+        today = today or date.today()   # 保留注入值(见函数 docstring)
         cutoff = today - timedelta(days=max(7, int(snapshot_days)))
         candidates = (
             db.query(EntryCandidate)
@@ -2567,6 +2573,7 @@ def count_missing_candidate_outcomes(
     horizons: tuple[int, ...] = (1, 3, 5, 10),
     snapshot_days: int = 45,
     sample_limit: int = 20,
+    today: date | None = None,
 ) -> dict:
     """只读报告: active 候选里"已到期但尚未验证"的缺口, 供调度器告警 / API 查询。
 
@@ -2576,7 +2583,7 @@ def count_missing_candidate_outcomes(
     safe_horizons = sorted({max(1, int(h)) for h in horizons if int(h) > 0})
     if not safe_horizons:
         safe_horizons = [1, 3, 5]
-    today = date.today()
+    today = today or date.today()   # 可注入, 见 evaluate_entry_candidate_outcomes 的说明
     cutoff = today - timedelta(days=max(7, int(snapshot_days)))
     db = SessionLocal()
     try:

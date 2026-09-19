@@ -62,11 +62,17 @@ def _mk_candidate(session, symbol: str, snap: date, *, score: float = 80.0) -> i
     return c.id
 
 
+#: 测试锚定的"今天"(2026-09-16 周三, 交易日)。
+#: **不许用 `date.today()`**: CI 跑在 UTC, 同一份代码在 CST 白天通过、UTC 跨到周末就失败 ——
+#: 发版被"什么时候跑"卡住(2026-09-19 v0.10.42 实测: 5 个用例因周六失败, 构建被 skip)。
+REF_TODAY = date(2026, 9, 16)
+
+
 def _trading_days_ago(n: int) -> date:
     """n 个交易日之前的日期(B0.3 后验窗口按交易日计, 测试须同口径)。"""
     from src.core.trading_calendar import prev_trading_day
 
-    d = date.today()
+    d = REF_TODAY
     for _ in range(n):
         d = prev_trading_day(d)
     return d
@@ -74,7 +80,7 @@ def _trading_days_ago(n: int) -> date:
 
 def _kline_rows(n_days_back: int = 40, close: float = 11.0) -> list[SimpleNamespace]:
     """最近 n_days_back 天(含今天)的日线, 收盘价固定 close。"""
-    today = date.today()
+    today = REF_TODAY
     return [
         SimpleNamespace(date=(today - timedelta(days=i)).isoformat(), close=close)
         for i in range(n_days_back, -1, -1)
@@ -110,6 +116,7 @@ def _eval(session_factory, **kwargs):
     orig_collector = ec.KlineCollector
     ec.SessionLocal = session_factory
     ec.KlineCollector = FakeKlineCollector
+    kwargs.setdefault("today", REF_TODAY)   # 注入固定"今天", 与 CI 时区/周末无关
     try:
         return ec.evaluate_entry_candidate_outcomes(**kwargs)
     finally:
@@ -121,6 +128,7 @@ def _missing(session_factory, **kwargs):
     orig = ec.SessionLocal
     ec.SessionLocal = session_factory
     try:
+        kwargs.setdefault("today", REF_TODAY)
         return ec.count_missing_candidate_outcomes(**kwargs)
     finally:
         ec.SessionLocal = orig
@@ -136,7 +144,7 @@ class TestDueOnlyAndOldestFirst:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
 
         old_id = _mk_candidate(session, "600001", _trading_days_ago(10))  # h1/h3/h5/h10 全到期
         mid_id = _mk_candidate(session, "600002", _trading_days_ago(3))   # h1/h3 到期
@@ -178,7 +186,7 @@ class TestDueOnlyAndOldestFirst:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         # 3 个候选同日快照(均 4 个 horizon 到期), score 区分先后; 单轮上限 1 → 三轮全验证
         ids = [
             _mk_candidate(session, f"6001{i:02d}", _trading_days_ago(10), score=float(90 - i))
@@ -204,7 +212,7 @@ class TestDueOnlyAndOldestFirst:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         cid = _mk_candidate(session, "600101", today - timedelta(days=10))
         for h in (1, 3, 5, 10):
             session.add(EntryCandidateOutcome(
@@ -239,7 +247,7 @@ class TestFailureHandling:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         cid = _mk_candidate(session, "600201", _trading_days_ago(5))
         # 预置一条失败记录: h1 曾因无 base price 失败
         session.add(EntryCandidateOutcome(
@@ -277,7 +285,7 @@ class TestFailureHandling:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         cid = _mk_candidate(session, "600202", _trading_days_ago(5))
         session.close()
 
@@ -309,7 +317,7 @@ class TestMissingReport:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         a_id = _mk_candidate(session, "600301", _trading_days_ago(10))  # 全缺 h1..h10
         b_id = _mk_candidate(session, "600302", _trading_days_ago(5))   # 只缺 h3/h5
         _mk_candidate(session, "600303", today)                              # 未到期, 不算缺口
@@ -344,7 +352,7 @@ class TestMissingReport:
         engine = _engine(tmp_path)
         factory = sessionmaker(bind=engine)
         session = factory()
-        today = date.today()
+        today = REF_TODAY
         cid = _mk_candidate(session, "600303", _trading_days_ago(10))
         for h in (1, 3, 5, 10):
             session.add(EntryCandidateOutcome(
