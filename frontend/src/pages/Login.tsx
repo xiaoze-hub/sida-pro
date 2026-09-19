@@ -36,6 +36,8 @@ export default function LoginPage() {
     searchParams.get('mode') === 'register' ? 'register' : 'password',
   )
   const [checking, setChecking] = useState(true)
+  // 邮件服务可用性(来自 /api/auth/status): 默认按"可用"渲染, 只有明确 false 才提示
+  const [emailReady, setEmailReady] = useState(true)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -43,6 +45,9 @@ export default function LoginPage() {
     authApi.status()
       .then(data => {
         setIsSetup(!data.initialized)
+        // 未配置邮件服务时, 邮箱注册/验证码登录这条路径**发不出验证码** —— 提前告知,
+        // 别让用户填完表单才撞 503(以前还会显示"已发送", 更误导)。
+        setEmailReady(data.email_configured !== false)
         setChecking(false)
       })
       .catch(() => setChecking(false))
@@ -300,6 +305,14 @@ export default function LoginPage() {
               </div>
             )}
 
+            {/* 邮件服务未配置: 这条路径发不出验证码 —— 直说, 别让用户白填一遍 */}
+            {!emailReady && (isRegister || isEmailCode) && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px] leading-relaxed">
+                邮件服务暂未开通，验证码发不出去。请把邮箱发给管理员手工开通账号，
+                或改用「密码登录」。
+              </div>
+            )}
+
             {(isRegister || isEmailCode) && (
               <div>
                 <Label>验证码</Label>
@@ -321,7 +334,8 @@ export default function LoginPage() {
                     type="button"
                     variant="outline"
                     className="shrink-0 w-28"
-                    disabled={countdown > 0 || sending}
+                    disabled={countdown > 0 || sending || !emailReady}
+                    title={emailReady ? '' : '邮件服务未配置, 验证码发不出去'}
                     onClick={handleSendCode}
                   >
                     {sending
