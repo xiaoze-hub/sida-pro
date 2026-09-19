@@ -610,7 +610,12 @@ async def auth_status(db: Session = Depends(get_db)):
     P1(audit-20260915): 未鉴权端点, 不得泄露用户名/角色/创建时间等用户信息。
     """
     get_or_create_owner(db)  # 保持首次部署兼容(owner 落库)
-    return {"initialized": True}
+    # 2026-09-19: 告知前端"邮件服务是否可用" —— 未配置时邮箱注册/验证码登录**根本走不通**
+    # (验证码发不出去), 前端据此给明确提示, 而不是让用户填完表单才撞 503。
+    # 只暴露布尔配置态, 不含任何用户信息(该端点是未鉴权的, 不得泄露用户数据)。
+    import os as _os
+    _smtp_ready = all(_os.getenv(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS"))
+    return {"initialized": True, "email_configured": bool(_smtp_ready)}
 
 
 @router.post("/login", response_model=TokenResponse)
