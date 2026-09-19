@@ -38,7 +38,7 @@ import {
 import type { MainIntentStructured } from '../lib/main-intent-types'
 import { safeFixed, toAmount } from '@/lib/format'
 
-import { readStockColors, readChartTheme, maShade, readGsColors, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
+import { readStockColors, readChartTheme, maShade, readGsColors, gsColorFor, directionColorFor, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
 import { dayKey, filterMarkersInBarsRange } from '../lib/chart-markers'
 // L3 资金柱的**唯一**净额/分色/时间口径(与 InteractiveKline 共用, 见 lib/fund-bar.ts)
 import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInterval } from '../lib/fund-bar'
@@ -829,7 +829,7 @@ export default function KlineChart(props: {
         markers.push({
           time: toChartTime(g.date, interval),
           position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
-          color: isBuy ? gs.go : gs.stop,
+          color: gsColorFor(g.side, gs),
           shape: 'circle' as const,
           size: g.confirmed ? 2 : 0,
           text: g.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
@@ -853,7 +853,7 @@ export default function KlineChart(props: {
         markers.push({
           time,
           position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
-          color: isBuy ? gs.go : gs.stop,
+          color: directionColorFor(t.side, gs),
           shape: isBuy ? ('arrowUp' as const) : ('arrowDown' as const),
           size: 1,
           text: t.text || (isBuy ? '买' : '卖'),
@@ -1068,8 +1068,17 @@ export default function KlineChart(props: {
     return fundBarTime(date, intv) as Time
   }
 
+  // G/S(含交割单买卖方向)的颜色规则验收钩子: K 线 marker 画在 canvas 上, DOM 里查不到 ——
+  // 所以把**解析后的实际颜色**挂到容器上, 生产巡检(terminal_audit)据此断言
+  // "G=红系 / S=绿系" 没被改反(改 CSS token 也拦得住)。
+  const gsResolved = readGsColors()
+
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className="flex flex-col gap-2"
+      data-gs-go={gsResolved.go}
+      data-gs-stop={gsResolved.stop}
+    >
       {/* 周期切换器 */}
       <div className="flex items-center gap-1 flex-wrap">
         {INTERVAL_OPTIONS.map((opt) => (

@@ -138,6 +138,48 @@ export interface GsColors {
  * 原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿 (与 --stock-up/down 同源, 同值不同名)。
  * 功能等价, 校准验收以信号位置为准不以颜色为准。
  */
+/** GS 两侧(与图表 marker 的 `side` 同口径)。 */
+export type GsSide = 'G' | 'S'
+
+/**
+ * **G/S 颜色规则的唯一判据**(2026-09-19 用户要求做成"可测验收线")。
+ *
+ * 规则: **A 股惯例 —— G(机会/买入方向)= 红, S(风险/卖出方向)= 绿**。
+ * 背景: 同花顺原版是 G 绿 S 红, SIDA 按国内惯例做了反转(见 `readGsColors` 注释)。
+ * 这张表是**唯一**的映射来源 —— 换色只改这里 + `index.css` 的 token, 不许在调用点写三元表达式。
+ * 验收: `tests/lib/gs-color-rule.test.ts`(规则 + token 色相 + 不得互换)。
+ */
+export const GS_COLOR_KIND: Record<GsSide, 'up' | 'down'> = { G: 'up', S: 'down' }
+
+//: 方向口径: GS 信号('G'/'S') 与 交割单成交方向('buy'/'sell') 都归到同一个 A 股惯例 ——
+//: **买/机会方向 = 红(up), 卖/风险方向 = 绿(down)**。两者共用一张表, 免得出现"K线是买红、
+//: 交割单是买绿"这种同页自相矛盾。
+export type DirectionSide = GsSide | 'buy' | 'sell'
+
+export const DIRECTION_COLOR_KIND: Record<DirectionSide, 'up' | 'down'> = {
+  G: 'up', S: 'down', buy: 'up', sell: 'down',
+}
+
+/** 方向 → 涨跌语义('up' = 红系, 'down' = 绿系)。 */
+export function directionColorKind(side: DirectionSide): 'up' | 'down' {
+  return DIRECTION_COLOR_KIND[side] ?? 'down'
+}
+
+/** G/S → 涨跌语义(语义名字更贴图表 marker; 与 directionColorKind 同源)。 */
+export function gsColorKind(side: GsSide): 'up' | 'down' {
+  return directionColorKind(side)
+}
+
+/** 方向 → 实际颜色(默认取当前主题的 GS 色; 可注入以便单测)。 */
+export function directionColorFor(side: DirectionSide, colors: GsColors = readGsColors()): string {
+  return directionColorKind(side) === 'up' ? colors.go : colors.stop
+}
+
+/** G/S → 实际颜色。 */
+export function gsColorFor(side: GsSide, colors: GsColors = readGsColors()): string {
+  return directionColorFor(side, colors)
+}
+
 export function readGsColors(): GsColors {
   return {
     go: cssVar('--gs-go', cssVar('--stock-up', '#E53935')),
