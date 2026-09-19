@@ -8,6 +8,45 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+# 本文件测的是**注册机制本身**(邮箱验证码/用户名生成/API Key), 不是邀请制闸门。
+# 2026-09-19 起默认 REGISTER_MODE=invite, 这里显式置 open —— 邀请制的三条验收线
+# 由 tests/test_invite_codes.py 专测。
+#
+# ⚠️ 必须写 **DB 设置**而不是 env: 注册模式优先级是 DB > env, 而 test_invite_codes.py
+# 会在 DB 里留下 register_mode 行(它自己的用例会把模式切到 invite/closed), 只置 env
+# 会被那份留下的 DB 值盖掉 —— 单独跑过、一起跑就挂(实测踩到)。用 DB 才与优先级一致。
+os.environ["REGISTER_MODE"] = "open"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _force_open_mode():
+    """把 DB 里的注册模式钉成 open(模块级), 结束时清掉自己的行。"""
+    from sqlalchemy import text
+
+    from src.web.database import SessionLocal, init_db
+
+    init_db()
+    db = SessionLocal()
+    try:
+        db.execute(text("DELETE FROM app_settings WHERE key = 'register_mode'"))
+        db.execute(
+            text(
+                "INSERT INTO app_settings (key, value, description) "
+                "VALUES ('register_mode', 'open', 'test')"
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    yield
+    db = SessionLocal()
+    try:
+        db.execute(text("DELETE FROM app_settings WHERE key = 'register_mode'"))
+        db.commit()
+    finally:
+        db.close()
+
+
 def _data(resp) -> dict:
     """解开 {code,success,data,message} 响应壳。"""
     body = resp.json()

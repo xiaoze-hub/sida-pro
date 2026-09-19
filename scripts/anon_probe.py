@@ -128,6 +128,38 @@ def main() -> int:
             return { status: r.status, text: (await r.text()).slice(0, 200) };
           } catch (e) { return { status: -1, text: String(e) }; }
         }""") or {}
+        # ── 邀请制闸门: 匿名注册必须被拒(2026-09-19 内部使用模式) ───────
+        # 合规红线是"面向公众"提供分析建议 → 公开自助注册的口子必须关。判据: 不带邀请码
+        # 直接调注册端点, 必须拿到明确拒绝(而不是 200/或含糊的 500)。
+        rg = pg.evaluate("""async () => {
+          try {
+            const r = await fetch('/api/auth/register', {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: 'anon-probe@example.com', password: 'Probe_0919_pw!',
+                                     code: '000000' }),
+            });
+            return { status: r.status, text: (await r.text()).slice(0, 200) };
+          } catch (e) { return { status: -1, text: String(e) }; }
+        }""") or {}
+        st = rg.get("status")
+        txt = rg.get("text") or ""
+        # 判据只认一件事: **无邀请码的匿名注册不得成功**(不得建号)。
+        # 4xx(含"请填写邀请码"/"验证码错误"/"注册未开放")都算被拒 —— 后者在 open 模式或
+        # 未上闸门的旧版本上也会出现, 那是"没开门"而不是"闸门失效", 不该误报失败;
+        # 但要把它记进 note, 这样发版验收能看出当时到底走的是哪条拒因。
+        if st == 200:
+            fails.append("无邀请码的匿名注册竟然成功了 —— 邀请制闸门没生效(公开自助注册仍开着)")
+        elif st and 400 <= st < 500:
+            if "邀请码" in txt:
+                notes.append("匿名注册被拒(需邀请码) ✅")
+            elif "注册未开放" in txt:
+                notes.append("匿名注册被拒(注册已关闭) ✅")
+            else:
+                notes.append(f"匿名注册被拒(HTTP {st}, 非邀请制拒因: {txt[:80]}) —— 若为 open 模式请确认是否有意为之")
+        else:
+            fails.append(f"匿名注册返回了非预期结果: HTTP {st} {txt[:120]}")
+
         if sc.get("status") == 403 and "CSRF" in (sc.get("text") or ""):
             fails.append(f"POST /api/auth/send-code 被 CSRF 拦死(匿名注册第一步走不通): {sc.get('text')}")
         else:

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   UserPlus,
   Activity,
+  Ticket,
 } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -24,6 +25,7 @@ import {
   type SideMenuItem,
 } from '@/components/dev/DevPageLayout'
 import { useI18n } from '@/hooks/useI18n'
+import { InviteCodesSection } from '@/components/admin/InviteCodesSection'
 
 /**
  * Admin 管理后台(2026-09-16)。
@@ -144,6 +146,7 @@ interface ProAppsResp {
 // ── 菜单 ──
 const MENU: SideMenuItem[] = [
   { id: 'users', label: '用户管理', icon: <Users className="h-3.5 w-3.5" />, anchor: 'sec-users' },
+  { id: 'invite', label: '邀请码管理', icon: <Ticket className="h-3.5 w-3.5" />, anchor: 'sec-invite' },
   { id: 'keys', label: 'API Key 管理', icon: <KeyRound className="h-3.5 w-3.5" />, anchor: 'sec-keys' },
   { id: 'usage', label: '用量监控', icon: <BarChart3 className="h-3.5 w-3.5" />, anchor: 'sec-usage' },
   { id: 'pro', label: 'Pro 申请审核', icon: <BadgeCheck className="h-3.5 w-3.5" />, anchor: 'sec-pro' },
@@ -353,6 +356,9 @@ export default function AdminPage() {
         </Button>
       }
     >
+      {/* ── 邀请码管理(2026-09-19 内部使用模式) ── */}
+      <InviteCodesSection />
+
       {/* ── 用户管理 ── */}
       <Section
         id="sec-users"

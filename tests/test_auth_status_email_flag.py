@@ -40,9 +40,14 @@ def test_partial_config_is_false(monkeypatch):
 
 
 def test_status_does_not_leak_user_info(monkeypatch):
-    """未鉴权端点: 只许给布尔配置态, 不许带用户名/角色/邮箱等。"""
+    """未鉴权端点: 只许给**开关类布尔/枚举**, 不许带用户名/角色/邮箱等。
+
+    2026-09-19: 允许字段扩为 {initialized, email_configured, register_mode} —— 都是
+    "服务是否可用/是否开放"这类公开开关, 不含任何个人数据。新增字段时**必须显式加进白名单**,
+    这条断言的用意就是逼改的人想一下"这个字段能公开吗"。
+    """
     data = _status()
-    assert set(data.keys()) <= {"initialized", "email_configured"}
+    assert set(data.keys()) <= {"initialized", "email_configured", "register_mode"}, data.keys()
     raw = str(data).lower()
     for leak in ("password", "token", "username", "role", "email@"):
         assert leak not in raw
