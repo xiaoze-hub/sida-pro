@@ -88,6 +88,29 @@ interface SkillUsageResp {
   report: SkillUsageRow[]
 }
 
+interface UsageLatencyRow {
+  calls: number
+  errors: number
+  /** **null = 没有可统计的样本**(全未记录耗时), 不是 0ms —— 页面显示 `--` */
+  p50_ms: number | null
+  p95_ms: number | null
+  /** 参与分位数的样本数(已记录耗时的调用数) */
+  latency_samples: number
+  day?: string
+  skill?: string
+  users?: number
+}
+
+interface UsageLatencyResp {
+  days: number
+  as_of: string
+  totals: { calls: number; errors: number; p50_ms: number | null; p95_ms: number | null }
+  by_day: UsageLatencyRow[]
+  by_skill: UsageLatencyRow[]
+  /** 后端给的口径说明(未记录耗时多少条等), 页面原样展示 */
+  latency_note: string
+}
+
 interface HighValueUsageResp {
   since: string
   days: number
@@ -164,8 +187,13 @@ function Th({ children, className = '' }: { children: React.ReactNode; className
   )
 }
 
-function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <td className={`px-3 py-2 text-[12px] text-foreground dark:text-slate-300 ${className}`}>{children}</td>
+function Td({ children, className = '', title }: { children: React.ReactNode; className?: string; title?: string }) {
+  // title 用于把"为什么是 --"(例如没有已记录耗时的样本)挂在单元格上, 不靠猜
+  return (
+    <td className={`px-3 py-2 text-[12px] text-foreground dark:text-slate-300 ${className}`} title={title}>
+      {children}
+    </td>
+  )
 }
 
 export default function AdminPage() {
@@ -195,6 +223,12 @@ export default function AdminPage() {
   const { data: skillUsage, isLoading: skillUsageLoading } = useApiQuery<SkillUsageResp>(
     ['admin-skill-usage'],
     '/admin/skills/usage?days=7',
+  )
+
+  // B7(2026-09-19): 耗时视图 —— 回答"慢不慢"(调用次数已在上面那张表里)
+  const { data: usageLatency, isLoading: latencyLoading } = useApiQuery<UsageLatencyResp>(
+    ['admin-usage-latency'],
+    '/admin/skills/usage/latency?days=7',
   )
 
   const { data: hvUsage, isLoading: hvUsageLoading } = useApiQuery<HighValueUsageResp>(
@@ -633,6 +667,74 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 按 skill / 按天 · 耗时(B7 2026-09-19) —— 与上面两张表的分工: 那两张数次数, 这张回答"慢不慢" */}
+        <div className="mb-2 mt-6 text-[12px] font-medium text-slate-400">按 Skill / 按天 · 耗时</div>
+        {latencyLoading ? (
+          <TableLoading label="加载耗时…" />
+        ) : !usageLatency?.by_skill?.length ? (
+          <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无调用" />
+        ) : (
+          <div className="mb-6 space-y-4">
+            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <table className="w-full min-w-[560px]">
+                <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+                  <tr>
+                    <Th>Skill</Th>
+                    <Th>调用</Th>
+                    <Th>错误</Th>
+                    <Th>P50</Th>
+                    <Th>P95</Th>
+                    <Th>样本</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usageLatency.by_skill.map((r) => (
+                    <tr key={r.skill} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                      <Td><code className="font-mono text-cyan-300">{r.skill}</code></Td>
+                      <Td className="font-mono text-foreground">{r.calls}{typeof r.users === 'number' ? ` · ${r.users}人` : ''}</Td>
+                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground dark:text-slate-500'}`}>{r.errors}</Td>
+                      {/* null = 没样本可算(不是 0ms): 显示 -- 并把原因放进 title */}
+                      <Td className="font-mono text-muted-foreground dark:text-slate-400" title={r.p50_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
+                        {r.p50_ms === null ? '--' : `${r.p50_ms} ms`}
+                      </Td>
+                      <Td className="font-mono text-muted-foreground dark:text-slate-400" title={r.p95_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
+                        {r.p95_ms === null ? '--' : `${r.p95_ms} ms`}
+                      </Td>
+                      <Td className="font-mono text-[11px] text-muted-foreground dark:text-slate-500">{r.latency_samples}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <table className="w-full min-w-[420px]">
+                <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+                  <tr>
+                    <Th>日期</Th>
+                    <Th>调用</Th>
+                    <Th>错误</Th>
+                    <Th>P50</Th>
+                    <Th>P95</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usageLatency.by_day.map((r) => (
+                    <tr key={r.day} className="border-b border-border/40 dark:border-white/5 last:border-0">
+                      <Td className="font-mono text-foreground">{r.day}</Td>
+                      <Td className="font-mono text-foreground">{r.calls}</Td>
+                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground dark:text-slate-500'}`}>{r.errors}</Td>
+                      <Td className="font-mono text-muted-foreground dark:text-slate-400">{r.p50_ms === null ? '--' : `${r.p50_ms} ms`}</Td>
+                      <Td className="font-mono text-muted-foreground dark:text-slate-400">{r.p95_ms === null ? '--' : `${r.p95_ms} ms`}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* 口径说明由后端给("未记录 ≠ 0ms"), 页面不自己措辞 */}
+            <div className="text-[11px] text-muted-foreground dark:text-slate-500">{usageLatency.latency_note}</div>
           </div>
         )}
 

@@ -1411,6 +1411,38 @@ def admin_key_action(
     }
 
 
+@router.get("/admin/skills/usage/latency")
+@allow_cross_user  # B7(2026-09-19): owner 的全局耗时报表, 有意跨用户
+def admin_usage_latency(
+    days: int = Query(default=7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    user: _User = Depends(_require_owner_admin),
+) -> dict:
+    """按天 / 按 skill 的**耗时**报表(仅 owner)。
+
+    与 `/admin/skills/usage` 的分工: 那个按 key 数调用次数, 这个回答"**慢不慢**"。
+    口径见 `src/core/usage_latency.py`: `duration_ms=0` 视为**未记录**, 不参与分位数;
+    样本为 0 时返回 `null` 而不是 0(没数据 ≠ 0ms)。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.core.usage_latency import aggregate_latency
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(
+            SkillUsage.skill_name,
+            SkillUsage.status_code,
+            SkillUsage.duration_ms,
+            SkillUsage.created_at,
+            SkillUsage.user_id,
+        )
+        .filter(SkillUsage.created_at >= since)
+        .all()
+    )
+    return aggregate_latency(rows, days=days, today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
+
 @router.get("/admin/skills/usage")
 @allow_cross_user  # C3(2026-09-18): owner-only(_require_owner_admin) 的全局用量报表, 有意跨用户
 def admin_usage_report(
