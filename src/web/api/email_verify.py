@@ -98,6 +98,9 @@ def create_and_send_code(email: str, purpose: str) -> None:
         # 发送失败时移除刚写入的验证码, 避免"以为发了其实没发"
         with _lock:
             _store.pop(_store_key(email_n, purpose), None)
+        if not all([os.getenv("SMTP_HOST"), os.getenv("SMTP_USER"), os.getenv("SMTP_PASS")]):
+            # 配置问题 → 说实话, 别让用户"稍后重试"重试到天荒地老
+            raise HTTPException(503, "邮件服务未配置, 请把邮箱发给管理员手工开通")
         raise HTTPException(500, "验证码发送失败, 请稍后重试")
 
 
@@ -141,6 +144,14 @@ def check_send_cooldown(email: str, purpose: str) -> Optional[str]:
     return None
 
 
+def _dev_email_log_only() -> bool:
+    """本地开发用: 没配 SMTP 时把验证码打到日志并**假装**发送成功(默认关闭)。
+
+    生产**不得**开启 —— 否则又回到"用户以为发了, 其实只写日志"的老问题。
+    """
+    return os.getenv("EMAIL_DEV_LOG_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _send_email(to: str, subject: str, body: str) -> bool:
     import smtplib
     from email.mime.text import MIMEText
@@ -150,8 +161,18 @@ def _send_email(to: str, subject: str, body: str) -> bool:
     user = os.getenv("SMTP_USER")
     pwd = os.getenv("SMTP_PASS")
     if not all([host, user, pwd]):
-        logger.info(f"[DEV] 验证码邮件 to={to}: {body}")
-        return True  # 开发模式
+        # 2026-09-19 修: 原来这里**无条件**返回 True("开发模式") —— 生产上没配 SMTP 时会
+        # 静默假装发送成功(验证码只写进日志), 用户看到"已发送"却永远收不到, 只会以为是自己邮箱问题。
+        # 现在: 只有**显式开了** EMAIL_DEV_LOG_ONLY(本地开发)才假装成功; 否则如实返回失败,
+        # 让端点给出明确文案(配置问题不该说成"稍后重试")。
+        if _dev_email_log_only():
+            logger.info("[DEV] 验证码邮件 to=%s: %s", to, body)
+            return True
+        logger.error(
+            "[email_verify] SMTP 未配置(SMTP_HOST/SMTP_USER/SMTP_PASS), 无法发送验证码邮件 to=%s —— "
+            "生产环境必须配置邮件服务, 否则邮箱注册/验证码登录不可用", to,
+        )
+        return False
 
     try:
         msg = MIMEText(body, "plain", "utf-8")

@@ -13,7 +13,7 @@ import {
   Database,
   BookOpen,
 } from 'lucide-react'
-import { fetchAPI, getToken } from '@panwatch/api'
+import { fetchAPI, getMyPermissions, getToken, isAuthenticated } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
@@ -167,6 +167,20 @@ const TIER_BADGE: Record<string, string> = {
 
 export default function DevelopersPage() {
   const { t } = useI18n()
+  // 2026-09-19(用户报障): 文档是**公开面**(匿名可见), 但里面列了 12 个 owner 专用端点
+  // (用户列表/改角色/全部 API Key/轮换密钥/审核申请…) —— 那不是给普通用户看的内部面。
+  // 处理: 按角色过滤, **非 owner 不渲染 owner 条目**; 匿名访客自然也只看到公开/登录级端点。
+  const [isOwner, setIsOwner] = useState(false)
+  useEffect(() => {
+    let alive = true
+    if (!isAuthenticated()) { setIsOwner(false); return }
+    void (async () => {
+      const perms = await getMyPermissions()
+      if (alive) setIsOwner(perms?.role === 'owner')
+    })()
+    return () => { alive = false }
+  }, [])
+
   const [activeSection, setActiveSection] = useState('quickstart')
   const [catalog, setCatalog] = useState<CatalogResp | null>(null)
   const [catLoading, setCatLoading] = useState(true)
@@ -527,7 +541,10 @@ export default function DevelopersPage() {
         icon={<BookOpen className="h-4 w-4" />}
       >
         <div className="space-y-6">
-          {API_GROUPS.map((group, gi) => (
+          {API_GROUPS
+            .map((g) => ({ ...g, apis: isOwner ? g.apis : g.apis.filter((a) => a.auth !== 'owner') }))
+            .filter((g) => g.apis.length > 0)
+            .map((group, gi) => (
             <div key={gi}>
               <h3 className="mb-3 text-[13px] font-semibold text-foreground">{group.title}</h3>
               <div className="overflow-x-auto">
@@ -566,6 +583,11 @@ export default function DevelopersPage() {
               </div>
             </div>
           ))}
+          {!isOwner && (
+            <p className="mt-3 text-[12px] text-muted-foreground">
+              管理员级端点（用户管理、密钥与用量、密钥轮换、申请审核等）仅对管理员账号显示。
+            </p>
+          )}
         </div>
       </Section>
 
