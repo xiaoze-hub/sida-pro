@@ -14,9 +14,41 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { factorICApi } from '@panwatch/api'
-import type { FactorIC, FactorICResp } from '@panwatch/api'
+import type { FactorIC, FactorICHistoryResp, FactorICResp } from '@panwatch/api'
 // 全仓纪律: 数字格式化走 @/lib/format 的 safe* 系列(null → fallback, 不抛不编)
 import { safeFixed } from '@/lib/format'
+
+/**
+ * IC 时序迷你图。**诚实口径**: 只有 ≥2 个"算得出来"的点才画线; 点不够就显示 `--` +
+ * 悬停说明"快照不足" —— 不许把 1 个点画成一条线, 也不许把 null 当 0 拉平。
+ */
+function Spark({ series, title }: { series: number[]; title: string }) {
+  if (series.length < 2) {
+    return <span className="text-muted-foreground" title={title || '快照不足(需 ≥2 天已算出 IC)'}>--</span>
+  }
+  // 坐标保留 1 位: 这是**几何**不是数字格式化, 所以不走 safe*(R6 门禁针对的是展示数字) ——
+  // 用算术取整, 避免与"数字必须走 safe*"的纪律混淆。
+  const r1 = (n: number) => Math.round(n * 10) / 10
+  const w = 64, h = 16, pad = 2
+  const min = Math.min(...series), max = Math.max(...series)
+  const span = max - min || 1
+  const pts = series.map((v, i) => {
+    const x = pad + (i * (w - pad * 2)) / (series.length - 1)
+    const y = h - pad - ((v - min) / span) * (h - pad * 2)
+    return `${r1(x)},${r1(y)}`
+  }).join(' ')
+  const last = series[series.length - 1]
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label={title}>
+      <title>{title}</title>
+      <line x1={pad} y1={h - pad - ((0 - min) / span) * (h - pad * 2)}
+            x2={w - pad} y2={h - pad - ((0 - min) / span) * (h - pad * 2)}
+            stroke="currentColor" strokeOpacity="0.25" strokeDasharray="2 2" strokeWidth="1" />
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2"
+                className={last >= 0 ? 'text-red-400' : 'text-emerald-400'} />
+    </svg>
+  )
+}
 
 /** 期数下限(与后端一致: ic 需 ≥3, 样本外 ≥2) */
 const MIN_PERIODS = 3
@@ -46,6 +78,9 @@ export default function FactorIC() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
+  const [hist, setHist] = useState<Record<string, number[]>>({})
+  const [histDays, setHistDays] = useState(0)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -59,6 +94,27 @@ export default function FactorIC() {
   }, [days, horizon])
 
   useEffect(() => { void load() }, [load])
+
+  // IC 时序(B9 收口): 与当前 horizon 对齐; 取不到就空着(不编历史)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const r: FactorICHistoryResp = await factorICApi.history(horizon, 30)
+        if (!alive) return
+        const by: Record<string, number[]> = {}
+        for (const p of r.items) {
+          if (p.ic === null || p.ic === undefined) continue   // null=那天没算出来, 不进曲线
+          ;(by[p.factor_code] = by[p.factor_code] || []).push(p.ic)
+        }
+        setHist(by)
+        setHistDays(r.items.length)
+      } catch {
+        if (alive) { setHist({}); setHistDays(0) }
+      }
+    })()
+    return () => { alive = false }
+  }, [horizon])
 
   const rows = useMemo(() => {
     const f = data?.factors ?? {}
@@ -138,6 +194,7 @@ export default function FactorIC() {
                   <th className="px-2 py-1.5 text-right font-medium" title="pooled Spearman, 混入时序变异 —— 只作对照, 不作决策口径">参考值</th>
                   <th className="px-2 py-1.5 text-right font-medium" title="样本量(因子快照条数)">样本</th>
                   <th className="px-2 py-1.5 text-right font-medium" title="参与 IC 计算的截面期数 / 样本外期数">期数</th>
+                  <th className="px-2 py-1.5 text-right font-medium" title="每日快照的 IC 走势(近 30 天; 只连已算出的点)">近 30 日</th>
                 </tr>
               </thead>
               <tbody>
@@ -157,6 +214,18 @@ export default function FactorIC() {
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{r.sample_size}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
                         {r.ic_periods} / {r.holdout_periods}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <Spark
+                          series={hist[r.code] || []}
+                          title={
+                            (hist[r.code] || []).length >= 2
+                              ? `近 30 天有 ${(hist[r.code] || []).length} 天算出 IC（共 ${histDays} 条快照）`
+                              : histDays === 0
+                                ? '还没有 IC 快照（每日快照任务尚未产出数据）'
+                                : '快照不足（需 ≥2 天算出 IC 才画线）'
+                          }
+                        />
                       </td>
                     </tr>
                   )

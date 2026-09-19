@@ -607,6 +607,15 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"每日备份 job 注册失败: {e}")
 
+    # B9(2026-09-19): 因子 IC 每日快照(收盘后) —— 把即时算的 IC 沉淀成时序,
+    # 才能回答"某个因子的 IC 随时间怎么变、什么时候失效"。
+    try:
+        from src.core.factor_ic_history import register_daily_job as register_factor_ic_job
+
+        register_factor_ic_job(sched.scheduler)
+    except Exception as e:  # noqa: BLE001 - 注册失败不阻断调度器构建
+        logger.warning(f"因子 IC 快照 job 注册失败: {e}")
+
     # P0(2026-09-18): JWT 密钥每 90 天自动轮换(旧密钥 grace 7 天内仍可验签)
     try:
         from src.core.secret_rotation import register_rotation_job

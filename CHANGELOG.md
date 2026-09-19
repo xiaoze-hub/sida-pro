@@ -5,6 +5,36 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-19 (B9 收口 · 因子 IC 时序落库 → v0.10.45)
+
+### feat(factors): 因子 IC 每日快照落库 + 时序迷你图 —— 回答"这个因子什么时候失效"
+
+**性质**: 补 B9 最后一块(数据资产 E1)。前面把 IC 接出来了, 但 IC 一直是**即时算**的:
+每次都用同一段窗口重算一遍、算完就丢 —— 于是能回答"这段时间哪些因子有效",
+**回答不了"某个因子的 IC 随时间怎么变、什么时候失效"**, 而后者才是调权与因子衰减判断的前提。
+
+**做法(纵向一条)**:
+- **迁移 v176 `factor_ic_snapshots`**: 一因子一市场一交易日一持有期一行, 唯一键 `(factor_code, market,
+  trade_date, horizon)` → **当天重跑只更新不重复插**(补跑/重跑安全);
+- **`src/core/factor_ic_history.py`**: `snapshot_ic()` 调既有 `evaluate_factor_ic` 落库;
+  `history()` 取时序(升序, 供前端画线); `register_daily_job()` 交易日 **17:25**(收盘后,
+  outcome 依赖当日 K 线已落库), 已在 `bootstrap/runtime.py` 接线;
+- **端点 `GET /api/recommendations/strategy-factor-ic/history?horizon&days&factor_code`**;
+- **前端**: 因子有效性页新增「近 30 日」列 —— 纯 SVG 迷你趋势线(自带零基准虚线, 因 IC 有正负)。
+
+**三条诚实口径(测试钉住)**:
+1. **样本不足也落行**: `ic` 为 NULL 且记下 `ic_periods` —— 留"这天算不出来"的痕迹,
+   比留空洞强(空洞分不清"没跑"与"没法算"); 计数列特意**可空**, 与 `0`("确实没样本")分开;
+2. **绝不补 0**: 任何取不到的指标列一律 NULL(0 = 真的没相关性, 是另一件事);
+3. **计算失败一行都不写**: 否则一堆 NULL 会被读成"这天样本不足"(测试 `test_calc_error_writes_nothing`);
+   前端同理 —— **点不足 2 个不画线**(1 个点画线 = 编趋势), `null` 不进曲线。
+
+**踩坑记录**: 迁移函数最初插在 `MIGRATIONS` 元组**之后** → ruff `F821` 当场拦下(元组在 import 期求值);
+计数列第一版写成 `NOT NULL DEFAULT 0`, 落 NULL 时 `IntegrityError` → 改可空(语义也更对)。
+
+**测试**: 后端 `tests/test_factor_ic_history.py` 6 例(幂等更新非重复插 · 样本不足留痕 ·
+不补 0 · 失败不写 · 时序升序且按 horizon 隔离); 前端 `tests/components/factor-ic-history.test.ts` 5 例。
+
 ## 2026-09-19 (修: 发版被"什么时候跑"卡住 —— 周末/UTC 依赖的测试 → v0.10.44)
 
 ### fix(test): 候选后验评估的"今天"改为可注入; 测试锚定固定交易日, 不再随 CI 时区/周末翻车

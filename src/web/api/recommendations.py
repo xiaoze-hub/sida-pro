@@ -493,6 +493,25 @@ def strategy_stats(days: int = Query(45, ge=1, le=365)):
     return get_strategy_stats(days=days)
 
 
+@router.get("/strategy-factor-ic/history")
+def strategy_factor_ic_history(
+    days: int = Query(30, ge=1, le=365, description="取最近 N 条快照"),
+    horizon: int = Query(5, ge=1, le=60, description="持有期(交易日)"),
+    market: str = Query("CN", description="市场"),
+    factor_code: str = Query("", description="只看某个因子(留空=全部)"),
+):
+    """因子 IC 的**时序**(B9 收口): 每日快照, 用于看趋势/失效拐点。
+
+    诚实口径: 样本不足的那天**也有行**, 只是 `ic` 为 NULL —— 前端必须能分开
+    "没算出来(NULL)" 与 "算了发现没相关性(0)"。
+    """
+    from src.core.factor_ic_history import history
+
+    return {"horizon": horizon, "market": market, "days": days,
+            "items": history(market=market, horizon=horizon, days=days,
+                             factor_code=factor_code or None)}
+
+
 @router.get("/strategy-factor-ic")
 def strategy_factor_ic(
     days: int = Query(90, ge=7, le=365, description="回看快照天数"),

@@ -4566,6 +4566,61 @@ def _m173_users_soft_delete(conn: Connection) -> None:
     )
 
 
+def _m176_factor_ic_snapshots(conn: Connection) -> None:
+    """因子 IC 每日快照(B9 数据资产 E1 收口, 2026-09-19)。
+
+    为什么需要: IC/IR 一直是**即时算**的 —— 每次都重算同一段窗口, 因此回答不了
+    "某个因子的 IC 随时间怎么变、什么时候失效"。把每日 IC 落成时序, 才能看趋势与拐点,
+    也是后续因子加权/归因的原料。
+
+    诚实口径:
+      - **样本不足也落行**, 只是 `ic` 等指标为 NULL + 记下 `ic_periods` —— 留下"这天样本不够"的痕迹,
+        比留一个空洞更有信息量(空洞分不清"没跑"和"没法算");
+      - 幂等: 唯一键 (factor_code, market, trade_date, horizon), 当天重跑只更新不重复插。
+    """
+    if _has_table(conn, "factor_ic_snapshots"):
+        return
+    is_pg = _dialect_is_pg(conn)
+    pk = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE factor_ic_snapshots (
+  id {pk},
+  factor_code TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  trade_date TEXT NOT NULL,
+  horizon INTEGER NOT NULL DEFAULT 5,
+  ic REAL,
+  ic_t REAL,
+  ic_std REAL,
+  ir REAL,
+  ic_holdout REAL,
+  ic_pooled REAL,
+  -- 计数列**可空**: NULL = "没算/不知道"(与 0 = "确实没有样本" 区分开)
+  sample_size INTEGER,
+  ic_periods INTEGER,
+  holdout_periods INTEGER,
+  created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_factor_ic_snapshot "
+            "ON factor_ic_snapshots (factor_code, market, trade_date, horizon)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_factor_ic_snapshot_date "
+            "ON factor_ic_snapshots (market, horizon, trade_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4682,6 +4737,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(174, "caliber_snapshots", _m174_caliber_snapshots),
     # 决策日志(B6, 2026-09-18): 信号 + 当时证据/价格留痕, 事后回填 T+1/3/5
     Migration(175, "decision_log", _m175_decision_log),
+    Migration(176, "factor_ic_snapshots", _m176_factor_ic_snapshots),
 )
 
 

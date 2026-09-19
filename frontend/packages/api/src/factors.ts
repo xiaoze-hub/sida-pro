@@ -66,7 +66,30 @@ export interface FactorICResp {
   error?: string
 }
 
+
+// ── 因子 IC 时序(B9 收口, 2026-09-19): 每日快照, 看趋势/失效拐点 ──────────────
+// 诚实口径: **样本不足的那天也有行**, 只是 `ic` 为 null —— 前端要把 null 与 0 分开显示。
+export interface FactorICPoint {
+  factor_code: string
+  trade_date: string
+  ic: number | null
+  ic_holdout: number | null
+  ir: number | null
+  sample_size: number | null
+  ic_periods: number | null
+}
+
+export interface FactorICHistoryResp {
+  horizon: number
+  market: string
+  days: number
+  /** 按 trade_date 升序 */
+  items: FactorICPoint[]
+}
+
 export const factorICApi = {
   evaluate: (days = 90, horizon = 5) =>
     fetchAPI<FactorICResp>(`/recommendations/strategy-factor-ic?days=${days}&horizon=${horizon}`),
+  history: (horizon = 5, days = 30) =>
+    fetchAPI<FactorICHistoryResp>(`/recommendations/strategy-factor-ic/history?horizon=${horizon}&days=${days}`),
 }
