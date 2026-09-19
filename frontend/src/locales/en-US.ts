@@ -62,6 +62,7 @@ const enUS: Messages = {
     home: 'Home',
     stocks: 'Quotes',
     heatmap: 'Heatmap',
+    factorIC: 'Factor IC',
     decision: 'Decision',
     themeMood: 'Theme Mood',
     opportunities: 'Opportunities',

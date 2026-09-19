@@ -5,6 +5,32 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-19 (B9 因子有效性接出来 + 文档端点校验 → v0.10.43)
+
+### feat(factors): 因子有效性页(IC/样本外/参考值) + fix(docs): 文档端点与 OpenAPI 对齐校验
+
+**性质**: 把**已有**的因子能力接到界面上(未来方向 B9「数据资产 E1」)+ 一条防"文档撒谎"的门禁。
+
+**先说不是新建**: 后端早就有完整因子体系 —— `factor_eval`(横截面 IC/IR + t + 样本外 IC)、
+`factor_lab`(因子注册表 + 分层回测 + long-short)、`factor_ic_report`(LLM 归因)、`factor_weights`
++ 端点 `/api/factors/weights`、`/api/recommendations/strategy-factor-ic`。
+**缺口是"没接出来"**: 前端零使用、开发者文档零列举 —— 外部根本发现不了。
+
+**① 新增 `/factor-ic` 页**(挂在「决策」组: 解释"信号为什么有效"):
+- 每因子: IC(主口径) · t · IR · **样本外 IC** · 参考值 · 样本 · 期数;
+- **三条诚实口径**(测试钉住): `ic` 为 null(期数 <3)→ 显示 `--` + 悬停"期数不足(不是无效)";
+  `ic_pooled` 显式标"**参考值 · 只作对照**"(混时序变异, 不作决策口径); 后端 `error` **原样显示**,
+  不装作"没数据"; 页面**不自己算任何相关系数**(测试扫 `reduce(`/`Math.sqrt`/统计库 import);
+- 参数可调(回看天数 / 持有期), 数字格式化一律走 `@/lib/format` 的 `safe*`(R6 门禁当场拦下裸 `toFixed`)。
+
+**② 文档端点校验(新门禁)**: 给文档补因子端点时我顺手写了一条
+`/api/recommendations/strategy-factor-eval` —— **这端点根本不存在**(真实的是
+`strategy-factors/{signal_run_id}`)。**文档写错端点比不写更糟**: 外部照调只会 404 并以为服务挂了。
+已修, 并加 `tests/test_docs_endpoints_match_openapi.py`: 抽出文档里全部 34 条 `path: '/api...'`,
+与 `app.openapi()['paths']` 逐条比对(路径参数归一后比)。**文档从此不能与真实端点脱节。**
+
+**测试**: 后端 2 例(文档端点全存在 + 因子端点已列举); 前端 `tests/components/factor-ic.test.ts` 8 例。
+
 ## 2026-09-19 (B7 内部计量 · 耗时视图 → v0.10.42)
 
 ### feat(admin): 用量看板补"慢不慢" —— 按 skill / 按天 P50·P95, 未记录耗时不算 0ms

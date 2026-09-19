@@ -61,6 +61,7 @@ const zhCN = {
     home: '首页',
     stocks: '行情',
     heatmap: '板块热力',
+    factorIC: '因子有效性',
     decision: '决策',
     themeMood: '题材情绪',
     opportunities: '机会',

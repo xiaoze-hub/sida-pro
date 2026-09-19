@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
@@ -46,7 +46,8 @@ const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
 const DevelopersPage = lazy(() => import('@/pages/Developers'))
 // 用户协议/隐私政策(合规落地, 2026-09-16): /terms 公开可访问
 const TermsPage = lazy(() => import('@/pages/Terms'))
-const TiersPage = lazy(() => import('@/pages/Tiers'))   // P2-4: 公开档位对比(未登录可看)
+const TiersPage = lazy(() => import('@/pages/Tiers'))
+const FactorICPage = lazy(() => import('@/pages/FactorIC'))   // B9: 因子有效性(IC/样本外/参考值)   // P2-4: 公开档位对比(未登录可看)
 // 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
 const LandingPage = lazy(() => import('@/pages/Landing'))
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
@@ -90,6 +91,9 @@ const navItems = [
   // 决策账本(2026-09-18, B6 前端 / 设计稿 v3.0 §六 新增"决策"一级入口): 信号→结果的账。
   // 后端只要求登录(不含 pro 数据), 故用通用权限点, 不挡普通用户看自己的账。
   { to: '/decision-ledger', icon: ClipboardList, labelKey: 'nav.decisionLedger', perm: 'view_quotes' },
+  // 因子有效性(2026-09-19, B9 数据资产): 解释"信号为什么有效"。研究/复核性质,
+  // 仅登录可见(不涉 pro 数据), 但**不代表买卖建议**。
+  { to: '/factor-ic', icon: FlaskConical, labelKey: 'nav.factorIC', perm: 'view_quotes' },
   { to: '/reports', icon: FileText, labelKey: 'nav.reports', perm: 'view_reports' },
   { to: '/history', icon: Clock, labelKey: 'nav.history' },
   { to: '/portfolio', icon: List, labelKey: 'nav.portfolio', perm: 'edit_portfolio' },
@@ -120,7 +124,7 @@ const desktopNavGroups = [
   { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
-  { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare'].includes(n.to)) },
+  { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare', '/factor-ic'].includes(n.to)) },
   // §4.3 补齐(2026-09-01): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知 后,
   // 投研 2→1 项、我的 4→3 项、系统 4→3 项(全部经 ?tab= 直达, 快捷键兜底不变)
   { key: 'research', labelKey: 'nav.reports', items: navItems.filter(n => ['/reports'].includes(n.to)) },
@@ -635,6 +639,7 @@ function App() {
               {/* 用户协议/隐私政策(合规, 2026-09-16): 已登录也可从设置等处回看 */}
               <Route path="/terms" element={<TermsPage />} />
               <Route path="/tiers" element={<TiersPage />} />
+              <Route path="/factor-ic" element={<FactorICPage />} />
               {/* Admin 管理后台(2026-09-16): PermGuard(manage_users) + 后端 require_owner 双重 */}
               <Route path="/admin" element={<PermGuard perm="manage_users" myPerms={myPerms}><AdminPage /></PermGuard>} />
               <Route path="/datasources" element={<LegacyTabRedirect to="/system?tab=datasources" />} />
