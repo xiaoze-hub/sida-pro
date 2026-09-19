@@ -5,6 +5,23 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-19 (修: core→web 反向依赖被门禁拦下 → v0.10.46)
+
+### fix(core): IC 时序模块改用 src/db/session; 并记一条"本地只跑部分后端测试 = 没跑门禁"的教训
+
+**性质**: 真架构违规修复(**v0.10.45 的构建就是被它拦死的**: gates 红 → build skipped → 无镜像)。
+
+**违规**: `src/core/factor_ic_history.py` 里写了 `from src.web.database import SessionLocal` ——
+`tests/test_w41_core_web_dependency.py`(B4.1/KI-039 棘轮) 当场判红:
+**src/core 不许反向依赖 src/web**(核心逻辑要能脱离 Web 层单测); 数据访问一律走 `src.db.session` / `src/db/repository`。
+
+**修法**: 两处改为 `from src.db.session import SessionLocal`(与 `src/core/adjust.py`、`agent_runs.py` 同一姿势)。
+
+**这条的教训比修复本身重要**: 我本地跑的是**目标测试子集**(`test_factor_ic_history.py` 6 例全绿)就打了 tag ——
+但 CI 跑的是**全量后端 pytest**, 架构棘轮/凭据扫描/契约断言都在那里。
+**"本地部分绿"不等于"门禁会绿"**; 发版前必须跑全量(`bash scripts/pre_release.sh` 或 `pytest tests/`)。
+这与 skill 里已有的"改前端也要跑后端 pytest"是同一条纪律的更严格版本: **跑一半不算跑**。
+
 ## 2026-09-19 (B9 收口 · 因子 IC 时序落库 → v0.10.45)
 
 ### feat(factors): 因子 IC 每日快照落库 + 时序迷你图 —— 回答"这个因子什么时候失效"

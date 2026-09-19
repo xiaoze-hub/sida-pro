@@ -71,7 +71,7 @@ def snapshot_ic(
 
     own = db is None
     if own:
-        from src.web.database import SessionLocal
+        from src.db.session import SessionLocal
 
         db = SessionLocal()
     try:
@@ -110,7 +110,7 @@ def history(
     """取 IC 时序(按日期升序; 一次可取多个因子, 便于前端画每行小趋势)。"""
     own = db is None
     if own:
-        from src.web.database import SessionLocal
+        from src.db.session import SessionLocal
 
         db = SessionLocal()
     try:
