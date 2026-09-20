@@ -11,7 +11,9 @@
    相交面积 > 较小者的 30% 且 > 120px² → 报。绝对定位的浮层（tooltip/下拉/遮罩）白名单放行。
 2. **裁切**：`overflow: hidden/clip` 且 `scrollWidth/Height` 超出 `clientWidth/Height` 5px 以上 → 内容被切。
 3. **横向溢出**：文档 `scrollWidth > clientWidth + 2` → 出现横向滚动条。
-4. **图表布局不变量**：K 线容器带 `data-chart-panes="pane数|各pane高度"`（运行时读的），
+4. **热力图标签**：容器带 `data-heatmap-labels="显示/总数"` + `-label-tiny` + `-contrast`，
+   要求 **显示 + 太小 === 总数**（不许静默丢标签）且**最小对比度 ≥3**（文字看得见）。
+5. **图表布局不变量**：K 线容器带 `data-chart-panes="pane数|各pane高度"`（运行时读的），
    要求 **≥2 个 pane 且每个都有高度** —— 即副图真的独立成 pane（2026-09-20 前是"同 pane overlay
    靠 margins 让位"，靠两个数字对齐，改一处就会重合）。
 
@@ -190,6 +192,26 @@ PROBE = r"""
   // 形如 "2|290/101"。判据: ① 至少 2 个 pane（副图真的独立, 没退化成同 pane 叠画）;
   // ② 每个 pane 都有高度（没塌成一条缝, 那样等于副图看不见）。
   // 为什么不用配置常量当判据: 配置写"分了 pane"≠ 运行时真分了（旧内核会静默退化）。
+  // 热力图标签(2026-09-20): 色块里的文字 DOM 量不到, 组件把**运行时**统计挂到容器上 ——
+  //   data-heatmap-labels="显示数/总数"  data-heatmap-label-tiny="太小放不下的块数"
+  //   data-heatmap-contrast="最小对比度"
+  // 不变量: ① 显示数 + 太小数 === 总数(不许有块**静默**丢标签 —— 用户报的就是这个);
+  //         ② 只要还有文字显示, 最小对比度必须 ≥3(文字真的看得见)。
+  const heatmaps = Array.from(document.querySelectorAll('[data-heatmap-labels]')).map((el) => {
+    const raw = el.getAttribute('data-heatmap-labels') || '';
+    const [sStr, tStr] = raw.split('/');
+    const shown = parseInt(sStr, 10);
+    const total = parseInt(tStr, 10);
+    const tiny = parseInt(el.getAttribute('data-heatmap-label-tiny') || '', 10);
+    const contrastRaw = el.getAttribute('data-heatmap-contrast') || '';
+    const contrast = parseFloat(contrastRaw);
+    const measured = Number.isFinite(shown) && Number.isFinite(total) && Number.isFinite(tiny);
+    const accounted = measured && shown + tiny === total;
+    const visible = !Number.isFinite(contrast) || shown === 0 || contrast >= 3;
+    return { raw, shown, total, tiny, contrast, contrastRaw, measured, ok: accounted && visible,
+             why: !measured ? '标签统计没量到' : !accounted ? `${total - shown - tiny} 块既没显示也不在"太小"清单里(静默丢标签)` : !visible ? `最小对比度 ${contrastRaw} < 3(文字看不清)` : '' };
+  });
+
   const charts = Array.from(document.querySelectorAll('[data-chart-panes]')).map((el) => {
     const raw = el.getAttribute('data-chart-panes') || '';
     const [nStr, hs] = raw.split('|');
@@ -200,7 +222,7 @@ PROBE = r"""
     return { raw, panes, heights, h: Math.round(r.height), ok };
   });
 
-  return { candidates: cand.length, overlaps: overlaps.slice(0, 40), suspects: suspects.slice(0, 20), clipped, hScroll, charts };
+  return { candidates: cand.length, overlaps: overlaps.slice(0, 40), suspects: suspects.slice(0, 20), clipped, hScroll, charts, heatmaps };
 }
 """
 
@@ -278,6 +300,15 @@ def main() -> int:
                 bad_charts = [c for c in ch if not c["ok"]]
                 su = res.get("suspects") or []
                 line = f"{label:<22} 重叠={len(ov):<3} 疑似={len(su):<3} 真裁切={len(cl):<3} 截断={len(cl_ell):<3}(看不全{len(cl_lost)}) 横向={hs['overflow']:<4} 图表={len(ch)}"
+                heatmaps = res.get("heatmaps") or []
+                bad_heat = [h for h in heatmaps if not h["ok"]]
+                if heatmaps:
+                    line += f" 热力图标签 {heatmaps[0]['raw']}"
+                    if heatmaps[0]['contrastRaw']:
+                        line += f" 对比度 {heatmaps[0]['contrastRaw']}"
+                    if bad_heat:
+                        line += f"  ⚠ {bad_heat[0]['why']}"
+                        fails.append(f"{label}: 热力图标签异常({bad_heat[0]['why']})")
                 if bad_charts:
                     c0 = bad_charts[0]
                     why = ("副图没独立成 pane(只 %s 个)" % c0["panes"]) if c0["panes"] < 2 else "有 pane 高度塌陷(<40px)"

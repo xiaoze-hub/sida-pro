@@ -7,6 +7,8 @@ import {
   formatHeatPct,
   hasDrawableArea,
   hasUsableVolume,
+  labelTierFor,
+  pickLabelColor,
   toTreemapCells,
   type BoardHeatItem,
   type HeatAnomaly,
@@ -14,6 +16,8 @@ import {
   type HeatPalette,
   type TreemapCell,
 } from '@panwatch/biz-ui/lib/board-heatmap'
+import type { Rgb } from '@panwatch/biz-ui/lib/board-heatmap'
+import type { EChartsType } from 'echarts/core'
 import { fetchAPI } from '@panwatch/api'
 import { safeFixed } from '@/lib/format'
 import ErrorState from '@panwatch/biz-ui/components/ErrorState'
@@ -58,14 +62,145 @@ const MAX_ANOMALY_CHIPS = 8
 /** 稳定引用: 避免 useMemo 依赖每次渲染都变 (react-hooks/exhaustive-deps) */
 const NO_ITEMS: BoardHeatItem[] = []
 
+/** 字色候选: 真正的深/浅两端(不跟随主题名 —— 跟随**实测底色**)。 */
+const LABEL_DARK = '#10151f'
+const LABEL_LIGHT = '#ffffff'
+
+/**
+ * 从**画布实测像素**取每个色块的实际底色。
+ *
+ * 为什么要实测: 色块填充是半透明的, 眼睛看到的是"填充叠在画布底色上"的结果, 而底色是白是黑
+ * 只有画出来才知道(生产实测这块画布底色是**白**的 —— 与深色主题的直觉相反, 这正是老规则
+ * 把字色判反、文字隐形的根因)。采样点取色块**上缘 12% 内缩**的三点取中位 —— 文字居中,
+ * 避开文字像素, 否则会把字色当底色。
+ */
+function sampleTileColors(chart: EChartsType, rects: { w: number; h: number }[]): (Rgb | null)[] | null {
+  try {
+    const canvas = (chart.getDom() as HTMLElement).querySelector('canvas')
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return null
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    const W = canvas.width
+    const leaves = (chart as unknown as { getModel?: () => EcLayoutProbe | undefined })
+      .getModel?.()?.getSeriesByIndex?.(0)?.getData?.()?.tree?.root?.children
+    if (!leaves || leaves.length !== rects.length) return null
+    return leaves.map((node, i) => {
+      const L = node.getLayout?.()
+      const x = Number(L?.x)
+      const y = Number(L?.y)
+      const w = rects[i].w
+      const h = rects[i].h
+      if (!Number.isFinite(x) || !Number.isFinite(y) || w < 4 || h < 4) return null
+      const pts = [0.15, 0.5, 0.85].map((f) => {
+        const sx = Math.min(Math.max(Math.round(x + w * f), 0), W - 1)
+        const sy = Math.min(Math.max(Math.round(y + h * 0.12), 0), canvas.height - 1)
+        const o = (sy * W + sx) * 4
+        return { r: d[o], g: d[o + 1], b: d[o + 2], a: 1 }
+      })
+      pts.sort((p, q) => p.r + p.g + p.b - (q.r + q.g + q.b))
+      return pts[1]
+    })
+  } catch {
+    return null // 读不到(tainted canvas / 结构变了) → 保留第一遍估算, 不硬改
+  }
+}
+
+/**
+ * ECharts 内部 model 的最小结构(公开 API 没暴露 getModel, 用结构类型读布局, 读不到就放弃)。
+ * treemap 的布局**不在 List 上**(实测 `data.count()=129` 含根节点, 与 cells 不等), 而在
+ * **树节点**上: `data.tree.root.children[i].getLayout()` → {x,y,width,height,isInView}。
+ */
+type EcLayoutProbe = {
+  getSeriesByIndex?: (i: number) => {
+    getData?: () => {
+      tree?: { root?: { children?: { getLayout?: () => { x?: number; y?: number; width?: number; height?: number } | undefined }[] } }
+    }
+  } | undefined
+}
+
+/**
+ * 二遍布局: 读 ECharts 算好的色块 rect, 按**真实像素尺寸**给每块定标签档位并写回。
+ *
+ * 为什么这么做(2026-09-20 缺陷修复): 老规则用"面积占比 ≥ 0.8%"当"放不放得下文字"的代理指标,
+ * 在**等权模式**下必然失效(每块占比 = 1/N, N=128 时恒 0.0078) ⇒ 整张图无标签; 量能模式下
+ * 也只有少数大块够阈值。真判据只能是布局后的 rect。
+ *
+ * 同时把统计挂到图表容器上(`data-heatmap-labels` 等)—— canvas 里的文字 DOM 量不到,
+ * 不变量 **shown + tiny === total** 就是"没有哪个块静默丢了标签"的机器判据(巡检据此断言)。
+ */
+function applyLabelTiers(chart: EChartsType, cells: TreemapCell[]) {
+  const host = (() => { try { return chart.getDom() ?? null } catch { return null } })()
+  let rects: { w: number; h: number }[] | null = null
+  try {
+    // getModel 在 ECharts 公开类型里是 private, 但运行时存在 —— 用结构类型读布局,
+    // 拿不到就放弃(不硬改, 保持第一遍全显示)。
+    const model = (chart as unknown as { getModel?: () => EcLayoutProbe | undefined }).getModel?.()
+    const leaves = model?.getSeriesByIndex?.(0)?.getData?.()?.tree?.root?.children
+    // 叶子数必须与 cells 一一对应, 否则宁可不改(顺序错位会把标签配到别的板块上)
+    if (leaves && leaves.length === cells.length) {
+      rects = leaves.map((n) => {
+        const L = n.getLayout?.()
+        return { w: Number(L?.width), h: Number(L?.height) }
+      })
+    }
+  } catch {
+    rects = null
+  }
+  if (!rects) {
+    // 读不到布局**不硬改**: 保持第一遍"全显示", 由 ECharts 自己裁 —— 并把"没量到"如实挂出去。
+    host?.setAttribute('data-heatmap-labels', `unknown/${cells.length}`)
+    return
+  }
+  const tiers = rects.map((r) => labelTierFor(r.w, r.h))
+  const tiny = tiers.filter((t) => t === 0).length
+  const shown = tiers.length - tiny
+  // ── 字色用**画布实测像素**定(不猜) ──────────────────────────────────────────
+  // 底色是白是黑只有画出来才知道(实测这块画布底色是**白**的, 与深色主题的直觉相反);
+  // 用 WCAG 对比度在深/浅两端里选, 并回传最小对比度给巡检断言"文字真的看得见"。
+  const sampled = sampleTileColors(chart, rects)
+  const colors: (string | undefined)[] = []
+  let minContrast = Infinity
+  rects.forEach((_, i) => {
+    const bg = sampled?.[i]
+    if (tiers[i] === 0 || !bg) return
+    const picked = pickLabelColor(bg, LABEL_DARK, LABEL_LIGHT)
+    colors[i] = picked.color
+    minContrast = Math.min(minContrast, picked.contrast)
+  })
+  const fin = (v: number) => (Number.isFinite(v) ? Math.round(v) : -1)
+  const minW = Math.min(...rects.map((r) => (Number.isFinite(r.w) ? r.w : Infinity)))
+  const minH = Math.min(...rects.map((r) => (Number.isFinite(r.h) ? r.h : Infinity)))
+  host?.setAttribute('data-heatmap-labels', `${shown}/${cells.length}`)
+  host?.setAttribute('data-heatmap-label-tiny', String(tiny))
+  host?.setAttribute('data-heatmap-min-tile', `${fin(minW)}x${fin(minH)}`)
+  // 最小对比度: 巡检据此断言"文字真的看得见"(WCAG 对比度 1~21; 小字号建议 ≥4.5, 这里按 ≥3 兜底)
+  host?.setAttribute('data-heatmap-contrast', Number.isFinite(minContrast) ? safeFixed(minContrast, 2) : 'unknown')
+  chart.setOption({
+    series: [
+      {
+        data: cells.map((c, i) => ({
+          ...c,
+          labelTier: tiers[i],
+          label: { ...c.label, show: tiers[i] > 0, ...(colors[i] ? { color: colors[i] as string } : {}) },
+        })),
+      },
+    ],
+  } as never)
+}
+
 function buildPalette(): HeatPalette {
   const sc = readStockColors()
   return {
     up: sc.up,
     down: sc.down,
     neutral: hslaVar('--flat-color', '215 16% 57%', 0.18),
-    labelDark: hslaVar('--foreground', '240 10% 10%'),
+    // 字色候选必须是**真正的深/浅两端** —— 以前 labelDark 取 `--foreground`, 深色主题下它
+    // 是近白(240 15% 90%), 两个候选都是浅色 ⇒ 浅色块上的文字必然隐形。这里写死两端,
+    // 由 pickLabelColor 按**实测对比度**选(浅底黑字/深底白字)。
+    labelDark: '#10151f',
     labelLight: '#ffffff',
+    // 图表实际底色(第一遍估算用; 二遍会用画布实测像素覆盖)
+    surface: '#ffffff',
   }
 }
 
@@ -216,8 +351,14 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
               show: true,
               fontSize: 11,
               overflow: 'truncate',
-              formatter: (p: { name?: string; data?: TreemapCell }) =>
-                `${p?.name ?? ''}\n${formatHeatPct(p?.data?.changePct)}`,
+              // 按**档位**渲染(2026-09-20): 2 行=名称+涨跌幅; 1 行=只名称(色块矮, 两行放不下);
+              // 0 行=空(色块太小, 只留 tooltip)。档位由二遍布局按真实 rect 定。
+              formatter: (p: { name?: string; data?: TreemapCell }) => {
+                const tier = p?.data?.labelTier ?? 2
+                if (tier === 0) return ''
+                if (tier === 1) return `${p?.name ?? ''}`
+                return `${p?.name ?? ''}\n${formatHeatPct(p?.data?.changePct)}`
+              },
             },
             data: cells,
           },
@@ -225,6 +366,11 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
       },
       true,
     )
+    // ── 二遍布局(2026-09-20): 用**真实色块像素尺寸**给每个块定标签档位 ──────────────
+    // 为什么必须二遍: 布局前不知道每块多大, 而"面积占比"不是尺寸 —— 等权模式下每块占比恒相等
+    // (1/128 = 0.0078 < 老阈值 0.008) ⇒ 老规则让**整张图一个标签都没有**(用户报的现象)。
+    applyLabelTiers(chart, cells as TreemapCell[])
+
     chart.off('click')
     chart.on('click', (params) => {
       const d = params?.data as unknown as TreemapCell | undefined
