@@ -251,7 +251,10 @@ export default function HistoryPage() {
                       <Badge variant="outline" className="text-[10px] flex-shrink-0">
                         {AGENT_LABELS[r.agent_name] || r.agent_name}
                       </Badge>
-                      <span className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}>{r.title || '分析报告'}</span>
+                      <span
+                        className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}
+                        title={r.title || '分析报告'}
+                      >{r.title || '分析报告'}</span>
                       {r.status && r.status !== 'success' && (
                         <Badge variant="destructive" className="text-[10px] flex-shrink-0">未生成</Badge>
                       )}

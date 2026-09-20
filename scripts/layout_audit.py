@@ -162,12 +162,19 @@ PROBE = r"""
       // 后者是"内容被切掉且看不全"，混在一起报等于没报。
       const ellipsis = st.textOverflow === 'ellipsis' ||
         /\btruncate\b|line-clamp/.test((el.className || '').toString());
+      // 截断要分"看不看得到全"：省略号本身是设计选择，但**看不全又没有任何途径看全**
+      // 就是内容丢失（2026-09-20 加：/history 报告标题被截到 256px 且无 title → 用户永远看不到全名）。
+      const readable = !!(
+        el.getAttribute('title') || el.getAttribute('aria-label') ||
+        el.closest('[title]') || el.querySelector('[title]')
+      );
       clipped.push({
         tag: el.tagName.toLowerCase(),
         cls: (el.className || '').toString().slice(0, 90),
         dw, dh, w: Math.round(r.width), h: Math.round(r.height),
-        txt: txt.slice(0, 40),
+        txt: txt.slice(0, 60),
         ellipsis,
+        readable,
       });
     }
     if (clipped.length > 60) break;
@@ -262,10 +269,12 @@ def main() -> int:
                 cl_all = res["clipped"]
                 cl = [c for c in cl_all if not c.get("ellipsis")]      # 真裁切
                 cl_ell = [c for c in cl_all if c.get("ellipsis")]      # 有意截断(info)
+                cl_lost = [c for c in cl_ell if not c.get("readable")]  # 截断且无处看全 → 内容丢失
+                res["clipped_lost"] = cl_lost
                 res["clipped_hard"], res["clipped_ellipsis"] = cl, cl_ell
                 bad_charts = [c for c in ch if not c["ok"]]
                 su = res.get("suspects") or []
-                line = f"{label:<22} 重叠={len(ov):<3} 疑似={len(su):<3} 真裁切={len(cl):<3} 截断={len(cl_ell):<3} 横向={hs['overflow']:<4} 图表={len(ch)}"
+                line = f"{label:<22} 重叠={len(ov):<3} 疑似={len(su):<3} 真裁切={len(cl):<3} 截断={len(cl_ell):<3}(看不全{len(cl_lost)}) 横向={hs['overflow']:<4} 图表={len(ch)}"
                 if bad_charts:
                     line += f"  ⚠ 图表布局违规: {[c['raw'] for c in bad_charts]}"
                     fails.append(f"{label}: 主图/副图重叠({bad_charts[0]['raw']})")
@@ -274,6 +283,8 @@ def main() -> int:
                 print(line)
                 for o in ov[:6]:
                     print(f"    ⚠ 重叠 {o['ratio']}× {o['area']}px²  [{o['a']['tag']} {o['a']['cls'][:34]}] × [{o['b']['tag']} {o['b']['cls'][:34]}]")
+                for c in cl_lost[:6]:
+                    print(f"    ⚠ 截断看不全 {c['tag']} -{c['dw']}px [{c['cls'][:38]}] «{c['txt'][:40]}»")
                 for c in cl[:5]:
                     print(f"    ⚠ 裁切 {c['tag']} +{c['dw']}x{c['dh']}px [{c['cls'][:40]}] «{c['txt'][:26]}»")
             except Exception as e:  # noqa: BLE001
