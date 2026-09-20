@@ -790,7 +790,7 @@ export default function DashboardPage() {
                           <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">{t('dashboard.todayTag')}</span>
                         )}
                       </div>
-                      {rule && <div className="truncate text-[11px] text-muted-foreground">{rule}</div>}
+                      {rule && <div className="truncate text-[11px] text-muted-foreground" title={rule}>{rule}</div>}
                     </div>
                     {dev != null && (
                       <span className="shrink-0 text-[10px] text-muted-foreground">
@@ -893,7 +893,7 @@ export default function DashboardPage() {
                     <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
-                      {it.why && <div className="truncate text-[11px] text-muted-foreground">{it.why}</div>}
+                      {it.why && <div className="truncate text-[11px] text-muted-foreground" title={it.why}>{it.why}</div>}
                     </div>
                     <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
                       {it.change_pct != null ? pct(it.change_pct) : '--'}
@@ -1123,7 +1123,7 @@ export default function DashboardPage() {
                         <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
                         {o.action_label && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">{o.action_label}</span>}
                       </div>
-                      {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground">{o.signal || o.reason}</div>}
+                      {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                   </div>
