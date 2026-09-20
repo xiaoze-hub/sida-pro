@@ -13,7 +13,7 @@
  *   - 缺失数据: KlineItem 为空数组时显示"无数据"占位 (业务硬约束: 禁止编造数字).
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createChart,
   CandlestickSeries,
@@ -137,22 +137,20 @@ export interface ActivityPoint {
   level?: string | null
 }
 
-/** 主图 / 副图的高度分配（2026-09-19 修重合）。
+/** 副图独立 pane（2026-09-20 架构改动，承接 09-19 的"K线与成交量重合"）。
  *
- * 轻量图表的副图（成交量/MACD/活跃度/资金柱）是**同 pane 的 overlay**，靠 priceScale 的
- * `scaleMargins` 挤到下方；主图价格轴必须把对应空间**让出来**，否则两者必然在
- * [副图 top, 主图 bottom] 区间**画到同一片像素上**——用户看到的就是"K 线和成交量重合"。
+ * 09-19 的修法是"同 pane overlay + 主图价格轴让出底部 30%" —— 能用，但**靠两个数字对齐**：
+ * 一旦有人改了其中一处（或加了新 overlay），又会画进同一片像素。用户报的那次重合就是这么来的。
  *
- * 历史 bug: 主图价格轴没设 scaleMargins（默认 top .2 / bottom .1）→ K 线最低可画到 90% 高度，
- * 而副图从 70% 开始 → **20% 高度重叠带**。
- * 规则: 主图 bottom ≥ (1 - SUBCHART_TOP)，再留 HAIRLINE_GAP 做分隔。
+ * 现在改成**真 pane**：副图（成交量/MACD/活跃度/资金柱）挂到 `paneIndex=1`，与主图在
+ * **不同画布**上 —— 结构上不可能重合，副图还顺带拿到自己的坐标轴（量柱有了可读的刻度）。
+ * 主图价格轴也不再需要给副图让位（原来 bottom=0.32 是"让位"留下的疤），恢复对称留白。
  */
-const SUBCHART_TOP = 0.7
-const HAIRLINE_GAP = 0.02
-/** 副图（overlay）占用的底部区域 */
-const SUBCHART_MARGINS = { top: SUBCHART_TOP, bottom: 0 } as const
-/** 主图价格轴：底部让出副图区域 + 一点间隙，顶部留 8% 给最高价 */
-const PRICE_SCALE_MARGINS = { top: 0.08, bottom: 1 - SUBCHART_TOP + HAIRLINE_GAP } as const
+const SUBCHART_PANE = 1
+/** 副图占比（stretch factor，与主图按比例分高度） */
+const SUBCHART_STRETCH = 0.7
+/** 主图价格轴：上下各留 8%（不再给副图让位） */
+const PRICE_SCALE_MARGINS = { top: 0.08, bottom: 0.08 } as const
 
 
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
@@ -405,6 +403,21 @@ export default function KlineChart(props: {
   const rangeBarsRef = useRef<RangeBar[]>([])
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
+  /** 运行时 pane 报告: "pane数|各pane高度", 供生产巡检断言(见 publishPanes) */
+  const [paneInfo, setPaneInfo] = useState('')
+  // 布局验收钩子(2026-09-20, 副图改独立 pane 后): 主图/副图都在 canvas 里, DOM 量不到 ——
+  // 把**运行时的 pane 数 + 各 pane 实际高度**挂到容器上, 巡检据此断言
+  // "确实是 ≥2 个 pane 且每个都有高度"(即副图真的独立成 pane, 而不是退化成单 pane 叠画)。
+  // 为什么不挂配置常量: 配置说"我分了 pane"不等于运行时真分了(旧内核会静默退化) —— 要量运行时的。
+  const publishPanes = useCallback(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    try {
+      const ps = chart.panes()
+      setPaneInfo(`${ps.length}|${ps.map((x) => Math.round(x.getHeight())).join('/')}`)
+    } catch { /* noop */ }
+  }, [])
+
   /**
    * KI-056: 每 pane 信息栏 —— 十字光标悬停时展示主图 OHLC + 当前副图读数。
    * 缺字段显示 `--`, 不补 0。
@@ -490,44 +503,52 @@ export default function KlineChart(props: {
       wickUpColor: sc.up,
       wickDownColor: sc.down,
     })
-    // ★ 2026-09-19 修"K 线与成交量重合": 主图价格轴**底部让出副图区域**。
-    // 不设的话默认 bottom=0.1, 而副图从 0.7 开始 → 0.7~0.9 是重叠带(K 线画进量柱里)。
+    // 主图价格轴: 上下对称留白(不再需要给副图让位 —— 副图已独立 pane)
     series.priceScale().applyOptions({ scaleMargins: PRICE_SCALE_MARGINS })
 
-    // 资金柱(阶段三): 与 K 线同 scale，叠加在K线下方 30% 高度
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    })
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: SUBCHART_MARGINS,
-    })
+    // 成交量柱: **独立 pane**(paneIndex=1)。同 pane overlay 时代它靠 margins 挤到底部,
+    // 主图没让位就会重合; 现在两图不同画布, 结构上不会重合。
+    const volumeSeries = chart.addSeries(
+      HistogramSeries,
+      {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+      },
+      SUBCHART_PANE,
+    )
     // 2026-09-04 P0-3 双单位共轴修复: 资金柱(元) 独立 'fund' 左轴,
     // 此前与成交量(股) 共用 volume 轴 → 轴被撑到 5 亿、量柱压扁(506.43M)。
-    const fundSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'fund',
-      lastValueVisible: false,
-      priceLineVisible: false,
-    })
-    fundSeries.priceScale().applyOptions({
-      scaleMargins: SUBCHART_MARGINS,
-      visible: false,
-    } as never)
+    const fundSeries = chart.addSeries(
+      HistogramSeries,
+      {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'fund',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      },
+      SUBCHART_PANE,
+    )
+    fundSeries.priceScale().applyOptions({ visible: false } as never)
     try {
       // overlay 轴放左侧(不支持的版本静默忽略, 则与 volume 并列右侧, 不抛)
       fundSeries.priceScale().applyOptions({ position: 'left' } as never)
     } catch { /* noop */ }
+    // 副图 pane 占约 30% 高度(与主图按比例分, 窗口缩放时保持比例)
+    try {
+      chart.panes()[SUBCHART_PANE]?.setStretchFactor(SUBCHART_STRETCH)
+    } catch { /* 旧内核不支持 panes 时静默: 退化为单 pane, 不会崩 */ }
     chartRef.current = chart
     seriesRef.current = series
     volumeSeriesRef.current = volumeSeries
     fundSeriesRef.current = fundSeries
+    publishPanes()
 
     // 容器尺寸自适应
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (entry && chart) {
         chart.applyOptions({ width: entry.contentRect.width })
+        publishPanes()
       }
     })
     observer.observe(container)
@@ -656,7 +677,7 @@ export default function KlineChart(props: {
       chartRef.current = null
       seriesRef.current = null
     }
-  }, [props.height, interval])
+  }, [props.height, interval, publishPanes])
 
   // ── 拉数据并 setData ──────────────────────────────────────
   useEffect(() => {
@@ -1070,7 +1091,11 @@ export default function KlineChart(props: {
         { v: signal, color: 'rgba(251, 146, 60, 0.95)', w: 1 }, // DEA
       ]
       for (const d of defs) {
-        const line = chart.addSeries(LineSeries, { color: d.color, lineWidth: d.w, priceLineVisible: false, lastValueVisible: false })
+        const line = chart.addSeries(
+          LineSeries,
+          { color: d.color, lineWidth: d.w, priceLineVisible: false, lastValueVisible: false },
+          SUBCHART_PANE,
+        )
         const pts = rawKlinesRef.current
           .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
           .filter((p): p is { time: Time; value: number } => p != null)
@@ -1080,6 +1105,12 @@ export default function KlineChart(props: {
     }
     // 主动买卖比 / 情绪周期 : 需后端 realtime 数据, Klines 接口无 → 不做假实现, 留给调 UI 切换(灰显"副图数据待接")。
   }, [props.layersVisible?.trend, rawKlinesRef.current.length, subchart, interval])
+
+  // 副图模式切换后 pane 内容变了(MACD 线增删) → 重新上报 pane 高度供巡检读
+  useEffect(() => {
+    const t = setTimeout(publishPanes, 80)
+    return () => clearTimeout(t)
+  }, [subchart, publishPanes])
 
   // ── 时间格式转换 ──────────────────────────────────────────
   // lightweight-charts 要求: 日级 UTCTimestamp(秒); 分钟级 unix time。
@@ -1093,16 +1124,13 @@ export default function KlineChart(props: {
   // 所以把**解析后的实际颜色**挂到容器上, 生产巡检(terminal_audit)据此断言
   // "G=红系 / S=绿系" 没被改反(改 CSS token 也拦得住)。
   const gsResolved = readGsColors()
-  // 布局验收钩子(2026-09-19): 主图/副图的分界是**画在 canvas 里的**, DOM 量不到 ——
-  // 把配置挂到容器上, 生产巡检据此断言"主图价格轴底部 ≥ 副图顶部"(即两者不重合)。
-  const chartLayout = `${safeFixed(PRICE_SCALE_MARGINS.bottom, 3)}/${safeFixed(SUBCHART_MARGINS.top, 3)}`
 
   return (
     <div
       className="flex flex-col gap-2"
       data-gs-go={gsResolved.go}
       data-gs-stop={gsResolved.stop}
-      data-chart-layout={chartLayout}
+      data-chart-panes={paneInfo}
     >
       {/* 周期切换器 */}
       <div className="flex items-center gap-1 flex-wrap">

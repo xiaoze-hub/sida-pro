@@ -11,8 +11,9 @@
    相交面积 > 较小者的 30% 且 > 120px² → 报。绝对定位的浮层（tooltip/下拉/遮罩）白名单放行。
 2. **裁切**：`overflow: hidden/clip` 且 `scrollWidth/Height` 超出 `clientWidth/Height` 5px 以上 → 内容被切。
 3. **横向溢出**：文档 `scrollWidth > clientWidth + 2` → 出现横向滚动条。
-4. **图表布局不变量**：K 线容器带 `data-chart-layout="主图底/副图顶"`，
-   要求 **主图 bottom ≥ 副图 top**（K 线不得画进成交量区域）。
+4. **图表布局不变量**：K 线容器带 `data-chart-panes="pane数|各pane高度"`（运行时读的），
+   要求 **≥2 个 pane 且每个都有高度** —— 即副图真的独立成 pane（2026-09-20 前是"同 pane overlay
+   靠 margins 让位"，靠两个数字对齐，改一处就会重合）。
 
 用法: python scripts/layout_audit.py [--base URL] [--json OUT] [--pages a,b,c]
 """
@@ -185,16 +186,18 @@ PROBE = r"""
   const hScroll = { scrollWidth: de.scrollWidth, clientWidth: de.clientWidth,
                     overflow: de.scrollWidth - de.clientWidth };
 
-  // 图表布局不变量
-  const charts = Array.from(document.querySelectorAll('[data-chart-layout]')).map((el) => {
-    const raw = el.getAttribute('data-chart-layout') || '';
-    const [priceBottom, subTop] = raw.split('/').map((v) => parseFloat(v));
+  // 图表布局不变量（2026-09-20 副图改独立 pane 后）: 钩子给的是**运行时** pane 数 + 各 pane 高度,
+  // 形如 "2|290/101"。判据: ① 至少 2 个 pane（副图真的独立, 没退化成同 pane 叠画）;
+  // ② 每个 pane 都有高度（没塌成一条缝, 那样等于副图看不见）。
+  // 为什么不用配置常量当判据: 配置写"分了 pane"≠ 运行时真分了（旧内核会静默退化）。
+  const charts = Array.from(document.querySelectorAll('[data-chart-panes]')).map((el) => {
+    const raw = el.getAttribute('data-chart-panes') || '';
+    const [nStr, hs] = raw.split('|');
+    const panes = parseInt(nStr, 10);
+    const heights = (hs || '').split('/').map((v) => parseInt(v, 10)).filter((v) => Number.isFinite(v));
     const r = el.getBoundingClientRect();
-    // 不变量: 价格轴底边距 B 与副图顶部起点 S 满足 B ≥ 1 - S（等价于 1-B ≤ S）。
-    // 直接比 B ≥ S 是**错的**(两者分数语义不同), 会把修好的版本误判成违规。
-    return { raw, priceBottom, subTop, h: Math.round(r.height),
-             ok: Number.isFinite(priceBottom) && Number.isFinite(subTop)
-                 && priceBottom >= (1 - subTop) - 1e-9 };
+    const ok = Number.isFinite(panes) && panes >= 2 && heights.length >= 2 && heights.every((h) => h >= 40);
+    return { raw, panes, heights, h: Math.round(r.height), ok };
   });
 
   return { candidates: cand.length, overlaps: overlaps.slice(0, 40), suspects: suspects.slice(0, 20), clipped, hScroll, charts };
@@ -276,8 +279,10 @@ def main() -> int:
                 su = res.get("suspects") or []
                 line = f"{label:<22} 重叠={len(ov):<3} 疑似={len(su):<3} 真裁切={len(cl):<3} 截断={len(cl_ell):<3}(看不全{len(cl_lost)}) 横向={hs['overflow']:<4} 图表={len(ch)}"
                 if bad_charts:
-                    line += f"  ⚠ 图表布局违规: {[c['raw'] for c in bad_charts]}"
-                    fails.append(f"{label}: 主图/副图重叠({bad_charts[0]['raw']})")
+                    c0 = bad_charts[0]
+                    why = ("副图没独立成 pane(只 %s 个)" % c0["panes"]) if c0["panes"] < 2 else "有 pane 高度塌陷(<40px)"
+                    line += f"  ⚠ 图表 pane 违规: {c0['raw']} ({why})"
+                    fails.append(f"{label}: 图表 pane 异常({c0['raw']}, {why})")
                 if hs["overflow"] > 2:
                     fails.append(f"{label}: 横向溢出 {hs['overflow']}px")
                 print(line)
