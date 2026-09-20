@@ -616,6 +616,32 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001 - 注册失败不阻断调度器构建
         logger.warning(f"因子 IC 快照 job 注册失败: {e}")
 
+    # 2026-09-19 打磨: 市场主线缓存预热(每 3 分钟) —— 主线接口冷启动要 16~37s,
+    # 预热后用户请求基本总命中(过期也走 stale-while-revalidate 先返回旧值)。
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.web.api.market_mainline import warm_market_mainline_cache
+
+        def _warm_mainline() -> None:
+            try:
+                warm_market_mainline_cache()
+            except Exception as e:  # noqa: BLE001 - 预热失败绝不能掀翻调度器
+                logger.debug(f"主线缓存预热失败(下次再试): {e}")
+
+        sched.scheduler.add_job(
+            _warm_mainline,
+            IntervalTrigger(minutes=3),
+            id="market_mainline_warm",
+            name="市场主线缓存预热",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[mainline] 已注册主线缓存预热 job(每 3 分钟)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"主线缓存预热 job 注册失败: {e}")
+
     # P0(2026-09-18): JWT 密钥每 90 天自动轮换(旧密钥 grace 7 天内仍可验签)
     try:
         from src.core.secret_rotation import register_rotation_job

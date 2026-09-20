@@ -137,7 +137,24 @@ export interface ActivityPoint {
   level?: string | null
 }
 
-/** L5 副图切换: 成交量 / MACD / 主动买卖比 / 情绪周期 / 活跃度(09-03 三色柱载体) */
+/** 主图 / 副图的高度分配（2026-09-19 修重合）。
+ *
+ * 轻量图表的副图（成交量/MACD/活跃度/资金柱）是**同 pane 的 overlay**，靠 priceScale 的
+ * `scaleMargins` 挤到下方；主图价格轴必须把对应空间**让出来**，否则两者必然在
+ * [副图 top, 主图 bottom] 区间**画到同一片像素上**——用户看到的就是"K 线和成交量重合"。
+ *
+ * 历史 bug: 主图价格轴没设 scaleMargins（默认 top .2 / bottom .1）→ K 线最低可画到 90% 高度，
+ * 而副图从 70% 开始 → **20% 高度重叠带**。
+ * 规则: 主图 bottom ≥ (1 - SUBCHART_TOP)，再留 HAIRLINE_GAP 做分隔。
+ */
+const SUBCHART_TOP = 0.7
+const HAIRLINE_GAP = 0.02
+/** 副图（overlay）占用的底部区域 */
+const SUBCHART_MARGINS = { top: SUBCHART_TOP, bottom: 0 } as const
+/** 主图价格轴：底部让出副图区域 + 一点间隙，顶部留 8% 给最高价 */
+const PRICE_SCALE_MARGINS = { top: 0.08, bottom: 1 - SUBCHART_TOP + HAIRLINE_GAP } as const
+
+
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
 
 /** 副图选项(2026-09-04: 抽模块常量, 受控隐藏时不用嵌套括号包 map) */
@@ -473,13 +490,17 @@ export default function KlineChart(props: {
       wickUpColor: sc.up,
       wickDownColor: sc.down,
     })
+    // ★ 2026-09-19 修"K 线与成交量重合": 主图价格轴**底部让出副图区域**。
+    // 不设的话默认 bottom=0.1, 而副图从 0.7 开始 → 0.7~0.9 是重叠带(K 线画进量柱里)。
+    series.priceScale().applyOptions({ scaleMargins: PRICE_SCALE_MARGINS })
+
     // 资金柱(阶段三): 与 K 线同 scale，叠加在K线下方 30% 高度
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     })
     volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.7, bottom: 0 },
+      scaleMargins: SUBCHART_MARGINS,
     })
     // 2026-09-04 P0-3 双单位共轴修复: 资金柱(元) 独立 'fund' 左轴,
     // 此前与成交量(股) 共用 volume 轴 → 轴被撑到 5 亿、量柱压扁(506.43M)。
@@ -490,7 +511,7 @@ export default function KlineChart(props: {
       priceLineVisible: false,
     })
     fundSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.7, bottom: 0 },
+      scaleMargins: SUBCHART_MARGINS,
       visible: false,
     } as never)
     try {
@@ -1072,12 +1093,16 @@ export default function KlineChart(props: {
   // 所以把**解析后的实际颜色**挂到容器上, 生产巡检(terminal_audit)据此断言
   // "G=红系 / S=绿系" 没被改反(改 CSS token 也拦得住)。
   const gsResolved = readGsColors()
+  // 布局验收钩子(2026-09-19): 主图/副图的分界是**画在 canvas 里的**, DOM 量不到 ——
+  // 把配置挂到容器上, 生产巡检据此断言"主图价格轴底部 ≥ 副图顶部"(即两者不重合)。
+  const chartLayout = `${safeFixed(PRICE_SCALE_MARGINS.bottom, 3)}/${safeFixed(SUBCHART_MARGINS.top, 3)}`
 
   return (
     <div
       className="flex flex-col gap-2"
       data-gs-go={gsResolved.go}
       data-gs-stop={gsResolved.stop}
+      data-chart-layout={chartLayout}
     >
       {/* 周期切换器 */}
       <div className="flex items-center gap-1 flex-wrap">
