@@ -138,10 +138,44 @@ def _enrich_with_rank_change(ranked_groups: list[dict]) -> list[dict]:
 # ──────────── 60s 进程内缓存(per spec) ────────────
 # key 固定为 "mainline:top20", 共享一份 Top20 排名(全市场视角)。
 # 拉涨停池耗 5-15s, 60s 缓存压住前端 30s 轮询的并发翻页成本。
-_CACHE_TTL_S = 30.0  # v0.4.77: 60s→30s, 涨停池冷启动 5-20s 太贵,
-                  # 但页面 30s 内轮询会撞一次; 30s 命中率足够高
+# 2026-09-19 打磨(用户报"页面卡"): 原实现是**同步冷启动** —— 缓存一过期,
+# 下一个请求就要**阻塞 16~37s**(实测 21s/16.5s/0.8s)去拉涨停池聚合。
+# 30s TTL + 同步回源 = 每半分钟就有一个倒霉的请求被卡住, 页面永远在转圈。
+# 改成 **stale-while-revalidate**: 过期先返回旧值(毫秒级), 后台线程刷新;
+# 只有"完全没数据"(进程刚起)或旧值已超过 STALE_MAX 才同步取。
+_CACHE_TTL_S = 180.0     # 主线排名是涨停池聚合, 3 分钟内变化有限; 30s 太短(命中率低→频繁回源)
+_STALE_MAX_S = 1800.0    # 陈旧上限: 超过 30 分钟没成功刷新过, 才值得让用户等一次
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[float, dict]] = {}
+_cache: dict[str, tuple[float, dict]] = {}   # key -> (monotonic 写入时刻, payload)
+_refreshing = False                          # 单飞: 防止过期瞬间 N 个请求同时回源(惊群)
+
+
+def _refresh_in_background() -> None:
+    """后台刷新(单飞)。失败只记日志 —— 旧值继续用, 不要把异常抛给请求线程。"""
+    global _refreshing
+    with _cache_lock:
+        if _refreshing:
+            return
+        _refreshing = True
+
+    def _work() -> None:
+        global _refreshing
+        try:
+            payload = _fetch_mainline()
+            with _cache_lock:
+                _cache["mainline:top20"] = (time.monotonic(), payload)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("market_mainline: 后台刷新失败(沿用旧值): %s", e)
+        finally:
+            with _cache_lock:
+                _refreshing = False
+
+    threading.Thread(target=_work, name="mainline-refresh", daemon=True).start()
+
+
+def warm_market_mainline_cache() -> None:
+    """预热(供 APScheduler 定时调用): 让第一个用户请求几乎总能命中。"""
+    _refresh_in_background()
 
 
 def _fetch_mainline() -> dict:
@@ -189,13 +223,21 @@ def get_market_mainline() -> dict:
     now = time.monotonic()
     with _cache_lock:
         hit = _cache.get("mainline:top20")
-        if hit is not None and now - hit[0] < _CACHE_TTL_S:
-            return hit[1]
 
+    if hit is not None:
+        age = now - hit[0]
+        if age < _CACHE_TTL_S:
+            return hit[1]
+        if age < _STALE_MAX_S:
+            # 过期但可用 → **立即返回旧值** + 后台刷新; 明确标注数据年龄, 不假装是新的
+            _refresh_in_background()
+            return {**hit[1], "stale": True, "age_s": round(age, 1)}
+
+    # 完全没缓存(进程刚起)或旧值已太久 → 同步取一次(这一次用户要等, 但只此一次)
     payload = _fetch_mainline()
     with _cache_lock:
-        _cache["mainline:top20"] = (now, payload)
-    return payload
+        _cache["mainline:top20"] = (time.monotonic(), payload)
+    return {**payload, "stale": False, "age_s": 0.0}
 
 
 def clear_market_mainline_cache() -> None:
