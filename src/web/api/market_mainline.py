@@ -227,7 +227,9 @@ def get_market_mainline() -> dict:
     if hit is not None:
         age = now - hit[0]
         if age < _CACHE_TTL_S:
-            return hit[1]
+            # 新鲜命中: 也带上 stale/age_s —— **接口契约要一致**, 让消费方永远能拿到
+            # "这份数据多旧", 而不是"只有陈旧时才有这个字段"(那样前端得写两套判断)。
+            return {**hit[1], "stale": False, "age_s": round(age, 1)}
         if age < _STALE_MAX_S:
             # 过期但可用 → **立即返回旧值** + 后台刷新; 明确标注数据年龄, 不假装是新的
             _refresh_in_background()
