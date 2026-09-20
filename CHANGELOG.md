@@ -5,6 +5,34 @@
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,
 > 写清改了哪个文件、为什么改、测了什么。分支规范见 `AGENTS.md` "分支工作流"。
 
+## 2026-09-20 (refactor(chart): K线副图改**真多 pane** → v0.10.55)
+
+**性质**: 架构级改动 —— 把"K线与成交量重合"从"靠数字对齐"改成"结构上不可能重合"。
+
+### 为什么改
+① 原来副图是**同 pane overlay**，靠 `scaleMargins` 挤到底部 → 主图没让位就画进同一片像素（用户报的重合）；
+② 09-19 的修法是"主图价格轴让出底部 30%" —— 能用，但**靠两个数字对齐**：改一处、或加一个新 overlay 就复发；
+③ 现在副图挂 `paneIndex=1`：主图/副图在**不同画布**上，结构上不可能重合，副图还顺带拿到**自己的坐标轴**
+（量柱有了可读刻度 —— 以前挤在主图底部没有独立轴）。
+
+### 改了什么
+- `SUBCHART_PANE = 1`：成交量 / 资金柱 / MACD 三条副图系列全部挂 pane 1；
+- `SUBCHART_STRETCH = 0.7` + `chart.panes()[1].setStretchFactor(...)`（旧内核不支持时 try/catch 静默退化，不崩）；
+- 主图价格轴**不再让位**：`PRICE_SCALE_MARGINS` 从 `{top:0.08, bottom:0.32}` 回到对称的 `{0.08, 0.08}`；
+- 删掉 `SUBCHART_MARGINS / SUBCHART_TOP / HAIRLINE_GAP` 三个 overlay 时代常量（两套布局逻辑不许并存）。
+
+### 本地实测（dev server 接生产数据，个股页）
+```
+data-chart-panes = "2|290/101"   → 主图 290px / 副图 101px（副图约 26%，K线仍是绝对主角）
+副图 pane canvas 墨迹比 0.26（量柱确实画出来了）· 副图轴 canvas 0.27（有独立刻度）· pageerror 0
+```
+
+### 验收钩子换代
+`data-chart-layout="主图底/副图顶"`（配置常量）→ **`data-chart-panes="pane数|各pane高度"`（运行时读的）**。
+理由：**配置写"分了 pane"≠ 运行时真分了**（旧内核会静默退化）—— 判据必须量运行时。
+探针 `layout_audit.py` 判据同步改为：**≥2 个 pane 且每个高度 ≥40px**（副图没独立、或塌成一条缝都算违规）。
+前端钉子 `kline-subchart-layout.test.ts` 同步改写（5 例）。
+
 ## 2026-09-20 (fix(ui): 截断的文字要能看全 + 布局体检加"看不全"判据 → v0.10.54)
 
 **性质**: 承接布局体检——把"几何问题"的探针扩到"**内容丢失**"这一类。
