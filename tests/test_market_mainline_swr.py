@@ -51,6 +51,9 @@ def test_fresh_cache_returns_immediately(monkeypatch):
     second = mm.get_market_mainline()
     assert (time.perf_counter() - t0) < 0.05, "命中缓存还慢, 说明又回源了"
     assert second["note"] == "v1" and calls["n"] == 1
+    # 契约一致性: 新鲜命中也要给 stale/age_s(消费方不用写两套判断)
+    assert second["stale"] is False
+    assert isinstance(second["age_s"], float) and second["age_s"] >= 0
 
 
 def test_stale_cache_does_not_block(monkeypatch):

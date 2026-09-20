@@ -54,6 +54,8 @@ def main() -> int:
     ap.add_argument("--skip-audit", action="store_true")
     ap.add_argument("--skip-anon", action="store_true",
                     help="跳过公开面实证(必跑: 档位页曾因客户端双 /api 前缀在生产 404, 后端测试查不出)")
+    ap.add_argument("--skip-layout", action="store_true",
+                    help="跳过布局体检(重叠/裁切/图表主副图不变量)")
     args = ap.parse_args()
 
     hard_fail = 0
@@ -145,6 +147,23 @@ def main() -> int:
             print("   ⚠ 跳过: 当前解释器没有 playwright(用项目 venv 或装 playwright 后重跑)")
         elif r.returncode != 0:
             print("   ✗ 公开面实证有失败项")
+            hard_fail += 1
+
+    # ⑥ 布局体检(2026-09-19 加): 重叠/裁切/横向溢出/图表主图副图不变量。
+    # 为什么放进部署验收: 用户报"K 线与成交量重合"这类问题**后端测试和终端巡检都测不到**
+    # (canvas 里画的东西 DOM 量不到、矩形相交也测不出), 只有比矩形才拦得住。
+    # 一个没人跑的探针等于没有 —— 所以并进每次发版都走的验收里。
+    if not args.skip_layout:
+        print("\n⑥ 布局体检: scripts/layout_audit.py")
+        r = subprocess.run([sys.executable, str(Path(__file__).with_name("layout_audit.py"))],
+                           capture_output=True, text=True)
+        out = (r.stdout or "") + (r.stderr or "")
+        for line in out.strip().splitlines()[-14:]:
+            print("   " + line)
+        if "ModuleNotFoundError" in out or "No module named 'playwright'" in out:
+            print("   ⚠ 跳过: 当前解释器没有 playwright(用项目 venv 或装 playwright 后重跑)")
+        elif r.returncode != 0:
+            print("   ✗ 布局体检有违规项")
             hard_fail += 1
 
     print()
