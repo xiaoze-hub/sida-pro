@@ -10,6 +10,7 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
 import { useSourceHealth } from '@/hooks/useSourceHealth'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
@@ -226,6 +227,10 @@ export default function StockWorkbench() {
    */
   const hasPosition = useHasPosition(symbol, MARKET, type === 'stock')
 
+  /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
+   *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
+  const back = useBackTarget()
+
   /**
    * 设计稿 v2.1 §10.2①: K 线周期落在 URL(`?period=d1`), 刷新/分享不丢。
    * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
@@ -269,6 +274,7 @@ export default function StockWorkbench() {
         onTypeChange={(t) => setQuery('type', t)}
         onGotoTab={(t) => setQuery('tab', t)}
         onRefresh={() => setRefreshKey((k) => k + 1)}
+        back={back}
       />
 
       {type !== 'stock' ? (

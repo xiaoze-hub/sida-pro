@@ -67,6 +67,7 @@ import StockContextMenu, { type StockContextMenuState, type StockContextTarget }
 import { parseServerTime } from '@/lib/utils'
 import { useI18n } from '@/hooks/useI18n'
 import Stat from '@panwatch/biz-ui/components/Stat'
+import { navBackState } from '@/lib/nav-back'
 
 /** 安全 toFixed: 处理 string / null / undefined / 非有限数, 一律返回 fallback。
  *  修复 2026-08-21: Dashboard 报 TypeError: c.price.toFixed is not a function
@@ -381,7 +382,7 @@ export default function DashboardPage() {
 
   // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol
   const openStock = useCallback((symbol: string, _market: string, _name = '', _hasPosition = false) => {
-    if (symbol) navigate(`/stocks/${encodeURIComponent(symbol)}`)
+    if (symbol) navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/', '首页') })
   }, [navigate])
 
   // ========== PC 右键菜单 ==========
