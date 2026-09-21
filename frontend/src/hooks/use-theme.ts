@@ -9,6 +9,8 @@ export type Density = 'compact' | 'normal' | 'comfortable'
 
 const STORAGE_KEY = 'panwatch-theme'
 const DENSITY_STORAGE_KEY = 'panwatch-density'
+/** 第三档 Dim(长时盯盘): 只降对比度, 不动色相与涨跌语义。与主题/密度同源存储。 */
+const DIM_STORAGE_KEY = 'panwatch-dim'
 
 function readMode(): ThemeMode {
   const stored = localStorage.getItem(STORAGE_KEY)
@@ -23,9 +25,18 @@ function readDensity(): Density {
   return 'normal'
 }
 
+function readDim(): boolean {
+  try {
+    return localStorage.getItem(DIM_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function useTheme() {
   const [mode, setMode] = useState<ThemeMode>(readMode)
   const [density, setDensity] = useState<Density>(readDensity)
+  const [dim, setDim] = useState<boolean>(readDim)
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
   )
@@ -48,6 +59,18 @@ export function useTheme() {
     localStorage.setItem(STORAGE_KEY, mode)
   }, [theme, mode])
 
+  // Dim 档: 写 <html data-theme="dim">(暗色 token + 降对比度); 关闭时移除属性回到常规
+  useEffect(() => {
+    const root = document.documentElement
+    if (dim) root.setAttribute('data-theme', 'dim')
+    else root.removeAttribute('data-theme')
+    try {
+      localStorage.setItem(DIM_STORAGE_KEY, dim ? '1' : '0')
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }, [dim])
+
   // 密度档位:写到 <html data-density="...">,由 index.css 的 [data-density] 规则驱动
   useEffect(() => {
     const root = document.documentElement
@@ -58,5 +81,5 @@ export function useTheme() {
   // 兼容旧调用:在亮/暗间切换(会把模式落为显式 light/dark)
   const toggleTheme = () => setMode(theme === 'dark' ? 'light' : 'dark')
 
-  return { theme, mode, setMode, toggleTheme, density, setDensity }
+  return { theme, mode, setMode, toggleTheme, density, setDensity, dim, setDim }
 }

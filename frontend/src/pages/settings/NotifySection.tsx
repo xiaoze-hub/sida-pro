@@ -51,7 +51,7 @@ export function NotifySection() {
           <MonitorUp className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
           <div>
             <div className="text-[12px] font-medium text-foreground">电脑 Web 推送</div>
-            <p className="mt-0.5 text-[10.5px] text-muted-foreground">页面打开或在后台运行时，新消息直接弹出电脑系统通知。需要 HTTPS 或 localhost。</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">页面打开或在后台运行时，新消息直接弹出电脑系统通知。需要 HTTPS 或 localhost。</p>
           </div>
         </div>
         <Switch
@@ -81,13 +81,13 @@ export function NotifySection() {
           <div className="min-w-0">
             <div className="text-[12px] font-medium text-foreground">个人微信(iLink)</div>
             {wechatBindInfo?.account_id ? (
-              <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 已绑定：
                 <span className="font-mono text-foreground">{wechatBindInfo.user_id || wechatBindInfo.account_id}</span>
                 {wechatBindInfo.nickname ? `（${wechatBindInfo.nickname}）` : ''}
               </p>
             ) : (
-              <p className="mt-0.5 text-[10.5px] text-muted-foreground">扫码绑定个人微信，绑定成功后自动创建通知渠道</p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">扫码绑定个人微信，绑定成功后自动创建通知渠道</p>
             )}
           </div>
         </div>

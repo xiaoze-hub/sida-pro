@@ -98,7 +98,7 @@ export function AddStockDialog() {
           {searching && <span className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />}
         </div>
         {showDropdown && (
-          <div className="absolute z-50 w-full mt-2 max-h-64 overflow-auto scrollbar card shadow-lg">
+          <div className="absolute z-50 w-full mt-2 max-h-64 overflow-auto scrollbar card shadow-float">
             {searchResults.map(item => (
               <button
                 key={`${item.market}-${item.symbol}`}

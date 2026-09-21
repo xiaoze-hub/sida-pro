@@ -124,7 +124,7 @@ export function NotifyDialogs() {
             <QrCode className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
             <div>
               <div className="text-[12px] font-medium text-foreground">扫码绑定个人微信</div>
-              <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
                 无需填写地址与密钥。点击下方按钮，用微信扫码确认后自动创建「个人微信」渠道。
               </p>
             </div>

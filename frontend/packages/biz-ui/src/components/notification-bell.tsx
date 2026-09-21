@@ -153,7 +153,7 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-[360px] max-w-[calc(100vw-2rem)] rounded-2xl border border-border/60 bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden">
+        <div className="absolute right-0 mt-2 w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-border/60 bg-card shadow-[0_16px_48px_rgba(0,0,0,0.16)] z-[80] overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/50">
             <span className="text-[13px] font-semibold text-foreground">
               消息中心 {unread > 0 && <span className="text-rose-500">({unread} 未读)</span>}
@@ -191,12 +191,12 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
                   <span className="flex-1 min-w-0">
                     <span className="flex items-center gap-1.5">
                       {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 flex-shrink-0" />}
-                      <span className="text-[12.5px] font-medium text-foreground truncate">{n.title}</span>
+                      <span className="text-[13px] font-medium text-foreground truncate">{n.title}</span>
                     </span>
                     {n.body && (
-                      <span className="block text-[11.5px] text-muted-foreground mt-0.5 line-clamp-2">{n.body}</span>
+                      <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2">{n.body}</span>
                     )}
-                    <span className="flex items-center gap-2 mt-1 text-[10.5px] text-muted-foreground/70">
+                    <span className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground/70">
                       <span>{timeAgo(n.created_at)}</span>
                       {n.source && <span>· {n.source}</span>}
                       {n.push_status && (

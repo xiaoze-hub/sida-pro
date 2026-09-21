@@ -1,0 +1,6 @@
+{
+  "_comment": "Surface/背景棘轮基线(2026-09-20 设计系统落地): 只许减少, 不许新增。新增代码一律走 bg-s0..s4 / bg-canvas。",
+  "bare_alpha": 30,
+  "accent_alpha": 297,
+  "price_bg": 36
+}

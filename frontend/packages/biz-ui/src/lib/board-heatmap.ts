@@ -7,7 +7,7 @@
  */
 
 import { safeFixed, safeNum } from '@/lib/format'
-import { withAlpha } from './stock-colors'
+import { oklchStringToHex } from './oklch'
 
 export interface BoardHeatItem {
   block_code: string
@@ -41,6 +41,8 @@ export interface HeatPalette {
   labelLight: string
   /** 图表实际底色(用于第一遍估算; 实测像素优先) */
   surface?: string
+  /** 强度阶实际颜色(由调用方从 CSS 变量解析; 缺省用内置 OKLCH 兜底) */
+  heat?: Partial<Record<HeatStepKey, string>>
   /** 异动警示环色(可选; 缺省 amber-500 —— 语义警示色, 非涨跌主题色) */
   ring?: string
 }
@@ -67,8 +69,6 @@ export interface TreemapCell {
 }
 
 const DEFAULT_CLAMP = 3
-const DEFAULT_MIN_ALPHA = 0.12
-const DEFAULT_MAX_ALPHA = 0.9
 const DEFAULT_MIN_SHARE = 0.02
 /** 全部板块量能都缺失/为 0 时的保底面积: 固定 1(必须 > 0, ECharts treemap 对 0 面积整块不画) */
 /**
@@ -155,10 +155,6 @@ function heatRatio(pct: number | null | undefined, clampPct: number): number | n
   return Math.min(Math.abs(pct) / clampPct, 1)
 }
 
-function alphaOf(ratio: number): number {
-  const raw = DEFAULT_MIN_ALPHA + (DEFAULT_MAX_ALPHA - DEFAULT_MIN_ALPHA) * ratio
-  return Math.round(raw * 1000) / 1000
-}
 
 // ── 字色必须按**实测对比度**选(2026-09-20 修缺陷) ──────────────────────────────
 // 老规则 `alphaOf(r) > 0.45 ? 白字 : labelDark` 有两个致命假设:
@@ -243,16 +239,56 @@ export function pickLabelColor(surface: Rgb, dark: string, light: string): { col
   return { color, contrast: contrastRatio(surface, rgb) }
 }
 
+
+// ── 涨跌强度阶: OKLCH 均匀发散 11 档(2026-09-20) ────────────────────────────────
+// 老实现 = 把 up/down 色按 alpha 0.12→0.9 叠底(sRGB 线性插值) ⇒ **感知不均匀**:
+// 弱档全挤在一起, 强档又几乎一样。OKLCH 的 L 是感知均匀的, 等步长 = 等观感差异。
+// CSS 侧是单一来源(`--heat-n5..--heat-p5`), 这里是**兜底**(纯函数测试/SSR/取不到变量时用),
+// 两者一致性由 `heat-ladder-parity.test.ts` 机械比对 —— 不许各写一套。
+export const HEAT_LADDER_OKLCH: Record<string, string> = {
+  n5: 'oklch(0.72 0.20 155)',
+  n4: 'oklch(0.67 0.17 155)',
+  n3: 'oklch(0.62 0.14 155)',
+  n2: 'oklch(0.57 0.10 155)',
+  n1: 'oklch(0.52 0.06 155)',
+  zero: 'oklch(0.50 0.01 265)',
+  p1: 'oklch(0.52 0.06 25)',
+  p2: 'oklch(0.57 0.10 25)',
+  p3: 'oklch(0.62 0.13 25)',
+  p4: 'oklch(0.67 0.16 25)',
+  p5: 'oklch(0.72 0.20 25)',
+}
+
+/** 强度阶键名: n5(最强跌) … zero(平盘/无数据) … p5(最强涨)。 */
+export type HeatStepKey = keyof typeof HEAT_LADDER_OKLCH
+
+/** 涨跌幅 → 强度档位。`null`(无数据)与平盘都归 `zero`, **不编造涨跌色**。 */
+export function heatStepOf(pct: number | null | undefined, clampPct = DEFAULT_CLAMP): HeatStepKey {
+  const r = heatRatio(pct, clampPct)
+  if (r === null || Math.abs(pct as number) < FLAT_EPSILON) return 'zero'
+  const magnitude = Math.max(1, Math.min(5, Math.ceil(r * 5))) // 0→1 映射到 1..5
+  const side = (pct as number) > 0 ? 'p' : 'n'
+  return `${side}${magnitude}` as HeatStepKey
+}
+
+/** 强度档位 → 实际颜色: 优先用调用方从 CSS 变量解析出的颜色, 否则用内置兜底(转 #rrggbb)。 */
+export function heatStepColor(step: HeatStepKey, palette?: HeatPalette): string {
+  const fromCss = palette?.heat?.[step]
+  const src = fromCss || HEAT_LADDER_OKLCH[step]
+  return oklchStringToHex(src) ?? '#888888'
+}
+
 /** 涨跌幅 → 色块底色。无数据/平盘 → neutral 灰(不编造涨跌色)。 */
 export function heatCellColor(
   pct: number | null | undefined,
   palette: HeatPalette,
   clampPct = DEFAULT_CLAMP,
 ): string {
-  const r = heatRatio(pct, clampPct)
-  if (r === null) return palette.neutral
-  if (Math.abs(pct as number) < FLAT_EPSILON) return palette.neutral
-  return withAlpha((pct as number) > 0 ? palette.up : palette.down, alphaOf(r))
+  // 无数据/平盘 → 中性灰(沿用 palette.neutral, 保持"平盘灰"全站一致);
+  // 有涨跌 → 走 OKLCH 强度阶(感知均匀), 不再做 sRGB alpha 插值。
+  const step = heatStepOf(pct, clampPct)
+  if (step === 'zero') return palette.neutral
+  return heatStepColor(step, palette)
 }
 
 /**

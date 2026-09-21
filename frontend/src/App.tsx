@@ -57,6 +57,7 @@ import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
+import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
 import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import { normalizeType } from '@/lib/workbench-tabs'
@@ -277,6 +278,22 @@ function App() {
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  /** 会话态(2026-09-20): 30s 刷新一次足够 —— 时段边界以分钟计, 不需要每秒 */
+  const [session, setSession] = useState<SessionInfo>(() => sessionPhaseOf())
+  useEffect(() => {
+    const t = window.setInterval(() => setSession(sessionPhaseOf()), 30_000)
+    return () => window.clearInterval(t)
+  }, [])
+  /** 焦点模式: 启动时从存储恢复(与命令面板里的开关同一套 key) */
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('sida_focus-mode') === '1') {
+        document.documentElement.setAttribute('data-focus-mode', '1')
+      }
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }, [])
   // 设计稿 v2.0 §4.2 可折叠侧边栏: 折叠态持久化到 localStorage
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -418,11 +435,11 @@ function App() {
       <BrowserNotificationBridge />
       <AmbientBackground />
       {/* Desktop Sidebar (设计稿 v2.0 §4.2: 6 项主导航可折叠侧边栏, 交易线顶/研究线中/系统沉底) */}
-      <aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
+      <aside data-shell-aside className={`fixed inset-y-0 left-0 z-50 hidden md:flex flex-col border-r border-border bg-card/80 backdrop-blur transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>
         {/* Logo + 折叠按钮 */}
         <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
           <NavLink to="/" className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm shrink-0">
               <BrandMark className="w-4 h-4 text-white" />
             </div>
             {!sidebarCollapsed && (
@@ -524,7 +541,23 @@ function App() {
               <span className="text-[13px] font-bold text-foreground">数智分析</span>
               {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
             </NavLink>
-            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-2xl bg-accent/20 border border-border/40">
+            <div className="flex items-center gap-2">
+              {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}
+              <SessionPhaseChip info={session} />
+              <button
+                type="button"
+                data-focus-chip
+                onClick={() => {
+                  document.documentElement.setAttribute('data-focus-mode', '0')
+                  localStorage.setItem('sida_focus-mode', '0')
+                }}
+                className="items-center gap-1 rounded border border-border px-1.5 text-[10px] text-muted-foreground"
+                title="焦点模式已开启(点击退出)"
+              >
+                焦点模式
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-xl bg-accent/20 border border-border/40">
               <button
                 onClick={() => window.open(repoUrl, '_blank', 'noopener,noreferrer')}
                 className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-colors"
@@ -576,7 +609,7 @@ function App() {
       </nav>
 
       {/* Content */}
-      <main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+      <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数 */}
         <SourceHeartbeat />
         <Suspense fallback={<PageFallback />}>

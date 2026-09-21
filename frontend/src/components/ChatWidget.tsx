@@ -558,7 +558,7 @@ export default function ChatWidget() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className={`fixed bottom-20 right-4 md:bottom-5 z-40 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center hover:bg-primary/90 transition-colors ${DESKTOP_POSITION_CLASSES[desktopPosition]}`}
+        className={`fixed bottom-20 right-4 md:bottom-5 z-40 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-float flex items-center justify-center hover:bg-primary/90 transition-colors ${DESKTOP_POSITION_CLASSES[desktopPosition]}`}
         title="打开数智分析BOT"
         aria-label="打开数智分析BOT"
       >
@@ -571,7 +571,7 @@ export default function ChatWidget() {
       <div
         ref={chatWindowRef}
         style={desktopWindowStyle}
-        className={`fixed bottom-0 right-0 z-[60] w-full h-full md:max-w-[calc(100vw-1.5rem)] md:max-h-[calc(100vh-1.5rem)] md:rounded-xl bg-background border border-border/60 shadow-2xl md:border-primary/30 md:ring-1 md:ring-white/10 md:shadow-[0_24px_72px_rgba(0,0,0,0.58),0_0_30px_rgba(79,70,229,0.16)] flex flex-col overflow-hidden ${DESKTOP_SIZE_CLASSES[desktopSize]} ${desktopWindowPositionClasses}`}
+        className={`fixed bottom-0 right-0 z-[60] w-full h-full md:max-w-[calc(100vw-1.5rem)] md:max-h-[calc(100vh-1.5rem)] md:rounded-xl bg-background border border-border/60 shadow-float md:border-primary/30 md:ring-1 md:ring-white/10 md:shadow-[0_24px_72px_rgba(0,0,0,0.58),0_0_30px_rgba(79,70,229,0.16)] flex flex-col overflow-hidden ${DESKTOP_SIZE_CLASSES[desktopSize]} ${desktopWindowPositionClasses}`}
       >
       {/* Header */}
       <div
@@ -627,7 +627,7 @@ export default function ChatWidget() {
               <Settings2 className="w-4 h-4" />
             </button>
             {settingsOpen && (
-              <div className="absolute right-0 top-9 z-20 w-[280px] rounded-xl border border-border/70 bg-background p-3 shadow-2xl">
+              <div className="absolute right-0 top-9 z-20 w-[280px] rounded-xl border border-border/70 bg-background p-3 shadow-float">
                 <div className="mb-2 text-[11px] font-medium text-muted-foreground">窗口大小</div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {DESKTOP_SIZE_OPTIONS.map((option) => {

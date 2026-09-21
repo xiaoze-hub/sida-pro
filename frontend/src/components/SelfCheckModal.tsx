@@ -227,7 +227,7 @@ export default function SelfCheckModal({ open, onClose }: SelfCheckModalProps) {
         </DialogHeader>
 
         {/* 渐变 Hero:进度条 + 总数/正常/异常 */}
-        <div className={`relative overflow-hidden rounded-2xl ${heroGradient} p-4 text-white shadow-lg`}>
+        <div className={`relative overflow-hidden rounded-xl ${heroGradient} p-4 text-white shadow-float`}>
           <div className="flex items-center justify-between gap-2">
             <div className="text-[13px] font-semibold">
               {running ? '正在检查…' : finished ? '检查完成' : '准备检查'}

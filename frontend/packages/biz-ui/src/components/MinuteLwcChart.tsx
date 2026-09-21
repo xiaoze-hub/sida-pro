@@ -413,7 +413,7 @@ export default function MinuteLwcChart({ points, prevClose, isIndex, swings }: P
       {/* ═══ 悬停分析 tooltip(2026-08-12 v3) */}
       {hoverMark && (
         <div
-          className="absolute z-20 rounded-md border border-border bg-background/95 backdrop-blur p-2 text-[11px] shadow-lg pointer-events-none"
+          className="absolute z-20 rounded-md border border-border bg-background/95 backdrop-blur p-2 text-[11px] shadow-float pointer-events-none"
           style={{ left: hoverMark.x, top: hoverMark.y, width: 240 }}
         >
           <SwingTooltip mark={hoverMark.mark} />

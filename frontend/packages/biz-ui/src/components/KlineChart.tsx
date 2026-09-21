@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
 import {
   createChart,
   CandlestickSeries,
@@ -595,15 +596,47 @@ export default function KlineChart(props: {
     })
 
     // (3) 十字光标联动: 推 { time, price } 给副图/资金面板 + KI-056 信息栏读数
+    //     + **同页多图联动**(2026-09-20): 按 time 广播, 让同页其它图表移到同一根 K 线
+    const crosshairSub = {
+      apply: ({ time, price }: { time: unknown; price: number }) => {
+        try {
+          chart.setCrosshairPosition(price, time as Time, series)
+        } catch {
+          /* 时间不在本图视窗内 → 忽略(不强行跳视窗) */
+        }
+      },
+      clear: () => {
+        try {
+          chart.clearCrosshairPosition()
+        } catch {
+          /* ignore */
+        }
+      },
+    }
+    const unregisterCrosshair = registerCrosshair(crosshairSub)
+
+    // 双击复位(2026-09-20): 回到"装满已加载区间"的默认视窗 —— 缩放/拖拽后一键还原
+    const onDblClick = () => {
+      try {
+        chart.timeScale().fitContent()
+      } catch {
+        /* ignore */
+      }
+    }
+    const hostEl = containerRef.current
+    hostEl?.addEventListener('dblclick', onDblClick)
+
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || param.point === undefined) {
         onCrosshairMoveRef.current?.(null)
         setHoverReadout(null)
+        broadcastCrosshair(null, crosshairSub)
         return
       }
       const price = series.coordinateToPrice(param.point.y)
       const time =
         typeof param.time === 'number' ? String(param.time) : String(param.time)
+      broadcastCrosshair({ time: param.time, price: price ?? 0 }, crosshairSub)
       // §10.2③: 该时刻的资金/事件读数 —— 按"K 线 time 完全相等"定位当日, 不用 ISO 反推
       // (分钟级 K 线的时间戳是本地解析, 用 UTC 反推会错位)。
       const tNum = typeof param.time === 'number' ? param.time : null
@@ -663,6 +696,8 @@ export default function KlineChart(props: {
     })
 
     return () => {
+      unregisterCrosshair()
+      hostEl?.removeEventListener('dblclick', onDblClick)
       observer.disconnect()
       themeObserver.disconnect()
       markerPluginRef.current?.setMarkers([])

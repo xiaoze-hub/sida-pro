@@ -98,7 +98,7 @@ function TW({ t, s = 45 }: { t: string; s?: number }) {
 /* ── 玻璃卡片 ── */
 function Glass({ tag, title, desc }: { tag: string; title: string; desc: string }) {
   return (
-    <div className="group relative overflow-hidden rounded-2xl border border-border/60 dark:border-cyan-400/10 bg-card/60 dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 hover:border-primary/30 dark:hover:border-cyan-400/25">
+    <div className="group relative overflow-hidden rounded-xl border border-border/60 dark:border-cyan-400/10 bg-card/60 dark:bg-gradient-to-b dark:from-cyan-500/[0.05] dark:to-blue-600/[0.02] backdrop-blur-xl p-7 transition-all duration-500 hover:border-primary/30 dark:hover:border-cyan-400/25">
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 dark:via-cyan-400/25 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
       <span className="mb-4 inline-block font-mono text-[12px] uppercase tracking-[0.2em] text-primary/70 dark:text-cyan-400/70">{tag}</span>
       <h3 className="mb-2.5 text-[16px] font-semibold text-foreground dark:text-white/90">{title}</h3>
@@ -249,7 +249,7 @@ export default function LandingPage() {
       {/* 代码示例 */}
       <section className="relative z-10 mx-auto max-w-3xl px-6 py-16">
         <h2 className="mb-6 text-center text-[16px] font-semibold text-foreground dark:text-white/90">调用示例</h2>
-        <div className="overflow-hidden rounded-2xl border border-border/60 dark:border-cyan-400/10 bg-card/80 dark:bg-[#080c18]/80 backdrop-blur-sm">
+        <div className="overflow-hidden rounded-xl border border-border/60 dark:border-cyan-400/10 bg-card/80 dark:bg-[#080c18]/80 backdrop-blur-sm">
           <div className="flex items-center gap-2 border-b border-border/50 dark:border-cyan-400/10 px-4 py-2.5">
             <div className="flex gap-1.5">
               <div className="h-2.5 w-2.5 rounded-full bg-red-500/50" />

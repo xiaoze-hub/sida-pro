@@ -199,7 +199,7 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 最接近的窗口规则 */}
-      <span className="text-[10.5px] text-muted-foreground font-mono truncate">
+      <span className="text-[10px] text-muted-foreground font-mono truncate">
         {worstLabel(row)}
       </span>
 
@@ -233,7 +233,7 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 状态标签 */}
-      <div className={`justify-self-end px-1.5 py-0.5 rounded border text-[10.5px] font-medium ${style.badgeBg} ${style.badgeText}`}>
+      <div className={`justify-self-end px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.badgeBg} ${style.badgeText}`}>
         {STATUS_LABEL[status]}
       </div>
     </button>
@@ -364,7 +364,7 @@ export default function AbnormalMovesCard({
         </div>
       ) : (
         <>
-          <div className="text-[10.5px] text-muted-foreground mb-1.5">
+          <div className="text-[10px] text-muted-foreground mb-1.5">
             按最接近阈值的规则倒序; <span className="text-rose-700 dark:text-rose-400">红色=已触发</span> 交易所将发异动公告; <span className="text-orange-700 dark:text-orange-400">橙=边缘</span> 次日再涨即触发; <span className="text-amber-700 dark:text-amber-400">黄=观察</span>
           </div>
           <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
