@@ -32,6 +32,7 @@ import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Skeleton } from '@/components/Skeleton'
 import { safeFixed, toAmountFromWan, toAmountFromWanUnsigned } from '@/lib/format'
 import { useI18n } from '@/hooks/useI18n'
+import { navBackState } from '@/lib/nav-back'
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true
@@ -225,7 +226,7 @@ export default function DarkFundTopPage() {
                     <tr
                       key={`${r.symbol}-${i}`}
                       className="hover:bg-accent/20 cursor-pointer"
-                      onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`)}
+                      onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`, { state: navBackState('/dark-fund-top', '暗盘资金榜') })}
                       title={`${r.symbol} → ${t('nav.stocks')}`}
                     >
                       <td className="px-3 py-2 font-mono text-muted-foreground">{i + 1}</td>
@@ -285,7 +286,7 @@ export default function DarkFundTopPage() {
                   key={`${r.symbol}-${i}`}
                   variant="hover"
                   className="p-3 min-h-[44px] cursor-pointer"
-                  onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`)}
+                  onClick={() => navigate(`/stocks/${encodeURIComponent(r.symbol)}`, { state: navBackState('/dark-fund-top', '暗盘资金榜') })}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">

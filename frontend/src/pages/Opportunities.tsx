@@ -37,6 +37,7 @@ import { SkeletonTable } from '@/components/Skeleton'
 import { Card } from '@panwatch/base-ui/components/ui/card'
 import Stat from '@panwatch/biz-ui/components/Stat'
 import { useI18n } from '@/hooks/useI18n'
+import { navBackState } from '@/lib/nav-back'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -517,12 +518,12 @@ export default function OpportunitiesPage() {
 
   // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol; 悬停出预览卡
   const openInsight = useCallback((item: StrategySignalItem) => {
-    navigate(`/stocks/${encodeURIComponent(item.stock_symbol)}`)
+    navigate(`/stocks/${encodeURIComponent(item.stock_symbol)}`, { state: navBackState('/opportunities', '机会') })
   }, [navigate])
 
   // 竞价异动 Tab 行点击 → 个股工作台(原弹窗)
   const openAuctionDetail = useCallback((symbol: string, _market: string, _name?: string) => {
-    navigate(`/stocks/${encodeURIComponent(symbol)}`)
+    navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/opportunities', '机会') })
   }, [navigate])
 
   const showHover = useCallback((symbol: string, name: string | undefined, e: React.MouseEvent) => {
@@ -1217,7 +1218,7 @@ export default function OpportunitiesPage() {
       </div>
 
       {viewMode === 'abnormal' ? (
-        <AbnormalMovesCard onOpenDetail={(symbol) => navigate(`/stocks/${encodeURIComponent(symbol)}`)} />
+        <AbnormalMovesCard onOpenDetail={(symbol) => navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/opportunities', '机会') })} />
       ) : viewMode === 'auction' ? (
         <AuctionAnomalyTab market="CN" onOpenDetail={openAuctionDetail} />
       ) : (

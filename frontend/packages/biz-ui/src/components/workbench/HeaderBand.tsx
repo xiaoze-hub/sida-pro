@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { fetchAPI, insightApi } from '@panwatch/api'
 import { cn } from '@panwatch/base-ui'
 import { TechnicalBadge, technicalToneFromSuggestionAction } from '@panwatch/biz-ui/components/technical-badge'
@@ -367,6 +367,11 @@ export interface HeaderBandProps {
    * (指数/板块正文 + 个股带2), 使它们的挂载取数重新执行。不传 = 只刷本带行情。
    */
   onRefresh?: () => void
+  /**
+   * 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): `{ label, onBack }`。
+   * **不传 = 不渲染** —— 直接输网址/刷新进入时本就没有可返回的来路, 不给假按钮。
+   */
+  back?: { label: string; onBack: () => void } | null
 }
 
 export default function HeaderBand({
@@ -378,6 +383,7 @@ export default function HeaderBand({
   onTypeChange,
   onGotoTab,
   onRefresh,
+  back,
 }: HeaderBandProps) {
   const isStock = showStockOnly(type)
   /** CN-only 数据面闸门: `/stocks/{s}/l2` 是 CN TQ RPC, more-info 对非 CN 直接 400 —— 同代码的境外标的绝不能发, 否则会把 CN 涨停价/PE/PB 画到别的标的上。 */
@@ -481,6 +487,20 @@ export default function HeaderBand({
   return (
     <div className="sticky top-0 z-20 rounded border border-border/60 bg-background/95 px-3 py-2 backdrop-blur">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        {/* 返回入口: 只有**确实知道来路**时才画(见 nav-back.ts 的三级降级); 紧凑文字按钮,
+            不用卡片包 —— 与带内其它控件同一字阶(11px)。 */}
+        {back ? (
+          <button
+            type="button"
+            onClick={back.onBack}
+            title={back.label}
+            aria-label={back.label}
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>{back.label}</span>
+          </button>
+        ) : null}
         {isStock ? (
           // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
           <>

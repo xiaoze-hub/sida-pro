@@ -26,6 +26,7 @@ import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import type { useStocksState } from './useStocksState'
 import { logger } from '@/lib/logger'
+import { navBackState } from '@/lib/nav-back'
 
 export function useStocksData(state: ReturnType<typeof useStocksState>) {
   const {
@@ -443,7 +444,7 @@ const navigate = useNavigate()
 
 const openStockDetail = useCallback((stockSymbol: string, _stockMarket: string, _stockName?: string, _hasPosition?: boolean) => {
   // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol
-  if (stockSymbol) navigate(`/stocks/${encodeURIComponent(stockSymbol)}`)
+  if (stockSymbol) navigate(`/stocks/${encodeURIComponent(stockSymbol)}`, { state: navBackState('/portfolio', '持仓') })
 }, [navigate])
 
 // ========== PC 右键菜单 ==========

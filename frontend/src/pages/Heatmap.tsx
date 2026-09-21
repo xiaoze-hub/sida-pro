@@ -5,6 +5,7 @@
  */
 import { useNavigate } from 'react-router-dom'
 import BoardHeatmap from '@panwatch/biz-ui/components/dashboard/BoardHeatmap'
+import { navBackState } from '@/lib/nav-back'
 
 export default function HeatmapPage() {
   const navigate = useNavigate()
@@ -20,7 +21,7 @@ export default function HeatmapPage() {
           改为 4px 圆角 + hairline 边框, 视觉几乎不变但不再是"卡片" */}
       <div className="rounded border border-border/60 bg-card p-3">
         <BoardHeatmap
-          onOpenBoard={(blockCode) => navigate(`/boards/${encodeURIComponent(blockCode)}`)}
+          onOpenBoard={(blockCode) => navigate(`/boards/${encodeURIComponent(blockCode)}`, { state: navBackState('/heatmap', '板块热力图') })}
         />
       </div>
     </div>
