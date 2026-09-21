@@ -265,7 +265,7 @@ export default function MarketPhaseCard() {
             {cur?.date ? (
               <div className="text-[10px] text-muted-foreground mt-1 font-mono">{cur.date}</div>
             ) : null}
-            <div className="text-[10.5px] text-muted-foreground mt-1.5 leading-snug">{style.desc}</div>
+            <div className="text-[10px] text-muted-foreground mt-1.5 leading-snug">{style.desc}</div>
           </div>
           {cur ? (
             <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] shrink-0">
@@ -343,7 +343,7 @@ export default function MarketPhaseCard() {
               return (
                 <span
                   key={d.phase}
-                  className={`inline-flex items-center gap-1 rounded-md border ${s.border} ${s.bg} px-1.5 py-0.5 text-[10.5px] font-mono`}
+                  className={`inline-flex items-center gap-1 rounded-md border ${s.border} ${s.bg} px-1.5 py-0.5 text-[10px] font-mono`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
                   <span className={s.text}>{d.label}</span>
@@ -382,11 +382,11 @@ function Stat({
 }) {
   return (
     <div className="border-l border-border/40 pl-2 py-0.5">
-      <div className="text-muted-foreground text-[9.5px] flex items-center gap-0.5">
+      <div className="text-muted-foreground text-[10px] flex items-center gap-0.5">
         {icon}
         {label}
       </div>
-      <div className={`font-mono tabular-nums text-[11.5px] ${valueClass ?? 'text-foreground'}`}>
+      <div className={`font-mono tabular-nums text-[12px] ${valueClass ?? 'text-foreground'}`}>
         {value}
       </div>
     </div>

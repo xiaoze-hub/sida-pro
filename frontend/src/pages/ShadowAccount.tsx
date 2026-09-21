@@ -382,7 +382,7 @@ iframe{width:100%;height:100%;border:0}
 
       {/* 上传区 */}
       <div
-        className={`border-2 border-dashed rounded-2xl p-8 text-center transition-colors cursor-pointer ${
+        className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
           dragOver ? 'border-primary bg-primary/5' : 'border-border bg-accent/10 hover:bg-accent/20'
         }`}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}

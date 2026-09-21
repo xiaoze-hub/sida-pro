@@ -62,7 +62,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
         <div className="p-6 pt-4">
           {step === 'welcome' && (
             <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-xl bg-primary flex items-center justify-center mx-auto mb-4">
                 <TrendingUp className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-[20px] font-bold text-foreground mb-2">
@@ -121,7 +121,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
 
           {step === 'ai' && (
             <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-xl bg-primary flex items-center justify-center mx-auto mb-4">
                 <Bot className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-[20px] font-bold text-foreground mb-2">
@@ -163,7 +163,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
 
           {step === 'notify' && (
             <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-amber-500 flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-xl bg-amber-500 flex items-center justify-center mx-auto mb-4">
                 <Bell className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-[20px] font-bold text-foreground mb-2">
@@ -205,7 +205,7 @@ export function Onboarding({ open, onComplete, hasStocks }: OnboardingProps) {
 
           {step === 'complete' && (
             <div className="text-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-500 flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 rounded-xl bg-emerald-500 flex items-center justify-center mx-auto mb-4">
                 <CheckCircle2 className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-[20px] font-bold text-foreground mb-2">

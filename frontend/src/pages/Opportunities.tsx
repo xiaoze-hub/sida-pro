@@ -38,6 +38,7 @@ import { Card } from '@panwatch/base-ui/components/ui/card'
 import Stat from '@panwatch/biz-ui/components/Stat'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'
+import { useRowNav } from '@panwatch/biz-ui/hooks/useRowNav'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -1035,9 +1036,23 @@ export default function OpportunitiesPage() {
 
   // P1 多源整合: 只看共振过滤(resonance_count>=2)
   const visibleItems = useMemo(() => {
+
     if (!resonanceOnly) return groupedItems
     return groupedItems.filter((g) => g.resonanceCount >= 2)
   }, [groupedItems, resonanceOnly])
+  /** 列表键盘协议(2026-09-20 设计系统 P0): J/K 逐行移动、Enter 进工作台、Esc 取消选中。
+   *  hook 必须在组件顶层调用(不能进 map 回调 / useMemo 回调) ⇒ 行号由 map 第二个参数给。 */
+  const openWorkbench = useCallback(
+    (symbol: string) => navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/opportunities', '机会') }),
+    [navigate],
+  )
+  const rowNav = useRowNav({
+    count: visibleItems.length,
+    onEnter: (idx) => {
+      const g = visibleItems[idx]
+      if (g) openWorkbench(g.primary.stock_symbol)
+    },
+  })
 
   const globalCoverage = stats?.coverage || null
   const factorStats = stats?.factor_stats || null
@@ -1329,7 +1344,7 @@ export default function OpportunitiesPage() {
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setSectorOpen(false); applyDraft() } }}
                 />
                 {sectorOpen && (
-                  <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-md border border-border/60 bg-popover p-1 shadow-lg">
+                  <div className="absolute z-50 mt-1 w-full max-h-52 overflow-y-auto rounded-md border border-border/60 bg-popover p-1 ">
                     {sectorResults.length === 0 && (
                       <div className="px-2 py-1.5 text-[11px] text-muted-foreground">无匹配题材</div>
                     )}
@@ -1985,7 +2000,7 @@ export default function OpportunitiesPage() {
           <span>来源</span>
           <span className="text-right">操作</span>
         </div>
-        {visibleItems.map((group) => {
+        {visibleItems.map((group, rowIndex) => {
           const item = group.primary
           const payload = item.payload && typeof item.payload === 'object' ? item.payload as Record<string, unknown> : {}
           const sourceMeta = payload.source_meta && typeof payload.source_meta === 'object' ? payload.source_meta as Record<string, unknown> : {}
@@ -2037,7 +2052,9 @@ export default function OpportunitiesPage() {
                     toggleExpanded(stateKey)
                   }
                 }}
-                className="w-full cursor-pointer grid grid-cols-[20px_minmax(0,1fr)_auto] md:grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] items-center gap-x-3 px-1 py-2.5 text-left transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                data-row-index={rowIndex}
+                onFocus={() => rowNav.setIndex(rowIndex)}
+                className={`w-full cursor-pointer row-focusable grid grid-cols-[20px_minmax(0,1fr)_auto] md:grid-cols-[20px_minmax(0,1.6fr)_64px_44px_repeat(3,minmax(70px,1fr))_minmax(0,1.2fr)_auto] items-center gap-x-3 px-1 py-2.5 text-left transition-colors duration-fast hover:bg-s2 ${rowNav.index === rowIndex ? 'row-selected' : ''}`}
               >
                 <span className={`text-[10px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
                 <div className="min-w-0">

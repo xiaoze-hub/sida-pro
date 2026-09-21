@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { fetchAPI, insightApi } from '@panwatch/api'
 import { cn } from '@panwatch/base-ui'
+import FreshnessBadge, { freshnessOf } from '@panwatch/biz-ui/components/FreshnessBadge'
+import { sessionPhaseOf } from '@panwatch/biz-ui/components/SessionPhaseChip'
 import { TechnicalBadge, technicalToneFromSuggestionAction } from '@panwatch/biz-ui/components/technical-badge'
 import { fmtAmount, fmtSignedAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { buildKlineSuggestion } from '@/lib/kline-scorer'
@@ -567,7 +569,13 @@ export default function HeaderBand({
           {(() => {
             const clock = asOfClock(l2AsOf)
             if (!clock) return null
+            // 新鲜度徽章(2026-09-20 设计系统 P0): 光有"快照 10:03:12"不够 ——
+            // 用户还要一眼知道**这份数离现在多久**; 收盘/超窗时角标降权, 时间戳一起淡化。
+            // 收盘态一律 closed(此时"实时"不存在); 盘中才按年龄判 live/delay/stale
+            const fresh = freshnessOf(l2AsOf, { marketClosed: !isStock || !sessionPhaseOf().ticking })
             return (
+              <>
+              <FreshnessBadge info={fresh} />
               <span
                 data-testid="band1-l2-snapshot-clock"
                 title="封单额/涨停价/连板 等 /l2 读数的取数时刻; 本带无 30s 轮询, 点刷新可重取"
@@ -575,6 +583,7 @@ export default function HeaderBand({
               >
                 快照 {clock}
               </span>
+              </>
             )
           })()}
         </div>

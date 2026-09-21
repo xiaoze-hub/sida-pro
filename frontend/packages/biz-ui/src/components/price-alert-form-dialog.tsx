@@ -291,7 +291,7 @@ export default function PriceAlertFormDialog(props: {
                     {selectedDate || '选择日期'}
                   </Button>
                   {calendarOpen && (
-                    <div className="absolute z-50 mt-1 w-[260px] rounded-xl border border-border/60 bg-card shadow-xl p-2">
+                    <div className="absolute z-50 mt-1 w-[260px] rounded-xl border border-border/60 bg-card shadow-float p-2">
                       <div className="flex items-center justify-between mb-2">
                         <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}>
                           <ChevronLeft className="w-3.5 h-3.5" />

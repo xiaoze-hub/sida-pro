@@ -258,7 +258,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mb-4">
+          <div className="w-16 h-16 rounded-xl bg-primary flex items-center justify-center mb-4">
             <BrandMark className="w-9 h-9 text-white" />
           </div>
           <h1 className="text-[20px] font-bold text-foreground">数智分析 SIDA</h1>

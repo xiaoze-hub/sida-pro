@@ -8,6 +8,9 @@ import {
   hasUsableVolume,
   heatCellColor,
   heatLabelColor,
+  heatStepOf,
+  contrastRatio,
+  parseColorToRgb,
   toTreemapCells,
   usableVolumeCount,
   type BoardHeatItem,
@@ -34,24 +37,48 @@ const item = (over: Partial<BoardHeatItem>): BoardHeatItem => ({
   ...over,
 })
 
+/** 色相粗分: 只用来判"语义没被换掉"(红系/绿系), 不钉具体数值。 */
+function hueOf(hex: string): '红' | '绿' | '其他' {
+  const c = parseColorToRgb(hex)
+  if (!c) return '其他'
+  const max = Math.max(c.r, c.g, c.b)
+  const min = Math.min(c.r, c.g, c.b)
+  const d = max - min || 1
+  const h = max === c.r ? (((c.g - c.b) / d + 6) % 6) * 60 : max === c.g ? ((c.b - c.r) / d + 2) * 60 : ((c.r - c.g) / d + 4) * 60
+  if (h <= 40 || h >= 330) return '红'
+  if (h > 80 && h < 180) return '绿'
+  return '其他'
+}
+
+/** 文字与底色的对比度(背景若半透明 → 视为不足, 返回 0 让断言红) */
+function contrastOf(label: string, bg: string): number {
+  const b = parseColorToRgb(bg)
+  const l = parseColorToRgb(label)
+  if (!b || !l || b.a < 1) return 0
+  return contrastRatio(b, l)
+}
+
 describe('heatCellColor 色阶映射', () => {
   it('无数据(null) → neutral 灰, 不编造涨跌色', () => {
     expect(heatCellColor(null, PALETTE)).toBe(PALETTE.neutral)
   })
 
-  it('涨用 up 红, 跌用 down 绿', () => {
-    expect(heatCellColor(1.0, PALETTE)).toContain('229, 57, 53')
-    expect(heatCellColor(-1.0, PALETTE)).toContain('67, 160, 71')
+  // 2026-09-20: 色阶由"sRGB alpha 插值"改为"OKLCH 均匀发散 11 档" ⇒ 断言改为**判色相**
+  // (涨必须落在红系 / 跌必须落在绿系)。判色相而不是判具体 RGB: 换色阶不该把语义也换掉。
+  it('涨用红系, 跌用绿系(判色相)', () => {
+    expect(hueOf(heatCellColor(1.0, PALETTE))).toMatch(/红/)
+    expect(hueOf(heatCellColor(-1.0, PALETTE))).toMatch(/绿/)
   })
 
-  it('幅度越大透明度越高, 且 ±3% 夹紧后封顶一致', () => {
-    const a = heatCellColor(2.9, PALETTE)
+  it('幅度越大档位越强, 且 ±3% 夹紧后封顶一致', () => {
     const b = heatCellColor(8.0, PALETTE)
     const c = heatCellColor(3.0, PALETTE)
-    expect(b).toBe(c) // 夹紧
-    const alpha = (s: string) => Number(s.split(',')[3]?.replace(')', ''))
-    expect(alpha(c)).toBeGreaterThan(alpha(a))
-    expect(alpha(a)).toBeGreaterThan(alpha(heatCellColor(0.2, PALETTE)))
+    expect(b).toBe(c) // 夹紧: 超过 3% 不再更强
+    const step = (pct: number) => Number(heatStepOf(pct).slice(1))
+    expect(step(3.0)).toBe(5)
+    expect(step(3.0)).toBeGreaterThan(step(2.0))
+    expect(step(2.0)).toBeGreaterThan(step(1.0))
+    expect(step(1.0)).toBeGreaterThan(step(0.2))
   })
 
   it('0% 平盘 → neutral 灰(全站平盘灰惯例), 极小幅度同样归灰', () => {
@@ -70,11 +97,11 @@ describe('heatCellColor: 缺数据(空)才算无数据, 不猜哨兵量级', () 
     expect(heatCellColor(Number.POSITIVE_INFINITY, PALETTE)).toBe(PALETTE.neutral)
   })
 
-  it('真实跌幅照旧染 down 绿: -10% 与 -100% 都不许变灰(按量级猜会把真跌染成灰)', () => {
-    expect(heatCellColor(-10, PALETTE)).toContain('67, 160, 71')
+  it('真实跌幅照旧染绿系: -10% 与 -100% 都不许变灰(按量级猜会把真跌染成灰)', () => {
+    expect(hueOf(heatCellColor(-10, PALETTE))).toMatch(/绿/)
     // -100 在 A 股板块上基本不可能, 但"是不是哨兵"只有数据源知道 —— 前端不猜,
     // 只如实按读数上色; 缺数据由后端改成 null 后自然走 neutral。
-    expect(heatCellColor(-100, PALETTE)).toContain('67, 160, 71')
+    expect(hueOf(heatCellColor(-100, PALETTE))).toMatch(/绿/)
     expect(heatCellColor(-100, PALETTE)).not.toBe(PALETTE.neutral)
   })
 
@@ -86,14 +113,16 @@ describe('heatCellColor: 缺数据(空)才算无数据, 不猜哨兵量级', () 
 })
 
 describe('heatLabelColor 对比度', () => {
-  it('深色块(大涨幅) → 浅色字', () => {
-    expect(heatLabelColor(3.0, PALETTE)).toBe(PALETTE.labelLight)
+  // 2026-09-20: 字色不再由 alpha 代理决定, 改由**实测底色亮度**在两端口之间选 ⇒
+  // 断言改为"每一档都有足够对比度"(具体取哪一端由对比度算出来, 不写死)。
+  it('强涨档: 文字与底色对比度 ≥3:1', () => {
+    expect(contrastOf(heatLabelColor(3.0, PALETTE), heatCellColor(3.0, PALETTE))).toBeGreaterThanOrEqual(3)
   })
-  it('浅色块(小涨幅/平价) → 深色字', () => {
-    expect(heatLabelColor(0.1, PALETTE)).toBe(PALETTE.labelDark)
+  it('微涨/平价: 文字看得见(对比度 ≥3:1)', () => {
+    expect(contrastOf(heatLabelColor(0.1, PALETTE), heatCellColor(0.1, PALETTE))).toBeGreaterThanOrEqual(3)
     expect(heatLabelColor(0, PALETTE)).toBe(PALETTE.labelDark)
   })
-  it('无数据 → 深色字(灰底)', () => {
+  it('无数据(灰底) → 深色字', () => {
     expect(heatLabelColor(null, PALETTE)).toBe(PALETTE.labelDark)
   })
 })
@@ -147,7 +176,8 @@ describe('toTreemapCells treemap 数据变换', () => {
       { palette: PALETTE, areaMetric: 'volume' },
     )
     expect(cells[0].itemStyle.color).toBe(heatCellColor(3.0, PALETTE))
-    expect(cells[0].label.color).toBe(PALETTE.labelLight)
+    // 字色不再写死"红底白字", 而是按**底色亮度**选两端(2026-09-20) ⇒ 断言"看得见"
+    expect(contrastOf(cells[0].label.color, cells[0].itemStyle.color)).toBeGreaterThanOrEqual(3)
     expect(cells[1].itemStyle.color).toBe(PALETTE.neutral)
     expect(cells[1].label.color).toBe(PALETTE.labelDark)
   })

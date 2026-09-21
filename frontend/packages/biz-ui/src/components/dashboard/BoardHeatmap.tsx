@@ -330,6 +330,8 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
     if (!chart || volumeUnavailable || !hasDrawableArea(cells)) return
     chart.setOption(
       {
+        // 画布底色显式给(不依赖主题是否注册成功): 图表区比外壳更空一档
+        backgroundColor: `hsl(${getComputedStyle(document.documentElement).getPropertyValue('--chart-canvas').trim() || '240 20% 3.5%'})`,
         tooltip: {
           confine: true,
           borderRadius: 8,

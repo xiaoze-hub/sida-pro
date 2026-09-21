@@ -172,7 +172,7 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
             <span className="w-28 shrink-0 truncate text-right font-mono text-[11px]">
               {safeFixed(r.start)} → {safeFixed(r.end)}
               {r.band && (
-                <span className="block text-[9.5px] text-muted-foreground/80">
+                <span className="block text-[10px] text-muted-foreground/80">
                   P5 {safeFixed(r.band.lo)} ~ P95 {safeFixed(r.band.hi)}
                 </span>
               )}
@@ -616,7 +616,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                 disabled={loading}
               />
               {searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 w-56 max-h-56 overflow-y-auto bg-popover border rounded-md shadow-lg">
+                <div className="absolute z-20 mt-1 w-56 max-h-56 overflow-y-auto bg-popover border rounded-md shadow-float">
                   {searchResults.map((s, i) => (
                     <button
                       key={i}
@@ -1076,7 +1076,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       {/* 历史预测详情弹窗 */}
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDetail(null)}>
-          <div className="bg-background border rounded-md shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
+          <div className="bg-background border rounded-md shadow-float max-w-lg w-full max-h-[80vh] overflow-y-auto p-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <div className="text-[16px] font-bold">
                 {detail.symbol} {detail.stock_name || ''}

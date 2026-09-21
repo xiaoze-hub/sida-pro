@@ -44,7 +44,7 @@ export default function StockHoverPreview({
   const pct = s.now != null && s.last_close ? ((s.now - s.last_close) / s.last_close) * 100 : null
   return (
     <div
-      className="pointer-events-none fixed z-50 w-[220px] rounded border border-border/70 bg-background/95 p-2 shadow-lg"
+      className="pointer-events-none fixed z-50 w-[220px] rounded border border-border/70 bg-background/95 p-2 shadow-float"
       style={{ left: Math.min(x + 12, window.innerWidth - 240), top: Math.min(y + 12, window.innerHeight - 160) }}
     >
       <div className="mb-1 flex items-baseline gap-1 text-[12px] font-semibold">

@@ -209,7 +209,9 @@ export function AccountsSection() {
                               setDraggingPositionAccountId(null)
                               positionDragSnapshotRef.current = null
                             }}
-                            className={`group hover:bg-accent/30 transition-colors ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
+                            // 交互三态(2026-09-20): 可点行统一 hover 亮 + 键盘 focus 左侧 3px ring;
+// <tr> 的热区由内容撑(表格行不吃 min-height), 故不加 row-hit
+                            className={`group row-focusable transition-colors duration-fast hover:bg-s2 ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
                           >
                             <td className="px-4 py-2.5">
                               <span className={`text-[10px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>

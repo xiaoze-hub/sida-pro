@@ -149,7 +149,7 @@ export default function AccountMenu({
             placement === 'up' ? 'bottom-full pb-2' : 'top-full pt-2'
           }`}
         >
-          <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-xl">
+          <div className="w-48 rounded-xl border border-border/60 bg-card/95 backdrop-blur p-1.5 shadow-float">
           {/* 原“更多”导航 */}
           {navItems.map(({ to, icon: Icon, label }) => {
             const isActive = location.pathname.startsWith(to)

@@ -485,7 +485,7 @@ export default function NotificationsPage() {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       {!item.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />}
-                      <span className={`truncate text-[12.5px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
+                      <span className={`truncate text-[13px] font-medium ${isSelected ? 'text-primary' : 'text-foreground'}`}>{item.title || '未命名通知'}</span>
                       {(item as { dupCount?: number }).dupCount && (item as { dupCount?: number }).dupCount! > 1 ? (
                         <span
                           className="shrink-0 rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-medium text-rose-600"

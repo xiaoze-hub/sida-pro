@@ -17,7 +17,9 @@ function cssVar(name: string, fallback: string): string {
 
 export function buildSidaTheme() {
   return {
-    backgroundColor: 'transparent',
+    /* 图表画布(2026-09-20): 用 --chart-canvas(比外壳更空一档), 不再交给默认值 ——
+       生产实测过一块**白色画布**(深色主题里热力图画布底色是白的), 显式给值才不会再漂。 */
+    backgroundColor: `hsl(${cssVar('--chart-canvas', '240 20% 3.5%')})`,
     textStyle: { color: cssVar('--echarts-text', '#c4c4cb') },
     axisPointer: {
       lineStyle: { color: cssVar('--echarts-crosshair', 'rgba(120,120,130,.4)') },

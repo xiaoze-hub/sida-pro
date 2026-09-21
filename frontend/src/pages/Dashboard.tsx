@@ -920,7 +920,7 @@ export default function DashboardPage() {
                   <Share2 className="h-3.5 w-3.5" />
                   分享 ▾
                 </summary>
-                <div className="absolute right-0 z-20 mt-1 w-28 rounded-md border border-border/60 bg-card py-1 shadow-lg">
+                <div className="absolute right-0 z-20 mt-1 w-28 rounded-md border border-border/60 bg-card py-1 ">
                   {benchReady && (
                     <button
                       type="button"
@@ -1019,7 +1019,7 @@ export default function DashboardPage() {
                       />
                     ))}
                   </div>
-                  <div className="mt-1 text-[10.5px] text-muted-foreground">
+                  <div className="mt-1 text-[10px] text-muted-foreground">
                     {marketSegs.map((seg) => `${seg.market} ${seg.pct.toFixed(0)}%`).join(' · ')}
                   </div>
                 </div>

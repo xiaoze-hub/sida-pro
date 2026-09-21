@@ -89,7 +89,7 @@ export default function StockContextMenu({
     <div
       ref={ref}
       style={style}
-      className="min-w-[140px] rounded-lg border border-border/60 bg-popover py-1 shadow-xl"
+      className="min-w-[140px] rounded-lg border border-border/60 bg-popover py-1 shadow-float"
       onContextMenu={(e) => e.preventDefault()}
     >
       {items.map((item) => (

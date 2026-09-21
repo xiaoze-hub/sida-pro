@@ -37,6 +37,13 @@ async function searchStocks() {
 }
 
 beforeEach(() => {
+  // 2026-09-20: 面板新增 frecency(最近使用优先, 存 localStorage) ⇒ 用例之间必须隔离,
+  // 否则前一个用例"访问过 600519"会把下一个用例的首个条目顶成别的股票(顺序依赖 = 假绿/假红)。
+  try {
+    localStorage.clear()
+  } catch {
+    /* jsdom 环境忽略 */
+  }
   mocks.fetchAPI.mockReset()
   mocks.navigate.mockReset()
   mocks.toast.mockReset()
@@ -49,7 +56,10 @@ describe('CommandPalette A2 动作化', () => {
     renderPalette()
     const input = await searchStocks()
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(mocks.navigate).toHaveBeenCalledWith(expect.stringContaining('/analysis/600519/'))
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.stringContaining('/analysis/600519/'),
+      expect.objectContaining({ state: { navBack: { path: '/', label: '首页' } } }),
+    )
     const postCalls = mocks.fetchAPI.mock.calls.filter(([, opts]) => (opts as RequestInit | undefined)?.method === 'POST')
     expect(postCalls.length).toBe(0)
   })

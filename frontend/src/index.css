@@ -3,9 +3,26 @@
 @tailwind utilities;
 
 @layer base {
+  /* 动效降级在 **token 层**做: 所有新动效只用 --dur-*, 这一处生效全局(旧动画另有各自兜底) */
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --dur-instant: 0ms; --dur-fast: 0ms; --dur-normal: 0ms; --dur-slow: 0ms;
+      --dur-flash: 0ms; --dur-flash-max: 0ms;
+    }
+  }
+  /* 第三主题档 Dim(长时盯盘): 只降对比度, 不动色相与涨跌语义 */
+  :root[data-theme='dim'] {
+    --s0: 240 20% 4%; --s1: 240 20% 8.5%; --s2: 240 18% 12%; --s3: 240 16% 15.5%; --s4: 240 22% 10.5%;
+    --chart-canvas: 240 20% 2.5%;
+    --background: var(--s0); --card: var(--s1);
+    --foreground: 240 15% 84%;
+    --muted-foreground: 240 10% 52%;
+    --border: 240 15% 12%;
+    --input: 240 15% 13%;
+  }
   :root {
     /* 反AI模板 P1: 中性色色相 220→240 统一向锚点色收敛(消除 AI 灰);卡片不再纯白 */
-    --background: 240 20% 95.5%;
+    --background: var(--s0);
     /* P0-1: 涨跌色 CSS 变量 — 供 ECharts 主题双态引用 */
     --stock-up: #E53935;
     --stock-down: #43A047;
@@ -18,7 +35,7 @@
     --echarts-split-line: rgba(120,120,130,.15);
     --echarts-crosshair: rgba(120,120,130,.4);
     --foreground: 240 20% 10%;
-    --card: 240 25% 99%; /* 纸面白(极低色度),替代纯白卡 */
+    --card: var(--s1); /* 纸面白(极低色度),替代纯白卡 */
     --card-foreground: 240 20% 10%;
     --popover: 240 25% 99%; /* 纸面白(极低色度),替代纯白 */
     --popover-foreground: 240 20% 10%;
@@ -40,6 +57,36 @@
     --ring: 240 70% 45%; /* 跟随锚点色 */
     /* 行情终端风格:微圆角。所有圆角档位由 tailwind.config.js 从此值派生
        (sm=-4px / md=-2px / lg=基准 / xl=+2px / 2xl=+4px),进一步收紧只需调小此值 */
+
+    /* ── Surface 阶梯(2026-09-20 设计系统落地)──────────────────────────────
+       此前没有阶梯 token: bg-accent/xx 散落 301 处、bg-white/[0.0x] 30 处、bg-muted/xx 40 处,
+       同一视觉层级在不同页面靠手调透明度, 结果"同层不同色"。
+       阶梯只表达**空间层级**(越靠前越"浮"), 不表达涨跌。旧 token 值保持不变以免波及存量,
+       新增代码一律走 --s*; 旧写法由门禁 R12 棘轮只减不增。 */
+    --s0: 240 20% 95.5%;   /* 工作区/页底 */
+    --s1: 240 25% 99%;     /* 面板/卡片 */
+    --s2: 240 20% 96%;     /* 卡片内 hover */
+    --s3: 240 15% 92%;     /* 浮层/selected */
+    --s4: 240 25% 100%;    /* tooltip/最高浮层 */
+    /* 图表画布: 比外壳**更空一档** —— 亮色更白、暗色更黑, 让 K 线浮起来。
+       (此前 --bg-kline 亮色=99% 与卡片同亮、暗色=6% 比页底还亮 ⇒ "更空"没落地) */
+    --chart-canvas: 240 25% 99.5%;
+    /* ── motion token ────────────────────────────────────────────────────── */
+    --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 250ms; --dur-slow: 400ms;
+    --dur-flash: 420ms; --dur-flash-max: 700ms;
+    --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    /* ── 角色色(只表达模块角色, 不得抢涨跌色)──────────────────────────────── */
+    --role-watch: 245 65% 62%;   /* 自选 */
+    --role-opp: 42 95% 55%;      /* 机会 */
+    --role-risk: 25 85% 50%;     /* 风险 */
+    --role-system: 240 8% 58%;   /* 系统 */
+    /* ── 涨跌强度阶(OKLCH 均匀发散; 每档文字对比度由测试锁定 ≥3:1)────────── */
+    --heat-n5: oklch(0.70 0.18 155); --heat-n4: oklch(0.75 0.16 155); --heat-n3: oklch(0.80 0.13 155);
+    --heat-n2: oklch(0.85 0.10 155); --heat-n1: oklch(0.90 0.06 155);
+    --heat-0: oklch(0.86 0.01 265);
+    --heat-p1: oklch(0.90 0.06 25);  --heat-p2: oklch(0.85 0.10 25);  --heat-p3: oklch(0.80 0.13 25);
+    --heat-p4: oklch(0.75 0.16 25);  --heat-p5: oklch(0.70 0.20 25);
     --radius: 0.375rem;
 
     /* 数字专用字体栈(金融数据感): 指数点位/涨跌幅/预测值等数字大字处使用。
@@ -50,7 +97,7 @@
     --font-cn: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans CN", "Noto Sans CJK SC", sans-serif;
     --font-ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
     /* 研究报告 §4.3: K 线图背景(亮色纸面白; 暗色接近黑, 与终端调性一致) */
-    --bg-kline: 240 25% 99%;
+    --bg-kline: var(--chart-canvas);
     /* 研究报告 §4.3 剩余色板(awesome-design-html Robinhood tint 手法校准):
        flat 平盘灰 #94A3B8; threshold 阈值线同基(使用处 alpha .5);
        accent-primary Bloomberg 风强调橙 #F59E0B;
@@ -97,6 +144,22 @@
     --echarts-tooltip-text: #fafafa;
     --echarts-split-line: rgba(120,120,130,.12);
     --echarts-crosshair: rgba(120,120,130,.4);
+    /* Surface 阶梯(暗色): 比亮色更依赖明度差, 但每档只差 3~4 个 L, 不用大面积色块区隔 */
+    --s0: 240 20% 5%; --s1: 240 20% 10%; --s2: 240 18% 13.5%; --s3: 240 16% 18%; --s4: 240 22% 12%;
+    /* 图表画布比页底再低一档(5%→3.5%): "图表区更空"在暗色里 = 更黑 */
+    --chart-canvas: 240 20% 3.5%;
+    --dur-instant: 80ms; --dur-fast: 150ms; --dur-normal: 250ms; --dur-slow: 400ms;
+    --dur-flash: 420ms; --dur-flash-max: 700ms;
+    --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --role-watch: 245 65% 68%; --role-opp: 42 95% 58%; --role-risk: 25 85% 58%; --role-system: 240 8% 60%;
+    /* 暗色强度阶: 亮度步长与亮色一致(0.05), 色度略提以在深底上拉开 */
+    --heat-n5: oklch(0.72 0.20 155); --heat-n4: oklch(0.67 0.17 155); --heat-n3: oklch(0.62 0.14 155);
+    --heat-n2: oklch(0.57 0.10 155); --heat-n1: oklch(0.52 0.06 155);
+    --heat-0: oklch(0.50 0.01 265);
+    --heat-p1: oklch(0.52 0.06 25);  --heat-p2: oklch(0.57 0.10 25);  --heat-p3: oklch(0.62 0.13 25);
+    --heat-p4: oklch(0.67 0.16 25);  --heat-p5: oklch(0.72 0.20 25);
+
     --background: 240 20% 5%;
     --foreground: 240 15% 90%;
     --card: 240 20% 10%;
@@ -112,7 +175,7 @@
     --accent: 240 15% 18%;
     --accent-foreground: 240 15% 90%;
     /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
-    --bg-kline: 222 47% 6%;
+    --bg-kline: var(--chart-canvas);
     /* §4.3 剩余色板暗色值: flat/threshold 提亮保可读; tint 落深底 */
     --flat-color: 215 16% 65%;
     --threshold-line: 215 16% 65%;
@@ -303,4 +366,66 @@ html.has-disclaimer { --disclaimer-h: 2.5rem; }
 @media (max-width: 767px) {
   /* 移动端免责条上抬到 14(56px 底部导航) 之上, 总占位 = 导航 + 条 */
   html.has-disclaimer { --disclaimer-h: 6rem; }
+}
+
+/* ── Surface 阶梯 / 交互三态 / 会话态 / 长列表性能(2026-09-20 设计系统落地)────── */
+@layer components {
+  .s-workspace { background-color: hsl(var(--s0)); }
+  .s-panel { background-color: hsl(var(--s1)); }
+  .s-raised { background-color: hsl(var(--s2)); }
+  .s-float { background-color: hsl(var(--s3)); }
+  .s-canvas { background-color: hsl(var(--chart-canvas)); }
+
+  .row-hit { min-height: 32px; }
+  .row-hover:hover { background-color: hsl(var(--s2)); }
+  .row-selected { background-color: hsl(var(--s3)); }
+  .role-strip { position: relative; }
+  .role-strip::before {
+    content: ''; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: 2px;
+    background-color: var(--role-bar, hsl(var(--role-system)));
+  }
+  .role-watch { --role-bar: hsl(var(--role-watch)); }
+  .role-opp { --role-bar: hsl(var(--role-opp)); }
+  .role-risk { --role-bar: hsl(var(--role-risk)); }
+  .role-system { --role-bar: hsl(var(--role-system)); }
+  .row-focusable:focus-visible { outline: none; box-shadow: inset 3px 0 0 0 hsl(var(--ring)); }
+
+  .session-dot { width: 6px; height: 6px; border-radius: 9999px; background-color: currentColor; }
+  .col-band { background-color: hsl(var(--foreground) / 0.035); }
+
+  /* 长列表: 视口外的行跳过布局与绘制(比引入虚拟滚动风险低得多);
+     contain-intrinsic-size 给占位高度, 避免滚动条跳动 */
+  .list-window > * { content-visibility: auto; contain-intrinsic-size: 0 34px; }
+}
+
+/* 大数字逐位滚动: 只让变化的位做一次入场(时长走 motion token, 降级由 token 层负责) */
+@keyframes sida-digit-in {
+  from { opacity: 0.35; transform: translateY(35%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.sida-digit-in {
+  animation: sida-digit-in var(--dur-fast) var(--ease-out) both;
+  will-change: transform, opacity;
+}
+/* 涨跌闪: 强度由 FlashValue 按 |Δ| 给到 --flash-dur, 上限 --dur-flash-max */
+.sida-flash { animation-duration: var(--flash-dur, var(--dur-flash)); }
+
+/* ── 焦点模式(2026-09-20): 收起侧栏与免责条, 只留一枚 chip ─────────────────────
+   盯盘时"一屏只有行情"; 不是把功能删掉, 而是把外壳收成提示 —— 再执行一次命令面板里的
+   「焦点模式: 开关」即恢复。免责条高度变量同时归零, 内容不再被固定底条占位。 */
+html[data-focus-mode='1'] [data-shell-aside] { display: none; }
+html[data-focus-mode='1'] { --disclaimer-h: 0px !important; }
+html[data-focus-mode='1'] [data-shell-disclaimer] { display: none; }
+html[data-focus-mode='1'] [data-focus-chip] { display: inline-flex; }
+[data-focus-chip] { display: none; }
+/* 焦点模式下主内容不再为侧栏留白 */
+html[data-focus-mode='1'] [data-shell-main] { padding-left: 1rem !important; }
+
+/* ── 单一浮层层级(2026-09-20): 全站只有**一档**阴影, 只给真正的浮层(弹窗/菜单/命令面板)────
+   此前 shadow-lg/xl/2xl/md 混用(实测 18 处), 层级全靠阴影大小猜 —— 结构与"浮不浮起来"
+   无关的信息不该用阴影表达, 平铺面板一律用 hairline 边框。 */
+@layer components {
+  .shadow-float {
+    box-shadow: 0 8px 24px hsl(var(--foreground) / 0.10), 0 2px 6px hsl(var(--foreground) / 0.06);
+  }
 }

@@ -373,7 +373,7 @@ export default function AnalysisDetailPage() {
               {tocOpen && (
                 <>
                   <div className="fixed inset-0 z-0" onClick={() => setTocOpen(false)} />
-                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-md border border-border/50 bg-card/95 backdrop-blur shadow-lg max-h-[60vh] overflow-y-auto scrollbar p-2">
+                  <div className="absolute left-0 right-0 top-full mt-1 z-10 rounded-md border border-border/50 bg-card/95 backdrop-blur  max-h-[60vh] overflow-y-auto scrollbar p-2">
                     {tocHeader}
                     {tocNav(() => setTocOpen(false))}
                   </div>

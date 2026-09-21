@@ -105,7 +105,7 @@ function MainlineRow({
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[12.5px] font-semibold text-foreground truncate">{g.name}</span>
+            <span className="text-[13px] font-semibold text-foreground truncate">{g.name}</span>
             <span className={`text-[10px] tabular-nums font-mono ${tone.text}`}>
               {g.score != null ? g.score.toFixed(1) : '--'}
             </span>
@@ -133,7 +133,7 @@ function MainlineRow({
         {/* 龙头 */}
         <div className="hidden md:flex items-center gap-1 shrink-0 max-w-[100px]">
           <Crown className="w-3 h-3 text-amber-500 shrink-0" />
-          <span className="text-[10.5px] text-amber-600 dark:text-amber-400 truncate" title={`龙头 ${leaderName} ${leaderDays}板`}>
+          <span className="text-[10px] text-amber-600 dark:text-amber-400 truncate" title={`龙头 ${leaderName} ${leaderDays}板`}>
             {leaderName}
             {leaderDays > 1 ? <span className="ml-0.5 text-muted-foreground">{leaderDays}B</span> : null}
           </span>
@@ -155,7 +155,7 @@ function MainlineRow({
               return (
                 <span
                   key={c.code || c.name}
-                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] transition-colors ${
+                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
                     isLeader
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
                       : 'border-border/50 bg-card text-foreground/90 hover:border-primary/40'

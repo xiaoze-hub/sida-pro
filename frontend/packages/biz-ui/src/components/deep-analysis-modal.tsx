@@ -517,7 +517,7 @@ export function ToolkitDiagnostics({
           {err > 0 && <span className="text-rose-600"> · 错误 {err}</span>}
         </span>
       </summary>
-      <div className="text-[10.5px] text-muted-foreground/80 mt-2 leading-relaxed">
+      <div className="text-[10px] text-muted-foreground/80 mt-2 leading-relaxed">
         <span className={ACTION_CLS.HIT}>HIT</span>: 用 PanWatch 数据 ·{' '}
         <span className={ACTION_CLS.MISS}>MISS</span>: 命中但 PanWatch 未实现 ·{' '}
         <span className={ACTION_CLS.PASSTHROUGH}>透传</span>: 非 A 股直接走上游 vendor ·{' '}
@@ -532,7 +532,7 @@ export function ToolkitDiagnostics({
           {recent.map((h, i) => {
             const action = (h.action || '').toUpperCase()
             const row = (
-              <div className="font-mono text-[10.5px] flex items-center gap-2 hover:bg-accent/30 px-1 rounded cursor-help w-full">
+              <div className="font-mono text-[10px] flex items-center gap-2 hover:bg-accent/30 px-1 rounded cursor-help w-full">
                 <span className={`${ACTION_CLS[action] || 'text-muted-foreground'} w-20 shrink-0`}>
                   {action}
                 </span>
@@ -568,7 +568,7 @@ export function ToolkitDiagnostics({
                       </div>
                     )}
                     {h.snippet && (
-                      <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-snug bg-accent/30 rounded p-2 text-foreground/85 max-h-[60vh] overflow-y-auto">
+                      <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug bg-accent/30 rounded p-2 text-foreground/85 max-h-[60vh] overflow-y-auto">
                         {h.snippet}
                         {h.chars != null && h.chars > h.snippet.length && (
                           <span className="text-muted-foreground/60">

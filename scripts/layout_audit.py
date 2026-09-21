@@ -212,6 +212,34 @@ PROBE = r"""
              why: !measured ? '标签统计没量到' : !accounted ? `${total - shown - tiny} 块既没显示也不在"太小"清单里(静默丢标签)` : !visible ? `最小对比度 ${contrastRaw} < 3(文字看不清)` : '' };
   });
 
+  // ── 空态高度收敛(2026-09-20): 空态必须"原因+唯一主操作+口径", 且**不许半屏留白** ──
+  const empties = Array.from(document.querySelectorAll('[data-empty-state]')).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { variant: el.getAttribute('data-empty-state'), h: Math.round(r.height),
+             ok: r.height <= 260, why: r.height > 260 ? `空态高 ${Math.round(r.height)}px > 260px(半屏留白)` : '' };
+  });
+
+  // ── 可点行热区下限(2026-09-20): 密度档只许收紧内容, 不许收紧热区 ──────────────
+  const hitRows = Array.from(document.querySelectorAll('.row-hit')).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { h: Math.round(r.height), ok: r.height >= 31,
+             why: r.height < 31 ? `可点行高 ${Math.round(r.height)}px < 32px(密度档压到热区了)` : '' };
+  });
+
+  // ── 图表画布不得是纯白(2026-09-20 生产实测过一块**白色画布**)──────────────────
+  const rawCanvas = Array.from(document.querySelectorAll('canvas')).filter((c) => c.width > 300).map((c) => {
+    let d = null;
+    try { d = c.getContext('2d')?.getImageData(0, 0, Math.min(c.width, 200), Math.min(c.height, 200)).data || null } catch (e) { d = null }
+    if (!d) return { ok: true, whiteRatio: -1 };
+    let white = 0, tot = 0;
+    for (let i = 0; i < d.length; i += 4 * 7) { tot++; if (d[i] > 245 && d[i+1] > 245 && d[i+2] > 245 && d[i+3] > 40) white++ }
+    const ratio = tot ? white / tot : 0;
+    // 亮色主题画布本来就该是白的 ⇒ 只在暗色主题下判
+    const dark = document.documentElement.classList.contains('dark');
+    const ok = !dark || ratio < 0.5;
+    return { ok, whiteRatio: +ratio.toFixed(3), why: ok ? '' : `图表画布 ${(ratio * 100).toFixed(0)}% 是纯白(暗色主题下画布必须走 --chart-canvas)` };
+  }).filter((x) => x.whiteRatio >= 0);
+
   const charts = Array.from(document.querySelectorAll('[data-chart-panes]')).map((el) => {
     const raw = el.getAttribute('data-chart-panes') || '';
     const [nStr, hs] = raw.split('|');
@@ -222,7 +250,7 @@ PROBE = r"""
     return { raw, panes, heights, h: Math.round(r.height), ok };
   });
 
-  return { candidates: cand.length, overlaps: overlaps.slice(0, 40), suspects: suspects.slice(0, 20), clipped, hScroll, charts, heatmaps };
+  return { candidates: cand.length, overlaps: overlaps.slice(0, 40), suspects: suspects.slice(0, 20), clipped, hScroll, charts, heatmaps, empties, hitRows, rawCanvas };
 }
 """
 
@@ -300,8 +328,24 @@ def main() -> int:
                 bad_charts = [c for c in ch if not c["ok"]]
                 su = res.get("suspects") or []
                 line = f"{label:<22} 重叠={len(ov):<3} 疑似={len(su):<3} 真裁切={len(cl):<3} 截断={len(cl_ell):<3}(看不全{len(cl_lost)}) 横向={hs['overflow']:<4} 图表={len(ch)}"
+                # 空态高度 / 可点行热区 / 画布纯白(2026-09-20 设计系统判据)
+                empties = res.get("empties") or []
+                bad_empty = [e for e in empties if not e["ok"]]
+                hit_rows = res.get("hitRows") or []
+                bad_hit = [h for h in hit_rows if not h["ok"]]
+                canv = [c for c in (res.get("rawCanvas") or []) if not c["ok"]]
+                if bad_empty:
+                    fails.append(f"{label}: 空态过高({bad_empty[0]['why']})")
+                if bad_hit:
+                    fails.append(f"{label}: 可点行热区不足({bad_hit[0]['why']})")
+                if canv:
+                    fails.append(f"{label}: {canv[0]['why']}")
                 heatmaps = res.get("heatmaps") or []
                 bad_heat = [h for h in heatmaps if not h["ok"]]
+                if empties:
+                    line += f" 空态{len(empties)}(最高 {max(e['h'] for e in empties)}px)"
+                if hit_rows:
+                    line += f" 可点行{len(hit_rows)}(最矮 {min(h['h'] for h in hit_rows)}px)"
                 if heatmaps:
                     line += f" 热力图标签 {heatmaps[0]['raw']}"
                     if heatmaps[0]['contrastRaw']:

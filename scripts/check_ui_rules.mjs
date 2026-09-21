@@ -207,5 +207,40 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
   }
 }
 
+// ── R12: Surface 棘轮(2026-09-20 设计系统落地)────────────────────────────────
+// 依据: 全站曾散落 bg-accent/xx 300+ 处、bg-white/[0.0x] 30 处 —— 同一视觉层级靠手调透明度,
+// 结果"同层不同色"。新代码一律走 bg-s0..s4 / bg-canvas(阶梯 token), 存量**只减不增**。
+// `bg-stock-up/down` 作**背景**同属此列: 背景只表达空间与会话, 涨跌用文字/图形表达。
+{
+  const SURFACE_BASELINE_FILE = join(ROOT, 'scripts', 'ui-rules-surface-baseline.json')
+  let sb = {}
+  try { sb = JSON.parse(readFileSync(SURFACE_BASELINE_FILE, 'utf8')) } catch { /* 无基线 → 全量新规 */ }
+  const sources = files.map((f) => readFileSync(f, 'utf8')).join('\n')
+  const now = {
+    bare_alpha: (sources.match(/bg-white\/\[/g) || []).length,
+    accent_alpha: (sources.match(/bg-accent\/[0-9]/g) || []).length,
+    price_bg: (sources.match(/bg-stock-(up|down)/g) || []).length,
+  }
+  for (const [k, v] of Object.entries(now)) {
+    const b = sb[k]
+    if (b === undefined) continue
+    if (v > b) bad('R12-SURFACE-RATCHET', 'frontend', 1, `${k}: ${v} > baseline ${b} — 新增背景请用 bg-s0..s4 / bg-canvas, 不许再手调透明度或背景上色`)
+    else if (v < b) console.log(`[R12] ${k}: ${v} < baseline ${b} — 可调低 baseline`)
+  }
+}
+
+// ── R13: 单一浮层层级 + 圆角上限(2026-09-20)────────────────────────────────
+// 依据: 实测 shadow-lg/xl/2xl/md 混用 18 处、rounded-2xl 14 处 —— 层级靠阴影大小猜。
+// 平铺面板一律 hairline 边框; 真正的浮层只允许 `.shadow-float` 一档; 圆角上限 rounded-xl(由 --radius 派生)。
+{
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const sh = (src.match(/\bshadow-(2xl|xl|lg|md)\b/g) || [])
+    const rd = (src.match(/\brounded-(2xl|3xl)\b/g) || [])
+    if (sh.length) bad('R13-ELEVATION', rel(f), sh.length, `shadow-${sh[0].split('-')[1]} —— 浮层只用 .shadow-float, 平铺面板用 hairline 边框`)
+    if (rd.length) bad('R13-ELEVATION', rel(f), rd.length, `${rd[0]} —— 圆角上限 rounded-xl(随 --radius)`)
+  }
+}
+
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)

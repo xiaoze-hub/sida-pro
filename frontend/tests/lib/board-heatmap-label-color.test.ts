@@ -79,26 +79,31 @@ describe('字色按实测底色亮度选(不再按 alpha 猜)', () => {
   })
 })
 
-describe('heatLabelColor 第一遍估算(饱和红→白字, 浅色块→深字)', () => {
-  it('强涨(饱和红) → 白字', () => {
-    expect(heatLabelColor(3, PALETTE, 3)).toBe('#ffffff')
+describe('heatLabelColor 第一遍估算(强弱档各取对比度更高的一端)', () => {
+  // 2026-09-20 起色阶改 OKLCH 均匀发散: 强档更**亮**(不是更暗), 所以"强涨必配白字"这个
+  // 直觉不再成立 —— 取哪一端由**实测/估算的底色亮度**决定。这里钉的是"看得见", 不是"白字"。
+  const ratio = (pct: number) => contrastRatio(parseColorToRgb(heatLabelColor(pct, PALETTE, 3))!, parseColorToRgb(heatCellColor(pct, PALETTE, 3))!)
+
+  it('强涨档: 文字与底色对比度 ≥3:1', () => {
+    expect(ratio(3)).toBeGreaterThanOrEqual(3)
   })
 
-  it('微涨(浅色块) → 深字 —— 修复前这里是白字, 等于隐形', () => {
-    expect(heatLabelColor(0.2, PALETTE, 3)).toBe('#10151f')
+  it('微涨档: 同样保证 ≥3:1(修复前浅色块上是白字, 对比度 ≈1.2 等于隐形)', () => {
+    expect(ratio(0.2)).toBeGreaterThanOrEqual(3)
   })
 
   it('无数据(灰底) → 深字', () => {
     expect(heatLabelColor(null, PALETTE, 3)).toBe('#10151f')
   })
 
-  it('不再依赖 alpha 代理: **同一个填充色**, 叠白底/深底上字色必须相反', () => {
-    // 微涨的填充(低 alpha)叠白底 = 浅粉 → 深字; 叠深底 = 暗红 → 白字。
-    // 老规则只看 alpha(同一个值), 会给出**同一个**字色 —— 这正是它错的地方。
-    const fill = parseColorToRgb(heatCellColor(0.15, PALETTE, 3))!
-    expect(fill.a).toBeLessThan(0.3)
-    const onWhite = pickLabelColor(compositeOver(fill, rgb(255, 255, 255)), '#10151f', '#ffffff')
-    const onDark = pickLabelColor(compositeOver(fill, rgb(10, 10, 15)), '#10151f', '#ffffff')
+  it('底色决定字色(不再是 alpha 代理): 同一个半透明填充叠白底/深底, 字色必须相反', () => {
+    // 在**半透明填充**上才看得出这个区别 —— 强度阶是**不透明**色(OKLCH 直接给色), 底色影响不了它;
+    // 而"无数据灰块"是半透明白灰, 白底上发亮 → 深字, 深底上发暗 → 白字。
+    // 老规则只看 alpha(同一个值) ⇒ 两个主题给出同一个字色 —— 这正是它错的地方。
+    const neutral = parseColorToRgb(PALETTE.neutral)!
+    expect(neutral.a).toBeLessThan(0.3)
+    const onWhite = pickLabelColor(compositeOver(neutral, rgb(255, 255, 255)), '#10151f', '#ffffff')
+    const onDark = pickLabelColor(compositeOver(neutral, rgb(10, 10, 15)), '#10151f', '#ffffff')
     expect(onWhite.color).toBe('#10151f')
     expect(onDark.color).toBe('#ffffff')
   })
