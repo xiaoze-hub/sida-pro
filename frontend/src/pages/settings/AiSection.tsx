@@ -115,7 +115,7 @@ export function AiSection() {
                     {sceneOptionsFor(b.scene).map(opt => (
                       <SelectItem key={opt.id} value={String(opt.id)}>
                         <span className="flex items-center gap-1.5">
-                          <span className="truncate">{opt.label}</span>
+                          <span className="truncate" title={opt.label}>{opt.label}</span>
                           <CapBadges caps={opt.caps} />
                         </span>
                       </SelectItem>
