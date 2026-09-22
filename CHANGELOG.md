@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-22 (CI 韧性: 基础镜像回落 + 构建超时 → v0.12.3)
+
+v0.12.2 发版时 **CI 的 `Build and push` 步骤卡死 2 小时**(开始 20:47 CST, 22:47 仍在跑),
+gates 全绿。真因(日志实证):
+
+```
+#4 ERROR: unexpected status from HEAD request to
+   https://docker.m.daocloud.io/v2/library/node/manifests/20-alpine: 500 Internal Server Error
+ERROR: failed to build: failed to resolve source metadata for docker.m.daocloud.io/library/node:20-alpine
+```
+
+即**第三方镜像站瞬时 500**, 而构建步骤**没有超时**, buildx 就一直重试 ⇒ 整个发布链挂在那里,
+既不发版也不报错。两处一起修:
+
+1. **基础镜像回落**: 构建前先 `docker buildx imagetools inspect` 探一次镜像站; 不可用就
+   回落 `node:20-alpine` / `python:3.11-slim`(GitHub runner 直连 Docker Hub 没问题),
+   并通过 `build-args NODE_IMAGE/PYTHON_IMAGE` 传给 Dockerfile(该文件本来就用 ARG 参数化)。
+   发布链不该挂在第三方镜像站的心情上。
+2. **构建步骤 30 分钟超时**(`timeout-minutes`): 卡住即失败, 不再静默等几小时 ——
+   "静默卡死"比"明确失败"危险得多, 前者没人知道要处理。
+
+镜像站健康度复测(修完当时): daocloud 401(正常, 需 token) / 1panel 403 / dockerproxy 404 /
+registry-1.docker.io 401 ⇒ **500 是瞬时故障**, 但兜底要常备。
+
+
 ## 2026-09-22 (端到端渲染验证 + 两处收尾 → v0.12.2)
 
 v0.12.1 部署后做了**端到端渲染探针**(登录→真实页面→数 DOM), 结论与两处收尾:

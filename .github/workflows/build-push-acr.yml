@@ -145,6 +145,23 @@ jobs:
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
+      - name: Resolve base images (mirror → Docker Hub fallback)
+        id: base
+        # 2026-09-22: docker.m.daocloud.io 对 library/node:20-alpine 返回 500 →
+        # buildx 一直重试, 整个 "Build and push" 步骤卡死 2 小时(v0.12.2 实测)。
+        # 现在先探一次, 不可用就回落 Docker Hub —— 发布链不该挂在第三方镜像站的心情上。
+        run: |
+          NODE=docker.m.daocloud.io/library/node:20-alpine
+          PY=docker.m.daocloud.io/library/python:3.11-slim
+          if ! docker buildx imagetools inspect "$NODE" >/dev/null 2>&1; then
+            echo "::warning::基础镜像镜像站不可用 → 回落 Docker Hub"
+            NODE=node:20-alpine
+            PY=python:3.11-slim
+          fi
+          echo "node=$NODE" >> "$GITHUB_OUTPUT"
+          echo "python=$PY" >> "$GITHUB_OUTPUT"
+          echo "基础镜像: $NODE / $PY"
+
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -155,8 +172,12 @@ jobs:
           tags: |
             crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:${{ steps.ver.outputs.version }}
             crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
+          # 卡住就失败, 别静默等几小时(v0.12.2 实测卡 2h)
+          timeout-minutes: 30
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
+            NODE_IMAGE=${{ steps.base.outputs.node }}
+            PYTHON_IMAGE=${{ steps.base.outputs.python }}
           # 个人版 ACR 不支持 OCI attestation 清单(unknown manifest class for empty.v1+json)
           provenance: false
           sbom: false
