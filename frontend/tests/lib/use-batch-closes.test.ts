@@ -24,7 +24,7 @@ describe('useBatchCloses', () => {
 
   it('正常回填: 逐标的收盘价进表, missing 如实透出', async () => {
     fetchAPIMock.mockResolvedValue({
-      items: [{ symbol: '002361', closes: [1, 2, 3] }],
+      items: [{ symbol: '002361', closes: [1, 2, 3], source: 'tq' }],
       missing: ['600519'],
     })
     const { result } = renderHook(() => useBatchCloses(['002361', '600519']))
@@ -32,6 +32,9 @@ describe('useBatchCloses', () => {
     expect(result.current.closes['002361']).toEqual([1, 2, 3])
     expect(result.current.closes['600519']).toBeUndefined() // 不许补 0 / 空数组冒充
     expect(result.current.missing).toEqual(['600519'])
+    // 口径可见: 来源如实透出(tq/tencent…), 缺来源就不编
+    expect(result.current.sources['002361']).toBe('tq')
+    expect(result.current.sources['600519']).toBeUndefined()
   })
 
   it('超过 60 只自动分批(两批请求), 结果合并', async () => {

@@ -17,6 +17,8 @@ import { fetchAPI } from '@panwatch/api'
 export interface BatchClosesResult {
   /** symbol → 收盘价序列(未命中 = 无该键) */
   closes: Record<string, number[]>
+  /** symbol → 数据来源(tq / tencent …)。**口径可见**: 列表行的 tooltip 直接显示 */
+  sources: Record<string, string>
   loading: boolean
   /** 这次没拿到的标的(后端如实回的 missing) */
   missing: string[]
@@ -26,6 +28,7 @@ const MAX_PER_REQUEST = 60
 
 export function useBatchCloses(symbols: string[], days = 20, enabled = true): BatchClosesResult {
   const [closes, setCloses] = useState<Record<string, number[]>>({})
+  const [sources, setSources] = useState<Record<string, string>>({})
   const [missing, setMissing] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   // 用"排序去重后的代码串"当依赖 —— 数组字面量每次渲染都是新引用, 直接进依赖会无限重取
@@ -35,6 +38,7 @@ export function useBatchCloses(symbols: string[], days = 20, enabled = true): Ba
   useEffect(() => {
     if (!enabled || !key) {
       setCloses({})
+      setSources({})
       setMissing([])
       return
     }
@@ -47,13 +51,21 @@ export function useBatchCloses(symbols: string[], days = 20, enabled = true): Ba
     setLoading(true)
     void (async () => {
       const merged: Record<string, number[]> = {}
+      const srcs: Record<string, string> = {}
       const miss: string[] = []
       for (const b of batches) {
         try {
-          const res = await fetchAPI<{ items?: { symbol: string; closes: number[] }[]; missing?: string[] }>(
+          const res = await fetchAPI<{
+            items?: { symbol: string; closes: number[]; source?: string }[]
+            missing?: string[]
+          }>(
             `/klines/closes?symbols=${encodeURIComponent(b.join(','))}&days=${days}`,
           )
-          for (const it of res?.items ?? []) if (Array.isArray(it.closes)) merged[it.symbol] = it.closes
+          for (const it of res?.items ?? []) {
+            if (!Array.isArray(it.closes)) continue
+            merged[it.symbol] = it.closes
+            if (it.source) srcs[it.symbol] = it.source
+          }
           miss.push(...(res?.missing ?? []))
         } catch {
           // 该批失败: 这几个标的就没有 sparkline(不编造, 不阻塞列表其它内容)
@@ -62,6 +74,7 @@ export function useBatchCloses(symbols: string[], days = 20, enabled = true): Ba
       }
       if (!alive) return
       setCloses(merged)
+      setSources(srcs)
       setMissing(miss)
       setLoading(false)
     })()
@@ -70,7 +83,7 @@ export function useBatchCloses(symbols: string[], days = 20, enabled = true): Ba
     }
   }, [key, days, enabled])
 
-  return { closes, loading, missing }
+  return { closes, sources, loading, missing }
 }
 
 export default useBatchCloses

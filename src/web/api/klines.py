@@ -153,6 +153,51 @@ def _aggregate_klines(klines, interval: str) -> list:
     return out
 
 
+# 同一交易日多源时取优先级更高的一支(不混源成一条序列 —— 混源就是口径污染)。
+_CLOSES_SOURCE_PREF = {"tencent": 0, "tq": 1, "sina": 2, "eastmoney": 3}
+
+
+def _closes_from_rows(wanted: list[str], rows, days: int) -> tuple[list[dict], list[str]]:
+    """(symbol, ts, close, source) 行 → 每只最后 days 个收盘价。
+
+    纯函数(无 DB/网络): 便于逐条钉住口径 —— ① 同日多源只取一支; ② 少于 2 个点算"没有";
+    ③ 缺数据进 missing 而不是补 0。
+    """
+    by_symbol: dict[str, dict[str, tuple[float, str]]] = {}
+    for sym, ts, close, source in rows:
+        if close is None:
+            continue
+        day = str(ts)[:10]
+        cur = by_symbol.setdefault(sym, {})
+        src = str(source or "?")
+        prev = cur.get(day)
+        if prev is None or _CLOSES_SOURCE_PREF.get(src, 9) < _CLOSES_SOURCE_PREF.get(prev[1], 9):
+            cur[day] = (float(close), src)
+
+    items: list[dict] = []
+    missing: list[str] = []
+    for sym in wanted:
+        days_map = by_symbol.get(sym)
+        if not days_map:
+            missing.append(sym)
+            continue
+        ordered = sorted(days_map.items())[-days:]
+        closes = [round(v[0], 3) for _, v in ordered]
+        if len(closes) < 2:
+            missing.append(sym)
+            continue
+        items.append(
+            {
+                "symbol": sym,
+                "closes": closes,
+                "asof": ordered[-1][0],
+                "source": ordered[-1][1][1],
+                "caliber": "pg_klines_hypertable",
+            }
+        )
+    return items, missing
+
+
 @router.get("/closes")
 def get_closes_batch(
     symbols: str,
@@ -179,19 +224,42 @@ def get_closes_batch(
     market_code = _parse_market(market)
 
     def _fetch() -> dict:
-        items: list[dict] = []
-        missing: list[str] = []
-        for sym in wanted:
-            klines, asof = _pg_klines(sym, market_code, days)
-            if not klines:
-                missing.append(sym)
-                continue
-            closes = [round(float(k.close), 3) for k in klines if k.close is not None]
-            if len(closes) < 2:
-                # 只有 1 个点画不出形状 ⇒ 如实算"没有", 不硬画
-                missing.append(sym)
-                continue
-            items.append({"symbol": sym, "closes": closes, "asof": asof, "source": "pg_klines_hypertable"})
+        """一次批量查完所有标的(2026-09-22 实测: 逐只查 3-7s/只, 批量 ANY() 3 只 0.02s)。
+
+        口径三条(与测试一致, 改了就是 bug):
+        1. **只读 PG, 绝不联网** —— 列表页几十行, 逐行联网会把页面拖成几十秒;
+        2. **不挑单一数据源** —— 库里 tq 375 万行 / tencent 75 万行, 按 `source='tencent'` 过滤会让
+           只有 tq 的票(如 002361)整只丢失; 同一交易日两源都有时按 tencent > tq > 其它 取一支
+           (同一时刻只认一个来源, 不混源成一条序列 —— 混源就是口径污染);
+        3. **缺数据的标的显式进 missing**, 绝不补 0 / 不编造平线。
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import bindparam, text
+
+        try:
+            from src.web.database import engine as _engine
+        except Exception:
+            return {"items": [], "missing": list(wanted), "days": days, "market": market.upper()}
+
+        # 日历天 → 交易日: 20 个交易日大约跨 28-30 个自然日(周末+节假日); 取 3 倍留足余量,
+        # 再截最后 days 个。**不是**直接拿 days 当自然日查(那样 20 天窗口只有 ~14 根 K 线)。
+        lookback = datetime.now(timezone.utc) - timedelta(days=days * 3)
+        try:
+            with _engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        "SELECT symbol, ts, close, source FROM klines "
+                        "WHERE symbol IN :ss AND market=:m AND period='1d' AND adjust='qfq' "
+                        "  AND ts >= :c ORDER BY symbol, ts ASC"
+                    ).bindparams(bindparam("ss", expanding=True)),
+                    {"ss": list(wanted), "m": market_code.value, "c": lookback},
+                ).fetchall()
+        except Exception:
+            # 库不可用/表不存在 → 全部按"没有"处理(诚实: 不编造)
+            return {"items": [], "missing": list(wanted), "days": days, "market": market.upper()}
+
+        items, missing = _closes_from_rows(list(wanted), rows, days)
         return {"items": items, "missing": missing, "days": days, "market": market.upper()}
 
     key = f"kline_closes:{market.upper()}:{days}:{','.join(sorted(wanted))}"

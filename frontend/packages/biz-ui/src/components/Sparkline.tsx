@@ -17,10 +17,12 @@ export interface SparklineProps {
   height?: number
   /** 涨跌方向(决定颜色); 缺省按末值 vs 首值自算 */
   direction?: 'up' | 'down' | 'flat'
+  /** 数据来源(tq / tencent …)。有就进 tooltip —— 数据面必须可见口径(设计铁律) */
+  source?: string
   className?: string
 }
 
-export default function Sparkline({ values, width = 40, height = 16, direction, className }: SparklineProps) {
+export default function Sparkline({ values, width = 40, height = 16, direction, source, className }: SparklineProps) {
   const series = (values || []).map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : null))
   const valid = series.filter((v): v is number => v !== null)
   if (valid.length < 3) return null
@@ -47,9 +49,11 @@ export default function Sparkline({ values, width = 40, height = 16, direction, 
       viewBox={`0 0 ${width} ${height}`}
       className={cn('shrink-0', className)}
       role="img"
-      aria-label={`近 ${valid.length} 日走势`}
+      aria-label={`近 ${valid.length} 日走势${source ? `(来源 ${source})` : ''}`}
       data-sparkline={dir}
+      data-source={source || undefined}
     >
+      <title>{`近 ${valid.length} 日收盘走势${source ? ` · 来源 ${source}` : ''}`}</title>
       {/* flat 基线: 首值位置, hairline */}
       <line x1={0} x2={width} y1={round1(baseY)} y2={round1(baseY)} stroke="hsl(var(--border))" strokeWidth={1} />
       <path d={d} fill="none" stroke={stroke} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />

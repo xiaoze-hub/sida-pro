@@ -46,7 +46,7 @@ export function WatchlistSection() {
 
   // 自选行 sparkline(2026-09-22): 与持仓行同一套(批量收盘, 不在每行发请求)
   const watchSymbols = useMemo(() => (stocks || []).map((x) => x.symbol).filter(Boolean), [stocks])
-  const { closes: sparkCloses } = useBatchCloses(watchSymbols)
+  const { closes: sparkCloses, sources: sparkSources } = useBatchCloses(watchSymbols)
   return (
     <>
 {/* Watchlist */}
@@ -164,7 +164,7 @@ export function WatchlistSection() {
                       {stock.symbol}
                     </button>
                     {/* 近 20 日走势: 没数据就不画(组件自己返回 null) */}
-                    <Sparkline values={sparkCloses[stock.symbol]} className="shrink-0" />
+                    <Sparkline values={sparkCloses[stock.symbol]} source={sparkSources[stock.symbol]} className="shrink-0" />
                     <button
                       className="text-[12px] text-muted-foreground truncate hover:text-primary"
                       onClick={(e) => { e.stopPropagation(); openStockDetail(stock.symbol, stock.market, stock.name, false) }}

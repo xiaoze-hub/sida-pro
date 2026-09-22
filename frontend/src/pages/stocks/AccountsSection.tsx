@@ -68,7 +68,7 @@ export function AccountsSection() {
     () => (portfolio?.accounts ?? []).flatMap((a) => a.positions.map((p) => p.symbol)).filter(Boolean),
     [portfolio],
   )
-  const { closes: sparkCloses } = useBatchCloses(allSymbols)
+  const { closes: sparkCloses, sources: sparkSources } = useBatchCloses(allSymbols)
 
   /**
    * 持仓表键盘协议(2026-09-22): 表格是"账户 → 持仓"两层 map, 没有现成行号 ⇒ 这里拍平一层。
@@ -257,7 +257,7 @@ export function AccountsSection() {
                                 {pos.symbol}
                               </span>
                               {/* 近 20 日走势(40×16): 数据没到/库里没有 ⇒ Sparkline 自己返回 null, 不画假线 */}
-                            <Sparkline values={sparkCloses[pos.symbol]} className="ml-1.5 inline-block align-middle" />
+                            <Sparkline values={sparkCloses[pos.symbol]} source={sparkSources[pos.symbol]} className="ml-1.5 inline-block align-middle" />
                             <button
                                 className="ml-1.5 text-[12px] text-muted-foreground hover:text-primary"
                                 onClick={() => openStockDetail(pos.symbol, pos.market, pos.name, true)}
