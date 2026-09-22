@@ -58,6 +58,7 @@ import NotificationBell from '@panwatch/biz-ui/components/notification-bell'
 import ChatWidget from '@/components/ChatWidget'
 import { BrandMark } from '@/components/BrandMark'
 import SessionPhaseChip, { sessionPhaseOf, type SessionInfo } from '@panwatch/biz-ui/components/SessionPhaseChip'
+import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
 import { CapabilityPill } from '@/components/DataCapabilities'
 import { getJwtRole, isDemoUser, isGuestUser } from '@/lib/jwt'
 import { normalizeType } from '@/lib/workbench-tabs'
@@ -74,6 +75,7 @@ import CaliberComparePage from '@/pages/CaliberCompare'
 import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
 import Disclaimer from '@/components/Disclaimer'
+import { onApiFailure } from '@panwatch/api'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.home', perm: 'view_dashboard' },
@@ -278,6 +280,18 @@ function App() {
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  /** 会话消息流接线(2026-09-22): API 失败 → 右栏 AlertLog。
+   *  用注册回调(不直接改 api 包) —— 底层包不反向依赖 UI。同一条消息 30s 内只累加计数, 不刷屏。 */
+  useEffect(() => {
+    onApiFailure((f) => {
+      pushAlert({
+        level: f.status >= 500 || f.status === 0 ? 'risk' : 'warn',
+        text: `${f.method} ${f.path} 失败: ${f.message}`,
+        key: `${f.method}:${f.path}:${f.status}`,
+      })
+    })
+    return () => onApiFailure(null)
+  }, [])
   /** 会话态(2026-09-20): 30s 刷新一次足够 —— 时段边界以分钟计, 不需要每秒 */
   const [session, setSession] = useState<SessionInfo>(() => sessionPhaseOf())
   useEffect(() => {

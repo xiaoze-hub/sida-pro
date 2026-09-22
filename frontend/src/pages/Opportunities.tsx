@@ -39,6 +39,7 @@ import Stat from '@panwatch/biz-ui/components/Stat'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'
 import { useRowNav } from '@panwatch/biz-ui/hooks/useRowNav'
+import SignalChip, { type SignalStrength, type SignalTone } from '@panwatch/biz-ui/components/SignalChip'
 
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
@@ -216,12 +217,20 @@ const toneClass = (item: StrategySignalItem) => {
   return ''
 }
 
-const actionBadgeClass = (action?: string) => {
+/**
+ * 动作 → 信号 chip 的色调与强度(2026-09-22 统一).
+ *
+ * 改前是 rose/emerald/blue 的 Tailwind 默认色(既违反"固定 5 色 + 中性 240"的调色板约定,
+ * 又和涨跌色语义打架)。现在走 SignalChip: **买/加仓=go(红) · 减仓/卖出=stop(绿) · 观察=中性**,
+ * 强度用**字重+边框**区分(买 > 加仓 > 观察), 色相只承担语义。
+ */
+const actionTone = (action?: string): { tone: SignalTone; strength: SignalStrength } => {
   const key = (action || '').toLowerCase()
-  if (key === 'buy') return 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/35'
-  if (key === 'add') return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-700 border border-emerald-500/35'
-  if (key === 'hold') return 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/35'
-  return 'bg-accent text-muted-foreground border border-border/50'
+  if (key === 'buy') return { tone: 'go', strength: 3 }
+  if (key === 'add') return { tone: 'go', strength: 2 }
+  if (key === 'reduce' || key === 'sell') return { tone: 'stop', strength: 2 }
+  if (key === 'hold') return { tone: 'neutral', strength: 1 }
+  return { tone: 'system', strength: 1 }
 }
 
 const displayActionLabel = (item: StrategySignalItem) => {
@@ -334,10 +343,15 @@ const formatEntryDisplay = (action: string | undefined, entryLow: number | null,
   return '当前不建议开仓'
 }
 
-const regimeToneClass = (regime?: string) => {
-  if (regime === 'bullish') return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-700 border border-emerald-500/30'
-  if (regime === 'bearish') return 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30'
-  return 'bg-amber-500/12 text-amber-700 dark:text-amber-300 border border-amber-500/25'
+/**
+ * 市场状态 → chip 色调(2026-09-22 统一): 多头=go(红) / 空头=stop(绿) / 震荡=中性。
+ * 原先是 emerald/rose/amber 三个 Tailwind 默认色 —— 既违反固定调色板, 又和"涨跌色"语义撞车。
+ * 用 go/stop(动作语义 token)而不是 --stock-up/down(价格 token): 后者是行情数值专用。
+ */
+const regimeTone = (regime?: string): { tone: SignalTone; strength: SignalStrength } => {
+  if (regime === 'bullish') return { tone: 'go', strength: 2 }
+  if (regime === 'bearish') return { tone: 'stop', strength: 2 }
+  return { tone: 'neutral', strength: 1 }
 }
 
 export default function OpportunitiesPage() {
@@ -1950,9 +1964,9 @@ export default function OpportunitiesPage() {
           <div className="text-[11px] text-muted-foreground mb-2">市场状态与组合风险</div>
           <div className="flex flex-wrap gap-2">
             {regimeSummary.map((r) => (
-              <span key={`regime-${r.market}`} className={`text-[11px] px-2.5 py-1 rounded ${regimeToneClass(r.regime)}`}>
+              <SignalChip key={`regime-${r.market}`} tone={regimeTone(r.regime).tone} strength={regimeTone(r.regime).strength} title="市场状态来自策略统计; 多头=进攻(红) 空头=防守(绿)">
                 {marketLabel(r.market)}: {r.label} · 置信 {Math.round(r.confidence * 100)}%
-              </span>
+              </SignalChip>
             ))}
             {riskSummary.map((r) => (
               <span key={`risk-${r.market}`} className="text-[11px] px-2.5 py-1 rounded bg-accent/70 text-muted-foreground border border-border/60">
@@ -2073,9 +2087,9 @@ export default function OpportunitiesPage() {
                   <div className="text-[11px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
                 </div>
                 <div>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] ${actionBadgeClass(item.action)}`}>
+                  <SignalChip tone={actionTone(item.action).tone} strength={actionTone(item.action).strength} title="动作来自策略信号; 色相只表动作语义, 强度用字重与边框">
                     {displayActionLabel(item)}
-                  </span>
+                  </SignalChip>
                 </div>
                 <div className={`hidden md:block text-right text-[12px] font-mono font-medium ${score >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>{score}</div>
                 <div className="hidden md:block text-[12px] font-mono font-semibold truncate">{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>

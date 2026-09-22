@@ -49,6 +49,11 @@ class KlineItem(BaseModel):
     interval: str | None = Field(default="1d", description="周期: 1d/1w/1m")
 
 
+#: sparkline 用的批量收盘: 一次最多几只(保护 DB)与结果缓存秒数(列表页 2 分钟足够新)
+MAX_CLOSES_SYMBOLS = 60
+_CLOSES_TTL = 120
+
+
 class KlineBatchRequest(BaseModel):
     items: list[KlineItem]
 
@@ -146,6 +151,57 @@ def _aggregate_klines(klines, interval: str) -> list:
         )
     out.sort(key=lambda k: k.date)
     return out
+
+
+@router.get("/closes")
+def get_closes_batch(
+    symbols: str,
+    market: str = "CN",
+    days: int = 20,
+):
+    """批量"只要收盘价"的轻量接口(2026-09-22) —— 给列表行 sparkline 用。
+
+    为什么单独开一个(而不是复用现成的两条):
+    - `GET /klines/{symbol}` 一次一只 ⇒ 持仓/自选 73 行 = **73 次请求**, 列表页不能这么干;
+    - `POST /klines/batch` 每项返回完整 OHLCV(含量与额), 但我们只要 20 个收盘价 ⇒ 传输/解析都浪费。
+
+    口径(诚实优先):
+    - **只读 PG hypertable**, 不触发联网抓取 —— 列表页不能因为某一行没缓存就拖慢整页(几十个请求串起来
+      会变成几十秒)。库里没有的标的进 `missing`, **绝不补 0 / 绝不编造平线**(sparkline 会因此不画);
+    - 一次最多 `MAX_CLOSES_SYMBOLS` 只(保护 DB); 结果按 (代码集, 天数, 市场) 缓存 `_CLOSES_TTL` 秒。
+    """
+    wanted = [x.strip() for x in (symbols or "").split(",") if x.strip()]
+    if not wanted:
+        raise HTTPException(400, "symbols 不能为空(逗号分隔)")
+    if len(wanted) > MAX_CLOSES_SYMBOLS:
+        raise HTTPException(400, f"一次最多查 {MAX_CLOSES_SYMBOLS} 只(收到 {len(wanted)})")
+    days = max(2, min(days, 120))
+    market_code = _parse_market(market)
+
+    def _fetch() -> dict:
+        items: list[dict] = []
+        missing: list[str] = []
+        for sym in wanted:
+            klines, asof = _pg_klines(sym, market_code, days)
+            if not klines:
+                missing.append(sym)
+                continue
+            closes = [round(float(k.close), 3) for k in klines if k.close is not None]
+            if len(closes) < 2:
+                # 只有 1 个点画不出形状 ⇒ 如实算"没有", 不硬画
+                missing.append(sym)
+                continue
+            items.append({"symbol": sym, "closes": closes, "asof": asof, "source": "pg_klines_hypertable"})
+        return {"items": items, "missing": missing, "days": days, "market": market.upper()}
+
+    key = f"kline_closes:{market.upper()}:{days}:{','.join(sorted(wanted))}"
+    try:
+        from src.web.cache.biz_cache import BizCache
+
+        data = BizCache.instance().get_or_fetch(key, ttl=_CLOSES_TTL, fetch=_fetch)
+    except Exception:  # 缓存不可用不影响主流程
+        data = _fetch()
+    return data
 
 
 @router.get("/{symbol}")

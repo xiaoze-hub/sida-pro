@@ -21,10 +21,16 @@ export default function CaliberBadge({
   caliber,
   className,
   withText = true,
+  label,
+  title,
 }: {
   caliber: Caliber
   className?: string
   withText?: boolean
+  /** 后端只给了中文标签(没有原始口径值)时, 用 label 如实显示 —— 不假装成 unknown */
+  label?: string
+  /** 覆盖 tooltip(默认给该口径的完整说明) */
+  title?: string
 }) {
   const t = CALIBER_TEXT[caliber] ?? CALIBER_TEXT.unknown
   return (
@@ -34,9 +40,9 @@ export default function CaliberBadge({
         className,
       )}
       data-caliber={caliber}
-      title={t.full}
+      title={title ?? t.full}
     >
-      {withText ? t.short : caliber === 'unknown' ? '?' : t.short.slice(0, 1)}
+      {label || (withText ? t.short : caliber === 'unknown' ? '?' : t.short.slice(0, 1))}
     </span>
   )
 }

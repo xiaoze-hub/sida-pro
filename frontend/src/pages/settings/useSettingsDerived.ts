@@ -53,6 +53,7 @@ const isOwner = currentUser?.role === 'owner'
 // 按“重要性”排序：常用优先，低频靠后
 const jumpItems: Array<{ id: string; label: string; hint?: string }> = [
   ...(isOwner ? [{ id: 'sec-ai', label: 'AI', hint: `${services.length} 服务 / ${allModels.length} 模型` } as const] : []),
+  { id: 'sec-appearance', label: '外观', hint: '主题 / 密度 / Dim / 焦点模式' },
   { id: 'sec-notify', label: '通知', hint: `${enabledChannels.length}/${channels.length} 启用` },
   ...(isOwner ? [{ id: 'sec-keys', label: '接口Key', hint: `${settings.filter(s => SECRET_SETTING_KEYS.has(s.key) && s.value === SECRET_MASK).length}/${SECRET_SETTING_KEYS.size} 已配` } as const] : []),
   ...(isOwner ? [{ id: 'sec-system', label: '系统', hint: health?.timezone ? `TZ ${health.timezone}` : undefined } as const] : []),

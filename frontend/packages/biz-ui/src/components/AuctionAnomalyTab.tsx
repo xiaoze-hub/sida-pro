@@ -4,6 +4,7 @@ import { fetchAPI, stocksApi } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { chaseBadge, type GapStudyResp } from '@/lib/gap-study'
+import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
 
 /**
  * 竞价异动池 Tab(2026-08-24, v0.3.1 修复字段口径)
@@ -180,7 +181,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
           <span>
             共 <span className="font-mono text-foreground">{total}</span> 只
           </span>
-          <span className="text-[10px] text-muted-foreground/70">口径: thsdk 竞价</span>
+          <CaliberBadge caliber="ths" label="thsdk 竞价" className="text-[10px]" />
         </div>
         <Button variant="secondary" size="sm" className="h-7 text-[12px]" onClick={() => { setLoading(true); void load() }} disabled={loading}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> 刷新

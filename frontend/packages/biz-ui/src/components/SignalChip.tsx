@@ -9,7 +9,14 @@
  */
 import { cn } from '@panwatch/base-ui'
 
-export type SignalTone = 'opp' | 'risk' | 'neutral' | 'system'
+/**
+ * 语义色调:
+ * - `opp`/`risk`/`system`/`neutral`: 模块角色(机会/风险/系统/中性) —— 用 --role-* 角色色;
+ * - `go`/`stop`: **交易动作**语义(买入/加仓 vs 卖出/减仓) —— 用 `--gs-go`/`--gs-stop`,
+ *   与价格涨跌色**同值不同名**: A 股用户看到"买入=红"符合习惯, 但代码里它是"动作色"不是"价格色",
+ *   两者可以各自演进(涨跌色治理的既有约定)。
+ */
+export type SignalTone = 'opp' | 'risk' | 'neutral' | 'system' | 'go' | 'stop'
 export type SignalStrength = 0 | 1 | 2 | 3
 
 const TONE_CLASS: Record<SignalTone, string> = {
@@ -17,6 +24,8 @@ const TONE_CLASS: Record<SignalTone, string> = {
   risk: 'text-[hsl(var(--role-risk))] border-[hsl(var(--role-risk))]/40',
   neutral: 'text-muted-foreground border-border',
   system: 'text-[hsl(var(--role-system))] border-border',
+  go: 'text-[hsl(var(--gs-go))] border-[hsl(var(--gs-go))]/40',
+  stop: 'text-[hsl(var(--gs-stop))] border-[hsl(var(--gs-stop))]/40',
 }
 
 /** 强度: 0 无边框 / 1 hairline / 2 hairline+600 / 3 双档边框(与色相无关, 换配色不影响强弱) */

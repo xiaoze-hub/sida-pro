@@ -105,6 +105,26 @@ function _cacheKey(path: string, options?: ApiRequestOptions): string | null {
   return null // 只缓存 GET
 }
 
+/**
+ * API 失败监听(2026-09-22): 让上层把"这次请求失败了"汇进会话消息流(右栏 AlertLog)。
+ * 用**注册回调**而不是直接 import UI 包 —— `packages/api` 是底层包, 不该反向依赖 biz-ui。
+ * 上层在启动时注册一次即可(App.tsx)。
+ */
+type ApiFailure = { path: string; method: string; status: number; message: string }
+let failureListener: ((f: ApiFailure) => void) | null = null
+
+export function onApiFailure(fn: ((f: ApiFailure) => void) | null): void {
+  failureListener = fn
+}
+
+function reportFailure(f: ApiFailure) {
+  try {
+    failureListener?.(f)
+  } catch {
+    /* 监听方出错绝不能影响主流程 */
+  }
+}
+
 export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Promise<T> {
   const headers: Record<string, string> = {}
 
@@ -152,6 +172,7 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     })
   } catch (error: any) {
     if (error?.name === 'AbortError') {
+      reportFailure({ path, method: (options?.method ?? 'GET').toUpperCase(), status: 0, message: '请求超时' })
       throw new Error('请求超时，请稍后重试')
     }
     throw error
@@ -184,6 +205,7 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     }
     err.status = res.status
     err.code = body.code
+    reportFailure({ path, method: (options?.method ?? 'GET').toUpperCase(), status: res.status, message: err.message })
     throw err
   }
   // 2026-08-12: GET 成功后写缓存

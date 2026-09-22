@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { datasourcesApi } from '@panwatch/api'
+import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
 
 /**
  * 设计稿 v2.1 §12: 数据源健康状态订阅。
@@ -55,7 +56,22 @@ export function useSourceHealth(pollMs: number = POLL_MS) {
         if (!alive) return
         const map: Record<string, SourceHealthItem> = {}
         for (const it of data?.items || []) map[it.id] = it
-        setHealth(map)
+        setHealth((prev) => {
+          // 只在**状态跃迁**时进会话消息流(2026-09-22): 掉线/恢复各推一次,
+          // 不每轮刷 —— 否则 60s 轮询会把右栏刷成一堵墙。
+          for (const it of Object.values(map)) {
+            const was = prev[it.id]?.status
+            if (was && was !== it.status) {
+              const ok = it.status === 'connected'
+              pushAlert({
+                level: ok ? 'info' : 'warn',
+                text: `数据源 ${it.name || it.id} ${ok ? '已恢复' : `异常(${it.status})`}`,
+                key: `src:${it.id}`,
+              })
+            }
+          }
+          return map
+        })
       } catch {
         // 请求失败 → 保持空表, 上层按"不可用"灰显, 不伪造状态
         if (alive) setHealth({})

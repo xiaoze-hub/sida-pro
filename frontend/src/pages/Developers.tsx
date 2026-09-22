@@ -28,6 +28,7 @@ import { DevPageLayout, Section, InfoCard, CodeBlock, type SideMenuItem } from '
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { useI18n } from '@/hooks/useI18n'
+import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
 
 /**
  * 开发者文档页 v2(2026-09-16)。
@@ -438,7 +439,7 @@ export default function DevelopersPage() {
                     {s.tier_min}
                   </span>
                   {s.slow && <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-[12px] text-orange-600 dark:text-orange-400">慢</span>}
-                  {s.caliber && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[12px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
+                  {s.caliber && <CaliberBadge caliber={caliberOf(s.caliber)} className="mr-1.5 align-middle" />}{false && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[12px] text-blue-600 dark:text-blue-400">{s.caliber}</span>}
                 </div>
                 <p className="mt-1 text-[12px] text-muted-foreground">{s.description}</p>
                 {Object.keys(s.params || {}).length > 0 && (

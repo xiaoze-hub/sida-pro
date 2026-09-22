@@ -57,7 +57,11 @@ describe('P0-2 收尾: 首页「结论行」', () => {
     expect(src).toMatch(/phaseKpi\.limitUp \?\? '--'/)
     expect(src).toMatch(/marketFlow\?\.up_count \?\? '--'/)
     expect(src).toMatch(/marketFlow\?\.total_amount == null \? '--'/)
-    expect(src).toMatch(/口径 \{marketFlow\?\.caliber_label \|\| '未标注'\}/)
+    // 2026-09-22: 口径标签换成统一徽章(CaliberBadge), 但**口径必须仍然可见** ——
+    // 断言从"字面模板"改成"徽章 + 标签兜底": 有原始口径值给徽章, 后端只给中文标签就如实显示,
+    // 两者的共同底线(结论行里看得到口径)不变。
+    expect(src).toContain('<CaliberBadge caliber={caliberOf(marketFlow?.caliber)}')
+    expect(src).toMatch(/label=\{marketFlow\?\.caliber_label/)
     expect(src).not.toMatch(/market-conclusion[\s\S]{0,600}\?\? 0/)
   })
 })

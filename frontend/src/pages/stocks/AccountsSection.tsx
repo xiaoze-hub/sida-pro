@@ -20,6 +20,10 @@ import { safeNum } from '@/lib/format'
 import { safePrice } from '@/lib/format'
 import { summarizeDailyPnlPeriod } from './shared'
 import { useStocks } from './context'
+import { useBatchCloses } from '@/hooks/useBatchCloses'
+import Sparkline from '@panwatch/biz-ui/components/Sparkline'
+import { useMemo } from 'react'
+import { useRowNav } from '@panwatch/biz-ui/hooks/useRowNav'
 
 export function AccountsSection() {
   const {
@@ -57,6 +61,38 @@ export function AccountsSection() {
     getPriceAlertSummary,
     getSuggestionForStock,
   } = useStocks()
+
+  // 列表行 sparkline(2026-09-22): 一次批量取"近 20 日收盘"(后端轻量端点, 一次最多 60 只),
+  // **不在每行发请求** —— 持仓 73 行逐行拉会把页面拖死。hook 必须在组件顶层(不能进 map 回调)。
+  const allSymbols = useMemo(
+    () => (portfolio?.accounts ?? []).flatMap((a) => a.positions.map((p) => p.symbol)).filter(Boolean),
+    [portfolio],
+  )
+  const { closes: sparkCloses } = useBatchCloses(allSymbols)
+
+  /**
+   * 持仓表键盘协议(2026-09-22): 表格是"账户 → 持仓"两层 map, 没有现成行号 ⇒ 这里拍平一层。
+   * 用 `${accountId}:${positionId}` 反查行号, 渲染时直接查表(不再累加偏移, 避免嵌套索引算错)。
+   */
+  const flatRows = useMemo(
+    () =>
+      (portfolio?.accounts ?? []).flatMap((a) =>
+        a.positions.map((p) => ({ accountId: a.id, positionId: p.id, symbol: p.symbol, market: p.market, name: p.name })),
+      ),
+    [portfolio],
+  )
+  const rowIndexByKey = useMemo(() => {
+    const m = new Map<string, number>()
+    flatRows.forEach((r, i) => m.set(`${r.accountId}:${r.positionId}`, i))
+    return m
+  }, [flatRows])
+  const rowNav = useRowNav({
+    count: flatRows.length,
+    onEnter: (i) => {
+      const r = flatRows[i]
+      if (r) openStockDetail(r.symbol, r.market, r.name, true)
+    },
+  })
   return (
     <>
 {/* Accounts & Positions */}
@@ -211,14 +247,18 @@ export function AccountsSection() {
                             }}
                             // 交互三态(2026-09-20): 可点行统一 hover 亮 + 键盘 focus 左侧 3px ring;
 // <tr> 的热区由内容撑(表格行不吃 min-height), 故不加 row-hit
-                            className={`group row-focusable transition-colors duration-fast hover:bg-s2 ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''}`}
+                            data-row-index={rowIndexByKey.get(`${account.id}:${pos.id}`) ?? undefined}
+                            onFocus={() => rowNav.setIndex(rowIndexByKey.get(`${account.id}:${pos.id}`) ?? -1)}
+                            className={`group row-focusable transition-colors duration-fast hover:bg-s2 ${i > 0 ? 'border-t border-border/20' : ''} ${draggingPositionId === pos.id ? 'opacity-60' : ''} ${rowNav.index === rowIndexByKey.get(`${account.id}:${pos.id}`) ? 'row-selected' : ''}`}
                           >
                             <td className="px-4 py-2.5">
                               <span className={`text-[10px] px-1 py-0.5 rounded mr-1.5 ${badge.style}`}>{badge.label}</span>
                               <span className="font-mono text-[12px] font-semibold text-foreground">
                                 {pos.symbol}
                               </span>
-                              <button
+                              {/* 近 20 日走势(40×16): 数据没到/库里没有 ⇒ Sparkline 自己返回 null, 不画假线 */}
+                            <Sparkline values={sparkCloses[pos.symbol]} className="ml-1.5 inline-block align-middle" />
+                            <button
                                 className="ml-1.5 text-[12px] text-muted-foreground hover:text-primary"
                                 onClick={() => openStockDetail(pos.symbol, pos.market, pos.name, true)}
                               >

@@ -11,6 +11,7 @@ import { NotifySection } from './settings/NotifySection'
 import { MyServicesSection } from './settings/MyServicesSection'
 import { UsersSection } from './settings/UsersSection'
 import { GeneralSettingsSection } from './settings/GeneralSettingsSection'
+import { AppearanceSection } from './settings/AppearanceSection'
 import { FreeTierSection } from '@/components/settings/FreeTierSection'
 import { PackSection } from './settings/PackSection'
 import { FeedbackSection } from './settings/FeedbackSection'
@@ -41,6 +42,7 @@ export default function SettingsPage() {
           <MyServicesSection />
           <UsersSection />
           <LlmUsageSection />
+          <AppearanceSection />
           <GeneralSettingsSection />
           {/* 免费档(owner 专属): 运行时调整 member 能试用什么/日限/skill 档位 */}
           <FreeTierSection />

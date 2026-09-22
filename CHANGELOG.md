@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-09-22 (夜批收尾: 列表 sparkline / 会话消息 / 口径徽章 / 持仓键位 / 外观设置 → v0.12.0)
+
+上一轮设计系统落地留下 5 项"明确未做", 本批全部收掉(不新增"未做"项)。
+
+**① 列表行 sparkline(需先补后端轻量端点)**
+- 新增 `GET /api/klines/closes?symbols=&days=20`(`src/web/api/klines.py`): **只读 PG hypertable**,
+  一次最多 60 只, 缺数据的标的**显式进 `missing`**(绝不补 0 / 不编造平线), 120s 缓存。
+  为什么单开: 单股一请求 = 持仓 73 行 73 个请求; `/klines/batch` 每项带完整 OHLCV(传输浪费)。
+- `frontend/src/hooks/useBatchCloses.ts`: 自动分批(>60 拆两批)、失败只影响走势图列、集合不变不重复请求。
+- 接入持仓行与自选行(`AccountsSection` / `WatchlistSection`)。
+- 测试: `tests/test_kline_closes_batch.py`(7 条, 含"绝不联网抓取"与"缺数据不许补 0")+
+  `frontend/tests/lib/use-batch-closes.test.ts`(5 条)。
+
+**② 会话消息进右栏(先有真实事件源, 再上 UI)**
+- 新增共享 store `packages/biz-ui/src/lib/alert-bus.ts`(模块级 + `useSyncExternalStore`;
+  同一条消息 **30s 内只累加计数**, 防轮询型失败刷屏; 上限 200)。
+- 两个真实事件源: ① `packages/api` 新增可插拔 `onApiFailure` 回调(App 启动注册 → 所有请求失败入流);
+  ② `useSourceHealth` 状态**跃迁**时才推(掉线/恢复各一次, 不每轮刷)。
+- 右栏 `QuickRail` 渲染 `<AlertLog>` —— 一次性确认仍归 toast。
+- 测试: `frontend/tests/lib/alert-bus.test.ts`(7 条: 去重计数/移到最前/上限/订阅/清空)。
+
+**③ 口径徽章与信号 chip 扫替**
+- `CaliberBadge` 支持 `label`/`title` 覆盖(后端只给中文标签时如实显示, 不假装 unknown);
+  `SignalChip` 新增 **go/stop 两个动作语义色调**(`--gs-go`/`--gs-stop` —— 与价格涨跌色**同值不同名**,
+  买入=红符合 A 股习惯, 但代码里是动作色不是价格色)。
+- 扫替 4 处口径面(Dashboard 结论行 / 暗盘资金 TOP / 竞价异动 Tab / 开发者数据源表)与 2 处信号面
+  (机会页动作徽章、市场状态徽章), **顺带清掉 rose/emerald/blue/amber 的 Tailwind 默认色**。
+- 更新既有钉子 `zero-vs-missing.test.ts`: 断言从"字面模板"改为"徽章 + 标签兜底", 意图(口径必须可见)不变。
+
+**④ 持仓表键盘行协议**
+- 表格是"账户 → 持仓"两层 map, 没有现成行号 ⇒ 拍平一层 + `${accountId}:${positionId}` 反查行号,
+  接 `useRowNav`(J/K 移动 / Enter 进工作台 / 选中态)。
+
+**⑤ 外观设置**
+- 新增设置页「外观」段(`AppearanceSection`): 主题(亮/暗/跟随系统)、密度(紧凑/标准/宽松)、
+  Dim(长时盯盘: 只降对比度)、焦点模式。**复用已有存储**(panwatch-theme/density/dim + sida_focus-mode),
+  不引入第二套状态源; 并进设置页搜索索引。
+
+**接线钉子**: `frontend/tests/components/nightly-batch-wiring.test.ts`(8 条, 源码级"谁引用了谁") ——
+拆了接线而单测仍全绿是最典型的假通过。
+
+**门禁**: 前端 105 文件 780 passed · 后端 2613 passed / 2 skipped · UI-RULES OK。
+
 > **给 AI 协作者的读法**: 本文件是"别人改了什么"的唯一入口。接手前先读最近 3 个 `## 日期` 段。
 > 每条 entry 末尾 `[commit <hash>]` 可直接 `git show <hash>` 看完整 diff。
 > 写新 entry 时: 同一 commit 内改代码+记 changelog, 末尾缀 `[commit <short-hash>]`,

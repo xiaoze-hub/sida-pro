@@ -28,11 +28,11 @@ import {
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Card } from '@panwatch/base-ui/components/ui/card'
-import { Badge } from '@panwatch/base-ui/components/ui/badge'
 import { Skeleton } from '@/components/Skeleton'
 import { safeFixed, toAmountFromWan, toAmountFromWanUnsigned } from '@/lib/format'
 import { useI18n } from '@/hooks/useI18n'
 import { navBackState } from '@/lib/nav-back'
+import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
 
 function isSnapshot(r: DarkFundTopResp): r is DarkFundTopSnapshot {
   return r.available === true
@@ -162,11 +162,10 @@ export default function DarkFundTopPage() {
                 {' · '}{t('darkFundTop.computed')} <span className="font-mono">{data.computed ?? '-'}</span>
                 {' · '}{t('darkFundTop.topCount')} <span className="font-mono">{data.top?.length ?? 0}</span>
                 {' · '}{t('common.source')} <span className="font-mono">thsdk_dde</span>({t('darkFundTop.sourceNote')})
-                {' · '}<Badge
-                  variant="outline"
-                  className="cursor-help underline decoration-dotted underline-offset-2"
-                  title={t('darkFundTop.caliberHint')}
-                >{t('darkFundTop.caliberTag')}</Badge>
+                {' · '}
+                {/* 口径统一徽章(2026-09-22): 10px 等宽 + tooltip, 中性色 —— 口径是"数据出处",
+                    不是行情方向, 所以不随涨跌上色(AGENTS 硬约束: 资金面必须可见口径标签)。 */}
+                <CaliberBadge caliber="eastmoney4" label={t('darkFundTop.caliberTag')} title={t('darkFundTop.caliberHint')} />
                 {' · '}{t('common.updatedAt')} <span className="font-mono">{data.updated_at ?? '-'}</span>
               </p>
             </div>

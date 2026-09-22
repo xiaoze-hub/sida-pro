@@ -9,6 +9,8 @@ import { fetchAPI } from '@panwatch/api'
 import { fmtSignedAmount } from '@panwatch/biz-ui/lib/ladder-format'
 import { safeFixed, safeNum, safePrice } from '@/lib/format'
 import DecisionCard from './DecisionCard'
+import AlertLog from '@panwatch/biz-ui/components/AlertLog'
+import { clearAlerts, useAlerts } from '@panwatch/biz-ui/lib/alert-bus'
 
 /**
  * 右栏速览卡容器(工作台 v2 三合一, spec §4.2 / 布局图 §1.2 右栏 320px)。
@@ -344,6 +346,13 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
  * 数智决策**只在这里渲染一次**, 本文件不重复任何三指标/共振读数。
  * `/l2` 只在容器层发**一条**(`useL2`, 30s 轮询), ②③ 两卡共用(Task 6 收敛)。
  */
+/** 右栏会话消息(自己订阅 store, 不依赖页面传参)。 */
+function RailAlertLog() {
+  const items = useAlerts()
+  const mapped = items.map((a) => ({ id: a.id, at: a.at, level: a.level, text: a.repeat > 1 ? `${a.text} ×${a.repeat}` : a.text, caliber: a.caliber }))
+  return <AlertLog items={mapped} onClear={clearAlerts} />
+}
+
 export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
   const l2 = useL2(symbol, market)
   return (
@@ -352,6 +361,9 @@ export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; m
       <QuoteCard l2={l2} />
       <FundamentalCard symbol={symbol} market={market} more={l2?.more ?? null} />
       <BlocksCard symbol={symbol} market={market} />
+      {/* 会话消息(2026-09-22): 预警/降级/请求失败在此**累积**可回溯 —— toast 只留一次性确认。
+          事件源: API 失败监听(App 注册) + 数据源状态跃迁(useSourceHealth)。 */}
+      <RailAlertLog />
     </div>
   )
 }

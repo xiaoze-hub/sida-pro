@@ -68,6 +68,7 @@ import { parseServerTime } from '@/lib/utils'
 import { useI18n } from '@/hooks/useI18n'
 import Stat from '@panwatch/biz-ui/components/Stat'
 import { navBackState } from '@/lib/nav-back'
+import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
 
 /** 安全 toFixed: 处理 string / null / undefined / 非有限数, 一律返回 fallback。
  *  修复 2026-08-21: Dashboard 报 TypeError: c.price.toFixed is not a function
@@ -568,7 +569,10 @@ export default function DashboardPage() {
           <span className="mx-0.5">/</span>跌 <b className="font-mono text-stock-down">{marketFlow?.down_count ?? '--'}</b></span>
         <span>成交 <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
         <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
-        <span className="ml-auto text-[11px] text-muted-foreground/80">口径 {marketFlow?.caliber_label || '未标注'}</span>
+        {/* 口径统一徽章(2026-09-22): 有原始口径值就给徽章, 只有中文标签就如实显示标签 */}
+        <span className="ml-auto">
+          <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
+        </span>
       </div>
 
       {/* 核心接口失败横幅:失败≠空态,给出重试入口 */}
