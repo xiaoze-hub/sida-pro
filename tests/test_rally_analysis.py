@@ -35,14 +35,24 @@ class TestRallyAnalysis:
         assert abs(r["summary"]["main_net_total"]) < 5e9  # < 50 亿(远超单日单票合理值, 但能拦住 1e4 量纲错)
 
     def test_format_report(self):
-        """摘要格式化: 不依赖 LLM, 含核心数字。"""
+        """摘要格式化: 不依赖 LLM, 含核心数字。
+
+        2026-09-22 修**间歇性红**: 原断言无条件要求出现「评分」, 但**评分行只在识别出拉升段时渲染**
+        (无段时的正确输出就是"识别0段"), 而真实数据(002361)盘初还没形成拉升段 ⇒ 每天开盘那会儿
+        这条用例必红、盘中又转绿 —— 是**用真实数据的测试撞上了"今天还没发生的事"**, 不是代码坏了。
+        现在按**契约**断言: 有段必须有评分; 无段必须**明确说 0 段且不许伪造评分**(诚实口径)。
+        """
         r = analyze_rallies("002361")
         if r is None:
             pytest.skip("盘前/无数据")
         text = format_rally_report(r)
         assert "拉升段分析" in text
-        assert "评分" in text
         assert "主力净" in text
+        if r["rallies"]:
+            assert "评分" in text, "识别出拉升段却没给评分"
+        else:
+            assert "识别0段" in text, "没识别出段却没显式说明 0 段"
+            assert "评分" not in text, "无段时不许伪造评分"
 
     def test_build_minutes_filters_auction(self):
         """分钟聚合: 竞价单(09:25)剔除, 09:30 后保留。"""

@@ -43,11 +43,17 @@ router = APIRouter(tags=["skill-gateway"])
 # 盐: 环境变量优先; 未配置时生成随机盐(仅本进程有效)并告警。
 # P2(audit-20260915): 禁止回落硬编码常量 —— 硬编码盐等于 key_hash 可被离线彩虹表碰撞。
 _KEY_SALT = os.getenv("SKILL_KEY_SALT", "")
-if not _KEY_SALT:
+# 盐是"临时盐"还是"固定盐": 只有固定盐签发的 key 才能跨进程/跨重启验证。
+# 2026-09-20 生产事故复盘: 未设 SKILL_KEY_SALT ⇒ **每个 worker 进程各自随机** ⇒ 同一把 key
+# 请求落在不同 worker 上时而 200 时而 401(实测同一 key 同一端点 6 次请求 401/200 交替),
+# 重启后更是永久 401。此前只打了一条 warning, 结果**没有任何人发现** —— 静默降级必须升级为显式拒绝。
+_SALT_IS_EPHEMERAL = not _KEY_SALT
+if _SALT_IS_EPHEMERAL:
     _KEY_SALT = secrets.token_hex(16)
-    logger.warning(
-        "SKILL_KEY_SALT 未配置, 已生成随机盐(仅本进程有效)。"
-        "生产环境必须设置 SKILL_KEY_SALT, 否则进程重启后已签发 key 校验会失效。"
+    logger.error(
+        "SKILL_KEY_SALT 未配置 → 已用进程内随机盐(仅本进程有效)。"
+        "此时**拒绝签发新 key**(签发即不可用); 请设置 SKILL_KEY_SALT 后重启。"
+        "症状: 同一把 key 时而 200 时而 401, 重启后永久 401。"
     )
 
 # ── 注册防刷(P1, audit-20260915): IP 级限流, 每小时最多 5 次 ─────────
@@ -277,6 +283,19 @@ def _hash_key(raw_key: str) -> str:
     # P2(audit-20260915): _KEY_SALT 已保证非空(无 env 时随机生成), 不再回落硬编码
     return hashlib.sha256(f"{_KEY_SALT}:{raw_key}".encode("utf-8")).hexdigest()
 
+
+def _require_stable_salt() -> None:
+    """签发 key 前必须确认盐是固定的。
+
+    理由(2026-09-20): 随机盐签发的 key 只在**当前进程**内可验证 —— 同一把 key 在别的 worker /
+    重启后必然 401。与其签一把"出生就带着间歇性 401"的 key, 不如显式 503 让管理员修配置。
+    """
+    if _SALT_IS_EPHEMERAL:
+        raise HTTPException(
+            503,
+            "服务未正确配置(SKILL_KEY_SALT 未设置): 现在签发的 key 会因进程重启而失效, "
+            "已拒绝签发。请管理员设置 SKILL_KEY_SALT 后重启服务。",
+        )
 
 def _gen_key() -> str:
     """生成 sk_ 前缀的 AppKey(明文只在创建响应里出现一次)。"""
@@ -1009,6 +1028,7 @@ def register_key(
     jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
     if jwt_user is not None:
         linked_user_id = str(jwt_user.id)
+    _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
     h = _hash_key(raw)
     tier = "trial" if body.trial else "free"
@@ -1180,6 +1200,7 @@ def create_my_key(
     ip = request.client.host if request.client else "unknown"
     _check_key_register_rate(ip)
     refresh_tier_configs(db)
+    _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
     tier = "trial" if body.trial else "free"
     expires = None
@@ -1232,6 +1253,7 @@ def reset_my_key(
     ip = request.client.host if request.client else "unknown"
     _check_key_register_rate(ip)
     row = _get_owned_key(db, user, key_id)
+    _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
     row.key_hash = _hash_key(raw)
     row.key_prefix = raw[:11]
