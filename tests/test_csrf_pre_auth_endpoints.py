@@ -51,3 +51,29 @@ def test_authenticated_endpoints_stay_protected():
     """反向: 登录后才用的端点**不许**被豁免(别为了修这个洞把 CSRF 拆了)。"""
     for path in ("/api/auth/change-password", "/api/auth/users", "/api/admin/rotate-secrets"):
         assert not any(path.startswith(p) for p in CSRF_EXEMPT_PREFIXES), f"{path} 不该豁免 CSRF"
+
+
+# ── API Key(机器调用)也必须免 CSRF(2026-09-20 生产实踩)────────────────────────
+# 症状: Skills API 的 **GET 列表正常**(/api/skills 200), 但**跑 skill 的 POST**
+# `/api/skills/{name}/run` 带 X-API-Key 一律 403「CSRF token 缺失, 请重新登录」——
+# 也就是说对外发布的 Skills 接口,**核心动作面整个不可用**, 而列表面看着是好的(所以久未被发现)。
+# 原理: CSRF 的前提是"浏览器会自动带上 cookie 凭证"; 机器调用带 X-API-Key, 没有这个前提。
+def test_api_key_post_is_not_csrf_blocked():
+    c = TestClient(app)
+    r = c.post(
+        "/api/skills/get_stock_quote/run",
+        json={"symbol": "002361"},
+        headers={"X-API-Key": "sk_" + "x" * 43},
+    )
+    # 允许 401「无效的 API Key」(这把我们没签过), 但**不许**是 CSRF 403
+    assert "CSRF" not in r.text, f"带 X-API-Key 的 POST 被 CSRF 拦了: {r.status_code} {r.text[:120]}"
+
+
+def test_post_without_any_credential_still_blocked():
+    """反向: 什么都不带(既不登录也不带 API Key)的 POST 必须继续被 CSRF 拦。
+
+    否则这次"给 API Key 开口子"就等于把 CSRF 整个拆了。
+    """
+    c = TestClient(app)
+    r = c.post("/api/skills/get_stock_quote/run", json={"symbol": "002361"})
+    assert r.status_code == 403 and "CSRF" in r.text, f"裸 POST 竟然没被拦: {r.status_code} {r.text[:120]}"

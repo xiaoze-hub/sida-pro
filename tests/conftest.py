@@ -8,6 +8,13 @@ from pathlib import Path
 # 在启动门禁生效后因缺 SIDA_DB_URL 被拒。个别测试用 monkeypatch.delenv 覆盖。
 os.environ.setdefault("SIDA_ALLOW_SQLITE", "1")
 
+# 2026-09-20: skill key 的盐必须**固定** —— 与生产同一前提。
+# 生产事故: SKILL_KEY_SALT 未设 ⇒ 每进程随机盐 ⇒ 同一把 key 时而 200 时而 401。
+# 代码已改成"盐不固定就拒绝签发(503)", 所以测试环境**必须**给一把固定盐,
+# 否则凡是要签 key 的用例都会被正确拒签而变红(本次实测: 3 个用例红)。
+# 必须在 src.web.api.skills_gateway **import 之前**设置 —— 该模块在 import 期读 env。
+os.environ.setdefault("SKILL_KEY_SALT", "test-fixed-salt-2f9c1d4e7a3b5086")
+
 # W2.2/E4 (2026-09-09) 测试隔离: 测试绝不触碰真实 DATA_DIR 与真实库文件。
 # 实测仓库 data/panwatch.db 被测试跑迁移留下 7 个 .bak(2026-09-08~09)。
 # 必须在任何 src.* 导入之前设置 —— error_tracker(_FILE)/disk_cache(_CACHE_DIR)/

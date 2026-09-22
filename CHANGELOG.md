@@ -11,6 +11,59 @@
 并断言"直接打开行情页不渲染返回按钮"。下一步并入 `postdeploy_verify.py` 常驻门禁
 (规则同布局体检: 一个没人跑的探针等于没有)。
 
+## 2026-09-20 (hotfix(skills-api): 修 skill key 间歇性 401 + POST 被 CSRF 拦死 → v0.11.1)
+
+**用户报**: "这个 key skill 调用报错 401"
+
+### 根因①: `SKILL_KEY_SALT` 未配置 → 每个进程一把随机盐
+生产容器**没有** `SKILL_KEY_SALT` ⇒ 代码回落"进程内随机盐", 而服务是**多进程**
+(`python server.py` + 若干 spawn 子进程) ⇒ 每进程一把不同的盐 ⇒ **同一把 key 的校验结果
+取决于请求落在哪个进程**:
+
+```
+实测(同一把 key, 同一端点, 连续 6 次):
+  /api/usage   → 401 200 200 200 200 401
+  /api/skills  → 401 401 401 200 401 200
+```
+
+用户侧看到的就是"**间歇性** 401"; 重启后签发它的进程消失 ⇒ **永久 401**。
+此前代码只打一条 `logger.warning` —— 静默降级, 所以上线很久没人发现。
+
+**修法(两层)**:
+1. **配置**: 生成固定盐存 `~/.hush/sida_skill_key_salt`(600), 并改
+   `~/.hermes/scripts/sida_prod_deploy.sh` **每次部署都注入** `-e SKILL_KEY_SALT=...`
+   (否则下次重建容器又会丢回来 —— 这才是真正防复发的部分);
+2. **代码**: `_SALT_IS_EPHEMERAL` 标记 + **签发守卫** `_require_stable_salt()` ——
+   盐不固定就 **503 拒绝签发**(并点名 SKILL_KEY_SALT), 日志由 warning 升 error。
+   理由: 与其签一把"出生即间歇性 401"的 key, 不如显式拒绝让管理员修配置。
+
+> **影响**: 盐一换, 旧 key 的 `key_hash`(sha256(盐:明文))永远匹配不上, 且**明文不落库 ⇒ 无法重算**
+> ⇒ 已签发的 key 必须**重签**。用户侧那把 key 本来就时灵时不灵, 重签是唯一出路。
+> 用户贴到聊天里的那把已在本次修复后失效 —— 顺带等于完成了一次轮换。
+
+### 根因②: 带 `X-API-Key` 的 **POST** 被 CSRF 中间件拦死
+`POST /api/skills/{name}/run`(Skills API 的**核心动作**)带 `X-API-Key` 一律
+**403「CSRF token 缺失, 请重新登录」**; 而 `GET /api/skills` 正常 —— **列表看着是好的,
+真正干活的那一步整个不可用**(所以久未被发现)。
+原理: CSRF 的前提是"浏览器会自动带上 cookie 凭证", 机器调用带 API Key, 没有这个前提
+(与 `Authorization: Bearer` 同理)。
+**修法**: CSRF 中间件对 `X-API-Key: sk_...` 豁免(裸 POST 仍然拦 —— 有反向测试钉住)。
+
+### 测试
+- **门禁当场抓到连带影响**: 修完第一版全量 pytest 报 `3 failed`(`test_skill_gateway` 2 + `test_email_reg_api_keys` 1)——
+  它们都要**签 key**, 而测试环境没设盐 ⇒ 被新守卫正确拒签。修法: `tests/conftest.py` 在
+  `src.web.api.skills_gateway` **import 之前** `setdefault("SKILL_KEY_SALT", ...)`(与生产同一前提)。
+  **这正是"盐不固定就不该签发"这条规则的自我证明**;
+- `tests/test_skill_key_salt.py`(5 例): 盐从 env 推导 · **换盐即查不到(事故机理复现)** ·
+  临时盐拒绝签发(503 + 文案点名 SKILL_KEY_SALT) · 固定盐可签发 ·
+  **每个 `_gen_key()` 调用点都必须有守卫**(结构钉子, 防新签发路径漏堵);
+- **顺手修掉一条间歇性红的既有用例**: `test_rally_analysis::test_format_report` 无条件要求报告里
+  出现「评分」, 但评分行**只在识别出拉升段时**渲染 —— 002361 盘初还没形成拉升段 ⇒ 每天开盘那会儿
+  必红、盘中转绿(与本次改动无关, 已用 `git stash` 在无改动的树上复现确认)。改为按契约断言:
+  **有段必须有评分 / 无段必须显式说 0 段且不许伪造评分**(顺带钉住诚实口径)。
+- `tests/test_csrf_pre_auth_endpoints.py` 补 2 例: 带 `X-API-Key` 的 POST 不得被 CSRF 拦 ·
+  **裸 POST 仍必须被拦**(反向断言, 防止这次开口子把 CSRF 拆了)。
+
 ## 2026-09-20 (feat(design-system): 专业行情终端设计系统落地(六维全量) → v0.11.0)
 
 **性质**: 设计系统级改动 —— 把"规范写在文档里、没人跑"变成"**令牌 + 组件 + 机器判据**"。

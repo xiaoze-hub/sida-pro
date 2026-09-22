@@ -539,6 +539,13 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         if auth.lower().startswith("bearer "):
             return await call_next(request)
 
+        # API Key 调用(2026-09-20 修): 携带 sk_... 的机器请求没有浏览器 cookie 上下文 ——
+        # CSRF 的前提是"浏览器会自动带上 cookie 凭证", 机器调用不存在这个前提, 与 Bearer 同理豁免。
+        # 此前 POST /api/skills/{name}/run 带 X-API-Key 被拦成 403「CSRF token 缺失」⇒
+        # Skills API 的**核心调用面**(跑 skill)对外完全不可用, 而 GET 列表却正常(所以容易被忽略)。
+        if (request.headers.get("x-api-key") or "").strip().startswith("sk_"):
+            return await call_next(request)
+
         # 服务间调用: X-Service-Token, 无浏览器上下文
         if (request.headers.get("x-service-token") or "").strip():
             return await call_next(request)
