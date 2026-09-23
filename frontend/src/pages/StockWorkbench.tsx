@@ -313,6 +313,11 @@ export default function StockWorkbench() {
                 /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
                 sourceReady={sourceReady}
                 sourceReason={sourceReason}
+                /* 2026-09-23 修: 个股分支漏迁 enableMinute —— 用户报"分时图不显示了"。
+                   IndexBody 在 P2(09-18) 由 InteractiveKline 迁到 KlineChart 时**保留**了
+                   enableMinute(见其内注释), 个股分支当时没跟着迁 ⇒ 个股页连「分时」按钮都不渲染。
+                   分时数据源本身是好的(后端 /quotes/minute 实测 603629 返回 267 点)。 */
+                enableMinute
               />
             </div>
             {railOpen ? (

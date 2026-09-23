@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-23 (hotfix: 个股页漏迁 enableMinute → 分时图消失 → v0.13.3)
+
+**报障**: "还有个事情, 分时图不显示了"。
+
+**根因(迁移漏项, 非数据问题)**: 后端分时接口**是好的** —— 实测 `/quotes/minute/603629`
+返回 267 个点、`prev_close` 正确、`degraded=false`。问题在前端入口:
+P2(2026-09-18) 把图表由 `InteractiveKline` 迁到 `KlineChart` 时, **指数/板块分支**在
+`IndexBody` 里保留了 `enableMinute`(其内注释原文: "enableMinute 保留原有的「分时」视图"),
+**个股分支** `StockWorkbench` 却没跟着迁 ⇒ 个股页连「分时」按钮都不渲染, 分时图自然"不显示"。
+(实测: 个股页 `[data-testid=minute-toggle]` 计数 = 0, 主图 canvas 正常 = 11。)
+
+**修**: 个股分支补回 `enableMinute`。分时数据源、`MinutePane` 的四种诚实态
+(加载中/失败原因/源异常/暂无数据)都未改动。
+
+
 ## 2026-09-23 (hotfix: 日K末根桩 bar 让"今日日K看不见" → v0.13.2)
 
 **报障**: "K线图不显示今日最新的日K"。
