@@ -164,6 +164,10 @@ jobs:
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        # 卡住就失败, 别静默等几小时(v0.12.2 实测卡 2h; 2026-09-23 v0.13.7 又卡 108 分钟)。
+        # ⚠️ 必须是 uses: 的**兄弟键** —— 原来写在 with: 块内部, 被当成 action 输入,
+        #    步骤超时从未生效(所以才会静默跑 108 分钟)。
+        timeout-minutes: 30
         with:
           context: .
           file: ./Dockerfile
@@ -172,8 +176,6 @@ jobs:
           tags: |
             crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:${{ steps.ver.outputs.version }}
             crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
-          # 卡住就失败, 别静默等几小时(v0.12.2 实测卡 2h)
-          timeout-minutes: 30
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
             NODE_IMAGE=${{ steps.base.outputs.node }}
