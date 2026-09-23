@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-24 (fix: CI 构建步超时形同虚设 → 静默卡死 108 分钟)
+
+**这是同一类"静默卡死"的第二次发作, 而上次的修法本身写错了位置。**
+
+`build-push-acr.yml` 的 `Build and push` 步骤里, `timeout-minutes: 30` 被写在 **`with:` 块内部**:
+
+```yaml
+        uses: docker/build-push-action@... # v6
+        with:
+          ...
+          timeout-minutes: 30      # ← 在 with 里 = 当成 action 输入, 不是步骤超时
+```
+
+`with:` 里的键是**传给 action 的输入**, 不是 GitHub 的步骤超时配置 —— 该 action 也没有这个输入。
+所以注释写着的"卡住就失败, 别静默等几小时"**从未生效**。
+
+**实证**: v0.13.7 的 ACR 构建, `gates` 14:18:56Z 成功, `build` 的 `Build and push` 步骤
+14:18:59Z → 16:08:15Z, **跑了 108.5 分钟**才被外部取消(超时本该在 30 分钟截断)。
+附带损失: 这一轮构建白烧, 生产停在 v0.13.5。
+
+**修法**: `timeout-minutes` 移到 `uses:` 的**兄弟键**位置(步骤级), 从 `with:` 内删除;
+并写明"必须是兄弟键"以免后人再犯。全仓 workflow 仅此一处(已用脚本按 `with:` 块归属逐条判定)。
+
+**排查方法(可复用)**: 怀疑超时/CI 配置没生效时, 用
+`gh api .../actions/jobs/<JID> --jq '.steps[]|{name,conclusion,started_at,completed_at}'`
+看**步骤级实际耗时** —— 配置文件里写了什么不算数, 步骤真实跑了多久才算。
+
 ## 2026-09-23 (hotfix: 网关故障分支漏掉 TQ 涨跌家数 → v0.13.7)
 
 **v0.13.6 拿真实生产接口验证时自己发现的 bug**: 大盘资金端点里, 网关报错分支是
