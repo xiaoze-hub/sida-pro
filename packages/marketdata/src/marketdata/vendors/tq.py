@@ -456,3 +456,389 @@ def formula_zb_single(
     v.pop("ErrorId", None)
     v.pop("Error", None)
     return v
+
+
+
+# ============================================================================
+# 专业数据序列 / 扩展接口 (2026-09-23 全量盘点后补齐)
+#
+# ⚠️ 网关参数契约与官方 SDK 不同(实测自曝, 写错时服务端回显 "json has no table_list"):
+#     个股 get_gpjy_value    : {"code": "002361.SZ", "table_list": ["GP2"],  "start_time": "20240101"}
+#     市场 get_scjy_value    : {"code": "999999.SH", "table_list": ["SC3"],  "start_time": "20260101"}
+#     板块 get_bkjy_value    : {"code": "880201.SH", "table_list": ["BK1"],  "start_time": "20260101"}
+#     单个 get_gp_one_data   : {"code": "...",       "table_list": ["GO47"]}
+#     财务 get_financial_data: {"code": "...",       "table_list": ["Fn193"], "start_time": "..."}
+#   即: 单数 code + table_list。官方 SDK 用 stock_list + field_list 是其内部映射, 网关不认。
+#
+# ⚠️ 命名的坑: T0002\bigdata_all.txt 那 404 个码(LHBD1/DZJY1/GDRS/JGDY...)
+#   是客户端「大数据」UI 模块的字段名, 不是 GP/SC 表名, 喂进来只会拿到 null。
+#
+# 编号空间实测(002361.SZ / 2024-01-01~):
+#   GP 有数据 38 个: GP01-03,06,08-22,24,25,27,30-34,36-40,42,44,47-50
+#   SC 有数据 33 个: SC01-19(缺09,20), SC21-35
+# ============================================================================
+
+# GPJYVALUE 官方编号(个股交易数据); 每项 = (编号, 含义, 单位)
+GP_TABLES: dict[str, str] = {
+    "GP1": "股东户数(户)",
+    "GP2": "龙虎榜 买入总计/卖出总计(万元)",
+    "GP3": "融资融券1 融资余额(万元)/融券余量(股)",
+    "GP4": "大宗交易 成交均价(元)/成交额(万元)",
+    "GP5": "增减持 成交均价(元)/变动股数(股)",
+    "GP6": "陆股通持股量(股)",
+    "GP7": "陆股通市场成交净额(万元)",
+    "GP8": "龙虎榜机构(卖方) 机构个数/卖出金额(万元)",
+    "GP9": "龙虎榜机构(买方) 机构个数/买入金额(万元)",
+    "GP10": "近3月机构调研 调研次数/调研机构数量",
+    "GP11": "融资融券2 融资买入额(万元)/融资偿还额(万元)",
+    "GP12": "融资融券3 融券卖出量(股)/融券偿还量(股)",
+    "GP13": "融资融券4 融资净买入(万元)/融券净卖出(股)",
+    "GP15": "涨跌停 状态/封单金额(万元) 2=涨停 1=曾涨停 -2=跌停 -1=曾跌停",
+    "GP16": "总市值(万元)",
+    "GP17": "龙虎榜营业部数据 买入金额/卖出金额(万元)",
+    "GP18": "龙虎榜沪深股通数据 买入金额/卖出金额(万元)",
+    "GP19": "每周股票质押数量 无限售(万)/有限售(万元)",
+    "GP20": "每周股票质押比例(%)",
+    "GP24": "涨停时间/封单额(仅涨停日有值)",
+}
+
+# SCJYVALUE 官方编号(市场级交易数据)
+SC_TABLES: dict[str, str] = {
+    "SC1": "沪深融资余额/融券余额(万元)",
+    "SC2": "陆股通资金流入 沪股通/深股通(亿元)",
+    "SC3": "沪深涨停股个数 涨停/曾涨停(炸板)",
+    "SC4": "沪深跌停股个数 跌停/曾跌停",
+    "SC5": "上证50股指期货净持仓(手)",
+    "SC6": "沪深300股指期货净持仓(手)",
+    "SC7": "中证500股指期货净持仓(手)",
+    "SC8": "ETF基金规模(亿)/净申赎(亿)",
+    "SC9": "每月新增投资者数量(户)",
+    "SC10": "增减持统计 增持额/减持额(万元)",
+    "SC11": "大宗交易 溢价额/折价额(万元)",
+    "SC12": "限售解禁 计划额/实际上市额(亿元)",
+    "SC13": "市场总分红额(亿元)",
+    "SC14": "市场总募资额(亿元)",
+    "SC15": "打板资金 封板成功/封板失败(亿元)",
+    "SC16": "龙虎榜 买入总金额/卖出总金额(亿元)",
+    "SC17": "龙虎榜机构数据 买入/卖出(亿元)",
+    "SC18": "龙虎榜营业部数据 买入/卖出(亿元)",
+    "SC19": "龙虎榜沪深股通数据 买入/卖出(亿元)",
+    "SC20": "陆股通净买入 买入/卖出(亿元)",
+    "SC21": "每周无限售质押率 深市/沪市(%)",
+    "SC22": "每周有限售质押率 深市/沪市(%)",
+    "SC23": "连板家数 含ST及未开板新股/不含",
+    "SC24": "沪深涨跌停股个数 涨停(不含ST及新股)/跌停(不含ST)",
+    "SC25": "沪深融资买入额(万元)/融券卖出量(万股)",
+    "SC26": "每周市场质押比例(%)",
+    "SC27": "央行公开市场净投放(亿元)",
+    "SC28": "扩展序列(官方未列, 待标定)",
+    "SC29": "扩展序列(官方未列, 待标定)",
+    "SC30": "扩展序列(官方未列, 待标定)",
+    "SC31": "扩展序列(官方未列, 待标定)",
+    "SC32": "扩展序列(官方未列, 待标定)",
+    "SC33": "扩展序列(官方未列, 待标定)",
+    "SC34": "扩展序列(官方未列, 待标定)",
+    "SC35": "扩展序列(官方未列, 待标定)",
+}
+
+_SC_FALLBACK_CODE = "999999.SH"  # 市场级序列的默认标的(上证指数)
+
+
+def _pro_series(method: str, table_list: list[str], *, code: str = "",
+                start_time: str = "", end_time: str = "", timeout: float = 30.0) -> dict:
+    """通用专业序列取数。返回 {表名: [{Date, Value:[...]}, ...]}; 空表不出现在结果里。
+
+    ⚠️ 网关参数契约是**递进必填**的, 少一个就报 `ErrorId=10 json has no XXX`
+    (服务端会把收到的 params 原样回显, 照着补):
+        {"table_list": [...]}                          → "json has no table_list"? 不, 先要 table_list
+        + start_time                                   → "json has no end_time"
+    实测: 只要带了 start_time 就**必须同时带 end_time**, 否则整批失败。
+    本函数把 end_time 默认补成今天, 调用方不必关心。
+
+    ⚠️ 单表无数据时服务端返回 Value:null(该股该期真的没这类事件/无权限/窗太窄),
+    这里统一过滤掉, 调用方按"缺表"处理, **不要当 0**。
+    """
+    if not table_list:
+        return {}
+    if not end_time:
+        end_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+    params: dict = {"table_list": list(table_list), "end_time": end_time}
+    if code:
+        params["code"] = code
+    if start_time:
+        params["start_time"] = start_time
+    v = _rpc(method, params, timeout=max(_TIMEOUT_S, timeout))
+    if not isinstance(v, dict):
+        return {}
+    # 网关把多表结果平铺在 {表名: [...]}; 偶尔会夹带 ErrorId/Error
+    out: dict = {}
+    for k, val in v.items():
+        if k in ("ErrorId", "Error", "run_id"):
+            continue
+        if val:
+            out[k] = val
+    return out
+
+
+def gp_series(tables: list[str], code: str, *, start_time: str = "",
+              end_time: str = "") -> dict:
+    """个股交易数据序列(GP)。code 形如 '002361.SZ'。"""
+    return _pro_series("get_gpjy_value", tables, code=code,
+                       start_time=start_time, end_time=end_time)
+
+
+def sc_series(tables: list[str], *, start_time: str = "", end_time: str = "",
+              code: str = _SC_FALLBACK_CODE) -> dict:
+    """市场交易数据序列(SC)。情绪周期历史基线的核心来源。"""
+    return _pro_series("get_scjy_value", tables, code=code,
+                       start_time=start_time, end_time=end_time)
+
+
+def bk_series(tables: list[str], code: str, *, start_time: str = "",
+              end_time: str = "") -> dict:
+    """板块交易数据序列(BK)。code 形如 '880201.SH'。"""
+    return _pro_series("get_bkjy_value", tables, code=code,
+                       start_time=start_time, end_time=end_time)
+
+
+def gp_one_data(tables: list[str], code: str) -> dict:
+    """股票单个数据(GO, 非序列)。如 GO47=涨停时间。"""
+    return _pro_series("get_gp_one_data", tables, code=code)
+
+
+def financial_data(tables: list[str], code: str, *, start_time: str = "",
+                   end_time: str = "", report_type: str = "announce_time") -> dict:
+    """专业财务数据(FnXXX)。report_type: report_time=按截止日 / announce_time=按公告日。"""
+    params = {"table_list": list(tables), "code": code, "report_type": report_type}
+    if start_time:
+        params["start_time"] = start_time
+    if end_time:
+        params["end_time"] = end_time
+    v = _rpc("get_financial_data", params, timeout=max(_TIMEOUT_S, 30.0))
+    if not isinstance(v, dict):
+        return {}
+    return {k: x for k, x in v.items()
+            if k not in ("ErrorId", "Error", "run_id") and x}
+
+
+def zdt_snapshot(codes: list[str]) -> dict:
+    """涨跌停快照(当日)。每只返回 14 字段:
+
+    FDVolMaxZT 最大封单量 / VolZT 涨停量 / FirstTimeZT 首封时间 /
+    LastTimeZT 最后封板时间 / OpenTimesZT 打开次数(=炸板次数) /
+    LastOpenTimeZT 最后打开时间 / ZDTStatusNow 当前状态 / ZDTStatusOri 原始状态 /
+    TimeNow / 以及 DT(跌停) 同名字段 6 个。
+
+    这是**当日快照**, 要历史必须每日落库(见 tq_sentiment_series)。
+    传入全 A 列表即可还原整个涨停池; 客户端单次上限约 100 只时请分批。
+    """
+    if not codes:
+        return {}
+    v = _rpc("get_zdt_data", {"stock_list": list(codes)}, timeout=max(_TIMEOUT_S, 30.0))
+    return v if isinstance(v, dict) else {}
+
+
+def exday_data(code: str, count: int = 1) -> list:
+    """日线统计数据: 四档资金 Amo/Vol + 委托 BOrder/SOrder/TotalBOrder/TotalSOrder
+    + 撤单 BCancel/SCancel + 成交笔数 CJBS + VolNum。单位: 金额元/量手。"""
+    v = _rpc("get_exday_data", {"stock_code": code, "count": int(count)},
+             timeout=max(_TIMEOUT_S, 30.0))
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict):
+        return v.get("Value") or []
+    return []
+
+
+def gb_info(code: str, *, date_list: list[str] | None = None, count: int = 1) -> list:
+    """股本信息(总股本 Zgb / 流通股本 Ltgb)。date_list 需升序。"""
+    params = {"stock_code": code, "count": int(count)}
+    if date_list:
+        params["date_list"] = list(date_list)
+    v = _rpc("get_gb_info", params)
+    return v if isinstance(v, list) else (v.get("Value") or [] if isinstance(v, dict) else [])
+
+
+def divid_factors(code: str, *, start_time: str = "", end_time: str = "") -> list:
+    """除权除息数据(分红送配)。"""
+    params = {"stock_code": code}
+    if start_time:
+        params["start_time"] = start_time
+    if end_time:
+        params["end_time"] = end_time
+    v = _rpc("get_divid_factors", params)
+    return v if isinstance(v, list) else (v.get("Value") or [] if isinstance(v, dict) else [])
+
+
+def pricevol(codes: list[str]) -> dict:
+    """批量价量: {代码: {LastClose, Now, Volume, Zaf}}。全市场涨跌家数走这个。"""
+    if not codes:
+        return {}
+    v = _rpc("get_pricevol", {"stock_list": list(codes)}, timeout=max(_TIMEOUT_S, 30.0))
+    return v if isinstance(v, dict) else {}
+
+
+def trading_calendar(market: str = "SH", *, start_time: str = "",
+                     end_time: str = "") -> list:
+    """交易日历(需客户端已下载上证指数盘后数据)。"""
+    v = _rpc("get_trading_calendar",
+             {"market": market, "start_time": start_time, "end_time": end_time})
+    if isinstance(v, dict):
+        return v.get("Date") or []
+    return v if isinstance(v, list) else []
+
+
+def sector_list(list_type: int = 1) -> list:
+    """全部板块(587 个)。list_type=0 指数 / 1 板块。"""
+    v = _rpc("get_sector_list", {"list_type": int(list_type)})
+    return v if isinstance(v, list) else []
+
+
+def sector_stocks(block_code: str, *, block_type: int = 0, list_type: int = 0) -> list:
+    """板块成分股。block_code 可为板块代码/名称/自定义简称; block_type=2 走期货前缀。"""
+    v = _rpc("get_stock_list_in_sector",
+             {"block_code": block_code, "block_type": int(block_type),
+              "list_type": int(list_type)})
+    return v if isinstance(v, list) else []
+
+
+def stock_list(market: str = "5", list_type: int = 5) -> list:
+    """股票列表。list_type: 5 所有A股 / 0 自选 / 1 持仓 / 12 概念 / 31 ETF / 32 可转债。
+
+    (实测: 不传 market/list_type 会报 '参数缺少:market/list_type')
+    """
+    v = _rpc("get_stock_list", {"market": str(market), "list_type": int(list_type)})
+    return v if isinstance(v, list) else []
+
+
+def relation(code: str) -> list:
+    """股票所属板块(行业/概念/风格 + 成分数)。"""
+    v = _rpc("get_relation", {"stock_code": code})
+    return v if isinstance(v, list) else []
+
+
+def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list:
+    """新股/新债申购信息。ipo_type 0新股 1新债 2两者; ipo_date 0今日 1今日及以后。"""
+    v = _rpc("get_ipo_info", {"ipo_type": int(ipo_type), "ipo_date": int(ipo_date)})
+    return v if isinstance(v, list) else []
+
+
+def kzz_info(code: str) -> dict:
+    """可转债基础信息。"""
+    v = _rpc("get_kzz_info", {"stock_code": code})
+    return v if isinstance(v, dict) else {}
+
+
+def trackzs_etf(zs_code: str) -> list:
+    """跟踪某指数的 ETF 列表(含 IOPV/规模)。"""
+    v = _rpc("get_trackzs_etf_info", {"zs_code": zs_code})
+    return v if isinstance(v, list) else []
+
+
+def download_file(*, stock_code: str = "", down_time: str = "",
+                  down_type: int = 1) -> dict:
+    """程序化触发客户端数据下载(落 .\\PYPlugins\\data)。
+
+    down_type: 1 十大股东(下 10 名数据, down_time 只生效年份)
+               2 ETF 申赎清单(down_time 生效到日期)
+               3 最近舆情
+               4 综合信息文件
+    """
+    v = _rpc("download_file", {"stock_code": stock_code, "down_time": down_time,
+                               "down_type": int(down_type)},
+             timeout=max(_TIMEOUT_S, 60.0))
+    return v if isinstance(v, dict) else {}
+
+
+def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
+                   formula_arg: str = "", stock_period: str = "1d",
+                   start_time: str = "", end_time: str = "",
+                   return_count: int = 0, return_date: bool = True,
+                   count: int = 0, dividend_type: int = 0) -> dict:
+    """批量条件选股公式(formula_process_mul_xg) → {代码: {信号名: [{Date, Value}]}}。"""
+    params = {
+        "formula_name": formula_name,
+        "formula_arg": formula_arg,
+        "stock_list": list(stock_list_),
+        "stock_period": stock_period,
+        "periodstr": stock_period,
+        "start_time": start_time,
+        "end_time": end_time,
+        "return_count": return_count,
+        "return_date": return_date,
+        "count": count,
+        "dividend_type": dividend_type,
+    }
+    v = _rpc("formula_process_mul_xg", params, timeout=max(_TIMEOUT_S, 120.0))
+    if not isinstance(v, dict):
+        return {}
+    v.pop("ErrorId", None)
+    v.pop("Error", None)
+    return v
+
+
+def formula_all(formula_type: int = 0) -> list:
+    """公式列表。formula_type: 0 技术指标 / 1 条件选股 / 2 专家系统 / 3 最新财务选股
+    / 4 实时行情选股 / 5 逻辑运算选股。(实测 type=1 有 108 个条件选股公式)"""
+    v = _rpc("formula_get_all", {"formula_type": int(formula_type)})
+    return v if isinstance(v, list) else []
+
+
+def match_stkinfo(key_word: str) -> list:
+    """按关键词检索证券(代码/名称/拼音)。"""
+    v = _rpc("get_match_stkinfo", {"key_word": key_word})
+    return v if isinstance(v, list) else []
+
+
+def refresh_cache(*, market: str = "AG", force: bool = False) -> dict:
+    """刷新行情缓存。刷新后 5 分钟内取快照/K线不再触发刷新。
+
+    串行调用会显著拖慢客户端, 批量取数前调用一次即可。
+    """
+    v = _rpc("refresh_cache", {"market": market, "force": bool(force)},
+             timeout=max(_TIMEOUT_S, 30.0))
+    return v if isinstance(v, dict) else {}
+
+
+def refresh_kline(codes: list[str], *, period: str = "1d") -> dict:
+    """缓存历史 K 线(仅支持 1m/5m/1d)。一次别更新太多, 会堵塞策略与客户端。"""
+    v = _rpc("refresh_kline", {"stock_list": list(codes), "period": period},
+             timeout=max(_TIMEOUT_S, 60.0))
+    return v if isinstance(v, dict) else {}
+
+
+def subscribe_hq(codes: list[str]) -> dict:
+    """订阅行情更新(客户端侧推送, 单次上限约 100 条)。"""
+    v = _rpc("subscribe_hq", {"stock_list": list(codes)},
+             timeout=max(_TIMEOUT_S, 20.0))
+    return v if isinstance(v, dict) else {}
+
+
+def unsubscribe_hq(codes: list[str]) -> dict:
+    v = _rpc("unsubscribe_hq", {"stock_list": list(codes)},
+             timeout=max(_TIMEOUT_S, 20.0))
+    return v if isinstance(v, dict) else {}
+
+
+def send_message(msg: str) -> dict:
+    """推送一条消息到客户端 TQ 策略界面('|' 或 '\\n' 分行)。"""
+    v = _rpc("send_message", {"message": msg})
+    return v if isinstance(v, dict) else {}
+
+
+def send_warn(stock_list_: list[str], time_list: list[str], price_list: list[str],
+              close_list: list[str], volum_list: list[str],
+              bs_flag_list: list[str], reason_list: list[str]) -> dict:
+    """推送预警信号到客户端预警列表。bs_flag 0买1卖2未知; time 形如 '20260923141115'。"""
+    v = _rpc("send_warn", {
+        "stock_list": list(stock_list_),
+        "time_list": list(time_list),
+        "price_list": list(price_list),
+        "close_list": list(close_list),
+        "volum_list": list(volum_list),
+        "bs_flag_list": list(bs_flag_list),
+        "warn_type_list": ["0"] * len(stock_list_),
+        "reason_list": list(reason_list),
+        "count": len(stock_list_),
+    }, timeout=max(_TIMEOUT_S, 20.0))
+    return v if isinstance(v, dict) else {}
