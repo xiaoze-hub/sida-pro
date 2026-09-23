@@ -1243,6 +1243,26 @@ export default function KlineChart(props: {
         <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
       )}
 
+      {/* GS 买卖点图例(2026-09-23): 起因是用户报障"数智决策显示 S区, 但 K线最新标记是 G" ——
+          真因是图层缓存永不失效(已在 summary_cache 修), 但即便数据一致, 用户看到空心 `○S`
+          也无从知道它=待确认(盘中价算出的新交叉, 收盘才定死)。补一行图例说明, 免得误读。 */}
+      {effGsSignals.length > 0 && (
+        <div
+          data-testid="gs-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">GS 买卖点</span>
+          <span>
+            <span className="font-mono text-[hsl(var(--gs-go))]">G</span> 买入
+          </span>
+          <span>
+            <span className="font-mono text-[hsl(var(--gs-stop))]">S</span> 卖出
+          </span>
+          <span>实心 = 已确认(收盘定死)</span>
+          <span>空心 ○ = 待确认(盘中价, 收盘才定死)</span>
+        </div>
+      )}
+
       {/* 主力意图图例(P2 补搬, 与 InteractiveKline 同口径): 数据不足时显示笔数, 不给方向 */}
       {intentRenderable(intent) && intentLegend && (
         <div

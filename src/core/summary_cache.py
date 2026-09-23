@@ -53,7 +53,16 @@ def get_cached_summary(symbol: str, market: str, ttl_s: int) -> dict | None:
                     return None  # ts 解析失败: 视为过期(避免卡住所有读)
             if computed.tzinfo is None:
                 computed = computed.replace(tzinfo=timezone.utc)
-            if (now - computed).total_seconds() > max(ttl, ttl_s):
+            age = (now - computed).total_seconds()
+            # ⚠️ 2026-09-23 修(影响面很大): 列是 `timestamp without time zone`, 而 PG 会话时区是
+            # Asia/Shanghai ⇒ 写入侧传的 aware UTC 会被存成 **CST 墙上时间**(05:50 UTC → 存 13:50)。
+            # 读侧原来把它当 UTC ⇒ age = 本地-UTC = **-8 小时(负数)** ⇒ 永远不 > ttl
+            # ⇒ **缓存永不失效**。生产实测: 603629 那行冻结在 09:42(已 4 小时)仍被当作有效返回,
+            # 导致 K 线图层的 gs_signals/fund_flow/events/chips 全部停在旧时刻, 与实时的数智决策
+            # 面板互相矛盾(用户 2026-09-23 报障: 决策显示 S区, K线最新标记却是 G)。
+            # 处理: ① age < 0(未来时间戳) 一律视为过期 —— 它只可能来自时区口径不一致或时钟异常;
+            #       ② 写入侧改为存 naive UTC(见 put_cached_summary), 两侧口径从此一致。
+            if age < 0 or age > max(ttl, ttl_s):
                 return None
             return json.loads(row["payload"])
     except Exception as e:  # noqa: BLE001
@@ -71,7 +80,11 @@ def put_cached_summary(symbol: str, market: str, payload: dict, ttl_s: int = 300
             body = body[:SUMMARY_PAYLOAD_MAX]
             payload = {"truncated": True, "note": f"payload>{SUMMARY_PAYLOAD_MAX}B 截断", "head": json.loads(body[:5000])}
             body = json.dumps(payload, ensure_ascii=False, default=str)
+        # 2026-09-23: 存 **naive UTC** —— 列是 `timestamp without time zone`, 传 aware datetime 会被
+        # PG 按会话时区(Asia/Shanghai)转成 CST 墙上时间, 与读侧"naive 即 UTC"的假设冲突 ⇒ 缓存永不失效。
+        # 两侧统一为 naive UTC 后 age 计算才正确。
         now = datetime.now(timezone.utc)
+        now_naive_utc = now.replace(tzinfo=None)
         # W3.1(D2): 原 PG/SQLite 双分支 SQL 仅 EXCLUDED 大小写之差(两后端均
         # 大小写不敏感), 收编为 src/db/dialect.upsert_sql 单一语句
         stmt = upsert_sql(
@@ -86,7 +99,7 @@ def put_cached_summary(symbol: str, market: str, payload: dict, ttl_s: int = 300
                 {
                     "symbol": symbol,
                     "market": market,
-                    "computed_at": now,
+                    "computed_at": now_naive_utc,
                     "ttl_s": int(ttl_s),
                     "payload": body,
                 },
