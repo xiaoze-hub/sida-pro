@@ -4675,6 +4675,87 @@ CREATE TABLE invite_code_uses (
         conn.execute(text("CREATE INDEX ix_invite_code_uses_code ON invite_code_uses (code)"))
     logger.info("[migration 177] invite_codes + invite_code_uses 就绪(邀请码注册)")
 
+def _m178_market_sentiment_daily(conn: Connection) -> None:
+    """TQ 专业序列: 市场级情绪日序列(涨停/炸板/连板/打板资金/两融/龙虎榜...)。
+
+    数据源 = 通达信客户端 TQ 网关 get_scjy_value(SCJYVALUE 编号空间),
+    实测覆盖 2025-01-02 起每日 420+ 个交易日, 34/35 张表有值。
+    东财类免费源只给**当日快照**, 这张表的意义是提供历史基线
+    (如"今日涨停 34 家 vs 近 20 日均值")。
+
+    宽表而非 JSON: 情绪周期要跑 AVG/PERCENTILE 这类聚合。
+    单位: 家数=家, 金额见列注释。
+    未标定的扩展序列(SC28-35)与原始响应进 extra, 便于后续补标。
+    """
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS market_sentiment_daily (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  limit_up_count INTEGER,
+  limit_up_open_count INTEGER,
+  limit_down_count INTEGER,
+  limit_down_open_count INTEGER,
+  streak_count INTEGER,
+  streak_count_ex INTEGER,
+  hard_limit_up_count INTEGER,
+  hard_limit_down_count INTEGER,
+  seal_success_money REAL,
+  seal_fail_money REAL,
+  margin_fin_balance REAL,
+  margin_sec_balance REAL,
+  margin_buy_amount REAL,
+  margin_sell_volume REAL,
+  lhb_buy REAL,
+  lhb_sell REAL,
+  lhb_inst_buy REAL,
+  lhb_inst_sell REAL,
+  lhb_yyb_buy REAL,
+  lhb_yyb_sell REAL,
+  lhb_hsgt_buy REAL,
+  lhb_hsgt_sell REAL,
+  holder_increase REAL,
+  holder_decrease REAL,
+  block_premium REAL,
+  block_discount REAL,
+  unlock_plan REAL,
+  unlock_actual REAL,
+  dividend_total REAL,
+  fundraising_total REAL,
+  ih_net_position REAL,
+  ic_net_position REAL,
+  im_net_position REAL,
+  etf_scale REAL,
+  etf_net_sub REAL,
+  new_investor_natural REAL,
+  new_investor_inst REAL,
+  pboc_net_injection REAL,
+  pledge_ratio_total REAL,
+  extra TEXT NOT NULL DEFAULT '{{}}',
+  source TEXT NOT NULL DEFAULT 'tdx_tq',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_market_sentiment_daily "
+            "ON market_sentiment_daily(trade_date, market)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_market_sentiment_daily_date "
+            "ON market_sentiment_daily(trade_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4794,6 +4875,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(176, "factor_ic_snapshots", _m176_factor_ic_snapshots),
     # 邀请码注册(2026-09-19): 内部使用模式下收回"面向公众"的自助注册口
     Migration(177, "invite_codes", _m177_invite_codes),
+    # TQ 市场级情绪日序列(2026-09-23): 涨停/炸板/连板/打板资金/两融/龙虎榜…
+    # 东财类免费源只给当日快照, 这张表提供历史基线(情绪周期全靠在它上面跑聚合)
+    Migration(178, "market_sentiment_daily_series", _m178_market_sentiment_daily),
 )
 
 

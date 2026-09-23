@@ -24,6 +24,7 @@ from src.core.kline_backfill_scheduler import KlineBackfillScheduler
 from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
+from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.web.database import SessionLocal, init_db
 
 logger = logging.getLogger("server")
@@ -233,6 +234,20 @@ async def lifespan(app):
             rt.kline_backfill_scheduler.start()
         except Exception as e:
             logger.error(f"K线入库调度器启动失败: {e}")
+        # TQ 市场级情绪日序列(2026-09-23)
+        # 为什么需要独立调度器: 情绪周期判断要的是「今日 vs 近 20 个交易日均值」,
+        # 而东财类免费源只给当日快照(没有历史序列)。TQ 的 SCJYVALUE 能给 420+ 个
+        # 交易日的历史, 落到 market_sentiment_daily 才能跑 AVG/PERCENTILE。
+        # 首次启动样本不足时调度器内部会自动回补 420 天。
+        try:
+            settings = Settings()
+            rt.tq_sentiment_scheduler = TqSentimentScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.tq_sentiment_scheduler.start()
+            logger.info("TQ 情绪序列调度器已启动")
+        except Exception as e:
+            logger.error(f"TQ情绪序列调度器启动失败: {e}")
 
         # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
         # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
@@ -679,6 +694,8 @@ async def lifespan(app):
         logger.info("SIDA 报告调度器已关闭")
     if rt.kline_backfill_scheduler:
         rt.kline_backfill_scheduler.shutdown()
+    if rt.tq_sentiment_scheduler:
+        rt.tq_sentiment_scheduler.shutdown()
     # v0.4.36 P0 派活 1: WS Hub 解绑 loop
     try:
         from src.web.notifications.ws_hub import attach_event_loop

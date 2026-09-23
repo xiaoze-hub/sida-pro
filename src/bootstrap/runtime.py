@@ -24,6 +24,7 @@ from src.core.notifier import NotifierManager
 from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
+from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.scheduler import AgentScheduler
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
@@ -50,6 +51,10 @@ paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
 report_scheduler: ReportScheduler | None = None
 kline_backfill_scheduler: KlineBackfillScheduler | None = None
+
+# TQ 市场级情绪日序列(2026-09-23): 每交易日收盘后拉 SCJYVALUE 序列入 PG。
+# 东财类免费源只给当日快照, 这个调度器负责把历史序列补成基线。
+tq_sentiment_scheduler: TqSentimentScheduler | None = None
 
 # 2026-08-17 加股 60s 快速 backfill:
 # APScheduler 跑在它自己的后台线程(没 asyncio loop),

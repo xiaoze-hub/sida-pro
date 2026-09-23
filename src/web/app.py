@@ -60,6 +60,7 @@ from src.web.api import (
     user_data,
     audit,
     market_mainline,
+    sentiment_series,
     market_scan,
     seal_quality,
     demon_pool,
@@ -356,6 +357,13 @@ app.include_router(
     market_mainline.router,
     prefix="/api/market",
     tags=["market-mainline"],
+    dependencies=protected,
+)
+# 市场情绪日序列(2026-09-23): TQ SCJYVALUE 历史序列 → 情绪周期基线; 需登录
+app.include_router(
+    sentiment_series.router,
+    prefix="/api/market/sentiment",
+    tags=["market-sentiment"],
     dependencies=protected,
 )
 app.include_router(
