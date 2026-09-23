@@ -51,6 +51,10 @@ export interface MainlineFilterStats {
 
 export interface MainlineResp {
   total_groups: number
+  /** 涨停池只数(后端 2026-09-23 起提供) */
+  total_limit_ups?: number
+  /** 入榜门槛(板块需 ≥ 这么多只涨停) */
+  min_limitup_for_rank?: number
   ranked_groups: MainlineGroup[]
   unranked?: MainlineGroup[]
   filter_stats?: MainlineFilterStats
@@ -233,6 +237,19 @@ export default function MarketMainlineCard() {
   const note = data?.note
   const totalGroups = data?.total_groups ?? 0
 
+  /** 空态的真实原因(不许一律赖"非交易日"):
+   *  - 一只涨停都没有 → 可能真非交易日/源故障, 如实说"暂无涨停池数据";
+   *  - 有涨停但没有板块够格 → 说清"池子 N 只、分属 M 个板块、未达门槛";
+   *  - 门槛值来自后端 filter_stats, 拿不到就不写死数字。 */
+  const minPerGroup = data?.min_limitup_for_rank ?? 3
+  const poolSize = data?.total_limit_ups
+  const honestReason =
+    totalGroups === 0
+      ? '暂无涨停池数据(数据源不可用或非交易日)'
+      : poolSize != null
+        ? `今日涨停池 ${poolSize} 只, 分属 ${totalGroups} 个板块, 均未达到「≥${minPerGroup} 只涨停」的入榜门槛`
+        : `今日 ${totalGroups} 个涨停板块均未达到「≥${minPerGroup} 只涨停」的入榜门槛`
+
   if (ranked.length === 0) {
     return (
       <div className="border-t border-border/60 pt-2.5">
@@ -246,9 +263,12 @@ export default function MarketMainlineCard() {
             ) : undefined
           }
         />
+        {/* 2026-09-23 修: 原来无论什么原因都写"非交易日/涨停池为空" —— 而当日实测是
+            "涨停池有 33 只、分属 26 个板块, 但没有任何板块达到 ≥3 只涨停的入榜门槛"。
+            归因说错比不显示更糟: 用户会以为系统没数据/没开盘。现在按 filter_stats 说真话。 */}
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{error || note || '暂无主线数据(非交易日/涨停池为空)'}</span>
+          <span>{error || note || honestReason}</span>
         </div>
       </div>
     )

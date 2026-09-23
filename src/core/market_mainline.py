@@ -289,6 +289,10 @@ def aggregate_mainline(
             "ranked_groups": [],
             "unranked": [],
             "filter_stats": {"broad_filtered": 0, "below_min": 0, "ranked": 0},
+            # 涨停池只数(2026-09-23): 空态文案要能说"池子有 N 只、但没有板块够格",
+            # 而不是一律赖"非交易日" —— 归因说错比不显示更糟。
+            "total_limit_ups": 0,
+            "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
             "note": "无涨停池数据(非交易日/数据源不可用)",
         }
 
@@ -336,5 +340,9 @@ def aggregate_mainline(
             "below_min": len(below_min),
             "ranked": len(ranked_top),
         },
+        # 2026-09-23: 池子规模与入榜门槛都吐出来 —— 前端空态才能说清"33 只涨停散在 26 个板块,
+        # 没有板块达到 ≥3 只门槛", 而不是笼统写"非交易日/涨停池为空"(归因错)。
+        "total_limit_ups": len(pool),
+        "min_limitup_for_rank": MIN_LIMITUP_FOR_RANK,
         "note": "",
     }
