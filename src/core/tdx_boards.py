@@ -40,22 +40,26 @@ _DAILY_BATCH = 100
 _SPEED_WINDOW_S = 300.0
 _SPEED_TOL_S = 120.0
 _TRADING_MINUTES = 240.0
+# 涨跌家数缓存 60s: 盘中家数变化慢, 而 12 片 pricevol 每次约 1s → 60s 足够且不浪费
+_BREADTH_TTL_S = 60.0
 
 _lock = threading.Lock()
 _sector_cache: tuple[float, list[dict]] | None = None
 _name_cache: tuple[float, dict[str, str]] | None = None
 _fresh_cache: tuple[float, bool] | None = None
+_breadth_cache: tuple[float, dict] | None = None
 _baseline_cache: dict[str, object] = {}  # {"date": "2026-09-10", "amounts": {code: 元}}
 _price_history: dict[str, list[tuple[float, float]]] = {}
 
 
 def _clear_caches() -> None:
     """测试隔离/手动清理。"""
-    global _sector_cache, _name_cache, _fresh_cache
+    global _sector_cache, _name_cache, _fresh_cache, _breadth_cache
     with _lock:
         _sector_cache = None
         _name_cache = None
         _fresh_cache = None
+        _breadth_cache = None
         _baseline_cache.clear()
         _price_history.clear()
 
@@ -209,6 +213,64 @@ def _probe() -> dict:
     with _lock:
         _fresh_cache = (now, dict(info))
     return info
+
+
+def market_breadth(*, force: bool = False) -> dict | None:
+    """全市场涨跌家数(TQ `get_pricevol`) —— 替代东财 `ulist.np` / cn 网关 market-overview。
+
+    为什么切(2026-09-23 清单): 涨跌家数原走 `115.190.177.213:8100/cn/market-overview`
+    与东财 push2delay, **两个都是外部 HTTP 依赖**(网关挂/被限流就整块缺失)。
+    TQ 走本地客户端: 零配额、无外部依赖, 实测 500 只/0.07s, 全 A ~5576 只分 12 片约 1s。
+
+    ⚠️ 分片用 `_BATCH`(500) —— 实测安全值。**绝不单次发全市场**: 那次压死过客户端
+    (见 market_sentiment_collector 的事故铁律)。
+
+    涨跌口径: `Zaf`(涨跌幅%) > 0 涨 / < 0 跌 / == 0 平; Zaf 缺失的票**不计入任何一档**
+    (不编造, 与 board_quotes 对 0 价归 None 的诚实口径一致)。
+    失败/空 → None, 由调用方降级(不返回全 0 假装"平盘")。
+    """
+    global _breadth_cache
+    now = time.time()
+    if not force:
+        with _lock:
+            if _breadth_cache and now - _breadth_cache[0] < _BREADTH_TTL_S:
+                return dict(_breadth_cache[1])
+    codes = list(name_map().keys())
+    if not codes:
+        logger.warning("涨跌家数(TQ): 全A代码表为空 → 降级")
+        return None
+    up = down = flat = ok = failed = 0
+    for part in _chunks(codes, _BATCH):
+        try:
+            got = _rpc("get_pricevol", {"stock_list": part}) or {}
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            logger.warning("涨跌家数(TQ) pricevol 失败(%d 码): %s", len(part), e)
+            continue
+        if not isinstance(got, dict):
+            failed += 1
+            continue
+        for p in got.values():
+            if not isinstance(p, dict):
+                continue
+            z = _num(p.get("Zaf"))
+            if z is None:
+                continue
+            ok += 1
+            if z > 0:
+                up += 1
+            elif z < 0:
+                down += 1
+            else:
+                flat += 1
+    if ok == 0:
+        logger.warning("涨跌家数(TQ): 全片无有效涨跌幅 → 降级")
+        return None
+    out = {"up": up, "down": down, "flat": flat, "total": up + down + flat,
+           "codes_ok": ok, "failed_chunks": failed, "source": "tdx_tq"}
+    with _lock:
+        _breadth_cache = (now, dict(out))
+    return out
 
 
 def board_quotes(codes: list[str], *, with_fund: bool = True) -> dict[str, dict]:

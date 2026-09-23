@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-23 (清单切换: 东财单日快照 → TQ 历史序列 → v0.13.6)
+
+按"能用通达信客户端的接口全部换成 TQ"清单, 把三处仍依赖外部 HTTP 的能力换成 TQ。
+
+### 1. 涨跌家数: cn 网关/东财 ulist.np → TQ `get_pricevol`
+- 新增 `src/core/tdx_boards.market_breadth()`: 全A 5576 只分片(`_BATCH`=500)取 `Zaf` 计涨跌平。
+  **实测 0.95s / 0 失败片 / 覆盖 5576 只**。
+- 接线: `market_flow_sampler.collect_once` + `market_data.py` 大盘资金端点(TQ 优先, 失败回退原值,
+  新增 `breadth_source` 字段标注来源)。
+- 动机是实测出来的: 切换当天 cn 网关 `115.190.177.213:8100/cn/market-overview` **返回 502**
+  (该网关是涨跌家数的原唯一来源) → TQ 走本地客户端, 零外部依赖零配额。
+- ⚠️ 只用 `Zaf` 缺失即**不计入任何一档**, 全片无效返回 `None` 而非全 0(全 0 看起来像"全市场平盘"= 编造)。
+
+### 2. 龙虎榜: 东财单日缓存 → TQ GP 序列**融合**(不是纯替换)
+- `tq.py` 新增 `gp_pairs` / `lhb_rows` / `lhb_series`; 解析与 RPC 分离 → CI 无网关可单测。
+- `fetch_fundamentals_detail` 改为 **TQ 出长历史骨架 + 东财补 reason/close/席位名**:
+  TQ 有东财没有的(实测 **64 行/1.5 年**历史 + 机构/营业部/沪深股通拆解), 东财有 TQ 没有的
+  (**上榜原因文本**、席位名称) → 合并比任一单源都全。TQ 命中后不再 `lhb_pending`(冷启动不阻塞)。
+- **单位必须对齐**: 东财 `buy_amt` = **元**(BILLBOARD_BUY_AMT), TQ GP02 = **万元** → ×1e4。
+  已用独立交叉验证标定(GP16 总市值 946279.81 万 ≈ 9.51 亿股 × 10.10 元)。不对齐会错 10000 倍。
+- 实测发现并标记: 20251229 单日 `buy == sell == 1443198.50` 万(144 亿 > 该股总市值 94.6 亿)
+  → 打 `suspicious` 标记**但不丢弃**(口径归 TQ, 消费方决定)。
+- ⚠️ 纠错: 一开始把 `GP02 ≈ GP17 + GP18` 当成会计恒等式写进 docstring 和测试, 实测 20260819
+  差 +4629.77 万 → 只是**近似**(营业部+沪深股通不覆盖机构专用席位等)。已改为"近似, 别当校验断言"。
+
+### 3. 撤单量: TQ `get_exday_data`(净增, 无东财等价物)
+- `tq.py` 新增 `exday_latest`: `BCancel`/`SCancel`(**撤单量**, 免费东财层完全拿不到,
+  实测 002361 `BCancel=194573`) + `BOrder/SOrder/Total*Order/CJBS` + 四档 `Amo`/`Vol` 4×4 矩阵透传。
+- 挂在 `fetch_fundamentals_detail` 的 `exday` 字段(单位: 金额元/量手)。
+- ⚠️ 网关注册的 JSON key 是 **`stock_code`**; 报错文案里叫 "codestr" 是服务端内部命名,
+  照报错改成 `codestr` 反而失败(实测两轮才定位)。
+
+### 4. 板块成分: 已在用 TQ(本轮只做确认, 无改动)
+`tdx_boards.constituents`(get_stock_list_in_sector) 早已是 88xxxx 板块的主源 ——
+实测国防军工 **537 只/0.07s**、按名"塑料" **95 只/0.03s**, 且与 `get_relation` 的 `GPNume`
+(537/95)**完全一致**(双向交叉验证)。
+
+### 测试
+- 新增 `tests/test_tq_extras.py`(22 例, 纯解析器) + `tests/test_tq_extras_integration.py`(19 例)。
+- **41 例全绿**; 仓库门禁(is_pg_scope/lock/migrations/scoped_queries/B4.1 core→web)**全过**。
+
 ## 2026-09-23 (hotfix: 情绪调度器 core→web 反向依赖撞 B4.1 门禁 → v0.13.5)
 
 **症状**: v0.13.4 的 `build-push-acr` 门禁红, `Backend pytest + coverage ratchet` 失败, 镜像没出。

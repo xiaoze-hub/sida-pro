@@ -47,6 +47,18 @@ def collect_once(now: datetime | None = None) -> dict:
         "sh_flow": (ov.get("sh") or {}).get("main_flow"),
         "sz_flow": (ov.get("sz") or {}).get("main_flow"),
     }
+    # 涨跌家数改走 TQ(2026-09-23 清单切换): 网关/东财都是外部 HTTP 依赖, 挂了整块缺失;
+    # TQ 走本地客户端零配额。失败(None)才回退网关值 —— 口径不变, 只是换源。
+    try:
+        from src.core.tdx_boards import market_breadth
+
+        br = market_breadth()
+        if br:
+            row["up_count"] = br["up"]
+            row["down_count"] = br["down"]
+            row["flat_count"] = br["flat"]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("涨跌家数(TQ)不可用, 沿用网关值: %s", e)
     if row["total_main_flow"] is None:
         return {"ok": False, "skipped": False, "error": "缺 total_main_flow"}
 

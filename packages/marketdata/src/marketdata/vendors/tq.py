@@ -842,3 +842,188 @@ def send_warn(stock_list_: list[str], time_list: list[str], price_list: list[str
         "count": len(stock_list_),
     }, timeout=max(_TIMEOUT_S, 20.0))
     return v if isinstance(v, dict) else {}
+
+
+# ════════════ 清单切换 (2026-09-23): 东财单日快照 → TQ 历史序列 ════════════
+#
+# 为什么切: ①东财 push2ex/datacenter 只给**当日快照**, 要历史必须按日循环抓
+# (N 次 HTTP + 限流风险); ②TQ GP/SC 一次给 400+ 交易日; ③TQ 走本地客户端, 零配额。
+# 解析与 RPC 分离: 纯函数可单测(CI 无 TQ 网关)。
+
+#: 龙虎榜相关 GP 表。GP02 买卖总额 / GP08 机构(卖) / GP09 机构(买) /
+#: GP17 营业部买卖 / GP18 沪深股通买卖。实测单位: 万元(GP02/08/09/17/18 同口径)。
+LHB_TABLES = ("GP02", "GP08", "GP09", "GP17", "GP18")
+
+
+def gp_pairs(v) -> dict:
+    """GP/SC 返回结构 → {date: {表名: [值...]}}。
+
+    网关原始形如 {"GP02": [{"Date": "20251219", "Value": ["14881.66", "23043.70"]}, ...],
+    "GP08": [...]}。按 **日期** 归并成一张宽表, 便于多表 left join。
+    """
+    out: dict = {}
+    if not isinstance(v, dict):
+        return out
+    for tab, rows in v.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            d = str(row.get("Date") or "").strip()
+            vals = row.get("Value")
+            if not d or not isinstance(vals, list):
+                continue
+            out.setdefault(d, {})[str(tab)] = [_to_float(x) for x in vals]
+    return out
+
+
+def _pair(vals, i: int) -> float | None:
+    """安全取 Value[i](缺失/短数组 → None, 不抛)。"""
+    if not isinstance(vals, list) or len(vals) <= i:
+        return None
+    return vals[i]
+
+
+def lhb_rows(pairs: dict) -> list:
+    """{date: {GPxx: [..]}} → 龙虎榜行(按日期升序)。
+
+    字段(**单位: 万元** —— 已用独立交叉验证标定: GP16 总市值 946279.81 万
+    ≈ 总股本 9.51 亿股 × 10.10 元 = 96 亿 = 960000 万, 量级吻合):
+      buy/sell                GP02[0]/[1]         买卖总额
+      inst_sell_amount/_cnt   GP08[1]/[0]         机构卖出金额/机构数
+      inst_buy_amount/_cnt    GP09[1]/[0]         机构买入金额/机构数
+      yyb_buy/yyb_sell        GP17[0]/[1]         营业部买入/卖出
+      hsgt_buy/hsgt_sell      GP18[0]/[1]         沪深股通买入/卖出
+
+    ⚠️ 实测 GP08/GP09 是 [机构个数, 金额] 而 GP17/18 是 [买, 卖] —— 顺序不同, 别套用。
+    ⚠️ 交叉核对: GP02 ≈ GP17 + GP18 **只是近似, 不是恒等式** —— 实测 20251229 精确相等,
+       但 20260819 差 +4629.77 万(营业部+沪深股通 只覆盖龙虎榜总额的一部分, 机构专用席位等
+       不在 GP17/18 里)。**别拿它当校验断言**, 只当量级合理性参考。
+
+    `suspicious`: buy == sell 且量级远超邻日(实测 20251229 单日 1443198.50 万 = 144 亿,
+    是相邻日的 ~60 倍; 144 亿 > 该股总市值 94.6 亿, 不像真实成交)。
+    只标记不丢弃: 口径归 TQ, 消费方自行决定要不要过滤。
+    """
+    rows = []
+    for d in sorted((pairs or {}).keys()):
+        g = pairs[d] or {}
+        gp02 = g.get("GP02")
+        # 完全没值的日期跳过(该股当日未上榜)
+        if gp02 is None and not any(g.get(t) for t in LHB_TABLES[1:]):
+            continue
+        buy, sell = _pair(gp02, 0), _pair(gp02, 1)
+        rows.append(
+            {
+                "date": d,
+                "buy": buy,
+                "sell": sell,
+                "inst_sell_cnt": _pair(g.get("GP08"), 0),
+                "inst_sell_amount": _pair(g.get("GP08"), 1),
+                "inst_buy_cnt": _pair(g.get("GP09"), 0),
+                "inst_buy_amount": _pair(g.get("GP09"), 1),
+                "yyb_buy": _pair(g.get("GP17"), 0),
+                "yyb_sell": _pair(g.get("GP17"), 1),
+                "hsgt_buy": _pair(g.get("GP18"), 0),
+                "hsgt_sell": _pair(g.get("GP18"), 1),
+            }
+        )
+    # 异常标记: 买卖完全相等(真实龙虎榜买卖几乎不可能一模一样) 且量级突出
+    vals = [r["buy"] for r in rows if r.get("buy")]
+    med = sorted(vals)[len(vals) // 2] if vals else 0.0
+    for r in rows:
+        b, s = r.get("buy"), r.get("sell")
+        r["suspicious"] = bool(
+            b is not None and s is not None and b == s and med and abs(b) > med * 10
+        )
+    return rows
+
+
+def lhb_series(code: str, *, start_time: str = "", end_time: str = "",
+               _rpc_fn=None) -> list:
+    """个股龙虎榜历史序列(东财只给单日 → TQ 一次给整段)。
+
+    start_time/end_time: YYYYMMDD; end_time 缺省即今天(网关把 end_time 当必填)。
+    """
+    from datetime import datetime as _dt
+
+    fn = _rpc_fn or _rpc
+    params = {
+        "table_list": list(LHB_TABLES),
+        "code": code,
+        "start_time": start_time or "20200101",
+        "end_time": end_time or _dt.now().strftime("%Y%m%d"),
+    }
+    v = fn("get_gpjy_value", params, timeout=max(_TIMEOUT_S, 30.0))
+    return lhb_rows(gp_pairs(v))
+
+
+def breadth(codes: list, *, chunk: int = 500, _rpc_fn=None) -> dict:
+    """全市场涨跌家数(替代东财 ulist.np / cn 网关 market-overview)。
+
+    实测(2026-09-23): pricevol 500 只 / 0.07s, 全 A 5576 只分 12 片约 1s。
+    分片大小 500 是**实测安全值**(get_market_data 的 ≤50 限制不适用于本方法,
+    但绝不单次发全市场 —— 那次把客户端压进假死态, 见 market_sentiment_collector 注释)。
+
+    返回: {up, down, flat, total, codes_ok, failed_chunks}。Zaf 缺失的票不计入任何一档。
+    """
+    fn = _rpc_fn or _rpc
+    up = down = flat = 0
+    ok = 0
+    failed = 0
+    for i in range(0, len(codes or []), max(1, int(chunk))):
+        part = list(codes[i : i + max(1, int(chunk))])
+        try:
+            v = fn("get_pricevol", {"stock_list": part}, timeout=max(_TIMEOUT_S, 30.0))
+        except Exception:  # noqa: BLE001
+            failed += 1
+            continue
+        if not isinstance(v, dict):
+            failed += 1
+            continue
+        for item in v.values():
+            if not isinstance(item, dict):
+                continue
+            z = _to_float(item.get("Zaf"))
+            if z is None:
+                continue
+            ok += 1
+            if z > 0:
+                up += 1
+            elif z < 0:
+                down += 1
+            else:
+                flat += 1
+    return {"up": up, "down": down, "flat": flat, "total": up + down + flat,
+            "codes_ok": ok, "failed_chunks": failed}
+
+
+#: exday_data 的标量字段 → 中文/语义名。Amo/Vol 是 4×4 矩阵(四档×4), 原样透传。
+_EXDAY_SCALARS = {
+    "BCancel": "b_cancel", "SCancel": "s_cancel",
+    "BOrder": "b_order", "SOrder": "s_order",
+    "TotalBOrder": "total_b_order", "TotalSOrder": "total_s_order",
+    "CJBS": "trades", "VolNum": "vol_num",
+}
+
+
+def exday_latest(code: str, *, count: int = 1, _rpc_fn=None) -> dict:
+    """最近 N 日日线统计 → 结构化(含**撤单量**, 免费东财层拿不到)。
+
+    ⚠️ 网关注册的 JSON key 是 `stock_code`; 报错文案里叫 "codestr" 是**服务端内部命名**,
+    别照着报错改成 codestr(实测 codestr 反而报错)。units: 金额元 / 量手。
+    返回 {"Amo": [[4],[4],[4],[4]], "Vol": ..., "b_cancel": ..., ...}; 空 → {}。
+    """
+    fn = _rpc_fn or _rpc
+    v = fn("get_exday_data", {"stock_code": code, "count": int(count)},
+           timeout=max(_TIMEOUT_S, 30.0))
+    if isinstance(v, dict):
+        v = v.get("Value") or []
+    if not isinstance(v, list) or not v:
+        return {}
+    row = v[-1] if isinstance(v[-1], dict) else {}
+    out = {"Amo": row.get("Amo"), "Vol": row.get("Vol")}
+    for k, name in _EXDAY_SCALARS.items():
+        out[name] = _to_float(row.get(k))
+    out["date"] = str(row.get("Date") or "")
+    return out
