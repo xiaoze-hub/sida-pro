@@ -2,12 +2,16 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import time as _time
 
 from pydantic import BaseModel, Field
 
 from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
+from src.core.trading_calendar import is_trading_day
+
+_APP_TZ = "Asia/Shanghai"
 
 # L4 事件里 wencai 查询的硬超时秒数(两条查询串行, 行情服务不通时不拖垮 summary)
 WENCAI_TIMEOUT_S = 10.0
@@ -272,6 +276,93 @@ def get_closes_batch(
     return data
 
 
+# ── 桩 bar 剔除 + 今日实时 bar 补齐 (2026-09-23 hotfix) ─────────────────────────
+# 报障: "K线图不显示今日最新的日K"。
+# 根因(生产实测): 库里当日那根日线是**盘前网关占位**——603629 的 09-23 行是
+#   O=H=L=C=115.96(=前收), volume=0, source=tq。零振幅+零量的 bar 画出来是一条看不见的
+#   横线 ⇒ 用户以为"今日日K没画"。且这根源数据还顶掉了"回落联网"的机会(它日期是今天,
+#   厚度/新鲜度检查都通过), 于是图表永远停在这根假 bar 上。
+#
+# 处理: ① 末根若为桩(量 0/空 + 零振幅 + 且等于前收) → 剔除;
+#       ② 剔掉后若"今天还没有真 bar"且今天是交易日 → 用实时源补一根**真实**今日 bar;
+#       ③ 拿不到实时数据就**不补**(宁缺勿造), 响应里用 today_bar 字段显式说明今日 bar 的性质。
+_LIVE_TODAY_CACHE: dict[str, tuple[float, object | None]] = {}
+_LIVE_TODAY_TTL = 60.0
+
+
+def _is_stub_bar(cur, prev_close: float | None = None) -> bool:
+    """桩 bar = 无量 + 零振幅(且价等于前收, 若给了前收)。停牌日的真 bar 也会零振幅,
+    但它不满足"等于前收且量为 0 且是盘前写入"的全部特征 —— 所以只在**末根**上做这个判定。"""
+    vol = getattr(cur, "volume", None)
+    if vol is not None and float(vol) > 0:
+        return False
+    o, h, low, c = (getattr(cur, "open", None), getattr(cur, "high", None),
+                    getattr(cur, "low", None), getattr(cur, "close", None))
+    if None in (o, h, low, c):
+        return False
+    if not (float(o) == float(h) == float(low) == float(c)):
+        return False
+    if prev_close is not None and abs(float(c) - float(prev_close)) > 1e-9:
+        return False
+    return True
+
+
+def _live_today_bar(symbol: str, market_code):
+    """取今日真实日 bar(联网, 60s 进程内缓存)。取不到 → None(不编造)。"""
+    key = f"{market_code.value}:{symbol}"
+    hit = _LIVE_TODAY_CACHE.get(key)
+    now = _time.monotonic()
+    if hit and now - hit[0] < _LIVE_TODAY_TTL:
+        return hit[1]
+    bar = None
+    try:
+        bars = KlineCollector(market_code).get_klines(symbol, days=5)
+        today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
+        for b in reversed(bars or []):
+            if str(getattr(b, "date", ""))[:10] == today:
+                bar = None if _is_stub_bar(b) else b
+                break
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).debug(f"[live-today-bar] {symbol}: {e!r}")
+        bar = None
+    _LIVE_TODAY_CACHE[key] = (now, bar)
+    return bar
+
+
+def _finalize_daily_bars(klines: list, symbol: str, market_code, interval: str):
+    """日报/日线序列收尾: 剔末根桩 + 补今日实时 bar。
+
+    返回 (bars, today_state)。today_state ∈ {"pg"(库里有真今日bar), "live"(盘中补的实时bar),
+    "missing"(今天还没有真bar且补不到 —— 前端应显式标注滞后, 不许当已收盘)}。
+    """
+    iv = (interval or "1d").lower()
+    if iv not in ("1d", "day", "d") or not klines:
+        return klines, None
+
+    bars = list(klines)
+    prev_close = float(getattr(bars[-2], "close", 0) or 0) if len(bars) >= 2 else None
+    dropped_stub = False
+    if _is_stub_bar(bars[-1], prev_close if prev_close else None):
+        bars = bars[:-1]
+        dropped_stub = True
+
+    today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
+    last_date = str(getattr(bars[-1], "date", ""))[:10] if bars else ""
+    if last_date == today:
+        return bars, ("live" if dropped_stub else "pg")
+
+    # 库里今天还没有真 bar: 交易日就补一根实时的(拿不到 → missing, 不编造)
+    if not is_trading_day(datetime.now(ZoneInfo(_APP_TZ)).date()):
+        return bars, "missing"
+    live = _live_today_bar(symbol, market_code)
+    if live is None:
+        return bars, "missing"
+    if str(getattr(live, "date", ""))[:10] <= last_date:
+        return bars, "missing"
+    bars.append(live)
+    return bars, "live"
+
+
 @router.get("/{symbol}")
 def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
     """获取单只股票/指数K线数据(指数代码自动识别,走指数K线源)"""
@@ -375,6 +466,10 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
     pg_klines, pg_asof = _pg_klines(symbol, market_code, days)
     if pg_klines is not None:
         klines = _aggregate_klines(pg_klines, interval)
+        # 2026-09-23: 剔末根桩 + 补今日实时 bar(否则当日零振幅占位 bar 让图上看不到今天的K)
+        klines, today_state = _finalize_daily_bars(klines, symbol, market_code, interval)
+        if klines:
+            pg_asof = str(getattr(klines[-1], "date", "") or pg_asof)[:10]
         return {
             "symbol": symbol,
             "market": market_code.value,
@@ -383,19 +478,24 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             "klines": _serialize_klines(klines),
             "source": "pg_klines_hypertable",
             "asof": pg_asof,
+            "today_bar": today_state,
         }
 
     # 2. Fallback: 联网拉 KlineCollector
     collector = KlineCollector(market_code)
     klines = collector.get_klines(symbol, days=days)
     klines = _aggregate_klines(klines, interval)
-    return {
+    klines, today_state_fb = _finalize_daily_bars(klines, symbol, market_code, interval)
+    _fb = {
         "symbol": symbol,
         "market": market_code.value,
         "days": days,
         "interval": interval,
         "klines": _serialize_klines(klines),
     }
+    if today_state_fb:
+        _fb["today_bar"] = today_state_fb
+    return _fb
 
 
 def _pg_klines(symbol: str, market_code, days: int):
@@ -449,7 +549,9 @@ def _pg_klines(symbol: str, market_code, days: int):
         # v0.4.9.2: PG 命中但数据过薄视为无效 → 联网拿完整历史
         if len(klines) >= min(30, days):
             asof = max(k.date for k in klines)
-            today = datetime.now(timezone.utc).date().isoformat()
+            # 2026-09-23 修: 原来用 UTC 日期当"今天" ⇒ CST 00:00-08:00 期间会差一天,
+            # 把滞后判定算错(lag 少 1 天)。统一用应用时区。
+            today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
             from datetime import date as _date
 
             try:
@@ -487,6 +589,7 @@ def get_klines_batch(payload: KlineBatchRequest):
             collector = KlineCollector(market_code)
             klines = collector.get_klines(item.symbol, days=days)
         klines = _aggregate_klines(klines, interval)
+        klines, today_state_b = _finalize_daily_bars(klines, item.symbol, market_code, interval)
         row = {
             "symbol": item.symbol,
             "market": market_code.value,
@@ -494,6 +597,8 @@ def get_klines_batch(payload: KlineBatchRequest):
             "interval": interval,
             "klines": _serialize_klines(klines),
         }
+        if today_state_b:
+            row["today_bar"] = today_state_b
         if source:
             row["source"] = source
         if asof:

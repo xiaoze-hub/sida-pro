@@ -402,6 +402,9 @@ export default function KlineChart(props: {
   onRangeStatsRef.current = props.onRangeStats
   // 带日期的 K 线(区间统计要按日期与资金柱/事件求交, rawKlinesRef 只有 time/close/volume)
   const rangeBarsRef = useRef<RangeBar[]>([])
+  // 2026-09-23: 末根 K 线日期 → 用于诚实标注"是否含今日"(报障: 今日日K不显示,
+  // 后端已修桩 bar; 前端同时把"最新一根是哪天"显式写出来, 免得滞后被当成实时)
+  const [lastBarDate, setLastBarDate] = useState('')
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
   /** 运行时 pane 报告: "pane数|各pane高度", 供生产巡检断言(见 publishPanes) */
@@ -750,6 +753,7 @@ export default function KlineChart(props: {
           volume: it.volume || 0,
         }))
         // v2.1 §10.2④: 区间统计的取数源(带日期 + OHLC)
+        setLastBarDate(valid.length ? String((valid[valid.length - 1] as KlineItem).date).slice(0, 10) : '')
         rangeBarsRef.current = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval) as unknown as number,
           date: String(it.date).slice(0, 10),
@@ -1241,6 +1245,22 @@ export default function KlineChart(props: {
       />
       {props.enableMinute && mode === 'minute' && (
         <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
+      )}
+
+      {/* 最新K线新鲜度(2026-09-23): 报障"今日日K不显示"。后端已修(剔桩+补实时),
+          前端把"最新一根是哪天"直接写出来 —— 滞后就显式滞后, 绝不把旧数据当实时。
+          判据只用日期比对, 不做交易日推算(节假日不误报"今日缺K")。 */}
+      {lastBarDate && (
+        <div
+          data-testid="kline-freshness"
+          className="mt-1 text-[11px] text-muted-foreground"
+        >
+          {lastBarDate === new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()) ? (
+            <>最新K线 {lastBarDate}（含今日盘中）</>
+          ) : (
+            <>最新K线 {lastBarDate}（今日尚无K线数据）</>
+          )}
+        </div>
       )}
 
       {/* GS 买卖点图例(2026-09-23): 起因是用户报障"数智决策显示 S区, 但 K线最新标记是 G" ——
