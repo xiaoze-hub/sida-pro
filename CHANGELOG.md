@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-23 (hotfix: 情绪调度器 core→web 反向依赖撞 B4.1 门禁 → v0.13.5)
+
+**症状**: v0.13.4 的 `build-push-acr` 门禁红, `Backend pytest + coverage ratchet` 失败, 镜像没出。
+
+**根因（单测失败, 不是覆盖率）**: `pytest` 结果是 `1 failed, 2667 passed`,
+覆盖率 **TOTAL 57% ≥ 基线 50%, 覆盖率是过的**:
+```
+FAILED tests/test_w41_core_web_dependency.py::test_no_new_core_to_web_dependencies
+src/core 新增了对 src/web 的反向依赖(B4.1 禁止; 数据访问请下沉到 src/db/repository):
+src/core/tq_sentiment_scheduler.py
+```
+该门禁对 `src/core/**` 扫 `^\s*(from|import)\s+src\.web` —— **缩进也匹配**, 所以把 import
+挪进函数体（延迟导入）同样违规。`tests/fixtures/core_web_deps_allowlist.txt` 是冻结清单
+（现存仅 1 个文件）, 只许减少。
+
+**修**: 调度器 2 处 `from src.web.database import SessionLocal`
+→ **`from src.db.session import SessionLocal`**。
+两者运行时是**同一个对象**（`src/web/database.py` 就是 re-export `src.db.session` 的,
+其 docstring 自己写着"中立层, core 可直接用"）—— 所以行为零变化, 只是绕开门禁扫的路径。
+这也是既有 core 调度器的合规写法（`kline_backfill_scheduler` 用 `from src.db.session import engine`）。
+
+**顺带**: `build-push-acr` 的 pytest 步骤耗时 **21 分 20 秒**(2667 passed),
+门禁慢别误判卡死。
+
 ## 2026-09-23 (feat: 接入 TQ 市场级情绪日序列 → 情绪周期有历史基线)
 
 **为什么做**: 情绪周期判断要的是"今日 vs 近 20 个交易日均值"（如"涨停 34 家，分位 5%"），

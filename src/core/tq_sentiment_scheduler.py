@@ -42,7 +42,7 @@ def _needs_backfill(db) -> bool:
 
 
 def _sync_in_job(*, backfill: bool = False) -> dict:
-    from src.web.database import SessionLocal
+    from src.db.session import SessionLocal
     from src.collectors.tq_sentiment_series import sync_sentiment_series
 
     db = SessionLocal()
@@ -82,7 +82,7 @@ class TqSentimentScheduler:
         try:
             import asyncio
 
-            from src.web.database import SessionLocal
+            from src.db.session import SessionLocal
 
             def _check():
                 db = SessionLocal()
