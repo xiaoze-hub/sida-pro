@@ -507,6 +507,7 @@ async def market_capital_flow_proxy():
             "inflow_boards": inflow_boards,
             "outflow_boards": outflow_boards,
             "source": "eastmoney_push2delay_cn",
+            "breadth_source": "cn_gateway",
             # 口径标签(B3/3.4): 主力净流入为按单金额四档归类(资金面参考),
             # 板块明细为同花顺行业资金 —— 均禁止用于主力意图判定(AGENTS.md 红线)
             "caliber": "eastmoney4",
@@ -514,6 +515,19 @@ async def market_capital_flow_proxy():
                              "板块明细: 同花顺行业资金(参考)",
             "timestamp": None,
         }
+        # 涨跌家数改走 TQ(2026-09-23 清单切换): 去掉对 cn 网关/东财该字段的依赖。
+        # 只换 up/down/flat 三个字段, 主力净流入与板块明细仍走原源(口径差异不混)。
+        try:
+            from src.core.tdx_boards import market_breadth
+
+            br = market_breadth()
+            if br:
+                result["up_count"] = br["up"]
+                result["down_count"] = br["down"]
+                result["flat_count"] = br["flat"]
+                result["breadth_source"] = "tdx_tq"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("涨跌家数(TQ)不可用, 沿用网关值: %s", e)
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
         try:
             _try_write_snapshot_async(result)
@@ -753,6 +767,75 @@ def _get_lhb_range(market: str, days: int) -> dict | None:
     return None
 
 
+def _sym_to_tq_code(symbol: str) -> str:
+    """'002361' / '002361.sz' → '002361.SZ'(TQ 格式)。已带后缀则规范化返回。
+
+    规则与 marketdata.vendors.tq.to_tq_code 一致(92/4/8 → BJ 优先判) ——
+    前端传裸代码时不加这层会整个龙虎榜取空。
+    """
+    s = (symbol or "").strip().upper()
+    if "." in s:
+        code, _, suf = s.partition(".")
+        return f"{code}.{suf}"
+    if len(s) != 6 or not s.isdigit():
+        return s
+    if s.startswith(("92", "4", "8")):
+        return f"{s}.BJ"
+    if s.startswith(("6", "9", "5")):
+        return f"{s}.SH"
+    return f"{s}.SZ"
+
+
+def _lhb_from_tq(symbol: str, *, start_time: str = "") -> list[dict]:
+    """TQ GP 序列 → 前端龙虎榜行(与东财路径**同契约**)。
+
+    单位对齐: 东财 `buy_amt`/`sell_amt` 口径是**元**(BILLBOARD_BUY_AMT),
+    TQ GP02 是**万元** → ×1e4。对不齐会错 10000 倍(已实测标定: GP16 总市值
+    946279.81 万 ≈ 9.51 亿股 × 10.10 元)。
+
+    TQ **没有**的字段(上榜原因 reason / 收盘 close / 涨跌幅 / 席位名)一律留空,
+    由调用方用东财缓存补 —— 不编造。
+    """
+    from marketdata.vendors.tq import lhb_series
+
+    rows = lhb_series(_sym_to_tq_code(symbol), start_time=start_time)
+    if not rows:
+        return []
+    out = []
+    for r in rows:
+        buy_wan, sell_wan = r.get("buy"), r.get("sell")
+        buy_yuan = buy_wan * 1e4 if buy_wan is not None else None
+        sell_yuan = sell_wan * 1e4 if sell_wan is not None else None
+        net = None
+        if buy_yuan is not None or sell_yuan is not None:
+            net = (buy_yuan or 0.0) - (sell_yuan or 0.0)
+        out.append(
+            {
+                "trade_date": r["date"],
+                "symbol": symbol,
+                "name": "",
+                "reason": None,
+                "close": None,
+                "change_pct": None,
+                "net_buy": net,
+                "buy_amt": buy_yuan,
+                "sell_amt": sell_yuan,
+                "turnover_pct": None,
+                "top_buyers": [],
+                "top_sellers": [],
+                # TQ 独有的结构拆解(万元, 原口径)
+                "inst_buy_wan": r.get("inst_buy_amount"),
+                "inst_sell_wan": r.get("inst_sell_amount"),
+                "yyb_buy_wan": r.get("yyb_buy"),
+                "yyb_sell_wan": r.get("yyb_sell"),
+                "hsgt_buy_wan": r.get("hsgt_buy"),
+                "hsgt_sell_wan": r.get("hsgt_sell"),
+                "suspicious": bool(r.get("suspicious")),
+            }
+        )
+    return out
+
+
 def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
     """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
 
@@ -775,19 +858,56 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         "lhb_pending": False,
     }
 
-    # 1) 龙虎榜(P1): 市场级多日范围后台化, 本请求只做过滤
+    # 1) 龙虎榜: **TQ 长序列为主骨架**(2026-09-23 清单切换), 东财市场级缓存补
+    #    reason(上榜原因)/close/change_pct/席位名 —— 这几个 TQ 没有(不编造),
+    #    而 TQ 有东财没有的: 一年以上历史 + 机构/营业部/沪深股通买卖拆解。
+    #    两者合并 = 比任一单源都全。
+    em_rows: list[dict] = []
     lhb_range = _get_lhb_range(market, dt_days)
-    if lhb_range is None:
-        out["lhb_pending"] = True
-        out["lhb_note"] = "龙虎榜多日数据后台抓取中, 请稍后重试或轮询 /dragon-tiger/range/status"
-    else:
+    if lhb_range is not None:
         by_date: dict[str, list[dict]] = lhb_range.get("by_date") or {}
-        matched: list[dict] = []
         for ds in sorted(by_date.keys(), reverse=True):
             for row in by_date[ds]:
                 if row.get("symbol") == symbol:
-                    matched.append(row)
-        out["dragon_tiger"] = matched
+                    em_rows.append(row)
+
+    tq_rows: list[dict] = []
+    if market == "CN":
+        try:
+            tq_rows = _lhb_from_tq(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"基本面明细-龙虎榜[TQ {symbol}]失败, 降级东财缓存: {e}")
+
+    if tq_rows:
+        # 东财有值的字段覆盖到 TQ 行上(TQ 侧留空的才补, 不覆盖 TQ 的金额口径)
+        em_by_date: dict[str, dict] = {}
+        for e in em_rows:
+            key = str(e.get("trade_date") or "").replace("-", "")
+            if key:
+                em_by_date[key] = e
+        for r in tq_rows:
+            e = em_by_date.get(str(r.get("trade_date") or "").replace("-", ""))
+            if not e:
+                continue
+            for k in ("name", "reason", "close", "change_pct", "turnover_pct",
+                      "top_buyers", "top_sellers"):
+                if not r.get(k) and e.get(k):
+                    r[k] = e[k]
+        # 东财有、TQ 无的日期也保留(两只票都不丢)
+        tq_dates = {str(r.get("trade_date") or "").replace("-", "") for r in tq_rows}
+        merged = list(tq_rows)
+        for e in em_rows:
+            if str(e.get("trade_date") or "").replace("-", "") not in tq_dates:
+                merged.append(e)
+        out["dragon_tiger"] = merged
+        out["lhb_source"] = "tdx_tq+em_merge" if em_rows else "tdx_tq"
+        # TQ 拿到就不需要等东财后台任务了(冷启动不再 pending)
+    else:
+        out["dragon_tiger"] = em_rows
+        out["lhb_source"] = "em"
+        if lhb_range is None:
+            out["lhb_pending"] = True
+            out["lhb_note"] = "龙虎榜多日数据后台抓取中, 请稍后重试或轮询 /dragon-tiger/range/status"
     # 龙虎榜按交易日倒序(新→旧)
     out["dragon_tiger"].sort(key=lambda r: r.get("trade_date") or "", reverse=True)
 
@@ -863,6 +983,18 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         )
     except Exception as e:
         logger.warning(f"基本面明细-事件[{symbol}]查询失败: {e}")
+
+    # 6) 日线统计(TQ 独有, 2026-09-23 清单新增): **撤单量** BCancel/SCancel + 四档委托。
+    #    免费东财层完全拿不到撤单量(实测 002361 BCancel=194573) → 没有"切换"对象, 这是净增。
+    #    单位: 金额元 / 量手; Amo/Vol 是 4×4 四档矩阵, 原样透传(不臆造含义)。
+    out["exday"] = {}
+    if market == "CN":
+        try:
+            from marketdata.vendors.tq import exday_latest
+
+            out["exday"] = exday_latest(_sym_to_tq_code(symbol))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"基本面明细-日线统计[TQ {symbol}]失败: {e}")
 
     return out
 
