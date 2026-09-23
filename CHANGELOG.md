@@ -44,6 +44,12 @@
 - 真实读数：20260923 涨停 **34** 家 vs 20 日均 **65.3**，**分位 5.0%**（情绪冰点）；
   封板失败额 561.59 亿 > 成功 423.39 亿（09-22）
 
+**补测试（同版本内补齐, 防覆盖率棘轮退步）**: 新增 `tests/test_tq_sentiment_api.py`（11 例：
+health/baseline/series/sync 四端点 + 空表 404 + days 越界 422 + backfill=1 传 420 +
+采集器报错转 502）与 `tests/test_tq_sentiment_scheduler.py`（14 例：回补阈值、表不可读不炸、
+cron 注册进 scheduler_registry、上一轮未结束跳过、周末跳过、跑完复位 `_running`、
+拉取失败只记日志不抛、trigger_now 两档窗口）。三个情绪测试文件共 **37 例全绿**。
+
 **不做**: 未做"把全部数据源换成 TQ"——TQ 强在**历史序列**，涨停原因文本、F10 事件流、
 席位名称等语义字段没有，那部分继续走东财（选型原则见 `tq-capability-audit` skill）。
 
