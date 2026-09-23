@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-23 (hotfix: 网关故障分支漏掉 TQ 涨跌家数 → v0.13.7)
+
+**v0.13.6 拿真实生产接口验证时自己发现的 bug**: 大盘资金端点里, 网关报错分支是
+```python
+if ov.get("error"):
+    stale = _stale_take("market-flow")
+    if stale is not None:
+        return stale          # ← 提前返回
+```
+而 TQ 涨跌家数的注入写在**网关成功分支之后** ⇒ **网关挂掉时 TQ 代码根本走不到**。
+而"网关挂"恰恰是这次切换的唯一动机 —— v0.13.6 在正常时换源成功, 在故障时完全没用上。
+(实测当时 cn 网关就是 502, 生产返回的是旧快照: up=1821/down=3315/flat=151。)
+
+**修**:
+1. 抽出 `_tq_breadth()` / `_apply_tq_breadth()`, 在**网关报错分支里也调** ——
+   有旧快照则用 TQ 实时值覆盖 up/down/flat(资金类字段仍保留旧快照, 不编造);
+   无旧快照则只返回涨跌家数 + `degraded: True`(不假装资金字段存在)。
+2. `asyncio.to_thread`: TQ 查询是同步 HTTP(全A 约 1s), 原实现直接在 `async def` 里调会
+   **阻塞事件循环**(本函数开头已有同类 P0 注释, 我漏了)。
+
+**回归锁**: 新增 5 例 `TestBreadthOnGatewayFailure` 覆盖四个网关报错组合 + 成功分支。
 ## 2026-09-23 (清单切换: 东财单日快照 → TQ 历史序列 → v0.13.6)
 
 按"能用通达信客户端的接口全部换成 TQ"清单, 把三处仍依赖外部 HTTP 的能力换成 TQ。

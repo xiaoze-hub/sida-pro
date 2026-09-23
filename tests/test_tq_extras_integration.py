@@ -237,3 +237,78 @@ class TestFundamentalsMerge:
         """撤单量为 TQ 净增字段, 无源时也要给出空 dict(契约稳定)。"""
         out = self._run(monkeypatch, [], {})
         assert "exday" in out
+
+
+# ═══════════════ 回归锁: 网关挂掉时 TQ 涨跌家数仍要生效 ═══════════════
+class TestBreadthOnGatewayFailure:
+    """实测发现的 bug: TQ 注入原本写在网关**成功**分支之后, 于是网关报错时直接
+    `return stale` 提前返回, TQ 代码根本走不到 —— 而"网关挂"恰恰是这次切换的动机。
+    这组测试是那个 bug 的回归锁。
+    """
+
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def json(self):
+            return self._p
+
+    def _call(self, monkeypatch, ov_payload, stale, tq):
+        import asyncio
+
+        from src.web.api import market_data as mdmod
+
+        monkeypatch.setattr("requests.get", lambda *a, **k: self._Resp(ov_payload))
+        monkeypatch.setattr(mdmod, "_stale_take", lambda kind: stale)
+        monkeypatch.setattr(mdmod, "_tq_breadth", lambda: tq)
+        return asyncio.run(mdmod.market_capital_flow_proxy())
+
+    def test_网关报错_有旧快照_涨跌家数被TQ覆盖(self, monkeypatch):
+        out = self._call(monkeypatch, {"error": "502 网关挂了"},
+                         {"up_count": 10, "down_count": 20, "flat_count": 30,
+                          "total_main_flow": -100.0, "breadth_source": "cn_gateway"},
+                         {"up": 1891, "down": 3564, "flat": 121, "source": "tdx_tq"})
+        assert out["up_count"] == 1891 and out["down_count"] == 3564 and out["flat_count"] == 121
+        assert out["breadth_source"] == "tdx_tq"
+        # 资金类字段仍来自旧快照(不编造)
+        assert out["total_main_flow"] == -100.0
+
+    def test_网关报错_无快照有TQ_显式标注降级(self, monkeypatch):
+        """只给涨跌家数, 不假装资金字段存在。"""
+        out = self._call(monkeypatch, {"error": "502"}, None,
+                         {"up": 1891, "down": 3564, "flat": 121})
+        assert out["up_count"] == 1891 and out["degraded"] is True
+        assert "total_main_flow" not in out and out["error"] == "502"
+
+    def test_网关报错_既无快照也无TQ_保持原错误语义(self, monkeypatch):
+        out = self._call(monkeypatch, {"error": "502"}, None, None)
+        assert out == {"error": "502"}
+
+    def test_网关报错_有快照无TQ_旧值原样返回(self, monkeypatch):
+        stale = {"up_count": 10, "down_count": 20, "breadth_source": "cn_gateway"}
+        out = self._call(monkeypatch, {"error": "502"}, stale, None)
+        assert out == stale and out["breadth_source"] == "cn_gateway"
+
+    def test_成功分支也应用TQ(self, monkeypatch):
+        """网关正常时同样换成 TQ(去依赖), 不是只在故障时才用。"""
+        import asyncio
+
+        from src.web.api import market_data as mdmod
+
+        ov = {"total_main_flow": 5.0, "up_count": 1, "down_count": 2, "flat_count": 3,
+              "sh": {}, "sz": {}, "cyb": {}, "total_amount": 9000.0}
+
+        class _MD:
+            def board_capital_flow(self, **k):
+                return []
+
+        monkeypatch.setattr("requests.get", lambda *a, **k: self._Resp(ov))
+        monkeypatch.setattr(mdmod, "_tq_breadth",
+                            lambda: {"up": 1891, "down": 3564, "flat": 121})
+        monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
+        monkeypatch.setattr(mdmod, "_try_write_snapshot_async", lambda payload: None)
+        monkeypatch.setattr(mdmod, "_stale_put", lambda kind, payload: None)
+        out = asyncio.run(mdmod.market_capital_flow_proxy())
+        assert out["up_count"] == 1891 and out["breadth_source"] == "tdx_tq"
+        # 资金字段保留网关口径, 不被 TQ 影响
+        assert out["total_main_flow"] == 5.0

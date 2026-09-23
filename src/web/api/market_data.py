@@ -451,8 +451,26 @@ async def market_capital_flow_proxy():
         if ov.get("error"):
             # C2: 网关显式报错同属"源不可用" → 有备份则回退旧快照+标注
             stale = _stale_take("market-flow")
+            # 但**涨跌家数不该跟着一起陈旧**(2026-09-23 清单切换): TQ 走本地客户端,
+            # 网关是否挂与它无关 → 网关报错分支里也要拿下 TQ 实时值盖上去。
+            br = await asyncio.to_thread(_tq_breadth)
             if stale is not None:
-                return stale
+                out = dict(stale)
+                if br:
+                    out["up_count"] = br["up"]
+                    out["down_count"] = br["down"]
+                    out["flat_count"] = br["flat"]
+                    out["breadth_source"] = "tdx_tq"
+                return out
+            if br:
+                # 资金类字段彻底没有(无备份) → 只给涨跌家数, 并显式标注降级,
+                # 不假装资金字段存在(用户对编造数字敏感)
+                return {
+                    "up_count": br["up"], "down_count": br["down"], "flat_count": br["flat"],
+                    "breadth_source": "tdx_tq",
+                    "degraded": True,
+                    "error": ov["error"],
+                }
             return {"error": ov["error"]}
         # 2026-09-05 口径修正: 上游网关 point/change_pct 放大了100倍
         # (point=393012实际3930.12, change_pct=-30实际-0.3%), 此处归一化。
@@ -515,19 +533,11 @@ async def market_capital_flow_proxy():
                              "板块明细: 同花顺行业资金(参考)",
             "timestamp": None,
         }
-        # 涨跌家数改走 TQ(2026-09-23 清单切换): 去掉对 cn 网关/东财该字段的依赖。
+        # 涨跌家数改走 TQ(2026-09-23 清单切换): 去掉对 cn 网关该字段的依赖。
         # 只换 up/down/flat 三个字段, 主力净流入与板块明细仍走原源(口径差异不混)。
-        try:
-            from src.core.tdx_boards import market_breadth
-
-            br = market_breadth()
-            if br:
-                result["up_count"] = br["up"]
-                result["down_count"] = br["down"]
-                result["flat_count"] = br["flat"]
-                result["breadth_source"] = "tdx_tq"
-        except Exception as e:  # noqa: BLE001
-            logger.debug("涨跌家数(TQ)不可用, 沿用网关值: %s", e)
+        # ⚠️ to_thread: TQ 查询是同步 HTTP(全A 约 1s), 在 async def 里直接调会阻塞事件循环
+        #    (见本函数开头 P0 注释 —— 同一类问题)。
+        result = await asyncio.to_thread(_apply_tq_breadth, result)
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
         try:
             _try_write_snapshot_async(result)
@@ -749,6 +759,33 @@ def _compute_lhb_range(market: str, days: int) -> dict:
         "errors": errors,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _tq_breadth() -> dict | None:
+    """涨跌家数(TQ pricevol)。供 API 与采样器复用; 不可用返回 None(调用方降级)。
+
+    单独抽出来是为了能在**网关报错分支**里也调到 —— 之前把注入写在网关成功分支之后,
+    结果网关挂时(恰恰是本切换要解决的场景)根本走不到 TQ。
+    """
+    try:
+        from src.core.tdx_boards import market_breadth
+
+        return market_breadth()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("涨跌家数(TQ)不可用: %s", e)
+        return None
+
+
+def _apply_tq_breadth(result: dict) -> dict:
+    """把 TQ 涨跌家数盖到 result 上(拿不到就原样返回, 不覆盖成 None)。"""
+    br = _tq_breadth()
+    if not br:
+        return result
+    result["up_count"] = br["up"]
+    result["down_count"] = br["down"]
+    result["flat_count"] = br["flat"]
+    result["breadth_source"] = "tdx_tq"
+    return result
 
 
 def _get_lhb_range(market: str, days: int) -> dict | None:
