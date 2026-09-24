@@ -255,13 +255,21 @@ def _html_escape(s: str) -> str:
 # 格式以实测稳定格式为准(见 SKILL.md 6.2), 解析失败返回 None 回退整段排版。
 
 def _parse_main_intent(text: str) -> dict | None:
-    """get_main_intent → 主力净额/超大单/大单/参与度/买占/阶段/竞价/筹码峰/获利/成本带。"""
-    if "主力净" not in text:
+    """get_main_intent → 主力净额/超大单/大单/参与度/买占/阶段/竞价/筹码峰/获利/成本带。
+
+    门槛: 必须命中「主力净流入/流出」主结构才解析, 否则返回 None。
+    (否则 rally 等文本里的「主力净-68552万」「买占76%」弱字段会被误吞,
+    渲染成残缺的主力意图卡 —— 2026-09-24 实测坑。)
+    """
+    import re as _re
+    if not _re.search(r"主力净(流入|流出)", text):
+        return None
+    # 四档口径特征(中单/小单)是 get_capital_flow 的文本 → 让位给资金流向解析器
+    if "中单" in text or "小单" in text:
         return None
     try:
-        import re as _re
         out: dict = {"_type": "main_intent"}
-        m = _re.search(r"主力净(流入|流出)([+-]?[\d.]+[亿万])", text)
+        m = _re.search(r"主力净(流入|流出)\s*([+-]?[\d.]+[亿万])", text)
         if m:
             direction, val = m.group(1), m.group(2)
             if direction == "流出":
@@ -375,6 +383,202 @@ def _classify_num(val: str) -> str:
     return "flat"
 
 
+def _fmt_amount(text: str) -> tuple[str, str] | None:
+    """把 '-685,522,901元' 类金额转成 (换算大字, 原值)。失败返回 None。"""
+    import re as _re
+    m = _re.search(r"([+-]?[\d,]+(?:\.\d+)?)\s*元", text)
+    if not m:
+        return None
+    raw = m.group(0)
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    sign = "-" if v < 0 else "+"
+    av = abs(v)
+    if av >= 1e8:
+        big = f"{sign}{av / 1e8:.2f}亿"
+    elif av >= 1e4:
+        big = f"{sign}{av / 1e4:.0f}万"
+    else:
+        big = f"{sign}{av:.0f}元"
+    return big, raw
+
+
+def _parse_flow_compare(text: str) -> dict | None:
+    """get_main_flow_compare → 一致性/发散幅度/两源净额/说明。"""
+    import re as _re
+    if "双源对比" not in text and "一致性" not in text:
+        return None
+    try:
+        out: dict = {"_type": "flow_compare"}
+        m = _re.search(r"一致性[:：]\s*([\d.]+/100)", text)
+        if m:
+            out["一致性"] = m.group(1)
+        m = _re.search(r"发散幅度[:：]\s*([\d.]+%)", text)
+        if m:
+            out["发散幅度"] = m.group(1)
+        for key, pat in (("腾讯逐笔", r"腾讯逐笔[:：]\s*主力净额\s*([+-]?[\d,]+(?:\.\d+)?元)"),
+                         ("同花顺L2", r"同花顺L2[:：]\s*主力净额\s*([+-]?[\d,]+(?:\.\d+)?元)")):
+            m = _re.search(pat, text)
+            if m:
+                out[key] = m.group(1)
+        m = _re.search(r"说明[:：]\s*([^\n]+)", text)
+        if m:
+            out["说明"] = m.group(1).strip()
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_rally(text: str) -> dict | None:
+    """get_rally_analysis → 概览(现价/段数/真拉升/疑似出货/全天主力净) + 段落列表。"""
+    import re as _re
+    if "拉升段分析" not in text:
+        return None
+    try:
+        out: dict = {"_type": "rally"}
+        m = _re.search(r"现价([\d.]+)", text)
+        if m:
+            out["现价"] = m.group(1)
+        m = _re.search(r"识别(\d+)段顺势拉升", text)
+        if m:
+            out["识别段数"] = m.group(1) + "段"
+        m = _re.search(r"真拉升(\d+)段", text)
+        if m:
+            out["真拉升"] = m.group(1) + "段"
+        m = _re.search(r"疑似出货(\d+)段", text)
+        if m:
+            out["疑似出货"] = m.group(1) + "段"
+        m = _re.search(r"全天主力净([+-][\d.]+[亿万])", text)
+        if m:
+            out["全天主力净"] = m.group(1)
+        segs = []
+        for line in text.split("\n"):
+            sm = _re.match(r"\[(\d{2}:\d{2}-\d{2}:\d{2})\]\s*(.+)", line.strip())
+            if not sm:
+                continue
+            seg = {"时间": sm.group(1), "原文": sm.group(2)}
+            tm = _re.search(r"(真拉升|假拉升|疑似出货)", sm.group(2))
+            if tm:
+                seg["类型"] = tm.group(1)
+            sm2 = _re.search(r"评分([+-]?\d+)", sm.group(2))
+            if sm2:
+                seg["评分"] = sm2.group(1)
+            sm2 = _re.search(r"主力净([+-][\d.]+[亿万])", sm.group(2))
+            if sm2:
+                seg["主力净"] = sm2.group(1)
+            sm2 = _re.search(r"买占(\d+%)", sm.group(2))
+            if sm2:
+                seg["买占"] = sm2.group(1)
+            segs.append(seg)
+        if segs:
+            out["_segments"] = segs
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_kline(text: str) -> dict | None:
+    """get_kline_patterns → OHLC + 自研形态列表 + TA-Lib 形态列表。"""
+    import re as _re
+    if "最近K线" not in text:
+        return None
+    try:
+        out: dict = {"_type": "kline"}
+        m = _re.search(r"开([\d.]+)\s*高([\d.]+)\s*低([\d.]+)\s*收([\d.]+)", text)
+        if m:
+            out.update({"开": m.group(1), "高": m.group(2), "低": m.group(3), "收": m.group(4)})
+        m = _re.search(r"最近K线\(([\d-]+)\)", text)
+        if m:
+            out["日期"] = m.group(1)
+        pats = _re.findall(r"- 【(.+?)】信号[:：]\s*(看跌|看涨)\s*位置[:：]\s*(\S+)", text)
+        if pats:
+            out["_patterns"] = [{"名称": n, "信号": s, "位置": p} for n, s, p in pats]
+        ta_part = text.split("【TA-Lib 标准形态】", 1)
+        if len(ta_part) == 2:
+            ta = _re.findall(r"- ([^\n(]+?)(?:\([^)]*\))?\s+(看涨|看跌)\s+强度(\d+)", ta_part[1])
+            if ta:
+                out["_talib"] = [{"名称": n.strip(), "信号": s, "强度": g} for n, s, g in ta]
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_northbound(text: str) -> dict | None:
+    """get_northbound → 沪股通净额(估算)/日期/暂缺说明。"""
+    import re as _re
+    if "北向资金" not in text:
+        return None
+    try:
+        out: dict = {"_type": "northbound"}
+        m = _re.search(r"沪股通净(流入|流出)\s*([\d.]+[亿万])", text)
+        if m:
+            d, v = m.group(1), m.group(2)
+            out["沪股通净额"] = ("-" + v) if d == "流出" else ("+" + v)
+        m = _re.search(r"-\s*(\d{4}-\d{2}-\d{2})", text)
+        if m:
+            out["日期"] = m.group(1)
+        m = _re.search(r"合计口径([^\n|]+)", text)
+        if m:
+            out["合计"] = "合计口径" + m.group(1).strip()
+        m = _re.search(r"注[:：]\s*([^\n]+)", text)
+        if m:
+            out["说明"] = m.group(1).strip()
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_sentiment(text: str) -> dict | None:
+    """get_sentiment_cycle → 阶段/置信度/依据。"""
+    import re as _re
+    if "情绪周期" not in text:
+        return None
+    try:
+        out: dict = {"_type": "sentiment"}
+        first = text.split("\n", 1)[0]
+        stage = _re.sub(r"短线情绪周期[:：]|📊|📈|📝", "", first).strip()
+        if stage:
+            out["阶段"] = stage
+        m = _re.search(r"置信度[:：]\s*(\S+)", text)
+        if m:
+            out["置信度"] = m.group(1)
+        m = _re.search(r"依据[:：]\s*([^\n]+)", text)
+        if m:
+            out["依据"] = m.group(1).strip()
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_fundamentals(text: str) -> dict | None:
+    """get_fundamentals_detail → 标题 + ■ 分节(节名 + 正文)。"""
+    import re as _re
+    if "基本面明细" not in text:
+        return None
+    try:
+        out: dict = {"_type": "fundamentals"}
+        m = _re.search(r"【(.+?)】\((市场\s*\w+)\)", text)
+        if m:
+            out["_title"] = m.group(1)
+            out["_market"] = m.group(2)
+        body = text.split("\n", 1)[1] if "\n" in text else ""
+        secs = []
+        for chunk in _re.split(r"\n(?=■)", body):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            line1, _, rest = chunk.partition("\n")
+            name = line1.lstrip("■").split(":", 1)[0].strip()
+            secs.append({"节": name, "正文": (rest or line1).strip()})
+        if secs:
+            out["_sections"] = secs
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _structured_payload(result: str, skill: str, caliber: str, risk: str,
                         duration_ms: int) -> dict:
     """结构化数据载荷(html 内嵌与 json 模式共用)。"""
@@ -417,6 +621,12 @@ def _render_html(payload: dict) -> str:
         or _parse_technical(result)
         or _parse_capital_flow(result)
         or _parse_quote(result)
+        or _parse_flow_compare(result)
+        or _parse_rally(result)
+        or _parse_kline(result)
+        or _parse_northbound(result)
+        or _parse_sentiment(result)
+        or _parse_fundamentals(result)
     )
 
     if parsed is None:
@@ -492,6 +702,144 @@ def _render_html(payload: dict) -> str:
                 f'<div class="card"><div class="sec-head"><h3>实时行情</h3>'
                 f'<span class="badge">{esc(caliber)}</span></div>{body_html}</div>'
             )
+        elif ptype == "flow_compare":
+            score = parsed.get("一致性", "")
+            try:
+                score_num = float(score.split("/")[0])
+            except (ValueError, IndexError):
+                score_num = None
+            agree = score_num is not None and score_num >= 60
+            badge = '<span class="badge ok">两源一致</span>' if agree else '<span class="badge warn">两源发散</span>'
+            rows = []
+            for key, lbl in (("腾讯逐笔", "腾讯逐笔净额(权威)"), ("同花顺L2", "同花顺L2净额")):
+                if key in parsed:
+                    conv = _fmt_amount(parsed[key])
+                    big = conv[0] if conv else parsed[key]
+                    orig = conv[1] if conv else ""
+                    rows.append(
+                        f'<div class="flow"><span class="flow-num {_classify_num(big)}">{esc(big)}</span>'
+                        f'<span class="flow-lbl">{esc(lbl)}</span>'
+                        + (f'<span class="chip"><i>原值</i><b>{esc(orig)}</b></span>' if orig else "")
+                        + '</div>'
+                    )
+            chips = []
+            if "发散幅度" in parsed:
+                chips.append(f'<span class="chip"><i>发散幅度</i><b>{esc(parsed["发散幅度"])}</b></span>')
+            if "一致性" in parsed:
+                chips.append(f'<span class="chip"><i>一致性</i><b>{esc(parsed["一致性"])}</b></span>')
+            note = f'<p class="note">{esc(parsed["说明"])}</p>' if parsed.get("说明") else ""
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>主力双源对比</h3>{badge}</div>'
+                + "".join(rows) + f'<div class="chips">{"".join(chips)}</div>{note}</div>'
+            )
+        elif ptype == "rally":
+            chips = []
+            for k in ("现价", "识别段数", "真拉升", "疑似出货"):
+                if k in parsed:
+                    chips.append(f'<span class="chip"><i>{esc(k)}</i><b>{esc(parsed[k])}</b></span>')
+            head = ""
+            if "全天主力净" in parsed:
+                head = (
+                    f'<div class="flow"><span class="flow-num {_classify_num(parsed["全天主力净"])}">'
+                    f'{esc(parsed["全天主力净"])}</span><span class="flow-lbl">全天主力净额</span></div>'
+                )
+            rows = []
+            for seg in parsed.get("_segments", []):
+                t = seg.get("类型", "")
+                t_cls = "up" if t == "真拉升" else ("down" if t in ("假拉升", "疑似出货") else "")
+                seg_chips = []
+                for k in ("评分", "主力净", "买占"):
+                    if k in seg:
+                        cls = _classify_num(seg[k]) if k == "主力净" else ""
+                        seg_chips.append(
+                            f'<span class="chip"><i>{esc(k)}</i><b class="{cls}">{esc(seg[k])}</b></span>'
+                        )
+                rows.append(
+                    f'<div class="row"><span class="mono">[{esc(seg["时间"])}]</span>'
+                    + (f'<span class="stage {t_cls}">{esc(t)}</span>' if t else "")
+                    + "".join(seg_chips) + '</div>'
+                )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>拉升段分析</h3>'
+                f'<span class="badge">{esc(caliber)}</span></div>{head}'
+                f'<div class="chips">{"".join(chips)}</div>'
+                f'<div class="rows">{"".join(rows)}</div>'
+                f'<details><summary>段落原始明细</summary><pre>{esc(result)}</pre></details></div>'
+            )
+        elif ptype == "kline":
+            chips = []
+            for k in ("开", "高", "低", "收"):
+                if k in parsed:
+                    cls = ""
+                    if k == "收" and "开" in parsed:
+                        try:
+                            cls = "up" if float(parsed["收"]) >= float(parsed["开"]) else "down"
+                        except ValueError:
+                            cls = ""
+                    chips.append(f'<span class="chip"><i>{esc(k)}</i><b class="{cls}">{esc(parsed[k])}</b></span>')
+            if "日期" in parsed:
+                chips.append(f'<span class="chip"><i>日期</i><b>{esc(parsed["日期"])}</b></span>')
+            rows = []
+            for p in parsed.get("_patterns", []):
+                s_cls = "up" if p.get("信号") == "看涨" else "down"
+                rows.append(
+                    f'<div class="row"><span class="stage {s_cls}">{esc(p["信号"])}</span>'
+                    f'<b>【{esc(p["名称"])}】</b><span class="chip"><i>位置</i><b>{esc(p.get("位置", ""))}</b></span></div>'
+                )
+            ta_chips = []
+            for p in parsed.get("_talib", []):
+                s_cls = "up" if p.get("信号") == "看涨" else "down"
+                ta_chips.append(
+                    f'<span class="chip"><i>{esc(p["名称"])}</i><b class="{s_cls}">{esc(p["信号"])}</b>'
+                    f'<b class="flat">强度{esc(p["强度"])}</b></span>'
+                )
+            ta_html = (
+                f'<div class="sec"><div class="sec-head"><h3>TA-Lib 标准形态</h3></div>'
+                f'<div class="chips">{"".join(ta_chips)}</div></div>' if ta_chips else ""
+            )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>K线形态</h3>'
+                f'<span class="badge">{esc(caliber)}</span></div>'
+                f'<div class="chips">{"".join(chips)}</div>'
+                f'<div class="rows">{"".join(rows)}</div>{ta_html}</div>'
+            )
+        elif ptype == "northbound":
+            flow_val = parsed.get("沪股通净额", "")
+            chips = []
+            for k in ("日期", "合计"):
+                if k in parsed:
+                    chips.append(f'<span class="chip"><i>{esc(k)}</i><b>{esc(parsed[k])}</b></span>')
+            note = f'<p class="note">{esc(parsed["说明"])}</p>' if parsed.get("说明") else ""
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>北向资金</h3>'
+                f'<span class="badge warn">估算口径 · 非权威</span></div>'
+                f'<div class="flow"><span class="flow-num {_classify_num(flow_val)}">{esc(flow_val)}</span>'
+                f'<span class="flow-lbl">沪股通净额(估算)</span></div>'
+                f'<div class="chips">{"".join(chips)}</div>{note}</div>'
+            )
+        elif ptype == "sentiment":
+            chips = []
+            for k in ("阶段", "置信度", "依据"):
+                if k in parsed:
+                    chips.append(f'<span class="chip"><i>{esc(k)}</i><b>{esc(parsed[k])}</b></span>')
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>短线情绪周期</h3>'
+                f'<span class="badge">{esc(caliber)}</span></div>'
+                f'<div class="chips">{"".join(chips)}</div></div>'
+            )
+        elif ptype == "fundamentals":
+            title = parsed.get("_title", "基本面明细")
+            market = parsed.get("_market", "")
+            secs = []
+            for s in parsed.get("_sections", []):
+                secs.append(
+                    f'<div class="sec"><div class="sec-head"><h3>{esc(s["节"])}</h3></div>'
+                    f'<div class="para">{esc(s["正文"])}</div></div>'
+                )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>{esc(title)}</h3>'
+                f'<span class="badge">{esc(market or caliber)}</span></div>{"".join(secs)}</div>'
+            )
         else:
             card_html = f'<div class="card"><div class="para">{esc(result)}</div></div>'
 
@@ -545,6 +893,12 @@ h1 {{ margin:0 0 6px; font-size:22px; letter-spacing:-.3px; }}
   border:1px solid var(--soft); border-radius:7px; padding:4px 9px; font-size:12.5px; }}
 .chip i {{ font-style:normal; color:var(--fg3); }}
 .chip b {{ font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums; }}
+
+.rows {{ margin-top:6px; }}
+.row {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:7px 0;
+  border-top:1px dashed var(--soft); font-size:12.5px; }}
+.row:first-child {{ border-top:none; }}
+.mono {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--fg3); }}
 
 .px {{ text-align:right; }}
 .px .price {{ font-size:34px; font-weight:680; line-height:1.1; font-variant-numeric:tabular-nums; }}
