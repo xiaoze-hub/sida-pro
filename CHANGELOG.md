@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-24 (fix: 关闭纯匿名调用, 统一「先领 key 再调用」模型)
+
+收口上一轮「游客匿名调 run」的 CSRF 放行, 让鉴权模型干净统一:
+
+- 移除 CSRF 中间件对 `/api/skills/{name}/run` 的无凭证放行 → 无 key 匿名调用重新被拦成 403。
+- 统一模型: 匿名用户先 `POST /api/guest-key` 领 free 档 key, 后续带 `X-API-Key` 调用
+  (命中 sk_ 豁免), 杜绝无法识别的 IP 幽灵调用。
+- 纯匿名被 CSRF 拦属**有意行为**, 已加注释固化。
+
+**验证**: 无 key 匿名调 run → 403; guest-key → 200; 凭 key 调 run → 200。
+
 ## 2026-09-24 (feat: 新增游客自动领 key 端点 /api/guest-key)
 
 老大确认「游客自动发 key」模型: 匿名用户先领一把 key, 后续凭 key 调用(而非无 key 匿名)。
