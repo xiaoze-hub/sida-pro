@@ -1,6 +1,6 @@
 # 开放 skill 参考手册
 
-共 **23 个** 开放 skill：free 档 15 个、pro 档 8 个。
+共 **24 个** 开放 skill：free 档 16 个、pro 档 8 个。
 
 > **参数一律以 `GET /api/skills` 返回的 `schema.parameters` 为准。**
 > 本文档给出的是概览，实际可传参数与默认值由服务端 Schema 定义，
@@ -11,7 +11,7 @@
 
 ---
 
-## 一、free 档（15 个）
+## 一、free 档（16 个）
 
 ### get_stock_quote — 实时行情
 
@@ -99,6 +99,15 @@
 
 - **参数**：`symbol`（可选）、`limit`（可选）
 - **返回**：策略信号列表
+
+### get_stock_report — 自选股体检报告
+
+- **参数**：`symbol`（必填）、`market`
+- **返回**：聚合行情 + 逐笔主力 + 技术面 + 资金四档，默认输出自包含 HTML 报告
+  （顶部价格区 + 三个 section + 原始返回折叠 + 口径 footer）。
+- **注意**：`result` 是 JSON 字符串，四个字段 `get_stock_quote` / `get_main_intent` /
+  `get_technical_analysis` / `get_capital_flow` 对应四个子 skill 的原始文本，可单独解析；
+  任一子项失败该字段为空字符串，不阻断整体。
 
 ---
 

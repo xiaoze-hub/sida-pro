@@ -39,7 +39,7 @@ allowed-tools: Bash, Read, Write
 - 全部 skill 的参数与返回格式：`@references/skill-reference.md`
 - 排障手册：`@references/troubleshooting.md`
 
-**开放 skill 共 23 个**：free 档 15 个、pro 档 8 个。
+**开放 skill 共 24 个**：free 档 16 个、pro 档 8 个。
 
 ---
 
@@ -312,6 +312,6 @@ curl -s -X POST .../api/skills/get_stock_quote/run -H "X-API-Key: $SIDA_KEY" \
 | 文件 | 内容 |
 |---|---|
 | `@references/sida-gateway-api.md` | 接口清单、请求/响应示例、Python 与 curl 用法 |
-| `@references/skill-reference.md` | 23 个 skill 的参数、返回格式与适用场景 |
+| `@references/skill-reference.md` | 24 个 skill 的参数、返回格式与适用场景 |
 | `@references/caliber-guide.md` | 数据口径指南：逐笔 / 四档 / DDE / 估算口径的差异与选用 |
 | `@references/troubleshooting.md` | 排障手册：限流、重试、代理、常见报错 |
