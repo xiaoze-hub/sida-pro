@@ -22,6 +22,20 @@ from src.models.market import MarketCode
 from src.web.api import klines as KL
 
 
+# 固定参考日: fixture 里的日期就是围绕它造的。
+# **必须注入**(见 _finalize_daily_bars 的 today 参数) —— 否则本文件会随运行日期漂移:
+# 2026-09-23 实测, fixture 写死 09-23, 跨到 09-24 后 "库里今日是真bar" 这条永久红,
+# CI 门禁红灯 → build 被 skip → 发版被堵死。硬编码"今天"是发版时间炸弹。
+REF_TODAY = "2026-09-23"
+
+
+def _fin(bars, symbol="603629", market=None, interval="1d"):
+    """统一注入 REF_TODAY 调用收尾函数, 让断言与真实运行日期解耦。"""
+    from src.models.market import MarketCode as _M
+
+    return KL._finalize_daily_bars(bars, symbol, market or _M.CN, interval, REF_TODAY)
+
+
 def _prev(close=115.96):
     return K(date="2026-09-22", open=112.86, close=close, high=118.0, low=111.19, volume=37928648)
 
@@ -58,14 +72,14 @@ class TestStubDetection:
 class TestFinalize:
     def test_剔桩并补今日实时(self, monkeypatch):
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: _real())
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _stub()], interval="1d")
         assert len(bars) == 2, "桩应被剔除 + 补回真实今日 bar"
         assert bars[-1].close == 111.57 and bars[-1].volume == 12345678
         assert state == "live"
 
     def test_补不到就不补_标注missing(self, monkeypatch):
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: None)
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _stub()], interval="1d")
         assert [b.date for b in bars] == ["2026-09-22"], "桩剔除后不许留假 bar"
         assert state == "missing"
 
@@ -77,31 +91,57 @@ class TestFinalize:
             return _real()
 
         monkeypatch.setattr(KL, "_live_today_bar", _boom)
-        bars, state = KL._finalize_daily_bars([_prev(), _real()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _real()], interval="1d")
         assert state == "pg" and len(bars) == 2
         assert called["n"] == 0, "库里已有真今日 bar 时不该联网"
 
     def test_非交易日不补_标missing(self, monkeypatch):
         monkeypatch.setattr(KL, "is_trading_day", lambda d: False)
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: _real())
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _stub()], interval="1d")
         assert state == "missing" and len(bars) == 1
 
     def test_周线不做处理(self, monkeypatch):
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: pytest.fail("周线不该补实时"))
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1w")
+        bars, state = _fin([_prev(), _stub()], interval="1w")
         assert state is None and len(bars) == 2
 
     def test_空序列不炸(self):
-        bars, state = KL._finalize_daily_bars([], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([], interval="1d")
         assert bars == [] and state is None
 
     def test_实时bar日期不前进则不补(self, monkeypatch):
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: _prev())  # 返回的是昨天的
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _stub()], interval="1d")
         assert state == "missing" and len(bars) == 1
+
+    def test_注入的today真的生效_不是摆设(self, monkeypatch):
+        """守卫: 防"加了 today 参数但函数体里没用它" —— 用两个不同注入日验证状态随之改变。
+
+        同时锁死本文件的**日期无关性**: 断言只由注入值决定, 与运行时的真实今天无关。
+        """
+        called = {"n": 0}
+
+        def _live_0924(s, m):
+            called["n"] += 1
+            return K(date="2026-09-24", open=110.0, close=112.0, high=113.0, low=109.5, volume=999)
+
+        monkeypatch.setattr(KL, "_live_today_bar", _live_0924)
+        bars = [_prev(), _real()]          # 末根 09-23 是真 bar(有量)
+        # 注入 09-23: 库里那根就是"今天" → pg, 且**不该联网**
+        _, st23 = KL._finalize_daily_bars(bars, "603629", MarketCode.CN, "1d", "2026-09-23")
+        assert st23 == "pg" and called["n"] == 0
+        # 注入 09-24: 09-23 不再是今天 → 走补实时分支(09-24 是交易日) → live
+        out24, st24 = KL._finalize_daily_bars(bars, "603629", MarketCode.CN, "1d", "2026-09-24")
+        assert st24 == "live" and called["n"] == 1
+        assert out24[-1].date == "2026-09-24" and len(out24) == 3
+
+    def test_默认不注入_走真实今天不报错(self):
+        """生产调用点不传 today —— 保证默认分支仍可用(不因新增参数而崩)。"""
+        bars, state = KL._finalize_daily_bars([_prev(), _real()], "603629", MarketCode.CN, "1d")
+        assert state in ("pg", "live", "missing") and bars
 
     def test_实时bar本身是桩也不补(self, monkeypatch):
         monkeypatch.setattr(KL, "_live_today_bar", lambda s, m: None)
-        bars, state = KL._finalize_daily_bars([_prev(), _stub()], "603629", MarketCode.CN, "1d")
+        bars, state = _fin([_prev(), _stub()], interval="1d")
         assert state == "missing"

@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 import time as _time
 
@@ -329,11 +329,18 @@ def _live_today_bar(symbol: str, market_code):
     return bar
 
 
-def _finalize_daily_bars(klines: list, symbol: str, market_code, interval: str):
+def _finalize_daily_bars(
+    klines: list, symbol: str, market_code, interval: str, today: str | None = None
+):
     """日报/日线序列收尾: 剔末根桩 + 补今日实时 bar。
 
     返回 (bars, today_state)。today_state ∈ {"pg"(库里有真今日bar), "live"(盘中补的实时bar),
     "missing"(今天还没有真bar且补不到 —— 前端应显式标注滞后, 不许当已收盘)}。
+
+    today: 可注入的"今天"(ISO 日期), 默认取 _APP_TZ 当天。
+    **单测必须显式注入** —— 否则断言随运行日期漂移: 2026-09-23 实测, fixture 写死 09-23,
+    跨到 09-24 后该文件一条用例永久红, 直接把发版堵死(CI 门禁红灯 → build 被 skip → 无镜像)。
+    生产调用点不传, 行为不变。
     """
     iv = (interval or "1d").lower()
     if iv not in ("1d", "day", "d") or not klines:
@@ -346,13 +353,13 @@ def _finalize_daily_bars(klines: list, symbol: str, market_code, interval: str):
         bars = bars[:-1]
         dropped_stub = True
 
-    today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
+    today = today or datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
     last_date = str(getattr(bars[-1], "date", ""))[:10] if bars else ""
     if last_date == today:
         return bars, ("live" if dropped_stub else "pg")
 
     # 库里今天还没有真 bar: 交易日就补一根实时的(拿不到 → missing, 不编造)
-    if not is_trading_day(datetime.now(ZoneInfo(_APP_TZ)).date()):
+    if not is_trading_day(date.fromisoformat(today)):
         return bars, "missing"
     live = _live_today_bar(symbol, market_code)
     if live is None:
