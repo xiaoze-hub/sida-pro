@@ -312,3 +312,59 @@ class TestBreadthOnGatewayFailure:
         assert out["up_count"] == 1891 and out["breadth_source"] == "tdx_tq"
         # 资金字段保留网关口径, 不被 TQ 影响
         assert out["total_main_flow"] == 5.0
+
+# ═══════════ 端点缓存: 降级响应不得入 24h 缓存 (2026-09-24 生产实踩) ═══════════
+class TestFundamentalsCacheSkipsDegraded:
+    """回归锁: 降级(pending)响应不许写 24h 缓存。
+
+    实踩经过: v0.13.8 部署后容器刚重启, TQ 客户端未就绪 → 首次调用拿到
+    空龙虎榜 + lhb_pending=True, 被无条件按 24h 缓存 ⇒ **新上线的 TQ 长历史龙虎榜
+    对用户完全不可见一整天**, 而且每次发版重启都会重演。页面不报错、就是没数据,
+    属最坏的一种失效(只能靠"端点返回了几行"才测得出来)。
+
+    判据: pending 的响应**不得**写缓存; 完整响应**必须**写(否则缓存失去意义)。
+    """
+
+    def _call(self, monkeypatch, result):
+        import asyncio
+
+        import src.core.summary_cache as SC
+        from src.web.api import market_data as MD
+
+        written = []
+        monkeypatch.setattr(SC, "get_cached_summary", lambda *a, **k: None, raising=False)
+        monkeypatch.setattr(
+            SC,
+            "put_cached_summary",
+            lambda sym, mk, payload, ttl_s=300: written.append({"key": sym, "pending": payload.get("lhb_pending")}),
+            raising=False,
+        )
+        monkeypatch.setattr(MD, "fetch_fundamentals_detail", lambda *a, **k: result)
+        out = asyncio.run(MD.fundamentals_detail_proxy("002361.SZ", "CN", 10, 0))
+        return out, written
+
+    def test_pending的响应不写缓存(self, monkeypatch):
+        out, written = self._call(monkeypatch, {"dragon_tiger": [], "lhb_pending": True, "lhb_source": "em"})
+        assert out["lhb_pending"] is True
+        assert written == [], "降级响应入了缓存 → 空值会遮住 TQ 长历史龙虎榜 24 小时"
+
+    def test_完整响应要写缓存(self, monkeypatch):
+        payload = {"dragon_tiger": [{"trade_date": "20250101"}], "lhb_pending": False, "lhb_source": "tdx_tq"}
+        out, written = self._call(monkeypatch, payload)
+        assert out["lhb_source"] == "tdx_tq"
+        assert len(written) == 1 and written[0]["pending"] is False
+        assert written[0]["key"] == "fundamentals:CN:002361.SZ:10"
+
+    def test_force_refresh不写缓存(self, monkeypatch):
+        """_refresh=1 是"强制重算", 不该顺手把结果写进缓存(保持原契约)。"""
+        import asyncio
+
+        import src.core.summary_cache as SC
+        from src.web.api import market_data as MD
+
+        written = []
+        monkeypatch.setattr(SC, "put_cached_summary", lambda *a, **k: written.append(1), raising=False)
+        monkeypatch.setattr(MD, "fetch_fundamentals_detail",
+                            lambda *a, **k: {"dragon_tiger": [{"trade_date": "20250101"}], "lhb_pending": False})
+        asyncio.run(MD.fundamentals_detail_proxy("002361.SZ", "CN", 10, 1))
+        assert written == []
