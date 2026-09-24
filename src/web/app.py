@@ -773,6 +773,17 @@ app.include_router(
     tags=["market-scan"],
     dependencies=protected,
 )
+# TQ 条件选股信号(2026-09-25): 每交易日全市场扫 108 个条件选股公式的"当日触发家数"。
+# 数据源=通达信客户端 TQ 网关(免费/无限频), 免费源没有"某技术条件当日多少只触发"的口径。
+# 诚实性: complete=False 表示分片失败, hit_count 不是全市场家数, 前端必须标注。
+from src.web.api import formula_signals as formula_signals_router  # noqa: E402
+
+app.include_router(
+    formula_signals_router.router,
+    prefix="/api/formula-signals",
+    tags=["formula-signals"],
+    dependencies=protected,
+)
 
 # ---- L2 轻接口(2026-08-20): OB 失衡条/竞价快照/问小达 容错注册 ----
 # 三个模块由并行子任务创建; 模块未就绪(尚未创建)或依赖缺失时 import 抛 ImportError,

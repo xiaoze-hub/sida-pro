@@ -4756,6 +4756,59 @@ CREATE TABLE IF NOT EXISTS market_sentiment_daily (
     )
 
 
+def _m179_tq_formula_signal_daily(conn: Connection) -> None:
+    """TQ 条件选股信号日序列(2026-09-25)。
+
+    为什么: TQ 客户端自带 **108 个条件选股公式**, 全市场扫一遍约 8s 且**无限频**
+    (对比: 问财限频 250ms; 免费行情源没有等价口径)。它给出"当日有多少只票触发某
+    技术条件"这一**市场宽度**维度 —— 而免费源只给当日快照, 没有历史序列就算不出基线。
+
+    为什么用窄表: 家数要跑 AVG/PERCENTILE 聚合(与 market_sentiment_daily 同理由)。
+    命中清单另存 `hits_json`(回看"当日是谁触发"), 上限 500 只, 超出置 `truncated`。
+
+    ⚠️ `complete=0` 表示扫描过程有分片失败 ⇒ 消费方**不得**把 `hit_count` 当
+    "全市场命中数"(那是编造); 必须显示为不完整。
+    单位: hit_count/scanned_count 均为**只**(当日全 A 口径)。
+    """
+    if _has_table(conn, "tq_formula_signal_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS tq_formula_signal_daily (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  formula_code TEXT NOT NULL,
+  formula_name TEXT NOT NULL DEFAULT '',
+  formula_arg TEXT NOT NULL DEFAULT '',
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  scanned_count INTEGER NOT NULL DEFAULT 0,
+  chunks_failed INTEGER NOT NULL DEFAULT 0,
+  complete INTEGER NOT NULL DEFAULT 1,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  hits_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'tdx_tq',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tq_formula_signal_daily "
+            "ON tq_formula_signal_daily(trade_date, formula_code, formula_arg)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_tq_formula_signal_daily_date "
+            "ON tq_formula_signal_daily(trade_date)"
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4878,6 +4931,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     # TQ 市场级情绪日序列(2026-09-23): 涨停/炸板/连板/打板资金/两融/龙虎榜…
     # 东财类免费源只给当日快照, 这张表提供历史基线(情绪周期全靠在它上面跑聚合)
     Migration(178, "market_sentiment_daily_series", _m178_market_sentiment_daily),
+    # TQ 条件选股信号日序列(2026-09-25): 108 个条件选股公式全市场扫描的"当日触发家数"
+    # 这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 算不出基线)
+    Migration(179, "tq_formula_signal_daily", _m179_tq_formula_signal_daily),
 )
 
 

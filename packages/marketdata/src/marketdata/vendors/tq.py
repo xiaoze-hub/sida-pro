@@ -945,16 +945,41 @@ def download_file(*, stock_code: str = "", down_time: str = "",
     return v if isinstance(v, dict) else {}
 
 
-def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
-                   formula_arg: str = "", stock_period: str = "1d",
-                   start_time: str = "", end_time: str = "",
-                   return_count: int = 0, return_date: bool = True,
-                   count: int = 0, dividend_type: int = 0) -> dict:
-    """批量条件选股公式(formula_process_mul_xg) → {代码: {信号名: [{Date, Value}]}}。"""
+#: 服务端批次元数据键: 不属于公式结果, 解析时必须剔除(SDK 同名过滤)。
+_FORMULA_META_KEYS = frozenset({
+    "ErrorId", "Error", "BatchFormulaPaged", "batch_start_index", "batch_end_index",
+    "batch_stock_count", "stock_total", "next_stock_index", "has_more_batch",
+})
+
+#: 全市场扫描的单批标的数。**实测(2026-09-25)**: 500 只/批 = 1.6s/批,
+#: 全 A(5577) 12 批 = **24.2s** 要回 5570 只; 而 50 只/批要 112 次 ≈ 145s(踩过),
+#: 一次性传全市场则由服务端按 800 只/页分页 = 33s。故取 500。
+TQ_SCAN_CHUNK = 500
+
+#: 扫描的时间窗(自然日)。**必须给窄窗口**: 不带日期时网关按"全部历史"算,
+#: 每片响应过重, 全市场扫描从 24s 拖到分钟级(实测踩过)。
+_SCAN_LOOKBACK_DAYS = 20
+
+#: 单批翻页保护: 服务端游标不前进时不要死循环。
+_FORMULA_MAX_PAGES = 40
+
+#: 非交易信号值(视为未命中)。网关回字符串 "0"/"1", 缺失回 null。
+_FORMULA_FALSY = frozenset({"", "0", "0.0", "0.00", "none", "null", "false"})
+
+
+def _formula_raw(formula_name: str, stocks: list[str], *, formula_arg: str,
+                 stock_period: str, start_time: str, end_time: str,
+                 return_count: int, return_date: bool, count: int,
+                 dividend_type: int, batch_start_index: int) -> dict:
+    """单批原始调用。
+
+    用 `full=True` 自行判 ErrorId: **19 = "数据过大只能部分返回"** 是正常现象,
+    交给 _rpc 会抛异常(旧实现即如此), 那就永远扫不完全市场。
+    """
     params = {
         "formula_name": formula_name,
         "formula_arg": formula_arg,
-        "stock_list": list(stock_list_),
+        "stock_list": list(stocks),
         "stock_period": stock_period,
         "periodstr": stock_period,
         "start_time": start_time,
@@ -963,13 +988,152 @@ def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
         "return_date": return_date,
         "count": count,
         "dividend_type": dividend_type,
+        "batch_start_index": int(batch_start_index),
     }
-    v = _rpc("formula_process_mul_xg", params, timeout=max(_TIMEOUT_S, 120.0))
-    if not isinstance(v, dict):
-        return {}
-    v.pop("ErrorId", None)
-    v.pop("Error", None)
-    return v
+    return _rpc("formula_process_mul_xg", params, timeout=max(_TIMEOUT_S, 120.0), full=True)
+
+
+def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
+                   formula_arg: str = "", stock_period: str = "1d",
+                   start_time: str = "", end_time: str = "",
+                   return_count: int = 0, return_date: bool = True,
+                   count: int = 0, dividend_type: int = 0,
+                   max_pages: int = _FORMULA_MAX_PAGES) -> dict:
+    """批量条件选股公式(formula_process_mul_xg) → {代码: {信号名: [{Date, Value}]}}。
+
+    ⚠️ 服务端**分页返回**: 每批带 `BatchFormulaPaged`/`next_stock_index`/`has_more_batch`,
+    必须按 `batch_start_index` 游标续取到 `has_more_batch` 为假。只取第一批会
+    **静默漏掉大部分标的**(2026-09-25 修: 旧实现无翻页, 大列表下结果残缺而看不出)。
+    `ErrorId=19`(数据过大) 时返回已取到的部分 + 记警告, **不抛**。
+    """
+    out: dict = {}
+    start = 0
+    for _ in range(max(1, int(max_pages))):
+        res = _formula_raw(formula_name, stock_list_, formula_arg=formula_arg,
+                           stock_period=stock_period, start_time=start_time,
+                           end_time=end_time, return_count=return_count,
+                           return_date=return_date, count=count,
+                           dividend_type=dividend_type, batch_start_index=start)
+        if not isinstance(res, dict):
+            break
+        err = str(res.get("ErrorId", "0"))
+        if err == "19":
+            logger.warning("TQ 条件选股 %s: 数据过大, 部分返回(已取 %d 只)",
+                           formula_name, len(out))
+        elif err not in ("0", ""):
+            raise RuntimeError(
+                f"TQ formula_process_mul_xg ErrorId={err}: {res.get('Error', '')}")
+        out.update({k: v for k, v in res.items() if k not in _FORMULA_META_KEYS})
+        if not res.get("BatchFormulaPaged") or not res.get("has_more_batch"):
+            break
+        try:
+            nxt = int(str(res.get("next_stock_index")))
+        except (TypeError, ValueError):
+            logger.warning("TQ 条件选股 %s: 批次游标异常, 停止续取", formula_name)
+            break
+        if nxt <= start:
+            logger.warning("TQ 条件选股 %s: 批次游标未前进(%d), 停止续取", formula_name, nxt)
+            break
+        start = nxt
+    return out
+
+
+def _formula_hits(res: dict, date: str = "") -> tuple[list[dict], str]:
+    """逐日信号序列 → 命中清单。返回 (hits, 实际使用的日期)。"""
+    hits: list[dict] = []
+    used_date = date
+    for code, block in (res or {}).items():
+        if not isinstance(block, dict) or not code or code in _FORMULA_META_KEYS:
+            continue
+        for sig, series in block.items():
+            if not isinstance(series, list) or not series:
+                continue
+            row = None
+            if date:
+                row = next((r for r in series if str(r.get("Date")) == str(date)), None)
+            else:
+                row = series[-1]
+                used_date = used_date or str(row.get("Date") or "")
+            if not isinstance(row, dict):
+                continue
+            val = row.get("Value")
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text.lower() in _FORMULA_FALSY:
+                continue
+            hits.append({"symbol": code, "signal": sig,
+                         "date": str(row.get("Date") or date), "value": text})
+    return hits, used_date
+
+
+def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
+                 codes: list[str] | None = None, chunk: int = TQ_SCAN_CHUNK,
+                 market: str = "5", list_type: int = 1) -> dict:
+    """全市场扫一遍条件选股公式, 返回命中清单。
+
+    实测性能(2026-09-25): 500 只/批 = 1.6s → 全 A(5577) 12 批 = **24.2s**,
+    返回 5570 只(差 7 只=停牌/无数据)。分片是**硬约束** —— 批量接口超限会把
+    Windows 客户端打成假死(唯一解整机重启, 见 tq-capability-audit)。
+
+    ⚠️ 必须给**窄时间窗**: 实测不带日期(count=-1=全部历史)时每片响应过重,
+    全市场扫描会从 24s 拖到分钟级(客户端一直忙着算历史)。这里默认回看
+    `_SCAN_LOOKBACK_DAYS` 个自然日, 足够覆盖目标交易日。
+
+    诚实性: 任一分片失败都会计入 `chunks_failed` 并把 `complete` 置 False,
+    调用方**不得**把不完整结果当成"全市场命中数"(会变成编造)。
+
+    `list_type=1` 实测回全 A 5577 只(与 stock_list 文档里的 "1=持仓" 不符,
+    以实测为准; 见 CHANGELOG)。
+    """
+    pool = list(codes) if codes else [str(i.get("Code")) for i in (stock_list(market, list_type) or [])
+                                      if isinstance(i, dict) and i.get("Code")]
+    if not pool:
+        return {"formula": formula_name, "formula_arg": formula_arg, "date": date,
+                "scanned": 0, "hit_count": 0, "hits": [], "per_signal": {},
+                "chunks_failed": 0, "complete": False,
+                "error": "代码池为空(取股票列表失败)"}
+
+    # 窄窗口: end = 目标日(默认今天), start = end - N 自然日
+    end_day = _norm_day(date) or datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+    try:
+        start_day = (datetime.strptime(end_day, "%Y%m%d")
+                     - timedelta(days=_SCAN_LOOKBACK_DAYS)).strftime("%Y%m%d")
+    except ValueError:
+        start_day = ""
+
+    step = max(1, int(chunk))
+    hits: list[dict] = []
+    failed = 0
+    scanned = 0
+    resolved = date
+    for i in range(0, len(pool), step):
+        part = pool[i: i + step]
+        try:
+            res = formula_xg_mul(formula_name, part, formula_arg=formula_arg,
+                                 start_time=start_day, end_time=end_day)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            logger.warning("TQ 条件选股 %s: 第 %d 片失败(%s)", formula_name, i // step + 1, e)
+            continue
+        scanned += len(part)
+        part_hits, resolved = _formula_hits(res, date)
+        hits.extend(part_hits)
+    per_signal: dict[str, int] = {}
+    for h in hits:
+        per_signal[h["signal"]] = per_signal.get(h["signal"], 0) + 1
+    return {
+        "formula": formula_name,
+        "formula_arg": formula_arg,
+        "date": resolved or date,
+        "requested_date": date,
+        "scanned": scanned,
+        "hit_count": len(hits),
+        "hits": hits,
+        "per_signal": per_signal,
+        "chunks_failed": failed,
+        "complete": failed == 0,
+    }
 
 
 def formula_all(formula_type: int = 0) -> list:

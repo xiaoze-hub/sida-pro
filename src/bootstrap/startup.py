@@ -25,6 +25,7 @@ from src.core.paper_trading_scheduler import PaperTradingScheduler
 from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
+from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.web.database import SessionLocal, init_db
 
 logger = logging.getLogger("server")
@@ -248,6 +249,19 @@ async def lifespan(app):
             logger.info("TQ 情绪序列调度器已启动")
         except Exception as e:
             logger.error(f"TQ情绪序列调度器启动失败: {e}")
+        # TQ 条件选股信号日序列(2026-09-25)
+        # 为什么需要: 108 个条件选股公式全市场扫一遍约 8s/公式且无限频, 落"当日触发
+        # 家数"给市场宽度一个新维度; 免费源只有当日快照, 没历史就算不出基线。
+        # 15:50 而非 15:35 —— TQ 背后只有一个客户端进程, 与情绪序列同点跑会把它压出假死。
+        try:
+            settings = Settings()
+            rt.tq_formula_signal_scheduler = TqFormulaSignalScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.tq_formula_signal_scheduler.start()
+            logger.info("TQ 条件选股信号调度器已启动")
+        except Exception as e:
+            logger.error(f"TQ条件选股信号调度器启动失败: {e}")
 
         # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
         # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
@@ -696,6 +710,8 @@ async def lifespan(app):
         rt.kline_backfill_scheduler.shutdown()
     if rt.tq_sentiment_scheduler:
         rt.tq_sentiment_scheduler.shutdown()
+    if rt.tq_formula_signal_scheduler:
+        rt.tq_formula_signal_scheduler.shutdown()
     # v0.4.36 P0 派活 1: WS Hub 解绑 loop
     try:
         from src.web.notifications.ws_hub import attach_event_loop
