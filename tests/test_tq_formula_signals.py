@@ -26,6 +26,27 @@ from src.collectors import tq_formula_signals as tfs
 FIXTURE = Path(__file__).parent / "fixtures" / "tq_formula_mul_xg_sample.json"
 
 
+@pytest.fixture(autouse=True)
+def _no_biz_cache():
+    """端点测试前清业务缓存: biz_cache 有 300s TTL 而 conftest 不清它 →
+
+    "空数据降级"测试缓存下来的空结果会让后面的 happy-path 测试读到旧值(flaky)。
+    """
+    try:
+        from src.web.cache.biz_cache import biz_cache
+
+        biz_cache.clear()
+    except Exception:  # noqa: BLE001 — 缓存不可用不影响断言
+        pass
+    yield
+    try:
+        from src.web.cache.biz_cache import biz_cache
+
+        biz_cache.clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @pytest.fixture
 def sample() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -373,6 +394,49 @@ def _client():
     app = FastAPI()
     app.include_router(api.router, prefix="/api/formula-signals")
     return TestClient(app)
+
+
+def test_endpoint_summary_sorted_with_baseline():
+    """有数据时: 按命中数降序、带基线; 同时覆盖缓存写入路径(原先没测到)。"""
+    from src.web.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.execute(text("DELETE FROM tq_formula_signal_daily"))
+        for day, n_macd, n_kdj in (("20260924", 38, 10), ("20260923", 12, 30), ("20260922", 20, 20)):
+            for code, name, n in (("MACD买入", "MACD买入信号", n_macd), ("KDJ买入", "KDJ买入信号", n_kdj)):
+                db.execute(
+                    text(
+                        "INSERT INTO tq_formula_signal_daily "
+                        "(trade_date, formula_code, formula_name, formula_arg, hit_count, "
+                        " scanned_count, chunks_failed, complete, truncated, hits_json) "
+                        "VALUES (:d, :c, :n2, '', :n, 5570, 0, 1, 0, '[]')"
+                    ),
+                    {"d": day, "c": code, "n2": name, "n": n},
+                )
+        db.commit()
+    finally:
+        db.close()
+
+    body = _client().get("/api/formula-signals?days=20").json()
+    assert body["trade_date"] == "20260924" and body["count"] == 2
+    # 最新日只有 MACD 有值(38) → 排序以最新日命中数为准
+    macd = next(i for i in body["items"] if i["formula_code"] == "MACD买入")
+    kdj = next(i for i in body["items"] if i["formula_code"] == "KDJ买入")
+    assert macd["hit_count"] == 38 and kdj["hit_count"] == 10
+    assert body["items"][0]["formula_code"] == "MACD买入", "应按命中数降序"
+    # 基线来自另外两天(12/20 → 均值 16)
+    assert macd["baseline_avg"] == 16.0 and macd["samples"] == 2
+    assert macd["complete"] is True
+    # 二次请求命中缓存, 结果一致
+    assert _client().get("/api/formula-signals?days=20").json()["count"] == 2
+
+    db = SessionLocal()
+    try:
+        db.execute(text("DELETE FROM tq_formula_signal_daily"))
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_endpoint_degrades_honestly_when_empty():
