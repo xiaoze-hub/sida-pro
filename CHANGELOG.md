@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-24 (docs: 新增对外技能 sida-market-data 源码入仓)
+
+将对外发布用技能 `sida-market-data`（SIDA 市场数据接口，v1.2.0）纳入仓库 `skills/` 统一管理，
+与既有的出向技能 `sida-pro-data` 并列。定位为**数据查询**（分类「数据分析」），非交易/投资建议。
+
+- 结构：`SKILL.md` + `references/`（4 份：接口说明 / skill 参考 / 数据口径指南 / 排障手册）
+  + `scripts/`（`sida_client.py` 标准库客户端 + `sida.sh` 包装脚本）
+- 站点源头内置：开源仓库、官网（国内 + 海外）
+- 图标采用站点自有 logo（`frontend/public/icon-512.png`）
+- 已脱敏：无内部运维信息、无鉴权旁路描述、无服务端缺陷细节
+
 ## 2026-09-24 (fix: 降级响应被缓存 24h, 把 TQ 龙虎榜新能力对用户遮住 → v0.13.9)
 
 **这是 v0.13.8 上线验证时挖出来的**: 验证脚本 D 段显示空(`lhb_pending=True, 行数=0`)。
