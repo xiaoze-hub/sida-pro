@@ -21,6 +21,12 @@
 4. **TQ `get_divid_factors` 的日期被丢**: 该响应是 `Date`/`Type`/`Value` 三个**平行
    数组**, 原 `_rpc` 只取 `Value`。新增 `_rpc(full=True)` + `divid_factors_rows()`
    保留除权日(`divid_factors()` 原样不动, `tdx_calendar` 复权因子路径不受影响)。
+5. **东财分红 `page_size=20` 截断历史**: 实测 600519 真实 28 笔只回 20 笔 → 取 100。
+
+同一处后缀问题还**顺带修好了 `margin`(两融)**: 该能力在生产同样是空的, 东财
+margin vendor 的 filter 也是 `SCODE="{sym.code}"` → 带后缀恒 0 条, 裸码 1 条。
+(排查中我一度以为 margin 是"另一种报表问题" —— 那是我自己探针的 sort 列写错
+`TRADE_DATE`(报表里是 `DATE`)导致 0 条, 属误判, 特此记录以免后人重踩。)
 
 **新增 TQ 备源**(`shareholders`/`dividend`)。优先级: 东财(0) → TQ(2) → 智兔(5, 付费
 且 429, 由 0 降级)。智兔股东 seed 里"东财接口不稳定,智兔优先"的备注已订正 ——
@@ -38,12 +44,13 @@
 字段、派息只到 2 位小数(东财 4 位: 茅台 280.24 vs 280.2423)。因此 TQ 定位是备源,
 主源东财保留更细口径。
 
-测试: 新增 `tests/test_tq_shareholders_dividend.py` 36 例(全离线 monkeypatch), 覆盖
+测试: 新增 `tests/test_tq_shareholders_dividend.py` 37 例(全离线 monkeypatch), 覆盖
 后缀归一化 / 不误剥美股 / 日期格式跨源一致 / 环比现算 / 坏行跳过 / 网关异常降级 /
-每10股除10 / 送转字段名。
+每10股除10 / 送转字段名 / page_size 不被截断。
 
-**本次未修的相邻问题**(不在本批范围, 单独排查): `margin`(两融)同样在生产为空, 但
-`SCODE` 两种写法都 0 条 → 属报表/字段名问题, 与本次不同类。
+**顺带修好**: `margin`(两融)在生产同样是空的 —— 同一处后缀问题(东财 margin
+vendor 的 `SCODE="{sym.code}"`)。本次未动的相邻项: `board_capital_flow`/
+`market_capital_flow`(同花顺单点)、涨跌停快照/TQ 选股等审计里列出的未接项。
 
 ## 2026-09-24 (docs: 修复 README 中英版语言混排)
 

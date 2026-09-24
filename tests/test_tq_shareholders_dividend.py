@@ -282,6 +282,18 @@ class TestEastmoneyFixes:
         assert r.transfer_ratio == 8.0
         assert r.bonus_ratio == 2.0
 
+    def test_分红page_size不被截断(self, monkeypatch):
+        """回归: page_size=20 会把长期分红股截断 —— 实测 600519 真实 28 笔只回 20 笔。"""
+        seen: list[int] = []
+
+        def _cap(report, filter_str, sort_col, *, page_size=1):
+            seen.append(page_size)
+            return []
+
+        monkeypatch.setattr("marketdata.vendors.market_flow._datacenter_get", _cap)
+        EastmoneyDividendVendor().fetch([_cn()], {})
+        assert seen and seen[0] >= 100
+
     def test_派息为0或空时留None(self, monkeypatch):
         def _cap(report, filter_str, sort_col, *, page_size=1):
             return [{"EX_DIVIDEND_DATE": "2025-07-21 00:00:00", "PRETAX_BONUS_RMB": None}]

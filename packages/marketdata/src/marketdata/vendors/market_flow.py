@@ -270,7 +270,9 @@ class EastmoneyDividendVendor(DividendVendor):
         for sym in symbols:
             try:
                 filter_str = f'(SECURITY_CODE="{sym.code}")'
-                rows = _datacenter_get(_REPORT_DIVIDEND, filter_str, "EX_DIVIDEND_DATE", page_size=20)
+                # page_size=20 会把长期分红的高价股截断(实测 600519 真实 28 笔只回 20 笔);
+                # 东财对该报表支持到百级, 取 100 覆盖任何单只的历史笔数。
+                rows = _datacenter_get(_REPORT_DIVIDEND, filter_str, "EX_DIVIDEND_DATE", page_size=100)
                 for row in rows:
                     try:
                         # ⚠️ PRETAX_BONUS_RMB 是**每10股**派息, 不是每股。
