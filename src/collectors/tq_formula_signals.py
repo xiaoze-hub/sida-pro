@@ -72,6 +72,12 @@ def fetch_formula_signals(trade_date: str = "") -> list[dict]:
         except Exception as e:  # noqa: BLE001 — 单公式失败不影响其余
             logger.warning("条件选股信号采集: %s 扫描失败(%s)", code, e)
             continue
+        if scan.get("date_has_data") is False:
+            # 该日**根本没有数据行** = 非交易日(或窗口未覆盖) → 跳过。
+            # 落了 0 会把基线拉低(用假期稀释真实基线), 而"0 家"这种真实情况
+            # 是有数据行且值全 0 —— 两者必须分开(见 tq._date_rows_seen)。
+            logger.info("条件选股信号: %s 在 %s 无数据行(非交易日?), 跳过不落 0", code, day)
+            continue
         hits = scan.get("hits") or []
         kept = hits[:HITS_STORE_LIMIT]
         rows.append({
@@ -122,7 +128,8 @@ def sync_formula_signals(db, *, trade_date: str = "") -> dict:
     try:
         rows = fetch_formula_signals(trade_date)
         if not rows:
-            return {"error": "TQ 条件选股无返回(客户端未开 / PANWATCH_ENABLE_TQ!=1 / 公式不可用)"}
+            return {"error": "无任何公式返回数据(非交易日 / TQ 客户端未开 / "
+                             "PANWATCH_ENABLE_TQ!=1 / 公式名不可用)"}
         written = _upsert_rows(db, rows)
         incomplete = [r["formula_code"] for r in rows if not r["complete"]]
         total_hits = {r["formula_code"]: r["hit_count"] for r in rows}

@@ -82,6 +82,26 @@ def test_parse_unknown_date_gives_no_hits(sample):
     """窗口里没有的日期 → 0 命中, **不得**拿最后一天的数据冒充。"""
     hits, used = tqv._formula_hits(sample["response"], "20200101")
     assert hits == [] and used == "20200101"
+    # 而且必须能区分: 该日期**一行数据都没有**(=非交易日), 不是"有行但值全 0"
+    assert tqv._date_rows_seen(sample["response"], "20200101") == 0
+    assert tqv._date_rows_seen(sample["response"], "20260924") > 0
+
+
+def test_scan_flags_no_data_day(monkeypatch):
+    """回归锁: 非交易日 → date_has_data=False(落库方据此跳过, 不写 0 拉低基线)。"""
+    def _fake_rpc(method, params, timeout=None, full=False):
+        # 只有 20260924 的行(请求的是 20260925=非交易日)
+        return {"600000.SH": {"OUTPUT1": [{"Date": "20260924", "Value": "1"}]}, "ErrorId": "0"}
+
+    monkeypatch.setattr(tqv, "_rpc", _fake_rpc)
+    out = tqv.formula_scan("MACD买入", date="20260925", codes=["600000.SH"])
+    assert out["hit_count"] == 0
+    assert out["date_rows"] == 0
+    assert out["date_has_data"] is False, "该日无数据行 ⇒ 必须标记出来"
+
+    # 有数据行的日期 → True
+    out2 = tqv.formula_scan("MACD买入", date="20260924", codes=["600000.SH"])
+    assert out2["date_has_data"] is True and out2["hit_count"] == 1
 
 
 def test_parse_without_date_uses_last_row(sample):
@@ -201,7 +221,8 @@ def test_scan_empty_pool_is_not_a_zero(monkeypatch):
 def _scan(**kw) -> dict:
     base = {"formula": "x", "date": "20260924", "scanned": 5570, "hit_count": 38,
             "hits": [{"symbol": "600000.SH", "signal": "OUTPUT1", "date": "20260924", "value": "1"}],
-            "chunks_failed": 0, "complete": True, "per_signal": {"OUTPUT1": 38}}
+            "chunks_failed": 0, "complete": True, "per_signal": {"OUTPUT1": 38},
+            "date_rows": 5570, "date_has_data": True}
     base.update(kw)
     return base
 
@@ -233,6 +254,27 @@ def test_fetch_survives_single_formula_failure(monkeypatch):
     rows = tfs.fetch_formula_signals("20260924")
     assert len(rows) == len(tfs.FORMULA_SET) - 1
     assert tfs.FORMULA_SET[0][0] not in {r["formula_code"] for r in rows}
+
+
+def test_fetch_skips_no_data_day_instead_of_writing_zero(monkeypatch):
+    """非交易日: 不落 0(0 会把基线拉低) → fetch 返回空, sync 显式报错。"""
+    from src.web.database import SessionLocal
+
+    monkeypatch.setattr(tfs, "formula_scan",
+                        lambda *a, **k: _scan(hit_count=0, hits=[], date_rows=0, date_has_data=False))
+    assert tfs.fetch_formula_signals("20260925") == []
+
+    db = SessionLocal()
+    try:
+        out = tfs.sync_formula_signals(db, trade_date="20260925")
+        assert "error" in out
+        n = db.execute(text(
+            "SELECT COUNT(*) FROM tq_formula_signal_daily WHERE trade_date='20260925'")).scalar()
+        assert n == 0, "非交易日绝不能写 0 行"
+    finally:
+        db.execute(text("DELETE FROM tq_formula_signal_daily"))
+        db.commit()
+        db.close()
 
 
 def test_fetch_truncates_hits_but_flags_it(monkeypatch):

@@ -1038,6 +1038,26 @@ def formula_xg_mul(formula_name: str, stock_list_: list[str], *,
     return out
 
 
+def _date_rows_seen(res: dict, date: str) -> int:
+    """该日期在响应里出现的**数据行数**(不看值)。
+
+    用途: 区分"非交易日/无数据"(0 行) 与"当日无票触发"(有行但值全 0)。
+    两者都算不出命中, 但**落库含义完全不同** —— 前者写 0 会把基线拉低(等于用假期
+    稀释掉真实基线), 后者才是真的 0 家。
+    """
+    if not date:
+        return -1
+    n = 0
+    for code, block in (res or {}).items():
+        if code in _FORMULA_META_KEYS or not isinstance(block, dict):
+            continue
+        for series in block.values():
+            if isinstance(series, list):
+                n += sum(1 for r in series
+                         if isinstance(r, dict) and str(r.get("Date")) == str(date))
+    return n
+
+
 def _formula_hits(res: dict, date: str = "") -> tuple[list[dict], str]:
     """逐日信号序列 → 命中清单。返回 (hits, 实际使用的日期)。"""
     hits: list[dict] = []
@@ -1107,6 +1127,7 @@ def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
     failed = 0
     scanned = 0
     resolved = date
+    date_rows = 0
     for i in range(0, len(pool), step):
         part = pool[i: i + step]
         try:
@@ -1117,6 +1138,7 @@ def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
             logger.warning("TQ 条件选股 %s: 第 %d 片失败(%s)", formula_name, i // step + 1, e)
             continue
         scanned += len(part)
+        date_rows += max(0, _date_rows_seen(res, date))
         part_hits, resolved = _formula_hits(res, date)
         hits.extend(part_hits)
     per_signal: dict[str, int] = {}
@@ -1133,6 +1155,10 @@ def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
         "per_signal": per_signal,
         "chunks_failed": failed,
         "complete": failed == 0,
+        # ⚠️ 区分两种 0: date_rows==0 = 该日**没有数据**(非交易日/窗口没覆盖),
+        # 此时 hit_count=0 **不是**"今日无票触发" —— 落库方必须跳过, 否则假期 0 会稀释基线。
+        "date_rows": date_rows,
+        "date_has_data": date_rows > 0 if date else None,
     }
 
 
