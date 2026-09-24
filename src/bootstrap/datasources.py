@@ -334,6 +334,19 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "test_symbols": ["600519", "000001"],
         },
         {
+            "name": "通达信TQ股东户数",
+            "type": "shareholders",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(GP01 股东人数, 季频)。**备源**: 东财取不到时接管。"
+                "实测与东财 HOLDER_NUM 逐笔一致(002361 264938 户), 但 GP01 无户均持股 → avg_shares 为空。",
+            },
+            "enabled": True,
+            "priority": 2,
+            "supports_batch": False,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
             "name": "东财分红",
             "type": "dividend",
             "provider": "eastmoney",
@@ -341,6 +354,19 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "enabled": True,
             "priority": 0,
             "supports_batch": True,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
+            "name": "通达信TQ分红",
+            "type": "dividend",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(get_divid_factors 除权除息历史)。**备源**: 东财取不到时接管。"
+                "13笔与东财同日对齐; 口径差=送股转增合并(不分送/转)、无方案进度字段。",
+            },
+            "enabled": True,
+            "priority": 2,
+            "supports_batch": False,
             "test_symbols": ["600519", "000001"],
         },
         {
@@ -371,7 +397,6 @@ DATA_SOURCE_SEEDS: list[dict] = [
         },
         {
             "name": "智兔股东",
-
             "type": "shareholders",
             "provider": "zhitu",
             "config": {
@@ -379,7 +404,10 @@ DATA_SOURCE_SEEDS: list[dict] = [
                 "description": "智兔数服十大股东/股东变化(双 key 池化)。东财股东接口不稳定,智兔优先。",
             },
             "enabled": True,
-            "priority": 0,   # 高于东财 → 股东优先源
+            # 2026-09-24 降级 0→5: 智兔股东户数接口实测反复 429(配额), 且这是**付费**源;
+            # 东财那侧"不稳定"的真因已查明是 filter 用了带后缀的 code(恒 0 条), 已修。
+            # 现序: 东财(0) → TQ(2) → 智兔(5, 兜底)。
+            "priority": 5,
             "supports_batch": False,
             "test_symbols": ["600519", "000001"],
         },
