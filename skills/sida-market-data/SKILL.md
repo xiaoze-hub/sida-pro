@@ -45,7 +45,15 @@ allowed-tools: Bash, Read, Write
 
 ## 一、拿到 AppKey
 
-所有业务接口都要 `X-API-Key: sk_...`。
+所有业务接口都要 `X-API-Key: sk_...`。**先领 key，再调用**（无 key 匿名调用一律 403）。
+
+最简单：游客自动领一把 free 档 key（无需任何信息，100 次/天）：
+
+```bash
+curl -X POST https://www.sida.hengsheng-elec.com/api/guest-key
+```
+
+也可以带标识领 key（`trial: true` 领 10 天试用档 500 次/天；不传则 free 档）：
 
 ```bash
 curl -X POST https://www.sida.hengsheng-elec.com/api/keys \
@@ -169,10 +177,12 @@ print(json.loads(urllib.request.urlopen(req, timeout=30).read())["data"]["result
 
 | 档位 | 日限 | 突发上限 | 匀速（次/分） | 说明 |
 |---|---|---|---|---|
-| 游客（无 key） | 10 | — | — | 按来源 IP 计量，**仅可调用 free 档 skill** |
-| free | 100 | 30 | 15 | 注册即可领取 |
+| free | 100 | 30 | 15 | 领 key 即可（`/api/guest-key` 自动发放，或 `/api/keys`） |
 | trial | 500 | 50 | 20 | 10 天有效期，到期自动降为 free |
 | pro | 5000 | 100 | 60 | 需申请，人工审核 |
+
+> **没有「无 key 匿名调用」通道**：必须先领 key 再调用。游客 = 通过 `/api/guest-key`
+> 自动领 free 档 key 的用户。
 
 限流是**三重**的：日配额 + 突发上限 + 匀速（恒定速率补充）。
 返回 `429` 时读 `Retry-After` 头，按指数退避重试。

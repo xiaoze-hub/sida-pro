@@ -38,7 +38,9 @@ X-API-Key: sk_xxxxxxxxxxxxxxxx
 | 调用者 | 凭据 | 额度 | 可调 skill |
 |---|---|---|---|
 | API Key | `X-API-Key` | 按档位（见下） | 按档位 |
-| 游客 | 无 | 按来源 IP，10 次 / 24h | 仅 free 档 |
+
+> **没有「无 key 匿名调用」通道**：业务接口必须先领 key。游客 = 通过 `/api/guest-key`
+> 自动领 free 档 key 的用户（100 次/天）。
 
 凭据纪律：`SIDA_KEY` 只放环境变量或权限 600 的配置文件，**不要写进代码、不要提交进仓库、
 不要输出到日志或对话**。
@@ -46,6 +48,14 @@ X-API-Key: sk_xxxxxxxxxxxxxxxx
 ---
 
 ## 三、领取 AppKey
+
+**最简单**：游客自动领 free 档 key（无需任何信息，100 次/天）：
+
+```bash
+curl -X POST https://www.sida.hengsheng-elec.com/api/guest-key
+```
+
+也可以带标识领 key（`trial: true` 领 10 天试用档 500 次/天；不传则 free 档）：
 
 ```bash
 curl -X POST https://www.sida.hengsheng-elec.com/api/keys \
@@ -144,7 +154,6 @@ done
 
 | 档位 | 日限 | 突发上限 | 匀速（次/分） |
 |---|---|---|---|
-| 游客 | 10（按 IP） | — | — |
 | free | 100 | 30 | 15 |
 | trial | 500 | 50 | 20 |
 | pro | 5000 | 100 | 60 |

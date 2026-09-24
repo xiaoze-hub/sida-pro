@@ -2,6 +2,7 @@
 """SIDA Skill Gateway 客户端（仅用 Python 标准库，无需 pip 安装）。
 
 用法:
+  python sida_client.py guest                            # 游客自动领 free 档 key（100次/天）
   python sida_client.py register "你的手机或微信标识"   # 领 AppKey（trial 档）
   python sida_client.py skills                          # 列可用 skill 与档位
   python sida_client.py run get_stock_quote '{"symbol":"600519","market":"CN"}'
@@ -82,6 +83,14 @@ def main() -> None:
     if cmd == "register":
         label = sys.argv[2] if len(sys.argv) > 2 else ""
         data = _req("POST", "/api/keys", {"owner_label": label, "trial": True}, need_key=False)
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        if isinstance(data, dict) and data.get("api_key"):
+            print("\n请立即保存（明文只返回一次）。设置方式:")
+            print(f"  export SIDA_KEY={data['api_key']}")
+
+    elif cmd == "guest":
+        # 游客自动领 free 档 key（无需任何信息，100 次/天）
+        data = _req("POST", "/api/guest-key", need_key=False)
         print(json.dumps(data, ensure_ascii=False, indent=2))
         if isinstance(data, dict) and data.get("api_key"):
             print("\n请立即保存（明文只返回一次）。设置方式:")
