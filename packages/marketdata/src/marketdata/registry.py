@@ -55,7 +55,13 @@ from marketdata.vendors.news import (
 from marketdata.vendors.northbound import HexinNorthboundVendor
 from marketdata.vendors.sina import SinaQuoteVendor
 from marketdata.vendors.tencent import TencentQuoteVendor
-from marketdata.vendors.tq import TqKlineVendor, TqMoreInfoVendor, TqQuoteVendor
+from marketdata.vendors.tq import (
+    TqDividendVendor,
+    TqKlineVendor,
+    TqMoreInfoVendor,
+    TqQuoteVendor,
+    TqShareholdersVendor,
+)
 from marketdata.vendors.yfinance import YFinanceQuoteVendor
 from marketdata.vendors.alphavantage import AlphaVantageQuoteVendor
 from marketdata.vendors.twelvedata import TwelveDataQuoteVendor
@@ -124,10 +130,12 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
     "shareholders": {
         "zhitu": ZhituShareholdersVendor,
         "eastmoney": EastmoneyShareholdersVendor,
+        "tq": TqShareholdersVendor,
     },
     "dividend": {
         "eastmoney": EastmoneyDividendVendor,
         "zhitu": ZhituDividendVendor,
+        "tq": TqDividendVendor,
     },
     "northbound": {
         "ths": HexinNorthboundVendor,

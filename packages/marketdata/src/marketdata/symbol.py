@@ -39,6 +39,29 @@ def _cn_exchange(code: str) -> str:
     return "sz"
 
 
+_EX_SUFFIX_MARKET = {
+    "SH": Market.CN,
+    "SZ": Market.CN,
+    "BJ": Market.CN,
+    "HK": Market.HK,
+}
+# 只认上面这几个已知后缀: 不能贪心剥 "."(伯克希尔 BRK.B 的后缀是股票类别非交易所)。
+
+
+def _split_suffix(raw: str) -> tuple[str, Market | None]:
+    """"002361.SZ" → ("002361", CN); 无已知后缀则 (原样, None)。
+
+    前端/URL 常带交易所后缀, 而各 vendor 的代码字段(腾讯前缀、东财
+    SECURITY_CODE、TQ to_tq_code 的 len==6 门禁)一律要**裸码** —— 不归一化
+    会让 filter 恒失配(实测: SECURITY_CODE="002361.SZ" 恒 0 条 vs 裸码 3 条)。
+    """
+    s = (raw or "").strip().upper()
+    head, _, suf = s.rpartition(".")
+    if head and suf in _EX_SUFFIX_MARKET:
+        return head, _EX_SUFFIX_MARKET[suf]
+    return s, None
+
+
 @dataclass(frozen=True)
 class Symbol:
     market: Market
@@ -46,10 +69,10 @@ class Symbol:
 
     @classmethod
     def parse(cls, raw: str, market: str | None = None) -> "Symbol":
-        code = raw.strip()
+        code, suffix_market = _split_suffix(raw)
         if market:
             return cls(Market(market), code)
-        return cls(_detect_market(code), code)
+        return cls(suffix_market or _detect_market(code), code)
 
     def to_tencent(self) -> str:
         if self.market == Market.HK:
