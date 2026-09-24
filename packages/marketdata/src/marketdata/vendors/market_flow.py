@@ -273,12 +273,22 @@ class EastmoneyDividendVendor(DividendVendor):
                 rows = _datacenter_get(_REPORT_DIVIDEND, filter_str, "EX_DIVIDEND_DATE", page_size=20)
                 for row in rows:
                     try:
+                        # ⚠️ PRETAX_BONUS_RMB 是**每10股**派息, 不是每股。
+                        # 实测标定(002361): 该字段 0.5 对应方案原文"10派0.50元";
+                        # 而 DividendItem.dividend_per_share 契约是"每股派息,元"
+                        # (前端 DataSources.tsx 直接显示 "元/股"), 所以必须 /10。
+                        # 同尺度参照: 智兔 vendor 一直用 send/10; TQ bonus 与东财
+                        # 同尺度(见 tq.py divid_factors_rows 标定)。
+                        pretax_per10 = _to_float(row.get("PRETAX_BONUS_RMB"))
                         out.append(
                             DividendItem(
                                 ex_date=str(row.get("EX_DIVIDEND_DATE") or "")[:10],
                                 symbol=sym.code,
-                                dividend_per_share=_to_float(row.get("PRETAX_BONUS_RMB")),
-                                transfer_ratio=_to_float(row.get("TRANSFER_RATIO")),
+                                dividend_per_share=round(pretax_per10 / 10, 4) if pretax_per10 else None,
+                                # ⚠️ 字段名是 IT_RATIO(转增) —— 本报表里**没有** TRANSFER_RATIO,
+                                # 原来取的就是这个不存在的键 → transfer_ratio 恒为 None。
+                                # 实测: 2013-04-16 BONUS_RATIO=2 / IT_RATIO=8 ↔ 方案"10送2.00转8.00"。
+                                transfer_ratio=_to_float(row.get("IT_RATIO")),
                                 bonus_ratio=_to_float(row.get("BONUS_RATIO")),
                                 progress=str(row.get("ASSIGN_PROGRESS") or ""),
                             )

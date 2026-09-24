@@ -19,8 +19,14 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from marketdata.symbol import Market, Symbol
-from marketdata.types import Bar, MoreInfo, Quote
-from marketdata.vendors.base import KlineVendor, MoreInfoVendor, QuoteVendor
+from marketdata.types import Bar, DividendItem, MoreInfo, Quote, ShareholderItem
+from marketdata.vendors.base import (
+    DividendVendor,
+    KlineVendor,
+    MoreInfoVendor,
+    QuoteVendor,
+    ShareholdersVendor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,21 @@ _TIMEOUT_S = 4.0  # 正常 <100ms; 隧道断开时快速失败交给降级链
 
 def _norm_day(s: object) -> str:
     return str(s).replace("-", "")[:8]
+
+
+def _fmt_day(s: object) -> str:
+    """TQ 日期 → 东财风格 'YYYY-MM-DD'(跨源同格式, 否则 API 里 ex_date 排序会混)。
+
+    TQ 回 '20260630'; 东财路径产出 '2026-06-30'。两源混排时纯数字串会**全部
+    排在带横线串之后**, 前端展示顺序就乱了。
+    """
+    raw = str(s or "").strip()
+    t = raw[:10].replace("/", "-")
+    if "-" in t:
+        return t
+    if len(t) >= 8 and t[:8].isdigit():
+        return f"{t[:4]}-{t[4:6]}-{t[6:8]}"
+    return raw
 
 
 def tq_bars_fresh(dates: list | None) -> bool:
@@ -143,8 +164,13 @@ def _resolve_tq_url() -> str:
     return _TQ_URL_CACHE
 
 
-def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
-    """发 JSON-RPC; 返回 result.Value 或抛异常(Engine 捕获后转下一源)。"""
+def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool = False):
+    """发 JSON-RPC; 返回 result.Value 或抛异常(Engine 捕获后转下一源)。
+
+    full=True → 返回整个 result。给 get_divid_factors 这类**多数组并列**的响应
+    用: 它的 Date/Type/Value 是三个平行数组靠下标对齐, 只取 Value 会把除权日期
+    整段丢掉(实测网关**有**回 Date, 是这里被丢的)。
+    """
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(_resolve_tq_url(), content=body,
@@ -158,7 +184,7 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
     err = str(result.get("ErrorId", "0"))
     if err not in ("0", "") and "Value" in result or (err not in ("0", "") and "Value" not in result):
         raise RuntimeError(f"TQ {method} ErrorId={err}: {result.get('Error', '')}")
-    return result.get("Value", result)
+    return result if full else result.get("Value", result)
 
 
 def tq_rpc(method: str, params: dict, timeout: float = _TIMEOUT_S):
@@ -397,6 +423,130 @@ class TqKlineVendor(KlineVendor):
             # 陈旧快照(见模块头注释): 当失败处理, Engine 自动降级下一源
             logger.warning("[tq] K线陈旧(最新 %s), 触发降级", out[-1].date)
             return []
+        return out
+
+
+# ---------------------------------------------------------------------------
+# 股东户数 / 分红 (2026-09-24)
+#
+# 起因: 这两个能力在生产**恒为空** —— 智兔 429, 而东财侧 filter 拿的是带交易所
+# 后缀的 code(SECURITY_CODE="002361.SZ" 恒 0 条; 裸码 3 条), 后缀源于
+# Symbol.parse 不归一化(已修)。TQ 侧数据实测可用且与东财逐笔对齐 → 接为备源。
+# 定位: 东财(主源, 字段更全: 送/转可分开 + 方案进度) → TQ(备源) → 智兔(付费)。
+# ---------------------------------------------------------------------------
+
+_GP01_WINDOW_DAYS = 500  # 覆盖 ≥4 个报告期, 供"较上期"户数环比计算
+
+
+def _gp01_series(tqc: str) -> list[tuple[str, int]]:
+    """GP01(股东人数) 序列 → [(报告期, 户数)] 按日期升序。"""
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    data = gp_series(
+        ["GP01"],
+        tqc,
+        start_time=(now - timedelta(days=_GP01_WINDOW_DAYS)).strftime("%Y%m%d"),
+        end_time=now.strftime("%Y%m%d"),
+    )
+    rows: list[tuple[str, int]] = []
+    for rec in (data or {}).get("GP01") or []:
+        if not isinstance(rec, dict):
+            continue
+        vals = rec.get("Value")
+        if not isinstance(vals, (list, tuple)) or not vals:
+            continue
+        num = _to_int(vals[0])
+        day = _fmt_day(rec.get("Date"))
+        if num is None or not day:
+            continue
+        rows.append((day, num))
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+class TqShareholdersVendor(ShareholdersVendor):
+    """股东户数: GP01(股东人数, 季频)取最新一期, 环比由前一期现算。
+
+    实测标定: 002361.SZ 2026-06-30 GP01 = 264938 户, 与东财
+    RPT_HOLDERNUMLATEST 的 HOLDER_NUM **完全一致**(独立源交叉验证)。
+    ⚠️ GP01 只给户数, 没有户均持股 → avg_shares 留 None(不拿流通股本现推,
+    避免与东财 AVG_FREE_SHARES 口径混)。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[ShareholderItem]:
+        out: list[ShareholderItem] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                rows = _gp01_series(tqc)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ GP01 %s failed: %s", tqc, e)
+                continue
+            if not rows:
+                continue
+            cur_date, cur_num = rows[-1]
+            change_num: int | None = None
+            change_ratio: float | None = None
+            if len(rows) >= 2:
+                prev_num = rows[-2][1]
+                if prev_num:
+                    change_num = cur_num - prev_num
+                    change_ratio = round(change_num / prev_num * 100, 2)
+            out.append(
+                ShareholderItem(
+                    report_date=cur_date,
+                    symbol=sym.code,
+                    holder_num=cur_num,
+                    change_num=change_num,
+                    change_ratio=change_ratio,
+                )
+            )
+        return out
+
+
+class TqDividendVendor(DividendVendor):
+    """分红: get_divid_factors 带除权除息日的历史(与东财同契约)。
+
+    实测标定: 002361.SZ 13 笔与东财 RPT_SHAREBONUS_DET 13 笔**同日对齐**。
+    ⚠️ 与东财的两处口径差(证据见 divid_factors_rows):
+      · TQ bonus 是每10股口径 → dividend_per_share = bonus/10
+      · TQ share_bonus 是**送股+转增合计**, 不分送/转 → 记入 bonus_ratio,
+        transfer_ratio 留 None(前端文案是"每10股转增X 每10股送股Y", 分开显示,
+        所以送转合并只在备源生效, 主源东财不受影响)。
+    progress 留空: TQ 只给已除权历史, 无方案进度字段, 不臆造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[DividendItem]:
+        out: list[DividendItem] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                rows = divid_factors_rows(tqc)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ get_divid_factors %s failed: %s", tqc, e)
+                continue
+            for r in rows:
+                bonus = r.get("bonus")
+                share_bonus = r.get("share_bonus")
+                out.append(
+                    DividendItem(
+                        ex_date=r.get("date") or "",
+                        symbol=sym.code,
+                        dividend_per_share=round(bonus / 10, 4) if bonus else None,
+                        transfer_ratio=None,
+                        bonus_ratio=share_bonus if share_bonus else None,
+                        progress="",
+                    )
+                )
         return out
 
 
@@ -668,6 +818,51 @@ def divid_factors(code: str, *, start_time: str = "", end_time: str = "") -> lis
         params["end_time"] = end_time
     v = _rpc("get_divid_factors", params)
     return v if isinstance(v, list) else (v.get("Value") or [] if isinstance(v, dict) else [])
+
+
+def divid_factors_rows(code: str) -> list[dict]:
+    """除权除息**带日期**的结构化行(供分红历史用)。
+
+    返回 [{date, bonus, allot_price, share_bonus, allotment}], 按原序。
+
+    为什么另起一个函数: get_divid_factors 的响应是 Date/Type/Value 三个**平行
+    数组**(下标对齐), 原 divid_factors() 只取 Value。那对 tdx_calendar 算复权
+    因子够用, 但分红历史缺 ex_date —— 实测网关其实**有回 Date**, 是被丢掉的。
+
+    列语义取客户端 SDK(tqcenter.py)的 DataFrame 列名, 非猜:
+        Bonus=派息 / AllotPrice=配股价 / ShareBonus=送股 / Allotment=配股
+
+    ⚠️ 单位标定(2026-09-24, 002361.SZ, 与东财 RPT_SHAREBONUS_DET 逐笔对齐):
+      · Bonus 是**每10股**派息 —— TQ 1.50 ↔ 东财 PRETAX_BONUS_RMB 1.5,
+        方案原文"10转10.00派1.50元"。→ 落地成"每股派息"时必须 /10。
+      · ShareBonus 是**送股+转增合计** —— 两笔验证: 送0转10 → 10.00;
+        送2转8 → 10.00。TQ 不区分送/转, 只能记合计。
+      · Bonus **只有 2 位小数**(通达信侧精度), 东财到 4 位 —— 600519 2026-06-26
+        TQ 280.24 vs 东财 280.2423。对拍容差要按 0.01 元/10股 取, 不是 1e-6。
+    """
+    v = _rpc("get_divid_factors", {"stock_code": code}, full=True)
+    if not isinstance(v, dict):
+        return []
+    dates, vals = v.get("Date") or [], v.get("Value") or []
+    if not isinstance(dates, list) or not isinstance(vals, list):
+        return []
+    out: list[dict] = []
+    for i, d in enumerate(dates):
+        if i >= len(vals):
+            break
+        row = vals[i]
+        if not isinstance(row, (list, tuple)) or len(row) < 4:
+            continue
+        out.append(
+            {
+                "date": _fmt_day(d),
+                "bonus": _to_float(row[0]),
+                "allot_price": _to_float(row[1]),
+                "share_bonus": _to_float(row[2]),
+                "allotment": _to_float(row[3]),
+            }
+        )
+    return out
 
 
 def pricevol(codes: list[str]) -> dict:
