@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-24 (feat: 新增聚合体检报告 get_stock_report)
+
+老大对比旧版 watchlist 报告(`2026-09-24-post.html`)后要求 skill 也能输出「整份体检报告」。
+
+- 新增聚合 skill `get_stock_report`(free 档): 并发拉取行情 + 逐笔主力 + 技术面 + 资金四档,
+  handler 返回 `{get_stock_quote, get_main_intent, get_technical_analysis, get_capital_flow}`
+  四字段 JSON 字符串, 任一子项失败不阻断整体。
+- 新增专用模板 `_render_report_html`: 观感对齐旧版报告(浅色白卡/涨红跌绿),
+  顶部价格区 + 主力意图/技术面/资金流向三 section + `<details>` 原始返回折叠 + 口径 footer。
+- `run_skill` 对 `get_stock_report` 走报告渲染器(其余 skill 不变, 单 skill 富模板照旧)。
+- 单 skill 独立富模板保留(两者都要), 报告是可选的聚合入口。
+- SKILL.md / sida-gateway-api.md 同步补 `get_stock_report` 说明与 free 档计数(15→16)。
+
 ## 2026-09-24 (feat: html 默认输出升级为逐字段富模板)
 
 承接上一轮「html/json 多格式」, 把默认 `html` 从「整段文本排版」升级为**逐字段解析的富模板**:

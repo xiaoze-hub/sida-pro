@@ -188,3 +188,15 @@ done
 - 拿到的 `caliber` 是什么口径 —— 决定这个数字能用来下什么结论；
 - 返回里有没有「降级」「暂缺」等标记 —— 有的话结论要如实说明；
 - 是否命中 `null`（上游瞬时故障）—— 应重试一次而不是当作 key 失效。
+
+### `get_stock_report` 聚合体检报告
+
+`get_stock_report` 一次并发拉取行情 + 逐笔主力 + 技术面 + 资金四档，返回一份自包含 HTML 体检报告
+（默认 `format=html`）。其 `result` 与其它 skill 不同：**是一个 JSON 字符串**，结构为
+
+```json
+{"get_stock_quote": "…", "get_main_intent": "…", "get_technical_analysis": "…", "get_capital_flow": "…"}
+```
+
+四个字段对应四个子 skill 的原始文本（含 `[数据源:…]` 前缀），可单独解析；HTML 模板已按
+「涨红跌绿」拆成指标卡片。任一子项失败时该字段为空字符串，不阻断整体。

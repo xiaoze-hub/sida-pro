@@ -1291,6 +1291,62 @@ async def _tool_get_factor_ic_report(db: Session, args: dict, user: User | None 
         return f"因子 IC 归因报告失败: {str(e)[:100]}"
 
 
+@register_chat_tool(
+    "get_stock_report",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_stock_report",
+            "description": "获取单只股票的「自选股体检报告」：并发聚合实时行情、主力意图(逐笔)、技术面、资金流向(四档)四类数据，输出结构化 JSON(供报告模板渲染)。回答「XX股票体检一下」「XX的综合分析报告」等需要一站式多维度概览的问题。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6位A股代码, 如 002436"},
+                    "market": {"type": "string", "description": "市场代码, 仅支持 CN", "default": "CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="行情+逐笔主力+技术面+资金四档 聚合体检",
+)
+async def _tool_get_stock_report(db: Session, args: dict, user: User | None = None) -> str:
+    """聚合 4 个 skill 成一份体检报告(供 get_stock_report 专用 HTML 模板消费)。
+
+    返回 JSON 字符串(而非人类可读文本), 结构:
+    {"quote": str, "main_intent": str, "technical": str, "capital_flow": str}
+    各字段为对应 skill 的原始文本(含 [数据源:...] 前缀), 由渲染层逐字段解析。
+    任一子项失败不阻断整体, 该字段置空字符串。
+    """
+    import json as _json
+
+    symbol = (args.get("symbol") or "").strip()
+    market = args.get("market", "CN")
+    if not symbol:
+        return '{"error": "请提供股票代码(symbol)。"}'
+    if market != "CN":
+        return '{"error": "体检报告仅支持 A 股(CN)。"}'
+
+    sub_args = {"symbol": symbol, "market": market}
+    fields = ("get_stock_quote", "get_main_intent", "get_technical_analysis", "get_capital_flow")
+    out: dict[str, str] = {}
+
+    async def _one(name: str) -> None:
+        tool = CHAT_TOOL_REGISTRY.get(name)
+        if tool is None:
+            out[name] = ""
+            return
+        try:
+            res = await tool.handler(db, dict(sub_args), None)
+            out[name] = res if isinstance(res, str) else str(res)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"get_stock_report 子项失败 [{name}] {symbol}: {e}")
+            out[name] = ""
+
+    await asyncio.gather(*(_one(n) for n in fields))
+    return _json.dumps(out, ensure_ascii=False)
+
+
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
 
 from src.agents.chat.tools_thsdk import (  # noqa: E402  (仅 stdlib 级依赖, 不构成循环)

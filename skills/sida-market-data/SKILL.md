@@ -152,7 +152,7 @@ curl -s -X POST .../api/skills/get_stock_quote/run -H "X-API-Key: $SIDA_KEY" \
 
 ## 三、开放 skill 清单
 
-**free 档（15 个）** —— 免费与试用档可用：
+**free 档（16 个）** —— 免费与试用档可用：
 
 | skill | 必填 | 说明 |
 |---|---|---|
@@ -171,6 +171,7 @@ curl -s -X POST .../api/skills/get_stock_quote/run -H "X-API-Key: $SIDA_KEY" \
 | `get_hot_stocks` | — | 热门股票（可带 `period` / `limit`） |
 | `get_opportunities` | — | 机会榜单 |
 | `get_strategy_signals` | — | 策略信号（可带 `limit`） |
+| `get_stock_report` | `symbol` | 自选股体检报告（聚合行情 + 逐笔主力 + 技术面 + 资金四档） |
 
 **pro 档（8 个）** —— 需申请；其中 6 个为耗时接口（`slow`），客户端超时请放宽到 60s：
 

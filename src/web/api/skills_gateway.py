@@ -132,6 +132,8 @@ OPEN_SKILLS: dict[str, dict[str, Any]] = {
     "get_event_catalyst": {"tier_min": "pro", "slow": True},
     "get_intent_explain": {"tier_min": "pro", "slow": True},
     "get_factor_ic_report": {"tier_min": "pro", "slow": True},
+    # 聚合体检报告: 并发拉行情+逐笔主力+技术面+资金四档, 输出旧版 watchlist 富报告模板
+    "get_stock_report": {"tier_min": "free", "slow": False},
 }
 
 # 明确禁止外放(个人数据 / SSRF / 账号依赖)
@@ -568,6 +570,249 @@ h1 {{ margin:0 0 6px; font-size:22px; letter-spacing:-.3px; }}
 
   <div class="risk">{esc(risk)}</div>
 
+  <div class="meta">耗时 <b>{duration_ms}</b> ms · SIDA Market Data API</div>
+</div>
+<script type="application/json" id="sida-data">{embedded_json}</script>
+</body>
+</html>"""
+
+
+# ── 聚合体检报告模板(2026-09-24): get_stock_report 专用 ──
+# 观感对齐旧版 watchlist/generate_report.py 的报告(浅色/白卡/涨红跌绿),
+# 顶部行情区 + 主力意图/技术面/资金流向三个 section + 原始返回折叠 + 口径 footer。
+
+_REPORT_CSS = """
+:root {
+  --bg:#f6f7f9; --card:#fff; --line:#e5e7eb; --soft:#f1f2f4;
+  --fg:#1a1d21; --fg2:#4b5563; --fg3:#9ca3af;
+  --up:#d93026; --down:#0a8f4c; --flat:#6b7280;
+  --warn-bg:#fff7ed; --warn-line:#fed7aa; --warn-fg:#9a3412;
+  --ok-bg:#eef2ff; --ok-fg:#3730a3;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",
+              "Microsoft YaHei","Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased; }
+.wrap { max-width:860px; margin:0 auto; padding:32px 20px 64px; }
+h1 { margin:0 0 8px; font-size:24px; letter-spacing:-.3px; }
+.sub { font-size:12.5px; color:var(--fg3); line-height:1.7; }
+.banner { background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn-fg);
+          border-radius:10px; padding:12px 16px; font-size:12.5px; line-height:1.8; margin-bottom:16px; }
+
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+        padding:20px 22px 16px; margin-bottom:16px; }
+.card-head { display:flex; align-items:flex-end; justify-content:space-between;
+             gap:16px; flex-wrap:wrap; padding-bottom:14px; border-bottom:1px solid var(--soft); }
+.co-name { font-size:20px; font-weight:650; letter-spacing:-.2px; }
+.co-code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+           color:var(--fg3); margin-left:8px; font-weight:400; }
+.px { text-align:right; }
+.px .price { font-size:32px; font-weight:680; line-height:1.1;
+             font-variant-numeric:tabular-nums; letter-spacing:-1px; }
+.px .chg { font-size:15px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums; }
+.px .vol { font-size:11.5px; color:var(--fg3); margin-top:5px; }
+
+.sec { padding:15px 0 4px; }
+.sec+.sec { border-top:1px dashed var(--line); }
+.sec.muted { opacity:.92; }
+.sec-head { display:flex; align-items:center; gap:9px; margin-bottom:11px; flex-wrap:wrap; }
+.sec-head h3 { margin:0; font-size:12.5px; font-weight:600; color:var(--fg3); letter-spacing:.6px; }
+.badge { font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; letter-spacing:.2px; }
+.badge.ok { background:var(--ok-bg); color:var(--ok-fg); }
+.badge.warn { background:#fef3c7; color:#92400e; }
+.badge { background:var(--soft); color:var(--fg2); }
+
+.flow { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:11px; }
+.flow-num { font-size:26px; font-weight:680; letter-spacing:-.6px;
+            font-variant-numeric:tabular-nums; }
+.flow-lbl { font-size:12.5px; color:var(--fg3); }
+.stage { font-size:12px; font-weight:600; padding:3px 10px; border-radius:6px;
+         background:var(--soft); color:var(--fg2); }
+.stage.down { background:#e8f5ee; color:var(--down); }
+.stage.up { background:#fdeceb; color:var(--up); }
+
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { display:inline-flex; align-items:center; gap:5px; background:#f7f8f9;
+        border:1px solid var(--soft); border-radius:7px; padding:4px 9px; font-size:12.5px; }
+.chip i { font-style:normal; color:var(--fg3); }
+.chip b { font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums; }
+.note { margin:11px 0 0; font-size:12px; line-height:1.75; color:var(--fg3); }
+.para { white-space:pre-wrap; word-break:break-word; font-size:13.5px; line-height:1.8; }
+
+.up { color:var(--up); } .down { color:var(--down); } .flat { color:var(--flat); }
+
+details { margin-top:14px; }
+summary { cursor:pointer; font-size:12px; color:var(--fg3); outline:none; }
+summary:hover { color:var(--fg2); }
+pre { margin:9px 0 0; padding:13px 15px; background:#fafbfc; border:1px solid var(--soft);
+      border-radius:8px; font-size:11.5px; line-height:1.7; color:var(--fg2);
+      white-space:pre-wrap; word-break:break-word;
+      font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+
+footer { margin-top:24px; padding-top:16px; border-top:1px solid var(--line);
+         font-size:12px; line-height:1.95; color:var(--fg3); }
+footer strong { color:var(--fg2); font-weight:600; }
+.meta { color:var(--fg3); font-size:12px; text-align:right; margin-top:6px; }
+.meta b { color:var(--fg2); }
+"""
+
+
+def _chips_html(parsed: dict, order: list[str]) -> str:
+    """把 parsed 字段按 order 渲染成 chips(涨红跌绿)。"""
+    parts = []
+    for k in order:
+        if k in parsed:
+            v = parsed[k]
+            parts.append(
+                f'<span class="chip"><i>{_html_escape(k)}</i>'
+                f'<b class="{_classify_num(v)}">{_html_escape(v)}</b></span>'
+            )
+    return f'<div class="chips">{"".join(parts)}</div>'
+
+
+def _render_report_html(payload: dict) -> str:
+    """渲染 get_stock_report 聚合体检报告(旧版 watchlist 报告观感)。"""
+    import json as _json
+
+    result = payload["result"]
+    risk = payload["risk"]
+    duration_ms = payload["duration_ms"]
+
+    # 解析聚合 JSON {quote, main_intent, technical, capital_flow}
+    try:
+        agg = _json.loads(result) if isinstance(result, str) else (result or {})
+    except Exception:  # noqa: BLE001
+        agg = {}
+    if not isinstance(agg, dict):
+        agg = {}
+
+    err = agg.get("error")
+    quote_txt = agg.get("get_stock_quote", "") or ""
+    mi_txt = agg.get("get_main_intent", "") or ""
+    tech_txt = agg.get("get_technical_analysis", "") or ""
+    cf_txt = agg.get("get_capital_flow", "") or ""
+
+    q = _parse_quote(quote_txt) or {}
+    mi = _parse_main_intent(mi_txt) or {}
+    tech = _parse_technical(tech_txt) or {}
+    cf = _parse_capital_flow(cf_txt) or {}
+
+    # 顶部价格区(从 quote 解析)
+    price = q.get("价格", "")
+    chg = q.get("涨跌幅", "")
+    vol = q.get("成交量", "")
+    chg_cls = _classify_num(chg)
+    price_html = ""
+    if price:
+        price_html = (
+            f'<div class="px"><div class="price {chg_cls}">{_html_escape(price)}</div>'
+            f'<div class="chg {chg_cls}">{_html_escape(chg)}</div>'
+            f'<div class="vol">成交量 {_html_escape(vol)} 股</div></div>'
+        )
+
+    # symbol 从 quote 文本里尽量取出(标题用)
+    import re as _re
+    m = _re.search(r"(CN:(\d{6}))", quote_txt)
+    symbol = m.group(2) if m else ""
+
+    # 主力意图 section
+    mi_flow = mi.get("主力净额", "")
+    mi_stage = mi.get("阶段", "")
+    stage_cls = "down" if ("派发" in mi_stage or "流出" in mi_stage) else ("up" if "吸筹" in mi_stage else "")
+    mi_html = ""
+    if mi:
+        mi_html = (
+            '<div class="sec"><div class="sec-head"><h3>主力意图</h3>'
+            '<span class="badge ok">腾讯逐笔 · 权威口径</span></div>'
+            f'<div class="flow"><span class="flow-num {_classify_num(mi_flow)}">{_html_escape(mi_flow)}</span>'
+            f'<span class="flow-lbl">主力净额</span>'
+            + (f'<span class="stage {stage_cls}">{_html_escape(mi_stage)}</span>' if mi_stage else "")
+            + f'</div>{_chips_html(mi, ["参与度","买占","超大单","大单","竞价","筹码峰","获利","成本带"])}</div>'
+        )
+
+    # 技术面 section
+    tech_html = ""
+    if tech:
+        tech_html = (
+            '<div class="sec"><div class="sec-head"><h3>技术面</h3>'
+            '<span class="badge">技术指标计算(基于K线数据)</span></div>'
+            f'{_chips_html(tech, ["趋势","MACD","RSI","支撑位","压力位","K线形态"])}</div>'
+        )
+
+    # 资金流向 section(禁判主力, muted)
+    cf_flow = cf.get("主力净额", "")
+    cf_ratio = cf.get("占比", "")
+    cf_html = ""
+    if cf:
+        cf_html = (
+            '<div class="sec muted"><div class="sec-head"><h3>资金流向</h3>'
+            '<span class="badge warn">东财四档 · 禁判主力</span></div>'
+            f'<div class="flow"><span class="flow-num {_classify_num(cf_flow)}">{_html_escape(cf_flow)}</span>'
+            f'<span class="flow-lbl">主力净额{("（占比 " + _html_escape(cf_ratio) + "）") if cf_ratio else ""}</span></div>'
+            f'{_chips_html(cf, ["超大单","大单","中单","小单"])}'
+            '<p class="note">本数据为按单金额四档归类, 非逐笔主动买卖方向, 禁止用于主力意图/吸筹派发判定; '
+            '主力意图一律以 get_main_intent(逐笔)为准, 两口径数字冲突时说明差异并优先采信逐笔。</p></div>'
+        )
+
+    # 原始返回折叠(4 项)
+    raw_lines = []
+    for label, txt, cal in (
+        ("get_stock_quote", quote_txt, "多源实时行情聚合"),
+        ("get_technical_analysis", tech_txt, "技术指标计算(基于K线数据)"),
+        ("get_capital_flow", cf_txt, "东财四档，方向位与逐笔口径相反，禁止据此判定主力意图"),
+        ("get_main_intent", mi_txt, "腾讯逐笔·主力意图口径"),
+    ):
+        if txt:
+            raw_lines.append(f"### {label}  (caliber: {cal})\n{txt}")
+    details_html = ""
+    if raw_lines:
+        details_html = (
+            f'<details><summary>原始返回（{len(raw_lines)} 项，含 caliber 与 risk）</summary>'
+            f'<pre>{_html_escape(chr(10).join(raw_lines))}</pre></details>'
+        )
+
+    # 无数据/错误兜底
+    if err:
+        body = f'<div class="banner">{_html_escape(err)}</div>'
+    elif not (price or mi or tech or cf):
+        body = '<div class="banner">暂无可聚合的数据（可能非交易时段或数据源未就绪）。</div>'
+    else:
+        body = (
+            f'<div class="card"><div class="card-head">'
+            f'<div><div class="co-name">A股 <span class="co-code">CN {_html_escape(symbol)}</span></div></div>'
+            f'{price_html}</div>{mi_html}{tech_html}{cf_html}{details_html}</div>'
+        )
+
+    embedded_json = _json.dumps(payload, ensure_ascii=False)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIDA · 自选股体检报告</title>
+<style>{_REPORT_CSS}</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>自选股体检 <span class="badge ok">聚合</span></h1>
+    <div class="sub">数据源：SIDA Skill Gateway（第三方聚合）· 仅数据查询，不构成投资建议</div>
+  </header>
+
+{body}
+
+  <footer>
+    <strong>口径与风险提示</strong><br>
+    · 本报告全部数据由第三方算法 / 数据源生成，仅作信息参考，<strong>不构成任何投资建议</strong>。<br>
+    · <strong>两套资金口径不要混用</strong>：主力意图以「腾讯逐笔」（get_main_intent）为准；
+      「东财四档」（get_capital_flow）服务端原文标注「方向位与逐笔口径相反，禁止据此判定主力意图」，
+      本报告仅并列展示供参考。<br>
+    · 北向资金、竞价等数据可能为估算或降级口径，页面内已标注 caliber 字段，引用前请核对。<br>
+    · 成交量字段服务端未标注单位，此处如实展示原始值，未做换算。<br>
+    · 数据存在延迟，实际以交易所与券商行情为准。股市有风险，入市需谨慎。
+  </footer>
   <div class="meta">耗时 <b>{duration_ms}</b> ms · SIDA Market Data API</div>
 </div>
 <script type="application/json" id="sida-data">{embedded_json}</script>
@@ -1319,6 +1564,8 @@ async def run_skill(
     payload = _structured_payload(result, name, tool.caliber, risk, duration_ms)
     if fmt == "json":
         rendered = _render_json(payload)
+    elif name == "get_stock_report":
+        rendered = _render_report_html(payload)
     else:
         rendered = _render_html(payload)
 
