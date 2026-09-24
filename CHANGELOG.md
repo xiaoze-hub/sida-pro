@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-24 (update: 技能展示名改为「SIDA 数智分析市场数据」)
+
+对外技能 `sida-market-data` 的中文展示名由「SIDA 市场数据接口」改为
+「**SIDA 数智分析市场数据**」（仓库 + 发布源两处 `display_name` 与正文标题同步，
+英文名 `SIDA Market Data API` 保持不变）。其余字段（name/category/version）不动。
+
 ## 2026-09-24 (docs: README 与技能新增微信交流群入口)
 
 为用户支持渠道补上微信群入口，覆盖三处：

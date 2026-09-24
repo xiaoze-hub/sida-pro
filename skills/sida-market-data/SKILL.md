@@ -1,6 +1,6 @@
 ---
 name: sida-market-data
-display_name: SIDA 市场数据接口
+display_name: SIDA 数智分析市场数据
 display_name_en: SIDA Market Data API
 description: 查询 A 股市场数据的 HTTP 接口，覆盖实时行情、技术面、资金流向、主力意图、市场新闻、竞价数据、情绪周期、北向资金、K 线形态、基本面等。适用于：查个股实时价格/涨跌幅/成交量、技术指标、资金动向、板块异动、热门股、北向资金、机会榜单、K 线形态、市场新闻、竞价数据、情绪周期、双源主力比对等各类取数场景。触发词：SIDA、A股行情、实时行情、查股价、主力意图、资金流向、北向资金、热门股、情绪周期、竞价数据、机会榜、K线形态、市场异动、双源主力、A-share quote、market data。
 description_zh: 接入 SIDA 市场数据接口，用一条 HTTP 请求取回 A 股的实时行情、技术指标、资金动向、市场情绪与机会榜单等数据，并附带数据口径说明，便于判断数据能不能用于下一步分析。只提供数据查询，不含交易执行与投资建议。
@@ -11,7 +11,7 @@ author: SIDA
 allowed-tools: Bash, Read, Write
 ---
 
-# SIDA 市场数据接口
+# SIDA 数智分析市场数据
 
 面向开发者的 **A 股市场数据查询接口**。一条 HTTP 请求即可取回行情、技术面、资金动向、
 市场情绪等数据，并附带数据口径说明。
