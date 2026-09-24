@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-24 (fix: POST /api/keys 被 CSRF 误杀, 对外注册通道死循环 → 修复上线)
+
+**症状**: 新用户 `POST /api/keys` 领 AppKey 时被 CSRF 中间件拦成 `403「CSRF token 缺失」`,
+而领 key 是**无任何凭证前**要调的第一个端点(既无 JWT 也无 sk_ key 也无 csrf cookie)
+⇒ 永远领不到 key ⇒ 整个对外 Skills API 注册通道死循环不可用。
+
+**根因**: `/api/keys` 不在 `CSRF_EXEMPT_PREFIXES` 白名单; 它和 `/api/auth/register` 同理
+是"登录前"端点, 却被双提交 CSRF 校验误伤(实测: 随便填一对一致的 cookie+header 就能过,
+说明该防护对"能控制自身 cookie 的机器调用"本就无约束力, 却拦住了正当的无凭证注册)。
+
+**修法**: 把 `/api/keys` 加入 `CSRF_EXEMPT_PREFIXES`。防滥用不靠 CSRF, 而是 register_key
+自带的 IP 级限流(_check_key_register_rate, 每小时 5 次) + 盐校验(_require_stable_salt)。
+
+**部署**: 本机 panwatch 容器为手动 docker run(ghcr 镜像), 代码镜像内置无源码挂载,
+故用 `docker cp` 单文件热修 + 重启(已备份容器内原文件为 middleware.py.bak-20260924)。
+验证: 修复后无 CSRF 头 POST /api/keys → 200 正常签发; 带 key 业务调用仍 200; 带无效凭据仍被挡。
+
+**遗留(未在本 commit 处理)**: 游客档(无 key)调 `/api/skills/{name}/run` 同样被 CSRF 挡成 403,
+游客每天 10 次试用通道亦断 —— 涉及匿名调用面更大, 需单独评估是否放行。
+
 ## 2026-09-24 (docs: 修复 README 中英版语言混排)
 
 英文版 `README.md` 残留 4 处中文，其中**副标题整段从未翻译**（品牌门面漏译）：

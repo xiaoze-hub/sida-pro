@@ -498,6 +498,12 @@ CSRF_EXEMPT_PREFIXES = (
     # 安全性: 该端点自带发送冷却(check_send_cooldown)+ 全局限流, 与 login 同级对待。
     "/api/auth/send-code",
     "/api/webhooks/",
+    # 2026-09-24 修: POST /api/keys 是「领 AppKey」的注册端点, 与 /api/auth/register 同理,
+    # 是**无任何凭证前**就要调用的第一个端点(此时既无 JWT 也无 sk_ key 也无 csrf cookie)。
+    # 若不放行 ⇒ 新用户永远领不到 key ⇒ 整个对外 Skills API 注册通道死循环不可用。
+    # 防滥用保障: register_key 自带 IP 级限流(_check_key_register_rate, 每小时 5 次) +
+    #           盐校验(_require_stable_salt), 与 login/register 同级, 无需担心裸放行被刷号。
+    "/api/keys",
 )
 
 
