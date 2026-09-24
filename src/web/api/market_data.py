@@ -1065,12 +1065,18 @@ async def fundamentals_detail_proxy(
         logger.warning(f"基本面明细代理失败 [{symbol}]: {e}")
         raise HTTPException(502, f"数据源调用失败: {e}")
     if not _refresh:
-        try:
-            from src.core.summary_cache import put_cached_summary
-            cache_key_symbol = f"fundamentals:{market}:{symbol}:{dt_days}"
-            put_cached_summary(cache_key_symbol, market, result, ttl_s=86400)
-        except Exception:  # noqa: BLE001
-            pass
+        # ⚠️ 降级响应**不入缓存**(2026-09-24 v0.13.8 生产实踩):
+        # 容器刚重启时 TQ 客户端尚未就绪, 首次调用会拿到空的龙虎榜 + lhb_pending=True;
+        # 原实现无条件按 24h 缓存 ⇒ 这个空值把"TQ 长历史龙虎榜"这个新能力对用户
+        # **完全遮住一整天**, 而且**每次发版重启都会重演**(页面不报错, 就是没数据 ——
+        # 最坏的一种失效)。现在只缓存完整结果, 降级的下次请求会重试。
+        if not result.get("lhb_pending"):
+            try:
+                from src.core.summary_cache import put_cached_summary
+                cache_key_symbol = f"fundamentals:{market}:{symbol}:{dt_days}"
+                put_cached_summary(cache_key_symbol, market, result, ttl_s=86400)
+            except Exception:  # noqa: BLE001
+                pass
     return result
 
 
