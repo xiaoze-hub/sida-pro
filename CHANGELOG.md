@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-24 (docs: 修复 README 中英版语言混排)
+
+英文版 `README.md` 残留 4 处中文，其中**副标题整段从未翻译**（品牌门面漏译）：
+
+- 标题 `数智分析 Pro · SIDA Pro` → `SIDA Pro · Stock Intelligent Data Analytics`
+  （补上 SIDA 全称展开，英文读者可自解释）
+- 副标题（原为整段中文）→ 英文：双数据源 TDX `.tck`/`.img`/TQ + THS `thsdk` →
+  全市场扫描 → K 线图层标注 → AI 数据管家，自托管一体系统
+- `"stitcher" (缝合怪)` → `"franken-build" — a deliberate assembly of proven parts`
+- `**Main-force intent analysis** (主力意图)` → 去中文括注（英文标题已表达同义，扩注冗余）
+- 数据源 `TDX (问小达) / Cninfo (互动易)` → `TDX (Wenxiaoda) / Cninfo (Hudongyi investor Q&A)`
+
+中文版 `README.zh-CN.md` 同批清理混排 + 补回互链：
+
+- `## 使用支持 Get Help` / `## 赞助 Sponsor` → 纯中文标题（英文后缀系早期改名遗留）
+- 新增 `*语言: [English](README.md)*` 切换行（此前只有 English → 中文 单向，
+  中文版读者无回路可切）
+- 赞助二维码 `alt` 文案本地化（`WeChat reward QR` → `微信赞赏二维码`）
+
+校验方式：`[\u4e00-\u9fff]` 全量扫 `README.md`，除刻意的语言切换行外零命中；
+`README.zh-CN.md` 标题行仅剩品牌名/SIDA/Docker 等专有名词含拉丁字母。
+
 ## 2026-09-24 (update: 技能展示名改为「SIDA 数智分析市场数据」)
 
 对外技能 `sida-market-data` 的中文展示名由「SIDA 市场数据接口」改为

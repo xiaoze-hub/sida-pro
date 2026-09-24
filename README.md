@@ -1,8 +1,8 @@
 <div align="center">
 
-# 数智分析 Pro · SIDA Pro
+# SIDA Pro · Stock Intelligent Data Analytics
 
-**闭源个人股票交易分析平台** — 通达信(.tck/.img/TQ) + 同花顺(thsdk) 双数据源 → 全市场扫描 → K线图层标注 → AI 全数据管家，自托管一体系统。
+**Proprietary personal stock-trading analytics platform** — dual data sources (TDX `.tck`/`.img`/TQ + THS `thsdk`) → full-market scanning → K-line overlay annotation → AI data steward. Self-hosted, all-in-one.
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-v0.13.9-blue) <!-- bump together with VERSION file on every release -->
@@ -17,9 +17,9 @@
 
 Most A-share tools show you **data**. SIDA closes the loop: it **reads the market, reasons about it with an AI analyst team, predicts it with time-series foundation models, verifies its own predictions against reality, and talks to you on WeChat** — every step traceable, every call auditable.
 
-> **The honest pitch: SIDA is a well-engineered "stitcher" (缝合怪).** Instead of reinventing quant wheels, it wires the best open-source projects — TradingAgents, Kronos, Chronos-Bolt, XGBoost, TA-Lib, TimescaleDB — into one coherent pipeline that actually closes the loop. Each part is proven; the integration is the product.
+> **The honest pitch: SIDA is a well-engineered "franken-build" — a deliberate assembly of proven parts.** Instead of reinventing quant wheels, it wires the best open-source projects — TradingAgents, Kronos, Chronos-Bolt, XGBoost, TA-Lib, TimescaleDB — into one coherent pipeline that actually closes the loop. Each part is proven; the integration is the product.
 
-- 🔍 **Main-force intent analysis** (主力意图) — tick-level order flow: accumulation/distribution detection, order-splitting recognition, support/resistance game — with physics guards that reject implausible readings instead of guessing
+- 🔍 **Main-force intent analysis** — tick-level order flow: accumulation/distribution detection, order-splitting recognition, support/resistance game — with physics guards that reject implausible readings instead of guessing
 - 🔮 **Foundation-model prediction ensemble + verification loop** — Kronos (AAAI 2026) + Chronos-Bolt + XGBoost weighted voting, **weights dynamically adjusted by historical hit rate**, every prediction auto-checked when it expires (hit/miss vs actual returns)
 - 🤖 **Multi-agent AI analysis powered by [TradingAgents](https://github.com/TauricResearch/TradingAgents)** — a team of specialized LLM analysts (researchers, bull/bear debaters, traders) that run, argue, and reach conclusions on any stock
 - 🏆 **Event-driven opportunity discovery** — 7 strategy signals, tri-engine resonance screening (Wenxiaoda + Wencai + strategy library cross-confirmed), anomaly pool, theme-launch detection — find themes *before* they take off
@@ -130,7 +130,7 @@ cd frontend && pnpm install && pnpm dev
 
 ## Data sources
 
-Tencent / Eastmoney / THS / Sina / TDX (问小达) / Cninfo (互动易) — quotes, K-lines, minute data, capital flow, tick-level trades, auctions, limit-up pools, hot boards, dragon-tiger lists, margin trading and more. Free sources, no paid keys required.
+Tencent / Eastmoney / THS / Sina / TDX (Wenxiaoda) / Cninfo (Hudongyi investor Q&A) — quotes, K-lines, minute data, capital flow, tick-level trades, auctions, limit-up pools, hot boards, dragon-tiger lists, margin trading and more. Free sources, no paid keys required.
 
 ## Disclaimer
 

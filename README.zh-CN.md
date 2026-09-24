@@ -7,6 +7,8 @@
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 ![Version](https://img.shields.io/badge/version-v0.13.9-blue) <!-- 发版时随 VERSION 文件同步更新 -->
 
+*语言: [English](README.md)*
+
 </div>
 
 ---
@@ -135,7 +137,7 @@ cd frontend && pnpm install && pnpm dev
 
 ---
 
-## 使用支持 Get Help
+## 使用支持
 
 使用说明或申请 API Key（市场数据接口）遇到问题，欢迎加入微信群交流：
 
@@ -145,12 +147,12 @@ cd frontend && pnpm install && pnpm dev
 
 ---
 
-## 赞助 Sponsor
+## 赞助
 
 如果 SIDA 对你有帮助，请作者喝杯咖啡 ☕ — 你的支持让项目持续下去！
 
 | 方式 | 入口 |
 |:---:|:---:|
-| **微信赞赏** | <img src="./assets/sponsor-wechat.png" width="200" alt="WeChat reward QR" /> |
+| **微信赞赏** | <img src="./assets/sponsor-wechat.png" width="200" alt="微信赞赏二维码" /> |
 
 > 觉得不错的话，点一下右上角 ⭐ **Star** 支持一下吧。
