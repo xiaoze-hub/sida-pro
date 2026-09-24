@@ -138,6 +138,16 @@ This project is for technical research and learning only. All AI-generated analy
 
 ---
 
+## Get Help
+
+Need help with the docs or applying for an API Key (Market Data API)? Join our WeChat group:
+
+<img src="./assets/wechat-group-qr.png" width="200" alt="WeChat group QR code" />
+
+> If the QR code expires, contact us on WeChat at `winter1920977`.
+
+---
+
 ## Sponsor
 
 If SIDA helps you, consider buying the author a coffee ☕ — your support keeps this project alive!

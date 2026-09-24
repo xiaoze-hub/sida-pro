@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-24 (docs: README 与技能新增微信交流群入口)
+
+为用户支持渠道补上微信群入口，覆盖三处：
+
+- `README.zh-CN.md` / `README.md`：新增「使用支持 Get Help」章节，嵌入群二维码
+  （`assets/wechat-group-qr.png`），说明「使用或申请 API Key 遇到问题可入群」，
+  并标注**二维码失效后联系微信 `winter1920977`**（该二维码 2026-10-01 过期，兜底渠道必须显著）
+- `skills/sida-market-data/SKILL.md`：「拿到 AppKey」一节后追加支持提示，
+  指向仓库 README 的二维码 + 微信兜底（技能包内不塞图片文件，保持发布包整洁，
+  二维码以 GitHub README 为唯一事实源）
+
 ## 2026-09-24 (docs: 新增对外技能 sida-market-data 源码入仓)
 
 将对外发布用技能 `sida-market-data`（SIDA 市场数据接口，v1.2.0）纳入仓库 `skills/` 统一管理，

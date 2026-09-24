@@ -135,6 +135,16 @@ cd frontend && pnpm install && pnpm dev
 
 ---
 
+## 使用支持 Get Help
+
+使用说明或申请 API Key（市场数据接口）遇到问题，欢迎加入微信群交流：
+
+<img src="./assets/wechat-group-qr.png" width="200" alt="微信交流群二维码" />
+
+> 二维码失效后，请添加微信 `winter1920977` 联系。
+
+---
+
 ## 赞助 Sponsor
 
 如果 SIDA 对你有帮助，请作者喝杯咖啡 ☕ — 你的支持让项目持续下去！

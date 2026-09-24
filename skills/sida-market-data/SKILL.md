@@ -69,6 +69,9 @@ export SIDA_BASE=https://www.sida.hengsheng-elec.com
 
 需要更高额度时走 `POST /api/pro/apply`（人工审核）。
 
+> **遇到问题？** 使用说明或申请 Key 卡住时，欢迎加入微信群交流（二维码见开源仓库
+> `README`）；群二维码失效后，请添加微信 `winter1920977` 联系。
+
 ---
 
 ## 二、调用方式
