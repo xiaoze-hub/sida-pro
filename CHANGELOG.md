@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-24 (feat: html 默认输出升级为逐字段富模板)
+
+承接上一轮「html/json 多格式」, 把默认 `html` 从「整段文本排版」升级为**逐字段解析的富模板**:
+
+- 新增四个解析器 `_parse_main_intent` / `_parse_technical` / `_parse_capital_flow` / `_parse_quote`,
+  把各 skill 的自然语言文本拆成结构化字段(主力净额/超大单/大单/参与度/买占/阶段/竞价/筹码峰/获利/成本带等)。
+- 渲染成「指标大字 + 阶段徽章 + 字段 chips」卡片, 配色按国内惯例**涨红跌绿**(`_classify_num`)。
+- 浅色主题(白卡/浅底), 与旧 watchlist 报告模板观感对齐; 解析失败回退整段排版。
+- 修复主力净额/资金流向的**双负号** bug: 流出且值已带负号时不再重复加 `-`。
+- `_render_json` 结构不变; 内嵌 `<script type="application/json">` 数据照旧。
+
 ## 2026-09-24 (feat: skill 输出新增 html/json 多格式)
 
 `POST /api/skills/{name}/run` 新增 `format` 参数(默认 `html`):

@@ -249,6 +249,130 @@ def _html_escape(s: str) -> str:
     )
 
 
+# ── 逐字段解析(2026-09-24): 把各 skill 的自然语言文本拆成结构化字段 ──
+# 格式以实测稳定格式为准(见 SKILL.md 6.2), 解析失败返回 None 回退整段排版。
+
+def _parse_main_intent(text: str) -> dict | None:
+    """get_main_intent → 主力净额/超大单/大单/参与度/买占/阶段/竞价/筹码峰/获利/成本带。"""
+    if "主力净" not in text:
+        return None
+    try:
+        import re as _re
+        out: dict = {"_type": "main_intent"}
+        m = _re.search(r"主力净(流入|流出)([+-]?[\d.]+[亿万])", text)
+        if m:
+            direction, val = m.group(1), m.group(2)
+            if direction == "流出":
+                out["主力净额"] = val if val.startswith("-") else "-" + val
+            else:
+                out["主力净额"] = val if val.startswith("+") else "+" + val
+        m = _re.search(r"超大单([+-][\d.]+[亿万])", text)
+        if m:
+            out["超大单"] = m.group(1)
+        m = _re.search(r"/大单([+-][\d.]+[亿万])", text)
+        if m:
+            out["大单"] = m.group(1)
+        m = _re.search(r"参与度(\d+%)", text)
+        if m:
+            out["参与度"] = m.group(1)
+        m = _re.search(r"买占(\d+%)", text)
+        if m:
+            out["买占"] = m.group(1)
+        m = _re.search(r"阶段\[(.+?)\]", text)
+        if m:
+            out["阶段"] = m.group(1)
+        m = _re.search(r"竞价([+-][\d.]+[亿万])", text)
+        if m:
+            out["竞价"] = m.group(1)
+        m = _re.search(r"筹码峰([\d.]+)", text)
+        if m:
+            out["筹码峰"] = m.group(1)
+        m = _re.search(r"获利(\d+%)", text)
+        if m:
+            out["获利"] = m.group(1)
+        m = _re.search(r"成本带([\d.]+-[\d.]+)", text)
+        if m:
+            out["成本带"] = m.group(1)
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_technical(text: str) -> dict | None:
+    """get_technical_analysis → 趋势/MACD/RSI/支撑位/压力位/K线形态。"""
+    if not text.startswith("技术面"):
+        return None
+    try:
+        body = text.split("技术面", 1)[1].lstrip("：: ")
+        out: dict = {"_type": "technical"}
+        for part in [p.strip() for p in body.split("，")]:
+            if " " in part:
+                k, _, v = part.partition(" ")
+                out[k] = v
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_capital_flow(text: str) -> dict | None:
+    """get_capital_flow → 主力净额(含占比)/超大单/大单/中单/小单。"""
+    if "资金流向" not in text and "主力净" not in text:
+        return None
+    try:
+        import re as _re
+        out: dict = {"_type": "capital_flow"}
+        m = _re.search(r"主力净(流入|流出)\s*([+-]?[\d.]+[亿万])(?:（占比([+-]?[\d.]+%)）)?", text)
+        if m:
+            direction, val = m.group(1), m.group(2)
+            if direction == "流出":
+                out["主力净额"] = val if val.startswith("-") else "-" + val
+            else:
+                out["主力净额"] = val if val.startswith("+") else "+" + val
+            if m.group(3):
+                out["占比"] = m.group(3)
+        for k, pat in (("超大单", r"超大单([+-][\d.]+[亿万])"),
+                       ("大单", r"大单([+-][\d.]+[亿万])"),
+                       ("中单", r"中单([+-][\d.]+[亿万])"),
+                       ("小单", r"小单([+-][\d.]+[亿万])")):
+            mm = _re.search(pat, text)
+            if mm:
+                out[k] = mm.group(1)
+        return out if len(out) > 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_quote(text: str) -> dict | None:
+    """get_stock_quote → 价格/涨跌幅/成交量。"""
+    import re as _re
+    m = _re.search(r"价格\s*([\d.]+)[，,]\s*涨跌幅\s*([+-]?[\d.]+)%[，,]\s*成交量\s*([\d.]+)", text)
+    if not m:
+        return None
+    price, chg, vol = m.group(1), m.group(2), m.group(3)
+    try:
+        vol_fmt = f"{float(vol):,.0f}"
+    except ValueError:
+        vol_fmt = vol
+    chg_f = float(chg)
+    return {
+        "_type": "quote",
+        "价格": price,
+        "涨跌幅": f"+{chg}%" if chg_f > 0 else f"{chg}%",
+        "成交量": vol_fmt,
+    }
+
+
+def _classify_num(val: str) -> str:
+    """按数值正负返回涨跌配色类 up/down/flat(国内: 涨红跌绿)。"""
+    s = val.strip()
+    if s.startswith("-") or s.startswith("流出"):
+        return "down"
+    if s.startswith("+") or s.startswith("流入"):
+        return "up"
+    # 阶段文案含"派发/流出"视为偏空, "吸筹/流入"偏多(仅用于 stage 底色, 非投资判断)
+    return "flat"
+
+
 def _structured_payload(result: str, skill: str, caliber: str, risk: str,
                         duration_ms: int) -> dict:
     """结构化数据载荷(html 内嵌与 json 模式共用)。"""
@@ -271,9 +395,8 @@ def _render_json(payload: dict) -> str:
 def _render_html(payload: dict) -> str:
     """自包含美化 HTML 模板(内联 CSS, 可直接浏览器打开)。
 
-    通用美化: 标题 + 数据正文(保留换行) + 口径徽章 + 风险提示卡片 + 元信息。
-    不做逐字段解析(那依赖各 skill 文本格式, 脆弱且属另一工程)。
-    内嵌 <script type="application/json"> 携带结构化数据, 一份响应既展示又供程序消费。
+    逐字段解析已知格式(主力意图/技术面/资金流向/行情), 渲染成红涨绿跌的
+    指标卡片; 解析失败回退整段排版。内嵌 JSON 供程序消费。
     """
     import json as _json
 
@@ -283,22 +406,92 @@ def _render_html(payload: dict) -> str:
     risk = payload["risk"]
     duration_ms = payload["duration_ms"]
 
-    # 正文按行渲染; 空行分段; 保留数据里的换行以维持对齐
-    body_lines = result.split("\n")
-    paragraphs: list[str] = []
-    buf: list[str] = []
-    for line in body_lines:
-        if line.strip():
-            buf.append(_html_escape(line))
-        else:
-            if buf:
-                paragraphs.append("<br>".join(buf))
-                buf = []
-    if buf:
-        paragraphs.append("<br>".join(buf))
+    def esc(s) -> str:
+        return _html_escape(s)
 
-    body_html = "\n".join(f'      <div class="para">{p}</div>' for p in paragraphs) if paragraphs \
-        else '<div class="para">（无数据）</div>'
+    # ── 组装 body 区(按 skill 类型渲染成卡片) ──
+    parsed = (
+        _parse_main_intent(result)
+        or _parse_technical(result)
+        or _parse_capital_flow(result)
+        or _parse_quote(result)
+    )
+
+    if parsed is None:
+        # 回退: 整段文本
+        body_html = (
+            f'<div class="para">{esc(result)}</div>'
+        )
+        card_html = f'<div class="card"><div class="label">数据结果</div>{body_html}</div>'
+    else:
+        ptype = parsed.pop("_type", "")
+        if ptype == "main_intent":
+            # 主力净额大字 + stage + chips
+            flow_val = parsed.get("主力净额", "")
+            stage = parsed.get("阶段", "")
+            stage_cls = "down" if ("派发" in stage or "流出" in stage) else ("up" if "吸筹" in stage else "")
+            chips = []
+            order = ["参与度", "买占", "超大单", "大单", "竞价", "筹码峰", "获利", "成本带"]
+            for k in order:
+                if k in parsed:
+                    chips.append(
+                        f'<span class="chip"><i>{esc(k)}</i><b class="{_classify_num(parsed[k])}">{esc(parsed[k])}</b></span>'
+                    )
+            body_html = (
+                f'<div class="flow"><span class="flow-num {_classify_num(flow_val)}">{esc(flow_val)}</span>'
+                f'<span class="flow-lbl">主力净额</span>'
+                + (f'<span class="stage {stage_cls}">{esc(stage)}</span>' if stage else "")
+                + f'</div><div class="chips">{"".join(chips)}</div>'
+            )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>主力意图</h3>'
+                f'<span class="badge ok">腾讯逐笔 · 权威口径</span></div>{body_html}</div>'
+            )
+        elif ptype == "technical":
+            chips = []
+            for k, v in parsed.items():
+                chips.append(
+                    f'<span class="chip"><i>{esc(k)}</i><b class="{_classify_num(v)}">{esc(v)}</b></span>'
+                )
+            body_html = f'<div class="chips">{"".join(chips)}</div>'
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>技术面</h3>'
+                f'<span class="badge">{esc(caliber)}</span></div>{body_html}</div>'
+            )
+        elif ptype == "capital_flow":
+            flow_val = parsed.get("主力净额", "")
+            ratio = parsed.get("占比", "")
+            chips = []
+            for k in ["超大单", "大单", "中单", "小单"]:
+                if k in parsed:
+                    chips.append(
+                        f'<span class="chip"><i>{esc(k)}</i><b class="{_classify_num(parsed[k])}">{esc(parsed[k])}</b></span>'
+                    )
+            body_html = (
+                f'<div class="flow"><span class="flow-num {_classify_num(flow_val)}">{esc(flow_val)}</span>'
+                f'<span class="flow-lbl">主力净额{("（占比 " + esc(ratio) + "）") if ratio else ""}</span></div>'
+                f'<div class="chips">{"".join(chips)}</div>'
+            )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>资金流向</h3>'
+                f'<span class="badge warn">东财四档 · 禁判主力</span></div>{body_html}</div>'
+            )
+        elif ptype == "quote":
+            price = parsed.get("价格", "")
+            chg = parsed.get("涨跌幅", "")
+            vol = parsed.get("成交量", "")
+            chg_cls = _classify_num(chg)
+            body_html = (
+                f'<div class="px"><div class="price {chg_cls}">{esc(price)}</div>'
+                f'<div class="chg {chg_cls}">{esc(chg)}</div>'
+                f'<div class="vol">成交量 {esc(vol)} 股</div></div>'
+            )
+            card_html = (
+                f'<div class="card"><div class="sec-head"><h3>实时行情</h3>'
+                f'<span class="badge">{esc(caliber)}</span></div>{body_html}</div>'
+            )
+        else:
+            card_html = f'<div class="card"><div class="para">{esc(result)}</div></div>'
 
     embedded_json = _json.dumps(payload, ensure_ascii=False)
 
@@ -307,51 +500,73 @@ def _render_html(payload: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SIDA · {_html_escape(skill)}</title>
+<title>SIDA · {esc(skill)}</title>
 <style>
-  :root {{ --bg:#0f1419; --card:#1a2029; --line:#2a3342; --fg:#e6edf3;
-          --muted:#8b98a8; --accent:#e05252; --accent2:#3aa76d; --ok:#3aa76d; }}
-  * {{ box-sizing:border-box; }}
-  body {{ margin:0; padding:24px; background:var(--bg); color:var(--fg);
-         font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }}
-  .wrap {{ max-width:760px; margin:0 auto; }}
-  .h {{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }}
-  .h .logo {{ width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#e05252,#b03a3a);
-              display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:15px; }}
-  .h h1 {{ margin:0; font-size:19px; font-weight:600; }}
-  .sub {{ color:var(--muted); font-size:12px; margin-bottom:18px; }}
-  .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px;
-           padding:18px 20px; margin-bottom:14px; }}
-  .label {{ font-size:12px; color:var(--muted); letter-spacing:.5px; margin-bottom:8px;
-            text-transform:uppercase; }}
-  .para {{ white-space:pre-wrap; word-break:break-word; }}
-  .caliber {{ display:inline-block; font-size:12px; color:var(--accent2);
-              border:1px solid var(--accent2); border-radius:20px; padding:2px 10px; margin-right:8px; }}
-  .risk {{ background:#2a1a1a; border:1px solid #4a2a2a; color:#f0b8b8; font-size:12.5px;
-           border-radius:10px; padding:12px 14px; }}
-  .meta {{ color:var(--muted); font-size:12px; margin-top:14px; text-align:right; }}
-  .meta b {{ color:var(--fg); }}
+:root {{
+  --bg:#f6f7f9; --card:#fff; --line:#e5e7eb; --soft:#f1f2f4;
+  --fg:#1a1d21; --fg2:#4b5563; --fg3:#9ca3af;
+  --up:#d93026; --down:#0a8f4c; --flat:#6b7280;
+  --ok-bg:#eef2ff; --ok-fg:#3730a3; --warn-bg:#fff7ed; --warn-fg:#9a3412;
+}}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",
+              "Microsoft YaHei","Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased; }}
+.wrap {{ max-width:760px; margin:0 auto; padding:28px 20px 56px; }}
+header {{ margin-bottom:18px; }}
+h1 {{ margin:0 0 6px; font-size:22px; letter-spacing:-.3px; }}
+.sub {{ font-size:12.5px; color:var(--fg3); line-height:1.7; }}
+
+.card {{ background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:18px 20px 16px; margin-bottom:14px; }}
+.label {{ font-size:12px; color:var(--fg3); letter-spacing:.5px; margin-bottom:10px; }}
+.sec-head {{ display:flex; align-items:center; gap:9px; margin-bottom:12px; flex-wrap:wrap; }}
+.sec-head h3 {{ margin:0; font-size:13px; font-weight:650; color:var(--fg2); letter-spacing:.4px; }}
+.badge {{ font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px; letter-spacing:.2px; }}
+.badge.ok {{ background:var(--ok-bg); color:var(--ok-fg); }}
+.badge.warn {{ background:var(--warn-bg); color:var(--warn-fg); }}
+.badge {{ background:var(--soft); color:var(--fg2); }}
+
+.para {{ white-space:pre-wrap; word-break:break-word; font-size:14px; line-height:1.8; }}
+
+.flow {{ display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:11px; }}
+.flow-num {{ font-size:28px; font-weight:680; letter-spacing:-.6px; font-variant-numeric:tabular-nums; }}
+.flow-lbl {{ font-size:12.5px; color:var(--fg3); }}
+.stage {{ font-size:12px; font-weight:600; padding:3px 10px; border-radius:6px;
+  background:var(--soft); color:var(--fg2); }}
+.stage.down {{ background:#e8f5ee; color:var(--down); }}
+.stage.up {{ background:#fdeceb; color:var(--up); }}
+
+.chips {{ display:flex; flex-wrap:wrap; gap:6px; }}
+.chip {{ display:inline-flex; align-items:center; gap:5px; background:#f7f8f9;
+  border:1px solid var(--soft); border-radius:7px; padding:4px 9px; font-size:12.5px; }}
+.chip i {{ font-style:normal; color:var(--fg3); }}
+.chip b {{ font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums; }}
+
+.px {{ text-align:right; }}
+.px .price {{ font-size:34px; font-weight:680; line-height:1.1; font-variant-numeric:tabular-nums; }}
+.px .chg {{ font-size:15px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums; }}
+.px .vol {{ font-size:11.5px; color:var(--fg3); margin-top:5px; }}
+
+.up {{ color:var(--up); }} .down {{ color:var(--down); }} .flat {{ color:var(--flat); }}
+
+.risk {{ background:var(--warn-bg); border:1px solid #fed7aa; color:var(--warn-fg);
+  border-radius:10px; padding:12px 16px; font-size:12.5px; line-height:1.8; margin-bottom:14px; }}
+.meta {{ color:var(--fg3); font-size:12px; text-align:right; }}
+.meta b {{ color:var(--fg2); }}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="h">
-    <div class="logo">S</div>
-    <h1>SIDA · {_html_escape(skill)}</h1>
-  </div>
-  <div class="sub">数智分析市场数据 · 仅数据查询，不构成投资建议</div>
+  <header>
+    <h1>SIDA · {esc(skill)}</h1>
+    <div class="sub">数智分析市场数据 · 仅数据查询，不构成投资建议 · 口径：{esc(caliber)}</div>
+  </header>
 
-  <div class="card">
-    <div class="label">数据结果</div>
-{body_html}
-  </div>
+{card_html}
 
-  <div class="card">
-    <div class="label">口径与风险</div>
-    <span class="caliber">口径：{_html_escape(caliber)}</span>
-  </div>
-
-  <div class="risk">{_html_escape(risk)}</div>
+  <div class="risk">{esc(risk)}</div>
 
   <div class="meta">耗时 <b>{duration_ms}</b> ms · SIDA Market Data API</div>
 </div>
