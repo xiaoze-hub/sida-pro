@@ -1010,28 +1010,21 @@ def _log_usage(
 
 # ── Key 注册 / 用量 ─────────────────────────────────────────────────
 
-@router.post("/keys")
-def register_key(
-    body: KeyRegisterRequest,
-    request: Request,
-    db: Session = Depends(get_db),
+def _issue_key(
+    ip: str,
+    owner_label: str,
+    tier: str,
+    linked_user_id: str | None,
+    db: Session,
 ) -> dict:
-    """领取 AppKey。明文 key 只在本次响应返回一次, 服务端只存 hash。
+    """签发一把 AppKey(核心逻辑, register_key 与 guest_key 共用)。
 
-    P1(audit-20260915): 此前完全免鉴权易被刷号, 加 IP 级限流(每小时 5 次)。
-    统一身份(2026-09-16): 若带 JWT, 绑定 user_id, 便于 web/API 共享配额。
+    明文 key 只在本次响应返回一次, 服务端只存 hash。
+    防刷: 调用方(路由)先做 IP 限流; 此处再做盐校验, 盐不固定直接拒签。
     """
-    ip = request.client.host if request.client else "unknown"
-    _check_key_register_rate(ip)
-    refresh_tier_configs(db)
-    linked_user_id = None
-    jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
-    if jwt_user is not None:
-        linked_user_id = str(jwt_user.id)
     _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
     h = _hash_key(raw)
-    tier = "trial" if body.trial else "free"
     daily = TIER_DAILY_LIMIT[tier]
     expires = None
     if tier == "trial":
@@ -1039,7 +1032,7 @@ def register_key(
     row = SkillApiKey(
         key_hash=h,
         key_prefix=raw[:11],
-        owner_label=(body.owner_label or "").strip()[:64],
+        owner_label=(owner_label or "").strip()[:64],
         user_id=linked_user_id,
         tier=tier,
         status="active",
@@ -1058,6 +1051,46 @@ def register_key(
         "note": "请妥善保存 API Key, 服务端不会再次展示明文。",
         "risk": RISK_DISCLAIMER,
     }
+
+
+@router.post("/keys")
+def register_key(
+    body: KeyRegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """领取 AppKey。明文 key 只在本次响应返回一次, 服务端只存 hash。
+
+    P1(audit-20260915): 此前完全免鉴权易被刷号, 加 IP 级限流(每小时 5 次)。
+    统一身份(2026-09-16): 若带 JWT, 绑定 user_id, 便于 web/API 共享配额。
+    """
+    ip = request.client.host if request.client else "unknown"
+    _check_key_register_rate(ip)
+    refresh_tier_configs(db)
+    linked_user_id = None
+    jwt_user = _optional_jwt_user(_header_str(request, "Authorization"), db)
+    if jwt_user is not None:
+        linked_user_id = str(jwt_user.id)
+    tier = "trial" if body.trial else "free"
+    return _issue_key(ip, body.owner_label, tier, linked_user_id, db)
+
+
+@router.post("/guest-key")
+def register_guest_key(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """游客自动领 key: 无凭证即可换取一把 free 档 key(每天限流)。
+
+    与 /keys 的区别: 无需 body, 强制 free 档(非 trial)、owner_label 记 guest、
+    不绑定 user_id。用于"游客自动发 key"模型 —— 匿名用户先调此端点拿到 key,
+    后续凭 key 调 /api/skills/{name}/run, 走 free 档限流(100 次/天)。
+    防刷复用 IP 限流(_check_key_register_rate, 每小时 5 次)。
+    """
+    ip = request.client.host if request.client else "unknown"
+    _check_key_register_rate(ip)
+    refresh_tier_configs(db)
+    return _issue_key(ip, "guest", "free", None, db)
 
 
 def _usage_by_channel(db: Session, base_filters: list, day_start: datetime) -> dict[str, int]:

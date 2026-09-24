@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-24 (feat: 新增游客自动领 key 端点 /api/guest-key)
+
+老大确认「游客自动发 key」模型: 匿名用户先领一把 key, 后续凭 key 调用(而非无 key 匿名)。
+
+- 新增 `POST /api/guest-key`: 无凭证即可换取一把 **free 档 key**(daily_limit=100),
+  owner_label 记 guest、不绑定 user_id。与 `/api/keys` 共用抽出的 `_issue_key()` 核心逻辑。
+- 防刷复用 `_check_key_register_rate`(每 IP 每小时 5 次) + `_require_stable_salt` 盐校验。
+- CSRF 豁免白名单追加 `/api/guest-key`(与 `/api/keys` 同为无凭证前调用端点)。
+- pro 仍需人工申请(不变): guest key 调 pro 档 → 403「需要 pro 档位」。
+
+**验证**: POST /api/guest-key → 200 返回 free key; 用该 key 调 free 档 200、pro 档 403。
+
 ## 2026-09-24 (fix: 游客匿名调用被 CSRF 误伤, 放开 run 端点让游客限流生效)
 
 承接上一条 `/api/keys` 修复后, 补上同源的「游客试用通道」被 CSRF 误伤的问题:

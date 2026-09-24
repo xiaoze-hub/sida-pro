@@ -504,6 +504,9 @@ CSRF_EXEMPT_PREFIXES = (
     # 防滥用保障: register_key 自带 IP 级限流(_check_key_register_rate, 每小时 5 次) +
     #           盐校验(_require_stable_salt), 与 login/register 同级, 无需担心裸放行被刷号。
     "/api/keys",
+    # 2026-09-24 修: POST /api/guest-key 是「游客自动领 key」端点, 同上无凭证前调用,
+    # 复用 _check_key_register_rate IP 限流防刷。
+    "/api/guest-key",
 )
 
 
