@@ -6,7 +6,11 @@
   python sida_client.py register "你的手机或微信标识"   # 领 AppKey（trial 档）
   python sida_client.py skills                          # 列可用 skill 与档位
   python sida_client.py run get_stock_quote '{"symbol":"600519","market":"CN"}'
+  python sida_client.py run get_stock_quote '{"symbol":"600519"}' json   # 第4参指定输出格式
   python sida_client.py usage                           # 查当日用量与剩余额度
+
+输出格式(format): html(默认, 美化模板内嵌 JSON) / json(纯结构化)。
+业务接口返回信封 {code, success, data:{skill, result, caliber, risk, duration_ms, format}}。
 
 环境变量:
   SIDA_BASE   API 基址，默认 https://www.sida.hengsheng-elec.com
@@ -107,12 +111,15 @@ def main() -> None:
 
     elif cmd == "run":
         if len(sys.argv) < 3:
-            sys.exit('用法: python sida_client.py run <skill_name> \'{"symbol":"600519"}\'')
+            sys.exit('用法: python sida_client.py run <skill_name> \'{"symbol":"600519"}\' [format]')
         name = sys.argv[2]
         payload = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
         # 参数需包一层 args；这里允许用户省略，自动补上
         if "args" not in payload:
             payload = {"args": payload}
+        # 第 4 参可选指定输出格式 html/json（默认 html）
+        if len(sys.argv) > 4:
+            payload["format"] = sys.argv[4]
         print(json.dumps(_req("POST", f"/api/skills/{name}/run", payload, timeout=60),
                          ensure_ascii=False, indent=2))
 

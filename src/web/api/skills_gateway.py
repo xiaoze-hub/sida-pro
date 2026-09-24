@@ -238,6 +238,128 @@ def _compliance_wrap(result: str) -> tuple[str, list[str]]:
     return wrapped, hits
 
 
+# ── 输出格式渲染(2026-09-24): html / json 两态 ─────────────────────
+# 默认 html(美化模板, 内嵌结构化 JSON); 可选 json(纯结构化)。
+# raw 恒为纯文本, 向后兼容老客户端读 result 当文本的场景。
+
+def _html_escape(s: str) -> str:
+    """转义 HTML 特殊字符, 防止正文里的 <>& 破坏模板或注入。"""
+    return (
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def _structured_payload(result: str, skill: str, caliber: str, risk: str,
+                        duration_ms: int) -> dict:
+    """结构化数据载荷(html 内嵌与 json 模式共用)。"""
+    return {
+        "skill": skill,
+        "result": result,
+        "caliber": caliber,
+        "risk": risk,
+        "duration_ms": duration_ms,
+    }
+
+
+def _render_json(payload: dict) -> str:
+    """结构化 JSON 输出。"""
+    import json as _json
+
+    return _json.dumps(payload, ensure_ascii=False)
+
+
+def _render_html(payload: dict) -> str:
+    """自包含美化 HTML 模板(内联 CSS, 可直接浏览器打开)。
+
+    通用美化: 标题 + 数据正文(保留换行) + 口径徽章 + 风险提示卡片 + 元信息。
+    不做逐字段解析(那依赖各 skill 文本格式, 脆弱且属另一工程)。
+    内嵌 <script type="application/json"> 携带结构化数据, 一份响应既展示又供程序消费。
+    """
+    import json as _json
+
+    skill = payload["skill"]
+    result = payload["result"]
+    caliber = payload["caliber"]
+    risk = payload["risk"]
+    duration_ms = payload["duration_ms"]
+
+    # 正文按行渲染; 空行分段; 保留数据里的换行以维持对齐
+    body_lines = result.split("\n")
+    paragraphs: list[str] = []
+    buf: list[str] = []
+    for line in body_lines:
+        if line.strip():
+            buf.append(_html_escape(line))
+        else:
+            if buf:
+                paragraphs.append("<br>".join(buf))
+                buf = []
+    if buf:
+        paragraphs.append("<br>".join(buf))
+
+    body_html = "\n".join(f'      <div class="para">{p}</div>' for p in paragraphs) if paragraphs \
+        else '<div class="para">（无数据）</div>'
+
+    embedded_json = _json.dumps(payload, ensure_ascii=False)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIDA · {_html_escape(skill)}</title>
+<style>
+  :root {{ --bg:#0f1419; --card:#1a2029; --line:#2a3342; --fg:#e6edf3;
+          --muted:#8b98a8; --accent:#e05252; --accent2:#3aa76d; --ok:#3aa76d; }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; padding:24px; background:var(--bg); color:var(--fg);
+         font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }}
+  .wrap {{ max-width:760px; margin:0 auto; }}
+  .h {{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }}
+  .h .logo {{ width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#e05252,#b03a3a);
+              display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:15px; }}
+  .h h1 {{ margin:0; font-size:19px; font-weight:600; }}
+  .sub {{ color:var(--muted); font-size:12px; margin-bottom:18px; }}
+  .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px;
+           padding:18px 20px; margin-bottom:14px; }}
+  .label {{ font-size:12px; color:var(--muted); letter-spacing:.5px; margin-bottom:8px;
+            text-transform:uppercase; }}
+  .para {{ white-space:pre-wrap; word-break:break-word; }}
+  .caliber {{ display:inline-block; font-size:12px; color:var(--accent2);
+              border:1px solid var(--accent2); border-radius:20px; padding:2px 10px; margin-right:8px; }}
+  .risk {{ background:#2a1a1a; border:1px solid #4a2a2a; color:#f0b8b8; font-size:12.5px;
+           border-radius:10px; padding:12px 14px; }}
+  .meta {{ color:var(--muted); font-size:12px; margin-top:14px; text-align:right; }}
+  .meta b {{ color:var(--fg); }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="h">
+    <div class="logo">S</div>
+    <h1>SIDA · {_html_escape(skill)}</h1>
+  </div>
+  <div class="sub">数智分析市场数据 · 仅数据查询，不构成投资建议</div>
+
+  <div class="card">
+    <div class="label">数据结果</div>
+{body_html}
+  </div>
+
+  <div class="card">
+    <div class="label">口径与风险</div>
+    <span class="caliber">口径：{_html_escape(caliber)}</span>
+  </div>
+
+  <div class="risk">{_html_escape(risk)}</div>
+
+  <div class="meta">耗时 <b>{duration_ms}</b> ms · SIDA Market Data API</div>
+</div>
+<script type="application/json" id="sida-data">{embedded_json}</script>
+</body>
+</html>"""
+
+
 # 异常冻结(Phase 2.3): 单 key 突增超阈值自动冻结
 _FREEZE_WINDOW_S = 300  # 5 分钟窗口
 _FREEZE_MULTIPLIER = 10
@@ -816,6 +938,7 @@ class KeyRegisterRequest(BaseModel):
 
 class SkillRunRequest(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
+    format: str = Field(default="html", description="输出格式: html(默认, 内嵌 JSON) / json")
 
 
 class SkillRunResponse(BaseModel):
@@ -824,6 +947,7 @@ class SkillRunResponse(BaseModel):
     caliber: str
     risk: str
     duration_ms: int
+    format: str = "html"
 
 
 # ── 路由 ────────────────────────────────────────────────────────────
@@ -927,7 +1051,8 @@ async def run_skill(
         raise HTTPException(404, f"未知 skill: {name}")
 
     # 热点缓存(并发优化任务2): quote/技术类短 TTL, 同 symbol 并发只打一次上游
-    cache_key = f"skill_cache:{name}:{hash(frozenset((body.args or {}).items()))}"
+    # key 含 format, 避免 html/json 互相命中缓存返回错误格式
+    cache_key = f"skill_cache:{name}:{body.format or 'html'}:{hash(frozenset((body.args or {}).items()))}"
     cached = _hot_cache_get(cache_key)
     if cached is not None:
         _log_usage(
@@ -972,14 +1097,25 @@ async def run_skill(
     if red_hits:
         risk = f"{RISK_DISCLAIMER} | 合规: 命中红线词 {red_hits}"
 
+    fmt = (body.format or "html").lower().strip()
+    if fmt not in ("html", "json"):
+        fmt = "html"
+
+    payload = _structured_payload(result, name, tool.caliber, risk, duration_ms)
+    if fmt == "json":
+        rendered = _render_json(payload)
+    else:
+        rendered = _render_html(payload)
+
     resp = SkillRunResponse(
         skill=name,
-        result=result,
+        result=rendered,
         caliber=tool.caliber,
         risk=risk,
         duration_ms=duration_ms,
+        format=fmt,
     )
-    # 热点缓存: 3-5s TTL, key 含 skill+args
+    # 热点缓存: 3-5s TTL, key 含 skill+args+format(不同格式不可互相命中)
     _hot_cache_set(cache_key, resp)
     return resp
 

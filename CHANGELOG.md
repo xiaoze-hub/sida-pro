@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-24 (feat: skill 输出新增 html/json 多格式)
+
+`POST /api/skills/{name}/run` 新增 `format` 参数(默认 `html`):
+
+- `html`(默认): 自包含美化 HTML 模板(内联 CSS, 可直接浏览器打开), 内嵌
+  `<script type="application/json">` 携带结构化数据 —— 一份响应既展示又供程序消费。
+- `json`: 结构化 JSON 字符串 `{"skill","result","caliber","risk","duration_ms"}`。
+- 响应新增 `format` 字段; `caliber`/`risk` 字段始终独立存在, 程序可直接读取口径/风险。
+- 热点缓存 key 纳入 format(避免 html/json 互串缓存)。
+- 客户端 `sida_client.py` 的 run 命令第 4 参可指定 format; docstring 更新。
+- SKILL.md / sida-gateway-api.md 补输出格式说明。
+
 ## 2026-09-24 (fix: 关闭纯匿名调用, 统一「先领 key 再调用」模型)
 
 收口上一轮「游客匿名调 run」的 CSRF 放行, 让鉴权模型干净统一:

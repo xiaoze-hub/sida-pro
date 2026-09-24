@@ -122,8 +122,27 @@ print(json.loads(urllib.request.urlopen(req, timeout=30).read())["data"]["result
 
 1. **参数要包一层 `args`**：`{"args": {"symbol": "600519"}}`。包装脚本会自动包，裸 curl 必须自己写。
 2. **两种返回信封**：裸 HTTP 拿到的是 `{code, success, data:{...}}`，正文在 `data.result`；
-   `sida_client.py` 已自动解包，顶层直接是 `{skill, result, caliber, risk, duration_ms}`。
+   `sida_client.py` 已自动解包，顶层直接是 `{skill, result, caliber, risk, duration_ms, format}`。
    **别把文档里的 `data.result` 直接套在客户端输出上** —— 会静默取到 `None`。
+
+**输出格式 `format`**（默认 `html`）：
+
+| format | `result` 内容 | 适用 |
+|---|---|---|
+| `html`（默认） | 自包含美化 HTML 模板（内联 CSS，可直接浏览器打开），内嵌 `<script type="application/json">` 携带结构化数据 | 给人看 / 网页渲染 |
+| `json` | 结构化 JSON 字符串 `{"skill","result","caliber","risk","duration_ms"}` | 给程序解析 |
+
+```bash
+# 默认 html
+curl -s -X POST .../api/skills/get_stock_quote/run -H "X-API-Key: $SIDA_KEY" \
+  -H "Content-Type: application/json" -d '{"args":{"symbol":"600519"}}'
+
+# 结构化 json
+curl -s -X POST .../api/skills/get_stock_quote/run -H "X-API-Key: $SIDA_KEY" \
+  -H "Content-Type: application/json" -d '{"args":{"symbol":"600519"},"format":"json"}'
+```
+
+> 无论哪种 format，`data.caliber` / `data.risk` 字段始终独立存在，供程序直接读取口径与风险。
 
 **不要猜参数名。** `GET /api/skills` 返回每个 skill 的完整 `schema.parameters`（JSON Schema，含
 `required` 与 `default`），照抄即可。实测参数只有 `symbol` / `market` / `limit` / `period` /
