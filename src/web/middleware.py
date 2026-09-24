@@ -556,6 +556,14 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         if (request.headers.get("x-service-token") or "").strip():
             return await call_next(request)
 
+        # 游客匿名调用(2026-09-24 修): POST /api/skills/{name}/run 是设计为"无凭证可调"的端点,
+        # 下游 skills_gateway._resolve_call_identity 会对无 key 无 JWT 的请求走游客分支,
+        # 自带 IP 级限流(_check_guest_rate, 每 IP 24h 10 次) + 只放行 free 档 + OPEN_SKILLS 白名单。
+        # 若此处不放行, 游客会在 CSRF 层就被 403 拦死, 永远走不到下游限流(游客试用通道形同虚设)。
+        # 仅放行 run 端点(有游客限流兜底); 其它 /api/skills 写操作(如 key 管理/admin)仍需凭证。
+        if path.startswith("/api/skills/") and path.endswith("/run"):
+            return await call_next(request)
+
         cookie_token = request.cookies.get(CSRF_COOKIE_NAME, "") or ""
         header_token = request.headers.get(CSRF_HEADER_NAME, "") or ""
         if not cookie_token or not header_token:

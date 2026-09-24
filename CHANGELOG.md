@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-24 (fix: 游客匿名调用被 CSRF 误伤, 放开 run 端点让游客限流生效)
+
+承接上一条 `/api/keys` 修复后, 补上同源的「游客试用通道」被 CSRF 误伤的问题:
+`POST /api/skills/{name}/run` 是**设计为无凭证可调**的端点, 下游 `_resolve_call_identity`
+对无 key 无 JWT 请求走游客分支, 自带 IP 24h 限流 10 次 + 只放行 free 档 + OPEN_SKILLS 白名单。
+但此前 CSRF 中间件在鉴权前就把它 403 拦死, 游客永远走不到下游限流。
+
+**修法**: CSRF 中间件对 `path.startswith("/api/skills/") and path.endswith("/run")` 放行,
+让无凭证请求落到下游游客限流逻辑(防护由 IP 限流承担, 非 CSRF)。
+
+**验证**: 游客裸调 free 档 get_stock_quote → 200; 游客调 pro 档 get_forecast → 403「游客仅可调用
+免费 skill」(档位限制, 非 CSRF); 带 key 调用 → 200; POST /api/keys → 200(上轮修复仍生效)。
+
 ## 2026-09-24 (fix: POST /api/keys 被 CSRF 误杀, 对外注册通道死循环 → 修复上线)
 
 **症状**: 新用户 `POST /api/keys` 领 AppKey 时被 CSRF 中间件拦成 `403「CSRF token 缺失」`,
