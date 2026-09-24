@@ -41,3 +41,9 @@ coverage.json
 .coverage
 htmlcov/
 .deploy/
+.workbuddy/memory/MEMORY.md
+.workbuddy/memory/2026-09-24.md
+.workbuddy/memory/2026-09-10.md
+.workbuddy/.DS_Store
+.DS_Store
+docs/PROJECT_KB.md
