@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-25 (fix: 会被重试的 TQ 中间失败不再留假警报 —— 生产验证实录)
+
+生产日志实录：一次**成功**的 `get_kzz_terms 128136` 在日志里留下
+`chat TQ 工具 kzz_info 失败: TQ get_kzz_info ErrorId=2: codestr error:128136`
+—— 功能正常，但读日志的人会据此误判该工具坏了（裸码先失败、随后补后缀自愈成功）。
+
+- `_tq_vendor_call` 新增 keyword-only `_quiet`：会被上层重试的尝试不打 WARNING；
+- `get_kzz_terms` 的「裸码 → 补 .SZ/.SH」自愈循环改传 `_quiet=True`，全部候选失败时
+  补**一条**真实警告（含试过的全部代码），使日志与最终结论一致；
+- 回归测试 2 条，**先证明能抓到旧行为**：修复前 → 3 条 WARNING + 2 failed；修复后 → 0/1 条 + 2 passed。
+- 未改动行为：`ipo_info` / `relation` 是单次调用、无重试，其警告本来就如实。
+
 ## 2026-09-25 (test: 同步 chat 工具护栏测试 —— 修 v0.13.13/v0.13.14 的 CI 门禁失败)
 
 `tests/test_w33_chat_registry.py` 有两条**工具清单护栏**、且是设计内的:

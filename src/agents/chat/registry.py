@@ -1368,14 +1368,20 @@ def _tq_unavailable(err: str) -> str:
             f"不要用其它来源猜测替代。")
 
 
-def _tq_vendor_call(fn_name: str, *a, **kw):
-    """调 vendor 里的 TQ 封装。返回 (ok, value_or_err); 异常不外抛, 由工具如实告知。"""
+def _tq_vendor_call(fn_name: str, *a, _quiet: bool = False, **kw):
+    """调 vendor 里的 TQ 封装。返回 (ok, value_or_err); 异常不外抛, 由工具如实告知。
+
+    `_quiet`: 该次尝试**会被上层重试**(裸码 → 补 .SZ/.SH 自愈)。这类中间失败不是最终结论,
+    不打 WARNING —— 否则一次**成功**的调用会在生产日志里留下「chat TQ 工具 kzz_info 失败: ...」,
+    读日志的人据此误判工具坏了(2026-09-25 生产验证实录)。由重试方在全败时补一条真实警告。
+    """
     try:
         from marketdata.vendors import tq as _tq
 
         return True, getattr(_tq, fn_name)(*a, **kw)
     except Exception as e:  # noqa: BLE001 — 工具层不因单源失败炸掉对话
-        logger.warning("chat TQ 工具 %s 失败: %s", fn_name, e)
+        if not _quiet:
+            logger.warning("chat TQ 工具 %s 失败: %s", fn_name, e)
         return False, f"{type(e).__name__}: {e}"[:160]
 
 
@@ -1477,7 +1483,7 @@ async def _tool_get_kzz_terms(db: Session, args: dict, user: User | None = None)
     cands = [raw] if "." in raw else [raw, f"{raw}.SZ", f"{raw}.SH"]
     last_err = ""
     for c in cands:
-        ok, d = _tq_vendor_call("kzz_info", c)
+        ok, d = _tq_vendor_call("kzz_info", c, _quiet=True)  # 中间尝试不打 WARNING(可能自愈成功)
         if not ok:
             last_err = str(d)
             continue
@@ -1494,6 +1500,8 @@ async def _tool_get_kzz_terms(db: Session, args: dict, user: User | None = None)
             body = " | ".join(f"{k} {v}" for k, v in pairs if v not in (None, "", "0.000", "0.00"))
             return f"🔗 可转债条款(通达信, {c}): {body or '(客户端未返回字段)'}"
     if last_err:
+        # 全部候选都失败才是真失败 —— 只在这里打一条, 日志与最终结论一致。
+        logger.warning("chat TQ 工具 kzz_info 全部候选失败(%s): %s", "/".join(cands), last_err)
         return _tq_unavailable(last_err)
     return f"通达信里查不到可转债 {raw}(试过 {'/'.join(cands)}) —— 代码是否正确或已退市?"
 

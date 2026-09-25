@@ -201,3 +201,50 @@ def test_market_day_uses_calendar_not_weekday():
     assert is_trading_day(date(2026, 9, 25)) is False   # 中秋, 周五
     assert is_trading_day(date(2026, 9, 24)) is True    # 节前最后交易日
     assert isinstance(_is_market_day(), bool)           # 不抛异常
+
+
+# ───────── 日志如实性: 会被重试的中间失败不许留下假警报 (2026-09-25 生产验证实录) ─────────
+
+
+def test_kzz_self_heal_leaves_no_false_warning(monkeypatch, caplog):
+    """裸码失败 → 补后缀成功时, **不得**打 WARNING。
+
+    生产实录: 一次**成功**的 `get_kzz_terms 128136` 在日志里留下
+    `chat TQ 工具 kzz_info 失败: ... codestr error:128136` —— 读日志的人据此误判工具坏了。
+    """
+    import asyncio
+    import logging
+
+    calls: list[str] = []
+
+    def _fake(code):
+        calls.append(code)
+        if code.endswith(".SZ"):
+            return {"KZZCode": "128136", "ZGPrice": "55.670", "HSScore": "AA+"}
+        raise RuntimeError(f"TQ get_kzz_info ErrorId=2: codestr error:{code}")
+
+    monkeypatch.setattr(tqmod, "kzz_info", _fake)
+    with caplog.at_level(logging.WARNING):
+        text = asyncio.run(registry._tool_get_kzz_terms(None, {"code": "128136"}, None))
+
+    assert "55.670" in text and "128136.SZ" in text      # 自愈成功
+    assert calls == ["128136", "128136.SZ"]              # 先裸码, 再补后缀
+    assert [r for r in caplog.records if "chat TQ 工具" in r.getMessage()] == []
+
+
+def test_kzz_all_candidates_failed_logs_exactly_one_warning(monkeypatch, caplog):
+    """全部候选都失败时: 只打一条 WARNING, 且内容含所有试过的代码(日志与结论一致)。"""
+    import asyncio
+    import logging
+
+    def _boom(code):
+        raise RuntimeError(f"TQ get_kzz_info ErrorId=2: codestr error:{code}")
+
+    monkeypatch.setattr(tqmod, "kzz_info", _boom)
+    with caplog.at_level(logging.WARNING):
+        text = asyncio.run(registry._tool_get_kzz_terms(None, {"code": "123456"}, None))
+
+    assert "取不到该数据" in text and "不要用其它来源猜测替代" in text
+    ours = [r for r in caplog.records if "chat TQ 工具" in r.getMessage()]
+    assert len(ours) == 1
+    assert "123456.SZ" in ours[0].getMessage() and "123456.SH" in ours[0].getMessage()
