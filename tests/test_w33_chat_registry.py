@@ -5,7 +5,7 @@
 1. src/core 下死代码工具包装模块已删除; 全仓 *.py 内容 grep 命中 0。
 2. 注册表: schema 与 handler 同处注册, 每个工具含 caliber(口径标签, 非空)
    + requires(权限点); get_capital_flow caliber 为固定红线文案。
-3. chat_api.CHAT_TOOLS 由注册表导出: 29 个核心 schema(原顺序) + 11 个 thsdk。
+3. chat_api.CHAT_TOOLS 由注册表导出: 29 个核心 schema(原顺序) + 11 个 thsdk + 3 个 TQ(2026-09-25 新增)。
 4. 合并后 _run_tool_loop(stream=True/False) 与原两函数事件语义等价(mock AI client):
    正常出字 / tool 轮次 / chat_multi 回落 / LLMDegradedError 不回落 /
    MAX_TOOL_ROUNDS 兜底 / 异常兜底。
@@ -45,6 +45,13 @@ EXPECTED_THSDK = {
     "get_thsdk_market_data_fund", "get_wencai_enhanced",
 }
 
+# 通达信客户端(TQ)独家能力工具(2026-09-25 新增) —— 注册在 thsdk 之后, 故导出顺序在尾部。
+EXPECTED_TQ = {
+    "get_ipo_calendar",      # 新股/新债申购日历
+    "get_kzz_terms",         # 可转债条款(转股价/强赎/回售/纯债价值)
+    "get_stock_sectors",     # 个股所属板块(题材归因)
+}
+
 
 # ──────────────────────────── 1. 死代码删除 ────────────────────────────
 
@@ -72,9 +79,9 @@ def test_no_residual_wrapper_references():
 def test_registry_integrity():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
     assert set(CHAT_TOOL_REGISTRY) == (
-        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | {"get_opportunities"}
+        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 41  # 29 core + 1 handler-only + 11 thsdk
+    assert len(CHAT_TOOL_REGISTRY) == 44  # 29 core + 1 handler-only + 11 thsdk + 3 tq
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -120,7 +127,9 @@ def test_exported_tool_order():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
     assert names[: len(EXPECTED_CORE_ORDER)] == EXPECTED_CORE_ORDER
-    assert set(names[len(EXPECTED_CORE_ORDER):]) == EXPECTED_THSDK
+    tail = names[len(EXPECTED_CORE_ORDER):]
+    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ
+    assert set(tail[-len(EXPECTED_TQ):]) == EXPECTED_TQ  # TQ 三件套注册在最后
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 

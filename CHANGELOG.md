@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-25 (test: 同步 chat 工具护栏测试 —— 修 v0.13.13/v0.13.14 的 CI 门禁失败)
+
+`tests/test_w33_chat_registry.py` 有两条**工具清单护栏**、且是设计内的:
+`test_registry_integrity`(断言注册表总数 41) 与 `test_exported_tool_order`(断言导出顺序尾部 == thsdk 11 个)。
+新增 3 个 TQ 工具后二者必然失败 —— 正确修法是**同步期望值**, 不是放宽断言:
+
+- 新增 `EXPECTED_TQ` 三件套; 总数 `41 → 44`(29 core + 1 handler-only + 11 thsdk + 3 tq);
+- `test_exported_tool_order` 额外断言 TQ 三件套确实排在导出列表**最后**(与注册顺序一致);
+- 文件头说明同步更新为「29 核心 + 11 thsdk + 3 TQ」。
+
+**后果纠正**: v0.13.13 / v0.13.14 两个 tag 的 ACR 构建都在 `gates` 阶段失败、
+**镜像从未发布**(v0.13.13 的 Release 说明里"镜像 tag"一句不成立, 已在 Release 上标注)。
+两者内容(三个 TQ 工具 + 交易日历修正 + 接口盘点文档)随 **v0.13.15** 一起发布。
+
 ## 2026-09-25 (docs: TQ 接口契约精读成果落地 + 修订 download_file 的 down_type 说明)
 
 啃完 231 页官方文档并**在真网关逐接口对拍**后的两份产物:
