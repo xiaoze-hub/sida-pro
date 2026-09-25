@@ -1490,3 +1490,78 @@ def exday_latest(code: str, *, count: int = 1, _rpc_fn=None) -> dict:
     out["date"] = str(row.get("Date") or "")
     return out
 
+
+# ── 单标的指标公式：必须先喂 K 线数据（2026-09-25 实测）─────────────────
+#
+# 文档原文「向通达信公式设置数据 formula_set_data —— 在调用公式前须先设置公式参数」。
+# 不喂数据直接调 formula_zb 会报 `ErrorId=9: no find formula setting`（**不是**客户端没注册公式）。
+#
+# 四个实测坑:
+#   1. `formula_set_data` 报 `ErrorId=10 RPC处理异常:TPyth_TdxWServer_Func`, 必须用
+#      **`formula_set_data_info`**（文档说两者等价, 实测不等价）。
+#   2. `formula_format_data`/`tdx_formula_format_data` 网关不暴露
+#      (`MCP不支持该tqcenter方法名`) ⇒ 自己把 get_market_data 的**列式**结果转置成行式。
+#      ⚠️ 列字典里 `ErrorId` 等是**标量**不是数组, 不滤会 IndexError。
+#   3. 设置是**连接级且会被覆盖**（文档: 设置的数据在断开连接前一直生效, 后设置的覆盖前面的）
+#      ⇒ 同一连接上**不能交错跑不同标的**, 必须"喂 A 的数据 → 立刻算 A"。
+#   4. `ErrorId=9` 有两种含义, 看消息文本: `no find formula setting`=本次连接没喂过该标的;
+#      `获取公式失败或公式不存在`=公式确实不存在。
+
+_FORMULA_FEED_CACHE: dict[tuple[str, str, int], bool] = {}
+
+
+def _formula_rows(code: str, *, count: int, period: str) -> list[dict]:
+    """取 K 线并转置成公式引擎要的行式 list[dict]（只保留数组列）。"""
+    raw = _rpc("get_market_data", {"stock_list": [code], "count": int(count), "period": period})
+    cols = raw.get(code) if isinstance(raw, dict) else None
+    if not isinstance(cols, dict):
+        raise RuntimeError(f"TQ get_market_data 未返回 {code} 的行情(公式需要先喂数据)")
+    keys = [k for k in cols if isinstance(cols[k], list)]
+    if not keys:
+        raise RuntimeError(f"TQ get_market_data 返回的 {code} 行情里没有数组列")
+    n = len(cols[keys[0]])
+    return [{k: cols[k][i] for k in keys} for i in range(n)]
+
+
+def formula_feed(code: str, *, count: int = 250, period: str = "1d", force: bool = False) -> dict:
+    """把某标的的 K 线喂给公式引擎。同一 (code, period, count) 只喂一次(连接级设置会覆盖,
+    但被覆盖只影响**别**的标的, 所以自己重喂是幂等的)。"""
+    key = (code, period, int(count))
+    if not force and _FORMULA_FEED_CACHE.get(key):
+        return {"ErrorId": "0", "Msg": "cached"}
+    rows = _formula_rows(code, count=count, period=period)
+    r = _rpc(
+        "formula_set_data_info",
+        {
+            "stock_code": code,
+            "stock_period": period,
+            "stock_data": rows,
+            "count": len(rows),
+            "dividend_type": 0,
+        },
+        timeout=max(_TIMEOUT_S, 30.0),
+    )
+    _FORMULA_FEED_CACHE[key] = True
+    out = r if isinstance(r, dict) else {"ErrorId": "0", "Msg": str(r)[:80]}
+    last = rows[-1].get("Date") if rows else ""
+    out["last_date"] = _fmt_day(last) if last else ""
+    out["bars"] = len(rows)
+    return out
+
+
+def formula_zb_many(formula_names: list[str], code: str, *, count: int = 250,
+                    period: str = "1d") -> dict[str, dict]:
+    """一次喂数据, 连续跑多个指标公式 → {公式名: 返回值}。单个公式失败不影响其他。
+
+    ⚠️ 只对**同一标的**成立; 换标的必须重新喂（见文件头说明）。
+    """
+    feed = formula_feed(code, count=count, period=period)
+    out: dict[str, dict] = {}
+    out["_feed"] = feed if isinstance(feed, dict) else {}
+    for name in formula_names:
+        try:
+            v = formula_zb_single(name, code)
+            out[name] = v if isinstance(v, dict) else {}
+        except Exception as exc:  # noqa: BLE001
+            out[name] = {"_error": str(exc)[:160]}
+    return out
