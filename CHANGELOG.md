@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-25 (v0.13.22: 修 v0.13.21 被 ui-rules 拦住的 R6 -- `.toFixed` 未走 safe 格式化)
+
+v0.13.21 的镜像构建**在 CI 门禁 `Frontend gates (tsc + eslint + vitest + ui-rules)` 失败**：
+
+```
+[R6-TOFIXED-RATCHET] frontend/src/components/MarketMoodChart.tsx:1: 2 toFixed in file without baseline (use @/lib/format safe*)
+UI-RULES FAIL: 1 violation(s)
+```
+
+**根因**：本仓库 R6 规则禁止组件内裸用 `.toFixed()`（`scripts/check_ui_rules.mjs` 按文件计数 + baseline 棘轮），
+必须走 `@/lib/format` 的 `safeFixed/safeNum/safeInt…`（非法值给 `--` 而不是 NaN）。
+已改 `MarketMoodChart` 的两处 `toFixed(1)` → `safeFixed(v, 1)`。
+
+**教训（已写进技能）**：本仓库前端改动**本地只跑 `tsc -b && vite build` 不够** —— CI 还有
+`ui-rules`（`node scripts/check_ui_rules.mjs`）与 eslint。**改动前端后应本地跑**
+`node scripts/check_ui_rules.mjs && npx tsc -b`，否则会白烧一整轮 CI + 等待。
+
+v0.13.21 未部署（构建失败于门禁），功能内容与 v0.13.22 相同。
+
 ## 2026-09-25 (F2 收尾: 全市场情绪温度曲线 —— 补齐 v0.13.20 的"未做"项)
 
 ### feat-后端 `GET /api/market-breadth/history?days=N`
