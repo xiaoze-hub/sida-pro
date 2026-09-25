@@ -1,5 +1,7 @@
 import { useId } from 'react'
 
+import { safeFixed } from '@/lib/format'
+
 interface MarketMoodChartProps {
   /** 情绪温度序列(0-100), 时间升序; 非有限值会被过滤 */
   data: number[]
@@ -32,7 +34,7 @@ export default function MarketMoodChart({
   const n = vals.length
   const y = (v: number) => height - (Math.max(0, Math.min(100, v)) / 100) * height
   const x = (i: number) => (i / (n - 1)) * width
-  const line = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const line = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${safeFixed(x(i), 1)},${safeFixed(y(v), 1)}`).join(' ')
   const area = `${line} L${width},${height} L0,${height} Z`
   const last = vals[n - 1]
 
