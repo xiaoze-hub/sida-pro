@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-25 (chore: 清掉「PANWATCH_ENABLE_TQ」幽灵开关 —— 全仓没有任何代码读它)
+
+排查 TQ 可用性时被 `PANWATCH_ENABLE_TQ!=1` 带偏过一轮: 该名字只出现在**报错文案、
+docstring 和两个测试的 setenv** 里, 全仓 grep **无任何代码读取** ⇒ 设不设都不影响。
+
+生产容器实测(2026-09-25): `PANWATCH_ENABLE_TQ` 与 `TDX_QUANT_URL` **都是空的**,
+但容器内直接调 TQ 一切正常(`stock_list` 全 A 5577 只 / 0.5s、`formula_all` 108 个公式)
+—— 因为网关地址由 `_resolve_tq_url()` 自动发现。**真正决定可用性的是客户端在不在跑。**
+
+- 删 3 处误导文案(条件选股采集器的 error、情绪序列采集器的 docstring + error)。
+- 删 2 处测试里的 `monkeypatch.setenv("PANWATCH_ENABLE_TQ", "1")` —— no-op,
+  留着会让后来人以为必须设。
+
 ## 2026-09-25 (fix: 交易日判定收口到统一日历 —— 两个 TQ 调度器不再按 weekday 近似)
 
 新写的两个 TQ 调度器(条件选股 15:50 / 情绪序列)在 `_is_market_day()` 里用了

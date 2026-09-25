@@ -244,7 +244,6 @@ def test_pro_series_always_sends_end_time(monkeypatch):
         return {"SC3": [{"Date": "20260923", "Value": ["34.00", "22.00"]}]}
 
     monkeypatch.setattr(tqv, "_rpc", _fake_rpc)
-    monkeypatch.setenv("PANWATCH_ENABLE_TQ", "1")
 
     out = tqv.sc_series(["SC3"], start_time="20260801")
     assert out == {"SC3": [{"Date": "20260923", "Value": ["34.00", "22.00"]}]}
@@ -271,7 +270,6 @@ def test_null_tables_are_dropped_not_zeroed(monkeypatch):
             "ErrorId": "0",
         },
     )
-    monkeypatch.setenv("PANWATCH_ENABLE_TQ", "1")
     out = tqv.sc_series(["SC3", "SC20"])
     assert "SC20" not in out and "ErrorId" not in out
     assert "SC3" in out

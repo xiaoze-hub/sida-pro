@@ -128,8 +128,7 @@ def sync_formula_signals(db, *, trade_date: str = "") -> dict:
     try:
         rows = fetch_formula_signals(trade_date)
         if not rows:
-            return {"error": "无任何公式返回数据(非交易日 / TQ 客户端未开 / "
-                             "PANWATCH_ENABLE_TQ!=1 / 公式名不可用)"}
+            return {"error": "无任何公式返回数据(非交易日 / TQ 客户端未开 / 公式名不可用)"}
         written = _upsert_rows(db, rows)
         incomplete = [r["formula_code"] for r in rows if not r["complete"]]
         total_hits = {r["formula_code"]: r["hit_count"] for r in rows}

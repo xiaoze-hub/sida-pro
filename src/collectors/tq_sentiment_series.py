@@ -9,7 +9,7 @@
   家数=家; SC1/SC10/SC11/SC25=万元; SC2/SC8/SC12/SC13/SC14/SC15/SC16-19/SC27=亿元;
   SC5/SC6/SC7=手; SC9=户; SC21/SC22/SC26=%。
 
-数据源降级: TQ 客户端未开/PANWATCH_ENABLE_TQ!=1 → 直接抛 RuntimeError,
+数据源降级: TQ 客户端未开 → 直接抛 RuntimeError,
 由调用方(定时任务/API)标记为不可用, **不伪造数据**。
 """
 
@@ -230,7 +230,7 @@ def sync_sentiment_series(db, *, start_time: str = "", days: int = 0) -> dict:
             start_time = (date.today() - timedelta(days=int(days))).strftime("%Y%m%d")
         rows = fetch_sentiment_series(start_time=start_time)
         if not rows:
-            return {"error": "TQ 无返回(客户端未开 / PANWATCH_ENABLE_TQ!=1 / 窗口无数据)"}
+            return {"error": "TQ 无返回(客户端未开 / 窗口无数据)"}
         written = _upsert_rows(db, rows)
         return {
             "rows": written,
