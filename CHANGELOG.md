@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-09-25 (feat: 市场广度/情绪周期量化 v2 —— 全市场序列 + 落库 + 接入 chat)
+
+接 v2 之前的 `src/core/market_breadth.py`（算法层，已单独提交），本次补齐**数据层、
+持久化与入口**，形成可用闭环。
+
+### feat-新增 `src/collectors/market_breadth_series.py`
+
+**为什么从 PG 自算**：`pricevol`（`tq.breadth` 的数据源）只有**当日快照**，攒不出历史基线；
+而本库 `klines` 有全市场深历史（实测 2026-09-21 及以前每日 ~5480 只标的）。
+
+- `load_bars_from_pg(db, days)`：一次 SQL 得每日涨跌家数 + 涨/跌成交量。
+  多源去重按 `tq > tencent > sina > 其它`（库口径铁律），`market='CN'`；
+  **起点日期在 Python 侧算好再传参**（双方言日期算术写法不同，避免拼接出错）。
+  **实测 `days=260` → 318 个交易日（2025-06-11 ~ 2026-09-24），9.7s。**
+- `sync_breadth_series(db, days)`：算指标并 UPSERT 落库。标的数 < `MIN_FULL_DAY_SYMBOLS`
+  (1000) 的交易日**跳过不落库**（数据未收全，避免污染分位基线），返回里计入 `skipped_thin`。
+- `latest_with_percentile(db)`：**读落库表**（毫秒级）+ 内存算分位。
+- `render_text(summary)`：chat 出口文本（纯函数、可测）。
+
+### fix-两个实测教训（都已写进注释，防复发）
+
+1. **重查询会撞 PG `statement timeout`**：起初窗口按 `days*2+40` 自然日估算，
+   `lag()` 分区要过 ~2M 行 → `QueryCanceled: canceling statement due to statement timeout`。
+   改为 `days*1.7+30` 收紧窗口 + `market='CN'` + 该会话显式 `SET statement_timeout='600s'`
+   （用完立即复位 `'0'`，不污染连接池）后降到 **9.7s**。
+2. **chat 工具绝不能走重算路径**：会卡住对话。故 `latest_with_percentile` 改为读表——
+   写入由每日 `sync_breadth_series` 负责，读取是几百行。
+
+### feat-新增迁移 180 `market_breadth_daily`
+
+涨跌家数 + 涨/跌成交量 + 六指标(adl/adr/arms/bti/bti_thrust/mcl/mcl_summation/stix)
++ `up_ratio` + `sentiment_score` + `symbols`(当日参与标的数，供消费方判断是否收全)
++ `source`；`trade_date` 唯一索引（UPSERT 冲突键）。双方言（PG SERIAL / SQLite AUTOINCREMENT）。
+
+### feat-接入 chat 工具 `get_sentiment_cycle`
+
+**最小爆炸半径**：不动 `_read_sentiment_cycle()`（前端与其他调用方不受影响），
+只在其**工具出口**追加广度板块；异常时静默降级（`logger.warning` + 返回原文本）。
+输出示例：涨跌家数、情绪温度 0-100（各指标历史分位均值）、六指标逐项值+分位、
+BTI thrust 标记、样本区间与"标的数偏少"警示。
+
+**口径纪律**：文本固定带"**自研口径**（教科书定义），非通达信客户端同名公式，数值可能有差异"；
+缺失一律显示 `—`（**不是 0**）；历史样本 < 20 不给分位。
+
+### test-新增 `tests/test_market_breadth_series.py`（10 项，stub 假库不连真 DB）
+
+无数据不写库且如实返回 `ok=False`；薄日跳过不计入写入；整日写入用 UPSERT 且参数含指标；
+`complete` 标记（厚/薄日）；`render_text` 缺失显示 `—` 而非 0、未收全警示、thrust 标记、
+空 summary 返回空串。连同算法层共 **21 passed**。
+
+> 未做（明确记录）：前端"情绪温度曲线"页面、每日定时任务挂载（当前靠 `sync_breadth_series`
+> 手动/被调触发）。推荐后续接入 `tq_sentiment_scheduler` 同款调度。
+
 ## 2026-09-25 (feat: 市场广度/情绪周期量化核心算法——自研口径)
 
 **背景**：研究通达信客户端公式库时发现真正可用的分析空间（客户端有 236 个指标公式 /
