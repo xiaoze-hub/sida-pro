@@ -1301,6 +1301,49 @@ async def _tool_get_factor_ic_report(db: Session, args: dict, user: User | None 
         return f"因子 IC 归因报告失败: {str(e)[:100]}"
 
 
+@register_chat_tool(
+    "get_stock_chips",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_stock_chips",
+            "description": (
+                "个股筹码/主力体检，用通达信客户端**现成公式**给出成本与筹码分布相关读数："
+                "筹码峰成本 SSRP、市场成本 MCST、成本均线 CYC、成本价均线 AMV、筹码引力 PAV/PAVE、"
+                "主力控盘 CYW、庄家抬轿 ZJTJ。"
+                "用户问「这只票筹码怎么样」「主力在吸筹还是派发」「筹码峰在哪」「成本区间」时调用。"
+                "注意：这是客户端公式口径的客观读数，不含买卖结论。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "股票代码，如 002361 或 002361.SZ"},
+                    "count": {"type": "integer", "description": "参与计算的日线根数，默认 250", "default": 250},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="客户端公式口径(SSRP/MCST/CYC/AMV/PAV/PAVE/CYW/ZJTJ)，非拟合值",
+)
+async def _tool_get_stock_chips(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.tq_chips import build_chips, normalize_code, render_text
+
+    code = normalize_code(str(args.get("symbol") or args.get("code") or ""))
+    if not code:
+        return "请提供股票代码(symbol)，如 002361 或 002361.SZ。"
+    count = int(args.get("count") or 250)
+    quote = None
+    ok_q, q = _tq_vendor_call("pricevol", [code])
+    if ok_q and isinstance(q, dict):
+        item = q.get(code) or {}
+        quote = {"close": item.get("Now"), "trade_date": ""}
+    payload = build_chips(code, count=count, quote=quote)
+    if not payload.get("ok"):
+        return _tq_unavailable(str(payload.get("detail") or "公式引擎不可用"))
+    return render_text(payload)
+
+
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
 
 from src.agents.chat.tools_thsdk import (  # noqa: E402  (仅 stdlib 级依赖, 不构成循环)

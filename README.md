@@ -5,7 +5,7 @@
 **Proprietary personal stock-trading analytics platform** — dual data sources (TDX `.tck`/`.img`/TQ + THS `thsdk`) → full-market scanning → K-line overlay annotation → AI data steward. Self-hosted, all-in-one.
 
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.13.18-blue) <!-- bump together with VERSION file on every release -->
+![Version](https://img.shields.io/badge/version-v0.13.19-blue) <!-- bump together with VERSION file on every release -->
 
 *Language: [中文](README.zh-CN.md)*
 

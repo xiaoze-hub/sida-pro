@@ -34,7 +34,7 @@ EXPECTED_CORE_ORDER = [
     "get_notifications", "get_fundamentals_detail", "get_irm_qa", "get_market_anomalies",
     "get_northbound", "get_hot_stocks", "get_web_content", "get_main_flow_compare",
     "get_delta_series", "get_orderbook", "get_event_catalyst", "get_intent_explain",
-    "get_factor_ic_report",
+    "get_factor_ic_report", "get_stock_chips",
 ]
 
 EXPECTED_THSDK = {
@@ -84,7 +84,7 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 47  # 29 core + 1 handler-only + 11 thsdk + 6 tq
+    assert len(CHAT_TOOL_REGISTRY) == 48  # 30 core + 1 handler-only + 11 thsdk + 6 tq
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"

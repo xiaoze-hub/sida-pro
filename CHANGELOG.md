@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-09-25 (feat: 个股筹码/主力体检 `get_stock_chips` —— 用客户端现成公式)
+
+### 先纠正一个我自己的错误结论
+
+本轮研究初期，我实测 21 个客户端公式全部报 `ErrorId=9: no find formula setting`，
+据此错误推断为"**公式必须在通达信客户端里注册，API 无法注册**"，并让用户在客户端找勾选框。
+**用户反馈"没看到勾选框"** —— 据此重查文档才发现：
+
+> `formula_set_data` —— **在调用公式前须先设置公式参数**
+
+即 "formula setting" 指的是**公式数据设置**，不是客户端注册项。**真正原因是调用前没喂 K 线数据。**
+（该错误结论已在技能 `tq-capability-audit` 中双处标注证伪，避免后续误传。）
+
+**正确序列（已实测跑通）**：`get_market_data` → 只取数组列转置成行式 `list[dict]` →
+`formula_set_data_info`（**必须用 `_info` 变体**，`formula_set_data` 报 `ErrorId=10 RPC处理异常`）→ `formula_zb`。
+
+### feat-vendor 新增单标的公式通路 `formula_zb_many()`
+
+一次喂数据、连跑多个公式，返回 `{公式名: 输出}` + `_feed`（`bars`/`last_date`）。
+四个实测坑写进 docstring：①必须 `_info`；②`formula_format_data` 网关不暴露→自己转置，
+且列字典里 `ErrorId` 等是**标量**不滤会 `IndexError`；③设置是**连接级且会被覆盖**⇒
+同一连接不能交错跑不同标的；④`ErrorId=9` 有两种含义（`no find formula setting`=没喂数据 /
+`获取公式失败或公式不存在`=公式真不存在）。
+
+### feat-新增核心模块 `src/core/tq_chips.py`
+
+`build_chips(code, count=250, quote=...)` + `render_text()` + `normalize_code()`（6→SH / 0,3,2→SZ /
+**920→BJ** / 9→SH / 4,8→BJ）。
+
+采用公式：`SSRP` 筹码峰成本族、`MCST` 市场成本、`CYC` 成本均线(1/2/3/∞)、`AMV` 成本价均线、
+`PAV`/`PAVE` 筹码引力、`CYW` 主力控盘、`ZJTJ` 庄家抬轿（该公式**自带中文键名**
+`主力出货`/`开始控盘`/`有庄控盘`/`高度控盘`，是客户端自己的语义，故可安全引用）。
+
+**明确排除 `SCR` 筹码集中度**：60 根与 250 根日线实测**恒返回 `0.00`**，本口径下不可用 ——
+按"缺失不得当数据展示"的纪律**不放进结果**，而不是显示成 0。
+
+**口径纪律**：公式值原样转述并标源；"现价 vs 成本线"的百分比是**我方计算**，单独放 `vs_close`
+并注明"仅陈述差值，不构成买卖建议"；取不到的项显示 `—`。
+
+### feat-接入 chat 工具 `get_stock_chips`（第 30 个 core 工具）
+
+用户问「这只票筹码怎么样」「主力在吸筹还是派发」「筹码峰在哪」时触发。
+
+⚠️ **注册位置的坑**（实测踩到）：该工具必须落在 **core 块末尾**，而 core 块的终点是
+`registry.py` 里 `# ──── thsdk 11 个高价值工具 ────` 那行**注释**（thsdk 工具是从
+`tools_thsdk` **import 时注册**的，不在本文件）。一开始插在 TQ 块之前 → 落到 index 41 ✗，
+护栏 `names[:len(core)] == core` 直接失败；改插到该注释前 → index 29 ✓（`EXPECTED_CORE_ORDER`
+同步 +1，注册表总数护栏 47→48，注释口径改 `30 core + 1 handler-only + 11 thsdk + 6 tq`）。
+
+### test-新增 `tests/test_tq_chips.py`（6 项）
+
+代码归一（含 920→BJ 回归）、最新值抽取、**部分公式失败如实报 `None` 不填 0**、
+公式引擎不可用返回 `tq_unavailable`、渲染 `—` 而非 0、空 payload 返回空串。
+相关套件共 **53 passed**。生产实跑（250 根日线，002361.SZ）全部拿到真实值。
+
 ## 2026-09-25 (fix: 广度温度落库为空 + 完整度判定过松)
 
 v0.13.17 上线后**生产验证暴露两个真 bug**（跑验证的价值就在这）：
