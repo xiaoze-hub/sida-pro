@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-25 (docs: TQ 接口契约精读成果落地 + 修订 download_file 的 down_type 说明)
+
+啃完 231 页官方文档并**在真网关逐接口对拍**后的两份产物:
+
+- `skills/finance/tq-capability-audit/references/api-contracts.md`: 15 个接口的逐字段契约
+  (签名/参数语义/返回字段/实测响应) + **6 条「文档说的和实测不一样」清单**。
+- `sida-pro/docs/tq-interface-coverage.md`: 62 个接口的覆盖盘点(已接/未接/明确不接及理由)。
+
+本提交顺带修正 vendor 里 `download_file` 的 docstring: 官方 `down_type` 有 **5 = 经营分析数据**,
+原说明只列到 4; 另修正 1 的口径(下的是**指定日期所在年度**的全部十大股东+流通股东数据, 不是"前10名")。
+
 ## 2026-09-25 (chore: 清掉「PANWATCH_ENABLE_TQ」幽灵开关 —— 全仓没有任何代码读它)
 
 排查 TQ 可用性时被 `PANWATCH_ENABLE_TQ!=1` 带偏过一轮: 该名字只出现在**报错文案、

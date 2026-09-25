@@ -981,10 +981,12 @@ def download_file(*, stock_code: str = "", down_time: str = "",
                   down_type: int = 1) -> dict:
     """程序化触发客户端数据下载(落 .\\PYPlugins\\data)。
 
-    down_type: 1 十大股东(下 10 名数据, down_time 只生效年份)
+    down_type(官方 2026-09-25 文档核对, 产品原 docstring 漏了 5):
+               1 十大股东(下指定日期**所在年度**的全部十大股东+流通股东数据)
                2 ETF 申赎清单(down_time 生效到日期)
-               3 最近舆情
-               4 综合信息文件
+               3 最近舆情(其余两项无效)
+               4 综合信息文件(其余两项无效)
+               5 经营分析数据(down_time 生效到日期, 含该年度全部数据)
     """
     v = _rpc("download_file", {"stock_code": stock_code, "down_time": down_time,
                                "down_type": int(down_type)},
