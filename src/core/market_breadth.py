@@ -166,6 +166,8 @@ def compute_series_with_percentile(bars: Sequence[BreadthBar]) -> list[dict[str,
             r[f"{m}_pct"] = percentile_rank(hist[m], v) if v is not None else None
             if v is not None:
                 hist[m].append(float(v))
+        # 逐日合成温度（落库需要每一天的值，不能只在最新一日算）
+        r["sentiment_score"] = sentiment_score(r)
     return rows
 
 

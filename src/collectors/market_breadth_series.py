@@ -159,6 +159,21 @@ def _load_stored_bars(db, *, days: int = DEFAULT_DAYS) -> list[BreadthBar]:
     return bars
 
 
+def _split_complete(bars: list[BreadthBar]) -> tuple[list[BreadthBar], int, int]:
+    """按"相对近期中位"判定收全日，返回 (收全日列表, 中位标的数, 阈值)。
+
+    固定阈值(如 1000)太松: 当日数据可能只收到 2000~3000 只(交易所/采集器还在补),
+    却比 1000 大, 会被当成完整日**污染分位基线**。故用 `max(MIN_FULL_DAY_SYMBOLS,
+    近期中位 × 0.8)`, 自动适配市场标的数变化。
+    """
+    totals = sorted(b.up + b.down + b.flat for b in bars)
+    if not totals:
+        return [], 0, MIN_FULL_DAY_SYMBOLS
+    median = totals[len(totals) // 2]
+    threshold = max(MIN_FULL_DAY_SYMBOLS, int(median * 0.8))
+    return [b for b in bars if (b.up + b.down + b.flat) >= threshold], median, threshold
+
+
 def sync_breadth_series(db, *, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     """自算并落库。返回 {ok, bars, written, skipped_thin, skipped_no_volume, last_date}。
 
@@ -229,13 +244,23 @@ def latest_with_percentile(db, *, days: int = DEFAULT_DAYS) -> dict[str, Any]:
     bars = _load_stored_bars(db, days=days)
     if not bars:
         return {"ok": False, "reason": "no_data", "hint": "尚未生成本表数据(需先跑 sync_breadth_series)"}
-    out = latest_summary(bars)
+    complete_bars, median, threshold = _split_complete(bars)
+    last = bars[-1]
+    last_total = last.up + last.down + last.flat
+    complete = last_total >= threshold
+    # 分位基线只含"收全日"; 最新一日若未收全, 仍追加进来算出它自己的指标与分位
+    # （追加在末尾不影响前面各日已算好的分位），但会通过 complete=False 显式告知。
+    series = list(complete_bars)
+    if not complete or not series or series[-1].trade_date != last.trade_date:
+        series = series + [last] if series else bars
+    out = latest_summary(series or bars)
     if not out.get("ok", True):
         return {"ok": False, "reason": out.get("reason", "no_data")}
     out["ok"] = True
-    total = bars[-1].up + bars[-1].down + bars[-1].flat
-    out["symbols"] = total
-    out["complete"] = total >= MIN_FULL_DAY_SYMBOLS
+    out["symbols"] = last_total
+    out["complete"] = complete
+    out["median_symbols"] = median
+    out["complete_threshold"] = threshold
     return out
 
 
