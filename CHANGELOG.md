@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-09-25 (F2 收尾: 全市场情绪温度曲线 —— 补齐 v0.13.20 的"未做"项)
+
+### feat-后端 `GET /api/market-breadth/history?days=N`
+
+从 `market_breadth_daily` 读**自算**日序列（涨跌家数 + 六指标 ADL/ADR/ARMS/BTI/MCL/STIX
++ 情绪温度 0-100），时间**升序**返回（消费方可直接画线）。
+
+与既有 `/breadth-distribution` 的分工：那个是**实时**九档分桶（新浪/东财），
+这个是**盘后自算**日序列，用于画曲线与看分位。
+
+**三条诚实性设计**：
+1. `note`：最新交易日覆盖 <3000 只时显式提示"PG 当日仍在回填，家数偏低，勿读作缩量"
+   （2026-09-25 实测 09-24 只收全 2143 只 —— 不提示就会把"覆盖不全"误读成"市场缩量"）；
+2. `temperature_percentile`：样本 <5 天返回 `None`（3 天的百分位是噪声，不给比给错好）；
+3. 表缺失/无数据分别返回 `reason=no_table` / `no_data` + `hint`，不返回假 0。
+
+### feat-前端 `MarketMoodChart` + 接进题材情绪页
+
+`frontend/src/components/MarketMoodChart.tsx`：手写 SVG（与 `Sparkline` 同风格，零第三方依赖）。
+**关键设计**：纵轴**钉死 0-100 并画 50 中轴**，不按数据自适应 —— 情绪温度是绝对量
+（0=冰点/100=沸腾），若自适应，近 20 日都在 38-42 时曲线会被拉成剧烈波动，那是**视觉欺骗**。
+
+接进 `ThemeMood.tsx`（题材情绪页顶部，`MarketPhasePanel` 之后）：显示最新温度 + 近 N 日分位
++ 涨/跌/平家数（含有效只数）+ 曲线 + 口径说明。窗口与页面 `windowDays` 联动。
+
+### fix-`tsc -b` 抓到 hooks 顺序错误
+
+初次插入 hooks 用了在其**之后**才声明的 `windowDays`/`reloadKey` →
+`TS2448/TS2454`。已改为插在两者声明之后。**这印证了"前端改动必须本地 `tsc -b && vite build`"**
+（CI 的镜像构建同样会因类型错而失败，本地先拦掉省一整轮）。
+
+### test-新增 `tests/test_market_breadth_api.py`（5 项）
+
+表缺失/无数据如实返回、时间升序、覆盖度偏低必警示、全量覆盖无 note、样本 <5 天不给分位。
+相关套件 **64 passed**。
+
 ## 2026-09-25 (feat: 启动早期信号池 + 市场广度调度器 + 自研/客户端口径交叉验证)
 
 ### feat-`FORMULA_SET` 新增「启动早期信号」组（14 个条件选股公式）

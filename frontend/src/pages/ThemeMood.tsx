@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import MarketMoodChart from '@/components/MarketMoodChart'
 import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
@@ -19,6 +20,16 @@ import {
   type TrendLine,
   type TrendDot,
 } from '@/lib/theme-mood'
+
+/** 全市场情绪温度序列(自算口径, 见后端 market_breadth_daily) */
+interface MarketMoodResp {
+  ok: boolean
+  items: Array<{ date: string; up: number | null; down: number | null; flat: number | null; symbols: number | null; temperature: number | null }>
+  latest?: { date: string; up: number | null; down: number | null; flat: number | null; symbols: number | null; temperature: number | null }
+  temperature_percentile?: number | null
+  note?: string
+  caliber?: string
+}
 
 /**
  * 题材情绪页(2026-09-12, 老板口径): 收盘确认口径的题材×日情绪矩阵。
@@ -164,6 +175,15 @@ export default function ThemeMoodPage() {
   const [ladder, setLadder] = useState<LadderResp | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // 全市场情绪温度曲线(2026-09-25): 自算口径, 见后端 /api/market-breadth/history
+  const [mood, setMood] = useState<MarketMoodResp | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<MarketMoodResp>(`/market-breadth/history?days=${windowDays}`, { cacheMode: 'reload' })
+      .then((r) => { if (alive) setMood(r) })
+      .catch(() => { if (alive) setMood(null) })
+    return () => { alive = false }
+  }, [windowDays, reloadKey])
   const [showAllRows, setShowAllRows] = useState(false)
   // P1-1(2026-09-18): 右侧题材列表默认只给**主线 12 条**(分层第一层)。
   // 实测该列原先一次渲染 516 行且逐行画 1px 分隔线 → hairline 526、密度 9680, 是典型"表格墙"。
@@ -269,6 +289,30 @@ export default function ThemeMoodPage() {
       <div className="mb-3">
         <MarketPhasePanel />
       </div>
+
+      {mood?.ok ? (
+        <div className="mb-3 border-b border-border/40 pb-2">
+          <div className="mb-1 flex items-baseline gap-2">
+            <span className="text-[11px] text-foreground/60">全市场情绪温度</span>
+            <span className="font-mono text-[12px] font-medium text-primary">{mood.latest?.temperature ?? '—'}</span>
+            <span className="text-[10px] text-muted-foreground">
+              近 {mood.items?.length ?? 0} 日分位 {typeof mood.temperature_percentile === 'number' ? `${mood.temperature_percentile}%` : '—'}
+            </span>
+            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+              涨 {mood.latest?.up ?? '—'} / 跌 {mood.latest?.down ?? '—'} / 平 {mood.latest?.flat ?? '—'}（{mood.latest?.symbols ?? '—'} 只有效）
+            </span>
+          </div>
+          <MarketMoodChart
+            data={(mood.items ?? []).map((i) => i.temperature).filter((v): v is number => typeof v === 'number')}
+            width={1000}
+            height={56}
+            ariaLabel={`全市场情绪温度曲线, 最新 ${mood.latest?.temperature ?? '—'}`}
+          />
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            口径：{mood.caliber}{mood.note ? ` ⚠️ ${mood.note}` : ''}
+          </div>
+        </div>
+      ) : null}
 
       <LadderBoard
         ladder={ladder?.ladder ?? []}

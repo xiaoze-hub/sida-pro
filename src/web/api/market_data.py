@@ -1387,3 +1387,71 @@ async def breadth_distribution_status():
         # ready=True 时前端可直接再调 /breadth-distribution 拿数据
         "hint": "ready=true 后 GET /api/market-data/breadth-distribution",
     }
+
+@router.get("/market-breadth/history")
+async def market_breadth_history(
+    days: int = Query(60, ge=5, le=250, description="返回最近 N 个交易日"),
+) -> dict:
+    """全市场情绪温度与涨跌家数**历史序列**（自算口径，落库见 market_breadth_daily）。
+
+    与 `/breadth-distribution` 的区别：那个是**实时**九档分桶（新浪/东财），
+    这个是**盘后自算**的日序列（PG klines → 涨跌家数 + 六指标 ADL/ADR/ARMS/BTI/MCL/STIX
+    + 情绪温度 0-100），用于画曲线和看分位。
+
+    ⚠️ 覆盖度：最新交易日 PG 往往还在回填（当日 klines 未收全），此时家数会**偏低**。
+    消费方必须看 `symbols/total` 比例，不能把"覆盖不全"读成"市场缩量"。
+    """
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rows = list(db.execute(text("""
+            SELECT trade_date, up_count, down_count, flat_count, symbols,
+                   adl, adr, arms, bti, bti_thrust, mcl, mcl_summation, stix,
+                   up_ratio, sentiment_score
+              FROM market_breadth_daily
+             ORDER BY trade_date DESC
+             LIMIT :lim
+        """), {"lim": int(days)}).fetchall())
+    except Exception as e:  # noqa: BLE001 — 表未建(迁移未跑)
+        logger.warning("[breadth-history] 查询失败: %r", e)
+        return {"ok": False, "reason": "no_table", "items": [],
+                "hint": "market_breadth_daily 不可用（迁移未跑或表未建）"}
+    finally:
+        db.close()
+
+    items = [{
+        "date": r[0],
+        "up": r[1], "down": r[2], "flat": r[3], "symbols": r[4],
+        "adl": r[5], "adr": r[6], "arms": r[7], "bti": r[8], "bti_thrust": r[9],
+        "mcl": r[10], "mcl_summation": r[11], "stix": r[12],
+        "up_ratio": r[13], "temperature": r[14],
+    } for r in rows]
+    items.reverse()  # 时间升序, 便于直接画曲线
+    if not items:
+        return {"ok": False, "reason": "no_data", "items": [],
+                "hint": "尚无自算序列（见 src/core/market_breadth_scheduler.py，每交易日 18:40 落库）"}
+
+    latest = items[-1]
+    temps = [i["temperature"] for i in items if isinstance(i["temperature"], (int, float))]
+    pct = None
+    if isinstance(latest.get("temperature"), (int, float)) and len(temps) >= 5:
+        below = sum(1 for t in temps if t <= latest["temperature"])
+        pct = round(below / len(temps) * 100, 1)
+
+    note = ""
+    cov = latest.get("symbols") or 0
+    if cov and cov < 3000:
+        note = (f"最新交易日 {latest['date']} 仅覆盖 {cov} 只（PG 当日仍在回填），"
+                "当日家数偏低，勿读作缩量")
+    return {
+        "ok": True,
+        "days": len(items),
+        "items": items,
+        "latest": latest,
+        "temperature_percentile": pct,
+        "coverage": {"symbols": cov, "full_market": 5577},
+        "note": note,
+        "caliber": "PG klines 自算（非实时）：涨跌家数 + 六指标 + 情绪温度 0-100；"
+                   "与客户端全市场快照口径同向（2026-09-25 交叉验证：涨跌比 0.28 vs 0.26）",
+    }
