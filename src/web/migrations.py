@@ -4809,6 +4809,58 @@ CREATE TABLE IF NOT EXISTS tq_formula_signal_daily (
     )
 
 
+def _m180_market_breadth_daily(conn: Connection) -> None:
+    """市场广度日序列 —— 涨跌家数 + 自研广度指标（ADL/ADR/ARMS/BTI/MCL/STIX）。
+
+    为什么自研: 通达信客户端公式库有同名指标，但**必须先在客户端注册**才能被 TQ 网关
+    调用（实测 21 个高价值公式全部 `ErrorId=9: no find formula setting`），且
+    `formula_set_data*` 只能设数据、无法注册公式；故按教科书定义自研，口径透明可审计，
+    对外展示标注"自研口径"（见 src/core/market_breadth.py）。
+
+    为什么从 PG 自算: `pricevol`（`tq.breadth` 数据源）只有**当日快照**，攒不出历史基线；
+    而本库 klines 有全市场深历史（2026-09-21 及以前每日约 5480 只标的），
+    一次 SQL 即可回溯 250+ 交易日，满足分位计算（样本 <20 不给分位）。
+
+    单位: 家数=只；成交量=股（与 klines.volume 同源，不做换算）。
+    `symbols` 为当日参与统计的标的数，供消费方判断该日数据是否收全
+    （<1000 的交易日采集侧不落库，避免污染分位基线）。
+    """
+    if _has_table(conn, TABLE_NAME := "market_breadth_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  up_count INTEGER,
+  down_count INTEGER,
+  flat_count INTEGER,
+  up_volume REAL,
+  down_volume REAL,
+  adl REAL,
+  adr REAL,
+  arms REAL,
+  bti REAL,
+  bti_thrust INTEGER NOT NULL DEFAULT 0,
+  mcl REAL,
+  mcl_summation REAL,
+  stix REAL,
+  up_ratio REAL,
+  sentiment_score INTEGER,
+  symbols INTEGER,
+  source TEXT NOT NULL DEFAULT 'pg_klines',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(
+        text(f"CREATE UNIQUE INDEX IF NOT EXISTS uq_market_breadth_daily_date ON {TABLE_NAME} (trade_date)")
+    )
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4934,6 +4986,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # TQ 条件选股信号日序列(2026-09-25): 108 个条件选股公式全市场扫描的"当日触发家数"
     # 这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 算不出基线)
     Migration(179, "tq_formula_signal_daily", _m179_tq_formula_signal_daily),
+    Migration(180, "market_breadth_daily", _m180_market_breadth_daily),
 )
 
 

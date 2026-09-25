@@ -643,7 +643,17 @@ async def _tool_get_opportunities(db: Session, args: dict, user: User | None = N
 async def _tool_get_sentiment_cycle(db: Session, args: dict, user: User | None = None) -> str:
     from src.web.api.chat import _read_sentiment_cycle
 
-    return await _read_sentiment_cycle()
+    base = await _read_sentiment_cycle()
+    # 2026-09-25: 追加自研市场广度指标（涨跌家数/ADL/ADR/ARMS/BTI/MCL/STIX + 情绪温度）。
+    # 只影响本 chat 工具出口，不改 _read_sentiment_cycle（前端与其他调用方不受影响）。
+    try:
+        from src.collectors.market_breadth_series import latest_with_percentile, render_text
+
+        extra = render_text(latest_with_percentile(db))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("breadth section failed: %s", exc)
+        extra = ""
+    return (base + "\n\n" + extra) if extra else base
 
 
 @register_chat_tool(
