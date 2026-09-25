@@ -153,6 +153,37 @@ def test_latest_with_percentile_no_stored_data_is_honest(monkeypatch):
     assert out["ok"] is False and out["reason"] == "no_data" and "sync_breadth_series" in out["hint"]
 
 
+def test_sentiment_score_written_per_row(monkeypatch):
+    """回归: 曾经 sentiment_score 只在 latest_summary 算, 落库全为 NULL。"""
+    db = _FakeDb()
+    _patch_loader(monkeypatch, _full_days(30))
+    M.sync_breadth_series(db)
+    params = [p for _s, p in db.executed if p]
+    # 样本 <20 的前若干日分位确实算不出(该为 None, 这是对的); 近期必须都有值。
+    assert params[-1]["sentiment_score"] is not None
+    assert sum(1 for p in params if p["sentiment_score"] is not None) >= 10
+    assert all(p["sentiment_score"] is not None for p in params[-10:])
+
+
+def test_complete_judged_relative_to_recent_median(monkeypatch):
+    """薄的最新日(远低于近期中位)必须 complete=False, 但其原始数字照常报出。"""
+    bars = _full_days(30)                      # 每日 4010+ 只
+    bars.append(BreadthBar("2026-09-24", up=1000, down=1100, flat=43, up_volume=1.0, down_volume=1.0))
+    _patch_stored(monkeypatch, bars)
+    out = M.latest_with_percentile(_FakeDb())
+    assert out["ok"] is True
+    assert out["complete"] is False            # 2143 < 4010*0.8 = 3208
+    assert out["symbols"] == 2143 and out["trade_date"] == "2026-09-24"
+    assert out["complete_threshold"] >= 3208
+    assert "未收全" in M.render_text(out)
+
+
+def test_complete_true_when_last_day_is_full(monkeypatch):
+    _patch_stored(monkeypatch, _full_days(30))
+    out = M.latest_with_percentile(_FakeDb())
+    assert out["complete"] is True
+
+
 def test_render_text_empty_summary_returns_blank():
     assert M.render_text({"ok": False, "reason": "no_data"}) == ""
     assert M.render_text({}) == ""
