@@ -50,6 +50,9 @@ EXPECTED_TQ = {
     "get_ipo_calendar",      # 新股/新债申购日历
     "get_kzz_terms",         # 可转债条款(转股价/强赎/回售/纯债价值)
     "get_stock_sectors",     # 个股所属板块(题材归因)
+    "search_symbols",        # 证券检索(跨市场: A/北交所/港股/场外基金/转债)
+    "get_index_etfs",        # 跟踪指数的 ETF 列表(IOPV/折溢价/规模)
+    "download_client_data",  # 触发客户端下载数据文件(前置动作, 非取数)
 }
 
 
@@ -81,7 +84,7 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 44  # 29 core + 1 handler-only + 11 thsdk + 3 tq
+    assert len(CHAT_TOOL_REGISTRY) == 47  # 29 core + 1 handler-only + 11 thsdk + 6 tq
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"

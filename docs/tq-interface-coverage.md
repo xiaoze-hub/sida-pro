@@ -6,15 +6,20 @@
 - **覆盖范围**：审了 `src/`（全部 .py）、`packages/marketdata/src/`、`frontend/src/`、`tests/`；**没审**：`scripts/`、`docs/`、以及服务端 tqcenter 内部实现（无源码）
 - **复核方式**：`grep -rn <接口名> src/ packages/ frontend/`（计数口径：去掉定义行）
 
-结论：**18 已接 / 14 少量接 / 30 未接**。未接的 30 个里，真正值得接的只有 5 类（下表「建议接」），其余要么是交易/写操作（明确不接），要么是公式管线的中间件。
+结论：**18 已接 / 14 少量接 / 30 未接**。
+
+**v0.13.16 更新（2026-09-25）**：`get_match_stkinfo`、`get_trackzs_etf_info` 由「未接」转「已接」；
+`download_file` 由「少量接」转「已接」—— 三者各配一个对话工具（`search_symbols` / `get_index_etfs` /
+`download_client_data`，见 `src/agents/chat/registry.py` 末段）。以上是逐项事实；
+**原 62 的分解口径未重算**，总数请以下文逐项清单为准，不要引用上面的三个数字相加。
 
 ## 一、建议接（按价值排序）
 
 | 接口 | 用途 | 为什么值得 |
 |---|---|---|
 | `get_*_by_date`（gpjy/scjy/bkjy/gb_info 四个） | 按**指定日期**取序列（现在只能整段拉再自己筛） | ⚠️ **实测后降级：暂不接**。原以为"整段拉很慢"，实测生产容器里 `fetch_sentiment_series` 全量 400 天窗口 **0.5s / 266 行**，日常任务本来就只用 30 天窗口（0.0s）—— 没有性能问题可修。仅在将来要"精确回补某一天、且不想动历史窗口"时才考虑。 |
-| `get_trackzs_etf_info` | 跟踪某指数的 ETF 列表（含 IOPV/规模） | ETF 页/指数页可直接用；免费源要么没有 IOPV 要么延迟 |
-| `get_match_stkinfo` | 证券检索（代码 ↔ 名称/简称） | 代码标准化与名称补全，减少对第三方名称表的依赖 |
+| `get_trackzs_etf_info` | 跟踪某指数的 ETF 列表（含 IOPV/规模） | ✅ **v0.13.16 已接**：`get_index_etfs` 工具。实测 `950162.CSI`→14 只 / `000300.SH` / `399006.SZ` 均可用，字段 Code/Name/NowPrice/PreClose/IOPV/Zgb/Sz；`930599.CSI` 返回 `{'raw': ''}` 空壳（已归一为空列表）。工具额外算**折溢价率**=(现价-IOPV)/IOPV，IOPV 缺失或为 0 时不给数字。 |
+| `get_match_stkinfo` | 证券检索（代码 ↔ 名称/简称） | ✅ **v0.13.16 已接**：`search_symbols` 工具。实测**跨市场**：`宁德时代`→`300750.SZ`+`03750.HK`；`002361`→`002361.SZ`+`002361.OF`(场外基金)；`立讯转债`→`128136.SZ`；查不到返回 **None**（不是 `[]`，工具已处理）。比仓库原有 `search_stocks()`(仅 A 股)覆盖更广。 |
 | `get_financial_data_by_date` | 指定日期专业财务数据 | 与已有 `get_financial_data` 配套，回补历史财务更精确 |
 | `get_trading_dates` | 交易日列表 | ⚠️ **实测后改判：不需要接**。全仓交易日判定早已收口到 `src/core/trading_calendar.py`（静态表 2025-2028，含法定节假日/调休，未覆盖年份显式报错）。真正的问题是**新写的两个 TQ 调度器绕过了它**（按 `weekday()<5` 近似），已在 v0.13.14 修正 —— 结论：接 TQ 日历反而会引入第二个日历口径，不接。 |
 
@@ -57,7 +62,7 @@
 
 | 接口 | 用途 | 调用点 |
 |---|---|---|
-| `download_file` | 下载特定数据文件 | 2 |
+| `download_file` | 下载特定数据文件 | ✅ **v0.13.16 已接**：`download_client_data` 工具（**喂数据的前置动作, 不是取数接口**）。实测 `down_time` 必须是 `'YYYYMMDD'` **字符串**（传 int → `ErrorId=10 RPC处理异常`），返回 `{'ErrorId':'0','Msg':'下载经营分析数据文件[2026]成功。'}`；文件落客户端 `.\\PYPlugins\\data`，本服务读不到。vendor 已强制归一日期。 |
 | `formula_get_all` | 获取指定种类的公式列表 | 2 |
 | `formula_zb` |  | 2 |
 | `get_bkjy_value` | 获取板块交易数据 | 2 |

@@ -978,8 +978,13 @@ def trackzs_etf(zs_code: str) -> list:
 
 
 def download_file(*, stock_code: str = "", down_time: str = "",
-                  down_type: int = 1) -> dict:
-    """程序化触发客户端数据下载(落 .\\PYPlugins\\data)。
+                  down_type: int = 1,
+                  timeout: float | None = None) -> dict:
+    """程序化触发客户端数据下载(落客户端 .\\PYPlugins\\data)。
+
+    ⚠️ **这是"给客户端喂数据"的前置动作, 不是取数接口** —— 返回里只有客户端的
+    `{'ErrorId': '0', 'Msg': '下载经营分析数据文件[2026]成功。', 'run_id': '0'}`,
+    数据本身落在客户端磁盘上, 本进程读不到。别把它当查询结果用。
 
     down_type(官方 2026-09-25 文档核对, 产品原 docstring 漏了 5):
                1 十大股东(下指定日期**所在年度**的全部十大股东+流通股东数据)
@@ -987,11 +992,34 @@ def download_file(*, stock_code: str = "", down_time: str = "",
                3 最近舆情(其余两项无效)
                4 综合信息文件(其余两项无效)
                5 经营分析数据(down_time 生效到日期, 含该年度全部数据)
+
+    ⚠️ `down_time` **必须是字符串**且形如 `YYYYMMDD`(如 `'20260924'`)。实测: 传 int
+    `20260924` → `ErrorId=10 RPC处理异常:TPyth_TdxWServer_Main_New`; 传 `'2026'` →
+    `ErrorId=3 down_time error`。故这里统一把 int/datetime/date 归一成 `YYYYMMDD` 字符串。
     """
-    v = _rpc("download_file", {"stock_code": stock_code, "down_time": down_time,
-                               "down_type": int(down_type)},
-             timeout=max(_TIMEOUT_S, 60.0))
+    payload = {"stock_code": stock_code, "down_time": _norm_down_time(down_time),
+               "down_type": int(down_type)}
+    v = _rpc("download_file", payload,
+             timeout=timeout or max(_TIMEOUT_S, 60.0))
     return v if isinstance(v, dict) else {}
+
+
+def _norm_down_time(down_time) -> str:
+    """把 down_time 归一成客户端要的 `YYYYMMDD` 字符串(客户端不收 int)。
+
+    接受: '20260924' / 20260924 / '2026-09-24' / '2026-09-24 00:00:00' /
+    datetime.date / datetime.datetime / ''(类型 3、4 忽略该字段)。
+    无法归一的一律按原样转 str 交给客户端报错 —— 不在这里替它猜一个日期。
+    """
+    if down_time is None or down_time == "":
+        return ""
+    if hasattr(down_time, "strftime"):            # datetime / date
+        return down_time.strftime("%Y%m%d")
+    if isinstance(down_time, int):
+        return str(down_time)
+    s = str(down_time).strip()
+    digits = "".join(ch for ch in s[:10] if ch.isdigit())
+    return digits if len(digits) >= 8 else s
 
 
 #: 服务端批次元数据键: 不属于公式结果, 解析时必须剔除(SDK 同名过滤)。

@@ -248,3 +248,128 @@ def test_kzz_all_candidates_failed_logs_exactly_one_warning(monkeypatch, caplog)
     ours = [r for r in caplog.records if "chat TQ 工具" in r.getMessage()]
     assert len(ours) == 1
     assert "123456.SZ" in ours[0].getMessage() and "123456.SH" in ours[0].getMessage()
+
+
+# ────────────── 第二批: search_symbols / get_index_etfs / download_client_data ──────────────
+
+
+def test_norm_down_time_always_string_yyyymmdd():
+    """客户端不收 int: 实测传 int 20260924 → ErrorId=10 RPC处理异常。必须归一成字符串。"""
+    from datetime import date, datetime
+
+    from marketdata.vendors.tq import _norm_down_time
+
+    assert _norm_down_time("20260924") == "20260924"
+    assert _norm_down_time(20260924) == "20260924"          # int → str(关键修复)
+    assert _norm_down_time("2026-09-24") == "20260924"
+    assert _norm_down_time("2026-09-24 00:00:00") == "20260924"
+    assert _norm_down_time(date(2026, 9, 24)) == "20260924"
+    assert _norm_down_time(datetime(2026, 9, 24, 15, 30)) == "20260924"
+    assert _norm_down_time("") == ""                        # type 3/4 忽略该字段
+    assert _norm_down_time("2026") == "2026"                # 归一不了就原样交客户端报错, 不猜
+
+
+def test_tool_search_symbols_labels_cross_market(monkeypatch):
+    """同名跨市场必须标出市场 —— 否则 03750.HK 会被当成 A 股用。"""
+    import asyncio
+
+    monkeypatch.setattr(tqmod, "match_stkinfo", lambda kw: [
+        {"Code": "300750.SZ", "Name": "宁德时代"},
+        {"Code": "03750.HK", "Name": "宁德时代"},
+        {"Code": "002361.OF", "Name": "国富恒瑞债券A"},
+    ])
+    text = asyncio.run(registry._tool_search_symbols(None, {"keyword": "宁德时代"}, None))
+    assert "300750.SZ(深市)" in text and "03750.HK(港股)" in text and "002361.OF(场外基金)" in text
+    assert "共 3 条" in text
+
+
+def test_tool_search_symbols_empty_and_unavailable(monkeypatch):
+    """查不到返回 None(不是 []) → 如实说没有, 不说成"没数据"。"""
+    import asyncio
+
+    monkeypatch.setattr(tqmod, "match_stkinfo", lambda kw: None)
+    assert "没有匹配「xxxxxx」" in asyncio.run(
+        registry._tool_search_symbols(None, {"keyword": "xxxxxx"}, None))
+
+    def _boom(kw):
+        raise RuntimeError("conn refused")
+
+    monkeypatch.setattr(tqmod, "match_stkinfo", _boom)
+    out = asyncio.run(registry._tool_search_symbols(None, {"keyword": "神剑"}, None))
+    assert "取不到该数据" in out and "不要用其它来源猜测替代" in out
+    assert asyncio.run(registry._tool_search_symbols(None, {}, None)).startswith("请提供检索关键词")
+
+
+def test_tool_get_index_etfs_sort_premium_and_selfheal(monkeypatch):
+    """按规模降序 + 折溢价率自带计算 + 裸码后缀自愈。"""
+    import asyncio
+
+    calls: list[str] = []
+
+    def _fake(zs):
+        calls.append(zs)
+        if zs == "000300.SH":
+            return [
+                {"Code": "159925.SZ", "Name": "沪深300ETF南方", "Sz": "28.61",
+                 "NowPrice": "4.591", "IOPV": "4.5889"},
+                {"Code": "510300.SH", "Name": "沪深300ETF华泰", "Sz": "1200.00",
+                 "NowPrice": "4.6000", "IOPV": "4.6000"},
+                {"Code": "512999.SH", "Name": "无IOPV的ETF", "Sz": "5.00",
+                 "NowPrice": "1.000", "IOPV": "0"},
+            ]
+        return []
+
+    monkeypatch.setattr(tqmod, "trackzs_etf", _fake)
+    text = asyncio.run(registry._tool_get_index_etfs(None, {"index_code": "000300"}, None))
+    assert calls == ["000300.SH"]                       # 裸码 → 补 .SH 自愈成功
+    assert "跟踪 000300.SH" in text and "共 3 只" in text
+    # 规模降序: 1200 的应排在 28.61 前面
+    assert text.index("510300.SH") < text.index("159925.SZ")
+    assert "折溢价 +0.05%" in text                      # (4.591-4.5889)/4.5889 = +0.046%
+    assert "折溢价 +0.00%" in text                      # 现价==IOPV
+    assert "512999.SH" in text and "IOPV 0" in text     # IOPV=0 时不给折溢价数字(不编)
+    assert text.count("折溢价") == 2
+
+
+def test_tool_get_index_etfs_not_found_and_missing_arg(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(tqmod, "trackzs_etf", lambda zs: [])
+    out = asyncio.run(registry._tool_get_index_etfs(None, {"index_code": "930599.CSI"}, None))
+    assert "没有指数「930599.CSI」的跟踪 ETF" in out and "试过" in out
+    assert asyncio.run(registry._tool_get_index_etfs(None, {}, None)).startswith("请提供指数代码")
+
+
+def test_tool_download_client_data_requires_date_and_code(monkeypatch):
+    """类型 1/2/5 缺参 → 明说缺什么, **不能**默认成今天去下(客户端按年度取数)。"""
+    import asyncio
+
+    def _boom(**kw):
+        raise AssertionError("缺参时不该调用 vendor")
+
+    monkeypatch.setattr(tqmod, "download_file", _boom)
+    out = asyncio.run(registry._tool_download_client_data(None, {"data_type": 5}, None))
+    assert "需要指定日期" in out and "20260924" in out
+    out2 = asyncio.run(registry._tool_download_client_data(
+        None, {"data_type": 5, "date": "20260924"}, None))
+    assert "需要指定证券代码" in out2
+    out3 = asyncio.run(registry._tool_download_client_data(None, {"data_type": 9}, None))
+    assert out3.startswith("请提供 data_type")
+
+
+def test_tool_download_client_data_reports_client_receipt(monkeypatch):
+    """如实转述客户端回执, 且**说明这是喂数据不是取数**。"""
+    import asyncio
+
+    seen: dict = {}
+
+    def _fake(*, stock_code=None, down_time=None, down_type=None):
+        seen.update(stock_code=stock_code, down_time=down_time, down_type=down_type)
+        return {"ErrorId": "0", "Msg": "下载经营分析数据文件[2026]成功。", "run_id": "0"}
+
+    monkeypatch.setattr(tqmod, "download_file", _fake)
+    text = asyncio.run(registry._tool_download_client_data(
+        None, {"data_type": 5, "stock_code": "688318.SH", "date": "20260924"}, None))
+    assert seen == {"stock_code": "688318.SH", "down_time": "20260924", "down_type": 5}
+    assert "下载经营分析数据文件[2026]成功。" in text
+    assert "不是取数结果" in text and "PYPlugins" in text

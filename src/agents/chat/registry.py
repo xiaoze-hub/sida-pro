@@ -1564,3 +1564,207 @@ async def _tool_get_stock_sectors(db: Session, args: dict, user: User | None = N
         if names:
             lines.append(f"· {t}: " + "、".join(names))
     return "\n".join(lines)
+
+
+# ─────────── 第二批 TQ 工具(2026-09-25): 证券检索 / 指数ETF / 客户端喂数据 ───────────
+# 这三个 vendor 封装**早已存在且结构正确**(与 kzz_info 不同, 无需修), 只是无人调用。
+# 契约与实测见 skills/finance/tq-capability-audit/references/api-contracts.md。
+
+#: 通达信代码后缀 → 市场中文名(检索结果跨市场, 必须标出来源, 否则 03750.HK 会被当 A 股)。
+_TQ_SUFFIX_CN = {
+    "SZ": "深市", "SH": "沪市", "BJ": "北交所", "HK": "港股",
+    "OF": "场外基金", "CSI": "中证指数", "CFF": "中金所", "US": "美股",
+}
+
+
+def _tq_market_cn(code: str) -> str:
+    return _TQ_SUFFIX_CN.get(code.rsplit(".", 1)[-1].upper(), "") if "." in code else ""
+
+
+@register_chat_tool(
+    "search_symbols",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "search_symbols",
+            "description": (
+                "按名称/简称/拼音/代码检索证券, **跨市场**(A股/北交所/港股/场外基金/可转债)。"
+                "用于把用户说的名字换成带市场的代码, 或确认某个名字对应哪些标的。"
+                "注意: 同名可能跨市场(如宁德时代 A股 300750.SZ 与港股 03750.HK), "
+                "结果里已标出市场, 选错市场会查不到行情。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "名称/简称/拼音/代码片段, 如 宁德时代、002361、立讯转债",
+                    },
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    caliber="通达信客户端 TQ get_match_stkinfo(证券检索口径, 覆盖 A/北交所/港股/场外基金/转债)",
+)
+async def _tool_search_symbols(db: Session, args: dict, user: User | None = None) -> str:
+    kw = str(args.get("keyword") or "").strip()
+    if not kw:
+        return "请提供检索关键词(keyword), 如 宁德时代 / 002361 / 立讯转债。"
+    ok, v = _tq_vendor_call("match_stkinfo", kw)
+    if not ok:
+        return _tq_unavailable(str(v))
+    rows = [r for r in (v or []) if isinstance(r, dict) and r.get("Code")]
+    if not rows:
+        return f"通达信里没有匹配「{kw}」的证券(名称/代码是否正确?)。"
+    lines = [f"🔍 通达信检索「{kw}」(共 {len(rows)} 条):"]
+    for r in rows[:15]:
+        code = str(r.get("Code") or "")
+        mkt = _tq_market_cn(code)
+        lines.append(f"· {r.get('Name') or '?'} {code}" + (f"({mkt})" if mkt else ""))
+    if len(rows) > 15:
+        lines.append(f"(仅显示前 15 条, 共 {len(rows)} 条)")
+    return "\n".join(lines)
+
+
+@register_chat_tool(
+    "get_index_etfs",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_index_etfs",
+            "description": (
+                "查跟踪某个指数的 ETF 列表: 现价、IOPV(参考净值)、**折溢价率**、规模(亿元)。"
+                "用于 ETF 选择、规模比较、以及看某只 ETF 当日是溢价还是折价。"
+                "指数代码需带市场后缀, 如 000300.SH(沪深300) / 399006.SZ(创业板指) / 950162.CSI。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index_code": {
+                        "type": "string",
+                        "description": "指数代码, 如 000300.SH、399006.SZ、950162.CSI(裸码会自动补后缀试)",
+                    },
+                },
+                "required": ["index_code"],
+            },
+        },
+    },
+    caliber="通达信客户端 TQ get_trackzs_etf_info(跟踪指数 ETF 口径: IOPV/规模/净额)",
+)
+async def _tool_get_index_etfs(db: Session, args: dict, user: User | None = None) -> str:
+    raw = str(args.get("index_code") or "").strip().upper()
+    if not raw:
+        return "请提供指数代码(index_code), 如 000300.SH / 399006.SZ / 950162.CSI。"
+    # 裸码不知市场 → 依次试后缀(自愈; 中间失败不打 WARNING, 逻辑同 get_kzz_terms)
+    cands = [raw] if "." in raw else [f"{raw}.SH", f"{raw}.SZ", f"{raw}.CSI", raw]
+    rows: list[dict] = []
+    used = ""
+    for c in cands:
+        ok, v = _tq_vendor_call("trackzs_etf", c, _quiet=True)
+        if ok and isinstance(v, list):
+            got = [r for r in v if isinstance(r, dict) and r.get("Code")]
+            if got:
+                rows, used = got, c
+                break
+    if not rows:
+        return (f"通达信里没有指数「{raw}」的跟踪 ETF(试过 {'/'.join(cands)}) —— "
+                f"指数代码或后缀是否正确?")
+
+    def _f(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    enriched: list[tuple[float, dict, float | None]] = []
+    for r in rows:
+        px, iopv, sz = _f(r.get("NowPrice")), _f(r.get("IOPV")), _f(r.get("Sz"))
+        # 折溢价率 = (现价 - IOPV) / IOPV; IOPV 缺失/为 0 时不给数字, 不编
+        prem = ((px - iopv) / iopv * 100) if (px is not None and iopv) else None
+        enriched.append((sz if sz is not None else -1.0, r, prem))
+    enriched.sort(key=lambda t: t[0], reverse=True)
+    lines = [f"📊 跟踪 {used} 的 ETF(通达信, 共 {len(rows)} 只, 按规模降序):"]
+    for sz, r, prem in enriched[:20]:
+        parts = [f"{r.get('Name') or '?'}({r.get('Code')})"]
+        if r.get("Sz") not in (None, ""):
+            parts.append(f"规模 {r['Sz']} 亿")
+        if r.get("NowPrice") not in (None, ""):
+            parts.append(f"现价 {r['NowPrice']}")
+        if r.get("IOPV") not in (None, ""):
+            parts.append(f"IOPV {r['IOPV']}")
+        if prem is not None:
+            parts.append(f"折溢价 {prem:+.2f}%")
+        lines.append("· " + " | ".join(parts))
+    if len(rows) > 20:
+        lines.append(f"(仅显示前 20 只, 共 {len(rows)} 只)")
+    return "\n".join(lines)
+
+
+#: download_file 的 down_type 中文名(与客户端 Msg 对齐)。
+_TQ_DOWN_NAMES = {
+    1: "十大股东数据文件", 2: "ETF 申赎清单文件", 3: "最近舆情信息文件",
+    4: "股票综合信息文件", 5: "经营分析数据文件",
+}
+
+
+@register_chat_tool(
+    "download_client_data",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "download_client_data",
+            "description": (
+                "让**通达信客户端**下载指定数据文件(落客户端本地 .\\PYPlugins\\data)。"
+                "这是给客户端喂数据的前置动作, **不是取数接口** —— 返回只有客户端的执行回执, "
+                "数据本身本服务读不到。用途: 需要客户端侧已有某类数据时(如经营分析/十大股东)先触发下载。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "data_type": {
+                        "type": "integer",
+                        "description": "1 十大股东 / 2 ETF申赎清单 / 3 最近舆情 / 4 股票综合信息 / 5 经营分析数据",
+                        "enum": [1, 2, 3, 4, 5],
+                    },
+                    "stock_code": {
+                        "type": "string",
+                        "description": "证券代码(类型 1/2/5 需要), 如 688318.SH",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "日期 YYYYMMDD(类型 1/2/5 需要, 客户端按该日期所在年度下载), 如 20260924",
+                    },
+                },
+                "required": ["data_type"],
+            },
+        },
+    },
+    caliber="通达信客户端 TQ download_file(客户端数据文件下载口径, 非取数接口)",
+)
+async def _tool_download_client_data(db: Session, args: dict, user: User | None = None) -> str:
+    try:
+        dt = int(args.get("data_type") or 0)
+    except (TypeError, ValueError):
+        dt = 0
+    if dt not in _TQ_DOWN_NAMES:
+        return ("请提供 data_type: 1 十大股东 / 2 ETF申赎清单 / 3 最近舆情 / "
+                "4 股票综合信息 / 5 经营分析数据。")
+    name = _TQ_DOWN_NAMES[dt]
+    code = str(args.get("stock_code") or "").strip()
+    day = str(args.get("date") or "").strip()
+    # 文档标这 3 项必选, 客户端也按「日期所在年度」取数 —— 缺参就明说, 不替它猜
+    if dt in (1, 2, 5):
+        if not day:
+            return f"{name}需要指定日期(date, 形如 20260924) —— 客户端按该日期所在年度下载。"
+        if not code:
+            return f"{name}需要指定证券代码(stock_code, 如 688318.SH)。"
+    ok, v = _tq_vendor_call("download_file", stock_code=code, down_time=day, down_type=dt)
+    if not ok:
+        return _tq_unavailable(str(v))
+    msg = str(v.get("Msg") or "").strip() if isinstance(v, dict) else ""
+    return "\n".join([
+        f"📥 已触发客户端下载「{name}」" + (f" —— 客户端返回: {msg}" if msg else ""),
+        "注意: 文件下载在**通达信客户端本地**(.\\PYPlugins\\data), 本服务读不到内容; "
+        "这是给客户端喂数据的前置动作, 不是取数结果。",
+    ])
