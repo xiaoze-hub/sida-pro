@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -28,7 +29,17 @@ _global_scheduler: "TqSentimentScheduler | None" = None
 
 
 def _is_market_day() -> bool:
-    return datetime.now().weekday() < 5  # 周一到周五, 节假日留 hook(取不到就当交易日处理)
+    """是否 A 股交易日(统一走 src.core.trading_calendar, 含法定节假日/调休)。
+
+    ⚠️ 不要退回 `weekday() < 5`: 周中假日会被误判成交易日。
+    """
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day
+
+    try:
+        return is_trading_day(datetime.now(ZoneInfo("Asia/Shanghai")).date())
+    except TradingCalendarError:
+        logger.warning("交易日历未覆盖当前年份, 本次按非交易日处理(请补表)")
+        return False
 
 
 def _needs_backfill(db) -> bool:

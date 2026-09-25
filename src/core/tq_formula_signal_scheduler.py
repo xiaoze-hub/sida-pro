@@ -18,7 +18,7 @@ TQ 网关背后是**一个** Windows 客户端进程。全市场条件选股扫�
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -41,17 +41,35 @@ _global_scheduler: "TqFormulaSignalScheduler | None" = None
 
 
 def _is_market_day() -> bool:
-    return datetime.now().weekday() < 5  # 节假日留 hook(取不到就当交易日处理)
+    """是否 A 股交易日 —— 走全仓统一的 `src/core/trading_calendar`(含法定节假日/调休)。
+
+    ⚠️ 不要退回 `weekday() < 5`: 那会把中秋/国庆之类的**周中假日**当交易日, 让采集器
+    在休市日空跑一轮全市场扫描(26s), 还会给"回补"喂进不存在的日期。
+    日历静态表未覆盖的年份按**非交易日**处理(宁可漏采, 不在假期乱动数据)。
+    """
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day
+
+    try:
+        return is_trading_day(datetime.now(ZoneInfo("Asia/Shanghai")).date())
+    except TradingCalendarError:
+        logger.warning("交易日历未覆盖当前年份, 本次按非交易日处理(请补表)")
+        return False
 
 
 def _recent_trading_days(n: int) -> list[str]:
-    """最近 n 个"像交易日"的日子(周一~周五倒推)。真实交易日由 TQ 返回值自证。"""
+    """最近 n 个**真实**交易日(YYYYMMDD, 由近及远)。走统一日历, 含节假日/调休。"""
+    from src.core.trading_calendar import TradingCalendarError, is_trading_day, prev_trading_day
+
     out: list[str] = []
-    day = datetime.now(ZoneInfo("Asia/Shanghai"))
-    while len(out) < n:
-        if day.weekday() < 5:
+    day = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    try:
+        if not is_trading_day(day):  # 今天休市(周末/节假日) → 从最近的交易日算起
+            day = prev_trading_day(day)
+        while len(out) < n:
             out.append(day.strftime("%Y%m%d"))
-        day -= timedelta(days=1)
+            day = prev_trading_day(day)
+    except TradingCalendarError:
+        logger.warning("交易日历未覆盖, 回补列表截断于 %s", day)
     return out
 
 

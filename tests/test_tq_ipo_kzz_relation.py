@@ -167,3 +167,37 @@ def test_tool_stock_sectors_empty_is_honest(monkeypatch):
 
     text = asyncio.run(registry._tool_get_stock_sectors(None, {"symbol": "002361"}, None))
     assert "没给出" in text
+
+
+# ───────── 交易日判定: 必须走统一日历, 不能按 weekday 近似 ─────────
+
+
+def test_recent_trading_days_are_real_trading_days():
+    """回归: 旧实现按 `weekday()<5` 倒推, 会把**周中假日**当交易日。
+
+    2026-09-25 是中秋节(周五休市) —— 在旧实现下这个断言必挂。
+    这里只用性质断言(不固定"今天"), 任意日期运行都成立:
+    返回的每一天都必须是日历认可的交易日, 且严格递减、格式为 YYYYMMDD。
+    """
+    from src.core.trading_calendar import is_trading_day
+    from src.core.tq_formula_signal_scheduler import _recent_trading_days
+
+    days = _recent_trading_days(6)
+    assert len(days) == 6
+    for d in days:
+        assert len(d) == 8 and d.isdigit(), d
+        assert is_trading_day(f"{d[:4]}-{d[4:6]}-{d[6:8]}"), f"{d} 不是交易日"
+    assert days == sorted(days, reverse=True)
+    assert len(set(days)) == 6
+
+
+def test_market_day_uses_calendar_not_weekday():
+    """`_is_market_day` 必须是日历判定: 中秋节(2026-09-25, 周五)在日历里是休市日。"""
+    from datetime import date
+
+    from src.core.trading_calendar import is_trading_day
+    from src.core.tq_formula_signal_scheduler import _is_market_day
+
+    assert is_trading_day(date(2026, 9, 25)) is False   # 中秋, 周五
+    assert is_trading_day(date(2026, 9, 24)) is True    # 节前最后交易日
+    assert isinstance(_is_market_day(), bool)           # 不抛异常
