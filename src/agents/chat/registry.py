@@ -1344,6 +1344,44 @@ async def _tool_get_stock_chips(db: Session, args: dict, user: User | None = Non
     return render_text(payload)
 
 
+@register_chat_tool(
+    "get_early_signals",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_early_signals",
+            "description": (
+                "启动早期信号：用通达信客户端条件选股公式**全市场扫描**的结果，给出"
+                "「放量上攻 / 温和放量上攻 / 阶段放量 / 持续放量 / 突然放量 / 下跌多日再放量上涨 /"
+                "小步碎阳 / 突破长期盘整 / 四串阳 / 连续N天收阳 / 昨日底部十字星 / 价量渐低后阳包阴 /"
+                "早晨之星 / 阳包阴」各自今天有多少只票满足，以及相对近 N 日基线的倍数，并给出命中清单。"
+                "用户问「今天有哪些票刚启动/刚放量」「有没有突破形态」「启动早期信号」「埋伏候选」时调用。"
+                "⚠️ 这是客观条件满足的家数，**不是推荐**；扫描不完整时会显式提示。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "基线窗口交易日数，默认 20", "default": 20},
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="客户端条件选股全市场扫描(通达信 TQ)，计数=只，基线=近 N 日均值",
+)
+async def _tool_get_early_signals(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.startup_signals import read_startup_signals, render_text
+
+    days = int(args.get("days") or 20)
+    payload = read_startup_signals(db, days=days)
+    if not payload.get("ok"):
+        return (
+            "启动早期信号暂不可用：尚未扫描落库（由盘后定时任务写入，非实时）。"
+            "此处**不猜数据**——需要的话先跑一次条件选股扫描。"
+        )
+    return render_text(payload)
+
+
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
 
 from src.agents.chat.tools_thsdk import (  # noqa: E402  (仅 stdlib 级依赖, 不构成循环)

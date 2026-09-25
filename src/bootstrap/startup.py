@@ -26,6 +26,7 @@ from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
+from src.core.market_breadth_scheduler import MarketBreadthScheduler
 from src.web.database import SessionLocal, init_db
 
 logger = logging.getLogger("server")
@@ -262,6 +263,20 @@ async def lifespan(app):
             logger.info("TQ 条件选股信号调度器已启动")
         except Exception as e:
             logger.error(f"TQ条件选股信号调度器启动失败: {e}")
+
+        # 市场广度日序列(2026-09-25)
+        # 为什么需要: 从 PG klines 自算每日涨跌家数与六指标(ADL/ADR/ARMS/BTI/MCL/STIX)
+        # +情绪温度; 不跑调度则序列不增长, 分位会一直停在最后一次同步的日期。
+        # 18:40 与 TQ 类调度器(15:35/15:50)错开 —— TQ 背后只有一个客户端进程。
+        try:
+            settings = Settings()
+            rt.market_breadth_scheduler = MarketBreadthScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.market_breadth_scheduler.start()
+            logger.info("市场广度调度器已启动")
+        except Exception as e:
+            logger.error(f"市场广度调度器启动失败: {e}")
 
         # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
         # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
