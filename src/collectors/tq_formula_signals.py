@@ -151,7 +151,7 @@ def sync_formula_signals(db, *, trade_date: str = "") -> dict:
 def latest_with_baseline(db, *, days: int = DEFAULT_BASELINE_DAYS) -> dict:
     """最新一日各公式信号家数 + 近 N 日均值/极值(供端点与 UI 判读)。
 
-    返回 {trade_date, items: [{formula_code, name, hit_count, scanned_count,
+    返回 {trade_date, items: [{formula_code, formula_name, formula_arg, hit_count, scanned_count,
     complete, truncated, baseline_avg, baseline_max, baseline_min, samples}]}。
     没有历史时 baseline 全为 None —— **不填占位数字**(缺失就是缺失)。
     """

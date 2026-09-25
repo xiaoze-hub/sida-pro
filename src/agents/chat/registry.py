@@ -1352,3 +1352,207 @@ for _thsdk_name in _THSDK_SCHEMA_BY_NAME:
         requires="",
     )(_make_thsdk_handler(_thsdk_name))
 del _thsdk_name
+
+
+# ──────────────── 通达信客户端(TQ)独家能力工具(2026-09-25) ────────────────
+# 为什么单列: 这几个接口**只有 TQ 给**(免来源/东财/同花顺没有或口径不同), vendor 里
+# 早已实现却**无人调用**(ipo_info 老版只透传裸 list; kzz_info 因判错类型恒返 {})。
+# 盘活它们 = 用户问「今天有什么可打新」「这只转债的强赎价/纯债价值」「票属于哪些板块」
+# 时不必再靠外部源拼。全部走 tq_rpc → 客户端本地, 零外部配额。
+#
+# 降级口径(与全站一致): TQ 不可用 → 如实说"取不到", **禁止用其它源猜一个数字顶上**。
+
+
+def _tq_unavailable(err: str) -> str:
+    return (f"通达信客户端(TQ)当前取不到该数据({err})。请确认 TQ 客户端在运行; "
+            f"不要用其它来源猜测替代。")
+
+
+def _tq_vendor_call(fn_name: str, *a, **kw):
+    """调 vendor 里的 TQ 封装。返回 (ok, value_or_err); 异常不外抛, 由工具如实告知。"""
+    try:
+        from marketdata.vendors import tq as _tq
+
+        return True, getattr(_tq, fn_name)(*a, **kw)
+    except Exception as e:  # noqa: BLE001 — 工具层不因单源失败炸掉对话
+        logger.warning("chat TQ 工具 %s 失败: %s", fn_name, e)
+        return False, f"{type(e).__name__}: {e}"[:160]
+
+
+def _fmt_num(x, unit: str = "", zero_word: str = "未披露") -> str:
+    """0/None 一律当**未披露**说清楚 —— 客户端常用 0 表示"还没出来", 不能当真实值。"""
+    if x is None or x == 0:
+        return zero_word
+    return f"{x:g}{unit}"
+
+
+def _fmt_date8(d: str) -> str:
+    d = (d or "").strip()
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 and d.isdigit() else (d or "未知")
+
+
+@register_chat_tool(
+    "get_ipo_calendar",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_ipo_calendar",
+            "description": (
+                "获取新股/新债申购日历(申购日、申购价、申购代码、申购上限、发行市盈率)。"
+                "用户问「今天/最近有什么新股可打新」「有没有新债申购」「打新日历」时调用。"
+                "数据来自通达信客户端(TQ), 只有它给这个日历。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["new", "bond", "all"],
+                        "description": "new=新股(默认) / bond=新债 / all=两者都要",
+                    },
+                    "only_today": {
+                        "type": "boolean",
+                        "description": "true=只看今天; false(默认)=今天及以后",
+                    },
+                },
+            },
+        },
+    },
+    caliber="通达信客户端 TQ get_ipo_info(官方申购日历; 申购价/上限为 0 = 客户端尚未披露, 非真实值)",
+)
+async def _tool_get_ipo_calendar(db: Session, args: dict, user: User | None = None) -> str:
+    kind = str(args.get("kind") or "new").strip().lower()
+    ipo_type = {"new": 0, "bond": 1, "all": 2}.get(kind, 0)
+    only_today = bool(args.get("only_today"))
+    ipo_date = 0 if only_today else 1
+    ok, data = _tq_vendor_call("ipo_info", ipo_type, ipo_date)
+    if not ok:
+        return _tq_unavailable(str(data))
+    scope = "今天" if only_today else "今天及以后"
+    what = {0: "新股", 1: "新债", 2: "新股/新债"}[ipo_type]
+    if not isinstance(data, list) or not data:
+        return f"通达信申购日历({scope})里没有{what}。(数据源: 通达信客户端 get_ipo_info)"
+    lines = [f"📅 {what}申购日历(通达信, {scope}, 共 {len(data)} 条):"]
+    for r in data:
+        lines.append(
+            f"· {r.get('name') or '?'}({r.get('code')})"
+            f" 申购日 {_fmt_date8(r.get('sg_date') or '')}"
+            f" | 申购价 {_fmt_num(r.get('sg_price'), ' 元', '待定')}"
+            f" | 申购代码 {r.get('sg_code') or '—'}"
+            f" | 申购上限 {_fmt_num(r.get('max_sg'))}"
+            f" | 发行市盈率 {_fmt_num(r.get('pe_issue'), ' 倍')}"
+        )
+    lines.append("注: 显示『待定/未披露』= 客户端当下确实没给该字段(不是 0); 数据源=通达信 TQ。")
+    return "\n".join(lines)
+
+
+@register_chat_tool(
+    "get_kzz_terms",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_kzz_terms",
+            "description": (
+                "获取单只可转债的**条款/基础信息**: 转股价、当期利率、剩余规模、强赎触发价、"
+                "回售触发价、到期日/到期价、纯债价值、评级、正股。"
+                "用户问「XX转债的强赎价多少」「这个转债转股价/还剩多少规模/什么时候到期」时调用。"
+                "行情(涨跌/成交)请用 get_thsdk_market_data_bond; 本工具给的是条款。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "可转债代码, 如 128136 或 128136.SZ"},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    caliber="通达信客户端 TQ get_kzz_info(可转债条款口径)",
+)
+async def _tool_get_kzz_terms(db: Session, args: dict, user: User | None = None) -> str:
+    raw = str(args.get("code") or "").strip().upper()
+    if not raw:
+        return "请提供可转债代码(code), 如 128136 或 128136.SZ。"
+    # 裸码在客户端会报 codestr error → 依次试 SZ/SH 两种后缀(自愈, 不猜死)
+    cands = [raw] if "." in raw else [raw, f"{raw}.SZ", f"{raw}.SH"]
+    last_err = ""
+    for c in cands:
+        ok, d = _tq_vendor_call("kzz_info", c)
+        if not ok:
+            last_err = str(d)
+            continue
+        if isinstance(d, dict) and d:
+            pairs = [
+                ("转债名称", d.get("KZZName")), ("转债代码", d.get("KZZCode")),
+                ("转债现价", d.get("KZZNow")), ("正股", d.get("HSCode") or d.get("HSName")),
+                ("转股价", d.get("ZGPrice")), ("当期利率", d.get("CurRate")),
+                ("剩余规模", d.get("RestScope")), ("强赎触发价", d.get("ForceRedeem")),
+                ("回售触发价", d.get("PutBack")), ("转股日", d.get("ZGDate")),
+                ("到期日", d.get("EndDate")), ("到期价", d.get("EndPrice")),
+                ("纯债价值", d.get("RealValue")), ("评级", d.get("HSScore")),
+            ]
+            body = " | ".join(f"{k} {v}" for k, v in pairs if v not in (None, "", "0.000", "0.00"))
+            return f"🔗 可转债条款(通达信, {c}): {body or '(客户端未返回字段)'}"
+    if last_err:
+        return _tq_unavailable(last_err)
+    return f"通达信里查不到可转债 {raw}(试过 {'/'.join(cands)}) —— 代码是否正确或已退市?"
+
+
+@register_chat_tool(
+    "get_stock_sectors",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_stock_sectors",
+            "description": (
+                "获取某只 A 股**所属的全部板块**(行业/地区/概念/风格/指数, 含各板块成分股数)。"
+                "用户问「这只票属于哪些板块/什么概念/哪个行业」「它为什么跟着某题材涨」时调用 —— "
+                "比外部源更全(含通达信自编概念), 可用于题材归因。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "股票代码, 如 002361 或 002361.SZ"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="通达信客户端 TQ get_relation(客户端板块归属口径, 含自编概念)",
+)
+async def _tool_get_stock_sectors(db: Session, args: dict, user: User | None = None) -> str:
+    raw = str(args.get("symbol") or "").strip()
+    if not raw:
+        return "请提供股票代码(symbol), 如 002361。"
+    code = raw
+    if "." not in code:
+        try:  # 复用产品统一的代码转换(含 92/4/8 → BJ, 6/9/5 → SH)
+            from marketdata.symbol import Market, Symbol
+
+            c = Symbol(code=code, market=Market.CN)
+            from marketdata.vendors.tq import to_tq_code
+
+            code = to_tq_code(c) or code
+        except Exception:  # noqa: BLE001 — 转换失败就按原样试
+            code = raw
+    ok, v = _tq_vendor_call("relation", code)
+    if not ok:
+        return _tq_unavailable(str(v))
+    if not isinstance(v, list):
+        return f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。"
+    rows = [r for r in v if isinstance(r, dict)]
+    if not rows:
+        return f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。"
+    by_type: dict[str, list[str]] = {}
+    for r in rows:
+        name = str(r.get("BlockName") or "").strip()
+        btype = str(r.get("BlockType") or "其它").strip()
+        if name:
+            by_type.setdefault(btype, []).append(name)
+    order = ["行业", "概念", "地区", "风格", "指数"]
+    lines = [f"🧩 {code} 所属板块(通达信, 共 {len(rows)} 个):"]
+    for t in order + [k for k in by_type if k not in order]:
+        names = by_type.get(t)
+        if names:
+            lines.append(f"· {t}: " + "、".join(names))
+    return "\n".join(lines)

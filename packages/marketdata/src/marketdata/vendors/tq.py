@@ -912,16 +912,63 @@ def relation(code: str) -> list:
     return v if isinstance(v, list) else []
 
 
-def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list:
-    """新股/新债申购信息。ipo_type 0新股 1新债 2两者; ipo_date 0今日 1今日及以后。"""
+# 申购类型 → 中文(工具层/端点直接用)
+_IPO_TYPE_CN = {0: "新股", 1: "新发债", 2: "新股+新债"}
+
+
+def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list[dict]:
+    """新股/新债申购日历 → **结构化行**(实测 2026-09-25, 原薄壳只透传裸 list)。
+
+    ipo_type: 0=新股 / 1=新发债 / 2=两者;  ipo_date: 0=仅今天 / 1=今天及以后。
+    返回 [{code, name, sg_date, sg_price, sg_code, max_sg, pe_issue, ipo_type, ipo_type_cn}]
+    —— 服务端**直接返 list[dict]**(不套 Value), 字段全为字符串, 按原样保留不做单位换算:
+      · sg_date 形如 "20260924"(申购日); sg_price = 申购价(元), 新债恒为 100.00;
+      · max_sg = 申购上限(**原文单位**, 客户端只给数值不给单位);
+      · pe_issue 常为 "0.00" = **未披露**, 消费侧按"缺失"处理, 不要当 0 倍市盈率展示。
+    过滤无 Code 的空壳行(服务端偶发返回)。callers: 对话工具 get_ipo_calendar。
+    """
     v = _rpc("get_ipo_info", {"ipo_type": int(ipo_type), "ipo_date": int(ipo_date)})
-    return v if isinstance(v, list) else []
+    if isinstance(v, dict):  # 某些版本可能套一层
+        v = v.get("Value") or v.get("Data") or []
+    if not isinstance(v, list):
+        return []
+    out: list[dict] = []
+    for row in v:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("Code") or "").strip()
+        if not code:
+            continue
+        out.append({
+            "code": code,
+            "name": str(row.get("Name") or "").strip(),
+            "sg_date": str(row.get("SGDate") or "").strip(),
+            "sg_price": _to_float(row.get("SGPrice")),
+            "sg_code": str(row.get("SGCode") or "").strip(),
+            "max_sg": _to_float(row.get("MaxSG")),
+            "pe_issue": _to_float(row.get("PE_Issue")),
+            "ipo_type": int(ipo_type),
+            "ipo_type_cn": _IPO_TYPE_CN.get(int(ipo_type), ""),
+        })
+    return out
 
 
 def kzz_info(code: str) -> dict:
-    """可转债基础信息。"""
+    """可转债条款/基础信息。⚠️ 必须传**带后缀**代码(如 `128136.SZ`); 裸码报 codestr error。
+
+    实测 2026-09-25 修正: 响应是 `result.Value = [ {...} ]`(**列表**), 原实现判
+    `isinstance(v, dict)` 于是**恒返 {}**(静默空)。这里取首行。
+    字段: KZZCode/KZZName/KZZNow(转债现价)/HSCode(正股)/ZGPrice(转股价)/CurRate(当期利率)/
+    RestScope(剩余规模)/ForceRedeem(强赎触发价)/PutBack(回售触发价)/ZGDate(转股日)/
+    EndPrice(到期价)/EndDate(到期日)/RealValue(纯债价值)/HSScore(评级)/ExpireYield 等。
+    查不到该转债 → {}。
+    """
     v = _rpc("get_kzz_info", {"stock_code": code})
-    return v if isinstance(v, dict) else {}
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, list) and v and isinstance(v[0], dict):
+        return v[0]
+    return {}
 
 
 def trackzs_etf(zs_code: str) -> list:
@@ -1412,3 +1459,4 @@ def exday_latest(code: str, *, count: int = 1, _rpc_fn=None) -> dict:
         out[name] = _to_float(row.get(k))
     out["date"] = str(row.get("Date") or "")
     return out
+
