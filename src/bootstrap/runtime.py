@@ -26,6 +26,7 @@ from src.core.price_alert_scheduler import PriceAlertScheduler
 from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
+from src.core.market_breadth_scheduler import MarketBreadthScheduler
 from src.core.scheduler import AgentScheduler
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
@@ -61,6 +62,10 @@ tq_sentiment_scheduler: TqSentimentScheduler | None = None
 # 落"当日触发家数"。这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 无基线)。
 # 15:50 而非 15:35: TQ 背后是**一个**客户端进程, 与情绪序列同点跑会把它压出假死。
 tq_formula_signal_scheduler: TqFormulaSignalScheduler | None = None
+
+# 市场广度日序列(2026-09-25): 每交易日 18:40 从 PG klines 自算每日涨跌家数与
+# 六指标(ADL/ADR/ARMS/BTI/MCL/STIX)+情绪温度。与 TQ 类调度器错开, 不抢客户端。
+market_breadth_scheduler: MarketBreadthScheduler | None = None
 
 # 2026-08-17 加股 60s 快速 backfill:
 # APScheduler 跑在它自己的后台线程(没 asyncio loop),
