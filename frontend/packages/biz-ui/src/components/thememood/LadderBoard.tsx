@@ -222,7 +222,11 @@ export default function LadderBoard(props: {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [onlyBoard, setOnlyBoard] = useState<number | null>(null)
   useEffect(() => { scrollToLatest(ref.current) }, [ladder, liveDay, view])
+  // 按日列视图: **最新在左**(2026-09-26 用户口径), 与题材情绪矩阵/连板梯队一致。
+  // 显式按日期降序排(不依赖接口返回顺序), 盘中 live 那天日期最大 -> 自然落在最左。
   const cols = [...ladder, ...(liveDay ? [liveDay] : [])]
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)))
   const toggleRow = (b: number) => setCollapsed((prev) => {
     const next = new Set(prev)
     if (next.has(b)) next.delete(b)

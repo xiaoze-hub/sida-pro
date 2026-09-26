@@ -133,7 +133,7 @@ describe('ThemeMood 页面', () => {
     })
   })
 
-  it('时间轴加载后默认滚到最新一端', async () => {
+  it('时间轴加载后默认滚到最新一端(最新在左 => 滚到 0)', async () => {
     const proto = HTMLElement.prototype
     const origW = Object.getOwnPropertyDescriptor(proto, 'scrollWidth')
     const origL = Object.getOwnPropertyDescriptor(proto, 'scrollLeft')
@@ -150,7 +150,9 @@ describe('ThemeMood 页面', () => {
       mocks.fetchAPI.mockResolvedValue(RESP)
       render(<ThemeMoodPage />)
       await screen.findAllByText('元件')
-      expect(writes).toContain(800)
+      // 2026-09-26: 轴改为最新在左, 故滚到 0(原为 scrollWidth=800)
+      expect(writes.length).toBeGreaterThan(0)   // 真的滚过
+      expect(Array.from(new Set(writes))).toEqual([0])
     } finally {
       if (origW) Object.defineProperty(proto, 'scrollWidth', origW)
       if (origL) Object.defineProperty(proto, 'scrollLeft', origL)
