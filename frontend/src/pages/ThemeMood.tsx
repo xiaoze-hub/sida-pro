@@ -113,7 +113,7 @@ const DIMS = ['涨停结构', '题材扩散', '核心强度', '接力反馈', '�
 const MARKET_CURVE_H = 46
 const DETAIL_CURVE_H = 68
 
-/** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。 */
+/** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。最新在左 => 滚到 0。 */
 function useAutoScrollToLatest(axisLen: number) {
   const ref = useRef<HTMLDivElement | null>(null)
   const lastLen = useRef(0)
@@ -121,7 +121,8 @@ function useAutoScrollToLatest(axisLen: number) {
     const el = ref.current
     if (!el || axisLen === 0 || axisLen === lastLen.current) return
     lastLen.current = axisLen
-    el.scrollLeft = el.scrollWidth
+    // 最新在左 -> 回到最左端即"最新"(2026-09-26 顺序调整前这里是 scrollWidth)
+    el.scrollLeft = 0
   }, [axisLen])
   return ref
 }
@@ -247,7 +248,8 @@ export default function ThemeMoodPage() {
   const axis = axisDates(resp?.dates, items[0]?.cells ?? [], windowDays)
   const bands = monthBands(axis)
   const labels = dayLabels(axis)
-  const latestDate = axis.length ? axis[axis.length - 1] : null
+  // 轴已改为最新在左(见 lib/theme-mood.axisDates), 故最新日取 index 0
+  const latestDate = axis.length ? axis[0] : null
   const detail = items.find((it) => it.block_code === active) ?? null
   const dims = detail ? [detail.s1, detail.s2, detail.s3, detail.s4, detail.s5] : []
   const axisW = axisWidth(axis.length)
@@ -260,6 +262,11 @@ export default function ThemeMoodPage() {
     detail && axis.length ? scoreTrend(axis.map((d) => detailCells?.get(d)?.score ?? null), { height: DETAIL_CURVE_H }) : null
 
   // 时间轴默认对齐"最新"一端; 仅轴长度变化(首次加载/切窗口)时回滚, 轮询刷新不动用户的滚动位置。
+
+  // 轴改成"最新在左"后, trend.last 是**最旧**那端(空间上最右), 不能再拿它当标量标签。
+  // 绘制本身仍按轴顺序(最左 = 最新), 高亮点用 trend.last 是对的。
+  const newestMarketScore = axis.length ? (marketByDate.get(axis[0]) ?? null) : null
+  const newestDetailScore = detail && axis.length ? (detailCells?.get(axis[0])?.score ?? null) : null
   const scrollRef = useAutoScrollToLatest(axis.length)
   const detailScrollRef = useAutoScrollToLatest(axis.length)
 
@@ -499,12 +506,12 @@ export default function ThemeMoodPage() {
                     trend={marketTrend}
                     width={axisW}
                     height={MARKET_CURVE_H}
-                    ariaLabel={`强势题材情绪走势, 最新 ${fmtScore(marketTrend.last?.score)}`}
+                    ariaLabel={`强势题材情绪走势, 最新 ${fmtScore(newestMarketScore)}`}
                     hint={(d) => `${axis[d.i]} · 前20均值 ${fmtScore(d.score)}`}
                     label={
                       <>
                         <span className="text-[11px] text-foreground/60">情绪走势</span>
-                        <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(marketTrend.last?.score)}</span>
+                        <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(newestMarketScore)}</span>
                       </>
                     }
                   />
@@ -594,7 +601,7 @@ export default function ThemeMoodPage() {
                     <span className="text-foreground/70">情绪走势(近 {axis.length} 个交易日)</span>
                     <span className="ml-auto text-muted-foreground">
                       最高 {fmtScore(detailTrend.hi)} · 最低 {fmtScore(detailTrend.lo)} · 最新{' '}
-                      <span className="font-mono text-foreground">{fmtScore(detailTrend.last?.score)}</span>
+                      <span className="font-mono text-foreground">{fmtScore(newestDetailScore)}</span>
                     </span>
                   </div>
                   <div ref={detailScrollRef} className="scrollbar overflow-x-auto pb-1">
@@ -602,7 +609,7 @@ export default function ThemeMoodPage() {
                       trend={detailTrend}
                       width={axisW}
                       height={DETAIL_CURVE_H}
-                      ariaLabel={`${detail.block_name || detail.block_code} 情绪走势, 最新 ${fmtScore(detailTrend.last?.score)}`}
+                      ariaLabel={`${detail.block_name || detail.block_code} 情绪走势, 最新 ${fmtScore(newestDetailScore)}`}
                       hint={(d) => `${axis[d.i]} · 情绪分 ${fmtScore(d.score)}`}
                     />
                   </div>
