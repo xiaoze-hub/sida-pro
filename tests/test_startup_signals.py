@@ -77,3 +77,29 @@ def test_render_text_not_a_recommendation():
 def test_render_empty_when_not_ok():
     assert S.render_text({"ok": False}) == ""
     assert S.render_text({}) == ""
+
+def test_norm_day_accepts_iso_and_compact():
+    """客户端只认紧凑格式; 传 ISO 过去会静默空跑(2026-09-25 实测)。"""
+    from src.collectors.tq_formula_signals import _norm_day
+
+    assert _norm_day("2026-09-24") == "20260924"
+    assert _norm_day("20260924") == "20260924"
+    assert _norm_day("2026/09/24") == "20260924"
+    assert _norm_day("") == ""
+    assert _norm_day("  2026-09-24  ") == "20260924"
+
+def test_startup_formulas_are_wired():
+    """防回归: 14 个启动信号公式必须真的在 FORMULA_SET 里被扫。
+
+    只定义 STARTUP_FORMULAS 而忘了并进 FORMULA_SET = 公式永远不会被扫描,
+    表现是"扫描成功但新公式一行都没有"(2026-09-25 实际踩到, 绕了一轮)。
+    """
+    from src.collectors.tq_formula_signals import BASE_FORMULAS, FORMULA_SET, STARTUP_FORMULAS
+
+    codes = {c for c, _n, _a in FORMULA_SET}
+    missing = [c for c, _n, _a in STARTUP_FORMULAS if c not in codes]
+    assert missing == [], f"这些启动公式没接进 FORMULA_SET: {missing}"
+    assert len(STARTUP_FORMULAS) == 14
+    assert len(FORMULA_SET) == len(BASE_FORMULAS) + 14
+    # 基础组也要在(防止改名时把基础公式弄丢)
+    assert all(c in codes for c, _n, _a in BASE_FORMULAS)
