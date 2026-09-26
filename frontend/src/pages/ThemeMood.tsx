@@ -179,7 +179,7 @@ export default function ThemeMoodPage() {
   const [mood, setMood] = useState<MarketMoodResp | null>(null)
   useEffect(() => {
     let alive = true
-    fetchAPI<MarketMoodResp>(`/market-breadth/history?days=${windowDays}`, { cacheMode: 'reload' })
+    fetchAPI<MarketMoodResp>(`/market-data/breadth-history?days=${windowDays}`, { cacheMode: 'reload' })
       .then((r) => { if (alive) setMood(r) })
       .catch(() => { if (alive) setMood(null) })
     return () => { alive = false }

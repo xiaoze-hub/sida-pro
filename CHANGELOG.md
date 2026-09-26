@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-25 (v0.13.23: 修端点路径 — 生产验证抓出 404)
+
+**生产验证抓出**：v0.13.22 上线后实测 `/api/market-breadth/history` **返回空**。
+
+**根因**：`market_data.router` 在 `src/web/app.py` 是**显式前缀挂载** ——
+`app.include_router(market_data.router, prefix="/api/market-data", ...)`，
+所以我在该 router 里写的 `@router.get("/market-breadth/history")` 真实路径是
+**`/api/market-data/market-breadth/history`**，而前端用 `fetchAPI('/market-breadth/history')`
+（fetchAPI 自带 `/api`）打的是 `/api/market-breadth/history` → **404**。
+
+**修法**：与同 router 的兄弟端点 `breadth-distribution` 命名对齐，路由改为
+**`/api/market-data/breadth-history`**（函数名不变，`tests/test_market_breadth_api.py` 不受影响）；
+前端改为 `fetchAPI('/market-data/breadth-history?days=N')`。
+并在 docstring 里**写明真实路径**（含"本 router 挂在 prefix=/api/market-data"），避免后人再猜。
+
+**顺带修正的验证方法（记入技能）**：
+1. 判断"路由是否存在"要看 **HTTP 状态码**：`curl -o /dev/null -w '%{http_code}'` ——
+   `401` 说明路由在（被鉴权挡）、`404` 才是没挂上；只看响应体会把两者混为一谈。
+2. 要验"端点逻辑出不出数据"就**直接调函数**（容器内 `python3 -c`），绕开 JWT；
+   router 的 `dependencies=protected` 会挡住无 token 的 curl。
+3. 前端产物在容器里是 **`/app/static/assets/`**（`build.sh` 把 `frontend/dist` 拷到 `./static`），
+   不是 `/app/frontend/dist`。
+4. **非交易日不要扫条件选股**（客户端无当日数据，采集器会如实报"无任何公式返回数据"）——
+   验证要用最近交易日：`sync_formula_signals(db, trade_date="2026-09-24")`。
+
 ## 2026-09-25 (v0.13.22: 修 v0.13.21 被 ui-rules 拦住的 R6 -- `.toFixed` 未走 safe 格式化)
 
 v0.13.21 的镜像构建**在 CI 门禁 `Frontend gates (tsc + eslint + vitest + ui-rules)` 失败**：
