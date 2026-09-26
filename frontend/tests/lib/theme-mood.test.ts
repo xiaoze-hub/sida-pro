@@ -58,9 +58,10 @@ describe('axisDates', () => {
     { date: '20260902', score: 66.0, limit_up_cnt: 3 },
   ]
   it('优先共享轴, 缺省回退首个题材 cells, 并按窗口截断', () => {
-    expect(axisDates(['20260901', '20260902', '20260903'], cells, 2)).toEqual(['20260902', '20260903'])
-    expect(axisDates(undefined, cells, 20)).toEqual(['20260901', '20260902'])
-    expect(axisDates([], cells, 20)).toEqual(['20260901', '20260902'])
+    // 顺序 = 最新在左(2026-09-26 用户口径): 与连板梯队一致
+    expect(axisDates(['20260901', '20260902', '20260903'], cells, 2)).toEqual(['20260903', '20260902'])
+    expect(axisDates(undefined, cells, 20)).toEqual(['20260902', '20260901'])
+    expect(axisDates([], cells, 20)).toEqual(['20260902', '20260901'])
     expect(axisDates(undefined, [], 20)).toEqual([])
   })
 })

@@ -1,5 +1,29 @@
 # Changelog
 
+### feat-题材情绪页日期轴改为「最新在左」（用户口径 2026-09-26）
+
+`axisDates()` 由升序（`slice(-window)`）改为**降序（最新在左）**，与页面下方「连板梯队」
+一致（梯队本就 `sort((a,b) => b-a)`）。理由：看盘时最新一天最该先被看到，横向滚动往右翻历史。
+
+**连带改动（同一根轴被全页共用，少改一处就会错位）**：
+- `latestDate` 由 `axis[axis.length-1]` 改为 `axis[0]`；
+- `useAutoScrollToLatest` 由 `scrollLeft = scrollWidth` 改为 **`scrollLeft = 0`**（最新在左端）；
+- **修一个我这次改动引入的真缺陷**：折线标量标签原先取 `trend.last?.score`，
+  轴翻转后 `last` 变成**最旧**那端 → 顶部「最新值」会显示成最旧的值。
+  现改为显式取 `axis[0]`（`newestMarketScore` / `newestDetailScore`）。
+  注意：`TrendChart` 内部用于**高亮点**的 `trend.last` 无需改 —— 绘制按轴顺序，最左点本就是最新点。
+- `monthBands`/`dayLabels` 本身顺序无关（比较相邻项），无需改；但「月首列显示 M/D」的规则
+  随之落到新的最左列（如 `9/11`），需知悉。
+
+测试同步 3 条断言（轴顺序、两条折线点序为镜像）：
+`axisDates` 单测改降序、页面测试的 `9/1`→`9/11`、两条 polyline 点序镜像。
+前端全量 **785 passed**、`tsc -b` 干净、`node scripts/check_ui_rules.mjs` OK。
+
+### test-折线点序镜像与轴顺序已钉住
+
+轴顺序变更属于「静默错位」类风险（折线与列各画各的，肉眼不盯着看不会发现），
+故在 `theme-mood.test.ts` / `theme-mood-page.test.tsx` 中以断言钉住。
+
 ### fix-条件选股扫描的日期格式静默空跑（生产验证抓出）
 
 `formula_scan` 只认**紧凑格式** `20260924`；传 ISO 的 `2026-09-24` 会被判定成

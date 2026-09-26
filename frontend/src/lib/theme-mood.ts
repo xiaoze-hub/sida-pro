@@ -134,10 +134,18 @@ export function dayLabels(dates: string[]): string[] {
   })
 }
 
-/** 共享时间轴: 优先接口 dates, 缺省回退首个题材的 cells(兼容旧响应), 再按窗口截断。 */
+/**
+ * 共享时间轴: 优先接口 dates, 缺省回退首个题材的 cells(兼容旧响应), 再按窗口截断。
+ *
+ * **顺序 = 最新在左**(2026-09-26 用户口径): 与页面下方「连板梯队」一致(那边本就 `sort((a,b)=>b-a)`)。
+ * 理由: 看盘时最新一天最该先被看到, 横向滚动条往右翻的是历史。
+ * ⚠️ 全页共用这条轴(矩阵列 + 走势折线 + 月带 + 日标签), 所以折线的横轴也随之为"右旧左新";
+ *    改顺序时这几处必须一起看, 否则折线会与列错位。
+ */
 export function axisDates(dates: string[] | undefined, fallback: MoodCell[], window: number): string[] {
   const src = dates && dates.length ? dates : fallback.map((c) => c.date)
-  return window > 0 ? src.slice(-window) : src
+  const asc = window > 0 ? src.slice(-window) : src
+  return asc.slice().reverse()
 }
 
 /** 单元格按日期索引(轴列渲染用; 缺该交易日的题材显示空位)。 */
