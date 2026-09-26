@@ -1,5 +1,22 @@
 # Changelog
 
+### feat-连板梯队默认「按日列视图」且最新在左（用户口径 2026-09-26）
+
+1. **默认视图**：组件 `view` 初始值本就是 `'cols'`（按日列视图），此次加测试钉住 ——
+   断言默认状态下切换按钮显示"矩阵视图"（点它才切过去），防止后续改动把默认换成矩阵。
+2. **顺序**：按日列视图的 `cols` 由 `[...ladder, ...liveDay]`（升序、靠滚到右端看最新）
+   改为**显式按日期降序**：`.sort((a,b) => String(b.date).localeCompare(String(a.date)))`
+   —— 显式排序不依赖接口返回顺序；盘中 `liveDay` 日期最大，自然落在最左。
+3. `scrollToLatest` 由 `el.scrollLeft = el.scrollWidth`（滚到右端）改为 **`el.scrollLeft = 0`**
+   （最新在左端）。该助手仅被 LadderBoard 使用（含其单测），改动面可控。
+
+至此页面三处日期顺序统一为**最新在左**：题材情绪矩阵、矩阵上方的题材情绪走势、连板梯队按日列。
+
+测试：`ladder-board.test.tsx` 新增 2 项（默认按日列 + 最新在左，故意按旧→新传入以证明组件自己排序；
+盘中 live 那天在最左）；`ladder-format.test.ts` 的 `scrollToLatest` 断言改 0；
+`theme-mood-page.test.tsx` 的滚动断言由"包含 800"改为"确实滚过且唯一值是 0"。
+前端全量 **787 passed** + `tsc -b` + `ui-rules` 全绿。
+
 ### feat-题材情绪页日期轴改为「最新在左」（用户口径 2026-09-26）
 
 `axisDates()` 由升序（`slice(-window)`）改为**降序（最新在左）**，与页面下方「连板梯队」

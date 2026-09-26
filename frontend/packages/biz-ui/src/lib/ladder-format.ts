@@ -60,6 +60,12 @@ export function prevBoardsLabel(prev: number | null | undefined): string {
 }
 
 /** 横向梯队滚到最新一天(最右)。null 安全。 */
+/**
+ * 把横向滚动容器拉到"最新"一端。
+ *
+ * 2026-09-26 起按日列视图**最新在左**，所以滚到 0；
+ * 此前是升序(最新在右)故滚到 `scrollWidth`。改顺序时这里必须一起改，否则打开就停在最旧一天。
+ */
 export function scrollToLatest(el: HTMLElement | null): void {
-  if (el) el.scrollLeft = el.scrollWidth
+  if (el) el.scrollLeft = 0
 }
