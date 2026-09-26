@@ -1388,11 +1388,14 @@ async def breadth_distribution_status():
         "hint": "ready=true 后 GET /api/market-data/breadth-distribution",
     }
 
-@router.get("/market-breadth/history")
+@router.get("/breadth-history")
 async def market_breadth_history(
     days: int = Query(60, ge=5, le=250, description="返回最近 N 个交易日"),
 ) -> dict:
     """全市场情绪温度与涨跌家数**历史序列**（自算口径，落库见 market_breadth_daily）。
+
+    真实路径: `/api/market-data/breadth-history`（本 router 挂在 prefix="/api/market-data"）。
+    前端用 `fetchAPI('/market-data/breadth-history')`（fetchAPI 自带 /api 前缀）。
 
     与 `/breadth-distribution` 的区别：那个是**实时**九档分桶（新浪/东财），
     这个是**盘后自算**的日序列（PG klines → 涨跌家数 + 六指标 ADL/ADR/ARMS/BTI/MCL/STIX
