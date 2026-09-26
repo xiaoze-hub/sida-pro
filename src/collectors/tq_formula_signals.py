@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 #: 落库的公式集合: (acCode, 展示名, 参数)。
 #: 取自 `formula_get_all(1)` 的 108 个条件选股公式, 挑**能横截面判读市场宽度**的三类:
 #: 买入信号 / 卖出信号 / 连涨连跌。新增一行即可, 无需改迁移。
-FORMULA_SET: tuple[tuple[str, str, str], ...] = (
+BASE_FORMULAS: tuple[tuple[str, str, str], ...] = (
     ("MACD买入", "MACD买入信号", ""),
     ("KDJ买入", "KDJ买入信号", ""),
     ("MA买入", "均线买入信号", ""),
@@ -68,6 +68,13 @@ STARTUP_FORMULAS: tuple[tuple[str, str, str], ...] = (
     ("SUNBY", "阳包阴", ""),
 )
 
+
+#: 实际参与扫描的完整清单 = 基础组 + 启动早期信号组。
+#: ⚠️ 只定义 STARTUP_FORMULAS 而忘了并进来 = 这些公式**永远不会被扫**
+#:   （2026-09-25 踩过：扫描"成功"但新公式一行都没有，看起来像没信号）。
+#:   由 tests/test_startup_signals.py::test_startup_formulas_are_wired 守住。
+FORMULA_SET: tuple[tuple[str, str, str], ...] = BASE_FORMULAS + STARTUP_FORMULAS
+
 #: 命中清单落库上限(超出只存前 N 只并置 truncated=1)。
 HITS_STORE_LIMIT = 500
 
@@ -79,13 +86,23 @@ def _today() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
 
 
+def _norm_day(d: str) -> str:
+    """把交易日期归一成客户端要求的**紧凑格式** `YYYYMMDD`。
+
+    客户端/`formula_scan` 只认 `20260924`；传 `2026-09-24`（ISO，最常见的写法）
+    会被判定为"该日无数据行"→ 全部公式跳过 → **静默返回 0 行**，
+    看起来像"今天没有信号"，实际是参数没归一（2026-09-25 实测踩到）。
+    """
+    return (d or "").strip().replace("-", "").replace("/", "").replace(".", "")
+
+
 def fetch_formula_signals(trade_date: str = "") -> list[dict]:
     """扫 FORMULA_SET 的每个公式 → 行字典列表(不含 DB 写入)。
 
     单公式失败**不拖垮其余公式**: 该公式本日不出行(由下一次运行补齐),
     而不是写一行 0(0 会被误读成"今天没人触发")。
     """
-    day = trade_date or _today()
+    day = _norm_day(trade_date) or _today()
     rows: list[dict] = []
     for code, name, arg in FORMULA_SET:
         try:
