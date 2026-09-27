@@ -185,3 +185,19 @@ def _clear_module_caches():
     except Exception:
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_biz_cache():
+    """每个用例前清 biz 两级缓存。
+
+    2026-09-26 起 /theme-mood 的 ladder/board 走 biz_cache, 同参数的用例会读到上一个用例
+    的回填结果 -> 断言静默变绿/变红。测试隔离优先, 用例内自己 delete 关键 key。
+    """
+    try:
+        from src.web.cache.biz_cache import biz_cache
+
+        biz_cache.clear()
+    except Exception:  # noqa: BLE001 — 缓存不可用不影响测试
+        pass
+    yield
