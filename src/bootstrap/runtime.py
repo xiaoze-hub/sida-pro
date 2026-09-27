@@ -658,6 +658,61 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"主线缓存预热 job 注册失败: {e}")
 
+    # 2026-09-27: 国内数据网关存活监控(每 15 分钟, 探**数据路径**而非 /health)。
+    # 起因: 网关 2026-09-26 整机失联且无任何监控, 直到用户发现"大盘资金流数据源调用失败"。
+    # 注意: 网关进程活着但上游被东财风控拒时 /health 仍是 200, 所以必须探取数。
+    # core 侧(src.core.cn_gateway_health)只探测, 通知在这里发 —— 分层门禁 B4.1。
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        from src.core.cn_gateway_health import GatewayWatch, probe
+
+        _gw_watch = GatewayWatch()
+
+        def _check_cn_gateway() -> None:
+            try:
+                msg = _gw_watch.observe(probe())
+                if not msg:
+                    return
+                logger.warning("[cn-gateway] %s", msg)
+                try:
+                    import asyncio
+
+                    from src.core.notifier import NotifierManager
+                    from src.web.database import SessionLocal
+                    from src.web.models import NotifyChannel
+
+                    db = SessionLocal()
+                    try:
+                        chs = (db.query(NotifyChannel)
+                               .filter(NotifyChannel.enabled == True,  # noqa: E712
+                                       NotifyChannel.is_default == True)  # noqa: E712
+                               .all())
+                    finally:
+                        db.close()
+                    n = NotifierManager()
+                    for ch in chs:
+                        n.add_channel(ch.type, ch.config or {})
+                    if chs:
+                        asyncio.run(n.notify("国内数据网关", msg))
+                except Exception as e:  # noqa: BLE001 — 推送失败不影响探测
+                    logger.warning("[cn-gateway] 告警推送失败: %s", e)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[cn-gateway] 监控异常: %s", e)
+
+        sched.scheduler.add_job(
+            _check_cn_gateway,
+            IntervalTrigger(minutes=15),
+            id="cn_gateway_watch",
+            name="国内数据网关存活监控",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[cn-gateway] 已注册存活监控 job(每 15 分钟)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"网关存活监控 job 注册失败: {e}")
+
     # 2026-09-26: 题材情绪接口缓存预热(交易日 18:45, 晚于 18:40 广度同步确保数据定型)。
     # 起因: /api/theme-mood/ladder 实测 6.5s、/board 2.4~5.8s, 每进页面都重算,
     # 用户反馈"连板梯队要等一会才能加载出来"。收盘后预热一次写长 TTL, 用户打开即热。
