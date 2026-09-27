@@ -658,6 +658,35 @@ def build_scheduler() -> AgentScheduler:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"主线缓存预热 job 注册失败: {e}")
 
+    # 2026-09-26: 题材情绪接口缓存预热(交易日 18:45, 晚于 18:40 广度同步确保数据定型)。
+    # 起因: /api/theme-mood/ladder 实测 6.5s、/board 2.4~5.8s, 每进页面都重算,
+    # 用户反馈"连板梯队要等一会才能加载出来"。收盘后预热一次写长 TTL, 用户打开即热。
+    # 注: 预热实现在 web 层, 而 core 不得反向 import web(B4.1 棘轮门禁),
+    #     故在装配层注册 —— 与 market_mainline 同款做法。
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+
+        from src.web.api.theme_mood import warm_caches as warm_theme_mood
+
+        def _warm_theme_mood() -> None:
+            try:
+                logger.info("[theme-mood] 缓存预热: %s", warm_theme_mood())
+            except Exception as e:  # noqa: BLE001 - 预热失败绝不能掀翻调度器
+                logger.warning(f"题材情绪缓存预热失败(下次再试): {e}")
+
+        sched.scheduler.add_job(
+            _warm_theme_mood,
+            CronTrigger(day_of_week="mon-fri", hour=18, minute=45),
+            id="theme_mood_warm",
+            name="题材情绪缓存预热",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[theme-mood] 已注册缓存预热 job(交易日 18:45)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"题材情绪预热 job 注册失败: {e}")
+
     # P0(2026-09-18): JWT 密钥每 90 天自动轮换(旧密钥 grace 7 天内仍可验签)
     try:
         from src.core.secret_rotation import register_rotation_job

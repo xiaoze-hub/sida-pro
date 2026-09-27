@@ -1,5 +1,40 @@
 # Changelog
 
+### perf-题材情绪两个重接口加两级缓存 + 收盘预热（用户口径 2026-09-26）
+
+**问题（实测，非推测）**：用户反馈"连板梯队要等一会才能加载出来"。直连生产量得：
+
+| 接口 | 延迟（三次） | 体积 |
+|---|---|---|
+| `/api/theme-mood/ladder?window=20` | **6.45 / 6.28 / 6.68 s** | 277 KB |
+| `/api/theme-mood/board?window=20&top=15` | 2.60 / 2.40 / 5.78 s | 807 KB |
+
+页面骨架 0.9s 就有、两请求并行，所以梯队区 ≈ 0.9 + 6.5 ≈ 7s，**且每次进页面都重算**。
+
+**修法**
+1. **两级缓存**（复用既有 `biz_cache`：L1 进程内 + L2 Redis，前缀 `biz:tm:`）。TTL 按时段分档：
+   - 盘中（`_is_intraday`）**30s** —— 有 live 日，实时性优先；
+   - 收盘后 40 分钟内 **5min** —— 当日数据还在定型；
+   - 收盘后 **30min** —— 历史日数据不可变，可长缓存。
+   `as_of` **每次新鲜生成**（不进缓存），避免界面"更新 HH:MM:SS"显示假时间；
+   响应新增 `cached` / `cache_ttl_s` 两个透明字段（前端忽略未知字段，不影响渲染）。
+2. **收盘预热** —— 挂到既有 18:40 广度调度器（`MarketBreadthScheduler._job`）：
+   用前端默认参数（window=20 / top=15）算一次并写 30min TTL，用户晚上/次日打开即热。
+
+**一条硬规则**：`worth(payload) is False`（空/降级结果）**不写缓存** —— 否则接口一次抽风会被钉住 30 分钟，用户要等 TTL 过期才能恢复。
+
+**测试**：新增 `tests/test_theme_mood_cache.py` 6 项 —— 第二次命中不重算、`as_of` 每次新鲜、
+空结果不缓存（ladder/board 各一）、TTL 分档、非法 mode 仍 400。相关回归一并跑过。
+
+**一处架构修正（被门禁拦下）**：预热最初写在 `src/core/market_breadth_scheduler.py` 里
+（`from src.web.api import theme_mood`），触发 `tests/test_w41_core_web_dependency.py`
+（core→web 反向依赖棘轮门禁，B4.1）：`src/core` 冻结允许清单只许减少、禁止新增。
+已改为在**装配层** `src/bootstrap/runtime.py` 注册预热 job（与既有 `market_mainline`
+预热同款：`sched.scheduler.add_job(..., CronTrigger(day_of_week="mon-fri", hour=18, minute=45))`），
+core 侧保持零 web 依赖。
+
+预热时间定在 **18:45**（晚于 18:40 广度同步），确保当日涨停/事件数据已定型再写缓存。
+
 ### feat-连板梯队默认「按日列视图」且最新在左（用户口径 2026-09-26）
 
 1. **默认视图**：组件 `view` 初始值本就是 `'cols'`（按日列视图），此次加测试钉住 ——

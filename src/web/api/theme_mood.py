@@ -16,6 +16,7 @@ import threading
 from src.core.jobs import jobs
 from src.core.theme_rotation import daily_top_sets, membership_flags, rotation_series
 
+from src.web.cache.biz_cache import biz_cache
 from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,28 @@ def _latest_date() -> str | None:
     return rows[0]["d"] if rows else None
 
 
+@router.get("/ladder")
+def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
+    """连板梯队(带两级缓存, 2026-09-26)。
+
+    实测该接口 6.5s(20 天全市场涨停梯队 + 全部个股 OHLC 批量查询), 每进一次页面都重算。
+    现按交易时段缓存: 盘中 30s / 收盘后 30min。`as_of` 每次新鲜生成, 不随缓存变旧。
+    """
+    if mode not in ("auto", "finalized", "live"):
+        raise HTTPException(400, "mode 仅支持 auto/finalized/live")
+    ttl = _cache_ttl()
+    payload, cached = _cached(
+        f"biz:tm:ladder:{window}:{mode}", ttl,
+        lambda: _ladder_payload(window, mode),
+        worth=lambda p: bool(p.get("ladder")),
+    )
+    from datetime import datetime, timezone
+
+    return {**payload,
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "cached": cached, "cache_ttl_s": ttl}
+
+
 def _board_data(window: int, top: int) -> dict:
     """Top 榜 + 每题材按共享日期轴对齐的 matrix cells + 强势情绪走势; 无数据 → 空结构。"""
     from src.core.theme_mood import align_cells, market_series, rank_items
@@ -293,19 +316,80 @@ def _spawn_scan() -> dict:
     return {"started": True, "reason": None, "job_id": job_id}
 
 
-@router.get("/ladder")
-def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
+# ── 两级缓存(用户口径 2026-09-26)─────────────────────────────────────────
+# 背景: /ladder 实测 6.5s(20 天全市场涨停梯队 + 全部个股 OHLC)、/board 2.4~5.8s/807KB,
+# 每进一次页面都重算, 用户反馈"连板梯队要等一会才能加载出来"。
+# 策略: 收盘后的历史日数据不可变 -> 长 TTL; 盘中有 live 日 -> 短 TTL。
+_TTL_INTRADAY = 30        # 盘中(有 live 日): 30s, 保证实时性
+_TTL_SETTLING = 300       # 收盘后 40 分钟内: 5min(当日数据还在定型)
+_TTL_CLOSED = 1800        # 收盘后: 30min(历史不可变)
+
+
+def _cache_ttl() -> int:
+    """按交易时段选 TTL。盘中短、收盘后长。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.core.limit_ladder_live import _is_intraday
+
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    try:
+        if _is_intraday(now):
+            return _TTL_INTRADAY
+    except Exception:  # noqa: BLE001 — 日历不可用时保守走短 TTL
+        return _TTL_INTRADAY
+    if now.hour * 60 + now.minute < 15 * 60 + 40:
+        return _TTL_SETTLING
+    return _TTL_CLOSED
+
+
+def _cached(key: str, ttl: int, produce, worth) -> tuple[dict, bool]:
+    """两级缓存取数。返回 (payload, 是否命中)。
+
+    `worth(payload) is False` 时**不写缓存** —— 空/降级结果不能被钉 30 分钟
+    (否则接口一旦抽风, 用户要等 TTL 过期才能恢复)。
+    """
+    hit = biz_cache.get_json(key)
+    if isinstance(hit, dict):
+        return hit, True
+    payload = produce()
+    if isinstance(payload, dict) and worth(payload):
+        biz_cache.set_json(key, payload, ttl=ttl)
+    return payload, False
+
+
+def warm_caches() -> dict:
+    """收盘后预热(供 18:40 调度器调用, 见 market_breadth_scheduler)。
+
+    用前端默认参数算一次并写长 TTL, 让用户晚上/次日打开就命中缓存。
+    """
+    out: dict = {}
+    for w, top in ((20, 15),):
+        try:
+            data = _board_data(w, top)
+            if data.get("items"):
+                biz_cache.set_json(f"biz:tm:board:{w}:{top}", data, ttl=_TTL_CLOSED)
+                out[f"board:{w}:{top}"] = {"items": len(data["items"]), "cached": True}
+        except Exception as e:  # noqa: BLE001 — 预热失败不影响主流程
+            out[f"board:{w}:{top}"] = {"error": repr(e)[:120]}
+        for mode in ("auto",):
+            try:
+                payload = _ladder_payload(w, mode)
+                if payload.get("ladder"):
+                    biz_cache.set_json(f"biz:tm:ladder:{w}:{mode}", payload, ttl=_TTL_CLOSED)
+                    out[f"ladder:{w}:{mode}"] = {"days": len(payload.get("ladder") or []), "cached": True}
+            except Exception as e:  # noqa: BLE001
+                out[f"ladder:{w}:{mode}"] = {"error": repr(e)[:120]}
+    return out
+
+def _ladder_payload(window: int, mode: str) -> dict:
     """连板梯队(v0.5.81) + 定型炸板/断板/当日K(v0.5.85) + 盘中实时(v0.5.86, 见 live 分支)。
 
     通达信式天梯: 每日按连板高度分组列个股。连板数**不信任 limit_days 列**(从未落库),
     从事件表自己推: 沿表内日期序列数连续收盘封板日。只算收盘封板, touch 未封不算。
     """
-    from datetime import datetime, timezone
-
     from src.core.limit_ladder import attach_candles, finalize_marks, ladder_window
 
-    if mode not in ("auto", "finalized", "live"):
-        raise HTTPException(400, "mode 仅支持 auto/finalized/live")
     snap = _live_snapshot() if mode in ("auto", "live") else None
     days = _read(
         "SELECT DISTINCT trade_date FROM limit_up_events ORDER BY trade_date DESC LIMIT :n",
@@ -352,18 +436,29 @@ def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
         "degraded": None,
         "note_closing": note_closing,
         "stats": _ladder_stats(ladder, live_day),
-        "as_of": datetime.now(timezone.utc).isoformat(),
+        # as_of 由路由层新鲜生成(不随缓存变旧), 故不进 payload/缓存 blob
     }
 
 
 @router.get("/board")
 def get_board(window: int = Query(20), top: int = Query(15)):
+    """题材情绪榜 + 矩阵(带两级缓存, 2026-09-26)。
+
+    实测 2.4~5.8s / 807KB, 每进页面重算。缓存口径同 /ladder; trade_date 每次新鲜读,
+    保证界面上的"数据日"不会因缓存而滞后。
+    """
     if window not in _WINDOWS or top not in _TOPS:
         raise HTTPException(400, f"window 仅支持 {_WINDOWS}, top 仅支持 {_TOPS}")
-    data = _board_data(window, top)
+    ttl = _cache_ttl()
+    data, cached = _cached(
+        f"biz:tm:board:{window}:{top}", ttl,
+        lambda: _board_data(window, top),
+        worth=lambda d: bool(d.get("items")),
+    )
     return {"trade_date": _latest_date(), "window": window, "count": len(data["items"]),
             "dates": data["dates"], "items": data["items"], "market": data["market"],
-            "rotation": data["rotation"], "rotation_top_k": data["rotation_top_k"]}
+            "rotation": data["rotation"], "rotation_top_k": data["rotation_top_k"],
+            "cached": cached, "cache_ttl_s": ttl}
 
 
 @router.get("/detail/{block_code}")
