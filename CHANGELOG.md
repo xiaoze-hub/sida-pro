@@ -1,5 +1,32 @@
 # Changelog
 
+### fix-国内数据网关整机失联: 地址收敛为唯一事实源 + 迁移到 systemd 常驻（2026-09-26）
+
+**故障**：用户报 `大盘资金流·数据源调用失败: HTTPConnectionPool(host='115.190.177.213', port=8100): Max retries exceeded`。
+
+**实测定位**（不猜）：
+- 本机(海外) TCP 8100 不通；**生产容器内** 访问 `/cn/market-overview` 直接 timeout；
+- 连 **22 端口也超时** → 不是网关进程挂了，是**整机不在**；
+- 该 IP 不在 Lighthouse 账号的上海/广州/北京/香港实例里（逐地域查过）→ 判断为 CVM 或已释放。
+
+**修复**：
+1. 网关**重建**在生产源站 `101.35.244.238:8100`（Shanghai Lighthouse，防火墙已开 8100）。
+   源码从两处历史存档**完整还原**（不是凭契约重写）：基础版来自 curator 备份 blob，
+   扩展端点 `/cn/market-overview` `/cn/hot-stocks` `/cn/hot-boards` 来自
+   `ashare-data-tooling/references/cn-gateway-endpoints.md`（2026-08-10 生产验证过的原文），
+   `/cn/quote` 来自 `cn-data-gateway-and-release/scripts/cn_gateway.py`。
+2. **部署方式换成 systemd**（`Restart=always` + 开机自启）。原方案是 `nohup` 单进程 ——
+   进程一崩或机器一重启就永久躺，且没有任何存活监控，这正是本次故障能长期无人知的原因。
+3. **地址收敛**：新增 `src/core/cn_gateway.py` 作唯一事实源（`CN_GATEWAY_BASE` 可用环境变量覆盖），
+   5 处硬编码（`discovery.py`/`market_data.py`/`market_flow_sampler.py`/`report_generator.py`/
+   `capital_flow_collector.py`）全部改为经它取 —— 顺手清掉审计
+   `docs/audit_report_20260915.md` 第 39 条"5 处硬编码基础设施 IP"。
+4. 完整网关源码 + systemd 单元 + 端点契约已存入 skill `cn-data-gateway-and-release`，
+   避免"源码只存在于那台机器上"再次发生（本次就是靠历史存档才捞回来的）。
+
+**生产验证**：生产容器内直连新网关 `/cn/market-overview` **0.08s** 返回，
+两市主力净流入 -652.1 亿 / 成交额 16534 亿 / 涨跌 1098·4047·142，`source=eastmoney_push2delay_cn`。
+
 ### perf-题材情绪两个重接口加两级缓存 + 收盘预热（用户口径 2026-09-26）
 
 **问题（实测，非推测）**：用户反馈"连板梯队要等一会才能加载出来"。直连生产量得：

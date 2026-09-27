@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from src.web.cache.biz_cache import biz_cache
+from src.core.cn_gateway import gateway_url
 
 logger = logging.getLogger(__name__)
 
@@ -443,7 +444,7 @@ async def market_capital_flow_proxy():
             # P0(2026-09-18): 同步 requests 不得在 async def 内直接调用(会阻塞事件循环),
             # 包一层 asyncio.to_thread 交给线程池。
             return _req.get(
-                "http://115.190.177.213:8100/cn/market-overview", timeout=6
+                gateway_url("cn/market-overview"), timeout=6
             ).json()
 
         # 1. 国内网关: 两市主力净流入 + 成交额 + 涨跌家数
