@@ -99,9 +99,10 @@ def get_market_data():
 #   CN_FLOW_MODE=gateway  强制走网关(海外部署)
 #   CN_FLOW_MODE=auto     自动检测(默认)
 import os as _os
+from src.core.cn_gateway import CN_GATEWAY_BASE as CN_GATEWAY_URL_DEFAULT
 
 _CN_FLOW_MODE = _os.getenv("CN_FLOW_MODE", "auto")
-CN_GATEWAY_BASE = _os.getenv("CN_GATEWAY_BASE", "http://115.190.177.213:8100")
+CN_GATEWAY_BASE = _os.getenv("CN_GATEWAY_BASE", CN_GATEWAY_URL_DEFAULT)
 _CN_GATEWAY_DISABLED = _os.getenv("CN_GATEWAY_DISABLE") == "1"  # 测试用
 
 # 直连东财 push2delay(大陆网络直通; 海外会被断连)

@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.timezone import beijing_now
+from src.core.cn_gateway import gateway_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ REPORT_TITLES = {
 _CN_INDEX_TENCENT_SYMBOLS = ["sh000001", "sz399001", "sz399006"]
 
 # 两市资金流国内网关(东财口径, 与 src/web/api/market_data.py 同源)
-_MARKET_OVERVIEW_URL = "http://115.190.177.213:8100/cn/market-overview"
+_MARKET_OVERVIEW_URL = gateway_url("cn/market-overview")
 
 
 def _report_root() -> Path:
