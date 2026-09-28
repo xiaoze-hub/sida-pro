@@ -30,6 +30,8 @@ _ZDT_CHUNK = 50  # 事故铁律: 单次 TQ 请求 ≤50 只
 _BARS = 12  # 连板数最多往回数 12 根(与主源一致)
 
 
+from src.core.tq_chips import normalize_code
+
 def parse_zdt_snapshot(snap: dict | None) -> dict[str, dict]:
     """TQ get_zdt_data 原始快照 → {TQ码: 真涨停记录}。
 
@@ -81,6 +83,10 @@ def zdt_fallback_pool(codes: list[str] | None = None) -> list[dict]:
     # ② 快照分片(单次 ≤50)
     snap: dict = {}
     fails = 0
+    # 2026-09-28 实测: TQ get_zdt_data 要求带市场后缀, 传裸码会 ErrorId=2(codestr error:xxxxxx)。
+    # 本模块对外可能被传裸 6 位码(如应用侧统一格式), 入口统一补后缀, 已带后缀的原样保留。
+    codes = [normalize_code(str(c)) for c in codes]
+
     for i in range(0, len(codes), _ZDT_CHUNK):
         part = codes[i : i + _ZDT_CHUNK]
         try:
