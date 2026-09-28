@@ -1,5 +1,15 @@
 # Changelog
 
+### test-A-1 shareholders/dividend TQ 备源现状钉住: seed 行与优先级回归防护（2026-09-28）
+
+审计任务探明: A-1(vendor + registry + seed)已于 2026-09-24 合入 main
+(见 tests/test_tq_shareholders_dividend.py 37 例), 本次只补**接线层回归防护**(8 例, 全离线):
+seed 行存在且 enabled / 优先级东财(0) < TQ(2) < 智兔(5, 付费且 429) / 主源恒为东财
+(TQ 不抢主源位) / registry 已注册 tq vendor。防的是后续改动误删 TQ seed 行或把优先级
+排到付费源前面 —— 那等于静默切回付费主链路。
+
+测试: tests/test_a1_shareholders_dividend_wiring.py 8 例。
+
 ### feat-国内数据网关存活监控: 探数据路径而非 /health（2026-09-27）
 
 **为什么必须做**：2026-09-26 网关整机失联，**全程没有任何监控**，直到用户看到
