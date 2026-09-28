@@ -1,5 +1,29 @@
 # Changelog
 
+### feat-涨跌停快照 TQ 备源(A-6): 首封/炸板/封单三真值接入涨停池降级链（2026-09-28）
+
+审计第五节第 6 项落地: 东财 `push2ex getTopicZTPool` 之外的**第三条 TQ 备源**。
+此前降级链是 TQ 主源(K线全市场扫描) → wudao → 东财, TQ 独有字段(封单量/首封时间/
+炸板次数)在主源挂掉时全丢。
+
+**实现(备源, 主源不动)**:
+- 新增 `src/core/limit_pool_zdt.py`: `zdt_fallback_pool()` = 分片 get_zdt_data(≤50/次)
+  挑真涨停(OpenTimesZT/FDVolMaxZT 字段存在才算, 不猜) → 只对真涨停股分片取 K线
+  (连板数口径钉子不动, build_pool_items 自算) → 快照真值回填 first_time / open_times /
+  order_amount(手×100→股), source 标 `tq_zdt`。
+- `market_sentiment_collector.get_limit_up_pool` 降级链插入快照备源:
+  TQ 主源 → **TQ 快照备源** → wudao → 东财。快照也挂 → 原链照走, 行为不变。
+- 口径钉子: 连板数仍走 K线(OpenTimesZT 是炸板次数不是连板数, 拿它猜就退回到
+  2026-09-23 事故前); K线取不到的涨停股 days=0(未知不猜 1), 快照字段独立保留;
+  单次请求 ≤50 只 + 连续两批失败即中止(事故铁律, 与主源同族)。
+
+**已知口径差(写在模块 docstring)**: FDVolMaxZT 原始单位=手, 已×100→股;
+amount/ltsz/sector 快照没有的字段留 0/空, 不编造; 快照是当日态, 历史不可回溯。
+
+测试: tests/test_limit_pool_zdt_fallback.py(14 例) + tests/test_zdt_fallback_wiring.py
+(5 例: 主源成功不触发备源/主源挂快照接管/快照挂走 wudao/快照空走 wudao/方法委托)。
+全部离线 monkeypatch(tqmod._rpc + tqmod.tq_rpc 双断点), 不碰真实网关。
+
 ### test-A-1 shareholders/dividend TQ 备源现状钉住: seed 行与优先级回归防护（2026-09-28）
 
 审计任务探明: A-1(vendor + registry + seed)已于 2026-09-24 合入 main
