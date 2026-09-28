@@ -1,5 +1,13 @@
 # Changelog
 
+### chore-网关源码纳入版本管理（2026-09-28）
+
+线上网关 `/opt/cn-gateway/gateway.py` 此前**只存在于小主机本地**（cron sync 排除 .git 的老毛病，
+改动不回 main）。本次把它收进仓库 `scripts/cn_gateway.py`，内含 2026-09-28 的东财兜底：
+`/cn/market-overview` 先走 `push2delay/ulist.np/get`（已被东财边缘层按 URL 拒），
+失败转 `datacenter-web` 的 `RPT_MARKET_CAPITALFLOW` 报表（同口径、单位万元→亿、`source` 如实标注），
+两者都失败才 502 交由主服务显式降级。
+
 ### fix-TQ快照备源入口补代码后缀归一化（2026-09-28）
 
 **生产对拍抓到的真缺陷**（验收阶段在容器内用真实 TQ 网关跑出来的，离线测试全绿但掩盖了它）：
