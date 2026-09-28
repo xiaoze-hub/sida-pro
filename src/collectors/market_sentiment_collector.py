@@ -133,6 +133,20 @@ class MarketSentimentCollector:
 
         return pool
 
+    def _limit_up_pool_zdt_tq(self) -> list[dict]:
+        """涨跌停快照备源(TQ get_zdt_data, 审计 A-6, 2026-09-28)。
+
+        主源 `_limit_up_pool_tq` 全市场 K线扫描挂掉(客户端断/连续失败)时,
+        这里只对"真涨停"的分片取快照 —— 直接拿到 TQ 独有字段:
+          · first_time   首封时间(快照真值, 主源 K线路径恒为空串)
+          · open_times   炸板次数(TQ 独有, 主源/wudao/东财都没有)
+          · order_amount 封单量(手×100→股, 主源恒为 0)
+        连板数仍走 K 线自算(build_pool_items, 口径钉子不动), 主源不动。
+        """
+        from src.core.limit_pool_zdt import zdt_fallback_pool
+
+        return zdt_fallback_pool(None)
+
     def _limit_up_pool_wudao(self, date: str) -> list[dict]:
         """wudao 涨停事件池(limit_up_filter) → 统一字段。
 
@@ -186,7 +200,7 @@ class MarketSentimentCollector:
         return out
 
     def get_limit_up_pool(self, date: str | None = None) -> list[dict]:
-        """获取涨停池: **通达信(TQ) 主源** → 东财兜底 → wudao(可选)。
+        """获取涨停池: **通达信(TQ) 主源** → TQ 涨跌停快照备源 → wudao → 东财兜底。
 
         2026-09-23 换主源: 原"wudao 优先 + 东财兜底"在 wudao 挂掉(wudao 当日全挂 SSLEOF)
         时降级到东财 —— 而东财两个缺陷(连板数读错字段、pagesize=60 截断且按封板时间排序丢尾盘)
@@ -213,14 +227,23 @@ class MarketSentimentCollector:
             except Exception:
                 return date
 
-        # ⓿ 通达信(TQ)主源(2026-09-23)。空/异常 → 落到下面的东财兜底, 不阻塞。
+        # ⓿ 通达信(TQ)主源(2026-09-23)。空/异常 → 先试快照备源, 再降级 wudao/东财。
         try:
             tq_pool = self._limit_up_pool_tq()
             if tq_pool:
                 return tq_pool
-            logger.warning("涨停池(TQ)为空 → 降级东财兜底")
+            logger.warning("涨停池(TQ)为空 → 先试涨跌停快照备源, 再降级 wudao/东财兜底")
         except Exception as e:  # noqa: BLE001
-            logger.warning("涨停池(TQ)异常 → 降级东财兜底: %s", e)
+            logger.warning("涨停池(TQ)异常 → 先试涨跌停快照备源, 再降级 wudao/东财兜底: %s", e)
+
+        # ⓿b TQ 涨跌停快照备源(A-6, 2026-09-28): 主源全市场 K线扫描挂掉时,
+        # 快照只需对"真涨停"分片取数, 且自带首封/炸板/封单真值。空/异常 → 继续 wudao/东财。
+        try:
+            zdt_pool = self._limit_up_pool_zdt_tq()
+            if zdt_pool:
+                return zdt_pool
+        except Exception as e:  # noqa: BLE001
+            logger.warning("涨停池(TQ备源-快照)失败 → 继续 wudao/东财: %s", e)
 
         # ① wudao 优先:找最近非空交易日(最多 5 天)。wudao 字段更全(题材/原因/封单/换手)
         for back in range(6):

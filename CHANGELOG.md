@@ -1,5 +1,66 @@
 # Changelog
 
+### chore-网关源码纳入版本管理（2026-09-28）
+
+线上网关 `/opt/cn-gateway/gateway.py` 此前**只存在于小主机本地**（cron sync 排除 .git 的老毛病，
+改动不回 main）。本次把它收进仓库 `scripts/cn_gateway.py`，内含 2026-09-28 的东财兜底：
+`/cn/market-overview` 先走 `push2delay/ulist.np/get`（已被东财边缘层按 URL 拒），
+失败转 `datacenter-web` 的 `RPT_MARKET_CAPITALFLOW` 报表（同口径、单位万元→亿、`source` 如实标注），
+两者都失败才 502 交由主服务显式降级。
+
+### fix-TQ快照备源入口补代码后缀归一化（2026-09-28）
+
+**生产对拍抓到的真缺陷**（验收阶段在容器内用真实 TQ 网关跑出来的，离线测试全绿但掩盖了它）：
+`zdt_fallback_pool` 直接吃调用方给的代码，若传**裸 6 位码**（应用侧统一格式，如 `000011`）
+→ TQ `get_zdt_data` 报 `ErrorId=2: codestr error:000011` ✗，整个备源静默失效。
+生产链路当前传 `None`（走全 A 拿 TQ 原生带后缀码）故未暴露，但公开接口不该有这颗雷。
+
+**修法**：入口统一 `normalize_code()`（复用 `src/core/tq_chips.py` 现成实现，6→SH / 0,3,2→SZ / 4,8,920→BJ），
+已带后缀的原样保留。1 行归一化 + 1 行导入。
+
+**对拍实测**（容器内真实 TQ 网关，与主源同批标的）：
+```
+主源涨停池 35 只(样例 000011/000020/000503/000513/000678)
+  → 首只 days=1, source=tq
+备源同批返回: 000011 days=1 price=10.12 ✓ / 000678 days=2 ✓ / … source=tq_zdt
+```
+连板数口径与主源一致 ✓。**遗留**：`first_time`/`order_amount` 在收盘后取回为 `00:00:00`/0，
+**单位标定（封单量 手×100→股）需盘中复对一次**（本模块 docstring 已注明）。
+
+### feat-涨跌停快照 TQ 备源(A-6): 首封/炸板/封单三真值接入涨停池降级链（2026-09-28）
+
+审计第五节第 6 项落地: 东财 `push2ex getTopicZTPool` 之外的**第三条 TQ 备源**。
+此前降级链是 TQ 主源(K线全市场扫描) → wudao → 东财, TQ 独有字段(封单量/首封时间/
+炸板次数)在主源挂掉时全丢。
+
+**实现(备源, 主源不动)**:
+- 新增 `src/core/limit_pool_zdt.py`: `zdt_fallback_pool()` = 分片 get_zdt_data(≤50/次)
+  挑真涨停(OpenTimesZT/FDVolMaxZT 字段存在才算, 不猜) → 只对真涨停股分片取 K线
+  (连板数口径钉子不动, build_pool_items 自算) → 快照真值回填 first_time / open_times /
+  order_amount(手×100→股), source 标 `tq_zdt`。
+- `market_sentiment_collector.get_limit_up_pool` 降级链插入快照备源:
+  TQ 主源 → **TQ 快照备源** → wudao → 东财。快照也挂 → 原链照走, 行为不变。
+- 口径钉子: 连板数仍走 K线(OpenTimesZT 是炸板次数不是连板数, 拿它猜就退回到
+  2026-09-23 事故前); K线取不到的涨停股 days=0(未知不猜 1), 快照字段独立保留;
+  单次请求 ≤50 只 + 连续两批失败即中止(事故铁律, 与主源同族)。
+
+**已知口径差(写在模块 docstring)**: FDVolMaxZT 原始单位=手, 已×100→股;
+amount/ltsz/sector 快照没有的字段留 0/空, 不编造; 快照是当日态, 历史不可回溯。
+
+测试: tests/test_limit_pool_zdt_fallback.py(14 例) + tests/test_zdt_fallback_wiring.py
+(5 例: 主源成功不触发备源/主源挂快照接管/快照挂走 wudao/快照空走 wudao/方法委托)。
+全部离线 monkeypatch(tqmod._rpc + tqmod.tq_rpc 双断点), 不碰真实网关。
+
+### test-A-1 shareholders/dividend TQ 备源现状钉住: seed 行与优先级回归防护（2026-09-28）
+
+审计任务探明: A-1(vendor + registry + seed)已于 2026-09-24 合入 main
+(见 tests/test_tq_shareholders_dividend.py 37 例), 本次只补**接线层回归防护**(8 例, 全离线):
+seed 行存在且 enabled / 优先级东财(0) < TQ(2) < 智兔(5, 付费且 429) / 主源恒为东财
+(TQ 不抢主源位) / registry 已注册 tq vendor。防的是后续改动误删 TQ seed 行或把优先级
+排到付费源前面 —— 那等于静默切回付费主链路。
+
+测试: tests/test_a1_shareholders_dividend_wiring.py 8 例。
+
 ### feat-国内数据网关存活监控: 探数据路径而非 /health（2026-09-27）
 
 **为什么必须做**：2026-09-26 网关整机失联，**全程没有任何监控**，直到用户看到
