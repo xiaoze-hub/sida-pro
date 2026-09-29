@@ -18,11 +18,21 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.core.caliber import (
+    CAPITAL_FLOW_TAG,
+    DIRECTION_THS,
+    DIRECTION_TICK,
+    CaliberTag,
+    CaliberViolationError,
+    reconcile_direction,
+    require_directional,
+)
 from src.web.api.auth import get_current_user
 from src.web.models import User
 
@@ -31,6 +41,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["caliber-compare"])
 
 _CST = ZoneInfo("Asia/Shanghai")
+
+
+def _now_iso() -> str:
+    return datetime.now(_CST).isoformat(timespec="seconds")
 
 #: 三个源的中文名与口径说明(静态文案, 减少前端硬编码; 改口径只改这里)
 SOURCE_META: dict[str, dict[str, str]] = {
@@ -60,6 +74,48 @@ MAIN_NET_LABEL: dict[str, str] = {
     "eastmoney_flow": "主力净流入",
     "tencent_dark": "主力净额（≥20万）",
 }
+
+#: 每个源的口径契约标签(单一来源: `src/core/caliber.py`, **不自创**)。
+#: 依据 AGENTS.md「SIDA 业务硬约束·口径」的用途映射(2026-09-29 A2 第一步补契约标签):
+#:   · tencent_dark → tick   ← 底层 `dark_flow.compute_dark_flow`, 与聊天工具
+#:                              `get_main_intent` 同口径(腾讯逐笔), **唯一可做方向判定**
+#:   · eastmoney_flow → eastmoney4 ← `capital_flow_collector.get_capital_flow`(东财四档)
+#:   · thsdk_l2 → ths        ← TQ L2 `zjl_hb`, 与 `get_decision_pioneer` 的 L2 字段同口径
+SOURCE_CALIBER: dict[str, CaliberTag] = {
+    "tencent_dark": CaliberTag(
+        caliber="tick",
+        direction_semantics=DIRECTION_TICK,
+        source="腾讯逐笔 v6 compute_dark_flow(与 get_main_intent 同口径)",
+    ),
+    "eastmoney_flow": CAPITAL_FLOW_TAG,
+    "thsdk_l2": CaliberTag(
+        caliber="ths",
+        direction_semantics=DIRECTION_THS,
+        source="TQ L2 get_more_info zjl_hb(与 get_decision_pioneer L2 字段同口径)",
+    ),
+}
+
+_SUFFIX_RE = re.compile(r"^(\d{6})(?:\.(?:SH|SZ|BJ|SS))?$", re.IGNORECASE)
+
+
+def _directional_allowed(tag: CaliberTag) -> bool:
+    """能否用该口径做方向性判定 —— 复用契约出口 `require_directional()`(非 tick 抛错)。"""
+    try:
+        require_directional(tag, "口径对照·方向判定可用性")
+        return True
+    except CaliberViolationError:
+        return False
+
+
+def _normalize_symbol(raw: str) -> str:
+    """归一股票代码: 接受 6 位 A 股代码, 可带 .SH/.SZ/.BJ/.SS 后缀; 其余友好报错。"""
+    code = (raw or "").strip().upper()
+    m = _SUFFIX_RE.match(code)
+    if not m:
+        raise HTTPException(
+            400, f"非法股票代码: {raw!r}(需要 6 位 A 股代码, 可带 .SH/.SZ/.BJ 后缀)"
+        )
+    return m.group(1)
 
 
 def _main_net_of(src: dict) -> float | None:
@@ -98,19 +154,41 @@ DIFFERENCES: list[dict[str, str]] = [
 ]
 
 
-def _wrap(key: str, *, fields: list[dict] | None, note: str = "", extra: dict | None = None) -> dict:
-    """统一的源结果包装: 缺失一律 available=false + note, 不补 0。"""
+def _wrap(
+    key: str,
+    *,
+    fields: list[dict] | None,
+    note: str = "",
+    extra: dict | None = None,
+    data_time: str | None = None,
+) -> dict:
+    """统一的源结果包装: 缺失一律 available=false + note, 不补 0。
+
+    每个源都带**口径契约标签**(caliber 类型 + direction_semantics + source + label)与
+    数据时间 as_of —— 前端据此显式标注口径, 下游据 direction_semantics 决定能否做方向判定。
+    """
     meta = SOURCE_META[key]
+    tag = SOURCE_CALIBER[key]
     has_value = bool(fields) and any(f.get("value") is not None for f in (fields or []))
     out = {
         "key": key,
         "name": meta["name"],
+        # 说明文案(保留: 前端列头/口径档案沿用)
         "caliber": meta["caliber"],
+        # 契约标签(src/core/caliber.py::CaliberTag.to_dict) —— 硬性要求
+        "caliber_tag": tag.to_dict(),
+        "caliber_type": tag.caliber,
+        "direction_semantics": tag.direction_semantics,
+        "directional_allowed": _directional_allowed(tag),
         "unit": meta["unit"],
         "available": has_value,
         "fields": fields or [],
-        "note": note if not has_value else note,
+        "note": note,
+        # 数据时间: 无源自带业务时间时退回抓取时刻
+        "as_of": data_time or _now_iso(),
     }
+    if not has_value and not out["note"]:
+        out["note"] = "无数据"
     if extra:
         out.update(extra)
     return out
@@ -224,11 +302,32 @@ def _diff_conclusion(sources: list[dict]) -> dict:
     return {"level": level, "hint": hint}
 
 
+def _direction_reconcile(sources: list[dict]) -> dict | None:
+    """逐笔(tick) vs 参考口径的裁决语句 —— 复用契约 `reconcile_direction()`, 不自创逻辑。
+
+    仅当 tick 源与至少一个参考源(东财四档优先, 其次 L2)都有数时才给; 否则 None。
+    """
+    tick = next((s for s in sources if s.get("caliber_type") == "tick"), None)
+    tick_val = _main_net_of(tick) if tick else None
+    if not tick or tick_val is None:
+        return None
+    for key in ("eastmoney_flow", "thsdk_l2"):
+        ref = next((s for s in sources if s.get("key") == key), None)
+        ref_val = _main_net_of(ref) if ref else None
+        if ref is None or ref_val is None:
+            continue
+        try:
+            return reconcile_direction(
+                SOURCE_CALIBER["tencent_dark"], tick_val, SOURCE_CALIBER[key], ref_val
+            )
+        except Exception as exc:  # noqa: BLE001 —— 裁决失败不影响对照主结果
+            logger.warning("caliber-compare 方向裁决失败 %s: %r", key, exc)
+    return None
+
+
 def build_caliber_compare(symbol: str) -> dict:
     """三源并排(供端点与测试直接调用)。"""
-    code = (symbol or "").strip()
-    if not code.isdigit() or len(code) != 6:
-        raise HTTPException(400, f"非法股票代码: {symbol!r}(需要6位A股代码)")
+    code = _normalize_symbol(symbol)
     # 每个源再包一层: 源函数**自身**抛异常(依赖缺失/网络炸)也只是这一列降级,
     # 不能让整个对照页 500 —— 对照页的价值恰恰在于"哪个源现在不行"也能看见。
     sources: list[dict] = []
@@ -241,14 +340,36 @@ def build_caliber_compare(symbol: str) -> dict:
     return {
         "symbol": code,
         "market": "CN",
-        "as_of": datetime.now(_CST).isoformat(timespec="seconds"),
+        "as_of": _now_iso(),
         "sources": sources,
         "available_count": sum(1 for s in sources if s["available"]),
+        # 口径契约声明(硬性要求): 方向判定只能用 tick; 三个口径各自怎么来的
+        "caliber_contract": {
+            "rule": "方向性判定只能用 tick(腾讯逐笔)口径; eastmoney4/ths 仅作资金面参考(AGENTS.md 口径红线)",
+            "contract": "src/core/caliber.py",
+            "matrix": "docs/_frozen/caliber_matrix.md",
+            "sources": {k: SOURCE_CALIBER[k].to_dict() for k in SOURCE_CALIBER},
+        },
         "differences": DIFFERENCES,
         # P2-1: **成对差异 + 归因**(看到差之后, 告诉你这个差是"正常口径差"还是"值得看一眼")
         "pair_diffs": _pair_diffs(sources),
         "diff_conclusion": _diff_conclusion(sources),
+        # 逐笔 vs 参考口径的一句裁决(方向冲突时一律优先采信逐笔)
+        "direction_reconcile": _direction_reconcile(sources),
     }
+
+
+@router.get("")
+def caliber_compare_query(
+    symbol: str = Query(..., description="6 位 A 股代码, 可带 .SH/.SZ/.BJ 后缀, 如 002361 / 600519.SH"),
+    _: User = Depends(get_current_user),
+):
+    """三口径对照(查询参数形式): `GET /api/caliber-compare?symbol=002361`。
+
+    同一票同一时刻并排返回 明盘 L2(TQ/ths) / 暗盘逐笔(腾讯/tick) / 东财四档(eastmoney4),
+    每源带 caliber 契约标签 + direction_semantics + 单位 + 数据时间; 不合成为单一数字。
+    """
+    return build_caliber_compare(symbol)
 
 
 @router.get("/{symbol}")
