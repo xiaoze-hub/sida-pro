@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -33,6 +34,8 @@ from sqlalchemy import text
 
 from src.web.cache.biz_cache import biz_cache
 from src.core.cn_gateway import gateway_url
+from src.core.caliber import CAPITAL_FLOW_TAG as _CAPITAL_FLOW_TAG
+from src.db.dialect import is_postgres
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +175,152 @@ def _try_write_snapshot_async(payload: dict) -> None:
 
     t = threading.Thread(target=_runner, name="mkt-flow-snapshot-writer", daemon=True)
     t.start()
+
+
+# ──────── A-7(2026-09-29): 端点优先读已落库快照(够新且在交易时段) ────────
+# 问题(审计 docs/TQ切换面审计_20260924.md 第五节第7条): 本端点的资金字段此前**只依赖
+# 实时外呼**(国内网关→东财), 上游一旦不可用(已多次发生)资金字段整块缺失, 只能降级成
+# 「仅涨跌家数」。而应用**本来就在持续落库大盘资金快照**(采样器每分钟 + 接口 30s 节流,
+# 都写 market_flow_snapshots) —— 应先读自己的库, 与上游可用性解耦。
+#
+# 判定规则(纯读路径, 不改动任何降级语义):
+#   1. 非交易时段 → 不读库, 照旧走实时链路;
+#   2. 读 market_flow_snapshots 最新一行, 行龄(秒) > 阈值 → 过旧, 照旧走实时链路;
+#   3. 命中(够新) → 直接用该行组装响应, 来源标注 source="db_snapshot" + 快照时间戳,
+#      **绝不把库里的陈旧值冒充实时值**;
+#   4. 库空/库不可达/资金字段缺失 → 回退实时链路(缺失即显式标注, 绝不补 0)。
+# 阈值默认 300s(5 分钟), 可用环境变量 MARKET_FLOW_SNAPSHOT_FRESH_SEC 覆盖。
+_SNAPSHOT_FRESH_SEC_DEFAULT = 300
+_SNAPSHOT_FRESH_ENV = "MARKET_FLOW_SNAPSHOT_FRESH_SEC"
+
+
+def _snapshot_fresh_sec() -> int:
+    """快照新鲜度阈值(秒): 环境变量覆盖, 非法/非正一律回落默认 300。"""
+    raw = os.environ.get(_SNAPSHOT_FRESH_ENV)
+    if raw:
+        try:
+            v = int(float(raw))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            logger.debug("%s 非法(%r), 用默认 %ss", _SNAPSHOT_FRESH_ENV, raw,
+                         _SNAPSHOT_FRESH_SEC_DEFAULT)
+    return _SNAPSHOT_FRESH_SEC_DEFAULT
+
+
+def _snapshot_age_sql() -> str:
+    """方言安全的「行龄(秒)」SQL 片段。
+
+    关键: 用 **DB 端 now** 与 ts 比较 —— ts 由 DB 默认 CURRENT_TIMESTAMP 写入(见
+    _try_write_snapshot_async / market_flow_sampler), 与写入口径自洽, 避免在 Python
+    侧猜 ts 是 UTC 还是本地时区而算错行龄。PG 走 EXTRACT, SQLite 走 julianday。
+    方言只认 src/db/dialect.py::is_postgres()(禁裸方言布尔量, CI 门禁)。
+    """
+    if is_postgres():
+        return "EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ts))"
+    return "(julianday('now') - julianday(ts)) * 86400.0"
+
+
+def _read_fresh_db_snapshot() -> dict | None:
+    """读已落库的最新大盘资金快照; 仅在「够新 ∩ 交易时段」时返回, 否则 None。
+
+    返回 None = 应回退实时链路(非交易时段/库空/过旧/库不可达), 调用方维持原降级语义。
+    行值一律如实透传: null 保留为 null(资金字段可能因网关故障而缺失), **绝不补 0**。
+    """
+    try:
+        from src.core.quote_snapshots import in_trading_window
+
+        if not in_trading_window():
+            return None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("交易时段判定不可用, 回退实时链路: %s", e)
+        return None
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
+                    "sh_flow, sz_flow, " + _snapshot_age_sql() + " AS age_sec "
+                    "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
+                )
+            ).fetchone()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("大盘资金快照读库失败(回退实时链路): %s", e)
+        return None
+    if row is None:
+        return None
+    try:
+        age = float(row[7]) if row[7] is not None else None
+    except (TypeError, ValueError):
+        age = None
+    # 行龄算不出, 或过旧(留 5s 容差应对时钟微偏) → 不猜, 回退实时链路
+    if age is None or age > _snapshot_fresh_sec() or age < -5:
+        return None
+    ts_val = row[0]
+    ts_str = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val)
+    return {
+        "snapshot_ts": ts_str,
+        "snapshot_age_sec": int(max(0, round(age))),
+        "total_main_flow": float(row[1]) if row[1] is not None else None,
+        "sh_flow": float(row[5]) if row[5] is not None else None,
+        "sz_flow": float(row[6]) if row[6] is not None else None,
+        "up_count": int(row[2]) if row[2] is not None else None,
+        "down_count": int(row[3]) if row[3] is not None else None,
+        "flat_count": int(row[4]) if row[4] is not None else None,
+    }
+
+
+def _snapshot_to_response(snap: dict) -> dict:
+    """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
+
+    字段名/结构与实时分支保持一致(前端不改), 仅新增来源标注字段; 快照表**未存**的
+    字段(成交额/指数点位涨跌/板块明细/创业板主力)一律显式置空 —— 不编造、不补 0。
+    口径标签沿用现网口径(eastmoney4, 见 docs/_frozen/caliber_matrix.md), 并显式标注
+    为「由快照继承」而非行内自带。
+    """
+    has_funds = snap.get("total_main_flow") is not None
+    resp = {
+        # 资金类字段(快照表存了这些)
+        "total_main_flow": snap.get("total_main_flow"),  # 亿
+        "sh_flow": snap.get("sh_flow"),
+        "sz_flow": snap.get("sz_flow"),
+        # 快照表未存的字段: 显式置空(缺失标注, 不编造)
+        "cyb_flow": None,
+        "total_amount": None,
+        "sh": None,
+        "sz": None,
+        "cyb": None,
+        "inflow_boards": [],
+        "outflow_boards": [],
+        # 市场统计(家数快照表存了)
+        "up_count": snap.get("up_count"),
+        "down_count": snap.get("down_count"),
+        "flat_count": snap.get("flat_count"),
+        # 来源标注(A-7): 库读而非实时外呼 —— 绝不冒充实时值
+        "source": "db_snapshot",
+        "data_source": "db_snapshot",
+        "data_origin": "market_flow_snapshots",
+        "breadth_source": "db_snapshot",
+        "snapshot_ts": snap.get("snapshot_ts"),
+        "snapshot_age_sec": snap.get("snapshot_age_sec"),
+        "timestamp": snap.get("snapshot_ts"),
+        # 口径标签: 沿用现网口径, 并标注为快照继承(行内未自带 caliber 列)
+        "caliber": _CAPITAL_FLOW_TAG.caliber,
+        "direction_semantics": _CAPITAL_FLOW_TAG.direction_semantics,
+        "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定 "
+                         "(口径由已落库快照继承)",
+        "caliber_source": "db_snapshot_inherited",
+        "note": "读自已落库大盘资金快照(非实时外呼); 快照表未存成交额/指数点位/板块明细, "
+                "已显式置空, 不编造。",
+    }
+    if not has_funds:
+        # 库里最新快照仅含涨跌家数(网关故障期间采样器落的行) → 显式降级, 不补 0
+        resp["degraded"] = True
+        resp["note"] = ("库内最新快照仅含涨跌家数, 资金字段缺失(未编造 0); "
+                        "资金面请参照实时链路或稍后重试。")
+    return resp
 
 
 @router.get("/dragon-tiger/range/status")
@@ -436,7 +585,15 @@ async def market_capital_flow_proxy():
 
     2026-08-10 重构: 之前用同花顺 hyzjl 行业资金求和(总流入2611亿口径不对),
     改为国内网关东财两市主力净流入(超大单+大单汇总, 与APP一致)。
+
+    A-7(2026-09-29): **优先读已落库的最新快照**(够新且在交易时段内) —— 与上游网关
+    可用性解耦; 未命中(库空/过旧/非交易时段)则照旧走实时链路, 失败再按原逻辑降级。
     """
+    # A-7: 先试库(读 market_flow_snapshots 最新一行, 够新且交易时段内才采纳)。
+    # 同步读库 → to_thread, 不阻塞事件循环(与本函数下面 P0 注释同类问题)。
+    snap = await asyncio.to_thread(_read_fresh_db_snapshot)
+    if snap is not None:
+        return _snapshot_to_response(snap)
     try:
         import requests as _req
 
@@ -532,6 +689,8 @@ async def market_capital_flow_proxy():
             "caliber": "eastmoney4",
             "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定; "
                              "板块明细: 同花顺行业资金(参考)",
+            # A-7: 与库读分支口径字段对齐(方向语义透传给下游/UI)
+            "direction_semantics": _CAPITAL_FLOW_TAG.direction_semantics,
             "timestamp": None,
         }
         # 涨跌家数改走 TQ(2026-09-23 清单切换): 去掉对 cn 网关该字段的依赖。
