@@ -1,5 +1,35 @@
 # Changelog
 
+### feat-大盘资金端点优先读已落库快照(够新且在交易时段)（2026-09-29）
+
+审计 `docs/TQ切换面审计_20260924.md` 第五节第 7 条（A-7）：`/api/market-data/market-capital-flow`
+的资金字段此前**只依赖实时外呼**（国内网关→东财），上游一旦不可用（已多次发生）资金字段
+整块缺失，只能降级成「仅涨跌家数」。而应用**本来就在持续落库大盘资金快照**
+（`market_flow_snapshots`：采样器每分钟 + 接口 30s 节流），应先读自己的库。
+
+新增纯读路径（`src/web/api/market_data.py`），**不改动任何降级语义**：
+
+- 判定规则：非交易时段 → 不读库；读库最新一行，**行龄(秒) > 阈值** → 视为过旧；命中
+  （够新 ∩ 交易时段）→ 直接用该行组装响应。
+- **行龄用 DB 端 now 与 ts 比较**（PG `EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - ts)` /
+  SQLite `julianday('now') - julianday(ts)`）—— 与 ts 由 DB 默认 `CURRENT_TIMESTAMP`
+  的写入口径自洽，不在 Python 侧猜时区。方言只走 `src/db/dialect.py::is_postgres()`。
+- 阈值默认 **300s（5 分钟）**，可配 `MARKET_FLOW_SNAPSHOT_FRESH_SEC`。
+- **来源如实标注**：命中时响应带 `source="db_snapshot"`、`data_origin="market_flow_snapshots"`、
+  `snapshot_ts` 原快照时间戳 + `snapshot_age_sec`，**绝不把库里的陈旧值冒充实时值**。
+- **口径标签**：库读分支带 `caliber` + `direction_semantics`（沿用现网 eastmoney4，标注
+  `caliber_source="db_snapshot_inherited"`）；实时分支补 `direction_semantics` 与之对齐。
+- **缺失不编造**：快照表未存的字段（成交额/指数点位涨跌/板块明细/创业板主力）显式置空；
+  库里最新行仅含家数（网关故障期采样器落的行）→ 显式 `degraded`，资金字段留 `null`，**不补 0**。
+- 向后兼容：响应字段名/结构与实时分支一致（前端不改），仅**新增**来源标注字段。
+
+新增 `tests/test_market_flow_db_read.py`（12 例，全 mock 无真实网络）：新鲜→走库且来源/口径
+标注正确、过旧→回退实时、库空→回退实时、库不可达→回退、非交易时段→即便新鲜也回退、
+缺资金字段→显式 degraded 不补 0、实时链路失败/源报错→现有降级语义不变（含 502 与 stale 备份）、
+阈值环境变量生效。
+
+文件：`src/web/api/market_data.py`、`tests/test_market_flow_db_read.py`
+
 ### fix-预测历史到期对照: 目标日=今天改为收盘(15:00)后即用当日K线评估（2026-09-29）
 
 上一版(v0.13.31)对「目标日=今天」一律判 `pending`，理由诚实但过于保守：盘中 K 线
