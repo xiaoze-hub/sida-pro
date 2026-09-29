@@ -16,6 +16,9 @@ jobs:
   # P2-27 (2026-09-05 28号审计): 生产镜像构建前门禁 — tsc/pytest 任一红灯, 坏 tag 推不上生产
   # 2026-09-08 审计修复: 原 `pytest | tail -3` 管道退出码取 tail, 全红照样绿;
   # `pip install || true` 依赖装不上也继续 — 门禁形同虚设。
+  # 2026-09-29: 后端 pytest 从本作业拆出为 4 片矩阵并行(见 backend-pytest) + 覆盖率汇总作业
+  # (coverage-ratchet), 本作业只留快门禁(语法/部署 stub/gitleaks/三个静态检查/前端),
+  # 与分片作业**并行**跑, 门禁总时长 23min → ~9min。用例集合/过滤条件/棘轮口径均不变。
   gates:
     runs-on: ubuntu-latest
     steps:
@@ -53,36 +56,22 @@ jobs:
       - name: Install system libs for WeasyPrint (PDF export tests)
         # 2026-09-18: gates job 原缺这一步 ⇒ PDF 用例在 CI 渲染出乱码二进制而红
         # (`test_pdf_export` 断言正文文本)。与 build-and-push-image.yml 的 test job 对齐。
+        # 2026-09-29: pytest 已搬去 backend-pytest(那里同样装了这套库), 本步骤保留不动。
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
             libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
 
-      - name: Backend pytest + coverage ratchet (W2.5/E5)
+      - name: Backend static gates (lock drift / scoped queries / dialect scope)
+        # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
+        # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
+        # W3.1/D2(2026-09-09): 方言分叉只允许出现在 src/db/ 层
+        # 原与 pytest 同步骤, 2026-09-29 pytest 拆走后留在本作业(纯 stdlib, 秒级)。
         run: |
-          set -o pipefail
-          # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
-          # lock 不含本仓本地包 marketdata(与 Dockerfile 同口径单独 --no-deps 装)
-          python3 -m pip install -q -r requirements-lock.txt pytest-timeout pytest-cov
-          python3 -m pip install -q --no-deps -e ./packages/marketdata
-          # W2.5/E6 漂移守卫: requirements.txt 新增顶层依赖而未再生 lock → 这里红
+          set -euo pipefail
           python3 scripts/check_lock_covers_reqs.py
-          # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
           python3 scripts/check_scoped_queries.py
-          # W3.1/D2(2026-09-09): 方言分叉只允许出现在 src/db/ 层
           python3 scripts/check_is_pg_scope.py
-          # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network, CI 主门禁跳过(-m "not network")。
-          # 2026-09-18 与 build-and-push-image.yml 的 test job **逐字对齐**(它是实际跑绿的基准):
-          #   ① 补两个 --ignore —— 这两个文件在 CI 缺依赖/数据, 本就由 test job 排除;
-          #   ② **去掉 `--timeout=60`** —— scrypt(n=2^15) 密集的认证用例在慢跑机上超 60s 被误杀
-          #      (test_email_reg_api_keys 三例 + tradingagents 一例), 而 test job 无此超时即通过。
-          #      需要超时兜底时用 pytest.ini 的标记粒度, 不再全局压 60s。
-          # W2.5/E5: 覆盖率棘轮(基线 scripts/coverage-baseline.json, 只许升不许降)
-          python3 -m pytest tests/ -q -m "not network" \
-            --ignore=tests/test_dark_l2_engine.py \
-            --ignore=tests/test_thsdk_extended.py \
-            --cov=src --cov-report=json:coverage.json --cov-report=term
-          python3 scripts/check_coverage_ratchet.py coverage.json
       - name: Frontend gates (tsc + eslint + vitest + ui-rules)
         run: |
           cd frontend
@@ -93,11 +82,142 @@ jobs:
           pnpm test
           node ../scripts/check_ui_rules.mjs
 
+  # 2026-09-29: 原全量 pytest(~20min, 单 runner 串行)拆成 4 片矩阵并行。
+  # 覆盖测试一份不少: 分片集合 = 原门禁测试集合(tests/test_*.py 去掉两个 CI --ignore 文件),
+  # 且是**文件级**切分 —— 每个文件整体只属于一片 ⇒ 无重复、无遗漏, 不需要 durations 文件/新依赖。
+  # 运行时过滤条件与分片前逐字一致: `-m "not network"` + 两个 --ignore + `--cov=src`。
+  # 本作业不再 needs: gates(与快门禁并行, 这才是 23min→~9min 的来源);
+  # 覆盖率棘轮在汇总作业 coverage-ratchet 里合并后仍照跑, build 改为 needs 该汇总作业。
+  backend-pytest:
+    name: Backend pytest shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      # 一片红也要看全 4 片的红(别让 fail-fast 吃掉其它片的诊断信息)
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      # 每片自己的原始覆盖率数据(非隐藏名, artifact 上传不需要 include-hidden-files)
+      COVERAGE_FILE: coverage.combined.${{ matrix.shard }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python 3.11 (与生产一致)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install system libs for WeasyPrint (PDF export tests)
+        # 2026-09-18: 缺这一步 ⇒ PDF 用例在 CI 渲染出乱码二进制而红(`test_pdf_export` 断言正文文本)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+            libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
+      - name: Install backend deps (requirements-lock.txt)
+        run: |
+          set -o pipefail
+          # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
+          # lock 不含本仓本地包 marketdata(与 Dockerfile 同口径单独 --no-deps 装)
+          python3 -m pip install -q -r requirements-lock.txt pytest-timeout pytest-cov
+          python3 -m pip install -q --no-deps -e ./packages/marketdata
+      - name: Select shard test files (确定性分片)
+        run: |
+          set -euo pipefail
+          SHARDS=4
+          SHARD=${{ matrix.shard }}
+          # 权重 = 文件里 test 函数个数, 按权重降序 → 4 片轮流取(LPT 贪心), 四片用例数尽量均衡;
+          # 平手用文件名字典序, 保证 4 个 runner 上选出**同一份**划分(确定性, 可复现)。
+          mapfile -t FILES < <(
+            for f in tests/test_*.py; do
+              case "$f" in
+                tests/test_dark_l2_engine.py|tests/test_thsdk_extended.py) continue ;;
+              esac
+              printf '%s %s\n' "$(grep -cE '^[[:space:]]*(async[[:space:]]+)?def test_' "$f")" "$f"
+            done | sort -k1,1nr -k2,2 | awk -v n="$SHARDS" -v k="$SHARD" 'NR % n == k - 1 {print $2}'
+          )
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::分片 $SHARD/$SHARDS 没选到任何测试文件 —— 分片逻辑失效, 拒绝静默放行"
+            exit 1
+          fi
+          printf '%s\n' "${FILES[@]}" > shard_files.txt
+          echo "shard $SHARD/$SHARDS: files=${#FILES[@]}"
+          cat shard_files.txt
+      - name: Backend pytest shard ${{ matrix.shard }}/4
+        run: |
+          set -o pipefail
+          mapfile -t FILES < shard_files.txt
+          # W2.3/E2(2026-09-09): 联网测试统一打 pytestmark=network, CI 主门禁跳过(-m "not network")。
+          # 2026-09-18 与 build-and-push-image.yml 的 test job **逐字对齐**(它是实际跑绿的基准):
+          #   ① 补两个 --ignore —— 这两个文件在 CI 缺依赖/数据, 本就由 test job 排除;
+          #   ② **去掉 `--timeout=60`** —— scrypt(n=2^15) 密集的认证用例在慢跑机上超 60s 被误杀
+          #      (test_email_reg_api_keys 三例 + tradingagents 一例), 而 test job 无此超时即通过。
+          #      需要超时兜底时用 pytest.ini 的标记粒度, 不再全局压 60s。
+          # 2026-09-29 分片: 只把那一步的"跑哪些文件"换成本片的文件清单, 过滤/覆盖率口径不变;
+          # 覆盖率 JSON 不在这里生成 —— 4 片的原始数据由汇总作业 combine 后一次性判棘轮。
+          python3 -m pytest "${FILES[@]}" -q -m "not network" \
+            --ignore=tests/test_dark_l2_engine.py \
+            --ignore=tests/test_thsdk_extended.py \
+            --cov=src --cov-report=term
+      - name: Upload shard coverage data
+        # 测试红了也上传: 便于确认"红"是不是分片漏跑造成的
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          # 直接用 matrix 表达式(不引 env 上下文, 少一层可用性歧义)
+          path: coverage.combined.${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  # 2026-09-29: 分片后覆盖率棘轮的落点 —— 合并 4 片原始数据, 再一次性判棘轮。
+  # 不能让棘轮静默失效: 缺 `[run] source = src` 时, 从未被任何用例导入的 src 文件不会进报告,
+  # 覆盖率会被算高(棘轮变松)。这里显式给同口径配置, 并已在本地实证 combine 结果与
+  # 单次全量跑的报告**逐文件一致**。
+  coverage-ratchet:
+    name: Backend coverage ratchet (combine 4 shards)
+    needs: [gates, backend-pytest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python 3.11 (与生产一致)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install coverage tooling
+        # 与分片作业同一条安装规格(pytest-cov, 未钉版 —— 与拆片前的 gates 完全一致),
+        # 保证两边解析到同一个 coverage 版本, 数据格式不打架。本作业只用它的 coverage CLI。
+        run: python3 -m pip install -q pytest-cov
+      - name: Download shard coverage data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: coverage-shard-*
+          merge-multiple: true
+          path: .
+      - name: Combine shard coverage + ratchet (W2.5/E5)
+        run: |
+          set -euo pipefail
+          ls -l coverage.combined.*
+          # 硬断言: 4 片数据少一片就是漏跑, 宁可红也别按部分覆盖率放行
+          data=(coverage.combined.*)
+          if [ "${#data[@]}" -ne 4 ]; then
+            echo "::error::期望 4 片覆盖率数据(coverage.combined.1..4), 实际匹配 ${#data[@]} 个"
+            exit 1
+          fi
+          COVERAGE_FILE=coverage.combined python3 -m coverage combine
+          # 与分片内 pytest-cov `--cov=src` 同口径(见本作业头注释), 生成棘轮用的 JSON
+          printf '[run]\nsource = src\n' > .coveragerc-shards
+          COVERAGE_FILE=coverage.combined COVERAGE_RCFILE=.coveragerc-shards \
+            python3 -m coverage json -o coverage.json
+          # W2.5/E5: 覆盖率棘轮(基线 scripts/coverage-baseline.json, 只许升不许降)
+          python3 scripts/check_coverage_ratchet.py coverage.json
+
   build:
     # PR 门禁只跑 gates, 不构建不推送镜像
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    needs: gates
+    # 门禁全绿才推镜像: 汇总作业 needs 快门禁(gates) + 4 个分片, 任一红 → 这里是 skipped
+    needs: coverage-ratchet
     permissions:
       contents: read
       packages: read   # 拉取私有 ghcr.io/xiaoze-hub/thsdk-vendor(L2 私有 SDK)

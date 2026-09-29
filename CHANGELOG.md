@@ -1,5 +1,30 @@
 # Changelog
 
+### chore-CI 门禁后端 pytest 改 4 片并行(23min → ~9min)（2026-09-29）
+
+`build-push-acr.yml` 的 `gates` 作业里全量后端 pytest(单 runner 串行, 约 20 min, 占该作业
+绝大部分时长)是发版门禁的时长瓶颈。把它拆出为 **4 片矩阵并行 + 覆盖率汇总作业**,
+**用例一份不少、过滤条件与覆盖率棘轮口径都不变**:
+
+- 新增 `backend-pytest` 矩阵作业(4 片, `fail-fast: false`), **不再 `needs: gates`** —— 与
+  快门禁(gitleaks/静态检查/前端 tsc+lint+vitest)与覆盖率汇总作业并行, 这才是压缩时长的关键。
+- 分片方式是**确定性文件级切分**, 不引入任何新依赖/新文件: 分片对象 = 原门禁测试集合
+  (`tests/test_*.py` 去掉两个 CI `--ignore` 文件), 权重 = 文件内 `def test_` 个数, 按权重降序
+  4 片轮流取(LPT 贪心), 平手用文件名字典序 ⇒ 4 个 runner 上划分一致且可复现; 每个文件整体
+  只属于一片 ⇒ **无重复、无遗漏**(本地逐 node-id 实证: 4 片并集 == 不分片全量 2973 例, 两两交集 0)。
+- 每片运行命令与拆片**逐字同口径**: 同样 `-m "not network"` + 两个 `--ignore` + `--cov=src`,
+  只把"跑哪些文件"换成本片清单; 覆盖率原始数据写 `coverage.combined.<片号>` 并作 artifact 上传。
+- 新增汇总作业 `coverage-ratchet`(`needs: [gates, backend-pytest]`): 先把 4 片数据**硬断言为
+  恰好 4 个**(少一片就红, 拒绝按部分覆盖率放行), 再 `coverage combine` 合并 → 用与 pytest-cov
+  同口径的 `[run] source = src` 生成 `coverage.json` → 跑 `scripts/check_coverage_ratchet.py`。
+  **不能让棘轮静默失效**: 缺 `source = src` 时从未被任何用例导入的 src 文件不会进报告、覆盖率会
+  被算高; 已本地实证 combine 出的报告与单次全量跑**逐文件一致**(文件数/语句数/missing_lines 全同)。
+- `build` 的 `needs` 由 `gates` 改为 `coverage-ratchet`, 「门禁全绿才推镜像」不变(汇总作业 needs
+  快门禁 + 4 片); 三个静态检查(`check_lock_covers_reqs.py`/`check_scoped_queries.py`/
+  `check_is_pg_scope.py`)、bash -n、部署脚本 stub、gitleaks、前端门禁全部保留在 `gates`。
+
+文件：`.github/workflows/build-push-acr.yml`
+
 ### fix-预测历史到期对照: 目标日=今天改为收盘(15:00)后即用当日K线评估（2026-09-29）
 
 上一版(v0.13.31)对「目标日=今天」一律判 `pending`，理由诚实但过于保守：盘中 K 线
