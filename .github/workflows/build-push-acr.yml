@@ -210,7 +210,10 @@ jobs:
           fi
           COVERAGE_FILE=coverage.combined python3 -m coverage combine
           # 与分片内 pytest-cov `--cov=src` 同口径(见本作业头注释), 生成棘轮用的 JSON
-          printf '[run]\nsource = src\n' > .coveragerc-shards
+          # 2026-09-29: omit 掉 tests/test_w32_bootstrap.py 动态生成又删除的临时 agent
+          #   (src/agents/w32_demo_agent.py) —— 测量时它在、汇总时已不在,
+          #   否则 coverage json 报 `No source for code` 而红。
+          printf '[run]\nsource = src\nrelative_files = true\nomit =\n    src/agents/w32_demo_agent.py\n' > .coveragerc-shards
           COVERAGE_FILE=coverage.combined COVERAGE_RCFILE=.coveragerc-shards \
             python3 -m coverage json -o coverage.json
           # W2.5/E5: 覆盖率棘轮(基线 scripts/coverage-baseline.json, 只许升不许降)
