@@ -6,13 +6,16 @@
   ③ 到期但行情缺失 → no_data 且**不返回 0**(硬约束: 缺数据禁编造)
   ④ 引擎报错 → 仍降级(不可达 503 / enrichment 失败返回引擎原始数据)
 
+另含 2026-09-29 新规则用例(⑤): 目标日=今天时按收盘线(15:00)判定 —— 未过收盘仍
+pending, >= 15:00 用当日 K 线评估, 当日 K 线缺失则 no_data。时间经 `now` 注入, 不改系统时钟。
+
 全部 mock 引擎响应与 K 线, **不触真实网络**。
 """
 from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -83,16 +86,20 @@ def test_pending_when_target_date_in_future_and_no_kline_fetch():
 
 
 def test_pending_when_target_is_today_even_with_today_bar():
-    """目标日=今天 → pending: T 日收盘价未局, 盘中实时柱不能当到期收盘(禁编造)。"""
+    """目标日=今天且未过收盘(<15:00) → pending: T 日收盘价未落定, 盘中实时柱不能当到期收盘(禁编造)。"""
     bars = _bars(("2026-09-25", 10.0), ("2026-09-29", 10.5))  # 含当日实时柱
     assert evaluate_history_item(
-        _item(last_date="2026-09-25", target_date="2026-09-29"), bars, today=_TODAY
+        _item(last_date="2026-09-25", target_date="2026-09-29"),
+        bars,
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 11, 30),
     ) == {"outcome_status": "pending"}
     # 且不该为此去取行情
     calls: list = []
     out = _enrich(
         {"items": [_item(last_date="2026-09-25", target_date="2026-09-29")]},
         lambda symbol, days: calls.append(symbol) or [],
+        now=datetime(2026, 9, 29, 11, 30),
     )
     assert out["items"][0]["outcome_status"] == "pending"
     assert calls == []
@@ -250,6 +257,120 @@ def test_unexpected_payload_shape_returned_unchanged():
     """引擎返回结构异常(无 items 列表)时原样透传, 不抛错。"""
     payload = {"items": "oops"}
     assert _enrich(payload, lambda symbol, days: []) is payload
+
+
+# ---------- ⑤ 目标日=今天 的收盘线判定(2026-09-29 新规则) ----------
+
+_CLOSE_LINE = datetime(2026, 9, 29, 15, 0)  # _TODAY 的收盘时刻
+
+
+def test_target_today_before_close_is_pending_and_skips_kline_fetch():
+    """① 目标日=今天, now=14:59(未过收盘) → pending, 且不取行情。"""
+    calls: list = []
+    bars = _bars(("2026-09-25", 10.0), ("2026-09-29", 10.5))
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-29"),
+        bars,
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 14, 59),
+    ) == {"outcome_status": "pending"}
+
+    out = _enrich(
+        {"items": [_item(last_date="2026-09-25", target_date="2026-09-29")]},
+        lambda symbol, days: calls.append(symbol) or _raw(("2026-09-29", 10.5)),
+        now=datetime(2026, 9, 29, 14, 59),
+    )
+    row = out["items"][0]
+    assert row["outcome_status"] == "pending"
+    assert row["outcome_return_pct"] is None
+    assert calls == [], f"未过收盘不应取 K 线, 实际: {calls}"
+
+
+def test_target_today_at_close_evaluates_with_today_bar():
+    """② 目标日=今天, now=15:00(收盘线, 含边界) 且当日 K 线已在 → 正常评出 hit/miss。"""
+    bars = _bars(("2026-09-25", 10.0), ("2026-09-29", 11.0))  # 当日已是终值
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-29", direction="up"),
+        bars,
+        today=_TODAY,
+        now=_CLOSE_LINE,
+    ) == {"outcome_return_pct": 10.0, "outcome_status": "hit"}
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-29", direction="down"),
+        bars,
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 15, 30),
+    ) == {"outcome_return_pct": 10.0, "outcome_status": "miss"}
+
+    seen: list[str] = []
+    out = _enrich(
+        {"items": [_item(last_date="2026-09-25", target_date="2026-09-29")]},
+        lambda symbol, days: seen.append(symbol)
+        or _raw(("2026-09-25", 10.0), ("2026-09-29", 11.0)),
+        now=_CLOSE_LINE,
+    )
+    row = out["items"][0]
+    assert seen == ["600519"]  # 过了收盘才取行情
+    assert row["outcome_return_pct"] == 10.0
+    assert row["outcome_status"] == "hit"
+
+
+def test_target_today_after_close_without_today_bar_is_no_data_not_zero():
+    """③ 目标日=今天, now>=15:00, 但当日 K 线缺失 → no_data 且 pct 显式为 None(禁填 0)。"""
+    bars_missing_today = _bars(("2026-09-25", 10.0))  # 只有昨收, 没有当日终值
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-29"),
+        bars_missing_today,
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 15, 30),
+    ) == {"outcome_status": "no_data"}
+    # 完全取不到行情同样 no_data
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-29"),
+        [],
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 15, 30),
+    ) == {"outcome_status": "no_data"}
+
+    out = _enrich(
+        {"items": [_item(last_date="2026-09-25", target_date="2026-09-29")]},
+        lambda symbol, days: _raw(("2026-09-25", 10.0)),
+        now=datetime(2026, 9, 29, 15, 30),
+    )
+    row = out["items"][0]
+    assert row["outcome_status"] == "no_data"
+    assert row["outcome_return_pct"] is None
+    assert row["outcome_return_pct"] != 0
+
+
+def test_target_yesterday_forced_evaluated_even_before_close_regression():
+    """④ 目标日=昨天(即使 now 还没到今天收盘) → 行为与改动前一致: 照旧评估。"""
+    bars = _bars(("2026-09-25", 10.0), ("2026-09-28", 11.0))
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-28", direction="up"),
+        bars,
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 9, 30),  # 早于收盘, 但目标日不是今天
+    ) == {"outcome_return_pct": 10.0, "outcome_status": "hit"}
+
+    out = _enrich(
+        {"items": [_item(last_date="2026-09-25", target_date="2026-09-28")]},
+        lambda symbol, days: _raw(("2026-09-25", 10.0), ("2026-09-28", 11.0)),
+        now=datetime(2026, 9, 29, 9, 30),
+    )
+    row = out["items"][0]
+    assert row["outcome_return_pct"] == 10.0
+    assert row["outcome_status"] == "hit"
+
+
+def test_target_tomorrow_still_pending_regression():
+    """④ 目标日 > 今天 → 仍 pending(不改动的分支)。"""
+    assert evaluate_history_item(
+        _item(last_date="2026-09-25", target_date="2026-09-30"),
+        _bars(("2026-09-25", 10.0), ("2026-09-30", 11.0)),
+        today=_TODAY,
+        now=datetime(2026, 9, 29, 16, 0),
+    ) == {"outcome_status": "pending"}
 
 
 # ---------- ④ 端点级: 引擎降级 ----------

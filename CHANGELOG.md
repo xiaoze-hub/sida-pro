@@ -1,5 +1,35 @@
 # Changelog
 
+### fix-预测历史到期对照: 目标日=今天改为收盘(15:00)后即用当日K线评估（2026-09-29）
+
+上一版(v0.13.31)对「目标日=今天」一律判 `pending`，理由诚实但过于保守：盘中 K 线
+源会返回**当日实时柱**，拿未收官价当到期收盘就是编造。但 15:00 之后当日 K 线已是
+**终值**，此时仍 `pending` 就是白白让 UI 的「到期对照」列在盘后空着。
+
+本次把判定收敛到**收盘线**（`src/core/forecast_outcome.py`）：
+
+- 目标日 **<** 今天：照旧评估（不变）。
+- 目标日 **==** 今天 且 `now >= 15:00`（本地时区 Asia/Shanghai，常量
+  `_MARKET_CLOSE = time(15, 0)`）：**允许评估**，用当日 K 线。
+- 目标日 **==** 今天 且 `now < 15:00`：仍 `pending`（盘中实时柱不是终值）。
+- 目标日 **>** 今天：仍 `pending`（不变）。
+
+**时间可注入**：`evaluate_history_item(..., today=..., now: datetime | None = None)`
+与 `enrich_history_outcomes(..., today=None, now: datetime | None = None, ...)`，
+默认取 `datetime.now()`；测试注入固定时刻即可，**不改系统时钟、不引新依赖**。
+
+**缺数据不回退 hit/miss**：目标日=今天且已过收盘，若取不到**当日**那根 K 线
+（当日缺失/今日非交易日），显式落 `no_data` 且 `outcome_return_pct` 为 `null`
+（绝不拿更早的收盘冒充当日终值，也绝不填 0）。平盘(0.00%) 对 up/down 仍判
+`miss`、对 flat 判 `hit` —— **本次未改**。
+
+新增 5 个用例（`tests/test_forecast_history_outcome.py` ⑤ 段，全 mock 无真实网络）：
+14:59→pending 且不取行情、15:00 边界→hit/miss、过收盘但当日 K 线缺失→no_data
+且 pct 为 None、目标日=昨天→照旧评估、目标日=未来→仍 pending。原 18 例全过
+（其中 1 例「目标日=今天」的旧用例补注入 `now=11:30` 以保持其盘中语义、避免盘后跑测翻转）。
+
+文件：`src/core/forecast_outcome.py`、`tests/test_forecast_history_outcome.py`
+
 ### feat-平台限额（同时在线设备数/游客限流/skill 档位日限）收编进「免费档」面板（2026-09-29）
 
 `docs/遗留项汇总与解决方案_20260918.md` **B3**：自选/预警上限此前已"可调"，但

@@ -19,10 +19,14 @@
 
 判定规则(SIDA 硬约束: 数据缺失一律显式 null/no_data, **禁编造、禁填 0**)
 ----------------------------------------------------------------------
-  - `pending`  目标日未到, **或目标日就是今天**(T 日收盘价未落定; 实测 K 线源
-               盘中会给出当日实时柱, 拿它当到期收盘就是编造) —— 一律不出对照结果
+  - `pending`  目标日未到, **或目标日就是今天且当前时间还没过收盘**(本地时区
+               Asia/Shanghai, 收盘线 15:00; 盘中 K 线源会给出当日**实时柱**, 拿
+               未收官价当到期收盘就是编造) —— 一律不出对照结果
+  - 目标日 == 今天 且当前时间 >= 15:00(本地时区): 当日 K 线已是终值, **允许评估**
+               (当日 K 线缺失/当日不是交易日 → 自然落到 `no_data`, 不回退 hit/miss)
   - `no_data`  到期但取不到行情 / 行情不足以覆盖预测窗口 / 到期日无法确定 /
-               方向字段缺失无法判定(_此时仍如实返回已算出的 outcome_return_pct_)
+               **目标日=今天但当日 K 线缺失** / 方向字段缺失无法判定
+               (_此时仍如实返回已算出的 outcome_return_pct_)
   - `hit`      实际涨跌方向与该条预测方向一致(up↔涨, down↔跌, flat↔持平)
   - `miss`     方向不一致; 涨幅恰好 0.00% 对 up/down 判 miss(方向未兑现),
                对 flat 判 hit
@@ -44,7 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime, time
 
 from src.collectors.kline_collector import KlineCollector
 from src.core.prediction_outcome import _add_trading_days, _parse_day
@@ -58,6 +62,8 @@ MAX_SYMBOLS_PER_REQUEST = 50
 _FETCH_CONCURRENCY = 4
 # K 线回溯上限(与 src/core/prediction_outcome.py 评估窗口一致)
 _MAX_LOOKBACK_DAYS = 600
+# A 股收盘时刻(本地时区): 目标日=今天时, 只有 >= 该时刻才认为当日 K 线已收官成终值
+_MARKET_CLOSE = time(15, 0)
 
 STATUS_HIT = "hit"
 STATUS_MISS = "miss"
@@ -123,6 +129,23 @@ def _resolve_target_day(item: dict) -> date | None:
         return None
 
 
+def _target_day_is_due(target_day: date | None, today: date, now: datetime) -> bool:
+    """目标日是否已「收官可评估」(决定要不要出对照结果)。
+
+    - 目标日 < 今天: 已到期, 可评估(原本行为, 不变)。
+    - 目标日 == 今天: 仅当当前时间 >= 收盘(15:00, 本地时区)才可评估 —— 当天 K 线
+      此时已是终值; 盘中(< 15:00)拿到的是**实时柱**, 不能当到期收盘(禁编造)。
+    - 目标日 > 今天 / 目标日无法确定(None): 不可评估。
+    """
+    if target_day is None:
+        return False
+    if target_day < today:
+        return True
+    if target_day > today:
+        return False
+    return now >= datetime.combine(today, _MARKET_CLOSE)
+
+
 def _judge_status(direction, pct: float) -> str | None:
     """按方向与涨跌幅符号判 hit/miss; 方向不可识别返回 None(调用方给 no_data)。"""
     direction_text = str(direction or "").strip().lower()
@@ -140,27 +163,36 @@ def evaluate_history_item(
     bars: list[tuple[date, float]],
     *,
     today: date,
+    now: datetime | None = None,
 ) -> dict:
     """算单条的到期对照结果。
 
+    `now` 可注入(默认取本地当前时间 `datetime.now()`), 供 `目标日=今天` 判断是否
+    已过收盘; 测试无需改系统时钟。
+
     返回**只含能确定字段**的 dict:
-      - 到期日未到(含目标日=今天: T 日收盘价未落定) → `{"outcome_status": "pending"}`
+      - 到期日未到 / 目标日=今天且未过收盘(15:00) → `{"outcome_status": "pending"}`
       - 算得出涨跌幅 → `{"outcome_return_pct": float, "outcome_status": ...}`
       - 到期但无行情/无法判定 → `{"outcome_status": "no_data"}`
         (方向字段缺失无法判定时也返回已算出的 `outcome_return_pct`, 不丢真实数据)
     """
+    now = now or datetime.now()
     target_day = _resolve_target_day(item)
     if target_day is None:
         return {"outcome_status": STATUS_NO_DATA}
-    if target_day >= today:
-        # 目标日未到; 或目标日就是今天而 T 日收盘价还没落定(盘中取到的是未收官价,
-        # 实测 K 线源会给出当日实时柱) → 一律不出对照结果, 免得把未定的数当成到期涨跌
+    if not _target_day_is_due(target_day, today, now):
+        # 目标日未到; 或目标日就是今天而当前尚未过收盘(K 线源会给出当日实时柱,
+        # 未收官价不能当到期收盘) → 一律不出对照结果, 免得把未定的数当成到期涨跌
         return {"outcome_status": STATUS_PENDING}
     if not bars:
         return {"outcome_status": STATUS_NO_DATA}
 
     outcome_bar = _pick_bar(bars, target_day)
     if outcome_bar is None:
+        return {"outcome_status": STATUS_NO_DATA}
+    if target_day == today and outcome_bar[0] != today:
+        # 目标日=今天且已过收盘, 却取不到**当日**K 线(缺失/今日非交易日) →
+        # 显式无数据, 绝不拿更早的收盘冒充当日终值(禁编造)
         return {"outcome_status": STATUS_NO_DATA}
 
     last_day = _parse_day(item.get("last_date"))
@@ -228,12 +260,15 @@ async def enrich_history_outcomes(
     payload,
     *,
     today: date | None = None,
+    now: datetime | None = None,
     max_symbols: int = MAX_SYMBOLS_PER_REQUEST,
     klines_loader=None,
 ):
     """对 `/forecast/history` 的引擎返回体做到期对照 enrichment(保持原结构)。
 
     - `payload` 支持 `{"items": [...]}`(引擎现状)或裸 list; 其他结构原样返回。
+    - `today` / `now` 可注入(测试用); 默认取本地当天与当前时间(`date.today()` /
+      `datetime.now()`)。`now` 只影响「目标日=今天」是否已过收盘(15:00)。
     - `klines_loader(symbol, days) -> list` 可注入(测试用), 默认走 `_load_klines`。
     - 返回结构与入参一致, 条目为**副本**, 引擎原有字段一律不改写。
     """
@@ -250,6 +285,7 @@ async def enrich_history_outcomes(
         return payload
 
     today = today or date.today()
+    now = now or datetime.now()
     loader = klines_loader or _load_klines
 
     # 1) 先挑出"已到期需要取行情"的标的(去重, 有上限)
@@ -258,7 +294,7 @@ async def enrich_history_outcomes(
         if not isinstance(item, dict):
             continue
         target_day = _resolve_target_day(item)
-        if target_day is None or target_day >= today:
+        if target_day is None or not _target_day_is_due(target_day, today, now):
             continue
         symbol = _normalize_symbol(item.get("symbol"))
         if not symbol:
@@ -296,16 +332,18 @@ async def enrich_history_outcomes(
         try:
             symbol = _normalize_symbol(item.get("symbol"))
             target_day = _resolve_target_day(item)
-            if target_day is not None and target_day >= today:
-                # 未到期(含目标日=今天, T 日收盘价未定): 不需要行情就能判定
-                enriched.append(merge_outcome(item, {"outcome_status": STATUS_PENDING}))
-            elif target_day is None:
+            if target_day is None:
                 # 记录不全(到期日都推不出来) → 显式无数据
                 enriched.append(merge_outcome(item, {"outcome_status": STATUS_NO_DATA}))
+            elif not _target_day_is_due(target_day, today, now):
+                # 未到期; 或目标日=今天但未过收盘(15:00) → 不需要行情就能判定
+                enriched.append(merge_outcome(item, {"outcome_status": STATUS_PENDING}))
             elif symbol in selected:
                 bars = bars_by_symbol.get(symbol, [])
                 enriched.append(
-                    merge_outcome(item, evaluate_history_item(item, bars, today=today))
+                    merge_outcome(
+                        item, evaluate_history_item(item, bars, today=today, now=now)
+                    )
                 )
             else:
                 # 到期但本次没取行情(超过评估上限/无 symbol): 不猜, 保持引擎原值
