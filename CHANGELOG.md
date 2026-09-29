@@ -1,5 +1,12 @@
 # Changelog
 
+### fix-CI 覆盖率跨 runner 合并补 relative_files（2026-09-29）
+
+v0.13.35 分片发版时 `coverage-ratchet` 作业红：`No source for code: .../src/agents/w32_demo_agent.py`。
+根因：pytest 拆成 4 片矩阵后各 runner 记录**绝对路径**，`coverage combine` 解析不到。
+修法：仓库级 `pyproject.toml` 增 `[tool.coverage.run] relative_files = true`
+（必须放仓库级，让分片作业的测量阶段也生效；只改聚合作业无效）。
+
 ### fix-CI 静态门禁步骤补装 lock 依赖（2026-09-29）
 
 v0.13.34 首次分片发版时 `gates` 作业红：`Backend static gates` 报
