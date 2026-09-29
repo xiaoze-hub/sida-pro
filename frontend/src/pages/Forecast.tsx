@@ -69,10 +69,10 @@ interface ForecastHistoryItem {
   summary: string
   sentiment_adj: number
   created_at: string
-  // TODO(到期对照): /forecast/history 后端(list_forecasts → forecasts 表)尚未返回 outcome 字段。
-  // 待后端在 forecast_lib/forecast_history.py 里按 target_date 对照实际行情后补充以下字段
-  // （如 outcome_return_pct: 实际涨跌幅%, outcome_status: 'hit'|'miss'|'pending'），
-  // 前端历史表会自动展示"到期对照"列，无需再改这里。
+  // 到期对照(2026-09-29 落地): 应用侧 /forecast/history 已按 target_date 对照实际行情补以下字段
+  // (实现见 src/core/forecast_outcome.py): outcome_return_pct=实际涨跌幅%,
+  // outcome_status='hit'|'miss'|'pending'|'no_data'(取不到行情=null + 'no_data', 不填 0)。
+  // 前端历史表据此自动展示"到期对照"列, 无需再改这里。
   outcome_return_pct?: number
   outcome_status?: 'hit' | 'miss' | 'pending' | string
 }
@@ -541,7 +541,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const dirColor = (dir: string) =>
     dir === 'up' ? 'text-stock-up' : dir === 'down' ? 'text-stock-down' : 'text-muted-foreground'
 
-  // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem 的 TODO)
+  // 到期对照: 仅当后端 /forecast/history 返回 outcome 字段时展示该列(见 ForecastHistoryItem)
   const historyHasOutcome = history.some(
     h => h.outcome_return_pct !== undefined || h.outcome_status !== undefined
   )
@@ -1040,7 +1040,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
                   <th className="text-right">止损</th>
                   <th className="text-left">操作建议</th>
                   <th className="text-left">置信</th>
-                  {/* TODO(到期对照): 后端返回 outcome 字段后自动出现该列, 见 ForecastHistoryItem */}
+                  {/* 到期对照列: 后端返回 outcome 字段时自动出现(见 ForecastHistoryItem) */}
                   {historyHasOutcome && <th className="text-right">到期对照</th>}
                 </tr>
               </thead>

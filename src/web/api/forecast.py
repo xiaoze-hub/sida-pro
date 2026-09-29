@@ -182,12 +182,34 @@ async def forecast_predict_status(
         raise HTTPException(500, f"查询失败: {e}")
 
 
+async def _enrich_forecast_history(data):
+    """应用侧补「到期对照」字段(src/core/forecast_outcome.py)。
+
+    历史预测列表直接来自 :8010 预测引擎, 而 `forecast_lib/` 是 8010 镜像专用
+    (镜像内无 `src/`, 禁 import `src.*`), 无法在引擎侧用应用自己的行情做对照。
+    故在应用侧 enrichment: 对已到期的预测算实际涨跌幅 + hit/miss。
+
+    失败一律降级返回引擎原始数据 —— enrichment 是增量信息, 绝不能把整个接口搞挂。
+    """
+    try:
+        from src.core.forecast_outcome import enrich_history_outcomes
+
+        return await enrich_history_outcomes(data)
+    except Exception:
+        logger.exception("预测历史到期对照 enrichment 失败, 降级返回引擎原始数据")
+        return data
+
+
 @router.get("/forecast/history")
 async def forecast_history(
     symbol: str = Query("", description="股票代码过滤"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    """历史预测列表(供回查)。"""
+    """历史预测列表(供回查)。
+
+    返回引擎原始字段 + 应用侧补的 `outcome_return_pct` / `outcome_status`
+    (仅到期条目; 前端「到期对照」列据此自动展示)。
+    """
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(
@@ -195,12 +217,13 @@ async def forecast_history(
                 params={"symbol": symbol, "limit": limit},
             )
             r.raise_for_status()
-            return r.json()
+            data = r.json()
     except httpx.ConnectError:
         raise HTTPException(503, "预测引擎不可用(需在主机运行 forecast_server.py)")
     except Exception as e:
         logger.exception("历史查询失败")
         raise HTTPException(500, f"查询失败: {e}")
+    return await _enrich_forecast_history(data)
 
 
 @router.get("/forecast/card")
