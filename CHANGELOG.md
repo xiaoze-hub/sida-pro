@@ -1,5 +1,42 @@
 # Changelog
 
+### feat-平台限额（同时在线设备数/游客限流/skill 档位日限）收编进「免费档」面板（2026-09-29）
+
+`docs/遗留项汇总与解决方案_20260918.md` **B3**：自选/预警上限此前已"可调"，但
+`MAX_SESSIONS_PER_USER`（同时在线设备 ≤2）、`GUEST_STRATEGY`（游客限流）、`tier_configs`
+（skill 档位日限）仍散在代码/表里。本次**收编进同一份 KV** `app_settings.free_tier_config`
+（复用现成的 30s 缓存 + 写后立即失效模式），owner 在 `GET/PUT /api/admin/free-tier`
+（设置页「免费档」面板）即可改，**30s 内全节点热生效，不用发版/重启**。
+
+**三组的读写位置与默认值**（未配置一律回退原硬编码默认，行为与收编前一致）：
+
+| 项 | 读位置 | 默认值 |
+|---|---|---|
+| `max_sessions_per_user` | `free_tier.max_sessions_per_user(db)` → `permissions.enforce_device_limit`（登录踢最早会话） | 2（`permissions.MAX_SESSIONS_PER_USER`） |
+| `guest_strategy.watchlist_limit` | `free_tier.guest_strategy(db)` → `web/api/stocks.py:create_stock`（demo/guest 自选上限） | 1 |
+| `guest_strategy.get_hourly_limit` | `free_tier.guest_strategy(db)` → `core/demo_limit.get_hourly_limit`（演示账号每小时 GET 限流，429 文案同源） | 20（`demo_limit._DEMO_GET_HOURLY_LIMIT`） |
+| `tier_limits.<tier>.{daily_limit,burst_limit,refill_per_min}` | `free_tier.tier_limits(db)` → `skills_gateway.refresh_tier_configs`（**KV 覆盖优先于 tier_configs 表/硬编码**） | 空 = 用 `tier_configs` 表（100/30/15、500/50/20、5000/100/60） |
+
+**向后兼容**：`tier_limits` 默认空 dict ⇒ `refresh_tier_configs` 行为与收编前逐字一致；
+`MAX_SESSIONS_PER_USER` / `GUEST_STRATEGY` 常量保留为兜底，`permissions.effective_max_sessions()`
+/ `effective_guest_strategy()` 读不到配置时回落它们。设备上限被调小时会一次踢到"未过期会话 == 上限"
+（原实现是登录踢 1 条，`rows >= limit` 语义不变）。
+
+**非法值**：`_coerce` 对负数/非数字/越界/未知档位/未知子项一律**丢弃回默认**（配置读坏不能让
+登录或限流入口 500）；`PUT` 面板侧再校验一遍（`max_sessions_per_user` 越界 → 422，
+未知游客子项/未知档位/非正限额 → 400），并带审计。
+
+**前端**：`FreeTierSection` 新增「平台限额」区（设备数 / 游客自选 / 游客每小时请求 +
+free·trial·pro 三档日限·突发·匀速输入，留空 = 不覆盖，占位显示当前生效值）；`catalog.tiers`
+下发三档生效值，面板不硬编码。`tsc -b` exit 0、`check_ui_rules.mjs` OK（UI-RULES OK）。
+
+**测试**：新增 `tests/test_platform_limits.py`（15 例，无真实网络）——①未配置→回退四个默认；
+②配置后生效 + 写后 L1 缓存立即失效 + 设备上限调大/调小真实踢会话；③非法值回退默认、
+bool/越界拒绝、PUT 400/422；④多用户（A 被踢不影响 B）、多档位（free/pro 分别覆盖、trial 不动）
+不串味，且配置是**全局一份 KV**（非 per-user）。`pytest tests/ -q -k "setting or limit or tier or
+session or guest"` 231 passed；新增 + 关联文件（permissions/free_tier/skill_gateway/stocks/tiers）
+99~105 passed；`py_compile` 与 `scripts/check_is_pg_scope.py` OK；前端该面板 vitest 6 passed。
+
 ### feat-预测历史「到期对照」应用侧 enrichment（2026-09-29）
 
 前端预测页历史表（`frontend/src/pages/Forecast.tsx`）早写好了「到期对照」列，只等

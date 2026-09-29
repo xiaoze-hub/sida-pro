@@ -149,6 +149,26 @@ def effective_trial_limit(db=None) -> int:
         return TRIAL_DAILY_LIMIT
 
 
+def effective_max_sessions(db=None) -> int:
+    """同账号同时在线设备数上限(运行时配置优先, 读不到用默认 2)。"""
+    try:
+        from src.core import free_tier
+
+        return free_tier.max_sessions_per_user(db)
+    except Exception:  # noqa: BLE001 —— 配置层故障不该让登录失败, 回落默认
+        return MAX_SESSIONS_PER_USER
+
+
+def effective_guest_strategy(db=None) -> dict[str, int]:
+    """游客限流策略(运行时配置优先, 读不到用 GUEST_STRATEGY 常量)。"""
+    try:
+        from src.core import free_tier
+
+        return free_tier.guest_strategy(db)
+    except Exception:  # noqa: BLE001
+        return dict(GUEST_STRATEGY)
+
+
 # member 基础权限 = 通用浏览权 - pro 专属 + 热力图 + member 操作权
 _MEMBER_BASE = (
     VIEW_PERMISSIONS
@@ -368,7 +388,11 @@ def check_alert_quota(db: Session, user) -> None:
 # 设备限制(同账号同时在线 ≤2)
 # ════════════════════════════════════════════════════════════════════
 def enforce_device_limit(db: Session, user, session_id: str) -> None:
-    """登录时: 超过 2 台踢最早。"""
+    """登录时: 超过上限(默认 2 台, 运行时可调)踢最早。
+
+    B3(2026-09-29): 上限从 `free_tier.max_sessions_per_user(db)` 读(30s 缓存热生效),
+    未配置时回退 `MAX_SESSIONS_PER_USER`(=2) —— 默认行为与收编前一致。
+    """
     try:
         from src.db.models import UserSession
 
@@ -378,13 +402,21 @@ def enforce_device_limit(db: Session, user, session_id: str) -> None:
             .order_by(UserSession.last_seen.asc())
             .all()
         )
-        if len(rows) >= MAX_SESSIONS_PER_USER:
+        limit = effective_max_sessions(db)
+        if len(rows) >= limit:
+            # 上限被调小后可能一次超限多个: 从左(最早)起踢到「未过期会话 == 上限」为止
             to_kick = [r for r in rows if r.session_id != session_id]
-            if to_kick:
-                oldest = to_kick[0]
+            kicked: list = []
+            while len(rows) - len(kicked) > limit and len(kicked) < len(to_kick):
+                oldest = to_kick[len(kicked)]
                 db.delete(oldest)
+                kicked.append(oldest)
+            if kicked:
                 db.commit()
-                logger.info("设备限制: 踢掉 %s 的会话 %s", user.username, oldest.session_id[:8])
+                logger.info(
+                    "设备限制(上限 %d): 踢掉 %s 的会话 %s",
+                    limit, user.username, kicked[0].session_id[:8],
+                )
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
