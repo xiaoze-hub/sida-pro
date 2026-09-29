@@ -1,5 +1,40 @@
 # Changelog
 
+### feat-预测历史「到期对照」应用侧 enrichment（2026-09-29）
+
+前端预测页历史表（`frontend/src/pages/Forecast.tsx`）早写好了「到期对照」列，只等
+`/api/forecast/history` 返回 `outcome_return_pct` / `outcome_status`（`historyHasOutcome` 判定）；
+但该端点此前**直接代理** :8010 预测引擎，而 `forecast_lib/` 是 8010 镜像专用（镜像内无 `src/`，
+禁 `import src.*`），引擎侧无法用应用自己的行情做对照。故改在**应用侧**补齐。
+
+**新增** `src/core/forecast_outcome.py`（只读、不改引擎）：对引擎返回的每条**已到期**预测，
+用应用日K（`KlineCollector.get_klines()`，PG hypertable 优先）对照基准日收盘算实际涨跌幅，
+新增两字段（引擎其余字段与包裹结构原样保留）：
+- `outcome_return_pct: float | null` —— 实际涨跌幅%（相对预测基准日收盘）
+- `outcome_status: 'hit' | 'miss' | 'pending' | 'no_data'`
+
+判定口径（SIDA 硬约束：缺数据显式 null/no_data，**禁编造、禁填 0**）：
+`pending` = 目标日未到**或目标日就是今天**（T 日收盘价未落定：实测 K 线源盘中会给出当日实时柱，
+拿未收官价当到期收盘等于编造，故 T 日一律不出对照结果）；
+`no_data` = 到期但取不到行情 / 行情覆盖不到预测窗口 / 到期日推不出 / 方向不可识别
+（最后一种仍如实返回已算出的涨跌幅）；`hit` = 实际方向与预测方向一致（up↔涨 / down↔跌 /
+flat↔持平），0.00% 对 up/down 判 miss、对 flat 判 hit。基准价优先取**同源 K 线**基准日收盘
+（规避复权口径混用失真），覆盖不到才回落该条 `last_close`。
+
+**降级与兼容**：引擎不可达仍返回原 503；enrichment 整体失败由
+`src/web/api/forecast.py::_enrich_forecast_history` 捕获并**降级返回引擎原始数据**；
+单标的取数失败 / 单条评估异常只影响该条；应用侧 no_data 时不覆盖引擎已给的评估值。
+单次请求最多评估 50 个标的（超出条目保持引擎原值），取 K 线走线程池 + 并发上限，不阻塞事件循环。
+
+**前端**：逻辑零改动（现有 `historyHasOutcome` / `renderOutcome` 直接可用），仅把 3 处
+`TODO(到期对照)` 注释改成现状说明（指向应用侧实现；注释-only，`tsc -b` 通过）。
+
+**测试**：新增 `tests/test_forecast_history_outcome.py`（18 例，全 mock 引擎响应与 K 线，
+无真实网络）：未到期/目标日=今天→pending 且不取行情 / 到期 hit·miss·0% / 行情缺失→no_data
+且**不为 0** / 引擎不可达→503 / enrichment 失败→返回原始数据；`pytest tests/ -q -k forecast` 52 passed。
+真实数据冒烟：`_load_klines('600519', 60)` 取到 60 根日K（末根为当日实时柱 2026-09-29）——
+正是"T 日柱未收官"这条 pending 规则的由来。
+
 ### chore-网关源码纳入版本管理（2026-09-28）
 
 线上网关 `/opt/cn-gateway/gateway.py` 此前**只存在于小主机本地**（cron sync 排除 .git 的老毛病，
