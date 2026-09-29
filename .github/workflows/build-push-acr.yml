@@ -66,9 +66,13 @@ jobs:
         # W2.5/E6(2026-09-09): 依赖统一走 requirements-lock.txt(生产容器 freeze 的精确版本)
         # W2.1/C3(2026-09-09): 越权静态扫描(与 build-and-push-image.yml 同门禁)
         # W3.1/D2(2026-09-09): 方言分叉只允许出现在 src/db/ 层
-        # 原与 pytest 同步骤, 2026-09-29 pytest 拆走后留在本作业(纯 stdlib, 秒级)。
+        # 原与 pytest 同步骤, 2026-09-29 pytest 拆走后留在本作业。
+        # 2026-09-29 修复: 当时误判为"纯 stdlib", 实际 check_scoped_queries.py 需要 sqlalchemy
+        #   (依赖原本由 pytest 步骤安装) → 拆走后本作业必须自己补装 lock 依赖, 否则
+        #   ModuleNotFoundError: No module named 'sqlalchemy' (v0.13.34 首次分片发版即因此红)。
         run: |
           set -euo pipefail
+          python3 -m pip install -q -r requirements-lock.txt
           python3 scripts/check_lock_covers_reqs.py
           python3 scripts/check_scoped_queries.py
           python3 scripts/check_is_pg_scope.py

@@ -1,5 +1,14 @@
 # Changelog
 
+### fix-CI 静态门禁步骤补装 lock 依赖（2026-09-29）
+
+v0.13.34 首次分片发版时 `gates` 作业红：`Backend static gates` 报
+`ModuleNotFoundError: No module named 'sqlalchemy'`。
+根因：把 pytest 拆成 4 片矩阵时，三个静态门禁脚本留在 `gates`，但**依赖安装原本在 pytest 步骤里**，
+拆走后 `gates` 没装依赖，而 `check_scoped_queries.py` 需要 sqlalchemy（当时误判为"纯 stdlib"）。
+修法：该步骤补 `python3 -m pip install -q -r requirements-lock.txt`（1 行）。
+分片本身已验证成功：4 片全绿，测试总耗时 ~10.5 分钟（原 23 分钟）。
+
 ### feat-口径对照页补契约标签(caliber/direction_semantics)+查询参数接口（2026-09-29）
 
 `docs/遗留项汇总与解决方案_20260918.md` **A2 第一步**：口径对照页已在 main（同一票同一时刻
