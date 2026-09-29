@@ -299,11 +299,16 @@ def get_quotes(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 @router.post("", response_model=StockResponse)
 def create_stock(stock: StockCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    # demo 账号: 自选数量上限 1 只(演示体验; 防公开账号堆积垃圾数据)
-    if user.username == "demo":
-        own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
-        if own_count >= 1:
-            raise HTTPException(403, "演示账号仅可添加 1 只自选股。请先删除当前自选,再添加其他股票体验。")
+    # demo 账号: 自选数量上限(演示体验; 防公开账号堆积垃圾数据)
+    # B3(2026-09-29): 上限从「免费档」面板的 guest_strategy.watchlist_limit 读, 未配置 → 1
+    if str(getattr(user, "username", "")) == "demo" or str(getattr(user, "role", "")) == "guest":
+        from src.core import free_tier
+
+        watch_limit = int(free_tier.guest_strategy(db).get("watchlist_limit", 1))
+        if watch_limit > 0:
+            own_count = db.query(Stock).filter(Stock.user_id == user.id).count()
+            if own_count >= watch_limit:
+                raise HTTPException(403, f"演示账号仅可添加 {watch_limit} 只自选股。请先删除当前自选,再添加其他股票体验。")
     # 权限体系 2026-09-15: 普通账号自选≤10, pro/owner 无限
     from src.core.permissions import check_watchlist_quota
 

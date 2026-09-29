@@ -268,11 +268,15 @@ async def demo_isolation_middleware(request: Request, call_next):
     # ── guest(demo) 隔离: 行为保持现状 ──────────────────────────────
     if username == "demo" or role == "guest":
         msg = "演示账号为只读浏览模式,不可修改数据或访问管理页面。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"
-        # 0) GET 限流: 每小时 20 次 API 请求(防爬虫刷数据源配额)
+        # 0) GET 限流: 每小时 N 次 API 请求(防爬虫刷数据源配额); N 可在「免费档」面板调
         if method in ("GET", "HEAD"):
-            from src.core.demo_limit import allow_api_get
-            if not allow_api_get(str(payload.get("sub", ""))):
-                return JSONResponse(status_code=429, content={"code": 429, "success": False, "message": "演示账号请求过于频繁(每小时限 20 次)。请稍后再试,或自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
+            from src.core.demo_limit import allow_api_get, get_hourly_limit
+
+            # 注意: 这里只传用户名(1 参) —— 既有单测用 `lambda uid: True` 打桩本函数,
+            # 改签名会连带改测试; 限额配置由 demo_limit 自己读(无 db 时自建只读 session)。
+            if not allow_api_get(str((payload or {}).get("sub", ""))):
+                _hourly = get_hourly_limit()
+                return JSONResponse(status_code=429, content={"code": 429, "success": False, "message": f"演示账号请求过于频繁(每小时限 {_hourly} 次)。请稍后再试,或自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics"})
         # demo 专属例外: 自选增删(自己的数据, user_id 隔离; 数量上限在接口层)
         is_own_watchlist_write = (
             (method == "POST" and path.rstrip("/") == "/api/stocks")

@@ -182,10 +182,6 @@ def refresh_tier_configs(db: Session | None = None) -> None:
             from src.db.models import TierConfig
 
             rows = db.query(TierConfig).all()
-            if not rows:
-                # 表存在但空: 也记时间戳, 避免每次请求都打库
-                _tier_cfg_loaded_at = now
-                return
             for r in rows:
                 t = (r.tier_name or "").strip().lower()
                 if t not in TIER_DAILY_LIMIT:
@@ -200,6 +196,24 @@ def refresh_tier_configs(db: Session | None = None) -> None:
                         TIER_REFILL_PER_MIN[t] = int(scope["refill_per_min"])
                 except (TypeError, ValueError) as ve:
                     logger.warning("tier_configs 行非法 tier=%s: %r", t, ve)
+
+            # B3(2026-09-29): 「免费档」面板(同一份 KV)的 tier_limits **覆盖优先** ——
+            # 未配置时为空 dict, 行为与收编前完全一致(tier_configs 表 / 硬编码兜底)。
+            try:
+                from src.core import free_tier
+
+                for t, lim in (free_tier.tier_limits(db) or {}).items():
+                    if t not in TIER_DAILY_LIMIT:
+                        continue
+                    if isinstance(lim.get("daily_limit"), int) and lim["daily_limit"] > 0:
+                        TIER_DAILY_LIMIT[t] = int(lim["daily_limit"])
+                    if isinstance(lim.get("burst_limit"), int) and lim["burst_limit"] > 0:
+                        TIER_BURST[t] = int(lim["burst_limit"])
+                    if isinstance(lim.get("refill_per_min"), int) and lim["refill_per_min"] > 0:
+                        TIER_REFILL_PER_MIN[t] = int(lim["refill_per_min"])
+            except Exception as fe:  # noqa: BLE001 —— 配置层故障不该打断档位限额读取
+                logger.debug("tier_limits(KV) 覆盖失败, 保持表/默认值: %r", fe)
+
             _tier_cfg_loaded_at = now
         except Exception as e:  # noqa: BLE001
             logger.debug("refresh_tier_configs 失败, 保持硬编码默认: %r", e)

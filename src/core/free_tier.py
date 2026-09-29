@@ -43,8 +43,32 @@ DEFAULT_MEMBER_ALERT_MAX = 3
 #: 外部 skill 的档位覆盖 {skill_name: "free"|"trial"|"pro"}; 空 = 用 OPEN_SKILLS 内置档位
 DEFAULT_SKILL_TIER_OVERRIDES: dict[str, str] = {}
 
+# ── B3(2026-09-29): 原先写死在代码/表里的三组"平台限额"收编进同一份 KV ──────
+#: 同账号同时在线设备数上限(原 permissions.MAX_SESSIONS_PER_USER=2)
+DEFAULT_MAX_SESSIONS_PER_USER = 2
+#: 游客限流策略(原 permissions.GUEST_STRATEGY): 自选上限 / 每小时 API 请求上限
+DEFAULT_GUEST_STRATEGY: dict[str, int] = {
+    "watchlist_limit": 1,
+    "get_hourly_limit": 20,
+}
+#: skill 档位限额覆盖 {tier: {daily_limit, burst_limit, refill_per_min}};
+#: **空 = 沿用 tier_configs 表 + 代码硬编码兜底**(未配置时行为与收编前完全一致)
+DEFAULT_TIER_LIMITS: dict[str, dict[str, int]] = {}
+
 #: 档位取值白名单(与 skills_gateway.TIER_RANK 同名)
 VALID_TIERS = ("free", "trial", "pro")
+
+#: 游客策略允许调的子项(只有这两项是限额, 其余语义不开放)
+VALID_GUEST_KEYS = ("watchlist_limit", "get_hourly_limit")
+#: 档位限额允许调的子项
+VALID_TIER_LIMIT_KEYS = ("daily_limit", "burst_limit", "refill_per_min")
+
+#: 档位限额取值范围((lo, hi)), 越界视为非法丢弃回默认
+_TIER_LIMIT_RANGE = {
+    "daily_limit": (1, 10_000_000),
+    "burst_limit": (1, 1_000_000),
+    "refill_per_min": (1, 100_000),
+}
 
 _LOCK = threading.Lock()
 _cache: dict[str, Any] | None = None
@@ -58,6 +82,9 @@ def _defaults() -> dict[str, Any]:
         "member_watchlist_max": DEFAULT_MEMBER_WATCHLIST_MAX,
         "member_alert_max": DEFAULT_MEMBER_ALERT_MAX,
         "skill_tier_overrides": dict(DEFAULT_SKILL_TIER_OVERRIDES),
+        "max_sessions_per_user": DEFAULT_MAX_SESSIONS_PER_USER,
+        "guest_strategy": dict(DEFAULT_GUEST_STRATEGY),
+        "tier_limits": {t: dict(v) for t, v in DEFAULT_TIER_LIMITS.items()},
     }
 
 
@@ -105,6 +132,41 @@ def _coerce(raw: Any) -> dict[str, Any]:
             for k, v in sto.items()
             if isinstance(k, str) and k and str(v) in VALID_TIERS
         }
+
+    # ── B3: 平台限额三组(负数/非数字/越界一律丢弃回默认, 不抛错)────────────
+    v = raw.get("max_sessions_per_user")
+    if not isinstance(v, bool) and isinstance(v, (int, float)) and 1 <= int(v) <= 100:
+        cfg["max_sessions_per_user"] = int(v)
+
+    gs = raw.get("guest_strategy")
+    if isinstance(gs, dict):
+        clean_gs = dict(DEFAULT_GUEST_STRATEGY)
+        for k in VALID_GUEST_KEYS:
+            gv = gs.get(k)
+            if isinstance(gv, bool) or not isinstance(gv, (int, float)):
+                continue
+            if 0 <= int(gv) <= 100_000:
+                clean_gs[k] = int(gv)
+        cfg["guest_strategy"] = clean_gs
+
+    tl = raw.get("tier_limits")
+    if isinstance(tl, dict):
+        clean_tl: dict[str, dict[str, int]] = {}
+        for tier, lim in tl.items():
+            t = str(tier).strip().lower()
+            if t not in VALID_TIERS or not isinstance(lim, dict):
+                continue
+            row: dict[str, int] = {}
+            for key in VALID_TIER_LIMIT_KEYS:
+                lv = lim.get(key)
+                if isinstance(lv, bool) or not isinstance(lv, (int, float)):
+                    continue
+                lo, hi = _TIER_LIMIT_RANGE[key]
+                if lo <= int(lv) <= hi:
+                    row[key] = int(lv)
+            if row:
+                clean_tl[t] = row
+        cfg["tier_limits"] = clean_tl
     return cfg
 
 
@@ -114,6 +176,15 @@ def invalidate_cache() -> None:
     with _LOCK:
         _cache = None
         _cache_at = 0.0
+
+
+def cached_config() -> dict[str, Any] | None:
+    """**只读 L1 缓存**(命中且在 TTL 内才返回, 否则 None) —— 给没有 db 上下文、又不想每次打库的调用方。"""
+    with _LOCK:
+        cached, at = _cache, _cache_at
+    if cached is None or (time.monotonic() - at) >= _CACHE_TTL:
+        return None
+    return json.loads(json.dumps(cached))
 
 
 def get_config(db=None, *, force: bool = False) -> dict[str, Any]:
@@ -194,3 +265,36 @@ def skill_tier_min(name: str, builtin: str, db=None) -> str:
     """外部 skill 的最低档位: 配置有覆盖用覆盖, 否则用 OPEN_SKILLS 内置值。"""
     override = (get_config(db).get("skill_tier_overrides") or {}).get(name)
     return override if override in VALID_TIERS else builtin
+
+
+# ── B3: 平台限额访问器(给 permissions / demo_limit / stocks / skills_gateway 用) ──
+def max_sessions_per_user(db=None) -> int:
+    """同账号同时在线设备数上限(未配置 → 2)。"""
+    v = get_config(db).get("max_sessions_per_user", DEFAULT_MAX_SESSIONS_PER_USER)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return DEFAULT_MAX_SESSIONS_PER_USER
+    iv = int(v)
+    return iv if 1 <= iv <= 100 else DEFAULT_MAX_SESSIONS_PER_USER
+
+
+def guest_strategy(db=None) -> dict[str, int]:
+    """游客限流策略 {watchlist_limit, get_hourly_limit}(未配置 → 1 / 20)。"""
+    cfg = get_config(db).get("guest_strategy") or {}
+    out = dict(DEFAULT_GUEST_STRATEGY)
+    for k in VALID_GUEST_KEYS:
+        iv = cfg.get(k)
+        if isinstance(iv, bool) or not isinstance(iv, (int, float)):
+            continue
+        if int(iv) >= 0:
+            out[k] = int(iv)
+    return out
+
+
+def tier_limits(db=None) -> dict[str, dict[str, int]]:
+    """skill 档位限额覆盖(空 = 用 tier_configs 表 / 代码硬编码)。"""
+    raw = get_config(db).get("tier_limits") or {}
+    return {
+        str(t): dict(v)
+        for t, v in raw.items()
+        if isinstance(v, dict) and str(t) in VALID_TIERS
+    }
