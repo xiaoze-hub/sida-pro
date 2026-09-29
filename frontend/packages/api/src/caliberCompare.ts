@@ -14,15 +14,38 @@ export interface CaliberField {
   unit?: string
 }
 
+/**
+ * 口径契约标签(后端 `src/core/caliber.py::CaliberTag.to_dict`)。
+ * `caliber` 是**契约类型**(tick/eastmoney4/ths/unknown), 不是说明文案。
+ */
+export interface CaliberTag {
+  caliber: 'tick' | 'eastmoney4' | 'ths' | 'unknown'
+  /** 方向语义(逐笔主动买卖 / 按单金额四档归类净额 / DDE 大单 …) */
+  direction_semantics: string
+  /** 该口径底层数据源 */
+  source: string
+  /** 后端拼好的可见中文标签(资金面展示处必须可见) */
+  label: string
+}
+
 export interface CaliberSource {
   key: 'thsdk_l2' | 'tencent_dark' | 'eastmoney_flow' | string
   name: string
+  /** 口径说明文案(列头用) */
   caliber: string
+  /** 口径契约标签(硬性要求: 展示处必须可见口径) */
+  caliber_tag?: CaliberTag
+  caliber_type?: CaliberTag['caliber']
+  direction_semantics?: string
+  /** 能否用于方向性判定(仅 tick 为 true) */
+  directional_allowed?: boolean
   unit: string
   available: boolean
   fields: CaliberField[]
   /** 不可用原因 / 数据可疑提示 / 基准日说明(照实显示) */
   note: string
+  /** 数据时间(抓取时刻) */
+  as_of?: string
   date?: string | null
 }
 
@@ -56,14 +79,26 @@ export interface CaliberCompareResponse {
   sources: CaliberSource[]
   available_count: number
   differences: CaliberDifference[]
+  /** 口径契约声明(方向判定只能用 tick) */
+  caliber_contract?: {
+    rule: string
+    contract: string
+    matrix: string
+    sources: Record<string, CaliberTag>
+  }
   /** P2-1: 成对差异 + 归因(看到差之后告诉你"这个差正不正常") */
   pair_diffs?: CaliberPairDiff[]
   diff_conclusion?: { level: 'ok' | 'warn' | 'alert' | 'unknown'; hint: string }
+  /** 逐笔 vs 参考口径的一句裁决(方向冲突时优先采信逐笔) */
+  direction_reconcile?: { agree: boolean; statement: string } | null
 }
 
 export const caliberCompareApi = {
   get: (symbol: string) =>
-    fetchAPI<CaliberCompareResponse>(`/caliber-compare/${symbol}`, { cacheMode: 'reload' }),
+    fetchAPI<CaliberCompareResponse>(
+      `/caliber-compare?symbol=${encodeURIComponent(symbol)}`,
+      { cacheMode: 'reload' },
+    ),
 }
 
 // ── 口径漂移(B5, 2026-09-18) ────────────────────────────────────────────────

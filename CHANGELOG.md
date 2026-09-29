@@ -1,5 +1,34 @@
 # Changelog
 
+### feat-口径对照页补契约标签(caliber/direction_semantics)+查询参数接口（2026-09-29）
+
+`docs/遗留项汇总与解决方案_20260918.md` **A2 第一步**：口径对照页已在 main（同一票同一时刻
+并排 明盘 L2 / 暗盘逐笔 / 东财四档），但三源只带**说明文案**，没有代码层口径契约，前端也没有
+可见口径标签；且接口只有路径参数形式。本次补齐（**只读、只展示，不动主链路取数逻辑**）：
+
+- 每个源加**契约标签**：`caliber_tag`（`src/core/caliber.py::CaliberTag.to_dict` →
+  `caliber` / `direction_semantics` / `source` / `label`）+ 扁平字段 `caliber_type` /
+  `direction_semantics` / `directional_allowed`。用途映射对齐 AGENTS.md 硬约束：
+  逐笔 `tick`（`compute_dark_flow`，与 `get_main_intent` 同口径）/ 东财四档 `eastmoney4`
+  （`capital_flow_collector`）/ TQ L2 `ths`（`zjl_hb`，与 `get_decision_pioneer` L2 字段同口径）。
+  `directional_allowed` 复用契约出口 `require_directional()`（非 tick 抛
+  `CaliberViolationError`），**不自创判定**。
+- 响应加 `caliber_contract`（口径规则声明）与 `direction_reconcile`（逐笔 vs 参考口径的
+  一句裁决，复用 `reconcile_direction()`，方向冲突一律以逐笔为准）；每个源带数据时间 `as_of`。
+- 新增**查询参数**接口 `GET /api/caliber-compare?symbol=002361`（兼容 `.SH/.SZ/.BJ/.SS`
+  后缀，归一为 6 位）；无源可用时 `available=false` + `note="无数据"` 且**不补 0**。
+- 前端 `CaliberCompare.tsx` 每列显式渲染口径徽章（`CaliberBadge`，`data-caliber`）与
+  「可用于方向判定 / 禁用于主力意图判定」，并展示口径裁决语句；API 改走查询参数。
+
+新增 `tests/test_caliber_contract_tags.py`（19 例，**mock 三源、无真实网络**）：三口径齐全
+字段/标签/单位/时间正确、契约标签与 `direction_semantics` 逐字一致、仅 tick 可判方向、
+某源缺失显式「无数据」且不返回 0、非法/空代码 400、后缀归一、查询路由注册。
+前端 `caliber-compare.test.tsx` 加 1 例（每列可见口径徽章 + 方向判定提示）。
+
+文件：`src/web/api/caliber_compare.py`、`frontend/packages/api/src/caliberCompare.ts`、
+`frontend/src/pages/CaliberCompare.tsx`、`frontend/tests/components/caliber-compare.test.tsx`、
+`tests/test_caliber_contract_tags.py`
+
 ### fix-预测历史到期对照: 目标日=今天改为收盘(15:00)后即用当日K线评估（2026-09-29）
 
 上一版(v0.13.31)对「目标日=今天」一律判 `pending`，理由诚实但过于保守：盘中 K 线

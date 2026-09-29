@@ -9,6 +9,8 @@ import {
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { safeMoney, safePercent, safeInt, safeFixed } from '@/lib/format'
+// 口径徽章(契约标签可视化: 资金面展示处**必须可见口径**, AGENTS.md 硬约束)
+import CaliberBadge, { caliberOf } from '@panwatch/biz-ui/components/CaliberBadge'
 // 口径词典(单一来源, 见 packages/biz-ui/src/lib/caliber-glossary.ts): 官方投教口径, 各页共用
 import { ANPAN, GS_SIGNAL, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 
@@ -49,6 +51,9 @@ function FieldRow({ label, value, unit }: { label: string; value: number | null;
 }
 
 function SourceColumn({ s }: { s: CaliberSource }) {
+  // 口径契约标签: 后端给 caliber_type / caliber_tag; 拿不到一律按 unknown(不猜)
+  const rawCaliber = s.caliber_type ?? s.caliber_tag?.caliber
+  const dirSemantics = s.direction_semantics ?? s.caliber_tag?.direction_semantics ?? s.caliber
   return (
     <div className="min-w-0 border-l border-border/40 pl-3 first:border-0 first:pl-0">
       <div className="flex items-center gap-2 mb-1.5">
@@ -60,6 +65,13 @@ function SourceColumn({ s }: { s: CaliberSource }) {
         ) : (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">无数据</span>
         )}
+      </div>
+      {/* 硬性要求: 每列都要可见口径标签 + 能否用于方向判定 */}
+      <div className="flex flex-wrap items-center gap-2 mb-1.5">
+        <CaliberBadge caliber={caliberOf(rawCaliber)} title={dirSemantics} />
+        <span className="text-[10px] text-muted-foreground">
+          {s.directional_allowed ? '可用于方向判定' : '仅资金面参考 · 禁用于主力意图判定'}
+        </span>
       </div>
       <div className="text-[10px] text-muted-foreground leading-relaxed mb-2">{s.caliber}</div>
 
@@ -355,6 +367,18 @@ export default function CaliberComparePage() {
               <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
             </h2>
             <div className="space-y-2">
+              {/* 口径裁决(2026-09-29 A2): 逐笔 vs 参考口径的一句话 —— 冲突一律以逐笔为准 */}
+              {data.direction_reconcile && (
+                <div
+                  data-testid="direction-reconcile"
+                  className={`border-l-2 pl-3 text-[11px] text-muted-foreground ${
+                    data.direction_reconcile.agree ? 'border-border/50' : 'border-destructive/60'
+                  }`}
+                >
+                  <span className="text-foreground">口径裁决：</span>
+                  {data.direction_reconcile.statement}
+                </div>
+              )}
               {/* P2-1(2026-09-18): 成对差异 + 归因 —— 三源并排能"看到差", 这块回答"这个差正不正常" */}
               {(data.pair_diffs ?? []).length > 0 && (
                 <div className="mt-4">
