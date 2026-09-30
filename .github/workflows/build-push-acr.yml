@@ -1,7 +1,16 @@
 name: build-push-acr
 
-# 发版构建: tag 推送触发 → 构建镜像 → 推阿里云 ACR(国内拉取快)
-# 解决: ACR 代码源构建无法拉取 private 仓库代码的问题
+# 门禁流水线: tag 推送 / PR / 手动 触发 → 只跑门禁(gates + 4 片 pytest + 覆盖率棘轮 + 前端)
+#
+# ⚠️ 2026-09-30: 本工作流**不再负责构建/推送镜像**。
+#    原因: 美区 GitHub Actions runner 走 `pushing layers` 一步耗时 3761.7s(62.7min)
+#    (跨太平洋推 ~2.43GB 到 cn-shanghai ACR); 国内云机(腾讯云上海)推同一步仅 768s(12.8min, 4.9×)。
+#    镜像现由**国内云机构建并推送**: 脚本 /opt/cn-build/build_and_push.sh(见 skill cn-acr-build-channel)。
+#
+# ⚠️ 质量底线不变("门禁全绿才推镜像"): 原设计靠 `build.needs: coverage-ratchet` 强制——门禁红则 build skipped。
+#    现在这条约束由**发版脚本**承担: ~/.hermes/scripts/sida_release.sh <版本> 会先等本工作流
+#    对该 tag 的运行**全绿**(gh run watch + 校 conclusion), 未绿**硬拒绝**构建与部署, 不许绕过。
+#    因此本工作流只保留门禁作业; 门禁(含 4 片 + 棘轮 + 前端)一个都没少。
 on:
   push:
     tags:
@@ -91,7 +100,8 @@ jobs:
   # 且是**文件级**切分 —— 每个文件整体只属于一片 ⇒ 无重复、无遗漏, 不需要 durations 文件/新依赖。
   # 运行时过滤条件与分片前逐字一致: `-m "not network"` + 两个 --ignore + `--cov=src`。
   # 本作业不再 needs: gates(与快门禁并行, 这才是 23min→~9min 的来源);
-  # 覆盖率棘轮在汇总作业 coverage-ratchet 里合并后仍照跑, build 改为 needs 该汇总作业。
+  # 覆盖率棘轮在汇总作业 coverage-ratchet 里合并后仍照跑。
+  # 2026-09-30: `build` 作业已移除(镜像改国内云机构建), 棘轮仍是独立门禁作业。
   backend-pytest:
     name: Backend pytest shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
@@ -219,97 +229,15 @@ jobs:
           # W2.5/E5: 覆盖率棘轮(基线 scripts/coverage-baseline.json, 只许升不许降)
           python3 scripts/check_coverage_ratchet.py coverage.json
 
-  build:
-    # PR 门禁只跑 gates, 不构建不推送镜像
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    # 门禁全绿才推镜像: 汇总作业 needs 快门禁(gates) + 4 个分片, 任一红 → 这里是 skipped
-    needs: coverage-ratchet
-    permissions:
-      contents: read
-      packages: read   # 拉取私有 ghcr.io/xiaoze-hub/thsdk-vendor(L2 私有 SDK)
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-
-      - name: Read VERSION
-        id: ver
-        run: |
-          # 2026-08-20 修复: 优先用 git ref (tag push 时 GITHUB_REF_NAME="v0.3.2"), 避免 VERSION 文件滞后
-          # P2-27 (2026-09-05 28号审计): 用 GITHUB_REF_TYPE=='tag' 判定(旧 refs/tags/ 前缀永不匹配)
-          # 导致 push 用错 tag (例如 tag=v0.3.2 但推 v0.3.0)。回退到 VERSION 文件兜底。
-          REF_TYPE="${GITHUB_REF_TYPE:-}"
-          REF_NAME="${GITHUB_REF_NAME:-}"
-          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
-            V="$REF_NAME"
-          elif [[ "$REF_NAME" == v* ]]; then
-            V="$REF_NAME"
-          else
-            V=$(cat VERSION 2>/dev/null || echo "0.0.0")
-          fi
-          echo "version=$V" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Login to GitHub Container Registry (thsdk vendor)
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: xiaoze-hub
-          # GITHUB_TOKEN 拉不到账号级其他私有包, 用经典 PAT(write:packages)
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Login to Aliyun ACR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Resolve base images (mirror → Docker Hub fallback)
-        id: base
-        # 2026-09-22: docker.m.daocloud.io 对 library/node:20-alpine 返回 500 →
-        # buildx 一直重试, 整个 "Build and push" 步骤卡死 2 小时(v0.12.2 实测)。
-        # 现在先探一次, 不可用就回落 Docker Hub —— 发布链不该挂在第三方镜像站的心情上。
-        run: |
-          NODE=docker.m.daocloud.io/library/node:20-alpine
-          PY=docker.m.daocloud.io/library/python:3.11-slim
-          if ! docker buildx imagetools inspect "$NODE" >/dev/null 2>&1; then
-            echo "::warning::基础镜像镜像站不可用 → 回落 Docker Hub"
-            NODE=node:20-alpine
-            PY=python:3.11-slim
-          fi
-          echo "node=$NODE" >> "$GITHUB_OUTPUT"
-          echo "python=$PY" >> "$GITHUB_OUTPUT"
-          echo "基础镜像: $NODE / $PY"
-
-      - name: Build and push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        # 卡住就失败, 别静默等几小时(v0.12.2 实测卡 2h; v0.13.7 卡 108 分钟)。
-        # ⚠️ 必须是 uses: 的**兄弟键** —— 原写在 with: 块内部会被当成 action 输入, 超时形同虚设。
-        # ⚠️ 阈值必须高于**正常最慢**的构建, 否则会误杀健康构建:
-        #    实测成功案例 v0.13.3 = 72.1 分钟 / v0.13.5 = 37.4 分钟(v0.13.6 取消于 24.3 分)。
-        #    一度取值 30 分钟 → 直接把 v0.13.5 那种 37 分钟的正常构建判死(v0.13.8 实踩)。
-        #    取 90: 覆盖实测最大 72 且留有波动余量, 同时仍能拦住 108 分钟以上的真卡死。
-        timeout-minutes: 90
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:${{ steps.ver.outputs.version }}
-            crpi-mte80ai8o78b1429.cn-shanghai.personal.cr.aliyuncs.com/xiaozexwz/xzxwz:latest
-          build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
-            NODE_IMAGE=${{ steps.base.outputs.node }}
-            PYTHON_IMAGE=${{ steps.base.outputs.python }}
-          # 个人版 ACR 不支持 OCI attestation 清单(unknown manifest class for empty.v1+json)
-          provenance: false
-          sbom: false
+  # ⚠️ 2026-09-30: `build` 作业已移除 —— 镜像不再由 GitHub Actions 构建/推送,
+  #    改由国内云机(腾讯云上海)执行 /opt/cn-build/build_and_push.sh <版本>。
+  #    见文件头说明与 skill cn-acr-build-channel / sida-pro-release-and-wsl-ops。
+  #    "门禁全绿才推镜像"由发版脚本 ~/.hermes/scripts/sida_release.sh 承担(先等本工作流绿, 否则硬拒绝)。
+  #
+  #    ── 回滚到 GitHub Actions 构建 ─────────────────────────────────────────────
+  #    1) `git revert <本次 commit>` (或 `git checkout <parent> -- .github/workflows/build-push-acr.yml`)
+  #       —— 原 `build` 作业在 git 历史里原样保留, 可原样恢复。
+  #    2) 恢复后 tag 推送即由 GH Actions 构建推 ACR, 发版脚本请改用:
+  #       SIDA_CI_ONLY=1 (只等门禁、不调云机构建) —— 或直接回退到 sida_prod_deploy.sh 手工链。
+  #    (原 build 作业参数: needs coverage-ratchet; buildx; ACR login; timeout-minutes: 90;
+  #     provenance/sbom: false; push 版本号取自 tag。详见 git 历史。)
