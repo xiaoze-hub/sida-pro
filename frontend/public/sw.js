@@ -1,6 +1,9 @@
 // PanWatch Service Worker
-// 2026-09-12: 换 Logo(B 方案) → 提升缓存名, 让老客户端安装新 SW 时重新预缓存 icon-192/512
-const CACHE_NAME = 'panwatch-v0.5.69-bust';
+// 缓存名注入真实版本号: Dockerfile 构建时 `sed s/__SW_VERSION__/<VERSION>/` 替换占位符
+// (VERSION 来自 build-arg 或仓库根 VERSION 文件)。发版 → sw.js 字节变化 → 浏览器装新 SW
+// → activate 清旧缓存, 不再依赖手改硬编码版本号。**不要**把 __SW_VERSION__ 改成写死的版本串,
+// 否则发版注入变空操作(build 日志会打 WARNING)。
+const CACHE_NAME = 'panwatch-__SW_VERSION__-bust';
 
 // 需要缓存的静态资源
 // 注意: 不缓存 '/' (index.html) —— 每次发版 HTML 都变, 缓存旧 HTML 会导致

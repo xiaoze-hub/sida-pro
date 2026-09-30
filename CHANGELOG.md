@@ -1,3 +1,17 @@
+### fix-sw.js 版本占位符失效：发版自动注入真实版本号（2026-09-30）
+
+`frontend/public/sw.js` 的 `CACHE_NAME` 被硬编码成 `panwatch-v0.5.69-bust`，而 `Dockerfile`
+仍用 `sed "s/__SW_VERSION__/<VERSION>/g"` 替换占位符 ⇒ **空操作**，发版并不刷新 SW 缓存名，
+“发版→用户拿到新版”实际退化成靠手改硬编码字符串（构建日志里看到的还是旧版本串）。
+
+- `sw.js`：`CACHE_NAME` 改回 `panwatch-__SW_VERSION__-bust` 占位符，构建时由 `VERSION`
+  （build-arg，或 ACR 无参时读仓库根 `VERSION` 文件）注入真实版本号 → sw.js 字节随发版变化
+  → 浏览器装新 SW、`activate` 清旧缓存。
+- `Dockerfile`：注入前先 `grep` 占位符；命中才 `sed`，并回显实际缓存名；未命中则打
+  **WARNING**（不再静默失败），构建继续但日志明确提示占位符缺失。
+- 测试新增 `tests/test_sw_version_injection.py`（6 例）：钉住占位符存在、无硬编码版本号、
+  Dockerfile 注入行 + 缺失告警、模拟注入结果、`index.html` 仍注册 `/sw.js`。
+
 ### fix-Dockerfile pip 源默认改官方 PyPI（2026-09-29）
 
 CI 的 `build` 频繁报 `The action 'Build and push' has timed out after 90 minutes`，
