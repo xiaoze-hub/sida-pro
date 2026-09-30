@@ -102,6 +102,8 @@ vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
     height?: number
     initialInterval?: string
     initialDays?: number
+    /** P1-2: 持仓成本线(页面据真实持仓成本价传; 无持仓/取不到 → undefined) */
+    costLines?: Array<{ price: number; title: string }>
     /** §12: 数据源健康裁决(页面必须把 useSourceHealth 的 isReady/reasonOf 接进来) */
     sourceReady?: (icon: string) => boolean
     sourceReason?: (icon: string) => string
@@ -111,6 +113,8 @@ vi.mock('@panwatch/biz-ui/components/KlineChart', () => ({
       /* §12 观测点: 把裁决函数**真调用一次**并渲染结果 —— 证明"页面→图表"这条线通了, 且
          tck(拆/⚠撤) 不可用时确实判 false(灰显), wencai(涨) 可用时判 true。 */
       data-gate={`tck=${String(p.sourceReady?.('拆'))};wencai=${String(p.sourceReady?.('涨'))};reason=${p.sourceReason?.('拆') ?? ''}`}
+      /* P1-2 观测点: `price|title` 逐条回显(空 = 一条成本线都不画)。 */
+      data-cost={(p.costLines ?? []).map((l) => `${l.price}|${l.title}`).join(',')}
     >{`kline:${p.symbol}:${p.market}:${p.height}:${p.initialInterval}:${p.initialDays}`}</div>
   ),
 }))
@@ -660,5 +664,56 @@ describe('StockWorkbench 三带骨架', () => {
     await new Promise((r) => setTimeout(r, 0))
     // 闸门关闭 ⇒ 不因切类型再发一次(仍恰 1 次)
     expect(mocks.portfolioSummary).toHaveBeenCalledTimes(1)
+  })
+
+  // ---- P1-2: 持仓成本线画在 K 线上(替代 ContextCard 占位卡) ----
+  // 页面据**真实持仓成本价**决定是否给 `KlineChart` 传 `costLines`:
+  //   有成本价(有限正数) → 传一条; 无持仓 / 取不到成本价 / 非有限数 → **不传**(一条不画, 不报错)。
+  const klineCost = () => screen.getByTestId('kline').getAttribute('data-cost')
+
+  it('有持仓且成本价>0 → 把成本价传给 KlineChart(画成本线, 带成本轴标签)', async () => {
+    // WITH_POSITION 里 002636 的 cost_price = 10
+    mocks.portfolioSummary.mockResolvedValue(WITH_POSITION)
+    renderAt('/stocks/002636')
+
+    // 判定落定后, 成本线随同一拍上屏(safePrice(10) = "10")
+    await waitFor(() => expect(klineCost()).toBe('10|成本 10'))
+  })
+
+  it('无持仓(空汇总) → 不传 costLines(K 线一条不画, 也不报错)', async () => {
+    renderAt('/stocks/002636')
+    // 等持仓判定落定(真查过 → 不在册)
+    await expectTabHasPosition('l2', 'false')
+    expect(klineCost()).toBe('')
+  })
+
+  it('持仓在册但成本价缺失(=0) → 不画线(不代填 0, 不画错线)', async () => {
+    mocks.portfolioSummary.mockResolvedValue({
+      ...WITH_POSITION,
+      accounts: [
+        {
+          ...WITH_POSITION.accounts[0],
+          positions: [{ ...WITH_POSITION.accounts[0].positions[0], cost_price: 0 }],
+        },
+      ],
+    })
+    renderAt('/stocks/002636')
+    // 仍是持仓(has=true → 标签回显 true), 但成本价无效 ⇒ 不画线
+    await expectTabHasPosition('l2', 'true')
+    expect(klineCost()).toBe('')
+  })
+
+  it('取数失败 → 未知: 不画线(不猜成本, 不报错)', async () => {
+    mocks.portfolioSummary.mockRejectedValue(new Error('boom'))
+    renderAt('/stocks/002636')
+    await waitFor(() => expect(screen.getByTestId('band1-position-unknown').textContent).toBe('unknown:true'))
+    expect(klineCost()).toBe('')
+  })
+
+  it('指数视图: 不请求持仓也不传成本线(K 线本就不渲染)', async () => {
+    renderAt('/stocks/000001?type=index')
+    expect(screen.queryByTestId('kline')).toBeNull()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(mocks.portfolioSummary).not.toHaveBeenCalled()
   })
 })

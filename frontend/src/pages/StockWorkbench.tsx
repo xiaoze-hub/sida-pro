@@ -10,6 +10,7 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
 import { useSourceHealth } from '@/hooks/useSourceHealth'
@@ -47,11 +48,13 @@ import {
  * 每个标签内部自带 `InsightProvider`(各自的 `keys`), 挂载才实例化取数 hook ⇒ 切标签 = 惰性取数,
  * 进工作台**不**触发下部接口风暴。六个标签**不得**同时挂载(否则首屏打满全部标签的端点)。
  *
- * **持仓上下文 `hasPosition`(T19 接真源)**: 见 `useHasPosition` —— 页面挂载时取
- * `GET /portfolio/summary`, 按 `market:symbol` 判定当前标的是否在真实持仓里; 三态
- * (`undefined`=未知/在途/失败), 未知时**不猜** `false`:
+ * **持仓上下文 `hasPosition` + 成本线(P1-2)**: 见 `usePositionContext` —— 页面挂载时取
+ * `GET /portfolio/summary`, 按 `market:symbol` 判定当前标的是否在真实持仓里, **并取回其成本价**;
+ * `has` 三态(`undefined`=未知/在途/失败, 未知时**不猜** `false`):
  *  ① 带1 建议条评分按非持仓口径 + 显式「持仓态未知」小标注(`HeaderBand positionUnknown`);
  *  ② 基本面标签的**加仓计算器**: 未知时不渲染(与未持仓同处置), 但在标签口径行显式标注未知。
+ *  ③ 带2 主图: 有成本价 → 在 K 线上画**持仓成本线**(水平线 + 成本轴标签), 替代原占位卡;
+ *     无持仓/取不到成本价 → 不传 `costLines`(一条不画, 不报错)。
  * 未持仓/未知都只是**不渲染**该块, **不产生假数据**。
  *
  * 真数据: 本页只取一件自己消费的数据 —— 持仓汇总(`/portfolio/summary`, 上条); 其余取数全在
@@ -74,29 +77,35 @@ const MARKET = 'CN'
 const POSITION_POLL_MS = 60000
 
 /**
- * 持仓上下文 `hasPosition`(T19 接**真源**)。
+ * 持仓上下文(自源 `GET /portfolio/summary`; T19 接真源, P1-2 起再带**成本价**)。
  *
- * 三态:
- *  - `undefined` —— **未知**(取数在途 / 失败 / **未启用**)。调用方**不得**把它当 `false`
- *    (那等于断言"未持仓", 对持仓用户是假陈述);
- *  - `true`/`false` —— 已从真实持仓接口判定。
+ * 返回两件, 同一次取数产出:
+ *  - `has`   三态:`undefined`=**未知**(取数在途/失败/未启用); `true`/`false`=已从真实持仓判定。
+ *            调用方**不得**把 `undefined` 当 `false`(那等于断言"未持仓", 对持仓用户是假陈述)。
+ *  - `cost`  该标的持仓成本价(元); **无持仓 / 成本价缺失 / 非有限数 / ≤0 → `null`**(禁猜、禁代填 0)。
+ *            供 K 线画持仓成本线用 —— `null` 即**不画**, 也**不报错**。
  *
  * 真源: `dashboardApi.portfolioSummary({ include_quotes: false })`(`GET /portfolio/summary`)——
  * 与 `DiscoveryPanel` 判定 `holdingSet` 用的是**同一个接口同一口径**(`accounts[].positions[]` 的
- * `market:symbol`)。不编造: 取数失败即保持 `undefined`, 由调用方展示「持仓态未知」而不是猜 `false`。
+ * `market:symbol`)。不编造: 取数失败即保持 `undefined`/`null`, 由调用方展示「持仓态未知」而不是猜 `false`。
  *
  * **`enabled` 闸门(Finding 3)**: 只有**个股视图**(`type === 'stock'`)才需要持仓态 —— 指数/板块
- * 分支既不渲染右栏/标签, 也不消费 `hasPosition`(见 `StockWorkbench` 的 `type !== 'stock'` 早分支)。
+ * 分支既不渲染右栏/标签/成本线, 也不消费本 hook(见 `StockWorkbench` 的 `type !== 'stock'` 早分支)。
  * 若不闸门, `?type=index`/`?type=board` 会白发一次 `GET /portfolio/summary` 且结果**永不被读**。
- * `enabled=false` 时本 hook **不发请求**且恒为 `undefined`(未知), 与"未启用"同态。个股视图的三态
+ * `enabled=false` 时本 hook **不发请求**且恒为未知/无成本, 与"未启用"同态。个股视图的三态
  * 语义(在册 true / 不在册 false / 在途失败 undefined)**逐字节不变**。
  */
-function useHasPosition(symbol: string, market: string, enabled: boolean): boolean | undefined {
-  const [held, setHeld] = useState<boolean | undefined>(undefined)
+interface PositionContext {
+  has: boolean | undefined
+  cost: number | null
+}
+
+function usePositionContext(symbol: string, market: string, enabled: boolean): PositionContext {
+  const [ctx, setCtx] = useState<PositionContext>({ has: undefined, cost: null })
   useEffect(() => {
     let alive = true
-    // 换标的/关闸门先回到"未知", 避免把上一只票(或已离开的个股视图)的持仓态画到当前标的上。
-    setHeld(undefined)
+    // 换标的/关闸门先回到"未知/无成本", 避免把上一只票(或已离开的个股视图)的成本线画到当前标的上。
+    setCtx({ has: undefined, cost: null })
     // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
     if (!enabled || !symbol) return () => { alive = false }
     const want = `${market}:${symbol}`
@@ -104,23 +113,28 @@ function useHasPosition(symbol: string, market: string, enabled: boolean): boole
       try {
         const r = await dashboardApi.portfolioSummary({ include_quotes: false })
         if (!alive) return
-        const has = (r?.accounts || []).some((acc) =>
-          (acc.positions || []).some((p) => `${p.market}:${p.symbol}` === want),
-        )
-        setHeld(has)
+        const hit = (r?.accounts || [])
+          .flatMap((acc) => acc.positions || [])
+          .find((p) => `${p.market}:${p.symbol}` === want)
+        // 成本价仅在**有限正数**时采用; 缺失(接口未给/NaN/Infinity/0)一律 null —— 不代填 0, 不画错线。
+        const cost =
+          hit && typeof hit.cost_price === 'number' && Number.isFinite(hit.cost_price) && hit.cost_price > 0
+            ? hit.cost_price
+            : null
+        setCtx({ has: !!hit, cost })
       } catch {
-        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`(未知) —— 不静默当未持仓。
+        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null` —— 不静默当未持仓、不画线。
       }
     }
     void load()
-    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器要等整页刷新才更新。
+    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器/成本线要等整页刷新才更新。
     const t = window.setInterval(() => void load(), POSITION_POLL_MS)
     return () => {
       alive = false
       window.clearInterval(t)
     }
   }, [symbol, market, enabled])
-  return held
+  return ctx
 }
 
 /**
@@ -220,12 +234,21 @@ export default function StockWorkbench() {
    */
   const [refreshKey, setRefreshKey] = useState(0)
   /**
-   * 持仓态(T19 真源): `undefined` = 未知(在途/失败), 见 `useHasPosition` 头注。
+   * 持仓上下文(T19 真源; P1-2 起兼带成本价): `has===undefined` = 未知(在途/失败), 见 `usePositionContext`。
    * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
-   * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费 `hasPosition`,
-   * 不该为其白发一次 `GET /portfolio/summary`(见 `useHasPosition` 的 `enabled`)。
+   * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费, 不该白发一次
+   * `GET /portfolio/summary`(见 `usePositionContext` 的 `enabled`)。
    */
-  const hasPosition = useHasPosition(symbol, MARKET, type === 'stock')
+  const position = usePositionContext(symbol, MARKET, type === 'stock')
+  const hasPosition = position.has
+  /**
+   * 持仓成本线(P1-2): 有成本价才画到 K 线上(水平线, 跟随该股成本价)。**无持仓 / 取不到成本价 ⇒ 不传**
+   * (`undefined`), `KlineChart` 据此**一条不画**, 也**不报错** —— 禁猜、禁默认值(铁律: 数据缺失不编造)。
+   * title 只作轴标签用 `safePrice` 格式化(避免裸 toFixed 撞 R6 门禁)。
+   */
+  const costLines = position.cost != null
+    ? [{ price: position.cost, title: `成本 ${safePrice(position.cost)}` }]
+    : undefined
 
   /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
    *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
@@ -302,6 +325,9 @@ export default function StockWorkbench() {
                 initialInterval={periodFromUrl ?? '1d'}
                 initialDays={120}
                 height={420}
+                /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
+                   无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
+                costLines={costLines}
                 /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
                 onIntervalChange={(i) => setQuery('period', intervalToPeriod(i))}
                 /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
