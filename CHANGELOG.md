@@ -1,4 +1,21 @@
-# Changelog
+### fix-Dockerfile pip 源默认改官方 PyPI（2026-09-29）
+
+CI 的 `build` 频繁报 `The action 'Build and push' has timed out after 90 minutes`，
+实测日志显示 14:28:37 之后 **89 分钟零输出** —— 不是编译慢，是卡在 pip 拉包重试里。
+根因：Dockerfile 硬编码 `-i https://mirrors.aliyun.com/pypi/simple/`，而镜像在
+**GitHub Actions 美区 runner** 上构建 → 每个包跨太平洋往返，叠加 `--timeout 300 --retries 8`，
+单个包卡住即可吃掉几十分钟。
+修法：改为 `ARG PIP_INDEX_URL`，**默认官方 PyPI**（美区就近）；国内本地构建时传
+`--build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/` 即可。
+（注：ACR 是镜像仓库、与本次无关；pnpm/apt 走官方源、美区就近，无需改。）
+\n# Changelog
+
+### fix-CI 覆盖率 omit 测试动态生成的临时 agent（2026-09-29）
+
+v0.13.35 分片发版时 `coverage-ratchet` 作业红：`No source for code: .../src/agents/w32_demo_agent.py`。
+根因：pytest 拆成 4 片矩阵后各 runner 记录**绝对路径**，`coverage combine` 解析不到。
+修法：仓库级 `pyproject.toml` 增 `[tool.coverage.run] relative_files = true`
+（必须放仓库级，让分片作业的测量阶段也生效；只改聚合作业无效）。
 
 ### fix-CI 覆盖率 omit 测试动态生成的临时 agent（2026-09-29）
 

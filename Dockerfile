@@ -133,7 +133,13 @@ COPY requirements-lock.txt ./
 
 # 分层优化(2026-09-04 #6): 第三方依赖与本地包分开装。
 # lock 文件无 -e 行(本地包 marketdata 不在其中), 无需再 grep 过滤。
-RUN pip install --no-cache-dir --timeout 300 --retries 8 -i https://mirrors.aliyun.com/pypi/simple/ -r requirements-lock.txt && \
+# 2026-09-29: pip 源改为可覆盖的 ARG，**默认走官方 PyPI**。
+# 原因: 镜像在 GitHub Actions(美区 runner) 上构建, 而原先硬编码 `-i mirrors.aliyun.com`
+#   → 每个包跨太平洋往返, 叠加 --timeout 300 --retries 8, 单个包卡住就能吃掉几十分钟,
+#   最终表现为 `Build and push has timed out after 90 minutes`(实测 build 89 分钟零输出)。
+# 国内本地构建如需加速, 传: --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --no-cache-dir --timeout 300 --retries 8 -i "${PIP_INDEX_URL}" -r requirements-lock.txt && \
     python -c "from sqlalchemy import create_engine; assert create_engine"
 
 # 注意: Playwright 浏览器将在首次启动时自动安装到 data 目录
