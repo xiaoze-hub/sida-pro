@@ -23,6 +23,37 @@
   无数据不补 0 / caliber 逐字符合契约 + registry/seed 接线）；`-k "capital_flow or board or margin or caliber"`
   226 例全绿。
 
+### fix-main_net_ratio 语义/命名修正：改中性名 main_net_vol（2026-09-30）
+
+thsdk DDE「主力净量」**不是百分比/占比**（实测存在 2131 之类 >100 的真值），但字段名
+`main_net_ratio` 与注释「主力净量占比」会误导下游按百分比渲染。其精确量纲（股/手）未在冻结
+口径矩阵 `docs/_frozen/caliber_matrix.md` 登记 ⇒ 本轮**不臆测单位**，改用中性名 `main_net_vol`
+（语义＝同花顺 DDE 主力净量原始值，非百分比），旧名保留为兼容别名（同值）。
+
+- 生产/出口统一输出 `main_net_vol`：`data_source/thsdk_l2.get_main_flow_official`、
+  `src/core/dark_fund_scan`（榜单行）、`src/web/api/thsdk_extended`（`GET /dde/{symbol}`）；
+  同时保留 `main_net_ratio` 为 **deprecated 兼容别名**（同值），旧快照/旧调用方不破。
+- 前端：`DarkFundTopRow` 增 `main_net_vol`（`main_net_ratio` 标 `@deprecated`），暗盘 TOP 页回落
+  读取 `main_net_vol ?? main_net_ratio`（历史落库快照该列不塌成 `-`）；中英文列标题/提示改为
+  「主力净量（非百分比/非占比，量纲未定）」。
+- 测试新增 `tests/test_main_net_vol_semantics.py`（5 例：规范键 + 别名同值、int32 哨兵对两键都过滤、
+  生产者无「占比」措辞、thsdk_l2 源码契约）；`test_thsdk_extended` 钉 `main_net_vol` + 别名同值；
+  前端 vitest 增「旧快照只有 ratio 仍可渲染」1 例（6/6 绿）。
+
+### fix-sw.js 版本占位符失效：发版自动注入真实版本号（2026-09-30）
+
+`frontend/public/sw.js` 的 `CACHE_NAME` 被硬编码成 `panwatch-v0.5.69-bust`，而 `Dockerfile`
+仍用 `sed "s/__SW_VERSION__/<VERSION>/g"` 替换占位符 ⇒ **空操作**，发版并不刷新 SW 缓存名，
+“发版→用户拿到新版”实际退化成靠手改硬编码字符串（构建日志里看到的还是旧版本串）。
+
+- `sw.js`：`CACHE_NAME` 改回 `panwatch-__SW_VERSION__-bust` 占位符，构建时由 `VERSION`
+  （build-arg，或 ACR 无参时读仓库根 `VERSION` 文件）注入真实版本号 → sw.js 字节随发版变化
+  → 浏览器装新 SW、`activate` 清旧缓存。
+- `Dockerfile`：注入前先 `grep` 占位符；命中才 `sed`，并回显实际缓存名；未命中则打
+  **WARNING**（不再静默失败），构建继续但日志明确提示占位符缺失。
+- 测试新增 `tests/test_sw_version_injection.py`（6 例）：钉住占位符存在、无硬编码版本号、
+  Dockerfile 注入行 + 缺失告警、模拟注入结果、`index.html` 仍注册 `/sw.js`。
+
 ### fix-Dockerfile pip 源默认改官方 PyPI（2026-09-29）
 
 CI 的 `build` 频繁报 `The action 'Build and push' has timed out after 90 minutes`，

@@ -154,7 +154,8 @@ def get_thsdk_dde(symbol: str) -> Dict[str, Any]:
         symbol: 6 位股票代码,如 "002361"。
     返回:
         {"available": bool, "data": [{symbol, price, main_net_amount_wan,
-         main_net_ratio, summary, detail...}], "note": str}
+         main_net_vol(同花顺主力净量, 非百分比/非占比), main_net_ratio(兼容别名, 已弃用),
+         summary, detail...}], "note": str}
     """
     if not symbol:
         return _degraded("请提供股票代码(symbol)。")

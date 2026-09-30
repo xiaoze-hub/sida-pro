@@ -42,7 +42,8 @@ COPY frontend/packages/biz-ui/package.json ./packages/biz-ui/package.json
 RUN pnpm install --frozen-lockfile
 
 # 复制源码并构建(tsc -b 严格类型检查 2026-09-09 E3 恢复, 与 CI pnpm typecheck 同口径)
-# 先注入 sw.js 缓存版本号 → 发版后 SW 字节变化, 浏览器自动更新并清旧缓存
+# 把 sw.js 缓存名的 __SW_VERSION__ 占位符替换成真实版本号 → 发版后 SW 字节变化,
+# 浏览器自动更新并清旧缓存(不再依赖手改硬编码版本号)。
 # ACR 构建无 build-arg 时读仓库根 VERSION 文件兜底(2026-08-14: 个人版无构建参数功能)
 # 2026-09-18: Docker 内 tsc 因 biz-ui 依赖解析失败, 本地 tsc 已过 → 跳过 tsc 只跑 vite build
 COPY frontend/ ./
@@ -52,7 +53,14 @@ RUN VERSION_VAL="${VERSION}"; \
       VERSION_VAL="$(cat VERSION | tr -d '[:space:]')"; \
     fi; \
     echo "SW version: ${VERSION_VAL}"; \
-    sed -i "s/__SW_VERSION__/${VERSION_VAL}/g" public/sw.js && npx vite build
+    if grep -q "__SW_VERSION__" public/sw.js; then \
+      sed -i "s/__SW_VERSION__/${VERSION_VAL}/g" public/sw.js; \
+      echo "SW cache name: $(grep -o "panwatch-[^']*" public/sw.js | head -1)"; \
+    else \
+      echo "WARNING: public/sw.js 未找到 __SW_VERSION__ 占位符 —— SW 缓存名未注入版本号," \
+           "发版后浏览器可能继续使用旧缓存! 请勿把占位符改成写死的版本串。" >&2; \
+    fi; \
+    npx vite build
 
 
 # ===== Stage 2: Python 运行环境 =====

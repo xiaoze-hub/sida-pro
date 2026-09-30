@@ -24,7 +24,9 @@ export interface DarkFundTopRow {
   ths_code?: string
   /** 同花顺官方主力净流入(元); 后端转万元 = 元 / 1e4 */
   main_net_wan: number
-  /** 主力净量占比(总成交里主力买入占比) */
+  /** 同花顺 DDE「主力净量」原始值 —— **非百分比/非占比**(量纲未定, 使用前需向数据源确认) */
+  main_net_vol?: number | null
+  /** @deprecated 旧字段名(曾误标为「占比」); 与 main_net_vol 同值, 仅为兼容旧快照保留, 请用 main_net_vol */
   main_net_ratio?: number | null
   /** 总成交额(万元) */
   total_amount_wan?: number | null

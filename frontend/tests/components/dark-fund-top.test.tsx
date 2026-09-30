@@ -25,7 +25,7 @@ function row(over: Record<string, unknown> = {}) {
     name: '贵州茅台',
     ths_code: 'USHA600519',
     main_net_wan: 88000,
-    main_net_ratio: 1234,
+    main_net_vol: 1234,
     total_amount_wan: 116836.13,
     source: 'thsdk_dde',
     ...over,
@@ -115,11 +115,24 @@ describe('DarkFundTop 暗盘资金 TOP 榜', () => {
 
   it('主力净量是字符串脏数(PG DECIMAL)时不崩', async () => {
     mocks.darkFundTop.mockResolvedValue(
-      snapshot([row({ main_net_ratio: '1234.0' as unknown as number, name: '脏数股' })]),
+      snapshot([row({ main_net_vol: '1234.0' as unknown as number, name: '脏数股' })]),
     )
     render(<DarkFundTopPage />)
     await screen.findAllByText('脏数股')
 
     expect(within(tbl()).getByText('1234')).toBeTruthy()
+  })
+
+  it('旧快照只有 main_net_ratio(已弃用别名)时仍能渲染, 不塌成 --', async () => {
+    // 历史落库快照用的是旧字段名; 前端必须回落读取 ratio, 否则老快照该列整列变 '-'
+    const legacy = row()
+    delete (legacy as Record<string, unknown>).main_net_vol
+    mocks.darkFundTop.mockResolvedValue(
+      snapshot([{ ...legacy, main_net_ratio: 4321, name: '老快照股' }]),
+    )
+    render(<DarkFundTopPage />)
+    await screen.findAllByText('老快照股')
+
+    expect(within(tbl()).getByText('4321')).toBeTruthy()
   })
 })
