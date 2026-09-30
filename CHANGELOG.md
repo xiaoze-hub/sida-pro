@@ -1,3 +1,21 @@
+### feat-持仓成本线画在 K 线上（2026-09-30）
+
+P1-2：把「持仓成本」从占位卡改为直接画在 K 线上（产品定位铁律：K 线是绝对主角、无卡片包）。
+`KlineChart`（biz-ui，唯一在用的 K 线引擎；`InteractiveKline` 已于 P3 删除）本就支持 `costLines` 入参，
+但**无人接线** ⇒ 本次补上「页面 → 图表」这条线：
+
+- `StockWorkbench` 的持仓 hook 由 `useHasPosition`（仅布尔）升级为 `usePositionContext`
+  —— 同一次 `GET /portfolio/summary` 取数**顺带取回该股成本价**（不新增请求）；
+- 有真实持仓且成本价为**有限正数**时，向主图传 `costLines={[{ price, title: '成本 <价>' }]}`
+  → 在 K 线上画一条水平成本线（实线 + 成本轴标签，`readAccentPrimary()` 强调色）；
+  **无持仓 / 成本价缺失(=0/NaN/Infinity) / 取数失败 → 不传**，一条不画、也不报错（禁猜、禁默认值）；
+- 成本轴标签用 `safePrice()` 格式化（不引裸 `toFixed`，避开 UI 门禁 R6）。
+- 未改 `KlineChart` 渲染逻辑（成本线沿用既有 `showSignal` 图层开关，与 `tradeMarkers` 用户数据层同处置），
+  十字光标/区间选择/标注层交互不受影响。
+- 测试：`stock-workbench.test.tsx` 新增「P1-2 持仓成本线」5 例（有成本→画线 / 无持仓→不画 /
+  成本=0→不画 / 取数失败→不画 / 指数视图不请求不画）+ 新增 `kline-cost-line-contract.test.ts`
+  钉图表侧契约（createPriceLine + `Number.isFinite` 守卫 + 重绘依赖）。
+
 ### fix-Dockerfile pip 源默认改官方 PyPI（2026-09-29）
 
 CI 的 `build` 频繁报 `The action 'Build and push' has timed out after 90 minutes`，
