@@ -332,6 +332,18 @@ class CapitalFlowCollector:
                 capital_flow.date = md_cf.date
                 if md_cf.name:
                     capital_flow.name = md_cf.name
+            # 口径标签隔离(A-5): Engine 命中的源口径必须随数据透传 —— 若 TQ 备源命中,
+            # 其口径=L2/主力(ths), 绝不能沿用本类默认的 eastmoney4(否则下游会误判可做
+            # 方向性判定, 违反 AGENTS 口径红线)。未标注(vendor 未给)则维持默认 eastmoney4。
+            md_caliber = getattr(md_cf, "caliber", "") or ""
+            if md_caliber:
+                capital_flow.caliber = md_caliber
+                capital_flow.direction_semantics = (
+                    getattr(md_cf, "direction_semantics", "") or capital_flow.direction_semantics
+                )
+                _src = getattr(md_cf, "source", "") or ""
+                if _src:
+                    capital_flow.source_label = _src
 
         if capital_flow is None:
             return None

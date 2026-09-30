@@ -56,8 +56,11 @@ from marketdata.vendors.northbound import HexinNorthboundVendor
 from marketdata.vendors.sina import SinaQuoteVendor
 from marketdata.vendors.tencent import TencentQuoteVendor
 from marketdata.vendors.tq import (
+    TqBoardCapitalFlowVendor,
+    TqCapitalFlowVendor,
     TqDividendVendor,
     TqKlineVendor,
+    TqMarginVendor,
     TqMoreInfoVendor,
     TqQuoteVendor,
     TqShareholdersVendor,
@@ -92,9 +95,11 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
         "eastmoney": EastmoneyCapitalFlowVendor,
         "sina": SinaCapitalFlowVendor,
         "tencent": TencentFundflowVendor,
+        "tq": TqCapitalFlowVendor,
     },
     "board_capital_flow": {
         "ths_flow": ThsBoardFlowVendor,
+        "tq": TqBoardCapitalFlowVendor,
     },
     "market_capital_flow": {
         "ths_market_flow": ThsMarketFlowVendor,
@@ -126,6 +131,7 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
     "margin": {
         "eastmoney": EastmoneyMarginVendor,
         "ftshare": FtshareMarginVendor,
+        "tq": TqMarginVendor,
     },
     "shareholders": {
         "zhitu": ZhituShareholdersVendor,

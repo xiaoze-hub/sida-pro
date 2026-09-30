@@ -96,6 +96,11 @@ class CapitalFlow:
     small_net_inflow: float | None = None      # 小单净流入
     main_net_5d: float | None = None           # 5日主力净流入
     date: str | None = None                    # 数据基准日(新浪/东财=T-1收盘; 盘中无当日实时)
+    source: str = ""                           # 实际命中的源(空=未标注, 由上层按主源口径处理)
+    # 口径标签(B3/3.4, 契约 src/core/caliber.py): 资金类返回值必须带 caliber +
+    # direction_semantics, 下游据此决定能否做方向性判定(TQ=L2/主力口径=ths, 非东财四档)。
+    caliber: str = ""
+    direction_semantics: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,10 @@ class BoardCapitalFlow:
     leader_change_pct: float | None = None      # 领涨股涨跌幅
     leader_price: float | None = None           # 领涨股当前价
     rank: int = 0                               # 排名
+    source: str = ""                            # 实际命中的源(空=未标注)
+    # 口径标签(契约 src/core/caliber.py): 板块资金类同个股资金类, TQ=L2/主力口径=ths。
+    caliber: str = ""
+    direction_semantics: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -242,6 +251,7 @@ class MarginItem:
     rq_sell_vol: float | None = None    # 融券卖出量(股)
     rq_repay_vol: float | None = None   # 融券偿还量(股)
     total_balance: float | None = None  # 两融余额(元)
+    source: str = ""                    # 实际命中的源(空=未标注)
 
 
 @dataclass
