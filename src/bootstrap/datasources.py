@@ -154,6 +154,21 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "supports_batch": False,
             "test_symbols": ["601127", "600519"],
         },
+        {
+            "name": "通达信TQ资金流",
+            "type": "capital_flow",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(get_more_info Zjl_HB 主力净流入, 万元→元)。**备源**: "
+                "东财/新浪均取不到时接管。⚠️ 口径=L2/主力(ths), **非**东财四档(eastmoney4), "
+                "返回值带 caliber+direction_semantics, 禁用于主力意图判定; TQ 无四档拆分 → "
+                "超大/大/中/小单留空(不补 0)。",
+            },
+            "enabled": True,
+            "priority": 8,  # 东财(0)/新浪(5)之后的 TQ 备源
+            "supports_batch": False,
+            "test_symbols": ["600519", "000001"],
+        },
         # 实时行情数据源
         {
             "name": "通达信TQ行情",
@@ -324,6 +339,19 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "test_symbols": ["600519", "000001"],
         },
         {
+            "name": "通达信TQ融资融券",
+            "type": "margin",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(GP03 融资余额/GP11 融资买入偿还/GP12 融券卖出偿还, 万元→元)。"
+                "**备源**。⚠️ TQ 只给融券余量(股)不给融券余额(元) → rq_balance/total_balance 留空(不补 0)。",
+            },
+            "enabled": True,
+            "priority": 8,  # 东财(0)/FTShare(5)之后的 TQ 备源
+            "supports_batch": False,
+            "test_symbols": ["600519", "000001"],
+        },
+        {
             "name": "东财股东户数",
             "type": "shareholders",
             "provider": "eastmoney",
@@ -446,6 +474,20 @@ DATA_SOURCE_SEEDS: list[dict] = [
             },
             "enabled": True,
             "priority": 0,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
+            "name": "通达信TQ板块资金",
+            "type": "board_capital_flow",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(SUPAMO 板块主力资金, 万元→亿)。**备源**: 解同花顺单点。"
+                "⚠️ 口径=L2/主力(ths), 带 caliber+direction_semantics, 禁用于主力意图判定; "
+                "同花顺给流入/流出双值, TQ 只给净额 → inflow/outflow 留空(不补 0)。",
+            },
+            "enabled": True,
+            "priority": 2,  # 同花顺(0)之后的 TQ 备源
             "supports_batch": False,
             "test_symbols": [],
         },

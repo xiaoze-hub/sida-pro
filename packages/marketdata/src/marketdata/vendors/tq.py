@@ -19,13 +19,25 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from marketdata.symbol import Market, Symbol
-from marketdata.types import Bar, DividendItem, MoreInfo, Quote, ShareholderItem
+from marketdata.types import (
+    Bar,
+    BoardCapitalFlow,
+    CapitalFlow,
+    DividendItem,
+    MarginItem,
+    MoreInfo,
+    Quote,
+    ShareholderItem,
+)
 from marketdata.vendors.base import (
+    CapitalFlowVendor,
     DividendVendor,
     KlineVendor,
+    MarginVendor,
     MoreInfoVendor,
     QuoteVendor,
     ShareholdersVendor,
+    Vendor,
 )
 
 logger = logging.getLogger(__name__)
@@ -547,6 +559,253 @@ class TqDividendVendor(DividendVendor):
                         progress="",
                     )
                 )
+        return out
+
+
+# ── TQ 资金类口径标签(契约 src/core/caliber.py) ──────────────────────────────
+# TQ 资金类(get_more_info.Zjl_HB / SUPAMO 板块主力资金)= L2/主力口径, 与
+# get_decision_pioneer 同族 —— 对应契约的 "ths", **不是**东财四档(eastmoney4),
+# 禁用于主力意图/方向性判定。直接复用契约常量(不自创文案); marketdata 独立运行时
+# (src 不在 import 路径)退化为 unknown, 下游按"未标注"处理。
+def _capital_caliber() -> tuple[str, str]:
+    try:
+        from src.core.caliber import DIRECTION_THS
+
+        return "ths", DIRECTION_THS
+    except Exception:  # noqa: BLE001
+        return "unknown", ""
+
+
+def _wan_to_yuan(wan: float | None) -> float | None:
+    """万元 → 元(TQ GP/SC/get_more_info 金额字段单位是万元)。None 原样透传(不补 0)。"""
+    return round(wan * 1e4, 2) if wan is not None else None
+
+
+def _latest_table_row(data: object, table: str) -> dict:
+    """从 gp_series/sc_series/bk_series 结果里取某表最后一条(服务端按日期升序)。"""
+    if not isinstance(data, dict):
+        return {}
+    rows = data.get(table)
+    if not isinstance(rows, list) or not rows:
+        return {}
+    for rec in reversed(rows):
+        if isinstance(rec, dict):
+            return rec
+    return {}
+
+
+def _row_value(row: dict, idx: int) -> float | None:
+    """取 {Date, Value:[...]} 行的 Value[idx], 缺/非法 → None(不补 0)。"""
+    vals = row.get("Value") if isinstance(row, dict) else None
+    if isinstance(vals, (list, tuple)) and len(vals) > idx:
+        return _to_float(vals[idx])
+    return None
+
+
+def _formula_scalar(vals: object, key: str) -> float | None:
+    """取公式结果 {指标名: 值 或 [值]} 的标量(兼容 return_count>1 的列表)。"""
+    if not isinstance(vals, dict):
+        return None
+    v = vals.get(key)
+    if isinstance(v, (list, tuple)):
+        v = v[-1] if v else None
+    return _to_float(v)
+
+
+class TqCapitalFlowVendor(CapitalFlowVendor):
+    """个股资金流 TQ **备源**: get_more_info 的 Zjl_HB(主力净流入, 万元) → 元。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与
+    get_decision_pioneer 同族), **不是**东财四档(eastmoney4), 禁用于主力意图/
+    方向性判定 —— 返回值带 caliber + direction_semantics。
+    ⚠️ 单位: Zjl_HB 是**万元** → 落地成"元"必须 ×1e4(漏换算会错 1e4 倍且不报错)。
+    ⚠️ 缺字段留 None(禁补 0): TQ get_more_info 无按单金额四档拆分 → 超大/大/中/小单
+    一律 None; 无净占比/5日字段 → None。备源不臆造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[CapitalFlow]:
+        if not symbols:
+            return []
+        caliber, direction = _capital_caliber()
+        out: list[CapitalFlow] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                mi = _rpc("get_more_info", {"stock_code": tqc})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ get_more_info %s failed: %s", tqc, e)
+                continue
+            if not isinstance(mi, dict):
+                continue
+            raw = _to_float(mi.get("Zjl_HB"))
+            if raw is None:
+                continue
+            out.append(
+                CapitalFlow(
+                    symbol=sym.code,
+                    name=str(mi.get("Name") or ""),
+                    main_net_inflow=raw * 1e4,   # 万元 → 元
+                    main_net_inflow_pct=None,    # TQ 无净占比字段
+                    super_net_inflow=None,       # TQ 无四档拆分 → None(禁补 0)
+                    big_net_inflow=None,
+                    mid_net_inflow=None,
+                    small_net_inflow=None,
+                    main_net_5d=None,
+                    date=_fmt_day(mi.get("HqDate")) or None,
+                    source="tq",
+                    caliber=caliber,
+                    direction_semantics=direction,
+                )
+            )
+        return out
+
+
+_MARGIN_WINDOW_DAYS = 400  # 覆盖最近若干交易日, 取最新一期
+
+
+class TqMarginVendor(MarginVendor):
+    """两融 TQ 源: GP03 融资余额(万元)/融券余量(股) + GP11 融资买入额/偿还额(万元)
+    + GP12 融券卖出量/偿还量(股), 取最新一期。
+
+    ⚠️ 单位: GP03/GP11 金额是**万元** → 落地成"元"×1e4。
+    ⚠️ 缺字段留 None(禁补 0): TQ 只给"融券余量(股)", **不给融券余额(元)** →
+    rq_balance=None; 据此 total_balance(两融余额)也不得臆造 → None。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[MarginItem]:
+        if not symbols:
+            return []
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        start = (now - timedelta(days=_MARGIN_WINDOW_DAYS)).strftime("%Y%m%d")
+        out: list[MarginItem] = []
+        for sym in symbols:
+            tqc = to_tq_code(sym)
+            if not tqc:
+                continue
+            try:
+                data = gp_series(["GP03", "GP11", "GP12"], tqc, start_time=start)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ GP03/11/12 %s failed: %s", tqc, e)
+                continue
+            gp3 = _latest_table_row(data, "GP03")
+            gp11 = _latest_table_row(data, "GP11")
+            gp12 = _latest_table_row(data, "GP12")
+            if not (gp3 or gp11 or gp12):
+                continue
+            date_src = (gp3 or gp11 or gp12).get("Date")
+            out.append(
+                MarginItem(
+                    date=_fmt_day(date_src),
+                    symbol=sym.code,
+                    rz_balance=_wan_to_yuan(_row_value(gp3, 0)),      # 融资余额(万元→元)
+                    rz_buy=_wan_to_yuan(_row_value(gp11, 0)),         # 融资买入额(万元→元)
+                    rz_repay=_wan_to_yuan(_row_value(gp11, 1)),       # 融资偿还额(万元→元)
+                    rq_balance=None,     # TQ 无融券余额(元) → None(禁补 0)
+                    rq_sell_vol=_row_value(gp12, 0),   # 股, 无需换算
+                    rq_repay_vol=_row_value(gp12, 1),
+                    total_balance=None,  # 缺 rq_balance → 不臆造
+                    source="tq",
+                )
+            )
+        return out
+
+
+# 板块主力资金公式(实测=主力额 万元, 已在 src/core/tdx_boards.board_quotes 生产使用)。
+# 为什么不用 bk_series(get_bkjy_value): 官方 BK5–BK19 只有 PE/PB/市值/涨跌停家数/两融,
+# **不含板块资金净额** → 拿不到净额; 板块代码上的 SUPAMO 主力资金公式可用。
+_BOARD_FLOW_FORMULA = "SUPAMO"
+_BOARD_FLOW_CHUNK = 500   # formula_process_mul_zb 批量实测安全值(与 tdx_boards._BATCH 同)
+_MAX_BOARDS = 600
+
+
+def _board_items(list_type: int = 1) -> list[dict]:
+    """板块目录 [{code,name,board_type}](get_sector_list)。881xxx=行业 / 880xxx=概念。"""
+    raw = sector_list(list_type)
+    out: list[dict] = []
+    for s in raw or []:
+        if not isinstance(s, dict):
+            continue
+        code = str(s.get("Code") or "").strip().upper()
+        if not (len(code) == 9 and code.endswith(".SH") and code[:6].isdigit()):
+            continue
+        out.append(
+            {
+                "code": code,
+                "name": str(s.get("Name") or "").strip(),
+                "board_type": "industry" if code.startswith("881") else "concept",
+            }
+        )
+    out.sort(key=lambda x: x["code"])
+    return out
+
+
+class TqBoardCapitalFlowVendor(Vendor):
+    """板块资金流 TQ **备源**(解同花顺单点): SUPAMO 板块主力资金(万元) → 净额(亿)。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与 get_decision_pioneer
+    同族), 带 caliber + direction_semantics, 禁用于主力意图判定。
+    ⚠️ 单位: 主力资金是**万元** → 板块净额(亿) = 万元/1e4。
+    ⚠️ 缺字段留 None(禁补 0): 同花顺给流入/流出双值, TQ 只给净额 → inflow/outflow=None;
+    指数点位/涨跌幅/领涨股 TQ 该公式不含 → None。备源不臆造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[BoardCapitalFlow]:
+        config = config or {}
+        board_type = config.get("board_type") or "industry"
+        items = [b for b in _board_items(1) if b["board_type"] == board_type][:_MAX_BOARDS]
+        if not items:
+            return []
+        caliber, direction = _capital_caliber()
+        codes = [b["code"] for b in items]
+        name_of = {b["code"]: b["name"] for b in items}
+        fund_wan: dict[str, float] = {}
+        for i in range(0, len(codes), _BOARD_FLOW_CHUNK):
+            part = codes[i : i + _BOARD_FLOW_CHUNK]
+            try:
+                got = formula_mul(_BOARD_FLOW_FORMULA, part)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ %s 板块资金失败(%d 码): %s", _BOARD_FLOW_FORMULA, len(part), e)
+                continue
+            if not isinstance(got, dict):
+                continue
+            for code, vals in got.items():
+                key = str(code).upper()
+                if key not in name_of:   # 只接受本次请求的板块(防串味/防脏行)
+                    continue
+                v = _formula_scalar(vals, "主力资金")
+                if v is not None:
+                    fund_wan[key] = v
+        ranked = sorted(
+            ((round(wan / 1e4, 4), code) for code, wan in fund_wan.items()),
+            key=lambda r: r[0],
+            reverse=True,
+        )
+        out: list[BoardCapitalFlow] = []
+        for rank, (net_yi, code) in enumerate(ranked, start=1):
+            out.append(
+                BoardCapitalFlow(
+                    board_name=name_of.get(code, ""),
+                    board_type=board_type,
+                    net_inflow=net_yi,
+                    inflow=None,    # TQ 只给净额 → None(禁补 0)
+                    outflow=None,
+                    rank=rank,
+                    source="tq",
+                    caliber=caliber,
+                    direction_semantics=direction,
+                )
+            )
         return out
 
 

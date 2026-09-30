@@ -1,3 +1,28 @@
+### feat-新增三条 TQ 备源 board_capital_flow/margin/capital_flow（2026-09-30）
+
+审计《TQ切换面审计_20260924》第五节建议顺序里的第 2/3/5 条(A-2/A-3/A-5)：给三个能力各加一条
+**TQ 备源**，只加备源、**不动主源**（主源优先级不变），不发版、不打 tag。
+
+- **A-2 `board_capital_flow`**：新增 `TqBoardCapitalFlowVendor`（解同花顺单点）。审计原建议走
+  `bk_series(get_bkjy_value)`，但官方 BK5–BK19 字段只有 PE/PB/市值/涨跌停家数/两融，**不含板块资金净额**，
+  故改用已在 `src/core/tdx_boards.board_quotes` 生产实测的 **SUPAMO 板块主力资金公式**（万元）→ 净额
+  **亿 = 万元/1e4**。同花顺给流入/流出双值、TQ 只给净额 → `inflow/outflow` 留空（不补 0）。
+- **A-3 `margin`**：新增 `TqMarginVendor`。GP03 融资余额(万元)/GP11 融资买入偿还(万元)→ 元 ×1e4；
+  GP12 融券卖出/偿还量(股) 原样。⚠️ TQ 只给融券余量（股），**不给融券余额（元）** → `rq_balance`
+  与据此的 `total_balance` 留空（不补 0）。
+- **A-5 `capital_flow`**：新增 `TqCapitalFlowVendor`（get_more_info `Zjl_HB` 万元 → 元 ×1e4）。
+  **口径隔离**：TQ 资金类=L2/主力口径=契约 `src/core/caliber.py` 的 `ths`（**非** eastmoney4），
+  返回值带 `caliber` + `direction_semantics`，禁用于主力意图判定；TQ 无四档拆分 → 超大/大/中/小单留空。
+  `src/collectors/capital_flow_collector.py` 同步让 Engine 命中源的口径标签随数据透传（不再一律按
+  eastmoney4 定型）。
+- 契约/类型：`marketdata.types` 的 `CapitalFlow`/`BoardCapitalFlow` 增设 `source`+`caliber`+
+  `direction_semantics`，`MarginItem` 增设 `source`（全部带默认值，向后兼容）。
+- 接线：`marketdata.registry` 三个能力的 vendor 表各加 `tq`；`src/bootstrap/datasources.py` 各加一条
+  `enabled` 的 TQ seed 行（priority 排在主源之后：capital_flow/margin=8，board_capital_flow=2）。
+- 测试：`tests/test_tq_fallback_capital_margin_board.py`（19 例，全离线 mock：happy path / 回退 /
+  无数据不补 0 / caliber 逐字符合契约 + registry/seed 接线）；`-k "capital_flow or board or margin or caliber"`
+  226 例全绿。
+
 ### fix-Dockerfile pip 源默认改官方 PyPI（2026-09-29）
 
 CI 的 `build` 频繁报 `The action 'Build and push' has timed out after 90 minutes`，
