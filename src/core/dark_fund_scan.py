@@ -80,7 +80,8 @@ def scan_dark_fund_top(
           "top": [{
              "symbol", "name", "ths_code",
              "main_net_wan": 主力净流入(万元),
-             "main_net_ratio": 主力净量占比,
+             "main_net_vol": 同花顺 DDE「主力净量」原始值(非百分比/非占比; 量纲未定),
+             "main_net_ratio": main_net_vol 的兼容别名(同值, 已弃用),
              "total_amount_wan": 总成交额(万元),
              "source": "thsdk_dde",
           }]  按 main_net_wan 降序
@@ -125,7 +126,8 @@ def scan_dark_fund_top(
         # 过滤 int32 溢出哨兵值(盘后无真实数据的次新股返回 2^31-1/2^31 占位)
         if abs(main_net) >= INT32_SENTINEL:
             continue
-        # 主力净量同理过滤溢出(2147483648)
+        # 主力净量同理过滤溢出(2147483648)。同花顺 DDE「主力净量」**非百分比/非占比**,
+        # 精确量纲未登记 → 以中性名 main_net_vol 暴露(旧名 main_net_ratio 兼容别名, 已弃用)。
         ratio = _f(r.get("主力净量"))
         if ratio is not None and abs(ratio) >= INT32_SENTINEL:
             ratio = None
@@ -138,7 +140,8 @@ def scan_dark_fund_top(
                 "name": name_map.get(six, ""),
                 "ths_code": raw_code,
                 "main_net_wan": round(main_net / 1e4, 2),       # 元 → 万元
-                "main_net_ratio": ratio,
+                "main_net_vol": ratio,
+                "main_net_ratio": ratio,  # deprecated 兼容别名(旧快照消费者)
                 # 总金额溢出/缺失 → None(不编造成 0)
                 "total_amount_wan": round(total_amt / 1e4, 2) if total_amt is not None else None,
                 "source": "thsdk_dde",

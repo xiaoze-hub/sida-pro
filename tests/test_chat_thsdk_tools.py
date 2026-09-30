@@ -65,7 +65,7 @@ class FakeL2:
             "price": 10.46,
             "total_amount_wan": 116836.13,
             "main_net_amount_wan": -5647.64,
-            "main_net_ratio": -0.6774,
+            "main_net_vol": -0.6774,
             "summary": {"代码": symbol, "主力净流入": -56476402},
             "detail": {"主动买入特大单金额": 100},
         }

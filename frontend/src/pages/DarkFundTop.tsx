@@ -79,7 +79,7 @@ export default function DarkFundTopPage() {
     const val = (r: DarkFundTopRow) =>
       sort.key === 'main' ? r.main_net_wan ?? 0
       : sort.key === 'amount' ? r.total_amount_wan ?? 0
-      : r.main_net_ratio ?? 0
+      : r.main_net_vol ?? r.main_net_ratio ?? 0
     return rows.sort((a, b) => (val(a) - val(b)) * (sort.dir === -1 ? -1 : 1))
   }, [data, sort])
   const sortMark = (key: 'main' | 'amount' | 'ratio') =>
@@ -241,7 +241,7 @@ export default function DarkFundTopPage() {
                         {toAmountFromWan(r.main_net_wan)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {safeFixed(r.main_net_ratio, 0, '-')}
+                        {safeFixed(r.main_net_vol ?? r.main_net_ratio, 0, '-')}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                         {toAmountFromWanUnsigned(r.total_amount_wan)}

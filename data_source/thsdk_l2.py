@@ -1252,7 +1252,7 @@ class THSDKL2:
                 'symbol', 'ths_code', 'price',
                 'total_amount_wan',      # 总成交额(万元)
                 'main_net_amount_wan',   # 主力净流入(万元), 同花顺官方口径
-                'main_net_ratio',        # 主力净量(占比)
+                'main_net_vol',          # 同花顺 DDE「主力净量」原始值 — 非百分比/非占比(量纲未定, 见返回注释)
                 'summary': {...},        # 汇总行
                 'detail': {...},         # 特大单/大单 主动/被动 明细
             }
@@ -1272,13 +1272,21 @@ class THSDKL2:
         total_wan = self._to_float(row.get("总金额"))
         main_net_wan = self._to_float(row.get("主力净流入"))
 
+        # thsdk DDE「主力净量」: 字段名 main_net_ratio 曾误标为「占比」, 但同花顺该字段
+        # **不是百分比**(实测出现 2131 之类 >100 的值)。其精确量纲(股/手)未在冻结口径
+        # 矩阵 docs/_frozen/caliber_matrix.md 中登记 → 本轮不臆测单位, 以中性名 main_net_vol
+        # 暴露, 语义 = 同花顺 DDE 主力净量原始值(非百分比)。旧名 main_net_ratio 保留为
+        # 兼容别名(同值), 已弃用。
+        main_net_vol = self._to_float(row.get("主力净量"))
+
         return {
             "symbol": symbol,
             "ths_code": ths_code,
             "price": self._to_float(row.get("价格")),
             "total_amount_wan": total_wan / 1e4 if total_wan is not None else None,
             "main_net_amount_wan": main_net_wan / 1e4 if main_net_wan is not None else None,
-            "main_net_ratio": self._to_float(row.get("主力净量")),
+            "main_net_vol": main_net_vol,
+            "main_net_ratio": main_net_vol,  # deprecated 兼容别名(旧前端/旧调用方)
             "summary": row,
             "detail": prow,
         }

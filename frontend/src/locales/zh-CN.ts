@@ -233,7 +233,7 @@ const zhCN = {
     mainNet: '主力净流入(万/亿)',
     mainNetSort: '按主力净流入排序',
     mainNetRatio: '主力净量',
-    mainNetRatioHint: '同花顺主力净量(股数口径, 非百分比)',
+    mainNetRatioHint: '同花顺 DDE「主力净量」原始值, 非百分比/非占比(量纲未定, 仅供对照)',
     totalAmount: '总成交额(万/亿)',
     totalAmountSort: '按总成交额排序(万元口径; 缺失为 --)',
     tckDark: '.tck 暗盘对照',
