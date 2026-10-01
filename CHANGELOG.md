@@ -1,3 +1,42 @@
+### perf-summary 冷启动 26s→10s + 修 L2 大载荷缓存静默丢弃（B1 P2 首屏慢）（2026-10-01）
+
+B1 走查: `GET /api/klines/{symbol}/summary` 冷调 25s 撞第一屏, 导致 `/portfolio` 自选股
+sparkline 长期空列。定位到两条独立根因, 分层修掉(不发版、不打 tag)。
+
+**根因①(冷启动~26s)**: 端点冷链是**串行相加**的四个互不依赖重活 ——
+`_main_intent_both`(逐笔翻页, 硬超时 12s) + `dark_review_from_tck` + `mainflow_tri.triangulate`
++ `_build_layer_data`(内含盘口 thsdk 硬超时 8s、wencai 硬超时 10s)。行情不健康时每段烧满超时,
+实测量级 26s, **超过前端 `fetchAPI` 的 20s abort**(`DEFAULT_TIMEOUT_MS=20000`) ⇒ 请求被前端掐断,
+sparkline 永远空。
+
+**根因②(缓存长期不命中)**: `put_cached_summary` 对 >50KB 载荷的"截断"分支在
+`json.loads(body[:5000])` 上解析**非法截断串** → 抛 `JSONDecodeError` → 被外层 except 吞掉 →
+**整条缓存被静默丢弃**。summary 富载荷(盘口队列/筹码/gs_signals/fund_flow 120 点/逐笔明细)
+实测 60–120KB, 故 L2 PG 永不落库; 每次进程重启/换 worker 都冷启动重算。
+
+**改法**
+- `src/web/api/klines.py`:
+  - 冷链并发化: 新增 `_compute_kline_summary` 用 `ThreadPoolExecutor(4)` 并发跑
+    `_enrich_main_intent` / `_enrich_dark_clusters` / `_enrich_mainflow_tri` / `_build_layer_data`
+    (逻辑/降级路径逐字保留); `_build_layer_data` 内部把盘口 `_build_orderbook` 抽出并**先起线程**
+    与其余计算重叠, 末尾 join。冷启动 ~26s → ~10s(≈最长一条)。
+  - 响应缓存迁到 `biz_cache`(L1 内存 + L2 Redis, key 前缀 `biz:`): 跨 worker 共享 + 重启不丢,
+    不再只靠进程内 dict。命中顺序 biz_cache → PG `summary_cache` → 重算。
+  - **single-flight**: per-`cache_key` 锁, 并发相同 symbol 只真正重算一次(B1 实测 30s 后仍有多条
+    in-flight = 线程被 26s 冷链占死; 单飞止血)。`refresh=1` 仍跳过全部缓存强刷。
+- `src/core/summary_cache.py`: 上限 50KB→1MB(列是 TEXT, 无硬上限); 超限改为**跳过落库**
+  (绝不写残缺数据、绝不抛), 修掉静默丢弃。
+- 测试新增 `tests/test_kline_summary_cold_start.py`(8 例, 全离线): ①冷/热逐字段一致
+  ②命中不重算(mock 计数) ③Redis 不可达降级仍正确 ④数据缺失原样返回不编造
+  ⑤冷链并发(4×0.3s 串行=1.2s, 断言 <0.9s) ⑥single-flight(5 并发只算 1 次)
+  ⑦大载荷完整落库(旧实现 RED)/超限不抛 ⑧refresh 跳缓存。`test_summary_resonance` 端点用例
+  同步改用 `clear_summary_biz_cache()` + `_clear_summary_caches()` 清双层缓存。
+
+**实测(同一 stub 夹具, 前后各跑一次)**: 冷 `26.040s → 10.040s`, 热 `0.0ms → 0.0ms`,
+响应逐字段一致(`same=True`)。门禁: `pytest -k "klines or summary or cache"` 196 passed;
+`test_w41_core_web_dependency` 1 passed; `check_is_pg_scope`/`check_migrations`/
+`check_scoped_queries`/`check_lock_covers_reqs` 全 OK。
+
 ### feat-新增三条 TQ 备源 board_capital_flow/margin/capital_flow（2026-09-30）
 
 审计《TQ切换面审计_20260924》第五节建议顺序里的第 2/3/5 条(A-2/A-3/A-5)：给三个能力各加一条

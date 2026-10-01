@@ -3,6 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+import concurrent.futures
+import threading
 import time as _time
 
 from pydantic import BaseModel, Field
@@ -31,19 +33,50 @@ from src.core.summary_cache import (  # noqa: E402
     put_cached_summary,
     clear_summary_cache as _clear_summary_cache,
 )
+from src.web.cache.biz_cache import biz_cache  # noqa: E402
 
-_SUMMARY_CACHE: dict = {}
-_SUMMARY_TTL = 300.0  # v0.4.8.1: 30s→5min, 冷启动重算20-30s太贵; 技术指标分钟级刷新足够
-_SUMMARY_PG_TTL = 300  # PG 落库 TTL 同进程内缓存, 双层一致
-# P2-7 (2026-09-05 28号审计): _SUMMARY_CACHE 上限 500, 超了挤最老
+_SUMMARY_CACHE: dict = {}  # noqa: F841 — 兼容旧测试引用; 实际存储已迁到 biz_cache
+_SUMMARY_TTL = 300  # biz_cache / PG 双层 TTL 一致(秒)
+_SUMMARY_PG_TTL = 300  # PG 落库 TTL 同 biz_cache, 双层一致
+# P2-7 (2026-09-05 28号审计): 上限保留语义; biz_cache 自带 L1 上限(2000)
 _SUMMARY_MAX = 500
+
+# single-flight: cache_key -> Lock。并发 miss 时只有一个真正重算, 其余等锁后读缓存。
+_summary_locks: dict[str, threading.Lock] = {}
+_summary_locks_guard = threading.Lock()
+
+
+def _summary_lock(cache_key: str) -> threading.Lock:
+    with _summary_locks_guard:
+        lk = _summary_locks.get(cache_key)
+        if lk is None:
+            lk = threading.Lock()
+            _summary_locks[cache_key] = lk
+        return lk
 
 
 def _summary_cache_set(key: str, value) -> None:
-    _SUMMARY_CACHE[key] = (_time.time(), value)
-    if len(_SUMMARY_CACHE) > _SUMMARY_MAX:
-        for k in list(_SUMMARY_CACHE)[: len(_SUMMARY_CACHE) - _SUMMARY_MAX]:
-            del _SUMMARY_CACHE[k]
+    """写 L1 内存 + L2 Redis(biz_cache)。保留旧函数名以兼容既有调用方/测试。"""
+    biz_cache.set_json(key, value, ttl=_SUMMARY_TTL)
+
+
+def _clear_summary_caches() -> None:
+    """清 summary 两层缓存(biz_cache L1+L2 Redis 与 PG summary_cache)。
+
+    供测试隔离、数据源热切/补数后强刷使用。任一层不可用不影响另一层。
+    """
+    try:
+        _clear_summary_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def clear_summary_biz_cache() -> None:
+    """只清 summary 在 biz_cache 里的条目(不误伤其他业务缓存)。"""
+    try:
+        biz_cache.clear()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class KlineItem(BaseModel):
@@ -718,6 +751,48 @@ def _build_resonance(symbol: str, bars: list[dict]) -> dict:
         return _resonance_default()
 
 
+def _build_orderbook(symbol: str):
+    """盘口队列 + 托压单(设计稿 §3.1)。
+
+    优先 .img 离线文件(完整委托队列); 无 .img 时退回 thsdk 实时快照;
+    都拿不到 → None(显式无数据, 不编造)。
+
+    2026-10-01 (B1 P2 首屏慢): 从 _build_layer_data 抽出成独立函数, 以便与其余
+    图层计算并发(盘口 thsdk 快照硬超时 8s, 是冷启动链里最长的几段之一)。
+    """
+    try:
+        from src.core import orderbook_engine as obe
+
+        ob = None
+        img_path = obe.find_img_file(symbol, "CN")
+        if img_path:
+            snaps = obe.load_snapshots_from_img(img_path)
+            if snaps:
+                snap = snaps[-1]  # 最新一帧
+                ob = obe.order_book_queue(snap)
+                if ob is not None:
+                    return {**ob, "img_path": img_path}
+        if ob is None:
+            # thsdk 实时快照带重试退避, 行情服务不通时单次可卡 30s(实测 -6 超时),
+            # 三轮退避就是 90s, 会把 summary 接口拖到反代超时。加硬超时护栏:
+            # 超时即放弃并显式"无数据", 绝不阻塞主链路。
+            # 2026-09-18: 走共享硬超时(并发槽+wait=False)。此前
+            # `with ThreadPoolExecutor(max_workers=1)` 在 result(timeout) 超时后
+            # 仍会 shutdown(wait=True) 等挂死线程, 硬超时形同虚设。
+            from src.core.thsdk_breaker import call_with_hard_timeout
+
+            snap = call_with_hard_timeout(
+                lambda: obe.fetch_snapshot(obe.to_ths_code(symbol) or ""),
+                default=None,
+                timeout_s=ORDERBOOK_TIMEOUT_S,
+            )
+            ob = obe.order_book_queue(snap)
+        return ob
+    except Exception as e:  # noqa: BLE001
+        logger.debug("orderbook %s failed: %s", symbol, e)
+        return None
+
+
 def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
     """P1 图层数据(2026-09-01): gs_signals / fund_flow / events。
 
@@ -736,6 +811,10 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
                  "resonance": _resonance_default()}
     if market_code.value != "CN":
         return out
+    # ⓪ orderbook 与 bars 无关, 先用独立线程跑起来(末尾 join), 与下面整段重叠,
+    #    把盘口 thsdk 的硬超时(ORDERBOOK_TIMEOUT_S)从串行链里挪走。
+    _ob_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    _ob_future = _ob_pool.submit(_build_orderbook, symbol)
     try:
         from src.core.decision_pioneer import fetch_bars
 
@@ -750,37 +829,8 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         # 仅 gs_signals / fund_flow 依赖 bars, 下面各自用 `if bars:` 门控跳过。
         logger.warning("layer_data %s bars 为空: gs_signals/fund_flow 跳过, 其余仍计算", symbol)
 
-    # ⓪ orderbook: 盘口队列 + 托压单(设计稿 §3.1)
-    #    优先 .img 离线文件(完整委托队列); 无 .img 时退回 thsdk 实时快照;
-    #    都拿不到 → None(显式无数据, 不编造)。
-    try:
-        from src.core import orderbook_engine as obe
-
-        snap = None
-        img_path = obe.find_img_file(symbol, "CN")
-        if img_path:
-            snaps = obe.load_snapshots_from_img(img_path)
-            if snaps:
-                snap = snaps[-1]  # 最新一帧
-                out["orderbook"] = {**obe.order_book_queue(snap), "img_path": img_path}
-        if out["orderbook"] is None:
-            # thsdk 实时快照带重试退避, 行情服务不通时单次可卡 30s(实测 -6 超时),
-            # 三轮退避就是 90s, 会把 summary 接口拖到反代超时。加硬超时护栏:
-            # 超时即放弃并显式"无数据", 绝不阻塞主链路。
-            # 2026-09-18: 走共享硬超时(并发槽+wait=False)。此前
-            # `with ThreadPoolExecutor(max_workers=1)` 在 result(timeout) 超时后
-            # 仍会 shutdown(wait=True) 等挂死线程, 硬超时形同虚设。
-            from src.core.thsdk_breaker import call_with_hard_timeout
-
-            snap = call_with_hard_timeout(
-                lambda: obe.fetch_snapshot(obe.to_ths_code(symbol) or ""),
-                default=None,
-                timeout_s=ORDERBOOK_TIMEOUT_S,
-            )
-            out["orderbook"] = obe.order_book_queue(snap)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("orderbook %s failed: %s", symbol, e)
-        out["orderbook"] = None
+    # ⓪ orderbook: 盘口队列 + 托压单 —— 已在函数开头并发启动(_build_orderbook),
+    #    末尾 join。此处不再串行调用(2026-10-01 B1 首屏慢)。
 
     # ① gs_signals(依赖 bars: bars 空时跳过, 保持 None 由前端显式"无数据")
     if bars:
@@ -872,6 +922,14 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.debug("resonance %s failed: %s", symbol, e)
             out["resonance"] = _resonance_default()
+    # ⓪ join 并发跑的 orderbook(与上面整段重叠, 冷启动从串行相加变为取较长者)
+    try:
+        out["orderbook"] = _ob_future.result()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("orderbook %s failed: %s", symbol, e)
+        out["orderbook"] = None
+    finally:
+        _ob_pool.shutdown(wait=False)
     return out
 
 
@@ -1032,53 +1090,35 @@ def get_l2_ticks_history(
     return {"symbol": symbol, "market": market_code.value, "count": len(stored), "rows": stored}
 
 
-@router.get("/{symbol}/summary")
-def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
-    """获取单只股票K线摘要
+def _enrich_main_intent(symbol: str, market_code: MarketCode):
+    """主力意图+筹码(腾讯逐笔口径) 字符串 + 结构化; 非 A 股 / 失败 → (None, None)。
 
-    2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
-    2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
-       进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
-    2026-09-04: refresh=1 跳过 L1+L2 强制重算(数据源热切/补数后立即验证用)。
+    2026-08-12 性能优化: 一次 compute_dark_flow 同时产出字符串+结构化,
+    避免 summary+structured 各调一次(逐笔翻页/分价表各跑一遍)。
     """
-    market_code = _parse_market(market)
-    cache_key = f"summary:{market_code.value}:{symbol}"
-    now = _time.time()
-    # L1: 进程内缓存(refresh 跳过)
-    cached = None if refresh else _SUMMARY_CACHE.get(cache_key)
-    if cached and (now - cached[0]) < _SUMMARY_TTL:
-        return cached[1]
-    # L2: PG 落库缓存(进程重启/容器迁移兜底, refresh 跳过)
-    pg_hit = None if refresh else get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
-    if pg_hit:
-        _summary_cache_set(cache_key, pg_hit)
-        return pg_hit
-    collector = KlineCollector(market_code)
-    summary = collector.get_kline_summary(symbol)
-    # 主力意图+筹码(2026-08-11): A股附加, 供前端个股窗口独立展示
-    main_intent = None
-    main_intent_structured = None
-    if market_code.value == "CN":
+    if market_code.value != "CN":
+        return None, None
+    try:
+        from src.agents.intraday_monitor import _main_intent_both
+        return _main_intent_both(symbol)
+    except Exception:  # noqa: BLE001
+        main_intent = None
+        main_intent_structured = None
         try:
-            # 2026-08-12 性能优化: 一次 compute_dark_flow 同时产出字符串+结构化,
-            # 避免 summary+structured 各调一次(逐笔翻页/分价表各跑一遍)
-            from src.agents.intraday_monitor import _main_intent_both
-            main_intent, main_intent_structured = _main_intent_both(symbol)
-        except Exception:
-            try:
-                from src.agents.intraday_monitor import _main_intent_summary
-                main_intent = _main_intent_summary(symbol)
-            except Exception:
-                main_intent = None
-            try:
-                from src.agents.intraday_monitor import _main_intent_structured
-                main_intent_structured = _main_intent_structured(symbol)
-            except Exception:
-                main_intent_structured = None
+            from src.agents.intraday_monitor import _main_intent_summary
+            main_intent = _main_intent_summary(symbol)
+        except Exception:  # noqa: BLE001
+            main_intent = None
+        try:
+            from src.agents.intraday_monitor import _main_intent_structured
+            main_intent_structured = _main_intent_structured(symbol)
+        except Exception:  # noqa: BLE001
+            main_intent_structured = None
+        return main_intent, main_intent_structured
 
-    # v2.0 §6.2 + A4 派活: A4 dark_clusters 暗盘资金(委托号级拆单簇)纳入 summary 接口,
-    # 让前端资金面板的「暗盘为主/还原为辅」双口径可落地。
-    # 独立 try/except: 数据源不可用 → available:false 走 §12 兜底规范,不编造。
+
+def _enrich_dark_clusters(symbol: str) -> dict:
+    """A4 拆单簇暗盘资金(委托号级拆单簇)。数据源不可用 → available:false(§12, 不编造)。"""
     dark_clusters: dict = {"available": False, "note": "未接入"}
     try:
         from src.core.postmarket_review import dark_review_from_tck
@@ -1101,24 +1141,50 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
             dark_clusters["note"] = review.get("note")
     except Exception as e:  # noqa: BLE001
         logger.debug("dark_clusters summary 失败 %s: %s", symbol, e)
+    return dark_clusters
 
-    # A4 置信度徽章(2026-09-06 28号, 批次A): 明盘三源交叉验证 → A/B/C, 随 summary 双层缓存
+
+def _enrich_mainflow_tri(symbol: str, market_code: MarketCode) -> dict:
+    """A4 明盘三源交叉验证置信度徽章(A/B/C)。失败 → 安全默认, 不编造。"""
     mainflow_tri: dict = {"agree": None, "consensus_wan": None, "spread_pct": None, "n_ok": 0, "sources": {}}
-    if market_code.value == "CN":
-        try:
-            from src.core.mainflow_tri import triangulate
+    if market_code.value != "CN":
+        return mainflow_tri
+    try:
+        from src.core.mainflow_tri import triangulate
+        mainflow_tri = triangulate(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("mainflow_tri summary 失败 %s: %s", symbol, e)
+    try:
+        from src.core.confidence import payload as _confidence_payload
+        mainflow_tri = {**mainflow_tri, **_confidence_payload(mainflow_tri)}
+    except Exception:  # noqa: BLE001
+        pass
+    return mainflow_tri
 
-            mainflow_tri = triangulate(symbol)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("mainflow_tri summary 失败 %s: %s", symbol, e)
-        try:
-            from src.core.confidence import payload as _confidence_payload
 
-            mainflow_tri = {**mainflow_tri, **_confidence_payload(mainflow_tri)}
-        except Exception:  # noqa: BLE001
-            pass
+def _compute_kline_summary(symbol: str, market_code: MarketCode) -> dict:
+    """真正重算 summary(冷启动链)。
 
-    result = {
+    2026-10-01 (B1 P2 首屏慢): 把四个**互不依赖**的重活并发化。原实现串行相加:
+        main_intent(逐笔翻页, 硬超时 12s) + dark_review + mainflow_tri
+        + layer(orderbook 硬超时 8s + wencai 硬超时 10s)
+      ⇒ 冷启动实测 ~26s, 超过前端 fetchAPI 的 20s abort ⇒ /portfolio sparkline 空列。
+    并发后冷启动 ≈ 最长的一条。各块内部逻辑与降级路径不变(返回值逐字段一致)。
+    """
+    collector = KlineCollector(market_code)
+    summary = collector.get_kline_summary(symbol)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        f_intent = ex.submit(_enrich_main_intent, symbol, market_code)
+        f_dark = ex.submit(_enrich_dark_clusters, symbol)
+        f_tri = ex.submit(_enrich_mainflow_tri, symbol, market_code)
+        f_layer = ex.submit(_build_layer_data, symbol, market_code)
+        main_intent, main_intent_structured = f_intent.result()
+        dark_clusters = f_dark.result()
+        mainflow_tri = f_tri.result()
+        layer = f_layer.result()
+
+    return {
         "symbol": symbol,
         "market": market_code.value,
         "summary": summary,
@@ -1126,18 +1192,55 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
         "main_intent_structured": main_intent_structured,
         # A4 置信度徽章(批次A)
         "mainflow_tri": mainflow_tri,
-        # P1 图层数据(2026-09-01): gs_signals / fund_flow / events
-        **_build_layer_data(symbol, market_code),
+        # P1 图层数据(2026-09-01): gs_signals / fund_flow / events / orderbook / chips / resonance
+        **layer,
         # A4 拆单簇暗盘(2026-09-01 接入 summary,前端资金面板双口径展示)
         "dark_clusters": dark_clusters,
     }
-    _summary_cache_set(cache_key, result)
-    # L2 落库(进程重启/容器迁移兜底, 失败永不抛)
-    try:
-        put_cached_summary(symbol, market_code.value, result, ttl_s=_SUMMARY_PG_TTL)
-    except Exception:  # noqa: BLE001
-        pass
-    return result
+
+
+@router.get("/{symbol}/summary")
+def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
+    """获取单只股票K线摘要
+
+    2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
+    2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
+       进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
+    2026-09-04: refresh=1 跳过 L1+L2 强制重算(数据源热切/补数后立即验证用)。
+    2026-10-01 (B1 P2 首屏慢): L1 从进程内 dict 迁到 biz_cache(L1 内存 + L2 Redis),
+       跨 worker 共享 + 重启不丢; 加 single-flight 防并发冷启动把线程池打满;
+       冷链四个重活并发化(见 _compute_kline_summary) —— 冷启动 ~26s → ~max(单条),
+       低于前端 fetchAPI 的 20s abort。命中顺序: biz_cache(内存→Redis) → PG → 重算。
+    """
+    market_code = _parse_market(market)
+    cache_key = f"summary:{market_code.value}:{symbol}"
+
+    # L1/L2: biz_cache(内存 + Redis); 命中秒回, 跨进程/重启共享(refresh 跳过)
+    if not refresh:
+        hit = biz_cache.get_json(cache_key)
+        if hit is not None:
+            return hit
+        # L3: PG 落库(进程重启/容器迁移兜底, 与 fundamentals-detail 同一持久层)
+        pg_hit = get_cached_summary(symbol, market_code.value, ttl_s=_SUMMARY_PG_TTL)
+        if pg_hit:
+            biz_cache.set_json(cache_key, pg_hit, ttl=_SUMMARY_TTL)
+            return pg_hit
+
+    # miss: single-flight —— 并发相同 symbol 只真正重算一次, 其余等锁后读缓存。
+    # (B1 实测 /portfolio 30s 后仍有多条请求 in-flight = 线程被 26s 冷链占死; 单飞止血。)
+    with _summary_lock(cache_key):
+        if not refresh:
+            hit = biz_cache.get_json(cache_key)
+            if hit is not None:
+                return hit
+        result = _compute_kline_summary(symbol, market_code)
+        biz_cache.set_json(cache_key, result, ttl=_SUMMARY_TTL)
+        # L3 落库(进程重启/容器迁移兜底, 失败永不抛)
+        try:
+            put_cached_summary(symbol, market_code.value, result, ttl_s=_SUMMARY_PG_TTL)
+        except Exception:  # noqa: BLE001
+            pass
+        return result
 
 
 @router.post("/summary/batch")

@@ -329,11 +329,13 @@ def test_summary_endpoint_exposes_resonance(monkeypatch):
     monkeypatch.setattr(postmarket_review, "dark_review_from_tck",
                         lambda symbol, date_=None, tck_path=None: {"available": False})
 
-    kapi._SUMMARY_CACHE.clear()
+    kapi.clear_summary_biz_cache()
+    kapi._clear_summary_caches()
     try:
         result = kapi.get_kline_summary("000977", market="CN")
     finally:
-        kapi._SUMMARY_CACHE.clear()
+        kapi.clear_summary_biz_cache()
+        kapi._clear_summary_caches()
 
     assert "resonance" in result
     _assert_contract(result["resonance"])
