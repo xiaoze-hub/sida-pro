@@ -163,7 +163,7 @@ export default function ReportsPage() {
               <Card key={jobId} variant="plain" className="p-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <div className="min-w-0">
-                    <h3 className="font-medium text-[13px] truncate">{jobName}</h3>
+                    <h3 title={jobName} className="font-medium text-[13px] truncate">{jobName}</h3>
                     <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-3">
                       <span className="flex items-center gap-1"><Hash className="w-3 h-3" />{t('reports.files', { n: files.length })}</span>
                       <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />
@@ -181,14 +181,14 @@ export default function ReportsPage() {
                     >
                       <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="text-[13px] truncate">
+                        <div className="text-[13px] truncate" title={it.title_preview || it.file}>
                           {it.title_preview || it.file}
                         </div>
                         <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5 min-w-0">
                           <span className="shrink-0">{formatDate(it.mtime_iso)}</span>
                           <span className="shrink-0">·</span>
                           <span className="shrink-0">{formatBytes(it.size)}</span>
-                          <span className="text-muted-foreground/60 truncate min-w-0">{it.file}</span>
+                          <span className="text-muted-foreground/60 truncate min-w-0" title={it.file}>{it.file}</span>
                         </div>
                       </div>
                       <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />

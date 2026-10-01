@@ -536,7 +536,7 @@ export function ToolkitDiagnostics({
                 <span className={`${ACTION_CLS[action] || 'text-muted-foreground'} w-20 shrink-0`}>
                   {action}
                 </span>
-                <span className="text-foreground/80 truncate flex-1 text-left">
+                <span className="text-foreground/80 truncate flex-1 text-left" title={`${h.method} (${h.symbol || '-'})${h.reason ? ` · ${h.reason}` : ''}${h.chars != null ? ` · ${h.chars} 字符` : ''}${h.source ? ` · ${h.source}` : ''}`}>
                   {h.method} ({h.symbol || '-'})
                   {h.reason && <span className="text-muted-foreground"> · {h.reason}</span>}
                   {h.chars != null && <span className="text-muted-foreground"> · {h.chars} 字符</span>}

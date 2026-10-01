@@ -40,7 +40,7 @@ export function AnnouncementsTab() {
             className="card block p-4 hover:bg-accent/20 transition-colors"
           >
             <div className="flex items-center justify-between gap-2">
-              <div className="text-[13px] font-medium text-foreground line-clamp-2">{item.title}</div>
+              <div className="text-[13px] font-medium text-foreground line-clamp-2" title={item.title}>{item.title}</div>
               <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">{item.source_label || item.source} · {formatTime(item.publish_time)}</div>

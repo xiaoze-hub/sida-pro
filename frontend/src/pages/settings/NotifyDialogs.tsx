@@ -64,7 +64,7 @@ export function NotifyDialogs() {
             title="点击复制链接"
           >
             <Copy className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate font-mono">{wechatQr.qrcode_url}</span>
+            <span className="truncate font-mono" title={wechatQr.qrcode_url}>{wechatQr.qrcode_url}</span>
           </button>
           {wechatQrStatus === 'waiting' && (
             <p className="flex items-center gap-2 text-[11px] text-muted-foreground">

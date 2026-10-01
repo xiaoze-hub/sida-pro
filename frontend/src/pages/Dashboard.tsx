@@ -707,7 +707,7 @@ export default function DashboardPage() {
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
                           {/* 2026-09-05 质感: 纯色10% → 左实右虚渐变，有“水位感” */}
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-up/25 to-stock-up/5 transition-all duration-500" style={{ width: `${Math.min(100, (b.net_inflow / maxIn) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
                           <span className="relative z-10 font-mono tabular-nums text-stock-up">+{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
@@ -724,7 +724,7 @@ export default function DashboardPage() {
                       return marketFlow.outflow_boards.map((b, bi) => (
                         <div key={b.name} className="relative flex justify-between overflow-hidden rounded text-[11px]">
                           <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-stock-down/25 to-stock-down/5 transition-all duration-500" style={{ width: `${Math.min(100, (Math.abs(b.net_inflow) / maxOut) * 100)}%`, transitionDelay: `${bi * 60}ms` }} />
-                          <span className="relative z-10 truncate px-1 text-muted-foreground">{b.name}</span>
+                          <span className="relative z-10 truncate px-1 text-muted-foreground" title={b.name}>{b.name}</span>
                           <span className="relative z-10 font-mono tabular-nums text-stock-down">{safeFixed(b.net_inflow, 1)}亿</span>
                         </div>
                       ))
@@ -789,7 +789,7 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{a.name || sym || '--'}</span>
+                        <span className="truncate text-[13px] font-medium" title={a.name || sym || '--'}>{a.name || sym || '--'}</span>
                         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sym}</span>
                         {a.is_today && (
                           <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">{t('dashboard.todayTag')}</span>
@@ -869,7 +869,7 @@ export default function DashboardPage() {
                     <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
-                    <span className="truncate">{t.message}</span>
+                    <span className="truncate" title={t.message}>{t.message}</span>
                   </div>
                 ))}
               </div>
@@ -897,7 +897,7 @@ export default function DashboardPage() {
                   >
                     <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium">{it.name || it.symbol}</div>
+                      <div className="truncate text-[13px] font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</div>
                       {it.why && <div className="truncate text-[11px] text-muted-foreground" title={it.why}>{it.why}</div>}
                     </div>
                     <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
@@ -1051,7 +1051,7 @@ export default function DashboardPage() {
                           }
                         />
                       </div>
-                      <span className="w-28 shrink-0 truncate text-right text-[11px]">
+                      <span className="w-28 shrink-0 truncate text-right text-[11px]" title={[item.name, pct(item.contribution_pct)].filter(Boolean).join(' ')}>
                         {item.name} <span className={`font-mono ${moveColor(item.contribution_pct)}`}>{pct(item.contribution_pct)}</span>
                       </span>
                     </div>
@@ -1125,7 +1125,7 @@ export default function DashboardPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-medium">{o.stock_name || o.stock_symbol}</span>
+                        <span className="truncate text-[13px] font-medium" title={o.stock_name || o.stock_symbol}>{o.stock_name || o.stock_symbol}</span>
                         {o.action_label && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">{o.action_label}</span>}
                       </div>
                       {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
@@ -1174,8 +1174,8 @@ export default function DashboardPage() {
                 >
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium">{r.title_preview || r.file}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">{formatReportTime(r.mtime_iso)}</div>
+                    <div className="truncate text-[12px] font-medium" title={r.title_preview || r.file}>{r.title_preview || r.file}</div>
+                    <div className="truncate text-[10px] text-muted-foreground" title={formatReportTime(r.mtime_iso)}>{formatReportTime(r.mtime_iso)}</div>
                   </div>
                 </button>
               ))}

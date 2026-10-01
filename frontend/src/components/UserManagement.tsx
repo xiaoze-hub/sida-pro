@@ -419,8 +419,8 @@ export default function UserManagement({ currentUser }: Props) {
                           onChange={() => toggleModel(m.id)}
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12px] font-medium text-foreground">{m.name}</span>
-                          <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                          <span className="block truncate text-[12px] font-medium text-foreground" title={m.name}>{m.name}</span>
+                          <span className="block truncate font-mono text-[10px] text-muted-foreground" title={`${m.model}${m.service_name ? ` · ${m.service_name}` : ''}`}>
                             {m.model}{m.service_name ? ` · ${m.service_name}` : ''}
                           </span>
                         </span>
@@ -484,7 +484,7 @@ export default function UserManagement({ currentUser }: Props) {
                             disabled={isDefault}
                             onChange={() => togglePerm(p.key)}
                           />
-                          <span className="flex-1 min-w-0 truncate">{p.label}</span>
+                          <span className="flex-1 min-w-0 truncate" title={p.label}>{p.label}</span>
                           {isDefault && (
                             <span className="flex-shrink-0 rounded-full border border-border/50 px-1.5 py-px text-[10px] text-muted-foreground">
                               角色默认

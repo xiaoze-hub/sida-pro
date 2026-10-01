@@ -602,7 +602,7 @@ export default function HeaderBand({
               size="sm"
             />
             <span className="font-mono text-[11px] text-muted-foreground">评分 {scoreText}</span>
-            <span className="truncate text-[11px]">{suggestion.signal}</span>
+            <span className="truncate text-[11px]" title={suggestion.signal}>{suggestion.signal}</span>
           </button>
           {/* T19: 持仓态未知时显式标注 —— 评分按**未持仓**口径算, 不把"未知"说成"未持仓"。 */}
           {positionUnknown ? (

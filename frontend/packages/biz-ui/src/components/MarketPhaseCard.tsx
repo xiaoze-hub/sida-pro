@@ -259,7 +259,7 @@ export default function MarketPhaseCard() {
       <div className={`border-l-2 ${style.border} pl-3 py-1 mb-3`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className={`text-[20px] font-bold ${style.text} leading-none tracking-tight truncate`}>
+            <div className={`text-[20px] font-bold ${style.text} leading-none tracking-tight truncate`} title={cur?.label || '积累中'}>
               {cur?.label || '积累中'}
             </div>
             {cur?.date ? (

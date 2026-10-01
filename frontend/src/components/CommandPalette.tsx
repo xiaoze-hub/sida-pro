@@ -316,7 +316,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               {it.type === 'stock' ? (
                 <>
                   <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.name}>{it.name}</span>
                   {i === active && (
                     <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-primary/80">
                       <Plus className="h-3 w-3" />
@@ -330,13 +330,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               ) : it.type === 'action' ? (
                 <>
                   <Zap className="h-4 w-4 shrink-0 text-[hsl(var(--role-opp))]" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
                   {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.hint}</span>}
                   <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{it.label}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
                   <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
                 </>
               )}

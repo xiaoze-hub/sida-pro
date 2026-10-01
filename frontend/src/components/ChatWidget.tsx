@@ -705,9 +705,9 @@ export default function ChatWidget() {
                 disabled={sending}
                 className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-1.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
               >
-                <div className="truncate text-[12px] text-foreground">{item.title}</div>
+                <div className="truncate text-[12px] text-foreground" title={item.title}>{item.title}</div>
                 {item.body && (
-                  <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{item.body}</div>
+                  <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground" title={item.body}>{item.body}</div>
                 )}
               </button>
             ))}
@@ -737,7 +737,7 @@ export default function ChatWidget() {
                 className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-accent/30 transition-colors border-b border-border/20"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13px] text-foreground truncate">
+                  <div className="text-[13px] text-foreground truncate" title={conv.title || '新对话'}>
                     {conv.title || '新对话'}
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">

@@ -74,11 +74,11 @@ function Cell({
           : 'text-foreground'
   return (
     <div className="min-w-0 px-2 py-1.5" title={title}>
-      <div className="truncate text-[10px] text-muted-foreground">{label}</div>
+      <div className="truncate text-[10px] text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
       <div className={`font-num tabular-nums text-[16px] font-semibold leading-tight ${toneCls}`}>
         {value}
       </div>
-      {sub && <div className="truncate text-[10px] text-muted-foreground">{sub}</div>}
+      {sub && <div className="truncate text-[10px] text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div>}
     </div>
   )
 }

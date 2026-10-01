@@ -216,28 +216,28 @@ function QuoteCard({ l2 }: { l2: L2Resp | null }) {
       <Row label="主力净额" value={fmtSignedAmount(m.zjl_hb)} />
       <div className="mt-1 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`b${i}`} className="truncate text-center text-[--stock-up]">
+          <div key={`b${i}`} className="truncate text-center text-[--stock-up]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
       <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.buyv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`bv${i}`} className="truncate text-center text-muted-foreground">
+          <div key={`bv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
           </div>
         ))}
       </div>
       <div className="mt-0.5 grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellp ?? []).slice(0, 5).map((p, i) => (
-          <div key={`s${i}`} className="truncate text-center text-[--stock-down]">
+          <div key={`s${i}`} className="truncate text-center text-[--stock-down]" title={lvl(p)}>
             {lvl(p)}
           </div>
         ))}
       </div>
       <div className="grid grid-cols-5 gap-0.5 text-[10px]">
         {(s.sellv ?? []).slice(0, 5).map((v, i) => (
-          <div key={`sv${i}`} className="truncate text-center text-muted-foreground">
+          <div key={`sv${i}`} className="truncate text-center text-muted-foreground" title={lvl(v)}>
             {lvl(v)}
           </div>
         ))}

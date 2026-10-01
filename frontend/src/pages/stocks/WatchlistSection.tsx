@@ -166,7 +166,7 @@ export function WatchlistSection() {
                     {/* 近 20 日走势: 没数据就不画(组件自己返回 null) */}
                     <Sparkline values={sparkCloses[stock.symbol]} source={sparkSources[stock.symbol]} className="shrink-0" />
                     <button
-                      className="text-[12px] text-muted-foreground truncate hover:text-primary"
+                      className="text-[12px] text-muted-foreground truncate hover:text-primary" title={stock.name}
                       onClick={(e) => { e.stopPropagation(); openStockDetail(stock.symbol, stock.market, stock.name, false) }}
                     >
                       {stock.name}

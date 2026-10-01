@@ -373,7 +373,7 @@ export default function ThemeMoodPage() {
                   active === it.block_code ? 'bg-accent/60' : ''
                 }`}
               >
-                <span className="truncate">
+                <span className="truncate" title={it.block_name || it.block_code}>
                   {it.block_name || it.block_code}
                   {it.core ? <span className="ml-1 rounded bg-stock-up/15 px-1 text-[10px] text-stock-up">核心</span> : null}
                 </span>

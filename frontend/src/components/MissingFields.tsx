@@ -74,7 +74,7 @@ export default function MissingFields({
         className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:text-foreground"
       >
         {open ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
-        <span className="truncate">
+        <span className="truncate" title={`${head}${summary ? ` · ${summary}` : ''}`}>
           {head}
           {summary ? ` · ${summary}` : ''}
         </span>

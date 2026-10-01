@@ -30,11 +30,11 @@ export default function Stat({
         className,
       )}
     >
-      <div className="truncate text-[10px] leading-tight text-muted-foreground">{label}</div>
-      <div className={cn('truncate font-num text-[16px] font-semibold leading-snug tabular-nums', tone)}>
+      <div className="truncate text-[10px] leading-tight text-muted-foreground" title={typeof label === 'string' ? label : undefined}>{label}</div>
+      <div className={cn('truncate font-num text-[16px] font-semibold leading-snug tabular-nums', tone)} title={typeof value === 'string' ? value : undefined}>
         {value}
       </div>
-      {sub ? <div className="truncate text-[10px] leading-tight text-muted-foreground">{sub}</div> : null}
+      {sub ? <div className="truncate text-[10px] leading-tight text-muted-foreground" title={typeof sub === 'string' ? sub : undefined}>{sub}</div> : null}
     </div>
   )
 }
