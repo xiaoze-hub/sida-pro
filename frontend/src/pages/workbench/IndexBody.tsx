@@ -263,7 +263,7 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
                       <div className="space-y-0.5">
                         {marketFlow.inflow_boards.map(b => (
                           <div key={b.name} className="flex justify-between text-[11px]">
-                            <span className="text-muted-foreground truncate">{b.name}</span>
+                            <span className="text-muted-foreground truncate" title={b.name}>{b.name}</span>
                             <span className="font-mono text-stock-up">{safeNum(b.net_inflow) !== null ? `+${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
                         ))}
@@ -276,7 +276,7 @@ export default function IndexBody({ symbol, refreshToken }: { symbol: string; re
                       <div className="space-y-0.5">
                         {marketFlow.outflow_boards.map(b => (
                           <div key={b.name} className="flex justify-between text-[11px]">
-                            <span className="text-muted-foreground truncate">{b.name}</span>
+                            <span className="text-muted-foreground truncate" title={b.name}>{b.name}</span>
                             <span className="font-mono text-stock-down">{safeNum(b.net_inflow) !== null ? `${safeFixed(b.net_inflow, 1)}亿` : '--'}</span>
                           </div>
                         ))}

@@ -60,7 +60,7 @@ function Row({ item, minSamples }: { item: CapabilityItem; minSamples?: number }
     <div>
     <div className="flex items-center gap-2 py-1 text-[12px]" title={`${item.reason}${eff ? ` · 路由生效源 ${eff.provider}` : ''}`}>
       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[item.status]}`} />
-      <span className="w-[92px] shrink-0 truncate">{item.label}</span>
+      <span className="w-[92px] shrink-0 truncate" title={item.label}>{item.label}</span>
       <span className={`w-[52px] shrink-0 ${STATUS_TEXT[item.status]}`}>{item.status_label}</span>
       <span className="w-[54px] shrink-0 text-muted-foreground">
         {item.enabled_count}源
@@ -133,7 +133,7 @@ export function CapabilityPill({ collapsed = false }: { collapsed?: boolean }) {
       className="mx-2 mb-1 flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-accent/60"
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${bad ? STATUS_DOT.degraded : STATUS_DOT.ok}`} />
-      <span className="min-w-0 truncate text-muted-foreground">
+      <span className="min-w-0 truncate text-muted-foreground" title={collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}>
         {collapsed ? `${s.ok}/${s.total}` : capabilitySummary(s)}
       </span>
     </button>

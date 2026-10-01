@@ -611,7 +611,10 @@ function EvolutionSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
               {shown.map((e, i) => (
             <li key={`${e.type ?? 'e'}-${String(e.ts ?? i)}-${i}`} className="flex items-baseline gap-1.5">
               <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground">{clockOf(e.ts)}</span>
-              <span className="min-w-0 flex-1 truncate">
+              <span
+                className="min-w-0 flex-1 truncate"
+                title={`${e.type ?? '--'} · ${e.side === 'bid' ? '买' : e.side === 'ask' ? '卖' : '--'}${e.price_level != null ? ` ${e.price_level}档` : ''} @${safeFixed(e.price, 2)} · ${safeInt(e.delta_hands)}手${e.duration_s != null ? ` / ${safeFixed(e.duration_s, 1)}s` : ''}${e.note ? ` · ${e.note}` : ''}`}
+              >
                 <span className="text-foreground">{e.type ?? '--'}</span>
                 <span className="text-muted-foreground">
                   {' · '}

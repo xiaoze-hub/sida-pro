@@ -185,11 +185,11 @@ export function FundamentalsPanel(props: {
                     <span className="shrink-0 rounded-full bg-accent/60 px-1.5 py-0.5 text-[10px] text-foreground/80">{item.event_type}</span>
                   )}
                   {item.url ? (
-                    <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-foreground/90 leading-snug hover:text-primary hover:underline line-clamp-2">
+                    <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-foreground/90 leading-snug hover:text-primary hover:underline line-clamp-2" title={title}>
                       {title}
                     </a>
                   ) : (
-                    <span className="text-[12px] text-foreground/90 leading-snug line-clamp-2">{title}</span>
+                    <span className="text-[12px] text-foreground/90 leading-snug line-clamp-2" title={title}>{title}</span>
                   )}
                 </div>
               )

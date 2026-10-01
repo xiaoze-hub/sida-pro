@@ -439,7 +439,7 @@ export function AccountsSection() {
                               {pos.symbol}
                             </span>
                             <button
-                              className="text-[12px] text-muted-foreground hover:text-primary truncate"
+                              className="text-[12px] text-muted-foreground hover:text-primary truncate" title={pos.name}
                               onClick={() => openStockDetail(pos.symbol, pos.market, pos.name, true)}
                             >
                               {pos.name}

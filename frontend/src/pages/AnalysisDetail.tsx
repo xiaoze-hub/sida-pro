@@ -291,6 +291,7 @@ export default function AnalysisDetailPage() {
             scrollTo(t.id)
             onAfter?.()
           }}
+          title={t.title}
           className={`block w-full text-left py-1 rounded-md transition-colors truncate ${
             t.level === 1 ? 'pl-5 pr-2 text-[12px]' : 'px-2'
           } ${
@@ -319,7 +320,7 @@ export default function AnalysisDetailPage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <h1 className="text-[20px] md:text-[20px] font-bold truncate min-w-0">{result.title || `${symbol} 深度分析`}</h1>
+            <h1 title={result.title || `${symbol} 深度分析`} className="text-[20px] md:text-[20px] font-bold truncate min-w-0">{result.title || `${symbol} 深度分析`}</h1>
             <span className="text-[12px] text-muted-foreground shrink-0">{date}</span>
             <button
               onClick={() => setShareOpen(true)}
@@ -365,7 +366,7 @@ export default function AnalysisDetailPage() {
                 className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-md border border-border/50 bg-card/95 backdrop-blur text-[13px] font-medium shadow-sm"
               >
                 <List className="w-4 h-4 shrink-0" />
-                <span className="truncate">{currentTitle || '目录'}</span>
+                <span title={currentTitle || '目录'} className="truncate">{currentTitle || '目录'}</span>
                 <ChevronDown
                   className={`w-4 h-4 ml-auto shrink-0 transition-transform ${tocOpen ? 'rotate-180' : ''}`}
                 />

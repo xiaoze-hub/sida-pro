@@ -49,7 +49,7 @@ export function MyServicesSection() {
               <Cpu className="w-3.5 h-3.5 text-primary flex-shrink-0" />
               <div className="min-w-0">
                 <span className="text-[12px] font-medium text-foreground">{svc.name}</span>
-                <p className="text-[10px] text-muted-foreground truncate font-mono">{svc.base_url}</p>
+                <p className="text-[10px] text-muted-foreground truncate font-mono" title={svc.base_url}>{svc.base_url}</p>
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">

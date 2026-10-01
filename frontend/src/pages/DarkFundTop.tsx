@@ -292,7 +292,7 @@ export default function DarkFundTopPage() {
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[10px] text-muted-foreground">#{i + 1}</span>
                         <span className="font-mono text-[13px] text-primary font-medium">{r.symbol}</span>
-                        <span className="text-[12px] text-foreground truncate">{r.name ?? '-'}</span>
+                        <span className="text-[12px] text-foreground truncate" title={r.name ?? '-'}>{r.name ?? '-'}</span>
                       </div>
                       <div className="mt-1 text-[10px] text-muted-foreground">{r.source}</div>
                     </div>

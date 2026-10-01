@@ -186,7 +186,7 @@ export default function StrategyLibraryDialog({
                       {it.ui_badge}
                     </span>
                   </div>
-                  <p className="text-xs text-muted-foreground line-clamp-2 min-h-[2.5em]">
+                  <p className="text-xs text-muted-foreground line-clamp-2 min-h-[2.5em]" title={it.description}>
                     {it.description}
                   </p>
                   <div className="flex items-center gap-2 mt-3 flex-wrap">

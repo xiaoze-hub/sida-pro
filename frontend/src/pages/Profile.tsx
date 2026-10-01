@@ -312,7 +312,7 @@ export function Profile() {
               ].map(row => (
                 <div key={row.k} className="flex items-center justify-between gap-3 text-[12px]">
                   <span className="text-muted-foreground">{row.k}</span>
-                  <span className="font-medium text-foreground truncate">{row.v}</span>
+                  <span className="font-medium text-foreground truncate" title={row.v}>{row.v}</span>
                 </div>
               ))
             )}

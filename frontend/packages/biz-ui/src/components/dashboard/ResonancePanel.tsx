@@ -118,7 +118,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
               onClick={() => navigate(`/quote/${it.symbol}`)}
               className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
             >
-              <span className="w-[70px] shrink-0 truncate font-medium">{it.name || it.symbol}</span>
+              <span className="w-[70px] shrink-0 truncate font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</span>
               <span className="w-[58px] shrink-0 font-mono text-[11px] text-muted-foreground">{it.symbol}</span>
               <span className={`w-[46px] shrink-0 text-right font-mono ${(it.change_pct ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                 {it.change_pct == null ? '--' : `${it.change_pct > 0 ? '+' : ''}${safeFixed(it.change_pct, 2)}%`}

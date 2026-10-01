@@ -68,7 +68,7 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
       className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[10px] text-foreground/80">{s.name}</span>
+      <span className="w-full truncate text-center text-[10px] text-foreground/80" title={s.name}>{s.name}</span>
       <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
       {s.tag ? (
         <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
@@ -183,7 +183,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
         </div>
         {cols.map((d) => (
           <div key={d.date} className="w-[170px] shrink-0">
-            <div className="mb-1 truncate text-[10px] font-medium text-foreground/85">
+            <div className="mb-1 truncate text-[10px] font-medium text-foreground/85" title={fmtISODate(d.date)}>
               {fmtISODate(d.date)}
               {d.provisional ? <span className="ml-1 text-primary">盘中</span> : null}
             </div>

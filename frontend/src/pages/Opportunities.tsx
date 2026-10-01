@@ -1796,7 +1796,7 @@ export default function OpportunitiesPage() {
                             clickable ? 'hover:bg-accent cursor-pointer' : 'cursor-default'
                           }`}
                         >
-                          <span className="truncate">
+                          <span className="truncate" title={`${code} ${name}`}>
                             <span className="text-muted-foreground mr-1">{code}</span>
                             <span className="font-medium text-foreground">{name}</span>
                           </span>
@@ -2072,8 +2072,8 @@ export default function OpportunitiesPage() {
               >
                 <span className={`text-[10px] text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate flex items-center gap-1.5">
-                    <span className="truncate">{item.stock_name || item.stock_symbol}</span>
+                  <div className="text-[13px] font-semibold truncate flex items-center gap-1.5" title={item.stock_name || item.stock_symbol}>
+                    <span className="truncate" title={item.stock_name || item.stock_symbol}>{item.stock_name || item.stock_symbol}</span>
                     {/* P1: 多源共振火焰 */}
                     {resCount >= 2 && (
                       <span
@@ -2092,9 +2092,9 @@ export default function OpportunitiesPage() {
                   </SignalChip>
                 </div>
                 <div className={`hidden md:block text-right text-[12px] font-mono font-medium ${score >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>{score}</div>
-                <div className="hidden md:block text-[12px] font-mono font-semibold truncate">{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
-                <div className="hidden md:block text-[12px] font-mono text-stock-down truncate">{formatPlanPrice(stopLoss)}</div>
-                <div className="hidden md:block text-[12px] font-mono text-stock-up truncate">{formatPlanPrice(targetPrice)}</div>
+                <div className="hidden md:block text-[12px] font-mono font-semibold truncate" title={formatEntryDisplay(item.action, entryLow, entryHigh)}>{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
+                <div className="hidden md:block text-[12px] font-mono text-stock-down truncate" title={formatPlanPrice(stopLoss)}>{formatPlanPrice(stopLoss)}</div>
+                <div className="hidden md:block text-[12px] font-mono text-stock-up truncate" title={formatPlanPrice(targetPrice)}>{formatPlanPrice(targetPrice)}</div>
                 <div className="hidden md:flex items-center gap-1 min-w-0">
                   {badgeSources.slice(0, 2).map((s) => (
                     <span key={s} className="inline-flex items-center px-1.5 py-0 rounded-full bg-primary/10 text-primary text-[10px]">

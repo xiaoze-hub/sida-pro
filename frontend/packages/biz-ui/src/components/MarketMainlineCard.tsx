@@ -109,7 +109,7 @@ function MainlineRow({
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-foreground truncate">{g.name}</span>
+            <span className="text-[13px] font-semibold text-foreground truncate" title={g.name}>{g.name}</span>
             <span className={`text-[10px] tabular-nums font-mono ${tone.text}`}>
               {g.score != null ? g.score.toFixed(1) : '--'}
             </span>
@@ -166,7 +166,7 @@ function MainlineRow({
                   }`}
                   title={`${c.name}(${c.code}) ${c.days}板 成交${fmtYi(c.amount)}`}
                 >
-                  <span className="font-medium truncate max-w-[64px]">{c.name}</span>
+                  <span className="font-medium truncate max-w-[64px]" title={c.name}>{c.name}</span>
                   {c.days > 1 ? (
                     <span className="text-[10px] font-mono text-stock-up shrink-0">
                       {c.days}B

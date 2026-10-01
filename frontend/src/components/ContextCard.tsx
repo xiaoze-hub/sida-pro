@@ -463,7 +463,7 @@ function Field({ label, value, tone, hint }: {
   return (
     <div className="min-w-0" title={hint}>
       <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className={`truncate font-mono ${
+      <div title={value} className={`truncate font-mono ${
         tone === 'up' ? 'text-stock-up' : tone === 'down' ? 'text-stock-down' : 'text-foreground'
       }`}>{value}</div>
     </div>

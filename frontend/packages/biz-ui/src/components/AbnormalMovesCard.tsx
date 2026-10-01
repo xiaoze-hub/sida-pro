@@ -189,7 +189,7 @@ function Row({ row, onOpen }: RowProps) {
 
       {/* 名称 + 板块 + 来源 */}
       <div className="min-w-0">
-        <div className="text-[12px] font-medium text-foreground truncate">{row.name || row.symbol}</div>
+        <div className="text-[12px] font-medium text-foreground truncate" title={row.name || row.symbol}>{row.name || row.symbol}</div>
         <div className="text-[10px] text-muted-foreground flex items-center gap-1">
           <span>{row.board_name || '—'}</span>
           {row.source && row.source !== 'watchlist' ? (
@@ -199,7 +199,7 @@ function Row({ row, onOpen }: RowProps) {
       </div>
 
       {/* 最接近的窗口规则 */}
-      <span className="text-[10px] text-muted-foreground font-mono truncate">
+      <span className="text-[10px] text-muted-foreground font-mono truncate" title={worstLabel(row)}>
         {worstLabel(row)}
       </span>
 

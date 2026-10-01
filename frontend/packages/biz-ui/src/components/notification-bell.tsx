@@ -191,10 +191,10 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
                   <span className="flex-1 min-w-0">
                     <span className="flex items-center gap-1.5">
                       {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 flex-shrink-0" />}
-                      <span className="text-[13px] font-medium text-foreground truncate">{n.title}</span>
+                      <span className="text-[13px] font-medium text-foreground truncate" title={n.title}>{n.title}</span>
                     </span>
                     {n.body && (
-                      <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2">{n.body}</span>
+                      <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2" title={n.body}>{n.body}</span>
                     )}
                     <span className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground/70">
                       <span>{timeAgo(n.created_at)}</span>

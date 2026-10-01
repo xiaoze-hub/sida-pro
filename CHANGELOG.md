@@ -1,3 +1,35 @@
+### fix-全站截断文本补 title（悬停看全）（2026-10-01）
+
+B1 UI 走查 P3-2: 全站 **192**(`/notifications`)+**14**(`/analysis` 左侧目录)+ theme-mood / history
+/ settings 各 1 处，以及其它页面同类元素 —— `text-overflow: ellipsis` / `truncate` / `line-clamp`
+的文本元素**既无 `title` 也无 `aria-label`**：鼠标悬停看不到全称，用户只能猜。
+
+**改法（纯前端，只加属性，不改任何视觉/尺寸/配色）**
+- **组件层优先**（本次主要落点，一次修覆盖多页）: Stat / KpiBand / SectionHeader / notification-bell /
+  MarketMainlineCard / NewsTab / AnnouncementsTab / FundamentalsPanel / AbnormalMovesCard /
+  MarketPhaseCard / ResonancePanel / BoardBody / QuickRail / HeaderBand / deep-analysis-modal /
+  logs-modal / LadderBoard / stock-price-alert-panel / MissingFields / JobPanel / SelfCheckModal /
+  DiscoveryPanel / UserManagement / ChatWidget / DataCapabilities / ContextCard / CommandPalette /
+  StrategyLibraryDialog —— 截断元素补 `title`，值 = **完整文本**。
+- **页面**: Notifications（标题/正文/渠道摘要）、AnalysisDetail（目录按钮/页标题/移动端吸顶条）、
+  ThemeMood、History、Reports、settings/*（base_url/描述/模型名）、Dashboard、Opportunities、
+  Profile、ErrorLog、DarkFundTop、IndexBody、AccountsSection、WatchlistSection、L2Tab、App 侧栏导航。
+- `ReactNode` 型值（`Stat.value`、`KpiBand.label` 等非纯 string）用 `typeof x === 'string' ? x : undefined`
+  守卫，避免 TS2322。
+
+**不动（设计有意 / 越界）**
+- `Forecast.tsx` 3 处 truncate 属**其它任务的禁区文件**，本次未碰（留给该任务）。
+- `App.tsx` 品牌名「数智分析」为静态固定文案，截断无信息损失 → 不加 `title`。
+- `/admin` 8 处 与 `theme-mood` 8 处「元素右缘越界」= `min-w-[860px]` 宽表 / `w-max` 日期矩阵，
+  均包在 `overflow-x-auto` 容器内（页面级 `scrollWidth == innerWidth`）→ **设计内横滚**，不动。
+
+**验证（真实输出）**
+- `cd frontend && npx tsc -b` → **exit 0**；`node scripts/check_ui_rules.mjs` → **UI-RULES OK**。
+- `npx vitest run` 全量 → **108 files / 808 passed**（基线 799 + 新增 9），无新增失败。
+- 新增 `tests/components/truncated-text-title.test.tsx`（9 例）：DOM 断言截断元素 `title` 存在且
+  **逐字等于完整文本**（超长夹具证明确非可见片段），并对 `/notifications`、`/analysis`、`/history`、
+  `/reports`、`/settings` 做源级契约断言，防回归。
+
 ### perf-summary 冷启动 26s→10s + 修 L2 大载荷缓存静默丢弃（B1 P2 首屏慢）（2026-10-01）
 
 B1 走查: `GET /api/klines/{symbol}/summary` 冷调 25s 撞第一屏, 导致 `/portfolio` 自选股

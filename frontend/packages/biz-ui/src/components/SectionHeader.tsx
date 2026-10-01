@@ -19,7 +19,7 @@ export default function SectionHeader({
     <div className={cn('mb-2 flex items-center justify-between gap-2', className)}>
       <div className="flex min-w-0 items-center gap-2">
         <span className="h-3.5 w-[3px] shrink-0 rounded-full bg-primary/80" aria-hidden />
-        <span className="truncate text-[13px] font-semibold text-foreground">{title}</span>
+        <span className="truncate text-[13px] font-semibold text-foreground" title={title}>{title}</span>
       </div>
       {action ? <div className="flex shrink-0 items-center gap-1.5">{action}</div> : null}
     </div>

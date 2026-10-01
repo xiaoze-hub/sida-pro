@@ -502,7 +502,7 @@ function App() {
                         }`}
                       >
                         <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-primary' : ''}`} />
-                        {!sidebarCollapsed && <span className="truncate">{label}</span>}
+                        {!sidebarCollapsed && <span className="truncate" title={label}>{label}</span>}
                       </NavLink>
                     )
                   })}
