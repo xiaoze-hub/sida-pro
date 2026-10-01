@@ -1,3 +1,37 @@
+### fix-auth-bearer 测试顺序隔离（CI Backend pytest shard 3/4 确定性 3 例 401）（2026-10-01）
+
+CI `Backend pytest shard 3/4` 稳定红 3 例：`tests/test_auth_bearer_priority.py` 的
+`test_bearer_wins_over_cookie` / `test_cookie_alone_still_works` /
+`test_invalid_bearer_does_not_fall_back_to_cookie` 全部在 `_login(admin)` 处拿
+`401「用户名/邮箱或密码错误」`（单跑该文件 5 passed；重跑 CI 同样 3 例红 ⇒ **确定性**）。
+
+**根因（已复现 + 证据）**：测试**顺序污染**，非本轮代码。
+- 上游 `tests/test_invite_codes.py`（shard 3 内，排在 auth_bearer **之前**）建了
+  `iv_test_owner_v1`（`role=owner`）等 `iv*` 用户，module teardown 只清了
+  `invite_*` / `register_mode`，**没清用户行** ⇒ 库里残留一个 owner。
+- `test_auth_bearer_priority` 旧 fixture 只 `purge_users(only_username="admin")`，而登录端点
+  `auth.get_or_create_owner()` **只要库里存在任意 owner 就短路返回**，不再按 env 重建
+  `admin` ⇒ admin 用户被删后没人补建 ⇒ 登录 401。
+- 复现组合：`pytest tests/test_invite_codes.py tests/test_auth_bearer_priority.py` →
+  `3 failed, 16 passed`（与 CI 逐字一致）；单独跑该文件 → `5 passed`。
+- 为何 v0.13.42 不红：分片按文件用例数 LPT 贪心，v0.13.43 新增
+  `tests/test_orderbook_ob_endpoint.py`(11 例) 使 auth_bearer 名次 209→210，
+  `210 % 4 == 2` ⇒ 从**片 2** 落到**片 3**，与 invite_codes 同片。分片分布是本次
+  触发面，**不改** `.github/`。
+
+**改法**
+- `tests/test_auth_bearer_priority.py`（主修，自洽化）：fixture 先清**所有 owner**
+  （含 admin），再**显式** `get_or_create_owner(db)` 按 env 重建 —— 不再依赖
+  "库中唯一 owner 就是 admin" 的隐含前提，也不依赖 import app 的惰性引导；无论上游
+  跑过什么，每个用例都在同一初始态。断言强度不变（仍真实验 Bearer 优先 / 不回退 Cookie）。
+- `tests/test_invite_codes.py`（污染源，顺手治根）：module teardown 补一行，把本模块
+  建的 `iv*` 用户经 `tests.conftest.purge_users` 一并清掉。
+
+**实测（worktree `/home/ubuntu/wt/authfix`）**：单跑该文件 5 passed；
+复现组合 `test_invite_codes.py + test_auth_bearer_priority.py` 19 passed；
+**按 shard 3 文件清单+顺序全跑 86 文件** 全过（详见提交报告）；`py_compile` OK；
+`scripts/check_is_pg_scope.py` OK。不改 `.github/`、不发版、不打 tag。
+
 ### fix-orderbook-ob 上游瞬时抖动治理（B1 P2 间歇 502）（2026-10-01）
 
 B1 走查: `/stocks/002361` 命中过一次 `GET /api/orderbook-ob` **502 Bad Gateway**(复现时 4s 内 200)
