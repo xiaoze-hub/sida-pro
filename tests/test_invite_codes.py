@@ -42,6 +42,19 @@ def _ensure_db():
         db.execute(text("DELETE FROM invite_codes WHERE created_by = :o OR note LIKE 'IVTEST%'"), {"o": _OWNER})
         db.execute(text("DELETE FROM app_settings WHERE key = 'register_mode'"))
         db.commit()
+
+        # 2026-10-01: **用户行也要清** —— 本模块建的 `iv_test_owner_v1` 是 owner,
+        # 留着会让下游用例登录端点的 `get_or_create_owner` 命中"已存在 owner"而
+        # **短路**, 不再按 env 重建 admin ⇒ 下游 admin 登录 401。
+        # CI shard 3 因此确定性红: test_auth_bearer_priority 3 例
+        # (v0.13.43 新增 test_orderbook_ob_endpoint 改了分片分布, 把这两个文件
+        #  排进了同一片)。注册用例顺手建的 `iv*` 成员一并清, 免得库越跑越脏。
+        from src.web.models import User
+        from tests.conftest import purge_users
+
+        stale_ids = [str(u.id) for u in db.query(User).filter(User.username.like("iv%")).all()]
+        if stale_ids:
+            purge_users(db, ids=stale_ids)
     finally:
         db.close()
 

@@ -23,7 +23,22 @@ ADMIN_PW = "admin-test-0606"
 
 @pytest.fixture()
 def client(monkeypatch):
-    """引导 owner(env 凭据), 返回一个 TestClient(自带 Cookie jar)。"""
+    """引导 owner(env 凭据), 返回一个 TestClient(自带 Cookie jar)。
+
+    2026-10-01 自洽化(CI shard 3 确定性红的根因修复): 本用例只依赖**自己**摆好的
+    身份状态, 不依赖同 shard 上游测试跑过什么。
+
+    旧写法只 `purge_users(only_username="admin")` 就返回, 隐含假定"库里的 owner
+    只有 admin"。但登录端点是 `get_or_create_owner()` —— 只要库中**存在任意一个
+    owner** 就直接返回它。上游若有测试写了一个 owner 且**不清理**(如
+    `tests/test_invite_codes.py` 的 `iv_test_owner_v1`), 本夹具把 admin 删掉后
+    owner 仍在 ⇒ `get_or_create_owner` 命中残留 owner **短路**, 不再按 env 重建
+    admin ⇒ `admin` 登录 401「用户名/邮箱或密码错误」(3 例全红)。
+
+    修法: 先把**所有 owner**(含 admin 本身)清干净, 再**显式**按 env 重建 owner;
+    无论前面跑过什么, 本夹具都把库收敛到同一初始态, 且不靠"import app 时的惰性
+    引导"这种隐式时序。断言强度不变 —— 仍在真实验 Bearer 优先/不回退 Cookie。
+    """
     monkeypatch.setattr("src.web.middleware.RATE_LIMIT_ENABLED", False)
     monkeypatch.setenv("AUTH_USERNAME", ADMIN_USER)
     monkeypatch.setenv("AUTH_PASSWORD", ADMIN_PW)
@@ -35,7 +50,17 @@ def client(monkeypatch):
     try:
         from tests.conftest import purge_users
 
-        purge_users(db, only_username=ADMIN_USER)
+        # 所有 owner(残留 owner 会让 get_or_create_owner 短路) + 名为 admin 的账号
+        # (可能残留旧口令哈希) 一并清掉, 再重建。
+        stale_ids = {str(u.id) for u in db.query(User).filter(User.role == "owner").all()}
+        stale_ids |= {str(u.id) for u in db.query(User).filter(User.username == ADMIN_USER).all()}
+        if stale_ids:
+            purge_users(db, ids=sorted(stale_ids))
+
+        # 显式重建 owner(env 凭据); 不再依赖 import app 的惰性引导副作用。
+        from src.web.api.auth import get_or_create_owner
+
+        get_or_create_owner(db)
     finally:
         db.close()
 
