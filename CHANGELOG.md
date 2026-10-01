@@ -1,3 +1,33 @@
+### fix-orderbook-ob 上游瞬时抖动治理（B1 P2 间歇 502）（2026-10-01）
+
+B1 走查: `/stocks/002361` 命中过一次 `GET /api/orderbook-ob` **502 Bad Gateway**(复现时 4s 内 200)
+—— 上游 thsdk/TQ 网关**间歇故障**, 但页面不该把上游抖动显示成 5xx。
+
+**定位(证据)**: `src/web/api/orderbook.py::get_orderbook_ob` 此前直接同步调
+`orderbook_engine.run()`(5 快照, 每快照走 `fetch_snapshot` 内 **3 轮退避**, 单次可卡 30s
+—— 实测 thsdk `-6 请求超时`)。抛异常的分支本就被 `except` 兜住返回 200, **真正漏网的是挂住不返回**:
+单次请求可达 90s+(既有 KI-030「/api/orderbook-ob 93s 慢响应」) ⇒ 拖垮反代读超时 ⇒ 502。
+
+**改法**(`src/web/api/orderbook.py`, 对齐 `klines.py::_build_orderbook` 既有姿势)
+- **硬超时护栏**: `call_with_hard_timeout` 包裹 `run()`, 单次上限 `_HARD_TIMEOUT_S=12s`
+  (挂死线程仍占 thsdk 并发槽, 见 `thsdk_breaker`), 上游卡死不再阻塞反代。
+- **有限次重试 + 退避**: `_RETRY_ATTEMPTS=2`(首次 + 1 次重试), 退避 `_RETRY_BACKOFF_S=0.5s`。
+- **显式降级**: 重试仍失败 → 200 + `available:false` + 真实 `note` + `source`/`as_of`,
+  **绝不**把上游抖动变成页面 502。
+- **快照兜底**: 有本地 `.img` 离线快照时优先用其兜底, 并显式标注 `source:"img"` + `as_of`
+  (快照时间) + note「离线快照非实时」, 不拿陈旧值冒充实时。
+- **成功路径逐字段不变**(不新增 source/as_of, 避免影响既有消费方)。
+
+**测试** 新增 `tests/test_orderbook_ob_endpoint.py`(11 例, 全 mock, 零真实网络): ①成功路径逐字段
+一致 ②首次失败重试成功(断言 run 调用 2 次) ③重试仍失败显式降级非 5xx ④上游挂死硬超时有界(<1.2s)
+⑤空序列降级 ⑥⑦降级/快照兜底 `source`+`as_of` 已标注 ⑧thsdk 缺失降级 ⑨端点级失败返回 **HTTP 200**
+⑩端点级成功逐字段一致 ⑪6 位代码归一。
+
+**实测**: `pytest tests/test_orderbook_ob_endpoint.py` 11 passed;
+`pytest -k "orderbook or l2 or quotes"` 100 passed(6 failed 均为 `test_dark_l2_engine.py` /
+`thsdk_alert` 因本机**未装 thsdk** 的既有环境失败, 已在 `origin/main` `9c6af6b` 复现同一 6 例, 非本轮引入);
+`py_compile` OK; `scripts/check_is_pg_scope.py` OK。不发版、不打 tag。
+
 ### perf-summary 冷启动 26s→10s + 修 L2 大载荷缓存静默丢弃（B1 P2 首屏慢）（2026-10-01）
 
 B1 走查: `GET /api/klines/{symbol}/summary` 冷调 25s 撞第一屏, 导致 `/portfolio` 自选股
