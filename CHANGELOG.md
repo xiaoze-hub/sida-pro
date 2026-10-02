@@ -1,3 +1,7 @@
+### docs-TQ 切换面审计覆盖清单落地状态标注（2026-10-02）
+
+`docs/TQ切换面审计_20260924.md` 追加「〇·复核 落地状态」节（基线 `main=v0.13.45` / `a35cbc9`），对 §一/§二 覆盖清单逐项标注「已做 / 不接（不碰）」并给出落地位置。本次实际新改动仅三项：§二-3 `market_capital_flow` TQ 备源、§二-7 `dragon_tiger` registry 层 TQ、§一 `get_financial_data_by_date`；其余为先前版本落地或审计已判「不接」（不接项本次不碰）。审计正文保持原样，不改口径。
+
 ### feat-接入 TQ get_financial_data_by_date(按年度专业财务数据)（2026-10-02）
 
 `docs/TQ切换面审计_20260924.md` 覆盖清单第 ③ 项(此前未接)。新增 `marketdata.vendors.tq.financial_data_by_date(tables, code, year)`，封装网关 `get_financial_data_by_date`（与既有 `financial_data` 配套：后者按日期区间 + report_type，本接口按**年度**，用于精确回补某一年历史财务不扰动历史窗口）。网关契约实测为 `table_list[]` + `code` + `year`（**不是** start_time/end_time）。缺参（表/代码/年度任一为空）→ `{}` 且**不发起 RPC**（不猜当前年）；元数据键(ErrorId/Error/run_id)剔除、空表(Value:null)过滤（**不补 0**）；网关故障**原样抛**，不与「无数据」混淆（与同模块 `financial_data` 一致，符合 AGENTS「缺数据/故障显式区分」）。测试 `tests/test_tq_financial_by_date.py`（全离线 mock）。
