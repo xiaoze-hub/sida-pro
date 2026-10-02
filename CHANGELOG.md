@@ -1,3 +1,7 @@
+### feat-接入 TQ get_financial_data_by_date(按年度专业财务数据)（2026-10-02）
+
+`docs/TQ切换面审计_20260924.md` 覆盖清单第 ③ 项(此前未接)。新增 `marketdata.vendors.tq.financial_data_by_date(tables, code, year)`，封装网关 `get_financial_data_by_date`（与既有 `financial_data` 配套：后者按日期区间 + report_type，本接口按**年度**，用于精确回补某一年历史财务不扰动历史窗口）。网关契约实测为 `table_list[]` + `code` + `year`（**不是** start_time/end_time）。缺参（表/代码/年度任一为空）→ `{}` 且**不发起 RPC**（不猜当前年）；元数据键(ErrorId/Error/run_id)剔除、空表(Value:null)过滤（**不补 0**）；网关故障**原样抛**，不与「无数据」混淆（与同模块 `financial_data` 一致，符合 AGENTS「缺数据/故障显式区分」）。测试 `tests/test_tq_financial_by_date.py`（全离线 mock）。
+
 ### feat-registry 补 TQ 备源: dragon_tiger + market_capital_flow（2026-10-02）
 
 补齐 `docs/TQ切换面审计_20260924.md` §二 覆盖清单最后两项 registry 缺口（**只做备源/注册，不动主源优先级**）。

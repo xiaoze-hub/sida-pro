@@ -1175,6 +1175,26 @@ def financial_data(tables: list[str], code: str, *, start_time: str = "",
             if k not in ("ErrorId", "Error", "run_id") and x}
 
 
+def financial_data_by_date(tables: list[str], code: str, year) -> dict:
+    """按**指定年度**取专业财务数据(get_financial_data_by_date, 与 financial_data 配套)。
+
+    用于精确回补某一年的历史财务: `financial_data` 走日期区间(report_type 决定按截止日/
+    公告日), 本接口走**年度**, 网关契约(实测自曝)是 ``table_list[]`` + ``code`` + ``year``
+    —— ⚠️ key 是 `year` 不是 start_time/end_time(references/api-contracts 标定)。
+
+    返回 {表名: 数据}; 空表/失败元数据剔除(不补 0)。year 必填(缺 → {}, 不猜当前年);
+    网关异常**原样抛**(与同模块 financial_data 一致: "{}"=无数据 ≠ 故障)。
+    """
+    if not tables or not code or year in (None, ""):
+        return {}
+    params = {"table_list": list(tables), "code": code, "year": str(year)}
+    v = _rpc("get_financial_data_by_date", params, timeout=max(_TIMEOUT_S, 30.0))
+    if not isinstance(v, dict):
+        return {}
+    return {k: x for k, x in v.items()
+            if k not in ("ErrorId", "Error", "run_id") and x}
+
+
 def zdt_snapshot(codes: list[str]) -> dict:
     """涨跌停快照(当日)。每只返回 14 字段:
 
