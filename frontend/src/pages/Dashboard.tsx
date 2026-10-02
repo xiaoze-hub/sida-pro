@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SafeMarkdown from '@/components/SafeMarkdown'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
@@ -169,6 +169,23 @@ const MARKET_BAR_CLS: Record<string, string> = {
   HK: 'bg-orange-500',
 }
 
+// ── perf(2026-10-02) 首屏渲染缓存 ──────────────────────────────────────────────
+// 首页父组件状态极多(30s 轮询 / 数据源错误横幅 / 看板定制 / 分享弹窗 / 右键菜单 ...),
+// 任一变更都会重渲染整棵树。下列区块各自带取数 + 画布/重列表, 入参只来自自己的数据(或空),
+// 与父组件的无关状态无关 —— 用 memo 钉住, 无关变更时不重渲染(照 404c2d5 深度分析页 memo LayerKline)。
+// 注: KpiBand 依赖的 `phase` 对象已在 usePhaseLabel 内 useMemo 稳定, 否则 memo 恒失效。
+const KpiBandMemo = memo(KpiBand)
+const MarketPhaseCardMemo = memo(MarketPhaseCard)
+const MarketMainlineCardMemo = memo(MarketMainlineCard)
+const BreadthDistributionChartMemo = memo(BreadthDistributionChart)
+const FlowHistoryChartMemo = memo(FlowHistoryChart)
+const ResonancePanelMemo = memo(ResonancePanel)
+const DiscoveryPanelMemo = memo(DiscoveryPanel)
+
+/** perf(2026-10-02): 慢车道(基准/归因, 分钟级)错峰延迟 —— 让首屏关键请求先占住后端单 worker
+ *  的队列/浏览器连接池。见 load() 内「错峰」注释。 */
+const SLOW_LANE_DELAY_MS = 1200
+
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { t } = useI18n()
@@ -243,9 +260,19 @@ export default function DashboardPage() {
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
   // P1(audit-20260915): Promise.allSettled 回调需 alive 守卫(仿下方 curate 模式), 卸载后不再 setState
   const benchAliveRef = useRef(true)
+  /** perf(2026-10-02): 慢车道错峰定时器(卸载/重复 load 时清理) */
+  const benchTimerRef = useRef<number | null>(null)
+  /** perf(2026-10-02): load 并发序号 —— 丢弃过期响应(竞态守卫, 见 load 内注释) */
+  const loadSeqRef = useRef(0)
   useEffect(() => {
     benchAliveRef.current = true
-    return () => { benchAliveRef.current = false }
+    return () => {
+      benchAliveRef.current = false
+      if (benchTimerRef.current !== null) {
+        window.clearTimeout(benchTimerRef.current)
+        benchTimerRef.current = null
+      }
+    }
   }, [])
   const loadBench = useCallback(() => {
     setBenchState('loading')
@@ -262,32 +289,39 @@ export default function DashboardPage() {
   }, [])
 
   const load = useCallback(async (opts?: { skipBench?: boolean }) => {
+    // perf(2026-10-02) 竞态守卫: 手动刷新/错误重试/30s 轮询可能重叠(此前无序号, 先发后到的
+    // 旧响应会覆盖新数据 —— 例如刷新后旧 overview 又把列表打回旧值)。每次 load 取一个序号,
+    // 落地前校验; 过期的响应一律丢弃(含错误横幅, 不产生幽灵报错)。
+    const seq = ++loadSeqRef.current
+    const stale = () => seq !== loadSeqRef.current
     setLoading(true)
     setSourceErrors([])  // 清空上次错误
     // 指数 pills:独立加载不阻塞首屏(spark 冷启动可能 ~1s,数据到了自然浮现)
-    dashboardApi.indices().then(setIndices).catch((err) => pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load))
+    dashboardApi.indices().then((v) => { if (!stale()) setIndices(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load) })
     // 大盘资金流(同花顺源):独立加载,失败聚合到全局横幅
-    dashboardApi.marketCapitalFlow().then(setMarketFlow).catch((err) => pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load))
+    dashboardApi.marketCapitalFlow().then((v) => { if (!stale()) setMarketFlow(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load) })
     // 最新报告(Hermes cron):独立加载,失败静默;cacheMode reload 保证 30s 轮询必拿新数据
     setReportsLoading(true)
     reportsApi
       .list({ limit: 8, cacheMode: 'reload' })
-      .then((r) => setReports((r.items || []).slice(0, 4)))
+      .then((r) => { if (!stale()) setReports((r.items || []).slice(0, 4)) })
       .catch((err) => {
+        if (stale()) return
         setReports([])
         pushError(t('dashboard.errorSources.reports'), err?.message || t('common.serviceUnavailable'), load)
       })
-      .finally(() => setReportsLoading(false))
+      .finally(() => { if (!stale()) setReportsLoading(false) })
     // 异动池(东财):独立加载,失败静默(端点未就绪时优雅降级为空态)
     setAnomaliesLoading(true)
     dashboardApi
       .anomalies({ limit: 10 })
-      .then((r) => setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)))
+      .then((r) => { if (!stale()) setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)) })
       .catch((err) => {
+        if (stale()) return
         setAnomalies([])
         pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), load)
       })
-      .finally(() => setAnomaliesLoading(false))
+      .finally(() => { if (!stale()) setAnomaliesLoading(false) })
     // 快车道:DB/轻量查询,先让首屏(要紧事/体检分布)尽快出来
     const [sc, ov, dg, ht, td, ms] = await Promise.allSettled([
       dashboardApi.intradayScan(),
@@ -297,6 +331,7 @@ export default function DashboardPage() {
       homeApi.todos(),
       dashboardApi.marketStatus(),
     ])
+    if (stale()) return  // 已被更新的一轮 load 取代 → 丢弃本轮全部结果
     if (sc.status === 'fulfilled') setScan(sc.value.stocks || [])
     if (ov.status === 'fulfilled') setOverview(ov.value)
     if (dg.status === 'fulfilled') setDiag(dg.value)
@@ -317,19 +352,31 @@ export default function DashboardPage() {
     if (ov.status !== 'fulfilled' || !ov.value.action_center?.opportunities?.length) {
       recommendationsApi
         .listStrategySignals({ status: 'active', limit: 5 })
-        .then((r) => setOppFallback(r.items || []))
-        .catch((err) => pushError(t('dashboard.errorSources.oppFallback'), err?.message || t('common.serviceUnavailable'), load))
+        .then((r) => { if (!stale()) setOppFallback(r.items || []) })
+        .catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.oppFallback'), err?.message || t('common.serviceUnavailable'), load) })
     }
 
     // 慢车道:基准/归因需拉全持仓 K 线(分钟级),独立加载,就绪后回填超额/归因。
     // 30s 自动刷新跳过(避免每分钟级重请求 + 图表反复"计算中"),仅首载/手动刷新触发
-    if (!opts?.skipBench) loadBench()
+    //
+    // perf(2026-10-02) 错峰: 后端单个 worker 串行处理首屏 ~18 个请求, 分钟级的慢车道若与
+    // 关键画布(市场温度 /market/phase、涨跌分布)同刻挤入队列, 会直接把画布的 settle 拖到十几秒
+    // (B1 走查: 冷态 14.3s 才稳)。这里把慢车道推迟到首屏请求之后(1.2s 宏任务)再起 ——
+    // 不改变它自身语义(仍是独立的 loading/ready/empty/error 占位), 只是不再抢首屏的连接/队列。
+    if (!opts?.skipBench) {
+      if (benchTimerRef.current !== null) window.clearTimeout(benchTimerRef.current)
+      benchTimerRef.current = window.setTimeout(() => {
+        benchTimerRef.current = null
+        if (benchAliveRef.current) loadBench()
+      }, SLOW_LANE_DELAY_MS)
+    }
 
 
     // 自选股列表(判断盘前标的是否已加自选)
     stocksApi.list().then((rows) => {
+      if (stale()) return
       setWatchSymbols(new Set((rows || []).map((s) => `${s.market}:${s.symbol}`)))
-    }).catch((err) => pushError(t('dashboard.errorSources.watchlist'), err?.message || t('common.serviceUnavailable'), load))
+    }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.watchlist'), err?.message || t('common.serviceUnavailable'), load) })
   }, [loadBench, t])
 
   // 盘前标的快捷加入自选
@@ -508,7 +555,14 @@ export default function DashboardPage() {
     return Math.max(...attribution.map((a) => Math.abs(a.contribution_pct)), 0.01)
   }, [attribution])
 
-  // v0.4.6 KPI 带: 情绪阶段标签 + 主线 Top1(轻量拉取, 与下方完整卡错峰复用缓存)
+  // perf(2026-10-02): ResonancePanel 的 actions 元素此前每次渲染都新建 → memo 恒失效(入参引用变)。
+  // 固定引用后, 无关状态变更不再重渲染共振区。
+  const resonanceScanAction = useMemo(
+    () => <ScanJobButton path="/resonance/scan/run" title={t('dashboard.resonanceScan')} />,
+    [t],
+  )
+
+  // v0.4.6 KPI 带: 情绪周期标签 + 主线 Top1(轻量拉取, 与下方完整卡错峰复用缓存)
   const phaseKpi = usePhaseLabel()
   const mainlineKpi = useMainlineTop1()
 
@@ -626,7 +680,7 @@ export default function DashboardPage() {
       {/* v0.4.6 KPI 带(借鉴 TSP): 数字优先 6 格, 一眼看全市场状态 */}
       {shown('kpi') && (
       <div style={{ order: orderIndex(layout, 'kpi') }}>
-      <KpiBand
+      <KpiBandMemo
         upCount={marketFlow?.up_count ?? null}
         downCount={marketFlow?.down_count ?? null}
         mainFlowYi={marketFlow?.total_main_flow ?? null}
@@ -643,8 +697,8 @@ export default function DashboardPage() {
       {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
       {shown('overview') && (
       <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
-        <MarketPhaseCard />
-        <MarketMainlineCard />
+        <MarketPhaseCardMemo />
+        <MarketMainlineCardMemo />
         {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
         <PhaseGaugeCard />
       </div>
@@ -692,7 +746,7 @@ export default function DashboardPage() {
             </div>
 
           {/* v0.4.7: 日内主力净流入面积图(30s 快照序列) */}
-          <FlowHistoryChart />
+          <FlowHistoryChartMemo />
 
           {/* 板块资金明细: 流入榜 / 流出榜 */}
           {(marketFlow.inflow_boards?.length || marketFlow.outflow_boards?.length) ? (
@@ -739,7 +793,7 @@ export default function DashboardPage() {
       {/* 三指标共振(2026-09-11 数智决策升级 B): 盘后全市场扫描落库结果 */}
       {shown('resonance') && (
         <div style={{ order: orderIndex(layout, 'resonance') }} className="mt-5 border-t border-border/60 pt-3">
-          <ResonancePanel actions={<ScanJobButton path="/resonance/scan/run" title={t('dashboard.resonanceScan')} />} />
+          <ResonancePanelMemo actions={resonanceScanAction} />
         </div>
       )}
       </div>{/* /A1 main 区 */}
@@ -818,7 +872,7 @@ export default function DashboardPage() {
         {shown('breadth') && (
         <div style={{ order: orderIndex(layout, 'breadth') }} className="border-t border-border/60 pt-2.5">
           <SectionHeader title={t('dashboard.breadth')} action={<span className="text-[10px] text-muted-foreground">{t('dashboard.breadthScope')}</span>} />
-          <BreadthDistributionChart />
+          <BreadthDistributionChartMemo />
         </div>
         )}
       </div>
@@ -1189,7 +1243,7 @@ export default function DashboardPage() {
 {/* 机会发现(次级,右;1280px 以下整行) */}
         {shown('discover') && (
         <div style={{ order: orderIndex(layout, 'discover') }} className="lg:col-span-12 xl:col-span-6">
-          <DiscoveryPanel monitorStocks={scan} onOpenStock={openStock} />
+          <DiscoveryPanelMemo monitorStocks={scan} onOpenStock={openStock} />
         </div>
         )}
       </div>
@@ -1272,8 +1326,14 @@ type PhaseGaugeState =
 /** 仪表盘与各态占位共用高度: 空/失败态也占满一格, 不留死白也不跳版 */
 const GAUGE_BOX_CLS = 'flex h-[154px] items-center justify-center px-3 text-center text-[11px] text-muted-foreground'
 
-/** 导出供单测覆盖三态(失败不得渲染成"无数据"/不得常驻"同步中") */
-export function PhaseGaugeCard() {
+/** 市场温度卡 —— 自带 /market/phase 取数 + canvas。
+ *
+ *  perf(2026-10-02): memo 化。它无 props, 但此前每次父组件(首页)状态变更都会跟着重渲染 ——
+ *  首页 30s 轮询、数据源错误横幅、看板定制、分享弹窗等无关状态的任何一次变更, 都会把这块
+ *  画布区块连同 154px 占位重画一遍。memo 后仅自身 30s 定时器/重试驱动刷新。
+ *
+ *  导出供单测覆盖三态(失败不得渲染成"无数据"/不得常驻"同步中") */
+function PhaseGaugeCardInner() {
   const [state, setState] = useState<PhaseGaugeState>({ kind: 'loading' })
   const aliveRef = useRef(true)
 
@@ -1342,3 +1402,5 @@ export function PhaseGaugeCard() {
     </div>
   )
 }
+
+export const PhaseGaugeCard = memo(PhaseGaugeCardInner)

@@ -98,6 +98,23 @@ export interface ApiRequestOptions extends RequestInit {
 const _RESP_CACHE = new Map<string, { ts: number; data: unknown }>()
 const _CACHE_TTL_DEFAULT = 30_000 // 30s
 
+/**
+ * 2026-10-02 首屏并发化: 同一 GET 的**在途**请求合并(single-flight)。
+ *
+ * 背景(B1 首页冷态走查代码定位): 首页「市场温度」被 3 个组件各打一次 `/market/phase`
+ * (`usePhaseLabel` / `MarketPhaseCard` / `PhaseGaugeCard`), 「主线 Top1」被 2 个组件各打一次
+ * `/market/mainline` —— 冷启动时它们与首屏其余 15+ 个请求一起争抢浏览器**同域连接池**
+ * (HTTP/1.1 默认 6 条), 关键画布(`/market/phase`)实际排在自己的重复请求后面。
+ * 与既有 30s 响应缓存同一取舍(GET 幂等): 并发同键**共享一次真实请求**, 响应回来后各调用方
+ * 拿到同一份 data; 在途合并只在“上游还没回”这段窗口内生效, 不改变缓存 TTL 语义。
+ *
+ * 跳过条件(任一):
+ *   - `cacheMode:'reload' | false` —— 调用方显式要新数据(如实时端点/手动刷新);
+ *   - 自带 `signal` —— 取消权归调用方, 共享会让一方 abort 影响另一方;
+ *   - 非 GET(ckey 为 null)。
+ */
+const _INFLIGHT = new Map<string, Promise<unknown>>()
+
 function _cacheKey(path: string, options?: ApiRequestOptions): string | null {
   if (!options || options.method === undefined || options.method === 'GET' || options.method === null) {
     return `${getToken()?.slice(0, 8) || 'anon'}:${path}`
@@ -149,6 +166,35 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
     }
   }
 
+  // 2026-10-02: 在途同键合并(见 _INFLIGHT 注释)。仅对“可缓存 GET”生效。
+  const dedupable =
+    !!ckey && options?.cacheMode !== 'reload' && options?.cacheMode !== false && !options?.signal
+  if (dedupable) {
+    const inflight = _INFLIGHT.get(ckey as string)
+    if (inflight) return inflight as Promise<T>
+  }
+
+  const p = _fetchNow<T>(path, options, headers, ckey)
+  if (dedupable) {
+    const key = ckey as string
+    _INFLIGHT.set(key, p as Promise<unknown>)
+    const cleanup = () => {
+      if (_INFLIGHT.get(key) === (p as Promise<unknown>)) _INFLIGHT.delete(key)
+    }
+    // .then(cleanup, cleanup) 而非 .finally: finally 派生的 promise 在拒绝时无人处理
+    // 会冒 unhandled rejection; then 双分支返回的 promise 一定 resolved。
+    void (p as Promise<unknown>).then(cleanup, cleanup)
+  }
+  return p
+}
+
+/** fetchAPI 的实际取数(与在途合并解耦, 便于同键共享同一份 promise)。 */
+async function _fetchNow<T>(
+  path: string,
+  options: ApiRequestOptions | undefined,
+  headers: Record<string, string>,
+  ckey: string | null,
+): Promise<T> {
   const timeoutController = options?.signal ? null : new AbortController()
   const timeoutMs = typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
     ? options.timeoutMs
@@ -215,9 +261,12 @@ export async function fetchAPI<T>(path: string, options?: ApiRequestOptions): Pr
   return body.data
 }
 
-/** 2026-08-12: 清空前端响应缓存(登出/手动刷新时调用) */
+/** 2026-08-12: 清空前端响应缓存(登出/手动刷新时调用)
+ *  2026-10-02: 一并清掉在途合并表 —— 登出/显式刷新语义上是「别再复用这一轮的结果」,
+ *  在途项被移除后, 新调用会重新发起真实请求(在途的旧 promise 仍会 resolve 给原调用方)。 */
 export function clearResponseCache() {
   _RESP_CACHE.clear()
+  _INFLIGHT.clear()
 }
 
 export const apiClient = {
