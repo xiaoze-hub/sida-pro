@@ -1,3 +1,7 @@
+### test-修正东财分红 vendor 存量失效用例(基线预存红)（2026-10-02）
+
+`packages/marketdata/tests/test_market_flow.py::TestDividend::test_parses_full_history` 在 **main=v0.13.45 基线即为红**（非本次改动引入，已在未改动 main 上复现）：用例仍按改动前的旧口径断言 —— ① `PRETAX_BONUS_RMB` 是**每10股**派息、`DividendItem.dividend_per_share` 契约是**每股**，代码已 `/10`（实测标定 002361：0.5 ↔ “10派0.50元”），用例仍期望未除的值；② 转增字段名报表真实是 `IT_RATIO`（代码已改用），用例 fixture 仍写 `TRANSFER_RATIO`。本次把用例 fixture/期望对齐到**已上线代码**（**加强、非减弱**断言：新增 /10 契约注释与字段名注释）。仅测试文件，不动 vendor 逻辑。
+
 ### docs-TQ 切换面审计覆盖清单落地状态标注（2026-10-02）
 
 `docs/TQ切换面审计_20260924.md` 追加「〇·复核 落地状态」节（基线 `main=v0.13.45` / `a35cbc9`），对 §一/§二 覆盖清单逐项标注「已做 / 不接（不碰）」并给出落地位置。本次实际新改动仅三项：§二-3 `market_capital_flow` TQ 备源、§二-7 `dragon_tiger` registry 层 TQ、§一 `get_financial_data_by_date`；其余为先前版本落地或审计已判「不接」（不接项本次不碰）。审计正文保持原样，不改口径。
