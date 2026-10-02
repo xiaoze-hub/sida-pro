@@ -1,3 +1,34 @@
+### feat-.img 盘口帧入库（版本化迁移）+ `/api/orderbook-ob/img` 显式错误态（2026-10-02）
+
+把校准后的 `.img` 逐帧十档盘口 + 委托队列**落库**并**暴露 API**，收口遗留 A2
+「`.img` 生产无消费方」。
+
+**入库**（新增 `src/core/img_orderbook_store.py` + 迁移 `src/web/migrations.py`）
+- schema 变更**唯一入口**是版本化迁移 `Migration(181, "img_orderbook_frames", ...)`
+  （`scripts/check_migrations.py` 通过：v101–v181 连续）；运行时**不**建表/加列。
+- 表 `img_orderbook_frames` 唯一键 `(user_id, market, symbol, trade_date, seq)`：
+  `seq` = 源文件内帧序 —— 实测 .img 存在**同秒多帧**（5066 帧里 22 处 0s 间隔），
+  只用 `as_of` 会丢帧（120 帧 fixture 只剩 115）；`trade_date` 进唯一键规避 l2_ticks
+  的裁剪列教训。
+- **多用户隔离**：每行带 `user_id`，读路径 `load_frames` / `latest_frame` **强制**按
+  `user_id` 过滤（不隐式跨用户）；测试覆盖「A 入库、B 读不到」。
+- `source` / `as_of` 随行落库；缺失一律 **NULL 不补 0**（0 是有意义的挂单量）。
+- `ingest_img_file()` + CLI（`python -m src.core.img_orderbook_store ...`）；缺文件 /
+  文件名无交易日 / 缺代码 / 容器损坏 全部**显式降级**（`available:false` + 真实 note），
+  永不抛。
+
+**API**（`src/web/api/orderbook.py` 新增 `GET /api/orderbook-ob/img`）
+- 顺序：入库帧（user_id 隔离）→ 本地 `PANWATCH_IMG_DIR` 下 `.img` → 显式「无数据」。
+- **错误态显式**：`available` / `source`（`img` 入库 / `img-file` 文件兜底）/ `as_of` /
+  `note` 全标注；`as_of` 支持取历史帧（≤ 该时间的最近一帧）；缺档一律「无数据」，
+  **不补 0**。
+- 路由 `/img` 声明在 `/{symbol}` **之前**，不被路径参数吞掉（测试：缺 symbol → 422）。
+- **不回归**：既有 `/api/orderbook-ob`（v0.13.43 硬超时 + 有限次重试 + 显式降级）逐字段
+  不变，`tests/test_orderbook_ob_endpoint.py` 全绿。
+
+测试：`tests/test_img_ingest_api.py`（迁移 / 幂等重导 / user 隔离 / 缺失态降级 /
+NULL 保真 / API 错误态 / 路由优先级 / 既有端点不回归），全离线（内存 SQLite + fixture）。
+
 ### feat-.img 十档盘口解析器真实样本校准 + 多帧切片规则（2026-10-02）
 
 `src/core/tdx_img_parser.py` 顶部 4 条「待校准」字节层假设，用**真实样本**逐条实测 ——
