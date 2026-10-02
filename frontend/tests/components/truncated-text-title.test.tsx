@@ -134,7 +134,9 @@ describe('截断文本的 title 契约(源级 · 重数据页)', () => {
   it('深度分析目录: 目录按钮 + 页标题 + 移动端吸顶条都补了 title', () => {
     const s = src('src/pages/AnalysisDetail.tsx')
     expect(s).toMatch(/title=\{t\.title\}[\s\S]{0,120}className=\{`block w-full text-left[\s\S]{0,80}truncate/)
-    expect(s).toMatch(/title=\{result\.title \|\| `\$\{symbol\} 深度分析`\}/)
+    // perf(2026-10-02): 页标题在加载期即渲染(result 可能为 null) → result?.title;
+    // 截断 + title 兜底的契约不变(仅 nullable 取值)。
+    expect(s).toMatch(/title=\{result\?\.title \|\| `\$\{symbol\} 深度分析`\}/)
     expect(s).toMatch(/title=\{currentTitle \|\| '目录'\}/)
   })
 
