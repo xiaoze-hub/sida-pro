@@ -135,6 +135,11 @@ class MarketCapitalFlow:
     net_inflow: float | None = None             # 全市场净额(亿)
     board_count: int = 0                        # 参与汇总的板块数
     source: str = ""                            # 数据源
+    # 口径标签(契约 src/core/caliber.py, 2026-10-02 补): 大盘资金同个股/板块资金类,
+    # 返回值须带 caliber + direction_semantics; 下游据此决定能否做方向性判定
+    # (TQ/同花顺=L2/主力口径=ths, 非逐笔 → 禁用于主力意图判定)。空=未标注按 unknown。
+    caliber: str = ""
+    direction_semantics: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
 
 

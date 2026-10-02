@@ -59,8 +59,10 @@ from marketdata.vendors.tq import (
     TqBoardCapitalFlowVendor,
     TqCapitalFlowVendor,
     TqDividendVendor,
+    TqDragonTigerVendor,
     TqKlineVendor,
     TqMarginVendor,
+    TqMarketFlowVendor,
     TqMoreInfoVendor,
     TqQuoteVendor,
     TqShareholdersVendor,
@@ -103,6 +105,7 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
     },
     "market_capital_flow": {
         "ths_market_flow": ThsMarketFlowVendor,
+        "tq": TqMarketFlowVendor,
     },
     "events": {
         "eastmoney": EventsVendor,
@@ -127,6 +130,7 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
     "dragon_tiger": {
         "eastmoney": EastmoneyDragonTigerVendor,
         "ftshare": FtshareDragonTigerVendor,
+        "tq": TqDragonTigerVendor,
     },
     "margin": {
         "eastmoney": EastmoneyMarginVendor,

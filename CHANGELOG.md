@@ -1,3 +1,12 @@
+### feat-registry 补 TQ 备源: dragon_tiger + market_capital_flow（2026-10-02）
+
+补齐 `docs/TQ切换面审计_20260924.md` §二 覆盖清单最后两项 registry 缺口（**只做备源/注册，不动主源优先级**）。
+
+- **dragon_tiger**: 新增 `TqDragonTigerVendor`（GP02/08/09/17/18 龙虎榜序列 → `DragonTigerItem`，**万元→元 ×1e4**，与东财 `BILLBOARD_*_AMT` 同口径）并入 registry（`packages/marketdata/src/marketdata/registry.py`）+ seed（priority 8，东财 0 / FTShare 5 之后）。⚠️ TQ **无市场级「某日全部上榜」枚举接口**（GP02 是个股序列，遍历全市场 5577 只不可行）→ 该 vendor 为**候选池驱动**（`config["symbols"]` 给候选，典型=个股长序列场景），候选为空返回空**不伪造榜单**（AGENTS 禁编造）。
+- **market_capital_flow**: 新增 `TqMarketFlowVendor`（全 881 行业板块 SUPAMO 主力资金求和 → 大盘净额亿）并入 registry + seed（priority 2，同花顺 0 之后）。**资金类硬约束**：返回值带 `caliber="ths"` + `direction_semantics`（`src/core/caliber.py`），`MarketCapitalFlow` 补该两字段；非 tick 口径过 `require_directional` 抛 `CaliberViolationError`，口径冲突一律优先逐笔。单位与同模块 `TqBoardCapitalFlowVendor` 同一读数（万元→亿 ÷1e4），保证「大盘=板块净额之和」内部一致；TQ 只给净额 → `total_inflow/outflow` 留空（不补 0）。
+- **权威表对齐**：`packages/marketdata/tests/test_registry.py` 的 `PACKAGE_VENDORS_BY_TYPE` 期望值此前已随 A-1/A-2/A-3/A-5 漂移（capital_flow/board_capital_flow/margin/shareholders/dividend 早带 tq 而表未同步，长期红），本次对齐到 registry 实况（**加强、非减弱**断言）。
+- 测试 `tests/test_tq_fallback_dragon_flow.py`（全离线 mock 网关）：龙虎榜万元→元 / 裸码归一 / 窗口外剔除 / 无候选不伪造 / 网关异常回退；大盘资金全行业求和 / 口径标签契约 / 冲突优先逐笔 / 无数据不补 0 / 公式异常回退；registry + seed 接线；Engine 链路端到端 fallback。
+
 ### perf-dashboard 首页 `/` 首屏加载链并发化 + 渲染缓存（2026-10-02）
 
 Dashboard 首页(`/`)首屏可感知等待优化。**无生产实测数据**（B1 走查产物已被缓存清理删除，不在本机），

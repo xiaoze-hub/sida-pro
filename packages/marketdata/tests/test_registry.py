@@ -9,22 +9,26 @@ from marketdata.registry import VENDOR_CLASSES_BY_TYPE, build_vendors
 
 
 def test_package_vendors_by_type_content():
-    """内容必须与 marketdata 包当前注册的 vendor 完全一致(2026-08-09 实抓 registry 校准)。"""
+    """内容必须与 marketdata 包当前注册的 vendor 完全一致(2026-10-02 实抓 registry 校准)。
+
+    历史遗留: 本表在 TQ 备源(A-1/A-2/A-3/A-5 等)落地后未同步, 曾长期与 registry 漂移;
+    2026-10-02 一次性对齐, 并随 dragon_tiger/market_capital_flow 的 TQ 备源再校准。
+    """
     assert PACKAGE_VENDORS_BY_TYPE == {
         "quote": frozenset({"alphavantage", "eastmoney", "sina", "tencent", "ths", "tq", "twelvedata", "yfinance"}),
         "kline": frozenset({"eastmoney", "stooq", "tencent", "ths", "tq", "yahoo", "zhitu"}),
-        "capital_flow": frozenset({"eastmoney", "sina", "tencent"}),
-        "board_capital_flow": frozenset({"ths_flow"}),
-        "market_capital_flow": frozenset({"ths_market_flow"}),
+        "capital_flow": frozenset({"eastmoney", "sina", "tencent", "tq"}),
+        "board_capital_flow": frozenset({"ths_flow", "tq"}),
+        "market_capital_flow": frozenset({"ths_market_flow", "tq"}),
         "events": frozenset({"eastmoney"}),
         "flash_news": frozenset({"cls", "eastmoney", "sina", "ths"}),
         "news": frozenset({"xueqiu", "eastmoney_news", "eastmoney"}),
         "fundamentals": frozenset({"eastmoney", "tencent", "ths_f10", "zhitu"}),
-        "dragon_tiger": frozenset({"eastmoney", "ftshare"}),
-        "margin": frozenset({"eastmoney", "ftshare"}),
+        "dragon_tiger": frozenset({"eastmoney", "ftshare", "tq"}),
+        "margin": frozenset({"eastmoney", "ftshare", "tq"}),
         "more_info": frozenset({"tq"}),
-        "shareholders": frozenset({"eastmoney", "zhitu"}),
-        "dividend": frozenset({"eastmoney", "zhitu"}),
+        "shareholders": frozenset({"eastmoney", "tq", "zhitu"}),
+        "dividend": frozenset({"eastmoney", "tq", "zhitu"}),
         "northbound": frozenset({"ths"}),
     }
 

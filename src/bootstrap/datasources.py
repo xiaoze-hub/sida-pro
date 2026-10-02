@@ -317,6 +317,20 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "test_symbols": [],
         },
         {
+            "name": "通达信TQ龙虎榜",
+            "type": "dragon_tiger",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(GP02/08/09/17/18 龙虎榜序列, 万元→元)。**备源**: 东财/FTShare "
+                "取不到时接管, 与端点已有的个股融合路径同口径。⚠️ TQ 无市场级「某日全部上榜」枚举接口, "
+                "需 config.symbols 给候选标的(个股长序列场景); 候选为空则返回空(不伪造榜单)。",
+            },
+            "enabled": True,
+            "priority": 8,  # 东财(0)/FTShare(5)之后的 TQ 备源
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
             "name": "东财融资融券",
             "type": "margin",
             "provider": "eastmoney",
@@ -500,6 +514,20 @@ DATA_SOURCE_SEEDS: list[dict] = [
             },
             "enabled": True,
             "priority": 0,
+            "supports_batch": False,
+            "test_symbols": [],
+        },
+        {
+            "name": "通达信TQ大盘资金",
+            "type": "market_capital_flow",
+            "provider": "tq",
+            "config": {
+                "description": "通达信TQ(SUPAMO 全行业板块主力资金求和, 万元→亿)。**备源**: 解同花顺单点。"
+                "⚠️ 口径=L2/主力(ths), 带 caliber+direction_semantics, 禁用于主力意图判定; "
+                "TQ 只给净额 → total_inflow/total_outflow 留空(不补 0)。",
+            },
+            "enabled": True,
+            "priority": 2,  # 同花顺(0)之后的 TQ 备源
             "supports_batch": False,
             "test_symbols": [],
         },
