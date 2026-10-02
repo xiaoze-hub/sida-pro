@@ -1,6 +1,8 @@
 """TQ 条件选股信号 API(2026-09-25)。
 
 暴露 `tq_formula_signal_daily`: 每个条件选股公式的**全市场当日触发家数** + 近 N 日基线。
+`GET /batch`(2026-10-02)为**按需批量执行**: 给定公式集 × (全市场 | 指定池) 直接返回命中
+清单, 不落库(引擎见 `src/collectors/tq_formula_batch.py`)。
 
 口径 / 来源: 通达信客户端 TQ 网关条件选股(`formula_process_mul_xg`, 108 个公式),
 采集见 `src/collectors/tq_formula_signals.py`, 调度见 `src/core/tq_formula_signal_scheduler.py`。
@@ -53,6 +55,58 @@ def formula_signals(days: int = Query(20, ge=1, le=120)) -> dict:
         out["note"] = ("暂无采集数据(调度器每交易日 15:50 写入); "
                        "非「今日无信号」")
     biz_cache.set_json(key, out, ttl=_CACHE_TTL)
+    return out
+
+
+@router.get("/batch")
+def formula_signals_batch(
+    formulas: str = Query(
+        ...,
+        description="公式集, 逗号分隔; 每个可带参数写成 `代码:参数`(如 `UPN:3`), 不带参数则为空参",
+    ),
+    date: str = Query("", description="交易日(YYYYMMDD 或 ISO); 缺省=今天; 非交易日不扫并显式提示"),
+    codes: str = Query("", description="可选标的池(逗号分隔); 缺省=全市场"),
+    formula_arg: str = Query("", description="统一默认参数(公式未单独带 `:arg` 时生效)"),
+    chunk: int = Query(0, ge=0, le=500, description="分片大小; 0=用默认 TQ_SCAN_CHUNK(500)"),
+    limit: int = Query(500, ge=1, le=5000, description="每公式返回的命中数上限(超出只截断展示, 计数不受影响)"),
+) -> dict:
+    """**按需**批量执行: 公式集 × (全市场 | 指定池) → 每公式命中清单, 不落库。
+
+    与 `/api/formula-signals`(读定时采集落库的家数+基线)互补: 这里直接对**给定公式集**
+    全市场/指定池扫一遍, 返回命中标的。
+
+    诚实性(硬约束, 与定时采集同口径):
+      · 分片失败**不当作 0 命中** —— 该公式 `complete=False` 且 `missing_chunks` 列出缺哪片;
+      · 非交易日**不扫**, 返回 `skipped=true` + `note`;
+      · `date_has_data=false` 表示该日无数据行(请求日≠有效数据日), 与「当日无票触发」不是一回事。
+
+    ⚠️ 全市场 × N 公式每公式约 24s, 接口为**同步长请求**, 公式数上限见 `MAX_BATCH_FORMULAS`。
+    """
+    from src.collectors.tq_formula_batch import MAX_BATCH_FORMULAS, _normalize_formulas, run_formula_batch
+
+    raw_specs = []
+    for token in (formulas or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        code, _, arg = token.partition(":")
+        raw_specs.append({"code": code.strip(), "arg": arg.strip() or formula_arg})
+    specs = _normalize_formulas(raw_specs)
+    if not specs:
+        raise HTTPException(400, "formulas 为空: 需给出至少一个公式代码")
+    if len(specs) > MAX_BATCH_FORMULAS:
+        raise HTTPException(400, f"公式数 {len(specs)} 超过上限 {MAX_BATCH_FORMULAS}")
+
+    pool = [c.strip() for c in (codes or "").split(",") if c.strip()] or None
+    out = run_formula_batch(
+        specs, trade_date=date, codes=pool, chunk=(chunk or None),
+    )
+    # 展示上限: 只截断 hits 列表, **不动 hit_count**(计数是全池真实命中数)。
+    for f in out.get("formulas") or []:
+        if len(f.get("hits") or []) > limit:
+            f["hits_truncated"] = True
+            f["hits_total"] = f["hit_count"]
+            f["hits"] = f["hits"][:limit]
     return out
 
 
