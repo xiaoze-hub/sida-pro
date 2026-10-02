@@ -1,3 +1,39 @@
+### perf-analysis-detail 首屏加载链并发化 + 正文渲染缓存（2026-10-02）
+
+深度分析详情页 `/analysis/:symbol/:date` 首屏可感知等待优化。**无生产实测数据**（B1 走查产物
+`uiwalk/` 在本机不存在），结论全部来自代码审查 + 本地可重复探针（mock 延迟单测 / 本机 TestClient）。
+
+**根因（本地证据）**
+1. 整页 early-return「加载中」：页面外壳与 K 线主图都被 `/agents/tradingagents/analysis` 请求门控，
+   主图要等分析返回后**才挂载** → K线/图层取数与分析请求**串行**（探针时间线：旧代码 33ms 才 mount，
+   且发生在我们 resolve 分析之后；新代码 12ms 首帧即 mount）。
+2. 正文/目录未缓存：`buildAnalysisSections` + `parseHeadings` 每次渲染都重跑（一次加载内实测 4 次），
+   而滚动联动经 IntersectionObserver 频繁 `setActiveId` → **每次滚动重解析整页 markdown**
+   （34 表探针：一次无关状态变更重渲染 **183ms**）。
+3. 后端分解：`/analysis`（27.7KB raw_data）本机 7.5–14ms；`/history-comparison` 尾部≈K线取数耗时
+   （+3s 模拟联网 → 3005ms）—— 分析响应本身不是瓶颈，历史比较是网络尾部，且**不阻塞正文**（探针确认）。
+
+**改法（只动加载/并发/渲染路径，不改内容/排序/决策语义，缺失仍显式 no-data）**
+- 页面外壳（标题栏）+ K线主图**立即挂载**，正文区独立门控：`加载中 / 未找到 / 正常` 三态语义不变；
+  未找到记录时不挂图表，分享卡等依赖 result 的部件仍只在就绪后挂载。
+- `rawData / sections / fullToc / toc / sectionNodes` 全部 `useMemo`；`headingComponents` 提到模块级；
+  `LayerKline` 加 `memo`。分节正文节点按 `sections` 引用缓存 → 无关状态变更不再重解析 markdown。
+- `LayerKline` 把 `activitySeries` 一并透传给 `KlineChart` → 图表判定「父已接管全部图层」，
+  **不再另发一次** `/klines/{symbol}/summary`（去掉一处重复请求）。
+
+**实测（本机 jsdom + 本机 TestClient，非生产联网）**
+- 无关状态变更重渲染：183ms → **15.6ms**；`buildAnalysisSections` 调用 4 → 2。
+- 首屏正文到可见（一次性解析 34 表）：~412ms（内容逐字段一致，未变）。
+- 新增回归测试 `frontend/tests/components/analysis-detail-load.test.tsx`（7 例，全 mock 无真实网络）：
+  主图不等分析请求；正文三态；历史比较 pending / 失败均不阻塞正文且结果不变；null → 未找到且不挂图；
+  无关状态变更不重算 sections。
+- 门禁：`npx tsc -b` / `tsc -p tsconfig.tests.json` / `node scripts/check_ui_rules.mjs` / `eslint` 全绿；
+  前端全量 vitest 815 passed（含新增 7 例）；后端相关 pytest 50 passed；`py_compile` OK。
+- 同步更新 `truncated-text-title.test.tsx` 的源级断言（`result.title` → `result?.title`，截断+title 兜底契约不变）。
+
+**测量条件**：无生产数据；延迟/耗时均为本机（jsdom / SQLite）实测，不代表线上绝对值，仅用于定位瓶颈
+与验证并发/缓存是否生效。不发版、不打 tag、不改 `.github/`、不改 Dockerfile。
+
 ### fix-auth-bearer 测试顺序隔离（CI Backend pytest shard 3/4 确定性 3 例 401）（2026-10-01）
 
 CI `Backend pytest shard 3/4` 稳定红 3 例：`tests/test_auth_bearer_priority.py` 的

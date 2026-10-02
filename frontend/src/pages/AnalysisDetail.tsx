@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { safeFixed, safeNum } from '@/lib/format'
@@ -27,7 +27,7 @@ import {
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 import { useKlineLayer } from '@/hooks/useKlineLayer'
-import { buildAnalysisSections } from '@panwatch/biz-ui/analysis-sections'
+import { buildAnalysisSections, type AnalysisSection } from '@panwatch/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
 
 const DECISION_COLOR: Record<string, string> = {
@@ -58,8 +58,12 @@ const TOC_SUB_KEY = 'panwatch_toc_show_sub'
  * 这里用 `useKlineLayer` 取一次 summary 图层数据并透传, 让分析详情页真正画出
  * GS 买卖点(L2)/ 资金柱(L3)/ 事件标注(L4)/ 支撑压力位。
  * 取不到 = 空数组(不编造), 图表自然不画, 页面不假报。
+ *
+ * perf(2026-10-02): `memo` 包一层 —— 入参只有 symbol/market 两个字符串, 页面别的状态
+ * (滚动高亮/目录开关)变更时不再牵连 KlineChart 重渲染。`activitySeries` 一并以 props 传入,
+ * 让 KlineChart 判定「父已接管全部图层分量」而**不再自己多发一次** `/klines/{symbol}/summary`。
  */
-function LayerKline({ symbol, market }: { symbol: string; market: string }) {
+const LayerKline = memo(function LayerKline({ symbol, market }: { symbol: string; market: string }) {
   const layer = useKlineLayer(symbol, market)
   // P2(2026-09-18): 由 InteractiveKline 迁到 KlineChart —— props 一一对应
   // (只把 initialDays 从字符串改数字); enableMinute 保留原有的「分时」视图。
@@ -73,10 +77,11 @@ function LayerKline({ symbol, market }: { symbol: string; market: string }) {
       fundFlow={layer.fundFlow}
       events={layer.events}
       supportPressure={layer.supportPressure}
+      activitySeries={layer.activitySeries}
       enableMinute
     />
   )
-}
+})
 
 function inferMarket(symbol: string): string {
   if (/^\d{6}$/.test(symbol)) return 'CN'
@@ -131,6 +136,21 @@ function parseHeadings(markdown: string): { text: string; slug: string }[] {
     if (text) out.push({ text, slug: slugify(m[2]) })
   }
   return out
+}
+
+/** markdown 标题渲染:挂上与目录一致的锚点 id + 顶部留白(避开吸顶导航)。
+ *  提到模块级(perf 2026-10-02):纯函数, 不随组件渲染重建 —— 分节正文节点据此按引用缓存。 */
+function headingComponents(sectionId: string) {
+  const make = (Tag: 'h2' | 'h3' | 'h4') =>
+    function Heading({ children }: { children?: ReactNode }) {
+      const id = `h-${sectionId}-${slugify(nodeText(children))}`
+      return (
+        <Tag id={id} className="scroll-mt-24">
+          {children}
+        </Tag>
+      )
+    }
+  return { h2: make('h2'), h3: make('h3'), h4: make('h4') }
 }
 
 export default function AnalysisDetailPage() {
@@ -194,23 +214,36 @@ export default function AnalysisDetailPage() {
     }
   }, [showSub])
 
-  const rawData = (result?.raw_data || {}) as Partial<DeepAnalysisResult['raw_data']>
+  // perf(2026-10-02): 正文/目录都是 result 的纯派生计算。此前每次渲染都重跑
+  // buildAnalysisSections + parseHeadings(实测一次加载内 4 次), 而滚动联动会经由
+  // IntersectionObserver 频繁 setActiveId → 每次滚动都重算整页 markdown。用 useMemo 固定引用,
+  // 只在 result 真正变化时重算 —— 不改任何内容/排序语义。
+  const rawData = useMemo(
+    () => (result?.raw_data || {}) as Partial<DeepAnalysisResult['raw_data']>,
+    [result],
+  )
   const sug = rawData.suggestion
-  const sections = buildAnalysisSections(rawData)
+  const sections = useMemo(() => buildAnalysisSections(rawData), [rawData])
   const stats = history?.stats
   const items = history?.items || []
 
   // 完整目录:每个 section(一级) + 其 markdown 内 2~4 级标题(二级) + 历史决策对比
-  const fullToc: { id: string; title: string; level: 0 | 1 }[] = []
-  for (const s of sections) {
-    fullToc.push({ id: `sec-${s.id}`, title: s.title, level: 0 })
-    for (const h of parseHeadings(s.markdown)) {
-      fullToc.push({ id: `h-${s.id}-${h.slug}`, title: h.text, level: 1 })
+  const fullToc = useMemo(() => {
+    const out: { id: string; title: string; level: 0 | 1 }[] = []
+    for (const s of sections) {
+      out.push({ id: `sec-${s.id}`, title: s.title, level: 0 })
+      for (const h of parseHeadings(s.markdown)) {
+        out.push({ id: `h-${s.id}-${h.slug}`, title: h.text, level: 1 })
+      }
     }
-  }
-  fullToc.push({ id: 'sec-history', title: '历史决策对比', level: 0 })
+    out.push({ id: 'sec-history', title: '历史决策对比', level: 0 })
+    return out
+  }, [sections])
   // 开关决定是否展示/联动二级目录
-  const toc = showSub ? fullToc : fullToc.filter((t) => t.level === 0)
+  const toc = useMemo(
+    () => (showSub ? fullToc : fullToc.filter((t) => t.level === 0)),
+    [fullToc, showSub],
+  )
 
   // 滚动联动:正文滚动时自动高亮当前段(取视口内最靠上、避开顶部导航的标题)
   useEffect(() => {
@@ -233,19 +266,9 @@ export default function AnalysisDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result, toc.length])
 
-  if (loading) {
-    return <div className="p-12 text-center text-muted-foreground">加载中...</div>
-  }
-  if (!result) {
-    return (
-      <div className="p-12 text-center text-muted-foreground space-y-3">
-        <div>未找到 {symbol} 在 {date} 的深度分析记录</div>
-        <button onClick={() => navigate(-1)} className="text-primary hover:underline">
-          返回
-        </button>
-      </div>
-    )
-  }
+  // perf(2026-10-02): 不再整页 early-return「加载中」。页面外壳(标题栏/K线主图)不依赖分析
+  // 请求, 提前挂载即可让 K 线取数**与**分析请求并发(此前是「先等分析 → 再挂图 → 才取K线」的串行),
+  // 首屏 K 线区不必等到分析回来才动; 正文区仍显式区分 加载中 / 未找到 / 正常(语义不变)。
 
   const scrollTo = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -254,19 +277,29 @@ export default function AnalysisDetailPage() {
   // 当前所在段标题(移动端折叠条上显示,让用户知道读到哪了)
   const currentTitle = toc.find((t) => t.id === activeId)?.title || ''
 
-  // markdown 标题渲染:挂上与目录一致的锚点 id + 顶部留白(避开吸顶导航)
-  const headingComponents = (sectionId: string) => {
-    const make = (Tag: 'h2' | 'h3' | 'h4') =>
-      function Heading({ children }: { children?: ReactNode }) {
-        const id = `h-${sectionId}-${slugify(nodeText(children))}`
+  // perf(2026-10-02): 分节正文节点按 sections 引用缓存。sections 未变时返回同一批 element,
+  // React 对同一 element 引用会跳过整棵子树重渲染 —— 滚动高亮/目录开关等无关状态变更不再
+  // 重新解析 30k 字 markdown(本地探针实测一次重渲染 ~180ms)。
+  const sectionNodes = useMemo(
+    () =>
+      sections.map((s: AnalysisSection) => {
+        const Icon = SECTION_ICON[s.id]
         return (
-          <Tag id={id} className="scroll-mt-24">
-            {children}
-          </Tag>
+          <section key={s.id} id={`sec-${s.id}`} className="mb-12 scroll-mt-24">
+            <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
+              {Icon && <Icon className="w-[18px] h-[18px] text-primary/70 shrink-0" />}
+              {s.title}
+            </h2>
+            <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground/90 prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={headingComponents(s.id)}>
+                {s.markdown}
+              </ReactMarkdown>
+            </div>
+          </section>
         )
-      }
-    return { h2: make('h2'), h3: make('h3'), h4: make('h4') }
-  }
+      }),
+    [sections],
+  )
 
   // 目录头(标题 + 二级目录开关),桌面右栏 / 移动下拉共用
   const tocHeader = (
@@ -320,7 +353,7 @@ export default function AnalysisDetailPage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <h1 title={result.title || `${symbol} 深度分析`} className="text-[20px] md:text-[20px] font-bold truncate min-w-0">{result.title || `${symbol} 深度分析`}</h1>
+            <h1 title={result?.title || `${symbol} 深度分析`} className="text-[20px] md:text-[20px] font-bold truncate min-w-0">{result?.title || `${symbol} 深度分析`}</h1>
             <span className="text-[12px] text-muted-foreground shrink-0">{date}</span>
             <button
               onClick={() => setShareOpen(true)}
@@ -358,7 +391,9 @@ export default function AnalysisDetailPage() {
             </div>
           )}
 
-          {/* 移动端目录:吸顶折叠条,显示当前段,展开下拉(覆盖式),选完/点外部收起(桌面隐藏) */}
+          {/* 移动端目录:吸顶折叠条,显示当前段,展开下拉(覆盖式),选完/点外部收起(桌面隐藏);
+              目录由分析结果派生 → 仅在拿到 result 时渲染(加载中不显示空目录) */}
+          {result && (
           <div className="lg:hidden sticky top-16 z-30 mb-6">
             <div className="relative">
               <button
@@ -382,29 +417,31 @@ export default function AnalysisDetailPage() {
               )}
             </div>
           </div>
+          )}
 
-          {/* K线主图(P1-7 终端化: 主图 + 副图在上, 长文在下; 与 IndexDetail 同款组件, 非 Quote/KlineChart scope) */}
-          <div className="mb-10 border-b border-border/40 pb-4">
-            <LayerKline symbol={symbol} market={inferMarket(symbol)} />
-          </div>
+          {/* K线主图(P1-7 终端化: 主图 + 副图在上, 长文在下; 与 IndexDetail 同款组件, 非 Quote/KlineChart scope)
+              perf(2026-10-02): 主图只依赖 URL 的 symbol/market, 不再等分析请求 —— 首屏即挂载,
+              K线/图层取数与 /analysis 并发; 未找到记录(result=null 且非加载中)时不显示。 */}
+          {(loading || !!result) && (
+            <div className="mb-10 border-b border-border/40 pb-4">
+              <LayerKline symbol={symbol} market={inferMarket(symbol)} />
+            </div>
+          )}
 
-          {/* 各部分长文 */}
-          {sections.map((s) => {
-            const Icon = SECTION_ICON[s.id]
-            return (
-              <section key={s.id} id={`sec-${s.id}`} className="mb-12 scroll-mt-24">
-                <h2 className="flex items-center gap-2 text-[16px] font-bold mb-4 pb-2 border-b border-border/40">
-                  {Icon && <Icon className="w-[18px] h-[18px] text-primary/70 shrink-0" />}
-                  {s.title}
-                </h2>
-                <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground/90 prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={headingComponents(s.id)}>
-                    {s.markdown}
-                  </ReactMarkdown>
-                </div>
-              </section>
-            )
-          })}
+          {/* 正文门控: 加载中 / 未找到 / 分节长文 —— 与页面外壳解耦, 外壳 + K线即时可见 */}
+          {loading ? (
+            <div className="p-12 text-center text-muted-foreground">加载中...</div>
+          ) : !result ? (
+            <div className="p-12 text-center text-muted-foreground space-y-3">
+              <div>未找到 {symbol} 在 {date} 的深度分析记录</div>
+              <button onClick={() => navigate(-1)} className="text-primary hover:underline">
+                返回
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* 各部分长文(节点按 sections 引用缓存, 见上方 sectionNodes) */}
+              {sectionNodes}
 
           {/* 历史决策对比 */}
           <section id="sec-history" className="mb-10 scroll-mt-24">
@@ -470,10 +507,14 @@ export default function AnalysisDetailPage() {
           <div className="text-[11px] text-muted-foreground/70 italic border-t border-border/30 pt-4">
             本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。投资有风险,决策需自主判断。
           </div>
+            </>
+          )}
           </article>
         </div>
 
-        {/* 右列:最终决策 + 目录合并到同一张卡片(与标题同高起始,不被标题压住;主题 token 适配日/夜) */}
+        {/* 右列:最终决策 + 目录合并到同一张卡片(与标题同高起始,不被标题压住;主题 token 适配日/夜)
+            依赖分析结果 → 仅 result 就绪后渲染(加载中右栏空着, 不显示半截目录) */}
+        {result && (
         <aside className="hidden lg:block w-52 shrink-0">
           <div className="sticky top-24 border-l border-border/40 pl-4">
             {/* 最终决策摘要 */}
@@ -516,16 +557,19 @@ export default function AnalysisDetailPage() {
             </div>
           </div>
         </aside>
+        )}
       </div>
 
-      {/* 分享卡片(导出 PNG) */}
-      <ShareCardModal
-        open={shareOpen}
-        onClose={() => setShareOpen(false)}
-        result={result}
-        symbol={symbol}
-        date={date}
-      />
+      {/* 分享卡片(导出 PNG) —— 需完整结果, 未取到时(加载中/未找到)不挂载 */}
+      {result && (
+        <ShareCardModal
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          result={result}
+          symbol={symbol}
+          date={date}
+        />
+      )}
     </div>
   )
 }
