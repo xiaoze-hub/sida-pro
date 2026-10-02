@@ -6,7 +6,7 @@ description: 查询 A 股市场数据的 HTTP 接口，覆盖实时行情、技�
 description_zh: 接入 SIDA 市场数据接口，用一条 HTTP 请求取回 A 股的实时行情、技术指标、资金动向、市场情绪与机会榜单等数据，并附带数据口径说明，便于判断数据能不能用于下一步分析。只提供数据查询，不含交易执行与投资建议。
 description_en: Query China A-share market data over plain HTTP — real-time quotes, technical indicators, capital flows, main-force intent, market sentiment and opportunity rankings, each returned with a clear caliber label. Data retrieval only; no trade execution or investment advice.
 category: 数据分析
-version: 1.2.0
+version: 1.3.0
 author: SIDA
 allowed-tools: Bash, Read, Write
 ---
