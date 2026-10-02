@@ -24,7 +24,9 @@ from marketdata.types import (
     BoardCapitalFlow,
     CapitalFlow,
     DividendItem,
+    DragonTigerItem,
     MarginItem,
+    MarketCapitalFlow,
     MoreInfo,
     Quote,
     ShareholderItem,
@@ -32,6 +34,7 @@ from marketdata.types import (
 from marketdata.vendors.base import (
     CapitalFlowVendor,
     DividendVendor,
+    DragonTigerVendor,
     KlineVendor,
     MarginVendor,
     MoreInfoVendor,
@@ -809,6 +812,148 @@ class TqBoardCapitalFlowVendor(Vendor):
         return out
 
 
+class TqDragonTigerVendor(DragonTigerVendor):
+    """龙虎榜 TQ **备源**: GP02/08/09/17/18 序列 → DragonTigerItem(与东财同契约)。
+
+    ⚠️ **TQ 没有市场级「某日全部上榜明细」枚举接口** —— GP02 是**个股**序列, 要还原
+    整日榜单必须遍历全市场(5577 只 × 单码 RPC, 远超 Engine 单源 8s 超时, 不可行)。
+    故本 vendor 是**候选池驱动**的: 调用方通过 ``config["symbols"]``(或显式传入的
+    ``symbols``)给出候选标的(典型=端点已知的个股长序列场景), 逐个查该标的在目标日
+    是否上榜。候选为空 → 返回 [](**不伪造**榜单, 遵守 AGENTS「禁止编造」)。
+
+    ⚠️ 单位: GP02 买卖额是**万元** → 东财 `buy_amt`/`sell_amt` 是**元**, 必须 ×1e4
+    (漏换算会错 10000 倍且不报错, 见 tq-capability-audit)。
+
+    TQ 没有的字段(上榜原因 reason / 收盘 close / 涨跌幅 / 换手 / 席位名)一律留空,
+    由调用方用东财缓存补(与端点 `_lhb_from_tq` 融合路径同口径)。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[DragonTigerItem]:
+        config = config or {}
+        date = str(config.get("date") or "").strip()
+        if not date:
+            return []  # 不猜"今天"; 与东财/ftshare vendor 同约定
+        compact = date.replace("-", "")
+        trade_date = _fmt_day(compact)
+
+        # 候选池: config["symbols"] 优先, 否则用显式传入的 symbols(市场级调用时为空)。
+        candidates: list[str] = []
+        for raw in (config.get("symbols") or []):
+            tqc = to_tq_code(Symbol.parse(str(raw), "CN"))
+            if tqc and tqc not in candidates:
+                candidates.append(tqc)
+        if not candidates:
+            for sym in symbols or []:
+                tqc = to_tq_code(sym)
+                if tqc and tqc not in candidates:
+                    candidates.append(tqc)
+        if not candidates:
+            logger.debug("TQ 龙虎榜: 无候选标的(TQ 无市场级枚举), 返回空交下一源")
+            return []
+
+        out: list[DragonTigerItem] = []
+        for tqc in candidates:
+            try:
+                rows = lhb_series(tqc, start_time=compact, end_time=compact)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ 龙虎榜 %s %s failed: %s", tqc, compact, e)
+                continue
+            for r in rows:
+                if str(r.get("date") or "").replace("-", "") != compact:
+                    continue  # 窗口外(网关可能回整段), 只取目标日
+                buy_wan, sell_wan = r.get("buy"), r.get("sell")
+                buy_yuan = buy_wan * 1e4 if buy_wan is not None else None
+                sell_yuan = sell_wan * 1e4 if sell_wan is not None else None
+                net = None
+                if buy_yuan is not None or sell_yuan is not None:
+                    net = (buy_yuan or 0.0) - (sell_yuan or 0.0)
+                out.append(
+                    DragonTigerItem(
+                        trade_date=trade_date,
+                        symbol=tqc.split(".")[0],
+                        name="",
+                        reason=None,        # TQ 无上榜原因
+                        close=None,         # TQ 无收盘价
+                        change_pct=None,    # TQ 无涨跌幅
+                        net_buy=net,
+                        buy_amt=buy_yuan,
+                        sell_amt=sell_yuan,
+                        deal_amt=None,
+                        turnover_pct=None,
+                        free_market_cap=None,
+                        top_buyers=None,    # TQ 只给金额, 无席位名/名次
+                        top_sellers=None,
+                    )
+                )
+        return out
+
+
+# 大盘资金 = 全行业板块主力资金求和。与 ThsMarketFlowVendor 的语义**逐字段对齐**
+# (同花顺=行业 net 求和; TQ=881 行业板块 SUPAMO 求和), 故 TQ 版块净额之和 == 本值。
+_MARKET_FLOW_BOARD_TYPE = "industry"
+
+
+class TqMarketFlowVendor(Vendor):
+    """大盘资金 TQ **备源**(解同花顺单点): 全 881 行业板块 SUPAMO 主力资金求和。
+
+    ⚠️ 口径(契约 src/core/caliber.py): TQ 资金类 = L2/主力口径(与 get_decision_pioneer
+    同族), 返回值带 caliber + direction_semantics, **禁用于主力意图判定**(方向性判定
+    只走 get_main_intent 逐笔)。与同花顺口径(ths)同族, 故冲突时说明差异并优先逐笔。
+
+    ⚠️ 单位: SUPAMO 主力资金按**万元**处理 → 净额(亿) = Σ万元 / 1e4 —— 与同模块
+    `TqBoardCapitalFlowVendor` 同一读数与换算, 保证「大盘 = 板块净额之和」内部一致。
+
+    ⚠️ 缺字段留 None(禁补 0): TQ 只给净额, 无流入/流出双值 → total_inflow/total_outflow
+    留空; 全行业板块都取不到 → 返回 [] 交下一源, 不伪造。
+    """
+
+    name = "tq"
+    supports_markets = {"CN"}
+
+    def fetch(self, symbols: list[Symbol], config: dict) -> list[MarketCapitalFlow]:
+        items = [b for b in _board_items(1) if b["board_type"] == _MARKET_FLOW_BOARD_TYPE][:_MAX_BOARDS]
+        if not items:
+            return []
+        caliber, direction = _capital_caliber()
+        valid = {b["code"] for b in items}
+        codes = [b["code"] for b in items]
+        total_wan = 0.0
+        boards_with_data = 0
+        for i in range(0, len(codes), _BOARD_FLOW_CHUNK):
+            part = codes[i : i + _BOARD_FLOW_CHUNK]
+            try:
+                got = formula_mul(_BOARD_FLOW_FORMULA, part)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TQ %s 大盘资金失败(%d 码): %s", _BOARD_FLOW_FORMULA, len(part), e)
+                continue
+            if not isinstance(got, dict):
+                continue
+            for code, vals in got.items():
+                key = str(code).upper()
+                if key not in valid:   # 只接受本次请求的板块(防串味/防脏行)
+                    continue
+                v = _formula_scalar(vals, "主力资金")
+                if v is not None:
+                    total_wan += v
+                    boards_with_data += 1
+        if boards_with_data == 0:
+            return []
+        return [
+            MarketCapitalFlow(
+                total_inflow=None,   # TQ 只给净额 → None(禁补 0)
+                total_outflow=None,
+                net_inflow=round(total_wan / 1e4, 4),
+                board_count=boards_with_data,
+                source="tq",
+                caliber=caliber,
+                direction_semantics=direction,
+            )
+        ]
+
+
 def formula_mul(
     formula_name: str,
     stock_list: list[str],
@@ -1024,6 +1169,26 @@ def financial_data(tables: list[str], code: str, *, start_time: str = "",
     if end_time:
         params["end_time"] = end_time
     v = _rpc("get_financial_data", params, timeout=max(_TIMEOUT_S, 30.0))
+    if not isinstance(v, dict):
+        return {}
+    return {k: x for k, x in v.items()
+            if k not in ("ErrorId", "Error", "run_id") and x}
+
+
+def financial_data_by_date(tables: list[str], code: str, year) -> dict:
+    """按**指定年度**取专业财务数据(get_financial_data_by_date, 与 financial_data 配套)。
+
+    用于精确回补某一年的历史财务: `financial_data` 走日期区间(report_type 决定按截止日/
+    公告日), 本接口走**年度**, 网关契约(实测自曝)是 ``table_list[]`` + ``code`` + ``year``
+    —— ⚠️ key 是 `year` 不是 start_time/end_time(references/api-contracts 标定)。
+
+    返回 {表名: 数据}; 空表/失败元数据剔除(不补 0)。year 必填(缺 → {}, 不猜当前年);
+    网关异常**原样抛**(与同模块 financial_data 一致: "{}"=无数据 ≠ 故障)。
+    """
+    if not tables or not code or year in (None, ""):
+        return {}
+    params = {"table_list": list(tables), "code": code, "year": str(year)}
+    v = _rpc("get_financial_data_by_date", params, timeout=max(_TIMEOUT_S, 30.0))
     if not isinstance(v, dict):
         return {}
     return {k: x for k, x in v.items()

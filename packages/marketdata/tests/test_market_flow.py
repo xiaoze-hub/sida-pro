@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import marketdata.vendors.market_flow as mf
 from marketdata.client import MarketData
 from marketdata.defaults import StaticConfigProvider
@@ -267,15 +269,15 @@ class TestDividend:
         return [
             {
                 "EX_DIVIDEND_DATE": "2026-06-20 00:00:00",
-                "PRETAX_BONUS_RMB": 2.38,
-                "TRANSFER_RATIO": 0.0,
+                "PRETAX_BONUS_RMB": 2.38,   # 每10股派息 → /10
+                "IT_RATIO": 0.0,            # 转增(报表真实字段名是 IT_RATIO, 非 TRANSFER_RATIO)
                 "BONUS_RATIO": 0.0,
                 "ASSIGN_PROGRESS": "实施分配",
             },
             {
                 "EX_DIVIDEND_DATE": "2025-06-21 00:00:00",
                 "PRETAX_BONUS_RMB": 2.19,
-                "TRANSFER_RATIO": 3.0,
+                "IT_RATIO": 3.0,
                 "BONUS_RATIO": 0.0,
                 "ASSIGN_PROGRESS": "实施分配",
             },
@@ -289,7 +291,8 @@ class TestDividend:
         first = out[0]
         assert first.ex_date == "2026-06-20"
         assert first.symbol == "600519"
-        assert first.dividend_per_share == 2.38
+        # PRETAX_BONUS_RMB 是**每10股**派息 → DividendItem.dividend_per_share(每股)必须 /10
+        assert first.dividend_per_share == pytest.approx(0.238)
         assert first.transfer_ratio == 0.0
         assert first.bonus_ratio == 0.0
         assert first.progress == "实施分配"

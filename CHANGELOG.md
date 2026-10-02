@@ -1,3 +1,23 @@
+### test-修正东财分红 vendor 存量失效用例(基线预存红)（2026-10-02）
+
+`packages/marketdata/tests/test_market_flow.py::TestDividend::test_parses_full_history` 在 **main=v0.13.45 基线即为红**（非本次改动引入，已在未改动 main 上复现）：用例仍按改动前的旧口径断言 —— ① `PRETAX_BONUS_RMB` 是**每10股**派息、`DividendItem.dividend_per_share` 契约是**每股**，代码已 `/10`（实测标定 002361：0.5 ↔ “10派0.50元”），用例仍期望未除的值；② 转增字段名报表真实是 `IT_RATIO`（代码已改用），用例 fixture 仍写 `TRANSFER_RATIO`。本次把用例 fixture/期望对齐到**已上线代码**（**加强、非减弱**断言：新增 /10 契约注释与字段名注释）。仅测试文件，不动 vendor 逻辑。
+
+### docs-TQ 切换面审计覆盖清单落地状态标注（2026-10-02）
+
+`docs/TQ切换面审计_20260924.md` 追加「〇·复核 落地状态」节（基线 `main=v0.13.45` / `a35cbc9`），对 §一/§二 覆盖清单逐项标注「已做 / 不接（不碰）」并给出落地位置。本次实际新改动仅三项：§二-3 `market_capital_flow` TQ 备源、§二-7 `dragon_tiger` registry 层 TQ、§一 `get_financial_data_by_date`；其余为先前版本落地或审计已判「不接」（不接项本次不碰）。审计正文保持原样，不改口径。
+
+### feat-接入 TQ get_financial_data_by_date(按年度专业财务数据)（2026-10-02）
+
+`docs/TQ切换面审计_20260924.md` 覆盖清单第 ③ 项(此前未接)。新增 `marketdata.vendors.tq.financial_data_by_date(tables, code, year)`，封装网关 `get_financial_data_by_date`（与既有 `financial_data` 配套：后者按日期区间 + report_type，本接口按**年度**，用于精确回补某一年历史财务不扰动历史窗口）。网关契约实测为 `table_list[]` + `code` + `year`（**不是** start_time/end_time）。缺参（表/代码/年度任一为空）→ `{}` 且**不发起 RPC**（不猜当前年）；元数据键(ErrorId/Error/run_id)剔除、空表(Value:null)过滤（**不补 0**）；网关故障**原样抛**，不与「无数据」混淆（与同模块 `financial_data` 一致，符合 AGENTS「缺数据/故障显式区分」）。测试 `tests/test_tq_financial_by_date.py`（全离线 mock）。
+
+### feat-registry 补 TQ 备源: dragon_tiger + market_capital_flow（2026-10-02）
+
+补齐 `docs/TQ切换面审计_20260924.md` §二 覆盖清单最后两项 registry 缺口（**只做备源/注册，不动主源优先级**）。
+
+- **dragon_tiger**: 新增 `TqDragonTigerVendor`（GP02/08/09/17/18 龙虎榜序列 → `DragonTigerItem`，**万元→元 ×1e4**，与东财 `BILLBOARD_*_AMT` 同口径）并入 registry（`packages/marketdata/src/marketdata/registry.py`）+ seed（priority 8，东财 0 / FTShare 5 之后）。⚠️ TQ **无市场级「某日全部上榜」枚举接口**（GP02 是个股序列，遍历全市场 5577 只不可行）→ 该 vendor 为**候选池驱动**（`config["symbols"]` 给候选，典型=个股长序列场景），候选为空返回空**不伪造榜单**（AGENTS 禁编造）。
+- **market_capital_flow**: 新增 `TqMarketFlowVendor`（全 881 行业板块 SUPAMO 主力资金求和 → 大盘净额亿）并入 registry + seed（priority 2，同花顺 0 之后）。**资金类硬约束**：返回值带 `caliber="ths"` + `direction_semantics`（`src/core/caliber.py`），`MarketCapitalFlow` 补该两字段；非 tick 口径过 `require_directional` 抛 `CaliberViolationError`，口径冲突一律优先逐笔。单位与同模块 `TqBoardCapitalFlowVendor` 同一读数（万元→亿 ÷1e4），保证「大盘=板块净额之和」内部一致；TQ 只给净额 → `total_inflow/outflow` 留空（不补 0）。
+- **权威表对齐**：`packages/marketdata/tests/test_registry.py` 的 `PACKAGE_VENDORS_BY_TYPE` 期望值此前已随 A-1/A-2/A-3/A-5 漂移（capital_flow/board_capital_flow/margin/shareholders/dividend 早带 tq 而表未同步，长期红），本次对齐到 registry 实况（**加强、非减弱**断言）。
+- 测试 `tests/test_tq_fallback_dragon_flow.py`（全离线 mock 网关）：龙虎榜万元→元 / 裸码归一 / 窗口外剔除 / 无候选不伪造 / 网关异常回退；大盘资金全行业求和 / 口径标签契约 / 冲突优先逐笔 / 无数据不补 0 / 公式异常回退；registry + seed 接线；Engine 链路端到端 fallback。
 ### feat-公式按需批量执行引擎（2026-10-02）
 
 新增**按需**批量执行: 给定公式集 × (全市场 | 指定标的池) 一次性跑通达信 TQ 条件选股
