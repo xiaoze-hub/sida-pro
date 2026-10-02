@@ -1,3 +1,56 @@
+### perf-dashboard 首页 `/` 首屏加载链并发化 + 渲染缓存（2026-10-02）
+
+Dashboard 首页(`/`)首屏可感知等待优化。**无生产实测数据**（B1 走查产物已被缓存清理删除，不在本机），
+以下全部来自**代码定位 + 本机 mock 探针**（jsdom 单测 / stub `globalThis.fetch` 计数）；本机 mock 延迟
+≠ 线上绝对值，不声称「14.3s→Xs」。
+
+**根因（代码定位 + 本机探针）**
+1. **同键请求不合并**：首页「市场温度」被 3 处组件各打一次 `/market/phase`
+   （`usePhaseLabel` / `MarketPhaseCard` / `PhaseGaugeCard`）。`fetchAPI` 的 30s 响应缓存只在
+   **响应回来之后**生效，冷启动那一刻 3 个同键请求会一起真发（本机探针：3 次真实 `fetch`）。
+   它们与首屏其余 15+ 请求一起抢同域连接池（HTTP/1.1 6 条）+ 后端单 worker 队列
+   （既有注释佐证：`ResonancePanel` “首页并发高(20+ 请求), 首拉易排队超时”）。
+2. **「涨跌分布」画布 60s 才回填**：`/market-data/breadth-distribution` 自 2026-09-18 起异步化
+   （缓存未命中立即返回 `{pending:true, 全 0}` + 后台线程算），而组件只在 **60s 定时器**上重拉 ——
+   后台几秒算完的分布，首屏画布要等下一个 60s tick（本机探针：pending 后推进 1.6s 画布仍空）。
+3. **慢车道与首屏同刻挤入**：分钟级的基准/归因（拉全持仓 K 线）在首屏窗口内即发起
+   （本机探针：快车道未回时 `benchmark` 已发出）。
+4. **有无序号守卫的竞态**：`load` 无并发序号，手动刷新/错误重试/可见性轮询重叠时，先发后到的旧响应
+   会覆盖新数据（本机探针：旧一轮的失败仍弹了错误横幅）。
+5. **重区块未 memo**：图表/列表区块（KPI 带 / 情绪周期卡 / 主线卡 / 涨跌分布 / 资金流 / 共振 / 发现区）
+   随父组件任意状态变更（30s 轮询 / 错误横幅 / 看板定制 / 分享弹窗）整棵重渲染
+   （本机探针：打开看板定制时 6 个重区块各多渲染 1 次）。
+
+**改法（只动加载/并发/渲染路径，不改内容/口径/排序/决策语义，缺值仍显式 `--`）**
+- `fetchAPI` 新增 **在途同键合并(single-flight)**：可缓存 GET 并发同键共享一次真实请求；`cacheMode:'reload'|false`
+  与自带 `signal` 一律让路（实时端点/手动刷新语义不变）。本机探针：3 处组件同打 `/market/phase` 真实请求 **3→1**。
+- 「涨跌分布」**先出壳后补数**：pending 时占满同高度 + 显式文案（不再用 0 假装有分布），并以 1.5s
+  间隔回补轮询，算完**立即**画（不再等 60s）；失败/空数据显式区分（失败态可见，空数据透传后端 note）；
+  该端点显式短超时 10s；请求序号丢弃过期响应。
+- 首页 `load` 加**并发序号守卫**：被新一轮取代后，旧响应（含错误横幅）一律不落地。
+- **慢车道错峰**：基准/归因推迟 1.2s（首屏请求之后）再起，不与关键画布抢连接池/单 worker 队列；
+  其自身 loading/empty/error 占位语义不变。
+- **渲染缓存**：`PhaseGaugeCard` 及 6 个重区块在首页渲染处 `memo` 化；`usePhaseLabel` / `useMainlineTop1`
+  返回对象 `useMemo` 稳定（否则 memo 恒失效）；`ResonancePanel` 的 `actions` 元素 `useMemo` 固定引用。
+  本机探针：打开看板定制（无关状态变更）时 6 个重区块重渲染 **各 1 次 → 0 次**。
+
+**实测（本机 jsdom + mock 延迟探针，非生产联网；不代表线上绝对值）**
+- 同键并发真实请求：`/market/phase` 3 → **1**（`/market/mainline` 保持 2：`MarketMainlineCard` 显式
+  `cacheMode:'reload'`，属有意不合并且已钉住）。
+- 异步分布回填：pending 后 **1.6s** 内画出（此前要等 60s tick）。
+- 慢车道：快车道未回/刚回时 `benchmark`/`attribution` 均 **0** 次，错峰窗口后各 1 次。
+- 竞态：过期一轮的失败**不**落地。
+- 无关状态变更重渲染：6 个重区块各 1 → **0**。（以上均为探针**计数**，非耗时毫秒，故不宣称提速倍数。）
+- 新增回归测试 4 个文件共 17 例（全 mock 无真实网络）：`tests/api/fetch-inflight-dedup.test.ts`(6)、
+  `tests/components/breadth-distribution-load.test.tsx`(5)、`tests/components/dashboard-first-screen.test.tsx`(5)、
+  `tests/components/dashboard-duplicate-requests.test.tsx`(1)。
+- 门禁：`npx tsc -b` / `tsc -p tsconfig.tests.json` / `node scripts/check_ui_rules.mjs` / `eslint` 全绿；
+  前端全量 vitest **113 files / 832 passed**（含新增 17 例）。
+- 未动后端，故无 pytest 变更；未改 `.github/`、Dockerfile、`sw.js`、禁改的 API 文件；不发版、不打 tag。
+
+**测量条件**：无生产数据；所有数字来自本机 mock 探针（计数/虚拟时钟），仅用于验证并发、回填与缓存是否生效，
+不代表线上绝对值。
+
 ### perf-analysis-detail 首屏加载链并发化 + 正文渲染缓存（2026-10-02）
 
 深度分析详情页 `/analysis/:symbol/:date` 首屏可感知等待优化。**无生产实测数据**（B1 走查产物

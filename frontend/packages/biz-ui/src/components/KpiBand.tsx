@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { Activity, Crown } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { safeFixed } from '@/lib/format'
 
@@ -283,7 +283,12 @@ export function usePhaseLabel(): PhaseKpi {
     }
   }, [load])
 
-  return { label, loading, error, unavailableNote, limitUp, sealRate, reload: load }
+  // perf(2026-10-02): 返回对象 useMemo 稳定引用 —— 首页 KpiBand 用 memo 包住, 若这里的 `phase`
+  // 每次渲染都是新对象, memo 恒失效(首页任何无关状态变更都会重渲染整条 KPI 带 + 重跑数字动画)。
+  return useMemo(
+    () => ({ label, loading, error, unavailableNote, limitUp, sealRate, reload: load }),
+    [label, loading, error, unavailableNote, limitUp, sealRate, load],
+  )
 }
 
 
@@ -317,5 +322,6 @@ export function useMainlineTop1(): MainlineKpi {
       aliveRef.current = false
     }
   }, [])
-  return { top, loading, error }
+  // perf(2026-10-02): 同上, 稳定引用以便首页 memo 命中。
+  return useMemo(() => ({ top, loading, error }), [top, loading, error])
 }
