@@ -4861,6 +4861,97 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
         text(f"CREATE UNIQUE INDEX IF NOT EXISTS uq_market_breadth_daily_date ON {TABLE_NAME} (trade_date)")
     )
 
+
+def _m181_img_orderbook_frames(conn: Connection) -> None:
+    """`.img` 十档盘口帧落库表 img_orderbook_frames(2026-10-02)。
+
+    把通达信 `.img` 逐帧十档盘口 + 委托队列落库(遗留 A2「.img 生产无消费方」收口),
+    供盘后回放 / 盘口队列展示。**schema 唯一入口就是本迁移**(AGENTS 铁律),
+    禁止运行时建表/加列。
+
+    - 唯一键 (user_id, market, symbol, trade_date, seq): 同日同帧序号重复导入幂等;
+      `seq` 为源文件内帧序(0 起) —— 因 .img 存在**同秒多帧**(实测 5066 帧里 22 处
+      间隔 0s), 仅用 as_of 会丢帧; trade_date 进唯一键规避 l2_ticks 的裁剪列教训。
+    - user_id: 多用户隔离(4 账号并存), 读路径一律按 user_id 过滤。
+    - source / as_of: 来源与数据时间显式标注, 不拿陈旧值冒充实时(AGENTS 硬约束)。
+    - 缺失一律写 NULL(**不补 0**): 0 是有意义的挂单量, 与「无数据」必须可区分。
+    - 单位: 价格=元, 量=股; 档位/队列以 JSON(TEXT) 保序存储。
+    """
+    if _has_table(conn, "img_orderbook_frames"):
+        return
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE img_orderbook_frames (
+                    trade_date TEXT NOT NULL,
+                    as_of TEXT NOT NULL,
+                    seq INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    user_id TEXT NOT NULL DEFAULT 'shared',
+                    source TEXT NOT NULL DEFAULT 'img',
+                    img_path TEXT,
+                    bid_prices TEXT,
+                    bid_vols TEXT,
+                    ask_prices TEXT,
+                    ask_vols TEXT,
+                    bid_queue TEXT,
+                    ask_queue TEXT,
+                    bid_orders INTEGER,
+                    ask_orders INTEGER,
+                    spread DOUBLE PRECISION,
+                    bid_pressure DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_img_orderbook_frames UNIQUE
+                        (user_id, market, symbol, trade_date, seq)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE img_orderbook_frames (
+                    trade_date TEXT NOT NULL,
+                    as_of TEXT NOT NULL,
+                    seq INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'CN',
+                    user_id TEXT NOT NULL DEFAULT 'shared',
+                    source TEXT NOT NULL DEFAULT 'img',
+                    img_path TEXT,
+                    bid_prices TEXT,
+                    bid_vols TEXT,
+                    ask_prices TEXT,
+                    ask_vols TEXT,
+                    bid_queue TEXT,
+                    ask_queue TEXT,
+                    bid_orders INTEGER,
+                    ask_orders INTEGER,
+                    spread REAL,
+                    bid_pressure REAL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, market, symbol, trade_date, seq)
+                )
+                """
+            )
+        )
+    _create_index_if_missing(
+        conn,
+        "ix_img_orderbook_frames_sym_asof",
+        "CREATE INDEX ix_img_orderbook_frames_sym_asof "
+        "ON img_orderbook_frames (symbol, market, as_of DESC)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_img_orderbook_frames_user_asof",
+        "CREATE INDEX ix_img_orderbook_frames_user_asof "
+        "ON img_orderbook_frames (user_id, symbol, as_of DESC)",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -4987,6 +5078,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 这是免费源没有的市场宽度维度(只有当日快照, 无历史 → 算不出基线)
     Migration(179, "tq_formula_signal_daily", _m179_tq_formula_signal_daily),
     Migration(180, "market_breadth_daily", _m180_market_breadth_daily),
+    # .img 十档盘口帧落库(2026-10-02): 校准入库 + 多用户隔离 + source/as_of 显式
+    Migration(181, "img_orderbook_frames", _m181_img_orderbook_frames),
 )
 
 

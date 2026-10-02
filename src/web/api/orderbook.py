@@ -41,9 +41,10 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from src.core import orderbook_engine
+from src.core.img_orderbook_store import SHARED_SCOPE
 
 logger = logging.getLogger(__name__)
 
@@ -214,10 +215,230 @@ def get_orderbook_ob(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# .img 十档盘口(已校准解析 + 入库回放) —— 2026-10-02
+# ─────────────────────────────────────────────────────────────────────────
+# 与 /api/orderbook-ob 同一套显式错误态语义: available/source/as_of/note 全标注;
+# 缺数据一律「无数据」, **不补 0**(0 是有意义的挂单量)。
+# 多用户隔离: 读路径按当前登录用户 user_id 过滤; 未登录回退共享 scope(公共市场数据)。
+
+
+def _scope_user_id(request: Request | None) -> str:
+    """尽力解析登录用户作数据隔离 scope; 无/无效 token → 共享 scope。
+
+    只做签名/有效期校验(不查库、不因未登录而 401) —— 读路径始终按解析出的
+    user_id 过滤, 未登录态落共享 scope, 不会串到别的用户数据。
+    """
+    try:
+        from src.core.auth_tokens import decode_token
+        from src.web.api.auth import extract_token_from_request
+
+        raw = extract_token_from_request(request, None) if request is not None else None
+        if raw:
+            payload = decode_token(raw) or {}
+            uid = payload.get("sub")
+            if uid:
+                return str(uid)
+    except Exception as e:  # noqa: BLE001  解析失败只影响 scope, 不阻断读
+        logger.debug("解析 .img 盘口用户 scope 失败, 回退 shared: %s", e)
+    return SHARED_SCOPE
+
+
+def _to_code(raw: str) -> str:
+    """THS 代码(USZA002361)/裸 6 位 → 6 位代码(入库键)。"""
+    s = (raw or "").strip().upper()
+    for prefix in ("USZA", "USHA", "USBJ", "USTM"):
+        if s.startswith(prefix) and s[len(prefix):].isdigit():
+            return s[len(prefix):]
+    return s
+
+
+def _row_to_img_snapshot(row: dict):
+    """入库行 → `tdx_img_parser.ImgSnapshot`(缺失保持 None, 不补 0)。"""
+    from src.core.tdx_img_parser import ImgSnapshot
+
+    as_of = row.get("as_of") or ""
+    t = as_of.split("T", 1)[1][:8] if "T" in as_of else (row.get("as_of") or None)
+    return ImgSnapshot(
+        t=t,
+        bid_prices=row.get("bid_prices") or [],
+        bid_vols=row.get("bid_vols") or [],
+        ask_prices=row.get("ask_prices") or [],
+        ask_vols=row.get("ask_vols") or [],
+        bid_orders=row.get("bid_orders"),
+        ask_orders=row.get("ask_orders"),
+        queue=row.get("ask_queue"),
+        bid_queue=row.get("bid_queue"),
+    )
+
+
+def _img_degraded(symbol: str, note: str, *, source: str = "img",
+                  as_of: str | None = None) -> dict:
+    """`.img` 盘口显式降级(available:false): 真实原因 + 来源/时间, 缺数据不补 0。"""
+    from src.core.tdx_img_parser import MISSING
+
+    return {
+        "available": False,
+        "source": source,
+        "as_of": as_of or _now_iso(),
+        "note": note,
+        "symbol": symbol,
+        "trade_date": None,
+        "frames": 0,
+        "origin": None,
+        "shape": None,
+        "best_bid": None,
+        "best_ask": None,
+        "bid_pressure": None,
+        "spread": None,
+        "book": {"bid": [], "ask": []},
+        "bid_queue": MISSING,
+        "ask_queue": MISSING,
+        "bid_orders": MISSING,
+        "ask_orders": MISSING,
+        "queue_imbalance": MISSING,
+    }
+
+
+def _img_response(symbol: str, row: dict, total: int, origin: str, note: str) -> dict:
+    """一行入库帧 → 端点响应(十档 + 队列 + 派生; 缺失处「无数据」)。"""
+    from src.core import tdx_img_parser as tip
+
+    snap = _row_to_img_snapshot(row)
+    frame = tip.snapshots_to_frames([snap])[0]
+    ob = orderbook_engine.order_book_queue(
+        orderbook_engine.img_frame_to_snapshot(snap, ts=0.0, dt_iso=row.get("as_of"))
+    )
+    return {
+        "available": True,
+        "source": "img",
+        "as_of": row.get("as_of"),
+        "note": note,
+        "symbol": symbol,
+        "trade_date": row.get("trade_date"),
+        "frames": total,
+        "origin": origin,
+        "shape": ob.get("shape"),
+        "best_bid": ob.get("best_bid"),
+        "best_ask": ob.get("best_ask"),
+        "bid_pressure": ob.get("bid_pressure"),
+        "spread": ob.get("spread"),
+        "book": {"bid": frame["bid"], "ask": frame["ask"]},
+        "bid_queue": snap.bid_queue if snap.bid_queue else tip.MISSING,
+        "ask_queue": snap.queue if snap.queue else tip.MISSING,
+        "bid_orders": frame["bid_orders"],
+        "ask_orders": frame["ask_orders"],
+        "queue_imbalance": frame["queue_imb"],
+    }
+
+
+def _pick_row(rows: list[dict], as_of: str | None) -> dict | None:
+    """取 as_of(含)之前最近一帧; 未给 as_of → 最新一帧。"""
+    if not as_of:
+        return rows[-1]
+    eligible = [r for r in rows if (r.get("as_of") or "") <= as_of]
+    return eligible[-1] if eligible else None
+
+
+def get_img_orderbook(
+    symbol: str,
+    *,
+    user_id: str = SHARED_SCOPE,
+    as_of: str | None = None,
+    limit: int | None = None,
+) -> dict:
+    """`.img` 十档盘口(已入库优先, 本地 .img 兜底)纯函数, 显式错误态。
+
+    顺序: 入库帧(user_id 隔离) → 本地 `PANWATCH_IMG_DIR` 下 .img → 显式「无数据」。
+    任一环节失败不抛, 返回 available:false + 真实 note; 缺档不补 0。
+    """
+    from src.core import img_orderbook_store as store
+
+    code = _to_code(symbol)
+    if not code:
+        return _img_degraded(symbol, "symbol 为空, 无法取 .img 盘口")
+
+    rows = store.load_frames(code, user_id=user_id, limit=limit)
+    if rows:
+        row = _pick_row(rows, as_of)
+        if row is not None:
+            return _img_response(
+                symbol, row, len(rows), "db",
+                f"通达信 .img 离线盘口(已入库, {len(rows)} 帧可选, user={user_id}); 非实时",
+            )
+        return _img_degraded(
+            symbol,
+            f"已入库 {len(rows)} 帧, 但无 as_of <= {as_of} 的帧",
+            as_of=as_of,
+        )
+
+    # 未入库 → 本地 .img 文件兜底(显式标注来源与时间为文件内帧时间)
+    try:
+        from src.core import tdx_img_parser as tip
+
+        img_path = orderbook_engine.find_img_file(code, "CN")
+        if img_path:
+            snaps = tip.parse_img(img_path)
+            if snaps:
+                snap = snaps[-1]  # 最新一帧
+                frame = tip.snapshots_to_frames([snap])[0]
+                return {
+                    "available": True,
+                    "source": "img-file",
+                    "as_of": snap.t,
+                    "note": (
+                        f".img 未入库, 回退本地文件 {img_path}(离线快照, 非实时); "
+                        f"数据时间 {snap.t or '未知'}"
+                    ),
+                    "symbol": symbol,
+                    "trade_date": store.trade_date_from_path(img_path),
+                    "frames": len(snaps),
+                    "origin": "file",
+                    "shape": orderbook_engine.order_book_queue(
+                        orderbook_engine.img_frame_to_snapshot(snap, ts=0.0, dt_iso=snap.t)
+                    ).get("shape"),
+                    "best_bid": frame["bid"][0]["price"],
+                    "best_ask": frame["ask"][0]["price"],
+                    "bid_pressure": frame["bid_pressure"],
+                    "spread": frame["spread"],
+                    "book": {"bid": frame["bid"], "ask": frame["ask"]},
+                    "bid_queue": snap.bid_queue if snap.bid_queue else tip.MISSING,
+                    "ask_queue": snap.queue if snap.queue else tip.MISSING,
+                    "bid_orders": frame["bid_orders"],
+                    "ask_orders": frame["ask_orders"],
+                    "queue_imbalance": frame["queue_imb"],
+                }
+    except Exception as e:  # noqa: BLE001  .img 兜底失败不外泄成 5xx
+        logger.warning(".img 盘口文件兜底失败 %s: %s", code, e)
+
+    return _img_degraded(
+        symbol,
+        f"无 .img 盘口数据(user={user_id} 无入库帧, 且本地 .img 不可用/解析失败); "
+        f"未编造任何盘口数字",
+    )
+
+
 @router.get("")
 def orderbook_ob(symbol: str = Query(..., description="THS 代码(如 USZA002361)或 6 位代码(如 002361)")):
     """OB 失衡条(轻接口, 分时卡片用): 买|卖压比例 + 盘口演变事件 + 幽灵单比率。"""
     return get_orderbook_ob(symbol)
+
+
+@router.get("/img")
+def orderbook_img(
+    request: Request,
+    symbol: str = Query(..., description="6 位代码(如 002361)或 THS 代码(如 USZA002361)"),
+    as_of: str | None = Query(None, description="取该时间点(含)之前最近一帧, ISO 如 2026-08-27T09:30:00"),
+    limit: int | None = Query(None, ge=1, le=5000, description="最多回看多少已入库帧"),
+):
+    """`.img` 十档盘口 + 委托队列(已校准解析; 已入库优先, 本地文件兜底)。
+
+    显式错误态: available / source / as_of / note 全标注; 缺档一律「无数据」, 不补 0。
+    读路径按当前登录用户隔离, 未登录回退共享 scope。
+    """
+    return get_img_orderbook(
+        symbol, user_id=_scope_user_id(request), as_of=as_of, limit=limit
+    )
 
 
 @router.get("/{symbol}")
