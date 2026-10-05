@@ -336,6 +336,17 @@ const TYPE_OPTIONS: { id: WorkbenchType; label: string }[] = [
   { id: 'board', label: '板块' },
 ]
 
+/**
+ * B1 首屏冷启动(2026-10-05): 摘要慢车道的**错峰延迟**与**显式超时**(与 KlineChart 对同端点同一取舍)。
+ *
+ * `/klines/{s}/summary` 冷链冷启动 ~10s+(逐笔翻页 + 盘口 thsdk + wencai), 是带1 建议条的唯一入参。
+ *  - 错峰: 延后到首帧之后发出, 不与快车道行情/主图 `/klines/{s}` 抢连接池与后端单 worker 队列;
+ *  - 显式 45s: fetchAPI 默认 20s 会在 10~22s 冷启动窗口提前掐断 ⇒ 建议条整块空(与 `useStocksData` 同取舍)。
+ * 取不到仍显式降级(不出建议条), 不编造。
+ */
+const SUMMARY_SLOW_LANE_DELAY_MS = 350
+const SUMMARY_TIMEOUT_MS = 45000
+
 interface L2Resp {
   more?: L2MoreSnapshot | null
   /** 遗留⑤: 同一份 `/l2` 响应的 `snapshot` 段(振幅的 CN 回退源) —— 不新增请求。 */
@@ -412,6 +423,13 @@ export default function HeaderBand({
     setSummary(null)
   }, [symbol, market, isStock])
 
+  /*
+   * 快车道(B1 首屏冷启动 2026-10-05): 行情/盘口 —— `busy` 只跟**这条**车道。
+   *
+   * 此前把慢速摘要 `/klines/{s}/summary`(冷链 ~10s+)也塞进同一 `allSettled`: 顶行/快照行早已
+   * 落位, 刷新时代的转圈图标却要一直转到摘要回来(首屏像卡住 10~22s)。现在 `busy` 只等
+   * quote/more-info/l2, 摘要改走下方慢车道, 到点补上建议条。
+   */
   useEffect(() => {
     if (!symbol) return
     let alive = true
@@ -445,13 +463,6 @@ export default function HeaderBand({
         }),
       )
     }
-    if (isStock) {
-      tasks.push(
-        insightApi.klineSummary<KlineSummaryData>(symbol, market).then((r) => {
-          if (alive) setSummary(r ?? null)
-        }),
-      )
-    }
     // 失败保留旧值(stale-on-error), 不编造、不清零
     void Promise.allSettled(tasks).then(() => {
       if (alive) setBusy(false)
@@ -460,6 +471,32 @@ export default function HeaderBand({
       alive = false
     }
   }, [symbol, market, isStock, cnStock, tick])
+
+  /**
+   * 慢车道(B1 首屏冷启动 2026-10-05): 技术面建议入参 `/klines/{s}/summary`。
+   *  - 错峰 `SUMMARY_SLOW_LANE_DELAY_MS`: 不与快车道行情/主图抢连接池与后端队列;
+   *  - 显式 `SUMMARY_TIMEOUT_MS`: 默认 20s 在冷链 10~22s 窗口会提前掐断 ⇒ 建议条整块空;
+   *  - 只对个股发(`isStock`; 非个股由"换股清旧值" effect 置 null, 不在此发无用请求)。
+   * 失败保留旧值(stale-on-error); 手动刷新(`tick`)重取但**不清**旧值(建议条不闪)。
+   */
+  useEffect(() => {
+    if (!symbol || !isStock) return
+    let alive = true
+    const timer = window.setTimeout(() => {
+      insightApi
+        .klineSummary<KlineSummaryData>(symbol, market, { timeoutMs: SUMMARY_TIMEOUT_MS })
+        .then((r) => {
+          if (alive) setSummary(r ?? null)
+        })
+        .catch(() => {
+          /* 保留旧值(stale-on-error), 不编造 */
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [symbol, market, isStock, tick])
 
   // 刷新 = 本带行情重取(`tick`)+ 页面级广播(`onRefresh`, 让正文/带2 也重新取数)。见头注 Finding 1。
   const refresh = useCallback(() => {

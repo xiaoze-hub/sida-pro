@@ -1,3 +1,21 @@
+### perf-带1 HeaderBand 快慢车道分离: 行情先出壳, 摘要不拖累刷新态（B1 首屏冷启动）（2026-10-05）
+
+带1 顶部信息带的慢/快取数解耦(只动加载链, 不改布局/文案/取值口径):
+
+- 把慢接口 `/klines/{s}/summary`(技术面建议入参, 冷链 ~10s+)从快车道
+  (`quote`/`more-info`/`l2`)的 `Promise.allSettled` 里**拆出**为独立 effect:
+  ① `busy`(刷新转圈)只跟快车道 ⇒ 行情落位即停, 不再被摘要拖到 10~22s 才停下(此前首屏像卡住);
+  ② 摘要**错峰**(`SUMMARY_SLOW_LANE_DELAY_MS = 350ms`)+ 显式 `timeoutMs: 45000`(默认 20s 会在冷启动
+     10~22s 窗口提前掐断 ⇒ 建议条整块空);
+  ③ 摘要失败**保留旧值**(stale-on-error)/不出建议条(显式降级), 非个股不发(闸门不变), 换股由原清值
+     effect 置 null。
+- `insightApi.klineSummary` 加**可选** `options`(透传 `fetchAPI` 的 `timeoutMs` 等), 不传时行为逐字不变。
+
+新增 `tests/components/header-band-lane.test.tsx`(4 例, **真组件** + mock 网络层): 摘要在途不阻塞出壳且
+转圈即停 / 摘要首帧不发、错峰后发且带显式 45s 超时 / 摘要失败不编造 / 非个股不发摘要。
+
+门禁同上(全量 vitest 116 files / 843 passed); 未动布局/语义。不发版、不打 tag。
+
 ### perf-个股工作台 K 线主图加载链解耦 + 无关重渲染收敛（B1 首屏冷启动）（2026-10-05）
 
 `/stocks/:symbol`(`StockWorkbench`)冷态 settle ~22.7s(B1 生产走查 2026-10-01)的前端加载链治理。
