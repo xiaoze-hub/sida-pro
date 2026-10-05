@@ -153,6 +153,23 @@ const SUBCHART_STRETCH = 0.7
 /** 主图价格轴：上下各留 8%（不再给副图让位） */
 const PRICE_SCALE_MARGINS = { top: 0.08, bottom: 0.08 } as const
 
+/**
+ * B1 首屏冷启动(2026-10-05): 慢速图层摘要(`/klines/{symbol}/summary`)的**错峰延迟**与**显式超时**。
+ *
+ * 背景: summary 冷链(逐笔翻页 + 盘口 thsdk + wencai)冷启动可达 10s+(B1 走查 `/stocks/002361`
+ * 首屏 settle ~22.7s), 且是带1 建议条 / 主图图层 / 主力意图 / 盘口资金标签共用的慢接口。
+ * 首屏若与关键画布的 `/klines/{symbol}`(K线主数据)在同一拍发出, 会同时在浏览器连接池
+ * (HTTP/1.1 同域 6 条)与后端单 worker 队列上把关键请求排在慢活后面 —— 表现为「K 线主图迟迟不出图」。
+ *
+ * 两件事(只改加载链, 不动布局/图层/口径):
+ *  - 错峰: summary 取数延后到首帧之后, 让关键请求**先行**(主图首帧即挂载);
+ *  - 显式超时: fetchAPI 默认 20s 在冷启动 10~22s 窗口会**提前掐断** ⇒ 图层/意图整块空白。
+ *    显式给到 45s(与 `useStocksData` 对同端点的既有取舍一致), 取不到仍走**显式降级**
+ *    (不画图层/不出图例), 不编造。
+ */
+const SUMMARY_SLOW_LANE_DELAY_MS = 350
+const SUMMARY_TIMEOUT_MS = 45000
+
 
 export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
 
@@ -355,17 +372,23 @@ export default function KlineChart(props: {
       return
     }
     let cancelled = false
-    fetchAPI<{ main_intent_structured?: MainIntentStructured | null }>(
-      `/klines/${encodeURIComponent(props.symbol)}/summary?market=CN`,
-    )
-      .then((res) => {
-        if (!cancelled) setIntentFetched(res.main_intent_structured ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setIntentFetched(null)
-      })
+    // 错峰(见 SUMMARY_SLOW_LANE_DELAY_MS 头注): 摘要延后到首帧后, 不抢主图 `/klines/{symbol}` 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      fetchAPI<{ main_intent_structured?: MainIntentStructured | null }>(
+        `/klines/${encodeURIComponent(props.symbol)}/summary?market=CN`,
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+        .then((res) => {
+          if (!cancelled) setIntentFetched(res.main_intent_structured ?? null)
+        })
+        .catch(() => {
+          // 显式降级: 取不到 = 本次不出主力意图图例/箭头(不编造, 不留假方向)
+          if (!cancelled) setIntentFetched(null)
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [props.symbol, props.market, props.mainIntent])
   const intent = props.mainIntent ?? intentFetched
@@ -788,28 +811,32 @@ export default function KlineChart(props: {
     }
     let cancelled = false
     const url = `/klines/${encodeURIComponent(props.symbol)}/summary?market=${encodeURIComponent(props.market)}`
-    fetchAPI<KlineSummaryLayer>(url)
-      .then((res: KlineSummaryLayer | null | undefined) => {
-        if (cancelled) return
-        const rawGs = Array.isArray(res?.gs_signals) ? res.gs_signals : []
-        const gs = rawGs.filter(
-          (g): g is GsSignalPoint =>
-            !!g && typeof g.date === 'string' && (g.side === 'G' || g.side === 'S'),
-        )
-        setLayer({
-          gsSignals: gs,
-          fundFlow: Array.isArray(res?.fund_flow) ? res.fund_flow : [],
-          events: normalizeKlineEvents(res?.events),
-          priceLines: normalizePriceLines(res?.unlock_levels),
-          activitySeries: Array.isArray(res?.activity_series) ? res.activity_series : [],
+    // 错峰(见 SUMMARY_SLOW_LANE_DELAY_MS 头注): 摘要延后到首帧后, 不抢主图 `/klines/{symbol}`。
+    const timer = window.setTimeout(() => {
+      fetchAPI<KlineSummaryLayer>(url, { timeoutMs: SUMMARY_TIMEOUT_MS })
+        .then((res: KlineSummaryLayer | null | undefined) => {
+          if (cancelled) return
+          const rawGs = Array.isArray(res?.gs_signals) ? res.gs_signals : []
+          const gs = rawGs.filter(
+            (g): g is GsSignalPoint =>
+              !!g && typeof g.date === 'string' && (g.side === 'G' || g.side === 'S'),
+          )
+          setLayer({
+            gsSignals: gs,
+            fundFlow: Array.isArray(res?.fund_flow) ? res.fund_flow : [],
+            events: normalizeKlineEvents(res?.events),
+            priceLines: normalizePriceLines(res?.unlock_levels),
+            activitySeries: Array.isArray(res?.activity_series) ? res.activity_series : [],
+          })
         })
-      })
-      .catch(() => {
-        // 取不到 = 本次不画图层(降级), 不编造; summary 侧已有自身降级与缓存
-        if (!cancelled) setLayer(null)
-      })
+        .catch(() => {
+          // 取不到 = 本次不画图层(显式降级), 不编造; summary 侧已有自身降级与缓存
+          if (!cancelled) setLayer(null)
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [props.symbol, props.market, needLayer])
 

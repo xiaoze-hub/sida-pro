@@ -46,8 +46,15 @@ export const insightApi = {
   company: <T>(symbol: string, market: string) =>
     fetchAPI<T>(`/quotes/${encodeURIComponent(symbol)}/company?market=${encodeURIComponent(market)}`),
 
-  klineSummary: <T>(symbol: string, market: string) =>
-    fetchAPI<T>(`/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`),
+  /**
+   * 技术面建议入参(慢接口)。B1 首屏冷启动(2026-10-05): 加可选 `options`(timeoutMs 等) ——
+   * 调用方可显式放宽/收紧超时(默认 20s 会在冷启动窗口提前掐断)。不传时行为逐字不变。
+   */
+  klineSummary: <T>(symbol: string, market: string, options?: ApiRequestOptions) =>
+    fetchAPI<T>(
+      `/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`,
+      options,
+    ),
 
   /** 决策合成(KI-021): 三信号 → 动手/看看/别碰 + 一行理由(后端永不 500) */
   decision: <T>(symbol: string, market: string = 'CN') =>
