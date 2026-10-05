@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi } from '@panwatch/api'
-import KlineChart, { type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
+import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
@@ -72,6 +72,19 @@ import {
 
 /** 工作台当前只服务 A 股口径(CN); 非 CN 标的的 market 由后续路由/参数再议。 */
 const MARKET = 'CN'
+
+/**
+ * B1 首屏冷启动(2026-10-05): 页面局部 `memo` 包一层 K 线主图。
+ *
+ * 主图只吃稳定的 `symbol`/`market`/`costLines` 与 `useCallback` 回调(见下方 `costLines`/`setQuery`),
+ * 页面其余**无关状态**变更(右栏折叠 `railOpen`、区间统计卡收起 `statsDismissed`、`?tab=` 切换)
+ * 不再牵连 K 线主图整棵重渲染 —— 否则它内部依赖 `props.costLines` 等身份的 marker/价格线重绘
+ * effect 会反复重跑(每次重画整图标注)。
+ *
+ * 只在**本页**包(`KlineChart` 是共享件, 它自身读 CSS 变量的渲染语义不动); 右栏 `QuickRail` 的
+ * `memo` 收在其自己模块内(本页是唯一调用方), 故 <QuickRail> 的 JSX 形态保持不变。
+ */
+const MemoKlineChart = memo(KlineChart)
 
 /** 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。 */
 const POSITION_POLL_MS = 60000
@@ -246,9 +259,16 @@ export default function StockWorkbench() {
    * (`undefined`), `KlineChart` 据此**一条不画**, 也**不报错** —— 禁猜、禁默认值(铁律: 数据缺失不编造)。
    * title 只作轴标签用 `safePrice` 格式化(避免裸 toFixed 撞 R6 门禁)。
    */
-  const costLines = position.cost != null
-    ? [{ price: position.cost, title: `成本 ${safePrice(position.cost)}` }]
-    : undefined
+  // 派生数据 memo(B1 首屏冷启动 2026-10-05): 只在**成本价真正变化**时换引用。持仓 60s 轮询
+  // 每拍都会 set 一个新的 `position` 对象, 但 cost 不变时本数组引用不变 ⇒ `MemoKlineChart`
+  // 不因无关重渲染重跑主图重绘 effect(costLines 在它的依赖里)。
+  const costLines = useMemo(
+    () =>
+      position.cost != null
+        ? [{ price: position.cost, title: `成本 ${safePrice(position.cost)}` }]
+        : undefined,
+    [position.cost],
+  )
 
   /** 返回入口(2026-09-20 用户报"从持仓进行情页没有返回按钮"): 必须在任何 early return **之前**
    *  调用(hooks 顺序固定) —— 所以放在这里, 不放渲染前。 */
@@ -273,15 +293,39 @@ export default function StockWorkbench() {
   const [railOpen, setRailOpen] = useState(() => {
     try { return localStorage.getItem('sida_workbench_rail') === '1' } catch { return false }
   })
-  const toggleRail = () =>
-    setRailOpen((v) => {
-      try { localStorage.setItem('sida_workbench_rail', v ? '0' : '1') } catch { /* 隐私模式忽略 */ }
-      return !v
-    })
+  const toggleRail = useCallback(
+    () =>
+      setRailOpen((v) => {
+        try { localStorage.setItem('sida_workbench_rail', v ? '0' : '1') } catch { /* 隐私模式忽略 */ }
+        return !v
+      }),
+    [],
+  )
 
-  /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。 */
-  const setQuery = (key: 'type' | 'tab' | 'period', value: string) =>
-    setSp((prev) => ({ ...Object.fromEntries(prev), [key]: value }))
+  /** 写单个 query(保留其它键, 如 ?type / ?tab / ?period 并存), 不跳页。
+   *  引用**恒定**(`useCallback([])` + 走 ref 取最新 setter): react-router 的 `setSearchParams`
+   *  在部分版本每次渲染换身份, 直接进依赖会让 `handleIntervalChange` 等跟着变 ⇒ 击穿主图 memo。
+   *  用 ref 解耦后, 传给主图/带1/标签栏的回调跨渲染恒同一引用(配合 MemoKlineChart)。 */
+  const setSpRef = useRef(setSp)
+  setSpRef.current = setSp
+  const setQuery = useCallback(
+    (key: 'type' | 'tab' | 'period', value: string) =>
+      setSpRef.current((prev) => ({ ...Object.fromEntries(prev), [key]: value })),
+    [],
+  )
+  // 分发的稳定回调(B1 首屏冷启动 2026-10-05): 全部 `useCallback` 固定身份, 避免无关重渲染。
+  const handleTypeChange = useCallback((t: WorkbenchType) => setQuery('type', t), [setQuery])
+  const handleGotoTab = useCallback((t: WorkbenchTab) => setQuery('tab', t), [setQuery])
+  const handleIntervalChange = useCallback(
+    (i: KlineInterval) => setQuery('period', intervalToPeriod(i)),
+    [setQuery],
+  )
+  const handleRefresh = useCallback(() => setRefreshKey((k) => k + 1), [])
+  const handleRangeStats = useCallback((s: KlineRangeStats | null) => {
+    setRangeStats(s)
+    // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
+    if (s) setStatsDismissed(false)
+  }, [])
 
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
@@ -294,9 +338,9 @@ export default function StockWorkbench() {
         type={type}
         hasPosition={hasPosition === true}
         positionUnknown={hasPosition === undefined}
-        onTypeChange={(t) => setQuery('type', t)}
-        onGotoTab={(t) => setQuery('tab', t)}
-        onRefresh={() => setRefreshKey((k) => k + 1)}
+        onTypeChange={handleTypeChange}
+        onGotoTab={handleGotoTab}
+        onRefresh={handleRefresh}
         back={back}
       />
 
@@ -318,7 +362,7 @@ export default function StockWorkbench() {
               两列底部对齐, 不再被最长列撑出死白。 */}
           <div className="mt-3 flex items-stretch gap-3">
             <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
-              <KlineChart
+              <MemoKlineChart
                 symbol={symbol}
                 market={MARKET}
                 /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
@@ -329,13 +373,9 @@ export default function StockWorkbench() {
                    无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
                 costLines={costLines}
                 /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
-                onIntervalChange={(i) => setQuery('period', intervalToPeriod(i))}
+                onIntervalChange={handleIntervalChange}
                 /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
-                onRangeStats={(s) => {
-                  setRangeStats(s)
-                  // 新区间 = 新读数: 之前手动收起过的卡在区间变化后重新出现
-                  if (s) setStatsDismissed(false)
-                }}
+                onRangeStats={handleRangeStats}
                 /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
                 sourceReady={sourceReady}
                 sourceReason={sourceReason}
@@ -389,7 +429,7 @@ export default function StockWorkbench() {
             )}
           </div>
           {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
-          <TabBar value={tab} onChange={(t) => setQuery('tab', t)} />
+          <TabBar value={tab} onChange={handleGotoTab} />
           <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
         </div>
       )}

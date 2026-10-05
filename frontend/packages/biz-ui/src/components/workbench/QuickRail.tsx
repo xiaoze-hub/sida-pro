@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 // 带符号金额(元 → 万/亿)走**共享实现**(v0.6.0 遗留⑤): 带1 `HeaderBand` 的「封单额」cell 与
 // 本卡的「主力净额」行必须同一套单位映射(同类金额在两个拥有面显示不同单位会被读成两个数)。
@@ -353,7 +353,7 @@ function RailAlertLog() {
   return <AlertLog items={mapped} onClear={clearAlerts} />
 }
 
-export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
+export default memo(function QuickRail({ symbol, market = 'CN' }: { symbol: string; market: string }) {
   const l2 = useL2(symbol, market)
   return (
     <div className="flex flex-col gap-2">
@@ -366,4 +366,4 @@ export default function QuickRail({ symbol, market = 'CN' }: { symbol: string; m
       <RailAlertLog />
     </div>
   )
-}
+})

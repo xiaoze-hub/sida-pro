@@ -1,3 +1,42 @@
+### perf-个股工作台 K 线主图加载链解耦 + 无关重渲染收敛（B1 首屏冷启动）（2026-10-05）
+
+`/stocks/:symbol`(`StockWorkbench`)冷态 settle ~22.7s(B1 生产走查 2026-10-01)的前端加载链治理。
+**只动加载链**(请求次序 / 派生 memo / 重渲染边界): K 线布局、图层配置、成本线、GS 颜色、指标口径、
+决策文案一律零改动 —— `git diff` 的新增行里不出现 `className`/样式/图层/价格轴/`createPriceLine` 类改动。
+
+- **慢摘要错峰(不阻塞主图)**: `KlineChart` 的两个慢接口消费点(图层摘要 + 主力意图自取
+  `/klines/{s}/summary`)改为**首帧之后**(`SUMMARY_SLOW_LANE_DELAY_MS = 350ms`)才发 —— 关键画布的
+  `/klines/{s}`(主图数据)先发、先出图; 摘要与它在浏览器连接池(HTTP/1.1 同域 6 条)与后端单 worker
+  队列上的争用被错开。图表壳与「加载中…」不依赖任何数据 ⇒ 首帧即挂载。
+- **慢接口显式超时 + 显式降级**: 该端点冷启动 10~22s, `fetchAPI` 默认 20s 会**提前掐断** ⇒ 图层/意图
+  整块空白; 两处取数显式给 `timeoutMs: 45000`(与 `useStocksData` 对同端点的既有取舍一致)。取不到仍
+  **显式降级**(不画图层 / 不出图例), 不编造; 竞态守卫(`cancelled` + `clearTimeout`)保持不变。
+- **无关状态变更不重渲染主图**: 页面局部 `memo(KlineChart)` + `costLines` 走 `useMemo`(只在成本价真正
+  变化时换引用) + 分发回调(`setQuery`/`toggleRail`/`handleRangeStats`/`handleIntervalChange`/
+  `handleTypeChange`/`handleGotoTab`/`handleRefresh`)全部 `useCallback` 固定身份(react-router 的
+  `setSearchParams` 身份不稳, 用 ref 解耦)。此前右栏折叠 `railOpen`、区间统计卡收起 `statsDismissed`、
+  切 `?tab=` 等无关变更会让主图重渲染, 并因 `props.costLines` 换身份重跑标记/价格线/资金柱重绘 effect。
+- **右栏 `QuickRail` 的 `memo` 收在其自己模块内**(本页是唯一调用方), 页面 `<QuickRail>` 的 JSX 形态
+  保持不变(兼容 `workbench-kline-focus` 源码钉子)。
+
+**证据(本机 jsdom + mock, 非生产数据; 测量条件如实标注)**: 无关状态变更导致的主图重渲染 **1 次 → 0 次**
+(测试断言); 一次「冗余重渲染」(新 `costLines` 身份 → 重绘 effect 重跑, 数据 = 120 根 K + 120 根资金柱 +
+20 个 GS 信号)jsdom 实测中位 **3.69ms**(对照组同引用 1.50ms); 首帧只发 1 个请求(仅主 K 线), 摘要 350ms
+后才发(测试断言)。**未在生产复测, 故不主张生产 settle 降幅。**
+
+新增回归 2 文件 7 例(全 mock 无真实网络):
+- `tests/components/stock-workbench-load.test.tsx`(3): 主图首帧即挂载(持仓在途时不传假成本线)/无关状态
+  变更不重渲染已 memo 主图/派生成本线引用稳定;
+- `tests/components/kline-load-chain.test.tsx`(4): 渲染**真** `KlineChart` —— 主数据先发先出图且摘要错峰
+  后发带 45s 超时 / 首帧即挂载 / 失败显式错误态(不假报数据也不伪装「无数据」)/ symbol 切换竞态守卫。
+
+测试期 `vite.config.ts` 加 `test.alias` 把 `lightweight-charts` 指向 `tests/stubs/lightweight-charts.ts`
+(该包是 `packages/biz-ui` 依赖, 测试文件 import 不到、`vi.mock` 也拦不住), 使加载链可**真渲染**验证;
+只在测试生效, dev/build 不受影响。
+
+门禁: `npx tsc -b` / `npx tsc -p tsconfig.tests.json` / `node scripts/check_ui_rules.mjs` 全绿;
+前端全量 `npx vitest run` 116 files / 843 passed。不发版、不打 tag。
+
 ### test-修正东财分红 vendor 存量失效用例(基线预存红)（2026-10-02）
 
 `packages/marketdata/tests/test_market_flow.py::TestDividend::test_parses_full_history` 在 **main=v0.13.45 基线即为红**（非本次改动引入，已在未改动 main 上复现）：用例仍按改动前的旧口径断言 —— ① `PRETAX_BONUS_RMB` 是**每10股**派息、`DividendItem.dividend_per_share` 契约是**每股**，代码已 `/10`（实测标定 002361：0.5 ↔ “10派0.50元”），用例仍期望未除的值；② 转增字段名报表真实是 `IT_RATIO`（代码已改用），用例 fixture 仍写 `TRANSFER_RATIO`。本次把用例 fixture/期望对齐到**已上线代码**（**加强、非减弱**断言：新增 /10 契约注释与字段名注释）。仅测试文件，不动 vendor 逻辑。
