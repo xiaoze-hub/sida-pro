@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Info, Loader2, RefreshCw, Search } from 'lucide-react'
 import {
   caliberCompareApi,
@@ -22,6 +22,17 @@ import { ANPAN, GS_SIGNAL, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
  *
  * 硬规则(全仓诚实口径): 某源没有数据就照实显示「无数据」+ 原因, **绝不显示 0 冒充**;
  * 涨红跌绿按 A 股惯例(净流入=红, 净流出=绿); 单位为元, 显示时自动折 亿/万。
+ *
+ * perf(2026-10-05, B1 冷态走查 /caliber-compare 冷态 settle 22.4s): 只动**加载/并发/渲染**路径,
+ * 不改内容/口径标签/排序/对比文案。后端 `build_caliber_compare` 三源是**串行**网络取数且单响应返回,
+ * 其绝对耗时非前端能改; 但前端原本把「对照 + 漂移」两个请求与慢响应串成一条链、且全程无壳:
+ *   - 先出壳后补数: 对照在途时即挂「正在取三源口径」外壳(**不显示任何占位数字**), 不再整片空白;
+ *   - 并发: 「口径漂移」不再等对照响应回来才挂载(此前串行 → 总耗时≈对照+漂移), 改为一旦拿到
+ *     合法代码就与对照**并发**发起;
+ *   - 慢接口显式降级: 对照超过 SLOW_HINT_MS 仍在途 → 显式「取数较慢, 仍在等待」提示 + 重试入口,
+ *     绝不用 0/估算值顶上;
+ *   - 竞态守卫(seqRef): 被更新一轮取代后, 旧响应(含错误)不落地;
+ *   - 渲染缓存: 三列对照 / 差异归因 / 漂移区块 memo 化, 输入框逐字(无关状态)变更不再整棵重渲染。
  */
 function valueColor(v: number | null): string {
   if (v === null || !Number.isFinite(v)) return 'text-muted-foreground'
@@ -50,7 +61,8 @@ function FieldRow({ label, value, unit }: { label: string; value: number | null;
   )
 }
 
-function SourceColumn({ s }: { s: CaliberSource }) {
+/** 单列口径 —— memo 化: 只有该源对象变了才重渲染(与输入框等无关状态解耦)。 */
+const SourceColumn = memo(function SourceColumn({ s }: { s: CaliberSource }) {
   // 口径契约标签: 后端给 caliber_type / caliber_tag; 拿不到一律按 unknown(不猜)
   const rawCaliber = s.caliber_type ?? s.caliber_tag?.caliber
   const dirSemantics = s.direction_semantics ?? s.caliber_tag?.direction_semantics ?? s.caliber
@@ -96,8 +108,130 @@ function SourceColumn({ s }: { s: CaliberSource }) {
       )}
     </div>
   )
-}
+})
 
+/**
+ * 三列对照块(memo)。`sources` 引用在两次渲染间不变时整块跳过 ——
+ * 输入框逐字变更(无关状态)不再重渲染 3 列。
+ */
+const SourceGrid = memo(function SourceGrid({ sources }: { sources: CaliberSource[] }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {sources.map((s) => (
+        <SourceColumn key={s.key} s={s} />
+      ))}
+    </div>
+  )
+})
+
+/**
+ * 「为什么三个数字不一样」+ 成对差异归因(memo)。整块只依赖响应对象, 与输入框状态解耦。
+ */
+const WhyDifferentPanel = memo(function WhyDifferentPanel({ data }: { data: CaliberCompareResponse }) {
+  const pairDiffs = data.pair_diffs ?? []
+  return (
+    <div>
+      <h2 className="text-[13px] font-semibold text-foreground mb-2 flex items-center gap-2">
+        <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
+      </h2>
+      <div className="space-y-2">
+        {/* 口径裁决(2026-09-29 A2): 逐笔 vs 参考口径的一句话 —— 冲突一律以逐笔为准 */}
+        {data.direction_reconcile && (
+          <div
+            data-testid="direction-reconcile"
+            className={`border-l-2 pl-3 text-[11px] text-muted-foreground ${
+              data.direction_reconcile.agree ? 'border-border/50' : 'border-destructive/60'
+            }`}
+          >
+            <span className="text-foreground">口径裁决：</span>
+            {data.direction_reconcile.statement}
+          </div>
+        )}
+        {/* P2-1(2026-09-18): 成对差异 + 归因 —— 三源并排能"看到差", 这块回答"这个差正不正常" */}
+        {pairDiffs.length > 0 && (
+          <div className="mt-4">
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-[13px] font-medium text-foreground">差异归因</span>
+              {data.diff_conclusion && (
+                <span
+                  data-testid="diff-conclusion"
+                  className={`rounded px-1.5 py-0.5 text-[11px] ${
+                    data.diff_conclusion.level === 'alert'
+                      ? 'bg-destructive/10 text-destructive'
+                      : data.diff_conclusion.level === 'warn'
+                        ? 'bg-amber-500/10 text-amber-600'
+                        : 'bg-muted text-muted-foreground'
+                  }`}
+                >
+                  {data.diff_conclusion.level === 'ok'
+                    ? '差在预期带内'
+                    : data.diff_conclusion.level === 'warn'
+                      ? '略出预期带'
+                      : data.diff_conclusion.level === 'alert'
+                        ? '远离预期带 / 方向冲突'
+                        : '数据不足'}
+                </span>
+              )}
+            </div>
+            {data.diff_conclusion && (
+              <p className="mb-2 text-[11px] text-muted-foreground">{data.diff_conclusion.hint}</p>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[11px]">
+                <thead>
+                  <tr className="border-b border-border/60 text-muted-foreground">
+                    <th className="px-2 py-1 font-medium">对比</th>
+                    <th className="px-2 py-1 text-right font-medium">差值</th>
+                    <th className="px-2 py-1 text-right font-medium">相对差</th>
+                    <th className="px-2 py-1 text-right font-medium">比值</th>
+                    <th className="px-2 py-1 font-medium">判定与归因</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {pairDiffs.map((d) => (
+                    <tr key={`${d.a}-${d.b}`}>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        {d.label_a} <span className="text-muted-foreground">vs</span> {d.label_b}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono">{safeMoney(d.abs_diff)}</td>
+                      <td className="px-2 py-1 text-right font-mono">
+                        {d.rel_diff == null ? '--' : `${safeFixed(d.rel_diff * 100, 1)}%`}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono">
+                        {d.ratio == null ? '--' : `${safeFixed(d.ratio, 2)}×`}
+                      </td>
+                      <td className="px-2 py-1">
+                        <span
+                          className={`mr-1 ${
+                            d.level === 'alert'
+                              ? 'text-destructive'
+                              : d.level === 'warn'
+                                ? 'text-amber-600'
+                                : 'text-muted-foreground'
+                          }`}
+                        >
+                          {d.level === 'ok' ? '预期' : d.level === 'warn' ? '留意' : d.level === 'alert' ? '需核对' : '缺数据'}
+                        </span>
+                        <span className="text-muted-foreground">{d.note}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {data.differences.map((d) => (
+          <div key={d.topic} className="border-l-2 border-border/50 pl-3">
+            <div className="text-[12px] text-foreground">{d.topic}</div>
+            <div className="text-[11px] text-muted-foreground leading-relaxed">{d.detail}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+})
 
 /** 源的短名(与对照页一致, 便于同一屏里对照) */
 const SOURCE_SHORT: Record<string, string> = {
@@ -113,8 +247,11 @@ const SOURCE_SHORT: Record<string, string> = {
  * - 每源一条序列, **不取平均、不互相校准、不合成单一"权威数字"**;
  * - 没留痕的日期显示「该日未留痕」, 不插值、不补 0;
  * - 跨源差异必须写明**比的是哪两个字段**, 并标注"口径差异不是误差"(字段含义本来就不同)。
+ *
+ * perf(2026-10-05): memo 化 + 由页面在拿到合法代码时**立即挂载**(与对照请求并发),
+ * 不再等对照响应回来才 mount(此前对照→漂移串行)。内部 symbol/days 变更语义不变。
  */
-function DriftSection({ symbol }: { symbol: string }) {
+const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) {
   const [days, setDays] = useState(30)
   const [data, setData] = useState<CaliberDriftResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -265,36 +402,73 @@ function DriftSection({ symbol }: { symbol: string }) {
       )}
     </div>
   )
-}
+})
+
+/** 对照请求在途超过多久就给出「较慢」显式提示(只是提示, 不中断请求, 不填占位值)。 */
+const SLOW_HINT_MS = 8000
 
 export default function CaliberComparePage() {
   const [code, setCode] = useState('002361')
   const [data, setData] = useState<CaliberCompareResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [slow, setSlow] = useState(false)
+  //: 已发起取数的合法代码 —— 交给「口径漂移」区块**并发**取数用(此前要等对照响应回来才有 data.symbol)。
+  const [querySymbol, setQuerySymbol] = useState('002361')
+  //: 竞态守卫: 每次 load 递增; 响应回来时若已被更新一轮取代, 丢弃(含错误)。
+  const seqRef = useRef(0)
+  const slowTimerRef = useRef<number | null>(null)
 
-  const load = useCallback(async (symbol: string) => {
-    const s = (symbol || '').trim()
-    if (!/^\d{6}$/.test(s)) {
-      setErr('请输入 6 位 A 股代码')
-      return
-    }
-    setLoading(true)
-    setErr('')
-    try {
-      const d = await caliberCompareApi.get(s)
-      setData(d)
-    } catch (e: any) {
-      setData(null)
-      setErr(e?.message || '取数失败')
-    } finally {
-      setLoading(false)
+  const clearSlowTimer = useCallback(() => {
+    if (slowTimerRef.current !== null) {
+      window.clearTimeout(slowTimerRef.current)
+      slowTimerRef.current = null
     }
   }, [])
+
+  const load = useCallback(
+    async (symbol: string) => {
+      const s = (symbol || '').trim()
+      if (!/^\d{6}$/.test(s)) {
+        setErr('请输入 6 位 A 股代码')
+        return
+      }
+      const seq = ++seqRef.current
+      setLoading(true)
+      setErr('')
+      setSlow(false)
+      // 立即把合法代码交给漂移区块 → 对照 + 漂移**并发**, 不再串行。
+      setQuerySymbol(s)
+      clearSlowTimer()
+      slowTimerRef.current = window.setTimeout(() => {
+        if (seqRef.current === seq) setSlow(true)
+      }, SLOW_HINT_MS)
+      try {
+        const d = await caliberCompareApi.get(s)
+        if (seq !== seqRef.current) return // 竞态: 被新一轮取代, 旧响应不落地
+        setData(d)
+      } catch (e: any) {
+        if (seq !== seqRef.current) return // 竞态: 旧响应(含错误)不落地
+        setData(null)
+        setErr(e?.message || '取数失败')
+      } finally {
+        if (seq === seqRef.current) {
+          setLoading(false)
+          clearSlowTimer()
+        }
+      }
+    },
+    [clearSlowTimer],
+  )
 
   useEffect(() => {
     void load('002361')
   }, [load])
+
+  useEffect(() => () => clearSlowTimer(), [clearSlowTimer])
+
+  // 漂移区块与对照并发: 一旦有合法代码且对照未报错即可挂载(此前必须等 data 回来)。
+  const showDrift = !!querySymbol && !err
 
   return (
     <div className="sida-page-enter max-w-6xl mx-auto px-4 py-6">
@@ -346,6 +520,37 @@ export default function CaliberComparePage() {
 
       {err && <div className="text-[12px] text-red-500 mb-3">{err}</div>}
 
+      {/* 先出壳后补数: 对照在途时即挂外壳, 不显示任何占位数字(数字回来前一律空)。 */}
+      {!data && loading && (
+        <div data-testid="caliber-compare-shell" className="mb-6">
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground mb-3">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            正在取三源口径…（冷态首屏可能较久；真实数字回来前不显示任何占位值）
+          </div>
+          {slow && (
+            <div
+              data-testid="caliber-compare-slow"
+              className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-amber-600"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>三源取数较慢，仍在等待 —— 这里不会用 0 或估算值顶上。</span>
+              <Button size="sm" className="h-7 text-[11px]" onClick={() => void load(querySymbol || code)}>
+                重试
+              </Button>
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                data-testid="caliber-compare-shell-col"
+                className="h-28 rounded border border-dashed border-border/40 bg-muted/10"
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {data && (
         <>
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground mb-3">
@@ -356,116 +561,13 @@ export default function CaliberComparePage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {data.sources.map((s) => (
-              <SourceColumn key={s.key} s={s} />
-            ))}
-          </div>
+          <SourceGrid sources={data.sources} />
 
-          <div>
-            <h2 className="text-[13px] font-semibold text-foreground mb-2 flex items-center gap-2">
-              <Info className="w-3.5 h-3.5 text-primary" /> 为什么三个数字不一样
-            </h2>
-            <div className="space-y-2">
-              {/* 口径裁决(2026-09-29 A2): 逐笔 vs 参考口径的一句话 —— 冲突一律以逐笔为准 */}
-              {data.direction_reconcile && (
-                <div
-                  data-testid="direction-reconcile"
-                  className={`border-l-2 pl-3 text-[11px] text-muted-foreground ${
-                    data.direction_reconcile.agree ? 'border-border/50' : 'border-destructive/60'
-                  }`}
-                >
-                  <span className="text-foreground">口径裁决：</span>
-                  {data.direction_reconcile.statement}
-                </div>
-              )}
-              {/* P2-1(2026-09-18): 成对差异 + 归因 —— 三源并排能"看到差", 这块回答"这个差正不正常" */}
-              {(data.pair_diffs ?? []).length > 0 && (
-                <div className="mt-4">
-                  <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                    <span className="text-[13px] font-medium text-foreground">差异归因</span>
-                    {data.diff_conclusion && (
-                      <span
-                        data-testid="diff-conclusion"
-                        className={`rounded px-1.5 py-0.5 text-[11px] ${
-                          data.diff_conclusion.level === 'alert'
-                            ? 'bg-destructive/10 text-destructive'
-                            : data.diff_conclusion.level === 'warn'
-                              ? 'bg-amber-500/10 text-amber-600'
-                              : 'bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {data.diff_conclusion.level === 'ok'
-                          ? '差在预期带内'
-                          : data.diff_conclusion.level === 'warn'
-                            ? '略出预期带'
-                            : data.diff_conclusion.level === 'alert'
-                              ? '远离预期带 / 方向冲突'
-                              : '数据不足'}
-                      </span>
-                    )}
-                  </div>
-                  {data.diff_conclusion && (
-                    <p className="mb-2 text-[11px] text-muted-foreground">{data.diff_conclusion.hint}</p>
-                  )}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-[11px]">
-                      <thead>
-                        <tr className="border-b border-border/60 text-muted-foreground">
-                          <th className="px-2 py-1 font-medium">对比</th>
-                          <th className="px-2 py-1 text-right font-medium">差值</th>
-                          <th className="px-2 py-1 text-right font-medium">相对差</th>
-                          <th className="px-2 py-1 text-right font-medium">比值</th>
-                          <th className="px-2 py-1 font-medium">判定与归因</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/40">
-                        {(data.pair_diffs ?? []).map((d) => (
-                          <tr key={`${d.a}-${d.b}`}>
-                            <td className="px-2 py-1 whitespace-nowrap">
-                              {d.label_a} <span className="text-muted-foreground">vs</span> {d.label_b}
-                            </td>
-                            <td className="px-2 py-1 text-right font-mono">{safeMoney(d.abs_diff)}</td>
-                            <td className="px-2 py-1 text-right font-mono">
-                              {d.rel_diff == null ? '--' : `${safeFixed(d.rel_diff * 100, 1)}%`}
-                            </td>
-                            <td className="px-2 py-1 text-right font-mono">
-                              {d.ratio == null ? '--' : `${safeFixed(d.ratio, 2)}×`}
-                            </td>
-                            <td className="px-2 py-1">
-                              <span
-                                className={`mr-1 ${
-                                  d.level === 'alert'
-                                    ? 'text-destructive'
-                                    : d.level === 'warn'
-                                      ? 'text-amber-600'
-                                      : 'text-muted-foreground'
-                                }`}
-                              >
-                                {d.level === 'ok' ? '预期' : d.level === 'warn' ? '留意' : d.level === 'alert' ? '需核对' : '缺数据'}
-                              </span>
-                              <span className="text-muted-foreground">{d.note}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {data.differences.map((d) => (
-                <div key={d.topic} className="border-l-2 border-border/50 pl-3">
-                  <div className="text-[12px] text-foreground">{d.topic}</div>
-                  <div className="text-[11px] text-muted-foreground leading-relaxed">{d.detail}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <DriftSection symbol={data.symbol} />
+          <WhyDifferentPanel data={data} />
         </>
       )}
+
+      {showDrift && <DriftSection symbol={querySymbol} />}
     </div>
   )
 }

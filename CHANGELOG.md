@@ -1,3 +1,36 @@
+### perf-口径对照页首屏冷加载链并发化 + 渲染缓存（2026-10-05）
+
+`/caliber-compare` 首屏冷启动优化。**无生产实测数据**（B1 生产走查 2026-10-01 的产物已被缓存清理删除），
+结论全部来自代码定位 + 本机 mock 延迟探针（jsdom，非生产联网）。
+
+**根因（本地证据）**
+1. 串行链：对照 `GET /api/caliber-compare?symbol=` 与漂移 `.../{symbol}/drift` 两个请求**串行** ——
+   漂移区块只在对照 `data` 回来后才 mount（`{data && <DriftSection symbol={data.symbol}/>}`），总耗时≈对照+漂移。
+2. 全程无壳：对照在途时内容区整片空白（只有查询按钮转圈），没有任何"正在取数"提示。
+3. `load` 无序号：初始请求与手动连查/回车重叠时，旧响应（含错误横幅）可能覆盖新数据。
+4. 三列对照 / 差异归因 / 漂移表未 memo：输入框逐字（无关状态）变更整棵重渲染。
+（后端 `build_caliber_compare` 三源为**串行**网络取数且单响应返回 —— 本页绝对耗时非前端能改；
+本次**不动后端、不改口径契约** `src/web/api/caliber_compare.py` / `src/core/caliber.py`。）
+
+**改法（只动前端加载/并发/渲染路径，不改内容/口径标签/排序/对比文案，缺数仍显式「无数据」/`--`）**
+- 先出壳后补数：对照在途时即挂「正在取三源口径…（真实数字回来前不显示任何占位值）」外壳，不再空白。
+- 并发：漂移区块改为**拿到合法代码即挂载**（`querySymbol`），与对照**并发**发起，不再等对照响应；对照失败态仍不显示漂移（语义不变）。
+- 慢接口显式降级：对照在途超过 8s → 显式「取数较慢，仍在等待 —— 不会用 0 或估算值顶上」提示 + 重试入口（不中断请求、不填占位值）。
+- 竞态守卫（`seqRef`）：被更新一轮取代后，旧响应（含错误）不落地。
+- 渲染缓存：`SourceGrid` / `WhyDifferentPanel` / `DriftSection` / `SourceColumn` memo 化。
+
+**实测（本机 jsdom + mock 延迟探针，非生产联网；不代表线上绝对值）**
+- 主内容 settle（对照三列 + 漂移行都稳定）：mock 延迟对照 1800ms / 漂移 1200ms 下，串行 **3109ms → 并发 1877ms**。
+- 无关状态变更重渲染（90 天 × 3 源漂移表，40 次逐字）：**667–771ms → 58.5–93.5ms**。
+- 新增回归测试 `frontend/tests/components/caliber-compare-cold-load.test.tsx`（8 例，全 mock 无真实网络）：
+  先出壳不填占位值 / 漂移与对照并发在途 / 慢接口显式降级 / 竞态守卫 ×2 / 失败显式空态不假值 /
+  口径字段缺失不填 0 且不默认方向可用 / 无关状态变更不重渲染。该 8 例在改动前旧代码上 **6 例红**（确为回归钉）。
+- 门禁：`npx tsc -b` / `tsc -p tsconfig.tests.json` / `node scripts/check_ui_rules.mjs` / `eslint` 全绿；
+  前端全量 vitest 114 files / 840 passed。
+
+**测量条件**：无生产数据；延迟/耗时均为本机 mock 实测，仅用于定位串行链与验证并发/缓存是否生效。
+不发版、不打 tag、不改 `.github/`、不改 Dockerfile、不改 sw.js。
+
 ### test-修正东财分红 vendor 存量失效用例(基线预存红)（2026-10-02）
 
 `packages/marketdata/tests/test_market_flow.py::TestDividend::test_parses_full_history` 在 **main=v0.13.45 基线即为红**（非本次改动引入，已在未改动 main 上复现）：用例仍按改动前的旧口径断言 —— ① `PRETAX_BONUS_RMB` 是**每10股**派息、`DividendItem.dividend_per_share` 契约是**每股**，代码已 `/10`（实测标定 002361：0.5 ↔ “10派0.50元”），用例仍期望未除的值；② 转增字段名报表真实是 `IT_RATIO`（代码已改用），用例 fixture 仍写 `TRANSFER_RATIO`。本次把用例 fixture/期望对齐到**已上线代码**（**加强、非减弱**断言：新增 /10 契约注释与字段名注释）。仅测试文件，不动 vendor 逻辑。
