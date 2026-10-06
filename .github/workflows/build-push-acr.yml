@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax check (bash -n)
         run: |
           set -euo pipefail
@@ -59,7 +59,7 @@ jobs:
           # 扫工作区全部文件(不依赖 git 历史深度); --redact 防命中内容泄进 CI 日志
           /tmp/gitleaks detect --no-git --redact
       - name: Set up Python 3.11 (与生产一致)
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - name: Install system libs for WeasyPrint (PDF export tests)
@@ -116,9 +116,9 @@ jobs:
       COVERAGE_FILE: coverage.combined.${{ matrix.shard }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python 3.11 (与生产一致)
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - name: Install system libs for WeasyPrint (PDF export tests)
@@ -175,7 +175,7 @@ jobs:
       - name: Upload shard coverage data
         # 测试红了也上传: 便于确认"红"是不是分片漏跑造成的
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-shard-${{ matrix.shard }}
           # 直接用 matrix 表达式(不引 env 上下文, 少一层可用性歧义)
@@ -193,9 +193,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python 3.11 (与生产一致)
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
       - name: Install coverage tooling
@@ -203,7 +203,7 @@ jobs:
         # 保证两边解析到同一个 coverage 版本, 数据格式不打架。本作业只用它的 coverage CLI。
         run: python3 -m pip install -q pytest-cov
       - name: Download shard coverage data
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: coverage-shard-*
           merge-multiple: true
