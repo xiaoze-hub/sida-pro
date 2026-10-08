@@ -46,6 +46,7 @@ from marketdata.vendors.base import (
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_S = 4.0  # 正常 <100ms; 隧道断开时快速失败交给降级链
+_TIMEOUT_CONNECT_S = 2.0  # P1-10: 显式 connect 超时, 黑洞地址不再挂满整个 read timeout
 
 # ---------------------------------------------------------------------------
 # TQ 陈旧快照防护 (2026-09-04, 09-03 漏数事故)
@@ -101,14 +102,33 @@ def tq_bars_fresh(dates: list | None) -> bool:
 # 运维很难记住配 TDX_QUANT_URL, 故改为**按环境自适应探测**:
 #   1) 显式环境变量 TDX_QUANT_URL 优先(保持既有部署兼容)
 #   2) 否则按候选列表探测(默认网关 → WSL/Docker 常见网段 → 回环), 命中即缓存
-# 探测只在进程内做一次(成本 ~几十 ms), 失败保持旧默认, 行为不变。
+# 探测只在进程内做一次(成本 ~几十 ms); 探测全灭时**不回退任何具体地址** ——
+# 返回 None / 由 _rpc 抛 TqUnavailable, 调用方显式进『TQ 不可用』态(降级链/无数据)。
 # ---------------------------------------------------------------------------
+class TqUnavailable(RuntimeError):
+    """TQ 网关不可用: 所有候选地址探测全灭且未配置显式兜底。
+
+    调用方应据此显式进入『TQ 不可用』态(降级链 / 显式无数据), **不得**再拿一个
+    未经验证的地址去连 —— 死地址连接只会白等超时。见 _resolve_tq_url()。
+    """
+
+
 _TQ_URL_CACHE: str | None = None
-# P2-18: 失败缓存 5min 后重探(网关重启可恢复); 成功缓存永久
+# P2-18: 失败缓存 5min 后重探(网关重启可恢复)
 _TQ_URL_CACHE_OK = False
 _TQ_URL_CACHE_TS = 0.0
 _TQ_FAIL_TTL = 300.0
-_FALLBACK_URL = "http://172.18.0.1:5100/"
+# P1-5: 成功缓存复探 TTL —— 旧代码成功后永久不自愈(网关迁移/端口变化后一直连旧地址)。
+# 20min 内复用, 超时重新探测(自愈)。见 _TQ_OK_TTL。
+_TQ_OK_TTL = 1200.0
+# P1-5: 连续 N 次 _rpc 连接失败 → 主动失效成功缓存, 下次 _resolve 强制重探。
+_TQ_FAIL_STREAK = 0
+_TQ_FAIL_STREAK_THRESHOLD = 3
+# P1-4: 探测总预算与单次预算, 防止失败后调用线程被 ~12 候选 × 1.5s 同步扫挂(最坏 18s)。
+_PROBE_BUDGET_S = 3.0
+_PROBE_SINGLE_TIMEOUT_S = 1.5
+# P1-4: 最近命中的主机地址, 探测时排到最前(优先探已知可用网段)。
+_TQ_LAST_GOOD_HOST: str | None = None
 
 
 def _host_gateway() -> str | None:
@@ -127,12 +147,16 @@ def _host_gateway() -> str | None:
 
 
 def _probe_tq(url: str, timeout: float = 1.5) -> bool:
-    """最轻探测: get_stock_list 能回 result 即视为可用。"""
+    """最轻探测: get_stock_list 能回 result 即视为可用。
+
+    P1-10: 显式 connect 超时(默认 2s) —— 纯 httpx 单值 timeout 下黑洞地址会挂满
+    整个 timeout; 探测本身也带 connect 上限。
+    """
     body = json.dumps(
         {"id": 1, "method": "get_stock_list", "params": {"market": "5", "list_type": 0}}
     ).encode("utf-8")
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as client:
             resp = client.post(url, content=body,
                                headers={"Content-Type": "application/json; charset=utf-8"})
             if resp.status_code != 200:
@@ -143,20 +167,40 @@ def _probe_tq(url: str, timeout: float = 1.5) -> bool:
         return False
 
 
-def _resolve_tq_url() -> str:
-    """解析可用的 TQ 网关地址(成功缓存永久, 失败缓存 5min 后重探)。"""
+def _resolve_tq_url() -> str | None:
+    """解析可用的 TQ 网关地址; **探测全灭时返回 None**(不回退任何具体地址)。
+
+    P0-3: 旧实现在候选全灭时回退 `candidates[0]`(= _host_gateway() 拼 17709 的
+    docker 桥网关, 生产永不监听) 并把死地址写进 `_TQ_URL_CACHE` 供 source_health
+    探活 → 探活永远失败却又被当成"已发现的地址"。现在:
+      - 候选全灭 → `_TQ_URL_CACHE = None`, 返回 None, 调用方显式进 TQ 不可用态;
+      - **唯一**允许的非探测兜底 = 运维显式配置的 env `TDX_QUANT_URL`;
+      - 死代码 `_FALLBACK_URL` 已删除。
+
+    P1-4: 探测总预算 `_PROBE_BUDGET_S`(≤3s), env + 最近命中主机优先, 超预算即停。
+    P1-5: 成功缓存 20min 复探 TTL; 连续连接失败主动失效(见 _note_rpc_conn_failure)。
+    """
     import time as _time
 
-    global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS
-    if _TQ_URL_CACHE and (_TQ_URL_CACHE_OK or _time.time() - _TQ_URL_CACHE_TS < _TQ_FAIL_TTL):
+    global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS, _TQ_LAST_GOOD_HOST
+    now = _time.time()
+
+    # 缓存判定: 成功 → OK TTL(20min) 内复用; 失败 → FAIL TTL(5min) 内不重复阻塞探测。
+    # 成功 TTL 过期或失败 TTL 过期 → 落到下面重新探测(自愈)。
+    ttl = _TQ_OK_TTL if _TQ_URL_CACHE_OK else _TQ_FAIL_TTL
+    if _TQ_URL_CACHE_TS and now - _TQ_URL_CACHE_TS < ttl:
         return _TQ_URL_CACHE
 
     env_url = (os.environ.get("TDX_QUANT_URL") or "").strip()
+    env_norm = env_url.rstrip("/") + "/" if env_url else ""
     gw = _host_gateway()
+    host_order = [gw, "172.27.16.1", "172.28.0.1", "172.17.0.1", "172.18.0.1", "127.0.0.1"]
+    if _TQ_LAST_GOOD_HOST:  # P1-4: 最近命中主机优先探
+        host_order = [_TQ_LAST_GOOD_HOST] + [h for h in host_order if h != _TQ_LAST_GOOD_HOST]
     candidates: list[str] = []
-    if env_url:
-        candidates.append(env_url.rstrip("/") + "/")
-    for host in [gw, "172.27.16.1", "172.28.0.1", "172.17.0.1", "172.18.0.1", "127.0.0.1"]:
+    if env_norm:
+        candidates.append(env_norm)
+    for host in host_order:
         if not host:
             continue
         for port in (17709, 5100):
@@ -164,19 +208,39 @@ def _resolve_tq_url() -> str:
             if u not in candidates:
                 candidates.append(u)
 
+    deadline = _time.monotonic() + _PROBE_BUDGET_S
     for u in candidates:
-        if _probe_tq(u):
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0.05:
+            logger.warning("TQ 探测预算(%.1fs)耗尽, 停止探测(候选剩余)", _PROBE_BUDGET_S)
+            break
+        if _probe_tq(u, timeout=min(_PROBE_SINGLE_TIMEOUT_S, remaining)):
             _TQ_URL_CACHE = u
             _TQ_URL_CACHE_OK = True
             _TQ_URL_CACHE_TS = _time.time()
+            _TQ_LAST_GOOD_HOST = httpx.URL(u).host
             logger.info("TQ 网关自动命中: %s", u)
             return u
 
-    _TQ_URL_CACHE = candidates[0] if candidates else _FALLBACK_URL
+    # 全灭: 不回退探测出的地址; 仅 env 兜底(运维显式配置)或 None。
+    _TQ_URL_CACHE = env_norm or None
     _TQ_URL_CACHE_OK = False
     _TQ_URL_CACHE_TS = _time.time()
-    logger.warning("TQ 网关探测全部失败, 沿用默认 %s(将降级其他数据源)", _TQ_URL_CACHE)
+    if env_norm:
+        logger.warning("TQ 网关探测全灭, 仅按 env TDX_QUANT_URL 兜底 %s(将降级其他数据源)", env_norm)
+    else:
+        logger.warning("TQ 网关探测全灭且未配置 TDX_QUANT_URL → TQ 不可用(将降级其他数据源)")
     return _TQ_URL_CACHE
+
+
+def _note_rpc_conn_failure() -> None:
+    """P1-5: 记录一次 _rpc 连接级失败; 连续 N 次 → 主动失效成功缓存强制重探。"""
+    global _TQ_FAIL_STREAK, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS
+    _TQ_FAIL_STREAK += 1
+    if _TQ_FAIL_STREAK >= _TQ_FAIL_STREAK_THRESHOLD and _TQ_URL_CACHE_OK:
+        logger.warning("TQ 连续 %d 次连接失败, 主动失效成功缓存触发重探", _TQ_FAIL_STREAK)
+        _TQ_URL_CACHE_OK = False
+        _TQ_URL_CACHE_TS = 0.0  # 强制下次 _resolve 重探
 
 
 def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool = False):
@@ -187,11 +251,22 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool =
     整段丢掉(实测网关**有**回 Date, 是这里被丢的)。
     """
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(_resolve_tq_url(), content=body,
-                          headers={"Content-Type": "application/json; charset=utf-8"})
-        resp.raise_for_status()
-        data = json.loads(resp.content.decode("utf-8"))
+    url = _resolve_tq_url()
+    if not url:
+        # P0-3: 探测全灭且无 env 兜底 → 显式 TQ 不可用, 不拿死地址去连(挂满 timeout)。
+        raise TqUnavailable("TQ 网关不可用: 候选地址探测全灭且未配置 TDX_QUANT_URL")
+    global _TQ_FAIL_STREAK
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(_TIMEOUT_CONNECT_S, timeout))) as client:
+            resp = client.post(url, content=body,
+                              headers={"Content-Type": "application/json; charset=utf-8"})
+            resp.raise_for_status()
+            data = json.loads(resp.content.decode("utf-8"))
+    except httpx.TransportError:
+        # P1-10/P1-5: 连接级失败 → 记一次失败, 连续多次主动失效成功缓存重探。
+        _note_rpc_conn_failure()
+        raise
+    _TQ_FAIL_STREAK = 0
     if "error" in data:
         raise RuntimeError(f"TQ rpc error: {data['error']}")
     result = data.get("result") or {}
@@ -320,6 +395,13 @@ class TqQuoteVendor(QuoteVendor):
                     total_mv = _to_float(mi.get("Zsz"))
             except Exception:  # noqa: BLE001
                 pass
+            # P1-8 单位标定(2026-10-08 实盘对照, 002361.SZ): 快照 Amount 源为**万元**。
+            # 证据: TQ Amount=182560.53; 腾讯同日 parts[37]=182560.5387(万元) 且
+            # parts[35] 元额=1,825,605,387 ≈ Amount×1e4; 恒等式 Amount×1e4 /(Volume 手×100)
+            # = 10.2308 ≈ 快照 Average(VWAP 10.23)。与 stock_l2.py / tdx_boards.py 对同一
+            # 接口 Amount 的 ×1e4(万元→元) 及 types.py 契约 turnover=元 一致。
+            _amt_wan = _to_float(v.get("Amount"))
+            turnover_yuan = (_amt_wan * 1e4) if _amt_wan is not None else None
             out.append(
                 Quote(
                     symbol=sym.code,
@@ -333,7 +415,7 @@ class TqQuoteVendor(QuoteVendor):
                     change_amount=change_amount,
                     change_pct=change_pct,
                     volume=_to_float(v.get("Volume")),
-                    turnover=_to_float(v.get("Amount")),
+                    turnover=turnover_yuan,
                     turnover_rate=turnover_rate,
                     volume_ratio=volume_ratio,
                     volume_inner=(inside if inside is not None else None),
@@ -1613,6 +1695,9 @@ def formula_scan(formula_name: str, *, formula_arg: str = "", date: str = "",
         return {"formula": formula_name, "formula_arg": formula_arg, "date": date,
                 "scanned": 0, "hit_count": 0, "hits": [], "per_signal": {},
                 "chunks_failed": 0, "complete": False,
+                # P2: 早退必须带 date_has_data=False —— 否则 tq_formula_signals 判不出
+                # "该日无数据" 而落 hit_count=0, 用非交易日稀释真实基线。
+                "date_rows": 0, "date_has_data": False,
                 "error": "代码池为空(取股票列表失败)"}
 
     # 窄窗口: end = 目标日(默认今天), start = end - N 自然日
