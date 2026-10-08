@@ -400,6 +400,13 @@ class TqQuoteVendor(QuoteVendor):
             # parts[35] 元额=1,825,605,387 ≈ Amount×1e4; 恒等式 Amount×1e4 /(Volume 手×100)
             # = 10.2308 ≈ 快照 Average(VWAP 10.23)。与 stock_l2.py / tdx_boards.py 对同一
             # 接口 Amount 的 ×1e4(万元→元) 及 types.py 契约 turnover=元 一致。
+            #
+            # P2 Volume 单位标定(2026-10-08 在线标定, 7 只 A股交叉腾讯): 快照 Volume 源为**手**,
+            # 与腾讯 qt.gtimg.cn parts[6] 同口径(比值 1.0000, 7/7); 恒等式 Volume(手)×100×Average
+            # = 1,825,454,499 元 ≈ Amount×1e4。(指数快照 Volume 亦同 parts[6] 口径。)
+            # Quote.volume 契约=手(冻结 docs/_frozen/data.md:12「腾讯 volume/outer/inner=手」;
+            # 恒等式 turnover/(price×volume×100) 见 test_vendor_missing_fields) ⇒ 此处**保持手,
+            # 不做 ×100** —— 与 Bar.volume(股)是两套契约, 别把两者混为一谈。
             _amt_wan = _to_float(v.get("Amount"))
             turnover_yuan = (_amt_wan * 1e4) if _amt_wan is not None else None
             out.append(
@@ -414,7 +421,7 @@ class TqQuoteVendor(QuoteVendor):
                     low_price=_to_float(v.get("Min")),
                     change_amount=change_amount,
                     change_pct=change_pct,
-                    volume=_to_float(v.get("Volume")),
+                    volume=_to_float(v.get("Volume")),  # 手(源原生); 见上 P2 标定, 不做 ×100
                     turnover=turnover_yuan,
                     turnover_rate=turnover_rate,
                     volume_ratio=volume_ratio,
@@ -502,6 +509,10 @@ class TqKlineVendor(KlineVendor):
         lows = rows.get("Low") or []
         volumes = rows.get("Volume") or []
         out: list[Bar] = []
+        # P2 Volume 单位: get_market_data 的 Volume **原生即股**(与腾讯/东财 fqkline 的手不同,
+        # 那两家才需 ×100 见 vendors/kline.py)。实测 002361 日线 Volume=178,441,360 = 快照手值
+        # 1,784,413×100; 恒等式 Volume(股)×Average ≈ daily Amount(万元)×1e4 (VWAP=10.23)。
+        # 冻结 docs/_frozen/data.md K线表同样登记「TQ volume=股(原生), 无需换算」⇒ 这里**绝不 ×100**。
         for i, d in enumerate(dates):
             try:
                 out.append(
