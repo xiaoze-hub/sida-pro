@@ -51,8 +51,10 @@ def run_scan(limit: int | None = Query(None, ge=1, le=6000)):
 
             jobs.start(job_id, "scanning")
             out = resonance_scan.scan(limit=limit, on_progress=jobs.progress_reporter(job_id))
-            jobs.succeed(job_id, str(out)[:500])
-            logger.info("手动共振扫描完成: %s", out)
+            if jobs.finish(job_id, out, context="共振扫描: "):
+                logger.info("手动共振扫描完成: %s", out)
+            else:
+                logger.warning("手动共振扫描未成: %s", out)
         except Exception as e:  # noqa: BLE001
             jobs.fail(job_id, str(e))
             logger.warning("手动共振扫描失败: %s", e)

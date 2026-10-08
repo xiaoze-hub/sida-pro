@@ -1,4 +1,25 @@
-### feat-题材情绪盘中实时更新 + 收盘定型状态徽标（2026-10-08）
+### fix-作业状态诚实化: ok=False 必须 failed（2026-10-08）
+
+诚实性审计 P0-1: 扫描类任务用 `{"ok": False, "reason": ...}` 表达"没干成"(TQ 断链/
+数据源全空), 但作业 runner 只要函数不抛就 `jobs.succeed(...)` —— 作业面板显示成功、
+实际无数据, 断链三天无人发现。修法: 抽统一判定, 显式 `ok is False` 即判失败并透传 reason。
+
+- **统一 helper**: `src/core/jobs.py` 新增 `result_failure(out)`(纯函数, 显式 `ok is False`
+  → 返回原因, 否则 None; 无 `ok` 键的老任务体不误伤) + `JobStore.finish(job_id, out, context=)`
+  (失败 → `failed` 且 message/error 都带 `<context><reason>`; 成功 → `succeed(str(out))`)。
+- **三个 _runner 收口**: `src/web/api/theme_mood.py` 的 `_spawn_scan`/`_spawn_intraday_refresh`/
+  `spawn_settle` 与 `src/web/api/resonance.py` 的 `run_scan` 全部改用 `jobs.finish(...)`,
+  不再无条件 succeed; 未成时打 warning(含返回体)。
+- **进程内后台任务**: `src/web/api/market_data.py` 的 `_bg_start._runner` 用 `result_failure`
+  判返回体; `ok=False` → `failed` 且不写缓存(失败结果绝不落缓存), 异常路径行为不变。
+
+新增 `tests/test_job_honesty.py`(11 例, SQLite 内存库 / 不触真实网络): `result_failure`
+语义(含无 ok 键不误伤)、`finish` 失败带 message+error、theme_mood 三种 job 参数化
+(ok=False → failed 带 reason; ok=True → succeeded)、resonance 手动扫描 job、`_bg_start`
+的 ok=False→failed / ok=True→succeeded / 异常→failed 三态。既有测试全绿。
+
+验收: `pytest tests/ -k 'theme_mood or resonance or job'` 全绿、`scripts/check_is_pg_scope.py`、
+ruff。不发版、不打 tag、不部署。
 
 `/theme-mood` 接后端 `/api/theme-mood/board` 顶层新增的板级数据状态(另一路同步实现):
 `phase`(`pre`/`live`/`closed_pending`/`final`)、`as_of`、`settled_at`、`trading_day`、`note`。

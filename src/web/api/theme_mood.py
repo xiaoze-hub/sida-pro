@@ -318,8 +318,10 @@ def _spawn_scan() -> dict:
 
             jobs.start(job_id, "scanning")
             out = theme_mood.scan(write_days=1, on_progress=jobs.progress_reporter(job_id))
-            jobs.succeed(job_id, str(out)[:500])
-            logger.info("手动题材情绪扫描完成: %s", out)
+            if jobs.finish(job_id, out, context="题材情绪扫描: "):
+                logger.info("手动题材情绪扫描完成: %s", out)
+            else:
+                logger.warning("手动题材情绪扫描未成: %s", out)
         except Exception as e:  # noqa: BLE001
             jobs.fail(job_id, str(e))
             logger.warning("手动题材情绪扫描失败: %s", e)
@@ -347,8 +349,10 @@ def _spawn_intraday_refresh(reason: str = "scheduled") -> dict:
 
             jobs.start(job_id, "intraday")
             out = theme_mood.intraday_job()
-            jobs.succeed(job_id, str(out)[:500])
-            logger.info("题材情绪盘中刷新完成(%s): %s", reason, out)
+            if jobs.finish(job_id, out, context="题材情绪盘中刷新: "):
+                logger.info("题材情绪盘中刷新完成(%s): %s", reason, out)
+            else:
+                logger.warning("题材情绪盘中刷新未成(%s): %s", reason, out)
         except Exception as e:  # noqa: BLE001
             jobs.fail(job_id, str(e))
             logger.warning("题材情绪盘中刷新失败: %s", e)
@@ -369,8 +373,10 @@ def spawn_settle(reason: str = "scheduled") -> dict:
 
             jobs.start(job_id, "settling")
             out = theme_mood.settle_job()
-            jobs.succeed(job_id, str(out)[:500])
-            logger.info("题材情绪收盘定型完成(%s): %s", reason, out)
+            if jobs.finish(job_id, out, context="题材情绪收盘定型: "):
+                logger.info("题材情绪收盘定型完成(%s): %s", reason, out)
+            else:
+                logger.warning("题材情绪收盘定型未成(%s): %s", reason, out)
         except Exception as e:  # noqa: BLE001
             jobs.fail(job_id, str(e))
             logger.warning("题材情绪收盘定型失败: %s", e)
