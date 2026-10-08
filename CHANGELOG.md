@@ -1,3 +1,8 @@
+### fix-job 诚实性测试改同步执行消时序竞态（2026-10-08）
+
+CI(run 37761685911) shard 3 三例红：`_wait_terminal` 5s 超时 —— 真后台线程在负载下完成时机不可测(单跑绿/CI 红)。
+测试内把 job runner 线程换成同步替身(`_ImmediateThread`)，断言强度不变、结果确定；等待上限 5s→30s 兜底。
+
 ### fix-监控计数器断言改 delta 解耦执行顺序（2026-10-08）
 
 `test_bridge_counts_method_kind` 绝对值断言与进程级 Prometheus 计数器的历史累积耦合（单跑绿/合跑红），
