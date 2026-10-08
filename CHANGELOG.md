@@ -1,3 +1,41 @@
+### fix-TQ 监控与降级可见性(断链不再无声)（2026-10-08）
+
+通达信链路断 3 天无人发现, 审计定位监控/可观测/降级标注缺口, 全部补上(不发版):
+
+- **P1-6 直连消费者失败进监控**: theme_mood/resonance_scan/tdx_boards/limit_pool_zdt/
+  market_sentiment_collector/tdx_dark_fund 等**直连** `tq_rpc` 的失败此前完全不上报
+  (只有经 Engine 的 vendor 失败才 `emit_vendor_failure`)。新增
+  `src/core/tq_rpc_observability.py`: `install_tq_rpc_guard()` 幂等包一层 `tq_rpc`,
+  失败 → `emit_vendor_failure("tq", 调用名)` 后**原样 re-raise**(不吞), 一处覆盖全部直连方
+  (含本子代理不便改动的核心文件)。kind=方法名但走**有界白名单**(白名单外归一 `fetch`,
+  防 Prometheus label 基数膨胀); health.py 启动时安装, 事件经既有桥接进
+  `sida_datasource_failures_total` + `datasource_failures` 表(表自带 60s 限流)。
+- **P1-7 断链主动告警**: 数据质量哨兵新增 `tq_gateway` 检查(第 6 项)——
+  alerting 的 TQ 连续失败计数(≥1 warn / ≥3 fail)与 source_health `tq_moreinfo`
+  "已发现地址但当前不通"的**延续轮数**(≥3 轮 → fail)任一达标即写 Notification/WeCom
+  (复用 `notify_center.push_notification`)。未配置/尚未发现地址**不算证据**, 不误告警。
+  新增 `alerting.failure_streak()` 只读访问器与 `data_quality_sentinel.reset_tq_gateway_streak()`。
+- **P2 失败日志限流**: 新增 `marketdata/log_throttle.py`(按 (provider,kind) 60s 一条 +
+  累计抑制计数), Engine 超时/异常分支与 vendor `fetch` 包装改用限流打印; 明细仍走已限流的表。
+- **P2 涨停池来源标注**: wudao 路径此前不写 `source`(tq/tq_zdt/eastmoney 已写)。
+  补 `source="wudao"`; `get_sentiment_summary()` 新增 `limit_up_source` / `limit_up_sources`
+  汇总并在 candidates 透传每条 source, 降级结果不再被当主源静默使用。
+- **P2 暗盘北交所映射**: `tdx_dark_fund._to_tq_code` 删本地副本, 统一复用
+  `marketdata.vendors.tq.to_tq_code` —— 修掉本地版缺 4/8/920 → BJ 分支、对北交所代码
+  静默返回 None 的缺口; 其 TQ 调用同时改走公开 `tq_rpc` 入口(进观测包装)。
+- **P2 妖股因子断链错误态**: `demon_factors` TQ 全断时此前 `events_saved=0` 且仅有 debug 级,
+  `update_pipeline` 无 ok 标志。`_tq_bars_direct` 加 `raise_on_error`(暴露真失败, 日志升 warning),
+  `backfill_incremental`/`backfill_direct_tq` 返回 `failed` 计数 + `ok` 显式错误态,
+  `update_pipeline` 返回 `ok` 并对失败计数记 warning。
+
+测试(禁真实网络): 新增 `tests/test_tq_observability.py`(26 例)覆盖观测包装 emit/re-raise/幂等/
+白名单、限流(同 key 60s 一条 + Engine 集成)、哨兵 tq_gateway(ok/warn/fail/degraded 升级/触发通知)、
+wudao source、summary 透传、北交所映射、妖股因子错误态。`tests/conftest.py` 前置本仓库 marketdata
+包路径(worktree 下避免解析到主库旧代码假绿) + 每用例清 TQ 失败计数/限流等进程级状态(修合跑 flaky)。
+验收: `pytest tests/ -k 'source_health or sentinel or limit_pool or dark_fund or demon or sentiment'`
+(158 passed)、`scripts/check_is_pg_scope.py` OK、ruff 全过。不发版、不打 tag、不部署。
+
+
 ### feat-题材情绪盘中实时更新 + 收盘定型状态徽标（2026-10-08）
 
 `/theme-mood` 接后端 `/api/theme-mood/board` 顶层新增的板级数据状态(另一路同步实现):

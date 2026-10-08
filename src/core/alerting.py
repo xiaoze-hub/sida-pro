@@ -413,6 +413,16 @@ def reset_data_source_streaks() -> None:
         _ds_last_detail.clear()
 
 
+def failure_streak(provider: str) -> int:
+    """当前连续失败次数(只读; 供数据质量哨兵等判断 TQ 断链)。失败静默返回 0。"""
+    try:
+        p = (provider or "unknown").strip() or "unknown"
+        with _ds_lock:
+            return int(_ds_fail_streak.get(p, 0))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def notify_db_connection_error(detail: str = "") -> bool:
     """数据库连接失败告警(健康检查/启动探测调用)。"""
     try:

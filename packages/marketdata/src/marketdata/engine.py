@@ -16,6 +16,7 @@ import time
 from marketdata.cache import TTLCache
 from marketdata.http import record_error
 from marketdata.keypool import KeyPool
+from marketdata.log_throttle import log_failure
 from marketdata.ports import ConfigProvider, MetricsSink
 from marketdata.symbol import Market, Symbol
 from marketdata.types import Request, Response
@@ -107,7 +108,10 @@ class Engine:
                     self.metrics.record(vendor=src.vendor, datatype=self.datatype, market=market,
                                         ok=False, count=0, latency_ms=latency, error=err)
                     last_err = err
-                    logger.warning(f"[marketdata/{self.datatype}] vendor={src.vendor} TIMEOUT {err}")
+                    log_failure(
+                        logger, f"{src.vendor}:timeout",
+                        f"[marketdata/{self.datatype}] vendor={src.vendor} TIMEOUT {err}",
+                    )
                     record_error(f"{src.vendor}: {err}")
                     emit_vendor_failure(src.vendor, "timeout")
                     break
@@ -124,9 +128,13 @@ class Engine:
                     self.metrics.record(vendor=src.vendor, datatype=self.datatype, market=market,
                                         ok=False, count=0, latency_ms=latency, error=err)
                     last_err = err
-                    logger.warning(f"[marketdata/{self.datatype}] vendor={src.vendor} key={api_key[:8] if api_key else '-'} raised: {e}")
-                    record_error(f"{src.vendor}: {type(e).__name__}: {e}")
                     kind = "auth" if rl and ("401" in err or "403" in err or "unauthorized" in err.lower()) else "fetch"
+                    log_failure(
+                        logger, f"{src.vendor}:{kind}",
+                        f"[marketdata/{self.datatype}] vendor={src.vendor} "
+                        f"key={api_key[:8] if api_key else '-'} raised: {e}",
+                    )
+                    record_error(f"{src.vendor}: {type(e).__name__}: {e}")
                     emit_vendor_failure(src.vendor, kind)
                     if kp and rl:
                         continue  # 限流: 换下一个 key 重试

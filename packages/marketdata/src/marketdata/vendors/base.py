@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import functools
+import logging
 import threading
 from abc import ABC, abstractmethod
 
 from marketdata.symbol import Symbol
+
+logger = logging.getLogger(__name__)
 
 # ── 数据源失败监听 ──
 # marketdata 包内零依赖: 失败事件经 emit_vendor_failure 广播, 由宿主应用
@@ -34,13 +37,25 @@ def emit_vendor_failure(provider: str, kind: str = "fetch") -> None:
 
 
 def _instrument_fetch(original):
-    """fetch 失败自动上报后原样抛出(不吞异常, 由上层决定降级)。"""
+    """fetch 失败自动上报后原样抛出(不吞异常, 由上层决定降级)。
+
+    日志按 (vendor, "fetch") 限流(60s 一条 + 累计抑制计数, 见 log_throttle),
+    避免 TQ 断链时全市场分片刷屏。
+    """
     @functools.wraps(original)
     def wrapper(self, symbols, config):
         try:
             return original(self, symbols, config)
-        except Exception:
-            emit_vendor_failure(self.name or type(self).__name__, "fetch")
+        except Exception as e:
+            from marketdata.log_throttle import log_failure
+
+            name = self.name or type(self).__name__
+            log_failure(
+                logger,
+                f"vendor-fetch:{name}",
+                f"[marketdata/vendor] {name} fetch 失败: {type(e).__name__}: {e}",
+            )
+            emit_vendor_failure(name, "fetch")
             raise
     wrapper._failure_instrumented = True
     return wrapper

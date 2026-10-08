@@ -195,6 +195,8 @@ class MarketSentimentCollector:
                     "reason": str(item.get("reasonType") or item.get("reason_type") or ""),
                     "turnover_rate": _f(item.get("turnoverRate")),
                     "order_amount": _f(item.get("orderAmount")),
+                    # P2(2026-10-08): 统一标来源, 降级链各源可追溯
+                    "source": "wudao",
                 }
             )
         return out
@@ -372,9 +374,19 @@ class MarketSentimentCollector:
                 "first_time": _first_time_str(p),
                 "turnover_rate": p.get("turnover_rate"),
                 "order_amount": p.get("order_amount"),
+                "source": p.get("source") or "",
             }
             for p in candidates[:12]
         ]
+
+        # P2(2026-10-08): 透传降级来源 —— 池子各条已带 source, 这里汇总出主源,
+        # 让消费方/前端能一眼看出"这份涨停池来自哪个源"(tq/tq_zdt/wudao/eastmoney),
+        # 不再把降级结果当主源静默使用。
+        src_counts: dict[str, int] = {}
+        for p in pool:
+            s = p.get("source") or "unknown"
+            src_counts[s] = src_counts.get(s, 0) + 1
+        limit_up_source = max(src_counts, key=lambda k: src_counts[k]) if src_counts else "unknown"
 
         return {
             "limit_up_count": total,
@@ -385,6 +397,8 @@ class MarketSentimentCollector:
                 {"name": k, "count": v} for k, v in top_sectors
             ],
             "candidates": candidate_list,
+            "limit_up_source": limit_up_source,
+            "limit_up_sources": src_counts,
         }
 
     def get_sector_rotation(self, top_n: int = 10) -> dict:

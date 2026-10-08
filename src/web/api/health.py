@@ -196,6 +196,15 @@ def record_request_metrics(method: str, path: str, status: int, duration_ms: flo
 
 _DATASOURCE_KINDS = ("fetch", "parse", "timeout", "auth")
 
+# 2026-10-08 可观测性审计 P1-6: 直连 tq_rpc 的失败以 TQ 方法名为 kind 上报,
+# 故归一白名单并入 TQ 方法名(有界集合, 防 label 基数膨胀)。
+try:
+    from src.core.tq_rpc_observability import TQ_RPC_KINDS as _TQ_RPC_KINDS
+
+    _DATASOURCE_KINDS = tuple(dict.fromkeys(_DATASOURCE_KINDS + _TQ_RPC_KINDS))
+except Exception:  # noqa: BLE001
+    pass
+
 
 def record_datasource_failure(provider: str, kind: str = "fetch") -> None:
     """数据源失败计数(供 Prometheus SidaDatasourceFailures 告警)。
@@ -235,6 +244,16 @@ try:
 
     _md_on_vendor_failure(_on_vendor_failure)
 except Exception:  # noqa: BLE001 - 桥接失败不影响业务
+    pass
+
+# P1-6(2026-10-08): 直连 tq_rpc 的消费者(theme_mood/resonance_scan/tdx_boards/
+# limit_pool_zdt/market_sentiment_collector 等)此前失败不进监控; 启动时装一层
+# 失败上报包装, 覆盖全部直连方。幂等, 失败静默。
+try:
+    from src.core.tq_rpc_observability import install_tq_rpc_guard
+
+    install_tq_rpc_guard()
+except Exception:  # noqa: BLE001
     pass
 
 
