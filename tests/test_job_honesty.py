@@ -17,8 +17,32 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+import threading as _threading
+
 import src.core.jobs as J
 import src.db.session as dbs
+
+
+class _ImmediateThread:
+    """同步替身: .start() 直接在当前线程跑 target —— 消灭 job 测试的时序竞态。
+
+    CI 实测(2026-10-08, run 37761685911): 真后台线程在负载下 5s 内不一定完成,
+    `_wait_terminal` 超时红(单跑绿/CI 红)。runner 的正确性与线程调度无关,
+    同步执行 = 断言强度不变、结果确定。
+    """
+
+    def __init__(self, target=None, name=None, daemon=None, **_kw):
+        self._target = target
+
+    def start(self) -> None:
+        if self._target is not None:
+            self._target()
+
+
+@pytest.fixture(autouse=True)
+def _sync_job_threads(monkeypatch):
+    monkeypatch.setattr(_threading, "Thread", _ImmediateThread)
+    yield
 
 
 # ────────────────────────── 统一 helper 单测 ──────────────────────────
@@ -64,7 +88,7 @@ def test_finish_succeed_on_ok_true(store):
 
 # ────────────────────────── P0-1 theme_mood 三种 job ──────────────────────────
 
-def _wait_terminal(store, jid, timeout=5.0):
+def _wait_terminal(store, jid, timeout=30.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         row = store.get(jid)
