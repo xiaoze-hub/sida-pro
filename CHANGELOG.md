@@ -1,3 +1,29 @@
+### feat-题材情绪盘中实时更新 + 收盘定型状态徽标（2026-10-08）
+
+`/theme-mood` 接后端 `/api/theme-mood/board` 顶层新增的板级数据状态(另一路同步实现):
+`phase`(`pre`/`live`/`closed_pending`/`final`)、`as_of`、`settled_at`、`trading_day`、`note`。
+**只加状态条/徽标/轮询逻辑** —— 布局/密度/分层零改动(`theme-mood-layering` / `theme-mood-density` /
+`truncation-readable` 契约测试原样通过), 数据语义/排序/五维权重文案零改动。
+
+- **状态徽标(五态 + 未知态)**: 新增 `frontend/src/components/ThemeMoodStatus.tsx`, 一行内联徽标。
+  `live`→「实时」+ `快照 <as_of>`; `final`→「已定型」+ `定型 <settled_at>`; `closed_pending`→「收盘待定型」;
+  `pre`→「盘前」(非交易日显式标「非交易日」); **字段缺失/旧后端/枚举外 → 显式「未知状态」**, 不假装成
+  live/final(`parseBoardPhase` 只认四个契约值, 缺省不作默认值猜测)。时间字段为空一律输出「无数据」。
+- **盘中自动轮询**: `phase=live` 每 60s 拉一次 board(`cacheMode:'reload'`, 不自行加缓存 —— 缓存口径由
+  后端控制); `final` 后**停止**轮询; 其余状态沿用原 120s 兜底节奏; `visibilitychange` 页面隐藏暂停、
+  回到前台立即补拉一次; 请求序号守卫(已被新请求取代的旧/慢响应**不落地**); 轮询失败**静默**(保留旧数据,
+  仅一条可见提示「轮询失败, 自动重试中」带 `title`, 不弹错误风暴)。
+- **as_of/基准日显式标注**: 顶部「基准日 <trade_date>」, 缺数据显示「基准日 无数据」(不填 0、不留空)。
+- **手动刷新复用**: 原 `refresh` 入口改为状态条内的「刷新」按钮, 刷新期间展示 `刷新中…` + 转圈。
+
+新增 `frontend/tests/components/theme-mood-live-ui.test.tsx`(15 例, jsdom + mock 网络层, 禁真实网络):
+五态徽标文案与 `data-phase` / live 显 as_of、final 显 settled_at、缺字段显「无数据」/ 未知态不冒充 /
+`parseBoardPhase` 容错 / live 60s 轮询、final 停轮询、pre 走 120s / 页面隐藏暂停 + 回前台补拉 /
+失败静默且旧数据保留 / 竞态守卫(旧响应不覆盖新数据) / 基准日与 as_of 标注 / 手动刷新 loading 态。
+
+验收: `npx vitest run` 全量通过、`npx tsc -b`、`npx tsc -p tsconfig.tests.json`、`node scripts/check_ui_rules.mjs`
+(UI-RULES OK)。不发版、不打 tag、不部署。
+
 ### perf-带1 HeaderBand 快慢车道分离: 行情先出壳, 摘要不拖累刷新态（B1 首屏冷启动）（2026-10-05）
 
 带1 顶部信息带的慢/快取数解耦(只动加载链, 不改布局/文案/取值口径):
