@@ -43,6 +43,20 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def result_failure(out: Any) -> str | None:
+    """任务返回体显式宣告失败时返回原因, 否则 None(视为成功)。
+
+    诚实性审计 P0-1(2026-10-08): 扫描/回填类任务用 `{"ok": False, "reason": ...}`
+    表达"没干成"(如 TQ 断链、数据源全空), 但过去调用方一律 `succeed`, 作业面板
+    显示成功、实际无数据 —— 断链三天无人发现。统一在此判定: 只有显式 `ok is False`
+    才判失败(缺 `ok` 键的老任务体不误伤, 仍按成功处理)。
+    """
+    if isinstance(out, dict) and out.get("ok") is False:
+        reason = out.get("reason") or out.get("error") or "任务返回 ok=False"
+        return str(reason)
+    return None
+
+
 def _row_to_dict(r: Any) -> dict:
     return {
         "id": r[0], "kind": r[1], "label": r[2], "status": r[3], "progress": r[4],
@@ -117,6 +131,23 @@ class JobStore:
 
     def fail(self, job_id: str, error: str) -> None:
         self.update(job_id, status="failed", error=str(error)[:1000], finished_at=_now())
+
+    def finish(self, job_id: str, out: Any, *, context: str = "") -> bool:
+        """按任务返回体诚实落终态: `result_failure(out)` 非空 → failed(带原因), 否则 succeeded。
+
+        P0-1(2026-10-08): 作业 runner 的结束逻辑统一走这里, 别再各处 `jobs.succeed(...)`
+        一把梭 —— 返回体说 `ok=False` 就必须显式失败。`context` 前缀(如 "共振扫描: ")
+        便于作业面板区分来源。返回 True=记为成功, False=记为失败。
+        """
+        reason = result_failure(out)
+        if reason is not None:
+            msg = f"{context}{reason}"
+            # message 与 error 都给上: 作业面板列表看 message, 详情/前端报错看 error。
+            self.update(job_id, status="failed", error=msg[:1000], message=msg[:500],
+                        finished_at=_now())
+            return False
+        self.succeed(job_id, str(out)[:500])
+        return True
 
     def cancel(self, job_id: str, reason: str = "已取消") -> bool:
         """协作式取消: 置 cancelled, 任务在下一个分块边界自查后退出。"""

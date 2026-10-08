@@ -35,6 +35,7 @@ from sqlalchemy import text
 from src.web.cache.biz_cache import biz_cache
 from src.core.cn_gateway import gateway_url
 from src.core.caliber import CAPITAL_FLOW_TAG as _CAPITAL_FLOW_TAG
+from src.core.jobs import result_failure
 from src.db.dialect import is_postgres
 
 logger = logging.getLogger(__name__)
@@ -95,20 +96,31 @@ def _bg_start(key: str, fn: Callable[[], dict], *, result_key: str = "",
     def _runner() -> None:
         try:
             result = fn()
-            if cache_ttl and result_key:
-                try:
-                    biz_cache.set_json(result_key, result, ttl=cache_ttl)
-                except Exception:
-                    pass
-            with job.lock:
-                job.status = "succeeded"
-                job.finished_at = time.time()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"后台任务 {key} 失败: {e}")
             with job.lock:
                 job.status = "failed"
                 job.error = str(e)[:300]
                 job.finished_at = time.time()
+            return
+        # P0-1(2026-10-08): 返回体显式 ok=False 时也是失败 —— 过去只要 fn() 不抛就
+        # 记 succeeded, 数据源全空/断链时作业面板显示成功而结果是空, 无人察觉。
+        reason = result_failure(result)
+        if reason is not None:
+            logger.warning(f"后台任务 {key} 返回失败: {reason}")
+            with job.lock:
+                job.status = "failed"
+                job.error = reason[:300]
+                job.finished_at = time.time()
+            return
+        if cache_ttl and result_key:
+            try:
+                biz_cache.set_json(result_key, result, ttl=cache_ttl)
+            except Exception:
+                pass
+        with job.lock:
+            job.status = "succeeded"
+            job.finished_at = time.time()
 
     threading.Thread(target=_runner, name=f"bg-{key[:40]}", daemon=True).start()
     return True
