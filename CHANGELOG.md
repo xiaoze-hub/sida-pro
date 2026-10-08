@@ -1,3 +1,16 @@
+### test-标定并锁死通达信 Volume 单位(快照=手/日线=股)（2026-10-08）
+
+审计遗留 P2(turnover 单位同族)。**在线标定(7 只 A股交叉腾讯, 2026-10-08 收盘后)**:
+`get_market_snapshot.Volume` = 手(腾讯 parts[6] 比值 1.0000, 7/7);`get_market_data(1d).Volume`
+= 股(比值 100.000, 7/7)。恒等式(002361)快照 Vol(手)×100×Average = Amount(万元)×1e4、
+日线 Vol(股)×Average ≈ Amount×1e4 均成立。
+
+结论(证据先行, **不改换算**): 两套契约单位本就不同 —— `Quote.volume=手`(腾讯/东财/TQ
+实时同口径, 冻结 docs/_frozen/data.md:12)、`Bar.volume=股`(腾讯/东财源为手需 ×100, TQ 原生
+已股)。故 `TqQuoteVendor.volume`(手)与 `TqKlineVendor` 日线 volume(股)**现有处理均正确**,
+不做任何 ×100/÷100;新增 tq.py 界内标定注释 + `tests/test_tq_volume_unit.py`(恒等式 + 跨源
+交叉 + Quote/Bar 归一一致性)锁死, 防止后续"顺手换算"污染 DB/B5 校验。
+
 ### fix-job 诚实性测试改同步执行消时序竞态（2026-10-08）
 
 CI(run 37761685911) shard 3 三例红：`_wait_terminal` 5s 超时 —— 真后台线程在负载下完成时机不可测(单跑绿/CI 红)。
