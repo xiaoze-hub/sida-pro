@@ -1,3 +1,29 @@
+### feat-题材情绪盘中实时刷新 + 收盘定型(phase/as_of/settled_at 契约)（2026-10-08）
+
+`src/core/theme_mood.py` 落库分两态, `GET /api/theme-mood/board` 顶层新增契约字段
+`phase / as_of / settled_at / trading_day / note`, `src/bootstrap/startup.py` 注册两个 cron:
+
+- **盘中(交易日 9:30-15:00)** `phase="live"`: 交易时段每 10 分钟后台 job 以 `source='intraday'`
+  upsert 当日实时快照(沿用现有五维口径与数据源; 盘中拉的"最新一日K线"即当日实时, 非昨日)。
+- **收盘(15:05 起)** `phase="final"`: 完整定型扫描 `source='close'` + `settled_at`, **幂等** ——
+  复跑靠 upsert 的 `COALESCE(theme_mood_daily.settled_at, excluded.settled_at)` 保留**首次**定型时间
+  (settled_at 不跳变), 数值一致。定型行受 `ON CONFLICT ... WHERE source <> 'close'` 保护,
+  **不再被盘中逻辑覆盖**。
+- **15:00-15:05 / 定型 job 未跑完** `phase="closed_pending"` 显式标注; **盘前/非交易日** `phase="pre"`,
+  无数据即 as_of=null(禁编造/禁填 0)。
+- `GET /board` 打开时: 若当日行 `updated_at` 陈旧(>10 分钟)则后台触发刷新, 但**先返回现有值**
+  (serve-stale-while-revalidate, 后台线程 + 进程内 60s 冷却 + 作业单飞, 绝不阻塞页面)。
+- schema 唯一入口: 迁移 `_m182_theme_mood_settled_at`(给 `theme_mood_daily` 补 `settled_at`),
+  禁运行时加列; 本表为**共享行情数据**(无 user_id), 沿用现状共享口径。
+- 调度(取代旧单一 15:45 扫描): `theme-mood-settle`(mon-fri 15:05) + `theme-mood-intraday`
+  (mon-fri 9-15 每 10 分钟, 任务内交易日/时段守卫); 18:45 缓存预热 job 保留; 非交易日两 job 都不跑。
+  用字符串 `"cron"` + kwargs 注册(仅此形式注入调度器 app_timezone)。
+
+新增 `tests/test_theme_mood_live_settle.py`(30 例, 离线 mock 数据源): phase 五态 / 盘中 upsert 刷新 /
+定型幂等(settled_at 冻结、数值一致) / 定型不被盘中覆盖 / 陈旧后台刷新不阻塞 / 非交易日 / 缺数据显式 /
+API 新字段契约 / 迁移可重复跑。`pytest tests/ -k theme_mood` 77 passed; `check_is_pg_scope` / 
+`check_migrations`(v182) / ruff 全绿。不发版、不打 tag。
+
 ### perf-带1 HeaderBand 快慢车道分离: 行情先出壳, 摘要不拖累刷新态（B1 首屏冷启动）（2026-10-05）
 
 带1 顶部信息带的慢/快取数解耦(只动加载链, 不改布局/文案/取值口径):

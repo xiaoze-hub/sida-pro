@@ -283,7 +283,8 @@ def market_series(rows: list[dict], dates: list[str], top_n: int = 20) -> list[d
 
 
 def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_sealed: list,
-                      s1_history: list, sealed_history: list, prev: dict, core_candidates: list) -> dict:
+                      s1_history: list, sealed_history: list, prev: dict, core_candidates: list,
+                      source: str = "close") -> dict:
     """单题材单日装配(纯函数): 五维 → 总分/置信度/核心/明细/广度。"""
     s1, d1 = dim_structure(sealed=int(today["sealed"]), touched=int(today["touched"]),
                            max_boards=int(today["max_boards"]), ge2=int(today["ge2"]),
@@ -326,7 +327,7 @@ def compute_theme_day(*, date: str, today: dict, pcts: list, market: dict, hist_
         "breadth": {"coverage": None if coverage is None else round(coverage, 3),
                     "sample": len(sample), "members": members,
                     "median_pct": d2.get("median_pct"), "strong_share": d2.get("strong_share")},
-        "source": "close",
+        "source": source,
     }
 
 
@@ -515,43 +516,90 @@ def _theme_cores(code: str, members: list[str], series: dict, date: str) -> list
     return out
 
 
-def _upsert(rows: list[dict]) -> int:
+# ── 盘中(source='intraday') / 定型(source='close') 两条 upsert 语义(2026-10-08)──
+# 定型: settled_at 用 COALESCE 保留首次(复跑不跳变), 可覆盖盘中行。
+# 盘中: settled_at 恒 NULL, 且 DO UPDATE 带 `WHERE source <> 'close'` 保护定型行。
+_UPSERT_SETTLED = """
+    INSERT INTO theme_mood_daily
+        (trade_date, block_code, block_name, block_type, score, s1, s2, s3, s4, s5,
+         confidence, core, limit_up_cnt, touched_cnt, max_boards, ge2_cnt,
+         core_stocks, detail, breadth, source, settled_at, updated_at)
+    VALUES (:trade_date, :block_code, :block_name, :block_type, :score, :s1, :s2, :s3, :s4, :s5,
+            :confidence, :core, :limit_up_cnt, :touched_cnt, :max_boards, :ge2_cnt,
+            :core_stocks, :detail, :breadth, 'close', :settled_at, :updated_at)
+    ON CONFLICT(trade_date, block_code) DO UPDATE SET
+        block_name=excluded.block_name, block_type=excluded.block_type, score=excluded.score,
+        s1=excluded.s1, s2=excluded.s2, s3=excluded.s3, s4=excluded.s4, s5=excluded.s5,
+        confidence=excluded.confidence, core=excluded.core, limit_up_cnt=excluded.limit_up_cnt,
+        touched_cnt=excluded.touched_cnt, max_boards=excluded.max_boards, ge2_cnt=excluded.ge2_cnt,
+        core_stocks=excluded.core_stocks, detail=excluded.detail, breadth=excluded.breadth,
+        source='close',
+        settled_at=COALESCE(theme_mood_daily.settled_at, excluded.settled_at),
+        updated_at=excluded.updated_at
+"""
+
+_UPSERT_INTRADAY = """
+    INSERT INTO theme_mood_daily
+        (trade_date, block_code, block_name, block_type, score, s1, s2, s3, s4, s5,
+         confidence, core, limit_up_cnt, touched_cnt, max_boards, ge2_cnt,
+         core_stocks, detail, breadth, source, settled_at, updated_at)
+    VALUES (:trade_date, :block_code, :block_name, :block_type, :score, :s1, :s2, :s3, :s4, :s5,
+            :confidence, :core, :limit_up_cnt, :touched_cnt, :max_boards, :ge2_cnt,
+            :core_stocks, :detail, :breadth, 'intraday', NULL, :updated_at)
+    ON CONFLICT(trade_date, block_code) DO UPDATE SET
+        block_name=excluded.block_name, block_type=excluded.block_type, score=excluded.score,
+        s1=excluded.s1, s2=excluded.s2, s3=excluded.s3, s4=excluded.s4, s5=excluded.s5,
+        confidence=excluded.confidence, core=excluded.core, limit_up_cnt=excluded.limit_up_cnt,
+        touched_cnt=excluded.touched_cnt, max_boards=excluded.max_boards, ge2_cnt=excluded.ge2_cnt,
+        core_stocks=excluded.core_stocks, detail=excluded.detail, breadth=excluded.breadth,
+        source='intraday',
+        updated_at=excluded.updated_at
+    WHERE theme_mood_daily.source <> 'close'
+"""
+
+
+def _now_cst_str() -> str:
+    """CST 墙上时间字符串(供 updated_at/settled_at 落库; 读侧解析成 +08:00)。"""
+    return datetime.now(_CST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _upsert(rows: list[dict], *, settle: bool = False) -> int:
+    """题材情绪日行幂等落库(2026-10-08 盘中/定型两态分写)。
+
+    `settle=True`(收盘定型): 写 `source='close'` + `settled_at`; 复跑用
+      `COALESCE(theme_mood_daily.settled_at, excluded.settled_at)` 保留**首次**定型时间
+      (settled_at 不跳变), 并允许定型覆盖此前的盘中行。
+    `settle=False`(盘中刷新): 写 `source='intraday'`, settled_at 恒 NULL; ON CONFLICT 带
+      `WHERE theme_mood_daily.source <> 'close'` —— **定型后的当日行不再被盘中覆盖**。
+    `updated_at` 一律写 CST 墙上时间字符串(不依赖 DB 时区), 供 API 的 `as_of` 精确回显。
+    """
     from sqlalchemy import text as _text
 
     from src.db.session import engine
 
-    cols = ("trade_date", "block_code", "block_name", "block_type", "score", "s1", "s2", "s3", "s4", "s5",
-            "confidence", "limit_up_cnt", "touched_cnt", "max_boards", "ge2_cnt", "source")
+    sql = _UPSERT_SETTLED if settle else _UPSERT_INTRADAY
+    now_str = _now_cst_str()
+    n = 0
     with engine.begin() as conn:
         for r in rows:
-            conn.execute(
-                _text(
-                    """
-                    INSERT INTO theme_mood_daily
-                        (trade_date, block_code, block_name, block_type, score, s1, s2, s3, s4, s5,
-                         confidence, core, limit_up_cnt, touched_cnt, max_boards, ge2_cnt,
-                         core_stocks, detail, breadth, source)
-                    VALUES (:trade_date, :block_code, :block_name, :block_type, :score, :s1, :s2, :s3, :s4, :s5,
-                            :confidence, :core, :limit_up_cnt, :touched_cnt, :max_boards, :ge2_cnt,
-                            :core_stocks, :detail, :breadth, :source)
-                    ON CONFLICT(trade_date, block_code) DO UPDATE SET
-                        block_name=excluded.block_name, block_type=excluded.block_type, score=excluded.score,
-                        s1=excluded.s1, s2=excluded.s2, s3=excluded.s3, s4=excluded.s4, s5=excluded.s5,
-                        confidence=excluded.confidence, core=excluded.core, limit_up_cnt=excluded.limit_up_cnt,
-                        touched_cnt=excluded.touched_cnt, max_boards=excluded.max_boards, ge2_cnt=excluded.ge2_cnt,
-                        core_stocks=excluded.core_stocks, detail=excluded.detail, breadth=excluded.breadth,
-                        source=excluded.source, updated_at=CURRENT_TIMESTAMP
-                    """
-                ),
-                {
-                    **{k: r.get(k) for k in cols},
-                    "core": bool(r.get("core")),
-                    "core_stocks": json.dumps(r.get("core_stocks") or [], ensure_ascii=False),
-                    "detail": json.dumps(r.get("detail") or {}, ensure_ascii=False),
-                    "breadth": json.dumps(r.get("breadth") or {}, ensure_ascii=False),
-                },
-            )
-    return len(rows)
+            params = {
+                "trade_date": r.get("trade_date"), "block_code": r.get("block_code"),
+                "block_name": r.get("block_name"), "block_type": r.get("block_type"),
+                "score": r.get("score"), "s1": r.get("s1"), "s2": r.get("s2"),
+                "s3": r.get("s3"), "s4": r.get("s4"), "s5": r.get("s5"),
+                "confidence": r.get("confidence"), "core": bool(r.get("core")),
+                "limit_up_cnt": r.get("limit_up_cnt"), "touched_cnt": r.get("touched_cnt"),
+                "max_boards": r.get("max_boards"), "ge2_cnt": r.get("ge2_cnt"),
+                "core_stocks": json.dumps(r.get("core_stocks") or [], ensure_ascii=False),
+                "detail": json.dumps(r.get("detail") or {}, ensure_ascii=False),
+                "breadth": json.dumps(r.get("breadth") or {}, ensure_ascii=False),
+                "updated_at": now_str,
+            }
+            if settle:
+                params["settled_at"] = now_str
+            conn.execute(_text(sql), params)
+            n += 1
+    return n
 
 
 def _purge_codes(dates: list[str], codes: list[str]) -> int:
@@ -579,8 +627,11 @@ def _purge_codes(dates: list[str], codes: list[str]) -> int:
 
 def scan(*, write_days: int = 1, day: str | None = None,
          min_members: int = POOL_MIN_MEMBERS, max_members: int = POOL_MAX_MEMBERS,
-         on_progress=None) -> dict:
+         source: str = "close", settle: bool = False, on_progress=None) -> dict:
     """全量扫描: 585 题材 × 最近 write_days 个交易日 → 幂等落库。永不抛异常。
+
+    `source`/`settle`: 盘中刷新传 `source='intraday'`(单日实时快照, 不覆盖定型行);
+    收盘定型传 `settle=True`(source='close' + settled_at, 幂等)。默认 close 定型语义不变。
 
     `on_progress(frac: float, stage: str)`(可选)按**流水线阶段**报进度, frac 单调 0→1:
     成分股 0~0.25 / 日线批量 0.25~0.40 / 逐日计算 0.40~0.95 / 落库 0.95~1。
@@ -651,6 +702,7 @@ def scan(*, write_days: int = 1, day: str | None = None,
                         pcts=[(series.get(s) or {}).get("pct", {}).get(d) for s in members],
                         market=market, hist_sealed=sealed_hist[code][-60:], s1_history=s1_hist[code][-3:],
                         sealed_history=sealed_hist[code][-2:], prev=prev, core_candidates=cores,
+                        source=source,
                     )
                     row["block_code"] = code
                     row["block_name"] = t.get("name") or code
@@ -672,21 +724,189 @@ def scan(*, write_days: int = 1, day: str | None = None,
         if not rows:
             return {"ok": False, "reason": "无可写行"}
         report(0.95, f"落库 {len(rows)} 行")
-        _upsert(rows)
+        _upsert(rows, settle=settle)
         meta_codes = [t["code"] for t in themes_all if is_meta_board(t.get("name"))]
         purged = _purge_codes(write, meta_codes + wide_codes)
         return {"ok": True, "rows": len(rows), "dates": write, "themes": len(const),
                 "symbols": len(all_syms), "skipped_meta": skipped_meta,
-                "skipped_wide": len(wide_codes), "purged": purged}
+                "skipped_wide": len(wide_codes), "purged": purged,
+                "source": source, "settled": bool(settle),
+                "settled_at": _now_cst_str() if settle else None}
     except Exception as e:  # noqa: BLE001
         logger.warning("题材情绪扫描异常: %s", e)
         return {"ok": False, "reason": str(e)}
 
 
 def daily_job() -> dict:
-    """cron 入口(交易日 15:45): 扫描当日。永不抛异常。"""
+    """cron 入口(交易日 15:05 定型; 兼容保留名): 扫描当日并写 settled_at。永不抛异常。"""
     try:
-        return scan(write_days=1)
+        return scan(write_days=1, source="close", settle=True)
     except Exception as e:  # noqa: BLE001
         logger.warning("题材情绪每日任务异常: %s", e)
         return {"ok": False, "reason": str(e)}
+
+
+def settle_job() -> dict:
+    """cron 入口(交易日 15:05): 收盘定型 —— source='close' + settled_at, 幂等。永不抛异常。"""
+    try:
+        return scan(write_days=1, source="close", settle=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("题材情绪收盘定型异常: %s", e)
+        return {"ok": False, "reason": str(e)}
+
+
+def intraday_job() -> dict:
+    """cron 入口(交易时段每 10 分钟): 盘中实时快照 —— source='intraday' 单日 upsert。
+
+    时段/交易日守卫在调用方(web 层换名函数, 因调度器注册点不得反向 import core→web)。
+    永不抛异常。
+    """
+    try:
+        return scan(write_days=1, source="intraday", settle=False)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("题材情绪盘中刷新异常: %s", e)
+        return {"ok": False, "reason": str(e)}
+
+
+# ── 时段/定型态判定(2026-10-08; 契约见 web/api/theme_mood.py 顶层注释)──────────────
+LIVE_START_MIN = 9 * 60 + 30   # 9:30 开盘
+LIVE_END_MIN = 15 * 60         # 15:00 收盘
+SETTLE_MIN = 15 * 60 + 5       # 15:05 定型起点
+INTRADAY_FRESH_S = 600         # 盘中行陈旧阈值(秒): > 10 分钟触发后台刷新
+
+
+def _cn_now(now=None) -> datetime:
+    """归一到 Asia/Shanghai; naive 视为上海墙上时间(便于单测注入)。"""
+    if now is None:
+        return datetime.now(_CST)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=_CST)
+    return now.astimezone(_CST)
+
+
+def _parse_dt(v):
+    """DB 时间值(str / datetime) → aware CST datetime; 无法解析返回 None。"""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        dt = v
+    else:
+        s = str(v).strip()
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s.replace(" ", "T")[:26])
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_CST)
+    return dt
+
+
+def _iso_cst(v) -> str | None:
+    """DB 时间值 → 带 +08:00 的 ISO8601; 缺失/非法 → None。"""
+    dt = _parse_dt(v)
+    return dt.isoformat() if dt is not None else None
+
+
+def resolve_phase(*, now: datetime, trading_day: bool, settled: bool) -> tuple[str, str]:
+    """纯函数: (CST 时刻, 是否交易日, 当日是否已定型) → (phase, note)。
+
+    phase ∈ pre / live / closed_pending / final; note 为**显式**人话说明(不伪装)。
+    """
+    mins = now.hour * 60 + now.minute
+    if not trading_day:
+        return "pre", "非交易日, 展示最近交易日数据"
+    if mins < LIVE_START_MIN:
+        return "pre", "盘前, 展示最近交易日数据"
+    if mins <= LIVE_END_MIN:
+        return "live", "盘中实时快照, 每 10 分钟刷新"
+    if mins < SETTLE_MIN:
+        return "closed_pending", "收盘撮合中, 待定型"
+    if settled:
+        return "final", "收盘已定型"
+    return "closed_pending", "收盘待定型(定型任务尚未完成)"
+
+
+def is_live_window(now=None) -> bool:
+    """是否处于盘中实时窗口(交易日 9:30-15:00)。"""
+    from src.core.trading_calendar import is_trading_day
+
+    dt = _cn_now(now)
+    if not is_trading_day(dt.date()):
+        return False
+    mins = dt.hour * 60 + dt.minute
+    return LIVE_START_MIN <= mins <= LIVE_END_MIN
+
+
+def is_settle_due_now(now=None) -> bool:
+    """是否已到收盘定型点(交易日 15:05 起)。"""
+    from src.core.trading_calendar import is_trading_day
+
+    dt = _cn_now(now)
+    if not is_trading_day(dt.date()):
+        return False
+    return dt.hour * 60 + dt.minute >= SETTLE_MIN
+
+
+def intraday_is_stale(as_of, *, max_age_s: int = INTRADAY_FRESH_S, now=None) -> bool:
+    """盘中行是否陈旧: as_of 缺失或距今 > max_age_s(默认 10 分钟) → True。"""
+    dt = _parse_dt(as_of)
+    if dt is None:
+        return True
+    return (_cn_now(now) - dt).total_seconds() > float(max_age_s)
+
+
+def _query(sql: str, params: dict) -> list[dict]:
+    from sqlalchemy import text as _text
+
+    from src.db.session import engine
+
+    with engine.begin() as conn:
+        return [dict(r._mapping) for r in conn.execute(_text(sql), params).fetchall()]
+
+
+def market_phase(now=None) -> dict:
+    """API 契约字段(2026-10-08): phase / as_of / settled_at / trading_day / note。
+
+    - `phase`: pre / live / closed_pending / final(语义见 resolve_phase);
+    - `as_of`: 当日(无则最近交易日的)数据快照时间, ISO8601 带 +08:00;
+    - `settled_at`: 当日定型时间或 null;
+    - `trading_day`: 今日是否交易日;
+    - `note`: 显式说明。
+    读取失败一律降级为 `pre` + 显式 note, 绝不抛异常打断页面。
+    """
+    from src.core.trading_calendar import is_trading_day
+
+    dt = _cn_now(now)
+    try:
+        trading = bool(is_trading_day(dt.date()))
+    except Exception as e:  # noqa: BLE001 — 日历未覆盖该年 → 按非交易日保守处理
+        logger.debug("题材情绪时段: 交易日历不可用: %s", e)
+        trading = False
+    today = dt.strftime("%Y%m%d")
+    as_of_raw = settled_raw = None
+    settled = False
+    try:
+        rows = _query(
+            "SELECT MAX(updated_at) AS as_of, MAX(settled_at) AS settled_at,"
+            " SUM(CASE WHEN source = 'close' THEN 1 ELSE 0 END) AS close_rows"
+            " FROM theme_mood_daily WHERE trade_date = :d",
+            {"d": today},
+        )
+        if rows:
+            as_of_raw = rows[0].get("as_of")
+            settled_raw = rows[0].get("settled_at")
+            settled = int(rows[0].get("close_rows") or 0) > 0
+    except Exception as e:  # noqa: BLE001 — 表未迁移/读失败 → 无数据, 不编造
+        logger.debug("题材情绪时段: 当日落库状态读取失败: %s", e)
+    if as_of_raw is None:  # 当日无数据 → 用最近一次数据时间(如盘的昨天定型)
+        try:
+            rows = _query("SELECT MAX(updated_at) AS as_of FROM theme_mood_daily", {})
+            if rows:
+                as_of_raw = rows[0].get("as_of")
+        except Exception:  # noqa: BLE001
+            pass
+    phase, note = resolve_phase(now=dt, trading_day=trading, settled=settled)
+    return {"phase": phase, "as_of": _iso_cst(as_of_raw), "settled_at": _iso_cst(settled_raw),
+            "trading_day": trading, "note": note}

@@ -4952,6 +4952,22 @@ def _m181_img_orderbook_frames(conn: Connection) -> None:
     )
 
 
+def _m182_theme_mood_settled_at(conn: Connection) -> None:
+    """题材情绪日表补 `settled_at`(2026-10-08): 收盘定型时间。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列。
+
+    - 盘中行(source='intraday')恒为 NULL —— 未定型;
+    - 交易日 15:05 定型扫描(source='close')写入定型的 CST 时间戳;
+    - 幂等复跑靠 upsert 的 `COALESCE(theme_mood_daily.settled_at, excluded.settled_at)`
+      保留**首次**定型时间(不跳变), 故本列无默认值即可。
+    """
+    _add_column_if_missing(
+        conn, "theme_mood_daily", "settled_at",
+        "ALTER TABLE theme_mood_daily ADD COLUMN settled_at TIMESTAMP",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5080,6 +5096,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(180, "market_breadth_daily", _m180_market_breadth_daily),
     # .img 十档盘口帧落库(2026-10-02): 校准入库 + 多用户隔离 + source/as_of 显式
     Migration(181, "img_orderbook_frames", _m181_img_orderbook_frames),
+    # 题材情绪收盘定型(2026-10-08): 盘中实时刷新 + 收盘 15:05 定型(settled_at)
+    Migration(182, "theme_mood_settled_at", _m182_theme_mood_settled_at),
 )
 
 

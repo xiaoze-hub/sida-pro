@@ -587,25 +587,46 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"口径快照留痕注册失败: {e}")
 
-        # 题材情绪分(2026-09-12 老板口径): 交易日 15:45(在 demon 15:35 落涨停事件之后)
+        # 题材情绪分(2026-10-08): 盘中实时刷新(交易日 9:30-15:00 每 10 分钟,
+        # source='intraday') + 收盘定型(15:05, source='close'+settled_at, 幂等)。
+        # 取代旧的单一 15:45 扫描 —— 15:05 定型早于 demon 落涨停事件无关紧要:
+        # 题材情绪的涨停事实由日线 + limit_rules **自算**(不依赖 limit_up_events)。
+        # 非交易日两 job 都不跑(为工作日专 cron + 任务内交易日守卫双保险)。
         try:
-            from src.core.theme_mood import daily_job as theme_mood_job
+            from src.web.api.theme_mood import (
+                intraday_refresh_job,
+                settle_refresh_job,
+            )
 
+            # 用字符串 "cron" + kwargs(而非 CronTrigger 实例): 只有字符串形式才会注入
+            # 调度器的 app_timezone, 触发器实例会退回进程本地时区(与全文件的写法一致)。
             rt.scheduler.scheduler.add_job(
-                theme_mood_job,
+                settle_refresh_job,
                 "cron",
                 day_of_week="mon-fri",
                 hour=15,
-                minute=45,
-                id="theme-mood-daily",
-                name="题材情绪分扫描",
+                minute=5,
+                id="theme-mood-settle",
+                name="题材情绪收盘定型",
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
             )
-            logger.info("题材情绪分扫描已注册(交易日 15:45)")
+            rt.scheduler.scheduler.add_job(
+                intraday_refresh_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour="9-15",
+                minute="*/10",
+                id="theme-mood-intraday",
+                name="题材情绪盘中刷新",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("题材情绪已注册: 盘中刷新(9:30-15:00 每10分钟) + 收盘定型(15:05)")
         except Exception as e:
-            logger.error(f"题材情绪分扫描注册失败: {e}")
+            logger.error(f"题材情绪调度注册失败: {e}")
 
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:

@@ -1,8 +1,19 @@
-"""题材情绪分 API(2026-09-12): 榜单 / 题材详情 / 手动扫描。
+"""题材情绪分 API(2026-09-12): 榜单 / 题材详情 / 手动扫描 / 盘中刷新 / 收盘定型。
 
 GET  /api/theme-mood/board?window=20&top=15   Top 题材榜 + 20 日矩阵(读落库)
 GET  /api/theme-mood/detail/{block_code}      单题材逐日五维明细
 POST /api/theme-mood/scan/run                 手动触发扫描(后台线程)
+
+盘中实时 + 收盘定型契约(2026-10-08, GET /board 顶层新增字段):
+  phase:        "pre" | "live" | "closed_pending" | "final"
+  as_of:        ISO8601 数据快照时间(带 +08:00), 无数据为 null
+  settled_at:   ISO8601 收盘定型时间, 未定型为 null
+  trading_day:  bool 今日是否交易日
+  note:         str 显式说明(盘前/非交易日/已定型/待定型/降级原因)
+语义: 盘中(交易日 9:30-15:00)=live, 每 10 分钟后台 source='intraday' 刷新;
+     收盘 15:05=final(完整定型 source='close'+settled_at, 幂等, 定型行不被盘中覆盖);
+     15:00-15:05 或定型未跑完=closed_pending; 盘前/非交易日=pre(无数据显式标注)。
+陈旧(>10 分钟)时后台触发刷新但**先返回现有值**(serve-stale-while-revalidate), 不阻塞页面。
 
 口径唯一事实源: src/core/theme_mood.py(设计见 docs/research/题材情绪分_设计方案_20260912.md)。
 响应信封由全局中间件(src/web/response.py)统一包装。
@@ -12,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 
 from src.core.jobs import jobs
 from src.core.theme_rotation import daily_top_sets, membership_flags, rotation_series
@@ -316,6 +328,124 @@ def _spawn_scan() -> dict:
     return {"started": True, "reason": None, "job_id": job_id}
 
 
+# ── 盘中刷新 / 收盘定型(2026-10-08)─────────────────────────────────────────
+# 契约(见模块顶层): 盘中每 10 分钟 source='intraday' 刷新; 15:05 source='close' 定型。
+_REVALIDATE_COOLDOWN_S = 60.0   # 进程内 serve-stale 后台刷新的最小间隔(防请求风暴重复起)
+_revalidate_lock = threading.Lock()
+_last_revalidate = 0.0
+
+
+def _spawn_intraday_refresh(reason: str = "scheduled") -> dict:
+    """单飞起一次盘中刷新(后台线程, 立即返回)。沿用作业框架, 作业面板可见。"""
+    job_id, is_new = jobs.create("theme_mood_intraday", "题材情绪盘中刷新")
+    if not is_new:
+        return {"started": False, "reason": "刷新进行中", "job_id": job_id}
+
+    def _runner() -> None:
+        try:
+            from src.core import theme_mood
+
+            jobs.start(job_id, "intraday")
+            out = theme_mood.intraday_job()
+            jobs.succeed(job_id, str(out)[:500])
+            logger.info("题材情绪盘中刷新完成(%s): %s", reason, out)
+        except Exception as e:  # noqa: BLE001
+            jobs.fail(job_id, str(e))
+            logger.warning("题材情绪盘中刷新失败: %s", e)
+
+    threading.Thread(target=_runner, name="theme-mood-intraday", daemon=True).start()
+    return {"started": True, "reason": None, "job_id": job_id}
+
+
+def spawn_settle(reason: str = "scheduled") -> dict:
+    """单飞起一次收盘定型(后台线程, 立即返回)。source='close' + settled_at, 幂等。"""
+    job_id, is_new = jobs.create("theme_mood_settle", "题材情绪收盘定型")
+    if not is_new:
+        return {"started": False, "reason": "定型进行中", "job_id": job_id}
+
+    def _runner() -> None:
+        try:
+            from src.core import theme_mood
+
+            jobs.start(job_id, "settling")
+            out = theme_mood.settle_job()
+            jobs.succeed(job_id, str(out)[:500])
+            logger.info("题材情绪收盘定型完成(%s): %s", reason, out)
+        except Exception as e:  # noqa: BLE001
+            jobs.fail(job_id, str(e))
+            logger.warning("题材情绪收盘定型失败: %s", e)
+
+    threading.Thread(target=_runner, name="theme-mood-settle", daemon=True).start()
+    return {"started": True, "reason": None, "job_id": job_id}
+
+
+def intraday_refresh_job() -> dict:
+    """调度器入口(交易日 9:30-15:00 每 10 分钟): 非盘中/非交易日**跳过**(不起扫描)。"""
+    from src.core import theme_mood
+
+    try:
+        if not theme_mood.is_live_window():
+            return {"skipped": True, "reason": "非盘中时段"}
+    except Exception as e:  # noqa: BLE001 — 日历不可用 → 保守跳过
+        return {"skipped": True, "reason": f"交易日历不可用: {e!r}"[:120]}
+    return _spawn_intraday_refresh(reason="scheduled")
+
+
+def settle_refresh_job() -> dict:
+    """调度器入口(交易日 15:05): 收盘定型; 非交易日/未到点**跳过**。"""
+    from src.core import theme_mood
+
+    try:
+        if not theme_mood.is_settle_due_now():
+            return {"skipped": True, "reason": "未到定型点或非交易日"}
+    except Exception as e:  # noqa: BLE001
+        return {"skipped": True, "reason": f"交易日历不可用: {e!r}"[:120]}
+    return spawn_settle(reason="scheduled")
+
+
+def _phase_payload() -> dict:
+    """新鲜计算契约字段; core 读取异常时降级为 pre + 显式 note, 绝不打断页面。"""
+    from src.core import theme_mood
+
+    try:
+        return theme_mood.market_phase()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[theme-mood] 时段判定降级: %r", e)
+        return {"phase": "pre", "as_of": None, "settled_at": None, "trading_day": False,
+                "note": f"时段判定降级: {e!r}"[:120]}
+
+
+def _maybe_revalidate(phase: dict) -> dict:
+    """盘中: 行陈旧(>10 分钟)则后台触发刷新, **先返回现有值**(serve-stale-while-revalidate)。
+
+    绝不阻塞(后台线程 + 进程内冷却 60s + 作业单飞双节流)。非盘中直接 no-op。
+    """
+    from src.core import theme_mood
+
+    if phase.get("phase") != "live":
+        return {"triggered": False, "reason": "非盘中"}
+    try:
+        stale = theme_mood.intraday_is_stale(phase.get("as_of"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[theme-mood] 陈旧判定失败, 保守不触发: %r", e)
+        return {"triggered": False, "reason": "判定失败"}
+    if not stale:
+        return {"triggered": False, "reason": "fresh"}
+    global _last_revalidate
+    now = time.monotonic()
+    with _revalidate_lock:
+        if now - _last_revalidate < _REVALIDATE_COOLDOWN_S:
+            return {"triggered": False, "reason": "cooldown"}
+        _last_revalidate = now
+    try:
+        out = _spawn_intraday_refresh(reason="stale")
+    except Exception as e:  # noqa: BLE001 — 触发失败也必须先返回现有值, 不打断页面
+        logger.warning("[theme-mood] 后台刷新触发失败(仍返回现有值): %r", e)
+        return {"triggered": False, "reason": "触发失败"}
+    return {"triggered": bool(out.get("started")), "reason": out.get("reason"),
+            "job_id": out.get("job_id")}
+
+
 # ── 两级缓存(用户口径 2026-09-26)─────────────────────────────────────────
 # 背景: /ladder 实测 6.5s(20 天全市场涨停梯队 + 全部个股 OHLC)、/board 2.4~5.8s/807KB,
 # 每进一次页面都重算, 用户反馈"连板梯队要等一会才能加载出来"。
@@ -442,10 +572,11 @@ def _ladder_payload(window: int, mode: str) -> dict:
 
 @router.get("/board")
 def get_board(window: int = Query(20), top: int = Query(15)):
-    """题材情绪榜 + 矩阵(带两级缓存, 2026-09-26)。
+    """题材情绪榜 + 矩阵(带两级缓存, 2026-09-26)+ 盘中/定型契约字段(2026-10-08)。
 
     实测 2.4~5.8s / 807KB, 每进页面重算。缓存口径同 /ladder; trade_date 每次新鲜读,
-    保证界面上的"数据日"不会因缓存而滞后。
+    保证界面上的"数据日"不会因缓存而滞后。`phase/as_of/settled_at/trading_day/note`
+    每次**新鲜**计算(不随缓存变旧); 盘中陈旧行由 `_maybe_revalidate` 后台刷新, 不阻塞。
     """
     if window not in _WINDOWS or top not in _TOPS:
         raise HTTPException(400, f"window 仅支持 {_WINDOWS}, top 仅支持 {_TOPS}")
@@ -455,10 +586,13 @@ def get_board(window: int = Query(20), top: int = Query(15)):
         lambda: _board_data(window, top),
         worth=lambda d: bool(d.get("items")),
     )
-    return {"trade_date": _latest_date(), "window": window, "count": len(data["items"]),
+    phase = _phase_payload()
+    revalidate = _maybe_revalidate(phase)
+    return {**phase,
+            "trade_date": _latest_date(), "window": window, "count": len(data["items"]),
             "dates": data["dates"], "items": data["items"], "market": data["market"],
             "rotation": data["rotation"], "rotation_top_k": data["rotation_top_k"],
-            "cached": cached, "cache_ttl_s": ttl}
+            "cached": cached, "cache_ttl_s": ttl, "revalidate": revalidate}
 
 
 @router.get("/detail/{block_code}")
