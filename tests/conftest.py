@@ -40,6 +40,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 2026-10-08: marketdata 是可编辑安装的本地包, 其 site-packages 链接指向**主库**路径;
+# 在独立 worktree 里跑测试若不前置本仓库的 packages 路径, 会 import 到主库的旧代码,
+# 本 worktree 对 packages/marketdata 的改动不被覆盖 → 测试假绿。故前置本仓库包路径。
+_PKGS_SRC = PROJECT_ROOT / "packages" / "marketdata" / "src"
+if _PKGS_SRC.is_dir() and str(_PKGS_SRC) not in sys.path:
+    sys.path.insert(0, str(_PKGS_SRC))
+
 import pytest
 
 
@@ -199,5 +206,40 @@ def _clear_biz_cache():
 
         biz_cache.clear()
     except Exception:  # noqa: BLE001 — 缓存不可用不影响测试
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_observability_state():
+    """跨测试全局状态隔离(2026-10-08 可观测性)。
+
+    数据源连续失败计数 / 失败明细限流 / 失败日志限流都是**进程级模块状态**:
+    用例 A 模拟一次 tq 失败后, 用例 B 的哨兵检查会读到残留 streak → 莫名 warn
+    (合跑挂、单跑过)。每个用例前清空, 与 _clear_module_caches 同思路。
+    """
+    try:
+        from src.core import alerting
+
+        alerting.reset_data_source_streaks()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from src.core import datasource_failures
+
+        datasource_failures.reset_dedupe()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from marketdata import log_throttle
+
+        log_throttle.reset()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from src.core import data_quality_sentinel
+
+        data_quality_sentinel.reset_tq_gateway_streak()
+    except Exception:  # noqa: BLE001
         pass
     yield

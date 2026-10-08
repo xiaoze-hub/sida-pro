@@ -19,6 +19,8 @@
                               >10 warn
   e) kline_quality            B1.2/KI-040: klines(qfq 日K)近 20 天 OHLC 关系异常 +
                               相邻柱缺口超板块限幅 + quality_flag=0 计数, >=1 warn, >=50 fail
+  f) tq_gateway               P1-7: TQ(通达信)网关连续失败 / source_health degraded
+                              延续 → 告警(断链不再无声)
 
 聚合: 任一 fail→fail; 否则任一 warn→warn; 否则 ok。
 仅当 overall != ok 时写一条 Notification。
@@ -54,6 +56,17 @@ _KLINE_BAD_FAIL = 50
 _KLINE_JUMP_TOLERANCE = 1.02
 
 _SOURCE = "data_quality_sentinel"
+
+# P1-7(2026-10-08 可观测性审计): TQ 网关连通性检查
+# 背景: 通达信链路断 3 天无人发现 —— sentinel 此前不查 TQ; source_health 只在被
+# 轮询时探活。这里把 TQ 连续失败(alerting 计数, 受 P1-6 直连上报驱动)与
+# source_health 的 degraded 延续纳入哨兵: 达阈值 → Notification/WeCom(复用现有设施)。
+_TQ_STREAK_WARN = 1        # 连续失败 >=1 → warn
+_TQ_STREAK_FAIL = 3        # 连续失败 >=3 → fail
+_TQ_DEGRADED_ESCALATE = 3  # source_health "已发现但当前不通" 连续 >=3 轮 → fail
+# "已发现过地址但当前不通" 才计入 degraded 延续; "从未发现/未配置" 不算证据
+# (诚实: 不因尚未使用而误告警, 也保证 CI/未部署环境不刷屏)。
+_tq_degraded_streak = 0
 
 
 def _now() -> datetime:
@@ -266,6 +279,7 @@ _CHECK_LABELS = {
     "null_created_at": "时间戳缺失",
     "suggestion_drop": "建议数突降",
     "failure_notifications": "失败通知",
+    "tq_gateway": "通达信网关",
 }
 _STATUS_LABELS = {"ok": "正常", "warn": "警告", "fail": "异常"}
 _OVERALL_LABELS = {
@@ -413,8 +427,75 @@ def _check_kline_quality(db, now: datetime) -> dict:
     }
 
 
+def _check_tq_gateway(db, now: datetime) -> dict:
+    """f) TQ(通达信)网关连通性(P1-7): 连续失败 / 持续 degraded → 告警。
+
+    两个证据源:
+      · alerting 的 TQ 连续失败计数(由 P1-6 直连上报 + Engine 链路共同驱动,
+        成功一次即清零);
+      · source_health 的 tq_moreinfo 状态 —— "已发现地址但当前不通" 连续多轮
+        才升级(未配置/尚未发现不算证据, 不误告警)。
+    ≥3 连续失败 或 degraded 延续≥3 轮 → fail; ≥1 连续失败 → warn; 否则 ok。
+    """
+    global _tq_degraded_streak
+
+    base: dict = {"check": "tq_gateway", "value": None}
+    try:
+        from src.core.alerting import failure_streak
+
+        streak = failure_streak("tq")
+    except Exception as e:  # noqa: BLE001
+        streak = 0
+        logger.debug("[dq] TQ 失败计数读取异常: %s", e)
+
+    src_status, detail = "unknown", ""
+    try:
+        from src.core import source_health
+
+        r = source_health.check_source("tq_moreinfo", use_cache=False) or {}
+        src_status = r.get("status") or "unknown"
+        detail = r.get("detail") or ""
+    except Exception as e:  # noqa: BLE001
+        detail = f"source_health 检查异常: {e}"
+
+    # degraded 延续: 只有"已发现地址但当前不通"算证据(未配置/未发现不算)
+    if src_status == "degraded" and "当前不通" in detail:
+        _tq_degraded_streak += 1
+    else:
+        _tq_degraded_streak = 0
+
+    base["value"] = {
+        "streak": streak,
+        "source_status": src_status,
+        "degraded_streak": _tq_degraded_streak,
+    }
+
+    if streak >= _TQ_STREAK_FAIL or _tq_degraded_streak >= _TQ_DEGRADED_ESCALATE:
+        base.update(
+            status="fail",
+            detail=(
+                f"TQ 网关异常: 连续失败 {streak} 次 / 不通 {_tq_degraded_streak} 轮"
+                + (f" — {detail[:150]}" if detail else "")
+            ),
+        )
+    elif streak >= _TQ_STREAK_WARN:
+        base.update(
+            status="warn",
+            detail=f"TQ 网关失败 {streak} 次" + (f": {detail[:150]}" if detail else ""),
+        )
+    else:
+        base.update(status="ok", detail=f"TQ 网关正常(源状态 {src_status})")
+    return base
+
+
+def reset_tq_gateway_streak() -> None:
+    """清空 TQ degraded 延续计数(测试隔离用)。"""
+    global _tq_degraded_streak
+    _tq_degraded_streak = 0
+
+
 def run_dq_checks(db) -> dict:
-    """执行 4 项数据质量检查。
+    """执行数据质量检查(6 项, 含 TQ 网关连通性)。
 
     Returns:
         {"ran_at": str, "overall": ok/warn/fail, "checks": [{check,status,detail,value}]}
@@ -427,6 +508,7 @@ def run_dq_checks(db) -> dict:
         _check_suggestion_drop,
         _check_failure_notifications,
         _check_kline_quality,
+        _check_tq_gateway,
     ]
     checks: list[dict] = []
     for fn in check_fns:
