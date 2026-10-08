@@ -1,3 +1,27 @@
+### fix-共振扫描完整性契约对齐公式引擎(替代 0.5 魔法阈值)（2026-10-08）
+
+`resonance_scan.scan()` 原用魔法阈值 `_MAX_FAILED_CHUNK_RATIO`(0.5) 判全断 —— 会把『只坏一半』(失败片占比 49%)当成功放过去。改为对齐公式引擎 `tq_formula_batch`(审计钦定范本)的完整性契约:
+
+- **返回体永远带** `chunks_failed`/`chunks_total`/`complete`(complete = chunks_failed == 0, 日线+资金都算), 失败体也带。
+- **全断(零数据) → ok=False**: 日线零数据 / 所有日线分片失败 / 资金所有分片失败 → 显式失败 + reason + note。
+- **部分失败 → ok=True + complete=False + note 显式**(『命中数不是全市场口径, 不得当全市场结果使用(...)』), 消费方不得当全市场口径用。
+- **删掉魔法阈值** `_MAX_FAILED_CHUNK_RATIO`。
+- **消费方透传**: API `POST /resonance/scan/run` 对 `complete=False` 显式 warning 并原样透传(作业终态 message/error 带 note); 决策日志每条共振信号的 context 加 `scan_complete` 标注。
+
+测试(禁真实网络): `test_resonance_scan_health.py` 三态(全断/部分失败/全部成功)+ complete 语义 + note; `test_job_honesty.py` 新增『部分失败作业成功但 message 报 incomplete』透传。
+验收: `pytest tests/ -k 'source_health or resonance or sentinel'` 全绿、`scripts/check_is_pg_scope.py` OK、ruff 通过。不发版、不打 tag、不部署。
+
+### fix-source_health TQ 面板发现态改读真实解析器 + 显式不可用态（2026-10-08）
+
+生产实测: TQ 链路明明通(真实 `tq_rpc` 成功), 数据源健康面板却报『未配置 TDX_QUANT_URL 且尚未自动发现』—— 根因是 `source_health.check_tq_moreinfo` 只读被动的 `_TQ_URL_CACHE`, 该缓存只在**触发过行情查询的那个进程**里被填, 多 worker/冷启动进程恒为 None。
+
+- **判定改走真实解析器**: `TDX_QUANT_URL` 优先 → 否则调 `marketdata.vendors.tq._resolve_tq_url()`(自动发现的真实入口), 命中地址轻探后报 `connected`; 不再只信进程内被动缓存。
+- **显式『TQ 不可用』**: 解析器候选全灭返 None(v0.13.49 新语义) → `degraded` 且 detail 明确『TQ 不可用』, 不再含糊地报『尚未自动发现』。
+- **四态口径不变**: 从未发现(旧模块/无解析器且无缓存)= degraded; env 配了但当前不通 = degraded 带原因; 探测异常 = unknown。不编造 connected。
+
+测试(禁真实网络, 解析器/探测全 monkeypatch): 三态覆盖 —— 发现前→degraded、发现后(解析器返地址)→connected、解析器 None→显式不可用; 另覆盖 env 配了不通→degraded、探测异常→unknown。
+验收: `pytest tests/ -k 'source_health or resonance or sentinel'` 全绿、`scripts/check_is_pg_scope.py` OK、ruff 通过。不发版、不打 tag、不部署。
+
 ### fix-job 诚实性测试改同步执行消时序竞态（2026-10-08）
 
 CI(run 37761685911) shard 3 三例红：`_wait_terminal` 5s 超时 —— 真后台线程在负载下完成时机不可测(单跑绿/CI 红)。

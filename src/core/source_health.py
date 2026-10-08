@@ -34,8 +34,8 @@
 | img    | `PANWATCH_IMG_DIR` 已配且目录内有 `.img` 文件                     |
 | wencai | thsdk 可 import 且 `THS_USERNAME`/`THS_PASSWORD` 均已注入          |
 | shadow | 数据库可连且 `paper_trading_trades` 表可查                        |
-| tq_moreinfo | TQ 网关(已解析地址或 `TDX_QUANT_URL`)轻探测 `get_stock_list` 可达 |
-  (只探单个地址, 不跑全候选扫描; 从未解析过 → degraded, 等首次行情查询触发自动发现)
+| tq_moreinfo | TQ 网关: `TDX_QUANT_URL` 优先, 否则走真实解析器 `_resolve_tq_url()` 自动发现 |
+  (候选全灭 → 显式『TQ 不可用』degraded; 解析器不可用时回退被动缓存, 无 → 尚未发现)
 """
 from __future__ import annotations
 
@@ -152,30 +152,62 @@ def check_shadow() -> dict[str, Any]:
 def check_tq_moreinfo() -> dict[str, Any]:
     """TQ 扩展指标网关(more_info/明盘资金/数智决策共用链路)。
 
-    只做轻探测, 不发起真实行情查询:
-      - `TDX_QUANT_URL` 已配 → 探该地址
-      - 否则用 vendor 已缓存的解析地址(首次行情查询时自动发现)
-      - 两者都没有 → degraded(诚实: 尚未发现, 不编造 connected)
-    超时 2s, 失败 → degraded(配了但当前不通), 异常 → unknown。
+    判定基于**真实解析器状态**, 不再只读被动的 `_TQ_URL_CACHE` —— 生产实测: 链路
+    明明通(真实 tq_rpc 成功), 面板却报『未配置 TDX_QUANT_URL 且尚未自动发现』,
+    因为缓存只在**触发过行情查询的那个进程**里被填, 多 worker/冷启动进程里恒为 None。
+
+    分级判定(诚实四态口径不变: connected/degraded/down/unknown):
+      1. env `TDX_QUANT_URL` 显式配置 → 探该地址(唯一允许的非探测兜底地址);
+      2. 否则调 `_resolve_tq_url()`(按候选自动发现的**真实入口**):
+           - 返回地址 → 轻探 → connected;
+           - 返回 None(候选全灭, v0.13.49 语义) → degraded, **显式『TQ 不可用』**
+             (不再伪装成『尚未自动发现』);
+      3. 解析器不可用(旧模块) → 回退读被动缓存 `_TQ_URL_CACHE`: 有 → 探; 无 → 
+         degraded(诚实: 尚未发现, 不编造 connected)。
+
+    超时 2s; 配了但当前不通 → degraded 带原因; 探测异常 → unknown。
     """
     try:
         from marketdata.vendors import tq as _tqmod  # type: ignore
     except Exception as e:  # pragma: no cover
         return {"status": STATUS_DOWN, "detail": f"TQ vendor 不可用: {e}"}
     try:
-        env_url = (os.environ.get("TDX_QUANT_URL") or "").strip().rstrip("/") + "/"
-        cached = getattr(_tqmod, "_TQ_URL_CACHE", None)
-        target = env_url if len(env_url) > 1 else (cached or "")
-        if not target:
+        probe = getattr(_tqmod, "_probe_tq", None)
+        env_url = (os.environ.get("TDX_QUANT_URL") or "").strip()
+        # 1) 运维显式配置的 env 优先
+        if env_url:
+            target = env_url.rstrip("/") + "/"
+            if probe is None:  # pragma: no cover
+                return {"status": STATUS_UNKNOWN, "detail": "vendor 无探测入口"}
+            if probe(target, timeout=2.0):
+                return {"status": STATUS_CONNECTED, "detail": f"TQ 网关可达(env): {target}"}
+            return {"status": STATUS_DEGRADED,
+                    "detail": f"TDX_QUANT_URL 已配置但当前不通: {target}"}
+        # 2) 未配 env: 用真实解析器自动发现
+        resolve = getattr(_tqmod, "_resolve_tq_url", None)
+        if resolve is not None:
+            target = resolve()
+            if not target:
+                # v0.13.49: 候选全灭 → 显式『TQ 不可用』, 非『尚未自动发现』
+                return {"status": STATUS_DEGRADED,
+                        "detail": "TQ 不可用: 候选地址探测全灭且未配置 TDX_QUANT_URL"}
+            if probe is None:  # pragma: no cover
+                return {"status": STATUS_CONNECTED, "detail": f"TQ 网关已发现: {target}"}
+            if probe(target, timeout=2.0):
+                return {"status": STATUS_CONNECTED, "detail": f"TQ 网关可达(自动发现): {target}"}
+            return {"status": STATUS_DEGRADED,
+                    "detail": f"TQ 网关已发现但当前不通: {target}"}
+        # 3) 旧模块无解析器: 回退被动缓存(诚实: 无 → 尚未发现)
+        cached = getattr(_tqmod, "_TQ_URL_CACHE", None) or ""
+        if not cached:
             return {"status": STATUS_DEGRADED,
                     "detail": "未配置 TDX_QUANT_URL 且尚未自动发现, 等首次行情查询"}
-        probe = getattr(_tqmod, "_probe_tq", None)
+        target = str(cached).rstrip("/") + "/"
         if probe is None:  # pragma: no cover
-            return {"status": STATUS_UNKNOWN, "detail": "vendor 无探测入口"}
-        ok = probe(target, timeout=2.0)
-        if ok:
-            return {"status": STATUS_CONNECTED, "detail": f"TQ 网关可达: {target}"}
-        return {"status": STATUS_DEGRADED, "detail": f"TQ 网关当前不通: {target}"}
+            return {"status": STATUS_CONNECTED, "detail": f"TQ 网关已缓存: {target}"}
+        if probe(target, timeout=2.0):
+            return {"status": STATUS_CONNECTED, "detail": f"TQ 网关可达(缓存): {target}"}
+        return {"status": STATUS_DEGRADED, "detail": f"TQ 网关缓存地址当前不通: {target}"}
     except Exception as e:  # noqa: BLE001
         return {"status": STATUS_UNKNOWN, "detail": f"TQ 探测异常: {e}"}
 

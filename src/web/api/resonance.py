@@ -51,6 +51,10 @@ def run_scan(limit: int | None = Query(None, ge=1, le=6000)):
 
             jobs.start(job_id, "scanning")
             out = resonance_scan.scan(limit=limit, on_progress=jobs.progress_reporter(job_id))
+            # 完整性契约: 部分分片失败(complete=False)不静默 —— API 层显式告警并透传,
+            # 作业终态 message 直接带 note(消费方据此不得当全市场口径用)。
+            if out.get("ok") and out.get("complete") is False:
+                logger.warning("手动共振扫描不完整: %s", out.get("note"))
             if jobs.finish(job_id, out, context="共振扫描: "):
                 logger.info("手动共振扫描完成: %s", out)
             else:
