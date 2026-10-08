@@ -1,3 +1,37 @@
+### fix-TQ 断链审计: URL 层显式不可用 + 探测预算/自愈/connect 超时 + 快照 turnover 单位标定 + formula 早退（2026-10-08）
+
+`packages/marketdata/src/marketdata/vendors/tq.py`(通达信断链 3 天无人发现, 本次审计定位 URL 层 4 缺陷 + 1 单位 bug + 1 公式早退):
+
+- **P0-3 回退死地址(根因)**: 旧 `_resolve_tq_url` 候选全灭时回退 `candidates[0]`
+  (= `_host_gateway()` 拼 17709 的 **docker 桥网关**, 生产永不监听) 并把该**死地址**写进
+  `_TQ_URL_CACHE` 供 `source_health` 探活 → 探活永远失败却仍被当成"已发现的地址", 断链被掩盖。
+  现在: 候选全灭 → `_TQ_URL_CACHE = None`, 返回 None; `_rpc` 抛新增的 `TqUnavailable`,
+  调用方显式进『TQ 不可用』态(降级链/显式无数据); **唯一允许的非探测兜底 = 运维显式配置的
+  env `TDX_QUANT_URL`**; 删除死代码 `_FALLBACK_URL`。全量核对 42 处 `_rpc/tq_rpc` 触点:
+  均 `try/except Exception` 或本就靠异常传播, 无未捕获异常冒出。
+- **P1-4 探测阻塞**: 失败缓存 5min 后曾在调用线程同步扫 ~12 候选(单次 1.5s, 最坏 18s)。
+  现加**总预算 `_PROBE_BUDGET_S`(≤3s)**, 超预算即停; env 与最近命中主机(`_TQ_LAST_GOOD_HOST`)
+  优先探; 单次探测超时按剩余预算收敛。
+- **P1-5 成功缓存永久不自愈**: 新增 `_TQ_OK_TTL`(20min) 复探 TTL; 连续 `_TQ_FAIL_STREAK_THRESHOLD`
+  (3) 次 `_rpc` 连接失败 → `_note_rpc_conn_failure()` 主动失效成功缓存并强制重探。
+- **P1-10 `_rpc` 无 connect 超时**: httpx 单值 timeout 下黑洞地址可挂满调用方 timeout;
+  改用 `httpx.Timeout(read=timeout, connect=2s)`(探测路径同)。
+- **P1-8 快照 turnover 单位(先标定后改)**: `TqQuoteVendor.fetch` 原 `turnover=Amount` 漏 ×1e4。
+  **实盘标定(2026-10-08 002361.SZ)**: TQ `Amount=182560.53`; 腾讯同日 parts[37]=182560.5387(万元)、
+  parts[35] 元额=1,825,605,387 ≈ `Amount×1e4`; 恒等式 `Amount×1e4/(Volume 手×100)=10.2308 ≈ 快照
+  Average(VWAP 10.23)`。确证源为**万元**, 统一 `/1e4→元`, 与 `stock_l2.py`/`tdx_boards.py` 同接口
+  口径及 `types.py`(turnover=元)一致。**非猜测**, 标定证据写入代码注释。
+- **P2 公式早退落 0**: `formula_scan` 空池早退 dict 缺 `date_has_data` → `tq_formula_signals.py:113`
+  判不出"该日无数据" → 落 `hit_count=0` 稀释基线。早退补 `date_rows=0, date_has_data=False`。
+
+新增 `tests/test_tq_url_layer.py`(12 例, 全 mock 禁真网络): 候选全灭→`TqUnavailable` 且不缓存
+死地址 / env 唯一兜底 / `_FALLBACK_URL` 已删 / 成功缓存 TTL 内不重探、过期自愈、连续失败失效 /
+探测预算上限 / `_rpc` 与探测 connect 超时生效 / turnover 万元×1e4 恒等式 / formula 早退 `date_has_data=False`。
+
+验收: `pytest tests/ packages/marketdata/tests/ -k 'tq or formula or market'` 全绿(806 passed, 1 skipped)、
+`python scripts/check_is_pg_scope.py` OK、`ruff check` 通过。不发版、不打 tag、不部署。
+
+### feat-题材情绪盘中实时更新 + 收盘定型状态徽标（2026-10-08）
 ### fix-共振扫描分片失败计数 + 全断显式失败（2026-10-08）
 
 诚实性审计 P0-2: `resonance_scan._fetch_daily`/`_fetch_funds` 每片 `except → continue`
