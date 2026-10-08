@@ -74,14 +74,15 @@ def test_bridge_counts_method_kind():
     health_mod._init_metrics()
     if health_mod._metrics.DATASOURCE_FAILURES is None:
         pytest.skip("prometheus_client 不可用")
+    # delta 断言: 进程级 Prometheus 计数器会被前序测试累积, 绝对值断言与执行顺序耦合
+    # (单跑绿/合跑红); 语义不变 —— 一次调用恰好 +1, 顺序无关
     from prometheus_client import REGISTRY
 
+    _labels = {"provider": "tq", "kind": "get_market_data"}
+    before = REGISTRY.get_sample_value("sida_datasource_failures_total", _labels)
     health_mod.record_datasource_failure("tq", kind="get_market_data")
-    val = REGISTRY.get_sample_value(
-        "sida_datasource_failures_total",
-        {"provider": "tq", "kind": "get_market_data"},
-    )
-    assert val == 1.0
+    val = REGISTRY.get_sample_value("sida_datasource_failures_total", _labels)
+    assert val == (before or 0.0) + 1.0
     health_mod._metrics.DATASOURCE_FAILURES.remove("tq", "get_market_data")
 
 
