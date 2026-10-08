@@ -27,6 +27,7 @@ _TABLE = "resonance_scan"
 _STRONG_LINE = 3.0  # 与 ai_activity.STRONG_LINE 同源(强势线)
 _BARS = 90          # 扫描用日线根数(BB0 需 28, 活跃度需 2; 90 富余)
 _KLINE_CHUNK = 100  # 单次批量日线代码数(TDX get_market_data 实测单次上限 ~100 码, 超出静默截断)
+_MAX_FAILED_CHUNK_RATIO = 0.5  # 失败分片占比 ≥ 此值 → 判链路全断(ok=False, 不静默报成功)
 _COLS = (
     "trade_date", "symbol", "name", "trend", "activity", "level",
     "fund_net", "hits", "resonance", "near", "close", "change_pct", "source", "created_at",
@@ -140,12 +141,21 @@ def _stock_pool() -> list[tuple[str, str]]:
     return out
 
 
-def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
-    """通达信批量日线(前复权) → {code: bars}。分片, 单片失败跳过。"""
+def _fetch_daily(codes: list[str], stats: dict | None = None) -> dict[str, list[dict]]:
+    """通达信批量日线(前复权) → {code: bars}。分片, 单片失败跳过。
+
+    诚实性审计 P0-2(2026-10-08): 过去每片 `except → continue` 不留痕, TQ 断链时
+    静默返回空 dict, 上游却报 `ok=True, scanned=0` —— 断链三天无人发现。现在把分片
+    健康度写进 `stats`(调用方传入的 dict), 让 scan 能显式判定"全断"。失败片 =
+    抛异常 **或** 返回空(rpc 通但无数据, 对 6000 只池子同样意味着链路不通)。
+    """
     from marketdata.vendors.tq import tq_rpc
 
     out: dict[str, list[dict]] = {}
+    failed = 0
+    total = 0
     for i in range(0, len(codes), _KLINE_CHUNK):
+        total += 1
         part = codes[i : i + _KLINE_CHUNK]
         try:
             v = tq_rpc(
@@ -154,7 +164,12 @@ def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
                 timeout=120,
             )
         except Exception as e:  # noqa: BLE001
+            failed += 1
             logger.warning("共振扫描: 日线批量失败(%d 码): %s", len(part), e)
+            continue
+        if not v:
+            failed += 1
+            logger.warning("共振扫描: 日线批量空返回(%d 码)", len(part))
             continue
         for code, rows in (v or {}).items():
             if not isinstance(rows, dict):
@@ -183,15 +198,21 @@ def _fetch_daily(codes: list[str]) -> dict[str, list[dict]]:
                     continue
             if bars:
                 out[code] = bars
+    if stats is not None:
+        stats["chunks_failed"] = failed
+        stats["chunks_total"] = total
     return out
 
 
-def _fetch_funds(codes: list[str]) -> dict[str, float | None]:
-    """通达信 SUPAMO 批量主力资金(万元→元)。分片, 失败跳过。"""
+def _fetch_funds(codes: list[str], stats: dict | None = None) -> dict[str, float | None]:
+    """通达信 SUPAMO 批量主力资金(万元→元)。分片, 失败跳过并计数(同 _fetch_daily)。"""
     from marketdata.vendors.tq import tq_rpc
 
     out: dict[str, float | None] = {}
+    failed = 0
+    total = 0
     for i in range(0, len(codes), 500):
+        total += 1
         part = codes[i : i + 500]
         try:
             v = tq_rpc(
@@ -210,11 +231,19 @@ def _fetch_funds(codes: list[str]) -> dict[str, float | None]:
                 timeout=120,
             )
         except Exception as e:  # noqa: BLE001
+            failed += 1
             logger.warning("共振扫描: 资金批量失败(%d 码): %s", len(part), e)
+            continue
+        if not v:
+            failed += 1
+            logger.warning("共振扫描: 资金批量空返回(%d 码)", len(part))
             continue
         for code, rec in (v or {}).items():
             val = _num((rec or {}).get("主力资金")) if isinstance(rec, dict) else None
             out[code] = val * 1e4 if val is not None else None
+    if stats is not None:
+        stats["chunks_failed"] = failed
+        stats["chunks_total"] = total
     return out
 
 
@@ -247,11 +276,54 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     report(0.1, f"股票池 {len(pool)} 只")
 
     report(0.12, "拉日K")
-    bars_by = _fetch_daily(pool)
+    daily_health: dict = {}
+    bars_by = _fetch_daily(pool, daily_health)
     report(0.5, f"日K就绪 {len(bars_by)} 只")
+
+    # P0-2(2026-10-08): 分片健康度显式透传 —— TQ 全断/大面积失败必须 ok=False, 不能
+    # 静默返回 ok=True, scanned=0(断链三天无人发现的根因)。个别片失败仍继续, 但带上计数。
+    daily_failed = int(daily_health.get("chunks_failed", 0))
+    daily_total = int(daily_health.get("chunks_total", 0))
+    daily_ratio = (daily_failed / daily_total) if daily_total else 0.0
+    if pool and (not bars_by or daily_ratio >= _MAX_FAILED_CHUNK_RATIO):
+        reason = (
+            "TQ 日线全断"
+            if not bars_by
+            else f"TQ 日线大面积失败({daily_failed}/{daily_total} 片)"
+        )
+        logger.warning("共振扫描未成: %s", reason)
+        return {
+            "ok": False,
+            "reason": reason,
+            "trade_date": trade_date or datetime.now(_CST).strftime("%Y%m%d"),
+            "scanned": 0,
+            "chunks_failed": daily_failed,
+            "chunks_total": daily_total,
+            "fund_chunks_failed": 0,
+            "fund_chunks_total": 0,
+        }
+
     report(0.52, "拉资金")
-    funds = _fetch_funds([c for c in pool if c in bars_by])
+    fund_health: dict = {}
+    funds = _fetch_funds([c for c in pool if c in bars_by], fund_health)
     report(0.7, f"资金就绪 {len(funds)} 只")
+    fund_failed = int(fund_health.get("chunks_failed", 0))
+    fund_total = int(fund_health.get("chunks_total", 0))
+    fund_ratio = (fund_failed / fund_total) if fund_total else 0.0
+    # 资金全断同样不能静默: 三指标会集体缺"资金"这一维, 共振结果失真。
+    if fund_total and fund_ratio >= _MAX_FAILED_CHUNK_RATIO:
+        reason = f"TQ 资金大面积失败({fund_failed}/{fund_total} 片)"
+        logger.warning("共振扫描未成: %s", reason)
+        return {
+            "ok": False,
+            "reason": reason,
+            "trade_date": trade_date or datetime.now(_CST).strftime("%Y%m%d"),
+            "scanned": 0,
+            "chunks_failed": daily_failed,
+            "chunks_total": daily_total,
+            "fund_chunks_failed": fund_failed,
+            "fund_chunks_total": fund_total,
+        }
     day = trade_date or datetime.now(_CST).strftime("%Y%m%d")
     rows = []
     total = max(1, len(pool))
@@ -320,7 +392,20 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
         logger.warning("决策日志留痕失败(不影响扫描): %r", e)
     n_near = sum(1 for r in rows if r["near"])
     logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s", len(rows), n_res, n_near)
-    return {"ok": True, "trade_date": day, "scanned": len(rows), "resonance": n_res, "near": n_near, "inserted": inserted, "logged": n_logged}
+    return {
+        "ok": True,
+        "trade_date": day,
+        "scanned": len(rows),
+        "resonance": n_res,
+        "near": n_near,
+        "inserted": inserted,
+        "logged": n_logged,
+        # 分片健康度: 即使成功也显式带上, 个别片失败(chunks_failed>0)上游可见、不静默。
+        "chunks_failed": daily_failed,
+        "chunks_total": daily_total,
+        "fund_chunks_failed": fund_failed,
+        "fund_chunks_total": fund_total,
+    }
 
 
 def _upsert(rows: list[dict]) -> int:

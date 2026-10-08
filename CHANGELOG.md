@@ -1,3 +1,27 @@
+### fix-共振扫描分片失败计数 + 全断显式失败（2026-10-08）
+
+诚实性审计 P0-2: `resonance_scan._fetch_daily`/`_fetch_funds` 每片 `except → continue`
+不留痕, TQ 断链时静默返回空 dict, 上游仍报 `{"ok": True, "scanned": 0}` —— 断链三天
+无人发现。修法: 分片失败显式计数, 全断/大面积失败判 `ok=False` 并透传健康度。
+
+- **分片计数**: `_fetch_daily(codes, stats=None)` / `_fetch_funds(codes, stats=None)`
+  在可选 `stats` 里写 `chunks_failed` / `chunks_total`;**失败片 = 抛异常 或 空返回**
+  (rpc 通但无数据, 对 6000 只池子同样意味着链路不通)。返回类型不变(向后兼容
+  `symbol_detail`/`activity_series` 的单参调用)。
+- **全断显式失败**: `scan()` 在日线 `bars_by` 为空或失败片占比 ≥ `_MAX_FAILED_CHUNK_RATIO`
+  (0.5) 时返回 `{"ok": False, "reason": "TQ 日线全断" / "TQ 日线大面积失败(x/y 片)", ...}`,
+  不再 `ok=True, scanned=0`; 资金全断同样显式失败(否则三指标集体缺资金维、共振结果失真)。
+- **健康度永远透传**: 成功返回体也带 `chunks_failed`/`chunks_total`(日线+资金),
+  个别片失败上游可见、不静默; `daily_job` 原样透传。
+
+新增 `tests/test_resonance_scan_health.py`(4 例, TQ rpc 一律 monkeypatch): 全断 →
+ok=False+分片计数、个别片失败(异常+空返回)→ ok=True 但 chunks_failed>0、资金全断 →
+显式失败、daily_job 透传。`tests/test_resonance_scan.py` 的 `_fetch_daily`/`_fetch_funds`
+mock 签名同步加 `stats=None`(断言不变); 既有测试全绿。
+
+验收: `pytest tests/ -k 'theme_mood or resonance or job'` 全绿、`scripts/check_is_pg_scope.py`、
+ruff。不发版、不打 tag、不部署。
+
 ### fix-作业状态诚实化: ok=False 必须 failed（2026-10-08）
 
 诚实性审计 P0-1: 扫描类任务用 `{"ok": False, "reason": ...}` 表达"没干成"(TQ 断链/
