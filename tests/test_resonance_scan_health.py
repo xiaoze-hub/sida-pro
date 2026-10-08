@@ -38,7 +38,7 @@ def _patch_eval(monkeypatch):
 
 
 def test_scan_all_outage_is_explicit_failure(monkeypatch):
-    """TQ 全断: 不得再返回 ok=True, scanned=0 —— 必须 ok=False + 分片计数。"""
+    """TQ 全断(零数据): 不得再返回 ok=True, scanned=0 —— 必须 ok=False + 分片计数。"""
     monkeypatch.setattr(rs, "_stock_pool", lambda: _codes(250))
     import marketdata.vendors.tq as tq
 
@@ -51,10 +51,12 @@ def test_scan_all_outage_is_explicit_failure(monkeypatch):
     assert out["scanned"] == 0
     assert "TQ 日线全断" in out["reason"]
     assert out["chunks_total"] == 3 and out["chunks_failed"] == 3
+    # 完整性契约: 失败体也带 complete=False + note 显式
+    assert out["complete"] is False and out["note"]
 
 
 def test_scan_partial_chunk_failure_is_not_silent(monkeypatch):
-    """个别片失败: 仍 ok=True, 但必须带 chunks_failed>0(不静默)。"""
+    """个别片失败: 仍 ok=True, 但必须带 chunks_failed>0 + complete=False + note(不静默)。"""
     _patch_eval(monkeypatch)
     monkeypatch.setattr(rs, "_stock_pool", lambda: _codes(550))   # 6 片
     import marketdata.vendors.tq as tq
@@ -79,10 +81,35 @@ def test_scan_partial_chunk_failure_is_not_silent(monkeypatch):
     assert out["chunks_total"] == 6 and out["chunks_failed"] == 2
     assert out["scanned"] > 0
     assert out["fund_chunks_total"] >= 1
+    # 部分失败不是全市场口径: complete=False 且 note 显式列出失败片
+    assert out["complete"] is False
+    assert out["note"] and "日线失败 2/6 片" in out["note"]
+
+
+def test_scan_all_success_is_complete(monkeypatch):
+    """全部成功: complete=True + note=None + 计数全 0(完整性契约正向)。"""
+    _patch_eval(monkeypatch)
+    monkeypatch.setattr(rs, "_stock_pool", lambda: _codes(250))   # 3 片
+    import marketdata.vendors.tq as tq
+
+    def _rpc(name, params, timeout=None):
+        if name == "get_market_data":
+            return _bars_for(params["stock_list"])
+        if name == "formula_process_mul_zb":
+            return {c: {"主力资金": 100.0} for c in params["stock_list"]}
+        return {}
+
+    monkeypatch.setattr(tq, "tq_rpc", _rpc)
+    out = rs.scan()
+    assert out["ok"] is True
+    assert out["complete"] is True
+    assert out["note"] is None
+    assert out["chunks_failed"] == 0 and out["chunks_total"] == 3
+    assert out["fund_chunks_failed"] == 0 and out["fund_chunks_total"] == 1
 
 
 def test_scan_fund_outage_is_explicit_failure(monkeypatch):
-    """日线好但资金全断: 三指标集体缺资金维 → 同样显式失败, 不静默降级。"""
+    """日线好但资金全断(零数据): 三指标集体缺资金维 → 同样显式失败, 不静默降级。"""
     _patch_eval(monkeypatch)
     monkeypatch.setattr(rs, "_stock_pool", lambda: _codes(50))
     import marketdata.vendors.tq as tq
@@ -96,11 +123,14 @@ def test_scan_fund_outage_is_explicit_failure(monkeypatch):
     out = rs.scan()
     assert out["ok"] is False
     assert "资金" in out["reason"] and out["fund_chunks_failed"] == 1
+    assert out["complete"] is False and out["note"]
 
 
 def test_daily_job_passes_through_health(monkeypatch):
     """daily_job 必须把 scan 的 ok/分片健康度原样透传, 不吞成成功。"""
     monkeypatch.setattr(rs, "scan", lambda: {"ok": False, "reason": "TQ 日线全断",
-                                             "chunks_failed": 3, "chunks_total": 3})
+                                             "chunks_failed": 3, "chunks_total": 3,
+                                             "complete": False})
     out = rs.daily_job()
     assert out["ok"] is False and out["chunks_failed"] == 3
+

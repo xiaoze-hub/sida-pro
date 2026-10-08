@@ -197,3 +197,22 @@ def test_resonance_job_fails_when_scan_ok_false(monkeypatch, store):
     row = _wait_terminal(store, out["job_id"])
     assert row["status"] == "failed" and "TQ 日线全断" in row["message"]
 
+
+def test_resonance_job_succeeded_but_reports_incomplete(monkeypatch, store):
+    """部分分片失败(ok=True + complete=False)不静默: 作业成功但终态 message 显式带
+    complete=False 与 note(消费方据此不得当全市场口径用)。"""
+    import src.core.resonance_scan as rscan
+    import src.web.api.resonance as rapi
+
+    monkeypatch.setattr(rapi, "jobs", store)
+    monkeypatch.setattr(rscan, "scan", lambda **k: {
+        "ok": True, "scanned": 5000, "complete": False,
+        "note": "分片失败: 命中数不是全市场口径(日线失败 2/60 片)",
+        "chunks_failed": 2, "chunks_total": 60,
+    })
+    out = rapi.run_scan(limit=10)
+    row = _wait_terminal(store, out["job_id"])
+    assert row["status"] == "succeeded"
+    assert "complete" in row["message"] and "False" in row["message"]
+    assert "不是全市场口径" in row["message"]
+

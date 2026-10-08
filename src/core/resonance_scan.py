@@ -11,6 +11,11 @@
 
 数据: 通达信客户端批量(日线 get_market_data / 资金 SUPAMO 公式), 全市场约 1~2 分钟;
 落库(迁移 v161)供页面/回看; 单票失败跳过不编造。
+
+完整性契约(对齐公式引擎 tq_formula_batch, 审计钦定范本): `scan()` 返回体**永远**带
+`chunks_failed` / `chunks_total` / `complete`(complete = chunks_failed == 0)。
+全断(零数据) → `ok=False`; 部分失败 → `ok=True + complete=False + note 显式`
+(消费方不得当全市场口径用)。
 """
 from __future__ import annotations
 
@@ -27,7 +32,10 @@ _TABLE = "resonance_scan"
 _STRONG_LINE = 3.0  # 与 ai_activity.STRONG_LINE 同源(强势线)
 _BARS = 90          # 扫描用日线根数(BB0 需 28, 活跃度需 2; 90 富余)
 _KLINE_CHUNK = 100  # 单次批量日线代码数(TDX get_market_data 实测单次上限 ~100 码, 超出静默截断)
-_MAX_FAILED_CHUNK_RATIO = 0.5  # 失败分片占比 ≥ 此值 → 判链路全断(ok=False, 不静默报成功)
+# 完整性契约(对齐公式引擎 tq_formula_batch, 审计钦定范本): 返回体永远带
+# `chunks_failed` / `chunks_total` / `complete`(complete = chunks_failed == 0);
+# 全断(零数据) → ok=False; 部分失败 → ok=True + complete=False + note 显式。
+# 不再用魔法阈值(_MAX_FAILED_CHUNK_RATIO=0.5)判全断 —— 那会把"只坏一半"当成功放过去。
 _COLS = (
     "trade_date", "symbol", "name", "trend", "activity", "level",
     "fund_net", "hits", "resonance", "near", "close", "change_pct", "source", "created_at",
@@ -280,16 +288,16 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     bars_by = _fetch_daily(pool, daily_health)
     report(0.5, f"日K就绪 {len(bars_by)} 只")
 
-    # P0-2(2026-10-08): 分片健康度显式透传 —— TQ 全断/大面积失败必须 ok=False, 不能
-    # 静默返回 ok=True, scanned=0(断链三天无人发现的根因)。个别片失败仍继续, 但带上计数。
+    # P0-2(2026-10-08)/完整性契约(对齐公式引擎): 分片健康度显式透传 —— 全断(零数据)
+    # 必须 ok=False; 部分失败仍 ok=True 但 complete=False + note 显式, 消费方不得当全市场口径用。
     daily_failed = int(daily_health.get("chunks_failed", 0))
     daily_total = int(daily_health.get("chunks_total", 0))
-    daily_ratio = (daily_failed / daily_total) if daily_total else 0.0
-    if pool and (not bars_by or daily_ratio >= _MAX_FAILED_CHUNK_RATIO):
+    daily_complete = daily_failed == 0
+    if pool and (not bars_by or (daily_total > 0 and daily_failed >= daily_total)):
         reason = (
-            "TQ 日线全断"
+            "TQ 日线全断(零数据)"
             if not bars_by
-            else f"TQ 日线大面积失败({daily_failed}/{daily_total} 片)"
+            else f"TQ 日线所有分片失败({daily_failed}/{daily_total} 片)"
         )
         logger.warning("共振扫描未成: %s", reason)
         return {
@@ -301,6 +309,8 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
             "chunks_total": daily_total,
             "fund_chunks_failed": 0,
             "fund_chunks_total": 0,
+            "complete": False,
+            "note": "日线全断, 无可用数据; 不产出任何口径结果",
         }
 
     report(0.52, "拉资金")
@@ -309,10 +319,10 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     report(0.7, f"资金就绪 {len(funds)} 只")
     fund_failed = int(fund_health.get("chunks_failed", 0))
     fund_total = int(fund_health.get("chunks_total", 0))
-    fund_ratio = (fund_failed / fund_total) if fund_total else 0.0
-    # 资金全断同样不能静默: 三指标会集体缺"资金"这一维, 共振结果失真。
-    if fund_total and fund_ratio >= _MAX_FAILED_CHUNK_RATIO:
-        reason = f"TQ 资金大面积失败({fund_failed}/{fund_total} 片)"
+    fund_complete = fund_failed == 0
+    # 资金全断(零数据)同样不能静默: 三指标会集体缺"资金"这一维, 共振结果失真。
+    if fund_total and fund_failed >= fund_total:
+        reason = f"TQ 资金全断({fund_failed}/{fund_total} 片): 三指标缺资金维, 共振口径失真"
         logger.warning("共振扫描未成: %s", reason)
         return {
             "ok": False,
@@ -323,7 +333,18 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
             "chunks_total": daily_total,
             "fund_chunks_failed": fund_failed,
             "fund_chunks_total": fund_total,
+            "complete": False,
+            "note": "资金全断, 三指标缺一维; 不产出共振结果",
         }
+    # 完整性: 每一片(日线+资金)都成功才 complete=True(对齐公式引擎 not missing 语义)。
+    complete = bool(daily_complete and fund_complete)
+    parts: list[str] = []
+    if not daily_complete:
+        parts.append(f"日线失败 {daily_failed}/{daily_total} 片")
+    if not fund_complete:
+        parts.append(f"资金失败 {fund_failed}/{fund_total} 片")
+    note = (None if complete
+            else "分片失败: 命中数不是全市场口径, 不得当全市场结果使用(" + "; ".join(parts) + ")")
     day = trade_date or datetime.now(_CST).strftime("%Y%m%d")
     rows = []
     total = max(1, len(pool))
@@ -379,7 +400,9 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
                 "trade_date": r["trade_date"],
                 "price": r.get("close"),
                 "context": {
-                    k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")
+                    **{k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")},
+                    # 完整性标注: complete=False 时该信号来自"部分失败"的扫描, 命中/口径不完整
+                    "scan_complete": complete,
                 },
             }
             for r in rows
@@ -391,7 +414,8 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
     except Exception as e:  # noqa: BLE001
         logger.warning("决策日志留痕失败(不影响扫描): %r", e)
     n_near = sum(1 for r in rows if r["near"])
-    logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s", len(rows), n_res, n_near)
+    logger.info("共振扫描完成: %s 只入池, 共振 %s / 接近 %s (complete=%s)",
+                len(rows), n_res, n_near, complete)
     return {
         "ok": True,
         "trade_date": day,
@@ -400,11 +424,14 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
         "near": n_near,
         "inserted": inserted,
         "logged": n_logged,
-        # 分片健康度: 即使成功也显式带上, 个别片失败(chunks_failed>0)上游可见、不静默。
+        # 分片健康度 + 完整性契约: 返回体**永远**带 chunks_failed/chunks_total/complete,
+        # 个别片失败(chunks_failed>0 ⇒ complete=False)上游可见、不静默。
         "chunks_failed": daily_failed,
         "chunks_total": daily_total,
         "fund_chunks_failed": fund_failed,
         "fund_chunks_total": fund_total,
+        "complete": complete,
+        "note": note,
     }
 
 
