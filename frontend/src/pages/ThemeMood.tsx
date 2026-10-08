@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fetchAPI } from '@panwatch/api'
+import { RefreshCw } from 'lucide-react'
 import MarketMoodChart from '@/components/MarketMoodChart'
 import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
+import ThemeMoodStatus, { parseBoardPhase, type BoardPhase } from '@/components/ThemeMoodStatus'
 import {
   AXIS_CELL_W,
   AXIS_PITCH,
@@ -106,12 +108,24 @@ interface BoardResp {
   market?: { date: string; score: number | null }[]
   rotation?: RotationDay[]
   rotation_top_k?: number
+  /** 2026-10-08 实时契约(后端同步实现, 字段可能缺失 → parseBoardPhase 容错): 板级数据状态。 */
+  phase?: string | null
+  as_of?: string | null
+  settled_at?: string | null
+  trading_day?: boolean | null
+  note?: string | null
 }
 
 const WINDOWS = [10, 20, 30] as const
 const DIMS = ['涨停结构', '题材扩散', '核心强度', '接力反馈', '连续性'] as const
 const MARKET_CURVE_H = 46
 const DETAIL_CURVE_H = 68
+/** 盘中实时轮询周期: phase=live 时 60s 拉一次 board(缓存由后端控制, 这里只负责频率)。 */
+const LIVE_POLL_MS = 60_000
+/** 非 live 也未定型时的兜底轮询(沿用原 120s board 节奏): pre/closed_pending/未知态。 */
+const IDLE_POLL_MS = 120_000
+/** 连板梯队盘中 60s 轮询(v0.5.87 既有口径)。 */
+const LADDER_POLL_MS = 60_000
 
 /** 轴长度变化时把滚动容器拉回"最新"一端(轮询刷新不打扰用户已滚动的位置)。最新在左 => 滚到 0。 */
 function useAutoScrollToLatest(axisLen: number) {
@@ -193,49 +207,88 @@ export default function ThemeMoodPage() {
     () => localStorage.getItem('tm-board-collapsed') === '1',
   )
 
-  useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<BoardResp>(`/theme-mood/board?window=${windowDays}&top=15`, { cacheMode: 'reload' })
-        if (alive) setResp(res)
-      } catch {
-        /* 保留旧数据 */
-      }
-      try {
-        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, { cacheMode: 'reload' })
-        if (alive) setLadder(lad)
-      } catch {
-        if (alive) setLadder(null)
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), 120000)
-    return () => {
-      alive = false
-      window.clearInterval(timer)
-    }
-  }, [windowDays, reloadKey])
+  // ── 数据状态 + 盘中实时轮询状态(2026-10-08)───────────────────────────────
+  const [boardPhase, setBoardPhase] = useState<BoardPhase>('unknown')
+  const [liveError, setLiveError] = useState<string | null>(null)
+  const [manualRefreshing, setManualRefreshing] = useState(false)
+  /** board 请求序号: 只有**最新**一次请求的响应能落地(竞态守卫 —— 旧/慢响应不覆盖新的)。 */
+  const boardSeq = useRef(0)
+  /** 轮询调度读 ref(不读 state): loadBoard 一回来就能决定下一拍节奏, 不必等 re-render。 */
+  const phaseRef = useRef<BoardPhase>('unknown')
 
-  // 盘中实时(v0.5.87): 梯队单独 60s 轮询(board 仍 120s); live_day/stale/note_closing 由 /ladder 带出
+  /** 拉一次 board。失败保留旧数据, 且只把"失败"记一次(liveError), 不弹错误风暴。 */
+  const loadBoard = useCallback(async () => {
+    const seq = ++boardSeq.current
+    try {
+      const res = await fetchAPI<BoardResp>(`/theme-mood/board?window=${windowDays}&top=15`, { cacheMode: 'reload' })
+      if (seq !== boardSeq.current) return   // 已有更新的请求发出 → 丢弃本响应
+      setResp(res)
+      const ph = parseBoardPhase(res)
+      phaseRef.current = ph
+      setBoardPhase(ph)
+      setLiveError(null)
+    } catch (e) {
+      if (seq !== boardSeq.current) return
+      setLiveError(e instanceof Error ? e.message : '刷新失败')
+    }
+  }, [windowDays])
+
+  const loadLadder = useCallback(async () => {
+    try {
+      const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, { cacheMode: 'reload' })
+      setLadder(lad)
+    } catch {
+      /* 保留旧数据 */
+    }
+  }, [windowDays])
+
+  /** 手动刷新(状态条按钮): 立即重拉 board + ladder, 期间展示 loading 态。 */
+  const manualRefresh = useCallback(async () => {
+    setManualRefreshing(true)
+    try {
+      await Promise.all([loadBoard(), loadLadder()])
+    } finally {
+      setManualRefreshing(false)
+    }
+  }, [loadBoard, loadLadder])
+
+  // 连板梯队(v0.5.87): 挂载拉一次 + 60s 轮询; live_day/stale/note_closing 由 /ladder 带出。
+  useEffect(() => {
+    void loadLadder()
+    const timer = window.setInterval(() => void loadLadder(), LADDER_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [loadLadder, reloadKey])
+
+  // 题材 board 实时轮询(2026-10-08): phase=live 每 60s; final 停止; 页面隐藏暂停(回前台立即补一次)。
+  // 非 live/未定型沿用 120s 兜底节奏; 切窗口/手动刷新(含 ScanJobButton 的 reloadKey)会重挂本 effect。
+  // 请求频率之外不缓存 —— 缓存口径由后端控制(每次都 cacheMode:'reload' 向服务端要真值)。
   useEffect(() => {
     let alive = true
-    const poll = async () => {
-      try {
-        const lad = await fetchAPI<LadderResp>(`/theme-mood/ladder?window=${windowDays}`, {
-          cacheMode: 'reload',
-        })
-        if (alive) setLadder(lad)
-      } catch {
-        /* 保留旧数据 */
+    let timer: number | undefined
+    const sleep = (ms: number) => new Promise<void>((resolve) => { timer = window.setTimeout(resolve, ms) })
+    const onVisibility = () => {
+      // 从后台回到前台: 立即补拉一次, 不等下一个周期。
+      if (alive && typeof document !== 'undefined' && !document.hidden) void loadBoard()
+    }
+    const run = async () => {
+      await loadBoard()
+      while (alive) {
+        if (phaseRef.current === 'final') return               // 收盘定型 → 停止轮询
+        const wait = phaseRef.current === 'live' ? LIVE_POLL_MS : IDLE_POLL_MS
+        await sleep(wait)
+        if (!alive) return
+        if (typeof document !== 'undefined' && document.hidden) continue   // 页面隐藏 → 暂停本次拉取
+        await loadBoard()
       }
     }
-    const timer = window.setInterval(() => void poll(), 60000)
+    void run()
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
     return () => {
       alive = false
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearTimeout(timer)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [windowDays, reloadKey])
+  }, [loadBoard, reloadKey])
 
   const items = resp?.items ?? []
   const rotationByDate = useMemo(
@@ -275,9 +328,34 @@ export default function ThemeMoodPage() {
       <div className="mb-3 flex items-center gap-3">
         <h1 className="text-[16px] font-semibold">题材情绪</h1>
         <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">收盘确认口径</span>
-        {resp?.trade_date ? <span className="text-[11px] text-muted-foreground">{resp.trade_date}</span> : null}
+        <ThemeMoodStatus
+          phase={boardPhase}
+          as_of={resp?.as_of}
+          settled_at={resp?.settled_at}
+          trading_day={resp?.trading_day}
+          note={resp?.note}
+        />
+        {/* 基准日/快照时间显式标注(铁律): 缺数据显式「无数据」, 不填 0 也不留空 */}
+        {resp ? (
+          <span className="text-[11px] text-muted-foreground">基准日 {resp.trade_date ?? '无数据'}</span>
+        ) : null}
+        {liveError ? (
+          <span className="text-[10px] text-stock-up" title={liveError}>
+            轮询失败, 自动重试中
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-1">
           <ScanJobButton path="/theme-mood/scan/run" onDone={() => setReloadKey((k) => k + 1)} />
+          <button
+            type="button"
+            onClick={() => void manualRefresh()}
+            disabled={manualRefreshing}
+            title="立即拉取最新题材情绪(盘中 phase=live 时每 60s 自动刷新)"
+            className="flex items-center rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-60"
+          >
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${manualRefreshing ? 'animate-spin' : ''}`} />
+            {manualRefreshing ? '刷新中…' : '刷新'}
+          </button>
           {WINDOWS.map((w) => (
             <button
               key={w}
