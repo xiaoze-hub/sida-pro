@@ -19,6 +19,53 @@ logger = logging.getLogger(__name__)
 PREMARKET_CRON = {"hour": 8, "minute": 30}
 POSTMARKET_CRON = {"hour": 15, "minute": 30}
 
+# 报告类型 → 推送文案前缀
+_REPORT_LABELS = {"premarket": "盘前", "postmarket": "盘后"}
+
+
+def _push_report_notification(report_type: str, result: dict) -> bool:
+    """生成成功后把内置报告推到通知中心(站内落库 + 外发渠道), 失败/无渠道显式不假装。
+
+    复用 `notify_center.push_notification`(与 agent 推送同一条链: 先站内落库再外发,
+    绝不抛异常)。返回值语义:
+      - True : 站内通知已落库(外发结果由通知中心的 push_status 记录, 无渠道时
+               push_status='skipped', 站内仍可见 —— 不是"沉默失败");
+      - False: 站内落库失败(未外发) 或调用异常 —— 调用方须如实记 error, 绝不报成功。
+
+    只落盘不推送是本轮审计的 P1: 报告文件生成后无人知晓, 这里补上"生成即通知"。
+    """
+    title = str(result.get("title") or "").lstrip("# ").strip() or "SIDA 报告"
+    path = str(result.get("path") or "")
+    size = result.get("size") or 0
+    label = _REPORT_LABELS.get(report_type, report_type)
+    body = f"SIDA {label}报告已生成\n标题: {title}\n大小: {size} 字节\n文件: {path}"
+    try:
+        from src.core.notify_center import push_notification
+
+        nid = push_notification(
+            title=title,
+            body=body,
+            category="report",
+            level="info",
+            link="/reports",
+            source="report_scheduler",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("[报告] %s 推送通知异常(未假装成功): %s", report_type, e)
+        return False
+    if nid is None:
+        # push_notification 返回 None = 站内落库失败 → 未外发, 不假装
+        logger.error(
+            "[报告] %s 通知站内落库失败(未外发), 报告本体已写入 %s", report_type, path
+        )
+        return False
+    logger.info(
+        "[报告] %s 已推送通知中心 id=%s (无渠道时站内存留 push_status=skipped)",
+        report_type,
+        nid,
+    )
+    return True
+
 
 def _generate_once_in_worker(report_type: str) -> dict:
     """在线程内运行完整报告生成(asyncio.run), 内部自开 DB session。"""
@@ -87,6 +134,9 @@ class ReportScheduler:
                 result.get("path", ""),
                 result.get("size", 0),
             )
+            # AI 链路 P1(2026-10-10): 生成成功后推送通知中心(站内 + 外发), 此前只落盘无人知。
+            # 失败/无渠道由 _push_report_notification 显式记 error, 不假装推送成功。
+            _push_report_notification(report_type, result)
         except Exception as e:
             logger.exception("[报告] %s 生成异常: %s", report_type, e)
         finally:

@@ -1,3 +1,22 @@
+### feat-内置报告生成即推送通知中心（盘前/盘后补"生成即通知"）（2026-10-10）
+
+AI 链路审计 P1: `report_scheduler` 8:30 盘前 / 15:30 盘后生成内置报告后**只落盘、无人知**
+(`report_generator._write_report` 写文件后无任何通知)。本次在生成成功后接 `notify_center.push_notification`
+(与 agent 推送同一条链, 参考 `src/agents/base.py:399` 的 `notify_with_result`):
+
+- `report_scheduler._push_report_notification(report_type, result)`: 站内落库 + 外发渠道,
+  `category=report` / `source=report_scheduler` / `link=/reports`; 标题取报告 title(去 markdown `#`)。
+- 失败/无渠道**显式不假装**: `push_notification` 返回 None(站内落库失败)或抛异常 → 记 error 并返回 False;
+  无渠道时由通知中心 `push_status='skipped'` 体现(站内仍可见, 非沉默失败), 调用方照实记录 id。
+- 生成异常(采集/写盘失败)不推送 —— 仅在"生成完成"日志后调用。
+- **职责定位(保留双轨, 不删)**: 内置报告调度器(8:30/15:30, 固定 job, 面向报告中心 `/reports`)
+  与 agent 版 `premarket_outlook`(盘前埋伏简报, 按用户/自选/情绪) / `daily_report`(盘后)在时段上
+  重叠但**面向对象与内容不同**(全市场模板报告 vs 个性化 agent 简报)。本轮**不合并**: 内置报告补
+  "生成即通知"仅让既有产物可见, 不接管 agent 推送; 后续如需去重再单独评估。
+- 测试(禁真网络): 新增 `tests/test_report_push.py` 6 例 —— 成功调 notify_center(参数/category/source
+  断言)/None 不假装/异常不假装/缺 title 兜底不崩/生成后推送/生成失败不推送。
+- 验收: `pytest tests/test_report_push.py`(6 passed)、`ruff check` 全绿。不发版、不打 tag、不部署、不 push main。
+
 ### feat-Agent 命中榜上个人中心 UI（分 Agent 预测命中率）（2026-10-10）
 
 AI 链路审计 P1: `GET /api/profile/stats/accuracy`(分 Agent 命中榜, 后端已实现)此前零前端消费 ——
