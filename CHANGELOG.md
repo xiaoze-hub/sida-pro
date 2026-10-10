@@ -1,3 +1,23 @@
+### feat-预测引擎(8010)部署链: 裸 venv 进程形态补齐（2026-10-10）
+
+生产实测 `GET /api/forecast/referee-stats` 恒返回「预测引擎不可用」—— 引擎从未随主服务拉起。
+查明**引擎历来不是容器化部署**: `docker-compose.yml` 的 `forecast:8010`、`Dockerfile.forecast`、
+`build-push-acr-forecast.yml` 只是早期规划形态, ACR/ghcr 上不存在 `*-forecast` 镜像仓库
+(`docker manifest inspect .../xzxwz-forecast:v0.13.5x` → MISS)。真实形态 = 主机 venv 里
+`python3 forecast_server.py` + systemd `panwatch-forecast.service`(历史库 `~/.panwatch_forecast.db`)。补:
+
+- **`deploy/deploy_forecast_engine.sh`**: 幂等部署脚本 —— 同步 `forecast_server.py` + `forecast_lib/`
+  → 建/复用 venv → 装 `forecast_requirements.txt`(依赖懒加载, 安装失败不阻塞拉起) → 写
+  `forecast.env` → 写 systemd unit(`Restart=always`/`MemoryMax=4G`/开机自启) → 拉起 → 30 次健康探测。
+  `FORECAST_HOST` 默认 `0.0.0.0` —— 主服务在容器里经 docker 网关(生产实测 `172.19.0.1`)访问引擎,
+  听回环会让容器连接被拒("起来了但够不着")。
+- **`deploy/panwatch-forecast.service`**: 更新为生产同款(路径 `/opt/panwatch-forecast`, `User=root`)。
+- **`deploy/FORECAST_ENGINE_DEPLOY.md`**: 形态结论 + 证据 + 发版接线说明(与 `sida_prod_deploy.sh`
+  同级的 `sida_prod_deploy_forecast.sh` 挂在主部署末尾, 非致命, 引擎失败不影响主服务判定)。
+- **`scripts/tests/test_deploy_forecast_engine.sh`**: stub 契约测试 20 项(BIND=0.0.0.0 / unit 字段 /
+  systemctl 调用 / 无 forecast 容器化命令 / 源码缺失显式失败)。
+- 验收: stub 测试 20 通过、`check_is_pg_scope.py`、`check_ui_rules.mjs` 绿。不发版、不打 tag、不 push main。
+
 ### fix-预测锥图空 K 线 RangeError: 空态早退 + 长度兜底（2026-10-10）
 
 `frontend/src/components/ForecastConeChart.tsx` 在历史 K 线为空(拉取失败 / 新股无 K 线)时,
