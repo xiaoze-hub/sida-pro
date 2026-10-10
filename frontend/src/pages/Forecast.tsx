@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { safeFixed, safeNum } from '@/lib/format'
 import ForecastConeChart from '@/components/ForecastConeChart'
+import { AiRefereePanel, RefereeStatsCard, type AiRefereeInfo, type RefereeStats } from '@/components/AiRefereePanel'
 
 interface KronosResult {
   median: number[]
@@ -38,6 +39,9 @@ interface PredictResult {
     adjustment_pct: number
     notes: string[]
   }
+  // AI 裁判结论(P0-2): 引擎 /predict 响应字段。verdict=adjust 时 direction 已覆盖
+  // 最终方向; 旧响应可能缺该字段 ⇒ 组件侧显式『无裁判结论』。
+  ai_referee?: AiRefereeInfo | null
   recommendation?: {
     action: string
     tone: string
@@ -213,6 +217,9 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const [showDetail, setShowDetail] = useState(false)
   const [modelWeights, setModelWeights] = useState<Record<string, number> | null>(null)
   const [weightsSource, setWeightsSource] = useState('')
+  // 裁判战绩卡片(P0-2): 消费 /api/forecast/referee-stats(代理引擎 referee_impact_stats)。
+  const [refereeStats, setRefereeStats] = useState<RefereeStats | null>(null)
+  const [refereeStatsLoading, setRefereeStatsLoading] = useState(false)
   const { toast } = useToast()
 
   // 股票搜索(输入名称/代码) — 用 数智分析 自带 /stocks/search(返回 list)
@@ -338,6 +345,26 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       .catch(() => { /* 引擎未起/接口未就绪: 保留硬编码 fallback */ })
     return () => { cancelled = true }
   }, [])
+
+  // P0-2: 裁判战绩(介入前后命中率) — 出结果后随标的拉取; 契约「永不 500」,
+  // 网络层异常也降级成显式空态, 不阻塞页面。
+  const loadRefereeStats = async (sym: string) => {
+    if (!/^\d{6}$/.test(sym)) return
+    setRefereeStatsLoading(true)
+    try {
+      const d = await fetchAPI<RefereeStats>(`/forecast/referee-stats?symbol=${sym}`)
+      setRefereeStats(d)
+    } catch (e: any) {
+      setRefereeStats({ total: 0, symbol: sym, message: e?.message || '裁判战绩暂不可得' })
+    } finally {
+      setRefereeStatsLoading(false)
+    }
+  }
+
+  // 依赖 result.symbol: 换标的重新拉; 未出结果时不请求(空态由卡片文案承载)
+  useEffect(() => {
+    if (result?.symbol) loadRefereeStats(result.symbol)
+  }, [result?.symbol])
 
   // 检测引擎状态(可手动刷新调用)
   const checkEngine = () => {
@@ -712,7 +739,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               <span>预测结果：{result.symbol}{result.stock_name ? ` ${result.stock_name}` : ''}</span>
               <span className={`text-[16px] font-bold ${dirColor(result.direction)}`}>
                 {/* 反AI模板⑤: 预测方向/幅度必须带"模型预测"限定,防既成事实表述(用户幻觉敏感) */}
-                <span className="mr-1.5 align-middle text-xs font-medium text-muted-foreground">模型预测</span>
+                {/* P0-2 修订: 若裁判 adjust 已覆盖最终方向, 限定词改为"裁判调整后" —— 不能把裁判改过的方向标成纯模型输出 */}
+                <span className="mr-1.5 align-middle text-xs font-medium text-muted-foreground">
+                  {result.ai_referee?.verdict === 'adjust' && (result.ai_referee.direction === 'up' || result.ai_referee.direction === 'down')
+                    ? '裁判调整后'
+                    : '模型预测'}
+                </span>
                 {result.direction === 'up' ? '↑ 看多' : result.direction === 'down' ? '↓ 看空' : '→ 横盘'}
                 {' '}({result.expected_pct > 0 ? '+' : ''}{result.expected_pct}%)
               </span>
@@ -834,6 +866,12 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
               <ModelDivergenceChart result={result} />
             </div>
             </div>{/* 预测价格 + 四模型对比 两栏 grid 结束 */}
+
+            {/* AI 裁判结论(P0-2): verdict/方向/理由全文; adjust 覆盖最终方向时显式标注 */}
+            <AiRefereePanel referee={result.ai_referee} />
+
+            {/* 裁判战绩卡片(P0-2): 介入前后命中率对比, 样本不足显式 */}
+            <RefereeStatsCard stats={refereeStats} loading={refereeStatsLoading} />
 
             {/* 消息情绪面 */}
             {result.sentiment && (

@@ -1,3 +1,35 @@
+### feat-AI 裁判结论上屏(verdict/理由/adjust 覆盖显式标注)+ 裁判战绩卡片 + referee-stats 端点（2026-10-10）
+
+AI 全链路审计 P0-2「AI 裁判零消费」: 引擎 `/predict` 早已把 `ai_referee{verdict,direction,reason}`
+放进响应(verdict=adjust 时 **forecast_server.py:417 已强势覆盖最终 direction**),
+`forecast_lib/ai_referee.py:454 referee_impact_stats(symbol)` 也已实现, 但**无任何调用者** ——
+前端全库 grep 'ai_referee' 零命中 ⇒ 预测记录里方向被裁判改过, 用户却看不到(幻觉敏感红线:
+变更必须可见; 缺数据必须显式)。本次把裁判结论全程接通(不发版、不打 tag、不部署)。
+
+- **后端(8010 引擎)**: `forecast_server.py` 新增 `GET /referee/stats`, 出口
+  `referee_impact_stats`(介入前后命中率对比)。**永不 500**: 无记录/统计异常一律返回
+  显式 no-data(`total=0` + `message` 说明原因), 统计是增量信息不拖垮前端。
+- **后端(8000 代理)**: `src/web/api/forecast.py` 新增 `GET /api/forecast/referee-stats?symbol=`,
+  代理引擎端点。同样**永不 500**: 引擎停机(ConnectError)/异常 → `200` + 显式 no-data message,
+  供前端如实标注「样本不足/无记录」, 绝不伪造命中率掩盖缺失。
+- **前端**: 新增 `frontend/src/components/AiRefereePanel.tsx` —— `AiRefereePanel`(结论面板) +
+  `RefereeStatsCard`(战绩卡片)。`frontend/src/pages/Forecast.tsx` 结果区渲染二者:
+  ① verdict 三态徽标(裁判确认/调整/弃权), 未知 verdict 原样透出不归类;
+  ② **adjust 且给出方向 ⇒ 显式红线标注「最终方向已被裁判调整」** + 裁判理由全文(不截断),
+  顶部主方向读出同步把「模型预测」限定词改为「裁判调整后」(不把裁判改过的方向当纯模型输出);
+  ③ 旧响应无 `ai_referee` ⇒ 显式「无裁判结论」, 不臆造 verdict/reason;
+  ④ 战绩卡片消费 `/api/forecast/referee-stats`, 命中率/基线/样本数展示, adjust 样本为 0 显式「样本不足」。
+  工作台标签 `frontend/src/pages/workbench/tabs/ForecastTab.tsx` 惰性内嵌同一页 ⇒ 其口径行显式声明
+  已含 AI 裁判结论(不重复渲染, 不新增取数)。
+- **测试(禁真网络)**: `frontend/tests/components/ai-referee.test.tsx` 9 例(三态徽标 / adjust 覆盖
+  标注+理由全文 / adjust 无有效方向不标覆盖 / 字段缺失兼容 / reason 空显式 / 战绩样本不足显式 /
+  stats=null 空态 / 有样本展示 / Forecast 页端到端消费 ai_referee+referee-stats);
+  `tests/test_forecast_referee_stats.py` 5 例(引擎透传+symbol 过滤 / 引擎异常 200 不 500 /
+  代理透传 / 引擎停机 200 不 500 / 代理意外异常 200 不 500)。
+- **验收**: `npx vitest run` 119 文件 875 例全绿、`npx tsc -b` 0 error、`npx tsc -p tsconfig.tests.json`
+  0 error、`node scripts/check_ui_rules.mjs` UI-RULES OK; 后端邻域 53 例全绿
+  (test_forecast_referee_stats 5 + test_w36_forecast_orchestration / test_ai_referee_http /
+  test_forecast_history_outcome / test_forecast_config_channel 48)。
 ### fix-决策账本回填接上生产调度(交易日 18:35 cron + 手动 API)（2026-10-10）
 
 AI 全链路审计 P0-1: `decision_log.backfill_outcomes` 全仓**无生产调度**(仅测试调用, 生产引用只剩 `resonance_scan.py:389` 一条注释), `startup.py` 的 add_job 无该项 → DecisionLedger 直读的 `ret_t1/hit_t1` 列**从不被回填**, 命中率恒显『样本不足』, "信号 → 结果" 反馈环整段死。修法(照既有 cron 惯例):

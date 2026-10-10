@@ -297,6 +297,43 @@ async def forecast_weights():
         raise HTTPException(500, f"查询失败: {e}")
 
 
+@router.get("/forecast/referee-stats")
+async def forecast_referee_stats(
+    symbol: str = Query("", description="股票代码过滤, 空=全市场聚合"),
+):
+    """AI 裁判战绩(介入前后命中率对比)。
+
+    代理 :8010 引擎的 referee_impact_stats(裁判结论 prediction_referee_evals
+    落库在引擎侧, 与本服务主库无关, 见 docs/dependency_direction.md 单向编排)。
+
+    **永不 500**: 引擎未启动/接口异常一律返回显式 no-data(message 说明原因),
+    供前端「裁判战绩」卡片如实标注「样本不足/无记录」, 绝不伪造命中率掩盖缺失。
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{FORECAST_ENGINE_URL}/referee/stats",
+                params={"symbol": symbol},
+            )
+            r.raise_for_status()
+            return r.json()
+    except httpx.ConnectError:
+        _log_forecast("error", f"裁判战绩查询失败: 引擎未启动 symbol={symbol}")
+        return {
+            "total": 0,
+            "symbol": symbol or "all",
+            "message": "预测引擎不可用(需在主机运行 forecast_server.py), 裁判战绩暂不可得",
+        }
+    except Exception as e:
+        logger.exception("裁判战绩查询失败")
+        _log_forecast("error", f"裁判战绩查询异常: {e} symbol={symbol}")
+        return {
+            "total": 0,
+            "symbol": symbol or "all",
+            "message": f"裁判战绩查询失败: {e}",
+        }
+
+
 @router.get("/forecast/models")
 async def forecast_models():
     """预测引擎模型清单(设置页展示)。"""

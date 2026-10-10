@@ -847,6 +847,33 @@ def forecast_weights():
     }
 
 
+@app.get("/referee/stats")
+def referee_stats(symbol: str = ""):
+    """AI 裁判介入前后命中率对比(供前端「裁判战绩」卡片消费)。
+
+    口径与实现见 forecast_lib.ai_referee.referee_impact_stats(裁判结论落库在
+    prediction_referee_evals, 介入前方向用模型预测价中位数重算, 不用已被裁判
+    改过的 final_direction)。
+
+    **永不 500**: 无记录/统计异常一律返回显式 no-data(message 说明原因),
+    统计是增量信息, 不能拖垮前端。前端据此如实标注「样本不足/无记录」,
+    绝不伪造命中率。
+    """
+    try:
+        try:
+            from forecast_lib.ai_referee import referee_impact_stats
+        except ImportError:
+            from ai_referee import referee_impact_stats
+        return referee_impact_stats(symbol)
+    except Exception as e:  # noqa: BLE001 - 统计失败绝不 500
+        logger.warning("裁判战绩统计失败 symbol=%s: %s", symbol, e)
+        return {
+            "total": 0,
+            "symbol": symbol or "all",
+            "message": f"裁判战绩统计不可用: {e}",
+        }
+
+
 @app.get("/forecast/models")
 def forecast_models():
     """预测引擎模型清单(设置页展示)。"""
