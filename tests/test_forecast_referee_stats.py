@@ -201,3 +201,31 @@ def test_proxy_referee_stats_never_500_on_unexpected_error(monkeypatch, main_cli
     assert body["total"] == 0
     assert body["symbol"] == "all"
     assert "bad gateway" in body["message"]
+
+
+def test_proxy_referee_stats_engine_up_but_no_samples(monkeypatch, main_client):
+    """引擎连通但无裁判样本 → 透传引擎的**显式 no-data**(与"引擎不可用"可区分), 200。
+
+    这是"引擎已拉起但从未跑过裁判"的真实生产态: 引擎返回 total=0 + 明确说明,
+    主服务原样代理; 前端据此如实标注「样本不足」, 而非误报「引擎不可用」。
+    """
+    from src.web.api import forecast as forecast_api
+
+    engine_payload = {
+        "total": 0,
+        "symbol": "002361",
+        "message": "暂无裁判记录(裁判层尚未介入过预测, 或 evaluate_prediction 未调用)",
+    }
+    monkeypatch.setattr(
+        forecast_api.httpx,
+        "AsyncClient",
+        lambda **kw: _FakeAsyncClient(payload=engine_payload),
+    )
+    resp = main_client.get("/api/forecast/referee-stats", params={"symbol": "002361"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 0
+    assert "暂无裁判记录" in body["message"]
+    # 与"引擎不可用"的代理层兜底文案显式区分
+    assert "预测引擎不可用" not in body["message"]

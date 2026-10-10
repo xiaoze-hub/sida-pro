@@ -1,3 +1,13 @@
+### test-预测引擎连通契约: referee-stats/health 双态回归（2026-10-10）
+
+把「引擎已拉起」与「引擎不可用」两种态在测试层钉死(全 mock, 禁真网络):
+
+- `tests/test_forecast_referee_stats.py`: 新增「引擎连通但无裁判样本」用例 —— 透传引擎显式
+  no-data(**与代理层"引擎不可用"文案可区分**), 200 永不 500。
+- `tests/test_w36_forecast_orchestration.py`: 新增 `/api/forecast/health` 两例 —— 引擎停机返回
+  显式 `unreachable`(200, 不 500)、引擎在线原样透传 `/health` 载荷。
+- 验收: 两文件 `pytest` 18 通过 + `ruff` 全绿。
+
 ### feat-预测引擎(8010)部署链: 裸 venv 进程形态补齐（2026-10-10）
 
 生产实测 `GET /api/forecast/referee-stats` 恒返回「预测引擎不可用」—— 引擎从未随主服务拉起。
