@@ -1,3 +1,14 @@
+### feat-每日跨源指标标定作业(腾讯/东财/TQ 快照恒等式+跨源比对)（2026-10-10）
+
+Volume 单位事故(快照=手/日线=股)教训: 既有单源对账 `unit_recon` 只查**单源内部**恒等式, 查不出**跨源不一致**(两源各自自洽、并排才现形)。
+- **新增 `src/core/indicator_calibration.py`**: 盘后抽样 N 只 A 股, 对 腾讯/东财/TQ 三源**当日快照**统一归一(量=股/额=元/价=元), 做 ①单源恒等式 `vol×price≈amt`(复用 `unit_check`, 实测校准 5%) ②跨源一致性(三源最大两两相对偏差 ≤ 2%, `SIDA_CALIB_CROSS_TOL_PCT` 可覆盖)。
+- **不静默**: 恒等式违规 / 跨源不一致 / 系统性单源缺失(整批取不到某源) → 显式落 `datasource_failures` + `alerting.record_data_source_failure` 告警。
+- **单源缺失显式降级**: 仅 1 源可用的标的进 `degraded_single_source`(不补齐、不当多源结论); 样本内**无任一票**可跨源校验 → `ok=False`(数据路径不完整)。
+- **作业诚实性**: `daily_job` 走 jobs 框架, 返回体 `ok=False` → `jobs.finish` 判 **failed**(v0.13.49 约定); 同类作业进行中复用 `job_id` 不起第二个; 作业框架不可用时退化为"只跑并返回报告"(报告自带 ok, 不因框架挂而假成功)。报告落 `DATA_DIR/reports/indicator_calibration/YYYY-MM-DD.json`。
+- **调度**: 交易日 **16:10**(`src/bootstrap/startup.py#indicator-calibration-daily`), 与 TQ 类(15:35/15:40/15:50)+全市场日线(16:00)错开(TQ 单客户端进程)。
+- **测试** `tests/test_indicator_calibration.py`(16 例, 禁真网络): 正常通过 / 恒等式违规告警 / 跨源不一致 / 单源缺失显式降级 / 全断不可校验 / 系统性缺失告警 / 作业 ok=False→failed / 复用活跃作业 / 报告落盘。审计表更新见 `docs/技术指标准确度审计_20261010.md` 工程 B 节。
+- 验收同前; **不发版、不打 tag、不 push main**。
+
 ### fix-技术指标准确度: 形态空区间崩溃 + 周月缺量当0 + 末根盘中 repaint 标注（2026-10-10）
 
 技术指标准确度地基(lookahead/repaint 审计)。审计表(基线 `60146bf` / 审计对象完整路径 / 覆盖范围与未审项)见 `docs/技术指标准确度审计_20261010.md`。

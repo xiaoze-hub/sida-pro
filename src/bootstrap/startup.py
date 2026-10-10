@@ -603,6 +603,29 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"口径快照留痕注册失败: {e}")
 
+        # 每日跨源指标标定(2026-10-10, Volume 单位事故教训): 交易日 16:10。
+        # 抽样 N 只对 腾讯/东财/TQ 三源快照做 单源恒等式 + 跨源一致性 两级校验;
+        # 异常显式落 datasource_failures/告警, 单源缺失显式降级; 作业 ok=False → failed。
+        # 16:10 与 TQ 类调度器(15:35/15:40/15:50)+全市场日线(16:00)错开(TQ 单客户端进程)。
+        try:
+            from src.core.indicator_calibration import daily_job as _calibration_job
+
+            rt.scheduler.scheduler.add_job(
+                _calibration_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=16,
+                minute=10,
+                id="indicator-calibration-daily",
+                name="每日跨源指标标定",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("每日跨源指标标定已注册(交易日 16:10)")
+        except Exception as e:
+            logger.error(f"每日跨源指标标定注册失败: {e}")
+
         # 题材情绪分(2026-10-08): 盘中实时刷新(交易日 9:30-15:00 每 10 分钟,
         # source='intraday') + 收盘定型(15:05, source='close'+settled_at, 幂等)。
         # 取代旧的单一 15:45 扫描 —— 15:05 定型早于 demon 落涨停事件无关紧要:
