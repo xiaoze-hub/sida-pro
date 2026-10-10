@@ -1,3 +1,77 @@
+### feat-预测引擎发版接线: 随主服务发版自动拉起（2026-10-10）
+
+补 `deploy/sida_prod_deploy_forecast.sh`: 把仓库快照(`forecast_server.py` + `forecast_lib/` +
+`forecast_requirements.txt` + `deploy/`)经 scp 送到目标主机, 远端执行
+`deploy/deploy_forecast_engine.sh`(复用主服务发版链的 base64-over-scp 送达惯例, 避开 Windows
+命令行长度上限; 引擎与主服务版本解耦)。
+
+- 与主服务发版链的关系: `~/.hermes/scripts/sida_prod_deploy.sh`(panwatch 容器部署)末尾
+  **非致命**调用本脚本(`|| echo`), 引擎失败不翻转主服务判定; `SIDA_SKIP_FORECAST_DEPLOY=1` 可关。
+- 实跑验证: 对生产幂等重跑 → `FORECAST_DEPLOY_OK`(引擎健康)。
+- 生产端到端(2026-10-10, 见 deploy/FORECAST_ENGINE_DEPLOY.md §5): 主服务 `/api/health`
+  `forecast_engine=ok`; 认证后 `GET /api/forecast/referee-stats?symbol=002361` 由
+  「预测引擎不可用(需在主机运行 forecast_server.py)」变为引擎真实返回的显式态
+  `{"total":0,"symbol":"002361","message":"暂无裁判记录(...)"}`(引擎已连通, 尚无裁判样本)。
+
+### fix-预测引擎 /health Kronos 缺失不再 500（2026-10-10）
+
+生产拉起引擎实测: 主机无 `~/Kronos` 源码时 `get_predictor()` 抛 `ModuleNotFoundError` →
+引擎 `/health` 直接 **500** → 主服务 `_forecast_engine_probe` 把"可选模型没装好"误判成
+"引擎 down"(referee-stats 仍报不可用)。修:
+
+- `forecast_server.py::health()`: 包 try/except —— Kronos 加载异常只降级为
+  `kronos_ready=false` + `kronos_error`(原因), **探针绝不 500**; Kronos 是 5 票模型
+  之一且可缺(`/predict` 缺失时用其余模型加权)。语义与主服务 `/api/health`
+  "组件 down 不整体 500"一致。
+- 回归测试(禁真网络): `tests/test_w36_forecast_orchestration.py` 加两例 ——
+  `get_predictor` 抛 ModuleNotFoundError → 200 + `kronos_ready=false`;
+  正常 → 200 + `kronos_ready=true` 且无 error 字段。
+- 验收: 两文件 `pytest` 20 通过 + `ruff` 绿。
+
+### test-预测引擎连通契约: referee-stats/health 双态回归（2026-10-10）
+
+把「引擎已拉起」与「引擎不可用」两种态在测试层钉死(全 mock, 禁真网络):
+
+- `tests/test_forecast_referee_stats.py`: 新增「引擎连通但无裁判样本」用例 —— 透传引擎显式
+  no-data(**与代理层"引擎不可用"文案可区分**), 200 永不 500。
+- `tests/test_w36_forecast_orchestration.py`: 新增 `/api/forecast/health` 两例 —— 引擎停机返回
+  显式 `unreachable`(200, 不 500)、引擎在线原样透传 `/health` 载荷。
+- 验收: 两文件 `pytest` 18 通过 + `ruff` 全绿。
+
+### feat-预测引擎(8010)部署链: 裸 venv 进程形态补齐（2026-10-10）
+
+生产实测 `GET /api/forecast/referee-stats` 恒返回「预测引擎不可用」—— 引擎从未随主服务拉起。
+查明**引擎历来不是容器化部署**: `docker-compose.yml` 的 `forecast:8010`、`Dockerfile.forecast`、
+`build-push-acr-forecast.yml` 只是早期规划形态, ACR/ghcr 上不存在 `*-forecast` 镜像仓库
+(`docker manifest inspect .../xzxwz-forecast:v0.13.5x` → MISS)。真实形态 = 主机 venv 里
+`python3 forecast_server.py` + systemd `panwatch-forecast.service`(历史库 `~/.panwatch_forecast.db`)。补:
+
+- **`deploy/deploy_forecast_engine.sh`**: 幂等部署脚本 —— 同步 `forecast_server.py` + `forecast_lib/`
+  → 建/复用 venv → 装 `forecast_requirements.txt`(依赖懒加载, 安装失败不阻塞拉起) → 写
+  `forecast.env` → 写 systemd unit(`Restart=always`/`MemoryMax=4G`/开机自启) → 拉起 → 30 次健康探测。
+  `FORECAST_HOST` 默认 `0.0.0.0` —— 主服务在容器里经 docker 网关(生产实测 `172.19.0.1`)访问引擎,
+  听回环会让容器连接被拒("起来了但够不着")。
+- **`deploy/panwatch-forecast.service`**: 更新为生产同款(路径 `/opt/panwatch-forecast`, `User=root`)。
+- **`deploy/FORECAST_ENGINE_DEPLOY.md`**: 形态结论 + 证据 + 发版接线说明(与 `sida_prod_deploy.sh`
+  同级的 `sida_prod_deploy_forecast.sh` 挂在主部署末尾, 非致命, 引擎失败不影响主服务判定)。
+- **`scripts/tests/test_deploy_forecast_engine.sh`**: stub 契约测试 20 项(BIND=0.0.0.0 / unit 字段 /
+  systemctl 调用 / 无 forecast 容器化命令 / 源码缺失显式失败)。
+- 验收: stub 测试 20 通过、`check_is_pg_scope.py`、`check_ui_rules.mjs` 绿。不发版、不打 tag、不 push main。
+
+### fix-预测锥图空 K 线 RangeError: 空态早退 + 长度兜底（2026-10-10）
+
+`frontend/src/components/ForecastConeChart.tsx` 在历史 K 线为空(拉取失败 / 新股无 K 线)时,
+`new Array(histVals.length - 1)` = `new Array(-1)` 抛 `RangeError: Invalid array length` →
+锥图整块白屏。修:
+
+- **长度兜底**: `new Array(Math.max(histVals.length - 1, 0))` —— 空历史长度为 0, 不再抛。
+- **显式空态早退**: `hist.length === 0` 时不挂图表, 改渲染 `ChartEmpty`「无历史K线」
+  (说明历史拉取失败或暂无 K 线), 不把空数组喂给 ECharts。
+- **回归测试(禁真网络)**: 新增 `frontend/tests/components/forecast-cone-chart.test.tsx` 两例 ——
+  ① 空 K 线: 不抛 + 显式「无历史K线」空态; ② 单根 K 线: 不抛 + 正常渲染。替身 `useECharts`
+  预置 `chartRef.current`, 使 effect 真进入 `setOption` 分支, 精确复现旧 `new Array(-1)` 路径
+  (删掉 `Math.max` 兜底该用例立刻红, 已实测)。
+- 验收: `vitest run tests/components/forecast-cone-chart.test.tsx`(2 通过)、`check_ui_rules.mjs` 绿。
 ### feat-数智决策 P1-2/P2-7·前端: 决策卡片渲染个性化注记 + 双维降级标注（2026-10-10）
 
 `DecisionVerdictCard`(`GET /api/decision/{symbol}` 唯一消费方)消费后端新增字段并**显式**上屏,
