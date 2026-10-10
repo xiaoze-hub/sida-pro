@@ -1,5 +1,11 @@
 ### feat-决策合成三信号接入个股工作台研究标签(P0-3)（2026-10-10）
 
+### fix-决策账本回填日期格式错配(紧凑 vs ISO 永不相等致 0 填)
+- 生产实测 5294 行回填 0 填的根因: `decision_log.trade_date` 落库紧凑格式(20260925)而 `_close_series_pg` 返回 ISO(2026-09-25), 回填比较 `series[0][0] != str(day)` 两种字面量永不相等 → 每行跳过。新增 `_norm_day()` 仅供比较归一(不改写存储值, 字面量保真)。
+- `stats()` 的 since 边界同款错配(紧凑 vs ISO 字符串比较会越界放行): 改 `length(trade_date)` 分支比较(两库通用, 不用 PG 专属函数)。
+- 回归钉子 `tests/test_decision_backfill_datefmt.py` 4 例: 真实生产形态(紧凑账本+ISO 系列)必须回填、存储值不被改写、ISO 账本兼容、错日仍不硬填。
+
+
 AI 全链路审计 P0-3: `GET /api/decision/{symbol}` 三信号合成(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由, `src/core/decision.py:synthesize`)后端路由已挂载(`src/web/app.py:673`)、前端 `insightApi.decision` 亦已定义, 但**全库零调用** —— 算得出来没有任何页面显示。
 
 - **新增唯一消费方** `frontend/src/pages/workbench/DecisionVerdictCard.tsx`: 调 `insightApi.decision(symbol, market)`, 渲染三态徽标(动手/看看/别碰, 语义色走 `gs`/`role` 令牌, 非价格涨跌色) + 一行理由; 诚实三态(loading/失败/无数据)显式 —— verdict 表外出「决策无数据」、reason 缺失出「理由无数据」, 不猜方向、不编造; `seqRef` 竞态守卫(换标的丢弃过期响应) + 取数只挂 `[symbol, market]`(无关重渲染不重发, `fetchAPI` 30s GET 缓存兜底)。
