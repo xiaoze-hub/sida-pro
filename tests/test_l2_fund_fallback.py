@@ -219,3 +219,49 @@ def test_latest_snapshot_prefers_table_then_seal(_cleanup_snap):
         assert s2["zjl_hb"] == -3762.99
     finally:
         db.close()
+
+
+def test_latest_snapshot_survives_aborted_first_query(monkeypatch):
+    """PG 回归针: 专用表未迁移/查询报错(事务 aborted)时, seal 回退仍能取到(独立 session)。
+
+    生产实测踩到: 旧写法同 session 复用 → 第一条 SQL 报 UndefinedTable 后事务进入
+    aborted 态, 后续 seal 查询抛 `InFailedSqlTransaction`, 回退全废 → 周末恒显无数据。
+    """
+    import src.db.session as dbs
+
+    class _Res:
+        def __init__(self, row):
+            self._row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    class _Sess:
+        def __init__(self, row=None, boom=False):
+            self._row, self._boom = row, boom
+
+        def execute(self, *a, **k):
+            if self._boom:
+                raise RuntimeError('relation "l2_fund_snapshots" does not exist')
+            return _Res(self._row)
+
+        def close(self):
+            pass
+
+    seen = {"n": 0}
+
+    def _factory():
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return _Sess(boom=True)  # ① 专用表查询失败
+        return _Sess(row={"ts": "2026-09-30T14:58:37+08:00", "total_buy_vol": 37842.0,
+                          "total_sell_vol": 96825.0, "cancel_buy": 1.0, "cancel_sell": 2.0,
+                          "l2_tick_num": 120327, "l2_order_num": 224629})
+
+    monkeypatch.setattr(dbs, "SessionLocal", _factory)
+    s = snap.latest_snapshot("002361", "CN")
+    assert s and s["origin"] == "seal_sample" and s["trade_date"] == "20260930"
+    assert s["total_buy_vol"] == 37842.0 and seen["n"] == 2  # 两个源各一个独立 session

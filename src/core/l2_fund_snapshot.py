@@ -179,42 +179,54 @@ def latest_snapshot(symbol: str, market: str = "CN") -> dict | None:
 
     优先 `l2_fund_snapshots` 最新交易日行; 无则回退现有落库 `seal_quality_samples`
     末行(同字段口径)。两者皆无 → None(调用方显式 available:false, 绝不返 0 冒充)。
+
+    两个源各开**独立 session**: PG 里一条语句报错(如表未迁移)会让整个事务进入
+    aborted 态, 同 session 上后续查询全废(`InFailedSqlTransaction`) —— 独立 session
+    天然隔离, 不依赖 rollback。
     """
     from sqlalchemy import text
 
     from src.db.session import SessionLocal
 
+    # ① 专用收盘快照表
     db = SessionLocal()
     try:
-        try:
-            r = db.execute(
-                text(
-                    f"SELECT trade_date, {', '.join(FIELDS)} FROM {_TABLE} "
-                    "WHERE symbol = :s AND market = :m ORDER BY trade_date DESC LIMIT 1"
-                ),
-                {"s": symbol, "m": market},
-            ).mappings().first()
-        except Exception as e:  # noqa: BLE001 表未迁移 → 退到 seal 源
-            logger.warning("l2_fund_snapshots 查询失败, 回退 seal 源: %s", e)
-            r = None
-        if r:
-            return _snap_from_row(dict(r), "snapshot", str(r.get("trade_date")))
-
-        try:
-            cols = ", ".join(_SEAL_MAP.values())
-            s = db.execute(
-                text(
-                    f"SELECT ts, {cols} FROM {_SEAL} "
-                    "WHERE symbol = :s AND market = :m ORDER BY ts DESC LIMIT 1"
-                ),
-                {"s": symbol, "m": market},
-            ).mappings().first()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("seal_quality_samples 查询失败: %s", e)
-            s = None
-        if s and has_live_values({k: s.get(v) for k, v in _SEAL_MAP.items()}):
-            d = dict(s)
-            return _snap_from_row(d, "seal_sample", str(d.get("ts") or "")[:10].replace("-", ""))
-        return None
+        r = db.execute(
+            text(
+                f"SELECT trade_date, {', '.join(FIELDS)} FROM {_TABLE} "
+                "WHERE symbol = :s AND market = :m ORDER BY trade_date DESC LIMIT 1"
+            ),
+            {"s": symbol, "m": market},
+        ).mappings().first()
+    except Exception as e:  # noqa: BLE001 表未迁移 → 退到 seal 源
+        logger.warning("l2_fund_snapshots 查询失败, 回退 seal 源: %s", e)
+        r = None
     finally:
         db.close()
+    if r:
+        return _snap_from_row(dict(r), "snapshot", str(r.get("trade_date")))
+
+    # ② 现有落库 seal_quality_samples(独立 session)
+    #    取**最近一行有真实值**的样本: 最新一行可能恰为全 0(采样器该次没拿到 L2),
+    #    取它等于"有落库却当无数据"; 取更早的非 0 行仍按实际 ts 标注日期(不冒充当日)。
+    db = SessionLocal()
+    try:
+        cols = ", ".join(_SEAL_MAP.values())
+        nonzero = " + ".join(f"COALESCE({c}, 0)" for c in _SEAL_MAP.values())
+        s = db.execute(
+            text(
+                f"SELECT ts, {cols} FROM {_SEAL} "
+                "WHERE symbol = :s AND market = :m AND (" + nonzero + ") > 0 "
+                "ORDER BY ts DESC LIMIT 1"
+            ),
+            {"s": symbol, "m": market},
+        ).mappings().first()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("seal_quality_samples 查询失败: %s", e)
+        s = None
+    finally:
+        db.close()
+    if s and has_live_values({k: s.get(v) for k, v in _SEAL_MAP.items()}):
+        d = dict(s)
+        return _snap_from_row(d, "seal_sample", str(d.get("ts") or "")[:10].replace("-", ""))
+    return None

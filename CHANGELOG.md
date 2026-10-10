@@ -1,3 +1,17 @@
+### fix-L2 快照回退 PG 事务隔离(生产实测暴露)（2026-10-11）
+
+生产实测(容器内 docker cp 探针跑生产真库)暴露两处只在 PG 才犯的毛病, 同批修复:
+
+- **事务 aborted 隔离**: 专用表 `l2_fund_snapshots` 未迁移时首条 SQL 报 `UndefinedTable`
+  → PG 事务进入 aborted 态, 同 session 上的 `seal_quality_samples` 回退查询抛
+  `InFailedSqlTransaction`, 回退全废(周末恒显"无数据")。改: 两个源各开**独立 session**,
+  不依赖 rollback。
+- **取最近一行"有真实值"的样本**: 旧写法取最新一行, 而最新一行可能恰为全 0(该次采样
+  没拿到 L2)→ 有落库却当无数据。改: 过滤 `SUM(COALESCE(col,0)) > 0` 取最近非 0 行
+  (仍按实际 ts 标注日期, 不冒充当日)。
+- **回归针**: `test_latest_snapshot_survives_aborted_first_query`(模拟首查失败 → 断言
+  seal 回退仍取到, 且两个源用两个独立 session)。
+
 ### fix-L2 成品资金非交易时段回退收盘快照(0 不冒充)（2026-10-11）
 
 工作台 L2「L2 成品资金」/ 暗盘卡「主力净流入(L2·TQ)」读 TQ `get_more_info`
