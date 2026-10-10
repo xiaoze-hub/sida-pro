@@ -126,3 +126,23 @@ def screen_stock_pool(req: StockPoolScreenRequest):
     data = _screen(symbols)
     _CACHE[key] = (now, data)
     return data
+
+
+class JbpScreenRequest(BaseModel):
+    symbols: list[str] = Field(..., description="6位A股代码列表")
+    wencai_keywords: Optional[str] = Field(None, description="可选: 问财自然语言选股条件")
+
+
+@router.post("/jbp")
+def jbp_screen(req: JbpScreenRequest):
+    """聚宝盆选股(规格 §4.2): 暗盘流入 AND 活跃度>6(>12更佳) AND GS在G区+G信号 AND 问财。
+
+    逐条件 AND 联合筛选, 输出**逐条件通过/未过明细**(证据非建议); 任一必需条件缺数据
+    → 显式降级、该股不出池(不编造)。结果走 biz_cache(60s)。
+    """
+    from src.core import jbp_pool
+
+    symbols = _valid_symbols(req.symbols)
+    if not symbols:
+        return {"universe": 0, "scanned": 0, "in_pool": 0, "rows": [], "wencai": {"provided": False}}
+    return jbp_pool.screen_cached(symbols, req.wencai_keywords)
