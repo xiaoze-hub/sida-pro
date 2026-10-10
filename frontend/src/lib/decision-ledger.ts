@@ -69,3 +69,57 @@ export function contextSummary(raw: string, max = 46): string {
 export function isFilled(item: DecisionLogItem): boolean {
   return (['t1', 't3', 't5'] as const).some((k) => item.outcomes?.[k]?.ret != null)
 }
+
+/** 比例(0-1) → 百分比文本; null/undefined → `--`(不把缺失当 0)。 */
+export function ratioPctText(ratio: number | null | undefined, digits = 1): string {
+  if (ratio == null) return '--'
+  return `${safeFixed(ratio * 100, digits)}%`
+}
+
+/** 已经是百分比数值(如后端恒回 52.3 表示 52.3%) → 文本; null → `--`。 */
+export function pctValueText(v: number | null | undefined, digits = 1): string {
+  if (v == null) return '--'
+  return `${safeFixed(v, digits)}%`
+}
+
+/** 普通数值(样本量等): 0 是真值如实显示, null → `--`。 */
+export function numText(v: number | null | undefined, digits = 0): string {
+  if (v == null) return '--'
+  return digits > 0 ? safeFixed(v, digits) : String(Math.round(v))
+}
+
+/** 盈亏比: null → `--`。 */
+export function ratioValueText(v: number | null | undefined): string {
+  return v == null ? '--' : safeFixed(v, 2)
+}
+
+/** 共振态中文名(未知原样透出, 不归类、不编造)。 */
+export const PHASE_LABEL: Record<string, string> = {
+  向好: '共振向好',
+  拐点: '共振拐点',
+  分歧: '共振分歧',
+  走坏: '共振走坏',
+}
+
+export function phaseLabel(phase: string): string {
+  return PHASE_LABEL[phase] ?? phase
+}
+
+/** 信号对账的类型中文名(后端机器名 → 人话; 未知原样透出)。 */
+export const SIGNAL_TYPE_LABEL: Record<string, string> = {
+  resonance: '三指标共振',
+  gs_signal: 'GS 信号',
+  ambush_candidate: '潜伏候选',
+  auction_pool: '竞价池',
+}
+
+export function signalTypeLabel(t: string): string {
+  return SIGNAL_TYPE_LABEL[t] ?? t
+}
+
+/** 样本不足文案: 命中率/胜率为 null 时, 页面统一这么说(不拿小样本算百分比)。 */
+export function insufficientHint(n: number | null | undefined, minSample: number | null | undefined): string {
+  const nn = n == null ? '--' : String(n)
+  const mm = minSample == null ? '' : ` < ${minSample}`
+  return `样本不足(${nn}${mm}), 不给数字`
+}

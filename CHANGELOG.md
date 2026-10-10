@@ -1,3 +1,43 @@
+### feat-数智决策 P2 前端: 复盘中心补共振回测/信号对账/入场后验/明细分页（2026-10-10）
+
+审计 P2「有功能没入口」四处 UI 入口上屏(**全并入 `DecisionLedger.tsx` 复盘中心**, 复用既有
+Section/hairline 原子, 不卡片堆砌; 字阶只用 10/11/12/16/20, 过 UI 门禁):
+
+- **信号对账卡片(P2-2)**: 消费 `GET /api/signals/hit-rate` —— 按信号类型 T+1/T+5 胜率+均值;
+  resonance 附官方基准对照(口径不完全一致的 title 提示)。胜率为 null(样本不足)→ `--`, 不出 0%。
+- **入场候选后验卡片(P2-3)**: 消费 `GET /api/decisions/entry-outcomes` —— horizon×来源胜率/均收益;
+  `insufficient` 行显式 `--` + 样本提示(3/3 不许显示 100%); `available=false` 显式查询失败, 不编造。
+- **共振回测入口(P2-1)**: 消费 `GET /api/decisions/backtest` —— 输入股票池点回测; **后端 `basis`
+  口径标记(双指标/三指标)与官方基准对照必须上屏**(明盘历史无源不可直接比优劣); 降级(缺池/失败)
+  显式 `available=false` 提示, 不出结果表。
+- **账本明细分页(P2-4)**: 明细段补 offset 翻页(上一页/下一页, `has_more` 控制禁用)+ 起止日期过滤;
+  空页显式说明(非首次加载失败)。
+- **API 客户端**: `decisions.ts` 增 `fetchDecisionBacktest`/`fetchEntryOutcomes`/`fetchSignalHitRate`
+  与 `DecisionLogResponse.total/has_more`, `signalsReviewApi` 导出; `fetchDecisionLog` 支持
+  offset/日期参数(向后兼容)。
+- **测试(禁真网络)**: 新增 `tests/components/decision-ledger-review.test.tsx` 9 例(对账卡片渲染/
+  胜率 null 不出 0%/后验样本不足显式/查询失败显式/回测 basis 透传/降级显式/翻页 offset 传参/末页禁用);
+  `tests/lib/decision-ledger.test.ts` 加 4 组口径函数钉子。
+- 验收: `vitest run` 全量(896 通过)、`tsc -b`、`tsc -p tsconfig.tests.json`、`check_ui_rules.mjs`、
+  后端 `pytest -k 'decision or signal or entry'`(186 通过)全绿。不发版、不打 tag、不部署、不 push main。
+
+### feat-数智决策 P2 后端: 共振回测/入场后验上入口 + 账本明细分页（2026-10-10）
+
+审计 P2「有功能没入口」三处后端接口补齐(不发版、不打 tag、不部署、不 push main):
+
+- **共振回测入口(P2-1)**: `GET /api/decisions/backtest` 暴露全仓零调用的
+  `backtest_resonance`。缺股票池/计算异常一律**显式降级**(`available=false` + `error`,
+  **永不 500**); 成功时后端已有的 `basis`(双指标/三指标口径)与 `official` 基准**原样透传**
+  —— 明盘历史无源, 默认走双指标, 与官方四态不可直接比较的诚实标注直达 UI。`max_symbols` 钳池。
+- **入场候选后验入口(P2-3)**: 新增 `src/core/entry_candidates.entry_outcomes_summary`
+  (只读汇总, 按 horizon×来源给胜率/均收益) + `GET /api/decisions/entry-outcomes`。
+  `total < min_sample` 时**不给胜率**(`win_rate=null` + `insufficient=true`), 空库空 rows。
+- **账本明细分页(P2-4)**: 新增 `src/core/decision_log.query_log`(`limit` 钳 `[1,500]`、
+  `offset` 负数按 0、越界返回空页不报错、`start_date`/`end_date` 支持 ISO 与紧凑双格式归一);
+  `GET /api/decisions/log` 补齐 `offset`/日期过滤并回 `total`/`has_more` 供前端翻页。
+- **测试(禁真网络)**: `tests/test_decisions_review_api.py` 11 例 —— 分页钳制/越界空页/日期过滤归一/
+  未回填保持 null; 回测缺池降级、basis 透传、异常不 500、max_symbols 钳池;
+  入场后验样本不足显式、查询失败降级、空库显式。
 ### feat-决策账本扩信号覆盖(GS买卖点/妖股因子/竞价池入账新 signal_kind)（2026-10-10）
 审计 P1-1: 决策账本此前只入账 `resonance3` 一类信号(`resonance_scan.py` 是 decision_log 全仓唯一写入点), GS 买卖点/妖股因子/竞价池信号的命中率无从统计(`stats()` 按 signal_kind 分组却永远只有一行)。本次把三类信号接入账本:
 

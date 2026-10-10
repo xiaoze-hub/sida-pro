@@ -278,6 +278,93 @@ ORDER BY n DESC
     }
 
 
+def query_log(
+    engine: Engine,
+    *,
+    kind: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """信号明细分页查询(账本明细, 审计 P2-4)。
+
+    纯只读透传: 缺价/未回填一律 NULL(不补 0), 不在 API 层推算。
+    - `limit` 钳到 [1, 500]; `offset` 负数按 0 处理(越界只是返回空页, 不报错);
+    - `start_date`/`end_date` 支持 ISO(`2026-09-25`)与紧凑(`20260925`), 比较前统一归一为
+      紧凑格式(存储即紧凑), 比较用字面量、**不改写存储值**;
+    - 返回 `total`(过滤后总行数)与 `has_more`, 供前端翻页; 越界 `offset` → items 空、has_more=False。
+    """
+    lim = max(1, min(int(limit), 500))
+    off = max(0, int(offset))
+    where: list[str] = []
+    params: dict[str, Any] = {"lim": lim, "off": off}
+
+    if kind:
+        where.append("signal_kind = :kind")
+        params["kind"] = kind
+    s_date = _norm_compact_day(start_date)
+    e_date = _norm_compact_day(end_date)
+    if s_date:
+        where.append("trade_date >= :start")
+        params["start"] = s_date
+    if e_date:
+        where.append("trade_date <= :end")
+        params["end"] = e_date
+    cond = ("WHERE " + " AND ".join(where) + " ") if where else ""
+
+    with engine.connect() as conn:
+        total = int(
+            conn.execute(text(f"SELECT COUNT(*) FROM decision_log {cond}"), params).scalar() or 0
+        )
+        rows = conn.execute(
+            text(
+                "SELECT signal_kind, symbol, trade_date, price_at_signal, context_json, source, "
+                "ret_t1, hit_t1, ret_t3, hit_t3, ret_t5, hit_t5, filled_at "
+                f"FROM decision_log {cond}ORDER BY trade_date DESC, id DESC LIMIT :lim OFFSET :off"
+            ),
+            params,
+        ).fetchall()
+
+    items = [
+        {
+            "signal_kind": r[0],
+            "symbol": r[1],
+            "trade_date": r[2],
+            "price_at_signal": None if r[3] is None else float(r[3]),
+            "context": r[4] or "",
+            "source": r[5] or "",
+            "outcomes": {
+                label: {
+                    "ret": None if r[i] is None else float(r[i]),
+                    "hit": None if r[i + 1] is None else bool(r[i + 1]),
+                }
+                for label, i in (("t1", 6), ("t3", 8), ("t5", 10))
+            },
+            "filled_at": None if r[12] is None else str(r[12]),
+        }
+        for r in rows
+    ]
+    return {
+        "count": len(items),
+        "total": total,
+        "offset": off,
+        "limit": lim,
+        "has_more": (off + len(items)) < total,
+        "items": items,
+        "note": "未回填的档位为 null(需要未来的 K 线才算得出来), 不用推算值填充; 命中 = 收益 > 0(平盘算未命中)。",
+    }
+
+
+def _norm_compact_day(day: str | None) -> str:
+    """ISO/紧凑日期 → 紧凑 `YYYYMMDD`(供与库中 trade_date 字面量比较)。空/非法 → 空串。"""
+    s = str(day or "").strip()
+    if not s:
+        return ""
+    digits = s.replace("-", "").replace("/", "")
+    return digits if (len(digits) == 8 and digits.isdigit()) else ""
+
+
 # ── 回填调度(P0-1 审计修复, 2026-10-10) ─────────────────────────────────────
 # 背景: backfill_outcomes 此前全仓无生产调度(仅测试调用, 生产引用只剩一条注释) →
 # DecisionLedger 的 ret_t1/hit_t1 列**从不被回填**, 命中率恒显『样本不足』, 反馈环整段死。
