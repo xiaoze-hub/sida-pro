@@ -137,6 +137,8 @@ async def analyze(symbol: str):
     )
     try:
         from src.core.ai_client import with_compliance
+        from src.core.evidence_chain import calibrate_confidence, historical_similarity, load_stats
+        from src.core.resonance_ai import RESONANCE_SIGNAL_KIND
         from src.web.api.chat import _get_ai_client
         from src.web.database import SessionLocal
 
@@ -148,21 +150,30 @@ async def analyze(symbol: str):
         finally:
             db.close()
         ai = resonance_ai.parse_ai_verdict(content)
+        stats = load_stats()
         out = {
             "symbol": code,
             "available": True,
             "rule": rule,
             "ai": ai,
             "data_time": detail.get("trade_date"),
+            # ── 证据化(2026-10-10): 触发条件/数据时点/失效条件 + 置信度账本校准 + 历史相似情形 ──
+            "evidence": resonance_ai.build_verdict_evidence(detail, ai),
+            "confidence_calibration": calibrate_confidence(ai.get("confidence"), RESONANCE_SIGNAL_KIND, stats),
+            "similar": historical_similarity(RESONANCE_SIGNAL_KIND, stats),
         }
     except Exception as e:  # noqa: BLE001
         logger.warning("共振 AI 判定失败 %s: %s", code, e)
+        # AI 不可用 → 诚实降级, 但**规则证据链仍照给**(确定性, 不依赖 LLM)
         out = {
             "symbol": code,
             "available": False,
             "reason": f"AI 不可用: {type(e).__name__}",
             "rule": rule,
             "ai": None,
+            "evidence": resonance_ai.build_verdict_evidence(detail, None),
+            "confidence_calibration": None,
+            "similar": None,
         }
     _ai_cache[code] = (now, out)
     return out

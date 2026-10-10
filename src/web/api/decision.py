@@ -27,6 +27,24 @@ router = APIRouter()
 _STYLE_TO_RISK = {"short": "aggressive", "swing": "balanced", "long": "conservative"}
 
 
+def _attach_evidence(out: dict) -> dict:
+    """证据化(2026-10-10): 给决策响应**追加**证据链 + 历史相似情形(**不改 verdict/理由**)。
+
+    触发条件/as_of/失效条件由 `src.core.evidence_chain` 从决策自身**确定性字段**拼出(不编);
+    相似情形只读决策账本(decision_log.stats)聚合。任何失败一律**旁路降级**(缺字段), 绝不影响
+    verdict 与理由。**只读** —— 不改 `src/core/decision.py`(合成本体)与 `decision_log.py`(账本本体)。
+    """
+    try:
+        from src.core.evidence_chain import build_decision_evidence, load_stats
+
+        extra = build_decision_evidence(out, stats=load_stats())
+        out.setdefault("evidence", extra.get("evidence"))
+        out.setdefault("similar", extra.get("similar"))
+    except Exception as e:  # noqa: BLE001 —— 证据是旁路, 失败不阻断决策
+        logger.debug("decision evidence 装配失败(跳过): %r", e)
+    return out
+
+
 def _infer_risk_profile(styles: list[str]) -> str | None:
     """由用户持仓的交易风格推断风险偏好档位。
 
@@ -111,7 +129,7 @@ async def get_decision(
         out["cached"] = True
         out["computed_at"] = rec["computed_at"]
         out["cache_source"] = rec["source"]
-        return out
+        return _attach_evidence(out)
 
     # ② miss: 算**全局基底**(无用户上下文) → 落库(短 TTL) → 读取时叠加个性化。
     try:
@@ -127,7 +145,7 @@ async def get_decision(
     out["cached"] = False
     out["computed_at"] = written or decision_cache.iso_utc(decision_cache.now_utc_naive())
     out["cache_source"] = decision_cache.SOURCE_TTL
-    return out
+    return _attach_evidence(out)
 
 
 @router.post("/precompute")

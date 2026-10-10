@@ -1,3 +1,15 @@
+### feat-AI建议证据化(前端): 共振/决策/L2 三处出口渲染证据链
+- `ResonanceVerdictPanel` / `DecisionVerdictCard` / `L2Tab IntentExplainBlock` 三处 AI/规则结论出口**追加**渲染证据链(触发条件/数据时点/失效条件)+置信度校准 note+历史相似情形; 旧响应缺字段一律不渲染(向后兼容, 不改既有布局与口径)。测试补 `resonance-evidence*` / `decision-evidence*` / `l2-intent-ai-evidence*` 断言。
+
+### feat-AI建议证据化(后端): 证据链+失效条件+置信度账本校准+历史相似情形（2026-10-10）
+- 用户铁律「AI 不替用户拍方向, 但要把证据备到最好」, 新增 `src/core/evidence_chain.py`(纯函数):
+  ①`build_evidence_chain` 结论必带 触发条件(确定性拼出, 非 LLM 编造)+数据时点(缺失显式「时点缺失」, 不默认今日)+**失效条件(必填, 缺失回确定性默认并标 `invalidation_defaulted`)**;
+  ②`calibrate_confidence` 原始置信度**挂钩决策账本实测命中率封顶**(只读消费 `decision_log.stats`), 样本不足/无口径一律 `calibrated=False`+「未校准」, **绝不编造数字**;
+  ③`historical_similarity` 历史相似情形命中统计(`n<min_sample` 显式样本不足不给百分比);
+  ④`load_stats` 只读账本加载器(失败回空壳绝不抛, 与 decision_log.py 零耦合)。
+- 三处 AI 出口接线: `intent_explain`(主力意图, 无账本口径→未校准)、`resonance_ai`+`api/resonance.py`(signal_kind=`resonance3`)、`api/decision.py`(`_attach_evidence` 旁路追加, 失败降级不阻断 verdict)。GS 解释面 `signal_explain.enrich_signal` 注入 `evidence_chain`。均**只读**, 不改决策/账本本体。
+- 提示词文件化(仓库约定一 agent 一 prompt): `prompts/intent_explain.txt` / `resonance_ai.txt` / `resonance_ai_batch.txt`, 加载失败回留存常量兜底, 行为逐字不变; LLM 输出新增 `invalidation` 字段(解析硬截断)。
+- 测试 `tests/test_prompt_evidence_chain.py` 7 类 + 三处出口证据组断言(禁真网络)。
 ### feat-K线形态图层标注(买红卖绿) + 悬停详情（2026-10-10）
 
 K 线形态识别(上一提交)的**前端取数+图层标注**落地 —— 只加图层元素(记号/图例/悬停), **不动 StockWorkbench 布局**。

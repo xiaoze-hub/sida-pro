@@ -69,10 +69,51 @@ def explain_factors(score_breakdown) -> dict:
     return {"positive": positive[:5], "negative": negative[:5]}
 
 
+def build_signal_evidence(item: dict) -> dict:
+    """GS/策略信号的证据链(触发条件 + 数据时点 + 失效条件)。纯函数, 无 IO。
+
+    - 触发条件: 正向因子(哪些因子在加分) + 评分;
+    - as_of: item 的 snapshot_date / trade_date / as_of(缺失显式「时点缺失」);
+    - 失效条件: item 自带 `invalidation`(若后端给了); 缺失则由**负向因子**拼出
+      「若这些拖累因子解除/反转则结论改变」+ 通用兜底, 绝不空。
+    """
+    from src.core.evidence_chain import build_evidence_chain
+
+    it = item if isinstance(item, dict) else {}
+    fe = it.get("factor_explain")
+    if not isinstance(fe, dict):
+        fe = explain_factors(it.get("score_breakdown"))
+    pos = [str(p.get("label") or p.get("factor") or "") for p in fe.get("positive", [])]
+    pos = [p for p in pos if p]
+    neg = [str(p.get("label") or p.get("factor") or "") for p in fe.get("negative", [])]
+    neg = [n for n in neg if n]
+
+    trig = [f"正向因子: {p}" for p in pos]
+    score = it.get("rank_score")
+    if score is not None:
+        trig.append(f"综合评分 {score}")
+    if not trig:
+        trig = ["无正向因子(评分=基线)"]
+
+    inval = it.get("invalidation")
+    if not inval and neg:
+        inval = [f"若拖累因子(「{'、'.join(neg)}」)解除或反转, 则此结论改变"]
+    default_inval = ["若正向因子转弱 或 风险/拥挤度恶化, 则此评分作废"]
+
+    as_of = it.get("snapshot_date") or it.get("trade_date") or it.get("as_of")
+    return build_evidence_chain(
+        triggers=trig,
+        as_of=as_of,
+        invalidation=inval,
+        default_invalidation=default_inval,
+    )
+
+
 def enrich_signal(item: dict) -> dict:
-    """给一条信号 item 注入 ai_score + factor_explain(原地修改并返回)。"""
+    """给一条信号 item 注入 ai_score + factor_explain + evidence(证据链)(原地修改并返回)。"""
     if not isinstance(item, dict):
         return item
     item["ai_score"] = to_ai_score(item.get("rank_score"))
     item["factor_explain"] = explain_factors(item.get("score_breakdown"))
+    item["evidence_chain"] = build_signal_evidence(item)
     return item

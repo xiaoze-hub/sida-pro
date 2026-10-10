@@ -91,3 +91,26 @@ def test_invalid_symbol_400():
     with pytest.raises(HTTPException) as ei:
         darkflow.build_intent_explain_response("abc")
     assert ei.value.status_code == 400
+
+
+def test_available_carries_evidence_block(monkeypatch):
+    """证据化(2026-10-10): AI 解读出口必带 证据链(触发条件/时点/失效条件) + 置信度校准(未校准)。"""
+    monkeypatch.setattr(
+        darkflow,
+        "compute_dark_flow",
+        lambda sym: {**_dark(), "trade_date": "20260911", "inner_outer": {"buy_pct": 58.3}},
+    )
+
+    async def fake_chat(system, user, db=None):  # noqa: ARG001
+        return '{"direction":"吸筹","confidence":"高","why":"超大单+5967万","invalidation":"若超大单转净流出则作废"}'
+
+    monkeypatch.setattr("src.core.intent_explain._llm_chat", fake_chat)
+    out = darkflow.build_intent_explain_response("002361")
+    assert out["available"] is True
+    ev = out["evidence"]
+    assert any("规则结论" in t for t in ev["triggers"])
+    assert ev["as_of"] == "20260911"
+    assert ev["invalidation"] == ["若超大单转净流出则作废"]
+    assert out["confidence_calibration"]["calibrated"] is False
+    assert "未校准" in out["confidence_calibration"]["note"]
+    assert out["similar"] is None  # 主力意图无账本口径 → 不借别的信号冒充

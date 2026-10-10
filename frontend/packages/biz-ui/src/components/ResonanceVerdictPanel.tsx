@@ -33,7 +33,36 @@ interface AiVerdict {
   risks: string[]
   watch: string[]
   missing: string[]
+  invalidation?: string[]
   parse_error?: boolean
+}
+
+/** 证据链(2026-10-10 证据化): 触发条件 / 数据时点 / 失效条件(反例检查, 防单边叙事)。 */
+export interface EvidenceBlock {
+  triggers: string[]
+  as_of: string | null
+  as_of_is_today: boolean
+  as_of_note: string
+  invalidation: string[]
+  invalidation_defaulted: boolean
+}
+
+/** 置信度账本校准: calibrated=false 即显式「未校准」(样本不足, 不编造数字)。 */
+export interface CalibrationBlock {
+  calibrated: boolean
+  value: number | null
+  cap: number | null
+  n: number
+  hit_rate: number | null
+  note: string
+}
+
+/** 历史相似情形: n<30 → insufficient, 不给百分比。 */
+export interface SimilarBlock {
+  n: number
+  up: number | null
+  insufficient: boolean
+  sentence: string
 }
 
 interface AnalyzeResp {
@@ -42,6 +71,9 @@ interface AnalyzeResp {
   reason?: string
   rule?: RuleResp
   ai?: AiVerdict | null
+  evidence?: EvidenceBlock | null
+  confidence_calibration?: CalibrationBlock | null
+  similar?: SimilarBlock | null
 }
 
 export interface ResonanceVerdictPanelProps {
@@ -182,6 +214,33 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
               ) : null}
               {ai.ai.missing.length > 0 ? (
                 <div className="text-muted-foreground/70">缺项: {ai.ai.missing.join('、')}</div>
+              ) : null}
+              {/* 证据化(2026-10-10): 证据链/失效条件/校准/相似情形 —— 仅追加, 不改既有布局 */}
+              {ai.evidence ? (
+                <div
+                  data-testid="resonance-evidence"
+                  className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
+                >
+                  <div className="text-foreground/70" data-testid="resonance-evidence-triggers">
+                    触发条件: {ai.evidence.triggers.join('；')}
+                  </div>
+                  <div className="text-muted-foreground/70" data-testid="resonance-evidence-asof">
+                    {ai.evidence.as_of_note}
+                  </div>
+                  <div className="text-amber-600 dark:text-amber-500" data-testid="resonance-evidence-invalidation">
+                    失效条件: {ai.evidence.invalidation.join('；')}
+                  </div>
+                  {ai.confidence_calibration?.note ? (
+                    <div className="text-muted-foreground/70" data-testid="resonance-evidence-calibration">
+                      置信度校准: {ai.confidence_calibration.note}
+                    </div>
+                  ) : null}
+                  {ai.similar?.sentence ? (
+                    <div className="text-muted-foreground/70" data-testid="resonance-evidence-similar">
+                      {ai.similar.sentence}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           )}

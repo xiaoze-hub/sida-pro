@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +30,42 @@ _LLM_TIMEOUT = 8
 _LLM_TEMPERATURE = 0.2
 # why 字段字数上限(解析时硬截断, 防止超长)
 _WHY_MAX_LEN = 80
+# invalidation(失效条件)字数上限
+_INVALIDATION_MAX_LEN = 120
 
 # 方向白名单(与规则口径一致, LLM 只能四选一)
 _DIRECTIONS = {"吸筹", "派发", "洗盘", "中性"}
 # 置信度白名单
 _CONFIDENCES = {"高", "中", "低"}
 
-_SYSTEM_PROMPT = (
-    "你是A股主力意图解释器。规则算法已给出\"结论\"与结构化盘口特征, "
-    "你的任务是给出一句话\"为什么\"+置信度+方向归类, 帮助用户理解算法结论。\n"
-    "硬性要求:\n"
-    "1. 必须结合内外盘(buy_pct/sell_pct)、拆单(split_order)、筹码(absorb_zones/"
-    "distribute_zones)、位置(position)等特征综合研判, 不能只看主力净额。\n"
-    "2. why 必须引用特征数字佐证(例如\"超大单+5967万但大单-8433万\"), 不能空泛。\n"
-    "3. 规则结论是事实依据, 你可以补充解释, 但不得推翻或改写规则结论方向。\n"
-    "4. 特征缺失的字段按\"无\"处理, 严禁编造任何数字或事件。\n"
-    "5. 只输出严格 JSON, 不要任何其他文字、注释或 markdown 围栏。\n"
-    '输出格式(严格 JSON): {\"direction\": \"吸筹|派发|洗盘|中性\", '
-    '"confidence": "高|中|低", "why": "一句话(≤80字), 必须引用特征数字"}'
+# 提示词文件化(仓库约定: 一 agent 一 prompt 文件, 落在 prompts/); 缺文件回兜底, 行为不因 IO 而变。
+_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+
+def _load_prompt(filename: str, fallback: str = "") -> str:
+    """读 prompts/<filename>; 缺文件/读失败 → 回 fallback(不抛)。末尾换行归一。"""
+    try:
+        return (_PROMPTS_DIR / filename).read_text(encoding="utf-8").rstrip("\n")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("主力意图解读提示词加载失败(%s): %r", filename, exc)
+        return fallback
+
+
+_SYSTEM_PROMPT = _load_prompt(
+    "intent_explain.txt",
+    (
+        "你是A股主力意图解释器。规则算法已给出\"结论\"与结构化盘口特征, "
+        "你的任务是给出一句话\"为什么\"+置信度+方向归类, 帮助用户理解算法结论。\n"
+        "硬性要求:\n"
+        "1. 必须结合内外盘(buy_pct/sell_pct)、拆单(split_order)、筹码(absorb_zones/"
+        "distribute_zones)、位置(position)等特征综合研判, 不能只看主力净额。\n"
+        "2. why 必须引用特征数字佐证(例如\"超大单+5967万但大单-8433万\"), 不能空泛。\n"
+        "3. 规则结论是事实依据, 你可以补充解释, 但不得推翻或改写规则结论方向。\n"
+        "4. 特征缺失的字段按\"无\"处理, 严禁编造任何数字或事件。\n"
+        "5. 只输出严格 JSON, 不要任何其他文字、注释或 markdown 围栏。\n"
+        '输出格式(严格 JSON): {"direction": "吸筹|派发|洗盘|中性", '
+        '"confidence": "高|中|低", "why": "一句话(≤80字), 必须引用特征数字"}'
+    ),
 )
 
 
@@ -229,7 +248,47 @@ def parse_explain_reply(reply: str | None) -> dict | None:
         return None
     if len(why) > _WHY_MAX_LEN:
         why = why[:_WHY_MAX_LEN] + "…"
-    return {"direction": direction, "confidence": confidence, "why": why}
+    invalidation = str(data.get("invalidation") or "").strip()
+    if len(invalidation) > _INVALIDATION_MAX_LEN:
+        invalidation = invalidation[:_INVALIDATION_MAX_LEN] + "…"
+    return {"direction": direction, "confidence": confidence, "why": why, "invalidation": invalidation}
+
+
+def build_intent_evidence(dark: dict, ai: dict | None = None) -> dict:
+    """主力意图 AI 解读的证据链(触发条件 + 数据时点 + 失效条件)。纯函数, 无 IO。
+
+    - 触发条件: 规则结论 signal + 已给出的关键盘口特征数字(确定性, 不编);
+    - as_of: dark.trade_date(缺失显式「时点缺失」);
+    - 失效条件: LLM `invalidation`; 缺失回领域化默认(规则结论反转即作废), 绝不空。
+    """
+    from src.core.evidence_chain import build_evidence_chain
+
+    d = dark if isinstance(dark, dict) else {}
+    ai = ai if isinstance(ai, dict) else {}
+    trig: list[str] = []
+    sig = _str(d.get("signal"), 200)
+    if sig:
+        trig.append(f"规则结论: {sig}")
+    io_raw = d.get("inner_outer")
+    io: dict = io_raw if isinstance(io_raw, dict) else {}
+    if _num(io.get("buy_pct")) is not None:
+        trig.append(f"内盘买占比 {_fmt_pct(io.get('buy_pct'))}")
+    div_raw = d.get("divergence")
+    div: dict = div_raw if isinstance(div_raw, dict) else {}
+    if div.get("type"):
+        trig.append(f"背离: {_str(div.get('type'), 40)}")
+    pdv_raw = d.get("price_divergence")
+    pdv: dict = pdv_raw if isinstance(pdv_raw, dict) else {}
+    if pdv.get("type"):
+        trig.append(f"量价背离: {_str(pdv.get('type'), 40)}")
+    return build_evidence_chain(
+        triggers=trig,
+        as_of=d.get("trade_date"),
+        invalidation=ai.get("invalidation"),
+        default_invalidation=[
+            "若规则结论 signal 反转 / 内外盘方向与主力净额背离消失 / 位置跌破承接位, 则此解读作废",
+        ],
+    )
 
 
 def _run_coro(coro):
@@ -307,7 +366,16 @@ def explain_main_intent(dark: dict, db=None) -> dict | None:
     try:
         system, user = build_explain_prompt(dark)
         raw = _run_coro(_llm_chat(system, user, db))
-        return parse_explain_reply(raw)
+        out = parse_explain_reply(raw)
     except Exception as e:
         logger.debug(f"主力意图 AI 解释失败(静默降级, 不影响规则结论): {e}")
         return None
+    if out is None:
+        return None
+    # 证据化(2026-10-10): 证据链(确定性触发条件 + 失效条件) + 置信度校准(无账本口径显式未校准)
+    from src.core.evidence_chain import calibrate_confidence
+
+    out["evidence"] = build_intent_evidence(dark, out)
+    out["confidence_calibration"] = calibrate_confidence(out.get("confidence"), None, None)
+    out["similar"] = None
+    return out
