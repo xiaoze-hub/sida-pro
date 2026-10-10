@@ -90,6 +90,11 @@ def test_decide_fund_net_reads_dict_field(monkeypatch):
     monkeypatch.setattr(gs, "trend_label", lambda res: "G信号")
     monkeypatch.setattr(ai_act, "eval_activity", lambda bars: {"activity": 2.5})
     monkeypatch.setattr(dpf, "compute_pool_flow", lambda s: {"main_net": 12345.0, "coverage": "full"})
+    # 2026-10-10 B: decide() CN 路径会拉七口诀(唯一 IO 口=真网络) —— 本用例只验资金口径,
+    # 以 stub 掐掉联网(禁真网络), 口诀按"难归集"(None) 处理。
+    import src.core.mnemonic_overlay as mo
+
+    monkeypatch.setattr(mo, "resolve_mnemonic", lambda symbol: None)
 
     out = core_mod.decide("002361")
     assert out["parts"]["fund_net"] == 12345.0, out

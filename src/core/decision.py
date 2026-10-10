@@ -48,11 +48,23 @@ def synthesize(
     fund_net: float | None,
     fund_net_prev: float | None = None,
     user_context: dict | None = None,
+    *,
+    regime: str | None = None,
+    bdqk: dict | None = None,
 ) -> dict:
     """纯函数: 三信号 → {verdict, reason, parts}。无 IO, 可单测。
 
     user_context(可选, 2026-10-10 P1-2): {risk_profile, holds, cost_price, quantity,
     in_watchlist, last_close}。缺省 None → 全局口径, 输出逐字段与旧版一致。
+
+    regime(可选, 2026-10-10 A 决策提胜率): 当前情绪周期态(冰点/修复/发酵/高潮/退潮,
+    见 `src.core.market_regime`); 对『动手』门槛做**显式可解释**的条件化。缺省 None
+    → 视作 unknown(标准口径, 向后兼容零破坏)。
+
+    bdqk(可选, 2026-10-10 B 决策提胜率): 内外盘七口诀判定结果(`_judge_mnemonic` 返回体
+    或 None); 作为叠加确认维度。缺省 None → 视为『难归集』(不叠加)。
+
+    处理顺序(透明、逐级留痕): 基线 → 情绪周期条件化 → 七口诀叠加 → 决策先锋口径 → 个性化。
     """
     from src.core.resonance import evaluate_state
 
@@ -87,7 +99,105 @@ def synthesize(
             "row": st.get("row", 0),
             "parts": _parts_text(trend, activity, fund_net),
         }
-    return _personalize(out, user_context)
+    out = _apply_regime(out, regime)
+    out = _apply_bdqk(out, bdqk)
+    return _personalize(_attach_pioneer_terms(out), user_context)
+
+
+# 四态 → 决策先锋口径「资金博弈」表述(口径对应, 只做中文命名对齐, 不改判定)
+_PIONEER_FUND_BY_PHASE = {
+    "向好": "多方占优",
+    "拐点": "多空转换",
+    "分歧": "多空分歧",
+    "走坏": "空方占优",
+}
+
+
+def _attach_pioneer_terms(out: dict) -> dict:
+    """附决策先锋口径的中文表述(2026-10-10 口径对齐)。
+
+    数智决策为**仿制同花顺「决策先锋」**的三指标体系; 本字段把内部判定映射到
+    决策先锋习惯的表述, 便于前端/报告对照展示(纯增量, **不改 verdict 语义**):
+      - 情绪周期: 冰点/修复/发酵/高潮/退潮(与决策先锋"情绪周期/市场情绪"口径对应);
+      - 资金博弈: 多方占优/多空转换/多空分歧/空方占优(对应四态 向好/拐点/分歧/走坏);
+      - 主力动向: 内外盘七口诀结论(真金进攻/主力撤退/诱多出货...); 无 → '未归集'。
+    """
+    out["pioneer_terms"] = {
+        "情绪周期": out.get("regime_label") or "数据不足",
+        "资金博弈": _PIONEER_FUND_BY_PHASE.get(out.get("phase") or "", "无数据"),
+        "主力动向": (out.get("bdqk") or {}).get("name") or "未归集",
+    }
+    return out
+
+
+def _apply_regime(out: dict, regime: str | None) -> dict:
+    """情绪周期条件化(2026-10-10 A)。透明留痕, 缺 data 显式, 缺参数零破坏。
+
+    输出附加(始终存在, 便于前端/审计显式看到条件化与否):
+      - `regime` / `regime_label`: 规范 key + 中文名;
+      - `regime_policy`: tighten / normal / loosen;
+      - `regime_note`: 条件化说明(未调整时也给当前态口径说明);
+      - `regime_adjusted`: 本次是否因 regime 改了 verdict。
+    """
+    from src.core.market_regime import condition_verdict, regime_policy
+
+    pol = regime_policy(regime)
+    prev = out.get("verdict") or ""
+    verdict, adjusted, note = condition_verdict(prev, out.get("row"), regime)
+    out["verdict"] = verdict
+    out["regime"] = pol["regime"]
+    out["regime_label"] = pol["label"]
+    out["regime_policy"] = pol["policy"]
+    out["regime_adjusted"] = adjusted
+    if adjusted and note:
+        out["regime_note"] = note
+        out["reason"] = f"{note}；{out.get('reason', '')}"
+    else:
+        out["regime_note"] = pol["note"]
+    return out
+
+
+def _apply_bdqk(out: dict, bdqk: dict | None) -> dict:
+    """内外盘七口诀叠加确认(2026-10-10 B)。缺数据显式, 差异可见。
+
+    输出附加:
+      - `bdqk`: {name, direction, effect, note}(无则 None);
+      - `bdqk_effect`: confirm / suppress / neutral / none / unavailable;
+      - `bdqk_note` / `bdqk_adjusted` / `bdqk_signal_kind`(入账用, 无则 None)。
+    """
+    from src.core.mnemonic_overlay import eval_bdqk_effect
+
+    eff = eval_bdqk_effect(bdqk)
+    out["bdqk"] = {
+        "name": eff["name"],
+        "direction": eff["direction"],
+        "effect": eff["effect"],
+        "note": eff["note"],
+    }
+    out["bdqk_effect"] = eff["effect"]
+    out["bdqk_note"] = eff["note"]
+    out["bdqk_adjusted"] = False
+    out["bdqk_signal_kind"] = None
+
+    if eff["effect"] == "confirm" and out.get("verdict") == "动手":
+        # 同向确认 → 动手加成(verdict 不变, 但标记已叠加确认)
+        out["bdqk_note"] = f"{eff['note']} → 与共振同向, 动手叠加加成"
+        out["bdqk_signal_kind"] = eff["signal_kind"]
+        out["reason"] = f"{out.get('reason', '')}｜七口诀『{eff['name']}』叠加确认(动手加成)"
+    elif eff["effect"] == "suppress" and out.get("verdict") == "动手":
+        # 出货/撤退 → 直接压制『动手』
+        out["verdict"] = "看看"
+        out["bdqk_adjusted"] = True
+        out["bdqk_signal_kind"] = eff["signal_kind"]
+        out["reason"] = (
+            f"七口诀『{eff['name']}』压制『动手』 → 收敛为『看看』；{out.get('reason', '')}"
+        )
+    elif eff["effect"] in ("neutral", "none", "unavailable"):
+        out["bdqk_note"] = eff["note"] + "(不叠加)"
+    elif out.get("verdict") != "动手":
+        # confirm 但当前不是『动手』: 如实说"未生效", 不硬改 verdict
+        out["bdqk_note"] = f"{eff['note']} (当前非『动手』, 未生效)"
+    return out
 
 
 def synthesize_two_dimension(
@@ -296,6 +406,11 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
     market: CN 走三信号(趋势×活跃度×资金); HK/US 资金维无源 → 双维诚实降级
     (见 `synthesize_two_dimension`)。
     user_context(可选): 当前用户上下文, 由 API 层按 user_id 隔离组装。
+
+    2026-10-10 决策提胜率: CN 路径额外读取**当前情绪周期态**(`market_regime`)做
+    『动手』门槛条件化, 并拉**内外盘七口诀**(`mnemonic_overlay`)做叠加确认; 叠加
+    确认/压制结果入账 `decision_log`(signal_kind=bdqk_confirm / bdqk_suppress)。
+    非 CN / 取数失败一律显式(regime=unknown, bdqk 难归集), 不硬凑、不编造。
     """
     mkt = (market or "CN").upper()
     try:
@@ -336,10 +451,17 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
             except Exception as e:  # noqa: BLE001
                 logger.debug("decision fund %s failed: %s", symbol, e)
                 fund_net = None
-            out = synthesize(trend, activity, activity_prev, fund_net, None, ctx)
+            regime_key = _resolve_regime_key()
+            mnemonic = _resolve_mnemonic_safe(symbol)
+            out = synthesize(
+                trend, activity, activity_prev, fund_net, None, ctx,
+                regime=regime_key, bdqk=mnemonic,
+            )
         out["symbol"] = symbol
         # 末根收盘(供预落库后**读取时**算持仓浮盈 —— 缓存层把全局基底与 last_close 一起存)。
         out["last_close"] = _last_bar_close(bars)
+        if mc == MarketCode.CN:
+            _log_decision_overlay(symbol, out)
         return out
     except Exception as e:  # noqa: BLE001 - 决策口永不 500
         logger.warning("decision %s failed: %s", symbol, e)
@@ -348,3 +470,62 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
                "phase": "无", "row": 0, "parts": _parts_text(None, None, None),
                "last_close": None}
         return _mark_non_cn(out, mkt)
+
+
+def _resolve_regime_key() -> str:
+    """读当前情绪周期态 → 规范 key。读失败/缺数据 → 'unknown'(显式, 不猜)。"""
+    try:
+        from src.core.market_regime import current_regime
+
+        return current_regime().get("regime") or "unknown"
+    except Exception as e:  # noqa: BLE001
+        logger.debug("regime 解析失败(按 unknown 放行): %r", e)
+        return "unknown"
+
+
+def _resolve_mnemonic_safe(symbol: str) -> dict | None:
+    """拉七口诀(难归集 → None)。绝不影响主流程。"""
+    try:
+        from src.core.mnemonic_overlay import resolve_mnemonic
+
+        return resolve_mnemonic(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("七口诀解析失败(难归集): %r", e)
+        return None
+
+
+def _log_decision_overlay(symbol: str, out: dict) -> int:
+    """把七口诀叠加(确认/压制)结果入账决策账本(旁路, 永不抛)。
+
+    - signal_kind = out['bdqk_signal_kind'](bdqk_confirm / bdqk_suppress), 只有
+      可行动的两类非空才写; 无价/无 kinds → 不写(不硬填 0)。
+    - 记录 regime(供账本按情绪周期分桶统计), 幂等(同 kind+symbol+trade_date UPSERT)。
+    """
+    kind = out.get("bdqk_signal_kind")
+    if not kind:
+        return 0
+    price = out.get("last_close")
+    if not isinstance(price, (int, float)):
+        return 0  # 取不到价 → 不入账(不硬填 0)
+    try:
+        from src.core.decision_log import record_many_safe
+
+        rows = [{
+            "signal_kind": kind,
+            "symbol": symbol,
+            "price": float(price),
+            "regime": out.get("regime") or "unknown",
+            "context": {
+                "regime": out.get("regime"),
+                "regime_policy": out.get("regime_policy"),
+                "verdict": out.get("verdict"),
+                "phase": out.get("phase"),
+                "row": out.get("row"),
+                "bdqk_name": (out.get("bdqk") or {}).get("name"),
+                "bdqk_effect": out.get("bdqk_effect"),
+            },
+        }]
+        return record_many_safe(rows, source="decision_synth")
+    except Exception as e:  # noqa: BLE001 —— 旁路失败只 warn
+        logger.debug("决策叠加入账失败(不影响决策): %r", e)
+        return 0

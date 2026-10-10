@@ -53,10 +53,15 @@ def record_signal(
     price: float | None = None,
     context: dict[str, Any] | None = None,
     source: str = "",
+    regime: str | None = None,
 ) -> dict[str, Any]:
     """记录一个信号(幂等: 同 kind+symbol+trade_date 走 UPDATE, 不堆行)。
 
     `price=None` 表示**当时取不到价** —— 如实留空, 不用 0 或"之后的价格"顶上。
+
+    `regime`(可选, 2026-10-10 A 决策提胜率): 信号产生时的情绪周期态(规范 key,
+    见 `src.core.market_regime`)。落库供**按 regime 分桶统计命中率**; 缺省 None →
+    分桶归入 'unknown'。二次写入未给 regime 时保留原值(不抹成 NULL)。
     """
     day = trade_date or _today_cst()
     sym = str(symbol or "").strip()
@@ -64,10 +69,30 @@ def record_signal(
     if not kind or not sym:
         raise ValueError("signal_kind 与 symbol 都必填")
     ctx = json.dumps(context or {}, ensure_ascii=False, separators=(",", ":"))[:4000]
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
+    reg = _norm_regime(regime)
+    # 兼容老库(未跑 v184): 表无 regime 列时**不写 regime**(不炸), 待迁移后自然生效。
+    if reg is not None and _has_regime_column(engine):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+INSERT INTO decision_log (signal_kind, symbol, trade_date, price_at_signal, context_json, source, regime)
+VALUES (:kind, :symbol, :day, :price, :ctx, :source, :regime)
+ON CONFLICT (signal_kind, symbol, trade_date) DO UPDATE SET
+  price_at_signal = COALESCE(excluded.price_at_signal, decision_log.price_at_signal),
+  context_json = excluded.context_json,
+  source = excluded.source,
+  regime = COALESCE(excluded.regime, decision_log.regime)
+"""
+                ),
+                {"kind": kind, "symbol": sym, "day": day, "price": price, "ctx": ctx,
+                 "source": source, "regime": reg},
+            )
+    else:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
 INSERT INTO decision_log (signal_kind, symbol, trade_date, price_at_signal, context_json, source)
 VALUES (:kind, :symbol, :day, :price, :ctx, :source)
 ON CONFLICT (signal_kind, symbol, trade_date) DO UPDATE SET
@@ -75,10 +100,48 @@ ON CONFLICT (signal_kind, symbol, trade_date) DO UPDATE SET
   context_json = excluded.context_json,
   source = excluded.source
 """
-            ),
-            {"kind": kind, "symbol": sym, "day": day, "price": price, "ctx": ctx, "source": source},
-        )
-    return {"signal_kind": kind, "symbol": sym, "trade_date": day, "price": price}
+                ),
+                {"kind": kind, "symbol": sym, "day": day, "price": price, "ctx": ctx,
+                 "source": source},
+            )
+    return {"signal_kind": kind, "symbol": sym, "trade_date": day, "price": price, "regime": reg}
+
+
+# 老库/新库列存在性缓存(按引擎实例; 表结构在一次进程内不中途变)
+_regime_col_cache: dict[Any, bool] = {}
+
+
+def _has_regime_column(engine: Engine) -> bool:
+    """decision_log 是否有 `regime` 列(兼容未跑 v184 的老库/老测试库)。永不抛。"""
+    key = (id(engine), str(getattr(engine, "url", "")))
+    hit = _regime_col_cache.get(key)
+    if hit is not None:
+        return hit
+    ok = False
+    try:
+        from sqlalchemy import inspect as _inspect
+
+        cols = {c["name"] for c in _inspect(engine).get_columns("decision_log")}
+        ok = "regime" in cols
+    except Exception:  # noqa: BLE001 —— 表不存在/方言异常: 视为无该列
+        ok = False
+    _regime_col_cache[key] = ok
+    return ok
+
+
+def _norm_regime(regime: str | None) -> str | None:
+    """规范 regime key(缺省→None, 分桶时归 unknown); 未知值也归 unknown(不硬编造状态)。"""
+    if regime is None:
+        return None
+    s = str(regime).strip()
+    if not s:
+        return None
+    try:
+        from src.core.market_regime import normalize_regime
+
+        return normalize_regime(s)
+    except Exception:  # noqa: BLE001
+        return s
 
 
 def record_many(engine: Engine, rows: list[dict[str, Any]], *, source: str = "") -> int:
@@ -213,11 +276,77 @@ def backfill_outcomes(
     return {"scanned": scanned, "filled": filled}
 
 
+def _horizon_block(n: Any, n1: Any, n3: Any, n5: Any, w1: Any, w3: Any, w5: Any,
+                   min_sample: int) -> dict[str, dict[str, Any]]:
+    """把一行聚合计数 → {t1/t3/t5: {n, hit_rate, insufficient, note}}(样本不足不给数字)。"""
+    out: dict[str, dict[str, Any]] = {}
+    for label, nn, ww in (("t1", n1, w1), ("t3", n3, w3), ("t5", n5, w5)):
+        have = int(nn or 0)
+        if have == 0:
+            out[label] = {
+                "n": 0, "hit_rate": None, "insufficient": True,
+                "note": "尚无已回填样本(需要未来的 K 线才算得出来)",
+            }
+        elif have < min_sample:
+            out[label] = {
+                "n": have, "hit_rate": None, "insufficient": True,
+                "note": f"样本不足({have} < {min_sample}), 不给命中率",
+            }
+        else:
+            out[label] = {
+                "n": have, "hit_rate": round(int(ww or 0) / have, 4),
+                "insufficient": False, "note": "",
+            }
+    return out
+
+
+def _regime_rows(engine: Engine, since: str, min_sample: int) -> list[dict[str, Any]]:
+    """按 (signal_kind, regime) 分桶统计命中率(2026-10-10 A)。列缺失/异常 → []。
+
+    只加聚合维度: 不建回测 UI, 不换算命中定义。regime NULL 归入 'unknown'。
+    """
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+SELECT signal_kind, COALESCE(NULLIF(regime, ''), 'unknown') AS reg,
+       COUNT(*) AS n,
+       COUNT(hit_t1) AS n_t1, COUNT(hit_t3) AS n_t3, COUNT(hit_t5) AS n_t5,
+       SUM(CASE WHEN hit_t1 = 1 THEN 1 ELSE 0 END) AS w_t1,
+       SUM(CASE WHEN hit_t3 = 1 THEN 1 ELSE 0 END) AS w_t3,
+       SUM(CASE WHEN hit_t5 = 1 THEN 1 ELSE 0 END) AS w_t5
+FROM decision_log
+WHERE (length(trade_date) = 8 AND trade_date >= :since_c)
+   OR (length(trade_date) = 10 AND trade_date >= :since)
+GROUP BY signal_kind, reg
+ORDER BY signal_kind, n DESC
+"""
+                ),
+                {"since": since, "since_c": since.replace("-", "")},
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 —— regime 列缺失(老库) → 无分桶
+        logger.debug("decision stats regime 分桶不可用: %r", exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for kind, reg, n, n1, n3, n5, w1, w3, w5 in rows:
+        out.append({
+            "signal_kind": kind,
+            "regime": reg,
+            "n_total": int(n or 0),
+            "horizons": _horizon_block(n, n1, n3, n5, w1, w3, w5, min_sample),
+        })
+    return out
+
+
 def stats(engine: Engine, *, days: int = 180, min_sample: int = MIN_SAMPLE) -> dict[str, Any]:
     """按信号类型统计命中率。
 
     `n < min_sample` → 该档返回 `insufficient: True` 且**命中率为 None**(页面显示"样本不足"),
     不给数字, 免得 3 个样本算出 67% 去指导决策。
+
+    2026-10-10 A: 额外返回 `regime_rows`(按 signal_kind × regime 分桶), 供验证
+    "情绪周期条件化是否真提胜率"; 老库无 regime 列时 `regime_rows=[]`(向后兼容)。
     """
     since = (date.fromisoformat(_today_cst()) - timedelta(days=max(7, int(days)))).isoformat()
     with engine.connect() as conn:
@@ -244,37 +373,21 @@ ORDER BY n DESC
 
     out: list[dict[str, Any]] = []
     for kind, n, n1, n3, n5, w1, w3, w5 in rows:
-        item: dict[str, Any] = {"signal_kind": kind, "n_total": int(n or 0), "horizons": {}}
-        for label, nn, ww in (("t1", n1, w1), ("t3", n3, w3), ("t5", n5, w5)):
-            have = int(nn or 0)
-            if have == 0:
-                item["horizons"][label] = {
-                    "n": 0,
-                    "hit_rate": None,
-                    "insufficient": True,
-                    "note": "尚无已回填样本(需要未来的 K 线才算得出来)",
-                }
-            elif have < min_sample:
-                item["horizons"][label] = {
-                    "n": have,
-                    "hit_rate": None,
-                    "insufficient": True,
-                    "note": f"样本不足({have} < {min_sample}), 不给命中率",
-                }
-            else:
-                item["horizons"][label] = {
-                    "n": have,
-                    "hit_rate": round(int(ww or 0) / have, 4),
-                    "insufficient": False,
-                    "note": "",
-                }
-        out.append(item)
+        out.append({
+            "signal_kind": kind,
+            "n_total": int(n or 0),
+            "horizons": _horizon_block(n, n1, n3, n5, w1, w3, w5, min_sample),
+        })
 
     return {
         "since": since,
         "min_sample": int(min_sample),
         "rows": out,
-        "note": "命中 = T+n 收益 > 0(平盘记未命中); 缺失/未回填一律不计入分母, 不用推算值填充。",
+        "regime_rows": _regime_rows(engine, since, min_sample),
+        "note": (
+            "命中 = T+n 收益 > 0(平盘记未命中); 缺失/未回填一律不计入分母, 不用推算值填充。"
+            " regime_rows 为按情绪周期分桶(regime NULL 归 unknown)。"
+        ),
     }
 
 
@@ -317,15 +430,19 @@ def query_log(
         total = int(
             conn.execute(text(f"SELECT COUNT(*) FROM decision_log {cond}"), params).scalar() or 0
         )
+        has_reg = _has_regime_column(engine)
+        reg_col = "regime, " if has_reg else ""
         rows = conn.execute(
             text(
                 "SELECT signal_kind, symbol, trade_date, price_at_signal, context_json, source, "
+                f"{reg_col}"
                 "ret_t1, hit_t1, ret_t3, hit_t3, ret_t5, hit_t5, filled_at "
                 f"FROM decision_log {cond}ORDER BY trade_date DESC, id DESC LIMIT :lim OFFSET :off"
             ),
             params,
         ).fetchall()
 
+    off_i = 1 if has_reg else 0
     items = [
         {
             "signal_kind": r[0],
@@ -334,14 +451,15 @@ def query_log(
             "price_at_signal": None if r[3] is None else float(r[3]),
             "context": r[4] or "",
             "source": r[5] or "",
+            "regime": (r[6] if has_reg else None),
             "outcomes": {
                 label: {
-                    "ret": None if r[i] is None else float(r[i]),
-                    "hit": None if r[i + 1] is None else bool(r[i + 1]),
+                    "ret": None if r[i + off_i] is None else float(r[i + off_i]),
+                    "hit": None if r[i + 1 + off_i] is None else bool(r[i + 1 + off_i]),
                 }
                 for label, i in (("t1", 6), ("t3", 8), ("t5", 10))
             },
-            "filled_at": None if r[12] is None else str(r[12]),
+            "filled_at": None if r[12 + off_i] is None else str(r[12 + off_i]),
         }
         for r in rows
     ]

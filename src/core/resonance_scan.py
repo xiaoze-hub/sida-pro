@@ -394,16 +394,27 @@ def scan(limit: int | None = None, *, trade_date: str | None = None, on_progress
         from src.core.decision_log import record_many
         from src.db.session import get_write_engine
 
+        # 情绪周期 regime(2026-10-10 A): 扫描时取当前态, 落到每行供账本分桶统计。
+        regime = "unknown"
+        try:
+            from src.core.market_regime import current_regime
+
+            regime = current_regime().get("regime") or "unknown"
+        except Exception as _re:  # noqa: BLE001 —— 取不到按 unknown(不猜)
+            logger.debug("共振扫描: regime 解析失败 %r", _re)
+
         payload = [
             {
                 "signal_kind": "resonance3",
                 "symbol": r["symbol"],
                 "trade_date": r["trade_date"],
                 "price": r.get("close"),
+                "regime": regime,
                 "context": {
                     **{k: r.get(k) for k in ("trend", "activity", "level", "fund_net", "hits", "near")},
                     # 完整性标注: complete=False 时该信号来自"部分失败"的扫描, 命中/口径不完整
                     "scan_complete": complete,
+                    "regime": regime,
                 },
             }
             for r in rows

@@ -22,7 +22,15 @@ from src.core.decision import (
 )
 
 # 旧版(无上下文)返回的键集合 —— 向后兼容红线: 该路径不得多/少字段。
-_LEGACY_KEYS = {"verdict", "reason", "phase", "row", "parts"}
+# 2026-10-10 A 决策提胜率: 增情绪周期条件化透明字段(regime_*) + 决策先锋口径术语
+# (pioneer_terms) —— **纯增量**, 原有键语义不变。
+_LEGACY_KEYS = {
+    "verdict", "reason", "phase", "row", "parts",
+    "regime", "regime_label", "regime_policy", "regime_note", "regime_adjusted",
+    # 2026-10-10 B 决策提胜率: 内外盘七口诀叠加确认透明字段(bdqk*) —— 纯增量
+    "bdqk", "bdqk_effect", "bdqk_note", "bdqk_adjusted", "bdqk_signal_kind",
+    "pioneer_terms",
+}
 
 
 # ─────────────────────────── A. 向后兼容 ───────────────────────────

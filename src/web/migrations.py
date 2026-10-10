@@ -5007,6 +5007,30 @@ def _m183_decision_cache(conn: Connection) -> None:
     )
 
 
+def _m184_decision_log_regime(conn: Connection) -> None:
+    """决策账本补 `regime` 列(2026-10-10 A 决策提胜率): 情绪周期条件化的分桶维度。
+
+    为什么需要: 三指标共振命中率此前是**全状态混算**的一个平均数(T+1 53.85%)。
+    把信号产生时的情绪周期态(冰点/修复/发酵/高潮/退潮, 见 `src.core.market_regime`)
+    落库后, `decision_log.stats` 可按 regime 分桶统计, 才能回答"哪套门槛在哪个周期
+    真管用" —— 只加聚合维度, **不建回测 UI**。
+
+    列可空(NULL = 该行产生时无 regime 数据 / 老行), 分桶时归入 'unknown'(显式缺
+    数据, 不硬编状态)。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "regime",
+        "ALTER TABLE decision_log ADD COLUMN regime TEXT",
+    )
+    if _has_table(conn, "decision_log"):
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_decision_log_kind_regime "
+                "ON decision_log(signal_kind, regime)"
+            )
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5139,6 +5163,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(182, "theme_mood_settled_at", _m182_theme_mood_settled_at),
     # 决策合成预落库 + TTL 缓存(2026-10-10 冗余设计): /decision/{symbol} 免重复现算
     Migration(183, "decision_cache", _m183_decision_cache),
+    # 决策账本 regime 分桶(2026-10-10 A 决策提胜率): 情绪周期条件化的聚合维度
+    Migration(184, "decision_log_regime", _m184_decision_log_regime),
 )
 
 
