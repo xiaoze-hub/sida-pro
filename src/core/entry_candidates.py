@@ -1989,6 +1989,9 @@ def _persist_candidates(
             )
 
         db.commit()
+        # 决策账本覆盖(2026-10-10 P1-1): 竞价池候选留痕(signal_kind=auction_pool)。
+        # 只对已成功落库的候选记账; 失败只 warn(旁路), 不影响候选池主流程。
+        _log_auction_signals(scored_items, snapshot=snapshot)
     except Exception as e:
         db.rollback()
         logger.error(f"刷新入场候选失败: {e}")
@@ -1996,6 +1999,48 @@ def _persist_candidates(
     finally:
         db.close()
     return items
+
+
+def _log_auction_signals(scored_items: list[dict], *, snapshot: str) -> int:
+    """把竞价池候选写决策账本(signal_kind=auction_pool)。
+
+    每条必须带 `price_at_signal`(候选时点价 current_price) —— 拿不到价的**不写该条**
+    (不硬填 0)。幂等由 (kind, symbol, trade_date) 唯一键保证; 失败只 warn, 不阻断主流程。
+    """
+    day = str(snapshot or "").replace("-", "")[:8]
+    if len(day) != 8 or not day.isdigit():
+        return 0
+    rows: list[dict] = []
+    for it in scored_items or []:
+        try:
+            if (it.get("candidate_source") or "").strip() != "auction":
+                continue
+            price = _safe_float((it.get("quote") or {}).get("current_price"))
+            if price is None or price <= 0:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "auction_pool",
+                    "symbol": it.get("symbol"),
+                    "trade_date": day,
+                    "price": float(price),
+                    "context": {
+                        "action": it.get("action"),
+                        "signal": it.get("signal"),
+                        "score": it.get("score"),
+                    },
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本竞价信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="entry_candidates_auction")
+    if n:
+        logger.info("决策账本: 竞价池候选 %s 条已留痕", n)
+    return n
 
 
 def refresh_entry_candidates(

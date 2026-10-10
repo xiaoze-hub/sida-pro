@@ -93,6 +93,25 @@ def record_many(engine: Engine, rows: list[dict[str, Any]], *, source: str = "")
     return ok
 
 
+def record_many_safe(rows: list[dict[str, Any]], *, source: str = "", engine: Engine | None = None) -> int:
+    """emit 侧便捷入口: 把一批信号写决策账本, **绝不抛异常**。
+
+    信号生成优先 —— 账本留痕是旁路: 取引擎失败/表不存在/写入报错一律只 warn,
+    返回实际写入条数(0 表示没写进, 不阻断主流程)。engine 缺省走写库。
+    """
+    if not rows:
+        return 0
+    try:
+        if engine is None:
+            from src.db.session import get_write_engine
+
+            engine = get_write_engine()
+        return record_many(engine, rows, source=source)
+    except Exception as exc:  # noqa: BLE001 —— 旁路失败只 warn
+        logger.warning("决策日志留痕失败(不影响主流程): %r", exc)
+        return 0
+
+
 def _close_series_pg(engine: Engine, symbol: str, start_day: str) -> list[tuple[str, float]]:
     """该标的从 start_day 起的日线收盘(升序, 每交易日一根)。
 

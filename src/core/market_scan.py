@@ -80,17 +80,73 @@ def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optio
         and gs.get("last_cross_idx") == n - 1   # 交叉就发生在最后一根(今日)
     )
 
+    # 决策账本(GS 买卖点覆盖): 今日新出**已确认**的 G/S 交叉(末根=盘后已收盘的一根)。
+    # 供 scan() 把 GS 买卖点连同当时价一并留痕; 取不到价/非今日交叉则不入账。
+    cross_side = None
+    if gs and gs.get("last_cross_idx") == n - 1 and gs.get("signal") in ("G", "S"):
+        cross_side = gs.get("signal")
+
     return {
         "symbol": symbol,
         "close": bars[-1].get("close"),
+        "close_date": _compact_date(bars[-1].get("date")),
         "gs_signal": gs.get("signal") if gs else None,
         "gs_state": gs.get("state") if gs else None,
+        "gs_cross_side": cross_side,
         "new_g": new_g,
         "activity": act.get("activity") if act else None,
         "activity_level": act.get("level") if act else None,
         "dark_net": dark.get("dark_net"),          # 元, 对照项
         "dark_bars_used": dark.get("bars_used"),
     }
+
+
+def _compact_date(value) -> Optional[str]:
+    """日期归一到紧凑 YYYYMMDD(决策账本口径); 无法识别原样返回(不猜)。"""
+    s = str(value or "").strip()
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s.replace("-", "")
+    return s or None
+
+
+def _log_gs_signals(metrics: Sequence[dict], trade_date: Optional[str] = None) -> int:
+    """把今日新出已确认的 GS 交叉(G 买 / S 卖)写决策账本(signal_kind=gs_cross)。
+
+    每条必须带 `price_at_signal`(信号时点收盘价) —— 拿不到价的**不写该条**(不硬填 0)。
+    幂等由 decision_log 的 (kind, symbol, trade_date) 唯一键保证; 全程失败只 warn,
+    绝不影响扫描主链路。
+    """
+    rows: list[dict] = []
+    for m in metrics or []:
+        try:
+            side = m.get("gs_cross_side")
+            if side not in ("G", "S"):
+                continue
+            price = m.get("close")
+            if not isinstance(price, (int, float)) or price <= 0:
+                continue  # 无价不写(不拿 0/之后的价格冒充当时)
+            day = m.get("close_date") or trade_date
+            if not day:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "gs_cross",
+                    "symbol": m.get("symbol"),
+                    "trade_date": day,
+                    "price": float(price),
+                    "context": {"side": side, "gs_state": m.get("gs_state")},
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本 GS 信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="market_scan_gs")
+    if n:
+        logger.info("决策账本: GS 买卖点 %s 条已留痕", n)
+    return n
 
 
 def _fund_net_of(symbol: str, bars: Sequence[dict], source: str) -> tuple[Optional[float], bool]:
@@ -379,6 +435,10 @@ def scan(
             logger.warning("market_scan zljc failed: %s", e)
             zljc = None
 
+    # 决策账本覆盖(2026-10-10 P1-1): 把今日新出 GS 买卖点同步留痕(signal_kind=gs_cross),
+    # 使 GS 信号命中率可统计; 失败只 warn, 不影响扫描返回。
+    logged = _log_gs_signals(metrics, trade_date=datetime.now().strftime("%Y%m%d"))
+
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "universe": len(symbols),
@@ -389,4 +449,5 @@ def scan(
         "dark_top": dark_top,
         "activity_top": activity_top,
         "zljc": zljc,
+        "logged_signals": logged,
     }
