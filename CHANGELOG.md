@@ -1,3 +1,29 @@
+### feat-决策先锋辅助指标前端集成(三线图层+分时突破提示条+数据面板节)（2026-10-10）
+
+决策先锋 P3 补差 UI 集成: 把已上线的三大辅助指标后端(趋势操盘线 / 牛熊线 / 分时突破,
+API `/api/indicators/*`)落到工作台前端。**只加图层/追加节, 不改工作台布局密度; 不发版**。
+
+- **新增 `frontend/packages/biz-ui/src/lib/pioneer-indicators.ts`**: 三指标前端**纯逻辑**层 ——
+  响应白名单清洗(`normalizeTrendLine/Niuxiong/MinuteBreakthrough`, 脏点不进图)、三线全序列
+  (`trendLineSeries`/`niuxiongSeries`, EMA/WMA/SMA 与后端 `src/core/{trend_pilot_line,niuxiong_line}.py`
+  **同源公式**, 周期一律取 API 回传 `params` 不硬编码)、买卖点 marker(`trendSignalMarkers`/
+  `niuxiongSignalMarkers`, **买红卖绿**: 买=B=红下 arrowUp / 卖=S=绿上 arrowDown)、降级文案常量
+  (`MINUTE_DDE_DEGRADE_TEXT = '逐分钟 DDE 未接入 · 暂不出信号'`)。
+- **`KlineChart.tsx` K 线图层**: 趋势操盘线红/黄/绿三线 + 牛熊线牛/马/买卖三线(LineSeries,
+  仅日线口径画线 —— 后端基于日K, 不给错口径的线); 买卖点/B-S 交叉 marker 并入既有 marker 插件;
+  与**形态标注共存**(各自 `layersVisible.{trendLine,niuxiong}` 门控 + 独立分组图例, 不互踩)。
+  自取策略与形态同源: 父传优先 / 错峰取数 / 取不到显式降级(不编造)。**分时突破「突/积」提示条**:
+  `available=false` 时照实展示降级文案(不编造信号)。
+- **`PioneerIndicatorsSection.tsx`(新)** + **`DecisionCard.tsx`**: 工作台「数智决策」数据面板**追加
+  一节** —— 三线现值(操盘线红/黄/绿 + 牛熊线牛/马/买卖线) + 买卖点枚举(客观规则) + 后端 `calibration`
+  「逆向近似待校准」标注 + 客观标注免责。**追加节不改工作台布局密度**(右栏本就滚动)。
+- **测试(禁真网络)**: `tests/lib/pioneer-indicators.test.ts`(白名单/同源序列/params 驱动/marker 买红卖绿/
+  降级文案) + `tests/components/kline-pioneer-indicators-layer.test.tsx`(自取/三图例共存/门控/父接管/
+  分时突破降级与信号) + `tests/components/pioneer-indicators-panel.test.tsx`(面板节读数/无数据 note/CN 门控)
+  + `tests/components/pioneer-indicators-contract.test.ts`(URL 接线/门控/params/买红卖绿/日线门控 源码契约)。
+  验收: `npx vitest run`(136 文件 1000 例全绿)、`npx tsc -b`、`npx tsc -p tsconfig.tests.json`、
+  `node scripts/check_ui_rules.mjs` 全绿。**纯前端, 不改后端, 不发版**。
+
 ### feat-决策先锋辅助指标·分时突破(突/积信号)（2026-10-10）
 
 决策先锋 P3 补差之三(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。「突」=盘整>15分钟 +
