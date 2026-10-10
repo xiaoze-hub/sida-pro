@@ -1,3 +1,19 @@
+### feat-决策先锋辅助指标·牛熊线(金叉死叉B/S)（2026-10-10）
+
+决策先锋 P3 补差之二(规格 §7; 基准 docs/decision-pioneer-spec.md:19)。牛线=20日加权均线
+(WMA), 马线=5日均线, 买卖线; 牛线金叉买卖线=B(买)、死叉=S(卖)。
+
+- **新增 `src/core/niuxiong_line.py`**: 牛线用**加权均线**(线性权重 1..n), 马线用简单均线,
+  买卖线用均线作**可调近似**(默认 30, 参数落配置层); 输出客观字段(信号枚举 B/S + 金叉/死叉
+  类型与时点 + 线值), **买红卖绿**(B=red / S=green); 数据不足返回 None, 不编造。
+- **阈值层 `src/core/thresholds.py`**: 新增 `niuxiong_*` 3 键(牛20/马5/买卖线30),
+  env `SIDA_THRESHOLD_NIUXIONG_*` 可覆盖。**买卖线口径逆向近似待校准**。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/niuxiong/{symbol}`
+  (数智决策档 view_forecast); 缺数据显式 `available=false`+`note`。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 金叉 B(买红)/死叉 S(卖绿) +
+  加权均线权重取值 + 数据不足 + 无交叉(平盘) + 阈值 env 覆盖 + API 契约。验收:
+  `pytest -k 'niuxiong or threshold'`、ruff、`check_is_pg_scope.py` 全绿。纯计算, 无新表, 不发版。
+
 ### feat-决策先锋辅助指标·趋势操盘线(三线+买卖点)（2026-10-10）
 
 决策先锋 P3 补差之一(规格 §5; 基准 docs/decision-pioneer-spec.md:17)。红/黄/绿三线 +

@@ -1,6 +1,7 @@
-"""决策先锋辅助指标 API(趋势操盘线, P3 补差, 2026-10-10)。
+"""决策先锋辅助指标 API(趋势操盘线 / 牛熊线, P3 补差, 2026-10-10)。
 
 - `GET /api/indicators/trend-line/{symbol}?market=CN`  趋势操盘线(三线+买卖点)
+- `GET /api/indicators/niuxiong/{symbol}?market=CN`    牛熊线(金叉/死叉 B/S)
 
 口径: 信号是**证据不是建议** —— 只回客观字段(枚举信号 + 触发时间/价格 + 触发条件),
 不含"建议买入/卖出"等主观措辞。缺数据显式 `available=false` + `note`(不编造、不 500)。
@@ -82,4 +83,27 @@ def _run_trend(code: str, mkt: str) -> dict:
         r = None
     if not r:
         return _unavailable("日K不足或无数据, 无法计算趋势操盘线")
+    return r
+
+
+@router.get("/niuxiong/{symbol}")
+def get_niuxiong(symbol: str, market: str = "CN"):
+    """牛熊线: 牛线(加权)/马线/买卖线 + 金叉死叉 B/S 信号(买红卖绿)。"""
+    mkt = (market or "CN").upper()
+    code = _valid_symbol(symbol, mkt)
+    payload = _cached(f"niuxiong:{mkt}:{code}", lambda: _run_niuxiong(code, mkt))
+    return {"symbol": code, "market": mkt, "indicator": "niuxiong",
+            "data_time": _now(), **payload}
+
+
+def _run_niuxiong(code: str, mkt: str) -> dict:
+    try:
+        from src.core.niuxiong_line import fetch_niuxiong
+
+        r = fetch_niuxiong(code, market=mkt)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("niuxiong %s 失败: %s", code, e)
+        r = None
+    if not r:
+        return _unavailable("日K不足或无数据, 无法计算牛熊线")
     return r

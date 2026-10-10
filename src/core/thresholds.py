@@ -81,6 +81,27 @@ _SPECS: dict[str, dict] = {
         "hi": 20.0,
         "label": "操盘线-回踩容差%",
     },
+    "niuxiong_bull_period": {
+        "default": 20.0,
+        "env": "SIDA_THRESHOLD_NIUXIONG_BULL_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "牛熊线-牛线(加权)周期",
+    },
+    "niuxiong_horse_period": {
+        "default": 5.0,
+        "env": "SIDA_THRESHOLD_NIUXIONG_HORSE_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "牛熊线-马线周期",
+    },
+    "niuxiong_trade_period": {
+        "default": 30.0,
+        "env": "SIDA_THRESHOLD_NIUXIONG_TRADE_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "牛熊线-买卖线周期",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)

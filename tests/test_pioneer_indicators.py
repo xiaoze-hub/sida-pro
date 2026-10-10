@@ -24,6 +24,7 @@ def test_trend_threshold_keys_defaults_and_env(monkeypatch):
     for key in (
         "trend_pilot_red_period", "trend_pilot_yellow_period", "trend_pilot_green_period",
         "trend_pilot_band_tol_pct",
+        "niuxiong_bull_period", "niuxiong_horse_period", "niuxiong_trade_period",
     ):
         assert key in snap, f"缺少配置键 {key}"
         assert snap[key]["source"] == "default"
@@ -156,6 +157,104 @@ def test_trend_line_signal_is_evidence_not_advice():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 牛熊线
+# ══════════════════════════════════════════════════════════════════════
+_P_NIX = {"bull_period": 3, "horse_period": 2, "trade_period": 6}
+
+
+def _closes_to_bars(closes):
+    return [{"close": c} for c in closes]
+
+
+def test_niuxiong_insufficient_returns_none():
+    from src.core.niuxiong_line import compute_niuxiong
+
+    assert compute_niuxiong([]) is None
+    assert compute_niuxiong(_closes_to_bars([10, 10, 10])) is None
+    # 默认(牛20/买卖30)需 32 根 → 10 根 None
+    assert compute_niuxiong(_closes_to_bars([10 + i for i in range(10)])) is None
+
+
+def test_niuxiong_reads_thresholds_config(monkeypatch):
+    from src.core import thresholds
+    from src.core.niuxiong_line import compute_niuxiong
+
+    for k in ("niuxiong_bull_period", "niuxiong_horse_period", "niuxiong_trade_period"):
+        monkeypatch.delenv(thresholds.snapshot()[k]["env"], raising=False)
+    bars = _closes_to_bars([10 + i * 0.3 for i in range(12)])
+    assert compute_niuxiong(bars) is None  # 默认需 32 根
+    monkeypatch.setenv("SIDA_THRESHOLD_NIUXIONG_BULL_PERIOD", "3")
+    monkeypatch.setenv("SIDA_THRESHOLD_NIUXIONG_HORSE_PERIOD", "2")
+    monkeypatch.setenv("SIDA_THRESHOLD_NIUXIONG_TRADE_PERIOD", "6")
+    r = compute_niuxiong(bars)
+    assert r is not None
+    assert r["params"] == {"bull_period": 3, "horse_period": 2, "trade_period": 6}
+
+
+def test_niuxiong_golden_cross_b_buy_red():
+    from src.core.niuxiong_line import compute_niuxiong
+
+    closes = []
+    c = 20.0
+    for _ in range(25):
+        c -= 0.2
+        closes.append(round(c, 4))
+    for _ in range(20):
+        c += 0.4
+        closes.append(round(c, 4))
+    r = compute_niuxiong(_closes_to_bars(closes), _P_NIX)
+    assert r["signal"] == "B"
+    assert r["color"] == "red"          # 买红
+    assert r["cross"]["type"] == "golden"
+    assert r["cross"]["bars_ago"] is not None
+    assert r["state"] == "牛线上方"
+
+
+def test_niuxiong_death_cross_s_sell_green():
+    from src.core.niuxiong_line import compute_niuxiong
+
+    closes = []
+    c = 10.0
+    for _ in range(25):
+        c += 0.2
+        closes.append(round(c, 4))
+    for _ in range(20):
+        c -= 0.4
+        closes.append(round(c, 4))
+    r = compute_niuxiong(_closes_to_bars(closes), _P_NIX)
+    assert r["signal"] == "S"
+    assert r["color"] == "green"        # 卖绿
+    assert r["cross"]["type"] == "death"
+    assert r["state"] == "牛线下方"
+
+
+def test_niuxiong_wma_weighting():
+    """加权均线: 线性权重 1..n, 最近值权重最大。"""
+    from src.core.niuxiong_line import wma_series
+
+    # [1,2,3] 周期3: (1*1+2*2+3*3)/6 = 14/6
+    assert wma_series([1, 2, 3], 3)[-1] == pytest.approx(14 / 6)
+    assert wma_series([1, 2], 3) == [0.0, 0.0]  # 不足周期占位 0
+
+
+def test_niuxiong_flat_no_cross():
+    from src.core.niuxiong_line import compute_niuxiong
+
+    r = compute_niuxiong(_closes_to_bars([10.0] * 12), _P_NIX)
+    assert r is not None
+    assert r["signal"] is None and r["color"] is None
+    assert r["cross"]["type"] is None
+
+
+def test_niuxiong_signal_is_evidence_not_advice():
+    from src.core.niuxiong_line import compute_niuxiong
+
+    r = compute_niuxiong(_closes_to_bars([10 + i * 0.2 for i in range(12)]), _P_NIX)
+    assert "建议" not in str(r)
+    assert "待校准" in r["calibration"]
+
+
+# ══════════════════════════════════════════════════════════════════════
 # API 契约(monkeypatch 取数, 不触网/库)
 # ══════════════════════════════════════════════════════════════════════
 class _FakeOwner:
@@ -190,6 +289,16 @@ def test_trend_line_api_contract(client, monkeypatch):
     assert d["available"] is True and d["lines"]["red"] == 1.0
 
 
+def test_niuxiong_api_contract(client, monkeypatch):
+    import src.core.niuxiong_line as nxl
+
+    monkeypatch.setattr(nxl, "fetch_niuxiong", lambda *a, **k: {"available": True, "signal": "B", "color": "red", "cross": {"type": "golden", "bars_ago": 2}})
+    r = client.get("/api/indicators/niuxiong/600519")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["indicator"] == "niuxiong" and d["signal"] == "B" and d["color"] == "red"
+
+
 def test_indicators_api_unavailable_note(client, monkeypatch):
     import src.core.trend_pilot_line as tpl
 
@@ -200,6 +309,7 @@ def test_indicators_api_unavailable_note(client, monkeypatch):
     assert d["available"] is False and d["degraded"] is True and d["note"]
 
 
-def test_indicators_api_invalid_symbol_400(client):
-    r = client.get("/api/indicators/trend-line/12ab")
+@pytest.mark.parametrize("path", ["trend-line", "niuxiong"])
+def test_indicators_api_invalid_symbol_400(client, path):
+    r = client.get(f"/api/indicators/{path}/12ab")
     assert r.status_code == 400
