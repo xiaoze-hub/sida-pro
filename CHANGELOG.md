@@ -1,3 +1,21 @@
+### feat-数智决策 P2 后端: 共振回测/入场后验上入口 + 账本明细分页（2026-10-10）
+
+审计 P2「有功能没入口」三处后端接口补齐(不发版、不打 tag、不部署、不 push main):
+
+- **共振回测入口(P2-1)**: `GET /api/decisions/backtest` 暴露全仓零调用的
+  `backtest_resonance`。缺股票池/计算异常一律**显式降级**(`available=false` + `error`,
+  **永不 500**); 成功时后端已有的 `basis`(双指标/三指标口径)与 `official` 基准**原样透传**
+  —— 明盘历史无源, 默认走双指标, 与官方四态不可直接比较的诚实标注直达 UI。`max_symbols` 钳池。
+- **入场候选后验入口(P2-3)**: 新增 `src/core/entry_candidates.entry_outcomes_summary`
+  (只读汇总, 按 horizon×来源给胜率/均收益) + `GET /api/decisions/entry-outcomes`。
+  `total < min_sample` 时**不给胜率**(`win_rate=null` + `insufficient=true`), 空库空 rows。
+- **账本明细分页(P2-4)**: 新增 `src/core/decision_log.query_log`(`limit` 钳 `[1,500]`、
+  `offset` 负数按 0、越界返回空页不报错、`start_date`/`end_date` 支持 ISO 与紧凑双格式归一);
+  `GET /api/decisions/log` 补齐 `offset`/日期过滤并回 `total`/`has_more` 供前端翻页。
+- **测试(禁真网络)**: `tests/test_decisions_review_api.py` 11 例 —— 分页钳制/越界空页/日期过滤归一/
+  未回填保持 null; 回测缺池降级、basis 透传、异常不 500、max_symbols 钳池;
+  入场后验样本不足显式、查询失败降级、空库显式。
+
 ### feat-决策合成三信号接入个股工作台研究标签(P0-3)（2026-10-10）
 
 ### fix-决策账本回填日期格式错配(紧凑 vs ISO 永不相等致 0 填)
