@@ -33,7 +33,7 @@ _global_scheduler: "DecisionPrecomputeScheduler | None" = None
 def collect_targets(db) -> list[tuple[str, str]]:
     """预热标的集(全库自选 ∪ 持仓): 去重的 (symbol, market) 列表。读失败 → 空。"""
     try:
-        from src.web.models import Stock
+        from src.db.models import Stock
 
         rows = db.query(Stock.symbol, Stock.market).all()
     except Exception as e:  # noqa: BLE001
@@ -70,7 +70,7 @@ def precompute(
     owns_db = False
     if symbols is None:
         if db is None:
-            from src.web.database import SessionLocal
+            from src.db.session import SessionLocal
 
             db = SessionLocal()
             owns_db = True

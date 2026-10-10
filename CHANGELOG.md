@@ -1,5 +1,9 @@
 ### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
 
+### fix-决策预热 import 方向修复(B4.1 门禁红)
+- v0.13.56 CI shard4 红: `src/core/decision_precompute.py` 反向依赖 src/web(B4.1)。且不止是门禁问题——`Stock` 实际在 `src/db/models.py`, 原 `from src.web.models import Stock` 在生产会被 except 吞掉致**预热集永远为空**(预落库静默失效)。改 `src.db.models.Stock` + `src.db.session.SessionLocal`(117/157 行本就正确, 73 行统一)。
+
+
 - 新增 `docs/precompute-redundancy-audit.md`(含三要素: 基线 `339d2f6` / 审计对象完整路径 / 覆盖范围
   与未审项): 逐个排查工作台研究首屏 + 数智决策/选股池 + 首页热路径端点, 分类 A(读库/缓存, 快)/
   B(每次现算, 慢)/ B-不可预落库(实时数据)。B 类首选 `/decision/{symbol}` 已改造; 其余 B 类明确标注
