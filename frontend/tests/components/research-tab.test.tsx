@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   getLatestForStock: vi.fn(),
   getHistoryComparison: vi.fn(),
   fundamentalsDetail: vi.fn(),
+  decision: vi.fn(),
 }))
 
 vi.mock('@panwatch/api', () => ({
@@ -67,6 +68,7 @@ vi.mock('@panwatch/api', () => ({
     news: (...a: unknown[]) => mocks.news(...a),
     history: (...a: unknown[]) => mocks.history(...a),
     company: (...a: unknown[]) => mocks.company(...a),
+    decision: (...a: unknown[]) => mocks.decision(...a),
   },
   stocksApi: {
     list: (...a: unknown[]) => mocks.stocksList(...a),
@@ -184,6 +186,13 @@ beforeEach(() => {
   mocks.getLatestForStock.mockResolvedValue(DEEP)
   mocks.getHistoryComparison.mockResolvedValue(DEEP_HISTORY)
   mocks.fundamentalsDetail.mockResolvedValue({})
+  mocks.decision.mockResolvedValue({
+    symbol: '002636',
+    verdict: '看看',
+    reason: '看看: 趋势无数据、活跃度无数据、主力无数据',
+    phase: '无',
+    row: 0,
+  })
   vi.spyOn(window, 'open').mockImplementation(() => null)
 })
 
@@ -275,6 +284,15 @@ describe('Task 15 研究: AI 报告 + 深度分析两段真渲染', () => {
     expect(historyCalls().every((p) => p.stock_symbol === '002636' && p.limit === 1)).toBe(true)
     expect(mocks.getLatestForStock).toHaveBeenCalledWith('002636')
     expect(mocks.getHistoryComparison).toHaveBeenCalledWith('002636', 'CN', 90)
+
+    // P0-3 决策合成: 独立于 keys 门控, 恰好一次, 参数 (symbol, market); 徽标 + 理由真渲染
+    expect(mocks.decision).toHaveBeenCalledTimes(1)
+    expect(mocks.decision).toHaveBeenCalledWith('002636', 'CN')
+    const decisionSection = screen.getByTestId('research-section-decision')
+    expect(within(decisionSection).getByTestId('decision-badge').textContent).toBe('看看')
+    expect(within(decisionSection).getByTestId('decision-reason').textContent).toBe(
+      '看看: 趋势无数据、活跃度无数据、主力无数据',
+    )
 
     // 其余端点一个都不发
     expect(mocks.quote).not.toHaveBeenCalled()
