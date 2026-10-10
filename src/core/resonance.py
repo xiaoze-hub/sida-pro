@@ -31,7 +31,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-STRONG_LINE = 3.00  # 强势线(活跃度阈值)
+from src.core import thresholds as _thresholds
+
+# 强势线(活跃度阈值)来源: 统一配置层 src.core.thresholds(默认 3.00, 支持 env
+# SIDA_THRESHOLD_STRONG_LINE 覆盖); 决策路径实时读取, 不再硬编码(审计 P1-3)。
 
 # 四态回测基准(官方 2024.10-2025.10)
 BACKTEST = {
@@ -94,7 +97,7 @@ def evaluate_state(
             "note": "缺失: " + "/".join(missing),
         }
 
-    act_ok = activity >= STRONG_LINE
+    act_ok = activity >= _thresholds.strong_line()
     act_double = _is_double(activity, activity_prev)
     fund_in = fund_net > 0
     fund_double = _is_double(fund_net, fund_net_prev)

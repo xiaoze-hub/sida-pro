@@ -165,3 +165,32 @@ def decisions_entry_outcomes(
             "rows": [],
             "note": "查询失败, 不推算; 请稍后重试或检查数据库。",
         }
+
+
+@router.get("/thresholds")
+def decisions_thresholds(
+    _: User = Depends(get_current_user),
+):
+    """决策阈值只读快照(数智决策 P1-3): 当前生效值 + 来源(default/env)。
+
+    阈值统一配置层见 `src.core.thresholds`(默认 1.56/3.00/6.00, 支持 env
+    `SIDA_THRESHOLD_*` 覆盖)。**只读** —— 运行时改阈值需要权限设计, 本端点不提供写入口。
+    非法/缺失配置在配置层回默认 + warn(不 crash), 故此处永远返回可用的生效值。
+    """
+    from src.core import thresholds
+
+    items = [
+        {
+            "key": key,
+            "label": spec["label"],
+            "value": spec["value"],
+            "source": spec["source"],
+            "default": spec["default"],
+            "env": spec["env"],
+        }
+        for key, spec in thresholds.snapshot().items()
+    ]
+    return {
+        "items": items,
+        "note": "只读快照; 来源 default=内置默认, env=环境变量覆盖。",
+    }

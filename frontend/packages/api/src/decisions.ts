@@ -194,6 +194,31 @@ export function fetchSignalHitRate(signalType?: string, days = 30) {
   return fetchAPI<SignalHitRateResponse>(`/signals/hit-rate?${q.toString()}`, { cacheMode: 'reload' })
 }
 
+/** 决策阈值只读快照一项(数智决策 P1-3 可配置化)。 */
+export interface DecisionThresholdItem {
+  key: string
+  /** 中文名(生命线/强势线/大牛线) */
+  label: string
+  /** 当前生效值 */
+  value: number
+  /** 来源: default=内置默认 / env=环境变量覆盖 */
+  source: 'default' | 'env'
+  /** 内置默认值(未覆盖时的值) */
+  default: number
+  /** 覆盖用的环境变量名(如 SIDA_THRESHOLD_STRONG_LINE) */
+  env: string
+}
+
+export interface DecisionThresholdsResponse {
+  items: DecisionThresholdItem[]
+  note: string
+}
+
+/** 决策阈值只读快照(当前生效值 + 来源); 无写入口。 */
+export function fetchDecisionThresholds() {
+  return fetchAPI<DecisionThresholdsResponse>('/decisions/thresholds', { cacheMode: 'reload' })
+}
+
 /** 信号类型的中文名(后端用机器名, 页面给人看)。 */
 
 export const SIGNAL_KIND_LABEL: Record<string, string> = {
@@ -214,6 +239,7 @@ export const decisionsApi = {
     fetchDecisionLog(kind, limit, offset, startDate, endDate),
   backtest: (params: Parameters<typeof fetchDecisionBacktest>[0]) => fetchDecisionBacktest(params),
   entryOutcomes: (days = 30, minSample = 20) => fetchEntryOutcomes(days, minSample),
+  thresholds: () => fetchDecisionThresholds(),
 }
 
 /** 信号对账(批次D)对象式导出。 */
