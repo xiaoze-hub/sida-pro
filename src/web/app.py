@@ -41,6 +41,7 @@ from src.web.api import (
     ths,
     darkflow,
     decision_pioneer,
+    pioneer_indicators,
     decision,
     resonance,
     stock_pool,
@@ -642,6 +643,14 @@ app.include_router(
     prefix="/api/decision-pioneer",
     tags=["decision-pioneer"],
     # 数智决策三指标(机构活跃度 + GS + L2主力净流入 TQ 口径): pro 专属
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 决策先锋辅助指标(P3 补差, 2026-10-10): 趋势操盘线 / 牛熊线 / 分时突破。
+# 同属数智决策档(pro, view_forecast)。信号是证据不是建议; 缺数据显式降级, 不编造。
+app.include_router(
+    pioneer_indicators.router,
+    prefix="/api/indicators",
+    tags=["pioneer-indicators"],
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
 )
 # 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排, 消歧不合并。

@@ -1,0 +1,205 @@
+"""决策先锋辅助指标测试(P3 补差, 2026-10-10) —— 趋势操盘线。
+
+**禁真网络**: 纯计算用例直接喂合成 bar; API 契约用例 monkeypatch 取数函数(不触网/库)。
+覆盖: 正例 / 反例 / 边界(数据不足/一字板) + 买卖点触发条件断言 + API 契约 + 显式降级。
+"""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+def _bars(rows):
+    """rows: [(o, h, l, c), ...] → bar dict 列表。"""
+    return [{"open": o, "high": h, "low": l, "close": c} for o, h, l, c in rows]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 阈值配置层: 新键默认值 + env 覆盖(P3 参数可调)
+# ══════════════════════════════════════════════════════════════════════
+def test_trend_threshold_keys_defaults_and_env(monkeypatch):
+    from src.core import thresholds
+
+    snap = thresholds.snapshot()
+    for key in (
+        "trend_pilot_red_period", "trend_pilot_yellow_period", "trend_pilot_green_period",
+        "trend_pilot_band_tol_pct",
+    ):
+        assert key in snap, f"缺少配置键 {key}"
+        assert snap[key]["source"] == "default"
+
+    # 红线=快(10) < 黄线=慢(20) < 绿线=长(60): 多头排列方向正确
+    assert thresholds.value("trend_pilot_red_period") < thresholds.value("trend_pilot_yellow_period")
+    assert thresholds.value("trend_pilot_yellow_period") < thresholds.value("trend_pilot_green_period")
+
+    monkeypatch.setenv("SIDA_THRESHOLD_TREND_PILOT_GREEN_PERIOD", "45")
+    assert thresholds.value("trend_pilot_green_period") == 45
+    assert thresholds.source("trend_pilot_green_period") == "env"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 趋势操盘线
+# ══════════════════════════════════════════════════════════════════════
+_P_TREND = {"red_period": 3, "yellow_period": 5, "green_period": 10}
+
+
+def _trend_up_with_pullback():
+    rows = []
+    c = 10.0
+    for i in range(20):
+        c = 10 + i * 0.5
+        rows.append((c - 0.05, c + 0.15, c - 0.15, c))
+    o2 = rows[-1][3] - 0.1
+    rows[-1] = (o2, o2 + 0.05, o2 - 0.6, o2 + 0.1)  # 回踩(下探带区)收阳
+    return _bars(rows)
+
+
+def test_trend_line_insufficient_returns_none():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    assert compute_trend_line([]) is None
+    assert compute_trend_line(_bars([(10, 10.1, 9.9, 10)])) is None
+    # 默认参数需 61 根 → 20 根返回 None(数据不足, 不编造)
+    assert compute_trend_line(_bars([(10, 10.1, 9.9, 10)] * 20)) is None
+
+
+def test_trend_line_reads_thresholds_config(monkeypatch):
+    """默认周期(10/20/60)不足 → None; env 缩短后同批 bar 可算且 params 反映 env。"""
+    from src.core import thresholds
+    from src.core.trend_pilot_line import compute_trend_line
+
+    for k in ("trend_pilot_red_period", "trend_pilot_yellow_period", "trend_pilot_green_period"):
+        monkeypatch.delenv(thresholds.snapshot()[k]["env"], raising=False)
+    bars = _bars([(10 + i * 0.4, 10.4 + i * 0.4, 9.9 + i * 0.4, 10.2 + i * 0.4) for i in range(8)])
+    assert compute_trend_line(bars) is None  # 默认需 61 根
+
+    monkeypatch.setenv("SIDA_THRESHOLD_TREND_PILOT_RED_PERIOD", "3")
+    monkeypatch.setenv("SIDA_THRESHOLD_TREND_PILOT_YELLOW_PERIOD", "4")
+    monkeypatch.setenv("SIDA_THRESHOLD_TREND_PILOT_GREEN_PERIOD", "6")
+    r = compute_trend_line(bars)
+    assert r is not None
+    assert r["params"]["red_period"] == 3
+    assert r["params"]["yellow_period"] == 4
+    assert r["params"]["green_period"] == 6
+
+
+def test_trend_line_buy_pullback_bull_band():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    r = compute_trend_line(_trend_up_with_pullback(), _P_TREND)
+    assert r["band"]["state"] == "多方带"
+    assert r["trend"] == "升势"
+    rules = [b["rule"] for b in r["buy_points"]]
+    assert "pullback_bull_band_yang" in rules
+    bp = next(b for b in r["buy_points"] if b["rule"] == "pullback_bull_band_yang")
+    assert bp["signal"] == "buy" and bp["price"] and "回踩" in bp["trigger"]
+
+
+def test_trend_line_buy_pullback_green_yang():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    rows = []
+    c = 10.0
+    for i in range(22):
+        c = 10 + i * 0.4
+        rows.append((c - 0.05, c + 0.15, c - 0.1, c))
+    # 深回踩: 低点触绿线区, 收阳且收于绿线上方
+    rows[-1] = (16.0, 16.9, 15.9, 16.8)
+    r = compute_trend_line(_bars(rows), _P_TREND)
+    assert r is not None
+    assert "pullback_green_yang" in [b["rule"] for b in r["buy_points"]]
+
+
+def test_trend_line_sell_rebound_green_fail():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    rows = []
+    c = 20.0
+    for i in range(20):
+        c = 20 - i * 0.15
+        rows.append((c + 0.05, c + 0.1, c - 0.1, c))
+    o3 = rows[-1][3]
+    rows[-1] = (o3 + 0.02, o3 + 0.75, o3 - 0.05, o3 - 0.02)  # 反弹触绿线但收在绿线下
+    r = compute_trend_line(_bars(rows), _P_TREND)
+    assert r["trend"] == "跌势"
+    assert "rebound_green_fail" in [s["rule"] for s in r["sell_points"]]
+    sp = r["sell_points"][0]
+    assert sp["signal"] == "sell" and "无力突破" in sp["trigger"]
+
+
+def test_trend_line_no_signal_when_no_pullback():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    # 单边强势上行, 不回踩 → 无买卖点
+    rows = [(10 + i * 0.5 - 0.05, 10 + i * 0.5 + 0.3, 10 + i * 0.5 - 0.1, 10 + i * 0.5) for i in range(20)]
+    r = compute_trend_line(_bars(rows), _P_TREND)
+    assert r["buy_points"] == [] and r["sell_points"] == []
+
+
+def test_trend_line_flat_limit_board_no_signal():
+    """一字板(h==l)不产生任何买卖点(避免零振幅假信号)。"""
+    from src.core.trend_pilot_line import compute_trend_line
+
+    r = compute_trend_line(_bars([(10, 10, 10, 10)] * 15), _P_TREND)
+    assert r["buy_points"] == [] and r["sell_points"] == []
+
+
+def test_trend_line_signal_is_evidence_not_advice():
+    from src.core.trend_pilot_line import compute_trend_line
+
+    r = compute_trend_line(_trend_up_with_pullback(), _P_TREND)
+    for s in r["signals"]:
+        assert s["signal"] in ("buy", "sell")
+        assert "建议" not in s["trigger"]
+        assert s["rule"] and s["trigger"] and s["price"] is not None
+    assert "待校准" in r["calibration"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# API 契约(monkeypatch 取数, 不触网/库)
+# ══════════════════════════════════════════════════════════════════════
+class _FakeOwner:
+    id = "test-owner"
+    username = "test-owner"
+    role = "owner"
+
+
+@pytest.fixture()
+def client():
+    from src.web.api import pioneer_indicators as pi
+    from src.web.app import app
+    from src.web.api.auth import get_current_user
+
+    pi._CACHE.clear()
+    app.dependency_overrides[get_current_user] = lambda: _FakeOwner()
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        pi._CACHE.clear()
+
+
+def test_trend_line_api_contract(client, monkeypatch):
+    import src.core.trend_pilot_line as tpl
+
+    monkeypatch.setattr(tpl, "fetch_trend_line", lambda *a, **k: {"available": True, "lines": {"red": 1.0, "yellow": 0.9, "green": 0.8}, "buy_points": [], "sell_points": [], "signals": []})
+    r = client.get("/api/indicators/trend-line/600519")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["symbol"] == "600519" and d["indicator"] == "trend-line"
+    assert d["available"] is True and d["lines"]["red"] == 1.0
+
+
+def test_indicators_api_unavailable_note(client, monkeypatch):
+    import src.core.trend_pilot_line as tpl
+
+    monkeypatch.setattr(tpl, "fetch_trend_line", lambda *a, **k: None)
+    r = client.get("/api/indicators/trend-line/600519")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["available"] is False and d["degraded"] is True and d["note"]
+
+
+def test_indicators_api_invalid_symbol_400(client):
+    r = client.get("/api/indicators/trend-line/12ab")
+    assert r.status_code == 400

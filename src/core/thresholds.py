@@ -50,6 +50,37 @@ _SPECS: dict[str, dict] = {
         "hi": 1000.0,
         "label": "大牛线",
     },
+    # ── 决策先锋辅助指标参数(P3 补差, 2026-10-10) ──────────────────────────
+    # 规格 §5/§6/§7; 官方精确参数未公开 → 均为**逆向近似默认值, 待截图/逆向校准**。
+    # 周期类按整数存浮点, 消费方 int() 取整。
+    "trend_pilot_red_period": {
+        "default": 10.0,
+        "env": "SIDA_THRESHOLD_TREND_PILOT_RED_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "操盘线-红线(快)周期",
+    },
+    "trend_pilot_yellow_period": {
+        "default": 20.0,
+        "env": "SIDA_THRESHOLD_TREND_PILOT_YELLOW_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "操盘线-黄线(慢)周期",
+    },
+    "trend_pilot_green_period": {
+        "default": 60.0,
+        "env": "SIDA_THRESHOLD_TREND_PILOT_GREEN_PERIOD",
+        "lo": 0.0,
+        "hi": 250.0,
+        "label": "操盘线-绿线周期",
+    },
+    "trend_pilot_band_tol_pct": {
+        "default": 1.0,
+        "env": "SIDA_THRESHOLD_TREND_PILOT_BAND_TOL_PCT",
+        "lo": 0.0,
+        "hi": 20.0,
+        "label": "操盘线-回踩容差%",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)

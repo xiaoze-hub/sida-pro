@@ -1,3 +1,21 @@
+### feat-决策先锋辅助指标·趋势操盘线(三线+买卖点)（2026-10-10）
+
+决策先锋 P3 补差之一(规格 §5; 基准 docs/decision-pioneer-spec.md:17)。红/黄/绿三线 +
+红黄带(多方/空方带) + 买卖点规则。
+
+- **新增 `src/core/trend_pilot_line.py`**: 三线用 EMA 作**可调近似**(红线=快/黄线=中/
+  绿线=长), 参数全部落 `src/core/thresholds` 配置层; 红≥黄=多方带(多头排列)。规则输出
+  客观字段(枚举买卖点 + 触发规则 + 触发条件 + 价格/时间), **信号是证据不是建议**;
+  一字板(h==l)不出买卖点, 数据不足返回 None。
+- **阈值层 `src/core/thresholds.py`**: 新增 `trend_pilot_*` 4 键(红10/黄20/绿60/回踩容差1%),
+  env `SIDA_THRESHOLD_TREND_PILOT_*` 可覆盖。**逆向近似待校准**(官方精确参数未公开)。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/trend-line/{symbol}`,
+  注册于 `src/web/app.py`(数智决策档 view_forecast)。缺数据显式 `available=false`+`note`。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 买点①(回踩多方带收阳)/买点②
+  (回踩绿线收阳)/卖点(反弹绿线无力突破)触发条件断言 + 数据不足 + 一字板 + 阈值 env 覆盖 +
+  API 契约(含非法代码 400 与不可用降级)。验收: `pytest -k 'trend or threshold'`、ruff、
+  `check_is_pg_scope.py` 全绿。纯计算, **无新表无 migration, 不发版**。
+
 ### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
 
 ### fix-决策预热 import 方向修复(B4.1 门禁红)
