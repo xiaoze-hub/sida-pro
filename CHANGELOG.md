@@ -1,3 +1,14 @@
+### fix-决策账本回填接上生产调度(交易日 18:35 cron + 手动 API)（2026-10-10）
+
+AI 全链路审计 P0-1: `decision_log.backfill_outcomes` 全仓**无生产调度**(仅测试调用, 生产引用只剩 `resonance_scan.py:389` 一条注释), `startup.py` 的 add_job 无该项 → DecisionLedger 直读的 `ret_t1/hit_t1` 列**从不被回填**, 命中率恒显『样本不足』, "信号 → 结果" 反馈环整段死。修法(照既有 cron 惯例):
+
+- **交易日 18:35 cron**(`decision_log.register_cron`, 仿 signal-nightly-review 的 18:30 错开 5 分钟; 复用现有调度器不新开), lifespan 调度器选主分支接线; 工作日专 cron + 任务内交易日守卫双保险, **非交易日跳过**。
+- **手动口子** `POST /api/decisions/backfill`(运维补跑/追单), 返回 job_id。
+- **统一走作业框架**(`jobs.create/finish`, 单飞复用 + 进度/结果落库): 返回体显式 `ok=False` → 作业 failed、抛异常 → failed(v0.13.49 诚实性约定); 回填作业**永不抛异常**。
+- 幂等可重跑: `backfill_outcomes` 只填『未来那根 K 线已存在』的档, 已填满的行不再进 pending, 重跑不双计。
+
+测试(禁真实网络, 假行情序列构造 T+1/3/5 + 同步线程替身): 新增 `tests/test_decision_backfill_cron.py` 钉 ① cron 注册(交易日 18:35 / id / 防并发参数) + 非交易日跳过; ② 幂等重跑不双计; ③ 回填后 `stats()` 的 `ret_t1/hit_t1` 真的变非空; ④ 返回体 ok=False / 抛异常 → 作业 failed。验收: `pytest tests/ -k 'decision or job'` 全绿、`scripts/check_is_pg_scope.py` OK、ruff 通过。不发版、不打 tag、不部署。
+
 ### test-标定并锁死通达信 Volume 单位(快照=手/日线=股)（2026-10-08）
 
 审计遗留 P2(turnover 单位同族)。**在线标定(7 只 A股交叉腾讯, 2026-10-08 收盘后)**:

@@ -24,7 +24,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from src.core.jobs import jobs
+
 logger = logging.getLogger(__name__)
+
+#: 回填作业在作业框架里的 kind(单飞复用与作业面板都按它归类)
+BACKFILL_JOB_KIND = "decision_backfill"
 
 _CST = ZoneInfo("Asia/Shanghai")
 
@@ -237,3 +242,119 @@ ORDER BY n DESC
         "rows": out,
         "note": "命中 = T+n 收益 > 0(平盘记未命中); 缺失/未回填一律不计入分母, 不用推算值填充。",
     }
+
+
+# ── 回填调度(P0-1 审计修复, 2026-10-10) ─────────────────────────────────────
+# 背景: backfill_outcomes 此前全仓无生产调度(仅测试调用, 生产引用只剩一条注释) →
+# DecisionLedger 的 ret_t1/hit_t1 列**从不被回填**, 命中率恒显『样本不足』, 反馈环整段死。
+# 修法: 交易日 18:35 cron + POST /api/decisions/backfill 手动触发, 统一走作业框架
+# (单飞复用 + 进度/结果落库; ok=False 显式判失败 —— v0.13.49 诚实性约定)。
+# 纪律: 永不抛异常; 非交易日跳过; 幂等可重跑(backfill_outcomes 只填『未来 K 线已存在』的档)。
+
+
+def backfill_runner(
+    job_id: str,
+    *,
+    engine: Engine | None = None,
+    limit: int = 500,
+    series_provider: Any = None,
+) -> None:
+    """作业体: 跑一次回填并把终态落库。**永不抛异常**(后台线程里抛出只丢日志, 无意义)。
+
+    失败显式: `backfill_outcomes` 抛异常 → `jobs.fail`; 返回体显式 `ok=False` →
+    `jobs.finish` 按诚实性约定判 failed(原因落 message/error)。正常计数体(无 `ok` 键)按成功处理。
+    作业表写失败(极早的库)也不能拖垮回填本身 —— 只记 warning。
+    """
+    from src.db.session import get_write_engine
+
+    eng = engine if engine is not None else get_write_engine()
+    try:
+        try:
+            jobs.start(job_id, "backfilling")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("决策账本回填: 作业启动落库失败(继续跑回填): %r", exc)
+        out = backfill_outcomes(eng, limit=limit, series_provider=series_provider)
+    except Exception as exc:  # noqa: BLE001 —— 显式失败, 不抛
+        logger.warning("决策账本回填失败: %r", exc)
+        try:
+            jobs.fail(job_id, str(exc))
+        except Exception as exc2:  # noqa: BLE001
+            logger.warning("决策账本回填: 失败态落库失败: %r", exc2)
+        return
+    try:
+        if not jobs.finish(job_id, out, context="决策账本回填: "):
+            logger.warning("决策账本回填未成: %s", out)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("决策账本回填: 终态落库失败: %r", exc)
+
+
+def spawn_backfill(
+    *,
+    limit: int = 500,
+    series_provider: Any = None,
+    reason: str = "manual",
+) -> dict[str, Any]:
+    """单飞起一次回填作业(后台线程执行, 立即返回 job_id)。
+
+    作业框架保证: 同类活跃作业已存在时**复用其 job_id**(`started=False`) —— 定时与手动
+    撞车、重复点击都不起第二个(并发回填会互踩同一批 pending 行)。
+    """
+    import threading
+
+    job_id, is_new = jobs.create(BACKFILL_JOB_KIND, "决策账本回填")
+    if not is_new:
+        return {"started": False, "running": True, "reason": "回填进行中", "job_id": job_id}
+    threading.Thread(
+        target=backfill_runner,
+        kwargs={"job_id": job_id, "limit": limit, "series_provider": series_provider},
+        name=f"decision-backfill-{reason}",
+        daemon=True,
+    ).start()
+    return {"started": True, "running": True, "reason": None, "job_id": job_id}
+
+
+def backfill_daily_job(*, limit: int = 500) -> dict[str, Any]:
+    """调度器入口(交易日 18:35): **非交易日跳过**, 否则单飞起回填作业。
+
+    与 signal-nightly-review(18:30) 错开 5 分钟: 那时当日日线已落库, T+1/3/5 才有 K 线可对。
+    """
+    from datetime import date
+
+    try:
+        from src.core.trading_calendar import is_trading_day
+
+        if not is_trading_day(date.today()):
+            return {"ok": True, "skipped": True, "reason": "非交易日跳过"}
+    except Exception as exc:  # noqa: BLE001 —— 日历缺失/未覆盖 → 显式失败, 禁止回落推测
+        logger.warning("决策账本回填: 交易日历不可用, 跳过: %r", exc)
+        return {"ok": False, "reason": f"交易日历不可用: {exc!r}"[:200]}
+    return spawn_backfill(limit=limit, reason="scheduled")
+
+
+def register_cron(scheduler) -> bool:
+    """把决策账本回填 job 注册到传入的现有 APScheduler(**禁止新开 scheduler**)。
+
+    在 lifespan 的调度器选主分支里调用; 传入 None / 无 add_job → 返回 False, 不崩。
+    非交易日命中在任务内再拦一道(工作日专 cron + 交易日守卫双保险)。
+    """
+    if scheduler is None or not hasattr(scheduler, "add_job"):
+        return False
+    try:
+        scheduler.add_job(
+            backfill_daily_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=18,
+            minute=35,
+            id="decision-backfill-daily",
+            name="决策账本回填",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+        logger.info("决策账本回填 job 已注册: 交易日 18:35")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error("决策账本回填 job 注册失败: %r", exc)
+        return False
