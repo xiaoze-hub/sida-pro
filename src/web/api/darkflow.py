@@ -13,6 +13,7 @@ GET /api/dark-flow/002361
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from marketdata import Symbol as MDSymbol
 from marketdata.vendors.tencent import TencentQuoteVendor
@@ -24,6 +25,7 @@ from src.core.dark_flow import (
     compute_tck_active_ratio,  # v0.4.79: .tck 主动率(口诀活代码化)
 )
 from src.web.api.auth import require_owner
+from src.web.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +252,82 @@ def _tick_staleness(
     return info
 
 
+def build_intent_explain_response(symbol_code: str, db: Session | None = None) -> dict:
+    """主力意图 AI 解读的组装(懒触发入口, 供 endpoint 与测试直接调用)。
+
+    规则结论仍由 `compute_dark_flow`(逐笔口径)给出; AI 只补「为什么 + 置信度 + 方向」,
+    **不改规则结论**(见 `src/core/intent_explain.py` 设计原则)。数据不足 / LLM 失败一律
+    `available=False` + `reason` 显式, 绝不编造 —— 前端按钮点击才调, 不自动跑(省 token)。
+
+    Returns:
+        {available, reason, rule_signal, direction, confidence, why, data_status}
+    """
+    symbol = _validate_symbol(symbol_code)
+    try:
+        dark = compute_dark_flow(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"intent-explain compute 异常 {symbol_code}: {e}")
+        dark = None
+
+    if not dark:
+        return {
+            "available": False,
+            "reason": "主力意图数据获取失败(可能非交易时段或无成交)",
+            "rule_signal": None,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": None,
+        }
+
+    data_status = dark.get("data_status", "ok")
+    rule_signal = dark.get("signal")
+    if data_status in ("insufficient", "suspect"):
+        reason = (
+            "逐笔成交异常(疑重复计数), 本轮不做 AI 解读"
+            if data_status == "suspect"
+            else "逐笔数据不足, 不做 AI 解读"
+        )
+        return {
+            "available": False,
+            "reason": reason,
+            "rule_signal": rule_signal,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": data_status,
+        }
+
+    from src.core.intent_explain import explain_main_intent
+
+    try:
+        result = explain_main_intent(dark, db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"intent-explain LLM 异常 {symbol_code}: {e}")
+        result = None
+
+    if not result:
+        return {
+            "available": False,
+            "reason": "AI 解读失败(超时/未配置模型), 不影响上方规则结论",
+            "rule_signal": rule_signal,
+            "direction": None,
+            "confidence": None,
+            "why": None,
+            "data_status": data_status,
+        }
+
+    return {
+        "available": True,
+        "reason": None,
+        "rule_signal": rule_signal,
+        "direction": result.get("direction"),
+        "confidence": result.get("confidence"),
+        "why": result.get("why"),
+        "data_status": data_status,
+    }
+
+
 @router.post("/cache/clear")
 def clear_darkflow_ticks_cache(
     symbol: str | None = Query(default=None, description="6位A股代码, 如 002361; 不传=清全部"),
@@ -356,3 +434,13 @@ def dark_flow(
 def dark_flow_path(symbol: str, source: str | None = Query(default=None, description="灰度数据源")):
     """路径式别名: /api/dark-flow/002361。"""
     return build_darkflow_response(symbol, source=source)
+
+
+@router.get("/{symbol}/intent-explain")
+def dark_flow_intent_explain(symbol: str, db: Session = Depends(get_db)):
+    """主力意图 AI 解读(懒触发: 前端「AI 解读」按钮点击才调, 不自动跑以省 token)。
+
+    规则结论仍由逐笔口径(`compute_dark_flow`)给出, AI 只补「为什么 + 置信度 + 方向」,
+    不改规则结论。数据不足 / LLM 失败一律 `available=false` + `reason` 显式, 绝不编造。
+    """
+    return build_intent_explain_response(symbol, db=db)

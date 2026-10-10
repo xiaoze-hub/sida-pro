@@ -1,3 +1,52 @@
+### feat-主力意图 AI 解读上个股工作台 L2 页（懒触发按钮）（2026-10-10）
+
+AI 链路审计 P1: `src/core/intent_explain.explain_main_intent`(规则给结论 + AI 补"为什么")此前唯一
+消费点是 chat 工具(`src/agents/chat/registry.py` `get_intent_explain`), 工作台「主力意图」卡只有规则
+结论、看不出"为什么"。本次把 AI 解读搬到 L2 页:
+
+- **后端**: 新增 `GET /api/dark-flow/{symbol}/intent-explain`(`src/web/api/darkflow.py`
+  `build_intent_explain_response`) —— 逐笔口径 `compute_dark_flow` 出规则结论, `explain_main_intent`
+  补 AI「为什么/置信度/方向」, **不改规则结论**。数据不足(insufficient/suspect)/取数失败/LLM 失败
+  一律 `available=false` + `reason` 显式, 绝不编造。
+- **前端**: `L2Tab.tsx` ④主力意图卡追加「AI 解读」段 —— **懒触发**(点按钮才调, 不自动跑省 token);
+  渲染 规则结论 + AI「为什么」+ 置信度 + 方向; 未触发不发请求, 失败显式(错误原文)。**不改主力意图
+  规则口径本体与布局密度**(仅追加一节, 原单元格/口径/密度零改动, diff 自查确认)。
+- 测试(禁真网络): 后端 `tests/test_darkflow_intent_explain.py` 7 例(成功透传/不足不调 LLM/suspect
+  不调/取数失败显式/异常不崩/LLM 失败显式/非法代码 400); 前端 `tests/components/l2-tab.test.tsx` 加
+  4 例(未点击零取数/点击才调+三态渲染/数据不足显式/失败显式 + 原规则单元格不变)。原 9 例仍绿(共 13)。
+- 验收: `pytest tests/test_darkflow_intent_explain.py`(7 passed)、`ruff check`、`vitest run`、
+  `tsc -b`、`tsc -p tsconfig.tests.json`、`check_ui_rules.mjs` 全绿。不发版、不打 tag、不部署、不 push main。
+
+### feat-内置报告生成即推送通知中心（盘前/盘后补"生成即通知"）（2026-10-10）
+
+AI 链路审计 P1: `report_scheduler` 8:30 盘前 / 15:30 盘后生成内置报告后**只落盘、无人知**
+(`report_generator._write_report` 写文件后无任何通知)。本次在生成成功后接 `notify_center.push_notification`
+(与 agent 推送同一条链, 参考 `src/agents/base.py:399` 的 `notify_with_result`):
+
+- `report_scheduler._push_report_notification(report_type, result)`: 站内落库 + 外发渠道,
+  `category=report` / `source=report_scheduler` / `link=/reports`; 标题取报告 title(去 markdown `#`)。
+- 失败/无渠道**显式不假装**: `push_notification` 返回 None(站内落库失败)或抛异常 → 记 error 并返回 False;
+  无渠道时由通知中心 `push_status='skipped'` 体现(站内仍可见, 非沉默失败), 调用方照实记录 id。
+- 生成异常(采集/写盘失败)不推送 —— 仅在"生成完成"日志后调用。
+- **职责定位(保留双轨, 不删)**: 内置报告调度器(8:30/15:30, 固定 job, 面向报告中心 `/reports`)
+  与 agent 版 `premarket_outlook`(盘前埋伏简报, 按用户/自选/情绪) / `daily_report`(盘后)在时段上
+  重叠但**面向对象与内容不同**(全市场模板报告 vs 个性化 agent 简报)。本轮**不合并**: 内置报告补
+  "生成即通知"仅让既有产物可见, 不接管 agent 推送; 后续如需去重再单独评估。
+- 测试(禁真网络): 新增 `tests/test_report_push.py` 6 例 —— 成功调 notify_center(参数/category/source
+  断言)/None 不假装/异常不假装/缺 title 兜底不崩/生成后推送/生成失败不推送。
+- 验收: `pytest tests/test_report_push.py`(6 passed)、`ruff check` 全绿。不发版、不打 tag、不部署、不 push main。
+
+### feat-Agent 命中榜上个人中心 UI（分 Agent 预测命中率）（2026-10-10）
+
+AI 链路审计 P1: `GET /api/profile/stats/accuracy`(分 Agent 命中榜, 后端已实现)此前零前端消费 ——
+"谁准谁不准"看不见。本次在个人中心「我的数据」段旁补「Agent 命中榜」小节(消费该接口), 不改后端:
+
+- 表格列: Agent / 命中率 / 命中(hit/total) / 平均收益 / 参评; 命中率或平均收益缺值显 `--`(不编 0%)。
+- 样本不足(`qualified=false`, 默认 <5)显式标"样本不足"(不参评), 防 1 中 1 刷榜被读成 100%。
+- 三态显式: 加载中 / 失败(后端原文透传) / 空态(近 30 天无样本), 不静默成空表; 全平台统计(预测记录无用户维度)在副标题注明。
+- 不动上方全局「预测命中率」StatTile 与账号/安全/通知各段。
+- 测试(禁真网络): 新增 `frontend/tests/components/profile-agent-board.test.tsx` 4 例 —— 分行渲染/样本不足显式/空态显式/失败显式/缺值 `--` 不出 0%; 既有 `profile-account-failure.test.tsx` 3 例仍绿(新增第三个 query 未干扰账号故障态)。
+- 验收: `vitest run` 相关 2 文件全绿。不发版、不打 tag、不部署、不 push main。
 ### feat-预测引擎发版接线: 随主服务发版自动拉起（2026-10-10）
 
 补 `deploy/sida_prod_deploy_forecast.sh`: 把仓库快照(`forecast_server.py` + `forecast_lib/` +
