@@ -1,3 +1,57 @@
+### feat-决策先锋辅助指标·分时突破(突/积信号)（2026-10-10）
+
+决策先锋 P3 补差之三(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。「突」=盘整>15分钟 +
+突然放量异动 + 突破日内高点 + DDE大单持续流入; 「积」=早盘大单稳健流入积蓄动能。
+
+- **新增 `src/core/minute_breakthrough.py`**: 纯计算 `compute_breakthrough(分钟K, DDE序列)`,
+  逐条给出四条件/两条件的命中与客观明细, 输出 {信号类型(突/积), 触发时间, 触发条件清单}。
+  **输入两条链**: 分钟数据(库 `klines period='1m'` → 腾讯 `fetch_tencent_minute_kline`) +
+  DDE 大单流入(thsdk `get_main_flow_official` / TQ `get_more_info`)。**现有 DDE 链只有当日
+  快照、非逐分钟序列 → 生产上显式降级, 不出信号**(直到接入逐分钟大单流, 后续任务)。
+  一字板无新高不构成「突」; 缺任一输入 → `available=false` + `reasons`。
+- **阈值层 `src/core/thresholds.py`**: 新增 `minute_*` 8 键(盘整15分/振幅0.6%/放量2×/
+  DDE连续3分/下限50万/早盘窗口60分/正流入占比0.8/突破容差0.2%), env `SIDA_THRESHOLD_MINUTE_*`
+  覆盖。**逆向近似待校准**。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/minute-breakthrough/{symbol}`
+  (数智决策档 view_forecast)。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 「突」四条件全中 + 「积」早盘流入 +
+  反例(负流入/不放量)+ 边界(一字板/分钟不足/DDE缺失/分钟缺失→显式降级)+ 阈值 env 覆盖 +
+  API 契约。验收: `pytest -k 'trend or niuxiong or minute or threshold'`(122 例)、ruff、
+  `check_is_pg_scope.py` 全绿。纯计算, **无新表无 migration, 不发版**。
+
+### feat-决策先锋辅助指标·牛熊线(金叉死叉B/S)（2026-10-10）
+
+决策先锋 P3 补差之二(规格 §7; 基准 docs/decision-pioneer-spec.md:19)。牛线=20日加权均线
+(WMA), 马线=5日均线, 买卖线; 牛线金叉买卖线=B(买)、死叉=S(卖)。
+
+- **新增 `src/core/niuxiong_line.py`**: 牛线用**加权均线**(线性权重 1..n), 马线用简单均线,
+  买卖线用均线作**可调近似**(默认 30, 参数落配置层); 输出客观字段(信号枚举 B/S + 金叉/死叉
+  类型与时点 + 线值), **买红卖绿**(B=red / S=green); 数据不足返回 None, 不编造。
+- **阈值层 `src/core/thresholds.py`**: 新增 `niuxiong_*` 3 键(牛20/马5/买卖线30),
+  env `SIDA_THRESHOLD_NIUXIONG_*` 可覆盖。**买卖线口径逆向近似待校准**。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/niuxiong/{symbol}`
+  (数智决策档 view_forecast); 缺数据显式 `available=false`+`note`。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 金叉 B(买红)/死叉 S(卖绿) +
+  加权均线权重取值 + 数据不足 + 无交叉(平盘) + 阈值 env 覆盖 + API 契约。验收:
+  `pytest -k 'niuxiong or threshold'`、ruff、`check_is_pg_scope.py` 全绿。纯计算, 无新表, 不发版。
+
+### feat-决策先锋辅助指标·趋势操盘线(三线+买卖点)（2026-10-10）
+
+决策先锋 P3 补差之一(规格 §5; 基准 docs/decision-pioneer-spec.md:17)。红/黄/绿三线 +
+红黄带(多方/空方带) + 买卖点规则。
+
+- **新增 `src/core/trend_pilot_line.py`**: 三线用 EMA 作**可调近似**(红线=快/黄线=中/
+  绿线=长), 参数全部落 `src/core/thresholds` 配置层; 红≥黄=多方带(多头排列)。规则输出
+  客观字段(枚举买卖点 + 触发规则 + 触发条件 + 价格/时间), **信号是证据不是建议**;
+  一字板(h==l)不出买卖点, 数据不足返回 None。
+- **阈值层 `src/core/thresholds.py`**: 新增 `trend_pilot_*` 4 键(红10/黄20/绿60/回踩容差1%),
+  env `SIDA_THRESHOLD_TREND_PILOT_*` 可覆盖。**逆向近似待校准**(官方精确参数未公开)。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/trend-line/{symbol}`,
+  注册于 `src/web/app.py`(数智决策档 view_forecast)。缺数据显式 `available=false`+`note`。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 买点①(回踩多方带收阳)/买点②
+  (回踩绿线收阳)/卖点(反弹绿线无力突破)触发条件断言 + 数据不足 + 一字板 + 阈值 env 覆盖 +
+  API 契约(含非法代码 400 与不可用降级)。验收: `pytest -k 'trend or threshold'`、ruff、
+  `check_is_pg_scope.py` 全绿。纯计算, **无新表无 migration, 不发版**。
 ### feat-AI建议证据化(前端): 共振/决策/L2 三处出口渲染证据链
 - `ResonanceVerdictPanel` / `DecisionVerdictCard` / `L2Tab IntentExplainBlock` 三处 AI/规则结论出口**追加**渲染证据链(触发条件/数据时点/失效条件)+置信度校准 note+历史相似情形; 旧响应缺字段一律不渲染(向后兼容, 不改既有布局与口径)。测试补 `resonance-evidence*` / `decision-evidence*` / `l2-intent-ai-evidence*` 断言。
 
