@@ -1,3 +1,57 @@
+### feat-主力资金战报(规格§4.4 当日主力动向汇总页)（2026-10-10）
+
+决策先锋辅助模块『主力资金战报』(规格 §4.4)。汇总当日主力动向: 全市场大单净流入
+TOP/BOTTOM + 行业分布 + 个股主力净额变化 + 拆单/对倒计数。任一子块缺源**显式无数据**,
+绝不编造/回 0。
+
+- **新表 `war_report_daily`**(migration v186, 唯一入口 `src/web/migrations.py`): 按
+  (snapshot_date, market) 存战报 payload; ORM `src/db/models.py::WarReportDaily`。
+- **构建 `src/core/war_report.py`**: `build_daily_war_report` 复用 `scan_dde_universe`
+  (thsdk DDE 全市场, 200/批) → TOP/BOTTOM; 个股净额变化读 `dde_minute_flow` 采样区间增量
+  (无采样 → None); 行业分布走 TQ SUPAMO(`tdx_boards.sector_items`+`board_quotes`, 亿元);
+  拆单/对倒走委托号级 `.tck`(无源 → 显式不可得; 对倒需账户信息 → 恒不可识别)。
+  `run_war_report_job` 落库, 数据源不可用**不落假快照**(ok=False)。
+- **API `src/web/api/war_report.py`**: `GET /api/war-report/daily`(读最新快照, 无 → available:false
+  +note) + `POST /api/war-report/refresh`(owner, 同步落库)。数智决策档(view_forecast),
+  注册于 `src/web/app.py`。
+- **调度**: 盘后报告流水线(`src/core/report_scheduler.py`)在暗盘 TOP 后追加战报生成。
+- **前端**: `@panwatch/api` 新增 `warReportApi`; 新页 `frontend/src/pages/WarReport.tsx`
+  (TOP/BOTTOM 表 + 行业分布 + 拆单对倒块, 缺源显式「无数据」, 口径徽章可见), 路由 `/war-report`
+  挂在「机会」组(view_forecast)。
+- **测试**: 后端 `tests/test_war_report.py`(字段契约 + 缺源降级 + 落库 + 端点契约);
+  前端 `frontend/tests/components/war-report.test.tsx`(渲染 + 缺源显式 + 无快照态)。
+- **验收**: 后端 `pytest -k 'minute or dde or war or breakthrough'`(161 例) + ruff +
+  `check_is_pg_scope.py` + `check_migrations.py`; 前端 vitest 全量(963 例) + tsc(+tests) +
+  `check_ui_rules.mjs` 全绿。**不发版**。
+
+### feat-分时突破逐分钟DDE大单序列落库（解锁「突」信号）（2026-10-10）
+
+决策先锋 P3 补差 A(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。此前 `minute_breakthrough`
+的 DDE 链只有**当日快照**(thsdk `get_dde_flow`/`get_main_flow_official` + TQ `get_more_info`),
+`fetch_dde_series` 只能构造单点序列 → 「突」的『DDE大单持续流入』条件在生产上**恒显式降级**。
+本轮落**盘中采样序列**, 该条件真可判。
+
+- **新表 `dde_minute_flow`**(migration v185, 唯一入口 `src/web/migrations.py`): 键
+  (trade_date, market, symbol, sample_ts); `cum_net_wan`=采样时刻当日累计主力净流入(万),
+  `delta_net_wan`=区间增量(万, 首个样本=其 cum); `main_net_vol`/`total_amount_wan`/`source`。
+  ORM 见 `src/db/models.py::DdeMinuteFlow`。(同批含战报表 v186/`WarReportDaily` 的 schema,
+  其功能在下一 commit 接线。)
+- **采样器 `src/core/dde_sampler.py`**: 复用全市场 thsdk DDE 批量(200/批);
+  `sample_dde_once` 逐批取数 → 幂等 upsert(uq 键, 重跑同一样本不重复/不双算 delta);
+  `run_dde_sample_job` 走**作业框架诚实性**(交易日+连续竞价时段才采样, 数据源全空/异常
+  → `ok=False` → `jobs.finish` 判 failed); **非交易时段显式无数据**(不落行、不建作业行)。
+- **`fetch_dde_series` 改读库构造真序列**(`dde_minute_flow` → 逐样本区间净流入, 万→元);
+  无采样回退快照单点(仍显式降级, 不编造)。判定改为**按采样样本**判「持续流入」
+  (`_sustained_vals`), 兼容采样节拍粗于 1m(默认 5min), 不再要求与分钟K逐点对齐。
+- **阈值层**: 新增 `minute_dde_sample_min`(默认 5, env `SIDA_THRESHOLD_MINUTE_DDE_SAMPLE_MIN`)。
+- **调度**: `src/bootstrap/startup.py` 注册盘中 cron(交易日 9-15, 每 N 分钟, 分钟位从 :01
+  起跳**避开整点拥堵**); 任务内再以 `trading_calendar` 守卫时段。
+- **重构 `src/core/dark_fund_scan.py`**: 抽出 `scan_dde_universe`(全市场归一化行)+
+  `_normalize_rows`, 供暗盘 TOP 与战报复用(行为不变)。
+- **测试 `tests/test_dde_minute_flow.py`**(禁真网络): 采样幂等 + delta 构造 + 读库构序列 +
+  「突」持续流入正/反例 + 非交易日/非时段显式 + 作业诚实性(ok=False→failed)。
+- **验收**: `pytest tests/ -k 'minute or dde or war or breakthrough'`(161 例)、ruff、
+  `check_is_pg_scope.py`、`check_migrations.py` 全绿。**不发版**。
 ### feat-聚宝盆选股(暗盘流入+活跃度>6+G区G信号+问财)（2026-10-10）
 
 决策先锋规格 §4.2 官方选股流程落地(基准 `docs/decision-pioneer-spec.md:16`)。**逐条件 AND** 联合筛选:

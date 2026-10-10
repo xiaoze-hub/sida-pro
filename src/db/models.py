@@ -1580,6 +1580,67 @@ class DarkFundTopSnapshot(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class DdeMinuteFlow(Base):
+    """盘中逐 N 分钟 DDE 大单净流入采样表(P3 补差 A, 2026-10-10)。
+
+    现有链(thsdk get_dde_flow / get_main_flow_official + TQ get_more_info)只给**当日快照**,
+    `minute_breakthrough.fetch_dde_series` 只能构造单点序列 → 分时突破「突」的
+    『DDE大单持续流入』条件无法判定(生产恒显式降级)。本表落**盘中采样序列**,
+    `fetch_dde_series` 改读库构造真序列。
+
+    诚实口径:
+      - `cum_net_wan`  = 采样时刻的**当日累计**同花顺 DDE 主力净流入(万元);
+      - `delta_net_wan` = 本区间增量 = 本采样 cum − 上一采样 cum(当日首个采样 = 其 cum);
+        「持续流入」= 相邻区间 delta > 0;
+      - `main_net_vol` = 主力净量原始值(非百分比/非占比, 量纲未定, 见 dark_fund_scan);
+      - 非交易时段不落任何行(采样作业显式无数据)。
+    """
+
+    __tablename__ = "dde_minute_flow"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "market", "symbol", "sample_ts",
+            name="uq_dde_minute_flow_day_sym_ts",
+        ),
+        Index("ix_dde_minute_flow_day_sym", "trade_date", "symbol"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String, nullable=False)     # YYYY-MM-DD (CST)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)     # 6 位代码
+    sample_ts = Column(String(8), nullable=False)   # HH:MM
+    cum_net_wan = Column(Float, nullable=True)      # 当日累计主力净流入(万元)
+    delta_net_wan = Column(Float, nullable=True)    # 本区间增量(万元)
+    main_net_vol = Column(Float, nullable=True)     # 主力净量原始值(量纲未定)
+    total_amount_wan = Column(Float, nullable=True)
+    source = Column(String, default="thsdk_dde")
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class WarReportDaily(Base):
+    """主力资金战报日快照表(规格 §4.4『主力资金战报』, 2026-10-10)。
+
+    汇总当日主力动向(全市场大单净流入 TOP/BOTTOM、行业分布、个股主力净额变化、
+    拆单/对倒计数); 盘后 cron / 手动 refresh 落库, 前端读快照
+    (与 dark_fund_top_snapshots 同形)。
+
+    诚实口径: 任一子块缺源都显式 available=False + note, 绝不编造/回 0。
+    """
+
+    __tablename__ = "war_report_daily"
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "stock_market", name="uq_war_report_day_market"),
+        Index("ix_war_report_day", "snapshot_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date = Column(String, nullable=False)  # YYYY-MM-DD
+    stock_market = Column(String, nullable=False, default="CN")
+    payload = Column(JSON, default={})  # build_daily_war_report() 的完整返回
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class SkillApiKey(Base):
     """Skill Gateway 对外开放 AppKey(2026-09-15; 统一身份 2026-09-16)。
 

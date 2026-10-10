@@ -5031,6 +5031,26 @@ def _m184_decision_log_regime(conn: Connection) -> None:
         )
 
 
+def _m185_dde_minute_flow_table(conn: Connection) -> None:
+    """盘中 DDE 大单逐 N 分钟采样序列表 dde_minute_flow(P3 补差 A, 2026-10-10)。
+
+    见 models.DdeMinuteFlow。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    from src.db.models import DdeMinuteFlow
+
+    DdeMinuteFlow.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m186_war_report_daily_table(conn: Connection) -> None:
+    """主力资金战报日快照表 war_report_daily(规格 §4.4, 2026-10-10)。
+
+    见 models.WarReportDaily。schema 唯一入口是本迁移, 禁止运行时建表。
+    """
+    from src.db.models import WarReportDaily
+
+    WarReportDaily.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5165,6 +5185,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(183, "decision_cache", _m183_decision_cache),
     # 决策账本 regime 分桶(2026-10-10 A 决策提胜率): 情绪周期条件化的聚合维度
     Migration(184, "decision_log_regime", _m184_decision_log_regime),
+    # 盘中 DDE 大单逐 N 分钟采样序列(2026-10-10 P3 补差 A): 解锁分时突破「突」的
+    # 「DDE大单持续流入」判定 —— 现有链只有当日快照, 落序列表才能构造真序列。
+    Migration(185, "dde_minute_flow_table", _m185_dde_minute_flow_table),
+    # 主力资金战报日快照(2026-10-10 规格 §4.4): 当日主力动向汇总页的读快照底座。
+    Migration(186, "war_report_daily_table", _m186_war_report_daily_table),
 )
 
 
