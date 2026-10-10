@@ -27,6 +27,8 @@ from src.core.decision import (
 _LEGACY_KEYS = {
     "verdict", "reason", "phase", "row", "parts",
     "regime", "regime_label", "regime_policy", "regime_note", "regime_adjusted",
+    # 2026-10-10 B 决策提胜率: 内外盘七口诀叠加确认透明字段(bdqk*) —— 纯增量
+    "bdqk", "bdqk_effect", "bdqk_note", "bdqk_adjusted", "bdqk_signal_kind",
     "pioneer_terms",
 }
 

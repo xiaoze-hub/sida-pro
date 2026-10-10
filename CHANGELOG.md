@@ -9,6 +9,34 @@
   B(每次现算, 慢)/ B-不可预落库(实时数据)。B 类首选 `/decision/{symbol}` 已改造; 其余 B 类明确标注
   属实时数据不预落库。
 
+### feat-内外盘七口诀叠加确认入决策合成与账本（提胜率 B）（2026-10-10）
+
+背景: 内外盘七口诀(规则预判, `src.core.dark_flow._judge_mnemonic`)此前只活在 L2 主力意图卡
+的**展示层**。它与三指标共振同源不同维 —— 『外盘大+涨+放量=真金进攻』若与共振同向是真金
+进攻的叠加确认;『高位诱多出货』则是直接的压制信号。本 commit 把口诀结论**信号化**为决策
+合成的叠加维度并入账。
+
+- **新增 `src/core/mnemonic_overlay.py`**: `eval_bdqk_effect`(纯函数)把口诀判定结果 → 叠加
+  效应: 看涨(真金进攻/压盘吸筹)= confirm(动手加成); 看跌/警惕(主力撤退/诱多出货/对倒造假/
+  双大单对倒)= suppress(压制动手); 观望/关注(多空平衡/控盘洗盘/双小单)= neutral(不叠加)。
+  **缺数据显式**: 逐笔不足/异常 → `unavailable`(标『难归集』); 无口诀命中 → `none`;
+  口诀与主力意图方向**背离** → confirm 撤销为 neutral(以主力意图为准, 与 dark_flow 同立场)。
+  `resolve_mnemonic` 为唯一 IO 口(复用生产链路 compute_dark_flow→腾讯 Quote→口诀), 失败 → None。
+- **`src/core/decision.py`**: `synthesize` 增 keyword-only `bdqk`; 输出恒定带 `bdqk` /
+  `bdqk_effect` / `bdqk_note` / `bdqk_adjusted` / `bdqk_signal_kind`(**叠加与否可见**)。
+  confirm → 动手保持 + 标记加成; suppress → 动手**收敛为看看**并写明『压制』; 缺省 `bdqk=None`
+  → 难归集不叠加(向后兼容零破坏)。`decide()` CN 路径拉七口诀传入, 并把叠加结果入账。
+- **入账 `decision_log`**: 新 signal_kind `bdqk_confirm`(动手+同向确认) / `bdqk_suppress`
+  (动手被压制); 随 signal 落 `regime`(供账本按情绪周期分桶, 与 A 同口径)。无价/无 kind →
+  **不入账**(不硬填 0), 幂等(同 kind+symbol+trade_date UPSERT)。
+- **决策先锋口径对齐(用户明确数智决策仿制同花顺「决策先锋」)**: 合成输出附 `pioneer_terms`
+  {情绪周期 / 资金博弈 / 主力动向}, 只做中文命名对齐, **不改 verdict 语义**(见报告)。
+- **测试**(`tests/test_decision_bdqk.py`, 13 例, 禁真网络): 叠加/压制/中性三路径、confirm
+  未生效、缺数据显式(难归集/unavailable/none)、背离撤销 confirm、decide() 真实 emit
+  (confirm/suppress 入账 + regime)、难归集不入账、无价不入账。
+- 验收: `pytest -k 'decision or regime or stock_l2'` 全绿 + ruff + `check_is_pg_scope.py`
+  + `check_migrations.py`。**不发版、不打 tag、不 push main**。
+
 ### feat-决策合成情绪周期条件化门槛 + 账本 regime 分桶（提胜率 A）（2026-10-10）
 
 背景: 三指标共振命中率此前是**全状态混算**的一个平均数(决策账本 resonance3: T+1 53.85%)。
