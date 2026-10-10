@@ -530,6 +530,11 @@ function L2FundSection({ moreInfo, loading }: { moreInfo: MoreInfoResponse | nul
   const zjlHb = safeNum(moreInfo?.zjl_hb) ?? rawPick(moreInfo?.raw, 'Zjl_HB', 'zjl_hb', 'ZJL_HB')
   const zjl = safeNum(moreInfo?.zjl) ?? rawPick(moreInfo?.raw, 'Zjl', 'zjl', 'ZJL')
   const quoteTime = moreInfo?.quote_time ? String(moreInfo.quote_time).slice(0, 19).replace('T', ' ') : ''
+  // 非交易时段回退/无数据(2026-10-11 P1): 会话值全 0 时后端回退最近收盘快照并标注,
+  // 绝不把 0 当真实值显示。source=snapshot/seal_sample 或 available=false 都要显式提示。
+  const isFallback = moreInfo?.source === 'snapshot' || moreInfo?.source === 'seal_sample'
+  const unavailable = moreInfo?.available === false
+  const asOf = moreInfo?.as_of ? `${String(moreInfo.as_of).slice(0, 4)}-${String(moreInfo.as_of).slice(4, 6)}-${String(moreInfo.as_of).slice(6, 8)}` : ''
 
   return (
     <Section
@@ -542,6 +547,17 @@ function L2FundSection({ moreInfo, loading }: { moreInfo: MoreInfoResponse | nul
         </span>
       }
     >
+      {isFallback || unavailable ? (
+        <div
+          data-testid="l2fund-source-note"
+          className="mb-1.5 text-[11px] text-amber-600 dark:text-amber-400"
+        >
+          {unavailable
+            ? moreInfo?.note || '无数据(不冒充 0)'
+            : moreInfo?.note || `非交易时段·显示 ${asOf} 收盘值`}
+          {isFallback ? ' · 非实时会话值' : ''}
+        </div>
+      ) : null}
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
         <Cell
           label="主力净额"

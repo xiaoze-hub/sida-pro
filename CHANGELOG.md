@@ -1,3 +1,25 @@
+### fix-L2 成品资金非交易时段回退收盘快照(0 不冒充)（2026-10-11）
+
+工作台 L2「L2 成品资金」/ 暗盘卡「主力净流入(L2·TQ)」读 TQ `get_more_info`
+**实时会话值**(Zjl_HB/TotalBVol/L2TicNum/L2OrderNum ...), 非交易时段 TQ 一律回 `0`
+—— 生产实测周末任意股票这些字段全为 `0.0`, 而 UI 未回退未标注, 显示
+"0万 平衡 / 逐笔0笔·委托0笔", 把 0 冒充真实值误导。
+
+- **新增** 迁移 187 `l2_fund_snapshots` 收盘快照表(金额=万元 / 量=股, 口径同 TQ)。
+- **新增** `src/core/l2_fund_snapshot.py`(纯核心层, B4.1): `capture_symbol/universe` 收盘
+  采样(**全 0 不落库**); `latest_snapshot()` 优先本表最近交易日行, 无则回退**现有落库**
+  `seal_quality_samples` 末行(带实际日期 as_of); 皆无 → `None`(由 web 层显式无数据)。
+- **改** `GET /api/quotes/{symbol}/more-info`: 实时有值 → `source:'live'`; 非交易时段 /
+  会话值全 0 → 回退快照并显式带 `source/as_of/note`("非交易时段·显示 2026-10-09 收盘值");
+  无快照 → `available:false` + "无数据(不冒充 0)"。**绝不返 0 当真实值**。
+- **接线** `src/bootstrap/startup.py`: 交易日 15:05 cron `l2-fund-snapshot` 采样落库。
+- **前端** `MoreInfoResponse` 增可选 `available/source/as_of/note`; L2Tab `L2FundSection`
+  回退/无数据时显式提示徽标。
+- **测试** `tests/test_l2_fund_fallback.py`(11 例): 三态(实时有值 / 全 0 回退快照 / 无快照
+  不冒充) + seal 源回退标注 + `latest_snapshot` 优先级。全 mock, 禁真网络。
+- **验收**: 同批 `pytest -k 'ladder or demon or limit or l2 or seal'` 280 passed + ruff +
+  `check_is_pg_scope.py` + 前端 `tsc -b` 全绿; 生产面板回退实测见报告。**不发版**。
+
 ### fix-连板梯队数据自检+自动补数(limit_up_events 断档自愈)（2026-10-11）
 
 `limit_up_events`(连板梯队 15:05 后 finalized 读它的收盘态真值源)在 TQ 断链期

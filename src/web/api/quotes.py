@@ -136,21 +136,60 @@ async def get_quotes_batch(payload: QuoteBatchRequest):
 
 @router.get("/{symbol}/more-info")
 async def get_more_info(symbol: str, market: str = "CN"):
-    """TQ 扩展指标(104字段, 含封单/竞价/连板/估值等)。仅 CN 且 TQ 在线时有数。"""
+    """TQ 扩展指标(104字段, 含封单/竞价/连板/估值等)。仅 CN 且 TQ 在线时有数。
+
+    非交易时段/会话值全 0 回退(2026-10-11 P1): TQ get_more_info 是**实时会话值**,
+    盘后/周末一律回 0 —— 此前 UI 把 0 当真实值显示("0万 平衡 / 逐笔0笔·委托0笔"),
+    误导。现在: 会话值全 0 或非交易时段 → 回退最近收盘快照(`l2_fund_snapshots` /
+    现有 `seal_quality_samples`), 显式带 `source`/`as_of`/`note`; 无快照 → 显式
+    `available:false`(绝不返 0 冒充真实值)。
+    """
     from src.core.marketdata_client import md_more_info
 
     market_code = _parse_market(market)
     if market_code != MarketCode.CN:
         raise HTTPException(400, "more-info 仅支持 CN 市场(TQ 扩展指标)")
     rows = await asyncio.to_thread(md_more_info, [symbol], market_code.value)
-    if not rows:
-        # UX: 空数据不 404 — 前端按 available:false 空态处理
+    live = (rows[0] if rows else None) or None
+
+    from src.core.l2_fund_snapshot import FIELDS as _L2F
+    from src.core.l2_fund_snapshot import has_live_values, latest_snapshot
+    from src.core.trading_calendar import is_trading_session
+
+    in_session = is_trading_session()
+    live_vals = {f: (live or {}).get(f) for f in _L2F}
+    if live is not None and has_live_values(live_vals):
+        return {**live, "available": True, "source": "live"}
+
+    # 非交易时段 / 会话值全 0 / 无实时行 → 回退最近收盘快照(显式标注, 0 不冒充)
+    snap = None
+    try:
+        snap = await asyncio.to_thread(latest_snapshot, symbol, market_code.value)
+    except Exception as e:  # noqa: BLE001 回退失败不挡端点, 走显式无数据
+        logger.warning("more-info 收盘快照回退失败 %s: %s", symbol, e)
+    if snap:
         return {
-            "available": False,
-            "note": "扩展指标不存在(TQ 未连接或该股无数据)",
+            **snap,
             "symbol": symbol,
+            "market": market_code.value,
+            "available": True,
+            "source": snap.get("origin") or "snapshot",
+            "as_of": snap.get("trade_date"),
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    f"·显示 {_fmt_trade_date(snap.get('trade_date'))} 收盘值",
         }
-    return {**(rows[0] or {}), "available": True}
+    if live is None:
+        return {"available": False, "source": "unavailable", "symbol": symbol,
+                "note": "扩展指标无数据(TQ 未连接或该股无数据)且无收盘快照"}
+    return {"available": False, "source": "session_closed", "symbol": symbol,
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    "·无收盘快照, 无数据(不冒充 0)"}
+
+
+def _fmt_trade_date(v) -> str:
+    """YYYYMMDD → YYYY-MM-DD; 不可解析原样返回(不编造)。"""
+    s = str(v or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) >= 8 and s[:8].isdigit() else s
 
 
 @router.get("/{symbol}/dark-flow-tq")
