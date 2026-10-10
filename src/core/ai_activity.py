@@ -12,6 +12,9 @@
     生命线 +1.56 / 强势线 +3.00 / 大牛线 +6.00
     站上强势线 = 少数强势机构参与; 站上大牛线 = 短期多支一线强势机构参与
 
+    以上为内置默认值; 实际生效值经 `src.core.thresholds` 统一配置层读取(env
+    `SIDA_THRESHOLD_LIFE_LINE/STRONG_LINE/BULL_LINE` 可覆盖), 未设 env 时与此处一致。
+
 ## 数据
 日K(开/高/低/收/量), 至少 2 根。缺失显式 None / "无数据", 不编造。
 """
@@ -20,11 +23,11 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+from src.core import thresholds as _thresholds
 from src.core.decision_pioneer import compute_institution_activity
 
-LIFE_LINE = 1.56
-STRONG_LINE = 3.00
-BULL_LINE = 6.00
+# 阈值来源: 统一配置层 src.core.thresholds(默认 1.56/3.00/6.00, 支持 env SIDA_THRESHOLD_* 覆盖)。
+# 决策路径**一律**走 _thresholds.*() 实时读取, 不再硬编码常量(审计 P1-3 可配置化)。
 
 # 档位判定输入(共振状态机用)
 LEVEL_WEAK = "弱"
@@ -59,8 +62,8 @@ def eval_activity(bars: Sequence[dict]) -> dict:
     return {
         "activity": a,
         "level": act.get("level"),
-        "above_strong": (a >= STRONG_LINE) if isinstance(a, (int, float)) else None,
-        "above_bull": (a >= BULL_LINE) if isinstance(a, (int, float)) else None,
+        "above_strong": (a >= _thresholds.strong_line()) if isinstance(a, (int, float)) else None,
+        "above_bull": (a >= _thresholds.bull_line()) if isinstance(a, (int, float)) else None,
         "streak_days": act.get("streak_days", 0),
         "ma5": act.get("ma5"),
     }
@@ -70,19 +73,22 @@ def activity_of_value(value: Optional[float]) -> dict:
     """已知活跃度值 → 档位/线位判定(不写数据, 纯函数, 供状态机复用)。"""
     if not isinstance(value, (int, float)):
         return {"activity": None, "level": None, "above_strong": None, "above_bull": None}
-    if value >= BULL_LINE:
+    life = _thresholds.life_line()
+    strong = _thresholds.strong_line()
+    bull = _thresholds.bull_line()
+    if value >= bull:
         level = LEVEL_BULL
-    elif value >= STRONG_LINE:
+    elif value >= strong:
         level = LEVEL_STRONG
-    elif value >= LIFE_LINE:
+    elif value >= life:
         level = LEVEL_LIFE
     else:
         level = LEVEL_WEAK
     return {
         "activity": value,
         "level": level,
-        "above_strong": value >= STRONG_LINE,
-        "above_bull": value >= BULL_LINE,
+        "above_strong": value >= strong,
+        "above_bull": value >= bull,
     }
 
 

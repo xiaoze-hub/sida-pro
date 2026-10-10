@@ -25,11 +25,12 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
+from src.core import thresholds as _thresholds
+
 logger = logging.getLogger(__name__)
 
 _CST = ZoneInfo("Asia/Shanghai")
 _TABLE = "resonance_scan"
-_STRONG_LINE = 3.0  # 与 ai_activity.STRONG_LINE 同源(强势线)
 _BARS = 90          # 扫描用日线根数(BB0 需 28, 活跃度需 2; 90 富余)
 _KLINE_CHUNK = 100  # 单次批量日线代码数(TDX get_market_data 实测单次上限 ~100 码, 超出静默截断)
 # 完整性契约(对齐公式引擎 tq_formula_batch, 审计钦定范本): 返回体永远带
@@ -91,7 +92,7 @@ def resonance_level(*, trend_zone_g: bool, activity: float | None, fund_net: flo
     if not trend_zone_g:
         return LEVEL_NONE, 0
     score = 0
-    if isinstance(activity, (int, float)) and activity >= _STRONG_LINE:
+    if isinstance(activity, (int, float)) and activity >= _thresholds.strong_line():
         score += 1
     if isinstance(fund_net, (int, float)) and fund_net > 0:
         score += 1
@@ -117,7 +118,7 @@ def evaluate_one(bars: list[dict], fund_net: float | None) -> dict:
     level = act.get("level") if isinstance(act, dict) else None
 
     hit_trend = trend in ("G信号", "G区间")
-    hit_strength = activity is not None and activity >= _STRONG_LINE
+    hit_strength = activity is not None and activity >= _thresholds.strong_line()
     hit_fund = fund_net is not None and fund_net > 0
     hits = [hit_trend, hit_strength, hit_fund]
     n = sum(1 for h in hits if h)
@@ -513,7 +514,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
 
     从日线口径逐日滚动计算(数据不足的头部为 None, 不补零)。
     """
-    from src.core.ai_activity import eval_activity, BULL_LINE, LIFE_LINE, STRONG_LINE
+    from src.core.ai_activity import eval_activity
     from src.core.gs_strategy import eval_gs, trend_label
 
     code = _tdx_code(symbol)
@@ -544,7 +545,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
     return {
         "symbol": symbol,
         "available": True,
-        "lines": {"life": LIFE_LINE, "strong": STRONG_LINE, "bull": BULL_LINE},
+        "lines": {"life": _thresholds.life_line(), "strong": _thresholds.strong_line(), "bull": _thresholds.bull_line()},
         "fund_net": fund_net,
         "count": len(items),
         "items": items,

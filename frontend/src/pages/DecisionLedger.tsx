@@ -9,6 +9,7 @@ import {
   type DecisionBacktestResponse,
   type EntryOutcomesResponse,
   type SignalHitRateResponse,
+  type DecisionThresholdItem,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import {
@@ -54,6 +55,7 @@ export default function DecisionLedger() {
   const [log, setLog] = useState<DecisionLogResponse | null>(null)
   const [hitRate, setHitRate] = useState<SignalHitRateResponse | null>(null)
   const [outcomes, setOutcomes] = useState<EntryOutcomesResponse | null>(null)
+  const [thresholds, setThresholds] = useState<DecisionThresholdItem[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
@@ -84,12 +86,14 @@ export default function DecisionLedger() {
       } finally {
         setLoading(false)
       }
-      const [hr, oc] = await Promise.allSettled([
+      const [hr, oc, th] = await Promise.allSettled([
         signalsReviewApi.hitRate(undefined, 30),
         decisionsApi.entryOutcomes(30, 20),
+        decisionsApi.thresholds(),
       ])
       if (hr.status === 'fulfilled') setHitRate(hr.value)
       if (oc.status === 'fulfilled') setOutcomes(oc.value)
+      if (th.status === 'fulfilled') setThresholds(th.value.items)
     },
     [offset, startDate, endDate],
   )
@@ -142,6 +146,25 @@ export default function DecisionLedger() {
           加载失败：{err}
         </div>
       )}
+
+      {/* 当前生效阈值(数智决策 P1-3 只读): 运行时改阈值需权限设计, 本轮只做可配+可见, 无写回 */}
+      <section className="mt-3" data-testid="thresholds">
+        <p
+          className="text-[11px] text-muted-foreground"
+          title={
+            thresholds && thresholds.length > 0
+              ? thresholds.map((t) => `${t.label}: ${t.value} (${t.source === 'env' ? t.env : '内置默认 ' + t.default})`).join('\n')
+              : undefined
+          }
+        >
+          当前阈值(只读)
+          {thresholds && thresholds.length > 0
+            ? `：${thresholds
+                .map((t) => `${t.label} ${t.value}${t.source === 'env' ? '(env)' : ''}`)
+                .join(' · ')}`
+            : '：—'}
+        </p>
+      </section>
 
       {/* ① 命中率 */}
       <section className="mt-4">

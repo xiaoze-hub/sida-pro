@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   backtest: vi.fn(),
   entryOutcomes: vi.fn(),
   hitRate: vi.fn(),
+  thresholds: vi.fn(),
 }))
 
 vi.mock('@panwatch/api', () => ({
@@ -24,6 +25,7 @@ vi.mock('@panwatch/api', () => ({
     log: (...a: unknown[]) => mocks.log(...a),
     backtest: (...a: unknown[]) => mocks.backtest(...a),
     entryOutcomes: (...a: unknown[]) => mocks.entryOutcomes(...a),
+    thresholds: (...a: unknown[]) => mocks.thresholds(...a),
   },
   signalsReviewApi: {
     hitRate: (...a: unknown[]) => mocks.hitRate(...a),
@@ -49,6 +51,7 @@ function primeDefaults() {
   mocks.log.mockResolvedValue(emptyLog)
   mocks.hitRate.mockResolvedValue(emptyHitRate)
   mocks.entryOutcomes.mockResolvedValue(emptyOutcomes)
+  mocks.thresholds.mockResolvedValue({ items: [], note: '' })
 }
 
 beforeEach(() => {

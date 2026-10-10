@@ -1,3 +1,26 @@
+### feat-数智决策 P1-3: 决策阈值可配置(统一配置层 + env 覆盖 + 只读 API/UI)（2026-10-10）
+
+审计 P1-3: 决策阈值(AI 机构活跃度的生命线/强势线/大牛线, 及共振判定用的强势线)原分散硬编码在三处,
+调整需改代码发版。本轮收成**统一只读配置层**, 默认值语义**逐比特零变化**:
+
+- **统一配置层** `src/core/thresholds.py`: 键 `life_line/strong_line/bull_line`, 默认 1.56/3.00/6.00
+  (与历史硬编码现值一致); 优先级 env(`SIDA_THRESHOLD_LIFE_LINE` / `SIDA_THRESHOLD_STRONG_LINE` /
+  `SIDA_THRESHOLD_BULL_LINE`) > 内置默认。**绝不 crash**: 配置缺失回默认; 非数 / 非有限(nan/inf) /
+  越界(合法域 `(0, 1000]`) → 回默认 + warn。`snapshot()` 供 API/UI 展示"生效值 + 来源(default/env)";
+  本层**不提供写回**(运行时改阈值需权限设计, 本轮只做可配 + 可见)。
+- **三处调用点改读配置层**(决策路径实时读取, 非常量): `resonance_scan`(共振强度判定/级别)、
+  `ai_activity`(档位 / above_strong / above_bull / 生命线)、`resonance`(7 行状态机强势线)。
+  未设 env 时判定结果与改前**完全一致**(既有测试断言零改动全绿)。
+- **只读暴露**: `GET /api/decisions/thresholds` 返回当前生效值 + 来源; 复盘中心 `DecisionLedger.tsx`
+  加只读「当前阈值」小段(11px 行内, 不卡片堆砌; env 覆盖带 `(env)` 标记; 请求失败显式 `—`, 不 crash)。
+- **UI 客户端**: `decisions.ts` 增 `fetchDecisionThresholds` + `decisionsApi.thresholds`。
+- **测试(禁真网络)**: 新增 `tests/test_thresholds.py` 17 例(默认值一致 / env 生效 / 非法回默认+warn /
+  三处调用点真读配置 / 端点值+来源 / 只读无写路由); 新增前端 `tests/components/decision-thresholds.test.tsx` 2 例;
+  既有前端账本测试 mock 补 `thresholds` 网络层(不断言变更)。
+- 验收: 后端 `pytest -k 'resonance or activity or decision or threshold'`(209 通过)、ruff、`check_is_pg_scope.py`、
+  前端 `vitest run`(898 通过)、`tsc -b`、`tsc -p tsconfig.tests.json`、`check_ui_rules.mjs` 全绿。
+  不发版、不打 tag、不部署、不 push main。
+
 ### feat-数智决策 P2 前端: 复盘中心补共振回测/信号对账/入场后验/明细分页（2026-10-10）
 
 审计 P2「有功能没入口」四处 UI 入口上屏(**全并入 `DecisionLedger.tsx` 复盘中心**, 复用既有
