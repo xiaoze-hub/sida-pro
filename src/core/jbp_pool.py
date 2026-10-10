@@ -48,7 +48,6 @@ CONDITION_LABELS = {
     "wencai": "问财关键词",
 }
 
-_CACHE_TTL = 60
 _DIGITS6 = re.compile(r"(\d{6})")
 
 
@@ -306,16 +305,4 @@ def screen(symbols: Sequence[str], wencai_keywords: Optional[str] = None) -> dic
     }
 
 
-def screen_cached(symbols: Sequence[str], wencai_keywords: Optional[str] = None) -> dict:
-    """带缓存的 screen(biz_cache: L1 内存 + L2 Redis, TTL 60s)。"""
-    from src.web.cache.biz_cache import biz_cache
 
-    codes = _valid_symbols(symbols)
-    kw = (wencai_keywords or "").strip()
-    key = "jbp:screen:" + ",".join(codes) + (f"|wencai={kw}" if kw else "")
-    cached = biz_cache.get_json(key)
-    if cached is not None:
-        return cached
-    data = screen(codes, kw)
-    biz_cache.set_json(key, data, ttl=_CACHE_TTL)
-    return data

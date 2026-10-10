@@ -182,6 +182,8 @@ def test_screen_wencai_down_all_degrade(monkeypatch):
 # 缓存 + API 契约
 # ══════════════════════════════════════════════════════════════════════
 def test_screen_cached_hits_cache(monkeypatch):
+    from src.web.api import stock_pool as sp
+
     calls = {"n": 0}
 
     def fake_screen(codes, kw=None):
@@ -189,12 +191,12 @@ def test_screen_cached_hits_cache(monkeypatch):
         return {"universe": len(codes), "rows": [], "mark": calls["n"]}
 
     monkeypatch.setattr(jbp, "screen", fake_screen)
-    r1 = jbp.screen_cached(["000001", "000002"])
+    r1 = sp.screen_cached(["000001", "000002"])
     assert r1["universe"] == 2
     # 第二次: 即便 screen 抛错也应命中缓存(不再重算)
     monkeypatch.setattr(jbp, "screen",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("should not recompute")))
-    r2 = jbp.screen_cached(["000001", "000002"])
+    r2 = sp.screen_cached(["000001", "000002"])
     assert r2["universe"] == 2 and calls["n"] == 1
 
 
@@ -224,7 +226,9 @@ def test_jbp_api_contract(client, monkeypatch):
                 "rows": [{"symbol": symbols[0], "in_pool": True, "conditions": []}],
                 "wencai": {"provided": bool(kw)}, "filters": {}, "note": None}
 
-    monkeypatch.setattr(jbp, "screen_cached", fake_cached)
+    from src.web.api import stock_pool as sp
+
+    monkeypatch.setattr(sp, "screen_cached", fake_cached)
     r = client.post("/api/stock-pool/jbp",
                     headers={"Authorization": "Bearer test-token"},  # Bearer 免 CSRF
                     json={"symbols": ["000001", "abc", "000002"], "wencai_keywords": "非ST"})

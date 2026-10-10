@@ -1,5 +1,9 @@
 ### feat-主力资金战报(规格§4.4 当日主力动向汇总页)（2026-10-10）
 
+### fix-聚宝盆缓存包装下沉 web 层(B4.1 门禁红)
+- v0.13.59 CI shard4 红: `src/core/jbp_pool.py` 引 `src.web.cache.biz_cache`(B4.1 core→web 禁止)。biz_cache 在 web 层, 缓存包装属 web 职责——`screen_cached` 迁至 `src/web/api/stock_pool.py`(TTL 60s 语义不变), core 只留纯计算; 测试 mock 点随之适配。
+
+
 决策先锋辅助模块『主力资金战报』(规格 §4.4)。汇总当日主力动向: 全市场大单净流入
 TOP/BOTTOM + 行业分布 + 个股主力净额变化 + 拆单/对倒计数。任一子块缺源**显式无数据**,
 绝不编造/回 0。

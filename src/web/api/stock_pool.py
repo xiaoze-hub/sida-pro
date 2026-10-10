@@ -140,9 +140,27 @@ def jbp_screen(req: JbpScreenRequest):
     逐条件 AND 联合筛选, 输出**逐条件通过/未过明细**(证据非建议); 任一必需条件缺数据
     → 显式降级、该股不出池(不编造)。结果走 biz_cache(60s)。
     """
-    from src.core import jbp_pool
-
     symbols = _valid_symbols(req.symbols)
     if not symbols:
         return {"universe": 0, "scanned": 0, "in_pool": 0, "rows": [], "wencai": {"provided": False}}
-    return jbp_pool.screen_cached(symbols, req.wencai_keywords)
+    return screen_cached(symbols, req.wencai_keywords)
+
+
+def screen_cached(symbols: list[str], wencai_keywords: Optional[str] = None) -> dict:
+    """聚宝盆选股带缓存(biz_cache L1+L2, TTL 60s)。
+
+    **缓存包装在 web 层**: B4.1 门禁禁止 src/core 引 src/web, biz_cache 位于
+    src/web/cache —— core 只留纯计算(jbp_pool.screen), 缓存归本层。
+    """
+    from src.core import jbp_pool
+    from src.web.cache.biz_cache import biz_cache
+
+    codes = _valid_symbols(symbols)
+    kw = (wencai_keywords or "").strip()
+    key = "jbp:screen:" + ",".join(codes) + (f"|wencai={kw}" if kw else "")
+    cached = biz_cache.get_json(key)
+    if cached is not None:
+        return cached
+    data = jbp_pool.screen(codes, kw)
+    biz_cache.set_json(key, data, ttl=60)
+    return data
