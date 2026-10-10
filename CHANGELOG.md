@@ -1,4 +1,23 @@
-### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
+### feat-每日跨源指标标定作业(腾讯/东财/TQ 快照恒等式+跨源比对)（2026-10-10）
+
+Volume 单位事故(快照=手/日线=股)教训: 既有单源对账 `unit_recon` 只查**单源内部**恒等式, 查不出**跨源不一致**(两源各自自洽、并排才现形)。
+- **新增 `src/core/indicator_calibration.py`**: 盘后抽样 N 只 A 股, 对 腾讯/东财/TQ 三源**当日快照**统一归一(量=股/额=元/价=元), 做 ①单源恒等式 `vol×price≈amt`(复用 `unit_check`, 实测校准 5%) ②跨源一致性(三源最大两两相对偏差 ≤ 2%, `SIDA_CALIB_CROSS_TOL_PCT` 可覆盖)。
+- **不静默**: 恒等式违规 / 跨源不一致 / 系统性单源缺失(整批取不到某源) → 显式落 `datasource_failures` + `alerting.record_data_source_failure` 告警。
+- **单源缺失显式降级**: 仅 1 源可用的标的进 `degraded_single_source`(不补齐、不当多源结论); 样本内**无任一票**可跨源校验 → `ok=False`(数据路径不完整)。
+- **作业诚实性**: `daily_job` 走 jobs 框架, 返回体 `ok=False` → `jobs.finish` 判 **failed**(v0.13.49 约定); 同类作业进行中复用 `job_id` 不起第二个; 作业框架不可用时退化为"只跑并返回报告"(报告自带 ok, 不因框架挂而假成功)。报告落 `DATA_DIR/reports/indicator_calibration/YYYY-MM-DD.json`。
+- **调度**: 交易日 **16:10**(`src/bootstrap/startup.py#indicator-calibration-daily`), 与 TQ 类(15:35/15:40/15:50)+全市场日线(16:00)错开(TQ 单客户端进程)。
+- **测试** `tests/test_indicator_calibration.py`(16 例, 禁真网络): 正常通过 / 恒等式违规告警 / 跨源不一致 / 单源缺失显式降级 / 全断不可校验 / 系统性缺失告警 / 作业 ok=False→failed / 复用活跃作业 / 报告落盘。审计表更新见 `docs/技术指标准确度审计_20261010.md` 工程 B 节。
+- 验收同前; **不发版、不打 tag、不 push main**。
+
+### fix-技术指标准确度: 形态空区间崩溃 + 周月缺量当0 + 末根盘中 repaint 标注（2026-10-10）
+
+技术指标准确度地基(lookahead/repaint 审计)。审计表(基线 `60146bf` / 审计对象完整路径 / 覆盖范围与未审项)见 `docs/技术指标准确度审计_20261010.md`。
+- **K线形态相邻双底/双顶崩溃**(`src/core/kline_pattern.py#_detect_classic_patterns`): 两个相近低(高)点相邻时颈线区间 `bars[lo+1:hi]` 为空, `max()/min()` 抛 `ValueError`; 异常穿出 `detect_patterns` 被调用方宽 `except` 吞掉 → **该股当根全部 K 线形态一起丢失**(静默降级)。修复: 区间为空 → 跳过该形态(不猜), 不改变"有颈线"情形的结果。
+- **周/月聚合缺量当 0**(`src/web/api/klines.py#_aggregate_klines`): 区间内任一根 `volume=None` → `sum()` 抛 `TypeError`(1w/1m 端点 500); 若 `or 0` 又把"无数据"伪装成"缩量"。修复: 任一缺失 → 聚合量 `None`(诚实口径)。
+- **末根盘中 repaint 标注**(`src/collectors/kline_collector.py`): `get_kline_summary` 末根若=当日未收盘, MACD/KDJ/形态/量能是**盘中值**、收盘前会被改写(GS 早有 `pending/confirmed`, 摘要层没有)。补 `provisional`+`provisional_note`(指标数值一字未改, 只加诚实标记)。
+- **因果性反向针**(`tests/test_indicator_correctness.py`): 对 gs/活跃度/机构活跃度/K线形态, **追加未来 K 线后重算 → 历史各根取值必须逐点不变** → 任何 lookahead/repaint 都会触发断言红; 核心指标层"无未来函数"由此有机器证据。另含形态崩溃复现针、缺量针、provisional 针。
+- 验收: `pytest -k 'gs or activity or resonance or demon or caliber or calibration'` 全绿(269); `ruff check` / `scripts/check_is_pg_scope.py` 绿。**不发版、不打 tag、不 push main**。
+
 
 ### fix-决策预热 import 方向修复(B4.1 门禁红)
 - v0.13.56 CI shard4 红: `src/core/decision_precompute.py` 反向依赖 src/web(B4.1)。且不止是门禁问题——`Stock` 实际在 `src/db/models.py`, 原 `from src.web.models import Stock` 在生产会被 except 吞掉致**预热集永远为空**(预落库静默失效)。改 `src.db.models.Stock` + `src.db.session.SessionLocal`(117/157 行本就正确, 73 行统一)。

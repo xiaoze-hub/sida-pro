@@ -77,6 +77,38 @@ def _is_auction_time(now: datetime | None = None) -> bool:
     return is_auction_time(now)
 
 
+def _last_bar_provisional(last_date, market: MarketCode, now: datetime | None = None) -> bool:
+    """末根日K是否=当日且**尚未收盘**(竞价/盘中/午休) → 该柱技术指标为盘中值, 收盘后会被改写。
+
+    与 `gs_strategy` 的 confirmed/pending 同精神(防 repaint): 不在已收盘的柱上误标,
+    也不在未收盘的柱上谎称"已定死"。判定异常一律按"已收盘"处理(不阻塞取数),
+    但 -- 与所有降级一致 -- 绝不把未知当已确认的额外承诺。
+    """
+    try:
+        d = str(last_date or "")[:10]
+        if not d:
+            return False
+        tz = ZoneInfo("Asia/Shanghai")
+        now_cst = now.astimezone(tz) if now is not None else datetime.now(tz)
+        if d != now_cst.date().isoformat():
+            return False  # 末根不是今天 → 已定死的收盘柱
+        md = MARKETS.get(market)
+        if md is None or not md.sessions:
+            return False
+        if market == MarketCode.CN:
+            from src.core.trading_calendar import is_trading_day
+
+            if not is_trading_day(now_cst.date()):
+                return False
+        elif now_cst.weekday() >= 5:
+            return False
+        last_close = max(s.end for s in md.sessions)
+        return now_cst.time() < last_close  # 收盘前 = 盘中(含竞价/午休) → 未定死
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[kline] 末根盘中判定异常, 按已收盘处理: %r", e)
+        return False
+
+
 def _kline_cache_ttl(market: MarketCode) -> float:
     try:
         # W2.6(B6): 竞价档提前到 is_trading_time 之外判断 —— 旧写法竞价档嵌在
@@ -1021,12 +1053,22 @@ class KlineCollector:
 
         last_date = klines[-1].date if klines else None
         now = datetime.now(timezone.utc).isoformat()
+        # 防 repaint(技术指标层): 末根若=当日且未收盘, 下面所有指标/形态都是盘中值,
+        # 收盘前会随最后一根 K 线改写 → 显式标注(值不变, 只加诚实标记; 与 gs_signals
+        # 的 confirmed/pending 同口径)。已收盘/历史柱 → False, 行为与改造前一致。
+        provisional = _last_bar_provisional(last_date, self.market)
 
         return {
             # meta
             "timeframe": "1d",
             "computed_at": now,
             "asof": last_date,
+            "provisional": provisional,
+            "provisional_note": (
+                "末根为盘中未收盘bar: 以下技术指标/形态为盘中值, 收盘前可能被改写(勿当已确认)"
+                if provisional
+                else None
+            ),
             "params": {
                 "ma": [5, 10, 20, 60],
                 "macd": {"fast": 12, "slow": 26, "signal": 9},

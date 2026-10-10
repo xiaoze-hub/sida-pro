@@ -175,7 +175,10 @@ def _aggregate_klines(klines, interval: str) -> list:
         last = items[-1][1]
         high = max(it[1].high for it in items)
         low = min(it[1].low for it in items)
-        vol = sum(it[1].volume for it in items)
+        # 诚实口径(与同文件 KlineData.volume None 约定一致): 聚合区间内任一根
+        # volume 缺失(None) → 聚合量也 None, 绝不把"无数据"当 0 求和(0 会伪装成缩量)。
+        vols = [it[1].volume for it in items]
+        vol = sum(vols) if vols and all(v is not None for v in vols) else None
         out.append(
             type(first)(
                 date=items[-1][0].strftime("%Y-%m-%d"),
