@@ -1,4 +1,12 @@
-### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
+### fix-技术指标准确度: 形态空区间崩溃 + 周月缺量当0 + 末根盘中 repaint 标注（2026-10-10）
+
+技术指标准确度地基(lookahead/repaint 审计)。审计表(基线 `60146bf` / 审计对象完整路径 / 覆盖范围与未审项)见 `docs/技术指标准确度审计_20261010.md`。
+- **K线形态相邻双底/双顶崩溃**(`src/core/kline_pattern.py#_detect_classic_patterns`): 两个相近低(高)点相邻时颈线区间 `bars[lo+1:hi]` 为空, `max()/min()` 抛 `ValueError`; 异常穿出 `detect_patterns` 被调用方宽 `except` 吞掉 → **该股当根全部 K 线形态一起丢失**(静默降级)。修复: 区间为空 → 跳过该形态(不猜), 不改变"有颈线"情形的结果。
+- **周/月聚合缺量当 0**(`src/web/api/klines.py#_aggregate_klines`): 区间内任一根 `volume=None` → `sum()` 抛 `TypeError`(1w/1m 端点 500); 若 `or 0` 又把"无数据"伪装成"缩量"。修复: 任一缺失 → 聚合量 `None`(诚实口径)。
+- **末根盘中 repaint 标注**(`src/collectors/kline_collector.py`): `get_kline_summary` 末根若=当日未收盘, MACD/KDJ/形态/量能是**盘中值**、收盘前会被改写(GS 早有 `pending/confirmed`, 摘要层没有)。补 `provisional`+`provisional_note`(指标数值一字未改, 只加诚实标记)。
+- **因果性反向针**(`tests/test_indicator_correctness.py`): 对 gs/活跃度/机构活跃度/K线形态, **追加未来 K 线后重算 → 历史各根取值必须逐点不变** → 任何 lookahead/repaint 都会触发断言红; 核心指标层"无未来函数"由此有机器证据。另含形态崩溃复现针、缺量针、provisional 针。
+- 验收: `pytest -k 'gs or activity or resonance or demon or caliber or calibration'` 全绿(269); `ruff check` / `scripts/check_is_pg_scope.py` 绿。**不发版、不打 tag、不 push main**。
+
 
 ### fix-决策预热 import 方向修复(B4.1 门禁红)
 - v0.13.56 CI shard4 红: `src/core/decision_precompute.py` 反向依赖 src/web(B4.1)。且不止是门禁问题——`Stock` 实际在 `src/db/models.py`, 原 `from src.web.models import Stock` 在生产会被 except 吞掉致**预热集永远为空**(预落库静默失效)。改 `src.db.models.Stock` + `src.db.session.SessionLocal`(117/157 行本就正确, 73 行统一)。
