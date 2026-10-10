@@ -1,3 +1,46 @@
+### feat-数智决策 P1-2/P2-7·前端: 决策卡片渲染个性化注记 + 双维降级标注（2026-10-10）
+
+`DecisionVerdictCard`(`GET /api/decision/{symbol}` 唯一消费方)消费后端新增字段并**显式**上屏,
+**布局零改动**(同卡片内追加 0-3 行小字, 过 UI 门禁: 字阶只用 10/11/12):
+
+- **个性化注记(P1-2)**: `personalization_note` 升屏(`data-testid=decision-personalization`),
+  注明哪部分因风险偏好调整(可解释, 幻觉敏感红线);
+- **持仓参考行(P1-2)**: `position.note`(持仓成本/浮盈)升屏(`decision-position`), **不改 verdict 徽标**;
+- **跨市场降级(P2-7)**: `basis==='two-dimension'` 时显式『资金维无数据(非CN)·仅趋势×活跃度双维』
+  (`decision-fund-missing`), 不冒充三信号; 且透传 market(如 HK)给 `insightApi.decision`。
+- **向后兼容**: 三字段均缺失(旧响应 / CN 无持仓)时这几行**不渲染**, 三态徽标与理由与旧版逐字一致。
+- **测试(禁真网络)**: 新增 `tests/components/decision-verdict-personalization.test.tsx` 4 例
+  (注记显式 / 持仓行 / 双维标注 / 旧响应零新增行 + 参数透传)。
+- 验收: 前端 `vitest run` 全量 122 files / 900 通过、`tsc -b`、`tsc -p tsconfig.tests.json`、
+  `check_ui_rules.mjs`(UI-RULES OK)全绿。
+
+### feat-数智决策合成个性化(P1-2) + 跨市场诚实降级(P2-7)·后端（2026-10-10）
+
+审计『数智决策』两缺口后端修复(不发版/不打 tag/不部署/不 push main):
+
+- **个性化合成层(P1-2)**: `src/core/decision.py:synthesize` 增可选 `user_context`
+  (risk_profile/持仓/自选), 只做**透明微调** —— 风险偏好改变『动手』阈值带宽
+  (保守型仅三指标首次/再次共振(状态表行1/2)才给『动手』, 行3 平稳收敛为『看看』;
+  激进型把拐点(再次共振)放开), 已持仓标的附『持仓成本/浮盈』参考行; **verdict 语义表本身不改**。
+  所有因个性化产生的变化在 `personalized`/`personalization_notes`/`risk_profile`/`position`
+  显式标注(可解释, 幻觉敏感红线)。缺 `user_context` → 输出**逐字段与旧版一致**(向后兼容零破坏)。
+- **上下文按 user_id 隔离**: `src/web/api/decision.py` 新增 `_build_user_context`
+  (走 `_scope.scoped`, 只读当前用户自选 + 持仓 + 由持仓 `trading_style` 多数派推断风险偏好;
+  user_id NULL 全局共享项一并纳入), 经 `GET /api/decision/{symbol}` 注入合成层。
+- **跨市场诚实降级(P2-7)**: 非 CN(HK/US)资金维无源(`compute_pool_flow` 为 A 股口径)
+  → `synthesize_two_dimension` 用**趋势 × 活跃度**双维出 verdict, 显式 `basis="two-dimension"`
+  + `fund_note="资金维无数据(非CN)"`, **禁编造资金、禁静默 None**; `decide(market=HK/US)` 自动路由。
+  `GET /api/decision-pioneer/{symbol}`(+ `history`) 非 CN 由裸 `400` 改为**结构化降级**
+  (200 + `l2_supported=false` + `degraded=true` + `note`『仅 CN 支持 L2 主力』), 代码校验按市场放宽
+  (CN=6位 / HK=5位 / US 放宽)。
+- **明确不做(记录到本 CHANGELOG)**: `decision_log` **不加 user_id** —— 市场级信号属全局口径;
+  按用户决策历史(账本个性化)属**新产品面**, 不在本次范围。
+- **测试(禁真网络)**: 新增 `tests/test_decision_personal_mkt.py` 25 例(向后兼容逐字段 /
+  保守型真实收紧 / 激进型放开拐点 / 持仓参考行 / 缺成本显式不编造 / 双维 verdict 表 + basis 标注 /
+  非 CN 显式降级不 400 / user_id 隔离 / 端点注入上下文)。既有断言未改(仅 `test_decision.py`
+  两处替身函数形参随新签名扩位)。
+- 验收: 后端 `pytest -k 'decision'` 112 通过; `ruff` / `check_is_pg_scope.py` /
+  `check_scoped_queries.py` 全绿。
 ### feat-数智决策 P1-3: 决策阈值可配置(统一配置层 + env 覆盖 + 只读 API/UI)（2026-10-10）
 
 审计 P1-3: 决策阈值(AI 机构活跃度的生命线/强势线/大牛线, 及共振判定用的强势线)原分散硬编码在三处,

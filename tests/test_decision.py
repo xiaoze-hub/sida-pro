@@ -26,10 +26,10 @@ def test_endpoint_never_500(monkeypatch):
     import src.core.decision as core_mod
     import src.web.api.decision as mod
 
-    def _boom(symbol, market="CN"):
+    def _boom(symbol, market="CN", days=120, user_context=None):
         raise RuntimeError("nope")
 
-    def _ok(symbol, market="CN"):
+    def _ok(symbol, market="CN", days=120, user_context=None):
         return {"symbol": symbol, "verdict": "看看", "reason": "看看: 测试", "phase": "分歧",
                 "row": 3, "parts": {}}
 
