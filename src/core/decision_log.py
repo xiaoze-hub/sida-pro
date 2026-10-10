@@ -126,6 +126,19 @@ def _close_series_pg(engine: Engine, symbol: str, start_day: str) -> list[tuple[
     return rows
 
 
+def _norm_day(day: Any) -> str:
+    """日期归一到 ISO(YYYY-MM-DD) 仅供比较用。
+
+    决策账本 `trade_date` 落库是紧凑格式(如 `20260925`), 而 `_close_series_pg`
+    返回 ISO(`2026-09-25`) —— 两种字面量直接 `==` 永远不等(踩过: 回填 0 填)。
+    比较一律走本函数归一; **不改写存储值**(字面量保真)。
+    """
+    s = str(day).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+
 def backfill_outcomes(
     engine: Engine,
     *,
@@ -158,7 +171,8 @@ def backfill_outcomes(
         provider = series_provider or _close_series_pg
         series = provider(engine, symbol, str(day))
         # series[0] 必须是信号日当根; 否则说明该日无 K 线(停牌/非交易日) → 不硬填
-        if not series or series[0][0] != str(day):
+        # (比较走 _norm_day 归一: 账本 trade_date 紧凑格式 vs 系列 ISO 格式, 直接比永远不等)
+        if not series or series[0][0] != _norm_day(day):
             continue
         sets: dict[str, Any] = {}
         for n in HORIZONS:
@@ -200,12 +214,13 @@ SELECT signal_kind,
        SUM(CASE WHEN hit_t3 = 1 THEN 1 ELSE 0 END) AS w_t3,
        SUM(CASE WHEN hit_t5 = 1 THEN 1 ELSE 0 END) AS w_t5
 FROM decision_log
-WHERE trade_date >= :since
+WHERE (length(trade_date) = 8 AND trade_date >= :since_c)
+   OR (length(trade_date) = 10 AND trade_date >= :since)
 GROUP BY signal_kind
 ORDER BY n DESC
 """
             ),
-            {"since": since},
+            {"since": since, "since_c": since.replace("-", "")},
         ).fetchall()
 
     out: list[dict[str, Any]] = []
