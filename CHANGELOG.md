@@ -1,3 +1,34 @@
+### fix-前端加载韧性: 请求超时+GET重试+错误态重试 + 懒加载 chunk 失败自愈（2026-10-10）
+
+用户报障「页面要加载很久, 需要刷新浏览器才能显示」。后端偶发 502 闪断/隧道问题在基建侧另治,
+前端韧性自立(两个机制)。
+
+- **请求超时 + GET 重试**(`frontend/packages/api/src/client.ts`): 默认超时 20s→15s; 超时抛**类型化**
+  `ApiTimeoutError`(kind=TIMEOUT, 带 timeoutMs), 网络错误保留原错误对象并打 `kind=NETWORK` 标记;
+  **GET 幂等请求失败(超时/网络错误/5xx)自动重试一次**, POST/PUT/… 永不重试, 调用方自带 `signal`
+  时不重试(取消权归调用方)。重试在**同一次** fetchAPI 调用内进行, 在途合并与 30s 响应缓存语义不变。
+- **错误态分类**(`frontend/src/lib/api-error.ts`): `classifyApiError` 优先采信 `kind` 标记
+  (超时文案是中文, 老的正则匹配不到), ErrorState 据此正确显示「请求超时/网络连接失败/服务暂时不可用」。
+- **页面错误态 + 重试**(选 2 个重灾页做透, 不全仓重写 loading):
+  - `AnalysisDetail`: 修复 `.catch(() => setResult(null))` 把「加载失败」**误显示成「未找到记录」**
+    —— 现为显式 ErrorState + 「重试」按钮, 重试重新取数(失败态保留, 不无限转圈);
+  - `DecisionLedger`: 首屏显式「加载中…」; 核心 stats+log 硬失败时显式 ErrorState + 「重试」
+    (此前会渲染一堆空表, 把失败读成「暂无数据」); 部分失败仍走行内横幅。
+  - `Dashboard` 经审计已有 ErrorBanner + 「全部重试」, 无需改。
+- **懒加载 chunk 404 自愈**(`frontend/src/lib/lazy-with-retry.ts`; App.tsx + 5 个枢纽页): React.lazy
+  封一层, 只在 chunk 加载失败时 `location.reload()` **一次**(`sessionStorage` 标记防刷新环); 刷新后
+  仍失败则清标记并**抛错交 ErrorBoundary**(不再刷新); 加载成功清标记(重新武装)。覆盖**全部路由级懒加载**
+  (App 22 个 + NotificationsHub/ReportsHub/SettingsHub/System/ShadowHub 共 13 个)。普通运行时错误原样抛,
+  不触发刷新(否则代码 bug 会变成无限刷新、掩盖真问题)。
+- **测试**(禁真网络, 新增 24 例): `tests/api/fetch-resilience.test.ts`(8: 超时类型化 / POST 不重试 /
+  GET 重试一次成功 / 重试用尽抛原错误且 kind=NETWORK / 5xx 重试 / 4xx 不重试 / 调用方 signal 不重试)、
+  `tests/lib/lazy-with-retry.test.ts`(10: 判定 / 决策三态 / 自愈一次 / 防刷新环 / 成功重新武装 / 惰性契约)、
+  `tests/components/analysis-detail-error-retry.test.tsx`(3: 错误态+重试 / 重试成功上屏 / 持续失败不转圈)、
+  `tests/components/decision-ledger-error-retry.test.tsx`(3: 加载中门控 / 硬失败错误态 / 重试成功)。
+  同步更新 `tests/api/fetch-inflight-dedup.test.ts` 失败用例计数(1→2, 反映 GET 重试语义)。
+- 验收: `npx vitest run`(129 文件 936 例全绿)、`npx tsc -b`、`npx tsc -p tsconfig.tests.json`、
+  `node scripts/check_ui_rules.mjs` 全绿。禁改 sw.js / StockWorkbench 布局 / 后端; 不发版、不打 tag、不 push main。
+
 ### feat-主力意图 AI 解读上个股工作台 L2 页（懒触发按钮）（2026-10-10）
 
 ### fix-合并撞车修复(决策双维读阈值配置层)

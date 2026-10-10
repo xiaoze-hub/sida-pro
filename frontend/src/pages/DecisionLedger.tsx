@@ -12,6 +12,7 @@ import {
   type DecisionThresholdItem,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import ErrorState from '@/components/ErrorState'
 import {
   contextSummary,
   hitRateText,
@@ -57,7 +58,9 @@ export default function DecisionLedger() {
   const [outcomes, setOutcomes] = useState<EntryOutcomesResponse | null>(null)
   const [thresholds, setThresholds] = useState<DecisionThresholdItem[] | null>(null)
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string | null>(null)
+  // 2026-10-10 加载韧性: 存原始错误对象(带 fetchAPI 的类型化 kind)而非字符串,
+  // 供 ErrorState 正确分类(超时/网络/5xx); 标语仍用 errMsg 展示。
+  const [err, setErr] = useState<unknown>(null)
 
   const [offset, setOffset] = useState(0)
   const [startDate, setStartDate] = useState('')
@@ -82,7 +85,7 @@ export default function DecisionLedger() {
         setLog(l)
         setOffset(nextOffset)
       } catch (e) {
-        setErr(e instanceof Error ? e.message : '加载失败')
+        setErr(e)
       } finally {
         setLoading(false)
       }
@@ -126,6 +129,7 @@ export default function DecisionLedger() {
     rows.every((r) => r.horizons.t1.insufficient && r.horizons.t3.insufficient && r.horizons.t5.insufficient)
   const hitTypes = Object.entries(hitRate?.by_type ?? {})
   const outcomeRows = outcomes?.rows ?? []
+  const errMsg = err instanceof Error ? err.message : err ? String(err) : ''
 
   return (
     <div className="mx-auto max-w-[1200px] p-3 md:p-4">
@@ -140,12 +144,23 @@ export default function DecisionLedger() {
         </Button>
       </div>
 
-      {err && (
-        <div className="mt-3 flex items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground">
-          <AlertTriangle className="h-3.5 w-3.5" />
-          加载失败：{err}
+      {/* 首屏门控(2026-10-10 加载韧性): 加载中显式提示 / 硬失败(核心 stats/log 取不到)显式错误态
+          + 重试 —— 不留空表冒充「无数据」, 也不无限转圈。部分失败(仍有 stats)沿用下方行内横幅。 */}
+      {loading && !stats ? (
+        <div className="mt-4 flex items-center gap-2 text-[12px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          加载中…
         </div>
-      )}
+      ) : err && !stats ? (
+        <ErrorState error={err} onRetry={() => void load(0, startDate, endDate)} className="mt-4" />
+      ) : (
+        <>
+          {!!err && (
+            <div className="mt-3 flex items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              加载失败：{errMsg}
+            </div>
+          )}
 
       {/* 当前生效阈值(数智决策 P1-3 只读): 运行时改阈值需权限设计, 本轮只做可配+可见, 无写回 */}
       <section className="mt-3" data-testid="thresholds">
@@ -475,6 +490,8 @@ export default function DecisionLedger() {
         </div>
         {log?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{log.note}</p>}
       </section>
+        </>
+      )}
     </div>
   )
 }

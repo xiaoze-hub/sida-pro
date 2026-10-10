@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Activity, Loader2, Shield } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 
 /**
  * 我的域枢纽页(设计稿 v2.0 §4.3「模拟盘并入影子」): 影子账户 + 模拟盘 两 Tab。
@@ -11,8 +12,8 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  *
  * 旧路由 /paper-trading 由 App.tsx 重定向到 /shadow?tab=paper, 书签不失效。
  */
-const ShadowAccountPage = lazy(() => import('@/pages/ShadowAccount'))
-const PaperTradingPage = lazy(() => import('@/pages/PaperTrading'))
+const ShadowAccountPage = lazyWithRetry(() => import('@/pages/ShadowAccount'), 'shadow-account-page')
+const PaperTradingPage = lazyWithRetry(() => import('@/pages/PaperTrading'), 'paper-trading-page')
 
 const SHADOW_TABS: TabDef[] = [
   {

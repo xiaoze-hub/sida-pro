@@ -117,7 +117,9 @@ describe('fetchAPI 在途同键合并(single-flight)', () => {
     const r2 = fetchAPI('/market/phase')
     await expect(r1).rejects.toThrow('network-down')
     await expect(r2).rejects.toThrow('network-down')
-    expect(failMock).toHaveBeenCalledTimes(1) // 同一份在途 promise 广播给两个调用方
+    // 2026-10-10 加载韧性: GET 幂等请求失败会**自动重试一次** —— 同一份在途 promise 内共发
+    // 2 次真实请求(首次 + 重试), 两个调用方仍共享**同一份结果**(而不是各自再发一轮)。
+    expect(failMock).toHaveBeenCalledTimes(2)
 
     // 失败不写响应缓存 → 恢复后下一次调用必须重新真发
     const okMock = vi.fn(async () => okResponse({ n: 1 }))

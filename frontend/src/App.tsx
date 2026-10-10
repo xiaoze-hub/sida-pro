@@ -1,57 +1,60 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
 import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
 import { useI18n } from '@/hooks/useI18n'
 import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/api'
 // 2026-08-12 性能优化: 路由懒加载 — 17 个页面原本静态 import 打进单 bundle 1.2MB,
-// 点任意路由都要下载/解析整个应用。改为 React.lazy 按需加载, 首屏只下载登录页+当前页。
-const DashboardPage = lazy(() => import('@/pages/Dashboard'))
-const OpportunitiesPage = lazy(() => import('@/pages/Opportunities'))
+// 点任意路由都要下载/解析整个应用。改为按需加载, 首屏只下载登录页+当前页。
+// 2026-10-10 加载韧性: 统一走 lazyWithRetry —— 发版后旧页面点开已被删掉的 chunk(404)
+// 自动刷新一次自愈(sessionStorage 防刷新环), 不再要求用户手动刷新。
+const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboard-page')
+const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
-const DarkFundTopPage = lazy(() => import('@/pages/DarkFundTop'))
-const StocksPage = lazy(() => import('@/pages/Stocks'))
+const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
+const StocksPage = lazyWithRetry(() => import('@/pages/Stocks'), 'stocks-page')
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
 // 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
 // §4.3 补齐(2026-09-01): History/Reports/PaperTrading/PriceAlerts/Notifications/
 // ShadowAccount 已由各枢纽页(ReportsHub/ShadowHub/NotificationsHub)内部懒加载,
 // App.tsx 不再直接挂载, 避免首屏多拉 6 个 chunk。
-const AnalysisDetailPage = lazy(() => import('@/pages/AnalysisDetail'))
-const LoginPage = lazy(() => import('@/pages/Login'))
+const AnalysisDetailPage = lazyWithRetry(() => import('@/pages/AnalysisDetail'), 'analysis-detail-page')
+const LoginPage = lazyWithRetry(() => import('@/pages/Login'), 'login-page')
 // 个股工作台三合一(Task 2, 2026-09-13): 指数/板块详情页的 lazy 绑定已摘除 ——
 // /index/:symbol、/boards/:blockCode 改走 LegacyIndexRedirect。正文已由 Task 7 抽成
 // IndexBody(src/pages/workbench) / BoardBody(biz-ui .../workbench) 供工作台复用, 原页已删。
 // P1-1 (2026-09-10, 借鉴 OpenTerminal): 板块热力图 treemap 页
-const HeatmapPage = lazy(() => import('@/pages/Heatmap'))
+const HeatmapPage = lazyWithRetry(() => import('@/pages/Heatmap'), 'heatmap-page')
 // 题材情绪(2026-09-12): 收盘确认口径的题材×日情绪矩阵
-const ThemeMoodPage = lazy(() => import('@/pages/ThemeMood'))
-const StockWorkbenchPage = lazy(() => import('@/pages/StockWorkbench'))
-const ProfilePage = lazy(() => import('@/pages/Profile'))
+const ThemeMoodPage = lazyWithRetry(() => import('@/pages/ThemeMood'), 'theme-mood-page')
+const StockWorkbenchPage = lazyWithRetry(() => import('@/pages/StockWorkbench'), 'stock-workbench-page')
+const ProfilePage = lazyWithRetry(() => import('@/pages/Profile'), 'profile-page')
 // API Key 控制台(2026-09-16): 个人中心 → 密钥管理 + 智能体一键安装
-const ApiKeysPage = lazy(() => import('@/pages/ApiKeys'))
+const ApiKeysPage = lazyWithRetry(() => import('@/pages/ApiKeys'), 'api-keys-page')
 // 设计稿 v2.0 §4.3 (2026-09-01): 两个收纳枢纽页
 // 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页并入 /stocks/:symbol,
 // 旧路由 /forecast、/quote、/quote/:symbol、/l2 改走 LegacyForecastRedirect/LegacyL2Redirect。
 // 正文已搬入工作台(KlineChart 复用, L2 内容挪至「盘口资金」标签), 原页 Quote.tsx/L2Orderbook.tsx
 // 已于 2026-09-13 删除。
-const SystemPage = lazy(() => import('@/pages/System'))
-const SettingsHubPage = lazy(() => import('@/pages/SettingsHub'))
+const SystemPage = lazyWithRetry(() => import('@/pages/System'), 'system-page')
+const SettingsHubPage = lazyWithRetry(() => import('@/pages/SettingsHub'), 'settings-hub-page')
 // §4.3 补齐(2026-09-01 下午): 历史并入报告 / 模拟盘并入影子 / 提醒并入通知。
 // 这三项属第 1 块, 产物被同步事故冲掉后重建时派活清单漏列, 对照设计稿补做。
-const ReportsHubPage = lazy(() => import('@/pages/ReportsHub'))
-const ShadowHubPage = lazy(() => import('@/pages/ShadowHub'))
-const NotificationsHubPage = lazy(() => import('@/pages/NotificationsHub'))
+const ReportsHubPage = lazyWithRetry(() => import('@/pages/ReportsHub'), 'reports-hub-page')
+const ShadowHubPage = lazyWithRetry(() => import('@/pages/ShadowHub'), 'shadow-hub-page')
+const NotificationsHubPage = lazyWithRetry(() => import('@/pages/NotificationsHub'), 'notifications-hub-page')
 // 开发者文档(任务 2.1, 2026-09-16): /developers 公开可访问(未登录时走独立壳层)
-const DevelopersPage = lazy(() => import('@/pages/Developers'))
+const DevelopersPage = lazyWithRetry(() => import('@/pages/Developers'), 'developers-page')
 // 用户协议/隐私政策(合规落地, 2026-09-16): /terms 公开可访问
-const TermsPage = lazy(() => import('@/pages/Terms'))
-const TiersPage = lazy(() => import('@/pages/Tiers'))
-const FactorICPage = lazy(() => import('@/pages/FactorIC'))   // B9: 因子有效性(IC/样本外/参考值)   // P2-4: 公开档位对比(未登录可看)
+const TermsPage = lazyWithRetry(() => import('@/pages/Terms'), 'terms-page')
+const TiersPage = lazyWithRetry(() => import('@/pages/Tiers'), 'tiers-page')
+const FactorICPage = lazyWithRetry(() => import('@/pages/FactorIC'), 'factor-ic-page')   // B9: 因子有效性(IC/样本外/参考值)   // P2-4: 公开档位对比(未登录可看)
 // 官网落地页(2026-09-16): 未登录访问 / 时展示(对标 DeepSeek 开放平台风格)
-const LandingPage = lazy(() => import('@/pages/Landing'))
+const LandingPage = lazyWithRetry(() => import('@/pages/Landing'), 'landing-page')
 // Admin 管理后台(2026-09-16): owner 专属 — 用户/Key/用量/Pro 审核
-const AdminPage = lazy(() => import('@/pages/Admin'))
+const AdminPage = lazyWithRetry(() => import('@/pages/Admin'), 'admin-page')
 import LogsModal from '@panwatch/biz-ui/components/logs-modal'
 import AmbientBackground from '@panwatch/biz-ui/components/AmbientBackground'
 import NotificationBell from '@panwatch/biz-ui/components/notification-bell'

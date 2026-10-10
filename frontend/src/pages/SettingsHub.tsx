@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { HelpCircle, Loader2, Settings, ShieldCheck } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 
 /**
  * 设置枢纽页(设计稿 §4.3): 审计 + 帮助 收纳进「设置」。
@@ -12,9 +13,9 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  *
  * 旧路由 /audit、/help 由 App.tsx 重定向到 /settings?tab=xxx, 书签不失效。
  */
-const SettingsPage = lazy(() => import('@/pages/Settings'))
-const AuditPage = lazy(() => import('@/pages/Audit'))
-const HelpPage = lazy(() => import('@/pages/Help'))
+const SettingsPage = lazyWithRetry(() => import('@/pages/Settings'), 'settings-page')
+const AuditPage = lazyWithRetry(() => import('@/pages/Audit'), 'audit-page')
+const HelpPage = lazyWithRetry(() => import('@/pages/Help'), 'help-page')
 
 const SETTINGS_TABS: TabDef[] = [
   {

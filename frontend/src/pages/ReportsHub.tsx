@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Clock, FileText, Loader2 } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 
 /**
  * 投研枢纽页(设计稿 v2.0 §4.3「历史并入报告」): 报告 + 历史 两 Tab。
@@ -11,8 +12,8 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  *
  * 旧路由 /history 由 App.tsx 重定向到 /reports?tab=history, 书签不失效。
  */
-const ReportsPage = lazy(() => import('@/pages/Reports'))
-const HistoryPage = lazy(() => import('@/pages/History'))
+const ReportsPage = lazyWithRetry(() => import('@/pages/Reports'), 'reports-page')
+const HistoryPage = lazyWithRetry(() => import('@/pages/History'), 'history-page')
 
 const REPORTS_TABS: TabDef[] = [
   {
