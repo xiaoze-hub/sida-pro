@@ -1,3 +1,62 @@
+### fix-L2 快照回退 PG 事务隔离(生产实测暴露)（2026-10-11）
+
+生产实测(容器内 docker cp 探针跑生产真库)暴露两处只在 PG 才犯的毛病, 同批修复:
+
+- **事务 aborted 隔离**: 专用表 `l2_fund_snapshots` 未迁移时首条 SQL 报 `UndefinedTable`
+  → PG 事务进入 aborted 态, 同 session 上的 `seal_quality_samples` 回退查询抛
+  `InFailedSqlTransaction`, 回退全废(周末恒显"无数据")。改: 两个源各开**独立 session**,
+  不依赖 rollback。
+- **取最近一行"有真实值"的样本**: 旧写法取最新一行, 而最新一行可能恰为全 0(该次采样
+  没拿到 L2)→ 有落库却当无数据。改: 过滤 `SUM(COALESCE(col,0)) > 0` 取最近非 0 行
+  (仍按实际 ts 标注日期, 不冒充当日)。
+- **回归针**: `test_latest_snapshot_survives_aborted_first_query`(模拟首查失败 → 断言
+  seal 回退仍取到, 且两个源用两个独立 session)。
+
+### fix-L2 成品资金非交易时段回退收盘快照(0 不冒充)（2026-10-11）
+
+工作台 L2「L2 成品资金」/ 暗盘卡「主力净流入(L2·TQ)」读 TQ `get_more_info`
+**实时会话值**(Zjl_HB/TotalBVol/L2TicNum/L2OrderNum ...), 非交易时段 TQ 一律回 `0`
+—— 生产实测周末任意股票这些字段全为 `0.0`, 而 UI 未回退未标注, 显示
+"0万 平衡 / 逐笔0笔·委托0笔", 把 0 冒充真实值误导。
+
+- **新增** 迁移 187 `l2_fund_snapshots` 收盘快照表(金额=万元 / 量=股, 口径同 TQ)。
+- **新增** `src/core/l2_fund_snapshot.py`(纯核心层, B4.1): `capture_symbol/universe` 收盘
+  采样(**全 0 不落库**); `latest_snapshot()` 优先本表最近交易日行, 无则回退**现有落库**
+  `seal_quality_samples` 末行(带实际日期 as_of); 皆无 → `None`(由 web 层显式无数据)。
+- **改** `GET /api/quotes/{symbol}/more-info`: 实时有值 → `source:'live'`; 非交易时段 /
+  会话值全 0 → 回退快照并显式带 `source/as_of/note`("非交易时段·显示 2026-10-09 收盘值");
+  无快照 → `available:false` + "无数据(不冒充 0)"。**绝不返 0 当真实值**。
+- **接线** `src/bootstrap/startup.py`: 交易日 15:05 cron `l2-fund-snapshot` 采样落库。
+- **前端** `MoreInfoResponse` 增可选 `available/source/as_of/note`; L2Tab `L2FundSection`
+  回退/无数据时显式提示徽标。
+- **测试** `tests/test_l2_fund_fallback.py`(11 例): 三态(实时有值 / 全 0 回退快照 / 无快照
+  不冒充) + seal 源回退标注 + `latest_snapshot` 优先级。全 mock, 禁真网络。
+- **验收**: 同批 `pytest -k 'ladder or demon or limit or l2 or seal'` 280 passed + ruff +
+  `check_is_pg_scope.py` + 前端 `tsc -b` 全绿; 生产面板回退实测见报告。**不发版**。
+
+### fix-连板梯队数据自检+自动补数(limit_up_events 断档自愈)（2026-10-11）
+
+`limit_up_events`(连板梯队 15:05 后 finalized 读它的收盘态真值源)在 TQ 断链期
+(2026-10-08~09)停更 —— 写入方妖股因子 15:35 增量管线取数失败静默收场, 表停在
+`20260930`, 页面几天不更新无人发现(生产实测 `MAX(trade_date)=20260930`, 缺
+`20261008` / `20261009`)。
+
+- **新增** `src/core/ladder_freshness.py`(纯核心层, B4.1): `expected_latest_trading_date()`
+  按**真实交易日历**算期望最新交易日 —— 剔除日历把"调休补班周末"记为交易日的偏差
+  (实测 2026 各补班周六在 klines / market_breadth_daily / limit_up_events 三类表均无行,
+  A 股周末恒不开市; 不剔除会让节后首个工作日永久假告警并反复全市场重补);
+  `missing_trading_days()` 枚举缺失交易日(中秋 9-25 等假期不计缺口);
+  `backfill_missing()`(TQ 直连**只补缺失日**, 幂等) / `check()` / `guard()`;
+  `run_ladder_freshness_job()` 走作业框架(**`ok=False → failed`**, 不假装成功)。
+  空表不以"无缺口"冒充, 显式 `ok=False`。
+- **接线** `src/bootstrap/startup.py`: 新增每日 16:05(**含周末**)cron `ladder-freshness-guard`
+  —— 周末/节后一发现断档即自愈(期望日 = 上一真实交易日)。
+- **测试** `tests/test_ladder_freshness.py`(15 例): 期望日含周末/假期/补班周六; 缺口枚举;
+  有缺口才补(无缺口零副作用); 补完复检转绿; TQ 直连只补缺失日 + 重跑幂等(saved=0);
+  TQ 失败显式计数。全 mock / 临时库, 禁真网络。
+- **验收**: `pytest -k 'ladder or demon or limit or l2 or seal'`(CI 忽略项外) 280 passed
+  + ruff + `check_is_pg_scope.py` 全绿; 生产补数实测见下条同批。**不发版**。
+
 ### fix-单股 L2 接口无数据时裸 500 降级(P1)（2026-10-10）
 
 `GET /api/stocks/{symbol}/l2` 在通达信/TQ 网关不可用时**未捕获异常 → 裸 500**

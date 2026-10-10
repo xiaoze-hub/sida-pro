@@ -67,6 +67,13 @@ export interface MoreInfoResponse {
   zjl_hb: number | null
   raw: Record<string, string>
   quote_time: string | null
+  /** 数据来源: live(实时会话) / snapshot / seal_sample(收盘回退) / unavailable / session_closed */
+  available?: boolean
+  source?: string
+  /** 回退快照的数据日(YYYYMMDD); 仅 snapshot/seal_sample 源有 */
+  as_of?: string | null
+  /** 显式标注文案(非交易时段·显示 <日期> 收盘值 / 无数据, 不冒充 0) */
+  note?: string
 }
 
 export interface DarkFlowTqResponse {

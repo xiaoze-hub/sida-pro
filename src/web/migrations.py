@@ -5051,6 +5051,50 @@ def _m186_war_report_daily_table(conn: Connection) -> None:
     WarReportDaily.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m187_l2_fund_snapshots(conn: Connection) -> None:
+    """L2 成品资金收盘快照表 l2_fund_snapshots(2026-10-11 P1 数据断档修复)。
+
+    背景: 工作台 L2「L2 成品资金」/ 暗盘卡「主力净流入(L2·TQ)」读 TQ
+    `get_more_info` **实时会话值**(Zjl_HB/TotalBVol/L2TicNum/L2OrderNum ...), 非交易
+    时段 TQ 一律回 0 —— UI 未回退未标注, 周末显示"0万 平衡 / 逐笔0笔·委托0笔",
+    把 0 冒充真实值误导。
+
+    修复: 交易日收盘后(15:05)采样落本表(全 0 不落); 非交易时段/会话值全 0 时 web 层
+    回退读本表最近交易日行, 并显式标注 as_of; 无快照则显式 available:false。
+
+    金额类(zjl_hb/zjl)单位=万元, 量类=股, 与 TQ get_more_info 口径一致。
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS l2_fund_snapshots (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                zjl_hb DOUBLE PRECISION,
+                zjl DOUBLE PRECISION,
+                total_buy_vol DOUBLE PRECISION,
+                total_sell_vol DOUBLE PRECISION,
+                cancel_buy DOUBLE PRECISION,
+                cancel_sell DOUBLE PRECISION,
+                l2_tick_num DOUBLE PRECISION,
+                l2_order_num DOUBLE PRECISION,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (symbol, market, trade_date)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "l2_fund_snapshots"):
+        _create_index_if_missing(
+            conn,
+            "ix_l2_fund_snapshots_date",
+            "CREATE INDEX ix_l2_fund_snapshots_date "
+            "ON l2_fund_snapshots (trade_date DESC)",
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5190,6 +5234,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(185, "dde_minute_flow_table", _m185_dde_minute_flow_table),
     # 主力资金战报日快照(2026-10-10 规格 §4.4): 当日主力动向汇总页的读快照底座。
     Migration(186, "war_report_daily_table", _m186_war_report_daily_table),
+    Migration(187, "l2_fund_snapshots", _m187_l2_fund_snapshots),
 )
 
 
