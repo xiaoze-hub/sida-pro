@@ -348,6 +348,28 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"妖股因子增量管线注册失败: {e}")
 
+        # 连板梯队数据自检 + 自愈(2026-10-11 P1 断档修复): 每日 16:05(含周末)
+        # limit_up_events 是 /ladder 收盘态真值源; TQ 断链期 15:35 管线静默失败 →
+        # 表停更几天无人发现。本作业比对最新交易日 vs 期望交易日, 缺则 TQ 直连补数;
+        # 仍缺 → 作业框架按 ok=False 判 failed(不假装成功)。放 16:05 保证在 15:35 管线之后。
+        try:
+            from src.core.ladder_freshness import run_ladder_freshness_job
+
+            rt.scheduler.scheduler.add_job(
+                run_ladder_freshness_job,
+                "cron",
+                hour=16,
+                minute=5,
+                id="ladder-freshness-guard",
+                name="连板梯队数据自检",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("连板梯队数据自检已注册(每日 16:05)")
+        except Exception as e:
+            logger.error(f"连板梯队数据自检注册失败: {e}")
+
         # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
         # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
         try:

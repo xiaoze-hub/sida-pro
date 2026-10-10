@@ -1,3 +1,26 @@
+### fix-连板梯队数据自检+自动补数(limit_up_events 断档自愈)（2026-10-11）
+
+`limit_up_events`(连板梯队 15:05 后 finalized 读它的收盘态真值源)在 TQ 断链期
+(2026-10-08~09)停更 —— 写入方妖股因子 15:35 增量管线取数失败静默收场, 表停在
+`20260930`, 页面几天不更新无人发现(生产实测 `MAX(trade_date)=20260930`, 缺
+`20261008` / `20261009`)。
+
+- **新增** `src/core/ladder_freshness.py`(纯核心层, B4.1): `expected_latest_trading_date()`
+  按**真实交易日历**算期望最新交易日 —— 剔除日历把"调休补班周末"记为交易日的偏差
+  (实测 2026 各补班周六在 klines / market_breadth_daily / limit_up_events 三类表均无行,
+  A 股周末恒不开市; 不剔除会让节后首个工作日永久假告警并反复全市场重补);
+  `missing_trading_days()` 枚举缺失交易日(中秋 9-25 等假期不计缺口);
+  `backfill_missing()`(TQ 直连**只补缺失日**, 幂等) / `check()` / `guard()`;
+  `run_ladder_freshness_job()` 走作业框架(**`ok=False → failed`**, 不假装成功)。
+  空表不以"无缺口"冒充, 显式 `ok=False`。
+- **接线** `src/bootstrap/startup.py`: 新增每日 16:05(**含周末**)cron `ladder-freshness-guard`
+  —— 周末/节后一发现断档即自愈(期望日 = 上一真实交易日)。
+- **测试** `tests/test_ladder_freshness.py`(15 例): 期望日含周末/假期/补班周六; 缺口枚举;
+  有缺口才补(无缺口零副作用); 补完复检转绿; TQ 直连只补缺失日 + 重跑幂等(saved=0);
+  TQ 失败显式计数。全 mock / 临时库, 禁真网络。
+- **验收**: `pytest -k 'ladder or demon or limit or l2 or seal'`(CI 忽略项外) 280 passed
+  + ruff + `check_is_pg_scope.py` 全绿; 生产补数实测见下条同批。**不发版**。
+
 ### fix-单股 L2 接口无数据时裸 500 降级(P1)（2026-10-10）
 
 `GET /api/stocks/{symbol}/l2` 在通达信/TQ 网关不可用时**未捕获异常 → 裸 500**
