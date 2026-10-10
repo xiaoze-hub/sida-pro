@@ -42,6 +42,7 @@ from src.web.api import (
     darkflow,
     decision_pioneer,
     pioneer_indicators,
+    war_report,
     decision,
     resonance,
     stock_pool,
@@ -651,6 +652,14 @@ app.include_router(
     pioneer_indicators.router,
     prefix="/api/indicators",
     tags=["pioneer-indicators"],
+    dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
+)
+# 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 净额变化 +
+# 拆单/对倒计数)。同属数智决策档(pro, view_forecast); 缺源显式降级, 不编造。
+app.include_router(
+    war_report.router,
+    prefix="/api/war-report",
+    tags=["war-report"],
     dependencies=protected + [Depends(require_perm(PERM_VIEW_FORECAST))],
 )
 # 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排, 消歧不合并。

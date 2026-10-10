@@ -125,6 +125,20 @@ class ReportScheduler:
                 except Exception as e:  # noqa: BLE001
                     logger.exception("[报告] 暗盘资金TOP异常: %s", e)
 
+                # 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM +
+                # 行业分布 SUPAMO + 个股净额变化 + 拆单/对倒计数)落 war_report_daily。
+                # 依赖全市场 DDE(与暗盘 TOP 同链但独立 try, 互不影响)。
+                try:
+                    from src.core.war_report import run_war_report_job
+
+                    wr_res = await asyncio.to_thread(run_war_report_job)
+                    logger.info(
+                        "[报告] 主力资金战报: %s",
+                        wr_res if wr_res.get("ok") else wr_res.get("reason", "跳过"),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("[报告] 主力资金战报异常: %s", e)
+
             result = await asyncio.to_thread(
                 _generate_once_in_worker, report_type
             )

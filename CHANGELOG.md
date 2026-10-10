@@ -1,3 +1,29 @@
+### feat-主力资金战报(规格§4.4 当日主力动向汇总页)（2026-10-10）
+
+决策先锋辅助模块『主力资金战报』(规格 §4.4)。汇总当日主力动向: 全市场大单净流入
+TOP/BOTTOM + 行业分布 + 个股主力净额变化 + 拆单/对倒计数。任一子块缺源**显式无数据**,
+绝不编造/回 0。
+
+- **新表 `war_report_daily`**(migration v186, 唯一入口 `src/web/migrations.py`): 按
+  (snapshot_date, market) 存战报 payload; ORM `src/db/models.py::WarReportDaily`。
+- **构建 `src/core/war_report.py`**: `build_daily_war_report` 复用 `scan_dde_universe`
+  (thsdk DDE 全市场, 200/批) → TOP/BOTTOM; 个股净额变化读 `dde_minute_flow` 采样区间增量
+  (无采样 → None); 行业分布走 TQ SUPAMO(`tdx_boards.sector_items`+`board_quotes`, 亿元);
+  拆单/对倒走委托号级 `.tck`(无源 → 显式不可得; 对倒需账户信息 → 恒不可识别)。
+  `run_war_report_job` 落库, 数据源不可用**不落假快照**(ok=False)。
+- **API `src/web/api/war_report.py`**: `GET /api/war-report/daily`(读最新快照, 无 → available:false
+  +note) + `POST /api/war-report/refresh`(owner, 同步落库)。数智决策档(view_forecast),
+  注册于 `src/web/app.py`。
+- **调度**: 盘后报告流水线(`src/core/report_scheduler.py`)在暗盘 TOP 后追加战报生成。
+- **前端**: `@panwatch/api` 新增 `warReportApi`; 新页 `frontend/src/pages/WarReport.tsx`
+  (TOP/BOTTOM 表 + 行业分布 + 拆单对倒块, 缺源显式「无数据」, 口径徽章可见), 路由 `/war-report`
+  挂在「机会」组(view_forecast)。
+- **测试**: 后端 `tests/test_war_report.py`(字段契约 + 缺源降级 + 落库 + 端点契约);
+  前端 `frontend/tests/components/war-report.test.tsx`(渲染 + 缺源显式 + 无快照态)。
+- **验收**: 后端 `pytest -k 'minute or dde or war or breakthrough'`(161 例) + ruff +
+  `check_is_pg_scope.py` + `check_migrations.py`; 前端 vitest 全量(963 例) + tsc(+tests) +
+  `check_ui_rules.mjs` 全绿。**不发版**。
+
 ### feat-分时突破逐分钟DDE大单序列落库（解锁「突」信号）（2026-10-10）
 
 决策先锋 P3 补差 A(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。此前 `minute_breakthrough`

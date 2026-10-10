@@ -14,6 +14,8 @@ const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboar
 const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
+// 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
+const WarReportPage = lazyWithRetry(() => import('@/pages/WarReport'), 'war-report-page')
 const StocksPage = lazyWithRetry(() => import('@/pages/Stocks'), 'stocks-page')
 // §4.3: Settings/Agents/DataSources/Help/Audit/Forecast 已不再由 App 直接挂载 —
 // 分别由 SettingsHub / System / Quote 三个枢纽页内部懒加载, 避免首屏多拉 6 个 chunk。
@@ -92,6 +94,8 @@ const navItems = [
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
+  // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 拆单/对倒)
+  { to: '/war-report', icon: TrendingUp, labelKey: 'nav.warReport', perm: 'view_forecast' },
   // 口径对照(2026-09-18): 明盘 L2 / 暗盘逐笔 / 东财四档 三口径并排; 属 pro 档数据 → view_forecast
   { to: '/caliber-compare', icon: Activity, labelKey: 'nav.caliberCompare', perm: 'view_forecast' },
   // 决策账本(2026-09-18, B6 前端 / 设计稿 v3.0 §六 新增"决策"一级入口): 信号→结果的账。
@@ -127,7 +131,7 @@ const navItems = [
 //    没被任何分组 filter 到, 桌面侧栏里根本看不到**(只能靠 URL 或移动端"更多") —— 这是真 bug。
 const desktopNavGroups = [
   { key: 'market', labelKey: 'nav.stocks', items: navItems.filter(n => ['/', '/stocks/000001?type=index', '/heatmap', '/theme-mood'].includes(n.to)) },
-  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top'].includes(n.to)) },
+  { key: 'opportunity', labelKey: 'nav.opportunities', items: navItems.filter(n => ['/opportunities', '/dark-fund-top', '/war-report'].includes(n.to)) },
   // 决策域: 决策账本(信号→结果的账) + 口径对照(三源消歧)。模拟盘/影子账仍留在「我的」——
   // 它们是**账户视图**(我持有/我模拟), 不是决策证据页, 故不并入(与设计稿的差异, 已在台账说明)。
   { key: 'decision', labelKey: 'nav.decision', items: navItems.filter(n => ['/decision-ledger', '/caliber-compare', '/factor-ic'].includes(n.to)) },
@@ -641,6 +645,7 @@ function App() {
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
               <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
+              <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />
               {/* 个股工作台三合一(Task 2, 2026-09-13): 行情页/盘口页退役 →
                   旧路由 redirect 到 /stocks/:symbol(工作台), 内容并入「盘口资金/预测」等标签 */}
               <Route path="/forecast" element={<LegacyForecastRedirect />} />
