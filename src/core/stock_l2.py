@@ -102,14 +102,36 @@ def fetch_more(symbol: str) -> dict:
     }
 
 
-def fetch_stock_l2(symbol: str) -> dict:
-    """单股 L2 汇总(snapshot+more_info); 两源都空 → {}。"""
-    snap = fetch_snapshot(symbol)
-    more = fetch_more(symbol)
+def fetch_stock_l2_ex(symbol: str) -> tuple[dict, str | None]:
+    """单股 L2 汇总(snapshot+more_info) + 降级原因 —— 源级永不抛。
+
+    铁律『数据缺失显式降级、永不 500』: 上游(TQ 网关/通达信源)不可用、
+    非交易日无数据、任一 RPC 抛异常 —— 一律不抛, 返回
+    `({}, reason)`(两源皆空)或 `(部分数据, reason)`, 由 API 层转
+    200 + `available:false` + `note`(真实原因)。**不吞异常返假数据**。
+    """
+    snap: dict = {}
+    more: dict = {}
+    reason: str | None = None
+    try:
+        snap = fetch_snapshot(symbol)
+    except Exception as e:  # noqa: BLE001  源不可用不 500(与 tdx_fundamental 同约定)
+        logger.warning("L2 snapshot 取数失败 %s: %s", symbol, e)
+        reason = f"L2 snapshot 源不可用({type(e).__name__}: {e})"
+    try:
+        more = fetch_more(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("L2 more_info 取数失败 %s: %s", symbol, e)
+        reason = reason or f"L2 more_info 源不可用({type(e).__name__}: {e})"
     if not snap and not more:
-        return {}
+        return {}, reason or "无L2数据(通达信源不可用)"
     return {"symbol": symbol, "as_of": datetime.now(_CST).isoformat(timespec="seconds"),
-            "snapshot": snap, "more": more}
+            "snapshot": snap, "more": more}, reason
+
+
+def fetch_stock_l2(symbol: str) -> dict:
+    """单股 L2 汇总(snapshot+more_info); 两源都空/源不可用 → {}(不抛)。"""
+    return fetch_stock_l2_ex(symbol)[0]
 
 
 def fetch_stock_l2_batch(symbols: list[str], concurrency: int = 8) -> dict[str, dict]:

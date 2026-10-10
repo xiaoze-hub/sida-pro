@@ -1,3 +1,28 @@
+### fix-单股 L2 接口无数据时裸 500 降级(P1)（2026-10-10）
+
+`GET /api/stocks/{symbol}/l2` 在通达信/TQ 网关不可用时**未捕获异常 → 裸 500**
+(Starlette `Internal Server Error`, 连 JSON envelope 都没走), 拖垮工作台/个股页/行情页
+共 4 个路由(页面 L2 区全 `--` + spinner 常转; 周六全天复现)。
+
+- **根因**: `src/core/stock_l2.py::fetch_stock_l2` 直接调 `_rpc_snap`/`_rpc_more`,
+  二者经 `tq_rpc` 在网关不可达时抛 `TqUnavailable`/`RuntimeError`/`httpx` 异常, 无
+  try/except 外泄到路由。同族 `src/core/tdx_fundamental.py` 已在源级 try/except 降级,
+  本模块是遗漏。
+- **修**: 新增 `fetch_stock_l2_ex() -> (data, reason)` —— 源级**永不抛**: 任一 RPC 异常
+  捕获后记 warning + reason, 返回 `({}, reason)`(两源皆空)或 `(部分数据, reason)`。
+  `fetch_stock_l2` 改为其薄封装(批量入口 `fetch_stock_l2_batch` 同样不再反抛主线程)。
+  路由 `get_stock_l2` 转 200 + `available:false` + `note`(真实原因), 契约与同族
+  `/api/stocks/{symbol}/dark-flow-tq` 的 `available/note` 一致; 成功加 `available:true`。
+  **不吞异常返假数据**。
+- **同族核查**: `/dark-flow-tq`(文件源 `md_dark_flow_tq` 已捕获 OSError/ValueError)、
+  `/orderbook-ob`(`_run_guarded` + `_degraded`)均已显式降级, 无同款未捕获异常;
+  `/seal-quality` 已有 try/except(返 500 JSON + detail, 非裸 500)。
+- **测试**: 新增 `tests/test_stock_l2_degrade.py`(10 例: 无数据/非交易日空载荷/上游异常
+  三态核心层永不抛 + 端点级 200 回归针 + 部分缺失 note + 成功路径)。全 mock 禁真网络。
+- **验收**: `pytest -k 'l2 or dark or orderbook or stock' -m 'not network'` 289 passed +
+  ruff + `check_is_pg_scope.py` 全绿(network 标记的 thsdk 用例本地无 thsdk, 基线同样失败)。
+  **不发版**。
+
 ### feat-主力资金战报(规格§4.4 当日主力动向汇总页)（2026-10-10）
 
 ### fix-聚宝盆缓存包装下沉 web 层(B4.1 门禁红)

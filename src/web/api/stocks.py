@@ -192,13 +192,17 @@ def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Sessio
     from src.core.hv_api_log import log_high_value_call
 
     log_high_value_call(db, user, "l2", symbol)
-    from src.core.stock_l2 import fetch_stock_l2
+    from src.core.stock_l2 import fetch_stock_l2_ex
 
-    data = fetch_stock_l2(symbol)
+    # 铁律『数据缺失显式降级、永不 500』(2026-10-10 P1): 上游(TQ 网关)不可用 /
+    # 非交易日无数据 / RPC 抛异常 → 200 + available:false + note(真实原因),
+    # 不裸 500。契约与同族 /api/stocks/{symbol}/dark-flow-tq 一致。
+    data, reason = fetch_stock_l2_ex(symbol)
     if not data:
-        return {"symbol": symbol, "snapshot": {}, "more": {}, "as_of": None,
-                "note": "无L2数据(通达信源不可用)"}
-    return {**data, "note": None}
+        return {"symbol": symbol, "available": False, "snapshot": {}, "more": {},
+                "as_of": None, "note": reason or "无L2数据(通达信源不可用)"}
+    # 部分源缺失(如更多信息源异常)时把真实原因带到 note; 两源皆正常 → reason None
+    return {**data, "available": True, "note": reason}
 
 
 @router.get("/{symbol}/blocks")
