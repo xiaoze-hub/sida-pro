@@ -1,3 +1,20 @@
+### feat-聚宝盆选股(暗盘流入+活跃度>6+G区G信号+问财)（2026-10-10）
+
+决策先锋规格 §4.2 官方选股流程落地(基准 `docs/decision-pioneer-spec.md:16`)。**逐条件 AND** 联合筛选:
+① 暗盘资金流入 ② AI 机构活跃度 > 6(> 12 标「更佳」) ③ GS 在 G 区且出现 G 信号 ④ 问财关键词(现有 wencai 链)。
+
+- **新增 `src/core/jbp_pool.py`**: 纯函数 `evaluate_one` + `screen`(取数封装可 monkeypatch)。
+  输出**逐条件通过/未过明细**(证据非建议, 每条件带 status ∈ pass/fail/degraded/na + evidence);
+  **任一必需条件缺数据 → 显式降级、该股不出池**(不编造); **问财源不可用 → 问财条件 degraded、
+  全池不出 + note**(不静默放宽); 活跃度 >12 标 `better`。结果走 `src.web.cache.biz_cache`(TTL 60s)。
+- **API `src/web/api/stock_pool.py`**: `POST /api/stock-pool/jbp`(数智决策档, 入参 symbols + 可选 wencai_keywords)。
+- **UI**: 新 biz-ui 组件 `JbpPoolTable`(Opportunities 选股工具新增「聚宝盆」tab), 表格式逐条件通过/未过/降级
+  + 入池态, 字阶 10-12px, 复用现有选股池表格惯例(不卡片堆砌)。
+- **测试**(禁真网络): 后端 `tests/test_jbp_pool.py`(逐条件明细 / 缺数据降级不出池 / 问财降级 / 缓存命中 /
+  API 契约 / 非法代码); 前端 `tests/components/jbp-pool-table.test.tsx`(逐条件渲染 / 降级 / 问财横幅)。
+- 无新表、不发版。验收: 后端 `pytest -k 'activity or pool or jbp or market_scan'` + ruff + `check_is_pg_scope.py`;
+  前端 vitest 全量 + tsc + UI-RULES 全绿。
+
 ### feat-AI机构活跃度口径核对(7因子留档) + >12更佳档（2026-10-10）
 
 决策先锋规格 §3 核对(基准 `docs/decision-pioneer-spec.md:15`)。公开功能解析资料记 AI 机构活跃度为

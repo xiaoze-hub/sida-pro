@@ -29,6 +29,7 @@ import StockHoverPreview, { type HoverPreviewData } from '@panwatch/biz-ui/compo
 import FactorWeightsPanel from '@/components/FactorWeightsPanel'
 import SignalScoreShareCard from '@/components/SignalScoreShareCard'
 import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
+import JbpPoolTable from '@panwatch/biz-ui/components/JbpPoolTable'
 import AuctionAnomalyTab from '@panwatch/biz-ui/components/AuctionAnomalyTab'
 import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
@@ -44,7 +45,7 @@ import SignalChip, { type SignalStrength, type SignalTone } from '@panwatch/biz-
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
 type RiskFilter = 'all' | 'low' | 'medium' | 'high'
-type ToolTab = 'resonance' | 'strategy' | 'tdx' | 'wencai' | 'stockpool'
+type ToolTab = 'resonance' | 'strategy' | 'tdx' | 'wencai' | 'stockpool' | 'jbp'
 
 type StockPoolRow = {
   symbol: string
@@ -1414,6 +1415,7 @@ export default function OpportunitiesPage() {
             <TabsTrigger value="tdx">问小达</TabsTrigger>
             <TabsTrigger value="wencai">问财</TabsTrigger>
             <TabsTrigger value="stockpool">选股池</TabsTrigger>
+            <TabsTrigger value="jbp">聚宝盆</TabsTrigger>
           </TabsList>
           {/* 共振查询(2026-08-22): 一句输入 → 问小达+问财并发 → 策略库精筛 → 共振排序 */}
           <TabsContent value="resonance">
@@ -1926,6 +1928,9 @@ export default function OpportunitiesPage() {
             ) : (
               <div className="mt-2 text-[11px] text-muted-foreground">输入代码后点「扫描共振」查看结果</div>
             )}
+          </TabsContent>
+          <TabsContent value="jbp">
+            <JbpPoolTable embedded />
           </TabsContent>
         </Tabs>
       </div>
