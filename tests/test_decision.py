@@ -33,6 +33,12 @@ def test_endpoint_never_500(monkeypatch):
         return {"symbol": symbol, "verdict": "看看", "reason": "看看: 测试", "phase": "分歧",
                 "row": 3, "parts": {}}
 
+    # 2026-10-10 冗余设计: /decision 现在缓存优先。清空 decision_cache 保证本用例
+    # 走"miss→算路"分支(否则可能命中别处留下的缓存行 → 不触发 decide → 断言失真)。
+    from src.core import decision_cache as _dc
+
+    _dc.clear_decision_cache()
+
     app = FastAPI()
     app.include_router(mod.router, prefix="/d")
     # 2026-09-18: /d/{symbol} 现在强制鉴权(Depends(get_current_user) + enforce_perm),

@@ -11,7 +11,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from src.web.api._scope import scoped
@@ -89,15 +89,69 @@ async def get_decision(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """三信号合成决策。永不 500: 算不出就看看 + 理由。"""
+    """三信号合成决策。永不 500: 算不出就看看 + 理由。
+
+    冗余设计(2026-10-10): **缓存优先** —— `decision_cache` 表存**全局基底**(盘后批算
+    或端上短 TTL 写入)。命中直返, 免重复现算; 用户维度(自选/持仓/风险偏好)在**读取时**
+    用 `apply_user_overlay` 叠加, 不污染全局缓存行。响应带 `cached` / `computed_at`
+    语义字段 —— **不用缓存冒充实时**(`computed_at` 即该结论的计算时刻)。
+    """
     from src.core.permissions import PERM_VIEW_FORECAST, enforce_perm
 
     enforce_perm(user, PERM_VIEW_FORECAST, db)
-    from src.core.decision import decide
+    from src.core import decision_cache
 
+    mkt = (market or "CN").upper()
     ctx = _build_user_context(db, user, symbol, market)
+
+    # ① 缓存优先(预落库基底 / 端上 TTL 同表): 命中直接返, 不重算。
+    rec = await asyncio.to_thread(decision_cache.get_cached_decision, symbol, mkt)
+    if rec is not None:
+        out = decision_cache.apply_user_overlay(rec["payload"], ctx)
+        out["cached"] = True
+        out["computed_at"] = rec["computed_at"]
+        out["cache_source"] = rec["source"]
+        return out
+
+    # ② miss: 算**全局基底**(无用户上下文) → 落库(短 TTL) → 读取时叠加个性化。
     try:
-        return await asyncio.to_thread(decide, symbol, market, 120, ctx)
+        base = await asyncio.to_thread(decision_cache.compute_base, symbol, mkt, 120)
     except Exception as e:  # noqa: BLE001
         logger.warning("decision endpoint %s failed: %s", symbol, e)
         raise HTTPException(500, f"决策计算失败({symbol})")
+    written = await asyncio.to_thread(
+        decision_cache.put_cached_decision, symbol, mkt, base,
+        decision_cache.DECISION_TTL_S, decision_cache.SOURCE_TTL,
+    )
+    out = decision_cache.apply_user_overlay(base, ctx)
+    out["cached"] = False
+    out["computed_at"] = written or decision_cache.iso_utc(decision_cache.now_utc_naive())
+    out["cache_source"] = decision_cache.SOURCE_TTL
+    return out
+
+
+@router.post("/precompute")
+def trigger_precompute(
+    limit: int | None = Query(None, ge=1, le=2000),
+    user: User = Depends(get_current_user),
+):
+    """手动触发盘后批算(自选/持仓标的预落库)。后台线程执行, 立即返回。
+
+    2026-10-10 冗余设计: 平时由 `DecisionPrecomputeScheduler`(工作日 15:45)自动跑,
+    本端点供运维/验证手动补跑。仅 owner/admin 可用(全库批算较重)。
+    """
+    if str(getattr(user, "role", "") or "").lower() not in ("owner", "admin"):
+        raise HTTPException(403, "仅 owner/admin 可触发决策预落库")
+
+    import threading
+
+    from src.core import decision_precompute
+
+    def _runner() -> None:
+        try:
+            decision_precompute.run_precompute_job()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("决策预落库手动触发失败: %s", e)
+
+    threading.Thread(target=_runner, name="decision-precompute-manual", daemon=True).start()
+    return {"started": True, "limit": limit}

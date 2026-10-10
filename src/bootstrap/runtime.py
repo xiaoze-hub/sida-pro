@@ -27,6 +27,7 @@ from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
+from src.core.decision_precompute import DecisionPrecomputeScheduler
 from src.core.scheduler import AgentScheduler
 from src.models.market import MarketCode
 from src.web.database import SessionLocal
@@ -66,6 +67,10 @@ tq_formula_signal_scheduler: TqFormulaSignalScheduler | None = None
 # 市场广度日序列(2026-09-25): 每交易日 18:40 从 PG klines 自算每日涨跌家数与
 # 六指标(ADL/ADR/ARMS/BTI/MCL/STIX)+情绪温度。与 TQ 类调度器错开, 不抢客户端。
 market_breadth_scheduler: MarketBreadthScheduler | None = None
+
+# 决策合成预落库(2026-10-10 冗余设计): 每工作日 15:45 对全库自选∪持仓标的批算决策基底
+# 落 decision_cache, 让 /api/decision/{symbol} 盘后/次日盘前命中缓存(免重复现算)。
+decision_precompute_scheduler: DecisionPrecomputeScheduler | None = None
 
 # 2026-08-17 加股 60s 快速 backfill:
 # APScheduler 跑在它自己的后台线程(没 asyncio loop),

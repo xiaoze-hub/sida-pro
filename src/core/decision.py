@@ -211,6 +211,16 @@ def _position_note(cost: Any, pnl_pct: Optional[float]) -> str:
     return f"已持仓：持仓成本 {cost:.2f} / 浮盈 {sign}{pnl_pct:.2f}%"
 
 
+def personalize(out: dict, user_context: dict | None) -> dict:
+    """公开入口: 对(可能是预落库的)全局基底施加用户个性化透明微调(2026-10-10 冗余设计)。
+
+    即 `_personalize` 的公开别名 —— 供 `decision_cache.apply_user_overlay` 在不 import
+    私有名的前提下复用同一套个性化口径(单一事实来源, 不复制逻辑)。**原地改 out**,
+    调用方需先深拷贝(缓存层负责)。
+    """
+    return _personalize(out, user_context)
+
+
 def _parts_text(trend, activity, fund_net) -> dict:
     return {
         "trend": trend or "无数据",
@@ -246,6 +256,16 @@ def _two_dim_reason(verdict, trend, activity, activity_prev) -> str:
             s += "(较前日翻倍)"
         bits.append(s)
     return f"{verdict}: {'、'.join(bits)}；{FUND_MISSING_NOTE_NON_CN}, 仅趋势×活跃度双维"
+
+
+def _last_bar_close(bars: list[dict]) -> Optional[float]:
+    """末根收盘价(None 安全, 不编造)。供预落库基底携带 last_close 做读取时浮盈。"""
+    try:
+        last = bars[-1]
+        close = last.get("close") if isinstance(last, dict) else getattr(last, "close", None)
+        return float(close) if close is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _attach_last_close(user_context: dict | None, bars: list[dict]) -> dict | None:
@@ -294,7 +314,7 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
         if not bars:
             out = {"symbol": symbol, "verdict": "看看",
                    "reason": "看看: 无 K 线数据, 先别动手", "phase": "无", "row": 0,
-                   "parts": _parts_text(None, None, None)}
+                   "parts": _parts_text(None, None, None), "last_close": None}
             return _mark_non_cn(out, mkt)
         trend = trend_label(eval_gs(bars))
         act = eval_activity(bars)
@@ -318,10 +338,13 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
                 fund_net = None
             out = synthesize(trend, activity, activity_prev, fund_net, None, ctx)
         out["symbol"] = symbol
+        # 末根收盘(供预落库后**读取时**算持仓浮盈 —— 缓存层把全局基底与 last_close 一起存)。
+        out["last_close"] = _last_bar_close(bars)
         return out
     except Exception as e:  # noqa: BLE001 - 决策口永不 500
         logger.warning("decision %s failed: %s", symbol, e)
         out = {"symbol": symbol, "verdict": "看看",
                "reason": f"看看: 计算失败({type(e).__name__}), 先别动手",
-               "phase": "无", "row": 0, "parts": _parts_text(None, None, None)}
+               "phase": "无", "row": 0, "parts": _parts_text(None, None, None),
+               "last_close": None}
         return _mark_non_cn(out, mkt)

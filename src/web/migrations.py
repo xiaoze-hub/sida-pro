@@ -4968,6 +4968,45 @@ def _m182_theme_mood_settled_at(conn: Connection) -> None:
     )
 
 
+def _m183_decision_cache(conn: Connection) -> None:
+    """decision_cache 表(2026-10-10 冗余设计): /api/decision/{symbol} 预落库 + TTL 缓存。
+
+    为什么需要: `/decision/{symbol}` 是**实时计算**端点 —— 每次现拉 120 天 K 线 + 明/暗盘
+    资金算三信号(慢接口, 前端 SDK 显式放宽到 30s 超时)。首屏/工作台反复请求会重复算。
+    落库后: 盘后批算命中直返(免重算), 非预热标的走短 TTL(盘中同标的不重复算)。
+
+    **只存全局基底**(不含个性化): 自选/持仓/风险偏好由 API 层在**读取时**叠加,
+    避免按用户维度爆炸(4 账号并存)。user_id 隔离红线不受影响 —— 基底与用户无关。
+
+    诚实语义: payload 里含 `last_close`(供读取时算浮盈); 响应另带 `computed_at`/`cached`,
+    由 API 层注入(**不写进 payload**, 因为 payload 是"计算时刻的数据快照")。
+
+    字段:
+      symbol TEXT NOT NULL / market TEXT NOT NULL  (联合主键, 双方言)
+      computed_at TIMESTAMP NOT NULL   (naive UTC, 与 summary_cache 同口径)
+      ttl_s INTEGER NOT NULL           (该行的有效秒数; 过期即视为 miss → 重算)
+      last_close REAL                  (末根收盘, 供个性化浮盈; 缺则 NULL, 不编造)
+      source TEXT                      (precompute / ttl, 供可观测)
+      payload TEXT NOT NULL            (JSON 全局基底, 上限防爆)
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS decision_cache (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                computed_at TIMESTAMP NOT NULL,
+                ttl_s INTEGER NOT NULL,
+                last_close DOUBLE PRECISION,
+                source TEXT DEFAULT '',
+                payload TEXT NOT NULL,
+                PRIMARY KEY (symbol, market)
+            )
+            """
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5098,6 +5137,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(181, "img_orderbook_frames", _m181_img_orderbook_frames),
     # 题材情绪收盘定型(2026-10-08): 盘中实时刷新 + 收盘 15:05 定型(settled_at)
     Migration(182, "theme_mood_settled_at", _m182_theme_mood_settled_at),
+    # 决策合成预落库 + TTL 缓存(2026-10-10 冗余设计): /decision/{symbol} 免重复现算
+    Migration(183, "decision_cache", _m183_decision_cache),
 )
 
 
