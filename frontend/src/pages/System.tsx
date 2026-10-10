@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Bot, Database, ListChecks, Loader2, ShieldAlert } from 'lucide-react'
 
 import TabbedPage, { type TabDef } from '@/components/TabbedPage'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 
 /**
  * 系统二级页(设计稿 §4.3): Agent + 数据源 收纳进「系统」。
@@ -11,10 +12,10 @@ import TabbedPage, { type TabDef } from '@/components/TabbedPage'
  * 旧路由 /agents、/datasources 由 App.tsx 重定向到 /system?tab=xxx, 书签不失效。
  * KI-018(2026-09-09): 增「错误」页签消费 GET /api/logs/errors(owner)。
  */
-const AgentsPage = lazy(() => import('@/pages/Agents'))
-const DataSourcesPage = lazy(() => import('@/pages/DataSources'))
-const ErrorLogPage = lazy(() => import('@/pages/ErrorLog'))
-const JobPanelPage = lazy(() => import('@/components/JobPanel').then(m => ({ default: m.JobPanel })))
+const AgentsPage = lazyWithRetry(() => import('@/pages/Agents'), 'agents-page')
+const DataSourcesPage = lazyWithRetry(() => import('@/pages/DataSources'), 'data-sources-page')
+const ErrorLogPage = lazyWithRetry(() => import('@/pages/ErrorLog'), 'error-log-page')
+const JobPanelPage = lazyWithRetry(() => import('@/components/JobPanel').then(m => ({ default: m.JobPanel })), 'job-panel-page')
 
 const SYSTEM_TABS: TabDef[] = [
   {

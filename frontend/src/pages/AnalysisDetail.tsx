@@ -26,6 +26,7 @@ import {
 } from '@panwatch/api'
 import { Switch } from '@panwatch/base-ui/components/ui/switch'
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
+import ErrorState from '@/components/ErrorState'
 import { useKlineLayer } from '@/hooks/useKlineLayer'
 import { buildAnalysisSections, type AnalysisSection } from '@panwatch/biz-ui/analysis-sections'
 import ShareCardModal from '../components/ShareCardModal'
@@ -159,6 +160,11 @@ export default function AnalysisDetailPage() {
   const [result, setResult] = useState<DeepAnalysisResult | null>(null)
   const [history, setHistory] = useState<HistoryComparisonResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  // 2026-10-10 加载韧性: 加载失败 ≠ 没有记录。此前 `.catch(() => setResult(null))` 把
+  // 「后端闪断/超时」误显示成「未找到记录」, 用户只能刷新。现在错误态显式 + 重试按钮。
+  const [loadError, setLoadError] = useState<unknown>(null)
+  // 重试: 自增触发 effect 重新取数(不改 URL 的 symbol/date)。
+  const [reloadNonce, setReloadNonce] = useState(0)
   const [activeId, setActiveId] = useState('')
   const [tocOpen, setTocOpen] = useState(false)
   const [showSub, setShowSub] = useState(() => {
@@ -191,10 +197,16 @@ export default function AnalysisDetailPage() {
     const mySeq = ++loadSeqRef.current
     const current = () => alive && mySeq === loadSeqRef.current
     setLoading(true)
+    setLoadError(null)
     tradingAgentsApi
       .getAnalysisByDate(symbol, date)
       .then((r) => { if (current()) setResult(r) })
-      .catch(() => { if (current()) setResult(null) })
+      .catch((e: unknown) => {
+        if (!current()) return
+        // 失败 ≠ 没有记录: 记下错误态(保留类型化错误对象, 供 ErrorState 分类), 不再伪装成「未找到」
+        setResult(null)
+        setLoadError(e ?? new Error('加载失败'))
+      })
       .finally(() => { if (current()) setLoading(false) })
     tradingAgentsApi
       .getHistoryComparison(symbol, inferMarket(symbol), 90)
@@ -203,7 +215,7 @@ export default function AnalysisDetailPage() {
     return () => {
       alive = false
     }
-  }, [symbol, date])
+  }, [symbol, date, reloadNonce])
 
   // 记住二级目录开关
   useEffect(() => {
@@ -428,9 +440,16 @@ export default function AnalysisDetailPage() {
             </div>
           )}
 
-          {/* 正文门控: 加载中 / 未找到 / 分节长文 —— 与页面外壳解耦, 外壳 + K线即时可见 */}
+          {/* 正文门控: 加载中 / 加载失败 / 未找到 / 分节长文 —— 与页面外壳解耦, 外壳 + K线即时可见 */}
           {loading ? (
             <div className="p-12 text-center text-muted-foreground">加载中...</div>
+          ) : loadError ? (
+            // 2026-10-10: 失败态显式 + 重试(超时由 fetchAPI 15s 触发, 不再无限转圈)
+            <ErrorState
+              error={loadError}
+              onRetry={() => setReloadNonce((n) => n + 1)}
+              className="my-6"
+            />
           ) : !result ? (
             <div className="p-12 text-center text-muted-foreground space-y-3">
               <div>未找到 {symbol} 在 {date} 的深度分析记录</div>
