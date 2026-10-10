@@ -1,3 +1,19 @@
+### feat-数智决策 P1-2/P2-7·前端: 决策卡片渲染个性化注记 + 双维降级标注（2026-10-10）
+
+`DecisionVerdictCard`(`GET /api/decision/{symbol}` 唯一消费方)消费后端新增字段并**显式**上屏,
+**布局零改动**(同卡片内追加 0-3 行小字, 过 UI 门禁: 字阶只用 10/11/12):
+
+- **个性化注记(P1-2)**: `personalization_note` 升屏(`data-testid=decision-personalization`),
+  注明哪部分因风险偏好调整(可解释, 幻觉敏感红线);
+- **持仓参考行(P1-2)**: `position.note`(持仓成本/浮盈)升屏(`decision-position`), **不改 verdict 徽标**;
+- **跨市场降级(P2-7)**: `basis==='two-dimension'` 时显式『资金维无数据(非CN)·仅趋势×活跃度双维』
+  (`decision-fund-missing`), 不冒充三信号; 且透传 market(如 HK)给 `insightApi.decision`。
+- **向后兼容**: 三字段均缺失(旧响应 / CN 无持仓)时这几行**不渲染**, 三态徽标与理由与旧版逐字一致。
+- **测试(禁真网络)**: 新增 `tests/components/decision-verdict-personalization.test.tsx` 4 例
+  (注记显式 / 持仓行 / 双维标注 / 旧响应零新增行 + 参数透传)。
+- 验收: 前端 `vitest run` 全量 122 files / 900 通过、`tsc -b`、`tsc -p tsconfig.tests.json`、
+  `check_ui_rules.mjs`(UI-RULES OK)全绿。
+
 ### feat-数智决策合成个性化(P1-2) + 跨市场诚实降级(P2-7)·后端（2026-10-10）
 
 审计『数智决策』两缺口后端修复(不发版/不打 tag/不部署/不 push main):

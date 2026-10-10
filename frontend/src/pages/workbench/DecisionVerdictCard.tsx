@@ -25,6 +25,12 @@ import { insightApi } from '@panwatch/api'
  *
  * 归属 `src/pages/workbench/`(与 `IndexBody` 同层): 属页面级装配, 不进 biz-ui —— 与兄弟组件的
  * 包边界一致(避免给 biz-ui 增加宿主隐性契约)。
+ *
+ * 个性化 + 跨市场(P1-2 / P2-7, 2026-10-10): 消费后端新增字段并**显式**上屏, 布局零改动:
+ *  - `personalization_note` -> 个性化注记(哪部分因风险偏好调整, 可解释, `decision-personalization`);
+ *  - `position.note` -> 持仓成本/浮盈参考行(`decision-position`), **不改 verdict 徽标**;
+ *  - `basis === 'two-dimension'` -> 显式『资金维无数据(非CN)』(`decision-fund-missing`), 不冒充三信号。
+ *  字段缺失(旧响应 / CN 无持仓)则这几行**不渲染** —— 三态徽标与理由行为与旧版逐字一致(向后兼容)。
  */
 export interface DecisionVerdict {
   symbol?: string
@@ -35,6 +41,23 @@ export interface DecisionVerdict {
   phase?: string
   row?: number
   parts?: { trend?: string; activity?: number | null; fund_net?: number | null }
+  /** 跨市场降级标记(P2-7): 'two-dimension' = 非 CN 资金维无源, 仅趋势×活跃度双维 */
+  basis?: string
+  /** 双维时的显式缺资金标注(P2-7), 如「资金维无数据(非CN)」 */
+  fund_note?: string
+  /** 是否因个性化调整(P1-2) */
+  personalized?: boolean
+  /** 个性化调整说明(可解释), 如「个性化(保守型)：…」; 无调整为 null */
+  personalization_note?: string | null
+  risk_profile?: string | null
+  /** 持仓参考行(P1-2): 已持仓时后端返回, 含成本/浮盈参考文案 */
+  position?: {
+    cost_price?: number | null
+    quantity?: number | null
+    last_close?: number | null
+    pnl_pct?: number | null
+    note?: string
+  } | null
 }
 
 type LoadState =
@@ -106,24 +129,48 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
   }
 
   const reason = state.data.reason
+  const personalizationNote = state.data.personalization_note
+  const positionNote = state.data.position?.note
+  const twoDimension = state.data.basis === 'two-dimension'
+  const fundNote = state.data.fund_note || '资金维无数据(非CN)'
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="decision-verdict-card">
-      <span
-        data-testid="decision-badge"
-        className={`inline-flex items-center rounded border border-border/60 px-1.5 py-0.5 text-[12px] font-semibold ${VERDICT_TONE[verdict]}`}
-      >
-        {verdict}
-      </span>
-      {reason ? (
-        <span data-testid="decision-reason" className="text-[11px] text-muted-foreground" title={reason}>
-          {reason}
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="decision-verdict-card">
+        <span
+          data-testid="decision-badge"
+          className={`inline-flex items-center rounded border border-border/60 px-1.5 py-0.5 text-[12px] font-semibold ${VERDICT_TONE[verdict]}`}
+        >
+          {verdict}
         </span>
-      ) : (
-        // verdict 已有而 reason 缺失: 不编造理由(显式缺数据)
-        <span data-testid="decision-reason-missing" className="text-[11px] text-muted-foreground">
-          理由无数据
+        {reason ? (
+          <span data-testid="decision-reason" className="text-[11px] text-muted-foreground" title={reason}>
+            {reason}
+          </span>
+        ) : (
+          // verdict 已有而 reason 缺失: 不编造理由(显式缺数据)
+          <span data-testid="decision-reason-missing" className="text-[11px] text-muted-foreground">
+            理由无数据
+          </span>
+        )}
+      </div>
+      {/* P2-7: 非 CN 资金维无源 —— 显式标注, 不冒充三信号 */}
+      {twoDimension ? (
+        <span data-testid="decision-fund-missing" className="mt-0.5 block text-[10px] text-muted-foreground/70">
+          {fundNote} — 仅趋势 × 活跃度双维判定
         </span>
-      )}
-    </div>
+      ) : null}
+      {/* P1-2: 个性化注记(哪部分因个性化调整, 可解释) */}
+      {personalizationNote ? (
+        <span data-testid="decision-personalization" className="mt-0.5 block text-[10px] text-muted-foreground">
+          个性化调整：{personalizationNote}
+        </span>
+      ) : null}
+      {/* P1-2: 持仓参考行(不改 verdict 语义) */}
+      {positionNote ? (
+        <span data-testid="decision-position" className="mt-0.5 block text-[10px] text-muted-foreground/80">
+          {positionNote}
+        </span>
+      ) : null}
+    </>
   )
 }
