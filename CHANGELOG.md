@@ -1,3 +1,18 @@
+### feat-预测引擎发版接线: 随主服务发版自动拉起（2026-10-10）
+
+补 `deploy/sida_prod_deploy_forecast.sh`: 把仓库快照(`forecast_server.py` + `forecast_lib/` +
+`forecast_requirements.txt` + `deploy/`)经 scp 送到目标主机, 远端执行
+`deploy/deploy_forecast_engine.sh`(复用主服务发版链的 base64-over-scp 送达惯例, 避开 Windows
+命令行长度上限; 引擎与主服务版本解耦)。
+
+- 与主服务发版链的关系: `~/.hermes/scripts/sida_prod_deploy.sh`(panwatch 容器部署)末尾
+  **非致命**调用本脚本(`|| echo`), 引擎失败不翻转主服务判定; `SIDA_SKIP_FORECAST_DEPLOY=1` 可关。
+- 实跑验证: 对生产幂等重跑 → `FORECAST_DEPLOY_OK`(引擎健康)。
+- 生产端到端(2026-10-10, 见 deploy/FORECAST_ENGINE_DEPLOY.md §5): 主服务 `/api/health`
+  `forecast_engine=ok`; 认证后 `GET /api/forecast/referee-stats?symbol=002361` 由
+  「预测引擎不可用(需在主机运行 forecast_server.py)」变为引擎真实返回的显式态
+  `{"total":0,"symbol":"002361","message":"暂无裁判记录(...)"}`(引擎已连通, 尚无裁判样本)。
+
 ### fix-预测引擎 /health Kronos 缺失不再 500（2026-10-10）
 
 生产拉起引擎实测: 主机无 `~/Kronos` 源码时 `get_predictor()` 抛 `ModuleNotFoundError` →
