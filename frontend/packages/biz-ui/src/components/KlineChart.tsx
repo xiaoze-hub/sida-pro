@@ -66,6 +66,24 @@ import {
 
 export type { PatternMark } from '../lib/kline-patterns'
 
+// 决策先锋辅助指标(P3 UI 集成, 2026-10-10): 趋势操盘线/牛熊线的三线序列 + 买卖点 marker 纯逻辑。
+// 数据源 `/api/indicators/*`; 与形态标注同策略(父传优先 + 自取, 错峰, 显式降级), 但**职责不同**:
+// 这里出**线**(前端按 API params 在日线收盘价上展开全序列), 数据面板出**现值读数**。
+import {
+  PIONEER_NOT_ADVICE_TEXT,
+  minuteDegradeText,
+  niuxiongSeries,
+  niuxiongSignalMarkers,
+  normalizeMinuteBreakthrough,
+  normalizeNiuxiong,
+  normalizeTrendLine,
+  trendLineSeries,
+  trendSignalMarkers,
+  type MinuteBreakthroughData,
+  type NiuxiongData,
+  type TrendLineData,
+} from '../lib/pioneer-indicators'
+
 export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 
 // 重导出共享模块的类型/纯函数 —— 既有调用方(`import { fundBarPoint } from '.../KlineChart'`)
@@ -290,6 +308,16 @@ export default function KlineChart(props: {
    * 父不传且 `layersVisible.pattern !== false` 时, 组件自取 `GET /klines/{symbol}/patterns`。
    */
   patterns?: PatternMark[]
+  /**
+   * 趋势操盘线(2026-10-10): 红/黄/绿三线 + 买卖点(证据非建议)。
+   * 父不传且 `layersVisible.trendLine !== false` 时, 组件自取 `GET /indicators/trend-line/{symbol}`。
+   */
+  trendLine?: TrendLineData | null
+  /**
+   * 牛熊线(2026-10-10): 牛/马/买卖线 + 金叉死叉 B/S(买红卖绿)。
+   * 父不传且 `layersVisible.niuxiong !== false` 时, 组件自取 `GET /indicators/niuxiong/{symbol}`。
+   */
+  niuxiong?: NiuxiongData | null
   /** L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */
   subchart?: KlineSubchart
   /** L5 副图切换回调 (父组件持久化到 URL) */
@@ -311,7 +339,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; trendLine?: boolean; niuxiong?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -493,6 +521,9 @@ export default function KlineChart(props: {
   }>({ ma5: [], ma10: [], ma20: [] })
   // L1 趋势均线 series (受 layers.trend 控制)
   const maSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  // 决策先锋辅助指标三线 series(趋势操盘线红/黄/绿 + 牛熊线牛/马/买卖; 2026-10-10)
+  const trendLineSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
+  const niuxiongLineSeriesRef = useRef<Array<ISeriesApi<'Line'>>>([])
   // 原始K线(供 L1 均线 / L5 副图 计算)
   const rawKlinesRef = useRef<Array<{ time: Time; close: number; volume: number }>>([])
   // L5 MACD 副图 series (subchart==='macd' 时渲染)
@@ -894,6 +925,64 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, ownPatterns, showPatternLayer])
 
+  // ── 决策先锋辅助指标自取(2026-10-10): 趋势操盘线 + 牛熊线 ─────────────────
+  // 与形态标注同策略: 父传优先(own* 布尔, 原子化)、错峰不发抢主图、取不到显式降级(不编造)。
+  // 受 `layersVisible.{trendLine,niuxiong}` 门控(整层关 → 不发请求, 也不画)。
+  const ownTrendLine = props.trendLine === undefined
+  const ownNiuxiong = props.niuxiong === undefined
+  const showTrendLineLayer = props.layersVisible?.trendLine !== false
+  const showNiuxiongLayer = props.layersVisible?.niuxiong !== false
+  const [trendLineData, setTrendLineData] = useState<TrendLineData | null>(null)
+  const [niuxiongData, setNiuxiongData] = useState<NiuxiongData | null>(null)
+  useEffect(() => {
+    const wantTrend = ownTrendLine && showTrendLineLayer && !!props.symbol && props.market === 'CN'
+    const wantNx = ownNiuxiong && showNiuxiongLayer && !!props.symbol && props.market === 'CN'
+    if (!wantTrend && !wantNx) {
+      setTrendLineData(null)
+      setNiuxiongData(null)
+      return
+    }
+    let cancelled = false
+    // 错峰(与 summary/patterns 同因): 辅助指标不抢主图 `/klines/{symbol}` 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      const q = `?market=${encodeURIComponent(props.market)}`
+      if (wantTrend) {
+        fetchAPI<unknown>(`/indicators/trend-line/${encodeURIComponent(props.symbol)}${q}`, { timeoutMs: SUMMARY_TIMEOUT_MS })
+          .then((r) => { if (!cancelled) setTrendLineData(normalizeTrendLine(r)) })
+          .catch(() => { if (!cancelled) setTrendLineData(null) }) // 显式降级: 取不到 = 不画线(不编造)
+      }
+      if (wantNx) {
+        fetchAPI<unknown>(`/indicators/niuxiong/${encodeURIComponent(props.symbol)}${q}`, { timeoutMs: SUMMARY_TIMEOUT_MS })
+          .then((r) => { if (!cancelled) setNiuxiongData(normalizeNiuxiong(r)) })
+          .catch(() => { if (!cancelled) setNiuxiongData(null) })
+      }
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownTrendLine, ownNiuxiong, showTrendLineLayer, showNiuxiongLayer])
+
+  // ── 分时突破「突/积」提示条自取(2026-10-10) ────────────────────────────────
+  // 缺输入时后端显式 `available=false` + reasons → 前端**照实展示降级文案**(不编造信号)。
+  const [minuteBreakthrough, setMinuteBreakthrough] = useState<MinuteBreakthroughData | null>(null)
+  useEffect(() => {
+    if (!props.symbol || props.market !== 'CN') {
+      setMinuteBreakthrough(null)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      fetchAPI<unknown>(`/indicators/minute-breakthrough/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}`, { timeoutMs: SUMMARY_TIMEOUT_MS })
+        .then((r) => { if (!cancelled) setMinuteBreakthrough(normalizeMinuteBreakthrough(r)) })
+        .catch(() => { if (!cancelled) setMinuteBreakthrough(null) })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market])
+
   // 有效图层值: 父传优先 → 自取 → 稳定空数组(fetch 用回调整体覆盖, 不用偏函数风格)
   const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
   const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
@@ -901,6 +990,9 @@ export default function KlineChart(props: {
   const effPriceLines = props.supportPressure ?? layer?.priceLines ?? EMPTY_LINES
   const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
   const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
+  // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
+  const effTrendLine = props.trendLine ?? trendLineData
+  const effNiuxiong = props.niuxiong ?? niuxiongData
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
   const fundRef = useRef<FundFlowBar[]>(effFundFlow)
   fundRef.current = effFundFlow
@@ -1037,6 +1129,23 @@ export default function KlineChart(props: {
         }) as never[]),
       )
     }
+    // 决策先锋辅助指标买卖点(2026-10-10): 趋势操盘线买/卖点 + 牛熊线金叉/死叉 B/S(买红卖绿)。
+    // 记号定位按信号自带日期 → 交给 filterMarkersInBarsRange 裁掉"落在K线区间外"的点(不给假定位)。
+    // 受 `layersVisible.{trendLine,niuxiong}` 门控, 与形态标注共存(各自独立开关/图例)。
+    {
+      const gcol = readGsColors()
+      const pc = { buy: gcol.go, sell: gcol.stop }
+      if (props.layersVisible?.trendLine !== false && effTrendLine?.available) {
+        markers.push(
+          ...(trendSignalMarkers(effTrendLine, (d) => toChartTime(d, interval), pc) as never[]),
+        )
+      }
+      if (props.layersVisible?.niuxiong !== false && effNiuxiong?.available) {
+        markers.push(
+          ...(niuxiongSignalMarkers(effNiuxiong, (d) => toChartTime(d, interval), pc) as never[]),
+        )
+      }
+    }
     // P2 补搬(2026-09-18): 主力意图箭头 + 涨停/跌停箭头(与 InteractiveKline 同语义/同阈值)
     if (intent) {
       const lastBar = rawKlinesRef.current[rawKlinesRef.current.length - 1]
@@ -1171,7 +1280,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, interval, props.sourceReady, props.tradeMarkers, intent])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effTrendLine, effNiuxiong, interval, props.sourceReady, props.tradeMarkers, intent])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -1240,6 +1349,45 @@ export default function KlineChart(props: {
     }
     // 主动买卖比 / 情绪周期 : 需后端 realtime 数据, Klines 接口无 → 不做假实现, 留给调 UI 切换(灰显"副图数据待接")。
   }, [props.layersVisible?.trend, rawKlinesRef.current.length, subchart, interval])
+
+  // ── 决策先锋辅助指标三线图层(2026-10-10): 趋势操盘线(红/黄/绿) + 牛熊线(牛/马/买卖) ──
+  // 全序列由前端按 API 回传 `params` 在**日线收盘价**上展开(与后端 EMA/WMA/SMA **同源公式** —— 后端
+  // 每只只回最后一根快照, 全序列需展开; 与既有 MA5/10/20/60 的"前端自算"同策略)。日线以外周期口径不一致
+  // (后端基于日K) → 仅 `interval==='1d'` 画线(诚实: 不给错口径的线)。门控与其它图层一致, 与形态共存。
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    for (const s of trendLineSeriesRef.current) { try { chart.removeSeries(s) } catch { /* noop */ } }
+    trendLineSeriesRef.current = []
+    for (const s of niuxiongLineSeriesRef.current) { try { chart.removeSeries(s) } catch { /* noop */ } }
+    niuxiongLineSeriesRef.current = []
+    const kl = rawKlinesRef.current
+    if (interval !== '1d' || kl.length === 0) return
+    const closes = kl.map((k) => k.close)
+    const drawLine = (target: Array<ISeriesApi<'Line'>>, v: Array<number | null>, color: string) => {
+      const line = chart.addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
+      const pts = kl
+        .map((k, i) => (v[i] == null ? null : { time: k.time, value: v[i] as number }))
+        .filter((p): p is { time: Time; value: number } => p != null)
+      line.setData(pts as never)
+      target.push(line)
+    }
+    const gcol = readGsColors()
+    if (props.layersVisible?.trendLine !== false && effTrendLine?.available && effTrendLine.lines) {
+      const s = trendLineSeries(closes, effTrendLine.params)
+      // 红=快线 / 黄=中线(专业图表语义色, 无令牌) / 绿=慢线
+      drawLine(trendLineSeriesRef.current, s.red, gcol.go)
+      drawLine(trendLineSeriesRef.current, s.yellow, 'rgba(234, 179, 8, 0.95)')
+      drawLine(trendLineSeriesRef.current, s.green, gcol.stop)
+    }
+    if (props.layersVisible?.niuxiong !== false && effNiuxiong?.available && effNiuxiong.lines) {
+      const s = niuxiongSeries(closes, effNiuxiong.params)
+      // 牛=蓝 / 马=橙(与既有牛马线同色) / 买卖线=中性
+      drawLine(niuxiongLineSeriesRef.current, s.bull, 'rgba(59, 130, 246, 0.95)')
+      drawLine(niuxiongLineSeriesRef.current, s.horse, 'rgba(249, 115, 22, 0.95)')
+      drawLine(niuxiongLineSeriesRef.current, s.trade, maShade(0.55))
+    }
+  }, [effTrendLine, effNiuxiong, interval, props.layersVisible?.trendLine, props.layersVisible?.niuxiong, rawKlinesRef.current.length])
 
   // 副图模式切换后 pane 内容变了(MACD 线增删) → 重新上报 pane 高度供巡检读
   useEffect(() => {
@@ -1400,6 +1548,103 @@ export default function KlineChart(props: {
             </span>
           ))}
           <span className="text-[10px]">客观标注 · 非投资建议</span>
+        </div>
+      )}
+
+      {/* 决策先锋辅助指标图例(2026-10-10): 与形态图例**并列共存**, 各自分组(不互踩)。
+          只放"颜色=语义"映射(现值读数在数据面板, 不在图例重复一行数字); 明确"客观标注 · 非投资建议"。 */}
+      {props.layersVisible?.trendLine !== false && effTrendLine?.available && effTrendLine.lines && (
+        <div
+          data-testid="trend-line-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">操盘线</span>
+          <span>
+            <span className="text-[hsl(var(--gs-go))]">红</span> 快线
+          </span>
+          <span>
+            <span className="text-[#eab308]">黄</span> 中线
+          </span>
+          <span>
+            <span className="text-[hsl(var(--gs-stop))]">绿</span> 慢线
+          </span>
+          {effTrendLine.trend ? <span>{effTrendLine.trend}</span> : null}
+          {effTrendLine.band?.state ? <span>{effTrendLine.band.state}</span> : null}
+          <span>买▲红 / 卖▼绿</span>
+          <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+        </div>
+      )}
+      {props.layersVisible?.niuxiong !== false && effNiuxiong?.available && effNiuxiong.lines && (
+        <div
+          data-testid="niuxiong-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">牛熊线</span>
+          <span>
+            <span className="text-[#3b82f6]">牛</span> 加权线
+          </span>
+          <span>
+            <span className="text-[#f97316]">马</span> 均线
+          </span>
+          <span>买卖线</span>
+          {effNiuxiong.signal ? (
+            <span
+              className={
+                effNiuxiong.signal === 'B'
+                  ? 'text-[hsl(var(--gs-go))]'
+                  : 'text-[hsl(var(--gs-stop))]'
+              }
+            >
+              {effNiuxiong.signal === 'B' ? '金叉 B（买）' : '死叉 S（卖）'}
+            </span>
+          ) : (
+            <span>近期无交叉</span>
+          )}
+          <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+        </div>
+      )}
+
+      {/* 分时突破「突/积」提示条(2026-10-10): 后端缺逐分钟 DDE 时显式降级(available=false),
+          前端**照实**展示降级文案, 不编造信号(证据非建议)。 */}
+      {minuteBreakthrough && (
+        <div
+          data-testid="minute-breakthrough-bar"
+          className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] ${
+            minuteBreakthrough.available && minuteBreakthrough.signalType
+              ? 'text-foreground'
+              : 'text-muted-foreground'
+          }`}
+        >
+          <span className="font-medium text-foreground/80">分时突破</span>
+          {minuteBreakthrough.available && minuteBreakthrough.signalType ? (
+            <>
+              <span
+                className={`font-mono ${
+                  minuteBreakthrough.signalType === '突'
+                    ? 'text-[hsl(var(--gs-go))]'
+                    : 'text-[hsl(var(--gs-stop))]'
+                }`}
+              >
+                「{minuteBreakthrough.signalType}」
+              </span>
+              {minuteBreakthrough.triggerTime ? <span>{minuteBreakthrough.triggerTime}</span> : null}
+              {minuteBreakthrough.metConditions.length > 0 ? (
+                <span className="text-muted-foreground">
+                  {minuteBreakthrough.metConditions.join(' · ')}
+                </span>
+              ) : null}
+              <span className="text-[10px]">{PIONEER_NOT_ADVICE_TEXT}</span>
+            </>
+          ) : minuteBreakthrough.available ? (
+            <span>暂未触发「突/积」</span>
+          ) : (
+            <>
+              <span>{minuteDegradeText(minuteBreakthrough.reasons)}</span>
+              {minuteBreakthrough.reasons.length > 0 ? (
+                <span className="text-[10px]">（{minuteBreakthrough.reasons.join(' · ')}）</span>
+              ) : null}
+            </>
+          )}
         </div>
       )}
 

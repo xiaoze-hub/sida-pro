@@ -1,5 +1,6 @@
 import DecisionPioneerCard from '@panwatch/biz-ui/components/DecisionPioneerCard'
 import ResonanceVerdictPanel from '@panwatch/biz-ui/components/ResonanceVerdictPanel'
+import PioneerIndicatorsSection from '@panwatch/biz-ui/components/PioneerIndicatorsSection'
 
 /**
  * 「数智决策」合并卡(工作台 v2 三合一, spec §4.2 / 去重表第 1 项)。
@@ -37,6 +38,11 @@ export default function DecisionCard({ symbol, market }: { symbol: string; marke
       <div className="mt-1.5">
         <ResonanceVerdictPanel symbol={symbol} bare />
       </div>
+
+      {/* 决策先锋辅助指标(2026-10-10 P3 UI 集成, **追加节**): 趋势操盘线/牛熊线三线现值 +
+          买卖点枚举 + 参数校准标注。属"追加节", 不改工作台布局密度(右栏本就是可滚动列)。
+          动机: 把已上线的 /api/indicators/* 后端读数落到工作台「数智决策」数据面板。 */}
+      <PioneerIndicatorsSection symbol={symbol} market={market} />
     </div>
   )
 }
