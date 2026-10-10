@@ -295,3 +295,39 @@ def test_forecast_health_proxy_passthrough_when_up(monkeypatch, main_client):
     resp = main_client.get("/api/forecast/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "kronos_ready": True}
+
+
+# ---------- 引擎侧 /health: Kronos 缺失不得 500 ----------
+
+def test_engine_health_never_500_when_kronos_missing(monkeypatch):
+    """Kronos 源码缺失(get_predictor 抛 ModuleNotFoundError) → /health 仍 200 + kronos_ready=false。
+
+    回归: 旧实现 `get_predictor() is not None` 让探测异常直接 500, 主服务 health 探针
+    把"可选模型没装好"误判成"引擎 down"(生产实测)。
+    """
+    import forecast_server
+    from fastapi.testclient import TestClient
+
+    def _boom():
+        raise ModuleNotFoundError("No module named 'model'")
+
+    monkeypatch.setattr(forecast_server, "get_predictor", _boom)
+    resp = TestClient(forecast_server.app).get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["kronos_ready"] is False
+    assert "model" in body.get("kronos_error", "")
+
+
+def test_engine_health_ok_when_kronos_ready(monkeypatch):
+    """Kronos 可用 → /health kronos_ready=true, 无 error 字段。"""
+    import forecast_server
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(forecast_server, "get_predictor", lambda: object())
+    resp = TestClient(forecast_server.app).get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kronos_ready"] is True
+    assert "kronos_error" not in body

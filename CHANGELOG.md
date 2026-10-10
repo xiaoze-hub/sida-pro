@@ -1,3 +1,18 @@
+### fix-预测引擎 /health Kronos 缺失不再 500（2026-10-10）
+
+生产拉起引擎实测: 主机无 `~/Kronos` 源码时 `get_predictor()` 抛 `ModuleNotFoundError` →
+引擎 `/health` 直接 **500** → 主服务 `_forecast_engine_probe` 把"可选模型没装好"误判成
+"引擎 down"(referee-stats 仍报不可用)。修:
+
+- `forecast_server.py::health()`: 包 try/except —— Kronos 加载异常只降级为
+  `kronos_ready=false` + `kronos_error`(原因), **探针绝不 500**; Kronos 是 5 票模型
+  之一且可缺(`/predict` 缺失时用其余模型加权)。语义与主服务 `/api/health`
+  "组件 down 不整体 500"一致。
+- 回归测试(禁真网络): `tests/test_w36_forecast_orchestration.py` 加两例 ——
+  `get_predictor` 抛 ModuleNotFoundError → 200 + `kronos_ready=false`;
+  正常 → 200 + `kronos_ready=true` 且无 error 字段。
+- 验收: 两文件 `pytest` 20 通过 + `ruff` 绿。
+
 ### test-预测引擎连通契约: referee-stats/health 双态回归（2026-10-10）
 
 把「引擎已拉起」与「引擎不可用」两种态在测试层钉死(全 mock, 禁真网络):

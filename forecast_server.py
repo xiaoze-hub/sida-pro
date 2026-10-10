@@ -94,7 +94,30 @@ def _get_owner_shadow_profile() -> dict | None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "kronos_ready": get_predictor() is not None, "time": datetime.now().isoformat()}
+    """引擎健康探针。
+
+    ⚠️ **绝不 500**: Kronos 是 5 票模型之一且可缺(源码 `~/Kronos` 未装/加载失败时,
+    `/predict` 用其余模型加权), 探针必须如实标注 `kronos_ready=false` + 原因, 而不是把
+    "可选模型没装好" 升级成 "引擎挂了"(旧实现 `get_predictor() is not None` 会让
+    ModuleNotFoundError 直接 500 → 主服务 `_forecast_engine_probe` 误判 down)。
+    """
+    kronos_ready = False
+    kronos_error = None
+    try:
+        kronos_ready = get_predictor() is not None
+    except HTTPException as e:
+        # 模型正在加载中(get_predictor 抛 503)也算"未就绪", 不是引擎故障
+        kronos_error = str(getattr(e, "detail", e))[:120]
+    except Exception as e:  # noqa: BLE001 - 探针绝不 500
+        kronos_error = f"{type(e).__name__}: {e}"[:120]
+    body = {
+        "status": "ok",
+        "kronos_ready": kronos_ready,
+        "time": datetime.now().isoformat(),
+    }
+    if kronos_error:
+        body["kronos_error"] = kronos_error
+    return body
 
 
 def _predict_with_guard(symbol: str, days: int, task_id: str, target_date: str, force: bool):
