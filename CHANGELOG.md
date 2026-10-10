@@ -1,3 +1,42 @@
+### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
+
+- 新增 `docs/precompute-redundancy-audit.md`(含三要素: 基线 `339d2f6` / 审计对象完整路径 / 覆盖范围
+  与未审项): 逐个排查工作台研究首屏 + 数智决策/选股池 + 首页热路径端点, 分类 A(读库/缓存, 快)/
+  B(每次现算, 慢)/ B-不可预落库(实时数据)。B 类首选 `/decision/{symbol}` 已改造; 其余 B 类明确标注
+  属实时数据不预落库。
+
+### feat-决策合成预落库 + TTL 缓存（冗余设计: /decision 免重复现算）（2026-10-10）
+
+背景: `GET /api/decision/{symbol}` 是**实时计算**端点 —— 每次现拉 120 天 K 线 + 明/暗盘资金
+(`compute_pool_flow`) 现算三信号; 前端 SDK 显式把超时放宽到 30s(`packages/api/src/insight.ts`)。
+工作台「研究」标签首屏就发它, 反复请求重复算同一标的。按「数据提前落库、前端直接读库」做冗余。
+
+- **新增 `decision_cache` 表**(迁移 v183 `_m183_decision_cache`): `(symbol, market, computed_at,
+  ttl_s, last_close, source, payload)`, 主键 `(symbol, market)`; `computed_at` 存 naive UTC
+  (与 `summary_cache` 同口径)。schema 唯一入口是版本化迁移, 不运行时建表。
+- **缓存层 `src/core/decision_cache.py`**: 落**全局基底**(`decide(..., user_context=None)`)+
+  **读时个性化叠加**。`apply_user_overlay` 深拷贝基底再走 `decide.personalize`(`_personalize`
+  公开别名)⇒ **绝不污染全局缓存行**(user_id 隔离红线不破)。过期(age>ttl_s)一律 miss → 重算,
+  不用陈旧结论冒充实时; 缺数据原样透传, 不编造。
+- **TTL 语义**: 端上 `DECISION_TTL_S=300`(盘中同标的最多 5 分钟不重复算); 盘后批算 TTL = 到
+  **下一工作日开盘 09:30**(`precompute_ttl_s`, 夹 [300s, 96h])—— 开盘后自动过期重算。
+- **端点改造 `src/web/api/decision.py`**: 缓存优先 —— 命中直返并注入诚实语义字段 `cached` /
+  `computed_at` / `cache_source`; miss 算基底 → 落库 → 读时个性化 → `cached=False`。新增
+  `POST /api/decision/precompute`(owner/admin)手动补跑。
+- **盘后批算 `src/core/decision_precompute.py`** + `DecisionPrecomputeScheduler`(工作日 15:45):
+  对**全库自选∪持仓**标的批算落库(`source=precompute`); 单标的失败不拖垮整批。启动编排接线
+  `src/bootstrap/startup.py` / `runtime.py`(含 shutdown)。
+- **`decide` 增量**: 输出补 `last_close`(末根收盘, 供读取时算持仓浮盈; 取不到 None, 不编造)。
+- **测试**(禁真网络, `tests/test_decision_cache.py` 22 例): 落库幂等 / 命中**不再调算路**
+  (mock 断言 `compute_base` 调用数)/ TTL 过期重算 / 个性化叠加不污染全局 / `cached`+`computed_at`
+  字段契约 / 缺数据显式 / 批算幂等 + 单标的失败隔离 / 目标集去重 / 批算口 owner 门禁。适配两处既有
+  用例(`test_decision.py` 清缓存保 miss 分支; `test_decision_personal_mkt.py` 断言改「读时叠加」)。
+- **实测**(本地隔离 DB + 预置 120 根真实日线 + 真实 `compute_pool_flow`; 本地无 thsdk →
+  coverage=dark_only, 生产含 L2 会更重): BEFORE 每次现算中位 **~664ms** → 命中中位 **~13ms**
+  (**~51×**); miss ≈ BEFORE。命中 `cached=True`、`computed_at` 与 miss 逐字一致。
+- 验收: `pytest -k 'decision or cache'`(219 例全绿)、`ruff`、`check_is_pg_scope.py`、
+  `check_migrations.py` 全绿。**不发版、不打 tag、不 push main、前端零改动**(UI 不变, 仅透传字段)。
+
 ### fix-前端加载韧性: 请求超时+GET重试+错误态重试 + 懒加载 chunk 失败自愈（2026-10-10）
 
 用户报障「页面要加载很久, 需要刷新浏览器才能显示」。后端偶发 502 闪断/隧道问题在基建侧另治,

@@ -307,9 +307,15 @@ def _client_for(router, user):
 
 
 def test_decision_endpoint_passes_user_context(monkeypatch):
+    """端点把**当前用户**上下文叠加在(预落库的)全局基底之上(user_id 隔离红线)。
+
+    2026-10-10 冗余设计改为读时叠加: 基底(无用户维度)落缓存 → 端点命中后用
+    `_build_user_context` 的上下文做个性化; 断言响应带 personalized 字段, 且**全局
+    缓存行不被污染**(基底仍为无个性化的『动手』)。
+    """
     from types import SimpleNamespace
 
-    import src.core.decision as core_mod
+    from src.core import decision_cache as dcache
     from factories import make_user
     from src.web.api import decision as decision_api
     from src.web.database import SessionLocal
@@ -321,19 +327,33 @@ def test_decision_endpoint_passes_user_context(monkeypatch):
         _seed_rows(s, uid, "600519", "CN", cost=11.0, qty=200, style="long")
     user = SimpleNamespace(id=uid, username="dec-owner", role="owner")
 
-    captured = {}
+    # 全局基底(无用户维度): 动手 row3 —— 保守型会收紧为『看看』
+    dcache.clear_decision_cache()
+    dcache.put_cached_decision(
+        "600519", "CN",
+        {"symbol": "600519", "verdict": "动手", "reason": "动手: 趋势G信号", "phase": "向好",
+         "row": 3, "parts": {}, "last_close": 11.0},
+        ttl_s=300,
+    )
 
-    def _fake_decide(symbol, market="CN", days=120, user_context=None):
-        captured["ctx"] = user_context
-        return {"symbol": symbol, "verdict": "看看", "reason": "看看: 测试"}
+    def _no_compute(*a, **k):
+        raise AssertionError("缓存命中不得重算")
 
-    monkeypatch.setattr(core_mod, "decide", _fake_decide)
+    monkeypatch.setattr(dcache, "compute_base", _no_compute)
+
     c = _client_for(decision_api.router, user)
     r = c.get("/d/600519?market=CN")
-    assert r.status_code == 200
-    ctx = captured["ctx"]
-    assert ctx["holds"] is True and ctx["cost_price"] == 11.0
-    assert ctx["risk_profile"] == "conservative"
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["cached"] is True
+    # 用户上下文生效: 全持仓 long → 保守型 → 动手收紧为看看; 附持仓行
+    assert body["risk_profile"] == "conservative"
+    assert body["verdict"] == "看看"
+    assert body["position"]["cost_price"] == 11.0
+    # 全局缓存未被个性化污染
+    rec = dcache.get_cached_decision("600519", "CN")
+    assert rec["payload"]["verdict"] == "动手" and "personalized" not in rec["payload"]
+    dcache.clear_decision_cache()
 
 
 def test_decision_pioneer_non_cn_degrades_no_400(monkeypatch):

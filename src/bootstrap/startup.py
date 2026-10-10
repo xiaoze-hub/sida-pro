@@ -27,6 +27,7 @@ from src.core.report_scheduler import ReportScheduler
 from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
+from src.core.decision_precompute import DecisionPrecomputeScheduler
 from src.web.database import SessionLocal, init_db
 
 logger = logging.getLogger("server")
@@ -277,6 +278,21 @@ async def lifespan(app):
             logger.info("市场广度调度器已启动")
         except Exception as e:
             logger.error(f"市场广度调度器启动失败: {e}")
+
+        # 决策合成预落库(2026-10-10 冗余设计)
+        # 为什么需要: /api/decision/{symbol} 是实时计算端点(拉 120 天 K 线 + 明暗盘资金),
+        # 工作台研究标签首屏就发它。盘后对全库自选∪持仓标的批算一次落 decision_cache,
+        # 让盘后/次日盘前的浏览直接命中(免重算); 未预热标的仍走端上 5min TTL。
+        # 15:45 与 K 线入库/TQ 类错开。
+        try:
+            settings = Settings()
+            rt.decision_precompute_scheduler = DecisionPrecomputeScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.decision_precompute_scheduler.start()
+            logger.info("决策预落库调度器已启动")
+        except Exception as e:
+            logger.error(f"决策预落库调度器启动失败: {e}")
 
         # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
         # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
@@ -762,6 +778,8 @@ async def lifespan(app):
         rt.tq_sentiment_scheduler.shutdown()
     if rt.tq_formula_signal_scheduler:
         rt.tq_formula_signal_scheduler.shutdown()
+    if rt.decision_precompute_scheduler:
+        rt.decision_precompute_scheduler.shutdown()
     # v0.4.36 P0 派活 1: WS Hub 解绑 loop
     try:
         from src.web.notifications.ws_hub import attach_event_loop
