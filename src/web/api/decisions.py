@@ -35,6 +35,22 @@ def decisions_stats(
     return stats(get_read_engine(), days=days, min_sample=min_sample)
 
 
+@router.post("/backfill")
+def decisions_backfill(
+    limit: int = Query(500, ge=1, le=5000, description="单次最多回填的待处理信号数"),
+    _: User = Depends(get_current_user),
+):
+    """手动触发决策账本回填(T+1/3/5 收益与命中), 作业框架单飞, 返回 job_id。
+
+    P0-1(2026-10-10) 运维口子: 定时在交易日 18:35, 这里供补跑/追单。同类活跃作业
+    已存在时复用其 job_id(`started=false`), 不并发起第二个。真实回填在后台线程执行,
+    进度/结果落作业框架(app_jobs), 可从 `/api/jobs` 查看。
+    """
+    from src.core.decision_log import spawn_backfill
+
+    return spawn_backfill(limit=limit, reason="manual")
+
+
 @router.get("/log")
 def decisions_log(
     kind: str | None = Query(None, description="按信号类型过滤, 如 resonance3"),

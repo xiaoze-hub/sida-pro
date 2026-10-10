@@ -684,6 +684,20 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"信号对账任务注册失败: {e}")
 
+        # 决策账本回填(P0-1 审计修复, 2026-10-10): 交易日 18:35 回填 T+1/3/5 收益与命中。
+        # 此前 decision_log.backfill_outcomes 全仓无生产调度(仅测试调用, 生产引用只剩一条注释)
+        # → DecisionLedger 的 ret_t1/hit_t1 从不被回填, 命中率恒显『样本不足』, 反馈环整段死。
+        # 仿 signal-nightly-review(18:30) 错开 5 分钟; 非交易日跳过(双保险); 失败显式。
+        try:
+            from src.core.decision_log import register_cron as _register_decision_backfill
+
+            if _register_decision_backfill(rt.scheduler.scheduler):
+                logger.info("决策账本回填 cron 已注册 (交易日 18:35)")
+            else:
+                logger.warning("决策账本回填 cron 注册未生效(调度器不可用)")
+        except Exception as e:
+            logger.error(f"决策账本回填 cron 注册失败: {e}")
+
         # GDPR 用户数据物理清除(P3, 2026-09-18): 每日 03:20 清除软删除满 30 天的账号
         try:
             from src.web.api.user_data import purge_expired_deletions
