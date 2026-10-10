@@ -242,6 +242,7 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
 
     updated = 0
     factor_date = datetime.now(_CST).strftime("%Y%m%d")
+    ledger_candidates: list[dict] = []
     db = SessionLocal()
     try:
         for sym, events in targets.items():
@@ -254,6 +255,19 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
             score = demon_score_from_events(
                 events, circ_mv=st.get("circ_mv"), n_lhb=n_lhb
             )
+            # 决策账本(妖股因子覆盖): "入池"(grade 非普通)事件留痕, 价取最新涨停事件收盘价。
+            grade = score.get("grade")
+            if grade in DEMON_BOOST_BY_GRADE:
+                latest = events[-1]
+                ledger_candidates.append(
+                    {
+                        "symbol": sym,
+                        "trade_date": latest.get("trade_date"),
+                        "price": latest.get("close_price"),
+                        "grade": grade,
+                        "total": score.get("total"),
+                    }
+                )
             payload = {
                 "factor_date": factor_date,
                 "symbol": sym,
@@ -290,7 +304,44 @@ def recompute_factors(symbols: list[str] | None = None) -> dict:
         db.rollback()
     finally:
         db.close()
-    return {"factor_date": factor_date, "updated": updated}
+    # 决策账本留痕(signal_kind=demon_pool): 入池(非普通)的妖股因子写账本, 供命中率统计;
+    # 失败只 warn, 不影响因子落库主流程。
+    logged = _log_demon_signals(ledger_candidates)
+    return {"factor_date": factor_date, "updated": updated, "logged": logged}
+
+
+def _log_demon_signals(candidates: list[dict]) -> int:
+    """把"入池"妖股因子写决策账本(signal_kind=demon_pool)。
+
+    每条必须带 `price_at_signal`(最新涨停事件收盘价) —— 拿不到价的**不写该条**(不硬填 0)。
+    幂等由 (kind, symbol, trade_date) 唯一键保证; 失败只 warn, 绝不阻断主流程。
+    """
+    rows: list[dict] = []
+    for c in candidates or []:
+        try:
+            day = str(c.get("trade_date") or "").strip()
+            price = c.get("price")
+            if not day or not isinstance(price, (int, float)) or price <= 0:
+                continue
+            rows.append(
+                {
+                    "signal_kind": "demon_pool",
+                    "symbol": c.get("symbol"),
+                    "trade_date": day,
+                    "price": float(price),
+                    "context": {"grade": c.get("grade"), "total": c.get("total")},
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
+            logger.warning("决策账本妖股信号组装失败(跳过): %r", exc)
+    if not rows:
+        return 0
+    from src.core.decision_log import record_many_safe
+
+    n = record_many_safe(rows, source="demon_factors")
+    if n:
+        logger.info("决策账本: 妖股因子入池 %s 条已留痕", n)
+    return n
 
 
 def update_pipeline(symbols: list[str] | None = None) -> dict:

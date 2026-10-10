@@ -1,3 +1,15 @@
+### feat-决策账本扩信号覆盖(GS买卖点/妖股因子/竞价池入账新 signal_kind)（2026-10-10）
+审计 P1-1: 决策账本此前只入账 `resonance3` 一类信号(`resonance_scan.py` 是 decision_log 全仓唯一写入点), GS 买卖点/妖股因子/竞价池信号的命中率无从统计(`stats()` 按 signal_kind 分组却永远只有一行)。本次把三类信号接入账本:
+
+- **GS 买卖点**(`src/core/market_scan.py`): 全市场扫描 `scan()` 落库后, 把今日新出**已确认**的 BB0/A0 交叉(G 买/S 卖)以 `signal_kind=gs_cross` 留痕。`_per_stock_metrics` 新增 `gs_cross_side/close_date`, 同款只在末根交叉时产出。
+- **妖股因子入池**(`src/core/demon_factors.py`): `recompute_factors` 对 grade 非普通(极妖/妖/活跃)的入池标的以 `signal_kind=demon_pool` 留痕。
+- **竞价池候选**(`src/core/entry_candidates.py`): `_persist_candidates` 落库成功后, 对 `candidate_source=auction` 的候选以 `signal_kind=auction_pool` 留痕。
+- **不硬填铁律**: 每条信号必须带 `price_at_signal`(信号时点价: GS=末根收盘 / 妖股=最新涨停事件收盘 / 竞价=候选 current_price) —— 拿不到价的**不写该条**(绝不填 0)。
+- **旁路安全**: 新增 `decision_log.record_many_safe`(取引擎/写入失败只 warn 返回 0, 绝不抛); 三个 emit 点单条组装异常也不拖垮主流程 —— 信号生成优先, 账本留痕只做旁路。
+- **幂等不变**: 复用 (signal_kind, symbol, trade_date) 唯一键 UPSERT, 重跑不双计; 不改 decision_log 表结构(无 migration)。
+- **测试(禁真网络)**: 新增 `tests/test_decision_ledger_signals.py` 6 例 —— GS/妖股/竞价各走真实 emit 路径后账本多出对应 signal_kind 行、幂等重跑不双计、无价不写、账本失败不阻断主流程。
+- 验收: `pytest tests/ -k 'decision or gs or demon or entry'`(213 passed)、`ruff check`、`scripts/check_is_pg_scope.py` 全绿。不发版、不打 tag、不部署、不 push main。
+
 ### feat-决策合成三信号接入个股工作台研究标签(P0-3)（2026-10-10）
 
 ### fix-决策账本回填日期格式错配(紧凑 vs ISO 永不相等致 0 填)
