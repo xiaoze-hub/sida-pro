@@ -1,3 +1,20 @@
+### feat-AI机构活跃度口径核对(7因子留档) + >12更佳档（2026-10-10）
+
+决策先锋规格 §3 核对(基准 `docs/decision-pioneer-spec.md:15`)。公开功能解析资料记 AI 机构活跃度为
+「**6 个**技术指标(影线/涨幅/高开等) MAX × 1.2」, 我方 `src/core/ai_activity.py` 是 **7 因子**。
+逐因子比对: 我方 7 因子(上影/下影/实体+上影/实体+下影/上影+下影/涨幅/高开)有**内部依据** ——
+《数智决策8问8答》§2.3 记录的官方因子集即 7 个(实上=实体+上影 / 实下=实体+下影 / 全幅=上影+下影),
+且逆向自桌面通达信公式 `1_JGHYD_机构活跃度.txt` 并与官方截图实测对齐。故**保留 7 因子**, 未改公式;
+在 docstring + `FACTOR_CALIBER_NOTE` 钉死「与公开 6 因子差异(多 1 项=上影+下影/全幅)及依据」。
+改前先跑全部既有断言(内核 7 因子 MAX×1.2 断言在 `tests/test_decision_pioneer.py` 逐值锁定)确认零影响。
+
+- **>12 更佳档(规格 §3「>12 更佳」)**: 配置层 `src/core/thresholds.py` 新增 `top_line`(默认 12.0,
+  env `SIDA_THRESHOLD_TOP_LINE` 可覆盖); `src/core/ai_activity.py` 输出第五档 `LEVEL_TOP="更佳"` +
+  `above_top`(活跃度 >= 12), `eval_activity`/`activity_of_value` 档位实时读配置层(四线五档: 弱/生命/强势/大牛/更佳)。
+- **测试 `tests/test_activity_caliber.py`**(禁真网络): 7 因子逐一点名 + 差异注释存在性(含 "6"/"8问8答"/
+  "1_JGHYD") + 内核仍 7 因子 MAX×1.2(全幅主导反锁) + >12 档(13/12.0→更佳, 11.99→大牛, env 覆盖)。
+- 无新表、不发版。验收: `pytest -k 'activity or pool or jbp or market_scan'` + ruff + `check_is_pg_scope.py` 全绿。
+
 ### feat-决策先锋辅助指标·分时突破(突/积信号)（2026-10-10）
 
 决策先锋 P3 补差之三(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。「突」=盘整>15分钟 +

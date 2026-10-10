@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # 默认值 = 历史硬编码现值(逐比特一致), 见审计 P1-3:
 #   ai_activity.LIFE_LINE=1.56 / STRONG_LINE=3.00 / BULL_LINE=6.00
 #   resonance.STRONG_LINE=3.00, resonance_scan._STRONG_LINE=3.0
+#   top_line=12.00(2026-10-10 规格 §3 ">12 更佳", 大牛线之上的第五档)
 _SPECS: dict[str, dict] = {
     "life_line": {
         "default": 1.56,
@@ -49,6 +50,15 @@ _SPECS: dict[str, dict] = {
         "lo": 0.0,
         "hi": 1000.0,
         "label": "大牛线",
+    },
+    # 更佳线(2026-10-10 规格 §3: AI 机构活跃度\"阈值 1.56生命线/3强势线/6大牛线, >12更佳\")。
+    # 大牛线之上的第五档: 活跃度 >= 12 = \"更佳\"(顶格)。默认 12.0, env 可覆盖。
+    "top_line": {
+        "default": 12.00,
+        "env": "SIDA_THRESHOLD_TOP_LINE",
+        "lo": 0.0,
+        "hi": 1000.0,
+        "label": "更佳线",
     },
     # ── 决策先锋辅助指标参数(P3 补差, 2026-10-10) ──────────────────────────
     # 规格 §5/§6/§7; 官方精确参数未公开 → 均为**逆向近似默认值, 待截图/逆向校准**。
@@ -208,6 +218,11 @@ def strong_line() -> float:
 
 def bull_line() -> float:
     return value("bull_line")
+
+
+def top_line() -> float:
+    """更佳线(活跃度 >= 12 = "更佳", 规格 §3 ">12 更佳")。"""
+    return value("top_line")
 
 
 def snapshot() -> dict:
