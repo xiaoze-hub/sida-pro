@@ -105,8 +105,27 @@ def _amp_pct(highs: list[float], lows: list[float]) -> float:
     return (max(highs) - lo) / lo * 100.0
 
 
+def _sustained_vals(
+    dde_pts: list[tuple[int, float]], at_min: int | None, consec: int, min_wan: float
+) -> list[float] | None:
+    """截止 at_min(含)最近 consec 个 DDE 采样: 全部 > 0 且累计 >= min_wan(万元) → 返回该批值。
+
+    采样序列已按分钟升序。**按样本数判定"持续流入"**(允许采样节拍粗于 1m —— 默认 5min),
+    不要求与分钟K逐点对齐; 样本不足 consec 个 → None(尚未形成"持续", 不编造)。
+    """
+    if at_min is None:
+        return None
+    upto = [v for (m, v) in dde_pts if m <= at_min]
+    vals = upto[-max(1, consec):]
+    if len(vals) < max(1, consec):
+        return None
+    if all(v > 0 for v in vals) and sum(vals) / 1e4 >= min_wan:
+        return vals
+    return None
+
+
 def _detect_breakthrough(
-    bars: list[dict], dde_by_time: dict[str, float], p: dict
+    bars: list[dict], dde_pts: list[tuple[int, float]], p: dict
 ) -> dict | None:
     """在 bars 上找最近一次满足「突」四条件的 bar; 找不到返回 None。"""
     c_min = max(1, p["consolidation_min"])
@@ -135,17 +154,12 @@ def _detect_breakthrough(
             prior_high > 0 and bars[i]["high"] >= prior_high * (1 + tol)
         )
 
-        # DDE 大单持续流入: 结束于 i 的连续 consec 分钟 main_net 均 > 0, 且累计 >= 下限
-        inflow_vals: list[float] = []
-        for j in range(i - consec + 1, i + 1):
-            t = bars[j]["time"]
-            if t is None or t not in dde_by_time:
-                inflow_vals = []
-                break
-            inflow_vals.append(dde_by_time[t])
-        cond_dde = bool(inflow_vals) and all(v > 0 for v in inflow_vals) and (
-            sum(inflow_vals) / 1e4 >= target_wan
+        # DDE 大单持续流入: 截止 i 最近 consec 个采样均 > 0, 且累计 >= 下限
+        # (采样节拍可能粗于 1m, 按样本判定"持续", 见 _sustained_vals)
+        inflow_vals = _sustained_vals(
+            dde_pts, _minutes_of_day(bars[i]["time"]), consec, target_wan
         )
+        cond_dde = inflow_vals is not None
 
         if cond_consolidation and cond_volume and cond_breakout and cond_dde:
             best = {
@@ -158,7 +172,7 @@ def _detect_breakthrough(
                     {"name": "突破日内高点", "met": True,
                      "detail": f"最高{bars[i]['high']}≥前高{prior_high}×(1+{p['breakout_tol_pct']}%)"},
                     {"name": "DDE大单持续流入", "met": True,
-                     "detail": f"连续{consec}分钟净流入累计{sum(inflow_vals) / 1e4:.1f}万≥{target_wan}万"},
+                     "detail": f"连续{consec}个采样净流入累计{sum(inflow_vals) / 1e4:.1f}万≥{target_wan}万"},
                 ],
                 "trigger_time": bars[i]["time"],
             }
@@ -166,7 +180,7 @@ def _detect_breakthrough(
 
 
 def _detect_accumulation(
-    bars: list[dict], dde_by_time: dict[str, float], p: dict
+    bars: list[dict], dde_pts: list[tuple[int, float]], p: dict
 ) -> dict | None:
     """早盘大单稳健流入 + 价格蓄势 → 「积」; 否则 None。"""
     early_end = p["early_end_minutes"]
@@ -179,12 +193,13 @@ def _detect_accumulation(
     if len(early) < 3:
         return None
 
-    matched = [(b["time"], dde_by_time[b["time"]]) for b in early if b["time"] in dde_by_time]
+    # 早盘窗口内的 DDE 采样(按样本, 不要求与分钟K逐点对齐)
+    matched = [v for (m, v) in dde_pts if first_mod <= m <= cutoff]
     if not matched:
         return None
-    pos = sum(1 for _, v in matched if v > 0)
+    pos = sum(1 for v in matched if v > 0)
     ratio = pos / len(matched)
-    total_wan = sum(v for _, v in matched) / 1e4
+    total_wan = sum(matched) / 1e4
 
     amp = _amp_pct([b["high"] for b in early], [b["low"] for b in early])
     cond_inflow = ratio >= p["early_inflow_ratio"] and total_wan >= p["dde_min_wan"]
@@ -228,14 +243,18 @@ def compute_breakthrough(
     elif len(bars) < p["consolidation_min"] + 2:
         reasons.append(f"分钟数据不足({len(bars)}<{p['consolidation_min'] + 2})")
 
-    dde_by_time: dict[str, float] = {}
+    dde_pts: list[tuple[int, float]] = []
     for d in dde_series or []:
         t = d.get("time") if isinstance(d, dict) else getattr(d, "time", None)
         v = d.get("main_net") if isinstance(d, dict) else getattr(d, "main_net", None)
         if t is None or v is None:
             continue
-        dde_by_time[str(t)] = _f(v)
-    if not dde_by_time:
+        m = _minutes_of_day(str(t))
+        if m is None:
+            continue
+        dde_pts.append((m, _f(v)))
+    dde_pts.sort(key=lambda x: x[0])
+    if not dde_pts:
         reasons.append("DDE大单流入序列缺失")
 
     base = {
@@ -257,12 +276,12 @@ def compute_breakthrough(
             "reasons": reasons,
         }
 
-    hit = _detect_breakthrough(bars, dde_by_time, p)
+    hit = _detect_breakthrough(bars, dde_pts, p)
     signal_type = None
     if hit:
         signal_type = "突"
     else:
-        hit = _detect_accumulation(bars, dde_by_time, p)
+        hit = _detect_accumulation(bars, dde_pts, p)
         if hit:
             signal_type = "积"
 
@@ -292,7 +311,7 @@ def _read_minute_klines_db(symbol: str, market: str) -> list[dict]:
 
         from src.db.session import engine
 
-        with engine().connect() as conn:
+        with engine.connect() as conn:
             rows = conn.execute(
                 text(
                     "SELECT ts, open, high, low, close, volume FROM klines "
@@ -327,14 +346,18 @@ def _fetch_tencent_minute(symbol: str, market: str) -> list[dict]:
 
 
 def fetch_dde_series(symbol: str, market: str = "CN") -> list[dict]:
-    """DDE 大单流入序列(现有链只有当日快照 → 单点序列)。
+    """DDE 大单流入序列(元)。
 
-    优先级: thsdk `get_main_flow_official`(同花顺官方口径) → TQ `get_more_info`。
-    两者都是**快照**, 无法支撑"持续/稳健流入"判定 ⇒ 单点序列会让 compute 显式降级。
+    优先读**盘中采样序列**(`dde_minute_flow`, 逐 N 分钟采样的区间净流入), 构造真序列,
+    使分时突破「突」的『DDE大单持续流入』条件真可判(此前只有单点 → 显式降级);
+    无采样(非交易时段/当日未采样) 回退现有**当日快照**单点(仍会触发显式降级, 不编造)。
     全失败返回 [](调用方按"无数据"处理)。
     """
     if market.upper() != "CN":
         return []
+    series = _read_dde_series_db(symbol, market)
+    if series:
+        return series
     net_wan = _fetch_thsdk_dde_wan(symbol)
     if net_wan is None:
         net_wan = _fetch_tq_dde_wan(symbol)
@@ -343,6 +366,34 @@ def fetch_dde_series(symbol: str, market: str = "CN") -> list[dict]:
     bars = fetch_minute_bars(symbol, market)
     t = bars[-1]["time"] if bars else datetime.now(_CST).strftime("%H:%M")
     return [{"time": t, "main_net": net_wan * 1e4}]  # 万元 → 元
+
+
+def _read_dde_series_db(symbol: str, market: str = "CN") -> list[dict]:
+    """读当日 DDE 采样序列表 → 逐样本区间净流入(元)。无行/异常返回 []。"""
+    try:
+        from sqlalchemy import text
+
+        from src.db.session import engine
+
+        today = datetime.now(_CST).strftime("%Y-%m-%d")
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT sample_ts, delta_net_wan FROM dde_minute_flow "
+                    "WHERE symbol = :s AND market = :m AND trade_date = :d "
+                    "ORDER BY sample_ts"
+                ),
+                {"s": symbol, "m": market.upper(), "d": today},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("minute_breakthrough 读 DDE 采样失败 %s: %s", symbol, e)
+        return []
+    out: list[dict] = []
+    for r in rows:
+        if r[1] is None:
+            continue
+        out.append({"time": str(r[0]), "main_net": _f(r[1]) * 1e4})  # 万元 → 元
+    return out
 
 
 def _fetch_thsdk_dde_wan(symbol: str) -> float | None:

@@ -1,3 +1,32 @@
+### feat-分时突破逐分钟DDE大单序列落库（解锁「突」信号）（2026-10-10）
+
+决策先锋 P3 补差 A(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。此前 `minute_breakthrough`
+的 DDE 链只有**当日快照**(thsdk `get_dde_flow`/`get_main_flow_official` + TQ `get_more_info`),
+`fetch_dde_series` 只能构造单点序列 → 「突」的『DDE大单持续流入』条件在生产上**恒显式降级**。
+本轮落**盘中采样序列**, 该条件真可判。
+
+- **新表 `dde_minute_flow`**(migration v185, 唯一入口 `src/web/migrations.py`): 键
+  (trade_date, market, symbol, sample_ts); `cum_net_wan`=采样时刻当日累计主力净流入(万),
+  `delta_net_wan`=区间增量(万, 首个样本=其 cum); `main_net_vol`/`total_amount_wan`/`source`。
+  ORM 见 `src/db/models.py::DdeMinuteFlow`。(同批含战报表 v186/`WarReportDaily` 的 schema,
+  其功能在下一 commit 接线。)
+- **采样器 `src/core/dde_sampler.py`**: 复用全市场 thsdk DDE 批量(200/批);
+  `sample_dde_once` 逐批取数 → 幂等 upsert(uq 键, 重跑同一样本不重复/不双算 delta);
+  `run_dde_sample_job` 走**作业框架诚实性**(交易日+连续竞价时段才采样, 数据源全空/异常
+  → `ok=False` → `jobs.finish` 判 failed); **非交易时段显式无数据**(不落行、不建作业行)。
+- **`fetch_dde_series` 改读库构造真序列**(`dde_minute_flow` → 逐样本区间净流入, 万→元);
+  无采样回退快照单点(仍显式降级, 不编造)。判定改为**按采样样本**判「持续流入」
+  (`_sustained_vals`), 兼容采样节拍粗于 1m(默认 5min), 不再要求与分钟K逐点对齐。
+- **阈值层**: 新增 `minute_dde_sample_min`(默认 5, env `SIDA_THRESHOLD_MINUTE_DDE_SAMPLE_MIN`)。
+- **调度**: `src/bootstrap/startup.py` 注册盘中 cron(交易日 9-15, 每 N 分钟, 分钟位从 :01
+  起跳**避开整点拥堵**); 任务内再以 `trading_calendar` 守卫时段。
+- **重构 `src/core/dark_fund_scan.py`**: 抽出 `scan_dde_universe`(全市场归一化行)+
+  `_normalize_rows`, 供暗盘 TOP 与战报复用(行为不变)。
+- **测试 `tests/test_dde_minute_flow.py`**(禁真网络): 采样幂等 + delta 构造 + 读库构序列 +
+  「突」持续流入正/反例 + 非交易日/非时段显式 + 作业诚实性(ok=False→failed)。
+- **验收**: `pytest tests/ -k 'minute or dde or war or breakthrough'`(161 例)、ruff、
+  `check_is_pg_scope.py`、`check_migrations.py` 全绿。**不发版**。
+
 ### feat-决策先锋辅助指标·分时突破(突/积信号)（2026-10-10）
 
 决策先锋 P3 补差之三(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。「突」=盘整>15分钟 +

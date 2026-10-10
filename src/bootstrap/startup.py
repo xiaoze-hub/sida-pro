@@ -667,6 +667,31 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"题材情绪调度注册失败: {e}")
 
+        # 盘中 DDE 大单逐 N 分钟采样(P3 补差 A, 2026-10-10): 落 dde_minute_flow 序列表,
+        # 解锁分时突破「突」的『DDE大单持续流入』判定(此前只有当日快照 → 恒显式降级)。
+        # 节拍走 thresholds(minute_dde_sample_min, 默认 5min); 分钟位从 :01 起跳**避开整点拥堵**;
+        # 非交易时段由任务内守卫显式跳过(不落行、不建作业行)。
+        try:
+            from src.core import thresholds as _th
+            from src.core.dde_sampler import run_dde_sample_job
+
+            _n = max(1, min(60, int(_th.value("minute_dde_sample_min"))))
+            rt.scheduler.scheduler.add_job(
+                run_dde_sample_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour="9-15",
+                minute=f"1-59/{_n}",
+                id="dde-intraday-sample",
+                name="DDE大单逐分钟采样",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("DDE大单采样已注册(交易日 9:30-15:00 每 %d 分钟, 避整点)", _n)
+        except Exception as e:
+            logger.error(f"DDE大单采样注册失败: {e}")
+
         # 快照行情 1 分钟桶落库(批次2 2/2, 2026-09-10): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.quote_snapshots import collect_once

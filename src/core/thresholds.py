@@ -158,6 +158,15 @@ _SPECS: dict[str, dict] = {
         "hi": 20.0,
         "label": "分时突破-突破容差%",
     },
+    # 盘中 DDE 大单采样节拍(P3 补差 A, 2026-10-10)。采样范围=全市场, 值越小序列越密、
+    # 数据源压力越大; 默认 5 分钟(与 1m 分时K 非逐分钟对齐 → 序列按样本判定"持续流入")。
+    "minute_dde_sample_min": {
+        "default": 5.0,
+        "env": "SIDA_THRESHOLD_MINUTE_DDE_SAMPLE_MIN",
+        "lo": 0.0,
+        "hi": 60.0,
+        "label": "分时突破-DDE采样节拍(分钟)",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)
