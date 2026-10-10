@@ -325,6 +325,10 @@ def build_intent_explain_response(symbol_code: str, db: Session | None = None) -
         "confidence": result.get("confidence"),
         "why": result.get("why"),
         "data_status": data_status,
+        # 证据化(2026-10-10): 证据链(触发条件/数据时点/失效条件) + 置信度校准(无账本口径=未校准) + 相似情形
+        "evidence": result.get("evidence"),
+        "confidence_calibration": result.get("confidence_calibration"),
+        "similar": result.get("similar"),
     }
 
 

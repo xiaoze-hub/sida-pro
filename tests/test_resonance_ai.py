@@ -106,6 +106,33 @@ def test_analyze_degrades_honestly_when_llm_fails(monkeypatch):
     assert "AI 不可用" in d["reason"]
 
 
+def test_analyze_carries_evidence_invalidation_and_similar(monkeypatch):
+    """证据化(2026-10-10): AI 判定出口必带 证据链(触发条件/时点/失效条件) + 校准 + 相似情形。"""
+    ai = _FakeAIClient(
+        content='{"resonance":"强共振","confidence":0.9,"summary":"三指标对齐","reasons":["趋势G区"],'
+        '"risks":[],"watch":[],"missing":[],"invalidation":["若GS转S区则作废"]}'
+    )
+    client = _client(monkeypatch, ai)
+    d = client.post("/api/resonance/analyze/300563").json()
+    ev = d["evidence"]
+    assert any("趋势 G区间" in t for t in ev["triggers"])
+    assert ev["as_of"] == "20260911" and ev["invalidation"] == ["若GS转S区则作废"]
+    # 空账本 → 校准/相似一律显式「未校准 / 样本不足」, 不编造数字
+    assert d["confidence_calibration"]["calibrated"] is False
+    assert d["confidence_calibration"]["value"] is None
+    assert "未校准" in d["confidence_calibration"]["note"]
+    assert d["similar"]["insufficient"] is True and d["similar"]["up"] is None
+
+
+def test_analyze_degrades_evidence_on_llm_failure(monkeypatch):
+    """AI 不可用时: 规则证据链仍照给(确定性), 校准/相似为 None(不冒充)。"""
+    client = _client(monkeypatch, _FakeAIClient(boom=True))
+    d = client.post("/api/resonance/analyze/300563").json()
+    assert d["available"] is False
+    assert d["evidence"]["invalidation"]  # 规则证据链仍在
+    assert d["confidence_calibration"] is None and d["similar"] is None
+
+
 def test_analyze_rejects_bad_symbol(monkeypatch):
     client = _client(monkeypatch, _FakeAIClient(content="{}"))
     assert client.post("/api/resonance/analyze/abc").status_code == 400
