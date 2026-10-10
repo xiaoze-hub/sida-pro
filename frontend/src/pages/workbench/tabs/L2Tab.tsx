@@ -1,6 +1,6 @@
 import { ANPAN, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { insightApi } from '@panwatch/api'
+import { insightApi, fetchAPI } from '@panwatch/api'
 import { RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
@@ -640,11 +640,96 @@ function EvolutionSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
  * ④ 主力意图 + 封单成色
  * ------------------------------------------------------------------ */
 
+/** AI 解读接口响应(`GET /api/dark-flow/{symbol}/intent-explain`)。 */
+interface IntentExplainResp {
+  available?: boolean
+  reason?: string | null
+  rule_signal?: string | null
+  direction?: string | null
+  confidence?: string | null
+  why?: string | null
+  data_status?: string | null
+}
+
+/**
+ * 主力意图 AI 解读(**懒触发**): 点击按钮才取数, 不自动跑(省 token)。
+ *
+ * 规则给结论(逐笔口径), AI 只补「为什么 + 置信度 + 方向」, **不改规则结论**。
+ * 缺数据/失败一律显式(reason / 错误原文), 绝不编造; 未触发时不发任何请求。
+ * 仅在本卡片下方**追加一节**, 不动上方规则单元格的口径与布局。
+ */
+function IntentExplainBlock({ symbol }: { symbol: string }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'done'>('idle')
+  const [resp, setResp] = useState<IntentExplainResp | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setState('loading')
+    setError(null)
+    try {
+      const data = await fetchAPI<IntentExplainResp>(`/dark-flow/${symbol}/intent-explain`)
+      setResp(data)
+      setState('done')
+    } catch (e) {
+      setResp(null)
+      setError(e instanceof Error ? e.message : '未知错误')
+      setState('done')
+    }
+  }
+
+  return (
+    <div className="mt-2 border-t border-border/30 pt-2" data-testid="l2-intent-ai">
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <span className="text-muted-foreground">AI 解读</span>
+        <button
+          type="button"
+          data-testid="l2-intent-ai-btn"
+          onClick={run}
+          disabled={state === 'loading'}
+          title="点击后调用 AI(规则给结论, AI 补『为什么』); 不自动跑以省 token"
+          className="inline-flex h-6 items-center rounded border border-border/50 px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-60"
+        >
+          {state === 'loading' ? '解读中…' : state === 'done' ? '重新解读' : 'AI 解读'}
+        </button>
+        <span className="text-[10px] text-muted-foreground/70">规则给结论, AI 只补『为什么』(不自动跑)</span>
+      </div>
+
+      {state === 'idle' ? null : error ? (
+        <div className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500" data-testid="l2-intent-ai-error">
+          AI 解读失败: {error}
+        </div>
+      ) : resp ? (
+        resp.available ? (
+          <div className="mt-1.5 space-y-1 text-[11px]">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
+              <Cell label="AI 方向" value={resp.direction ?? '--'} />
+              <Cell label="AI 置信度" value={resp.confidence ?? '--'} />
+            </div>
+            <div className="text-muted-foreground" data-testid="l2-intent-ai-why">
+              <span className="text-foreground">为什么:</span> {resp.why ?? '--'}
+            </div>
+            <div className="text-muted-foreground" data-testid="l2-intent-ai-rule">
+              规则结论: {resp.rule_signal ?? '--'}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1.5 text-[11px] text-muted-foreground" data-testid="l2-intent-ai-reason">
+            {resp.reason ?? 'AI 解读不可用'}
+            {resp.rule_signal ? <span className="ml-1">(规则结论: {resp.rule_signal})</span> : null}
+          </div>
+        )
+      ) : null}
+    </div>
+  )
+}
+
 function IntentSealSection({
+  symbol,
   mainIntent,
   seal,
   sealLoading,
 }: {
+  symbol: string
   mainIntent: MainIntentStructured | null
   seal: Feed<SealResp>
   sealLoading: boolean
@@ -684,6 +769,9 @@ function IntentSealSection({
       {!mi ? (
         <div className="mb-2 text-[12px] text-muted-foreground">暂无主力意图数据(非 A 股/数据源不可用/未开盘)</div>
       ) : null}
+
+      {/* AI 解读(2026-10-10 AI 链路 P1): 懒触发按钮 + 规则结论/AI 为什么/置信度/方向; 仅追加一节 */}
+      <IntentExplainBlock symbol={symbol} />
 
       {/* 封单成色(A3 批次, /seal-quality) */}
       <div className="border-t border-border/30 pt-2">
@@ -914,7 +1002,7 @@ function L2TabBody({ symbol }: { symbol: string }) {
         </div>
         <div className="space-y-3 lg:col-span-5 lg:border-l lg:border-border/40 lg:pl-4">
           <EvolutionSection feed={ob} loading={loading} />
-          <IntentSealSection mainIntent={mainIntent} seal={seal} sealLoading={loading} />
+          <IntentSealSection symbol={symbol} mainIntent={mainIntent} seal={seal} sealLoading={loading} />
           <DarkFlowTqSection data={darkFlowTq} />
           <ChipsSection mainIntent={mainIntent} />
         </div>

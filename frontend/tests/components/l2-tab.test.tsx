@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
@@ -490,5 +490,83 @@ describe('Task 11 复审修复: 取数失败保留上次成功值 + 不猜原因
     expect(screen.queryByText(/thsdk 未接/)).toBeNull()
     expect(screen.queryByText(/非涨停股或非交易时段/)).toBeNull()
     expect(screen.queryByText(/盘口不可用/)).toBeNull()
+  })
+})
+
+/**
+ * AI 链路 P1(2026-10-10): 主力意图卡新增「AI 解读」段(懒触发)。
+ * 守四件事: ①未点击零取数(不自动跑省 token); ②点击才调 `/dark-flow/{s}/intent-explain`,
+ * 渲染规则结论+AI 为什么+置信度+方向; ③数据不足/失败显式(不编造); ④规则单元格布局零改动。
+ */
+describe('AI 解读(主力意图卡, 懒触发)', () => {
+  it('未点击不取数: fetchAPI 一次都没被调用', async () => {
+    renderTab()
+    await waitFor(() => expect(mocks.orderbookOb).toHaveBeenCalled())
+    expect(within(section('intent')).getByTestId('l2-intent-ai-btn')).toBeTruthy()
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+  })
+
+  it('点击才取数: 渲染 方向/置信度/为什么 + 规则结论, 原规则单元格不变', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      available: true,
+      reason: null,
+      rule_signal: '超大单净流入, 主力吸筹迹象',
+      direction: '吸筹',
+      confidence: '高',
+      why: '超大单+5967万但大单-8433万, 托盘出货嫌疑',
+      data_status: 'ok',
+    })
+    renderTab()
+    const intentSec = section('intent')
+    const btn = await within(intentSec).findByTestId('l2-intent-ai-btn')
+    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+    fireEvent.click(btn)
+    await waitFor(() =>
+      expect(mocks.fetchAPI).toHaveBeenCalledWith('/dark-flow/002636/intent-explain'),
+    )
+    await waitFor(() =>
+      expect(within(intentSec).getByTestId('l2-intent-ai-why').textContent).toContain('托盘出货嫌疑'),
+    )
+    expect(within(intentSec).getByTestId('l2-intent-ai-rule').textContent).toContain(
+      '超大单净流入, 主力吸筹迹象',
+    )
+    expect(within(intentSec).getByTestId('l2-intent-ai').textContent).toContain('吸筹')
+    expect(within(intentSec).getByTestId('l2-intent-ai').textContent).toContain('高')
+    // 布局零改动: 原有规则单元格仍在且值不变
+    expect(cellValue(intentSec, '方向')).toBe('吸筹')
+    expect(cellValue(intentSec, '参与度')).toBe('42.5%')
+    expect(cellValue(intentSec, '主力买占比')).toBe('53.2%')
+  })
+
+  it('数据不足显式: available=false 展示 reason 原文, 不编造方向', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      available: false,
+      reason: '逐笔数据不足, 不做 AI 解读',
+      rule_signal: '平衡',
+      direction: null,
+      confidence: null,
+      why: null,
+      data_status: 'insufficient',
+    })
+    renderTab()
+    const intentSec = section('intent')
+    fireEvent.click(await within(intentSec).findByTestId('l2-intent-ai-btn'))
+    await waitFor(() =>
+      expect(within(intentSec).getByTestId('l2-intent-ai-reason').textContent).toContain(
+        '逐笔数据不足, 不做 AI 解读',
+      ),
+    )
+    expect(within(intentSec).queryByTestId('l2-intent-ai-why')).toBeNull()
+  })
+
+  it('取数失败显式: reject 展示错误原文, 不假装成功', async () => {
+    mocks.fetchAPI.mockRejectedValue(new Error('HTTP 500'))
+    renderTab()
+    const intentSec = section('intent')
+    fireEvent.click(await within(intentSec).findByTestId('l2-intent-ai-btn'))
+    await waitFor(() =>
+      expect(within(intentSec).getByTestId('l2-intent-ai-error').textContent).toContain('AI 解读失败'),
+    )
+    expect(within(intentSec).getByTestId('l2-intent-ai-error').textContent).toContain('HTTP 500')
   })
 })

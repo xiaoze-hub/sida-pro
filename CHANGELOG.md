@@ -1,3 +1,22 @@
+### feat-主力意图 AI 解读上个股工作台 L2 页（懒触发按钮）（2026-10-10）
+
+AI 链路审计 P1: `src/core/intent_explain.explain_main_intent`(规则给结论 + AI 补"为什么")此前唯一
+消费点是 chat 工具(`src/agents/chat/registry.py` `get_intent_explain`), 工作台「主力意图」卡只有规则
+结论、看不出"为什么"。本次把 AI 解读搬到 L2 页:
+
+- **后端**: 新增 `GET /api/dark-flow/{symbol}/intent-explain`(`src/web/api/darkflow.py`
+  `build_intent_explain_response`) —— 逐笔口径 `compute_dark_flow` 出规则结论, `explain_main_intent`
+  补 AI「为什么/置信度/方向」, **不改规则结论**。数据不足(insufficient/suspect)/取数失败/LLM 失败
+  一律 `available=false` + `reason` 显式, 绝不编造。
+- **前端**: `L2Tab.tsx` ④主力意图卡追加「AI 解读」段 —— **懒触发**(点按钮才调, 不自动跑省 token);
+  渲染 规则结论 + AI「为什么」+ 置信度 + 方向; 未触发不发请求, 失败显式(错误原文)。**不改主力意图
+  规则口径本体与布局密度**(仅追加一节, 原单元格/口径/密度零改动, diff 自查确认)。
+- 测试(禁真网络): 后端 `tests/test_darkflow_intent_explain.py` 7 例(成功透传/不足不调 LLM/suspect
+  不调/取数失败显式/异常不崩/LLM 失败显式/非法代码 400); 前端 `tests/components/l2-tab.test.tsx` 加
+  4 例(未点击零取数/点击才调+三态渲染/数据不足显式/失败显式 + 原规则单元格不变)。原 9 例仍绿(共 13)。
+- 验收: `pytest tests/test_darkflow_intent_explain.py`(7 passed)、`ruff check`、`vitest run`、
+  `tsc -b`、`tsc -p tsconfig.tests.json`、`check_ui_rules.mjs` 全绿。不发版、不打 tag、不部署、不 push main。
+
 ### feat-内置报告生成即推送通知中心（盘前/盘后补"生成即通知"）（2026-10-10）
 
 AI 链路审计 P1: `report_scheduler` 8:30 盘前 / 15:30 盘后生成内置报告后**只落盘、无人知**
