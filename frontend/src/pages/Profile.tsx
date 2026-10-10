@@ -36,6 +36,30 @@ interface ProfileStats {
   has_shadow_profile: boolean
 }
 
+/** 分 Agent 命中榜(GET /profile/stats/accuracy)。字段全可选, 防后端/传输异常时崩。 */
+interface AccuracyAgent {
+  agent: string
+  hit: number
+  total: number
+  hit_rate: number | null
+  avg_return_pct: number | null
+  qualified: boolean
+}
+
+interface AccuracyBoard {
+  since: string | null
+  scope: string
+  note?: string
+  overall?: {
+    hit_count: number
+    total: number
+    hit_rate: number | null
+    avg_return_pct: number | null
+    scope: string
+  }
+  agents?: AccuracyAgent[]
+}
+
 /** 头像首字母圆形色块(无头像时兜底); 240 色相实底, 不用渐变。 */
 function AvatarCircle({ name, avatar, size = 'lg' }: { name: string; avatar: string; size?: 'lg' | 'sm' }) {
   const cls = size === 'lg' ? 'w-16 h-16 text-[20px]' : 'w-9 h-9 text-[13px]'
@@ -82,6 +106,11 @@ export function Profile() {
   const { data: profile, isLoading, error: profileError, refetch: refetchProfile, isFetching: profileFetching } =
     useApiQuery<ProfileInfo>(['profile'], '/profile')
   const { data: stats, error: statsError } = useApiQuery<ProfileStats>(['profile', 'stats'], '/profile/stats')
+  // 2026-10-10 AI 链路 P1: 分 Agent 命中榜(此前后端已实现、零前端消费)。独立 query, 不拖累账号区。
+  const { data: board, error: boardError } = useApiQuery<AccuracyBoard>(
+    ['profile', 'stats', 'accuracy'],
+    '/profile/stats/accuracy',
+  )
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
   const [avatarChanged, setAvatarChanged] = useState(false)
@@ -388,6 +417,76 @@ export function Profile() {
               sub={stats?.has_shadow_profile ? '交割单分析已落库' : '上传交割单后生成'}
               accent={stats?.has_shadow_profile ? 'text-emerald-600' : 'text-muted-foreground'}
             />
+          </div>
+
+          {/* 分 Agent 命中榜(2026-10-10 AI 链路 P1): 谁准谁不准, 一眼见。
+              消费 GET /profile/stats/accuracy(此前后端已实现、零前端消费)。
+              样本不足(qualified=false)显式标注不参评; 失败/空态显式, 不编造。 */}
+          <div className="mt-5 border-t border-border/40 pt-4" data-testid="profile-agent-board">
+            <div className="mb-3 flex flex-wrap items-baseline gap-2">
+              <span className="text-[12px] font-semibold text-foreground">Agent 命中榜</span>
+              <span className="text-[10px] text-muted-foreground">
+                分智能体预测命中率 · 近 30 天 · 样本不足不参评(按全平台统计, 预测记录无用户维度)
+              </span>
+            </div>
+            {boardError ? (
+              <div className="text-[11px] text-amber-600 dark:text-amber-500" data-testid="profile-agent-board-error">
+                Agent 命中榜加载失败: {boardError instanceof Error ? boardError.message : '未知错误'}
+              </div>
+            ) : !board ? (
+              <div className="text-[11px] text-muted-foreground">加载中…</div>
+            ) : (board.agents ?? []).length === 0 ? (
+              <div className="text-[11px] text-muted-foreground" data-testid="profile-agent-board-empty">
+                暂无已评估的 Agent 预测(近 30 天无样本)
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="border-b border-border/40 text-muted-foreground">
+                      <th className="px-2 py-1 font-medium">Agent</th>
+                      <th className="px-2 py-1 text-right font-medium">命中率</th>
+                      <th className="px-2 py-1 text-right font-medium">命中</th>
+                      <th className="px-2 py-1 text-right font-medium">平均收益</th>
+                      <th className="px-2 py-1 text-right font-medium">参评</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {(board.agents ?? []).map(a => (
+                      <tr key={a.agent} data-testid={`profile-agent-row-${a.agent}`}>
+                        <td className="px-2 py-1 text-foreground">{a.agent}</td>
+                        <td className="px-2 py-1 text-right font-mono text-foreground">
+                          {a.hit_rate != null ? `${a.hit_rate}%` : '--'}
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-muted-foreground">
+                          {a.hit}/{a.total}
+                        </td>
+                        <td
+                          className={`px-2 py-1 text-right font-mono ${
+                            a.avg_return_pct == null
+                              ? 'text-muted-foreground'
+                              : a.avg_return_pct > 0
+                                ? 'text-stock-up'
+                                : a.avg_return_pct < 0
+                                  ? 'text-stock-down'
+                                  : 'text-foreground'
+                          }`}
+                        >
+                          {a.avg_return_pct != null ? `${a.avg_return_pct > 0 ? '+' : ''}${a.avg_return_pct}%` : '--'}
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          {a.qualified ? (
+                            <span className="text-muted-foreground">参评</span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-500">样本不足</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </section>
 
