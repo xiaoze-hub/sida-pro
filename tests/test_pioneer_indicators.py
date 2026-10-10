@@ -1,7 +1,8 @@
-"""决策先锋辅助指标测试(P3 补差, 2026-10-10) —— 趋势操盘线。
+"""决策先锋辅助指标测试(P3 补差, 2026-10-10) —— 趋势操盘线 / 牛熊线 / 分时突破。
 
 **禁真网络**: 纯计算用例直接喂合成 bar; API 契约用例 monkeypatch 取数函数(不触网/库)。
-覆盖: 正例 / 反例 / 边界(数据不足/一字板) + 买卖点触发条件断言 + API 契约 + 显式降级。
+覆盖每指标: 正例 / 反例 / 边界(数据不足/一字板/停牌/缺输入降级) + 买卖点触发条件断言 +
+API 契约 + 显式降级。
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ def test_trend_threshold_keys_defaults_and_env(monkeypatch):
         "trend_pilot_red_period", "trend_pilot_yellow_period", "trend_pilot_green_period",
         "trend_pilot_band_tol_pct",
         "niuxiong_bull_period", "niuxiong_horse_period", "niuxiong_trade_period",
+        "minute_consolidation_min", "minute_volume_spike_mult", "minute_dde_min_wan",
     ):
         assert key in snap, f"缺少配置键 {key}"
         assert snap[key]["source"] == "default"
@@ -255,6 +257,133 @@ def test_niuxiong_signal_is_evidence_not_advice():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 分时突破「突/积」
+# ══════════════════════════════════════════════════════════════════════
+def _mb(t, o, h, l, c, v):
+    return {"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v}
+
+
+def _tu_bars():
+    """16 分钟窄幅盘整(09:30..09:45) + 09:46 放量突破前高。"""
+    bars = [_mb(f"09:{30 + i:02d}", 10.0, 10.02, 9.99, 10.0, 1000) for i in range(16)]
+    bars.append(_mb("09:46", 10.0, 10.4, 9.99, 10.35, 5000))
+    return bars
+
+
+def _dde_for(bars, main_net, times=None):
+    times = set(times) if times else None
+    return [{"time": b["time"], "main_net": (main_net if (times is None or b["time"] in times) else 0)}
+            for b in bars]
+
+
+def test_minute_breakthrough_tu_positive():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = _tu_bars()
+    dde = _dde_for(bars, main_net=1_000_000, times=("09:44", "09:45", "09:46"))
+    r = compute_breakthrough(bars, dde)
+    assert r["available"] is True and r["degraded"] is False
+    assert r["signal_type"] == "突"
+    assert r["trigger_time"] == "09:46"
+    names = {c["name"] for c in r["conditions"]}
+    assert {"盘整>15分钟", "突然放量异动", "突破日内高点", "DDE大单持续流入"} <= names
+    assert all(c["met"] for c in r["conditions"])
+
+
+def test_minute_breakthrough_ji_positive():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = [_mb(f"09:{30 + i:02d}", 10.0, 10.01, 9.99, 10.0, 1000) for i in range(20)]
+    dde = _dde_for(bars, main_net=200_000)  # 早盘每分钟 20 万, 稳健流入
+    r = compute_breakthrough(bars, dde)
+    assert r["signal_type"] == "积"
+    assert r["trigger_time"] is not None
+    assert "早盘大单稳健流入" in r["met_conditions"]
+
+
+def test_minute_breakthrough_no_signal_on_negative_inflow():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = [_mb(f"09:{30 + i:02d}", 10.0, 10.01, 9.99, 10.0, 1000) for i in range(20)]
+    dde = _dde_for(bars, main_net=-200_000)
+    r = compute_breakthrough(bars, dde)
+    assert r["available"] is True
+    assert r["signal_type"] is None
+
+
+def test_minute_breakthrough_volume_not_spiking_no_tu():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = _tu_bars()
+    bars[-1]["volume"] = 1000  # 无量 → 不构成「突」
+    dde = _dde_for(bars, main_net=1_000_000, times=("09:44", "09:45", "09:46"))
+    r = compute_breakthrough(bars, dde)
+    assert r["signal_type"] != "突"
+
+
+def test_minute_breakthrough_degraded_missing_dde():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    r = compute_breakthrough(_tu_bars(), None)
+    assert r["available"] is False and r["degraded"] is True
+    assert r["signal_type"] is None
+    assert any("DDE" in x for x in r["reasons"])
+
+
+def test_minute_breakthrough_degraded_missing_minutes():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    dde = [{"time": "09:30", "main_net": 1_000_000}]
+    r = compute_breakthrough([], dde)
+    assert r["degraded"] is True
+    assert any("分钟数据" in x for x in r["reasons"])
+
+
+def test_minute_breakthrough_degraded_too_few_bars():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = [_mb(f"09:3{i}", 10.0, 10.01, 9.99, 10.0, 1000) for i in range(5)]
+    dde = _dde_for(bars, main_net=1_000_000)
+    r = compute_breakthrough(bars, dde)
+    assert r["degraded"] is True
+    assert any("分钟数据不足" in x for x in r["reasons"])
+
+
+def test_minute_breakthrough_flat_limit_no_tu():
+    """一字板(无新高)不构成「突」。"""
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = [_mb(f"09:{30 + i:02d}", 10.0, 10.0, 10.0, 10.0, 1000) for i in range(18)]
+    dde = _dde_for(bars, main_net=1_000_000)
+    r = compute_breakthrough(bars, dde)
+    assert r["signal_type"] != "突"
+
+
+def test_minute_breakthrough_reads_thresholds_config(monkeypatch):
+    from src.core import thresholds
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    monkeypatch.setenv("SIDA_THRESHOLD_MINUTE_VOLUME_SPIKE_MULT", "10.0")
+    # 放量 5 倍 < 10 倍 → 「突」被配置层挡住
+    bars = _tu_bars()
+    dde = _dde_for(bars, main_net=1_000_000, times=("09:44", "09:45", "09:46"))
+    r = compute_breakthrough(bars, dde)
+    assert r["params"]["volume_spike_mult"] == 10.0
+    assert r["signal_type"] != "突"
+    assert thresholds.source("minute_volume_spike_mult") == "env"
+
+
+def test_minute_breakthrough_signal_is_evidence_not_advice():
+    from src.core.minute_breakthrough import compute_breakthrough
+
+    bars = _tu_bars()
+    dde = _dde_for(bars, main_net=1_000_000, times=("09:44", "09:45", "09:46"))
+    r = compute_breakthrough(bars, dde)
+    assert r["signal_type"] in ("突", "积")
+    assert "建议" not in str(r)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # API 契约(monkeypatch 取数, 不触网/库)
 # ══════════════════════════════════════════════════════════════════════
 class _FakeOwner:
@@ -299,6 +428,17 @@ def test_niuxiong_api_contract(client, monkeypatch):
     assert d["indicator"] == "niuxiong" and d["signal"] == "B" and d["color"] == "red"
 
 
+def test_minute_breakthrough_api_contract(client, monkeypatch):
+    import src.core.minute_breakthrough as mbt
+
+    monkeypatch.setattr(mbt, "fetch_minute_breakthrough", lambda *a, **k: {"available": False, "degraded": True, "signal_type": None, "reasons": ["DDE大单流入序列缺失"]})
+    r = client.get("/api/indicators/minute-breakthrough/600519")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["indicator"] == "minute-breakthrough"
+    assert d["available"] is False and d["degraded"] is True and d["signal_type"] is None
+
+
 def test_indicators_api_unavailable_note(client, monkeypatch):
     import src.core.trend_pilot_line as tpl
 
@@ -309,7 +449,7 @@ def test_indicators_api_unavailable_note(client, monkeypatch):
     assert d["available"] is False and d["degraded"] is True and d["note"]
 
 
-@pytest.mark.parametrize("path", ["trend-line", "niuxiong"])
+@pytest.mark.parametrize("path", ["trend-line", "niuxiong", "minute-breakthrough"])
 def test_indicators_api_invalid_symbol_400(client, path):
     r = client.get(f"/api/indicators/{path}/12ab")
     assert r.status_code == 400

@@ -1,10 +1,14 @@
-"""决策先锋辅助指标 API(趋势操盘线 / 牛熊线, P3 补差, 2026-10-10)。
+"""决策先锋辅助指标 API(趋势操盘线 / 牛熊线 / 分时突破, P3 补差, 2026-10-10)。
 
-- `GET /api/indicators/trend-line/{symbol}?market=CN`  趋势操盘线(三线+买卖点)
-- `GET /api/indicators/niuxiong/{symbol}?market=CN`    牛熊线(金叉/死叉 B/S)
+- `GET /api/indicators/trend-line/{symbol}?market=CN`        趋势操盘线(三线+买卖点)
+- `GET /api/indicators/niuxiong/{symbol}?market=CN`          牛熊线(金叉/死叉 B/S)
+- `GET /api/indicators/minute-breakthrough/{symbol}?market=CN`  分时突破(突/积)
 
 口径: 信号是**证据不是建议** —— 只回客观字段(枚举信号 + 触发时间/价格 + 触发条件),
 不含"建议买入/卖出"等主观措辞。缺数据显式 `available=false` + `note`(不编造、不 500)。
+
+诚实降级: minute-breakthrough 需**分钟数据 + DDE 大单序列**两条输入, 现有 DDE 链只有当日
+快照 → 生产上多为显式降级, 直到接入逐分钟大单流。
 
 权限: 数智决策档(view_forecast, 与 /api/decision-pioneer 同档)。
 进程内 30s 缓存(盘中多用户/多轮询防重复重算)。
@@ -107,3 +111,23 @@ def _run_niuxiong(code: str, mkt: str) -> dict:
     if not r:
         return _unavailable("日K不足或无数据, 无法计算牛熊线")
     return r
+
+
+@router.get("/minute-breakthrough/{symbol}")
+def get_minute_breakthrough(symbol: str, market: str = "CN"):
+    """分时突破: 「突/积」信号 + 触发时间 + 触发条件清单(缺输入显式降级)。"""
+    mkt = (market or "CN").upper()
+    code = _valid_symbol(symbol, mkt)
+    payload = _cached(f"minute:{mkt}:{code}", lambda: _run_minute(code, mkt))
+    return {"symbol": code, "market": mkt, "indicator": "minute-breakthrough",
+            "data_time": _now(), **payload}
+
+
+def _run_minute(code: str, mkt: str) -> dict:
+    try:
+        from src.core.minute_breakthrough import fetch_minute_breakthrough
+
+        return fetch_minute_breakthrough(code, market=mkt)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("minute-breakthrough %s 失败: %s", code, e)
+        return _unavailable("分时突破取数异常, 已降级")

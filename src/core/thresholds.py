@@ -102,6 +102,62 @@ _SPECS: dict[str, dict] = {
         "hi": 250.0,
         "label": "牛熊线-买卖线周期",
     },
+    "minute_consolidation_min": {
+        "default": 15.0,
+        "env": "SIDA_THRESHOLD_MINUTE_CONSOLIDATION_MIN",
+        "lo": 0.0,
+        "hi": 240.0,
+        "label": "分时突破-盘整最少分钟",
+    },
+    "minute_consolidation_amp_pct": {
+        "default": 0.6,
+        "env": "SIDA_THRESHOLD_MINUTE_CONSOLIDATION_AMP_PCT",
+        "lo": 0.0,
+        "hi": 20.0,
+        "label": "分时突破-盘整振幅上限%",
+    },
+    "minute_volume_spike_mult": {
+        "default": 2.0,
+        "env": "SIDA_THRESHOLD_MINUTE_VOLUME_SPIKE_MULT",
+        "lo": 0.0,
+        "hi": 50.0,
+        "label": "分时突破-放量倍数",
+    },
+    "minute_dde_consecutive_min": {
+        "default": 3.0,
+        "env": "SIDA_THRESHOLD_MINUTE_DDE_CONSECUTIVE_MIN",
+        "lo": 0.0,
+        "hi": 60.0,
+        "label": "分时突破-DDE连续流入分钟",
+    },
+    "minute_dde_min_wan": {
+        "default": 50.0,
+        "env": "SIDA_THRESHOLD_MINUTE_DDE_MIN_WAN",
+        "lo": 0.0,
+        "hi": 1_000_000.0,
+        "label": "分时突破-DDE流入下限(万元)",
+    },
+    "minute_early_end_minutes": {
+        "default": 60.0,
+        "env": "SIDA_THRESHOLD_MINUTE_EARLY_END_MINUTES",
+        "lo": 0.0,
+        "hi": 240.0,
+        "label": "分时突破-早盘窗口(开盘后分钟)",
+    },
+    "minute_early_inflow_ratio": {
+        "default": 0.8,
+        "env": "SIDA_THRESHOLD_MINUTE_EARLY_INFLOW_RATIO",
+        "lo": 0.0,
+        "hi": 1.0,
+        "label": "分时突破-早盘正流入占比",
+    },
+    "minute_breakout_tol_pct": {
+        "default": 0.2,
+        "env": "SIDA_THRESHOLD_MINUTE_BREAKOUT_TOL_PCT",
+        "lo": 0.0,
+        "hi": 20.0,
+        "label": "分时突破-突破容差%",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)

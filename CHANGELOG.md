@@ -1,3 +1,24 @@
+### feat-决策先锋辅助指标·分时突破(突/积信号)（2026-10-10）
+
+决策先锋 P3 补差之三(规格 §6; 基准 docs/decision-pioneer-spec.md:18)。「突」=盘整>15分钟 +
+突然放量异动 + 突破日内高点 + DDE大单持续流入; 「积」=早盘大单稳健流入积蓄动能。
+
+- **新增 `src/core/minute_breakthrough.py`**: 纯计算 `compute_breakthrough(分钟K, DDE序列)`,
+  逐条给出四条件/两条件的命中与客观明细, 输出 {信号类型(突/积), 触发时间, 触发条件清单}。
+  **输入两条链**: 分钟数据(库 `klines period='1m'` → 腾讯 `fetch_tencent_minute_kline`) +
+  DDE 大单流入(thsdk `get_main_flow_official` / TQ `get_more_info`)。**现有 DDE 链只有当日
+  快照、非逐分钟序列 → 生产上显式降级, 不出信号**(直到接入逐分钟大单流, 后续任务)。
+  一字板无新高不构成「突」; 缺任一输入 → `available=false` + `reasons`。
+- **阈值层 `src/core/thresholds.py`**: 新增 `minute_*` 8 键(盘整15分/振幅0.6%/放量2×/
+  DDE连续3分/下限50万/早盘窗口60分/正流入占比0.8/突破容差0.2%), env `SIDA_THRESHOLD_MINUTE_*`
+  覆盖。**逆向近似待校准**。
+- **API `src/web/api/pioneer_indicators.py`**: `GET /api/indicators/minute-breakthrough/{symbol}`
+  (数智决策档 view_forecast)。
+- **测试 `tests/test_pioneer_indicators.py`**(禁真网络): 「突」四条件全中 + 「积」早盘流入 +
+  反例(负流入/不放量)+ 边界(一字板/分钟不足/DDE缺失/分钟缺失→显式降级)+ 阈值 env 覆盖 +
+  API 契约。验收: `pytest -k 'trend or niuxiong or minute or threshold'`(122 例)、ruff、
+  `check_is_pg_scope.py` 全绿。纯计算, **无新表无 migration, 不发版**。
+
 ### feat-决策先锋辅助指标·牛熊线(金叉死叉B/S)（2026-10-10）
 
 决策先锋 P3 补差之二(规格 §7; 基准 docs/decision-pioneer-spec.md:19)。牛线=20日加权均线
