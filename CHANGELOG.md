@@ -1,3 +1,18 @@
+### fix-预测锥图空 K 线 RangeError: 空态早退 + 长度兜底（2026-10-10）
+
+`frontend/src/components/ForecastConeChart.tsx` 在历史 K 线为空(拉取失败 / 新股无 K 线)时,
+`new Array(histVals.length - 1)` = `new Array(-1)` 抛 `RangeError: Invalid array length` →
+锥图整块白屏。修:
+
+- **长度兜底**: `new Array(Math.max(histVals.length - 1, 0))` —— 空历史长度为 0, 不再抛。
+- **显式空态早退**: `hist.length === 0` 时不挂图表, 改渲染 `ChartEmpty`「无历史K线」
+  (说明历史拉取失败或暂无 K 线), 不把空数组喂给 ECharts。
+- **回归测试(禁真网络)**: 新增 `frontend/tests/components/forecast-cone-chart.test.tsx` 两例 ——
+  ① 空 K 线: 不抛 + 显式「无历史K线」空态; ② 单根 K 线: 不抛 + 正常渲染。替身 `useECharts`
+  预置 `chartRef.current`, 使 effect 真进入 `setOption` 分支, 精确复现旧 `new Array(-1)` 路径
+  (删掉 `Math.max` 兜底该用例立刻红, 已实测)。
+- 验收: `vitest run tests/components/forecast-cone-chart.test.tsx`(2 通过)、`check_ui_rules.mjs` 绿。
+
 ### feat-数智决策 P2 前端: 复盘中心补共振回测/信号对账/入场后验/明细分页（2026-10-10）
 
 审计 P2「有功能没入口」四处 UI 入口上屏(**全并入 `DecisionLedger.tsx` 复盘中心**, 复用既有
