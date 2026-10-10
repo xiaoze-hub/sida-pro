@@ -101,13 +101,13 @@ def synthesize_two_dimension(
     诚实降级: 资金维**无数据**(非 CN 无明/暗盘源), 显式标 `basis="two-dimension"` +
     `fund_note="资金维无数据(非CN)"` —— **不编造资金、不静默 None**。
 
-    verdict 口径(两维, 活跃度阈值复用 ai_activity.STRONG_LINE=3.00):
+    verdict 口径(两维, 活跃度阈值复用阈值配置层 strong_line()=3.00 可配):
       - 趋势 G(信号/区间) + 活跃度站上强势线 → 动手(向好)
       - 趋势 S(信号/区间) + 活跃度跌破强势线 → 别碰(走坏)
       - 其余(G 但活跃度弱 / S 但活跃度强) → 看看(分歧)
       - 缺数(趋势/活跃度任一缺) → 看看 + 理由写清缺哪个
     """
-    from src.core.ai_activity import STRONG_LINE
+    from src.core.thresholds import strong_line
 
     missing = []
     if not trend or trend == "无数据":
@@ -122,7 +122,7 @@ def synthesize_two_dimension(
             f"仅趋势×活跃度双维, 先别动手"
         )
     else:
-        act_ok = activity is not None and activity >= STRONG_LINE
+        act_ok = activity is not None and activity >= strong_line()
         if trend in ("G信号", "G区间") and act_ok:
             verdict, phase = "动手", "向好"
         elif trend in ("S信号", "S区间") and not act_ok:

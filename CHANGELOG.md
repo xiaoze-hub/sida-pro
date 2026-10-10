@@ -1,5 +1,10 @@
 ### feat-主力意图 AI 解读上个股工作台 L2 页（懒触发按钮）（2026-10-10）
 
+### fix-合并撞车修复(决策双维读阈值配置层)
+- v0.13.54 四支合并后组合冒烟 10 红: `decision.py` 双维合成仍 `from ai_activity import STRONG_LINE`, 而阈值配置化支已把该常量挪进 `src/core/thresholds.py`(各自基线绿、合并即 ImportError)。改读 `_thresholds.strong_line()`(默认值 3.00 逐比特一致), 文档字符串同步。
+- 教训入账: 合并后必须跑跨支组合冒烟(本次拦下带病 tag); `pytest | tail` 会吞退出码, 门禁命令禁止管道接 tail。
+
+
 AI 链路审计 P1: `src/core/intent_explain.explain_main_intent`(规则给结论 + AI 补"为什么")此前唯一
 消费点是 chat 工具(`src/agents/chat/registry.py` `get_intent_explain`), 工作台「主力意图」卡只有规则
 结论、看不出"为什么"。本次把 AI 解读搬到 L2 页:
