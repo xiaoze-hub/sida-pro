@@ -569,4 +569,38 @@ describe('AI 解读(主力意图卡, 懒触发)', () => {
     )
     expect(within(intentSec).getByTestId('l2-intent-ai-error').textContent).toContain('HTTP 500')
   })
+
+  it('证据化(2026-10-10): 追加渲染证据链/失效条件/置信度校准, 既有段零改动', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      available: true,
+      reason: null,
+      rule_signal: '超大单净流入, 主力吸筹迹象',
+      direction: '吸筹',
+      confidence: '高',
+      why: '超大单+5967万但大单-8433万',
+      data_status: 'ok',
+      evidence: {
+        triggers: ['规则结论: 超大单净流入, 主力吸筹迹象', '内盘买占比 58.3%'],
+        as_of: '20260911',
+        as_of_is_today: false,
+        as_of_note: '数据时点: 20260911(非今日, 基准日滞后)',
+        invalidation: ['若超大单转净流出则作废'],
+        invalidation_defaulted: false,
+      },
+      confidence_calibration: { calibrated: false, value: null, note: '未校准(该类判断无决策账本信号口径, 不给校准数)', n: 0 },
+      similar: null,
+    })
+    renderTab()
+    const intentSec = section('intent')
+    fireEvent.click(await within(intentSec).findByTestId('l2-intent-ai-btn'))
+    await waitFor(() => expect(within(intentSec).getByTestId('l2-intent-ai-evidence')).toBeTruthy())
+    expect(within(intentSec).getByTestId('l2-intent-ai-evidence-triggers').textContent).toContain('内盘买占比 58.3%')
+    expect(within(intentSec).getByTestId('l2-intent-ai-evidence-asof').textContent).toContain('非今日')
+    expect(within(intentSec).getByTestId('l2-intent-ai-evidence-invalidation').textContent).toContain('作废')
+    expect(within(intentSec).getByTestId('l2-intent-ai-evidence-calibration').textContent).toContain('未校准')
+    // 既有规则单元格与 AI 段零改动
+    expect(cellValue(intentSec, '方向')).toBe('吸筹')
+    expect(cellValue(intentSec, '参与度')).toBe('42.5%')
+    expect(within(intentSec).getByTestId('l2-intent-ai-why').textContent).toContain('超大单+5967万')
+  })
 })

@@ -129,3 +129,40 @@ describe('DecisionVerdictCard · 竞态/失败/去重', () => {
     expect(mocks.decision).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('DecisionVerdictCard · 证据化(2026-10-10)', () => {
+  it('响应带证据链/相似情形 ⇒ 追加渲染(徽标与理由零改动)', async () => {
+    mocks.decision.mockResolvedValue({
+      symbol: '002636',
+      verdict: '动手',
+      reason: '动手: 趋势G、活跃度26.68、主力流入2.30亿',
+      phase: '向好',
+      evidence: {
+        triggers: ['趋势 G信号', '活跃度 26.68', '主力净流入 2.30亿'],
+        as_of: '2026-10-10T07:00:00',
+        as_of_is_today: true,
+        as_of_note: '数据时点: 20261010(今日)',
+        invalidation: ['若趋势转弱 / 资金转净流出, 则『动手』作废'],
+        invalidation_defaulted: true,
+      },
+      similar: { n: 40, up: 22, insufficient: false, sentence: '历史上 40 次相似情形, 22 次后续上涨' },
+    })
+    render(<DecisionVerdictCard symbol="002636" market="CN" />)
+    expect((await screen.findByTestId('decision-badge')).textContent).toBe('动手')
+    const ev = screen.getByTestId('decision-evidence')
+    expect(ev).toBeTruthy()
+    expect(screen.getByTestId('decision-evidence-triggers').textContent).toContain('活跃度 26.68')
+    expect(screen.getByTestId('decision-evidence-asof').textContent).toContain('今日')
+    expect(screen.getByTestId('decision-evidence-invalidation').textContent).toContain('作废')
+    expect(screen.getByTestId('decision-evidence-similar').textContent).toContain('22 次后续上涨')
+    // 徽标/理由既有行为逐字不变
+    expect(screen.getByTestId('decision-reason').textContent).toBe('动手: 趋势G、活跃度26.68、主力流入2.30亿')
+  })
+
+  it('响应无证据字段(旧后端) ⇒ 不渲染证据块, 逐字向后兼容', async () => {
+    mocks.decision.mockResolvedValue({ symbol: '002636', verdict: '看看', reason: '看看: 观望' })
+    render(<DecisionVerdictCard symbol="002636" market="CN" />)
+    await screen.findByTestId('decision-badge')
+    expect(screen.queryByTestId('decision-evidence')).toBeNull()
+  })
+})

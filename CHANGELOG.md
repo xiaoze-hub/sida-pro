@@ -1,3 +1,6 @@
+### feat-AI建议证据化(前端): 共振/决策/L2 三处出口渲染证据链
+- `ResonanceVerdictPanel` / `DecisionVerdictCard` / `L2Tab IntentExplainBlock` 三处 AI/规则结论出口**追加**渲染证据链(触发条件/数据时点/失效条件)+置信度校准 note+历史相似情形; 旧响应缺字段一律不渲染(向后兼容, 不改既有布局与口径)。测试补 `resonance-evidence*` / `decision-evidence*` / `l2-intent-ai-evidence*` 断言。
+
 ### feat-AI建议证据化(后端): 证据链+失效条件+置信度账本校准+历史相似情形（2026-10-10）
 - 用户铁律「AI 不替用户拍方向, 但要把证据备到最好」, 新增 `src/core/evidence_chain.py`(纯函数):
   ①`build_evidence_chain` 结论必带 触发条件(确定性拼出, 非 LLM 编造)+数据时点(缺失显式「时点缺失」, 不默认今日)+**失效条件(必填, 缺失回确定性默认并标 `invalidation_defaulted`)**;

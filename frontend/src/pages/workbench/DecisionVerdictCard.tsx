@@ -58,6 +58,22 @@ export interface DecisionVerdict {
     pnl_pct?: number | null
     note?: string
   } | null
+  /** 证据链(2026-10-10 证据化): 触发条件 / 数据时点 / 失效条件(反例检查)。旧响应无此字段 → 不渲染。 */
+  evidence?: {
+    triggers: string[]
+    as_of: string | null
+    as_of_is_today: boolean
+    as_of_note: string
+    invalidation: string[]
+    invalidation_defaulted: boolean
+  } | null
+  /** 历史相似情形(从决策账本聚合); n<30 → insufficient, 不给百分比。旧响应无此字段 → 不渲染。 */
+  similar?: {
+    n: number
+    up: number | null
+    insufficient: boolean
+    sentence: string
+  } | null
 }
 
 type LoadState =
@@ -133,6 +149,8 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
   const positionNote = state.data.position?.note
   const twoDimension = state.data.basis === 'two-dimension'
   const fundNote = state.data.fund_note || '资金维无数据(非CN)'
+  const evidence = state.data.evidence
+  const similar = state.data.similar
   return (
     <>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="decision-verdict-card">
@@ -170,6 +188,28 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
         <span data-testid="decision-position" className="mt-0.5 block text-[10px] text-muted-foreground/80">
           {positionNote}
         </span>
+      ) : null}
+      {/* 证据化(2026-10-10): 证据链/失效条件/相似情形 —— 仅追加, 旧响应无字段则不渲染 */}
+      {evidence ? (
+        <div
+          data-testid="decision-evidence"
+          className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
+        >
+          <div className="text-foreground/70" data-testid="decision-evidence-triggers">
+            触发条件: {evidence.triggers.join('；')}
+          </div>
+          <div className="text-muted-foreground/70" data-testid="decision-evidence-asof">
+            {evidence.as_of_note}
+          </div>
+          <div className="text-amber-600 dark:text-amber-500" data-testid="decision-evidence-invalidation">
+            失效条件: {evidence.invalidation.join('；')}
+          </div>
+          {similar?.sentence ? (
+            <div className="text-muted-foreground/70" data-testid="decision-evidence-similar">
+              {similar.sentence}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </>
   )

@@ -641,6 +641,15 @@ function EvolutionSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
  * ------------------------------------------------------------------ */
 
 /** AI 解读接口响应(`GET /api/dark-flow/{symbol}/intent-explain`)。 */
+interface IntentExplainEvidence {
+  triggers: string[]
+  as_of: string | null
+  as_of_is_today: boolean
+  as_of_note: string
+  invalidation: string[]
+  invalidation_defaulted: boolean
+}
+
 interface IntentExplainResp {
   available?: boolean
   reason?: string | null
@@ -649,6 +658,12 @@ interface IntentExplainResp {
   confidence?: string | null
   why?: string | null
   data_status?: string | null
+  /** 证据化(2026-10-10): 触发条件/数据时点/失效条件 */
+  evidence?: IntentExplainEvidence | null
+  /** 置信度校准(主力意图无账本口径 → 显式未校准) */
+  confidence_calibration?: { calibrated: boolean; value: number | null; note: string; n: number } | null
+  /** 历史相似情形(无口径 → null) */
+  similar?: { n: number; up: number | null; insufficient: boolean; sentence: string } | null
 }
 
 /**
@@ -711,6 +726,33 @@ function IntentExplainBlock({ symbol }: { symbol: string }) {
             <div className="text-muted-foreground" data-testid="l2-intent-ai-rule">
               规则结论: {resp.rule_signal ?? '--'}
             </div>
+            {/* 证据化(2026-10-10): 证据链/失效条件/校准 —— 仅追加, 不改上方口径与布局 */}
+            {resp.evidence ? (
+              <div
+                className="mt-1 space-y-0.5 border-t border-border/30 pt-1 text-[10px]"
+                data-testid="l2-intent-ai-evidence"
+              >
+                <div className="text-foreground/70" data-testid="l2-intent-ai-evidence-triggers">
+                  触发条件: {resp.evidence.triggers.join('；')}
+                </div>
+                <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-asof">
+                  {resp.evidence.as_of_note}
+                </div>
+                <div className="text-amber-600 dark:text-amber-500" data-testid="l2-intent-ai-evidence-invalidation">
+                  失效条件: {resp.evidence.invalidation.join('；')}
+                </div>
+                {resp.confidence_calibration?.note ? (
+                  <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-calibration">
+                    置信度校准: {resp.confidence_calibration.note}
+                  </div>
+                ) : null}
+                {resp.similar?.sentence ? (
+                  <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-similar">
+                    {resp.similar.sentence}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="mt-1.5 text-[11px] text-muted-foreground" data-testid="l2-intent-ai-reason">
