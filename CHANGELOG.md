@@ -1,3 +1,22 @@
+### feat-K线形态图层标注(买红卖绿) + 悬停详情（2026-10-10）
+
+K 线形态识别(上一提交)的**前端取数+图层标注**落地 —— 只加图层元素(记号/图例/悬停), **不动 StockWorkbench 布局**。
+
+- **新增 `frontend/packages/biz-ui/src/lib/kline-patterns.ts`**(纯逻辑, 不 import 图表库, 可独立单测):
+  白名单清洗(`normalizePatterns`: 缺 name/非法 direction/非有限 index 一律丢)、形态→记号映射
+  (`buildPatternMarkers`: **买红卖绿** —— 看涨=红/下方/arrowUp, 看跌=绿/上方/arrowDown, 中性=灰;
+  同(交易日+方向)多形态**合并为一个记号**防完全重合; 无合法日期不画, 不给假定位; 输出按时间升序)、
+  悬停读数(`patternHoverLabels`)。
+- **`KlineChart.tsx` 图层接线**: 父不传且 `layersVisible.pattern !== false` 时自取
+  `GET /klines/{symbol}/patterns?market=…`(与主图**同源同口径**, 走错峰慢车道 + 显式 45s 超时);
+  父传 `patterns` 则不重复自取; 取数失败 → **空数组显式降级(不编造)**。图例客观罗列形态名+方向+
+  日期/位置(悬停 title 看定义), 文案**不含买卖建议**(明确"客观标注 · 非投资建议"); 十字光标悬停读数
+  带出该根 K 线命中的形态。受 `layersVisible.pattern` 整层门控(关 → 既不取也不画)。
+- **测试(20 例)**: `kline-patterns-lib.test.ts`(纯逻辑正反例: 清洗/买红卖绿/合并/无日期不画/排序/中性命中)、
+  `kline-pattern-layer.test.tsx`(真渲染: 自取/图例/门控不发请求/父接管)、`kline-pattern-contract.test.ts`
+  (源码侧契约钉关键接线)。
+- 门禁: 全量 vitest 956 passed / `tsc -b` + `tsc -p tsconfig.tests.json` 0 error / `check_ui_rules.mjs` OK。
+
 ### feat-K线形态识别(严格规则) + /klines/{symbol}/patterns 端点（2026-10-10）
 
 K 线是产品绝对主角 —— 把 K 线形态识别做成**图层标注的取数底座**(证据, 非建议)。
