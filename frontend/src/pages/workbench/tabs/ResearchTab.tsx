@@ -3,6 +3,7 @@ import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import { ReportsTab } from '@panwatch/biz-ui/components/insight/ReportsTab'
 import { DeepTab } from '@panwatch/biz-ui/components/insight/DeepTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
+import DecisionVerdictCard from '@/pages/workbench/DecisionVerdictCard'
 
 /**
  * 工作台标签「研究」(工作台 v2 三合一, Task 15)。
@@ -27,7 +28,9 @@ import InsightProvider from '@/pages/workbench/InsightProvider'
  *    —— 见 `DeepTab.tsx`), 本文件**不再造第二个入口**(否则同屏两个按钮指向同一路径)。
  *  - 两个恢复文件**一字未改**: 改它们会让本标签与其它消费方(T9 恢复面)分叉;
  *  - 本文件自建的只有: 一层 `InsightProvider` + 段头(标题/口径/条数, 恢复组件里没有)
- *    + 两段**如实的空态说明**(见下「诚实空态」)。
+ *    + 两段**如实的空态说明**(见下「诚实空态」)
+ *    + ⓪ 一段「决策合成」(`GET /api/decision/{symbol}` → 动手/看看/别碰 + 一行理由, P0-3 2026-10-10;
+ *      由 `@/pages/workbench/DecisionVerdictCard` 自带取数/竞态守卫/三态 —— 见该文件头注)。
  *
  * 取数键 `keys={['reports','deep']}`(控制器裁定, 见 progress「Task 15 Ruling」):
  *  - `'reports'` → `insightApi.history({agent_name: premarket_outlook|daily_report|news_digest,
@@ -119,7 +122,7 @@ function Section({
 }
 
 /** 标签正文(在 Provider 内消费 useInsight; 见文件头注)。 */
-function ResearchTabBody({ symbol }: { symbol: string }) {
+function ResearchTabBody({ symbol, market }: { symbol: string; market: string }) {
   const { reports, activeReport, deepLoaded, deepResult, deepHistory } = useInsight()
   // 历史对比的条数: 只用于**如实陈述**"历史部分取到了几条", 不参与任何推断。
   const historyCount = deepHistory?.items?.length ?? 0
@@ -132,6 +135,20 @@ function ResearchTabBody({ symbol }: { symbol: string }) {
         <span className="text-border/60">|</span>
         <span>AI 报告(盘前 / 盘后 / 新闻 三子页签 + 正文) · 深度分析(TradingAgents)</span>
       </div>
+
+      {/*
+        ⓪ 决策合成(P0-3, 2026-10-10): `GET /api/decision/{symbol}` 三信号 → 动手/看看/别碰 + 一行理由。
+        全库此前**零调用**(后端已挂载, 前端 API 已定义), 本段是它唯一的消费方。取数**独立**于
+        InsightProvider 的 keys(自带竞态守卫与三态), 故本标签的取数门控 `['reports','deep']` 不变
+        —— 决策段另发一条 `/decision`。布局: 复用本标签 Section 原子(hairline 分节), **不改布局密度**。
+      */}
+      <Section
+        id="decision"
+        title="决策合成"
+        hint={`三信号(趋势 × 活跃度 × 资金) → 动手 / 看看 / 别碰 + 一行理由 · /decision/${symbol}`}
+      >
+        <DecisionVerdictCard symbol={symbol} market={market} />
+      </Section>
 
       {/* ① AI 报告(三子页签 + 正文由恢复组件 ReportsTab 自带) */}
       <Section
@@ -211,7 +228,7 @@ export default function ResearchTab({
       hasPosition={hasPosition}
       keys={RESEARCH_TAB_KEYS}
     >
-      <ResearchTabBody symbol={symbol} />
+      <ResearchTabBody symbol={symbol} market={mkt} />
     </InsightProvider>
   )
 }

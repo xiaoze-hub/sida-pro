@@ -56,9 +56,16 @@ export const insightApi = {
       options,
     ),
 
-  /** 决策合成(KI-021): 三信号 → 动手/看看/别碰 + 一行理由(后端永不 500) */
+  /**
+   * 决策合成(KI-021): 三信号 → 动手/看看/别碰 + 一行理由(后端永不 500)。
+   * P0-3(2026-10-10) 接 UI 时补超时: 后端 `decide` 要拉 120 天 K 线 + 明暗盘资金(慢接口),
+   * 默认 20s 会在冷启动窗口提前掐断 ⇒ 显式放宽到 30s。**签名不变**(仍 `(symbol, market)`)。
+   * 错误态由调用方处理(`fetchAPI` 失败即 reject), 后端永不 500 只保证"算不出给看看", 不保证网络成功。
+   */
   decision: <T>(symbol: string, market: string = 'CN') =>
-    fetchAPI<T>(`/decision/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`),
+    fetchAPI<T>(`/decision/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`, {
+      timeoutMs: 30000,
+    }),
 
   /**
    * L2 盘口 OB 失衡(thsdk 20档, 含十档买卖额/ob_series/事件/幽灵单; 不可用时 available=false)。

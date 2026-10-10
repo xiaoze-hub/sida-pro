@@ -1,3 +1,12 @@
+### feat-决策合成三信号接入个股工作台研究标签(P0-3)（2026-10-10）
+
+AI 全链路审计 P0-3: `GET /api/decision/{symbol}` 三信号合成(趋势×活跃度×资金 → 动手/看看/别碰 + 一行理由, `src/core/decision.py:synthesize`)后端路由已挂载(`src/web/app.py:673`)、前端 `insightApi.decision` 亦已定义, 但**全库零调用** —— 算得出来没有任何页面显示。
+
+- **新增唯一消费方** `frontend/src/pages/workbench/DecisionVerdictCard.tsx`: 调 `insightApi.decision(symbol, market)`, 渲染三态徽标(动手/看看/别碰, 语义色走 `gs`/`role` 令牌, 非价格涨跌色) + 一行理由; 诚实三态(loading/失败/无数据)显式 —— verdict 表外出「决策无数据」、reason 缺失出「理由无数据」, 不猜方向、不编造; `seqRef` 竞态守卫(换标的丢弃过期响应) + 取数只挂 `[symbol, market]`(无关重渲染不重发, `fetchAPI` 30s GET 缓存兜底)。
+- **接入** `ResearchTab`(工作台「研究」标签)新增一段「决策合成」(复用 Section hairline 原子, **布局/带1带2零改动**); 该段取数**独立**于 `InsightProvider` 的 `keys` 门控(仍 `['reports','deep']`, 决策段另发一条 `/decision`)。
+- **`insight.ts` `decision()`** 补 30s 超时(慢接口: 后端拉 120 天 K 线 + 明暗盘资金), **签名不变**; 错误态由调用方处理。
+- **测试(禁真网络)**: 新增 `tests/components/decision-verdict-card.test.tsx`(三态徽标/理由原文/换标的竞态/失败显式空态/无关重渲染不重发/verdict 缺失与 reason 缺失两条诚实边界); `research-tab.test.tsx` 加 `decision` mock(扩展, 非减弱)+ 断言决策段独立取数恰一次(symbol, market)且徽标/理由真渲染。
+- 验收: `vitest run` 全量、`tsc -b`、`tsc -p tsconfig.tests.json`、`node scripts/check_ui_rules.mjs` 全绿。不发版、不打 tag、不部署、不 push main。
 ### feat-AI 裁判结论上屏(verdict/理由/adjust 覆盖显式标注)+ 裁判战绩卡片 + referee-stats 端点（2026-10-10）
 
 AI 全链路审计 P0-2「AI 裁判零消费」: 引擎 `/predict` 早已把 `ai_referee{verdict,direction,reason}`
