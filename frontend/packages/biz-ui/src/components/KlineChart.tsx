@@ -55,6 +55,16 @@ import {
 } from '../klineEvents'
 // v2.1 §10.2④: 区间统计纯函数(可视区间 → 首末价/涨跌幅/振幅/累计明暗盘/事件数)
 import { computeRangeStats, type KlineRangeStats, type RangeBar } from '../lib/range-stats'
+// K线形态标注(2026-10-10 图层): 纯逻辑(白名单清洗 + 记号映射), 数据来自 /klines/{symbol}/patterns
+import {
+  normalizePatterns,
+  buildPatternMarkers,
+  patternHoverLabels,
+  PATTERN_DIRECTION_LABEL,
+  type PatternMark,
+} from '../lib/kline-patterns'
+
+export type { PatternMark } from '../lib/kline-patterns'
 
 export type { KlineRangeStats, RangeBar } from '../lib/range-stats'
 
@@ -188,6 +198,7 @@ const EMPTY_FUND: FundFlowBar[] = []
 const EMPTY_EVENTS: KlineEventPoint[] = []
 const EMPTY_LINES: KlinePriceLine[] = []
 const EMPTY_ACTIVITY: ActivityPoint[] = []
+const EMPTY_PATTERNS: PatternMark[] = []
 
 /**
  * v2.1 §12: 把 `#RRGGBB` 压暗成半透明色 —— 用于"数据源不可用"的事件图标灰显。
@@ -274,6 +285,11 @@ export default function KlineChart(props: {
   events?: KlineEventPoint[]
   /** L2 GS 买卖点 (设计稿 §5.2): 日线均线交叉, 实心已确认/空心待确认 */
   gsSignals?: GsSignalPoint[]
+  /**
+   * K线形态标注(2026-10-10): 严格规则识别的形态(证据, 非建议)。
+   * 父不传且 `layersVisible.pattern !== false` 时, 组件自取 `GET /klines/{symbol}/patterns`。
+   */
+  patterns?: PatternMark[]
   /** L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */
   subchart?: KlineSubchart
   /** L5 副图切换回调 (父组件持久化到 URL) */
@@ -295,7 +311,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -462,6 +478,8 @@ export default function KlineChart(props: {
     darkNet?: number | null
     /** §10.2③: 该根 K 线同日事件标签 */
     events?: string[]
+    /** K线形态标注(2026-10-10): 该根 K 线命中的形态, 如 ['红三兵(看涨)'] */
+    patterns?: string[]
     /** P2 补搬(2026-09-18): 该根 K 线的均线读数(IK 曾常显, 迁移后补回; 缺失 null → `--`) */
     ma5?: number | null
     ma10?: number | null
@@ -681,6 +699,8 @@ export default function KlineChart(props: {
               return icon && ready && !ready(icon) ? `${e.label}(数据源不可用)` : e.label
             })
         : []
+      // K线形态标注(2026-10-10): 该根 K 线命中的形态读数(证据描述, 无买卖建议)
+      const hitPatterns = patternHoverLabels(patternsRef.current, hitDate)
       const mingNet = hitFund
         ? (typeof hitFund.ming_net === 'number' && Number.isFinite(hitFund.ming_net)
             ? hitFund.ming_net
@@ -714,6 +734,7 @@ export default function KlineChart(props: {
           mingNet,
           darkNet,
           events: hitEvents,
+          patterns: hitPatterns,
           ma5: barIdx >= 0 ? (mv.ma5[barIdx] ?? null) : null,
           ma10: barIdx >= 0 ? (mv.ma10[barIdx] ?? null) : null,
           ma20: barIdx >= 0 ? (mv.ma20[barIdx] ?? null) : null,
@@ -840,17 +861,53 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, needLayer])
 
+  // ── K线形态标注自取(2026-10-10) ─────────────────────────────
+  // 数据源: GET /klines/{symbol}/patterns(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
+  // 与其它图层同策略: 父传了 props.patterns 就不取; 取不到 = 本次不画(空数组, 不编造)。
+  // 受 `layersVisible.pattern` 门控(整层关 → 不发请求, 也不画)。
+  const ownPatterns = props.patterns === undefined
+  const showPatternLayer = props.layersVisible?.pattern !== false
+  const [patternMarks, setPatternMarks] = useState<PatternMark[] | null>(null)
+  useEffect(() => {
+    if (!ownPatterns || !showPatternLayer || !props.symbol) {
+      setPatternMarks(null)
+      return
+    }
+    let cancelled = false
+    // 错峰(与 summary 同因): 形态标注不抢主图 /klines/{symbol} 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      fetchAPI<{ patterns?: unknown }>(
+        `/klines/${encodeURIComponent(props.symbol)}/patterns?market=${encodeURIComponent(props.market)}`,
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+        .then((res) => {
+          if (!cancelled) setPatternMarks(normalizePatterns(res?.patterns))
+        })
+        .catch(() => {
+          // 显式降级: 取不到 = 本次不画形态(不编造), 也不报错
+          if (!cancelled) setPatternMarks([])
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownPatterns, showPatternLayer])
+
   // 有效图层值: 父传优先 → 自取 → 稳定空数组(fetch 用回调整体覆盖, 不用偏函数风格)
   const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
   const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
   const effEvents = props.events ?? layer?.events ?? EMPTY_EVENTS
   const effPriceLines = props.supportPressure ?? layer?.priceLines ?? EMPTY_LINES
   const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
+  const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
   const fundRef = useRef<FundFlowBar[]>(effFundFlow)
   fundRef.current = effFundFlow
   const eventsRef = useRef<KlineEventPoint[]>(effEvents)
   eventsRef.current = effEvents
+  const patternsRef = useRef<PatternMark[]>(effPatterns)
+  patternsRef.current = effPatterns
   // §10.2④ 统计也要价位线(区间内出现的支撑/压力), 同样用 ref 供注册一次的回调读取
   const layersPriceLinesRef = useRef<KlinePriceLine[]>(effPriceLines)
   layersPriceLinesRef.current = effPriceLines
@@ -967,6 +1024,18 @@ export default function KlineChart(props: {
           text: t.text || (isBuy ? '买' : '卖'),
         })
       }
+    }
+    // K线形态标注(2026-10-10): 严格规则形态 → 记号(买红卖绿, 证据非建议; 受 pattern 图层开关)。
+    // 同 (交易日+方向) 的多个形态合成为一个记号(见 lib/kline-patterns), 防完全重合。
+    if (props.layersVisible?.pattern !== false) {
+      const pc = readStockColors()
+      markers.push(
+        ...(buildPatternMarkers(effPatterns, (d) => toChartTime(d, interval), {
+          up: pc.up,
+          down: pc.down,
+          neutral: readChartTheme().neutral,
+        }) as never[]),
+      )
     }
     // P2 补搬(2026-09-18): 主力意图箭头 + 涨停/跌停箭头(与 InteractiveKline 同语义/同阈值)
     if (intent) {
@@ -1102,7 +1171,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, interval, props.sourceReady, props.tradeMarkers, intent])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, interval, props.sourceReady, props.tradeMarkers, intent])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -1310,6 +1379,30 @@ export default function KlineChart(props: {
         </div>
       )}
 
+      {/* K线形态图例(2026-10-10): 识别到的形态客观罗列(悬停 title 看定义), 明确"证据非建议"。
+          样式复用 gs-legend 的令牌色(买红卖绿), 不新增字号/背景, 不改布局密度。 */}
+      {effPatterns.length > 0 && (
+        <div
+          data-testid="pattern-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">K线形态</span>
+          {effPatterns.map((m, i) => (
+            <span key={`${m.name}-${m.index}-${i}`} title={m.definition || ''}>
+              <span className={m.direction === 'bearish' ? 'text-[hsl(var(--gs-stop))]' : 'text-[hsl(var(--gs-go))]'}>
+                {m.name}
+              </span>
+              <span className="ml-1">
+                {PATTERN_DIRECTION_LABEL[m.direction]}
+                {m.date ? ` ${m.date.slice(0, 10)}` : ''}
+                {m.position ? ` · ${m.position}` : ''}
+              </span>
+            </span>
+          ))}
+          <span className="text-[10px]">客观标注 · 非投资建议</span>
+        </div>
+      )}
+
       {/* 主力意图图例(P2 补搬, 与 InteractiveKline 同口径): 数据不足时显示笔数, 不给方向 */}
       {intentRenderable(intent) && intentLegend && (
         <div
@@ -1376,6 +1469,9 @@ export default function KlineChart(props: {
             <span>暗盘 {toAmount(hoverReadout.darkNet)}</span>
             {hoverReadout.events && hoverReadout.events.length > 0 && (
               <span className="text-foreground">{hoverReadout.events.join(' · ')}</span>
+            )}
+            {hoverReadout.patterns && hoverReadout.patterns.length > 0 && (
+              <span className="text-foreground">形态 {hoverReadout.patterns.join(' · ')}</span>
             )}
           </>
         ) : (

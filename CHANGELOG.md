@@ -1,3 +1,40 @@
+### feat-K线形态图层标注(买红卖绿) + 悬停详情（2026-10-10）
+
+K 线形态识别(上一提交)的**前端取数+图层标注**落地 —— 只加图层元素(记号/图例/悬停), **不动 StockWorkbench 布局**。
+
+- **新增 `frontend/packages/biz-ui/src/lib/kline-patterns.ts`**(纯逻辑, 不 import 图表库, 可独立单测):
+  白名单清洗(`normalizePatterns`: 缺 name/非法 direction/非有限 index 一律丢)、形态→记号映射
+  (`buildPatternMarkers`: **买红卖绿** —— 看涨=红/下方/arrowUp, 看跌=绿/上方/arrowDown, 中性=灰;
+  同(交易日+方向)多形态**合并为一个记号**防完全重合; 无合法日期不画, 不给假定位; 输出按时间升序)、
+  悬停读数(`patternHoverLabels`)。
+- **`KlineChart.tsx` 图层接线**: 父不传且 `layersVisible.pattern !== false` 时自取
+  `GET /klines/{symbol}/patterns?market=…`(与主图**同源同口径**, 走错峰慢车道 + 显式 45s 超时);
+  父传 `patterns` 则不重复自取; 取数失败 → **空数组显式降级(不编造)**。图例客观罗列形态名+方向+
+  日期/位置(悬停 title 看定义), 文案**不含买卖建议**(明确"客观标注 · 非投资建议"); 十字光标悬停读数
+  带出该根 K 线命中的形态。受 `layersVisible.pattern` 整层门控(关 → 既不取也不画)。
+- **测试(20 例)**: `kline-patterns-lib.test.ts`(纯逻辑正反例: 清洗/买红卖绿/合并/无日期不画/排序/中性命中)、
+  `kline-pattern-layer.test.tsx`(真渲染: 自取/图例/门控不发请求/父接管)、`kline-pattern-contract.test.ts`
+  (源码侧契约钉关键接线)。
+- 门禁: 全量 vitest 956 passed / `tsc -b` + `tsc -p tsconfig.tests.json` 0 error / `check_ui_rules.mjs` OK。
+
+### feat-K线形态识别(严格规则) + /klines/{symbol}/patterns 端点（2026-10-10）
+
+K 线是产品绝对主角 —— 把 K 线形态识别做成**图层标注的取数底座**(证据, 非建议)。
+
+- **新增 `src/core/kline_patterns.py`**: 严格规则形态识别(与启发式 `kline_pattern.py` 分工并存,
+  不改动后者以免回归 agent 文本输出)。10 种形态(反转 5 + 持续 5, 看涨/看跌各半): 金针探底/
+  早晨之星/看涨吞没/黄昏之星/看跌吞没 + 红三兵/上升三法/黑三兵/下降三法/空方炮。每种给
+  **严格数学定义**(窗口大小/影线比/实体比/量能), 不做模糊阈值; 输出**绝对索引** + 逐条置信依据。
+- **边界显式不识别**(宁缺勿造): 窗口不足 / 前置历史 < 5 根 → 位置类形态不判; 一字板(range≤0)
+  剔除; 停牌缺口(相邻日期跨度 > 15 天, 含进入形态处)判为不连续。
+- **新增端点 `GET /api/klines/{symbol}/patterns`**: 与 `/klines/{symbol}` **同源同口径**
+  (PG hypertable 优先 → 联网兜底 + 剔桩/补今日), 返回近 N 根内识别到的形态; 识别不出 →
+  显式 `patterns: []` + `count: 0`。`days∈[30,250]`、`lookback∈[1,days]` 夹取。
+- 标注为**客观描述**(形态名/方向/位置/依据), 定义与依据文案**不含买卖建议字样**(测试钉住)。
+- 测试: `tests/test_kline_patterns.py`(10 形态各正反例 + 3 类边界 + 输出契约 + 目录 + 无建议字样)、
+  `tests/test_kline_patterns_api.py`(契约/同源/空数组/夹取/openapi 注册)。全 mock, 不发网络。
+
+### docs-冗余设计审计: /decision 预落库 + 前端热路径端点读库/现算分类（2026-10-10）
 ### feat-每日跨源指标标定作业(腾讯/东财/TQ 快照恒等式+跨源比对)（2026-10-10）
 
 Volume 单位事故(快照=手/日线=股)教训: 既有单源对账 `unit_recon` 只查**单源内部**恒等式, 查不出**跨源不一致**(两源各自自洽、并排才现形)。

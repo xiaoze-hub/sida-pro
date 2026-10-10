@@ -1266,3 +1266,69 @@ def get_kline_summary_batch(payload: KlineSummaryBatchRequest):
         )
 
     return results
+
+
+# ── K线形态识别(图层标注): 严格规则, 证据非建议 ────────────────────────────────
+#: 形态识别的 bars 根数夹取(太短识别不出; 太长无谓开销)
+PATTERNS_MIN_DAYS = 30
+PATTERNS_MAX_DAYS = 250
+#: 默认"近 N 根内"确认根窗口
+PATTERNS_DEFAULT_LOOKBACK = 60
+
+
+@router.get("/{symbol}/patterns")
+def get_kline_patterns(
+    symbol: str,
+    market: str = "CN",
+    days: int = 120,
+    lookback: int = PATTERNS_DEFAULT_LOOKBACK,
+):
+    """获取单只股票的 K 线形态标注(供前端 K 线图层打点)。
+
+    - 与 `/klines/{symbol}` **同源同口径**(PG hypertable 优先 → 联网兜底 + 剔桩/补今日),
+      保证标注与图上 K 线一一对齐, 不是另算一条序列;
+    - 形态走 `src/core/kline_patterns` 的**严格规则**(窗口/影线比/实体比/量能), 不做模糊判定;
+    - `patterns` 为**证据标注**(形态名/方向/位置/置信依据), 不含买卖建议;
+    - 识别不出 → **显式空数组**(不硬凑), `count` 如实为 0;
+    - 边界(窗口不足/一字板/停牌缺口)由识别模块显式不识别。
+    """
+    market_code = _parse_market(market)
+    days = max(PATTERNS_MIN_DAYS, min(int(days), PATTERNS_MAX_DAYS))
+    lookback = max(1, min(int(lookback), days))
+
+    source = None
+    pg_asof = None
+    today_bar = None
+
+    pg_klines, pg_asof = _pg_klines(symbol, market_code, days)
+    if pg_klines is not None:
+        klines = _aggregate_klines(pg_klines, "1d")
+        klines, today_bar = _finalize_daily_bars(klines, symbol, market_code, "1d")
+        source = "pg_klines_hypertable"
+    else:
+        collector = KlineCollector(market_code)
+        klines = collector.get_klines(symbol, days=days)
+        klines = _aggregate_klines(klines, "1d")
+        klines, today_bar = _finalize_daily_bars(klines, symbol, market_code, "1d")
+
+    bars = _serialize_klines(klines)
+    asof = str(getattr(klines[-1], "date", "") or pg_asof or "")[:10] if klines else (pg_asof or None)
+
+    from src.core.kline_patterns import detect_pattern_marks
+
+    marks = detect_pattern_marks(bars, lookback=lookback)
+
+    out: dict = {
+        "symbol": symbol,
+        "market": market_code.value,
+        "asof": asof,
+        "days": days,
+        "lookback": lookback,
+        "count": len(marks),
+        "patterns": [m.to_dict() for m in marks],
+    }
+    if source:
+        out["source"] = source
+    if today_bar:
+        out["today_bar"] = today_bar
+    return out
