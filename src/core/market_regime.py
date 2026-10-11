@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -362,3 +363,167 @@ def clear_regime_memo() -> None:
 def regime_key(regime: str | None) -> str:
     """规范 key 便捷入口(供账本写入/分桶)。"""
     return normalize_regime(regime)
+
+
+# ── 历史 regime 回填(2026-10-11): 按【信号日】解析当日情绪周期态 ───────────────
+# 背景: 存量 decision_log 的 regime 全 NULL(旧样本早于 regime 落库改动) → regime 分桶
+# 退化为单桶, "53.85% 是否被状态平均掩盖"无法验证。本函数给存量行**按其信号日**补 regime。
+# 口径铁律(禁自创第二套): 源优先级与映射**逐字复用** `_resolve`/`current_regime` ——
+#   ① signal_summary_daily.snapshot_date 命中该日 → blocks.sentiment.cycle;
+#   ② market_phase_daily.date 命中该日 → phase(经 PHASE_TO_REGIME);
+#   ③ 都缺 → 'unknown'(显式缺数据, 不猜态)。
+# 与 `current_regime` 的**唯一区别**: 按指定日精确取历史行, 而非取最新行。
+# 温度计(market_sentiment_daily)只作**证据**一并返回, **不参与 regime key 判定**。
+
+
+def _iso_day(day: Any) -> str:
+    """日期归一到 ISO(YYYY-MM-DD) 仅供比较用(紧凑 20260918 与 ISO 2026-09-18 必须归一)。"""
+    s = str(day).strip() if day is not None else ""
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+
+def _read_cycle_for_day(engine, day_iso: str, day_compact: str) -> tuple[str | None, str | None]:
+    """读指定日 signal_summary_daily 的情绪周期 → (cycle, confidence)。缺/异常 → (None, None)。
+
+    日期比较走 IN(ISO, 紧凑) 双字面量: signal_summary_daily.snapshot_date 语义是
+    `YYYY-MM-DD`, 但账本 `trade_date` 是紧凑 `YYYYMMDD` —— 两者**都不可以**直接
+    `==`(踩过回填 0 填), 故两种字面量都试。
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT blocks FROM signal_summary_daily "
+                    "WHERE snapshot_date IN (:a, :b) ORDER BY id DESC LIMIT 1"
+                ),
+                {"a": day_iso, "b": day_compact},
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 —— 表不存在/方言异常都算缺数据
+        logger.debug("regime 回填: signal_summary 读取失败 %r", exc)
+        return None, None
+    if row is None:
+        return None, None
+    blocks = row[0]
+    if isinstance(blocks, str):
+        try:
+            blocks = json.loads(blocks)
+        except Exception:  # noqa: BLE001 —— 坏 JSON 按缺数据
+            return None, None
+    if not isinstance(blocks, dict):
+        return None, None
+    senti = blocks.get("sentiment") or {}
+    if not isinstance(senti, dict):
+        return None, None
+    cycle = senti.get("cycle")
+    if not cycle:
+        return None, None
+    return str(cycle), (str(senti.get("confidence")) if senti.get("confidence") else None)
+
+
+def _read_phase_for_day(engine, day_iso: str, day_compact: str) -> str | None:
+    """读指定日 market_phase_daily.phase(兜底源)。缺/异常 → None。"""
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text('SELECT phase FROM market_phase_daily WHERE "date" IN (:a, :b) LIMIT 1'),
+                {"a": day_iso, "b": day_compact},
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001
+        # `date` 是 Date 列: 部分方言不接受紧凑字面量 → 退回只按 ISO 查(不猜)
+        logger.debug("regime 回填: market_phase 读取失败(退回 ISO 单查) %r", exc)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text('SELECT phase FROM market_phase_daily WHERE "date" = :a LIMIT 1'),
+                    {"a": day_iso},
+                ).fetchone()
+        except Exception:  # noqa: BLE001
+            return None
+    if row is None:
+        return None
+    return str(row[0]) if row[0] else None
+
+
+def _read_temperature_for_day(engine, day_iso: str, day_compact: str) -> dict[str, Any] | None:
+    """读指定日 market_sentiment_daily 派生情绪温度计(证据, 不参与 regime 判定)。缺 → None。"""
+    from sqlalchemy import text
+
+    try:
+        from src.core.sentiment_thermometer import derive_thermometer
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT trade_date, limit_up_count, limit_up_open_count, "
+                    "seal_success_money, seal_fail_money FROM market_sentiment_daily "
+                    "WHERE market = 'CN' AND trade_date IN (:a, :b) ORDER BY trade_date DESC LIMIT 1"
+                ),
+                {"a": day_compact, "b": day_iso},
+            ).mappings().first()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("regime 回填: 温度计读取失败 %r", exc)
+        return None
+    return derive_thermometer(dict(row)) if row else None
+
+
+def resolve_regime_for_day(engine, day: Any) -> dict[str, Any]:
+    """按【信号日】解析当日情绪周期态(历史态回填口径)。**永不抛异常**。
+
+    Returns: {available, regime, label, cycle, confidence, source, temperature[, reason]}
+    - source ∈ {signal_summary, market_phase, none}; 都缺 → available=False + regime='unknown';
+    - `temperature`: market_sentiment_daily 派生温度计(证据留存), 不参与 regime 判定。
+    """
+    day_iso = _iso_day(day)
+    day_compact = day_iso.replace("-", "")
+    base: dict[str, Any] = {
+        "available": False,
+        "regime": "unknown",
+        "label": REGIME_LABELS["unknown"],
+        "cycle": None,
+        "confidence": None,
+        "source": "none",
+        "temperature": None,
+    }
+    if not day_iso:
+        base["reason"] = "信号日不可解析"
+        return base
+
+    base["temperature"] = _read_temperature_for_day(engine, day_iso, day_compact)
+
+    cycle, confidence = _read_cycle_for_day(engine, day_iso, day_compact)
+    if cycle:
+        key = normalize_regime(cycle)
+        if key != "unknown":
+            base.update(
+                available=True, regime=key, label=REGIME_LABELS.get(key, key),
+                cycle=cycle, confidence=confidence, source="signal_summary",
+            )
+            return base
+
+    phase = _read_phase_for_day(engine, day_iso, day_compact)
+    if phase:
+        key = normalize_regime(phase)
+        if key != "unknown":
+            base.update(
+                available=True, regime=key, label=REGIME_LABELS.get(key, key),
+                cycle=phase, confidence=None, source="market_phase",
+            )
+            return base
+
+    base["reason"] = "无当日情绪周期快照(signal_summary_daily / market_phase_daily 均无该日数据)"
+    return base
+
+
+def regime_for_day_key(engine, day: Any) -> str:
+    """按【信号日】取规范 regime key(供账本回填); 解析不到 → 'unknown'(不猜态)。"""
+    try:
+        return resolve_regime_for_day(engine, day).get("regime") or "unknown"
+    except Exception as exc:  # noqa: BLE001 —— 回填侧永不抛
+        logger.debug("regime_for_day_key 解析失败(按 unknown): %r", exc)
+        return "unknown"
