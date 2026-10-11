@@ -1,3 +1,9 @@
+### test-自选池信号质量前端卡 UI 契约(样本不足显--·无建议文案)（2026-10-11）
+
+- **加** `frontend/tests/components/decision-watchlist-quality.test.tsx`(2 例): 样本足够显命中率、
+  样本不足显『--』、regime 分桶标注上屏、无法隔离/空池显式原因、**断言不含建议文案**。
+- **验证**: vitest 相关 4 个 decision 组件文件 18 例全绿。
+
 ### docs-胜率证据层分桶对比验证(情绪温度计条件化是否提胜率·含证伪)（2026-10-11）
 
 对 5294 样本(生产 `decision_log.resonance3`)做分桶对比: 全状态混算 T+1 = **53.85%**,
@@ -27,8 +33,8 @@
 - **加** 前端 `frontend/packages/api/src/decisions.ts` 客户端 + `DecisionLedger.tsx`
   只读卡(样本不足显『--』, 回落中性色, 不卡片化堆砌)。
 - **加** `tests/test_signal_quality.py`(7 例): 多用户隔离、样本不足不显数字、regime 分桶、
-  空池显式、无建议文案。
-- **验证**: 前端 `tsc -b` + `vite build` 通过; 后端两测试文件 18 例全绿。
+  空池显式、无建议文案; **加** `frontend/tests/components/decision-watchlist-quality.test.tsx`(2 例)。
+- **验证**: 前端 `tsc -b` + `vite build` 通过; 后端两测试文件 18 例全绿, 前端相关 4 文件 18 例全绿。
 
 ### feat-情绪温度计条件化门槛(SC15封板成功率/SC3炸板比接进情绪周期判据)（2026-10-11）
 
