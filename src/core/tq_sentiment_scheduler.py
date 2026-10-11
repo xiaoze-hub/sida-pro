@@ -3,7 +3,8 @@
 照抄 MarketSnapshotScheduler 形状(AsyncIOScheduler + 全局单例 + server lifespan 启动)。
 
 为什么收盘后: SC 序列是**日频**数据, 盘中当日值未定稿(SC3 涨停家数盘中会持续变化),
-收盘后取才是当日终值。周末与 TQ 不可用都静默跳过, 失败只记日志不抛。
+收盘后取才是当日终值。周末与 TQ 不可用都跳过, 失败带重试并显式记 ERROR(不静默);
+断链由每日 16:20 的 `src.core.sentiment_freshness` 自检兜底告警 + 自愈。
 """
 
 from __future__ import annotations
@@ -58,8 +59,15 @@ def _sync_in_job(*, backfill: bool = False) -> dict:
 
     db = SessionLocal()
     try:
-        out = sync_sentiment_series(db, days=BACKFILL_DAYS if backfill else 30)
-        logger.info("[tq sentiment] 同步完成%s: %s", "(回补)" if backfill else "", out)
+        # 重试/降级诚实(2026-10-11): TQ 突发 reset 常见, 给 2 次重试; 仍失败则显式
+        # 记 ERROR(不再静默) —— 断链由 16:20 的 sentiment_freshness 自检兜底告警。
+        out = sync_sentiment_series(
+            db, days=BACKFILL_DAYS if backfill else 30, retries=2
+        )
+        if isinstance(out, dict) and out.get("error"):
+            logger.error("[tq sentiment] 同步失败%s: %s", "(回补)" if backfill else "", out)
+        else:
+            logger.info("[tq sentiment] 同步完成%s: %s", "(回补)" if backfill else "", out)
         return out
     finally:
         db.close()

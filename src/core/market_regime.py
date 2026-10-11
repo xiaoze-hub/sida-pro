@@ -149,8 +149,23 @@ def temperature_policy(regime: str | None, thermo: dict[str, Any] | None = None)
     pol = regime_policy(regime)
     pol["thermo_applied"] = False
     pol["thermo_suspicious"] = bool(thermo.get("suspicious")) if thermo else False
+    pol["thermo_stale"] = bool(thermo.get("stale")) if thermo else False
     pol["temperature"] = None
     if not thermo or not thermo.get("available"):
+        return pol
+
+    # 数据停在过去(2026-10-11 断链修复): **不拿旧值冒充当日**, 不据此条件化, 显式标注。
+    if thermo.get("stale"):
+        pol["note"] = (
+            f"{pol['note']}; 情绪温度计数据停在 {thermo.get('trade_date') or '?'} 日"
+            f"(期望 {thermo.get('expected_asof') or '?'}), 本轮不据此条件化"
+        )
+        pol["temperature"] = {
+            "seal_success_rate": thermo.get("seal_success_rate"),
+            "blow_ratio": thermo.get("blow_ratio"),
+            "trade_date": thermo.get("trade_date"),
+            "stale": True,
+        }
         return pol
 
     note_bits: list[str] = []

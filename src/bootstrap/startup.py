@@ -370,6 +370,31 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"连板梯队数据自检注册失败: {e}")
 
+        # 市场情绪序列自检 + 自愈(2026-10-11 断链修复): 每日 16:20。
+        # market_sentiment_daily(TQ get_scjy_value SC01-35 全量落库)曾停在 2026-09-22
+        # 无人知 —— 每日同步(15:35)一旦失败只写一条日志, 且无表新鲜度自检(哨兵的
+        # tq_gateway 只探网关可达, 不校验本表 MAX(date))。本作业比对最新交易日 vs
+        # 期望交易日, 缺则 TQ 直连批量补数(带重试); 仍缺 → 作业按 ok=False 判 failed +
+        # 写通知(断链显式告警)。16:20 与 TQ 类调度器(15:35/15:50)、全市场日线(16:00)、
+        # 连板自检(16:05)、跨源标定(16:10)错开 —— TQ 背后只有一个客户端进程。
+        try:
+            from src.core.sentiment_freshness import run_sentiment_freshness_job
+
+            rt.scheduler.scheduler.add_job(
+                run_sentiment_freshness_job,
+                "cron",
+                hour=16,
+                minute=20,
+                id="sentiment-freshness-guard",
+                name="市场情绪序列数据自检",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("市场情绪序列数据自检已注册(每日 16:20)")
+        except Exception as e:
+            logger.error(f"市场情绪序列数据自检注册失败: {e}")
+
         # L2 成品资金收盘快照(2026-10-11 P1): 交易日 15:05 采样落库。
         # 非交易时段 TQ get_more_info 回 0, 之前 UI 把 0 当真实值; 收盘后落快照 →
         # 盘外回退最近交易日值并显式标注(全 0 不落)。

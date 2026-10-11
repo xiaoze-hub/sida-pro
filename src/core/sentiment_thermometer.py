@@ -62,13 +62,32 @@ def _is_sick(v: Any) -> bool:
     return (not math.isfinite(f)) or f < 0
 
 
-def derive_thermometer(row: Any) -> dict[str, Any]:
+def _stale_days(trade_date: str, expected_asof: str) -> int | None:
+    """trade_date 相对 expected_asof 落后多少个自然日; 不可比 → None(不猜)。"""
+    from datetime import date
+
+    try:
+        d = datetime.strptime(str(trade_date), "%Y%m%d").date()
+        e = datetime.strptime(str(expected_asof), "%Y%m%d").date()
+    except (TypeError, ValueError):
+        return None
+    return (e - d).days
+
+
+def derive_thermometer(row: Any, *, expected_asof: str | None = None) -> dict[str, Any]:
     """一行 market_sentiment_daily(映射/对象) → 情绪温度计(纯函数, 无 IO)。
+
+    ``expected_asof``(可选, 2026-10-11 断链修复): 期望的最新交易日(YYYYMMDD)。
+    传入且行日期落后其上时 → ``stale=True`` + ``reason`` 写明『数据停在 X 日』,
+    **供消费方显式标注, 不拿旧值冒充当日**。缺省 None → 与旧行为逐字段一致。
 
     Returns:
         {
           available: bool,              # 至少一个指标可算
           trade_date: str,
+          stale: bool,                  # 数据停在过去(仅当传入 expected_asof 才可能为真)
+          stale_days: int|None,         # 落后自然日数
+          expected_asof: str|None,
           seal_success_rate: float|None,  # 封板成功率 0-1
           blow_ratio: float|None,         # 炸板比 0-1
           seal_success_money, seal_fail_money, limit_up_count, limit_up_open_count: float|None,
@@ -121,9 +140,26 @@ def derive_thermometer(row: Any) -> dict[str, Any]:
         blow_ratio = limit_up_open_count / limit_up_count
 
     available = seal_success_rate is not None or blow_ratio is not None
+
+    # ── 陈旧标注(数据停在过去) ──
+    stale = False
+    sd: int | None = None
+    if expected_asof and td:
+        sd = _stale_days(td, expected_asof)
+        if sd is not None and sd > 0:
+            stale = True
+            reasons.append(f"数据停在 {td} 日(期望 {expected_asof}, 落后 {sd} 天)")
+
+    if reasons:
+        reasons_text = "; ".join(reasons)
+    else:
+        reasons_text = ""
     return {
         "available": available,
         "trade_date": td,
+        "stale": stale,
+        "stale_days": sd,
+        "expected_asof": expected_asof,
         "seal_success_rate": seal_success_rate,
         "blow_ratio": blow_ratio,
         "seal_success_money": seal_success_money,
@@ -131,7 +167,7 @@ def derive_thermometer(row: Any) -> dict[str, Any]:
         "limit_up_count": limit_up_count,
         "limit_up_open_count": limit_up_open_count,
         "suspicious": suspicious,
-        "reason": "; ".join(reasons),
+        "reason": reasons_text,
     }
 
 
@@ -159,10 +195,22 @@ def _read_latest_row(db) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _expected_asof() -> str | None:
+    """期望的最新交易日(YYYYMMDD); 日历不可用 → None(不猜, 也就不标陈旧)。"""
+    try:
+        from src.core.sentiment_freshness import _expected_latest
+
+        return _expected_latest()
+    except Exception as e:  # noqa: BLE001 —— 拿不到期望日就不标"陈旧"
+        logger.debug("期望交易日解析失败(不标陈旧): %r", e)
+        return None
+
+
 def _resolve(db=None) -> dict[str, Any]:
     """读当前情绪温度计(不走网络)。永远返回 dict; 失败 → available=False + reason。"""
     from src.db.session import SessionLocal
 
+    expected = _expected_asof()
     owns = db is None
     session = db
     try:
@@ -177,16 +225,22 @@ def _resolve(db=None) -> dict[str, Any]:
             return {
                 "available": False,
                 "trade_date": "",
+                "stale": True,
+                "stale_days": None,
+                "expected_asof": expected,
                 "seal_success_rate": None,
                 "blow_ratio": None,
                 "suspicious": False,
                 "reason": "无情绪温度数据(market_sentiment_daily 无 CN 行)",
             }
-        return derive_thermometer(row)
+        return derive_thermometer(row, expected_asof=expected)
     except Exception as e:  # noqa: BLE001
         return {
             "available": False,
             "trade_date": "",
+            "stale": True,
+            "stale_days": None,
+            "expected_asof": expected,
             "seal_success_rate": None,
             "blow_ratio": None,
             "suspicious": False,
