@@ -1,3 +1,27 @@
+### feat-情绪温度计条件化门槛(SC15封板成功率/SC3炸板比接进情绪周期判据)（2026-10-11）
+
+决策账本 resonance3 的命中率此前是**全状态混算的平均数**(T+1 53.85%), 同一套『动手』
+门槛在冰点/退潮与发酵/修复期含义不同。本轮在既有**五态条件化**(`market_regime`)之上,
+叠加**当日市场温度**这一新判据: 封板成功率高→承接强(放宽)、低→资金退却(收紧),
+炸板比高→分歧加剧(收紧)。**零新采集** —— 全部派生自已落库的 `market_sentiment_daily`
+(tq_sentiment_series 的 SC15/SC3 列)。
+
+- **加** `src/core/sentiment_thermometer.py`: 纯函数 `derive_thermometer`(封板成功率 =
+  `seal_success_money/(成功+失败)`; 炸板比 = `limit_up_open_count/limit_up_count`) +
+  `current_thermometer()`(读最新行, 60s 进程缓存)。缺数据/分母 0 → `None` 不编造;
+  **sick 值(负/非有限)→ `suspicious=True` 且不硬算**。
+- **改** `src/core/market_regime.py`: 新增 `temperature_policy(regime, thermo)` —— 在周期态
+  允许动手行上叠加温度修正(冷→仅行1 / 热→纳入拐点行2 / 炸板比高→收紧), 且 `note`
+  **写明依据**(如『封板成功率 61%<阈值 50% → 收紧』)。`condition_verdict` 增可选 `thermo`
+  关键字参数, 缺省时与旧版**逐字一致**(向后兼容零破坏)。
+- **改** `src/core/thresholds.py`: 新增 `seal_rate_tighten`(0.50)/`seal_rate_loosen`(0.70)/
+  `blow_rate_tighten`(0.45)三个阈值, 走 env `SIDA_THRESHOLD_*`(禁硬编码)。
+- **改** `src/core/decision.py`: `synthesize` 增可选 `thermo`; `decide()` 取温度计并透传;
+  `_apply_regime` 输出 `temperature` 字段 + 温度条件化的 `regime_note`; 账本 context 带温度。
+- **加** `tests/test_regime_thermometer.py`(12 例): 派生/降级/sick、收紧放宽、缺数据零破坏、
+  阈值可配、读库、synthesize 透传。
+- **验证**: 见 `docs/research/情绪温度计条件化与胜率证据_20261011.md`(分桶对比结论)。
+
 ### test-登录失败限流计数跨用例隔离(修 CI shard 1 顺序污染)（2026-10-11）
 
 CI shard 1 红: `tests/test_auth_change_password.py` 的改密用例故意用错旧口令(失败路径)

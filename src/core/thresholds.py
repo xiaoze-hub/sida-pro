@@ -177,6 +177,33 @@ _SPECS: dict[str, dict] = {
         "hi": 60.0,
         "label": "分时突破-DDE采样节拍(分钟)",
     },
+    # ── 情绪温度计条件化阈值(2026-10-11 胜率证据层 ①) ──────────────────────────
+    # 供 `src.core.market_regime` 的『动手』门槛做**温度条件化**:
+    #   封板成功率 < seal_rate_tighten → 收紧;  >= seal_rate_loosen → 放宽(冷热两侧);
+    #   炸板比     >= blow_rate_tighten → 收紧(分歧加剧)。
+    # 默认值为**启发式初值(占比 0-1)**, 待 5294 样本分桶验证后按需 env 覆盖
+    # (docs/research/情绪温度计条件化与胜率证据_20261011.md)。
+    "seal_rate_tighten": {
+        "default": 0.50,
+        "env": "SIDA_THRESHOLD_SEAL_RATE_TIGHTEN",
+        "lo": 0.0,
+        "hi": 1.0,
+        "label": "封板成功率-收紧线",
+    },
+    "seal_rate_loosen": {
+        "default": 0.70,
+        "env": "SIDA_THRESHOLD_SEAL_RATE_LOOSEN",
+        "lo": 0.0,
+        "hi": 1.0,
+        "label": "封板成功率-放宽线",
+    },
+    "blow_rate_tighten": {
+        "default": 0.45,
+        "env": "SIDA_THRESHOLD_BLOW_RATE_TIGHTEN",
+        "lo": 0.0,
+        "hi": 1.0,
+        "label": "炸板比-收紧线",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)
