@@ -16,9 +16,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── AI 机构活跃度阈值(同花顺官方, 零调参) ──────────────────────────────
-LIFE_LINE = 1.56      # 生命线 = 1.3% × 1.2
-STRONG_LINE = 3.0     # 强势线 = 2.5% × 1.2
-BULL_LINE = 6.0       # 大牛线 = 5% × 1.2
+# 实际生效值统一走 `src.core.thresholds` 配置层(env `SIDA_THRESHOLD_*` 可覆盖);
+# 下列常量仅为**默认值镜像**(向后兼容: 他处 import LIFE_LINE 做比较), 判定时不再直用。
+# 2026-10-11 P2: 原先本模块直用硬编码常量, env 对其无效 → 与 ai_activity(已走配置层)
+# 档位不一致。现与 ai_activity 同源读配置层, 两处 level 恒一致。
+LIFE_LINE = 1.56      # 生命线默认 = 1.3% × 1.2
+STRONG_LINE = 3.0     # 强势线默认 = 2.5% × 1.2
+BULL_LINE = 6.0       # 大牛线默认 = 5% × 1.2
 ACTIVITY_MULT = 1.2   # 波动放大系数(源码写死)
 
 
@@ -77,12 +81,19 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     if cur is None:
         return None
 
+    # 阈值实时读统一配置层(env SIDA_THRESHOLD_* 可覆盖) —— 与 ai_activity 同源, 档位一致
+    from src.core import thresholds as _thresholds
+
+    life = _thresholds.life_line()
+    strong = _thresholds.strong_line()
+    bull = _thresholds.bull_line()
+
     # level
-    if cur >= BULL_LINE:
+    if cur >= bull:
         level = "大牛"
-    elif cur >= STRONG_LINE:
+    elif cur >= strong:
         level = "强势"
-    elif cur >= LIFE_LINE:
+    elif cur >= life:
         level = "生命"
     else:
         level = "弱"
@@ -90,7 +101,7 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     # 连强天数(活跃度 > 生命线 连续日数, 含当日)
     streak = 0
     for a in reversed(acts):
-        if a is not None and a > LIFE_LINE:
+        if a is not None and a > life:
             streak += 1
         else:
             break
@@ -104,9 +115,9 @@ def compute_institution_activity(bars: list[dict]) -> dict | None:
     return {
         "activity": round(cur, 3),
         "level": level,
-        "life_line": LIFE_LINE,
-        "strong_line": STRONG_LINE,
-        "bull_line": BULL_LINE,
+        "life_line": life,
+        "strong_line": strong,
+        "bull_line": bull,
         "streak_days": streak,
         "ma5": ma5,
         "is_yang": c >= o,

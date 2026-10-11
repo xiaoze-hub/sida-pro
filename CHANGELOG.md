@@ -1,3 +1,20 @@
+### fix-decision_pioneer 阈值接入统一配置层(env 生效, 与 ai_activity 档位一致)（2026-10-11）
+
+**问题(P2)**: `src/core/decision_pioneer.py:19-21` 的 `LIFE_LINE/STRONG_LINE/BULL_LINE` 硬编码,
+`compute_institution_activity` 直用 → env `SIDA_THRESHOLD_LIFE_LINE/STRONG_LINE/BULL_LINE` 对其**无效**;
+而 `ai_activity.py` 已改走 `src/core/thresholds` 配置层 → **两处档位不一致**。
+
+**改**:
+- `src/core/decision_pioneer.py`: 档位判定(life/strong/bull)与返回体的 `life_line/strong_line/bull_line`
+  改为实时调 `src.core.thresholds.life_line()/strong_line()/bull_line()`; 三个模块常量降级为
+  **默认值镜像**(向后兼容 import, 判定不再直用)。
+- `tests/test_decision_pioneer.py`: 新增 3 例回归 —— ①默认下两模块 level 一致(=强势);
+  ②env 覆盖强势线/生命线 → `decision_pioneer` 与 `ai_activity` level **恒一致**(且随 env 降级);
+  ③返回体阈值字段真读配置层(非常量)。
+
+**验证**: `tests/test_decision_pioneer.py` + `test_thresholds.py` + `test_activity_caliber.py` 全绿;
+全量 `-m 'not network'` 3613 passed / 0 failed。
+
 ### fix-交易日历按真实行情修正: 补班周末恒休市 + 补 2026 除夕（2026-10-11）
 
 **问题(P1)**: `src/core/trading_calendar.py` 的 `_WORKDAYS_2026` 含 2026-10-10(调休补班周六),
