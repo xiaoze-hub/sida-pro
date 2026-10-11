@@ -35,7 +35,7 @@
 | wencai | thsdk 可 import 且 `THS_USERNAME`/`THS_PASSWORD` 均已注入          |
 | shadow | 数据库可连且 `paper_trading_trades` 表可查                        |
 | tq_moreinfo | TQ 网关: `TDX_QUANT_URL` 优先, 否则走真实解析器 `_resolve_tq_url()` 自动发现 |
-  (候选全灭 → 显式『TQ 不可用』degraded; 解析器不可用时回退被动缓存, 无 → 尚未发现)
+  (候选探测未命中 → 显式『TQ 不可用』degraded, 文案区分真·全灭 vs 预算耗尽; 解析器不可用时回退被动缓存, 无 → 尚未发现)
 """
 from __future__ import annotations
 
@@ -188,9 +188,12 @@ def check_tq_moreinfo() -> dict[str, Any]:
         if resolve is not None:
             target = resolve()
             if not target:
-                # v0.13.49: 候选全灭 → 显式『TQ 不可用』, 非『尚未自动发现』
+                # v0.13.49: 探测未命中 → 显式『TQ 不可用』, 非『尚未自动发现』
+                # P2(2026-10-11): 诚实区分「真·候选全灭」vs「预算耗尽(已探 x/y)」
+                desc_fn = getattr(_tqmod, "_probe_state_desc", None)
+                desc = desc_fn() if callable(desc_fn) else "候选地址探测未命中"
                 return {"status": STATUS_DEGRADED,
-                        "detail": "TQ 不可用: 候选地址探测全灭且未配置 TDX_QUANT_URL"}
+                        "detail": f"TQ 不可用: {desc}且未配置 TDX_QUANT_URL"}
             if probe is None:  # pragma: no cover
                 return {"status": STATUS_CONNECTED, "detail": f"TQ 网关已发现: {target}"}
             if probe(target, timeout=2.0):

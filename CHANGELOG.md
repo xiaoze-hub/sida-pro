@@ -1,3 +1,21 @@
+### fix-TQ 探测结论文案区分真·全灭与预算耗尽(已探 x/y)（2026-10-11）
+
+**问题(P2)**: `packages/marketdata/.../vendors/tq.py`(`_rpc` 抛 TqUnavailable)与
+`src/core/source_health.py`(tq_moreinfo detail)都写「候选地址探测**全灭**」, 但 `_resolve_tq_url`
+是 3s 预算耗尽就 `break`(候选 ~13 个可能只探了几个)—— 把「预算没跑完」误报成「全灭」。
+
+**改**:
+- `tq.py`: 新增进程态 `_TQ_LAST_PROBE = {probed, total, budget_exhausted}` 与
+  `_probe_state_desc()`; `_resolve_tq_url` 记录已探数/是否预算耗尽, 日志/异常文案据此区分
+  「候选地址探测全灭(已探 N/N)」vs「候选探测未在预算内完成(已探 x/y)」(修 `global` 声明)。
+- `src/core/source_health.py`: tq_moreinfo 未命中时用 `_probe_state_desc()` 组装 detail
+  (旧模块无该函数时回退原文案)。
+- `tests/test_tq_url_layer.py`: 新增 3 例 —— ①全灭态 probed==total 且 desc 含「全灭」不含「预算」;
+  ②预算耗尽(预算=0)态 budget_exhausted=True、probed<total、desc 含「未在预算内完成 已探 x/y」;
+  ③`_rpc` 抛出的 TqUnavailable 文案两种情况可区分。
+
+**验证**: `tests/test_tq_url_layer.py` + `test_source_health.py` 全绿; 全量 3613 passed / 0 failed。
+
 ### fix-decision_pioneer 阈值接入统一配置层(env 生效, 与 ai_activity 档位一致)（2026-10-11）
 
 **问题(P2)**: `src/core/decision_pioneer.py:19-21` 的 `LIFE_LINE/STRONG_LINE/BULL_LINE` 硬编码,

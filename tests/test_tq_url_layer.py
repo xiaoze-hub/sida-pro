@@ -27,6 +27,8 @@ def _reset(monkeypatch):
     monkeypatch.setattr(tqmod, "_TQ_URL_CACHE_TS", 0.0)
     monkeypatch.setattr(tqmod, "_TQ_LAST_GOOD_HOST", None)
     monkeypatch.setattr(tqmod, "_TQ_FAIL_STREAK", 0)
+    monkeypatch.setattr(tqmod, "_TQ_LAST_PROBE",
+                        {"probed": 0, "total": 0, "budget_exhausted": False})
     monkeypatch.delenv("TDX_QUANT_URL", raising=False)
     monkeypatch.setattr(tqmod, "_host_gateway", lambda: "10.9.9.9")
 
@@ -251,3 +253,56 @@ def test_formula_scan_empty_pool_marks_no_data(monkeypatch):
     assert res["hit_count"] == 0
     assert res["date_has_data"] is False
     assert res["complete"] is False
+
+
+# ---------------------------------------------------------------------------
+# P2(2026-10-11): 探测结论文案 —— 诚实区分「真·全灭」vs「预算耗尽」
+# ---------------------------------------------------------------------------
+
+
+def test_probe_state_all_dead_is_complete(monkeypatch):
+    """预算内探完全部候选仍全灭 → 结论=全灭(已探 N/N), 不含『预算』字样。"""
+    _reset(monkeypatch)
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=1.5: False)
+    assert tqmod._resolve_tq_url() is None
+    st = tqmod._TQ_LAST_PROBE
+    assert st["budget_exhausted"] is False
+    assert st["probed"] == st["total"] > 0
+    desc = tqmod._probe_state_desc()
+    assert "全灭" in desc and "预算" not in desc
+    assert f"{st['probed']}/{st['total']}" in desc
+
+
+def test_probe_state_budget_exhausted_is_partial(monkeypatch):
+    """3s 预算耗尽(只探了一部分) → 结论=未在预算内完成(已探 x/y), 不谎称『全灭』。"""
+    _reset(monkeypatch)
+    monkeypatch.setattr(tqmod, "_PROBE_BUDGET_S", 0.0)  # 预算立即耗尽
+    called: list[str] = []
+    monkeypatch.setattr(tqmod, "_probe_tq",
+                        lambda url, timeout=1.5: called.append(url) or False)
+    assert tqmod._resolve_tq_url() is None
+    st = tqmod._TQ_LAST_PROBE
+    assert st["budget_exhausted"] is True
+    assert st["probed"] < st["total"]
+    assert called == []  # 预算为 0 → 一个候选都没探到
+    desc = tqmod._probe_state_desc()
+    assert "未在预算内完成" in desc
+    assert f"已探 {st['probed']}/{st['total']}" in desc
+
+
+def test_rpc_unavailable_message_distinguishes_budget_vs_all_dead(monkeypatch):
+    _reset(monkeypatch)
+    # ① 真·全灭
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=1.5: False)
+    with pytest.raises(tqmod.TqUnavailable) as ei:
+        tqmod._rpc("get_stock_list", {})
+    assert "全灭" in str(ei.value)
+
+    # ② 预算耗尽
+    _reset(monkeypatch)
+    monkeypatch.setattr(tqmod, "_PROBE_BUDGET_S", 0.0)
+    monkeypatch.setattr(tqmod, "_probe_tq", lambda url, timeout=1.5: False)
+    with pytest.raises(tqmod.TqUnavailable) as ei2:
+        tqmod._rpc("get_stock_list", {})
+    assert "未在预算内完成" in str(ei2.value)
+    assert "全灭" not in str(ei2.value)
