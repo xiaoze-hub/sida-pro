@@ -1,3 +1,22 @@
+### fix-情绪温度计/regime/API 数据陈旧显式标注(不拿旧值冒充当日)（2026-10-11）
+
+承接上一提交(情绪序列断链)。此前消费方读 `market_sentiment_daily` **最新行**时,
+即使该行是个把月前的旧值也照当"当日温度"用于条件化 —— 断链期间会拿 09-22 的温度给
+09-25 的决策"盖章"。本轮给全链加**陈旧显式标注**, 数据停在过去即标注且**不据此条件化**。
+
+- **改** `src/core/sentiment_thermometer.py`: `derive_thermometer` 增可选 `expected_asof`
+  → 行日期落后其上时 `stale=True`/`stale_days`/`expected_asof`, 并在 `reason` 写明
+  『数据停在 X 日』; `current_thermometer`/`_resolve` 自动算期望交易日传入(日历不可用则不标陈旧, 不猜)。
+  缺省无 `expected_asof` → 与旧行为逐字段一致(向后兼容零破坏)。
+- **改** `src/core/market_regime.py`: `temperature_policy` 遇 `thermo.stale` → **不据此条件化**
+  (按周期态放行), 输出 `thermo_stale=True` + `note` 显式标注『情绪温度计数据停在 X 日』。
+- **改** `src/web/api/sentiment_series.py`: `GET /health|baseline` 带 `stale`/`expected`/`stale_days`
+  (数据停在过去时显式暴露, 供前端/战报标注)。
+- **加** `tests/test_sentiment_staleness.py`(6 例): 温度计陈旧标注、regime 拒用陈旧值、
+  新鲜值照常条件化、API 陈旧标注。
+- **验证**: `pytest tests/test_sentiment_staleness.py tests/test_regime_thermometer.py
+  tests/test_decision_regime.py -q` 全绿; 逐字段向后兼容(无 `expected_asof` 时 stale=False)。
+
 ### fix-市场情绪序列断链修复(每日自检+自愈+重试降级诚实+16:20 接线)（2026-10-11）
 
 `market_sentiment_daily`(TQ `get_scjy_value` SC01-35 全量落库)**停在 2026-09-22** 无人知,
