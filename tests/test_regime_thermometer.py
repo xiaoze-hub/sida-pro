@@ -152,6 +152,6 @@ def test_synthesize_with_thermo_notes_basis():
     assert o["verdict"] == "看看" and o["regime_adjusted"] is True
     assert "封板成功率 30%<阈值 50% → 收紧" in o["reason"]
     assert o["temperature"]["seal_success_rate"] == 0.30
-    # 无 thermo 时零破坏
+    # 无 thermo 时零破坏(不新增字段)
     base = synthesize(*ROW3, regime="ferment")
-    assert base["verdict"] == "动手" and base["temperature"] is None
+    assert base["verdict"] == "动手" and "temperature" not in base

@@ -1,3 +1,12 @@
+### fix-synthesize 温度计字段只在显式传入时透出(修零破坏契约)（2026-10-11）
+
+`test_synthesize_no_context_is_field_identical_to_legacy` 要求无上下文 `synthesize(...)` 输出
+**逐字段等于 legacy 键集**。上一提交让 `temperature` 字段恒存在 → 破坏该契约(全量跑 1 failed)。
+
+- **改** `src/core/decision.py._apply_regime`: `temperature` 仅在 `thermo is not None` 时写入输出
+  (缺省路径不新增字段, 逐字段零破坏); **改** 对应测试断言 `temperature` 不在 base。
+- **验证**: 全量 `-m 'not network'` 修后 **3608 passed / 2 skipped / 0 failed**(修前 1 failed)。
+
 ### test-自选池信号质量前端卡 UI 契约(样本不足显--·无建议文案)（2026-10-11）
 
 - **加** `frontend/tests/components/decision-watchlist-quality.test.tsx`(2 例): 样本足够显命中率、

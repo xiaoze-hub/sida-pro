@@ -155,7 +155,9 @@ def _apply_regime(out: dict, regime: str | None, thermo: dict | None = None) -> 
     out["regime_label"] = pol["label"]
     out["regime_policy"] = pol["policy"]
     out["regime_adjusted"] = adjusted
-    out["temperature"] = pol.get("temperature")
+    if thermo is not None:
+        # 温度计只在**显式传入**时透出(缺省路径逐字段零破坏, 见 test_decision_personal_mkt)
+        out["temperature"] = pol.get("temperature")
     if adjusted and note:
         out["regime_note"] = note
         out["reason"] = f"{note}；{out.get('reason', '')}"
