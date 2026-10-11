@@ -1,3 +1,49 @@
+### fix-presets 多用户隔离缺口(select() 漏 user_id) + 门禁扩 SQLAlchemy 2.0 select() 覆盖（2026-10-11）
+
+P1 越权: `src/web/api/presets.py:run()` 找标的时
+`db.execute(select(Stock).where(Stock.symbol==target, Stock.market==market))`
+**漏 user_id 过滤** → 两用户持有同 symbol/market 时 `scalar_one_or_none()` 抛
+`MultipleResultsFound`(500), 或命中他人自选(把别人的标的喂给本用户的分析)。
+
+- **修** `src/web/api/presets.py`: `run()` 加 `user: User = Depends(get_current_user)`,
+  查标的补 `or_(Stock.user_id == user.id, Stock.user_id.is_(None))`(本人 + 全局共享,
+  同 stocks 列表口径), 并改 `.order_by(Stock.user_id.is_(None)).scalars().first()`:
+  同号(本人 + 共享)并存时优先本人, 彻底消除 MultipleResultsFound。
+- **修** `scripts/check_scoped_queries.py`(门禁盲区): 此前只识别 `db.query(<Model>)`,
+  对 SQLAlchemy 2.0 `db.execute(select(<Model>))` 零覆盖 → presets 漏过滤逃逸。
+  现扩 AST 匹配纳入 select()(含 `.where/.order_by` 方法链回剥)。`text()` 原生 SQL
+  模型是字符串无法静态归因, 保留人工核对: `src/web/api` 现存 text() 查询已逐个核对,
+  均只查共享行情表/独立预测库(无 user-scoped 表) → 无新增泄露。
+- **加** `tests/test_presets_user_scope.py`(4 例): 两用户同标的各自拿到本人标的、
+  仅全局共享时回退共享、只存在他人标的时 404。
+- **加** `tests/test_multitenant_isolation.py::TestScopeCheckerC3` 4 例: 漏过滤 select()
+  报红 / 带 user_id 过滤的 select() 放行 / 方法链 select() 报红 / 非 user-scoped 模型不误报。
+- **反向验证**: ①删 presets 的 user_id 过滤 → 隔离用例 2 红(拿到他人标的 / 404 失效);
+  ②临时加漏过滤 `select(Stock)` 探针文件 → 门禁报红(命中), 删探针 → 绿。
+- **验证**: 门禁 `check_scoped_queries` 绿; 全量 `-m "not network"` 绿(见下条)。
+
+### perf-报告中心 /reports/list 性能双缺陷(先排序后读标题 + 缓存 + 标题噪音)（2026-10-11）
+
+P1: `/api/reports/list` 被首页每 30s 轮询(frontend Dashboard.tsx `setInterval(30_000)`),
+生产实测 30-45s 渲染。两个缺陷:
+  - 性能: 对 `CRON_OUTPUT_DIR` 全目录**每个** .md 都 `f.stat()` + 逐行读标题,
+    **排序截断在后** → limit 不减扫描量; 无缓存; cron output 无保留期清理。
+  - 正确性: `title_preview` 取原始首行 → 446/457 文件恒显 `# Cron Job: 任务名` 噪音。
+
+- **改** `src/web/api/reports.py`:
+  ①先只 stat 全量 → 按 mtime 倒序 → **只读命中前 limit 项**标题(limit 直接决定读取量);
+  ②新增 `_extract_title`(复用 `_strip_meta` 剥噪后取正文首个 `# x`, 并跳过 `# Cron Job:` 头);
+  ③新增 mtime 签名 + TTL(30s)缓存: 键=(job_id, limit), 未过 TTL 且 job 目录 mtime 未变
+  直接命中; 新报告落盘改目录 mtime → 缓存立即失效(不必等 TTL)。
+- **加** `scripts/cleanup_cron_outputs.py`: 保留期清理(默认 30 天, 支持 `--days`/`--dry-run`/`--dir`),
+  控目录规模; 运维可挂 cron(脚本 docstring 给了示例)。手动脚本 + 本说明, 不进部署。
+- **加** `tests/test_reports_list.py`(6 例): 真标题非噪音 / 无 Response 锚点旧格式也跳噪音 /
+  limit 只读命中项标题(断言 read_text 次数==limit) / 缓存命中零读取 / 新文件经目录 mtime
+  失效缓存 / 非 md 忽略 + job_id 过滤。
+- **反向验证**: 临时还原旧行为(naive 首行标题 + 读全部再截断) → 4 例红(标题噪音 ×2、
+  只读命中、缓存失效); 还原修复 → 全绿。
+- **验证**: 全量 `-m "not network"` 绿; 生产提速效果待部署后实测。
+
 ### test-登录失败限流计数跨用例隔离(修 CI shard 1 顺序污染)（2026-10-11）
 
 CI shard 1 红: `tests/test_auth_change_password.py` 的改密用例故意用错旧口令(失败路径)
