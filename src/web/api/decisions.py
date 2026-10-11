@@ -167,6 +167,40 @@ def decisions_entry_outcomes(
         }
 
 
+@router.get("/watchlist-signal-quality")
+def decisions_watchlist_signal_quality(
+    days: int = Query(180, ge=7, le=730, description="回看天数(按信号产生日)"),
+    min_sample: int = Query(30, ge=1, le=500, description="低于此样本量不给命中率"),
+    user: User = Depends(get_current_user),
+):
+    """用户自选池专属信号质量报告(2026-10-11 胜率证据层 ②): 纯账本聚合, 零预测。
+
+    **按 user_id 隔离**(多用户铁律): 只在**当前登录用户自选池标的**的决策账本行上聚合
+    (signal_kind × symbol), 给出 T+1/3/5 实测命中率 + 样本量 + regime 分桶。
+    样本 < min_sample 一律 `insufficient=true`(不给数字)。**只陈述实测, 不给建议**。
+    无自选/无法隔离 → `available=false` + 原因(不退化到全局池、不编造)。
+    """
+    from src.core.signal_quality import watchlist_signal_quality
+    from src.db.session import get_read_engine
+
+    try:
+        return watchlist_signal_quality(
+            get_read_engine(), user_id=user.id, days=days, min_sample=min_sample
+        )
+    except Exception as e:  # noqa: BLE001 —— 永不 500, 显式失败
+        logger.warning("自选池信号质量查询失败: %s", e)
+        return {
+            "available": False,
+            "user_id": getattr(user, "id", ""),
+            "days": days,
+            "min_sample": min_sample,
+            "symbols_count": 0,
+            "signals": [],
+            "error": f"查询失败: {e}",
+            "note": "查询失败, 不推算; 请稍后重试。",
+        }
+
+
 @router.get("/thresholds")
 def decisions_thresholds(
     _: User = Depends(get_current_user),

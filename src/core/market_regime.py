@@ -130,10 +130,81 @@ def regime_policy(regime: str | None) -> dict[str, Any]:
     return pol
 
 
+def temperature_policy(regime: str | None, thermo: dict[str, Any] | None = None) -> dict[str, Any]:
+    """在情绪周期政策之上叠加**情绪温度计**条件化(纯函数)。
+
+    温度计(`src.core.sentiment_thermometer`)给出当日『封板成功率 / 炸板比』; 本轮把它接入
+    『动手』门槛:
+      - 封板成功率 < `seal_rate_tighten`(默认 0.50) → **收紧**(仅保留最强行1);
+      - 炸板比     ≥ `blow_rate_tighten`(默认 0.45) → **收紧**(分歧加剧, 承接弱);
+      - 封板成功率 ≥ `seal_rate_loosen`(默认 0.70) → **放宽**(纳入拐点行2)。
+    阈值一律走 `src.core.thresholds`(禁硬编码)。缺数据/可疑一律不条件化(按周期态放行)。
+
+    Returns: 在 `regime_policy` 基础上追加
+      - `allow_touch_rows`: 温度修正后的允许动手行;
+      - `policy`: 收紧/放宽后的政策(温度优先于周期态同类政策);
+      - `note`: 可解释说明(**写明依据**: 如『封板成功率 61%<阈值 50% → 收紧』);
+      - `thermo_applied` / `thermo_suspicious` / `temperature`(透传, 供审计)。
+    """
+    pol = regime_policy(regime)
+    pol["thermo_applied"] = False
+    pol["thermo_suspicious"] = bool(thermo.get("suspicious")) if thermo else False
+    pol["temperature"] = None
+    if not thermo or not thermo.get("available"):
+        return pol
+
+    note_bits: list[str] = []
+    if thermo.get("suspicious"):
+        # SC15/SC3 出现 sick 值 → 温度不可信, 不据此条件化(显式留痕, 不猜)
+        pol["note"] = f"{pol['note']}; 情绪温度计数据可疑(sick 值), 本轮不据此条件化"
+        return pol
+
+    from src.core import thresholds  # 局部导入避免循环依赖
+
+    sr = thermo.get("seal_success_rate")
+    br = thermo.get("blow_ratio")
+    t_tighten = thresholds.value("seal_rate_tighten")
+    t_loosen = thresholds.value("seal_rate_loosen")
+    t_blow = thresholds.value("blow_rate_tighten")
+
+    tighten = False
+    loosen = False
+    if sr is not None and sr < t_tighten:
+        tighten = True
+        note_bits.append(f"封板成功率 {sr * 100:.0f}%<阈值 {t_tighten * 100:.0f}% → 收紧")
+    if br is not None and br >= t_blow:
+        tighten = True
+        note_bits.append(f"炸板比 {br * 100:.0f}%≥阈值 {t_blow * 100:.0f}% → 收紧")
+    if not tighten and sr is not None and sr >= t_loosen:
+        loosen = True
+        note_bits.append(f"封板成功率 {sr * 100:.0f}%≥阈值 {t_loosen * 100:.0f}% → 放宽")
+
+    if tighten:
+        allow = tuple(r for r in pol["allow_touch_rows"] if r == 1) or (1,)
+        pol["allow_touch_rows"] = allow
+        pol["policy"] = "tighten"
+    elif loosen:
+        pol["allow_touch_rows"] = tuple(sorted(set(pol["allow_touch_rows"]) | {2}))
+        pol["policy"] = "loosen"
+
+    pol["thermo_applied"] = bool(tighten or loosen)
+    pol["temperature"] = {
+        "seal_success_rate": sr,
+        "blow_ratio": br,
+        "trade_date": thermo.get("trade_date"),
+    }
+    if note_bits:
+        pol["note"] = f"{pol['note']}; 情绪温度计: " + "; ".join(note_bits)
+    return pol
+
+
 def condition_verdict(
-    verdict: str, row: int | None, regime: str | None
+    verdict: str, row: int | None, regime: str | None, *, thermo: dict[str, Any] | None = None
 ) -> tuple[str, bool, str | None]:
-    """对『动手』档做情绪周期条件化(纯函数)。
+    """对『动手』档做情绪周期(+温度)条件化(纯函数)。
+
+    `thermo`(可选, 2026-10-11 胜率证据层 ①): 情绪温度计(`current_thermometer`)结果。
+    缺省 None → 与纯周期条件化逐字一致(向后兼容零破坏)。
 
     Returns:
         (verdict_after, adjusted, note)
@@ -142,7 +213,7 @@ def condition_verdict(
         - normal / unknown: 与基线一致(向后兼容);
         - 只改『动手』档, 不动『别碰』。
     """
-    pol = regime_policy(regime)
+    pol = temperature_policy(regime, thermo)
     allowed = set(pol["allow_touch_rows"])
     label = pol["label"]
     r = row if isinstance(row, int) else None
@@ -152,14 +223,14 @@ def condition_verdict(
             "看看",
             True,
             f"情绪周期条件化({label}/{pol['policy']}): 状态表行{r} 不在本态允许动手行 "
-            f"{sorted(allowed)}, 『动手』收敛为『看看』",
+            f"{sorted(allowed)}, 『动手』收敛为『看看』({pol['note']})",
         )
     if verdict != "动手" and r is not None and r in allowed and r not in BASE_TOUCH_ROWS:
         return (
             "动手",
             True,
             f"情绪周期条件化({label}/{pol['policy']}): 状态表行{r} 在本态放宽行内, "
-            f"放开为『动手』",
+            f"放开为『动手』({pol['note']})",
         )
     return verdict, False, None
 

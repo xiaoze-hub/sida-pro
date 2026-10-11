@@ -51,6 +51,7 @@ def synthesize(
     *,
     regime: str | None = None,
     bdqk: dict | None = None,
+    thermo: dict | None = None,
 ) -> dict:
     """纯函数: 三信号 → {verdict, reason, parts}。无 IO, 可单测。
 
@@ -63,6 +64,10 @@ def synthesize(
 
     bdqk(可选, 2026-10-10 B 决策提胜率): 内外盘七口诀判定结果(`_judge_mnemonic` 返回体
     或 None); 作为叠加确认维度。缺省 None → 视为『难归集』(不叠加)。
+
+    thermo(可选, 2026-10-11 胜率证据层 ①): 情绪温度计(`current_thermometer`)结果 ——
+    SC15 封板成功率 / SC3 炸板比。叠加在周期态条件化之上, 让『动手』门槛随当日冷热
+    自动收紧/放宽(详见 `market_regime.temperature_policy`)。缺省 None → 只用周期态。
 
     处理顺序(透明、逐级留痕): 基线 → 情绪周期条件化 → 七口诀叠加 → 决策先锋口径 → 个性化。
     """
@@ -99,7 +104,7 @@ def synthesize(
             "row": st.get("row", 0),
             "parts": _parts_text(trend, activity, fund_net),
         }
-    out = _apply_regime(out, regime)
+    out = _apply_regime(out, regime, thermo)
     out = _apply_bdqk(out, bdqk)
     return _personalize(_attach_pioneer_terms(out), user_context)
 
@@ -130,25 +135,29 @@ def _attach_pioneer_terms(out: dict) -> dict:
     return out
 
 
-def _apply_regime(out: dict, regime: str | None) -> dict:
-    """情绪周期条件化(2026-10-10 A)。透明留痕, 缺 data 显式, 缺参数零破坏。
+def _apply_regime(out: dict, regime: str | None, thermo: dict | None = None) -> dict:
+    """情绪周期(+情绪温度计)条件化(2026-10-10 A / 2026-10-11 ①)。透明留痕, 缺 data 显式。
 
     输出附加(始终存在, 便于前端/审计显式看到条件化与否):
       - `regime` / `regime_label`: 规范 key + 中文名;
       - `regime_policy`: tighten / normal / loosen;
-      - `regime_note`: 条件化说明(未调整时也给当前态口径说明);
-      - `regime_adjusted`: 本次是否因 regime 改了 verdict。
+      - `regime_note`: 条件化说明(未调整时也给当前态口径说明; 温度条件化时**写明依据**);
+      - `regime_adjusted`: 本次是否因 regime/温度改了 verdict;
+      - `temperature`: 当时的封板成功率/炸板比(缺数据为 None)。
     """
-    from src.core.market_regime import condition_verdict, regime_policy
+    from src.core.market_regime import condition_verdict, temperature_policy
 
-    pol = regime_policy(regime)
+    pol = temperature_policy(regime, thermo)
     prev = out.get("verdict") or ""
-    verdict, adjusted, note = condition_verdict(prev, out.get("row"), regime)
+    verdict, adjusted, note = condition_verdict(prev, out.get("row"), regime, thermo=thermo)
     out["verdict"] = verdict
     out["regime"] = pol["regime"]
     out["regime_label"] = pol["label"]
     out["regime_policy"] = pol["policy"]
     out["regime_adjusted"] = adjusted
+    if thermo is not None:
+        # 温度计只在**显式传入**时透出(缺省路径逐字段零破坏, 见 test_decision_personal_mkt)
+        out["temperature"] = pol.get("temperature")
     if adjusted and note:
         out["regime_note"] = note
         out["reason"] = f"{note}；{out.get('reason', '')}"
@@ -452,10 +461,11 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
                 logger.debug("decision fund %s failed: %s", symbol, e)
                 fund_net = None
             regime_key = _resolve_regime_key()
+            thermo = _resolve_thermo_safe()
             mnemonic = _resolve_mnemonic_safe(symbol)
             out = synthesize(
                 trend, activity, activity_prev, fund_net, None, ctx,
-                regime=regime_key, bdqk=mnemonic,
+                regime=regime_key, bdqk=mnemonic, thermo=thermo,
             )
         out["symbol"] = symbol
         # 末根收盘(供预落库后**读取时**算持仓浮盈 —— 缓存层把全局基底与 last_close 一起存)。
@@ -481,6 +491,18 @@ def _resolve_regime_key() -> str:
     except Exception as e:  # noqa: BLE001
         logger.debug("regime 解析失败(按 unknown 放行): %r", e)
         return "unknown"
+
+
+def _resolve_thermo_safe() -> dict | None:
+    """读当前情绪温度计(SC15 封板成功率 / SC3 炸板比)。失败/缺数据 → None(不影响主流程)。"""
+    try:
+        from src.core.sentiment_thermometer import current_thermometer
+
+        t = current_thermometer()
+        return t if t.get("available") else None
+    except Exception as e:  # noqa: BLE001 —— 温度计取不到按缺数据(不猜)
+        logger.debug("情绪温度计解析失败(按缺数据): %r", e)
+        return None
 
 
 def _resolve_mnemonic_safe(symbol: str) -> dict | None:
@@ -518,6 +540,7 @@ def _log_decision_overlay(symbol: str, out: dict) -> int:
             "context": {
                 "regime": out.get("regime"),
                 "regime_policy": out.get("regime_policy"),
+                "temperature": out.get("temperature"),
                 "verdict": out.get("verdict"),
                 "phase": out.get("phase"),
                 "row": out.get("row"),

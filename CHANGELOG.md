@@ -1,3 +1,73 @@
+### fix-synthesize 温度计字段只在显式传入时透出(修零破坏契约)（2026-10-11）
+
+`test_synthesize_no_context_is_field_identical_to_legacy` 要求无上下文 `synthesize(...)` 输出
+**逐字段等于 legacy 键集**。上一提交让 `temperature` 字段恒存在 → 破坏该契约(全量跑 1 failed)。
+
+- **改** `src/core/decision.py._apply_regime`: `temperature` 仅在 `thermo is not None` 时写入输出
+  (缺省路径不新增字段, 逐字段零破坏); **改** 对应测试断言 `temperature` 不在 base。
+- **验证**: 全量 `-m 'not network'` 修后 **3608 passed / 2 skipped / 0 failed**(修前 1 failed)。
+
+### test-自选池信号质量前端卡 UI 契约(样本不足显--·无建议文案)（2026-10-11）
+
+- **加** `frontend/tests/components/decision-watchlist-quality.test.tsx`(2 例): 样本足够显命中率、
+  样本不足显『--』、regime 分桶标注上屏、无法隔离/空池显式原因、**断言不含建议文案**。
+- **验证**: vitest 相关 4 个 decision 组件文件 18 例全绿。
+
+### docs-胜率证据层分桶对比验证(情绪温度计条件化是否提胜率·含证伪)（2026-10-11）
+
+对 5294 样本(生产 `decision_log.resonance3`)做分桶对比: 全状态混算 T+1 = **53.85%**,
+按封板成功率与 regime 分桶后 —— **样本内无法证实也无法证伪**条件化增益(唯一有回填的 2 个
+信号日温度同落『中』桶, 规则不触发, 分桶=混算)。日间摆幅 65.7% vs 42.6%(23pct)证明
+"平均值"确实掩盖结构差异, 但**差异不由封板成功率/炸板比解释**。结论: 机制可用但**不建议据此
+调参/加码**, 先补 regime 落库 + 更多带温度分化的已回填样本。
+
+- **加** `scripts/regime_bucket_analysis.py`: 只读分桶对比脚本(可对生产 PG/任意库跑),
+  逐桶命中率 vs 混算对照, 阈值走 `src.core.thresholds`。
+- **加** `docs/research/情绪温度计条件化与胜率证据_20261011.md`: 含三要素头部、结论表、
+  分桶表、日间差异、规则触发频率、发现的账本问题(regime 全 NULL / 样本集中 2 天 / 温度序列断更)。
+- **验证数据**: 生产决策账本只读导出 → sqlite 复算, 与脚本输出一致(53.85%/65.68%/42.63%)。
+
+### feat-用户自选池专属信号质量报告(user_id 隔离账本聚合·只陈述实测)（2026-10-11）
+
+回答「我自选池里这几类信号实测到底管不管用」: 按 **user_id 隔离** × signal_kind × symbol
+聚合决策账本 T+1/3/5 命中率 + regime 分桶, **纯账本聚合零预测**。样本 < 30 一律显『样本不足』,
+报告**不含任何建议文案**(AI 备证据不拍方向)。
+
+- **加** `src/core/signal_quality.py`: `watchlist_signal_quality(engine, user_id, ...)` ——
+  自选池 = `stocks.user_id=<当前用户>` 的 CN 标的; 只在这些标的的账本行上聚合(别人的池子
+  不进); user_id 缺失/自选为空 → `available=False`(不退化到全局池); regime 分桶附
+  『该信号只在X期样本足够』标注。
+- **加** `src/web/api/decisions.py`: `GET /api/decisions/watchlist-signal-quality`
+  (user 从登录态取, 永不 500)。
+- **加** 前端 `frontend/packages/api/src/decisions.ts` 客户端 + `DecisionLedger.tsx`
+  只读卡(样本不足显『--』, 回落中性色, 不卡片化堆砌)。
+- **加** `tests/test_signal_quality.py`(7 例): 多用户隔离、样本不足不显数字、regime 分桶、
+  空池显式、无建议文案; **加** `frontend/tests/components/decision-watchlist-quality.test.tsx`(2 例)。
+- **验证**: 前端 `tsc -b` + `vite build` 通过; 后端两测试文件 18 例全绿, 前端相关 4 文件 18 例全绿。
+
+### feat-情绪温度计条件化门槛(SC15封板成功率/SC3炸板比接进情绪周期判据)（2026-10-11）
+
+决策账本 resonance3 的命中率此前是**全状态混算的平均数**(T+1 53.85%), 同一套『动手』
+门槛在冰点/退潮与发酵/修复期含义不同。本轮在既有**五态条件化**(`market_regime`)之上,
+叠加**当日市场温度**这一新判据: 封板成功率高→承接强(放宽)、低→资金退却(收紧),
+炸板比高→分歧加剧(收紧)。**零新采集** —— 全部派生自已落库的 `market_sentiment_daily`
+(tq_sentiment_series 的 SC15/SC3 列)。
+
+- **加** `src/core/sentiment_thermometer.py`: 纯函数 `derive_thermometer`(封板成功率 =
+  `seal_success_money/(成功+失败)`; 炸板比 = `limit_up_open_count/limit_up_count`) +
+  `current_thermometer()`(读最新行, 60s 进程缓存)。缺数据/分母 0 → `None` 不编造;
+  **sick 值(负/非有限)→ `suspicious=True` 且不硬算**。
+- **改** `src/core/market_regime.py`: 新增 `temperature_policy(regime, thermo)` —— 在周期态
+  允许动手行上叠加温度修正(冷→仅行1 / 热→纳入拐点行2 / 炸板比高→收紧), 且 `note`
+  **写明依据**(如『封板成功率 61%<阈值 50% → 收紧』)。`condition_verdict` 增可选 `thermo`
+  关键字参数, 缺省时与旧版**逐字一致**(向后兼容零破坏)。
+- **改** `src/core/thresholds.py`: 新增 `seal_rate_tighten`(0.50)/`seal_rate_loosen`(0.70)/
+  `blow_rate_tighten`(0.45)三个阈值, 走 env `SIDA_THRESHOLD_*`(禁硬编码)。
+- **改** `src/core/decision.py`: `synthesize` 增可选 `thermo`; `decide()` 取温度计并透传;
+  `_apply_regime` 输出 `temperature` 字段 + 温度条件化的 `regime_note`; 账本 context 带温度。
+- **加** `tests/test_regime_thermometer.py`(12 例): 派生/降级/sick、收紧放宽、缺数据零破坏、
+  阈值可配、读库、synthesize 透传。
+- **验证**: 见 `docs/research/情绪温度计条件化与胜率证据_20261011.md`(分桶对比结论)。
 ### docs-决策先锋规格同步 AI 机构活跃度因子数结论(保留 7 因子)（2026-10-11）
 
 **问题(P3)**: `docs/decision-pioneer-spec.md:15` 仍写「我方实现为 7 因子——需核对是否多算一因子」,
