@@ -1,4 +1,31 @@
-### fix-synthesize 温度计字段只在显式传入时透出(修零破坏契约)（2026-10-11）
+### fix-市场情绪序列断链修复(每日自检+自愈+重试降级诚实+16:20 接线)（2026-10-11）
+
+`market_sentiment_daily`(TQ `get_scjy_value` SC01-35 全量落库)**停在 2026-09-22** 无人知,
+而决策账本信号到 09-25 之后仍在产 —— 情绪温度计/regime/胜率分桶验证取不到当日温度。属
+**「断链无人知」**类: 同步入口**已接线**(`TqSentimentScheduler` 每交易日 15:35, v0.13.4 起),
+但失败被吞成一条日志、**无表新鲜度自检**(哨兵 `tq_gateway` 只探网关可达, 不验本表 `MAX(date)`)、
+启动回补仅在表近空(`<30` 行)时触发 → 中途断一次就永久停在断点, 无告警无人发现。
+
+- **加** `src/core/sentiment_freshness.py`(仿 `ladder_freshness`): `check` 比对
+  `MAX(trade_date)` vs 期望交易日(复用 `ladder_freshness` 的真实交易日历口径, 单一事实源);
+  `backfill_missing` TQ 直连**批量**补数(SC 市场级序列一次调用覆盖整段窗口, 幂等 upsert) +
+  **重试/降级诚实**(`retries` 次重试, 仍失败 → `ok=False`+显式 `error`, 绝不静默当成功);
+  `guard` 自检→补数→复检; `run_sentiment_freshness_job` 走作业框架(`ok=False → failed`)并
+  **落后即写通知**(断链显式告警, 推 owner)。
+- **改** `src/collectors/tq_sentiment_series.py`: `sync_sentiment_series` 增 `retries`/`sleep_fn`
+  (缺省 0 → 与旧行为逐字段一致), 失败带尝试次数显式返回。
+- **改** `src/core/tq_sentiment_scheduler.py`: 每日同步给 2 次重试, 失败显式记 `ERROR`(不再静默)。
+- **改** `src/bootstrap/startup.py`: 接线每日 **16:20** 自检作业(与 TQ 类 15:35/15:50、全市场日线
+  16:00、连板自检 16:05、跨源标定 16:10 错开 —— TQ 单客户端进程; 含周末跑, 周末即发现断档自愈)。
+- **加** `scripts/backfill_sentiment_series.py`: 一键补历史断档(本地/生产可跑, 打印补前/后 `MAX(date)`,
+  TQ 不可用显式 exit 2)。
+- **加** `tests/test_sentiment_freshness.py`(15 例)、`docs/情绪序列断链破案与修复_20261011.md`(含三要素
+  头 + 破案结论 + 实补阻塞诚实记录)。
+- **验证**: 本机(沙箱)**无法连 TQ** → 真实补数未能执行(阻塞已显式记录); 用临时 sqlite + 真补数路径
+  验证: 停在 `20260922` 的表被 `check` 正确判出缺口 `20260923…20261009`(7 交易日)、`stale=True`,
+  `backfill_missing` 对真 TQ 显式失败(`ok=False, attempts=2`), `MAX(date)` 保持不变(不伪造)。
+
+
 
 `test_synthesize_no_context_is_field_identical_to_legacy` 要求无上下文 `synthesize(...)` 输出
 **逐字段等于 legacy 键集**。上一提交让 `temperature` 字段恒存在 → 破坏该契约(全量跑 1 failed)。

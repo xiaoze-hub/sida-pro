@@ -65,6 +65,9 @@ ALL_TABLES: tuple[str, ...] = CORE_TABLES + EXTRA_TABLES
 # 情绪基线的默认回看窗口(交易日)
 DEFAULT_BASELINE_DAYS = 20
 
+#: 单次同步失败后的重试退避(秒)。TQ 链路突发 reset 常见(~0.7s 后恢复)。
+RETRY_BACKOFF_S = 1.5
+
 _INT_COLUMNS = frozenset(
     {
         "limit_up_count",
@@ -220,31 +223,55 @@ def _upsert_rows(db, rows: list[dict], market: str = "CN") -> int:
     return written
 
 
-def sync_sentiment_series(db, *, start_time: str = "", days: int = 0) -> dict:
+def sync_sentiment_series(
+    db, *, start_time: str = "", days: int = 0, retries: int = 0, sleep_fn=None
+) -> dict:
     """采集并落库。days>0 时按天数回看(自然日); 否则 start_time(YYYYMMDD)。
 
-    返回 {rows, first, last, tables} 或 {error}。异常不抛给定时器, 记日志返回。
+    返回 {rows, first, last, tables, attempts} 或 {error, attempts}。异常不抛给定时器,
+    记日志返回(**重试/降级诚实**: `retries` 次重试后仍失败 → 显式 `error`, 绝不静默当成功)。
+
+    ``retries`` 缺省 0 → 单次尝试(与旧行为逐字段一致)。
     """
-    try:
-        if days and days > 0:
-            start_time = (date.today() - timedelta(days=int(days))).strftime("%Y%m%d")
-        rows = fetch_sentiment_series(start_time=start_time)
-        if not rows:
-            return {"error": "TQ 无返回(客户端未开 / 窗口无数据)"}
-        written = _upsert_rows(db, rows)
-        return {
-            "rows": written,
-            "first": rows[0]["trade_date"],
-            "last": rows[-1]["trade_date"],
-            "tables": len(ALL_TABLES),
-        }
-    except Exception as e:  # noqa: BLE001 — 定时任务不因单源失败炸掉
-        logger.warning("sync_sentiment_series 失败: %s", e)
+    if days and days > 0:
+        start_time = (date.today() - timedelta(days=int(days))).strftime("%Y%m%d")
+
+    _sleep = sleep_fn if sleep_fn is not None else _default_sleep
+    total = max(1, int(retries) + 1)
+    attempts = 0
+    last_err: str | None = None
+    for i in range(total):
+        attempts = i + 1
         try:
-            db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
-        return {"error": str(e)[:200]}
+            rows = fetch_sentiment_series(start_time=start_time)
+            if not rows:
+                last_err = "TQ 无返回(客户端未开 / 窗口无数据)"
+            else:
+                written = _upsert_rows(db, rows)
+                return {
+                    "rows": written,
+                    "first": rows[0]["trade_date"],
+                    "last": rows[-1]["trade_date"],
+                    "tables": len(ALL_TABLES),
+                    "attempts": attempts,
+                }
+        except Exception as e:  # noqa: BLE001 — 定时任务不因单源失败炸掉
+            last_err = str(e)[:200]
+            logger.warning("sync_sentiment_series 第 %d/%d 次失败: %s", attempts, total, e)
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        if i < total - 1:
+            _sleep(RETRY_BACKOFF_S)
+    logger.warning("sync_sentiment_series 失败(%d 次尝试): %s", attempts, last_err)
+    return {"error": last_err or "TQ 无返回", "attempts": attempts}
+
+
+def _default_sleep(seconds: float) -> None:
+    import time
+
+    time.sleep(seconds)
 
 
 def latest_with_baseline(db, *, days: int = DEFAULT_BASELINE_DAYS) -> dict:
