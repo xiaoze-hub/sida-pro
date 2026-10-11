@@ -1,3 +1,30 @@
+### fix-交易日历按真实行情修正: 补班周末恒休市 + 补 2026 除夕（2026-10-11）
+
+**问题(P1)**: `src/core/trading_calendar.py` 的 `_WORKDAYS_2026` 含 2026-10-10(调休补班周六),
+`is_trading_day` 返回 True, 但那天 A 股**没开市** → 全仓所有「N 个交易日」链路错位。
+
+**真相核验(证据先行)**: 只读生产 PG `klines`(period='1d'), 取全市场覆盖最高的 40 只
+A 股标的(600519 等)的 distinct 交易日并集当权威真相(2024-2026 逐日核验, **周末 0 行**)。
+对比后列出**全部**不一致(不只 10-10):
+- **调休补班日全是周末**(2025 五个 + 2026 五个), A 股交易所不参与国务院调休补班 → 全部应剔除;
+- **2026-02-16(周一·除夕) 漏列** → 被误判交易日(真实: 节前 02-13、节后 02-24)。
+
+**改**:
+- `src/core/trading_calendar.py`: `_WORKDAYS_2025/2026` 清空(留档注释); `_HOLIDAYS_2026` 补
+  `2026-02-16`; `_WORKDAYS_2027/2028` 无真实数据 → 保留并标「待核」(按同一周末口径, 待官方
+  公告+真实日线复核清空); 模块头设计说明更新。
+- `forecast_lib/trading_days.py`(8010 侧自带表): 同步改(parity 门禁要求两侧一致)。
+- `src/core/ladder_freshness.py`: 手动绕开「补班周末」的注释/文案改为「日历已修正, 周末判断
+  保留为双保险」(逻辑不变, 防未来回归)。
+- **回归测试**: 新增离线 fixture `tests/fixtures/real_trading_days.txt`(399 个真实交易日,
+  由生成脚本 `scripts/gen_real_trading_days_fixture.py` 从 PG 只读导出) + `tests/test_trading_calendar_truth.py`
+  —— 断言「日历 == fixture 真相」而非两张手抄表互比; 禁真网络。
+- 修正编码了旧错误口径的用例: `test_user_isolation_trading_calendar.py`(补班周末改判休市,
+  跨春节计数 7→5, 跨国庆目标日 9/30→10/9)、`test_w26_trading_calendar_wiring.py`(10-10 盘中改判非交易中)、
+  `test_theme_mood_live_settle.py`(10-10 is_live_window→False)。断言强度不变(仅改判为真实值)。
+
+**验证**: 全量 `-m 'not network'` **3613 passed / 2 skipped / 0 failed**。
+
 ### test-登录失败限流计数跨用例隔离(修 CI shard 1 顺序污染)（2026-10-11）
 
 CI shard 1 红: `tests/test_auth_change_password.py` 的改密用例故意用错旧口令(失败路径)
