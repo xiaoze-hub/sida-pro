@@ -1,3 +1,18 @@
+### fix-主力净流入(L2·TQ)卡非交易时段回退收盘快照(0 不冒充)（2026-10-11）
+
+用户报周末截图: 工作台右栏「主力净流入(L2·TQ)」仍显示"0万 平衡 逐笔0笔"。真因是这张卡走
+**另一条取数路**(`fetch_decision_pioneer` → TQ `get_more_info` 实时会话值), 昨夜 v0.13.61 只给
+`/api/quotes/{symbol}/more-info` 加了回退, 此路未覆盖, 0 仍冒充真实值。
+
+- **改** `src/web/api/decision_pioneer.py`: 新增 `_apply_l2_fallback`, `_get()` 取数后套**同款回退**
+  (B4.1, web 层回退+标注): 会话任一字段非 0 → `source:'live'` 原样返回; 全 0(非交易时段/空会话)
+  → `l2_fund_snapshot.latest_snapshot()` 最近收盘快照, 显式 `source/as_of/note`(快照 Zjl_HB 万元 → 元,
+  口径同 `_l2_summary`); 无快照 → `available:false` + 显式"不冒充 0"文案。**绝不返 0 当真实值**。
+- **前端** `DecisionPioneerCard`: `L2Flow` 增 `source/as_of/note`; 非实时(source≠live)显式标
+  "YYYY-MM-DD 收盘", `available:false` 显示后端 note(不静默回退成"0万 平衡")。
+- **测试**: `tests/test_decision_l2_fallback.py`(6 例: 实时透传 / tick-only / 快照回退 / 盘中空会话 /
+  无快照不冒充 / `_get` 接线钉死) + 前端 `decision-pioneer-l2-fallback.test.tsx`(3 例)。全 mock 禁真网络。
+
 ### feat-决策先锋主图 GS 买卖点▲▼+区间色带 + 副图「暗盘资金」档（2026-10-11）
 
 用户报生产工作台 600111 日K「不显示 GS 买卖点, 也不显示资金」。补齐决策先锋主图/副图两块:

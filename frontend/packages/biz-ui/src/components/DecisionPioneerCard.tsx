@@ -36,6 +36,12 @@ export interface L2Flow {
   direction: string | null
   l2_tick_num: number | null
   l2_order_num: number | null
+  /** 取数来源: 'live'(实时会话) / 'snapshot' / 'seal_sample'(非交易时段回退收盘快照) 等 */
+  source?: string | null
+  /** 回退快照的交易日(YYYY-MM-DD); 仅非实时时有值 */
+  as_of?: string | null
+  /** 回退说明(非交易时段·显示 X 收盘值 / 无数据(不冒充 0)) */
+  note?: string | null
 }
 
 export interface DecisionPioneerResp {
@@ -210,9 +216,17 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
               <div className="text-[10px] text-muted-foreground/70 mt-0.5">
                 逐笔{l2.l2_tick_num ?? 0}笔 · 委托{l2.l2_order_num ?? 0}笔
               </div>
+              {/* 非交易时段回退收盘快照时显式标注(0 不冒充真实值); live 不标注 */}
+              {l2.source && l2.source !== 'live' && (
+                <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+                  {l2.as_of ? `${l2.as_of} 收盘` : '非实时'}
+                </div>
+              )}
             </>
           ) : (
-            <div className="text-muted-foreground">无数据(休市/TQ未连接)</div>
+            <div className="text-muted-foreground">
+              {l2?.note ? `无数据(${l2.note})` : '无数据(休市/TQ未连接)'}
+            </div>
           )}
         </div>
       </div>
