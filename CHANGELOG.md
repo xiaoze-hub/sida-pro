@@ -1,3 +1,45 @@
+### fix-UI-RULES R4 判据改用文件名(修 checkout 目录名含 gs 的误伤)（2026-10-11）
+
+`scripts/check_ui_rules.mjs` 的 R4(GS 颜色禁硬编码)用**全路径** `/Kline|...|gs/i` 判定"是否 GS 相关文件",
+于是当仓库被 checkout 到目录名含 "gs" 的路径时(如 worktree `/home/ubuntu/wt/gs-fund-layer`), 无关文件
+(`dashboard/SentimentGauge.tsx` 的 rally/panic 红绿)被误判为 GS 硬编码 → 门禁假红。
+
+- **改**: R4 的判据字符串改为对**文件名**(`f.split('/').pop()`)匹配; `/lib/stock-colors.ts` 豁免仍按全路径。
+  只收紧不放松(文件名 ⊂ 全路径), 真实 K线/GS 文件(KlineChart.tsx/stock-colors.ts/...)照旧命中。
+
+### fix-主力净流入(L2·TQ)卡非交易时段回退收盘快照(0 不冒充)（2026-10-11）
+
+用户报周末截图: 工作台右栏「主力净流入(L2·TQ)」仍显示"0万 平衡 逐笔0笔"。真因是这张卡走
+**另一条取数路**(`fetch_decision_pioneer` → TQ `get_more_info` 实时会话值), 昨夜 v0.13.61 只给
+`/api/quotes/{symbol}/more-info` 加了回退, 此路未覆盖, 0 仍冒充真实值。
+
+- **改** `src/web/api/decision_pioneer.py`: 新增 `_apply_l2_fallback`, `_get()` 取数后套**同款回退**
+  (B4.1, web 层回退+标注): 会话任一字段非 0 → `source:'live'` 原样返回; 全 0(非交易时段/空会话)
+  → `l2_fund_snapshot.latest_snapshot()` 最近收盘快照, 显式 `source/as_of/note`(快照 Zjl_HB 万元 → 元,
+  口径同 `_l2_summary`); 无快照 → `available:false` + 显式"不冒充 0"文案。**绝不返 0 当真实值**。
+- **前端** `DecisionPioneerCard`: `L2Flow` 增 `source/as_of/note`; 非实时(source≠live)显式标
+  "YYYY-MM-DD 收盘", `available:false` 显示后端 note(不静默回退成"0万 平衡")。
+- **测试**: `tests/test_decision_l2_fallback.py`(6 例: 实时透传 / tick-only / 快照回退 / 盘中空会话 /
+  无快照不冒充 / `_get` 接线钉死) + 前端 `decision-pioneer-l2-fallback.test.tsx`(3 例)。全 mock 禁真网络。
+
+### feat-决策先锋主图 GS 买卖点▲▼+区间色带 + 副图「暗盘资金」档（2026-10-11）
+
+用户报生产工作台 600111 日K「不显示 GS 买卖点, 也不显示资金」。补齐决策先锋主图/副图两块:
+
+- **主图 GS 买卖点改 ▲/▼**(规格 §1): G=红▲标在下 / S=绿▼标在上(买红卖绿铁律, 位置为准),
+  已确认大号实心 / 待确认小号 ○ 前缀(防末根疑似当确认); 与 trendLine/niuxiong 同约定加
+  **日线口径门控**(gs_signals 是日线口径, 非日线周期不画, 不给错口径的点)。
+- **主图新增 GS 区间色带**(规格 §1): G区紫/S区绿短柱, 挂主图顶部窄带(独立隐藏轴, 不遮 K 线主体);
+  由**已确认** G/S 信号逐根推区间(纯函数 `lib/gs-zones.gsZonePoints`), 末根 pending 不据它染色,
+  首个已确认信号前不画。独立 `gs-zone-legend` 图例, 与买卖点图例共存。
+- **副图加「暗盘资金」档**(规格 §2): 红柱=流入/绿柱=流出(0/脏值不画, 不把 0 冒充平衡柱),
+  四组合用法在悬停读数体现; 该档独占副图 pane(成交量让位免重叠)。数据走新增端点
+  `GET /api/klines/{symbol}/pool-flow-series`(后端 `dark_pool_flow.compute_pool_flow_series`,
+  5min 缓存, 懒取数仅切到该档才发请求); 图上显式标 `L1_approx`(历史日=OHLC 分摊近似, 诚实标注)。
+- **核对**: 活跃度副图已是三色柱 + 1.56/3/6 阈值线(规格 §3), 未缺失, 不改。
+- **测试**: 前端 `kline-gs-darkpool-lib`(纯逻辑 10 例) + `kline-gs-darkpool-contract`(接线 10 例);
+  后端 `tests/test_pool_flow_series_api.py`(4 例, 全 mock 禁真网络)。
+
 ### fix-L2 快照回退 PG 事务隔离(生产实测暴露)（2026-10-11）
 
 生产实测(容器内 docker cp 探针跑生产真库)暴露两处只在 PG 才犯的毛病, 同批修复:

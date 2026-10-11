@@ -43,6 +43,10 @@ import { readStockColors, readChartTheme, maShade, readGsColors, gsColorFor, dir
 import { dayKey, filterMarkersInBarsRange } from '../lib/chart-markers'
 // L3 资金柱的**唯一**净额/分色/时间口径(与 InteractiveKline 共用, 见 lib/fund-bar.ts)
 import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInterval } from '../lib/fund-bar'
+// GS 区间色带(G区紫/S区绿, 规格 §1) 纯逻辑: 由 GS 买卖点序列逐根推区间
+import { gsZonePoints, GS_ZONE_COLOR } from '../lib/gs-zones'
+// 暗盘资金副图(规格 §2): 红柱=流入/绿柱=流出 + 四组合用法 + L1_approx 诚实标注
+import { DARK_POOL_CONFIDENCE, darkPoolBarPoint, darkPoolCombo, type DarkPoolPoint } from '../lib/dark-pool'
 
 import {
   KIND_ICON,
@@ -199,15 +203,17 @@ const SUMMARY_SLOW_LANE_DELAY_MS = 350
 const SUMMARY_TIMEOUT_MS = 45000
 
 
-export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity'
+export type KlineSubchart = 'vol' | 'macd' | 'active_ratio' | 'phase' | 'activity' | 'dark_pool'
 
-/** 副图选项(2026-09-04: 抽模块常量, 受控隐藏时不用嵌套括号包 map) */
+/** 副图选项(2026-09-04: 抽模块常量, 受控隐藏时不用嵌套括号包 map)。
+ *  2026-10-11: 加「暗盘资金」档(决策先锋副图1 §2, 红柱=流入/绿柱=流出)。 */
 const SUBCHART_OPTS = [
   ['vol', '成交量'],
   ['macd', 'MACD'],
   ['active_ratio', '买卖比'],
   ['phase', '情绪'],
   ['activity', '活跃度'],
+  ['dark_pool', '暗盘资金'],
 ] as const
 
 /** 稳定空数组常量: 图层缺数据时复用同一引用, 避免每帧新数组触发 effect 重跑。 */
@@ -217,6 +223,11 @@ const EMPTY_EVENTS: KlineEventPoint[] = []
 const EMPTY_LINES: KlinePriceLine[] = []
 const EMPTY_ACTIVITY: ActivityPoint[] = []
 const EMPTY_PATTERNS: PatternMark[] = []
+const EMPTY_DARKPOOL: DarkPoolPoint[] = []
+
+/** GS 区间色带主图独立隐藏轴(顶部窄带) + 暗盘资金副图独立隐藏轴。 */
+const GSZONE_SCALE = 'gszone'
+const DARKPOOL_SCALE = 'darkpool'
 
 /**
  * v2.1 §12: 把 `#RRGGBB` 压暗成半透明色 —— 用于"数据源不可用"的事件图标灰显。
@@ -332,6 +343,12 @@ export default function KlineChart(props: {
   fundFlow?: FundFlowBar[]
   /** 活跃度副图序列 (09-03: 三色柱载体, subchart==='activity' 时渲染) */
   activitySeries?: ActivityPoint[]
+  /**
+   * 暗盘资金副图序列(2026-10-11 决策先锋副图1 §2, subchart==='dark_pool' 时渲染)。
+   * 父不传且切到该档时, 组件自取 `GET /klines/{symbol}/pool-flow-series`(懒取数, 不给首屏加债)。
+   * 历史日=OHLC 分摊近似, 图上显式标 `L1_approx`。
+   */
+  darkPoolSeries?: DarkPoolPoint[]
   /** 阶段三: 事件种类显隐过滤 (默认全部 true). 设 false 该 kind 不渲染 marker */
   kindsVisible?: Partial<Record<KlineEventKind, boolean>>
   /**
@@ -397,6 +414,10 @@ export default function KlineChart(props: {
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 2026-09-04 P0-3: L3 资金柱独立序列('fund' 轴, 单位元; 成交量是股, 不再共轴)
   const fundSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  // GS 区间色带(2026-10-11 规格 §1): 主图顶部窄带(G区紫/S区绿), 独立隐藏轴
+  const gsZoneSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  // 暗盘资金副图(2026-10-11 规格 §2): 副图 pane, 红柱流入/绿柱流出, 独立隐藏轴
+  const darkPoolSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 活跃度阈值线 (subchart==='activity' 时建在 volumeSeries 上, 值域与价格独立)
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
@@ -512,6 +533,9 @@ export default function KlineChart(props: {
     ma5?: number | null
     ma10?: number | null
     ma20?: number | null
+    /** §2 暗盘资金(2026-10-11): 该根主力净额(元) + 收盘涨跌(元), 供四组合用法(仅暗盘资金档) */
+    poolNet?: number | null
+    poolChg?: number | null
   } | null>(null)
   /** 均线数组(绘制时算好存这里, 供光标读数取值; 不重复算一遍) */
   const maValuesRef = useRef<{
@@ -609,6 +633,27 @@ export default function KlineChart(props: {
       // overlay 轴放左侧(不支持的版本静默忽略, 则与 volume 并列右侧, 不抛)
       fundSeries.priceScale().applyOptions({ position: 'left' } as never)
     } catch { /* noop */ }
+
+    // GS 区间色带(2026-10-11 规格 §1): 主图顶部窄带(G区紫/S区绿)。独立隐藏轴 +
+    // scaleMargins 把值域压到主图顶部 ~12% → 视觉上是"上方短柱带", 不遮 K 线主体。
+    const gsZoneSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: GSZONE_SCALE,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    })
+    gsZoneSeries.priceScale().applyOptions({ visible: false } as never)
+    try {
+      gsZoneSeries.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0.88 } } as never)
+    } catch { /* 旧内核不支持则铺满主图, 不崩 */ }
+
+    // 暗盘资金副图(2026-10-11 规格 §2): 挂副图 pane, 独立隐藏轴(红柱流入/绿柱流出)。
+    const darkPoolSeries = chart.addSeries(
+      HistogramSeries,
+      { priceScaleId: DARKPOOL_SCALE, lastValueVisible: false, priceLineVisible: false },
+      SUBCHART_PANE,
+    )
+    darkPoolSeries.priceScale().applyOptions({ visible: false } as never)
+
     // 副图 pane 占约 30% 高度(与主图按比例分, 窗口缩放时保持比例)
     try {
       chart.panes()[SUBCHART_PANE]?.setStretchFactor(SUBCHART_STRETCH)
@@ -617,6 +662,8 @@ export default function KlineChart(props: {
     seriesRef.current = series
     volumeSeriesRef.current = volumeSeries
     fundSeriesRef.current = fundSeries
+    gsZoneSeriesRef.current = gsZoneSeries
+    darkPoolSeriesRef.current = darkPoolSeries
     publishPanes()
 
     // 容器尺寸自适应
@@ -755,6 +802,16 @@ export default function KlineChart(props: {
         // 该根 K 线在序列里的序号 → 取同一位置的均线值(算过就复用, 没算过(left null)显示 --)
         const barIdx = rangeBarsRef.current.findIndex((b) => b.time === (tNum as number))
         const mv = maValuesRef.current
+        // §2 暗盘资金(2026-10-11): 该根净额 + 收盘涨跌(元), 供"暗盘资金"档四组合用法读数
+        const poolHit = hitDate
+          ? darkPoolRef.current.find((p) => String(p.date || '').slice(0, 10) === hitDate)
+          : undefined
+        const poolNet =
+          poolHit && typeof poolHit.main_net === 'number' && Number.isFinite(poolHit.main_net)
+            ? poolHit.main_net
+            : null
+        const prevClose = barIdx > 0 ? (rangeBarsRef.current[barIdx - 1]?.close ?? null) : null
+        const poolChg = prevClose != null ? bar.close - prevClose : null
         setHoverReadout({
           date: hitDate ?? time,
           o: bar.open ?? null,
@@ -769,6 +826,8 @@ export default function KlineChart(props: {
           ma5: barIdx >= 0 ? (mv.ma5[barIdx] ?? null) : null,
           ma10: barIdx >= 0 ? (mv.ma10[barIdx] ?? null) : null,
           ma20: barIdx >= 0 ? (mv.ma20[barIdx] ?? null) : null,
+          poolNet,
+          poolChg,
         })
       }
     })
@@ -983,6 +1042,37 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market])
 
+  // ── 暗盘资金副图自取(2026-10-11 规格 §2) ────────────────────────────────────
+  // 懒取数: 仅切到「暗盘资金」档才发请求(不给首屏加债); 父传 props.darkPoolSeries 则以父为准。
+  // 与其它图层同策略: 取不到 = 空数组显式降级(不画, 不编造), 且带显式超时。
+  const ownDarkPool = props.darkPoolSeries === undefined
+  const [darkPoolFetched, setDarkPoolFetched] = useState<DarkPoolPoint[] | null>(null)
+  useEffect(() => {
+    const want = ownDarkPool && !!props.symbol && props.market === 'CN' && subchart === 'dark_pool'
+    if (!want) {
+      setDarkPoolFetched(null)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      fetchAPI<{ series?: DarkPoolPoint[] }>(
+        `/klines/${encodeURIComponent(props.symbol)}/pool-flow-series?market=CN&days=60`,
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+        .then((r) => {
+          if (!cancelled) setDarkPoolFetched(Array.isArray(r?.series) ? r.series : [])
+        })
+        .catch(() => {
+          // 显式降级: 取不到 = 本次不画暗盘资金(不编造)
+          if (!cancelled) setDarkPoolFetched([])
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownDarkPool, subchart])
+
   // 有效图层值: 父传优先 → 自取 → 稳定空数组(fetch 用回调整体覆盖, 不用偏函数风格)
   const effGsSignals = props.gsSignals ?? layer?.gsSignals ?? EMPTY_GS
   const effFundFlow = props.fundFlow ?? layer?.fundFlow ?? EMPTY_FUND
@@ -993,9 +1083,13 @@ export default function KlineChart(props: {
   // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
   const effTrendLine = props.trendLine ?? trendLineData
   const effNiuxiong = props.niuxiong ?? niuxiongData
+  // 暗盘资金序列: 父传优先 → 自取(切到该档才取; null=未取, 空数组=降级不画)
+  const effDarkPool = props.darkPoolSeries ?? darkPoolFetched ?? EMPTY_DARKPOOL
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
   const fundRef = useRef<FundFlowBar[]>(effFundFlow)
   fundRef.current = effFundFlow
+  const darkPoolRef = useRef<DarkPoolPoint[]>(effDarkPool)
+  darkPoolRef.current = effDarkPool
   const eventsRef = useRef<KlineEventPoint[]>(effEvents)
   eventsRef.current = effEvents
   const patternsRef = useRef<PatternMark[]>(effPatterns)
@@ -1075,11 +1169,11 @@ export default function KlineChart(props: {
         })
       }
     }
-    // L2 GS 买卖点 (设计稿 §5.2 + 09-03 色收敛): G=买入(--gs-go 红)/S=卖出(--gs-stop 绿),
-    // 与 --stock-up/down 同源(同值不同名); 原版 G绿S红, SIDA 按A股惯例 G红S绿, 验收以位置为准。
-    // 实心=已确认, 空心=待确认(防疑似当确认)。
-    // LC v5 无 circleOutline 形状, 用 size 区分: 实心 size=2(大), 空心 size=0(小) + 文字 ○ 前缀。
-    if (showSignal) {
+    // L2 GS 买卖点 (设计稿 §5.2 + 09-03 色收敛, 2026-10-11 规格 §1 校正为 ▲/▼):
+    //   G=机会/买入(--gs-go 红) ▲ 标在下; S=风险/卖出(--gs-stop 绿) ▼ 标在上 —— 买红卖绿铁律, 位置为准。
+    //   实心大号=已确认(收盘定死); 小号+○ 前缀=待确认(盘中价, 收盘才定死, 防疑似当确认)。
+    //   **日线口径门控**(与 trendLine/niuxiong 同约定): gs_signals 是日线口径, 非日线周期不画(不给错口径的点)。
+    if (showSignal && interval === '1d') {
       const gs = readGsColors()
       for (const g of effGsSignals) {
         const isBuy = g.side === 'G'
@@ -1087,8 +1181,8 @@ export default function KlineChart(props: {
           time: toChartTime(g.date, interval),
           position: isBuy ? ('belowBar' as const) : ('aboveBar' as const),
           color: gsColorFor(g.side, gs),
-          shape: 'circle' as const,
-          size: g.confirmed ? 2 : 0,
+          shape: isBuy ? ('arrowUp' as const) : ('arrowDown' as const),
+          size: g.confirmed ? 2 : 1,
           text: g.confirmed ? (isBuy ? 'G' : 'S') : (isBuy ? '○G' : '○S'),
         })
       }
@@ -1164,6 +1258,25 @@ export default function KlineChart(props: {
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
     if (!markerPluginRef.current) markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
     markerPluginRef.current.setMarkers(safeMarkers)
+
+    // 2a) GS 区间色带(规格 §1, 2026-10-11): 由**已确认** G/S 信号逐根推区间 → 主图顶部短柱带
+    //     (G区紫/S区绿)。末根 pending(未确认)不据它染色(防末根假交叉染错整段区间);
+    //     首个已确认信号之前的 K 线无区间(不画)。日线口径门控, 整层 signal 关 → 清空。
+    const zoneSeries = gsZoneSeriesRef.current
+    if (zoneSeries) {
+      if (showSignal && interval === '1d' && effGsSignals.length > 0) {
+        const zonePts = gsZonePoints(effGsSignals, rangeBarsRef.current.map((b) => b.date))
+        zoneSeries.setData(
+          zonePts.map((z) => ({
+            time: toChartTime(z.date, interval),
+            value: 1,
+            color: GS_ZONE_COLOR[z.zone],
+          })) as never,
+        )
+      } else {
+        zoneSeries.setData([])
+      }
+    }
 
     // 2) 支撑压力位 (L2 买卖点/价位线, showSignal 开关 + priceLinesVisible 过滤)。
     //    先清掉上一轮的价位线, 再按当前开关重建 — 避免切开关导致虚线累积。
@@ -1252,6 +1365,9 @@ export default function KlineChart(props: {
       } else if (subchart === 'activity') {
         // 有档位无序列: 显式清空, 不画阈值线 (不编造)
         volSeries.setData([])
+      } else if (subchart === 'dark_pool') {
+        // 暗盘资金档独占副图 pane(2026-10-11 规格 §2): 成交量让位, 免与暗盘柱重叠
+        volSeries.setData([])
       } else {
         // 2026-09-04 P0-3: 默认档画真正的成交量 bars(股, volume 轴)。
         // 此前缺失: subchart==='vol' + L3 关 = 空白 pane; L3 开 = 资金柱冒充成交量。
@@ -1279,8 +1395,21 @@ export default function KlineChart(props: {
           fs.priceScale().applyOptions({ visible: false } as never)
         }
       }
+      // 4) 暗盘资金柱(2026-10-11 规格 §2, subchart==='dark_pool'): 红柱=流入/绿柱=流出。
+      //    0/脏值不画(`darkPoolBarPoint` 返回 null → 过滤, 绝不把 0 冒充成"平衡柱")。
+      const dpr = darkPoolSeriesRef.current
+      if (dpr) {
+        if (subchart === 'dark_pool' && effDarkPool.length > 0) {
+          const pts = effDarkPool
+            .map((p) => darkPoolBarPoint(p, interval, sc))
+            .filter((x): x is { time: Time; value: number; color: string } => x !== null)
+          dpr.setData(pts as never)
+        } else {
+          dpr.setData([])
+        }
+      }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effTrendLine, effNiuxiong, interval, props.sourceReady, props.tradeMarkers, intent])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -1407,6 +1536,11 @@ export default function KlineChart(props: {
   // 所以把**解析后的实际颜色**挂到容器上, 生产巡检(terminal_audit)据此断言
   // "G=红系 / S=绿系" 没被改反(改 CSS token 也拦得住)。
   const gsResolved = readGsColors()
+  // 暗盘资金档悬停"四组合用法"(规格 §2): 收盘涨跌 × 暗盘红绿 → 用法提示(证据口径, 非建议)
+  const hoverPoolCombo =
+    subchart === 'dark_pool' && hoverReadout
+      ? darkPoolCombo(hoverReadout.poolChg ?? null, hoverReadout.poolNet ?? null)
+      : null
 
   return (
     <div
@@ -1604,6 +1738,44 @@ export default function KlineChart(props: {
         </div>
       )}
 
+      {/* GS 区间色带图例(2026-10-11 规格 §1): G区紫/S区绿短柱, 与买卖点标记**并列共存**(不互踩)。
+          只在日线且有已确认信号时出现(与色带本身同门控, 无数据不冒领)。 */}
+      {interval === '1d' && props.layersVisible?.signal !== false && effGsSignals.length > 0 && (
+        <div
+          data-testid="gs-zone-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">GS 区间</span>
+          <span>
+            <span style={{ color: 'rgb(168, 85, 247)' }}>G区</span> 上方紫柱(趋势偏多)
+          </span>
+          <span>
+            <span className="text-[hsl(var(--gs-stop))]">S区</span> 绿柱(趋势偏空)
+          </span>
+          <span className="text-[10px]">非函数指标 · 信号后不消失直至反向 · 客观标注</span>
+        </div>
+      )}
+
+      {/* 暗盘资金副图图例(2026-10-11 规格 §2): 红柱=流入/绿柱=流出, 显式标 L1_approx(诚实近似),
+          四组合用法在悬停读数里体现。仅该档激活时出现。 */}
+      {subchart === 'dark_pool' && (
+        <div
+          data-testid="dark-pool-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">暗盘资金</span>
+          <span>
+            <span className="text-[hsl(var(--gs-go))]">红柱</span> 流入
+          </span>
+          <span>
+            <span className="text-[hsl(var(--gs-stop))]">绿柱</span> 流出
+          </span>
+          <span className="text-[10px]">历史日=OHLC分摊近似 · {DARK_POOL_CONFIDENCE}</span>
+          <span className="text-[10px]">涨+红持股 / 跌+绿回避 / 跌+红吸筹 / 涨+绿诱多</span>
+          <span className="text-[10px]">客观标注 · 非投资建议</span>
+        </div>
+      )}
+
       {/* 分时突破「突/积」提示条(2026-10-10): 后端缺逐分钟 DDE 时显式降级(available=false),
           前端**照实**展示降级文案, 不编造信号(证据非建议)。 */}
       {minuteBreakthrough && (
@@ -1712,6 +1884,13 @@ export default function KlineChart(props: {
             {/* §10.2③ 光标联动: 该时刻的资金/事件读数(与资金面板同一口径, 缺数据 = --) */}
             <span>明盘 {toAmount(hoverReadout.mingNet)}</span>
             <span>暗盘 {toAmount(hoverReadout.darkNet)}</span>
+            {/* §2 暗盘资金档: 该根主力净额 + 四组合用法(规格 §2, 证据非建议) */}
+            {subchart === 'dark_pool' && (
+              <span>
+                暗盘资金 {toAmount(hoverReadout.poolNet)}
+                {hoverPoolCombo ? ` · ${hoverPoolCombo}` : ''}
+              </span>
+            )}
             {hoverReadout.events && hoverReadout.events.length > 0 && (
               <span className="text-foreground">{hoverReadout.events.join(' · ')}</span>
             )}

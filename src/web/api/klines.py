@@ -1332,3 +1332,63 @@ def get_kline_patterns(
     if today_bar:
         out["today_bar"] = today_bar
     return out
+
+
+# ── 暗盘资金副图序列(决策先锋副图1 §2 载体) ───────────────────────────────────
+#: 序列天数夹取(太短看不出红绿连续性; 太长无谓开销)
+POOL_FLOW_MIN_DAYS = 1
+POOL_FLOW_MAX_DAYS = 60
+#: 进程缓存秒数(与 summary 同量级; 资金序列盘中变化慢, 5min 足够新)
+_POOL_FLOW_TTL = 300
+
+
+@router.get("/{symbol}/pool-flow-series")
+def get_pool_flow_series(symbol: str, market: str = "CN", days: int = 30):
+    """暗盘资金 N 日序列(供 K 线副图「暗盘资金」红绿柱)。
+
+    数据源: `src/core/dark_pool_flow.compute_pool_flow_series`(明盘 + 暗盘 = 主力净额)。
+    诚实口径(与规格 §2 一致, 不编造):
+      - **历史日 = OHLC 分摊近似**(方向/符号可靠, 幅度有偏差), 逐点显式带
+        `approximation=True`; 图上标注 `L1_approx`;
+      - 当日(最后一根)若权威 ming+dark 可得则已叠加(`approximation=False`);
+      - 无 K 线(多源全挂) → `available:false` + 显式 note(绝不返 0 冒充真实值);
+      - 非 CN 无明/暗盘资金源 → `available:false` 结构化降级。
+    红柱=流入(net>0)/绿柱=流出(net<0) 由前端按 net 符号分色, 后端不预分。
+    """
+    market_code = _parse_market(market)
+    if market_code.value != "CN":
+        return {
+            "symbol": symbol, "market": market_code.value, "available": False,
+            "series": [], "days": 0, "confidence": None,
+            "note": "仅 A 股支持暗盘资金序列(明/暗盘为 A 股口径)",
+        }
+    days = max(POOL_FLOW_MIN_DAYS, min(int(days), POOL_FLOW_MAX_DAYS))
+    cache_key = f"poolflow:{market_code.value}:{symbol}:{days}"
+    hit = biz_cache.get_json(cache_key)
+    if hit is not None:
+        return hit
+
+    from src.core.dark_pool_flow import DARK_CONFIDENCE, compute_pool_flow_series
+
+    try:
+        d = compute_pool_flow_series(symbol, days=days)
+    except Exception as e:  # noqa: BLE001 计算失败显式无数据, 不编造
+        logger.warning("pool-flow-series %s failed: %s", symbol, e)
+        return {
+            "symbol": symbol, "market": market_code.value, "available": False,
+            "series": [], "days": days, "confidence": DARK_CONFIDENCE,
+            "note": "无数据(暗盘资金序列计算失败)",
+        }
+    series = (d or {}).get("series") or []
+    out = {
+        "symbol": symbol,
+        "market": market_code.value,
+        "available": bool(series),
+        "days": days,
+        "series": series,
+        # 历史日=OHLC 分摊近似(方向可靠/幅度有偏差), 显式标 confidence 供 UI 诚实标注
+        "confidence": DARK_CONFIDENCE,
+        "note": (d or {}).get("note") if series else "无数据",
+    }
+    biz_cache.set_json(cache_key, out, ttl=_POOL_FLOW_TTL)
+    return out

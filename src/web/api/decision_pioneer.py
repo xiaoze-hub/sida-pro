@@ -51,6 +51,77 @@ def _valid_symbol(raw: str, market: str = "CN") -> str:
     return code
 
 
+def _fmt_trade_date(v) -> str:
+    """YYYYMMDD → YYYY-MM-DD; 不可解析原样返回(不编造)。"""
+    s = str(v or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) >= 8 and s[:8].isdigit() else s
+
+
+# 卡片「主力净流入(L2·TQ)」实际展示的实时会话字段(Zjl_HB 单列为元的口径在上游 _l2_summary 已转)。
+# 全 0 = 非交易时段会话值, 不能当真实值(与 /quotes/{symbol}/more-info 同款判据)。
+_L2_LIVE_FIELDS = ("zjl_hb", "cancel_buy", "cancel_sell", "l2_tick_num", "l2_order_num")
+
+
+def _apply_l2_fallback(data: dict) -> dict:
+    """非交易时段 / 会话值全 0 → 回退最近收盘快照 + 显式 as_of; 无快照 → available:false。
+
+    真 bug(2026-10-11, 同 /quotes/{symbol}/more-info 的 P1 修复): 卡片「主力净流入(L2·TQ)」
+    走 **另一条取数路**(`fetch_decision_pioneer` → TQ `get_more_info` 实时会话值)。非交易时段
+    TQ 一律回 0, 卡片显示\"0万 平衡 / 逐笔0笔·委托0笔\", 把 0 冒充真实值。此处套**同款回退**:
+      - 会话任一字段非 0 → 原样返回(标 source='live');
+      - 全 0 → `latest_snapshot()` 最近收盘快照, 显式 source/as_of/note(0 不冒充);
+      - 无快照 → `available:false` + 显式无数据文案(绝不返 0)。
+    B4.1: 回退+标注在 web 层做, 落库/读取在 `l2_fund_snapshot` core 模块。
+    """
+    l2 = data.get("l2")
+    if not isinstance(l2, dict) or not l2.get("available"):
+        return data
+
+    from src.core.l2_fund_snapshot import has_live_values, latest_snapshot
+
+    live_vals = {f: l2.get(f) for f in _L2_LIVE_FIELDS}
+    if has_live_values(live_vals):
+        l2.setdefault("source", "live")
+        return data
+
+    from src.core.trading_calendar import is_trading_session
+
+    in_session = is_trading_session()
+    snap = None
+    try:
+        snap = latest_snapshot(data.get("symbol") or "", data.get("market") or "CN")
+    except Exception as e:  # noqa: BLE001 回退失败不挡端点, 走显式无数据
+        logger.warning("decision-pioneer L2 收盘快照回退失败 %s: %s", data.get("symbol"), e)
+
+    reason = "非交易时段" if not in_session else "实时会话值全 0"
+    if snap:
+        zjl_wan = snap.get("zjl_hb")  # 快照落的是 TQ 原始值(万元)
+        net_yuan = zjl_wan * 1e4 if isinstance(zjl_wan, (int, float)) else None
+        direction = None
+        if net_yuan is not None:
+            direction = "净流入" if net_yuan > 0 else ("净流出" if net_yuan < 0 else "平衡")
+        data["l2"] = {
+            **l2,
+            "zjl_hb": net_yuan,
+            "direction": direction,
+            "l2_tick_num": snap.get("l2_tick_num"),
+            "l2_order_num": snap.get("l2_order_num"),
+            "available": True,
+            "source": snap.get("origin") or "snapshot",
+            "as_of": _fmt_trade_date(snap.get("trade_date")),
+            "note": f"{reason}·显示 {_fmt_trade_date(snap.get('trade_date'))} 收盘值",
+        }
+        return data
+
+    data["l2"] = {
+        "available": False,
+        "source": "session_closed",
+        "as_of": None,
+        "note": f"{reason}·无收盘快照, 无数据(不冒充 0)",
+    }
+    return data
+
+
 def _get(symbol: str, market: str) -> dict:
     key = f"{market}:{symbol}"
     now = time.time()
@@ -58,6 +129,8 @@ def _get(symbol: str, market: str) -> dict:
     if hit and now - hit[0] < _TTL:
         return hit[1]
     data = fetch_decision_pioneer(symbol, market)
+    # 非交易时段 L2 会话值全 0 → 回退收盘快照/显式无数据(0 不冒充), 与 more-info 同款
+    data = _apply_l2_fallback(data)
     _CACHE[key] = (now, data)
     # 09-03: 新鲜快照落库(历史回查用; best-effort, 失败不影响读链路)
     try:

@@ -90,7 +90,9 @@ for (const f of files) {
     if (
       !/lib\/stock-colors\.ts$/.test(f.replace(/\\/g, '/')) &&
       !R4_SKIP_LINE.some((p) => p.test(ln)) &&
-      /Kline|GsColors|stock-colors|GsSignal|gs/i.test(f) &&
+      // 判据用**文件名**(而非全路径): 全路径会误伤 checkout 目录名含 "gs" 的情况
+      // (worktree /home/ubuntu/wt/gs-fund-layer 下, 无辜的 SentimentGauge.tsx 会被当成 GS 文件)。
+      /Kline|GsColors|stock-colors|GsSignal|gs/i.test(f.split('/').pop() ?? f) &&
       /#E53935|#43A047|#ef4444|#22c55e|#EF4444|#22C55E/i.test(ln)
     )
       bad('R4-NO-HARDCODED-GS-COLOR', rel(f), n, ln)
