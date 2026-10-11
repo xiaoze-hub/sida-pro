@@ -1,3 +1,30 @@
+### feat-首封时间×封成比强度因子(影子运行·只读展示+分桶验证底座)（2026-10-11）
+
+打板策略数据核心 **『首封时间 × 封成比』强度因子**, TQ 独家(东财无等价字段)。**影子运行**:
+每日盘后对当日涨停股打强度分层标签(S/A/B/C)只落**一张只读新表**, **不改任何现有信号/决策**;
+徽章只读展示, 悬停标注「影子运行·仅统计参考」;因子是否有效靠**满 20 交易日后分桶对比**回填判定。
+
+- **加** `src/core/limit_up_strength.py`(纯函数, 无 I/O): 首封时间分桶(竞价/早盘/盘中/尾盘) ×
+  封成比分档(封单额÷流通市值, C/B/A/S) → 标签矩阵; 炸板次数(OpenTimesZT)≥阈值降一档;
+  **缺数据显式 `status=no_data`/`label=null`, 绝不编造**;note 带「影子运行·非交易建议」。
+- **加** 阈值层 `src/core/thresholds.py` 键 `first_seal_*` / `seal_ratio_*` / `blow_downgrade_open_times`
+  (env 可覆盖, 禁硬编码)。
+- **加** 迁移 `_m188_limit_strength_shadow`(表 `limit_strength_shadow`, PK (trade_date, symbol)+日期索引),
+  过 `scripts/check_migrations.py` 门禁(v101–v188 连续)。
+- **加** `src/core/limit_strength_shadow.py`: 分片(≤50 只/次, TQ 铁律)取 `get_zdt_data`(FirstTimeZT/
+  OpenTimesZT)+`get_more_info`(limit_up_amount/Ltsz) → 打标 → 幂等 upsert; 独立作业入口
+  `run_strength_shadow_job`(不碰 `src/collectors/`), `src/bootstrap/startup.py` 交易日 15:35 注册。
+- **加** 只读 API `GET/POST /api/limit-strength/shadow[/run]`(`src/web/api/limit_strength.py`, 注册于 app.py)。
+- **加** 只读展示徽章: 连板梯队 `LadderBoard.tsx` + 聚宝盆 `JbpPoolTable.tsx` 一字符强度徽章
+  (强红弱绿, 不卡片化), 服务端只读附加字段(`theme_mood._ladder_payload` / `stock_pool._attach_strength_label`);
+  无标签不出徽章(降级不编造)。
+- **加** `docs/research/首封时间封成比_影子验证_模板.md`(三要素头部+分桶对比口径: 高桶 vs 低桶
+  T+1/T+3 命中差 / 样本≥30 / 满 20 交易日回填) + `scripts/limit_strength_backtest.py`(只读回测, 缺口显式)。
+- **加** `tests/test_limit_up_strength.py`(23 例)+`tests/test_limit_strength_shadow.py`(14 例)+
+  `tests/test_limit_strength_backtest.py`(3 例)+前端徽章降级 2 例。
+- **验证**: 新增测试 47 backend + 前端 11 全绿; 全量 `-m 'not network'` **3692 passed / 2 skipped / 0 failed, RC=0**。
+- **未做(诚实声明)**: 未做真实 TQ 网关联调(测试全 mock); 封成比分母历史多用 Ltsz, 与流通股本口径
+  差异记入模板 §0; 未触碰 `src/collectors/` 与 `limit_pool`/`limit_up_events` 既有语义。
 ### feat-regime 历史回填(存量 decision_log 按信号日补情绪周期态·幂等可重跑)（2026-10-11）
 
 生产决策账本 5415 行 `regime` **100% NULL**(旧样本早于 regime 落库改动) → regime 分桶退化

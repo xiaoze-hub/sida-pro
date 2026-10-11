@@ -5095,6 +5095,47 @@ def _m187_l2_fund_snapshots(conn: Connection) -> None:
         )
 
 
+def _m188_limit_strength_shadow(conn: Connection) -> None:
+    """首封时间×封成比 强度标签影子表 limit_strength_shadow(2026-10-11 胜率创新 P0-1)。
+
+    **影子运行**: 每日盘后对当日涨停股打强度分层标签(S/A/B/C), 只落本表, **不改任何
+    现有信号/决策/展示语义** —— 供只读展示(涨停池/聚宝盆徽章)与胜率验证分桶统计用。
+
+    标签口径见 src/core/limit_up_strength.py; 缺数据行 status='no_data' 且 label 为空,
+    绝不编造。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS limit_strength_shadow (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                first_time TEXT,
+                first_seal_bucket TEXT,
+                seal_amount DOUBLE PRECISION,
+                circulating_mktcap DOUBLE PRECISION,
+                seal_ratio DOUBLE PRECISION,
+                seal_ratio_grade TEXT,
+                open_times INTEGER,
+                strength_label TEXT,
+                status TEXT NOT NULL DEFAULT 'no_data',
+                source TEXT,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (trade_date, symbol)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "limit_strength_shadow"):
+        _create_index_if_missing(
+            conn,
+            "ix_limit_strength_shadow_date",
+            "CREATE INDEX ix_limit_strength_shadow_date "
+            "ON limit_strength_shadow (trade_date DESC)",
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5235,6 +5276,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 主力资金战报日快照(2026-10-10 规格 §4.4): 当日主力动向汇总页的读快照底座。
     Migration(186, "war_report_daily_table", _m186_war_report_daily_table),
     Migration(187, "l2_fund_snapshots", _m187_l2_fund_snapshots),
+    # 首封时间×封成比 强度标签影子表(2026-10-11 胜率创新 P0-1, 影子运行): 每日盘后打标,
+    # 只读展示 + 分桶胜率验证, 不改任何现有信号/决策。
+    Migration(188, "limit_strength_shadow", _m188_limit_strength_shadow),
 )
 
 

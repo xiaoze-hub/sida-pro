@@ -34,6 +34,9 @@ interface JbpRow {
   better: boolean
   gs_zone: string | null
   gs_signal: string | null
+  /** 首封×封成比 强度标签 S/A/B/C(影子运行·仅统计参考; 无数据为 null) */
+  strength_label?: string | null
+  strength_date?: string | null
 }
 
 interface JbpResponse {
@@ -207,7 +210,23 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                       data-testid={`jbp-row-${r.symbol}`}
                     >
                       <td className="py-1.5 pr-2 font-mono">
-                        {r.symbol}
+                        <span className="inline-flex items-center gap-1">
+                          {r.symbol}
+                          {r.strength_label ? (
+                            <span
+                              title={`强度 ${r.strength_label}（首封×封成比 · 影子运行·仅统计参考${r.strength_date ? ` · ${r.strength_date}` : ''}）`}
+                              data-testid={`jbp-strength-${r.symbol}`}
+                              className={`rounded border px-0.5 text-[10px] font-medium leading-none ${
+                                r.strength_label === 'S' ? 'text-[--stock-up] border-[--stock-up]/60'
+                                  : r.strength_label === 'A' ? 'text-[--stock-up]/80 border-[--stock-up]/40'
+                                    : r.strength_label === 'C' ? 'text-[--stock-down]/80 border-[--stock-down]/40'
+                                      : 'text-muted-foreground border-border/50'
+                              }`}
+                            >
+                              {r.strength_label}
+                            </span>
+                          ) : null}
+                        </span>
                         <div className="text-[10px] text-muted-foreground/80" data-testid={`jbp-level-${r.symbol}`}>
                           {r.activity != null ? fmtNum(r.activity, 2) : '--'}
                           {r.activity_level ? `(${r.activity_level})` : ''}

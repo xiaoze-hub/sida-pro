@@ -204,6 +204,61 @@ _SPECS: dict[str, dict] = {
         "hi": 1.0,
         "label": "炸板比-收紧线",
     },
+    # ── 首封时间 × 封成比 强度因子阈值(2026-10-11 胜率创新 P0-1, 影子运行) ──────────
+    # 首封时间分桶边界(秒, 自 00:00 起算): 竞价 ≤ auc_end; 早盘 ≤ early_end;
+    # 盘中 ≤ mid_end; 其余=尾盘。默认 09:30:00 / 10:00:00 / 14:30:00。
+    # 供 src.core.limit_up_strength 消费; 纯展示/统计, 不改任何现有信号或决策。
+    "first_seal_auc_end": {
+        "default": 34200.0,  # 09:30:00
+        "env": "SIDA_THRESHOLD_FIRST_SEAL_AUC_END",
+        "lo": 0.0,
+        "hi": 86400.0,
+        "label": "首封-竞价桶上界(秒)",
+    },
+    "first_seal_early_end": {
+        "default": 36000.0,  # 10:00:00
+        "env": "SIDA_THRESHOLD_FIRST_SEAL_EARLY_END",
+        "lo": 0.0,
+        "hi": 86400.0,
+        "label": "首封-早盘桶上界(秒)",
+    },
+    "first_seal_mid_end": {
+        "default": 52200.0,  # 14:30:00
+        "env": "SIDA_THRESHOLD_FIRST_SEAL_MID_END",
+        "lo": 0.0,
+        "hi": 86400.0,
+        "label": "首封-盘中桶上界(秒)",
+    },
+    # 封成比(=封单额/流通市值)分档线: <b → C; [b,a) → B; [a,s) → A; >=s → S。
+    "seal_ratio_b": {
+        "default": 0.01,
+        "env": "SIDA_THRESHOLD_SEAL_RATIO_B",
+        "lo": 0.0,
+        "hi": 10.0,
+        "label": "封成比-B档线",
+    },
+    "seal_ratio_a": {
+        "default": 0.03,
+        "env": "SIDA_THRESHOLD_SEAL_RATIO_A",
+        "lo": 0.0,
+        "hi": 10.0,
+        "label": "封成比-A档线",
+    },
+    "seal_ratio_s": {
+        "default": 0.05,
+        "env": "SIDA_THRESHOLD_SEAL_RATIO_S",
+        "lo": 0.0,
+        "hi": 10.0,
+        "label": "封成比-S档线",
+    },
+    # 炸板次数降档阈值: OpenTimesZT >= 该值 → 强度标签降一档(炸板=封板质量受损)。
+    "blow_downgrade_open_times": {
+        "default": 1.0,
+        "env": "SIDA_THRESHOLD_BLOW_DOWNGRADE_OPEN_TIMES",
+        "lo": 0.0,
+        "hi": 100.0,
+        "label": "炸板降档-次数阈值",
+    },
 }
 
 # 对外暴露的阈值键(顺序稳定, 供 API/UI 展示)

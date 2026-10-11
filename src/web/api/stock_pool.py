@@ -143,7 +143,33 @@ def jbp_screen(req: JbpScreenRequest):
     symbols = _valid_symbols(req.symbols)
     if not symbols:
         return {"universe": 0, "scanned": 0, "in_pool": 0, "rows": [], "wencai": {"provided": False}}
-    return screen_cached(symbols, req.wencai_keywords)
+    data = screen_cached(symbols, req.wencai_keywords)
+    return _attach_strength_label(data)
+
+
+def _attach_strength_label(data: dict) -> dict:
+    """给聚宝盆行附加首封×封成比强度标签(影子运行, 只读附加字段)。
+
+    在**web 层**做(不污染 core 纯计算); 缓存里的原对象不可变 → 深拷再改。
+    影子表无数据 → 各行 strength_label=None(前端不出徽章), 绝不编造。
+    """
+    import copy
+
+    try:
+        from src.core.limit_strength_shadow import labels_for_date
+
+        lab = labels_for_date()  # 最近一日
+        label_map = lab.get("labels") or {}
+        date = lab.get("trade_date")
+    except Exception as e:  # noqa: BLE001 影子表未迁移/异常 → 无徽章
+        logger.debug("聚宝盆强度标签附加失败(不影响选股): %s", e)
+        return data
+    out = copy.deepcopy(data)
+    for r in out.get("rows") or []:
+        row = label_map.get(str(r.get("symbol")))
+        r["strength_label"] = (row or {}).get("strength_label")
+        r["strength_date"] = date if row else None
+    return out
 
 
 def screen_cached(symbols: list[str], wencai_keywords: Optional[str] = None) -> dict:

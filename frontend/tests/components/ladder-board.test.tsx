@@ -73,3 +73,26 @@ describe('LadderBoard', () => {
     const txt = container.textContent || ''
     expect(txt.indexOf('2026-09-12')).toBeLessThan(txt.indexOf('2026-09-11'))
   })
+
+  // 2026-10-11 首封×封成比 强度徽章(影子运行): 有标签出徽章, 无标签不出(降级不编造)。
+  it('强度徽章: 有标签出、无标签不出', () => {
+    const d = {
+      ...day,
+      date: '20260920',
+      rows: [
+        {
+          boards: 1, codes: ['E'], names: ['EE'], tag: '首板',
+          stocks: [{ symbol: 'E', name: 'EE', candle: null, pct: 10.0, strength_label: 'S' }],
+        },
+        {
+          boards: 1, codes: ['F'], names: ['FF'], tag: '首板',
+          stocks: [{ symbol: 'F', name: 'FF', candle: null, pct: 10.0 }],
+        },
+      ],
+    }
+    render(<LadderBoard ladder={[d]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
+    const badge = screen.getByTestId('ladder-strength-E')
+    expect(badge.textContent).toBe('S')
+    expect(badge.getAttribute('title')).toContain('影子运行')
+    expect(screen.queryByTestId('ladder-strength-F')).toBeNull()
+  })

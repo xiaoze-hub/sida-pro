@@ -417,6 +417,28 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"L2 成品资金收盘快照注册失败: {e}")
 
+        # 首封时间×封成比 强度影子打标(2026-10-11 胜率创新 P0-1, 影子运行):
+        # 交易日 15:35 对当日涨停股打强度分层标签(S/A/B/C) 落 limit_strength_shadow。
+        # 独立入口(不碰 src/collectors/), 只写影子表不改任何现有信号/决策。
+        try:
+            from src.core.limit_strength_shadow import run_strength_shadow_job
+
+            rt.scheduler.scheduler.add_job(
+                run_strength_shadow_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=35,
+                id="limit-strength-shadow",
+                name="首封×封成比 强度影子打标",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("首封×封成比 强度影子打标已注册(交易日 15:35)")
+        except Exception as e:
+            logger.error(f"强度影子打标注册失败: {e}")
+
         # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
         # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
         try:
