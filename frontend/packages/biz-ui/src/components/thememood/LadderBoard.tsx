@@ -18,6 +18,8 @@ export interface LadderStock {
   last_sealed?: string | null
   seal_amount?: number | null
   seal_ratio?: number | null
+  /** 首封×封成比 强度标签 S/A/B/C(影子运行, 仅统计参考; 无数据为 null/缺省) */
+  strength_label?: string | null
 }
 export interface LadderRow { boards: number; codes: string[]; names: string[]; tag: string | null; stocks: LadderStock[] }
 export interface LadderMark extends LadderStock { prev_boards: number | null }
@@ -58,7 +60,18 @@ function stockTitle(s: LadderStock): string {
   if (s.seal_amount != null) parts.push(`封单 ${fmtAmount(s.seal_amount)}`)
   if (s.seal_ratio != null) parts.push(`封成比 ${fmtPct(s.seal_ratio * 100)}`)
   if (s.amount != null) parts.push(`额 ${fmtAmount(s.amount)}`)
+  if (s.strength_label) parts.push(`强度 ${s.strength_label}（影子运行·仅统计参考）`)
   return parts.join(' · ')
+}
+
+/** 强度标签色调: 强(S/A)=涨停红, 中(B)=中性, 弱(C)=跌绿(买卖红绿铁律)。 */
+function strengthTone(label: string | null | undefined): string {
+  switch (label) {
+    case 'S': return 'text-[--stock-up] border-[--stock-up]/60'
+    case 'A': return 'text-[--stock-up]/80 border-[--stock-up]/40'
+    case 'C': return 'text-[--stock-down]/80 border-[--stock-down]/40'
+    default: return 'text-muted-foreground border-border/50'
+  }
 }
 
 function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw' }) {
@@ -75,6 +88,15 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
       ) : null}
       {s.seal_tag && s.seal_tag !== s.tag ? (
         <span className="rounded bg-accent/40 px-0.5 text-[10px] text-muted-foreground">{s.seal_tag}</span>
+      ) : null}
+      {s.strength_label ? (
+        <span
+          title={`强度 ${s.strength_label}（首封×封成比 · 影子运行·仅统计参考）`}
+          data-testid={`ladder-strength-${s.symbol}`}
+          className={`rounded border px-0.5 text-[10px] font-medium leading-none ${strengthTone(s.strength_label)}`}
+        >
+          {s.strength_label}
+        </span>
       ) : null}
       {s.dive ? (
         <span className="rounded bg-[--stock-down]/20 px-0.5 text-[10px] text-[--stock-down]">跳水</span>

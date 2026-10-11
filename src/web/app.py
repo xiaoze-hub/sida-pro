@@ -736,6 +736,15 @@ app.include_router(
     tags=["seal-quality"],
     dependencies=protected,
 )
+# 首封时间×封成比 强度因子(2026-10-11 胜率创新 P0-1, 影子运行): 只读标签 + 手动打标
+from src.web.api import limit_strength as limit_strength_router  # noqa: E402
+
+app.include_router(
+    limit_strength_router.router,
+    prefix="/api/limit-strength",
+    tags=["limit-strength"],
+    dependencies=protected,
+)
 # 妖股池/股性雷达(批次B, 2026-09-06): 六维妖股评分, 题材轮动先锋名单
 app.include_router(
     demon_pool.router,

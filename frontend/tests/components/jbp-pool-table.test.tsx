@@ -134,3 +134,25 @@ describe('JbpPoolTable 聚宝盆选股', () => {
     await waitFor(() => expect(screen.getByText(/问财数据源不可用/)).toBeTruthy())
   })
 })
+
+describe('JbpPoolTable 强度徽章(2026-10-11 影子运行)', () => {
+  beforeEach(() => { mocks.fetchAPI.mockReset() })
+  afterEach(cleanup)
+
+  it('有标签出行内徽章, 无标签不出', async () => {
+    mocks.fetchAPI.mockResolvedValue({
+      ...RESP,
+      rows: [
+        { ...RESP.rows[0], symbol: '000001', strength_label: 'A', strength_date: '20261010' },
+        { ...RESP.rows[1], symbol: '000002', strength_label: null },
+      ],
+    })
+    render(<JbpPoolTable embedded />)
+    fireEvent.click(screen.getByText('聚宝盆扫描'))
+    await waitFor(() => expect(screen.getByTestId('jbp-strength-000001')).toBeTruthy())
+    const badge = screen.getByTestId('jbp-strength-000001')
+    expect(badge.textContent).toBe('A')
+    expect(badge.getAttribute('title')).toContain('影子运行')
+    expect(screen.queryByTestId('jbp-strength-000002')).toBeNull()
+  })
+})

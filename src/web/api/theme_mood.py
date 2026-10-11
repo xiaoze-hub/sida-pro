@@ -550,12 +550,23 @@ def _ladder_payload(window: int, mode: str) -> dict:
         # OHLC 只服务日K蜡烛标注, 超时/失败不得把整页打成 500
         logger.warning("[theme-mood] OHLC 批量查询失败, 梯队继续无日K: %r", e)
         ohlc = {}
+    # 首封×封成比 强度标签(影子运行, 只读附加字段; 无数据即无徽章, 不改既有语义)
+    try:
+        from src.core.limit_strength_shadow import labels_map
+
+        strength_by_date = labels_map(dates)
+    except Exception as e:  # noqa: BLE001 影子表未迁移/异常 → 无徽章, 不影响梯队
+        logger.warning("[theme-mood] 强度影子标签查询失败(梯队继续无徽章): %r", e)
+        strength_by_date = {}
     for day in ladder:
+        day_labels = strength_by_date.get(day["date"]) or {}
         for r in day["rows"]:
             r["stocks"] = attach_candles(
                 [{"symbol": c, "name": n} for c, n in zip(r["codes"], r["names"])],
                 day["date"], ohlc,
             )
+            for s in r["stocks"]:
+                s["strength_label"] = day_labels.get(str(s["symbol"]))
             r["tag"] = "首板" if r["boards"] == 1 else None
         day["blown"] = marks[day["date"]]["blown"]
         day["broken"] = marks[day["date"]]["broken"]
