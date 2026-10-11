@@ -1,3 +1,12 @@
+### docs-决策先锋规格同步 AI 机构活跃度因子数结论(保留 7 因子)（2026-10-11）
+
+**问题(P3)**: `docs/decision-pioneer-spec.md:15` 仍写「我方实现为 7 因子——需核对是否多算一因子」,
+而 `src/core/ai_activity.py:11-22` 已给出结论「保留 7 因子」。
+
+**改**: spec 该条同步为结论态 —— 公开资料记 6 指标, 我方**保留 7 因子**(内部《8问8答》=7 +
+逆向公式 `1_JGHYD_机构活跃度.txt` max(7因子)×1.2 + 官方截图实测对齐), 多的 1 项=上影+下影(全幅),
+并回指 `src/core/ai_activity.py:11-22`。
+
 ### fix-TQ 探测结论文案区分真·全灭与预算耗尽(已探 x/y)（2026-10-11）
 
 **问题(P2)**: `packages/marketdata/.../vendors/tq.py`(`_rpc` 抛 TqUnavailable)与
