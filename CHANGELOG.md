@@ -1,3 +1,34 @@
+### test-登录失败限流计数跨用例隔离(修 CI shard 1 顺序污染)（2026-10-11）
+
+CI shard 1 红: `tests/test_auth_change_password.py` 的改密用例故意用错旧口令(失败路径)
+会累计 `src/core/login_ratelimit` 的**进程级**失败计数, 同进程下游
+`tests/test_entry_candidate_feedback_api.py` 的正常登录撞 429「登录失败次数过多,请 10 分钟后重试」。
+
+- **改** `src/core/login_ratelimit.py`: 新增 `reset()`(仅供测试隔离调用, 生产不暴露入口;
+  产品限流语义 5 次锁 10 分钟**不变**)。
+- **改** `tests/conftest.py`: 新增 autouse fixture `_reset_login_ratelimit`, 每个用例前清零失败
+  计数, 与 `_reset_observability_state`(alerting/datasource_failures/...) 同思路 —— 进程级
+  模块状态跨用例隔离。
+- **加** `tests/test_auth_login_ratelimit_isolation.py`(2 例): ①连续 5 次错口令必须真实打满并
+  第 6 次 429(产品语义不减, 不跳过); ②紧随的正确口令登录**不得**被①连坐 429。②是反向验证
+  锚点 —— 注释掉 `_reset_login_ratelimit` 时②必红 429。
+- **验证**: 修后 shard 1 全序 856 passed / 1 skipped(修前 6 failed / 2 errors); 反向验证见 PR 说明。
+
+### test-决策个性/缓存模块清理落库 owner(修残留 owner 连坐 admin 登录)（2026-10-11）
+
+CI shard 1 / 全量合跑的**真正根因**: `tests/test_decision_personal_mkt.py` 与
+`tests/test_decision_cache.py` 用 `SessionLocal()` 直接 `s.add(make_user(..., role="owner"))`
+并 commit 临时 owner 却从不清理。残留 owner 让登录端点的 `get_or_create_owner()`
+**短路**(库中已有 owner ⇒ 不再按 env 重建 admin), 于是同进程下游靠 admin 登录的
+`test_auth_change_password` / `test_chat_stream` / `test_entry_candidate_feedback_api`
+全部 401「用户名/邮箱或密码错误」, 失败计数累计满 5 次后进一步 429 —— 合跑红、单跑绿。
+
+- **改** `tests/test_decision_personal_mkt.py` / `tests/test_decision_cache.py`: 各加 module 级
+  autouse 清理 fixture —— 模块前快照既有 `users.id`, 模块后经 `tests.conftest.purge_users`
+  清掉本模块新增用户(含子表行), 收敛到与 `test_multitenant_isolation` 同一模式。断言强度不变。
+- **验证**: 修后 shard 1 全绿; 全量 `-m "not network"` 3588 passed / 2 skipped / 0 error
+  (修前 2 errors)。反向验证: 临时禁用清理 → 401 连坐复现, 恢复即绿。
+
 ### fix-UI-RULES R4 判据改用文件名(修 checkout 目录名含 gs 的误伤)（2026-10-11）
 
 `scripts/check_ui_rules.mjs` 的 R4(GS 颜色禁硬编码)用**全路径** `/Kline|...|gs/i` 判定"是否 GS 相关文件",

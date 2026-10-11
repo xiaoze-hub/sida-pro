@@ -243,3 +243,22 @@ def _reset_observability_state():
     except Exception:  # noqa: BLE001
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_ratelimit():
+    """登录失败限流计数跨用例隔离(2026-10-11 CI shard 1)。
+
+    `src/core/login_ratelimit` 的失败计数是**进程级模块状态**: 用例 A 故意用
+    错口令登录(或 admin 因残留 owner 登录 401)累计的失败计数会留给用例 B →
+    用例 B 的正常登录撞 429「登录失败次数过多,请 10 分钟后重试」(合跑红、单跑绿)。
+    每个用例前清零, 与 `_reset_observability_state` 同思路。产品限流(5 次锁
+    10 分钟)行为不变 —— 只在测试进程做隔离。
+    """
+    try:
+        from src.core import login_ratelimit
+
+        login_ratelimit.reset()
+    except Exception:  # noqa: BLE001 — 模块不可用不影响测试
+        pass
+    yield

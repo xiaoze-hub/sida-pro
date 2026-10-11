@@ -44,3 +44,16 @@ def success(ip: str, username: str) -> None:
     """登录成功, 清零计数。"""
     with _lock:
         _state.pop(_key(ip, username), None)
+
+
+def reset() -> None:
+    """清空全部失败计数与锁定(仅测试隔离调用; 生产不暴露入口)。
+
+    2026-10-11: 失败计数是**进程级模块状态**, 一个测试故意用错口令登录(如
+    test_auth_change_password 的改密失败路径)会把计数留给下一个测试 → 后续
+    用例的正常登录撞 429「登录失败次数过多」(CI shard 1 顺序污染)。
+    conftest 每个用例前调用本函数清零, 与 alerting.reset_data_source_streaks
+    同思路。产品限流语义(5 次失败锁 10 分钟)不变。
+    """
+    with _lock:
+        _state.clear()

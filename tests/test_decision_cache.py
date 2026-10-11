@@ -21,6 +21,36 @@ import pytest
 from src.core import decision_cache as dc
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_seeded_users():
+    """模块结束清理本文件落库的临时 owner —— 共享 SQLite 跨文件污染。
+
+    2026-10-11: 本文件的个性化用例 `s.add(make_user(..., role="owner"))` 落库后不清理,
+    残留 owner 会让登录端点的 `get_or_create_owner()` 短路(库中已有 owner ⇒ 不再按 env
+    重建 admin), 于是同进程下游 test_entry_candidate_feedback_api 的 admin 登录 401
+    「用户名/邮箱或密码错误」(单跑绿、全量合跑红)。修法与 test_multitenant_isolation
+    一致: 模块前快照既有 user id, 模块后经 tests.conftest.purge_users 清掉本模块新增的。
+    """
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    db = SessionLocal()
+    try:
+        before = {row[0] for row in db.query(User.id).all()}
+    finally:
+        db.close()
+    yield
+    db = SessionLocal()
+    try:
+        new_ids = [row[0] for row in db.query(User.id).all() if row[0] not in before]
+        if new_ids:
+            from tests.conftest import purge_users
+
+            purge_users(db, ids=new_ids)
+    finally:
+        db.close()
+
+
 @pytest.fixture(autouse=True)
 def _clean_cache():
     dc.clear_decision_cache()
