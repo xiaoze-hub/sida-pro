@@ -1,7 +1,7 @@
 """S6 (2026-08-23): A 股交易日历工具单元测试
 
 覆盖:
-- is_trading_day: 周末 / 法定节假日 / 调休补班 / 普通工作日
+- is_trading_day: 周末 / 法定节假日 / 补班周末(仍休市) / 普通工作日
 - add_trading_days: 跨春节 / 跨国庆 / 跨周末
 - next/prev_trading_day: 边界 + 跳过节假日
 - trading_days_between: 区间计数(含端点 / 不含端点)
@@ -40,10 +40,13 @@ class TestIsTradingDay:
                   "2025-02-01", "2025-02-02", "2025-02-03", "2025-02-04"):
             assert is_trading_day(d) is False, f"{d} 应该休市"
 
-    def test_spring_festival_makeup_workday(self):
-        """春节调休补班: 2025-01-26 周日 / 2025-02-08 周六 变为交易日"""
-        assert is_trading_day("2025-01-26") is True
-        assert is_trading_day("2025-02-08") is True
+    def test_spring_festival_makeup_weekend_is_holiday(self):
+        """春节调休补班日(2025-01-26 周日 / 2025-02-08 周六)仍是周末 → A 股不开市。
+
+        2026-10-11 P1 真相核验: A 股交易所不参与国务院调休补班, 补班日仍为周末恒休市
+        (原断言为 True 编码了错误口径, 经真实行情/klines 核验改判)。"""
+        assert is_trading_day("2025-01-26") is False
+        assert is_trading_day("2025-02-08") is False
 
     def test_national_day_holiday(self):
         """国庆 2025: 10/1 ~ 10/8 全部休市"""
@@ -51,10 +54,10 @@ class TestIsTradingDay:
                   "2025-10-05", "2025-10-06", "2025-10-07", "2025-10-08"):
             assert is_trading_day(d) is False, f"{d} 应该休市"
 
-    def test_national_day_makeup_workday(self):
-        """国庆调休补班: 2025-09-28 周日 / 2025-10-11 周六 变为交易日"""
-        assert is_trading_day("2025-09-28") is True
-        assert is_trading_day("2025-10-11") is True
+    def test_national_day_makeup_weekend_is_holiday(self):
+        """国庆调休补班日(2025-09-28 周日 / 2025-10-11 周六)仍是周末 → 不开市(2026-10-11 核验)。"""
+        assert is_trading_day("2025-09-28") is False
+        assert is_trading_day("2025-10-11") is False
 
     def test_labor_day_2026(self):
         """劳动节 2026: 5/1~5/5"""
@@ -66,10 +69,9 @@ class TestIsTradingDay:
         # 2025-04-07 是周一(清明假最后一天已结束, 实际是工作日; 选 2026-04-06 周一)
         assert is_trading_day("2026-04-06") is False  # 周一, 清明假期内
 
-    def test_makeup_weekend_override(self):
-        """调休补班覆盖周末判定: 周六周日如果是补班日, 判定为交易日"""
-        # 2025-10-11 周六, 国庆调休补班
-        assert is_trading_day("2025-10-11") is True
+    def test_makeup_weekend_not_override(self):
+        """补班周末不覆盖周末判定: 2025-10-11 周六仍是休市(A 股周末恒不开市)。"""
+        assert is_trading_day("2025-10-11") is False
 
     def test_date_object_input(self):
         """支持 date 对象输入"""
@@ -201,11 +203,11 @@ class TestTradingDaysBetween:
 
     def test_cross_spring_festival(self):
         """跨春节(2025-01-28~02-04)"""
-        # 2025-01-23 周四 ~ 2025-02-10 周一
-        # 1/24(五) 1/27(一) → 2 个交易日 + 春节假 + 2/5(二) 2/6(三) 2/7(四) 2/8(六补) → 7 个交易日
-        # 总共 9 个, 但 2/10 是周一, 不含端点 → 7 个
+        # 2025-01-23 周四 ~ 2025-02-10 周一(不含端点)
+        # 1/24(五) 1/27(一) → 2 个 + 春节假 + 2/5(三) 2/6(四) 2/7(五) → 3 个
+        # (2/8 周六补班旧口径误计, 2026-10-11 核验剔除 → 共 5 个)
         cnt = trading_days_between("2025-01-23", "2025-02-10")
-        assert cnt == 7
+        assert cnt == 5
 
     def test_inclusive_end(self):
         """inclusive=True 含 end 当天"""
@@ -234,5 +236,6 @@ class TestPredictionOutcomeAddTradingDays:
         result = _add_trading_days(start, 3)
         # 必须不在国庆假内
         assert is_trading_day(result) is True
-        # 2025-09-26 起算: 9/28(日补班) 9/29(一) 9/30(二) → 第 3 个交易日 = 9/30
-        assert result == date(2025, 9, 30)
+        # 2025-09-26 起算(9/28 周日补班旧口径误计, 2026-10-11 核验剔除):
+        # 9/29(一) 9/30(二) 然后国庆假 → 10/9(四) → 第 3 个交易日 = 10/9
+        assert result == date(2025, 10, 9)

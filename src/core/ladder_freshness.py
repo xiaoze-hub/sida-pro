@@ -22,8 +22,8 @@ TQ 断链期(2026-10-08~09)该管线取数失败、以 events_saved=0 静默收�
 --------------------------------
 - 「真实交易日」= ``trading_calendar.is_trading_day`` **且非周末**。A 股周末恒不开市
   (实测 2026 各"调休补班周六"在 klines / market_breadth_daily / limit_up_events
-  三类数据表里**均无任何行**), 而交易日历把补班周末也记为交易日属已知偏差; 本模块
-  显式剔除该偏差, 否则节假日后的第一个工作日会永久假告警并反复触发全市场重补。
+  三类数据表里**均无任何行**)。2026-10-11 起交易日历已按真实行情修正(补班周末不再记为
+  交易日), 本模块的「非周末」判断保留为**双保险**(防未来日历表回归), 语义与修正后的日历一致。
 - ``limit_up_events`` 为空(无任何事件期号)时,**不**以"空表"冒充"无缺口",
   显式 ``ok=False``(不下结论)。
 """
@@ -45,7 +45,11 @@ JOB_LABEL = "连板梯队数据自检"
 # ── 交易日历口径 ────────────────────────────────────────────────────────────
 
 def _is_real_trading_day(d: date) -> bool:
-    """真实交易日 = 交易日历判为交易日 **且非周末**(A 股周末恒不开市, 见模块头)。"""
+    """真实交易日 = 交易日历判为交易日 **且非周末**(A 股周末恒不开市, 见模块头)。
+
+    2026-10-11 起日历已修正(补班周末不再误记为交易日), 此处周末判断为**双保险**。
+    日历表未覆盖年份 → 显式不猜(返回 False + 告警)。
+    """
     from src.core.trading_calendar import is_trading_day
 
     if d.weekday() >= 5:
@@ -60,15 +64,15 @@ def _is_real_trading_day(d: date) -> bool:
 def expected_latest_trading_date(now: datetime | None = None) -> str:
     """期望的 limit_up_events 最新交易日(YYYYMMDD)。
 
-    = 最近一个 **真实交易日**(<= now 当日); 周末/节假日回退到上一交易日,
-    并剔除日历把"补班周末"记为交易日的偏差。
+    = 最近一个 **真实交易日**(<= now 当日); 周末/节假日回退到上一交易日。
+    末尾的周末回退是**双保险**(2026-10-11 起日历已修正, 补班周末不再误记为交易日)。
     """
     from src.core.trading_calendar import prev_trading_day, trading_day_anchor
 
     dt = now or datetime.now(_CST)
     d = dt.date() if isinstance(dt, datetime) else dt
     d = trading_day_anchor(d)          # 当日非交易日 → 回退上一交易日
-    # 日历把补班周末记为交易日 → 逐级回退到真正的工作日
+    # 双保险: 若当日(或回退结果)是周末仍继续回退到真正的工作日(防日历表回归)
     guard = 0
     while d.weekday() >= 5 and guard < 20:
         d = prev_trading_day(d)

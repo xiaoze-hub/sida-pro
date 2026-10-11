@@ -1,3 +1,73 @@
+### docs-决策先锋规格同步 AI 机构活跃度因子数结论(保留 7 因子)（2026-10-11）
+
+**问题(P3)**: `docs/decision-pioneer-spec.md:15` 仍写「我方实现为 7 因子——需核对是否多算一因子」,
+而 `src/core/ai_activity.py:11-22` 已给出结论「保留 7 因子」。
+
+**改**: spec 该条同步为结论态 —— 公开资料记 6 指标, 我方**保留 7 因子**(内部《8问8答》=7 +
+逆向公式 `1_JGHYD_机构活跃度.txt` max(7因子)×1.2 + 官方截图实测对齐), 多的 1 项=上影+下影(全幅),
+并回指 `src/core/ai_activity.py:11-22`。
+
+### fix-TQ 探测结论文案区分真·全灭与预算耗尽(已探 x/y)（2026-10-11）
+
+**问题(P2)**: `packages/marketdata/.../vendors/tq.py`(`_rpc` 抛 TqUnavailable)与
+`src/core/source_health.py`(tq_moreinfo detail)都写「候选地址探测**全灭**」, 但 `_resolve_tq_url`
+是 3s 预算耗尽就 `break`(候选 ~13 个可能只探了几个)—— 把「预算没跑完」误报成「全灭」。
+
+**改**:
+- `tq.py`: 新增进程态 `_TQ_LAST_PROBE = {probed, total, budget_exhausted}` 与
+  `_probe_state_desc()`; `_resolve_tq_url` 记录已探数/是否预算耗尽, 日志/异常文案据此区分
+  「候选地址探测全灭(已探 N/N)」vs「候选探测未在预算内完成(已探 x/y)」(修 `global` 声明)。
+- `src/core/source_health.py`: tq_moreinfo 未命中时用 `_probe_state_desc()` 组装 detail
+  (旧模块无该函数时回退原文案)。
+- `tests/test_tq_url_layer.py`: 新增 3 例 —— ①全灭态 probed==total 且 desc 含「全灭」不含「预算」;
+  ②预算耗尽(预算=0)态 budget_exhausted=True、probed<total、desc 含「未在预算内完成 已探 x/y」;
+  ③`_rpc` 抛出的 TqUnavailable 文案两种情况可区分。
+
+**验证**: `tests/test_tq_url_layer.py` + `test_source_health.py` 全绿; 全量 3613 passed / 0 failed。
+
+### fix-decision_pioneer 阈值接入统一配置层(env 生效, 与 ai_activity 档位一致)（2026-10-11）
+
+**问题(P2)**: `src/core/decision_pioneer.py:19-21` 的 `LIFE_LINE/STRONG_LINE/BULL_LINE` 硬编码,
+`compute_institution_activity` 直用 → env `SIDA_THRESHOLD_LIFE_LINE/STRONG_LINE/BULL_LINE` 对其**无效**;
+而 `ai_activity.py` 已改走 `src/core/thresholds` 配置层 → **两处档位不一致**。
+
+**改**:
+- `src/core/decision_pioneer.py`: 档位判定(life/strong/bull)与返回体的 `life_line/strong_line/bull_line`
+  改为实时调 `src.core.thresholds.life_line()/strong_line()/bull_line()`; 三个模块常量降级为
+  **默认值镜像**(向后兼容 import, 判定不再直用)。
+- `tests/test_decision_pioneer.py`: 新增 3 例回归 —— ①默认下两模块 level 一致(=强势);
+  ②env 覆盖强势线/生命线 → `decision_pioneer` 与 `ai_activity` level **恒一致**(且随 env 降级);
+  ③返回体阈值字段真读配置层(非常量)。
+
+**验证**: `tests/test_decision_pioneer.py` + `test_thresholds.py` + `test_activity_caliber.py` 全绿;
+全量 `-m 'not network'` 3613 passed / 0 failed。
+
+### fix-交易日历按真实行情修正: 补班周末恒休市 + 补 2026 除夕（2026-10-11）
+
+**问题(P1)**: `src/core/trading_calendar.py` 的 `_WORKDAYS_2026` 含 2026-10-10(调休补班周六),
+`is_trading_day` 返回 True, 但那天 A 股**没开市** → 全仓所有「N 个交易日」链路错位。
+
+**真相核验(证据先行)**: 只读生产 PG `klines`(period='1d'), 取全市场覆盖最高的 40 只
+A 股标的(600519 等)的 distinct 交易日并集当权威真相(2024-2026 逐日核验, **周末 0 行**)。
+对比后列出**全部**不一致(不只 10-10):
+- **调休补班日全是周末**(2025 五个 + 2026 五个), A 股交易所不参与国务院调休补班 → 全部应剔除;
+- **2026-02-16(周一·除夕) 漏列** → 被误判交易日(真实: 节前 02-13、节后 02-24)。
+
+**改**:
+- `src/core/trading_calendar.py`: `_WORKDAYS_2025/2026` 清空(留档注释); `_HOLIDAYS_2026` 补
+  `2026-02-16`; `_WORKDAYS_2027/2028` 无真实数据 → 保留并标「待核」(按同一周末口径, 待官方
+  公告+真实日线复核清空); 模块头设计说明更新。
+- `forecast_lib/trading_days.py`(8010 侧自带表): 同步改(parity 门禁要求两侧一致)。
+- `src/core/ladder_freshness.py`: 手动绕开「补班周末」的注释/文案改为「日历已修正, 周末判断
+  保留为双保险」(逻辑不变, 防未来回归)。
+- **回归测试**: 新增离线 fixture `tests/fixtures/real_trading_days.txt`(399 个真实交易日,
+  由生成脚本 `scripts/gen_real_trading_days_fixture.py` 从 PG 只读导出) + `tests/test_trading_calendar_truth.py`
+  —— 断言「日历 == fixture 真相」而非两张手抄表互比; 禁真网络。
+- 修正编码了旧错误口径的用例: `test_user_isolation_trading_calendar.py`(补班周末改判休市,
+  跨春节计数 7→5, 跨国庆目标日 9/30→10/9)、`test_w26_trading_calendar_wiring.py`(10-10 盘中改判非交易中)、
+  `test_theme_mood_live_settle.py`(10-10 is_live_window→False)。断言强度不变(仅改判为真实值)。
+
+**验证**: 全量 `-m 'not network'` **3613 passed / 2 skipped / 0 failed**。
 ### fix-presets 多用户隔离缺口(select() 漏 user_id) + 门禁扩 SQLAlchemy 2.0 select() 覆盖（2026-10-11）
 
 P1 越权: `src/web/api/presets.py:run()` 找标的时

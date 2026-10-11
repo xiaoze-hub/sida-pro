@@ -73,6 +73,62 @@ def test_gs_signal_insufficient():
     assert compute_gs_signal(_bars([(10, 10, 10, 10), (10, 10, 10, 10)])) is None
 
 
+# ── 阈值一致性回归(2026-10-11 P2) ─────────────────────────────────────────
+# decision_pioneer 与 ai_activity 的档位必须同源(都走 src.core.thresholds 配置层),
+# env 覆盖下两者 level 恒一致 —— 钉死"两处阈值不一致"这个历史 bug。
+_ENV_KEYS = ("SIDA_THRESHOLD_LIFE_LINE", "SIDA_THRESHOLD_STRONG_LINE",
+             "SIDA_THRESHOLD_BULL_LINE")
+
+# 活跃度 ≈ 3.03(默认档=强势): prev 10 → c=10.1 o=10 h=10.15 l=9.85
+_LEVEL_BARS = _bars([(10, 10, 10, 10), (10, 10.15, 9.85, 10.1)])
+
+
+def _both_levels():
+    from src.core import ai_activity as ai
+    from src.core.decision_pioneer import compute_institution_activity
+
+    dp = compute_institution_activity(_LEVEL_BARS)
+    ai_res = ai.eval_activity(_LEVEL_BARS)
+    assert dp is not None
+    return dp["level"], ai_res["level"]
+
+
+def test_decision_pioneer_and_ai_activity_level_consistent_default(monkeypatch):
+    for k in _ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    dp_level, ai_level = _both_levels()
+    assert dp_level == ai_level == "强势"  # 3.03 落在 [3,6)
+
+
+def test_decision_pioneer_and_ai_activity_level_consistent_env_override(monkeypatch):
+    """env 抬高强势线 → 两模块档位同步降级(证明 decision_pioneer 真读配置层)。"""
+    for k in _ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SIDA_THRESHOLD_STRONG_LINE", "5.0")
+    dp_level, ai_level = _both_levels()
+    assert dp_level == ai_level, f"env 覆盖下档位不一致: dp={dp_level} ai={ai_level}"
+    assert dp_level == "生命"  # 3.03 < 5.0 → 掉到生命档
+
+    # 再抬生命线到 4.0 → 3.03 掉到"弱"
+    monkeypatch.setenv("SIDA_THRESHOLD_LIFE_LINE", "4.0")
+    dp_level2, ai_level2 = _both_levels()
+    assert dp_level2 == ai_level2 == "弱"
+
+
+def test_decision_pioneer_result_thresholds_read_config(monkeypatch):
+    """返回体里的 life/strong/bull_line 是配置层生效值, 不是硬编码常量。"""
+    for k in _ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    from src.core.decision_pioneer import compute_institution_activity
+
+    monkeypatch.setenv("SIDA_THRESHOLD_BULL_LINE", "9.9")
+    r = compute_institution_activity(_LEVEL_BARS)
+    assert r is not None
+    assert r["bull_line"] == 9.9
+    assert r["life_line"] == 1.56
+    assert r["strong_line"] == 3.0
+
+
 if __name__ == "__main__":
     from src.core.decision_pioneer import LIFE_LINE
     test_institution_activity_bull()

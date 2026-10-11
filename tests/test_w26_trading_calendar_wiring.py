@@ -28,7 +28,7 @@ SH = ZoneInfo("Asia/Shanghai")
 
 # 已知日期(与日历静态表核对): 2026-09-09 周三(交易日), 2026-09-12 周六,
 # 2026-09-11 周五, 2026-09-30 周三; 2026-10-01(周四)~10-07 国庆休市,
-# 2026-10-10 周六为国庆补班交易日。
+# 2026-10-10 周六(国庆调休补班)仍是周末 → A 股不开市(2026-10-11 P1 核验)。
 WED = "2026-09-09"
 SAT = "2026-09-12"
 FRI = "2026-09-11"
@@ -110,12 +110,13 @@ class TestMarketDef:
         assert md.is_trading_time(_dt.datetime(2026, 9, 9, 12, 0, tzinfo=SH)) is False  # 午休
         assert md.is_trading_time(_dt.datetime(2026, 9, 12, 10, 0, tzinfo=SH)) is False  # 周六
 
-    def test_cn_makeup_saturday_is_trading(self):
+    def test_cn_makeup_saturday_is_holiday(self):
         from src.models.market import MARKETS, MarketCode
 
         md = MARKETS[MarketCode.CN]
-        # 2026-10-10 周六为国庆补班交易日, 盘中应判定交易中
-        assert md.is_trading_time(_dt.datetime(2026, 10, 10, 10, 0, tzinfo=SH)) is True
+        # 2026-10-10 周六(国庆调休补班) 仍是周末 → A 股不开市
+        # (2026-10-11 P1 核验: 原断言 True 编码了错误口径, 经真实行情改判)
+        assert md.is_trading_time(_dt.datetime(2026, 10, 10, 10, 0, tzinfo=SH)) is False
 
     def test_cn_uncovered_year_raises(self):
         from src.models.market import MARKETS, MarketCode

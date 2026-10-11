@@ -87,7 +87,7 @@ def test_is_live_window_uses_calendar():
     assert tm.is_live_window(datetime(2026, 10, 8, 9, 0)) is False     # 盘前
     assert tm.is_live_window(datetime(2026, 10, 8, 16, 0)) is False    # 收盘后
     assert tm.is_live_window(datetime(2026, 10, 6, 10, 30)) is False   # 国庆休市
-    assert tm.is_live_window(datetime(2026, 10, 10, 10, 30)) is True   # 周六调休补班=交易日
+    assert tm.is_live_window(datetime(2026, 10, 10, 10, 30)) is False  # 周六调休补班: A 股不开市(2026-10-11 P1 核验)
 
 
 def test_is_settle_due_now():

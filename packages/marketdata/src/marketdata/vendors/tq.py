@@ -106,7 +106,7 @@ def tq_bars_fresh(dates: list | None) -> bool:
 # 返回 None / 由 _rpc 抛 TqUnavailable, 调用方显式进『TQ 不可用』态(降级链/无数据)。
 # ---------------------------------------------------------------------------
 class TqUnavailable(RuntimeError):
-    """TQ 网关不可用: 所有候选地址探测全灭且未配置显式兜底。
+    """TQ 网关不可用: 候选地址探测未命中(全灭或预算耗尽)且未配置显式兜底。
 
     调用方应据此显式进入『TQ 不可用』态(降级链 / 显式无数据), **不得**再拿一个
     未经验证的地址去连 —— 死地址连接只会白等超时。见 _resolve_tq_url()。
@@ -129,6 +129,20 @@ _PROBE_BUDGET_S = 3.0
 _PROBE_SINGLE_TIMEOUT_S = 1.5
 # P1-4: 最近命中的主机地址, 探测时排到最前(优先探已知可用网段)。
 _TQ_LAST_GOOD_HOST: str | None = None
+
+# P2(2026-10-11): 最近一次候选探测的诊断态 —— 供调用方(source_health / 错误文案)
+# 区分"真·候选全灭"(探完全部候选)与"预算耗尽"(3s 预算用尽, 只探了一部分)。
+# {probed: 已探候选数, total: 候选总数, budget_exhausted: 是否因预算耗尽提前 break}
+_TQ_LAST_PROBE: dict = {"probed": 0, "total": 0, "budget_exhausted": False}
+
+
+def _probe_state_desc() -> str:
+    """人类可读的探测结论(诚实区分全灭 vs 预算耗尽)。"""
+    st = _TQ_LAST_PROBE
+    probed, total = int(st.get("probed", 0)), int(st.get("total", 0))
+    if st.get("budget_exhausted"):
+        return f"候选探测未在预算内完成(已探 {probed}/{total})"
+    return f"候选地址探测全灭(已探 {probed}/{total})"
 
 
 def _host_gateway() -> str | None:
@@ -183,6 +197,7 @@ def _resolve_tq_url() -> str | None:
     import time as _time
 
     global _TQ_URL_CACHE, _TQ_URL_CACHE_OK, _TQ_URL_CACHE_TS, _TQ_LAST_GOOD_HOST
+    global _TQ_LAST_PROBE
     now = _time.time()
 
     # 缓存判定: 成功 → OK TTL(20min) 内复用; 失败 → FAIL TTL(5min) 内不重复阻塞探测。
@@ -209,27 +224,40 @@ def _resolve_tq_url() -> str | None:
                 candidates.append(u)
 
     deadline = _time.monotonic() + _PROBE_BUDGET_S
+    probed = 0
+    budget_exhausted = False
     for u in candidates:
         remaining = deadline - _time.monotonic()
         if remaining <= 0.05:
-            logger.warning("TQ 探测预算(%.1fs)耗尽, 停止探测(候选剩余)", _PROBE_BUDGET_S)
+            budget_exhausted = True
+            logger.warning(
+                "TQ 探测预算(%.1fs)耗尽, 停止探测(已探 %d/%d 个候选)",
+                _PROBE_BUDGET_S, probed, len(candidates),
+            )
             break
+        probed += 1
         if _probe_tq(u, timeout=min(_PROBE_SINGLE_TIMEOUT_S, remaining)):
             _TQ_URL_CACHE = u
             _TQ_URL_CACHE_OK = True
             _TQ_URL_CACHE_TS = _time.time()
             _TQ_LAST_GOOD_HOST = httpx.URL(u).host
+            _TQ_LAST_PROBE = {"probed": probed, "total": len(candidates), "budget_exhausted": False}
             logger.info("TQ 网关自动命中: %s", u)
             return u
 
-    # 全灭: 不回退探测出的地址; 仅 env 兜底(运维显式配置)或 None。
+    # 未命中: 不回退探测出的地址; 仅 env 兜底(运维显式配置)或 None。
+    # P2(2026-10-11): 诚实区分「真·全灭」(探完所有候选) vs 「预算耗尽」(3s 用尽只探了一部分)。
+    _TQ_LAST_PROBE = {
+        "probed": probed, "total": len(candidates), "budget_exhausted": budget_exhausted,
+    }
     _TQ_URL_CACHE = env_norm or None
     _TQ_URL_CACHE_OK = False
     _TQ_URL_CACHE_TS = _time.time()
+    desc = _probe_state_desc()
     if env_norm:
-        logger.warning("TQ 网关探测全灭, 仅按 env TDX_QUANT_URL 兜底 %s(将降级其他数据源)", env_norm)
+        logger.warning("TQ 网关%s, 仅按 env TDX_QUANT_URL 兜底 %s(将降级其他数据源)", desc, env_norm)
     else:
-        logger.warning("TQ 网关探测全灭且未配置 TDX_QUANT_URL → TQ 不可用(将降级其他数据源)")
+        logger.warning("TQ 网关%s 且未配置 TDX_QUANT_URL → TQ 不可用(将降级其他数据源)", desc)
     return _TQ_URL_CACHE
 
 
@@ -253,8 +281,9 @@ def _rpc(method: str, params: dict, timeout: float = _TIMEOUT_S, *, full: bool =
     body = json.dumps({"id": 1, "method": method, "params": params}, ensure_ascii=False).encode("utf-8")
     url = _resolve_tq_url()
     if not url:
-        # P0-3: 探测全灭且无 env 兜底 → 显式 TQ 不可用, 不拿死地址去连(挂满 timeout)。
-        raise TqUnavailable("TQ 网关不可用: 候选地址探测全灭且未配置 TDX_QUANT_URL")
+        # P0-3: 探测未命中且无 env 兜底 → 显式 TQ 不可用, 不拿死地址去连(挂满 timeout)。
+        # P2(2026-10-11): 文案诚实区分「真·全灭」与「预算耗尽」。
+        raise TqUnavailable(f"TQ 网关不可用: {_probe_state_desc()}且未配置 TDX_QUANT_URL")
     global _TQ_FAIL_STREAK
     try:
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(_TIMEOUT_CONNECT_S, timeout))) as client:
