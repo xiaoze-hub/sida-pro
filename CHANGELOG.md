@@ -1,3 +1,12 @@
+### fix-UI-RULES R4 判据改用文件名(修 checkout 目录名含 gs 的误伤)（2026-10-11）
+
+`scripts/check_ui_rules.mjs` 的 R4(GS 颜色禁硬编码)用**全路径** `/Kline|...|gs/i` 判定"是否 GS 相关文件",
+于是当仓库被 checkout 到目录名含 "gs" 的路径时(如 worktree `/home/ubuntu/wt/gs-fund-layer`), 无关文件
+(`dashboard/SentimentGauge.tsx` 的 rally/panic 红绿)被误判为 GS 硬编码 → 门禁假红。
+
+- **改**: R4 的判据字符串改为对**文件名**(`f.split('/').pop()`)匹配; `/lib/stock-colors.ts` 豁免仍按全路径。
+  只收紧不放松(文件名 ⊂ 全路径), 真实 K线/GS 文件(KlineChart.tsx/stock-colors.ts/...)照旧命中。
+
 ### fix-主力净流入(L2·TQ)卡非交易时段回退收盘快照(0 不冒充)（2026-10-11）
 
 用户报周末截图: 工作台右栏「主力净流入(L2·TQ)」仍显示"0万 平衡 逐笔0笔"。真因是这张卡走
