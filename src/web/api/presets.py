@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.agents.tradingagents.presets import (
     get_preset,
     list_presets,
 )
+from src.web.api.auth import get_current_user
+from src.web.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,11 @@ async def get_detail(name: str):
 
 
 @router.post("/{name}/run")
-async def run(name: str, req: RunPresetRequest):
+async def run(
+    name: str,
+    req: RunPresetRequest,
+    user: User = Depends(get_current_user),
+):
     """跑 preset(借 TradingAgents 4 分析师 + 辩论机制)。
 
     实现思路:
@@ -82,18 +88,30 @@ async def run(name: str, req: RunPresetRequest):
     if not p:
         raise HTTPException(404, f"preset 不存在: {name}")
 
-    # 2. 找股票
-    from sqlalchemy import select
+    # 2. 找股票(多用户隔离: 只认当前用户的 + 全局共享 user_id IS NULL 的,
+    #    否则两用户同标的会 MultipleResultsFound(500) 或读到他人标的)
+    from sqlalchemy import or_, select
     from src.web.database import SessionLocal
     from src.web.models import Stock
 
     with SessionLocal() as db:
-        stock_obj = db.execute(
-            select(Stock).where(
-                Stock.symbol == req.target,
-                Stock.market == req.market,
+        stock_obj = (
+            db.execute(
+                select(Stock)
+                .where(
+                    Stock.symbol == req.target,
+                    Stock.market == req.market,
+                    or_(
+                        Stock.user_id == user.id,
+                        Stock.user_id.is_(None),
+                    ),
+                )
+                # 同号(本人自选 + 全局共享)并存时优先本人, 避免歧义与 MultipleResultsFound
+                .order_by(Stock.user_id.is_(None))
             )
-        ).scalar_one_or_none()
+            .scalars()
+            .first()
+        )
         if not stock_obj:
             raise HTTPException(
                 404,

@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""C3(2026-09-09) 静态门禁: src/web/api 下 db.query(带 user_id 的模型)必须有用户过滤。
+"""C3(2026-09-09) 静态门禁: src/web/api 下 user-scoped 查询必须有用户过滤。
 
-规则: 扫描 src/web/api/*.py 的 `db.query(<Model>)`, 若 Model 含 user_id 列,
-则同函数(含嵌套祖先函数)内必须满足其一, 否则报错退出 1:
+规则: 扫描 src/web/api/*.py, 命中以下任一"查询点"且被查模型含 user_id 列时,
+同函数(含嵌套祖先函数)内必须满足其一, 否则报错退出 1:
   1. 查询链/函数体出现 `<Model>.user_id` 过滤
   2. 出现 _scope 助手调用: scoped( / owned_or_404( / writable(,
      或 *user_scope*( 本地作用域条件助手, 如 _user_scope_pos(acc) )
   3. 函数被 @allow_cross_user 显式豁免(须附安全性理由注释)
   4. 查询行尾注释 `# scoped-check: allow`(单行豁免, 同样须附理由)
 
+查询点(2026-10-11 扩): 此前只识别 ORM 1.x `db.query(<Model>)`, 对 SQLAlchemy 2.0
+`db.execute(select(<Model>)...)` 零覆盖 → presets.py 的 select() 漏 user_id 过滤
+逃逸(两用户同标的 MultipleResultsFound / 命中他人标的)。现一并纳入。
+`db.execute(text("..."))` 原生 SQL 的模型是字符串, AST 无法静态归因, 不在此判定;
+src/web/api 现存 text() 查询经人工核对均只查共享行情表/独立预测库(无 user-scoped 表)。
+
 用法: python scripts/check_scoped_queries.py            # 门禁模式
       python scripts/check_scoped_queries.py --list     # 同输出, 永远退出 0
-红样例: 在任意 api 文件加裸 `db.query(Stock).all()` → CI 变红(验收要求)。
+红样例: 在任意 api 文件加裸 `db.query(Stock).all()` 或
+        `db.execute(select(Stock).where(Stock.symbol=="600519"))` → CI 变红(验收要求)。
 """
 from __future__ import annotations
 
@@ -44,11 +51,102 @@ def user_scoped_models() -> set[str]:
 
 
 def _model_name(node: ast.AST) -> str | None:
-    """db.query(X) 的 X: Name→id / Attribute→最右属性名; 其余(函数调用等)不识别。"""
+    """db.query(X) 的 X / select(X) 的 X: Name→id / Attribute→最右属性名; 其余(函数调用等)不识别。"""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
+    return None
+
+
+def _root_model_name(node: ast.AST) -> str | None:
+    """取表达式的根模型名: select(Stock)→Stock, select(Stock.symbol)→Stock。
+
+    沿 Attribute/Subscript 向左下剥到最左的 Name; 函数调用(Call)等无法可靠
+    归因的一律 None(不误报)。
+    """
+    cur = node
+    for _ in range(50):  # 防御性上限, 避免异常深链死循环
+        if isinstance(cur, ast.Attribute):
+            cur = cur.value
+        elif isinstance(cur, ast.Subscript):
+            cur = cur.value
+        else:
+            break
+    if isinstance(cur, ast.Name):
+        return cur.id
+    return None
+
+
+def _call_name(node: ast.AST) -> str | None:
+    """取被调用对象的名字: foo(...)→foo, a.b(...)→b。"""
+    if not isinstance(node, ast.Call):
+        return None
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    return None
+
+
+def _unwrap_select(node: ast.AST) -> ast.Call | None:
+    """沿方法链(.where/.filter/.order_by/...)回剥到最底层的 select(...) 调用。
+
+    db.execute(select(Stock).where(...)) 的实参是 Call(where)，需一路回剥到
+    Call(select) 才能取到被查模型。不是 select() 链则返回 None。
+    """
+    cur = node
+    for _ in range(100):
+        if isinstance(cur, ast.Call) and isinstance(cur.func, ast.Attribute):
+            cur = cur.func.value  # 剥掉一层方法调用
+        else:
+            break
+    if isinstance(cur, ast.Call) and _call_name(cur) in {"select", "select_from"}:
+        return cur
+    return None
+
+
+def _select_model(node: ast.AST) -> str | None:
+    """从一个 select(...) 调用取被查模型名(取第一个实参的根模型)。"""
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    return _root_model_name(node.args[0])
+
+
+def _query_site_model(node: ast.AST) -> str | None:
+    """识别一个 user-scoped 查询点, 返回被查模型名; 不识别返回 None。
+
+    覆盖两种 SQLAlchemy 写法:
+      1. ORM 1.x/2.0:  db.query(<Model>) / db.query(<Model>).filter(...)
+      2. ORM 2.0:      db.execute(select(<Model>)[.where(...)...])
+    对 db.execute(text("...")) 之类原生 SQL: 模型无法从 AST 静态归因(字符串),
+    不在此处判定 —— 由维护者人工核对(见模块 docstring)。
+    """
+    # 形态 1: db.query(Model)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "query"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "db"
+        and node.args
+    ):
+        return _model_name(node.args[0])
+
+    # 形态 2: db.execute(select(Model)...)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "execute"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"db", "session"}
+        and node.args
+    ):
+        sel = _unwrap_select(node.args[0])
+        if sel is not None:
+            return _select_model(sel)
+
     return None
 
 
@@ -124,15 +222,9 @@ def check_source(src: str, scoped_models: set[str]) -> list[dict]:
 
     violations: list[dict] = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "query"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "db"):
+        if not isinstance(node, ast.Call):
             continue
-        if not node.args:
-            continue
-        model = _model_name(node.args[0])
+        model = _query_site_model(node)
         if not model or model not in scoped_models:
             continue
 
@@ -180,7 +272,7 @@ def main() -> int:
         return 0
     print(f"check_scoped_queries: {len(violations)} 处未过滤的 user-scoped 查询:")
     for v in violations:
-        print(f"  {v['file']}:{v['line']}  db.query({v['model']})  in {v['func']}()")
+        print(f"  {v['file']}:{v['line']}  user-scoped 查询 {v['model']}  in {v['func']}()")
     if args.list:
         return 0
     print("修复方式: 走 _scope.scoped()/owned_or_404()/writable(), 或 @allow_cross_user 显式豁免(附理由)")

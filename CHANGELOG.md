@@ -1,3 +1,27 @@
+### fix-presets 多用户隔离缺口(select() 漏 user_id) + 门禁扩 SQLAlchemy 2.0 select() 覆盖（2026-10-11）
+
+P1 越权: `src/web/api/presets.py:run()` 找标的时
+`db.execute(select(Stock).where(Stock.symbol==target, Stock.market==market))`
+**漏 user_id 过滤** → 两用户持有同 symbol/market 时 `scalar_one_or_none()` 抛
+`MultipleResultsFound`(500), 或命中他人自选(把别人的标的喂给本用户的分析)。
+
+- **修** `src/web/api/presets.py`: `run()` 加 `user: User = Depends(get_current_user)`,
+  查标的补 `or_(Stock.user_id == user.id, Stock.user_id.is_(None))`(本人 + 全局共享,
+  同 stocks 列表口径), 并改 `.order_by(Stock.user_id.is_(None)).scalars().first()`:
+  同号(本人 + 共享)并存时优先本人, 彻底消除 MultipleResultsFound。
+- **修** `scripts/check_scoped_queries.py`(门禁盲区): 此前只识别 `db.query(<Model>)`,
+  对 SQLAlchemy 2.0 `db.execute(select(<Model>))` 零覆盖 → presets 漏过滤逃逸。
+  现扩 AST 匹配纳入 select()(含 `.where/.order_by` 方法链回剥)。`text()` 原生 SQL
+  模型是字符串无法静态归因, 保留人工核对: `src/web/api` 现存 text() 查询已逐个核对,
+  均只查共享行情表/独立预测库(无 user-scoped 表) → 无新增泄露。
+- **加** `tests/test_presets_user_scope.py`(4 例): 两用户同标的各自拿到本人标的、
+  仅全局共享时回退共享、只存在他人标的时 404。
+- **加** `tests/test_multitenant_isolation.py::TestScopeCheckerC3` 4 例: 漏过滤 select()
+  报红 / 带 user_id 过滤的 select() 放行 / 方法链 select() 报红 / 非 user-scoped 模型不误报。
+- **反向验证**: ①删 presets 的 user_id 过滤 → 隔离用例 2 红(拿到他人标的 / 404 失效);
+  ②临时加漏过滤 `select(Stock)` 探针文件 → 门禁报红(命中), 删探针 → 绿。
+- **验证**: 门禁 `check_scoped_queries` 绿; 全量 `-m "not network"` 绿(见下条)。
+
 ### test-登录失败限流计数跨用例隔离(修 CI shard 1 顺序污染)（2026-10-11）
 
 CI shard 1 红: `tests/test_auth_change_password.py` 的改密用例故意用错旧口令(失败路径)
