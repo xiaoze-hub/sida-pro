@@ -194,6 +194,59 @@ export function fetchSignalHitRate(signalType?: string, days = 30) {
   return fetchAPI<SignalHitRateResponse>(`/signals/hit-rate?${q.toString()}`, { cacheMode: 'reload' })
 }
 
+/** 自选池信号质量: 单个时间档(与 DecisionHorizon 同口径: 样本不足不给数字)。 */
+export interface WatchlistQualityHorizon {
+  n: number
+  hit_rate: number | null
+  insufficient: boolean
+  note: string
+}
+
+export interface WatchlistQualitySymbolRow {
+  symbol: string
+  n_total: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+}
+
+export interface WatchlistQualityRegimeBucket {
+  regime: string
+  label: string
+  n_total: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+}
+
+export interface WatchlistQualitySignal {
+  signal_kind: string
+  n_total: number
+  symbols_count: number
+  horizons: Record<'t1' | 't3' | 't5', WatchlistQualityHorizon>
+  by_symbol: WatchlistQualitySymbolRow[]
+  regime_buckets: WatchlistQualityRegimeBucket[]
+  /** 如『该信号仅在发酵期样本足够』; 无定论为空串 */
+  regime_note: string
+}
+
+export interface WatchlistSignalQualityResponse {
+  /** false = 无法隔离/自选为空/查询失败(带 error) */
+  available: boolean
+  user_id: string
+  days: number
+  min_sample: number
+  symbols_count: number
+  signals: WatchlistQualitySignal[]
+  error?: string
+  note: string
+}
+
+/** 自选池专属信号质量(2026-10-11 ②): 按 user_id 隔离的账本聚合, 只陈述实测。 */
+export function fetchWatchlistSignalQuality(days = 180, minSample = 30) {
+  const q = new URLSearchParams({ days: String(days), min_sample: String(minSample) })
+  return fetchAPI<WatchlistSignalQualityResponse>(
+    `/decisions/watchlist-signal-quality?${q.toString()}`,
+    { cacheMode: 'reload' },
+  )
+}
+
 /** 决策阈值只读快照一项(数智决策 P1-3 可配置化)。 */
 export interface DecisionThresholdItem {
   key: string
@@ -240,6 +293,7 @@ export const decisionsApi = {
   backtest: (params: Parameters<typeof fetchDecisionBacktest>[0]) => fetchDecisionBacktest(params),
   entryOutcomes: (days = 30, minSample = 20) => fetchEntryOutcomes(days, minSample),
   thresholds: () => fetchDecisionThresholds(),
+  watchlistQuality: (days = 180, minSample = 30) => fetchWatchlistSignalQuality(days, minSample),
 }
 
 /** 信号对账(批次D)对象式导出。 */

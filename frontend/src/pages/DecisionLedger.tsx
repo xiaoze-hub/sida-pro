@@ -10,6 +10,7 @@ import {
   type EntryOutcomesResponse,
   type SignalHitRateResponse,
   type DecisionThresholdItem,
+  type WatchlistSignalQualityResponse,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import ErrorState from '@/components/ErrorState'
@@ -57,6 +58,7 @@ export default function DecisionLedger() {
   const [hitRate, setHitRate] = useState<SignalHitRateResponse | null>(null)
   const [outcomes, setOutcomes] = useState<EntryOutcomesResponse | null>(null)
   const [thresholds, setThresholds] = useState<DecisionThresholdItem[] | null>(null)
+  const [wl, setWl] = useState<WatchlistSignalQualityResponse | null>(null)
   const [loading, setLoading] = useState(true)
   // 2026-10-10 加载韧性: 存原始错误对象(带 fetchAPI 的类型化 kind)而非字符串,
   // 供 ErrorState 正确分类(超时/网络/5xx); 标语仍用 errMsg 展示。
@@ -97,6 +99,12 @@ export default function DecisionLedger() {
       if (hr.status === 'fulfilled') setHitRate(hr.value)
       if (oc.status === 'fulfilled') setOutcomes(oc.value)
       if (th.status === 'fulfilled') setThresholds(th.value.items)
+      // 自选池信号质量(2026-10-11 ②): 单独兜底, 失败不拖垮整页
+      try {
+        setWl(await decisionsApi.watchlistQuality(180, 30))
+      } catch {
+        /* 单独失败: 该卡显式空态, 页面其余部分照常 */
+      }
     },
     [offset, startDate, endDate],
   )
@@ -233,6 +241,88 @@ export default function DecisionLedger() {
           </p>
         )}
         {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{stats.note}</p>}
+      </section>
+
+      {/* ①b 我的自选池信号质量(2026-10-11 胜率证据层 ②): 按 user_id 隔离的账本聚合, 只读/零预测。
+          样本不足则显示『样本不足』; 不写任何建议, 只陈述实测。 */}
+      <section className="mt-6" data-testid="watchlist-signal-quality">
+        <h2 className="text-[16px] font-semibold">我的自选池信号质量</h2>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          只看你自己自选池里出现过的信号 · 纯账本实测(零预测), 命中 = T+n 收益 &gt; 0;
+          样本不足(&lt; {wl?.min_sample ?? 30})一律显示『样本不足』, 不给数字 —— 报告只陈述实测, 不构成建议。
+        </p>
+        {wl && !wl.available && (
+          <p className="mt-2 text-[12px] text-muted-foreground">
+            暂无可报告：{wl.error ?? '自选池为空或暂无账本样本'}(空即空, 不补造)。
+          </p>
+        )}
+        {wl?.available && (
+          <div className="mt-2 space-y-3">
+            <p className="text-[11px] text-muted-foreground">
+              自选池 {numText(wl.symbols_count)} 只标的 · 回看 {numText(wl.days)} 天
+            </p>
+            {wl.signals.length === 0 && (
+              <p className="text-[12px] text-muted-foreground">自选池标的暂无信号留痕(需盘后扫描/决策生成后入账)。</p>
+            )}
+            {wl.signals.map((sig) => (
+              <div key={sig.signal_kind} className="rounded border border-border/60">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-2 py-1.5">
+                  <span className="text-[13px] font-semibold">{kindLabel(sig.signal_kind)}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    样本 {numText(sig.n_total)} · 覆盖 {numText(sig.symbols_count)} 只标的
+                  </span>
+                  {sig.regime_note && (
+                    <span className="rounded border border-border/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                      {sig.regime_note}
+                    </span>
+                  )}
+                </div>
+                <div className="overflow-x-auto px-2 py-1.5">
+                  <table className="w-full text-left text-[12px]">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="py-0.5 pr-2 font-medium">维度</th>
+                        <th className="px-2 py-0.5 text-right font-medium">样本</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+1</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+3</th>
+                        <th className="px-2 py-0.5 text-right font-medium">T+5</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/30">
+                      <tr>
+                        <td className="py-0.5 pr-2">合计</td>
+                        <td className="px-2 py-0.5 text-right font-mono">{sampleText(sig.n_total)}</td>
+                        {(['t1', 't3', 't5'] as const).map((k) => {
+                          const c = hitRateText(sig.horizons[k])
+                          return (
+                            <td key={k} title={c.title} className={`px-2 py-0.5 text-right font-mono ${c.muted ? 'text-muted-foreground' : ''}`}>
+                              {c.text}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                      {sig.regime_buckets.map((b) => (
+                        <tr key={`reg-${b.regime}`} className="text-muted-foreground">
+                          <td className="py-0.5 pr-2">周期·{b.label}</td>
+                          <td className="px-2 py-0.5 text-right font-mono">{sampleText(b.n_total)}</td>
+                          {(['t1', 't3', 't5'] as const).map((k) => {
+                            const c = hitRateText(b.horizons[k])
+                            return (
+                              <td key={k} title={c.title} className={`px-2 py-0.5 text-right font-mono ${c.muted ? 'text-muted-foreground' : ''}`}>
+                                {c.text}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {wl?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{wl.note}</p>}
       </section>
 
       {/* ② 信号对账(批次D hit-rate) */}

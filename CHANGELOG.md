@@ -1,3 +1,21 @@
+### feat-用户自选池专属信号质量报告(user_id 隔离账本聚合·只陈述实测)（2026-10-11）
+
+回答「我自选池里这几类信号实测到底管不管用」: 按 **user_id 隔离** × signal_kind × symbol
+聚合决策账本 T+1/3/5 命中率 + regime 分桶, **纯账本聚合零预测**。样本 < 30 一律显『样本不足』,
+报告**不含任何建议文案**(AI 备证据不拍方向)。
+
+- **加** `src/core/signal_quality.py`: `watchlist_signal_quality(engine, user_id, ...)` ——
+  自选池 = `stocks.user_id=<当前用户>` 的 CN 标的; 只在这些标的的账本行上聚合(别人的池子
+  不进); user_id 缺失/自选为空 → `available=False`(不退化到全局池); regime 分桶附
+  『该信号只在X期样本足够』标注。
+- **加** `src/web/api/decisions.py`: `GET /api/decisions/watchlist-signal-quality`
+  (user 从登录态取, 永不 500)。
+- **加** 前端 `frontend/packages/api/src/decisions.ts` 客户端 + `DecisionLedger.tsx`
+  只读卡(样本不足显『--』, 回落中性色, 不卡片化堆砌)。
+- **加** `tests/test_signal_quality.py`(7 例): 多用户隔离、样本不足不显数字、regime 分桶、
+  空池显式、无建议文案。
+- **验证**: 前端 `tsc -b` + `vite build` 通过; 后端两测试文件 18 例全绿。
+
 ### feat-情绪温度计条件化门槛(SC15封板成功率/SC3炸板比接进情绪周期判据)（2026-10-11）
 
 决策账本 resonance3 的命中率此前是**全状态混算的平均数**(T+1 53.85%), 同一套『动手』
