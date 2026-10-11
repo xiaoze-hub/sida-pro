@@ -570,14 +570,156 @@ def backfill_daily_job(*, limit: int = 500) -> dict[str, Any]:
     return spawn_backfill(limit=limit, reason="scheduled")
 
 
+#: regime 历史回填作业 kind(与 outcomes 回填分开单飞)
+REGIME_BACKFILL_JOB_KIND = "decision_regime_backfill"
+
+
+def backfill_regime(
+    engine: Engine,
+    *,
+    limit: int = 20000,
+    day_resolver: Any = None,
+) -> dict[str, int]:
+    """给 `regime` 仍为 NULL/'' 的存量行**按其信号日**回填情绪周期态(幂等可重跑)。
+
+    历史回填(2026-10-11): 存量行早于 regime 落库改动 → 全 NULL → regime 分桶退化为单桶。
+    本函数按每行 `trade_date`(信号日)从当日情绪周期快照推 regime(口径见
+    `src.core.market_regime.resolve_regime_for_day` —— 与 current_regime 同源同映射, 不造第二套)。
+
+    纪律:
+    - **只填解析出明确态的行**; 解析为 unknown 的行**保持 NULL**(留给未来数据补齐, 不写
+      'unknown' 冒充已归集) —— 故幂等: 重跑对已填行与不可解析行都不改；
+    - 日期比较一律归一(账本紧凑 20260918 vs 快照 ISO 2026-09-18, 直接 == 永远不等); **不改写存储值**；
+    - regime 列不存在(老库) → 空跑, 计数全 0, 不炸。
+
+    Returns: {scanned, filled, unresolved, skipped_no_column}
+    """
+    if not _has_regime_column(engine):
+        return {"scanned": 0, "filled": 0, "unresolved": 0, "skipped_no_column": 1}
+    with engine.begin() as conn:
+        pend = conn.execute(
+            text(
+                "SELECT id, trade_date FROM decision_log "
+                "WHERE regime IS NULL OR regime = '' "
+                "ORDER BY trade_date ASC LIMIT :lim"
+            ),
+            {"lim": int(limit)},
+        ).fetchall()
+
+    if day_resolver is None:
+        from src.core.market_regime import regime_for_day_key
+
+        def _default_resolver(_engine: Engine, _day: Any) -> str:
+            return regime_for_day_key(_engine, _day)
+
+        day_resolver = _default_resolver
+
+    scanned = filled = unresolved = 0
+    for pid, day in pend:
+        scanned += 1
+        try:
+            reg = _norm_regime(day_resolver(engine, day))
+        except Exception as exc:  # noqa: BLE001 —— 单行解析失败不拖垮整批
+            logger.warning("regime 回填: 信号日 %s 解析失败(跳过): %r", day, exc)
+            unresolved += 1
+            continue
+        if not reg or reg == "unknown":
+            # 当日无快照 → 显式缺数据, 保持 NULL(不写 unknown 冒充), 下次数据补齐再填
+            unresolved += 1
+            continue
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE decision_log SET regime = :r WHERE id = :pid"),
+                {"r": reg, "pid": pid},
+            )
+        filled += 1
+
+    return {"scanned": scanned, "filled": filled, "unresolved": unresolved, "skipped_no_column": 0}
+
+
+def regime_backfill_runner(
+    job_id: str,
+    *,
+    engine: Engine | None = None,
+    limit: int = 20000,
+    day_resolver: Any = None,
+) -> None:
+    """作业体: 跑一次 regime 回填并把终态落库。**永不抛异常**(与 backfill_runner 同风格)。"""
+    from src.db.session import get_write_engine
+
+    eng = engine if engine is not None else get_write_engine()
+    try:
+        try:
+            jobs.start(job_id, "backfilling")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("regime 回填: 作业启动落库失败(继续跑回填): %r", exc)
+        out = backfill_regime(eng, limit=limit, day_resolver=day_resolver)
+    except Exception as exc:  # noqa: BLE001 —— 显式失败, 不抛
+        logger.warning("regime 回填失败: %r", exc)
+        try:
+            jobs.fail(job_id, str(exc))
+        except Exception as exc2:  # noqa: BLE001
+            logger.warning("regime 回填: 失败态落库失败: %r", exc2)
+        return
+    try:
+        if not jobs.finish(job_id, out, context="regime 历史回填: "):
+            logger.warning("regime 回填未成: %s", out)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("regime 回填: 终态落库失败: %r", exc)
+
+
+def spawn_regime_backfill(
+    *,
+    limit: int = 20000,
+    day_resolver: Any = None,
+    reason: str = "manual",
+) -> dict[str, Any]:
+    """单飞起一次 regime 回填作业(后台线程, 立即返回 job_id)。并发撞车复用同 job。"""
+    import threading
+
+    job_id, is_new = jobs.create(REGIME_BACKFILL_JOB_KIND, "regime 历史回填")
+    if not is_new:
+        return {"started": False, "running": True, "reason": "回填进行中", "job_id": job_id}
+    threading.Thread(
+        target=regime_backfill_runner,
+        kwargs={"job_id": job_id, "limit": limit, "day_resolver": day_resolver},
+        name=f"decision-regime-backfill-{reason}",
+        daemon=True,
+    ).start()
+    return {"started": True, "running": True, "reason": None, "job_id": job_id}
+
+
+def regime_backfill_daily_job(*, limit: int = 20000) -> dict[str, Any]:
+    """调度器入口(交易日 18:36): **非交易日跳过**, 否则单飞起 regime 回填作业。
+
+    与 outcomes 回填(18:35)错开 1 分钟: regime 是"按信号日"解析, 不依赖当日 K 线, 但避开
+    同一分钟的资源竞争。非交易日命中在任务内再拦一道(工作日专 cron + 交易日守卫双保险)。
+    """
+    from datetime import date
+
+    try:
+        from src.core.trading_calendar import is_trading_day
+
+        if not is_trading_day(date.today()):
+            return {"ok": True, "skipped": True, "reason": "非交易日跳过"}
+    except Exception as exc:  # noqa: BLE001 —— 日历缺失/未覆盖 → 显式失败, 禁止回落推测
+        logger.warning("regime 回填: 交易日历不可用, 跳过: %r", exc)
+        return {"ok": False, "reason": f"交易日历不可用: {exc!r}"[:200]}
+    return spawn_regime_backfill(limit=limit, reason="scheduled")
+
+
 def register_cron(scheduler) -> bool:
     """把决策账本回填 job 注册到传入的现有 APScheduler(**禁止新开 scheduler**)。
 
+    注册两个同风格作业:
+      - `decision-backfill-daily`(18:35): T+1/3/5 结果回填(需当日 K 线);
+      - `decision-regime-backfill-daily`(18:36): 存量行 regime 历史回填(按信号日)。
     在 lifespan 的调度器选主分支里调用; 传入 None / 无 add_job → 返回 False, 不崩。
     非交易日命中在任务内再拦一道(工作日专 cron + 交易日守卫双保险)。
     """
     if scheduler is None or not hasattr(scheduler, "add_job"):
         return False
+    ok = True
     try:
         scheduler.add_job(
             backfill_daily_job,
@@ -593,7 +735,25 @@ def register_cron(scheduler) -> bool:
             misfire_grace_time=300,
         )
         logger.info("决策账本回填 job 已注册: 交易日 18:35")
-        return True
     except Exception as exc:  # noqa: BLE001
         logger.error("决策账本回填 job 注册失败: %r", exc)
-        return False
+        ok = False
+    try:
+        scheduler.add_job(
+            regime_backfill_daily_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=18,
+            minute=36,
+            id="decision-regime-backfill-daily",
+            name="regime 历史回填",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+        logger.info("regime 历史回填 job 已注册: 交易日 18:36")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("regime 历史回填 job 注册失败: %r", exc)
+        ok = False
+    return ok

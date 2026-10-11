@@ -83,18 +83,28 @@ _FULL_BARS = {
 
 
 def test_register_cron_schedule_and_reuse():
-    """交易日 18:35 挂到传入的现有调度器(不新开); id/防并发参数一致。"""
+    """交易日 18:35/18:36 挂两个同风格 job 到传入的现有调度器(不新开); 防并发参数一致。"""
     sched = Mock()
     assert dl.register_cron(sched) is True
-    sched.add_job.assert_called_once()
-    args = sched.add_job.call_args[0]
-    kw = sched.add_job.call_args[1]
+    assert sched.add_job.call_count == 2, "outcomes + regime 两个回填作业都要注册"
+    calls = {c[1].get("id"): c for c in sched.add_job.call_args_list}
+    assert set(calls) == {"decision-backfill-daily", "decision-regime-backfill-daily"}, calls
+
+    # ① 结果回填: 18:35
+    args, kw = calls["decision-backfill-daily"][0], calls["decision-backfill-daily"][1]
     assert args[0] is dl.backfill_daily_job and args[1] == "cron"
     assert kw["day_of_week"] == "mon-fri"
     assert kw["hour"] == 18 and kw["minute"] == 35
-    assert kw["id"] == "decision-backfill-daily"
     assert kw["replace_existing"] is True
     assert kw["max_instances"] == 1 and kw["coalesce"] is True
+
+    # ② regime 历史回填: 18:36
+    args2, kw2 = calls["decision-regime-backfill-daily"][0], calls["decision-regime-backfill-daily"][1]
+    assert args2[0] is dl.regime_backfill_daily_job and args2[1] == "cron"
+    assert kw2["day_of_week"] == "mon-fri"
+    assert kw2["hour"] == 18 and kw2["minute"] == 36
+    assert kw2["replace_existing"] is True
+    assert kw2["max_instances"] == 1 and kw2["coalesce"] is True
 
 
 def test_register_cron_none_safe():

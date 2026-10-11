@@ -1,3 +1,32 @@
+### feat-regime 历史回填(存量 decision_log 按信号日补情绪周期态·幂等可重跑)（2026-10-11）
+
+生产决策账本 5415 行 `regime` **100% NULL**(旧样本早于 regime 落库改动) → regime 分桶退化
+为单桶, 『53.85% 是否被状态平均掩盖』无法验证。本次补上**按信号日**推 regime 的历史回填,
+让 stats/分桶真正可用。
+
+- **加** `src/core/market_regime.py`: `resolve_regime_for_day` / `regime_for_day_key` —— 按
+  **指定信号日**解析当日情绪周期态; 源优先级与映射**逐字复用** `current_regime`(①
+  signal_summary_daily.blocks.sentiment.cycle 主源 → ② market_phase_daily.phase 兜底 → ③
+  unknown), **禁自创第二套口径**; 区别仅在按日取历史行而非取最新行。日期归一(账本紧凑
+  `20260918` ↔ 快照 ISO `2026-09-18`)后比较; 温度计(`market_sentiment_daily`)只作证据回带,
+  **不参与 regime key 判定**。
+- **加** `src/core/decision_log.py`: `backfill_regime`(只填解析出明确态的行; 解析为 unknown 者
+  **保持 NULL** 不写 'unknown' 冒充; 不改写 trade_date 字面量 → **幂等可重跑**) +
+  `regime_backfill_runner/spawn_regime_backfill/regime_backfill_daily_job`; `register_cron`
+  再挂一个同风格作业 `decision-regime-backfill-daily`(交易日 **18:36**, 与 18:35 结果回填错开)。
+- **加** `tests/test_decision_regime_backfill.py`(15 例): 口径与 current_regime 一致 / 日期归一
+  双向 / 兜底源 / 缺数据显式 unknown / 幂等重跑 / 只填明确态 / 值保真 / 缺列降级 / 分析脚本
+  子进程真跑通。**改** `tests/test_decision_backfill_cron.py` 注册断言(1→2 个作业, 加强非降低)。
+- **补** `docs/research/情绪温度计条件化与胜率证据_20261011.md` 新章节: 回填口径 + 管道验证
+  (fixture, **非生产数**) 的分桶对比输出 + 生产重跑命令 + 不足处。样本不足的桶显『样本不足』
+  不造数。
+- **说明**: gs_cross / demon_pool / auction_pool 三类信号的新行**仍不带 regime**(生成侧未传,
+  属另一支边界) —— 由本回填作业(逐日)覆盖, 无需改动那三处生成代码。
+- **验证**: 新增/改动测试全绿(15 + 既有 cron 套件); 后端全量
+  `-m 'not network' --ignore=tests/test_dark_l2_engine.py --ignore=tests/test_thsdk_extended.py`
+  = **3658 passed / 2 skipped / 0 failed (RC=0)**。
+
+### fix-synthesize 温度计字段只在显式传入时透出(修零破坏契约)（2026-10-11）
 ### fix-情绪温度计/regime/API 数据陈旧显式标注(不拿旧值冒充当日)（2026-10-11）
 
 承接上一提交(情绪序列断链)。此前消费方读 `market_sentiment_daily` **最新行**时,
