@@ -33,6 +33,42 @@ _LEGACY_KEYS = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_seeded_users():
+    """模块结束清理本文件落库的临时 owner(dec_*/...) —— 共享 SQLite 跨文件污染。
+
+    2026-10-11 CI shard 1 根因: 本文件多处 `SessionLocal()` 直接 `s.add(make_user(
+    role="owner"))` 并 commit(见 _seed_user_with_stock / test_decision_endpoint_
+    passes_user_context), 却从不清理。残留 owner 会让登录端点的
+    `get_or_create_owner()` 短路(库中已有 owner ⇒ 不再按 env 重建 admin), 于是
+    同 shard 下游 test_auth_change_password / test_chat_stream / test_entry_candidate
+    的 admin 登录 401「用户名/邮箱或密码错误」, 失败计数累计满 5 次后进一步 429
+    「登录失败次数过多」—— 合跑红、单跑绿。
+
+    修法: 模块开始前快照既有 user id, 结束时把本模块**新增**的用户(及其子表行)
+    经 tests.conftest.purge_users 清干净, 收敛到与 test_multitenant_isolation 同一
+    模式。断言强度不变。
+    """
+    from src.web.database import SessionLocal
+    from src.web.models import User
+
+    db = SessionLocal()
+    try:
+        before = {row[0] for row in db.query(User.id).all()}
+    finally:
+        db.close()
+    yield
+    db = SessionLocal()
+    try:
+        new_ids = [row[0] for row in db.query(User.id).all() if row[0] not in before]
+        if new_ids:
+            from tests.conftest import purge_users
+
+            purge_users(db, ids=new_ids)
+    finally:
+        db.close()
+
+
 # ─────────────────────────── A. 向后兼容 ───────────────────────────
 def test_synthesize_no_context_is_field_identical_to_legacy():
     out = synthesize("G区间", 5.0, 5.0, 1e8, 0.5e8)
