@@ -1,0 +1,36 @@
+{===============================================================
+ SIDA-Pro 策略指标 · 通达信(TDX) 公式包
+ 公式名称: GS波段              [技术指标公式 · 主图叠加]
+ 换算来源: src/core/gs_strategy.py + src/core/decision_pioneer.py::compute_gs_signal
+ 算法(SIDA 代码里的实际实现, 逐式还原):
+     慢线 BB0 = (MA(C,3)+MA(C,7)+MA(C,13)+MA(C,27))/4
+     快线 A0  = (H+L+2*O+6*C)/10
+     A0 上穿 BB0 -> G(趋势有望启动);  A0 下穿 BB0 -> S(趋势暂或结束)
+ ⚠️ 差异声明(必读, 见 README §5): SIDA 的 compute_gs_signal 本身就标注为
+     "仿编版+自建结构, 未校准近似"; 同花顺官方 GS 口径据研究为**小波变换**类算法,
+     小波在 TDX 公式语言里无法表达 -> 本公式还原的是"**SIDA 的近似实现**", 不是官方 GS。
+     另: SIDA 有"信号次日不消失(G区/S区状态机)"与"抖动合并(反向信号<=3天成对丢弃)",
+         TDX 单公式版无状态记忆, 只给逐根 CROSS 标记, 故信号条数会多于 SIDA 去抖后条数。
+ 语法基准: 通达信官方公式系统函数表 help.tdx.com.cn/gspt
+ 安装:    公式管理器 -> 技术指标公式 -> 新建 -> 画线方法=主图叠加 -> 粘贴 -> 测试公式
+ 用途:    客观信号标注, 不构成交易建议。
+===============================================================}
+
+{--- 慢线 / 快线 ---}
+BB0:=(MA(C,3)+MA(C,7)+MA(C,13)+MA(C,27))/4;
+A0:=(H+L+2*O+6*C)/10;
+慢线:BB0,COLORLIBLUE;
+快线:A0,COLORWHITE;
+
+{--- G / S 交叉标记 ---}
+GT:=CROSS(A0,BB0);      {A0 上穿 BB0 -> G}
+SV:=CROSS(BB0,A0);      {A0 下穿 BB0 -> S}
+DRAWTEXT(GT,L*0.98,'G'),COLORRED;
+DRAWTEXT(SV,H*1.02,'S'),COLORGREEN;
+
+{--- 备选『趋势跟踪近似』(若只要方向、不要 BB0/A0 双线, 可整块替换上面的 G/S 段):
+  EMA快:=EMA(C,10);
+  EMA慢:=EMA(C,30);
+  DRAWTEXT(CROSS(EMA快,EMA慢),L*0.98,'G'),COLORRED;
+  DRAWTEXT(CROSS(EMA慢,EMA快),H*1.02,'S'),COLORGREEN;
+---}
