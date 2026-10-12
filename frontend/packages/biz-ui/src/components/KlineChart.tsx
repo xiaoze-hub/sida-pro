@@ -109,6 +109,10 @@ export interface KlineItem {
 export interface KlinesResponse {
   klines: KlineItem[]
   source?: string
+  /** 今日 bar 性质: 'pg'(库有真今日 bar) / 'live'(读时合成) / 'missing'(缺, 无数据) */
+  today_bar?: string
+  /** 合成今日 bar 的诚实标注(仅 today_bar==='live' 时给); partial=盘中未定型 */
+  live_bar?: { partial?: boolean; source?: string; as_of?: string }
 }
 
 /**
@@ -493,6 +497,9 @@ export default function KlineChart(props: {
   // 2026-09-23: 末根 K 线日期 → 用于诚实标注"是否含今日"(报障: 今日日K不显示,
   // 后端已修桩 bar; 前端同时把"最新一根是哪天"显式写出来, 免得滞后被当成实时)
   const [lastBarDate, setLastBarDate] = useState('')
+  // 2026-10-12: 合成今日 bar 的标注(partial/source/as_of) → 『盘中未定型』小字。
+  // 后端 today_bar==='live' 才给; 定型(18:00 批量)或非合成 → null。
+  const [liveBar, setLiveBar] = useState<{ partial?: boolean; source?: string; as_of?: string } | null>(null)
   // L5 副图: 受控(父传入)或内部自管
   const [subchart, setSubchart] = useState<KlineSubchart>(props.subchart || 'vol')
   /** 运行时 pane 报告: "pane数|各pane高度", 供生产巡检断言(见 publishPanes) */
@@ -862,6 +869,7 @@ export default function KlineChart(props: {
         const query = `/klines/${encodeURIComponent(props.symbol)}?market=${encodeURIComponent(props.market)}&days=${days}&interval=${encodeURIComponent(interval)}`
         const res = await fetchAPI<KlinesResponse>(query)
         if (cancelled) return
+        setLiveBar(res.live_bar ?? null)
         const kl = res.klines || []
         // 2026-09-05: 过滤 OHLC 含 null/NaN 的行(周末/预测拼接数据常有空值，
         // lightweight-charts setData 遇 null 直接抛 Value is null 全页崩)。
@@ -1637,6 +1645,14 @@ export default function KlineChart(props: {
             <>最新K线 {lastBarDate}（含今日盘中）</>
           ) : (
             <>最新K线 {lastBarDate}（今日尚无K线数据）</>
+          )}
+          {/* 2026-10-12: 合成的今日 bar 未定型(分钟聚合/实时日线 forming, 18:00 才批量定型)。
+              诚实小字: 一字符徽章/小字不卡片化 —— 只加一段 muted 小字, 悬停/图例可读。 */}
+          {liveBar?.partial && (
+            <span data-testid="kline-live-partial" className="ml-2 text-muted-foreground">
+              盘中未定型（{liveBar.source || '实时合成'}
+              {liveBar.as_of ? ` 截至 ${liveBar.as_of.replace('T', ' ').slice(0, 16)}` : ''}）
+            </span>
           )}
         </div>
       )}
