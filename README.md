@@ -122,6 +122,14 @@ cd frontend && pnpm install && pnpm dev
 | **Alerts** | Price/condition alerts pushed to your phone |
 | **AI Agents** | TradingAgents multi-agent runs with full reasoning traces |
 
+### TDX formula pack (paste into your 通达信 client)
+
+The strategy indicators can be exported as **native 通达信 (TDX) formula source** — see
+[`docs/tq-formulas/`](docs/tq-formulas/README.md): AI institutional activity, trend pilot line,
+bull/bear line, dark-pool flow, GS swing, and a limit-up strength screener. Each `.txt` is
+paste-ready (formula manager → new → paste → test), with per-formula parameter tables,
+install steps, and an explicit **divergence statement** vs. the SIDA implementation.
+
 ## Multi-user & AI config
 
 - **Account isolation**: positions, watchlists, notification channels, WeChat bindings are per-user
