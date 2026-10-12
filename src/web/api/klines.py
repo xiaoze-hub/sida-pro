@@ -320,49 +320,124 @@ def get_closes_batch(
 #   厚度/新鲜度检查都通过), 于是图表永远停在这根假 bar 上。
 #
 # 处理: ① 末根若为桩(量 0/空 + 零振幅 + 且等于前收) → 剔除;
-#       ② 剔掉后若"今天还没有真 bar"且今天是交易日 → 用实时源补一根**真实**今日 bar;
-#       ③ 拿不到实时数据就**不补**(宁缺勿造), 响应里用 today_bar 字段显式说明今日 bar 的性质。
-_LIVE_TODAY_CACHE: dict[str, tuple[float, object | None]] = {}
+#       ② 剔掉后若"今天还没有真 bar"且今天是交易日 → 读时**合成**一根真实今日 bar;
+#       ③ 拿不到实时数据就**不补**(宁缺勿造), 响应里用 today_bar/live_bar 显式说明性质。
+#
+# 2026-10-12 缺口治根: 合成口径下沉到 src/core/live_daily_bar(① PG 分钟线聚合当日
+#   → ② 实时日线源(TQ get_market_data 1d)今日 bar → ③ 都缺不合成)。此前此处只走
+#   KlineCollector(联网日线), 分钟线全天在库却没人读 → 盘后 15:00-18:00 仍无当日 K。
+_LIVE_TODAY_CACHE: dict[str, tuple[float, object | None, dict | None]] = {}
 _LIVE_TODAY_TTL = 60.0
 
 
 def _is_stub_bar(cur, prev_close: float | None = None) -> bool:
     """桩 bar = 无量 + 零振幅(且价等于前收, 若给了前收)。停牌日的真 bar 也会零振幅,
-    但它不满足"等于前收且量为 0 且是盘前写入"的全部特征 —— 所以只在**末根**上做这个判定。"""
-    vol = getattr(cur, "volume", None)
-    if vol is not None and float(vol) > 0:
-        return False
-    o, h, low, c = (getattr(cur, "open", None), getattr(cur, "high", None),
-                    getattr(cur, "low", None), getattr(cur, "close", None))
-    if None in (o, h, low, c):
-        return False
-    if not (float(o) == float(h) == float(low) == float(c)):
-        return False
-    if prev_close is not None and abs(float(c) - float(prev_close)) > 1e-9:
-        return False
-    return True
+    但它不满足"等于前收且量为 0 且是盘前写入"的全部特征 —— 所以只在**末根**上做这个判定。
+
+    唯一实现下沉到 src/core/live_daily_bar.is_stub_bar(与读时合成同源, 避免两处漂移)。
+    """
+    from src.core.live_daily_bar import is_stub_bar
+
+    return is_stub_bar(cur, prev_close)
 
 
 def _live_today_bar(symbol: str, market_code):
-    """取今日真实日 bar(联网, 60s 进程内缓存)。取不到 → None(不编造)。"""
+    """今日真实日 bar —— 读时合成(分钟线聚合 → 实时日线源), 60s 进程内缓存。
+
+    合成口径见 src/core/live_daily_bar。取不到 → None(不编造)。合成 bar 的
+    partial/source/as_of 标注经 _live_today_meta 读出, 供响应显式标『盘中未定型』。
+    """
     key = f"{market_code.value}:{symbol}"
     hit = _LIVE_TODAY_CACHE.get(key)
     now = _time.monotonic()
     if hit and now - hit[0] < _LIVE_TODAY_TTL:
         return hit[1]
     bar = None
+    meta = None
     try:
-        bars = KlineCollector(market_code).get_klines(symbol, days=5)
-        today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
-        for b in reversed(bars or []):
-            if str(getattr(b, "date", ""))[:10] == today:
-                bar = None if _is_stub_bar(b) else b
-                break
+        from src.collectors.kline_collector import KlineData
+        from src.core.live_daily_bar import synthesize_live_daily_bar
+
+        lb = synthesize_live_daily_bar(symbol, market_code.value)
+        if lb is not None:
+            bar = KlineData(
+                date=lb.date, open=lb.open, close=lb.close,
+                high=lb.high, low=lb.low, volume=lb.volume,
+            )
+            meta = {
+                "partial": bool(lb.partial),
+                "source": lb.source or "",
+                "as_of": lb.as_of or "",
+                "amount": lb.amount,
+            }
     except Exception as e:  # noqa: BLE001
         logging.getLogger(__name__).debug(f"[live-today-bar] {symbol}: {e!r}")
         bar = None
-    _LIVE_TODAY_CACHE[key] = (now, bar)
+        meta = None
+    _LIVE_TODAY_CACHE[key] = (now, bar, meta)
     return bar
+
+
+def _live_today_meta(symbol: str, market_code) -> dict | None:
+    """最近一次 _live_today_bar 的合成标注(partial/source/as_of); 未合成为 None。"""
+    hit = _LIVE_TODAY_CACHE.get(f"{market_code.value}:{symbol}")
+    if not hit or len(hit) < 3:
+        return None
+    return hit[2]
+
+
+def _attach_live_bar(resp: dict, symbol: str, market_code, today_state) -> None:
+    """today_state=='live' 时把合成标注挂到响应与末根 K(诚实标注『盘中未定型』)。
+
+    读时合成值(分钟聚合/实时日线 forming)未定型, 前端据 ``live_bar.partial`` 显小字;
+    18:00 批量定型后走 'pg' 分支, 不再附标注 —— 合成值被真实值取代(idempotent)。
+    """
+    if today_state != "live":
+        return
+    meta = _live_today_meta(symbol, market_code)
+    if not meta:
+        return
+    resp["live_bar"] = {
+        "partial": bool(meta.get("partial")),
+        "source": meta.get("source") or "",
+        "as_of": meta.get("as_of") or "",
+    }
+    ks = resp.get("klines") or []
+    if ks:
+        ks[-1]["partial"] = bool(meta.get("partial"))
+        ks[-1]["source"] = meta.get("source") or ""
+        ks[-1]["as_of"] = meta.get("as_of") or ""
+        if meta.get("amount") is not None:
+            ks[-1]["amount"] = meta["amount"]
+
+
+def _annotate_index_today(klines, interval: str, market_code) -> tuple[str | None, dict | None]:
+    """指数/板块日 K 的**同口径**今日标注。
+
+    指数日 K 走腾讯/新浪实时源(无 PG 定型库, 不落 'pg'): 末根日期==今天 → 标
+    ``today_bar='live'`` + ``live_bar``。``partial`` 只表示"当日仍在形成中"
+    (交易时段内) —— 收盘后指数当日 K 已是终值, 标 partial=False, 不误报『未定型』。
+    """
+    iv = (interval or "1d").lower()
+    if iv not in ("1d", "day", "d") or not klines:
+        return None, None
+    today = datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
+    if str(getattr(klines[-1], "date", ""))[:10] != today:
+        return None, None
+    now = datetime.now(ZoneInfo(_APP_TZ))
+    try:
+        from src.models.market import MARKETS
+
+        forming = MARKETS[market_code].is_trading_time(now)
+    except Exception as e:  # noqa: BLE001 交易日历未覆盖年份等 → 不确定则不标 partial
+        _log_idx = logging.getLogger(__name__)
+        _log_idx.debug(f"[index live-bar] 时段判定异常, 按已定型处理: {e!r}")
+        forming = False
+    return "live", {
+        "partial": bool(forming),
+        "source": "live_index",
+        "as_of": now.isoformat(timespec="seconds"),
+    }
 
 
 def _finalize_daily_bars(
@@ -491,7 +566,7 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
                 for b in bars
             ]
             klines = _aggregate_klines(raw, interval)
-            return {
+            body = {
                 "symbol": symbol,
                 "market": market_code.value,
                 "days": days,
@@ -499,6 +574,19 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
                 "klines": _serialize_klines(klines),
                 "is_index": True,
             }
+            # 指数同口径(2026-10-12): 末根为今日 → 标 live(+ partial 视交易时段)
+            idx_state, idx_meta = _annotate_index_today(klines, interval, market_code)
+            if idx_state:
+                body["today_bar"] = idx_state
+            if idx_meta:
+                body["live_bar"] = idx_meta
+                if body["klines"]:
+                    body["klines"][-1].update({
+                        "partial": idx_meta["partial"],
+                        "source": idx_meta["source"],
+                        "as_of": idx_meta["as_of"],
+                    })
+            return body
         except Exception as e:
             # ⚠️ 指数K线失败必须显式 fail: 否则会回退到股票K线分支,
             # 导致"上证指数"页面显示平安银行数据(代码 000001 都是它)
@@ -513,7 +601,7 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
         klines, today_state = _finalize_daily_bars(klines, symbol, market_code, interval)
         if klines:
             pg_asof = str(getattr(klines[-1], "date", "") or pg_asof)[:10]
-        return {
+        resp = {
             "symbol": symbol,
             "market": market_code.value,
             "days": days,
@@ -523,6 +611,9 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
             "asof": pg_asof,
             "today_bar": today_state,
         }
+        # 2026-10-12: 合成今日 bar 显式标 partial/source/as_of(诚实区分子源)
+        _attach_live_bar(resp, symbol, market_code, today_state)
+        return resp
 
     # 2. Fallback: 联网拉 KlineCollector
     collector = KlineCollector(market_code)
@@ -538,6 +629,7 @@ def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = 
     }
     if today_state_fb:
         _fb["today_bar"] = today_state_fb
+    _attach_live_bar(_fb, symbol, market_code, today_state_fb)
     return _fb
 
 
@@ -642,6 +734,7 @@ def get_klines_batch(payload: KlineBatchRequest):
         }
         if today_state_b:
             row["today_bar"] = today_state_b
+        _attach_live_bar(row, item.symbol, market_code, today_state_b)
         if source:
             row["source"] = source
         if asof:

@@ -1,3 +1,39 @@
+### feat-最新日K实时合成(分钟线聚合/TQ实时源→今日形成中bar·partial/source/as_of 诚实标注)（2026-10-12）
+
+治根『日K只等 18:00 批量』设计缺口: 日线此前**只有** `KlineBackfillScheduler` 一条入库链
+(收盘后 18:00 拉最近 2 天), 全天(含盘后 15:00-18:00)没有任何『当前形成中日 K』合成逻辑
+→ `klines` period='1d' 最新只到前一交易日, 前端只能显『今日尚无K线数据』。本次在**读取侧**
+合成今日 bar(**不写库**, 不污染 qfq 分区), 诚实标注 `partial/source/as_of`。
+
+- **加** `src/core/live_daily_bar.py`(纯函数 + I/O, 无引 src.web): `aggregate_minute_bars`
+  (首开/最高/最低/末收 + Σ量/Σ额, 脏柱跳过, 任一分钟缺额→聚合额=None 不把缺数据当 0)
+  / `daily_bar_from_minutes`(source=`live_synthesized`) / `daily_bar_from_daily_bars`
+  (source=`live_<vendor>`, 末根非今日或为盘前占位桩→不合成) / `synthesize_live_daily_bar`
+  (三源优先级: ① PG 分钟线聚合 → ② 实时日线源(TQ get_market_data 1d)今日 bar → ③ 都缺→None)
+  / `read_minute_bars_pg`(period='1m' 当日 CST 半开日界) / `is_stub_bar`(口径唯一实现)。
+- **接** `src/web/api/klines.py`: `_live_today_bar` 改走 core 合成(原仅 KlineCollector 联网日线,
+  分钟线全天在库却没人读); 新增 `_live_today_meta` / `_attach_live_bar`(today_bar=='live' 时
+  把 partial/source/as_of 挂到响应与末根 K); **指数同口径** `_annotate_index_today`(末根为今日→
+  标 live, partial 视交易时段 —— 收盘后指数当日 K 已是终值不误报『未定型』)。PG/fallback/batch
+  三处出口均接; 分页/缺口检测语义未动。`_is_stub_bar` 委托 core(避免两处口径漂移)。
+- **改** `frontend/packages/biz-ui/src/components/KlineChart.tsx`: `KlinesResponse` 加
+  `today_bar`/`live_bar`; 新鲜度那行当 `live_bar.partial` 为真时显『盘中未定型（来源 截至 as_of）』
+  **小字不卡片化**(UI 铁律)。
+- **单位标定(实测, 600000 2026-10-12)**: 腾讯 m1 源=手 → vendor `fetch_tencent_minute_kline` ×100
+  归股, `klines_minute` 落库即股; 日线同一 vendor 同样 ×100 归股 ⇒ **Σ分钟量 == 日线量(股), 禁二次
+  换算**。实测 Σ(m1)=66,287,900 ≈ 1d=66,288,000, OHLC 逐项吻合; TQ `get_market_data` Volume 原生
+  即股 ⇒ 无换算。
+- **18:00 定型**: backfill 入库真实当日 bar 后, 读取链见 last_date==today 即走 'pg' 分支不再合成
+  → 合成 partial bar 被真实值**自然取代**(读时合成, 幂等, 无需写库覆盖)。
+- **测试**: 加 `tests/test_live_daily_bar.py`(29 例: 分钟聚合口径/单位标定锁死/三源优先级/
+  partial 标注/桩不合成/读异常降级/18点定型覆盖/缺数据 missing/指数标注/PG 读取日界) +
+  `frontend/tests/components/kline-live-partial.test.tsx`(2 例)。
+- **验证**: 后端全量 `-m 'not network'`(忽略 2 个 network 文件) 全绿 RC=0; 前端 `vitest run`
+  **143 文件 / 1035 用例全绿** + `tsc -b` 0 error。
+- **未做(诚实声明)**: 未触碰 `KlineBackfillScheduler`/`klines_ingestor` 入库链; 板块无日 K 端点
+  (`/boards/*` 只有列表/详情/成分, 无 kline) 故无同口径改造面; 合成值**不落库**(读时合成), 因此
+  不写 `limit_strength`/决策等下游表(避免用未定型值污染)。
+
 ### feat-首封时间×封成比强度因子(影子运行·只读展示+分桶验证底座)（2026-10-11）
 
 打板策略数据核心 **『首封时间 × 封成比』强度因子**, TQ 独家(东财无等价字段)。**影子运行**:
