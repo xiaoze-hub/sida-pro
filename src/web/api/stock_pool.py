@@ -6,10 +6,11 @@ POST /api/stock-pool/screen
   按"共振强度"排序返回。
 
 共振判定(买入方向):
-  趋势分: gs.state == "G区" 或 gs.signal == "G"
+  趋势分: gs.state == "G区"(**已确认**区间, 与 K 线图层同源) 或 gs.signal == "G"
   强度分: institution_activity.level in ("大牛","强势") 或 activity >= 3
   资金分: l2.available 且 zjl_hb > 0
   三项全满足="强", 满足两项="弱", 否则="无"。
+  gs.state/signal 均为**已确认**口径(末根疑似交叉只作 pending, 不接管区间)。
 
 进程内 30s 缓存; 单只失败标"无"不阻塞整批; 数据缺失显式 None 不编造。
 """
@@ -52,6 +53,8 @@ def _resonance(gs, act, l2) -> tuple[str, int]:
     只认 state(G区/S区)作方向过滤, S区/无GS 直接不共振。买卖强度看活跃度+L2资金。
     """
     # GS 趋势过滤: 只认 G区(趋势向上), S区/无GS 直接过滤
+    # gs.state 已是**已确认**区间(单一事实源 gs_state.resolve_gs_state, 见 decision_pioneer);
+    # 末根疑似反向交叉只作 gs.pending, 不抢跑区间。
     zone_g = bool(gs and gs.get("state") == "G区")
     activity = (act or {}).get("activity")
     if activity is None and (act or {}).get("level") in ("大牛", "强势"):
@@ -85,6 +88,7 @@ def _screen(symbols: list[str]) -> dict:
                 "activity_level": None,
                 "gs_state": None,
                 "gs_signal": None,
+                "gs_pending": False,
                 "l2_net": None,
                 "resonance": "无",
                 "score": 0,
@@ -101,6 +105,8 @@ def _screen(symbols: list[str]) -> dict:
             "activity_level": act.get("level") if act else None,
             "gs_state": gs.get("state") if gs else None,
             "gs_signal": gs.get("signal") if gs else None,
+            # 末根疑似交叉(未定型): 显式透出, 供前端/复盘区分"已确认"与"待确认"
+            "gs_pending": bool(gs.get("pending")) if gs else False,
             "l2_net": round(zjl / 1e4, 0) if isinstance(zjl, (int, float)) else None,  # 万元
             "resonance": level,
             "score": score,
