@@ -307,6 +307,23 @@ def test_ladder_no_snapshot_degrades_finalized(monkeypatch):
     assert d["mode"] == "finalized" and d["live_day"] is None
 
 
+def test_ladder_live_as_of_carries_tick_data_time(monkeypatch):
+    """live 响应带盘中**数据时刻** live_as_of(scan_tick 的 last_ok), 不是请求时刻。
+
+    定型(无快照)时显式 None —— 不得残留旧值, 也不得拿请求 as_of 冒充数据时刻。
+    """
+    snap = {"live_day": {"date": "20260912", "rows": [], "blown": [], "broken": [],
+                         "provisional": True},
+            "meta": {"stale": False, "last_ok": "14:31"}, "date": "20260912", "closing": False}
+    c = _ladder_client(monkeypatch, snap)
+    d = c.get("/api/theme-mood/ladder?mode=auto").json()["data"]
+    assert d["mode"] == "live" and d["live_as_of"] == "14:31"
+
+    monkeypatch.setattr(api, "_live_snapshot", lambda: None)  # 降级定型
+    d = c.get("/api/theme-mood/ladder?mode=finalized").json()["data"]
+    assert d["mode"] == "finalized" and d["live_as_of"] is None
+
+
 def test_ladder_stats_from_latest_finalized(monkeypatch):
     dates = ["20260910", "20260911"]
     ev = [

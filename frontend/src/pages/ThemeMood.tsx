@@ -85,6 +85,8 @@ interface LadderResp {
   note?: string
   mode?: 'live' | 'finalized'
   as_of?: string | null
+  /** 盘中快照的数据时刻(scan_tick last_ok, HH:MM); 定型后为 null。 */
+  live_as_of?: string | null
   stale?: boolean
   degraded?: string | null
   live_day?: LadderDay | null
@@ -404,10 +406,11 @@ export default function ThemeMoodPage() {
         liveDay={ladder?.live_day ?? null}
         mode={ladder?.mode ?? 'finalized'}
         stale={ladder?.stale ?? false}
-        lastOk={null}
+        lastOk={ladder?.live_as_of ?? null}
         noteClosing={ladder?.note_closing ?? null}
         stats={ladder?.stats ?? null}
         asOf={ladder?.as_of ?? null}
+        liveAsOf={ladder?.live_as_of ?? null}
       />
 
       <button
