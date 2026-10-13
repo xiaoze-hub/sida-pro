@@ -1,3 +1,28 @@
+### feat-L2成品资金快照数据自检+自愈(每日验最新交易日快照是否已落·缺则复用现有采样口径重采·TQ不可用显式告警不静默)（2026-10-13）
+
+治根『快照表 0 行』事故: `l2_fund_snapshots` 是主力净流入(L2·TQ)非交易时段回退的
+**唯一兜底源**, 但 15:05 快照 cron 撞上 TQ 僵尸期失败后**无自愈重试**、也**无表新鲜度
+自检** —— 表空无人知, 非交易时段 web 层回退(v0.13.62 `_apply_l2_fallback`)设计对却
+**没东西可兜**, 主力净流入显『无数据』。仿 `src/core/sentiment_freshness.py` 成熟模式
+补齐: check → backfill → 复检 → 落后告警。
+
+- **加** `src/core/l2_snapshot_freshness.py`(纯核心层, 不引 src.web —— B4.1):
+  `check()`(比对 `l2_fund_snapshots` 最新交易日 vs 期望最新交易日, 缺失日枚举 + 空表
+  显式 `ok=False` 不冒充)/ `backfill_missing()`(**复用** `l2_fund_snapshot.capture_universe`
+  重采, 落库口径与现有实现**完全一致·禁自创第二套 SQL**; TQ 不可用/零产出 →
+  `ok=False` + 显式 error 不静默)/ `guard()`(**空表也须触发重采**, 复检转绿)/
+  `run_l2_snapshot_freshness_job()`(作业框架 `ok=False→failed` + 落后写通知)。
+- **接** `src/bootstrap/startup.py`: 每日 15:35 注册(与 15:05 快照 cron 错开, 仍在 L2
+  会话有效窗口内; 仿 16:05 连板/16:20 情绪自检的每日跑法, 周末也能发现上周断档)。
+- **口径(诚实)**: TQ `get_more_info` 只给实时会话值 → 历史某日 L2 收盘快照**跨日
+  无法回补**; 自愈恢复**当日**快照(常见缺口=15:05 失败后 15:35 重采), 更早的历史
+  缺口如实告警、不编造。
+- **测试**: 加 `tests/test_l2_snapshot_freshness.py`(18 例: 期望交易日/缺失枚举/空表
+  诚实态/无缺口零副作用/缺口重采复检/默认复用现有捕获口径/TQ 降级显式失败/作业告警/
+  在飞跳过)。
+- **未做(诚实声明)**: 迁移/表结构未动; 未触碰 web 层回退(`_apply_l2_fallback`)与
+  15:05 快照 cron 本体。
+
 ### feat-最新日K实时合成(分钟线聚合/TQ实时源→今日形成中bar·partial/source/as_of 诚实标注)（2026-10-12）
 
 治根『日K只等 18:00 批量』设计缺口: 日线此前**只有** `KlineBackfillScheduler` 一条入库链

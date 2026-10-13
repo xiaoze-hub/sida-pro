@@ -417,6 +417,33 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"L2 成品资金收盘快照注册失败: {e}")
 
+        # L2 成品资金快照自检 + 自愈(2026-10-13 快照源空修复): 每日 15:35(含周末)。
+        # l2_fund_snapshots 是主力净流入(L2·TQ)非交易时段回退的唯一兜底源;
+        # 15:05 快照 cron 撞上 TQ 僵尸期失败后**无自愈重试** → 快照表 0 行无人知,
+        # 非交易时段 web 层回退也没东西可兜(显『无数据』)。本作业比对最新交易日 vs
+        # 期望交易日, 缺则复用现有采样口径重采(capture_universe); TQ 不可用显式
+        # ok=False → 作业判 failed + 写通知(断链显式告警), 下次调度再试。
+        # 每日跑(仿 16:05 连板/16:20 情绪自检): 周末也能发现上周断档并显式告警。
+        # 15:35 与 15:05 快照 cron 错开, 且仍在 L2 会话有效窗口内(TQ get_more_info
+        # 只给实时会话值, 跨日无法回补历史快照 —— 历史缺口如实告警, 不编造)。
+        try:
+            from src.core.l2_snapshot_freshness import run_l2_snapshot_freshness_job
+
+            rt.scheduler.scheduler.add_job(
+                run_l2_snapshot_freshness_job,
+                "cron",
+                hour=15,
+                minute=35,
+                id="l2-snapshot-freshness-guard",
+                name="L2 成品资金快照数据自检",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("L2 成品资金快照数据自检已注册(每日 15:35)")
+        except Exception as e:
+            logger.error(f"L2 成品资金快照数据自检注册失败: {e}")
+
         # 首封时间×封成比 强度影子打标(2026-10-11 胜率创新 P0-1, 影子运行):
         # 交易日 15:35 对当日涨停股打强度分层标签(S/A/B/C) 落 limit_strength_shadow。
         # 独立入口(不碰 src/collectors/), 只写影子表不改任何现有信号/决策。
