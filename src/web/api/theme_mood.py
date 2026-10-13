@@ -535,7 +535,7 @@ def _ladder_payload(window: int, mode: str) -> dict:
     if not dates:
         return {"dates": [], "ladder": [], "note": "limit_up_events 无数据",
                 "mode": "finalized", "as_of": None, "stale": False,
-                "degraded": None, "live_day": None}
+                "degraded": None, "live_day": None, "live_as_of": None}
     events = _read(
         "SELECT trade_date, symbol, name, is_sealed_close FROM limit_up_events "
         "WHERE trade_date >= :a ORDER BY trade_date", {"a": dates[0]},
@@ -573,12 +573,16 @@ def _ladder_payload(window: int, mode: str) -> dict:
     eff_mode = "live" if snap else "finalized"
     live_day = snap["live_day"] if snap else None
     stale = bool(snap["meta"].get("stale")) if snap else False
+    # 盘中快照的**数据时刻**(scan_tick 的 last_ok, HH:MM); 盘后为 None。
+    # 与路由层 `as_of`(请求时刻) 不同: 徽章/中断横幅要的是"数据截至哪一刻", 不是"页面何时打开"。
+    live_as_of = snap["meta"].get("last_ok") if snap else None
     note_closing = "收盘撮合中, 稍后定型" if (snap and snap["closing"]) else None
     return {
         "dates": dates, "ladder": ladder,
         "note": "连板数=沿事件表日期序列的连续收盘封板日; 只算收盘封板",
         "mode": eff_mode,
         "live_day": live_day,
+        "live_as_of": live_as_of,
         "stale": stale,
         "degraded": None,
         "note_closing": note_closing,

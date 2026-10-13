@@ -126,7 +126,7 @@ function MarkGroup({ label, marks, tone }: { label: string; marks: LadderMark[];
   )
 }
 
-function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
+function DayColumn({ day, basis, liveAsOf }: { day: LadderDay; basis: 'qfq' | 'raw'; liveAsOf?: string | null }) {
   const sealed = day.rows.reduce((a, r) => a + r.codes.length, 0)
   return (
     <div className="w-[170px] shrink-0 rounded border border-border/40 p-1.5">
@@ -134,8 +134,11 @@ function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
         <span className="text-[11px] font-medium text-foreground/85">{fmtISODate(day.date)}</span>
         <span className="text-[10px] text-muted-foreground">封 {sealed}</span>
       </div>
+      {/* 盘中列诚实标注: 未定型 + 数据截至时刻(小字徽章, 不卡片化); 定型后此列不再出现 ⇒ 徽章消失。 */}
       {day.provisional ? (
-        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">盘中</div>
+        <div className="mb-1 inline-block rounded bg-primary/15 px-1 text-[10px] text-primary">
+          盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}
+        </div>
       ) : null}
       {day.rows.length === 0 && day.blown.length === 0 && day.broken.length === 0 ? (
         <div className="py-2 text-center text-[10px] text-muted-foreground">无收盘封板</div>
@@ -162,12 +165,13 @@ function DayColumn({ day, basis }: { day: LadderDay; basis: 'qfq' | 'raw' }) {
 }
 
 /** 矩阵视图(借鉴 quicktiny 多日天梯): 行=板高, 列=日期, 格=该(日,板高)个股。 */
-function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
+function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, liveAsOf }: {
   cols: LadderDay[]
   collapsed: Set<number>
   onlyBoard: number | null
   onToggleRow: (b: number) => void
   onOnlyBoard: (b: number | null) => void
+  liveAsOf?: string | null
 }) {
   const boards = useMemo(() => {
     const set = new Set<number>()
@@ -207,7 +211,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard }: {
           <div key={d.date} className="w-[170px] shrink-0">
             <div className="mb-1 truncate text-[10px] font-medium text-foreground/85" title={fmtISODate(d.date)}>
               {fmtISODate(d.date)}
-              {d.provisional ? <span className="ml-1 text-primary">盘中</span> : null}
+              {d.provisional ? <span className="ml-1 text-primary">盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}</span> : null}
             </div>
             {shown.map((b) => {
               const row = d.rows.find((r) => r.boards === b)
@@ -237,8 +241,9 @@ export default function LadderBoard(props: {
   noteClosing?: string | null
   stats?: LadderStats | null
   asOf?: string | null
+  liveAsOf?: string | null
 }) {
-  const { ladder, liveDay, mode, stale, lastOk, noteClosing, stats, asOf } = props
+  const { ladder, liveDay, mode, stale, lastOk, noteClosing, stats, asOf, liveAsOf } = props
   const ref = useRef<HTMLDivElement>(null)
   const [view, setView] = useState<'cols' | 'matrix'>('cols')
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
@@ -290,13 +295,13 @@ export default function LadderBoard(props: {
           <div className="scrollbar overflow-x-auto pb-1">
             <div className="flex w-max gap-1">
               {cols.map((d) => (
-                <DayColumn key={`${d.date}-${d.provisional ? 'live' : 'fin'}`} day={d} basis={d.provisional ? 'raw' : 'qfq'} />
+                <DayColumn key={`${d.date}-${d.provisional ? 'live' : 'fin'}`} day={d} basis={d.provisional ? 'raw' : 'qfq'} liveAsOf={liveAsOf} />
               ))}
             </div>
           </div>
         ) : (
           <MatrixView cols={cols} collapsed={collapsed} onlyBoard={onlyBoard}
-            onToggleRow={toggleRow} onOnlyBoard={setOnlyBoard} />
+            onToggleRow={toggleRow} onOnlyBoard={setOnlyBoard} liveAsOf={liveAsOf} />
         )}
       </div>
     </div>

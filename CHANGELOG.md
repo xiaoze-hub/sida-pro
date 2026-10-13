@@ -1,3 +1,23 @@
+### feat-连板梯队盘中徽章标注数据时刻(盘中·截至 HH:MM + 中断横幅时间接线)（2026-10-13）
+
+连板梯队「盘中实时(live) + 收盘定型(finalized)」双态(**v0.5.87 已上线基线** —— `scan_tick` 60s job +
+`ladder_live_state` Redis 态 + `/ladder` 的 `mode`/`live_day`/`stale`/`note_closing`)本次**未重造**,
+仅补齐**前端两处诚实标注**:
+- **改** `src/web/api/theme_mood.py` `/ladder`: 响应新增 `live_as_of`(= `scan_tick` 的 `last_ok`, HH:MM)
+  —— 盘中快照的**数据时刻**, 与既有 `as_of`(**请求时刻**, 路由层 UTC ISO)语义分离; 定型/降级时显式 `None`
+  (不残留旧值、不拿请求时刻冒充数据时刻)。
+- **改** `frontend/packages/biz-ui/src/components/thememood/LadderBoard.tsx`: live 列徽章由 `盘中`
+  → `盘中 · 截至 xx:xx`(**小字不卡片化**, 买红卖绿铁律未动); 矩阵视图列头同口径; 定型后不再有 live 列
+  ⇒ 徽章**自动消失**(非交易时段/周末 `_is_intraday=False` → 不入 live, 前端天然无徽章)。
+- **改** `frontend/src/pages/ThemeMood.tsx`: `lastOk` 由写死的 `null` 接上 `live_as_of`
+  —— 修『实时源中断』横幅**永远显不出中断时刻**的死接线。
+- **测试**: `tests/test_theme_mood_api.py` 加 `test_ladder_live_as_of_carries_tick_data_time`
+  (live 带数据时刻 / 定型为 None); `frontend/tests/components/ladder-board.test.tsx` 加盘中徽章用例
+  (live 列出「盘中 · 截至 14:31」, 定型后消失)。
+- **未做(诚实声明)**: 未改 `limit_up_events` 生成侧既有语义与 gs/decision 面; 未新增收盘定型 job
+  (沿用既有 16:05 `ladder_freshness` 自检 + `_is_intraday` 收盘后自动切回 finalized 的幂等覆盖);
+  未改 TDX 分片口径(`pricevol_only` 沿用实测安全值 `_BATCH=500`)。
+
 ### feat-最新日K实时合成(分钟线聚合/TQ实时源→今日形成中bar·partial/source/as_of 诚实标注)（2026-10-12）
 
 治根『日K只等 18:00 批量』设计缺口: 日线此前**只有** `KlineBackfillScheduler` 一条入库链

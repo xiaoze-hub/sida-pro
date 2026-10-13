@@ -96,3 +96,17 @@ describe('LadderBoard', () => {
     expect(badge.getAttribute('title')).toContain('影子运行')
     expect(screen.queryByTestId('ladder-strength-F')).toBeNull()
   })
+
+  // 2026-10-13 盘中徽章: live 列带「盘中 · 截至 xx:xx」小字(不卡片化); 定型后徽章消失。
+  it('盘中 live 列带「盘中 · 截至 xx:xx」徽章, 定型后无', () => {
+    const live = { ...day, date: '20260912', provisional: true }
+    const { rerender } = render(
+      <LadderBoard ladder={[day]} liveDay={live} mode="live" stale={false} lastOk="14:31" liveAsOf="14:31" />,
+    )
+    expect(screen.getByText('盘中 · 截至 14:31')).toBeTruthy()
+    // 定型后不再有 live 列 ⇒ 徽章消失
+    rerender(
+      <LadderBoard ladder={[day]} liveDay={null} mode="finalized" stale={false} lastOk={null} liveAsOf={null} />,
+    )
+    expect(screen.queryAllByText(/盘中/)).toHaveLength(0)
+  })
