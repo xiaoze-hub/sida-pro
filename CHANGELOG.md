@@ -1,3 +1,19 @@
+### test-GS单一事实源一致性契约(图表标记态==面板区态三态钉子·逐根截断对拍·pending语义)（2026-10-13）
+
+给上两条修复上钉子(禁真网络, 全纯计算): 新增 `tests/test_gs_single_source.py`。
+
+- **一致性契约**: 同一 `gs_strategy` 输出 → `gs_state.resolve_gs_state` 的 zone 必等于
+  「前端 `gs-zones.ts::gsZonePoints` 口径」推出的区间 —— **三态各钉一例**(confirmed G /
+  confirmed S / pending); 并**逐根截断对拍**(防「只有末根一致」的假修)。
+- **pending 语义**: 末根疑似反向交叉**不接管区间**(zone 仍停已确认信号)、`zone=None`
+  时显式「待确认」; 待确认文案与 K 线图图例**逐字一致**; 缺数据显式「无数据」不编造。
+- **旧逻辑退役钉子**: 末根疑似时 `compute_gs_signal.state`(=旧面板值)与新 zone **必须不同**
+  (钉死「面板不再吃末根盘中价」)。
+- **消费方同源**: 面板 `fetch_decision_pioneer().gs`、推送文案、`market_scan._per_stock_metrics`
+  都走单一事实源; 账本行日期/价取**信号当日**且显式带确认状态; 无信号价不入账(不硬填 0)。
+- **改** `tests/test_market_scan.py::test_new_g_detects_cross_on_last_bar`: 对齐新口径
+  (new_g 标「待确认」, gs_signal/gs_state 只报已确认 → 此处为 None)。
+
 ### fix-全市场扫描/决策账本GS口径收口(疑似交叉不再当已确认·信号价/日取信号当日)（2026-10-13）
 
 承接上条「GS 区间单一事实源」: 同页之外的 GS 消费方一并收口到 `gs_state`(与 K 线图层同源),
