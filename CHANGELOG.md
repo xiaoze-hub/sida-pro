@@ -1,3 +1,20 @@
+### fix-全市场扫描/决策账本GS口径收口(疑似交叉不再当已确认·信号价/日取信号当日)（2026-10-13）
+
+承接上条「GS 区间单一事实源」: 同页之外的 GS 消费方一并收口到 `gs_state`(与 K 线图层同源),
+消掉「末根疑似交叉被当已确认」这一类口径分歧。
+
+- **改** `src/core/market_scan._per_stock_metrics`: `gs_state`/`gs_signal` 改由
+  `gs_state.resolve_gs_state` 产出(**已确认**口径; 此前用 `compute_gs_signal.state`,
+  会吃末根盘中价)。`new_g`(今日新出 G 点榜)语义明确为**末根疑似**并加 `new_g_status=待确认`;
+  新增 `gs_signal_date/gs_signal_confirmed/gs_pending/gs_pending_side`。
+- **改** `market_scan._log_gs_signals`(决策账本 gs_cross): 日期/价格改取**信号当日**
+  (`gs_cross_date`/`gs_cross_price`)而非末根(交叉未必发生在末根; 此前用末根价冒充信号价);
+  无已确认时取末根疑似并在 `context.status` 显式标「待确认」(次日转确认按
+  (kind,symbol,trade_date) UPSERT 刷新), 不再无标注地当已确认入账。
+- **改** `src/core/signal_summary.py`: 三榜推送文案「新G点」→「新G点(待确认)」
+  (末根交叉按官方语义未定型)。
+- **改** `src/core/history_store.py`: `gs_side` 注释对齐(已确认口径, 疑似不入账)。
+
 ### feat-GS区间单一事实源(数智决策面板改吃gs_strategy·confirmed/pending与K线图层逐字一致)（2026-10-13）
 
 用户实报(600111 收盘后): K 线图 GS 买卖点显示 **G**(红▲), 但右侧数智决策面板

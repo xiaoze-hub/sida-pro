@@ -123,7 +123,7 @@ def _block_market_scan(db) -> dict:
             f"{r.get('symbol')}({r.get('level') or '-'})" for r in act
         ) or "无"
         content = (
-            f"三榜：新G点[{_syms(new_g)}]；"
+            f"三榜：新G点(待确认)[{_syms(new_g)}]；"
             f"暗盘TOP[{dark_str}]；"
             f"机构活跃[{act_str}]"
         )

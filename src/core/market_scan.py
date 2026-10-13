@@ -9,7 +9,8 @@
 
 ## 数据链路(全部复用既有模块, 不新造轮子)
   K 线:        `decision_pioneer.fetch_bars`(marketdata Engine, TQ 优先, 含当日)
-  GS:          `decision_pioneer.compute_gs_signal`(BB0/A0 交叉, 与前端 InteractiveKline 已等价验证)
+  GS:          `gs_state.resolve_gs_state`(单一事实源: 只消费 `gs_strategy.compute_gs_signals`
+               的**已确认**信号; 与前端 K 线图层的标记/区间色带同源)
   活跃度:      `decision_pioneer.compute_institution_activity`(7 因子 MAX × 1.2)
   暗盘(对照):  `ohlc_dark.ohlc_dark_net`(APZJ 对照项, 已知大阳线日失真, 仅排序参考)
   ZLJC:        `marketdata_client.md_main_flow_zljc`(formula_process_mul_zb 批量)
@@ -55,45 +56,58 @@ def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optio
                    ⚠️ 不要用全部 bars 累计——60 日 OHLC 分摊会把净额放大到失真量级。
 
     返回:
-        gs_signal / gs_state / new_g(bool) / activity / activity_level /
-        dark_net(元, 对照) / close
+        gs_signal / gs_state / gs_signal_date / gs_signal_confirmed /
+        gs_cross_side + gs_cross_status + gs_cross_date + gs_cross_price(账本留痕,
+        已确认为先, 无已确认时取末根**疑似**并标「待确认」) / new_g(末根疑似 G) /
+        activity / activity_level / dark_net(元, 对照) / close
     """
     from src.core.decision_pioneer import (
-        compute_gs_signal,
         compute_institution_activity,
         fetch_bars,
     )
+    from src.core.gs_state import resolve_gs_state
     from src.core.ohlc_dark import ohlc_dark_net
 
     bars = fetch_bars(symbol, "CN", days=bars_days)
     if not bars:
         return None
 
-    gs = compute_gs_signal(bars)
+    # GS: **单一事实源**(只消费 gs_strategy 输出) —— 与 K 线图层标记/区间同源。
+    # 此前用 compute_gs_signal.state / last_cross_idx(自带 a0/bb0 比较, 吃末根盘中价)。
+    gs2 = resolve_gs_state(bars)
     act = compute_institution_activity(bars)
     dark = ohlc_dark_net(bars, days=dark_days)
 
-    n = len(bars)
-    new_g = bool(
-        gs
-        and gs.get("signal") == "G"
-        and gs.get("last_cross_idx") == n - 1   # 交叉就发生在最后一根(今日)
-    )
+    # 「今日新出 G 点」榜: 末根(今日)出现**疑似** G 交叉。官方语义下末根的交叉一律
+    # 未定型(pending) —— 榜只作候选提示, 不冒充"已确认"(见 new_g_status)。
+    new_g = bool(gs2["pending"] and gs2["pending_side"] == "G")
 
-    # 决策账本(GS 买卖点覆盖): 今日新出**已确认**的 G/S 交叉(末根=盘后已收盘的一根)。
-    # 供 scan() 把 GS 买卖点连同当时价一并留痕; 取不到价/非今日交叉则不入账。
-    cross_side = None
-    if gs and gs.get("last_cross_idx") == n - 1 and gs.get("signal") in ("G", "S"):
-        cross_side = gs.get("signal")
+    # 决策账本(GS 买卖点覆盖): 记最近一次交叉, 已确认为先; 无已确认时取末根疑似
+    # 并**显式标 status=待确认**(不冒充已确认)。价格/日期均取**信号当日**(非末根)。
+    cross_side = cross_status = cross_date = cross_price = None
+    if gs2["signal_confirmed"]:
+        cross_side, cross_status = gs2["signal"], "已确认"
+        cross_date, cross_price = gs2["signal_date"], gs2["signal_price"]
+    elif gs2["pending"]:
+        cross_side, cross_status = gs2["pending_side"], "待确认"
+        cross_date, cross_price = gs2["pending_date"], gs2["pending_price"]
 
     return {
         "symbol": symbol,
         "close": bars[-1].get("close"),
         "close_date": _compact_date(bars[-1].get("date")),
-        "gs_signal": gs.get("signal") if gs else None,
-        "gs_state": gs.get("state") if gs else None,
+        "gs_signal": gs2["signal"],
+        "gs_state": gs2["zone"],
+        "gs_signal_date": gs2["signal_date"],
+        "gs_signal_confirmed": gs2["signal_confirmed"],
+        "gs_pending": gs2["pending"],
+        "gs_pending_side": gs2["pending_side"],
         "gs_cross_side": cross_side,
+        "gs_cross_status": cross_status,
+        "gs_cross_date": cross_date,
+        "gs_cross_price": cross_price,
         "new_g": new_g,
+        "new_g_status": "待确认" if new_g else None,
         "activity": act.get("activity") if act else None,
         "activity_level": act.get("level") if act else None,
         "dark_net": dark.get("dark_net"),          # 元, 对照项
@@ -110,9 +124,12 @@ def _compact_date(value) -> Optional[str]:
 
 
 def _log_gs_signals(metrics: Sequence[dict], trade_date: Optional[str] = None) -> int:
-    """把今日新出已确认的 GS 交叉(G 买 / S 卖)写决策账本(signal_kind=gs_cross)。
+    """把最近一次 GS 交叉(G 买 / S 卖)写决策账本(signal_kind=gs_cross)。
 
-    每条必须带 `price_at_signal`(信号时点收盘价) —— 拿不到价的**不写该条**(不硬填 0)。
+    每条必须带**信号时点**收盘价(`gs_cross_price`) —— 拿不到价的**不写该条**(不硬填 0)。
+    日期/价格都取信号**当日**(不是末根 —— 交叉未必发生在末根)。
+    口径单一事实源 `gs_state`: 已确认为先; 无已确认时取末根**疑似**交叉并在
+    `context.status` 显式标「待确认」(次日转确认后按 (kind,symbol,trade_date) UPSERT 刷新)。
     幂等由 decision_log 的 (kind, symbol, trade_date) 唯一键保证; 全程失败只 warn,
     绝不影响扫描主链路。
     """
@@ -122,19 +139,24 @@ def _log_gs_signals(metrics: Sequence[dict], trade_date: Optional[str] = None) -
             side = m.get("gs_cross_side")
             if side not in ("G", "S"):
                 continue
-            price = m.get("close")
+            # 信号时点收盘价(不是末根收盘价 —— 交叉未必发生在末根)
+            price = m.get("gs_cross_price")
             if not isinstance(price, (int, float)) or price <= 0:
-                continue  # 无价不写(不拿 0/之后的价格冒充当时)
-            day = m.get("close_date") or trade_date
+                continue  # 无价不写(不拿 0/之后的价冒充当时)
+            day = m.get("gs_cross_date") or trade_date
             if not day:
                 continue
             rows.append(
                 {
                     "signal_kind": "gs_cross",
                     "symbol": m.get("symbol"),
-                    "trade_date": day,
+                    "trade_date": str(day).replace("-", ""),
                     "price": float(price),
-                    "context": {"side": side, "gs_state": m.get("gs_state")},
+                    "context": {
+                        "side": side,
+                        "status": m.get("gs_cross_status") or "已确认",
+                        "gs_state": m.get("gs_state"),
+                    },
                 }
             )
         except Exception as exc:  # noqa: BLE001 —— 单条异常不拖垮
@@ -361,7 +383,7 @@ def scan(
           "universe": 输入股票数,
           "computed": 成功计算数,
           "skipped": 失败/无数据数,
-          "new_g_points": [...],   # 今日新出 G 点榜(按 symbol 升序)
+          "new_g_points": [...],   # 今日新出 G 点榜(末根疑似 G, status=待确认; 按 symbol 升序)
           "dark_top": [...],       # 暗盘资金 TOP 榜(净额降序, approximation=True)
           "activity_top": [...],   # 机构活跃度 TOP 榜(活跃度降序)
           "zljc": {...} | None,    # ZLJC 主力进出(明盘参考)
@@ -388,12 +410,13 @@ def scan(
             continue
         metrics.append(m)
 
-    # 榜1: 今日新出 G 点(最后一根产生 G 交叉)
+    # 榜1: 今日新出 G 点(末根产生**疑似** G 交叉 —— 官方语义下待确认, 不冒充定型)
     new_g_points = [
         {
             "symbol": m["symbol"],
             "close": m["close"],
             "gs_state": m["gs_state"],
+            "status": m.get("new_g_status") or "待确认",
         }
         for m in metrics
         if m["new_g"]

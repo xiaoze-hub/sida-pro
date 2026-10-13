@@ -77,6 +77,7 @@ VALUES (:ts, :symbol, :market, :activity, :level, :gs_side, :fund_net, :main_net
                     "market": market,
                     "activity": act.get("activity"),
                     "level": act.get("level"),
+                    # gs_side = 最近一次**已确认**GS 信号(单一事实源 gs_state; 末根疑似不入账)
                     "gs_side": gs.get("side") or gs.get("signal"),
                     "fund_net": l2.get("main_net") if isinstance(l2, dict) else None,
                     "main_net": mi.get("main_net") if isinstance(mi, dict) else None,
