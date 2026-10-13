@@ -1,3 +1,20 @@
+### feat-TdxW TQ网关JSON-RPC看门狗(真探活验现价·连续2轮失败才杀拉·防登录窗口期误杀)（2026-10-13）
+
+小主机通达信 `TdxW.exe` 假死(zombie)时端口 17709 仍 LISTENING 但 JSON-RPC 空响应,
+旧的只探端口看门狗(TqKeepAlive)永远判它活。落一个**真 JSON-RPC 探活**的运维件:
+
+- **加** `deploy/windows/tdxw_watchdog.ps1`(**纯 ASCII**, PS 5.1 GBK 解析铁律):
+  发 `get_market_snapshot` 并校验 `result.ErrorId==0` 且现价(`Now`)>0 才算活;
+  **连续 2 轮失败才动作**(5min 一轮 ⇒ ~10min 观察窗, 防登录屏误杀), 有主窗口不杀;
+  通过闸门 → `taskkill /F /IM TdxW.exe /T`(+tdxcef) → `schtasks /run TdxAutoStart`
+  → 等 90s → **复探**; 日志 `C:\Users\tianxiang\tqwatch.log`, 失败计数
+  `qwatch_state.txt`(阈值后清零防杀循环); `-DryRun` 自测(只探不杀)。
+- **加** `deploy/windows/README.md`(安装说明: schtasks `/sc minute /mo 5` 建
+  `TqRpcWatchdog` 替换只探端口的 TqKeepAlive; scp 落文件; 内层命令 `</dev/null`
+  防 stdin 吞流; 绝不碰 portproxy/17709)。
+- **测试**: 加 `tests/test_tdxw_watchdog_script.py`(静态护栏: 脚本纯 ASCII + 真
+  JSON-RPC 探活/现价校验/阈值 2/杀拉/日志等关键标记防回退)。
+
 ### feat-L2成品资金快照数据自检+自愈(每日验最新交易日快照是否已落·缺则复用现有采样口径重采·TQ不可用显式告警不静默)（2026-10-13）
 
 治根『快照表 0 行』事故: `l2_fund_snapshots` 是主力净流入(L2·TQ)非交易时段回退的
