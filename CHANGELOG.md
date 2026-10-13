@@ -1,3 +1,27 @@
+### refactor-GS趋势/区间消费方全面收口(共振·决策战报·回测·聚宝盆都走单一事实源)（2026-10-13）
+
+承接前三条: GS 的「区间/趋势」在系统里还有一批消费方走 `gs_strategy.eval_gs`
+(其 zone 吃 a0/bb0 盘中价) —— 末根疑似反向交叉时它们会与 K 线图层**同一时刻两张脸**
+(图表 G区色带, 共振却已报「S区间」)。现全部收口到 `gs_state`。
+
+- **加** `src/core/gs_state.trend_label(bars)`(共振状态机词表 G信号/G区间/S信号/S区间/
+  无数据): **仅一处**修正 —— 「已确认区间 + 末根疑似反向交叉」时报**当前区间的「区间」态**
+  (区域未被新信号接管; 官方语义「信号出现后次日不消失, 处于该区间直到出现反向信号」),
+  其余情形**逐字委托** `gs_strategy.trend_label(eval_gs(bars))`(选股覆盖面/词表不变,
+  异常也回退该口径不向上抛)。
+- **改** 趋势消费方统一改 `gs_state.trend_label(bars)`: `klines._build_resonance`
+  (个股工作台共振)、`resonance_scan.evaluate_one` 与逐日序列、
+  `decision.decide`(决策战报)、`decision_backtest`、`market_scan.resonance_pick`。
+- **改** `jbp_pool.screen`(聚宝盆「GS在G区+G信号」): 改 `gs_state.resolve_gs_state`
+  —— 判据从「a0/bb0 区间 + 信号」收紧为**已确认**区间 + 已确认信号(与文档/规格一致)。
+- **改** `decision_pioneer.fetch_decision_pioneer`: 取数窗口 60→120 根, 与 K 线图层
+  (`_build_layer_data` days=120)**同一份 bars** —— 窗口不同本身就会让区间/趋势不一致。
+- **口径(无已确认锚点)**: 区间仍为 None(不猜), 说明文案区分「日K不足」与
+  「本窗口内无已确认 G/S 信号」两种情形。
+- **测试**: `tests/test_gs_single_source.py` 增趋势同源钉子(待确认不抢跑趋势、非待确认
+  逐字委托、面板区态与趋势不得反向·逐根截断); `tests/test_jbp_pool.py` 取数 stub 改挂
+  `gs_state.resolve_gs_state`。
+
 ### test-GS单一事实源一致性契约(图表标记态==面板区态三态钉子·逐根截断对拍·pending语义)（2026-10-13）
 
 给上两条修复上钉子(禁真网络, 全纯计算): 新增 `tests/test_gs_single_source.py`。

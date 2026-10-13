@@ -779,7 +779,7 @@ def _build_resonance(symbol: str, bars: list[dict]) -> dict:
     """数智决策三指标共振状态(2026-09-02 暴露到 summary, 字段契约见前端消费方)。
 
     三指标当日最新值, 全部复用已有能力, 不重写算法:
-      - 趋势  : gs_strategy.eval_gs(bars) + trend_label(复用 layer 已拉的 bars, 纯计算)
+      - 趋势  : gs_state.trend_label(bars) (单一事实源: 与 K 线图层/数智决策面板同源)
       - 活跃度: ai_activity.eval_activity(bars); activity_prev = eval_activity(bars[:-1])
                 (砍末根重算, 纯计算无网络; 拿不到 → None, "较前日翻倍"按不满足处理)
       - 资金  : dark_pool_flow.compute_pool_flow(symbol).main_net(明+暗主力净额);
@@ -793,13 +793,14 @@ def _build_resonance(symbol: str, bars: list[dict]) -> dict:
         if not bars:
             return out
 
-        from src.core.gs_strategy import eval_gs, trend_label
+        from src.core.gs_state import trend_label
         from src.core.ai_activity import eval_activity
         from src.core.dark_pool_flow import compute_pool_flow
         from src.core.resonance import evaluate_state, state_action_label
 
-        # ① 趋势(GS): 复用 layer 已拉的 bars
-        trend = trend_label(eval_gs(bars))
+        # ① 趋势(GS): 复用 layer 已拉的 bars —— 单一事实源 gs_state(与 K 线图层同源;
+        #    末根疑似反向交叉不再抢跑区间)
+        trend = trend_label(bars)
 
         # ② 活跃度: 当日 + 前一日(砍末根, 纯计算)
         act = eval_activity(bars)

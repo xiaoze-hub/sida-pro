@@ -160,7 +160,7 @@ def backtest_resonance(
           "note": 口径与局限说明
         }
     """
-    from src.core import ai_activity, gs_strategy, resonance
+    from src.core import ai_activity, gs_state, resonance
 
     if universe_as_of:
         from src.core.universe import filter_symbols
@@ -195,8 +195,7 @@ def backtest_resonance(
 
             window = bars[: i + 1]
             try:
-                gs_eval = gs_strategy.eval_gs(window)
-                trend = gs_strategy.trend_label(gs_eval)
+                trend = gs_state.trend_label(window)
                 activity = (ai_activity.eval_activity(window) or {}).get("activity")
 
                 if fund_source == "ohlc":

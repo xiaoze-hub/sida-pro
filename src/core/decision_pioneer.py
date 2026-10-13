@@ -485,7 +485,9 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    bars = fetch_bars(symbol, market=market, days=60)
+    # 取数窗口与 K 线图层(_build_layer_data)对齐: 同一份 bars 才谈得上「与图表逐字一致」
+    # (窗口不同 → 窗口内是否含已确认交叉可能不同 → 区间/趋势会不一致)。
+    bars = fetch_bars(symbol, market=market, days=120)
     act = compute_institution_activity(bars)
     # GS 区间:**单一事实源** —— 只消费 gs_strategy 输出(与 K 线图层逐字一致)。
     # 此前这里用 compute_gs_signal.state(自带 a0/bb0 比较, 吃末根盘中价),

@@ -296,3 +296,39 @@ def test_ledger_skips_rows_without_signal_day_price(monkeypatch):
     ]
     assert market_scan._log_gs_signals(metrics, trade_date=None) == 0
     assert called["n"] == 0
+
+
+# ── ④ 共振趋势(趋势 S信)同源: 末根疑似反向不再抢跑趋势 ─────────────────────────
+def test_trend_label_agrees_with_chart_zone_on_pending():
+    """共振趋势的「趋势」口径必须与图表区间同源: 末根疑似反向 → 仍是原区间的「区间」态。"""
+    # 用户实报形: 已确认 G + 末根疑似转 S
+    bars = bars_pending_s()
+    assert gs_state.trend_label(bars) == "G区间"       # 图表仍是 G区
+    # 对照: gs_strategy 原口径当天就翻成 S区间(= 修复前的错误)
+    assert gs_strategy.trend_label(gs_strategy.eval_gs(bars)) == "S区间"
+
+    # 已确认 G + 末根无交叉 → G信号(与原口径一致)
+    assert gs_state.trend_label(bars_confirmed_g()) == "G信号"
+    # 已确认 S + 末根无交叉 → S信号
+    assert gs_state.trend_label(bars_confirmed_s()) == "S信号"
+
+
+def test_trend_label_degrades_to_gs_strategy_outside_pending():
+    """非「已确认区间 + 疑似反向」的情形逐字委托 gs_strategy(不改变选股覆盖面)。"""
+    for bars in (bars_pending_g(), [], bars_confirmed_g()[:10]):
+        expect = gs_strategy.trend_label(gs_strategy.eval_gs(bars))
+        assert gs_state.trend_label(bars) == expect
+
+
+def test_panel_zone_and_trend_label_never_contradict():
+    """面板区态与共振趋势不得反向(同源钉死; 逐根截断)。"""
+    for mk_bars in (bars_confirmed_g, bars_confirmed_s, bars_pending_s, bars_pending_g):
+        bars = mk_bars()
+        for k in range(28, len(bars) + 1):
+            sub = bars[:k]
+            st = resolve_gs_state(sub)
+            trend = gs_state.trend_label(sub)
+            if st["zone"] == "G区":
+                assert trend in ("G信号", "G区间"), f"{mk_bars.__name__} 前{k}根: {st['zone']} vs {trend}"
+            elif st["zone"] == "S区":
+                assert trend in ("S信号", "S区间"), f"{mk_bars.__name__} 前{k}根: {st['zone']} vs {trend}"

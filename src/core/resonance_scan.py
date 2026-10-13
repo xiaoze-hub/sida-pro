@@ -1,7 +1,7 @@
 """三指标共振判定 + 全市场扫描(2026-09-11, 老板"都做")。
 
 三指标(全部用**我们自己的实现**, 非客户端复刻公式 —— 规避双源分叉):
-  趋势 = GS策略(gs_strategy.trend_label(eval_gs(bars)))  → G区/G信号 视为趋势对
+  趋势 = GS策略(gs_state.trend_label(bars))  → G区/G信号 视为趋势对
   强度 = AI机构活跃度(ai_activity.eval_activity)          → >= 强势线 3.0 视为强度对
   资金 = 主力净流入(通达信 SUPAMO 批量, 万元→元)          → > 0 视为资金对
 
@@ -110,9 +110,9 @@ def evaluate_one(bars: list[dict], fund_net: float | None) -> dict:
     数据不足/缺失 → 对应项 False 并在 note 标注(不猜)。
     """
     from src.core.ai_activity import eval_activity
-    from src.core.gs_strategy import eval_gs, trend_label
+    from src.core.gs_state import trend_label
 
-    trend = trend_label(eval_gs(bars)) if bars else "无数据"
+    trend = trend_label(bars) if bars else "无数据"
     act = eval_activity(bars) if bars else {}
     activity = act.get("activity") if isinstance(act, dict) else None
     level = act.get("level") if isinstance(act, dict) else None
@@ -526,7 +526,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
     从日线口径逐日滚动计算(数据不足的头部为 None, 不补零)。
     """
     from src.core.ai_activity import eval_activity
-    from src.core.gs_strategy import eval_gs, trend_label
+    from src.core.gs_state import trend_label
 
     code = _tdx_code(symbol)
     bars = (_fetch_daily([code]) or {}).get(code) or []
@@ -540,7 +540,7 @@ def activity_series(symbol: str, days: int = 120) -> dict:
         window = bars[: i + 1]
         act = eval_activity(window) or {}
         activity = act.get("activity")
-        trend = trend_label(eval_gs(window))
+        trend = trend_label(window)
         lvl, _ = resonance_level(trend_zone_g=trend in ("G信号", "G区间"), activity=activity, fund_net=fund_net if i == len(bars) - 1 else None)
         items.append(
             {

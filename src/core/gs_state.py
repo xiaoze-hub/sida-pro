@@ -149,7 +149,10 @@ def resolve_gs_state(bars: Optional[Sequence[dict]]) -> dict:
         out["label"] = ZONE_G if out["pending_side"] == "G" else ZONE_S
         out["note"] = "尚无已确认信号, 末根疑似交叉未定型"
     else:
-        out["note"] = "无数据(日K不足或无已确认 GS 信号)"
+        out["note"] = (
+            "日K不足 28 根, 不猜区间" if len(bars) < 28
+            else "本窗口内无已确认 G/S 信号, 不猜区间"
+        )
     return out
 
 
@@ -161,3 +164,27 @@ def _norm_date(d) -> Optional[str]:
     if len(s) == 8 and s.isdigit():
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return s[:10]
+
+
+def trend_label(bars: Optional[Sequence[dict]]) -> str:
+    """趋势标签(共振状态机口径): G信号 / G区间 / S信号 / S区间 / 无数据。
+
+    词表与 `gs_strategy.trend_label` **完全一致**, 且**只在一处**不同(即本次修复):
+
+    - **已确认区间 + 末根疑似反向交叉** → 报**当前区间的「区间」态**(区域未被新信号接管),
+      而不是像 `gs_strategy.trend_label`(吃 a0/bb0 盘中价)那样当天就翻成反方向的「区间」。
+      例: 已确认 G区 + 末根疑似转 S → 本函数「G区间」(图表仍是 G区色带),
+      `gs_strategy.trend_label` 会报「S区间」。
+    - 其余情形(无已确认锚点 / 末根无交叉 / 无数据)**逐字委托**给
+      `gs_strategy.trend_label(gs_strategy.eval_gs(bars))`, 行为不变
+      (选股覆盖面不受影响; 任何异常也回退到该口径, 不向上抛)。
+    """
+    try:
+        st = resolve_gs_state(bars)
+        if st["zone"] and st["pending"]:
+            return "G区间" if st["zone"] == ZONE_G else "S区间"
+    except Exception:  # noqa: BLE001 兜底走 gs_strategy 原口径
+        pass
+    from src.core.gs_strategy import eval_gs, trend_label as _gs_trend_label
+
+    return _gs_trend_label(eval_gs(list(bars or [])))

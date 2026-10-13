@@ -105,12 +105,13 @@ def test_evaluate_one_wencai_required_but_unavailable_degrades():
 # ══════════════════════════════════════════════════════════════════════
 def _patch_fetch(monkeypatch, *, dark, acts, zones, signals, wencai=None, wencai_avail=True):
     import src.core.ai_activity as ai
-    import src.core.gs_strategy as gs
+    import src.core.gs_state as gs_state
 
     monkeypatch.setattr(jbp, "_bars_of", lambda s: [{"symbol": s, "close": 1.0}])
     monkeypatch.setattr(jbp, "_dark_net_of", lambda s: dark.get(s))
     monkeypatch.setattr(ai, "eval_activity", lambda bars: {"activity": acts.get(bars[0]["symbol"])})
-    monkeypatch.setattr(gs, "eval_gs",
+    # 2026-10-13: 聚宝盆 GS 区口径收口到单一事实源 gs_state(与 K 线图层同源)
+    monkeypatch.setattr(gs_state, "resolve_gs_state",
                         lambda bars: {"zone": zones.get(bars[0]["symbol"]),
                                       "signal": signals.get(bars[0]["symbol"])})
     if wencai is not None or not wencai_avail:

@@ -249,7 +249,7 @@ def resonance_pick(
           "note": 口径说明
         }
     """
-    from src.core import ai_activity, gs_strategy, resonance
+    from src.core import ai_activity, gs_state, resonance
 
     if symbols is None:
         from src.collectors.stock_list import get_stock_list
@@ -270,8 +270,7 @@ def resonance_pick(
             if not bars:
                 return "empty", None
 
-            gs_eval = gs_strategy.eval_gs(bars)
-            trend = gs_strategy.trend_label(gs_eval)
+            trend = gs_state.trend_label(bars)
             if trend in ("无数据",):
                 return "empty", None
             if require_new_g and trend != "G信号":
