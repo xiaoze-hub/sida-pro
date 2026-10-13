@@ -10,7 +10,7 @@ G 信号 + 问财关键词**。四条件按 **AND** 联合筛选; 本模块产�
 |--------------|--------------------------|-------------------------------------------------------------|----------|
 | dark_inflow  | 暗盘资金流入             | 暗盘净额 > 0(dark_pool_flow 暗盘口径)                       | 显式降级 |
 | activity     | AI 机构活跃度 > 6        | 活跃度 > 大牛线 6.00(> 更佳线 12.00 标"更佳")               | 显式降级 |
-| gs           | GS 在 G 区 + G 信号      | gs_strategy.zone == "G区" 且 signal == "G"(已确认)         | 显式降级 |
+| gs           | GS 在 G 区 + G 信号      | gs_state.zone == "G区" 且 signal == "G"(**已确认**口径, 与图表同源)| 显式降级 |
 | wencai       | 问财关键词               | 传入关键词时: 命中问财列表才算过; 未传关键词 → 不参与筛选   | 显式降级 |
 
 ## 口径纪律
@@ -258,14 +258,14 @@ def screen(symbols: Sequence[str], wencai_keywords: Optional[str] = None) -> dic
             logger.warning("聚宝盆日K取数失败 %s: %s", code, e)
 
         from src.core.ai_activity import eval_activity
-        from src.core.gs_strategy import eval_gs
+        from src.core.gs_state import resolve_gs_state
 
         try:
             activity = (eval_activity(bars) or {}).get("activity") if bars else None
         except Exception:  # noqa: BLE001
             activity = None
         try:
-            gs_eval = eval_gs(bars) if bars else None
+            gs_eval = resolve_gs_state(bars) if bars else None
         except Exception:  # noqa: BLE001
             gs_eval = None
 

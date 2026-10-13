@@ -721,10 +721,14 @@ def _append_decision_pioneer(lines: list, symbol: str) -> None:
             )
         else:
             lines.append("- AI机构活跃度：无数据")
-        gs = d.get("gs")
-        if gs:
+        gs: dict = d.get("gs") or {}
+        zone = gs.get("state")        # 已确认区间(与 K 线图层单一事实源)
+        if zone or gs.get("pending"):
             sig = {"G": "G买(上穿)", "S": "S卖(下穿)"}.get(gs.get("signal"), "无")
-            lines.append(f"- GS趋势：{gs['state']}(方向过滤, 买卖点滞后仅参考, 最近{sig})")
+            txt = f"{zone or '待确认'}"
+            if gs.get("pending"):
+                txt += f"(末根疑似{gs.get('pending_side')}待确认)"
+            lines.append(f"- GS趋势：{txt}(方向过滤, 买卖点滞后仅参考, 最近已确认{sig})")
         else:
             lines.append("- GS趋势：无数据")
         l2 = d.get("l2") or {}

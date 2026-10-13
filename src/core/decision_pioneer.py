@@ -4,6 +4,10 @@
 
 - AI机构活跃度: 零调参纯K线波动探测器。源码 7 因子 MAX × 1.2, 阈值 1.56/3/6。
 - GS策略: BB0 慢线(MA3/7/13/27 均值) + A0 快线((H+L+2O+6C)/10) 交叉 → G买/S卖。
+  ⚠️ 面板/推送/共振的**GS 区间**不在本模块判定 —— 统一走 `src/core/gs_state.py`
+  (只消费 `gs_strategy.compute_gs_signals` 的**已确认**信号, 与 K 线图层逐字一致)。
+  本模块的 `compute_gs_signal`/`compute_gs_windows` 是**低层内核**(供 `gs_strategy`
+  复用), 其 `state` 是原始 a0/bb0 方向, **不是**官方 G/S 区间(会吃末根盘中价而抢跑)。
 - L2 主力净流入(明盘口径, 非暗盘): TQ get_more_info.Zjl_HB 成品字段 = 同花顺"主力净额"——按单笔成交金额阈值(特大/大/中/小)汇总的**明盘资金流向**,不包含拆单识别。要做真正的暗盘请用 dark_flow(腾讯逐笔 + .tck 委托号拆单识别)。
 
 盘中实时: 日线走 TQ(get_market_data period=1d 含当日), L2 走 TQ get_more_info。
@@ -138,7 +142,11 @@ def _sma(vals: list[float], n: int) -> float | None:
 
 
 def compute_gs_signal(bars: list[dict]) -> dict | None:
-    """GS 策略(仿编版 + 自建结构, 未校准近似)。
+    """GS 策略**低层内核**(BB0/A0 交叉; 供 `gs_strategy` 复用, 勿直接做面板口径)。
+
+    ⚠️ 面板/推送/共振的 GS 区间请用 `src/core/gs_state.py::resolve_gs_state` —— 见本文件头。
+    此处 `state` 只是**原始** a0/bb0 方向(吃末根盘中价, 末根疑似交叉即翻面),
+    **不是**官方「G区/S区」(官方非函数指标要等 confirmed)。
 
     BB0 = (MA3 + MA7 + MA13 + MA27) / 4  慢线(趋势)
     A0  = (H + L + 2O + 6C) / 10          快线(收盘 60% 权重)
@@ -146,7 +154,7 @@ def compute_gs_signal(bars: list[dict]) -> dict | None:
 
     返回: {signal, state, bb0, a0, last_cross}
     - signal: 最近一次交叉方向 "G"(买) / "S"(卖) / None(无交叉)
-    - state: 当前 "G区"(a0>bb0) / "S区"(a0<bb0)
+    - state: **低层**当前方向 "G区"(a0>bb0) / "S区"(a0<bb0)
     数据不足(bar<27)返回 None。
     """
     if not bars or len(bars) < 5:
@@ -206,6 +214,10 @@ def compute_gs_windows(bars: list[dict], windows: tuple[int, ...] = (1, 3, 5)) -
 
     对 A0−BB0 差值序列, 给每个窗口统计: 窗口内 0 轴穿越次数、窗口累计差值、窗口末方向;
     并给出最近一次 0 轴穿越的方向与距今天数(0 = 最后一根)。
+
+    ⚠️ 返回体里的 `state` 是**原始 0 轴方向**(dif 符号), **不是**官方 G/S 区间 ——
+    面板/推送的区间请用 `src/core/gs_state.py::resolve_gs_state`(与 K 线图层同源)。
+    本字段保留仅作低层对照(无已确认语义, 会吃末根盘中价)。
     """
     if not bars or len(bars) < 5:
         return None
@@ -464,7 +476,7 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     {
       symbol, market,
       institution_activity: {...}|None,   # AI机构活跃度
-      gs: {...}|None,                      # GS策略
+      gs: {...}|None,                      # GS区间(单一事实源, 见 gs_state.resolve_gs_state)
       l2: {...},                           # TQ L2 主力净流入(含 available 标记)
       main_intent: {...}|None,             # 主力意图(腾讯逐笔, 复用 dark_flow)
       data_time: str,
@@ -473,9 +485,34 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    bars = fetch_bars(symbol, market=market, days=60)
+    # 取数窗口与 K 线图层(_build_layer_data)对齐: 同一份 bars 才谈得上「与图表逐字一致」
+    # (窗口不同 → 窗口内是否含已确认交叉可能不同 → 区间/趋势会不一致)。
+    bars = fetch_bars(symbol, market=market, days=120)
     act = compute_institution_activity(bars)
-    gs = compute_gs_signal(bars)
+    # GS 区间:**单一事实源** —— 只消费 gs_strategy 输出(与 K 线图层逐字一致)。
+    # 此前这里用 compute_gs_signal.state(自带 a0/bb0 比较, 吃末根盘中价),
+    # 末根疑似反向交叉时面板立刻翻面, 与图表(停在上一根已确认信号)打架。
+    from src.core.gs_state import resolve_gs_state
+
+    gs_eval = resolve_gs_state(bars)
+    gs = {
+        "state": gs_eval["zone"],              # 兼容旧字段名: 现值=已确认区间(与图表同源)
+        "zone": gs_eval["zone"],
+        "label": gs_eval["label"],
+        "signal": gs_eval["signal"],           # 最近一次**已确认**信号(图表实心 ▲/▼)
+        "signal_date": gs_eval["signal_date"],
+        "signal_confirmed": gs_eval["signal_confirmed"],
+        "pending": gs_eval["pending"],         # 末根疑似交叉(图表空心 ○)
+        "pending_side": gs_eval["pending_side"],
+        "pending_date": gs_eval["pending_date"],
+        "pending_label": gs_eval["pending_label"],
+        "note": gs_eval["note"],
+        "available": gs_eval["available"],
+        "as_of": gs_eval["as_of"],             # 数据截止(末根 bar 日期)
+        # 展示项(规格 §1 面板要求可见的快/慢线): 与区间同源, 不参与判定
+        "a0": gs_eval["a0"],                   # 快线
+        "bb0": gs_eval["bb0"],                 # 慢线
+    }
     # B6.8: 1/3/5 日序列 + 0 轴穿越(接口文档点名的 P0 缺口)
     gs_windows = compute_gs_windows(bars)
     l2 = fetch_tq_l2(symbol, market=market)
@@ -527,10 +564,19 @@ def decision_pioneer_text(symbol: str, market: str = "CN") -> str:
     else:
         parts.append("机构活跃度: 无数据")
 
-    gs = d.get("gs")
-    if gs:
+    gs: dict = d.get("gs") or {}
+    zone = gs.get("state")            # = gs_state.zone(已确认区间, 与 K 线图层同源)
+    if zone or gs.get("pending"):
         sig = {"G": "G买", "S": "S卖"}.get(gs.get("signal"), "无")
-        parts.append(f"GS策略: 当前{gs['state']}, 最近信号{sig}")
+        if zone:
+            txt = f"当前{zone}(已确认), 最近已确认信号{sig}"
+            if gs.get("signal_date"):
+                txt += f"({gs['signal_date']})"
+            if gs.get("pending"):
+                txt += f"; {gs.get('pending_date') or '末根'}疑似转{gs.get('pending_side')}待确认"
+        else:
+            txt = f"待确认(尚无已确认区间), 末根疑似{gs.get('pending_side')}"
+        parts.append(f"GS策略: {txt}")
     else:
         parts.append("GS策略: 无数据")
 

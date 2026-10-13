@@ -64,13 +64,23 @@ def test_valid_symbols(raw, expected):
 
 
 def test_new_g_detects_cross_on_last_bar(monkeypatch):
-    """末根暴力拉升产生 G 交叉 → new_g=True。"""
+    """末根暴力拉升产生 G 交叉 → new_g=True(单一事实源口径: 末根交叉=**待确认**)。
+
+    2026-10-13: 口径收口到 `gs_state`(与 K 线图层同源)。末根交叉按官方语义是 pending
+    (次日不消失/收盘才定死), 故:
+      - `new_g`=True 但 `new_g_status` 显式「待确认」(榜只作候选提示, 不冒充已确认);
+      - `gs_signal`/`gs_state` 只报**已确认**信号 → 此处尚无已确认信号, 为 None
+        (旧口径会把这次疑似交叉直接当 "G"/"G区" 输出)。
+    """
     bars = _mk_bars(n=40, trend=-0.05, final_surge=True)
     monkeypatch.setattr(dp, "fetch_bars", lambda s, m, days=60: bars)
     m = ms._per_stock_metrics("000977", 60)
     assert m is not None
     assert m["new_g"] is True
-    assert m["gs_signal"] == "G"
+    assert m["new_g_status"] == "待确认"
+    assert m["gs_pending"] is True and m["gs_pending_side"] == "G"
+    assert m["gs_signal"] is None          # 未确认 → 不冒充信号
+    assert m["gs_state"] is None           # 未确认 → 不冒充区间
 
 
 def test_old_g_cross_not_counted(monkeypatch):

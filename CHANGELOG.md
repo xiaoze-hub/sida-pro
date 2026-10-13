@@ -1,3 +1,87 @@
+### refactor-GS趋势/区间消费方全面收口(共振·决策战报·回测·聚宝盆都走单一事实源)（2026-10-13）
+
+承接前三条: GS 的「区间/趋势」在系统里还有一批消费方走 `gs_strategy.eval_gs`
+(其 zone 吃 a0/bb0 盘中价) —— 末根疑似反向交叉时它们会与 K 线图层**同一时刻两张脸**
+(图表 G区色带, 共振却已报「S区间」)。现全部收口到 `gs_state`。
+
+- **加** `src/core/gs_state.trend_label(bars)`(共振状态机词表 G信号/G区间/S信号/S区间/
+  无数据): **仅一处**修正 —— 「已确认区间 + 末根疑似反向交叉」时报**当前区间的「区间」态**
+  (区域未被新信号接管; 官方语义「信号出现后次日不消失, 处于该区间直到出现反向信号」),
+  其余情形**逐字委托** `gs_strategy.trend_label(eval_gs(bars))`(选股覆盖面/词表不变,
+  异常也回退该口径不向上抛)。
+- **改** 趋势消费方统一改 `gs_state.trend_label(bars)`: `klines._build_resonance`
+  (个股工作台共振)、`resonance_scan.evaluate_one` 与逐日序列、
+  `decision.decide`(决策战报)、`decision_backtest`、`market_scan.resonance_pick`。
+- **改** `jbp_pool.screen`(聚宝盆「GS在G区+G信号」): 改 `gs_state.resolve_gs_state`
+  —— 判据从「a0/bb0 区间 + 信号」收紧为**已确认**区间 + 已确认信号(与文档/规格一致)。
+- **改** `decision_pioneer.fetch_decision_pioneer`: 取数窗口 60→120 根, 与 K 线图层
+  (`_build_layer_data` days=120)**同一份 bars** —— 窗口不同本身就会让区间/趋势不一致。
+- **口径(无已确认锚点)**: 区间仍为 None(不猜), 说明文案区分「日K不足」与
+  「本窗口内无已确认 G/S 信号」两种情形。
+- **测试**: `tests/test_gs_single_source.py` 增趋势同源钉子(待确认不抢跑趋势、非待确认
+  逐字委托、面板区态与趋势不得反向·逐根截断); `tests/test_jbp_pool.py` 取数 stub 改挂
+  `gs_state.resolve_gs_state`。
+
+### test-GS单一事实源一致性契约(图表标记态==面板区态三态钉子·逐根截断对拍·pending语义)（2026-10-13）
+
+给上两条修复上钉子(禁真网络, 全纯计算): 新增 `tests/test_gs_single_source.py`。
+
+- **一致性契约**: 同一 `gs_strategy` 输出 → `gs_state.resolve_gs_state` 的 zone 必等于
+  「前端 `gs-zones.ts::gsZonePoints` 口径」推出的区间 —— **三态各钉一例**(confirmed G /
+  confirmed S / pending); 并**逐根截断对拍**(防「只有末根一致」的假修)。
+- **pending 语义**: 末根疑似反向交叉**不接管区间**(zone 仍停已确认信号)、`zone=None`
+  时显式「待确认」; 待确认文案与 K 线图图例**逐字一致**; 缺数据显式「无数据」不编造。
+- **旧逻辑退役钉子**: 末根疑似时 `compute_gs_signal.state`(=旧面板值)与新 zone **必须不同**
+  (钉死「面板不再吃末根盘中价」)。
+- **消费方同源**: 面板 `fetch_decision_pioneer().gs`、推送文案、`market_scan._per_stock_metrics`
+  都走单一事实源; 账本行日期/价取**信号当日**且显式带确认状态; 无信号价不入账(不硬填 0)。
+- **改** `tests/test_market_scan.py::test_new_g_detects_cross_on_last_bar`: 对齐新口径
+  (new_g 标「待确认」, gs_signal/gs_state 只报已确认 → 此处为 None)。
+
+### fix-全市场扫描/决策账本GS口径收口(疑似交叉不再当已确认·信号价/日取信号当日)（2026-10-13）
+
+承接上条「GS 区间单一事实源」: 同页之外的 GS 消费方一并收口到 `gs_state`(与 K 线图层同源),
+消掉「末根疑似交叉被当已确认」这一类口径分歧。
+
+- **改** `src/core/market_scan._per_stock_metrics`: `gs_state`/`gs_signal` 改由
+  `gs_state.resolve_gs_state` 产出(**已确认**口径; 此前用 `compute_gs_signal.state`,
+  会吃末根盘中价)。`new_g`(今日新出 G 点榜)语义明确为**末根疑似**并加 `new_g_status=待确认`;
+  新增 `gs_signal_date/gs_signal_confirmed/gs_pending/gs_pending_side`。
+- **改** `market_scan._log_gs_signals`(决策账本 gs_cross): 日期/价格改取**信号当日**
+  (`gs_cross_date`/`gs_cross_price`)而非末根(交叉未必发生在末根; 此前用末根价冒充信号价);
+  无已确认时取末根疑似并在 `context.status` 显式标「待确认」(次日转确认按
+  (kind,symbol,trade_date) UPSERT 刷新), 不再无标注地当已确认入账。
+- **改** `src/core/signal_summary.py`: 三榜推送文案「新G点」→「新G点(待确认)」
+  (末根交叉按官方语义未定型)。
+- **改** `src/core/history_store.py`: `gs_side` 注释对齐(已确认口径, 疑似不入账)。
+
+### feat-GS区间单一事实源(数智决策面板改吃gs_strategy·confirmed/pending与K线图层逐字一致)（2026-10-13）
+
+用户实报(600111 收盘后): K 线图 GS 买卖点显示 **G**(红▲), 但右侧数智决策面板
+「GS 信号(机会/风险)」显示 **S区**(快线35.85/慢线36.27)—— 同一只股票同一时刻「两张脸」。
+
+**根因**(两套 GS 并存): ①K 线图层走 `gs_strategy.compute_gs_signals`(逐根交叉, 带
+confirmed/pending; 区间色带**只由已确认锚点**建立, 见前端 `gs-zones.ts::gsZonePoints`);
+②面板走 `decision_pioneer` 自带的 a0/bb0 比较(`compute_gs_signal.state`), 且**吃末根
+盘中价** ⇒ 末根出现**疑似**反向交叉时面板立刻翻面, 图表仍停在上一根已确认信号处。
+官方语义(数智决策 8问8答): GS 是**非函数指标**, 信号次日不消失, **收盘才定死**。
+
+- **加** `src/core/gs_state.py::resolve_gs_state`(GS **单一事实源**; 只消费
+  `gs_strategy` 输出, 本体禁改): zone/signal = `compute_gs_signals` 里**已确认**
+  信号(与图表实心 ▲/▼ 同源); pending = 末根疑似交叉(图表空心 ○), 只标注**不接管区间**;
+  首个已确认信号之前→无数据(不猜)。快/慢线 a0/bb0 取自 `eval_gs`, 与区间同源, **仅展示**;
+  `pending_label` 文案与 K 线图图例**逐字一致**(「○S 待确认(盘中价, 收盘才定死)」)。
+- **改** `src/core/decision_pioneer.fetch_decision_pioneer`: `gs` 段改由 `resolve_gs_state`
+  产出(退役面板路径上的 a0/bb0 判定), 补 `zone/signal_date/signal_confirmed/pending/
+  pending_side/pending_date/pending_label/note/as_of/available`; `state` 保留为区间别名。
+  `compute_gs_signal`/`compute_gs_windows` 降为**低层内核**并标注「其 state 非官方区间」。
+- **改** `decision_pioneer_text` / `src/agents/intraday_monitor.py` 推送文案: 显式区分
+  「已确认」与「末根疑似待确认」, 不把疑似当定论。
+- **改** `src/web/api/stock_pool.py`: 趋势过滤口径注释对齐(gs.state=已确认区间), 行内加
+  `gs_pending` 透出。
+- **改** `frontend/packages/biz-ui/src/components/DecisionPioneerCard.tsx`: 面板显式渲染
+  「待确认」徽标 + 图例同款待确认文案 + 「最近已确认 G(日期)」; 无已确认区间时不冒充区间。
+
 ### feat-TdxW TQ网关JSON-RPC看门狗(真探活验现价·连续2轮失败才杀拉·防登录窗口期误杀)（2026-10-13）
 
 小主机通达信 `TdxW.exe` 假死(zombie)时端口 17709 仍 LISTENING 但 JSON-RPC 空响应,

@@ -1,7 +1,7 @@
 """决策合成(2026-09-08 方向2): 三信号 → 动手/看看/别碰 + 一行理由。
 
 输入复用现有能力, 不重写算法:
-- 趋势: gs_strategy.eval_gs + trend_label
+- 趋势: gs_state.trend_label (单一事实源, 见 src/core/gs_state.py)
 - 活跃度: ai_activity.eval_activity(当日 + 砍末根算前日)
 - 资金: dark_pool_flow.compute_pool_flow(symbol)["main_net"](明+暗; 未齐时为 None)
 - 合成: resonance.evaluate_state(7 行状态表) → verdict 映射
@@ -425,7 +425,7 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
     try:
         from src.collectors.kline_collector import KlineCollector
         from src.models.market import MarketCode
-        from src.core.gs_strategy import eval_gs, trend_label
+        from src.core.gs_state import trend_label
         from src.core.ai_activity import eval_activity
 
         mc = MarketCode(mkt)
@@ -440,7 +440,7 @@ def decide(symbol: str, market: str = "CN", days: int = 120, user_context: dict 
                    "reason": "看看: 无 K 线数据, 先别动手", "phase": "无", "row": 0,
                    "parts": _parts_text(None, None, None), "last_close": None}
             return _mark_non_cn(out, mkt)
-        trend = trend_label(eval_gs(bars))
+        trend = trend_label(bars)
         act = eval_activity(bars)
         activity = act.get("activity") if isinstance(act, dict) else None
         act_prev = eval_activity(bars[:-1])

@@ -25,9 +25,26 @@ export interface InstitutionActivity {
 
 export interface GsSignal {
   signal: 'G' | 'S' | null | string
-  state: 'G区' | 'S区' | string
-  bb0: number
-  a0: number
+  /** 区间(已确认口径): "G区"/"S区"/null(无已确认信号) —— 与 K 线图层单一事实源 */
+  state: 'G区' | 'S区' | string | null
+  /** 同 state 的另一名(gs_state.zone); 面板展示优先用 state */
+  zone?: 'G区' | 'S区' | string | null
+  bb0: number | null
+  a0: number | null
+  /** 面板主文案: G区/S区/G区·待确认/S区·待确认/无数据 */
+  label?: string | null
+  /** 最近一次**已确认**信号(图表实心 ▲/▼) */
+  signal_date?: string | null
+  signal_confirmed?: boolean
+  /** 末根疑似交叉(图表空心 ○): 未定型, 不冒充定论 */
+  pending?: boolean
+  pending_side?: 'G' | 'S' | null
+  pending_date?: string | null
+  /** "○S 待确认(盘中价, 收盘才定死)" —— 与 K 线图图例逐字一致 */
+  pending_label?: string | null
+  note?: string | null
+  /** 数据截止(末根 bar 日期) */
+  as_of?: string | null
 }
 
 export interface L2Flow {
@@ -186,21 +203,39 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
           )}
         </div>
 
-        {/* GS 信号(AI 大数据多因子机会/风险, 盘中实时) —— 口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
+        {/* GS 区间(机会/风险, 盘中实时) —— 口径单一事实源: 只认已确认信号, 与 K 线图层
+            (gs_signals 标记 + 区间色带)逐字一致; 末根疑似交叉只标「待确认」。
+            口径见 packages/biz-ui/src/lib/caliber-glossary.ts */}
         <div className="rounded-lg bg-accent/20 px-2.5 py-1.5" title={glossaryTooltip(GS_SIGNAL)}>
           <div className="text-muted-foreground mb-0.5">GS 信号（机会/风险）</div>
-          {gs ? (
+          {gs && (gs.state || gs.pending) ? (
             <>
-              <div className="font-mono text-[16px] font-semibold text-foreground">{gs.state}</div>
+              <div className="font-mono text-[16px] font-semibold text-foreground">
+                {gs.state ?? gs.label ?? '无数据'}
+                {gs.pending ? (
+                  <span className="text-[10px] ml-1 text-muted-foreground/80">待确认</span>
+                ) : null}
+              </div>
               <div className="text-muted-foreground mt-0.5">
-                快线{gs.a0?.toFixed(2)} / 慢线{gs.bb0?.toFixed(2)}
+                {gs.state ? null : '尚无已确认区间 · '}
+                快线{gs.a0 != null ? gs.a0.toFixed(2) : '--'} / 慢线
+                {gs.bb0 != null ? gs.bb0.toFixed(2) : '--'}
               </div>
               <div className="text-[10px] text-muted-foreground/70 mt-0.5">
-                G={GS_SIGNAL.g.meaning} · S={GS_SIGNAL.s.meaning}
+                {gs.pending
+                  ? gs.pending_label ?? `○${gs.pending_side ?? ''} 待确认(盘中价, 收盘才定死)`
+                  : `G=${GS_SIGNAL.g.meaning} · S=${GS_SIGNAL.s.meaning}`}
               </div>
+              {gs.signal_date ? (
+                <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+                  最近已确认 {gs.signal}（{gs.signal_date}）
+                </div>
+              ) : null}
             </>
           ) : (
-            <div className="text-muted-foreground">无数据</div>
+            <div className="text-muted-foreground">
+              {gs?.note ? `无数据（${gs.note}）` : '无数据'}
+            </div>
           )}
         </div>
 
