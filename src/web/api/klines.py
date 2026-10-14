@@ -40,6 +40,9 @@ _SUMMARY_TTL = 300  # biz_cache / PG 双层 TTL 一致(秒)
 _SUMMARY_PG_TTL = 300  # PG 落库 TTL 同 biz_cache, 双层一致
 # P2-7 (2026-09-05 28号审计): 上限保留语义; biz_cache 自带 L1 上限(2000)
 _SUMMARY_MAX = 500
+# summary/batch 并发上限(2026-10-14 缓存收口): 每只 _compute_kline_summary 内部再开
+# 4 条线程(主力意图/暗盘/三口径/图层并发), 上限 4 → 峰值 ~16 线程, 不把线程池打满。
+_SUMMARY_BATCH_MAX_WORKERS = 4
 
 # single-flight: cache_key -> Lock。并发 miss 时只有一个真正重算, 其余等锁后读缓存。
 _summary_locks: dict[str, threading.Lock] = {}
@@ -1296,20 +1299,21 @@ def _compute_kline_summary(symbol: str, market_code: MarketCode) -> dict:
     }
 
 
-@router.get("/{symbol}/summary")
-def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
-    """获取单只股票K线摘要
+def _get_or_compute_summary(
+    symbol: str, market_code: MarketCode, refresh: bool = False
+) -> dict:
+    """单只 summary 三层缓存取数: biz_cache(内存+Redis) → PG → 重算。
 
-    2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
-    2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
-       进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
-    2026-09-04: refresh=1 跳过 L1+L2 强制重算(数据源热切/补数后立即验证用)。
-    2026-10-01 (B1 P2 首屏慢): L1 从进程内 dict 迁到 biz_cache(L1 内存 + L2 Redis),
-       跨 worker 共享 + 重启不丢; 加 single-flight 防并发冷启动把线程池打满;
-       冷链四个重活并发化(见 _compute_kline_summary) —— 冷启动 ~26s → ~max(单条),
-       低于前端 fetchAPI 的 20s abort。命中顺序: biz_cache(内存→Redis) → PG → 重算。
+    命中顺序与单只端点一致(2026-10-01 B1 P2): 
+      ① biz_cache(L1 内存 + L2 Redis, 跨 worker/重启共享);
+      ② PG summary_cache(L3 持久兜底, 进程重启/容器迁移);
+      ③ 都 miss → _compute_kline_summary 真正重算, 回填两层。
+    重算段用 per-key single-flight 锁: 并发相同 symbol 只真算一次, 其余等锁后读缓存。
+
+    **单只端点和 /summary/batch 共用此入口** —— 2026-10-14 缓存收口: 批量端点此前
+    逐只裸调 collector.get_kline_summary()(绕开全部缓存, N 只 N 次现算), 现改为
+    逐只走本函数, 与单只端点命中同一份 `summary:{market}:{symbol}` 缓存。
     """
-    market_code = _parse_market(market)
     cache_key = f"summary:{market_code.value}:{symbol}"
 
     # L1/L2: biz_cache(内存 + Redis); 命中秒回, 跨进程/重启共享(refresh 跳过)
@@ -1340,26 +1344,48 @@ def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
         return result
 
 
+@router.get("/{symbol}/summary")
+def get_kline_summary(symbol: str, market: str = "CN", refresh: bool = False):
+    """获取单只股票K线摘要
+
+    2026-08-20: 加 30s 进程内缓存(主力意图+筹码逐笔翻页冷启动 ~20-30s 撞 502)。
+    2026-09-03 (v0.4.77): 加 PG summary_cache 落库, 进程重启后冷启动也命中;
+       进程内 L1 5min, PG L2 5min, 双层一致。冷启动命中顺序 L1 → L2 → 计算。
+    2026-09-04: refresh=1 跳过 L1+L2 强制重算(数据源热切/补数后立即验证用)。
+    2026-10-01 (B1 P2 首屏慢): L1 从进程内 dict 迁到 biz_cache(L1 内存 + L2 Redis),
+       跨 worker 共享 + 重启不丢; 加 single-flight 防并发冷启动把线程池打满;
+       冷链四个重活并发化(见 _compute_kline_summary) —— 冷启动 ~26s → ~max(单条),
+       低于前端 fetchAPI 的 20s abort。命中顺序: biz_cache(内存→Redis) → PG → 重算。
+    2026-10-14 缓存收口: 取数逻辑抽到 _get_or_compute_summary, 与 /summary/batch 共用。
+    """
+    market_code = _parse_market(market)
+    return _get_or_compute_summary(symbol, market_code, refresh=refresh)
+
+
 @router.post("/summary/batch")
 def get_kline_summary_batch(payload: KlineSummaryBatchRequest):
-    """批量获取K线摘要"""
-    if not payload.items:
+    """批量获取K线摘要
+
+    2026-10-14 缓存收口(审计: 放着已有缓存设施不用): 原实现是**逐只裸调
+    `collector.get_kline_summary()` 现算** —— 既绕过 biz_cache/PG 两层缓存(同一只
+    股票从单只端点刚算过, 批量端点仍从头再算一遍), 又是纯串行(N 只 = N 次现算串联,
+    冷启动必然撞前端 abort)。现改为**逐只走 _get_or_compute_summary**(与单只端点同
+    一份 `summary:{market}:{symbol}` 缓存, 命中即零重算)+ 线程池并发(上限
+    _SUMMARY_BATCH_MAX_WORKERS, 防把线程池打满)。返回结构与单只端点一致(逐只的
+    完整 summary 载荷), 顺序与请求 items 一致。
+    """
+    items = payload.items or []
+    if not items:
         return []
 
-    results = []
-    for item in payload.items:
+    def _one(item: KlineSummaryItem) -> dict:
         market_code = _parse_market(item.market)
-        collector = KlineCollector(market_code)
-        summary = collector.get_kline_summary(item.symbol)
-        results.append(
-            {
-                "symbol": item.symbol,
-                "market": market_code.value,
-                "summary": summary,
-            }
-        )
+        return _get_or_compute_summary(item.symbol, market_code)
 
-    return results
+    # ex.map 保序(与请求 items 一致); 坏市场 _parse_market 抛 HTTPException → 原样上抛 400。
+    workers = max(1, min(_SUMMARY_BATCH_MAX_WORKERS, len(items)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(_one, items))
 
 
 # ── K线形态识别(图层标注): 严格规则, 证据非建议 ────────────────────────────────

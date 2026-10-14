@@ -1,3 +1,58 @@
+### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
+
+落库缺口审计: `/api/market/mainline` 用**模块内进程 dict**(60s per spec)—— 多 worker
+各存各的、重启即丢(重启后第一个请求必吃 16~37s 冷启动重拉涨停池), 违反 AGENTS 硬约束
+『缓存一律走 `src/web/cache/biz_cache.py`』。
+
+- **改** `src/web/api/market_mainline.py`: 缓存承载换成 biz_cache(L1 内存 + L2 Redis,
+  跨 worker/多容器/重启共享); **SWR 契约不变**(过期先返旧值毫秒级 + 后台单飞回源)。
+- **加** 日频快照落库: 每次成功聚合后后台 upsert 当日一行进新表
+  `mainline_daily_snapshot`(30s 节流, 失败静默; 收盘后那次即当日定稿。先例
+  `market_data._try_write_snapshot_async` 写 `market_flow_snapshots`)。
+- **读侧口径**: biz_cache 够新(<TTL)直接返 → 未命中读库, 够新直接返(不阻塞) → 过旧
+  仍先返旧值 + `stale=True` + `age_s` 并后台回源刷新 → 两层都空(全新部署)才同步取一次。
+  快照缺 `cache_ts` 时用列 `computed_ts` 回填(绝不假装数据是新的)。
+  `clear_market_mainline_cache()` 只清响应缓存(快照是历史数据, 不随缓存清理丢弃)。
+- **建表** `src/web/migrations.py` 新增 `Migration(189, "mainline_daily_snapshot", ...)`
+  (双方言 DDL: `date` 主键 / `payload` TEXT / `computed_ts`)。
+- **测试**(禁真网络): 新增 `tests/test_market_mainline_snapshot.py`(快照 upsert→读回
+  一致且同日只留一行·缺 cache_ts 用 computed_ts 回填·够新读库零回源并回填 biz_cache·
+  过旧先返旧值(stale=True+age_s)且后台回源落库·超陈旧上限仍不阻塞·读库失败静默);
+  `tests/test_market_mainline_swr.py` 改用 biz_cache 驱动(非阻塞过期/单飞/后台刷新三态
+  逐字保留); `tests/test_migration_lock_and_failures.py` 补 m189 建表钉子;
+  `tests/test_limit_strength_shadow.py` 的迁移连续性断言改为"101 起连续无缺口"(不写死
+  上界, 新增迁移不再误伤)。
+
+### fix-决策先锋辅助指标缓存迁 biz_cache(30s TTL 不变·跨 worker 共享+重启不丢)（2026-10-14）
+
+落库缺口审计: `src/web/api/pioneer_indicators.py` 的三条指标(趋势操盘线/牛熊线/分时
+突破)结果缓存在**模块内 dict `_CACHE`** —— 多 worker 各存各的、重启即丢, 违反 AGENTS
+硬约束『缓存一律走 `src/web/cache/biz_cache.py`, 禁止业务代码自建』。
+
+- **改** `_cached()` 改走 biz_cache(L1 内存 + L2 Redis), 键 `pioneer_indicators:<key>`,
+  TTL 仍 30s(原 30.0s 秒级语义不变); Redis 不可达时 biz_cache 自动退回纯 L1(= 原行
+  为, 不抛不阻塞)。
+- **加** `clear_pioneer_indicators_cache()`: 只清本模块写过的键(登记表), 不误伤其他
+  业务缓存(biz_cache 没有按前缀枚举接口, 也不许业务代码裸连 Redis 扫键)。
+- **测试**: `tests/test_pioneer_indicators.py` 夹具由 `pi._CACHE.clear()` 改为关 L2 +
+  清 biz_cache(缓存换承载后原隔离方式失效, 同参数用例会读到上一个用例的回填)。
+
+### fix-K线批量摘要接回三层缓存(summary/batch 不再逐只裸算·加并发上限)（2026-10-14）
+
+落库缺口审计: `/api/klines/summary/batch` **逐只裸调 `collector.get_kline_summary()`
+现算** —— 绕开 biz_cache/PG 两层缓存(同一只股票单只端点刚算过, 批量端点仍从头再算),
+且纯串行(N 只 = N 次现算串联), 冷启动必撞前端 abort。违反 AGENTS 硬约束『缓存一律走
+`src/web/cache/biz_cache.py`, 禁止业务代码自建』。
+
+- **改** `src/web/api/klines.py`: 单只端点的三层取数(biz_cache → PG `summary_cache` →
+  `_compute_kline_summary`, per-key single-flight)抽成 `_get_or_compute_summary()`,
+  **单只端点与批量端点共用同一入口/同一份 `summary:{market}:{symbol}` 缓存**; 批量按
+  `_SUMMARY_BATCH_MAX_WORKERS=4` 线程池并发(每只内部再开 4 线程, 峰值 ~16, 不打满线程池),
+  `ex.map` 保序; 返回结构改为与单只端点一致的完整载荷。
+- **测试**(禁真网络): 新增 `tests/test_kline_summary_batch.py`(第二批零重算·与单只端点
+  共享缓存·并发上限且真并发·同 symbol 单飞·A/H 键隔离·空列表/坏市场 400) +
+  `tests/test_biz_cache_l2_shared.py`(内存假 Redis 钉跨实例共享 / `biz:` 前缀隔离 /
+  L2 不可达退纯 L1 —— 收口的前提"L2 真的共享"成立)。
 ### feat-选股池共振扫描并发化+biz_cache 缓存(50只串行打TQ→线程池)（2026-10-14）
 
 选股池共振扫描 `stock_pool._screen` 对最多 50 只**串行**逐只打 TQ L2 + 联网拉 K 线,

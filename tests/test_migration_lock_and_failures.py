@@ -223,6 +223,39 @@ def test_m138_m139_create_tables_on_sqlite(sqlite_engine, monkeypatch):
     assert rank is not None and rank[0] == 1
 
 
+def test_m189_mainline_daily_snapshot_on_sqlite(sqlite_engine, monkeypatch):
+    """2026-10-14 缓存收口: 主线日频快照表(date 主键 / payload / computed_ts)。"""
+    monkeypatch.setattr(
+        mig,
+        "MIGRATIONS",
+        (Migration(189, "mainline_daily_snapshot", mig._m189_mainline_daily_snapshot_table),),
+    )
+    run_versioned_migrations(sqlite_engine)
+
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO mainline_daily_snapshot (date, payload, computed_ts)"
+                " VALUES ('2026-10-14', '{\"note\":\"ok\"}', 1.5)"
+            )
+        )
+        # date 主键: 同日再写必须替换(upsert 语义), 而不是插出第二行
+        conn.execute(
+            text(
+                "INSERT INTO mainline_daily_snapshot (date, payload, computed_ts)"
+                " VALUES ('2026-10-14', '{\"note\":\"v2\"}', 2.5)"
+                " ON CONFLICT (date) DO UPDATE SET payload = excluded.payload,"
+                " computed_ts = excluded.computed_ts"
+            )
+        )
+        rows = conn.execute(
+            text("SELECT payload, computed_ts FROM mainline_daily_snapshot")
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0][0] == '{"note":"v2"}' and rows[0][1] == 2.5
+
+
 def test_m140_141_142_orm_model_tables_on_sqlite(sqlite_engine, monkeypatch):
     """收编 market_scan.py / signal_summary.py 兜底建表的三个 ORM 迁移。"""
     monkeypatch.setattr(

@@ -138,7 +138,8 @@ def test_migration_188_registered():
 
     versions = [m.version for m in MIGRATIONS]
     assert 188 in versions
-    assert versions == list(range(101, 189))
+    # 版本号从 101 起**连续无缺口**(不写死上界 —— 新增迁移不应让本钉子变红)
+    assert versions == list(range(101, max(versions) + 1))
     m188 = next(m for m in MIGRATIONS if m.version == 188)
     assert m188.name == "limit_strength_shadow"
     assert m188.runner.__name__.startswith("_m188_")
