@@ -70,6 +70,18 @@ import {
 
 export type { PatternMark } from '../lib/kline-patterns'
 
+// 图表说明(chart-notes, 2026-10-14 看图决策产品件): 逐标记「为什么在那」的**纯逻辑**。
+// 数据源 `/klines/{symbol}/chart-notes` —— 与后端图层标记**单一事实源**(AI 读的=图上标的)。
+import {
+  normalizeChartNotesPayload,
+  markerWhy,
+  notesForDate,
+  notesBarText,
+  zoneNoteText,
+  noteForMarker,
+  type ChartNote,
+} from '../lib/chart-notes'
+
 // 决策先锋辅助指标(P3 UI 集成, 2026-10-10): 趋势操盘线/牛熊线的三线序列 + 买卖点 marker 纯逻辑。
 // 数据源 `/api/indicators/*`; 与形态标注同策略(父传优先 + 自取, 错峰, 显式降级), 但**职责不同**:
 // 这里出**线**(前端按 API params 在日线收盘价上展开全序列), 数据面板出**现值读数**。
@@ -227,6 +239,7 @@ const EMPTY_EVENTS: KlineEventPoint[] = []
 const EMPTY_LINES: KlinePriceLine[] = []
 const EMPTY_ACTIVITY: ActivityPoint[] = []
 const EMPTY_PATTERNS: PatternMark[] = []
+const EMPTY_NOTES: ChartNote[] = []
 const EMPTY_DARKPOOL: DarkPoolPoint[] = []
 
 /** GS 区间色带主图独立隐藏轴(顶部窄带) + 暗盘资金副图独立隐藏轴。 */
@@ -333,6 +346,14 @@ export default function KlineChart(props: {
    * 父不传且 `layersVisible.niuxiong !== false` 时, 组件自取 `GET /indicators/niuxiong/{symbol}`。
    */
   niuxiong?: NiuxiongData | null
+  /**
+   * 图表说明(2026-10-14 看图决策产品件): 逐标记「为什么在那」(触发/时点/失效/置信度)。
+   * 父不传且 `layersVisible.explain !== false` 时, 组件自取 `GET /klines/{symbol}/chart-notes`。
+   * 与后端图层标记**单一事实源**(AI 读的=图上标的); 用于①图例悬停 title ②悬停读数 ③图下说明条。
+   */
+  chartNotes?: ChartNote[] | null
+  /** 当前 GS 标记(区间/待确认)的说明(与推送/战报同源取句); 父不传则用自取的 zoneNote。 */
+  zoneNote?: ChartNote | null
   /** L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期 */
   subchart?: KlineSubchart
   /** L5 副图切换回调 (父组件持久化到 URL) */
@@ -360,7 +381,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; trendLine?: boolean; niuxiong?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -543,6 +564,8 @@ export default function KlineChart(props: {
     /** §2 暗盘资金(2026-10-11): 该根主力净额(元) + 收盘涨跌(元), 供四组合用法(仅暗盘资金档) */
     poolNet?: number | null
     poolChg?: number | null
+    /** 图表说明(2026-10-14): 该根命中标记的「为什么」行(触发/时点/失效); 无 = 空旷 */
+    why?: string[]
   } | null>(null)
   /** 均线数组(绘制时算好存这里, 供光标读数取值; 不重复算一遍) */
   const maValuesRef = useRef<{
@@ -786,6 +809,9 @@ export default function KlineChart(props: {
         : []
       // K线形态标注(2026-10-10): 该根 K 线命中的形态读数(证据描述, 无买卖建议)
       const hitPatterns = patternHoverLabels(patternsRef.current, hitDate)
+      // 图表说明(2026-10-14): 该根命中标记的「为什么」(触发/时点/失效) —— 与后端 chart-notes 同源
+      const hitNotes = hitDate ? notesForDate(chartNotesRef.current, hitDate) : []
+      const hitWhy = hitNotes.map(markerWhy)
       const mingNet = hitFund
         ? (typeof hitFund.ming_net === 'number' && Number.isFinite(hitFund.ming_net)
             ? hitFund.ming_net
@@ -835,6 +861,7 @@ export default function KlineChart(props: {
           ma20: barIdx >= 0 ? (mv.ma20[barIdx] ?? null) : null,
           poolNet,
           poolChg,
+          why: hitWhy,
         })
       }
     })
@@ -992,6 +1019,42 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, ownPatterns, showPatternLayer])
 
+  // ── 图表说明自取(2026-10-14 看图决策产品件): 逐标记「为什么在那」 ─────────────
+  // 数据源: GET /klines/{symbol}/chart-notes(后端与图层标记**单一事实源**)。
+  // 与其它图层同策略: 父传了 props.chartNotes 就不取; 取不到 = 本次不展示说明(空, 不编造)。
+  // 受 `layersVisible.explain` 门控(整层关 → 不发请求, 也不展示)。
+  const ownChartNotes = props.chartNotes === undefined
+  const showExplainLayer = props.layersVisible?.explain !== false
+  const [chartNotesData, setChartNotesData] = useState<{
+    notes: ChartNote[]
+    zoneNote: ChartNote | null
+  } | null>(null)
+  useEffect(() => {
+    if (!ownChartNotes || !showExplainLayer || !props.symbol) {
+      setChartNotesData(null)
+      return
+    }
+    let cancelled = false
+    // 错峰(与 summary/patterns 同因): 图表说明不抢主图 /klines/{symbol} 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      fetchAPI<unknown>(
+        `/klines/${encodeURIComponent(props.symbol)}/chart-notes?market=${encodeURIComponent(props.market)}`,
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+        .then((res) => {
+          if (!cancelled) setChartNotesData(normalizeChartNotesPayload(res))
+        })
+        .catch(() => {
+          // 显式降级: 取不到 = 本次不展示说明(不编造), 也不报错
+          if (!cancelled) setChartNotesData({ notes: [], zoneNote: null })
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownChartNotes, showExplainLayer])
+
   // ── 决策先锋辅助指标自取(2026-10-10): 趋势操盘线 + 牛熊线 ─────────────────
   // 与形态标注同策略: 父传优先(own* 布尔, 原子化)、错峰不发抢主图、取不到显式降级(不编造)。
   // 受 `layersVisible.{trendLine,niuxiong}` 门控(整层关 → 不发请求, 也不画)。
@@ -1091,6 +1154,9 @@ export default function KlineChart(props: {
   // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
   const effTrendLine = props.trendLine ?? trendLineData
   const effNiuxiong = props.niuxiong ?? niuxiongData
+  // 图表说明: 父传优先 → 自取(空 = 本次不展示说明, 不编造)
+  const effChartNotes = props.chartNotes ?? chartNotesData?.notes ?? EMPTY_NOTES
+  const effZoneNote = props.zoneNote ?? chartNotesData?.zoneNote ?? null
   // 暗盘资金序列: 父传优先 → 自取(切到该档才取; null=未取, 空数组=降级不画)
   const effDarkPool = props.darkPoolSeries ?? darkPoolFetched ?? EMPTY_DARKPOOL
   // 十字光标 handler 注册一次 → 用 ref 读最新图层数据(与 onRangeSelectRef 同模式)
@@ -1102,6 +1168,8 @@ export default function KlineChart(props: {
   eventsRef.current = effEvents
   const patternsRef = useRef<PatternMark[]>(effPatterns)
   patternsRef.current = effPatterns
+  const chartNotesRef = useRef<ChartNote[]>(effChartNotes)
+  chartNotesRef.current = effChartNotes
   // §10.2④ 统计也要价位线(区间内出现的支撑/压力), 同样用 ref 供注册一次的回调读取
   const layersPriceLinesRef = useRef<KlinePriceLine[]>(effPriceLines)
   layersPriceLinesRef.current = effPriceLines
@@ -1674,6 +1742,16 @@ export default function KlineChart(props: {
           </span>
           <span>实心 = 已确认(收盘定死)</span>
           <span>空心 ○ = 待确认(盘中价, 收盘才定死)</span>
+          {/* 图表说明(2026-10-14): 当前 GS 标记「为什么」—— 悬停看触发/时点/失效(与推送/战报同源) */}
+          {effZoneNote && (
+            <span
+              data-testid="gs-legend-why"
+              className="text-[10px] cursor-help"
+              title={markerWhy(effZoneNote)}
+            >
+              为什么? (悬停: {effZoneNote.label})
+            </span>
+          )}
         </div>
       )}
 
@@ -1685,18 +1763,23 @@ export default function KlineChart(props: {
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
           <span className="font-medium text-foreground/80">K线形态</span>
-          {effPatterns.map((m, i) => (
-            <span key={`${m.name}-${m.index}-${i}`} title={m.definition || ''}>
-              <span className={m.direction === 'bearish' ? 'text-[hsl(var(--gs-stop))]' : 'text-[hsl(var(--gs-go))]'}>
-                {m.name}
+          {effPatterns.map((m, i) => {
+            // 图表说明(2026-10-14): 图例项挂「为什么」(触发/时点/失效) —— 与图上标的同源
+            const why = noteForMarker(effChartNotes, 'pattern', m.date, m.name)
+            const tip = [m.definition, why ? markerWhy(why) : ''].filter(Boolean).join('\n')
+            return (
+              <span key={`${m.name}-${m.index}-${i}`} title={tip}>
+                <span className={m.direction === 'bearish' ? 'text-[hsl(var(--gs-stop))]' : 'text-[hsl(var(--gs-go))]'}>
+                  {m.name}
+                </span>
+                <span className="ml-1">
+                  {PATTERN_DIRECTION_LABEL[m.direction]}
+                  {m.date ? ` ${m.date.slice(0, 10)}` : ''}
+                  {m.position ? ` · ${m.position}` : ''}
+                </span>
               </span>
-              <span className="ml-1">
-                {PATTERN_DIRECTION_LABEL[m.direction]}
-                {m.date ? ` ${m.date.slice(0, 10)}` : ''}
-                {m.position ? ` · ${m.position}` : ''}
-              </span>
-            </span>
-          ))}
+            )
+          })}
           <span className="text-[10px]">客观标注 · 非投资建议</span>
         </div>
       )}
@@ -1872,6 +1955,28 @@ export default function KlineChart(props: {
         </div>
       )}
 
+      {/* 图表说明条(2026-10-14 看图决策产品件): **一行式小字, 非卡片** ——
+          逐标记「为什么在那」(触发/时点/失效)。AI 读的=图上标的(单一事实源);
+          无说明不渲染(不留空壳)。悬停看全部(不撑破布局密度)。 */}
+      {effChartNotes.length > 0 && (
+        <div
+          data-testid="chart-notes-bar"
+          className="mt-1 text-[11px] text-muted-foreground"
+          title={effChartNotes.map((n) => markerWhy(n)).join('\n')}
+        >
+          <span className="font-medium text-foreground/80">图表说明</span>
+          <span className="ml-2">
+            {effChartNotes.length} 个标记 · {notesBarText(effChartNotes, 3)}
+          </span>
+          {/* 当前 GS 标记说明(与推送/战报同源取句): 一行式小字 */}
+          {effZoneNote && (
+            <span className="ml-2" data-testid="chart-zone-note">
+              GS: {zoneNoteText(effZoneNote)}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* KI-056: 每 pane 信息栏 —— 悬停十字光标时显示主图 OHLC + 成交量; 未悬停显示副图口径 */}
       <div
         data-testid="kline-pane-info"
@@ -1912,6 +2017,16 @@ export default function KlineChart(props: {
             )}
             {hoverReadout.patterns && hoverReadout.patterns.length > 0 && (
               <span className="text-foreground">形态 {hoverReadout.patterns.join(' · ')}</span>
+            )}
+            {/* 图表说明(2026-10-14): 该根命中标记的「为什么」(悬停浮层小字, 非卡片; 与图上标的同源) */}
+            {hoverReadout.why && hoverReadout.why.length > 0 && (
+              <span
+                data-testid="chart-note-why"
+                className="text-muted-foreground"
+                title={hoverReadout.why.join('\n')}
+              >
+                为什么 {hoverReadout.why[0]}
+              </span>
             )}
           </>
         ) : (

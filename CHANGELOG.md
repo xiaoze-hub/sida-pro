@@ -25,6 +25,22 @@
   (无触发显式「数据缺失」/时点缺失不默认成今日/失效必填回标 defaulted/置信度未校准) ·
   **同源契约**(chart-notes 条目 ⇔ 图层标记逐条对应) · 端点多态 · 推送引用同源取句。
 
+### feat-图表说明产品件·前端(标记「为什么」上图: 悬停浮层/图例扩展/图下说明条)（2026-10-14）
+
+承接上条后端。UI 铁律: **悬停浮层小字 / 图例扩展, 不卡片化、不加宽、不改 StockWorkbench 布局**。
+
+- **加** `frontend/packages/biz-ui/src/lib/chart-notes.ts`(纯逻辑, 可独立单测): 白名单清洗
+  (`normalizeChartNotes`/`normalizeChartNotesPayload`) + `markerWhy`(触发/时点/失效一行式) +
+  `notesForDate`(悬停) + `notesBarText`(图下说明条) + `zoneNoteText` + `noteForMarker`(图例 title)。
+  铁律: 只**清洗/展示**后端说明, **不重算**任何标记或口径(缺数据显式, 不补 0、不编)。
+- **改** `frontend/packages/biz-ui/src/components/KlineChart.tsx`: 自取
+  `GET /klines/{symbol}/chart-notes`(父传优先, 受新增 `layersVisible.explain` 门控, 错峰,
+  取不到显式降级); ①悬停读数补「为什么」小字(`data-testid="chart-note-why"`); ②K线形态/GS
+  图例项挂「为什么」title(`gs-legend-why`); ③图下**一行式**说明条(`chart-notes-bar`, muted 小字,
+  非卡片, 无说明不渲染)。
+- **测试** `frontend/tests/lib/chart-notes.test.ts`(纯函数) + `frontend/tests/components/
+  chart-notes-contract.test.ts`(源码侧接线契约)。
+
 ## feat-暗盘逐笔采集纳入自选∪持仓池(轮转切片, 免"当天首次点开"冷启动)（2026-10-14）
 
 补齐上两条的一个空洞: 只刷"热码(最近被请求过)"的话, **某只票当天第一次被点开时冷启动
