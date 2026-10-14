@@ -1,3 +1,34 @@
+### feat-十档盘口转后台采集: 快照采集器 + 落库 + 调度接线（2026-10-14）
+
+审计定性: `/api/orderbook-ob`(`src/web/api/orderbook.py`, 硬超时 12s)与 klines summary 的
+`_build_orderbook`(`src/web/api/klines.py`, 硬超时 8s)在**请求期**直接打 thsdk 十档
+(`order_book_bid/ask`), 上游单次实测可卡 30s —— 卡顿/超时**直接压在用户请求上**。本提交
+先把采集侧建起来(读路径改造见下一条)。
+
+- **采集器** 新增 `src/core/orderbook_snapshot.py`(仿 `board_flow_sampler`/`l2_fund_snapshot`):
+  - 交易时段每 `ORDERBOOK_SNAPSHOT_INTERVAL_SEC`(默认 20s, 15~30s 区间)对**活跃票**
+    (自选 ∪ 启用账户持仓 ∪ 当日异动[`seal_quality_samples` 当日样本], 去重 +
+    `ORDERBOOK_SNAPSHOT_MAX_SYMBOLS` 上限默认 40)逐个拉十档快照, 裁剪到前十档后追加进该票
+    **滚动窗**(`_WINDOW`=5 帧), 一行一票 upsert 落 `orderbook_snapshots`。
+  - 节流防 thsdk 过载: 进程内跨轮节流(距上轮 < interval 直接跳过, `force` 可绕过) +
+    单轮时间预算 12s + 逐票小睡 50ms + 单票硬超时 6s(`call_with_hard_timeout`, 复用
+    thsdk 并发槽/熔断); 取数失败/空盘口只记日志不抛。
+  - 读侧 `read_snapshot()` 返回滚动窗 + **`snapshot_age_sec` 显式陈旧度**;
+    `fresh_snapshot()` 仅当年龄 <= `ORDERBOOK_SNAPSHOT_STALE_SEC`(默认 60)时返回。
+  - `rebuild_snapshot()` 把落库帧还原成 `fetch_snapshot()` 同构快照(重建 float 价格键 bid/ask
+    map —— JSON 往返会把键变字符串, 不重建会让价格比较退化成字符串比较)。
+- **建表** `src/web/migrations.py` 新增 `Migration(194, "orderbook_snapshots_table", ...)`
+  (双方言 DDL; `symbol` 唯一索引供 upsert; 行内 `collected_at` epoch 为陈旧度基准)。
+  `scripts/check_migrations.py` 通过(101→194 连续)。
+- **调度接线** `src/bootstrap/startup.py` 注册 `orderbook-snapshot-sampler`(interval =
+  `snapshot_interval_sec()`, `max_instances=1`/`coalesce`), 时段守卫在模块内(非交易时段停采)。
+- **测试** 新增 `tests/test_orderbook_snapshot.py`(禁真网络; 库用内存 SQLite): 滚动窗追加/截断/
+  旧→新顺序 · 空盘口不落(0 不冒充) · 取数失败/thsdk 缺失不抛 · 节流跳过 + `force` 绕过 ·
+  非交易时段跳过 · 陈旧度 age 标注 + 超龄 None + env 阈值(含非法回落) · `rebuild_snapshot`
+  往返 float 价格键 · 无快照/库不可达 → None · universe 合并去重上限 + 来源失败不抛(15 例)。
+- **未做/边界**: 读路径(orderbook-ob / klines)仍在请求期打 thsdk —— 下一条提交改『读快照优先 +
+  超龄穿透 + 陈旧度标注』。
+
 ### test-连板梯队快照: 读库零重算 / 幂等 / 回退补写 专项测试（2026-10-14）
 
 - 新增 `tests/test_ladder_snapshot.py`(禁真网络; 落库回环 = 测试 SQLite, 其余全 mock):

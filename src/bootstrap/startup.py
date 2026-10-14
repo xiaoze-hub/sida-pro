@@ -889,6 +889,32 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"快照行情1分钟落库注册失败: {e}")
 
+        # 十档盘口快照采集(2026-10-14, 盘口移出用户请求路径): 交易时段每 15~30s
+        # (ORDERBOOK_SNAPSHOT_INTERVAL_SEC, 默认 20s)对活跃票(自选∪持仓∪当日异动, 带上限)
+        # 拉 thsdk 十档写 orderbook_snapshots。请求端只读快照 + snapshot_age_sec 标注,
+        # 超龄才穿透实时 —— 把 8~12s 的 thsdk 硬超时从用户请求链里挪到后台。
+        # 节流(universe 上限 + 单轮时间预算 + 逐票小睡)防 thsdk 过载; 时段守卫在模块内。
+        try:
+            from src.core import orderbook_snapshot as _obsnap
+
+            _ob_interval = _obsnap.snapshot_interval_sec()
+            rt.scheduler.scheduler.add_job(
+                _obsnap.collect_once,
+                "interval",
+                seconds=_ob_interval,
+                id="orderbook-snapshot-sampler",
+                name="十档盘口快照采集",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info(
+                "十档盘口快照采集已注册(interval %ds, 交易时段内生效, 上限 %d 只)",
+                _ob_interval, _obsnap.max_symbols(),
+            )
+        except Exception as e:
+            logger.error(f"十档盘口快照采集注册失败: {e}")
+
         # 分钟K线 1m 滚动入库(2026-09-10, 数据落库设计 Matrix #2): 每 60s, 交易时段由模块内守卫
         try:
             from src.core.klines_minute import collect_minute_klines_once
