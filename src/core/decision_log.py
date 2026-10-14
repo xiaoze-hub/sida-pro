@@ -39,6 +39,19 @@ MIN_SAMPLE = 30
 #: 回填要求的未来交易日数(与 stats 的 horizon 对齐)
 HORIZONS = (1, 3, 5)
 
+#: 回填候选窗口的"查看"上限(与"填多少"解耦, 见 `backfill_outcomes`; 缺省取 `max(2*limit, 本值)`)。
+#: 生产实证(2026-10-14): `limit=500` 单跑只看 500 条候选, 而积压里 20260925(中秋休市,
+#: 信号日无 K 线, T+n 永远算不出来)的 597 行恰好排在 waiters 最前 → 整跑 0 填。
+DEFAULT_SCAN_CAP = 5000
+
+#: 定时回填单跑的目标填充行数(交易日 18:35)。积压清空靠它: 2026-10-14 实测积压 3270 行
+#: (其中 ~2350 行 K 线早已就绪), 旧的 500/天 口径要 6 天以上才能追上, 期间新信号继续堆。
+BACKFILL_DAILY_LIMIT = 5000
+
+#: 回填终态: 信号日无 K 线锚点(休市/停牌) → T+n 无从起算, 显式标注、收益列保持 NULL。
+#: NULL = 尚未定论(未到期/部分已填), 仍会进候选窗口。
+OUTCOME_NO_ANCHOR = "no_anchor"
+
 
 def _today_cst() -> str:
     return datetime.now(_CST).date().isoformat()
@@ -127,6 +140,39 @@ def _has_regime_column(engine: Engine) -> bool:
         ok = False
     _regime_col_cache[key] = ok
     return ok
+
+
+# outcome_state/outcome_note 列存在性缓存(与 regime 同理, 单独一份)
+_state_col_cache: dict[Any, bool] = {}
+
+
+def _has_outcome_state_column(engine: Engine) -> bool:
+    """decision_log 是否有 `outcome_state` 列(兼容未跑 v197 的老库/老测试库)。永不抛。"""
+    key = (id(engine), str(getattr(engine, "url", "")))
+    hit = _state_col_cache.get(key)
+    if hit is not None:
+        return hit
+    ok = False
+    try:
+        from sqlalchemy import inspect as _inspect
+
+        cols = {c["name"] for c in _inspect(engine).get_columns("decision_log")}
+        ok = "outcome_state" in cols
+    except Exception:  # noqa: BLE001 —— 表不存在/方言异常: 视为无该列
+        ok = False
+    _state_col_cache[key] = ok
+    return ok
+
+
+def _mark_no_anchor(engine: Engine, pid: int, note: str) -> None:
+    """把"信号日无 K 线锚点"的行显式标注(**只写标注, 不碰收益列** —— 不填 0 冒充真值)。"""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE decision_log SET outcome_state = :st, outcome_note = :nt WHERE id = :pid"
+            ),
+            {"st": OUTCOME_NO_ANCHOR, "nt": note, "pid": pid},
+        )
 
 
 def _norm_regime(regime: str | None) -> str | None:
@@ -225,6 +271,7 @@ def backfill_outcomes(
     engine: Engine,
     *,
     limit: int = 500,
+    scan_cap: int | None = None,
     series_provider: Any = None,
 ) -> dict[str, int]:
     """回填 T+1/3/5 收益与命中。
@@ -232,29 +279,74 @@ def backfill_outcomes(
     **只填"未来那根 K 线已经存在"的部分**: 不足 T+n 的只填得出来的那几档,
     一档都填不出来就原样留着(下次再填) —— 不推算、不假设。
     命中定义: 收益 > 0 记 1, ≤0 记 0(**含 0 为未命中**, 不把平盘算成赚)。
+
+    2026-10-14(回填覆盖修复) 改的是"看得见的行轮不到", **不是判定口径**(T+n 仍按信号日
+    起第 n 根可用 K 线, 与既有已回填值同口径 —— 改口径会和存量混算):
+
+    - **查看预算与填充预算解耦**(`scan_cap`, 缺省 `max(2*limit, DEFAULT_SCAN_CAP)`):
+      一份候选里只要有永久不可填的行(信号日无 K 线: 休市/停牌), 老口径下它们每次都被重新
+      选中并**占满 `LIMIT :lim` 窗口** → 后面的行永远轮不到(生产: 20260925 休市 597 行挡在
+      最前, 2026-10-10 10:17 一跑 `scanned=500, filled=0`)。现在照 `scan_cap` 看、按
+      `limit` 填, 不可填的行不再挤掉可填的行。
+    - **不可填的行显式标注**: 信号日那根 K 线缺失(且其后确有 K 线) → 该行 `outcome_state`
+      记 `no_anchor`(原因落 `outcome_note`), 收益列**保持 NULL(绝不填 0)**; 仍以**低优先**
+      留在候选里(K 线后续补齐即自动重新评估并清空标注), 故不会永久掩盖真值。列缺失
+      (未跑 v197)时降级: 不写标注, 但同样不填 0。
+
+    幂等: 已填满的行不进候选(重跑不双计); 标注行重跑无副作用。
+
+    Returns: `{scanned, filled, no_anchor, blocked, no_base}`
+      - `scanned` 实际查看行数(不含已填满的); `filled` 实际回填行数;
+      - `no_anchor` 本轮新标注"信号日无 K 线"的行数; `blocked` 有锚点但至今一档也算不出的行数;
+      - `no_base` 当时没留价(`price_at_signal IS NULL`)的行数 —— 都拿不到就显式计数, 不猜。
     """
-    filled = 0
-    scanned = 0
-    with engine.begin() as conn:
+    filled = scanned = no_anchor = blocked = no_base = 0
+    # 余量一倍: 候选头部若堆着不可填的行(空序列那种不下永久结论的), 也得留够额度够到可填的行。
+    cap = int(scan_cap) if scan_cap else max(2 * int(limit), DEFAULT_SCAN_CAP)
+    has_state = _has_outcome_state_column(engine)
+
+    state_col = "outcome_state" if has_state else "NULL"
+    # 已标注(永远算不出)的行排到最后: 仍会被看到, 但不许占用窗口头部、不许挤掉可填的行。
+    order = (
+        "CASE WHEN outcome_state IS NULL THEN 0 ELSE 1 END, trade_date ASC, id ASC"
+        if has_state
+        else "trade_date ASC, id ASC"
+    )
+    with engine.connect() as conn:
         pend = conn.execute(
             text(
-                "SELECT id, symbol, trade_date, price_at_signal FROM decision_log "
-                "WHERE ret_t5 IS NULL OR ret_t3 IS NULL OR ret_t1 IS NULL "
-                "ORDER BY trade_date ASC LIMIT :lim"
+                f"SELECT id, symbol, trade_date, price_at_signal, {state_col} "
+                "FROM decision_log "
+                "WHERE ret_t1 IS NULL OR ret_t3 IS NULL OR ret_t5 IS NULL "
+                f"ORDER BY {order} LIMIT :cap"
             ),
-            {"lim": int(limit)},
+            {"cap": cap},
         ).fetchall()
 
-    for pid, symbol, day, base in pend:
+    for pid, symbol, day, base, state in pend:
+        if filled >= int(limit):
+            break
         scanned += 1
         if base is None:
             # 当时就没价 → 这里也补不出"当时的价", 只能等(不拿今天的价冒充)
+            no_base += 1
             continue
         provider = series_provider or _close_series_pg
         series = provider(engine, symbol, str(day))
         # series[0] 必须是信号日当根; 否则说明该日无 K 线(停牌/非交易日) → 不硬填
         # (比较走 _norm_day 归一: 账本 trade_date 紧凑格式 vs 系列 ISO 格式, 直接比永远不等)
-        if not series or series[0][0] != _norm_day(day):
+        anchor = _norm_day(day)
+        if not series or series[0][0] != anchor:
+            if not series:
+                # 该标的从信号日起一根 K 线都没有 → 可能只是还没落库, 不下"永久不可填"的结论
+                blocked += 1
+            elif has_state and state is None:
+                _mark_no_anchor(
+                    engine, pid, f"信号日 {anchor} 无 K 线(休市/停牌), T+n 无法起算",
+                )
+                no_anchor += 1
+            else:
+                blocked += 1
             continue
         sets: dict[str, Any] = {}
         for n in HORIZONS:
@@ -264,7 +356,12 @@ def backfill_outcomes(
                 sets[f"ret_t{n}"] = round(ret, 6)
                 sets[f"hit_t{n}"] = 1 if ret > 0 else 0
         if not sets:
+            blocked += 1
             continue
+        if has_state:
+            # 锚点已就绪 → 清掉此前的缺数据标注(不留过期状态)
+            sets["outcome_state"] = None
+            sets["outcome_note"] = None
         assign = ", ".join(f"{k} = :{k}" for k in sets)
         with engine.begin() as conn:
             conn.execute(
@@ -273,7 +370,13 @@ def backfill_outcomes(
             )
         filled += 1
 
-    return {"scanned": scanned, "filled": filled}
+    return {
+        "scanned": scanned,
+        "filled": filled,
+        "no_anchor": no_anchor,
+        "blocked": blocked,
+        "no_base": no_base,
+    }
 
 
 def _horizon_block(n: Any, n1: Any, n3: Any, n5: Any, w1: Any, w3: Any, w5: Any,
@@ -339,6 +442,33 @@ ORDER BY signal_kind, n DESC
     return out
 
 
+def _no_anchor_counts(engine: Engine, since: str) -> dict[str, int]:
+    """按 signal_kind 统计"信号日无 K 线 → T+n 算不出来"的行数(2026-10-14 显式标注)。
+
+    这些行**不进命中分母**(hit_* 为 NULL), 但此前与"还没到 T+n"不可区分, 看板上只能写
+    "无法证实也无法证伪"。现在单独报出来, 让读的人知道分母为什么小。
+    列缺失(未跑 v197)/查询失败 → `{}`(不假装有数据)。
+    """
+    if not _has_outcome_state_column(engine):
+        return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT signal_kind, COUNT(*) FROM decision_log "
+                    "WHERE outcome_state = :st "
+                    "AND ((length(trade_date) = 8 AND trade_date >= :since_c) "
+                    "     OR (length(trade_date) = 10 AND trade_date >= :since)) "
+                    "GROUP BY signal_kind"
+                ),
+                {"st": OUTCOME_NO_ANCHOR, "since": since, "since_c": since.replace("-", "")},
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 —— 列缺失/方言异常 → 无此口径
+        logger.debug("decision stats 缺数据计数不可用: %r", exc)
+        return {}
+    return {str(k): int(v or 0) for k, v in rows}
+
+
 def stats(engine: Engine, *, days: int = 180, min_sample: int = MIN_SAMPLE) -> dict[str, Any]:
     """按信号类型统计命中率。
 
@@ -384,6 +514,15 @@ ORDER BY n DESC
         "min_sample": int(min_sample),
         "rows": out,
         "regime_rows": _regime_rows(engine, since, min_sample),
+        # 缺失显式标注(2026-10-14): 信号日无 K 线的存量行单列出来, 命中分母为什么小有据可查。
+        "no_data": {
+            "state": OUTCOME_NO_ANCHOR,
+            "rows_by_kind": _no_anchor_counts(engine, since),
+            "note": (
+                "outcome_state='no_anchor' = 信号日无 K 线(休市/停牌) → T+n 永远算不出来; "
+                "显式标注、收益列留 NULL(不是 0% 命中), 故不进命中分母。"
+            ),
+        },
         "note": (
             "命中 = T+n 收益 > 0(平盘记未命中); 缺失/未回填一律不计入分母, 不用推算值填充。"
             " regime_rows 为按情绪周期分桶(regime NULL 归 unknown)。"
@@ -432,11 +571,14 @@ def query_log(
         )
         has_reg = _has_regime_column(engine)
         reg_col = "regime, " if has_reg else ""
+        has_state = _has_outcome_state_column(engine)
+        state_col = ", outcome_state, outcome_note" if has_state else ""
         rows = conn.execute(
             text(
                 "SELECT signal_kind, symbol, trade_date, price_at_signal, context_json, source, "
                 f"{reg_col}"
-                "ret_t1, hit_t1, ret_t3, hit_t3, ret_t5, hit_t5, filled_at "
+                "ret_t1, hit_t1, ret_t3, hit_t3, ret_t5, hit_t5, filled_at"
+                f"{state_col} "
                 f"FROM decision_log {cond}ORDER BY trade_date DESC, id DESC LIMIT :lim OFFSET :off"
             ),
             params,
@@ -460,6 +602,10 @@ def query_log(
                 for label, i in (("t1", 6), ("t3", 8), ("t5", 10))
             },
             "filled_at": None if r[12 + off_i] is None else str(r[12 + off_i]),
+            # 缺失显式标注(2026-10-14): 'no_anchor' = 信号日无 K 线, T+n 算不出来(收益列留 NULL);
+            # None = 未到期/部分已填/已回填 —— 前端据此把"没数据"与"还没到"分开显示。
+            "outcome_state": (r[13 + off_i] if has_state else None),
+            "outcome_note": (r[14 + off_i] if has_state else None),
         }
         for r in rows
     ]
@@ -470,7 +616,11 @@ def query_log(
         "limit": lim,
         "has_more": (off + len(items)) < total,
         "items": items,
-        "note": "未回填的档位为 null(需要未来的 K 线才算得出来), 不用推算值填充; 命中 = 收益 > 0(平盘算未命中)。",
+        "note": (
+            "未回填的档位为 null(需要未来的 K 线才算得出来), 不用推算值填充; 命中 = 收益 > 0"
+            "(平盘算未命中)。outcome_state='no_anchor' 表示信号日无 K 线(休市/停牌), 该行 T+n "
+            "永远算不出来 —— 显式标注, 不填 0。"
+        ),
     }
 
 
@@ -497,6 +647,7 @@ def backfill_runner(
     engine: Engine | None = None,
     limit: int = 500,
     series_provider: Any = None,
+    scan_cap: int | None = None,
 ) -> None:
     """作业体: 跑一次回填并把终态落库。**永不抛异常**(后台线程里抛出只丢日志, 无意义)。
 
@@ -512,7 +663,7 @@ def backfill_runner(
             jobs.start(job_id, "backfilling")
         except Exception as exc:  # noqa: BLE001
             logger.warning("决策账本回填: 作业启动落库失败(继续跑回填): %r", exc)
-        out = backfill_outcomes(eng, limit=limit, series_provider=series_provider)
+        out = backfill_outcomes(eng, limit=limit, series_provider=series_provider, scan_cap=scan_cap)
     except Exception as exc:  # noqa: BLE001 —— 显式失败, 不抛
         logger.warning("决策账本回填失败: %r", exc)
         try:
@@ -532,6 +683,7 @@ def spawn_backfill(
     limit: int = 500,
     series_provider: Any = None,
     reason: str = "manual",
+    scan_cap: int | None = None,
 ) -> dict[str, Any]:
     """单飞起一次回填作业(后台线程执行, 立即返回 job_id)。
 
@@ -545,17 +697,25 @@ def spawn_backfill(
         return {"started": False, "running": True, "reason": "回填进行中", "job_id": job_id}
     threading.Thread(
         target=backfill_runner,
-        kwargs={"job_id": job_id, "limit": limit, "series_provider": series_provider},
+        kwargs={"job_id": job_id, "limit": limit, "series_provider": series_provider,
+                "scan_cap": scan_cap},
         name=f"decision-backfill-{reason}",
         daemon=True,
     ).start()
     return {"started": True, "running": True, "reason": None, "job_id": job_id}
 
 
-def backfill_daily_job(*, limit: int = 500) -> dict[str, Any]:
+def backfill_daily_job(
+    *,
+    limit: int = BACKFILL_DAILY_LIMIT,
+    scan_cap: int | None = None,
+) -> dict[str, Any]:
     """调度器入口(交易日 18:35): **非交易日跳过**, 否则单飞起回填作业。
 
     与 signal-nightly-review(18:30) 错开 5 分钟: 那时当日日线已落库, T+1/3/5 才有 K 线可对。
+
+    2026-10-14: 单跑目标从 500 提到 `BACKFILL_DAILY_LIMIT`(5000) —— 500/天 追不平 3000+ 积压,
+    且旧口径下不可填的行会占满窗口(见 `backfill_outcomes`)。
     """
     from datetime import date
 
@@ -567,7 +727,7 @@ def backfill_daily_job(*, limit: int = 500) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 —— 日历缺失/未覆盖 → 显式失败, 禁止回落推测
         logger.warning("决策账本回填: 交易日历不可用, 跳过: %r", exc)
         return {"ok": False, "reason": f"交易日历不可用: {exc!r}"[:200]}
-    return spawn_backfill(limit=limit, reason="scheduled")
+    return spawn_backfill(limit=limit, reason="scheduled", scan_cap=scan_cap)
 
 
 #: regime 历史回填作业 kind(与 outcomes 回填分开单飞)

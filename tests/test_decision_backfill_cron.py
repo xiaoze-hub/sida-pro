@@ -149,11 +149,13 @@ def test_backfill_idempotent_repeat_no_double_count(env):
     dl.record_signal(env, signal_kind="resonance3", symbol="AAA", trade_date="2026-09-10", price=10.0)
     prov = _provider(_FULL_BARS)
     first = dl.backfill_outcomes(env, series_provider=prov)
-    assert first == {"scanned": 1, "filled": 1}
+    assert first == {"scanned": 1, "filled": 1, "no_anchor": 0, "blocked": 0, "no_base": 0}
     stat1 = dl.stats(env, min_sample=1)
 
     second = dl.backfill_outcomes(env, series_provider=prov)
-    assert second == {"scanned": 0, "filled": 0}, "已填满的行不再进 pending → 重跑不双计"
+    assert second == {
+        "scanned": 0, "filled": 0, "no_anchor": 0, "blocked": 0, "no_base": 0,
+    }, "已填满的行不再进 pending → 重跑不双计"
     stat2 = dl.stats(env, min_sample=1)
     assert stat1["rows"][0]["n_total"] == stat2["rows"][0]["n_total"] == 1
     for label in ("t1", "t3", "t5"):

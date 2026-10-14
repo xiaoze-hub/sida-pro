@@ -5401,6 +5401,35 @@ def _m184_decision_log_regime(conn: Connection) -> None:
         )
 
 
+def _m197_decision_log_outcome_state(conn: Connection) -> None:
+    """决策账本补 `outcome_state`/`outcome_note` 列(2026-10-14 回填覆盖修复): 缺失显式标注。
+
+    为什么需要(**生产实证**): 2026-09-25 为中秋休市, 当日却落了 597 条 `resonance3` 信号;
+    这类"信号日无 K 线锚点"的行 T+n **永远算不出来**, 此前只能把收益列留 NULL —— 于是与
+    "还没到 T+n"不可区分, 且每次回填都被重新选中并**占满 `LIMIT :lim` 候选窗口**
+    (生产 2026-10-10 10:17 一跑: `scanned=500, filled=0`), 后面可填的行永远轮不到;
+    分桶统计也因此"无法证实也无法证伪"(T+1 覆盖率长期停在 ~46%)。
+
+    列语义(可空, 不设默认值 → 存量行为 NULL):
+      - NULL      = 尚未定论(未到期 / 部分档已填 / 评估时取不到后续 K 线), **仍会进候选窗口**;
+      - 'no_anchor' = 信号日那根 K 线不存在而之后有 K 线(休市/停牌) → 锚点永久缺失,
+        **显式标注、收益列保持 NULL(绝不填 0)**; 以低优先级保留在候选里, K 线后续补齐即自动
+        重新评估并清空标注。
+    `outcome_note` 存人类可读原因(供明细/报告直读, 不再靠猜)。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表/加列; 两列都用
+    `_add_column_if_missing` 幂等, 重复执行不报错。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "outcome_state",
+        "ALTER TABLE decision_log ADD COLUMN outcome_state TEXT",
+    )
+    _add_column_if_missing(
+        conn, "decision_log", "outcome_note",
+        "ALTER TABLE decision_log ADD COLUMN outcome_note TEXT",
+    )
+
+
 def _m185_dde_minute_flow_table(conn: Connection) -> None:
     """盘中 DDE 大单逐 N 分钟采样序列表 dde_minute_flow(P3 补差 A, 2026-10-10)。
 
@@ -5680,6 +5709,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 自算(+ limit_up_events 聚合), 本表存自算明细/近似标注/诊断; 兼容列同时写
     # market_sentiment_daily, 温度计/API/新鲜度自检零改动。
     Migration(196, "sentiment_selfcalc_daily", _m196_sentiment_selfcalc_daily),
+    # 决策账本回填覆盖修复(2026-10-14): `outcome_state`/`outcome_note` —— 让"信号日无
+    # K 线(休市/停牌)所以永远算不出 T+n"的行**显式标注**, 不再与"还没到 T+n"混为一谈,
+    # 也不再每次占满回填候选窗口(生产: 20260925 中秋休市落 597 行, 挡在 waiters 最前)。
+    Migration(197, "decision_log_outcome_state", _m197_decision_log_outcome_state),
 )
 
 

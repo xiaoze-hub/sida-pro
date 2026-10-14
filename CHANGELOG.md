@@ -1,3 +1,72 @@
+## fix-决策账本回填覆盖缺口(信号日无K线锚点占满候选窗口 + 缺数据显式标注)（2026-10-14）
+
+**背景(只读排查生产, main v0.13.74)**: 决策胜率证据层显示 T+1 只有 1998/5294 行有回填,
+缺 62%, 分桶统计"无法证实也无法证伪"。逐日核 `decision_log`(6759 行, T+1 非空 3489 = 51.6%):
+
+- `resonance3` 块 5294 行(20260918~20260925 一次性灌入)是缺口主体; 20260918/20260921 回填 100%,
+  而 **20260922(835 待填)/20260923(888)/20260924(629) 这三天 klines 明明有却 0 填**(共 2352 行);
+- **20260925 是中秋休市**(klines 全表无该日)却落了 597 条信号 → 信号日无 K 线锚点, T+n 永远算不出来;
+- 作业本身在跑(`app_jobs` 有 18:35 succeeded 记录), 但 **2026-10-10 10:17 一跑返回
+  `{'scanned': 500, 'filled': 0}`** —— 候选窗口被永久不可填的行占满。
+- "1998" 这个数正是 2026-10-10 10:49 那次 `limit=2000` 手动跑(1998 填)留下的; 之后每天 18:35 只推进 ~498 行。
+
+**根因(两条, 都在 `backfill_outcomes`)**:
+1. **查看预算 = 填充预算**: 候选是 `WHERE ret_* IS NULL ORDER BY trade_date ASC LIMIT :lim`
+   (默认 500), 而永久不可填的行(信号日无 K 线: 休市/停牌)每次都被**重新选中并占满这 500 个名额**,
+   后面的可填行永远轮不到 —— 20260925 的 597 行恰好连续排在最前, 一跑就能把窗口全吃掉(`filled=0` 实证)。
+2. **缺数据没有终态标注**: 算不出来的档只留 NULL, 与"还没到 T+n"**不可区分**, 既没法解释分母为什么小,
+   也没法把这种行从窗口里挑出来。
+   (另发现一处口径问题, 本次**不改**: T+n 取的是"信号日起第 n 根可用 K 线", 遇长期停牌会把一个月后的收盘
+   当 T+1 填 —— 生产实证 symbol=300082 信号日 20260918 的下一根是 2026-10-13, `ret_t1=-0.0886` 即由此而来。
+   改口径会和存量已填值混算, 留独立决策。)
+
+**改动**:
+- **`src/web/migrations.py`**: 新增迁移 `197` → `decision_log.outcome_state`/`outcome_note`(可空, 不设默认,
+  存量行 NULL): `NULL` = 尚未定论(仍进候选窗口); `'no_anchor'` = 信号日无 K 线(休市/停牌) → **显式标注,
+  收益列保持 NULL(绝不填 0)**。两列走 `_add_column_if_missing`, 幂等; schema 唯一入口是迁移(AGENTS 铁律)。
+- **`src/core/decision_log.py`**:
+  - `backfill_outcomes(engine, *, limit, scan_cap, series_provider)`: **查看预算与填充预算解耦**
+    (`scan_cap` 缺省 `max(2*limit, 5000)`) —— 不可填的行不再挤掉可填的行; 已标注行按 `CASE WHEN
+    outcome_state IS NULL THEN 0 ELSE 1 END` **排到窗口最后**(仍会被看, K 线补齐即自动重新评估并清空标注,
+    不永久掩盖真值); 信号日无 K 线且其后确有 K 线 → 记 `no_anchor` + 原因(只写标注, 不碰收益列);
+    空序列(可能只是还没落库)只记 `blocked`, 不下永久结论; 返回体扩为
+    `{scanned, filled, no_anchor, blocked, no_base}`(拿不到就显式计数)。**未跑 v197 的老库降级**: 不写标注、不填 0, 照常回填。
+  - `stats()` 新增顶层 `no_data`(`state` / `rows_by_kind` / `note`): 缺 K 锚点的行单列出来,
+    说清"它们不进命中分母(不是 0% 命中)"; 列缺失 → `{}`(不假装有数)。
+  - `query_log()` 明细新增 `outcome_state`/`outcome_note`(读数面直出, 把"没数据"与"还没到"分开);
+    `note` 说明 `no_anchor` 语义。
+  - 调度:`backfill_daily_job` 单跑目标 `500 → BACKFILL_DAILY_LIMIT(5000)`(500/天 追不平 3000+ 积压);
+    `scan_cap` 一路从 `backfill_daily_job`/`spawn_backfill`/`backfill_runner` 透传到 `backfill_outcomes`
+    (手动口子与定时口子同一套语义); 手动 API 参数不变。
+- **`tests/test_decision_backfill_coverage.py`(新增, 18 例, 全离线)**: 钉①迁移幂等/表缺失不炸;
+  ②**核心回归** "不可填的行挡在最前 + limit=1 → 可填的行仍必须填到"(修前该场景 `filled=0`);
+  600 行不可填挡路仍要填到、`scan_cap` 生效、空序列不贴永久标注、`no_base` 显式计数、`limit` 仍生效;
+  ③**绝不填 0**(逐档断言 NULL 且 `!= 0.0`)+ 休市 20260925 生产形态标注 + 标注可被后续 K 线清掉;
+  ④老库无标注列时降级不炸; ⑤`stats().no_data` 与 `query_log` 的 `outcome_state` 可见; ⑥单跑目标 ≥3000、`scan_cap` 透传。
+  同步更新 `tests/test_decision_backfill_cron.py` 里锁返回体形状的断言(补全新计数器, 强度不降)。
+- **不做**: 不改 T+n 判定口径(见上); 不动 `market_data.py`/`caliber_compare.py`/`klines.py`/分片逻辑等本体;
+  不写生产 DB、不发版、不打 tag。
+
+**验收**: `pytest tests/` 全绿; `python scripts/check_is_pg_scope.py` OK; `ruff check` 通过; core 未引 `src.web`。
+**覆盖率(只读干跑同一算法, 生产 6759 行)**: 旧口径单跑填 498 行 → 新口径单跑填 **2558** 行,
+`no_anchor` 597 行(休市, 显式标注)、`blocked` 118 行(有锚点无后续 K 线, 保持 NULL);
+T+1 非空 **3489 → 6047/6759 = 51.6% → 89.5%**。
+
+**回填执行(交主模型, 部署后跑; 本分支不写生产 DB)**: 迁移 197 随应用启动自动执行, 之后二选一
+```bash
+# A. 手动口子(需登录态; limit 上限 5000, 单跑即可清完当前积压)
+curl -sX POST 'https://www.sida.hengsheng-elec.com/api/decisions/backfill?limit=5000' -H "Authorization: Bearer $TOKEN"
+# B. 容器内直调(等效; 幂等可重跑)
+ssh tianxiang@100.91.30.35 'wsl bash -c "docker exec -e PYTHONPATH=/app panwatch python3 -c \
+  \"from src.core.decision_log import backfill_outcomes; from src.db.session import get_write_engine; \
+    print(backfill_outcomes(get_write_engine(), limit=5000))\""'
+# 复核(只读): 期望 T+1 非空 ≈ 6047/6759, 且 outcome_state='no_anchor' 有 597 行(20260925 休市)
+ssh tianxiang@100.91.30.35 'wsl bash -c "docker exec -i panwatch-postgres psql -U sida -d sida -c \
+  \"SELECT count(*) total, count(ret_t1) t1, count(*) FILTER (WHERE outcome_state=\x27no_anchor\x27) no_anchor FROM decision_log;\""'
+```
+若不想手动跑: 交易日 18:35 的 `decision-backfill-daily` 会以 `limit=5000` 自动清完积压。
+另: 存量已填值用的是旧 T+n 口径(见上"不改"), 本次不回写、不重算 —— 如需统一口径属独立决策。
+
 ##### fix-情绪自算盘后主路径改吃limit_up_events(2026-10-14)
 
 - 对表抓到 zdt 会话计数字段盘后清零(与 L2 计数器同族): 盘后跑批涨停/炸板被低估(43/0 vs 真值 76/33): 四指标改以 limit_up_events(K线回填)为真值覆盖, zdt 降级盘中增强/诊断; 资金 0 冒充防线(封住>0 而资金求和为 0 ⇒ 落 None); fetch_events 补 open_count。
