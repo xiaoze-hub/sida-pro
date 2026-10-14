@@ -785,6 +785,30 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"题材情绪调度注册失败: {e}")
 
+        # 连板梯队定型预渲染(2026-10-14): 交易日 16:30 把当日定型 payload 渲进
+        # ladder_daily_snapshot —— /ladder 每请求现算 6.5s(20 天涨停梯队 + 1100+ 只
+        # 个股 OHLC), 请求期改读库(毫秒级) + 盘中只叠加 live 快照当日行。
+        # 16:30 在 limit_up_events 15:35 管线 + 16:05 自检 + 16:00 全市场日线之后
+        # (梯队日K蜡烛要当日 klines), 且本作业纯读库不抢 TQ 客户端; 幂等(同日覆盖)。
+        try:
+            from src.web.api.theme_mood import ladder_snapshot_job
+
+            rt.scheduler.scheduler.add_job(
+                ladder_snapshot_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=16,
+                minute=30,
+                id="theme-mood-ladder-snapshot",
+                name="连板梯队定型预渲染",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("连板梯队定型预渲染已注册(交易日 16:30)")
+        except Exception as e:
+            logger.error(f"连板梯队定型预渲染注册失败: {e}")
+
         # 盘中 DDE 大单逐 N 分钟采样(P3 补差 A, 2026-10-10): 落 dde_minute_flow 序列表,
         # 解锁分时突破「突」的『DDE大单持续流入』判定(此前只有当日快照 → 恒显式降级)。
         # 节拍走 thresholds(minute_dde_sample_min, 默认 5min); 分钟位从 :01 起跳**避开整点拥堵**;

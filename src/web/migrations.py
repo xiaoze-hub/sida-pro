@@ -2683,6 +2683,56 @@ def _m189_mainline_daily_snapshot_table(conn: Connection) -> None:
         )
 
 
+def _m190_ladder_daily_snapshot_table(conn: Connection) -> None:
+    """连板梯队定型日快照表(2026-10-14 定型预渲染落库)。
+
+    背景(审计定性): `/api/theme-mood/ladder` 的 `_ladder_payload` **每次请求重算** ——
+    20 天全市场 limit_up_events + 1100+ 只个股 OHLC 批量查询, 代码注释自证实测 6.5s;
+    且 TTL 盘中仅 30s, 一到期就再吃一次 6.5s。但梯队**历史交易日的连板数不可变**
+    (只随 limit_up_events 落库而定), 盘中唯一会变的只有"当日行"(来自既有
+    ladder_live_state 盘中状态机)。故收盘 cron 预渲染定型 payload 落库, 请求期读库为主。
+
+    字段: window_days(INTEGER) = /ladder 的 `window` 参数(列名避开 window 关键字) /
+    mode(TEXT) auto|finalized|live / date(DATE, 落库日 CST) / payload(TEXT) 完整响应
+    JSON / computed_ts(epoch 秒)。主键 (window_days, mode, date) → 同日重跑幂等覆盖,
+    收盘后那次即当日定稿。先例: _m189 mainline_daily_snapshot(同款 DDL 风格)。
+
+    **合入提醒**: 并行分支 `feat/summary-precompute-20261014` 也申请了 190
+    (`workbench_layer_daily`) —— check_migrations 要求版本 101 起**连续唯一**, 故两支
+    只能有一支保留 190; 后落地的那支需顺延(函数名 `_m190_` → `_m191_` + 注册号 +1)。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ladder_daily_snapshot (
+                    window_days INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    date DATE NOT NULL,
+                    payload TEXT,
+                    computed_ts DOUBLE PRECISION,
+                    PRIMARY KEY (window_days, mode, date)
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ladder_daily_snapshot (
+                    window_days INTEGER NOT NULL,
+                    mode TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    payload TEXT,
+                    computed_ts REAL,
+                    PRIMARY KEY (window_days, mode, date)
+                )
+                """
+            )
+        )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5317,6 +5367,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 市场主线日频快照(2026-10-14 缓存收口): biz_cache 缺失时(重启/换 worker)读库,
     # 免掉冷启动 16~37s 重拉涨停池; date 主键同日覆盖, 收盘后那次即当日定稿。
     Migration(189, "mainline_daily_snapshot", _m189_mainline_daily_snapshot_table),
+    # 连板梯队定型日快照(2026-10-14 定型预渲染落库): 收盘 cron 预渲染当日定型 payload,
+    # 请求期读库为主(6.5s 现算 → 毫秒级), 盘中只叠加 live 快照的当日行; 缺行/落后回退现算。
+    Migration(190, "ladder_daily_snapshot", _m190_ladder_daily_snapshot_table),
 )
 
 

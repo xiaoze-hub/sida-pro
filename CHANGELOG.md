@@ -1,3 +1,45 @@
+### test-连板梯队快照: 读库零重算 / 幂等 / 回退补写 专项测试（2026-10-14）
+
+- 新增 `tests/test_ladder_snapshot.py`(禁真网络; 落库回环 = 测试 SQLite, 其余全 mock):
+  快照 upsert 同日覆盖只留一行 · 收盘预渲染各窗口幂等 · 事件表落后/最新日读不到时不落
+  落后快照(作业 ok=False) · **读库命中 → `_ladder_payload` 一次都不调** · 盘中 live 只叠加
+  当日行(历史 `dates`/`ladder` 逐字不变, `stats` 用 live 日重算; live 日已落进快照或隔日
+  残留一律不叠) · mode=finalized 不叠 live · 只请求 live/finalized 回退读同窗口 'auto' 行
+  且窗口不串用 · 缺行/落后回退现算 + 后台补写(不阻塞、30s 节流、落后 payload 不落库) ·
+  日期格式归一('2026-10-14' vs '20261014' 同交易日) · 读库失败静默回退 · 响应字段集与现算
+  路径逐键一致(前端零改动)。
+
+### feat-连板梯队定型 payload 收盘预渲染落库(6.5s 现算 → 读库秒开)（2026-10-14）
+
+审计定性: `/api/theme-mood/ladder` 的 `_ladder_payload` **每次请求重算** —— 20 天全市场
+`limit_up_events` + 1100+ 只个股 OHLC 批量查询(代码自注释: 实测 6.5s), TTL 盘中仅 30s
+一到期就再吃一次 6.5s; 但梯队**历史交易日的连板数不可变**(只随 `limit_up_events` 落库而
+定), 盘中唯一会变的只有"当日行"(既有 `ladder_live_state` 盘中状态机)。
+
+- **建表** `src/web/migrations.py` 新增 `Migration(190, "ladder_daily_snapshot", ...)`
+  (双方言 DDL: `window_days`/`mode`/`date` 复合主键 + `payload` TEXT + `computed_ts`;
+  `window_days` 即 `/ladder` 的 `window` 参数, 列名避开 window 关键字)。DDL 风格对齐
+  `:189 mainline_daily_snapshot`; `scripts/check_migrations.py` 通过(101→190 连续)。
+  **合入提醒**: 并行分支 `feat/summary-precompute-20261014` 也申请了 190
+  (`workbench_layer_daily`), 而门禁要求版本 101 起**连续唯一** —— 两支只能留一支用 190,
+  后落地的那支需顺延到 191(函数名 + 注册号一起改)。
+- **收盘 cron**: `src/web/api/theme_mood.py::ladder_snapshot_job` + `startup.py` 注册
+  (`theme-mood-ladder-snapshot`, 交易日 16:30 —— 在 events 15:35 管线 / 16:05 自检 /
+  16:00 全市场日线之后, 且纯读库不抢 TQ 客户端)。按 `_WINDOWS`(10/20/30)逐窗口预渲染定型
+  payload, 同日同 (window, mode) 幂等覆盖; 事件表未到最新定型日或最新日读不到 → **不落
+  落后快照**(作业返回 ok=False → 作业框架判 failed, 不假装成功)。
+- **请求期取数** 改走 `_ladder_serve`: 读库为主(单行索引读, 毫秒级) + 盘中只叠加 live
+  快照的**当日行**(`_overlay_live` —— 历史日原封不动来自快照, 不重算; live 日已落进快照
+  或 Redis 隔日残留一律不叠, 免得同一天出两列); 另加**落后门禁**(`limit_up_events` MAX >
+  快照末日期 → 该快照不得服务, 否则静默吞掉一个已定型的交易日)。
+- **冷路径兜底**: 快照缺行/落后 → 回退 `_ladder_payload` 现算(与改造前同成本) + **后台**
+  补写快照(每 (window, mode) 30s 节流, 失败静默), 且仅在能确认覆盖到事件表最新定型日时
+  落库。落库前剥掉 live 字段(`_snapshot_candidate`)—— 存的是"截至最新定型日"的定型视图,
+  不被盘中数据污染。
+- **响应结构不变**: 字段集与 `_ladder_payload` 逐键一致(`mode/live_day/live_as_of/stale/
+  note_closing/degraded/stats` + 路由层新鲜生成的 `as_of`), 前端零改动; `warm_caches`
+  预热同走快照路径。
+
 ### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
 
 落库缺口审计: `/api/market/mainline` 用**模块内进程 dict**(60s per spec)—— 多 worker

@@ -17,6 +17,10 @@ POST /api/theme-mood/scan/run                 手动触发扫描(后台线程)
 
 口径唯一事实源: src/core/theme_mood.py(设计见 docs/research/题材情绪分_设计方案_20260912.md)。
 响应信封由全局中间件(src/web/response.py)统一包装。
+
+连板梯队定型预渲染(2026-10-14): `_ladder_serve` 取代请求期现算 —— 收盘 cron(交易日
+16:30)把当日定型 payload 渲进 `ladder_daily_snapshot`(迁移 190), 请求期读库为主(毫秒级)
++ 盘中只叠加 live 快照的当日行; 快照缺行/落后回退 `_ladder_payload` 现算并后台补写。
 """
 from __future__ import annotations
 
@@ -182,17 +186,19 @@ def _latest_date() -> str | None:
 
 @router.get("/ladder")
 def get_ladder(window: int = Query(20, ge=5, le=60), mode: str = Query("auto")):
-    """连板梯队(带两级缓存, 2026-09-26)。
+    """连板梯队(带两级缓存, 2026-09-26; 定型预渲染读库, 2026-10-14)。
 
-    实测该接口 6.5s(20 天全市场涨停梯队 + 全部个股 OHLC 批量查询), 每进一次页面都重算。
-    现按交易时段缓存: 盘中 30s / 收盘后 30min。`as_of` 每次新鲜生成, 不随缓存变旧。
+    改造前实测该接口 6.5s(20 天全市场涨停梯队 + 全部个股 OHLC 批量查询), 每进一次
+    页面都重算。现在取数走 `_ladder_serve`: 收盘预渲染的 `ladder_daily_snapshot`
+    读库为主(毫秒级) + 盘中只把 live 快照的当日行叠加; 快照缺行/落后才回退现算并
+    后台补写。`as_of` 每次新鲜生成, 不随缓存变旧。
     """
     if mode not in ("auto", "finalized", "live"):
         raise HTTPException(400, "mode 仅支持 auto/finalized/live")
     ttl = _cache_ttl()
     payload, cached = _cached(
         f"biz:tm:ladder:{window}:{mode}", ttl,
-        lambda: _ladder_payload(window, mode),
+        lambda: _ladder_serve(window, mode),
         worth=lambda p: bool(p.get("ladder")),
     )
     from datetime import datetime, timezone
@@ -498,6 +504,7 @@ def warm_caches() -> dict:
     """收盘后预热(供 18:40 调度器调用, 见 market_breadth_scheduler)。
 
     用前端默认参数算一次并写长 TTL, 让用户晚上/次日打开就命中缓存。
+    梯队走 `_ladder_serve`(读定型快照为主) —— 16:30 收盘预渲染已落库, 预热不再吃 6.5s。
     """
     out: dict = {}
     for w, top in ((20, 15),):
@@ -510,13 +517,312 @@ def warm_caches() -> dict:
             out[f"board:{w}:{top}"] = {"error": repr(e)[:120]}
         for mode in ("auto",):
             try:
-                payload = _ladder_payload(w, mode)
+                payload = _ladder_serve(w, mode)
                 if payload.get("ladder"):
                     biz_cache.set_json(f"biz:tm:ladder:{w}:{mode}", payload, ttl=_TTL_CLOSED)
                     out[f"ladder:{w}:{mode}"] = {"days": len(payload.get("ladder") or []), "cached": True}
             except Exception as e:  # noqa: BLE001
                 out[f"ladder:{w}:{mode}"] = {"error": repr(e)[:120]}
     return out
+
+
+# ── 定型 payload 收盘预渲染落库(2026-10-14)─────────────────────────────────
+# 背景(审计定性): `_ladder_payload` **每次请求重算** —— 20 天全市场涨停梯队 +
+# 1100+ 只个股 OHLC 批量查询(自注释: 实测 6.5s), 而 TTL 盘中仅 30s, 到期即再算。
+# 事实: 梯队**历史交易日的连板数不可变**(只随 limit_up_events 落库而定), 盘中唯一会
+# 变的只有"当日行"(既有 ladder_live_state 盘中状态机)。故三层:
+#   ① 收盘 cron(交易日 16:30, 见 src/bootstrap/startup.py)预渲染当日定型 payload 落库;
+#   ② 请求期 = 读库为主(单行索引读, 毫秒级) + 盘中只把 live 快照的**当日行**叠加(纯内存);
+#   ③ 冷路径 = 快照缺行/落后 → 回退现有 `_ladder_payload` 现算, 并**后台**补写快照(不阻塞)。
+# 响应结构不变(前端零改动): 字段集与 `_ladder_payload` 完全一致。
+_SNAPSHOT_TABLE = "ladder_daily_snapshot"
+# 预渲染窗口 = 前端可选窗口(_WINDOWS)。**不能拿 20 日快照切出 10 日**: 连板数是"沿给定
+# 日期序列回溯"算的, 切掉更早的历史日会让切片里的早期日连板数被低估, 故逐窗口各一份。
+SNAPSHOT_WINDOWS = tuple(_WINDOWS)
+# 收盘时 auto/finalized/live 三模式结果同构(收盘后 `_live_snapshot` 一律 None →
+# mode=finalized), 故只渲一份 'auto'; 请求期再按**请求 mode** 决定是否允许叠加 live。
+SNAPSHOT_MODE = "auto"
+_SNAPSHOT_WRITE_THROTTLE_S = 30.0   # 冷路径后台补写节流(同 market_mainline 的 30s)
+_snapshot_lock = threading.Lock()
+_snapshot_write_ts: dict[tuple, float] = {}
+
+
+def _cst_today() -> str:
+    """落库日(CST, 'YYYY-MM-DD') —— 与快照表 date 列口径一致。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+
+def _norm_date(v) -> str:
+    """日期归一为紧凑 'yyyymmdd'。
+
+    事件表 `trade_date` 是双方言 TEXT 'YYYYMMDD', 但快照列的**落库日**是 'YYYY-MM-DD'
+    (对齐 mainline_daily_snapshot 的日期语义) —— 比较前统一归一, 免得 '2026-10-13' 与
+    '20261013' 这种格式漂移把"同一交易日"判成不同(落后门禁会静默失效)。
+    """
+    digits = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return digits[:8]
+
+
+def _latest_event_date() -> str | None:
+    """limit_up_events 最新交易日(走 ix_limit_up_events_date 的 MAX, 毫秒级)。"""
+    try:
+        rows = _read("SELECT MAX(trade_date) AS d FROM limit_up_events", {})
+        return rows[0]["d"] if rows and rows[0]["d"] else None
+    except Exception as e:  # noqa: BLE001 — 判不了就不判(由 payload 自身兜底)
+        logger.debug("[theme-mood] 梯队事件表最新日读取失败: %r", e)
+        return None
+
+
+def _read_snapshot_row(window: int, mode: str) -> tuple[dict, str] | None:
+    """读最近一行快照: 先精确 (window, mode), 缺则回退 (window, 'auto')。
+
+    返回 (payload, date); 无行/脏行/读库失败一律 None(调用方现算兜底, 不 500)。
+    """
+    from sqlalchemy import text
+
+    from src.db.session import engine
+
+    modes = [str(mode)] if str(mode) == SNAPSHOT_MODE else [str(mode), SNAPSHOT_MODE]
+    try:
+        with engine.begin() as conn:
+            for m in modes:
+                row = conn.execute(
+                    text(
+                        f"SELECT payload, date FROM {_SNAPSHOT_TABLE} "
+                        "WHERE window_days = :w AND mode = :m ORDER BY date DESC LIMIT 1"
+                    ),
+                    {"w": int(window), "m": m},
+                ).first()
+                if not row:
+                    continue
+                raw = row[0]
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(payload, dict) and payload.get("ladder") and payload.get("dates"):
+                    return payload, str(row[1])
+        return None
+    except Exception as e:  # noqa: BLE001 — 快照不可用 → 现算兜底
+        logger.debug("[theme-mood] 梯队快照读取失败(回退现算): %r", e)
+        return None
+
+
+def _write_snapshot_row(window: int, mode: str, date: str, payload: dict) -> bool:
+    """upsert 一行快照(主键 (window_days, mode, date) → 同日重跑幂等覆盖)。失败静默。"""
+    if not payload:
+        return False
+    from sqlalchemy import text
+
+    from src.db.dialect import upsert_sql
+    from src.db.session import engine
+
+    try:
+        stmt = upsert_sql(
+            _SNAPSHOT_TABLE,
+            ["window_days", "mode", "date", "payload", "computed_ts"],
+            ["window_days", "mode", "date"],
+            ["payload", "computed_ts"],
+        )
+        with engine.begin() as conn:
+            conn.execute(
+                text(stmt),
+                {
+                    "window_days": int(window), "mode": str(mode), "date": str(date),
+                    "payload": json.dumps(payload, default=str, ensure_ascii=False),
+                    "computed_ts": time.time(),
+                },
+            )
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[theme-mood] 梯队快照写入失败(静默): %r", e)
+        return False
+
+
+def _snapshot_candidate(payload: dict) -> dict | None:
+    """从现算 payload 取**定型视图**(可落库那份): 无数据 → None。
+
+    盘中现算时 `payload['ladder']` 的历史日全部来自 limit_up_events(已定型、不可变),
+    盘中态只在 `live_day` 里 —— 故落库前把 live 字段清空, 存的就是"截至最新定型日"的
+    定型 payload, 不会被盘中数据污染。
+    """
+    if not isinstance(payload, dict) or not payload.get("ladder") or not payload.get("dates"):
+        return None
+    ladder = payload["ladder"]
+    return {
+        "dates": list(payload["dates"]),
+        "ladder": ladder,
+        "note": payload.get("note"),
+        "mode": "finalized",
+        "live_day": None,
+        "live_as_of": None,
+        "stale": False,
+        "degraded": payload.get("degraded"),
+        "note_closing": None,
+        "stats": _ladder_stats(ladder, None),
+    }
+
+
+def _write_snapshot_async(window: int, mode: str, date: str, payload: dict) -> None:
+    """后台线程补写快照(每 (window, mode) 30s 节流; 失败静默, 绝不阻塞请求)。"""
+    key = (int(window), str(mode))
+    now = time.monotonic()
+    with _snapshot_lock:
+        if now - _snapshot_write_ts.get(key, 0.0) < _SNAPSHOT_WRITE_THROTTLE_S:
+            return
+        _snapshot_write_ts[key] = now
+
+    def _runner() -> None:
+        try:
+            _write_snapshot_row(window, mode, date, payload)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[theme-mood] 梯队快照后台补写失败(静默): %r", e)
+
+    threading.Thread(target=_runner, name="theme-mood-ladder-snap", daemon=True).start()
+
+
+def _snapshot_base(window: int, mode: str) -> dict | None:
+    """可用快照(定型 base); 缺行/落后/脏行 → None(调用方现算兜底)。
+
+    **落后门禁**: 库里已有比快照更新的定型交易日(limit_up_events MAX > 快照末日期) →
+    该快照不得服务 —— 否则会静默吞掉一个已定型的交易日; 此时走现算 + 后台补写。
+    """
+    row = _read_snapshot_row(window, mode)
+    if not row:
+        return None
+    payload, _snap_date = row
+    dates = payload.get("dates") or []
+    if not dates:
+        return None
+    latest = _latest_event_date()
+    if latest and _norm_date(latest) > _norm_date(dates[-1]):
+        return None
+    return payload
+
+
+def _overlay_live(base: dict, mode: str) -> dict:
+    """把盘中 live 快照的**当日行**叠加到定型 base 上(历史日一律来自快照, 不重算)。
+
+    live 只在 mode ∈ (auto, live) 且 live 日**晚于** base 末日期时叠加 ——
+    live 日已落进 base、或 Redis 里是隔日残留, 一律不叠(免得同一天出两列)。
+    """
+    out = dict(base)
+    dates = list(out.get("dates") or [])
+    snap = _live_snapshot() if mode in ("auto", "live") else None
+    live_day = None
+    if snap:
+        cand = snap.get("live_day")
+        if cand and (not dates or _norm_date(cand.get("date")) > _norm_date(dates[-1])):
+            live_day = cand
+    closing = bool(live_day and snap and snap.get("closing"))
+    out["mode"] = "live" if live_day else "finalized"
+    out["live_day"] = live_day
+    out["live_as_of"] = (snap["meta"]).get("last_ok") if (live_day and snap) else None
+    out["stale"] = bool(live_day and snap and snap["meta"].get("stale"))
+    out["note_closing"] = "收盘撮合中, 稍后定型" if closing else None
+    if "degraded" not in out:
+        out["degraded"] = None
+    out["stats"] = _ladder_stats(out.get("ladder") or [], live_day)
+    return out
+
+
+def _ladder_serve(window: int, mode: str) -> dict:
+    """/ladder 取数(2026-10-14): 快照读库为主 + 盘中 live 叠加当日行 + 缺行回退现算。
+
+    命中快照时**不碰** `_ladder_payload`(零重算); 未命中/落后时现算(与改造前同成本)
+    并后台补写快照, 让下一个请求(含其它 worker)直接命中。响应字段集与
+    `_ladder_payload` 完全一致(前端零改动)。
+    """
+    base = _snapshot_base(window, mode)
+    if base is not None:
+        return _overlay_live(base, mode)
+
+    payload = _ladder_payload(window, mode)
+    cand = _snapshot_candidate(payload)
+    if cand is not None:
+        latest = _latest_event_date()
+        # 只有"**能确认**覆盖到事件表最新定型日"的 payload 才落库 —— 落后快照会污染后续读,
+        # 而事件表最新日读不到(空表/查询异常)时无从确认, 故不落库(不确定就不写)。
+        if latest and _norm_date(latest) == _norm_date(cand["dates"][-1]):
+            _write_snapshot_async(window, mode, _cst_today(), cand)
+    return payload
+
+
+def _render_ladder_snapshots() -> dict:
+    """收盘预渲染: 各窗口定型 payload 落库(幂等 —— 同日同 (window, mode) 覆盖)。不抛异常。"""
+    out: dict = {"ok": True, "date": _cst_today(), "events_latest": None,
+                 "windows": {}, "wrote": 0, "skipped": 0}
+    latest = _latest_event_date()
+    out["events_latest"] = latest
+    for w in SNAPSHOT_WINDOWS:
+        try:
+            payload = _ladder_payload(w, SNAPSHOT_MODE)
+        except Exception as e:  # noqa: BLE001 — 单窗口失败不连坐其它窗口
+            out["ok"] = False
+            out["windows"][w] = {"error": repr(e)[:120]}
+            continue
+        cand = _snapshot_candidate(payload)
+        if cand is None:
+            out["ok"] = False
+            out["windows"][w] = {"skipped": "无数据(limit_up_events 空)"}
+            out["skipped"] += 1
+            continue
+        if not latest or _norm_date(latest) != _norm_date(cand["dates"][-1]):
+            # 事件表还没到最新定型日(15:35 管线 / 16:05 自检未成), 或最新日读不到
+            # → 不落"落后快照"(落库前提是能确认覆盖到最新定型日)
+            out["ok"] = False
+            out["windows"][w] = {"skipped": f"事件表最新 {latest} != 梯队末日 {cand['dates'][-1]}"}
+            out["skipped"] += 1
+            continue
+        saved = _write_snapshot_row(w, SNAPSHOT_MODE, out["date"], cand)
+        out["wrote"] += 1 if saved else 0
+        if not saved:
+            out["ok"] = False
+        out["windows"][w] = {"days": len(cand["dates"]), "saved": saved,
+                             "latest_day": cand["dates"][-1]}
+    if not out["wrote"]:
+        out["ok"] = False
+        out.setdefault("reason", "没有窗口落库成功")
+    return out
+
+
+def spawn_ladder_snapshot(reason: str = "scheduled") -> dict:
+    """单飞起一次定型预渲染(后台线程, 立即返回)。沿用作业框架, 作业面板可见。"""
+    job_id, is_new = jobs.create("theme_mood_ladder_snapshot", "连板梯队定型预渲染")
+    if not is_new:
+        return {"started": False, "reason": "预渲染进行中", "job_id": job_id}
+
+    def _runner() -> None:
+        try:
+            jobs.start(job_id, "rendering")
+            out = _render_ladder_snapshots()
+            if jobs.finish(job_id, out, context="连板梯队定型预渲染: "):
+                logger.info("连板梯队定型预渲染完成(%s): %s", reason, out)
+            else:
+                logger.warning("连板梯队定型预渲染未成(%s): %s", reason, out)
+        except Exception as e:  # noqa: BLE001
+            jobs.fail(job_id, str(e))
+            logger.warning("连板梯队定型预渲染失败: %s", e)
+
+    threading.Thread(target=_runner, name="theme-mood-ladder-snapshot", daemon=True).start()
+    return {"started": True, "reason": None, "job_id": job_id}
+
+
+def ladder_snapshot_job() -> dict:
+    """调度器入口(交易日 16:30): 收盘定型 payload 预渲染; 非交易日/未到点**跳过**。
+
+    16:30 的取时理由: limit_up_events 的 15:35 增量管线 + 16:05 自检 + 16:00 全市场日线
+    **之后**(梯队日K蜡烛要当日 klines), 且本作业纯读库不抢 TQ 客户端。
+    """
+    from src.core import theme_mood
+
+    try:
+        if not theme_mood.is_settle_due_now():
+            return {"skipped": True, "reason": "未到定型点或非交易日"}
+    except Exception as e:  # noqa: BLE001 — 日历不可用 → 保守跳过
+        return {"skipped": True, "reason": f"交易日历不可用: {e!r}"[:120]}
+    return spawn_ladder_snapshot(reason="scheduled")
+
 
 def _ladder_payload(window: int, mode: str) -> dict:
     """连板梯队(v0.5.81) + 定型炸板/断板/当日K(v0.5.85) + 盘中实时(v0.5.86, 见 live 分支)。
