@@ -285,15 +285,54 @@ def _read_fresh_db_snapshot() -> dict | None:
     }
 
 
+def _boards_to_inout(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """板块 items → (流入榜 top10, 流出榜 top10)。net_inflow 缺失的板块不参与排序
+    (此前 or 0.0 把"无数据"当 0, 会挤占榜单); 正/负筛选, 无正(负)则对应榜为空列表。"""
+    valid = [b for b in (items or []) if isinstance(b, dict) and b.get("net_inflow") is not None]
+    s = sorted(valid, key=lambda b: b["net_inflow"], reverse=True)
+    inflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),
+         "change_pct": b.get("change_pct")}
+        for b in s[:10]
+        if b["net_inflow"] > 0
+    ]
+    outflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),  # 亿(负=流出)
+         "change_pct": b.get("change_pct")}
+        for b in reversed(s[-10:])
+        if b["net_inflow"] < 0
+    ]
+    return inflow, outflow
+
+
+def _fresh_board_inout(board_type: str = "industry") -> tuple[list[dict], list[dict]] | None:
+    """读够新的板块资金快照并派生流入/流出榜; 无够新快照/读取失败 → None(不编造)。"""
+    try:
+        from src.core import board_flow_sampler as _bfs
+
+        snap = _bfs.read_fresh(board_type)
+    except Exception:  # noqa: BLE001
+        return None
+    if not snap:
+        return None
+    return _boards_to_inout(snap.get("items") or [])
+
+
 def _snapshot_to_response(snap: dict) -> dict:
     """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
 
     字段名/结构与实时分支保持一致(前端不改), 仅新增来源标注字段; 快照表**未存**的
-    字段(成交额/指数点位涨跌/板块明细/创业板主力)一律显式置空 —— 不编造、不补 0。
-    口径标签沿用现网口径(eastmoney4, 见 docs/_frozen/caliber_matrix.md), 并显式标注
-    为「由快照继承」而非行内自带。
+    字段(成交额/指数点位涨跌/创业板主力)一律显式置空 —— 不编造、不补 0。
+    板块明细(2026-10-14 收口)改为从 board_flow_snapshots 读够新快照派生; 无够新
+    板块快照时置空(不编造)。口径标签沿用现网口径(eastmoney4,
+    见 docs/_frozen/caliber_matrix.md), 并显式标注为「由快照继承」而非行内自带。
     """
     has_funds = snap.get("total_main_flow") is not None
+    board_inout = _fresh_board_inout("industry")
+    if board_inout is not None:
+        inflow_boards, outflow_boards = board_inout
+    else:
+        inflow_boards, outflow_boards = [], []
     resp = {
         # 资金类字段(快照表存了这些)
         "total_main_flow": snap.get("total_main_flow"),  # 亿
@@ -305,8 +344,10 @@ def _snapshot_to_response(snap: dict) -> dict:
         "sh": None,
         "sz": None,
         "cyb": None,
-        "inflow_boards": [],
-        "outflow_boards": [],
+        # 板块明细: 从板块资金快照读库派生(收口前恒空)
+        "inflow_boards": inflow_boards,
+        "outflow_boards": outflow_boards,
+        "board_source": "db_snapshot" if board_inout is not None else None,
         # 市场统计(家数快照表存了)
         "up_count": snap.get("up_count"),
         "down_count": snap.get("down_count"),
@@ -316,6 +357,7 @@ def _snapshot_to_response(snap: dict) -> dict:
         "data_source": "db_snapshot",
         "data_origin": "market_flow_snapshots",
         "breadth_source": "db_snapshot",
+        "snapshot_used": True,
         "snapshot_ts": snap.get("snapshot_ts"),
         "snapshot_age_sec": snap.get("snapshot_age_sec"),
         "timestamp": snap.get("snapshot_ts"),
@@ -325,8 +367,8 @@ def _snapshot_to_response(snap: dict) -> dict:
         "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定 "
                          "(口径由已落库快照继承)",
         "caliber_source": "db_snapshot_inherited",
-        "note": "读自已落库大盘资金快照(非实时外呼); 快照表未存成交额/指数点位/板块明细, "
-                "已显式置空, 不编造。",
+        "note": "读自已落库大盘资金快照(非实时外呼); 板块明细读板块资金快照; "
+                "快照表未存成交额/指数点位, 已显式置空, 不编造。",
     }
     if not has_funds:
         # 库里最新快照仅含涨跌家数(网关故障期间采样器落的行) → 显式降级, 不补 0
@@ -687,33 +729,20 @@ async def market_capital_flow_proxy():
                 if isinstance(_d.get("change_pct"), (int, float)):
                     _d["change_pct"] = round(_d["change_pct"] / 100, 2)
         # 2. 板块资金明细(同花顺 hyzjl 行业, 流入/流出榜)
+        from src.core import board_flow_sampler as _bfs
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         boards = md.board_capital_flow(board_type="industry") or []
         # P1(audit-20260915): net_inflow 缺失的板块不参与排序
-        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置)
-        boards_valid = [b for b in boards if b.net_inflow is not None]
-        boards_sorted = sorted(
-            boards_valid, key=lambda b: b.net_inflow, reverse=True
-        )
-        inflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿
-                "change_pct": b.change_pct,
-            }
-            for b in boards_sorted[:10]
-            if b.net_inflow > 0
-        ]
-        outflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿(负=流出)
-                "change_pct": b.change_pct,
-            }
-            for b in reversed(boards_sorted[-10:])
-            if b.net_inflow < 0
-        ]
+        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置) —— 排序/筛选逻辑
+        # 统一收口到 _boards_to_inout(与库读分支同口径)。
+        board_items = [_bfs.board_to_item(b) for b in boards]
+        inflow_boards, outflow_boards = _boards_to_inout(board_items)
+        # 板块资金采样落库(节流, 后台线程): 供板块端点与大盘资金库读分支复用
+        try:
+            _bfs.try_write_async("industry", board_items)
+        except Exception:  # noqa: BLE001
+            pass
         result = {
             # 两市主力净流入(对齐同花顺APP)
             "total_main_flow": ov.get("total_main_flow"),      # 亿
@@ -731,6 +760,9 @@ async def market_capital_flow_proxy():
             "outflow_boards": outflow_boards,
             "source": "eastmoney_push2delay_cn",
             "breadth_source": "cn_gateway",
+            # 收口(2026-10-14): 无够新大盘资金快照 → 走实时并**显式标注**(不静默)
+            "snapshot_used": False,
+            "snapshot_note": "库内无够新大盘资金快照(或非交易时段), 走实时链路",
             # 口径标签(B3/3.4): 主力净流入为按单金额四档归类(资金面参考),
             # 板块明细为同花顺行业资金 —— 均禁止用于主力意图判定(AGENTS.md 红线)
             "caliber": "eastmoney4",

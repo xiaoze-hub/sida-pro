@@ -1,3 +1,21 @@
+### feat-大盘资金端点全接入(库读分支含板块明细·快照缺失显式标注)（2026-10-14）
+
+资金类落库收口 ③: `/api/market-data/market-capital-flow` 此前是**半接入** —— 够新读
+`market_flow_snapshots` 的资金/家数字段, 但板块明细(流入/流出榜)在库读分支**恒空**
+(快照表没存), 功能弱于实时分支; 走实时分支时也不标注「为什么没读库」。
+
+- **收口** `_snapshot_to_response`: 板块明细改为从 `board_flow_snapshots`(m191) 读**够新**
+  快照派生(与实时分支同口径), 新增 `board_source`(有快照=db_snapshot / 无快照=None,
+  显式置空不编造) + `snapshot_used=True`。
+- **统一口径** 新增 `_boards_to_inout()`(净额降序取流入 top10 / 最负 10 取流出, 缺失
+  net_inflow 不参与排序) + `_fresh_board_inout()`; 实时分支的板块流入/流出榜改用同一
+  函数(此前是就地手写排序, 两分支口径有漂移风险)。
+- **显式缺失** 实时分支新增 `snapshot_used=False` + `snapshot_note`(「库内无够新大盘
+  资金快照(或非交易时段), 走实时链路」), 并顺带把行业板块采样落库(节流 180s)。
+- **测试**(禁真网络): 新增 `tests/test_market_capital_flow_full.py`(库读分支含板块明细·
+  缺板块快照显式置空 board_source=None·板块快照过旧置空·无快照回源并显式标注
+  snapshot_used/note·`_boards_to_inout` 排序与缺失过滤口径)。
+
 ### feat-板块资金采样落库(board_flow_snapshots·够新读库/过旧回源+stale)（2026-10-14）
 
 资金类落库收口 ②: `/api/market-data/board-capital-flow` **完全现拉**同花顺行业/概念
