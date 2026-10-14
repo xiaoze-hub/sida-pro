@@ -387,6 +387,33 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"连板梯队数据自检注册失败: {e}")
 
+        # 市场情绪序列**本地自算**(2026-10-14 用户决策: 不购通达信云数据 Key)。
+        # 原产者 TqSentimentScheduler(云 get_scjy_value, 15:35)永久弃用(生产断在
+        # 2026-09-23, 已改为 expected_gap 静默跳过); 情绪四指标(涨停/炸板/封板资金/
+        # 连板)改由客户端本地接口自算: get_zdt_data 全市场分片(≤50/次, 事故铁律) +
+        # get_pricevol 取候选价量 + limit_up_events 聚合连板。落 market_sentiment_daily
+        # 兼容列 + sentiment_selfcalc_daily 明细表 ⇒ 温度计/API/新鲜度自检零改动。
+        # 15:45 选点: 15:35 的妖股因子增量管线(内含 limit_up_events 当日回填)已跑完,
+        # 且与 15:40 共振扫描 / 15:50 条件选股(重装备 TQ)错开 —— TQ 背后只有一个客户端进程。
+        try:
+            from src.core.sentiment_selfcalc import run_selfcalc_job
+
+            rt.scheduler.scheduler.add_job(
+                run_selfcalc_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=45,
+                id="sentiment-selfcalc-daily",
+                name="市场情绪序列本地自算",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("市场情绪序列本地自算已注册(交易日 15:45)")
+        except Exception as e:
+            logger.error(f"市场情绪序列本地自算注册失败: {e}")
+
         # 市场情绪序列自检 + 自愈(2026-10-11 断链修复): 每日 16:20。
         # market_sentiment_daily(TQ get_scjy_value SC01-35 全量落库)曾停在 2026-09-22
         # 无人知 —— 每日同步(15:35)一旦失败只写一条日志, 且无表新鲜度自检(哨兵的

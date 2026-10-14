@@ -1,3 +1,59 @@
+### update-SC期待降级(新鲜度自检改自算 + 15:35 同步静默跳过 expected_gap)（2026-10-14）
+
+承接上一条(自算产者)。本提交把**对云 SC 的期待**从主链上摘掉: 不再空转重试 / 不再空转告警。
+
+- **`src/core/sentiment_freshness.py`**: 自检目标即**自算序列**(同一张 `market_sentiment_daily`
+  兼容列); 自愈主路径换成**本地自算** `_default_selfcalc`(`sentiment_selfcalc.selfcalc_for_date`,
+  以**期望最新交易日**为目标); 云 `get_scjy_value` 降级为**可选增强源** —— 新增
+  `sc_enhancement_enabled()`(`SIDA_SENTIMENT_SC_ENHANCEMENT=1` 才启用, **默认关闭**),
+  关闭时 `backfill_missing` **一次都不调**, 无数据不告警。快照型接口补不回历史 ⇒ 断点与新边缘
+  之间的交易日显式列进 `historic_gaps` 并写进 reason/通知(**不假装补好**); 作业失败判据 =
+  最新期望交易日仍缺(可自愈的那一档), 内层缺口不再制造"永久红"。
+- **`src/core/tq_sentiment_scheduler.py`**: SC 云序列退役 —— `SC_RETIRED=True`, 每日 15:35 与
+  启动回补都只打 `expected_gap` 标记(**零网络 / 零 ERROR / 不进告警链**), 保留调度器与 registry
+  接线(直接删会让系统自检报"调度器缺失"这种假故障; 云数据若恢复置 False 即原地复活)。
+- **测试**: `tests/test_sentiment_freshness.py` 按新语义更新(自算注入, 禁真网络)并新增
+  "默认完全不碰 SC" / "opt-in 才并入" / "历史缺口显式列出" 三例;
+  `tests/test_tq_sentiment_scheduler.py` 新增 expected_gap 静默跳过、退役后不触网、启动回补 no-op。
+
+### feat-情绪序列本地自算替代云SC(涨停/炸板/封板资金/连板落库)（2026-10-14）
+
+用户决策: **不购买通达信云数据 Key** —— SC/GP **云**函数永久放弃(生产已断在 2026-09-23),
+情绪序列改由客户端**本地接口**自算。本提交只放自算产者; 对云 SC 的期待降级(新鲜度/调度)见下一条。
+
+- **新增** `src/core/sentiment_selfcalc.py`: 盘后用本地接口自算四指标, 落
+  `market_sentiment_daily` **兼容列**(温度计/`/api/market/sentiment`/新鲜度自检零改动即读到)
+  + 新表 `sentiment_selfcalc_daily`(明细/诊断/近似标注)。
+  ① 涨停家数 = `get_zdt_data` 全市场真涨停候选家数(复用 `limit_pool_zdt.parse_zdt_snapshot`,
+  与本仓 SC3 v1「涨停/曾涨停」口径一致);
+  ② 炸板家数 = `OpenTimesZT>0` **或** 曾涨停未封住 —— **封住判定走 `limit_up_events` 生成侧同一口径**
+  (收盘价 ≥ `limit_rules.limit_up_price(昨收)`, 禁自创第二套), 故炸板 ⊆ 涨停、炸板比语义不崩;
+  ③ 连板家数 = `limit_up_events` 聚合(走 `market_phase.consecutive_boards` 单一事实源; 生产传交易日历,
+  否则中间没涨停的日子被跳过 ⇒ 连板数高估);
+  ④ 封板成功/失败资金 = 封单量(`FDVolMaxZT`, 手)×100×收盘价 按封住/未封分侧求和, 落库口径与 SC15 一致
+  (**亿元**), 表里 `approximation=1` + extra 写明近似来源(`FDVolMaxZT` 是当日**最大**封单量, 非收盘瞬时);
+  派生炸板比/封板成功率一律委托 `sentiment_thermometer.derive_thermometer`(全仓单一口径)。
+- **口径诚实(不猜)**: `get_zdt_data.ZDTStatusNow` 枚举本仓未标定 ⇒ **只做交叉核对**(原始值分布 +
+  与封住判定的冲突计数进 extra), 不据它单独判"封住"; 取不到价量的候选单独计数(`price_missing`),
+  既不计成功也不计失败; **候选全都没价量时封板资金落 None(不落 0)** —— 0 会污染封板成功率基线;
+  分片铁律: 单次 TQ 请求 ≤50 只、连续 2 片失败即**中止**
+  (绝不压测式重试 —— 那是 2026-09-23 压死客户端的做法); 快照无真涨停条目 / 全A码表空 ⇒
+  **ok=False 不落库**(不落 0 污染 20 日均值基线); 当日无 `limit_up_events` ⇒ 连板落 None 不落 0。
+- **迁移 196** `sentiment_selfcalc_daily`: 四指标 + 派生 + 诊断(候选/封住/炸板次数/价量缺失/分片失败)
+  + `approximation` / `caliber`(`close_ge_limit_price`) / `money_unit`(亿元) / `extra`, 唯一键
+  (trade_date, market)。兼容列写入用 `COALESCE`(**只填空位**) ⇒ 重复跑幂等, 且云 SC 真值若日后并入仍优先。
+  ⚠️ **迁移号取 196 而非 195**: main 的 `_m195_ai_pattern_shadow`(AI 看图形态影子层已合入)
+  已占用 195, 撞号会让 checksum 不符导致双方反复重跑、互相覆盖记录。
+- **调度** `src/bootstrap/startup.py`: 交易日 **15:45** `sentiment-selfcalc-daily`。选点理由: 15:35 的妖股
+  因子增量管线(内含 `limit_up_events` 当日回填)已跑完, 且与 15:40 共振扫描 / 15:50 条件选股(重装备 TQ)
+  错开 —— TQ 背后只有一个客户端进程。
+- **测试** `tests/test_sentiment_selfcalc.py`(全离线, 数据源全注入): 封住口径与 `limit_rules` 逐字一致 ·
+  ST 5% 线确实改变结论 · 四指标数值(手→股→元→亿元) · 炸板 ⊆ 涨停 · 价格缺失显式且不计入两侧 ·
+  zdt 状态冲突只计数不改结论 · 连板不传日历会高估(口径钉子) · 无当日事件落 None · 分片 ≤50 +
+  连续 2 片失败即中止 · 编排成功 / 三种显式失败(中止·无真涨停·码表空) · 落库幂等 + **不覆盖已有真值**
+  + 失败态拒绝写半行。
+
+### feat-AI看图形态影子证据层(渲染→视觉LLM认形态→与规则形态对照落库)（2026-10-14）
 #### fix-ai_pattern_shadow迁移window保留字(2026-10-14)
 
 - PG 保留字 `window` 致迁移195建表语法错、v0.13.71 部署回滚；列改名 window_n(DDL/SELECT/写入三处)，success=0 行由 runner 自动重试。

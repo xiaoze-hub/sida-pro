@@ -3,26 +3,35 @@
 
 背景(破案结论)
 ------------
-`market_sentiment_daily`(TQ `get_scjy_value` SC01-35 全量落库)在生产**停在
+`market_sentiment_daily`(原 TQ `get_scjy_value` SC01-35 全量落库)在生产**停在
 2026-09-22** 无人知, 而决策账本信号到 09-25 之后还在产 —— 情绪温度计/regime/胜率
 分桶验证都取不到当日温度。属「断链无人知」类:
 
 - 采集器**接线在**(`TqSentimentScheduler`, 每交易日 15:35, 见 `startup.py`),
   不是"没调度";
 - 但每日同步一旦失败(`sync_sentiment_series` 把 TQ 异常吞成 `{"error"}` 只写一条
-  日志、调度器只 `logger.warning`)就**不显眼**, 且**没有表新鲜度自检** ——
-  `data_quality_sentinel` 的 `tq_gateway` 检查只探"网关可不可达", **不校验
-  `market_sentiment_daily` 的 `MAX(trade_date)`**; 启动回补又只在表近空
-  (`< 30 行`)时才触发 → 中途断一次就永久停在断点。
+  日志、调度器只 `logger.warning`)就**不显眼**, 且**没有表新鲜度自检**;
+- 启动回补又只在表近空(`< 30 行`)时才触发 → 中途断一次就永久停在断点。
+
+2026-10-14 改口径(用户决策: **不购买通达信云数据 Key**)
+---------------------------------------------------
+SC/GP **云**函数永久放弃(生产断在 2026-09-23)。本表的产者换成
+`src.core.sentiment_selfcalc`(**客户端本地接口自算**: get_zdt_data/get_pricevol +
+`limit_up_events` 聚合, 每交易日 15:45). 于是:
+
+- ``check()`` 的**自检目标就是自算序列**(同一张 `market_sentiment_daily`, 兼容列);
+- 自愈走 **本地自算**(快照型接口只能算"最近一个已收盘交易日", 故历史缺口**补不回来** ——
+  显式列进 ``historic_gaps``, 不假装补好);
+- `get_scjy_value` 降级为**可选增强源**: 默认**关闭**
+  (`SIDA_SENTIMENT_SC_ENHANCEMENT=1` 才启用), 无数据**不告警**、不再空转重试。
 
 本模块(纯核心层, 不引 src.web —— B4.1)
 ------------------------------------
 - ``check()``            : 比对 `market_sentiment_daily` 最新交易日 vs 期望最新交易日,
                           缺则 ``stale=True`` 并列出缺失交易日;
-- ``backfill_missing()`` : TQ 直连**批量补全缺失交易日**(SC 是市场级序列, 一次调用
-                          覆盖整段窗口; 幂等 upsert), **重试/降级诚实**(失败显式计数,
-                          绝不静默返回成功);
-- ``guard()``            : stale → 补数 → 复检, 返回诚实作业态;
+- ``backfill_missing()`` : **可选增强源**专用 —— 云 SC 直连批量补全(幂等 upsert);
+                          默认链路不再调用它(见上);
+- ``guard()``            : stale → **本地自算** → 复检, 返回诚实作业态;
 - ``run_sentiment_freshness_job()``: cron 入口, 走作业框架(``ok=False → failed``),
                           落后即写通知(断链显式告警)。
 
@@ -35,6 +44,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -51,6 +61,18 @@ BACKFILL_LOOKBACK_DAYS = 60
 DEFAULT_RETRIES = 3
 #: 重试退避(秒)。测试注入 ``sleep_fn`` 为 no-op 即不真等。
 RETRY_BACKOFF_S = 1.5
+
+
+def sc_enhancement_enabled() -> bool:
+    """云 SC(`get_scjy_value`)是否作为**可选增强源**启用。默认关闭。
+
+    用户决策(2026-10-14): 不购通达信云数据 Key ⇒ 生产断在 2026-09-23。默认关闭后
+    本模块**不再对云 SC 空转重试/告警**; 若日后重新拿到云数据, 置
+    ``SIDA_SENTIMENT_SC_ENHANCEMENT=1`` 即恢复"有数据就并入"的旧路径(真值优先)。
+    """
+    return str(os.environ.get("SIDA_SENTIMENT_SC_ENHANCEMENT", "")).strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 # ── 交易日历口径(复用 ladder_freshness 的唯一事实源, 避免第二套日历) ──────────
@@ -133,7 +155,10 @@ def backfill_missing(
     retries: int = DEFAULT_RETRIES,
     sleep_fn=None,
 ) -> dict:
-    """TQ 直连**批量补全缺失交易日**(幂等; 重跑安全)。
+    """云 SC(``get_scjy_value``)**批量补全缺失交易日**(幂等; 重跑安全)。
+
+    ⚠️ 2026-10-14 起这是**可选增强源**专用路径(默认不启用, 见 ``sc_enhancement_enabled``):
+    日常自愈走本地自算。保留本函数供"日后重新拿到云数据"时并入真值, 以及手动运维补历史。
 
     SC 是市场级序列, 一次 `get_scjy_value` 调用即返回整段窗口 → 无需逐日循环。
     **重试/降级诚实**: 失败按 ``retries`` 次重试; 仍失败 → ``ok=False`` + 显式
@@ -215,15 +240,37 @@ def _default_sleep(seconds: float) -> None:
 
 # ── 自检 + 自愈 ─────────────────────────────────────────────────────────────
 
+def _default_selfcalc(trade_date: str) -> dict:
+    """默认自愈路径: 用本地接口自算指定交易日并落库(2026-10-14)。
+
+    快照型接口(`get_zdt_data`)只能给"最近一个已收盘交易日" ⇒ 这里只可能把
+    **最新期望交易日**补上; 更早的缺口补不回来(由 ``guard`` 显式列进 ``historic_gaps``)。
+    """
+    from src.core import sentiment_selfcalc as sc
+
+    out = sc.selfcalc_for_date(trade_date)
+    return {
+        "ok": bool(out.get("ok")),
+        "trade_date": out.get("trade_date"),
+        "written": int(out.get("written") or 0),
+        "error": None if out.get("ok") else (out.get("reason") or "本地自算未成功"),
+    }
+
+
 def guard(
     now: datetime | None = None,
     *,
     latest_fn=latest_sentiment_date,
+    selfcalc_fn=None,
     backfill_fn=None,
 ) -> dict:
-    """自检 → 缺则补数 → 复检。返回诚实作业态(``ok`` False = 仍缺, 判 failed)。
+    """自检 → 缺则**本地自算** → 复检。返回诚实作业态(``ok`` False = 仍缺, 判 failed)。
 
     幂等: 无缺口时不触发任何补数(纯读)。
+
+    2026-10-14 改: 自愈主路径从"云 SC 批量补数"换成"本地自算"
+    (``selfcalc_fn``, 缺省 ``_default_selfcalc``); 云 SC 降级为**可选增强源**
+    (``backfill_fn``, 仅 ``SIDA_SENTIMENT_SC_ENHANCEMENT=1`` 时调用, 失败**不告警**)。
     """
     chk = check(now, latest_fn=latest_fn)
     if chk["ok"]:
@@ -233,34 +280,67 @@ def guard(
             "backfilled": 0,
             "backfill_attempts": 0,
             "backfill_error": None,
+            "selfcalc_ok": False,
+            "sc_enhancement": None,
+            "historic_gaps": [],
             "recovered": True,
         }
 
-    bf = backfill_fn or backfill_missing
+    expected = chk["expected"]
+
+    sc_fn = selfcalc_fn or _default_selfcalc
     try:
-        res = bf(chk["missing"]) if chk["missing"] else {}
+        res = sc_fn(expected) or {}
     except Exception as e:  # noqa: BLE001
-        logger.exception("sentiment-freshness 补数异常: %s", e)
-        res = {"ok": False, "rows": 0, "attempts": 0, "error": str(e)}
+        logger.exception("sentiment-freshness 本地自算异常: %s", e)
+        res = {"ok": False, "written": 0, "error": str(e)}
+
+    # 可选增强源: 云 SC —— 默认关闭(用户决策不购云 Key), 关闭时**完全不碰**
+    enh = None
+    if sc_enhancement_enabled():
+        bf = backfill_fn or backfill_missing
+        try:
+            enh = bf(chk["missing"])
+        except Exception as e:  # noqa: BLE001 —— 增强源失败不该拖垮主判据
+            logger.warning("sentiment-freshness SC 增强源补数异常: %s", e)
+            enh = {"ok": False, "rows": 0, "error": str(e)}
 
     chk2 = check(now, latest_fn=latest_fn)
+    latest2 = chk2["latest"]
+    ok = latest2 is not None and str(latest2) >= expected
+
+    # 自算只能补最新交易日 ⇒ 上次断点到新边缘之间的交易日**补不回来**, 显式列出(不假装)
+    historic: list[str] = []
+    if latest2 is not None and chk["latest"] is not None:
+        historic = [d for d in _missing_days(chk["latest"], str(latest2)) if d != str(latest2)]
+
     reason = None
-    if not chk2["ok"]:
+    if not ok:
+        why = res.get("error") or res.get("reason") or "无返回"
         reason = (
-            f"市场情绪序列仍缺 {len(chk2['missing'])} 个交易日 "
-            f"(最新 {chk2['latest']} < 期望 {chk2['expected']}), "
-            f"补数 {'成功' if res.get('ok') else '未完成'}"
+            f"市场情绪序列仍缺(最新 {latest2} < 期望 {expected}); "
+            f"本地自算{'成功' if res.get('ok') else '未完成'}: {why}"
         )
-        if res.get("error"):
-            reason += f": {res['error']}"
+        if enh is not None and not enh.get("ok"):
+            reason += f"; SC 增强源: {enh.get('error')}"
+    elif historic:
+        reason = (
+            f"最新交易日已补上({latest2}), 但 {len(historic)} 个历史交易日"
+            f"({historic[0]}…{historic[-1]}) 快照型接口无法回补 —— 显式记录, 不假装补好"
+        )
     return {
         **chk2,
-        "latest_before": chk["latest"],
-        "backfilled": int(res.get("rows") or 0),
-        "backfill_attempts": int(res.get("attempts") or 0),
-        "backfill_error": res.get("error"),
-        "recovered": chk2["ok"],
+        "ok": ok,
+        "stale": not ok,
         "reason": reason,
+        "latest_before": chk["latest"],
+        "backfilled": int(res.get("written") or 0),
+        "backfill_attempts": 1 if res else 0,
+        "backfill_error": res.get("error"),
+        "selfcalc_ok": bool(res.get("ok")),
+        "sc_enhancement": enh,
+        "historic_gaps": historic,
+        "recovered": ok,
     }
 
 
@@ -283,10 +363,12 @@ def _notify_stale(info: dict, now: datetime) -> None:
         body = (
             f"market_sentiment_daily 最新 {info.get('latest')} 日, "
             f"期望 {info.get('expected')} 日, 缺 {len(info.get('missing') or [])} 个交易日。"
-            f"补数{'未完成' if not info.get('recovered') else '已完成'}"
+            f"本地自算{'' if info.get('selfcalc_ok') else '未完成'}"
         )
         if info.get("backfill_error"):
-            body += f"(TQ: {info['backfill_error']})"
+            body += f"(自算: {info['backfill_error']})"
+        if info.get("historic_gaps"):
+            body += f"; 历史 {len(info['historic_gaps'])} 个交易日快照型接口无法回补"
         owners: list[str] = []
         try:
             db = SessionLocal()

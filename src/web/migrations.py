@@ -2874,6 +2874,75 @@ def _m193_board_flow_snapshots_table(conn: Connection) -> None:
     )
 
 
+def _m196_sentiment_selfcalc_daily(conn: Connection) -> None:
+    """情绪序列**本地自算**明细/诊断表 sentiment_selfcalc_daily(2026-10-14)。
+
+    ⚠️ 迁移号取 **196**(不是 195): 生产 `schema_migrations` 里 195 已被姊妹分支
+    `ai_pattern_shadow` 占用(实测 `195|ai_pattern_shadow|success=0`), 撞号会让
+    `has_pending_migrations` 因 checksum 不符反复重跑并互相覆盖记录。
+
+    背景(用户决策): 不购买通达信云数据 Key, SC/GP **云**函数永久放弃(生产已断在
+    2026-09-23)。情绪序列改由客户端本地接口自算(`src.core.sentiment_selfcalc`:
+    get_zdt_data + get_pricevol + get_stock_list + limit_up_events 聚合)。
+
+    为什么另起一张表而不是只写 market_sentiment_daily:
+      · 自算的封板资金是**近似**(封单量×收盘价), 需要一个显式标注位(`approximation`)
+        与原始元金额/口径标识留痕 —— market_sentiment_daily 的列是 SC 口径, 不该塞私货;
+      · 诊断量(候选数/封住数/炸板次数分布/价量缺失数/分片失败数)供审计复核,
+        不进被温度计高频读取的主表。
+    兼容列(涨停/炸板/连板/封板资金)仍**同时**写入 market_sentiment_daily,
+    温度计/API/新鲜度自检零改动即可读到。
+
+    单位: 家数=家; `seal_*_money` = 亿元(与 SC15 同口径, `money_unit` 显式登记)。
+    """
+    if _has_table(conn, "sentiment_selfcalc_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE sentiment_selfcalc_daily (
+  id {id_col},
+  trade_date TEXT NOT NULL,
+  market TEXT NOT NULL DEFAULT 'CN',
+  limit_up_count INTEGER,
+  limit_up_open_count INTEGER,
+  streak_count INTEGER,
+  seal_success_money REAL,
+  seal_fail_money REAL,
+  seal_success_rate REAL,
+  blow_ratio REAL,
+  candidates INTEGER,
+  sealed_count INTEGER,
+  open_times_gt0 INTEGER,
+  price_missing INTEGER,
+  chunks_total INTEGER NOT NULL DEFAULT 0,
+  chunks_failed INTEGER NOT NULL DEFAULT 0,
+  approximation INTEGER NOT NULL DEFAULT 1,
+  caliber TEXT NOT NULL DEFAULT 'close_ge_limit_price',
+  money_unit TEXT NOT NULL DEFAULT '亿元',
+  source TEXT NOT NULL DEFAULT 'tdx_selfcalc',
+  extra TEXT NOT NULL DEFAULT '{{}}',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "uq_sentiment_selfcalc_daily",
+        "CREATE UNIQUE INDEX uq_sentiment_selfcalc_daily "
+        "ON sentiment_selfcalc_daily(trade_date, market)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_sentiment_selfcalc_daily_date",
+        "CREATE INDEX ix_sentiment_selfcalc_daily_date "
+        "ON sentiment_selfcalc_daily(trade_date)",
+    )
+
+
 def _m194_orderbook_snapshots_table(conn: Connection) -> None:
     """十档盘口快照采集表 orderbook_snapshots(2026-10-14, 盘口移出请求路径)。
 
@@ -5606,6 +5675,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 「渲染→视觉 LLM 认形态」并与规则形态(kline_patterns)同日同票对照落库, 只读用,
     # 不改任何现有信号/决策/展示。先例: _m188 limit_strength_shadow。
     Migration(195, "ai_pattern_shadow", _m195_ai_pattern_shadow),
+    # 情绪序列本地自算(2026-10-14): 用户决策**不购通达信云数据 Key**, SC/GP 云函数永久
+    # 放弃(生产断在 2026-09-23)。情绪四指标(涨停/炸板/封板资金/连板)改由客户端本地接口
+    # 自算(+ limit_up_events 聚合), 本表存自算明细/近似标注/诊断; 兼容列同时写
+    # market_sentiment_daily, 温度计/API/新鲜度自检零改动。
+    Migration(196, "sentiment_selfcalc_daily", _m196_sentiment_selfcalc_daily),
 )
 
 
