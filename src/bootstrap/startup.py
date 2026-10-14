@@ -667,6 +667,32 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"板块资金快照采样注册失败: {e}")
 
+        # 暗盘逐笔后台增量采集(2026-10-14, 冷启动移出请求路径): 每 60s 一轮。
+        # 此前逐笔缓存过期后**在用户请求路径上**增量翻页(无缓存时整轮全量, 冷启动
+        # 秒级~十几秒)。本作业对"最近被请求过"的股票(LRU 热码表, 请求路径自动登记)
+        # 做增量续拉 —— 只拉缓存末游标之后的页 —— 使请求端常态命中 90s 缓存零翻页;
+        # 缓存空/跨日的请求期兜底保留(冷启动一次)。间隔必须 < _TICKS_TTL(90s), 由
+        # sampler_interval_s() 保证(环境变量越界会被钳回默认)。时段守卫内建(非交易
+        # 时段直接 skip, 零网络请求)。
+        try:
+            from src.core.dark_flow_sampler import collect_once as darkflow_tick_collect
+            from src.core.dark_flow_sampler import sampler_interval_s
+
+            _interval = int(sampler_interval_s())
+            rt.scheduler.scheduler.add_job(
+                darkflow_tick_collect,
+                "interval",
+                seconds=_interval,
+                id="darkflow-tick-sampler",
+                name="暗盘逐笔增量采集",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("暗盘逐笔增量采集已注册(每 %ss, 交易时段内生效)", _interval)
+        except Exception as e:
+            logger.error(f"暗盘逐笔增量采集注册失败: {e}")
+
         # 三指标共振全市场扫描(2026-09-11 数智决策升级): 交易日 15:40(收盘后)
         # 用我们自己的实现(非客户端复刻公式), 落库 resonance_scan 供页面/回看
         try:

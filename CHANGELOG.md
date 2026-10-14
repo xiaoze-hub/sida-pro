@@ -1,3 +1,70 @@
+### feat-暗盘逐笔采集纳入自选∪持仓池(轮转切片, 免"当天首次点开"冷启动)（2026-10-14）
+
+补齐上两条的一个空洞: 只刷"热码(最近被请求过)"的话, **某只票当天第一次被点开时冷启动
+仍然发生在请求路径上** —— 而那正是本次审计要消除的东西(热码表只能覆盖"已经点开过"的票)。
+
+- **改** `src/core/dark_flow_sampler.py`: `collect_once` 的标 = 热码(最近请求, 优先) +
+  **自选∪持仓池**(`quote_snapshots.collect_market_symbols` 的 CN, 复用既有函数不另建口径;
+  池子缓存 300s, 上限 300, 取不到/`DARK_FLOW_UNIVERSE_DISABLED` 置位即退回"只刷热码")。
+  池子按**轮转切片**刷新(每轮 `_BATCH_PER_RUN`), 且轮转按"本轮实际取走的池子标的数"推进 ——
+  按批大小推进会跳过中间的票(热码占位时每轮少取一只 → 步长 2 会永久跳过奇数位), 单测锁死。
+  `universe_codes()` 公开供 diag; `sampler_stats()` 增 `universe` / `universe_age_sec`;
+  `collect_once` 摘要增 `targets`。
+- **测试** `tests/test_darkflow_bg_collect.py` 增 5 例(全 mock, 不联网/不依赖真实自选库):
+  池子取 CN∪转腾讯 code(非 CN/非法跳过) + 缓存 TTL 内不再打库 · 环境变量可关 · 库不可用
+  静默为空 · **未经请求的池子标的也会被采集** · 热码优先 + 轮转 5 轮覆盖全池(不跳号)。
+
+### feat-暗盘逐笔采集调度接线 + 请求端缓存快照元数据 diag（2026-10-14）
+
+承接上一条(后台增量采集器)。请求端从此常态读的是后台刚推进过的缓存, 冷启动兜底只在
+"缓存空/跨日"时触发一次 —— 本提交把调度接上, 并把"读到的到底是新鲜缓存还是降级兜底"
+暴露给运维, 不靠猜。
+
+- **接线** `src/bootstrap/startup.py`: 注册 `darkflow-tick-sampler`(interval 默认 60s, 紧挨
+  `board-flow-sampler` 之后)。作业自身时段守卫(非交易时段直接 skip, 零网络请求), 间隔由
+  `sampler_interval_s()` 保证 < TTL。
+- **请求端** `src/web/api/darkflow.py`: `diag` 加法扩展(既有字段与语义一字不动) ——
+  `cache_origin`(`cache|incremental|cold|reset|l2|none`)、`snapshot_age_sec`、`cache_fresh`、
+  `tick_cursor{page,seq}`、`pages_fetched`(**0 = 全程零翻页, 实证走的是缓存**)、`degraded`、
+  `degrade_reason`、`degrade_sec`(上游已停更时长)、`cache_day`; 新增运维杠杆
+  `POST /api/dark-flow/collect`(仅 owner)手动推一轮采集, 返回本轮摘要 + 采集器状态。
+- **TQ L2 维持现状**: `decision_pioneer.fetch_tq_l2` 未订阅月无值的行为不动, 本次不碰。
+- **测试**: `tests/test_darkflow_bg_collect.py` 增 diag 两个用例(正常缓存 / 降级可见)与
+  `/collect` 端点用例(全 mock, 不联网); `tests/test_darkflow_ops.py::test_diag_forwarded`
+  同步新增 diag 键(mock `tick_snapshot_info` 固定元数据, 不随跑测机器的缓存状态漂移)。
+
+### feat-暗盘逐笔转后台增量采集(冷启动移出请求路径 + 游标续拉判据修复)（2026-10-14）
+
+审计定性(勿重查): `src/core/dark_flow.py` 的逐笔翻页 —— 无缓存时整轮全量(冷启动; 文件内
+自注释: 分钟接口 swings 场景实测 ~15s)、缓存过期时增量补拉 —— **都跑在用户请求路径上**;
+90s TTL 一过, 又轮到某个倒霉的请求去翻页。本次把"推进游标"挪到后台, 请求端常态只读缓存。
+
+- **新增** `src/core/dark_flow_sampler.py`(仿 `board_flow_sampler`/`market_flow_sampler` 成熟
+  模式): 热码表(LRU ≤300; 请求路径自动 `register_code`, 30min 无请求即退出采集) +
+  `collect_once()` 每轮对热码跑一次**增量续拉**(只拉末游标之后的页)。间隔默认 60s —— 必须
+  < `_TICKS_TTL`(90s), 环境变量越界(≥TTL/非法/非正)一律钳回默认, 防请求端读到过期缓存;
+  时段守卫内建(非交易时段直接 skip, 零网络请求)。**不新增表**: 逐笔持久化继续走既有
+  `DiskCache`(按交易日分 key, 重启自动回血), 不再存第二份逐笔副本。
+- **改** `src/core/dark_flow.py`:
+  - `_fetch_all_ticks_inner` 拆出主体 `_fetch_ticks_locked` + 加 **per-code 锁**: 后台采集与
+    请求期补齐并发同一只票时串行化(原会各从同一游标往后拉、写回互相覆盖/丢笔)。
+    `_fetch_all_ticks`/`_fetch_all_ticks_inner` 增 `force`(后台忽略 TTL 短路以主动推进游标;
+    请求路径默认 False, 语义与改造前完全一致)。
+  - **游标续拉判据修复**: 原判据 `min(seq) >= old_last_seq` 与"末页**整页重拉**"的做法自相
+    矛盾 —— 一页 ≥2 行时 `min(seq)` 必小于旧末 seq, 于是**每次缓存过期都走"序号断裂 → 全量
+    重拉"**(实测: 第二次请求仍翻 15 页 = 全量), 增量续拉名存实亡, 后台采集器若无此修复会
+    60s 一轮全量重拉。改判"是否仍在向前推进": `max(seq) >= old_last_seq`(含相等 = 末页原样),
+    只有 seq 倒退(盘中数据重置/跨日残留)才全量重拉。增量批 10 → 4(常态只新增 1~2 页,
+    实测上游请求量降到约 1/3; 全量路径仍 batch=10)。
+  - 新增拉取元数据与后台入口: `tick_snapshot_info()`(快照年龄 `snapshot_age_sec` / 游标
+    `cursor_page`+`cursor_seq` / 来源 `cache|incremental|cold|reset|l2|none` / 本轮
+    `pages_fetched` / `degraded`+`degraded_sec`)、`refresh_ticks()`(不抛, 返回摘要)。
+    **降级显式**: 交易时段翻页成功但零新笔 → `degraded` + 原因 + "已停更 N 秒"起点(连续降级
+    起点不归零), 返回旧快照, 不补 0、不编造。`clear_ticks_cache` 连元数据一起清。
+- **测试** `tests/test_darkflow_bg_collect.py`(禁真网络, urlopen 全 mock): 冷启动一次 → 增量
+  只从末游标起(断言不重翻第 0 页) / 缓存命中零翻页 / TTL 边界(89s 命中、91s 续拉, TTL≥90 契约) /
+  seq 倒退仍全量重拉 / 降级显式(含连续降级起点保持) / 采集器 skip·热码刷新·单只失败不抛 /
+  间隔 < TTL 且越界钳回默认 / 热码 LRU 与活跃窗口 / 清缓存连元数据。
 ### feat-盘口读路径改『读快照优先 + 超龄穿透 + 陈旧度标注』（2026-10-14）
 
 承接上一条(采集器建好)。本提交把 `orderbook-ob` 与 klines summary 的盘口读路径从

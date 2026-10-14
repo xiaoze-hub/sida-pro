@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 import urllib.request
 from zoneinfo import ZoneInfo
 
@@ -114,7 +116,150 @@ def _tencent_code(symbol: Symbol) -> str | None:
 _TICKS_CACHE: dict[str, tuple[float, list[dict], int, int, str]] = {}
 # 2026-08-20 修复: 分钟接口冷启动 ~15s(swings 需翻页拉全量逐笔)。前 _TICKS_TTL=30s
 # 配合前端 30s 轮询, 几乎每次都冷启动。改为 90s TTL, 保证连续轮询命中缓存。
+# 2026-10-14(暗盘逐笔转后台): 冷启动(全量翻页)从请求路径挪到后台采集器
+# (`src/core/dark_flow_sampler.py`, 60s 一轮增量续拉) —— 请求端常态命中本缓存,
+# **零翻页**; 缓存空/跨日仍保留请求期兜底(冷启动一次)。本 TTL 仍是语义下限
+# (≥ 前端轮询节奏, 且 > 后台采集间隔), 不再提供下调入口。
 _TICKS_TTL = 90.0
+
+# ── 拉取元数据 / per-code 锁(2026-10-14 后台增量采集)───────────────────────
+# 元数据供两处用: ① 请求端 diag(一眼看出"新鲜缓存"还是"上游降级兜底"+ 游标位置);
+# ② 后台采集器摘要(本轮翻了几页/新拉了几笔/是否降级)。
+# per-code 锁: 后台采集与请求期增量补齐可能并发同一只票, 必须串行化, 否则两个
+# 线程各自从同一游标往后拉、合并写回时互相覆盖(丢笔/重复)。
+_FETCH_META: dict[str, dict] = {}
+_META_LOCK = threading.Lock()
+_CODE_LOCKS: dict[str, threading.Lock] = {}
+_META_MAX = 512
+
+
+def _code_lock(code: str) -> threading.Lock:
+    """取(或惰性创建)该 code 的翻页互斥锁(有界: 超限时只淘汰未持有的条目)。"""
+    with _META_LOCK:
+        lk = _CODE_LOCKS.get(code)
+        if lk is not None:
+            return lk
+        if len(_CODE_LOCKS) > _META_MAX:
+            for k in [k for k, v in _CODE_LOCKS.items() if not v.locked()][: _META_MAX // 4]:
+                _CODE_LOCKS.pop(k, None)
+                _FETCH_META.pop(k, None)
+        lk = threading.Lock()
+        _CODE_LOCKS[code] = lk
+        return lk
+
+
+def _record_fetch_meta(code: str, had_cache: bool, stale_pre: bool, stats: dict) -> None:
+    """记录本轮拉取元数据(供 diag/采集器; 不抛)。origin 由"是否真翻页"推导, 不再各分支手写。"""
+    try:
+        cached = _TICKS_CACHE.get(code)
+        pages = int(stats.get("page_calls") or 0)
+        new_ticks = int(stats.get("new_ticks") or 0)
+        explicit = stats.get("origin")      # 分支内显式标注(如 reset/l2)优先
+        if explicit:
+            origin = explicit
+        elif pages == 0:
+            origin = "cache" if had_cache else "none"
+        elif not had_cache:
+            origin = "cold"          # 缓存空 → 请求期/后台冷启动全量拉
+        elif stale_pre:
+            origin = "reset"         # 跨日/旧格式 → 全量重拉
+        else:
+            origin = "incremental"   # 游标续拉(只拉 last_page 之后的页)
+        degraded, reason = False, None
+        prev_meta: dict = {}
+        with _META_LOCK:
+            prev_meta = dict(_FETCH_META.get(code) or {})
+        if pages > 0 and new_ticks == 0:
+            # 翻页成功但一笔没拉到: 交易时段内即上游限流/停更 → 显式降级(返回旧快照)
+            try:
+                in_session = _in_trading_hours()
+            except Exception:  # noqa: BLE001
+                in_session = False
+            if in_session:
+                degraded = True
+                reason = "上游无新增逐笔(疑限流/停更), 返回缓存快照"
+        # 降级起点(连续降级的第一次): 让 diag 能报"上游已停更 N 秒", 而不是只看单次快照。
+        degraded_since = prev_meta.get("degraded_since_ts") if degraded else None
+        if degraded and not degraded_since:
+            degraded_since = time.time()
+        meta = {
+            "last_run_ts": time.time(),
+            "origin": origin,
+            "pages_fetched": pages,
+            "new_ticks": new_ticks,
+            "tick_count": (len(cached[1]) if cached and len(cached) > 1 else 0),
+            "cursor_page": (cached[2] if cached and len(cached) > 2 else None),
+            "cursor_seq": (cached[3] if cached and len(cached) > 3 else None),
+            "day": (cached[4] if cached and len(cached) > 4 else None),
+            "degraded": degraded,
+            "degraded_reason": reason,
+            "degraded_since_ts": degraded_since,
+        }
+        with _META_LOCK:
+            _FETCH_META[code] = meta
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def tick_snapshot_info(code: str) -> dict | None:
+    """逐笔缓存快照元信息(diag 用): 年龄/游标/来源/降级全部显式, 无缓存返回 None。"""
+    cached = _TICKS_CACHE.get(code)
+    if not cached:
+        return None
+    try:
+        age = max(0, int(round(time.time() - float(cached[0]))))
+    except (TypeError, ValueError, IndexError):
+        return None
+    with _META_LOCK:
+        meta = dict(_FETCH_META.get(code) or {})
+    _since = meta.get("degraded_since_ts")
+    try:
+        _deg_sec = int(round(time.time() - float(_since))) if (meta.get("degraded") and _since) else None
+    except (TypeError, ValueError):
+        _deg_sec = None
+    return {
+        "snapshot_age_sec": age,
+        "fresh": age < _TICKS_TTL,
+        "ttl_sec": _TICKS_TTL,
+        "tick_count": (len(cached[1]) if len(cached) > 1 else 0),
+        "cursor_page": (cached[2] if len(cached) > 2 else None),
+        "cursor_seq": (cached[3] if len(cached) > 3 else None),
+        "day": (cached[4] if len(cached) > 4 else None),
+        "origin": meta.get("origin"),
+        "pages_fetched": meta.get("pages_fetched"),
+        "last_fetch_ts": meta.get("last_run_ts"),
+        "degraded": bool(meta.get("degraded")),
+        "degraded_reason": meta.get("degraded_reason"),
+        # 连续降级已持续多少秒(上游停更时长; 未降级为 None)
+        "degraded_sec": _deg_sec,
+        "degraded_since_ts": _since if meta.get("degraded") else None,
+    }
+
+
+def refresh_ticks(code: str, max_pages: int = 200) -> dict:
+    """后台采集入口: 忽略 TTL 做一次增量续拉(只拉缓存末游标之后的页)。
+
+    与请求路径唯一区别是"是否允许 TTL 短路" —— 后台要主动推进游标, 故 force=True;
+    缓存缺失/跨日/序号断裂等既有语义全部复用 `_fetch_all_ticks`, 不另写一套翻页。
+    返回摘要(不抛), 供采集器统计与告警。
+    """
+    try:
+        ticks = _fetch_all_ticks(code, max_pages, force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[dark_flow] 后台刷新失败 %s: %s", code, e)
+        return {"ok": False, "code": code, "ticks": 0, "error": str(e)}
+    info = tick_snapshot_info(code) or {}
+    return {
+        "ok": True,
+        "code": code,
+        "ticks": len(ticks or []),
+        "origin": info.get("origin"),
+        "pages_fetched": info.get("pages_fetched"),
+        "snapshot_age_sec": info.get("snapshot_age_sec"),
+        "degraded": bool(info.get("degraded")),
+        "degraded_reason": info.get("degraded_reason"),
+        "degraded_sec": info.get("degraded_sec"),
+    }
 
 
 def _cache_day() -> str:
@@ -150,8 +295,12 @@ def clear_ticks_cache(code: str | None = None) -> int:
     if code is None:
         n = len(_TICKS_CACHE)
         _TICKS_CACHE.clear()
+        with _META_LOCK:  # 2026-10-14: 元数据一并清(否则 diag 仍报旧来源/游标)
+            _FETCH_META.clear()
     else:
         n = 1 if _TICKS_CACHE.pop(code, None) is not None else 0
+        with _META_LOCK:
+            _FETCH_META.pop(code, None)
     try:
         _ticks_persist()
     except Exception:  # noqa: BLE001
@@ -295,13 +444,37 @@ def _in_trading_hours() -> bool:
         return False
 
 
-def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
+def _fetch_all_ticks_inner(code: str, max_pages: int = 200, force: bool = False) -> list[dict]:
+    """对外/后台统一入口(2026-10-14): per-code 串行化 + 拉取元数据记录, 主体在 `_fetch_ticks_locked`。
+
+    force=True 时忽略 TTL 短路(后台采集要主动推进游标); 请求路径保持 force=False,
+    TTL 内命中缓存零翻页 —— 语义与改造前完全一致。
+    顺带把 code 登记进后台采集器热码表(LRU 上限内), 使后续请求被后台预热。
+    """
+    try:
+        from src.core.dark_flow_sampler import register_code
+        register_code(code)
+    except Exception:  # noqa: BLE001 — 采集器不可用不影响拉取
+        pass
+    with _code_lock(code):
+        cached_now = _TICKS_CACHE.get(code)
+        had_cache = cached_now is not None
+        stale_pre = bool(cached_now) and _cache_stale(code, cached_now)
+        stats: dict = {"page_calls": 0, "new_ticks": 0}
+        try:
+            return _fetch_ticks_locked(code, max_pages, force, stats)
+        finally:
+            _record_fetch_meta(code, had_cache, stale_pre, stats)
+
+
+def _fetch_ticks_locked(code: str, max_pages: int, force: bool, stats: dict) -> list[dict]:
     """翻页拉取全天全量逐笔(增量续拉), 返回 [{direction, amount, volume, time}]。
 
     2026-08-11 打磨: 加 30s 缓存(盘中每轮监控复用) + 单页重试(腾讯偶发限流)。
     2026-08-12 增量续拉(用户设计): 缓存记录 last_page+last_seq, 过期后只拉
       新增页合并; 并发拉页(全天 19 页串行 2.9s → 并发 ~0.9s); 空页判定 ['']。
     数据源: 默认 tencent_ticks; 未来 L2 接入在此分发(PANWATCH_DARK_SOURCE)。
+    2026-10-14: stats 记录本轮翻页数/新拉笔数(元数据/降级判定用); 调用方已持 code 锁。
     """
     import time as _time
     now = _time.time()
@@ -311,7 +484,8 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
     cached = None if _gray else _TICKS_CACHE.get(code)
 
     # 2026-08-12: TTL 内直接返回(盘中 30s 窗口零请求; 重构时勿丢此分支)
-    if cached and now - cached[0] < _TICKS_TTL:
+    # 2026-10-14: force=True(后台采集)绕过短路, 即使新鲜也推进游标拉增量页。
+    if cached and now - cached[0] < _TICKS_TTL and not force:
         return cached[1]
 
     # 2026-08-13 跨日修复: 缓存属于昨天(或旧 4 元格式) → 丢弃走全量重拉,
@@ -327,6 +501,7 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
         try:
             from src.core.dark_l2 import fetch_l2_ticks  # 预留模块, 接入L2时实现
             ticks = fetch_l2_ticks(code, _src)
+            stats["origin"] = "l2"  # 2026-10-14: 外部源(非腾讯翻页)标出来源, 便于 diag 区分
             if not _gray:
                 _cache_put(code, now, ticks, 0, 0)
                 _ticks_persist()  # 2026-08-12: 快照落盘
@@ -337,6 +512,7 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
 
     def _fetch_page(p: int) -> tuple[int, list[dict]]:
         """拉单页, 返回 (页码, ticks)。失败/空页返回 (p, [])。"""
+        stats["page_calls"] = stats.get("page_calls", 0) + 1  # 2026-10-14: 翻页观测(缓存命中=0)
         url = f"https://stock.gtimg.cn/data/index.php?appn=detail&action=data&c={code}&p={p}"
         body = None
         # 单页重试(最多2次): 腾讯偶发限流/超时
@@ -377,6 +553,8 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
                 out.append({"d": direction, "amt": amt, "vol": vol, "price": price, "t": t, "_seq": seq,
                             # v6 平盘误标修正用: chg==0=相对前笔持平(涨停封板时腾讯几乎全标S)
                             "chg": float(parts[3]) if len(parts) > 3 else 1.0})
+        if out:  # 2026-10-14: 本轮真正拉到的笔数(降级判定: 翻页成功但零新笔)
+            stats["new_ticks"] = stats.get("new_ticks", 0) + len(out)
         return p, out
 
     def _drain_pages(start: int, max_pages: int, ticks: list[dict], batch: int = 10) -> tuple[list[dict], int, int]:
@@ -421,10 +599,19 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
             _ticks_persist()  # 2026-08-12: 快照落盘
             return old_ticks
         new_ticks: list[dict] = []
-        _new_ticks, last_page, last_seq = _drain_pages(start, max_pages, new_ticks)
+        # 2026-10-14: 增量续拉用更小的批(batch=4) —— 常态新增 1~2 页, 而 batch=10 会
+        # 一次性提交 10 个空页请求(实测: 1 页新数据 = 10 次请求)。后台 60s 一轮跑多只票,
+        # 小批把上游请求量压到 ~1/3。全量路径仍用 batch=10(一次翻到底, 轮数越少越好)。
+        _new_ticks, last_page, last_seq = _drain_pages(start, max_pages, new_ticks, batch=4)
         if _new_ticks:
+            # 2026-10-14 判据修复(增量续拉名存实亡): 原判据是 min(seq) >= old_last_seq,
+            # 但末页**整页重拉**时 min(seq) 恒 < old_last_seq(一页 ≥2 行), 于是每次缓存
+            # 过期请求都走"序号断裂 → 全量重拉"(实测: 第二次请求仍翻 15 页, 等于全量)。
+            # 改为判"是否仍在向前推进": max(seq) >= old_last_seq(含相等 = 末页原样、
+            # 无新增) → 正常续拉合并; 只有 seq 倒退(盘中数据重置/跨日残留)才全量重拉。
             new_first_seq = min(t.get("_seq", -1) for t in _new_ticks)
-            if new_first_seq <= 0 or old_last_seq <= 0 or new_first_seq >= old_last_seq:
+            new_last_seq = max(t.get("_seq", -1) for t in _new_ticks)
+            if new_first_seq <= 0 or old_last_seq <= 0 or new_last_seq >= old_last_seq:
                 # 序号连续/推进(新 seq ≥ 旧末条 seq) → 合并去重(旧最后一页可能被新完整版覆盖)
                 # 2026-09-04 P0-1: 合并前双方先丢未来 tick(旧快照残留洗白主入口)。
                 merged = _dedup_ticks(_drop_future_ticks(old_ticks) + _drop_future_ticks(_new_ticks))
@@ -440,14 +627,16 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
                         f"{max(old_amt, new_amt)/1e8:.2f}亿×1.1), 弃增量全量重拉"
                     )
                     _TICKS_CACHE.pop(code, None)
+                    stats["origin"] = "reset"  # 合并校验失败 → 走全量重拉, 来源如实标注
                 else:
                     for t in merged:
                         t.pop("_seq", None)
                     _cache_put(code, now, merged, last_page, last_seq)
                     _ticks_persist()  # 2026-08-12: 快照落盘
                     return merged
-            # 序号断裂(新交易日/数据重置) 或 合并校验失败 → 全量重拉
+            # 序号断裂(数据重置/跨日残留) 或 合并校验失败 → 全量重拉
             _TICKS_CACHE.pop(code, None)
+            stats["origin"] = "reset"
         else:
             # 无新增(可能盘前/刚开盘): 刷新缓存时间, 保留旧数据
             # ⚠️ 2026-08-14 热修: 防跨日残留被"无新增"洗白 —— 昨天接口异常时可能只
@@ -516,16 +705,17 @@ def _fetch_all_ticks_inner(code: str, max_pages: int = 200) -> list[dict]:
     return ticks
 
 
-def _fetch_all_ticks(code: str, max_pages: int = 200) -> list[dict]:
-    """对外入口(签名不变): 拉取 + 回填观测 + 交易时段空拉取重试一次。
+def _fetch_all_ticks(code: str, max_pages: int = 200, force: bool = False) -> list[dict]:
+    """对外入口(签名向后兼容): 拉取 + 回填观测 + 交易时段空拉取重试一次。
 
     2026-09-04 P0-2 sanity: 盘中拉空(0 笔)极可能是腾讯抖动而非真没成交,
     重试一次仍空才认(下游走 insufficient)。页数/笔数记 _LAST_FETCH 供 diag。
+    2026-10-14: force=True 供后台采集器(忽略 TTL 短路, 只推进游标); 请求路径默认 False。
     """
-    ticks = _fetch_all_ticks_inner(code, max_pages)
+    ticks = _fetch_all_ticks_inner(code, max_pages, force=force)
     if not ticks and _in_trading_hours():
         logger.warning(f"[dark_flow] {code} 盘中拉空, 重试一次")
-        ticks = _fetch_all_ticks_inner(code, max_pages)
+        ticks = _fetch_all_ticks_inner(code, max_pages, force=force)
     try:
         cached = _TICKS_CACHE.get(code)
         _LAST_FETCH[code] = {

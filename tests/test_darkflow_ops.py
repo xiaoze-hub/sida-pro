@@ -62,6 +62,13 @@ def test_diag_forwarded(monkeypatch):
     monkeypatch.setattr(api, "compute_dark_flow", lambda symbol: fake)
     monkeypatch.setattr(api, "_fetch_quote_dict", lambda symbol: None)
     monkeypatch.setattr(api, "compute_tck_active_ratio", lambda code: None)
+    # 2026-10-14(后台增量采集): diag 新增缓存快照元数据(年龄/游标/来源/降级)。
+    # 固定它, 免得断言随跑测机器的缓存状态漂移; 元数据自身另有专项单测。
+    monkeypatch.setattr(api, "tick_snapshot_info", lambda code: {
+        "origin": "cache", "snapshot_age_sec": 12, "fresh": True,
+        "cursor_page": 17, "cursor_seq": 1180, "pages_fetched": 0,
+        "degraded": False, "degraded_reason": None, "day": "2026-10-14",
+    })
     # stale 走真实时钟会 flaky: 固定它, staleness 另有纯函数单测
     monkeypatch.setattr(api, "_tick_staleness", lambda *a, **k: {"stale": False, "lag_sec": 5})
     # 活跃源来自环境变量(DARK_SOURCE = PANWATCH_DARK_SOURCE or "tencent_ticks"), 在 CI 里
@@ -89,6 +96,16 @@ def test_diag_forwarded(monkeypatch):
         "stale": False,
         "tick_lag_sec": 5,
         "source": "tencent_ticks",
+        # 2026-10-14: 后台增量采集的缓存快照元数据(diag 加法扩展)
+        "cache_origin": "cache",
+        "snapshot_age_sec": 12,
+        "cache_fresh": True,
+        "tick_cursor": {"page": 17, "seq": 1180},
+        "pages_fetched": 0,
+        "degraded": False,
+        "degrade_reason": None,
+        "degrade_sec": None,
+        "cache_day": "2026-10-14",
     }
     assert resp["dark_order"]["trade_date"] == _df_cache_day()
 
