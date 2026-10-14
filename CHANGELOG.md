@@ -41,6 +41,22 @@
 - **测试** `frontend/tests/lib/chart-notes.test.ts`(纯函数) + `frontend/tests/components/
   chart-notes-contract.test.ts`(源码侧接线契约)。
 
+### test-图层预落库跨用例污染隔离(summary layer/resonance 用例不再依赖执行顺序)（2026-10-14）
+
+全量串行跑时 `tests/test_summary_layer_api.py` 与 `tests/test_summary_resonance.py` 各有
+1~2 例稳定红(与本次图表说明改动无关, **main@36d927c 同样红**, 见下) —— 根因是
+`_build_layer_data` 会把「定型日」结果落 `workbench_layer_daily`(`src/core/layer_precompute.py`),
+同会话里**同一 symbol**(`000977`)的后续用例命中上一条预落库, 拿到**别的用例**的
+events/resonance(与自己的 bars 无关); 表现为 `test_build_layer_data_events_limit_down`
+读到 `test_build_layer_data_full` 落的 limit_up。
+
+- **修** 两个测试文件加 autouse fixture `_isolate_layer_precompute`: 每个用例前
+  `layer_precompute.clear_layer_daily()`, 保证 `_build_layer_data` 读的是**用例自己的 bars**,
+  不依赖执行顺序(清不动/建表前静默跳过, 不影响断言)。
+- **复现**: `pytest tests/test_summary_layer_api.py -q -m 'not network'` 单文件即红;
+  修复后 `pytest tests/test_layer_precompute.py tests/test_summary_layer_api.py
+  tests/test_summary_resonance.py -q` 全绿。
+
 ## feat-暗盘逐笔采集纳入自选∪持仓池(轮转切片, 免"当天首次点开"冷启动)（2026-10-14）
 
 补齐上两条的一个空洞: 只刷"热码(最近被请求过)"的话, **某只票当天第一次被点开时冷启动
