@@ -1,3 +1,20 @@
+### fix-K线批量摘要接回三层缓存(summary/batch 不再逐只裸算·加并发上限)（2026-10-14）
+
+落库缺口审计: `/api/klines/summary/batch` **逐只裸调 `collector.get_kline_summary()`
+现算** —— 绕开 biz_cache/PG 两层缓存(同一只股票单只端点刚算过, 批量端点仍从头再算),
+且纯串行(N 只 = N 次现算串联), 冷启动必撞前端 abort。违反 AGENTS 硬约束『缓存一律走
+`src/web/cache/biz_cache.py`, 禁止业务代码自建』。
+
+- **改** `src/web/api/klines.py`: 单只端点的三层取数(biz_cache → PG `summary_cache` →
+  `_compute_kline_summary`, per-key single-flight)抽成 `_get_or_compute_summary()`,
+  **单只端点与批量端点共用同一入口/同一份 `summary:{market}:{symbol}` 缓存**; 批量按
+  `_SUMMARY_BATCH_MAX_WORKERS=4` 线程池并发(每只内部再开 4 线程, 峰值 ~16, 不打满线程池),
+  `ex.map` 保序; 返回结构改为与单只端点一致的完整载荷。
+- **测试**(禁真网络): 新增 `tests/test_kline_summary_batch.py`(第二批零重算·与单只端点
+  共享缓存·并发上限且真并发·同 symbol 单飞·A/H 键隔离·空列表/坏市场 400) +
+  `tests/test_biz_cache_l2_shared.py`(内存假 Redis 钉跨实例共享 / `biz:` 前缀隔离 /
+  L2 不可达退纯 L1 —— 收口的前提"L2 真的共享"成立)。
+
 #### fix-TdxW看门狗杀拉补坑8顺序(2026-10-14)
 
 - 看门狗自动杀拉前先删 17709 portproxy 转发规则、拉起后补回(坑8: 0.0.0.0 监听抢先占口致 TdxW TQ 服务绑定失败, 客户端表面正常但接口死)。2026-10-14 09:01 实战踩中复发, 此前脚本『不碰 portproxy』设计错误已纠正; 静态护栏 5 例过, 已部署小主机。
