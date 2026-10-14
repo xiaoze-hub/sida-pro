@@ -159,12 +159,13 @@ def test_zt_metrics_st_name_uses_five_percent_line():
 # ── ③ 连板家数(limit_up_events 聚合) ──────────────────────────────────────
 
 _EVENTS = [
-    {"trade_date": "20261013", "symbol": "X", "sealed": True},
-    {"trade_date": "20261014", "symbol": "X", "sealed": True},   # X: 2 连板
-    {"trade_date": "20261014", "symbol": "Y", "sealed": True},   # Y: 首板
-    {"trade_date": "20261012", "symbol": "Z", "sealed": True},
-    {"trade_date": "20261013", "symbol": "Z", "sealed": True},   # Z: 13 日 2 连板, 14 日断了
-    {"trade_date": "20261014", "symbol": "W", "sealed": True},   # W: 只有 14 日
+    {"trade_date": "20261013", "symbol": "X", "sealed": True, "open_count": 0},
+    # 20261014 场景: X 开板后回封(炸板计数内), Y 干净封住, W 触及未封(回落)
+    {"trade_date": "20261014", "symbol": "X", "sealed": True, "open_count": 1},
+    {"trade_date": "20261014", "symbol": "Y", "sealed": True, "open_count": 0},
+    {"trade_date": "20261012", "symbol": "Z", "sealed": True, "open_count": 0},
+    {"trade_date": "20261013", "symbol": "Z", "sealed": True, "open_count": 0},
+    {"trade_date": "20261014", "symbol": "W", "sealed": False, "open_count": 1},
 ]
 _DAYS = ["20261012", "20261013", "20261014"]
 

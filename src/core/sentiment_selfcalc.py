@@ -485,7 +485,8 @@ def fetch_events(trade_date: str, *, days: int = _EVENTS_LOOKBACK_DAYS, db=None)
     try:
         rows = db.execute(
             text(
-                "SELECT trade_date, symbol, is_sealed_close AS sealed FROM limit_up_events "
+                "SELECT trade_date, symbol, is_sealed_close AS sealed, "
+                "COALESCE(open_count, 0) AS open_count FROM limit_up_events "
                 "WHERE trade_date >= :start AND trade_date <= :end"
             ),
             {"start": start, "end": trade_date},
@@ -501,6 +502,7 @@ def fetch_events(trade_date: str, *, days: int = _EVENTS_LOOKBACK_DAYS, db=None)
             "trade_date": str(dict(r._mapping).get("trade_date")),
             "symbol": str(dict(r._mapping).get("symbol")),
             "sealed": bool(dict(r._mapping).get("sealed")),
+            "open_count": int(dict(r._mapping).get("open_count") or 0),
         }
         for r in rows
     ]
@@ -591,6 +593,32 @@ def collect_and_compute(
     )
     streak = streak_count_from_events(events, trade_date, trading_days or None)
 
+    # ── 事件真值覆盖(K线回填口径): zdt 会话计数字段盘后清零(与 L2 计数器同族语义),
+    # 盘后跑批必须以 limit_up_events(触及/封住/开板) 为准, zdt 口径降级为盘中增强/诊断。
+    ev_rows = [e for e in events if str(e.get("trade_date", trade_date)) == trade_date]
+    if ev_rows:
+        m["limit_up_count"] = len(ev_rows)
+        m["sealed_count"] = sum(1 for e in ev_rows if e.get("sealed"))
+        m["open_times_gt0"] = sum(1 for e in ev_rows if (e.get("open_count") or 0) > 0)
+        m["limit_up_open_count"] = sum(
+            1
+            for e in ev_rows
+            if (not e.get("sealed")) or (e.get("open_count") or 0) > 0
+        )
+        metrics_source = "limit_up_events"
+    else:
+        metrics_source = "zdt_snapshot"
+
+    # 0 冒充防线: 封住>0 但资金求和为 0 ⇒ zdt 封单计数盘后清零, 落 None 不落 0
+    if m["sealed_count"] > 0 and (m["seal_success_money"] or 0) <= 0:
+        m["seal_success_money"] = None
+        m["seal_success_money_yuan"] = None
+        errors.append("封板成功资金无有效数据(zdt 封单计数盘后清零), 落 None(不落 0)")
+    if m["limit_up_open_count"] > 0 and (m["seal_fail_money"] or 0) <= 0:
+        m["seal_fail_money"] = None
+        m["seal_fail_money_yuan"] = None
+        errors.append("封板失败资金无有效数据(zdt 封单计数盘后清零), 落 None(不落 0)")
+
     ratios = derive_ratios(
         m["limit_up_count"], m["limit_up_open_count"], m["seal_success_money"], m["seal_fail_money"]
     )
@@ -599,7 +627,7 @@ def collect_and_compute(
         "commission": "自算替代云 SC(get_scjy_value 已弃用, 用户决策不购云 Key)",
         "approximation": {
             "seal_money": "封单量(FDVolMaxZT 手)×100×收盘价 → 元 → 亿元; FDVolMaxZT 为当日最大封单量, 非收盘瞬时封单",
-            "limit_up_count": "zdt 真涨停候选家数(=SC3 v1 涨停/曾涨停口径)",
+            "limit_up_count": f"{metrics_source} 口径(涨停/曾涨停=触及涨停家数); zdt 会话计数盘后清零不可信",
             "streak_count": "limit_up_events 聚合(收盘封住且连续封板 ≥2 天)",
         },
         "caliber": CALIBER_SEALED,
