@@ -2936,7 +2936,7 @@ def _m195_ai_pattern_shadow(conn: Connection) -> None:
                 ai_basis TEXT,
                 ai_all TEXT,
                 model_name TEXT,
-                window INTEGER,
+                window_n INTEGER,
                 rule_primary TEXT,
                 rule_patterns TEXT,
                 compare_status TEXT,
