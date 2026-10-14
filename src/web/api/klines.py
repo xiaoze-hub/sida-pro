@@ -893,44 +893,39 @@ def _build_orderbook(symbol: str):
         return None
 
 
-def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
-    """P1 图层数据(2026-09-01): gs_signals / fund_flow / events。
+def _latest_settled_bar_date(bars: list[dict], now=None) -> str | None:
+    """bars 里**最近一根已定型日 K** 的日期('YYYY-MM-DD'); 取不到 → None。
+
+    定型 = 该交易日的日 K 不再变化(历史日 / 今日过了收盘定型时刻 15:05)。
+    盘中今日那根 live 合成 bar 尚未定型, 故排除 —— 它是"当日实时块", 不能拿它去
+    核对预落库日级块的新鲜度(见 src/core/layer_precompute.usable)。
+    """
+    from src.core.layer_precompute import is_settled
+
+    for b in reversed(bars or []):
+        d = _norm_date(b.get("date") if isinstance(b, dict) else b)
+        if d and is_settled(d, now):
+            return d
+    return None
+
+
+def _compute_daily_blocks(symbol: str, bars: list[dict]) -> dict:
+    """**日级派生块**现算(收盘定型后即为该日定稿, 见 layer_precompute 模块头)。
 
     - gs_signals: 全量 GS 交叉序列(收盘定死=confirmed, 末根疑似=待确认)
     - fund_flow: 日级, 长度对齐 klines; dark_net=OHLC 分摊(L1 近似对照项),
       ming_net=当日 big_order_flow 全口径(历史逐日明盘无数据, 显式 null)
-    - events: 涨停/跌停(K线自算); 龙虎榜/公告事件待 28 号数据源接入后补
-    - resonance: 三指标共振状态(2026-09-02), 复用本函数已拉的 bars, 见 _build_resonance
-    - activity_series: 活跃度日级序列(2026-09-03, 活跃度副图柱载体), 每点 {date, activity, level}
+    - activity_series: 活跃度日级序列(活跃度副图柱载体), 每点 {date, activity, level}
+    - events: 涨停/跌停(K线自算) + .tck 拆单撤单 + wencai 龙虎榜/公告
+    - unlock_levels / chips: 标准筹码接口(腾讯当日分价表优先 / 新浪历史分价兜底)
+    - resonance: 三指标共振状态, 复用本函数已拉的 bars
 
     仅 A 股; 任一字段计算失败独立降级为 None/默认, 不拖垮整体, 不编造。
+    orderbook(实时块)不在此函数内 —— 它在 `_build_layer_data` 里与这里并发跑且从不落库。
     """
-    out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
-                 "orderbook": None, "unlock_levels": None, "chips": None,
-                 "activity_series": None,
+    out: dict = {"gs_signals": None, "fund_flow": None, "activity_series": None,
+                 "events": None, "unlock_levels": None, "chips": None,
                  "resonance": _resonance_default()}
-    if market_code.value != "CN":
-        return out
-    # ⓪ orderbook 与 bars 无关, 先用独立线程跑起来(末尾 join), 与下面整段重叠,
-    #    把盘口 thsdk 的硬超时(ORDERBOOK_TIMEOUT_S)从串行链里挪走。
-    _ob_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    _ob_future = _ob_pool.submit(_build_orderbook, symbol)
-    try:
-        from src.core.decision_pioneer import fetch_bars
-
-        bars = fetch_bars(symbol, "CN", days=120)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("layer_data fetch_bars %s failed: %s", symbol, e)
-        bars = []
-    if not bars:
-        # 2026-09-02 修: bars 为空(多 vendor 全挂)时**不再整体早退**。
-        # orderbook / .tck 拆单撤单 / wencai 龙虎榜公告 / 筹码解套盘位 都不依赖 bars,
-        # 早退会把它们一起拖成 None → 前端"整页无数据"(2026-09-02 生产实测)。
-        # 仅 gs_signals / fund_flow 依赖 bars, 下面各自用 `if bars:` 门控跳过。
-        logger.warning("layer_data %s bars 为空: gs_signals/fund_flow 跳过, 其余仍计算", symbol)
-
-    # ⓪ orderbook: 盘口队列 + 托压单 —— 已在函数开头并发启动(_build_orderbook),
-    #    末尾 join。此处不再串行调用(2026-10-01 B1 首屏慢)。
 
     # ① gs_signals(依赖 bars: bars 空时跳过, 保持 None 由前端显式"无数据")
     if bars:
@@ -969,7 +964,7 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
                     try:
                         from src.core.history_store import persist_l2_ticks
 
-                        persist_l2_ticks(symbol, market_code.value, "thsdk_big_order", ticks)
+                        persist_l2_ticks(symbol, "CN", "thsdk_big_order", ticks)
                     except Exception:  # noqa: BLE001
                         pass
                     ming = dark_split.ming_net_from_big_orders(ticks)
@@ -1022,6 +1017,116 @@ def _build_layer_data(symbol: str, market_code: MarketCode) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.debug("resonance %s failed: %s", symbol, e)
             out["resonance"] = _resonance_default()
+    return out
+
+
+def build_layer_daily_blocks(
+    symbol: str, market_code: MarketCode, days: int = 120
+) -> tuple[str | None, dict]:
+    """批算入口(供 `src.core.layer_precompute` 收盘预热): 取 bars → 算日级块 → (asof, blocks)。
+
+    与请求期用**同一个** `_compute_daily_blocks`, 保证预落库载荷与现算逐字段一致;
+    不碰 orderbook(实时块, 不落库), 故批算不会打 thsdk 盘口。
+    取不到 bars → (None, {}), 调用方计 skipped(不编造)。
+    """
+    if market_code.value != "CN":
+        return None, {}
+    try:
+        from src.core.decision_pioneer import fetch_bars
+
+        bars = fetch_bars(symbol, "CN", days=days)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("layer 批算 fetch_bars %s failed: %s", symbol, e)
+        bars = []
+    if not bars:
+        logger.warning("layer 批算 %s bars 为空: 跳过(不编造)", symbol)
+        return None, {}
+    return _norm_date(bars[-1].get("date")), _compute_daily_blocks(symbol, bars)
+
+
+def _build_layer_data(symbol: str, market_code: MarketCode, now=None) -> dict:
+    """P1 图层数据: **日级派生块读库优先 + 仅当日实时块现算** + 实时盘口。
+
+    2026-10-14 (首屏 P0 26s→秒开): 日级派生块(gs_signals/fund_flow/activity/events/
+    unlock_levels/chips/resonance)此前**每请求全量现算**, 其中 chips/wencai/pool_flow
+    是网络调用, 冷启动 ~26s 撞前端 20s abort。现在:
+
+      ① 读库命中(`layer_precompute.usable`: 行已定型 且 覆盖最近已定型交易日 且
+         当前不在盘中窗口)⇒ 日级块**零现算**, 直接回预落库载荷;
+      ② 未命中(盘中当日块未定型 / 无行 / 行过旧 / 读库失败)⇒ 走现行全路径
+         `_compute_daily_blocks` 现算(**口径逐字段不变**), 算完若该日已定型则落库,
+         下次请求直接命中(见 `src/core/layer_precompute.py` 模块头)。
+      ③ orderbook 是**实时块**(盘口队列/托压单), 从不落库, 与上面并发跑、末尾 join。
+
+    仅 A 股; 任一字段计算失败独立降级为 None/默认, 不拖垮整体, 不编造。
+    `now` 仅测试注入(时钟敏感: 定型判定/盘中窗口)。
+    """
+    out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
+                 "orderbook": None, "unlock_levels": None, "chips": None,
+                 "activity_series": None,
+                 "resonance": _resonance_default()}
+    if market_code.value != "CN":
+        return out
+    # ⓪ orderbook 与 bars 无关, 先用独立线程跑起来(末尾 join), 与下面整段重叠,
+    #    把盘口 thsdk 的硬超时(ORDERBOOK_TIMEOUT_S)从串行链里挪走。
+    _ob_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    _ob_future = _ob_pool.submit(_build_orderbook, symbol)
+    try:
+        from src.core.decision_pioneer import fetch_bars
+
+        bars = fetch_bars(symbol, "CN", days=120)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("layer_data fetch_bars %s failed: %s", symbol, e)
+        bars = []
+    if not bars:
+        # 2026-09-02 修: bars 为空(多 vendor 全挂)时**不再整体早退**。
+        # orderbook / .tck 拆单撤单 / wencai 龙虎榜公告 / 筹码解套盘位 都不依赖 bars,
+        # 早退会把它们一起拖成 None → 前端"整页无数据"(2026-09-02 生产实测)。
+        # 仅 gs_signals / fund_flow 依赖 bars, 下面各自用 `if bars:` 门控跳过。
+        logger.warning("layer_data %s bars 为空: gs_signals/fund_flow 跳过, 其余仍计算", symbol)
+
+    # ⓪ orderbook: 盘口队列 + 托压单 —— 已在函数开头并发启动(_build_orderbook),
+    #    末尾 join。此处不再串行调用(2026-10-01 B1 首屏慢)。
+
+    # ①-⑤ 日级派生块: 读库优先(收盘批算/上次请求落库) → miss 才现算
+    hit_row = None
+    if bars:
+        try:
+            from src.core import layer_precompute as lp
+
+            latest_settled = _latest_settled_bar_date(bars, now)
+            row = lp.get_layer_daily(symbol, market_code.value)
+            if lp.usable(row, latest_settled, now):
+                hit_row = row
+        except Exception as e:  # noqa: BLE001 — 读库/门禁失败 = 未命中, 回现算(不阻塞)
+            logger.debug("layer_data %s 日级块读库失败(回现算): %s", symbol, e)
+
+    if hit_row is not None:
+        out.update(hit_row["blocks"])
+        logger.debug(
+            "layer_data %s 命中日级预落库(asof=%s source=%s): 零现算",
+            symbol, hit_row.get("asof"), hit_row.get("source"),
+        )
+    else:
+        try:
+            daily = _compute_daily_blocks(symbol, bars)
+        except Exception as e:  # noqa: BLE001 — 现算整体失败: 保持显式"无数据", 不阻塞
+            logger.debug("layer_data %s 日级块现算失败: %s", symbol, e)
+            daily = {}
+        out.update(daily)
+        # 落库(best-effort): 定型日才算完可作定稿; 未定型的当日行只留"最近访问"痕迹
+        try:
+            from src.core import layer_precompute as lp
+
+            asof = _norm_date(bars[-1].get("date")) if bars else None
+            if asof:
+                lp.put_layer_daily(
+                    symbol, market_code.value, asof, daily,
+                    source=lp.SOURCE_REQUEST, settled=True, now=now,
+                )
+        except Exception as e:  # noqa: BLE001 — 落库失败不影响响应
+            logger.debug("layer_data %s 日级块落库失败(不影响响应): %s", symbol, e)
+
     # ⓪ join 并发跑的 orderbook(与上面整段重叠, 冷启动从串行相加变为取较长者)
     try:
         out["orderbook"] = _ob_future.result()
@@ -1512,3 +1617,16 @@ def get_pool_flow_series(symbol: str, market: str = "CN", days: int = 30):
     }
     biz_cache.set_json(cache_key, out, ttl=_POOL_FLOW_TTL)
     return out
+
+
+# ── 日级块现算入口注册(2026-10-14 首屏 P0, 依赖倒置) ──────────────────────────
+# `src/core/layer_precompute` 的收盘批算需要本模块的 `build_layer_daily_blocks`,
+# 但 core **禁止**反向 import web(B4.1/KI-039 棘轮门禁
+# tests/test_w41_core_web_dependency.py)。故由本层在 import 期把入口注册过去;
+# 应用启动必加载本模块(app.py 挂 klines.router), 调度器因此总能拿到入口。
+# 未注册时批算显式记 skipped + 告警, 绝不编造(见 layer_precompute.precompute)。
+from src.core.layer_precompute import (  # noqa: E402
+    register_daily_block_builder as _register_layer_daily_builder,
+)
+
+_register_layer_daily_builder(build_layer_daily_blocks)
