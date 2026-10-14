@@ -1642,6 +1642,127 @@ def get_pool_flow_series(symbol: str, market: str = "CN", days: int = 30):
     return out
 
 
+# ── 图表说明(chart-notes): 逐标记「为什么」, 人可读 / AI 可引 ──────────────────
+#: chart-notes 取 bars 的天数(与图层 `_build_layer_data` 同窗口 —— 窗口不同等于两套口径)
+CHART_NOTES_DAYS = 120
+
+
+def _collect_chart_note_sources(symbol: str, market_code: MarketCode) -> dict:
+    """收集 chart-notes 的**标记来源** —— 全部与图层/指标端点**同函数**, 不另算标记。
+
+    | 标记 | 来源(与图层同一份计算结果) |
+    |---|---|
+    | gs_signals / events | `_build_layer_data`(读库优先 + 现算, 与 K 线图逐条一致) |
+    | patterns            | `kline_patterns.detect_pattern_marks`(与 `/patterns` 同函数) |
+    | trend / niuxiong    | `fetch_trend_line` / `fetch_niuxiong`(与 `/indicators/*` 同函数) |
+    | gs_state            | `gs_state.resolve_gs_state`(与色带/图例同源) |
+
+    任一来源失败独立降级为 None(不编造); 全程 try/except, 绝不抛。`bars` 取一次复用
+    (与图层同窗口 `CHART_NOTES_DAYS`, 避免窗口不同导致 「两张脸」)。
+    """
+    out: dict = {
+        "bars": [], "gs_signals": None, "events": None,
+        "patterns": None, "trend": None, "niuxiong": None, "gs_state": None,
+    }
+    # ① bars(与图层同一份取数 `decision_pioneer.fetch_bars`)
+    try:
+        from src.core.decision_pioneer import fetch_bars
+
+        out["bars"] = fetch_bars(symbol, "CN", days=CHART_NOTES_DAYS) or []
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chart-notes fetch_bars %s failed: %s", symbol, e)
+
+    # ② GS 买卖点 / L4 事件: 图层**同一份计算结果**(读库优先 + 现算)
+    try:
+        layer = _build_layer_data(symbol, market_code)
+        out["gs_signals"] = layer.get("gs_signals")
+        out["events"] = layer.get("events")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chart-notes layer_data %s failed: %s", symbol, e)
+
+    bars = out["bars"]
+    if bars:
+        # ③ GS 区间/待确认(与 K 线图色带/图例同源)
+        try:
+            from src.core.gs_state import resolve_gs_state
+
+            out["gs_state"] = resolve_gs_state(bars)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("chart-notes gs_state %s failed: %s", symbol, e)
+        # ④ 形态(与 /klines/{symbol}/patterns 同函数)
+        try:
+            from src.core.kline_patterns import detect_pattern_marks
+
+            out["patterns"] = detect_pattern_marks(bars, lookback=PATTERNS_DEFAULT_LOOKBACK)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("chart-notes patterns %s failed: %s", symbol, e)
+
+    # ⑤ 趋势操盘线 / 牛熊线(与 /indicators/* 同函数)
+    try:
+        from src.core.trend_pilot_line import fetch_trend_line
+
+        out["trend"] = fetch_trend_line(symbol, market=market_code.value)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chart-notes trend %s failed: %s", symbol, e)
+    try:
+        from src.core.niuxiong_line import fetch_niuxiong
+
+        out["niuxiong"] = fetch_niuxiong(symbol, market=market_code.value)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chart-notes niuxiong %s failed: %s", symbol, e)
+    return out
+
+
+@router.get("/{symbol}/chart-notes")
+def get_chart_notes(symbol: str, market: str = "CN"):
+    """图表说明文本: 逐标记「为什么在那」(触发/时点/失效/置信度), 人读图 / AI 备料共用。
+
+    **看图决策产品件(2026-10-14)**: 图表标注是人机共用的证据语言 —— 本端点把图层上
+    **每个标记**转成一条稳定可引用的说明, 供①前端图下说明条(一行式小字, 非卡片)②AI
+    备料直接引用。
+
+    **单一事实源(禁第二套口径)**: 标记列表不由本端点重算 —— 全部取**与图层渲染同一份
+    计算结果**(GS 买卖点/事件走 `_build_layer_data`; 形态走 `detect_pattern_marks`;
+    操盘线/牛熊线走 `/indicators/*` 同函数; 区间走 `resolve_gs_state`)。逐条对应关系由
+    `tests/test_chart_notes.py::test_same_source_contract` 钉死。
+
+    **三字段**: 触发条件/数据时点/失效条件复用 `evidence_chain.build_evidence_chain`
+    (与 AI 建议出口同一套字段) —— 失效条件永不为空(缺失显式标 `invalidation_defaulted`);
+    数据时点缺失显式「时点缺失」, 非今日显式标基准日(不默认成今日)。置信度缺样本显式
+    「未校准」, 不给数字(不编造)。
+
+    非 A 股 / 无标记 → `available=False` + `notes=[]` + 显式 note(不编造)。
+    """
+    market_code = _parse_market(market)
+    if market_code.value != "CN":
+        return {
+            "symbol": symbol, "market": market_code.value, "available": False,
+            "count": 0, "counts": {}, "notes": [], "notes_text": [], "zone_note": None,
+            "note": "仅 A 股支持图表标记说明(图层为 A 股口径)",
+        }
+
+    from src.core.chart_notes import build_chart_notes, gs_state_note
+
+    src = _collect_chart_note_sources(symbol, market_code)
+    bars = src.get("bars") or []
+    asof = _norm_date(bars[-1].get("date")) if bars else None
+
+    out = build_chart_notes(
+        symbol=symbol,
+        as_of=asof,
+        gs_signals=src.get("gs_signals"),
+        events=src.get("events"),
+        patterns=src.get("patterns"),
+        trend=src.get("trend"),
+        niuxiong=src.get("niuxiong"),
+        gs_state=src.get("gs_state"),
+    )
+    out["market"] = market_code.value
+    # 当前 GS 标记(区间/待确认)的说明: 与推送/战报**同源取句**(单一事实源)
+    out["zone_note"] = gs_state_note(src.get("gs_state"), as_of=asof)
+    return out
+
+
 # ── 日级块现算入口注册(2026-10-14 首屏 P0, 依赖倒置) ──────────────────────────
 # `src/core/layer_precompute` 的收盘批算需要本模块的 `build_layer_daily_blocks`,
 # 但 core **禁止**反向 import web(B4.1/KI-039 棘轮门禁
