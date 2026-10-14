@@ -39,6 +39,50 @@
 - **响应结构不变**: 字段集与 `_ladder_payload` 逐键一致(`mode/live_day/live_as_of/stale/
   note_closing/degraded/stats` + 路由层新鲜生成的 `as_of`), 前端零改动; `warm_caches`
   预热同走快照路径。
+### feat-工作台日级图层块收盘预落库(首屏 26s→秒开: 日级块读库·仅当日实时块现算)（2026-10-14）
+
+首屏慢审计: 个股工作台首屏 `/api/klines/{symbol}/summary` 的**日级派生块**
+(`gs_signals` 全量交叉序列 / `fund_flow` / `activity_series` / `events` / `unlock_levels`
+/ `chips` / `resonance`)此前**每次请求都在 `_build_layer_data` 现算** —— 其中 chips
+(腾讯/新浪分价表)、events 的 wencai 两条查询(硬超时 10s)、resonance 的
+`compute_pool_flow`(明+暗) 都是网络调用, 冷启动实测 ~26s, 撞前端 fetchAPI 的 20s abort;
+而 `fetch_bars` 已在 v0.13.68 读库化, 唯独派生块仍现算, 只有 300s TTL 兜底。
+
+- **加** `src/core/layer_precompute.py`: 日级块预落库模块(仿 `decision_precompute` 成熟
+  模式)。`is_settled()` 以**收盘定型时刻 15:05** 判定某交易日是否已成定稿;
+  `in_live_window()` = 交易日 09:15–15:05; `usable()` = 「行已定型 且 覆盖最近已定型
+  交易日 且 当前不在盘中窗口」; `put_layer_daily/get_layer_daily/clear_layer_daily`;
+  预热集 `collect_targets` = **全库自选 ∪ 持仓(经 Stock 关联) ∪ 最近访问**(本表近 5 天
+  有行 = 被算过/访问过的票); `precompute()` 批算落库(单票失败不拖垮整批, 非 CN/取不到
+  bars 计 skipped); `LayerPrecomputeScheduler`(工作日 **15:40**, 与 K 线入库/decision
+  15:45/TQ 类 15:35·15:50 错开) + `run_precompute_job()` 手动入口。
+- **改** `src/web/api/klines.py`: `_build_layer_data` 拆成「日级块」+「实时块」——
+  `_compute_daily_blocks()`(原 ①–⑤ 逻辑逐行搬移, **口径逐字段不变**)、
+  `_latest_settled_bar_date()`(bars 里最近一根**已定型**日 K, 盘中的 live bar 不算)、
+  `build_layer_daily_blocks()`(批算入口, 与请求期同一现算函数)。新流程: **读库命中 ⇒
+  日级块零现算**; 未命中(盘中当日块未定型 / 无行 / 行过旧 / 读库失败) ⇒ 现算, 算完若
+  已定型就落库(下次直接命中)。**orderbook 是实时块, 从不落库、每次现算**(与日级块并发)。
+  PG `summary_cache` / biz_cache 双层 300s 缓存**原样保留**。新增可选参数 `now=`
+  (仅测试注入时钟: 定型判定/盘中窗口)。
+- **建表** `src/web/migrations.py` 新增 `Migration(190, "workbench_layer_daily", ...)`:
+  `(symbol, market, asof)` 联合主键(日级块按交易日定稿, 保留历史行) + `settled`(未定型的
+  当日行读侧永不使用, 只作"最近访问"痕迹) + `source`(precompute/request) + `computed_ts`
+  (epoch 秒, 供"最近访问"与 14 天保留期清理) + `payload`(TEXT, 上限 1MB, 超限不落库)。
+- **接线** `src/bootstrap/runtime.py` + `src/bootstrap/startup.py`: 启动/关闭调度器。
+- **依赖方向(B4.1/KI-039 棘轮门禁)**: 现算实现留在 web 层(它依赖 `_build_events`/
+  `_build_resonance`/`_to_tencent` 等 web 层件, 且既有测试直接打桩这些符号), 而 core
+  **禁止**反向 import web。故用**依赖倒置**: web 层 import 期调
+  `register_daily_block_builder(build_layer_daily_blocks)`, core 只按回调调用;
+  未注册(web 层未加载)→ 批算显式 `skipped + errors=[no_builder]` 并告警, 不猜不编造。
+- **诚实语义(不冒充实时)**: 盘中(chips/资金/共振仍在变)一律回现算, 不拿旧块当当日状态;
+  行落后于最新定型日(批算漏票)→ 回现算补齐序列; 全空载荷(数据源整体不可用)不落库;
+  读库/落库/计算失败一律回现算或返回原降级结果, 绝不因预落库把 summary 打挂。
+- **测试**(禁真网络): 新增 `tests/test_layer_precompute.py`(落库读库往返+幂等·读库命中
+  零现算(现算桩直接炸)·未命中与直接现算逐字段一致且落库·盘中窗口忽略定型行·行过旧回
+  现算·bars 空不读库·读库/落库/现算失败三路降级不阻塞·定型门禁三态·预热集并集与坏库
+  兜底·批算统计与单票失败隔离·全空载荷不落库·现算入口注册/未注册两态);
+  `tests/test_migration_lock_and_failures.py` 补 m190 建表钉子(同日 upsert 覆盖 /
+  同日不同交易日留行)。
 
 ### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
 

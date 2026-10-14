@@ -28,6 +28,7 @@ from src.core.tq_sentiment_scheduler import TqSentimentScheduler
 from src.core.tq_formula_signal_scheduler import TqFormulaSignalScheduler
 from src.core.market_breadth_scheduler import MarketBreadthScheduler
 from src.core.decision_precompute import DecisionPrecomputeScheduler
+from src.core.layer_precompute import LayerPrecomputeScheduler
 from src.web.database import SessionLocal, init_db
 
 logger = logging.getLogger("server")
@@ -293,6 +294,22 @@ async def lifespan(app):
             logger.info("决策预落库调度器已启动")
         except Exception as e:
             logger.error(f"决策预落库调度器启动失败: {e}")
+
+        # 工作台日级图层派生块预落库(2026-10-14 首屏 P0)
+        # 为什么需要: /api/klines/{symbol}/summary 的日级派生块(gs_signals/fund_flow/
+        # activity/events/unlock/chips/resonance)此前每请求全量现算 —— chips/wencai/
+        # pool_flow 是网络调用, 冷启动 ~26s 撞前端 20s abort, 只有 300s TTL 兜底。
+        # 15:40(收盘后, K 线入库之后)批算高频票落 workbench_layer_daily; 与
+        # decision_precompute(15:45)/TQ 类(15:35, 15:50)错开, 不抢客户端进程。
+        try:
+            settings = Settings()
+            rt.layer_precompute_scheduler = LayerPrecomputeScheduler(
+                timezone=settings.app_timezone
+            )
+            rt.layer_precompute_scheduler.start()
+            logger.info("工作台图层预落库调度器已启动")
+        except Exception as e:
+            logger.error(f"工作台图层预落库调度器启动失败: {e}")
 
         # L2 逐笔定期落库(v0.4.77): 每 5 分钟一次, 盘中拉自选+候选池 thsdk L2 → DB,
         # 前端 /api/klines/{symbol}/l2-ticks 默认 fetch=0 只读库, 解决 30s 超时
@@ -970,6 +987,8 @@ async def lifespan(app):
         rt.tq_formula_signal_scheduler.shutdown()
     if rt.decision_precompute_scheduler:
         rt.decision_precompute_scheduler.shutdown()
+    if rt.layer_precompute_scheduler:
+        rt.layer_precompute_scheduler.shutdown()
     # v0.4.36 P0 派活 1: WS Hub 解绑 loop
     try:
         from src.web.notifications.ws_hub import attach_event_loop

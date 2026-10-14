@@ -2731,6 +2731,51 @@ def _m190_ladder_daily_snapshot_table(conn: Connection) -> None:
                 """
             )
         )
+def _m191_workbench_layer_daily_table(conn: Connection) -> None:
+    """工作台日级图层派生块预落库表(2026-10-14 首屏 P0)。
+
+    为什么需要: 个股工作台首屏 `/api/klines/{symbol}/summary` 的**日级派生块**
+    (gs_signals 全量交叉序列 / fund_flow / activity_series / events / unlock_levels /
+    chips / resonance)此前**每次请求都在 `_build_layer_data` 现算** —— 其中 chips
+    (腾讯/新浪分价表)、events 的 wencai 两条查询(硬超时 10s)、resonance 的
+    compute_pool_flow(明+暗) 都是网络调用, 冷启动实测 ~26s, 撞前端 fetchAPI 的
+    20s abort。只有 300s TTL 兜底 ⇒ 隔夜首访/重启/换 worker 必重吃一遍。
+    本表让收盘批算一次 + 请求期读库, 请求期只现算"当日实时块"(口径不变)。
+
+    诚实语义: 行只在**该交易日已定型**(收盘 15:05 后)时才置 `settled=1`; 盘中写入的
+    当日行 `settled=0` **永不被读侧使用**(只作"最近访问"痕迹) —— 不拿旧块冒充当日状态。
+    读侧另用"最近已定型交易日"做新鲜度门禁(行过旧 → 回现算), 见
+    `src/core/layer_precompute.py::usable`。
+
+    字段(双方言同一 DDL: SQLite 对类型声明宽松, 与 _m183 同法):
+      symbol TEXT / market TEXT / asof TEXT('YYYY-MM-DD' 交易日)  → 联合主键(保留历史行)
+      settled INTEGER   -- 1 = 该日已定型(可被读侧使用)
+      source TEXT       -- precompute(收盘批算) / request(请求期算完落库)
+      computed_ts DOUBLE PRECISION -- 写入时刻(epoch 秒), 供"最近访问"与保留期清理
+      payload TEXT      -- 日级块 JSON(上限 1MB, 超限宁可不写, 绝不存残缺载荷)
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS workbench_layer_daily (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL,
+                asof TEXT NOT NULL,
+                settled INTEGER NOT NULL DEFAULT 0,
+                source TEXT DEFAULT '',
+                computed_ts DOUBLE PRECISION,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (symbol, market, asof)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_workbench_layer_daily_ts "
+            "ON workbench_layer_daily(computed_ts)"
+        )
+    )
 
 
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
@@ -5370,6 +5415,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 连板梯队定型日快照(2026-10-14 定型预渲染落库): 收盘 cron 预渲染当日定型 payload,
     # 请求期读库为主(6.5s 现算 → 毫秒级), 盘中只叠加 live 快照的当日行; 缺行/落后回退现算。
     Migration(190, "ladder_daily_snapshot", _m190_ladder_daily_snapshot_table),
+    # 工作台日级图层派生块预落库(2026-10-14 首屏 P0): 个股 summary 的日级块
+    # (gs_signals/fund_flow/activity/events/unlock/chips/resonance)此前每请求现算
+    # (chips/wencai/pool_flow 是网络调用, 冷启动 ~26s 撞前端 20s abort)。收盘批算 +
+    # 请求期读库, 只现算当日实时块。先例: _m183 decision_cache。
+    Migration(191, "workbench_layer_daily", _m191_workbench_layer_daily_table),
 )
 
 

@@ -256,6 +256,58 @@ def test_m189_mainline_daily_snapshot_on_sqlite(sqlite_engine, monkeypatch):
     assert rows[0][0] == '{"note":"v2"}' and rows[0][1] == 2.5
 
 
+def test_m191_workbench_layer_daily_on_sqlite(sqlite_engine, monkeypatch):
+    """2026-10-14 首屏 P0: 工作台日级图层块预落库表((symbol, market, asof) 联合主键)。
+
+    同日重写必须覆盖(upsert 语义, 不插第二行); 同票不同交易日保留历史行(日级键)。
+    """
+    monkeypatch.setattr(
+        mig,
+        "MIGRATIONS",
+        (Migration(191, "workbench_layer_daily", mig._m191_workbench_layer_daily_table),),
+    )
+    run_versioned_migrations(sqlite_engine)
+
+    _cols = "(symbol, market, asof, settled, source, computed_ts, payload)"
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                f"INSERT INTO workbench_layer_daily {_cols}"
+                " VALUES ('000001', 'CN', '2026-10-13', 1, 'precompute', 1.5,"
+                " '{\"gs_signals\": []}')"
+            )
+        )
+        # 同 (symbol, market, asof) 再写必须替换(upsert 语义), 而不是插出第二行
+        conn.execute(
+            text(
+                f"INSERT INTO workbench_layer_daily {_cols}"
+                " VALUES ('000001', 'CN', '2026-10-13', 1, 'request', 2.5,"
+                " '{\"gs_signals\": [1]}')"
+                " ON CONFLICT (symbol, market, asof) DO UPDATE SET source = excluded.source,"
+                " computed_ts = excluded.computed_ts, payload = excluded.payload"
+            )
+        )
+        # 同票不同交易日: 保留历史行(日级块按交易日定稿)
+        conn.execute(
+            text(
+                f"INSERT INTO workbench_layer_daily {_cols}"
+                " VALUES ('000001', 'CN', '2026-10-14', 0, 'request', 3.5,"
+                " '{\"gs_signals\": [2]}')"
+            )
+        )
+        rows = conn.execute(
+            text(
+                "SELECT asof, settled, source, computed_ts, payload FROM workbench_layer_daily"
+                " ORDER BY asof"
+            )
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0][0] == "2026-10-13" and rows[0][1] == 1
+    assert rows[0][2] == "request" and rows[0][3] == 2.5
+    assert rows[1][0] == "2026-10-14" and rows[1][1] == 0
+
+
 def test_m140_141_142_orm_model_tables_on_sqlite(sqlite_engine, monkeypatch):
     """收编 market_scan.py / signal_summary.py 兜底建表的三个 ORM 迁移。"""
     monkeypatch.setattr(
