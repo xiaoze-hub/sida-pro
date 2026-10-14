@@ -724,11 +724,11 @@ def _append_decision_pioneer(lines: list, symbol: str) -> None:
         gs: dict = d.get("gs") or {}
         zone = gs.get("state")        # 已确认区间(与 K 线图层单一事实源)
         if zone or gs.get("pending"):
-            sig = {"G": "G买(上穿)", "S": "S卖(下穿)"}.get(gs.get("signal"), "无")
-            txt = f"{zone or '待确认'}"
-            if gs.get("pending"):
-                txt += f"(末根疑似{gs.get('pending_side')}待确认)"
-            lines.append(f"- GS趋势：{txt}(方向过滤, 买卖点滞后仅参考, 最近已确认{sig})")
+            # 2026-10-14 图表说明同源收口: 三指标段 GS 文案统一走 chart_notes.gs_state_text
+            # (与 K 线图 GS 标记 / chart-notes **同源**), 不再自拼一份。
+            from src.core.chart_notes import gs_state_text
+
+            lines.append(f"- GS趋势：{gs_state_text(gs, style='trend')}")
         else:
             lines.append("- GS趋势：无数据")
         l2 = d.get("l2") or {}

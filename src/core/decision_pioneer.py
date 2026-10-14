@@ -648,16 +648,11 @@ def decision_pioneer_text(symbol: str, market: str = "CN") -> str:
     gs: dict = d.get("gs") or {}
     zone = gs.get("state")            # = gs_state.zone(已确认区间, 与 K 线图层同源)
     if zone or gs.get("pending"):
-        sig = {"G": "G买", "S": "S卖"}.get(gs.get("signal"), "无")
-        if zone:
-            txt = f"当前{zone}(已确认), 最近已确认信号{sig}"
-            if gs.get("signal_date"):
-                txt += f"({gs['signal_date']})"
-            if gs.get("pending"):
-                txt += f"; {gs.get('pending_date') or '末根'}疑似转{gs.get('pending_side')}待确认"
-        else:
-            txt = f"待确认(尚无已确认区间), 末根疑似{gs.get('pending_side')}"
-        parts.append(f"GS策略: {txt}")
+        # 2026-10-14 图表说明同源收口: GS 文案(逐字)统一由 chart_notes.gs_state_text 产出,
+        # 与 chart-notes / K 线图 G 区色带同源 —— 推送不再自拼一份(防两处各说各话)。
+        from src.core.chart_notes import gs_state_text
+
+        parts.append(f"GS策略: {gs_state_text(gs)}")
     else:
         parts.append("GS策略: 无数据")
 

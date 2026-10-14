@@ -2,6 +2,29 @@
 
 - docs/roadmap.md: 看图决策口径深化(图表说明=用户与AI共用证据语言)+三主线+不做清单+节奏。
 
+## feat-图表说明产品件·后端(chart-notes 接口 + 标记「为什么」三字段 + 推送 AI 同源收口)（2026-10-14）
+
+产品口径(用户 2026-10-14 明示): **看图决策 = 提供图表说明供用户和 AI 共同决策** —— 图表标注是
+人机共用的**证据语言**, **AI 读的必须与图上标的逐字一致**(单一事实源)。本提交落地后端两件。
+
+- **加** `src/core/chart_notes.py`: 逐标记「为什么在那」纯函数(无 IO) —— 每个标记带
+  **触发条件/数据时点/失效条件/置信度**。三字段**复用** `evidence_chain.build_evidence_chain`
+  (与 AI 建议出口同一套字段/口径, 不另立标准): 失效条件**永不为空**(缺失回领域兜底并标
+  `invalidation_defaulted`); 时点缺失显式「时点缺失」、非今日显式标基准日(**不默认成今日**);
+  置信度缺样本显式「未校准」不给数字(不编造)。标记列表**不由本模块重算** —— 由调用方喂入
+  **与图层渲染同一份计算结果**(GS 买卖点/事件走 `_build_layer_data`; 形态走
+  `detect_pattern_marks`; 操盘线/牛熊线走 `/indicators/*` 同函数; 区间走 `resolve_gs_state`)。
+  附人可读取句入口 `note_sentence` / `chart_notes_sentence` / `pick_text`。
+- **加** `GET /api/klines/{symbol}/chart-notes`(`src/web/api/klines.py`): 逐标记说明数组
+  (标记类型/日期/价格/触发/时点/失效/置信度)+ `notes_text`(人可读单行)+ `zone_note`
+  (当前 GS 标记说明, 与推送同源)。非 A 股 / 无标记 → 显式 `available=False` + `note`(不编造)。
+- **改** AI 同源收口: `src/core/decision_pioneer.py`(面板/战报一段式)与
+  `src/agents/intraday_monitor.py`(盘中三指标段)引用图上 GS 标记的文案, 统一改走
+  `chart_notes.gs_state_text`(**单点取句**, 与 chart-notes / K 线图 G 区色带同源), 不再自拼。
+- **测试** `tests/test_chart_notes.py`(19 例, 全 mock, 禁真网络): 字段完整性 · 三字段降级
+  (无触发显式「数据缺失」/时点缺失不默认成今日/失效必填回标 defaulted/置信度未校准) ·
+  **同源契约**(chart-notes 条目 ⇔ 图层标记逐条对应) · 端点多态 · 推送引用同源取句。
+
 ## feat-暗盘逐笔采集纳入自选∪持仓池(轮转切片, 免"当天首次点开"冷启动)（2026-10-14）
 
 补齐上两条的一个空洞: 只刷"热码(最近被请求过)"的话, **某只票当天第一次被点开时冷启动
