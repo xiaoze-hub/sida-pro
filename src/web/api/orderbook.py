@@ -35,6 +35,21 @@ thsdk 未安装时引擎模块级软依赖自动置 None, 本接口返回 availa
      里**显式标注**来源与时间(离线快照 ≠ 实时, 不冒充)。
 
 成功路径返回值与修改前逐字段一致(见 tests/test_orderbook_ob_endpoint.py)。
+
+## 2026-10-14: 盘口转后台采集(读快照优先 + 超龄穿透 + 陈旧度标注)
+
+审计定性: 本接口此前**每次请求现拉** thsdk 十档(硬超时 12s 直接压在用户请求上)。
+
+现改为: 后台采集器(`src/core/orderbook_snapshot.py`, 交易时段每 15~30s 拉活跃票十档
+落 `orderbook_snapshots` 滚动窗)产出快照, 本接口**优先读快照**:
+  - 快照够新(`snapshot_age_sec` <= `ORDERBOOK_SNAPSHOT_STALE_SEC`, 默认 60s) → 直接读,
+    不打 thsdk; 响应带 `source='snapshot'` + `snapshot_age_sec` + `as_of`(陈旧度显式标注);
+  - 快照超龄 / 无快照 / `?refresh=true`(用户主动刷新) → **穿透实时**, 走上面的硬超时 +
+    重试 + .img 兜底 + 显式降级(语义不变);
+  - 无快照且实时不可用(采集器停摆亦然) → 显式降级 `available:false` + 真实原因。
+
+非 `refresh` 的读快照成功路径新增 `source`/`snapshot_age_sec`/`as_of` 三键(原有键不变);
+穿透实时的成功路径仍与改造前逐字段一致(不新增 source/as_of)。
 """
 import logging
 import time
@@ -44,6 +59,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Query, Request
 
 from src.core import orderbook_engine
+from src.core import orderbook_snapshot
 from src.core.img_orderbook_store import SHARED_SCOPE
 
 logger = logging.getLogger(__name__)
@@ -167,24 +183,81 @@ def _img_snapshot_fallback(symbol: str) -> dict | None:
         return None
 
 
+def _from_snapshot(snap: dict) -> dict | None:
+    """后台采集的滚动窗快照 → OB 失衡条响应(带 snapshot_age_sec 显式陈旧度)。
+
+    快照帧经 JSON 往返落库, 先用 `orderbook_snapshot.rebuild_snapshot` 还原成引擎同构
+    快照(重建 **float 价格键** bid/ask map, 否则价格比较会退化成字符串比较)。
+    无可用帧 / 产不出 OB 序列 → None(调用方穿透实时)。
+
+    成功路径字段 = 现有成功路径 + `source`/`snapshot_age_sec`/`as_of`(陈旧度显式标注)。
+    """
+    frames = snap.get("frames") or []
+    snaps = [s for s in (orderbook_snapshot.rebuild_snapshot(f) for f in frames) if s]
+    if not snaps:
+        return None
+    ob_series = orderbook_engine.order_book_imbalance(snaps)
+    if not ob_series:
+        return None
+    events = orderbook_engine.order_book_evolution(snaps)
+    _ghosts, ghost_ratio = orderbook_engine.ghost_order(snaps)
+    age = snap.get("snapshot_age_sec")
+    return {
+        "available": True,
+        "ob_series": ob_series,
+        "events": events,
+        "ghost_ratio": ghost_ratio,
+        "note": (
+            f"盘口快照(后台采集, {len(snaps)} 帧滚动窗); "
+            f"数据时间 {snap.get('latest_ts') or '未知'}, 陈旧度 {age}s"
+        ),
+        "source": "snapshot",
+        "snapshot_age_sec": age,
+        "as_of": snap.get("latest_ts"),
+    }
+
+
 def get_orderbook_ob(
     symbol: str,
     n_snapshots: int = _N_SNAPSHOTS,
     interval: float = _INTERVAL_S,
+    *,
+    refresh: bool = False,
 ) -> dict:
-    """OB 失衡条纯函数: 调 orderbook_engine.run 取真实 THS L2 盘口, 组装卡片数据。
+    """OB 失衡条纯函数: 优先读后台快照, 超龄/无快照/主动刷新才穿透实时。
+
+    2026-10-14 盘口转后台采集: 此前每次请求现拉 thsdk 十档(硬超时 12s 压在请求上)。
+    现在:
+      ① **读快照优先**(非 `refresh`): 后台采集的滚动窗够新(`snapshot_age_sec` <=
+         `ORDERBOOK_SNAPSHOT_STALE_SEC`) → 直接读快照, 不打 thsdk; 响应带陈旧度标注;
+      ② **超龄穿透**: 快照超龄 / 无快照 / `refresh=True`(用户主动刷新) → 走现有
+         `_run_guarded`(硬超时 + 有限次重试 + .img 兜底 + 显式降级), 语义不变;
+      ③ **无快照且实时不可用** → 显式降级(available:false + 真实原因), 采集器停摆亦然。
 
     任何失败(thsdk 缺失 / 取数失败 / 数据为空 / 上游超时)都返回 available:false + 真实 note,
-    绝不伪造盘口数据; 上游瞬时抖动做有限次重试 + 退避 + 硬超时, 重试仍失败显式降级(200)。
+    绝不伪造盘口数据。
     """
     ths_code = _normalize_symbol(symbol)
     if not ths_code:
         return _degraded("symbol 为空, 无法取盘口数据")
 
-    # thsdk 缺失: 引擎模块级软依赖 THS=None, 这里显式预检给出明确原因
+    # ① 读快照优先: 把 thsdk 的硬超时彻底移出请求链(非主动刷新时)
+    stale_age: int | None = None
+    if not refresh:
+        snap = orderbook_snapshot.read_snapshot(ths_code)
+        if snap is not None:
+            age = snap.get("snapshot_age_sec")
+            if age is not None and age <= orderbook_snapshot.stale_threshold_sec():
+                resp = _from_snapshot(snap)
+                if resp is not None:
+                    return resp
+            stale_age = age
+
+    # thsdk 缺失: 快照也没有(采集器也无法产出) → 显式降级
     if orderbook_engine.THS is None:
         return _degraded("thsdk 未安装, 无法拉取真实 L2 盘口(OB 失衡条不可用)")
 
+    # ② 超龄 / 无快照 / 主动刷新 → 穿透实时
     result, attempts = _run_guarded(ths_code, n_snapshots, interval)
 
     if result is None:
@@ -192,10 +265,13 @@ def get_orderbook_ob(
         fallback = _img_snapshot_fallback(ths_code)
         if fallback is not None:
             return fallback
-        return _degraded(
-            f"盘口取数失败(上游 thsdk 连续 {attempts} 次不可用或超时), 本次无数据",
-            source="thsdk",
-        )
+        note = f"盘口取数失败(上游 thsdk 连续 {attempts} 次不可用或超时), 本次无数据"
+        if stale_age is not None:
+            note += (
+                f"; 后台快照超龄({stale_age}s > "
+                f"{orderbook_snapshot.stale_threshold_sec()}s), 未能兜底"
+            )
+        return _degraded(note, source="thsdk")
 
     ob_series = result.get("ob_series") or []
     if not ob_series:
@@ -419,9 +495,16 @@ def get_img_orderbook(
 
 
 @router.get("")
-def orderbook_ob(symbol: str = Query(..., description="THS 代码(如 USZA002361)或 6 位代码(如 002361)")):
-    """OB 失衡条(轻接口, 分时卡片用): 买|卖压比例 + 盘口演变事件 + 幽灵单比率。"""
-    return get_orderbook_ob(symbol)
+def orderbook_ob(
+    symbol: str = Query(..., description="THS 代码(如 USZA002361)或 6 位代码(如 002361)"),
+    refresh: bool = Query(False, description="true=跳过快照, 主动穿透实时(用户手动刷新用)"),
+):
+    """OB 失衡条(轻接口, 分时卡片用): 买|卖压比例 + 盘口演变事件 + 幽灵单比率。
+
+    默认读后台采集的盘口快照(带 `snapshot_age_sec` 陈旧度标注); `refresh=true` 或快照
+    超龄时穿透实时 thsdk。
+    """
+    return get_orderbook_ob(symbol, refresh=refresh)
 
 
 @router.get("/img")
@@ -442,6 +525,7 @@ def orderbook_img(
 
 
 @router.get("/{symbol}")
-def orderbook_ob_path(symbol: str):
-    """路径式别名: /api/orderbook-ob/USZA002361。"""
-    return get_orderbook_ob(symbol)
+def orderbook_ob_path(symbol: str, refresh: bool = Query(False,
+                                                         description="true=跳过快照, 主动穿透实时")):
+    """路径式别名: /api/orderbook-ob/USZA002361(默认读快照; `?refresh=true` 穿透实时)。"""
+    return get_orderbook_ob(symbol, refresh=refresh)

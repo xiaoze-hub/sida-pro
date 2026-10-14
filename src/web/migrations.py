@@ -2874,6 +2874,43 @@ def _m193_board_flow_snapshots_table(conn: Connection) -> None:
     )
 
 
+def _m194_orderbook_snapshots_table(conn: Connection) -> None:
+    """十档盘口快照采集表 orderbook_snapshots(2026-10-14, 盘口移出请求路径)。
+
+    审计定性: `/api/orderbook-ob`(硬超时 12s)与 klines summary 的 `_build_orderbook`
+    (硬超时 8s)在**请求期**直接打 thsdk 十档(order_book_bid/ask), 上游单次实测可卡 30s
+    → 卡顿/超时直接压在用户请求上。本表承载**后台采集**的十档快照, 请求端读快照优先。
+
+    一行一票(`symbol` 唯一, upsert 原地更新滚动窗): `collected_at`=采集时刻 epoch 秒
+    (陈旧度基准), `payload`=滚动窗帧 JSON(旧→新, 最多 N 帧), `latest_ts`/`frames` 便捷列。
+    节流周期 / 陈旧阈值 / universe 上限均 env 可配。
+    """
+    if _has_table(conn, "orderbook_snapshots"):
+        return
+    dbl = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE orderbook_snapshots (
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'CN',
+                collected_at {dbl} NOT NULL,
+                latest_ts TEXT,
+                frames INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL,
+                source TEXT DEFAULT 'thsdk'
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "uq_orderbook_snap_symbol",
+        "CREATE UNIQUE INDEX uq_orderbook_snap_symbol "
+        "ON orderbook_snapshots (symbol)",
+    )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5509,6 +5546,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 板块资金采样落库(2026-10-14): board-capital-flow 完全现拉同花顺 + 仅 stale 备份。
     # 追加 1~5min 采样落库(仿 market_flow_snapshots 先例), 读侧够新读库/过旧回源+stale。
     Migration(193, "board_flow_snapshots_table", _m193_board_flow_snapshots_table),
+    # 十档盘口快照采集表(2026-10-14): /api/orderbook-ob(12s 硬超时)与 klines summary
+    # 的 _build_orderbook(8s 硬超时)在请求期直接打 thsdk 十档, 上游可卡 30s → 压用户请求。
+    # 本表承载后台采集(交易时段 15~30s, 活跃票)的十档滚动窗, 请求端读快照优先 + 陈旧度标注。
+    Migration(194, "orderbook_snapshots_table", _m194_orderbook_snapshots_table),
 )
 
 
