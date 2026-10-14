@@ -1,3 +1,22 @@
+### feat-暗盘逐笔采集调度接线 + 请求端缓存快照元数据 diag（2026-10-14）
+
+承接上一条(后台增量采集器)。请求端从此常态读的是后台刚推进过的缓存, 冷启动兜底只在
+"缓存空/跨日"时触发一次 —— 本提交把调度接上, 并把"读到的到底是新鲜缓存还是降级兜底"
+暴露给运维, 不靠猜。
+
+- **接线** `src/bootstrap/startup.py`: 注册 `darkflow-tick-sampler`(interval 默认 60s, 紧挨
+  `board-flow-sampler` 之后)。作业自身时段守卫(非交易时段直接 skip, 零网络请求), 间隔由
+  `sampler_interval_s()` 保证 < TTL。
+- **请求端** `src/web/api/darkflow.py`: `diag` 加法扩展(既有字段与语义一字不动) ——
+  `cache_origin`(`cache|incremental|cold|reset|l2|none`)、`snapshot_age_sec`、`cache_fresh`、
+  `tick_cursor{page,seq}`、`pages_fetched`(**0 = 全程零翻页, 实证走的是缓存**)、`degraded`、
+  `degrade_reason`、`degrade_sec`(上游已停更时长)、`cache_day`; 新增运维杠杆
+  `POST /api/dark-flow/collect`(仅 owner)手动推一轮采集, 返回本轮摘要 + 采集器状态。
+- **TQ L2 维持现状**: `decision_pioneer.fetch_tq_l2` 未订阅月无值的行为不动, 本次不碰。
+- **测试**: `tests/test_darkflow_bg_collect.py` 增 diag 两个用例(正常缓存 / 降级可见)与
+  `/collect` 端点用例(全 mock, 不联网); `tests/test_darkflow_ops.py::test_diag_forwarded`
+  同步新增 diag 键(mock `tick_snapshot_info` 固定元数据, 不随跑测机器的缓存状态漂移)。
+
 ### feat-暗盘逐笔转后台增量采集(冷启动移出请求路径 + 游标续拉判据修复)（2026-10-14）
 
 审计定性(勿重查): `src/core/dark_flow.py` 的逐笔翻页 —— 无缓存时整轮全量(冷启动; 文件内

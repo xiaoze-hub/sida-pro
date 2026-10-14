@@ -343,6 +343,93 @@ def test_hot_registry_lru_and_window():
     assert sampler.tracked_codes() == [CODE]
 
 
+# ---------------------------------------------------------------------------
+# 请求端 diag(不联网: compute/quote/tck/L2/三源交叉全 mock)
+# ---------------------------------------------------------------------------
+
+
+def _stub_api(monkeypatch, fake_dark):
+    import src.web.api.darkflow as api
+    import src.core.decision_pioneer as dp
+    import src.core.mainflow_tri as mt
+
+    monkeypatch.setattr(api, "compute_dark_flow", lambda symbol: fake_dark)
+    monkeypatch.setattr(api, "_fetch_quote_dict", lambda symbol: None)
+    monkeypatch.setattr(api, "compute_tck_active_ratio", lambda code: None)
+    monkeypatch.setattr(api, "_tick_staleness", lambda *a, **k: {"stale": False, "lag_sec": 5})
+    monkeypatch.setattr(df, "_active_source", lambda: "tencent_ticks")
+    monkeypatch.setattr(
+        dp, "fetch_tq_l2",
+        lambda code: (_ for _ in ()).throw(RuntimeError("no net in test")),
+    )
+    monkeypatch.setattr(
+        mt, "triangulate",
+        lambda code: {"agree": None, "consensus_wan": None, "spread_pct": None, "n_ok": 0, "sources": {}},
+    )
+    return api
+
+
+def test_api_diag_exposes_snapshot_metadata(monkeypatch):
+    """diag 显式暴露缓存年龄/游标/来源/翻页数/降级 —— 请求端读缓存可见可查。"""
+    fake_dark = {
+        "main_net": 1, "big_net": 1, "mid_net": 0, "small_net": 0,
+        "main_intensity": 1.0, "main_buy_ratio": 50.0, "signal": "s",
+        "data_status": "ok", "inner_outer": {}, "split_order": None,
+        "tick_count": 140, "last_tick_t": "10:30:00", "tick_pages": 2,
+    }
+    api = _stub_api(monkeypatch, fake_dark)
+    df._TICKS_CACHE[CODE] = (
+        time.time(), [{"d": "B", "amt": 1.0, "t": "10:00:00"}], 3, 300, df._cache_day(),
+    )
+    resp = api.build_darkflow_response("002361")
+    diag = resp["diag"]
+    assert diag["cache_origin"] is None          # 本目录无 meta(未走过拉取路径)
+    assert diag["snapshot_age_sec"] == 0
+    assert diag["cache_fresh"] is True
+    assert diag["tick_cursor"] == {"page": 3, "seq": 300}
+    assert diag["degraded"] is False
+    assert diag["degrade_reason"] is None
+    assert diag["degrade_sec"] is None
+    assert diag["cache_day"] == df._cache_day()
+    assert diag["source"] == "tencent_ticks"
+
+
+def test_api_diag_reports_degraded(monkeypatch):
+    """降级在 diag 上显式可见(运维一眼看出是旧快照兜底)。"""
+    fake_dark = {
+        "main_net": 0, "big_net": 0, "mid_net": 0, "small_net": 0,
+        "main_intensity": None, "main_buy_ratio": None, "signal": "s",
+        "data_status": "ok", "inner_outer": {}, "split_order": None,
+        "tick_count": 140, "last_tick_t": "10:30:00", "tick_pages": 2,
+    }
+    api = _stub_api(monkeypatch, fake_dark)
+    df._TICKS_CACHE[CODE] = (
+        time.time() - 300, [{"d": "B", "amt": 1.0, "t": "10:00:00"}], 1, 140, df._cache_day(),
+    )
+    df._FETCH_META[CODE] = {
+        "origin": "incremental", "pages_fetched": 4, "last_run_ts": time.time(),
+        "degraded": True, "degraded_reason": "上游无新增逐笔(疑限流/停更), 返回缓存快照",
+        "degraded_since_ts": time.time() - 120,
+    }
+    diag = api.build_darkflow_response("002361")["diag"]
+    assert diag["cache_origin"] == "incremental"
+    assert diag["pages_fetched"] == 4
+    assert diag["degraded"] is True
+    assert "上游无新增" in diag["degrade_reason"]
+    assert diag["degrade_sec"] >= 100            # 上游已停更时长显式可见
+    assert diag["snapshot_age_sec"] >= 300
+
+
+def test_collect_endpoint_shape(monkeypatch):
+    """运维杠杆 /collect: 返回本轮摘要 + 采集器状态(不联网)。"""
+    import src.web.api.darkflow as api
+
+    monkeypatch.setattr(sampler, "collect_once", lambda *a, **k: {"ok": True, "skipped": True, "reason": "非交易时段"})
+    out = api.collect_darkflow_ticks(owner=object())
+    assert out["ok"] is True and out["skipped"] is True
+    assert "sampler" in out
+
+
 def test_clear_cache_drops_meta(monkeypatch):
     """运维清缓存必须连元数据一起清(diag 不得继续报旧来源/游标)。"""
     fake = FakeTicks(nonempty=2)

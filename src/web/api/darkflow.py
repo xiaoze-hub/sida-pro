@@ -20,9 +20,11 @@ from marketdata.vendors.tencent import TencentQuoteVendor
 from src.core.dark_flow import (
     _judge_mnemonic,
     _position_from_range,
+    _tencent_code,
     clear_ticks_cache,
     compute_dark_flow,
     compute_tck_active_ratio,  # v0.4.79: .tck 主动率(口诀活代码化)
+    tick_snapshot_info,  # 2026-10-14: 逐笔缓存快照元数据(后台增量采集后的 diag)
 )
 from src.web.api.auth import require_owner
 from src.web.database import get_db
@@ -175,6 +177,15 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
 
     # 2026-09-04 P1-5: stale 只标停滞(data_status 不动, 不断口诀链路)。
     _stale = _tick_staleness(dark.get("last_tick_t"), trade_date)
+    # 2026-10-14: 逐笔缓存快照元数据(后台增量采集)。请求端常态读的是后台刚推进过的
+    # 缓存(零翻页); 缓存空/跨日时走请求期兜底(冷启动一次)。年龄/游标/来源/降级
+    # 全部显式暴露 —— 一眼可辨"新鲜缓存"还是"上游降级兜底", 不靠猜。
+    try:
+        _tcode = _tencent_code(symbol)
+        _snap = tick_snapshot_info(_tcode) if _tcode else None
+    except Exception:  # noqa: BLE001
+        _snap = None
+    _snap = _snap or {}
     # 2026-09-04 #5: suspect/stale 推通知(全局渠道, 同股同类每日一次, 失败静默)。
     try:
         from src.core.darkflow_alerts import maybe_alert_anomaly
@@ -214,6 +225,22 @@ def build_darkflow_response(symbol_code: str, source: str | None = None) -> dict
             "stale": _stale["stale"],
             "tick_lag_sec": _stale["lag_sec"],
             "source": used_source,  # 2026-09-04 #2: 本次实际数据源
+            # 2026-10-14(后台增量采集): 缓存快照的年龄/游标/来源/降级显式化。
+            # cache_origin: cache(命中) / incremental(游标续拉) / cold(冷启动兜底)
+            # / reset(跨日重拉) / l2(外部源) / none(无缓存); pages_fetched=本轮翻页数
+            # (0 = 全程零翻页读缓存)。degraded=True 时 degraded_reason 给出原因。
+            "cache_origin": _snap.get("origin"),
+            "snapshot_age_sec": _snap.get("snapshot_age_sec"),
+            "cache_fresh": _snap.get("fresh"),
+            "tick_cursor": {
+                "page": _snap.get("cursor_page"),
+                "seq": _snap.get("cursor_seq"),
+            },
+            "pages_fetched": _snap.get("pages_fetched"),
+            "degraded": bool(_snap.get("degraded")),
+            "degrade_reason": _snap.get("degraded_reason"),
+            "degrade_sec": _snap.get("degraded_sec"),
+            "cache_day": _snap.get("day"),
         },
     }
 
@@ -412,6 +439,21 @@ def archive_darkflow_day(
     ticks = _fetch_all_ticks(tcode)  # TTL 命中走缓存, 不重复翻页
     ok = _ta.maybe_archive_day(tcode, symbol, ticks, dark)
     return {"archived": ok, "symbol": symbol, "tick_count": dark.get("tick_count")}
+
+
+@router.post("/collect")
+def collect_darkflow_ticks(owner=Depends(require_owner)):
+    """手动触发一轮暗盘逐笔增量采集(运维杠杆, 仅管理员)。
+
+    2026-10-14: 逐笔冷启动已挪到后台采集器(`src/core/dark_flow_sampler.py`, 交易
+    时段 60s 一轮对热码做增量续拉), 请求端常态读缓存零翻页。本接口是运维"立刻推
+    一轮"的开关(缓存被清后 / 怀疑盘中停更时), 返回本轮摘要 + 采集器状态。
+    非交易时段直接 skip(零网络请求), 与调度器同语义。
+    """
+    from src.core.dark_flow_sampler import collect_once, sampler_stats
+
+    out = collect_once()
+    return {**out, "sampler": sampler_stats()}
 
 
 @router.get("/series")
