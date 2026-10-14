@@ -1,3 +1,28 @@
+### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
+
+落库缺口审计: `/api/market/mainline` 用**模块内进程 dict**(60s per spec)—— 多 worker
+各存各的、重启即丢(重启后第一个请求必吃 16~37s 冷启动重拉涨停池), 违反 AGENTS 硬约束
+『缓存一律走 `src/web/cache/biz_cache.py`』。
+
+- **改** `src/web/api/market_mainline.py`: 缓存承载换成 biz_cache(L1 内存 + L2 Redis,
+  跨 worker/多容器/重启共享); **SWR 契约不变**(过期先返旧值毫秒级 + 后台单飞回源)。
+- **加** 日频快照落库: 每次成功聚合后后台 upsert 当日一行进新表
+  `mainline_daily_snapshot`(30s 节流, 失败静默; 收盘后那次即当日定稿。先例
+  `market_data._try_write_snapshot_async` 写 `market_flow_snapshots`)。
+- **读侧口径**: biz_cache 够新(<TTL)直接返 → 未命中读库, 够新直接返(不阻塞) → 过旧
+  仍先返旧值 + `stale=True` + `age_s` 并后台回源刷新 → 两层都空(全新部署)才同步取一次。
+  快照缺 `cache_ts` 时用列 `computed_ts` 回填(绝不假装数据是新的)。
+  `clear_market_mainline_cache()` 只清响应缓存(快照是历史数据, 不随缓存清理丢弃)。
+- **建表** `src/web/migrations.py` 新增 `Migration(189, "mainline_daily_snapshot", ...)`
+  (双方言 DDL: `date` 主键 / `payload` TEXT / `computed_ts`)。
+- **测试**(禁真网络): 新增 `tests/test_market_mainline_snapshot.py`(快照 upsert→读回
+  一致且同日只留一行·缺 cache_ts 用 computed_ts 回填·够新读库零回源并回填 biz_cache·
+  过旧先返旧值(stale=True+age_s)且后台回源落库·超陈旧上限仍不阻塞·读库失败静默);
+  `tests/test_market_mainline_swr.py` 改用 biz_cache 驱动(非阻塞过期/单飞/后台刷新三态
+  逐字保留); `tests/test_migration_lock_and_failures.py` 补 m189 建表钉子;
+  `tests/test_limit_strength_shadow.py` 的迁移连续性断言改为"101 起连续无缺口"(不写死
+  上界, 新增迁移不再误伤)。
+
 ### fix-决策先锋辅助指标缓存迁 biz_cache(30s TTL 不变·跨 worker 共享+重启不丢)（2026-10-14）
 
 落库缺口审计: `src/web/api/pioneer_indicators.py` 的三条指标(趋势操盘线/牛熊线/分时

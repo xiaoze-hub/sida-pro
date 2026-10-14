@@ -2648,6 +2648,41 @@ def _m139_mainline_rank_daily_table(conn: Connection) -> None:
         )
 
 
+def _m189_mainline_daily_snapshot_table(conn: Connection) -> None:
+    """市场主线日频快照表(2026-10-14 缓存收口)。
+
+    market_mainline 接口每次成功聚合后异步 upsert 当日一行(date 主键 → 同日覆盖为
+    最新, 收盘后那次即当日定稿)。用途: 响应缓存(biz_cache)缺失时(进程重启/换 worker/
+    新容器)直接读库, 不再冷启动 16~37s 重拉涨停池。先例: _m138 market_flow_snapshots。
+
+    字段: date(DATE) 交易日 / payload(TEXT) 完整响应 JSON / computed_ts(epoch 秒)。
+    """
+    if _dialect_is_pg(conn):
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_daily_snapshot (
+                    date DATE PRIMARY KEY,
+                    payload TEXT,
+                    computed_ts DOUBLE PRECISION
+                )
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS mainline_daily_snapshot (
+                    date TEXT PRIMARY KEY,
+                    payload TEXT,
+                    computed_ts REAL
+                )
+                """
+            )
+        )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5279,6 +5314,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 首封时间×封成比 强度标签影子表(2026-10-11 胜率创新 P0-1, 影子运行): 每日盘后打标,
     # 只读展示 + 分桶胜率验证, 不改任何现有信号/决策。
     Migration(188, "limit_strength_shadow", _m188_limit_strength_shadow),
+    # 市场主线日频快照(2026-10-14 缓存收口): biz_cache 缺失时(重启/换 worker)读库,
+    # 免掉冷启动 16~37s 重拉涨停池; date 主键同日覆盖, 收盘后那次即当日定稿。
+    Migration(189, "mainline_daily_snapshot", _m189_mainline_daily_snapshot_table),
 )
 
 
