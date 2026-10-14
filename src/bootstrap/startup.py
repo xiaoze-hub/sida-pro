@@ -483,6 +483,29 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"强度影子打标注册失败: {e}")
 
+        # AI 看图形态影子打标(2026-10-14 胜率创新 · 主线一并行, 影子运行):
+        # 交易日 15:40 对自选∪持仓逐票做「K线渲染→视觉 LLM 认形态」, 与规则形态
+        # (kline_patterns)同日同票并排落 ai_pattern_shadow。独立入口, 只写影子表,
+        # 不改任何现有信号/决策。无视觉模型 → 显式降级不出形态(不编造)。
+        try:
+            from src.core.ai_vision_pattern import run_ai_vision_pattern_job
+
+            rt.scheduler.scheduler.add_job(
+                run_ai_vision_pattern_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=40,
+                id="ai-vision-pattern",
+                name="AI 看图形态 影子打标(与规则形态对照)",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("AI 看图形态影子打标已注册(交易日 15:40)")
+        except Exception as e:
+            logger.error(f"AI 看图形态影子打标注册失败: {e}")
+
         # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
         # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
         try:
