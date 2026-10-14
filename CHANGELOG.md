@@ -83,6 +83,71 @@
   兜底·批算统计与单票失败隔离·全空载荷不落库·现算入口注册/未注册两态);
   `tests/test_migration_lock_and_failures.py` 补 m190 建表钉子(同日 upsert 覆盖 /
   同日不同交易日留行)。
+### feat-大盘资金端点全接入(库读分支含板块明细·快照缺失显式标注)（2026-10-14）
+
+资金类落库收口 ③: `/api/market-data/market-capital-flow` 此前是**半接入** —— 够新读
+`market_flow_snapshots` 的资金/家数字段, 但板块明细(流入/流出榜)在库读分支**恒空**
+(快照表没存), 功能弱于实时分支; 走实时分支时也不标注「为什么没读库」。
+
+- **收口** `_snapshot_to_response`: 板块明细改为从 `board_flow_snapshots`(m191) 读**够新**
+  快照派生(与实时分支同口径), 新增 `board_source`(有快照=db_snapshot / 无快照=None,
+  显式置空不编造) + `snapshot_used=True`。
+- **统一口径** 新增 `_boards_to_inout()`(净额降序取流入 top10 / 最负 10 取流出, 缺失
+  net_inflow 不参与排序) + `_fresh_board_inout()`; 实时分支的板块流入/流出榜改用同一
+  函数(此前是就地手写排序, 两分支口径有漂移风险)。
+- **显式缺失** 实时分支新增 `snapshot_used=False` + `snapshot_note`(「库内无够新大盘
+  资金快照(或非交易时段), 走实时链路」), 并顺带把行业板块采样落库(节流 180s)。
+- **测试**(禁真网络): 新增 `tests/test_market_capital_flow_full.py`(库读分支含板块明细·
+  缺板块快照显式置空 board_source=None·板块快照过旧置空·无快照回源并显式标注
+  snapshot_used/note·`_boards_to_inout` 排序与缺失过滤口径)。
+
+### feat-板块资金采样落库(board_flow_snapshots·够新读库/过旧回源+stale)（2026-10-14）
+
+资金类落库收口 ②: `/api/market-data/board-capital-flow` **完全现拉**同花顺行业/概念
+资金, 仅用 biz_cache 的 stale 备份兜源故障 —— 上游一挂整块缺失。
+
+- **建表** `src/web/migrations.py` 新增 `Migration(191, "board_flow_snapshots_table", ...)`:
+  `board_flow_snapshots`(ts 默认时间戳 / board_type / item_count / payload,
+  索引 `(board_type, ts DESC)`), 行序采样, 按类型查最新。
+- **加** `src/core/board_flow_sampler.py`(仿 `market_flow_sampler` 写
+  `market_flow_snapshots` 的成熟先例): `write_snapshot()` 落一行 / `try_write_async()`
+  后台线程 + 180s 进程内节流(落在 1~5min 区间) / `read_fresh()` 仅『够新 ∩ 交易时段』
+  返回 / `collect_once()` 独立采样(页面不开也落库); 板块 item 映射抽成
+  `board_to_item()` 单一入口(接口与采样共用)。
+- **改** `board-capital-flow` 端点: 读侧『够新读库(零回源, `source=db_snapshot` +
+  快照时间戳/行龄) / 过旧/库空/非交易时段回源实时(成功顺带采样落库) / 源故障或空返回
+  回退 stale 备份(带 stale/stale_age_sec), 无备份显式 degraded』。
+- **注册** `src/bootstrap/startup.py`: 新增 `board-flow-sampler` 定时任务(180s,
+  `max_instances=1/coalesce`), 与 `market-flow-sampler` 同款。
+- **测试**(禁真网络): 新增 `tests/test_board_flow_snapshot.py`(写读回原样·空列表不落库·
+  新鲜度(过旧/非交易时段/库空/库不可达)·阈值环境变量覆盖·端点够新读库零回源·过旧回源
+  并采样·空返回 degraded·源故障 stale·collect_once 交易时段落两类/非交易跳过/取数失败
+  不抛); `tests/test_stale_on_error.py` / `tests/test_degraded_honesty_ki043_44_45.py`
+  加板块快照读路径隔离夹具(实时/降级分支不被前序落库行串扰);
+  `tests/test_migration_lock_and_failures.py` 补 m190/m191 建表钉子。
+
+### feat-龙虎榜按日 upsert 落库(请求只读库·当日增量回源·历史日永不回源)（2026-10-14）
+
+资金类落库收口 ①: `/api/market-data/fundamentals-detail` 经 `_lhb_from_tq` **每次请求
+现拉** TQ GP 长序列(个股整段历史), `/dragon-tiger/{date}` 亦逐次现拉东财+ftshare ——
+审计定性「资金类仍现拉」。
+
+- **建表** `src/web/migrations.py` 新增 `Migration(190, "dragon_tiger_daily_table", ...)`:
+  `dragon_tiger_daily`(双方言 DDL, 唯一键 `(trade_date, symbol, market)`, 索引
+  `(symbol, trade_date DESC)` / `(trade_date DESC, market)`), 除榜单字段外含 TQ 独有拆解
+  (机构/营业部/沪深股通买卖, 万元原口径)与席位 JSON 列。
+- **拉到即落** `src/web/api/market_data.py`: 新增 `_lhb_upsert_rows()`(upsert 幂等,
+  键不全的行丢弃不编造) + `_lhb_row_to_db` / `_lhb_rec_to_row`(JSON 席位还原, 空列表不写
+  `"[]"` 占位); `/dragon-tiger/{date}` 的 `_compute` 与 `_compute_lhb_range` 拉到即落。
+- **读侧只读库** 新增 `_dragon_tiger_from_db()`: 该交易日已落库 → 直接读库返回(历史日
+  永不回源)并回填响应缓存; `_compute_lhb_range` 逐日先读库, 已落库日零回源。
+- **库 + 当日增量回源** 新增 `_lhb_symbol_rows()`: 库里有该 symbol 且最新日 >= 今天 →
+  **零回源**; 最新日 < 今天 → 只回源 `[最新日+1, 今天]` 增量(`start_time` 收窄); 库空
+  (冷启动) → 整段回源一次并落库。`fetch_fundamentals_detail` 由 `_lhb_from_tq` 改走此入口。
+- **测试**(禁真网络): 新增 `tests/test_lhb_daily_store.py`(upsert 幂等·键不全丢弃·读回
+  与现拉同契约·库命中零回源·过旧增量回源起点正确·冷启动整段+二次走库·按日端点读库/
+  回源落库·range 逐日先读库); `tests/test_tq_extras_integration.py` 加库隔离夹具(龙虎榜
+  融合单测与库解耦, 防前序用例落库行串扰)。
 
 ### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
 

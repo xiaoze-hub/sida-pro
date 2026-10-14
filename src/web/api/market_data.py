@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -284,15 +285,54 @@ def _read_fresh_db_snapshot() -> dict | None:
     }
 
 
+def _boards_to_inout(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """板块 items → (流入榜 top10, 流出榜 top10)。net_inflow 缺失的板块不参与排序
+    (此前 or 0.0 把"无数据"当 0, 会挤占榜单); 正/负筛选, 无正(负)则对应榜为空列表。"""
+    valid = [b for b in (items or []) if isinstance(b, dict) and b.get("net_inflow") is not None]
+    s = sorted(valid, key=lambda b: b["net_inflow"], reverse=True)
+    inflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),
+         "change_pct": b.get("change_pct")}
+        for b in s[:10]
+        if b["net_inflow"] > 0
+    ]
+    outflow = [
+        {"name": b.get("board_name"), "net_inflow": round(b["net_inflow"], 2),  # 亿(负=流出)
+         "change_pct": b.get("change_pct")}
+        for b in reversed(s[-10:])
+        if b["net_inflow"] < 0
+    ]
+    return inflow, outflow
+
+
+def _fresh_board_inout(board_type: str = "industry") -> tuple[list[dict], list[dict]] | None:
+    """读够新的板块资金快照并派生流入/流出榜; 无够新快照/读取失败 → None(不编造)。"""
+    try:
+        from src.core import board_flow_sampler as _bfs
+
+        snap = _bfs.read_fresh(board_type)
+    except Exception:  # noqa: BLE001
+        return None
+    if not snap:
+        return None
+    return _boards_to_inout(snap.get("items") or [])
+
+
 def _snapshot_to_response(snap: dict) -> dict:
     """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
 
     字段名/结构与实时分支保持一致(前端不改), 仅新增来源标注字段; 快照表**未存**的
-    字段(成交额/指数点位涨跌/板块明细/创业板主力)一律显式置空 —— 不编造、不补 0。
-    口径标签沿用现网口径(eastmoney4, 见 docs/_frozen/caliber_matrix.md), 并显式标注
-    为「由快照继承」而非行内自带。
+    字段(成交额/指数点位涨跌/创业板主力)一律显式置空 —— 不编造、不补 0。
+    板块明细(2026-10-14 收口)改为从 board_flow_snapshots 读够新快照派生; 无够新
+    板块快照时置空(不编造)。口径标签沿用现网口径(eastmoney4,
+    见 docs/_frozen/caliber_matrix.md), 并显式标注为「由快照继承」而非行内自带。
     """
     has_funds = snap.get("total_main_flow") is not None
+    board_inout = _fresh_board_inout("industry")
+    if board_inout is not None:
+        inflow_boards, outflow_boards = board_inout
+    else:
+        inflow_boards, outflow_boards = [], []
     resp = {
         # 资金类字段(快照表存了这些)
         "total_main_flow": snap.get("total_main_flow"),  # 亿
@@ -304,8 +344,10 @@ def _snapshot_to_response(snap: dict) -> dict:
         "sh": None,
         "sz": None,
         "cyb": None,
-        "inflow_boards": [],
-        "outflow_boards": [],
+        # 板块明细: 从板块资金快照读库派生(收口前恒空)
+        "inflow_boards": inflow_boards,
+        "outflow_boards": outflow_boards,
+        "board_source": "db_snapshot" if board_inout is not None else None,
         # 市场统计(家数快照表存了)
         "up_count": snap.get("up_count"),
         "down_count": snap.get("down_count"),
@@ -315,6 +357,7 @@ def _snapshot_to_response(snap: dict) -> dict:
         "data_source": "db_snapshot",
         "data_origin": "market_flow_snapshots",
         "breadth_source": "db_snapshot",
+        "snapshot_used": True,
         "snapshot_ts": snap.get("snapshot_ts"),
         "snapshot_age_sec": snap.get("snapshot_age_sec"),
         "timestamp": snap.get("snapshot_ts"),
@@ -324,8 +367,8 @@ def _snapshot_to_response(snap: dict) -> dict:
         "caliber_label": "主力净流入: 东财四档·资金面参考, 禁用于主力意图判定 "
                          "(口径由已落库快照继承)",
         "caliber_source": "db_snapshot_inherited",
-        "note": "读自已落库大盘资金快照(非实时外呼); 快照表未存成交额/指数点位/板块明细, "
-                "已显式置空, 不编造。",
+        "note": "读自已落库大盘资金快照(非实时外呼); 板块明细读板块资金快照; "
+                "快照表未存成交额/指数点位, 已显式置空, 不编造。",
     }
     if not has_funds:
         # 库里最新快照仅含涨跌家数(网关故障期间采样器落的行) → 显式降级, 不补 0
@@ -385,6 +428,13 @@ async def dragon_tiger_proxy(
     if cached is not None:
         return cached
 
+    # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库返回(历史日永不回源),
+    # 并回填响应缓存。仅当库里没有该日(冷启动/当日未落)才走下面的回源链路。
+    db_payload = _dragon_tiger_from_db(trade_date, market)
+    if db_payload is not None:
+        biz_cache.set_json(cache_key, db_payload, ttl=cache_ttl)
+        return db_payload
+
     def _compute() -> dict:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -417,12 +467,18 @@ async def dragon_tiger_proxy(
                     "top_sellers": list(getattr(ft, "top_sellers", []) or []) if ft else [],
                 }
             )
+        # 拉到即落(2026-10-14 落库收口): 东财-ftshare 行按 (date, symbol) upsert;
+        # 下次同请求直接读库, 历史日不再回源。
+        if items:
+            _lhb_upsert_rows(items, market=market, source="em_ftshare")
         return {
             "trade_date": trade_date,
             "market": market,
             "count": len(items),
             "items": items,
             "pending": False,
+            "source": "em_ftshare",
+            "data_origin": "realtime",
         }
 
     started = _bg_start(job_key, _compute, result_key=cache_key, cache_ttl=cache_ttl)
@@ -540,8 +596,35 @@ async def board_capital_flow_proxy(
     """板块资金流向(同花顺行业/概念资金,免登录免费源)。
 
     返回按净额降序的板块资金列表(流入/流出/净额,单位亿)。
-    C2: 源故障/空返回且有备份 → 回退旧快照并带 stale/stale_age_sec 标注。
+
+    落库收口(2026-10-14, 迁移 m191): 读侧『够新读库、过旧回源 + stale 标注』——
+      · 库里有够新快照(且交易时段) → **直接读库(零回源)**, source=db_snapshot;
+      · 过旧/库空/非交易时段 → 回源实时(成功后顺带采样落库, 1~5min 节流);
+      · 回源失败/空返回 → 回退 stale 备份(带 stale/stale_age_sec); 无备份则显式 degraded。
+    先例: market_flow_snapshots(m138) + _try_write_snapshot_async。
     """
+    from src.core import board_flow_sampler as _bfs
+
+    # 1) 读侧: 够新读库(过旧/非交易时段/库不可达 → None, 回源实时)
+    try:
+        snap = await asyncio.to_thread(_bfs.read_fresh, board_type)
+    except Exception:  # noqa: BLE001
+        snap = None
+    if snap is not None:
+        items = snap["items"]
+        return {
+            "board_type": board_type,
+            "count": len(items),
+            "items": items,
+            "source": "db_snapshot",
+            "data_source": "db_snapshot",
+            "data_origin": "board_flow_snapshots",
+            "snapshot_ts": snap.get("snapshot_ts"),
+            "snapshot_age_sec": snap.get("snapshot_age_sec"),
+            "stale": False,
+        }
+
+    # 2) 过旧/缺失 → 回源实时
     try:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -559,28 +642,22 @@ async def board_capital_flow_proxy(
                 "degraded": True,
                 "note": "板块资金源暂无数据(源故障或空返回); 非「今日无资金流」",
             }
+        items = [_bfs.board_to_item(b) for b in boards]
         payload = {
             "board_type": board_type,
-            "count": len(boards),
-            "items": [
-                {
-                    "board_name": b.board_name,
-                    "board_type": b.board_type,
-                    "index_value": b.index_value,
-                    "change_pct": b.change_pct,
-                    "inflow": b.inflow,
-                    "outflow": b.outflow,
-                    "net_inflow": b.net_inflow,
-                    "stock_count": b.stock_count,
-                    "leader_name": b.leader_name,
-                    "leader_change_pct": b.leader_change_pct,
-                    "leader_price": b.leader_price,
-                    "rank": b.rank,
-                }
-                for b in boards
-            ],
+            "count": len(items),
+            "items": items,
+            "source": "ths_realtime",
+            "data_origin": "realtime",
+            "snapshot_used": False,
+            "snapshot_ts": None,
         }
         _stale_put(f"board-flow:{board_type}", payload)
+        # 3) 采样落库(后台线程, 1~5min 节流, 失败静默)
+        try:
+            _bfs.try_write_async(board_type, items)
+        except Exception:  # noqa: BLE001
+            pass
         return payload
     except Exception as e:
         logger.warning(f"板块资金代理失败: {e}")
@@ -652,33 +729,20 @@ async def market_capital_flow_proxy():
                 if isinstance(_d.get("change_pct"), (int, float)):
                     _d["change_pct"] = round(_d["change_pct"] / 100, 2)
         # 2. 板块资金明细(同花顺 hyzjl 行业, 流入/流出榜)
+        from src.core import board_flow_sampler as _bfs
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
         boards = md.board_capital_flow(board_type="industry") or []
         # P1(audit-20260915): net_inflow 缺失的板块不参与排序
-        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置)
-        boards_valid = [b for b in boards if b.net_inflow is not None]
-        boards_sorted = sorted(
-            boards_valid, key=lambda b: b.net_inflow, reverse=True
-        )
-        inflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿
-                "change_pct": b.change_pct,
-            }
-            for b in boards_sorted[:10]
-            if b.net_inflow > 0
-        ]
-        outflow_boards = [
-            {
-                "name": b.board_name,
-                "net_inflow": round(b.net_inflow, 2),  # 亿(负=流出)
-                "change_pct": b.change_pct,
-            }
-            for b in reversed(boards_sorted[-10:])
-            if b.net_inflow < 0
-        ]
+        # (此前 or 0.0 把"无数据"当成 0, 会挤占流入/流出榜单位置) —— 排序/筛选逻辑
+        # 统一收口到 _boards_to_inout(与库读分支同口径)。
+        board_items = [_bfs.board_to_item(b) for b in boards]
+        inflow_boards, outflow_boards = _boards_to_inout(board_items)
+        # 板块资金采样落库(节流, 后台线程): 供板块端点与大盘资金库读分支复用
+        try:
+            _bfs.try_write_async("industry", board_items)
+        except Exception:  # noqa: BLE001
+            pass
         result = {
             # 两市主力净流入(对齐同花顺APP)
             "total_main_flow": ov.get("total_main_flow"),      # 亿
@@ -696,6 +760,9 @@ async def market_capital_flow_proxy():
             "outflow_boards": outflow_boards,
             "source": "eastmoney_push2delay_cn",
             "breadth_source": "cn_gateway",
+            # 收口(2026-10-14): 无够新大盘资金快照 → 走实时并**显式标注**(不静默)
+            "snapshot_used": False,
+            "snapshot_note": "库内无够新大盘资金快照(或非交易时段), 走实时链路",
             # 口径标签(B3/3.4): 主力净流入为按单金额四档归类(资金面参考),
             # 板块明细为同花顺行业资金 —— 均禁止用于主力意图判定(AGENTS.md 红线)
             "caliber": "eastmoney4",
@@ -889,6 +956,11 @@ def _compute_lhb_range(market: str, days: int) -> dict:
         d -= timedelta(days=1)
         if is_weekend:
             continue
+        # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库, 不回源(历史日永不回源)。
+        day_db = _lhb_read_date(ds, market)
+        if day_db:
+            by_date[ds] = day_db
+            continue
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
         except Exception as e:
@@ -923,6 +995,8 @@ def _compute_lhb_range(market: str, days: int) -> dict:
                 }
             )
         if day_items:
+            # 拉到即落(2026-10-14): 东财-ftshare 按日落库, 下次(1h TTL 过期/重启)直接读库。
+            _lhb_upsert_rows(day_items, market=market, source="em_ftshare")
             by_date[ds] = day_items
     return {
         "market": market,
@@ -1045,6 +1119,236 @@ def _lhb_from_tq(symbol: str, *, start_time: str = "") -> list[dict]:
     return out
 
 
+# ──────────── 龙虎榜按日落库(2026-10-14 资金类落库收口, 迁移 m190) ────────────
+# 审计定性: fundamentals-detail 经 _lhb_from_tq **每次请求现拉** TQ GP 长序列(个股整段
+# 历史), /dragon-tiger/{date} 亦逐次现拉东财+ftshare。现把拉到的行按 (trade_date,
+# symbol, market) upsert 落库 dragon_tiger_daily:
+#   拉取侧: 任何来源(TQ GP / 东财-ftshare)拉到即落(_lhb_upsert_rows);
+#   读侧:  请求只读库, 仅**当日**(尚未落库)增量回源; 历史日永不回源。
+_LHB_DB_COLS = (
+    "trade_date", "symbol", "market", "name", "reason", "close", "change_pct",
+    "net_buy", "buy_amt", "sell_amt", "turnover_pct", "top_buyers", "top_sellers",
+    "inst_buy_wan", "inst_sell_wan", "yyb_buy_wan", "yyb_sell_wan",
+    "hsgt_buy_wan", "hsgt_sell_wan", "suspicious", "source",
+)
+# 读回时 SELECT 的列顺序(与 _lhb_rec_to_row 一一对应)。
+_LHB_READ_SQL = (
+    "SELECT trade_date, symbol, name, reason, close, change_pct, net_buy, buy_amt, "
+    "sell_amt, turnover_pct, top_buyers, top_sellers, inst_buy_wan, inst_sell_wan, "
+    "yyb_buy_wan, yyb_sell_wan, hsgt_buy_wan, hsgt_sell_wan, suspicious "
+    "FROM dragon_tiger_daily "
+)
+
+
+def _lhb_json_list(v) -> str | None:
+    """席位列表 → JSON 文本(空/空列表 → NULL, 不写 "[]" 占位)。"""
+    if not v:
+        return None
+    try:
+        return json.dumps(v, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lhb_row_to_db(r: dict, market: str, source: str) -> dict:
+    """前端龙虎榜行 → dragon_tiger_daily 落库行(纯函数, 便于单测)。"""
+    d = str(r.get("trade_date") or "")[:10].replace("-", "")
+    sym = str(r.get("symbol") or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    susp = r.get("suspicious")
+    return {
+        "trade_date": d,
+        "symbol": sym,
+        "market": market or "CN",
+        "name": r.get("name") or None,
+        "reason": r.get("reason") or None,
+        "close": r.get("close"),
+        "change_pct": r.get("change_pct"),
+        "net_buy": r.get("net_buy"),
+        "buy_amt": r.get("buy_amt"),
+        "sell_amt": r.get("sell_amt"),
+        "turnover_pct": r.get("turnover_pct"),
+        "top_buyers": _lhb_json_list(r.get("top_buyers")),
+        "top_sellers": _lhb_json_list(r.get("top_sellers")),
+        "inst_buy_wan": r.get("inst_buy_wan"),
+        "inst_sell_wan": r.get("inst_sell_wan"),
+        "yyb_buy_wan": r.get("yyb_buy_wan"),
+        "yyb_sell_wan": r.get("yyb_sell_wan"),
+        "hsgt_buy_wan": r.get("hsgt_buy_wan"),
+        "hsgt_sell_wan": r.get("hsgt_sell_wan"),
+        "suspicious": (None if susp is None else bool(susp)),
+        "source": source or None,
+    }
+
+
+def _lhb_upsert_rows(rows: list[dict], market: str = "CN", source: str = "") -> int:
+    """按日 upsert 落库 (trade_date, symbol, market) 唯一键 → 重拉幂等。失败静默返回 0。"""
+    if not rows:
+        return 0
+    try:
+        from src.db.dialect import upsert_sql
+        from src.web.database import engine
+
+        stmt = upsert_sql(
+            "dragon_tiger_daily",
+            list(_LHB_DB_COLS),
+            ["trade_date", "symbol", "market"],
+            [c for c in _LHB_DB_COLS if c not in ("trade_date", "symbol", "market")],
+        )
+        saved = 0
+        seen: set[tuple] = set()
+        with engine.begin() as conn:
+            for r in rows:
+                row = _lhb_row_to_db(r, market, source)
+                if len(row["trade_date"]) != 8 or len(row["symbol"]) != 6:
+                    continue  # 键不全的行不入库(不编造)
+                key = (row["trade_date"], row["symbol"], row["market"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                conn.execute(text(stmt), row)
+                saved += 1
+        return saved
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜落库失败(静默, 不阻断): %s", e)
+        return 0
+
+
+def _lhb_json_parse(v) -> list:
+    if not v:
+        return []
+    try:
+        x = json.loads(v) if isinstance(v, str) else v
+    except (TypeError, ValueError):
+        return []
+    return x if isinstance(x, list) else []
+
+
+def _lhb_rec_to_row(r, symbol: str) -> dict:
+    """dragon_tiger_daily 行 → 前端契约行(与 _lhb_from_tq/东财路径同键)。"""
+    return {
+        "trade_date": str(r[0]),
+        "symbol": r[1] or symbol,
+        "name": r[2] or "",
+        "reason": r[3],
+        "close": r[4],
+        "change_pct": r[5],
+        "net_buy": r[6],
+        "buy_amt": r[7],
+        "sell_amt": r[8],
+        "turnover_pct": r[9],
+        "top_buyers": _lhb_json_parse(r[10]),
+        "top_sellers": _lhb_json_parse(r[11]),
+        "inst_buy_wan": r[12],
+        "inst_sell_wan": r[13],
+        "yyb_buy_wan": r[14],
+        "yyb_sell_wan": r[15],
+        "hsgt_buy_wan": r[16],
+        "hsgt_sell_wan": r[17],
+        "suspicious": bool(r[18]) if r[18] is not None else False,
+    }
+
+
+def _lhb_read_symbol(symbol: str, market: str = "CN", limit: int = 400) -> list[dict]:
+    """读某 symbol 的落库龙虎榜(新→旧)。失败/无表静默返回 [](调用方回源)。"""
+    sym = str(symbol or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE symbol = :s AND market = :m "
+                     "ORDER BY trade_date DESC LIMIT :lim"),
+                {"s": sym, "m": market or "CN", "lim": limit},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, sym) for r in recs]
+
+
+def _lhb_read_date(trade_date: str, market: str = "CN") -> list[dict]:
+    """读某交易日的落库龙虎榜(全市场)。失败/无表静默返回 [](调用方回源)。"""
+    d = str(trade_date or "")[:10].replace("-", "")
+    if len(d) != 8:
+        return []
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE trade_date = :d AND market = :m ORDER BY symbol"),
+                {"d": d, "m": market or "CN"},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库(按日)失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, r[1] or "") for r in recs]
+
+
+def _dragon_tiger_from_db(trade_date: str, market: str = "CN") -> dict | None:
+    """该交易日已落库 → 组装与回源分支同构的响应(items 为前端契约行); 无行返回 None。"""
+    rows = _lhb_read_date(trade_date, market)
+    if not rows:
+        return None
+    return {
+        "trade_date": str(trade_date or "")[:10].replace("-", ""),
+        "market": market,
+        "count": len(rows),
+        "items": rows,
+        "pending": False,
+        "source": "db",
+        "data_origin": "dragon_tiger_daily",
+    }
+
+
+def _next_day_yyyymmdd(d: str) -> str:
+    """'20251219' → '20251220'; 非法输入返回 ''(调用方按全量回源处理)。"""
+    s = str(d or "").replace("-", "")[:8]
+    if len(s) != 8 or not s.isdigit():
+        return ""
+    try:
+        from datetime import date as _date, timedelta as _td
+
+        nxt = _date(int(s[:4]), int(s[4:6]), int(s[6:8])) + _td(days=1)
+        return nxt.strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def _lhb_symbol_rows(symbol: str, market: str = "CN") -> list[dict]:
+    """个股龙虎榜: **只读库 + 当日增量回源**(历史日永不回源)。
+
+    1) 库里有该 symbol 的行且最新日 >= 今天 → 直接返回, **零回源**;
+    2) 库里有行但最新日 < 今天(当日榜单未落) → 仅回源 [最新日+1, 今天] 的增量
+       (TQ GP 序列, start_time 收窄), 落库后与库行合并返回;
+    3) 库空(从未落库/冷启动) → 一次性回源整段并落库;
+    库不可达/回源异常 → 由调用方容错(此处不抛, 返回已得部分)。
+    """
+    db_rows = _lhb_read_symbol(symbol, market)
+    today = datetime.now().strftime("%Y%m%d")
+    if db_rows:
+        latest = max((str(r.get("trade_date") or "") for r in db_rows), default="")
+        if latest >= today:
+            return db_rows
+        start = _next_day_yyyymmdd(latest)
+        fetched = _lhb_from_tq(symbol, start_time=start) if start else _lhb_from_tq(symbol)
+        if fetched:
+            _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+            merged: dict[str, dict] = {str(r.get("trade_date")): r for r in fetched}
+            for r in db_rows:
+                merged.setdefault(str(r.get("trade_date")), r)
+            return sorted(merged.values(), key=lambda x: str(x.get("trade_date") or ""), reverse=True)
+        return db_rows
+    fetched = _lhb_from_tq(symbol)
+    if fetched:
+        _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+    return fetched
+
+
 def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
     """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
 
@@ -1067,10 +1371,10 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         "lhb_pending": False,
     }
 
-    # 1) 龙虎榜: **TQ 长序列为主骨架**(2026-09-23 清单切换), 东财市场级缓存补
+    # 1) 龙虎榜: **已落库的库行为主骨架**(2026-10-14 落库收口), 东财市场级缓存补
     #    reason(上榜原因)/close/change_pct/席位名 —— 这几个 TQ 没有(不编造),
     #    而 TQ 有东财没有的: 一年以上历史 + 机构/营业部/沪深股通买卖拆解。
-    #    两者合并 = 比任一单源都全。
+    #    读侧只读库 + 当日增量回源(历史日永不回源), 不再每次现拉整段 TQ GP 序列。
     em_rows: list[dict] = []
     lhb_range = _get_lhb_range(market, dt_days)
     if lhb_range is not None:
@@ -1083,9 +1387,9 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
     tq_rows: list[dict] = []
     if market == "CN":
         try:
-            tq_rows = _lhb_from_tq(symbol)
+            tq_rows = _lhb_symbol_rows(symbol, market)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"基本面明细-龙虎榜[TQ {symbol}]失败, 降级东财缓存: {e}")
+            logger.warning(f"基本面明细-龙虎榜[库/TQ {symbol}]失败, 降级东财缓存: {e}")
 
     if tq_rows:
         # 东财有值的字段覆盖到 TQ 行上(TQ 侧留空的才补, 不覆盖 TQ 的金额口径)

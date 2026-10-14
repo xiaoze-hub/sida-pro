@@ -647,6 +647,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"大盘资金流快照采样注册失败: {e}")
 
+        # 板块资金采样落库(2026-10-14 资金类落库收口): board-capital-flow 此前完全
+        # 现拉同花顺 + 仅 stale 备份。独立采样(180s ≈ 1~5min 区间)使页面不开也落库,
+        # 读侧『够新读库、过旧回源 + stale 标注』。先例: market-flow-sampler 上游。
+        try:
+            from src.core.board_flow_sampler import collect_once as board_flow_collect
+
+            rt.scheduler.scheduler.add_job(
+                board_flow_collect,
+                "interval",
+                seconds=180,
+                id="board-flow-sampler",
+                name="板块资金快照采样",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("板块资金快照采样已注册(每 180s, 交易时段内生效)")
+        except Exception as e:
+            logger.error(f"板块资金快照采样注册失败: {e}")
+
         # 三指标共振全市场扫描(2026-09-11 数智决策升级): 交易日 15:40(收盘后)
         # 用我们自己的实现(非客户端复刻公式), 落库 resonance_scan 供页面/回看
         try:

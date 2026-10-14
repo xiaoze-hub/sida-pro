@@ -108,9 +108,14 @@ def _patch_trading(monkeypatch, flag: bool = True):
 
 
 def _use_engine(monkeypatch, eng):
+    # 市场资金读经 src.web.database.engine; 大盘资金库读分支派生板块明细时经
+    # board_flow_sampler(2026-10-14 收口)读 src.db.session.engine —— 两处都要指到内存库,
+    # 否则会读到共享测试库里别的用例落的板块快照行(串扰)。
+    import src.db.session as dbs
     import src.web.database as database
 
     monkeypatch.setattr(database, "engine", eng)
+    monkeypatch.setattr(dbs, "engine", eng)
 
 
 # ─────────────────────────── ① 新鲜快照 → 走库 ───────────────────────────

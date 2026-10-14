@@ -17,6 +17,18 @@ def _clear_tdx_caches():
     tdx_boards._clear_caches()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_lhb_store(monkeypatch):
+    """龙虎榜按日落库(2026-10-14)后的测试隔离: 本文件的龙虎榜是 **TQ 融合单测**,
+    必须与库解耦 —— 否则前序用例落进共享测试库的行会被后续用例读回, 变成假绿/假红。
+    保持原语义: 读库恒空(走冷启动回源) + 落库 no-op。"""
+    from src.web.api import market_data as mdmod
+
+    monkeypatch.setattr(mdmod, "_lhb_read_symbol", lambda *a, **k: [])
+    monkeypatch.setattr(mdmod, "_lhb_upsert_rows", lambda *a, **k: 0)
+    yield
+
+
 class TestMarketBreadth:
     def _patch(self, monkeypatch, pv_map, codes=None):
         codes = codes or list(pv_map)
