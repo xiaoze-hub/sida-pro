@@ -2766,6 +2766,18 @@ def _m191_workbench_layer_daily_table(conn: Connection) -> None:
                 computed_ts DOUBLE PRECISION,
                 payload TEXT NOT NULL,
                 PRIMARY KEY (symbol, market, asof)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_workbench_layer_daily_ts "
+            "ON workbench_layer_daily(computed_ts)"
+        )
+    )
+
+
 def _m192_dragon_tiger_daily_table(conn: Connection) -> None:
     """龙虎榜按日明细表 dragon_tiger_daily(2026-10-14 资金类落库收口)。
 
@@ -2813,11 +2825,6 @@ def _m192_dragon_tiger_daily_table(conn: Connection) -> None:
             """
         )
     )
-    conn.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_workbench_layer_daily_ts "
-            "ON workbench_layer_daily(computed_ts)"
-        )
     _create_index_if_missing(
         conn,
         "ix_dragon_tiger_daily_sym_date",
@@ -2897,20 +2904,6 @@ def _m149_stock_universe_snapshots(conn: Connection) -> None:
     from src.db.models import StockUniverseSnapshot
 
     StockUniverseSnapshot.__table__.create(bind=conn, checkfirst=True)
-
-
-def _has_column(conn: Connection, table: str, column: str) -> bool:
-    if _dialect_is_pg(conn):
-        row = conn.execute(
-            text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = :t AND column_name = :c LIMIT 1"
-            ),
-            {"t": table, "c": column},
-        ).first()
-        return bool(row)
-    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-    return any(str(r[1]) == column for r in rows)
 
 
 def _m150_klines_amount_column(conn: Connection) -> None:

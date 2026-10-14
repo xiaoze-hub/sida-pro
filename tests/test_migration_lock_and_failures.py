@@ -256,7 +256,6 @@ def test_m189_mainline_daily_snapshot_on_sqlite(sqlite_engine, monkeypatch):
     assert rows[0][0] == '{"note":"v2"}' and rows[0][1] == 2.5
 
 
-<<<<<<< HEAD
 def test_m191_workbench_layer_daily_on_sqlite(sqlite_engine, monkeypatch):
     """2026-10-14 首屏 P0: 工作台日级图层块预落库表((symbol, market, asof) 联合主键)。
 
@@ -307,7 +306,6 @@ def test_m191_workbench_layer_daily_on_sqlite(sqlite_engine, monkeypatch):
     assert rows[0][0] == "2026-10-13" and rows[0][1] == 1
     assert rows[0][2] == "request" and rows[0][3] == 2.5
     assert rows[1][0] == "2026-10-14" and rows[1][1] == 0
-=======
 def test_m190_m191_money_store_tables_on_sqlite(sqlite_engine, monkeypatch):
     """2026-10-14 资金类落库收口: 龙虎榜按日表 + 板块资金采样表(DLL 语法跑在 sqlite)。"""
     monkeypatch.setattr(
@@ -347,7 +345,6 @@ def test_m190_m191_money_store_tables_on_sqlite(sqlite_engine, monkeypatch):
         snaps = conn.execute(text("SELECT COUNT(*) FROM board_flow_snapshots")).scalar()
     assert lhb[0] == 1 and lhb[1] == 9.0
     assert snaps == 1
->>>>>>> feat/fund-lhb-land-20261014
 
 
 def test_m140_141_142_orm_model_tables_on_sqlite(sqlite_engine, monkeypatch):
