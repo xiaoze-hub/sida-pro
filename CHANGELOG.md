@@ -1,3 +1,36 @@
+### feat-暗盘逐笔转后台增量采集(冷启动移出请求路径 + 游标续拉判据修复)（2026-10-14）
+
+审计定性(勿重查): `src/core/dark_flow.py` 的逐笔翻页 —— 无缓存时整轮全量(冷启动; 文件内
+自注释: 分钟接口 swings 场景实测 ~15s)、缓存过期时增量补拉 —— **都跑在用户请求路径上**;
+90s TTL 一过, 又轮到某个倒霉的请求去翻页。本次把"推进游标"挪到后台, 请求端常态只读缓存。
+
+- **新增** `src/core/dark_flow_sampler.py`(仿 `board_flow_sampler`/`market_flow_sampler` 成熟
+  模式): 热码表(LRU ≤300; 请求路径自动 `register_code`, 30min 无请求即退出采集) +
+  `collect_once()` 每轮对热码跑一次**增量续拉**(只拉末游标之后的页)。间隔默认 60s —— 必须
+  < `_TICKS_TTL`(90s), 环境变量越界(≥TTL/非法/非正)一律钳回默认, 防请求端读到过期缓存;
+  时段守卫内建(非交易时段直接 skip, 零网络请求)。**不新增表**: 逐笔持久化继续走既有
+  `DiskCache`(按交易日分 key, 重启自动回血), 不再存第二份逐笔副本。
+- **改** `src/core/dark_flow.py`:
+  - `_fetch_all_ticks_inner` 拆出主体 `_fetch_ticks_locked` + 加 **per-code 锁**: 后台采集与
+    请求期补齐并发同一只票时串行化(原会各从同一游标往后拉、写回互相覆盖/丢笔)。
+    `_fetch_all_ticks`/`_fetch_all_ticks_inner` 增 `force`(后台忽略 TTL 短路以主动推进游标;
+    请求路径默认 False, 语义与改造前完全一致)。
+  - **游标续拉判据修复**: 原判据 `min(seq) >= old_last_seq` 与"末页**整页重拉**"的做法自相
+    矛盾 —— 一页 ≥2 行时 `min(seq)` 必小于旧末 seq, 于是**每次缓存过期都走"序号断裂 → 全量
+    重拉"**(实测: 第二次请求仍翻 15 页 = 全量), 增量续拉名存实亡, 后台采集器若无此修复会
+    60s 一轮全量重拉。改判"是否仍在向前推进": `max(seq) >= old_last_seq`(含相等 = 末页原样),
+    只有 seq 倒退(盘中数据重置/跨日残留)才全量重拉。增量批 10 → 4(常态只新增 1~2 页,
+    实测上游请求量降到约 1/3; 全量路径仍 batch=10)。
+  - 新增拉取元数据与后台入口: `tick_snapshot_info()`(快照年龄 `snapshot_age_sec` / 游标
+    `cursor_page`+`cursor_seq` / 来源 `cache|incremental|cold|reset|l2|none` / 本轮
+    `pages_fetched` / `degraded`+`degraded_sec`)、`refresh_ticks()`(不抛, 返回摘要)。
+    **降级显式**: 交易时段翻页成功但零新笔 → `degraded` + 原因 + "已停更 N 秒"起点(连续降级
+    起点不归零), 返回旧快照, 不补 0、不编造。`clear_ticks_cache` 连元数据一起清。
+- **测试** `tests/test_darkflow_bg_collect.py`(禁真网络, urlopen 全 mock): 冷启动一次 → 增量
+  只从末游标起(断言不重翻第 0 页) / 缓存命中零翻页 / TTL 边界(89s 命中、91s 续拉, TTL≥90 契约) /
+  seq 倒退仍全量重拉 / 降级显式(含连续降级起点保持) / 采集器 skip·热码刷新·单只失败不抛 /
+  间隔 < TTL 且越界钳回默认 / 热码 LRU 与活跃窗口 / 清缓存连元数据。
+
 ### test-连板梯队快照: 读库零重算 / 幂等 / 回退补写 专项测试（2026-10-14）
 
 - 新增 `tests/test_ladder_snapshot.py`(禁真网络; 落库回环 = 测试 SQLite, 其余全 mock):
