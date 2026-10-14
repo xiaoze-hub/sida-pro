@@ -12,12 +12,22 @@ POST /api/stock-pool/screen
   三项全满足="强", 满足两项="弱", 否则="无"。
   gs.state/signal 均为**已确认**口径(末根疑似交叉只作 pending, 不接管区间)。
 
-进程内 30s 缓存; 单只失败标"无"不阻塞整批; 数据缺失显式 None 不编造。
+2026-10-14 性能/缓存:
+- **并发化**: `_screen` 由串行 for 改 `ThreadPoolExecutor`(上限 10, 参考
+  `src/web/api/klines.py::_compute_kline_summary` 成熟写法)—— 50 只选股池此前**串行**
+  打 TQ + 联网拉 K 线, 首屏耗时线性叠加; 并发后 ≈ 最长的一只。
+- **结果缓存**: 进程内 dict(30s) → `biz_cache`(L1 内存 + L2 Redis, TTL 60s, 与同文件
+  `screen_cached`/jbp 一致); 命中**零外呼**, 跨 worker / 重启共享。命中顺序:
+  biz_cache(预落库基底) → 现算。
+- **降级基底**: 单只实时取数彻底失败时, 尽力用 `decision_cache` 的**预落库全局基底**
+  补 bars 派生字段(trend→GS 区 / 活跃度); 其不携带(或口径不同)的 gs_signal/pending/
+  L2 资金一律如实置 None(维护单位口径, 不编造)。
+- 单只失败标"无"不阻塞整批; 数据缺失显式 None 不编造。
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
-import time
 from typing import Optional
 
 from fastapi import APIRouter
@@ -28,8 +38,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_SYMBOLS = 50
-_CACHE: dict[str, tuple[float, dict]] = {}
-_TTL = 30.0
+#: 并发上限: 单股 Enrichment 是网络 I/O 瓶颈(TQ L2 + 联网 K 线), 每只互不依赖。
+_MAX_WORKERS = 10
+#: 结果缓存 TTL(秒): 与同文件 jbp `screen_cached` 的 60s 一致。
+_SCREEN_TTL = 60
+
+#: GS 趋势态 → 已确认区间(仅用于从 decision_cache 基底还原趋势维, 与 gs_state 同词表)。
+_ZONE_BY_TREND = {"G信号": "G区", "G区间": "G区", "S信号": "S区", "S区间": "S区"}
 
 
 class StockPoolScreenRequest(BaseModel):
@@ -66,51 +81,123 @@ def _resonance(gs, act, l2) -> tuple[str, int]:
     return resonance_level(trend_zone_g=zone_g, activity=activity, fund_net=fund)
 
 
-def _screen(symbols: list[str]) -> dict:
+def _empty_row(symbol: str) -> dict:
+    """实时+基底都拿不到 → 显式"无"(不编造), 不阻塞整批。"""
+    return {
+        "symbol": symbol,
+        "activity": None,
+        "activity_level": None,
+        "gs_state": None,
+        "gs_signal": None,
+        "gs_pending": False,
+        "l2_net": None,
+        "resonance": "无",
+        "score": 0,
+        "source": "none",
+    }
+
+
+def _row_from_decision_base(symbol: str) -> Optional[dict]:
+    """尽力从 `decision_cache` 的**预落库全局基底**还原一行(实时取数彻底失败时的兜底)。
+
+    只取基底中**口径兼容**的字段: `parts.trend`(趋势标签 → GS 区)与 `parts.activity`
+    (活跃度)。基底**不携带** gs_signal(已确认信号)/gs_pending, 资金维口径亦不同
+    (基底 = `compute_pool_flow` 明暗盘 main_net; 本池 = L2·TQ zjl_hb) —— 这些字段
+    一律**如实置 None**(绝不拿口径不符的数字冒充)。取不到/无可用信号 → None。
+    """
+    try:
+        from src.core.decision_cache import get_cached_decision
+
+        base = get_cached_decision(symbol, "CN")
+    except Exception as e:  # noqa: BLE001 基底不可用 → 退回"无"
+        logger.debug("stock-pool decision_cache 基底读取失败 %s: %s", symbol, e)
+        return None
+    if not base:
+        return None
+    payload = base.get("payload") or {}
+    parts = payload.get("parts") or {}
+    zone = _ZONE_BY_TREND.get(str(parts.get("trend") or ""))
+    activity = parts.get("activity")
+    act_ok = isinstance(activity, (int, float))
+    if zone is None and not act_ok:
+        return None  # 基底没给出任何可用信号 → 不冒充
+
+    level = None
+    if act_ok:
+        try:
+            from src.core.ai_activity import activity_of_value
+
+            level = activity_of_value(activity).get("level")
+        except Exception:  # noqa: BLE001 档位推导失败 → None
+            level = None
+
+    # 资金维无 L2 → 不参与共振(显式 available=False, 不拿基底明暗盘冒充 L2)
+    level_str, score = _resonance(
+        {"state": zone} if zone else None,
+        {"activity": activity, "level": level},
+        {"available": False},
+    )
+    return {
+        "symbol": symbol,
+        "activity": round(activity, 2) if act_ok else None,
+        "activity_level": level,
+        "gs_state": zone,
+        "gs_signal": None,
+        "gs_pending": False,
+        "l2_net": None,
+        "resonance": level_str,
+        "score": score,
+        "source": "decision_cache",
+    }
+
+
+def _row_of(symbol: str) -> dict:
+    """单只股票 → 共振行(线程池内执行; 单只异常不阻塞整批)。"""
     from src.core.decision_pioneer import fetch_decision_pioneer
 
-    rows: list[dict] = []
+    try:
+        d = fetch_decision_pioneer(symbol, "CN")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("stock-pool screen %s failed: %s", symbol, e)
+        d = None
+    if not d:
+        # 实时取数失败 → 退预落库基底; 仍无 → 显式"无"
+        return _row_from_decision_base(symbol) or _empty_row(symbol)
+    act = d.get("institution_activity")
+    gs = d.get("gs")
+    l2 = d.get("l2") or {}
+    level, score = _resonance(gs, act, l2)
+    zjl = l2.get("zjl_hb")
+    return {
+        "symbol": symbol,
+        "activity": round(act["activity"], 2) if act and isinstance(act.get("activity"), (int, float)) else None,
+        "activity_level": act.get("level") if act else None,
+        "gs_state": gs.get("state") if gs else None,
+        "gs_signal": gs.get("signal") if gs else None,
+        # 末根疑似交叉(未定型): 显式透出, 供前端/复盘区分"已确认"与"待确认"
+        "gs_pending": bool(gs.get("pending")) if gs else False,
+        "l2_net": round(zjl / 1e4, 0) if isinstance(zjl, (int, float)) else None,  # 万元
+        "resonance": level,
+        "score": score,
+        "source": "live",
+    }
+
+
+def _screen(symbols: list[str]) -> dict:
     truncated = False
     if len(symbols) > _MAX_SYMBOLS:
         truncated = True
         symbols = symbols[:_MAX_SYMBOLS]
 
-    for sym in symbols:
-        try:
-            d = fetch_decision_pioneer(sym, "CN")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("stock-pool screen %s failed: %s", sym, e)
-            d = None
-        if not d:
-            rows.append({
-                "symbol": sym,
-                "activity": None,
-                "activity_level": None,
-                "gs_state": None,
-                "gs_signal": None,
-                "gs_pending": False,
-                "l2_net": None,
-                "resonance": "无",
-                "score": 0,
-            })
-            continue
-        act = d.get("institution_activity")
-        gs = d.get("gs")
-        l2 = d.get("l2") or {}
-        level, score = _resonance(gs, act, l2)
-        zjl = l2.get("zjl_hb")
-        rows.append({
-            "symbol": sym,
-            "activity": round(act["activity"], 2) if act and isinstance(act.get("activity"), (int, float)) else None,
-            "activity_level": act.get("level") if act else None,
-            "gs_state": gs.get("state") if gs else None,
-            "gs_signal": gs.get("signal") if gs else None,
-            # 末根疑似交叉(未定型): 显式透出, 供前端/复盘区分"已确认"与"待确认"
-            "gs_pending": bool(gs.get("pending")) if gs else False,
-            "l2_net": round(zjl / 1e4, 0) if isinstance(zjl, (int, float)) else None,  # 万元
-            "resonance": level,
-            "score": score,
-        })
+    # 并发: 串行 for → ThreadPoolExecutor(网络 I/O 瓶颈: TQ L2 + 联网 K 线; 每只互不依赖)。
+    # max_workers 取 min(上限, 标的数), 单只不必开池; `ex.map` 保序(排序前顺序与以前一致)。
+    if len(symbols) <= 1:
+        rows = [_row_of(s) for s in symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(_MAX_WORKERS, len(symbols))
+        ) as ex:
+            rows = list(ex.map(_row_of, symbols))
 
     # 排序: resonance(强>弱>无) → score 降序 → symbol 升序
     order = {"强": 0, "弱": 1, "无": 2}
@@ -120,17 +207,23 @@ def _screen(symbols: list[str]) -> dict:
 
 @router.post("/screen")
 def screen_stock_pool(req: StockPoolScreenRequest):
-    """数智决策选股池共振扫描(批量, 盘中实时)。"""
+    """数智决策选股池共振扫描(批量, 盘中实时)。
+
+    结果走 `biz_cache`(L1 内存 + L2 Redis, TTL 60s): 命中**零外呼**, 跨 worker/重启共享
+    (与同文件 `screen_cached`/jbp 同款写法); 未命中才现算并回填。
+    """
     symbols = _valid_symbols(req.symbols)
     if not symbols:
         return {"rows": [], "total": 0, "truncated": False}
-    key = ",".join(symbols)
-    now = time.time()
-    hit = _CACHE.get(key)
-    if hit and now - hit[0] < _TTL:
-        return hit[1]
+
+    from src.web.cache.biz_cache import biz_cache
+
+    key = "stock_pool:screen:" + ",".join(symbols)
+    cached = biz_cache.get_json(key)
+    if cached is not None:
+        return cached
     data = _screen(symbols)
-    _CACHE[key] = (now, data)
+    biz_cache.set_json(key, data, ttl=_SCREEN_TTL)
     return data
 
 

@@ -352,14 +352,51 @@ def _fallback_bars(symbol: str, market: str, days: int) -> list[dict]:
     return []
 
 
-def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
-    """盘中实时日K(走 marketdata Engine, TQ 优先, 含当日)。
+# ── 读库优先参数(与 src/web/api/klines.py::_pg_klines 同口径) ──────────────
+#: PG 命中需达到的最少根数; 低于此视作「空窗」→ 回落联网拿完整历史(避免库里只有
+#: 三五根就把历史截断, 让 GS(需≥27)等消费方算不出)。
+_PG_MIN_BARS = 30
+#: PG 最新 bar 距今允许的最大滞后(天): 超过视为陈旧网关快照 → 全量联网
+#: (与 get_klines 的 12 天陈旧策略一致, 覆盖春节级长假)。
+_MAX_PG_LAG_DAYS = 12
+#: 「仅最新 bar 联网」时向原联网通道请求的小窗口(足够覆盖周末/短假缺口)。
+_LIVE_TAIL_DAYS = 5
+#: 自然日 → bar 数换算系数(交易日 ≈ 0.68×自然日); 读库窗口放大 + 缓冲后截取末 days 根,
+#: 保持与联网同口径的「长度语义」。
+_PG_LOOKBACK_FACTOR = 1.6
 
-    两级取数(2026-09-02 修):
-      1. marketdata Engine: 按 DB 配置的 priority 主备取数(尊重线上数据源编排)
-      2. Engine 返回空/异常 → `_fallback_bars()` 直连 东财 → 新浪 → 腾讯
 
-    仍全挂才返回 [](调用方按"无数据"显式处理, 禁止编造)。
+def _pg_daily_bars(symbol: str, market: str, days: int) -> list[dict]:
+    """PG klines hypertable 读前复权日K(升序, 单位=**股**)。库/表缺失/非 CN → [](fail-soft)。
+
+    与 `src/web/api/klines.py::_pg_klines` 同一张表/同过滤条件
+    (`period='1d'` / `source='tencent'` / `adjust='qfq'`), 但走**仓储层**
+    `src/db/klines_repo.load_qfq_bars` —— core 不 import src.web(分层约束)。
+
+    `days` 是「要几根 bar」: 按自然日放大窗口读库后截取**末 days 根**, 使返回序列
+    在条数语义上与联网路径一致(联网也是返回最近 days 根)。
+    """
+    if (market or "CN").upper() != "CN":
+        return []
+    try:
+        from src.db.klines_repo import load_qfq_bars
+    except Exception as e:  # noqa: BLE001 仓储层不可用 → 无从读库
+        logger.debug("fetch_bars 读库不可用(仓储层导入失败): %s", e)
+        return []
+    n = max(int(days or 60), 1)
+    lookback = int(n * _PG_LOOKBACK_FACTOR) + 10
+    try:
+        bars = load_qfq_bars(symbol, market, days=lookback) or []
+    except Exception as e:  # noqa: BLE001 查库失败 → 视为空窗(回落联网)
+        logger.warning("fetch_bars %s 读库失败, 回落联网: %s", symbol, e)
+        return []
+    return bars[-n:]
+
+
+def _network_bars(symbol: str, market: str, days: int) -> list[dict]:
+    """原两级联网取数: marketdata Engine(TQ 优先, 含当日) → `_fallback_bars` 直连兜底。
+
+    读库未命中/仅缺当日时, 当日/最新 bar 仍走本通道(单位: 日线 volume=股)。
     """
     from src.core.marketdata_client import get_market_data
 
@@ -367,10 +404,54 @@ def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
         bars = _bars_to_dicts(get_market_data().klines(symbol, market=market, days=days))
         if bars:
             return bars
-        logger.warning("fetch_bars %s 主链路返回空, 转直连兜底", symbol)
+        logger.warning("fetch_bars %s 联网主链路返回空, 转直连兜底", symbol)
     except Exception as e:  # noqa: BLE001
-        logger.warning("decision_pioneer fetch_bars %s 主链路失败: %s, 转直连兜底", symbol, e)
+        logger.warning("fetch_bars %s 联网主链路失败: %s, 转直连兜底", symbol, e)
     return _fallback_bars(symbol, market, days)
+
+
+def fetch_bars(symbol: str, market: str = "CN", days: int = 60) -> list[dict]:
+    """日K取数(**读库优先**, AGENTS『K线读取走 PG hypertable 优先(get_klines())』)。
+
+    数智决策面板/工作台/聚宝盆/共振此前**每次全程联网现拉**(东财/新浪/腾讯直连), 与
+    已落库的 PG `klines` hypertable 脱节。现改为:
+
+      1. **历史日K 读库**: `_pg_daily_bars`(PG `klines` period='1d'/source='tencent'/
+         adjust='qfq', 单位=股, 与 `get_klines()` 同源)→ 命中且够厚(≥min(30,days))
+         且不陈旧(滞后 ≤ 12 天)时作为**基底**。
+      2. **仅当日/最新 bar 走原联网通道**: 库里未含今日时, 只向 `_network_bars`
+         (Engine TQ 优先 → 直连兜底)要**小窗口**, 取日期晚于库末根的 bar 追加
+         (覆盖周末/短假缺口)。库里**已含今日 → 零联网**直接返回。
+      3. **显式回落/标缺**: PG 空窗/过薄/陈旧 → 全量联网(改造前原路径); 联网失败
+         → 回库(序列止于末根日期, 显式缺当日, **不编造**)。
+
+    返回格式/长度语义与改造前**逐字段一致**: 单 bar =
+    `{date, open, high, low, close, volume}`, 日线 volume=**股**。消费方(gs_strategy
+    消费链/共振/聚宝盆/niuxiong/trend_pilot)无需改动。
+    """
+    n = max(int(days or 60), 1)
+    pg = _pg_daily_bars(symbol, market, n)
+    if len(pg) >= min(_PG_MIN_BARS, n):
+        from datetime import date as _date
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _TZ
+
+        today = _dt.now(_TZ("Asia/Shanghai")).date().isoformat()
+        last = str(pg[-1].get("date") or "")[:10]
+        if last >= today:
+            return pg  # 库里已含今日 → 零联网
+        try:
+            lag = (_date.fromisoformat(today) - _date.fromisoformat(last)).days
+        except ValueError:
+            lag = _MAX_PG_LAG_DAYS + 1
+        if lag <= _MAX_PG_LAG_DAYS:
+            live = _network_bars(symbol, market, min(n, _LIVE_TAIL_DAYS))
+            extra = [b for b in live if str(b.get("date") or "")[:10] > last]
+            # 无更新 bar(非交易日/盘前) → 回库基底, 不编造当日
+            return pg + extra if extra else pg
+        logger.info("fetch_bars %s PG 滞后 %d 天(> %d), 回落全量联网", symbol, lag, _MAX_PG_LAG_DAYS)
+    # PG 空窗/过薄/陈旧 → 全量联网(改造前原路径: Engine TQ 优先 → 直连兜底)
+    return _network_bars(symbol, market, n)
 
 
 def fetch_tq_l2(symbol: str, market: str = "CN") -> dict | None:

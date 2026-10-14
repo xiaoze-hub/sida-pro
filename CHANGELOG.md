@@ -1,3 +1,38 @@
+### feat-选股池共振扫描并发化+biz_cache 缓存(50只串行打TQ→线程池)（2026-10-14）
+
+选股池共振扫描 `stock_pool._screen` 对最多 50 只**串行**逐只打 TQ L2 + 联网拉 K 线,
+首屏耗时线性叠加; 且只有进程内 30s dict 缓存。现:
+
+- **改** `_screen`: 串行 for → `ThreadPoolExecutor`(上限 10, 参考 `klines.py`
+  `_compute_kline_summary` 成熟写法); 每只互不依赖, 并发后 ≈ 最长的一只。
+- **改** `/screen` 结果缓存: 进程内 dict(30s) → `biz_cache`(L1 内存 + L2 Redis, 60s, 与同文件
+  jbp `screen_cached` 同款写法); 命中**零外呼**, 跨 worker/重启共享。
+- **加** 降级基底: 单只实时取数彻底失败时, 尽力用 `decision_cache` **预落库全局基底**
+  补 bars 派生字段(trend→GS 区 / 活跃度); 其不携带或口径不符的 gs_signal/pending/L2 资金
+  一律如实置 None(守单位口径, 不编造)。行增 `source` 字段(live/decision_cache/none)。
+- **测试**: 新增 `tests/test_stock_pool_screen.py`(禁真网络): 并发收敛(多线程 + 耗时下降)、
+  排序、缓存命中零外呼、基底降级映射、单只失败显式"无"。
+
+### feat-fetch_bars 读库优先(PG hypertable 打底·仅当日/最新 bar 走联网)（2026-10-14）
+
+落库缺口审计: 决策先锋/聚宝盆/工作台共振的日K取数 `decision_pioneer.fetch_bars` **每次
+全程联网现拉**(东财/新浪/腾讯直连), 与已落库的 PG `klines` hypertable 脱节, 违背
+AGENTS『K线读取走 PG hypertable 优先(get_klines())』。现改为**读库优先**:
+
+- **加** `_pg_daily_bars`(读 PG: `period='1d'/source='tencent'/adjust='qfq'`, 走仓储层
+  `src/db/klines_repo.load_qfq_bars` —— core 不 import src.web); `_network_bars`(原两级
+  联网通道下沉为独立函数)。
+- **改** `fetch_bars`: ① 历史日K 读库为基底(够厚 ≥min(30,days) 且滞后 ≤12 天);
+  ② 库里未含今日时**仅**向联网通道要小窗口(min(days,5)), 取日期晚于库末根的 bar 追加
+  (覆盖周末/短假缺口); 库里已含今日 → **零联网**; ③ PG 空窗/过薄/陈旧 → 全量联网;
+  联网失败 → 回库(止于末根日期, 显式缺当日, 不编造)。
+- **口径不变**: 单 bar 仍 `{date,open,high,low,close,volume}`, 日线 volume=**股**(PG 前复权
+  与联网 Bar 同口径); 长度语义按自然日放大窗口后截取末 days 根, 与联网一致。gs_strategy
+  消费链/共振/聚宝盆消费方零改动。
+- **聚宝盆同口径**: `jbp_pool._bars_of` 显式复用 `fetch_bars`(同一读库优先机制, 不搞两套)。
+- **测试**: 新增 `tests/test_fetch_bars_read_db.py`(禁真网络): 含今日零联网 / 缺今日小窗口
+  合并 / 无更新回库 / 空窗·过薄·陈旧全量联网 / 非 CN 不读库 / 长度语义 / 聚宝盆复用。
+
 #### fix-TdxW看门狗杀拉补坑8顺序(2026-10-14)
 
 - 看门狗自动杀拉前先删 17709 portproxy 转发规则、拉起后补回(坑8: 0.0.0.0 监听抢先占口致 TdxW TQ 服务绑定失败, 客户端表面正常但接口死)。2026-10-14 09:01 实战踩中复发, 此前脚本『不碰 portproxy』设计错误已纠正; 静态护栏 5 例过, 已部署小主机。
