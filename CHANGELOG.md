@@ -1,3 +1,17 @@
+### fix-决策先锋辅助指标缓存迁 biz_cache(30s TTL 不变·跨 worker 共享+重启不丢)（2026-10-14）
+
+落库缺口审计: `src/web/api/pioneer_indicators.py` 的三条指标(趋势操盘线/牛熊线/分时
+突破)结果缓存在**模块内 dict `_CACHE`** —— 多 worker 各存各的、重启即丢, 违反 AGENTS
+硬约束『缓存一律走 `src/web/cache/biz_cache.py`, 禁止业务代码自建』。
+
+- **改** `_cached()` 改走 biz_cache(L1 内存 + L2 Redis), 键 `pioneer_indicators:<key>`,
+  TTL 仍 30s(原 30.0s 秒级语义不变); Redis 不可达时 biz_cache 自动退回纯 L1(= 原行
+  为, 不抛不阻塞)。
+- **加** `clear_pioneer_indicators_cache()`: 只清本模块写过的键(登记表), 不误伤其他
+  业务缓存(biz_cache 没有按前缀枚举接口, 也不许业务代码裸连 Redis 扫键)。
+- **测试**: `tests/test_pioneer_indicators.py` 夹具由 `pi._CACHE.clear()` 改为关 L2 +
+  清 biz_cache(缓存换承载后原隔离方式失效, 同参数用例会读到上一个用例的回填)。
+
 ### fix-K线批量摘要接回三层缓存(summary/batch 不再逐只裸算·加并发上限)（2026-10-14）
 
 落库缺口审计: `/api/klines/summary/batch` **逐只裸调 `collector.get_kline_summary()`

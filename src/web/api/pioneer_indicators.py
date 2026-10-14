@@ -11,24 +11,35 @@
 快照 → 生产上多为显式降级, 直到接入逐分钟大单流。
 
 权限: 数智决策档(view_forecast, 与 /api/decision-pioneer 同档)。
-进程内 30s 缓存(盘中多用户/多轮询防重复重算)。
+30s 结果缓存走 biz_cache(L1 内存 + L2 Redis, 跨 worker 共享 + 重启不丢)。
 """
 from __future__ import annotations
 
 import logging
-import time
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
+
+from src.web.cache.biz_cache import biz_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _CST = ZoneInfo("Asia/Shanghai")
-_CACHE: dict[str, tuple[float, dict]] = {}
-_TTL = 30.0
+
+# ──────────── 30s 结果缓存(2026-10-14 缓存收口) ────────────
+# 原实现是模块内 dict(_CACHE): 多 worker 各存各的 + 重启即丢, 且违反 AGENTS
+# 『缓存一律走 src/web/cache/biz_cache.py, 禁止业务代码自建』。现收口到 biz_cache
+# (L1 内存 + L2 Redis), TTL 仍是 30s 语义(盘中多用户/多轮询防重复重算)。
+_CACHE_NS = "pioneer_indicators"
+_TTL = 30  # 秒(biz_cache TTL 精度为秒, 与原 30.0s 语义一致)
+# 本模块写过的键登记(仅用于 clear_* 精准清理 —— biz_cache 无按前缀枚举接口,
+# 又不许业务代码裸连 Redis 扫键)。进程内最佳努力, 生产不需要它。
+_CACHE_KEYS: set[str] = set()
+_CACHE_KEYS_LOCK = threading.Lock()
 
 
 def _valid_symbol(raw: str, market: str = "CN") -> str:
@@ -51,13 +62,34 @@ def _now() -> str:
 
 
 def _cached(key: str, fn):
-    now = time.time()
-    hit = _CACHE.get(key)
-    if hit and now - hit[0] < _TTL:
-        return hit[1]
+    """30s 结果缓存: biz_cache(L1 内存 + L2 Redis) —— 跨 worker 共享、重启不丢。
+
+    与原进程内 dict 行为差异: 命中语义不变(30s 内同键直接返回), 但多 worker /
+    多容器现在读同一份缓存; 降级: Redis 不可达时 biz_cache 自动退回纯 L1,
+    等价于原进程内行为(不抛、不阻塞)。
+    """
+    full_key = f"{_CACHE_NS}:{key}"
+    cached = biz_cache.get_json(full_key)
+    if cached is not None:
+        return cached
     data = fn()
-    _CACHE[key] = (now, data)
+    if data is not None:
+        biz_cache.set_json(full_key, data, ttl=_TTL)
+        with _CACHE_KEYS_LOCK:
+            _CACHE_KEYS.add(full_key)
     return data
+
+
+def clear_pioneer_indicators_cache() -> None:
+    """只清本模块写过的缓存键(不误伤其他业务缓存)。运维/测试用。"""
+    with _CACHE_KEYS_LOCK:
+        keys = list(_CACHE_KEYS)
+        _CACHE_KEYS.clear()
+    if keys:
+        try:
+            biz_cache.delete(*keys)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("pioneer_indicators 清缓存失败(静默): %s", e)
 
 
 def _unavailable(note: str, extra: dict | None = None) -> dict:

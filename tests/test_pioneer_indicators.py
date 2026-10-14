@@ -397,14 +397,21 @@ def client():
     from src.web.api import pioneer_indicators as pi
     from src.web.app import app
     from src.web.api.auth import get_current_user
+    from src.web.cache.biz_cache import biz_cache
 
-    pi._CACHE.clear()
+    # 2026-10-14 缓存收口: 结果缓存从模块 dict 迁到 biz_cache。测试隔离 → 关 L2
+    # (不连真 Redis) + 清本模块键, 免得同参数的用例读到上一个用例的回填。
+    biz_cache._enabled = False
+    biz_cache._l1.clear()
+    pi.clear_pioneer_indicators_cache()
     app.dependency_overrides[get_current_user] = lambda: _FakeOwner()
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
-        pi._CACHE.clear()
+        pi.clear_pioneer_indicators_cache()
+        biz_cache._l1.clear()
+        biz_cache._enabled = True
 
 
 def test_trend_line_api_contract(client, monkeypatch):
