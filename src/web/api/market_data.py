@@ -554,8 +554,35 @@ async def board_capital_flow_proxy(
     """板块资金流向(同花顺行业/概念资金,免登录免费源)。
 
     返回按净额降序的板块资金列表(流入/流出/净额,单位亿)。
-    C2: 源故障/空返回且有备份 → 回退旧快照并带 stale/stale_age_sec 标注。
+
+    落库收口(2026-10-14, 迁移 m191): 读侧『够新读库、过旧回源 + stale 标注』——
+      · 库里有够新快照(且交易时段) → **直接读库(零回源)**, source=db_snapshot;
+      · 过旧/库空/非交易时段 → 回源实时(成功后顺带采样落库, 1~5min 节流);
+      · 回源失败/空返回 → 回退 stale 备份(带 stale/stale_age_sec); 无备份则显式 degraded。
+    先例: market_flow_snapshots(m138) + _try_write_snapshot_async。
     """
+    from src.core import board_flow_sampler as _bfs
+
+    # 1) 读侧: 够新读库(过旧/非交易时段/库不可达 → None, 回源实时)
+    try:
+        snap = await asyncio.to_thread(_bfs.read_fresh, board_type)
+    except Exception:  # noqa: BLE001
+        snap = None
+    if snap is not None:
+        items = snap["items"]
+        return {
+            "board_type": board_type,
+            "count": len(items),
+            "items": items,
+            "source": "db_snapshot",
+            "data_source": "db_snapshot",
+            "data_origin": "board_flow_snapshots",
+            "snapshot_ts": snap.get("snapshot_ts"),
+            "snapshot_age_sec": snap.get("snapshot_age_sec"),
+            "stale": False,
+        }
+
+    # 2) 过旧/缺失 → 回源实时
     try:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -573,28 +600,22 @@ async def board_capital_flow_proxy(
                 "degraded": True,
                 "note": "板块资金源暂无数据(源故障或空返回); 非「今日无资金流」",
             }
+        items = [_bfs.board_to_item(b) for b in boards]
         payload = {
             "board_type": board_type,
-            "count": len(boards),
-            "items": [
-                {
-                    "board_name": b.board_name,
-                    "board_type": b.board_type,
-                    "index_value": b.index_value,
-                    "change_pct": b.change_pct,
-                    "inflow": b.inflow,
-                    "outflow": b.outflow,
-                    "net_inflow": b.net_inflow,
-                    "stock_count": b.stock_count,
-                    "leader_name": b.leader_name,
-                    "leader_change_pct": b.leader_change_pct,
-                    "leader_price": b.leader_price,
-                    "rank": b.rank,
-                }
-                for b in boards
-            ],
+            "count": len(items),
+            "items": items,
+            "source": "ths_realtime",
+            "data_origin": "realtime",
+            "snapshot_used": False,
+            "snapshot_ts": None,
         }
         _stale_put(f"board-flow:{board_type}", payload)
+        # 3) 采样落库(后台线程, 1~5min 节流, 失败静默)
+        try:
+            _bfs.try_write_async(board_type, items)
+        except Exception:  # noqa: BLE001
+            pass
         return payload
     except Exception as e:
         logger.warning(f"板块资金代理失败: {e}")

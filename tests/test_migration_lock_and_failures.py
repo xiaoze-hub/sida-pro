@@ -256,6 +256,47 @@ def test_m189_mainline_daily_snapshot_on_sqlite(sqlite_engine, monkeypatch):
     assert rows[0][0] == '{"note":"v2"}' and rows[0][1] == 2.5
 
 
+def test_m190_m191_money_store_tables_on_sqlite(sqlite_engine, monkeypatch):
+    """2026-10-14 资金类落库收口: 龙虎榜按日表 + 板块资金采样表(DLL 语法跑在 sqlite)。"""
+    monkeypatch.setattr(
+        mig,
+        "MIGRATIONS",
+        (
+            Migration(190, "dragon_tiger_daily_table", mig._m190_dragon_tiger_daily_table),
+            Migration(191, "board_flow_snapshots_table", mig._m191_board_flow_snapshots_table),
+        ),
+    )
+    run_versioned_migrations(sqlite_engine)
+
+    with sqlite_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO dragon_tiger_daily (trade_date, symbol, market, buy_amt)"
+                " VALUES ('20251219', '002361', 'CN', 148816600.0)"
+            )
+        )
+        # 唯一键 (trade_date, symbol, market): 重拉 upsert 覆盖而非插两行
+        conn.execute(
+            text(
+                "INSERT INTO dragon_tiger_daily (trade_date, symbol, market, buy_amt)"
+                " VALUES ('20251219', '002361', 'CN', 9.0)"
+                " ON CONFLICT (trade_date, symbol, market) DO UPDATE SET buy_amt = excluded.buy_amt"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO board_flow_snapshots (board_type, item_count, payload)"
+                " VALUES ('industry', 2, '[{\"board_name\":\"银行\"}]')"
+            )
+        )
+        lhb = conn.execute(
+            text("SELECT COUNT(*), MAX(buy_amt) FROM dragon_tiger_daily")
+        ).first()
+        snaps = conn.execute(text("SELECT COUNT(*) FROM board_flow_snapshots")).scalar()
+    assert lhb[0] == 1 and lhb[1] == 9.0
+    assert snaps == 1
+
+
 def test_m140_141_142_orm_model_tables_on_sqlite(sqlite_engine, monkeypatch):
     """收编 market_scan.py / signal_summary.py 兜底建表的三个 ORM 迁移。"""
     monkeypatch.setattr(

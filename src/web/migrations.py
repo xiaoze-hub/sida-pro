@@ -2744,6 +2744,41 @@ def _m190_dragon_tiger_daily_table(conn: Connection) -> None:
     )
 
 
+def _m191_board_flow_snapshots_table(conn: Connection) -> None:
+    """板块资金采样快照表 board_flow_snapshots(2026-10-14)。
+
+    审计定性: `/market-data/board-capital-flow` **完全现拉**同花顺行业/概念资金, 仅用
+    biz_cache 的 stale 备份兜源故障 —— 上游一挂整块缺失。本表按 1~5min 采样落一条,
+    读侧『够新读库、过旧回源 + stale 标注』, 与 market_flow_snapshots(m138) 同思路。
+
+    字段: ts(DB 端默认时间戳) / board_type(industry|concept) / payload(整块 items JSON) /
+    item_count。行序采样(非定稿), 按 (board_type, ts DESC) 查最新。
+    """
+    if _has_table(conn, "board_flow_snapshots"):
+        return
+    pk = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    stamp = "TIMESTAMP" if _dialect_is_pg(conn) else "DATETIME"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE board_flow_snapshots (
+                id {pk},
+                ts {stamp} DEFAULT CURRENT_TIMESTAMP,
+                board_type TEXT NOT NULL,
+                item_count INTEGER,
+                payload TEXT
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_board_flow_snapshots_type_ts",
+        "CREATE INDEX ix_board_flow_snapshots_type_ts "
+        "ON board_flow_snapshots (board_type, ts DESC)",
+    )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5382,6 +5417,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     # GP 长序列(个股整段历史), 属审计定性「资金类仍现拉」。按日 upsert 后请求只读库 +
     # 当日增量回源, 历史日永不回源(先例: _m156 dragon_tiger_events / _m138 快照)。
     Migration(190, "dragon_tiger_daily_table", _m190_dragon_tiger_daily_table),
+    # 板块资金采样落库(2026-10-14): board-capital-flow 完全现拉同花顺 + 仅 stale 备份。
+    # 追加 1~5min 采样落库(仿 market_flow_snapshots 先例), 读侧够新读库/过旧回源+stale。
+    Migration(191, "board_flow_snapshots_table", _m191_board_flow_snapshots_table),
 )
 
 

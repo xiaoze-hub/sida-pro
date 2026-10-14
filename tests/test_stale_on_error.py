@@ -13,6 +13,18 @@ import src.core.marketdata_client as md_client
 import src.web.api.market_data as mdm
 
 
+@pytest.fixture(autouse=True)
+def _isolate_board_snapshot(monkeypatch):
+    """板块资金落库(2026-10-14)后的测试隔离: 本文件测的是**实时/降级/备份**分支,
+    须屏蔽「够新读库」路径 —— 否则前序用例后台线程落的快照行会被读回(且随交易时段
+    时有时无 → flaky), 掩盖实时分支行为。"""
+    import src.core.board_flow_sampler as bfs
+
+    monkeypatch.setattr(bfs, "read_fresh", lambda board_type: None)
+    monkeypatch.setattr(bfs, "try_write_async", lambda board_type, items: None)
+    yield
+
+
 class _Board:
     def __init__(self, name: str):
         self.board_name = name

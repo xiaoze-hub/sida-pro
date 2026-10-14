@@ -1,3 +1,28 @@
+### feat-板块资金采样落库(board_flow_snapshots·够新读库/过旧回源+stale)（2026-10-14）
+
+资金类落库收口 ②: `/api/market-data/board-capital-flow` **完全现拉**同花顺行业/概念
+资金, 仅用 biz_cache 的 stale 备份兜源故障 —— 上游一挂整块缺失。
+
+- **建表** `src/web/migrations.py` 新增 `Migration(191, "board_flow_snapshots_table", ...)`:
+  `board_flow_snapshots`(ts 默认时间戳 / board_type / item_count / payload,
+  索引 `(board_type, ts DESC)`), 行序采样, 按类型查最新。
+- **加** `src/core/board_flow_sampler.py`(仿 `market_flow_sampler` 写
+  `market_flow_snapshots` 的成熟先例): `write_snapshot()` 落一行 / `try_write_async()`
+  后台线程 + 180s 进程内节流(落在 1~5min 区间) / `read_fresh()` 仅『够新 ∩ 交易时段』
+  返回 / `collect_once()` 独立采样(页面不开也落库); 板块 item 映射抽成
+  `board_to_item()` 单一入口(接口与采样共用)。
+- **改** `board-capital-flow` 端点: 读侧『够新读库(零回源, `source=db_snapshot` +
+  快照时间戳/行龄) / 过旧/库空/非交易时段回源实时(成功顺带采样落库) / 源故障或空返回
+  回退 stale 备份(带 stale/stale_age_sec), 无备份显式 degraded』。
+- **注册** `src/bootstrap/startup.py`: 新增 `board-flow-sampler` 定时任务(180s,
+  `max_instances=1/coalesce`), 与 `market-flow-sampler` 同款。
+- **测试**(禁真网络): 新增 `tests/test_board_flow_snapshot.py`(写读回原样·空列表不落库·
+  新鲜度(过旧/非交易时段/库空/库不可达)·阈值环境变量覆盖·端点够新读库零回源·过旧回源
+  并采样·空返回 degraded·源故障 stale·collect_once 交易时段落两类/非交易跳过/取数失败
+  不抛); `tests/test_stale_on_error.py` / `tests/test_degraded_honesty_ki043_44_45.py`
+  加板块快照读路径隔离夹具(实时/降级分支不被前序落库行串扰);
+  `tests/test_migration_lock_and_failures.py` 补 m190/m191 建表钉子。
+
 ### feat-龙虎榜按日 upsert 落库(请求只读库·当日增量回源·历史日永不回源)（2026-10-14）
 
 资金类落库收口 ①: `/api/market-data/fundamentals-detail` 经 `_lhb_from_tq` **每次请求
