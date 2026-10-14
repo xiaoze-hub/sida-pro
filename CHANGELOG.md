@@ -1,3 +1,26 @@
+### feat-龙虎榜按日 upsert 落库(请求只读库·当日增量回源·历史日永不回源)（2026-10-14）
+
+资金类落库收口 ①: `/api/market-data/fundamentals-detail` 经 `_lhb_from_tq` **每次请求
+现拉** TQ GP 长序列(个股整段历史), `/dragon-tiger/{date}` 亦逐次现拉东财+ftshare ——
+审计定性「资金类仍现拉」。
+
+- **建表** `src/web/migrations.py` 新增 `Migration(190, "dragon_tiger_daily_table", ...)`:
+  `dragon_tiger_daily`(双方言 DDL, 唯一键 `(trade_date, symbol, market)`, 索引
+  `(symbol, trade_date DESC)` / `(trade_date DESC, market)`), 除榜单字段外含 TQ 独有拆解
+  (机构/营业部/沪深股通买卖, 万元原口径)与席位 JSON 列。
+- **拉到即落** `src/web/api/market_data.py`: 新增 `_lhb_upsert_rows()`(upsert 幂等,
+  键不全的行丢弃不编造) + `_lhb_row_to_db` / `_lhb_rec_to_row`(JSON 席位还原, 空列表不写
+  `"[]"` 占位); `/dragon-tiger/{date}` 的 `_compute` 与 `_compute_lhb_range` 拉到即落。
+- **读侧只读库** 新增 `_dragon_tiger_from_db()`: 该交易日已落库 → 直接读库返回(历史日
+  永不回源)并回填响应缓存; `_compute_lhb_range` 逐日先读库, 已落库日零回源。
+- **库 + 当日增量回源** 新增 `_lhb_symbol_rows()`: 库里有该 symbol 且最新日 >= 今天 →
+  **零回源**; 最新日 < 今天 → 只回源 `[最新日+1, 今天]` 增量(`start_time` 收窄); 库空
+  (冷启动) → 整段回源一次并落库。`fetch_fundamentals_detail` 由 `_lhb_from_tq` 改走此入口。
+- **测试**(禁真网络): 新增 `tests/test_lhb_daily_store.py`(upsert 幂等·键不全丢弃·读回
+  与现拉同契约·库命中零回源·过旧增量回源起点正确·冷启动整段+二次走库·按日端点读库/
+  回源落库·range 逐日先读库); `tests/test_tq_extras_integration.py` 加库隔离夹具(龙虎榜
+  融合单测与库解耦, 防前序用例落库行串扰)。
+
 ### fix-市场主线缓存迁 biz_cache + 日频快照落库(够新读库·过旧回源+stale 标注)（2026-10-14）
 
 落库缺口审计: `/api/market/mainline` 用**模块内进程 dict**(60s per spec)—— 多 worker

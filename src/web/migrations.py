@@ -2683,6 +2683,67 @@ def _m189_mainline_daily_snapshot_table(conn: Connection) -> None:
         )
 
 
+def _m190_dragon_tiger_daily_table(conn: Connection) -> None:
+    """龙虎榜按日明细表 dragon_tiger_daily(2026-10-14 资金类落库收口)。
+
+    审计定性: `/market-data/fundamentals-detail` 经 `_lhb_from_tq` 每次请求**现拉** TQ GP
+    长序列(个股整段历史), `/dragon-tiger/{date}` 亦逐次现拉东财+ftshare。本表把拉到
+    的行**按日 upsert 落库**: 请求只读库, 仅当日(尚未落库)增量回源; 历史日永不回源。
+
+    来源合一(TQ GP 序列 / 东财-ftshare 市场级), 同 `(trade_date, symbol, market)` 唯一键 →
+    重拉幂等。TQ 侧独有字段(机构/营业部/沪深股通买卖拆解, 万元原口径)也一并落;
+    top_buyers/top_sellers 结构化列表存 JSON 文本(席位明细)。
+    """
+    if _has_table(conn, "dragon_tiger_daily"):
+        return
+    money = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    stamp = "TIMESTAMP" if _dialect_is_pg(conn) else "DATETIME"
+    boolt = "BOOLEAN" if _dialect_is_pg(conn) else "INTEGER"
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE dragon_tiger_daily (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT 'CN',
+                name TEXT,
+                reason TEXT,
+                close {money},
+                change_pct {money},
+                net_buy {money},
+                buy_amt {money},
+                sell_amt {money},
+                turnover_pct {money},
+                top_buyers TEXT,
+                top_sellers TEXT,
+                inst_buy_wan {money},
+                inst_sell_wan {money},
+                yyb_buy_wan {money},
+                yyb_sell_wan {money},
+                hsgt_buy_wan {money},
+                hsgt_sell_wan {money},
+                suspicious {boolt},
+                source TEXT,
+                updated_at {stamp} DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_dragon_tiger_daily UNIQUE (trade_date, symbol, market)
+            )
+            """
+        )
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_dragon_tiger_daily_sym_date",
+        "CREATE INDEX ix_dragon_tiger_daily_sym_date "
+        "ON dragon_tiger_daily (symbol, trade_date DESC)",
+    )
+    _create_index_if_missing(
+        conn,
+        "ix_dragon_tiger_daily_date",
+        "CREATE INDEX ix_dragon_tiger_daily_date "
+        "ON dragon_tiger_daily (trade_date DESC, market)",
+    )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5317,6 +5378,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 市场主线日频快照(2026-10-14 缓存收口): biz_cache 缺失时(重启/换 worker)读库,
     # 免掉冷启动 16~37s 重拉涨停池; date 主键同日覆盖, 收盘后那次即当日定稿。
     Migration(189, "mainline_daily_snapshot", _m189_mainline_daily_snapshot_table),
+    # 龙虎榜按日落库(2026-10-14 资金类落库收口): `_lhb_from_tq` 此前每次请求现拉 TQ
+    # GP 长序列(个股整段历史), 属审计定性「资金类仍现拉」。按日 upsert 后请求只读库 +
+    # 当日增量回源, 历史日永不回源(先例: _m156 dragon_tiger_events / _m138 快照)。
+    Migration(190, "dragon_tiger_daily_table", _m190_dragon_tiger_daily_table),
 )
 
 

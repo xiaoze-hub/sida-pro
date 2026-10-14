@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -385,6 +386,13 @@ async def dragon_tiger_proxy(
     if cached is not None:
         return cached
 
+    # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库返回(历史日永不回源),
+    # 并回填响应缓存。仅当库里没有该日(冷启动/当日未落)才走下面的回源链路。
+    db_payload = _dragon_tiger_from_db(trade_date, market)
+    if db_payload is not None:
+        biz_cache.set_json(cache_key, db_payload, ttl=cache_ttl)
+        return db_payload
+
     def _compute() -> dict:
         from src.core.marketdata_client import get_market_data
         md = get_market_data()
@@ -417,12 +425,18 @@ async def dragon_tiger_proxy(
                     "top_sellers": list(getattr(ft, "top_sellers", []) or []) if ft else [],
                 }
             )
+        # 拉到即落(2026-10-14 落库收口): 东财-ftshare 行按 (date, symbol) upsert;
+        # 下次同请求直接读库, 历史日不再回源。
+        if items:
+            _lhb_upsert_rows(items, market=market, source="em_ftshare")
         return {
             "trade_date": trade_date,
             "market": market,
             "count": len(items),
             "items": items,
             "pending": False,
+            "source": "em_ftshare",
+            "data_origin": "realtime",
         }
 
     started = _bg_start(job_key, _compute, result_key=cache_key, cache_ttl=cache_ttl)
@@ -889,6 +903,11 @@ def _compute_lhb_range(market: str, days: int) -> dict:
         d -= timedelta(days=1)
         if is_weekend:
             continue
+        # 读侧(2026-10-14 落库收口): 该日已落库 → 直接读库, 不回源(历史日永不回源)。
+        day_db = _lhb_read_date(ds, market)
+        if day_db:
+            by_date[ds] = day_db
+            continue
         try:
             rows = md.dragon_tiger(date=ds, market=market) or []
         except Exception as e:
@@ -923,6 +942,8 @@ def _compute_lhb_range(market: str, days: int) -> dict:
                 }
             )
         if day_items:
+            # 拉到即落(2026-10-14): 东财-ftshare 按日落库, 下次(1h TTL 过期/重启)直接读库。
+            _lhb_upsert_rows(day_items, market=market, source="em_ftshare")
             by_date[ds] = day_items
     return {
         "market": market,
@@ -1045,6 +1066,236 @@ def _lhb_from_tq(symbol: str, *, start_time: str = "") -> list[dict]:
     return out
 
 
+# ──────────── 龙虎榜按日落库(2026-10-14 资金类落库收口, 迁移 m190) ────────────
+# 审计定性: fundamentals-detail 经 _lhb_from_tq **每次请求现拉** TQ GP 长序列(个股整段
+# 历史), /dragon-tiger/{date} 亦逐次现拉东财+ftshare。现把拉到的行按 (trade_date,
+# symbol, market) upsert 落库 dragon_tiger_daily:
+#   拉取侧: 任何来源(TQ GP / 东财-ftshare)拉到即落(_lhb_upsert_rows);
+#   读侧:  请求只读库, 仅**当日**(尚未落库)增量回源; 历史日永不回源。
+_LHB_DB_COLS = (
+    "trade_date", "symbol", "market", "name", "reason", "close", "change_pct",
+    "net_buy", "buy_amt", "sell_amt", "turnover_pct", "top_buyers", "top_sellers",
+    "inst_buy_wan", "inst_sell_wan", "yyb_buy_wan", "yyb_sell_wan",
+    "hsgt_buy_wan", "hsgt_sell_wan", "suspicious", "source",
+)
+# 读回时 SELECT 的列顺序(与 _lhb_rec_to_row 一一对应)。
+_LHB_READ_SQL = (
+    "SELECT trade_date, symbol, name, reason, close, change_pct, net_buy, buy_amt, "
+    "sell_amt, turnover_pct, top_buyers, top_sellers, inst_buy_wan, inst_sell_wan, "
+    "yyb_buy_wan, yyb_sell_wan, hsgt_buy_wan, hsgt_sell_wan, suspicious "
+    "FROM dragon_tiger_daily "
+)
+
+
+def _lhb_json_list(v) -> str | None:
+    """席位列表 → JSON 文本(空/空列表 → NULL, 不写 "[]" 占位)。"""
+    if not v:
+        return None
+    try:
+        return json.dumps(v, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lhb_row_to_db(r: dict, market: str, source: str) -> dict:
+    """前端龙虎榜行 → dragon_tiger_daily 落库行(纯函数, 便于单测)。"""
+    d = str(r.get("trade_date") or "")[:10].replace("-", "")
+    sym = str(r.get("symbol") or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    susp = r.get("suspicious")
+    return {
+        "trade_date": d,
+        "symbol": sym,
+        "market": market or "CN",
+        "name": r.get("name") or None,
+        "reason": r.get("reason") or None,
+        "close": r.get("close"),
+        "change_pct": r.get("change_pct"),
+        "net_buy": r.get("net_buy"),
+        "buy_amt": r.get("buy_amt"),
+        "sell_amt": r.get("sell_amt"),
+        "turnover_pct": r.get("turnover_pct"),
+        "top_buyers": _lhb_json_list(r.get("top_buyers")),
+        "top_sellers": _lhb_json_list(r.get("top_sellers")),
+        "inst_buy_wan": r.get("inst_buy_wan"),
+        "inst_sell_wan": r.get("inst_sell_wan"),
+        "yyb_buy_wan": r.get("yyb_buy_wan"),
+        "yyb_sell_wan": r.get("yyb_sell_wan"),
+        "hsgt_buy_wan": r.get("hsgt_buy_wan"),
+        "hsgt_sell_wan": r.get("hsgt_sell_wan"),
+        "suspicious": (None if susp is None else bool(susp)),
+        "source": source or None,
+    }
+
+
+def _lhb_upsert_rows(rows: list[dict], market: str = "CN", source: str = "") -> int:
+    """按日 upsert 落库 (trade_date, symbol, market) 唯一键 → 重拉幂等。失败静默返回 0。"""
+    if not rows:
+        return 0
+    try:
+        from src.db.dialect import upsert_sql
+        from src.web.database import engine
+
+        stmt = upsert_sql(
+            "dragon_tiger_daily",
+            list(_LHB_DB_COLS),
+            ["trade_date", "symbol", "market"],
+            [c for c in _LHB_DB_COLS if c not in ("trade_date", "symbol", "market")],
+        )
+        saved = 0
+        seen: set[tuple] = set()
+        with engine.begin() as conn:
+            for r in rows:
+                row = _lhb_row_to_db(r, market, source)
+                if len(row["trade_date"]) != 8 or len(row["symbol"]) != 6:
+                    continue  # 键不全的行不入库(不编造)
+                key = (row["trade_date"], row["symbol"], row["market"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                conn.execute(text(stmt), row)
+                saved += 1
+        return saved
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜落库失败(静默, 不阻断): %s", e)
+        return 0
+
+
+def _lhb_json_parse(v) -> list:
+    if not v:
+        return []
+    try:
+        x = json.loads(v) if isinstance(v, str) else v
+    except (TypeError, ValueError):
+        return []
+    return x if isinstance(x, list) else []
+
+
+def _lhb_rec_to_row(r, symbol: str) -> dict:
+    """dragon_tiger_daily 行 → 前端契约行(与 _lhb_from_tq/东财路径同键)。"""
+    return {
+        "trade_date": str(r[0]),
+        "symbol": r[1] or symbol,
+        "name": r[2] or "",
+        "reason": r[3],
+        "close": r[4],
+        "change_pct": r[5],
+        "net_buy": r[6],
+        "buy_amt": r[7],
+        "sell_amt": r[8],
+        "turnover_pct": r[9],
+        "top_buyers": _lhb_json_parse(r[10]),
+        "top_sellers": _lhb_json_parse(r[11]),
+        "inst_buy_wan": r[12],
+        "inst_sell_wan": r[13],
+        "yyb_buy_wan": r[14],
+        "yyb_sell_wan": r[15],
+        "hsgt_buy_wan": r[16],
+        "hsgt_sell_wan": r[17],
+        "suspicious": bool(r[18]) if r[18] is not None else False,
+    }
+
+
+def _lhb_read_symbol(symbol: str, market: str = "CN", limit: int = 400) -> list[dict]:
+    """读某 symbol 的落库龙虎榜(新→旧)。失败/无表静默返回 [](调用方回源)。"""
+    sym = str(symbol or "").strip()
+    if "." in sym:
+        sym = sym.split(".")[0]
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE symbol = :s AND market = :m "
+                     "ORDER BY trade_date DESC LIMIT :lim"),
+                {"s": sym, "m": market or "CN", "lim": limit},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, sym) for r in recs]
+
+
+def _lhb_read_date(trade_date: str, market: str = "CN") -> list[dict]:
+    """读某交易日的落库龙虎榜(全市场)。失败/无表静默返回 [](调用方回源)。"""
+    d = str(trade_date or "")[:10].replace("-", "")
+    if len(d) != 8:
+        return []
+    try:
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            recs = conn.execute(
+                text(_LHB_READ_SQL + "WHERE trade_date = :d AND market = :m ORDER BY symbol"),
+                {"d": d, "m": market or "CN"},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("龙虎榜读库(按日)失败(回源): %s", e)
+        return []
+    return [_lhb_rec_to_row(r, r[1] or "") for r in recs]
+
+
+def _dragon_tiger_from_db(trade_date: str, market: str = "CN") -> dict | None:
+    """该交易日已落库 → 组装与回源分支同构的响应(items 为前端契约行); 无行返回 None。"""
+    rows = _lhb_read_date(trade_date, market)
+    if not rows:
+        return None
+    return {
+        "trade_date": str(trade_date or "")[:10].replace("-", ""),
+        "market": market,
+        "count": len(rows),
+        "items": rows,
+        "pending": False,
+        "source": "db",
+        "data_origin": "dragon_tiger_daily",
+    }
+
+
+def _next_day_yyyymmdd(d: str) -> str:
+    """'20251219' → '20251220'; 非法输入返回 ''(调用方按全量回源处理)。"""
+    s = str(d or "").replace("-", "")[:8]
+    if len(s) != 8 or not s.isdigit():
+        return ""
+    try:
+        from datetime import date as _date, timedelta as _td
+
+        nxt = _date(int(s[:4]), int(s[4:6]), int(s[6:8])) + _td(days=1)
+        return nxt.strftime("%Y%m%d")
+    except ValueError:
+        return ""
+
+
+def _lhb_symbol_rows(symbol: str, market: str = "CN") -> list[dict]:
+    """个股龙虎榜: **只读库 + 当日增量回源**(历史日永不回源)。
+
+    1) 库里有该 symbol 的行且最新日 >= 今天 → 直接返回, **零回源**;
+    2) 库里有行但最新日 < 今天(当日榜单未落) → 仅回源 [最新日+1, 今天] 的增量
+       (TQ GP 序列, start_time 收窄), 落库后与库行合并返回;
+    3) 库空(从未落库/冷启动) → 一次性回源整段并落库;
+    库不可达/回源异常 → 由调用方容错(此处不抛, 返回已得部分)。
+    """
+    db_rows = _lhb_read_symbol(symbol, market)
+    today = datetime.now().strftime("%Y%m%d")
+    if db_rows:
+        latest = max((str(r.get("trade_date") or "") for r in db_rows), default="")
+        if latest >= today:
+            return db_rows
+        start = _next_day_yyyymmdd(latest)
+        fetched = _lhb_from_tq(symbol, start_time=start) if start else _lhb_from_tq(symbol)
+        if fetched:
+            _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+            merged: dict[str, dict] = {str(r.get("trade_date")): r for r in fetched}
+            for r in db_rows:
+                merged.setdefault(str(r.get("trade_date")), r)
+            return sorted(merged.values(), key=lambda x: str(x.get("trade_date") or ""), reverse=True)
+        return db_rows
+    fetched = _lhb_from_tq(symbol)
+    if fetched:
+        _lhb_upsert_rows(fetched, market=market, source="tdx_tq")
+    return fetched
+
+
 def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10) -> dict:
     """个股基本面明细合并取数(纯函数, 供 HTTP 端点与对话助手共用)。
 
@@ -1067,10 +1318,10 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         "lhb_pending": False,
     }
 
-    # 1) 龙虎榜: **TQ 长序列为主骨架**(2026-09-23 清单切换), 东财市场级缓存补
+    # 1) 龙虎榜: **已落库的库行为主骨架**(2026-10-14 落库收口), 东财市场级缓存补
     #    reason(上榜原因)/close/change_pct/席位名 —— 这几个 TQ 没有(不编造),
     #    而 TQ 有东财没有的: 一年以上历史 + 机构/营业部/沪深股通买卖拆解。
-    #    两者合并 = 比任一单源都全。
+    #    读侧只读库 + 当日增量回源(历史日永不回源), 不再每次现拉整段 TQ GP 序列。
     em_rows: list[dict] = []
     lhb_range = _get_lhb_range(market, dt_days)
     if lhb_range is not None:
@@ -1083,9 +1334,9 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
     tq_rows: list[dict] = []
     if market == "CN":
         try:
-            tq_rows = _lhb_from_tq(symbol)
+            tq_rows = _lhb_symbol_rows(symbol, market)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"基本面明细-龙虎榜[TQ {symbol}]失败, 降级东财缓存: {e}")
+            logger.warning(f"基本面明细-龙虎榜[库/TQ {symbol}]失败, 降级东财缓存: {e}")
 
     if tq_rows:
         # 东财有值的字段覆盖到 TQ 行上(TQ 侧留空的才补, 不覆盖 TQ 的金额口径)
