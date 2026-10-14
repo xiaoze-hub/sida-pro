@@ -169,7 +169,7 @@ def zt_metrics(snap: dict, prices: dict, names: dict | None = None) -> dict:
     live = parse_zdt_snapshot(snap)
     names = names or {}
 
-    limit_up_count = len(live)
+    limit_up_count = 0  # 真触及涨停计数(逐票 touched 过滤后累加, 不用 len(live))
     sealed_count = 0
     open_times_gt0 = 0
     blow_count = 0
@@ -189,10 +189,19 @@ def zt_metrics(snap: dict, prices: dict, names: dict | None = None) -> dict:
         is_st = ("ST" in name.upper()) if name else None
 
         sealed = is_sealed_close(close, prev_close, bare, is_st=is_st)
+        open_times = _to_int(rec.get("OpenTimesZT"), 0)
+        fd_hands = _to_int(rec.get("FDVolMaxZT"), 0)
+        first_t = str(rec.get("FirstTimeZT") or "").strip("0: ")
+        # 真触及涨停(全市场口径): 封住 / 开过板 / 有过封单量 / 有过首封时间。
+        # ⚠️ parse_zdt_snapshot 的「字段存在即候选」判据只适用于预过滤池;
+        # 全市场 get_zdt_data 对每只票都回 ZT 字段(值 0/空), 必须按**值**过滤。
+        touched = sealed is True or open_times > 0 or fd_hands > 0 or bool(first_t)
+        if not touched:
+            continue
+        limit_up_count += 1
         if sealed is None:
             price_missing += 1
 
-        open_times = _to_int(rec.get("OpenTimesZT"), 0)
         if open_times > 0:
             open_times_gt0 += 1
         # 炸板 = 打开过(OpenTimesZT>0) **或** 曾涨停未封住。

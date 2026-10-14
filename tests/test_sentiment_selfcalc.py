@@ -447,3 +447,17 @@ def test_persist_refuses_failed_result():
 def test_chunk_constant_respects_accident_rule():
     assert sc._CHUNK <= 50, "事故铁律(2026-09-23 客户端假死): 单次 TQ 请求 ≤50 只"
     assert sc._MAX_CHUNK_FAILS >= 1
+
+
+def test_full_market_zero_fields_not_counted():
+    # 全市场口径: ZT 字段存在但全 0/空的普通票不得计入涨停家数(回归: 5581 假数)
+    snap = {
+        "000001.SZ": {"OpenTimesZT": "0", "FDVolMaxZT": "0", "FirstTimeZT": ""},
+        "000002.SZ": {"OpenTimesZT": "0", "FDVolMaxZT": "0"},
+    }
+    prices = {
+        "000001": {"close": 10.0, "prev_close": 9.5},
+        "000002": {"close": 20.0, "prev_close": 19.0},
+    }
+    m = sc.zt_metrics(snap, prices, {"000001": "甲股", "000002": "乙股"})
+    assert m["limit_up_count"] == 0, m
