@@ -67,7 +67,7 @@ RENDER_HEIGHT = 420
 #: 落库列(除主键 trade_date/symbol 外), 与 _m195 表结构一一对应。
 FIELDS: tuple[str, ...] = (
     "name", "ai_pattern", "ai_confidence", "ai_basis", "ai_all",
-    "model_name", "window", "rule_primary", "rule_patterns",
+    "model_name", "window_n", "rule_primary", "rule_patterns",
     "compare_status", "status", "source",
 )
 
@@ -341,7 +341,7 @@ def build_rows(records: list[dict]) -> list[dict]:
                     json.dumps(ai_patterns, ensure_ascii=False) if ai_patterns else None
                 ),
                 "model_name": rec.get("model_name") or None,
-                "window": rec.get("window"),
+                "window_n": rec.get("window"),
                 "rule_primary": rule_patterns[0] if rule_patterns else None,
                 "rule_patterns": (
                     json.dumps(rule_patterns, ensure_ascii=False) if rule_patterns else None
@@ -728,7 +728,7 @@ def collect_and_mark(
                 "ai_patterns": res.get("ai_patterns") or [],
                 "rule_patterns": rules,
                 "model_name": res.get("model_name"),
-                "window": res.get("window"),
+                "window": res.get("window_n"),
                 "status": res.get("status"),
                 "source": "ai_vision",
             }
@@ -800,7 +800,7 @@ def patterns_for_date(trade_date: str | None = None) -> dict:
         rows = db.execute(
             text(
                 f"SELECT symbol, name, ai_pattern, ai_confidence, ai_basis, ai_all, "
-                f"model_name, window, rule_primary, rule_patterns, compare_status, "
+                f"model_name, window_n, rule_primary, rule_patterns, compare_status, "
                 f"status, source FROM {_TABLE} WHERE trade_date = :d ORDER BY symbol"
             ),
             {"d": td},
