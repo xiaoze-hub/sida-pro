@@ -1,3 +1,14 @@
+### test-连板梯队快照: 读库零重算 / 幂等 / 回退补写 专项测试（2026-10-14）
+
+- 新增 `tests/test_ladder_snapshot.py`(禁真网络; 落库回环 = 测试 SQLite, 其余全 mock):
+  快照 upsert 同日覆盖只留一行 · 收盘预渲染各窗口幂等 · 事件表落后/最新日读不到时不落
+  落后快照(作业 ok=False) · **读库命中 → `_ladder_payload` 一次都不调** · 盘中 live 只叠加
+  当日行(历史 `dates`/`ladder` 逐字不变, `stats` 用 live 日重算; live 日已落进快照或隔日
+  残留一律不叠) · mode=finalized 不叠 live · 只请求 live/finalized 回退读同窗口 'auto' 行
+  且窗口不串用 · 缺行/落后回退现算 + 后台补写(不阻塞、30s 节流、落后 payload 不落库) ·
+  日期格式归一('2026-10-14' vs '20261014' 同交易日) · 读库失败静默回退 · 响应字段集与现算
+  路径逐键一致(前端零改动)。
+
 ### feat-连板梯队定型 payload 收盘预渲染落库(6.5s 现算 → 读库秒开)（2026-10-14）
 
 审计定性: `/api/theme-mood/ladder` 的 `_ladder_payload` **每次请求重算** —— 20 天全市场
