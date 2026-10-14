@@ -1,3 +1,23 @@
+### feat-fetch_bars 读库优先(PG hypertable 打底·仅当日/最新 bar 走联网)（2026-10-14）
+
+落库缺口审计: 决策先锋/聚宝盆/工作台共振的日K取数 `decision_pioneer.fetch_bars` **每次
+全程联网现拉**(东财/新浪/腾讯直连), 与已落库的 PG `klines` hypertable 脱节, 违背
+AGENTS『K线读取走 PG hypertable 优先(get_klines())』。现改为**读库优先**:
+
+- **加** `_pg_daily_bars`(读 PG: `period='1d'/source='tencent'/adjust='qfq'`, 走仓储层
+  `src/db/klines_repo.load_qfq_bars` —— core 不 import src.web); `_network_bars`(原两级
+  联网通道下沉为独立函数)。
+- **改** `fetch_bars`: ① 历史日K 读库为基底(够厚 ≥min(30,days) 且滞后 ≤12 天);
+  ② 库里未含今日时**仅**向联网通道要小窗口(min(days,5)), 取日期晚于库末根的 bar 追加
+  (覆盖周末/短假缺口); 库里已含今日 → **零联网**; ③ PG 空窗/过薄/陈旧 → 全量联网;
+  联网失败 → 回库(止于末根日期, 显式缺当日, 不编造)。
+- **口径不变**: 单 bar 仍 `{date,open,high,low,close,volume}`, 日线 volume=**股**(PG 前复权
+  与联网 Bar 同口径); 长度语义按自然日放大窗口后截取末 days 根, 与联网一致。gs_strategy
+  消费链/共振/聚宝盆消费方零改动。
+- **聚宝盆同口径**: `jbp_pool._bars_of` 显式复用 `fetch_bars`(同一读库优先机制, 不搞两套)。
+- **测试**: 新增 `tests/test_fetch_bars_read_db.py`(禁真网络): 含今日零联网 / 缺今日小窗口
+  合并 / 无更新回库 / 空窗·过薄·陈旧全量联网 / 非 CN 不读库 / 长度语义 / 聚宝盆复用。
+
 #### fix-TdxW看门狗杀拉补坑8顺序(2026-10-14)
 
 - 看门狗自动杀拉前先删 17709 portproxy 转发规则、拉起后补回(坑8: 0.0.0.0 监听抢先占口致 TdxW TQ 服务绑定失败, 客户端表面正常但接口死)。2026-10-14 09:01 实战踩中复发, 此前脚本『不碰 portproxy』设计错误已纠正; 静态护栏 5 例过, 已部署小主机。

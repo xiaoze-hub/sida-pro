@@ -186,6 +186,12 @@ def _activity_level_of(activity: float) -> Optional[str]:
 
 # ── 取数封装(便于测试 monkeypatch, 不触真网络) ──────────────────────────────
 def _bars_of(symbol: str) -> list[dict]:
+    """日K取数(**与决策先锋共享同一读库优先机制**, 不搞两套)。
+
+    直接复用 `decision_pioneer.fetch_bars` —— 其内部即「PG hypertable 打底 + 仅当日/
+    最新 bar 走联网」(AGENTS: K线读取走 PG 优先 `get_klines()`)。聚宝盆/决策先锋/工作台
+    因此天然同口径同源, 无需在 core 再抄一份读库逻辑。
+    """
     from src.core.decision_pioneer import fetch_bars
 
     return fetch_bars(symbol, "CN", days=60)
