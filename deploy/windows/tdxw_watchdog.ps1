@@ -143,13 +143,20 @@ if ($DryRun) {
   exit 0
 }
 
-Write-Log 'ACTION: threshold reached + no window -> kill TdxW, relaunch, re-probe'
+Write-Log 'ACTION: threshold reached + no window -> drop portproxy rule, kill TdxW, relaunch, re-add rule, re-probe'
+# Pit-8 ordering (mandatory): the iphlpsvc portproxy listener on 0.0.0.0:17709
+# grabs the port BEFORE TdxW can bind 127.0.0.1:17709, and TdxW's TQ service
+# then fails to start ("port occupied") while the client itself looks fine.
+# So: drop the rule first, let TdxW own 17709, then re-add the forwarder.
+& netsh.exe interface portproxy delete v4tov4 listenport=17709 listenaddress=0.0.0.0 2>&1 | Out-Null
+Start-Sleep -Seconds 2
 & taskkill.exe /F /IM TdxW.exe /T 2>&1 | Out-Null
 Start-Sleep -Seconds 3
 & taskkill.exe /F /IM tdxcef.exe /T 2>&1 | Out-Null
 Start-Sleep -Seconds 2
 & schtasks.exe /run /tn $TaskName 2>&1 | Out-Null
 Start-Sleep -Seconds $RelaunchWait
+& netsh.exe interface portproxy add v4tov4 listenport=17709 listenaddress=0.0.0.0 connectport=17709 connectaddress=127.0.0.1 2>&1 | Out-Null
 
 if (Test-TqRpc) {
   Write-Log 'RECOVERED: get_market_snapshot returns price after relaunch'
