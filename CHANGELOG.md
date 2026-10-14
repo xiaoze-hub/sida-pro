@@ -1,3 +1,32 @@
+### feat-AI看图形态影子证据层(渲染→视觉LLM认形态→与规则形态对照落库)（2026-10-14）
+
+QuantHarness 启发: 视觉 LLM 直接"看图认形态"比纯数值规则更自然(头肩顶/旗形等纯规则难写全)。
+新增 **AI 看图形态影子层** —— 每日盘后对自选∪持仓逐票「K线渲染 → 视觉模型认形态(形态名/
+置信度/依据) → 与 `kline_patterns` 规则形态同日同票并排落库」, 供后续「分桶验证」用。
+**影子运行, 不改任何现有信号/决策/展示**; 无视觉模型/调用失败 → 显式降级不出形态(禁编造)。
+
+- **新增** `src/core/ai_vision_pattern.py`: ① `render_kline_png` 本地蜡烛图渲染(Pillow,
+  红涨绿跌+成交量副图, 无网络); ② `build_vision_prompt`/`parse_vision_result`(严格 JSON 契约,
+  容错去 fence/取对象); ③ `compare_with_rules` 四组分桶(agree/conflict/ai_only/rules_only,
+  另 none/degraded); ④ `recognize_from_bars` 单票编排(无模型/调用失败/输出不可解析 → degraded);
+  ⑤ `resolve_vision_model` 走统一配置中心 `get_model_for_scene(db,"vision")`(平台模型须带
+  `vision` 能力, 否则降级); ⑥ `make_vision_provider` 真实调用(OpenAI 兼容 + base64 内嵌);
+  ⑦ `collect_and_mark` 编排(标的池复用 `quote_snapshots.collect_market_symbols`, K线走
+  `KlineCollector`, 规则走 `detect_pattern_marks(lookback=5)`); ⑧ `run_ai_vision_pattern_job`
+  作业入口 + `patterns_for_date`/`latest_date` 只读。
+- **新增** `src/web/migrations.py::_m195_ai_pattern_shadow`: 表 `ai_pattern_shadow`
+  (trade_date,symbol 主键; AI 主形态/置信度/依据/全量 JSON + 规则形态 + compare_status +
+  status + 模型名/窗口)。**只写本表, 禁止运行时建表**(先例 `_m188`)。
+- **接线** `src/bootstrap/startup.py`: 注册 `ai-vision-pattern`(交易日 15:40)。
+- **新增** `src/web/api/ai_pattern.py`(`GET /api/ai-pattern/shadow` 只读对照 +
+  `POST .../run` 手动识别), `src/web/app.py` 注册路由。
+- **文档** `docs/research/AI看图形态_影子验证_模板.md`: 四组对照口径(agree/conflict/
+  ai_only/rules_only)、样本≥30、20 交易日结算、Wilson 95% CI。
+- **测试** `tests/test_ai_vision_pattern.py`(全 mock, 禁真网络): 输出解析容错 / 四组对照 /
+  影子行构造 / 本地渲染真出 PNG / 降级显式(无模型·调用失败·不可解析·K线不足) / 落库幂等+读取 /
+  编排铺 provider / 迁移门禁(_m195 + 版本连续) / 只读 API。
+
+### feat-暗盘逐笔采集纳入自选∪持仓池(轮转切片, 免"当天首次点开"冷启动)（2026-10-14）
 #### docs-发展路线roadmap(2026-10-14)
 
 - docs/roadmap.md: 看图决策口径深化(图表说明=用户与AI共用证据语言)+三主线+不做清单+节奏。

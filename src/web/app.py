@@ -745,6 +745,15 @@ app.include_router(
     tags=["limit-strength"],
     dependencies=protected,
 )
+# AI 看图形态 影子证据层(2026-10-14 胜率创新 · 主线一并行, 影子运行): 只读对照 + 手动识别
+from src.web.api import ai_pattern as ai_pattern_router  # noqa: E402
+
+app.include_router(
+    ai_pattern_router.router,
+    prefix="/api/ai-pattern",
+    tags=["ai-pattern"],
+    dependencies=protected,
+)
 # 妖股池/股性雷达(批次B, 2026-09-06): 六维妖股评分, 题材轮动先锋名单
 app.include_router(
     demon_pool.router,

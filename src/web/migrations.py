@@ -2911,6 +2911,58 @@ def _m194_orderbook_snapshots_table(conn: Connection) -> None:
     )
 
 
+def _m195_ai_pattern_shadow(conn: Connection) -> None:
+    """AI 看图形态影子表 ai_pattern_shadow(2026-10-14 胜率创新 · 主线一并行)。
+
+    **影子运行**: 每日盘后对自选∪持仓逐票做「K线渲染→视觉模型认形态」, 并与
+    `src/core/kline_patterns` 规则形态同日同票并排落库, 只写本表, **不改任何现有
+    信号/决策/展示语义** —— 供「分桶验证」(agree/conflict/仅AI/仅规则 四组 T+1/T+3
+    命中差) 使用。
+
+    一行一票(trade_date, symbol): AI 侧存主形态(最高置信)+全量形态 JSON, 规则侧存
+    规则形态 JSON + 对照结论 compare_status。缺数据/无视觉模型 → status='degraded'
+    (不出形态, 绝不编造)。schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    先例: _m188 limit_strength_shadow。
+    """
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ai_pattern_shadow (
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT,
+                ai_pattern TEXT,
+                ai_confidence DOUBLE PRECISION,
+                ai_basis TEXT,
+                ai_all TEXT,
+                model_name TEXT,
+                window INTEGER,
+                rule_primary TEXT,
+                rule_patterns TEXT,
+                compare_status TEXT,
+                status TEXT NOT NULL DEFAULT 'no_data',
+                source TEXT,
+                captured_at TIMESTAMP,
+                PRIMARY KEY (trade_date, symbol)
+            )
+            """
+        )
+    )
+    if _has_table(conn, "ai_pattern_shadow"):
+        _create_index_if_missing(
+            conn,
+            "ix_ai_pattern_shadow_date",
+            "CREATE INDEX ix_ai_pattern_shadow_date "
+            "ON ai_pattern_shadow (trade_date DESC)",
+        )
+        _create_index_if_missing(
+            conn,
+            "ix_ai_pattern_shadow_compare",
+            "CREATE INDEX ix_ai_pattern_shadow_compare "
+            "ON ai_pattern_shadow (compare_status)",
+        )
+
+
 def _m140_market_scan_ranks_table(conn: Connection) -> None:
     """三榜快照表 market_scan_ranks(W1.5/A5 收编: 原 market_scan.py 运行时兜底建表)。
 
@@ -5550,6 +5602,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 的 _build_orderbook(8s 硬超时)在请求期直接打 thsdk 十档, 上游可卡 30s → 压用户请求。
     # 本表承载后台采集(交易时段 15~30s, 活跃票)的十档滚动窗, 请求端读快照优先 + 陈旧度标注。
     Migration(194, "orderbook_snapshots_table", _m194_orderbook_snapshots_table),
+    # AI 看图形态影子表(2026-10-14 胜率创新 · 主线一并行, 影子运行): 盘后对自选∪持仓
+    # 「渲染→视觉 LLM 认形态」并与规则形态(kline_patterns)同日同票对照落库, 只读用,
+    # 不改任何现有信号/决策/展示。先例: _m188 limit_strength_shadow。
+    Migration(195, "ai_pattern_shadow", _m195_ai_pattern_shadow),
 )
 
 
