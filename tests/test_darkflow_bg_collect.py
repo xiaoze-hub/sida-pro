@@ -80,7 +80,9 @@ class FakeTicks:
 
 
 @pytest.fixture(autouse=True)
-def _clean_state():
+def _clean_state(monkeypatch):
+    # 默认关掉"自选∪持仓池"(否则用例会随测试库里的自选/持仓数据漂移, 还可能多刷标的)
+    monkeypatch.setenv(sampler._UNIVERSE_DISABLE_ENV, "1")
     df._TICKS_CACHE.clear()
     df._FETCH_META.clear()
     sampler.clear_tracking()
@@ -341,6 +343,87 @@ def test_hot_registry_lru_and_window():
     # 超出活跃窗口(30min) → 不再采集
     assert sampler.tracked_codes(now=time.time() + sampler._HOT_TTL_S + 1) == []
     assert sampler.tracked_codes() == [CODE]
+
+
+# ---------------------------------------------------------------------------
+# 自选∪持仓池(免冷启动的关键: 用户还没点开就先被后台预热)
+# ---------------------------------------------------------------------------
+
+
+def test_universe_from_watchlist_and_holdings(monkeypatch):
+    """池子取 CN(自选∪持仓), 转腾讯 code; 非 CN/非法标的跳过(不猜)。"""
+    monkeypatch.delenv(sampler._UNIVERSE_DISABLE_ENV, raising=False)
+    import src.core.quote_snapshots as qs
+
+    monkeypatch.setattr(
+        qs, "collect_market_symbols",
+        lambda: {"CN": ["600519", "002361", "000001", "ABCDEF"], "HK": ["00700"]},
+    )
+    assert sampler.universe_codes() == ["sh600519", "sz002361", "sz000001"]
+
+    # 缓存生效: TTL 内不再打库
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        qs, "collect_market_symbols",
+        lambda: calls.__setitem__("n", calls["n"] + 1) or {"CN": ["600519"]},
+    )
+    now = time.time()
+    sampler.universe_codes(now=now)
+    sampler.universe_codes(now=now + 1)
+    assert calls["n"] == 0, "TTL 内应命中池子缓存"
+    sampler.universe_codes(now=now + sampler._UNIVERSE_TTL_S + 1)
+    assert calls["n"] == 1
+
+
+def test_universe_disabled_by_env(monkeypatch):
+    monkeypatch.setenv(sampler._UNIVERSE_DISABLE_ENV, "1")
+    assert sampler.universe_codes() == []
+
+
+def test_universe_db_failure_is_silent(monkeypatch):
+    """库不可用 → 池子为空, 只刷热码, 不抛。"""
+    monkeypatch.delenv(sampler._UNIVERSE_DISABLE_ENV, raising=False)
+    import src.core.quote_snapshots as qs
+
+    monkeypatch.setattr(
+        qs, "collect_market_symbols",
+        lambda: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+    assert sampler.universe_codes() == []
+    assert sampler._select_targets() == []
+
+
+def test_collect_once_warms_universe_without_prior_request(monkeypatch):
+    """未经请求的池子标的也会被采集(这正是"把冷启动移出请求路径"的落点)。"""
+    import src.core.quote_snapshots as qs
+
+    monkeypatch.setattr(qs, "in_trading_window", lambda now=None: True)
+    monkeypatch.setattr(sampler, "universe_codes", lambda now=None: ["sz000001", "sz000002"])
+    seen: list[str] = []
+    monkeypatch.setattr(
+        df, "refresh_ticks",
+        lambda code, *a, **k: seen.append(code) or {"ok": True},
+    )
+    out = sampler.collect_once()
+    assert seen == ["sz000001", "sz000002"]
+    assert out["targets"] == 2 and out["refreshed"] == 2
+    assert out["tracked"] == 0, "池子标的只在池子里, 不冒充热码"
+
+
+def test_targets_hot_first_then_universe_rotation(monkeypatch):
+    monkeypatch.setattr(sampler, "_BATCH_PER_RUN", 2)
+    monkeypatch.setattr(
+        sampler, "universe_codes", lambda now=None: [f"sz00000{i}" for i in range(5)]
+    )
+    monkeypatch.setattr(df, "refresh_ticks", lambda code, *a, **k: {"ok": True})
+
+    sampler.register_code("sh600000")           # 热码优先
+    rounds = [sampler._select_targets() for _ in range(5)]
+    assert rounds[0] == ["sh600000", "sz000000"]
+    assert all(r[0] == "sh600000" for r in rounds), "热码始终优先(用户正在看的票)"
+    universe_seen = [c for r in rounds for c in r[1:]]
+    # 5 轮各取 1 只(热码占掉另一个名额) → 恰好把 5 只池子标的全覆盖一遍, 无跳号无重复
+    assert universe_seen == [f"sz00000{i}" for i in range(5)]
 
 
 # ---------------------------------------------------------------------------

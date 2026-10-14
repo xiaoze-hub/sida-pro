@@ -446,8 +446,8 @@ def collect_darkflow_ticks(owner=Depends(require_owner)):
     """手动触发一轮暗盘逐笔增量采集(运维杠杆, 仅管理员)。
 
     2026-10-14: 逐笔冷启动已挪到后台采集器(`src/core/dark_flow_sampler.py`, 交易
-    时段 60s 一轮对热码做增量续拉), 请求端常态读缓存零翻页。本接口是运维"立刻推
-    一轮"的开关(缓存被清后 / 怀疑盘中停更时), 返回本轮摘要 + 采集器状态。
+    时段 60s 一轮对"热码 + 自选∪持仓池"做增量续拉), 请求端常态读缓存零翻页。本接口
+    是运维"立刻推一轮"的开关(缓存被清后 / 怀疑盘中停更时), 返回本轮摘要 + 采集器状态。
     非交易时段直接 skip(零网络请求), 与调度器同语义。
     """
     from src.core.dark_flow_sampler import collect_once, sampler_stats
