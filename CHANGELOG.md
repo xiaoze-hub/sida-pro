@@ -1,3 +1,21 @@
+### update-SC期待降级(新鲜度自检改自算 + 15:35 同步静默跳过 expected_gap)（2026-10-14）
+
+承接上一条(自算产者)。本提交把**对云 SC 的期待**从主链上摘掉: 不再空转重试 / 不再空转告警。
+
+- **`src/core/sentiment_freshness.py`**: 自检目标即**自算序列**(同一张 `market_sentiment_daily`
+  兼容列); 自愈主路径换成**本地自算** `_default_selfcalc`(`sentiment_selfcalc.selfcalc_for_date`,
+  以**期望最新交易日**为目标); 云 `get_scjy_value` 降级为**可选增强源** —— 新增
+  `sc_enhancement_enabled()`(`SIDA_SENTIMENT_SC_ENHANCEMENT=1` 才启用, **默认关闭**),
+  关闭时 `backfill_missing` **一次都不调**, 无数据不告警。快照型接口补不回历史 ⇒ 断点与新边缘
+  之间的交易日显式列进 `historic_gaps` 并写进 reason/通知(**不假装补好**); 作业失败判据 =
+  最新期望交易日仍缺(可自愈的那一档), 内层缺口不再制造"永久红"。
+- **`src/core/tq_sentiment_scheduler.py`**: SC 云序列退役 —— `SC_RETIRED=True`, 每日 15:35 与
+  启动回补都只打 `expected_gap` 标记(**零网络 / 零 ERROR / 不进告警链**), 保留调度器与 registry
+  接线(直接删会让系统自检报"调度器缺失"这种假故障; 云数据若恢复置 False 即原地复活)。
+- **测试**: `tests/test_sentiment_freshness.py` 按新语义更新(自算注入, 禁真网络)并新增
+  "默认完全不碰 SC" / "opt-in 才并入" / "历史缺口显式列出" 三例;
+  `tests/test_tq_sentiment_scheduler.py` 新增 expected_gap 静默跳过、退役后不触网、启动回补 no-op。
+
 ### feat-情绪序列本地自算替代云SC(涨停/炸板/封板资金/连板落库)（2026-10-14）
 
 用户决策: **不购买通达信云数据 Key** —— SC/GP **云**函数永久放弃(生产已断在 2026-09-23),

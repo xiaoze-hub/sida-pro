@@ -1,10 +1,25 @@
-"""TQ 情绪序列定时同步(单写者): 每交易日收盘后拉一次市场情绪日序列。
+"""TQ 情绪序列定时同步 —— **SC 云序列已弃用, 15:35 改为静默跳过(expected_gap)**。
 
-照抄 MarketSnapshotScheduler 形状(AsyncIOScheduler + 全局单例 + server lifespan 启动)。
+历史: 每交易日 15:35 拉一次市场情绪日序列落 market_sentiment_daily。
 
-为什么收盘后: SC 序列是**日频**数据, 盘中当日值未定稿(SC3 涨停家数盘中会持续变化),
-收盘后取才是当日终值。周末与 TQ 不可用都跳过, 失败带重试并显式记 ERROR(不静默);
-断链由每日 16:20 的 `src.core.sentiment_freshness` 自检兜底告警 + 自愈。
+2026-10-14 用户决策: **不购买通达信云数据 Key** ⇒ SC/GP 云函数(`get_scjy_value` /
+`get_gpjy_value`)**永久放弃**(生产已断在 2026-09-23)。情绪序列改由
+`src.core.sentiment_selfcalc` 用**客户端本地接口**自算(交易日 15:45, 见 startup.py)。
+
+于是本调度器**不再打 TQ、不再记 ERROR、不再进入告警链** —— 每轮只返回
+``{"skipped": "expected_gap"}`` 标记(explicit expected gap: 这是**预期内**的缺席,
+不是故障)。保留调度器/registry 接线是为了兼容既有运维面板与"系统自检看调度器在不在跑"。
+
+为什么"静默跳过"而不是删掉调度器
+--------------------------------
+- `GET /api/system/health` 一类的自检按 registry 判"调度器是否在跑"; 直接删会让
+  `tq_sentiment` 从注册表消失 → 自检报"调度器缺失"这种**假故障**;
+- 日后若重新拿到云数据, 只要把 ``SC_RETIRED`` 关掉(或把 SC 接成"可选增强源",
+  见 `src.core.sentiment_freshness.sc_enhancement_enabled`)即可原地复活。
+
+数据链现在是谁:
+- 产者 = `src.core.sentiment_selfcalc`(本地自算, 15:45);
+- 自检 = `src.core.sentiment_freshness`(16:20, 落后 → 本地自算自愈 + 显式告警)。
 """
 
 from __future__ import annotations
@@ -25,6 +40,18 @@ RUN_MINUTE = 35
 BACKFILL_DAYS = 420
 # 样本少于这个数就认为需要回补
 MIN_SAMPLE_ROWS = 30
+
+#: SC 云序列是否已退役(用户决策: 不购云 Key)。True = 本轮只打 expected_gap 标记。
+SC_RETIRED = True
+
+#: 静默跳过时返回的标记值(运维/作业面板据此区分"预期缺席"与"故障")。
+EXPECTED_GAP = "expected_gap"
+
+#: expected_gap 的人话原因(写日志/返回体的同一句话, 便于排查对齐)。
+RETIRED_REASON = (
+    "SC 云序列已弃用(用户决策: 不购通达信云数据 Key, 生产断在 2026-09-23); "
+    "情绪序列改由本地自算提供(src.core.sentiment_selfcalc)"
+)
 
 _global_scheduler: "TqSentimentScheduler | None" = None
 
@@ -54,23 +81,41 @@ def _needs_backfill(db) -> bool:
 
 
 def _sync_in_job(*, backfill: bool = False) -> dict:
-    from src.db.session import SessionLocal
-    from src.collectors.tq_sentiment_series import sync_sentiment_series
+    """SC 同步入口 —— 已退役: 显式 ``expected_gap`` 静默跳过(零网络, 零告警)。
 
-    db = SessionLocal()
-    try:
-        # 重试/降级诚实(2026-10-11): TQ 突发 reset 常见, 给 2 次重试; 仍失败则显式
-        # 记 ERROR(不再静默) —— 断链由 16:20 的 sentiment_freshness 自检兜底告警。
-        out = sync_sentiment_series(
-            db, days=BACKFILL_DAYS if backfill else 30, retries=2
-        )
-        if isinstance(out, dict) and out.get("error"):
-            logger.error("[tq sentiment] 同步失败%s: %s", "(回补)" if backfill else "", out)
-        else:
-            logger.info("[tq sentiment] 同步完成%s: %s", "(回补)" if backfill else "", out)
-        return out
-    finally:
-        db.close()
+    刻意**不**打 TQ: 旧行为每天打一次必然失败的云接口并记 ERROR, 属"空转告警",
+    而这是**已知且已决策**的缺席, 不是故障。见模块 docstring。
+    """
+    if not SC_RETIRED:
+        # 逃生口: 云数据恢复时把 SC_RETIRED 置 False, 走回原同步实现。
+        from src.collectors.tq_sentiment_series import sync_sentiment_series
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            out = sync_sentiment_series(
+                db, days=BACKFILL_DAYS if backfill else 30, retries=2
+            )
+            if isinstance(out, dict) and out.get("error"):
+                logger.error("[tq sentiment] 同步失败%s: %s", "(回补)" if backfill else "", out)
+            else:
+                logger.info("[tq sentiment] 同步完成%s: %s", "(回补)" if backfill else "", out)
+            return out
+        finally:
+            db.close()
+
+    logger.info(
+        "[tq sentiment] %s%s: %s",
+        EXPECTED_GAP,
+        "(启动回补)" if backfill else "(每日 15:35)",
+        RETIRED_REASON,
+    )
+    return {
+        "skipped": EXPECTED_GAP,
+        "backfill": bool(backfill),
+        "reason": RETIRED_REASON,
+        "source": "src.core.sentiment_selfcalc",
+    }
 
 
 class TqSentimentScheduler:
@@ -97,7 +142,14 @@ class TqSentimentScheduler:
             self._running = False
 
     async def _startup_backfill(self):
-        """启动时若样本不足则回补一次(不阻塞启动)。"""
+        """启动时的历史回补 —— SC 已退役 ⇒ 直接 expected_gap 跳过(零网络)。
+
+        即便表为空也不再回补: 云接口拿不到数据, 回补只会制造"启动即告警"。
+        空表由 `sentiment_selfcalc`(15:45) 与 `sentiment_freshness`(16:20) 负责填。
+        """
+        if SC_RETIRED:
+            logger.info("[tq sentiment] %s(启动回补): %s", EXPECTED_GAP, RETIRED_REASON)
+            return
         try:
             import asyncio
 

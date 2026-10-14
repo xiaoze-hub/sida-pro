@@ -74,32 +74,84 @@ def test_check_empty_table_not_ok():
 def test_guard_noop_when_fresh():
     calls = []
     r = sf.guard(_NOW_1011, latest_fn=lambda: "20261009",
+                 selfcalc_fn=lambda day: calls.append(day) or {"ok": True, "written": 0},
                  backfill_fn=lambda days: calls.append(days) or {"ok": True, "rows": 0})
     assert r["ok"] is True and r["backfilled"] == 0 and r["recovered"] is True
-    assert calls == []
+    assert calls == [], "无缺口时不触发任何补数(自算/SC 都不碰)"
 
 
-def test_guard_backfills_then_recovers():
+def test_guard_selfcalcs_then_recovers(monkeypatch):
+    """2026-10-14 改: 自愈主路径 = 本地自算(给的是**期望交易日**)。"""
     state = {"latest": "20260922"}
     seen = {}
 
-    def _bf(days):
-        seen["days"] = list(days)
+    def _selfcalc(day):
+        seen["day"] = day
         state["latest"] = "20261009"
-        return {"ok": True, "rows": 12, "attempts": 1, "error": None}
+        return {"ok": True, "written": 12, "error": None}
 
-    r = sf.guard(_NOW_1011, latest_fn=lambda: state["latest"], backfill_fn=_bf)
-    assert seen["days"][0] == "20260923"
-    assert r["ok"] is True and r["recovered"] is True
+    r = sf.guard(_NOW_1011, latest_fn=lambda: state["latest"], selfcalc_fn=_selfcalc)
+    assert seen["day"] == "20261009", "自算目标 = 期望最新交易日"
+    assert r["ok"] is True and r["recovered"] is True and r["selfcalc_ok"] is True
     assert r["latest_before"] == "20260922" and r["latest"] == "20261009"
     assert r["backfilled"] == 12
 
 
-def test_guard_still_stale_reports_not_ok():
-    r = sf.guard(_NOW_1011, latest_fn=lambda: "20260922",
-                 backfill_fn=lambda days: {"ok": False, "rows": 0, "attempts": 3, "error": "TQ 网关不可达"})
+def test_guard_still_stale_reports_not_ok(monkeypatch):
+    monkeypatch.delenv("SIDA_SENTIMENT_SC_ENHANCEMENT", raising=False)
+    r = sf.guard(
+        _NOW_1011,
+        latest_fn=lambda: "20260922",
+        selfcalc_fn=lambda day: {"ok": False, "written": 0, "error": "TQ 网关不可达"},
+    )
     assert r["ok"] is False and r["recovered"] is False
     assert "仍缺" in (r["reason"] or "") and "TQ 网关不可达" in (r["reason"] or "")
+
+
+def test_guard_sc_enhancement_off_by_default(monkeypatch):
+    """用户决策(不购云 Key): 默认**完全不碰**云 SC —— 不空转、不告警。"""
+    monkeypatch.delenv("SIDA_SENTIMENT_SC_ENHANCEMENT", raising=False)
+    called = []
+    sf.guard(
+        _NOW_1011,
+        latest_fn=lambda: "20260922",
+        selfcalc_fn=lambda day: {"ok": False, "written": 0, "error": "x"},
+        backfill_fn=lambda days: called.append(days) or {"ok": True, "rows": 1},
+    )
+    assert called == [] and sf.sc_enhancement_enabled() is False
+
+
+def test_guard_sc_enhancement_opt_in(monkeypatch):
+    monkeypatch.setenv("SIDA_SENTIMENT_SC_ENHANCEMENT", "1")
+    called = []
+
+    def _bf(days):
+        called.append(list(days))
+        return {"ok": True, "rows": 3, "error": None}
+
+    out = sf.guard(
+        _NOW_1011,
+        latest_fn=lambda: "20260922",
+        selfcalc_fn=lambda day: {"ok": False, "written": 0, "error": "x"},
+        backfill_fn=_bf,
+    )
+    assert sf.sc_enhancement_enabled() is True
+    assert called and called[0][0] == "20260923"
+    assert out["sc_enhancement"]["rows"] == 3
+
+
+def test_guard_lists_historic_gaps_explicitly():
+    """自算只能补最新交易日 ⇒ 中间断掉的交易日显式列出, 不假装补好。"""
+    state = {"latest": "20260930"}
+
+    def _selfcalc(day):
+        state["latest"] = "20261009"
+        return {"ok": True, "written": 1, "error": None}
+
+    r = sf.guard(_NOW_1011, latest_fn=lambda: state["latest"], selfcalc_fn=_selfcalc)
+    assert r["ok"] is True
+    assert r["historic_gaps"] == ["20261008"], "9/30 与 10/9 之间的交易日补不回来, 必须显式"
+    assert "无法回补" in (r["reason"] or "")
 
 
 # ─────────────── ④ backfill_missing: 批量 + 重试/降级诚实 ───────────────
@@ -165,12 +217,14 @@ def test_run_job_stale_alerts(monkeypatch):
                         {"ok": False, "latest": "20260922", "expected": "20261009",
                          "missing": ["20260923"], "stale": True, "reason": "停在 20260922"})
     monkeypatch.setattr(sf, "_notify_stale", lambda info, now: alerted.update(info))
-    # 补数(仍缺) → guard 复检仍 stale
-    monkeypatch.setattr(sf, "backfill_missing",
-                        lambda days, **k: {"ok": False, "rows": 0, "attempts": 3, "error": "TQ 断链"})
+    # 本地自算也失败(禁真网络: 注入假实现, 不碰 TQ)
+    monkeypatch.setattr(sf, "_default_selfcalc",
+                        lambda day: {"ok": False, "written": 0, "error": "TQ 断链"})
+    monkeypatch.delenv("SIDA_SENTIMENT_SC_ENHANCEMENT", raising=False)
     out = sf.run_sentiment_freshness_job(_NOW_1011)
     assert out["ok"] is False
     assert alerted.get("latest") == "20260922"
+    assert alerted.get("selfcalc_ok") is False
 
 
 def test_run_job_skips_when_in_flight(monkeypatch):
