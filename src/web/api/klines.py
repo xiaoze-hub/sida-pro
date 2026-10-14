@@ -854,14 +854,37 @@ def _build_resonance(symbol: str, bars: list[dict]) -> dict:
 def _build_orderbook(symbol: str):
     """盘口队列 + 托压单(设计稿 §3.1)。
 
-    优先 .img 离线文件(完整委托队列); 无 .img 时退回 thsdk 实时快照;
-    都拿不到 → None(显式无数据, 不编造)。
+    优先后台采集的**盘口快照**(够新, 2026-10-14); 无/超龄 → .img 离线文件(完整委托队列);
+    再退 thsdk 实时快照; 都拿不到 → None(显式无数据, 不编造)。
 
     2026-10-01 (B1 P2 首屏慢): 从 _build_layer_data 抽出成独立函数, 以便与其余
     图层计算并发(盘口 thsdk 快照硬超时 8s, 是冷启动链里最长的几段之一)。
+
+    2026-10-14 盘口转后台采集: 读快照优先, 命中够新快照时**完全不打 thsdk**, 把 8s 硬超时
+    移出请求链; 返回 `source='snapshot'` + `snapshot_age_sec` 陈旧度标注。超龄/无快照才
+    回退 .img / thsdk(语义不变)。
     """
     try:
         from src.core import orderbook_engine as obe
+
+        # ① 读快照优先: 够新 → 直接由最新帧算盘口队列(不打 thsdk)
+        try:
+            from src.core import orderbook_snapshot as obsnap
+
+            snap_meta = obsnap.fresh_snapshot(symbol)
+            if snap_meta:
+                frames = snap_meta.get("frames") or []
+                latest = obsnap.rebuild_snapshot(frames[-1]) if frames else None
+                if latest is not None:
+                    ob = obe.order_book_queue(latest)
+                    if ob and ob.get("available"):
+                        return {
+                            **ob,
+                            "source": "snapshot",
+                            "snapshot_age_sec": snap_meta.get("snapshot_age_sec"),
+                        }
+        except Exception as e:  # noqa: BLE001  快照读取失败 = 未命中, 回退既有路径
+            logger.debug("orderbook %s 读快照失败(回退): %s", symbol, e)
 
         ob = None
         img_path = obe.find_img_file(symbol, "CN")

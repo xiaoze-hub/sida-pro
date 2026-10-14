@@ -1,3 +1,27 @@
+### feat-盘口读路径改『读快照优先 + 超龄穿透 + 陈旧度标注』（2026-10-14）
+
+承接上一条(采集器建好)。本提交把 `orderbook-ob` 与 klines summary 的盘口读路径从
+『请求期现拉 thsdk(硬超时 12s / 8s 压在用户请求上)』改成『读后台快照优先』, 并保留
+超龄/无快照时的穿透实时 + 显式降级语义。
+
+- **`/api/orderbook-ob`** `src/web/api/orderbook.py::get_orderbook_ob`:
+  - 非主动刷新时**先读快照**: `snapshot_age_sec <= ORDERBOOK_SNAPSHOT_STALE_SEC`(默认 60)
+    → 直接读后台滚动窗算 OB 序列/演变/幽灵比, **不打 thsdk**; 响应新增
+    `source='snapshot'` + `snapshot_age_sec` + `as_of`(陈旧度显式标注);
+  - 快照超龄 / 无快照 / `?refresh=true`(用户主动刷新) → **穿透实时**, 走既有
+    硬超时 + 有限次重试 + .img 兜底 + 显式降级(`available:false` 语义不变);
+  - 超龄且实时失败时 note 显式标注『后台快照超龄(Ns > 阈值), 未能兜底』;
+  - 穿透实时的成功路径字段与改造前**逐字段一致**(不新增 source/as_of,
+    `tests/test_orderbook_ob_endpoint.py` 锁定契约仍绿)。
+- **klines summary** `src/web/api/klines.py::_build_orderbook`: 读快照优先(最新帧经
+  `rebuild_snapshot` 还原算 `order_book_queue`), 命中够新快照即返回(`source='snapshot'` +
+  `snapshot_age_sec`)且**完全不打 thsdk**; 超龄/无快照回退 .img → thsdk(原路径与 8s 硬超时
+  不变); 全无 → 原 `order_book_queue(None)` 显式无数据。
+- **测试** 扩展 `tests/test_orderbook_snapshot.py`(禁真网络): orderbook-ob 读快照优先
+  (零穿透) · 超龄穿透 · `refresh` 穿透 · 无快照实时不可用显式降级 · 超龄+失败 note 标注 ·
+  端点 `refresh` 透传 + 默认读快照 · klines `_build_orderbook` 读快照优先/回退 img/全无返回
+  显式无数据(共 24 例)。
+
 ### feat-十档盘口转后台采集: 快照采集器 + 落库 + 调度接线（2026-10-14）
 
 审计定性: `/api/orderbook-ob`(`src/web/api/orderbook.py`, 硬超时 12s)与 klines summary 的

@@ -310,3 +310,166 @@ def test_universe来源失败不抛(monkeypatch):
     monkeypatch.setattr(qs, "collect_market_symbols", lambda: (_ for _ in ()).throw(RuntimeError("x")))
     _use_engine(monkeypatch, _Boom())
     assert osnap.active_symbols() == []
+
+
+# ═══════════════ 读路径: orderbook-ob / klines _build_orderbook ═══════════════
+
+import src.web.api.orderbook as obmod          # noqa: E402
+import src.web.api.klines as kapi              # noqa: E402
+import src.core.orderbook_engine as obe        # noqa: E402
+
+_FAKE_RUN = {
+    "events": [{"type": "托单", "side": "bid", "price_level": 1, "price": 11.27,
+                "delta_hands": 5000, "duration_s": 0.3, "ts": 1.0, "note": ""}],
+    "ob_series": [{"ts": 1.0, "dt": "2026-10-14T10:30:00", "bid_amt10": 123456.0,
+                   "ask_amt10": 23456.0, "ob": 0.6807, "label": "买压"}],
+    "ghost_ratio": 0.25,
+    "summary": "symbol=USZA002361 快照数=1 用时=1.0s | 交易时段 | 事件数=1 | OB均值=0.6807",
+}
+
+
+def _frames(n=2):
+    return [osnap.trim_frame(_snap(dt=f"2026-10-14T10:00:{i:02d}")) for i in range(n)]
+
+
+def _snap_meta(age=5, n=2):
+    frames = _frames(n)
+    return {
+        "symbol": "USZA002361", "frames": frames, "frame_count": len(frames),
+        "latest_ts": frames[-1]["dt"], "collected_at": 0.0,
+        "snapshot_age_sec": age, "source": "thsdk",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _no_img_and_ths_present(monkeypatch):
+    monkeypatch.setattr(obe, "find_img_file", lambda *a, **k: None)
+    monkeypatch.setattr(obe, "THS", object())
+
+
+# ── ① 读快照优先 ──
+
+def test_ob读快照优先不调run(monkeypatch):
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: _snap_meta(age=5))
+    monkeypatch.setattr(obe, "run", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("够新快照不该穿透实时")))
+
+    out = obmod.get_orderbook_ob("002361")
+
+    assert out["available"] is True
+    assert out["source"] == "snapshot"
+    assert out["snapshot_age_sec"] == 5
+    assert out["as_of"] == "2026-10-14T10:00:01"
+    assert len(out["ob_series"]) == 2
+    assert "陈旧度" in out["note"]
+
+
+def test_ob快照超龄穿透实时(monkeypatch):
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: _snap_meta(age=999))
+    monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
+    called = {"n": 0}
+
+    def _run(*a, **k):
+        called["n"] += 1
+        return _FAKE_RUN
+
+    monkeypatch.setattr(obe, "run", _run)
+
+    out = obmod.get_orderbook_ob("002361")
+    assert called["n"] == 1
+    assert out["available"] is True
+    assert "snapshot" not in out                 # 穿透成功路径保持旧字段集
+    assert set(out.keys()) == {"available", "ob_series", "events", "ghost_ratio", "note"}
+
+
+def test_ob主动刷新穿透快照(monkeypatch):
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: _snap_meta(age=1))
+    monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
+    called = {"n": 0}
+
+    def _run(*a, **k):
+        called["n"] += 1
+        return _FAKE_RUN
+
+    monkeypatch.setattr(obe, "run", _run)
+
+    out = obmod.get_orderbook_ob("002361", refresh=True)
+    assert called["n"] == 1 and out["available"] is True
+
+
+def test_ob无快照实时不可用显式降级(monkeypatch):
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: None)
+    monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(obe, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+
+    out = obmod.get_orderbook_ob("002361")
+    assert out["available"] is False and out["source"] == "thsdk"
+    assert "上游 thsdk" in out["note"] and out["as_of"]
+
+
+def test_ob超龄且实时失败note标超龄(monkeypatch):
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: _snap_meta(age=300))
+    monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(obe, "run", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+
+    out = obmod.get_orderbook_ob("002361")
+    assert out["available"] is False
+    assert "后台快照超龄" in out["note"] and "300s" in out["note"]
+
+
+def test_ob端点refresh参数透传(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(obmod.orderbook_snapshot, "read_snapshot", lambda s: _snap_meta(age=1))
+    monkeypatch.setattr(obmod, "_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(obe, "run", lambda *a, **k: _FAKE_RUN)
+
+    app = FastAPI()
+    app.include_router(obmod.router, prefix="/api/orderbook-ob")
+    client = TestClient(app)
+
+    # refresh=true → 穿透实时(旧字段集)
+    r1 = client.get("/api/orderbook-ob", params={"symbol": "002361", "refresh": "true"})
+    assert r1.status_code == 200 and r1.json() == {
+        "available": True, "ob_series": _FAKE_RUN["ob_series"],
+        "events": _FAKE_RUN["events"], "ghost_ratio": 0.25, "note": _FAKE_RUN["summary"],
+    }
+    # 默认 → 读快照
+    r2 = client.get("/api/orderbook-ob/002361")
+    assert r2.status_code == 200 and r2.json()["source"] == "snapshot"
+
+
+# ── klines _build_orderbook ──
+
+def test_build_orderbook读快照优先(monkeypatch):
+    monkeypatch.setattr(osnap, "fresh_snapshot", lambda s: _snap_meta(age=3))
+    monkeypatch.setattr(obe, "fetch_snapshot", lambda *a: (_ for _ in ()).throw(
+        AssertionError("够新快照不该打 thsdk")))
+
+    ob = kapi._build_orderbook("002361")
+    assert ob is not None and ob["available"] is True
+    assert ob["source"] == "snapshot" and ob["snapshot_age_sec"] == 3
+
+
+def test_build_orderbook无快照回退img(monkeypatch):
+    monkeypatch.setattr(osnap, "fresh_snapshot", lambda s: None)
+    snaps = [obe.img_frame_to_snapshot(
+        __import__("src.core.tdx_img_parser", fromlist=["ImgSnapshot"]).ImgSnapshot(
+            t="10:00:00", bid_prices=[11.27], bid_vols=[10000],
+            ask_prices=[11.28], ask_vols=[4000]),
+        ts=1.0, dt_iso="10:00:00")]
+    monkeypatch.setattr(obe, "find_img_file", lambda *a, **k: "/tmp/x.img")
+    monkeypatch.setattr(obe, "load_snapshots_from_img", lambda *a, **k: snaps)
+
+    ob = kapi._build_orderbook("002361")
+    assert ob is not None and ob.get("img_path") == "/tmp/x.img"
+
+
+def test_build_orderbook全无返回None(monkeypatch):
+    monkeypatch.setattr(osnap, "fresh_snapshot", lambda s: None)
+    monkeypatch.setattr(obe, "find_img_file", lambda *a, **k: None)
+    monkeypatch.setattr(obe, "fetch_snapshot", lambda *a: None)
+
+    ob = kapi._build_orderbook("002361")
+    assert ob is not None and ob.get("available") is False   # 显式无数据, 不编造
