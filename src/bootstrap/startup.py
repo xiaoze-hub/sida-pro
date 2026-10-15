@@ -511,9 +511,15 @@ async def lifespan(app):
             logger.error(f"强度影子打标注册失败: {e}")
 
         # AI 看图形态影子打标(2026-10-14 胜率创新 · 主线一并行, 影子运行):
-        # 交易日 15:40 对自选∪持仓逐票做「K线渲染→视觉 LLM 认形态」, 与规则形态
-        # (kline_patterns)同日同票并排落 ai_pattern_shadow。独立入口, 只写影子表,
-        # 不改任何现有信号/决策。无视觉模型 → 显式降级不出形态(不编造)。
+        # 交易日 16:30 对 **自选池 ∪ 前一日有标记票**(成本可控)逐票做
+        # 「K线渲染→视觉 LLM 认形态」, 与规则形态(kline_patterns)同日同票并排落
+        # ai_pattern_shadow。独立入口, 只写影子表, 不改任何现有信号/决策。
+        # 视觉模型默认绑 scene='vision' → agens-3.0-flash(sida-pro 自带多模态);
+        # 无视觉模型 → 显式降级不出形态(不编造)。
+        # 时段 16:30: 原 15:40 撞 TQ 采集/共振扫描高峰(15:35/15:40/15:45 已占, TQ 背后
+        # 只有一个客户端进程); 16:10 已被跨源标定(indicator-calibration)占用, 故取 16:30
+        # —— 在 16:00 全市场日线 / 16:05 连板自检 / 16:20 情绪自检之后, 且本作业只读 PG
+        # K线 + 走外部视觉 LLM, 不碰 TQ。
         try:
             from src.core.ai_vision_pattern import run_ai_vision_pattern_job
 
@@ -521,15 +527,15 @@ async def lifespan(app):
                 run_ai_vision_pattern_job,
                 "cron",
                 day_of_week="mon-fri",
-                hour=15,
-                minute=40,
+                hour=16,
+                minute=30,
                 id="ai-vision-pattern",
                 name="AI 看图形态 影子打标(与规则形态对照)",
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
             )
-            logger.info("AI 看图形态影子打标已注册(交易日 15:40)")
+            logger.info("AI 看图形态影子打标已注册(交易日 16:30)")
         except Exception as e:
             logger.error(f"AI 看图形态影子打标注册失败: {e}")
 

@@ -360,3 +360,215 @@ def test_api_shadow_no_data(monkeypatch):
     )
     body = _client().get("/api/ai-pattern/shadow").json()
     assert body["available"] is False and body["note"]
+
+
+# ─────────────── scene='vision' 默认绑定 agens-3.0-flash(2026-10-15) ───────────────
+
+
+def _mem_db():
+    """独立内存 SQLite 会话(建全表, 含 ai_services/ai_models/ai_scene_bindings)。
+
+    StaticPool: TestClient 在工作线程里跑端点, 需共享同一条内存连接, 否则新线程拿到
+    空库(no such table)。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from src.db import models as _m  # noqa: F401  注册 ORM
+    from src.db.session import Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
+
+
+def _seed_service(db, name="Agnes", base_url="https://api.agnes-ai.cn/v1", key="sk-vision"):
+    from src.db.models import AIService
+
+    svc = AIService(name=name, base_url=base_url, api_key=key)
+    db.add(svc)
+    db.commit()
+    db.refresh(svc)
+    return svc
+
+
+def test_scene_default_model_name_constant():
+    """vision 场景默认模型名 = agens-3.0-flash(ai_client 与本题分析层同源)。"""
+    from src.core.ai_client import SCENE_DEFAULT_MODEL_NAMES
+
+    assert SCENE_DEFAULT_MODEL_NAMES["vision"] == "agens-3.0-flash"
+    assert V.DEFAULT_VISION_MODEL == "agens-3.0-flash"
+
+
+def test_resolve_global_model_prefers_scene_default_name():
+    """未显式绑定时, vision 场景按名回落 agens-3.0-flash(优先于全局默认模型)。"""
+    from src.core.ai_client import _resolve_global_model
+    from src.db.models import AIModel
+
+    db = _mem_db()
+    svc = _seed_service(db)
+    db.add(AIModel(name="deepseek", service_id=svc.id, model="deepseek-chat", is_default=True))
+    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    db.commit()
+
+    assert _resolve_global_model(db, "vision").model == "agens-3.0-flash"
+    # 其他场景不受影响: 仍取全局默认模型
+    assert _resolve_global_model(db, "chat").model == "deepseek-chat"
+
+
+def test_resolve_global_model_falls_back_when_scene_default_absent():
+    """模型池没有 agens-3.0-flash → vision 仍回落全局默认模型(不报错)。"""
+    from src.core.ai_client import _resolve_global_model
+    from src.db.models import AIModel
+
+    db = _mem_db()
+    svc = _seed_service(db, name="X", base_url="http://x")
+    db.add(AIModel(name="deepseek", service_id=svc.id, model="deepseek-chat", is_default=True))
+    db.commit()
+
+    assert _resolve_global_model(db, "vision").model == "deepseek-chat"
+
+
+def test_resolve_vision_model_default_binds_agens():
+    """未显式绑定 → 解析到 agens-3.0-flash(存量 capabilities 未标注也信任默认名)。"""
+    from src.db.models import AIModel
+
+    db = _mem_db()
+    svc = _seed_service(db)
+    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash", capabilities=""))
+    db.commit()
+
+    assert V.resolve_vision_model(db) == (
+        "https://api.agnes-ai.cn/v1", "sk-vision", "agens-3.0-flash",
+    )
+
+
+def test_resolve_vision_model_non_vision_fallback_degrades():
+    """无默认视觉模型、仅非视觉模型 → None(显式降级语义保持)。"""
+    from src.db.models import AIModel
+
+    db = _mem_db()
+    svc = _seed_service(db, name="DeepSeek", base_url="http://ds")
+    db.add(AIModel(name="deepseek", service_id=svc.id, model="deepseek-chat",
+                   is_default=True, capabilities="chat"))
+    db.commit()
+
+    assert V.resolve_vision_model(db) is None
+
+
+def test_resolve_vision_model_explicit_binding_wins_over_default():
+    """显式绑定(AISceneBinding) 优先于按名默认; 且必须是 vision 能力模型。"""
+    from src.db.models import AIModel, AISceneBinding
+
+    db = _mem_db()
+    svc = _seed_service(db, name="S", base_url="http://s")
+    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    vl = AIModel(name="qwen-vl", service_id=svc.id, model="qwen-vl", capabilities="chat,vision")
+    db.add(vl)
+    db.commit()
+    db.refresh(vl)
+    db.add(AISceneBinding(scene="vision", model_id=vl.id))
+    db.commit()
+
+    assert V.resolve_vision_model(db) == ("http://s", "sk-vision", "qwen-vl")
+
+
+# ─────────────── 影子任务标的圈定(自选池 ∪ 前一日有标记票) ───────────────
+
+
+def test_shadow_universe_watchlist_plus_prev_marks_bare_dedup():
+    syms = V.shadow_universe(
+        "20261015",
+        watchlist_provider=lambda: ["600000.SH", "600001.SZ"],
+        marks_provider=lambda: ["600000", "300750.SZ", "300750"],
+    )
+    # 自选在前, 前一日标记票补充, 去后缀/去重
+    assert syms == ["600000", "600001", "300750"]
+
+
+def test_shadow_universe_tolerates_provider_failure():
+    def boom():
+        raise RuntimeError("db down")
+
+    syms = V.shadow_universe(
+        "20261015", watchlist_provider=lambda: ["600000.SH"], marks_provider=boom,
+    )
+    assert syms == ["600000"]
+
+
+def test_collect_and_mark_default_universe_is_scoped(monkeypatch):
+    """不注入 universe_provider → 默认走 shadow_universe(成本可控圈定)。"""
+    monkeypatch.setattr(V, "shadow_universe", lambda td, **kw: ["600000"])
+    seen: list[str] = []
+
+    def kline_provider(s):
+        seen.append(s)
+        return _bars(30)
+
+    out = V.collect_and_mark(
+        _TD,
+        kline_provider=kline_provider,
+        rule_provider=lambda bars: [],
+        names_provider=lambda syms: {},
+        render_provider=lambda bars, out_path: (Path(out_path).write_bytes(b"png"), out_path)[1],
+        vision_provider=lambda *a: '{"patterns":[]}',
+        write=False,
+    )
+    assert seen == ["600000"]           # 只处理圈定池
+    assert out["ok"] is True            # 视觉可用但判无形态 → ok(空形态)
+
+
+def test_collect_and_mark_empty_scoped_universe_ok_false(monkeypatch):
+    monkeypatch.setattr(V, "shadow_universe", lambda td, **kw: [])
+    out = V.collect_and_mark(_TD, write=False)
+    assert out["ok"] is False and out["rows"] == 0
+
+
+# ─────────────── 场景绑定 API 暴露默认/当前绑定状态 ───────────────
+
+
+def _providers_client(db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.web.api import providers
+    from src.web.database import get_db
+
+    app = FastAPI()
+    app.include_router(providers.router, prefix="/api/providers")
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+def test_scene_bindings_expose_default_and_effective_model_name():
+    from src.db.models import AIModel
+
+    db = _mem_db()
+    svc = _seed_service(db)
+    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    db.commit()
+    client = _providers_client(db)
+
+    body = client.get("/api/providers/scene-bindings").json()
+    vis = next(b for b in body if b["scene"] == "vision")
+    assert vis["default_model_name"] == "agens-3.0-flash"
+    assert vis["effective_model_name"] == "agens-3.0-flash"
+    assert vis["is_bound"] is False
+
+    # 改成别的模型 → 显示当前绑定状态
+    vl = AIModel(name="qwen-vl", service_id=svc.id, model="qwen-vl", capabilities="chat,vision")
+    db.add(vl)
+    db.commit()
+    db.refresh(vl)
+    r = client.put("/api/providers/scene-bindings/vision", json={"model_id": vl.id}).json()
+    assert r["is_bound"] is True and r["model_name"] == "qwen-vl"
+    assert r["default_model_name"] == "agens-3.0-flash"
+
+    # 解绑 → 回落默认 agens-3.0-flash
+    r2 = client.put("/api/providers/scene-bindings/vision", json={"model_id": None}).json()
+    assert r2["is_bound"] is False and r2["effective_model_name"] == "agens-3.0-flash"

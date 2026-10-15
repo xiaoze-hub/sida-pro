@@ -9,6 +9,10 @@ export interface SceneBinding {
   model_name: string | null
   service_id: number | null
   is_bound: boolean
+  /** 未显式绑定时的默认模型名(如 vision → agens-3.0-flash); 无默认 → null */
+  default_model_name?: string | null
+  /** 当前生效模型名(已绑定→绑定模型; 未绑定→默认模型名或全局默认模型名) */
+  effective_model_name?: string | null
 }
 
 /** 全部场景的绑定状态(含未绑定场景), 前端据此渲染"场景分配" UI。 */
