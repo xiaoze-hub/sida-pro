@@ -24,6 +24,7 @@ import { parseServerTime } from '@/lib/utils'
 import { stocksApi } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { usePausedInterval } from '@panwatch/base-ui'
 import type { useStocksState } from './useStocksState'
 import { logger } from '@/lib/logger'
 import { navBackState } from '@/lib/nav-back'
@@ -53,7 +54,6 @@ export function useStocksData(state: ReturnType<typeof useStocksState>) {
     autoRefresh,
     refreshInterval,
     setLastRefreshTime,
-    refreshTimerRef,
     setScanning,
     setPoolSuggestions,
     setPoolSuggestionsLoading,
@@ -643,30 +643,16 @@ useEffect(() => {
 }, [portfolio, refreshKlines, loadPoolSuggestions])
 
 // Auto-refresh timer
-useEffect(() => {
-  if (autoRefresh) {
-    refreshQuotes()
-    refreshKlines()
-    loadPoolSuggestions()
-    refreshTimerRef.current = setInterval(() => {
-      refreshQuotes()
-      refreshKlines()
-      loadPoolSuggestions()
-    }, refreshInterval * 1000)
-  } else {
-    // Clear interval when disabled
-    if (refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current)
-      refreshTimerRef.current = undefined
-    }
-  }
-
-  return () => {
-    if (refreshTimerRef.current) {
-      clearInterval(refreshTimerRef.current)
-    }
-  }
-}, [autoRefresh, refreshInterval, refreshQuotes, refreshKlines, loadPoolSuggestions, refreshTimerRef])
+// 页签 keep-alive(2026-10-15): 轮询走 `usePausedInterval` ⇒ **隐藏页签停表**(不发请求), 回前台补一次;
+// 用户关掉自动刷新 ⇒ `delayMs<=0` 停用(原 `else` 分支的"清表"由此承担)。
+const autoRefreshTick = useCallback(() => {
+  refreshQuotes()
+  refreshKlines()
+  loadPoolSuggestions()
+}, [refreshQuotes, refreshKlines, loadPoolSuggestions])
+usePausedInterval(autoRefreshTick, autoRefresh ? refreshInterval * 1000 : 0, {
+  deps: [autoRefresh, refreshInterval],
+})
 
 
   return {

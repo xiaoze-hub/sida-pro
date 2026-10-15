@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 
 import { fetchAPI } from '@panwatch/api'
 
@@ -35,43 +36,43 @@ export default function MinutePane({ symbol, market, height = 360, pollMs = 3000
   /** 请求序号: 切股/重挂时旧响应直接丢(防数据错位) */
   const seqRef = useRef(0)
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      const seq = ++seqRef.current
-      setLoading(true)
-      setError('')
-      setDegradedNote(null)
-      try {
-        // 分钟接口冷启动可能 ~15s(swings 全量逐笔翻页) → 给足 60s; 命中缓存后毫秒级
-        const res = await fetchAPI<MinuteResponse>(
-          `/quotes/minute/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`,
-          { cacheMode: 'reload', timeoutMs: 60000 },
-        )
-        if (!alive || seq !== seqRef.current) return
-        setPoints(res.points || [])
-        setPrevClose(res.prev_close ?? null)
-        setIsIndex(!!res.is_index)
-        setSwings(res.swings || null)
-        setDegradedNote(res.degraded ? res.note || '分时源暂不可用' : null)
-      } catch (e) {
-        if (!alive || seq !== seqRef.current) return
-        setError(e instanceof Error ? e.message : '加载分时失败')
-        setPoints([])
-        setPrevClose(null)
-        setIsIndex(false)
-        setSwings(null)
-      } finally {
-        if (alive && seq === seqRef.current) setLoading(false)
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), pollMs)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(timer)
+      aliveRef.current = false
     }
-  }, [symbol, market, pollMs])
+  }, [])
+  const load = useCallback(async () => {
+    const seq = ++seqRef.current
+    setLoading(true)
+    setError('')
+    setDegradedNote(null)
+    try {
+      // 分钟接口冷启动可能 ~15s(swings 全量逐笔翻页) → 给足 60s; 命中缓存后毫秒级
+      const res = await fetchAPI<MinuteResponse>(
+        `/quotes/minute/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`,
+        { cacheMode: 'reload', timeoutMs: 60000 },
+      )
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setPoints(res.points || [])
+      setPrevClose(res.prev_close ?? null)
+      setIsIndex(!!res.is_index)
+      setSwings(res.swings || null)
+      setDegradedNote(res.degraded ? res.note || '分时源暂不可用' : null)
+    } catch (e) {
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setError(e instanceof Error ? e.message : '加载分时失败')
+      setPoints([])
+      setPrevClose(null)
+      setIsIndex(false)
+      setSwings(null)
+    } finally {
+      if (aliveRef.current && seq === seqRef.current) setLoading(false)
+    }
+  }, [symbol, market])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, pollMs, { deps: [symbol, market, pollMs] })
 
   return (
     <div data-testid="minute-pane" className="w-full" style={{ minHeight: height }}>

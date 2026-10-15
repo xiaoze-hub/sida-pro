@@ -1,3 +1,54 @@
+## feat-页签隐藏成本闸门补全(usePausedInterval: 裸 setInterval 全部接闸)（2026-10-15）
+
+**背景(承接上一版页签真 keep-alive)**: 上一版把闸门装在**共享数据层**(`usePolling` / `useApiQuery` /
+`useQuoteStream`), 但页面里**手写的裸 `window.setInterval(...)` 轮询没接** —— keep-alive 下非活动页签
+只是 `display:none` **不卸载**, 于是照样每 N 秒发请求(`N 页签 = N 路数据流`)。本版把这层补齐。
+
+**改动(分支 `feat/tab-paused-interval-20261015`, 独立 worktree `/home/ubuntu/wt/tab-paused-interval`, 基于 main `374adfe`)**
+- **`frontend/packages/base-ui/src/use-paused-interval.ts`(新, 与 `tab-activity.tsx` 同层) + `index.ts` 导出**:
+  `usePausedInterval(callback, delayMs, { deps?, immediate? })`。语义 = 原
+  `useEffect(() => { void cb(); const t = setInterval(cb, ms); return () => clearInterval(t) }, deps)` **再加页签闸门**:
+  活动页签挂载 / `deps` 变化即补一次, 之后每 `delayMs` 一次; **隐藏页签一律不打表也不回调**
+  (挂在隐藏页签里的页面**一个请求都不发**); **隐藏 → 回前台立即补一次**再恢复定时; `delayMs<=0` 停用
+  (「用户关了自动刷新」直接用零值表达); `immediate:false` 表达"原 setInterval 没有首拉"。
+  回调经 ref 读取 ⇒ 调用方每次渲染重造箭头函数**不会**重装定时器、也不触发额外请求。
+  口径: 比 `useApiQuery`(隐藏仍完成初次取数)严一档, 与 `usePolling`(隐藏连首拉也停)一致 —— 正是页面级轮询要的。
+- **替换(27 个文件 / 29 处裸 `setInterval` → 单点调用; 逐处只搬轮询体, 周期 / 回调体 / 首拉时机 / 失败保留旧值 / 请求序号守卫逐字节不变)**:
+  `frontend/src`: `pages/Dashboard.tsx`(市场温度 30s + 首页自动刷新 30s)、`pages/ThemeMood.tsx`(连板梯队 60s)、
+  `pages/StockWorkbench.tsx`(`usePositionContext` 持仓 60s)、`pages/Notifications.tsx`(30s)、
+  `pages/stocks/useStocksData.ts`(自选自动刷新)、`pages/Forecast.tsx`(引擎状态 30s)、
+  `pages/workbench/tabs/L2Tab.tsx`(盘口 30s)、`hooks/useSourceHealth.ts`(60s)、`hooks/useVendorTrust.ts`(60s)、
+  `components/DataCapabilities.tsx`(5min)、`components/BrowserNotificationBridge.tsx`(20s);
+  `packages/biz-ui`: `components/dashboard/{BreadthDistributionChart,FlowHistoryChart,ResonancePanel,BoardHeatmap}.tsx`、
+  `components/{DarkFlowCards,OrderBookObBar,MarketMainlineCard,MarketPhaseCard,MainFlowCompareCard,AbnormalMovesCard,DecisionPioneerCard,AuctionAnomalyTab,notification-bell}.tsx`、
+  `components/workbench/QuickRail.tsx`、`components/MinutePane.tsx`、`components/insight/useInsightData.ts`。
+  原本 effect 内闭包的 `alive` 一律改 `aliveRef`、`load` 提到 `useCallback`(换标的 / 依赖变化的触发时机不变)。
+- 顺带删除随该轮询一起作废的 `refreshTimerRef`(`pages/stocks/useStocksState.ts`)。
+
+**测试(+9 例)**
+- `frontend/tests/components/use-paused-interval.test.tsx`(6): 活动挂载补一次 + 定时; **隐藏着挂载 → 0 回调**;
+  活动 → 隐藏: 时间推进也不再回调、回前台补一次; `immediate:false` 挂载不补但回前台仍补; `delayMs<=0` 停用 / 启用即补;
+  `deps` 变化即重挂补一次。
+- `frontend/tests/components/tab-paused-polling-regression.test.tsx`(3, **页面级**): 隐藏的真实页面 `ThemeMood` /
+  `L2Tab` / `BoardHeatmap` 对各自轮询端点(`/theme-mood/ladder`、`/orderbook-ob`+`/seal-quality`、`/boards/heatmap`)
+  **0 次请求**; 切可见后**立即补一次**(不必等下一个周期)。
+- 全仓: `pnpm build` + `tsc -b` + `tsc -p tsconfig.tests.json` + `node scripts/check_ui_rules.mjs` 全绿;
+  `vitest run` **151 文件 / 1142 例**全通过(断言强度未降)。
+
+**未替换清单(逐条给原因)**
+- `App.tsx` 会话阶段心跳(30s): 壳层 chrome, 不随页签复制、恒可见。
+- `Login.tsx` / `Landing.tsx`: 公开面(未登录), 没有页签体系; Landing 两处是打字/轮播动画(不取数)。
+- `useSettingsActions.ts`(微信扫码): 扫码流程内自终止, 非周期轮询。
+- `packages/biz-ui/src/hooks/usePolling.ts`: 共享数据层, **已**接 `useTabActive` 闸门。
+- `BreadthDistributionChart` 的后补数循环(`pending` 期间 `BACKFILL_MS`, 最多 N 次后自停): 有界自终止, 非稳态轮询。
+- `deep-analysis-modal.tsx`(3 处) / `logs-modal.tsx`: 弹窗生命周期内的进度 / 日志跟随轮询, 自终止, 与页签可见性不正交。
+- `useInsightActions.ts`(2 处): 用户点「触发分析」后最多 ~2 分钟的等结果轮询, 到点自停(非周期轮询)。
+- `KlineChart.tsx`: **假阳性** —— `const [interval, setInterval] = useState(...)` 是本地状态 setter, 不是定时器。
+- `tests/` 下的 `setInterval` spy / mock: 测试替身。
+
+**残留(本版未处理, 如实说明)**: `ThemeMood` 题材 board 的实时轮询是 `setTimeout` 链(非 `setInterval`),
+且按 `document.visibilityState`(浏览器标签页)停表、**不随页签面板可见性** —— 不在本版"裸 setInterval"范围, 留待后续统一。
+
 ## feat-页签真 keep-alive(多页签并存不卸载 + 隐藏页签停数据流 + 上限 12 提示)（2026-10-15）
 
 **背景(用户新裁决原话)**: 「需要支持同时存在多个页签，点击哪个页签就进入里面的内容」。

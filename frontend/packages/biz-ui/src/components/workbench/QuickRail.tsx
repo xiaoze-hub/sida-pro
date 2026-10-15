@@ -1,4 +1,5 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { fetchAPI } from '@panwatch/api'
 // 带符号金额(元 → 万/亿)走**共享实现**(v0.6.0 遗留⑤): 带1 `HeaderBand` 的「封单额」cell 与
 // 本卡的「主力净额」行必须同一套单位映射(同类金额在两个拥有面显示不同单位会被读成两个数)。
@@ -126,24 +127,24 @@ function useL2(symbol: string, market: string): L2Resp | null {
     setL2(null)
   }, [symbol, market])
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    if (!symbol || !cn) return
-    let alive = true
-    const load = async () => {
-      try {
-        const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
-        if (alive) setL2(r ?? null)
-      } catch {
-        /* 保留旧值(stale-on-error) */
-      }
-    }
-    void load()
-    const t = window.setInterval(() => void load(), L2_POLL_MS)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(t)
+      aliveRef.current = false
+    }
+  }, [])
+  const load = useCallback(async () => {
+    if (!symbol || !cn) return
+    try {
+      const r = await fetchAPI<L2Resp>(`/stocks/${encodeURIComponent(symbol)}/l2`)
+      if (aliveRef.current) setL2(r ?? null)
+    } catch {
+      /* 保留旧值(stale-on-error) */
     }
   }, [symbol, cn])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次; 非 CN/无标的 ⇒ 停用。
+  usePausedInterval(load, symbol && cn ? L2_POLL_MS : 0, { deps: [symbol, cn] })
 
   return l2
 }

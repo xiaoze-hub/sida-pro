@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, ShieldAlert, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
@@ -160,14 +161,15 @@ export default function MarketPhaseCard() {
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000) // 30s
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(30s)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   if (loading && !data) {
     return (

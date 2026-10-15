@@ -17,6 +17,7 @@ import {
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { usePausedInterval } from '@panwatch/base-ui'
 import SkeletonRows from '@/components/SkeletonRows'
 import { parseServerTime } from '@/lib/utils'
 import ErrorBanner from '@/components/ErrorBanner'
@@ -200,27 +201,28 @@ export default function NotificationsPage() {
 
   useEffect(() => { void load() }, [load])
 
-  // 30s 自动刷新:页面可见才轮询(隐藏时暂停,回到页面立即补一次),增量拉新通知;
+  // 30s 自动刷新: 页面可见才轮询(浏览器切后台由下方 visibilitychange 暂停),增量拉新通知;
   // busyRef 防请求叠加;已读状态/选中项由本地逻辑保持,列表已有数据时不闪 spinner
   const autoRefreshBusy = useRef(false)
+  const autoRefreshTick = useCallback(() => {
+    if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
+    autoRefreshBusy.current = true
+    load().finally(() => {
+      autoRefreshBusy.current = false
+    })
+  }, [load])
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` ⇒ **隐藏页签停表**, 回前台补一次;
+  // 原 setInterval 无首拉 ⇒ `immediate:false`。
+  usePausedInterval(autoRefreshTick, 30_000, { immediate: false })
   useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
-      autoRefreshBusy.current = true
-      load().finally(() => {
-        autoRefreshBusy.current = false
-      })
-    }
-    const timer = setInterval(tick, 30_000)
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') tick()
+      if (document.visibilityState === 'visible') autoRefreshTick()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [load])
+  }, [autoRefreshTick])
 
   useEffect(() => {
     if (!selectedId) {

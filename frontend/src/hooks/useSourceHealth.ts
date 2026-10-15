@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { datasourcesApi } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { pushAlert } from '@panwatch/biz-ui/lib/alert-bus'
 
 /**
@@ -47,46 +48,47 @@ export function useSourceHealth(pollMs: number = POLL_MS) {
   const [health, setHealth] = useState<Record<string, SourceHealthItem>>({})
   const [loading, setLoading] = useState(true)
 
+  // 卸载后不 setState(原 effect 的 `alive` 闭包改为 ref, 以配合 hook 化的轮询体)。
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-
-    const load = async () => {
-      try {
-        const data = await datasourcesApi.health<{ items?: SourceHealthItem[] }>()
-        if (!alive) return
-        const map: Record<string, SourceHealthItem> = {}
-        for (const it of data?.items || []) map[it.id] = it
-        setHealth((prev) => {
-          // 只在**状态跃迁**时进会话消息流(2026-09-22): 掉线/恢复各推一次,
-          // 不每轮刷 —— 否则 60s 轮询会把右栏刷成一堵墙。
-          for (const it of Object.values(map)) {
-            const was = prev[it.id]?.status
-            if (was && was !== it.status) {
-              const ok = it.status === 'connected'
-              pushAlert({
-                level: ok ? 'info' : 'warn',
-                text: `数据源 ${it.name || it.id} ${ok ? '已恢复' : `异常(${it.status})`}`,
-                key: `src:${it.id}`,
-              })
-            }
-          }
-          return map
-        })
-      } catch {
-        // 请求失败 → 保持空表, 上层按"不可用"灰显, 不伪造状态
-        if (alive) setHealth({})
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-
-    void load()
-    const timer = window.setInterval(load, pollMs)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(timer)
+      aliveRef.current = false
     }
-  }, [pollMs])
+  }, [])
+
+  const load = useCallback(async () => {
+    try {
+      const data = await datasourcesApi.health<{ items?: SourceHealthItem[] }>()
+      if (!aliveRef.current) return
+      const map: Record<string, SourceHealthItem> = {}
+      for (const it of data?.items || []) map[it.id] = it
+      setHealth((prev) => {
+        // 只在**状态跃迁**时进会话消息流(2026-09-22): 掉线/恢复各推一次,
+        // 不每轮刷 —— 否则 60s 轮询会把右栏刷成一堵墙。
+        for (const it of Object.values(map)) {
+          const was = prev[it.id]?.status
+          if (was && was !== it.status) {
+            const ok = it.status === 'connected'
+            pushAlert({
+              level: ok ? 'info' : 'warn',
+              text: `数据源 ${it.name || it.id} ${ok ? '已恢复' : `异常(${it.status})`}`,
+              key: `src:${it.id}`,
+            })
+          }
+        }
+        return map
+      })
+    } catch {
+      // 请求失败 → 保持空表, 上层按"不可用"灰显, 不伪造状态
+      if (aliveRef.current) setHealth({})
+    } finally {
+      if (aliveRef.current) setLoading(false)
+    }
+  }, [])
+
+  // 页签 keep-alive(2026-10-15): 轮询走 `usePausedInterval` —— 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, pollMs, { deps: [pollMs] })
 
   /**
    * 某个图标是否可用: 只有 connected 才算可用。

@@ -1,6 +1,7 @@
 import { ANPAN, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { insightApi, fetchAPI } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
@@ -332,14 +333,14 @@ function useL2Sources(symbol: string): L2Sources {
     setLoading(false)
   }, [symbol])
 
+  // 换股/首挂先清旧值(不把上一只票的盘口画到新标的上; 清空先于下面的首拉 —— 声明顺序即执行顺序)。
   useEffect(() => {
     setOb(EMPTY_OB)
     setSeal(EMPTY_SEAL)
     setUpdatedAt('')
-    void load()
-    const timer = window.setInterval(() => void load(), POLL_MS)
-    return () => window.clearInterval(timer)
   }, [load])
+  // 取数/轮询: 隐藏页签停表, 回前台补一次(keep-alive 成本闸门, 2026-10-15)。
+  usePausedInterval(() => void load(), POLL_MS, { deps: [load] })
 
   return { ob, seal, loading, updatedAt, reload: load }
 }

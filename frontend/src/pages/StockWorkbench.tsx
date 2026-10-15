@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { dashboardApi } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
@@ -115,38 +116,49 @@ interface PositionContext {
 
 function usePositionContext(symbol: string, market: string, enabled: boolean): PositionContext {
   const [ctx, setCtx] = useState<PositionContext>({ has: undefined, cost: null })
+  // 迟到响应守卫(原 effect 内闭包 `alive` → ref); 请求序号另防"上一只票的响应落到新标的上"。
+  const aliveRef = useRef(true)
+  const seqRef = useRef(0)
   useEffect(() => {
-    let alive = true
-    // 换标的/关闸门先回到"未知/无成本", 避免把上一只票(或已离开的个股视图)的成本线画到当前标的上。
-    setCtx({ has: undefined, cost: null })
-    // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
-    if (!enabled || !symbol) return () => { alive = false }
-    const want = `${market}:${symbol}`
-    const load = async () => {
-      try {
-        const r = await dashboardApi.portfolioSummary({ include_quotes: false })
-        if (!alive) return
-        const hit = (r?.accounts || [])
-          .flatMap((acc) => acc.positions || [])
-          .find((p) => `${p.market}:${p.symbol}` === want)
-        // 成本价仅在**有限正数**时采用; 缺失(接口未给/NaN/Infinity/0)一律 null —— 不代填 0, 不画错线。
-        const cost =
-          hit && typeof hit.cost_price === 'number' && Number.isFinite(hit.cost_price) && hit.cost_price > 0
-            ? hit.cost_price
-            : null
-        setCtx({ has: !!hit, cost })
-      } catch {
-        // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null` —— 不静默当未持仓、不画线。
-      }
-    }
-    void load()
-    // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器/成本线要等整页刷新才更新。
-    const t = window.setInterval(() => void load(), POSITION_POLL_MS)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(t)
+      aliveRef.current = false
+    }
+  }, [])
+  // 换标的/关闸门先回到"未知/无成本", 避免把上一只票(或已离开的个股视图)的成本线画到当前标的上。
+  useEffect(() => {
+    seqRef.current += 1 // 作废在途响应(换标的/关闸门)
+    setCtx({ has: undefined, cost: null })
+  }, [symbol, market, enabled])
+
+  const load = useCallback(async () => {
+    // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
+    if (!enabled || !symbol) return
+    const want = `${market}:${symbol}`
+    const seq = ++seqRef.current
+    try {
+      const r = await dashboardApi.portfolioSummary({ include_quotes: false })
+      if (!aliveRef.current || seq !== seqRef.current) return
+      const hit = (r?.accounts || [])
+        .flatMap((acc) => acc.positions || [])
+        .find((p) => `${p.market}:${p.symbol}` === want)
+      // 成本价仅在**有限正数**时采用; 缺失(接口未给/NaN/Infinity/0)一律 null —— 不代填 0, 不画错线。
+      const cost =
+        hit && typeof hit.cost_price === 'number' && Number.isFinite(hit.cost_price) && hit.cost_price > 0
+          ? hit.cost_price
+          : null
+      setCtx({ has: !!hit, cost })
+    } catch {
+      // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null` —— 不静默当未持仓、不画线。
     }
   }, [symbol, market, enabled])
+
+  // 盘中持仓会变(买入/卖出) ⇒ 轮询刷新, 否则评分/加仓计算器/成本线要等整页刷新才更新。
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(usePausedInterval);
+  // 指数/板块(enabled=false / 无 symbol)⇒ delayMs<=0 停用。
+  usePausedInterval(() => void load(), enabled && symbol ? POSITION_POLL_MS : 0, {
+    deps: [symbol, market, enabled],
+  })
   return ctx
 }
 

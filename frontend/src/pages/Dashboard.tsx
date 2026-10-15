@@ -29,6 +29,7 @@ import {
   fetchAPI,
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { Skeleton } from '@/components/Skeleton'
 import { Onboarding } from '@panwatch/biz-ui/components/onboarding'
 import KpiBand, { usePhaseLabel, useMainlineTop1 } from '@panwatch/biz-ui/components/KpiBand'
@@ -398,27 +399,27 @@ export default function DashboardPage() {
     // 历史兼容: 已看过的用户(localStorage 标志存在)依然不会被打扰
   }, [load])
 
-  // 30s 自动刷新:页面可见才轮询(visibilitychange 隐藏时暂停,回到页面立即补一次);
-  // busyRef 防请求叠加;慢车道(基准/归因)跳过,避免每分钟级重请求
   const autoRefreshBusy = useRef(false)
+  const autoRefreshTick = useCallback(() => {
+    if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
+    autoRefreshBusy.current = true
+    load({ skipBench: true }).finally(() => {
+      autoRefreshBusy.current = false
+    })
+  }, [load])
+  // 30s 自动刷新: 页面可见才轮询(浏览器切后台由下方 visibilitychange 暂停);
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` ⇒ **隐藏页签停表**, 回前台补一次。
+  // 原 setInterval 无首拉 ⇒ `immediate:false`(不额外补首屏请求)。
+  usePausedInterval(autoRefreshTick, 30_000, { immediate: false })
   useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState !== 'visible' || autoRefreshBusy.current) return
-      autoRefreshBusy.current = true
-      load({ skipBench: true }).finally(() => {
-        autoRefreshBusy.current = false
-      })
-    }
-    const timer = setInterval(tick, 30_000)
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') tick()
+      if (document.visibilityState === 'visible') autoRefreshTick()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [load])
+  }, [autoRefreshTick])
 
   const handleOnboardingComplete = () => {
     localStorage.setItem('panwatch_onboarding_completed', 'true')
@@ -1357,13 +1358,12 @@ function PhaseGaugeCardInner() {
 
   useEffect(() => {
     aliveRef.current = true
-    void load()
-    const t = window.setInterval(() => void load(), 30000)
     return () => {
       aliveRef.current = false
-      window.clearInterval(t)
     }
-  }, [load])
+  }, [])
+  // 30s 轮询: 隐藏页签停表, 回前台补一次(keep-alive 成本闸门, 2026-10-15)。
+  usePausedInterval(() => void load(), 30000, { deps: [load] })
 
   return (
     <div className="border-t border-border/60 pt-2.5">

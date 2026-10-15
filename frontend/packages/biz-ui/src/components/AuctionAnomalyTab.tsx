@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, UserPlus, Eye, Info } from 'lucide-react'
 import { fetchAPI, stocksApi } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -104,33 +105,27 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000) // 30s 刷新
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
-    }
-  }, [load])
-
-  // 高开分档实证: 拉不到就只是不贴徽标, 绝不影响竞价池本身
-  useEffect(() => {
-    let alive = true
-    const loadStudy = async () => {
-      try {
-        const r = await fetchAPI<GapStudyResp>('/gap-study?days=250')
-        if (alive) setGapStudy(r?.available ? r : null)
-      } catch {
-        if (alive) setGapStudy(null)
-      }
-    }
-    void loadStudy()
-    const t = window.setInterval(() => void loadStudy(), GAP_STUDY_REFRESH_MS)
-    return () => {
-      alive = false
-      window.clearInterval(t)
     }
   }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(30s 刷新)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
+
+  // 高开分档实证: 拉不到就只是不贴徽标, 绝不影响竞价池本身
+  const loadStudy = useCallback(async () => {
+    try {
+      const r = await fetchAPI<GapStudyResp>('/gap-study?days=250')
+      if (mountedRef.current) setGapStudy(r?.available ? r : null)
+    } catch {
+      if (mountedRef.current) setGapStudy(null)
+    }
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(loadStudy, GAP_STUDY_REFRESH_MS)
 
   const addToWatchlist = useCallback(
     async (item: AuctionAnomalyItem) => {
