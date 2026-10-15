@@ -286,9 +286,15 @@ def test_universe合并去重上限(monkeypatch):
     monkeypatch.setattr(qs, "collect_market_symbols",
                         lambda: {"CN": ["002361", "600000", "002361"], "US": ["AAPL"]})
     with eng.begin() as conn:
+        # ⚠️ 日期字面量禁写死: 实现按 now(_CST) 的「当日」过滤, 写死日期会在翻日(00:00)后
+        # 变成「非当日」被剔除(2026-10-15 00:18 CI shard3 实锤) —— 夹具必须跟随当日。
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        _today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
         conn.execute(text("INSERT INTO seal_quality_samples (ts, symbol, market) VALUES "
                           "(:ts, :s, 'CN')"),
-                     {"ts": "2026-10-14T09:31:00", "s": "000001"})
+                     {"ts": f"{_today}T09:31:00", "s": "000001"})
         # 非当日/非法代码
         conn.execute(text("INSERT INTO seal_quality_samples (ts, symbol, market) VALUES "
                           "('2020-01-01T09:31:00', '000002', 'CN')"))
