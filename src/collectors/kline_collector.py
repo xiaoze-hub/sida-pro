@@ -130,6 +130,38 @@ def clear_kline_cache() -> None:
     _FAIL_UNTIL.clear()
 
 
+def _drop_degenerate_today_bar(
+    bars: list["KlineData"], symbol: str, market: MarketCode
+) -> list["KlineData"]:
+    """剔除末根「今日退化占位行」(零振幅 + 零量, 非停牌) —— 见 src/core/live_daily_bar。
+
+    PG 日线分区里 TQ 网关盘前/集合竞价会写入今日占位行(OHLC 全等、量 0, 价 = 竞价
+    指示价, 不等于前收)。若原样返回, 下游(summary 技术指标 / 预测 / 图)会把 volume=0
+    与占位价当真值(「0 冒充」红线; 生产实测 600111 的 summary.last_close=34.08)。
+
+    仅在 A 股、末根 = 今日且形态退化、且**非停牌日**时剔除(按「今日无真 bar」处理,
+    由上层读时合成/标注); 停牌日保留其真实(零成交)bar。fail-soft: 任何异常原样返回
+    (宁可不动, 绝不误删真数据)。
+    """
+    if market != MarketCode.CN or not bars:
+        return bars
+    try:
+        from src.core.live_daily_bar import is_degenerate_placeholder
+
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        if not is_degenerate_placeholder(bars[-1], today):
+            return bars
+        from src.core.halts import is_halted
+
+        if is_halted(symbol, today, market=market.value):
+            return bars
+        logger.info("[kline-degrade] %s: 剔除今日退化占位行(量0/零振幅 %s)", symbol, today)
+        return bars[:-1]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[kline-degrade] %s 退化判定失败(原样返回): %r", symbol, e)
+        return bars
+
+
 def get_index_klines(index_code: str, market: MarketCode, days: int = 120) -> list[KlineData]:
     """取大盘/指数日K:走 marketdata 包 index_klines(INDEX_SECID 显式映射,未映射如美股指数
     → 空列表,fail-soft;见 packages/marketdata/src/marketdata/client.py)。
@@ -651,6 +683,9 @@ class KlineCollector:
         3. HTTP 全挂 → 服务同复权维度的陈旧 PG 数据(宁陈旧, 不混维度), 再不行才空。
         """
         pg = self._pg_read(symbol, days, adjust)
+        # 2026-10-15: 剔除末根「今日退化占位行」(零振幅+零量, 非停牌) —— 否则
+        # summary/预测/图 会把网关盘前占位价与 volume=0 当真值端出去(0 冒充红线)。
+        pg = _drop_degenerate_today_bar(pg, symbol, self.market)
         if pg and self._pg_usable(pg, days):
             return pg
 
@@ -661,8 +696,10 @@ class KlineCollector:
             bars, _vendor = get_market_data().klines_with_vendor(
                 symbol, market=self.market.value, days=want, min_count=need)
             if bars:
-                return [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
-                                  low=b.low, volume=b.volume) for b in bars]
+                out = [KlineData(date=b.date, open=b.open, close=b.close, high=b.high,
+                                 low=b.low, volume=b.volume) for b in bars]
+                # 同一道防线: 实时源盘前也可能返回今日占位行(量0/零振幅)
+                return _drop_degenerate_today_bar(out, symbol, self.market)
         else:
             # v0.4.9.1 引入的新浪直拉兜底; 1.2 起仅服务不复权请求
             sina = self._sina_fallback(symbol, days)

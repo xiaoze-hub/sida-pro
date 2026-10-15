@@ -1,3 +1,53 @@
+## fix-日K今日行零值占位桩(读路径退化剔除 + 写侧不入库 + 历史退化行清查)（2026-10-15）
+
+**背景(生产实测)**: `klines` 当日(2026-10-15)`period='1d'` 共 147 行, **全部** `source=tq`,
+形态 = `O=H=L=C | volume=0`(如 600111 的 10-15 行 = `34.08`、量 0, 而前收 34.86、实时真价 34.85)。
+前端因此画出「假平棒 + 成交量 0」标签, 且 `today_bar` 被标成 `'pg'`(当成已定型真值) —— 盘中
+live 合成(2026-10-12 `src/core/live_daily_bar`)被「今日行已存在」挤掉不触发。**0 冒充真值 = 红线**。
+
+**根因**:
+- **写入方** = 工作日 09:20 盘前预缓存 `src/core/kline_precache.py` → `ingest_symbol`
+  (`src/collectors/klines_ingestor.py`)。集合竞价时段网关返回的今日 bar 是「价 = 竞价指示价、
+  量 0」的**占位行**; `validate_bar` 只拦非正价/OHLC 违例/负量与「跳变超限」(标记), **零振幅零量
+  占位照单全收**, 以 `quality_flag=1` 落库。
+- **读取漏判** = `_finalize_daily_bars`(`src/web/api/klines.py`)里 `is_stub_bar` 要求「价 == 前收」;
+  占位价是竞价指示价(≠前收) ⇒ 实测 **147 行中 144 行漏判**, 假平棒以 `today_bar='pg'` 端出并顶掉
+  live 合成。`/klines/{symbol}/summary` 的 `last_close` 亦端出 34.08。
+
+**改动(分支 `fix/kline-degraded-today-bar-20261015`)**:
+- **`src/core/live_daily_bar.py`**: 新增纯函数 `is_flat_zero_volume`(OHLC 全等 + 量 0/None)与
+  `is_degenerate_placeholder(bar, today)`(**今日** + 零振幅零量, **不要求价 = 前收**)。既有
+  `is_stub_bar` **契约不变**(仍要求等于前收), 断言强度不降。日期比较经 `_norm_iso` **归一** ——
+  紧凑 8 位(`20261015`)与 ISO(`2026-10-15`)混用不再静默漏匹配(硬约束)。
+- **`src/web/api/klines.py`**: `_finalize_daily_bars` 增「今日退化行防线」—— 末根 = 今日且形态退化、
+  且**非停牌**(`_is_halted_today` 查 `trading_halts`, fail-soft)⇒ 按缺失剔除 ⇒ 走 live 合成 /
+  显式 `missing`; **绝不把占位价 + volume=0 以任何状态端出**。停牌日保留其真实(零成交)bar。
+  响应 **shape / 字段 / 口径不变**(仍只有 `pg`/`live`/`missing`, 未加新字段)。
+- **`src/collectors/kline_collector.py`**: 新增 `_drop_degenerate_today_bar`, 在 `_fetch_all_sources`
+  的 PG 分区分支与实时源分支**各挂一道** —— 否则 summary / 预测 / 图这些采集器消费方仍会端出占位值
+  (生产实测 `summary.last_close=34.08`)。
+- **`src/collectors/klines_ingestor.py`**: `validate_bar` 质量判据补 `degraded_placeholder`
+  (今日 + 零振幅 + 量 0 + **非停牌**); `ingest_symbol` 对该类**不入库**(单列计数 `skipped_degraded`,
+  不写 `fail_details`, 免得正常盘前预缓存被 `ingest_batch` 聚合逻辑误报「三源失败」)。
+
+**生产退化行清查(只读, 未改任何历史数据)**:
+- `period='1d'` 全表 4,367,663 行, 其中 `volume=0` 共 **151** 行, 且这 151 行**全部**为零振幅
+  (`O=H=L=C`), **全部** `source=tq` / `adjust=qfq`;
+- 分布: 今日 2026-10-15(盘中 14:26 CST 时点)**147** 行 + 2026-10-14 遗留 **4** 行
+  (600293 / 002388 / 000016 / 300773, 盘前预缓存写入后当晚未被 18:00 回填覆盖);
+- 全部落在交易日(10-14 周三 / 10-15 周四), `trading_halts` 表为空 ⇒ **非停牌日退化行 = 151**;
+- 今日 147 行中 **144** 行占位价 ≠ 前收(旧口径漏判率 98%), 仅 3 行(000877 / 920047 / 600900)恰等于前收。
+
+**回归测试**: `tests/test_kline_degraded_today_bar.py`(22 例, 全离线)钉三层防线 —— 纯函数 /
+读路径(`_finalize_daily_bars` + 采集器出口: 退化行 → live 合成 或 `missing`, **禁返假值**) /
+写路径(`validate_bar` 判据 + `ingest_symbol` 不入库); 含停牌日、今日真 bar 与日期字面量归一的
+**不误伤/不漏判**守卫。**断言强度不降**: 对 `main`(未修复)复跑 = **21 failed / 1 passed**
+(唯一通过者是「`is_stub_bar` 契约不变」守卫, 本就不依赖修复)。
+
+**验证**: 受影响用例 293 passed; `test_w41_core_web_dependency` 绿;
+`scripts/check_{is_pg_scope,lock_covers_reqs,migrations,scoped_queries}.py` 全 OK。
+**未发版**(禁 push main / 不打 tag)。
+
 #### fix-vision模型名拼写agnes-3.0-flash(2026-10-15)
 
 - 用户截图点破: 模型真名 `agnes-3.0-flash`(agnes-ai.cn 同缀), 先前误绑 `agens-3.0-flash` 503 无可用渠道即错名打不着路由: 全部引用改真名, 真名实测 200 读图正确(答"红色"); 图片能力确认支持。
