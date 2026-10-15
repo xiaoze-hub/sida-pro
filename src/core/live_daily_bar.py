@@ -109,6 +109,18 @@ def _day_of(ts: Any) -> str:
     return str(ts or "")[:10]
 
 
+def _norm_iso(d: Any) -> str:
+    """日期字面量归一为 'YYYY-MM-DD'。
+
+    全仓多次踩坑: 紧凑 8 位(`20261015`)与 ISO(`2026-10-15`)混用时直接 `[:10]` 比较
+    **永不相等**(静默漏匹配, 无报错)。此处两形态都归一到 ISO 再比; 其余原样取前 10 位。
+    """
+    s = str(d or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s[:10]
+
+
 def _iso_ts(ts: Any) -> str:
     """时间戳 → ISO 秒级字符串(用于 as_of)。
 
@@ -219,6 +231,41 @@ def is_stub_bar(cur: Any, prev_close: float | None = None) -> bool:
     if prev_close is not None and abs(c - float(prev_close)) > 1e-9:
         return False
     return True
+
+
+def is_flat_zero_volume(bar: Any) -> bool:
+    """零振幅 + 零量: OHLC 全等 且 volume 为 0/None。
+
+    网关「盘前/集合竞价占位行」与「停牌日无成交」的共同形态。**零量**已排除有成交的
+    一字板(一字板虽零振幅但有量); 单看形态仍无法与停牌日区分, 是否**退化**必须结合
+    日期(今日)与停牌表判定, 见 `is_degenerate_placeholder`。
+    """
+    vol = _num(_field(bar, "volume"))
+    if vol is not None and vol > 0:
+        return False
+    o = _num(_field(bar, "open"))
+    h = _num(_field(bar, "high"))
+    low = _num(_field(bar, "low"))
+    c = _num(_field(bar, "close"))
+    if None in (o, h, low, c):
+        return False
+    return o == h == low == c
+
+
+def is_degenerate_placeholder(bar: Any, today: str) -> bool:
+    """「今日退化占位行」形态: 日期 == today 且 `is_flat_zero_volume`。
+
+    与 `is_stub_bar` 的关键区别: **不要求价等于前收**。2026-10-15 生产实测: 09:20 盘前
+    预缓存写入的今日行 OHLC 全等, 但价 = 集合竞价指示价(≠前收, 144/147 行如此) ⇒ 旧
+    `is_stub_bar` 的「等于前收」子句漏判, 零量假平棒被当 `today_bar='pg'` 真值端给前端
+    (「0 量冒充真值」红线)。真实停牌日也零振幅零量, 由调用方用停牌表
+    (`src.core.halts.is_halted`)排除 ⇒ 只在**非停牌日**才判为退化。
+
+    日期比较经 `_norm_iso` 归一 —— 紧凑 8 位与 ISO 混用也不会漏判。
+    """
+    if _norm_iso(_field(bar, "date")) != _norm_iso(today):
+        return False
+    return is_flat_zero_volume(bar)
 
 
 # ── 纯函数: 实时日线源取今日 bar ────────────────────────────────────────────

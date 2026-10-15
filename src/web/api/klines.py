@@ -344,6 +344,36 @@ def _is_stub_bar(cur, prev_close: float | None = None) -> bool:
     return is_stub_bar(cur, prev_close)
 
 
+def _is_degenerate_today_bar(cur, today: str) -> bool:
+    """今日退化占位行(零振幅 + 零量, **不要求价等于前收**)。
+
+    与 `_is_stub_bar` 的区别: 2026-10-15 生产实测 600111 的 10-15 行 O=H=L=C=34.08、
+    量 0, 而前收 34.86 —— 网关盘前/集合竞价写入的占位价是**竞价指示价**, 不等于前收,
+    故旧的「等于前收」子句漏判(实测 147 行中 144 行如此)。
+
+    唯一实现下沉到 src/core/live_daily_bar.is_degenerate_placeholder(与写侧同源,
+    避免两处漂移)。是否**真退化**还需排除停牌日, 见 `_finalize_daily_bars`。
+    """
+    from src.core.live_daily_bar import is_degenerate_placeholder
+
+    return is_degenerate_placeholder(cur, today)
+
+
+def _is_halted_today(symbol: str, market_code, today: str) -> bool:
+    """symbol 在 today 是否停牌(`trading_halts` 表)。任何异常 → False(当作未停牌)。
+
+    只在末根 = 今日且形态退化时被调用(见 `_finalize_daily_bars`), 不在热路径上;
+    停牌表缺失/库不可达时**仍按退化剔除** —— 宁显"今日无真 bar"也绝不端出占位值。
+    """
+    try:
+        from src.core.halts import is_halted
+
+        return bool(is_halted(symbol, today, market=market_code.value))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[kline-degrade] 停牌判定失败 %s/%s: %r", symbol, today, e)
+        return False
+
+
 def _live_today_bar(symbol: str, market_code):
     """今日真实日 bar —— 读时合成(分钟线聚合 → 实时日线源), 60s 进程内缓存。
 
@@ -446,10 +476,14 @@ def _annotate_index_today(klines, interval: str, market_code) -> tuple[str | Non
 def _finalize_daily_bars(
     klines: list, symbol: str, market_code, interval: str, today: str | None = None
 ):
-    """日报/日线序列收尾: 剔末根桩 + 补今日实时 bar。
+    """日报/日线序列收尾: 剔末根桩 + 剔今日退化占位行 + 补今日实时 bar。
 
     返回 (bars, today_state)。today_state ∈ {"pg"(库里有真今日bar), "live"(盘中补的实时bar),
     "missing"(今天还没有真bar且补不到 —— 前端应显式标注滞后, 不许当已收盘)}。
+
+    剔除两类末根(2026-10-15 加固): ① `is_stub_bar`(量0+零振幅+**等于前收**);
+    ② `is_degenerate_placeholder`(今日+零振幅+量0, **不要求等于前收**, 非停牌日) ——
+    后者是网关盘前/集合竞价占位行(价=竞价指示价)的防线, 绝不把「0 量冒充真值」端出去。
 
     today: 可注入的"今天"(ISO 日期), 默认取 _APP_TZ 当天。
     **单测必须显式注入** —— 否则断言随运行日期漂移: 2026-09-23 实测, fixture 写死 09-23,
@@ -469,6 +503,18 @@ def _finalize_daily_bars(
 
     today = today or datetime.now(ZoneInfo(_APP_TZ)).date().isoformat()
     last_date = str(getattr(bars[-1], "date", ""))[:10] if bars else ""
+
+    # 2026-10-15 退化今日行防线(「0 量冒充真值」红线): 末根 = 今日 且 零振幅零量 =
+    # 网关盘前/集合竞价占位行(**价 = 竞价指示价, 不等于前收**, 故 _is_stub_bar 的
+    # 「等于前收」子句漏判; 生产实测 600111 的 10-15 行 O=H=L=C=34.08、量 0、前收 34.86)。
+    # 非停牌日一律按「今日无真 bar」剔除 ⇒ 走下面的 live 合成(拿不到则显式 missing),
+    # 绝不让占位价 + volume=0 以 today_bar='pg' 端出去。停牌日保留其真实(零成交)bar。
+    if last_date == today and _is_degenerate_today_bar(bars[-1], today):
+        if not _is_halted_today(symbol, market_code, today):
+            bars = bars[:-1]
+            dropped_stub = True
+            last_date = str(getattr(bars[-1], "date", ""))[:10] if bars else ""
+
     if last_date == today:
         return bars, ("live" if dropped_stub else "pg")
 
