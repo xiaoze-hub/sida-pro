@@ -99,6 +99,7 @@ const enUS: Messages = {
     board: 'Board',
     analysis: 'Analysis',
     close: 'Close {name} tab',
+    limitToast: 'At most {max} tabs; closed the oldest “{name}”',
   },
 
   dashboard: {

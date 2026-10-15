@@ -5,8 +5,12 @@
 // - queryFn 默认 cacheMode:'reload' —— 绕开 fetchAPI 内置的 30s _RESP_CACHE,
 //   否则 mutation 后 refetch 会拿到缓存里的旧值(TanStack Query 才是缓存所有者)。
 // - path 传 null/空表示"条件查询"(enabled=false), 与 TanStack 惯例一致。
+// - 页签 keep-alive(2026-10-15): 隐藏页签**停轮询** —— refetchInterval 只在该页签可见时生效,
+//   回到前台立即补一次刷新(见 useTabActive)。缓存仍在, 切回不闪空。
+import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query'
 
+import { useTabActive } from '@panwatch/base-ui'
 import { fetchAPI, type ApiRequestOptions } from '@panwatch/api'
 
 let _queryClient: QueryClient | null = null
@@ -33,7 +37,10 @@ export function useApiQuery<T>(
   options?: UseApiQueryOptions,
 ) {
   const enabled = (options?.enabled ?? true) && !!path
-  return useQuery<T>({
+  // 隐藏页签停轮询(keep-alive 成本控制)。初次取数不受影响(缓存该有就有), 只掐掉定时重取。
+  const tabActive = useTabActive()
+  const interval = options?.refetchInterval
+  const query = useQuery<T>({
     queryKey: key,
     queryFn: () => {
       if (!path) throw new Error('useApiQuery: path 为空但已启用')
@@ -41,8 +48,20 @@ export function useApiQuery<T>(
     },
     enabled,
     staleTime: options?.staleTime,
-    refetchInterval: options?.refetchInterval || undefined,
+    refetchInterval: tabActive && interval ? interval : undefined,
   })
+
+  // 回到前台(隐藏→可见)立即补一次刷新 —— 否则最长要等一个 interval 才更新, 读数停在旧值。
+  // refetch 的引用每次渲染都会变, 所以放 ref, effect 只依赖可见性本身。
+  const refetchRef = useRef(query.refetch)
+  refetchRef.current = query.refetch
+  const wasActiveRef = useRef(tabActive)
+  useEffect(() => {
+    if (tabActive && !wasActiveRef.current && enabled) void refetchRef.current()
+    wasActiveRef.current = tabActive
+  }, [tabActive, enabled])
+
+  return query
 }
 
 export interface UseApiMutationOptions<TVars, TData> {

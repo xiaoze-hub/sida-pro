@@ -635,10 +635,11 @@ function App() {
       {/* Content */}
       <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
         {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
-            页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。 */}
-        <WorkspaceTabShell>
-        {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数 */}
-        <SourceHeartbeat />
+            页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。
+            真 keep-alive(2026-10-15): 每个页签一个常驻面板(同时挂载/隐藏不卸), 见 WorkspaceTabShell。
+            `header` 里的壳层(如顶栏源心跳条)只渲染一次, 不随页签复制。 */}
+        <WorkspaceTabShell header={<SourceHeartbeat />}>
+        {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数(经 header 传入) */}
         <Suspense fallback={<PageFallback />}>
           <AppErrorBoundary
             onError={(error) =>
