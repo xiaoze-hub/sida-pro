@@ -90,6 +90,16 @@ const zhCN = {
     workbench: '工作台',
   },
 
+  // 工作台页签(Tab Shell, 2026-10-15): 页签栏 / 标题后缀 / 关闭键 aria-label
+  tabs: {
+    bar: '工作台页签',
+    stock: '个股',
+    index: '指数',
+    board: '板块',
+    analysis: '分析',
+    close: '关闭 {name} 页签',
+  },
+
   dashboard: {
     title: '驾驶舱',
     subtitle: '市场全景 · 组合工作台',

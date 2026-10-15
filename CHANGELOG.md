@@ -1,3 +1,50 @@
+### feat-页签式工作台(Tab Shell: 功能页=页签 + 独立✕ + 相邻接管 + 持久化)（2026-10-15）
+
+**背景(用户原话)**: 「还需要做功能菜单的页签，这样每次关闭页签，而不是把整个功能全关掉」。
+病根: 左侧菜单点开一个功能页, 再点另一个就整页切换(前页被卸载), 且**没有页签/关闭入口** ——
+用户想"收掉某个功能页"时没有对象可收, 只能整页切走。
+
+**改动(分支 `feat/workspace-tab-shell-20261015`, 独立 worktree `/home/ubuntu/wt/tab-shell`)**
+- **`frontend/src/lib/tab-shell.ts`(新)**: 页签状态机(纯函数, 零 React/路由依赖, 可单测)。
+  - **页签身份 key**: 同路由不重复开; `/stocks/:symbol` 按 **symbol + 品种(type)** 粒度 ——
+    两只股票 = 两个页签; 同一票换 `?tab=l2|news|forecast` 仍是**一个**页签(否则页内切标签就长页签)。
+  - **首页 `/` 是常驻页签**(钉住, 无 ✕): 所以"关最后一个功能页签"的落点是首页, **永不出现
+    "把整个功能全关掉"或空白工作台** —— 这正是用户给的验收标准。
+  - **关闭落点 = 相邻页签**: 优先右邻(移除后同下标), 无右邻取左邻, 兜底首页; 关**非当前**页签
+    只移除它自己, 内容区不动。关当前页签用 `replace` 导航(后退不会把刚关掉的页签复活)。
+  - 上限 12 个(超出丢最早的**非首页**页签, 首页与新开的不丢); 持久化 key `sida_workspace_tabs_v1`,
+    **只存身份+地址**(标题由路由现算, 不存文案, 免得与 i18n 漂移); 存储损坏/配额满/隐私模式
+    一律降级为"只剩首页", 不抛错、不编数据。
+  - **非页签路由**(不在功能菜单里, 别摆页签): ① 公开文档面 `/terms`、`/tiers`、`/login`;
+    ② 老路由别名 `/history`、`/paper-trading`、`/alerts`、`/agents`、`/datasources`、`/audit`、
+    `/help`、`/stocks`、`/quote`、`/l2`、`/forecast`、`/index/*`、`/boards/*`、`/quote/*` ——
+    别名一律 redirect, 页签化它们会在页签集里留一个**再也回不去的僵尸页签**;
+    ③ 通配/未知路由(routes 的 `*`)。
+- **`frontend/src/components/WorkspaceTabs.tsx`(新) + `WorkspaceTabShell.tsx`(新)**: 内容区顶部页签栏 + 壳。
+  **路由是唯一事实源**(路由变 → 查页签集), 所以左侧菜单/快捷键/命令面板/推送链接**一行没改**就自动
+  "未开过 → 新开, 已开过 → 切过去"; 页签集持在 Routes **外层** ⇒ 页面内部零改动
+  (个股工作台 `StockWorkbench.tsx` 一字未动, K 线页布局不受影响)。
+- **`frontend/src/App.tsx`**: `<main>` 内把 `SourceHeartbeat` 之后的 Suspense/Routes 包进 `WorkspaceTabShell`。
+- **`frontend/src/locales/{zh-CN,en-US}.ts`**: 新增 `tabs.*`(页签栏 aria-label / 个股·指数·板块后缀 /
+  深度分析前缀 / 关闭键文案)。标题注册表与 `navItems` 对齐, 由钉子测试兜底"菜单入口不许留裸路径页签"。
+- **UI 铁律**: 整条栏只有一条 1px hairline 下分隔线(页签之间不画竖线、不卡片化); 层级只走 Surface
+  阶梯(`bg-s2` 选中 / `bg-s3` 关闭键悬停, 不手调透明度 R12、不用阴影 R13); 选中态 = 唯一的 accent
+  权重(2px `--primary` 指示条, 与侧栏当前项同一套语言); 全 token 化 ⇒ 暗色优先自动成立;
+  桌面端吸顶(`md:sticky`, 移动端不叠 sticky header), 页签栏横向可滚。
+
+**测试(59 例, 全绿)**
+- `frontend/tests/lib/tab-shell.test.ts`(44): 页签身份(`?tab=` 不新开 / 个股 symbol 粒度 / 指数与个股分行)、
+  非页签路由(公开面+老别名+未知)、标题(含"注册表 key 在词典里真存在"与"navItems 全覆盖"两条源码级钉子)、
+  upsert(追加/同 key 切回/无变化返回原引用/超上限丢最早)、关闭(右邻→左邻→首页; 首页不可关;
+  关不存在 key 无操作; **无论怎么关页签集恒非空**)、持久化(往返/损坏降级/去重截断/幂等/存储抛错静默)。
+- `frontend/tests/components/workspace-tab-shell.test.tsx`(15, jsdom + 真 MemoryRouter + 真组件):
+  进功能页出现页签并高亮、点菜单新开/已开切回(**前一个页签还在**)、点页签本体切换、个股两票两页签、
+  **✕ 只关那一个**(关当前 → 右邻接管; 关最后一个 → 回首页; 关非当前 → 内容不动; 连关多次永远非空)、
+  首页无 ✕、每次开/切/关写 localStorage、重挂载(≈刷新)恢复、公开文档面不页签化。
+
+**门禁**: `pnpm build`(tsc -b + vite build)、`pnpm typecheck:tests`、`scripts/check_ui_rules.mjs`
+(UI-RULES OK)、`pnpm test` 全量 —— 均通过。**未 push main、未打 tag、未发版**。
+
 #### fix-vision模型名拼写agnes-3.0-flash(2026-10-15)
 
 - 用户截图点破: 模型真名 `agnes-3.0-flash`(agnes-ai.cn 同缀), 先前误绑 `agens-3.0-flash` 503 无可用渠道即错名打不着路由: 全部引用改真名, 真名实测 200 读图正确(答"红色"); 图片能力确认支持。
