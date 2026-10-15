@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { activityLevelColor } from '../lib/stock-colors'
@@ -121,14 +122,15 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 30000)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 30000, { deps: [load] })
 
   // 手动刷新按钮: 非 bare 挂在标题行右侧; bare 时标题行被外层卡替代, 挪到卡尾
   // (与「更新于 …」同行), 否则 bare 化会静默丢掉手动刷新入口(30s 自动轮询仍在)。

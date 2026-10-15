@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { fetchAPI } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
 import { safeFixed } from '@/lib/format'
@@ -58,27 +59,30 @@ export default function ResonancePanel({ className, actions }: { className?: str
   const [expanded, setExpanded] = useState(false)
   const PREVIEW_N = 20
 
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-    // 首页并发高(20+ 请求), 首拉易排队超时 → 失败/空结果保留上次数据并自动重试
-    const load = async () => {
-      try {
-        const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
-        if (alive && res?.items?.length) setResp(res)
-        else if (alive) setResp((prev) => (prev && prev.items.length > 0 && prev.trade_date ? prev : { trade_date: null, count: 0, items: [] }))
-      } catch {
-        if (alive) setResp((prev) => prev ?? { trade_date: null, count: 0, items: [] })
-      }
-    }
-    void load()
-    const retry = window.setTimeout(() => void load(), 8000)
-    const timer = window.setInterval(() => void load(), 60000)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearTimeout(retry)
-      window.clearInterval(timer)
+      aliveRef.current = false
+    }
+  }, [])
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchAPI<ScanResp>(`/resonance/scan?only=${only}&limit=30`, { cacheMode: 'reload' })
+      if (!aliveRef.current) return
+      if (res?.items?.length) setResp(res)
+      else setResp((prev) => (prev && prev.items.length > 0 && prev.trade_date ? prev : { trade_date: null, count: 0, items: [] }))
+    } catch {
+      if (aliveRef.current) setResp((prev) => prev ?? { trade_date: null, count: 0, items: [] })
     }
   }, [only])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, 60000, { deps: [only] })
+  // 首页并发高(20+ 请求), 首拉易排队超时 → 8s 后一次性兜底重试(非周期轮询, 不进闸门)。
+  useEffect(() => {
+    const retry = window.setTimeout(() => void load(), 8000)
+    return () => window.clearTimeout(retry)
+  }, [load])
 
   const items = resp?.items ?? []
   const visible = expanded ? items : items.slice(0, PREVIEW_N)

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
@@ -138,14 +139,15 @@ export default function MainFlowCompareCard({ symbol }: { symbol: string }) {
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), 60000) // 60s 刷新
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次(60s 刷新)。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, 60000, { deps: [load] })
 
   if (loading && !data) {
     return <div className="h-[96px] rounded-xl border border-border/50 bg-card animate-pulse bg-accent/20" />

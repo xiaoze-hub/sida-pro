@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { datasourcesApi, type VendorTrustItem } from '@panwatch/api'
+import { usePausedInterval } from '@panwatch/base-ui'
 
 /**
  * vendor 质量分订阅 (C1, 2026-09-10): 默认 60s 轮询 /datasources/trust。
@@ -22,30 +23,31 @@ export function useVendorTrust(pollMs: number = POLL_MS): VendorTrustState {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
+  // 卸载后不 setState(原 effect 的 `alive` 闭包改为 ref, 以配合 hook 化的轮询体)。
+  const aliveRef = useRef(true)
   useEffect(() => {
-    let alive = true
-
-    const load = async () => {
-      try {
-        const d = await datasourcesApi.trust<{ items?: VendorTrustItem[] }>()
-        if (!alive) return
-        setItems(Array.isArray(d?.items) ? d.items : [])
-        setError(false)
-      } catch {
-        // 失败不覆盖快照(旧读数带"刷新失败"标注仍比空白有信息), 但绝不静默
-        if (alive) setError(true)
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-
-    void load()
-    const timer = window.setInterval(load, pollMs)
+    aliveRef.current = true
     return () => {
-      alive = false
-      window.clearInterval(timer)
+      aliveRef.current = false
     }
-  }, [pollMs])
+  }, [])
+
+  const load = useCallback(async () => {
+    try {
+      const d = await datasourcesApi.trust<{ items?: VendorTrustItem[] }>()
+      if (!aliveRef.current) return
+      setItems(Array.isArray(d?.items) ? d.items : [])
+      setError(false)
+    } catch {
+      // 失败不覆盖快照(旧读数带"刷新失败"标注仍比空白有信息), 但绝不静默
+      if (aliveRef.current) setError(true)
+    } finally {
+      if (aliveRef.current) setLoading(false)
+    }
+  }, [])
+
+  // 页签 keep-alive(2026-10-15): 轮询走 `usePausedInterval` —— 隐藏页签停表, 回前台补一次。
+  usePausedInterval(load, pollMs, { deps: [pollMs] })
 
   return { items, loading, error }
 }

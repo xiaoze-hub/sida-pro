@@ -49,7 +49,6 @@ const [klineSummaries, setKlineSummaries] = useState<Record<string, KlineSummary
 const [autoRefresh, setAutoRefresh] = useLocalStorage('panwatch_stocks_autoRefresh', false)
 const [refreshInterval, setRefreshInterval] = useLocalStorage('panwatch_stocks_refreshInterval', 30)
 const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null)
-const refreshTimerRef = useRef<ReturnType<typeof setInterval>>()
 
 // Alerts / Scanning
 const [scanning, setScanning] = useState(false)
@@ -189,7 +188,6 @@ const positionDragSnapshotRef = useRef<PortfolioSummary | null>(null)
     setRefreshInterval,
     lastRefreshTime,
     setLastRefreshTime,
-    refreshTimerRef,
     scanning,
     setScanning,
     viewTab,

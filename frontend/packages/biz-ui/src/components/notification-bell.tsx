@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { useNavigate } from 'react-router-dom'
 import { Bell, CheckCheck, Trash2, CheckCircle2, AlertCircle, Info, AlertTriangle, ListChecks } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
@@ -88,11 +89,8 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
   }, [])
 
   // 未读数轮询（20s）。后台任务通常 1-5 分钟，20s 足够及时又不吵。
-  useEffect(() => {
-    void loadCount()
-    const t = window.setInterval(() => void loadCount(), 20000)
-    return () => window.clearInterval(t)
-  }, [loadCount])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(loadCount, 20000, { deps: [loadCount] })
 
   useEffect(() => {
     if (open) void loadList()

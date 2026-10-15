@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import {
   insightApi,
   stocksApi,
@@ -668,17 +669,21 @@ useEffect(() => {
   loadReports().catch(() => setReports([]))
 }, [props.open, symbol, enabledKeys, loadReports])
 
-useEffect(() => {
-  if (!props.open || !symbol || !autoRefreshEnabled) return
-  // Task 10 门控: 一个键都没启用时, 20s 自动刷新整体不启动(缺省全开 = 旧行为不变)。
-  if (!hasAnyResourceEnabled(enabledKeys)) return
-  const sec = Number(autoRefreshSec) > 0 ? Number(autoRefreshSec) : 20
-  const ms = Math.max(10, sec) * 1000
-  const timer = setInterval(() => {
+// 页签 keep-alive(2026-10-15): 自动刷新走 `usePausedInterval` —— 隐藏页签**停表**(不发请求),
+// 回前台补一次; 门控(面板未开/没启用任一资源键)时 `delayMs<=0` 停用, 原行为不变。
+const autoRefreshGated =
+  props.open && !!symbol && autoRefreshEnabled && hasAnyResourceEnabled(enabledKeys)
+const autoRefreshMs = Math.max(10, Number(autoRefreshSec) > 0 ? Number(autoRefreshSec) : 20) * 1000
+usePausedInterval(
+  () => {
     refreshForAuto().catch(() => undefined)
-  }, ms)
-  return () => clearInterval(timer)
-}, [props.open, symbol, autoRefreshEnabled, autoRefreshSec, enabledKeys, refreshForAuto])
+  },
+  autoRefreshGated ? autoRefreshMs : 0,
+  {
+    immediate: false,
+    deps: [props.open, symbol, autoRefreshEnabled, autoRefreshSec, enabledKeys],
+  },
+)
 
 const miniKlineExtrema = useMemo(() => {
   if (!miniKlines.length) return null

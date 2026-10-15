@@ -3,6 +3,7 @@ import { fetchAPI } from '@panwatch/api'
 import { RefreshCw } from 'lucide-react'
 import MarketMoodChart from '@/components/MarketMoodChart'
 import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
 import ThemeMoodStatus, { parseBoardPhase, type BoardPhase } from '@/components/ThemeMoodStatus'
@@ -255,11 +256,8 @@ export default function ThemeMoodPage() {
   }, [loadBoard, loadLadder])
 
   // 连板梯队(v0.5.87): 挂载拉一次 + 60s 轮询; live_day/stale/note_closing 由 /ladder 带出。
-  useEffect(() => {
-    void loadLadder()
-    const timer = window.setInterval(() => void loadLadder(), LADDER_POLL_MS)
-    return () => window.clearInterval(timer)
-  }, [loadLadder, reloadKey])
+  // 页签 keep-alive(2026-10-15): 走 `usePausedInterval` —— 隐藏页签**停表**(不发请求), 回前台补一次。
+  usePausedInterval(() => void loadLadder(), LADDER_POLL_MS, { deps: [loadLadder, reloadKey] })
 
   // 题材 board 实时轮询(2026-10-08): phase=live 每 60s; final 停止; 页面隐藏暂停(回前台立即补一次)。
   // 非 live/未定型沿用 120s 兜底节奏; 切窗口/手动刷新(含 ScanJobButton 的 reloadKey)会重挂本 effect。

@@ -7,6 +7,7 @@ import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@panwatch/base-ui/components/ui/select'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { safeFixed, safeNum } from '@/lib/format'
 import ForecastConeChart from '@/components/ForecastConeChart'
 import { AiRefereePanel, RefereeStatsCard, type AiRefereeInfo, type RefereeStats } from '@/components/AiRefereePanel'
@@ -377,18 +378,9 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
       .catch(() => setEngineStatus('down'))
   }
 
-  useEffect(() => {
-    // 每 30 秒轮询引擎状态(引擎可能在页面打开后启动)
-    let cancelled = false
-    const timer = setInterval(() => {
-      if (!cancelled) checkEngine()
-    }, 30000)
-    checkEngine()
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [])
+  // 引擎状态轮询(引擎可能在页面打开后启动): 挂载补一次 + 每 30s 一次。
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(checkEngine, 30000)
 
   const refreshEngine = () => checkEngine()
 

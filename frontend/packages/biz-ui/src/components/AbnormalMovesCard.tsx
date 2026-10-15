@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { AlertTriangle, RefreshCw, ShieldAlert, Zap } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 
@@ -295,14 +296,15 @@ export default function AbnormalMovesCard({
 
   useEffect(() => {
     mountedRef.current = true
-    setLoading(true)
-    void load()
-    const timer = window.setInterval(() => void load(), intervalMs)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load, intervalMs])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
+    setLoading(true)
+    void load()
+  }, intervalMs, { deps: [load, intervalMs] })
 
   // 加载占位
   if (loading && !data) {

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { AlertTriangle, RefreshCw, Zap } from 'lucide-react'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { hslaVar, readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
@@ -268,29 +269,33 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
     onOpenRef.current = onOpenBoard
   }, [onOpenBoard])
 
+  const aliveRef = useRef(true)
+  const seqRef = useRef(0)
   useEffect(() => {
-    let alive = true
-    const load = async () => {
-      try {
-        const res = await fetchAPI<HeatmapResp>(`/boards/heatmap?type=${btype}`)
-        if (!alive) return
-        setData(res)
-        setError(null)
-      } catch (e) {
-        if (!alive) return
-        setError(e)
-      } finally {
-        if (alive) setLoading(false)
-      }
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
     }
+  }, [])
+  const load = useCallback(async () => {
+    const seq = ++seqRef.current
+    try {
+      const res = await fetchAPI<HeatmapResp>(`/boards/heatmap?type=${btype}`)
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setData(res)
+      setError(null)
+    } catch (e) {
+      if (!aliveRef.current || seq !== seqRef.current) return
+      setError(e)
+    } finally {
+      if (aliveRef.current && seq === seqRef.current) setLoading(false)
+    }
+  }, [btype])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => {
     setLoading(true)
     void load()
-    const t = window.setInterval(() => void load(), POLL_MS)
-    return () => {
-      alive = false
-      window.clearInterval(t)
-    }
-  }, [btype, reloadKey])
+  }, POLL_MS, { deps: [btype, reloadKey] })
 
   const fresh = data !== null && data.type === btype
   const items = fresh && data ? data.items : NO_ITEMS

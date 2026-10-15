@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePausedInterval } from '@panwatch/base-ui'
 import { useECharts } from '@panwatch/biz-ui/hooks/useECharts'
 import { readStockColors } from '@panwatch/biz-ui/lib/stock-colors'
 import { fetchAPI } from '@panwatch/api'
@@ -84,13 +85,12 @@ export default function BreadthDistributionChart() {
 
   useEffect(() => {
     mountedRef.current = true
-    void load()
-    const timer = window.setInterval(() => void load(), REFRESH_MS)
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
     }
-  }, [load])
+  }, [])
+  // 页签 keep-alive(2026-10-15): 隐藏页签停表, 回前台补一次。
+  usePausedInterval(() => void load(), REFRESH_MS, { deps: [load] })
 
   // 后补数: pending 期间以 BACKFILL_MS 间隔回补, 算完即停(最多 BACKFILL_MAX_TRIES 次)
   useEffect(() => {
