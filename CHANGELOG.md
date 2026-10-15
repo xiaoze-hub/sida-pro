@@ -1,3 +1,40 @@
+## feat-威科夫量价结构K线图层(P1 第三层: 放量滞涨/弹簧试探/缩量沉淀/放量突破)（2026-10-16）
+
+**背景**: A股本土三层滤网落地P1 —— 只做第三层(威科夫量价结构)K线图层标注,
+设计见 `docs/本土三层滤网_设计_20261016.md`。刻意不碰: summary 三层缓存 schema、
+L4 events kind 白名单契约(新开独立 `wyckoff` 通道, 不混流)。口径红线:
+本层只描述日K量价结构, 文案禁用"主力/建仓/出货", 不做主力意图判定(唯一走
+`get_main_intent`逐笔)。
+
+**改动(分支 `feat/wyckoff-filter-20261016`)**
+- **`src/core/wyckoff.py`(新, 纯函数)**: `analyze_wyckoff(bars, lookback=60)` →
+  `{markers, verdict}`; 四信号严格阈值(放量≥1.8×/突破≥1.5×/缩量≤0.6×均量,
+  弹簧需收回+从最低回收≥1%防碎步刷屏); 脏bar/不足25根→空+unknown(不硬凑);
+  marker 线型对齐 PatternMark(+稳定 `code` 键), direction 只是记号配色;
+  verdict 常带 note 免责。
+- **`src/web/api/klines.py`**: `GET /klines/{symbol}/wyckoff`, 与 `/patterns`
+  同源同口径(PG→collector→剔桩补今日)+同夹取[30,250], 返回
+  `{markers, verdict}`; openapi 已验证挂载 `/api/klines/{symbol}/wyckoff`。
+- **`frontend/packages/biz-ui/src/components/KlineChart.tsx`**: 新增 `wyckoff`
+  prop + `layersVisible.wyckoff` 独立开关 + 错峰自取 + 复用 patterns 管线
+  (清洗/记号/悬停合并) + marker effect 依赖; 无新数字格式化(R6 门禁干净)。
+- **附带发现(本次不修, 记设计文档P2)**: `/patterns` 下发 `direction: 看涨/看跌`,
+  而前端 `normalizePatterns` 只认 `bullish/bearish/neutral` → 自取形态疑似被整层
+  过滤; wyckoff 端点直接下发 EN 方向规避。
+
+**测试(+24 例)**
+- `tests/test_wyckoff.py`(16): 四信号正/反例 + 脏bar/桩线/不足根/lookback +
+  600111真实20根回放(10-15弹簧试探待确认+stage=C, 10-13强阳线不出滞涨标) +
+  全输出方向性词禁令 + verdict 免责必备。
+- `tests/test_wyckoff_api.py`(4): 端点契约/PG→collector回落/夹取/诚实空。
+- `frontend/tests/components/kline-wyckoff-lib.test.ts`(4) +
+  `kline-pattern-contract.test.ts`(+4 wyckoff契约, 1处悬停合并断言同步更新):
+  复用管线行为 + 配色语义 + 无建议词 + 源码侧契约。
+
+**验证**: 新后端20例 + patterns回归6例全绿; `tsc -b` 干净;
+`node scripts/check_ui_rules.mjs` OK; vitest 相关3文件24/24;
+`check_is_pg/lock/migrations/scoped_queries` + w41 全绿; 全量后端套件已交后台跑。
+
 ## feat-页签隐藏成本闸门补全(usePausedInterval: 裸 setInterval 全部接闸)（2026-10-15）
 
 **背景(承接上一版页签真 keep-alive)**: 上一版把闸门装在**共享数据层**(`usePolling` / `useApiQuery` /

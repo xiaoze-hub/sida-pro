@@ -337,6 +337,12 @@ export default function KlineChart(props: {
    */
   patterns?: PatternMark[]
   /**
+   * 威科夫量价结构标注(本土三层滤网 P1): 放量滞涨/弹簧试探/缩量沉淀/放量突破(证据, 非建议)。
+   * 父不传且 `layersVisible.wyckoff !== false` 时, 组件自取 `GET /klines/{symbol}/wyckoff`。
+   * 与 patterns 同线型(PatternMark), 复用同一套清洗/记号/悬停管线, 独立开关。
+   */
+  wyckoff?: PatternMark[]
+  /**
    * 趋势操盘线(2026-10-10): 红/黄/绿三线 + 买卖点(证据非建议)。
    * 父不传且 `layersVisible.trendLine !== false` 时, 组件自取 `GET /indicators/trend-line/{symbol}`。
    */
@@ -381,7 +387,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -808,7 +814,8 @@ export default function KlineChart(props: {
             })
         : []
       // K线形态标注(2026-10-10): 该根 K 线命中的形态读数(证据描述, 无买卖建议)
-      const hitPatterns = patternHoverLabels(patternsRef.current, hitDate)
+      // 威科夫结构标注(P1)合并进同一悬停读数(同 PatternMark 线型, 名称即中文展示名)
+      const hitPatterns = patternHoverLabels([...patternsRef.current, ...wyckoffRef.current], hitDate)
       // 图表说明(2026-10-14): 该根命中标记的「为什么」(触发/时点/失效) —— 与后端 chart-notes 同源
       const hitNotes = hitDate ? notesForDate(chartNotesRef.current, hitDate) : []
       const hitWhy = hitNotes.map(markerWhy)
@@ -1019,6 +1026,40 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, ownPatterns, showPatternLayer])
 
+  // ── 威科夫量价结构标注自取(本土三层滤网 P1) ─────────────────────────
+  // 数据源: GET /klines/{symbol}/wyckoff(与主图 /klines/{symbol} 同源同口径, 标注与 K 线对齐)。
+  // 与 patterns 同策略: 父传了 props.wyckoff 就不取; 取不到 = 本次不画(空数组, 不编造)。
+  // 受 `layersVisible.wyckoff` 门控(整层关 → 不发请求, 也不画)。记号配色只是图上区分,
+  // 不是方向结论(后端 verdict 常带 note 免责, 图上不渲染买卖建议)。
+  const ownWyckoff = props.wyckoff === undefined
+  const showWyckoffLayer = props.layersVisible?.wyckoff !== false
+  const [wyckoffMarks, setWyckoffMarks] = useState<PatternMark[] | null>(null)
+  useEffect(() => {
+    if (!ownWyckoff || !showWyckoffLayer || !props.symbol) {
+      setWyckoffMarks(null)
+      return
+    }
+    let cancelled = false
+    // 错峰(与 patterns 同因): 量价结构标注不抢主图 /klines/{symbol} 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      fetchAPI<{ markers?: unknown }>(
+        `/klines/${encodeURIComponent(props.symbol)}/wyckoff?market=${encodeURIComponent(props.market)}`,
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+        .then((res) => {
+          if (!cancelled) setWyckoffMarks(normalizePatterns(res?.markers))
+        })
+        .catch(() => {
+          // 显式降级: 取不到 = 本次不画结构标注(不编造), 也不报错
+          if (!cancelled) setWyckoffMarks([])
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownWyckoff, showWyckoffLayer])
+
   // ── 图表说明自取(2026-10-14 看图决策产品件): 逐标记「为什么在那」 ─────────────
   // 数据源: GET /klines/{symbol}/chart-notes(后端与图层标记**单一事实源**)。
   // 与其它图层同策略: 父传了 props.chartNotes 就不取; 取不到 = 本次不展示说明(空, 不编造)。
@@ -1151,6 +1192,8 @@ export default function KlineChart(props: {
   const effPriceLines = props.supportPressure ?? layer?.priceLines ?? EMPTY_LINES
   const effActivitySeries = props.activitySeries ?? layer?.activitySeries ?? EMPTY_ACTIVITY
   const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
+  // 威科夫量价结构(本土三层滤网 P1): 父传优先 → 自取 → 稳定空数组(与 patterns 同策略)
+  const effWyckoff = props.wyckoff ?? wyckoffMarks ?? EMPTY_PATTERNS
   // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
   const effTrendLine = props.trendLine ?? trendLineData
   const effNiuxiong = props.niuxiong ?? niuxiongData
@@ -1168,6 +1211,8 @@ export default function KlineChart(props: {
   eventsRef.current = effEvents
   const patternsRef = useRef<PatternMark[]>(effPatterns)
   patternsRef.current = effPatterns
+  const wyckoffRef = useRef<PatternMark[]>(effWyckoff)
+  wyckoffRef.current = effWyckoff
   const chartNotesRef = useRef<ChartNote[]>(effChartNotes)
   chartNotesRef.current = effChartNotes
   // §10.2④ 统计也要价位线(区间内出现的支撑/压力), 同样用 ref 供注册一次的回调读取
@@ -1293,6 +1338,19 @@ export default function KlineChart(props: {
       const pc = readStockColors()
       markers.push(
         ...(buildPatternMarkers(effPatterns, (d) => toChartTime(d, interval), {
+          up: pc.up,
+          down: pc.down,
+          neutral: readChartTheme().neutral,
+        }) as never[]),
+      )
+    }
+    // 威科夫量价结构标注(本土三层滤网 P1): 严格规则结构 → 记号(与形态同配色语义,
+    // 看涨红/下方·看跌绿/上方·中性灰/下方, 证据非建议; 受 wyckoff 图层开关, 独立序列
+    // 避免与形态记号 '/' 混连, 同根同向重合时两记号叠放——结构名不同, 悬停可区分)。
+    if (props.layersVisible?.wyckoff !== false) {
+      const pc = readStockColors()
+      markers.push(
+        ...(buildPatternMarkers(effWyckoff, (d) => toChartTime(d, interval), {
           up: pc.up,
           down: pc.down,
           neutral: readChartTheme().neutral,
@@ -1485,7 +1543,7 @@ export default function KlineChart(props: {
         }
       }
     }
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。

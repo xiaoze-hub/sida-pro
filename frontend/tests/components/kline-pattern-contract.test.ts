@@ -35,7 +35,7 @@ describe('KlineChart K线形态图层契约', () => {
   })
 
   it('悬停读数带出形态(证据描述)', () => {
-    expect(KC).toMatch(/patternHoverLabels\(patternsRef\.current, hitDate\)/)
+    expect(KC).toMatch(/patternHoverLabels\(\[\.\.\.patternsRef\.current, \.\.\.wyckoffRef\.current\], hitDate\)/)
     expect(KC).toMatch(/形态 \{hoverReadout\.patterns\.join/)
   })
 
@@ -48,5 +48,27 @@ describe('KlineChart K线形态图层契约', () => {
     expect(KC).toMatch(/setPatternMarks\(normalizePatterns\(res\?\.patterns\)\)/)
     expect(KC).toMatch(/setPatternMarks\(\[\]\)/)
     expect(KC).toMatch(/timeoutMs: SUMMARY_TIMEOUT_MS/)
+  })
+})
+
+describe('KlineChart 威科夫量价结构图层契约(本土三层滤网 P1)', () => {
+  it('自取 /klines/{symbol}/wyckoff(与主图同源同口径, 走 encodeURIComponent)', () => {
+    expect(KC).toMatch(/\/klines\/\$\{encodeURIComponent\(props\.symbol\)\}\/wyckoff\?market=/)
+  })
+
+  it('受 layersVisible.wyckoff 门控(整层关既不取也不画, 与 pattern 独立)', () => {
+    expect(KC).toMatch(/props\.layersVisible\?\.wyckoff !== false/)
+    expect(KC).toMatch(/const ownWyckoff = props\.wyckoff === undefined/)
+    expect(KC).toMatch(/props\.wyckoff \?\? wyckoffMarks \?\? EMPTY_PATTERNS/)
+  })
+
+  it('复用 patterns 管线(清洗/记号/悬停), 失败显式降级为空(不编造)', () => {
+    expect(KC).toMatch(/setWyckoffMarks\(normalizePatterns\(res\?\.markers\)\)/)
+    expect(KC).toMatch(/setWyckoffMarks\(\[\]\)/)
+    expect(KC).toMatch(/buildPatternMarkers\(effWyckoff/)
+  })
+
+  it('记号文案无买卖建议(证据描述, 口径红线)', () => {
+    expect(KC).not.toMatch(/建议买入|建议卖出|主力建仓|主力出货/)
   })
 })
