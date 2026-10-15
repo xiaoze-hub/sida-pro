@@ -5430,6 +5430,29 @@ def _m197_decision_log_outcome_state(conn: Connection) -> None:
     )
 
 
+def _m198_decision_log_t_n_span(conn: Connection) -> None:
+    """决策账本补 `t_n_span` 列(2026-10-15 停牌跨期口径标注): T+n 取值日的交易日跨度。
+
+    为什么需要(**生产实证**): 决策账本的 T+n 取的是「信号日起**第 n 根可用 K 线**」——
+    遇长期停牌会把这**一个月后**的收盘当 T+1。实证 symbol=300082 信号日 20260918,
+    下一根可用 K 线是 2026-10-13(相隔 11 个交易日), `ret_t1=-0.0886` 实为一月后跌幅,
+    混进胜率会误导。用户裁决: **不重算存量数值, 只标注 + 排除统计**。
+
+    列语义(可空, 不设默认值 → 存量行为 NULL):
+      - `t_n_span` = 信号日 → T+1 取值日(信号日之后**第一根可用 K 线**)相隔的交易日数
+        (走 `src.core.trading_calendar` 交易日历, **含停牌**, `1 = 次一个交易日`);
+      - 正常票 T+1 取值日即次一交易日 → span=1; 长期停牌 → span 远大于 1;
+      - `t_n_span > 5` → 该行 `outcome_state='suspended_gap'`(覆盖原状态), note 注明跨度,
+        **收益列保持原值(绝不改写已填数值)**; 胜率/分桶统计据此排除该行并显式标注条数。
+
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时加列; 幂等(`_add_column_if_missing`)。
+    """
+    _add_column_if_missing(
+        conn, "decision_log", "t_n_span",
+        "ALTER TABLE decision_log ADD COLUMN t_n_span INTEGER",
+    )
+
+
 def _m185_dde_minute_flow_table(conn: Connection) -> None:
     """盘中 DDE 大单逐 N 分钟采样序列表 dde_minute_flow(P3 补差 A, 2026-10-10)。
 
@@ -5713,6 +5736,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     # K 线(休市/停牌)所以永远算不出 T+n"的行**显式标注**, 不再与"还没到 T+n"混为一谈,
     # 也不再每次占满回填候选窗口(生产: 20260925 中秋休市落 597 行, 挡在 waiters 最前)。
     Migration(197, "decision_log_outcome_state", _m197_decision_log_outcome_state),
+    # 决策账本停牌跨期口径标注(2026-10-15): `t_n_span` —— T+n 取「第 n 根可用 K 线」,
+    # 长期停牌会把一个月后的收盘当 T+1(symbol=300082 信号日 20260918 下一根是 2026-10-13)。
+    # 加跨度列后 span>5 的行标 `suspended_gap`, 胜率/分桶统计排除并显式标注条数;
+    # **不改 T+n 判定本体、不重算存量数值**(用户裁决: 只标注 + 排除统计)。
+    Migration(198, "decision_log_t_n_span", _m198_decision_log_t_n_span),
 )
 
 
