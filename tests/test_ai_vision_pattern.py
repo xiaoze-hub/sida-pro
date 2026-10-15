@@ -362,7 +362,7 @@ def test_api_shadow_no_data(monkeypatch):
     assert body["available"] is False and body["note"]
 
 
-# ─────────────── scene='vision' 默认绑定 agens-3.0-flash(2026-10-15) ───────────────
+# ─────────────── scene='vision' 默认绑定 agnes-3.0-flash(2026-10-15) ───────────────
 
 
 def _mem_db():
@@ -398,31 +398,31 @@ def _seed_service(db, name="Agnes", base_url="https://api.agnes-ai.cn/v1", key="
 
 
 def test_scene_default_model_name_constant():
-    """vision 场景默认模型名 = agens-3.0-flash(ai_client 与本题分析层同源)。"""
+    """vision 场景默认模型名 = agnes-3.0-flash(ai_client 与本题分析层同源)。"""
     from src.core.ai_client import SCENE_DEFAULT_MODEL_NAMES
 
-    assert SCENE_DEFAULT_MODEL_NAMES["vision"] == "agens-3.0-flash"
-    assert V.DEFAULT_VISION_MODEL == "agens-3.0-flash"
+    assert SCENE_DEFAULT_MODEL_NAMES["vision"] == "agnes-3.0-flash"
+    assert V.DEFAULT_VISION_MODEL == "agnes-3.0-flash"
 
 
 def test_resolve_global_model_prefers_scene_default_name():
-    """未显式绑定时, vision 场景按名回落 agens-3.0-flash(优先于全局默认模型)。"""
+    """未显式绑定时, vision 场景按名回落 agnes-3.0-flash(优先于全局默认模型)。"""
     from src.core.ai_client import _resolve_global_model
     from src.db.models import AIModel
 
     db = _mem_db()
     svc = _seed_service(db)
     db.add(AIModel(name="deepseek", service_id=svc.id, model="deepseek-chat", is_default=True))
-    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    db.add(AIModel(name="agnes-3.0-flash", service_id=svc.id, model="agnes-3.0-flash"))
     db.commit()
 
-    assert _resolve_global_model(db, "vision").model == "agens-3.0-flash"
+    assert _resolve_global_model(db, "vision").model == "agnes-3.0-flash"
     # 其他场景不受影响: 仍取全局默认模型
     assert _resolve_global_model(db, "chat").model == "deepseek-chat"
 
 
 def test_resolve_global_model_falls_back_when_scene_default_absent():
-    """模型池没有 agens-3.0-flash → vision 仍回落全局默认模型(不报错)。"""
+    """模型池没有 agnes-3.0-flash → vision 仍回落全局默认模型(不报错)。"""
     from src.core.ai_client import _resolve_global_model
     from src.db.models import AIModel
 
@@ -435,16 +435,16 @@ def test_resolve_global_model_falls_back_when_scene_default_absent():
 
 
 def test_resolve_vision_model_default_binds_agens():
-    """未显式绑定 → 解析到 agens-3.0-flash(存量 capabilities 未标注也信任默认名)。"""
+    """未显式绑定 → 解析到 agnes-3.0-flash(存量 capabilities 未标注也信任默认名)。"""
     from src.db.models import AIModel
 
     db = _mem_db()
     svc = _seed_service(db)
-    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash", capabilities=""))
+    db.add(AIModel(name="agnes-3.0-flash", service_id=svc.id, model="agnes-3.0-flash", capabilities=""))
     db.commit()
 
     assert V.resolve_vision_model(db) == (
-        "https://api.agnes-ai.cn/v1", "sk-vision", "agens-3.0-flash",
+        "https://api.agnes-ai.cn/v1", "sk-vision", "agnes-3.0-flash",
     )
 
 
@@ -467,7 +467,7 @@ def test_resolve_vision_model_explicit_binding_wins_over_default():
 
     db = _mem_db()
     svc = _seed_service(db, name="S", base_url="http://s")
-    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    db.add(AIModel(name="agnes-3.0-flash", service_id=svc.id, model="agnes-3.0-flash"))
     vl = AIModel(name="qwen-vl", service_id=svc.id, model="qwen-vl", capabilities="chat,vision")
     db.add(vl)
     db.commit()
@@ -550,14 +550,14 @@ def test_scene_bindings_expose_default_and_effective_model_name():
 
     db = _mem_db()
     svc = _seed_service(db)
-    db.add(AIModel(name="agens-3.0-flash", service_id=svc.id, model="agens-3.0-flash"))
+    db.add(AIModel(name="agnes-3.0-flash", service_id=svc.id, model="agnes-3.0-flash"))
     db.commit()
     client = _providers_client(db)
 
     body = client.get("/api/providers/scene-bindings").json()
     vis = next(b for b in body if b["scene"] == "vision")
-    assert vis["default_model_name"] == "agens-3.0-flash"
-    assert vis["effective_model_name"] == "agens-3.0-flash"
+    assert vis["default_model_name"] == "agnes-3.0-flash"
+    assert vis["effective_model_name"] == "agnes-3.0-flash"
     assert vis["is_bound"] is False
 
     # 改成别的模型 → 显示当前绑定状态
@@ -567,8 +567,8 @@ def test_scene_bindings_expose_default_and_effective_model_name():
     db.refresh(vl)
     r = client.put("/api/providers/scene-bindings/vision", json={"model_id": vl.id}).json()
     assert r["is_bound"] is True and r["model_name"] == "qwen-vl"
-    assert r["default_model_name"] == "agens-3.0-flash"
+    assert r["default_model_name"] == "agnes-3.0-flash"
 
-    # 解绑 → 回落默认 agens-3.0-flash
+    # 解绑 → 回落默认 agnes-3.0-flash
     r2 = client.put("/api/providers/scene-bindings/vision", json={"model_id": None}).json()
-    assert r2["is_bound"] is False and r2["effective_model_name"] == "agens-3.0-flash"
+    assert r2["is_bound"] is False and r2["effective_model_name"] == "agnes-3.0-flash"

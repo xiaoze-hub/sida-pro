@@ -525,9 +525,9 @@ class AIClient:
 # 默认模型(is_default), 而是回落到此表登记的模型名 —— 只按“模型名”绑定, 不锁
 # model_id(换服务商/重建模型行也不失效)。新增场景默认绑定在此登记。
 #   vision: AI 看图形态影子层 + 对话发图视觉代理, 默认用 sida-pro 自带的
-#           agens-3.0-flash(多模态, 见 ai_vision_pattern 能力探针)。
+#           agnes-3.0-flash(多模态, 见 ai_vision_pattern 能力探针)。
 SCENE_DEFAULT_MODEL_NAMES: dict[str, str] = {
-    "vision": "agens-3.0-flash",
+    "vision": "agnes-3.0-flash",
 }
 
 

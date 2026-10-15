@@ -514,7 +514,7 @@ async def lifespan(app):
         # 交易日 16:30 对 **自选池 ∪ 前一日有标记票**(成本可控)逐票做
         # 「K线渲染→视觉 LLM 认形态」, 与规则形态(kline_patterns)同日同票并排落
         # ai_pattern_shadow。独立入口, 只写影子表, 不改任何现有信号/决策。
-        # 视觉模型默认绑 scene='vision' → agens-3.0-flash(sida-pro 自带多模态);
+        # 视觉模型默认绑 scene='vision' → agnes-3.0-flash(sida-pro 自带多模态);
         # 无视觉模型 → 显式降级不出形态(不编造)。
         # 时段 16:30: 原 15:40 撞 TQ 采集/共振扫描高峰(15:35/15:40/15:45 已占, TQ 背后
         # 只有一个客户端进程); 16:10 已被跨源标定(indicator-calibration)占用, 故取 16:30

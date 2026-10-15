@@ -20,7 +20,7 @@ SCENES = {
     "insights": {"name": "机会评分", "desc": "投资机会评分 / 洞察"},
     "vision": {"name": "视觉代理(图片识别)",
                "desc": "图片内容理解 / AI 看图形态(需支持视觉的多模态模型; "
-                       "默认 agens-3.0-flash)"},
+                       "默认 agnes-3.0-flash)"},
 }
 
 
@@ -32,7 +32,7 @@ class SceneBindingResponse(BaseModel):
     model_name: str | None = None
     service_id: int | None = None
     is_bound: bool = False
-    # 未显式绑定时的默认模型名(如 vision → agens-3.0-flash); 无默认 → None
+    # 未显式绑定时的默认模型名(如 vision → agnes-3.0-flash); 无默认 → None
     default_model_name: str | None = None
     # 无默认模型时回落"全局默认模型"的说明(供前端显示当前生效模型)
     effective_model_name: str | None = None

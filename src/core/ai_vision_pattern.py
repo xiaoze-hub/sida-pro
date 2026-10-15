@@ -21,7 +21,7 @@
 
 视觉模型默认绑定(2026-10-15 用户裁决)
 --------------------------------------
-`scene='vision'` 默认绑定 sida-pro 自带的 **`agens-3.0-flash`**(多模态)。绑定在
+`scene='vision'` 默认绑定 sida-pro 自带的 **`agnes-3.0-flash`**(多模态)。绑定在
 `src.core.ai_client.SCENE_DEFAULT_MODEL_NAMES`(按**模型名**回落, 不锁 model_id);
 设置页「场景分配」可改成模型池里的任意模型。未显式绑定且模型池无该默认模型 →
 `resolve_vision_model` 返回 None → 显式降级(语义不变)。
@@ -61,7 +61,7 @@ _TABLE = "ai_pattern_shadow"
 _SCENE = "vision"
 #: 该场景默认模型名(与 src.core.ai_client.SCENE_DEFAULT_MODEL_NAMES['vision'] 同源)。
 #: 未显式绑定时, 解析到模型池里此名的模型即视为视觉模型(能力由探针实测, 见模块头)。
-DEFAULT_VISION_MODEL = "agens-3.0-flash"
+DEFAULT_VISION_MODEL = "agnes-3.0-flash"
 
 #: 默认窗口: 取最近多少根 K 线渲染/识别
 DEFAULT_WINDOW = 60

@@ -1,4 +1,8 @@
-### feat-AI看图形态绑定 agens-3.0-flash(vision 场景默认 + 设置页可改 + 成本可控圈定 + 16:30 调度)（2026-10-15）
+#### fix-vision模型名拼写agnes-3.0-flash(2026-10-15)
+
+- 用户截图点破: 模型真名 `agnes-3.0-flash`(agnes-ai.cn 同缀), 先前误绑 `agens-3.0-flash` 503 无可用渠道即错名打不着路由: 全部引用改真名, 真名实测 200 读图正确(答"红色"); 图片能力确认支持。
+
+## feat-AI看图形态绑定 agens-3.0-flash(vision 场景默认 + 设置页可改 + 成本可控圈定 + 16:30 调度)（2026-10-15）
 
 **背景**: AI 看图形态影子层(`src/core/ai_vision_pattern.py` + 迁移 195 `ai_pattern_shadow`, 只写影子表,
 不动现有信号/决策)已上线但 `scene='vision'` 未绑模型 → `_resolve_global_model` 回落到全局默认(非视觉)
