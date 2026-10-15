@@ -76,6 +76,9 @@ import CommandPalette from '@/components/CommandPalette'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@panwatch/base-ui/components/ui/dialog'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import AppErrorBoundary from '@/components/ErrorBoundary'
+// 页签式工作台(Tab Shell, 2026-10-15): 内容区顶部页签栏 —— 每个功能页一个页签,
+// 独立 ✕ 只关那一个功能页(首页常驻), localStorage 持久化。壳在页面**外层**, 页面内部零改动。
+import WorkspaceTabShell from '@/components/WorkspaceTabShell'
 import CaliberComparePage from '@/pages/CaliberCompare'
 import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
@@ -631,6 +634,9 @@ function App() {
 
       {/* Content */}
       <main data-shell-main className={`px-4 md:px-6 py-4 md:py-6 w-full ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'}`}>
+        {/* 页签式工作台(Tab Shell, 2026-10-15): 内容区**最顶部**是页签栏, 下面才是内容。
+            页签集在 Routes **外层**持有 ⇒ 关页签只关那一个功能页, 首页常驻, 永不"全关掉"。 */}
+        <WorkspaceTabShell>
         {/* C1 (2026-09-10): 顶部源心跳条 — 每源质量分色段 + 悬停 EWMA/成功率读数 */}
         <SourceHeartbeat />
         <Suspense fallback={<PageFallback />}>
@@ -705,6 +711,7 @@ function App() {
           </AppErrorBoundary>
 
         </Suspense>
+        </WorkspaceTabShell>
       </main>
       <ChatWidget />
       {/* 全局免责声明底部条(合规, 2026-09-16): 仅登录后壳层; 关闭后 localStorage 记住 */}

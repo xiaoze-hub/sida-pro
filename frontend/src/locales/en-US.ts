@@ -91,6 +91,16 @@ const enUS: Messages = {
     workbench: 'Workbench',
   },
 
+  // Workspace tabs (Tab Shell, 2026-10-15)
+  tabs: {
+    bar: 'Workspace tabs',
+    stock: 'Stock',
+    index: 'Index',
+    board: 'Board',
+    analysis: 'Analysis',
+    close: 'Close {name} tab',
+  },
+
   dashboard: {
     title: 'Dashboard',
     subtitle: 'Market overview · Portfolio workspace',
