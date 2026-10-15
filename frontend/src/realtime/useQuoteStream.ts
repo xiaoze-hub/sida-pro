@@ -14,6 +14,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { getToken } from '@panwatch/api'
 
+import { useTabActive } from '@panwatch/base-ui'
+
 import { parseFrame, reconnectUrl } from './envelope'
 
 export interface QuoteTick {
@@ -49,9 +51,12 @@ export function useQuoteStream(
   handlerRef.current = onTicks
   const lastSeqRef = useRef(0)
   const [status, setStatus] = useState<QuoteStreamStatus>('connecting')
+  // 隐藏页签不占 WS(keep-alive 成本控制: N 页签 = N 路连接)。切回前台自动重连,
+  // 带 `last_seq` ⇒ 服务端补发 ring 内漏掉的帧, 不"开天窗"。
+  const tabActive = useTabActive()
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !tabActive) {
       setStatus('offline')
       return
     }
@@ -113,7 +118,7 @@ export function useQuoteStream(
         /* noop */
       }
     }
-  }, [enabled])
+  }, [enabled, tabActive])
 
   return status
 }

@@ -1,3 +1,49 @@
+## feat-页签真 keep-alive(多页签并存不卸载 + 隐藏页签停数据流 + 上限 12 提示)（2026-10-15）
+
+**背景(用户新裁决原话)**: 「需要支持同时存在多个页签，点击哪个页签就进入里面的内容」。
+上一版页签壳只是"路由 + 页签栏"(点另一个功能页 = 前页被卸载); 用户要的是**真 keep-alive**:
+所有已开页签的页面组件**同时存在**, 点谁显谁, **状态不丢**。已知代价(上轮已向用户说明并被接受):
+N 页签 = N 路数据流 ⇒ 本版同时在**共享数据层**加了"隐藏页签停表"的闸门。
+
+**改动(分支 `feat/tab-keepalive-20261015`, 独立 worktree `/home/ubuntu/wt/tab-keepalive`)**
+- **`frontend/packages/base-ui/src/tab-activity.tsx`(新)**: 页签可见性上下文 `TabActiveProvider` / `useTabActive`
+  (零依赖底座, `frontend` 与 `packages/biz-ui` 都能 import; 默认 `true` ⇒ 壳层 chrome 与测试里的散件照常工作)。
+- **`frontend/src/components/TabPane.tsx`(新)**: 页签**常驻面板**。react-router v6 有硬不变量「`<Router>` 不能套 `<Router>`」,
+  故直接用底层上下文给每个页签造**独立软路由**: `UNSAFE_NavigationContext`(本页签自己的 navigator) +
+  `UNSAFE_LocationContext`(本页签自己的地址)。隐藏页签的 `useLocation`/`useSearchParams` 读到的是**它自己**的地址
+  (不被活动页签串味); 本页签内导航只改自己的地址, 活动页签的地址同步到地址栏; 跨页签/公开面导航
+  一律**交给外层路由**(开新页签或切到已有页签 —— 不会把别的功能页塞进当前页签)。
+  隐藏方式 `hidden` + `display:none` ⇒ **不卸载**; 同 `key`(= tabKeyOf) 复用同一实例 ⇒ 状态与实例都保住。
+- **`frontend/src/components/WorkspaceTabShell.tsx`**: 由"单份 children"改为"**每页签一面板** + 非页签路由的整页槽";
+  新增 `header` prop(壳层 chrome 只渲染一次, 不随页签复制); 上限挤掉页签时**明确提示**(不静默丢用户的页)。
+- **`frontend/src/App.tsx`**: `SourceHeartbeat` 经 `header` 传入(视觉顺序不变, 只渲染一次)。
+- **隐藏页签停数据流(共享层各接一行, 不逐页改)**:
+  `hooks/useApiQuery.ts`(react-query `refetchInterval` 只在活动页签生效, 回前台立即补一次刷新)、
+  `packages/biz-ui/src/hooks/usePolling.ts`(隐藏**不打表也不首拉**, 回前台恢复并立即拉一次)、
+  `realtime/useQuoteStream.ts`(隐藏**不开 WS**, 回前台带 `last_seq` 重连锁定补帧)。
+- **`frontend/src/locales/{zh-CN,en-US}.ts`**: 新增 `tabs.limitToast`。
+- **UI 铁律**: 页签栏样式零改动(hairline/不卡片化/暗色优先); 隐藏面板只是 `display:none`, 不引入任何视觉包装。
+
+**URL 同步取舍(自己定并说明)**:
+- 地址栏 = **活动页签**的地址。活动页签内导航 → 同步到地址栏(push) ⇒ 刷新/收藏/浏览器后退都能回到原处;
+- 隐藏页签内导航 → **不动地址栏**(它只活在自己的软路由里, 切回时原样还在);
+- 跨页签/公开面导航 → 交给外层路由(地址栏即目标, 页签栏随之开/切);
+- 刷新后: 只恢复"当前路由那个页签"的地址, 其余页签回到各自**持久化的最新地址**(localStorage `sida_workspace_tabs_v1`)。
+  代价: 隐藏页签里"未持久化的地址"(如临时 `?debug=1`)不会被刷新保留 —— 可接受(见上一版: 页签只存身份+地址)。
+
+**测试(+16 例)**: 新增 `frontend/tests/components/tab-keepalive.test.tsx`(11) —— 多面板并存/隐藏不卸、
+切走切回输入框值不丢且**挂载次数恒为 1**(实例复用)、两只股票页签状态互不串味、隐藏页签 `useTabActive()=false`、
+地址栏=活动页签地址、隐藏页签内导航不动地址栏、跨页签导航不把别的功能页塞进当前页签、上限 12 挤掉最早的非首页页签**并提示**、
+被挤掉的页签面板随之卸载、非页签路由走整页槽、持久化恢复的各页签各就各位;
+新增 `frontend/tests/components/tab-activity-gate.test.tsx`(5) —— `useTabActive` 默认 true、
+`usePolling` 隐藏停表/回前台补一次、`useApiQuery` 隐藏掐 `refetchInterval`(初次取数照常)/回前台补一次、
+`useQuoteStream` 隐藏不建 WS。
+存量 59 例语义不变(仅把"内容区是哪一页"限定到**活动面板**——隐藏面板的桩页仍在 DOM, 这是 keep-alive 的代价)。
+
+**门禁**: `pnpm build`(tsc -b + vite build)、`tsc -p tsconfig.tests.json --noEmit`、
+`node scripts/check_ui_rules.mjs`(UI-RULES OK)、`pnpm test`(149 文件 / 1133 例) —— **均通过**。
+**未 push main、未打 tag、未发版**。
+
 ### feat-页签式工作台(Tab Shell: 功能页=页签 + 独立✕ + 相邻接管 + 持久化)（2026-10-15）
 
 **背景(用户原话)**: 「还需要做功能菜单的页签，这样每次关闭页签，而不是把整个功能全关掉」。

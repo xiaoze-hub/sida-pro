@@ -6,9 +6,13 @@
  * 极简桩页面 —— 断言打的是用户看到的东西: 页签栏里有哪些页签、哪个高亮、内容区是哪一页、
  * 关掉之后是不是"只关那一个"。
  *
+ * 2026-10-15 升级真 keep-alive: 每个已开页签一个常驻面板(同时挂载, 隐藏不卸)。
+ * 所以"内容区是哪一页"要**限定在活动面板里**看(隐藏面板的桩页仍在 DOM 里, 这是 keep-alive 的代价)。
+ * 断言语义一字未改。
+ *
  * 用户原话是验收标准: 「每次关闭页签，而不是把整个功能全关掉」。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -63,7 +67,14 @@ function renderShell(initialPath: string) {
 
 const tabButtons = () => screen.getAllByTestId('workspace-tab')
 const labels = () => tabButtons().map((el) => el.textContent ?? '')
-const page = () => screen.getByTestId('page').textContent ?? ''
+/** 内容区根(**活动面板**; 无活动面板时=非功能页的整页槽)。隐藏面板仍在 DOM, 故必须限定范围。 */
+function visibleRoot(): HTMLElement {
+  const pane = screen
+    .getAllByTestId('workspace-tab-pane')
+    .find((el) => el.getAttribute('data-active') === 'true')
+  return pane ?? screen.getByTestId('workspace-ephemeral')
+}
+const page = () => within(visibleRoot()).getByTestId('page').textContent ?? ''
 function activeLabel(): string | null {
   const item = screen
     .getAllByTestId('workspace-tab-item')
