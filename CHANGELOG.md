@@ -2,6 +2,47 @@
 
 - test_universe合并去重上限 写死 ts=2026-10-14, 实现按 now(_CST) 当日过滤 ⇒ 00:00 翻日即红(v0.13.75 CI shard3 00:18 实锤, 22:09 同代码绿): 夹具改跟随当日, 24 例凌晨时段全绿。
 
+### fix-决策账本停牌跨期口径标注(t_n_span + suspended_gap + 胜率排除统计)(2026-10-15)
+
+**背景(只读排查生产)**: 账本 T+n 取「信号日起第 n 根**可用** K 线」, 遇长期停牌会把这**一个月后**
+的收盘当 T+1 —— 实证 symbol=300082 信号日 20260918, 下一根可用 K 线是 2026-10-13(跨中秋+国庆,
+相隔 **11 个交易日**), `ret_t1=-0.0886` 实为一月后跌幅, 混进胜率会误导。用户裁决: **不重算存量
+数值, 只标注 + 排除统计**。
+
+**改动**:
+- **`src/web/migrations.py`**: 新增迁移 `198` → `decision_log.t_n_span INTEGER`(可空, 不设默认,
+  存量行 NULL): 信号日 → T+1 取值日(信号日后第一根可用 K 线)相隔的**交易日数**(走交易日历, 含停牌,
+  `1=次一交易日`)。`_add_column_if_missing` 幂等; schema 唯一入口是迁移(AGENTS 铁律)。
+- **`src/core/decision_log.py`**:
+  - `backfill_outcomes()`: 回填时**同步写 `t_n_span`**; 跨度 > `SUSPENDED_GAP_MAX_SPAN`(5)→ 该行
+    `outcome_state='suspended_gap'`(**覆盖原状态**, note 注明跨度), **收益列保持原值(绝不改写已填
+    数值)**。**T+n 判定本体不动**(取值仍是第 n 根可用 K 线)。
+  - `backfill_spans()`(**新增**): 存量已填行(`t_n_span IS NULL` 且 ret_* 有值)的跨度**一次性幂等**
+    回填 —— 只补跨度/标注, 绝不改写收益/命中; K 线取不到/日历未覆盖 → 留空待下次(不猜跨度)。
+    本仓取**独立脚本** `scripts/backfill_decision_spans.py` 跑(幂等可重跑), 不新增 cron。
+  - `stats()` / `_regime_rows()`: **停牌跨期行不计入命中率分子/分母**(`n_total` 仍报全量, 让读者看得到
+    全样本); 顶层 `note` 与 `no_data.suspended_gap`(state/max_span/rows_by_kind/total)**显式标注**
+    「含 N 条停牌跨期样本已排除」(N 从库里数, 禁编造)。
+  - `query_log()`: 明细新增 `t_n_span`; **明细不删行**(审计用, 收益列原值不动), 但回 `suspended_gap_excluded`
+    条数并在 note 标注该行不计入胜率/分桶统计。
+- **`src/core/signal_quality.py`**(自选池信号质量, 同为账本胜率面): 同样排除 suspended_gap, 回
+  `suspended_gap_excluded` 并标注条数。
+- **`scripts/regime_bucket_analysis.py`**: 分桶统计**排除** suspended_gap 行, 打印
+  「含 N 条停牌跨期样本已排除」。
+- **`scripts/backfill_decision_spans.py`**(新增): 生产回填入口(见「生产回填命令」)。
+
+**降级**: 未跑 v197/v198 的老库 —— 不写跨度/标注, 照常回填; stats/query_log 与旧口径逐字一致(向后兼容)。
+
+**生产回填命令(交主模型执行, 不写生产)**:
+```
+SIDA_DB_URL="postgresql+psycopg2://<user>:<pw>@<host>:5432/sida" \
+  .venv/bin/python scripts/backfill_decision_spans.py --limit 20000
+```
+(应用启动即自动跑 v198 迁移; 幂等可重跑, 只写 t_n_span/outcome_state/outcome_note 三列。)
+
+**测试**: `tests/test_decision_suspended_gap.py`(16 例, 全离线 mock: 迁移幂等/跨度口径/回填标跨期且
+收益不动/胜率分桶排除+标注/存量幂等回填/自选池排除); 相关既有 247 例全绿。
+
 ## fix-决策账本回填覆盖缺口(信号日无K线锚点占满候选窗口 + 缺数据显式标注)（2026-10-14）
 
 **背景(只读排查生产, main v0.13.74)**: 决策胜率证据层显示 T+1 只有 1998/5294 行有回填,

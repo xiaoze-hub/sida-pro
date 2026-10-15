@@ -80,15 +80,41 @@ def main() -> int:
     since = (date.today() - timedelta(days=args.days)).isoformat()
     since_c = since.replace("-", "")
 
+    # 停牌跨期行(outcome_state='suspended_gap')排除在胜率/分桶之外(2026-10-15): 其收益列是
+    # "一个月后的跌幅"而非真 T+1, 混算会误导。列缺失(未跑 v197)→ 与旧口径逐字一致(向后兼容)。
+    from sqlalchemy import inspect as _inspect
+
+    try:
+        cols = {c["name"] for c in _inspect(eng).get_columns("decision_log")}
+    except Exception:  # noqa: BLE001 —— 表缺失/方言异常: 视为无标注列
+        cols = set()
+    has_state = "outcome_state" in cols
+    excl = "AND COALESCE(outcome_state, '') <> 'suspended_gap' " if has_state else ""
+    window = (
+        "((length(trade_date)=8 AND trade_date>=:sc) OR "
+        "(length(trade_date)=10 AND trade_date>=:s))"
+    )
+
     with eng.connect() as conn:
         dl = conn.execute(
             text(
                 "SELECT trade_date, hit_t1, hit_t3, hit_t5, COALESCE(NULLIF(regime,''),'unknown') AS reg "
-                "FROM decision_log WHERE signal_kind = :k AND "
-                "((length(trade_date)=8 AND trade_date>=:sc) OR (length(trade_date)=10 AND trade_date>=:s))"
+                "FROM decision_log WHERE signal_kind = :k " + excl + "AND " + window
             ),
             {"k": args.kind, "s": since, "sc": since_c},
         ).fetchall()
+        gap_excluded = 0
+        if has_state:
+            gap_excluded = int(
+                conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM decision_log WHERE signal_kind = :k "
+                        "AND outcome_state = 'suspended_gap' AND " + window
+                    ),
+                    {"k": args.kind, "s": since, "sc": since_c},
+                ).scalar()
+                or 0
+            )
         sent = conn.execute(
             text(
                 "SELECT trade_date, limit_up_count, limit_up_open_count, "
@@ -132,6 +158,10 @@ def main() -> int:
 
     print(f"# 决策账本分桶对比: {args.kind} (since {since})\n")
     print(f"- 样本行数: {len(rows)}；min_sample={args.min_sample}")
+    print(
+        f"- 含 {gap_excluded} 条停牌跨期样本已排除"
+        "(outcome_state='suspended_gap', T+1 取值日距信号日 > 5 个交易日, 疑长期停牌)"
+    )
     print(f"- 阈值: 封板成功率收紧线={t_tighten} 放宽线={t_loosen} 炸板比收紧线={t_blow}")
     print("\n## 混算(全部状态平均)\n")
     print("| 档 | 样本 | 命中率 |\n|---|---|---|")

@@ -25,7 +25,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from src.core.decision_log import MIN_SAMPLE, _horizon_block, _today_cst
+from src.core.decision_log import (
+    MIN_SAMPLE,
+    _SUSPENDED_GAP_EXCL,
+    _has_outcome_state_column,
+    _horizon_block,
+    _today_cst,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,30 +113,45 @@ def watchlist_signal_quality(
         "(length(trade_date) = 10 AND trade_date >= :since))"
     )
 
+    # 停牌跨期行(outcome_state='suspended_gap')不计入命中率(2026-10-15): 收益列是"一个月后的
+    # 跌幅"而非真 T+1, 混算会误导。列缺失(未跑 v197) → 与旧口径逐字一致(向后兼容)。
+    has_state = _has_outcome_state_column(engine)
+    excl = f"{_SUSPENDED_GAP_EXCL} AND " if has_state else ""
+    agg = (
+        "COUNT(*) AS n, "
+        + ", ".join(f"SUM(CASE WHEN {excl}hit_t{i} IS NOT NULL THEN 1 ELSE 0 END) AS n{i}" for i in (1, 3, 5))
+        + ", "
+        + ", ".join(f"SUM(CASE WHEN {excl}hit_t{i} = 1 THEN 1 ELSE 0 END) AS w{i}" for i in (1, 3, 5))
+    )
+
     try:
         with engine.connect() as conn:
             kind_sym = conn.execute(
                 text(
-                    "SELECT signal_kind, symbol, COUNT(*) AS n, "
-                    "COUNT(hit_t1) AS n1, COUNT(hit_t3) AS n3, COUNT(hit_t5) AS n5, "
-                    "SUM(CASE WHEN hit_t1 = 1 THEN 1 ELSE 0 END) AS w1, "
-                    "SUM(CASE WHEN hit_t3 = 1 THEN 1 ELSE 0 END) AS w3, "
-                    "SUM(CASE WHEN hit_t5 = 1 THEN 1 ELSE 0 END) AS w5 "
+                    f"SELECT signal_kind, symbol, {agg} "
                     f"FROM decision_log {where} GROUP BY signal_kind, symbol"
                 ),
                 params,
             ).fetchall()
             reg_rows = conn.execute(
                 text(
-                    "SELECT signal_kind, COALESCE(NULLIF(regime, ''), 'unknown') AS reg, "
-                    "COUNT(*) AS n, COUNT(hit_t1) AS n1, COUNT(hit_t3) AS n3, COUNT(hit_t5) AS n5, "
-                    "SUM(CASE WHEN hit_t1 = 1 THEN 1 ELSE 0 END) AS w1, "
-                    "SUM(CASE WHEN hit_t3 = 1 THEN 1 ELSE 0 END) AS w3, "
-                    "SUM(CASE WHEN hit_t5 = 1 THEN 1 ELSE 0 END) AS w5 "
+                    f"SELECT signal_kind, COALESCE(NULLIF(regime, ''), 'unknown') AS reg, {agg} "
                     f"FROM decision_log {where} GROUP BY signal_kind, reg"
                 ),
                 params,
             ).fetchall()
+            gap_excluded = 0
+            if has_state:
+                gap_excluded = int(
+                    conn.execute(
+                        text(
+                            f"SELECT COUNT(*) FROM decision_log {where} "
+                            "AND outcome_state = :st"
+                        ),
+                        {**params, "st": "suspended_gap"},
+                    ).scalar()
+                    or 0
+                )
     except Exception as exc:  # noqa: BLE001 —— 账本不可用 → 显式失败(不造假)
         base["error"] = f"决策账本聚合失败: {exc}"
         base["note"] = base["error"]
@@ -191,9 +212,12 @@ def watchlist_signal_quality(
 
     base["available"] = True
     base["signals"] = out_signals
+    base["suspended_gap_excluded"] = gap_excluded
     base["note"] = (
         "纯账本聚合(零预测): 命中 = T+n 收益 > 0(平盘记未命中); 只统计已回填行, 缺失不进分母。"
         f" 样本 < {int(min_sample)} 一律显示『样本不足』, 不给数字。只陈述实测, 不构成建议。"
+        f" 含 {gap_excluded} 条停牌跨期样本已排除(outcome_state='suspended_gap', T+1 取值日距信号日"
+        " > 5 个交易日, 疑长期停牌)。"
     )
     return base
 
