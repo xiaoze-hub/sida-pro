@@ -1,3 +1,51 @@
+### feat-AI看图形态绑定 agens-3.0-flash(vision 场景默认 + 设置页可改 + 成本可控圈定 + 16:30 调度)（2026-10-15）
+
+**背景**: AI 看图形态影子层(`src/core/ai_vision_pattern.py` + 迁移 195 `ai_pattern_shadow`, 只写影子表,
+不动现有信号/决策)已上线但 `scene='vision'` 未绑模型 → `_resolve_global_model` 回落到全局默认(非视觉)
+模型 → 每日显式降级不出形态。用户裁决: **vision 场景默认绑 sida-pro 自带的 `agens-3.0-flash`**
+(非 SenseNova/外部 VLM)。
+
+**改动(分支 `feat/ai-vision-agnes-binding-20261015`)**:
+- **`src/core/ai_client.py`**: 新增 `SCENE_DEFAULT_MODEL_NAMES = {"vision": "agens-3.0-flash"}`;
+  `_resolve_global_model` 在「显式绑定」之后、「全局默认模型」之前, 增加**按模型名回落场景默认模型**
+  (不锁 model_id —— 换服务商/重建模型行不失效)。其他场景不受影响。
+- **`src/core/ai_vision_pattern.py`**:
+  - `DEFAULT_VISION_MODEL='agens-3.0-flash'`; `resolve_vision_model` 对平台模型判定放宽为
+    「capabilities 含 vision **或** 名称 == 默认视觉模型」—— 存量 capabilities 未标注不再误降级;
+    无可解析模型 → 返回 None → **显式降级语义不变**(不编造形态)。
+  - 标的口径改**成本可控**(视觉 LLM 逐票有成本): 新增 `shadow_universe(trade_date)` =
+    **自选池(stocks 表 CN) ∪ 前一日影子表出过形态的票**(去 `.SH/.SZ` 后缀、去重保序);
+    `collect_and_mark` 默认 universe 走它(原来自选∪持仓 → 收窄, 避免全池调用)。
+- **`src/web/api/providers.py`**: 场景绑定响应新增 `default_model_name` / `effective_model_name`;
+  抽 `_scene_binding_response` 统一组装(list/put 共用); vision 场景描述标注默认模型。
+- **`src/bootstrap/startup.py`**: `ai-vision-pattern` cron **15:40 → 16:30**。理由: 15:35/15:40/15:45
+  是 TQ 采集/妖股因子/情绪自算/共振扫描高峰(TQ 背后只有一个客户端进程), 16:10 已被跨源标定
+  (indicator-calibration)占用; 16:30 在 16:00 全市场日线 / 16:05 连板自检 / 16:20 情绪自检之后,
+  且本作业只读 PG K 线 + 调外部视觉 LLM, 不碰 TQ。
+- **前端** `packages/api/src/providers.ts`(SceneBinding 增 `default_model_name`/`effective_model_name`)
+  + `pages/settings/AiSection.tsx`: vision 场景显示「当前绑定: X」/「默认: agens-3.0-flash」,
+  下拉默认项标注 `默认(agens-3.0-flash)`; **选择可改**(绑/解绑走既有 PUT, 未绑定即回落默认)。
+
+**agens-3.0-flash 图片能力实测(开发环境真调用, 仓库同形 vision 通道: OpenAI 兼容
+`/chat/completions` + base64 `image_url`, base_url=`https://api.agnes-ai.cn/v1`, key=`~/.agnes_key` /
+env `AGNES_API_KEY`)——结论: 未能确认(渠道不可用), 不定性为"支持"或"不支持"**:
+- `GET /v1/models` 确实列出 `agens-3.0-flash`(及 2.5 全系、agnes-image/video);
+- 单次 **文本** 调用 `agens-3.0-flash` 曾返回 200("OK") → 渠道存在但**间歇**(请求 id 2026101502113…);
+- 其后(含 30 分钟每 25s 重试窗口)对 `agens-3.0-flash` 的**文本与图片**调用**持续** HTTP 503
+  `分组 default 下模型 agens-3.0-flash 无可用渠道（distributor）`(3.0-pro 同现象);
+- 同期对照组 `agnes-2.5-flash` **图片**调用**稳定 200 且正确读出图上"红"**(23 次全绿)→ 证明
+  **请求形态/图片通道/密钥均有效, 问题在 3.0 渠道而非探针**(开发环境可用密钥无 3.0 渠道;
+  生产 AIService 的 agnes key 是否有 3.0 渠道需在生产侧核)。
+- 运行时语义据此**保持显式降级**: 未显式绑定 → 按名回落 agens-3.0-flash; 模型不可达 / 返回不可
+  解析 → `status='degraded'` 不出形态(绝不编造)。**不因"未实测到图片"就宣称支持**(不得猜)。
+
+**测试(全离线 mock, 能力探针脚本除外)**: `tests/test_ai_vision_pattern.py` 新增 12 例 ——
+默认模型名常量同源 / `_resolve_global_model` 按名回落且不误伤其他场景 / 无默认模型回落全局默认 /
+`resolve_vision_model` 绑定默认·非视觉降级·显式绑定优先 / `shadow_universe` 圈定去重·provider 容错 /
+`collect_and_mark` 默认走圈定池(空池 ok=False) / 场景绑定 API 暴露默认·当前·生效模型名。
+全量 `pytest tests/` = **4243 passed, 6 failed**(6 例均为 `test_dark_l2_engine.py`,
+本环境缺 `thsdk` 模块所致, 已在 clean `main` worktree 复现 —— 与本改动无关);
+
 ### fix-orderbook宇宙当日夹具翻日炸弹(2026-10-15)
 
 - test_universe合并去重上限 写死 ts=2026-10-14, 实现按 now(_CST) 当日过滤 ⇒ 00:00 翻日即红(v0.13.75 CI shard3 00:18 实锤, 22:09 同代码绿): 夹具改跟随当日, 24 例凌晨时段全绿。

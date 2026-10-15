@@ -100,7 +100,12 @@ export function AiSection() {
               </div>
               <div className="flex-shrink-0 w-[220px] sm:w-[280px]">
                 {b.scene === 'vision' && (
-                  <p className="mb-1 text-[10px] text-sky-700/90 dark:text-sky-400/90">优先选择含视觉(vision)能力的模型</p>
+                  <p className="mb-1 text-[10px] text-sky-700/90 dark:text-sky-400/90">
+                    {b.is_bound
+                      ? `当前绑定: ${b.model_name || '—'}`
+                      : `默认: ${b.default_model_name || b.effective_model_name || '默认模型'}`}
+                    <span className="text-muted-foreground"> · 优先含 vision 能力的模型</span>
+                  </p>
                 )}
                 <Select
                   value={b.model_id != null ? String(b.model_id) : SCENE_DEFAULT_VALUE}
@@ -111,7 +116,11 @@ export function AiSection() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={SCENE_DEFAULT_VALUE}>默认模型</SelectItem>
+                    <SelectItem value={SCENE_DEFAULT_VALUE}>
+                      {b.scene === 'vision' && b.default_model_name
+                        ? `默认(${b.default_model_name})`
+                        : '默认模型'}
+                    </SelectItem>
                     {sceneOptionsFor(b.scene).map(opt => (
                       <SelectItem key={opt.id} value={String(opt.id)}>
                         <span className="flex items-center gap-1.5">

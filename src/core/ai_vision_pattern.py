@@ -15,13 +15,20 @@
 
 影子运行(不干扰生产)
 --------------------
-每日盘后对 **自选∪持仓**(复用 `src.core.quote_snapshots.collect_market_symbols`) 逐票识别,
+每日盘后对 **自选池 ∪ 前一日有标记的票**(成本可控, 见 ``shadow_universe``)逐票识别,
 只写 `ai_pattern_shadow` —— **不改任何现有信号/决策/落库**。表建在
 `src/web/migrations.py::_m195`。
 
+视觉模型默认绑定(2026-10-15 用户裁决)
+--------------------------------------
+`scene='vision'` 默认绑定 sida-pro 自带的 **`agens-3.0-flash`**(多模态)。绑定在
+`src.core.ai_client.SCENE_DEFAULT_MODEL_NAMES`(按**模型名**回落, 不锁 model_id);
+设置页「场景分配」可改成模型池里的任意模型。未显式绑定且模型池无该默认模型 →
+`resolve_vision_model` 返回 None → 显式降级(语义不变)。
+
 复用既有能力(禁重造)
 --------------------
-- 标的池: `quote_snapshots.collect_market_symbols`(自选∪启用账户持仓, 既有口径);
+- 标的池: `shadow_universe` = 自选池(stocks 表, CN) ∪ 前一日影子表出过形态的票;
 - K 线: `KlineCollector.get_klines`(PG 优先);
 - 规则形态: `kline_patterns.detect_pattern_marks`;
 - 视觉模型: 统一 LLM 配置中心 `get_model_for_scene(db, "vision")`(设置页场景分配);
@@ -52,6 +59,9 @@ logger = logging.getLogger(__name__)
 _CST = ZoneInfo("Asia/Shanghai")
 _TABLE = "ai_pattern_shadow"
 _SCENE = "vision"
+#: 该场景默认模型名(与 src.core.ai_client.SCENE_DEFAULT_MODEL_NAMES['vision'] 同源)。
+#: 未显式绑定时, 解析到模型池里此名的模型即视为视觉模型(能力由探针实测, 见模块头)。
+DEFAULT_VISION_MODEL = "agens-3.0-flash"
 
 #: 默认窗口: 取最近多少根 K 线渲染/识别
 DEFAULT_WINDOW = 60
@@ -454,11 +464,12 @@ def resolve_vision_model(db=None) -> tuple[str, str, str] | None:
             key = str(model.get("api_key") or "").strip()
             mn = str(model.get("model") or model.get("name") or "").strip()
             return (bu, key, mn) if (bu and key and mn) else None
-        # 平台 AIModel: 必须显式声明 vision 能力
-        if not _has_vision_capability(getattr(model, "capabilities", "")):
+        # 平台 AIModel: 显式声明 vision 能力, 或即本场景默认模型(名称匹配 DEFAULT_VISION_MODEL)。
+        # 默认模型按用户裁决绑定, 能力由探针实测(不因存量 capabilities 未标注就误降级)。
+        mn = str(getattr(model, "model", "") or "").strip()
+        if not _has_vision_capability(getattr(model, "capabilities", "")) and mn != DEFAULT_VISION_MODEL:
             logger.warning(
-                "AI看图: scene='vision' 绑定模型 '%s' 无 vision 能力 → 降级",
-                getattr(model, "model", ""),
+                "AI看图: scene='vision' 绑定模型 '%s' 无 vision 能力 → 降级", mn,
             )
             return None
         from src.db.models import AIService
@@ -468,7 +479,6 @@ def resolve_vision_model(db=None) -> tuple[str, str, str] | None:
             return None
         bu = str(svc.base_url or "").strip()
         key = str(svc.api_key or "").strip()
-        mn = str(getattr(model, "model", "") or "").strip()
         return (bu, key, mn) if (bu and key and mn) else None
     finally:
         if own:
@@ -522,18 +532,104 @@ def make_vision_provider(model: tuple, *, timeout: float = 60.0):
     return _call
 
 
-# ── 默认数据源 ──────────────────────────────────────────────────────────────
+# ── 默认标的池(成本可控) ─────────────────────────────────────────────────────
 
-def _default_universe() -> list[str]:
-    """自选∪持仓(CN)代码 — 复用既有口径 `quote_snapshots.collect_market_symbols`。"""
+def _bare(sym) -> str:
+    """归一化代码: 去市场后缀(600000.SH → 600000), 与影子表主键口径一致。"""
+    return str(sym or "").split(".", 1)[0].strip()
+
+
+def _default_watchlist() -> list[str]:
+    """自选池(CN)代码 —— stocks 表(与 quote_snapshots 的\"自选\"口径一致, **不含持仓**)。
+
+    保留 .SH/.SZ 后缀(取 K 线 provider 需要), 去重保序。
+    """
     try:
-        from src.core.quote_snapshots import collect_market_symbols
+        from src.db.models import Stock
+        from src.db.session import SessionLocal
 
-        groups = collect_market_symbols() or {}
-        return [str(s) for s in (groups.get("CN") or []) if s]
+        db = SessionLocal()
+        try:
+            out: list[str] = []
+            for sym, mkt in db.query(Stock.symbol, Stock.market).all():
+                if (mkt or "CN") != "CN" or not sym:
+                    continue
+                s = str(sym)
+                if s not in out:
+                    out.append(s)
+            return out
+        finally:
+            db.close()
     except Exception as e:  # noqa: BLE001
-        logger.warning("AI看图: 取自选∪持仓池失败: %s", e)
+        logger.warning("AI看图: 取自选池失败: %s", e)
         return []
+
+
+def _default_prev_marked(trade_date: str) -> list[str]:
+    """前一个有打标日的影子表里**出过形态**(规则或 AI)的裸代码 —— 与自选合并控成本。
+
+    取影子表里 < trade_date 的最大 trade_date(前一个已打标交易日); 其 rule_primary 或
+    ai_pattern 非空即算\"有标记\"。表未迁移/查询失败 → [](上层按仅自选处理, 不编造)。
+    """
+    try:
+        from sqlalchemy import text
+
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text(f"SELECT MAX(trade_date) AS d FROM {_TABLE} WHERE trade_date < :td"),
+                {"td": trade_date},
+            ).first()
+            prev = str(row[0]) if row and row[0] else None
+            if not prev:
+                return []
+            rows = db.execute(
+                text(
+                    f"SELECT symbol FROM {_TABLE} WHERE trade_date = :d "
+                    f"AND (rule_primary IS NOT NULL OR ai_pattern IS NOT NULL)"
+                ),
+                {"d": prev},
+            ).fetchall()
+            return [_bare(r[0]) for r in rows if r and r[0]]
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI看图: 取前一日标记票失败(忽略): %s", e)
+        return []
+
+
+def shadow_universe(
+    trade_date: str,
+    *,
+    watchlist_provider=None,
+    marks_provider=None,
+) -> list[str]:
+    """影子任务标的圈定(成本可控): **自选池 ∪ 前一日有标记的票**。
+
+    视觉 LLM 逐票调用有成本, 故不放全市场 / 全部持仓, 只跑自选池 + 前一日影子表里
+    出过形态的票(自扩张但有界)。返回**裸代码**(去 .SH/.SZ, 与影子表主键一致), 去重保序。
+    watchlist_provider / marks_provider 可注入(测试禁真网络/真库)。
+    """
+    wp = watchlist_provider or _default_watchlist
+    mp = marks_provider or (lambda: _default_prev_marked(trade_date))
+    try:
+        watch = [_bare(s) for s in (wp() or [])]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI看图: 取自选池异常(继续): %s", e)
+        watch = []
+    try:
+        marked = [_bare(s) for s in (mp() or [])]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI看图: 取前一日标记异常(继续): %s", e)
+        marked = []
+
+    out: list[str] = []
+    for s in [*watch, *marked]:
+        if s and s not in out:
+            out.append(s)
+    return out
 
 
 def _default_names(symbols: list[str]) -> dict[str, str]:
@@ -657,12 +753,12 @@ def collect_and_mark(
     write: bool = True,
     now: datetime | None = None,
 ) -> dict:
-    """自选∪持仓 → 逐票(渲染→AI→规则对照) → 影子落库。provider 可注入(测试禁真网络)。
+    """自选池∪前一日标记票 → 逐票(渲染→AI→规则对照) → 影子落库。provider 可注入(测试禁真网络)。
 
     返回统计 dict; 池子为空 / 无视觉模型 / 全部无数据 → ``ok=False`` 并显式说明原因。
     """
     td = trade_date or _trade_date(now)
-    universe_provider = universe_provider or _default_universe
+    universe_provider = universe_provider or (lambda: shadow_universe(td))
     kline_provider = kline_provider or (lambda s: _default_klines(s, window))
     rule_provider = rule_provider or _default_rules
     names_provider = names_provider or _default_names
@@ -745,7 +841,11 @@ def collect_and_mark(
 def run_ai_vision_pattern_job(
     now: datetime | None = None, trade_date: str | None = None
 ) -> dict:
-    """cron 入口(交易日收盘后): 逐票识别 + 对照 + 落库, 走作业框架诚实性(ok=False → failed)。"""
+    """cron 入口(交易日收盘后): 逐票识别 + 对照 + 落库, 走作业框架诚实性(ok=False → failed)。
+
+    标的圈定走 ``shadow_universe``(自选池 ∪ 前一日有标记票, 成本可控), 由
+    ``collect_and_mark`` 的默认 universe 提供。
+    """
     from src.core.jobs import jobs
 
     job_id, is_new = jobs.create("ai_vision_pattern", "AI 看图形态 影子打标(与规则形态对照)")

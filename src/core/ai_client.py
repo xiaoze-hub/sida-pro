@@ -521,6 +521,16 @@ class AIClient:
 # 所有 AI 使用点(对话/Agent/裁判/报告/自检)统一经 get_model_for_scene 解析模型、
 # build_system_prompt 组装 system prompt(含用户交易风格画像注入)。
 
+# 场景**默认模型名**(2026-10-15): 某场景未显式绑定 AISceneBinding 时, 不用全局
+# 默认模型(is_default), 而是回落到此表登记的模型名 —— 只按“模型名”绑定, 不锁
+# model_id(换服务商/重建模型行也不失效)。新增场景默认绑定在此登记。
+#   vision: AI 看图形态影子层 + 对话发图视觉代理, 默认用 sida-pro 自带的
+#           agens-3.0-flash(多模态, 见 ai_vision_pattern 能力探针)。
+SCENE_DEFAULT_MODEL_NAMES: dict[str, str] = {
+    "vision": "agens-3.0-flash",
+}
+
+
 # 画像注入节流(与 src/web/api/chat.py 口径一致, 独立实现避免循环依赖):
 # profile_text 截断 + rules 只取前 N 条, 避免每次调用占过多 token
 _SHADOW_PROFILE_TEXT_MAX = 300
@@ -637,7 +647,7 @@ def get_model_for_scene(db, scene: str, user=None):
 
 
 def _resolve_global_model(db, scene: str):
-    """原全局解析逻辑: 场景绑定 → 默认模型(is_default) → 模型池第一个。"""
+    """原全局解析逻辑: 场景绑定 → 场景默认模型名 → 默认模型(is_default) → 模型池第一个。"""
     from src.db.models import AISceneBinding, AIModel
 
     # 1. 场景显式绑定
@@ -653,6 +663,19 @@ def _resolve_global_model(db, scene: str):
         logger.warning(
             f"场景 {scene} 绑定的模型(id={binding.model_id})已不存在, 回落默认模型"
         )
+
+    # 1.5 场景默认模型名(未显式绑定时按名回落; 见 SCENE_DEFAULT_MODEL_NAMES)
+    default_name = SCENE_DEFAULT_MODEL_NAMES.get(scene)
+    if default_name:
+        named = (
+            db.query(AIModel)
+            .filter(AIModel.model == default_name)
+            .order_by(AIModel.id)
+            .first()
+        )
+        if named:
+            return named
+        logger.debug(f"场景 {scene} 默认模型 '{default_name}' 不在模型池, 回落全局默认")
 
     # 2. 默认模型
     default = (
