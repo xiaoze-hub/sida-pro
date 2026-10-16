@@ -1,3 +1,9 @@
+## release: v0.13.88 (修复 CI 门禁前端单元测试并成功发版)（2026-10-16）
+
+- **VERSION**: bump v0.13.87 → v0.13.88 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁修复**:
+  - `frontend/tests/components/ladder-board.test.tsx`: 在 `afterEach` 中补充 `localStorage.clear()`，修复由于新增本地存储偏好导致前一个单测切换状态残留污染后续断言的 CI 红灯。
+
 ## release: v0.13.87 (连板梯队默认固定为按日列视图展示)（2026-10-16）
 
 - **VERSION**: bump v0.13.86 → v0.13.87 (同步 README.md / README.zh-CN.md 徽章)。
