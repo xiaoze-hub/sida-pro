@@ -3,6 +3,7 @@ import { Loader2, Radar } from 'lucide-react'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import { SuggestionsTab } from '@panwatch/biz-ui/components/insight/SuggestionsTab'
 import InsightProvider from '@/pages/workbench/InsightProvider'
+import { ThreeTierVerdictRow } from '@/components/ThreeTierVerdictRow'
 
 /**
  * 工作台标签「建议」(工作台 v2 三合一, Task 12)。
@@ -78,7 +79,7 @@ const SUGGEST_TAB_KEYS = ['suggestions', 'core'] as const
 /** 「盘中监测」的用户可见名(内部 agent 名 `intraday_monitor` 只出现在代码/契约里, 不进 UI 文案)。 */
 const INTRADAY_LABEL = '盘中监测'
 
-function SuggestTabBody() {
+function SuggestTabBody({ symbol, market }: { symbol: string; market: string }) {
   const { suggestions, alerting, triggerIntradayOnce } = useInsight()
   // 失败态: 本路径**无前置写入**(触发前不加自选、不绑 Agent)⇒ 不存在"部分成功", 只需如实说"未提交成功"
   // + "本次未发生自选 / 绑定写入"; 失败原因**不在此处推断**(错误原文由 action 内部 toast)。
@@ -142,6 +143,9 @@ function SuggestTabBody() {
         </div>
       ) : null}
 
+      {/* 本土三层滤网决策行 (情绪层 / 催化层 / 威科夫量价结构) */}
+      <ThreeTierVerdictRow symbol={symbol} market={market} />
+
       {/* 建议列表(含「包含过期」开关 + 空态回退技术指标基础建议) —— 全部复用恢复组件 */}
       <SuggestionsTab />
     </div>
@@ -164,7 +168,7 @@ export default function SuggestTab({
 }) {
   return (
     <InsightProvider symbol={symbol} market={market} hasPosition={hasPosition} keys={SUGGEST_TAB_KEYS}>
-      <SuggestTabBody />
+      <SuggestTabBody symbol={symbol} market={market} />
     </InsightProvider>
   )
 }

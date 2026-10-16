@@ -24,6 +24,7 @@ describe('normalizePatterns 白名单清洗', () => {
   it('保留合法项, 丢弃缺字段/非法枚举/非有限索引', () => {
     const raw = [
       { name: '红三兵', direction: 'bullish', index: 3, date: '2026-03-07', basis: ['a', 1] },
+      { name: '早晨之星', direction: '看涨', index: 4, date: '2026-03-08' }, // 中文看涨兼容
       { name: '', direction: 'bullish', index: 1 }, // 空名
       { name: 'X', direction: 'up', index: 1 }, // 非法方向
       { name: 'Y', direction: 'bearish', index: NaN }, // 非有限索引
@@ -32,9 +33,10 @@ describe('normalizePatterns 白名单清洗', () => {
       { name: '黄昏之星', direction: 'bearish', index: 9, date: null },
     ]
     const out = normalizePatterns(raw)
-    expect(out.map((m) => m.name)).toEqual(['红三兵', '黄昏之星'])
+    expect(out.map((m) => m.name)).toEqual(['红三兵', '早晨之星', '黄昏之星'])
+    expect(out[1].direction).toBe('bullish') // 中文看涨归一化为 bullish
     expect(out[0].basis).toEqual(['a']) // 非字符串依据被过滤
-    expect(out[1].date).toBeNull()
+    expect(out[2].date).toBeNull()
   })
 
   it('非数组输入 → 空数组(不抛)', () => {

@@ -48,9 +48,17 @@ export function normalizePatterns(raw: unknown): PatternMark[] {
     if (!item || typeof item !== 'object') continue
     const it = item as Record<string, unknown>
     const name = asString(it.name).trim()
-    const direction = it.direction as PatternDirection
+    const rawDir = String(it.direction || '')
+    let direction: PatternDirection | undefined = DIRECTIONS.includes(rawDir as PatternDirection)
+      ? (rawDir as PatternDirection)
+      : undefined
+    if (!direction) {
+      if (rawDir === '看涨') direction = 'bullish'
+      else if (rawDir === '看跌') direction = 'bearish'
+      else if (rawDir === '中性') direction = 'neutral'
+    }
     const index = it.index
-    if (!name || !DIRECTIONS.includes(direction)) continue
+    if (!name || !direction) continue
     if (typeof index !== 'number' || !Number.isFinite(index)) continue
     const basis = Array.isArray(it.basis)
       ? it.basis.filter((b): b is string => typeof b === 'string')
