@@ -245,7 +245,20 @@ export default function LadderBoard(props: {
 }) {
   const { ladder, liveDay, mode, stale, lastOk, noteClosing, stats, asOf, liveAsOf } = props
   const ref = useRef<HTMLDivElement>(null)
-  const [view, setView] = useState<'cols' | 'matrix'>('cols')
+  const [view, setView] = useState<'cols' | 'matrix'>(() => {
+    try {
+      const saved = localStorage.getItem('sida_ladder_view')
+      if (saved === 'cols' || saved === 'matrix') return saved
+    } catch {}
+    return 'cols'
+  })
+  const handleToggleView = () => {
+    const next = view === 'cols' ? 'matrix' : 'cols'
+    setView(next)
+    try {
+      localStorage.setItem('sida_ladder_view', next)
+    } catch {}
+  }
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const [onlyBoard, setOnlyBoard] = useState<number | null>(null)
   useEffect(() => { scrollToLatest(ref.current) }, [ladder, liveDay, view])
@@ -277,7 +290,7 @@ export default function LadderBoard(props: {
           {asOf ? <span className="text-[10px] text-muted-foreground">更新 {asOf.slice(11, 19)}</span> : null}
           <button
             type="button"
-            onClick={() => setView(view === 'cols' ? 'matrix' : 'cols')}
+            onClick={handleToggleView}
             className="rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
           >
             {view === 'cols' ? '矩阵视图' : '按日列视图'}

@@ -1,3 +1,9 @@
+## release: v0.13.87 (连板梯队默认固定为按日列视图展示)（2026-10-16）
+
+- **VERSION**: bump v0.13.86 → v0.13.87 (同步 README.md / README.zh-CN.md 徽章)。
+- **交互优化**:
+  - `frontend/packages/biz-ui/src/components/thememood/LadderBoard.tsx`: 将连板梯队默认视图固定为“按日列视图 (`cols`)”，并引入 `localStorage` 记忆机制，确保用户偏好持久化。
+
 ## release: v0.13.86 (系统全面性能与稳定性加固: 消除 K 线慢查询 + 隧道心跳强化 + 梯队空态容错)（2026-10-16）
 
 - **VERSION**: bump v0.13.85 → v0.13.86 (同步 README.md / README.zh-CN.md 徽章)。
