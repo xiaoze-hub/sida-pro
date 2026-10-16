@@ -1,3 +1,10 @@
+## release: v0.13.81 (本土三层滤网完整落地: 威科夫量价结构K线图层 + SuggestTab三层决策行)（2026-10-16）
+
+- **VERSION**: bump v0.13.80 → v0.13.81 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心交付**:
+  1. P1: 威科夫量价结构纯函数引擎 `src/core/wyckoff.py` + `GET /api/klines/{symbol}/wyckoff` 端点 + `KlineChart.tsx` 独立量价结构图层。
+  2. P2: 个股工作台 `SuggestTab` 挂载 `ThreeTierVerdictRow` 三层滤网决策行(情绪/催化/量价)，以及修复 K 线形态中英文看涨看跌归一化。
+
 ## feat-本土三层滤网决策行与形态归一化(P2: SuggestTab三层结论+中文看涨方向归一)（2026-10-16）
 
 **背景**: 承接 P1 威科夫量价结构图层。P2 在个股工作台 `SuggestTab` 增加三层滤网决策行,
