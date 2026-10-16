@@ -481,6 +481,9 @@ class DailyReportAgent(BaseAgent):
                     lines.append(
                         f"- 持仓：{total_qty}股 成本{avg_cost:.2f} 浮盈{pnl_pct:+.1f}%（{style}）"
                     )
+                    # 2026-10-16 纪律约束: 触及 -8% 硬防线显式打标
+                    if pnl_pct <= -8.0:
+                        lines.append(f"  - 🚨【硬防线触发】：当前浮亏已达 {pnl_pct:.1f}%（超过 -8% 防线），必须执行减仓/止损纪律，不抱任何幻想！")
 
             kline_history = stock_ctx.get("kline_history") or {}
             if kline_history.get("available"):

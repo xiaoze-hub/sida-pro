@@ -167,8 +167,8 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
     AgentSeedSpec(
         name="theme_launch_detector",
         display_name="题材启动识别",
-        description="9:45 识别题材启动信号与首板候选(潜伏池)",
-        enabled=False,
+        description="每天 09:45 结合主力资金抢筹与首板梯队识别新题材启动信号",
+        enabled=True,
         schedule="45 9 * * 1-5",
         execution_mode="batch",
         kind=AGENT_KIND_WORKFLOW,

@@ -1830,9 +1830,10 @@ class IntradayMonitorAgent(BaseAgent):
         return obj
 
     def _format_human_readable_content(
-        self, stock: StockData, suggestion: dict, raw_content: str
+        self, stock: StockData, suggestion: dict, raw_content: str, data: dict | None = None
     ) -> str:
         """当模型返回 JSON 时，生成可读通知内容。"""
+        data = data or {}
         action_label = suggestion.get("action_label") or "观望"
         signal = suggestion.get("signal") or "无明显新信号"
         reason = suggestion.get("reason") or "请结合盘面与风控策略审慎判断。"
@@ -1864,6 +1865,30 @@ class IntradayMonitorAgent(BaseAgent):
         intent = _main_intent_summary(stock.symbol)
         if intent:
             lines.append(f"主力意图：{intent}")
+        # 威科夫量价形态与硬防线 (2026-10-16 纪律探针增强)
+        try:
+            from src.core.wyckoff import analyze_wyckoff
+            kline_list = data.get("kline_data") or []
+            if kline_list:
+                wyck = analyze_wyckoff(kline_list)
+                if wyck and wyck.get("phase"):
+                    sig_str = "、".join([s.get("name", "") for s in wyck.get("signals", []) if s.get("name")]) or "无显著异动"
+                    lines.append(f"威科夫结构：{wyck.get('phase_desc', wyck.get('phase'))}（{sig_str}）")
+        except Exception:
+            pass
+        # 持仓 -8% 硬防线预警
+        pos_info = data.get("position") or {}
+        cost = pos_info.get("cost") or pos_info.get("cost_price")
+        if cost and getattr(stock, "current_price", None):
+            try:
+                c_val = float(cost)
+                cur_val = float(stock.current_price)
+                if c_val > 0:
+                    loss_ratio = (cur_val - c_val) / c_val
+                    if loss_ratio <= -0.08:
+                        lines.append(f"🚨【触发硬防线警报】：成本 {c_val:.2f}，现价 {cur_val:.2f}，浮亏 {loss_ratio * 100:.2f}%，已触及 -8% 硬止损防线，请坚决执行风控纪律！")
+            except Exception:
+                pass
         # 数智决策三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
         try:
             from src.core.decision_pioneer import decision_pioneer_text
@@ -1948,7 +1973,7 @@ class IntradayMonitorAgent(BaseAgent):
         )
         # JSON/类 JSON 输出时，统一转换为可读通知文本，避免渠道直接推送原始 JSON
         if try_parse_action_json(raw_content) or self._try_parse_loose_json(raw_content):
-            content = self._format_human_readable_content(stock, suggestion, raw_content)
+            content = self._format_human_readable_content(stock, suggestion, raw_content, data=data)
 
         # M3(2026-08-23): 提取触发用户 UUID 喂给建议池, 多账号各自决策互不干扰
         _user_id = None

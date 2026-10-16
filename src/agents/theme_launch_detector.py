@@ -52,6 +52,38 @@ class ThemeLaunchDetectorAgent(BaseAgent):
                 sector_dist.items(), key=lambda x: x[1], reverse=True
             )[:6]
 
+            # 2026-10-16 升级: 引入开盘啦/悟道盘中主力资金流与爆发原因(theme_intraday_capital)
+            capital_themes = []
+            try:
+                from src.collectors.wudao_mcp_client import WudaoMCPClient
+
+                wclient = WudaoMCPClient()
+                cap_resp = wclient.call_tool(
+                    "theme_intraday_capital",
+                    {
+                        "sortBy": "mainNetAmount",
+                        "limit": 8,
+                        "includeBoomReason": True,
+                        "universe": "featured",
+                    },
+                )
+                c_rows = (cap_resp or {}).get("rows") or []
+                for cr in c_rows:
+                    if not isinstance(cr, dict):
+                        continue
+                    capital_themes.append(
+                        {
+                            "name": cr.get("themeName") or "",
+                            "strength": cr.get("strength") or 0,
+                            "pctChg": cr.get("pctChg") or 0,
+                            "mainNet": cr.get("mainNetAmountText") or cr.get("mainNetAmount") or "",
+                            "boomReason": (cr.get("boomReason") or "")[:200],
+                            "boomLeaders": cr.get("boomLeaders") or "",
+                        }
+                    )
+            except Exception as cap_err:
+                logger.warning("[%s] 盘中题材主力资金采集异常: %s", trace_id, cap_err)
+
             sentiment_data = {
                 "sentiment": summary,
                 "pool": pool,
@@ -59,14 +91,16 @@ class ThemeLaunchDetectorAgent(BaseAgent):
                 "top_sectors": [
                     {"name": k, "count": v} for k, v in top_sectors
                 ],
+                "capital_themes": capital_themes,
                 "indices": indices,
             }
             logger.info(
-                "[%s] 题材启动采集: pool=%s first_boards=%s sectors=%s",
+                "[%s] 题材启动采集: pool=%s first_boards=%s sectors=%s capital_themes=%s",
                 trace_id,
                 len(pool),
                 len(first_boards),
                 len(top_sectors),
+                len(capital_themes),
             )
         except Exception as e:
             logger.warning("[%s] 题材启动采集失败: %s", trace_id, e)
@@ -158,6 +192,18 @@ class ThemeLaunchDetectorAgent(BaseAgent):
             )
             user_content.append(f"- {sector_str}")
             user_content.append("")
+
+        capital_themes = sd.get("capital_themes", [])
+        if capital_themes:
+            user_content.append("## 盘中主力资金抢筹题材与爆发原因(开盘啦核心)")
+            for ct in capital_themes:
+                line = f"- **{ct.get('name')}** (涨幅:{ct.get('pctChg')}%, 主力净额:{ct.get('mainNet')}, 强度:{ct.get('strength')})"
+                if ct.get("boomReason"):
+                    line += f"\n  - 爆发催化: {ct.get('boomReason')}"
+                if ct.get("boomLeaders"):
+                    line += f"\n  - 领涨龙头: {ct.get('boomLeaders')}"
+                user_content.append(line)
+            user_content.append("> 注意: 主力资金大幅净流入 + 伴随首板或大幅异动的题材，是今日真正的日内主线，重点结合首板候选挖掘潜伏机会。\n")
 
         # 商品轮动前瞻 + 地缘冲突(2026-08-10 接入, 联动题材启动判断)
         rotation = sd.get("rotation") or {}
