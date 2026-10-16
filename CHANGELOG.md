@@ -1,3 +1,7 @@
+## fix-补全 suggest-tab 单测 mock 中 fetchAPI 导出（2026-10-16）
+
+- **修复**: `frontend/tests/components/suggest-tab.test.tsx` 补齐 `@panwatch/api` 的 `fetchAPI` mock，解决三层滤网组件挂载时 CI 报错。
+
 ## release: v0.13.81 (本土三层滤网完整落地: 威科夫量价结构K线图层 + SuggestTab三层决策行)（2026-10-16）
 
 - **VERSION**: bump v0.13.80 → v0.13.81 (同步 README.md / README.zh-CN.md 徽章)。
