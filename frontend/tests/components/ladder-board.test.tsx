@@ -33,6 +33,7 @@ describe('LadderBoard', () => {
   })
   it('首板字样/炸板组/断板组/昨板数 tooltip', () => {
     render(<LadderBoard ladder={[day]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
+    fireEvent.click(screen.getByRole('button', { name: '按日列视图' }))
     expect(screen.getByText('首板')).toBeTruthy()
     expect(screen.getByText(/炸板 1/)).toBeTruthy()
     expect(screen.getByText(/断板 1/)).toBeTruthy()
@@ -45,7 +46,6 @@ describe('LadderBoard', () => {
   })
   it('矩阵视图: 板数列 sticky left(横滑后仍能看到几板)', () => {
     render(<LadderBoard ladder={[day]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
-    fireEvent.click(screen.getByRole('button', { name: '矩阵视图' }))
     const label = screen.getByText('层级')
     const col = label.parentElement as HTMLElement
     expect(col.className).toContain('sticky')
@@ -55,14 +55,14 @@ describe('LadderBoard', () => {
   })
 })
 
-  // 2026-09-26 用户口径: 连板梯队默认「按日列视图」, 且最新在左。
-  it('默认按日列视图, 且最新在左', () => {
+  // 2026-09-26 用户口径: 连板梯队默认「矩阵视图」天梯, 且最新在左。
+  it('默认矩阵视图, 且最新在左', () => {
     const older = { ...day, date: '20260910' }
     const newer = { ...day, date: '20260911' }
     // 故意按"旧->新"传入, 断言组件自己按日期降序排(不依赖接口顺序)
     const { container } = render(<LadderBoard ladder={[older, newer]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
-    // 默认视图 = 按日列: 切换按钮此时显示的是"矩阵视图"(点它才切过去)
-    expect(screen.getByRole('button', { name: '矩阵视图' })).toBeTruthy()
+    // 默认视图 = 矩阵天梯: 切换按钮此时显示的是"按日列视图"(点它才切到日列)
+    expect(screen.getByRole('button', { name: '按日列视图' })).toBeTruthy()
     const txt = container.textContent || ''
     const iNew = txt.indexOf('2026-09-11')
     const iOld = txt.indexOf('2026-09-10')

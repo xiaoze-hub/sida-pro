@@ -250,10 +250,10 @@ export default function LadderBoard(props: {
       const saved = localStorage.getItem('sida_ladder_view')
       if (saved === 'cols' || saved === 'matrix') return saved
     } catch {}
-    return 'cols'
+    return 'matrix'
   })
   const handleToggleView = () => {
-    const next = view === 'cols' ? 'matrix' : 'cols'
+    const next = view === 'matrix' ? 'cols' : 'matrix'
     setView(next)
     try {
       localStorage.setItem('sida_ladder_view', next)
@@ -293,7 +293,7 @@ export default function LadderBoard(props: {
             onClick={handleToggleView}
             className="rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
           >
-            {view === 'cols' ? '矩阵视图' : '按日列视图'}
+            {view === 'matrix' ? '按日列视图' : '矩阵视图'}
           </button>
         </span>
       </div>

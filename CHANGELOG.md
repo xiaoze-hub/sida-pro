@@ -1,3 +1,10 @@
+## release: v0.13.91 (连板梯队默认固定为二维矩阵天梯视图展示)（2026-10-16）
+
+- **VERSION**: bump v0.13.90 → v0.13.91 (同步 README.md / README.zh-CN.md 徽章)。
+- **交互优化**:
+  - `frontend/packages/biz-ui/src/components/thememood/LadderBoard.tsx`: 将连板梯队默认视图固定为“二维矩阵天梯视图 (`matrix`)”（X 轴为日期序列，Y 轴为 1~11 连板层级），完美呈现龙头逐日晋级路径，切换按钮对应显示“按日列视图”。
+  - `frontend/tests/components/ladder-board.test.tsx`: 对应更新视图切换单测断言，全绿通过。
+
 ## release: v0.13.90 (前端构建拆包瘦身首屏秒开 + 盘中硬防线击穿微信直推)（2026-10-16）
 
 - **VERSION**: bump v0.13.89 → v0.13.90 (同步 README.md / README.zh-CN.md 徽章)。
