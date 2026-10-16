@@ -88,10 +88,12 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
     from src.db.session import engine
 
     iso = sorted(f"{d[:4]}-{d[4:6]}-{d[6:8]}" for d in dates)
+    ts_start = f"{iso[0]} 00:00:00+08"
+    ts_end = f"{iso[-1]} 23:59:59+08"
     stmt = text(
         "SELECT ts, symbol, open, high, low, close, amount FROM klines "
         "WHERE period = '1d' AND adjust = 'qfq' "
-        "AND CAST(ts AS date) BETWEEN :d0 AND :d1 AND symbol IN :codes"
+        "AND ts >= :ts_start AND ts <= :ts_end AND symbol IN :codes"
     ).bindparams(bindparam("codes", expanding=True))
     out: dict = {}
     codes_all = sorted(set(str(s) for s in symbols))
@@ -100,7 +102,7 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
         for i in range(0, len(codes_all), batch):
             chunk = tuple(codes_all[i:i + batch])
             raw = conn.execute(
-                stmt, {"d0": iso[0], "d1": iso[-1], "codes": chunk}
+                stmt, {"ts_start": ts_start, "ts_end": ts_end, "codes": chunk}
             ).fetchall()
             for r in raw:
                 m = dict(r._mapping)

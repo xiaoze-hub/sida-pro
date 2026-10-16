@@ -5558,6 +5558,23 @@ def _m188_limit_strength_shadow(conn: Connection) -> None:
         )
 
 
+def _m199_klines_period_ts_symbol_index(conn: Connection) -> None:
+    """klines 查询覆盖索引 (2026-10-16 性能优化):
+    针对 /api/theme-mood/ladder 等全市场批量查询 K 线的慢操作进行加固。
+    在 (period, adjust, ts, symbol) 上建立联合索引，消除全表扫描与 6s 阻塞。
+    """
+    try:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_klines_period_adjust_ts_symbol "
+                "ON klines(period, adjust, ts, symbol)"
+            )
+        )
+        logger.info("klines: 联合覆盖索引 ix_klines_period_adjust_ts_symbol 创建成功")
+    except Exception as e:
+        logger.warning(f"klines 索引创建失败(非致命): {e}")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5741,6 +5758,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 加跨度列后 span>5 的行标 `suspended_gap`, 胜率/分桶统计排除并显式标注条数;
     # **不改 T+n 判定本体、不重算存量数值**(用户裁决: 只标注 + 排除统计)。
     Migration(198, "decision_log_t_n_span", _m198_decision_log_t_n_span),
+    Migration(199, "klines_period_ts_symbol_index", _m199_klines_period_ts_symbol_index),
 )
 
 

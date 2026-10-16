@@ -81,8 +81,8 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
       className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[10px] text-foreground/80" title={s.name}>{s.name}</span>
-      <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+      <span className="w-full truncate text-center text-[10px] text-foreground/80" title={s.name || s.symbol}>{s.name || s.symbol}</span>
+      <span className={`text-[10px] ${pctClass(s.pct)}`}>{s.pct != null ? fmtPct(s.pct) : '--'}</span>
       {s.tag ? (
         <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
       ) : null}

@@ -1,3 +1,12 @@
+## release: v0.13.86 (系统全面性能与稳定性加固: 消除 K 线慢查询 + 隧道心跳强化 + 梯队空态容错)（2026-10-16）
+
+- **VERSION**: bump v0.13.85 → v0.13.86 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心优化**:
+  - `src/web/api/theme_mood.py`: 重构 `_read_ohlc` 查询 SQL，消除破坏 TimescaleDB 索引的 `CAST(ts AS date)`，改用时间戳范围区间比较，将 6s 阻塞降至毫秒级。
+  - `src/web/migrations.py`: 增加 Migration 199 补齐 `ix_klines_period_adjust_ts_symbol` 联合覆盖索引。
+  - `frontend/packages/biz-ui/src/components/thememood/LadderBoard.tsx`: 强化梯队标的名称与涨跌幅的空态防御，杜绝局部数据缺失导致的异常显示。
+  - 小主机反向隧道保活: 加固 `sida-reverse-tunnel.service` 心跳为 10s 快速熔断重连，消灭长达 180s 的网络假死。
+
 ## release: v0.13.85 (彻底修复连板梯队窗口截断: 引入充分历史回溯基准，精准锁定新华传媒 11 连板)（2026-10-16）
 
 - **VERSION**: bump v0.13.84 → v0.13.85 (同步 README.md / README.zh-CN.md 徽章)。
