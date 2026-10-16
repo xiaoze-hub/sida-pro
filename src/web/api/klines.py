@@ -1436,11 +1436,36 @@ def _enrich_mainflow_tri(symbol: str, market_code: MarketCode) -> dict:
     return mainflow_tri
 
 
+def _enrich_cancel_order_intent(symbol: str) -> dict:
+    """微观高频撤单意图分析 (基于通达信 TQ get_more_info 与广发金工方法论)。"""
+    try:
+        from marketdata.vendors.tq import _rpc
+        from src.core.cancel_order_intent import calc_cancel_order_intent
+
+        tq_code = symbol if ("." in symbol) else (f"{symbol}.SH" if symbol.startswith("6") else f"{symbol}.SZ")
+        more_info = _rpc("get_more_info", {"stock_code": tq_code})
+        chg = None
+        if isinstance(more_info, dict) and "ZAF" in more_info:
+            try:
+                chg = float(more_info["ZAF"])
+            except Exception:
+                chg = None
+        return calc_cancel_order_intent(more_info, pct_chg=chg)
+    except Exception as e:
+        return {
+            "available": False,
+            "error": str(e)[:120],
+            "intent_tag": "无数据",
+            "intent_desc": "撤单盘口数据不可用",
+            "warning_level": "safe",
+        }
+
+
 def _compute_kline_summary(symbol: str, market_code: MarketCode) -> dict:
     """真正重算 summary(冷启动链)。
 
-    2026-10-01 (B1 P2 首屏慢): 把四个**互不依赖**的重活并发化。原实现串行相加:
-        main_intent(逐笔翻页, 硬超时 12s) + dark_review + mainflow_tri
+    2026-10-01 (B1 P2 首屏慢): 把多个**互不依赖**的重活并发化。原实现串行相加:
+        main_intent(逐笔翻页, 硬超时 12s) + dark_review + mainflow_tri + cancel_intent
         + layer(orderbook 硬超时 8s + wencai 硬超时 10s)
       ⇒ 冷启动实测 ~26s, 超过前端 fetchAPI 的 20s abort ⇒ /portfolio sparkline 空列。
     并发后冷启动 ≈ 最长的一条。各块内部逻辑与降级路径不变(返回值逐字段一致)。
@@ -1448,14 +1473,16 @@ def _compute_kline_summary(symbol: str, market_code: MarketCode) -> dict:
     collector = KlineCollector(market_code)
     summary = collector.get_kline_summary(symbol)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
         f_intent = ex.submit(_enrich_main_intent, symbol, market_code)
         f_dark = ex.submit(_enrich_dark_clusters, symbol)
         f_tri = ex.submit(_enrich_mainflow_tri, symbol, market_code)
+        f_cancel = ex.submit(_enrich_cancel_order_intent, symbol)
         f_layer = ex.submit(_build_layer_data, symbol, market_code)
         main_intent, main_intent_structured = f_intent.result()
         dark_clusters = f_dark.result()
         mainflow_tri = f_tri.result()
+        cancel_order_intent = f_cancel.result()
         layer = f_layer.result()
 
     return {
@@ -1464,6 +1491,8 @@ def _compute_kline_summary(symbol: str, market_code: MarketCode) -> dict:
         "summary": summary,
         "main_intent": main_intent,
         "main_intent_structured": main_intent_structured,
+        # 微观高频撤单意图 (对标广发金工与通达信盘口)
+        "cancel_order_intent": cancel_order_intent,
         # A4 置信度徽章(批次A)
         "mainflow_tri": mainflow_tri,
         # P1 图层数据(2026-09-01): gs_signals / fund_flow / events / orderbook / chips / resonance

@@ -40,10 +40,21 @@ interface WyckoffResp {
   }
 }
 
+interface SummaryResp {
+  cancel_order_intent?: {
+    available?: boolean
+    intent_tag?: string
+    cancel_bias?: number
+    b_cancel_ratio?: number
+    s_cancel_ratio?: number
+  }
+}
+
 export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market: string }) {
   const [phaseData, setPhaseData] = useState<string | null>(null)
   const [catalystCount, setCatalystCount] = useState<number | null>(null)
   const [wyckoffStage, setWyckoffStage] = useState<string | null>(null)
+  const [cancelIntent, setCancelIntent] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -87,7 +98,23 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         if (!cancelled) setWyckoffStage(null)
       })
 
-    Promise.allSettled([pPhase, pCat, pWyc]).finally(() => {
+    const pSum = fetchAPI<SummaryResp>(`/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`)
+      .then((res) => {
+        if (cancelled) return
+        const ci = res?.cancel_order_intent
+        if (ci && ci.available && ci.intent_tag && ci.intent_tag !== '无数据') {
+          const b = ci.b_cancel_ratio != null ? `${(ci.b_cancel_ratio * 100).toFixed(0)}%` : '--'
+          const s = ci.s_cancel_ratio != null ? `${(ci.s_cancel_ratio * 100).toFixed(0)}%` : '--'
+          setCancelIntent(`${ci.intent_tag} (买撤${b}/卖撤${s})`)
+        } else {
+          setCancelIntent(null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCancelIntent(null)
+      })
+
+    Promise.allSettled([pPhase, pCat, pWyc, pSum]).finally(() => {
       if (!cancelled) setLoading(false)
     })
 
@@ -134,6 +161,16 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
           {loading ? '加载中...' : wyckoffStage ? wyckoffStage : '--'}
         </span>
       </div>
+
+      {/* 第四维度: 微观撤单意图 (对标广发金工与通达信盘口) */}
+      {cancelIntent ? (
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground">撤单层:</span>
+          <span className="font-medium text-foreground">
+            {cancelIntent}
+          </span>
+        </div>
+      ) : null}
 
       {/* 综合纪律约束与行动禁令 */}
       <div className="flex items-center gap-1">

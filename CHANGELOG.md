@@ -1,4 +1,14 @@
-## release: v0.13.91 (连板梯队默认固定为二维矩阵天梯视图展示)（2026-10-16）
+## release: v0.13.92 (接入通达信微观撤单意图引擎与广发金工因子落地)（2026-10-16）
+
+- **VERSION**: bump v0.13.91 → v0.13.92 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心算法与微观结构引擎**:
+  - `src/core/cancel_order_intent.py`: 基于广发金工《从高频撤单信息中构建因子：海量 Level 2 数据因子挖掘系列（八）》与通达信 TQ 真实 L2 盘口数据，构建微观撤单意图分析引擎，涵盖买/卖盘撤单率 (`b_cancel_ratio`, `s_cancel_ratio`)、撤单多空偏向度 (`cancel_bias`) 与主力虚假托盘/压盘吸筹意图定性。
+  - `tests/test_cancel_order_intent.py`: 建立完备单元测试套件，使用 2026-10-16 神剑股份实测数据与极端诱多/诱空盘口验证，5 项全绿。
+- **系统集成与前端呈现**:
+  - `src/web/api/klines.py`: 在 `_compute_kline_summary` 冷启动并发线程池中接入 `_enrich_cancel_order_intent`，极速聚合下发 `cancel_order_intent` 对象。
+  - `frontend/packages/biz-ui/src/components/thememood/L2Tab.tsx`: 深度重构 L2 成品资金与撤单区，将原始数字升级为“买撤/卖撤率”对比指标，提示大单挂撤意愿。
+  - `frontend/src/components/ThreeTierVerdictRow.tsx`: 在三层决策滤网中接入第四维度“撤单层”，直观展示主力微观挂撤意图（如：`🛡️ 压盘吸筹 (买撤31%/卖撤37%)`），与量价结构形成强共振。
+
 
 - **VERSION**: bump v0.13.90 → v0.13.91 (同步 README.md / README.zh-CN.md 徽章)。
 - **交互优化**:

@@ -580,7 +580,16 @@ function L2FundSection({ moreInfo, loading }: { moreInfo: MoreInfoResponse | nul
         <Cell
           label="撤买/撤卖量"
           value={`${safeInt(moreInfo?.cancel_buy)} / ${safeInt(moreInfo?.cancel_sell)}`}
-          hint="当日累计撤买 / 撤卖量; 撤单量大代表挂单意愿不稳"
+          hint="当日累计撤买 / 撤卖量(手); 撤单量大代表挂单意愿不稳"
+        />
+        <Cell
+          label="买撤/卖撤率"
+          value={
+            moreInfo?.cancel_buy != null && moreInfo?.total_buy_vol != null && moreInfo?.cancel_sell != null && moreInfo?.total_sell_vol != null
+              ? `${safeFixed((moreInfo.cancel_buy / (moreInfo.total_buy_vol + moreInfo.cancel_buy)) * 100, 1)}% / ${safeFixed((moreInfo.cancel_sell / (moreInfo.total_sell_vol + moreInfo.cancel_sell)) * 100, 1)}%`
+              : '--'
+          }
+          hint="买盘撤单率 vs 卖盘撤单率(广发金工口径: >35% 提示挂单虚脱或诱多)"
         />
         <Cell
           label="逐笔成交/委托笔数"
