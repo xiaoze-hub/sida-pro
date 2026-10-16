@@ -1,4 +1,27 @@
-## fix-补全 suggest-tab 单测 mock 中 fetchAPI 导出（2026-10-16）
+## feat-反人性纪律闸门(冷水舱警示条+持仓硬防线警报+三层滤网行动禁令)（2026-10-16）
+
+**背景**: 解决交易决策中“看得懂但管不住手”的深层心魔。将系统从单纯的“信息提供者”
+升级为“人性管束者”: 在大盘退潮杀跌、个股逼近最后防线时强力告警, 阻断侥幸逆势抗单与冲动加仓。
+
+**改动(分支 `feat/discipline-gate-20261016`)**
+- **`frontend/src/components/DisciplineCoolDownBanner.tsx`(新)**: 大盘冷静期警示条。
+  当大盘情绪处于退潮期 (ebb) 或冰点期 (ice) 时, 在个股工作台顶部以醒目暗红色呈现冷静期告警,
+  提示统计上该环境下任何抄底加仓胜率极低, 督促保命第一、手绑背后。
+- **`frontend/src/components/DefenseLineBanner.tsx`(新)**: 持仓最后防线与止损警报条。
+  针对真实持仓股, 实时对拍现价与成本防线(-8% 预设硬防线); 接近警戒线时预警, 击穿硬防线时
+  触发强烈止损警报 (“纪律高于预测”, 提示无条件执行止损减仓, 杜绝心疼亏损死扛)。
+- **`frontend/src/pages/StockWorkbench.tsx`**: 在吸顶带1与主图之间挂载冷静期警示条与持仓防线警报。
+- **`frontend/src/components/ThreeTierVerdictRow.tsx`**: 增强三层滤网行动禁令标签
+  (退潮期标红“⚠️ 退潮期严禁盲目加仓”, 放量滞涨标红“⚠️ 滞涨背离禁止追高”, 弹簧试探提示“⏳ 弹簧待确认·切勿抢跑”)。
+
+**测试(+4 例)**
+- `frontend/tests/components/discipline-gate.test.ts`(4): 覆盖冷水舱挂载、退潮/冰点期判定、
+  -8% 预设硬防线止损警报、三层滤网综合行动禁令全套契约。
+- 验证: `tsc -b` 0 错误; `check_ui_rules.mjs` OK; vitest 相关组件测试全绿。
+
+## feat-反人性纪律闸门(冷水舱警示条+持仓硬防线警报+三层滤网行动禁令)（2026-10-16）
+
+**背景**: 解决交易决策中\"看得懂但管不住手\"的深层心魔。将系统从单纯的\"信息提供者\"\n升级为\"人性管束者\": 在大盘退潮杀跌、个股逼近最后防线时强力告警, 阻断侥幸逆势抗单与冲动加仓。\n\n**改动(分支 `feat/discipline-gate-20261016`)**\n- **`frontend/src/components/DisciplineCoolDownBanner.tsx`(新)**: 大盘冷静期警示条。\n  当大盘情绪处于退潮期 (ebb) 或冰点期 (ice) 时, 在个股工作台顶部以醒目暗红色呈现冷静期告警,\n  提示统计上该环境下任何抄底加仓胜率极低, 督促保命第一、手绑背后。\n- **`frontend/src/components/DefenseLineBanner.tsx`(新)**: 持仓最后防线与止损警报条。\n  针对真实持仓股, 实时对拍现价与成本防线(-8% 预设硬防线); 接近警戒线时预警, 击穿硬防线时\n  触发强烈止损警报 (\"纪律高于预测\", 提示无条件执行止损减仓, 杜绝心疼亏损死扛)。\n- **`frontend/src/pages/StockWorkbench.tsx`**: 在吸顶带1与主图之间挂载冷静期警示条与持仓防线警报。\n- **`frontend/src/components/ThreeTierVerdictRow.tsx`**: 增强三层滤网行动禁令标签\n  (退潮期标红\"⚠️ 退潮期严禁盲目加仓\", 放量滞涨标红\"⚠️ 滞涨背离禁止追高\", 弹簧试探提示\"⏳ 弹簧待确认·切勿抢跑\")。\n\n**测试(+4 例)**\n- `frontend/tests/components/discipline-gate.test.ts`(4): 覆盖冷水舱挂载、退潮/冰点期判定、\n  -8% 预设硬防线止损警报、三层滤网综合行动禁令全套契约。\n- 验证: `tsc -b` 0 错误; `check_ui_rules.mjs` OK; vitest 相关组件测试全绿。\n\n## fix-补全 suggest-tab 单测 mock 中 fetchAPI 导出（2026-10-16）
 
 - **修复**: `frontend/tests/components/suggest-tab.test.tsx` 补齐 `@panwatch/api` 的 `fetchAPI` mock，解决三层滤网组件挂载时 CI 报错。
 

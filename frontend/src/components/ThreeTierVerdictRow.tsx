@@ -135,6 +135,31 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </span>
       </div>
 
+      {/* 综合纪律约束与行动禁令 */}
+      <div className="flex items-center gap-1">
+        <span className="text-muted-foreground">纪律约束:</span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+            phaseData?.includes('退潮') || phaseData?.includes('冰点')
+              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+              : wyckoffStage?.includes('突破') || wyckoffStage?.includes('弹簧')
+              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+              : 'bg-muted/40 text-muted-foreground border border-border/40'
+          }`}
+          data-testid="three-tier-discipline-constraint"
+        >
+          {loading
+            ? '评估中...'
+            : phaseData?.includes('退潮') || phaseData?.includes('冰点')
+            ? '⚠️ 退潮期严禁盲目加仓'
+            : wyckoffStage?.includes('放量滞涨')
+            ? '⚠️ 滞涨背离禁止追高'
+            : wyckoffStage?.includes('弹簧试探')
+            ? '⏳ 弹簧待确认·切勿抢跑'
+            : '纪律观望·无右侧信号不动作'}
+        </span>
+      </div>
+
       <span className="ml-auto text-[10px] text-muted-foreground/70">
         客观证据 · 不构成买卖指令
       </span>
