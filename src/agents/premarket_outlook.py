@@ -247,7 +247,7 @@ class PremarketOutlookAgent(BaseAgent):
             market_sentiment = {}
 
         # 6. 事件驱动扫描(核心:提前发现题材,不追涨停)
-        #    全网事件流: 涨价/停产/限产/事故/灾害/战争/政策 关键词
+        #    全网事件流: 大宗涨价 + 全球重磅科技/低空突发 双轨制
         #    未来催化日历: 未来 3 天事件
         event_stream = []
         catalyst = {}
@@ -255,28 +255,45 @@ class PremarketOutlookAgent(BaseAgent):
             from src.collectors.wudao_mcp_client import WudaoMCPClient
 
             wclient = WudaoMCPClient()
-            ev_resp = wclient.call_tool(
+            ev_resp1 = wclient.call_tool(
                 "cls_news",
                 {
                     "keyword": "涨价,停产,限产,事故,灾害,战争,地震,台风,减产,提价,涨价函",
                     "hoursAgo": 48,
-                    "limit": 40,
+                    "limit": 30,
                     "format": "json",
                 },
             )
-            rows = (ev_resp or {}).get("rows") or []
-            for it in rows[:30]:
+            ev_resp2 = wclient.call_tool(
+                "cls_news",
+                {
+                    "keyword": "低空,飞行汽车,特斯拉,马斯克,SpaceX,机器人,算力,eVTOL,航空",
+                    "hoursAgo": 24,
+                    "limit": 30,
+                    "format": "json",
+                },
+            )
+            rows1 = (ev_resp1 or {}).get("rows") or []
+            rows2 = (ev_resp2 or {}).get("rows") or []
+            seen_content = set()
+            for it in (rows1 + rows2):
                 if not isinstance(it, dict):
                     continue
+                cnt = (it.get("content") or "").strip()
+                if not cnt or cnt[:50] in seen_content:
+                    continue
+                seen_content.add(cnt[:50])
                 event_stream.append(
                     {
                         "time": it.get("fullTime") or it.get("time") or "",
                         "level": it.get("level") or "",
-                        "content": (it.get("content") or "")[:200],
+                        "content": cnt[:200],
                         "subjects": it.get("subjects") or [],
                         "ref": it.get("ref") or "",
                     }
                 )
+                if len(event_stream) >= 40:
+                    break
             cat_resp = wclient.call_tool(
                 "market_catalyst_calendar",
                 {"startDate": datetime.now().strftime("%Y-%m-%d"), "endDate": (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")},
