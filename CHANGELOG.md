@@ -1,3 +1,25 @@
+## feat-本土三层滤网决策行与形态归一化(P2: SuggestTab三层结论+中文看涨方向归一)（2026-10-16）
+
+**背景**: 承接 P1 威科夫量价结构图层。P2 在个股工作台 `SuggestTab` 增加三层滤网决策行,
+将「市场情绪层(大盘退潮/冰点) · 题材催化层(未来14天事件) · 量价结构层(威科夫阶段)」
+聚合呈现于建议列表上方, 遵循不堆砌大卡片、不编造数据、不给单点买卖指令的原则。
+同时修复 P1 发现的形态断层(后端 patterns 下发中文'看涨/看跌'被前端白名单拦截)。
+
+**改动(分支 `feat/three-tier-filter-p2-20261016`)**
+- **`frontend/src/components/ThreeTierVerdictRow.tsx`(新)**: 紧凑三层结论行, 自动异步并发
+  拉取 `/market/phase`、`/catalyst/calendar?days=14` 及 `/klines/{symbol}/wyckoff`,
+  统一呈现情绪、催化、量价三个维度的客观状态, 缺项显式 `--`, 明确标注「客观证据 · 不构成买卖指令」。
+- **`frontend/src/pages/workbench/tabs/SuggestTab.tsx`**: 挂载 `ThreeTierVerdictRow`,
+  将 symbol 与 market 上下文向下传导, 位于操作条与建议卡片之间。
+- **`frontend/packages/biz-ui/src/lib/kline-patterns.ts`**: `normalizePatterns` 支持
+  将后端历史下发的中文 '看涨/看跌/中性' 自动归一化为标准的 'bullish/bearish/neutral',
+  修复原有形态标注因枚举大小写/中英文不匹配被整层过滤的潜在断层。
+
+**测试(+4 例)**
+- `frontend/tests/components/three-tier-verdict-row.test.ts`(3): 验证组件挂载、三层端点串联及无买卖指令约束。
+- `frontend/tests/components/kline-patterns-lib.test.ts`(回归+更新): 验证中文看涨成功归一化为 bullish 并正常渲染。
+- 前端综合验证: `tsc -b` 0 错误, `check_ui_rules.mjs` 全绿, 相关 4 个 vitest 测试文件 27/27 全绿。
+
 ## feat-威科夫量价结构K线图层(P1 第三层: 放量滞涨/弹簧试探/缩量沉淀/放量突破)（2026-10-16）
 
 **背景**: A股本土三层滤网落地P1 —— 只做第三层(威科夫量价结构)K线图层标注,
