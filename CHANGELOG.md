@@ -1,3 +1,9 @@
+## release: v0.13.89 (同步 _read_ohlc 单元测试与真实时间戳范围断言)（2026-10-16）
+
+- **VERSION**: bump v0.13.88 → v0.13.89 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁修复**:
+  - `tests/test_theme_mood_api.py`: 同步更新 `test_read_ohlc_filters_none_rows_and_short_circuits` 的参数断言，对齐消除 `CAST(ts AS date)` 后改用原生时间戳 `ts_start`/`ts_end` 的真实签名，CI 单元测试 17 项全绿。
+
 ## release: v0.13.88 (修复 CI 门禁前端单元测试并成功发版)（2026-10-16）
 
 - **VERSION**: bump v0.13.87 → v0.13.88 (同步 README.md / README.zh-CN.md 徽章)。

@@ -194,8 +194,12 @@ def test_read_ohlc_filters_none_rows_and_short_circuits(monkeypatch):
     monkeypatch.setattr("src.db.session.engine", fake_engine)
     out = api._read_ohlc(["20260911"], ["A", "B"])
     assert out == {("20260911", "A"): {"o": 1, "h": 2, "l": 1, "c": 2, "amount": 1.5e8}}  # B 缺 high 被丢
-    # 2026-09-18: 日期改 BETWEEN(2 参) + symbol 分批, 不再 20 日期 IN 列表
-    assert conn.last_params == {"d0": "2026-09-11", "d1": "2026-09-11", "codes": ("A", "B")}
+    # 2026-10-16: 日期改原生时间戳区间(2 参) + symbol 分批, 消除 CAST 慢查询
+    assert conn.last_params == {
+        "ts_start": "2026-09-11 00:00:00+08",
+        "ts_end": "2026-09-11 23:59:59+08",
+        "codes": ("A", "B"),
+    }
     assert api._read_ohlc([], ["A"]) == {}
     assert api._read_ohlc(["20260911"], []) == {}
 
