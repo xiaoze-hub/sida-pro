@@ -833,23 +833,25 @@ def _ladder_payload(window: int, mode: str) -> dict:
     from src.core.limit_ladder import attach_candles, finalize_marks, ladder_window
 
     snap = _live_snapshot() if mode in ("auto", "live") else None
-    days = _read(
+    # 连板回溯基准: 读足回溯窗口(默认至少 60 交易日), 避免 window=5 时仅读5天把高位连板腰斩截断
+    history_days = _read(
         "SELECT DISTINCT trade_date FROM limit_up_events ORDER BY trade_date DESC LIMIT :n",
-        {"n": int(window)},
+        {"n": max(int(window) + 40, 60)},
     )
-    dates = sorted(d["trade_date"] for d in days)
+    history_dates = sorted(d["trade_date"] for d in history_days)
+    dates = history_dates[-int(window):] if len(history_dates) >= int(window) else history_dates
     if not dates:
         return {"dates": [], "ladder": [], "note": "limit_up_events 无数据",
                 "mode": "finalized", "as_of": None, "stale": False,
                 "degraded": None, "live_day": None, "live_as_of": None}
     events = _read(
         "SELECT trade_date, symbol, name, is_sealed_close FROM limit_up_events "
-        "WHERE trade_date >= :a ORDER BY trade_date", {"a": dates[0]},
+        "WHERE trade_date >= :a ORDER BY trade_date", {"a": history_dates[0]},
     )
     names = {e["symbol"]: e["name"] for e in events if e.get("name")}
     symbols = sorted({str(e["symbol"]) for e in events})
     try:
-        ohlc = _read_ohlc(dates, symbols)
+        ohlc = _read_ohlc(history_dates, symbols)
     except Exception as e:  # noqa: BLE001
         # OHLC 只服务日K蜡烛标注, 超时/失败不得把整页打成 500
         logger.warning("[theme-mood] OHLC 批量查询失败, 梯队继续无日K: %r", e)
@@ -860,8 +862,10 @@ def _ladder_payload(window: int, mode: str) -> dict:
     for (d, s) in ohlc.keys():
         trading_days.setdefault(d, set()).add(s)
 
-    ladder = ladder_window(dates, events, names, trading_days=trading_days)
-    marks = finalize_marks(dates, events)
+    # 用充分的历史日期序列计算连板数，再切片返回用户请求的窗口日期
+    full_ladder = ladder_window(history_dates, events, names, trading_days=trading_days)
+    ladder = [day for day in full_ladder if day["date"] in dates]
+    marks = finalize_marks(history_dates, events)
     # 首封×封成比 强度标签(影子运行, 只读附加字段; 无数据即无徽章, 不改既有语义)
     try:
         from src.core.limit_strength_shadow import labels_map
