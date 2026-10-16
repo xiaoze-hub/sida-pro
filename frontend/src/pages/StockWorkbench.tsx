@@ -5,6 +5,8 @@ import { dashboardApi } from '@panwatch/api'
 import { usePausedInterval } from '@panwatch/base-ui'
 import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
+import { DefenseLineBanner } from '@/components/DefenseLineBanner'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
 import IndexBody from '@/pages/workbench/IndexBody'
@@ -355,6 +357,14 @@ export default function StockWorkbench() {
         onRefresh={handleRefresh}
         back={back}
       />
+
+      {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
+      {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
+
+      {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
+      {type === 'stock' && hasPosition ? (
+        <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
+      ) : null}
 
       {type !== 'stock' ? (
         /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
