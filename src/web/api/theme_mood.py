@@ -847,8 +847,6 @@ def _ladder_payload(window: int, mode: str) -> dict:
         "WHERE trade_date >= :a ORDER BY trade_date", {"a": dates[0]},
     )
     names = {e["symbol"]: e["name"] for e in events if e.get("name")}
-    ladder = ladder_window(dates, events, names)
-    marks = finalize_marks(dates, events)
     symbols = sorted({str(e["symbol"]) for e in events})
     try:
         ohlc = _read_ohlc(dates, symbols)
@@ -856,6 +854,14 @@ def _ladder_payload(window: int, mode: str) -> dict:
         # OHLC 只服务日K蜡烛标注, 超时/失败不得把整页打成 500
         logger.warning("[theme-mood] OHLC 批量查询失败, 梯队继续无日K: %r", e)
         ohlc = {}
+
+    # 提取各交易日有实际成交行(未停牌)的 symbol 集合，供梯队算法处理特停穿透
+    trading_days: dict[str, set[str]] = {}
+    for (d, s) in ohlc.keys():
+        trading_days.setdefault(d, set()).add(s)
+
+    ladder = ladder_window(dates, events, names, trading_days=trading_days)
+    marks = finalize_marks(dates, events)
     # 首封×封成比 强度标签(影子运行, 只读附加字段; 无数据即无徽章, 不改既有语义)
     try:
         from src.core.limit_strength_shadow import labels_map

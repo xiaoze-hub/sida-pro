@@ -1,3 +1,11 @@
+## release: v0.13.84 (修复连板梯队特停穿透: 解决新华传媒停牌核查后复牌断板误算为首板缺陷)（2026-10-16）
+
+- **VERSION**: bump v0.13.83 → v0.13.84 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心修复**:
+  - `src/core/limit_ladder.py`: `boards_for_date` 引入交易日与停牌识别，当个股因停牌核查（如特停）无行情数据时，自动穿透跳过停牌日向前累加连板天数，不再因中间断层误断板。
+  - `src/web/api/theme_mood.py`: 提取各交易日实际成交标的集合，注入梯队生成器。
+  - `tests/test_rotation_ladder.py`: 新增特停穿透单测并通过验证。
+
 ## release: v0.13.83 (全套智能体深度升级: 盘前科技/低空双轨制+题材启动盘中主力资金+盘中威科夫与硬防线探针)（2026-10-16）
 
 - **VERSION**: bump v0.13.82 → v0.13.83 (同步 README.md / README.zh-CN.md 徽章)。

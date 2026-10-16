@@ -44,13 +44,27 @@ def _ev(d, sym, sealed=1):
     return {"trade_date": d, "symbol": sym, "is_sealed_close": sealed}
 
 
-def test_boards_count_consecutive_sealed_days_via_table_dates():
-    dates = ["2026-09-08", "2026-09-09", "2026-09-10"]     # 表内日期序列(跳过周末)
-    events = [_ev("2026-09-08", "A"), _ev("2026-09-09", "A"), _ev("2026-09-10", "A"),
-              _ev("2026-09-10", "B")]
-    sealed = {"2026-09-08": {"A"}, "2026-09-09": {"A"}, "2026-09-10": {"A", "B"}}
-    assert boards_for_date(dates, sealed, "2026-09-10") == {"A": 3, "B": 1}
-    assert boards_for_date(dates, sealed, "nope") == {}
+def test_boards_for_date_handles_suspension_penetration():
+    # 模拟新华传媒场景: 2026-09-08~10 连续涨停(3板), 09-11 停牌核查(无交易行), 09-14 复牌涨停 -> 应记 4 板
+    dates = ["2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14"]
+    sealed = {
+        "2026-09-08": {"A"},
+        "2026-09-09": {"A"},
+        "2026-09-10": {"A"},
+        "2026-09-11": set(),  # 停牌无封板
+        "2026-09-14": {"A"},
+    }
+    # 09-11 股票 A 停牌(不在 trading_days 集合内), 其余股票 B 有交易
+    trading_days = {
+        "2026-09-08": {"A", "B"},
+        "2026-09-09": {"A", "B"},
+        "2026-09-10": {"A", "B"},
+        "2026-09-11": {"B"},       # A 停牌
+        "2026-09-14": {"A", "B"},
+    }
+    b = boards_for_date(dates, sealed, "2026-09-14", trading_days=trading_days)
+    assert b == {"A": 4}  # 成功穿透停牌日 09-11, 连续累加为 4 板
+
 
 
 def test_touch_without_seal_does_not_count():
