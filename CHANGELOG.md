@@ -1,3 +1,12 @@
+## release: v0.13.83 (全套智能体深度升级: 盘前科技/低空双轨制+题材启动盘中主力资金+盘中威科夫与硬防线探针)（2026-10-16）
+
+- **VERSION**: bump v0.13.82 → v0.13.83 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心交付**:
+  1. 盘前推演 Agent (`premarket_outlook`): 时间调整为 09:05，推行【双轨制】(大宗供给 + 全球科技/低空突发)，彻底解除涨价词绑架。
+  2. 题材启动识别 Agent (`theme_launch_detector`): 接入开盘啦/悟道盘中主力资金流 (`theme_intraday_capital`) 与爆发原因 (`boomReason`)，启用 09:45 自动调度。
+  3. 盘中监测 Agent (`intraday_monitor`): 深度集成威科夫结构分析与 -8% 持仓硬防线告警。
+  4. 每日收盘复盘 Agent (`daily_report`): 持仓分析区强制接入 -8% 硬防线击穿与纪律约束提示。
+
 ## release: v0.13.82 (反人性纪律闸门完整落地: 冷水舱警示+持仓硬防线告警+三层滤网行动禁令)（2026-10-16）
 
 - **VERSION**: bump v0.13.81 → v0.13.82 (同步 README.md / README.zh-CN.md 徽章)。
