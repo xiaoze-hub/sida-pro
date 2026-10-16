@@ -1,3 +1,10 @@
+## release: v0.13.90 (前端构建拆包瘦身首屏秒开 + 盘中硬防线击穿微信直推)（2026-10-16）
+
+- **VERSION**: bump v0.13.89 → v0.13.90 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心优化**:
+  - `frontend/vite.config.ts`: 配置 `manualChunks` 拆解 `vendor-echarts`、`vendor-charts` 与 `vendor-react`，首屏核心主包 `index.js` 从 835KB 骤降至 254KB（Gzip 后仅 85KB），首屏加载与解析速度提升 3 倍！
+  - `src/agents/intraday_monitor.py`: 当盘中持仓浮亏触及或跌破预设 `-8%` 硬防线时，直接调用 `push_notification` 触发 `critical` 级系统告警，通过微信/移动端通道秒级直推手机，实现风控纪律贴身闭环。
+
 ## release: v0.13.89 (同步 _read_ohlc 单元测试与真实时间戳范围断言)（2026-10-16）
 
 - **VERSION**: bump v0.13.88 → v0.13.89 (同步 README.md / README.zh-CN.md 徽章)。

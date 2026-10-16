@@ -1886,7 +1886,23 @@ class IntradayMonitorAgent(BaseAgent):
                 if c_val > 0:
                     loss_ratio = (cur_val - c_val) / c_val
                     if loss_ratio <= -0.08:
-                        lines.append(f"🚨【触发硬防线警报】：成本 {c_val:.2f}，现价 {cur_val:.2f}，浮亏 {loss_ratio * 100:.2f}%，已触及 -8% 硬止损防线，请坚决执行风控纪律！")
+                        alert_line = f"🚨【触发硬防线警报】：成本 {c_val:.2f}，现价 {cur_val:.2f}，浮亏 {loss_ratio * 100:.2f}%，已触及 -8% 硬止损防线，请坚决执行风控纪律！"
+                        lines.append(alert_line)
+                        # 2026-10-16: 硬防线击穿直接触发微信/钉钉等外部高优先级通道外发
+                        try:
+                            from src.core.notify_center import push_notification
+                            user_id = data.get("user_id") or (data.get("position") or {}).get("user_id")
+                            push_notification(
+                                title=f"🚨【硬防线击穿警报】{stock.name}（{stock.symbol}）",
+                                body=alert_line,
+                                category="risk_warning",
+                                level="critical",
+                                source="intraday_monitor",
+                                also_push=True,
+                                user_id=user_id,
+                            )
+                        except Exception as n_err:
+                            logger.warning(f"硬防线微信外发异常: {n_err}")
             except Exception:
                 pass
         # 数智决策三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
