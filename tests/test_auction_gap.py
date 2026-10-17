@@ -343,18 +343,28 @@ def test_api_anomaly_response_includes_missing_fields(mock_thsdk_l2):
 
 
 def test_api_anomaly_unavailable_includes_missing_fields(monkeypatch):
-    """数据源不可用 -> available=false, 响应仍带 missing_fields + note。"""
+    """数据源不可用 -> available=false, 响应仍带 missing_fields + note。
+
+    2026-10-18 A-03: 接口改走 `fetch_auction_payload`(多一层数据日/阶段语义), 因此
+    monkeypatch 要打在 **core** 的取数函数上; 空池原因按交易阶段分流, 不再是一句话
+    "非交易时段/数据源未接入/无高波动标的"。
+    """
     from src.web.api.auction_pool import anomaly as _anomaly_handler
 
-    def fake_fetch_empty(market="CN"):
-        return []
-
-    monkeypatch.setattr(
-        "src.web.api.auction_pool.fetch_auction_anomaly", fake_fetch_empty
-    )
+    monkeypatch.setattr("src.core.auction_pool.fetch_auction_anomaly", lambda market="CN": [])
+    monkeypatch.setattr("src.core.auction_pool._last_sync_at", lambda: None)
+    monkeypatch.setattr("src.core.auction_pool._LAST_FETCH_ERROR", "ImportError: thsdk 未安装")
     body = _anomaly_handler(market="CN")
     assert body["available"] is False
     assert body["count"] == 0
     assert body["missing_fields"] == ["volume_ratio"]
     assert "量比" in body["note"]
-    assert "数据源未接入" in body["note"] or "不可用" in body["note"]
+    # 数据日期 / 交易阶段(A-03)必须存在, 且空池原因可诊断
+    assert body["trade_phase"] and body["reason_text"]
+    assert body["reason"] in (
+        "source_unavailable",
+        "non_trading_day",
+        "non_auction_session",
+        "no_anomaly",
+    )
+    assert "不可用" in body["note"] or "非交易日" in body["note"] or "非竞价时段" in body["note"]

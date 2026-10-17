@@ -30,6 +30,7 @@ import FactorWeightsPanel from '@/components/FactorWeightsPanel'
 import SignalScoreShareCard from '@/components/SignalScoreShareCard'
 import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
 import JbpPoolTable from '@panwatch/biz-ui/components/JbpPoolTable'
+import CbRadarPanel from '@panwatch/biz-ui/components/CbRadarPanel'
 import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
 import { EmptyState } from '@/components/EmptyState'
@@ -44,7 +45,8 @@ import SignalChip, { type SignalStrength, type SignalTone } from '@panwatch/biz-
 type SourceFilter = 'all' | 'market_scan' | 'watchlist' | 'mixed' | 'strategy' | 'auction' | 'tdx' | 'wencai'
 type HoldingFilter = 'all' | 'held' | 'unheld'
 type RiskFilter = 'all' | 'low' | 'medium' | 'high'
-type ToolTab = 'resonance' | 'strategy' | 'tdx' | 'wencai' | 'stockpool' | 'jbp'
+// 2026-10-18 I-4: 新增"转债雷达"Tab(可转债-正股联动套利)
+type ToolTab = 'resonance' | 'strategy' | 'tdx' | 'wencai' | 'stockpool' | 'jbp' | 'cb'
 
 type StockPoolRow = {
   symbol: string
@@ -1410,6 +1412,7 @@ export default function OpportunitiesPage() {
             <TabsTrigger value="strategy">量化策略库</TabsTrigger>
             <TabsTrigger value="tdx">问小达</TabsTrigger>
             <TabsTrigger value="wencai">同花顺问财</TabsTrigger>
+            <TabsTrigger value="cb">转债雷达</TabsTrigger>
           </TabsList>
           {/* 共振查询(2026-08-22): 一句输入 → 问小达+问财并发 → 策略库精筛 → 共振排序 */}
           <TabsContent value="resonance">
@@ -1933,6 +1936,17 @@ export default function OpportunitiesPage() {
             ) : (
               <div className="mt-2 text-[11px] text-muted-foreground">输入代码后点「扫描共振」查看结果</div>
             )}
+          </TabsContent>
+          <TabsContent value="cb">
+            {/* I-4 转债-正股联动套利雷达: 折溢价 / 双低 / 强赎距离 + 四类场景 */}
+            <CbRadarPanel
+              limit={60}
+              onOpenStock={(stockCode) =>
+                navigate(`/stocks/${encodeURIComponent(stockCode)}`, {
+                  state: navBackState('/opportunities', '机会'),
+                })
+              }
+            />
           </TabsContent>
           <TabsContent value="jbp">
             <JbpPoolTable embedded />

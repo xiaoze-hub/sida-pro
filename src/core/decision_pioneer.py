@@ -550,6 +550,30 @@ def _l2_summary(l2: dict | None) -> dict:
     }
 
 
+def _l2_direction(l2_info: dict) -> tuple[bool | None, str]:
+    """L2 资金方向**三态化**(2026-10-18 审计 A-01 P0 修复)。
+
+    返回 `(inflow, state)`:
+    - `True`  + `"inflow"`   : 可判定为净流入
+    - `False` + `"outflow"`  : 可判定为净流出
+    - `None`  + `"unknown"`  : **不可判定** —— 数据源不可用(`available=False`)、
+      净额缺失、或净额恰为 0(方向无意义)
+
+    为什么必须三态: 布尔化会把"TQ 网关断链"压成"资金流出", 进而输出方向性错误结论
+    (原实现让 G 区强势票在断链时被判成"主力正在出货")。断链只能得到"证据不足"。
+    """
+    if not l2_info or not l2_info.get("available"):
+        return None, "unknown"
+    zjl = l2_info.get("zjl_hb")
+    if not isinstance(zjl, (int, float)):
+        return None, "unknown"
+    if zjl > 0:
+        return True, "inflow"
+    if zjl < 0:
+        return False, "outflow"
+    return None, "unknown"
+
+
 def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     """组合三指标 + L2 主力净流入 + 主力意图 → 完整快照(盘中实时)。
 
@@ -621,6 +645,13 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
 
     # ── 官方口径: 同花顺决策先锋三指标共振状态机 (对标《决策先锋8问8答》§3.4) ──
     # 铁律: 要顺不要逆(GS), 要红不要绿(暗盘/L2), 要活不要死(活跃度>=3)
+    #
+    # ⚠️ 2026-10-18 审计 A-01(P0): L2 方向必须是**三态**, 不能压成布尔 ——
+    # `available=False`(TQ 网关超时/客户端未开/非交易时段) 与"真的净流出"语义完全不同。
+    # 原实现 `available and zjl>0` 把三种情况压成 False, 于是断链时一只 G 区强势票被判成
+    # 一句"主力正在出货"(方向性误导 + 命中合规违禁词)。现在:
+    #   True=净流入 / False=净流出 / None=不可判定(断链、值为 0、字段缺失)
+    # None 只走"证据不足"分支, 绝不进"背离/出货"分支。
     resonance_state = "三指标分歧"
     resonance_action = "关注指标动态"
     resonance_warning = "safe"
@@ -630,25 +661,44 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     gs_signal = gs.get("signal")
     gs_zone = gs.get("zone") or gs.get("state")
     l2_info = _l2_summary(l2)
-    l2_inflow = l2_info.get("available") and (l2_info.get("zjl_hb") or 0.0) > 0
+    l2_inflow, l2_dir_state = _l2_direction(l2_info)
+    l2_known = l2_inflow is not None
 
-    if gs_signal == "G" and act_strong and l2_inflow:
+    if gs_signal == "G" and act_strong and l2_inflow is True:
         resonance_state = "🔥 首次共振·机会挖掘"
-        resonance_action = "趋势有望启动，三指标首次共振，建议逢低重点关注"
+        resonance_action = "趋势有望启动，三指标首次共振，重点关注趋势延续性"
         resonance_warning = "opportunity"
-    elif gs_zone in ("G", "G区", "G区间") and act_strong and l2_inflow:
+    elif gs_zone in ("G", "G区", "G区间") and act_strong and l2_inflow is True:
         resonance_state = "⭐ 共振向好·持股待涨"
-        resonance_action = "处于多方G区且资金机构共振，顺势持股"
+        resonance_action = "处于多方G区且资金机构共振，趋势结构完好"
         resonance_warning = "safe"
-    elif gs_signal == "S" or (gs_zone in ("S", "S区", "S区间") and not act_strong and not l2_inflow):
+    elif gs_signal == "S" or (gs_zone in ("S", "S区", "S区间") and not act_strong and l2_inflow is False):
         resonance_state = "⚠️ 全线走坏·注意风险"
-        resonance_action = "S信号或空方S区且机构资金双撤退，注意潜在调整风险"
+        if l2_inflow is False:
+            resonance_action = "S信号或空方S区且机构资金双撤退，注意潜在调整风险"
+        elif act_strong:
+            # S 信号已确认, 但活跃度仍强 + 资金维缺失: 不替用户编"双撤退"
+            resonance_action = "S信号（已确认空方信号），注意潜在调整风险；资金维不可用，未纳入判定"
+        else:
+            # 资金维不可判定时不许替用户"补"一句资金撤退
+            resonance_action = "S信号/空方S区，且机构活跃度低于强势线，注意潜在调整风险（资金维数据缺失）"
         resonance_warning = "warning"
-    elif gs_zone in ("G", "G区", "G区间") and not l2_inflow:
-        resonance_state = "⚡ 警惕背离·主力出货"
-        resonance_action = "虽处G区但主力资金流出，提防主力假突破诱多出货"
+    elif gs_zone in ("S", "S区", "S区间") and not act_strong and l2_inflow is None:
+        # 两维走坏 + 资金维不可判定: 风险态成立, 但不替用户断言"资金撤退"
+        resonance_state = "⚠️ 两维走坏·资金维缺失"
+        resonance_action = "空方S区且机构活跃度低于强势线，注意潜在调整风险；L2资金维不可用，未纳入判定"
+        resonance_warning = "warning"
+    elif gs_zone in ("G", "G区", "G区间") and l2_inflow is False:
+        # 只陈述"资金背离、上行承压"这一可观测事实, 不写"主力正在出货"这类定性结论
+        resonance_state = "⚡ 资金背离·上行承压"
+        resonance_action = "虽处G区但L2主力净额为负，上行存在抛压，观察是否放量收复"
         resonance_warning = "caution"
-    elif not act_strong and l2_inflow:
+    elif gs_zone in ("G", "G区", "G区间") and l2_inflow is None:
+        # 审计 A-01 核心修复: 断链/无数据 → "证据不足"态, 不给方向性结论
+        resonance_state = "— 资金维缺失·仅双指标"
+        resonance_action = "L2主力净额不可用（网关断链/非交易时段/字段缺失），仅按GS与活跃度两维研判"
+        resonance_warning = "unknown"
+    elif not act_strong and l2_inflow is True:
         resonance_state = "👀 潜伏吸筹·主力在买"
         resonance_action = "活跃度未破强势线但主力暗中流入，关注蓄势突破"
         resonance_warning = "safe"
@@ -664,6 +714,10 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
         "resonance_state": resonance_state,
         "resonance_action": resonance_action,
         "resonance_warning": resonance_warning,
+        # 三态方向(True/False/None) + 枚举化表述, 供前端/参谋卡判断"能不能下方向结论"
+        "l2_inflow": l2_inflow,
+        "l2_direction_state": l2_dir_state,
+        "l2_evaluable": l2_known,
         "data_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
     }
 
@@ -707,5 +761,11 @@ def decision_pioneer_text(symbol: str, market: str = "CN") -> str:
         parts.append(f"主力意图(逐笔): 主力净额{mn / 1e4:+.0f}万")
     elif mi:
         parts.append("主力意图(逐笔): 数据不足")
+
+    # 2026-10-18 数智参谋 §5.6: 补五态共振结论 —— 模型回答「三指标共振」时直接引用后端
+    # 状态机结论, 不再自己编。五态之一: 🔥首次共振 / ⭐共振向好 / ⚠️全线走坏 / ⚡警惕背离 / 👀潜伏吸筹。
+    rs = d.get("resonance_state")
+    if rs:
+        parts.append(f"共振状态: {rs} · {d.get('resonance_action') or ''}".rstrip(" ·"))
 
     return " | ".join(parts)

@@ -108,12 +108,16 @@ def test_screen_endpoint_cache_hit_zero_calls(monkeypatch):
     monkeypatch.setattr(dp, "fetch_decision_pioneer",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("should not refetch")))
     r2 = sp.screen_stock_pool(req)
-    assert r2 == r1 and calls["n"] == 2
+    # 时间语义(as_of/is_live)是组装时现算的, **不进缓存**, 故只比业务载荷
+    assert r2["rows"] == r1["rows"] and calls["n"] == 2
 
 
 def test_screen_endpoint_invalid_symbols_empty():
     r = sp.screen_stock_pool(sp.StockPoolScreenRequest(symbols=["abc", "12"]))
-    assert r == {"rows": [], "total": 0, "truncated": False}
+    assert r["rows"] == [] and r["total"] == 0 and r["truncated"] is False
+    # 2026-10-18 审计 A-03: 空结果也必须带"数据日 + 交易阶段", 不许前端用浏览器时钟猜
+    assert r["data_date"] and r["trade_phase"] and r["as_of"]
+    assert r["is_live"] is False  # 非交易时段/无数据时不许自称实时
 
 
 # ══════════════════════════════════════════════════════════════════════

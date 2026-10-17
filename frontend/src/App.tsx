@@ -13,6 +13,8 @@ import { appApi, fetchAPI, getMyPermissions, isAuthenticated } from '@panwatch/a
 const DashboardPage = lazyWithRetry(() => import('@/pages/Dashboard'), 'dashboard-page')
 const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), 'opportunities-page')
 const AuctionPage = lazyWithRetry(() => import('@/pages/Auction'), 'auction-page')
+// AI 数智参谋一级工作台(2026-10-18, 设计稿 §8.8/§9): 筹码·共振·量价·盘口·竞价·妖股因子全量穿透
+const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copilot-page')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
 // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
@@ -97,6 +99,9 @@ const navItems = [
   { to: '/theme-mood', icon: Activity, labelKey: 'nav.themeMood', perm: 'view_quotes' },
   { to: '/opportunities', icon: Sparkles, labelKey: 'nav.opportunities', perm: 'view_opportunities' },
   { to: '/auction', icon: Flame, labelKey: 'nav.auction', perm: 'view_opportunities' },
+  // AI 数智参谋(2026-10-18): 独立一级入口。**不进 desktopNavGroups** —— 侧栏里渲染成
+  // 独立高亮卡(见 Sidebar 的 aiEntry), 组数仍为 6(设计稿 §9.3 方案 A)。移动端落"更多"。
+  { to: '/ai-copilot', icon: Sparkles, labelKey: 'nav.aiCopilot', perm: 'view_quotes' },
   // v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流)
   { to: '/dark-fund-top', icon: TrendingUp, labelKey: 'nav.darkFundTop', perm: 'view_dark' },
   // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总(TOP/BOTTOM + 行业分布 + 拆单/对倒)
@@ -391,6 +396,8 @@ function App() {
       handler: runOnDesktop(() => setSearchOpen(true)),
     },
     { combo: 'mod+,', handler: runOnDesktop(() => navigate('/settings')) },
+    // AI 数智参谋(2026-10-18, 设计稿 §9.4): ⌘/Ctrl+J 直达一级工作台
+    { combo: 'mod+j', handler: runOnDesktop(() => navigate('/ai-copilot')) },
     // v2.0 §4.4 快捷键导航: g + {key} 序列, 6 主导航全覆盖.
     { sequence: ['g', 'd'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/')) },           // 驾驶舱 Dashboard
     { sequence: ['g', 'p'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/portfolio')) }, // 我的 Portfolio
@@ -489,6 +496,41 @@ function App() {
 
         {/* 6 项主导航 */}
         <nav className="flex-1 overflow-y-auto px-2 py-2">
+          {/* AI 数智参谋: 独立高亮卡(设计稿 §9.3 方案 A —— 不进分组, 组数仍 6)。
+              AI 是产品第一心智, 塞进「机会」组会变成第 4 个子项 = 等于没做入口。 */}
+          {(() => {
+            const ai = navItems.find((n) => n.to === '/ai-copilot')
+            if (!ai) return null
+            if (isNavHiddenForRole(ai) || isNavHiddenForPerm(ai, myPerms)) return null
+            if (isGuestUser() && isNavHiddenForGuest(ai.to)) return null
+            const Icon = ai.icon
+            const label = t(ai.labelKey)
+            const active = isNavItemActive(ai.to, location.pathname)
+            return (
+              <NavLink
+                to={ai.to}
+                title={label}
+                data-testid="nav-ai-copilot"
+                className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
+                  sidebarCollapsed ? 'justify-center px-0' : ''
+                } ${
+                  active
+                    ? 'border-role-watch/60 bg-s3 text-foreground'
+                    : 'border-role-watch/40 bg-s2 text-foreground hover:bg-s3'
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0 text-role-watch" />
+                {!sidebarCollapsed && (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium">{label}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      筹码·共振·撤单·竞价
+                    </span>
+                  </span>
+                )}
+              </NavLink>
+            )
+          })()}
           {desktopNavGroups.map((group) => {
             // guest(demo): 隐藏管理/个人页面导航; 模块权限: 未授权模块隐藏入口
             const items = group.items.filter(n => (!isGuestUser() || !isNavHiddenForGuest(n.to)) && !isNavHiddenForRole(n) && !isNavHiddenForPerm(n, myPerms))
@@ -653,6 +695,8 @@ function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/opportunities" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><OpportunitiesPage /></PermGuard>} />
               <Route path="/auction" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><AuctionPage /></PermGuard>} />
+              {/* AI 数智参谋一级工作台(2026-10-18): 登录 + view_quotes 即可进(与 /stocks/:symbol 同档) */}
+              <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AiCopilotPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
               <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />

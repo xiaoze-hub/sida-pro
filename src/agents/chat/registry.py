@@ -1382,6 +1382,15 @@ async def _tool_get_early_signals(db: Session, args: dict, user: User | None = N
     return render_text(payload)
 
 
+# ──────────────── 数智参谋 5 工具(2026-10-18, AI 数智参谋全链路 §5) ────────────────
+# 位置铁律: 必须插在 thsdk 段之前 —— core 工具是导出清单的**连续前缀**,
+# 插到 thsdk 之后会排到 44+ 位, tests/test_w33_chat_registry.py 的 EXPECTED_CORE_ORDER
+# index 断言直接红。实现收口在 tools_market.py(注册顺序 = MARKET_TOOLS 顺序)。
+from src.agents.chat import tools_market as _tools_market  # noqa: E402  (无模块级反向依赖)
+
+_tools_market.register_market_tools()
+
+
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
 
 from src.agents.chat.tools_thsdk import (  # noqa: E402  (仅 stdlib 级依赖, 不构成循环)

@@ -50,6 +50,8 @@ from src.web.api import (
     main_flow,
     theme_mood,
     auction_pool,
+    cb_radar,
+    copilot,
     abnormal_moves,
     gap_study,
     market_phase,
@@ -698,6 +700,21 @@ app.include_router(
     stock_pool.router,
     prefix="/api/stock-pool",
     tags=["stock-pool"],
+    dependencies=protected,
+)
+# 可转债-正股联动套利雷达(I-4, 2026-10-18): 折溢价/双低/强赎距离 + 四类场景
+app.include_router(
+    cb_radar.router,
+    prefix="/api/cb-radar",
+    tags=["cb-radar"],
+    dependencies=protected,
+)
+
+# AI 数智参谋(Copilot, 2026-10-18): 确定性判定引擎 + 证据聚合 + 一级页指令池
+app.include_router(
+    copilot.router,
+    prefix="/api",
+    tags=["copilot"],
     dependencies=protected,
 )
 # 三指标共振(2026-09-11 数智决策升级): 全市场盘后扫描结果 + 活跃度序列

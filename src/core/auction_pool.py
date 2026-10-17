@@ -50,10 +50,16 @@ MISSING_NOTE: str = "thsdk 竞价异动数据源不提供量比,字段固定为�
 _CACHE_TTL = 30.0
 _cache: dict[str, tuple[float, list[dict]]] = {}
 
+#: 最近一次拉取失败原因(None=最近一次成功)。用于把"空池"拆成可诊断的 reason:
+#: 数据源断链 / 非竞价时段 / 今日真的无异动(A-03 要求三义不能合一)。
+_LAST_FETCH_ERROR: str | None = None
+
 
 def clear_cache() -> None:
     """清空进程内缓存(测试 / 运维手动刷新用)。"""
+    global _LAST_FETCH_ERROR
     _cache.clear()
+    _LAST_FETCH_ERROR = None
 
 
 # ── 异动类型分类(用于 gap_pct / withdraw_rate 推导) ────────────────────────
@@ -206,6 +212,7 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
     2026-08-24 v0.3.2: gap_pct / withdraw_rate 在 _to_records 内基于 异动类型 + 价格列
     直接推导(无需 klines 二次计算), volume_ratio 固定 None(数据源不提供)。
     """
+    global _LAST_FETCH_ERROR
     norm_market = (market or "CN").strip().upper()
     thsdk_market = _MARKET_MAP.get(norm_market, "USHA")
 
@@ -243,8 +250,10 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
                     continue
                 seen_codes.add(sym)
                 all_records.append(rec)
+        _LAST_FETCH_ERROR = None
     except Exception as e:  # noqa: BLE001 - 数据源不可用统一降级
         logger.warning("[auction_pool] 竞价异动拉取失败 market=%r: %r", market, e)
+        _LAST_FETCH_ERROR = f"{type(e).__name__}: {e}"
         all_records = []
 
     # ── 通达信 TQ 盘口增强: 补齐缺失的 涨幅、量比、竞价金额、撤单率与妖股评分 ──
@@ -308,7 +317,7 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
                 r["demon_grade"] = dfactor.get("grade")
                 r["demon_streak"] = dfactor.get("max_streak")
 
-            # 7. 主力意图与买卖建议研判 (对标实战交易决策)
+            # 7. 盘口意图判定(只给事实标签, 不给买卖建议 / 不做"出货"定性)
             gap = r.get("gap_pct") or 0.0
             open_amt = r.get("open_amount") or 0.0
             v_ratio = r.get("volume_ratio") or 0.0
@@ -328,7 +337,7 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
                 r["verdict_level"] = "buy"
             elif w_rate >= 40.0 and gap > 2.0:
                 r["verdict_tag"] = "⚠️ 诱多试盘"
-                r["verdict_action"] = "买盘撤单率过高，谨防主力假托单掩护开盘出货"
+                r["verdict_action"] = "买盘撤单率过高，存在假托单掩护开盘派发的可能"
                 r["verdict_level"] = "warning"
             elif gap <= -3.0 and open_amt >= 1e7:
                 r["verdict_tag"] = "⚡ 恐慌砸盘"
@@ -353,6 +362,143 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
 
     _cache[cache_key] = (time.time(), all_records)
     return all_records
+
+
+def _last_sync_at():
+    """最近一次竞价池落库时刻(DB)。读不到(未初始化/无表/无行)返回 None, 不抛。"""
+    try:
+        from src.db.models import AuctionAnomalyRecord
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(AuctionAnomalyRecord)
+                .order_by(AuctionAnomalyRecord.created_at.desc())
+                .first()
+            )
+            return getattr(row, "created_at", None) if row else None
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001 - 元数据缺失不能拖垮数据本身
+        logger.debug("[auction_pool] 读取最近同步时刻失败: %r", e)
+        return None
+
+
+def _source_clock(records: list[dict]) -> str | None:
+    """源端自带的时间列(thsdk 竞价异动 6 列里的"时间"), 原样返回不做格式化。
+
+    这是判断"这份池子到底是哪一刻的"唯一一手证据; 源不给就如实 None, 不拿 now() 顶替。
+    """
+    for r in records or []:
+        for k in ("时间", "time", "timestamp", "Time"):
+            v = r.get(k)
+            if v not in (None, ""):
+                return str(v)
+    return None
+
+
+def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
+    """竞价池**带数据日期/交易阶段**的响应体(2026-10-18 审计 A-03 P0 修复)。
+
+    原响应 `{available,count,records,missing_fields,note}` 缺 `trade_date/as_of/is_live`,
+    前端只能用 `new Date()`(浏览器时钟)渲染"同步 HH:MM:SS" —— 周日打开会把上周五 9:25
+    的池子说成"刚刚同步"。本函数把这些语义补齐:
+
+    - `data_date`     : 池子所属交易日(非交易日回看最近交易日; 推不出就 None)
+    - `trade_phase`   : 当前交易阶段(non_trading_day/pre_open/auction/continuous/post_close…)
+    - `is_live`       : **仅竞价窗口内(09:15-09:25)且数据就是今天的** 才为 True
+    - `as_of`         : **服务端**组装时刻(替代浏览器时钟)
+    - `data_clock`    : 源端自带时间(如 "09:25:03"), 没有就 None
+    - `reason`        : 空池原因码, 把原来"三义合一"的一句话拆开
+                        (`source_unavailable` / `non_trading_day` / `non_auction_session` / `no_anomaly`)
+
+    数据为空时一律 `available=False` 且 `reason` 可诊断, 绝不编造。
+    """
+    from src.core.trade_phase import (
+        PHASE_AUCTION,
+        as_of_iso,
+        cn_now,
+        phase_meta,
+        trading_day_anchor,
+    )
+
+    records = fetch_auction_anomaly(market)
+    meta = phase_meta(now)
+    phase = meta["trade_phase"]
+    today = cn_now(now).date()
+    clock = _source_clock(records)
+
+    # ① 源端带完整日期 → 以源为准; ② 只带时分秒/没有 → 归属"最近一个交易日"
+    #    (非交易日回看上一个交易日, 这正是 A-03 要修的那一格)
+    sync_at = _last_sync_at()
+    sync_date = None
+    if sync_at is not None and hasattr(sync_at, "date"):
+        sync_date = sync_at.date()
+
+    data_date = None
+    if clock:
+        from src.core.trade_phase import parse_date  # noqa: PLC0415 - 源时钟解析
+
+        data_date = parse_date(clock)
+    if data_date is None:
+        # 有行 → 归属最近交易日; 无行 → 只认"库里最后一次落库日", 两者都没有就诚实地给 None
+        # (绝不在"没有任何数据"时编一个数据日出来)
+        data_date = trading_day_anchor(today) if records else sync_date
+
+    live = bool(records) and phase == PHASE_AUCTION and data_date == today
+
+    if records:
+        if live:
+            reason = None
+            reason_text = f"实时竞价池（{meta['phase_label']}）"
+        elif data_date == today:
+            reason = None
+            reason_text = (
+                f"当前{meta['phase_label']}，展示今日 09:25 集合竞价结果（已定型）"
+            )
+        else:
+            reason = None
+            reason_text = (
+                f"非实时：当前{meta['phase_label']}，展示 {data_date} 的竞价快照"
+            )
+    elif not meta["is_trading_day"]:
+        # 闭市是主导事实; 若同时拉取失败, 把错误也写出来(不隐藏运维信号)
+        reason = "non_trading_day"
+        reason_text = "非交易日，竞价池无当日数据"
+        if _LAST_FETCH_ERROR:
+            reason_text += f"（数据源同时不可达：{_LAST_FETCH_ERROR}）"
+    elif _LAST_FETCH_ERROR:
+        reason = "source_unavailable"
+        reason_text = "数据源不可用（thsdk 竞价异动拉取失败），非「今日无异常」"
+    elif phase != PHASE_AUCTION:
+        reason = "non_auction_session"
+        reason_text = f"非竞价时段（当前{meta['phase_label']}），无当日竞价快照"
+    else:
+        reason = "no_anomaly"
+        reason_text = "今日集合竞价无异动标的"
+
+    note = MISSING_NOTE + (f" | {reason_text}" if reason_text else "")
+    return {
+        "available": bool(records),
+        "count": len(records),
+        "records": records,
+        "missing_fields": list(MISSING_FIELDS),
+        "note": note,
+        # ── A-03: 数据日期 / 交易阶段 / 是否实时 ──────────────────────────
+        "data_date": data_date.isoformat() if data_date else None,
+        "trade_phase": phase,
+        "phase_label": meta["phase_label"],
+        "is_trading_day": meta["is_trading_day"],
+        "is_live": live,
+        "is_today": data_date == today,
+        "as_of": as_of_iso(now),
+        "data_clock": clock,
+        "data_synced_at": sync_at.isoformat() if sync_at is not None else None,
+        "reason": reason,
+        "reason_text": reason_text,
+        "source": "thsdk 集合竞价异动池 + 通达信 TQ 逐票增强",
+    }
 
 
 def sync_auction_to_db(records: list) -> int:

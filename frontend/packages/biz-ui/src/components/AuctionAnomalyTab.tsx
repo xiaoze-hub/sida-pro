@@ -13,13 +13,16 @@ import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
  * 挂在机会页 Opportunities 的竞价异动 Tab 内。
  * 数据 GET /api/auction/anomaly?market=CN (fetchAPI 自动补 /api 前缀)。
  *
- * 口径(2026-08-24):
- *   - gap_pct       竞价相对昨收涨幅%(二次计算: (价格/昨收 - 1)*100, 昨收取
- *                   PG klines hypertable 该 symbol ts<今天 的最近一条 close)。
- *                   脏数据过滤: 涨停试盘/跌停试盘 且 价格<=1.01 且 |gap|>30% -> 置 None。
- *   - withdraw_rate 撤单率%(数据源不提供, 固定 None, 表格显 '—')。
- *   - volume_ratio  竞价量比(数据源不提供, 固定 None, 表格显 '—')。
+ * 口径(2026-08-24 v0.3.2 修正, 勿再按旧注释理解):
+ *   - gap_pct       竞价涨跌幅%: 由"异动类型 + 价格列"直接推导(价格列是幅度小数, 不是价格)。
+ *   - withdraw_rate 撤单率%: 仅"涨停撤单/跌停撤单"类型有值; TQ 增强成功后按
+ *                   BCancel/(TotalBVol+BCancel) 覆盖为真实值。**不是固定 None**。
+ *   - volume_ratio  竞价量比: 仅 thsdk 提供不了, TQ 逐票增强成功时才有值, 否则 '—'。
  * 响应带 missing_fields / note, 表头加 tooltip 注明数据源不含此字段。
+ *
+ * 2026-10-18 审计 A-03(P0): 表头"同步时刻"改为**后端给的 data_date / trade_phase /
+ * is_live / data_clock**。旧实现用 `new Date()`(浏览器本地时钟), 周日打开会把上周五
+ * 9:25 的池子说成"刚刚同步" —— 数据时刻永远由数据源/服务端给, 不许前端猜。
  *
  * 行色: 高开 ≥+3% 染红, 低开 ≤-3% 染绿(红=上涨, 绿=下跌, A股口径)。
  * 交互: 行点击"查看详情"(onOpenDetail 回调, 由宿主注入); "+自选" 调 stocksApi.create。
@@ -52,6 +55,25 @@ export interface AuctionAnomalyResp {
   note?: string
   /** 2026-08-24: 后端声明"本接口不提供"的字段,前端对应列显 '—' */
   missing_fields?: string[]
+  // ── 2026-10-18 审计 A-03: 数据日期 / 交易阶段(严禁用浏览器时钟替代) ──
+  /** 池子所属交易日(非交易日回看最近交易日) */
+  data_date?: string | null
+  trade_phase?: string
+  phase_label?: string
+  is_trading_day?: boolean
+  /** 仅竞价窗口内(09:15-09:25)且数据就是今天的才为 true */
+  is_live?: boolean
+  is_today?: boolean
+  /** 服务端组装时刻(不是浏览器时间) */
+  as_of?: string
+  /** 源端自带时间, 如 "09:25:03"; 源不给则 null */
+  data_clock?: string | null
+  /** 最近一次落库同步时刻 */
+  data_synced_at?: string | null
+  /** 空池原因码: source_unavailable / non_trading_day / non_auction_session / no_anomaly */
+  reason?: string | null
+  reason_text?: string
+  source?: string
 }
 
 interface AuctionAnomalyTabProps {
@@ -95,7 +117,6 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [adding, setAdding] = useState<Set<string>>(new Set())
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const [gapStudy, setGapStudy] = useState<GapStudyResp | null>(null)
   const mountedRef = useRef(true)
 
@@ -106,7 +127,6 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
         cacheMode: 'reload',
       })
       if (mountedRef.current) setData(res)
-      if (mountedRef.current) setUpdatedAt(new Date())
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : '竞价异动池加载失败')
     } finally {
@@ -164,9 +184,10 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
 
   const records = data?.records ?? []
   const total = data?.count ?? records.length
-  const syncAt = updatedAt
-    ? updatedAt.toLocaleTimeString('zh-CN', { hour12: false })
-    : '--'
+  // A-03: 数据时刻只认后端 —— 实时看源端时钟(data_clock), 非实时看数据日 + 阶段
+  const liveClock = data?.data_clock || (data?.as_of ? data.as_of.slice(11, 19) : '--')
+  const dataDate = data?.data_date || '--'
+  const phaseLabel = data?.phase_label || '阶段未知'
 
   return (
     <div className="card p-3 md:p-4">
@@ -174,9 +195,19 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <Eye className="w-3.5 h-3.5" />
-          <span>
-            09:25 集合竞价异动池 · 同步 <span className="font-mono text-foreground">{syncAt}</span>
-          </span>
+          {data?.is_live ? (
+            <span>
+              竞价池 · <span className="font-semibold text-stock-up">实时</span>{' '}
+              <span className="font-mono text-foreground">{liveClock}</span>
+            </span>
+          ) : (
+            <span>
+              竞价池 · 数据日 <span className="font-mono text-foreground">{dataDate}</span>
+              <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                {data?.is_today ? `${phaseLabel}(已定型)` : `${phaseLabel}快照`}
+              </span>
+            </span>
+          )}
           <span className="opacity-40">|</span>
           <span>
             共 <span className="font-mono text-foreground">{total}</span> 只
@@ -202,7 +233,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               <th className="text-right py-1.5 pr-2">竞价成交额</th>
               <th className="text-right py-1.5 pr-2">竞价量比</th>
               <th className="text-right py-1.5 pr-2">撤单率</th>
-              <th className="text-left py-1.5 px-2">9:25 主力意图与买卖建议</th>
+              <th className="text-left py-1.5 px-2">9:25 盘口意图判定</th>
               <th className="text-right py-1.5">操作</th>
             </tr>
           </thead>
@@ -310,8 +341,18 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
             })}
             {records.length === 0 && !loading && (
               <tr>
-                <td colSpan={7} className="py-8 text-center text-[11px] text-muted-foreground">
-                  暂无竞价异动 (非交易时段 / 数据源未接入 / 无高波动标的)
+                <td colSpan={9} className="py-8 text-center text-[11px] text-muted-foreground">
+                  {/* A-03/A-13: 三种原因三种文案, 不再三义合一 */}
+                  {data?.reason_text ||
+                    (data?.reason === 'source_unavailable'
+                      ? '数据源不可用(thsdk 竞价异动拉取失败)，非「今日无异常」'
+                      : data?.reason === 'non_trading_day'
+                        ? '非交易日，竞价池无当日数据'
+                        : data?.reason === 'non_auction_session'
+                          ? `非竞价时段（当前${phaseLabel}），无当日竞价快照`
+                          : data?.reason === 'no_anomaly'
+                            ? '今日集合竞价无异动标的'
+                            : '暂无竞价异动数据')}
                 </td>
               </tr>
             )}

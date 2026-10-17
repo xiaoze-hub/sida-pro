@@ -67,6 +67,7 @@ const enUS: Messages = {
     themeMood: 'Theme Mood',
     opportunities: 'Opportunities',
     auction: 'Auction',
+    aiCopilot: 'AI Copilot',
     darkFundTop: 'Dark Flow TOP',
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',

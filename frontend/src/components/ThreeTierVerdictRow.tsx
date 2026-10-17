@@ -213,6 +213,8 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
                 ? 'text-green-500'
                 : resonanceState.warning === 'caution'
                 ? 'text-yellow-500'
+                : resonanceState.warning === 'unknown'
+                ? 'text-muted-foreground'  // A-01: 证据不足态灰显, 不给方向色
                 : 'text-foreground'
             }`}
             title={resonanceState.action}

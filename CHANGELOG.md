@@ -1,3 +1,85 @@
+## fix: A-01 断链熔断 + A-03 数据日期 + feat: I-4 转债联动套利雷达（2026-10-18，未发版）
+
+> 依据：`docs/research/SIDA_PRO整体项目深度审计与创新功能规划.md`（基线 v0.14.9 / b7aeb12）
+> 第 0 批止血（A-01 / A-03）与首批创新（I-4）。三件事同一批落地，因为参谋卡 R2/R7 读
+> `resonance_warning`：**证据层不许撒谎**，否则参谋第一天就会把「TQ 断线」讲成方向性结论。
+
+- **A-01【P0】L2 方向三态化（断链熔断）** — `src/core/decision_pioneer.py`
+  - 新增 `_l2_direction(l2_info) -> (True|False|None, "inflow|outflow|unknown")`：
+    `available=False`、净额缺失、净额恰为 0 **一律 unknown**（原实现压成布尔 False → 走"资金流出"分支）。
+  - 状态机新增「— 资金维缺失·仅双指标」(`resonance_warning="unknown"`)，**断链时不再进入"背离"分支**；
+    "⚡ 警惕背离·主力出货"改为"⚡ 资金背离·上行承压"（只陈述可观测事实，同时清掉合规违禁词）；
+    S 区 + 资金维缺失单独给「⚠️ 两维走坏·资金维缺失」，不替用户断言"资金双撤退"。
+  - 响应新增 `l2_inflow` / `l2_direction_state` / `l2_evaluable` 三字段，供前端与参谋卡判断
+    「能不能下方向结论」；`src/core/resonance.py` 同步清掉 4 处"主力出货"定性文案。
+- **A-03【P0】数据日期 / 交易阶段显式化** — 新增 `src/core/trade_phase.py`（唯一事实源）
+  - 交易阶段枚举 `non_trading_day / pre_open / auction / auction_match / continuous / noon_break /
+    post_close`（走 `trading_calendar.is_trading_day`，不用星期近似；非交易日一律回看最近交易日）。
+  - 竞价池 `GET /api/auction/anomaly` 追加 `data_date / trade_phase / phase_label / is_live /
+    is_today / as_of（服务端时钟）/ data_clock（源端口径如 09:25:03）/ data_synced_at / reason /
+    reason_text / source`；空池原因拆成 `source_unavailable / non_trading_day /
+    non_auction_session / no_anomaly`（原「三义合一」不可诊断）。
+  - 机会池 `POST /api/stock-pool/screen` 追加同族字段；**时间字段不进缓存**（缓存只存 rows，
+    组装时现算），避免把缓存写入时刻当数据时刻。
+  - 前端 `AuctionAnomalyTab`：删掉 `new Date()` 的"同步 HH:MM:SS"，改为「数据日 2026-10-16（收盘后）」
+    / 「实时 09:25:03」；空态按 reason 分支；表头「9:25 主力意图与买卖建议」→「9:25 盘口意图判定」；
+    修正"撤单率固定 None"的陈旧注释（A-12）。
+  - `ThreeTierVerdictRow` 对 `unknown` 灰显；`lib/copilot/types.ts` 的 `resonance_warning` 枚举补 `unknown`。
+- **I-4【新功能】可转债-正股联动套利与折溢价雷达** — `src/core/cb_radar.py` +
+  `src/web/api/cb_radar.py`（挂 `/api/cb-radar`，`protected`）+ `CbRadarPanel.tsx`（机会页「转债雷达」Tab）
+  - 指标：转股价值 `100/转股价×正股价`、溢价率、双低值、强赎距离、纯债溢价、相对转股价值滞后幅度；
+    **转股价/强赎触发价/纯债价值全部用客户端原值，不自行贴现/估算**（A-06 同族铁律），缺字段显 `—`。
+  - 四类场景：正股封板·转债滞后（20cm/30cm 分档阈值）、折价套利（≤-1%）、强赎触发区/接近强赎、
+    双低前列（全池排名）。
+  - 数据源零新增：`get_stock_list list_type=32` 转债码表 + `get_pricevol` 批量价量 +
+    `get_kzz_info` 条款；条款 12h 进程内缓存、Top-N（按|涨跌幅|）只算用户真会看的几十只，
+    避免 A-02 式 N+1；响应经 `biz_cache` 跨进程缓存（盘中 60s / 非盘中 600s），**降级不缓存**。
+  - 合规：只陈述条件是否成立（折价/距离触发价），不给买卖建议；尾注披露未计费用与 T+1。
+- **门禁**：新增 `tests/test_decision_pioneer_resonance.py`（7）、`tests/test_auction_payload_phase.py`（13）、
+  `tests/test_trade_phase.py`（17）、`tests/test_cb_radar.py`（21）、`tests/test_cb_radar_api.py`（6）；
+  前端 `auction-datadate.test.tsx`（4）/`cb-radar-panel.test.tsx`（3）；
+  `check_ui_rules.mjs` OK、`tsc -b` OK、新模块覆盖率 80%（trade_phase 98% / api 100%）。
+
+## feat: AI 数智参谋工具链与工作台入口（2026-10-18，未发版）
+
+> 设计稿：`docs/research/AI数智参谋全链路落地设计方案.md`。本批只做「工具链 + 触点」，
+> `/api/copilot/brief` 契约由后续批次补齐；在此之前卡片按「暂不可用」诚实降级，不编结论。
+
+- **后端 · 5 个 chat 工具**（`src/agents/chat/tools_market.py` 新增，`registry.py` 在 thsdk 段之前注册）：
+  - `get_chip_accumulation`（自算 CYQ 120 日底仓沉淀，与 `get_stock_chips` 客户端公式口径划清）、
+    `get_cancel_order_intent`（TQ 会话撤单率 + 意图定性，与 `get_orderbook` 静态挂单区分）、
+    `get_wyckoff_structure`（日K量价结构 + Phase A–E）、`get_demon_factor`（妖股六维因子/身位）、
+    `scan_auction_anomaly`（全市场竞价五态扫描 + 金额阈值）。
+  - 注册表 49 → **54**（36 core + 1 handler-only + 11 thsdk + 6 tq），`EXPECTED_CORE_ORDER` 末尾追加 5 项，
+    导出顺序 index 31~35（core 连续前缀铁律）。
+  - `src/web/api/chat.py`：新增 5 条流式阶段文案（竞价扫描明示 20–60s），SYSTEM_PROMPT 追加
+    「数智参谋工具路由矩阵 + 三段式回答模板 + 防幻觉约束」。
+  - `src/core/decision_pioneer.py`：`decision_pioneer_text()` 补「共振状态 · action」五态结论。
+- **前端 · 三段式参谋卡**：`components/copilot/CopilotBriefCard.tsx` + `CopilotDefenseBlock` + `CopilotPlanBlock`
+  接入工作台「建议」标签**最上层**（意图定性 / 关键防守位 / 操盘预案），旧建议列表原样保留为历史流水。
+  缺失三态（正常 / 升级解锁 / `--`+原因）逐格实现；价位一律 `safeFixed`，不补 0。
+- **前端 · 常驻唤醒胶囊**：`components/copilot/CopilotCapsule.tsx` 挂个股工作台右下角
+  （`bottom-36 md:bottom-20`，避让 ChatWidget FAB），点击派发 `panwatch-open-chat` 并由既有
+  ChatWidget 建带 brief 快照的新会话；收起后原地留 ✨ 恢复钮（不必回工具栏找）。
+- **前端 · 一级入口**：`pages/AiCopilot.tsx`（`/ai-copilot`，战术指令池 + 对话流 + 代码查卡）、
+  App 侧栏独立高亮卡（组数仍 6）、`⌘/Ctrl+J` 快捷键、i18n `nav.aiCopilot`、页签标题注册。
+- **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
+  前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
+
+## release: v0.15.0 (AI数智参谋Copilot全链路打通 + A-01/A-03断链熔断 + 可转债套利雷达I-4首发)（2026-10-18）
+
+- **VERSION**: bump v0.14.9 → v0.15.0 (同步 README.md / README.zh-CN.md 徽章)。
+- **AI 数智参谋 (Copilot) 全链路落地**:
+  - 后端实现 `src/core/copilot_brief.py` 确定性判定引擎（R1-R9 真值表、置信度算法、防守位去重与优先级、持仓/空仓预案真值表）与 7 维证据多线程并发聚合。
+  - 新增 `src/web/api/copilot.py`：`/api/copilot/brief/{symbol}` 与 `/api/copilot/presets` 接口，带分级 TTL 与单飞防穿透。
+  - 新增 5 个盘口/量化 Chat Tools（`tools_market.py`）并扩充注册表至 54 个工具。
+  - 前端上线 `/ai-copilot` 独立一级页面、工作台右下角常驻唤醒胶囊 `CopilotCapsule.tsx`、以及个股工作台多维数智参谋卡片 `CopilotBriefCard.tsx`。
+- **P0 级审计隐患加固 (A-01 / A-03)**:
+  - 修复 `decision_pioneer.py` 在 TQ 断链或休市时误判为“⚡主力出货”的致命 bug，新增三态熔断保护与合规文案净化。
+  - 新增 `src/core/trade_phase.py` 交易阶段与真实日期唯一事实源，竞价池与机会池显式注入 `data_date`，杜绝周末假装同步。
+- **I-4 独家创新功能：可转债-正股联动套利雷达首发**:
+  - 新增 `src/core/cb_radar.py` 与 `/api/cb-radar/snapshot`，结合通达信转债 14 字段，前端机会页上线「转债雷达」大屏。
+
 ## release: v0.14.9 (修复筹码算法Dict兼容性，彻底激活K线横向筹码山峰直方图)（2026-10-18）
 
 - **VERSION**: bump v0.14.8 → v0.14.9 (同步 README.md / README.zh-CN.md 徽章)。

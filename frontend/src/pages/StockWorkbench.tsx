@@ -5,6 +5,7 @@ import { dashboardApi } from '@panwatch/api'
 import { usePausedInterval } from '@panwatch/base-ui'
 import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
+import { CopilotCapsule } from '@/components/copilot/CopilotCapsule'
 import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
 import { DefenseLineBanner } from '@/components/DefenseLineBanner'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
@@ -455,6 +456,11 @@ export default function StockWorkbench() {
           <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
         </div>
       )}
+
+      {/* AI 数智参谋常驻唤醒胶囊(2026-10-18, 设计稿 §9.2④): 只挂个股分支。
+          指数/板块没有筹码/撤单证据, 挂了只会给出空结论 —— 不挂。
+          挂在这一层(不在 key={refreshKey} 子树内): 页面刷新不重挂载, 胶囊不闪、不重取数。 */}
+      {type === 'stock' ? <CopilotCapsule symbol={symbol} market={MARKET} /> : null}
     </div>
   )
 }

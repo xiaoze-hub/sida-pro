@@ -211,20 +211,50 @@ def screen_stock_pool(req: StockPoolScreenRequest):
 
     结果走 `biz_cache`(L1 内存 + L2 Redis, TTL 60s): 命中**零外呼**, 跨 worker/重启共享
     (与同文件 `screen_cached`/jbp 同款写法); 未命中才现算并回填。
+
+    2026-10-18 审计 A-03: 响应追加 `data_date / trade_phase / phase_label / is_live / as_of`
+    —— 机会池也必须显式标注"数据属于哪个交易日 + 当前交易阶段", 不许前端用浏览器时钟
+    冒充实时。时间字段**不进缓存**(缓存只存 rows, 组装时现算), 避免把缓存写入时刻当数据时刻。
     """
     symbols = _valid_symbols(req.symbols)
     if not symbols:
-        return {"rows": [], "total": 0, "truncated": False}
+        return _with_phase({"rows": [], "total": 0, "truncated": False})
 
     from src.web.cache.biz_cache import biz_cache
 
     key = "stock_pool:screen:" + ",".join(symbols)
     cached = biz_cache.get_json(key)
     if cached is not None:
-        return cached
+        return _with_phase(cached)
     data = _screen(symbols)
     biz_cache.set_json(key, data, ttl=_SCREEN_TTL)
-    return data
+    return _with_phase(data)
+
+
+def _with_phase(payload: dict) -> dict:
+    """给机会池响应注入时间语义(A-03)。缓存里只有 rows, 时刻在这里现算。"""
+    from src.core.trade_phase import (
+        PHASE_AUCTION,
+        PHASE_CONTINUOUS,
+        as_of_iso,
+        cn_now,
+        phase_meta,
+    )
+    from src.core.trading_calendar import trading_day_anchor
+
+    meta = phase_meta()
+    today = cn_now().date()
+    data_date = trading_day_anchor(today)
+    live = meta["trade_phase"] in (PHASE_AUCTION, PHASE_CONTINUOUS) and data_date == today
+    return {
+        **payload,
+        "data_date": data_date.isoformat(),
+        "trade_phase": meta["trade_phase"],
+        "phase_label": meta["phase_label"],
+        "is_live": live,
+        "as_of": as_of_iso(),
+        "source": "TQ L2 主力净额 + Engine 日线(GS/活跃度)",
+    }
 
 
 class JbpScreenRequest(BaseModel):

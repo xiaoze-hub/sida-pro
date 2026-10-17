@@ -5,7 +5,7 @@
 1. src/core 下死代码工具包装模块已删除; 全仓 *.py 内容 grep 命中 0。
 2. 注册表: schema 与 handler 同处注册, 每个工具含 caliber(口径标签, 非空)
    + requires(权限点); get_capital_flow caliber 为固定红线文案。
-3. chat_api.CHAT_TOOLS 由注册表导出: 29 个核心 schema(原顺序) + 11 个 thsdk + 3 个 TQ(2026-09-25 新增)。
+3. chat_api.CHAT_TOOLS 由注册表导出: 36 个核心 schema(原顺序 + 数智参谋 5 工具) + 11 个 thsdk + 6 个 TQ(2026-09-25 新增)。
 4. 合并后 _run_tool_loop(stream=True/False) 与原两函数事件语义等价(mock AI client):
    正常出字 / tool 轮次 / chat_multi 回落 / LLMDegradedError 不回落 /
    MAX_TOOL_ROUNDS 兜底 / 异常兜底。
@@ -35,6 +35,9 @@ EXPECTED_CORE_ORDER = [
     "get_northbound", "get_hot_stocks", "get_web_content", "get_main_flow_compare",
     "get_delta_series", "get_orderbook", "get_event_catalyst", "get_intent_explain",
     "get_factor_ic_report", "get_stock_chips", "get_early_signals",
+    # 数智参谋 5 工具(2026-10-18): 注册在 core 段尾、thsdk 段前 —— 导出顺序 index 31~35
+    "get_chip_accumulation", "get_cancel_order_intent", "get_wyckoff_structure",
+    "get_demon_factor", "scan_auction_anomaly",
 ]
 
 EXPECTED_THSDK = {
@@ -84,7 +87,7 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 49  # 31 core + 1 handler-only + 11 thsdk + 6 tq
+    assert len(CHAT_TOOL_REGISTRY) == 54  # 36 core + 1 handler-only + 11 thsdk + 6 tq
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"

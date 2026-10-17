@@ -35,7 +35,15 @@ function navItemPaths(): string[] {
  * §4.3 已把这三页并入别处: 历史→报告(?tab=history)、模拟盘→影子(?tab=paper)、提醒→通知(?tab=alerts);
  * 它们的 navItems 条目保留只为**移动端"更多"**与**老书签跳转**, 桌面侧栏不再单独占位。
  */
-const NOT_GROUPED = new Set<string>(['/history', '/paper-trading', '/alerts'])
+const NOT_GROUPED = new Set<string>([
+  '/history',
+  '/paper-trading',
+  '/alerts',
+  // 2026-10-18: `/ai-copilot` 不进分组是**产品决定**(设计稿 §9.3 方案 A) ——
+  // 它在侧栏渲染成独立高亮卡(data-testid="nav-ai-copilot"), 组数仍为 6;
+  // 放进「机会」组会变成第 4 个子项, 等于没做入口。
+  '/ai-copilot',
+])
 
 describe('一级导航 ≤6 组', () => {
   it('分组数 ≤6', () => {
