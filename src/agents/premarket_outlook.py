@@ -390,7 +390,8 @@ class PremarketOutlookAgent(BaseAgent):
             try:
                 from src.core.demon_factors import top_demon_factors
 
-                demon_factors = top_demon_factors(30)
+                # 扩大至 Top 50，确保覆盖主线题材中的潜在妖股先锋
+                demon_factors = top_demon_factors(50)
             except Exception as e:  # noqa: BLE001
                 logger.debug("[%s] 先锋组因子不可用: %s", trace_id, e)
             ambush_scored = await asyncio.to_thread(
@@ -688,7 +689,7 @@ class PremarketOutlookAgent(BaseAgent):
         df_map = data.get("demon_factors") or {}
         if df_map:
             lines.append("## 妖股先锋组(股性因子 Top, 题材启动时的优先名单)")
-            for sym, f in list(df_map.items())[:10]:
+            for sym, f in list(df_map.items())[:15]:
                 lines.append(
                     f"- [{sym}] {f.get('name') or ''} 股性分{f.get('total')}({f.get('grade')}) | "
                     f"近一年封板{f.get('n_sealed')}次 最高{f.get('max_streak')}连板 | {f.get('participation')}"
@@ -696,7 +697,7 @@ class PremarketOutlookAgent(BaseAgent):
             if mood.get("demon_veto"):
                 lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
             else:
-                lines.append("> 题材事件命中先锋组成员时, 该标的传导分按等级加成(极妖+3/妖+2/活跃+1); 一字板标的按排板口径自行判断")
+                lines.append("> 💡 核心选股规则: 当识别到上方事件驱动或主线题材爆发时，**优先在主线受益标的中挑选命中本先锋组（极妖/妖级）的个股**！此类标的兼具题材风口与股性记忆，极易走出超预期主升浪。")
             lines.append("")
 
         # 埋伏榜: 优先四维评分增强版(批次C C2/C3), 回落原始榜
