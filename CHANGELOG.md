@@ -1,3 +1,10 @@
+## release: v0.14.9 (修复筹码算法Dict兼容性，彻底激活K线横向筹码山峰直方图)（2026-10-18）
+
+- **VERSION**: bump v0.14.8 → v0.14.9 (同步 README.md / README.zh-CN.md 徽章)。
+- **P0级算法数据兼容性修复**:
+  - `src/core/chip_distribution.py`: 修复 `compute_chips` 中读取 K 线 bars 时仅假定对象属性访问（`k.low`）导致传入 dict 抛出 `AttributeError` 被静默吞掉的严重 bug。新增 `_k_get` 统一属性与字典映射适配，通过 6 项单元测试。
+  - 彻底打通从后端 `fetch_bars` → `compute_main_accumulation_chips` → 前端 K 线右侧横向 CYQ 筹码山峰直方图的真实数据渲染闭环。
+
 ## release: v0.14.8 (完全修复 L2Tab 单元测试回归，确保门禁 100% 全绿)（2026-10-17）
 
 - **VERSION**: bump v0.14.7 → v0.14.8 (同步 README.md / README.zh-CN.md 徽章)。

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -327,20 +328,30 @@ def compute_near_term_chips(symbol_code: str, days: int = 10) -> dict | None:
     return _result
 
 
+def _k_get(k: Any, field: str, default: float = 0.0) -> float:
+    if isinstance(k, dict):
+        v = k.get(field, default)
+    else:
+        v = getattr(k, field, default)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def compute_chips(klines: list, float_shares: float | None = None,
                   price_step: float = 0.01) -> dict | None:
     """计算筹码分布。
 
     klines: 日K列表, 每项有 date/open/high/low/close/volume(升序, 越新越靠后)
-    float_shares: 自由流通股本(股)。None 时用最大成交量×5 近似(粗略)。
-    Returns: {prices, chips, cost_10, cost_50, cost_90, profit_ratio, peak_price, peak_ratio}
+    支持 dict 或带有属性的对象。
     """
     if not klines or len(klines) < 20:
         return None
 
     # 价格网格: 覆盖全历史 [min_low, max_high], 步长自适应
-    lo_p = min(k.low for k in klines)
-    hi_p = max(k.high for k in klines)
+    lo_p = min(_k_get(k, "low") for k in klines)
+    hi_p = max(_k_get(k, "high") for k in klines)
     if hi_p - lo_p > 20:
         step = 0.1
     elif hi_p - lo_p > 5:
@@ -355,30 +366,31 @@ def compute_chips(klines: list, float_shares: float | None = None,
 
     # 流通股本: 用最大换手日近似(成交量/换手率); 无换手率时用最大成交量×8
     if float_shares is None:
-        max_vol = max(k.volume for k in klines if k.volume)
+        max_vol = max(_k_get(k, "volume") for k in klines if _k_get(k, "volume"))
         float_shares = max_vol * 8 or 1.0
 
     for k in klines:
-        if k.volume <= 0 or k.high <= k.low:
+        vol = _k_get(k, "volume")
+        k_high = _k_get(k, "high")
+        k_low = _k_get(k, "low")
+        k_close = _k_get(k, "close")
+        if vol <= 0 or k_high <= k_low:
             continue
-        turnover = k.volume / float_shares  # 换手率
+        turnover = vol / float_shares  # 换手率
         turnover = min(max(turnover, 0.001), 1.0)
         # 衰减: 旧筹码按 (1 - turnover×DECAY) 保留
         keep = 1.0 - turnover * DECAY
         chips = [c * keep for c in chips]
-        # 新增筹码: 三角分布(均价为峰) — 近似: 线性分配, 均价处权重最高
-        avg_p = (k.high + k.low + k.close) / 3.0
-        vol = k.volume
+        # 新增筹码: 三角分布(均价为峰)
+        avg_p = (k_high + k_low + k_close) / 3.0
         # 将 vol 按三角权重分配到 [low, high] 网格
-        p_lo, p_hi = k.low, k.high
+        p_lo, p_hi = k_low, k_high
         i_lo, i_hi = idx.get(round(p_lo, 2)), idx.get(round(p_hi, 2))
         if i_lo is None or i_hi is None:
-            # 边界外: 找最近网格
             i_lo = min(range(n), key=lambda i: abs(prices[i] - p_lo))
             i_hi = min(range(n), key=lambda i: abs(prices[i] - p_hi))
         i_lo, i_hi = sorted([i_lo, i_hi])
         i_avg = min(range(i_lo, i_hi + 1), key=lambda i: abs(prices[i] - avg_p))
-        # 三角权重: 左升右降
         total_w = 0.0
         w = [0.0] * (i_hi - i_lo + 1)
         for j in range(i_lo, i_hi + 1):
@@ -412,7 +424,7 @@ def compute_chips(klines: list, float_shares: float | None = None,
 
     c10, c50, c90 = cost(0.10), cost(0.50), cost(0.90)
     # 获利盘: 价格 ≤ 最新收盘 的筹码占比
-    last_close = klines[-1].close
+    last_close = _k_get(klines[-1], "close")
     profit_ratio = sum(c for p, c in zip(prices, chips) if p <= last_close)
     # 筹码峰: 最大占比价位(主力成本区)
     peak_i = max(range(n), key=lambda i: chips[i])
@@ -513,8 +525,9 @@ def compute_main_accumulation_chips(
     else:
         profit_state = "深套/低位主力吸筹区"
 
+    sym_val = getattr(sub_klines[-1], "symbol", None) if not isinstance(sub_klines[-1], dict) else sub_klines[-1].get("symbol")
     return {
-        "symbol": getattr(sub_klines[-1], "symbol", None),
+        "symbol": sym_val,
         "lookback_days": len(sub_klines),
         "main_cost": main_cost,
         "peak_price": peak_p,

@@ -54,6 +54,19 @@ class TestChipDistribution:
         assert "action_advice" in r
         assert 0 <= r["profit_ratio"] <= 100
 
+    def test_main_accumulation_chips_dict_format(self):
+        """测试主力建仓期筹码沉淀模型支持 dict 格式 bars。"""
+        from src.core.chip_distribution import compute_main_accumulation_chips
+        bars = [
+            {"date": f"2026-01-{i:02d}", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2 + i * 0.01, "volume": 500000}
+            for i in range(1, 50)
+        ]
+        r = compute_main_accumulation_chips(bars, lookback_days=40)
+        assert r is not None
+        assert "main_cost" in r
+        assert r["cost_70_low"] <= r["main_cost"] <= r["cost_70_high"]
+        assert len(r["prices"]) > 0
+
     @pytest.mark.network  # W2.3/E2: 直连腾讯 K 线接口, 联网测试
     def test_real_data(self):
         """真实数据: 神剑应返回合理筹码峰。"""
