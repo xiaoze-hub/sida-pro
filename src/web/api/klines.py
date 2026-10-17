@@ -942,7 +942,27 @@ def _build_orderbook(symbol: str):
                 if ob is not None:
                     return {**ob, "img_path": img_path}
         if ob is None:
-            # thsdk 实时快照带重试退避, 行情服务不通时单次可卡 30s(实测 -6 超时),
+            # 盘后/非交易时段: 若未命中够新快照，直接读最近收盘快照，绝不向外打 thsdk 实时阻塞 8~25s
+            from src.core.quote_snapshots import in_trading_window
+            if not in_trading_window():
+                try:
+                    from src.core import orderbook_snapshot as _obs
+                    snap_meta = _obs.read_snapshot(symbol)
+                    if snap_meta:
+                        frames = snap_meta.get("frames") or []
+                        latest = _obs.rebuild_snapshot(frames[-1]) if frames else None
+                        if latest is not None:
+                            ob = obe.order_book_queue(latest)
+                            if ob and ob.get("available"):
+                                return {
+                                    **ob,
+                                    "source": "snapshot",
+                                    "snapshot_age_sec": snap_meta.get("snapshot_age_sec"),
+                                    "note": "非交易时段·显示历史收盘快照",
+                                }
+                except Exception:
+                    pass
+                return {"available": False, "note": "非交易时段·无可用盘口快照"}
             # 三轮退避就是 90s, 会把 summary 接口拖到反代超时。加硬超时护栏:
             # 超时即放弃并显式"无数据", 绝不阻塞主链路。
             # 2026-09-18: 走共享硬超时(并发槽+wait=False)。此前

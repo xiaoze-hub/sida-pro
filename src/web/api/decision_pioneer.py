@@ -126,7 +126,12 @@ def _get(symbol: str, market: str) -> dict:
     key = f"{market}:{symbol}"
     now = time.time()
     hit = _CACHE.get(key)
-    if hit and now - hit[0] < _TTL:
+    # 非交易时段(盘后/周末): 延长内存缓存 TTL 至 3600 秒(1小时), 避免切标签时重复重算 120 根 K 线
+    from src.core.quote_snapshots import in_trading_window
+    in_trading = in_trading_window()
+    effective_ttl = _TTL if in_trading else 3600.0
+
+    if hit and now - hit[0] < effective_ttl:
         return hit[1]
     data = fetch_decision_pioneer(symbol, market)
     # 非交易时段 L2 会话值全 0 → 回退收盘快照/显式无数据(0 不冒充), 与 more-info 同款
