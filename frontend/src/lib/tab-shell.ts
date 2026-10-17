@@ -68,6 +68,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/heatmap': 'nav.heatmap',
   '/theme-mood': 'nav.themeMood',
   '/opportunities': 'nav.opportunities',
+  '/auction': 'nav.auction',
   '/dark-fund-top': 'nav.darkFundTop',
   '/war-report': 'nav.warReport',
   '/caliber-compare': 'nav.caliberCompare',

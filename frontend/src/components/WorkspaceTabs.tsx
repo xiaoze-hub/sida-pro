@@ -1,4 +1,4 @@
-import { X } from 'lucide-react'
+import { X, Flame } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -41,6 +41,7 @@ const TAB_ICONS: Record<string, LucideIcon> = {
   '/heatmap': LayoutGrid,
   '/theme-mood': Activity,
   '/opportunities': Sparkles,
+  '/auction': Flame,
   '/dark-fund-top': TrendingUp,
   '/war-report': TrendingUp,
   '/caliber-compare': Activity,

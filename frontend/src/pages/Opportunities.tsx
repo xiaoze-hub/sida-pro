@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BookOpen, Filter, RefreshCw, Share2, Sparkles, ScanSearch, ThumbsDown, ThumbsUp, Download } from 'lucide-react'
+import { AlertTriangle, BookOpen, Filter, RefreshCw, Share2, Sparkles, ScanSearch, ThumbsDown, ThumbsUp, Download, Flame } from 'lucide-react'
 import {
   getToken,
   fetchAPI,
@@ -30,7 +30,6 @@ import FactorWeightsPanel from '@/components/FactorWeightsPanel'
 import SignalScoreShareCard from '@/components/SignalScoreShareCard'
 import WencaiPanel from '@panwatch/biz-ui/components/WencaiPanel'
 import JbpPoolTable from '@panwatch/biz-ui/components/JbpPoolTable'
-import AuctionAnomalyTab from '@panwatch/biz-ui/components/AuctionAnomalyTab'
 import AbnormalMovesCard from '@panwatch/biz-ui/components/AbnormalMovesCard'
 import StrategyLibraryDialog from '@/components/StrategyLibraryDialog'
 import { EmptyState } from '@/components/EmptyState'
@@ -535,11 +534,6 @@ export default function OpportunitiesPage() {
   // 工作台③(2026-09-13): 模态降级 → 点击跳个股工作台 /stocks/:symbol; 悬停出预览卡
   const openInsight = useCallback((item: StrategySignalItem) => {
     navigate(`/stocks/${encodeURIComponent(item.stock_symbol)}`, { state: navBackState('/opportunities', '机会') })
-  }, [navigate])
-
-  // 竞价异动 Tab 行点击 → 个股工作台(原弹窗)
-  const openAuctionDetail = useCallback((symbol: string, _market: string, _name?: string) => {
-    navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/opportunities', '机会') })
   }, [navigate])
 
   const showHover = useCallback((symbol: string, name: string | undefined, e: React.MouseEvent) => {
@@ -1229,12 +1223,11 @@ export default function OpportunitiesPage() {
         </button>
         <button
           type="button"
-          onClick={() => setViewMode('auction')}
-          className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] ${
-            viewMode === 'auction' ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-muted-foreground hover:bg-accent'
-          }`}
+          onClick={() => navigate('/auction')}
+          className="rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors min-h-[44px] bg-accent/50 text-muted-foreground hover:bg-accent hover:text-foreground flex items-center gap-1.5"
         >
-          {t('opportunities.auction')}
+          <Flame className="w-3.5 h-3.5 text-orange-500" />
+          前往集合竞价专区 →
         </button>
         <button
           type="button"
@@ -1249,8 +1242,6 @@ export default function OpportunitiesPage() {
 
       {viewMode === 'abnormal' ? (
         <AbnormalMovesCard onOpenDetail={(symbol) => navigate(`/stocks/${encodeURIComponent(symbol)}`, { state: navBackState('/opportunities', '机会') })} />
-      ) : viewMode === 'auction' ? (
-        <AuctionAnomalyTab market="CN" onOpenDetail={openAuctionDetail} />
       ) : (
       <>
       {/* 统一筛选入口(2026-08-22): 7 项筛选收进 Popover 草稿; 只看共振保留外露快捷开关 */}
@@ -1409,13 +1400,16 @@ export default function OpportunitiesPage() {
       {/* ── 选股工具: 共振查询 / 策略选股 / 问小达 / 问财, 主动查询, 结果并入下方候选池 ── */}
       <div className="border-y border-border/60 py-3 mb-4">
         <Tabs value={toolTab} onValueChange={(v) => setToolTab(v as ToolTab)}>
-          <TabsList>
-            <TabsTrigger value="resonance">共振查询</TabsTrigger>
-            <TabsTrigger value="strategy">策略选股</TabsTrigger>
+          <TabsList className="bg-muted/60 p-1">
+            <TabsTrigger value="resonance" className="gap-1.5 font-medium">
+              <Sparkles className="w-3.5 h-3.5 text-primary" />
+              选股铁三角共振
+            </TabsTrigger>
+            <TabsTrigger value="stockpool">数智选股池</TabsTrigger>
+            <TabsTrigger value="jbp">聚宝盆选股</TabsTrigger>
+            <TabsTrigger value="strategy">量化策略库</TabsTrigger>
             <TabsTrigger value="tdx">问小达</TabsTrigger>
-            <TabsTrigger value="wencai">问财</TabsTrigger>
-            <TabsTrigger value="stockpool">选股池</TabsTrigger>
-            <TabsTrigger value="jbp">聚宝盆</TabsTrigger>
+            <TabsTrigger value="wencai">同花顺问财</TabsTrigger>
           </TabsList>
           {/* 共振查询(2026-08-22): 一句输入 → 问小达+问财并发 → 策略库精筛 → 共振排序 */}
           <TabsContent value="resonance">

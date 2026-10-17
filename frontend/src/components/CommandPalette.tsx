@@ -30,6 +30,7 @@ const PAGE_COMMANDS: PageCommand[] = [
   { to: '/', label: '首页 · 驾驶舱', group: '驾驶舱' },
   { to: '/forecast', label: '预测', group: '行情' },
   { to: '/opportunities', label: '机会 · 选股池', group: '机会' },
+  { to: '/auction', label: '集合竞价 · 盘前打板', group: '机会' },
   // §4.3 补齐(2026-09-01): 历史/模拟盘/提醒 收纳后指向新地址(带 ?tab= 直达对应页签)
   { to: '/reports?tab=reports', label: '报告中心', group: '投研' },
   { to: '/reports?tab=history', label: '历史分析', group: '投研' },

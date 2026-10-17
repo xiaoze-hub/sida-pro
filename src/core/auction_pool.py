@@ -247,6 +247,39 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
         logger.warning("[auction_pool] 竞价异动拉取失败 market=%r: %r", market, e)
         all_records = []
 
+    # ── 通达信 TQ 盘口增强: 补齐缺失的 volume_ratio (竞价量比) 与 open_amount (竞价金额) ──
+    try:
+        from marketdata.vendors.tq import _rpc
+        for r in all_records:
+            sym = r.get("symbol")
+            if not sym or len(sym) != 6:
+                continue
+            tq_code = f"{sym}.SH" if sym.startswith("6") else f"{sym}.SZ"
+            info = _rpc("get_more_info", {"stock_code": tq_code})
+            if isinstance(info, dict):
+                # OpenVolPre1 = 竞价成交量对比前 1 日放大比例 (竞价量比)
+                # OpenAmo = 竞价成交金额 (元)
+                # OpenZTBuy = 涨停委买金额
+                vr = info.get("OpenVolPre1")
+                amo = info.get("OpenAmo")
+                if vr is not None:
+                    try:
+                        r["volume_ratio"] = round(float(vr), 2)
+                    except Exception:
+                        pass
+                if amo is not None:
+                    try:
+                        r["open_amount"] = round(float(amo), 2)
+                    except Exception:
+                        pass
+                if info.get("OpenZTBuy"):
+                    try:
+                        r["open_zt_buy"] = round(float(info["OpenZTBuy"]), 2)
+                    except Exception:
+                        pass
+    except Exception as tq_err:
+        logger.debug("[auction_pool] 通达信 TQ 竞价量比补齐跳过: %s", tq_err)
+
     _cache[cache_key] = (time.time(), all_records)
     return all_records
 

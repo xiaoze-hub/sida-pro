@@ -305,11 +305,20 @@ def read_snapshot(symbol: str) -> dict | None:
     }
 
 
-def fresh_snapshot(symbol: str) -> dict | None:
-    """最新滚动窗(仅当年龄 <= 陈旧阈值)。过旧/算不出年龄 → None(调用方穿透实时)。"""
+def fresh_snapshot(symbol: str, *, allow_closed_session: bool = False, **kwargs) -> dict | None:
+    """最新滚动窗(仅当年龄 <= 陈旧阈值)。
+
+    非交易时段优化:
+    - 仅当明确允许非交易时段读收盘快照(allow_closed_session=True)时放行;
+    - 默认保持严格陈旧度阈值检查(超龄返回 None), 保证单元测试与常规口径严格一致。
+    """
     snap = read_snapshot(symbol)
     if snap is None:
         return None
+    if allow_closed_session:
+        from src.core.quote_snapshots import in_trading_window
+        if not in_trading_window():
+            return snap
     age = snap.get("snapshot_age_sec")
     if age is None or age > stale_threshold_sec():
         return None
