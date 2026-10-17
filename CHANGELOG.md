@@ -1,3 +1,9 @@
+## release: v0.13.95 (修复周末 CI 门禁与龙虎榜测试断言)（2026-10-17）
+
+- **VERSION**: bump v0.13.94 → v0.13.95 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁修复**:
+  - `tests/test_lhb_daily_store.py`: 修复 `test_range逐日先读库_已落库日不回源` 在周末（2026-10-17 周六）运行时，因 `_compute_lhb_range` 自动跳过周末导致 `by_date` 字典中无当日记录的断言失败；显式打桩 `date.today` 为固定交易日 `20261016`，CI 门禁 10 项测试全绿通过。
+
 ## release: v0.13.94 (同花顺决策先锋选股铁三角共振状态机实装)（2026-10-17）
 
 - **VERSION**: bump v0.13.93 → v0.13.94 (同步 README.md / README.zh-CN.md 徽章)。

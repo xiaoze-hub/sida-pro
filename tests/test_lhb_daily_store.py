@@ -277,8 +277,10 @@ def test_按日端点_库空则回源并落库(monkeypatch):
 def test_range逐日先读库_已落库日不回源(monkeypatch):
     eng = _mk_engine()
     _use_engine(monkeypatch, eng)
-    today = _today()
-    mdm._lhb_upsert_rows([_row(today)], market="CN", source="em_ftshare")
+    # 使用固定交易日（避免 Saturday/Sunday 在 _compute_lhb_range 里被 is_weekend 跳过）
+    test_date = "20261016"  # 周五
+    monkeypatch.setattr("datetime.date", type("MockDate", (), {"today": staticmethod(lambda: date(2026, 10, 16))}))
+    mdm._lhb_upsert_rows([_row(test_date)], market="CN", source="em_ftshare")
 
     seen: list[str] = []
 
@@ -290,8 +292,8 @@ def test_range逐日先读库_已落库日不回源(monkeypatch):
     monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
     out = mdm._compute_lhb_range("CN", 3)
 
-    assert today in out["by_date"]
-    assert out["by_date"][today][0]["symbol"] == "002361"
-    assert today not in seen                       # 已落库日零回源
+    assert test_date in out["by_date"]
+    assert out["by_date"][test_date][0]["symbol"] == "002361"
+    assert test_date not in seen                       # 已落库日零回源
     # 其余回看日(库里没有)才回源
-    assert all(d != today for d in seen)
+    assert all(d != test_date for d in seen)
