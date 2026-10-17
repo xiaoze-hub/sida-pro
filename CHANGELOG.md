@@ -1,3 +1,11 @@
+## release: v0.14.4 (修复 CI 门禁对齐：前端 exhaustive-deps 与后端预落库契约)（2026-10-17）
+
+- **VERSION**: bump v0.14.3 → v0.14.4 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁与契约对齐修复**:
+  - `frontend/packages/biz-ui/src/components/KlineChart.tsx`: 补齐 `useEffect` 依赖项 `effAccumulationChips`，消除 `eslint react-hooks/exhaustive-deps` 报错。
+  - `src/core/layer_precompute.py`: 在日级落库派生键 `DAILY_BLOCK_KEYS` 中对齐登记 `main_accumulation_chips`，保证落库/读库契约与现算逐字段一致。
+  - `tests/test_layer_precompute.py`: 修复测试桩载荷，验证通过 21 项日级预落库断言。
+
 ## release: v0.14.3 (主力建仓期筹码沉淀模型与K线图层底仓线落地)（2026-10-17）
 
 - **VERSION**: bump v0.14.2 → v0.14.3 (同步 README.md / README.zh-CN.md 徽章)。

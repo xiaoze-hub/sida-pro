@@ -44,6 +44,7 @@ def _blocks(marker: str = "computed") -> dict:
         "unlock_levels": None,
         "chips": "sz000001",
         "resonance": {"available": True, "row": 1, "phase": "发酵", "marker": marker},
+        "main_accumulation_chips": None,
     }
 
 

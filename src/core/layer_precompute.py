@@ -63,6 +63,7 @@ DAILY_BLOCK_KEYS: tuple[str, ...] = (
     "unlock_levels",
     "chips",
     "resonance",
+    "main_accumulation_chips",
 )
 
 #: 写入来源标记(可观测/排查用): 收盘批算 vs 请求期算完落库。
