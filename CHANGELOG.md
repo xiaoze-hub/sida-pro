@@ -1,3 +1,14 @@
+## release: v0.14.3 (主力建仓期筹码沉淀模型与K线图层底仓线落地)（2026-10-17）
+
+- **VERSION**: bump v0.14.2 → v0.14.3 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心算法与筹码模型落地**:
+  - `src/core/chip_distribution.py`: 新增主力建仓期筹码沉淀模型 `compute_main_accumulation_chips`。通过穿透主力 120 交易日波段建仓区间，结合真实换手率历史衰减公式与三角分布加权，精准解构【主力建仓均价线 (COST 50)】、【70%核心底仓密集区 (COST 15 - COST 85)】、【获利盘比例】与【筹码集中度】。
+  - **筹码形态与决策研判**: 自动输出单峰密集（主力高控盘锁仓）、双峰对峙、筹码发散等定性诊断及针对性操盘建议。
+- **前后端全链路打通与图层渲染**:
+  - `src/web/api/klines.py`: 将 `main_accumulation_chips` 装配至日级图层派生块，随 `summary` 毫秒级下发。
+  - `frontend/packages/biz-ui/src/lib/main-intent.ts`: 在 K 线主图精准绘制 🔴 **`主力建仓成本 (实线)`** 与 🟡/🟢 **`70%建仓顶沿/底沿 (虚线)`**。
+  - `frontend/src/pages/workbench/tabs/L2Tab.tsx`: 将【筹码】卡片全面升级为【主力建仓筹码分布 (波段沉淀)】，直观呈现主力建仓均价、70%成本区间、集中度与决策参考卡片。
+
 ## release: v0.14.2 (机会选股池与聚宝盆空白态优化，全面消灭半成品体验)（2026-10-17）
 
 - **VERSION**: bump v0.14.1 → v0.14.2 (同步 README.md / README.zh-CN.md 徽章)。

@@ -1091,10 +1091,18 @@ def _compute_daily_blocks(symbol: str, bars: list[dict]) -> dict:
     #    腾讯当日分价表优先 / 新浪历史分价兜底; 取不到 → None(显式无数据)。
     try:
         from src.core.l4_events import chip_levels, unlock_levels_from_chips
+        from src.core.chip_distribution import compute_main_accumulation_chips
 
-        chips = _to_tencent(symbol)
+        tc = _to_tencent(symbol)
+        chips = chip_levels(tc)
         out["chips"] = chips
         out["unlock_levels"] = unlock_levels_from_chips(chips) or None
+
+        # 主力建仓期筹码分布模型 (穿透 120 交易日建仓区间沉淀筹码)
+        if bars and len(bars) >= 20:
+            out["main_accumulation_chips"] = compute_main_accumulation_chips(bars, lookback_days=120)
+        else:
+            out["main_accumulation_chips"] = None
     except Exception as e:  # noqa: BLE001
         logger.debug("chips %s failed: %s", symbol, e)
 

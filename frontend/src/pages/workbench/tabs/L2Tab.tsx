@@ -1012,21 +1012,79 @@ function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
  * ⑦ 筹码(近 10 日分价分布, 随 klineSummary.main_intent_structured 下发)
  * ------------------------------------------------------------------ */
 
-function ChipsSection({ mainIntent }: { mainIntent: MainIntentStructured | null }) {
+function ChipsSection({
+  mainIntent,
+  chipsModel,
+}: {
+  mainIntent: MainIntentStructured | null
+  chipsModel?: any
+}) {
   const band = mainIntent?.chip_band ?? null
+  const acc = chipsModel
   return (
-    <Section id="chips" title="筹码" hint="近 10 日分价分布 · 筹码峰/成本带/获利盘(逐日成本分位未暴露)">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-3">
-        <Cell label="筹码峰" value={safeFixed(mainIntent?.chip_peak, 2)} hint="成交最密集价位" />
+    <Section
+      id="chips"
+      title="主力建仓筹码分布 (波段沉淀)"
+      hint="主力波段建仓区间(120日)筹码沉淀 · 真实衰减模型 · 底仓成本带与形态研判"
+    >
+      {/* 核心指标卡 */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
         <Cell
-          label="成本带"
-          value={band ? `${safeFixed(band.low, 2)} - ${safeFixed(band.high, 2)}` : '--'}
-          hint="主要成本区间下沿 - 上沿"
+          label="主力建仓均价"
+          value={acc?.main_cost ? `¥${safeFixed(acc.main_cost, 2)}` : safeFixed(mainIntent?.chip_peak, 2)}
+          hint="主力波段吸筹加权平均成本位 (COST 50)"
         />
-        <Cell label="获利盘比例" value={pct(mainIntent?.profit_ratio, 0)} hint="当前价上方获利筹码占比" />
+        <Cell
+          label="70%建仓成本区"
+          value={
+            acc?.cost_70_low != null && acc?.cost_70_high != null
+              ? `¥${safeFixed(acc.cost_70_low, 2)} - ¥${safeFixed(acc.cost_70_high, 2)}`
+              : band
+              ? `${safeFixed(band.low, 2)} - ${safeFixed(band.high, 2)}`
+              : '--'
+          }
+          hint="主力核心吸筹底仓区间 (COST 15 - COST 85)"
+        />
+        <Cell
+          label="获利盘比例"
+          value={acc?.profit_ratio != null ? `${safeFixed(acc.profit_ratio, 1)}%` : pct(mainIntent?.profit_ratio, 0)}
+          hint="当前价位下方获利筹码总占比"
+        />
+        <Cell
+          label="筹码集中度"
+          value={acc?.concentration != null ? `${safeFixed(acc.concentration * 100, 1)}%` : '--'}
+          hint="90%筹码价格跨度/成本均价; <12% 为高度控盘锁仓"
+        />
       </div>
-      {!mainIntent ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">暂无筹码数据(klineSummary 未下发或数据源不可用)</div>
+
+      {/* 主力筹码结构研判与操盘建议 */}
+      {acc ? (
+        <div className="mt-2.5 rounded border border-border/50 bg-s1 p-2 text-[11px]">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-1.5">
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                acc.signal_level === 'bullish' ? 'bg-red-500/20 text-red-500' :
+                acc.signal_level === 'warning' ? 'bg-amber-500/20 text-amber-500' :
+                'bg-muted text-muted-foreground'
+              }`}>
+                {acc.pattern} · {acc.status_label}
+              </span>
+              <span className="text-muted-foreground">
+                当前价较建仓均价: <span className={`font-mono font-medium ${acc.departure_pct >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                  {acc.departure_pct >= 0 ? '+' : ''}{safeFixed(acc.departure_pct, 1)}%
+                </span>
+              </span>
+            </div>
+            <span className="text-[10px] text-muted-foreground">{acc.profit_state}</span>
+          </div>
+          <div className="text-foreground/90 font-medium">
+            💡 决策参考: {acc.action_advice}
+          </div>
+        </div>
+      ) : !mainIntent ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+          暂无筹码数据(klineSummary 未下发或数据源不可用)
+        </div>
       ) : null}
     </Section>
   )
@@ -1037,7 +1095,7 @@ function ChipsSection({ mainIntent }: { mainIntent: MainIntentStructured | null 
  * ------------------------------------------------------------------ */
 
 function L2TabBody({ symbol }: { symbol: string }) {
-  const { moreInfo, moreInfoLoading, darkFlowTq, mainIntent, fundFlow, summaryOrderbook } = useInsight()
+  const { moreInfo, moreInfoLoading, darkFlowTq, mainIntent, mainAccumulationChips, fundFlow, summaryOrderbook } = useInsight()
   const { ob, seal, loading, updatedAt, reload } = useL2Sources(symbol)
   // `fundFlow` 的元素类型在 biz-ui 里声明为 `open_net`, 后端实际下发 `ming_net` —— 两种键都读。
   const fundRows = (fundFlow ?? []) as FundFlowRow[]
@@ -1072,7 +1130,7 @@ function L2TabBody({ symbol }: { symbol: string }) {
           <EvolutionSection feed={ob} loading={loading} />
           <IntentSealSection symbol={symbol} mainIntent={mainIntent} seal={seal} sealLoading={loading} />
           <DarkFlowTqSection data={darkFlowTq} />
-          <ChipsSection mainIntent={mainIntent} />
+          <ChipsSection mainIntent={mainIntent} chipsModel={mainAccumulationChips} />
         </div>
       </div>
     </div>

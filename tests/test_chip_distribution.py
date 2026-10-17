@@ -40,6 +40,20 @@ class TestChipDistribution:
     def test_insufficient_data(self):
         assert compute_chips(_mk_klines(5)) is None
 
+    def test_main_accumulation_chips(self):
+        """测试主力建仓期筹码沉淀模型。"""
+        from src.core.chip_distribution import compute_main_accumulation_chips
+        klines = _mk_klines(100, base=10.0, drift=0.02)
+        r = compute_main_accumulation_chips(klines, lookback_days=60)
+        assert r is not None
+        assert "main_cost" in r
+        assert "cost_70_low" in r and "cost_70_high" in r
+        assert r["cost_70_low"] <= r["main_cost"] <= r["cost_70_high"]
+        assert "pattern" in r
+        assert "status_label" in r
+        assert "action_advice" in r
+        assert 0 <= r["profit_ratio"] <= 100
+
     @pytest.mark.network  # W2.3/E2: 直连腾讯 K 线接口, 联网测试
     def test_real_data(self):
         """真实数据: 神剑应返回合理筹码峰。"""

@@ -42,6 +42,7 @@ import type {
   HistoryRecord,
   PortfolioSummaryResponse,
   StockItem,
+  MainAccumulationChips,
 } from './types'
 
 /**
@@ -125,6 +126,7 @@ const [klineSummary, setKlineSummary] = useState<KlineSummary | null>(null)
 const [summaryOrderbook, setSummaryOrderbook] = useState<SummaryOrderbook | null>(null)
 /** 2026-08-12 预热优化: 弹窗打开即拉主力意图, 切到 K线 tab 秒显图例卡 */
 const [mainIntent, setMainIntent] = useState<MainIntentStructured | null>(null)
+const [mainAccumulationChips, setMainAccumulationChips] = useState<MainAccumulationChips | null>(null)
 // ============== SIDA Pro: K线图层标注数据 state (P1+ P2) (2026-09-01) ==============
 const [gsSignals, setGsSignals] = useState<GsSignalLike[]>([])
 const [fundFlow, setFundFlow] = useState<FundFlowBarLike[]>([])
@@ -230,6 +232,8 @@ const loadKline = useCallback(async () => {
   // 遗留④: 顶层 `orderbook`(与 summary 平级)单独存一份 —— 无条件 set(缺失即 null),
   // 否则换标的/源不可用时会把上一只票的盘口形态留在屏上。
   setSummaryOrderbook(data?.orderbook ?? null)
+  // 主力建仓期筹码沉淀模型
+  if (data?.main_accumulation_chips) setMainAccumulationChips(data.main_accumulation_chips)
   // 2026-08-12 预热优化: 顺手存主力意图, 传给 K线 tab 秒显(免组件二次请求)
   if (data?.main_intent_structured) setMainIntent(data.main_intent_structured)
   // ============== SIDA Pro: K线图层标注数据 (P1+ P2 入口) (2026-09-01) ==============
@@ -730,6 +734,7 @@ const miniKlineExtrema = useMemo(() => {
     // 遗留④: `/klines/{s}/summary` 的**顶层** orderbook(形态/最优买卖/价差/买盘占比)
     summaryOrderbook,
     mainIntent,
+    mainAccumulationChips,
     gsSignals,
     fundFlow,
     klineEvents,

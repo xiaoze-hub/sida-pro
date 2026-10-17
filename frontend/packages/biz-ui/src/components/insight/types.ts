@@ -180,6 +180,31 @@ export interface KlineSummaryResponse {
    * 返回的正是 `{"available": false, "shape": null, "note": "无数据"}` ⇒ 走的是第一种。
    */
   orderbook?: SummaryOrderbook | null
+  /** 主力建仓期筹码沉淀模型 (120日波段主力底仓、成本带、形态研判) */
+  main_accumulation_chips?: MainAccumulationChips | null
+}
+
+export interface MainAccumulationChips {
+  symbol?: string
+  lookback_days: number
+  main_cost: number
+  peak_price: number
+  peak_ratio: number
+  cost_70_low: number
+  cost_70_high: number
+  cost_90_low: number
+  cost_90_high: number
+  profit_ratio: number
+  profit_state: string
+  concentration?: number | null
+  pattern: string
+  status_label: string
+  signal_level: string
+  action_advice: string
+  departure_pct: number
+  last_close: number
+  prices: number[]
+  chips: number[]
 }
 // 镜像 KlineChart 的新图层类型, 避免循环 import (组件已 export 同名 type)
 export type GsSignalLike = { date: string; side: 'G' | 'S'; confirmed: boolean; price: number }

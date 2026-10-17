@@ -322,6 +322,7 @@ export default function KlineChart(props: {
    * (原先靠这个自取渲染"主力意图"图例与箭头, 只看 props 会误判为"无人使用")。
    */
   mainIntent?: MainIntentStructured | null
+  mainAccumulationChips?: any
   initialInterval?: KlineInterval
   /** 初始回看天数; 默认 120 */
   initialDays?: number
@@ -458,6 +459,7 @@ export default function KlineChart(props: {
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
+  const [accumulationChipsFetched, setAccumulationChipsFetched] = useState<any>(null)
   useEffect(() => {
     if (props.mainIntent) {
       setIntentFetched(null)
@@ -470,12 +472,20 @@ export default function KlineChart(props: {
     let cancelled = false
     // 错峰(见 SUMMARY_SLOW_LANE_DELAY_MS 头注): 摘要延后到首帧后, 不抢主图 `/klines/{symbol}` 的带宽/队列。
     const timer = window.setTimeout(() => {
-      fetchAPI<{ main_intent_structured?: MainIntentStructured | null }>(
+      fetchAPI<{
+        main_intent_structured?: MainIntentStructured | null
+        main_accumulation_chips?: any
+      }>(
         `/klines/${encodeURIComponent(props.symbol)}/summary?market=CN`,
         { timeoutMs: SUMMARY_TIMEOUT_MS },
       )
         .then((res) => {
-          if (!cancelled) setIntentFetched(res.main_intent_structured ?? null)
+          if (!cancelled) {
+            setIntentFetched(res.main_intent_structured ?? null)
+            if (res.main_accumulation_chips) {
+              setAccumulationChipsFetched(res.main_accumulation_chips)
+            }
+          }
         })
         .catch(() => {
           // 显式降级: 取不到 = 本次不出主力意图图例/箭头(不编造, 不留假方向)
@@ -489,6 +499,7 @@ export default function KlineChart(props: {
   }, [props.symbol, props.market, props.mainIntent])
   const intent = props.mainIntent ?? intentFetched
   const intentLegend = intentLabelFor(intent)
+  const effAccumulationChips = props.mainAccumulationChips ?? accumulationChipsFetched
   const intentLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
 
   const [loading, setLoading] = useState(false)
@@ -1438,7 +1449,7 @@ export default function KlineChart(props: {
     for (const line of intentLinesRef.current) series.removePriceLine(line)
     intentLinesRef.current = []
     if (showSignal) {
-      for (const line of intentPriceLinesFor(intent)) {
+      for (const line of intentPriceLinesFor(intent, effAccumulationChips)) {
         intentLinesRef.current.push(series.createPriceLine(line))
       }
     }
@@ -2008,6 +2019,12 @@ export default function KlineChart(props: {
           {typeof intent?.profit_ratio === 'number' && (
             <span className="ml-2">
               获利 <span className="font-mono">{safeFixed(intent.profit_ratio * 100, 0)}%</span>
+            </span>
+          )}
+          {effAccumulationChips?.main_cost != null && (
+            <span className="ml-2 text-rose-500 font-medium">
+              主力建仓 <span className="font-mono">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
+              <span className="text-[10px] ml-1 text-muted-foreground">({effAccumulationChips.pattern})</span>
             </span>
           )}
         </div>
