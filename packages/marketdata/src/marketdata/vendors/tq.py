@@ -1462,6 +1462,38 @@ def relation(code: str) -> list:
 _IPO_TYPE_CN = {0: "新股", 1: "新发债", 2: "新股+新债"}
 
 
+def trackzs_etf_info(zs_code: str = "000300.SH") -> list[dict]:
+    """获取跟踪某指数的全部 ETF 信息 (含现价 NowPrice、IOPV 净值、折溢价率与规模)。
+    常用于国家队抄底/护盘监控 (000300.SH 沪深300 / 000016.SH 上证50 / 000905.SH 中证500 等)。
+    """
+    v = _rpc("get_trackzs_etf_info", {"zs_code": str(zs_code)})
+    if not isinstance(v, list):
+        return []
+    res = []
+    for item in v:
+        if not isinstance(item, dict) or not item.get("Code"):
+            continue
+        try:
+            now_p = float(item.get("NowPrice") or 0.0)
+            iopv = float(item.get("IOPV") or 0.0)
+            premium_rate = round(((now_p - iopv) / iopv) * 100, 3) if iopv > 0 and now_p > 0 else 0.0
+            res.append({
+                "code": item.get("Code", ""),
+                "name": item.get("Name", ""),
+                "now_price": now_p,
+                "iopv": iopv,
+                "premium_rate": premium_rate,  # 折溢价率(%), 正为溢价(买方情绪强/护盘抢筹), 负为折价
+                "pre_close": float(item.get("PreClose") or 0.0),
+                "market_cap_wan": float(item.get("Sz") or 0.0),
+                "total_shares_wan": float(item.get("Zgb") or 0.0),
+            })
+        except Exception:
+            continue
+    # 按规模降序排
+    res.sort(key=lambda x: x.get("market_cap_wan", 0.0), reverse=True)
+    return res
+
+
 def ipo_info(ipo_type: int = 2, ipo_date: int = 1) -> list[dict]:
     """新股/新债申购日历 → **结构化行**(实测 2026-09-25, 原薄壳只透传裸 list)。
 

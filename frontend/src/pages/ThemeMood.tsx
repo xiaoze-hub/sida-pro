@@ -187,12 +187,37 @@ function TrendChart({ trend, width, height, label, hint, ariaLabel }: {
   )
 }
 
+interface EtfTrackResp {
+  zs_code?: string
+  total?: number
+  status?: string
+  premium_count?: number
+  discount_count?: number
+  etfs?: Array<{
+    code: string
+    name: string
+    now_price: number
+    iopv: number
+    premium_rate: number
+    market_cap_wan: number
+  }>
+}
+
 export default function ThemeMoodPage() {
   const [windowDays, setWindowDays] = useState<number>(20)
   const [resp, setResp] = useState<BoardResp | null>(null)
   const [ladder, setLadder] = useState<LadderResp | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // 通达信官方 ETF 折溢价与国家队护盘信号
+  const [etfTrack, setEtfTrack] = useState<EtfTrackResp | null>(null)
+  useEffect(() => {
+    let alive = true
+    fetchAPI<EtfTrackResp>('/tdx/etf-track?zs_code=000300.SH')
+      .then((r) => { if (alive) setEtfTrack(r) })
+      .catch(() => { if (alive) setEtfTrack(null) })
+    return () => { alive = false }
+  }, [reloadKey])
   // 全市场情绪温度曲线(2026-09-25): 自算口径, 见后端 /api/market-breadth/history
   const [mood, setMood] = useState<MarketMoodResp | null>(null)
   useEffect(() => {
@@ -396,6 +421,33 @@ export default function ThemeMoodPage() {
           <div className="mt-0.5 text-[10px] text-muted-foreground">
             口径：{mood.caliber}{mood.note ? ` ⚠️ ${mood.note}` : ''}
           </div>
+        </div>
+      ) : null}
+
+      {/* 通达信 300ETF IOPV 折溢价护盘雷达 (国家队抄底与流动性异动) */}
+      {etfTrack ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded border border-border/40 bg-card/40 px-3 py-1.5 text-[11px]">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-foreground">沪深300 ETF 护盘雷达:</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold text-primary">
+              {etfTrack.status || '平价运行'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              共跟踪 {etfTrack.total ?? 0} 只 ETF · 溢价 {etfTrack.premium_count ?? 0} 只 / 折价 {etfTrack.discount_count ?? 0} 只
+            </span>
+          </div>
+          {etfTrack.etfs && etfTrack.etfs.length > 0 ? (
+            <div className="flex items-center gap-3 font-mono text-[10px]">
+              {etfTrack.etfs.slice(0, 3).map((e) => (
+                <span key={e.code} className="flex items-center gap-1">
+                  <span className="text-muted-foreground">{e.name.replace('沪深300ETF', '')}:</span>
+                  <span className={e.premium_rate > 0.05 ? 'text-red-500 font-medium' : e.premium_rate < -0.05 ? 'text-green-500 font-medium' : 'text-foreground'}>
+                    {e.premium_rate > 0 ? `+${e.premium_rate.toFixed(2)}%` : `${e.premium_rate.toFixed(2)}%`}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

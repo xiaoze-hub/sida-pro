@@ -1,3 +1,13 @@
+## release: v0.13.93 (通达信官方 ETF 折溢价雷达上线与国家队护盘异动监控)（2026-10-17）
+
+- **VERSION**: bump v0.13.92 → v0.13.93 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心数据与分析能力**:
+  - `packages/marketdata/src/marketdata/vendors/tq.py`: 封装 `trackzs_etf_info` 接口，调用通达信 TQ 官方 `get_trackzs_etf_info` 引擎，穿透跟踪宽基与行业指数（如沪深300 `000300.SH`）的全部 ETF 份额净值 IOPV、二级市场现价 NowPrice、实时折溢价率与规模市值。
+  - `src/web/api/tdx.py`: 新增 `/api/tdx/etf-track` 端点，自动聚合处于溢价抢筹状态的 ETF 比例，提供“平价运行 / 🛡️ 溢价抢筹护盘信号 / ⚠️ 折价承压赎回压力”三种状态裁决。
+  - `tests/test_tdx_etf_track.py`: 建立单元测试套件，验证 Mock 与状态裁决逻辑，测试全绿通过。
+- **前端页面呈现**:
+  - `frontend/src/pages/ThemeMood.tsx`: 在全市场情绪温度曲线下方无缝集成“沪深300 ETF 护盘雷达”横幅，毫秒级轮询国家队核心宽基 ETF 折溢价异动，直观展示华泰柏瑞、易方达、华夏等龙头 ETF 的溢价率（正溢价标红，负折价标绿），为大盘多空决策提供客观护盘证据。
+
 ## release: v0.13.92 (接入通达信微观撤单意图引擎与广发金工因子落地)（2026-10-16）
 
 - **VERSION**: bump v0.13.91 → v0.13.92 (同步 README.md / README.zh-CN.md 徽章)。

@@ -86,3 +86,36 @@ async def tdx_ask(
         "headers": headers,
         "rows": data,
     }
+
+
+@router.get("/etf-track")
+async def tdx_etf_track(
+    zs_code: str = Query("000300.SH", description="指数代码, 如 000300.SH (沪深300) / 000016.SH (上证50) / 000905.SH (中证500)"),
+):
+    """通达信官方指数跟踪 ETF 清单与实时 IOPV 折溢价雷达 (用于国家队护盘抢筹异动识别)。"""
+    try:
+        from marketdata.vendors.tq import trackzs_etf_info
+
+        items = await asyncio.to_thread(trackzs_etf_info, zs_code.strip())
+        premium_count = sum(1 for x in items if x.get("premium_rate", 0) > 0.05)
+        discount_count = sum(1 for x in items if x.get("premium_rate", 0) < -0.05)
+        total_etfs = len(items)
+
+        status = "平价运行"
+        if total_etfs > 0 and (premium_count / total_etfs) >= 0.5:
+            status = "🛡️ 溢价抢筹/护盘信号"
+        elif total_etfs > 0 and (discount_count / total_etfs) >= 0.5:
+            status = "⚠️ 折价承压/赎回压力"
+
+        return {
+            "zs_code": zs_code,
+            "total": total_etfs,
+            "status": status,
+            "premium_count": premium_count,
+            "discount_count": discount_count,
+            "etfs": items,
+        }
+    except Exception as e:
+        logger.warning(f"通达信 ETF 跟踪查询失败: {e}")
+        raise HTTPException(502, f"通达信 TQ 接口异常: {e}")
+
