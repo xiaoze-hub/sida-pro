@@ -1,3 +1,10 @@
+## release: v0.14.5 (完善前端回归契约与门禁全绿验证)（2026-10-17）
+
+- **VERSION**: bump v0.14.4 → v0.14.5 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端测试回归契约修复**:
+  - `frontend/packages/biz-ui/src/components/KlineChart.tsx` 与 `main-intent.ts`: 调整文案为“底仓成本 / 🔴 主力成本”，严格符合 `kline-pattern-contract.test.ts` 的合规词表断言。
+  - `frontend/src/pages/workbench/tabs/L2Tab.tsx`: 保持“筹码峰”与“成本带”核心字段标签，完美契合 `l2-tab.test.tsx` 现有测试断言，同时扩展承接主力建仓底仓沉淀模型。
+
 ## release: v0.14.4 (修复 CI 门禁对齐：前端 exhaustive-deps 与后端预落库契约)（2026-10-17）
 
 - **VERSION**: bump v0.14.3 → v0.14.4 (同步 README.md / README.zh-CN.md 徽章)。

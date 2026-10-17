@@ -171,14 +171,14 @@ export function intentPriceLinesFor(
 ): IntentPriceLine[] {
   const out: IntentPriceLine[] = []
 
-  // 1. 若有主力建仓期筹码沉淀模型，绘制主力建仓均价线与70%核心建仓底仓带
+  // 1. 若有主力筹码沉淀模型，绘制主力底仓均价线与70%核心底仓带
   if (acc?.main_cost != null && acc.main_cost > 0) {
     out.push({
       price: acc.main_cost,
       color: 'rgba(239, 68, 68, 0.85)', // 亮红
       lineWidth: 2,
       lineStyle: 0, // solid 实线，突出主力生命线
-      title: '🔴 主力建仓成本',
+      title: '🔴 主力成本',
       axisLabelVisible: true,
     })
     if (acc.cost_70_low != null && acc.cost_70_high != null) {
@@ -187,7 +187,7 @@ export function intentPriceLinesFor(
         color: 'rgba(245, 158, 11, 0.6)', // 琥珀橙
         lineWidth: 1,
         lineStyle: 2, // dashed 虚线
-        title: '70%建仓顶沿',
+        title: '70%成本顶沿',
         axisLabelVisible: true,
       })
       out.push({
@@ -195,7 +195,7 @@ export function intentPriceLinesFor(
         color: 'rgba(16, 185, 129, 0.6)', // 翡翠绿
         lineWidth: 1,
         lineStyle: 2, // dashed 虚线
-        title: '70%建仓底沿',
+        title: '70%成本底沿',
         axisLabelVisible: true,
       })
     }

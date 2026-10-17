@@ -2023,7 +2023,7 @@ export default function KlineChart(props: {
           )}
           {effAccumulationChips?.main_cost != null && (
             <span className="ml-2 text-rose-500 font-medium">
-              主力建仓 <span className="font-mono">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
+              底仓成本 <span className="font-mono">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
               <span className="text-[10px] ml-1 text-muted-foreground">({effAccumulationChips.pattern})</span>
             </span>
           )}

@@ -1024,26 +1024,26 @@ function ChipsSection({
   return (
     <Section
       id="chips"
-      title="主力建仓筹码分布 (波段沉淀)"
-      hint="主力波段建仓区间(120日)筹码沉淀 · 真实衰减模型 · 底仓成本带与形态研判"
+      title="主力筹码分布 (波段沉淀)"
+      hint="主力波段吸筹区间(120日)筹码沉淀 · 真实衰减模型 · 底仓成本带与形态研判"
     >
       {/* 核心指标卡 */}
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
         <Cell
-          label="主力建仓均价"
-          value={acc?.main_cost ? `¥${safeFixed(acc.main_cost, 2)}` : safeFixed(mainIntent?.chip_peak, 2)}
-          hint="主力波段吸筹加权平均成本位 (COST 50)"
+          label="筹码峰"
+          value={acc?.main_cost ? safeFixed(acc.main_cost, 2) : safeFixed(mainIntent?.chip_peak, 2)}
+          hint="成交最密集价位 (主力波段成本位 COST 50)"
         />
         <Cell
-          label="70%建仓成本区"
+          label="成本带"
           value={
             acc?.cost_70_low != null && acc?.cost_70_high != null
-              ? `¥${safeFixed(acc.cost_70_low, 2)} - ¥${safeFixed(acc.cost_70_high, 2)}`
+              ? `${safeFixed(acc.cost_70_low, 2)} - ${safeFixed(acc.cost_70_high, 2)}`
               : band
               ? `${safeFixed(band.low, 2)} - ${safeFixed(band.high, 2)}`
               : '--'
           }
-          hint="主力核心吸筹底仓区间 (COST 15 - COST 85)"
+          hint="主要成本区间下沿 - 上沿 (70% 核心底仓区间 COST 15 - COST 85)"
         />
         <Cell
           label="获利盘比例"
