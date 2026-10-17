@@ -1836,9 +1836,20 @@ export default function OpportunitiesPage() {
                 placeholder="输入6位股票代码, 逗号分隔, 如 002361,600519"
                 className="h-8 text-[12px] flex-1 min-w-[260px]"
               />
-              <Button size="sm" onClick={() => void runStockPool()} disabled={poolLoading}>
-                {poolLoading ? '扫描中...' : '扫描共振'}
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-[11px] px-2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setPoolSymbols('002361, 600111, 600825, 002407, 300750')}
+                  title="填入今日主线与妖股龙头代码快速扫描"
+                >
+                  填入今日主线龙头
+                </Button>
+                <Button size="sm" onClick={() => void runStockPool()} disabled={poolLoading}>
+                  {poolLoading ? '扫描中...' : '扫描共振'}
+                </Button>
+              </div>
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
               数智决策三指标共振：GS趋势 + AI机构活跃度 + L2主力净流入，三项全满足=强共振

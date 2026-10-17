@@ -156,6 +156,18 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
           {loading ? '扫描中...' : '聚宝盆扫描'}
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 text-[11px] px-2 text-muted-foreground hover:text-foreground"
+          onClick={() => {
+            setSymbols('002361, 600111, 600825, 002407, 300750')
+            setKeywords('均线多头,放量突破,非ST')
+          }}
+          title="填入今日主线龙头与高胜率问财条件"
+        >
+          载入经典形态
+        </Button>
       </div>
 
       <div className="mt-2 text-[11px] text-muted-foreground">
