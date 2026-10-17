@@ -1,3 +1,9 @@
+## release: v0.13.98 (修复测试交易时段打桩与盘后零穿透闭环)（2026-10-17）
+
+- **VERSION**: bump v0.13.97 → v0.13.98 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁与测试完备性**:
+  - `tests/test_img_linkage.py`: 为 `test_summary_orderbook_falls_back_to_thsdk` 与 `test_summary_orderbook_none_when_all_fail` 显式注入交易时段打桩 (`in_trading_window=True`)，对齐非交易时段零穿透的生产行为，21 项单测全部绿灯通过。
+
 ## release: v0.13.97 (非交易时段盘口零穿透与数智决策长效缓存加速)（2026-10-17）
 
 - **VERSION**: bump v0.13.96 → v0.13.97 (同步 README.md / README.zh-CN.md 徽章)。
