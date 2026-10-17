@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePausedInterval } from '@panwatch/base-ui'
-import { RefreshCw, UserPlus, Eye, Info } from 'lucide-react'
+import { RefreshCw, UserPlus, Eye } from 'lucide-react'
 import { fetchAPI, stocksApi } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { chaseBadge, type GapStudyResp } from '@/lib/gap-study'
+import { safeFixed } from '@/lib/format'
 import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
 
 /**
@@ -32,6 +33,14 @@ export interface AuctionAnomalyItem {
   gap_pct?: number | null
   withdraw_rate?: number | null
   volume_ratio?: number | null
+  open_amount?: number | null
+  open_zt_buy?: number | null
+  demon_score?: number | null
+  demon_grade?: string | null
+  demon_streak?: number | null
+  verdict_tag?: string | null
+  verdict_action?: string | null
+  verdict_level?: string | null
   note?: string
   [key: string]: unknown
 }
@@ -51,15 +60,17 @@ interface AuctionAnomalyTabProps {
   onOpenDetail?: (symbol: string, market: string, name?: string) => void
 }
 
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v) || v <= 0) return '—'
+  if (v >= 1e8) return `${safeFixed(v / 1e8, 2)} 亿`
+  if (v >= 1e4) return `${safeFixed(v / 1e4, 0)} 万`
+  return `${safeFixed(v, 0)} 元`
+}
+
 function fmtPct(v: number | null | undefined, plus = true): string {
   if (v == null || !Number.isFinite(v)) return '—'
   const sign = plus ? (v > 0 ? '+' : '') : ''
-  return `${sign}${v.toFixed(2)}%`
-}
-
-function fmtNum(v: number | null | undefined, suffix = ''): string {
-  if (v == null || !Number.isFinite(v)) return '—'
-  return `${v.toFixed(2)}${suffix}`
+  return `${sign}${safeFixed(v, 2)}%`
 }
 
 function gapRowClass(gap: number | null | undefined): string {
@@ -157,12 +168,6 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
     ? updatedAt.toLocaleTimeString('zh-CN', { hour12: false })
     : '--'
 
-  // 2026-08-24: 后端声明的 missing_fields 决定哪些列显 '—'(覆盖默认值)
-  const missingSet = new Set<string>(data?.missing_fields ?? [])
-  const withdrawMissing = missingSet.has('withdraw_rate')
-  const volumeMissing = missingSet.has('volume_ratio')
-  const headerNote = data?.note || 'thsdk 竞价异动池'
-
   return (
     <div className="card p-3 md:p-4">
       {/* 顶栏: 09:25 同步时间 + 总数 + 刷新 */}
@@ -194,30 +199,10 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               <th className="text-left py-1.5 pr-2">代码</th>
               <th className="text-left py-1.5 pr-2">名称</th>
               <th className="text-right py-1.5 pr-2">竞价涨幅</th>
-              <th
-                className="text-right py-1.5 pr-2"
-                title={withdrawMissing ? `${headerNote}: 数据源不提供撤单率` : '撤单率 %'}
-              >
-                撤单率
-                {withdrawMissing && (
-                  <Info
-                    className="inline w-3 h-3 ml-0.5 align-middle text-muted-foreground/70"
-                    aria-label="数据源不提供撤单率"
-                  />
-                )}
-              </th>
-              <th
-                className="text-right py-1.5 pr-2"
-                title={volumeMissing ? `${headerNote}: 数据源不提供量比` : '竞价量能'}
-              >
-                竞价量能
-                {volumeMissing && (
-                  <Info
-                    className="inline w-3 h-3 ml-0.5 align-middle text-muted-foreground/70"
-                    aria-label="数据源不提供量比"
-                  />
-                )}
-              </th>
+              <th className="text-right py-1.5 pr-2">竞价成交额</th>
+              <th className="text-right py-1.5 pr-2">竞价量比</th>
+              <th className="text-right py-1.5 pr-2">撤单率</th>
+              <th className="text-left py-1.5 px-2">9:25 主力意图与买卖建议</th>
               <th className="text-right py-1.5">操作</th>
             </tr>
           </thead>
@@ -228,6 +213,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               const gap = typeof r.gap_pct === 'number' ? r.gap_pct : null
               const withdraw = typeof r.withdraw_rate === 'number' ? r.withdraw_rate : null
               const vol = typeof r.volume_ratio === 'number' ? r.volume_ratio : null
+              const openAmt = typeof r.open_amount === 'number' ? r.open_amount : null
               const isAdding = !!code && adding.has(code)
               return (
                 <tr
@@ -247,7 +233,14 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                     title="查看详情"
                     onClick={() => code && onOpenDetail?.(code, market, name)}
                   >
-                    {name}
+                    <div className="flex items-center gap-1.5">
+                      <span>{name}</span>
+                      {r.demon_score && r.demon_score >= 75 ? (
+                        <span className="rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-semibold text-red-500 border border-red-500/20">
+                          {r.demon_grade || '极妖'}
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${gapColor(gap)}`}>
                     {fmtPct(gap)}
@@ -263,11 +256,34 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                       ) : null
                     })()}
                   </td>
-                  <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-muted-foreground">
-                    {withdrawMissing || withdraw == null ? '—' : fmtNum(withdraw, '%')}
+                  <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-foreground font-medium">
+                    {fmtMoney(openAmt)}
                   </td>
-                  <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-foreground">
-                    {volumeMissing || vol == null ? '—' : fmtNum(vol, 'x')}
+                  <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${vol && vol >= 3 ? 'text-amber-500 font-bold' : 'text-foreground'}`}>
+                    {vol == null ? '—' : `${safeFixed(vol, 1)} 倍`}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right font-mono tabular-nums text-muted-foreground">
+                    {withdraw == null ? '—' : `${safeFixed(withdraw, 1)}%`}
+                  </td>
+                  <td className="py-1.5 px-2 text-left">
+                    {r.verdict_tag ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          r.verdict_level === 'strong_buy' ? 'bg-red-500/20 text-red-500 font-bold' :
+                          r.verdict_level === 'buy' ? 'bg-amber-500/20 text-amber-500 font-semibold' :
+                          r.verdict_level === 'warning' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
+                          r.verdict_level === 'risk' ? 'bg-green-500/20 text-green-500' :
+                          'bg-muted text-muted-foreground'
+                        }`}>
+                          {r.verdict_tag}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground truncate max-w-[200px]" title={r.verdict_action || ''}>
+                          {r.verdict_action}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">常态观察</span>
+                    )}
                   </td>
                   <td className="py-1.5 text-right">
                     {code ? (

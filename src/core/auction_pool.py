@@ -247,9 +247,12 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
         logger.warning("[auction_pool] 竞价异动拉取失败 market=%r: %r", market, e)
         all_records = []
 
-    # ── 通达信 TQ 盘口增强: 补齐缺失的 volume_ratio (竞价量比) 与 open_amount (竞价金额) ──
+    # ── 通达信 TQ 盘口增强: 补齐缺失的 涨幅、量比、竞价金额、撤单率与妖股评分 ──
     try:
         from marketdata.vendors.tq import _rpc
+        from src.core.demon_factors import top_demon_factors
+        demon_map = top_demon_factors(100) or {}
+
         for r in all_records:
             sym = r.get("symbol")
             if not sym or len(sym) != 6:
@@ -257,26 +260,94 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
             tq_code = f"{sym}.SH" if sym.startswith("6") else f"{sym}.SZ"
             info = _rpc("get_more_info", {"stock_code": tq_code})
             if isinstance(info, dict):
-                # OpenVolPre1 = 竞价成交量对比前 1 日放大比例 (竞价量比)
-                # OpenAmo = 竞价成交金额 (元)
-                # OpenZTBuy = 涨停委买金额
+                # 1. 竞价真实涨幅 (解决截图全部显示 -- 的核心痛点: OpenZAF 是开盘竞价涨跌幅)
+                if r.get("gap_pct") is None and info.get("OpenZAF") is not None:
+                    try:
+                        r["gap_pct"] = round(float(info["OpenZAF"]), 2)
+                    except Exception:
+                        pass
+                elif r.get("gap_pct") is None and info.get("ZAF") is not None:
+                    try:
+                        r["gap_pct"] = round(float(info["ZAF"]), 2)
+                    except Exception:
+                        pass
+
+                # 2. 竞价量比 (OpenVolPre1: 相对前1日成交量放大比例)
                 vr = info.get("OpenVolPre1")
-                amo = info.get("OpenAmo")
                 if vr is not None:
                     try:
                         r["volume_ratio"] = round(float(vr), 2)
                     except Exception:
                         pass
+
+                # 3. 竞价真实成交金额 (OpenAmo, 单位元)
+                amo = info.get("OpenAmo")
                 if amo is not None:
                     try:
                         r["open_amount"] = round(float(amo), 2)
                     except Exception:
                         pass
+
+                # 4. 真实撤单率 (解决撤单率全部显示 --: BCancel / (TotalBVol + BCancel))
+                bc = float(info.get("BCancel") or 0.0)
+                tb = float(info.get("TotalBVol") or 0.0)
+                if bc > 0 and (tb + bc) > 0:
+                    r["withdraw_rate"] = round((bc / (tb + bc)) * 100.0, 1)
+
+                # 5. 涨停封单金额
                 if info.get("OpenZTBuy"):
                     try:
                         r["open_zt_buy"] = round(float(info["OpenZTBuy"]), 2)
                     except Exception:
                         pass
+
+            # 6. 妖股基因匹配
+            dfactor = demon_map.get(sym)
+            if dfactor:
+                r["demon_score"] = dfactor.get("total")
+                r["demon_grade"] = dfactor.get("grade")
+                r["demon_streak"] = dfactor.get("max_streak")
+
+            # 7. 主力意图与买卖建议研判 (对标实战交易决策)
+            gap = r.get("gap_pct") or 0.0
+            open_amt = r.get("open_amount") or 0.0
+            v_ratio = r.get("volume_ratio") or 0.0
+            w_rate = r.get("withdraw_rate") or 0.0
+
+            if gap >= 9.8 and (open_amt > 1e7 or r.get("open_zt_buy", 0) > 2e7):
+                r["verdict_tag"] = "👑 涨停抢筹"
+                r["verdict_action"] = "顶级游资一字顶板，买盘坚决，注意龙头身位"
+                r["verdict_level"] = "strong_buy"
+            elif gap >= 2.5 and open_amt >= 1.5e7 and v_ratio >= 2.5:
+                r["verdict_tag"] = "🔥 爆量抢筹"
+                r["verdict_action"] = "主力资金超预期高开抢筹，量能充沛，重点关注开盘秒板"
+                r["verdict_level"] = "buy"
+            elif gap >= 1.0 and v_ratio >= 3.0 and open_amt >= 8e6:
+                r["verdict_tag"] = "🛡️ 弱转强"
+                r["verdict_action"] = "竞价量比急剧放大，分歧后弱转强，观察承接低吸"
+                r["verdict_level"] = "buy"
+            elif w_rate >= 40.0 and gap > 2.0:
+                r["verdict_tag"] = "⚠️ 诱多试盘"
+                r["verdict_action"] = "买盘撤单率过高，谨防主力假托单掩护开盘出货"
+                r["verdict_level"] = "warning"
+            elif gap <= -3.0 and open_amt >= 1e7:
+                r["verdict_tag"] = "⚡ 恐慌砸盘"
+                r["verdict_action"] = "大资金竞价核按钮抢跑，回避风险，勿盲目抄底"
+                r["verdict_level"] = "risk"
+            else:
+                r["verdict_tag"] = "常态试盘"
+                r["verdict_action"] = "竞价表现平稳，等待开盘 9:30 确立方向"
+                r["verdict_level"] = "neutral"
+
+        # 排序优化: 告别杂毛，按【竞价金额】从大到小降序排列！主力真金白银买的优先排在前面！
+        all_records.sort(
+            key=lambda x: (
+                1 if x.get("verdict_level") in ("strong_buy", "buy") else 0,
+                x.get("open_amount") or 0.0,
+                x.get("gap_pct") or -99.0,
+            ),
+            reverse=True,
+        )
     except Exception as tq_err:
         logger.debug("[auction_pool] 通达信 TQ 竞价量比补齐跳过: %s", tq_err)
 

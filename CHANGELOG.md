@@ -1,3 +1,13 @@
+## release: v0.14.1 (集合竞价真实盘口穿透与买卖决策建议引擎落地)（2026-10-17）
+
+- **VERSION**: bump v0.14.0 → v0.14.1 (同步 README.md / README.zh-CN.md 徽章)。
+- **核心数据与盘口指标落地**:
+  - `src/core/auction_pool.py`: 彻底根除竞价表格大面积 `--` 痛点。深度聚合通达信 TQ 真实盘口，补齐真实竞价涨幅 (`OpenZAF`)、9:25 真实撮合成交额 (`OpenAmo`)、竞价量比 (`OpenVolPre1`)、真实撤单率 (`BCancel / (TotalBVol + BCancel)`) 与涨停委买金额。
+  - **9:25 主力意图与买卖建议研判**: 新增 `verdict_tag` 与 `verdict_action`，涵盖“👑 涨停抢筹”、“🔥 爆量抢筹”、“🛡️ 弱转强”、“⚠️ 诱多试盘”、“⚡ 恐慌砸盘”，并交叉核对 `demon_factors` 妖股评分，高亮标注【极妖】身份。
+  - **默认排序优化**: 彻底告别无成交杂毛，默认按【9:25 竞价真实成交额】与抢筹强度降序排列，资金真金买入的龙头永远置顶第一屏。
+- **前端交互重塑**:
+  - `frontend/packages/biz-ui/src/components/AuctionAnomalyTab.tsx`: 重构表格列结构为“代码 / 名称 / 竞价涨幅 / 竞价成交额 / 竞价量比 / 撤单率 / 9:25 主力意图与买卖建议”，给交易者提供直观、明确的买卖参考依据。
+
 ## release: v0.14.0 (机会菜单重构拆分 + 独立集合竞价专区上线)（2026-10-17）
 
 - **VERSION**: bump v0.13.99 → v0.14.0 (里程碑大版本，同步 README.md / README.zh-CN.md 徽章)。
