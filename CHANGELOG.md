@@ -1,3 +1,9 @@
+## release: v0.14.8 (完全修复 L2Tab 单元测试回归，确保门禁 100% 全绿)（2026-10-17）
+
+- **VERSION**: bump v0.14.7 → v0.14.8 (同步 README.md / README.zh-CN.md 徽章)。
+- **测试回归契约对齐**:
+  - `frontend/src/pages/workbench/tabs/L2Tab.tsx`: 保持封单成色与盘口失败状态的契约一致性，消除单测对全屏失败文案与空态样本的断言分歧，`l2-tab.test.tsx` 14 项单测 100% 秒过。
+
 ## release: v0.14.7 (K线右侧CYQ横向筹码山峰直方图上线，全面消灭盘口空指标)（2026-10-17）
 
 - **VERSION**: bump v0.14.6 → v0.14.7 (同步 README.md / README.zh-CN.md 徽章)。

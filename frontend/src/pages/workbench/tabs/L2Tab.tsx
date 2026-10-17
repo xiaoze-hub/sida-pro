@@ -366,9 +366,10 @@ function OrderbookSection({
   const bid10Raw = safeNum(latest?.bid_amt10)
   const ask10Raw = safeNum(latest?.ask_amt10)
 
-  // 盘后回退: 当 ob 为 0 且 moreInfo 有收盘买卖量时, 用收盘真实委买委卖额填补, 杜绝全 0.00万
-  const totalBVol = safeNum(moreInfo?.total_buy_vol)
-  const totalSVol = safeNum(moreInfo?.total_sell_vol)
+  // 盘后回退: 当 ob 为 0 且 moreInfo 有收盘买卖量时, 用收盘真实委买委卖额填补, 杜绝全 0.00万 (仅在接口正常下发且非测试全挂时回退)
+  const isObFailed = feed.failed
+  const totalBVol = isObFailed ? null : safeNum(moreInfo?.total_buy_vol)
+  const totalSVol = isObFailed ? null : safeNum(moreInfo?.total_sell_vol)
   const lastPrice = safeNum(moreInfo?.raw?.Close) ?? 35.0
 
   const bid10 = bid10Raw && bid10Raw > 0 ? bid10Raw : totalBVol ? totalBVol * lastPrice : null
@@ -377,8 +378,8 @@ function OrderbookSection({
   const total = bid10 != null && ask10 != null ? bid10 + ask10 : 0
   /** 十档额口径买盘占比(%): 买十档额 /(买十档额 + 卖十档额) —— 仅作 `bid_pressure` 缺失时的回退。 */
   const obBidPct = total > 0 && bid10 != null ? (bid10 / total) * 100 : null
-  const obVal = safeNum(latest?.ob) ?? (total > 0 && bid10 != null && ask10 != null ? (bid10 - ask10) / total : null)
-  const available = ob?.available === true || (bid10 != null && ask10 != null)
+  const obVal = safeNum(latest?.ob)
+  const available = ob?.available === true
 
   /** 真字段: `summary.orderbook.shape`('托盘'/'压盘'/'均衡'); 空串/缺失一律视为"未下发"(不猜)。 */
   const realShape = (() => {
@@ -847,43 +848,41 @@ function IntentSealSection({
       {/* AI 解读(2026-10-10 AI 链路 P1): 懒触发按钮 + 规则结论/AI 为什么/置信度/方向; 仅追加一节 */}
       <IntentExplainBlock symbol={symbol} />
 
-      {/* 封单成色(A3 批次, /seal-quality): 仅当股票涨停、或曾经封单、或该卡片有有效采样数据时展示, 避免非涨停股全屏 '--' 噪音 */}
-      {sealAvailable && (
-        <div className="border-t border-border/30 pt-2">
-          <div className="mb-1.5 text-[11px] text-muted-foreground">
-            封单成色
-            <span className="ml-1 text-[10px] opacity-70">
-              {m?.window_min != null ? `近 ${safeFixed(m.window_min, 0)} 分钟 · ` : ''}盘中 60s 采样
-              {seal.data?.n_samples != null ? ` · ${seal.data.n_samples} 样本` : ''}
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
-            <Cell
-              label="成色"
-              value={pct(m?.seal_quality, 0)}
-              valueClass={
-                safeNum(m?.seal_quality) != null && (safeNum(m?.seal_quality) ?? 1) < 0.6 ? 'text-stock-down' : 'text-foreground'
-              }
-              hint="成色 = 1 - 窗口撤单率(0~1); <60% 或撤单异动 >=2 视为走弱"
-            />
-            <Cell label="撤单率" value={pct(m?.cancel_rate_5m)} hint="窗口内 撤单量 /(买卖量 + 撤单量)" />
-            <Cell label="撤单异动" value={safeFixed(m?.cancel_zscore, 2)} hint="窗口撤单率对历史基线的 z-score" />
-            <Cell label="封板成功率" value={pct(m?.seal_success_rate, 0)} hint="窗口内 is_sealed 为真的样本占比" />
-            <Cell label="撤单偏向" value={safeFixed(m?.cancel_bias_5m, 2)} hint="(撤买-撤卖)/总撤单; >0 买方撤多, <0 卖方撤多" />
-            <Cell
-              label="当前封板"
-              value={m?.is_sealed == null ? '--' : m.is_sealed ? '封住' : '未封住'}
-              valueClass={m?.is_sealed === false ? 'text-stock-down' : 'text-foreground'}
-              hint="最新样本是否处于封板状态"
-            />
-          </div>
-          {!sealAvailable || seal.failed ? (
-            <div className="mt-1.5 text-[10px] text-muted-foreground/70">
-              {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason)}
-            </div>
-          ) : null}
+      {/* 封单成色(A3 批次, /seal-quality) */}
+      <div className="border-t border-border/30 pt-2">
+        <div className="mb-1.5 text-[11px] text-muted-foreground">
+          封单成色
+          <span className="ml-1 text-[10px] opacity-70">
+            {m?.window_min != null ? `近 ${safeFixed(m.window_min, 0)} 分钟 · ` : ''}盘中 60s 采样
+            {seal.data?.n_samples != null ? ` · ${seal.data.n_samples} 样本` : ''}
+          </span>
         </div>
-      )}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
+          <Cell
+            label="成色"
+            value={pct(m?.seal_quality, 0)}
+            valueClass={
+              safeNum(m?.seal_quality) != null && (safeNum(m?.seal_quality) ?? 1) < 0.6 ? 'text-stock-down' : 'text-foreground'
+            }
+            hint="成色 = 1 - 窗口撤单率(0~1); <60% 或撤单异动 >=2 视为走弱"
+          />
+          <Cell label="撤单率" value={pct(m?.cancel_rate_5m)} hint="窗口内 撤单量 /(买卖量 + 撤单量)" />
+          <Cell label="撤单异动" value={safeFixed(m?.cancel_zscore, 2)} hint="窗口撤单率对历史基线的 z-score" />
+          <Cell label="封板成功率" value={pct(m?.seal_success_rate, 0)} hint="窗口内 is_sealed 为真的样本占比" />
+          <Cell label="撤单偏向" value={safeFixed(m?.cancel_bias_5m, 2)} hint="(撤买-撤卖)/总撤单; >0 买方撤多, <0 卖方撤多" />
+          <Cell
+            label="当前封板"
+            value={m?.is_sealed == null ? '--' : m.is_sealed ? '封住' : '未封住'}
+            valueClass={m?.is_sealed === false ? 'text-stock-down' : 'text-foreground'}
+            hint="最新样本是否处于封板状态"
+          />
+        </div>
+        {!sealAvailable || seal.failed ? (
+          <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+            {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason || '非涨停或未触发封板采样')}
+          </div>
+        ) : null}
+      </div>
     </Section>
   )
 }
@@ -977,9 +976,7 @@ function FundFlowSection({ rows }: { rows: FundFlowRow[] }) {
  * ------------------------------------------------------------------ */
 
 function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
-  if (!data || data.data_status !== 'complete') {
-    return null // 盘后无拆单还原样本时直接隐藏整张空卡片，消灭全屏 '--' 噪点
-  }
+  const complete = data?.data_status === 'complete'
 
   return (
     <Section
@@ -1009,6 +1006,11 @@ function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
           {data?.suopan ? <span className="rounded bg-accent/30 px-2 py-0.5 text-foreground">锁盘</span> : null}
         </div>
       )}
+      {!complete ? (
+        <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+          暗盘数据状态 {data?.data_status ?? '不可用'}(盘后采集, 当日无样本时全部 `--`)
+        </div>
+      ) : null}
     </Section>
   )
 }
