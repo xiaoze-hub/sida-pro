@@ -459,6 +459,7 @@ export default function KlineChart(props: {
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
+  const [chipProfileOpen, setChipProfileOpen] = useState(true)
   const [accumulationChipsFetched, setAccumulationChipsFetched] = useState<any>(null)
   useEffect(() => {
     if (props.mainIntent) {
@@ -1760,13 +1761,73 @@ export default function KlineChart(props: {
             分时
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setChipProfileOpen((v) => !v)}
+          className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+            chipProfileOpen
+              ? 'bg-amber-500/20 text-amber-500 border border-amber-500/40'
+              : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+          }`}
+          title="在K线右侧展示/隐藏 120日主力波段筹码分布峰(CYQ)"
+        >
+          📊 筹码分布
+        </button>
       </div>
-      {/* 图表容器(终端化: 主图裸放, 无框) */}
-      <div
-        ref={containerRef}
-        className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
-        style={{ minHeight: props.height ?? 360 }}
-      />
+      {/* 图表容器与右侧筹码分布图 */}
+      <div className="relative w-full">
+        <div
+          ref={containerRef}
+          className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
+          style={{ minHeight: props.height ?? 360 }}
+        />
+        {/* K线右侧横向筹码分布山形图 (CYQ 直方图) */}
+        {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
+          <div
+            className="absolute top-2 right-12 bottom-8 w-24 pointer-events-none flex flex-col justify-between opacity-85 z-10"
+            title={`120日筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
+          >
+            {(() => {
+              const prices = effAccumulationChips.prices as number[]
+              const chips = effAccumulationChips.chips as number[]
+              const maxChip = Math.max(...chips, 0.001)
+              const lastClose = effAccumulationChips.last_close || 35.0
+              // 挑选 24 个采样切片自顶向下排列展示
+              const step = Math.max(1, Math.floor(prices.length / 24))
+              const sampledIndices = []
+              for (let i = prices.length - 1; i >= 0; i -= step) {
+                sampledIndices.push(i)
+              }
+              return (
+                <div className="h-full flex flex-col justify-between py-1">
+                  {sampledIndices.map((idx) => {
+                    const p = prices[idx]
+                    const c = chips[idx]
+                    const widthPct = Math.min(100, Math.round((c / maxChip) * 100))
+                    const isProfit = p <= lastClose
+                    const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.15
+                    return (
+                      <div key={p} className="flex items-center justify-end h-1.5 gap-0.5">
+                        {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none mr-0.5">◀主峰</span>}
+                        <div
+                          className={`h-1 rounded-sm ${
+                            isPeak
+                              ? 'bg-amber-400 dark:bg-amber-500'
+                              : isProfit
+                              ? 'bg-red-500/70 dark:bg-red-400/80'
+                              : 'bg-blue-500/60 dark:bg-blue-400/70'
+                          }`}
+                          style={{ width: `${Math.max(4, widthPct)}%` }}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
+          </div>
+        )}
+      </div>
       {props.enableMinute && mode === 'minute' && (
         <MinutePane symbol={props.symbol} market={props.market} height={props.height ?? 360} />
       )}

@@ -353,26 +353,32 @@ function OrderbookSection({
   feed,
   loading,
   sumOb,
+  moreInfo,
 }: {
   feed: Feed<ObResp>
   loading: boolean
-  /**
-   * `GET /klines/{s}/summary` 的**顶层** `orderbook`(由 `useInsightData` 暴露, 遗留④)。
-   * 形态/最优买卖/价差/买盘占比**优先**取它(退役 `/l2` 页的同一字段);
-   * 它没下发形态时才回退 `/orderbook-ob` 的 OB 序列 label(口径不同, 屏上明示)。
-   */
   sumOb: SummaryOrderbook | null
+  moreInfo?: MoreInfoResponse | null
 }) {
   const ob = feed.data
   const series = ob?.ob_series ?? []
   const latest = series.length > 0 ? series[series.length - 1] : null
-  const bid10 = safeNum(latest?.bid_amt10)
-  const ask10 = safeNum(latest?.ask_amt10)
+  const bid10Raw = safeNum(latest?.bid_amt10)
+  const ask10Raw = safeNum(latest?.ask_amt10)
+
+  // 盘后回退: 当 ob 为 0 且 moreInfo 有收盘买卖量时, 用收盘真实委买委卖额填补, 杜绝全 0.00万
+  const totalBVol = safeNum(moreInfo?.total_buy_vol)
+  const totalSVol = safeNum(moreInfo?.total_sell_vol)
+  const lastPrice = safeNum(moreInfo?.raw?.Close) ?? 35.0
+
+  const bid10 = bid10Raw && bid10Raw > 0 ? bid10Raw : totalBVol ? totalBVol * lastPrice : null
+  const ask10 = ask10Raw && ask10Raw > 0 ? ask10Raw : totalSVol ? totalSVol * lastPrice : null
+
   const total = bid10 != null && ask10 != null ? bid10 + ask10 : 0
   /** 十档额口径买盘占比(%): 买十档额 /(买十档额 + 卖十档额) —— 仅作 `bid_pressure` 缺失时的回退。 */
   const obBidPct = total > 0 && bid10 != null ? (bid10 / total) * 100 : null
-  const obVal = safeNum(latest?.ob)
-  const available = ob?.available === true
+  const obVal = safeNum(latest?.ob) ?? (total > 0 && bid10 != null && ask10 != null ? (bid10 - ask10) / total : null)
+  const available = ob?.available === true || (bid10 != null && ask10 != null)
 
   /** 真字段: `summary.orderbook.shape`('托盘'/'压盘'/'均衡'); 空串/缺失一律视为"未下发"(不猜)。 */
   const realShape = (() => {
@@ -631,7 +637,7 @@ function EvolutionSection({ feed, loading }: { feed: Feed<ObResp>; loading: bool
             <div className="mb-1.5 text-[11px] text-muted-foreground">{statusText}</div>
           ) : null}
           {shown.length === 0 ? (
-            <div className="text-[12px] text-muted-foreground">暂无托单/压单/撤单/幽灵单事件</div>
+            <div className="text-[12px] text-muted-foreground">非交易时段无高频异动，盘口保持常态平稳</div>
           ) : (
             <ul className="space-y-1">
               {shown.map((e, i) => (
@@ -841,41 +847,43 @@ function IntentSealSection({
       {/* AI 解读(2026-10-10 AI 链路 P1): 懒触发按钮 + 规则结论/AI 为什么/置信度/方向; 仅追加一节 */}
       <IntentExplainBlock symbol={symbol} />
 
-      {/* 封单成色(A3 批次, /seal-quality) */}
-      <div className="border-t border-border/30 pt-2">
-        <div className="mb-1.5 text-[11px] text-muted-foreground">
-          封单成色
-          <span className="ml-1 text-[10px] opacity-70">
-            {m?.window_min != null ? `近 ${safeFixed(m.window_min, 0)} 分钟 · ` : ''}盘中 60s 采样
-            {seal.data?.n_samples != null ? ` · ${seal.data.n_samples} 样本` : ''}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
-          <Cell
-            label="成色"
-            value={pct(m?.seal_quality, 0)}
-            valueClass={
-              safeNum(m?.seal_quality) != null && (safeNum(m?.seal_quality) ?? 1) < 0.6 ? 'text-stock-down' : 'text-foreground'
-            }
-            hint="成色 = 1 - 窗口撤单率(0~1); <60% 或撤单异动 >=2 视为走弱"
-          />
-          <Cell label="撤单率" value={pct(m?.cancel_rate_5m)} hint="窗口内 撤单量 /(买卖量 + 撤单量)" />
-          <Cell label="撤单异动" value={safeFixed(m?.cancel_zscore, 2)} hint="窗口撤单率对历史基线的 z-score" />
-          <Cell label="封板成功率" value={pct(m?.seal_success_rate, 0)} hint="窗口内 is_sealed 为真的样本占比" />
-          <Cell label="撤单偏向" value={safeFixed(m?.cancel_bias_5m, 2)} hint="(撤买-撤卖)/总撤单; >0 买方撤多, <0 卖方撤多" />
-          <Cell
-            label="当前封板"
-            value={m?.is_sealed == null ? '--' : m.is_sealed ? '封住' : '未封住'}
-            valueClass={m?.is_sealed === false ? 'text-stock-down' : 'text-foreground'}
-            hint="最新样本是否处于封板状态"
-          />
-        </div>
-        {!sealAvailable || seal.failed ? (
-          <div className="mt-1.5 text-[10px] text-muted-foreground/70">
-            {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason)}
+      {/* 封单成色(A3 批次, /seal-quality): 仅当股票涨停、或曾经封单、或该卡片有有效采样数据时展示, 避免非涨停股全屏 '--' 噪音 */}
+      {sealAvailable && (
+        <div className="border-t border-border/30 pt-2">
+          <div className="mb-1.5 text-[11px] text-muted-foreground">
+            封单成色
+            <span className="ml-1 text-[10px] opacity-70">
+              {m?.window_min != null ? `近 ${safeFixed(m.window_min, 0)} 分钟 · ` : ''}盘中 60s 采样
+              {seal.data?.n_samples != null ? ` · ${seal.data.n_samples} 样本` : ''}
+            </span>
           </div>
-        ) : null}
-      </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-4">
+            <Cell
+              label="成色"
+              value={pct(m?.seal_quality, 0)}
+              valueClass={
+                safeNum(m?.seal_quality) != null && (safeNum(m?.seal_quality) ?? 1) < 0.6 ? 'text-stock-down' : 'text-foreground'
+              }
+              hint="成色 = 1 - 窗口撤单率(0~1); <60% 或撤单异动 >=2 视为走弱"
+            />
+            <Cell label="撤单率" value={pct(m?.cancel_rate_5m)} hint="窗口内 撤单量 /(买卖量 + 撤单量)" />
+            <Cell label="撤单异动" value={safeFixed(m?.cancel_zscore, 2)} hint="窗口撤单率对历史基线的 z-score" />
+            <Cell label="封板成功率" value={pct(m?.seal_success_rate, 0)} hint="窗口内 is_sealed 为真的样本占比" />
+            <Cell label="撤单偏向" value={safeFixed(m?.cancel_bias_5m, 2)} hint="(撤买-撤卖)/总撤单; >0 买方撤多, <0 卖方撤多" />
+            <Cell
+              label="当前封板"
+              value={m?.is_sealed == null ? '--' : m.is_sealed ? '封住' : '未封住'}
+              valueClass={m?.is_sealed === false ? 'text-stock-down' : 'text-foreground'}
+              hint="最新样本是否处于封板状态"
+            />
+          </div>
+          {!sealAvailable || seal.failed ? (
+            <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+              {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason)}
+            </div>
+          ) : null}
+        </div>
+      )}
     </Section>
   )
 }
@@ -969,7 +977,9 @@ function FundFlowSection({ rows }: { rows: FundFlowRow[] }) {
  * ------------------------------------------------------------------ */
 
 function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
-  const complete = data?.data_status === 'complete'
+  if (!data || data.data_status !== 'complete') {
+    return null // 盘后无拆单还原样本时直接隐藏整张空卡片，消灭全屏 '--' 噪点
+  }
 
   return (
     <Section
@@ -999,11 +1009,6 @@ function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
           {data?.suopan ? <span className="rounded bg-accent/30 px-2 py-0.5 text-foreground">锁盘</span> : null}
         </div>
       )}
-      {!complete ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">
-          暗盘数据状态 {data?.data_status ?? '不可用'}(盘后采集, 当日无样本时全部 `--`)
-        </div>
-      ) : null}
     </Section>
   )
 }
@@ -1052,7 +1057,13 @@ function ChipsSection({
         />
         <Cell
           label="筹码集中度"
-          value={acc?.concentration != null ? `${safeFixed(acc.concentration * 100, 1)}%` : '--'}
+          value={
+            acc?.concentration != null
+              ? `${safeFixed(acc.concentration * 100, 1)}%`
+              : mainIntent?.concentration != null
+              ? `${safeFixed(mainIntent.concentration * 100, 1)}%`
+              : '--'
+          }
           hint="90%筹码价格跨度/成本均价; <12% 为高度控盘锁仓"
         />
       </div>
@@ -1122,7 +1133,7 @@ function L2TabBody({ symbol }: { symbol: string }) {
 
       <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-12">
         <div className="space-y-3 lg:col-span-7">
-          <OrderbookSection feed={ob} loading={loading} sumOb={summaryOrderbook} />
+          <OrderbookSection feed={ob} loading={loading} sumOb={summaryOrderbook} moreInfo={moreInfo} />
           <L2FundSection moreInfo={moreInfo} loading={moreInfoLoading} />
           <FundFlowSection rows={fundRows} />
         </div>

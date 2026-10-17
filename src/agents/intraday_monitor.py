@@ -294,6 +294,7 @@ def _main_intent_structured(symbol: str) -> dict | None:
                 if band:
                     out["chip_band"] = {"low": band["low"], "high": band["high"]}
                 out["profit_ratio"] = chips.get("profit_ratio")
+                out["concentration"] = chips.get("concentration")
         except Exception as e:
             # P1: 筹码辅助数据降级路径, 不静默
             logger.debug("筹码分布获取失败(降级跳过) %s: %s", symbol, e)
