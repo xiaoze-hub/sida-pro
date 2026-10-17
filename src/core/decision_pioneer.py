@@ -619,14 +619,51 @@ def fetch_decision_pioneer(symbol: str, market: str = "CN") -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning("decision_pioneer main_intent %s failed: %s", symbol, e)
 
+    # ── 官方口径: 同花顺决策先锋三指标共振状态机 (对标《决策先锋8问8答》§3.4) ──
+    # 铁律: 要顺不要逆(GS), 要红不要绿(暗盘/L2), 要活不要死(活跃度>=3)
+    resonance_state = "三指标分歧"
+    resonance_action = "关注指标动态"
+    resonance_warning = "safe"
+
+    act_val = act.get("activity") if act else None
+    act_strong = act_val is not None and act_val >= 3.0  # 站上强势线
+    gs_signal = gs.get("signal")
+    gs_zone = gs.get("zone") or gs.get("state")
+    l2_info = _l2_summary(l2)
+    l2_inflow = l2_info.get("available") and (l2_info.get("zjl_hb") or 0.0) > 0
+
+    if gs_signal == "G" and act_strong and l2_inflow:
+        resonance_state = "🔥 首次共振·机会挖掘"
+        resonance_action = "趋势有望启动，三指标首次共振，建议逢低重点关注"
+        resonance_warning = "opportunity"
+    elif gs_zone in ("G", "G区", "G区间") and act_strong and l2_inflow:
+        resonance_state = "⭐ 共振向好·持股待涨"
+        resonance_action = "处于多方G区且资金机构共振，顺势持股"
+        resonance_warning = "safe"
+    elif gs_signal == "S" or (gs_zone in ("S", "S区", "S区间") and not act_strong and not l2_inflow):
+        resonance_state = "⚠️ 全线走坏·注意风险"
+        resonance_action = "S信号或空方S区且机构资金双撤退，注意潜在调整风险"
+        resonance_warning = "warning"
+    elif gs_zone in ("G", "G区", "G区间") and not l2_inflow:
+        resonance_state = "⚡ 警惕背离·主力出货"
+        resonance_action = "虽处G区但主力资金流出，提防主力假突破诱多出货"
+        resonance_warning = "caution"
+    elif not act_strong and l2_inflow:
+        resonance_state = "👀 潜伏吸筹·主力在买"
+        resonance_action = "活跃度未破强势线但主力暗中流入，关注蓄势突破"
+        resonance_warning = "safe"
+
     return {
         "symbol": symbol,
         "market": market,
         "institution_activity": act,
         "gs": gs,
         "gs_windows": gs_windows,
-        "l2": _l2_summary(l2),
+        "l2": l2_info,
         "main_intent": main_intent,
+        "resonance_state": resonance_state,
+        "resonance_action": resonance_action,
+        "resonance_warning": resonance_warning,
         "data_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
     }
 

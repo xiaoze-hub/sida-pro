@@ -50,11 +50,22 @@ interface SummaryResp {
   }
 }
 
+interface DecisionPioneerResp {
+  resonance_state?: string
+  resonance_action?: string
+  resonance_warning?: string
+  institution_activity?: {
+    activity?: number
+    level?: string
+  }
+}
+
 export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market: string }) {
   const [phaseData, setPhaseData] = useState<string | null>(null)
   const [catalystCount, setCatalystCount] = useState<number | null>(null)
   const [wyckoffStage, setWyckoffStage] = useState<string | null>(null)
   const [cancelIntent, setCancelIntent] = useState<string | null>(null)
+  const [resonanceState, setResonanceState] = useState<{ state: string; action: string; warning: string } | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -114,7 +125,24 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         if (!cancelled) setCancelIntent(null)
       })
 
-    Promise.allSettled([pPhase, pCat, pWyc, pSum]).finally(() => {
+    const pDp = fetchAPI<DecisionPioneerResp>(`/decision-pioneer/${encodeURIComponent(symbol)}?market=${encodeURIComponent(market)}`)
+      .then((res) => {
+        if (cancelled) return
+        if (res && res.resonance_state) {
+          setResonanceState({
+            state: res.resonance_state,
+            action: res.resonance_action || '',
+            warning: res.resonance_warning || 'safe',
+          })
+        } else {
+          setResonanceState(null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResonanceState(null)
+      })
+
+    Promise.allSettled([pPhase, pCat, pWyc, pSum, pDp]).finally(() => {
       if (!cancelled) setLoading(false)
     })
 
@@ -168,6 +196,27 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
           <span className="text-muted-foreground">撤单层:</span>
           <span className="font-medium text-foreground">
             {cancelIntent}
+          </span>
+        </div>
+      ) : null}
+
+      {/* 选股铁三角: 同花顺决策先锋三指标共振状态机 */}
+      {resonanceState ? (
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground">铁三角共振:</span>
+          <span
+            className={`font-semibold ${
+              resonanceState.warning === 'opportunity'
+                ? 'text-red-500 animate-pulse'
+                : resonanceState.warning === 'warning'
+                ? 'text-green-500'
+                : resonanceState.warning === 'caution'
+                ? 'text-yellow-500'
+                : 'text-foreground'
+            }`}
+            title={resonanceState.action}
+          >
+            {resonanceState.state}
           </span>
         </div>
       ) : null}
