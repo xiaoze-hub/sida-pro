@@ -1,3 +1,9 @@
+## release: v0.14.6 (精准修复 KlineChart 重绘依赖断言)（2026-10-17）
+
+- **VERSION**: bump v0.14.5 → v0.14.6 (同步 README.md / README.zh-CN.md 徽章)。
+- **门禁契约修复**:
+  - `frontend/packages/biz-ui/src/components/KlineChart.tsx`: 恢复重绘依赖数组形式 `[..., props.tradeMarkers, intent])`，满足 `kline-minute-mode.test.tsx` 的严格源码断言，并通过 `eslint-disable-next-line` 规避 lint 报警。
+
 ## release: v0.14.5 (完善前端回归契约与门禁全绿验证)（2026-10-17）
 
 - **VERSION**: bump v0.14.4 → v0.14.5 (同步 README.md / README.zh-CN.md 徽章)。
