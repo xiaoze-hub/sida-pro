@@ -1,3 +1,10 @@
+## release: v0.13.96 (对齐 R6 safeFixed 规范与全量门禁全绿)（2026-10-17）
+
+- **VERSION**: bump v0.13.95 → v0.13.96 (同步 README.md / README.zh-CN.md 徽章)。
+- **规范治理**:
+  - `frontend/src/components/ThreeTierVerdictRow.tsx`: 将直接 `.toFixed` 替换为 `@/lib/format` 中的 `safeFixed`，符合项目 R6 规范门禁。
+  - `frontend/src/pages/ThemeMood.tsx`: 将 ETF 折溢价率中的 `.toFixed` 替换为 `safeFixed`，`check_ui_rules.mjs` 门禁 100% OK。
+
 ## release: v0.13.95 (修复周末 CI 门禁与龙虎榜测试断言)（2026-10-17）
 
 - **VERSION**: bump v0.13.94 → v0.13.95 (同步 README.md / README.zh-CN.md 徽章)。

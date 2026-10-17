@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
 import { Activity, Flame, ShieldAlert, Sparkles } from 'lucide-react'
 import { PHASE_LABEL, type PhaseKey } from '@/lib/market-phase'
+import { safeFixed } from '@/lib/format'
 
 /**
  * 本土三层滤网结论行 (P2 阶段件):
@@ -114,8 +115,8 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         if (cancelled) return
         const ci = res?.cancel_order_intent
         if (ci && ci.available && ci.intent_tag && ci.intent_tag !== '无数据') {
-          const b = ci.b_cancel_ratio != null ? `${(ci.b_cancel_ratio * 100).toFixed(0)}%` : '--'
-          const s = ci.s_cancel_ratio != null ? `${(ci.s_cancel_ratio * 100).toFixed(0)}%` : '--'
+          const b = ci.b_cancel_ratio != null ? `${safeFixed(ci.b_cancel_ratio * 100, 0)}%` : '--'
+          const s = ci.s_cancel_ratio != null ? `${safeFixed(ci.s_cancel_ratio * 100, 0)}%` : '--'
           setCancelIntent(`${ci.intent_tag} (买撤${b}/卖撤${s})`)
         } else {
           setCancelIntent(null)

@@ -4,6 +4,7 @@ import { RefreshCw } from 'lucide-react'
 import MarketMoodChart from '@/components/MarketMoodChart'
 import LadderBoard, { type LadderDay } from '@panwatch/biz-ui/components/thememood/LadderBoard'
 import { usePausedInterval } from '@panwatch/base-ui'
+import { safeFixed } from '@/lib/format'
 import { MarketPhasePanel } from '@/components/MarketPhasePanel'
 import ScanJobButton from '@/components/ScanJobButton'
 import ThemeMoodStatus, { parseBoardPhase, type BoardPhase } from '@/components/ThemeMoodStatus'
@@ -442,7 +443,7 @@ export default function ThemeMoodPage() {
                 <span key={e.code} className="flex items-center gap-1">
                   <span className="text-muted-foreground">{e.name.replace('沪深300ETF', '')}:</span>
                   <span className={e.premium_rate > 0.05 ? 'text-red-500 font-medium' : e.premium_rate < -0.05 ? 'text-green-500 font-medium' : 'text-foreground'}>
-                    {e.premium_rate > 0 ? `+${e.premium_rate.toFixed(2)}%` : `${e.premium_rate.toFixed(2)}%`}
+                    {e.premium_rate > 0 ? `+${safeFixed(e.premium_rate, 2)}%` : `${safeFixed(e.premium_rate, 2)}%`}
                   </span>
                 </span>
               ))}
