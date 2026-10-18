@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.3 (同步图层骨架字段断言，确保后端测试分片全绿)（2026-10-18）
+
+- **VERSION**: bump v0.16.2 → v0.16.3 (同步 README.md / README.zh-CN.md 徽章)。
+- **后端回归单测修复**:
+  - `tests/test_summary_layer_api.py`: 同步图层空骨架 `_ALL_NONE` 字典，补齐 `main_accumulation_chips: None` 断言，确保后端 shard 2/4 门禁 100% 全绿。
+
 ## release: v0.16.2 (打通 K 线图层自取 summary 时筹码山峰的双向绑定)（2026-10-18）
 
 - **VERSION**: bump v0.16.1 → v0.16.2 (同步 README.md / README.zh-CN.md 徽章)。
