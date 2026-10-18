@@ -1,4 +1,4 @@
-"""决策先锋辅助指标 API(趋势操盘线 / 牛熊线 / 分时突破, P3 补差, 2026-10-10)。
+"""数智决策辅助指标 API(趋势操盘线 / 牛熊线 / 分时突破, P3 补差, 2026-10-10)。
 
 - `GET /api/indicators/trend-line/{symbol}?market=CN`        趋势操盘线(三线+买卖点)
 - `GET /api/indicators/niuxiong/{symbol}?market=CN`          牛熊线(金叉/死叉 B/S)

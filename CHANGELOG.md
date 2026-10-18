@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.8 (合规重命名：决策先锋全面更名为数智决策，彻底消除侵权风险)（2026-10-18）
+
+- **VERSION**: bump v0.15.7 → v0.15.8 (同步 README.md / README.zh-CN.md 徽章)。
+- **合规命名彻底净化 (去侵权化)**:
+  - 全局、全景图谱（16:9 HTML & PNG）、前端组件（ThreeTierVerdictRow / KlineChart / caliber-glossary）、后端 API（pioneer_indicators / klines）中所有「决策先锋」文案全面统一更名为 **「数智决策」**，形成专属知识产权，彻底消除外部商标侵权风险。
+
 ## release: v0.15.7 (补充 SourceHeartbeat 的 TypeScript 类型与导入，确保 CI 全绿)（2026-10-18）
 
 - **VERSION**: bump v0.15.6 → v0.15.7 (同步 README.md / README.zh-CN.md 徽章)。

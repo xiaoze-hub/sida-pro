@@ -201,7 +201,7 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </div>
       ) : null}
 
-      {/* 选股铁三角: 同花顺决策先锋三指标共振状态机 */}
+      {/* 选股铁三角: 数智决策三指标共振状态机 */}
       {resonanceState ? (
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">铁三角共振:</span>

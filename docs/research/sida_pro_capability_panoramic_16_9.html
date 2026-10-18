@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SIDA-Pro 系统全景能力与数智架构图 (16:9)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #0b0f19;
+      color: #f3f4f6;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    /* 16:9 黄金展示比例画板 (1920x1080 缩放基准) */
+    .canvas-container {
+      width: 1600px;
+      height: 900px;
+      background: radial-gradient(circle at 50% 0%, #172033 0%, #0c101b 70%, #070a12 100%);
+      border: 1px solid #1f293d;
+      border-radius: 16px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px rgba(59, 130, 246, 0.1);
+      display: flex;
+      flex-direction: column;
+      padding: 28px 36px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* 顶部装饰光 */
+    .canvas-container::before {
+      content: "";
+      position: absolute;
+      top: -100px;
+      left: 30%;
+      width: 40%;
+      height: 200px;
+      background: radial-gradient(ellipse, rgba(59, 130, 246, 0.25), transparent 70%);
+      filter: blur(40px);
+      pointer-events: none;
+    }
+
+    /* 顶栏 Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #1e293b;
+      margin-bottom: 24px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo-badge {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      color: #fff;
+      font-weight: 800;
+      font-size: 20px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+    }
+    .title-group h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      background: linear-gradient(to right, #ffffff, #cbd5e1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .title-group p {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-top: 3px;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .tag {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      font-family: monospace;
+    }
+    .tag.live {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.4);
+      color: #34d399;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tag.live::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      background: #34d399;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #34d399;
+    }
+
+    /* 主网格 4 层架构 */
+    .grid-container {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      flex: 1;
+    }
+
+    /* 列卡片 */
+    .layer-card {
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      backdrop-filter: blur(12px);
+    }
+    .layer-card:hover {
+      border-color: #3b82f6;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+    }
+    .layer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .layer-title-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .layer-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .col-1 .layer-num { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .col-2 .layer-num { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
+    .col-3 .layer-num { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .col-4 .layer-num { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+
+    .layer-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .layer-subtitle {
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    /* 模块列表 */
+    .module-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+    }
+    .module-item {
+      background: rgba(30, 41, 59, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 12px 14px;
+      transition: all 0.2s ease;
+    }
+    .module-item:hover {
+      background: rgba(30, 41, 59, 0.8);
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateY(-2px);
+    }
+    .module-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .module-badge {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+    .badge-tq { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+    .badge-ai { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; }
+    .badge-core { background: rgba(245, 158, 11, 0.2); color: #fde68a; }
+    .badge-db { background: rgba(16, 185, 129, 0.2); color: #a7f3d0; }
+
+    .module-desc {
+      font-size: 11.5px;
+      color: #94a3b8;
+      line-height: 1.45;
+    }
+    .module-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .micro-tag {
+      font-size: 10px;
+      background: rgba(15, 23, 42, 0.8);
+      padding: 2px 5px;
+      border-radius: 3px;
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    /* 底部指标与架构总结条 */
+    .footer-bar {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #1e293b;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #64748b;
+    }
+    .stats-group {
+      display: flex;
+      gap: 28px;
+    }
+    .stat-item {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .stat-val {
+      font-size: 17px;
+      font-weight: 700;
+      color: #38bdf8;
+      font-family: monospace;
+    }
+    .stat-lbl {
+      color: #94a3b8;
+    }
+    .disclaimer-note {
+      font-size: 11px;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="canvas-container">
+    <!-- Header 标题栏 -->
+    <div class="header">
+      <div class="header-left">
+        <div class="logo-badge">SIDA-PRO</div>
+        <div class="title-group">
+          <h1>股票交易分析与 AI 数智决策终端 · 全景能力图谱</h1>
+          <p>看图决策 · 拒绝堆砌 · 通达信高频微观盘口 + 腾讯高精逐笔 + 确定性 AI 参谋副驾驶</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="tag">架构版本: v0.15.7</div>
+        <div class="tag">PostgreSQL 16 · 105迁移</div>
+        <div class="tag live">生产运行正常 (1ms延迟)</div>
+      </div>
+    </div>
+
+    <!-- 4 列分层核心架构 -->
+    <div class="grid-container">
+
+      <!-- Column 1: 数据底座与全量落库 -->
+      <div class="layer-card col-1">
+        <div class="layer-header">
+          <div class="layer-title-box">
+            <div class="layer-num">1</div>
+            <div>
+              <div class="layer-title">数据底座与持久化</div>
+              <div class="layer-subtitle">多源接入 · 读穿透 · 回测底座</div>
+            </div>
+          </div>
+        </div>
+        <div class="module-list">
+          <div class="module-item">
+            <div class="module-name">
+              <span>通达信 TQ 官方网关</span>
+              <span class="module-badge badge-tq">62 RPC 接口</span>
+            </div>
+            <div class="module-desc">覆盖 9:25 真实竞价金额 OpenAmo、量比、撤单总量、108个内置选股公式批量执行。</div>
+            <div class="module-tags">
+              <span class="micro-tag">500码/批</span>
+              <span class="micro-tag">撤单率</span>
+              <span class="micro-tag">转债14条款</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>腾讯高精逐笔与微观分价</span>
+              <span class="module-badge badge-core">方向基石</span>
+            </div>
+            <div class="module-desc">大单/中单/小单四档明盘；逐笔主动买卖 B/S 真实定性；全天各价位微观分价撮合表。</div>
+            <div class="module-tags">
+              <span class="micro-tag">get_main_intent</span>
+              <span class="micro-tag">分价博弈</span>
+              <span class="micro-tag">零成本</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>全量数据落库 (v201-v205)</span>
+              <span class="module-badge badge-db">持久化闭环</span>
+            </div>
+            <div class="module-desc">竞价逐分钟过程采样、悟道因子、转债折溢价日快照、通达信 104 字段盘后定稿。</div>
+            <div class="module-tags">
+              <span class="micro-tag">auction_ticks</span>
+              <span class="micro-tag">more_info_daily</span>
+              <span class="micro-tag">index_daily</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>分价数据读穿透存储</span>
+              <span class="module-badge badge-db">v200 迁移</span>
+            </div>
+            <div class="module-desc">首次回源 0.6s，二次读库仅 13ms (提速 50 倍)；15:05 盘后自动定稿归档。</div>
+            <div class="module-tags">
+              <span class="micro-tag">13ms秒开</span>
+              <span class="micro-tag">量化回测</span>
+              <span class="micro-tag">冰山单回放</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 2: 核心量化算法与盘口分析 -->
+      <div class="layer-card col-2">
+        <div class="layer-header">
+          <div class="layer-title-box">
+            <div class="layer-num">2</div>
+            <div>
+              <div class="layer-title">核心量化算法矩阵</div>
+              <div class="layer-subtitle">博弈画像 · 筹码分布 · 量价结构</div>
+            </div>
+          </div>
+        </div>
+        <div class="module-list">
+          <div class="module-item">
+            <div class="module-name">
+              <span>CYQ 主力波段建仓筹码</span>
+              <span class="module-badge badge-core">独家模型</span>
+            </div>
+            <div class="module-desc">120日换手衰减三角分布，自算主力底仓成本(COST50)、70%密集区、获利盘比率。</div>
+            <div class="module-tags">
+              <span class="micro-tag">横向筹码山峰</span>
+              <span class="micro-tag">主峰标记</span>
+              <span class="micro-tag">成本带</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>I-3 委托行为画像 (Z-Score)</span>
+              <span class="module-badge badge-tq">告别固定阈值</span>
+            </div>
+            <div class="module-desc">通达信 60 日历史撤单建立专属常态基线；Z>2 且涨幅大判托单诱多，消灭假警报。</div>
+            <div class="module-tags">
+              <span class="micro-tag">撤单时序带</span>
+              <span class="micro-tag">中位数基线</span>
+              <span class="micro-tag">ECDF分位</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>I-8 分价博弈与拆单检测</span>
+              <span class="module-badge badge-core">微观穿透</span>
+            </div>
+            <div class="module-desc">剔除竞价噪点，识别多空竞买率；自动提炼大单强托举位、密集抛压带与算法冰山拆单。</div>
+            <div class="module-tags">
+              <span class="micro-tag">红绿多空梯队</span>
+              <span class="micro-tag">托举线</span>
+              <span class="micro-tag">拆单伪装</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>数智决策三指标共振</span>
+              <span class="module-badge badge-core">选股铁三角</span>
+            </div>
+            <div class="module-desc">GS 趋势买卖点 + AI 机构活跃度(强势/大牛线) + L2 逐笔净额；A-01 三态熔断防误判。</div>
+            <div class="module-tags">
+              <span class="micro-tag">五态状态机</span>
+              <span class="micro-tag">首次共振</span>
+              <span class="micro-tag">断链熔断</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 3: 业务大屏与交易机会 -->
+      <div class="layer-card col-3">
+        <div class="layer-header">
+          <div class="layer-title-box">
+            <div class="layer-num">3</div>
+            <div>
+              <div class="layer-title">实战业务决策大屏</div>
+              <div class="layer-subtitle">个股终端 · 竞价抢筹 · 跨市套利</div>
+            </div>
+          </div>
+        </div>
+        <div class="module-list">
+          <div class="module-item">
+            <div class="module-name">
+              <span>个股深度决策工作台</span>
+              <span class="module-badge badge-core">核心终端</span>
+            </div>
+            <div class="module-desc">K线图层≥80%无卡片压迫；多周期分时/K线标注；L2盘口资金、建议、基本面6大Tab。</div>
+            <div class="module-tags">
+              <span class="micro-tag">看图决策</span>
+              <span class="micro-tag">hairline分割</span>
+              <span class="micro-tag">买红卖绿</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>独立集合竞价专区 (/auction)</span>
+              <span class="module-badge badge-tq">9:25 抢先手</span>
+            </div>
+            <div class="module-desc">五态意图判定(爆量抢筹/弱转强/诱多/砸盘)；真实 data_date 锚定，量比量纲规范化。</div>
+            <div class="module-tags">
+              <span class="micro-tag">OpenAmo</span>
+              <span class="micro-tag">竞价量比</span>
+              <span class="micro-tag">抢筹排序</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>I-4 可转债-正股联动雷达</span>
+              <span class="module-badge badge-tq">跨品种套利</span>
+            </div>
+            <div class="module-desc">正股封板转债补涨抢跑、转债折价套利、强赎倒计时预警、全市场双低轮动。</div>
+            <div class="module-tags">
+              <span class="micro-tag">转股溢价率</span>
+              <span class="micro-tag">纯债价值</span>
+              <span class="micro-tag">正股联动</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>全市场机会池与连板梯队</span>
+              <span class="module-badge badge-core">主线龙头</span>
+            </div>
+            <div class="module-desc">杜绝止损倒挂数学逻辑错误；梯队关联补齐涨跌幅，消灭 800+ 处缺失破损。</div>
+            <div class="module-tags">
+              <span class="micro-tag">计划合法性</span>
+              <span class="micro-tag">梯队穿透</span>
+              <span class="micro-tag">妖股Top50</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 4: AI 数智参谋 (Copilot) -->
+      <div class="layer-card col-4">
+        <div class="layer-header">
+          <div class="layer-title-box">
+            <div class="layer-num">4</div>
+            <div>
+              <div class="layer-title">AI 数智参谋 (副驾驶)</div>
+              <div class="layer-subtitle">确定性研判 · 全工具打通 · 随身胶囊</div>
+            </div>
+          </div>
+        </div>
+        <div class="module-list">
+          <div class="module-item">
+            <div class="module-name">
+              <span>确定性判定引擎 (Brief)</span>
+              <span class="module-badge badge-ai">拒绝臆造</span>
+            </div>
+            <div class="module-desc">R1–R9 真值表首条匹配；动态置信度；防守位优先级排序；持仓/空仓实战预案。</div>
+            <div class="module-tags">
+              <span class="micro-tag">主力意图定性</span>
+              <span class="micro-tag">生命线</span>
+              <span class="micro-tag">操盘预案</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>54 项全量 Chat Tools</span>
+              <span class="module-badge badge-ai">穿透大脑</span>
+            </div>
+            <div class="module-desc">新增筹码沉淀、撤单意图、威科夫量价、妖股因子、竞价异动5大新工具，对话秒级调用。</div>
+            <div class="module-tags">
+              <span class="micro-tag">get_chip_accum</span>
+              <span class="micro-tag">get_cancel_intent</span>
+              <span class="micro-tag">scan_auction</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>可自由拖拽发光大胶囊</span>
+              <span class="module-badge badge-ai">高阶交互</span>
+            </div>
+            <div class="module-desc">56px 双层大尺寸，动态 tone 色条外发光；支持拖拽移动与边缘吸附；一键唤醒并预注入上下文。</div>
+            <div class="module-tags">
+              <span class="micro-tag">Draggable</span>
+              <span class="micro-tag">不误触</span>
+              <span class="micro-tag">FAB让位</span>
+            </div>
+          </div>
+
+          <div class="module-item">
+            <div class="module-name">
+              <span>独立一级大屏 (/ai-copilot)</span>
+              <span class="module-badge badge-ai">战术中枢</span>
+            </div>
+            <div class="module-desc">内置爆量抢筹、持仓体检、首次共振、妖股检索等快捷战术指令池；SSE 流式输出。</div>
+            <div class="module-tags">
+              <span class="micro-tag">快捷指令</span>
+              <span class="micro-tag">个股跳板</span>
+              <span class="micro-tag">⌘/Ctrl+J</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 底部状态条 Footer -->
+    <div class="footer-bar">
+      <div class="stats-group">
+        <div class="stat-item">
+          <span class="stat-lbl">自动化测试用例:</span>
+          <span class="stat-val">4,433 项后端 + 1,208 项前端 (全绿)</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-lbl">通达信接口覆盖:</span>
+          <span class="stat-val">62 项 (深度落地24+)</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-lbl">分价读取时延:</span>
+          <span class="stat-val">13 ms (秒开提速50倍)</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-lbl">全局限流配额:</span>
+          <span class="stat-val">1,200 req/min (平滑无感)</span>
+        </div>
+      </div>
+      <div class="disclaimer-note">
+        SIDA-Pro 股票交易分析系统 · 闭源工业级行情终端架构
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

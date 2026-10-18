@@ -1916,7 +1916,7 @@ export default function KlineChart(props: {
         </div>
       )}
 
-      {/* 决策先锋辅助指标图例(2026-10-10): 与形态图例**并列共存**, 各自分组(不互踩)。
+      {/* 数智决策辅助指标图例(2026-10-10): 与形态图例**并列共存**, 各自分组(不互踩)。
           只放"颜色=语义"映射(现值读数在数据面板, 不在图例重复一行数字); 明确"客观标注 · 非投资建议"。 */}
       {props.layersVisible?.trendLine !== false && effTrendLine?.available && effTrendLine.lines && (
         <div
