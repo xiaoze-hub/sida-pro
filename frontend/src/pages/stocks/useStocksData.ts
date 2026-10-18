@@ -239,9 +239,16 @@ const loadPortfolio = useCallback(async () => {
     } catch (e) {
       logger.warn('获取市场状态失败:', e)
     }
+    setLoadError(null)
   } catch (e) {
     logger.error(e)
-    setLoadError(e instanceof Error ? e.message : '加载失败')
+    const msg = e instanceof Error ? e.message : '加载失败'
+    // 若仅是 429 限流或网络暂态抖动且已有持仓数据，沿用既有快照，不弹红框
+    if (msg.includes('429') && portfolioRaw) {
+      logger.warn('持仓刷新触发限流退避，保留当前数据')
+    } else {
+      setLoadError(msg)
+    }
   } finally {
     setPortfolioLoading(false)
   }

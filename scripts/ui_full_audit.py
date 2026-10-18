@@ -29,7 +29,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-BASE = os.getenv("SIDA_BASE_URL", "https://www.sida.hengsheng-elec.com").rstrip("/")
+BASE = os.getenv("SIDA_BASE_URL", "https://SIDA.hengsheng-elec.com").rstrip("/")
 OUT = Path(__file__).resolve().parent.parent / "docs" / "research" / "shots_ui_audit"
 
 DEFAULT_PAGES = [

@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.0 (彻底治理持仓HTTP 429弹窗与生产逐页体检收敛)（2026-10-18）
+
+- **VERSION**: bump v0.15.9 → v0.16.0 (同步 README.md / README.zh-CN.md 徽章)。
+- **持仓与账户 429 弹窗彻底治理**:
+  - `useStocksData.ts`: 针对 `loadPortfolio` 捕获异常增加 429 专属限流感知。在持仓已有快照情况下，遇到 429 自动进入安静退避，不再向页面抛出侵入式 `持仓/账户 · HTTP 429` 弹红条，保留既有平滑数据。
+  - 生产真机走查脚本 `ui_full_audit.py` 域名修正为 `https://SIDA.hengsheng-elec.com`，支持生产全量页面实测对账。
+
 ## release: v0.15.9 (同步更新 SourceHeartbeat 测试断言，确保 CI 门禁 100% 全绿)（2026-10-18）
 
 - **VERSION**: bump v0.15.8 → v0.15.9 (同步 README.md / README.zh-CN.md 徽章)。
