@@ -12,12 +12,72 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+
+def _bnum(baseline: Dict[str, Any] | None, *names: str) -> Optional[float]:
+    """从基线字典取有限数值（兼容 profile.buy / 扁平两种形状）。"""
+    if not isinstance(baseline, dict):
+        return None
+    for name in names:
+        val = baseline.get(name)
+        if val is None or isinstance(val, bool):
+            continue
+        try:
+            f = float(val)
+        except (TypeError, ValueError):
+            continue
+        if f == f and f not in (float("inf"), float("-inf")):
+            return f
+    return None
+
+
+def baseline_coords(
+    today_rate: Optional[float],
+    baseline: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """今日撤单率 → 相对该股自身历史基线的 z 坐标 (I-3)。
+
+    基线入参形状（两种都吃）:
+        {"median": 0.41, "std": 0.09, "n": 59, "percentile": 97.0}
+        {"b_median": .., "b_std": .., "b_n": ..}         # 扁平别名
+    `std` 为 None/0（历史波动为零）或样本 < 20 时 z 为 None —— 不给伪 z。
+    """
+    out = {
+        "available": False,
+        "median": _bnum(baseline, "median", "b_median"),
+        "std": _bnum(baseline, "std", "b_std"),
+        "n": int(_bnum(baseline, "n", "b_n") or 0),
+        "percentile": _bnum(baseline, "percentile", "b_percentile"),
+        "z": None,
+    }
+    if today_rate is None or out["median"] is None or out["std"] is None:
+        return out
+    if out["n"] < 20 or out["std"] <= 1e-9:
+        return out
+    out["z"] = round((today_rate - out["median"]) / out["std"], 4)
+    out["available"] = True
+    return out
+
+
+def _base_fields(coords: Dict[str, Any], basis: str = "fixed_threshold") -> Dict[str, Any]:
+    """把基线坐标摊平成响应字段（所有返回分支共用同一 schema）。"""
+    return {
+        "decision_basis": basis,
+        "baseline_available": coords["available"],
+        "baseline_median": coords["median"],
+        "baseline_std": coords["std"],
+        "baseline_days": coords["n"],
+        "zscore": coords["z"],
+        "percentile": coords["percentile"],
+    }
+
 
 
 def calc_cancel_order_intent(
     more_info: Dict[str, Any] | None,
     pct_chg: float | None = None,
+    baseline: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """计算单股高频撤单意图与微观盘口指标.
 
@@ -30,6 +90,11 @@ def calc_cancel_order_intent(
             - L2OrderNum: 逐笔总委托笔数 (可选)
             - L2TicNum: 逐笔总成交笔数 (可选)
         pct_chg: 当日最新涨跌幅(%), 用于结合价格走势判定诱多/诱空。
+        baseline: I-3 委托行为画像的历史基线 `{median, std, n, percentile}`
+            (由 `src.core.cancel_profile.build_cancel_profile` 的 `buy` 段产出)。
+            **有基线时判定改用相对 z 坐标**, 固定 40% 阈值不再单独定性
+            (同一阈值压 5000 只票必然一半误报, 见 docs/research 审计 I-3);
+            无基线/样本不足时退回原固定阈值口径, 行为与历史版本一致。
 
     返回结构:
         {
@@ -40,9 +105,16 @@ def calc_cancel_order_intent(
             "s_cancel_ratio": float,     # 卖盘撤单率 (0~1)
             "cancel_bias": float,        # 撤单偏向 (-1~+1, >0 买方撤多, <0 卖方撤多)
             "activity_score": float,     # 撤单活跃度 (0~1)
-            "intent_tag": str,           # 意图标签 (虚假托盘/压盘吸筹/多空均衡/无数据)
+            "intent_tag": str,           # 意图标签 (相对异常诱多/压盘吸筹/多空均衡/无数据)
             "intent_desc": str,          # 意图详解说明
             "warning_level": str,        # safe / caution / warning
+            "decision_basis": str,       # baseline_z / fixed_threshold
+            "baseline_available": bool,
+            "baseline_median": float|None,
+            "baseline_std": float|None,
+            "baseline_days": int,
+            "zscore": float|None,        # 今日撤买率相对自身基线的 z
+            "percentile": float|None,    # 今日撤买率在基线中的分位 (P0~P100)
         }
     """
     if not more_info or not isinstance(more_info, dict):
@@ -57,6 +129,7 @@ def calc_cancel_order_intent(
             "intent_tag": "无数据",
             "intent_desc": "暂无撤单盘口数据",
             "warning_level": "safe",
+            **_base_fields(baseline_coords(None, baseline)),
         }
 
     def _f(key: str) -> float:
@@ -87,6 +160,7 @@ def calc_cancel_order_intent(
             "intent_tag": "无撤单",
             "intent_desc": "当日盘口无有效撤单记录",
             "warning_level": "safe",
+            **_base_fields(baseline_coords(None, baseline)),
         }
 
     # 1. 撤买率与撤卖率 (撤单量 / (委托量 + 撤单量) 或 直接占比)
@@ -112,16 +186,53 @@ def calc_cancel_order_intent(
         denom = (b_denom + s_denom)
         activity_score = min(1.0, total_cancel / denom) if denom > 0 else 0.0
 
-    # 4. 结合广发金工与 A 股盘口实战的主力意图定性
-    # - 虚假托盘 (Fake Bidding): 买方撤单极其显著 (cancel_bias > 0.25 且 b_ratio >= 0.35)
-    # - 压盘吸筹 (Fake Selling): 卖方撤单极其显著 (cancel_bias < -0.25 且 s_ratio >= 0.35)
+    # 4. I-3 动态基线坐标: 有历史基线时, 判定基准是"该股自己的分布", 不是全市场固定阈值
+    coords = baseline_coords(b_ratio, baseline)
+    z = coords["z"]
     chg = pct_chg if pct_chg is not None else 0.0
 
     intent_tag = "多空均衡"
     intent_desc = "买卖双方撤单频率处于常态区间，未见明显异常虚假挂撤单。"
     warning_level = "safe"
+    basis = "fixed_threshold"
 
-    if cancel_bias >= 0.25 and b_ratio >= 0.30:
+    if coords["available"] and z is not None:
+        basis = "baseline_z"
+        pct_txt = f"P{coords['percentile']:.0f}" if coords["percentile"] is not None else "P--"
+        base_txt = (
+            f"今日买撤 {b_ratio*100:.1f}%，为近 {coords['n']} 日 {pct_txt}"
+            f"（常态 {coords['median']*100:.1f}%±{coords['std']*100:.1f}pp，z={z:+.2f}）"
+        )
+        # 相对口径三分支: 只有"相对它自己异常"才报警; |z|<1 一律常态(不误报)
+        if z >= 2.0 and chg > 3.0:
+            intent_tag = "⚠️ 相对异常诱多"
+            intent_desc = base_txt + "，撤单抬升与拉升同步，相对该股自身历史异常，谨防托单诱多出货。"
+            warning_level = "warning"
+        elif z <= -1.0 and chg < -2.0:
+            intent_tag = "抛压真实确认"
+            intent_desc = base_txt + "，撤单萎缩伴随股价破位，挂单被真实成交，抛压非虚挂。"
+            warning_level = "caution"
+        elif abs(z) < 1.0:
+            intent_tag = "常态"
+            intent_desc = base_txt + "，处于该股自身常态区间（固定 40% 阈值口径在此不适用，不构成异常）。"
+            warning_level = "safe"
+        elif z >= 2.0:
+            intent_tag = "撤单抬升·涨幅未配合"
+            intent_desc = base_txt + "，撤单显著高于自身常态但涨幅未达诱多确认条件，仅作观察。"
+            warning_level = "caution"
+        elif z <= -1.0:
+            intent_tag = "撤单显著偏低"
+            intent_desc = base_txt + "，撤单显著低于自身常态，挂单意愿稳定或挂单被成交消化。"
+            warning_level = "safe"
+        else:
+            intent_tag = "轻度偏离"
+            intent_desc = base_txt + "，偏离常态但未达异常阈值。"
+            warning_level = "safe"
+
+    # 5. 无基线（或基线样本不足）时退回固定阈值口径 —— 行为与历史版本一致
+    # - 虚假托盘 (Fake Bidding): 买方撤单极其显著 (cancel_bias > 0.25 且 b_ratio >= 0.30)
+    # - 压盘吸筹 (Fake Selling): 卖方撤单极其显著 (cancel_bias < -0.25 且 s_ratio >= 0.30)
+    elif cancel_bias >= 0.25 and b_ratio >= 0.30:
         if chg > 2.0:
             intent_tag = "⚠️ 托单诱多"
             intent_desc = f"买盘撤单率高达 {b_ratio*100:.1f}%，显著高于卖盘，高位频现大托单撤销，谨防主力诱多出货。"
@@ -155,4 +266,5 @@ def calc_cancel_order_intent(
         "intent_tag": intent_tag,
         "intent_desc": intent_desc,
         "warning_level": warning_level,
+        **_base_fields(coords, basis),
     }

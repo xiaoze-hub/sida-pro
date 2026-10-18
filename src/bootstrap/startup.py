@@ -229,6 +229,18 @@ async def lifespan(app):
                 logger.warning("K线盘前预缓存 cron 注册未生效")
         except Exception as e:
             logger.error(f"K线盘前预缓存 cron 注册失败: {e}")
+        # I-8 分价矩阵收盘归档(2026-10-18): 工作日 15:05 把当日分价定稿写入
+        # price_distribution_daily(历史回测/主力轨迹复盘的永久事实源; 盘中快照只留 5 天)
+        try:
+            from src.core.price_distribution_archive import register_archive_cron
+
+            _rs3 = locals().get("report_scheduler")
+            if register_archive_cron(_rs3.scheduler if _rs3 else None):
+                logger.info("分价矩阵收盘归档 cron 已注册 (工作日 15:05)")
+            else:
+                logger.warning("分价矩阵归档 cron 注册未生效(调度器不可用), 可手动 POST /api/market/price-distribution/{symbol}/archive")
+        except Exception as e:
+            logger.error(f"分价矩阵归档 cron 注册失败: {e}")
         # K线每日 backfill(收盘后 18:00, 周一至五, 拉最近 2 天)
         try:
             settings = Settings()

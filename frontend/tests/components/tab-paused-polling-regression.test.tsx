@@ -151,8 +151,10 @@ describe('② L2Tab(工作台标签): 隐藏不发盘口轮询端点', () => {
     expect(mocks.sealQuality).not.toHaveBeenCalled()
 
     rerender(<TabActiveProvider active>{tab()}</TabActiveProvider>)
-    await waitFor(() => expect(mocks.orderbookOb).toHaveBeenCalledWith('002636'))
-    expect(mocks.sealQuality).toHaveBeenCalledWith('002636')
+    await waitFor(() =>
+      expect(mocks.orderbookOb).toHaveBeenCalledWith('002636', expect.anything()),
+    )
+    expect(mocks.sealQuality).toHaveBeenCalledWith('002636', expect.anything())
   })
 })
 

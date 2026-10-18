@@ -4,6 +4,7 @@ import SafeMarkdown from '@/components/SafeMarkdown'
 import { chatApi, fetchAPI, type ChatConversation, type ChatMessage } from '@panwatch/api'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { parseServerTime } from '@/lib/utils'
+import { useCapsulePresent } from '@/lib/copilot/capsule-presence'
 
 interface StockContext {
   symbol: string
@@ -155,6 +156,12 @@ export default function ChatWidget() {
   const dragStateRef = useRef<DesktopChatDragState | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+  /**
+   * 入口唯一性(2026-10-18): 个股工作台已挂 CopilotCapsule(带标的上下文的更高级入口),
+   * 全局圆形 FAB 必须让位 —— 否则右下角两个 AI 入口叠在一起, 既重复又互相遮挡。
+   * 只在"胶囊在场"时隐藏; 其它页面 FAB 仍是唯一入口, 不做全局删除。
+   */
+  const capsulePresent = useCapsulePresent()
 
   const loadConversations = useCallback(async () => {
     try {
@@ -555,6 +562,7 @@ export default function ChatWidget() {
     : undefined
 
   if (!open) {
+    if (capsulePresent) return null
     return (
       <button
         onClick={() => setOpen(true)}

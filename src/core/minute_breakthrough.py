@@ -7,10 +7,13 @@
 **输入两条链(缺任一即显式降级, 不出信号, 不编造)**:
 1. 分钟数据 —— 复用现有 1m 链(`src.core.klines_minute` 落库 / 腾讯
    `fetch_tencent_minute_kline`), `fetch_minute_bars()` 优先读库再落腾讯源;
-2. DDE 大单流入 —— 现有链(thsdk `get_dde_flow`/`get_main_flow_official` + TQ
-   `get_more_info`)给出的都是**当日快照**, 非逐分钟序列 → `fetch_dde_series()` 只能构造
-   单点序列, 无法验证"持续/稳健流入" ⇒ 生产上 `compute_breakthrough` 会**显式降级**并给出
-   `reasons`, 直到接入逐分钟大单流(后续任务)。
+2. DDE 大单流入 —— 多级取数(全部失败才显式降级, 不编造):
+   ① `dde_minute_flow` 盘中采样序列表(全市场, 5 分钟节拍; 样本够判「持续」才直接用);
+   ② **腾讯逐笔按分钟聚合**(2026-10-18 接入): 与 `get_main_intent` 同口径
+      (单笔 ≥20 万或 ≥600 手, 剔除 09:25-09:30 竞价), 逐分钟主力净流入 ——
+      采样不足/为空时用它补全, 使「突」在单票维度真可判;
+   ③ thsdk/TQ 当日快照单点(仅能证明"有流入", 不足以证明"持续" → 仍降级)。
+   全空才 `available=false` + `reasons`, 并附 `dde_source` 说明实际口径。
 
 **信号是证据不是建议**: 输出客观字段(信号枚举 + 触发时间 + 触发条件清单), 无主观措辞。
 参数全部落在 `src/core/thresholds` 配置层(env `SIDA_THRESHOLD_MINUTE_*` 覆盖)。
@@ -255,7 +258,7 @@ def compute_breakthrough(
         dde_pts.append((m, _f(v)))
     dde_pts.sort(key=lambda x: x[0])
     if not dde_pts:
-        reasons.append("DDE大单流入序列缺失")
+        reasons.append("DDE大单流入序列缺失(采样表与腾讯逐笔均空)")
 
     base = {
         "params": p,
@@ -346,26 +349,108 @@ def _fetch_tencent_minute(symbol: str, market: str) -> list[dict]:
 
 
 def fetch_dde_series(symbol: str, market: str = "CN") -> list[dict]:
-    """DDE 大单流入序列(元)。
+    """DDE 大单流入序列(元) —— 兼容入口(只要序列, 不要来源标签)。"""
+    return fetch_dde_series_with_source(symbol, market)[0]
 
-    优先读**盘中采样序列**(`dde_minute_flow`, 逐 N 分钟采样的区间净流入), 构造真序列,
-    使分时突破「突」的『DDE大单持续流入』条件真可判(此前只有单点 → 显式降级);
-    无采样(非交易时段/当日未采样) 回退现有**当日快照**单点(仍会触发显式降级, 不编造)。
-    全失败返回 [](调用方按"无数据"处理)。
+
+def fetch_dde_series_with_source(
+    symbol: str, market: str = "CN"
+) -> tuple[list[dict], str | None]:
+    """DDE 大单流入序列(元) + 实际口径标签。
+
+    取数顺序(先精确、先便宜, 全失败才空):
+      ① `dde_minute_flow` 盘中采样序列(全市场逐 N 分钟区间净流入), 且样本数已够判
+         「持续」(≥ `minute_dde_consecutive_min`, 默认 3) —— 够用就不再多翻逐笔;
+      ② 采样不足/为空 → 腾讯逐笔逐分钟聚合(与 `get_main_intent` 同口径);
+      ③ 逐笔也不可用 → 仍用采样(哪怕只有 1-2 点, 显式降级但不丢证据);
+      ④ thsdk/TQ 当日快照单点(只为「有流入」留证, 单点无法证明持续 → 仍降级)。
+    全失败返回 ([], None)(调用方按"无数据"处理)。
     """
     if market.upper() != "CN":
-        return []
+        return [], None
+
     series = _read_dde_series_db(symbol, market)
+    # 采样点不够判「持续」(早盘刚开盘常见) → 先用逐分钟逐笔补全, 避免明明有逐笔却降级。
+    need = max(3, int(_params()["dde_consecutive_min"]))
+    if len(series) >= need:
+        return series, "minute_sample"
+
+    tick_series = _fetch_tencent_tick_dde_series(symbol, market)
+    if tick_series:
+        return tick_series, "tencent_tick"
     if series:
-        return series
+        return series, "minute_sample"
+
     net_wan = _fetch_thsdk_dde_wan(symbol)
     if net_wan is None:
         net_wan = _fetch_tq_dde_wan(symbol)
     if net_wan is None:
-        return []
+        return [], None
     bars = fetch_minute_bars(symbol, market)
     t = bars[-1]["time"] if bars else datetime.now(_CST).strftime("%H:%M")
-    return [{"time": t, "main_net": net_wan * 1e4}]  # 万元 → 元
+    return [{"time": t, "main_net": net_wan * 1e4}], "intraday_snapshot"  # 万元 → 元
+
+
+def _fetch_tencent_tick_dde_series(symbol: str, market: str = "CN") -> list[dict]:
+    """腾讯逐笔 → 逐分钟主力净流入序列(元)。
+
+    **与 `get_main_intent` 同口径**(`src/core/dark_flow.py`): 单笔成交额 ≥20 万或
+    股数 ≥600 手视为主力单, 按主动方向 B/S 计 ±金额, 09:25-09:30 集合竞价撮合
+    方向不可信 → 剔除。逐分钟聚合后**该分钟无主力单则记 0**(序列完整, 不虚增"持续流入")。
+
+    为什么这里是**唯一可做逐笔归因的兜底**: 通达信 TQ 网关未开放深交所叫买/叫卖
+    委托号与逐笔成交明细, 无法重建主动买卖方向; 腾讯逐笔有方向, 故主力意图与
+    本序列共用同一口径。
+
+    - 非交易日直接返回 []: 腾讯逐笔接口按"最近交易日"返回, 套到节假日会把上一
+      交易日的序列伪装成今日(宁可显式缺失, 不给错日序列);
+    - 任何异常返回 [](调用方继续走快照/降级, 不让指标端点 500)。
+    """
+    if market.upper() != "CN":
+        return []
+    try:
+        from src.core.trading_calendar import is_trading_day
+
+        if not is_trading_day(datetime.now(_CST).date()):
+            return []
+    except Exception as e:  # noqa: BLE001 — 日历不可用 → 不给可能错日的序列
+        logger.debug("minute_breakthrough 交易日历不可用, 跳过逐笔 DDE: %s", e)
+        return []
+
+    try:
+        from marketdata.symbol import Market, Symbol
+        from src.core.dark_flow import (
+            MAIN_AMOUNT,
+            MAIN_VOLUME,
+            _fetch_all_ticks,
+            _tencent_code,
+        )
+
+        code = _tencent_code(Symbol(market=Market(market), code=symbol))
+        ticks = _fetch_all_ticks(code) if code else []
+    except Exception as e:  # noqa: BLE001
+        logger.debug("minute_breakthrough 腾讯逐笔 DDE 失败 %s: %s", symbol, e)
+        return []
+
+    minutes: set[str] = set()
+    net: dict[str, float] = {}
+    for tk in ticks or []:
+        t = str(tk.get("t") or "")
+        if len(t) < 5 or t < "09:30":  # 竞价撮合不计(与 dark_flow 一致)
+            continue
+        hm = t[:5]
+        minutes.add(hm)
+        amt = _f(tk.get("amt"))
+        vol = _f(tk.get("vol"))
+        if not (amt >= MAIN_AMOUNT or vol >= MAIN_VOLUME):
+            continue  # 非主力单不进 DDE 大单序列
+        d = tk.get("d")
+        if d == "B":
+            net[hm] = net.get(hm, 0.0) + amt
+        elif d == "S":
+            net[hm] = net.get(hm, 0.0) - amt
+
+    return [{"time": hm, "main_net": round(net.get(hm, 0.0), 2)} for hm in sorted(minutes)]
 
 
 def _read_dde_series_db(symbol: str, market: str = "CN") -> list[dict]:
@@ -421,7 +506,19 @@ def _fetch_tq_dde_wan(symbol: str) -> float | None:
 
 
 def fetch_minute_breakthrough(symbol: str, market: str = "CN") -> dict:
-    """组合分钟数据 + DDE 序列 → compute_breakthrough(生产多为显式降级)。"""
+    """组合分钟数据 + DDE 序列 → compute_breakthrough。
+
+    额外回传 `dde_source`(实际采用的 DDE 口径: minute_sample / tencent_tick /
+    intraday_snapshot / null)与 `note`(降级时的**事实**说明, 不猜原因),
+    供前端把「为什么不出信号」讲清楚, 而不是笼统一句"未接入"。
+    """
     bars = fetch_minute_bars(symbol, market)
-    dde = fetch_dde_series(symbol, market)
-    return compute_breakthrough(bars, dde)
+    dde, source = fetch_dde_series_with_source(symbol, market)
+    out = compute_breakthrough(bars, dde)
+    out["dde_source"] = source
+    if out.get("degraded") and not dde:
+        out["note"] = (
+            "逐分钟 DDE 序列为空(采样表与腾讯逐笔均无数据): "
+            "非交易时段或数据源暂不可用; 按铁律不出信号"
+        )
+    return out

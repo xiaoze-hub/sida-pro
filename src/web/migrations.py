@@ -5575,6 +5575,23 @@ def _m199_klines_period_ts_symbol_index(conn: Connection) -> None:
         logger.warning(f"klines 索引创建失败(非致命): {e}")
 
 
+def _m200_price_distribution_tables(conn: Connection) -> None:
+    """I-8 分价博弈矩阵两张表(2026-10-18)。
+
+    · `price_distribution_snapshots`: 盘中滚动快照(缓存 + 分价时序证据), 唯一键
+      (trade_date, market, symbol, bucket_ts=5 分钟桶), 桶内原地覆盖(留最新);
+    · `price_distribution_daily`: 日终定稿归档, 唯一键 (trade_date, market, symbol),
+      历史回测/主力轨迹复盘的**永久事实源**(历史日永不回源)。
+
+    建表走 ORM `__table__.create(checkfirst=True)`: JSON 列在 PG/SQLite 都由 SQLAlchemy
+    适配, 手写 SQL 反而要分叉方言。先例: _m142 dark_fund_top_snapshots。
+    """
+    from src.db.models import PriceDistributionDaily, PriceDistributionSnapshot
+
+    PriceDistributionSnapshot.__table__.create(bind=conn, checkfirst=True)
+    PriceDistributionDaily.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5759,6 +5776,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     # **不改 T+n 判定本体、不重算存量数值**(用户裁决: 只标注 + 排除统计)。
     Migration(198, "decision_log_t_n_span", _m198_decision_log_t_n_span),
     Migration(199, "klines_period_ts_symbol_index", _m199_klines_period_ts_symbol_index),
+    # I-8 分价博弈矩阵落库(2026-10-18, 用户硬约束): 盘中快照(缓存 + 分价时序证据)
+    # + 日终定稿归档(历史回测/主力轨迹复盘的永久事实源)。读侧读库优先, 免每次首屏
+    # 跨网打腾讯(海外节点 1~8s); 历史日永不回源(分价表只给当日)。
+    Migration(200, "price_distribution_tables", _m200_price_distribution_tables),
 )
 
 

@@ -36,6 +36,8 @@ from src.web.api import (
     forecast,
     calendar,
     market_data,
+    cancel_profile,
+    price_distribution,
     tdx,
     shadow,
     ths,
@@ -821,6 +823,22 @@ app.include_router(
     market_phase.router,
     prefix="/api/market",
     tags=["market-phase"],
+    dependencies=protected,
+)
+# I-3 委托行为画像(2026-10-18): 撤单率 60 日基线 + 动态 z 坐标系。
+# prefix 复用 /api/market, 端点 /cancel-profile/{symbol}(与 market_phase 的 /phase 共存)
+app.include_router(
+    cancel_profile.router,
+    prefix="/api/market",
+    tags=["market-cancel-profile"],
+    dependencies=protected,
+)
+# I-8 分价博弈矩阵(2026-10-18): 逐档多空力量 + 托举/抛压/拆单三形态, 读库优先。
+# prefix 复用 /api/market, 端点 /price-distribution/{symbol}(含 /history、/archive 子路径)
+app.include_router(
+    price_distribution.router,
+    prefix="/api/market",
+    tags=["market-price-distribution"],
     dependencies=protected,
 )
 # 全市场三榜扫描(2026-09-01, §6.1): 读快照 + 手动触发

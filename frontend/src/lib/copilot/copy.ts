@@ -105,6 +105,8 @@ export const CAPSULE_FALLBACK = '盘口参谋'
 export const CAPSULE_HIDE = '收起参谋胶囊'
 export const CAPSULE_RESTORE = '重新展开参谋胶囊'
 export const CAPSULE_HINT = '打开盘口参谋（已预注入当前标的上下文）'
+/** 拖拽提示：胶囊可自由移动并吸附左右边缘（位置按浏览器记忆）。 */
+export const CAPSULE_DRAG_HINT = '按住拖动可移动 · 点击唤醒数智参谋'
 
 /** 胶囊零输入唤醒时预置的三个追问（会随会话注入 system prompt） */
 export const QUICK_QUESTIONS = [

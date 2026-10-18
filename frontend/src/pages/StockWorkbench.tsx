@@ -90,8 +90,14 @@ const MARKET = 'CN'
  */
 const MemoKlineChart = memo(KlineChart)
 
-/** 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。 */
-const POSITION_POLL_MS = 60000
+/**
+ * 持仓态轮询间隔: 盘中买卖会变, 否则建议条评分/加仓计算器要等整页刷新才更新。
+ * 2026-10-18: 60s → 90s —— 持仓变动以"分钟"计, 90s 足够; 配合失败指数退避,
+ * 不再出现「刷新一次页面就打满 /portfolio/summary 配额」的 429 噪音。
+ */
+const POSITION_POLL_MS = 90_000
+/** 持仓态失败退避上限(5 分钟): 限流/断网恢复后最多等 5 分钟必重试一次。 */
+const POSITION_BACKOFF_MAX_MS = 300_000
 
 /**
  * 持仓上下文(自源 `GET /portfolio/summary`; T19 接真源, P1-2 起再带**成本价**)。
@@ -122,6 +128,10 @@ function usePositionContext(symbol: string, market: string, enabled: boolean): P
   // 迟到响应守卫(原 effect 内闭包 `alive` → ref); 请求序号另防"上一只票的响应落到新标的上"。
   const aliveRef = useRef(true)
   const seqRef = useRef(0)
+  /** 连续失败次数 → 指数退避; 成功一次即清零。 */
+  const failStreakRef = useRef(0)
+  /** 退避窗口截止时刻: 轮询 tick 到点也先看它, 窗口内不发请求(429/断网不刷屏)。 */
+  const blockedUntilRef = useRef(0)
   useEffect(() => {
     aliveRef.current = true
     return () => {
@@ -131,12 +141,16 @@ function usePositionContext(symbol: string, market: string, enabled: boolean): P
   // 换标的/关闸门先回到"未知/无成本", 避免把上一只票(或已离开的个股视图)的成本线画到当前标的上。
   useEffect(() => {
     seqRef.current += 1 // 作废在途响应(换标的/关闸门)
+    failStreakRef.current = 0
+    blockedUntilRef.current = 0
     setCtx({ has: undefined, cost: null })
   }, [symbol, market, enabled])
 
   const load = useCallback(async () => {
     // `enabled=false`(指数/板块)⇒ **不发** /portfolio/summary, 恒为未知(结果本就无人消费)。
     if (!enabled || !symbol) return
+    // 退避窗口内静默跳过: 429/超时连续失败时不再每一拍都撞上游。
+    if (Date.now() < blockedUntilRef.current) return
     const want = `${market}:${symbol}`
     const seq = ++seqRef.current
     try {
@@ -151,8 +165,25 @@ function usePositionContext(symbol: string, market: string, enabled: boolean): P
           ? hit.cost_price
           : null
       setCtx({ has: !!hit, cost })
-    } catch {
-      // 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null` —— 不静默当未持仓、不画线。
+      failStreakRef.current = 0
+      blockedUntilRef.current = 0
+    } catch (e) {
+      /**
+       * 失败**保留上次值**(stale-on-error); 首次即失败则仍为 `undefined`/`null`。
+       * 429 按后端 `Retry-After` 起退避, 其它可重试错误(超时/网络/5xx)按 2^n 翻倍;
+       * 4xx 业务错误(权限/参数)不退避 —— 重试同一请求不会有不同结果。
+       */
+      const { status, retryAfterMs } = e as { status?: number; retryAfterMs?: number }
+      const retryable = status === 429 || status === 0 || status === undefined || status >= 500
+      if (!retryable) return
+      failStreakRef.current += 1
+      const base = Math.min(
+        POSITION_POLL_MS * 2 ** (failStreakRef.current - 1),
+        POSITION_BACKOFF_MAX_MS,
+      )
+      const jitter = base * 0.2 * (Math.random() * 2 - 1)
+      const wait = Math.max(base + jitter, retryAfterMs ?? 0)
+      blockedUntilRef.current = Date.now() + Math.min(wait, POSITION_BACKOFF_MAX_MS)
     }
   }, [symbol, market, enabled])
 

@@ -105,4 +105,34 @@ describe('CopilotCapsule', () => {
 
     window.removeEventListener('panwatch-open-chat', onOpen)
   })
+
+  it('拖拽后吸附左边缘并持久化位置；松手那一下不误触唤醒', async () => {
+    const events: CustomEvent[] = []
+    const onOpen = (e: Event) => events.push(e as CustomEvent)
+    window.addEventListener('panwatch-open-chat', onOpen)
+
+    render(<CopilotCapsule symbol="600111" />)
+    const capsule = await screen.findByTestId('copilot-capsule')
+
+    fireEvent.pointerDown(capsule, { button: 0, pointerId: 1, clientX: 20, clientY: 20 })
+    fireEvent.pointerMove(capsule, { pointerId: 1, clientX: 40, clientY: 120 })
+    fireEvent.pointerUp(capsule, { pointerId: 1, clientX: 40, clientY: 120 })
+
+    // 吸附: 40px 已进入左吸附区(12 + 72) → 贴左边缘 12px；y 保持自由(120 - 抓取偏移 20)
+    const stored = JSON.parse(localStorage.getItem('copilot_capsule_position') || '{}')
+    expect(stored.x).toBe(12)
+    expect(stored.y).toBe(100)
+    expect((capsule as HTMLElement).style.left).toBe('12px')
+
+    // 拖拽结束的 click 必须被吞掉（否则松手就弹聊天面板）
+    fireEvent.click(screen.getByTestId('copilot-capsule-open'))
+    expect(events).toHaveLength(0)
+
+    // 抑制只作用于那一下：随后的正常点击仍能唤醒
+    await new Promise((r) => setTimeout(r, 20))
+    fireEvent.click(screen.getByTestId('copilot-capsule-open'))
+    expect(events).toHaveLength(1)
+
+    window.removeEventListener('panwatch-open-chat', onOpen)
+  })
 })

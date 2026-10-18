@@ -13,7 +13,8 @@ import { ToastProvider } from '@panwatch/base-ui/components/ui/toast'
  * ② **缺数据走 `--` / note, 不编造** —— 盘口 `available=false` 显后端 note; moreInfo/mainIntent/
  *   fundFlow 缺字段显 `--`; 封单成色 `available=false` 显 reason; 暗盘未采显状态原文;
  * ③ **惰性门控** —— 标签自带 `InsightProvider keys={['core']}`, 只打 core 六端点 + 本标签自有的
- *   两个端点(`/orderbook-ob`、`/seal-quality`); watchlist/news/suggestions/reports 一个都不发。
+ *   三个端点(`/orderbook-ob`、`/seal-quality`、I-3 的 `/market/cancel-profile/{s}`); watchlist/news/
+ *    suggestions/reports 一个都不发。
  *
  * 真数据纪律: mock 的是**网络层**(`@panwatch/api`), 组件与 `InsightProvider`/`useInsight*` 走真实代码。
  */
@@ -263,14 +264,24 @@ describe('Task 11 盘口资金: 七节真实渲染', () => {
     expect(cellValue(chipSec, '获利盘比例')).toBe('62%')
   })
 
-  it('惰性门控: 本标签只打 core 六端点 + orderbookOb/sealQuality, 标签外端点零调用', async () => {
+  it('惰性门控: 本标签只打 core 六端点 + orderbookOb/sealQuality/cancel-profile, 标签外端点零调用', async () => {
     renderTab()
-    await waitFor(() => expect(mocks.orderbookOb).toHaveBeenCalledWith('002636'))
-    expect(mocks.sealQuality).toHaveBeenCalledWith('002636')
+    await waitFor(() =>
+      expect(mocks.orderbookOb).toHaveBeenCalledWith('002636', expect.objectContaining({ timeoutMs: 25000 })),
+    )
+    expect(mocks.sealQuality).toHaveBeenCalledWith(
+      '002636',
+      expect.objectContaining({ timeoutMs: 25000 }),
+    )
     expect(mocks.quote).toHaveBeenCalledWith('002636', 'CN')
     expect(mocks.moreInfo).toHaveBeenCalledWith('002636', 'CN')
     expect(mocks.darkFlowTq).toHaveBeenCalledWith('002636', 'CN')
     expect(mocks.klineSummary).toHaveBeenCalledWith('002636', 'CN')
+    // I-3 委托行为画像: 本标签自有端点, 只发一次(60s 节奏), 且带 market/days 口径
+    expect(mocks.fetchAPI).toHaveBeenCalledWith(
+      expect.stringContaining('/market/cancel-profile/002636?market=CN&days=60'),
+      expect.objectContaining({ cacheMode: 'reload' }),
+    )
     // 标签外端点(自带 keys=['core'] 的门控)
     expect(mocks.stocksList).not.toHaveBeenCalled()
     expect(mocks.news).not.toHaveBeenCalled()
@@ -499,11 +510,13 @@ describe('Task 11 复审修复: 取数失败保留上次成功值 + 不猜原因
  * 渲染规则结论+AI 为什么+置信度+方向; ③数据不足/失败显式(不编造); ④规则单元格布局零改动。
  */
 describe('AI 解读(主力意图卡, 懒触发)', () => {
-  it('未点击不取数: fetchAPI 一次都没被调用', async () => {
+  it('未点击不取数: AI 解读端点一次都没被调用', async () => {
     renderTab()
     await waitFor(() => expect(mocks.orderbookOb).toHaveBeenCalled())
     expect(within(section('intent')).getByTestId('l2-intent-ai-btn')).toBeTruthy()
-    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+    // 口径: 只断言 **AI 端点**没被自动调用 —— 本标签另有自己的取数(盘口/封单成色/I-3 委托画像),
+    // 用 "fetchAPI 全局零调用" 当断言会随任何新增端点翻红(2026-10-18 I-3 落地即踩)。
+    expect(mocks.fetchAPI.mock.calls.some(([p]) => String(p).includes('/intent-explain'))).toBe(false)
   })
 
   it('点击才取数: 渲染 方向/置信度/为什么 + 规则结论, 原规则单元格不变', async () => {
@@ -519,7 +532,7 @@ describe('AI 解读(主力意图卡, 懒触发)', () => {
     renderTab()
     const intentSec = section('intent')
     const btn = await within(intentSec).findByTestId('l2-intent-ai-btn')
-    expect(mocks.fetchAPI).not.toHaveBeenCalled()
+    expect(mocks.fetchAPI.mock.calls.some(([p]) => String(p).includes('/intent-explain'))).toBe(false)
     fireEvent.click(btn)
     await waitFor(() =>
       expect(mocks.fetchAPI).toHaveBeenCalledWith('/dark-flow/002636/intent-explain'),
@@ -602,5 +615,15 @@ describe('AI 解读(主力意图卡, 懒触发)', () => {
     expect(cellValue(intentSec, '方向')).toBe('吸筹')
     expect(cellValue(intentSec, '参与度')).toBe('42.5%')
     expect(within(intentSec).getByTestId('l2-intent-ai-why').textContent).toContain('超大单+5967万')
+  })
+
+  it('主力意图口径徽标: 明示腾讯逐笔 + 通达信未开放逐笔单号', async () => {
+    renderTab()
+    const badge = await screen.findByTestId('intent-caliber-badge')
+    expect(badge.textContent).toContain('腾讯逐笔口径')
+
+    fireEvent.mouseEnter(badge)
+    expect(await screen.findByText(/通达信未开放逐笔单号/)).toBeTruthy()
+    expect(screen.getByText(/未开放深交所叫买\/叫卖委托号与逐笔成交明细/)).toBeTruthy()
   })
 })

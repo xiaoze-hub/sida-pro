@@ -297,10 +297,27 @@ function App() {
   const [version, setVersion] = useState('')
   const [logsOpen, setLogsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  /** 429 告警节流: 5 分钟内只留一条(限流是自愈态, 不该按请求数刷屏)。 */
+  const last429AlertRef = useRef(0)
   /** 会话消息流接线(2026-09-22): API 失败 → 右栏 AlertLog。
    *  用注册回调(不直接改 api 包) —— 底层包不反向依赖 UI。同一条消息 30s 内只累加计数, 不刷屏。 */
   useEffect(() => {
     onApiFailure((f) => {
+      /**
+       * 429 限流(2026-10-18): 自愈型瞬时态, 各取数块已用「取数失败（上次成功 …）」标出 stale。
+       * 不再按请求数灌 "HTTP 429 ×9" —— 5 分钟最多留一条可解释的告警, 真正需要人看的
+       * 5xx/超时不被噪音挤出视野。轮询层已按 Retry-After 指数退避。
+       */
+      if (f.status === 429) {
+        if (Date.now() - last429AlertRef.current < 300_000) return
+        last429AlertRef.current = Date.now()
+        pushAlert({
+          level: 'warn',
+          text: '接口限流(429): 已自动退避重试, 数据可能短暂停滞',
+          key: 'api:429',
+        })
+        return
+      }
       pushAlert({
         level: f.status >= 500 || f.status === 0 ? 'risk' : 'warn',
         text: `${f.method} ${f.path} 失败: ${f.message}`,

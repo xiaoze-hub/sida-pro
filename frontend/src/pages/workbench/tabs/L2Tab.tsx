@@ -2,13 +2,16 @@ import { ANPAN, MINGPAN, glossaryTooltip } from '@panwatch/biz-ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { insightApi, fetchAPI } from '@panwatch/api'
 import { usePausedInterval } from '@panwatch/base-ui'
-import { RefreshCw } from 'lucide-react'
+import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
+import { Info, RefreshCw } from 'lucide-react'
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import type { DarkFlowTqResponse, MoreInfoResponse, SummaryOrderbook } from '@panwatch/biz-ui/components/insight/types'
 import type { MainIntentStructured } from '@panwatch/biz-ui/lib/main-intent-types'
 import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
 import MissingFields from '@/components/MissingFields'
+import CancelProfilePanel, { type CancelProfile } from '@/components/CancelProfilePanel'
+import PriceDistributionPanel, { type PriceDistribution } from '@/components/PriceDistributionPanel'
 
 /**
  * 工作台标签「盘口资金」(工作台 v2 三合一, Task 11)。
@@ -23,7 +26,11 @@ import MissingFields from '@/components/MissingFields'
  *    `moreInfo`(`/quotes/{s}/more-info` L2 成品) · `darkFlowTq`(`/quotes/{s}/dark-flow-tq` 盘后还原)
  *    · `mainIntent`/`fundFlow`(均由 `/klines/{s}/summary` 的 `main_intent_structured`/`fund_flow` 派生)
  *    · `summaryOrderbook`(同一响应的**顶层** `orderbook`: 盘口形态/最优买卖/价差/买盘占比, 遗留④);
- *  - `insightApi.sealQuality`(`/seal-quality/{s}`)—— 封单成色(盘中 60s 采样)。
+ *  - `insightApi.sealQuality`(`/seal-quality/{s}`)—— 封单成色(盘中 60s 采样);
+ *  - `fetchAPI` `/market/cancel-profile/{s}`（I-3, 60s 轮询）—— 委托行为画像: 近 60 日撤单率
+ *    基线 + 动态 z + 一句话结论(全部由后端算, 前端只渲染, 见 `@/components/CancelProfilePanel`)。
+ *  - `fetchAPI` `/market/price-distribution/{s}`（I-8, 30s 轮询, 后端盘中读库 15s 缓存）——
+ *    微观分价博弈矩阵: 逐档主动买卖力量 + 托举位/抛压带/拆单信号(见 `@/components/PriceDistributionPanel`)。
  *
  * 惰性: 本标签默认导出即自带 `InsightProvider keys={['core']}` —— 标签**挂载才取数**
  * (`TabPanel` 只渲染当前激活标签), 且只取 core 六端点(不带 watchlist/news/suggestions/reports/deep/fundamentals)。
@@ -122,6 +129,16 @@ interface FundFlowRow {
 }
 
 const POLL_MS = 30_000
+/**
+ * 实时端点单次超时(2026-10-18): 默认 15s 在 thsdk/TQ 冷启动 + 十档聚合时太紧,
+ * 截图里的 `GET /orderbook-ob 失败: 请求超时` 即由此而来。放宽到 25s 仍保留显式失败态,
+ * 失败时前端 stale-on-error(保留上次成功值), 不把慢当空。
+ */
+const L2_TIMEOUT_MS = 25_000
+/** 两个端点都失败时的退避上限(3 分钟): 429/源不可用期间不再每 30s 撞两次。 */
+const L2_BACKOFF_MAX_MS = 180_000
+/** 委托行为画像轮询: 日线基线一天才变一次, 60s 足够(且每次只发 1 个单标的 RPC)。 */
+const PROFILE_POLL_MS = 60_000
 /** 资金流水表展示天数(与旧行情页 FundDetail 一致)。 */
 const FUND_ROWS = 30
 
@@ -312,14 +329,19 @@ function useL2Sources(symbol: string): L2Sources {
   const [loading, setLoading] = useState(false)
   const [updatedAt, setUpdatedAt] = useState('')
   const seqRef = useRef(0)
+  const failStreakRef = useRef(0)
+  const blockedUntilRef = useRef(0)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     if (!symbol) return
+    // 双端点都失败后进入退避窗口: 429/源不可用时不按 30s 节奏反复撞上游。
+    // 用户手动「刷新」传 force=true, 永远立即生效(退避只约束自动轮询)。
+    if (!force && Date.now() < blockedUntilRef.current) return
     const seq = ++seqRef.current
     setLoading(true)
     const [o, s] = await Promise.allSettled([
-      insightApi.orderbookOb<ObResp>(symbol),
-      insightApi.sealQuality<SealResp>(symbol),
+      insightApi.orderbookOb<ObResp>(symbol, { timeoutMs: L2_TIMEOUT_MS }),
+      insightApi.sealQuality<SealResp>(symbol, { timeoutMs: L2_TIMEOUT_MS }),
     ])
     if (seq !== seqRef.current) return
     const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -329,7 +351,15 @@ function useL2Sources(symbol: string): L2Sources {
     setSeal((prev) =>
       s.status === 'fulfilled' ? { data: s.value, failed: false, lastOkAt: now } : { ...prev, failed: true },
     )
-    if (o.status === 'fulfilled' || s.status === 'fulfilled') setUpdatedAt(now)
+    if (o.status === 'fulfilled' || s.status === 'fulfilled') {
+      setUpdatedAt(now)
+      failStreakRef.current = 0
+      blockedUntilRef.current = 0
+    } else {
+      failStreakRef.current += 1
+      const wait = Math.min(POLL_MS * 2 ** (failStreakRef.current - 1), L2_BACKOFF_MAX_MS)
+      blockedUntilRef.current = Date.now() + wait
+    }
     setLoading(false)
   }, [symbol])
 
@@ -342,7 +372,65 @@ function useL2Sources(symbol: string): L2Sources {
   // 取数/轮询: 隐藏页签停表, 回前台补一次(keep-alive 成本闸门, 2026-10-15)。
   usePausedInterval(() => void load(), POLL_MS, { deps: [load] })
 
-  return { ob, seal, loading, updatedAt, reload: load }
+  return { ob, seal, loading, updatedAt, reload: () => void load(true) }
+}
+
+/**
+ * 委托行为画像取数(`/market/cancel-profile/{s}`)。I-3, 2026-10-18。
+ *
+ * - 换股: 先清旧值(不把上一只票的基线画到新标的上) + 请求序号守卫;
+ * - 失败: **保留上次成功值**并置 `failed`(stale-on-error, 与本节其余端点同规则),
+ *   绝不把失败当"无数据"、也不本地编造原因;
+ * - `pct_chg` 走 **ref** 而不是依赖项: 它每 30s 跟着 moreInfo 变一次, 若进依赖数组会每 30s
+ *   重置一次 60s 定时器 ⇒ 定时轮询永远跑不到点(只能靠 deps 变化的那次首拉打工)。
+ */
+function useCancelProfile(symbol: string, market: string, pctChg: number | null) {
+  const [profile, setProfile] = useState<CancelProfile | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [lastOkAt, setLastOkAt] = useState('')
+  const [loading, setLoading] = useState(false)
+  const seqRef = useRef(0)
+  const chgRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    chgRef.current = safeNum(pctChg)
+  }, [pctChg])
+
+  const load = useCallback(async () => {
+    if (!symbol) return
+    const seq = ++seqRef.current
+    setLoading(true)
+    const qs = new URLSearchParams({ market: market || 'CN', days: '60' })
+    const chg = chgRef.current
+    if (chg != null) qs.set('pct_chg', String(chg))
+    try {
+      // 实时端点: 盘中撤单量持续累加, 跳过 fetchAPI 的 30s GET 内存缓存
+      const res = await fetchAPI<CancelProfile>(
+        `/market/cancel-profile/${encodeURIComponent(symbol)}?${qs.toString()}`,
+        { cacheMode: 'reload' },
+      )
+      if (seq !== seqRef.current) return
+      setProfile(res)
+      setFailed(false)
+      setLastOkAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    } catch {
+      if (seq !== seqRef.current) return
+      setFailed(true)
+    } finally {
+      if (seq === seqRef.current) setLoading(false)
+    }
+  }, [symbol, market])
+
+  // 换股/首挂先清旧值(声明顺序即执行顺序, 先于下面的首拉)
+  useEffect(() => {
+    setProfile(null)
+    setFailed(false)
+    setLastOkAt('')
+  }, [load])
+
+  usePausedInterval(() => void load(), PROFILE_POLL_MS, { deps: [load] })
+
+  return { profile, loading, failed, lastOkAt }
 }
 
 /* ------------------------------------------------------------------ *
@@ -609,6 +697,110 @@ function L2FundSection({ moreInfo, loading }: { moreInfo: MoreInfoResponse | nul
 }
 
 /* ------------------------------------------------------------------ *
+ * ②.5 委托行为画像(I-3): 60 日撤单率基线 + 动态 z
+ * ------------------------------------------------------------------ */
+
+function CancelProfileSection({
+  symbol,
+  market,
+  pctChg,
+}: {
+  symbol: string
+  market: string
+  pctChg: number | null
+}) {
+  const { profile, loading, failed, lastOkAt } = useCancelProfile(symbol, market, pctChg)
+  return (
+    <Section
+      id="cancel-profile"
+      title="委托行为画像"
+      hint="近 60 日撤单率基线 · 动态 Z-Score(相对该股自身, 非全市场固定阈值)"
+      extra={
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+          {profile?.available ? `基线 ${profile.baseline_days ?? 0} 日` : ''}
+        </span>
+      }
+    >
+      <CancelProfilePanel profile={profile} loading={loading} failed={failed} lastOkAt={lastOkAt} />
+    </Section>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * ②.6 微观分价博弈矩阵(I-8): 逐档多空力量 + 托举/抛压/拆单
+ * ------------------------------------------------------------------ */
+
+/** 分价矩阵轮询: 后端盘中 15s 缓存, 前端 30s 拉一次即可(读库毫秒级, 不打上游)。 */
+const PRICE_DIST_POLL_MS = 30_000
+
+/**
+ * 分价矩阵取数(`/market/price-distribution/{s}`)。I-8, 2026-10-18。
+ *
+ * - 换股: 先清旧值 + 请求序号守卫(不把上一只票的价位梯队画到新标的上);
+ * - 失败: **保留上次成功值**并置 `failed`(stale-on-error), 由面板显式标注
+ *   「显示上次成功值」; 绝不把失败当"无数据", 也不本地编造理由;
+ * - 后端已做「读库优先」, 本 hook 不再叠加本地缓存(两层缓存会让"刷新"按钮撒谎)。
+ */
+function usePriceDistribution(symbol: string, market: string) {
+  const [data, setData] = useState<PriceDistribution | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [lastOkAt, setLastOkAt] = useState('')
+  const [loading, setLoading] = useState(false)
+  const seqRef = useRef(0)
+
+  const load = useCallback(async () => {
+    if (!symbol) return
+    const seq = ++seqRef.current
+    setLoading(true)
+    const qs = new URLSearchParams({ market: market || 'CN', limit: '70' })
+    try {
+      const res = await fetchAPI<PriceDistribution>(
+        `/market/price-distribution/${encodeURIComponent(symbol)}?${qs.toString()}`,
+        { cacheMode: 'reload' },
+      )
+      if (seq !== seqRef.current) return
+      setData(res)
+      setFailed(false)
+      setLastOkAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    } catch {
+      if (seq !== seqRef.current) return
+      setFailed(true)
+    } finally {
+      if (seq === seqRef.current) setLoading(false)
+    }
+  }, [symbol, market])
+
+  // 换股/首挂先清旧值(声明顺序即执行顺序, 先于下面的首拉)
+  useEffect(() => {
+    setData(null)
+    setFailed(false)
+    setLastOkAt('')
+  }, [load])
+
+  usePausedInterval(() => void load(), PRICE_DIST_POLL_MS, { deps: [load] })
+
+  return { data, loading, failed, lastOkAt }
+}
+
+function PriceDistributionSection({ symbol, market }: { symbol: string; market: string }) {
+  const { data, loading, failed, lastOkAt } = usePriceDistribution(symbol, market)
+  return (
+    <Section
+      id="price-distribution"
+      title="微观分价博弈"
+      hint="腾讯分价表 · 逐档主动买/卖力量 · 大单托举/密集抛压/算法拆单"
+      extra={
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+          {data?.available ? `${data.trade_date ?? '--'} ${data.snapshot_ts ?? ''}` : ''}
+        </span>
+      }
+    >
+      <PriceDistributionPanel data={data} loading={loading} failed={failed} lastOkAt={lastOkAt} />
+    </Section>
+  )
+}
+
+/* ------------------------------------------------------------------ *
  * ③ 盘口演变事件 + 幽灵单占比
  * ------------------------------------------------------------------ */
 
@@ -817,10 +1009,39 @@ function IntentSealSection({
     <Section
       id="intent"
       title="主力意图 · 封单成色"
-      hint="逐笔 V14 判据 · 涨停封单 60s 采样"
+      hint="腾讯逐笔口径 · 逐笔 V14 判据 · 涨停封单 60s 采样"
       extra={
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-          {mi?.data_status === 'insufficient' ? '意图数据不足' : ''}
+        <span className="ml-auto inline-flex items-center gap-2">
+          <HoverPopover
+            side="bottom"
+            align="end"
+            popoverClassName="w-[24rem]"
+            trigger={
+              <span
+                data-testid="intent-caliber-badge"
+                className="inline-flex cursor-help items-center gap-1 rounded-full border border-role-watch/35 bg-role-watch/10 px-2 py-0.5 text-[10px] text-role-watch"
+              >
+                <Info className="h-2.5 w-2.5" aria-hidden="true" />
+                腾讯逐笔口径
+              </span>
+            }
+            title="主力意图 · 逐笔口径说明"
+            content={
+              <div className="space-y-1.5">
+                <p className="text-foreground/90">
+                  当前主力意图采用腾讯高频逐笔口径（通达信未开放逐笔单号），保证方向绝对准确。
+                </p>
+                <p>
+                  逐笔主动买卖方向是唯一可做归因的口径；通达信 TQ 官方网关未开放深交所叫买/叫卖委托号与逐笔成交明细，
+                  无法重建主动买卖方向，因此本栏不使用通达信数据。
+                </p>
+                <p>东财四档资金流向仅作资金面参考，禁止用于吸筹/派发判定；两套口径数字不同属正常。</p>
+              </div>
+            }
+          />
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {mi?.data_status === 'insufficient' ? '意图数据不足' : ''}
+          </span>
         </span>
       }
     >
@@ -1107,7 +1328,7 @@ function ChipsSection({
  * 标签正文(在 Provider 内消费 useInsight; 见文件头注)
  * ------------------------------------------------------------------ */
 
-function L2TabBody({ symbol }: { symbol: string }) {
+function L2TabBody({ symbol, market }: { symbol: string; market: string }) {
   const { moreInfo, moreInfoLoading, darkFlowTq, mainIntent, mainAccumulationChips, fundFlow, summaryOrderbook } = useInsight()
   const { ob, seal, loading, updatedAt, reload } = useL2Sources(symbol)
   // `fundFlow` 的元素类型在 biz-ui 里声明为 `open_net`, 后端实际下发 `ming_net` —— 两种键都读。
@@ -1136,7 +1357,9 @@ function L2TabBody({ symbol }: { symbol: string }) {
       <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-12">
         <div className="space-y-3 lg:col-span-7">
           <OrderbookSection feed={ob} loading={loading} sumOb={summaryOrderbook} moreInfo={moreInfo} />
+          <PriceDistributionSection symbol={symbol} market={market} />
           <L2FundSection moreInfo={moreInfo} loading={moreInfoLoading} />
+          <CancelProfileSection symbol={symbol} market={market} pctChg={moreInfo?.change_pct ?? null} />
           <FundFlowSection rows={fundRows} />
         </div>
         <div className="space-y-3 lg:col-span-5 lg:border-l lg:border-border/40 lg:pl-4">
@@ -1166,7 +1389,7 @@ export default function L2Tab({
 }) {
   return (
     <InsightProvider symbol={symbol} market={market} hasPosition={hasPosition} keys={['core']}>
-      <L2TabBody symbol={symbol} />
+      <L2TabBody symbol={symbol} market={market} />
     </InsightProvider>
   )
 }

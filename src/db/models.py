@@ -1799,3 +1799,105 @@ class TierDowngradeLog(Base):
     to_daily_limit = Column(Integer, default=0)
     reason = Column(String(255), default="")
     created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
+class PriceDistributionSnapshot(Base):
+    """I-8 分价博弈矩阵盘中快照(2026-10-18): 读库优先, 免每次首屏跨网打腾讯。
+
+    为什么必须落库(用户硬约束)
+    --------------------------
+    ① 分价矩阵是**盘中可回放**的微观证据: 主力在哪个价位承接/出货, 只有落成时序才能
+       做事后回测与"主力轨迹"复盘; 请求期现拉等于每天把证据丢一次。
+    ② `/api/market/price-distribution` 首屏若每次现拉腾讯(海外节点常态 1~8s), 页面
+       秒开无从谈起; 读本表一行 JSON 是毫秒级。
+
+    粒度: 一行 = (标的, 交易日, **5 分钟桶**) 的最新一次采样。为什么按桶而不是按秒:
+    分价表快照盘中每 3~5s 刷新一次, 若按秒落库, 单票一天几百行 × 30KB ≈ 十 MB 级,
+    200 只票就是 GB/天 —— 那是把"证据"存成了"录像"。5 分钟桶(48 行/天/票)既保住
+    日内轨迹, 又把体量压到 1/10; 桶内多次采样**原地覆盖**, 保留桶内最后一次(最新)。
+    老于保留期的行由 `price_distribution_store.purge_old_snapshots` 清理(默认 5 个交易日)。
+
+    口径: `payload` 是 analyzer 的**完整返回**(含 bins/support/resistance/iceberg/
+    summary/quality), 读侧直接回吐, 不在读路径重算 —— 重算会让历史行的口径随代码漂移。
+    """
+
+    __tablename__ = "price_distribution_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "trade_date", "market", "symbol", "bucket_ts",
+            name="uq_price_dist_snap_day_sym_bucket",
+        ),
+        Index("ix_price_dist_snap_sym_day", "symbol", "trade_date"),
+        Index("ix_price_dist_snap_captured", "captured_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)     # YYYY-MM-DD(交易所快照日, 非调用日)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)         # 6 位代码
+    snapshot_ts = Column(String(8), nullable=False)     # HH:MM:SS(源表头时刻, 桶内最后一次)
+    bucket_ts = Column(String(5), nullable=False)       # HH:MM(5 分钟桶, 唯一键)
+    captured_at = Column(Float, nullable=False)         # 落库时刻 epoch 秒(缓存新鲜度基准)
+    close_price = Column(Float, nullable=True)
+    total_vol = Column(Float, nullable=True)            # 手(矩阵覆盖档合计)
+    buy_vol = Column(Float, nullable=True)
+    sell_vol = Column(Float, nullable=True)
+    net_amount = Column(Float, nullable=True)           # 元
+    buy_ratio = Column(Float, nullable=True)
+    big_ratio = Column(Float, nullable=True)
+    price_bins_json = Column(JSON, nullable=True)       # 逐档矩阵
+    support_levels = Column(JSON, nullable=True)        # 强托举位
+    resistance_levels = Column(JSON, nullable=True)     # 密集抛压带
+    iceberg_signals = Column(JSON, nullable=True)       # 算法拆单
+    payload = Column(JSON, nullable=True)               # 完整分析结果(读侧直出)
+    source = Column(String(32), default="tencent_price")
+    quality_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class PriceDistributionDaily(Base):
+    """I-8 分价博弈矩阵**日终归档**(2026-10-18): 历史回测/主力轨迹复盘的唯一事实源。
+
+    与 `PriceDistributionSnapshot` 的分工:
+      · snapshots = 盘中滚动采样(短期缓存, 会被保留期清理);
+      · daily      = 每交易日**一份定稿**(收盘归档/当日最后一次采样), 永久保留。
+
+    粒度: 唯一键 (trade_date, market, symbol), 同一交易日重复归档原地覆盖
+    (`settled_at` 记录最后一次归档时刻)。历史日**永不回源** —— 分价表只给当日,
+    回源既拿不到历史, 也会把"今天的分价"污染到历史日上。
+
+    为什么另存列而不是只留 payload: 回测要按 `symbol+trade_date` 范围扫、按
+    `net_amount`/`buy_ratio` 排序筛选, 抽 JSON 字段在 PG 上代价高(且 SQLite 不支持)。
+    """
+
+    __tablename__ = "price_distribution_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "market", "symbol", name="uq_price_dist_daily"),
+        Index("ix_price_dist_daily_sym_day", "symbol", "trade_date"),
+        Index("ix_price_dist_daily_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    symbol = Column(String(16), nullable=False)
+    snapshot_ts = Column(String(8), nullable=False)     # 定稿所用采样的源时刻
+    settled_at = Column(Float, nullable=False)          # 归档时刻 epoch 秒
+    close_price = Column(Float, nullable=True)
+    total_vol = Column(Float, nullable=True)
+    buy_vol = Column(Float, nullable=True)
+    sell_vol = Column(Float, nullable=True)
+    net_amount = Column(Float, nullable=True)
+    buy_ratio = Column(Float, nullable=True)
+    big_ratio = Column(Float, nullable=True)
+    support_price = Column(Float, nullable=True)        # 最强托举位(回测主键位)
+    resistance_price = Column(Float, nullable=True)     # 最强抛压位
+    iceberg_count = Column(Integer, default=0)
+    price_bins_json = Column(JSON, nullable=True)
+    support_levels = Column(JSON, nullable=True)
+    resistance_levels = Column(JSON, nullable=True)
+    iceberg_signals = Column(JSON, nullable=True)
+    payload = Column(JSON, nullable=True)
+    source = Column(String(32), default="tencent_price")
+    quality_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())

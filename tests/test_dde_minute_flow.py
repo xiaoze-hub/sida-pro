@@ -163,6 +163,104 @@ def test_fetch_dde_series_constructs_sequence_from_db(dde_db):
     assert series[-1]["main_net"] == pytest.approx(30.0 * 1e4)
 
 
+# ────────────────────────── 腾讯逐笔逐分钟 DDE 兜底(2026-10-18) ──────────────────────────
+def test_tick_dde_series_per_minute_main_net(monkeypatch):
+    """腾讯逐笔 → 逐分钟主力净额: 剔除竞价、只算主力单、B/S 定符号、无主力单分钟记 0。"""
+    from src.core import minute_breakthrough as mbt
+
+    ticks = [
+        {"t": "09:25:03", "amt": 900_000.0, "vol": 5000, "d": "B"},   # 竞价撮合 → 剔除
+        {"t": "09:30:10", "amt": 250_000.0, "vol": 100, "d": "B"},    # 主力买
+        {"t": "09:30:40", "amt": 300_000.0, "vol": 100, "d": "S"},    # 主力卖
+        {"t": "09:31:05", "amt": 50_000.0, "vol": 10, "d": "B"},      # 非主力 → 该分钟记 0
+        {"t": "09:32:00", "amt": 100_000.0, "vol": 700, "d": "B"},    # 金额不足但 ≥600 手 → 主力买
+    ]
+    monkeypatch.setattr("src.core.trading_calendar.is_trading_day", lambda d: True)
+    monkeypatch.setattr("src.core.dark_flow._fetch_all_ticks", lambda code: ticks)
+
+    series = mbt._fetch_tencent_tick_dde_series("600111", "CN")
+    assert [x["time"] for x in series] == ["09:30", "09:31", "09:32"]
+    assert series[0]["main_net"] == pytest.approx(250_000.0 - 300_000.0)
+    assert series[1]["main_net"] == pytest.approx(0.0)  # 完整序列: 无主力单 ≠ 缺失
+    assert series[2]["main_net"] == pytest.approx(100_000.0)
+
+
+def test_tick_dde_series_skipped_on_non_trading_day(monkeypatch):
+    """非交易日不取逐笔(腾讯返回"最近交易日", 套到今天即错日序列)。"""
+    from src.core import minute_breakthrough as mbt
+
+    monkeypatch.setattr("src.core.trading_calendar.is_trading_day", lambda d: False)
+    monkeypatch.setattr(
+        "src.core.dark_flow._fetch_all_ticks",
+        lambda code: pytest.fail("非交易日不该翻逐笔"),
+    )
+    assert mbt._fetch_tencent_tick_dde_series("600111", "CN") == []
+
+
+def test_fetch_dde_series_falls_back_to_tencent_tick(monkeypatch, dde_db):
+    """采样表无行 → 腾讯逐笔序列兜底, 且不再白跑 thsdk/TQ 快照。"""
+    from src.core import minute_breakthrough as mbt
+
+    monkeypatch.setattr(mbt, "_read_dde_series_db", lambda *a, **k: [])
+    monkeypatch.setattr(
+        mbt,
+        "_fetch_tencent_tick_dde_series",
+        lambda *a, **k: [{"time": "09:30", "main_net": 1_000_000.0}],
+    )
+    monkeypatch.setattr(
+        mbt, "_fetch_thsdk_dde_wan", lambda *a, **k: pytest.fail("不应回退快照")
+    )
+
+    series, source = mbt.fetch_dde_series_with_source("600111", "CN")
+    assert source == "tencent_tick"
+    assert series == [{"time": "09:30", "main_net": 1_000_000.0}]
+    # 兼容入口仍只返回序列
+    assert mbt.fetch_dde_series("600111", "CN") == series
+
+
+def test_fetch_minute_breakthrough_degraded_note_is_factual(monkeypatch):
+    """DDE 与分钟数据都空 → note 只陈述事实(序列为空), 不编造原因。"""
+    from src.core import minute_breakthrough as mbt
+
+    monkeypatch.setattr(mbt, "fetch_minute_bars", lambda *a, **k: _tu_bars())
+    monkeypatch.setattr(mbt, "fetch_dde_series_with_source", lambda *a, **k: ([], None))
+
+    out = mbt.fetch_minute_breakthrough("600111", "CN")
+    assert out["available"] is False and out["dde_source"] is None
+    assert "逐分钟 DDE 序列为空" in out["note"]
+    assert "按铁律不出信号" in out["note"]
+
+
+def test_fetch_dde_series_uses_tick_when_samples_too_few(monkeypatch, dde_db):
+    """早盘采样只有 1-2 点(不足以判「持续」) → 用逐分钟逐笔补全, 不被短采样卡住。"""
+    from src.core import minute_breakthrough as mbt
+
+    short = [{"time": "09:35", "main_net": 1.0e6}, {"time": "09:40", "main_net": 2.0e6}]
+    monkeypatch.setattr(mbt, "_read_dde_series_db", lambda *a, **k: list(short))
+    monkeypatch.setattr(
+        mbt,
+        "_fetch_tencent_tick_dde_series",
+        lambda *a, **k: [{"time": "09:30", "main_net": 5.0e5}, {"time": "09:31", "main_net": 6.0e5}],
+    )
+
+    series, source = mbt.fetch_dde_series_with_source("600111", "CN")
+    assert source == "tencent_tick"
+    assert len(series) == 2
+
+
+def test_fetch_dde_series_keeps_short_samples_when_tick_unavailable(monkeypatch, dde_db):
+    """逐笔不可用 → 短采样仍原样返回(显式降级但不丢已有证据)。"""
+    from src.core import minute_breakthrough as mbt
+
+    short = [{"time": "09:35", "main_net": 1.0e6}]
+    monkeypatch.setattr(mbt, "_read_dde_series_db", lambda *a, **k: list(short))
+    monkeypatch.setattr(mbt, "_fetch_tencent_tick_dde_series", lambda *a, **k: [])
+
+    series, source = mbt.fetch_dde_series_with_source("600111", "CN")
+    assert source == "minute_sample"
+    assert series == short
+
+
 # ────────────────────────── 「突」持续流入 正/反例(采样节拍粗于 1m) ──────────────────────────
 def _mb(t, o, h, l, c, v):
     return {"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v}

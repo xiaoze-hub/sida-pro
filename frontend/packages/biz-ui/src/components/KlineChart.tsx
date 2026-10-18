@@ -86,6 +86,7 @@ import {
 // 数据源 `/api/indicators/*`; 与形态标注同策略(父传优先 + 自取, 错峰, 显式降级), 但**职责不同**:
 // 这里出**线**(前端按 API params 在日线收盘价上展开全序列), 数据面板出**现值读数**。
 import {
+  MINUTE_DDE_HINT,
   PIONEER_NOT_ADVICE_TEXT,
   minuteDegradeText,
   niuxiongSeries,
@@ -2041,7 +2042,17 @@ export default function KlineChart(props: {
             <span>暂未触发「突/积」</span>
           ) : (
             <>
-              <span>{minuteDegradeText(minuteBreakthrough.reasons)}</span>
+              <span
+                title={
+                  minuteBreakthrough.note
+                    ? `${minuteBreakthrough.note}\n${MINUTE_DDE_HINT}`
+                    : MINUTE_DDE_HINT
+                }
+                data-testid="minute-dde-degrade-hint"
+                className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2"
+              >
+                {minuteDegradeText(minuteBreakthrough.reasons)}
+              </span>
               {minuteBreakthrough.reasons.length > 0 ? (
                 <span className="text-[10px]">（{minuteBreakthrough.reasons.join(' · ')}）</span>
               ) : null}

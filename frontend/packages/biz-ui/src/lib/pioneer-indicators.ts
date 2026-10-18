@@ -72,13 +72,21 @@ export interface MinuteBreakthroughData {
   metConditions: string[]
   degraded: boolean
   reasons: string[]
+  /** 实际采用的 DDE 口径: minute_sample / tencent_tick / intraday_snapshot（null=无） */
+  ddeSource?: string
   note?: string
   params: Record<string, number>
   calibration?: string
 }
 
-/** 分时突破降级文案(后端 `available=false` 时显式展示; 与后端"逐分钟 DDE 未接入"同义)。 */
-export const MINUTE_DDE_DEGRADE_TEXT = '逐分钟 DDE 未接入 · 暂不出信号'
+/** 分时突破降级文案(后端 `available=false` 时显式展示; 三级 DDE 取数全空)。 */
+export const MINUTE_DDE_DEGRADE_TEXT = '逐分钟 DDE 暂缺 · 暂不出信号'
+/**
+ * 降级原因的悬浮说明（2026-10-18）：
+ * 把"暂缺"讲成可验证的取数链，而不是让用户以为功能没接。**措辞只陈述事实**。
+ */
+export const MINUTE_DDE_HINT =
+  '分时突破需要逐分钟 DDE 大单净流入序列。系统按序取：① 盘中 DDE 采样表（5 分钟节拍）→ ② 腾讯逐笔按分钟聚合（与主力意图同口径，单笔≥20万或≥600手，剔除竞价）→ ③ 当日快照单点。三级全空才显式不出信号，不编造。'
 /** 客观标注免责(证据非建议)。 */
 export const PIONEER_NOT_ADVICE_TEXT = '客观标注 · 非投资建议'
 
@@ -207,6 +215,7 @@ export function normalizeMinuteBreakthrough(raw: unknown): MinuteBreakthroughDat
     metConditions: met,
     degraded: raw.degraded === true,
     reasons,
+    ddeSource: str(raw.dde_source) || undefined,
     note: str(raw.note) || undefined,
     params: numRecord(raw.params),
     calibration: str(raw.calibration) || undefined,

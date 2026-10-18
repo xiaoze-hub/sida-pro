@@ -17,7 +17,7 @@ from src.core.trade_phase import phase_meta
 logger = logging.getLogger(__name__)
 
 Tone = Literal["opportunity", "neutral", "caution", "risk"]
-DefenseSlot = Literal["first", "core", "probe", "cost", "cap"]
+DefenseSlot = Literal["first", "core", "probe", "cost", "cap", "pd_support", "pd_resist"]
 
 DISCLAIMER = "客观证据 · 仅供参考 · 不构成投资建议与买卖指令"
 
@@ -442,6 +442,50 @@ def _fetch_theme_evidence(symbol: str) -> dict:
     }
 
 
+def _fetch_price_dist_evidence(symbol: str, market: str) -> dict:
+    """I-8 分价博弈矩阵证据: 当日放量托举位 / 抛压带 / 拆单信号。
+
+    AI 要回答"主力在哪承接、哪出货、有没有拆单", 只有这块证据给得出**价位**。
+    读穿透(库优先)在 store 内完成, brief 侧不再关心网络。
+    """
+    from src.core.price_distribution_analyzer import CALIBER
+    from src.core.price_distribution_store import get_or_refresh
+
+    try:
+        d = get_or_refresh(symbol, market, limit=70)
+        if not d.get("available"):
+            return {
+                "available": False,
+                "caliber": CALIBER,
+                "as_of": None,
+                "degraded_reason": d.get("reason") or "分价矩阵不可用",
+                "gated": False,
+            }
+        return {
+            "available": True,
+            "caliber": CALIBER,
+            "as_of": d.get("trade_date"),
+            "degraded_reason": None,
+            "gated": False,
+            "support": d.get("support_levels") or [],
+            "resistance": d.get("resistance_levels") or [],
+            "iceberg": d.get("iceberg_signals") or [],
+            "bias": d.get("bias"),
+            "day": d.get("day"),
+            "summary_text": [s.get("text") for s in (d.get("summary") or [])],
+            "cache": d.get("cache"),
+        }
+    except Exception as e:  # noqa: BLE001 - 证据层不许炸掉 brief
+        logger.warning("Price-dist evidence error for %s: %s", symbol, e)
+        return {
+            "available": False,
+            "caliber": CALIBER,
+            "as_of": None,
+            "degraded_reason": f"分价矩阵异常: {e}",
+            "gated": False,
+        }
+
+
 # ---------------------------------------------------------------------------
 # 确定性判定引擎 (Intent / Defense Lines / Plans / Narrative)
 # ---------------------------------------------------------------------------
@@ -497,10 +541,23 @@ def _eval_intent_rule(evidence: dict) -> tuple[str, str, Tone, list[str]]:
     return "R9", "多空均衡 · 区间待方向", "neutral", []
 
 
-def _compute_defense_lines(quote: dict, chips: dict, wyckoff: dict) -> list[dict]:
+def _compute_defense_lines(
+    quote: dict, chips: dict, wyckoff: dict, price_dist: dict | None = None
+) -> list[dict]:
     close = quote.get("close")
     if close is None or close <= 0:
         return []
+
+    def _first_price(rows: Any) -> float | None:
+        if not rows:
+            return None
+        try:
+            return float(rows[0].get("price"))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    pd_support = _first_price((price_dist or {}).get("support"))
+    pd_resistance = _first_price((price_dist or {}).get("resistance"))
 
     candidates = [
         ("first", "第一防守位", quote.get("low"), "今日盘中探底低点"),
@@ -508,6 +565,9 @@ def _compute_defense_lines(quote: dict, chips: dict, wyckoff: dict) -> list[dict
         ("probe", "弹簧针低点", wyckoff.get("spring_low"), "威科夫Phase C弹簧支撑"),
         ("cost", "底仓成本", chips.get("main_cost"), "主力底仓重仓均价"),
         ("cap", "强阻力压制", chips.get("cost_70_high"), "70%建仓筹码顶沿"),
+        # I-8: 当日分价矩阵给出的真实成交密集位(不是筹码模型的估算带)
+        ("pd_support", "分价托举位", pd_support, "当日放量+主动买占比≥65%(分价矩阵)"),
+        ("pd_resist", "分价抛压带", pd_resistance, "当日放量+主动卖占比≥65%(分价矩阵)"),
     ]
 
     filtered = []
@@ -641,10 +701,11 @@ def build_copilot_brief(symbol: str, market: str = "CN", perms: list[str] | None
         "auction": lambda: _fetch_auction_evidence(symbol),
         "demon": lambda: _fetch_demon_evidence(symbol),
         "theme": lambda: _fetch_theme_evidence(symbol),
+        "price_distribution": lambda: _fetch_price_dist_evidence(symbol, market),
     }
 
     evidence: dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=7) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(fn): key for key, fn in evidence_getters.items()}
         for fut in as_completed(futures):
             key = futures[fut]
@@ -674,7 +735,10 @@ def build_copilot_brief(symbol: str, market: str = "CN", perms: list[str] | None
     confidence = max(0.20, min(0.95, round(raw_conf, 2)))
 
     # 防守位与预案
-    defense_lines = _compute_defense_lines(quote_res, evidence["chips"], evidence["wyckoff"])
+    defense_lines = _compute_defense_lines(
+        quote_res, evidence["chips"], evidence["wyckoff"],
+        evidence.get("price_distribution"),
+    )
     action_plans = _build_action_plans(intent_tone, defense_lines)
     narrative = _build_narrative(evidence["chips"], evidence["microstructure"], evidence["resonance"])
 

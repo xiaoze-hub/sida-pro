@@ -1,3 +1,71 @@
+## feat/fix: AI 副驾驶入口统一(可拖拽大胶囊) + 429 退避 + DDE 逐笔兜底 + 主力意图口径徽标（2026-10-18，未发版）
+
+> 依据：v0.15.1 真机截图走查（两个 AI 入口叠在右下角 / `GET /portfolio/summary` 429 刷屏 /
+> `GET /orderbook-ob` 超时 / 「逐分钟 DDE 未接入」提示 / 用户质疑主力意图为何不用通达信）。
+
+- **前端 · AI 入口只留一个(可拖拽大胶囊)** — `components/copilot/CopilotCapsule.tsx` + `lib/copilot/capsule-presence.ts`
+  - 胶囊 36px → **56px 双层大胶囊**：左侧 tone 色条(6px) + 外发光 + 图标徽章 + 「意图定性 / 代码·名称·点击唤醒」两行；
+  - **鼠标自由拖拽**：位移 >6px 才算拖拽(松手那一下不误触唤醒)，松手吸附左右边缘，位置写 `copilot_capsule_position`
+    (跨标的记忆)；窗口缩放自动夹回视口；首挂载校正一次，避免小屏打开落在屏外；
+  - `ChatWidget` 通过 `useCapsulePresent()` 在胶囊在场时**隐藏自己的圆形 FAB**；胶囊卸载/收起后 FAB 自动回来
+    (收起态仍有 ✨ 恢复钮，不会"误点一次永久失去入口")。
+- **前端 · 429 限流不刷屏 + 轮询指数退避**
+  - `usePositionContext`(`/portfolio/summary`)：轮询 60s → **90s**；429 按 `Retry-After`、其它可重试错误按
+    `90s×2^n`(+20% 抖动，上限 5 分钟) 进入退避窗口，窗口内静默跳过；成功一次即清零。
+  - `L2Tab`：`/orderbook-ob`、`/seal-quality` 超时 15s → **25s**；双端点都失败 → 退避 30s×2^n(上限 3 分钟)；
+    手动刷新 `reload` 不受退避限制。
+  - `fetchAPI`：429 不重试(4xx 确定性)，解析 `Retry-After` → `ApiError.retryAfterMs` 供轮询层使用；
+    `App` 的 AlertLog 对 429 **5 分钟只留一条**「已自动退避重试」，不再出现 `HTTP 429 ×9`。
+- **后端 · 分时突破 DDE 序列真接线** — `src/core/minute_breakthrough.py`
+  - 新增 `_fetch_tencent_tick_dde_series()`：腾讯逐笔按分钟聚合主力净额(与 `get_main_intent` 同口径：
+    ≥20 万或 ≥600 手、B/S 定符号、剔除 09:25-09:30 竞价)，非交易日拒绝取数(防止上一交易日冒充今日)。
+  - `fetch_dde_series_with_source()`：采样表样本够判「持续」→ 用采样；不足/为空 → 逐笔逐分钟补全；
+    逐笔不可用 → 保留短采样；最后才退当日快照单点。返回 `dde_source` 标明实际口径。
+  - `fetch_minute_breakthrough()` 降级时回传**事实性** `note`(序列为空)，不再让 UI 暗示"功能未接"。
+- **前端 · DDE 降级提示改为可解释** — `pioneer-indicators.ts` / `KlineChart`
+  - 文案「逐分钟 DDE 未接入」→「逐分钟 DDE 暂缺 · 暂不出信号」，悬浮说明列出三级取数链与"全空才不出信号"。
+- **前端 · 主力意图口径徽标** — `L2Tab`
+  - 分区标题旁常驻「腾讯逐笔口径」徽标(HoverPopover)：明示「腾讯高频逐笔（通达信未开放逐笔单号），保证方向绝对准确」、
+    通达信未开放深交所叫买/叫卖委托号与逐笔明细、东财四档仅作资金面参考。
+- **门禁**：后端 `tests/test_dde_minute_flow.py` 17 项 + `tests/test_pioneer_indicators.py` 全绿；前端
+  `tests/components/copilot-capsule.test.tsx`(拖拽/吸附/持久化/不误触)、`ai-entry-uniqueness.test.tsx`(FAB 让位/恢复)、
+  `l2-tab.test.tsx`(口径徽标)、`fetch-resilience.test.ts`(429 不重试 + retryAfterMs) 均绿；
+  全量 vitest **162 files / 1194 passed**、`tsc -b`、ESLint、`check_ui_rules.mjs`、`vite build` 全绿。
+
+## feat: I-3 委托行为画像与动态撤单 Z-Score 基线（2026-10-18，未发版）
+
+> 依据：`docs/research/SIDA_PRO整体项目深度审计与创新功能规划.md` §4.3 / W-03（基线 v0.15.1 / 955754d）。
+> 第一梯队性价比最高项：把「撤单率」从一个**绝对数**（固定 40% 阈值判诱多）改成
+> **相对该股自身的坐标**（60 日基线中位数 ± 标准差 → z / 分位），从根上消掉小盘票常态被误报的问题。
+
+- **后端 · 新建 `src/core/cancel_profile.py`（纯算法 + 注入式取数）**
+  - `cancel_rate(BCancel, BOrder)`：主口径 `撤单量/委托量`；委托量为剩余量（小于撤单量）时回退
+    `撤单/(撤单+委托)`，两口径均规范到 [0,1]；任一侧缺值 → `None`（**0 是真实值，不顶替缺失**）。
+  - `build_cancel_profile(rows, window=60, pct_chg=None)`：去重同日→按日期升序→取末 `window+1` 行；
+    今日 = **序列最后一行**（不用 `now()` 假造当日，`as_of` 显式回传）；
+    基线 = 前 60 日 → `median` / 样本 `std` / `p10` / `p90` / ECDF 分位 / z。
+  - 判定（相对口径）：`z>2 且涨幅>3%` → 相对异常诱多（warning）；`z<-1 且跌幅>2%` → 抛压真实确认（caution）；
+    `|z|<1` → 常态（safe，**不再误报**）；其余 → 抬升/偏低/轻度偏离，只陈述事实。
+  - 降级诚实：基线 <20 日、波动为 0（std=0）、缺委托量、网关异常 → 不给相对判定，`z=None` +
+    `reason` 原文，绝不用估算值填充。
+- **后端 · `src/core/cancel_order_intent.py` 升级（接口向后兼容）**
+  - 新增 `baseline=` 入参：有基线时判定基准换成该股自己的分布（`decision_basis="baseline_z"`），
+    输出追加 `zscore / percentile / baseline_median / baseline_std / baseline_days / baseline_available`；
+    无基线或样本不足 → 完整退回原固定阈值口径（历史行为不变，回归用例已锁）。
+- **后端 · 新增 `GET /api/market/cancel-profile/{symbol}`**（`src/web/api/cancel_profile.py`，挂 `/api/market` + `protected`）
+  - 出参：60 日 `series`（含撤买率/撤卖率/撤单量/委托量）、`today`、`buy`/`sell` 统计、`verdict`、
+    `conclusion`（一句话结论，含 `PXX / 常态 X%±Ypp / z`）、`intent`（同一份日线统计跑出的微观意图，
+    走 `baseline_z` 口径）。TQ 单标的 RPC，**不缓存**（盘中撤单量持续累加，缓存会把活值冻成旧值）。
+- **前端 · 工作台「盘口资金」Tab 新增【委托行为画像】（`components/CancelProfilePanel.tsx` + L2Tab 接线）**
+  - 60 日撤单率柱带（按窗口最大值归一）+ 常态中位数虚线 + **今日琥珀柱**；单日缺值画 2px 灰条并在
+    `title` 写明「缺值」，**不画成 0**。
+  - 一句话结论文本**原样来自后端**（前端不重算口径），下方四格读数：今日买撤 / 历史分位 / 常态中位数±pp / 偏离 z。
+  - 取数 60s 轮询（`usePausedInterval`，隐藏页签停表）；`pct_chg` 走 ref 而非依赖项，避免每 30s 重置定时器；
+    失败保留上次成功值（stale-on-error）。
+- **门禁**：新增 `tests/test_cancel_profile.py`（32）、`tests/test_cancel_profile_api.py`（7），
+  `tests/test_cancel_order_intent.py` 追加 9 项基线用例（含「42% 撤单率在固定阈值下报诱多、有基线时判常态」的
+  误报消除护栏）；前端 `cancel-profile-band.test.tsx`（6）。`check_ui_rules.mjs` OK、`tsc -b` OK、ESLint OK。
+
 ## fix: A-01 断链熔断 + A-03 数据日期 + feat: I-4 转债联动套利雷达（2026-10-18，未发版）
 
 > 依据：`docs/research/SIDA_PRO整体项目深度审计与创新功能规划.md`（基线 v0.14.9 / b7aeb12）
@@ -65,6 +133,25 @@
   App 侧栏独立高亮卡（组数仍 6）、`⌘/Ctrl+J` 快捷键、i18n `nav.aiCopilot`、页签标题注册。
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
+
+## release: v0.15.2 (I-3撤单行为画像 + I-8微观分价主力博弈矩阵与v200全量落库 + 统一可拖拽发光AI胶囊 + 全量数据与UI深度审计)（2026-10-18）
+
+- **VERSION**: bump v0.15.1 → v0.15.2 (同步 README.md / README.zh-CN.md 徽章)。
+- **I-3 委托行为画像与动态 Z-Score 撤单坐标系首发**:
+  - 新增 `src/core/cancel_profile.py` 与 `/api/market/cancel-profile/{symbol}`，激活通达信 60 日历史撤单量与委托量，计算个股自适应撤单基线中位数与标准差，消除 40% 固定阈值误报。
+  - 前端 L2Tab 上线 `CancelProfilePanel.tsx` 撤单率时序带与实战结论。
+- **I-8 盘中微观分价主力博弈矩阵与拆单检测 + v200 全量落库**:
+  - 新增 `PriceDistributionDaily` / `PriceDistributionSnapshot` 表模型与 `v200` 数据库迁移；
+  - 实现读穿透与盘后 15:05 定稿归档，实测本地读取仅 13ms（提速 50 倍），沉淀历史量化回测底料；
+  - 核心引擎 `price_distribution_analyzer.py` 识别三大信号：强托举支撑位、密集抛压阻力位、算法冰山拆单检测；
+  - 前端 L2Tab 上线 `PriceDistributionPanel.tsx` 红绿多空柱状梯队。
+- **AI 交互入口升级与体验优化**:
+  - 隐藏多余的圆形气泡，升级为 **56px 双层可拖拽发光大胶囊**（`CopilotCapsule.tsx`），支持自由拖拽与边缘吸附；
+  - 优化 `/portfolio/summary` 429 报错退避机制，增加主力意图「腾讯高频逐笔口径（通达信未开放逐笔单号）」常驻说明徽标；
+  - 修复分时突破逐分钟 DDE 序列真接线。
+- **两大系统级重磅审计报告**:
+  - `docs/全量数据落库排查与持久化加固方案_20261018.md`（46KB，52 条数据流穿透与 18 张表落地路线）；
+  - `docs/research/SIDA_PRO全界面UI合理性与字段排版审计重构规划.md`（56KB，38 张无头浏览器真机走查与重构规划）。
 
 ## release: v0.15.1 (修复 CbRadarPanel useMemo 依赖 eslint 门禁，确保 CI 100% 全绿)（2026-10-18）
 

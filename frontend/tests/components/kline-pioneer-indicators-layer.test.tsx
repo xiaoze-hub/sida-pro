@@ -6,7 +6,7 @@
 //  ② 图例分组共存: `trend-line-legend` / `niuxiong-legend` / `pattern-legend` 同时在, 互不吃掉;
 //  ③ 门控: `layersVisible.{trendLine,niuxiong}=false` → 不发对应请求, 也不渲染对应图例;
 //  ④ 父接管: 传了 `trendLine` prop → 不再自取 trend-line;
-//  ⑤ 分时突破降级: `available=false` → 提示条显式「逐分钟 DDE 未接入 · 暂不出信号」(不编造信号);
+//  ⑤ 分时突破降级: `available=false` → 提示条显式「逐分钟 DDE 暂缺 · 暂不出信号」+ 三级取数链说明(不编造信号);
 //  ⑥ 分时突破信号: `available=true, signal_type='突'` → 提示条出「突」+ 触发条件;
 //  另: 图例不含买卖建议字样(信号是证据非建议)。
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
@@ -153,11 +153,15 @@ describe('KlineChart 决策先锋辅助指标图层', () => {
     expect(H.calls.some((u) => u.includes('/indicators/trend-line'))).toBe(false)
   })
 
-  it('分时突破降级: available=false → 提示条显示「逐分钟 DDE 未接入 · 暂不出信号」', async () => {
+  it('分时突破降级: available=false → 提示条显示「逐分钟 DDE 暂缺 · 暂不出信号」+ 取数链说明', async () => {
     renderChart()
     const bar = await screen.findByTestId('minute-breakthrough-bar')
-    expect(bar.textContent).toContain('逐分钟 DDE 未接入 · 暂不出信号')
+    expect(bar.textContent).toContain('逐分钟 DDE 暂缺 · 暂不出信号')
     expect(bar.textContent).toContain('分时突破')
+    // 悬浮说明必须讲清三级取数链（不是"未接"），避免用户误读为功能缺失
+    const hint = screen.getByTestId('minute-dde-degrade-hint')
+    expect(hint.getAttribute('title')).toContain('腾讯逐笔按分钟聚合')
+    expect(hint.getAttribute('title')).toContain('三级全空')
   })
 
   it('分时突破信号: available=true, signal_type=突 → 提示条出「突」+ 触发条件', async () => {

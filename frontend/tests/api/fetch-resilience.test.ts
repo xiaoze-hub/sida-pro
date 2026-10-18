@@ -23,6 +23,17 @@ function statusResponse(status: number): Response {
   } as unknown as Response
 }
 
+/** 429 限流响应: 后端中间件只给 `detail` + `Retry-After`, 无 code/success 包裹。 */
+function rateLimitedResponse(retryAfterSec = 7): Response {
+  return {
+    status: 429,
+    headers: {
+      get: (name: string) => (name.toLowerCase() === 'retry-after' ? String(retryAfterSec) : null),
+    },
+    json: async () => ({ detail: '请求过于频繁, 请稍后再试' }),
+  } as unknown as Response
+}
+
 /** 永不 resolve 的 fetch, 只在 signal abort 时 reject AbortError —— 模拟"后端不响应"。 */
 function hangingFetch() {
   return vi.fn(
@@ -138,5 +149,22 @@ describe('fetchAPI POST 不重试 / 调用方 signal 不被重试', () => {
     expect(err.name).toBe('AbortError') // 不是 ApiTimeoutError
     expect(err).not.toBeInstanceOf(ApiTimeoutError)
     expect(f).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('fetchAPI 429 限流(2026-10-18)', () => {
+  it('不重试(1 次), 且把 Retry-After 换算成 retryAfterMs 供轮询退避', async () => {
+    const f = vi.fn().mockResolvedValue(rateLimitedResponse(7))
+    vi.stubGlobal('fetch', f)
+
+    const err = (await fetchAPI('/portfolio/summary').catch((e) => e)) as {
+      status?: number
+      kind?: string
+      retryAfterMs?: number
+    }
+    expect(f).toHaveBeenCalledTimes(1) // 4xx 确定性拒绝, 重试只会加大限流
+    expect(err.status).toBe(429)
+    expect(err.kind).toBe('HTTP_4xx')
+    expect(err.retryAfterMs).toBe(7000)
   })
 })

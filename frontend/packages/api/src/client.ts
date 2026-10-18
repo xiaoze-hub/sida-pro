@@ -31,6 +31,8 @@ export interface ApiError extends Error {
    * 不用去猜错误文案(文案会改, 标记不会)。
    */
   proGate?: { proOnly: boolean; feature?: string }
+  /** 429 限流时后端 `Retry-After` 头换算的等待毫秒(可能缺失) —— 供轮询层做退避。 */
+  retryAfterMs?: number
 }
 
 /**
@@ -294,6 +296,13 @@ async function _parseResponse<T>(
     }
     err.status = res.status
     err.code = body.code
+    // 429: 把 Retry-After 换算成毫秒挂到错误上, 轮询层据此退避(不靠猜固定间隔)。
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers?.get?.('Retry-After'))
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        err.retryAfterMs = Math.min(retryAfter, 3600) * 1000
+      }
+    }
     // 类型化(2026-10-10): 5xx/4xx 归类, 页面错误态不再靠 message 里的数字猜。
     err.kind = res.status >= 500 ? 'HTTP_5xx' : res.status >= 400 ? 'HTTP_4xx' : 'UNKNOWN'
     reportFailure({ path, method, status: res.status, message: err.message })
