@@ -50,7 +50,8 @@ function stockTitle(s: LadderStock): string {
   const parts = [s.name || s.symbol]
   if (s.tag) parts.push(s.tag)
   if (s.plate_type) parts.push(s.plate_type)
-  parts.push(fmtPct(s.pct))
+  // 无 pct 时不往 tooltip 里塞 `--`(2026-10-18 P0: 缺数不占位)
+  if (s.pct != null) parts.push(fmtPct(s.pct))
   if (s.first_time) parts.push(`首封 ${s.first_time}`)
   if (s.last_sealed) parts.push(`尾封 ${s.last_sealed}`)
   if (s.open_count) parts.push(`开板 ${s.open_count}次`)
