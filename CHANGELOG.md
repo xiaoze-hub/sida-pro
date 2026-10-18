@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.8 (在盘口Tab内增加专属筹码梯队分布表与主峰显式呈现)（2026-10-18）
+
+- **VERSION**: bump v0.16.7 → v0.16.8 (同步 README.md / README.zh-CN.md 徽章)。
+- **筹码分布表全量显式呈现**:
+  - `L2Tab.tsx`: 在个股工作台「盘口资金」Tab 的主力筹码分布卡片下方，直接内嵌展示「价位区间梯队 (自顶向下分布)」直方图表格。标出每个价位筹码占比、红绿多空性质以及 `◀峰` 主峰密集位（¥35.20），让用户无需切图即可直观对比筹码分布！
+
 ## release: v0.16.7 (清理临时走查脚本以满足固定密码安全扫描门禁)（2026-10-18）
 
 - **VERSION**: bump v0.16.6 → v0.16.7 (同步 README.md / README.zh-CN.md 徽章)。

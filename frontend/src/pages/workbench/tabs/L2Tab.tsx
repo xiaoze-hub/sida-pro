@@ -1314,6 +1314,55 @@ function ChipsSection({
           <div className="text-foreground/90 font-medium">
             💡 决策参考: {acc.action_advice}
           </div>
+          {/* 横向筹码分布微观梯队柱状表 */}
+          {acc.prices && acc.chips && acc.prices.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-border/40">
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1.5">
+                <span>价位区间梯队 (自顶向下分布)</span>
+                <span>主峰密集位: <strong className="text-amber-500 font-mono">¥{safeFixed(acc.main_cost, 2)}</strong></span>
+              </div>
+              <div className="space-y-1">
+                {(() => {
+                  const prices = acc.prices as number[]
+                  const chips = acc.chips as number[]
+                  const maxChip = Math.max(...chips, 0.001)
+                  const lastClose = acc.last_close || acc.main_cost || 10.0
+                  const step = Math.max(1, Math.floor(prices.length / 10))
+                  const rows = []
+                  for (let i = prices.length - 1; i >= 0; i -= step) {
+                    rows.push(i)
+                    if (rows.length >= 8) break
+                  }
+                  return rows.map((idx) => {
+                    const p = prices[idx]
+                    const c = chips[idx]
+                    const pctWidth = Math.min(100, Math.round((c / maxChip) * 100))
+                    const isProfit = p <= lastClose
+                    const isPeak = Math.abs(p - (acc.main_cost || 0)) <= 0.25
+                    return (
+                      <div key={p} className="flex items-center text-[10px] gap-2">
+                        <span className="font-mono w-12 text-right text-muted-foreground">¥{safeFixed(p, 2)}</span>
+                        <div className="flex-1 h-2 bg-muted/40 rounded-sm overflow-hidden flex items-center">
+                          <div
+                            className={`h-full rounded-sm transition-all ${
+                              isPeak
+                                ? 'bg-amber-400 dark:bg-amber-500'
+                                : isProfit
+                                ? 'bg-rose-500/80'
+                                : 'bg-emerald-500/80'
+                            }`}
+                            style={{ width: `${Math.max(4, pctWidth)}%` }}
+                          />
+                        </div>
+                        <span className="w-12 text-[10px] font-mono text-muted-foreground">{pctWidth}%</span>
+                        {isPeak && <span className="text-[10px] text-amber-500 font-bold">◀峰</span>}
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+            </div>
+          )}
         </div>
       ) : !mainIntent ? (
         <div className="mt-1.5 text-[10px] text-muted-foreground/70">
