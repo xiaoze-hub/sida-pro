@@ -763,6 +763,10 @@ env -u PYTHONPATH .venv/bin/python -m pytest tests/test_p0_plan_legality.py test
 cd frontend && npx vitest run tests/lib/symbol.test.ts tests/components/fundamentals-panel-dragon-tiger.test.tsx tests/components/ladder-board.test.tsx tests/components/dark-fund-top.test.tsx
 ```
 
+**实测（2026-10-18，本机）**：全量后端 `pytest tests/ -q -m "not network"` → **4432 passed / 2 skipped / 0 failed**（18m34s）；
+全量前端 `vitest run` → **165 files / 1208 tests passed**（4m11s）；`check_ui_rules` OK、`tsc -b` 0 退出码；
+`check_is_pg_scope` / `check_lock_covers_reqs` / `check_migrations`(105 个迁移) / `check_scoped_queries` 全 OK。
+
 ---
 
 ## 附录 A · 证据索引
