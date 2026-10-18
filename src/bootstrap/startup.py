@@ -596,6 +596,28 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"悟道竞价因子日归档注册失败: {e}")
 
+        # 悟道 9:15-10:30 是服务端限流窗口(采集器 `_wudao_available` 直接跳过),
+        # 9:26 那次大概率只能拿到 limited 标记。10:35 再补采一次, 才是真正有数据的一跑
+        # (悟道工具在窗口后仍返回当日竞价结果)。两次同函数不同 id, 语义: 先试 → 再补。
+        try:
+            from src.core.auction_wudao_store import run_auction_wudao_job
+
+            rt.scheduler.scheduler.add_job(
+                run_auction_wudao_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=10,
+                minute=35,
+                id="auction-wudao-daily-late",
+                name="悟道竞价因子补采(限流窗口后)",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("悟道竞价因子补采已注册(交易日 10:35)")
+        except Exception as e:
+            logger.error(f"悟道竞价因子补采注册失败: {e}")
+
         # 批次 2(P0-b): TQ more_info 104 字段收盘定稿(15:10)。
         # 时序: 15:05 L2 快照 → 15:10 more_info(本作业) → 15:20 转债 → 15:30 指数。
         try:

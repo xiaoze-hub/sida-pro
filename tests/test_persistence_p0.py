@@ -323,14 +323,24 @@ def test_wudao_capture_persists_when_available_and_writes_nothing_when_not(maker
     with maker() as s:
         assert len(s.scalars(select(AuctionWudaoDaily)).all()) == 2
 
-    out = aws.capture_daily(
+    # 限流窗口 = 已知不可用(非错误) → skip, 不判 failed
+    limited = aws.capture_daily(
         now=datetime(2026, 10, 17, 9, 26, 0),
         fetcher=lambda: {"opening_snapshot": {}, "limited": True,
                          "error": "悟道限流窗口(9:15-10:30)"},
         session_factory=maker,
     )
-    assert out["ok"] is False
-    assert "限流" in out["reason"]
+    assert limited["ok"] is True and limited["skipped"] == "wudao_rate_limit_window"
+    assert limited["rows"] == 0
+
+    # 真错误(未配 token / 网关挂) → ok=False, 作业面板可见
+    broken = aws.capture_daily(
+        now=datetime(2026, 10, 17, 9, 26, 0),
+        fetcher=lambda: {"opening_snapshot": {}, "limited": False,
+                         "error": "connect timeout"},
+        session_factory=maker,
+    )
+    assert broken["ok"] is False and "connect timeout" in broken["reason"]
     with maker() as s:
         assert len(s.scalars(select(AuctionWudaoDaily)).all()) == 2   # 不写空行
 
@@ -491,7 +501,28 @@ def test_get_radar_ignores_db_rows_from_previous_day_intraday(maker):
     assert out["data_date"] == "2026-10-16"
 
 
-def test_terms_read_through_hits_db_without_rpc(maker, monkeypatch):
+@pytest.fixture()
+def clean_global_cb_terms():
+    """清掉本文件写进**全局测试库**的条款行, 避免污染后续 cb_radar 用例。"""
+    from sqlalchemy import delete
+
+    from src.db.session import SessionLocal
+
+    def _clean():
+        try:
+            with SessionLocal() as s:
+                s.execute(delete(CbTerms).where(CbTerms.code.in_(["113001", "123456"])))
+                s.commit()
+        except Exception:  # noqa: BLE001 - 表不存在时忽略
+            pass
+        cb_radar.clear_terms_cache()
+
+    _clean()
+    yield
+    _clean()
+
+
+def test_terms_read_through_hits_db_without_rpc(maker, monkeypatch, clean_global_cb_terms):
     from src.db.session import SessionLocal
 
     today = __import__("datetime").date.today().isoformat()
@@ -665,8 +696,7 @@ def test_load_recent_closes_ascending_and_limited(maker):
         assert idxd.load_recent_closes("999999", days=3, session=s) == []
 
 
-def test_backfill_reports_honestly(maker, monkeypatch):
-    monkeypatch.setattr(idxd, "SessionLocal", maker)
+def test_backfill_reports_honestly(maker):
     calls = {"n": 0}
 
     def fetcher(code, market, days):
@@ -675,13 +705,13 @@ def test_backfill_reports_honestly(maker, monkeypatch):
             return []
         return _bars([100.0, 101.0])
 
-    out = idxd.backfill(fetcher=fetcher)
+    out = idxd.backfill(fetcher=fetcher, session_factory=maker)
     assert out["ok"] is True
     assert out["rows"] == 2 * (len(idxd.INDEX_UNIVERSE) - 1)
     assert out["empty"] == 1 and out["failed"] == 0
     assert calls["n"] == len(idxd.INDEX_UNIVERSE)
 
-    bad = idxd.backfill(fetcher=lambda *a, **k: [])
+    bad = idxd.backfill(fetcher=lambda *a, **k: [], session_factory=maker)
     assert bad["ok"] is False and "全部指数无可用日K" in bad["reason"]
 
 
@@ -725,3 +755,109 @@ def test_spark_reads_db_first_and_falls_back(monkeypatch):
         ],
     )
     assert market._spark_for(idx) == [1.0, 2.0]
+
+
+def test_get_radar_rebuilds_when_intraday_db_row_is_stale(maker, monkeypatch):
+    """盘中库行必须按 TTL 判新鲜: 10:00 的快照不能在 11:00 冒充实时。"""
+    day = "2026-10-16"
+    with maker() as s:
+        cbs.upsert_daily_rows(
+            s, [_row()], trade_date=day, universe=480,
+            captured_at=datetime(2026, 10, 16, 10, 0, 0).timestamp(),
+        )
+    out = cb_radar.get_radar(
+        limit=10,
+        now=datetime(2026, 10, 16, 11, 0, 0),
+        builder=lambda *, limit, now=None: _radar_payload(day),
+        session_factory=maker,
+    )
+    assert out["cache"]["source"] == "live"
+    assert out["cache"]["ttl_s"] == cb_radar.TTL_LIVE_S
+
+
+def test_prime_terms_fills_cache_in_one_bulk_read(maker, clean_global_cb_terms):
+    from src.db.session import SessionLocal
+
+    today = __import__("datetime").date.today().isoformat()
+    with SessionLocal() as s:
+        cbs.upsert_terms(s, "113001", _TERM_RAW, as_of=today)
+        cbs.upsert_terms(s, "123456", {**_TERM_RAW, "KZZName": "转债二号"}, as_of=today)
+
+    cb_radar.clear_terms_cache()
+    cb_radar._prime_terms(["113001", "123456", "999999"])
+    cached = cb_radar._terms_cache
+    assert cached["113001"][1]["KZZName"] == "转债一号"
+    assert cached["123456"][1]["KZZName"] == "转债二号"
+    assert "999999" not in cached
+
+
+def test_pool_symbols_prefers_limit_up_pool_then_caps(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.klines_fullmarket.limit_up_symbols",
+        lambda: ["300750", "600519"],
+    )
+    monkeypatch.setattr(
+        "src.collectors.stock_list.get_stock_list",
+        lambda: [{"symbol": "000001"}, {"symbol": "600000"}, {"symbol": "300750"}],
+    )
+    assert ats.pool_symbols(3) == ["300750", "600519", "000001"]
+    assert ats.pool_symbols(0) == ["300750", "600519", "000001", "600000"]
+
+
+def test_more_info_endpoint_falls_back_to_daily_snapshot(monkeypatch):
+    """盘后 TQ 会话值全 0 → 端点回退 more_info_daily(104 字段), 不再只能显"无数据"。"""
+    import asyncio
+
+    from src.web.api import quotes as quotes_api
+
+    zero_live = {k: 0.0 for k in mid.FIELD_MAP.values()}
+    monkeypatch.setattr(
+        "src.core.marketdata_client.md_more_info",
+        lambda syms, market="CN": [{**zero_live, "symbol": s} for s in syms],
+    )
+    monkeypatch.setattr(
+        "src.core.more_info_daily.latest",
+        lambda symbol, market="CN", **kw: {
+            "symbol": symbol, "trade_date": "2026-10-16", "chg_pct": 3.1,
+            "limit_up_ratio": 0.0, "raw": {"OpenZAF": "2.5"},
+        },
+    )
+    out = asyncio.run(quotes_api.get_more_info("600519", "CN"))
+    assert out["available"] is True
+    assert out["source"] == "more_info_daily"
+    assert out["as_of"] == "2026-10-16"
+    assert out["chg_pct"] == pytest.approx(3.1)
+    assert "收盘定稿" in out["note"]
+
+
+def test_cb_snapshot_api_serves_db_without_any_vendor_call(monkeypatch, maker):
+    """验收(方案 §8 批次1): 冷启动(进程缓存 + Redis 全空)首次请求读库出参。
+
+    证明方式: 把 TQ 侧入口全部换成"被调用即失败", 仍能返回 available=True
+    且 `cache.source='db'` —— 说明这条链一次 RPC 都没打。
+    """
+    from src.core.trade_phase import cn_now
+    from src.web.api import cb_radar as cb_api
+    from src.web.cache.biz_cache import biz_cache
+
+    day = cn_now().date().isoformat()
+    with maker() as s:
+        cbs.upsert_daily_rows(s, [_row(), _row(code="123456")], trade_date=day, universe=488)
+
+    monkeypatch.setattr("src.db.session.SessionLocal", maker)
+    monkeypatch.setattr(
+        cb_radar, "_universe",
+        lambda: (_ for _ in ()).throw(AssertionError("读库命中时不应拉转债代码表")),
+    )
+    monkeypatch.setattr(
+        "marketdata.vendors.tq.kzz_info",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("不应打 kzz_info")),
+    )
+    cb_radar.clear_terms_cache()
+    biz_cache.delete("cb_radar:snapshot:10")
+
+    out = cb_api.snapshot(limit=10, refresh=False)
+    assert out["available"] is True
+    assert out["cache"]["source"] == "db"
+    assert out["universe"] == 488
+    assert {r["code"] for r in out["rows"]} == {"113001", "123456"}

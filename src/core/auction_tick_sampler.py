@@ -54,6 +54,9 @@ MAX_SYMBOLS = int(os.environ.get("AUCTION_TICK_MAX_SYMBOLS", "800") or 0)
 #: 每只之间小睡(秒), 让 TQ 客户端有喘息; 全市场一轮 5400 只 ≈ 11 分钟会超出窗口,
 #: 故默认只在 `MAX_SYMBOLS` 内有意义 —— 生产通过 env 设定(如 800)。
 PER_SYMBOL_SLEEP = float(os.environ.get("AUCTION_TICK_SLEEP_S", "0") or 0)
+JOB_KIND = "auction_tick_sample"
+JOB_LABEL = "竞价过程帧采样"
+
 
 _LIMIT_THRESHOLD = {
     "default": 9.8,
@@ -208,7 +211,7 @@ def upsert_frames(
     *,
     trade_date: str | None = None,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> int:
     """幂等写入帧(同 (交易日, 标的, 帧时刻, 来源) 原地覆盖)。返回写入行数。"""
     items = [f for f in (frames or []) if f and f.get("symbol") and f.get("tick_ts")]
@@ -244,7 +247,7 @@ def upsert_frames(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -257,7 +260,7 @@ def load_frames(
     symbol: str | None = None,
     market: str = "CN",
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> list[dict]:
     """读某交易日的过程帧(按 tick_ts 升序)。**不**回源 —— 历史帧只存在于本表。"""
 
@@ -277,7 +280,7 @@ def load_frames(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -344,7 +347,7 @@ def replay(trade_date: str, symbol: str, *, market: str = "CN", **kw) -> dict:
 
 def purge_old_frames(
     *, keep_days: int = RETENTION_DAYS, today: str | None = None,
-    session: Session | None = None, session_factory=SessionLocal,
+    session: Session | None = None, session_factory=None,
 ) -> int:
     """清理超过保留期的帧(按 trade_date 文本比较)。返回删除行数。"""
     base = date.fromisoformat(today) if today else date.today()
@@ -359,7 +362,7 @@ def purge_old_frames(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -535,7 +538,7 @@ def run_auction_tick_job(
         return {"ok": True, "skipped": "outside_auction_window",
                 "now": hhmmss, "frames": 0}
 
-    job_id, is_new = jobs.create("auction_tick_sampler", "竞价过程帧采样")
+    job_id, is_new = jobs.create(JOB_KIND, JOB_LABEL)
     if not is_new:
         return {"ok": True, "skipped": "in_flight", "job_id": job_id}
     purged = None

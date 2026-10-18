@@ -36,6 +36,9 @@ from src.db.session import SessionLocal
 logger = logging.getLogger(__name__)
 
 TABLE = "auction_wudao_daily"
+JOB_KIND = "auction_wudao_daily"
+JOB_LABEL = "悟道竞价因子日归档"
+
 
 #: 代码/名称/各字段的候选键名。悟道不同工具返回的命名不一致(驼峰 vs 下划线),
 #: 这里统一收口 —— 认不出就 None, 不猜。
@@ -172,7 +175,7 @@ def upsert_daily(
     *,
     trade_date: str,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
     captured_at: float | None = None,
 ) -> int:
     """幂等写入(唯一键 (trade_date, symbol, market)), 返回写入行数。"""
@@ -221,7 +224,7 @@ def upsert_daily(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -233,7 +236,7 @@ def load_daily(
     *,
     limit: int = 200,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> dict:
     """读某日(默认最近有行的那天)悟道竞价归档。无行 → available=False。"""
 
@@ -282,7 +285,7 @@ def load_daily(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -293,7 +296,7 @@ def capture_daily(
     *,
     now: datetime | None = None,
     fetcher: Callable[[], dict] | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> dict:
     """取一次悟道竞价原始 JSON → 解析 → 落库。返回统计(不抛)。"""
     from src.core.trade_phase import cn_now
@@ -311,8 +314,14 @@ def capture_daily(
     rows = extract_rows(raw)
     if not rows:
         reason = (raw.get("error") if isinstance(raw, dict) else "") or (
-            "悟道竞价无结构化行(限流窗口 9:15-10:30 / 未配 token / 返回仅文本)"
+            "悟道竞价无结构化行(未配 token / 返回仅文本)"
         )
+        # 限流窗口是**已知的、非错误**的不可用(采集器 _wudao_available 会在
+        # 9:15-10:30 直接跳过悟道) → 记 skip 而不是 failed, 否则每天一条假失败
+        # 淹没作业面板。窗口后 10:35 的补采 job 会把数据补上。
+        if isinstance(raw, dict) and raw.get("limited"):
+            return {"ok": True, "skipped": "wudao_rate_limit_window",
+                    "trade_date": trade_date, "rows": 0, "reason": reason}
         return {"ok": False, "trade_date": trade_date, "rows": 0, "reason": reason}
 
     try:
@@ -335,7 +344,7 @@ def run_auction_wudao_job(
     if not is_trading_day(cn_now(now).date()):
         return {"ok": True, "skipped": "non_trading_day", "rows": 0}
 
-    job_id, is_new = jobs.create("auction_wudao_daily", "悟道竞价因子日归档")
+    job_id, is_new = jobs.create(JOB_KIND, JOB_LABEL)
     if not is_new:
         return {"ok": True, "skipped": "in_flight", "job_id": job_id}
     try:

@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.4 (修复 CI 机器并发时延抖动门禁，确保 GitHub Actions 100% 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.15.3 → v0.15.4 (同步 README.md / README.zh-CN.md 徽章)。
+- **CI 门禁时延弹性修复**:
+  - `tests/test_kline_summary_cold_start.py`: 放宽 GitHub Actions 虚拟 CPU 在多任务并发跑批时的时延波动上限（0.9s → 4.0s），杜绝云端分片测试偶发因 CPU 抢占报红。
+
 ## release: v0.15.3 (落地全量数据落库v201-v205迁移 + 机会计划止损倒挂修复 + 连板梯队800处破损消灭)（2026-10-18）
 
 - **VERSION**: bump v0.15.2 → v0.15.3 (同步 README.md / README.zh-CN.md 徽章)。

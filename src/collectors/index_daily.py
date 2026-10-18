@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 #: 回填窗口(自然日)。800 天 ≈ 3 年, 覆盖一轮完整牛熊 + 择时回测起步样本。
 BACKFILL_DAYS = 800
+JOB_KIND = "index_daily"
+JOB_LABEL = "指数日K落库"
+
 
 #: 与 `src.web.api.market.MARKET_INDICES` 的 symbol/market 保持一致(单测校验)。
 #: 这里不 import web 层(核心层不依赖 API), 保持单向依赖。
@@ -89,7 +92,7 @@ def upsert_bars(
     name: str | None = None,
     source: str = "marketdata",
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> int:
     """幂等写入指数日K(唯一键 trade_date+code)。返回写入行数。"""
     seq: list[dict] = []
@@ -136,7 +139,7 @@ def upsert_bars(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -146,7 +149,7 @@ def load_recent_closes(
     days: int = 20,
     market: str | None = None,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> list[float]:
     """最近 N 个交易日收盘(升序)。无行 → [](调用方回落取数, 不编造)。"""
 
@@ -162,7 +165,7 @@ def load_recent_closes(
     if session is not None:
         return _run(session)
     try:
-        with session_factory() as sess:
+        with (session_factory or SessionLocal)() as sess:
             return _run(sess)
     except Exception as e:  # noqa: BLE001 - 表未迁移/库不可用 → 回落
         logger.warning("index_daily 读库失败[%s]: %s", code, e)
@@ -175,7 +178,7 @@ def history(
     days: int = 250,
     market: str | None = None,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> list[dict]:
     """最近 N 根日K(升序), 供大盘择时回测。不回源。"""
 
@@ -197,7 +200,7 @@ def history(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -210,10 +213,16 @@ def count_rows(session: Session) -> int:
 def backfill(
     *,
     days: int = BACKFILL_DAYS,
+    incremental_days: int = 10,
     indices: Iterable[dict] | None = None,
     fetcher=None,
+    session_factory=None,
 ) -> dict:
-    """拉取指数日K并落库。返回统计(不抛)。`fetcher(code, market, days)` 可注入。"""
+    """拉取指数日K并落库。返回统计(不抛)。`fetcher(code, market, days)` 可注入。
+
+    首次(该指数库里无行)拉满 `days`(默认 800 天); 之后每日只拉
+    `incremental_days`(默认 10, 覆盖长假), 避免每晚把 6×800 根 K 线重写一遍。
+    """
     if fetcher is None:
         from src.collectors.kline_collector import get_index_klines
         from src.models.market import MarketCode
@@ -228,8 +237,16 @@ def backfill(
     details: list[dict] = []
     for idx in universe:
         code, market = idx["symbol"], idx.get("market") or "CN"
+        want = days
         try:
-            bars = fetcher(code, market, days)
+            if load_recent_closes(
+                code, days=1, market=market, session_factory=session_factory
+            ):
+                want = min(int(days), max(1, int(incremental_days)))
+        except Exception:  # noqa: BLE001 - 判断失败按全量拉(宁慢勿缺)
+            want = days
+        try:
+            bars = fetcher(code, market, want)
         except Exception as e:  # noqa: BLE001 - 单指数失败不影响其余
             failed += 1
             details.append({"code": code, "error": f"{type(e).__name__}: {e}"})
@@ -240,7 +257,10 @@ def backfill(
             details.append({"code": code, "error": "上游无返回(未映射/停市)"})
             continue
         try:
-            n = upsert_bars(code, bars, market=market, name=idx.get("name"))
+            n = upsert_bars(
+                code, bars, market=market, name=idx.get("name"),
+                session_factory=session_factory,
+            )
         except Exception as e:  # noqa: BLE001
             failed += 1
             details.append({"code": code, "error": f"落库失败: {e}"})
@@ -263,8 +283,13 @@ def backfill(
 def run_index_daily_job(*, days: int = BACKFILL_DAYS, indices=None) -> dict:
     """cron 入口(交易日 15:30): 指数日K增量/回填落库。"""
     from src.core.jobs import jobs
+    from src.core.trade_phase import cn_now
+    from src.core.trading_calendar import is_trading_day
 
-    job_id, is_new = jobs.create("index_daily", "指数日K落库")
+    if not is_trading_day(cn_now().date()):
+        return {"ok": True, "skipped": "non_trading_day", "rows": 0}
+
+    job_id, is_new = jobs.create(JOB_KIND, JOB_LABEL)
     if not is_new:
         return {"ok": True, "skipped": "in_flight", "job_id": job_id}
     try:

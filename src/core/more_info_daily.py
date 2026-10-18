@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 BATCH = 200
 #: 批间小睡(秒), 防止 15:10 集中打爆 TQ。
 BATCH_SLEEP_S = 0.05
+JOB_KIND = "more_info_daily"
+JOB_LABEL = "TQ more_info 收盘定稿"
+
 
 #: 落库列 ← md_more_info 返回键(逐条对齐 marketdata.types.MoreInfo)。
 FIELD_MAP: dict[str, str] = {
@@ -131,7 +134,7 @@ def upsert_rows(
     trade_date: str,
     market: str = "CN",
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
     captured_at: float | None = None,
     allow_zero: bool = False,
 ) -> int:
@@ -181,7 +184,7 @@ def upsert_rows(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -207,7 +210,7 @@ def latest(
     market: str = "CN",
     *,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> dict | None:
     """该标的最新中国交易日定稿行; 无行 → None(调用方显式 available:false)。"""
 
@@ -228,7 +231,7 @@ def latest(
     if session is not None:
         return _run(session)
     try:
-        with session_factory() as sess:
+        with (session_factory or SessionLocal)() as sess:
             return _run(sess)
     except Exception as e:  # noqa: BLE001 - 表未迁移/库不可用 → 交由调用方降级
         logger.warning("more_info_daily 读库失败[%s]: %s", symbol, e)
@@ -241,7 +244,7 @@ def history(
     *,
     days: int = 60,
     session: Session | None = None,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> list[dict]:
     """最近 N 个交易日的定稿行(升序), 供回测/趋势。不回源。"""
 
@@ -259,7 +262,7 @@ def history(
 
     if session is not None:
         return _run(session)
-    with session_factory() as sess:
+    with (session_factory or SessionLocal)() as sess:
         return _run(sess)
 
 
@@ -274,7 +277,7 @@ def capture_universe(
     now: datetime | None = None,
     fetcher: Callable[..., list[dict]] | None = None,
     batch: int = BATCH,
-    session_factory=SessionLocal,
+    session_factory=None,
 ) -> dict:
     """全市场(或指定池)分批取 more_info → 落库。返回统计(不抛)。"""
     from src.core.trade_phase import cn_now
@@ -353,7 +356,7 @@ def run_more_info_daily_job(
     if not is_trading_day(cn_now(now).date()):
         return {"ok": True, "skipped": "non_trading_day", "captured": 0}
 
-    job_id, is_new = jobs.create("more_info_daily", "TQ more_info 收盘定稿")
+    job_id, is_new = jobs.create(JOB_KIND, JOB_LABEL)
     if not is_new:
         return {"ok": True, "skipped": "in_flight", "job_id": job_id}
     try:

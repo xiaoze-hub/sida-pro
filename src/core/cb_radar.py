@@ -43,6 +43,9 @@ _terms_cache: dict[str, tuple[float, dict]] = {}
 #: 因为用户真正会看的就是异动/折价的那几十只, 而不是全市场 500 只的平均值。
 DEFAULT_LIMIT = 60
 MAX_LIMIT = 200
+JOB_KIND = "cb_daily"
+JOB_LABEL = "可转债条款+折溢价日终落库"
+
 
 _SCENARIO_LABELS = {
     "stock_limit_up_lag": "正股封板·转债滞后",
@@ -418,6 +421,33 @@ def _terms(code: str) -> dict:
     return {}
 
 
+def _prime_terms(codes: list[str]) -> None:
+    """一次性把 `cb_terms` 里的新鲜条款灌进进程缓存(单次 IN 查询)。
+
+    没有它: 进程重启后 Top-60 会逐个 `_terms()` → 60 次库查询(或 60 次 RPC)。
+    有它: 1 次查询命中绝大多数, 只有真的缺条款的少数走 RPC。
+    """
+    now = time.time()
+    missing = [
+        c for c in codes
+        if not (c in _terms_cache and now - _terms_cache[c][0] < _TERMS_TTL)
+    ]
+    if not missing:
+        return
+    try:
+        from src.core import cb_radar_store as store
+        from src.db.session import SessionLocal
+
+        with SessionLocal() as session:
+            rows = store.load_terms(session, missing)
+    except Exception as e:  # noqa: BLE001 - 读库失败退回逐只 RPC(旧行为)
+        logger.debug("[cb_radar] 条款批量预热失败: %r", e)
+        return
+    for code, raw in (rows or {}).items():
+        if store.terms_are_fresh(raw):
+            _terms_cache[code] = (now, raw)
+
+
 def _stock_code_of(term: dict) -> str:
     raw = str(term.get("HSCode") or term.get("HSName") or "").strip()
     if not raw:
@@ -466,6 +496,7 @@ def build_radar(*, limit: int = DEFAULT_LIMIT, now: datetime | None = None) -> d
 
     picked = sorted(universe, key=_rank, reverse=True)[:limit]
 
+    _prime_terms(picked)
     terms: dict[str, dict] = {}
     for code in picked:
         t = _terms(code)
@@ -675,6 +706,7 @@ def get_radar(
             out["age_s"] = db_payload.get("age_s") or 0
             out["cache"] = _cache_meta(
                 hit=True, source="db", age_s=db_payload.get("age_s"),
+                ttl_s=_ttl_s(now),
             )
             return out
 
@@ -699,6 +731,7 @@ def get_radar(
         age_s=0.0 if payload.get("available") else None,
         reason=None if payload.get("available") else payload.get("note"),
         persist_error=persist_error,
+        ttl_s=_ttl_s(now),
     )
     out["persisted_rows"] = persisted
     return out
@@ -718,8 +751,14 @@ def run_cb_daily_job(limit: int = MAX_LIMIT, now: datetime | None = None) -> dic
     保证读侧任何合法 limit 都能从库里截断。
     """
     from src.core.jobs import jobs
+    from src.core.trade_phase import cn_now
+    from src.core.trading_calendar import is_trading_day
 
-    job_id, is_new = jobs.create("cb_daily", "可转债条款+折溢价日终落库")
+    if not is_trading_day(cn_now(now).date()):
+        # 非交易日行情冻结, 重跑只会把同一份收盘价重复 upsert(浪费 TQ RPC)
+        return {"ok": True, "skipped": "non_trading_day", "rows": 0}
+
+    job_id, is_new = jobs.create(JOB_KIND, JOB_LABEL)
     if not is_new:
         return {"ok": True, "skipped": "in_flight", "job_id": job_id}
     try:

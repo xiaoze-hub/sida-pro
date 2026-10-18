@@ -122,7 +122,14 @@ def upsert_terms(
     """写入一期条款(`as_of` 版本内原地覆盖)。空条款不落库(不制造"抓到过"的假象)。"""
     if not raw or not isinstance(raw, dict):
         return False
-    values = term_columns(code, raw, as_of=as_of or date.today().isoformat())
+    if not as_of:
+        try:
+            from src.core.trade_phase import cn_now
+
+            as_of = cn_now().date().isoformat()
+        except Exception:  # noqa: BLE001
+            as_of = date.today().isoformat()
+    values = term_columns(code, raw, as_of=as_of)
     row = session.scalar(
         select(CbTerms).where(CbTerms.code == code, CbTerms.as_of == values["as_of"])
     )
@@ -211,16 +218,18 @@ def load_terms(
     want = [str(c) for c in (codes or []) if c]
     if not want:
         return {}
+    # 一次 IN 查询 + Python 去重(取每只 as_of 最新): 60 只转债只打 1 次库,
+    # 而不是 60 次 —— 冷启动秒开正是靠这个(方案 §5.3 的 N+1 教训)。
+    rows = session.scalars(
+        select(CbTerms)
+        .where(CbTerms.code.in_(want))
+        .order_by(CbTerms.code.asc(), CbTerms.as_of.desc())
+    ).all()
     out: dict[str, dict] = {}
-    for code in want:
-        row = session.scalar(
-            select(CbTerms)
-            .where(CbTerms.code == code)
-            .order_by(CbTerms.as_of.desc())
-            .limit(1)
-        )
-        if row is None:
-            continue
+    for row in rows:
+        code = str(row.code)
+        if code in out:
+            continue  # 已取到更新的 as_of
         raw = row.raw if isinstance(row.raw, dict) else {}
         # raw 为空(历史库/手写 INSERT)时用结构化列重建 —— 读侧仍需 ZGPrice 等键名
         if not raw:
@@ -250,7 +259,13 @@ def terms_are_fresh(raw: dict, *, max_age_days: int = TERMS_MAX_AGE_DAYS) -> boo
         d = date.fromisoformat(as_of)
     except ValueError:
         return False
-    return (date.today() - d).days <= max(0, int(max_age_days))
+    try:
+        from src.core.trade_phase import cn_now
+
+        today = cn_now().date()
+    except Exception:  # noqa: BLE001
+        today = date.today()
+    return (today - d).days <= max(0, int(max_age_days))
 
 
 def latest_trade_date(session: Session) -> str | None:
@@ -320,14 +335,14 @@ def load_daily_rows(
     }
 
 
-def persist_radar(payload: dict, *, session_factory=SessionLocal) -> dict:
+def persist_radar(payload: dict, *, session_factory=None) -> dict:
     """把一次成功构建的 radar 响应落库。返回 `{rows, error, trade_date}`。"""
     rows = payload.get("rows") or []
     trade_date = payload.get("data_date")
     if not payload.get("available") or not rows or not trade_date:
         return {"rows": 0, "error": None, "trade_date": trade_date}
     try:
-        with session_factory() as session:
+        with (session_factory or SessionLocal)() as session:
             n = upsert_daily_rows(
                 session,
                 rows,
