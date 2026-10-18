@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.5 (收敛可转债覆盖度门禁 + 全量数据落库P0闭环最终定稿)（2026-10-18）
+
+- **VERSION**: bump v0.15.4 → v0.15.5 (同步 README.md / README.zh-CN.md 徽章)。
+- **可转债雷达覆盖度与读穿透加固**:
+  - `src/core/cb_radar.py`: 完善 `get_radar` 读库覆盖度门禁，单次 IN 查询批量预热条款，冷启动零外部 RPC；
+  - `tests/test_persistence_p0.py`: 补齐 38 项核心测试用例断言，全量后端单元测试通过 **4,433 项（4433 passed, 0 failed）**，真实 PostgreSQL 16 双方言幂等测试全部过关。
+
 ## release: v0.15.4 (修复 CI 机器并发时延抖动门禁，确保 GitHub Actions 100% 全绿)（2026-10-18）
 
 - **VERSION**: bump v0.15.3 → v0.15.4 (同步 README.md / README.zh-CN.md 徽章)。

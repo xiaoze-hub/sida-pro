@@ -699,7 +699,13 @@ def get_radar(
         except Exception as e:  # noqa: BLE001 - 库不可用不能连累出数
             logger.warning("[cb_radar] 快照读库失败: %r", e)
             db_payload = None
-        if db_payload and _db_servable(db_payload, now):
+        # 覆盖度门禁: 库行是上一次请求/作业按**当时 limit** 落的, 可能比本次 limit 少
+        # (如先来过 limit=5, 再来 limit=60)。行数不够就回源重建, 而不是给一个
+        # "评估 5 / 全池 480" 的残缺页(60s 后自愈不算修好)。
+        db_rows = (db_payload or {}).get("rows") or []
+        db_universe = (db_payload or {}).get("universe") or 0
+        need = min(limit, db_universe) if db_universe else limit
+        if db_payload and len(db_rows) >= need and _db_servable(db_payload, now):
             out = _payload_from_db(db_payload, limit=limit, now=now)
             out["elapsed_ms"] = int((_time.time() - t0) * 1000)
             out["cached"] = True

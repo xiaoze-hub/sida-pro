@@ -470,7 +470,7 @@ def test_get_radar_live_then_db_hit(maker):
         return _radar_payload(day)
 
     first = cb_radar.get_radar(
-        limit=10, now=datetime(2026, 10, 16, 10, 0, 0),
+        limit=2, now=datetime(2026, 10, 16, 10, 0, 0),
         builder=builder, session_factory=maker,
     )
     assert first["cache"]["source"] == "live"
@@ -478,7 +478,7 @@ def test_get_radar_live_then_db_hit(maker):
     assert calls["n"] == 1
 
     second = cb_radar.get_radar(
-        limit=10, now=datetime(2026, 10, 16, 10, 1, 0),
+        limit=2, now=datetime(2026, 10, 16, 10, 1, 0),
         builder=builder, session_factory=maker,
     )
     assert second["cache"]["source"] == "db"
@@ -486,6 +486,31 @@ def test_get_radar_live_then_db_hit(maker):
     assert calls["n"] == 1                     # 读库命中 → 不再回源
     assert second["universe"] == 480
     assert len(second["rows"]) == 2
+
+
+def test_get_radar_rebuilds_when_db_coverage_is_below_requested_limit(maker):
+    """库行按"当时 limit"落, 行数不够本次 limit → 回源重建(不给残缺页)。"""
+    day = "2026-10-16"
+    with maker() as s:
+        cbs.upsert_daily_rows(s, [_row(), _row(code="123456")], trade_date=day, universe=480)
+
+    calls = {"n": 0}
+
+    def builder(*, limit, now=None):
+        calls["n"] += 1
+        return _radar_payload(day, n=2)
+
+    out = cb_radar.get_radar(
+        limit=10, now=datetime(2026, 10, 16, 16, 0, 0),
+        builder=builder, session_factory=maker,
+    )
+    assert calls["n"] == 1 and out["cache"]["source"] == "live"
+
+    ok = cb_radar.get_radar(
+        limit=2, now=datetime(2026, 10, 16, 16, 1, 0),
+        builder=builder, session_factory=maker,
+    )
+    assert calls["n"] == 1 and ok["cache"]["source"] == "db"
 
 
 def test_get_radar_ignores_db_rows_from_previous_day_intraday(maker):
@@ -842,7 +867,9 @@ def test_cb_snapshot_api_serves_db_without_any_vendor_call(monkeypatch, maker):
 
     day = cn_now().date().isoformat()
     with maker() as s:
-        cbs.upsert_daily_rows(s, [_row(), _row(code="123456")], trade_date=day, universe=488)
+        cbs.upsert_daily_rows(
+            s, [_row(code=f"11300{i}") for i in range(5)], trade_date=day, universe=488
+        )
 
     monkeypatch.setattr("src.db.session.SessionLocal", maker)
     monkeypatch.setattr(
@@ -856,8 +883,8 @@ def test_cb_snapshot_api_serves_db_without_any_vendor_call(monkeypatch, maker):
     cb_radar.clear_terms_cache()
     biz_cache.delete("cb_radar:snapshot:10")
 
-    out = cb_api.snapshot(limit=10, refresh=False)
+    out = cb_api.snapshot(limit=5, refresh=False)
     assert out["available"] is True
     assert out["cache"]["source"] == "db"
     assert out["universe"] == 488
-    assert {r["code"] for r in out["rows"]} == {"113001", "123456"}
+    assert len(out["rows"]) == 5
