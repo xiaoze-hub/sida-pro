@@ -1804,7 +1804,7 @@ export default function KlineChart(props: {
                 sampledIndices.push(i)
               }
               return (
-                <div className="h-full flex flex-col justify-between py-1 bg-background/80 dark:bg-black/60 backdrop-blur-md rounded p-1.5 border border-border/60 shadow-lg pointer-events-auto">
+                <div className="h-full flex flex-col justify-between py-1 bg-background/80 dark:bg-black/60 backdrop-blur-md rounded p-1.5 border border-border/60 shadow-float pointer-events-auto">
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground pb-1 border-b border-border/40 select-none">
                     <span className="font-medium">筹码分布 (CYQ)</span>
                     <span className="font-mono text-amber-500 font-bold">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>

@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.0 (修复 R13 浮层阴影门禁并放行 CYQ 横向筹码山峰终极上线)（2026-10-18）
+
+- **VERSION**: bump v0.16.9 → v0.17.0 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端门禁合规修正**:
+  - `KlineChart.tsx`: 筹码山形卡片阴影类由 `shadow-lg` 修正为规范类 `shadow-float`，`check_ui_rules.mjs` 门禁 100% 通过（UI-RULES OK）。
+
 ## release: v0.16.9 (升级K线主图CYQ横向山形图独立高亮卡片与价位轴)（2026-10-18）
 
 - **VERSION**: bump v0.16.8 → v0.16.9 (同步 README.md / README.zh-CN.md 徽章)。
