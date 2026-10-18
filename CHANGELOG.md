@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.5 (可转债代码池增加本地持久化条款库双向自动兜底)（2026-10-18）
+
+- **VERSION**: bump v0.16.4 → v0.16.5 (同步 README.md / README.zh-CN.md 徽章)。
+- **可转债雷达高可用增强**:
+  - `src/core/cb_radar.py`: 在 `_universe()` 中增加本地 `CbTerms` 表的双向兜底。当通达信客户端离线、周末休市或尚未下载转债列表时，自动从已持久化的本地条款表中提取全量 400+ 只转债代码池，消灭「通达信未返回可转债列表」的降级报错。
+
 ## release: v0.16.4 (持仓页双重兜底防429横幅与筹码峰直方图视觉图层增强)（2026-10-18）
 
 - **VERSION**: bump v0.16.3 → v0.16.4 (同步 README.md / README.zh-CN.md 徽章)。

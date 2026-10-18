@@ -323,25 +323,46 @@ def _tq_code(code: str) -> str:
 
 
 def _universe() -> list[str]:
-    """全市场可转债代码表(list_type=32)。"""
+    """全市场可转债代码表(list_type=32)。若 TQ 暂态不可用，自动从已持久化条款表兜底。"""
     from marketdata.vendors.tq import stock_list
 
-    raw = stock_list(market="5", list_type=32) or []
     out: list[str] = []
-    for item in raw:
-        code = ""
-        if isinstance(item, str):
-            code = item
-        elif isinstance(item, dict):
-            for k in ("code", "Code", "SECURITY_CODE", "证券代码", "stock_code"):
-                if item.get(k):
-                    code = str(item[k])
-                    break
-        elif isinstance(item, (list, tuple)) and item:
-            code = str(item[0])
-        code = code.strip().upper().replace("SH", "").replace("SZ", "").replace(".", "")
-        if code.isdigit() and len(code) == 6 and code not in out:
-            out.append(code)
+    try:
+        raw = stock_list(market="5", list_type=32) or []
+        for item in raw:
+            code = ""
+            if isinstance(item, str):
+                code = item
+            elif isinstance(item, dict):
+                for k in ("code", "Code", "SECURITY_CODE", "证券代码", "stock_code"):
+                    if item.get(k):
+                        code = str(item[k])
+                        break
+            elif isinstance(item, (list, tuple)) and item:
+                code = str(item[0])
+            code = code.strip().upper().replace("SH", "").replace("SZ", "").replace(".", "")
+            if code.isdigit() and len(code) == 6 and code not in out:
+                out.append(code)
+    except Exception as e:
+        logger.warning("[cb_radar] TQ stock_list(list_type=32) 失败: %r", e)
+
+    # 兜底：若 TQ 返回空(如未开盘/离线/未同步转债列表)，从本地已持久化的 CbTerms 库中提取全量转债代码
+    if not out:
+        try:
+            from sqlalchemy import select
+            from src.db.models import CbTerms
+            maker = _session_factory()
+            with maker() as session:
+                codes = session.scalars(select(CbTerms.code).distinct()).all()
+                for c in codes:
+                    c_clean = str(c).strip().upper().replace("SH", "").replace("SZ", "").replace(".", "")
+                    if c_clean.isdigit() and len(c_clean) == 6 and c_clean not in out:
+                        out.append(c_clean)
+            if out:
+                logger.info("[cb_radar] 从 CbTerms 库中兜底恢复 %d 只转债代码", len(out))
+        except Exception as err:
+            logger.debug("[cb_radar] 从 CbTerms 兜底失败: %r", err)
+
     return out
 
 
