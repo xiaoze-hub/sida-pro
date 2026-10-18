@@ -66,6 +66,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.1 (修复 CbRadarPanel useMemo 依赖 eslint 门禁，确保 CI 100% 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.15.0 → v0.15.1 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端 CI ESLint 门禁修复**:
+  - `frontend/packages/biz-ui/src/components/CbRadarPanel.tsx`: 将 `rows` 改为 `useMemo` 缓存包裹，严格遵守 `react-hooks/exhaustive-deps` 规范，彻底消除 CI 门禁报错。
+
 ## release: v0.15.0 (AI数智参谋Copilot全链路打通 + A-01/A-03断链熔断 + 可转债套利雷达I-4首发)（2026-10-18）
 
 - **VERSION**: bump v0.14.9 → v0.15.0 (同步 README.md / README.zh-CN.md 徽章)。

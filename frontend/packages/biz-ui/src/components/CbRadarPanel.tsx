@@ -163,7 +163,7 @@ export default function CbRadarPanel({ limit = 60, onOpenStock }: CbRadarPanelPr
     }
   }, [load])
 
-  const rows = data?.rows ?? []
+  const rows = useMemo(() => data?.rows ?? [], [data?.rows])
   const counts = data?.scenario_counts ?? {}
 
   const shown = useMemo(() => {
