@@ -1616,6 +1616,16 @@ def _compute_signal_scores(
                 row.action = "watch"
                 row.action_label = PLAN_INVALID_LABEL
                 row.rank_score = min(float(row.rank_score or 0.0), SCORE_CAP_PLAN_INVALID)
+                # 分数被降级后, 明细里的 weighted_score 与受限原因必须跟着改 ——
+                # 否则同一条信号"总分 65 / 明细 100"自相矛盾(审计同族问题: 数字互相打脸)。
+                breakdown = payload.get("score_breakdown")
+                if isinstance(breakdown, dict):
+                    breakdown["weighted_score"] = round(float(row.rank_score or 0.0), 4)
+                reasons = payload.get("constraint_reasons")
+                if not isinstance(reasons, list):
+                    reasons = []
+                payload["constraint_reasons"] = [*[str(x) for x in reasons], plan_invalid_reason][:6]
+                payload["constrained"] = True
                 logger.info(
                     "[策略层] 计划不合法降级 %s/%s 策略=%s: %s",
                     c.stock_market or "CN", c.stock_symbol, code, plan_invalid_reason,
