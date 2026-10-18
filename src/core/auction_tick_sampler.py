@@ -474,6 +474,8 @@ def sample_once(
 
     if MAX_SYMBOLS > 0:
         symbols = symbols[:MAX_SYMBOLS]
+    if not symbols:
+        return {"ok": False, "reason": "采样池为空(涨停池与全市场名单均不可用)", "frames": 0}
 
     fetch = fetcher or (lambda syms: fetch_frame_rows(syms))
     try:

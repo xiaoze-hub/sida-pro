@@ -554,11 +554,26 @@ def _cache_meta(*, hit: bool, source: str, age_s: float | None = None,
     }
 
 
+#: 转债快照 TTL(秒): 盘中行情在动, 读库行必须按新鲜度判; 非盘中数据冻结, 不设上限。
+TTL_LIVE_S = 60
+
+
+def _ttl_s(now: datetime | None = None) -> int | None:
+    """交易时段返回 TTL(秒); 非交易时段返回 None(=库行视为定稿, 不再回源)。"""
+    try:
+        from src.core.trade_phase import phase_meta
+
+        return TTL_LIVE_S if phase_meta(now).get("is_live_session") else None
+    except Exception:  # noqa: BLE001
+        return TTL_LIVE_S
+
+
 def _db_servable(db_payload: dict, now: datetime | None = None) -> bool:
     """库里的快照行是否可以**直接出**(不回源)。
 
     规则(与 price_distribution/看板口径一致):
-      · 连续竞价/竞价撮合中: 必须是**今天**的行, 否则盘中拿到昨日收盘 = 骗人;
+      · 连续竞价/竞价撮合中: 必须是**今天**的行, 且 `age_s <= TTL_LIVE_S` ——
+        否则盘中会把 10:00 的快照当成 11:00 的实时价(比"回源慢"更糟);
       · 其余时段(盘前/盘后/周末): 只要不早于上一交易日即可 —— 盘前出昨收是正确
         的"最新可得数据", 盘后若 15:20 的 job 已跑则出今日定稿。
     """
@@ -574,15 +589,18 @@ def _db_servable(db_payload: dict, now: datetime | None = None) -> bool:
         d = date.fromisoformat(td)
     except ValueError:
         return False
-    today = cn_now(now).date()
-    if td == today.isoformat():
-        return True
+    today = cn_now(now).date().isoformat()
     if phase_meta(now).get("trade_phase") in (
         PHASE_AUCTION, PHASE_AUCTION_MATCH, PHASE_CONTINUOUS
     ):
-        return False
+        if td != today:
+            return False
+        age = db_payload.get("age_s")
+        return age is not None and float(age) <= TTL_LIVE_S
+    if td == today:
+        return True
     try:
-        return d >= prev_trading_day(today)
+        return d >= prev_trading_day(cn_now(now).date())
     except Exception:  # noqa: BLE001 - 日历异常时保守回源
         return False
 
