@@ -68,7 +68,10 @@ def _day(date: str, boards=None) -> dict:
     rows = [
         {"boards": b, "codes": list(cs), "names": list(cs), "seal_n": len(cs),
          "tag": "首板" if b == 1 else None,
-         "stocks": [{"symbol": s, "name": s, "candle": None, "strength_label": None}
+         "stocks": [{"symbol": s, "name": s, "candle": None, "strength_label": None,
+                    # 2026-10-18 P0 口径: 快照个股必须带 pct 键(旧快照无此键 → 拒服务)。
+                    # 夹具跟随新口径, 否则 _snapshot_has_pct 会把夹具判成旧快照。
+                    "pct": None}
                     for s in cs]}
         for b, cs in sorted(boards.items(), reverse=True)
     ]

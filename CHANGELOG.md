@@ -33,7 +33,7 @@
   - 「上榜原因」全为 null 时**整列不渲染**(标题注明「源未提供(该列已隐藏)」)，净买入全空同样隐藏；
   - 默认只渲染最近 10 条，超出给「展开全部 N 条 / 收起」—— 68 行空白占位与 6 屏高度一起消掉。
 - **代码前缀统一** — 新增 `frontend/src/lib/symbol.ts`(`normSymbol/stripInternalPrefix/hasInternalSymbolPrefix`)：
-  竞价表、机会页 tdx/问财表统一走它；`StockWorkbench` 路由参数剥前缀(点击 `USHT603922` 不再把脏代码带进整页与所有 API)。
+  竞价表、问财表(`WencaiPanel`)、机会页 tdx 表统一走它；`StockWorkbench` 路由参数剥前缀(点击 `USHT603922` 不再把脏代码带进整页与所有 API)。
 - **门禁**：新增 `tests/test_p0_plan_legality.py`(15) / `tests/test_p0_auction_units.py`(29) /
   `tests/test_p0_ladder_pct.py`(6)，前端 `tests/lib/symbol.test.ts`(6) /
   `tests/components/fundamentals-panel-dragon-tiger.test.tsx`(5) / `ladder-board` 增补 1 /

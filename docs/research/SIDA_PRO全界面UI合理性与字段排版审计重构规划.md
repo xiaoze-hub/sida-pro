@@ -735,7 +735,7 @@ lib/symbol.ts                        # normSymbol() 剥离 USZA/USHT
 | 5 | ladder 补 `pct` | `theme_mood.py::_build_ladder_pct_map`（事件表 `prev_close/close_price` 优先，回退 klines 上一交易日 qfq 收盘）；旧口径快照拒服（`_snapshot_has_pct`）；`LadderBoard.tsx` 无值时不再渲染 `--` | `tests/test_p0_ladder_pct.py`（6 项）+ `ladder-board.test.tsx` 增补 |
 | 6 | 竞价量比量纲 | `auction_pool.py::normalize_auction_volume_ratio`（0.3~30 才是倍率；否则 ÷10000；都落不进 → 置空 + 原因） | `tests/test_p0_auction_units.py`（29 项；`163513 → 16.35`、`857 → None`） |
 | 8 | 龙虎榜「上榜原因」 | `FundamentalsPanel.tsx`：全 null 整列不渲染（标题注明源未提供）；默认 10 行 + 展开/收起 | `fundamentals-panel-dragon-tiger.test.tsx`（5 项：68 行 → 表头 3 列、10 行） |
-| 10 | `normSymbol()` | `frontend/src/lib/symbol.ts` + 竞价表 / 机会页 tdx+问财 / `StockWorkbench` 路由参数 | `tests/lib/symbol.test.ts`（6 项） |
+| 10 | `normSymbol()` | `frontend/src/lib/symbol.ts` + 竞价表 / 问财表(`WencaiPanel`) / 机会页 tdx 表 / `StockWorkbench` 路由参数 | `tests/lib/symbol.test.ts`（6 项）+ `wencai-symbol.test.tsx`（整页文本无 `USxx+6位`） |
 
 ### 12.2 与审计建议的偏差（有意为之）
 
