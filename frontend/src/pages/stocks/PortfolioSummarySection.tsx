@@ -36,7 +36,7 @@ export function PortfolioSummarySection() {
 {/* Portfolio Total Summary */}
 {/* 2026-08-17: 加载失败横幅统一为 ErrorBanner(闭环修正 P0-3: 错误体系统一) */}
 <ErrorBanner
-  errors={loadError ? [{ source: t('stocks.loadError'), message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
+  errors={loadError && !loadError.includes('429') ? [{ source: t('stocks.loadError'), message: loadError, retry: () => { void load(); void loadPortfolio() } }] : []}
   onDismiss={() => setLoadError && setLoadError(null)}
 />
 {portfolioLoading && !portfolio ? (

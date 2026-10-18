@@ -203,7 +203,12 @@ const load = useCallback(async () => {
     setExpandedAccounts(new Set(accountData.map((a: Account) => a.id)))
   } catch (e) {
     logger.error(e)
-    setLoadError(e instanceof Error ? e.message : '加载失败')
+    const msg = e instanceof Error ? e.message : '加载失败'
+    if (msg.includes('429')) {
+      logger.warn('页面基础数据刷新触发限流退避，沿用当前状态')
+    } else {
+      setLoadError(msg)
+    }
   } finally {
     setLoading(false)  // 提前解除阻塞
   }

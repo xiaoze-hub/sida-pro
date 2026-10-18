@@ -1788,7 +1788,7 @@ export default function KlineChart(props: {
         {/* K线右侧横向筹码分布山形图 (CYQ 直方图) */}
         {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
           <div
-            className="absolute top-2 right-12 bottom-8 w-24 pointer-events-none flex flex-col justify-between opacity-85 z-10"
+            className="absolute top-4 right-16 bottom-28 w-32 pointer-events-none flex flex-col justify-between z-20"
             title={`120日筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
           >
             {(() => {
@@ -1796,32 +1796,32 @@ export default function KlineChart(props: {
               const chips = effAccumulationChips.chips as number[]
               const maxChip = Math.max(...chips, 0.001)
               const lastClose = effAccumulationChips.last_close || 35.0
-              // 挑选 24 个采样切片自顶向下排列展示
-              const step = Math.max(1, Math.floor(prices.length / 24))
+              // 挑选 28 个采样切片自顶向下排列展示
+              const step = Math.max(1, Math.floor(prices.length / 28))
               const sampledIndices = []
               for (let i = prices.length - 1; i >= 0; i -= step) {
                 sampledIndices.push(i)
               }
               return (
-                <div className="h-full flex flex-col justify-between py-1">
+                <div className="h-full flex flex-col justify-between py-1 bg-background/40 backdrop-blur-[2px] rounded p-1 border border-border/30">
                   {sampledIndices.map((idx) => {
                     const p = prices[idx]
                     const c = chips[idx]
                     const widthPct = Math.min(100, Math.round((c / maxChip) * 100))
                     const isProfit = p <= lastClose
-                    const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.15
+                    const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
                     return (
-                      <div key={p} className="flex items-center justify-end h-1.5 gap-0.5">
-                        {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none mr-0.5">◀主峰</span>}
+                      <div key={p} className="flex items-center justify-end h-1.5 gap-1">
+                        {isPeak && <span className="text-[9px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
                         <div
-                          className={`h-1 rounded-sm ${
+                          className={`h-1 rounded-sm shadow-sm transition-all ${
                             isPeak
-                              ? 'bg-amber-400 dark:bg-amber-500'
+                              ? 'bg-amber-400 dark:bg-amber-500 shadow-amber-500/50'
                               : isProfit
-                              ? 'bg-red-500/70 dark:bg-red-400/80'
-                              : 'bg-blue-500/60 dark:bg-blue-400/70'
+                              ? 'bg-rose-500/80 dark:bg-rose-500/90'
+                              : 'bg-emerald-500/80 dark:bg-emerald-400/90'
                           }`}
-                          style={{ width: `${Math.max(4, widthPct)}%` }}
+                          style={{ width: `${Math.max(6, widthPct)}%` }}
                         />
                       </div>
                     )

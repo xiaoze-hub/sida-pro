@@ -175,6 +175,15 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.4 (持仓页双重兜底防429横幅与筹码峰直方图视觉图层增强)（2026-10-18）
+
+- **VERSION**: bump v0.16.3 → v0.16.4 (同步 README.md / README.zh-CN.md 徽章)。
+- **彻底消除持仓页 429 横幅 (前端双重阻断)**:
+  - `useStocksData.ts`: 针对 `load`（`/stocks` + `/accounts`）增加 429 限流退避感知，不再将 429 赋给 `loadError`；
+  - `PortfolioSummarySection.tsx`: 在 `ErrorBanner` 渲染入口增加硬拦截，包含 429 错误一律静默屏蔽，绝不弹大黄条。
+- **K线筹码峰 (CYQ) 横向直方图层视觉增强**:
+  - `KlineChart.tsx`: 优化横向山形图 DOM 容器层级与尺寸（`w-32 z-20`），增加毛玻璃微边框背景与采样精度，红绿国内盘口配色加亮加阴影，主峰标带高光，彻底解决浅色底与副图重叠遮挡问题。
+
 ## release: v0.16.3 (同步图层骨架字段断言，确保后端测试分片全绿)（2026-10-18）
 
 - **VERSION**: bump v0.16.2 → v0.16.3 (同步 README.md / README.zh-CN.md 徽章)。
