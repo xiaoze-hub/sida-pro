@@ -46,10 +46,11 @@ _MARKET_MAP = {
     "ALL": None,
 }
 
-# 2026-08-24 v0.3.2: 仅 volume_ratio 数据源**完全不**提供。
+# 2026-08-24 v0.3.2: 基础源(thsdk)不提供 volume_ratio; 2026-10-18 P0 起 TQ 逐票增强
+# (`OpenVolPre1` 归一化)成功时才有值, 量纲异常一律置空。
 # withdraw_rate 已由"涨停撤单/跌停撤单"类型记录填入, 不再 always-missing。
 MISSING_FIELDS: list[str] = ["volume_ratio"]
-MISSING_NOTE: str = "thsdk 竞价异动数据源不提供量比,字段固定为空"
+MISSING_NOTE: str = "thsdk 竞价源不含量比; TQ OpenVolPre1 增强成功才有值(量纲异常时置空)"
 
 _CACHE_TTL = 30.0
 _cache: dict[str, tuple[float, list[dict]]] = {}

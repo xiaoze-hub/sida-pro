@@ -1,3 +1,44 @@
+## fix: P0 可信度硬修 — 计划合法性/量比量纲/梯队涨跌幅/暗盘与基本面排版（2026-10-18，未发版）
+
+> 依据：`docs/research/SIDA_PRO全界面UI合理性与字段排版审计重构规划.md` §9 P0（审计 30 条 active 信号 /
+> 竞价量比 857~163,513 倍 / 梯队 1,222 只 pct 全 null / 暗盘净量被舍成 0 / 龙虎榜 68 行全 `--`）。
+> 原则照旧：**规范不落成机器判据等于没有** —— 每条修复配一条能自己红的断言。
+
+- **机会页 · 计划合法性断言 + 信号去重** — `src/core/strategy_engine.py`
+  - 新增 `validate_entry_plan()`：做多计划必须 `entry_low < stop_loss < target_price`；
+    V 形价格(止损挂在入场之上)、目标低于入场一律判非法(entry 上下沿写反先归一再判，不误杀)。
+  - 落库前对每条信号断言：非法 → 动作降级 `watch` + `action_label=观望·计划不合法` + 分数封顶 65，
+    payload 记 `plan_valid/plan_invalid_reason`(仍 active，用户看得见原因)。
+  - 读侧 `_format_signal()` 同样复算 `plan_valid`：**修复前落库的历史倒挂行当场生效**，不必等下一次全量刷新；
+    `action` 不会再把倒挂计划显示成「建仓」。
+  - 去重 `(market, symbol, snapshot_date, strategy)`：落库侧每组只留一条(计划合法 > 分数 > 置信度)，
+    其余降级 inactive(不物理删，后验样本靠它)；读侧再聚合一次(兼容历史重复行，SQL 侧放大 limit 后收敛)。
+  - 接口返回新增 `plan_valid/plan_invalid_reason`、`deduped`、`invalid_plans` 三个可机器判读字段。
+- **机会页 · 表格红条** — `frontend/src/pages/Opportunities.tsx` / `packages/api/src/recommendations.ts`
+  - 非法计划行：左侧 3px 红条 + 浅红底 + `data-invalid="1"`，代码下挂「⚠ 止损倒挂 · 计划不可执行」，
+    止损价转红加粗并带 tooltip 原因；展开区给出完整原因与「已降级为观望，勿按此价位执行」。
+- **集合竞价 · 量比量纲** — `src/core/auction_pool.py`
+  - `OpenVolPre1` 不再原值透传：已在 0.3~30 视为倍率；否则 ÷10000(万分位)再判；都落不进 → **置空**并给
+    `volume_ratio_note`(原始值 + 原因)，同时记 `volume_ratio_scale` 供排障。全批同一量纲，不逐行换算法。
+  - 同步修 `_normalize_symbol()`：`USHT*` 等任意 `US+两位交易所码` 前缀都剥掉 —— 旧实现只认 USZA/USHA/USTM，
+    沪市前缀既漏到页面，又让 `len(sym)==6` 的 TQ 增强整批跳过(量比/竞价额因此整列为空)。
+- **题材情绪 · 梯队涨跌幅** — `src/web/api/theme_mood.py` + `LadderBoard.tsx`
+  - `limit_up_events` 已带 `prev_close/close_price` → 直接算 `pct`(缺失时回退 klines 上一交易日 qfq 收盘)，
+    1,222 只个股不再全 null；两处都没有才留 `None`(键仍下发，前端据此判口径)。
+  - 旧口径快照(个股无 `pct` 键) **拒服**：改现算 + 后台补写新快照，否则修复上线后页面仍是空白到次日 16:30。
+  - 前端无 `pct` 时**不再渲染 `--`**，改等高占位块(820 处占位归零，格子高度不变)。
+- **暗盘 TOP · 主力净量** — `frontend/src/pages/DarkFundTop.tsx`：`safeFixed(..., 0)` → `2` 位，
+  0.4661 亿显示 0.47 而不是 0(修前 5/20 行显示成 0/1/2)。
+- **基本面 · 龙虎榜** — `packages/biz-ui/.../FundamentalsPanel.tsx`
+  - 「上榜原因」全为 null 时**整列不渲染**(标题注明「源未提供(该列已隐藏)」)，净买入全空同样隐藏；
+  - 默认只渲染最近 10 条，超出给「展开全部 N 条 / 收起」—— 68 行空白占位与 6 屏高度一起消掉。
+- **代码前缀统一** — 新增 `frontend/src/lib/symbol.ts`(`normSymbol/stripInternalPrefix/hasInternalSymbolPrefix`)：
+  竞价表、机会页 tdx/问财表统一走它；`StockWorkbench` 路由参数剥前缀(点击 `USHT603922` 不再把脏代码带进整页与所有 API)。
+- **门禁**：新增 `tests/test_p0_plan_legality.py`(15) / `tests/test_p0_auction_units.py`(29) /
+  `tests/test_p0_ladder_pct.py`(6)，前端 `tests/lib/symbol.test.ts`(6) /
+  `tests/components/fundamentals-panel-dragon-tiger.test.tsx`(5) / `ladder-board` 增补 1 /
+  `dark-fund-top` 改 2 增 1；`check_ui_rules.mjs`、`tsc -b`、全量 pytest 与全量 vitest 见下条发布记录。
+
 ## feat/fix: AI 副驾驶入口统一(可拖拽大胶囊) + 429 退避 + DDE 逐笔兜底 + 主力意图口径徽标（2026-10-18，未发版）
 
 > 依据：v0.15.1 真机截图走查（两个 AI 入口叠在右下角 / `GET /portfolio/summary` 429 刷屏 /

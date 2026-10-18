@@ -715,8 +715,53 @@ lib/symbol.ts                        # normSymbol() 剥离 USZA/USHT
 2. **未做真实下单链路验证**——机会页只审了信号展示，未验证下单/持仓联动。
 3. **未审计登录/注册/落地页/管理后台/开发者页**（非交易主链路）。
 4. **未量化首屏 API p95**——只对 theme-mood 做了粗粒度耗时观察，未做全站瀑布。
-5. **未改动任何代码**——本文件是审计 + 规划，P0 修复尚未实施。
+5. ~~**未改动任何代码**——本文件是审计 + 规划，P0 修复尚未实施。~~ **已被 §12 取代**：P0 的 7 项已于 2026-10-18 落地（3 项遗留见 §12.3）。
 6. **截图 38 张 / 18MB 保留原图**（含加载态对照），未压缩；如需入库建议转 WebP。
+
+---
+
+## 12. P0 实施记录（2026-10-18）
+
+**基线**：`v0.15.2` / `62716a9`（审计读的是这一版）。**分支**：`fix/p0-trust-data-20261018`。
+**覆盖范围**：§9 P0 十项中的 7 项（逐项落在下面表格）；**未覆盖**：评分去饱和、市场温度缺项、明盘 30 天 `MissingFields`（见 §12.3）。
+
+### 12.1 已落地项与落点
+
+| # | 任务 | 落点 | 机器判据 |
+|---|---|---|---|
+| 1 | 计划合法性 `entry_low < stop_loss < target` | `src/core/strategy_engine.py::validate_entry_plan` + 落库前断言 + 读侧复算；`Opportunities.tsx` 红条/红底/`data-invalid="1"` | `tests/test_p0_plan_legality.py`（15 项；含审计点名的寒武纪/中际旭创/永鼎三例） |
+| 2 | 信号去重 `(symbol, date, strategy)` | 同文件 `_dedupe_signal_rows`：落库侧每组留一条（计划合法 > 分数 > 置信度），其余降级 `inactive`；读侧再聚合（兼容历史重复行） | 同文件 3 项；接口新增 `deduped` 计数 |
+| 4 | `main_net_vol` 0 位 → 2 位 | `DarkFundTop.tsx` | `dark-fund-top.test.tsx`：`0.4661 → 0.47`，不再出现 `0` |
+| 5 | ladder 补 `pct` | `theme_mood.py::_build_ladder_pct_map`（事件表 `prev_close/close_price` 优先，回退 klines 上一交易日 qfq 收盘）；旧口径快照拒服（`_snapshot_has_pct`）；`LadderBoard.tsx` 无值时不再渲染 `--` | `tests/test_p0_ladder_pct.py`（6 项）+ `ladder-board.test.tsx` 增补 |
+| 6 | 竞价量比量纲 | `auction_pool.py::normalize_auction_volume_ratio`（0.3~30 才是倍率；否则 ÷10000；都落不进 → 置空 + 原因） | `tests/test_p0_auction_units.py`（29 项；`163513 → 16.35`、`857 → None`） |
+| 8 | 龙虎榜「上榜原因」 | `FundamentalsPanel.tsx`：全 null 整列不渲染（标题注明源未提供）；默认 10 行 + 展开/收起 | `fundamentals-panel-dragon-tiger.test.tsx`（5 项：68 行 → 表头 3 列、10 行） |
+| 10 | `normSymbol()` | `frontend/src/lib/symbol.ts` + 竞价表 / 机会页 tdx+问财 / `StockWorkbench` 路由参数 | `tests/lib/symbol.test.ts`（6 项） |
+
+### 12.2 与审计建议的偏差（有意为之）
+
+1. **非法计划不隐藏、只降级**：审计原文是「降级为 watch 并标注原因」，落地方案保留 `active` + 红条，
+   否则用户看不到「这里曾经有一条倒挂计划」，也就无从判断生成端坏了。动作/分数已降级，不可执行这一点由 `plan_valid=false` 表达。
+2. **缺口比值不逐行试算量纲**：假如逐行按「哪个倍率落进 0.3~30 就用哪个」，同一列会混着 bp 与 pct 两种口径 ——
+   那是另一种量纲错乱。规则固定为「原值 → ÷10000 万分位 → 置空」，宁可缺。
+3. **`pct` 缺失时不留 `--`，保留等高占位**：审计要求「不渲染 `--`、格子高度不变」，故用 `h-[14px]` 空块而非删列。
+4. **顺带修了 `USHT` 前缀导致 TQ 增强整批跳过**：`_normalize_symbol` 只认 USZA/USHA/USTM，沪市前缀让
+   `len(sym)==6` 判断失败 → 竞价额/量比/撤单率对沪市整批为空。这属于同一根因（F19），一并修。
+
+### 12.3 仍未实施（下一批）
+
+| 项 | 原因 | 建议落点 |
+|---|---|---|
+| 评分去饱和（100×23 / 99×7）+ `confidence != score/100` | 涉及评分器标定与历史回测口径，需单独设计分位拉伸并回放 30 日 | `src/core/strategy_engine.py::_compute_factor_breakdown` + 评分器 |
+| 市场温度「三项缺二仍出 100」 | 需与情绪周期口径一起改（缺项不出分 → 显示「数据不足」） | `Dashboard.tsx` PhaseGaugeCard + `/market/phase` |
+| 明盘历史净额 30 天全空 → 一行 `MissingFields` | 落库侧未写 `ming_net`，属数据管道问题（非展示层） | `src/core/dark_flow*` + `L2Tab` |
+
+### 12.4 复跑门禁
+
+```bash
+node scripts/check_ui_rules.mjs && (cd frontend && npx tsc -b)
+env -u PYTHONPATH .venv/bin/python -m pytest tests/test_p0_plan_legality.py tests/test_p0_auction_units.py tests/test_p0_ladder_pct.py -q
+cd frontend && npx vitest run tests/lib/symbol.test.ts tests/components/fundamentals-panel-dragon-tiger.test.tsx tests/components/ladder-board.test.tsx tests/components/dark-fund-top.test.tsx
+```
 
 ---
 
