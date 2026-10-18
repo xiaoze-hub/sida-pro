@@ -24,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@panwatch/base-ui/compo
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/components/ui/tabs'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { useLocalStorage } from '@/lib/utils'
+import { normSymbol } from '@/lib/symbol'
 import { useNavigate } from 'react-router-dom'
 import StockHoverPreview, { type HoverPreviewData } from '@panwatch/biz-ui/components/StockHoverPreview'
 import FactorWeightsPanel from '@/components/FactorWeightsPanel'
@@ -90,19 +91,14 @@ const sortResRows = (rows: ResonanceRow[]): ResonanceRow[] =>
 /** tdx 行字段名动态(中文键兜底,与后端入池口径一致 tdx.py): 识别不了返回 '' */
 const normSymbolTdx = (r: Record<string, unknown>): string => {
   const raw = r['代码'] ?? r['股票代码'] ?? r['sec_code'] ?? r['symbol'] ?? r['code']
-  const s = String(raw ?? '')
-    .replace(/^(USZA|USHA)/i, '')
-    .replace(/\.(SH|SZ|BJ)$/i, '')
-    .trim()
+  // P0(2026-10-18 审计 F19): 统一走 lib/symbol(旧版只剥 USZA/USHA, 沪市 USHT 直接漏到页面)
+  const s = normSymbol(String(raw ?? ''))
   return /^\d{6}$/.test(s) ? s : ''
 }
 
 /** 问财 symbol 是 thsdk 前缀码(USZA300033),剥前缀归一成 6 位 */
 const normSymbolWencai = (r: { symbol?: string | number | null }): string => {
-  const s = String(r.symbol ?? '')
-    .replace(/^(USZA|USHA)/i, '')
-    .replace(/\.(SH|SZ)$/i, '')
-    .trim()
+  const s = normSymbol(String(r.symbol ?? ''))
   return /^\d{6}$/.test(s) ? s : ''
 }
 
@@ -2047,6 +2043,12 @@ export default function OpportunitiesPage() {
           const entryHigh = toNumberOrNull(item.entry_high) ?? toNumberOrNull(sourcePlan.entry_high)
           const stopLoss = toNumberOrNull(item.stop_loss) ?? toNumberOrNull(sourcePlan.stop_loss)
           const targetPrice = toNumberOrNull(item.target_price) ?? toNumberOrNull(sourcePlan.target_price)
+          // P0(2026-10-18 审计 §4.1/R16): 计划合法性 —— 后端已降级为观望, 前端再画红条并给出原因,
+          // 让"止损挂在入场之上"这种数学上不可执行的行无法被当成可执行计划读。
+          const planValid = item.plan_valid !== false
+          const planInvalidReason = !planValid
+            ? (item.plan_invalid_reason || '入场/止损/目标价位关系不成立(止损倒挂)')
+            : ''
           const stateKey = `${item.snapshot_date}:${group.key}`
           const inWatchlist = watchlist.has(group.key)
           const breakdown = item.score_breakdown || {}
@@ -2074,7 +2076,13 @@ export default function OpportunitiesPage() {
           const expanded = expandedRows.has(stateKey)
           const score = Math.round(item.rank_score || item.score || 0)
           return (
-            <div key={stateKey} className={`border-b border-border/40 ${toneClass(item)}`}>
+            <div
+              key={stateKey}
+              data-invalid={planValid ? undefined : '1'}
+              className={`border-b border-border/40 ${toneClass(item)} ${
+                planValid ? '' : 'border-l-[3px] border-l-red-500 bg-red-500/[0.06]'
+              }`}
+            >
               {/* W3.7/D7 扫读行: 点击展开/收起明细; 桌面端表格化对齐, 移动端保留名称+动作 */}
               <div
                 role="button"
@@ -2109,6 +2117,15 @@ export default function OpportunitiesPage() {
                     )}
                   </div>
                   <div className="text-[11px] text-muted-foreground font-mono">{item.stock_market}:{item.stock_symbol}</div>
+                  {!planValid && (
+                    <div
+                      className="mt-0.5 text-[10px] font-semibold text-red-500"
+                      title={planInvalidReason}
+                      data-testid="plan-invalid-badge"
+                    >
+                      ⚠ 止损倒挂 · 计划不可执行
+                    </div>
+                  )}
                 </div>
                 <div>
                   <SignalChip tone={actionTone(item.action).tone} strength={actionTone(item.action).strength} title="动作来自策略信号; 色相只表动作语义, 强度用字重与边框">
@@ -2117,7 +2134,12 @@ export default function OpportunitiesPage() {
                 </div>
                 <div className={`hidden md:block text-right text-[12px] font-mono font-medium ${score >= 80 ? 'text-primary' : 'text-muted-foreground'}`}>{score}</div>
                 <div className="hidden md:block text-[12px] font-mono font-semibold truncate" title={formatEntryDisplay(item.action, entryLow, entryHigh)}>{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
-                <div className="hidden md:block text-[12px] font-mono text-stock-down truncate" title={formatPlanPrice(stopLoss)}>{formatPlanPrice(stopLoss)}</div>
+                <div
+                  className={`hidden md:block text-[12px] font-mono truncate ${
+                    planValid ? 'text-stock-down' : 'text-red-500 font-semibold'
+                  }`}
+                  title={planValid ? formatPlanPrice(stopLoss) : `${formatPlanPrice(stopLoss)} · ${planInvalidReason}`}
+                >{formatPlanPrice(stopLoss)}</div>
                 <div className="hidden md:block text-[12px] font-mono text-stock-up truncate" title={formatPlanPrice(targetPrice)}>{formatPlanPrice(targetPrice)}</div>
                 <div className="hidden md:flex items-center gap-1 min-w-0">
                   {badgeSources.slice(0, 2).map((s) => (
@@ -2146,6 +2168,11 @@ export default function OpportunitiesPage() {
                     <span className="text-stock-down">止损 {formatPlanPrice(stopLoss)}</span>
                     <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
                   </div>
+                  {!planValid && (
+                    <div className="text-[11px] leading-4 font-semibold text-red-500" data-testid="plan-invalid-reason">
+                      ⚠ 计划不合法: {planInvalidReason} —— 已降级为观望, 勿按此价位执行
+                    </div>
+                  )}
                   <div className="text-[12px] leading-5 text-foreground">{item.signal || item.reason || '--'}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
                   <span>失效 {item.invalidation || '--'}</span>

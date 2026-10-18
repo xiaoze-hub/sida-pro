@@ -18,6 +18,7 @@ import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
 import { useSourceHealth } from '@/hooks/useSourceHealth'
+import { stripInternalPrefix } from '@/lib/symbol'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
 import FundamentalTab from '@/pages/workbench/tabs/FundamentalTab'
@@ -281,7 +282,10 @@ function TabPanel({
 }
 
 export default function StockWorkbench() {
-  const { symbol = '' } = useParams()
+  const { symbol: rawSymbol = '' } = useParams()
+  // P0(2026-10-18 审计 F19): 路由里可能带内部前缀(竞价表点进来是 /stocks/USHT603922),
+  // 不剥掉则整页显示与所有 API 调用都用这个脏代码(页面右上是 `USZA002361`)。
+  const symbol = stripInternalPrefix(rawSymbol)
   const [sp, setSp] = useSearchParams()
   const type = normalizeType(sp.get('type'))
   const tab = parseTab(sp.get('tab'))

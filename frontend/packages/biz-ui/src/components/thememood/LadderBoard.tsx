@@ -78,11 +78,18 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
   return (
     <span
       title={stockTitle(s)}
+      data-ladder-stock={s.symbol}
       className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
       <span className="w-full truncate text-center text-[10px] text-foreground/80" title={s.name || s.symbol}>{s.name || s.symbol}</span>
-      <span className={`text-[10px] ${pctClass(s.pct)}`}>{s.pct != null ? fmtPct(s.pct) : '--'}</span>
+      {/* P0(2026-10-18 审计 F06): 无 pct 时不渲染 `--` —— 单页 820 处占位把格子塞满噪音。
+          保留等高占位块(高度不变、不塌格), 缺多少就是"这格只有名称+板数"。 */}
+      {s.pct != null ? (
+        <span className={`text-[10px] ${pctClass(s.pct)}`}>{fmtPct(s.pct)}</span>
+      ) : (
+        <span aria-hidden className="h-[14px] leading-[14px]" />
+      )}
       {s.tag ? (
         <span className="rounded bg-accent/50 px-0.5 text-[10px] text-muted-foreground">{s.tag}</span>
       ) : null}

@@ -24,7 +24,7 @@ import time
 
 from fastapi import APIRouter, Query
 
-from src.core.cb_radar import DEFAULT_LIMIT, MAX_LIMIT, build_one, build_radar
+from src.core.cb_radar import DEFAULT_LIMIT, MAX_LIMIT, build_one, get_radar
 from src.web.cache.biz_cache import biz_cache
 
 logger = logging.getLogger(__name__)
@@ -62,20 +62,26 @@ def snapshot(
             return {**body, "cached": True, "age_s": max(0, age)}
 
     try:
-        payload = build_radar(limit=limit)
+        # 读库优先(P0-a 2026-10-18): 有当日/上一交易日快照 → 一行 SQL 出参,
+        # 冷启动零 RPC; 库里没有才回源构建并**落库**(读穿透)。
+        payload = get_radar(limit=limit, refresh=refresh)
     except Exception as e:  # noqa: BLE001 - 接口不许 500, 如实降级
         logger.error("[cb-radar] 快照计算失败: %r", e)
         return {
             "available": False,
             "rows": [],
             "scenario_counts": {},
+            "cached": False,
+            "age_s": 0,
             "note": f"转债雷达计算失败: {type(e).__name__}: {e}",
         }
 
     if payload.get("available") and payload.get("rows"):
         # 只缓存可用载荷: 单次抖动不得被钉住整个 TTL
         biz_cache.set_json(key, {**payload, "_cached_at": time.time()}, ttl=_ttl())
-    return {**payload, "cached": False, "age_s": 0}
+    # 响应契约固定带 cached/age_s(读库命中时由 core 给出, 这里兜底默认值)
+    return {**payload, "cached": payload.get("cached", False),
+            "age_s": payload.get("age_s", 0)}
 
 
 @router.get("/bond/{code}")

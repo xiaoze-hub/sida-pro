@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import type { FundamentalsDetail } from '@panwatch/api'
 import { formatCompactNumber } from './helpers'
+
+/** 龙虎榜默认渲染行数上限(2026-10-18 P0 审计 F13/R17: 生产 68 行把整页撑到 6 个屏) */
+const DRAGON_TIGER_DEFAULT_ROWS = 10
 
 /**
  * 基本面明细面板(龙虎榜/融资融券/股东户数/分红/事件日历)。
@@ -14,6 +18,8 @@ export function FundamentalsPanel(props: {
   loaded: boolean
 }) {
   const { data, loading, loaded } = props
+  // hooks 必须在任何 early return 之前(P0: 龙虎榜折叠状态)
+  const [dtExpanded, setDtExpanded] = useState(false)
   // 防御性取值: 后端字段可能缺省/为 null, 统一规整为数组
   const d = data || ({} as FundamentalsDetail)
   const dtList = Array.isArray(d.dragon_tiger) ? d.dragon_tiger : []
@@ -22,6 +28,11 @@ export function FundamentalsPanel(props: {
   const divList = Array.isArray(d.dividend) ? d.dividend : []
   const evList = Array.isArray(d.events) ? d.events : []
   const hasAny = dtList.length > 0 || mgList.length > 0 || scList.length > 0 || divList.length > 0 || evList.length > 0
+  // P0(2026-10-18 审计 F13): tdx_tq 源不给"上榜原因", 生产 70/70 全 null —— 整列 68 个 `--`
+  // 还吃掉 1/3 表宽。全空就不渲染该列(只在标题上注明源未提供), 有值才显示。
+  const dtHasReason = dtList.some((x) => typeof x.reason === 'string' && x.reason.trim() !== '')
+  const dtHasNetBuy = dtList.some((x) => x.net_buy != null)
+  const dtShown = dtExpanded ? dtList : dtList.slice(0, DRAGON_TIGER_DEFAULT_ROWS)
 
   if (loading) {
     return <div className="card p-6 text-[12px] text-muted-foreground text-center">加载中...</div>
@@ -42,30 +53,61 @@ export function FundamentalsPanel(props: {
     <div className="space-y-3">
       {/* 龙虎榜 */}
       {dtList.length > 0 && (
-        <div className="card p-4">
-          <div className="text-[11px] text-muted-foreground mb-2">龙虎榜</div>
+        <div className="card p-4" data-testid="dragon-tiger-section">
+          <div className="text-[11px] text-muted-foreground mb-2">
+            龙虎榜
+            <span className="ml-2 text-[10px] text-muted-foreground/70">
+              共 {dtList.length} 条{dtList.length > DRAGON_TIGER_DEFAULT_ROWS && !dtExpanded
+                ? ` · 显示最近 ${DRAGON_TIGER_DEFAULT_ROWS} 条` : ''}
+            </span>
+            {!dtHasReason && (
+              <span className="ml-2 text-[10px] text-muted-foreground/60" data-testid="dragon-tiger-reason-missing">
+                · 上榜原因源未提供(该列已隐藏)
+              </span>
+            )}
+          </div>
           <div className="overflow-x-auto -mx-1">
             <table className="w-full text-[11px]">
               <thead className="text-muted-foreground">
                 <tr className="border-b border-border/40">
                   <th className="text-left px-1 py-1 font-normal whitespace-nowrap">日期</th>
-                  <th className="text-right px-1 py-1 font-normal whitespace-nowrap">净买入</th>
-                  <th className="text-left px-1 py-1 font-normal">上榜原因</th>
+                  {dtHasNetBuy && (
+                    <th className="text-right px-1 py-1 font-normal whitespace-nowrap">净买入</th>
+                  )}
+                  {dtHasReason && (
+                    <th className="text-left px-1 py-1 font-normal">上榜原因</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {dtList.map((item, i) => (
+                {dtShown.map((item, i) => (
                   <tr key={`dt-${item.trade_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.trade_date || '--'}</td>
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${(item.net_buy ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
-                      {signedMoney(item.net_buy)}
-                    </td>
-                    <td className="px-1 py-1 text-foreground/80">{item.reason || '--'}</td>
+                    {dtHasNetBuy && (
+                      <td className={`px-1 py-1 text-right font-mono tabular-nums whitespace-nowrap ${(item.net_buy ?? 0) >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                        {signedMoney(item.net_buy)}
+                      </td>
+                    )}
+                    {dtHasReason && (
+                      <td className="px-1 py-1 text-foreground/80">{item.reason || '--'}</td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {dtList.length > DRAGON_TIGER_DEFAULT_ROWS && (
+            <button
+              type="button"
+              className="mt-2 text-[11px] text-muted-foreground hover:text-primary"
+              data-testid="dragon-tiger-toggle"
+              onClick={() => setDtExpanded((v) => !v)}
+            >
+              {dtExpanded
+                ? `收起(只看最近 ${DRAGON_TIGER_DEFAULT_ROWS} 条)`
+                : `展开全部 ${dtList.length} 条`}
+            </button>
+          )}
         </div>
       )}
 

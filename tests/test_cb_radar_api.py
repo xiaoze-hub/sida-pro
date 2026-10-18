@@ -1,9 +1,13 @@
 """可转债雷达 API 层单测(2026-10-18)。
 
-守三件事:
+守四件事:
 ① 可用载荷进 `biz_cache`, 第二次请求命中缓存且带 `cached/age_s`(不打数据源);
 ② **降级载荷不进缓存** —— 单次抖动不能被钉住整个 TTL;
-③ 数据源异常时接口返回 200 + `available=false` + note, 绝不 500。
+③ 数据源异常时接口返回 200 + `available=false` + note, 绝不 500;
+④ 读穿透下 `refresh` 仍能绕过缓存与读库(运维强制刷新)。
+
+注: 2026-10-18 P0-a 起 API 的取数入口由 `build_radar` 换成 `get_radar`
+(读库优先 + 回源落库), 本文件的桩随之改为 patch `get_radar`。
 """
 from __future__ import annotations
 
@@ -53,11 +57,11 @@ def _payload(rows=1):
 def test_snapshot_caches_available_payload(monkeypatch):
     calls = {"n": 0}
 
-    def _build(limit=60):
+    def _build(limit=60, refresh=False):
         calls["n"] += 1
         return _payload()
 
-    monkeypatch.setattr(api, "build_radar", _build)
+    monkeypatch.setattr(api, "get_radar", _build)
     r1 = api.snapshot(limit=10, refresh=False)
     r2 = api.snapshot(limit=10, refresh=False)
 
@@ -71,11 +75,11 @@ def test_snapshot_caches_available_payload(monkeypatch):
 def test_snapshot_refresh_bypasses_cache(monkeypatch):
     calls = {"n": 0}
 
-    def _build(limit=60):
+    def _build(limit=60, refresh=False):
         calls["n"] += 1
         return _payload()
 
-    monkeypatch.setattr(api, "build_radar", _build)
+    monkeypatch.setattr(api, "get_radar", _build)
     api.snapshot(limit=10, refresh=False)
     api.snapshot(limit=10, refresh=True)
     assert calls["n"] == 2
@@ -84,11 +88,11 @@ def test_snapshot_refresh_bypasses_cache(monkeypatch):
 def test_snapshot_does_not_cache_degraded_payload(monkeypatch):
     calls = {"n": 0}
 
-    def _build(limit=60):
+    def _build(limit=60, refresh=False):
         calls["n"] += 1
         return {"available": False, "rows": [], "note": "转债代码表不可用", "scenario_counts": {}}
 
-    monkeypatch.setattr(api, "build_radar", _build)
+    monkeypatch.setattr(api, "get_radar", _build)
     r1 = api.snapshot(limit=10, refresh=False)
     r2 = api.snapshot(limit=10, refresh=False)
     assert calls["n"] == 2  # 没有被缓存钉死
@@ -96,10 +100,10 @@ def test_snapshot_does_not_cache_degraded_payload(monkeypatch):
 
 
 def test_snapshot_swallows_exceptions(monkeypatch):
-    def _boom(limit=60):
+    def _boom(limit=60, refresh=False):
         raise RuntimeError("tq down")
 
-    monkeypatch.setattr(api, "build_radar", _boom)
+    monkeypatch.setattr(api, "get_radar", _boom)
     r = api.snapshot(limit=10, refresh=False)
     assert r["available"] is False
     assert "tq down" in r["note"]

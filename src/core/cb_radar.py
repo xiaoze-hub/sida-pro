@@ -363,11 +363,32 @@ def _batch_quotes(codes: list[str], *, chunk: int = 500) -> dict[str, dict]:
 
 
 def _terms(code: str) -> dict:
-    """条款(带 12h 进程内缓存)。失败返回 {}(调用方按"无条款"处理, 不猜)。"""
+    """条款: **先读库(cb_terms)**, 未命中/过期才回源 kzz_info 并落库。
+
+    改造动机(2026-10-18 P0-a): 原实现只有 12h 进程内 dict —— worker 重启/容器迁移
+    即全空, Top-60 要串行打 60 次 `kzz_info`, 首屏秒开无从谈起(方案 §5.3)。
+    现在进程内缓存只是 L1, 真正的 L0 是 `cb_terms`: 冷启动也零 RPC。
+    """
     now = time.time()
     hit = _terms_cache.get(code)
     if hit and now - hit[0] < _TERMS_TTL:
         return hit[1]
+
+    from src.core import cb_radar_store as store
+
+    db_raw: dict = {}
+    try:
+        from src.db.session import SessionLocal
+
+        with SessionLocal() as session:
+            db_raw = (store.load_terms(session, [code]) or {}).get(code) or {}
+    except Exception as e:  # noqa: BLE001 - 库不可用不能连累取数
+        logger.debug("[cb_radar] 条款读库失败 %s: %r", code, e)
+
+    if db_raw and store.terms_are_fresh(db_raw):
+        _terms_cache[code] = (now, db_raw)
+        return db_raw
+
     from marketdata.vendors.tq import kzz_info
 
     data: dict = {}
@@ -382,7 +403,19 @@ def _terms(code: str) -> dict:
             break
     if data:
         _terms_cache[code] = (now, data)
-    return data
+        try:
+            from src.db.session import SessionLocal
+
+            with SessionLocal() as session:
+                store.upsert_terms(session, code, data)
+        except Exception as e:  # noqa: BLE001 - 落库失败不阻断本次响应
+            logger.warning("[cb_radar] 条款落库失败 %s: %r", code, e)
+        return data
+    # 回源失败但有过期旧条款: 用旧条款(调用方从 _as_of 可判断新鲜度), 不返回空
+    if db_raw:
+        _terms_cache[code] = (now, db_raw)
+        return db_raw
+    return {}
 
 
 def _stock_code_of(term: dict) -> str:
@@ -504,6 +537,202 @@ def build_one(code: str, *, now: datetime | None = None) -> dict:
         "row": rows[0],
         "note": None,
     }
+
+
+def _cache_meta(*, hit: bool, source: str, age_s: float | None = None,
+                ttl_s: int | None = None, stale: bool = False,
+                reason: str | None = None,
+                persist_error: str | None = None) -> dict:
+    return {
+        "hit": hit,
+        "source": source,        # db | live | none
+        "age_s": age_s,
+        "ttl_s": ttl_s,
+        "stale": stale,
+        "reason": reason,
+        "persist_error": persist_error,
+    }
+
+
+def _db_servable(db_payload: dict, now: datetime | None = None) -> bool:
+    """库里的快照行是否可以**直接出**(不回源)。
+
+    规则(与 price_distribution/看板口径一致):
+      · 连续竞价/竞价撮合中: 必须是**今天**的行, 否则盘中拿到昨日收盘 = 骗人;
+      · 其余时段(盘前/盘后/周末): 只要不早于上一交易日即可 —— 盘前出昨收是正确
+        的"最新可得数据", 盘后若 15:20 的 job 已跑则出今日定稿。
+    """
+    from src.core.trade_phase import (
+        PHASE_AUCTION, PHASE_AUCTION_MATCH, PHASE_CONTINUOUS, cn_now, phase_meta,
+    )
+    from src.core.trading_calendar import prev_trading_day
+
+    td = str(db_payload.get("trade_date") or "")
+    if not td:
+        return False
+    try:
+        d = date.fromisoformat(td)
+    except ValueError:
+        return False
+    today = cn_now(now).date()
+    if td == today.isoformat():
+        return True
+    if phase_meta(now).get("trade_phase") in (
+        PHASE_AUCTION, PHASE_AUCTION_MATCH, PHASE_CONTINUOUS
+    ):
+        return False
+    try:
+        return d >= prev_trading_day(today)
+    except Exception:  # noqa: BLE001 - 日历异常时保守回源
+        return False
+
+
+def _payload_from_db(db_payload: dict, *, limit: int, now: datetime | None = None) -> dict:
+    """库行 → 与 `build_radar` **同形**的响应(前端零改动)。"""
+    from src.core.trade_phase import as_of_iso, cn_now, phase_meta
+
+    rows = db_payload.get("rows") or []
+    counts: dict[str, int] = {}
+    for r in rows:
+        for key in r.get("scenario_keys") or []:
+            counts[key] = counts.get(key, 0) + 1
+    meta = phase_meta(now)
+    td = str(db_payload.get("trade_date") or "")
+    today = cn_now(now).date().isoformat()
+    is_today = td == today
+    universe = db_payload.get("universe")
+    return {
+        "available": True,
+        "data_date": td,
+        "is_live": False,          # 读库 = 定稿/采样值, 绝不冒充实时
+        "is_today": is_today,
+        "trade_phase": meta["trade_phase"],
+        "phase_label": meta["phase_label"],
+        "as_of": as_of_iso(now),
+        "source": "通达信 TQ(已落库: cb_daily_snapshot)",
+        "caliber": "转股价/强赎触发价/纯债价值均为客户端原值，未自行贴现或估算",
+        "universe": int(universe) if universe else len(rows),
+        "evaluated": len(rows),
+        "limit": limit,
+        "rows": rows,
+        "scenario_counts": counts,
+        "elapsed_ms": 0,
+        "note": None if is_today else f"显示 {td} 收盘快照(当日快照尚未生成)",
+    }
+
+
+def get_radar(
+    *,
+    limit: int = DEFAULT_LIMIT,
+    refresh: bool = False,
+    now: datetime | None = None,
+    persist: bool = True,
+    builder=None,
+    session_factory=None,
+) -> dict:
+    """读库优先 → 不可用则回源构建 → 落库 → 出参。API 层唯一入口。
+
+    `refresh=True` 跳过读库(运维/调试), 但**仍会落库**; `persist=False` 只读不写
+    (单测/只读副本)。`builder` / `session_factory` 供单测注入。
+    """
+    import time as _time
+
+    from src.core import cb_radar_store as store
+
+    limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
+    t0 = _time.time()
+
+    if not refresh:
+        try:
+            maker = session_factory or _session_factory()
+            with maker() as session:
+                db_payload = store.load_daily_rows(session, limit=limit)
+        except Exception as e:  # noqa: BLE001 - 库不可用不能连累出数
+            logger.warning("[cb_radar] 快照读库失败: %r", e)
+            db_payload = None
+        if db_payload and _db_servable(db_payload, now):
+            out = _payload_from_db(db_payload, limit=limit, now=now)
+            out["elapsed_ms"] = int((_time.time() - t0) * 1000)
+            out["cached"] = True
+            out["age_s"] = db_payload.get("age_s") or 0
+            out["cache"] = _cache_meta(
+                hit=True, source="db", age_s=db_payload.get("age_s"),
+            )
+            return out
+
+    build = builder or build_radar
+    payload = build(limit=limit, now=now)
+
+    persist_error = None
+    persisted = 0
+    if persist and payload.get("available") and payload.get("rows"):
+        res = store.persist_radar(
+            payload, session_factory=session_factory or _session_factory()
+        )
+        persisted = res.get("rows") or 0
+        persist_error = res.get("error")
+
+    out = dict(payload)
+    out["cached"] = False
+    out["age_s"] = 0
+    out["cache"] = _cache_meta(
+        hit=False,
+        source="live" if payload.get("available") else "none",
+        age_s=0.0 if payload.get("available") else None,
+        reason=None if payload.get("available") else payload.get("note"),
+        persist_error=persist_error,
+    )
+    out["persisted_rows"] = persisted
+    return out
+
+
+def _session_factory():
+    from src.db.session import SessionLocal
+
+    return SessionLocal
+
+
+def run_cb_daily_job(limit: int = MAX_LIMIT, now: datetime | None = None) -> dict:
+    """cron 入口(交易日 15:20): 条款刷新 + 当日折溢价/双低快照定稿落库。
+
+    走作业框架(`jobs.create/finish`), `ok=False` 会被判 failed —— 数据源不可用的
+    日子绝不在面板上显示"成功但 0 行"。落库的最大 `limit` 用 `MAX_LIMIT`(200),
+    保证读侧任何合法 limit 都能从库里截断。
+    """
+    from src.core.jobs import jobs
+
+    job_id, is_new = jobs.create("cb_daily", "可转债条款+折溢价日终落库")
+    if not is_new:
+        return {"ok": True, "skipped": "in_flight", "job_id": job_id}
+    try:
+        payload = build_radar(limit=min(int(limit or MAX_LIMIT), MAX_LIMIT), now=now)
+        if not payload.get("available"):
+            out = {
+                "ok": False,
+                "reason": payload.get("note") or "转债雷达不可用",
+                "job_id": job_id,
+                "rows": 0,
+            }
+            jobs.finish(job_id, out, context="可转债日终落库: ")
+            return out
+        from src.core import cb_radar_store as store
+
+        res = store.persist_radar(payload)
+        ok = bool(res.get("rows"))
+        out = {
+            "ok": ok,
+            "reason": None if ok else (res.get("error") or "无可用行(债券价全缺失)"),
+            "job_id": job_id,
+            "trade_date": payload.get("data_date"),
+            "evaluated": payload.get("evaluated"),
+            "rows": res.get("rows") or 0,
+        }
+    except Exception as e:  # noqa: BLE001
+        jobs.fail(job_id, str(e))
+        logger.exception("可转债日终落库作业异常: %s", e)
+        return {"ok": False, "error": str(e), "job_id": job_id}
+    jobs.finish(job_id, out, context="可转债日终落库: ")
+    return out
 
 
 def _degraded(note: str, meta: dict, err: Exception | None = None) -> dict:

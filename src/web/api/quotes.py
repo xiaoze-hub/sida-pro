@@ -161,7 +161,28 @@ async def get_more_info(symbol: str, market: str = "CN"):
     if live is not None and has_live_values(live_vals):
         return {**live, "available": True, "source": "live"}
 
-    # 非交易时段 / 会话值全 0 / 无实时行 → 回退最近收盘快照(显式标注, 0 不冒充)
+    # ① 优先回退 more_info_daily(P0-b 2026-10-18): 104 字段收盘定稿, 比 8 字段的
+    #    l2 快照完整(封单额/封成比/委比/连板/竞价买入都在), 且历史可查。
+    try:
+        from src.core.more_info_daily import latest as _mi_latest
+
+        daily = await asyncio.to_thread(_mi_latest, symbol, market_code.value)
+    except Exception as e:  # noqa: BLE001 回退失败不挡端点
+        logger.warning("more-info more_info_daily 回退失败 %s: %s", symbol, e)
+        daily = None
+    if daily:
+        return {
+            **daily,
+            "symbol": symbol,
+            "market": market_code.value,
+            "available": True,
+            "source": "more_info_daily",
+            "as_of": daily.get("trade_date"),
+            "note": f"{'非交易时段' if not in_session else '实时会话值全 0'}"
+                    f"·显示 {_fmt_trade_date(daily.get('trade_date'))} 收盘定稿",
+        }
+
+    # ② 再回退 8 字段 L2 快照(历史兜底, 先于 more_info_daily 上线)
     snap = None
     try:
         snap = await asyncio.to_thread(latest_snapshot, symbol, market_code.value)

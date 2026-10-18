@@ -134,6 +134,23 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.3 (落地全量数据落库v201-v205迁移 + 机会计划止损倒挂修复 + 连板梯队800处破损消灭)（2026-10-18）
+
+- **VERSION**: bump v0.15.2 → v0.15.3 (同步 README.md / README.zh-CN.md 徽章)。
+- **全量数据落库 P0 阶段核心闭环 (v201–v205)**:
+  - 新增 `src/db/models.py` 核心模型与 `src/web/migrations.py` 迁移：
+    * `v201_auction_tick_snapshots`：竞价过程记录表（记录 9:15–9:25 每一分钟撤单与抢筹演变）；
+    * `v202_auction_wudao_daily`：悟道独家竞价多维因子日归档表；
+    * `v203_cb_tables`：`cb_terms`（转债 14 项条款）+ `cb_daily_snapshot`（转债每日折溢价/双低）；
+    * `v204_more_info_daily`：通达信 104 字段盘后定稿表；
+    * `v205_index_daily`：主要指数日 K 线表（择时底座）；
+  - `check_migrations.py` 105 个迁移连续性与双库方言校验 100% 通过。
+- **UI 合理性与数据真实性 P0 阶段修复**:
+  - 机会页计划合法性：强力断言并校验 `entry_low < stop_loss < target`，彻底消灭止损倒挂；
+  - 连板梯队数据穿透：修复与 board 接口的涨跌幅 join 关联，消灭梯队 829 处空白破损 `--`；
+  - 竞价量比量纲：`OpenVolPre1` 加入实战阈值过滤（0.3–30），杜绝 160,000 倍离谱噪点；
+  - 暗盘 TOP 修复：`main_net_vol` 格式化支持 2 位 safeFixed，0.4661 亿正确显示为 0.47 亿。
+
 ## release: v0.15.2 (I-3撤单行为画像 + I-8微观分价主力博弈矩阵与v200全量落库 + 统一可拖拽发光AI胶囊 + 全量数据与UI深度审计)（2026-10-18）
 
 - **VERSION**: bump v0.15.1 → v0.15.2 (同步 README.md / README.zh-CN.md 徽章)。

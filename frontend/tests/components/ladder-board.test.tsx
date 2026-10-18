@@ -112,4 +112,27 @@ describe('LadderBoard', () => {
       <LadderBoard ladder={[day]} liveDay={null} mode="finalized" stale={false} lastOk={null} liveAsOf={null} />,
     )
     expect(screen.queryAllByText(/盘中/)).toHaveLength(0)
+  
+
+  // P0(2026-10-18 审计 F06): 缺 pct 不得渲染 `--`(单页 820 处), 但格子高度要保持。
+  it('pct 为空时不渲染 -- 占位, 有值时正常显示', () => {
+    const d = {
+      ...day,
+      date: '20260921',
+      rows: [
+        {
+          boards: 1, codes: ['G', 'H'], names: ['GG', 'HH'], tag: '首板',
+          stocks: [
+            { symbol: 'G', name: 'GG', candle: null, pct: null },
+            { symbol: 'H', name: 'HH', candle: null, pct: 10.02 },
+          ],
+        },
+      ],
+    }
+    const { container } = render(<LadderBoard ladder={[d]} liveDay={null} mode="finalized" stale={false} lastOk={null} />)
+    expect(container.textContent).not.toContain('--')
+    expect(container.textContent).toContain('+10.02%')
+    // 缺值那格仍渲染(只是没有涨跌幅), 名称在
+    expect(container.querySelector('[data-ladder-stock="G"]')).toBeTruthy()
   })
+})

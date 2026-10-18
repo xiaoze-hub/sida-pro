@@ -120,7 +120,17 @@ describe('DarkFundTop 暗盘资金 TOP 榜', () => {
     render(<DarkFundTopPage />)
     await screen.findAllByText('脏数股')
 
-    expect(within(tbl()).getByText('1234')).toBeTruthy()
+    // P0(2026-10-18 审计 F17): 净量改为 2 位小数, 不再 0 位舍入
+    expect(within(tbl()).getByText('1234.00')).toBeTruthy()
+  })
+
+  it('主力净量 0.4661 显示 0.47, 不被 0 位舍入吞成 0', async () => {
+    mocks.darkFundTop.mockResolvedValue(snapshot([row({ main_net_vol: 0.4661, name: '缩影股' })]))
+    render(<DarkFundTopPage />)
+    await screen.findAllByText('缩影股')
+
+    expect(within(tbl()).getByText('0.47')).toBeTruthy()
+    expect(within(tbl()).queryByText('0')).toBeNull()
   })
 
   it('旧快照只有 main_net_ratio(已弃用别名)时仍能渲染, 不塌成 --', async () => {
@@ -133,6 +143,6 @@ describe('DarkFundTop 暗盘资金 TOP 榜', () => {
     render(<DarkFundTopPage />)
     await screen.findAllByText('老快照股')
 
-    expect(within(tbl()).getByText('4321')).toBeTruthy()
+    expect(within(tbl()).getByText('4321.00')).toBeTruthy()
   })
 })

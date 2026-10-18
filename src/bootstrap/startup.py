@@ -551,6 +551,113 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"AI 看图形态影子打标注册失败: {e}")
 
+        # ── P0 落库加固(2026-10-18, docs/全量数据落库排查与持久化加固方案_20261018.md) ──
+        # 批次 1(P0-a): 竞价过程逐分钟采样 → auction_tick_snapshots(append-only)。
+        # 原 auction_snapshots 唯一键 (trade_date,symbol,market) 只留 9:25 终值,
+        # 试盘/9:20 前撤单/虚假封单过程全丢。窗口/交易日由作业内自守卫, 窗口外直接 skip。
+        try:
+            from src.core.auction_tick_sampler import run_auction_tick_job
+
+            rt.scheduler.scheduler.add_job(
+                run_auction_tick_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=9,
+                minute="15-25",
+                id="auction-tick-sampler",
+                name="竞价过程帧采样(9:15-9:25 每分钟)",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("竞价过程帧采样已注册(交易日 9:15-9:25 每分钟)")
+        except Exception as e:
+            logger.error(f"竞价过程帧采样注册失败: {e}")
+
+        # 批次 1(P0-a): 悟道竞价独家字段日归档(竞价一致性/买盘强度/弱转强/涨停反馈)。
+        # 9:26 跑在悟道限流窗口(9:15-10:30)内 —— 大概率拿不到, 作业会显式 ok=False
+        # 并留原因(不写 0 行冒充); 这是数据源事实, 不是代码缺陷。
+        try:
+            from src.core.auction_wudao_store import run_auction_wudao_job
+
+            rt.scheduler.scheduler.add_job(
+                run_auction_wudao_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=9,
+                minute=26,
+                id="auction-wudao-daily",
+                name="悟道竞价因子日归档",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("悟道竞价因子日归档已注册(交易日 9:26)")
+        except Exception as e:
+            logger.error(f"悟道竞价因子日归档注册失败: {e}")
+
+        # 批次 2(P0-b): TQ more_info 104 字段收盘定稿(15:10)。
+        # 时序: 15:05 L2 快照 → 15:10 more_info(本作业) → 15:20 转债 → 15:30 指数。
+        try:
+            from src.core.more_info_daily import run_more_info_daily_job
+
+            rt.scheduler.scheduler.add_job(
+                run_more_info_daily_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=10,
+                id="more-info-daily",
+                name="TQ more_info 收盘定稿",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("TQ more_info 收盘定稿已注册(交易日 15:10)")
+        except Exception as e:
+            logger.error(f"TQ more_info 收盘定稿注册失败: {e}")
+
+        # 批次 1(P0-a): 可转债条款刷新 + 当日折溢价/双低快照定稿(15:20)。
+        try:
+            from src.core.cb_radar import run_cb_daily_job
+
+            rt.scheduler.scheduler.add_job(
+                run_cb_daily_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=20,
+                id="cb-daily",
+                name="可转债条款+折溢价日终落库",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("可转债条款+折溢价日终落库已注册(交易日 15:20)")
+        except Exception as e:
+            logger.error(f"可转债日终落库注册失败: {e}")
+
+        # 批次 2(P0-b): 指数日K落库(15:30, 首次自动回填 800 天)。
+        # 落表后 /api/market/indices 的 spark 直读库, 0 次跨网(原每 30min 重付 6×K线)。
+        try:
+            from src.collectors.index_daily import run_index_daily_job
+
+            rt.scheduler.scheduler.add_job(
+                run_index_daily_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=30,
+                id="index-daily",
+                name="指数日K落库",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("指数日K落库已注册(交易日 15:30)")
+        except Exception as e:
+            logger.error(f"指数日K落库注册失败: {e}")
+
         # 龙虎榜每日增量(2026-09-10, 妖股因子 lhb 维数据底座): 交易日 17:45
         # 榜单 ~17:30 发布 → 拉近 3 个交易日落 dragon_tiger_events → 有新行的股票因子重算
         try:

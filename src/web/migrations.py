@@ -5592,6 +5592,76 @@ def _m200_price_distribution_tables(conn: Connection) -> None:
     PriceDistributionDaily.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m201_auction_tick_snapshots(conn: Connection) -> None:
+    """竞价过程帧表 auction_tick_snapshots(2026-10-18 P0-a, 方案 §7.2②)。
+
+    append-only: 原 `auction_snapshots` 唯一键 (trade_date, symbol, market) 把
+    9:15-9:25 的过程压成一个 9:25 终值, 试盘/撤单/虚假封单全部丢失。本表按
+    (标的, 帧时刻, 来源) 幂等写入, 支持逐分钟过程回放。
+
+    保留期: 365 天(方案 §9), 由 `src.core.auction_tick_sampler.purge_old_frames`
+    按 `trade_date` 文本比较清理(应用层保留期契约)。
+
+    为什么没有 Timescale hypertable: `create_hypertable` 的分区列必须是时间类型,
+    而本表 `trade_date` 是 ISO 文本(与 price_distribution_* 同口径, 双方言免转换)。
+    强行转换会在 PG 上每次启动都告警失败 —— 宁可不做, 待列类型升级后再上
+    (方案 §7.5 的存储治理不在本批验收里)。索引已按 (symbol, trade_date) /
+    (trade_date) 覆盖回放与保留期清理两条主查询。
+    """
+    from src.db.models import AuctionTickSnapshot
+
+    AuctionTickSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m202_auction_wudao_daily(conn: Connection) -> None:
+    """悟道竞价多维因子日归档 auction_wudao_daily(2026-10-18 P0-a, 方案 §7.2③)。
+
+    唯一键 (trade_date, symbol, market); 悟道不可用的日子不写行(显式空, 不写 0)。
+    schema 唯一入口是本迁移(AGENTS 铁律), 禁止运行时建表。
+    """
+    from src.db.models import AuctionWudaoDaily
+
+    AuctionWudaoDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m203_cb_tables(conn: Connection) -> None:
+    """可转债两张表 cb_terms + cb_daily_snapshot(2026-10-18 P0-a, 方案 §7.2④)。
+
+    · `cb_terms`: 条款版本化(版本=抓取日 as_of), 14 个业务字段 + raw 原样;
+    · `cb_daily_snapshot`: 每日折溢价/双低快照, payload 存 radar 行完整返回。
+
+    背景: 条款此前是 12h 进程内 dict(重启即失, 冷启动 N 次 kzz_info RPC), 快照
+    只进 Redis 60s —— 既不能回测, 也无法秒开。schema 唯一入口是本迁移。
+    """
+    from src.db.models import CbDailySnapshot, CbTerms
+
+    CbTerms.__table__.create(bind=conn, checkfirst=True)
+    CbDailySnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m204_more_info_daily(conn: Connection) -> None:
+    """TQ `get_more_info` 104 字段收盘定稿表 more_info_daily(2026-10-18 P0-b)。
+
+    此前只有 8 个 L2 字段进 `l2_fund_snapshots`; 封单额/封成比/委比/连板/竞价买入
+    等字段盘后一律回 0, 既不能回测也没有历史可回退。唯一键
+    (trade_date, symbol, market), raw 保留 104 字段原样以便口径比对。
+    """
+    from src.db.models import MoreInfoDaily
+
+    MoreInfoDaily.__table__.create(bind=conn, checkfirst=True)
+
+
+def _m205_index_daily(conn: Connection) -> None:
+    """主要指数日K表 index_daily(2026-10-18 P0-b)。
+
+    `klines` 明确不收指数(裸码撞号), spark 此前每 30 分钟重付一轮 6×指数K(≈4s)。
+    本表唯一键 (trade_date, code), 供首屏 spark 读库 + 大盘择时回测。
+    """
+    from src.db.models import IndexDaily
+
+    IndexDaily.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5780,6 +5850,16 @@ MIGRATIONS: tuple[Migration, ...] = (
     # + 日终定稿归档(历史回测/主力轨迹复盘的永久事实源)。读侧读库优先, 免每次首屏
     # 跨网打腾讯(海外节点 1~8s); 历史日永不回源(分价表只给当日)。
     Migration(200, "price_distribution_tables", _m200_price_distribution_tables),
+    # P0 落库加固批次 1(2026-10-18 P0-a, 方案 §8): 竞价过程 append-only + 悟道竞价
+    # 独家字段 + 可转债条款/折溢价。共同目标: ① 过程可回放(原只留终值);
+    # ② 冷启动不再 N 次 RPC(条款 12h 进程内 dict → 版本化表)。
+    Migration(201, "auction_tick_snapshots", _m201_auction_tick_snapshots),
+    Migration(202, "auction_wudao_daily", _m202_auction_wudao_daily),
+    Migration(203, "cb_tables", _m203_cb_tables),
+    # P0-b(方案 §8 批次 2): more_info 104 字段收盘定稿 + 指数日K。
+    # 前者填补「盘后一律回 0」的会话值缺口, 后者让首屏 spark 零跨网。
+    Migration(204, "more_info_daily", _m204_more_info_daily),
+    Migration(205, "index_daily", _m205_index_daily),
 )
 
 

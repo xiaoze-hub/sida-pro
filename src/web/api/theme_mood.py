@@ -114,6 +114,45 @@ def _read_ohlc(dates: list[str], symbols: list[str]) -> dict:
     return out
 
 
+def _build_ladder_pct_map(
+    dates: list[str], events: list[dict], ohlc: dict
+) -> dict[tuple[str, str], float]:
+    """(交易日, symbol) → 当日涨跌幅%(P0 审计 F06)。
+
+    优先用事件表 `prev_close / close_price`(与封板判定同源, 精确);
+    事件行缺这两个字段时回退 klines 前一根交易日 qfq 收盘(同复权口径, 比值可比)。
+    两处都拿不到 → 该键不放(前端不渲染占位, 不编 0)。
+    """
+    prev_of = {d: dates[i - 1] for i, d in enumerate(dates) if i > 0}
+    out: dict[tuple[str, str], float] = {}
+    for e in events:
+        day = str(e.get("trade_date") or "")
+        sym = str(e.get("symbol") or "")
+        if not day or not sym:
+            continue
+        pct = None
+        prev_close = e.get("prev_close")
+        close = e.get("close_price")
+        try:
+            if prev_close is not None and close is not None and float(prev_close) > 0:
+                pct = (float(close) / float(prev_close) - 1.0) * 100.0
+        except (TypeError, ValueError):
+            pct = None
+        if pct is None:
+            cur = (ohlc.get((day, sym)) or {}).get("c")
+            prev_day = prev_of.get(day)
+            prev_bar = (ohlc.get((prev_day, sym)) if prev_day else None) or {}
+            prev_c = prev_bar.get("c")
+            try:
+                if cur is not None and prev_c is not None and float(prev_c) > 0:
+                    pct = (float(cur) / float(prev_c) - 1.0) * 100.0
+            except (TypeError, ValueError):
+                pct = None
+        if pct is not None and abs(pct) < 1000:  # 明显脏数据不落(涨停最大 ±30%)
+            out[(day, sym)] = round(pct, 2)
+    return out
+
+
 def _ladder_stats(ladder: list, live_day) -> dict:
     """头部统计(借鉴 quicktiny): 昨日候选/今日首板/晋级/炸板/断板/冲板。
 
@@ -683,6 +722,20 @@ def _write_snapshot_async(window: int, mode: str, date: str, payload: dict) -> N
     threading.Thread(target=_runner, name="theme-mood-ladder-snap", daemon=True).start()
 
 
+def _snapshot_has_pct(payload: dict) -> bool:
+    """快照里每只个股都带 `pct` 字段(哪怕是 None)才算新口径(2026-10-18 P0)。
+
+    旧快照的 stocks 里根本没有 pct 键 → 前端只能渲染占位。
+    """
+    ladder = payload.get("ladder") or []
+    for day in ladder:
+        for row in day.get("rows") or []:
+            stocks = row.get("stocks") or []
+            if stocks:
+                return all("pct" in s for s in stocks)
+    return False
+
+
 def _snapshot_base(window: int, mode: str) -> dict | None:
     """可用快照(定型 base); 缺行/落后/脏行 → None(调用方现算兜底)。
 
@@ -695,6 +748,11 @@ def _snapshot_base(window: int, mode: str) -> dict | None:
     payload, _snap_date = row
     dates = payload.get("dates") or []
     if not dates:
+        return None
+    # P0(2026-10-18 审计 F06): 旧口径快照(个股没有 pct 字段)不再服务 —— 否则修复上线后
+    # 页面仍是一片空白, 直到下一次 16:30 预渲染。缺 pct → 现算 + 后台补写新口径快照。
+    if not _snapshot_has_pct(payload):
+        logger.info("[theme-mood] 梯队快照为旧口径(个股无 pct), 改现算并补写: %s", dates[-1])
         return None
     latest = _latest_event_date()
     if latest and _norm_date(latest) > _norm_date(dates[-1]):
@@ -847,7 +905,7 @@ def _ladder_payload(window: int, mode: str) -> dict:
                 "mode": "finalized", "as_of": None, "stale": False,
                 "degraded": None, "live_day": None, "live_as_of": None}
     events = _read(
-        "SELECT trade_date, symbol, name, is_sealed_close FROM limit_up_events "
+        "SELECT trade_date, symbol, name, is_sealed_close, prev_close, close_price FROM limit_up_events "
         "WHERE trade_date >= :a ORDER BY trade_date", {"a": history_dates[0]},
     )
     names = {e["symbol"]: e["name"] for e in events if e.get("name")}
@@ -863,6 +921,12 @@ def _ladder_payload(window: int, mode: str) -> dict:
     trading_days: dict[str, set[str]] = {}
     for (d, s) in ohlc.keys():
         trading_days.setdefault(d, set()).add(s)
+
+    # P0(2026-10-18 审计 F06): 个股当日涨跌幅 —— 旧版 ladder 只回 symbol/name/candle,
+    # 1,222 只个股 pct 全 null, 题材情绪页单页 ≈820 处 `--`。
+    # 口径: 优先事件表自带的 prev_close/close_price(精确、与封板判定同源);
+    # 事件表缺值时回退 klines 上一交易日的 qfq 收盘。两处都拿不到 → pct=None(不编)。
+    pct_map = _build_ladder_pct_map(history_dates, events, ohlc)
 
     # 用充分的历史日期序列计算连板数，再切片返回用户请求的窗口日期
     full_ladder = ladder_window(history_dates, events, names, trading_days=trading_days)
@@ -880,7 +944,8 @@ def _ladder_payload(window: int, mode: str) -> dict:
         day_labels = strength_by_date.get(day["date"]) or {}
         for r in day["rows"]:
             r["stocks"] = attach_candles(
-                [{"symbol": c, "name": n} for c, n in zip(r["codes"], r["names"])],
+                [{"symbol": c, "name": n, "pct": pct_map.get((day["date"], str(c)))}
+                 for c, n in zip(r["codes"], r["names"])],
                 day["date"], ohlc,
             )
             for s in r["stocks"]:

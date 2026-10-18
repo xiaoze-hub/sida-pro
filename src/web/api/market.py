@@ -49,21 +49,35 @@ def clear_indices_cache() -> None:
 
 
 def _spark_for(idx: dict) -> list[float]:
-    """近 20 日收盘价,供首页指数走势 sparkline 用(带 30min 独立缓存)。
+    """近 20 日收盘价,供首页指数走势 sparkline 用。
 
-    fail-soft:市场码非法/取数异常/无映射一律吞掉,返回空列表,绝不影响 quote 主体。
+    读库优先(2026-10-18 P0-b): `index_daily` 有行就直接出 —— 首次回填后**零跨网**。
+    库里不够(新部署/表未迁移/该指数未映射)才回落到 `get_index_klines`, 仍走
+    30min 进程内缓存。fail-soft: 一律吞异常, 返回空列表, 绝不影响 quote 主体。
     """
     now = time.time()
     hit = _SPARK_CACHE.get(idx["symbol"])
     if hit and now - hit[0] < _SPARK_TTL_S:
         return hit[1]
+
+    spark: list[float] = []
     try:
-        market_code = MarketCode(idx["market"])
-        klines = get_index_klines(idx["symbol"], market_code, days=20)
-        spark = [k.close for k in klines] if klines else []
-    except Exception as e:
-        logger.debug(f"指数 spark 获取失败 {idx['symbol']}: {e}")
-        spark = []
+        from src.collectors.index_daily import load_recent_closes
+
+        db_closes = load_recent_closes(idx["symbol"], days=20, market=idx.get("market"))
+        if len(db_closes) >= 2:
+            spark = db_closes
+    except Exception as e:  # noqa: BLE001 - 读库失败回落取数
+        logger.debug(f"指数 spark 读库失败 {idx['symbol']}: {e}")
+
+    if not spark:
+        try:
+            market_code = MarketCode(idx["market"])
+            klines = get_index_klines(idx["symbol"], market_code, days=20)
+            spark = [k.close for k in klines] if klines else []
+        except Exception as e:
+            logger.debug(f"指数 spark 获取失败 {idx['symbol']}: {e}")
+            spark = []
     _SPARK_CACHE[idx["symbol"]] = (now, spark)
     return spark
 

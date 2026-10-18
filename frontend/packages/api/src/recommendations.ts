@@ -161,6 +161,9 @@ export interface StrategySignalItem {
   target_price?: number | null
   invalidation?: string
   plan_quality?: number
+  /** P0(2026-10-18): 计划合法性 —— entry_low < stop_loss < target; false 时前端画红条 */
+  plan_valid?: boolean
+  plan_invalid_reason?: string
   source_agent?: string
   source_suggestion_id?: number | null
   source_candidate_id?: number | null

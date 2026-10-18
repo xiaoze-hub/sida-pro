@@ -18,12 +18,16 @@
   * 涨停撤单 / 跌停撤单:                价格列 = 撤单率(0.5~0.9 区间) -> withdraw_rate = 价格列 × 100
   * 其他类型(兜底安全网):             若 |价格列| < 0.21 也按涨跌幅处理 -> gap_pct = 价格列 × 100
                                        否则视为脏数据 -> None
-- volume_ratio 数据源不提供, 字段固定 None, API 响应 missing_fields 告知前端。
+- volume_ratio 数据源(thsdk)不提供 → 基础值为 None; TQ 逐票增强成功后由 `OpenVolPre1`
+  归一化填充(2026-10-18: 该字段量纲无文档, 只在落进 0.3~30 的合理区间才落值, 否则置空并给
+  `volume_ratio_note` 说明 —— 旧实现把原值当倍率透传, 生产上出现 163,513 倍的假量比)。
 - v0.3.1 旧版 (价格/昨收-1)*100 二次计算已废弃: 价格列不是价格, 公式不成立。
 """
 from __future__ import annotations
 
 import logging
+import math
+import re
 import time
 
 logger = logging.getLogger(__name__)
@@ -179,17 +183,19 @@ def _to_records(df) -> list[dict]:
 def _normalize_symbol(raw: str) -> str:
     """把竞价异动返回的代码归一化为 6 位 A 股代码(去除交易所后缀 / thsdk 前缀)。
 
-    例: "USZA002361" / "002361.SZ" / "002361" / "sh600000" -> 6 位数字代码。
+    例: "USZA002361" / "USHT603922" / "002361.SZ" / "002361" / "sh600000" -> 6 位数字。
     归一化失败(无法识别)则原样返回(由上层容错)。
+
+    2026-10-18 P0(审计 F19): 旧实现只认 USZA/USHA/USTM 三个硬编码前缀, 沪市
+    USHT 前缀直接漏到页面上(竞价表整列 `USHT603922`, 破坏复制/跳转/搜索),
+    且 TQ 逐票增强按 `len(sym)==6` 跳过这些行 —— 量比/竞价额因此整列为空。
+    改为通用 `US + 两位交易所码 + 6 位数字`。
     """
     s = (raw or "").strip().upper()
-    # thsdk 前缀: USZA/USHA/USTM
-    for prefix in ("USZA", "USHA", "USTM"):
-        if s.startswith(prefix):
-            tail = s[len(prefix):]
-            if tail.isdigit() and len(tail) == 6:
-                return tail
-            break
+    # thsdk 前缀: USZA(深A)/USHA(沪A)/USHT(沪)/USBJ(北)/USTM ...
+    m = re.match(r"^US[A-Z]{2}(\d{6})$", s)
+    if m:
+        return m.group(1)
     # 交易所后缀: 002361.SZ / 600000.SH / 830001.BJ
     if "." in s:
         base = s.split(".")[0]
@@ -202,6 +208,36 @@ def _normalize_symbol(raw: str) -> str:
     if len(s) == 8 and s[:2] in ("SH", "SZ") and s[2:].isdigit():
         return s[2:]
     return raw
+
+
+# ── 竞价量比量纲(2026-10-18 P0, 审计 §4.2) ────────────────────────────────
+# TQ `OpenVolPre1` 无单位文档, 生产实测原值 857 ~ 163,513: 直接当倍率展示就是
+# 「163,513 倍量比」—— 全站最像真数据、实际最不可用的一列。
+# 实战量比合理区间 0.3 ~ 30, 归一规则(全批同一量纲, 不逐行换算法 —— 否则同一列
+# 混着 bp/pct 两种倍率, 又是另一种量纲错乱):
+#   ① 原值已在 [0.3, 30]  → 认定已是倍率(少数源直接给倍率);
+#   ② 原值 / 10000 落区间  → 万分位(主假设: 857~163,513 → 0.09~16.4);
+#   ③ 都落不进            → 置空 + 原因(宁缺, 不给 16 万倍的假量比)。
+AUCTION_VR_MIN = 0.3
+AUCTION_VR_MAX = 30.0
+AUCTION_VR_BP_DIVISOR = 10000.0
+
+
+def normalize_auction_volume_ratio(raw) -> tuple[float | None, str | None]:
+    """`OpenVolPre1` → (量比, 采用的量纲标签); 无法落进 0.3~30 则 (None, 原因)。"""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, "invalid"
+    if not math.isfinite(value) or value <= 0:
+        return None, "invalid"
+    if AUCTION_VR_MIN <= value <= AUCTION_VR_MAX:
+        return round(value, 2), "ratio"
+    scaled = value / AUCTION_VR_BP_DIVISOR
+    if AUCTION_VR_MIN <= scaled <= AUCTION_VR_MAX:
+        return round(scaled, 2), "bp"
+    return None, "out_of_range"
+
 
 
 def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
@@ -281,13 +317,17 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
                     except Exception:
                         pass
 
-                # 2. 竞价量比 (OpenVolPre1: 相对前1日成交量放大比例)
+                # 2. 竞价量比 (OpenVolPre1: 该字段量纲无文档 → 归一到 0.3~30 才落值)
                 vr = info.get("OpenVolPre1")
                 if vr is not None:
-                    try:
-                        r["volume_ratio"] = round(float(vr), 2)
-                    except Exception:
-                        pass
+                    value, label = normalize_auction_volume_ratio(vr)
+                    r["volume_ratio"] = value
+                    if value is None:
+                        # 溯源信息: 原始值 + 置空原因(不落 DB 列, 只随响应给排障用)
+                        r["volume_ratio_raw"] = vr
+                        r["volume_ratio_note"] = f"OpenVolPre1={vr} 量纲异常({label}), 已置空"
+                    else:
+                        r["volume_ratio_scale"] = label
 
                 # 3. 竞价真实成交金额 (OpenAmo, 单位元)
                 amo = info.get("OpenAmo")

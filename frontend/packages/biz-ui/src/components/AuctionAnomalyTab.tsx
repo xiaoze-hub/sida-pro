@@ -6,6 +6,7 @@ import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { chaseBadge, type GapStudyResp } from '@/lib/gap-study'
 import { safeFixed } from '@/lib/format'
+import { normSymbol } from '@/lib/symbol'
 import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
 
 /**
@@ -160,7 +161,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
 
   const addToWatchlist = useCallback(
     async (item: AuctionAnomalyItem) => {
-      const code = String(item.symbol || item.code || '').trim()
+      const code = normSymbol(String(item.symbol || item.code || ''))
       if (!code) return
       if (adding.has(code)) return
       const next = new Set(adding)
@@ -239,7 +240,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
           </thead>
           <tbody>
             {records.map((r, i) => {
-              const code = String(r.symbol || r.code || '')
+              const code = normSymbol(String(r.symbol || r.code || ''))
               const name = String(r.name || code || '')
               const gap = typeof r.gap_pct === 'number' ? r.gap_pct : null
               const withdraw = typeof r.withdraw_rate === 'number' ? r.withdraw_rate : null

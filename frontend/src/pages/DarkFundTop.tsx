@@ -241,7 +241,9 @@ export default function DarkFundTopPage() {
                         {toAmountFromWan(r.main_net_wan)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {safeFixed(r.main_net_vol ?? r.main_net_ratio, 0, '-')}
+                        {/* P0(2026-10-18 审计 F17): 0 位舍入把 0.4661 亿显示成 0(5/20 行"无净量")。
+                            净量以「亿股」计, 2 位小数才有区分度。 */}
+                        {safeFixed(r.main_net_vol ?? r.main_net_ratio, 2, '-')}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
                         {toAmountFromWanUnsigned(r.total_amount_wan)}

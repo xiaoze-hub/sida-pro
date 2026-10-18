@@ -518,3 +518,41 @@ async def fetch_auction_risk_async(limit: int = 10) -> str:
 
 async def fetch_auction_raw_async() -> dict:
     return await to_async(fetch_auction_raw)
+
+
+def fetch_auction_structured(limit: int = 200) -> dict:
+    """竞价**结构化**视图(2026-10-18 P0-a, 方案 §8 批次 1)。
+
+    与 `fetch_auction_raw` 的区别: 后者回吐悟道原始 JSON(各工具形状不一), 本函数
+    把它归一化成"每只票一行"的结构, 供 `auction_wudao_daily` 落库与 API 直出。
+
+    返回: `{available, trade_date, rows[], limited, error, source}`。
+    悟道不可用/返回只有文本 → `available=False` + `error`, **rows 为空**
+    (显式空, 不写 0 行冒充"当日无竞价因子")。
+    """
+    from src.core.trade_phase import cn_now
+
+    raw = fetch_auction_raw() or {}
+    try:
+        from src.core.auction_wudao_store import extract_rows
+
+        rows = extract_rows(raw)
+    except Exception as e:  # noqa: BLE001 - 解析失败如实降级
+        return {
+            "available": False,
+            "trade_date": cn_now().date().isoformat(),
+            "rows": [],
+            "limited": bool(raw.get("limited")),
+            "error": f"竞价结构化解析失败: {e}",
+            "source": "wudao",
+        }
+    if limit and limit > 0:
+        rows = rows[:limit]
+    return {
+        "available": bool(rows),
+        "trade_date": cn_now().date().isoformat(),
+        "rows": rows,
+        "limited": bool(raw.get("limited")),
+        "error": None if rows else (raw.get("error") or "悟道竞价无结构化行"),
+        "source": "wudao",
+    }
