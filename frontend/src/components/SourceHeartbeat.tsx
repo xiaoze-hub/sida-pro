@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 
+import { useSourceHealth, type SourceHealthItem } from '@/hooks/useSourceHealth'
 import { useVendorTrust } from '@/hooks/useVendorTrust'
 import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone, trustTooltip } from '@/lib/vendor-trust'
 
@@ -13,7 +14,9 @@ export function SourceHeartbeat() {
   const { health: logicHealth } = useSourceHealth()
 
   // 兜底：如果 vendor trust 接口由于限流或初次未就绪，而 logicHealth 已有就绪源，则正常渲染心跳，不报红字
-  const hasLogicReady = Object.values(logicHealth || {}).some((it) => it.status === 'connected')
+  const hasLogicReady = Object.values(logicHealth || {}).some(
+    (it: unknown) => (it as SourceHealthItem)?.status === 'connected',
+  )
 
   if (items.length === 0) {
     if (error && !loading && !hasLogicReady) {

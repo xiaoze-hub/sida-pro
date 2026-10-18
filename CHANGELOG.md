@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.7 (补充 SourceHeartbeat 的 TypeScript 类型与导入，确保 CI 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.15.6 → v0.15.7 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端 TypeScript 类型修复**:
+  - `SourceHeartbeat.tsx`: 补充导入 `useSourceHealth` 与 `SourceHealthItem` 类型，解决 `tsc -b` 未定义与 unknown 类型推断报错。
+
 ## release: v0.15.6 (修复胶囊点击被拖拽误截流 + 彻底解决HTTP 429并平滑心跳状态)（2026-10-18）
 
 - **VERSION**: bump v0.15.5 → v0.15.6 (同步 README.md / README.zh-CN.md 徽章)。
