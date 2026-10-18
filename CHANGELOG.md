@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.7 (清理临时走查脚本以满足固定密码安全扫描门禁)（2026-10-18）
+
+- **VERSION**: bump v0.16.6 → v0.16.7 (同步 README.md / README.zh-CN.md 徽章)。
+- **安全扫描门禁合规**:
+  - 清理本地临时巡检测试脚本中的明文密码常量，`test_no_fixed_admin_password_anywhere` 100% 绿灯。
+
 ## release: v0.16.6 (收敛筹码主峰字体字号到系统规范 10px，保证门禁 100% 全绿)（2026-10-18）
 
 - **VERSION**: bump v0.16.5 → v0.16.6 (同步 README.md / README.zh-CN.md 徽章)。
