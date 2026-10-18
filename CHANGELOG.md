@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.2 (打通 K 线图层自取 summary 时筹码山峰的双向绑定)（2026-10-18）
+
+- **VERSION**: bump v0.16.1 → v0.16.2 (同步 README.md / README.zh-CN.md 徽章)。
+- **K线筹码山峰 (CYQ) 数据链路全打通**:
+  - `src/web/api/klines.py`: 在日级派生块的初始骨架 `_compute_daily_blocks` 与 `_build_layer_data` 中明确声明 `"main_accumulation_chips": None` 键，防止字段漏并；
+  - `frontend/packages/biz-ui/src/components/KlineChart.tsx`: 在按需自取图层数据（`fetchAPI<KlineSummaryLayer>`）的回调中，提取 `res.main_accumulation_chips` 并调用 `setAccumulationChipsFetched`，确保个股工作台主图右侧横向筹码山峰直方图直接展示。
+
 ## release: v0.16.1 (补齐 useStocksData 的 useCallback 依赖，确保 CI 100% 全绿)（2026-10-18）
 
 - **VERSION**: bump v0.16.0 → v0.16.1 (同步 README.md / README.zh-CN.md 徽章)。

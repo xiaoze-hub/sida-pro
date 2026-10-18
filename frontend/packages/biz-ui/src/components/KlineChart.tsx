@@ -994,6 +994,9 @@ export default function KlineChart(props: {
             priceLines: normalizePriceLines(res?.unlock_levels),
             activitySeries: Array.isArray(res?.activity_series) ? res.activity_series : [],
           })
+          if ((res as any)?.main_accumulation_chips) {
+            setAccumulationChipsFetched((res as any).main_accumulation_chips)
+          }
         })
         .catch(() => {
           // 取不到 = 本次不画图层(显式降级), 不编造; summary 侧已有自身降级与缓存

@@ -1014,6 +1014,7 @@ def _compute_daily_blocks(symbol: str, bars: list[dict]) -> dict:
     """
     out: dict = {"gs_signals": None, "fund_flow": None, "activity_series": None,
                  "events": None, "unlock_levels": None, "chips": None,
+                 "main_accumulation_chips": None,
                  "resonance": _resonance_default()}
 
     # ① gs_signals(依赖 bars: bars 空时跳过, 保持 None 由前端显式"无数据")
@@ -1160,7 +1161,7 @@ def _build_layer_data(symbol: str, market_code: MarketCode, now=None) -> dict:
     """
     out: dict = {"gs_signals": None, "fund_flow": None, "events": None,
                  "orderbook": None, "unlock_levels": None, "chips": None,
-                 "activity_series": None,
+                 "activity_series": None, "main_accumulation_chips": None,
                  "resonance": _resonance_default()}
     if market_code.value != "CN":
         return out
