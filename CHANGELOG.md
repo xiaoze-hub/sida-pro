@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.9 (升级K线主图CYQ横向山形图独立高亮卡片与价位轴)（2026-10-18）
+
+- **VERSION**: bump v0.16.8 → v0.16.9 (同步 README.md / README.zh-CN.md 徽章)。
+- **K线主图右侧 CYQ 横向筹码山峰图视觉彻底重构**:
+  - `KlineChart.tsx`: 为横向直方图增加 `data-testid="chip-profile-histogram"` 与独立高亮半透卡片容器（`w-36` 磨砂玻璃质感、头部顶标 `筹码分布 (CYQ) ¥10.37`、每个采样切片增加价格数字刻度 `¥9.0`、红绿筹码柱加高加宽、主峰高光指示 `◀峰`），彻底消除图层过窄不可见问题。
+
 ## release: v0.16.8 (在盘口Tab内增加专属筹码梯队分布表与主峰显式呈现)（2026-10-18）
 
 - **VERSION**: bump v0.16.7 → v0.16.8 (同步 README.md / README.zh-CN.md 徽章)。

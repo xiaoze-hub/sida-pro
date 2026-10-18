@@ -65,7 +65,6 @@
     "url": "https://SIDA.hengsheng-elec.com/stocks/002361?tab=fundamentals",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/07_workbench_tab_fundamentals.png",
     "alerts": [
-      " 买 +106.06万 卖 +429.12万 盘口快照源: 非交易时段·无可用盘口快照 微观分价博弈",
       "力意图数据(非 A 股/数据源不可用/未开盘) AI 解读 AI 解读 规则给结论, AI 只补『为"
     ],
     "net_errs": [],
@@ -76,9 +75,7 @@
     "name": "个股工作台-研报深度",
     "url": "https://SIDA.hengsheng-elec.com/stocks/002361?tab=research",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/08_workbench_tab_research.png",
-    "alerts": [
-      "ent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分 深度分析 tradingAgents"
-    ],
+    "alerts": [],
     "net_errs": [],
     "console_errs": []
   },
@@ -98,7 +95,9 @@
     "name": "独立集合竞价专区",
     "url": "https://SIDA.hengsheng-elec.com/auction",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/10_auction.png",
-    "alerts": [],
+    "alerts": [
+      "9:30 确立方向 \t 自选 429\t688190\t XD云路股 \t+0.16%\t1 万\t—\t98."
+    ],
     "net_errs": [],
     "console_errs": []
   },

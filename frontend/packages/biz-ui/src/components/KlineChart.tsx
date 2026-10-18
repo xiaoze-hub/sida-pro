@@ -1788,8 +1788,9 @@ export default function KlineChart(props: {
         {/* K线右侧横向筹码分布山形图 (CYQ 直方图) */}
         {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
           <div
-            className="absolute top-4 right-16 bottom-28 w-32 pointer-events-none flex flex-col justify-between z-20"
-            title={`120日筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
+            data-testid="chip-profile-histogram"
+            className="absolute top-4 right-16 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"
+            title={`120日主力筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
           >
             {(() => {
               const prices = effAccumulationChips.prices as number[]
@@ -1803,29 +1804,38 @@ export default function KlineChart(props: {
                 sampledIndices.push(i)
               }
               return (
-                <div className="h-full flex flex-col justify-between py-1 bg-background/40 backdrop-blur-[2px] rounded p-1 border border-border/30">
-                  {sampledIndices.map((idx) => {
-                    const p = prices[idx]
-                    const c = chips[idx]
-                    const widthPct = Math.min(100, Math.round((c / maxChip) * 100))
-                    const isProfit = p <= lastClose
-                    const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
-                    return (
-                      <div key={p} className="flex items-center justify-end h-1.5 gap-1">
-                        {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
-                        <div
-                          className={`h-1 rounded-sm shadow-sm transition-all ${
-                            isPeak
-                              ? 'bg-amber-400 dark:bg-amber-500 shadow-amber-500/50'
-                              : isProfit
-                              ? 'bg-rose-500/80 dark:bg-rose-500/90'
-                              : 'bg-emerald-500/80 dark:bg-emerald-400/90'
-                          }`}
-                          style={{ width: `${Math.max(6, widthPct)}%` }}
-                        />
-                      </div>
-                    )
-                  })}
+                <div className="h-full flex flex-col justify-between py-1 bg-background/80 dark:bg-black/60 backdrop-blur-md rounded p-1.5 border border-border/60 shadow-lg pointer-events-auto">
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground pb-1 border-b border-border/40 select-none">
+                    <span className="font-medium">筹码分布 (CYQ)</span>
+                    <span className="font-mono text-amber-500 font-bold">¥{safeFixed(effAccumulationChips.main_cost, 2)}</span>
+                  </div>
+                  <div className="flex-1 flex flex-col justify-between py-1">
+                    {sampledIndices.map((idx) => {
+                      const p = prices[idx]
+                      const c = chips[idx]
+                      const widthPct = Math.min(100, Math.round((c / maxChip) * 100))
+                      const isProfit = p <= lastClose
+                      const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
+                      return (
+                        <div key={p} className="flex items-center justify-end h-1.5 gap-1" title={`¥${safeFixed(p, 2)}: 占比 ${widthPct}%`}>
+                          <span className="font-mono text-[10px] text-muted-foreground/60 w-8 text-right select-none leading-none">
+                            {safeFixed(p, 1)}
+                          </span>
+                          {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
+                          <div
+                            className={`h-1.5 rounded-sm shadow-sm transition-all ${
+                              isPeak
+                                ? 'bg-amber-400 dark:bg-amber-500 shadow-amber-500/50'
+                                : isProfit
+                                ? 'bg-rose-500/85 dark:bg-rose-500'
+                                : 'bg-emerald-500/85 dark:bg-emerald-400'
+                            }`}
+                            style={{ width: `${Math.max(8, widthPct)}%` }}
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               )
             })()}
