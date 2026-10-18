@@ -173,7 +173,8 @@ export function CopilotCapsule({
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('[data-capsule-no-drag]')) return
+    // 只有拖拽把手与外壳空白处允许拖拽，点击内部按钮（如唤醒主体、关闭按钮）不劫持为拖拽
+    if (target.closest('[data-capsule-no-drag]') || target.closest('[data-testid="copilot-capsule-open"]')) return
     const el = rootRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
@@ -354,9 +355,10 @@ export function CopilotCapsule({
         <span
           aria-hidden="true"
           title={CAPSULE_DRAG_HINT}
-          className="hidden w-4 items-center justify-center text-muted-foreground/50 md:flex"
+          data-capsule-drag-handle="true"
+          className="flex w-6 cursor-grab active:cursor-grabbing items-center justify-center text-muted-foreground/60 hover:text-foreground md:flex"
         >
-          <GripVertical className="h-3.5 w-3.5" />
+          <GripVertical className="h-4 w-4" />
         </span>
         <button
           type="button"

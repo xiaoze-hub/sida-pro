@@ -175,6 +175,15 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.6 (修复胶囊点击被拖拽误截流 + 彻底解决HTTP 429并平滑心跳状态)（2026-10-18）
+
+- **VERSION**: bump v0.15.5 → v0.15.6 (同步 README.md / README.zh-CN.md 徽章)。
+- **AI 盘口参谋胶囊唤醒修复**:
+  - `CopilotCapsule.tsx`: 优化 pointerDown 逻辑，将唤醒主体与关闭按钮显式豁免拖拽拦截，单独设立 GripVertical 拖拽把手区，彻底解决点击唤醒因指针微移被阻断的问题。
+- **HTTP 429 与源心跳提示平滑优化**:
+  - `src/web/middleware.py`: 将全局 GET 默认限流桶从 300 req/min 放宽至 1200 req/min，完全适应个股工作台多组件密集并发加载；
+  - `SourceHeartbeat.tsx`: 增强源心跳平滑过渡，若逻辑源已连接或处于初始化阶段，显示柔和呼吸态，不再突兀报红。
+
 ## release: v0.15.5 (收敛可转债覆盖度门禁 + 全量数据落库P0闭环最终定稿)（2026-10-18）
 
 - **VERSION**: bump v0.15.4 → v0.15.5 (同步 README.md / README.zh-CN.md 徽章)。

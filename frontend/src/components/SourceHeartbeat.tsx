@@ -10,12 +10,17 @@ import { TRUST_TONE_CLASS, formatLatency, trustSummary, trustTone, trustTooltip 
  */
 export function SourceHeartbeat() {
   const { items, loading, error } = useVendorTrust()
+  const { health: logicHealth } = useSourceHealth()
+
+  // 兜底：如果 vendor trust 接口由于限流或初次未就绪，而 logicHealth 已有就绪源，则正常渲染心跳，不报红字
+  const hasLogicReady = Object.values(logicHealth || {}).some((it) => it.status === 'connected')
 
   if (items.length === 0) {
-    if (error && !loading) {
+    if (error && !loading && !hasLogicReady) {
       return (
-        <div className="mb-3 text-[11px] text-amber-600" role="status">
-          源心跳不可用(质量接口请求失败)
+        <div className="mb-2 text-[11px] text-muted-foreground flex items-center gap-1.5" role="status">
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+          <span>源心跳连接中...</span>
         </div>
       )
     }

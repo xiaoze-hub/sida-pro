@@ -43,7 +43,7 @@ def _env_int(name: str, default: int) -> int:
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 # 2026-08-21 限流分级: 全局默认 60 → 300 req/min
 # 原因: Dashboard 单次刷新并发 26 个 GET, 60/min 下多 tab/连续操作极易误伤(实测生产触发)
-RATE_LIMIT_DEFAULT = _env_int("RATE_LIMIT_DEFAULT", 300)  # 默认 300 req / minute / IP
+RATE_LIMIT_DEFAULT = _env_int("RATE_LIMIT_DEFAULT", 1200)  # 默认 1200 req / minute (适应数据密集大屏多组件并发加载)
 RATE_LIMIT_WINDOW = 60  # 60 秒滑动窗口
 RATE_LIMIT_BURST = _env_int("RATE_LIMIT_BURST", 10)  # 突发容忍 10 个
 # 敏感端点单独严格档(防爆破/防滥用): 登录/改密等写操作
