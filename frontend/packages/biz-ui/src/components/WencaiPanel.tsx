@@ -3,6 +3,7 @@ import { Loader2, Search, Sparkles } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
+import { normSymbol } from '@/lib/symbol'
 
 interface WencaiRow {
   symbol: string
@@ -198,7 +199,8 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
             <tbody>
               {shownRows.map(r => (
                 <tr key={r.symbol || `${r.name}-${Math.random()}`} className="border-b border-border/30 hover:bg-accent/40">
-                  <td className="py-1.5 pr-2 font-mono text-muted-foreground">{r.symbol || '--'}</td>
+                  {/* P0(2026-10-18 审计 F19): 问财给的是 thsdk 前缀码(USZA000006), 展示层必须归一成 6 位 */}
+                  <td className="py-1.5 pr-2 font-mono text-muted-foreground" data-symbol={r.symbol || ''}>{normSymbol(r.symbol) || '--'}</td>
                   <td className="py-1.5 pr-2 font-medium text-foreground whitespace-nowrap">{r.name || '--'}</td>
                   {extraCols.map(c => (
                     <td key={c} className="py-1.5 pr-2 text-right font-mono whitespace-nowrap">
