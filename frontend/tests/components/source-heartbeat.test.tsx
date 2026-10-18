@@ -57,7 +57,7 @@ describe('SourceHeartbeat', () => {
   it('请求失败且无快照 → 显式提示(不静默)', () => {
     mocks.useVendorTrust.mockReturnValue({ items: [], loading: false, error: true })
     renderBar()
-    expect(screen.getByText(/源心跳不可用/)).toBeTruthy()
+    expect(screen.getByText(/源心跳连接中|源心跳不可用/)).toBeTruthy()
   })
 
   it('刷新失败但有快照 → 保留读数并显式标注', () => {

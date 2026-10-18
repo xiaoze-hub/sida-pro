@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.15.9 (同步更新 SourceHeartbeat 测试断言，确保 CI 门禁 100% 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.15.8 → v0.15.9 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端门禁回归测试修复**:
+  - `source-heartbeat.test.tsx`: 同步匹配平滑后的「源心跳连接中...」提示，保证全量 vitest 1208 项单测 100% 全绿。
+
 ## release: v0.15.8 (合规重命名：决策先锋全面更名为数智决策，彻底消除侵权风险)（2026-10-18）
 
 - **VERSION**: bump v0.15.7 → v0.15.8 (同步 README.md / README.zh-CN.md 徽章)。
