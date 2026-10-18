@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.1 (补齐 useStocksData 的 useCallback 依赖，确保 CI 100% 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.16.0 → v0.16.1 (同步 README.md / README.zh-CN.md 徽章)。
+- **前端 ESLint 门禁修复**:
+  - `src/pages/stocks/useStocksData.ts`: 将 `portfolioRaw` 补齐进 `loadPortfolio` 的 `useCallback` 依赖数组，满足 `react-hooks/exhaustive-deps` 严格门禁，消除 CI 失败。
+
 ## release: v0.16.0 (彻底治理持仓HTTP 429弹窗与生产逐页体检收敛)（2026-10-18）
 
 - **VERSION**: bump v0.15.9 → v0.16.0 (同步 README.md / README.zh-CN.md 徽章)。

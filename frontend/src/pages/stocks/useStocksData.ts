@@ -252,7 +252,7 @@ const loadPortfolio = useCallback(async () => {
   } finally {
     setPortfolioLoading(false)
   }
-}, [setLoadError, setMarketStatus, setPortfolio, setPortfolioLoading, setPortfolioRaw])
+}, [portfolioRaw, setLoadError, setMarketStatus, setPortfolio, setPortfolioLoading, setPortfolioRaw])
 
 const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
   const items: QuoteRequestItem[] = []
