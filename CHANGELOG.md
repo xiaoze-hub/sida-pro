@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.16.6 (收敛筹码主峰字体字号到系统规范 10px，保证门禁 100% 全绿)（2026-10-18）
+
+- **VERSION**: bump v0.16.5 → v0.16.6 (同步 README.md / README.zh-CN.md 徽章)。
+- **设计系统字号门禁合规**:
+  - `KlineChart.tsx`: 筹码主峰指示标签字号从 `text-[9px]` 规范化收敛至 `text-[10px]`，完全符合 `design-system-tokens.test.ts` 规定的系统字号档位集合 `[10, 11, 12, 13, 16, 20]`。
+
 ## release: v0.16.5 (可转债代码池增加本地持久化条款库双向自动兜底)（2026-10-18）
 
 - **VERSION**: bump v0.16.4 → v0.16.5 (同步 README.md / README.zh-CN.md 徽章)。

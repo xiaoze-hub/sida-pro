@@ -1812,7 +1812,7 @@ export default function KlineChart(props: {
                     const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
                     return (
                       <div key={p} className="flex items-center justify-end h-1.5 gap-1">
-                        {isPeak && <span className="text-[9px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
+                        {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
                         <div
                           className={`h-1 rounded-sm shadow-sm transition-all ${
                             isPeak
