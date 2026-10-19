@@ -117,6 +117,10 @@ async def _fetch_news_by_sentiment(
     try:
         from src.core.marketdata_client import get_market_data
 
+        # 未显式传名称时自行解析，避免单独调用本函数时退化成只按 symbols 判定（会串入全市场汇总稿）
+        if not stock_name and (market or "CN").upper() == "CN":
+            stock_name = await asyncio.to_thread(_resolve_stock_name, sym)
+
         items = await asyncio.to_thread(
             lambda: get_market_data().news([sym], market=market, since_hours=hours)
         )
@@ -124,14 +128,13 @@ async def _fetch_news_by_sentiment(
         for it in items or []:
             title = (getattr(it, "title", "") or "").strip()
             content = (getattr(it, "content", "") or "").strip()
-            # 相关性过滤（宁可漏，不可把别家新闻算到本股头上）
+            # 相关性过滤：以标题是否点名本股为准（宁可漏，不可把别家新闻算到本股头上）。
             # 东财个股新闻源会把全市场汇总稿一并打上本股 tag（如「55家公司前三季度业绩预增」），
-            # 因此有股票名称时以「标题/正文出现本股名称」为准；名称缺失才退回 symbols 判定。
-            syms = getattr(it, "symbols", None) or []
+            # 这类稿件标题不含本股名称，必须剔除；名称缺失时退回 symbols 判定。
             if stock_name:
-                related = stock_name in title or stock_name in content[:200]
+                related = stock_name in title or sym in title
             else:
-                related = sym in syms
+                related = sym in (getattr(it, "symbols", None) or [])
             if not related:
                 continue
             label, score, hits = classify_news_sentiment(title, content)
