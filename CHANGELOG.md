@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.3 (回归纯净usable门禁以确保全量测试绿灯通过)（2026-10-19）
+
+- **VERSION**: bump v0.17.2 → v0.17.3 (同步 README.md / README.zh-CN.md 徽章)。
+- **测试门禁回归修复**:
+  - `layer_precompute.py` & `summary_cache.py`: 保持原始 `usable()` 和 `get_cached_summary()` 单测契约严格对齐，彻底通过 `test_live_window_and_usable_gates` 与 shard 2/4 门禁。
+
 ## release: v0.17.2 (个股行情工作台三段式功能舱重构与视觉分层隔离)（2026-10-19）
 
 - **VERSION**: bump v0.17.1 → v0.17.2 (同步 README.md / README.zh-CN.md 徽章)。

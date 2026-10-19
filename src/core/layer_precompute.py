@@ -265,13 +265,7 @@ def usable(
         return False
     asof = _to_iso_date(row.get("asof"))
     cut = _to_iso_date(latest_settled_asof)
-    if not (asof and cut and asof >= cut):
-        return False
-    # 2026-10-19: 若旧落库行中缺少 main_accumulation_chips(历史版本升级前写入)，视为不完整未命中，回现算补齐
-    blocks = row.get("blocks") or {}
-    if "main_accumulation_chips" not in blocks or blocks.get("main_accumulation_chips") is None:
-        return False
-    return True
+    return bool(asof and cut and asof >= cut)
 
 
 def put_layer_daily(
