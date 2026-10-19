@@ -236,7 +236,7 @@ function TabBar({ value, onChange }: { value: WorkbenchTab; onChange: (t: Workbe
       value={value}
       // 点击回传的是普通 string → 用 Task 1 的 parseTab 收敛回联合类型(非法值落 'l2')
       onChange={(key) => onChange(parseTab(key))}
-      className="mt-3"
+      className="m-0"
     />
   )
 }
@@ -380,115 +380,126 @@ export default function StockWorkbench() {
   if (!symbol) return <div className="p-4 text-[12px] text-muted-foreground">缺少代码</div>
 
   return (
-    <div className="mx-auto max-w-none p-3">
-      {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
-      <HeaderBand
-        symbol={symbol}
-        market={MARKET}
-        type={type}
-        hasPosition={hasPosition === true}
-        positionUnknown={hasPosition === undefined}
-        onTypeChange={handleTypeChange}
-        onGotoTab={handleGotoTab}
-        onRefresh={handleRefresh}
-        back={back}
-      />
+    <div className="mx-auto max-w-none p-3 space-y-3">
+      {/* ── 【舱 1：标的战术看板 Header Station】 ──────────────────────── */}
+      <section className="rounded-lg border border-border/80 bg-card/60 p-2 shadow-sm backdrop-blur">
+        <HeaderBand
+          symbol={symbol}
+          market={MARKET}
+          type={type}
+          hasPosition={hasPosition === true}
+          positionUnknown={hasPosition === undefined}
+          onTypeChange={handleTypeChange}
+          onGotoTab={handleGotoTab}
+          onRefresh={handleRefresh}
+          back={back}
+        />
 
-      {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
-      {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
+        {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
+        {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
 
-      {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
-      {type === 'stock' && hasPosition ? (
-        <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
-      ) : null}
+        {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
+        {type === 'stock' && hasPosition ? (
+          <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
+        ) : null}
+      </section>
 
       {type !== 'stock' ? (
         /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
            遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <div className="mt-3">
+        <section className="rounded-lg border border-border/80 bg-card/40 p-2 shadow-sm">
           <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
-        </div>
+        </section>
       ) : (
         /* 个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都没有
            `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
-        <div key={refreshKey}>
-          {/* 带2: 首屏主体 —— 大 K 线(4 图层 + 副图) + 右栏 320px 速览卡
-              走查 2026-09-18: 右栏更高时左图下方会大片空白 —— 右栏限高与主图同高并可滚,
-              两列底部对齐, 不再被最长列撑出死白。 */}
-          <div className="mt-3 flex items-stretch gap-3">
-            <div className="min-w-0 flex-1 rounded border border-border/60 p-2">
-              <MemoKlineChart
-                symbol={symbol}
-                market={MARKET}
-                /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
-                initialInterval={periodFromUrl ?? '1d'}
-                initialDays={120}
-                height={420}
-                /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
-                   无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
-                costLines={costLines}
-                /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
-                onIntervalChange={handleIntervalChange}
-                /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
-                onRangeStats={handleRangeStats}
-                /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
-                sourceReady={sourceReady}
-                sourceReason={sourceReason}
-                /* 2026-09-23 修: 个股分支漏迁 enableMinute —— 用户报"分时图不显示了"。
-                   IndexBody 在 P2(09-18) 由 InteractiveKline 迁到 KlineChart 时**保留**了
-                   enableMinute(见其内注释), 个股分支当时没跟着迁 ⇒ 个股页连「分时」按钮都不渲染。
-                   分时数据源本身是好的(后端 /quotes/minute 实测 603629 返回 267 点)。 */
-                enableMinute
-              />
-            </div>
-            {railOpen ? (
-              <div className="flex w-[320px] shrink-0 flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-muted-foreground">速览</span>
+        <div key={refreshKey} className="space-y-3">
+          {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ──────────────────────── */}
+          <section className="rounded-lg border border-border/80 bg-card/40 p-2.5 shadow-sm">
+            <div className="flex items-stretch gap-3">
+              <div className="min-w-0 flex-1 rounded border border-border/50 bg-background/50 p-2">
+                <MemoKlineChart
+                  symbol={symbol}
+                  market={MARKET}
+                  /* §10.2①: 周期以 URL 为准; URL 无/非法 → 图表默认 '1d' */
+                  initialInterval={periodFromUrl ?? '1d'}
+                  initialDays={120}
+                  height={420}
+                  /* P1-2: 持仓成本线 —— 该股在真实持仓里且有正成本价时才传(画水平线 + 成本轴标签);
+                     无持仓/取不到成本价时 undefined ⇒ 一条不画, 不报错(禁猜/禁默认值)。 */
+                  costLines={costLines}
+                  /* §10.2①: 用户切周期 → 写 ?period=, 链接可分享/刷新不丢 */
+                  onIntervalChange={handleIntervalChange}
+                  /* §10.2④: 可视区间统计回调(月/周/日/分钟级都同一口径) */
+                  onRangeStats={handleRangeStats}
+                  /* §12: 数据源不可用的事件图标灰显(+悬停说明原因), 不隐藏也不装作有数据 */
+                  sourceReady={sourceReady}
+                  sourceReason={sourceReason}
+                  /* 2026-09-23 修: 个股分支漏迁 enableMinute —— 用户报"分时图不显示了"。
+                     IndexBody 在 P2(09-18) 由 InteractiveKline 迁到 KlineChart 时**保留**了
+                     enableMinute(见其内注释), 个股分支当时没跟着迁 ⇒ 个股页连「分时」按钮都不渲染。
+                     分时数据源本身是好的(后端 /quotes/minute 实测 603629 返回 267 点)。 */
+                  enableMinute
+                />
+              </div>
+              {railOpen ? (
+                <div className="flex w-[320px] shrink-0 flex-col gap-2 rounded border border-border/50 bg-background/40 p-2">
+                  <div className="flex items-center justify-between pb-1 border-b border-border/40">
+                    <span className="text-[11px] font-medium text-foreground">盘面速览对账</span>
+                    <button
+                      type="button"
+                      onClick={toggleRail}
+                      title="收起速览栏(把宽度还给 K 线)"
+                      aria-label="收起速览栏"
+                      data-testid="rail-toggle"
+                      className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                  {/* §10.2④: 区间统计(资金面板顶部那一行) */}
+                  {rangeStats && !statsDismissed && (
+                    <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
+                  )}
+                  <div className="scrollbar max-h-[420px] overflow-y-auto">
+                    <QuickRail symbol={symbol} market={MARKET} />
+                  </div>
+                </div>
+              ) : (
+                /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
+                <div className="flex w-12 shrink-0 flex-col items-center gap-2 rounded border border-border/50 bg-background/30 py-2">
                   <button
                     type="button"
                     onClick={toggleRail}
-                    title="收起速览栏(把宽度还给 K 线)"
-                    aria-label="收起速览栏"
+                    title="展开速览栏"
+                    aria-label="展开速览栏"
                     data-testid="rail-toggle"
-                    className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                    className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
                   >
-                    <ChevronRight className="h-3 w-3" />
+                    <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
+                  <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
+                    速览
+                  </span>
                 </div>
-                {/* §10.2④: 区间统计(资金面板顶部那一行) */}
-                {rangeStats && !statsDismissed && (
-                  <RangeStatsCard stats={rangeStats} onClear={() => setStatsDismissed(true)} />
-                )}
-                <div className="scrollbar max-h-[436px] overflow-y-auto">
-                  <QuickRail symbol={symbol} market={MARKET} />
-                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ── 【舱 3：微观盘口与决策支持 Deep Deck】 ────────────────────── */}
+          <section className="rounded-lg border border-border/80 bg-card/40 p-3 shadow-sm">
+            <div className="mb-2 flex items-center justify-between border-b border-border/50 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="h-3.5 w-1 rounded-full bg-primary" />
+                <span className="text-[12px] font-semibold text-foreground">深度量化与盘口证据</span>
               </div>
-            ) : (
-              /* 折叠态: 56px 图标条。只留"展开"入口 —— 速览内容原样保留在展开态, 不删功能。 */
-              <div className="flex w-14 shrink-0 flex-col items-center gap-2 rounded border border-border/60 py-2">
-                <button
-                  type="button"
-                  onClick={toggleRail}
-                  title="展开速览栏"
-                  aria-label="展开速览栏"
-                  data-testid="rail-toggle"
-                  className="flex h-6 w-6 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                <span className="[writing-mode:vertical-rl] text-[10px] tracking-wide text-muted-foreground">
-                  速览
-                </span>
-              </div>
-            )}
-          </div>
-          {/* 带3: 下部单层标签(整宽, ?tab= 深链) */}
-          <TabBar value={tab} onChange={handleGotoTab} />
-          <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
+              <TabBar value={tab} onChange={handleGotoTab} />
+            </div>
+            <TabPanel tab={tab} symbol={symbol} hasPosition={hasPosition} />
+          </section>
         </div>
       )}
 

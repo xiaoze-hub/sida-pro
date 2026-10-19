@@ -175,6 +175,14 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.2 (个股行情工作台三段式功能舱重构与视觉分层隔离)（2026-10-19）
+
+- **VERSION**: bump v0.17.1 → v0.17.2 (同步 README.md / README.zh-CN.md 徽章)。
+- **工作台空间与层级重构（明确视觉隔离）**:
+  - `StockWorkbench.tsx`: 告别平铺杂乱，采用「三段式独立功能舱」架构（舱1：标的战术看板 / 舱2：主力博弈主战场 / 舱3：深度量化与盘口证据）；
+  - 每个功能舱拥有独立的卡片底色（`bg-card/60` 与 `bg-card/40`）、明确的物理间距（`space-y-3`）与高反差边框边界；
+  - 舱3 增加专属标题导航槽（左侧主色指示条 + 标题，右侧对齐紧凑 TabBar），彻底将图表与下方详情区切分开。
+
 ## release: v0.17.1 (旧数据库缓存自愈：缺少筹码键自动穿透重算)（2026-10-19）
 
 - **VERSION**: bump v0.17.0 → v0.17.1 (同步 README.md / README.zh-CN.md 徽章)。
