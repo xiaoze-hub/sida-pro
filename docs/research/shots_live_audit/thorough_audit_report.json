@@ -1,10 +1,12 @@
 [
   {
-    "id": "11_theme_mood",
-    "name": "题材情绪连板梯队",
-    "url": "https://SIDA.hengsheng-elec.com/theme-mood",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/11_theme_mood.png",
-    "alerts": [],
+    "id": "04_workbench_main",
+    "name": "个股工作台主图(神剑股份002361)",
+    "url": "https://SIDA.hengsheng-elec.com/stocks/002361",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/04_workbench_main.png",
+    "alerts": [
+      "-- / -- 暗盘数据状态 不可用(盘后采集, 当日无样本时全部 `--`) 主力筹码分布 (波段"
+    ],
     "net_errs": [],
     "console_errs": []
   }

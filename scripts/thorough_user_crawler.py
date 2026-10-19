@@ -200,8 +200,8 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        # 走查题材情绪连板梯队
-        flows_to_run = [f for f in FLOWS if f["id"] == "11_theme_mood"]
+        # 走查 04_workbench_main 检查 GS 标记与图例
+        flows_to_run = [f for f in FLOWS if f["id"] == "04_workbench_main"]
         for flow in flows_to_run:
             f_id = flow["id"]
             name = flow["name"]
@@ -216,13 +216,15 @@ def run_user_crawler():
                 if msg.type in ("error", "warning"):
                     page_errors.append(msg.text[:120])
             def handle_resp(r):
-                if "/boards/heatmap" in r.url:
-                    print(f"[BROWSER NET HEATMAP] {r.status} {r.url}")
+                if "/summary" in r.url and "klines" in r.url:
+                    print(f"[BROWSER NET SUMMARY] {r.status} {r.url}")
                     try:
-                        body_txt = r.text()
-                        print(f"[BROWSER NET HEATMAP BODY] len={len(body_txt)}: {body_txt[:300]}")
+                        txt = r.text()
+                        import json
+                        obj = json.loads(txt).get("data", {})
+                        print(f"gs_signals: {obj.get('gs_signals')}")
                     except Exception as err:
-                        print(f"[BROWSER NET HEATMAP BODY ERR]: {err}")
+                        print(f"[BROWSER NET SUMMARY ERR]: {err}")
                 if r.status >= 400:
                     print(f"[BROWSER NET] {r.status} {r.url}")
                     network_errors.append(f"{r.status} {r.url.split('?')[0]}")
@@ -250,6 +252,19 @@ def run_user_crawler():
             except Exception as e:
                 print(f"    [FAIL] 页面访问失败: {e}")
                 
+            # 检查图例中是否存在 gs-zone-legend 以及 data-gs-count
+            gs_info = page.evaluate("""() => {
+                const el = document.querySelector('[data-gs-count]');
+                const legend = document.querySelector('[data-testid="gs-zone-legend"]');
+                const gs_legend = document.querySelector('[data-testid="gs-legend"]');
+                return {
+                    gs_count_attr: el ? el.getAttribute('data-gs-count') : null,
+                    zone_legend_found: Boolean(legend),
+                    gs_legend_found: Boolean(gs_legend),
+                    gs_legend_text: gs_legend ? gs_legend.innerText : null
+                };
+            }""")
+            print(f"[PAGE EVAL GS INFO]: {gs_info}")
             # 真实页面可见文字抽检
             text = page.evaluate("() => document.body ? document.body.innerText : ''")
             found_alerts = []

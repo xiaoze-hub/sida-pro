@@ -175,6 +175,14 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.2 (修复K线图LWC插件单调排序约束与周期同步)（2026-10-19）
+
+- **VERSION**: bump v0.18.1 → v0.18.2 (同步 README.md / README.zh-CN.md 徽章)。
+- **K线主图 GS 买卖点与 Marker 稳定渲染**:
+  - `chart-markers.ts` (filterMarkersInBarsRange): 增加强制按时间升序排序（LWC 强制约束，非单调递增 markers 会导致整个图层标记静默丢失或抛错）；
+  - `KlineChart.tsx`: 为 `createSeriesMarkers` 与 `setMarkers` 增加异常捕获与自动重建机制，并在顶层暴露 `data-gs-count` 供巡检探针追踪；
+  - `KlineChart.tsx`: 同步响应外部 `props.initialInterval` 切换，确保从分时或其他周期切换到日线时自动重置日线周期，正确激活日线 GS 标记。
+
 ## release: v0.18.1 (连板梯队盘中时段放宽至午间休市连续查看)（2026-10-19）
 
 - **VERSION**: bump v0.18.0 → v0.18.1 (同步 README.md / README.zh-CN.md 徽章)。

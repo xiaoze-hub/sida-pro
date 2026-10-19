@@ -455,6 +455,12 @@ export default function KlineChart(props: {
   const activityLinesRef = useRef<ReturnType<ISeriesApi<'Histogram'>['createPriceLine']>[]>([])
   const [interval, setInterval] = useState<KlineInterval>(props.initialInterval || '1d')
 
+  useEffect(() => {
+    if (props.initialInterval && props.initialInterval !== interval) {
+      setInterval(props.initialInterval)
+    }
+  }, [props.initialInterval, interval])
+
   // ── 分时模式(P1): 只保留 "分时/K线" 切换; 取数与四种状态由 MinutePane 自持 ──
   const [mode, setMode] = useState<'kline' | 'minute'>('kline')
 
@@ -1406,8 +1412,20 @@ export default function KlineChart(props: {
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
-    if (!markerPluginRef.current) markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
-    markerPluginRef.current.setMarkers(safeMarkers)
+    try {
+      if (!markerPluginRef.current) {
+        markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
+      } else {
+        markerPluginRef.current.setMarkers(safeMarkers)
+      }
+    } catch (e) {
+      console.warn('[KlineChart] createSeriesMarkers failed, fallback to recreate:', e)
+      try {
+        markerPluginRef.current = createSeriesMarkers(series, safeMarkers)
+      } catch (err) {
+        console.error('[KlineChart] recreate marker failed:', err)
+      }
+    }
 
     // 2a) GS 区间色带(规格 §1, 2026-10-11): 由**已确认** G/S 信号逐根推区间 → 主图顶部短柱带
     //     (G区紫/S区绿)。末根 pending(未确认)不据它染色(防末根假交叉染错整段区间);
@@ -1698,6 +1716,7 @@ export default function KlineChart(props: {
       className="flex flex-col gap-2"
       data-gs-go={gsResolved.go}
       data-gs-stop={gsResolved.stop}
+      data-gs-count={effGsSignals.length}
       data-chart-panes={paneInfo}
     >
       {/* 周期切换器 */}
