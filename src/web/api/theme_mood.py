@@ -198,12 +198,15 @@ def _live_snapshot():
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     cli = rst.client()
     if cli is None:
+        logger.debug("_live_snapshot: redis client is None")
         return None
     if not _is_intraday(now):
+        logger.debug("_live_snapshot: not intraday %s", now)
         return None
     date = now.strftime("%Y%m%d")
     day = rst.load_day(cli, date)
     if not day:
+        logger.debug("_live_snapshot: load_day for %s is None", date)
         return None
     meta = rst.load_meta(cli, date)
     mins = now.hour * 60 + now.minute

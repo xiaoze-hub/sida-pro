@@ -1,9 +1,9 @@
 [
   {
-    "id": "06_heatmap",
-    "name": "板块热力图(连板龙头与梯队升级)",
-    "url": "https://SIDA.hengsheng-elec.com/heatmap",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/06_heatmap.png",
+    "id": "11_theme_mood",
+    "name": "题材情绪连板梯队",
+    "url": "https://SIDA.hengsheng-elec.com/theme-mood",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/11_theme_mood.png",
     "alerts": [],
     "net_errs": [],
     "console_errs": [

@@ -158,6 +158,10 @@ def _is_intraday(now) -> bool:
     from src.core.trading_calendar import is_trading_day
 
     dt = now or datetime.now(_CST)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_CST)
+    else:
+        dt = dt.astimezone(_CST)
     if not is_trading_day(dt):
         return False
     mins = dt.hour * 60 + dt.minute
@@ -184,6 +188,7 @@ def scan_tick(now=None, deps=None):
         d.save_fn(d.cli, date, d.load_fn(d.cli, date), meta)
         logger.warning("ladder-live: 扫描失败(rounds_failed=%s): %s", failed, e)
         return None
+    logger.info("ladder-live: 获取全市场代码 %d 只, 快照 %d 只", len(codes) if codes else 0, len(raw) if raw else 0)
     if not raw:
         return None
     names = d.names_fn()
@@ -249,6 +254,7 @@ def scan_tick(now=None, deps=None):
     d.save_fn(d.cli, date, state, meta)
     live_day = build_live_day(state, quotes, yb, names, date, seal_amounts)
     d.save_day_fn(d.cli, date, live_day)
+    logger.info("ladder-live: 成功保存盘中 live_day (date=%s, rows=%d, blown=%d)", date, len(live_day.get("rows") or []), len(live_day.get("blown") or []))
     return {"date": date, "state": state, "quotes": quotes, "meta": meta,
             "live_day": live_day}
 

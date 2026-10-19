@@ -200,8 +200,8 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        # 只保留 06_heatmap 快速核对
-        flows_to_run = [f for f in FLOWS if f["id"] == "06_heatmap"]
+        # 走查题材情绪连板梯队
+        flows_to_run = [f for f in FLOWS if f["id"] == "11_theme_mood"]
         for flow in flows_to_run:
             f_id = flow["id"]
             name = flow["name"]
@@ -231,8 +231,8 @@ def run_user_crawler():
             page.on("response", handle_resp)
             
             try:
-                page.goto(url, wait_until="commit", timeout=25000)
-                page.wait_for_selector("[data-testid='heatmap-canvas']", timeout=15000)
+                page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(6000)
                 # 模拟真实用户交互与等待
                 for act, val in flow["actions"]:
                     if act == "wait":

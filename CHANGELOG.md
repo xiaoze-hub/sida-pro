@@ -175,6 +175,14 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.8 (修正时区对齐与连板梯队盘中状态探测)（2026-10-19）
+
+- **VERSION**: bump v0.17.7 → v0.17.8 (同步 README.md / README.zh-CN.md 徽章)。
+- **连板梯队盘中实时更新修复**:
+  - `limit_ladder_live.py`: 修复 `_is_intraday` 时区对齐，强制转入 `Asia/Shanghai` CST 时区计算日内分钟数，防止 UTC 容器内时段误判；
+  - `limit_ladder_live.py`: 修复 `yesterday_boards_fn` 追溯查询，由 2 天扩展为 30 天，确保连续涨停梯队高度对齐；
+  - `ladder_live_state.py`: 修复默认 `REDIS_URL` 回退与超时配置。
+
 ## release: v0.17.7 (连板梯队盘中状态机与历史连板追溯修复)（2026-10-19）
 
 - **VERSION**: bump v0.17.6 → v0.17.7 (同步 README.md / README.zh-CN.md 徽章)。
