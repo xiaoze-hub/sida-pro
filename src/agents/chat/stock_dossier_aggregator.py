@@ -124,10 +124,19 @@ async def _fetch_news_by_sentiment(
         items = await asyncio.to_thread(
             lambda: get_market_data().news([sym], market=market, since_hours=hours)
         )
+        # 上游 since_hours 不是严格时间切分（实测会夹带数月前的旧公告），这里自己做时间下限
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        cutoff = _dt.now(_tz.utc) - _td(hours=hours)
         out: list[dict[str, Any]] = []
         for it in items or []:
             title = (getattr(it, "title", "") or "").strip()
             content = (getattr(it, "content", "") or "").strip()
+            ts = getattr(it, "publish_time", None)
+            if ts is not None and hasattr(ts, "tzinfo"):
+                ts_cmp = ts if ts.tzinfo else ts.replace(tzinfo=_tz.utc)
+                if ts_cmp < cutoff:
+                    continue
             # 相关性过滤：以标题是否点名本股为准（宁可漏，不可把别家新闻算到本股头上）。
             # 东财个股新闻源会把全市场汇总稿一并打上本股 tag（如「55家公司前三季度业绩预增」），
             # 这类稿件标题不含本股名称，必须剔除；名称缺失时退回 symbols 判定。

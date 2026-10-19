@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from src.agents.chat.stock_dossier_aggregator import (
+    _fetch_news_by_sentiment,
     classify_news_sentiment,
     format_stock_dossier_text,
 )
@@ -103,3 +104,46 @@ def test_format_stock_dossier_empty_sections():
     assert "暂无规则筛出的利好条目" in text
     assert "近期暂无公开券商深度研报" in text
     assert "暂无形态数据" in text
+
+
+class _StubItem:
+    def __init__(self, title, content, publish_time, symbols=None, source="eastmoney_news"):
+        self.title = title
+        self.content = content
+        self.publish_time = publish_time
+        self.symbols = symbols or []
+        self.source = source
+        self.url = ""
+
+
+class _StubMd:
+    def __init__(self, items):
+        self._items = items
+
+    def news(self, symbols, *, market="CN", since_hours=72, names=None, now=None):
+        return list(self._items)
+
+
+def test_news_relevance_and_time_window(monkeypatch):
+    """相关性（标题须点名本股）+ 时间窗口（剔除过期旧闻）双重过滤。"""
+    import src.core.marketdata_client as mdc
+
+    now = datetime.now(timezone.utc)
+    items = [
+        # 本股利好，窗口内 → 保留
+        _StubItem("北方稀土：前三季度净利润同比预增135%", "", now - timedelta(hours=5)),
+        # 全市场汇总稿（标题不含本股名，即便被打了本股 tag）→ 剔除
+        _StubItem("55家公司前三季度业绩预增", "……600111……", now - timedelta(hours=5), symbols=["600111"]),
+        # 本股利好但已过期（数月前）→ 剔除
+        _StubItem("北方稀土：半年度业绩预增公告", "", now - timedelta(days=120)),
+        # 本股但属利空 → 利好通道剔除
+        _StubItem("北方稀土：控股股东拟减持3%股份", "", now - timedelta(hours=3)),
+    ]
+    monkeypatch.setattr(mdc, "get_market_data", lambda: _StubMd(items))
+
+    import asyncio
+
+    out = asyncio.run(_fetch_news_by_sentiment("600111", "CN", "利好", stock_name="北方稀土"))
+    titles = [x["title"] for x in out]
+    assert titles == ["北方稀土：前三季度净利润同比预增135%"]
+    assert out[0]["score"] > 0 and out[0]["hits"]
