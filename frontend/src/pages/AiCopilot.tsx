@@ -123,6 +123,9 @@ export default function AiCopilotPage() {
   const [convId, setConvId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [symbol, setSymbol] = useState('')
+  /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
+  const [anchorSymbol, setAnchorSymbol] = useState('')
+  /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
   const [briefSymbol, setBriefSymbol] = useState('')
   const [showMorePresets, setShowMorePresets] = useState(false)
   const [attach, setAttach] = useState<PendingAttachment | null>(null)
@@ -142,7 +145,7 @@ export default function AiCopilotPage() {
     const sym = (sp.get('symbol') || '').trim()
     if (SYMBOL_RE.test(sym)) {
       setSymbol(sym)
-      setBriefSymbol(sym)
+      setAnchorSymbol(sym)
     }
     const q = (sp.get('q') || '').trim()
     if (q) setInput(q)
@@ -356,7 +359,9 @@ export default function AiCopilotPage() {
             onSubmit={(e) => {
               e.preventDefault()
               const code = symbol.trim()
-              setBriefSymbol(SYMBOL_RE.test(code) ? code : '')
+              const ok = SYMBOL_RE.test(code)
+              setBriefSymbol(ok ? code : '')
+              if (ok) setAnchorSymbol(code)
             }}
           >
             <input
@@ -375,17 +380,18 @@ export default function AiCopilotPage() {
           </form>
         </div>
 
-        {briefSymbol ? (
+        {anchorSymbol ? (
           <div
             data-testid="copilot-context-anchor"
             className="flex items-center gap-1.5 border-b border-border/40 bg-s2 px-3 py-1.5"
           >
             <span className="text-[10px] text-muted-foreground">{CONTEXT_ANCHOR_PREFIX}</span>
-            <span className="font-mono text-[11px] text-role-watch">{briefSymbol}</span>
+            <span className="font-mono text-[11px] text-role-watch">{anchorSymbol}</span>
             <button
               type="button"
               onClick={() => {
                 setBriefSymbol('')
+                setAnchorSymbol('')
                 setSymbol('')
               }}
               className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
@@ -447,7 +453,7 @@ export default function AiCopilotPage() {
                 ) : (
                   (() => {
                     const parsed = parseAnswer(m.content)
-                    const symbolInMsg = extractSymbolChips(m.content)[0] || briefSymbol
+                    const symbolInMsg = extractSymbolChips(m.content)[0] || anchorSymbol
                     return parsed.structured ? (
                       <AnswerCard parsed={parsed} symbol={symbolInMsg} onFollowUp={(q) => void send(q)} />
                     ) : (

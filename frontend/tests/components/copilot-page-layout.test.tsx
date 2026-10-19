@@ -65,12 +65,18 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('数智参谋 P0/P1', () => {
-  it('?symbol= 带入标的：显示锚点与参谋卡', async () => {
+  it('?symbol= 只带入锚点，不自动拉参谋卡（brief 接口重，避免进页面就卡 10s+）', async () => {
     window.history.pushState({}, '', '/ai-copilot?symbol=600111')
     render(<AiCopilotPage />)
 
     await waitFor(() => expect(screen.getByTestId('copilot-context-anchor')).toBeTruthy())
-    expect(screen.getByTestId('brief-card').textContent).toBe('600111')
+    expect(screen.getByTestId('copilot-context-anchor').textContent).toContain('600111')
+    // 不主动请求参谋卡
+    expect(screen.queryByTestId('brief-card')).toBeNull()
+
+    // 点「看卡」才拉
+    fireEvent.click(screen.getByText('看卡'))
+    await waitFor(() => expect(screen.getByTestId('brief-card').textContent).toBe('600111'))
   })
 
   it('指令池分层：今日推荐 3 条 + 更多可展开', async () => {
