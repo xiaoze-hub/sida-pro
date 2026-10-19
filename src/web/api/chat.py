@@ -1509,10 +1509,12 @@ async def _fetch_kline_pattern_context(symbol: str, market: str) -> str:
         # TA-Lib 标准形态
         talib_hits = _detect_talib_patterns(list(bars))
         if talib_hits:
-            text += "\n\n【TA-Lib 标准形态】(信号值为 ±100 的方向标记，非强度；同一根K线常同时触发多种同义形态)"
+            text += (
+                "\n\n【TA-Lib 标准形态】(TA-Lib 原始输出仅 ±100 方向标记，无强弱分级；"
+                "同一根K线常同时触发多种同义形态，条数多不代表共振强)"
+            )
             for p in talib_hits[:8]:
-                sv = p.get("strength", 0)
-                text += f"\n- {p['cn_name']}({p['name']}) {p['signal']} 信号值{sv:+d}"
+                text += f"\n- {p['cn_name']}({p['name']}) {p['signal']}"
         # 附带最近价格信息
         last = bars[-1]
         head = f"{market}:{symbol} 最近K线({last.date}): 开{last.open} 高{last.high} 低{last.low} 收{last.close}\n"
