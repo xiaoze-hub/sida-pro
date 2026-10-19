@@ -205,8 +205,17 @@ def _live_snapshot():
         return None
     date = now.strftime("%Y%m%d")
     day = rst.load_day(cli, date)
+    # 盘中若没有 live_day 缓存（例如初次请求或调度器尚未落盘），现跑一轮 scan_tick
     if not day:
-        logger.debug("_live_snapshot: load_day for %s is None", date)
+        logger.info("_live_snapshot: load_day for %s is None, 现跑 scan_tick 补齐", date)
+        try:
+            from src.core.limit_ladder_live import scan_tick
+            scan_res = scan_tick(now)
+            if scan_res and scan_res.get("live_day"):
+                day = scan_res["live_day"]
+        except Exception as e:
+            logger.warning("_live_snapshot 现算失败: %s", e)
+    if not day:
         return None
     meta = rst.load_meta(cli, date)
     mins = now.hour * 60 + now.minute

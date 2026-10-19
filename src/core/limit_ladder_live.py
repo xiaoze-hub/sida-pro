@@ -153,15 +153,15 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
             "charging": charging, "provisional": True}
 
 
-def _is_intraday(now) -> bool:
+def _is_intraday(now=None) -> bool:
     """交易时段(含集合竞价后~收盘后 5min 缓冲)才跑 live; 否则 None/降级。"""
     from src.core.trading_calendar import is_trading_day
 
-    dt = now or datetime.now(_CST)
+    dt = now if now is not None else datetime.now(ZoneInfo("Asia/Shanghai"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_CST)
+        dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
     else:
-        dt = dt.astimezone(_CST)
+        dt = dt.astimezone(ZoneInfo("Asia/Shanghai"))
     if not is_trading_day(dt):
         return False
     mins = dt.hour * 60 + dt.minute
@@ -173,7 +173,11 @@ def scan_tick(now=None, deps=None):
     from src.core.limit_rules import limit_ratio, limit_up_price
 
     d = deps or _default_deps()
-    dt = now or datetime.now(_CST)
+    dt = now if now is not None else datetime.now(ZoneInfo("Asia/Shanghai"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    else:
+        dt = dt.astimezone(ZoneInfo("Asia/Shanghai"))
     if not _is_intraday(dt):
         return None
     date = dt.strftime("%Y%m%d")

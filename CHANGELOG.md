@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.0 (连板梯队盘中自愈触发与时区分钟数精确对齐)（2026-10-19）
+
+- **VERSION**: bump v0.17.9 → v0.18.0 (同步 README.md / README.zh-CN.md 徽章)。
+- **连板梯队盘中自动现算自愈**:
+  - `theme_mood.py` (_live_snapshot): 当 Redis 缺少盘中 `live_day` 时自动唤醒同步 `scan_tick(now)` 现算补齐并入库，拒绝静默停留于历史定型态；
+  - `limit_ladder_live.py`: 强制统一时间戳为 CST `Asia/Shanghai` 时区计算交易分钟数，杜绝容器 UTC 错峰误判。
+
 ## release: v0.17.9 (连板梯队提速与通达信原生代码表融合)（2026-10-19）
 
 - **VERSION**: bump v0.17.8 → v0.17.9 (同步 README.md / README.zh-CN.md 徽章)。
