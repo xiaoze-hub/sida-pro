@@ -18,14 +18,12 @@ _EMPTY_META = {"last_ok": None, "stale": False, "rounds_failed": 0}
 
 
 def client():
-    url = (os.getenv("REDIS_URL") or "").strip()
-    if not url:
-        return None
+    url = (os.getenv("REDIS_URL") or "redis://localhost:6379/0").strip()
     try:
         import redis
 
-        cli = redis.Redis.from_url(url, socket_connect_timeout=0.3,
-                                   socket_timeout=0.3, decode_responses=True)
+        cli = redis.Redis.from_url(url, socket_connect_timeout=2.0,
+                                   socket_timeout=2.0, decode_responses=True)
         cli.ping()
         return cli
     except Exception as e:  # noqa: BLE001

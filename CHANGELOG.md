@@ -175,6 +175,14 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.7 (连板梯队盘中状态机与历史连板追溯修复)（2026-10-19）
+
+- **VERSION**: bump v0.17.6 → v0.17.7 (同步 README.md / README.zh-CN.md 徽章)。
+- **连板梯队盘中实时更新修复**:
+  - `ladder_live_state.py`: 修复生产容器默认 `REDIS_URL` 回退与 socket 连接超时阈值（提升至 2.0s 防止抖动连接断开）；
+  - `limit_ladder_live.py`: 修复昨日连板追溯查询由原先错误的 `LIMIT 2` 扩展为 `LIMIT 30` 连续追溯，确保盘中精准识别前一日连板数；
+  - `limit_ladder_live.py`: 状态机合并仅累积封板与炸板状态，防止非在板股污染首板时间；完善昨日连板个股断板扫描机制。
+
 ## release: v0.17.6 (板块热力图融合题材情绪与连板龙头证据链)（2026-10-19）
 
 - **VERSION**: bump v0.17.5 → v0.17.6 (同步 README.md / README.zh-CN.md 徽章)。

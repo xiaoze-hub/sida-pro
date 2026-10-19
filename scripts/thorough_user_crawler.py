@@ -65,11 +65,11 @@ FLOWS = [
         ]
     },
     {
-        "id": "06_workbench_tab_suggest",
-        "name": "个股工作台-AI诊断建议",
-        "url": f"{BASE_URL}/stocks/002361?tab=suggest",
+        "id": "06_heatmap",
+        "name": "板块热力图(连板龙头与梯队升级)",
+        "url": f"{BASE_URL}/heatmap",
         "actions": [
-            ("wait", 3000),
+            ("wait", 6000),
         ]
     },
     {
@@ -200,7 +200,9 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        for flow in FLOWS:
+        # 只保留 06_heatmap 快速核对
+        flows_to_run = [f for f in FLOWS if f["id"] == "06_heatmap"]
+        for flow in flows_to_run:
             f_id = flow["id"]
             name = flow["name"]
             url = flow["url"]
@@ -210,17 +212,27 @@ def run_user_crawler():
             network_errors = []
             
             def handle_console(msg):
-                if msg.type in ("error",):
+                print(f"[BROWSER CONSOLE] {msg.type}: {msg.text}")
+                if msg.type in ("error", "warning"):
                     page_errors.append(msg.text[:120])
             def handle_resp(r):
+                if "/boards/heatmap" in r.url:
+                    print(f"[BROWSER NET HEATMAP] {r.status} {r.url}")
+                    try:
+                        body_txt = r.text()
+                        print(f"[BROWSER NET HEATMAP BODY] len={len(body_txt)}: {body_txt[:300]}")
+                    except Exception as err:
+                        print(f"[BROWSER NET HEATMAP BODY ERR]: {err}")
                 if r.status >= 400:
+                    print(f"[BROWSER NET] {r.status} {r.url}")
                     network_errors.append(f"{r.status} {r.url.split('?')[0]}")
                     
             page.on("console", handle_console)
             page.on("response", handle_resp)
             
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                page.goto(url, wait_until="commit", timeout=25000)
+                page.wait_for_selector("[data-testid='heatmap-canvas']", timeout=15000)
                 # 模拟真实用户交互与等待
                 for act, val in flow["actions"]:
                     if act == "wait":
@@ -234,7 +246,7 @@ def run_user_crawler():
                                 loc.click()
                         except Exception:
                             pass
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(3000)
             except Exception as e:
                 print(f"    [FAIL] 页面访问失败: {e}")
                 

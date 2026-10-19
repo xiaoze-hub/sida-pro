@@ -54,9 +54,11 @@ def merge_state(prev: dict, round_states: dict, ts: str) -> dict:
     """把本轮三态并入累计态。first_at 不覆写; 回封清 opened_at 并置 resealed; 每次炸板 open_count+1。"""
     out = {k: dict(v) for k, v in (prev or {}).items()}
     for sym, st in (round_states or {}).items():
+        if st not in (STATE_SEALED, STATE_BLOWN):
+            continue
         rec = out.get(sym) or {"ever_sealed": False, "first_at": None, "last_sealed_at": None,
                               "opened_at": None, "open_count": 0, "resealed": False}
-        if rec["first_at"] is None:
+        if rec["first_at"] is None and st == STATE_SEALED:
             rec["first_at"] = ts
         if st == STATE_SEALED:
             if rec["opened_at"] is not None:
@@ -103,7 +105,10 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
     seal_amounts = seal_amounts or {}
     groups: dict[int, list[dict]] = {}
     blown, broken, charging = [], [], []
-    for sym, rec in (state or {}).items():
+    # 遍历在板/炸板累计态，以及昨日有连板（今日可能断板）的个股
+    candidate_symbols = set((state or {}).keys()) | {s for s, b in (yesterday_boards or {}).items() if b >= 2}
+    for sym in candidate_symbols:
+        rec = (state or {}).get(sym) or {}
         q = (quotes or {}).get(sym) or {}
         yb = (yesterday_boards or {}).get(sym, 0)
         st = classify(q.get("price"), q.get("limit_px"), bool(rec.get("ever_sealed")),
@@ -279,12 +284,13 @@ def _default_deps():
         with SessionLocal() as db:
             dates = [r[0] for r in db.execute(
                 text("SELECT DISTINCT trade_date FROM limit_up_events "
-                     "ORDER BY trade_date DESC LIMIT 2")).fetchall()]
-            if len(dates) < 2:
+                     "ORDER BY trade_date DESC LIMIT 30")).fetchall()]
+            if not dates:
                 return {}
+            min_date = sorted(dates)[0]
             ev = db.execute(
                 text("SELECT trade_date, symbol, is_sealed_close FROM limit_up_events "
-                     "WHERE trade_date >= :a"), {"a": dates[0]}).mappings().fetchall()
+                     "WHERE trade_date >= :a"), {"a": min_date}).mappings().fetchall()
         return boards_for_date(sorted(dates), _sealed_by_date(list(ev)), sorted(dates)[-1])
 
     def seal_amounts_fn():
