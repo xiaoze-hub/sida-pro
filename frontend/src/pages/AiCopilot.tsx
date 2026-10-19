@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
@@ -430,9 +430,11 @@ export default function AiCopilotPage() {
                     type="button"
                     onClick={() => void send(x)}
                     disabled={streaming}
-                    className="rounded-full border border-border/60 bg-s1 px-2.5 py-1 text-left text-[12px] text-muted-foreground hover:border-role-watch/50 hover:bg-s2 hover:text-foreground disabled:opacity-60"
+                    data-testid="copilot-empty-example"
+                    className="group flex w-full items-center gap-2 rounded-lg border border-role-watch/30 bg-s2 px-2.5 py-1.5 text-left text-[12px] text-foreground/90 transition-colors hover:border-role-watch/60 hover:bg-s3 disabled:opacity-60"
                   >
-                    {x}
+                    <span className="min-w-0 flex-1">{x}</span>
+                    <ChevronRight className="h-3 w-3 shrink-0 text-role-watch/70" />
                   </button>
                 ))}
               </div>
