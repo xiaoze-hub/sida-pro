@@ -129,7 +129,7 @@ FLOWS = [
     {
         "id": "13_ai_copilot",
         "name": "AI 数智参谋独立大屏",
-        "url": f"{BASE_URL}/ai-copilot",
+        "url": f"{BASE_URL}/ai-copilot?symbol=600111",
         "actions": [
             ("wait", 3000),
         ]
@@ -202,9 +202,9 @@ def run_user_crawler():
 
         # 走查北方稀土 600111，进入数智参谋 /ai-copilot 页面走查
         flows_to_run = [{
-            "id": "ai_copilot_harness",
-            "name": "数智参谋Harness走查",
-            "url": f"{BASE_URL}/ai-copilot",
+            "id": "ai_copilot_p0p1",
+            "name": "数智参谋P0P1走查",
+            "url": f"{BASE_URL}/ai-copilot?symbol=600111",
             "actions": [
                 ("wait", 4000),
             ]

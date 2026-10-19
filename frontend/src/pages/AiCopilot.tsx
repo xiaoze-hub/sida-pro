@@ -47,6 +47,16 @@ interface PendingAttachment {
 /** 指令池接口失败时的本地兜底（只影响"有没有快捷按钮"，不影响能不能提问）。 */
 const LOCAL_PRESETS: CopilotPreset[] = [
   {
+    // 旗舰项必须进兜底：接口抖动时只剩 4 条本地指令、把「全景诊断」丢掉是最伤的降级
+    id: 'full_dossier',
+    icon: '🧬',
+    label: '全景数智深度诊断(多维Harness)',
+    prompt:
+      '请调用标的全景档案工具，对我当前查看的股票进行全面深度分析：整合实时量价、K线形态、腾讯逐笔主力意图、120日底仓筹码沉淀、数智决策GS多空色带、东方财富机构研报、近期公司公告与利好/利空消息面，给出明确结论与实战作战预案。',
+    group: 'dossier',
+    requires_perm: null,
+  },
+  {
     id: 'chip_cost',
     icon: '🎯',
     label: '诊断底仓成本与获利盘',
@@ -140,14 +150,27 @@ export default function AiCopilotPage() {
 
   useEffect(() => {
     let alive = true
-    getCopilotPresets()
-      .then((rows) => {
-        if (!alive) return
-        if (rows?.length) setPresets(rows)
-      })
-      .catch(() => {
-        if (alive) setPresetFailed(true)
-      })
+    // 冷启动偶发失败：重试一次再降级，避免用户当场看到残缺指令池
+    const load = (attempt: number) =>
+      getCopilotPresets()
+        .then((rows) => {
+          if (!alive) return
+          if (rows?.length) {
+            setPresets(rows)
+            setPresetFailed(false)
+          } else {
+            setPresetFailed(true)
+          }
+        })
+        .catch(() => {
+          if (!alive) return
+          if (attempt === 0) {
+            window.setTimeout(() => void load(1), 800)
+            return
+          }
+          setPresetFailed(true)
+        })
+    void load(0)
     return () => {
       alive = false
     }
@@ -401,7 +424,7 @@ export default function AiCopilotPage() {
                     type="button"
                     onClick={() => void send(x)}
                     disabled={streaming}
-                    className="rounded-full border border-border/60 px-2.5 py-1 text-left text-[12px] text-muted-foreground hover:border-role-watch/50 hover:bg-s2 hover:text-foreground disabled:opacity-60"
+                    className="rounded-full border border-border/60 bg-s1 px-2.5 py-1 text-left text-[12px] text-muted-foreground hover:border-role-watch/50 hover:bg-s2 hover:text-foreground disabled:opacity-60"
                   >
                     {x}
                   </button>

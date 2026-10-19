@@ -1,10 +1,12 @@
 [
   {
-    "id": "ai_copilot_harness",
-    "name": "数智参谋Harness走查",
-    "url": "https://SIDA.hengsheng-elec.com/ai-copilot",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/ai_copilot_harness.png",
-    "alerts": [],
+    "id": "ai_copilot_p0p1",
+    "name": "数智参谋P0P1走查",
+    "url": "https://SIDA.hengsheng-elec.com/ai-copilot?symbol=600111",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/ai_copilot_p0p1.png",
+    "alerts": [
+      "0111 换个标的 参谋数据暂不可用 重试 请求超时（12s） 以上为盘口与筹码数据的客观推演，不构"
+    ],
     "net_errs": [],
     "console_errs": []
   }

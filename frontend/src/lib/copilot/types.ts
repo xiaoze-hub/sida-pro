@@ -217,7 +217,8 @@ export interface CopilotPreset {
   icon: string
   label: string
   prompt: string
-  group: 'auction' | 'chip' | 'resonance' | 'demon' | 'defense'
+  /** 后端 group 取值；新增分组时这里要同步（缺 'dossier' 会导致旗舰指令类型报错） */
+  group: 'dossier' | 'auction' | 'chip' | 'resonance' | 'demon' | 'defense'
   requires_perm: string | null
 }
 
