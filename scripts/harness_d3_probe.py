@@ -67,6 +67,26 @@ def _post(path: str, payload: dict, token: str, timeout: int = 180):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def _expected_sections(agent: str | None) -> list[str]:
+    if not agent:
+        return ["结论", "依据"]
+    try:
+        from src.harness.recipes import get_recipe
+
+        r = get_recipe(agent)
+        return list(r.output_sections) if r else []
+    except Exception:
+        return []
+
+
+def _structure_ok(text: str, agent: str | None) -> bool:
+    want = _expected_sections(agent)
+    if not want:
+        return "【结论】" in text
+    hit = sum(1 for w in want if w in text)
+    return hit >= max(2, len(want) // 2)
+
+
 def run_case(base: str, token: str, agent: str | None, question: str, symbol: str | None) -> dict:
     conv = {"initial_context": "harness d3 自动评测"}
     if symbol:
@@ -115,7 +135,9 @@ def run_case(base: str, token: str, agent: str | None, question: str, symbol: st
         "tool_calls": len(stages),
         "tools": stages[:12],
         "chars": len(text),
-        "structured": all(k in text for k in ("【结论】", "【依据】")),
+        # 结构合规按"配方自己的输出段落"判，而不是写死【依据】——premarket 用「隔夜事件」、
+        # postmarket 用「涨停结构」，用固定标记会把正确输出判成不合格（首轮评测就踩了）。
+        "structured": _structure_ok(text, agent),
         "head": text[:160].replace("\n", " "),
     }
 
