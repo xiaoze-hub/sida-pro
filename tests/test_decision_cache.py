@@ -265,7 +265,9 @@ def test_precompute_batch_idempotent(monkeypatch):
     syms = [("600519", "CN"), ("000001", "CN")]
     out1 = dp.precompute(symbols=syms)
     assert out1["computed"] == 2 and out1["failed"] == 0
-    assert out1["ttl_s"] == dc.precompute_ttl_s()
+    # TTL 是"到下一个工作日 09:30 的秒数"，两次取值跨过秒边界会差 1 —— 这是时间粒度
+    # 而不是产品缺陷（CI 实测 32619 vs 32618 卡掉过一次 v0.19.11 发版）。
+    assert abs(out1["ttl_s"] - dc.precompute_ttl_s()) <= 1
     # 再跑一次: 幂等 upsert, 仍只有两行
     out2 = dp.precompute(symbols=syms)
     assert out2["computed"] == 2
