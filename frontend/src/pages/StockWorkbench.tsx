@@ -381,46 +381,44 @@ export default function StockWorkbench() {
 
   return (
     <div className="mx-auto max-w-none p-3 space-y-3">
-      {/* ── 【舱 1：标的战术看板 Header Station】 ──────────────────────── */}
-      <section className="rounded-lg border border-border/80 bg-card/60 p-2 shadow-sm backdrop-blur">
-        <HeaderBand
-          symbol={symbol}
-          market={MARKET}
-          type={type}
-          hasPosition={hasPosition === true}
-          positionUnknown={hasPosition === undefined}
-          onTypeChange={handleTypeChange}
-          onGotoTab={handleGotoTab}
-          onRefresh={handleRefresh}
-          back={back}
-        />
+      {/* 带1: 顶部信息带(吸顶, 三类型共享)。**不挂 key** —— 刷新时它自己只重取自身行情(tick), 不重挂载 */}
+      <HeaderBand
+        symbol={symbol}
+        market={MARKET}
+        type={type}
+        hasPosition={hasPosition === true}
+        positionUnknown={hasPosition === undefined}
+        onTypeChange={handleTypeChange}
+        onGotoTab={handleGotoTab}
+        onRefresh={handleRefresh}
+        back={back}
+      />
 
-        {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
-        {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
+      {/* 市场退潮/冰点期冷静期警示条 (个股视图专属) */}
+      {type === 'stock' ? <DisciplineCoolDownBanner /> : null}
 
-        {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
-        {type === 'stock' && hasPosition ? (
-          <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
-        ) : null}
-      </section>
+      {/* 持仓标的硬防线击穿预警条 (持仓股专属) */}
+      {type === 'stock' && hasPosition ? (
+        <DefenseLineBanner symbol={symbol} cost={position.cost} hasPosition={hasPosition} />
+      ) : null}
 
       {type !== 'stock' ? (
         /* 指数/板块: 只留带1 + 正文(spec §1.3 —— 无右栏/无 6 标签/无建议条)。
            遗留⑦: **不再**挂 `key={refreshKey}`(那会重挂载 ⇒ 重放入场动画 + 丢正文内部状态),
            改为把 `refreshKey` 当 `refreshToken` prop 传下去 —— 正文据此重跑取数 effect。
            `mt-3`: 与个股分支的带1↔带2 间距对齐(Finding 2)。 */
-        <section className="rounded-lg border border-border/80 bg-card/40 p-2 shadow-sm">
+        <div className="mt-3 rounded-lg border border-border/80 bg-card/40 p-2 shadow-sm">
           <IndexBoardHost type={type} symbol={symbol} refreshToken={refreshKey} />
-        </section>
+        </div>
       ) : (
         /* 个股分支**保留** `key={refreshKey}`: `KlineChart`/`QuickRail`/六个标签都没有
            `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
         <div key={refreshKey} className="space-y-3">
           {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ──────────────────────── */}
-          <section className="rounded-lg border border-border/80 bg-card/40 p-2.5 shadow-sm">
+          <section className="mt-3 rounded-lg border border-border/80 bg-card/40 p-2.5 shadow-sm">
             <div className="flex items-stretch gap-3">
-              <div className="min-w-0 flex-1 rounded border border-border/50 bg-background/50 p-2">
+              <div className="min-w-0 flex-1 rounded border border-border/60 bg-background/50 p-2">
                 <MemoKlineChart
                   symbol={symbol}
                   market={MARKET}
