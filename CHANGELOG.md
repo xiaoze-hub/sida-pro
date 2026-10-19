@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.1 (旧数据库缓存自愈：缺少筹码键自动穿透重算)（2026-10-19）
+
+- **VERSION**: bump v0.17.0 → v0.17.1 (同步 README.md / README.zh-CN.md 徽章)。
+- **持久化层缓存自愈 (消灭历史版本脏缓存阻断)**:
+  - `layer_precompute.py`: `usable()` 增加校验，若库中已有历史行缺少 `main_accumulation_chips` 字段，视为未命中，强制自动回源重新计算并落库；
+  - `summary_cache.py`: `get_cached_summary()` 增加校验，若命中缓存字典缺少 `main_accumulation_chips`，视为过期并触发自愈穿透重算。
+
 ## release: v0.17.0 (修复 R13 浮层阴影门禁并放行 CYQ 横向筹码山峰终极上线)（2026-10-18）
 
 - **VERSION**: bump v0.16.9 → v0.17.0 (同步 README.md / README.zh-CN.md 徽章)。

@@ -72,7 +72,11 @@ def get_cached_summary(symbol: str, market: str, ttl_s: int) -> dict | None:
             #       ② 写入侧改为存 naive UTC(见 put_cached_summary), 两侧口径从此一致。
             if age < 0 or age > max(ttl, ttl_s):
                 return None
-            return json.loads(row["payload"])
+            data = json.loads(row["payload"])
+            # 2026-10-19: 若旧缓存缺少 main_accumulation_chips，视为过期回现算
+            if isinstance(data, dict) and "main_accumulation_chips" not in data:
+                return None
+            return data
     except Exception as e:  # noqa: BLE001
         logger.debug("get_cached_summary %s failed: %s", symbol, e)
         return None
