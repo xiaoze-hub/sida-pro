@@ -85,6 +85,14 @@ def get_copilot_presets(
 ) -> list[dict]:
     return [
         {
+            "id": "full_dossier",
+            "icon": "🧬",
+            "label": "全景数智深度诊断(五维Harness)",
+            "prompt": "请调用标的全景档案工具，对我当前查看的股票进行全面深度分析：整合实时量价、腾讯逐笔主力意图、120日底仓筹码沉淀、数智决策GS多空色带与机构研报评级，给出明确结论与实战作战预案。",
+            "group": "dossier",
+            "requires_perm": None,
+        },
+        {
             "id": "auction_strong",
             "icon": "🔥",
             "label": "扫描今日 9:25 爆量抢筹",

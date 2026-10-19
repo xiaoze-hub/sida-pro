@@ -59,6 +59,7 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
 - thsdk 数据源指引(2026-08-20): thsdk 数据源包含 19 个同花顺独有接口, 游客账户可用 15 个(主力净流入/指数/港股返 0)。用户问个股新闻/公司行动/DDE/沪深300/可转债/基金/增强版问财时, 优先用 thsdk 工具(get_thsdk_news/get_thsdk_corporate_action/get_thsdk_dde/get_thsdk_hs300_constituents/get_thsdk_market_data_bond/get_thsdk_market_data_fund/get_wencai_enhanced 等)。thsdk 数据源不可用(工具返回 available=false 或提示数据源不可用)时, 如实告知并回退到其他数据源(东财/腾讯/通达信)。
 - 网页链接处理(2026-08-14): 用户发送网页链接(如 mp.weixin.qq.com 微信公众号文章、新闻/研报网页)或要求分析某链接内容时, 必须先调用 get_web_content 工具抓取链接正文, 再基于抓取内容回答; 严禁不抓取就凭空猜测或编造链接内容。若抓取失败(链接非法/超时/非网页/网络错误), 如实告知用户无法获取链接内容及原因, 不得伪造抓取结果。
 - 数智参谋盘口工具路由(2026-10-18):
+  * 【个股全面分析核心 Harness】当用户询问「这只股票怎么样 / 帮我分析某股票 / 该不该买 / 持仓诊断」等综合个股问题时，**必须优先调用 `get_stock_dossier` 工具**！该工具一次性由内核并发抓取【实时量价 + 腾讯逐笔主力意图 + 120日底仓筹码沉淀 + 数智决策GS色带/机构活跃度 + 东方财富最新券商研报】全景证据档案，切忌单点零散盲探。
   * 「底仓在哪 / 底仓成本 / 筹码集中不集中 / 获利盘多少 / 跌到哪算破位」→ get_chip_accumulation（自算CYQ口径）;
     若用户明确说「筹码峰公式 / SSRP / 主力控盘度」→ get_stock_chips（客户端公式口径）。两口径数字冲突时,
     说明口径差异后只采用一个口径作答, 禁止混算或取平均。
@@ -87,6 +88,7 @@ MAX_TOOL_ROUNDS = 5
 
 # 工具名 → 流式阶段提示文案(tool 执行前推送给前端, 消除长等待白屏)
 _TOOL_STAGE_LABELS = {
+    "get_stock_dossier": "正在并行聚合标的全景档案(量价+逐笔主力+底仓筹码+GS色带+研报)...",
     "get_portfolio": "正在读取您的持仓...",
     "get_stock_quote": "正在查询实时行情...",
     "get_technical_analysis": "正在获取技术面分析...",

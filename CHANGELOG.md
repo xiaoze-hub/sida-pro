@@ -175,6 +175,15 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.6 (构建AI助手全景Harness与全维度标的客观证据编排)（2026-10-19）
+
+- **VERSION**: bump v0.18.5 → v0.18.6 (同步 README.md / README.zh-CN.md 徽章)。
+- **AI 助手 Harness 编排线束**:
+  - `stock_dossier_aggregator.py`: 新建全景标的证据聚合器，并发集成实时行情、均线技术面、腾讯逐笔主力意图、自算CYQ 120日底仓筹码沉淀、数智决策三指标（GS多空色带/机构活跃度/暗盘资金）以及东方财富官方研报中心评级；
+  - `registry.py`: 注册核心 Harness 工具 `get_stock_dossier`，作为个股综合分析的首选推荐工具；
+  - `chat.py`: 固化数智参谋标准路由（SOP），在提示词中强制引导模型在个股问答时优先调用全景档案，杜绝盲目单点盲探与信息偏颇；
+  - `copilot.py` & `copy.ts`: 前端数智参谋指令池新增「🧬 全景数智深度诊断(五维Harness)」快捷指令。
+
 ## release: v0.18.5 (补齐盘前突发科技与大宗事件全市场标的映射)（2026-10-19）
 
 - **VERSION**: bump v0.18.4 → v0.18.5 (同步 README.md / README.zh-CN.md 徽章)。

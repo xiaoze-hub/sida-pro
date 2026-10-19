@@ -120,6 +120,7 @@ export const COPILOT_PAGE_TITLE = '数智参谋'
 export const COPILOT_PAGE_SUBTITLE = '筹码 · 共振 · 量价 · 盘口 · 竞价 · 妖股因子 全量穿透'
 export const PRESET_FALLBACK_HINT = '指令池暂不可用（接口失败），可直接在右侧提问。'
 export const PRESET_GROUP_LABEL: Record<string, string> = {
+  dossier: '全景',
   auction: '竞价',
   chip: '筹码',
   resonance: '共振',
