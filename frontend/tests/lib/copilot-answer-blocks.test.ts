@@ -1,8 +1,9 @@
 /**
  * 参谋回答结构化解析（P1 排版契约）。
  *
- * 契约来源：`src/web/api/chat.py` 的 SYSTEM_PROMPT「参谋回答模板」四段：
- * 【结论】【依据】【预案】【口径】。前端只负责切段与渲染，不重写内容。
+ * 契约来源：`src/web/api/chat.py` 的 SYSTEM_PROMPT「参谋回答模板」，但真实模型输出
+ * 会加 markdown 标题、写表格、把段名写成「口径汇总 / 实战作战预案」——
+ * 所以样例里既有「模板态」，也有从生产环境抄回来的「真实态」。
  */
 import { describe, expect, it } from 'vitest'
 import { extractConfidence, parseAnswer, splitEvidence } from '../../src/lib/copilot/answer-blocks'
@@ -16,6 +17,43 @@ const SAMPLE = `【结论】洗盘吸筹偏多，但上方套牢盘较重，短�
 【预案】持仓者：跌破 33.96 元第一防守位后重新评估；空仓者：站上 36 元再观察
 【口径】自算CYQ·120日 + 腾讯逐笔
 以上分析仅供参考，不构成投资建议。`
+
+/** 生产环境真实回答（002361，v0.19.6 实测）：markdown 标题 + 表格 + 变体段名 + 满屏加粗 */
+const REAL = `# 【002361 全景深度档案分析】
+
+---
+
+## 【结论】
+
+**空头趋势延续，主力持续派发中，短线防守为主。** 置信度 **4/10**（基于 7/9 项证据，2 项暂无数据）。
+
+当前股价 8.92 元（-1.55%），均线空头排列 + MACD 死叉 + 主力净流出——**三线共振走坏**。
+
+---
+
+## 【依据】（逐条列真实数字与口径）
+
+| 维度 | 关键读数 | 口径/备注 |
+|------|---------|-----------|
+| 实时价 | 8.92 元，-1.55%，量 45.78 万手 | 腾讯行情 |
+| 主力逐笔 | **净流出 -3531 万** | 腾讯逐笔·主力意图口径 |
+| 筹码（自算CYQ） | 底仓成本 10.37，获利盘 3.8% | 自算CYQ·120日 |
+
+> **口径差异提示**：逐笔 -3531 万 vs L2 -1178 万，方向一致。
+
+---
+
+## 【预案】
+
+### 持仓者
+- **第一防线 8.66 元（支撑位）**：破位减仓 1/3，止损纪律优先；
+- **第二防线 8.47 元**：跌破视为派发加速，清仓离场。
+
+---
+
+## 【口径汇总】
+
+腾讯逐笔 + 自算CYQ + TQ L2`
 
 describe('parseAnswer', () => {
   it('切出四段并把依据拆成条目', () => {
@@ -56,6 +94,30 @@ describe('parseAnswer', () => {
     const p = parseAnswer('')
     expect(p.structured).toBe(false)
     expect(p.evidence).toEqual([])
+  })
+
+  it('真实输出：markdown 标题/加粗/表格都要吃掉，变体段名也要认', () => {
+    const p = parseAnswer(REAL)
+    expect(p.structured).toBe(true)
+    expect(p.confidence).toBe(4)
+    // 裁决里不能露出 `**` 或 `##`
+    expect(p.verdict).not.toContain('**')
+    expect(p.verdict).not.toContain('##')
+    expect(p.verdict).toContain('空头趋势延续')
+    // 表格 → 条目；加粗被剥离
+    expect(p.evidence.length).toBeGreaterThanOrEqual(4)
+    expect(p.evidence[0]).toBe('实时价：8.92 元，-1.55%，量 45.78 万手（腾讯行情）')
+    expect(p.evidence.join(' ')).not.toContain('**')
+    // 【口径汇总】是变体段名，也要认出来
+    expect(p.caliber).toContain('腾讯逐笔')
+    // 预案保留结构（含破位数字），不带 markdown 星号
+    expect(p.plan).toContain('第一防线 8.66 元')
+    expect(p.plan).not.toContain('**')
+  })
+
+  it('结论的第二段并入依据，不能丢内容', () => {
+    const p = parseAnswer(REAL)
+    expect(p.evidence.some((e) => e.includes('三线共振走坏'))).toBe(true)
   })
 })
 
