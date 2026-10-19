@@ -107,9 +107,9 @@ async def _fetch_announcements(sym: str, market: str, days: int = 15) -> list[di
 
 
 async def _fetch_news_by_sentiment(
-    sym: str, market: str, want: str, hours: int = 72, limit: int = 8, stock_name: str = ""
+    sym: str, market: str, want: str, hours: int = 168, limit: int = 8, stock_name: str = ""
 ) -> list[dict[str, Any]]:
-    """近 N 小时个股新闻，先剔除全市场泛新闻，再规则打分保留指定倾向条目。
+    """近 N 小时（默认 7 日）个股新闻，先剔除全市场泛新闻，再规则打分保留指定倾向条目。
 
     相关性过滤：item.symbols 含本股代码，或标题出现本股名称。东财个股新闻常把
     全市场汇总稿一并返回（如「168家公司预告前三季度业绩」），不过滤会污染结论。
@@ -383,7 +383,7 @@ def format_stock_dossier_text(dossier: dict[str, Any]) -> str:
         lines.append("- 近 15 日暂无公司公告")
     lines.append("")
 
-    lines.append("【第九维：利好面消息（近 72 小时个股新闻·规则筛选，含命中词，来源可溯）】")
+    lines.append("【第九维：利好面消息（近 7 日个股新闻·规则筛选，含命中词，来源可溯）】")
     pos = dossier.get("positive_news") or []
     if pos:
         for n in pos[:6]:
@@ -393,17 +393,17 @@ def format_stock_dossier_text(dossier: dict[str, Any]) -> str:
                 f"（命中: {hits or '—'}｜来源: {n.get('source') or '—'}）"
             )
     else:
-        lines.append("- 近 72 小时暂无规则筛出的利好条目（仅代表未命中利好词，不代表无消息）")
+        lines.append("- 近 7 日暂无规则筛出的利好条目（仅代表未命中利好词，不代表无消息）")
     lines.append("")
 
-    lines.append("【第十维：利空/风险消息（反向验证，近 72 小时）】")
+    lines.append("【第十维：利空/风险消息（反向验证，近 7 日）】")
     neg = dossier.get("negative_news") or []
     if neg:
         for n in neg[:5]:
             hits = "/".join((n.get("hits") or [])[:3])
             lines.append(f"- {_fmt_dt(n.get('publish_time'))[:16]} {n.get('title')}（命中: {hits or '—'}）")
     else:
-        lines.append("- 近 72 小时暂无规则筛出的利空条目")
+        lines.append("- 近 7 日暂无规则筛出的利空条目")
     lines.append("==========================================================================")
 
     return "\n".join(lines)
