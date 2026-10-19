@@ -154,7 +154,7 @@ def build_live_day(state: dict, quotes: dict, yesterday_boards: dict,
 
 
 def _is_intraday(now=None) -> bool:
-    """交易时段(含集合竞价后~收盘后 5min 缓冲)才跑 live; 否则 None/降级。"""
+    """交易时段(含集合竞价后~收盘后 5min 缓冲，以及午盘休市缓冲 11:30~13:00)才跑 live; 否则 None/降级。"""
     from src.core.trading_calendar import is_trading_day
 
     dt = now if now is not None else datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -165,7 +165,8 @@ def _is_intraday(now=None) -> bool:
     if not is_trading_day(dt):
         return False
     mins = dt.hour * 60 + dt.minute
-    return (9 * 60 + 25 <= mins <= 11 * 60 + 30) or (13 * 60 <= mins <= 15 * 60 + 5)
+    # 覆盖 09:25 直至 15:05 全天时段（含午盘 11:30~13:00 仍可查看最新上午战果）
+    return (9 * 60 + 25 <= mins <= 15 * 60 + 5)
 
 
 def scan_tick(now=None, deps=None):

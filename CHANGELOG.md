@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.1 (连板梯队盘中时段放宽至午间休市连续查看)（2026-10-19）
+
+- **VERSION**: bump v0.18.0 → v0.18.1 (同步 README.md / README.zh-CN.md 徽章)。
+- **连板梯队盘中窗口扩展**:
+  - `limit_ladder_live.py`: `_is_intraday` 扩展判定窗口为 09:25 至 15:05 全天连续（含 11:30~13:00 午间休市时段），确保午盘复盘时依然可以顺畅查看今日上午最新连板天梯与炸板统计，不被误判为非交易时段而强制切回上一日收盘定型态。
+
 ## release: v0.18.0 (连板梯队盘中自愈触发与时区分钟数精确对齐)（2026-10-19）
 
 - **VERSION**: bump v0.17.9 → v0.18.0 (同步 README.md / README.zh-CN.md 徽章)。
