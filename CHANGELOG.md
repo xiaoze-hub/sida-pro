@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.5 (补齐盘前突发科技与大宗事件全市场标的映射)（2026-10-19）
+
+- **VERSION**: bump v0.18.4 → v0.18.5 (同步 README.md / README.zh-CN.md 徽章)。
+- **全市场突发题材龙头映射引擎**:
+  - `theme_candidate_mapper.py`: 实现突发科技与大宗主线（人形机器人/低空经济/算力/半导体/大宗涨价）关键词提取、通达信板块全市场成分股动态检索、高妖股基因分排序与主板龙头优先机制；
+  - `premarket_outlook.py`: 盘前采集链路突破用户自选股沙盒限制，将全市场高辨识度突发题材候选标的注入 Prompt 第 0 节事件驱动作战潜伏表，避免因标的未在自选股中而错失开盘主线行情。
+
 ## release: v0.18.4 (切换东财官方研报中心直连接口与研报穿透下钻)（2026-10-19）
 
 - **VERSION**: bump v0.18.3 → v0.18.4 (同步 README.md / README.zh-CN.md 徽章)。

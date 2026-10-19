@@ -476,6 +476,19 @@ class PremarketOutlookAgent(BaseAgent):
             logger.warning("[%s] TDX 问小达采集失败: %s", trace_id, e)
             tdx_wenda = {}
 
+        # 6.7 突发科技/大宗题材映射全市场标的(突破自选股沙盒限制)
+        theme_candidates = []
+        try:
+            import asyncio
+
+            from src.core.theme_candidate_mapper import build_fullmarket_theme_candidates
+
+            theme_candidates = await asyncio.to_thread(build_fullmarket_theme_candidates, event_stream)
+            logger.info("[%s] 突发题材全市场候选映射完成: %s 个题材", trace_id, len(theme_candidates))
+        except Exception as e:
+            logger.warning("[%s] 突发题材映射失败: %s", trace_id, e)
+            theme_candidates = []
+
         return {
             "yesterday_analysis": yesterday_analysis.content
             if yesterday_analysis
@@ -488,6 +501,7 @@ class PremarketOutlookAgent(BaseAgent):
             "news": news_items,
             "market_sentiment": market_sentiment,
             "event_stream": event_stream,
+            "theme_candidates": theme_candidates,
             "catalyst": catalyst,
             "catalyst_local": catalyst_local,
             "ambush_list": ambush_list,
@@ -698,6 +712,23 @@ class PremarketOutlookAgent(BaseAgent):
                 lines.append("- ⛔ 当前退潮/高潮档位: 先锋组整体禁推(妖股退潮期跌最狠), 只提示不进观察池")
             else:
                 lines.append("> 💡 核心选股规则: 当识别到上方事件驱动或主线题材爆发时，**优先在主线受益标的中挑选命中本先锋组（极妖/妖级）的个股**！此类标的兼具题材风口与股性记忆，极易走出超预期主升浪。")
+            lines.append("")
+
+        # 突发主线题材全市场标的推荐(突破自选股沙盒限制)
+        tc_list = data.get("theme_candidates") or []
+        if tc_list:
+            lines.append("## 突发重磅科技/大宗事件全市场受益龙头映射（不受自选股限制）")
+            lines.append("> ⚠️ 提示：以下标的由全市场题材库与妖股基因分自动匹配，重点在【第 0 节 事件驱动前瞻】中列入作战潜伏表格：")
+            for tc in tc_list:
+                theme = tc.get("theme")
+                lines.append(f"### 主题：【{theme}】（触发事件：{tc.get('sample_event', '')[:60]}...）")
+                cands = tc.get("candidates") or []
+                for c in cands:
+                    board_flag = "主板" if c.get("is_mainboard") else "创业板/科创板"
+                    demon_tag = f"【妖股分:{c.get('demon_score')}({c.get('demon_level')})】" if c.get("demon_score", 0) > 0 else ""
+                    lines.append(
+                        f"- `{c.get('symbol')}` **{c.get('name')}** ({board_flag}) {demon_tag}: {c.get('reason')}"
+                    )
             lines.append("")
 
         # 埋伏榜: 优先四维评分增强版(批次C C2/C3), 回落原始榜

@@ -5,11 +5,9 @@
     "url": "https://SIDA.hengsheng-elec.com/stocks/600111?tab=research",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/bfxt_600111_research.png",
     "alerts": [
-      "「该标的尚无深度分析 / 取数失败」在此不可区分 ✦ 盘口参谋 · 600111 600111 点击"
+      "ent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分 深度分析 tradingAgents"
     ],
     "net_errs": [],
-    "console_errs": [
-      "Error while trying to use the following icon from the Manifest: https://sida.hengsheng-elec.com/icon-192.png (Download e"
-    ]
+    "console_errs": []
   }
 ]
