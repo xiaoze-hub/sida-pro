@@ -2,7 +2,7 @@ id: auction_hunter
 label: 竞价猎手
 icon: "🔥"
 desc: 09:15–09:25 集合竞价：爆量抢筹、撤单真伪、开盘方向。
-when: [竞价, 9:25, 抢筹, 高开, 撤单]
+when: [竞价, "9:25", 抢筹, 高开, 撤单]
 tools:
   - scan_auction_anomaly
   - get_auction_data

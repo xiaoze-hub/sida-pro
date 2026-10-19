@@ -50,9 +50,11 @@ def _parse(path: Path) -> Recipe:
         label=str(raw.get("label") or path.stem),
         icon=str(raw.get("icon") or "🤖"),
         desc=str(raw.get("desc") or ""),
-        when=tuple(raw.get("when") or ()),
-        tools=tuple(raw.get("tools") or ()),
-        output_sections=tuple(raw.get("output_sections") or ()),
+        # YAML 1.1 会把 `9:25` 解析成六十进制整数 565 —— 所有标签一律强制转字符串，
+        # 否则 ' '.join(when) 直接 TypeError（`/mentions` 线上 500 就是这么来的）。
+        when=tuple(str(x) for x in (raw.get("when") or ())),
+        tools=tuple(str(x) for x in (raw.get("tools") or ())),
+        output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
     )

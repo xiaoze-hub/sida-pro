@@ -137,3 +137,11 @@ def test_budget_exhausts_after_max_calls():
     second = _run_tool("no_such_tool", {}, setup)
     assert "未知工具" in first          # 第一次：预算放行，落到工具不存在
     assert "预算（1 次）已用尽" in second
+
+
+def test_recipe_tags_are_strings_even_when_yaml_coerces():
+    """YAML 1.1 会把 `9:25` 当六十进制整数（565），join 时直接炸 —— 线上 /mentions 500 的根因。"""
+    auction = get_recipe("auction_hunter")
+    assert all(isinstance(w, str) for w in auction.when)
+    assert "9:25" in auction.when                      # 保留原样，不是 565
+    assert " ".join(auction.when) == " ".join(list(auction.when))
