@@ -175,6 +175,16 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.9 (收紧消息面相关性过滤并修正TA-Lib形态强度误导)（2026-10-19）
+
+- **VERSION**: bump v0.18.8 → v0.18.9 (同步 README.md / README.zh-CN.md 徽章)。
+- **消息面相关性收紧 (`stock_dossier_aggregator.py`)**:
+  - 生产实测发现东财个股新闻源会把全市场汇总稿（如「55家公司前三季度业绩预增」「沪市公司密集披露利好」）一并打上本股 tag，导致 Harness 把别家新闻算到本股头上；
+  - 改为：有股票名称时以「标题/正文出现本股名称」为相关性判据，名称缺失才退回 `symbols` 判定，宁可漏不可串。
+- **TA-Lib 形态展示口径修正 (`chat.py`)**:
+  - 原渲染把 TA-Lib 的 `±100` 信号值当「强度」展示，实测一根十字星会输出多条「强度100 看涨」，易被误读为多形态强共振；
+  - 改为标注「信号值 ±100 为方向标记，非强度」并附一句同义形态说明，杜绝伪精确。
+
 ## release: v0.18.8 (AI助手全景Harness扩充公告/利好消息面/K线形态至9维)（2026-10-19）
 
 - **VERSION**: bump v0.18.7 → v0.18.8 (同步 README.md / README.zh-CN.md 徽章)。
