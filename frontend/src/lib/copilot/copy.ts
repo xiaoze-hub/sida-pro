@@ -137,6 +137,8 @@ export const ATTACH_FAILED = '附件上传失败'
 export const ATTACH_REMOVE = '移除附件'
 export const ATTACH_EMPTY = '附件未解析出内容'
 export const ATTACH_CHIP_LABEL = '附件'
+/** 图片不依赖 OCR：多模态模型直接读图，因此 OCR 失败不算附件失败。 */
+export const ATTACH_IMAGE_READY = '图片已附加，模型将直接读图'
 
 export const PAGE_EMPTY_EXAMPLES = [
   '今天 9:25 谁在爆量抢筹？',

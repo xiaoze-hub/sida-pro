@@ -98,6 +98,30 @@ describe('数智参谋附件上传', () => {
     expect(imageData).toBeUndefined()
   })
 
+  it('图片无 OCR 文本时不报错、不塞「未解析」，正文提示直接看图', async () => {
+    // 生产实测：容器未装 tesseract → 图片 OCR 失败，但 image_data 正常
+    apiMock.uploadAttachment.mockResolvedValue({
+      filename: 'shot.png',
+      text: '',
+      image_data: IMG_DATA,
+      error: '图片 OCR 失败: tesseract is not installed',
+    })
+    render(<AiCopilotPage />)
+
+    pickFile('shot.png', 'image/png')
+
+    await waitFor(() => expect(screen.getByText('图片已附加，模型将直接读图')).toBeTruthy())
+    // OCR 失败不得冒泡成错误条
+    expect(screen.queryByText(/附件上传失败/)).toBeNull()
+
+    fireEvent.click(screen.getByLabelText('发送'))
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalledTimes(1))
+    const [, content, , , imageData] = apiMock.sendMessageStream.mock.calls[0]
+    expect(content).toContain('（图片，请直接看图回答）')
+    expect(content).not.toContain('未解析出内容')
+    expect(imageData).toBe(IMG_DATA)
+  })
+
   it('超过 20MB 直接拒绝、不上传', async () => {
     render(<AiCopilotPage />)
     const input = screen.getByTestId('copilot-attach-input') as HTMLInputElement

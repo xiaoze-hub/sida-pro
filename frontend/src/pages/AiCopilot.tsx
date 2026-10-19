@@ -10,6 +10,7 @@ import {
   ATTACH_EMPTY,
   ATTACH_FAILED,
   ATTACH_HINT,
+  ATTACH_IMAGE_READY,
   ATTACH_PARSING,
   ATTACH_REMOVE,
   ATTACH_TOO_LARGE,
@@ -150,7 +151,8 @@ export default function AiCopilotPage() {
           imageData: res.image_data,
           isImage: file.type.startsWith('image/'),
         })
-        if (res.error) setError(`${ATTACH_FAILED}: ${res.error}`)
+        // 图片走多模态：OCR 失败不影响读图，只有「无图且无文本」才是真失败
+        if (res.error && !res.image_data) setError(`${ATTACH_FAILED}: ${res.error}`)
       } catch (e) {
         setError(`${ATTACH_FAILED}: ${e instanceof Error ? e.message : '未知错误'}`)
       } finally {
@@ -165,9 +167,14 @@ export default function AiCopilotPage() {
       const words = text.trim()
       // 只有附件没打字也允许发（截图直接问"这是什么"），所以附件在场时不要求文字
       if ((!words && !attach) || streaming || uploading) return
-      const content = [words, attach ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${attach.text || ATTACH_EMPTY}` : '']
-        .filter(Boolean)
-        .join('\n\n')
+      const attachPart = attach
+        ? attach.text
+          ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${attach.text}`
+          : attach.imageData
+            ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]（图片，请直接看图回答）`
+            : `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${ATTACH_EMPTY}`
+        : ''
+      const content = [words, attachPart].filter(Boolean).join('\n\n')
       const sentAttachment = attach ? { name: attach.name, isImage: attach.isImage } : undefined
       const imageData = attach?.imageData
       setError(null)
@@ -374,7 +381,11 @@ export default function AiCopilotPage() {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[11px] text-foreground">{attach.name}</div>
                 <div className="text-[10px] text-muted-foreground">
-                  {attach.text ? `${attach.text.length} 字已解析，可一起提问` : ATTACH_EMPTY}
+                  {attach.text
+                    ? `${attach.text.length} 字已解析，可一起提问`
+                    : attach.imageData
+                      ? ATTACH_IMAGE_READY
+                      : ATTACH_EMPTY}
                 </div>
               </div>
               <button

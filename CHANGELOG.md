@@ -181,7 +181,10 @@
 - **附件上传（`AiCopilot.tsx`）**: 数智参谋一级页补齐多模态输入 —— 回形针选文件、截图直接 Ctrl+V 粘贴、拖文件到对话区三种入口；复用既有 `POST /api/chat/upload`（不新造通道），图片透传 `image_data` 走多模态、PDF/Excel/txt 走服务端解析文本；上传后显示缩略图预览 chip 可移除，允许"只发图不打字"。
 - **AI 入口去重**: `/ai-copilot` 页内不再渲染右下角圆形 FAB（页面本身就是入口，重复即噪音）；工作台仍保留上下文胶囊，其它页面 FAB 不变。
 - **图标统一**: ChatWidget 的 FAB / 窗口空态图标由 `MessageCircle` 改为 `Sparkles`，与侧栏「数智参谋」高亮卡、工作台胶囊、页面标题同一 glyph。
-- **单测**: 新增 `copilot-attachment.test.tsx`（3 例：图片透传 image_data／移除后不带／超 20MB 拒传）；`ai-entry-uniqueness.test.tsx` 增 1 例断言参谋页无 FAB。
+- **图片 OCR 容错**: 生产容器未装 tesseract，图片上传会返回「OCR 失败」但 `image_data` 正常；
+  已改为图片路径不看 OCR 结果（不弹错误、不在正文写「未解析出内容」，改为「（图片，请直接看图回答）」），
+  预览 chip 提示「图片已附加，模型将直接读图」。
+- **单测**: 新增 `copilot-attachment.test.tsx`（4 例：图片透传 image_data／移除后不带／图片无 OCR 文本仍可发／超 20MB 拒传）；`ai-entry-uniqueness.test.tsx` 增 1 例断言参谋页无 FAB。
 
 ## release: v0.18.9 (收紧消息面相关性过滤并修正TA-Lib形态强度误导)（2026-10-19）
 
