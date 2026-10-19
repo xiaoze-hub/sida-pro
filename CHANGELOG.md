@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.7 (规范全景Harness在注册表的导出排序与CI门禁)（2026-10-19）
+
+- **VERSION**: bump v0.18.6 → v0.18.7 (同步 README.md / README.zh-CN.md 徽章)。
+- **注册表与单测修复**:
+  - `registry.py`: 严格将 `get_stock_dossier` 置于 core 连续前缀尾部（参谋 5 工具之后、thsdk 之前），遵守工具链导出顺序契约；
+  - `test_w33_chat_registry.py` & `test_chat_tools_copilot.py`: 同步预期 core 工具集合 (37 核心工具) 与 thsdk 起始 index (37)，本地全量通过。
+
 ## release: v0.18.6 (构建AI助手全景Harness与全维度标的客观证据编排)（2026-10-19）
 
 - **VERSION**: bump v0.18.5 → v0.18.6 (同步 README.md / README.zh-CN.md 徽章)。

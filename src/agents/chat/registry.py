@@ -115,46 +115,6 @@ def _perm_denied(user, db, perm: str) -> str | None:
 
 
 @register_chat_tool(
-    "get_stock_dossier",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "get_stock_dossier",
-            "description": "【首选核心Harness】获取单只股票的全面综合客观证据档案。一次性并发打包：实时量价、技术面状态、腾讯逐笔主力意图、120日底仓筹码沉淀(成本峰与获利盘)、数智决策三指标(GS多空色带与机构活跃度)、东方财富券商研报评级。分析个股/问某股票怎么样/持仓诊断时必须优先调用本工具，避免盲目单点调用导致证据缺失。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string", "description": "股票代码，如 600111 或 002361"},
-                    "market": {"type": "string", "description": "市场代码：CN/HK/US", "default": "CN"},
-                },
-                "required": ["symbol"],
-            },
-        },
-    },
-    caliber="综合全景档案·量价+逐笔主力+底仓筹码+决策色带+机构研报",
-)
-async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = None) -> str:
-    from src.core.permissions import PERM_VIEW_QUOTE
-
-    denied = _perm_denied(user, db, PERM_VIEW_QUOTE)
-    if denied:
-        return denied
-    symbol = args.get("symbol", "")
-    market = args.get("market", "CN")
-    if not symbol:
-        return "请提供股票代码(symbol)。"
-
-    try:
-        from src.agents.chat.stock_dossier_aggregator import build_stock_full_dossier, format_stock_dossier_text
-
-        dossier = await build_stock_full_dossier(symbol, market=market, db=db, user=user)
-        return format_stock_dossier_text(dossier)
-    except Exception as e:
-        logger.warning("获取标的全景档案失败: %s", e)
-        return f"获取全景档案失败: {e}"
-
-
-@register_chat_tool(
     "get_portfolio",
     schema={
         "type": "function",
@@ -1429,6 +1389,46 @@ async def _tool_get_early_signals(db: Session, args: dict, user: User | None = N
 from src.agents.chat import tools_market as _tools_market  # noqa: E402  (无模块级反向依赖)
 
 _tools_market.register_market_tools()
+
+
+@register_chat_tool(
+    "get_stock_dossier",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_stock_dossier",
+            "description": "【首选核心Harness】获取单只股票的全面综合客观证据档案。一次性并发打包：实时量价、技术面状态、腾讯逐笔主力意图、120日底仓筹码沉淀(成本峰与获利盘)、数智决策三指标(GS多空色带与机构活跃度)、东方财富券商研报评级。分析个股/问某股票怎么样/持仓诊断时必须优先调用本工具，避免盲目单点调用导致证据缺失。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "股票代码，如 600111 或 002361"},
+                    "market": {"type": "string", "description": "市场代码：CN/HK/US", "default": "CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="综合全景档案·量价+逐笔主力+底仓筹码+决策色带+机构研报",
+)
+async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.permissions import PERM_VIEW_QUOTE
+
+    denied = _perm_denied(user, db, PERM_VIEW_QUOTE)
+    if denied:
+        return denied
+    symbol = args.get("symbol", "")
+    market = args.get("market", "CN")
+    if not symbol:
+        return "请提供股票代码(symbol)。"
+
+    try:
+        from src.agents.chat.stock_dossier_aggregator import build_stock_full_dossier, format_stock_dossier_text
+
+        dossier = await build_stock_full_dossier(symbol, market=market, db=db, user=user)
+        return format_stock_dossier_text(dossier)
+    except Exception as e:
+        logger.warning("获取标的全景档案失败: %s", e)
+        return f"获取全景档案失败: {e}"
 
 
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
