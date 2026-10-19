@@ -58,6 +58,16 @@ describe('AI 入口唯一性', () => {
     expect(screen.getByTitle(FAB_TITLE)).toBeTruthy()
   })
 
+  it('数智参谋一级页内不再渲染 FAB（页面本身就是入口）', () => {
+    window.history.pushState({}, '', '/ai-copilot')
+    try {
+      render(<ChatWidget />)
+      expect(screen.queryByTitle(FAB_TITLE)).toBeNull()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
+  })
+
   it('胶囊在场时隐藏 FAB，只留胶囊；胶囊卸载后 FAB 恢复', async () => {
     const first = render(
       <>

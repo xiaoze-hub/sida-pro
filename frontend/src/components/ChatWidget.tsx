@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MessageCircle, X, Plus, Trash2, Send, ChevronLeft, XCircle, Settings2, Check, GripHorizontal, Newspaper, Paperclip, Loader2 } from 'lucide-react'
+import { Sparkles, X, Plus, Trash2, Send, ChevronLeft, XCircle, Settings2, Check, GripHorizontal, Newspaper, Paperclip, Loader2 } from 'lucide-react'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { chatApi, fetchAPI, type ChatConversation, type ChatMessage } from '@panwatch/api'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
@@ -561,8 +561,15 @@ export default function ChatWidget() {
       } as React.CSSProperties)
     : undefined
 
+  /**
+   * 入口去重（2026-10-19）：`/ai-copilot` 已是数智参谋一级页，右下角再挂一个圆形 FAB
+   * 就是同一入口两处出现 —— 页面内不再渲染 FAB（工作台另有上下文胶囊，见 CopilotCapsule）。
+   * 用 pathname 判断而非 router hook：本组件全站常驻、且单测裸渲染不带 Router。
+   */
+  const onCopilotPage = typeof window !== 'undefined' && window.location.pathname.startsWith('/ai-copilot')
+
   if (!open) {
-    if (capsulePresent) return null
+    if (capsulePresent || onCopilotPage) return null
     return (
       <button
         onClick={() => setOpen(true)}
@@ -570,7 +577,7 @@ export default function ChatWidget() {
         title="打开数智分析BOT"
         aria-label="打开数智分析BOT"
       >
-        <MessageCircle className="w-5 h-5" />
+        <Sparkles className="w-5 h-5" />
       </button>
     )
   }
@@ -728,7 +735,7 @@ export default function ChatWidget() {
         <div className="flex-1 overflow-y-auto scrollbar">
           {conversations.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[13px] gap-3">
-              <MessageCircle className="w-8 h-8 opacity-30" />
+              <Sparkles className="w-8 h-8 opacity-30" />
               <p>暂无对话</p>
               <button
                 onClick={createNewConversation}
@@ -789,7 +796,7 @@ export default function ChatWidget() {
             )}
             {messages.length === 0 && suggestedQuestions.length === 0 && !sending && (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-[13px] gap-2">
-                <MessageCircle className="w-6 h-6 opacity-30" />
+                <Sparkles className="w-6 h-6 opacity-30" />
                 <p>输入问题开始对话</p>
               </div>
             )}

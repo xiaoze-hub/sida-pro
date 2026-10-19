@@ -128,6 +128,16 @@ export const PRESET_GROUP_LABEL: Record<string, string> = {
   defense: '防守',
 }
 export const SEND = '发送'
+
+/** 附件上传（2026-10-19）：截图问盘口、交割单对账、研报 PDF 都能直接丢进来。 */
+export const ATTACH_HINT = '上传图片或文件：截图 / 交割单 / 研报 PDF / Excel / txt'
+export const ATTACH_PARSING = '正在解析附件…'
+export const ATTACH_TOO_LARGE = '附件超过 20MB 上限'
+export const ATTACH_FAILED = '附件上传失败'
+export const ATTACH_REMOVE = '移除附件'
+export const ATTACH_EMPTY = '附件未解析出内容'
+export const ATTACH_CHIP_LABEL = '附件'
+
 export const PAGE_EMPTY_EXAMPLES = [
   '今天 9:25 谁在爆量抢筹？',
   '600111 底仓成本多少，现在追安全吗？',

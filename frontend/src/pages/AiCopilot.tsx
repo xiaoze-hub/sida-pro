@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Send, Sparkles } from 'lucide-react'
+import { Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { getCopilotPresets } from '@/lib/copilot/api'
 import { extractSymbolChips } from '@/lib/copilot/symbolChips'
 import {
+  ATTACH_CHIP_LABEL,
+  ATTACH_EMPTY,
+  ATTACH_FAILED,
+  ATTACH_HINT,
+  ATTACH_PARSING,
+  ATTACH_REMOVE,
+  ATTACH_TOO_LARGE,
   COPILOT_PAGE_SUBTITLE,
   COPILOT_PAGE_TITLE,
   DISCLAIMER,
@@ -15,6 +22,17 @@ import {
   SEND,
 } from '@/lib/copilot/copy'
 import type { CopilotPreset } from '@/lib/copilot/types'
+
+/** 与服务端 /api/chat/upload 上限保持一致（20MB）。 */
+const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
+
+/** 待发送附件：解析文本 + 可选图片 data URL（图片走多模态，文本模型走解析结果）。 */
+interface PendingAttachment {
+  name: string
+  text: string
+  imageData?: string
+  isImage: boolean
+}
 
 /** 指令池接口失败时的本地兜底（只影响"有没有快捷按钮"，不影响能不能提问）。 */
 const LOCAL_PRESETS: CopilotPreset[] = [
@@ -54,7 +72,12 @@ const LOCAL_PRESETS: CopilotPreset[] = [
   },
 ]
 
-type Msg = { role: 'user' | 'assistant'; content: string }
+type Msg = {
+  role: 'user' | 'assistant'
+  content: string
+  /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
+  attachment?: { name: string; isImage: boolean }
+}
 
 /** 6 位 A 股代码（含北交所 4/8 开头）才允许查参谋卡，避免把日期/金额当代码。 */
 const SYMBOL_RE = /^[03468]\d{5}$/
@@ -81,6 +104,9 @@ export default function AiCopilotPage() {
   const [error, setError] = useState<string | null>(null)
   const [symbol, setSymbol] = useState('')
   const [briefSymbol, setBriefSymbol] = useState('')
+  const [attach, setAttach] = useState<PendingAttachment | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
 
@@ -103,13 +129,51 @@ export default function AiCopilotPage() {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
   }, [msgs, stage])
 
+  /**
+   * 选择附件：图片走多模态（`image_data` 直传模型），PDF/Excel/txt 走服务端解析文本。
+   * 复用 ChatWidget 同一条 `/api/chat/upload`，不新造通道。
+   */
+  const handleFile = useCallback(
+    async (file: File | null | undefined) => {
+      if (!file) return
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        setError(ATTACH_TOO_LARGE)
+        return
+      }
+      setError(null)
+      setUploading(true)
+      try {
+        const res = await chatApi.uploadAttachment(file)
+        setAttach({
+          name: res.filename || file.name,
+          text: (res.text || '').trim(),
+          imageData: res.image_data,
+          isImage: file.type.startsWith('image/'),
+        })
+        if (res.error) setError(`${ATTACH_FAILED}: ${res.error}`)
+      } catch (e) {
+        setError(`${ATTACH_FAILED}: ${e instanceof Error ? e.message : '未知错误'}`)
+      } finally {
+        setUploading(false)
+      }
+    },
+    [],
+  )
+
   const send = useCallback(
     async (text: string) => {
-      const content = text.trim()
-      if (!content || streaming) return
+      const words = text.trim()
+      // 只有附件没打字也允许发（截图直接问"这是什么"），所以附件在场时不要求文字
+      if ((!words && !attach) || streaming || uploading) return
+      const content = [words, attach ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${attach.text || ATTACH_EMPTY}` : '']
+        .filter(Boolean)
+        .join('\n\n')
+      const sentAttachment = attach ? { name: attach.name, isImage: attach.isImage } : undefined
+      const imageData = attach?.imageData
       setError(null)
-      setMsgs((m) => [...m, { role: 'user', content }])
+      setMsgs((m) => [...m, { role: 'user', content, attachment: sentAttachment }])
       setInput('')
+      setAttach(null)
       setStreaming(true)
       setStage('正在准备上下文…')
       let assistant = ''
@@ -143,6 +207,7 @@ export default function AiCopilotPage() {
             onError: (e) => setError(e),
           },
           ac.signal,
+          imageData,
         )
       } catch (e) {
         setError(e instanceof Error ? e.message : '对话失败')
@@ -151,7 +216,7 @@ export default function AiCopilotPage() {
         setStage('')
       }
     },
-    [convId, streaming],
+    [attach, convId, streaming, uploading],
   )
 
   return (
@@ -218,7 +283,21 @@ export default function AiCopilotPage() {
           </form>
         </div>
 
-        <div ref={scroller} className="scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3">
+        <div
+          ref={scroller}
+          onDragOver={(e) => {
+            // 拖文件进来直接接管，避免浏览器把图片当导航打开
+            if (Array.from(e.dataTransfer?.types || []).includes('Files')) e.preventDefault()
+          }}
+          onDrop={(e) => {
+            const f = e.dataTransfer?.files?.[0]
+            if (f) {
+              e.preventDefault()
+              void handleFile(f)
+            }
+          }}
+          className="scrollbar flex-1 space-y-3 overflow-y-auto px-3 py-3"
+        >
           {briefSymbol ? (
             <CopilotBriefCard symbol={briefSymbol} market="CN" />
           ) : null}
@@ -244,6 +323,11 @@ export default function AiCopilotPage() {
                 }
               >
                 {m.role === 'user' ? m.content : <SafeMarkdown>{m.content}</SafeMarkdown>}
+                {m.role === 'user' && m.attachment ? (
+                  <span className="mt-1 block text-[10px] text-muted-foreground">
+                    📎 {m.attachment.name}
+                  </span>
+                ) : null}
                 {m.role === 'assistant'
                   ? extractSymbolChips(m.content).map((s) => (
                       <a
@@ -273,10 +357,84 @@ export default function AiCopilotPage() {
         </div>
 
         <div className="border-t border-border/40 p-2">
+          {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
+          {attach ? (
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-role-watch/35 bg-s2 px-2 py-1.5">
+              {attach.imageData ? (
+                <img
+                  src={attach.imageData}
+                  alt={attach.name}
+                  className="h-9 w-9 shrink-0 rounded object-cover"
+                />
+              ) : (
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-s3 text-[10px] text-muted-foreground">
+                  {attach.name.split('.').pop()?.slice(0, 4).toUpperCase() || 'FILE'}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] text-foreground">{attach.name}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {attach.text ? `${attach.text.length} 字已解析，可一起提问` : ATTACH_EMPTY}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttach(null)}
+                aria-label={ATTACH_REMOVE}
+                title={ATTACH_REMOVE}
+                data-testid="copilot-attach-remove"
+                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-s3 hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
+
+          {uploading ? (
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {ATTACH_PARSING}
+            </div>
+          ) : null}
+
           <div className="flex items-end gap-2">
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={streaming || uploading}
+              aria-label={ATTACH_HINT}
+              title={ATTACH_HINT}
+              data-testid="copilot-attach"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-40"
+            >
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              data-testid="copilot-attach-input"
+              className="hidden"
+              accept="image/*,.pdf,.xlsx,.xls,.csv,.txt,.md,.docx"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                void handleFile(f)
+              }}
+            />
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={(e) => {
+                // 直接粘贴截图（截图工具 → Ctrl+V）是最常见的用法，不能只支持点选文件
+                const item = Array.from(e.clipboardData?.items || []).find((it) =>
+                  it.type.startsWith('image/'),
+                )
+                const file = item?.getAsFile()
+                if (file) {
+                  e.preventDefault()
+                  void handleFile(file)
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
@@ -284,13 +442,15 @@ export default function AiCopilotPage() {
                 }
               }}
               rows={2}
-              placeholder="问筹码、共振、量价、撤单、竞价、妖股因子…（Enter 发送 / Shift+Enter 换行）"
+              placeholder={
+                attach ? '补充说明（可直接发送，或继续写你的问题）' : '问筹码、共振、量价、撤单、竞价、妖股因子…（Enter 发送 / Shift+Enter 换行）'
+              }
               className="scrollbar min-h-[44px] flex-1 resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
             />
             <button
               type="button"
               onClick={() => void send(input)}
-              disabled={streaming || !input.trim()}
+              disabled={streaming || uploading || (!input.trim() && !attach)}
               className="flex h-9 w-9 items-center justify-center rounded-lg bg-role-watch/15 text-role-watch hover:bg-role-watch/25 disabled:opacity-40"
               aria-label={SEND}
             >
