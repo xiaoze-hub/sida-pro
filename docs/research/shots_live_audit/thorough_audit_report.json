@@ -1,13 +1,13 @@
 [
   {
-    "id": "bfxt_600111_research",
-    "name": "北方稀土工作台研究Tab",
-    "url": "https://SIDA.hengsheng-elec.com/stocks/600111?tab=research",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/bfxt_600111_research.png",
-    "alerts": [
-      "ent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分 深度分析 tradingAgents"
-    ],
+    "id": "ai_copilot_harness",
+    "name": "数智参谋Harness走查",
+    "url": "https://SIDA.hengsheng-elec.com/ai-copilot",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/ai_copilot_harness.png",
+    "alerts": [],
     "net_errs": [],
-    "console_errs": []
+    "console_errs": [
+      "Error while trying to use the following icon from the Manifest: https://sida.hengsheng-elec.com/icon-192.png (Download e"
+    ]
   }
 ]

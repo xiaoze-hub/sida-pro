@@ -200,15 +200,13 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        # 走查北方稀土 600111，带 ?tab=research 直接深链进入研究 Tab
+        # 走查北方稀土 600111，进入数智参谋 /ai-copilot 页面走查
         flows_to_run = [{
-            "id": "bfxt_600111_research",
-            "name": "北方稀土工作台研究Tab",
-            "url": f"{BASE_URL}/stocks/600111?tab=research",
+            "id": "ai_copilot_harness",
+            "name": "数智参谋Harness走查",
+            "url": f"{BASE_URL}/ai-copilot",
             "actions": [
                 ("wait", 4000),
-                ("scroll_bottom", None),
-                ("wait", 2000)
             ]
         }]
         for flow in flows_to_run:

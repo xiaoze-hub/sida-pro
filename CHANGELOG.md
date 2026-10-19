@@ -175,6 +175,18 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.8 (AI助手全景Harness扩充公告/利好消息面/K线形态至9维)（2026-10-19）
+
+- **VERSION**: bump v0.18.7 → v0.18.8 (同步 README.md / README.zh-CN.md 徽章)。
+- **Harness 证据维度扩充 (`stock_dossier_aggregator.py`)**:
+  - 新增【近期公告】：东财公告源近 15 日公司公告（标题+事件类型+时间+重要性），权威一手信息；
+  - 新增【利好面消息】：近 72 小时个股新闻，按利好/利空词典规则打分筛选（返回命中词便于溯源），并做相关性过滤剔除全市场泛新闻（`symbols` 命中或标题含股票名称），杜绝把别家新闻算到本股头上；
+  - 新增【利空/风险消息】：同窗口反向验证，防止只看利好被单边叙事带偏；
+  - 新增【K线形态】：同花顺 29 形态教学体系 + TA-Lib 标准形态识别（复用 `_fetch_kline_pattern_context`）；
+  - 全部并入同一 `asyncio.gather` 并行调度，总耗时基本不变。
+- **提示词与工具契约**: `chat.py` SOP 与 `registry.py` 工具描述同步 9 维口径，明确公告/消息须保留原文标题与来源、标注「暂无」的维度不得编造、利好候选须与公告/研报交叉验证。
+- **单测**: `tests/test_stock_dossier.py` 扩到 3 例（倾向判别含混合场景、9 维渲染、空数据显式「暂无」）。
+
 ## release: v0.18.7 (规范全景Harness在注册表的导出排序与CI门禁)（2026-10-19）
 
 - **VERSION**: bump v0.18.6 → v0.18.7 (同步 README.md / README.zh-CN.md 徽章)。
