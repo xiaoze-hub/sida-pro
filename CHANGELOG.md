@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.6 (板块热力图融合题材情绪与连板龙头证据链)（2026-10-19）
+
+- **VERSION**: bump v0.17.5 → v0.17.6 (同步 README.md / README.zh-CN.md 徽章)。
+- **板块热力图演进（Phase 1 龙头标头与梯队角标）**:
+  - `boards.py` (/api/boards/heatmap): 在热力图载荷中穿透融合 `theme_mood_daily` 最新一期定型证据，注入板块 `limit_up_cnt`（涨停家数）、`max_boards`（最高连板）及领涨龙头 `leader_name` / `leader_boards`；
+  - `board-heatmap.ts` & `BoardHeatmap.tsx`: 色块展示升级为带涨停梯队与领涨龙头格式（如 `低空经济 (5停) \n +4.2% [神剑股份 3B]`），并在 Tooltip 浮层详实展示「涨停家数」与「板块领涨龙头」，实战一眼穿透真假主线。
+
 ## release: v0.17.5 (分片2单测环境网络隔离与盘中状态断言鲁棒性修复)（2026-10-19）
 
 - **VERSION**: bump v0.17.4 → v0.17.5 (同步 README.md / README.zh-CN.md 徽章)。

@@ -183,8 +183,10 @@ def run_user_crawler():
     print("[2/3] 启动全量真实交互爬虫...")
     summary = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
+        context = p.chromium.launch_persistent_context(
+            user_data_dir="/tmp/chromium_user_data",
+            headless=True,
+            executable_path="/snap/bin/chromium",
             viewport={"width": 1600, "height": 900},
             ignore_https_errors=True
         )
@@ -264,7 +266,7 @@ def run_user_crawler():
             page.remove_listener("console", handle_console)
             page.remove_listener("response", handle_resp)
 
-        browser.close()
+        context.close()
 
     with open(SHOT_DIR / "thorough_audit_report.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)

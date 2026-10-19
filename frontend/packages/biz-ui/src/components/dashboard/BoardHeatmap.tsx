@@ -220,6 +220,13 @@ function tooltipHtml(c: TreemapCell): string {
     ['量能', fmtMoney(c.volume)],
     ['资金净流入', fmtMoney(c.fundNet)],
   ]
+  if (c.limitUpCnt !== undefined && c.limitUpCnt > 0) {
+    rows.push(['涨停家数', `${c.limitUpCnt}家`])
+  }
+  if (c.leaderName) {
+    const bStr = c.leaderBoards && c.leaderBoards > 1 ? ` (${c.leaderBoards}板)` : ''
+    rows.push(['板块领涨龙头', `${c.leaderName}${bStr}`])
+  }
   if (c.volumeRatio !== null && c.volumeRatio !== undefined && isFinite(c.volumeRatio)) {
     rows.push(['量比', safeFixed(c.volumeRatio, 2)])
   }
@@ -364,7 +371,13 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
                 const tier = p?.data?.labelTier ?? 2
                 if (tier === 0) return ''
                 if (tier === 1) return `${p?.name ?? ''}`
-                return `${p?.name ?? ''}\n${formatHeatPct(p?.data?.changePct)}`
+                const d = p?.data
+                const pctStr = formatHeatPct(d?.changePct)
+                if (d?.leaderName && (d.limitUpCnt || 0) > 0) {
+                  const bStr = d.leaderBoards && d.leaderBoards > 1 ? `${d.leaderBoards}B` : '首板'
+                  return `${p?.name ?? ''} (${d.limitUpCnt}停)\n${pctStr} [${d.leaderName} ${bStr}]`
+                }
+                return `${p?.name ?? ''}\n${pctStr}`
               },
             },
             data: cells,

@@ -32,7 +32,6 @@
     "url": "https://SIDA.hengsheng-elec.com/stocks/002361",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/04_workbench_main.png",
     "alerts": [
-      " 买 +106.06万 卖 +429.12万 微观分价博弈 腾讯分价表 · 逐档主动买/卖力量 · ",
       "力意图数据(非 A 股/数据源不可用/未开盘) AI 解读 AI 解读 规则给结论, AI 只补『为"
     ],
     "net_errs": [],
@@ -44,8 +43,7 @@
     "url": "https://SIDA.hengsheng-elec.com/stocks/002361?tab=l2",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/05_workbench_tab_l2.png",
     "alerts": [
-      " 买 +106.06万 卖 +429.12万 盘口快照源: 非交易时段·无可用盘口快照 微观分价博弈",
-      "-- / -- 暗盘数据状态 不可用(盘后采集, 当日无样本时全部 `--`) 主力筹码分布 (波段"
+      "力意图数据(非 A 股/数据源不可用/未开盘) AI 解读 AI 解读 规则给结论, AI 只补『为"
     ],
     "net_errs": [],
     "console_errs": []
@@ -75,7 +73,9 @@
     "name": "个股工作台-研报深度",
     "url": "https://SIDA.hengsheng-elec.com/stocks/002361?tab=research",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/08_workbench_tab_research.png",
-    "alerts": [],
+    "alerts": [
+      "ent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分 深度分析 tradingAgents"
+    ],
     "net_errs": [],
     "console_errs": []
   },
@@ -95,9 +95,7 @@
     "name": "独立集合竞价专区",
     "url": "https://SIDA.hengsheng-elec.com/auction",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/10_auction.png",
-    "alerts": [
-      "9:30 确立方向 \t 自选 429\t688190\t XD云路股 \t+0.16%\t1 万\t—\t98."
-    ],
+    "alerts": [],
     "net_errs": [],
     "console_errs": []
   },
@@ -115,7 +113,9 @@
     "name": "可转债-正股联动雷达",
     "url": "https://SIDA.hengsheng-elec.com/cb-radar",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/12_cb_radar.png",
-    "alerts": [],
+    "alerts": [
+      "跌分布 全A · 9档 数据源不可用: Server disconnected without se"
+    ],
     "net_errs": [],
     "console_errs": []
   },
@@ -142,7 +142,9 @@
     "name": "影子模拟实盘账户",
     "url": "https://SIDA.hengsheng-elec.com/shadow-account",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/15_shadow_account.png",
-    "alerts": [],
+    "alerts": [
+      "跌分布 全A · 9档 数据源不可用: Server disconnected without se"
+    ],
     "net_errs": [],
     "console_errs": []
   },
@@ -151,7 +153,9 @@
     "name": "决策账本与回测对账",
     "url": "https://SIDA.hengsheng-elec.com/decision-log",
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/16_decision_log.png",
-    "alerts": [],
+    "alerts": [
+      "跌分布 全A · 9档 数据源不可用: Server disconnected without se"
+    ],
     "net_errs": [],
     "console_errs": []
   },

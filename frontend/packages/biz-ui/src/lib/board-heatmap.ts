@@ -24,6 +24,16 @@ export interface BoardHeatItem {
   speed?: number | null
   /** 是否实时数据(live 模式覆盖) */
   live?: boolean
+  /** 涨停家数 (题材情绪/连板梯队证据) */
+  limit_up_cnt?: number
+  /** 板块最高连板高度 */
+  max_boards?: number
+  /** 龙头代码 */
+  leader_symbol?: string
+  /** 龙头名称 */
+  leader_name?: string
+  /** 龙头连板数 */
+  leader_boards?: number
 }
 
 export interface HeatPalette {
@@ -60,6 +70,11 @@ export interface TreemapCell {
   hasDaily: boolean
   volumeRatio?: number | null
   speed?: number | null
+  limitUpCnt?: number
+  maxBoards?: number
+  leaderSymbol?: string
+  leaderName?: string
+  leaderBoards?: number
   /** 异动标注(无 → null); 命中时 itemStyle 带警示环 */
   anomaly: HeatAnomaly | null
   itemStyle: { color: string; borderColor?: string; borderWidth?: number }
@@ -403,6 +418,11 @@ export function toTreemapCells(
       hasDaily: it.has_daily,
       volumeRatio: it.volume_ratio ?? null,
       speed: it.speed ?? null,
+      limitUpCnt: it.limit_up_cnt,
+      maxBoards: it.max_boards,
+      leaderSymbol: it.leader_symbol,
+      leaderName: it.leader_name,
+      leaderBoards: it.leader_boards,
       anomaly,
       itemStyle: {
         color: heatCellColor(it.change_pct, palette, clampPct),
