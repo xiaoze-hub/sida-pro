@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@panwatch/api', () => ({
+  fetchAPI: vi.fn(async () => ({ items: [], total: 0 })),
   insightApi: {
     quote: (...a: unknown[]) => mocks.quote(...a),
     moreInfo: (...a: unknown[]) => mocks.moreInfo(...a),
