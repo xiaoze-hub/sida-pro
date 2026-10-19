@@ -92,6 +92,7 @@ export const chatApi = {
     signal?: AbortSignal,
     imageData?: string,
     stock?: { symbol: string; market?: string },
+    mentions?: { type: string; value: string; label?: string }[],
   ): Promise<void> =>
     new Promise<void>((resolve, reject) => {
       fetch(`${API_BASE}/chat/conversations/${conversationId}/messages/stream`, {
@@ -106,6 +107,7 @@ export const chatApi = {
           // 当前查看的标的：让后端把对话绑到这只票，避免模型从持仓里"猜"成别的股票
           stock_symbol: stock?.symbol || undefined,
           stock_market: stock?.market || undefined,
+          mentions: mentions?.length ? mentions : undefined,
         }),
         signal,
       })

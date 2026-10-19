@@ -21,7 +21,10 @@ const presetsMock = vi.hoisted(() => ({
 }))
 
 vi.mock('@panwatch/api', () => ({ chatApi: apiMock }))
-vi.mock('../../src/lib/copilot/api', () => presetsMock)
+vi.mock('../../src/lib/copilot/api', () => ({
+  ...presetsMock,
+  getCopilotMentions: vi.fn(async () => ({ stocks: [], agents: [] })),
+}))
 vi.mock('../../src/lib/copilot/symbolChips', () => ({
   extractSymbolChips: (text: string) => {
     const m = text.match(/\b([034689]\d{5})\b/)

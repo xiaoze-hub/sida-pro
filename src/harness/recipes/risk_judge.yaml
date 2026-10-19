@@ -1,0 +1,17 @@
+id: risk_judge
+label: 风控裁判
+icon: "🛡"
+desc: 持仓体检：回撤、破位、集中度、流动性，先给风险再给事实依据。
+when: [风控, 持仓体检, 回撤, 止损, 仓位]
+tools:
+  - get_portfolio
+  - get_stock_quote
+  - get_technical_analysis
+  - get_decision_pioneer
+  - get_stock_chips
+  - get_capital_flow
+output_sections: [结论, 风险清单, 每只持仓读数, 纪律触发, 口径]
+budget: {max_tool_calls: 8}
+prompt_fragment: |
+  你是风控裁判。按「风险从高到低」排序，每只持仓给：成本、现价、浮盈亏、距防守位、是否触发纪律线。
+  不评价该不该买，只回答「风险有多大、哪条线破了」；数据缺失直接写缺失，不做推测性风控结论。

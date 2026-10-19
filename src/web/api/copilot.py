@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 
 from src.core.copilot_brief import build_copilot_brief
 from src.core.trade_phase import phase_meta
@@ -133,3 +134,79 @@ def get_copilot_presets(
             "requires_perm": None,
         },
     ]
+
+
+# ─────────────────────────────── 内置智能体（Harness 配方） ───────────────────────────────
+@router.get("/agents")
+def get_copilot_agents(user: Any = Depends(get_current_user)) -> list[dict]:
+    """内置智能体元信息（前端 @ 面板用）。配方正文不下发。"""
+    from src.harness.recipes import list_recipes
+
+    return [r.public() for r in list_recipes()]
+
+
+@router.get("/mentions")
+def get_copilot_mentions(
+    q: str = Query("", description="代码 / 名称 / 拼音首字母"),
+    limit: int = Query(8, ge=1, le=30),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """@ 面板候选：自选股（含全局）+ 内置智能体。
+
+    自选股按当前用户隔离（与 get_watchlist 同口径：本人 + user_id IS NULL 的全局自选）。
+    """
+    from src.db.models import Stock
+    from src.harness.recipes import list_recipes
+    from src.web.database import SessionLocal
+
+    kw = (q or "").strip().lower()
+    stocks: list[dict] = []
+    db = SessionLocal()
+    try:
+        query = db.query(Stock)
+        if getattr(user, "id", None) is not None:
+            query = query.filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
+        rows = query.order_by(Stock.sort_order.asc()).limit(200).all()
+        for s in rows:
+            name = s.name or ""
+            py = _pinyin_initials(name)
+            hay = f"{s.symbol} {name} {py}".lower()
+            if kw and kw not in hay:
+                continue
+            stocks.append({
+                "type": "stock",
+                "symbol": s.symbol,
+                "name": name,
+                "market": s.market or "CN",
+                "py": py,
+            })
+            if len(stocks) >= limit:
+                break
+    except Exception as e:  # 自选表异常不应打断 @ 面板
+        logger.warning("mentions 自选股查询失败: %s", e)
+    finally:
+        db.close()
+
+    agents = []
+    for r in list_recipes():
+        hay = f"{r.id} {r.label} {r.desc} {' '.join(r.when)}"
+        if kw and kw not in hay.lower():
+            continue
+        item = r.public()
+        item["type"] = "agent"
+        agents.append(item)
+        if len(agents) >= limit:
+            break
+    return {"stocks": stocks, "agents": agents}
+
+
+def _pinyin_initials(name: str) -> str:
+    """名称 → 拼音首字母（"北方稀土" → "bfxt"）。pypinyin 缺失时退化为空串。"""
+    if not name:
+        return ""
+    try:
+        from pypinyin import Style, lazy_pinyin
+
+        return "".join(lazy_pinyin(name, style=Style.FIRST_LETTER, errors="ignore")).lower()
+    except Exception:
+        return ""

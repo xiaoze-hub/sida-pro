@@ -60,3 +60,4 @@ cryptography>=42.0
 pytesseract>=0.3.10
 pypdf>=4.0
 Pillow>=10.0
+pypinyin==0.55.0

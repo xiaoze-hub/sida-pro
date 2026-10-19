@@ -726,12 +726,18 @@ def get_web_content(url: str) -> str:
         return f"抓取失败: {str(e)[:120]}。"
 
 
-from contextvars import ContextVar
 
-# 每次请求的标的上下文：bound=对话已绑定的代码(或本轮文字里的代码)，text=用户本轮原文。
-# 工具层用它拦住模型"自己挑一只股票"（实测：看 600111 却分析 002361）。
-_REQ_BOUND: ContextVar[str | None] = ContextVar("chat_req_bound", default=None)
-_REQ_TEXT: ContextVar[str] = ContextVar("chat_req_text", default="")
+# 标的/配方上下文统一放在 src/harness/context.py（chat.py 有行数护栏）。
+from src.harness.context import (  # noqa: E402
+    Mention,
+    REQ_BOUND as _REQ_BOUND,
+    REQ_BUDGET as _REQ_BUDGET,
+    REQ_RECIPE_LABEL as _REQ_RECIPE_LABEL,
+    REQ_TEXT as _REQ_TEXT,
+    REQ_TOOLS as _REQ_TOOLS,
+    enter_request_ctx as _enter_request_ctx,
+    exit_request_ctx as _exit_request_ctx,
+)
 
 
 async def _execute_tool(
@@ -746,6 +752,21 @@ async def _execute_tool(
     S5(2026-08-26): user 沿工具链下传, 数据类工具(get_portfolio/get_stock_suggestions/
     get_watchlist/get_notifications)只读当前用户自己的数据(requires="self")。
     """
+    # 守卫先于查表：白名单/预算必须对"未注册的工具名"同样生效（否则模型写错名字就绕过了预算）
+    # 内置智能体白名单：配方没列的工具一律不执行（可审计、可回归）
+    allow = _REQ_TOOLS.get()
+    if allow is not None and name not in allow:
+        label = _REQ_RECIPE_LABEL.get() or "当前智能体"
+        return (f"{label} 本轮不使用工具 `{name}`。可用工具：{', '.join(sorted(allow))}。"
+                f"请用已有工具回答，或直接说明数据不足。")
+
+    budget = _REQ_BUDGET.get()
+    if budget is not None:
+        if budget["used"] >= budget["max"]:
+            label = _REQ_RECIPE_LABEL.get() or "当前智能体"
+            return f"{label} 的工具预算（{budget['max']} 次）已用尽。请基于已取到的证据作答，缺失处标「暂无」。"
+        budget["used"] += 1
+
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         return f"未知工具: {name}"
@@ -1066,6 +1087,7 @@ async def _build_ai_messages(
     return messages_for_ai
 
 
+
 async def _run_tool_loop(
     ai_client: AIClient, messages_for_ai: list[dict], db: Session,
     user: User | None = None, *, stream: bool = False,
@@ -1184,6 +1206,8 @@ class CreateConversationBody(BaseModel):
 class SendMessageBody(BaseModel):
     content: str
     image_data: str | None = None  # 可选: 图片 base64 data URL(多模态, 模型看图)
+    # @ 提及（股票 / 内置智能体）
+    mentions: list[Mention] = []
     # 2026-10-19: 前端当前查看的标的。没有它时模型只能靠"猜" —— 实测会把正在看的 600111
     # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
     stock_symbol: str | None = None
@@ -1944,15 +1968,13 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        _bound = conv.stock_symbol or _extract_repeat_stock_code(body.content)
-        _tok_b, _tok_t = _REQ_BOUND.set(_bound), _REQ_TEXT.set(body.content)
+        _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
         try:
             async for _kind, payload in _run_tool_loop(ai_client, messages_for_ai, db, user=user):
                 if _kind == "text":
                     ai_response = payload
         finally:
-            _REQ_BOUND.reset(_tok_b)
-            _REQ_TEXT.reset(_tok_t)
+            _exit_request_ctx(_toks)
 
         # 保存 AI 回复
         assistant_msg = ChatMessage(
@@ -2055,8 +2077,7 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
-            _bound = conv.stock_symbol or _extract_repeat_stock_code(body.content)
-            _tok_b, _tok_t = _REQ_BOUND.set(_bound), _REQ_TEXT.set(body.content)
+            _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
             try:
                 async for kind, payload in _run_tool_loop(
                     ai_client, messages_for_ai, db, user=user, stream=True
@@ -2074,8 +2095,7 @@ async def send_message_stream(
                 logger.info("流被取消, 清理上游 LLM 调用")
                 raise
             finally:
-                _REQ_BOUND.reset(_tok_b)
-                _REQ_TEXT.reset(_tok_t)
+                _exit_request_ctx(_toks)
 
             # 保存 AI 回复(全文落库, 与 send_message 一致)
             assistant_msg = ChatMessage(

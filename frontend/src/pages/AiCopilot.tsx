@@ -8,6 +8,9 @@ import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import { SESSION_LABEL, orderPresetsForSession, sessionOf } from '@/lib/copilot/presets-order'
 import { getCopilotPresets } from '@/lib/copilot/api'
 import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
+import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
+import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
+import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
 import {
   ATTACH_CHIP_LABEL,
   ATTACH_EMPTY,
@@ -127,6 +130,18 @@ export default function AiCopilotPage() {
   const [anchorSymbol, setAnchorSymbol] = useState('')
   /** 参谋卡只在用户主动点「看卡」时请求（brief 接口较重，常 10s+） */
   const [briefSymbol, setBriefSymbol] = useState('')
+  // ── @ 提及（股票 / 内置智能体）──
+  const [mentionHit, setMentionHit] = useState<MentionHit | null>(null)
+  const [mentionTab, setMentionTab] = useState<MentionTab>('stock')
+  const [mentionIdx, setMentionIdx] = useState(0)
+  const [mentionLoading, setMentionLoading] = useState(false)
+  const [mentionPool, setMentionPool] = useState<{ stocks: MentionStock[]; agents: MentionAgent[] }>({
+    stocks: [],
+    agents: [],
+  })
+  const [mentions, setMentions] = useState<(MentionStock | MentionAgent)[]>([])
+  /** 中文输入法组合期间不触发 @ 面板（否则打拼音会边打边跳、回车误选） */
+  const composingRef = useRef(false)
   const [showMorePresets, setShowMorePresets] = useState(false)
   const [attach, setAttach] = useState<PendingAttachment | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -215,6 +230,44 @@ export default function AiCopilotPage() {
     [],
   )
 
+  // @ 面板数据源：只在面板打开时请求，按检索词防抖
+  useEffect(() => {
+    if (!mentionHit) return
+    let alive = true
+    const timer = window.setTimeout(() => {
+      setMentionLoading(true)
+      getCopilotMentions(mentionHit.query)
+        .then((res) => {
+          if (!alive) return
+          setMentionPool({ stocks: res?.stocks || [], agents: res?.agents || [] })
+          setMentionIdx(0)
+        })
+        .catch(() => {
+          if (alive) setMentionPool({ stocks: [], agents: [] })
+        })
+        .finally(() => alive && setMentionLoading(false))
+    }, 150)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [mentionHit])
+
+  const mentionRows = mentionHit
+    ? mentionTab === 'stock'
+      ? filterMentions(mentionPool.stocks, mentionHit.query)
+      : filterMentions(mentionPool.agents, mentionHit.query)
+    : []
+
+  const pickMention = (item: MentionStock | MentionAgent) => {
+    if (!mentionHit) return
+    const label = item.type === 'stock' ? item.name || item.symbol : item.label
+    const next = applyMention(input, mentionHit, label)
+    setInput(next.text)
+    setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(item)) ? m : [...m, item]))
+    setMentionHit(null)
+  }
+
   const session = sessionOf()
   const { primary: primaryPresets, more: morePresets } = orderPresetsForSession(presets, session)
 
@@ -237,13 +290,16 @@ export default function AiCopilotPage() {
       setMsgs((m) => [...m, { role: 'user', content, attachment: sentAttachment }])
       setInput('')
       setAttach(null)
+      setMentions([])
+      setMentionHit(null)
       setStreaming(true)
       setStage('正在准备上下文…')
       let assistant = ''
       try {
-        // 标的解析优先级：本条文字里的代码 > 页面锚点（正在看 XXX）
+        // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
+        const mentionedStock = mentions.find((m) => m.type === 'stock') as MentionStock | undefined
         const symInText = extractSymbolChips(words)[0]
-        const sym = symInText || anchorSymbol
+        const sym = mentionedStock?.symbol || symInText || anchorSymbol
         if (sym && sym !== anchorSymbol) setAnchorSymbol(sym)
 
         let id = convId
@@ -283,6 +339,11 @@ export default function AiCopilotPage() {
           ac.signal,
           imageData,
           sym ? { symbol: sym, market: marketOf(sym) } : undefined,
+          mentions.map((m) => ({
+            type: m.type,
+            value: m.type === 'stock' ? m.symbol : m.id,
+            label: m.type === 'stock' ? m.name || m.symbol : m.label,
+          })),
         )
       } catch (e) {
         setError(e instanceof Error ? e.message : '对话失败')
@@ -291,7 +352,7 @@ export default function AiCopilotPage() {
         setStage('')
       }
     },
-    [attach, convId, anchorSymbol, streaming, uploading],
+    [attach, convId, anchorSymbol, mentions, streaming, uploading],
   )
 
   return (
@@ -593,9 +654,63 @@ export default function AiCopilotPage() {
                 void handleFile(f)
               }}
             />
+            <div className="relative flex-1">
+              {mentionHit ? (
+                <MentionPicker
+                  tab={mentionTab}
+                  onTab={(t) => {
+                    setMentionTab(t)
+                    setMentionIdx(0)
+                  }}
+                  stocks={filterMentions(mentionPool.stocks, mentionHit.query)}
+                  agents={filterMentions(mentionPool.agents, mentionHit.query)}
+                  active={mentionIdx}
+                  onHover={setMentionIdx}
+                  onPick={pickMention}
+                  loading={mentionLoading}
+                />
+              ) : null}
+              {mentions.length ? (
+                <div className="mb-1 flex flex-wrap gap-1" data-testid="copilot-mention-chips">
+                  {mentions.map((m) => (
+                    <span
+                      key={mentionKey(m)}
+                      className="flex items-center gap-1 rounded-full border border-role-watch/40 bg-role-watch/10 px-2 py-0.5 text-[10px] text-role-watch"
+                    >
+                      {m.type === 'stock' ? `@${m.name || m.symbol}` : `@${m.label}`}
+                      <button
+                        type="button"
+                        aria-label="移除"
+                        onClick={() => setMentions((list) => list.filter((x) => mentionKey(x) !== mentionKey(m)))}
+                        className="text-role-watch/70 hover:text-role-watch"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value
+                setInput(v)
+                if (composingRef.current) {
+                  setMentionHit(null)
+                  return
+                }
+                const caret = e.target.selectionStart ?? v.length
+                const hit = detectMention(v, caret)
+                setMentionHit(hit)
+                if (hit) setMentionIdx(0)
+              }}
+              onCompositionStart={() => {
+                composingRef.current = true
+                setMentionHit(null)
+              }}
+              onCompositionEnd={() => {
+                composingRef.current = false
+              }}
               onPaste={(e) => {
                 // 直接粘贴截图（截图工具 → Ctrl+V）是最常见的用法，不能只支持点选文件
                 const item = Array.from(e.clipboardData?.items || []).find((it) =>
@@ -608,6 +723,28 @@ export default function AiCopilotPage() {
                 }
               }}
               onKeyDown={(e) => {
+                if (mentionHit && mentionRows.length) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setMentionIdx((i) => (i + 1) % mentionRows.length)
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setMentionIdx((i) => (i - 1 + mentionRows.length) % mentionRows.length)
+                    return
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    pickMention(mentionRows[Math.min(mentionIdx, mentionRows.length - 1)])
+                    return
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setMentionHit(null)
+                    return
+                  }
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
                   void send(input)
@@ -617,8 +754,9 @@ export default function AiCopilotPage() {
               placeholder={
                 attach ? '补充说明（可直接发送，或继续写你的问题）' : '问筹码、共振、量价、撤单、竞价、妖股因子…（Enter 发送 / Shift+Enter 换行）'
               }
-              className="scrollbar min-h-[44px] flex-1 resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
+              className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
             />
+            </div>
             <button
               type="button"
               onClick={() => void send(input)}
