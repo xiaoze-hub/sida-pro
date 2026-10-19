@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { fetchAPI } from '@panwatch/api'
+import { safeFixed } from '@/lib/format'
 import { useInsight } from '@panwatch/biz-ui/components/insight/context'
 import { ReportsTab } from '@panwatch/biz-ui/components/insight/ReportsTab'
 import { DeepTab } from '@panwatch/biz-ui/components/insight/DeepTab'
@@ -121,6 +123,128 @@ function Section({
   )
 }
 
+interface BrokerReportItem {
+  info_code: string
+  title: string
+  org_name: string
+  author: string
+  publish_date: string
+  rating: string
+  target_price: number | null
+  industry_name: string
+  pdf_url: string | null
+  detail_url: string | null
+}
+
+function BrokerResearchSection({ symbol }: { symbol: string }) {
+  const [items, setItems] = useState<BrokerReportItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchAPI<{ items: BrokerReportItem[]; total: number }>(`/reports/broker/${symbol}`)
+      .then((res) => {
+        if (cancelled) return
+        setItems(res?.items || [])
+        setError(null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [symbol])
+
+  if (loading) {
+    return <div className="py-3 text-[11px] text-muted-foreground">正在同步东方财富机构研报...</div>
+  }
+
+  if (error) {
+    return <div className="py-2 text-[11px] text-destructive">研报加载异常: {error}</div>
+  }
+
+  if (items.length === 0) {
+    return <div className="py-2 text-[11px] text-muted-foreground">暂无该标的机构研报</div>
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="overflow-x-auto rounded border border-border/50">
+        <table className="w-full text-left text-[11px]">
+          <thead className="bg-muted/40 text-[10px] text-muted-foreground">
+            <tr>
+              <th className="py-1.5 pl-2.5 font-medium">研报标题</th>
+              <th className="py-1.5 px-2 font-medium">发布机构</th>
+              <th className="py-1.5 px-2 font-medium">评级</th>
+              <th className="py-1.5 px-2 font-medium">目标价</th>
+              <th className="py-1.5 px-2 font-medium">分析师</th>
+              <th className="py-1.5 px-2 font-medium">日期</th>
+              <th className="py-1.5 pr-2.5 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/30">
+            {items.map((r) => (
+              <tr key={r.info_code || r.title} className="hover:bg-muted/20 transition-colors">
+                <td className="py-1.5 pl-2.5 max-w-[280px] truncate text-foreground font-medium" title={r.title}>
+                  {r.title}
+                </td>
+                <td className="py-1.5 px-2 text-foreground/80">{r.org_name || '--'}</td>
+                <td className="py-1.5 px-2">
+                  <span className={`inline-block rounded px-1.5 py-0.2 text-[10px] font-medium ${
+                    r.rating.includes('买入') || r.rating.includes('强推')
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : r.rating.includes('增持')
+                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : 'bg-muted text-muted-foreground'
+                  }`}>
+                    {r.rating}
+                  </span>
+                </td>
+                <td className="py-1.5 px-2 font-mono text-foreground/90">
+                  {r.target_price != null ? `${safeFixed(r.target_price, 2)}元` : '--'}
+                </td>
+                <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[80px]" title={r.author}>
+                  {r.author || '--'}
+                </td>
+                <td className="py-1.5 px-2 font-mono text-muted-foreground whitespace-nowrap">{r.publish_date}</td>
+                <td className="py-1.5 pr-2.5 text-right whitespace-nowrap">
+                  {r.detail_url ? (
+                    <a
+                      href={r.detail_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline mr-2"
+                    >
+                      原文 ↗
+                    </a>
+                  ) : null}
+                  {r.pdf_url ? (
+                    <a
+                      href={r.pdf_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      PDF
+                    </a>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 /** 标签正文(在 Provider 内消费 useInsight; 见文件头注)。 */
 function ResearchTabBody({ symbol, market }: { symbol: string; market: string }) {
   const { reports, activeReport, deepLoaded, deepResult, deepHistory } = useInsight()
@@ -150,7 +274,16 @@ function ResearchTabBody({ symbol, market }: { symbol: string; market: string })
         <DecisionVerdictCard symbol={symbol} market={market} />
       </Section>
 
-      {/* ① AI 报告(三子页签 + 正文由恢复组件 ReportsTab 自带) */}
+      {/* ① 机构研报(东方财富研报中心直连) */}
+      <Section
+        id="broker-reports"
+        title="券商机构研报"
+        hint={`东方财富机构研报中心权威收录 · 标的 ${symbol}`}
+      >
+        <BrokerResearchSection symbol={symbol} />
+      </Section>
+
+      {/* ② AI 报告(三子页签 + 正文由恢复组件 ReportsTab 自带) */}
       <Section
         id="reports"
         title="AI 报告"

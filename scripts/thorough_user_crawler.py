@@ -200,8 +200,13 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        # 走查 04_workbench_main 检查 GS 标记与图例
-        flows_to_run = [f for f in FLOWS if f["id"] == "04_workbench_main"]
+        # 走查北方稀土 600111
+        flows_to_run = [{
+            "id": "bfxt_600111",
+            "name": "北方稀土工作台",
+            "url": f"{BASE_URL}/stocks/600111",
+            "actions": [("wait", 5000)]
+        }]
         for flow in flows_to_run:
             f_id = flow["id"]
             name = flow["name"]
@@ -222,9 +227,12 @@ def run_user_crawler():
                         txt = r.text()
                         import json
                         obj = json.loads(txt).get("data", {})
-                        print(f"gs_signals: {obj.get('gs_signals')}")
+                        chips = obj.get("main_accumulation_chips")
+                        if chips:
+                            print(f"[API RESPONSE CHIPS KEYS]: {list(chips.keys())}")
+                            print(f"[API RESPONSE CHIPS SAMPLES]: {str(chips)[:400]}")
                     except Exception as err:
-                        print(f"[BROWSER NET SUMMARY ERR]: {err}")
+                        pass
                 if r.status >= 400:
                     print(f"[BROWSER NET] {r.status} {r.url}")
                     network_errors.append(f"{r.status} {r.url.split('?')[0]}")
@@ -253,6 +261,7 @@ def run_user_crawler():
                 print(f"    [FAIL] 页面访问失败: {e}")
                 
             # 检查图例中是否存在 gs-zone-legend 以及 data-gs-count
+            page.wait_for_timeout(3000)
             gs_info = page.evaluate("""() => {
                 const el = document.querySelector('[data-gs-count]');
                 const legend = document.querySelector('[data-testid="gs-zone-legend"]');

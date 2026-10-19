@@ -243,6 +243,15 @@ async def get_report_content(
     return {"job_id": job_id, "file": file, "content": content}
 
 
+@router.get("/broker/{symbol}")
+def get_broker_research_reports(symbol: str, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=50)):
+    """获取东方财富机构券商研报列表。"""
+    from src.collectors.eastmoney_research import fetch_eastmoney_research_reports
+
+    data = fetch_eastmoney_research_reports(symbol, page=page, page_size=page_size)
+    return {"code": 0, "success": True, "data": data}
+
+
 # 2026-08-18: 根路径 alias (前端 fetch /api/reports 直接转发到 /list)
 @router.get("")
 async def get_reports_root():

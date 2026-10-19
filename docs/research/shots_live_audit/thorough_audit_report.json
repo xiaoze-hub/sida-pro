@@ -1,13 +1,15 @@
 [
   {
-    "id": "04_workbench_main",
-    "name": "个股工作台主图(神剑股份002361)",
-    "url": "https://SIDA.hengsheng-elec.com/stocks/002361",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/04_workbench_main.png",
+    "id": "bfxt_600111",
+    "name": "北方稀土工作台",
+    "url": "https://SIDA.hengsheng-elec.com/stocks/600111",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/bfxt_600111.png",
     "alerts": [
       "-- / -- 暗盘数据状态 不可用(盘后采集, 当日无样本时全部 `--`) 主力筹码分布 (波段"
     ],
     "net_errs": [],
-    "console_errs": []
+    "console_errs": [
+      "Error while trying to use the following icon from the Manifest: https://sida.hengsheng-elec.com/icon-192.png (Download e"
+    ]
   }
 ]

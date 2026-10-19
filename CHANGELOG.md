@@ -175,6 +175,14 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.3 (接入东方财富机构券商研报中心与工作台深度研报)（2026-10-19）
+
+- **VERSION**: bump v0.18.2 → v0.18.3 (同步 README.md / README.zh-CN.md 徽章)。
+- **东方财富研报中心集成**:
+  - `eastmoney_research.py`: 建立东财 Datacenter `RPT_DEVELOP_RES_DATA` 采集器，抓取机构研报标题、券商名、分析师、买入/增持评级、目标价、发布日期及 PDF/原文直达链接；
+  - `reports.py`: 暴露 `/api/reports/broker/{symbol}` 研报列表端点；
+  - `ResearchTab.tsx`: 工作台研究 Tab 新增「券商机构研报」区块，表格化呈现权威机构观点、评级标签与原文/PDF 快速下钻。
+
 ## release: v0.18.2 (修复K线图LWC插件单调排序约束与周期同步)（2026-10-19）
 
 - **VERSION**: bump v0.18.1 → v0.18.2 (同步 README.md / README.zh-CN.md 徽章)。
