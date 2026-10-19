@@ -271,11 +271,28 @@ def _default_deps():
     from src.core.tdx_boards import pricevol_only
 
     def universe_fn():
+        from src.core.tdx_boards import name_map
+
+        # 优先通达信原生代码目录（5569 只本地高速），免去第三方网络采集阻塞
+        try:
+            m = name_map()
+            if m and len(m) > 1000:
+                return list(m.keys())
+        except Exception as e:
+            logger.debug("ladder-live name_map 兜底: %s", e)
         from src.collectors.stock_list import get_stock_list
 
         return merge_universe(a_share_universe(get_stock_list()), limit_up_symbols())
 
     def names_fn():
+        from src.core.tdx_boards import name_map
+
+        try:
+            m = name_map()
+            if m and len(m) > 1000:
+                return m
+        except Exception:
+            pass
         from src.collectors.stock_list import get_stock_list
 
         return {s["symbol"]: s.get("name") for s in get_stock_list() if s.get("symbol")}

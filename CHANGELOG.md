@@ -175,6 +175,12 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.9 (连板梯队提速与通达信原生代码表融合)（2026-10-19）
+
+- **VERSION**: bump v0.17.8 → v0.17.9 (同步 README.md / README.zh-CN.md 徽章)。
+- **连板梯队盘中扫描性能与稳定性升级**:
+  - `limit_ladder_live.py`: `universe_fn` / `names_fn` 改为优先直接从通达信本地原生 A 股代码表（`tdx_boards.name_map` 5569 只）高速加载，彻底避免盘中第三方采集器网络爬虫超时阻塞或被反爬拦截，大幅提升每分钟盘中天梯运算稳定性与及时率。
+
 ## release: v0.17.8 (修正时区对齐与连板梯队盘中状态探测)（2026-10-19）
 
 - **VERSION**: bump v0.17.7 → v0.17.8 (同步 README.md / README.zh-CN.md 徽章)。
