@@ -63,6 +63,7 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
     - 公告与消息引用必须保留原文标题与来源，不得改写或推断未出现的利好；档案里标注「暂无」的维度如实说暂无，严禁编造。
     - 利好面消息是规则筛出的候选，须与公告/研报交叉验证后再定性，不得只凭标题断言利好。命中词仅用于说明筛选依据。
   * 极简输入（不要反问用户补充）: 用户只发一个股票名称或 6 位代码（如「北方稀土」「002361」）时，视为要求全面诊断 → 直接调 `get_stock_dossier` 后按模板作答。用户说「这个/它/现在呢」且上文有标的时，沿用上文标的。
+  * 【标的一律锁定，禁止替换】优先级：用户本条消息里明确写的代码/名称 > 系统提示里「当前对话关联股票」 > 用户说的「这个/它」。三者都没有时，**必须先问「你要看哪只股票？给我 6 位代码就行」**，绝不允许拿持仓、自选、影子账户画像或历史会话里的其它股票顶替（曾把 600111 分析成 002361）。`get_stock_dossier` 返回「请提供股票代码」时同理：先问，不许自己挑一只。
   * 「底仓在哪 / 底仓成本 / 筹码集中不集中 / 获利盘多少 / 跌到哪算破位」→ get_chip_accumulation（自算CYQ口径）;
     若用户明确说「筹码峰公式 / SSRP / 主力控盘度」→ get_stock_chips（客户端公式口径）。两口径数字冲突时,
     说明口径差异后只采用一个口径作答, 禁止混算或取平均。
@@ -1161,6 +1162,10 @@ class CreateConversationBody(BaseModel):
 class SendMessageBody(BaseModel):
     content: str
     image_data: str | None = None  # 可选: 图片 base64 data URL(多模态, 模型看图)
+    # 2026-10-19: 前端当前查看的标的。没有它时模型只能靠"猜" —— 实测会把正在看的 600111
+    # 分析成用户主仓 002361（神剑股份），或直接报"没有股票标的"。
+    stock_symbol: str | None = None
+    stock_market: str | None = None
 
 
 def _client_from_scene_cfg(db: Session, cfg) -> AIClient | None:
@@ -1830,6 +1835,29 @@ def delete_conversation(
     return {"ok": True}
 
 
+
+def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
+    """把前端"正在看的标的"绑到对话上（只在对话还没绑定时写）。
+
+    为什么必须绑：不绑时模型只能从持仓/画像里猜 —— 实测把正在看的 600111 分析成了
+    用户主仓 002361（神剑股份）。绑上后 `_build_conv_system_prompt` 会注入
+    「当前对话关联股票」，同时实时/技术上下文也按这只票取数。
+    """
+    sym = (body.stock_symbol or "").strip()
+    if not sym or conv.stock_symbol:
+        return
+    if not (len(sym) == 6 and sym.isdigit()):
+        return
+    conv.stock_symbol = sym
+    conv.stock_market = (body.stock_market or "").strip() or (
+        "SH" if sym[0] == "6" else ("BJ" if sym[0] in "489" else "SZ")
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
     conversation_id: int,
@@ -1859,6 +1887,8 @@ async def send_message(
         )
         if not conv:
             raise HTTPException(404, "对话不存在")
+
+        _bind_conv_symbol(db, conv, body)
 
         # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
         if user.username == "demo":
@@ -1951,6 +1981,8 @@ async def send_message_stream(
             if not conv:
                 yield _sse_event("error", {"message": "对话不存在"})
                 return
+
+            _bind_conv_symbol(db, conv, body)
 
             # demo 账号限流: 每日对话次数上限, 防共享模型 key 被公开访客滥用
             if user.username == "demo":

@@ -6,7 +6,7 @@
  *  - 金额 / 数量（120000 手、350000 万元）。
  * 做法：要求代码左右**不是数字**，且不能紧跟「年/月/日/手/万/元/%」这类量纲字。
  */
-const CODE_RE = /(?:^|\D)([03468]\d{5})(?!\d)/g
+const CODE_RE = /(?:^|\D)([034689]\d{5})(?!\d)/g
 const UNIT_AFTER = /^[\s]*(?:年|月|日|手|万|亿|元|%|股|倍|点)/
 
 export function extractSymbolChips(text: string, limit = 6): string[] {
@@ -21,4 +21,12 @@ export function extractSymbolChips(text: string, limit = 6): string[] {
     if (out.length >= limit) break
   }
   return out
+}
+
+/** 6 位代码 → 市场后缀（后端口径 SH/SZ/BJ，与 tq 的 6→SH / 0,3→SZ / 4,8,9→BJ 一致）。 */
+export function marketOf(code: string): 'SH' | 'SZ' | 'BJ' {
+  const c = (code || '').trim()
+  if (c.startsWith('6')) return 'SH'
+  if (/^[489]/.test(c)) return 'BJ'
+  return 'SZ'
 }

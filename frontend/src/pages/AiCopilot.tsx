@@ -7,7 +7,7 @@ import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import { SESSION_LABEL, orderPresetsForSession, sessionOf } from '@/lib/copilot/presets-order'
 import { getCopilotPresets } from '@/lib/copilot/api'
-import { extractSymbolChips } from '@/lib/copilot/symbolChips'
+import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
 import {
   ATTACH_CHIP_LABEL,
   ATTACH_EMPTY,
@@ -241,11 +241,22 @@ export default function AiCopilotPage() {
       setStage('正在准备上下文…')
       let assistant = ''
       try {
+        // 标的解析优先级：本条文字里的代码 > 页面锚点（正在看 XXX）
+        const symInText = extractSymbolChips(words)[0]
+        const sym = symInText || anchorSymbol
+        if (sym && sym !== anchorSymbol) setAnchorSymbol(sym)
+
         let id = convId
         if (!id) {
-          const conv = await chatApi.createConversation({
-            initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。',
-          })
+          const conv = await chatApi.createConversation(
+            sym
+              ? {
+                  stock_symbol: sym,
+                  stock_market: marketOf(sym),
+                  initial_context: `用户从【数智参谋】一级页进入，当前标的 ${sym}。`,
+                }
+              : { initial_context: '用户从【数智参谋】一级页进入，尚未指定标的。' },
+          )
           id = conv.id
           setConvId(id)
         }
@@ -271,6 +282,7 @@ export default function AiCopilotPage() {
           },
           ac.signal,
           imageData,
+          sym ? { symbol: sym, market: marketOf(sym) } : undefined,
         )
       } catch (e) {
         setError(e instanceof Error ? e.message : '对话失败')
@@ -279,7 +291,7 @@ export default function AiCopilotPage() {
         setStage('')
       }
     },
-    [attach, convId, streaming, uploading],
+    [attach, convId, anchorSymbol, streaming, uploading],
   )
 
   return (

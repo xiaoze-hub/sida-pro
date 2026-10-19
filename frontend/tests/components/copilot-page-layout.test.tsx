@@ -24,9 +24,11 @@ vi.mock('@panwatch/api', () => ({ chatApi: apiMock }))
 vi.mock('../../src/lib/copilot/api', () => presetsMock)
 vi.mock('../../src/lib/copilot/symbolChips', () => ({
   extractSymbolChips: (text: string) => {
-    const m = text.match(/\b([0368]\d{5})\b/)
+    const m = text.match(/\b([034689]\d{5})\b/)
     return m ? [m[1]] : []
   },
+  marketOf: (code: string) =>
+    code.startsWith('6') ? 'SH' : /^[489]/.test(code) ? 'BJ' : 'SZ',
 }))
 vi.mock('../../src/components/SafeMarkdown', () => ({
   default: ({ children }: { children: string }) => <div data-testid="md-fallback">{children}</div>,
@@ -134,5 +136,38 @@ describe('数智参谋 P0/P1', () => {
     await waitFor(() => expect(screen.getByTestId('md-fallback')).toBeTruthy())
     expect(screen.getByTestId('md-fallback').textContent).toContain('1.2 万亿')
     expect(screen.queryByTestId('copilot-answer-card')).toBeNull()
+  })
+})
+
+describe('标的锁定（2026-10-19 修复：看 600111 却分析成 002361）', () => {
+  it('点推荐指令时把锚点标的随请求发出，并绑定到会话', async () => {
+    window.history.pushState({}, '', '/ai-copilot?symbol=600111')
+    apiMock.sendMessageStream.mockImplementation(async () => {})
+    render(<AiCopilotPage />)
+
+    await screen.findByText('全景数智深度诊断')
+    fireEvent.click(screen.getAllByText('全景数智深度诊断')[0])
+
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
+    const [, prompt, , , , stock] = apiMock.sendMessageStream.mock.calls[0]
+    expect(prompt).toBe('全面分析')
+    expect(stock).toEqual({ symbol: '600111', market: 'SH' })
+    expect(apiMock.createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ stock_symbol: '600111', stock_market: 'SH' }),
+    )
+  })
+
+  it('文字里写了代码时以文字为准，不被旧锚点覆盖', async () => {
+    window.history.pushState({}, '', '/ai-copilot?symbol=600111')
+    apiMock.sendMessageStream.mockImplementation(async () => {})
+    render(<AiCopilotPage />)
+
+    await screen.findByText('全景数智深度诊断')
+    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '002361 怎么样' } })
+    fireEvent.click(screen.getByLabelText('发送'))
+
+    await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
+    const [, , , , , stock] = apiMock.sendMessageStream.mock.calls[0]
+    expect(stock).toEqual({ symbol: '002361', market: 'SZ' })
   })
 })
