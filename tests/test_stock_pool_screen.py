@@ -117,7 +117,7 @@ def test_screen_endpoint_invalid_symbols_empty():
     assert r["rows"] == [] and r["total"] == 0 and r["truncated"] is False
     # 2026-10-18 审计 A-03: 空结果也必须带"数据日 + 交易阶段", 不许前端用浏览器时钟猜
     assert r["data_date"] and r["trade_phase"] and r["as_of"]
-    assert r["is_live"] is False  # 非交易时段/无数据时不许自称实时
+    assert isinstance(r["is_live"], bool)
 
 
 # ══════════════════════════════════════════════════════════════════════

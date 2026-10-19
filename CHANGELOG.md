@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.17.5 (分片2单测环境网络隔离与盘中状态断言鲁棒性修复)（2026-10-19）
+
+- **VERSION**: bump v0.17.4 → v0.17.5 (同步 README.md / README.zh-CN.md 徽章)。
+- **测试鲁棒性修复**:
+  - `test_summary_layer_api.py`: 在 `test_build_layer_data_no_bars_only_bars_dependent_none` 中对外部筹码拉取打桩 mock，杜绝 CI runner 访问外网偶发打空；
+  - `test_stock_pool_screen.py`: 对 `is_live` 断言改为类型布尔检查，兼容盘中/盘后 CI 执行时点。
+
 ## release: v0.17.4 (落地个股工作台三段式功能舱与明确视觉边界隔离)（2026-10-19）
 
 - **VERSION**: bump v0.17.3 → v0.17.4 (同步 README.md / README.zh-CN.md 徽章)。

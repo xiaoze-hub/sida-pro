@@ -114,6 +114,8 @@ def test_build_layer_data_no_bars_only_bars_dependent_none(monkeypatch):
     数据一起拖成 None, 前端出现"整页无数据"(2026-09-02 实测)。
     """
     from src.models.market import MarketCode
+    from src.core import l4_events as l4e
+    monkeypatch.setattr(l4e, "chip_levels", lambda tc: {"peak_price": 10.0, "source": "mock"})
     _patch_bars(monkeypatch, [])
     out = kapi._build_layer_data("000977", MarketCode.CN)
     assert out["gs_signals"] is None
