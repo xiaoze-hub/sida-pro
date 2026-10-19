@@ -215,6 +215,22 @@ def _resolve_tq_url() -> str | None:
     candidates: list[str] = []
     if env_norm:
         candidates.append(env_norm)
+
+    # 2026-10-19 (P3): 优先走本地标准网关 tdx-gateway —— 它负责串行排队、熔断、契约补参
+    # (`id`/`type`/`table_list`) 与缓存；17709 是客户端单线程服务，直连并发打会把客户端打崩。
+    gw_url = (os.environ.get("TDX_GATEWAY_URL") or "").strip()
+    if gw_url:
+        gw_norm = gw_url.rstrip("/") + "/"
+        if gw_norm not in candidates:
+            candidates.append(gw_norm)
+    else:
+        try:
+            import socket as _socket
+            _socket.gethostbyname("tdx-gateway")      # 同 docker 网络内有该服务才加入候选
+            if "http://tdx-gateway:8000/" not in candidates:
+                candidates.append("http://tdx-gateway:8000/")
+        except Exception:
+            pass
     for host in host_order:
         if not host:
             continue

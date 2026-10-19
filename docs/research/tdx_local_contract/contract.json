@@ -1,0 +1,1495 @@
+{
+  "source": "/tmp/tqcenter.py",
+  "count": 81,
+  "methods": {
+    "convert_or_validate": {
+      "line": 134,
+      "args": [
+        "data"
+      ],
+      "defaults": {},
+      "group": "其他",
+      "risk": null,
+      "doc": "如果输入是list，则根据后缀(SZ=0, SH=1, BJ=2)转换为“0#600000|1#600001|2#600002”格式的字符串",
+      "decorators": []
+    },
+    "market_str_to_int_market": {
+      "line": 205,
+      "args": [
+        "data"
+      ],
+      "defaults": {
+        "data": ""
+      },
+      "group": "其他",
+      "risk": null,
+      "doc": "将字符串对应的市场转为int类型",
+      "decorators": []
+    },
+    "get_python_version_number": {
+      "line": 228,
+      "args": [],
+      "defaults": {},
+      "group": "工具",
+      "risk": null,
+      "doc": "获取当前Python版本号，提取主、次版本拼接为数字（如3.13.7返回313）",
+      "decorators": []
+    },
+    "get_warn_struct_str": {
+      "line": 242,
+      "args": [
+        "stock_list",
+        "time_list",
+        "price_list",
+        "close_list",
+        "volum_list",
+        "bs_flag_list",
+        "warn_type_list",
+        "reason_list",
+        "count"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "time_list": [],
+        "price_list": [],
+        "close_list": [],
+        "volum_list": [],
+        "bs_flag_list": [],
+        "warn_type_list": [],
+        "reason_list": [],
+        "count": 1
+      },
+      "group": "其他",
+      "risk": null,
+      "doc": "获取预警结构字符串",
+      "decorators": []
+    },
+    "get_bt_struct_str": {
+      "line": 296,
+      "args": [
+        "time_list",
+        "data_list",
+        "count"
+      ],
+      "defaults": {
+        "time_list": [],
+        "data_list": [],
+        "count": 1
+      },
+      "group": "其他",
+      "risk": null,
+      "doc": "获取回测结构字符串",
+      "decorators": []
+    },
+    "check_stock_code_format": {
+      "line": 326,
+      "args": [
+        "input_data"
+      ],
+      "defaults": {},
+      "group": "其他",
+      "risk": null,
+      "doc": "仅校验证券代码入参是否非空，不再限制代码格式",
+      "decorators": []
+    },
+    "is_callback_func": {
+      "line": 346,
+      "args": [
+        "func"
+      ],
+      "defaults": {},
+      "group": "其他",
+      "risk": null,
+      "doc": "判断入参是否为 on_data(datas) 格式的函数",
+      "decorators": []
+    },
+    "process_tdx_formula_arg": {
+      "line": 535,
+      "args": [
+        "formula_arg"
+      ],
+      "defaults": {},
+      "group": "公式",
+      "risk": null,
+      "doc": "转换公式入参格式，将逗号分隔的数字字符串转换为数字列表，最多处理前16个元素",
+      "decorators": []
+    },
+    "initialize": {
+      "line": 641,
+      "args": [
+        "path",
+        "dll_path"
+      ],
+      "defaults": {
+        "dll_path": ""
+      },
+      "group": "工具",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "close": {
+      "line": 666,
+      "args": [],
+      "defaults": {},
+      "group": "工具",
+      "risk": null,
+      "doc": "手动关闭连接",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "price_df": {
+      "line": 755,
+      "args": [
+        "df",
+        "price_col",
+        "column_names"
+      ],
+      "defaults": {
+        "column_names": null
+      },
+      "group": "其他",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "print_to_tdx": {
+      "line": 794,
+      "args": [
+        "df_list",
+        "sp_name",
+        "xml_filename",
+        "jsn_filenames",
+        "vertical",
+        "horizontal",
+        "height",
+        "table_names"
+      ],
+      "defaults": {
+        "sp_name": "",
+        "xml_filename": "",
+        "jsn_filenames": null,
+        "vertical": null,
+        "horizontal": null,
+        "height": null,
+        "table_names": null
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "将多组因子DataFrame导出为通达信所需的 .xml, .jsn, 和 .sp 文件，并移动到指定目录。",
+      "decorators": [
+        "staticmethod"
+      ]
+    },
+    "filter_dict_by_fields": {
+      "line": 1108,
+      "args": [
+        "data",
+        "field_list"
+      ],
+      "defaults": {
+        "data": {},
+        "field_list": []
+      },
+      "group": "其他",
+      "risk": null,
+      "doc": "根据指定的字段列表筛选字典中的键值对（不区分大小写）",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_market_data": {
+      "line": 1136,
+      "args": [
+        "field_list",
+        "stock_list",
+        "period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type",
+        "fill_data"
+      ],
+      "defaults": {
+        "field_list": [],
+        "stock_list": [],
+        "period": "",
+        "start_time": "",
+        "end_time": "",
+        "count": -1,
+        "dividend_type": null,
+        "fill_data": true
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_divid_factors": {
+      "line": 1456,
+      "args": [
+        "stock_code",
+        "start_time",
+        "end_time"
+      ],
+      "defaults": {
+        "start_time": "",
+        "end_time": ""
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取除权除息数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_stock_info": {
+      "line": 1556,
+      "args": [
+        "stock_code",
+        "field_list"
+      ],
+      "defaults": {
+        "field_list": []
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取基础财务数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_market_snapshot": {
+      "line": 1597,
+      "args": [
+        "stock_code",
+        "field_list"
+      ],
+      "defaults": {
+        "field_list": []
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "获取市场快照数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_message": {
+      "line": 1638,
+      "args": [
+        "msg_str"
+      ],
+      "defaults": {},
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "策略管理输出字符串",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_file": {
+      "line": 1670,
+      "args": [
+        "file_path"
+      ],
+      "defaults": {},
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "策略管理输出文件",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_warn": {
+      "line": 1702,
+      "args": [
+        "stock_list",
+        "time_list",
+        "price_list",
+        "close_list",
+        "volum_list",
+        "bs_flag_list",
+        "warn_type_list",
+        "reason_list",
+        "count"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "time_list": [],
+        "price_list": [],
+        "close_list": [],
+        "volum_list": [],
+        "bs_flag_list": [],
+        "warn_type_list": [],
+        "reason_list": [],
+        "count": 1
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "发送预警信息到主程序",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_bt_data": {
+      "line": 1758,
+      "args": [
+        "stock_code",
+        "time_list",
+        "data_list",
+        "count"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "time_list": [],
+        "data_list": [],
+        "count": 1
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "策略管理输出回测数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_user_block": {
+      "line": 1802,
+      "args": [
+        "block_code",
+        "stock_list",
+        "show"
+      ],
+      "defaults": {
+        "block_code": "",
+        "stock_list": [],
+        "show": false
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "客户端添加自选股",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_sector_list": {
+      "line": 1839,
+      "args": [
+        "list_type"
+      ],
+      "defaults": {
+        "list_type": 0
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "获取板块列表",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_user_sector": {
+      "line": 1873,
+      "args": [],
+      "defaults": {},
+      "group": "板块",
+      "risk": null,
+      "doc": "获取用户自选股板块列表",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_stock_list_in_sector": {
+      "line": 1905,
+      "args": [
+        "block_code",
+        "block_type",
+        "list_type"
+      ],
+      "defaults": {
+        "block_type": 0,
+        "list_type": 0
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "获取板块成分股",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_financial_data": {
+      "line": 1974,
+      "args": [
+        "stock_list",
+        "field_list",
+        "start_time",
+        "end_time",
+        "report_type"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": "",
+        "report_type": "report_time"
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取财务数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_financial_data_by_date": {
+      "line": 2027,
+      "args": [
+        "stock_list",
+        "field_list",
+        "year",
+        "mmdd"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取财务数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_gpjy_value": {
+      "line": 2061,
+      "args": [
+        "stock_list",
+        "field_list",
+        "start_time",
+        "end_time"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取股票交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_gpjy_value_by_date": {
+      "line": 2104,
+      "args": [
+        "stock_list",
+        "field_list",
+        "year",
+        "mmdd"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取股票交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_bkjy_value": {
+      "line": 2138,
+      "args": [
+        "stock_list",
+        "field_list",
+        "start_time",
+        "end_time"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取板块交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_bkjy_value_by_date": {
+      "line": 2182,
+      "args": [
+        "stock_list",
+        "field_list",
+        "year",
+        "mmdd"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取板块交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_scjy_value": {
+      "line": 2217,
+      "args": [
+        "field_list",
+        "start_time",
+        "end_time"
+      ],
+      "defaults": {
+        "field_list": [],
+        "start_time": "",
+        "end_time": ""
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取市场交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_scjy_value_by_date": {
+      "line": 2261,
+      "args": [
+        "field_list",
+        "year",
+        "mmdd"
+      ],
+      "defaults": {
+        "field_list": [],
+        "year": 0,
+        "mmdd": 0
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取市场交易数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_gp_one_data": {
+      "line": 2296,
+      "args": [
+        "stock_list",
+        "field_list"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "field_list": []
+      },
+      "group": "专业序列",
+      "risk": null,
+      "doc": "获取股票单个数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_trading_calendar": {
+      "line": 2327,
+      "args": [
+        "market",
+        "start_time",
+        "end_time"
+      ],
+      "defaults": {},
+      "group": "工具",
+      "risk": null,
+      "doc": "获取交易日历",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_trading_dates": {
+      "line": 2371,
+      "args": [
+        "market",
+        "start_time",
+        "end_time",
+        "count"
+      ],
+      "defaults": {
+        "count": -1
+      },
+      "group": "工具",
+      "risk": null,
+      "doc": "获取交易日列表",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_stock_list": {
+      "line": 2416,
+      "args": [
+        "market",
+        "list_type"
+      ],
+      "defaults": {
+        "market": null,
+        "list_type": 0
+      },
+      "group": "工具",
+      "risk": null,
+      "doc": "获取股票列表",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "subscribe_quote": {
+      "line": 2458,
+      "args": [
+        "stock_code",
+        "period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type",
+        "callback"
+      ],
+      "defaults": {
+        "period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": null,
+        "callback": null
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "订阅单股行情数据回调 暂无实际功能",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "subscribe_hq": {
+      "line": 2544,
+      "args": [
+        "stock_list",
+        "callback"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "callback": null
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "订阅单股行情更新",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "unsubscribe_hq": {
+      "line": 2613,
+      "args": [
+        "stock_list"
+      ],
+      "defaults": {
+        "stock_list": []
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "订阅单股行情更新",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_subscribe_hq_stock_list": {
+      "line": 2675,
+      "args": [],
+      "defaults": {},
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "refresh_cache": {
+      "line": 2680,
+      "args": [
+        "market",
+        "force"
+      ],
+      "defaults": {
+        "market": "AG",
+        "force": false
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "刷新缓存行情",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "refresh_kline": {
+      "line": 2712,
+      "args": [
+        "stock_list",
+        "period"
+      ],
+      "defaults": {
+        "stock_list": [],
+        "period": ""
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "刷新K线缓存",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "download_file": {
+      "line": 2754,
+      "args": [
+        "stock_code",
+        "down_time",
+        "down_type"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "down_time": "",
+        "down_type": 1
+      },
+      "group": "工具",
+      "risk": null,
+      "doc": "下载文件（10大股东，ETF申赎数据等）",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "create_sector": {
+      "line": 2796,
+      "args": [
+        "block_code",
+        "block_name"
+      ],
+      "defaults": {
+        "block_code": "",
+        "block_name": ""
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "创建自定义板块",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "delete_sector": {
+      "line": 2835,
+      "args": [
+        "block_code"
+      ],
+      "defaults": {
+        "block_code": ""
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "删除自定义板块",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "rename_sector": {
+      "line": 2869,
+      "args": [
+        "block_code",
+        "block_name"
+      ],
+      "defaults": {
+        "block_code": "",
+        "block_name": ""
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "重命名自定义板块",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "clear_sector": {
+      "line": 2908,
+      "args": [
+        "block_code"
+      ],
+      "defaults": {
+        "block_code": ""
+      },
+      "group": "板块",
+      "risk": null,
+      "doc": "清空自定义板块",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_kzz_info": {
+      "line": 2942,
+      "args": [
+        "stock_code",
+        "field_list"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "field_list": []
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取可转债基础信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_ipo_info": {
+      "line": 2982,
+      "args": [
+        "ipo_type",
+        "ipo_date"
+      ],
+      "defaults": {
+        "ipo_type": 0,
+        "ipo_date": 0
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取新股申购信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_format_data": {
+      "line": 3015,
+      "args": [
+        "data_dict"
+      ],
+      "defaults": {
+        "data_dict": {}
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "格式化通达信公式数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_set_data": {
+      "line": 3082,
+      "args": [
+        "stock_code",
+        "stock_period",
+        "stock_data",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "stock_period": "1d",
+        "stock_data": [],
+        "count": 1,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "设置通达信公式股票参数",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_set_data_info": {
+      "line": 3131,
+      "args": [
+        "stock_code",
+        "stock_period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "设置通达信公式股票参数",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_get_data": {
+      "line": 3184,
+      "args": [],
+      "defaults": {},
+      "group": "公式",
+      "risk": null,
+      "doc": "设置通达信公式股票参数",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "tdx_formula": {
+      "line": 3212,
+      "args": [
+        "formula_type",
+        "formula_name",
+        "formula_arg",
+        "xsflag"
+      ],
+      "defaults": {
+        "formula_type": 0,
+        "formula_name": "",
+        "formula_arg": "",
+        "xsflag": -1
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "调用通达信公式",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_zb": {
+      "line": 3244,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "xsflag"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "xsflag": -1
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_xg": {
+      "line": 3254,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "xsflag"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "xsflag": -1
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_exp": {
+      "line": 3264,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "xsflag"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "xsflag": -1
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_more_info": {
+      "line": 3274,
+      "args": [
+        "stock_code",
+        "field_list"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "field_list": []
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "获取股票更多信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_gb_info": {
+      "line": 3315,
+      "args": [
+        "stock_code",
+        "date_list",
+        "count"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "date_list": [],
+        "count": 1
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取股票股本信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_gb_info_by_date": {
+      "line": 3361,
+      "args": [
+        "stock_code",
+        "start_date",
+        "end_date"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "start_date": "",
+        "end_date": ""
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取股票股本信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_process_mul": {
+      "line": 3406,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "formula_type",
+        "return_count",
+        "return_date",
+        "xsflag",
+        "stock_list",
+        "stock_period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "formula_type": 0,
+        "return_count": 1,
+        "return_date": false,
+        "xsflag": -1,
+        "stock_list": [],
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "批量执行公式，自动按服务端批次获取完整股票池结果",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_process_mul_xg": {
+      "line": 3492,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "return_count",
+        "return_date",
+        "stock_list",
+        "stock_period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "return_count": 1,
+        "return_date": false,
+        "stock_list": [],
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "批量执行选股公式",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_process_mul_zb": {
+      "line": 3518,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "return_count",
+        "return_date",
+        "xsflag",
+        "stock_list",
+        "stock_period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "return_count": 1,
+        "return_date": false,
+        "xsflag": -1,
+        "stock_list": [],
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "批量执行指标公式",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_process_mul_exp": {
+      "line": 3546,
+      "args": [
+        "formula_name",
+        "formula_arg",
+        "return_count",
+        "return_date",
+        "xsflag",
+        "stock_list",
+        "stock_period",
+        "start_time",
+        "end_time",
+        "count",
+        "dividend_type"
+      ],
+      "defaults": {
+        "formula_name": "",
+        "formula_arg": "",
+        "return_count": 1,
+        "return_date": false,
+        "xsflag": -1,
+        "stock_list": [],
+        "stock_period": "1d",
+        "start_time": "",
+        "end_time": "",
+        "count": 0,
+        "dividend_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "批量执行指标公式",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_trackzs_etf_info": {
+      "line": 3574,
+      "args": [
+        "zs_code"
+      ],
+      "defaults": {
+        "zs_code": ""
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取跟踪指数的ETF信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "stock_account": {
+      "line": 3609,
+      "args": [
+        "account",
+        "account_type"
+      ],
+      "defaults": {
+        "account": "",
+        "account_type": "stock"
+      },
+      "group": "其他",
+      "risk": "资金账户登录",
+      "doc": "获取交易账户句柄",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "query_stock_asset": {
+      "line": 3642,
+      "args": [
+        "account_id"
+      ],
+      "defaults": {
+        "account_id": -1
+      },
+      "group": "其他",
+      "risk": "资金查询",
+      "doc": "查询股票账户资产信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "query_stock_orders": {
+      "line": 3676,
+      "args": [
+        "account_id",
+        "stock_code",
+        "cancelable_only"
+      ],
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "cancelable_only": false
+      },
+      "group": "其他",
+      "risk": "委托查询",
+      "doc": "查询股票账户委托信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "query_stock_positions": {
+      "line": 3716,
+      "args": [
+        "account_id"
+      ],
+      "defaults": {
+        "account_id": -1
+      },
+      "group": "其他",
+      "risk": "持仓查询",
+      "doc": "查询股票账户持仓信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "order_stock": {
+      "line": 3750,
+      "args": [
+        "account_id",
+        "stock_code",
+        "order_type",
+        "order_volume",
+        "price_type",
+        "price",
+        "notify"
+      ],
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "order_type": 0,
+        "order_volume": 0,
+        "price_type": 0,
+        "price": 0.0,
+        "notify": 0
+      },
+      "group": "其他",
+      "risk": "下单",
+      "doc": "下单接口",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "cancel_order_stock": {
+      "line": 3807,
+      "args": [
+        "account_id",
+        "stock_code",
+        "order_id"
+      ],
+      "defaults": {
+        "account_id": -1,
+        "stock_code": "",
+        "order_id": ""
+      },
+      "group": "其他",
+      "risk": "撤单",
+      "doc": "撤单接口",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_relation": {
+      "line": 3852,
+      "args": [
+        "stock_code"
+      ],
+      "defaults": {
+        "stock_code": ""
+      },
+      "group": "F10/基本面",
+      "risk": null,
+      "doc": "获取股票所属板块信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "exec_to_tdx": {
+      "line": 3886,
+      "args": [
+        "url"
+      ],
+      "defaults": {
+        "url": ""
+      },
+      "group": "其他",
+      "risk": "客户端内执行 URL(可被滥用)",
+      "doc": "在客户端调用功能或URL",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_pricevol": {
+      "line": 3915,
+      "args": [
+        "stock_list"
+      ],
+      "defaults": {
+        "stock_list": []
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "获取股票价格和成交量数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_get_all": {
+      "line": 3943,
+      "args": [
+        "formula_type"
+      ],
+      "defaults": {
+        "formula_type": 0
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "获取通达信公式列表",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "formula_get_info": {
+      "line": 3973,
+      "args": [
+        "formula_type",
+        "formula_code"
+      ],
+      "defaults": {
+        "formula_type": 0,
+        "formula_code": ""
+      },
+      "group": "公式",
+      "risk": null,
+      "doc": "获取通达信公式信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_match_stkinfo": {
+      "line": 4006,
+      "args": [
+        "key_word"
+      ],
+      "defaults": {
+        "key_word": ""
+      },
+      "group": "工具",
+      "risk": null,
+      "doc": "检索证券信息",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_exday_data": {
+      "line": 4038,
+      "args": [
+        "stock_code",
+        "count"
+      ],
+      "defaults": {
+        "stock_code": "",
+        "count": 1
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "获取日线统计数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "get_zdt_data": {
+      "line": 4072,
+      "args": [
+        "stock_list"
+      ],
+      "defaults": {
+        "stock_list": []
+      },
+      "group": "行情",
+      "risk": null,
+      "doc": "获取股票涨跌停数据",
+      "decorators": [
+        "classmethod"
+      ]
+    },
+    "send_source": {
+      "line": 4104,
+      "args": [
+        "py_code",
+        "handle_type"
+      ],
+      "defaults": {
+        "py_code": "",
+        "handle_type": 0
+      },
+      "group": "订阅/推送",
+      "risk": null,
+      "doc": "传递 TQ 量化 AI 源码，handle_type 为 0/1/2。",
+      "decorators": [
+        "classmethod"
+      ]
+    }
+  }
+}
