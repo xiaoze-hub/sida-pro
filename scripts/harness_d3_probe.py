@@ -122,7 +122,10 @@ def run_case(base: str, token: str, agent: str | None, question: str, symbol: st
                 except Exception:
                     continue
                 if kind == "stage":
-                    stages.append(obj.get("message", ""))
+                    msg = obj.get("message", "")
+                    # 「正在准备上下文…」是预置提示，不是工具调用；算进去会让每次多 1
+                    if msg and "准备上下文" not in msg:
+                        stages.append(msg)
                 elif kind == "delta":
                     text += obj.get("content", "")
                 elif kind == "done":
