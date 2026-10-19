@@ -6,8 +6,6 @@
     "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/ai_copilot_harness.png",
     "alerts": [],
     "net_errs": [],
-    "console_errs": [
-      "Error while trying to use the following icon from the Manifest: https://sida.hengsheng-elec.com/icon-192.png (Download e"
-    ]
+    "console_errs": []
   }
 ]

@@ -908,13 +908,20 @@ async def _describe_image(image_data: str, user=None) -> str:
                     "content": [
                         {
                             "type": "text",
-                            "text": "请用中文简要描述这张图片: 包含内容、颜色、形状、文字、图表类型等, 50字以内。",
+                            "text": (
+                                "你是A股行情截图解析助手。请客观转写图片内容，禁止推测：\n"
+                                "1) 行情/K线图：股票名称与代码、最新价与涨跌幅、周期(分时/日K/周K)、"
+                                "可见指标(MA/MACD/成交量/筹码分布)、图上出现的所有可见文字与数字；\n"
+                                "2) 交割单/持仓表：逐行转写 日期/代码/名称/买卖方向/价格/数量/金额；\n"
+                                "3) 研报/公告截图：转写标题、机构、评级、日期、核心结论要点。\n"
+                                "看不清的地方写「不清晰」，不得编造数字。控制在 400 字内。"
+                            ),
                         },
                         {"type": "image_url", "image_url": {"url": image_data}},
                     ],
                 }
             ],
-            "max_tokens": 200,
+            "max_tokens": 700,
         }
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(

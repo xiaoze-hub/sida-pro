@@ -171,7 +171,7 @@ export default function AiCopilotPage() {
         ? attach.text
           ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${attach.text}`
           : attach.imageData
-            ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]（图片，请直接看图回答）`
+            ? `[${ATTACH_CHIP_LABEL}: ${attach.name}]（图片，已由视觉模型转写）`
             : `[${ATTACH_CHIP_LABEL}: ${attach.name}]\n${ATTACH_EMPTY}`
         : ''
       const content = [words, attachPart].filter(Boolean).join('\n\n')

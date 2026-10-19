@@ -110,14 +110,14 @@ describe('数智参谋附件上传', () => {
 
     pickFile('shot.png', 'image/png')
 
-    await waitFor(() => expect(screen.getByText('图片已附加，模型将直接读图')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('图片已附加，将先由视觉模型转写再分析')).toBeTruthy())
     // OCR 失败不得冒泡成错误条
     expect(screen.queryByText(/附件上传失败/)).toBeNull()
 
     fireEvent.click(screen.getByLabelText('发送'))
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalledTimes(1))
     const [, content, , , imageData] = apiMock.sendMessageStream.mock.calls[0]
-    expect(content).toContain('（图片，请直接看图回答）')
+    expect(content).toContain('（图片，已由视觉模型转写）')
     expect(content).not.toContain('未解析出内容')
     expect(imageData).toBe(IMG_DATA)
   })
