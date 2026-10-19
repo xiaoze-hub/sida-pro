@@ -175,6 +175,13 @@
 - **门禁**：`tests/test_chat_tools_copilot.py`（21 项）+ `copilot-capsule/copilot-brief-card/copilot-copy-contract`
   前端用例；`check_ui_rules.mjs` OK（无裸 `toFixed` / 无 CRLF / 字号合规）。
 
+## release: v0.18.4 (切换东财官方研报中心直连接口与研报穿透下钻)（2026-10-19）
+
+- **VERSION**: bump v0.18.3 → v0.18.4 (同步 README.md / README.zh-CN.md 徽章)。
+- **研报数据源校正**:
+  - `eastmoney_research.py`: 切换为东方财富官方研报 API `https://reportapi.eastmoney.com/report/list`，支持实盘标的全量券商研报检索（含北方稀土等大盘标的数十篇券商深度研报）；
+  - `ResearchTab.tsx`: 修复目标价类型防护，支持研报跟踪、评级标签高亮、PDF 原文直达。
+
 ## release: v0.18.3 (接入东方财富机构券商研报中心与工作台深度研报)（2026-10-19）
 
 - **VERSION**: bump v0.18.2 → v0.18.3 (同步 README.md / README.zh-CN.md 徽章)。

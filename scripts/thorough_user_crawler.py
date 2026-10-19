@@ -200,12 +200,16 @@ def run_user_crawler():
             localStorage.setItem('token', '{token}');
         }}""")
 
-        # 走查北方稀土 600111
+        # 走查北方稀土 600111，带 ?tab=research 直接深链进入研究 Tab
         flows_to_run = [{
-            "id": "bfxt_600111",
-            "name": "北方稀土工作台",
-            "url": f"{BASE_URL}/stocks/600111",
-            "actions": [("wait", 5000)]
+            "id": "bfxt_600111_research",
+            "name": "北方稀土工作台研究Tab",
+            "url": f"{BASE_URL}/stocks/600111?tab=research",
+            "actions": [
+                ("wait", 4000),
+                ("scroll_bottom", None),
+                ("wait", 2000)
+            ]
         }]
         for flow in flows_to_run:
             f_id = flow["id"]
@@ -247,6 +251,8 @@ def run_user_crawler():
                 for act, val in flow["actions"]:
                     if act == "wait":
                         page.wait_for_timeout(val)
+                    elif act == "scroll_bottom":
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     elif act == "scroll":
                         page.evaluate(f"window.scrollTo({val[0]}, {val[1]})")
                     elif act == "click_if_exists":

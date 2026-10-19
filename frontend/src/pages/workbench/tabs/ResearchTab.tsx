@@ -208,7 +208,7 @@ function BrokerResearchSection({ symbol }: { symbol: string }) {
                   </span>
                 </td>
                 <td className="py-1.5 px-2 font-mono text-foreground/90">
-                  {r.target_price != null ? `${safeFixed(r.target_price, 2)}元` : '--'}
+                  {typeof r.target_price === 'number' ? `${safeFixed(r.target_price, 2)}元` : '--'}
                 </td>
                 <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[80px]" title={r.author}>
                   {r.author || '--'}

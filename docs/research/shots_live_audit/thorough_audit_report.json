@@ -1,11 +1,11 @@
 [
   {
-    "id": "bfxt_600111",
-    "name": "北方稀土工作台",
-    "url": "https://SIDA.hengsheng-elec.com/stocks/600111",
-    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/bfxt_600111.png",
+    "id": "bfxt_600111_research",
+    "name": "北方稀土工作台研究Tab",
+    "url": "https://SIDA.hengsheng-elec.com/stocks/600111?tab=research",
+    "shot": "/home/ubuntu/sida-pro/docs/research/shots_live_audit/bfxt_600111_research.png",
     "alerts": [
-      "-- / -- 暗盘数据状态 不可用(盘后采集, 当日无样本时全部 `--`) 主力筹码分布 (波段"
+      "「该标的尚无深度分析 / 取数失败」在此不可区分 ✦ 盘口参谋 · 600111 600111 点击"
     ],
     "net_errs": [],
     "console_errs": [
