@@ -140,6 +140,37 @@ export const ATTACH_CHIP_LABEL = '附件'
 /** 图片不依赖 OCR：多模态模型直接读图，因此 OCR 失败不算附件失败。 */
 export const ATTACH_IMAGE_READY = '图片已附加，将先由视觉模型转写再分析'
 
+/** 回答卡片（2026-10-19 排版 P1）：把【结论】【依据】【预案】【口径】四段渲染成分层卡片。 */
+export const ANSWER_VERDICT_LABEL = '数智裁决'
+export const ANSWER_EVIDENCE_LABEL = '核心依据'
+export const ANSWER_EVIDENCE_EXPAND_PREFIX = '展开完整'
+export const ANSWER_EVIDENCE_EXPAND_SUFFIX = '条依据'
+export const ANSWER_EVIDENCE_COLLAPSE = '收起'
+export const ANSWER_PLAN_LABEL = '实战预案'
+export const ANSWER_CALIBER_LABEL = '口径'
+export const ANSWER_ACTION_WORKBENCH = '看工作台'
+export const ANSWER_ACTION_COPY = '复制'
+export const ANSWER_ACTION_COPIED = '已复制'
+export const ANSWER_CONFIDENCE_LABEL = '置信度'
+export const ANSWER_FOLLOWUP_LABEL = '接着问'
+
+/** 追加追问（点击即发）：都是问事实，不问「该不该买」。 */
+export const FOLLOW_UP_QUESTIONS = [
+  '上方套牢筹码集中在哪个价位',
+  '跌破关键防守位后该怎么重新评估',
+  '和同行业比现在估值处在什么位置',
+]
+
+/** 指令池分层（按时段给「今日推荐」，其余收进更多）。 */
+export const PRESET_PRIMARY_LABEL = '今日推荐'
+export const PRESET_MORE_LABEL = '更多指令'
+export const PRESET_MORE_COLLAPSE = '收起更多'
+export const PAGE_EMPTY_HINT = '也可以直接点一条，不用自己组织语言'
+
+/** 上下文锚点：从个股工作台带着标的进来时显示。 */
+export const CONTEXT_ANCHOR_PREFIX = '正在看'
+export const CONTEXT_ANCHOR_CLEAR = '换个标的'
+
 export const PAGE_EMPTY_EXAMPLES = [
   '今天 9:25 谁在爆量抢筹？',
   '600111 底仓成本多少，现在追安全吗？',

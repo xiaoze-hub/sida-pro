@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
+import { ChevronDown, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
+import { AnswerCard } from '@/components/copilot/AnswerCard'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
+import { parseAnswer } from '@/lib/copilot/answer-blocks'
+import { SESSION_LABEL, orderPresetsForSession, sessionOf } from '@/lib/copilot/presets-order'
 import { getCopilotPresets } from '@/lib/copilot/api'
 import { extractSymbolChips } from '@/lib/copilot/symbolChips'
 import {
@@ -14,12 +17,18 @@ import {
   ATTACH_PARSING,
   ATTACH_REMOVE,
   ATTACH_TOO_LARGE,
+  CONTEXT_ANCHOR_CLEAR,
+  CONTEXT_ANCHOR_PREFIX,
   COPILOT_PAGE_SUBTITLE,
   COPILOT_PAGE_TITLE,
   DISCLAIMER,
   PAGE_EMPTY_EXAMPLES,
+  PAGE_EMPTY_HINT,
   PRESET_FALLBACK_HINT,
   PRESET_GROUP_LABEL,
+  PRESET_MORE_COLLAPSE,
+  PRESET_MORE_LABEL,
+  PRESET_PRIMARY_LABEL,
   SEND,
 } from '@/lib/copilot/copy'
 import type { CopilotPreset } from '@/lib/copilot/types'
@@ -105,11 +114,29 @@ export default function AiCopilotPage() {
   const [error, setError] = useState<string | null>(null)
   const [symbol, setSymbol] = useState('')
   const [briefSymbol, setBriefSymbol] = useState('')
+  const [showMorePresets, setShowMorePresets] = useState(false)
   const [attach, setAttach] = useState<PendingAttachment | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
+
+  /**
+   * 上下文带入（P0）：从个股工作台/外部链接进来时带 `?symbol=600111`，
+   * 页面直接进入「正在看」状态，用户不必再输一次代码；带 `?q=` 时预填问题。
+   * 用 URLSearchParams 而非 router hook：本页单测裸渲染不带 Router。
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const sp = new URLSearchParams(window.location.search)
+    const sym = (sp.get('symbol') || '').trim()
+    if (SYMBOL_RE.test(sym)) {
+      setSymbol(sym)
+      setBriefSymbol(sym)
+    }
+    const q = (sp.get('q') || '').trim()
+    if (q) setInput(q)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -161,6 +188,9 @@ export default function AiCopilotPage() {
     },
     [],
   )
+
+  const session = sessionOf()
+  const { primary: primaryPresets, more: morePresets } = orderPresetsForSession(presets, session)
 
   const send = useCallback(
     async (text: string) => {
@@ -228,25 +258,23 @@ export default function AiCopilotPage() {
 
   return (
     <div className="flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
-      {/* 左：战术指令池 */}
+      {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
       <aside className="hidden w-[248px] shrink-0 flex-col gap-2 lg:flex">
-        <div className="text-[12px] font-medium text-muted-foreground">战术指令</div>
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] font-medium text-muted-foreground">{PRESET_PRIMARY_LABEL}</span>
+          <span className="text-[10px] text-muted-foreground/70">{SESSION_LABEL[session]}</span>
+        </div>
         <div className="space-y-1.5">
-          {presets.map((p) => (
+          {primaryPresets.map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => void send(p.prompt)}
               disabled={streaming}
-              className="w-full rounded-lg border border-border/60 bg-s1 px-2.5 py-2 text-left text-[12px] hover:bg-s2 disabled:opacity-60"
+              className="w-full rounded-lg border border-role-watch/35 bg-s1 px-2.5 py-2 text-left text-[12px] hover:bg-s2 disabled:opacity-60"
             >
               <span className="mr-1">{p.icon}</span>
               {p.label}
-              {p.group ? (
-                <span className="ml-1 text-[10px] text-muted-foreground">
-                  {PRESET_GROUP_LABEL[p.group] || ''}
-                </span>
-              ) : null}
             </button>
           ))}
           {presetFailed ? (
@@ -255,6 +283,40 @@ export default function AiCopilotPage() {
             </div>
           ) : null}
         </div>
+
+        {morePresets.length ? (
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={() => setShowMorePresets((v) => !v)}
+              data-testid="copilot-preset-more"
+              className="flex w-full items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <ChevronDown className={`h-3 w-3 transition-transform ${showMorePresets ? 'rotate-180' : ''}`} />
+              {showMorePresets ? PRESET_MORE_COLLAPSE : `${PRESET_MORE_LABEL} ${morePresets.length}`}
+            </button>
+            {showMorePresets
+              ? morePresets.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => void send(p.prompt)}
+                    disabled={streaming}
+                    className="w-full rounded-lg border border-border/60 bg-s1 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:bg-s2 hover:text-foreground disabled:opacity-60"
+                  >
+                    <span className="mr-1">{p.icon}</span>
+                    {p.label}
+                    {p.group ? (
+                      <span className="ml-1 text-[10px] text-muted-foreground/70">
+                        {PRESET_GROUP_LABEL[p.group] || ''}
+                      </span>
+                    ) : null}
+                  </button>
+                ))
+              : null}
+          </div>
+        ) : null}
+
         <div className="mt-auto text-[10px] leading-relaxed text-muted-foreground/80">
           {DISCLAIMER}
         </div>
@@ -290,6 +352,26 @@ export default function AiCopilotPage() {
           </form>
         </div>
 
+        {briefSymbol ? (
+          <div
+            data-testid="copilot-context-anchor"
+            className="flex items-center gap-1.5 border-b border-border/40 bg-s2 px-3 py-1.5"
+          >
+            <span className="text-[10px] text-muted-foreground">{CONTEXT_ANCHOR_PREFIX}</span>
+            <span className="font-mono text-[11px] text-role-watch">{briefSymbol}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setBriefSymbol('')
+                setSymbol('')
+              }}
+              className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {CONTEXT_ANCHOR_CLEAR}
+            </button>
+          </div>
+        ) : null}
+
         <div
           ref={scroller}
           onDragOver={(e) => {
@@ -310,13 +392,21 @@ export default function AiCopilotPage() {
           ) : null}
 
           {!msgs.length ? (
-            <div className="mt-4 space-y-2 text-[12px] text-muted-foreground">
-              <div>直接问，或点左侧战术指令。例：</div>
-              <ul className="space-y-1 pl-4">
+            <div className="mt-4 space-y-2">
+              <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
+              <div className="flex flex-col items-start gap-1.5">
                 {PAGE_EMPTY_EXAMPLES.map((x) => (
-                  <li key={x}>· {x}</li>
+                  <button
+                    key={x}
+                    type="button"
+                    onClick={() => void send(x)}
+                    disabled={streaming}
+                    className="rounded-full border border-border/60 px-2.5 py-1 text-left text-[12px] text-muted-foreground hover:border-role-watch/50 hover:bg-s2 hover:text-foreground disabled:opacity-60"
+                  >
+                    {x}
+                  </button>
                 ))}
-              </ul>
+              </div>
             </div>
           ) : null}
 
@@ -329,7 +419,19 @@ export default function AiCopilotPage() {
                     : 'rounded-lg border border-border/50 bg-s2 px-2.5 py-2 text-[12px] leading-relaxed'
                 }
               >
-                {m.role === 'user' ? m.content : <SafeMarkdown>{m.content}</SafeMarkdown>}
+                {m.role === 'user' ? (
+                  m.content
+                ) : (
+                  (() => {
+                    const parsed = parseAnswer(m.content)
+                    const symbolInMsg = extractSymbolChips(m.content)[0] || briefSymbol
+                    return parsed.structured ? (
+                      <AnswerCard parsed={parsed} symbol={symbolInMsg} onFollowUp={(q) => void send(q)} />
+                    ) : (
+                      <SafeMarkdown>{m.content}</SafeMarkdown>
+                    )
+                  })()
+                )}
                 {m.role === 'user' && m.attachment ? (
                   <span className="mt-1 block text-[10px] text-muted-foreground">
                     📎 {m.attachment.name}
@@ -364,6 +466,22 @@ export default function AiCopilotPage() {
         </div>
 
         <div className="border-t border-border/40 p-2">
+          {/* 移动端入口（<lg 左栏整块隐藏，这里补一条横向指令条） */}
+          <div className="scrollbar mb-1.5 flex gap-1.5 overflow-x-auto lg:hidden">
+            {primaryPresets.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => void send(p.prompt)}
+                disabled={streaming}
+                data-testid="copilot-mobile-chip"
+                className="shrink-0 rounded-full border border-role-watch/35 px-2 py-0.5 text-[11px] text-role-watch disabled:opacity-50"
+              >
+                {p.icon} {p.label}
+              </button>
+            ))}
+          </div>
+
           {/* 待发送附件预览（图片显示缩略图，其它显示文件名） */}
           {attach ? (
             <div className="mb-2 flex items-center gap-2 rounded-lg border border-role-watch/35 bg-s2 px-2 py-1.5">
