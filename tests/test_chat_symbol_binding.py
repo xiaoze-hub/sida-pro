@@ -59,3 +59,72 @@ def test_missing_symbol_keeps_conversation_unbound():
     conv, db = _conv(), _DB()
     _bind_conv_symbol(db, conv, SendMessageBody(content="今天大盘怎么样"))
     assert conv.stock_symbol is None
+
+
+# ── 工具层守卫（模型不许自己挑股票）────────────────────────────────────────────
+import asyncio
+from src.web.api import chat as chat_api
+
+
+def test_dossier_refuses_when_nothing_should_be_analyzed():
+    async def run():
+        token = chat_api._REQ_BOUND.set(None)
+        text = chat_api._REQ_TEXT.set("帮我全面分析一下")
+        try:
+            out = await chat_api._execute_tool(None, "get_stock_dossier", {"symbol": "600111"})
+        finally:
+            chat_api._REQ_BOUND.reset(token)
+            chat_api._REQ_TEXT.reset(text)
+        return out
+
+    out = asyncio.run(run())
+    assert "哪只股票" in out
+    assert "600111" not in out
+
+
+def test_dossier_forced_to_bound_symbol():
+    async def run():
+        token = chat_api._REQ_BOUND.set("600111")
+        text = chat_api._REQ_TEXT.set("全面分析一下")
+        seen = {}
+
+        async def fake_handler(db, args, user):
+            seen.update(args)
+            return "ok"
+
+        import dataclasses
+        orig = chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"]
+        chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"] = dataclasses.replace(orig, handler=fake_handler)
+        try:
+            await chat_api._execute_tool(None, "get_stock_dossier", {"symbol": "002361"})
+        finally:
+            chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"] = orig
+            chat_api._REQ_BOUND.reset(token)
+            chat_api._REQ_TEXT.reset(text)
+        return seen
+
+    assert asyncio.run(run())["symbol"] == "600111"
+
+
+def test_dossier_allows_explicit_user_code():
+    async def run():
+        token = chat_api._REQ_BOUND.set("600111")
+        text = chat_api._REQ_TEXT.set("002361 怎么样")
+        seen = {}
+
+        async def fake_handler(db, args, user):
+            seen.update(args)
+            return "ok"
+
+        import dataclasses
+        orig = chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"]
+        chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"] = dataclasses.replace(orig, handler=fake_handler)
+        try:
+            await chat_api._execute_tool(None, "get_stock_dossier", {"symbol": "002361"})
+        finally:
+            chat_api.CHAT_TOOL_REGISTRY["get_stock_dossier"] = orig
+            chat_api._REQ_BOUND.reset(token)
+            chat_api._REQ_TEXT.reset(text)
+        return seen
+
+    assert asyncio.run(run())["symbol"] == "002361"

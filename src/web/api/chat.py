@@ -726,6 +726,14 @@ def get_web_content(url: str) -> str:
         return f"抓取失败: {str(e)[:120]}。"
 
 
+from contextvars import ContextVar
+
+# 每次请求的标的上下文：bound=对话已绑定的代码(或本轮文字里的代码)，text=用户本轮原文。
+# 工具层用它拦住模型"自己挑一只股票"（实测：看 600111 却分析 002361）。
+_REQ_BOUND: ContextVar[str | None] = ContextVar("chat_req_bound", default=None)
+_REQ_TEXT: ContextVar[str] = ContextVar("chat_req_text", default="")
+
+
 async def _execute_tool(
     db: Session, name: str, args: dict, user: User | None = None
 ) -> str:
@@ -741,6 +749,20 @@ async def _execute_tool(
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:
         return f"未知工具: {name}"
+
+    # 标的锁定守卫：只作用于"按单只股票取全维度"的工具
+    if name == "get_stock_dossier":
+        bound = _REQ_BOUND.get()
+        asked = (args or {}).get("symbol") or ""
+        mentioned = _extract_repeat_stock_code(_REQ_TEXT.get() or "")
+        if bound and not mentioned and asked and asked != bound:
+            # 对话已锁定标的，用户本轮又没点别的票 → 强制用锁定标的，顺手把模型的越界改掉
+            args = {**(args or {}), "symbol": bound}
+            logger.info("标的锁定: get_stock_dossier 请求 %s → 改用会话标的 %s", asked, bound)
+        elif not bound and not mentioned:
+            return ("本次对话还没有绑定股票，用户也没给出代码。请先问用户「你要看哪只股票？给我 6 位代码就行」，"
+                    "不要自己从持仓/自选/画像里挑一只。")
+
     try:
         return await tool.handler(db, args or {}, user)
     except Exception as e:
@@ -1922,9 +1944,15 @@ async def send_message(
         messages_for_ai = await _build_ai_messages(db, conv, user, image_data=body.image_data)
         ai_client = _get_ai_client(db, conv.ai_model_id, user=user)
         ai_response = ""
-        async for _kind, payload in _run_tool_loop(ai_client, messages_for_ai, db, user=user):
-            if _kind == "text":
-                ai_response = payload
+        _bound = conv.stock_symbol or _extract_repeat_stock_code(body.content)
+        _tok_b, _tok_t = _REQ_BOUND.set(_bound), _REQ_TEXT.set(body.content)
+        try:
+            async for _kind, payload in _run_tool_loop(ai_client, messages_for_ai, db, user=user):
+                if _kind == "text":
+                    ai_response = payload
+        finally:
+            _REQ_BOUND.reset(_tok_b)
+            _REQ_TEXT.reset(_tok_t)
 
         # 保存 AI 回复
         assistant_msg = ChatMessage(
@@ -2027,6 +2055,8 @@ async def send_message_stream(
             # 多轮 tool use + 真流式(2026-08-23 U1): 边流式出字边执行工具
             # W3.3: 客户端断开即中止工具循环(停止 LLM 计费); 流被取消时清理上游
             ai_response = ""
+            _bound = conv.stock_symbol or _extract_repeat_stock_code(body.content)
+            _tok_b, _tok_t = _REQ_BOUND.set(_bound), _REQ_TEXT.set(body.content)
             try:
                 async for kind, payload in _run_tool_loop(
                     ai_client, messages_for_ai, db, user=user, stream=True
@@ -2043,6 +2073,9 @@ async def send_message_stream(
             except asyncio.CancelledError:
                 logger.info("流被取消, 清理上游 LLM 调用")
                 raise
+            finally:
+                _REQ_BOUND.reset(_tok_b)
+                _REQ_TEXT.reset(_tok_t)
 
             # 保存 AI 回复(全文落库, 与 send_message 一致)
             assistant_msg = ChatMessage(
