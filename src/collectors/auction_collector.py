@@ -556,3 +556,63 @@ def fetch_auction_structured(limit: int = 200) -> dict:
         "error": None if rows else (raw.get("error") or "悟道竞价无结构化行"),
         "source": "wudao",
     }
+
+def _fmt_yi(v: float | None) -> str:
+    if v is None:
+        return "—"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:.2f} 亿"
+    if abs(v) >= 1e4:
+        return f"{v / 1e4:.0f} 万"
+    return f"{v:.0f} 元"
+
+
+def fetch_auction_symbols(symbols: list[str], limit: int = 20) -> str:
+    """逐票竞价快照（2026-10-20）。
+
+    修复: `scene=watchlist` 原先被静默别名成 `strongest`（全市场前十），于是"我的自选股
+    竞价怎么样"只能得到"不在榜单里 ⇒ 没有竞价强度"——把"没进榜单"说成"没有数据"。
+    现在按票直取：TQ `get_more_info`(OpenZAF/OpenAmo/OpenZTBuy) 为主，缺票再用
+    thsdk 超级盘口补（慢，最多补 3 只）。**每只票都给一行结论**，取不到就明写取不到。
+    """
+    syms = [s for s in (symbols or []) if s][:limit]
+    if not syms:
+        return "未提供标的（symbols 为空），无法逐票查询竞价。"
+
+    rows = fetch_auction_snapshots_tq(syms, limit=limit)
+    missing = [s for s in syms if s not in rows][:3]
+    if missing:
+        rows.update(fetch_auction_snapshots_thsdk(missing, limit=len(missing)))
+
+    lines = ["## 逐票竞价快照（TQ 为主 / 同花顺补）"]
+    for sym in syms:
+        r = rows.get(sym) or {}
+        if not r:
+            lines.append(f"- {sym}: 无竞价快照（TQ/同花顺均未返回，可能停牌或客户端未连）")
+            continue
+        if r.get("source") == "thsdk":
+            lines.append(
+                f"- {sym}: 竞价方向 {r.get('direction') or '—'}，"
+                f"开盘 {r.get('open') or '—'}，撤单率近似 {r.get('cancel_rate') or '—'}"
+            )
+            continue
+        open_px = r.get("open")
+        open_pct = r.get("open_pct")
+        parts = [
+            f"开盘 {open_px if open_px is not None else '—'}"
+            + (f"（{open_pct:+.2f}%）" if isinstance(open_pct, (int, float)) else ""),
+            f"竞价成交额 {_fmt_yi(r.get('open_amount'))}",
+        ]
+        if r.get("open_limit_buy"):
+            parts.append(f"一字买量 {_fmt_yi(r.get('open_limit_buy'))}")
+        if r.get("buy1") is not None:
+            parts.append(f"买一 {r.get('buy1')}×{r.get('buy1_vol') or '—'}")
+        if r.get("sell1") is not None:
+            parts.append(f"卖一 {r.get('sell1')}×{r.get('sell1_vol') or '—'}")
+        lines.append(f"- {sym}: " + "，".join(parts))
+
+    lines.append("")
+    lines.append("口径：开盘涨幅=OpenZAF；竞价成交额=OpenAmo（元）；撤单率需竞价逐帧序列（TQ 快照不含）。"
+                 "「无竞价快照」≠「竞价没强度」，只代表该票没取到读数。")
+    return "\n".join(lines)
+
