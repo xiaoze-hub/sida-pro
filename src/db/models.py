@@ -2222,7 +2222,7 @@ class CopilotRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String(36), nullable=False, unique=True)   # uuid4
     conversation_id = Column(Integer, nullable=True)
-    user_id = Column(Integer, nullable=True)
+    user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
     recipe = Column(String(48), nullable=True)                 # 配方 id(内置 6 个)
     question = Column(Text, nullable=True)                     # 用户本轮问题(截断 500)
     status = Column(String(16), nullable=False, default="running")  # running/ok/error
@@ -2265,7 +2265,7 @@ class CopilotFeedback(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String(36), nullable=False, index=True)
-    user_id = Column(Integer, nullable=True)
+    user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
     useful = Column(Boolean, nullable=False, default=True)
     reason = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

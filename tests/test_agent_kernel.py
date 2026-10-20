@@ -129,12 +129,12 @@ async def test_runtime_passes_through_db_and_user_kwargs():
     assert seen == {"tool": "get_quote", "kw": {"db": "DB", "user": "U"}}
 
 
-def test_migration_208_registered():
+def test_migration_registered():
     from src.web.migrations import MIGRATIONS
 
     ids = [m.version for m in MIGRATIONS]
-    assert 208 in ids
-    assert max(ids) == 208
+    assert 208 in ids and 209 in ids
+    assert max(ids) == 209
 
 
 # --- 集成：真实走一遍 _run_tool_loop（假 LLM + 假工具），验证轨迹端到端落库 ---
@@ -206,3 +206,19 @@ async def test_tool_loop_writes_trace(monkeypatch):
         if run is not None:
             _cleanup(run.run_id)
         db.close()
+
+
+def test_user_id_accepts_uuid_string():
+    """回归：users.id 是 UUID 字符串，曾经 Declare 成 Integer 导致每条轨迹写入 DataError。"""
+    trace = CopilotTrace(conversation_id=9, user_id="84425dba-9944-4f35-b804-fcdfc7ce6fa4", question="uuid")
+    trace.open()
+    try:
+        trace.finish(status="ok")
+        db = SessionLocal()
+        try:
+            run = db.query(CopilotRun).filter(CopilotRun.run_id == trace.run_id).one()
+            assert run.user_id == "84425dba-9944-4f35-b804-fcdfc7ce6fa4"
+        finally:
+            db.close()
+    finally:
+        _cleanup(trace.run_id)

@@ -18,7 +18,11 @@ import time
 import uuid
 from datetime import datetime
 
+import logging
+
 from src.db.session import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 MAX_ARG_CHARS = 2000
 MAX_DIGEST_CHARS = 500
@@ -72,8 +76,9 @@ class CopilotTrace:
                 db.commit()
             finally:
                 db.close()
-        except Exception:  # noqa: BLE001 - 轨迹是旁路
-            pass
+        except Exception as e:  # noqa: BLE001 - 轨迹是旁路, 但必须留痕
+            # 2026-10-20 教训: 完全静默会让「表建好了却没数据」无从查起(生产实测踩过)
+            logger.warning("[trace] open 写库失败: %s: %s", type(e).__name__, e)
 
     def step(
         self,
@@ -107,8 +112,8 @@ class CopilotTrace:
                 db.commit()
             finally:
                 db.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 - 旁路, 但必须留痕
+            logger.warning("[trace] 写库失败: %s: %s", type(e).__name__, e)
 
     def finish(self, *, status: str = "ok", error: str | None = None) -> None:
         """收尾。状态只能是 ok/error；elapsed_ms 由 start 时刻算出。"""
@@ -142,8 +147,8 @@ class CopilotTrace:
                 db.commit()
             finally:
                 db.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 - 旁路, 但必须留痕
+            logger.warning("[trace] 写库失败: %s: %s", type(e).__name__, e)
 
 
 def start_copilot_run(
