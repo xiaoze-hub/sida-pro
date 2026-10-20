@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { applyPendingAction, getPendingActions, rejectPendingAction, type PendingAction } from '@/lib/copilot/api'
 import { ChevronDown, ChevronRight, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
@@ -355,6 +356,31 @@ export default function AiCopilotPage() {
     [attach, convId, anchorSymbol, mentions, streaming, uploading],
   )
 
+  // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
+  const [pending, setPending] = useState<PendingAction[]>([])
+  const loadPending = useCallback(() => {
+    void getPendingActions()
+      .then((rows) => setPending(Array.isArray(rows) ? rows : []))
+      .catch(() => setPending([]))
+  }, [])
+  useEffect(() => {
+    loadPending()
+    const timer = window.setInterval(loadPending, 20_000)
+    return () => window.clearInterval(timer)
+  }, [loadPending])
+
+  const act = useCallback(
+    async (id: number, kind: 'apply' | 'reject') => {
+      try {
+        if (kind === 'apply') await applyPendingAction(id)
+        else await rejectPendingAction(id)
+      } finally {
+        loadPending()
+      }
+    },
+    [loadPending],
+  )
+
   return (
     <div className="flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
       {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
@@ -423,6 +449,19 @@ export default function AiCopilotPage() {
 
       {/* 右：交互工作台 */}
       <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-border/60 bg-s1">
+        {pending.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/40 bg-role-watch/5 px-3 py-2" data-testid="copilot-pending-actions">
+            <span className="text-[11px] text-muted-foreground">待确认动作</span>
+            {pending.slice(0, 3).map((a) => (
+              <span key={a.id} className="flex items-center gap-1 rounded-md border border-border/60 px-2 py-0.5 text-[11px]">
+                <span className="font-mono">{a.kind === 'watchlist' ? '加自选' : a.kind === 'annotation' ? '画标注' : '盯盘提醒'}</span>
+                <span className="text-muted-foreground">{String((a.payload as Record<string, unknown>).symbol ?? '')}</span>
+                <button type="button" className="text-role-watch hover:underline" onClick={() => void act(a.id, 'apply')}>确认</button>
+                <button type="button" className="text-muted-foreground hover:underline" onClick={() => void act(a.id, 'reject')}>忽略</button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
           <Sparkles className="h-3.5 w-3.5 text-role-watch" />
           <span className="text-[12px] font-medium">{COPILOT_PAGE_TITLE}</span>

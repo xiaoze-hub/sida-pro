@@ -75,8 +75,9 @@ def test_exported_order_is_core_prefix():
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
     idx = [names.index(n) for n in NEW_TOOLS]
     assert idx == list(range(31, 36)), f"参谋工具不在 core 连续前缀尾: {idx}"
-    # core 前缀之后的第一个工具必须是 thsdk 段（顺序错了 EXPECTED_CORE_ORDER 必红）
-    assert names[37].startswith("get_thsdk_") or names[37] in {"get_wencai_enhanced"}
+    # 2026-10-20: 核心段尾部新增 propose_action（动作回写），之后才是 thsdk 段
+    assert names[37] == "propose_action"
+    assert names[38].startswith("get_thsdk_") or names[38] in {"get_wencai_enhanced"}
 
 
 def test_stage_labels_present():

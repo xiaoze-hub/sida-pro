@@ -3,6 +3,7 @@ label: 筹码分析师
 icon: "🧬"
 desc: 底仓筹码 + 逐笔主力意图 + 十档盘口：谁在拿货、谁在派发。
 when: [筹码, 底仓成本, 获利盘, 主力意图, 盘口]
+skills: [chip]
 tools:
   - get_stock_dossier
   - get_stock_chips

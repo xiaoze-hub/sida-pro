@@ -5722,6 +5722,19 @@ def _m209_copilot_user_id_text(conn: Connection) -> None:
         # SQLite 是动态类型, 无需变更
 
 
+def _m210_copilot_actions_annotations(conn: Connection) -> None:
+    """动作回写 + K 线标注表(2026-10-20, P1)。
+
+    copilot_actions: AI 提议 → pending → 用户确认 → applied; 红线动作(改持仓/下单)
+    永远不在这套框架里。
+    kline_annotations: 把 AI 的结论落到图上, 让标注成为人机共用的证据语言。
+    """
+    from src.db.models import CopilotAction, KlineAnnotation
+
+    CopilotAction.__table__.create(bind=conn, checkfirst=True)
+    KlineAnnotation.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5924,6 +5937,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(207, "flow_snapshot_total_amount", _m207_flow_snapshot_total_amount),
     Migration(208, "copilot_trace_tables", _m208_copilot_trace_tables),
     Migration(209, "copilot_user_id_text", _m209_copilot_user_id_text),
+    Migration(210, "copilot_actions_annotations", _m210_copilot_actions_annotations),
 )
 
 

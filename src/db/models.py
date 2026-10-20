@@ -2269,3 +2269,48 @@ class CopilotFeedback(Base):
     useful = Column(Boolean, nullable=False, default=True)
     reason = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotAction(Base):
+    """AI 提议的动作用待确认(2026-10-20, P1 动作回写)。
+
+    「融合」的硬指标不是 AI 能读页面, 而是能改页面。但不能直接改: 所有动作先落
+    pending, 用户点确认才 apply —— 这是红线(改持仓/下单永不在这个框架里)。
+    """
+
+    __tablename__ = "copilot_actions"
+    __table_args__ = (Index("ix_copilot_actions_user", "user_id", "status", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(24), nullable=False)        # annotation / watchlist / alert
+    payload = Column(Text, nullable=False, default="{}")   # JSON
+    status = Column(String(16), nullable=False, default="pending")  # pending/applied/rejected
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    applied_at = Column(DateTime, nullable=True)
+
+
+class KlineAnnotation(Base):
+    """K 线图层标注(2026-10-20)。
+
+    产品铁律: 图表标注是人机共用的证据语言。AI 的结论要能落到图上, 而不是只活在
+    聊天记录里。price/time 二选一: 水平线用 price, 时间点用 ts。
+    """
+
+    __tablename__ = "kline_annotations"
+    __table_args__ = (Index("ix_kline_annotations_symbol", "symbol", "market", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)
+    symbol = Column(String(12), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    period = Column(String(8), nullable=False, default="1d")
+    price = Column(Float, nullable=True)
+    ts = Column(String(32), nullable=True)           # ISO 或 "2026-10-20"
+    label = Column(String(64), nullable=False)       # 短标签, 图上直接显示
+    note = Column(Text, nullable=True)               # 依据/口径
+    color = Column(String(16), nullable=False, default="up")
+    source = Column(String(16), nullable=False, default="ai")   # ai / user
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

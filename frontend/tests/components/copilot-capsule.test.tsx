@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ getCopilotBrief: vi.fn() }))
 vi.mock('../../src/lib/copilot/api', () => ({
+  getPendingActions: vi.fn(async () => []),
+  applyPendingAction: vi.fn(async () => ({})),
+  rejectPendingAction: vi.fn(async () => ({})),
+  reportViewState: vi.fn(async () => ({ saved: true })),
+
   getCopilotBrief: (...a: unknown[]) => mocks.getCopilotBrief(...a),
   getCopilotPresets: vi.fn().mockResolvedValue([]),
 }))

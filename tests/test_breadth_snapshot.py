@@ -66,5 +66,5 @@ def test_migration_206_registered():
     from src.web.migrations import MIGRATIONS
 
     versions = {m.version for m in MIGRATIONS}
-    assert 206 in versions and 209 in versions
-    assert max(versions) == 209          # 新增迁移必须接在末尾，不能插队
+    assert 206 in versions and 210 in versions
+    assert max(versions) == 210          # 新增迁移必须接在末尾，不能插队

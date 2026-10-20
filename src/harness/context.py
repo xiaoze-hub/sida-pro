@@ -80,6 +80,14 @@ def inject_recipe(messages: list[dict], recipe, note: str | None = None) -> None
             extra.append("输出段落顺序：" + " → ".join(recipe.output_sections))
         if recipe.tools:
             extra.append("本轮只允许调用这些工具：" + "、".join(recipe.tools))
+        try:
+            from src.harness.skills import skills_block
+
+            manual = skills_block(getattr(recipe, "skills", ()))
+            if manual:
+                extra.append("--- 研判手册（按其顺序读，不要跳步） ---\n" + manual)
+        except Exception:  # noqa: BLE001 - 手册是增强, 缺了不影响作答
+            pass
     if note:
         extra.append(note)
     if not extra:
