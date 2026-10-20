@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { applyPendingAction, getPendingActions, rejectPendingAction, type PendingAction } from '@/lib/copilot/api'
+import { safeFixed } from '@/lib/format'
+import {
+  applyPendingAction,
+  getCopilotMetrics,
+  getPendingActions,
+  rejectPendingAction,
+  type CopilotMetrics,
+  type PendingAction,
+} from '@/lib/copilot/api'
 import { ChevronDown, ChevronRight, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
@@ -357,6 +365,7 @@ export default function AiCopilotPage() {
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
+  const [metrics, setMetrics] = useState<CopilotMetrics | null>(null)
   const [pending, setPending] = useState<PendingAction[]>([])
   const loadPending = useCallback(() => {
     void getPendingActions()
@@ -368,6 +377,22 @@ export default function AiCopilotPage() {
     const timer = window.setInterval(loadPending, 20_000)
     return () => window.clearInterval(timer)
   }, [loadPending])
+
+  // 治理块（P3, 2026-10-20）：近 7 天运行数 / 成功率 / 平均工具数 / P95 耗时。
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      void getCopilotMetrics(7)
+        .then((m) => { if (!cancelled) setMetrics(m) })
+        .catch(() => { if (!cancelled) setMetrics(null) })
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   const act = useCallback(
     async (id: number, kind: 'apply' | 'reject') => {
@@ -442,7 +467,32 @@ export default function AiCopilotPage() {
           </div>
         ) : null}
 
-        <div className="mt-auto text-[10px] leading-relaxed text-muted-foreground/80">
+        {metrics && metrics.runs > 0 ? (
+          <div className="mt-auto space-y-1 rounded-lg border border-border/50 px-2.5 py-2" data-testid="copilot-metrics">
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>近 7 天运行</span>
+              <span className="font-mono text-foreground">{metrics.runs}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>成功率</span>
+              <span className="font-mono text-foreground">
+                {metrics.ok_rate == null ? '--' : `${Math.round(metrics.ok_rate * 100)}%`}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>平均工具数</span>
+              <span className="font-mono text-foreground">{metrics.avg_tools ?? '--'}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>P95 耗时</span>
+              <span className="font-mono text-foreground">
+                {metrics.p95_elapsed_ms == null ? '--' : `${safeFixed(metrics.p95_elapsed_ms / 1000, 1)}s`}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className={`${metrics && metrics.runs > 0 ? 'mt-2' : 'mt-auto'} text-[10px] leading-relaxed text-muted-foreground/80`}>
           {DISCLAIMER}
         </div>
       </aside>

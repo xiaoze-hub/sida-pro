@@ -389,7 +389,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** AI/用户标注 */ aiNote?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -1055,6 +1055,9 @@ export default function KlineChart(props: {
   // 不是方向结论(后端 verdict 常带 note 免责, 图上不渲染买卖建议)。
   const ownWyckoff = props.wyckoff === undefined
   const showWyckoffLayer = props.layersVisible?.wyckoff !== false
+  // AI/用户标注（P1 收尾，2026-10-20）：来自 /api/copilot/annotations，画到图上。
+  // 铁律：只画落在当前 K 线区间内的点（filterMarkersInBarsRange 统一裁剪，不贴柱假定位）。
+  const [aiNotes, setAiNotes] = useState<{ price?: number | null; ts?: string | null; label: string; color?: string }[]>([])
   const [wyckoffMarks, setWyckoffMarks] = useState<PatternMark[] | null>(null)
   useEffect(() => {
     if (!ownWyckoff || !showWyckoffLayer || !props.symbol) {
@@ -1262,6 +1265,28 @@ export default function KlineChart(props: {
     onRangeStatsRef.current?.(stats)
   }, [hasStatsCb, visibleRange, effFundFlow, effEvents, effPriceLines, dataLen])
 
+  // AI 标注取数（symbol/周期变化即刷新）；失败静默 —— 标注是增强，不该打断看图。
+  useEffect(() => {
+    const sym = (props.symbol || '').trim()
+    if (!sym) {
+      setAiNotes([])
+      return
+    }
+    let cancelled = false
+    fetchAPI<{ price?: number | null; ts?: string | null; label: string; color?: string }[]>(
+      `/copilot/annotations?symbol=${encodeURIComponent(sym)}&market=${encodeURIComponent(props.market || 'CN')}&period=${encodeURIComponent(interval)}`,
+    )
+      .then((rows) => {
+        if (!cancelled) setAiNotes(Array.isArray(rows) ? rows : [])
+      })
+      .catch(() => {
+        if (!cancelled) setAiNotes([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [props.symbol, props.market, interval])
+
   // ── L4 事件 markers + 支撑压力位 price lines + 资金柱 (阶段二+三) ──
   useEffect(() => {
     const chart = chartRef.current
@@ -1409,6 +1434,21 @@ export default function KlineChart(props: {
         ) as never[]),
       )
     }
+    // AI/用户标注：有时间点的画 marker，有价位的画虚线（两类可同时存在）。
+    if (props.layersVisible?.aiNote !== false && aiNotes.length) {
+      const pc2 = readStockColors()
+      for (const n of aiNotes) {
+        if (!n.ts) continue
+        markers.push({
+          time: toChartTime(n.ts, interval),
+          position: 'aboveBar' as const,
+          color: n.color === 'down' ? pc2.down : pc2.up,
+          shape: 'circle' as const,
+          size: 1,
+          text: `🤖 ${n.label}`,
+        } as never)
+      }
+    }
     // LWC v5: 时间落在首/末根 K 线之外的 marker 会让 setMarkers 抛 "Value is null"
     // → 整页进错误边界(周末/节假日"当天有公告、当天没 K 线"必踩)。裁掉, 不假装定位。
     const safeMarkers = filterMarkersInBarsRange(markers, rawKlinesRef.current.map(b => b.time))
@@ -1443,6 +1483,23 @@ export default function KlineChart(props: {
         )
       } else {
         zoneSeries.setData([])
+      }
+    }
+
+    // 2.5) AI 标注价位线（虚线 + 标题带 🤖，与人工支撑压力线区分）。
+    if (props.layersVisible?.aiNote !== false) {
+      for (const n of aiNotes) {
+        if (n.price == null) continue
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: Number(n.price),
+            color: readChartTheme().neutral,
+            lineWidth: 1,
+            lineStyle: 3, // dotted
+            axisLabelVisible: true,
+            title: `🤖 ${n.label}`.slice(0, 24),
+          }),
+        )
       }
     }
 
@@ -1578,7 +1635,7 @@ export default function KlineChart(props: {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent, aiNotes])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
