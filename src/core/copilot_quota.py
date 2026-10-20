@@ -88,6 +88,15 @@ def check(db, user_id) -> tuple[bool, str | None, dict]:
     return True, None, usage
 
 
+def error_message(db, user) -> str | None:
+    """流式端点用：返回给人看的一句话，未超限返回 None（不抛异常，避免 SSE 头已发后 500）。"""
+    try:
+        ok, reason, _ = check(db, getattr(user, "id", None))
+    except Exception:  # noqa: BLE001
+        return None
+    return None if ok else (reason or "已达今日 AI 配额")
+
+
 def enforce(db, user) -> None:
     """网关层硬拒：超限抛 HTTPException(429)。异常信息直接给用户看。"""
     from fastapi import HTTPException

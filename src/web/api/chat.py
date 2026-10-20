@@ -22,7 +22,7 @@ from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
-from src.core.copilot_quota import enforce as enforce_copilot_quota
+from src.core.copilot_quota import enforce as enforce_copilot_quota, error_message as quota_error_message
 from src.web.api.auth import get_current_user, get_user_or_service
 from src.web.database import SessionLocal, get_db
 from src.web.models import (
@@ -2107,7 +2107,10 @@ async def send_message_stream(
     async def gen():
         db = SessionLocal()
         try:
-            enforce_copilot_quota(db, user)
+            _qmsg = quota_error_message(db, user)
+            if _qmsg:
+                yield _sse_event("error", {"message": _qmsg})
+                return
             conv = (
                 db.query(ChatConversation)
                 .filter(

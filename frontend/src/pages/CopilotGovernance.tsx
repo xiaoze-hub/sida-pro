@@ -12,7 +12,8 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { safeFixed } from '@/lib/format'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, Plus, RefreshCw } from 'lucide-react'
+import { authApi } from '@panwatch/api'
 import {
   getCopilotCost,
   getCopilotQuotas,
@@ -323,6 +324,11 @@ function QuotaTab() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 没有配额行的用户是「不限」，管理页必须能给他新增一行，否则这个功能等于没有入口
+  const [users, setUsers] = useState<{ id: string; username: string }[]>([])
+  const [pick, setPick] = useState('')
+  const [newRuns, setNewRuns] = useState('')
+  const [newTokens, setNewTokens] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -340,6 +346,26 @@ function QuotaTab() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (scope !== 'all') return
+    authApi
+      .listUsers()
+      .then((res) => {
+        const list = (res?.users || []).map((u: { id: string; username: string }) => ({
+          id: u.id,
+          username: u.username,
+        }))
+        setUsers(list)
+        setPick((prev) => prev || list[0]?.id || '')
+      })
+      .catch(() => setUsers([]))
+  }, [scope])
+
+  const nameOf = useCallback(
+    (uid: string) => users.find((u) => u.id === uid)?.username || uid.slice(0, 8),
+    [users],
+  )
 
   const save = useCallback(
     async (row: CopilotQuotaRow, patch: Partial<CopilotQuotaRow>) => {
@@ -378,6 +404,51 @@ function QuotaTab() {
         {scope === 'self' ? '（普通账号只能看自己）' : ''}
       </div>
       {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {scope === 'all' && users.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
+          <span className="text-[11px] text-muted-foreground">新增/覆盖配额</span>
+          <select
+            className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+          >
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.username}
+              </option>
+            ))}
+          </select>
+          <input
+            className="w-20 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            placeholder="轮数/天"
+            value={newRuns}
+            onChange={(e) => setNewRuns(e.target.value.replace(/[^0-9]/g, ''))}
+          />
+          <input
+            className="w-28 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+            placeholder="tokens/天"
+            value={newTokens}
+            onChange={(e) => setNewTokens(e.target.value.replace(/[^0-9]/g, ''))}
+          />
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            disabled={!pick || saving !== null}
+            onClick={() =>
+              void save(
+                { user_id: pick, daily_runs: null, daily_tokens: null, enabled: true },
+                {
+                  daily_runs: newRuns === '' ? null : Number(newRuns),
+                  daily_tokens: newTokens === '' ? null : Number(newTokens),
+                },
+              )
+            }
+          >
+            <Plus className="h-3 w-3" /> 保存
+          </button>
+        </div>
+      ) : null}
+
       {rows.length === 0 ? (
         <div className="text-[11px] text-muted-foreground">还没有任何配额记录（全员不限）</div>
       ) : (
@@ -393,7 +464,13 @@ function QuotaTab() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <QuotaRow key={r.user_id} row={r} saving={saving === r.user_id} onSave={save} />
+              <QuotaRow
+                key={r.user_id}
+                row={r}
+                saving={saving === r.user_id}
+                onSave={save}
+                nameOf={nameOf}
+              />
             ))}
           </tbody>
         </table>
@@ -406,17 +483,21 @@ function QuotaRow({
   row,
   saving,
   onSave,
+  nameOf,
 }: {
   row: CopilotQuotaRow
   saving: boolean
   onSave: (row: CopilotQuotaRow, patch: Partial<CopilotQuotaRow>) => Promise<void>
+  nameOf: (uid: string) => string
 }) {
   const [runs, setRuns] = useState(row.daily_runs == null ? '' : String(row.daily_runs))
   const [tokens, setTokens] = useState(row.daily_tokens == null ? '' : String(row.daily_tokens))
 
   return (
     <tr className="border-t border-border/30">
-      <td className="max-w-[180px] truncate px-2 py-1.5 font-mono">{row.user_id}</td>
+      <td className="max-w-[180px] truncate px-2 py-1.5 font-mono" title={row.user_id}>
+        {nameOf(row.user_id)}
+      </td>
       <td className="px-2 py-1.5 text-right font-mono">
         {num(row.used_runs)} /{' '}
         <input
