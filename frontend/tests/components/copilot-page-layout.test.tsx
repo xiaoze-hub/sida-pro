@@ -22,6 +22,11 @@ const presetsMock = vi.hoisted(() => ({
 
 vi.mock('@panwatch/api', () => ({ chatApi: apiMock }))
 vi.mock('../../src/lib/copilot/api', () => ({
+  getPendingActions: vi.fn(async () => []),
+  applyPendingAction: vi.fn(async () => ({})),
+  rejectPendingAction: vi.fn(async () => ({})),
+  reportViewState: vi.fn(async () => ({ saved: true })),
+
   ...presetsMock,
   getCopilotMentions: vi.fn(async () => ({ stocks: [], agents: [] })),
 }))

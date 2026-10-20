@@ -210,3 +210,164 @@ def _pinyin_initials(name: str) -> str:
         return "".join(lazy_pinyin(name, style=Style.FIRST_LETTER, errors="ignore")).lower()
     except Exception:
         return ""
+
+
+# ──────────────── P1: 页面即上下文 / 动作回写 / P3: 轨迹只读 ────────────────
+
+from fastapi import Body, HTTPException  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from src.harness import actions as actions_mod  # noqa: E402
+from src.harness.viewstate import ViewState, load_view_state, save_view_state  # noqa: E402
+from src.web.database import get_db  # noqa: E402
+
+
+@router.post("/context")
+def post_copilot_context(
+    payload: dict = Body(...),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """前端上报当前视图（K 线页的标的/周期/圈选区）。
+
+    刻意用裸 dict 而不是直接绑定 ViewState：前端字段演进时不该 422，
+    未知字段一律忽略，缺字段一律可选。
+    """
+    conversation_id = payload.get("conversation_id")
+    try:
+        state = ViewState(**{k: v for k, v in payload.items() if k in ViewState.model_fields})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"视图状态不合法：{exc}") from exc
+    ok = save_view_state(user.id, conversation_id, state)
+    return {"saved": ok, "ttl_seconds": 1800}
+
+
+@router.get("/context")
+def get_copilot_context(
+    conversation_id: int | None = Query(default=None),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    return {"state": load_view_state(user.id, conversation_id)}
+
+
+@router.get("/actions")
+def get_copilot_actions(
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """待确认动作列表（AI 提议、等用户点确认）。"""
+    return actions_mod.list_pending(db, user.id)
+
+
+@router.post("/actions/{action_id}/apply")
+def apply_copilot_action(
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    try:
+        return actions_mod.apply_action(db, user_id=user.id, action_id=action_id)
+    except actions_mod.ActionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/actions/{action_id}/reject")
+def reject_copilot_action(
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    try:
+        return actions_mod.reject_action(db, user_id=user.id, action_id=action_id)
+    except actions_mod.ActionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/runs")
+def get_copilot_runs(
+    limit: int = Query(default=20, le=100),
+    conversation_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """最近若干轮问答的骨架（P3 治理/回放入口）。"""
+    from src.db.models import CopilotRun
+
+    q = db.query(CopilotRun).filter(CopilotRun.user_id == str(user.id))
+    if conversation_id is not None:
+        q = q.filter(CopilotRun.conversation_id == conversation_id)
+    rows = q.order_by(CopilotRun.id.desc()).limit(limit).all()
+    return [{
+        "run_id": r.run_id, "conversation_id": r.conversation_id, "recipe": r.recipe,
+        "status": r.status, "tool_calls": r.tool_calls, "elapsed_ms": r.elapsed_ms,
+        "question": r.question, "created_at": str(r.created_at or ""),
+    } for r in rows]
+
+
+@router.get("/runs/{run_id}")
+def get_copilot_run_detail(
+    run_id: str,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """单轮回放：骨架 + 每步工具调用（含摘要与耗时）。"""
+    from src.db.models import CopilotRun, CopilotStep
+
+    run = (
+        db.query(CopilotRun)
+        .filter(CopilotRun.run_id == run_id, CopilotRun.user_id == str(user.id))
+        .one_or_none()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="轨迹不存在")
+    steps = (
+        db.query(CopilotStep).filter(CopilotStep.run_id == run_id)
+        .order_by(CopilotStep.seq).all()
+    )
+    return {
+        "run": {
+            "run_id": run.run_id, "status": run.status, "recipe": run.recipe,
+            "question": run.question, "tool_calls": run.tool_calls,
+            "elapsed_ms": run.elapsed_ms, "created_at": str(run.created_at or ""),
+        },
+        "steps": [{
+            "seq": s.seq, "tool": s.tool, "ok": s.ok, "elapsed_ms": s.elapsed_ms,
+            "args": s.args, "result_digest": s.result_digest,
+        } for s in steps],
+    }
+
+
+@router.get("/metrics")
+def get_copilot_metrics(
+    days: int = Query(default=7, le=30),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """成本/质量看板数据：运行数、成功率、平均工具数、P95 耗时、按配方分组。"""
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from src.db.models import CopilotRun
+
+    since = __import__("datetime").datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(CopilotRun)
+        .filter(CopilotRun.user_id == str(user.id), CopilotRun.created_at >= since)
+        .all()
+    )
+    if not rows:
+        return {"days": days, "runs": 0, "ok_rate": None, "avg_tools": None,
+                "p95_elapsed_ms": None, "by_recipe": []}
+    elapsed = sorted([r.elapsed_ms for r in rows if r.elapsed_ms])
+    p95 = elapsed[int(len(elapsed) * 0.95) - 1] if elapsed else None
+    by_recipe: dict[str, int] = {}
+    for r in rows:
+        by_recipe[r.recipe or "(默认)"] = by_recipe.get(r.recipe or "(默认)", 0) + 1
+    return {
+        "days": days,
+        "runs": len(rows),
+        "ok_rate": round(sum(1 for r in rows if r.status == "ok") / len(rows), 3),
+        "avg_tools": round(sum(r.tool_calls or 0 for r in rows) / len(rows), 1),
+        "p95_elapsed_ms": p95,
+        "by_recipe": [{"recipe": k, "runs": v} for k, v in sorted(by_recipe.items(), key=lambda x: -x[1])],
+    }

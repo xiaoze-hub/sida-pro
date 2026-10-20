@@ -15,6 +15,10 @@ const apiMock = vi.hoisted(() => ({
 }))
 
 const copilotMock = vi.hoisted(() => ({
+  getPendingActions: vi.fn(async () => []),
+  applyPendingAction: vi.fn(async () => ({})),
+  rejectPendingAction: vi.fn(async () => ({})),
+  reportViewState: vi.fn(async () => ({ saved: true })),
   getCopilotPresets: vi.fn(async () => []),
   getCopilotBrief: vi.fn().mockResolvedValue(null),
   getCopilotMentions: vi.fn(async () => ({

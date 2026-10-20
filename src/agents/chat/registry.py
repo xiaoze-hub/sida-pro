@@ -1433,6 +1433,58 @@ async def _tool_get_stock_dossier(db: Session, args: dict, user: User | None = N
         return f"获取全景档案失败: {e}"
 
 
+@register_chat_tool(
+    "propose_action",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "propose_action",
+            "description": (
+                "向用户提议一个可执行动作（不会立即生效，必须用户点确认）。"
+                "kind=annotation：在K线图上加一条标注，需要 symbol + label，可选 price(水平线)/ts(时间点)/note(依据)；"
+                "kind=watchlist：把某只票加入自选，需要 symbol，可选 name/market；"
+                "kind=alert：建盯盘提醒（当前仅记录，暂不执行）。"
+                "只在用户明确要「标注/加自选/盯一下」时调用；不要用它代替分析结论。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["annotation", "watchlist", "alert"]},
+                    "symbol": {"type": "string", "description": "6 位 A 股代码"},
+                    "label": {"type": "string", "description": "标注短标签（annotation 必填，≤20 字）"},
+                    "price": {"type": "number", "description": "标注价位（水平线）"},
+                    "ts": {"type": "string", "description": "标注时间点，如 2026-10-20 或完整 ISO"},
+                    "note": {"type": "string", "description": "依据/口径说明"},
+                    "name": {"type": "string", "description": "股票名称（watchlist 用）"},
+                    "market": {"type": "string", "description": "市场，默认 CN"},
+                    "period": {"type": "string", "description": "周期，默认 1d"},
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    caliber="动作提议: 落 pending 待用户确认，不直接改数据",
+    requires="self",
+)
+async def _tool_propose_action(db: Session, args: dict, user: User | None = None) -> str:
+    from src.harness.actions import ALLOWED_KINDS, ActionError, propose
+
+    if user is None:
+        return "该动作需要登录用户，当前会话没有用户身份。"
+    kind = str(args.get("kind") or "").strip()
+    if kind not in ALLOWED_KINDS:
+        return f"不支持的 kind：{kind}（可选 {', '.join(ALLOWED_KINDS)}）"
+    payload = {k: v for k, v in args.items() if k != "kind" and v not in (None, "")}
+    try:
+        item = propose(db, user_id=user.id, kind=kind, payload=payload)
+    except ActionError as exc:
+        return f"动作提议失败：{exc}"
+    return (
+        f"已在「待确认动作」里生成一条提议（#{item['id']}，类型 {kind}）。"
+        "请提醒用户在参谋面板点确认后才会生效；不要声称已经加好或已经标注。"
+    )
+
+
 # ──────────────── thsdk 11 个高价值工具(2026-08-20 选项 C, W3.3 并入注册表) ────────────────
 
 from src.agents.chat.tools_thsdk import (  # noqa: E402  (仅 stdlib 级依赖, 不构成循环)

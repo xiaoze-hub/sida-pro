@@ -25,6 +25,7 @@ class Recipe:
     desc: str = ""
     when: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
     output_sections: tuple[str, ...] = ()
     max_tool_calls: int = 10
     prompt_fragment: str = field(default="")
@@ -54,6 +55,7 @@ def _parse(path: Path) -> Recipe:
         # 否则 ' '.join(when) 直接 TypeError（`/mentions` 线上 500 就是这么来的）。
         when=tuple(str(x) for x in (raw.get("when") or ())),
         tools=tuple(str(x) for x in (raw.get("tools") or ())),
+        skills=tuple(str(x) for x in (raw.get("skills") or ())),
         output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),

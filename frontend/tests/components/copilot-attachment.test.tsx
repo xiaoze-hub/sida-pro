@@ -19,6 +19,11 @@ vi.mock('@panwatch/api', () => ({
 }))
 
 vi.mock('../../src/lib/copilot/api', () => ({
+  getPendingActions: vi.fn(async () => []),
+  applyPendingAction: vi.fn(async () => ({})),
+  rejectPendingAction: vi.fn(async () => ({})),
+  reportViewState: vi.fn(async () => ({ saved: true })),
+
   getCopilotPresets: vi.fn().mockResolvedValue([]),
   getCopilotBrief: vi.fn().mockResolvedValue(null),
 }))

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
 from src.harness.runtime import AgentRuntime
+from src.harness.viewstate import append_view_state_block
 from src.harness.trace import finish_copilot_run, start_copilot_run
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
@@ -1067,6 +1068,9 @@ async def _build_ai_messages(
         stock_ctx = _build_stock_context(db, conv.stock_symbol, conv.stock_market, user=user)
         if stock_ctx:
             context_parts.append(stock_ctx)
+
+    # 页面即上下文(P1): 只补空 —— 用户文字里的代码/@提及/会话绑定已在前面生效
+    append_view_state_block(messages_for_ai, getattr(user, "id", None), conv.id)
 
     if context_parts:
         # 把上下文追加到 system message

@@ -23,6 +23,11 @@ vi.mock('@panwatch/base-ui/components/ui/toast', () => ({
 
 const briefMock = vi.hoisted(() => ({ getCopilotBrief: vi.fn() }))
 vi.mock('../../src/lib/copilot/api', () => ({
+  getPendingActions: vi.fn(async () => []),
+  applyPendingAction: vi.fn(async () => ({})),
+  rejectPendingAction: vi.fn(async () => ({})),
+  reportViewState: vi.fn(async () => ({ saved: true })),
+
   getCopilotBrief: (...a: unknown[]) => briefMock.getCopilotBrief(...a),
   getCopilotPresets: vi.fn().mockResolvedValue([]),
 }))

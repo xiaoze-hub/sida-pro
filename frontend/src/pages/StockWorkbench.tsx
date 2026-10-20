@@ -14,6 +14,7 @@ import IndexBody from '@/pages/workbench/IndexBody'
 import PageTabs from '@/components/PageTabs'
 import RangeStatsCard from '@/components/RangeStatsCard'
 import { intervalToPeriod, periodToInterval } from '@/lib/kline-period'
+import { reportViewOnce } from '@/lib/copilot/viewstate'
 import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
@@ -329,6 +330,23 @@ export default function StockWorkbench() {
    * 解析不出(缺失/非法/`intra` 分时) → `undefined` → 图表用自身默认周期(不假装支持)。
    */
   const periodFromUrl = periodToInterval(sp.get('period'))
+
+  /**
+   * 页面即上下文（P1, 2026-10-20）：把「正在看哪只票、什么周期、哪个页面」推给参谋。
+   * 只上报视图、不改任何业务状态；失败静默（参谋那边只是少了锚点）。
+   */
+  useEffect(() => {
+    if (!symbol) return
+    reportViewOnce(
+      {
+        page: 'kline',
+        symbol,
+        market: type === 'stock' ? 'CN' : type,
+        period: periodFromUrl ?? undefined,
+      },
+      `wb:${symbol}:${periodFromUrl ?? '-'}:${type}`,
+    )
+  }, [symbol, periodFromUrl, type])
 
   /**
    * 设计稿 v2.1 §10.2④: 区间统计(拖拽选段/缩放后, 资金面板顶部那一行)。

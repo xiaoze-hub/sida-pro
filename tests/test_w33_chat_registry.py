@@ -38,7 +38,8 @@ EXPECTED_CORE_ORDER = [
     # 数智参谋 5 工具(2026-10-18): 注册在 core 段尾、thsdk 段前 —— 导出顺序 index 31~35
     "get_chip_accumulation", "get_cancel_order_intent", "get_wyckoff_structure",
     "get_demon_factor", "scan_auction_anomaly",
-    "get_stock_dossier",  # 2026-10-19: 全景标的证据线束 Harness 工具
+    "get_stock_dossier",  # 2026-10-19: 全景标的证据线束 Harness 工具,
+    "propose_action",
 ]
 
 EXPECTED_THSDK = {
@@ -88,7 +89,7 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 55  # 37 core + 1 handler-only + 11 thsdk + 6 tq
+    assert len(CHAT_TOOL_REGISTRY) == 56  # 37 core + propose_action + 1 handler-only + 11 thsdk + 6 tq
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -110,6 +111,7 @@ def test_self_requires_scoping():
     self_tools = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.requires == "self"}
     assert self_tools == {
         "get_portfolio", "get_stock_suggestions", "get_watchlist", "get_notifications",
+        "propose_action",
     }
 
 

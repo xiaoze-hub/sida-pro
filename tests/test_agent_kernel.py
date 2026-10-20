@@ -133,8 +133,8 @@ def test_migration_registered():
     from src.web.migrations import MIGRATIONS
 
     ids = [m.version for m in MIGRATIONS]
-    assert 208 in ids and 209 in ids
-    assert max(ids) == 209
+    assert 208 in ids and 210 in ids
+    assert max(ids) == 210
 
 
 # --- 集成：真实走一遍 _run_tool_loop（假 LLM + 假工具），验证轨迹端到端落库 ---

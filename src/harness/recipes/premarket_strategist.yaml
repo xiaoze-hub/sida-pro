@@ -3,6 +3,7 @@ label: 盘前策略官
 icon: "🌅"
 desc: 开盘前把隔夜事件、题材主线、自选股摆在一张桌上，给出今日观察清单（不给买卖指令）。
 when: [盘前, 今天怎么看, 隔夜消息, 事件驱动, 题材主线]
+skills: [premarket]
 tools:
   - get_event_catalyst
   - get_market_news
