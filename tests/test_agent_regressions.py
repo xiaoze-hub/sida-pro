@@ -348,6 +348,21 @@ def _c32_auction_gap_is_open_vs_prev_close():
     assert "❔ 数据不足" in src_text
 
 
+def _c33_tq_flow_snapshot_must_be_source_filtered():
+    """快照表里混着东财口径的旧行 —— 读侧必须只认 source='tdx_tq'，
+    否则会把东财的数标成 TQ 口径（比没数据更坏）。
+    """
+    import inspect
+
+    from src.web.api import market_data as md
+
+    src_text = inspect.getsource(md._latest_tq_flow_row)
+    assert "source = 'tdx_tq'" in src_text
+    # 时区: 库里是本地 naive 时间, 不能当 UTC（否则算出负年龄的"未来快照"）
+    assert "timedelta(hours=8)" in src_text
+
+
+
 CASES = [
     ("c01_竞价别名", _c01_auction_not_aliased),
     ("c02_竞价缺数措辞", _c02_auction_missing_snapshot_wording),
@@ -381,6 +396,7 @@ CASES = [
     ("c30_chat行数护栏", _c30_chat_py_line_guard),
     ("c31_对外文案口径", _c31_no_decision_pioneer_in_user_facing_text),
     ("c32_竞价涨幅口径", _c32_auction_gap_is_open_vs_prev_close),
+    ("c33_TQ快照来源过滤", _c33_tq_flow_snapshot_must_be_source_filtered),
 ]
 
 

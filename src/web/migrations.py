@@ -5702,6 +5702,19 @@ def _m208_copilot_trace_tables(conn: Connection) -> None:
     CopilotFeedback.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m211_flow_snapshot_source(conn: Connection) -> None:
+    """大盘资金快照补 source 列(2026-10-20)。
+
+    缘由: 同一个表里既有「东财四档」写入的旧行, 又有「通达信 AMO/SUPAMO」汇总的新行。
+    没有来源列就无法区分, 读侧会把东财的行当成 TQ 值再标成 TQ 口径(撒谎)。
+    """
+    if not _has_table(conn, "market_flow_snapshots"):
+        return
+    if _has_column(conn, "market_flow_snapshots", "source"):
+        return
+    conn.execute(text("ALTER TABLE market_flow_snapshots ADD COLUMN source VARCHAR(32)"))
+
+
 def _m209_copilot_user_id_text(conn: Connection) -> None:
     """把 copilot_runs/copilot_feedback 的 user_id 从 integer 改成 varchar(36)(2026-10-20)。
 
@@ -5938,6 +5951,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(208, "copilot_trace_tables", _m208_copilot_trace_tables),
     Migration(209, "copilot_user_id_text", _m209_copilot_user_id_text),
     Migration(210, "copilot_actions_annotations", _m210_copilot_actions_annotations),
+    Migration(211, "flow_snapshot_source", _m211_flow_snapshot_source),
 )
 
 

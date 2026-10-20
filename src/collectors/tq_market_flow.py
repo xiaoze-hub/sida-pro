@@ -102,10 +102,10 @@ def write_snapshot(totals: dict) -> bool:
                     """
                     INSERT INTO market_flow_snapshots
                         (total_main_flow, up_count, down_count, flat_count,
-                         sh_flow, sz_flow, total_amount)
+                         sh_flow, sz_flow, total_amount, source)
                     VALUES
                         (:total_main_flow, :up_count, :down_count, :flat_count,
-                         NULL, NULL, :total_amount)
+                         NULL, NULL, :total_amount, :source)
                     """
                 ),
                 {
@@ -114,6 +114,7 @@ def write_snapshot(totals: dict) -> bool:
                     "down_count": totals.get("down"),
                     "flat_count": totals.get("flat"),
                     "total_amount": totals.get("total_amount"),
+                    "source": "tdx_tq",
                 },
             )
         return True
@@ -122,24 +123,50 @@ def write_snapshot(totals: dict) -> bool:
         return False
 
 
+def _has_tq_row_today() -> bool:
+    """今天是否已有 TQ 口径的快照行（用于收盘后补跑判定）。"""
+    try:
+        from sqlalchemy import text
+
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT 1 FROM market_flow_snapshots "
+                    "WHERE source = 'tdx_tq' AND ts >= CURRENT_DATE LIMIT 1"
+                )
+            ).fetchone()
+        return bool(row)
+    except Exception:  # noqa: BLE001 - 查不到就当没有, 允许补跑
+        return False
+
+
 def run_scheduled() -> dict | None:
-    """调度入口：只在交易时段跑（收盘后再跑一次收盘态）。"""
+    """调度入口：交易时段跑；收盘后(15:05 起)若今日还没有 TQ 快照则补跑一次。
+
+    补跑很重要：发版/重启往往发生在收盘后, 而"今天没有 TQ 行"会让首页主力净流入
+    退回东财口径(或 --)。补跑一次即自愈。
+    """
     try:
         from src.core.trading_calendar import is_trading_day, is_trading_session
 
         if not is_trading_day():
             return None
-        now_ok = is_trading_session()
-        # 15:00-15:10 补一次收盘定稿（尾盘成交额要含 14:57-15:00 集合竞价）
-        if not now_ok:
-            import datetime as _dt
+        if is_trading_session():
+            return collect_once()
+        import datetime as _dt
 
-            t = _dt.datetime.now()
-            if not (t.hour == 15 and t.minute <= 10):
-                return None
+        t = _dt.datetime.now()
+        tail_close = t.hour == 15 and t.minute <= 10     # 14:57-15:00 集合竞价刚结束
+        catch_up = (t.hour > 15 or (t.hour == 15 and t.minute > 10)) and not _has_tq_row_today()
+        if tail_close or catch_up:
+            logger.info("[tq-market-flow] 收盘后补跑（今日无 TQ 快照）")
+            return collect_once()
+        return None
     except Exception:  # noqa: BLE001 - 日历不可用时宁可跑，也别静默停摆
-        pass
-    return collect_once()
+        logger.debug("[tq-market-flow] 日历不可用, 直接跑一轮", exc_info=True)
+        return collect_once()
 
 
 def collect_once(*, write: bool = True) -> dict | None:
