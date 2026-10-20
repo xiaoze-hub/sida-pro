@@ -434,6 +434,40 @@ def _fresh_board_inout(board_type: str = "industry") -> tuple[list[dict], list[d
     return _boards_to_inout(snap.get("items") or [])
 
 
+
+
+# 2026-10-20: 两市成交额兜底。上游 market-overview 的 total_amount 经常为 None（网关不返回该字段），
+# 而首页把它当核心 KPI。用指数成交额补：上证(000001) + 深证成指(399001) 的 turnover 之和，
+# 单位元 → 亿元。与同花顺口径一致（实测 11:00 约 8265 亿）。60s 进程内缓存，避免每次请求外呼。
+_AMOUNT_CACHE: dict = {"ts": 0.0, "val": None}
+
+
+def _total_amount_from_indices() -> float | None:
+    import time as _t
+
+    now = _t.time()
+    if now - float(_AMOUNT_CACHE.get("ts") or 0) < 60 and _AMOUNT_CACHE.get("val") is not None:
+        return _AMOUNT_CACHE["val"]
+    try:
+        from src.core.marketdata_client import get_market_data
+
+        items = get_market_data().index_quotes(["sh000001", "sz399001"])
+        total = 0.0
+        got = 0
+        for it in items or []:
+            tv = it.get("turnover")
+            if tv:
+                total += float(tv)
+                got += 1
+        if got < 2:
+            return None
+        val = round(total / 1e8, 1)
+        _AMOUNT_CACHE["ts"], _AMOUNT_CACHE["val"] = now, val
+        return val
+    except Exception as e:  # noqa: BLE001 - 兜底失败就保持 None
+        logger.debug("两市成交额兜底失败: %s", e)
+        return None
+
 def _snapshot_to_response(snap: dict) -> dict:
     """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
 
@@ -798,7 +832,11 @@ async def market_capital_flow_proxy():
     # 同步读库 → to_thread, 不阻塞事件循环(与本函数下面 P0 注释同类问题)。
     snap = await asyncio.to_thread(_read_fresh_db_snapshot)
     if snap is not None:
-        return _snapshot_to_response(snap)
+        out = _snapshot_to_response(snap)
+        if out.get("total_amount") is None:
+            out["total_amount"] = await asyncio.to_thread(_total_amount_from_indices)
+            out["amount_source"] = "腾讯指数成交额口径"
+        return out
     try:
         import requests as _req
 
@@ -893,6 +931,11 @@ async def market_capital_flow_proxy():
         # ⚠️ to_thread: TQ 查询是同步 HTTP(全A 约 1s), 在 async def 里直接调会阻塞事件循环
         #    (见本函数开头 P0 注释 —— 同一类问题)。
         result = await asyncio.to_thread(_apply_tq_breadth, result)
+        # 2026-10-20: 上游 total_amount 常为 None → 用指数成交额兜底（否则首页成交额恒为 --，
+        # 且落库后读库分支也一直是空）。
+        if result.get("total_amount") is None:
+            result["total_amount"] = _total_amount_from_indices()
+            result["amount_source"] = "腾讯指数成交额口径"
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
         try:
             _try_write_snapshot_async(result)

@@ -60,3 +60,25 @@ def test_snapshot_response_now_carries_total_amount():
 def test_snapshot_response_keeps_null_when_amount_missing():
     resp = md._snapshot_to_response({"total_main_flow": 1.0})
     assert resp["total_amount"] is None
+
+
+def test_total_amount_falls_back_to_index_turnover(monkeypatch):
+    """上游 total_amount 为 None 时用指数成交额兜底（首页成交额不再恒为 --）。"""
+    class _MD:
+        def index_quotes(self, codes):
+            assert set(codes) == {"sh000001", "sz399001"}
+            return [{"turnover": 3.9e11}, {"turnover": 4.37e11}]
+
+    monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
+    md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+    assert md._total_amount_from_indices() == 8270.0
+
+
+def test_total_amount_none_when_source_incomplete(monkeypatch):
+    class _MD:
+        def index_quotes(self, codes):
+            return [{"turnover": 3.9e11}]
+
+    monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
+    md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+    assert md._total_amount_from_indices() is None
