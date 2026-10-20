@@ -377,6 +377,26 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"妖股因子增量管线注册失败: {e}")
 
+        # 全市场成交额/主力净流入 —— 通达信 TQ 原生公式汇总(2026-10-20 用户铁律:
+        # 逆向出的客户端接口一律优先)。5576 只批量约 37s ⇒ 绝不进请求路径,
+        # 5 分钟一次落 market_flow_snapshots, 接口读库。
+        try:
+            from src.collectors.tq_market_flow import run_scheduled as _tq_flow_job
+
+            rt.scheduler.scheduler.add_job(
+                _tq_flow_job,
+                "interval",
+                seconds=300,
+                id="tq-market-flow",
+                name="TQ全市场成交额/主力净流入",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("TQ 全市场资金汇总任务已注册(300s)")
+        except Exception as e:
+            logger.error(f"TQ 全市场资金汇总任务注册失败: {e}")
+
         # 连板梯队数据自检 + 自愈(2026-10-11 P1 断档修复): 每日 16:05(含周末)
         # limit_up_events 是 /ladder 收盘态真值源; TQ 断链期 15:35 管线静默失败 →
         # 表停更几天无人发现。本作业比对最新交易日 vs 期望交易日, 缺则 TQ 直连补数;

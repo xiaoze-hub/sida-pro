@@ -442,31 +442,114 @@ def _fresh_board_inout(board_type: str = "industry") -> tuple[list[dict], list[d
 _AMOUNT_CACHE: dict = {"ts": 0.0, "val": None}
 
 
-def _total_amount_from_indices() -> float | None:
-    import time as _t
+def _tq_index_amount() -> tuple[float | None, str]:
+    """两市成交额 —— **首选通达信 TQ 指数快照**(2026-10-20 用户铁律: 逆向出的客户端接口优先)。
 
-    now = _t.time()
-    if now - float(_AMOUNT_CACHE.get("ts") or 0) < 60 and _AMOUNT_CACHE.get("val") is not None:
-        return _AMOUNT_CACHE["val"]
+    口径: 上证指数(999999.SH, 全沪市) + 深证综指(399106.SZ, 全深市) 的 `Amount`(万元) 之和。
+    与腾讯指数口径实测相差 ~1%(通达信含集合竞价/盘后固定价格), 属正常口径差。
+    只打 2 次 RPC, 单线程 17709 上可接受; 每次间隔 0.15s 避免突发。
+    """
     try:
-        from src.core.marketdata_client import get_market_data
+        from marketdata.vendors.tq import tq_rpc
 
-        items = get_market_data().index_quotes(["sh000001", "sz399001"])
-        total = 0.0
+        total_yuan = 0.0
         got = 0
-        for it in items or []:
-            tv = it.get("turnover")
-            if tv:
-                total += float(tv)
+        for idx, code in enumerate(("999999.SH", "399106.SZ")):
+            if idx:
+                time.sleep(0.15)
+            resp = tq_rpc("get_market_snapshot", {"stock_code": code}) or {}
+            v = resp.get("Value") if isinstance(resp, dict) else None
+            if not isinstance(v, dict):
+                continue
+            amt = v.get("Amount")
+            if amt is None:
+                continue
+            try:
+                total_yuan += float(amt) * 1e4  # 万元 → 元
                 got += 1
+            except (TypeError, ValueError):
+                continue
         if got < 2:
+            return None, "tdx_tq_partial"
+        return round(total_yuan / 1e8, 1), "tdx_tq_index"
+    except Exception as e:  # noqa: BLE001 - 兜底失败就走腾讯
+        logger.debug("TQ 指数成交额失败: %s", e)
+        return None, "tdx_tq_error"
+
+
+def _total_amount_from_indices() -> float | None:
+    """腾讯指数成交额口径(历史兜底实现, 测试契约沿用; 端点优先走 _refresh_amount_fallback)。"""
+    return _refresh_amount_fallback()[0]
+
+
+def _latest_tq_flow_row(max_age_sec: int = 1800) -> dict | None:
+    """最近一次 TQ 全市场汇总(主力净流入)。超过 max_age_sec 视为过旧 → None(不拿旧数当实时)。
+
+    返回 {"total_main_flow", "age_sec"}。读库失败 → None。
+    """
+    try:
+        from sqlalchemy import text
+
+        from src.web.database import engine
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT total_main_flow, ts FROM market_flow_snapshots
+                    WHERE total_main_flow IS NOT NULL
+                    ORDER BY ts DESC LIMIT 1
+                    """
+                )
+            ).fetchone()
+        if not row:
             return None
-        val = round(total / 1e8, 1)
-        _AMOUNT_CACHE["ts"], _AMOUNT_CACHE["val"] = now, val
-        return val
-    except Exception as e:  # noqa: BLE001 - 兜底失败就保持 None
-        logger.debug("两市成交额兜底失败: %s", e)
+        val, ts = row[0], row[1]
+        age = 0
+        try:
+            import datetime as _dt
+
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_dt.timezone.utc)
+            age = int((_dt.datetime.now(_dt.timezone.utc) - ts).total_seconds())
+        except Exception:  # noqa: BLE001
+            age = 0
+        if age > max_age_sec:
+            return None
+        return {"total_main_flow": float(val), "age_sec": age}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("读取 TQ 资金快照失败: %s", e)
         return None
+
+
+def _refresh_amount_fallback() -> tuple[float | None, str]:
+    """成交额兜底链: TQ 指数(首选) → 腾讯指数(次选)。60s 缓存。"""
+    now = time.time()
+    if now - float(_AMOUNT_CACHE.get("ts") or 0) < 60 and _AMOUNT_CACHE.get("val") is not None:
+        return _AMOUNT_CACHE["val"], _AMOUNT_CACHE.get("src") or "cache"
+
+    val, src = _tq_index_amount()
+    if val is None:
+        try:
+            from src.core.marketdata_client import get_market_data
+
+            items = get_market_data().index_quotes(["sh000001", "sz399106"])
+            total = 0.0
+            got = 0
+            for it in items or []:
+                tv = it.get("turnover")
+                if tv:
+                    total += float(tv)
+                    got += 1
+            if got >= 2:
+                val, src = round(total / 1e8, 1), "tencent_index"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("腾讯指数成交额兜底失败: %s", e)
+    if val is not None:
+        _AMOUNT_CACHE.clear()
+        _AMOUNT_CACHE.update({"ts": now, "val": val, "src": src})
+    return val, src
+
 
 def _snapshot_to_response(snap: dict) -> dict:
     """把库快照行组装成与实时分支同构的响应, 并**如实标注来源与口径**。
@@ -834,8 +917,13 @@ async def market_capital_flow_proxy():
     if snap is not None:
         out = _snapshot_to_response(snap)
         if out.get("total_amount") is None:
-            out["total_amount"] = await asyncio.to_thread(_total_amount_from_indices)
-            out["amount_source"] = "腾讯指数成交额口径"
+            # 2026-10-20: 兜底链改为 TQ 优先(TQ 指数快照 → 腾讯指数)
+            _amt, _src = await asyncio.to_thread(_refresh_amount_fallback)
+            out["total_amount"] = _amt
+            out["amount_source"] = (
+                "通达信 TQ 指数成交额(沪综指+深综指)" if _src == "tdx_tq_index"
+                else ("腾讯指数成交额口径" if _src == "tencent_index" else "不可用")
+            )
         return out
     try:
         import requests as _req
@@ -934,8 +1022,21 @@ async def market_capital_flow_proxy():
         # 2026-10-20: 上游 total_amount 常为 None → 用指数成交额兜底（否则首页成交额恒为 --，
         # 且落库后读库分支也一直是空）。
         if result.get("total_amount") is None:
-            result["total_amount"] = _total_amount_from_indices()
-            result["amount_source"] = "腾讯指数成交额口径"
+            _amt, _src = await asyncio.to_thread(_refresh_amount_fallback)
+            result["total_amount"] = _amt
+            result["amount_source"] = (
+                "通达信 TQ 指数成交额(沪综指+深综指)" if _src == "tdx_tq_index"
+                else ("腾讯指数成交额口径" if _src == "tencent_index" else "不可用")
+            )
+        # 2026-10-20: 主力净流入上游(cn 网关)常缺 → 退回库内最近一次 TQ 全市场汇总(AMO/SUPAMO),
+        # 标注快照年龄; 连库也没有就保持 None(前端 --), 绝不用 0 顶替。
+        if result.get("total_main_flow") is None:
+            _snap = await asyncio.to_thread(_latest_tq_flow_row)
+            if _snap is not None:
+                result["total_main_flow"] = _snap["total_main_flow"]
+                result["main_flow_source"] = f"tdx_tq_supamo(快照 {_snap['age_sec']}s 前)"
+                result["caliber"] = "tdx_supamo"
+                result["caliber_label"] = "主力净流入: 通达信 SUPAMO 全市场汇总(资金面参考, 禁用于主力意图判定)"
         # v0.4.7: 顺手异步写库(30s 节流, 失败静默不阻断接口)
         try:
             _try_write_snapshot_async(result)

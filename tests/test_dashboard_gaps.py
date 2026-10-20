@@ -66,11 +66,13 @@ def test_total_amount_falls_back_to_index_turnover(monkeypatch):
     """上游 total_amount 为 None 时用指数成交额兜底（首页成交额不再恒为 --）。"""
     class _MD:
         def index_quotes(self, codes):
-            assert set(codes) == {"sh000001", "sz399001"}
+            assert set(codes) == {"sh000001", "sz399106"}
             return [{"turnover": 3.9e11}, {"turnover": 4.37e11}]
 
+    # 2026-10-20: 兜底链改为 TQ 优先 → 先把 TQ 打桩成不可用, 专测腾讯这一层
+    monkeypatch.setattr(md, "_tq_index_amount", lambda: (None, "tdx_tq_error"))
     monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
-    md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+    md._AMOUNT_CACHE.clear(); md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
     assert md._total_amount_from_indices() == 8270.0
 
 
@@ -79,6 +81,8 @@ def test_total_amount_none_when_source_incomplete(monkeypatch):
         def index_quotes(self, codes):
             return [{"turnover": 3.9e11}]
 
+    # 2026-10-20: 兜底链改为 TQ 优先 → 先把 TQ 打桩成不可用, 专测腾讯这一层
+    monkeypatch.setattr(md, "_tq_index_amount", lambda: (None, "tdx_tq_error"))
     monkeypatch.setattr("src.core.marketdata_client.get_market_data", lambda: _MD())
-    md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+    md._AMOUNT_CACHE.clear(); md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
     assert md._total_amount_from_indices() is None
