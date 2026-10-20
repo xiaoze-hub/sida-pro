@@ -1583,11 +1583,20 @@ async def _fetch_kline_pattern_context(symbol: str, market: str) -> str:
         return f"K线形态识别失败: {e}"
 
 
-async def _fetch_auction_context(scene: str, limit: int = 10) -> str:
-    """集合竞价数据(auction_collector: 悟道优先, 腾讯批量降级, 30s 缓存)。"""
+async def _fetch_auction_context(
+    scene: str, limit: int = 10, symbols: list[str] | None = None,
+    db=None, user=None,
+) -> str:
+    """集合竞价数据(auction_collector: 悟道优先, 腾讯批量降级, 30s 缓存)。
+
+    2026-10-20 修复: `watchlist` 原先被别名成 `strongest`（全市场前 N），于是
+    "查我持仓/自选的竞价"只能得到"不在榜单里" —— 把"没进榜单"误说成"没有竞价数据"。
+    现在 `watchlist` / `symbols` 走逐票快照（每只票一行，取不到就明写取不到）。
+    """
     from src.collectors.auction_collector import (
         fetch_auction_overview,
         fetch_auction_strongest,
+        fetch_auction_symbols,
         fetch_auction_theme,
         fetch_auction_weak_to_strong,
         fetch_auction_risk,
@@ -1595,7 +1604,21 @@ async def _fetch_auction_context(scene: str, limit: int = 10) -> str:
 
     scene = (scene or "overview").strip() or "overview"
     try:
-        if scene in ("strongest", "watchlist"):
+        if scene in ("watchlist", "symbols") or symbols:
+            syms = list(symbols or [])
+            if scene == "watchlist" and not syms and db is not None:
+                from sqlalchemy import or_
+
+                from src.db.models import Stock
+
+                q = db.query(Stock)
+                if getattr(user, "id", None) is not None:
+                    q = q.filter(or_(Stock.user_id == user.id, Stock.user_id.is_(None)))
+                syms = [s.symbol for s in q.order_by(Stock.sort_order.asc()).limit(limit).all()]
+            if not syms:
+                return "没有可查的标的：既没传 symbols，当前账号也没有自选股。"
+            return fetch_auction_symbols(syms, limit=max(limit, 10))
+        if scene == "strongest":
             return fetch_auction_strongest(limit=limit)
         if scene == "theme":
             return fetch_auction_theme(limit=limit)

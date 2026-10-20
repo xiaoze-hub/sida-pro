@@ -561,11 +561,12 @@ async def _tool_get_kline_patterns(db: Session, args: dict, user: User | None = 
         "type": "function",
         "function": {
             "name": "get_auction_data",
-            "description": "获取A股集合竞价数据（9:25后当日竞价已生成）：竞价全景（竞价涨停/跌停/涨停委买额/成交额/昨炸板反馈/昨涨停反馈）、竞价最强个股（按bidStrength/金额/涨幅）、竞价主线题材、弱转强/被核风险。用于回答「集合竞价怎么样」「今天竞价最强是谁」「竞价主线是什么」「竞价有超预期的吗」「昨高标被核了吗」「今天弱转强的是谁」等竞价相关问题。注意：9:25前当日竞价数据未生成，会明确提示。",
+            "description": "获取A股集合竞价数据（9:25后当日竞价已生成）。场景：overview(竞价全景)、strongest(全市场最强个股)、theme(主线题材)、weak_to_strong(弱转强)、risk(被核风险)、watchlist(我的持仓+自选逐票竞价)、symbols(指定代码逐票竞价)。⚠️ 问「我的持仓/自选股竞价怎么样」「600111 竞价如何」这类**指定标的**的问题，必须用 watchlist 或 symbols 场景（逐票给开盘涨幅/竞价成交额/一字买量）；不要用 strongest 再下「不在榜单所以没强度」的结论——不在榜单≠没有竞价数据。9:25 前当日竞价数据未生成，会明确提示。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "scene": {"type": "string", "description": "竞价场景：overview(竞价全景，默认)/strongest(最强个股)/theme(主线题材)/weak_to_strong(弱转强)/risk(被核风险)/watchlist(盯盘名单)"},
+                    "scene": {"type": "string", "description": "overview(默认)/strongest/theme/weak_to_strong/risk/watchlist(我的自选逐票)/symbols(指定代码逐票)"},
+                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "逐票查询的股票代码，如 [\"600111\",\"002361\"]；与 scene=symbols 配合"},
                     "limit": {"type": "integer", "description": "返回条数，默认 10", "default": 10},
                 },
                 "required": [],
@@ -585,7 +586,8 @@ async def _tool_get_auction_data(db: Session, args: dict, user: User | None = No
 
     scene = args.get("scene", "overview")
     limit = int(args.get("limit", 10) or 10)
-    return await _fetch_auction_context(scene, limit)
+    symbols = [str(x).strip() for x in (args.get("symbols") or []) if str(x).strip()]
+    return await _fetch_auction_context(scene, limit, symbols=symbols, db=db, user=user)
 
 
 @register_chat_tool(
