@@ -62,13 +62,16 @@ def _c05_total_amount_index_fallback():
     import src.core.marketdata_client as mdc
 
     old = mdc.get_market_data
+    old_tq = md._tq_index_amount
     mdc.get_market_data = lambda: _MD()
-    md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+    md._tq_index_amount = lambda: (None, "tdx_tq_error")   # 专测腾讯兜底层
+    md._AMOUNT_CACHE.clear(); md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
     try:
         assert md._total_amount_from_indices() == pytest.approx(8270.0)
     finally:
         mdc.get_market_data = old
-        md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
+        md._tq_index_amount = old_tq
+        md._AMOUNT_CACHE.clear(); md._AMOUNT_CACHE.update({"ts": 0.0, "val": None})
 
 
 def _c06_trace_digest_truncated():
