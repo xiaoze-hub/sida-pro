@@ -261,10 +261,10 @@ def _try_write_snapshot_async(payload: dict) -> None:
                         """
                         INSERT INTO market_flow_snapshots
                             (total_main_flow, up_count, down_count, flat_count,
-                             sh_flow, sz_flow)
+                             sh_flow, sz_flow, total_amount)
                         VALUES
                             (:total_main_flow, :up_count, :down_count, :flat_count,
-                             :sh_flow, :sz_flow)
+                             :sh_flow, :sz_flow, :total_amount)
                         """
                     ),
                     {
@@ -272,6 +272,7 @@ def _try_write_snapshot_async(payload: dict) -> None:
                         "up_count": payload.get("up_count"),
                         "down_count": payload.get("down_count"),
                         "flat_count": payload.get("flat_count"),
+                        "total_amount": payload.get("total_amount"),
                         "sh_flow": payload.get("sh_flow"),
                         "sz_flow": payload.get("sz_flow"),
                     },
@@ -355,7 +356,7 @@ def _read_fresh_db_snapshot() -> dict | None:
             row = conn.execute(
                 text(
                     "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
-                    "sh_flow, sz_flow, " + _snapshot_age_sql() + " AS age_sec "
+                    "sh_flow, sz_flow, total_amount, " + _snapshot_age_sql() + " AS age_sec "
                     "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
                 )
             ).fetchone()
@@ -365,7 +366,7 @@ def _read_fresh_db_snapshot() -> dict | None:
     if row is None:
         return None
     try:
-        age = float(row[7]) if row[7] is not None else None
+        age = float(row[8]) if row[8] is not None else None   # age_sec 位于 total_amount 之后
     except (TypeError, ValueError):
         age = None
     # 行龄算不出, 或过旧(留 5s 容差应对时钟微偏) → 不猜, 回退实时链路
@@ -382,6 +383,7 @@ def _read_fresh_db_snapshot() -> dict | None:
         "up_count": int(row[2]) if row[2] is not None else None,
         "down_count": int(row[3]) if row[3] is not None else None,
         "flat_count": int(row[4]) if row[4] is not None else None,
+        "total_amount": float(row[7]) if row[7] is not None else None,
     }
 
 
@@ -440,7 +442,7 @@ def _snapshot_to_response(snap: dict) -> dict:
         "sz_flow": snap.get("sz_flow"),
         # 快照表未存的字段: 显式置空(缺失标注, 不编造)
         "cyb_flow": None,
-        "total_amount": None,
+        "total_amount": snap.get("total_amount"),
         "sh": None,
         "sz": None,
         "cyb": None,

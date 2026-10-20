@@ -5674,6 +5674,20 @@ def _m206_breadth_snapshot(conn: Connection) -> None:
     BreadthDistributionSnapshot.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m207_flow_snapshot_total_amount(conn: Connection) -> None:
+    """大盘资金快照补 total_amount(2026-10-20)。
+
+    首页「两市成交额」长期显示 `--`：实时分支有值，但走库快照分支时 `_snapshot_to_response`
+    显式置空（表里没这列）。补列后快照分支也能给出成交额，不再因为"读库"丢字段。
+    """
+    if not _has_table(conn, "market_flow_snapshots"):
+        return
+    if _has_column(conn, "market_flow_snapshots", "total_amount"):
+        return
+    ddl = "DOUBLE PRECISION" if _dialect_is_pg(conn) else "REAL"
+    conn.execute(text(f"ALTER TABLE market_flow_snapshots ADD COLUMN total_amount {ddl}"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5873,6 +5887,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(204, "more_info_daily", _m204_more_info_daily),
     Migration(205, "index_daily", _m205_index_daily),
     Migration(206, "breadth_distribution_snapshot", _m206_breadth_snapshot),
+    Migration(207, "flow_snapshot_total_amount", _m207_flow_snapshot_total_amount),
 )
 
 
