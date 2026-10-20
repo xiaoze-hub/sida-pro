@@ -2177,3 +2177,25 @@ class IndexDaily(Base):
     amount = Column(Float, nullable=True)
     source = Column(String(24), nullable=False, default="marketdata")
     captured_at = Column(Float, nullable=False)
+
+
+class BreadthDistributionSnapshot(Base):
+    """全市场涨跌幅 9 档分布快照(2026-10-20)。
+
+    现状: 首页「涨跌分布」只靠 biz_cache(300s), TTL 过期/容器重启/Redis 抖动都要重拉
+    新浪 79 页(约 32s), 期间用户只能看到「后台计算中」。落表后冷启动直接读库,
+    并把盘中每 15 分钟的快照沉淀成可回看的历史序列(情绪扩散过程)。
+    """
+
+    __tablename__ = "breadth_distribution_snapshot"
+    __table_args__ = (
+        Index("ix_breadth_snapshot_day", "trade_date", "captured_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(10), nullable=False)      # YYYY-MM-DD (CST)
+    captured_at = Column(DateTime, nullable=False)       # 采集时刻(naive UTC, 与全库一致)
+    total = Column(Integer, nullable=False, default=0)   # 拉到的样本数
+    valid = Column(Integer, nullable=False, default=0)   # 有效涨跌幅样本
+    items = Column(Text, nullable=False, default="[]")   # [{"bucket","count"}...] JSON
+    source = Column(String(24), nullable=False, default="sina")

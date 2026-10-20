@@ -127,6 +127,106 @@ def _bg_start(key: str, fn: Callable[[], dict], *, result_key: str = "",
     return True
 
 
+
+def _breadth_with_age(payload: dict) -> dict:
+    """给响应补 age_s / stale（aged 数据必须显式标注，不许冒充新鲜）。"""
+    captured = payload.get("captured_at") or ""
+    age = None
+    if captured:
+        try:
+            from datetime import datetime as _dt
+
+            age = int((_dt.now() - _dt.fromisoformat(captured)).total_seconds())
+        except Exception:
+            age = None
+    out = dict(payload)
+    out["age_s"] = age
+    out["stale"] = bool(age is not None and age > 900)
+    return out
+
+
+def _breadth_from_db(max_age_s: int = 1800) -> dict | None:
+    """读最近一条快照。冷启动/重启后首页仍能秒出图（原先只能等 32s 重算）。"""
+    try:
+        from src.db.session import SessionLocal
+        from src.db.models import BreadthDistributionSnapshot
+
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(BreadthDistributionSnapshot)
+                .order_by(BreadthDistributionSnapshot.captured_at.desc())
+                .first()
+            )
+            if row is None:
+                return None
+            captured = row.captured_at
+            age = None
+            if captured is not None:
+                from datetime import datetime as _dt
+
+                if getattr(captured, "tzinfo", None) is not None:
+                    captured = captured.replace(tzinfo=None)
+                age = int((_dt.now() - captured).total_seconds())
+                if age > max_age_s:
+                    return None
+            return {
+                "count": row.valid,
+                "total": row.total,
+                "items": json.loads(row.items or "[]"),
+                "note": "",
+                "pending": False,
+                "captured_at": captured.isoformat(timespec="seconds") if captured else "",
+                "source": row.source or "db",
+            }
+        finally:
+            db.close()
+    except Exception as e:  # 读库失败不应阻断现算路径
+        logger.warning("breadth 读库失败: %s", e)
+        return None
+
+
+def _breadth_save(payload: dict) -> None:
+    """把算好的分布落库（同一 trade_date 每 15 分钟最多一条，避免撑爆表）。"""
+    try:
+        from datetime import datetime as _dt
+
+        from src.db.models import BreadthDistributionSnapshot
+        from src.db.session import SessionLocal
+
+        if payload.get("pending") or not payload.get("count"):
+            return
+        db = SessionLocal()
+        try:
+            last = (
+                db.query(BreadthDistributionSnapshot)
+                .order_by(BreadthDistributionSnapshot.captured_at.desc())
+                .first()
+            )
+            now = _dt.now()
+            if last is not None and last.captured_at is not None:
+                prev = last.captured_at
+                if getattr(prev, "tzinfo", None) is not None:
+                    prev = prev.replace(tzinfo=None)
+                if (now - prev).total_seconds() < 900:
+                    return
+            db.add(
+                BreadthDistributionSnapshot(
+                    trade_date=now.strftime("%Y-%m-%d"),
+                    captured_at=now,
+                    total=int(payload.get("total") or 0),
+                    valid=int(payload.get("count") or 0),
+                    items=json.dumps(payload.get("items") or [], ensure_ascii=False),
+                    source=str(payload.get("source") or "sina"),
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("breadth 落库失败(忽略): %s", e)
+
+
 def _empty_breadth() -> dict:
     return {
         "count": 0,
@@ -1815,17 +1915,30 @@ async def breadth_distribution(
             valid += 1
             buckets[label] = buckets.get(label, 0) + 1
         items = [{"bucket": b[2], "count": buckets.get(b[2], 0)} for b in _BUCKET_BOUNDS]
-        return {
+        payload = {
             "count": valid,
             "total": len(pcts),
             "items": items,
             "note": "" if valid else "数据源返回为空(可能非交易日)",
             "pending": False,
+            "captured_at": datetime.now().isoformat(timespec="seconds"),
+            "source": "sina",
         }
+        _breadth_save(payload)
+        return payload
 
     cached = biz_cache.get_json(_BREADTH_CACHE_KEY)
     if cached is not None:
-        return cached
+        return _breadth_with_age(cached)
+
+    # 2026-10-20: 缓存未命中先读库（冷启动/重启秒出），再考虑后台重算。
+    from_db = _breadth_from_db()
+    if from_db is not None:
+        try:
+            biz_cache.set_json(_BREADTH_CACHE_KEY, from_db, ttl=60)   # 短暂回填，避免连打库
+        except Exception:
+            pass
+        return _breadth_with_age(from_db)
 
     job_key = "breadth:distribution"
     _bg_start(
