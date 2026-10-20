@@ -404,8 +404,16 @@ class TqQuoteVendor(QuoteVendor):
     name = "tq"
     supports_markets = {"CN"}
 
+    # 批量上限（2026-10-20）：TQ 是**逐票**RPC 且每票要再打一次 `get_more_info`
+    # （拿 PE/量比/换手），单票约 0.13~0.4s。39 只的列表页会跑成 5~17s，比腾讯批量(0.3s)慢一个量级。
+    # ⇒ 超过这个数量**主动让位**给批量源（返回空 → 引擎自动落到腾讯），
+    #    单票/小列表（详情页、K线页、5 只以内的对照）仍走 TQ 拿全字段。
+    MAX_SYMBOLS_FOR_TQ = 5
+
     def fetch(self, symbols: list[Symbol], config: dict) -> list[Quote]:
         out: list[Quote] = []
+        if len(symbols) > self.MAX_SYMBOLS_FOR_TQ:
+            return out
         for sym in symbols:
             tqc = to_tq_code(sym)
             if not tqc:
