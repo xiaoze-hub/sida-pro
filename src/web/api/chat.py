@@ -17,6 +17,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
+from src.harness.runtime import AgentRuntime
+from src.harness.trace import finish_copilot_run, start_copilot_run
 from src.config import Settings
 from src.core.ai_client import AIClient, LLMDegradedError
 from src.web.api.auth import get_current_user, get_user_or_service
@@ -1088,9 +1090,18 @@ async def _build_ai_messages(
 
 
 
-async def _run_tool_loop(
+async def _tool_executor(name: str, args: dict, *, db: Session, user: User | None = None) -> str:
+    """运行时与 `_execute_tool` 之间的适配器。
+
+    `_execute_tool(db, name, args, user=...)` 的首参是 db, 而 `AgentRuntime.call`
+    的统一签名是 (name, args, **kwargs); 这层适配让两边都不用改形状。
+    """
+    return await _execute_tool(db, name, args, user=user)
+
+async def _run_tool_loop_inner(
     ai_client: AIClient, messages_for_ai: list[dict], db: Session,
     user: User | None = None, *, stream: bool = False,
+    runtime: AgentRuntime | None = None,
 ):
     """带 tool use 的多轮对话(异步生成器, 流式/非流式统一, W3.3 合并)。
 
@@ -1163,7 +1174,12 @@ async def _run_tool_loop(
                 tool_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
                 logger.info(f"Tool call: {tc.function.name}({tool_args})")
                 yield "stage", _TOOL_STAGE_LABELS.get(tc.function.name, f"正在调用 {tc.function.name}...")
-                result = await _execute_tool(db, tc.function.name, tool_args, user=user)
+                if runtime is not None:
+                    result = await runtime.call(
+                        tc.function.name, tool_args, _tool_executor, db=db, user=user,
+                    )
+                else:
+                    result = await _execute_tool(db, tc.function.name, tool_args, user=user)
                 messages_for_ai.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -1180,6 +1196,39 @@ async def _run_tool_loop(
             yield "done", f"抱歉，AI 服务暂时不可用：{e}"
         else:
             yield "text", f"抱歉，AI 服务暂时不可用：{e}"
+
+
+
+async def _run_tool_loop(
+    ai_client: AIClient, messages_for_ai: list[dict], db: Session,
+    user: User | None = None, *, stream: bool = False,
+    conversation_id: int | None = None, recipe: str | None = None,
+    question: str | None = None,
+):
+    """参谋一轮问答的外壳(Agent 内核 P0, 2026-10-20)。
+
+    只做三件事: 开一条轨迹 → 交给 `_run_tool_loop_inner` → 无论正常结束、
+    超轮次还是抛异常都收尾。轨迹是旁路, `start_copilot_run` 失败会返回 None,
+    此时行为与拆分前完全一致。
+    """
+    trace = start_copilot_run(
+        conversation_id=conversation_id,
+        user_id=getattr(user, "id", None),
+        recipe=recipe,
+        question=question,
+    )
+    runtime = AgentRuntime(trace=trace)
+    status, error = "ok", None
+    try:
+        async for kind, payload in _run_tool_loop_inner(
+            ai_client, messages_for_ai, db, user, stream=stream, runtime=runtime,
+        ):
+            yield kind, payload
+    except Exception as exc:  # noqa: BLE001 - 记录后原样抛出, 不改既有降级语义
+        status, error = "error", f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        finish_copilot_run(trace, status=status, error=error)
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -1993,7 +2042,10 @@ async def send_message(
         ai_response = ""
         _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
         try:
-            async for _kind, payload in _run_tool_loop(ai_client, messages_for_ai, db, user=user):
+            async for _kind, payload in _run_tool_loop(
+                ai_client, messages_for_ai, db, user=user,
+                conversation_id=conv.id, question=body.content,
+            ):
                 if _kind == "text":
                     ai_response = payload
         finally:
@@ -2103,7 +2155,8 @@ async def send_message_stream(
             _toks = _enter_request_ctx(db, conv, body, messages_for_ai)
             try:
                 async for kind, payload in _run_tool_loop(
-                    ai_client, messages_for_ai, db, user=user, stream=True
+                    ai_client, messages_for_ai, db, user=user, stream=True,
+                    conversation_id=conv.id, question=body.content,
                 ):
                     if await request.is_disconnected():
                         logger.info("客户端断开, 中止 LLM 工具循环(停止计费)")

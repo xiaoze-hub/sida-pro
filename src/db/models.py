@@ -13,6 +13,8 @@ from sqlalchemy import (
     Index,
     text,
 )
+from datetime import datetime
+
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -2199,3 +2201,71 @@ class BreadthDistributionSnapshot(Base):
     valid = Column(Integer, nullable=False, default=0)   # 有效涨跌幅样本
     items = Column(Text, nullable=False, default="[]")   # [{"bucket","count"}...] JSON
     source = Column(String(24), nullable=False, default="sina")
+
+
+
+
+class CopilotRun(Base):
+    """一次数智参谋问答的骨架(2026-10-20, Agent 内核 P0)。
+
+    与 `agent_runs` 分工不同: 那张表记的是**后台定时 Agent** 的执行(agent_name/
+    trigger_source/notify_*), 这张表记的是**用户对话**的运行时轨迹。没有它, 用户问
+    「为什么这么说」无法回放, 线上事故(如竞价被别名成 strongest)只能靠日志猜。
+    """
+
+    __tablename__ = "copilot_runs"
+    __table_args__ = (
+        Index("ix_copilot_runs_conv", "conversation_id", "created_at"),
+        Index("ix_copilot_runs_user", "user_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, unique=True)   # uuid4
+    conversation_id = Column(Integer, nullable=True)
+    user_id = Column(Integer, nullable=True)
+    recipe = Column(String(48), nullable=True)                 # 配方 id(内置 6 个)
+    question = Column(Text, nullable=True)                     # 用户本轮问题(截断 500)
+    status = Column(String(16), nullable=False, default="running")  # running/ok/error
+    error = Column(Text, nullable=True)
+    tool_calls = Column(Integer, nullable=False, default=0)
+    elapsed_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class CopilotStep(Base):
+    """参谋单步工具调用(2026-10-20)。
+
+    result_digest 只存摘要(前 500 字), 不存全文: 一是体积, 二是工具返回里可能带
+    用户私有持仓/自选, 全量落库等于二次留存。
+    """
+
+    __tablename__ = "copilot_steps"
+    __table_args__ = (Index("ix_copilot_steps_run", "run_id", "seq"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)
+    seq = Column(Integer, nullable=False)                      # 本轮内序号, 从 1 开始
+    tool = Column(String(64), nullable=False)
+    args = Column(Text, nullable=True)                         # JSON, 截断 2KB
+    ok = Column(Boolean, nullable=False, default=True)
+    error = Column(Text, nullable=True)
+    result_digest = Column(Text, nullable=True)                # 前 500 字
+    elapsed_ms = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CopilotFeedback(Base):
+    """用户对某次回答的反馈(2026-10-20), 最便宜的评测样本来源。
+
+    没有它时配方/提示词好坏只能靠人工 D3 抽检(6 智能体 × 3 问), 样本量和覆盖面都不够。
+    """
+
+    __tablename__ = "copilot_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(Integer, nullable=True)
+    useful = Column(Boolean, nullable=False, default=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

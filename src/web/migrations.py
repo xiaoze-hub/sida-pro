@@ -5688,6 +5688,20 @@ def _m207_flow_snapshot_total_amount(conn: Connection) -> None:
     conn.execute(text(f"ALTER TABLE market_flow_snapshots ADD COLUMN total_amount {ddl}"))
 
 
+def _m208_copilot_trace_tables(conn: Connection) -> None:
+    """数智参谋运行时轨迹表(2026-10-20, Agent 内核 P0)。
+
+    三张表: copilot_runs(一次问答) / copilot_steps(每步工具调用) /
+    copilot_feedback(用户反馈=评测样本)。与既有 agent_runs 分开: 那张表记后台定时
+    Agent 的执行与推送, 这张表记用户对话的运行时轨迹。
+    """
+    from src.db.models import CopilotFeedback, CopilotRun, CopilotStep
+
+    CopilotRun.__table__.create(bind=conn, checkfirst=True)
+    CopilotStep.__table__.create(bind=conn, checkfirst=True)
+    CopilotFeedback.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5888,6 +5902,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(205, "index_daily", _m205_index_daily),
     Migration(206, "breadth_distribution_snapshot", _m206_breadth_snapshot),
     Migration(207, "flow_snapshot_total_amount", _m207_flow_snapshot_total_amount),
+    Migration(208, "copilot_trace_tables", _m208_copilot_trace_tables),
 )
 
 
