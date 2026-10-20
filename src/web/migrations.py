@@ -5702,6 +5702,26 @@ def _m208_copilot_trace_tables(conn: Connection) -> None:
     CopilotFeedback.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m209_copilot_user_id_text(conn: Connection) -> None:
+    """把 copilot_runs/copilot_feedback 的 user_id 从 integer 改成 varchar(36)(2026-10-20)。
+
+    缘由: users.id 是 UUID 字符串(见 agent_runs.user_id 的既有约定)。_m208 误写成
+    Integer, 于是每次写轨迹都 DataError: invalid input syntax for type integer。
+    表此时必为空(读写都在同一版本), 直接 ALTER 类型即可。
+    """
+    for table in ("copilot_runs", "copilot_feedback"):
+        if not _has_table(conn, table):
+            continue
+        if not _has_column(conn, table, "user_id"):
+            continue
+        if _dialect_is_pg(conn):
+            conn.execute(text(
+                f"ALTER TABLE {table} ALTER COLUMN user_id TYPE VARCHAR(36) "
+                "USING user_id::varchar"
+            ))
+        # SQLite 是动态类型, 无需变更
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5903,6 +5923,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(206, "breadth_distribution_snapshot", _m206_breadth_snapshot),
     Migration(207, "flow_snapshot_total_amount", _m207_flow_snapshot_total_amount),
     Migration(208, "copilot_trace_tables", _m208_copilot_trace_tables),
+    Migration(209, "copilot_user_id_text", _m209_copilot_user_id_text),
 )
 
 
