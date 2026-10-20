@@ -353,20 +353,34 @@ def _read_fresh_db_snapshot() -> dict | None:
         from src.web.database import engine
 
         with engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
-                    "sh_flow, sz_flow, total_amount, " + _snapshot_age_sql() + " AS age_sec "
-                    "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
-                )
-            ).fetchone()
+            # 2026-10-20: total_amount 列由 _m207 引入。老库/迁移未落时**不能整条读失败**
+            # （那会让首页静默回退实时外呼），退化为不带该列的查询，成交额显式 None。
+            try:
+                row = conn.execute(
+                    text(
+                        "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
+                        "sh_flow, sz_flow, total_amount, " + _snapshot_age_sql() + " AS age_sec "
+                        "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
+                    )
+                ).fetchone()
+                has_amount = True
+            except Exception as col_err:  # noqa: BLE001 - 缺列/老 schema
+                logger.debug("快照表缺 total_amount 列, 退化为无成交额查询: %s", col_err)
+                row = conn.execute(
+                    text(
+                        "SELECT ts, total_main_flow, up_count, down_count, flat_count, "
+                        "sh_flow, sz_flow, " + _snapshot_age_sql() + " AS age_sec "
+                        "FROM market_flow_snapshots ORDER BY ts DESC LIMIT 1"
+                    )
+                ).fetchone()
+                has_amount = False
     except Exception as e:  # noqa: BLE001
         logger.debug("大盘资金快照读库失败(回退实时链路): %s", e)
         return None
     if row is None:
         return None
     try:
-        age = float(row[8]) if row[8] is not None else None   # age_sec 位于 total_amount 之后
+        age = float(row[8] if has_amount else row[7]) if (row[8] if has_amount else row[7]) is not None else None
     except (TypeError, ValueError):
         age = None
     # 行龄算不出, 或过旧(留 5s 容差应对时钟微偏) → 不猜, 回退实时链路
@@ -383,7 +397,7 @@ def _read_fresh_db_snapshot() -> dict | None:
         "up_count": int(row[2]) if row[2] is not None else None,
         "down_count": int(row[3]) if row[3] is not None else None,
         "flat_count": int(row[4]) if row[4] is not None else None,
-        "total_amount": float(row[7]) if row[7] is not None else None,
+        "total_amount": (float(row[7]) if row[7] is not None else None) if has_amount else None,
     }
 
 
