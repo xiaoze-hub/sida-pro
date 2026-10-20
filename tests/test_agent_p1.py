@@ -193,3 +193,26 @@ def test_recipes_declare_skills():
     assert get_recipe("auction_hunter").skills == ("auction",)
     assert get_recipe("chip_analyst").skills == ("chip",)
     assert get_recipe("premarket_strategist").skills == ("premarket",)
+
+
+def test_annotation_market_codes_are_interchangeable():
+    """线上实测：AI 写 market=CN，K线页用 SH 查 → 标注「确认成功但图上没有」。"""
+    from src.db.models import KlineAnnotation
+
+    db = SessionLocal()
+    try:
+        _cleanup()
+        db.add(KlineAnnotation(user_id=UID, symbol="600111", market="CN", period="1d",
+                               price=35.2, label="缩量假阳", source="ai"))
+        db.commit()
+        # 读路径按 A 股一组匹配（CN/SH/SZ/BJ 等价）
+        from src.web.api.copilot import get_copilot_annotations
+
+        class _U:
+            id = UID
+
+        rows = get_copilot_annotations(symbol="600111", market="SH", period="1d", db=db, user=_U())
+        assert [r["label"] for r in rows] == ["缩量假阳"]
+    finally:
+        _cleanup()
+        db.close()
