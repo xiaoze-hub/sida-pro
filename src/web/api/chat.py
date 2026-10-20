@@ -524,6 +524,10 @@ def _format_fundamentals_text(symbol: str, market: str, data: dict) -> str:
         src = r.get("source") or ""
         lines.append(f"- [{ts}] {r.get('title') or '—'} ({src})")
 
+    # 6) TQ 异动资金档案(大宗/增减持/北向/质押/财务)；渲染逻辑在 src/core/tdx_corporate.py
+    from src.core.tdx_corporate import render_lines as _corp_lines
+    lines.extend(_corp_lines(data.get("corporate") or {}, _fmt_num, _fmt_yi))
+
     return "\n".join(lines)
 
 
