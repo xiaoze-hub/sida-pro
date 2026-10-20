@@ -1486,6 +1486,10 @@ export default function KlineChart(props: {
       }
     }
 
+    // 2) 支撑压力位 (L2 买卖点/价位线, showSignal 开关 + priceLinesVisible 过滤)。
+    //    先清掉上一轮的价位线, 再按当前开关重建 — 避免切开关导致虚线累积。
+    for (const line of priceLinesRef.current) series.removePriceLine(line)
+    priceLinesRef.current = []
     // 2.5) AI 标注价位线（虚线 + 标题带 🤖，与人工支撑压力线区分）。
     if (props.layersVisible?.aiNote !== false) {
       for (const n of aiNotes) {
@@ -1503,10 +1507,6 @@ export default function KlineChart(props: {
       }
     }
 
-    // 2) 支撑压力位 (L2 买卖点/价位线, showSignal 开关 + priceLinesVisible 过滤)。
-    //    先清掉上一轮的价位线, 再按当前开关重建 — 避免切开关导致虚线累积。
-    for (const line of priceLinesRef.current) series.removePriceLine(line)
-    priceLinesRef.current = []
     const plv = props.priceLinesVisible || {}
     if (showSignal) {
       for (const line of effPriceLines) {
