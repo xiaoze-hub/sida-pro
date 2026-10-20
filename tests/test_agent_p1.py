@@ -128,7 +128,21 @@ def test_alert_requires_price_and_creates_rule():
         out = A.apply_action(db, user_id=UID, action_id=ok["id"])
         assert out["status"] == "applied" and "盯盘提醒" in out["result"]
         rule = db.query(PriceAlertRule).filter(PriceAlertRule.user_id == UID).one()
-        assert rule.condition_group == {"op": "above", "price": 36.5}
+        assert rule.condition_group == {
+            "op": "and",
+            "items": [{"type": "price", "op": ">=", "value": 36.5}],
+        }
+        # 用引擎自己的解析器验一遍 —— 形状不对会返回 empty_items，规则永远不触发
+        import asyncio as _aio
+
+        from src.core.price_alert_engine import PriceAlertEngine
+        from src.models.market import MarketCode
+
+        eng = object.__new__(PriceAlertEngine)
+        ok, _detail = _aio.run(eng._eval_condition(
+            rule.condition_group["items"][0], {"current_price": 37.0}, MarketCode.CN, "600111",
+        ))
+        assert ok is True
         assert rule.enabled is True
     finally:
         db.query(PriceAlertRule).filter(PriceAlertRule.user_id == UID).delete()
