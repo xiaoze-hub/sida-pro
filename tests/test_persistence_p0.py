@@ -94,7 +94,7 @@ def test_migrations_201_205_create_tables_and_are_idempotent(tmp_path):
 def test_migrations_registry_tail_is_contiguous():
     versions = [m.version for m in mig.MIGRATIONS]
     assert versions[:1] == [101]
-    assert versions[-5:] == [202, 203, 204, 205, 206]
+    assert versions[-5:] == [203, 204, 205, 206, 207]
     for prev, cur in zip(versions, versions[1:]):
         assert cur == prev + 1, f"版本不连续: {prev} -> {cur}"
 
