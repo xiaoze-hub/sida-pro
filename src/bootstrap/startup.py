@@ -377,6 +377,28 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"妖股因子增量管线注册失败: {e}")
 
+        # 龙虎榜金额「次日 TQ 回填」(2026-10-20 用户要求): 交易日 08:30 回填上一个交易日。
+        # 当日榜单只有东财能枚举, 而 TQ 的 GP02 金额与东财分文不差且晚一天 —— 次日用 TQ 覆写,
+        # 历史数据就不再依赖"东财网关那天有没有挂"。
+        try:
+            from src.collectors.lhb_tq_backfill import run_scheduled as _lhb_backfill_job
+
+            rt.scheduler.scheduler.add_job(
+                _lhb_backfill_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=8,
+                minute=30,
+                id="lhb-tq-backfill",
+                name="龙虎榜TQ金额回填",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("龙虎榜 TQ 金额回填任务已注册(交易日 08:30)")
+        except Exception as e:
+            logger.error(f"龙虎榜 TQ 金额回填任务注册失败: {e}")
+
         # 全市场成交额/主力净流入 —— 通达信 TQ 原生公式汇总(2026-10-20 用户铁律:
         # 逆向出的客户端接口一律优先)。5576 只批量约 37s ⇒ 绝不进请求路径,
         # 5 分钟一次落 market_flow_snapshots, 接口读库。
