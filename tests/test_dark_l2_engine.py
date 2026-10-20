@@ -27,9 +27,9 @@ except ImportError as e:  # 无 thsdk 环境下跳过(CI 等)
     pytest.skip(f"thsdk 未安装: {e}", allow_module_level=True)
 
 
-pytestmark = pytest.mark.skipif(
-    not THSDK_AVAILABLE, reason="thsdk 环境不可用"
-)
+# ⚠️ 不能用裸赋值: 文件末尾还有一处 pytestmark = network, 后赋值会**覆盖**前一个。
+# 两个标记必须合成列表, 否则 skipif 被静默丢掉(本地无 thsdk 时 6 个用例直接 RuntimeError)。
+pytestmark = [pytest.mark.network]
 
 
 class TestDarkL2:
@@ -97,4 +97,6 @@ class TestThsdkAlert:
 # W2.3/E2 (2026-09-09): 本文件测试需要真实外部接口(国内行情源/thsdk),
 # CI 主门禁以 -m "not network" 跳过, 由 nightly 网络工作流单独跑(-m network)。
 # 置于文件末尾: pytestmark 模块级任意位置生效, 避开 docstring/__future__/import 顺序。
-pytestmark = pytest.mark.network
+# 注意: 前面已有 pytestmark 赋值, 这里用 += 叠加而不是覆盖。
+pytestmark = [pytest.mark.skipif(not THSDK_AVAILABLE, reason="thsdk 环境不可用"),
+              pytest.mark.network]
