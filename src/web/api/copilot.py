@@ -371,3 +371,39 @@ def get_copilot_metrics(
         "p95_elapsed_ms": p95,
         "by_recipe": [{"recipe": k, "runs": v} for k, v in sorted(by_recipe.items(), key=lambda x: -x[1])],
     }
+
+
+@router.get("/annotations")
+def get_copilot_annotations(
+    symbol: str = Query(...),
+    market: str = Query(default="CN"),
+    period: str = Query(default="1d"),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """K 线图层标注（P1 收尾，2026-10-20）。
+
+    只返回本人 + 全局(user_id IS NULL)的标注；AI 与用户画的都在这张表里，
+    用 `source` 区分。前端按 symbol/period 取，直接画到图上。
+    """
+    from sqlalchemy import or_
+
+    from src.db.models import KlineAnnotation
+
+    rows = (
+        db.query(KlineAnnotation)
+        .filter(
+            KlineAnnotation.symbol == symbol,
+            KlineAnnotation.market == market,
+            KlineAnnotation.period == period,
+            or_(KlineAnnotation.user_id == str(user.id), KlineAnnotation.user_id.is_(None)),
+        )
+        .order_by(KlineAnnotation.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    return [{
+        "id": r.id, "price": r.price, "ts": r.ts, "label": r.label,
+        "note": r.note, "color": r.color, "source": r.source,
+        "created_at": str(r.created_at or ""),
+    } for r in rows]

@@ -98,3 +98,16 @@ export interface CopilotRunRow {
 
 export const getCopilotRuns = (limit = 20, signal?: AbortSignal) =>
   fetchAPI<CopilotRunRow[]>(`/copilot/runs?limit=${limit}`, { signal })
+
+
+export interface CopilotMetrics {
+  days: number
+  runs: number
+  ok_rate: number | null
+  avg_tools: number | null
+  p95_elapsed_ms: number | null
+  by_recipe: { recipe: string; runs: number }[]
+}
+
+export const getCopilotMetrics = (days = 7, signal?: AbortSignal) =>
+  fetchAPI<CopilotMetrics>(`/copilot/metrics?days=${days}`, { signal })

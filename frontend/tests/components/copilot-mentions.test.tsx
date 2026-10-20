@@ -15,6 +15,7 @@ const apiMock = vi.hoisted(() => ({
 }))
 
 const copilotMock = vi.hoisted(() => ({
+  getCopilotMetrics: vi.fn(async () => ({ days: 7, runs: 0, ok_rate: null, avg_tools: null, p95_elapsed_ms: null, by_recipe: [] })),
   getPendingActions: vi.fn(async () => []),
   applyPendingAction: vi.fn(async () => ({})),
   rejectPendingAction: vi.fn(async () => ({})),

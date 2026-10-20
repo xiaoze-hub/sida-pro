@@ -70,9 +70,13 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         raise ActionError(f"该动作已是 {row.status} 状态")
 
     payload = json.loads(row.payload or "{}")
-    handler = {"watchlist": _apply_watchlist, "annotation": _apply_annotation}.get(row.kind)
+    handler = {
+        "watchlist": _apply_watchlist,
+        "annotation": _apply_annotation,
+        "alert": _apply_alert,
+    }.get(row.kind)
     if handler is None:
-        raise ActionError(f"{row.kind} 动作暂未开放执行（P2 接入盯盘任务）")
+        raise ActionError(f"{row.kind} 动作暂未开放执行")
 
     result = handler(db, user_id=user_id, payload=payload)
     row.status = "applied"
@@ -148,6 +152,51 @@ def _apply_annotation(db: Session, *, user_id: Any, payload: dict) -> str:
     db.add(row)
     db.commit()
     return f"已标注 {symbol} @ {price if price is not None else payload.get('ts')}：{label}"
+
+
+def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
+    """建一条价格提醒规则（2026-10-20, P2）。
+
+    规则必须挂在一只**自选**上（表结构是 stock_id 外键），所以先确保自选里有这只票，
+    没有就顺带加进去 —— 用户点「盯一下」时不会想要"先去自选添加再来一次"。
+    """
+    from src.db.models import PriceAlertRule, Stock
+
+    symbol = str(payload.get("symbol") or "").strip()
+    if not symbol:
+        raise ActionError("盯盘提醒需要 symbol")
+    price = payload.get("price")
+    if price is None:
+        raise ActionError("盯盘提醒需要 price（触发价）")
+    direction = str(payload.get("direction") or "above")
+    if direction not in ("above", "below"):
+        raise ActionError("direction 只能是 above / below")
+
+    stock = (
+        db.query(Stock)
+        .filter(Stock.user_id == str(user_id), Stock.symbol == symbol)
+        .first()
+    )
+    if stock is None:
+        stock = Stock(
+            user_id=str(user_id), symbol=symbol,
+            name=str(payload.get("name") or symbol), market=str(payload.get("market") or "CN"),
+        )
+        db.add(stock)
+        db.flush()
+
+    rule = PriceAlertRule(
+        user_id=str(user_id),
+        stock_id=stock.id,
+        name=str(payload.get("label") or f"{symbol} {'上破' if direction == 'above' else '下破'} {price}")[:60],
+        enabled=True,
+        condition_group={"op": direction, "price": float(price)},
+        market_hours_mode="trading_only",
+        repeat_mode="once",
+    )
+    db.add(rule)
+    db.commit()
+    return f"已建盯盘提醒：{symbol} {'上破' if direction == 'above' else '下破'} {price}"
 
 
 def _to_dict(row: Any) -> dict:

@@ -108,15 +108,31 @@ def test_apply_annotation_writes_kline_layer():
         db.close()
 
 
-def test_alert_kind_is_proposable_but_not_executable():
+def test_alert_requires_price_and_creates_rule():
+    """alert 从「仅提议」升级为真可执行：必须带 price，落地为价格提醒规则。"""
+    from src.db.models import PriceAlertRule
+
     db = SessionLocal()
     try:
         _cleanup()
+        _ensure_user(db)
+        # 缺 price → 明确报错，不静默成功
         item = A.propose(db, user_id=UID, kind="alert", payload={"symbol": "600111"})
         with pytest.raises(A.ActionError) as ei:
             A.apply_action(db, user_id=UID, action_id=item["id"])
-        assert "暂未开放执行" in str(ei.value)
+        assert "price" in str(ei.value)
+
+        ok = A.propose(db, user_id=UID, kind="alert", payload={
+            "symbol": "600111", "price": 36.5, "direction": "above", "label": "上破 36.5",
+        })
+        out = A.apply_action(db, user_id=UID, action_id=ok["id"])
+        assert out["status"] == "applied" and "盯盘提醒" in out["result"]
+        rule = db.query(PriceAlertRule).filter(PriceAlertRule.user_id == UID).one()
+        assert rule.condition_group == {"op": "above", "price": 36.5}
+        assert rule.enabled is True
     finally:
+        db.query(PriceAlertRule).filter(PriceAlertRule.user_id == UID).delete()
+        db.commit()
         _cleanup()
         db.close()
 
