@@ -29,7 +29,7 @@ from sqlalchemy.pool import StaticPool
 import src.core.marketdata_client as md_client
 import src.core.quote_snapshots as qs
 import src.web.api.market_data as mdm
-from src.web.migrations import _m138_market_flow_snapshots_table
+from src.web.migrations import _m138_market_flow_snapshots_table, _m207_flow_snapshot_total_amount
 
 
 # ─────────────────────────── 夹具: 双方言兼容的内存库 ───────────────────────────
@@ -40,6 +40,8 @@ def _mk_engine():
     )
     with eng.begin() as conn:
         _m138_market_flow_snapshots_table(conn)
+        # 2026-10-20: 读路径已 SELECT total_amount，夹具必须跟上生产 schema
+        _m207_flow_snapshot_total_amount(conn)
     return eng
 
 
