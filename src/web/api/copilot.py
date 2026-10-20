@@ -390,11 +390,15 @@ def get_copilot_annotations(
 
     from src.db.models import KlineAnnotation
 
+    # 2026-10-20 线上实测: AI 提议里 market 默认写 "CN"，而 K 线页传 "SH"/"SZ"，
+    # 严格等值匹配会导致"标注确认成功但图上查不到"。A 股市场代码统一按一组处理。
+    _A_SHARE = {"CN", "SH", "SZ", "BJ"}
+    markets = sorted(_A_SHARE) if (market or "").upper() in _A_SHARE else [market]
     rows = (
         db.query(KlineAnnotation)
         .filter(
             KlineAnnotation.symbol == symbol,
-            KlineAnnotation.market == market,
+            KlineAnnotation.market.in_(markets),
             KlineAnnotation.period == period,
             or_(KlineAnnotation.user_id == str(user.id), KlineAnnotation.user_id.is_(None)),
         )
