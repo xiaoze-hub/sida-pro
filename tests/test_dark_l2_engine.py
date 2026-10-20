@@ -16,7 +16,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-THSDK_AVAILABLE = True
+# ⚠️ 2026-10-20: 这三个模块 import 本身不依赖 thsdk, 所以"import 成功"不等于"能跑" ——
+# 必须在模块级显式探测 thsdk 包。否则本地无 thsdk 时 6 个用例跑到一半 RuntimeError。
+try:
+    import thsdk  # noqa: F401
+    THSDK_AVAILABLE = True
+except ModuleNotFoundError:
+    THSDK_AVAILABLE = False
+
 try:
     from src.core.dark_l2 import fetch_l2_ticks
     from src.core.delta_engine import compute_delta_series
