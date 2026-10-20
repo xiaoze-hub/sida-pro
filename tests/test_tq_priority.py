@@ -87,3 +87,33 @@ def test_tq_quote_yields_to_batch_source_for_big_lists():
     syms = [Symbol(code=f"60000{i}", market="CN") for i in range(6)]
     assert vendor.fetch(syms, {}) == [], "6 只以上不该再由 TQ 逐票拉"
     assert TqQuoteVendor.MAX_SYMBOLS_FOR_TQ == 5
+
+
+def test_lhb_amounts_from_tq_units_and_source(monkeypatch):
+    """龙虎榜金额：TQ GP02 是**万元**，必须 ×1e4 转元；来源要能标注。"""
+    import marketdata.vendors.tq as tqv
+    from src.web.api import market_data as md
+
+    monkeypatch.setattr(
+        tqv, "lhb_series",
+        lambda code, start_time="", end_time="", **kw: [
+            {"date": "2026-10-20", "buy": 12345.67, "sell": 8000.0},
+            {"date": "2026-10-19", "buy": 1.0, "sell": 1.0},   # 窗口外的行必须被丢掉
+        ],
+        raising=False,
+    )
+    out = md._lhb_amounts_from_tq(["600127"], "20261020")
+    row = out["600127"]
+    assert row["buy_amt"] == pytest.approx(12345.67 * 1e4)
+    assert row["sell_amt"] == pytest.approx(8000.0 * 1e4)
+    assert row["net_buy"] == pytest.approx(4345.67 * 1e4)
+    assert row["source"] == "tdx_tq_gp02"
+
+
+def test_lhb_amounts_from_tq_empty_when_no_row(monkeypatch):
+    """TQ 当日无该股记录 → 空 dict（调用方回落东财金额，绝不补 0）。"""
+    import marketdata.vendors.tq as tqv
+    from src.web.api import market_data as md
+
+    monkeypatch.setattr(tqv, "lhb_series", lambda *a, **k: [], raising=False)
+    assert md._lhb_amounts_from_tq(["600127"], "20261020") == {}

@@ -685,19 +685,43 @@ async def dragon_tiger_proxy(
         except Exception:
             ft_by_sym = {}
 
+        # 2026-10-20 用户铁律「备弱用强」：**枚举靠东财**(TQ 无市场级榜单接口)，
+        # **金额以 TQ 为准**(本地零配额、可与东财对账；东财网关 502 时金额常整块缺失)，
+        # 席位名/上榜原因仍由东财+ftshare 提供。TQ 拿不到的票才用东财金额。
+        tq_amt = {}
+        try:
+            tq_amt = _lhb_amounts_from_tq([getattr(r, "symbol", "") for r in rows], trade_date)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("龙虎榜 TQ 金额补强失败(不改用东财): %s", e)
+
         items = []
         for i in rows:
             ft = ft_by_sym.get(i.symbol)
+            sym = getattr(i, "symbol", "")
+            em_buy = getattr(i, "buy_amt", None)
+            em_sell = getattr(i, "sell_amt", None)
+            em_net = getattr(i, "net_buy", None)
+            tq_row = tq_amt.get(sym)
+            if tq_row and (tq_row.get("buy_amt") is not None or tq_row.get("sell_amt") is not None):
+                buy_amt, sell_amt, net_buy = tq_row["buy_amt"], tq_row["sell_amt"], tq_row["net_buy"]
+                amt_source = "tdx_tq_gp02"
+            else:
+                buy_amt, sell_amt, net_buy = em_buy, em_sell, em_net
+                amt_source = "eastmoney" if em_buy is not None or em_sell is not None else "unavailable"
             items.append(
                 {
                     "trade_date": getattr(i, "trade_date", trade_date),
-                    "symbol": getattr(i, "symbol", ""),
+                    "symbol": sym,
                     "name": getattr(i, "name", ""),
                     "close": getattr(i, "close", None),
                     "change_pct": getattr(i, "change_pct", None),
-                    "net_buy": getattr(i, "net_buy", None),
-                    "buy_amt": getattr(i, "buy_amt", None),
-                    "sell_amt": getattr(i, "sell_amt", None),
+                    "net_buy": net_buy,
+                    "buy_amt": buy_amt,
+                    "sell_amt": sell_amt,
+                    # 对账字段：TQ 生效时保留东财值，两者不一致时一眼可见
+                    "buy_amt_em": em_buy,
+                    "sell_amt_em": em_sell,
+                    "amount_source": amt_source,
                     "reason": getattr(i, "reason", None),
                     "top_buyers": list(getattr(ft, "top_buyers", []) or []) if ft else [],
                     "top_sellers": list(getattr(ft, "top_sellers", []) or []) if ft else [],
@@ -706,7 +730,11 @@ async def dragon_tiger_proxy(
         # 拉到即落(2026-10-14 落库收口): 东财-ftshare 行按 (date, symbol) upsert;
         # 下次同请求直接读库, 历史日不再回源。
         if items:
-            _lhb_upsert_rows(items, market=market, source="em_ftshare")
+            _used_tq = any(it.get("amount_source") == "tdx_tq_gp02" for it in items)
+            _lhb_upsert_rows(
+                items, market=market,
+                source="em_ftshare+tq_amt" if _used_tq else "em_ftshare",
+            )
         return {
             "trade_date": trade_date,
             "market": market,
@@ -714,6 +742,7 @@ async def dragon_tiger_proxy(
             "items": items,
             "pending": False,
             "source": "em_ftshare",
+            "amount_source": "tdx_tq_gp02(缺失逐票回落东财)",
             "data_origin": "realtime",
         }
 
@@ -1407,7 +1436,7 @@ _LHB_DB_COLS = (
 _LHB_READ_SQL = (
     "SELECT trade_date, symbol, name, reason, close, change_pct, net_buy, buy_amt, "
     "sell_amt, turnover_pct, top_buyers, top_sellers, inst_buy_wan, inst_sell_wan, "
-    "yyb_buy_wan, yyb_sell_wan, hsgt_buy_wan, hsgt_sell_wan, suspicious "
+    "yyb_buy_wan, yyb_sell_wan, hsgt_buy_wan, hsgt_sell_wan, suspicious, source "
     "FROM dragon_tiger_daily "
 )
 
@@ -1452,6 +1481,61 @@ def _lhb_row_to_db(r: dict, market: str, source: str) -> dict:
         "suspicious": (None if susp is None else bool(susp)),
         "source": source or None,
     }
+
+
+def _lhb_amounts_from_tq(symbols: list[str], trade_date: str,
+                         *, max_symbols: int = 200, budget_sec: float = 12.0) -> dict[str, dict]:
+    """用 TQ 的 GP 序列**补强**龙虎榜金额（用户铁律：谁强用谁，弱的备用）。
+
+    分工（2026-10-20）：
+    - **枚举**（某日全部上榜股）→ 东财强，TQ 无市场级接口，不碰；
+    - **金额** → TQ 走本地客户端、零配额、与东财互相印证；东财网关 502 时金额常整块缺失。
+      所以：TQ 有值就用 TQ（东财值保留成 `buy_amt_em/sell_amt_em` 对账），TQ 没值才用东财；
+    - **席位名/上榜原因** → TQ 无此语义，仍由东财/ftshare 提供。
+
+    返回 {symbol: {buy_amt, sell_amt, net_buy, source}}（金额单位=元）。失败/超时静默返回已取到的部分。
+    """
+    out: dict[str, dict] = {}
+    if not symbols:
+        return out
+    compact = str(trade_date).replace("-", "")
+    t0 = time.time()
+    try:
+        from marketdata.vendors.tq import lhb_series, to_tq_code
+        from marketdata.symbol import Symbol
+    except Exception as e:  # noqa: BLE001
+        logger.debug("TQ 龙虎榜不可用: %s", e)
+        return out
+    for i, sym in enumerate(symbols[:max_symbols]):
+        if time.time() - t0 > budget_sec:
+            logger.info("TQ 龙虎榜金额补强超预算(已补 %d 只) → 其余沿用东财", len(out))
+            break
+        try:
+            tqc = to_tq_code(Symbol.parse(str(sym), "CN"))
+            if not tqc:
+                continue
+            rows = lhb_series(tqc, start_time=compact, end_time=compact) or []
+        except Exception as e:  # noqa: BLE001
+            logger.debug("TQ 龙虎榜 %s 失败: %s", sym, e)
+            continue
+        for r in rows:
+            if str(r.get("date") or "").replace("-", "") != compact:
+                continue
+            buy_wan, sell_wan = r.get("buy"), r.get("sell")
+            if buy_wan is None and sell_wan is None:
+                continue
+            buy = float(buy_wan) * 1e4 if buy_wan is not None else None   # 万元 → 元
+            sell = float(sell_wan) * 1e4 if sell_wan is not None else None
+            out[str(sym)] = {
+                "buy_amt": buy,
+                "sell_amt": sell,
+                "net_buy": (buy or 0.0) - (sell or 0.0),
+                "source": "tdx_tq_gp02",
+            }
+            break
+        if i % 20 == 19:
+            time.sleep(0.05)   # 单线程 17709：别突发
+    return out
 
 
 def _lhb_upsert_rows(rows: list[dict], market: str = "CN", source: str = "") -> int:
@@ -1519,6 +1603,10 @@ def _lhb_rec_to_row(r, symbol: str) -> dict:
         "hsgt_buy_wan": r[16],
         "hsgt_sell_wan": r[17],
         "suspicious": bool(r[18]) if r[18] is not None else False,
+        # 金额来源（TQ 补强过就标 TQ；老行为东财口径）。source 列见 dragon_tiger_daily。
+        "amount_source": (
+            "tdx_tq_gp02" if "tq_amt" in str(r[19] or "") else "eastmoney"
+        ),
     }
 
 
