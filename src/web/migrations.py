@@ -5662,6 +5662,18 @@ def _m205_index_daily(conn: Connection) -> None:
     IndexDaily.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m206_breadth_snapshot(conn: Connection) -> None:
+    """涨跌分布快照表(2026-10-20): 首页分布从"每次都算"改为"读库 + 增量落库"。
+
+    没有这张表时: biz_cache TTL 300s 一过就重拉新浪 79 页(~32s), 前端只能显示
+    「后台计算中」; 容器/Redis 重启后同样从零开始。落表后冷启动秒出, 并留下
+    盘中情绪扩散的历史序列。
+    """
+    from src.db.models import BreadthDistributionSnapshot
+
+    BreadthDistributionSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5860,6 +5872,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 前者填补「盘后一律回 0」的会话值缺口, 后者让首屏 spark 零跨网。
     Migration(204, "more_info_daily", _m204_more_info_daily),
     Migration(205, "index_daily", _m205_index_daily),
+    Migration(206, "breadth_distribution_snapshot", _m206_breadth_snapshot),
 )
 
 

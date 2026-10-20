@@ -145,3 +145,11 @@ def test_recipe_tags_are_strings_even_when_yaml_coerces():
     assert all(isinstance(w, str) for w in auction.when)
     assert "9:25" in auction.when                      # 保留原样，不是 565
     assert " ".join(auction.when) == " ".join(list(auction.when))
+
+
+def test_recipe_prompt_pins_its_own_sections():
+    """结构漂移（D3 实测盘中用 markdown 编号）靠配方自身把段落名钉死。"""
+    for r in list_recipes():
+        assert "严格使用这些段落名做标题" in r.prompt_fragment, r.id
+        for sec in r.output_sections:
+            assert sec in r.prompt_fragment, f"{r.id} 缺少段落 {sec}"
