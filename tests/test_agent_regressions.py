@@ -327,6 +327,24 @@ def _c31_no_decision_pioneer_in_user_facing_text():
     assert bad == [], f"对外文案出现「决策先锋」: {bad}"
 
 
+
+
+def _c32_auction_gap_is_open_vs_prev_close():
+    """2026-10-20 金健米业事故：THS 异动幅度曾被当成竞价涨幅（低开 -1.75% 显示 +4.87%）。
+
+    口径铁律：gap_pct 只能来自「开盘价 vs 昨收」；异动幅度单独放 anomaly_ratio。
+    """
+    import inspect
+
+    import src.core.auction_pool as ap
+
+    src_text = inspect.getsource(ap)
+    assert "anomaly_ratio" in src_text
+    assert "OpenZAF" in src_text and "LastClose" in src_text
+    # 没有真实涨幅时不得做方向判定
+    assert "❔ 数据不足" in src_text
+
+
 CASES = [
     ("c01_竞价别名", _c01_auction_not_aliased),
     ("c02_竞价缺数措辞", _c02_auction_missing_snapshot_wording),
@@ -359,6 +377,7 @@ CASES = [
     ("c29_迁移连续", _c29_migrations_contiguous),
     ("c30_chat行数护栏", _c30_chat_py_line_guard),
     ("c31_对外文案口径", _c31_no_decision_pioneer_in_user_facing_text),
+    ("c32_竞价涨幅口径", _c32_auction_gap_is_open_vs_prev_close),
 ]
 
 

@@ -160,7 +160,9 @@ def _to_records(df) -> list[dict]:
             "volume_ratio": None,
             # 内部字段(供调试 / 测试断言可见)
             "price_raw": price_raw,
-            "anomaly_type": atype,
+            # 急速上涨/急速下跌 描述的是 9:25 那一瞬的异动, 容易被误读成"高开/低开"
+            "anomaly_type": (atype + "(盘中异动)") if atype in ("急速上涨", "急速下跌") else atype,
+            "anomaly_type_raw": atype,
         }
         # 保留其余原始字段(去掉已提取的, 避免重复), 归一化列名以避免重复列冲突。
         # 总金额(int32 上限占位垃圾)也归入 skip_norm, 不进 record。
@@ -306,17 +308,43 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
             tq_code = f"{sym}.SH" if sym.startswith("6") else f"{sym}.SZ"
             info = _rpc("get_more_info", {"stock_code": tq_code})
             if isinstance(info, dict):
-                # 1. 竞价真实涨幅 (解决截图全部显示 -- 的核心痛点: OpenZAF 是开盘竞价涨跌幅)
-                if r.get("gap_pct") is None and info.get("OpenZAF") is not None:
+                # 1. 竞价真实涨幅 —— **必须优先于 THS 异动幅度**(2026-10-20 线上事故)
+                #
+                # 事故: 金健米业(600127) 实际低开 -1.75%(开 12.93 / 昨收 13.16)，页面却显示
+                # 「竞价涨幅 +4.87% + 爆量抢筹」。根因是 THS 异动表的「价格」列被直接当成
+                # 相对昨收的涨幅, 而它是**9:25 那一瞬的异动幅度**(急速上涨/下跌类),
+                # 与开盘方向可以完全相反。
+                #
+                # 新口径: gap_pct 只认「开盘价 vs 昨收」(OpenZAF, 缺失时用 Open/LastClose 现算);
+                # THS 的异动幅度保留在 anomaly_ratio 里, 并标注 gap_source 供 UI 区分。
+                real_gap = None
+                gap_src = None
+                if info.get("OpenZAF") is not None:
                     try:
-                        r["gap_pct"] = round(float(info["OpenZAF"]), 2)
+                        real_gap = round(float(info["OpenZAF"]), 2)
+                        gap_src = "tq_openzaf"
                     except Exception:
-                        pass
-                elif r.get("gap_pct") is None and info.get("ZAF") is not None:
+                        real_gap = None
+                if real_gap is None and info.get("Open") and info.get("LastClose"):
                     try:
-                        r["gap_pct"] = round(float(info["ZAF"]), 2)
+                        o, pc = float(info["Open"]), float(info["LastClose"])
+                        if o > 0 and pc > 0:
+                            real_gap = round((o - pc) / pc * 100.0, 2)
+                            gap_src = "tq_open_vs_lastclose"
                     except Exception:
-                        pass
+                        real_gap = None
+                if real_gap is not None:
+                    prev_ratio = r.get("gap_pct")
+                    if prev_ratio is not None and abs(float(prev_ratio) - real_gap) > 0.05:
+                        # 两口径打架: 保留 THS 异动幅度, 但不再冒充涨幅
+                        r["anomaly_ratio"] = prev_ratio
+                    r["gap_pct"] = real_gap
+                    r["gap_source"] = gap_src
+                elif r.get("gap_pct") is not None:
+                    # 拿不到开盘价/昨收 → 明确标注这是异动幅度, 不是竞价涨幅
+                    r["anomaly_ratio"] = r.get("gap_pct")
+                    r["gap_pct"] = None
+                    r["gap_source"] = "unavailable"
 
                 # 2. 竞价量比 (OpenVolPre1: 该字段量纲无文档 → 归一到 0.3~30 才落值)
                 vr = info.get("OpenVolPre1")
@@ -359,12 +387,19 @@ def fetch_auction_anomaly(market: str = "CN") -> list[dict]:
                 r["demon_streak"] = dfactor.get("max_streak")
 
             # 7. 盘口意图判定(只给事实标签, 不给买卖建议 / 不做"出货"定性)
-            gap = r.get("gap_pct") or 0.0
+            # 2026-10-20: 没有真实竞价涨幅就不做方向判定 —— 用异动幅度"代替"涨跌幅
+            # 会把低开说成高开(金健米业事故)。宁可给"数据不足"。
+            gap_raw = r.get("gap_pct")
+            gap = float(gap_raw) if gap_raw is not None else None
             open_amt = r.get("open_amount") or 0.0
             v_ratio = r.get("volume_ratio") or 0.0
             w_rate = r.get("withdraw_rate") or 0.0
 
-            if gap >= 9.8 and (open_amt > 1e7 or r.get("open_zt_buy", 0) > 2e7):
+            if gap is None:
+                r["verdict_tag"] = "❔ 数据不足"
+                r["verdict_action"] = "开盘价/昨收未取到，不做竞价方向判定（异动幅度不等同于竞价涨幅）"
+                r["verdict_level"] = "unknown"
+            elif gap >= 9.8 and (open_amt > 1e7 or r.get("open_zt_buy", 0) > 2e7):
                 r["verdict_tag"] = "👑 涨停抢筹"
                 r["verdict_action"] = "顶级游资一字顶板，买盘坚决，注意龙头身位"
                 r["verdict_level"] = "strong_buy"

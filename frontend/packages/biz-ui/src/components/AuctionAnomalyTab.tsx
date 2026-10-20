@@ -276,6 +276,18 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                   </td>
                   <td className={`py-1.5 pr-2 text-right font-mono tabular-nums ${gapColor(gap)}`}>
                     {fmtPct(gap)}
+                    {/* 2026-10-20 口径修正: gap 现在只认「开盘价 vs 昨收」。THS 异动幅度
+                        另列一行小字 —— 它可以是 +4.87% 而实际低开 -1.75%(金健米业事故)。 */}
+                    {(() => {
+                      const ratio = (r as { anomaly_ratio?: number | null }).anomaly_ratio
+                      if (ratio == null || gap == null || Math.abs(ratio - gap) < 0.05) return null
+                      return (
+                        <span className="mt-0.5 block text-[10px] font-sans text-muted-foreground/80"
+                              title="异动幅度：9:25 那一瞬的涨速，不等于相对昨收的竞价涨幅">
+                          异动 {ratio > 0 ? '+' : ''}{safeFixed(ratio, 2)}%
+                        </span>
+                      )
+                    })()}
                     {(() => {
                       const badge = chaseBadge(gapStudy, gap)
                       return badge ? (
