@@ -133,8 +133,10 @@ def test_migration_registered():
     from src.web.migrations import MIGRATIONS
 
     ids = [m.version for m in MIGRATIONS]
+    # 只钉"存在"与"连续"，不钉尾号（每次新增迁移都会红一次，2026-10-20 已踩两次）
     assert 208 in ids and 210 in ids
-    assert max(ids) == 210
+    assert max(ids) >= 211
+    assert ids == list(range(ids[0], ids[-1] + 1))
 
 
 # --- 集成：真实走一遍 _run_tool_loop（假 LLM + 假工具），验证轨迹端到端落库 ---

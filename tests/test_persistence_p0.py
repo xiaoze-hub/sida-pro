@@ -92,9 +92,17 @@ def test_migrations_201_205_create_tables_and_are_idempotent(tmp_path):
 
 
 def test_migrations_registry_tail_is_contiguous():
+    """迁移注册表必须从 101 起连续递增。
+
+    ⚠️ 别再写死尾部版本号列表（2026-10-20 第二次踩）：每次新增迁移都会红一次，
+    而它要守的其实是「连续性」与「先前版本没被删」。所以只钉锚点版本 + 连续性。
+    """
     versions = [m.version for m in mig.MIGRATIONS]
-    assert versions[:1] == [101]
-    assert versions[-5:] == [206, 207, 208, 209, 210]
+    assert versions[0] == 101
+    assert max(versions) >= 211
+    # 曾经存在、不可回退的关键锚点（加了新迁移也不许消失）
+    for anchor in (101, 138, 179, 205, 207, 208, 210, 211):
+        assert anchor in versions, f"迁移 {anchor} 丢了"
     for prev, cur in zip(versions, versions[1:]):
         assert cur == prev + 1, f"版本不连续: {prev} -> {cur}"
 

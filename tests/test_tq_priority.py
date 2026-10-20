@@ -76,3 +76,14 @@ def test_market_totals_sums_when_coverage_ok(monkeypatch):
     assert out["main_flow"] == pytest.approx(-10.0)      # 10 × -1e8 = -1e9 元 = -10 亿
     assert out["up"] == 5 and out["down"] == 5
     assert out["source"] == "tdx_tq_amo_supamo"
+
+
+def test_tq_quote_yields_to_batch_source_for_big_lists():
+    """列表页(>5 只)必须让位给批量源 —— TQ 逐票 RPC 会把 39 只跑成 5~17s。"""
+    from marketdata.symbol import Symbol
+    from marketdata.vendors.tq import TqQuoteVendor
+
+    vendor = TqQuoteVendor()
+    syms = [Symbol(code=f"60000{i}", market="CN") for i in range(6)]
+    assert vendor.fetch(syms, {}) == [], "6 只以上不该再由 TQ 逐票拉"
+    assert TqQuoteVendor.MAX_SYMBOLS_FOR_TQ == 5

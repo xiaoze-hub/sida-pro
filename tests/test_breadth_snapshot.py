@@ -67,4 +67,7 @@ def test_migration_206_registered():
 
     versions = {m.version for m in MIGRATIONS}
     assert 206 in versions and 210 in versions
-    assert max(versions) == 210          # 新增迁移必须接在末尾，不能插队
+    # 不钉尾号(每次新增迁移都会红); 只保证 206 仍在且表连续
+    assert max(versions) >= 211
+    ordered = [m.version for m in MIGRATIONS]
+    assert ordered == list(range(ordered[0], ordered[-1] + 1))
