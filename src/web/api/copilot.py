@@ -442,13 +442,14 @@ def get_copilot_cost(
     """
     from src.core.copilot_quota import cost_summary
 
-    data = cost_summary(db, days=days, price_per_mtoken=_llm_prices())
-    if not _is_admin(user):
+    if _is_admin(user):
+        data = cost_summary(db, days=days, price_per_mtoken=_llm_prices())
+        data["scope"] = "all"
+    else:
         uid = str(getattr(user, "id", ""))
+        data = cost_summary(db, days=days, price_per_mtoken=_llm_prices(), user_id=uid)
         data["by_user"] = [r for r in data["by_user"] if r.get("user_id") == uid]
         data["scope"] = "self"
-    else:
-        data["scope"] = "all"
     return data
 
 

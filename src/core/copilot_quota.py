@@ -123,14 +123,19 @@ def list_all(db) -> list[dict]:
     return out
 
 
-def cost_summary(db, *, days: int = 7, price_per_mtoken: dict | None = None) -> dict:
+def cost_summary(db, *, days: int = 7, price_per_mtoken: dict | None = None,
+                 user_id: str | None = None) -> dict:
     """成本看板数据：按日 / 按模型 / 按用户聚合 token 与估算费用。
 
     `price_per_mtoken` 是 {模型前缀: 每百万 token 混合单价(元)}；未配置价格的模型
     返回 cost=None 并在 `unpriced_models` 里列出来 —— 不编造单价。
     """
     since = datetime.utcnow() - timedelta(days=max(1, int(days)))
-    rows = db.query(LLMUsage).filter(LLMUsage.created_at >= since).all()
+    q = db.query(LLMUsage).filter(LLMUsage.created_at >= since)
+    # 非管理员只看自己：by_day/by_model 也必须过滤，否则总量仍会把别人的用量摊出来
+    if user_id:
+        q = q.filter(LLMUsage.user_id == str(user_id))
+    rows = q.all()
     price = price_per_mtoken or {}
 
     def _price(model: str | None) -> float | None:
