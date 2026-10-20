@@ -1869,6 +1869,22 @@ def fetch_fundamentals_detail(symbol: str, market: str = "CN", dt_days: int = 10
         except Exception as e:  # noqa: BLE001
             logger.warning(f"基本面明细-日线统计[TQ {symbol}]失败: {e}")
 
+    # 7) TQ「异动资金档案」(2026-10-20 用户裁决: 逆向接口优先):
+    #    大宗交易 GP04 / 增减持 GP05 / 陆股通持股 GP06 / 质押 GP19+20 / 财务 FN1+FN3。
+    #    单位全部经交叉验证(见 src/core/tdx_corporate.py 顶部表格)。
+    #    东财这五类要拉四个 datacenter 接口还会限流, TQ 一次拿全且零配额。
+    #    单类失败只在各自 note 里标注, 不影响其余数据。
+    if market == "CN":
+        try:
+            from src.core.tdx_corporate import dossier as _tq_dossier
+
+            out["corporate"] = _tq_dossier(symbol)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"基本面明细-异动资金档案[TQ {symbol}]失败: {e}")
+            out["corporate"] = {"symbol": symbol, "available": False, "note": f"取数异常: {e}"}
+    else:
+        out["corporate"] = {"symbol": symbol, "available": False, "note": "TQ 仅覆盖 A 股"}
+
     return out
 
 
