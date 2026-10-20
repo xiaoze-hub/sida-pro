@@ -178,17 +178,26 @@ class AIClient:
     # fire-and-forget, 记录失败绝不阻塞主流程。
     def _log_usage(self, scene: str | None, model_name: str,
                    usage, latency_ms: int) -> None:
+        # ⚠️ 2026-10-21 线上实测: `run_in_executor` **不继承 contextvars** —— 在线程里再读
+        # `llm_context.current()` 恒为 None, 导致 llm_usage 的 user_id/run_id 永远是空
+        # (表现: 成本/配额全 0)。必须**在调用线程**先取值, 再作为参数传进去。
+        try:
+            from src.core.llm_context import current as _llm_current
+
+            ctx = _llm_current()
+        except Exception:  # noqa: BLE001
+            ctx = {}
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._log_usage_sync(scene, model_name, usage, latency_ms)
+            self._log_usage_sync(scene, model_name, usage, latency_ms, ctx)
             return
         loop.run_in_executor(
-            None, self._log_usage_sync, scene, model_name, usage, latency_ms,
+            None, self._log_usage_sync, scene, model_name, usage, latency_ms, ctx,
         )
 
     def _log_usage_sync(self, scene: str | None, model_name: str,
-                        usage, latency_ms: int) -> None:
+                        usage, latency_ms: int, ctx: dict | None = None) -> None:
         try:
             from src.db.models import LLMUsage
             from src.db.session import SessionLocal
@@ -196,13 +205,15 @@ class AIClient:
             completion_tokens = getattr(usage, "completion_tokens", 0) or 0
             if prompt_tokens == 0 and completion_tokens == 0:
                 return  # 无用量信息不记
-            # 2026-10-20 P3: 归因到用户与轨迹（contextvar 由请求入口 bind）
-            try:
-                from src.core.llm_context import current as _llm_ctx
+            # 2026-10-20 P3: 归因到用户与轨迹（ctx 由调用线程取出后传入，见 _log_usage 注释）
+            _ctx = ctx or {}
+            if not _ctx:
+                try:
+                    from src.core.llm_context import current as _llm_ctx
 
-                _ctx = _llm_ctx()
-            except Exception:  # noqa: BLE001
-                _ctx = {}
+                    _ctx = _llm_ctx()
+                except Exception:  # noqa: BLE001
+                    _ctx = {}
             db = SessionLocal()
             try:
                 db.add(LLMUsage(
