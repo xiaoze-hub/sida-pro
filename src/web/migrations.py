@@ -5735,6 +5735,21 @@ def _m209_copilot_user_id_text(conn: Connection) -> None:
         # SQLite 是动态类型, 无需变更
 
 
+def _m212_copilot_governance(conn: Connection) -> None:
+    """P3 治理：llm_usage 归因(用户/轨迹) + 多用户配额表(2026-10-20)。
+
+    为什么必须加: 成本看板要回答"谁在烧 token", 配额要在网关层硬拒 ——
+    原先 llm_usage 只有 scene/model, 没有 user_id, 连"某用户今天用了多少"都算不出来。
+    """
+    from src.db.models import CopilotQuota
+
+    CopilotQuota.__table__.create(bind=conn, checkfirst=True)
+
+    for col, dtype in (("user_id", "VARCHAR(36)"), ("run_id", "VARCHAR(36)")):
+        if _has_table(conn, "llm_usage") and not _has_column(conn, "llm_usage", col):
+            conn.execute(text(f"ALTER TABLE llm_usage ADD COLUMN {col} {dtype}"))
+
+
 def _m210_copilot_actions_annotations(conn: Connection) -> None:
     """动作回写 + K 线标注表(2026-10-20, P1)。
 
@@ -5952,6 +5967,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(209, "copilot_user_id_text", _m209_copilot_user_id_text),
     Migration(210, "copilot_actions_annotations", _m210_copilot_actions_annotations),
     Migration(211, "flow_snapshot_source", _m211_flow_snapshot_source),
+    Migration(212, "copilot_governance", _m212_copilot_governance),
 )
 
 

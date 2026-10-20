@@ -15,6 +15,7 @@ const OpportunitiesPage = lazyWithRetry(() => import('@/pages/Opportunities'), '
 const AuctionPage = lazyWithRetry(() => import('@/pages/Auction'), 'auction-page')
 // AI 数智参谋一级工作台(2026-10-18, 设计稿 §8.8/§9): 筹码·共振·量价·盘口·竞价·妖股因子全量穿透
 const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copilot-page')
+const CopilotGovernancePage = lazyWithRetry(() => import('@/pages/CopilotGovernance'), 'copilot-governance-page')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
 // 主力资金战报(规格 §4.4, 2026-10-10): 当日主力动向汇总
@@ -714,6 +715,7 @@ function App() {
               <Route path="/auction" element={<PermGuard perm="view_opportunities" myPerms={myPerms}><AuctionPage /></PermGuard>} />
               {/* AI 数智参谋一级工作台(2026-10-18): 登录 + view_quotes 即可进(与 /stocks/:symbol 同档) */}
               <Route path="/ai-copilot" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AiCopilotPage /></PermGuard>} />
+              <Route path="/copilot-governance" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotGovernancePage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}
               <Route path="/dark-fund-top" element={<PermGuard perm="view_dark" myPerms={myPerms}><DarkFundTopPage /></PermGuard>} />
               <Route path="/war-report" element={<PermGuard perm="view_forecast" myPerms={myPerms}><WarReportPage /></PermGuard>} />

@@ -92,6 +92,8 @@ export interface CopilotRunRow {
   status: string
   tool_calls: number
   elapsed_ms: number | null
+  /** 该轮 token 合计（llm_usage 按 run_id 汇总；无记录为 null） */
+  tokens?: number | null
   question: string | null
   created_at: string
 }
@@ -111,3 +113,79 @@ export interface CopilotMetrics {
 
 export const getCopilotMetrics = (days = 7, signal?: AbortSignal) =>
   fetchAPI<CopilotMetrics>(`/copilot/metrics?days=${days}`, { signal })
+
+
+/** 单轮轨迹回放（P3）：骨架 + 每步工具调用。 */
+export interface CopilotRunStep {
+  seq: number
+  tool: string
+  ok: boolean
+  elapsed_ms: number | null
+  args: string | null
+  result_digest: string | null
+}
+
+export interface CopilotRunDetail {
+  run: {
+    run_id: string
+    status: string
+    recipe: string | null
+    question: string | null
+    tool_calls: number
+    elapsed_ms: number | null
+    created_at: string
+  }
+  steps: CopilotRunStep[]
+}
+
+export const getCopilotRunDetail = (runId: string, signal?: AbortSignal) =>
+  fetchAPI<CopilotRunDetail>(`/copilot/runs/${encodeURIComponent(runId)}`, { signal })
+
+/** 成本看板（P3）：按日/按模型/按用户聚合 token 与估算费用。 */
+export interface CopilotCostBucket {
+  date?: string
+  model?: string
+  user_id?: string
+  tokens: number
+  calls: number
+  cost: number | null
+}
+
+export interface CopilotCost {
+  days: number
+  total_tokens: number
+  total_calls: number
+  by_day: CopilotCostBucket[]
+  by_model: CopilotCostBucket[]
+  by_user: CopilotCostBucket[]
+  unpriced_models: string[]
+  scope?: string
+}
+
+export const getCopilotCost = (days = 7, signal?: AbortSignal) =>
+  fetchAPI<CopilotCost>(`/copilot/governance/cost?days=${days}`, { signal })
+
+/** 多用户配额（P3）：没有配额行 = 不限；超限网关层直接 429。 */
+export interface CopilotQuotaRow {
+  user_id: string
+  daily_runs: number | null
+  daily_tokens: number | null
+  enabled: boolean
+  note?: string | null
+  used_runs?: number | null
+  used_tokens?: number | null
+  updated_at?: string
+}
+
+export const getCopilotQuotas = (signal?: AbortSignal) =>
+  fetchAPI<{ scope: string; items: CopilotQuotaRow[] }>('/copilot/governance/quota', { signal })
+
+export const putCopilotQuota = (
+  userId: string,
+  body: { daily_runs: number | null; daily_tokens: number | null; enabled: boolean; note?: string },
+) =>
+  fetchAPI<CopilotQuotaRow>(`/copilot/governance/quota/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })

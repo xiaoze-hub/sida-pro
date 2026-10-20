@@ -296,9 +296,25 @@ def get_copilot_runs(
     if conversation_id is not None:
         q = q.filter(CopilotRun.conversation_id == conversation_id)
     rows = q.order_by(CopilotRun.id.desc()).limit(limit).all()
+    run_ids = [r.run_id for r in rows]
+    tokens: dict[str, int] = {}
+    if run_ids:
+        from sqlalchemy import func
+
+        from src.db.models import LLMUsage
+
+        for rid, tot in (
+            db.query(LLMUsage.run_id,
+                     func.coalesce(func.sum(LLMUsage.prompt_tokens + LLMUsage.completion_tokens), 0))
+            .filter(LLMUsage.run_id.in_(run_ids))
+            .group_by(LLMUsage.run_id)
+            .all()
+        ):
+            tokens[rid] = int(tot or 0)
     return [{
         "run_id": r.run_id, "conversation_id": r.conversation_id, "recipe": r.recipe,
         "status": r.status, "tool_calls": r.tool_calls, "elapsed_ms": r.elapsed_ms,
+        "tokens": tokens.get(r.run_id),
         "question": r.question, "created_at": str(r.created_at or ""),
     } for r in rows]
 
@@ -411,3 +427,122 @@ def get_copilot_annotations(
         "note": r.note, "color": r.color, "source": r.source,
         "created_at": str(r.created_at or ""),
     } for r in rows]
+
+
+@router.get("/governance/cost")
+def get_copilot_cost(
+    days: int = Query(default=7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """成本看板：按日 / 按模型 / 按用户聚合 token 与估算费用。
+
+    未配置单价的模型 cost 返回 null 并列进 `unpriced_models` —— 不编造金额。
+    普通用户只能看自己那份（by_user 只剩自己），owner/admin 看全量。
+    """
+    from src.core.copilot_quota import cost_summary
+
+    data = cost_summary(db, days=days, price_per_mtoken=_llm_prices())
+    if not _is_admin(user):
+        uid = str(getattr(user, "id", ""))
+        data["by_user"] = [r for r in data["by_user"] if r.get("user_id") == uid]
+        data["scope"] = "self"
+    else:
+        data["scope"] = "all"
+    return data
+
+
+@router.get("/governance/quota")
+def get_copilot_quota(
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """配额列表 + 各自今日用量。普通用户只看自己。"""
+    from src.core.copilot_quota import get_quota, list_all, usage_today
+
+    if _is_admin(user):
+        return {"scope": "all", "items": list_all(db)}
+    uid = str(getattr(user, "id", ""))
+    row = get_quota(db, uid)
+    return {
+        "scope": "self",
+        "items": [{
+            "user_id": uid,
+            "daily_runs": getattr(row, "daily_runs", None),
+            "daily_tokens": getattr(row, "daily_tokens", None),
+            "enabled": bool(getattr(row, "enabled", True)) if row else True,
+            "note": getattr(row, "note", None),
+            "used_runs": usage_today(db, uid)["runs"],
+            "used_tokens": usage_today(db, uid)["tokens"],
+            "updated_at": str(getattr(row, "updated_at", "") or ""),
+        }],
+    }
+
+
+@router.put("/governance/quota/{user_id}")
+def put_copilot_quota(
+    user_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """设置某人配额（仅 owner/admin）。body: {daily_runs, daily_tokens, enabled, note}。
+
+    `null` = 该维度不限；两个都 null 等于不限。
+    """
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="只有管理员可以修改配额")
+    from src.core.copilot_quota import set_quota
+
+    def _int_or_none(v):
+        if v is None or v == "":
+            return None
+        n = int(v)
+        if n < 0:
+            raise HTTPException(status_code=400, detail="配额不能为负数")
+        return n
+
+    row = set_quota(
+        db, user_id,
+        daily_runs=_int_or_none(body.get("daily_runs")),
+        daily_tokens=_int_or_none(body.get("daily_tokens")),
+        enabled=bool(body.get("enabled", True)),
+        note=(body.get("note") or None),
+        updated_by=getattr(user, "id", None),
+    )
+    return {
+        "user_id": row.user_id, "daily_runs": row.daily_runs,
+        "daily_tokens": row.daily_tokens, "enabled": bool(row.enabled),
+        "note": row.note, "updated_at": str(row.updated_at or ""),
+    }
+
+
+def _is_admin(user) -> bool:
+    return str(getattr(user, "role", "") or "").lower() in ("owner", "admin")
+
+
+def _llm_prices() -> dict:
+    """模型单价表（元 / 百万 token，混合口径）。
+
+    来源：`settings` 表的 `llm_price_per_mtoken`（JSON，可热改），缺省用内置保守值。
+    没有配置的模型一律 cost=None —— 宁可显示"—"，不编一个假金额。
+    """
+    import json
+
+    try:
+        from src.db.models import AppSettings
+        from src.db.session import SessionLocal
+
+        with SessionLocal() as db:
+            row = db.query(AppSettings).filter(AppSettings.key == "llm_price_per_mtoken").one_or_none()
+            if row and row.value:
+                return json.loads(row.value)
+    except Exception:  # noqa: BLE001 - 没有配置表/解析失败都退回内置值
+        pass
+    return {
+        "gemini": 0.0,      # 订阅制，无按量计费
+        "deepseek": 2.0,
+        "glm": 1.0,
+        "kimi": 1.0,
+        "gpt-4o-mini": 1.0,
+    }
