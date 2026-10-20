@@ -458,8 +458,10 @@ def _tq_index_amount() -> tuple[float | None, str]:
             if idx:
                 time.sleep(0.15)
             resp = tq_rpc("get_market_snapshot", {"stock_code": code}) or {}
-            v = resp.get("Value") if isinstance(resp, dict) else None
-            if not isinstance(v, dict):
+            # ⚠️ 2026-10-20 线上实测: 经 tq_rpc 拿到的指数快照是**扁平 dict**({Amount, Now, ...}),
+            # 不带 Value 包裹; 而个股路径有时带。两种形状都要吃, 否则永远 tdx_tq_partial。
+            v = resp.get("Value") if isinstance(resp, dict) and isinstance(resp.get("Value"), dict) else resp
+            if not isinstance(v, dict) or v.get("Amount") is None:
                 continue
             amt = v.get("Amount")
             if amt is None:
@@ -497,7 +499,7 @@ def _latest_tq_flow_row(max_age_sec: int = 1800) -> dict | None:
                 text(
                     """
                     SELECT total_main_flow, ts FROM market_flow_snapshots
-                    WHERE total_main_flow IS NOT NULL
+                    WHERE total_main_flow IS NOT NULL AND source = 'tdx_tq'
                     ORDER BY ts DESC LIMIT 1
                     """
                 )
@@ -510,7 +512,8 @@ def _latest_tq_flow_row(max_age_sec: int = 1800) -> dict | None:
             import datetime as _dt
 
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=_dt.timezone.utc)
+                # 库里存的是**本地时间**(CST, naive)。当成 UTC 会算出 -28758s 的"未来快照"。
+                ts = ts.replace(tzinfo=_dt.timezone(_dt.timedelta(hours=8)))
             age = int((_dt.datetime.now(_dt.timezone.utc) - ts).total_seconds())
         except Exception:  # noqa: BLE001
             age = 0
@@ -1030,6 +1033,15 @@ async def market_capital_flow_proxy():
             )
         # 2026-10-20: 主力净流入上游(cn 网关)常缺 → 退回库内最近一次 TQ 全市场汇总(AMO/SUPAMO),
         # 标注快照年龄; 连库也没有就保持 None(前端 --), 绝不用 0 顶替。
+        # 2026-10-20 铁律: TQ 优先 —— 库内有 10 分钟内的 TQ 汇总就用它, 东财只作兜底。
+        _snap_fresh = await asyncio.to_thread(_latest_tq_flow_row, 600)
+        if _snap_fresh is not None:
+            if result.get("total_main_flow") is not None:
+                result["main_flow_eastmoney"] = result["total_main_flow"]   # 保留东财值供对账
+            result["total_main_flow"] = _snap_fresh["total_main_flow"]
+            result["main_flow_source"] = f"tdx_tq_supamo(快照 {_snap_fresh['age_sec']}s 前)"
+            result["caliber"] = "tdx_supamo"
+            result["caliber_label"] = "主力净流入: 通达信 SUPAMO 全市场汇总(资金面参考, 禁用于主力意图判定)"
         if result.get("total_main_flow") is None:
             _snap = await asyncio.to_thread(_latest_tq_flow_row)
             if _snap is not None:
