@@ -190,7 +190,16 @@ def _apply_alert(db: Session, *, user_id: Any, payload: dict) -> str:
         stock_id=stock.id,
         name=str(payload.get("label") or f"{symbol} {'上破' if direction == 'above' else '下破'} {price}")[:60],
         enabled=True,
-        condition_group={"op": direction, "price": float(price)},
+        # 必须匹配 price_alert_engine.eval_rule 的期望结构，否则规则入库但永远不触发
+        # （engine: {"op": "and"|"or", "items": [{"type","op","value"}]}）
+        condition_group={
+            "op": "and",
+            "items": [{
+                "type": "price",
+                "op": ">=" if direction == "above" else "<=",
+                "value": float(price),
+            }],
+        },
         market_hours_mode="trading_only",
         repeat_mode="once",
     )
