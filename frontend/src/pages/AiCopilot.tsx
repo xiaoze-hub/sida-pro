@@ -8,7 +8,7 @@ import {
   type CopilotMetrics,
   type PendingAction,
 } from '@/lib/copilot/api'
-import { ChevronDown, ChevronRight, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles, Trash2, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
@@ -133,6 +133,11 @@ export default function AiCopilotPage() {
   const [stage, setStage] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [convId, setConvId] = useState<number | null>(null)
+  // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
+  // 刷新即丢上下文。这里补抽屉：列出/打开/删除历史，并把 conversation_id 续上。
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [symbol, setSymbol] = useState('')
   /** 上下文锚点（?symbol= 带进来即显示），不触发参谋卡请求 */
@@ -280,6 +285,63 @@ export default function AiCopilotPage() {
   const session = sessionOf()
   const { primary: primaryPresets, more: morePresets } = orderPresetsForSession(presets, session)
 
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const rows = await chatApi.listConversations(60)
+      setConvs((rows || []).map((c) => ({ id: c.id, title: c.title || '未命名对话', created_at: c.created_at })))
+    } catch {
+      setConvs([])
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
+  const openConversation = useCallback(async (id: number) => {
+    try {
+      const detail = await chatApi.getConversation(id)
+      setConvId(id)
+      setMsgs(
+        (detail.messages || [])
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      )
+      const sym = detail.conversation?.stock_symbol || ''
+      if (sym) {
+        setSymbol(sym)
+        setAnchorSymbol(sym)
+      }
+      setHistoryOpen(false)
+      setError(null)
+    } catch (e) {
+      setError(`打开历史对话失败：${e instanceof Error ? e.message : '未知错误'}`)
+    }
+  }, [])
+
+  const startNewConversation = useCallback(() => {
+    setConvId(null)
+    setMsgs([])
+    setHistoryOpen(false)
+    setError(null)
+  }, [])
+
+  const removeConversation = useCallback(
+    async (id: number) => {
+      try {
+        await chatApi.deleteConversation(id)
+        setConvs((prev) => prev.filter((c) => c.id !== id))
+        if (convId === id) startNewConversation()
+      } catch {
+        /* 删除失败不打断，列表保留 */
+      }
+    },
+    [convId, startNewConversation],
+  )
+
+  useEffect(() => {
+    if (historyOpen) void loadHistory()
+  }, [historyOpen, loadHistory])
+
   const send = useCallback(
     async (text: string) => {
       const words = text.trim()
@@ -407,7 +469,7 @@ export default function AiCopilotPage() {
   )
 
   return (
-    <div className="flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
+    <div className="relative flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
       {/* 左：战术指令池（按时段分层：今日推荐 3 + 更多） */}
       <aside className="hidden w-[248px] shrink-0 flex-col gap-2 lg:flex">
         <div className="flex items-center justify-between">
@@ -497,6 +559,50 @@ export default function AiCopilotPage() {
         </div>
       </aside>
 
+        {historyOpen ? (
+          <div className="absolute inset-y-0 left-72 z-20 w-72 rounded-xl border border-border/60 bg-s1/95 shadow-float backdrop-blur" data-testid="copilot-history-drawer">
+            <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
+              <span className="text-[12px] font-medium">历史对话</span>
+              <button type="button" aria-label="关闭" onClick={() => setHistoryOpen(false)}>
+                <X className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto px-2 py-2">
+              {historyLoading ? (
+                <div className="flex items-center gap-2 px-2 py-3 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+                </div>
+              ) : convs.length === 0 ? (
+                <div className="px-2 py-3 text-[11px] text-muted-foreground">还没有历史对话</div>
+              ) : (
+                convs.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-s2 ${convId === c.id ? 'bg-s2' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => void openConversation(c.id)}
+                    >
+                      <div className="truncate text-[12px]">{c.title}</div>
+                      <div className="truncate text-[10px] text-muted-foreground">{String(c.created_at || '').slice(0, 16)}</div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="删除"
+                      className="opacity-0 transition group-hover:opacity-100"
+                      onClick={() => void removeConversation(c.id)}
+                    >
+                      <Trash2 className="h-3 w-3 text-muted-foreground hover:text-role-risk" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        ) : null}
+
       {/* 右：交互工作台 */}
       <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-border/60 bg-s1">
         {pending.length > 0 ? (
@@ -516,6 +622,32 @@ export default function AiCopilotPage() {
           <Sparkles className="h-3.5 w-3.5 text-role-watch" />
           <span className="text-[12px] font-medium">{COPILOT_PAGE_TITLE}</span>
           <span className="text-[10px] text-muted-foreground">{COPILOT_PAGE_SUBTITLE}</span>
+          <button
+            type="button"
+            className="ml-2 flex items-center gap-1 rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => setHistoryOpen((v) => !v)}
+            data-testid="copilot-history-toggle"
+          >
+            <History className="h-3 w-3" />
+            历史
+            {convs.length > 0 ? <span className="font-mono text-[10px]">{convs.length}</span> : null}
+          </button>
+          {convId !== null ? (
+            <button
+              type="button"
+              className="rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={startNewConversation}
+            >
+              新对话
+            </button>
+          ) : null}
+          <a
+            href="/copilot-governance"
+            className="rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            data-testid="copilot-governance-link"
+          >
+            治理
+          </a>
           <form
             className="ml-auto flex items-center gap-1"
             onSubmit={(e) => {

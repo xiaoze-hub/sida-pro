@@ -179,3 +179,20 @@ def finish_copilot_run(trace: CopilotTrace | None, *, status: str = "ok", error:
         trace.finish(status=status, error=error)
     except Exception:  # noqa: BLE001
         pass
+
+
+def bind_llm_context(user, trace) -> None:
+    """把本轮 user_id/run_id 绑到 contextvar，供 ai_client 写 llm_usage 时归因（P3）。
+
+    吞掉所有异常：归因失败绝不能影响问答。不 unbind —— 请求任务结束上下文即销毁。
+    """
+    try:
+        from src.core.llm_context import bind
+
+        bind(
+            user_id=getattr(user, "id", None),
+            run_id=(getattr(trace, "run_id", None) if trace is not None else None),
+            scene="chat",
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("LLM 归因绑定失败(忽略)", exc_info=True)

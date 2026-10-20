@@ -196,14 +196,23 @@ class AIClient:
             completion_tokens = getattr(usage, "completion_tokens", 0) or 0
             if prompt_tokens == 0 and completion_tokens == 0:
                 return  # 无用量信息不记
+            # 2026-10-20 P3: 归因到用户与轨迹（contextvar 由请求入口 bind）
+            try:
+                from src.core.llm_context import current as _llm_ctx
+
+                _ctx = _llm_ctx()
+            except Exception:  # noqa: BLE001
+                _ctx = {}
             db = SessionLocal()
             try:
                 db.add(LLMUsage(
-                    scene=(scene or self.scene or "other"),
+                    scene=(scene or _ctx.get("scene") or self.scene or "other"),
                     model_name=model_name or self.model,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     latency_ms=int(latency_ms),
+                    user_id=_ctx.get("user_id"),
+                    run_id=_ctx.get("run_id"),
                 ))
                 db.commit()
             finally:

@@ -1416,7 +1416,31 @@ class LLMUsage(Base):
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     latency_ms = Column(Integer, default=0)
+    # 2026-10-20 (P3 成本看板/配额): 归因到人、归因到某轮问答。
+    # 原先只有 scene/model —— 无法回答"谁在烧 token", 也就没法做多用户配额。
+    user_id = Column(String(36), nullable=True, index=True)
+    run_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class CopilotQuota(Base):
+    """多用户 AI 配额（2026-10-20, P3）。
+
+    没有限额行 = 不限（向后兼容）；有行则按日统计 `llm_usage` 与 `copilot_runs`。
+    限额是**硬约束**（网关层拒绝），不是提示词里的"请节约"。
+    """
+
+    __tablename__ = "copilot_quotas"
+    __table_args__ = (Index("ix_copilot_quotas_user", "user_id", unique=True),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    daily_runs = Column(Integer, nullable=True)        # None = 不限
+    daily_tokens = Column(Integer, nullable=True)      # None = 不限
+    enabled = Column(Boolean, nullable=False, default=True)
+    note = Column(String(120), nullable=True)
+    updated_by = Column(String(36), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Board(Base):
