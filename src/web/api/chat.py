@@ -753,6 +753,7 @@ from src.harness.context import (  # noqa: E402
     inject_recipe as _inject_recipe,
 )
 from src.harness.routing import route_for_request as _route_for_request
+from src.harness.pipeline import answer as _pipeline_answer
 
 
 async def _execute_tool(
@@ -1148,6 +1149,15 @@ async def _run_tool_loop_inner(
         _REQ_BUDGET.set({"max": _route.recipe.max_tool_calls, "used": 0})
         _inject_recipe(messages_for_ai, _route.recipe)
     _tools, _temp = _route.tools, _route.temperature
+    if _route.recipe is not None and getattr(_route.recipe, "pipeline", False):
+        # 管线模式：harness 按固定顺序取数，模型只写结论（工具选择方差 → 0）
+        async def _px(name, args):
+            return await _execute_tool(db, name, args, user)
+
+        _ptxt = await _pipeline_answer(ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px)
+        if _ptxt:
+            yield ("done" if stream else "text"), _ptxt
+            return
     _note = correction_note(_utext)
     if _note:
         messages_for_ai.insert(0, {"role": "system", "content": _note})

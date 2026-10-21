@@ -31,6 +31,10 @@ class Recipe:
     prompt_fragment: str = field(default="")
     # 关键词打平时的优先级：风控/全景这类"更该赢"的意图显式抬高，不靠文件名顺序
     priority: int = 0
+    # 确定性管线：true = 命中后由 harness 按 `tools` 顺序自己调工具，模型只写结论。
+    # 实测同一问题工具集合 Jaccard 只有 0.57，让模型"选哪几个"就是方差源；
+    # 管线化把这一步拿走，Jaccard 天然 = 1.0。
+    pipeline: bool = False
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -59,6 +63,7 @@ def _parse(path: Path) -> Recipe:
         tools=tuple(str(x) for x in (raw.get("tools") or ())),
         skills=tuple(str(x) for x in (raw.get("skills") or ())),
         priority=int(raw.get("priority") or 0),
+        pipeline=bool(raw.get("pipeline") or False),
         output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
