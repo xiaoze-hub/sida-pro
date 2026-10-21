@@ -5786,6 +5786,13 @@ def _m214_cancel_rate_snapshots(conn: Connection) -> None:
     CancelRateSnapshot.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m215_stock_factor_daily(conn: Connection) -> None:
+    """个股因子日快照（2026-10-21）：诊断要"个股 × 日期"的因子，而不是信号级快照。"""
+    from src.db.models import StockFactorDaily
+
+    StockFactorDaily.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5993,6 +6000,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(212, "copilot_governance", _m212_copilot_governance),
     Migration(213, "copilot_memory_schedules", _m213_copilot_memory_schedules),
     Migration(214, "cancel_rate_snapshots", _m214_cancel_rate_snapshots),
+    Migration(215, "stock_factor_daily", _m215_stock_factor_daily),
 )
 
 

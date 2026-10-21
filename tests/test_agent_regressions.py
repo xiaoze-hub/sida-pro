@@ -127,7 +127,7 @@ def _c12_tool_count_stable():
     """工具数变化必须是有意的（2026-10-21 = 59：P0 记忆/定时 + 分时画像）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 60
+    assert len(CHAT_TOOL_REGISTRY) == 61
 
 
 def _c13_tool_schema_name_matches():

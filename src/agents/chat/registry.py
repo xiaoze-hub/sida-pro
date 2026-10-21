@@ -2127,3 +2127,36 @@ async def _tool_get_trend_profile(db: Session, args: dict, user: User | None = N
         return await _asyncio.to_thread(_build_trend, symbol, market)
     except Exception as exc:  # noqa: BLE001
         return f"[多周期走势] 取数失败：{type(exc).__name__}——不做推断。"
+
+
+@register_chat_tool(
+    "get_stock_factors",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_stock_factors",
+            "description": (
+                "个股量化因子：20/60 日动量、20 日年化波动、量能 z、120 日区间位置，"
+                "每项带**同日全市场横截面分位**与 20 日变化（历史够时）。"
+                "回答「这票强弱在什么水平 / 波动大不大 / 是不是放量」时用它，",
+            )
+            ,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002050"},
+                    "market": {"type": "string", "enum": ["CN"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="stock_factor_daily 日快照 · 横截面分位同日排名 · 缺值写「暂无」不填近似",
+)
+async def _tool_get_stock_factors(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.stock_factors import build as _build_factors
+
+    symbol = str(args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002050。"
+    return _build_factors(db, symbol, "CN")
