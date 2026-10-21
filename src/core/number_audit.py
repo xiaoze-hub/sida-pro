@@ -19,7 +19,11 @@ _NUM_RE = re.compile(
 _UNITS = ("万元", "亿元", "%", "万", "亿", "倍", "手", "元")
 _SCALE = {"万": 1e4, "万元": 1e4, "亿": 1e8, "亿元": 1e8}
 
-_CODE_LIKE = re.compile(r"(?<!\d)\d{6}(?!\d)")
+# 只抹掉"带市场标记"的代码（002050.SZ / CN:002050 / sh600519）。
+# 裸 6 位数不能当代码抹掉 —— 125628 手 也是 6 位数，抹了会让证据池缺数、把真数判成编造。
+_CODE_LIKE = re.compile(
+    r"(?:CN:|SH|SZ|BJ|sh|sz|bj)\d{6}(?!\d)|(?<!\d)\d{6}\.(?:SH|SZ|HK|BJ|sh|sz|hk|bj)(?!\w)"
+)
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}:\d{2}")
 
 
