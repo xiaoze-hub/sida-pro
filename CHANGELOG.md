@@ -10,8 +10,12 @@
 - **修复** — 补丁改 `_connect_with_timeout(self, api_key="")`: 同时兼容 0.9.40 `(self, api_key)`
   与 0.9.30 `(self)`; 按 `api_key.startswith("bs-")` 走 `BAOSTOCK_VIP_SERVER_IP` / 普通服务器
   (保留原版分流); 失败时关闭半开 socket; 保留 15s 超时(补丁原始目的); 幂等性不变。
-- **依赖钉死** — `forecast_requirements.txt`: `baostock>=0.8.8` → `baostock==0.9.40`(生产实测版本),
-  避免再漂移。
+- **依赖约束(最终态)** — `forecast_requirements.txt` 保持 `baostock>=0.8.8`, **刻意不钉版本**:
+  曾试 `==0.9.40`, 生产部署实测 PyPI(beta 源) 无 0.9.40(最新 0.9.4), 整份 requirements 安装失败;
+  跨版本签名差异改由补丁双签名兼容 + 回归测试兜住(注释已写明升级须跑该测试)。
+- **生产验证** — 重部署 8010 后 `/health` 200(`kronos_ready=true`)、
+  `/predict?symbol=002361&days=5` 200 返回 5 天 prediction; 经 8000 代理
+  `GET /api/forecast/predict?symbol=002361&days=5` 200 `code:0`。
 - **回归测试** — `tests/test_forecast_baostock_connect_compat.py`(5 条, 全离线假 baostock):
   0.9.40 带参不 TypeError / `bs-` 走 VIP / 旧版无参仍可用 / 两条路径都设超时 / patch 幂等。
   已做变异验证: 把补丁回退成 `(self)` 后 4 条转红。
