@@ -14,14 +14,24 @@ from typing import Any
 
 
 def _levels(trend: dict, chips: dict, intraday: dict | None = None) -> dict[str, Any]:
+    """阻力必须**在现价之上**、支撑必须**在现价之下**。
+
+    第一版直接对候选取 min/max，结果 MA60(35.8) 被当成支撑、却比现价(33)还高 ——
+    "支撑在阻力上方"是逻辑错误，不是数据问题。这里按现价过滤后再取最近。
+    """
     mas = trend.get("mas") or {}
+    price = trend.get("last") or (intraday or {}).get("last")
     band_hi = chips.get("band70_hi")
     band_lo = chips.get("band70_lo")
-    resist = [v for v in (mas.get(20), band_hi, trend.get("high")) if v]
-    support = [v for v in (mas.get(60), band_lo, trend.get("low")) if v]
+    up = [v for v in (mas.get(20), band_hi, trend.get("high")) if v]
+    down = [v for v in (mas.get(60), band_lo, trend.get("low")) if v]
+    if price:
+        up = [v for v in up if v > price] or up
+        down = [v for v in down if v < price] or down
     return {
-        "resist": round(min(resist), 2) if resist else None,
-        "support": round(max(support), 2) if support else None,
+        "price": price,
+        "resist": round(min(up), 2) if up else None,
+        "support": round(max(down), 2) if down else None,
         "ma20": mas.get(20),
         "ma60": mas.get(60),
         "band_hi": band_hi,
