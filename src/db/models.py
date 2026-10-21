@@ -2439,6 +2439,8 @@ class StockFactorDaily(Base):
     vol_20 = Column(Float, nullable=True)          # 20 日年化波动 %
     volume_z20 = Column(Float, nullable=True)      # 当日量能 z（对 60 日）
     position_120 = Column(Float, nullable=True)    # 120 日区间位置 0~100
+    concentration = Column(Float, nullable=True)   # CYQ 集中度 (C90-C10)/C50
+    peak_price = Column(Float, nullable=True)      # 筹码峰价位（看峰位迁移）
     rank_momentum_20 = Column(Float, nullable=True)
     rank_momentum_60 = Column(Float, nullable=True)
     rank_vol_20 = Column(Float, nullable=True)

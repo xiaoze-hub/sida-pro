@@ -5793,6 +5793,13 @@ def _m215_stock_factor_daily(conn: Connection) -> None:
     StockFactorDaily.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m216_factor_concentration(conn: Connection) -> None:
+    """因子表补 CYQ 集中度与筹码峰（2026-10-21）：第 6 个因子 + 峰位迁移。"""
+    for col, dtype in (("concentration", "DOUBLE PRECISION"), ("peak_price", "DOUBLE PRECISION")):
+        if _has_table(conn, "stock_factor_daily") and not _has_column(conn, "stock_factor_daily", col):
+            conn.execute(text(f"ALTER TABLE stock_factor_daily ADD COLUMN {col} {dtype}"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6001,6 +6008,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(213, "copilot_memory_schedules", _m213_copilot_memory_schedules),
     Migration(214, "cancel_rate_snapshots", _m214_cancel_rate_snapshots),
     Migration(215, "stock_factor_daily", _m215_stock_factor_daily),
+    Migration(216, "factor_concentration", _m216_factor_concentration),
 )
 
 
