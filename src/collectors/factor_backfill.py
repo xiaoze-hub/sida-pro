@@ -19,17 +19,23 @@ logger = logging.getLogger(__name__)
 def _trading_dates(db, days: int) -> list[str]:
     from sqlalchemy import text
 
+    # 2026-10-21: 原写法 SELECT DISTINCT ... FROM klines 全表扫，8s 超时被取消。
+    # 交易日历没必要扫全表 —— 取一只每日都有的标的（上证指数 000001，缺则退 600519）的日线即可。
+    rows = []
     try:
         with db.get_bind().connect() as conn:
-            rows = conn.execute(text(
-                "SELECT DISTINCT to_char(ts,'YYYYMMDD') FROM klines "
-                "WHERE period='1d' AND market='CN' AND adjust='qfq' "
-                "ORDER BY 1 DESC LIMIT :n"
-            ), {"n": days}).fetchall()
+            for probe in ("000001", "600519"):
+                rows = conn.execute(text(
+                    "SELECT to_char(ts,'YYYYMMDD') FROM klines "
+                    "WHERE symbol=:s AND period='1d' AND ts >= now() - interval '120 days' "
+                    "ORDER BY ts DESC LIMIT :n"
+                ), {"s": probe, "n": days}).fetchall()
+                if len(rows) >= min(days, 5):
+                    break
     except Exception as exc:  # noqa: BLE001
         logger.warning("回填取交易日失败: %s", exc)
         return []
-    return sorted(str(r[0]) for r in rows if r[0])
+    return sorted({str(r[0]) for r in rows if r[0]})
 
 
 def backfill(db: Session, days: int = 30, limit: int | None = None) -> dict:
