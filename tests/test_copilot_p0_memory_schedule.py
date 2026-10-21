@@ -187,3 +187,53 @@ def test_summarize_on_budget_returns_empty_on_failure():
     assert asyncio.run(rt.summarize_on_budget(_AI(), [])) == ""
     hint = rt.budget_exhausted_hint()
     assert "一次只问一只" in hint, "建议必须可执行，不能只说请精简"
+
+
+# ── 标的护栏（2026-10-21：问两只票却零工具作答、编出别的股票） ──
+
+def test_is_stock_question():
+    from src.core.symbol_guard import is_stock_question
+
+    assert is_stock_question("301128强瑞技术今天怎么样")
+    assert is_stock_question("全景数智深度诊断强锐技术和三花智控")
+    assert is_stock_question("600519 还能拿吗")
+    assert not is_stock_question("今天大盘怎么样")
+    assert not is_stock_question("帮我记一下：以后都用逐笔口径")
+
+
+def test_mention_candidates_extracts_names():
+    from src.core.symbol_guard import mention_candidates
+
+    got = mention_candidates("全景数智深度诊断强锐技术和三花智控")
+    assert "强锐技术" in got and "三花智控" in got
+    assert len(got) <= 4
+
+
+def test_resolve_mentions_skips_when_code_given(monkeypatch):
+    """用户已给代码就不许再"自动更正"成别的标的。"""
+    from src.core import symbol_guard as sg
+
+    called = []
+    monkeypatch.setattr(sg, "mention_candidates", lambda t: called.append(t) or ["三花智控"])
+    out = sg.resolve_mentions("301128 和 002050 怎么看")
+    assert out == {"resolved": [], "suggestions": [], "unknown": []}
+    assert called == [], "有代码时不该再做名称匹配"
+
+
+def test_correction_note_flags_unknown_without_inventing(monkeypatch):
+    """查不到的名字要明说查不到，不许编成别的票。"""
+    from src.core import symbol_guard as sg
+
+    monkeypatch.setattr(sg, "_tq_match", lambda w: [])
+    monkeypatch.setattr(sg, "_suggest", lambda w: None)
+    note = sg.correction_note("强锐技术和三花智控怎么看")
+    assert "查不到" in note and "禁止换" in note
+    assert "000" not in note.replace("0000", "")
+
+
+def test_zero_tool_refusal_has_no_numbers():
+    from src.core.symbol_guard import zero_tool_refusal
+
+    t = zero_tool_refusal()
+    assert "没有取到任何行情数据" in t
+    assert "代码" in t

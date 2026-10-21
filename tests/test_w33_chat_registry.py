@@ -400,9 +400,9 @@ def test_stream_endpoint_has_disconnect_guard():
 
 def test_chat_py_line_shrink():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
-    # 2026-10-20 治理/TQ +2 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
+    # 2026-10-21: 长期记忆 +5 → 2240；标的核对/零工具拦截 +9 → 2260。
     # 相对 3021 行仍下降 ≥780 行，护栏意图不变。
-    assert lines <= 2240, f"chat.py 应较 3021 行下降 ≥780, 当前 {lines}"
+    assert lines <= 2260, f"chat.py 应较 3021 行下降 ≥780, 当前 {lines}"
 
 
 def test_exec_thsdk_tool_compat_surface():
@@ -410,3 +410,27 @@ def test_exec_thsdk_tool_compat_surface():
     from src.web.api import chat as chat_api
     out = asyncio.run(chat_api._exec_thsdk_tool("get_thsdk_not_real", {}))
     assert out == "[thsdk] 工具 get_thsdk_not_real 尚未注册实现。"
+
+
+def test_zero_tool_answer_refused_for_stock_question(monkeypatch):
+    """2026-10-21 线上：问两只票却零工具作答，还编出「北方稀土/688013」两只无关的票。
+    现在问具体标的一律不许零工具作答。"""
+    from src.web.api import chat as chat_api
+
+    monkeypatch.setattr(chat_api, "correction_note", lambda t: None)
+    client = _Client([_Msg(content="301128 现价 87.9，支撑 81.4，建议低吸")])
+    msgs = [{"role": "user", "content": "强瑞技术和三花智控今天怎么样"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    assert len(evs) == 1 and evs[0][0] == "text"
+    assert "没有取到任何行情数据" in evs[0][1]
+    assert "87.9" not in evs[0][1], "编造的价格必须被丢弃"
+
+
+def test_zero_tool_answer_allowed_for_chitchat():
+    """闲聊不拦（没有标的就不需要工具）。"""
+    from src.web.api import chat as chat_api
+
+    client = _Client([_Msg(content="你好，我是数智参谋")])
+    msgs = [{"role": "user", "content": "你好"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    assert evs == [("text", "你好，我是数智参谋")]
