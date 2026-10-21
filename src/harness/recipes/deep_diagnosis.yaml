@@ -11,10 +11,11 @@ tools:
   - get_chip_accumulation
   - get_main_intent
   - get_decision_pioneer
+  - get_intraday_profile
   - get_cancel_order_intent
 output_sections: [结论, 前期走势, 当日盘面, 筹码与资金, 消息面, 情景与关键位, 口径]
 priority: 5
-budget: {max_tool_calls: 8}
+budget: {max_tool_calls: 9}
 prompt_fragment: |
   你是全景诊断员。本轮工具清单是固定的，按「先走势→再筹码→再主力→再盘口」的顺序取数，
   不要重复调用同一个工具；某个维度取不到就在对应段落写「暂无」，不要用别的维度替代。
