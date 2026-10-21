@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
+from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
 from src.core.copilot_memory import memory_block
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
@@ -1129,6 +1130,13 @@ async def _run_tool_loop_inner(
     放大) / 轮次上限兜底 / 异常兜底。send_message 非流式路径同样消费本生成器。
     S5(2026-08-26): user 下传到 _execute_tool, 工具读数限本人数据。
     """
+    # 标的核对：用户写的名字（可能有错字）先拿 TQ 核一遍，不一致就在回答前先更正
+    _utext = next((m.get("content") for m in reversed(messages_for_ai)
+                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+    _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
+    _note = correction_note(_utext)
+    if _note:
+        messages_for_ai.insert(0, {"role": "system", "content": _note})
     try:
         for _round in range(MAX_TOOL_ROUNDS):
             response_msg = None
@@ -1140,7 +1148,9 @@ async def _run_tool_loop_inner(
                     ):
                         if kind == "delta":
                             acc.append(payload)
-                            yield "delta", payload
+                            # 首轮先缓冲：万一是"没调工具就作答"的幻觉，直接丢掉别让用户看见
+                            if _round or not _stock_q:
+                                yield "delta", payload
                         else:
                             response_msg = payload
                 else:
@@ -1153,6 +1163,10 @@ async def _run_tool_loop_inner(
             except Exception:
                 logger.info("流式 tool use 不可用，使用普通对话" if stream else "Tool use 不可用，使用普通对话")
                 ai_response = await ai_client.chat_multi(messages_for_ai, temperature=0.5)
+                if _stock_q:
+                    # 工具链不可用时同样不许凭记忆报数
+                    logger.warning("tool use 不可用且问的是具体标的 → 拒绝无数据作答")
+                    ai_response = zero_tool_refusal()
                 if stream:
                     yield "delta", ai_response
                     yield "done", ai_response
@@ -1165,10 +1179,12 @@ async def _run_tool_loop_inner(
             else:
                 no_calls = not response_msg.tool_calls
             if no_calls:
-                if stream:
-                    yield "done", "".join(acc)
-                else:
-                    yield "text", (response_msg.content or "")
+                text = "".join(acc) if stream else (response_msg.content or "")
+                if _round == 0 and _stock_q:
+                    # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
+                    logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
+                    text = zero_tool_refusal()
+                yield ("done" if stream else "text"), text
                 return
 
             # 执行 tool calls
