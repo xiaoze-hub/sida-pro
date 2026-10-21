@@ -37,3 +37,11 @@ def test_missing_levels_refuses():
 def test_render_states_no_direction_prediction():
     m = build_scenarios(TREND, {"band70_lo": 32.5, "band70_hi": 44.5})
     assert "不预测方向" in render(m)
+
+
+def test_weak_target_differs_from_support():
+    """走弱目标不能等于支撑位本身（循环表述）。"""
+    m = build_scenarios(TREND, {"band70_lo": 32.5, "band70_hi": 44.5})
+    weak = next(s for s in m["scenarios"] if s["name"] == "走弱")
+    assert weak["target"] != m["levels"]["support"]
+    assert "32.5" not in str(weak["target"]) or "下方无明确" in str(weak["target"])
