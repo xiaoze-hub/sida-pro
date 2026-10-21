@@ -181,6 +181,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         method = request.method
         if path.startswith(_WEBHOOK_PATHS):
             limit = RATE_LIMIT_WEBHOOK  # 10/min — 无登录态, 防 secret 爆破/滥用
+        elif path.startswith("/api/klines/") and method == "GET":
+            # 2026-10-21 事故：图表页把 /api/klines/{symbol} 打到 1264 次/分钟 → 撞 300/min
+            # 全局限流 → 图上出现「错误: HTTP 429」且主图空白。
+            # 主数据已有 60s 服务端缓存+单飞，这里给 K 线单独放宽到 1200/min（仍远低于风暴量级
+            # 之外的上限，且异常仍会被下面的超限告警抓到），真正该修的是前端轮询，另案跟进。
+            limit = _env_int("RATE_LIMIT_KLINES", 1200)
         elif path.startswith(_SENSITIVE_PATHS):
             limit = RATE_LIMIT_SENSITIVE  # 登录/改密防爆破: 20/min
         elif method == "GET":
@@ -207,6 +213,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             count = await redis_client.incr(redis_key, ttl_seconds=RATE_LIMIT_WINDOW)
             if count is not None and count > limit:
                 allowed = False
+            elif count is not None and count == 800:
+                # 到 800/min 还没被拦，说明有轮询风暴在打同一个端点：留一条可查的告警
+                logger.warning("限流告警: %s 在 %ss 内已 %s 次（path=%s ua=%s）",
+                               bucket_key, RATE_LIMIT_WINDOW, count, path,
+                               request.headers.get("user-agent", "")[:60])
         else:
             allowed = _in_memory_bucket.allow((bucket_key, endpoint), limit=limit)
 
