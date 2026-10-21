@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
+# (标签, 是否带符号) —— 波动是量级不是变化，不能加 +/-
 _LABELS = {
-    "momentum_20": ("20 日动量", "%"),
-    "momentum_60": ("60 日动量", "%"),
-    "vol_20": ("20 日年化波动", "%"),
-    "volume_z20": ("量能 z(60日)", ""),
-    "position_120": ("120 日区间位置", ""),
+    "momentum_20": ("20 日动量", True, "%"),
+    "momentum_60": ("60 日动量", True, "%"),
+    "vol_20": ("20 日年化波动", False, "%"),
+    "volume_z20": ("量能 z(60日)", True, ""),
+    "position_120": ("120 日区间位置", False, ""),
 }
 
 
@@ -57,13 +58,14 @@ def render(m: dict) -> str:
     if not m.get("available"):
         return "[量化因子] 该标的当日因子尚未生成（因子表按日累积）——不做推断。"
     lines = [f"[数据源: stock_factor_daily · {m['trade_date']} · 横截面分位=同日全市场排名]"]
-    for key, (label, unit) in _LABELS.items():
+    for key, (label, signed, unit) in _LABELS.items():
         v = m["values"].get(key)
         if v is None:
             lines.append(f"{label}：暂无")
             continue
         rank = m["ranks"].get(key)
-        txt = f"{label}：{v:+.2f}{unit}" if unit == "%" else f"{label}：{v:.2f}"
+        num = "{:+.2f}".format(v) if signed else "{:.2f}".format(v)
+        txt = f"{label}：{num}{unit}"
         if rank is not None:
             txt += f"（全市场 {rank:.0f} 分位）"
         if key in m["changes_20d"]:
