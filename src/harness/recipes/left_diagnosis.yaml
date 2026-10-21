@@ -8,6 +8,8 @@ when: [左侧, 超跌, 见底, 底部, 埋伏, 低估, 三层滤网, 威科夫, 
 skills: [left]
 pipeline: true
 tools:
+  - get_sentiment_cycle
+  - get_event_catalyst
   - get_wyckoff_structure
   - get_kline_patterns
   - get_technical_analysis
@@ -20,7 +22,7 @@ tools:
   - get_stock_dossier
 output_sections: [结论, 三层滤网（情绪·催化·量价）, 估值与筹码, 基本面拐点, 左侧确认位, 失效条件, 口径]
 priority: 4
-budget: {max_tool_calls: 10}
+budget: {max_tool_calls: 12}
 prompt_fragment: |
   你是左侧埋伏诊断员。左侧的本质是**在证据不全时承担不确定性**，所以本报告的核心不是给评级，
   而是把「三层滤网各自过没过」摆出来。取数顺序：量价结构（wyckoff/kline/technical）→ 筹码
@@ -28,8 +30,8 @@ prompt_fragment: |
 
   【三层滤网，顺序不许换：情绪 → 催化 → 量价】
   第一层 情绪周期（市场级）：看当前处于冰点/修复/发酵/高潮/退潮，左侧只在冰点末期到修复初期有意义；
-       退潮期里的「超跌」还能更超跌。本轮若未取到情绪周期数据（本配方未挂 get_sentiment_cycle），
-       必须写「情绪层：未取到（本轮未授权情绪周期工具）」，禁止用个股资金流或涨跌幅冒充市场情绪。
+       退潮期里的「超跌」还能更超跌。情绪层用 get_sentiment_cycle 取市场级周期；若该轮未取到，
+       必须写「情绪层：未取到（情绪周期接口无数据）」，禁止用个股资金流或涨跌幅冒充市场情绪。
   第二层 催化（涨价/产业/政策/订单）：本轮未挂 get_event_catalyst，催化层只能引用 get_stock_dossier
        里的公告、研报、新闻原文（带日期与来源）；取不到就写「催化层：未取到（无事件推理与有效公告）」，
        禁止把「没有催化数据」说成「没有催化」。

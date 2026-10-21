@@ -1,3 +1,19 @@
+## release: v0.38.1（画像只接管三类 + 左侧配方补齐三层滤网工具）（2026-10-21）
+
+v0.38.0 的 CI 红在两处，都是画像接管的**范围**问题，不是画像本身：
+
+1. `test_agent_kernel::test_tool_loop_writes_trace` 期望 1 次工具调用，实际 11 次 ——
+   因为 `normal` 画像也返回 `deep_diagnosis`，把「600111 怎么样」推进了 10 工具管线。
+2. `test_chat_stream::test_stream_events_arrive_incrementally` 没有 delta 事件 —— 同一原因（走管线只发 stage/done）。
+
+修法：**画像只在「指标会量错」的三类接管** —— 妖股 / 左侧 / 题材龙头；趋势与常规交回模型自选。
+同时加诊断意图门控（`is_diagnosis_intent`）：单纯问价（"600111 多少钱"）不触发画像，
+画像还要求「没有命中具体配方」才生效，避免抢走 chip_analyst / intraday_analyst 的路由。
+
+另修：`left_diagnosis` 工具 10 → 12，补上 `get_sentiment_cycle`（三层滤网第一层）与
+`get_event_catalyst`（第二层）—— 之前只能写「未取到（本轮未授权）」，等于三层只做了第三层。
+预算同步 12。
+
 ## release: v0.38.0（标的画像 + 按画像选配方：妖股不再用趋势票的尺子量）（2026-10-21）
 
 **背景（实测）**：62 个 chat 工具里只有 **27 个**进了配方，**35 个从未进入任何分析路径** ——
