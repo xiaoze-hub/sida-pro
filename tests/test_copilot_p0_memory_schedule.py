@@ -148,3 +148,42 @@ def test_weekday_matching():
     assert sched._match_weekday("mon-fri", mon) is True
     assert sched._match_weekday("mon-fri", sat) is False
     assert sched._match_weekday("daily", sat) is True
+
+
+# ── 轮次用尽兜底（2026-10-21 线上：一次问两只票 → 只回"抱歉处理轮次过多"） ──
+
+def test_summarize_on_budget_uses_collected_evidence():
+    import asyncio
+
+    from src.harness import runtime as rt
+
+    class _Final:
+        content = "强瑞技术：筹码集中度 12%；三花智控：暂无"
+
+    class _AI:
+        def __init__(self):
+            self.calls = []
+
+        async def chat_with_tools(self, messages, tools, temperature=0.4):
+            self.calls.append((len(messages), tools))
+            return _Final()
+
+    ai = _AI()
+    out = asyncio.run(rt.summarize_on_budget(ai, [{"role": "system", "content": "x"}]))
+    assert "强瑞技术" in out
+    assert "触达工具轮次上限" in out
+    assert ai.calls[0][1] == [], "兜底总结必须不带工具，否则又会进入循环"
+
+
+def test_summarize_on_budget_returns_empty_on_failure():
+    import asyncio
+
+    from src.harness import runtime as rt
+
+    class _AI:
+        async def chat_with_tools(self, *a, **k):
+            raise RuntimeError("model down")
+
+    assert asyncio.run(rt.summarize_on_budget(_AI(), [])) == ""
+    hint = rt.budget_exhausted_hint()
+    assert "一次只问一只" in hint, "建议必须可执行，不能只说请精简"

@@ -80,3 +80,38 @@ class AgentRuntime:
                     result=locals().get("result"),
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                 )
+
+
+async def summarize_on_budget(ai_client, messages: list[dict]) -> str:
+    """轮次用尽时的兜底：用**已取到的证据**补一次无工具总结。
+
+    2026-10-21 线上：用户一次问两只票 → 5 轮工具没跑完 → 只回一句"抱歉，处理轮次过多"，
+    白等 90 秒什么也没得到。这里改成"把已经查到的讲完"，并显式标注触达上限。
+    失败返回空串，由调用方给可执行的建议文案。
+    """
+    try:
+        final = await ai_client.chat_with_tools(
+            messages + [{
+                "role": "user",
+                "content": (
+                    "工具轮次已到上限，不要再调用工具。请只基于以上已取到的数据直接作答："
+                    "结论先行，缺失的维度明确写「暂无」，不要推测、不要补数字。"
+                ),
+            }],
+            tools=[],
+            temperature=0.3,
+        )
+    except Exception:  # noqa: BLE001 - 兜底失败就走调用方的建议文案
+        return ""
+    text = (getattr(final, "content", "") or "").strip()
+    if not text:
+        return ""
+    return text + "\n\n（本次触达工具轮次上限：以上只基于已取到的数据，缺失维度标「暂无」）"
+
+
+def budget_exhausted_hint() -> str:
+    """连兜底总结都失败时给人的下一步建议（可执行，不说"请精简"这种空话）。"""
+    return (
+        "抱歉，这次要查的维度太多，工具轮次跑完了还没收齐。"
+        "建议一次只问一只股票，或说得更具体（例如只看筹码 / 只看竞价 / 只看资金）。"
+    )

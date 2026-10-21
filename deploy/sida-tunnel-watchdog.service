@@ -1,0 +1,7 @@
+[Unit]
+Description=SIDA tunnel watchdog (cloud 127.0.0.1:18000 health)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sida-tunnel-watchdog.sh

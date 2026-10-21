@@ -17,7 +17,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
-from src.harness.runtime import AgentRuntime
+from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
 from src.core.copilot_memory import memory_block
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
@@ -79,7 +79,7 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
   * 「妖不妖 / 连板身位 / 在不在妖股池」→ get_demon_factor; 同时说明这是历史事件画像, 非当日热度。
   * 「今天竞价谁爆量 / 全市场竞价异动」→ scan_auction_anomaly（全市场扫描, 较慢）;
     「某只票竞价怎么样」→ get_auction_data / 竞价快照。个股竞价不要用 scan_auction_anomaly。
-  * 一次回答最多调用 5 个工具（MAX_TOOL_ROUNDS=5）; 优先「1 个主证据 + 1 个反向验证」的组合。
+  * 一次回答最多 7 轮工具（MAX_TOOL_ROUNDS=7）; 优先「1 个主证据 + 1 个反向验证」的组合。\n    用户一次问**多只股票**时：每只票只取 1~2 个主证据、分标的段落作答，不要对每只都跑全景诊断（会撞轮次上限）。
     推荐组合: 该不该追 → get_chip_accumulation + get_cancel_order_intent; 洗盘还是出货 →
     get_wyckoff_structure + get_decision_pioneer; 能不能成妖 → get_demon_factor + get_auction_data。
 - 结论一致性: 若工具返回的数字与用户给出的数字冲突, 以工具为准并指出差异; 不得为了顺应用户而改数。
@@ -93,7 +93,7 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
   末尾固定一行: 以上为客观数据推演, 不构成投资建议。"""
 
 MAX_HISTORY_MESSAGES = 20
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 7
 
 # 工具名 → 流式阶段提示文案(tool 执行前推送给前端, 消除长等待白屏)
 _TOOL_STAGE_LABELS = {
@@ -1200,10 +1200,9 @@ async def _run_tool_loop_inner(
                     "content": result,
                 })
         else:
-            if stream:
-                yield "done", "抱歉，处理轮次过多，请精简问题再试。"
-            else:
-                yield "text", (response_msg.content or "抱歉，处理轮次过多，请精简问题再试。")
+            # 轮次用尽(2026-10-21): 先用已取到的证据补一次无工具总结, 实在没有才给建议文案
+            _sum = await summarize_on_budget(ai_client, messages_for_ai)
+            yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")
         if stream:
