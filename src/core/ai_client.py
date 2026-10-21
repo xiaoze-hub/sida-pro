@@ -420,9 +420,11 @@ class AIClient:
         create_kwargs = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
             "temperature": temperature,
         }
+        # 空 tools 有些 OpenAI 兼容服务会 400；轮次用尽时的"无工具总结"就走这条分支
+        if tools:
+            create_kwargs["tools"] = tools
 
         try:
             response, _latency_ms = await self._call_with_retry(

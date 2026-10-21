@@ -205,14 +205,22 @@ class _Client:
 class _StreamClient:
     """流式 mock: 每轮是一组 (kind, payload) 事件或 _Msg(final) 或异常。"""
 
-    def __init__(self, rounds, multi="multi-兜底回复"):
+    def __init__(self, rounds, multi="multi-兜底回复", summary="已取证据的结论：B"):
         self._rounds = list(rounds)
         self._multi = multi
+        self._summary = summary
         self.chat_multi_calls = 0
+        self.no_tool_calls = 0
         self._idx = 0
 
     def chat_with_tools_stream(self, messages, tools=None, temperature=0.5):
         return self._gen()
+
+    async def chat_with_tools(self, messages, tools=None, temperature=0.4):
+        """轮次用尽时的无工具兜底总结（summarize_on_budget 走这里）。"""
+        self.no_tool_calls += 1
+        assert not tools, "兜底总结不该再带工具"
+        return _Msg(content=self._summary)
 
     async def _gen(self):
         # 跨调用累计推进: 每次 chat_with_tools_stream 消费一轮, 不重置
@@ -296,12 +304,13 @@ def test_nonstream_rounds_exhausted(monkeypatch):
         return "x"
 
     monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
-    client = _Client([_Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]) for i in range(5)])
+    # MAX_TOOL_ROUNDS=7(2026-10-21 起)：7 轮都只回 tool_calls，随后走"用已取证据补一次总结"
+    client = _Client([_Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]) for i in range(7)]
+                     + [_Msg(content="基于已取到的数据：结论A；缺失：暂无")])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None)))
-    # 每轮 tool 前先产 stage 事件, 5 轮后 MAX_TOOL_ROUNDS 兜底
-    assert evs == [("stage", "正在读取您的持仓...")] * 5 + [
-        ("text", "抱歉，处理轮次过多，请精简问题再试。")
-    ]
+    assert evs[:-1] == [("stage", "正在读取您的持仓...")] * 7
+    assert evs[-1][0] == "text"
+    assert "结论A" in evs[-1][1] and "触达工具轮次上限" in evs[-1][1], "轮次用尽必须给出已取证据的结论"
 
 
 def test_nonstream_exception_bottomline(monkeypatch):
@@ -372,12 +381,12 @@ def test_stream_rounds_exhausted(monkeypatch):
 
     monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
     client = _StreamClient([
-        [("final", _Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]))] for i in range(5)
+        [("final", _Msg(content=None, tool_calls=[_ToolCall(f"t{i}")]))] for i in range(7)
     ])
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, [], db=None, stream=True)))
-    assert evs == [("stage", "正在读取您的持仓...")] * 5 + [
-        ("done", "抱歉，处理轮次过多，请精简问题再试。")
-    ]
+    assert evs[:-1] == [("stage", "正在读取您的持仓...")] * 7
+    assert evs[-1][0] == "done"
+    assert "结论：B" in evs[-1][1] and "触达工具轮次上限" in evs[-1][1]
 
 
 # ──────────────────────────── 5. 断开检测 + 行数 ────────────────────────────
