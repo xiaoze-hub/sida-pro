@@ -58,3 +58,30 @@ def test_forced_whitelist_wins():
 def test_filter_schemas_never_returns_empty():
     schemas = [{"type": "function", "function": {"name": "a"}}]
     assert filter_schemas(schemas, frozenset({"nonexistent"})) == schemas, "白名单写错不该让模型裸奔"
+
+
+def test_persona_recipe_locks_recipe_and_narrows_tools():
+    """画像命中必须直接锁配方：妖股不能被「筹码怎么样」这类关键词带偏到 chip_analyst。"""
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+
+    schemas = [{"type": "function", "function": {"name": n}} for n in CHAT_TOOL_REGISTRY]
+    rt = route_for_request("002050 筹码怎么样", schemas, persona_recipe="demon_diagnosis")
+    assert rt.recipe is not None and rt.recipe.id == "demon_diagnosis"
+    assert rt.reason == "persona:demon_diagnosis"
+    assert rt.temperature == 0.2
+    names = {s["function"]["name"] for s in rt.tools}
+    assert "get_demon_factor" in names and "get_chip_accumulation" not in names, "画像配方必须真收窄工具"
+
+
+def test_persona_recipe_mention_still_wins():
+    """@提及 > 画像：用户显式指定工具集时，画像不许覆盖。"""
+    schemas = [{"type": "function", "function": {"name": n}} for n in ("a", "b")]
+    rt = route_for_request("002050 筹码", schemas, forced=frozenset({"a"}), persona_recipe="demon_diagnosis")
+    assert rt.reason == "mention" and {s["function"]["name"] for s in rt.tools} == {"a"}
+
+
+def test_persona_recipe_unknown_id_falls_back():
+    """配方 id 写错不许崩，也不许锁空工具集 —— 回落到常规路由。"""
+    schemas = [{"type": "function", "function": {"name": "a"}}]
+    rt = route_for_request("用一句话说明你能做什么", schemas, persona_recipe="no_such_recipe")
+    assert rt.recipe is None and rt.reason == "default"

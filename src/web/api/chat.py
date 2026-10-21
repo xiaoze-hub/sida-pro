@@ -748,6 +748,7 @@ from src.harness.context import (  # noqa: E402
     REQ_RECIPE_LABEL as _REQ_RECIPE_LABEL,
     REQ_TEXT as _REQ_TEXT,
     REQ_TOOLS as _REQ_TOOLS,
+    detect_persona as _detect_persona,
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
@@ -1142,7 +1143,9 @@ async def _run_tool_loop_inner(
     _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
     # 确定性路由(2026-10-21): 命中配方关键词 → 工具白名单收紧 + 温度降到 0.2。
     # 实测同一问题工具集合 Jaccard 仅 0.52，方差主要来自"模型自选工具"，不是模型能力。
-    _route = _route_for_request(_utext, CHAT_TOOLS, _REQ_TOOLS.get())
+    _persona, _ptxt = _detect_persona(db, _utext, _REQ_BOUND.get()) if _stock_q else (None, "")
+    if _ptxt: messages_for_ai.insert(0, {"role": "system", "content": _ptxt})
+    _route = _route_for_request(_utext, CHAT_TOOLS, _REQ_TOOLS.get(), persona_recipe=(_persona.recipe if _persona else None))
     if _route.recipe is not None:
         _REQ_TOOLS.set(frozenset(_route.recipe.tools))
         _REQ_RECIPE_LABEL.set(_route.recipe.label)

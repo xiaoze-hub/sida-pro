@@ -104,6 +104,27 @@ def extract_code(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def detect_persona(db, text: str, bound: str | None):
+    """标的画像旁路（2026-10-21）。
+
+    先判「这是妖股 / 左侧超跌 / 题材龙头 / 趋势白马 / 常规」，再由画像锁配方：
+    拿趋势+估值的尺子量五连板妖股，输出必然是「跌破支撑位、建议观望」这种废话。
+    失败一律 (None, "")，不影响主流程；失败原因只记 info。
+
+    放在 context.py 而不是 chat.py：chat.py 有行数护栏，画像逻辑属于上下文层。
+    """
+    try:
+        from src.core.stock_persona import detect, render
+
+        sym = (bound or extract_code(text or "") or "").split(".")[0].strip()
+        if not sym:
+            return None, ""
+        _p = detect(db, sym)
+        return _p, render(_p)
+    except Exception:  # noqa: BLE001  画像只是旁路，任何异常都不该影响作答
+        return None, ""
+
+
 def enter_request_ctx(db, conv, body, messages: list[dict]):
     """装配本轮上下文，返回需要回滚的 token 列表。"""
     recipe, note = apply_mentions(db, conv, body)
