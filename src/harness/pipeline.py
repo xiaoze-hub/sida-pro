@@ -13,12 +13,28 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time as _time
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 PER_TOOL_TIMEOUT = 60.0
 MAX_SYMBOLS = 2
+
+
+def _ms(t0: float) -> int:
+    return int((_time.perf_counter() - t0) * 1000)
+
+
+def _record(trace, tool: str, symbol: str, *, ok: bool, ms: int,
+            error: str | None = None, result: str | None = None) -> None:
+    """管线里的工具调用也要进轨迹：否则治理页看不到，Jaccard 也没法从库里量。"""
+    if trace is None:
+        return
+    try:
+        trace.step(tool, {"symbol": symbol}, ok=ok, error=error, result=result, elapsed_ms=ms)
+    except Exception:  # noqa: BLE001 - 轨迹是旁路
+        pass
 _CODE_RE = re.compile(r"(?<!\d)((?:00|30|60|68|83|87|43)\d{4})(?!\d)")
 
 
@@ -35,7 +51,18 @@ class PipelineRun:
         return self.ok > 0
 
 
-def symbols_of(text: str, bound: str | None = None) -> list[str]:
+def _names_to_codes(text: str) -> list[str]:
+    """没有 6 位代码时，用 TQ 名称检索兜底（"全景诊断 三花智控" 这种只写名字的提问）。"""
+    try:
+        from src.core.symbol_guard import resolve_mentions
+
+        info = resolve_mentions(text or "")
+        return [code.split(".")[0] for _, code, _ in (info.get("resolved") or [])]
+    except Exception:  # noqa: BLE001 - 解析失败就当解析不出来
+        return []
+
+
+def symbols_of(text: str, bound: str | None = None, *, allow_names: bool = False) -> list[str]:
     """从问句里取标的：显式代码优先，其次会话锁定；最多 2 只（多只就各跑一遍）。"""
     codes = []
     for m in _CODE_RE.finditer(text or ""):
@@ -44,17 +71,22 @@ def symbols_of(text: str, bound: str | None = None) -> list[str]:
             codes.append(c)
     if codes:
         return codes[:MAX_SYMBOLS]
-    return [bound] if bound else []
+    if bound:
+        return [bound]
+    if allow_names:
+        return _names_to_codes(text)[:MAX_SYMBOLS]
+    return []
 
 
 async def run(recipe, symbols: list[str], executor, db=None, user=None,
-              market: str = "CN") -> tuple[list[PipelineRun], list[str]]:
+              market: str = "CN", trace=None) -> tuple[list[PipelineRun], list[str]]:
     """按配方顺序跑工具。executor(name, args) -> str（由 chat 层注入，避免反向依赖）。"""
     results: list[PipelineRun] = []
     errors: list[str] = []
     for sym in symbols:
         pr = PipelineRun(symbol=sym)
         for tool in recipe.tools:
+            _t0 = _time.perf_counter()
             try:
                 out = await asyncio.wait_for(
                     executor(tool, {"symbol": sym, "market": market}),
@@ -63,17 +95,21 @@ async def run(recipe, symbols: list[str], executor, db=None, user=None,
             except asyncio.TimeoutError:
                 pr.failed += 1
                 errors.append(f"{tool}:timeout")
+                _record(trace, tool, sym, ok=False, error="timeout", ms=_ms(_t0))
                 continue
             except Exception as exc:  # noqa: BLE001 - 单个工具炸了不该毁整条管线
                 pr.failed += 1
                 errors.append(f"{tool}:{type(exc).__name__}")
+                _record(trace, tool, sym, ok=False, error=type(exc).__name__, ms=_ms(_t0))
                 continue
             text = str(out or "").strip()
             if not text:
                 pr.failed += 1
+                _record(trace, tool, sym, ok=False, error="empty", ms=_ms(_t0))
                 continue
             pr.outputs.append((tool, text))
             pr.ok += 1
+            _record(trace, tool, sym, ok=True, ms=_ms(_t0), result=text)
         results.append(pr)
     return results, errors
 
@@ -99,13 +135,13 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str) -> tuple[str,
 
 
 async def answer(ai_client, recipe, question: str, bound: str | None, executor,
-                 market: str = "CN") -> str | None:
+                 market: str = "CN", trace=None) -> str | None:
     """完整跑一条管线并写结论。返回 None = 管线没跑成，调用方回落到多轮 loop。"""
-    syms = symbols_of(question, bound)
+    syms = symbols_of(question, bound, allow_names=True)
     if not syms:
         logger.info("管线跳过：问题里没有可解析的标的（%s）", (question or "")[:30])
         return None
-    runs, errors = await run(recipe, syms, executor, market=market)
+    runs, errors = await run(recipe, syms, executor, market=market, trace=trace)
     if not any(r.usable for r in runs):
         logger.warning("管线全部失败，回落 tool loop：%s", errors[:3])
         return None
