@@ -191,7 +191,9 @@ async def test_tool_loop_writes_trace(monkeypatch):
     ):
         events.append((kind, payload))
 
-    assert ("text", "北方稀土 35.03 元，-0.57%。") in events
+    # 数字对账会在末尾追加对账结论（正文不改），所以用前缀断言
+    _texts = [c for k, c in events if k == "text"]
+    assert any(t.startswith("北方稀土 35.03 元，-0.57%。") for t in _texts)
 
     db = SessionLocal()
     try:

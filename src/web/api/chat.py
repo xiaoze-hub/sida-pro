@@ -79,6 +79,8 @@ SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analyti
   * 「洗盘还是出货 / 弹簧针 / 放量滞涨 / 缩量沉淀 / 突破有效吗」→ get_wyckoff_structure;
     必须保留「弹簧待确认」「放量突破须回踩确认」的不确定性表述, 不得说成"已见底/已突破"。
   * 「妖不妖 / 连板身位 / 在不在妖股池」→ get_demon_factor; 同时说明这是历史事件画像, 非当日热度。
+  * 「分时怎么样 / 尾盘有没有资金 / 是不是放量上攻 / 盘口压不压」→ get_intraday_profile
+    （日内位置 + 均价线 + 分时段量能 + 内外盘 + 五档；不要凭K线形态推分时结论）;
   * 「今天竞价谁爆量 / 全市场竞价异动」→ scan_auction_anomaly（全市场扫描, 较慢）;
     「某只票竞价怎么样」→ get_auction_data / 竞价快照。个股竞价不要用 scan_auction_anomaly。
   * 一次回答最多 7 轮工具（MAX_TOOL_ROUNDS=7）; 优先「1 个主证据 + 1 个反向验证」的组合。\n    用户一次问**多只股票**时：每只票只取 1~2 个主证据、分标的段落作答，不要对每只都跑全景诊断（会撞轮次上限）。

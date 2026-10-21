@@ -2046,3 +2046,44 @@ async def _tool_create_daily_task(db: Session, args: dict, user: User | None = N
     label = "竞价摘要" if kind == "auction_digest" else "收盘小结"
     return (f"已生成待确认动作 #{row['id']}：{label} 每天 {at} 推送。"
             f"请在面板「待确认动作」里点确认后才会生效。")
+
+
+@register_chat_tool(
+    "get_intraday_profile",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_intraday_profile",
+            "description": (
+                "分时走势画像：日内位置、均价线(VWAP)上下关系、分时段量能分布、"
+                "最大放量时点、尾盘量价、外盘/内盘(主动买卖)、五档买卖压比、量比。"
+                "问「分时怎么样/是不是放量上攻/尾盘有没有资金/盘口压不压」时先调这个，"
+                "它给的是可复算的事实，不要凭K线图猜分时。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002050"},
+                    "market": {"type": "string", "enum": ["CN", "HK", "US"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="分时=腾讯分钟线差分 · 内外盘/五档=腾讯qt · 缺失写「未取到」不推断",
+)
+async def _tool_get_intraday_profile(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.intraday_profile import build as _build_intraday
+
+    symbol = str(args.get("symbol") or "").strip().upper()
+    market = str(args.get("market") or "CN").strip().upper() or "CN"
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002050。"
+    if market == "CN" and not (len(symbol) == 6 and symbol.isdigit()):
+        return f"代码格式不对：{symbol}（A 股需 6 位数字）"
+    import asyncio as _asyncio
+
+    try:
+        return await _asyncio.to_thread(_build_intraday, symbol, market)
+    except Exception as exc:  # noqa: BLE001 - 源故障要说清，不许编分时
+        return f"[分时画像] 取数失败：{type(exc).__name__}: {exc}——不做推断。"
