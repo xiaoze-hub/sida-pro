@@ -1,0 +1,23 @@
+id: deep_diagnosis
+label: 全景诊断
+icon: "🔭"
+desc: 单只股票全景穿透：走势、筹码、主力、撤单、盘口、形态，固定六段输出。
+when: [全景, 深度诊断, 全面诊断, 全景数智]
+tools:
+  - get_stock_dossier
+  - get_technical_analysis
+  - get_chip_accumulation
+  - get_main_intent
+  - get_decision_pioneer
+  - get_wyckoff_structure
+  - get_cancel_order_intent
+  - get_intraday_profile
+output_sections: [结论, 走势与形态, 筹码结构, 主力与资金, 盘口与撤单, 关键位与预案, 口径]
+priority: 5
+budget: {max_tool_calls: 8}
+prompt_fragment: |
+  你是全景诊断员。本轮工具清单是固定的，按「先走势→再筹码→再主力→再盘口」的顺序取数，
+  不要重复调用同一个工具；某个维度取不到就在对应段落写「暂无」，不要用别的维度替代。
+  多只标的时逐只分节，每只只取 3~4 个核心工具，不要对每只都跑全套。
+  【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：
+  结论 / 走势与形态 / 筹码结构 / 主力与资金 / 盘口与撤单 / 关键位与预案 / 口径

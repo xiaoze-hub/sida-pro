@@ -750,7 +750,9 @@ from src.harness.context import (  # noqa: E402
     REQ_TOOLS as _REQ_TOOLS,
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
+    inject_recipe as _inject_recipe,
 )
+from src.harness.routing import route_for_request as _route_for_request
 
 
 async def _execute_tool(
@@ -1137,6 +1139,15 @@ async def _run_tool_loop_inner(
     _utext = next((m.get("content") for m in reversed(messages_for_ai)
                    if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
     _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
+    # 确定性路由(2026-10-21): 命中配方关键词 → 工具白名单收紧 + 温度降到 0.2。
+    # 实测同一问题工具集合 Jaccard 仅 0.52，方差主要来自"模型自选工具"，不是模型能力。
+    _route = _route_for_request(_utext, CHAT_TOOLS, _REQ_TOOLS.get())
+    if _route.recipe is not None:
+        _REQ_TOOLS.set(frozenset(_route.recipe.tools))
+        _REQ_RECIPE_LABEL.set(_route.recipe.label)
+        _REQ_BUDGET.set({"max": _route.recipe.max_tool_calls, "used": 0})
+        _inject_recipe(messages_for_ai, _route.recipe)
+    _tools, _temp = _route.tools, _route.temperature
     _note = correction_note(_utext)
     if _note:
         messages_for_ai.insert(0, {"role": "system", "content": _note})
@@ -1147,7 +1158,7 @@ async def _run_tool_loop_inner(
             try:
                 if stream:
                     async for kind, payload in ai_client.chat_with_tools_stream(
-                        messages_for_ai, tools=CHAT_TOOLS, temperature=0.5
+                        messages_for_ai, tools=_tools, temperature=_temp
                     ):
                         if kind == "delta":
                             acc.append(payload)
@@ -1158,7 +1169,7 @@ async def _run_tool_loop_inner(
                             response_msg = payload
                 else:
                     response_msg = await ai_client.chat_with_tools(
-                        messages_for_ai, tools=CHAT_TOOLS, temperature=0.5,
+                        messages_for_ai, tools=_tools, temperature=_temp,
                     )
             except LLMDegradedError:
                 # 0.3: 服务降级≠工具不支持, 不许走 chat_multi 兜底重试放大
