@@ -47,7 +47,11 @@ class GlobalLLMCircuitBreaker:
     _instances: dict[str, "GlobalLLMCircuitBreaker"] = {}
     _instances_lock = threading.Lock()
 
-    DEFAULT_RATE = 10         # 每分钟最多 N 次
+    # 2026-10-21: 10 次/分钟对多轮 agent 太低 —— 一次深度诊断就要 6~7 轮,
+    # 两次并发立刻打满, 桶空后直接降级 → 用户看到"AI 服务暂时不可用"。
+    # 放宽到 30 并允许环境变量覆盖；真正的上游 429 由冷却窗口兜底。
+    import os as _os
+    DEFAULT_RATE = int(_os.getenv("LLM_RATE_PER_MIN", "30"))
     DEFAULT_COOLDOWN = 600    # 429 冷却秒数
 
     __slots__ = ("service", "rate", "cooldown", "_lock",
@@ -72,8 +76,17 @@ class GlobalLLMCircuitBreaker:
                 cls._instances[service] = cls(service, rate, cooldown)
             return cls._instances[service]
 
-    def acquire(self) -> bool:
-        """尝试获取一个令牌。返回 True 表示可以调用, False 表示限流/冷却中。"""
+    def acquire(self, wait_s: float = 0.0) -> bool:
+        """尝试获取一个令牌。wait_s>0 时在窗口内短暂等待（背压），而不是立刻降级。"""
+        deadline = time.time() + max(wait_s, 0.0)
+        while True:
+            if self._try_once():
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _try_once(self) -> bool:
         now = time.time()
         with self._lock:
             if now < self._429_until:
@@ -306,7 +319,7 @@ class AIClient:
             temperature: 生成温度
         """
         # ── 限流检查: 令牌桶耗尽 → 类型化降级(0.3: 不再返回伪装成内容的字符串) ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
@@ -372,7 +385,7 @@ class AIClient:
             temperature: 生成温度
         """
         # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
@@ -413,7 +426,7 @@ class AIClient:
     ):
         """带 tool use 的对话调用，返回原始 message 对象。"""
         # ── 限流检查: 令牌桶耗尽 → 类型化降级 ──
-        if not self._cb.acquire():
+        if not self._cb.acquire(wait_s=3.0):
             logger.warning(f"LLM 限流(service={self.scene}), 令牌桶耗尽")
             raise LLMDegradedError("限流: 令牌桶耗尽", self.scene)
 
