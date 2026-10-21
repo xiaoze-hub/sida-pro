@@ -15,6 +15,7 @@ import urllib.request
 from typing import Any
 
 _QT_URL = "https://qt.gtimg.cn/q={code}"
+_MIN_URL = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}"
 
 # 分钟 → 时段
 _BUCKETS = (
@@ -186,11 +187,57 @@ def fetch_qt(symbol: str, market: str = "CN") -> dict:
         return {}
 
 
+def fetch_minute(symbol: str, market: str = "CN") -> tuple[list[dict] | None, float | None, str | None]:
+    """腾讯分时（自含实现：src/core 不许反向依赖 src/web，B4.1）。
+
+    返回 (points, prev_close, note)：
+    - points is None → 源故障（note 有值），**不是**"无分时"
+    - points == []   → 当日真无分时（非交易日/停牌）
+    """
+    prefix = {"CN": "sh" if symbol.startswith(("6", "9")) else "sz",
+              "HK": "hk", "US": ""}.get(market, "sh")
+    if market == "CN":
+        if symbol in ("000001", "000300", "000016", "000905", "000852"):
+            prefix = "sh"
+        elif symbol.startswith("399"):
+            prefix = "sz"
+    code = f"{prefix}{symbol}" if market != "US" else symbol
+    try:
+        req = urllib.request.Request(_MIN_URL.format(code=code), headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.load(resp)
+        block = (d.get("data") or {}).get(code) or {}
+        rows = (block.get("data") or {}).get("data") or []
+        prev_close = None
+        qt = block.get("qt") or {}
+        qt_list = qt.get(code) if isinstance(qt, dict) else None
+        if isinstance(qt_list, list) and len(qt_list) > 4 and qt_list[4]:
+            prev_close = float(qt_list[4])
+        if not rows:
+            return [], prev_close, None
+        points, prev_cum = [], 0.0
+        for row in rows:
+            parts = str(row).split()
+            if len(parts) < 4:
+                continue
+            try:
+                t, price = parts[0], float(parts[1])
+                cum_vol, cum_amt = float(parts[2]), float(parts[3])  # 累计量(手)/累计额(元)
+            except ValueError:
+                continue
+            # 均价 = 累计额 / (累计量 × 100 股)
+            avg = (cum_amt / (cum_vol * 100.0)) if cum_vol > 0 else price
+            points.append({"t": t, "price": price, "avg": round(avg, 2),
+                           "volume": int(max(cum_vol - prev_cum, 0.0))})
+            prev_cum = cum_vol
+        return points, prev_close, None
+    except Exception as exc:  # noqa: BLE001 - 源故障必须与"真空态"可分
+        return None, None, f"分时源(腾讯)暂不可用: {type(exc).__name__}"
+
+
 def build(symbol: str, market: str = "CN") -> str:
     """工具入口：抓一次分时 + 一次快照，算完给文本。"""
-    from src.web.api.quotes import _tencent_minute
-
-    points, prev_close, note = _tencent_minute(symbol, market)
+    points, prev_close, note = fetch_minute(symbol, market)
     if points is None:
         return f"[分时画像] 分时源暂不可用：{note or '腾讯分时异常'}——不做推断。"
     qt = fetch_qt(symbol, market)
