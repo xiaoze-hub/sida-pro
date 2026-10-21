@@ -19,6 +19,10 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 PER_TOOL_TIMEOUT = 60.0
+# 证据裁剪：6 个工具原文能到 2 万字，喂给模型只会让它更慢（实测某次 141s 里工具只占 8.6s，
+# 其余全在生成）。保留数字与结论行，砍掉长列表尾部。
+PER_TOOL_CHARS = 2500
+TOTAL_EVIDENCE_CHARS = 12000
 MAX_SYMBOLS = 2
 
 
@@ -125,10 +129,16 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str) -> tuple[str,
         + (f"\n输出段落：{sections}" if sections else "")
     )
     blocks = [f"【用户问题】{question}"]
+    used = 0
     for pr in runs:
         blocks.append(f"\n===== 标的 {pr.symbol}（成功 {pr.ok} / 失败 {pr.failed}）=====")
         for tool, text in pr.outputs:
-            blocks.append(f"\n--- {tool} ---\n{text}")
+            body = text if len(text) <= PER_TOOL_CHARS else text[:PER_TOOL_CHARS] + "\n…（后略）"
+            if used + len(body) > TOTAL_EVIDENCE_CHARS:
+                blocks.append(f"\n--- {tool} ---\n（证据总量已达上限，此处省略；该维度在结论里写「暂无」）")
+                continue
+            used += len(body)
+            blocks.append(f"\n--- {tool} ---\n{body}")
         if not pr.outputs:
             blocks.append("（该标的全部工具取数失败：请在结论里明确写「数据未取到」，不要推断）")
     return system, "\n".join(blocks)
