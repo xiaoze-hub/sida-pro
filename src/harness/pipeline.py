@@ -173,3 +173,45 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
     except Exception:  # noqa: BLE001
         pass
     return text
+
+
+async def answer_stream(ai_client, recipe, question: str, bound: str | None, executor,
+                        market: str = "CN", trace=None):
+    """流式版：边生成边下发。取数 ~5s，生成 25~135s —— 不流式的话用户只能干等。
+
+    产出 ("delta", 文本) 若干 → 最后 ("done", 全文)。管线没跑成时直接 return（调用方回落 loop）。
+    """
+    syms = symbols_of(question, bound, allow_names=True)
+    if not syms:
+        return
+    runs, errors = await run(recipe, syms, executor, market=market, trace=trace)
+    if not any(r.usable for r in runs):
+        logger.warning("管线全部失败，回落 tool loop：%s", errors[:3])
+        return
+    system, user_block = compose_prompt(recipe, runs, question)
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
+    acc: list[str] = []
+    final = None
+    try:
+        async for kind, payload in ai_client.chat_with_tools_stream(msgs, tools=[], temperature=0.2):
+            if kind == "delta":
+                acc.append(payload)
+                yield "delta", payload
+            else:
+                final = payload
+    except Exception as exc:  # noqa: BLE001 - 流断了就用已收到的部分
+        logger.warning("管线流式写结论中断：%s", type(exc).__name__)
+    text = "".join(acc).strip() or (getattr(final, "content", "") or "").strip()
+    if not text:
+        return
+    try:
+        from src.core.number_audit import annotate as _ann, audit as _audit
+
+        evidence = "\n".join(t for r in runs for _, t in r.outputs)
+        audited = _ann(text, _audit(text, evidence, question))
+        if len(audited) > len(text):  # 对账附言作为增量补发，不重复正文
+            yield "delta", audited[len(text):]
+            text = audited
+    except Exception:  # noqa: BLE001
+        pass
+    yield "done", text
