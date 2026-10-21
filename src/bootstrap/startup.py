@@ -412,6 +412,31 @@ async def lifespan(app):
                 coalesce=True,
             )
             logger.info("撤单率时序采样已注册(30s, 仅交易时段)")
+
+        # 个股因子日快照(2026-10-21): 收盘后算一次, 给全景诊断的「位置与因子」提供横截面分位。
+        try:
+            from src.core.trading_calendar import is_trading_day
+            from src.collectors.factor_daily import collect_once as _factor_collect
+
+            def _factor_job():
+                from datetime import datetime as _dt
+                if not is_trading_day(_dt.now().date()):
+                    return
+                from src.db.session import SessionLocal
+                db = SessionLocal()
+                try:
+                    _factor_collect(db)
+                finally:
+                    db.close()
+
+            rt.scheduler.scheduler.add_job(
+                _factor_job, "cron", hour=15, minute=35,
+                id="stock-factor-daily", name="个股因子日快照",
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
+            logger.info("个股因子日快照已注册(交易日 15:35)")
+        except Exception as e:
+            logger.error(f"因子快照注册失败: {e}")
         except Exception as e:
             logger.error(f"撤单率采样注册失败: {e}")
 

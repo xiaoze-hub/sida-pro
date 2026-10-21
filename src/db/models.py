@@ -2416,3 +2416,32 @@ class CancelRateSnapshot(Base):
     cancel_bias = Column(Float, nullable=True)
     intent = Column(String(24), nullable=True)
     source = Column(String(32), nullable=True)
+
+
+class StockFactorDaily(Base):
+    """个股因子日快照（2026-10-21）。
+
+    `strategy_factor_snapshots` 是信号级（只有被策略选中的票），诊断需要"个股 × 日期"。
+    只写能精确算的因子；换手率缺流通股本历史、主力净额缺逐笔历史 → 留 NULL，不拿近似值冒充。
+    rank_* 是**同日全市场横截面分位**（0~100），绝不跨日或用未来数据。
+    """
+
+    __tablename__ = "stock_factor_daily"
+    __table_args__ = (
+        Index("ix_stock_factor_sym_date", "symbol", "trade_date", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False)
+    trade_date = Column(String(8), nullable=False)
+    momentum_20 = Column(Float, nullable=True)     # 20 日涨跌幅 %
+    momentum_60 = Column(Float, nullable=True)     # 60 日涨跌幅 %
+    vol_20 = Column(Float, nullable=True)          # 20 日年化波动 %
+    volume_z20 = Column(Float, nullable=True)      # 当日量能 z（对 60 日）
+    position_120 = Column(Float, nullable=True)    # 120 日区间位置 0~100
+    rank_momentum_20 = Column(Float, nullable=True)
+    rank_momentum_60 = Column(Float, nullable=True)
+    rank_vol_20 = Column(Float, nullable=True)
+    rank_volume_z20 = Column(Float, nullable=True)
+    rank_position_120 = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
