@@ -35,13 +35,14 @@ def _conv(symbol=None, market=None):
 
 
 def test_six_recipes_loaded_and_valid():
-    """配方数量是显式契约：新增/删除配方必须同步这里（2026-10-21 增 intraday_analyst）。"""
+    """配方数量是显式契约：新增/删除配方必须同步这里。
+    2026-10-21: 增 intraday_analyst(8) → 按标的画像增 demon/left/theme_leader(11)。"""
     recipes = list_recipes()
-    assert len(recipes) == 8
+    assert len(recipes) == 11
     assert {r.id for r in recipes} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
-        "deep_diagnosis",
+        "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
     }
     for r in recipes:
         assert r.label and r.prompt_fragment

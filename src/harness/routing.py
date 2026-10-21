@@ -21,15 +21,29 @@ class Route:
 
 
 def route_for_request(text: str, all_schemas: list[dict],
-                      forced: frozenset[str] | set[str] | None = None) -> Route:
-    """决定本轮工具集与温度。forced 是 @提及 指定的白名单（优先于自动路由）。"""
-    from src.harness.recipes import filter_schemas, match_recipe
+                      forced: frozenset[str] | set[str] | None = None,
+                      persona_recipe: str | None = None) -> Route:
+    """决定本轮工具集与温度。
+
+    优先级：@提及白名单 > 标的画像（persona_recipe）> 关键词路由 > 默认。
+    画像是确定性判定（stock_persona.detect），比关键词更可靠 ——
+    妖股用「趋势+估值」的配方分析必然输出废话，所以画像命中时直接锁定配方。
+    """
+    from src.harness.recipes import filter_schemas, get_recipe, match_recipe
     from src.core.symbol_guard import is_stock_question
 
     if forced:
         return Route(recipe=None, tools=filter_schemas(all_schemas, forced),
                      temperature=0.2 if is_stock_question(text) else 0.3,
                      reason="mention")
+
+    if persona_recipe:
+        _pr = get_recipe(persona_recipe)
+        if _pr is not None:
+            return Route(recipe=_pr,
+                         tools=filter_schemas(all_schemas, frozenset(_pr.tools)),
+                         temperature=0.2,
+                         reason=f"persona:{_pr.id}")
 
     recipe = match_recipe(text or "")
     if recipe is not None:
