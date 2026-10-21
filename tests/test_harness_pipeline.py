@@ -97,3 +97,29 @@ def test_pipeline_records_steps_into_trace(monkeypatch):
     asyncio.run(run(FakeRecipe(), ["002050"], ex, trace=tr))
     assert [s[0] for s in tr.steps] == ["a", "b", "c"]
     assert tr.steps[1][1] is False and tr.steps[0][1] is True
+
+
+def test_answer_stream_yields_deltas_then_done():
+    """生成要 25~135s，不流式用户只能干等——必须边生成边下发。"""
+    import asyncio
+
+    import src.harness.pipeline as pl
+
+    class AI:
+        async def chat_with_tools_stream(self, msgs, tools=None, temperature=0.4):
+            yield "delta", "【结论】"
+            yield "delta", "偏多"
+            yield "final", type("M", (), {"content": "【结论】偏多"})()
+
+    async def ex(name, args):
+        return "现价 32.91"
+
+    events = []
+
+    async def go():
+        async for k, v in pl.answer_stream(AI(), FakeRecipe(), "002050 怎么样", None, ex):
+            events.append((k, v))
+
+    asyncio.run(go())
+    assert [k for k, _ in events] == ["delta", "delta", "done"]
+    assert events[-1][1].startswith("【结论】偏多")

@@ -753,7 +753,7 @@ from src.harness.context import (  # noqa: E402
     inject_recipe as _inject_recipe,
 )
 from src.harness.routing import route_for_request as _route_for_request
-from src.harness.pipeline import answer as _pipeline_answer
+from src.harness.pipeline import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
 
 
 async def _execute_tool(
@@ -1154,11 +1154,23 @@ async def _run_tool_loop_inner(
         async def _px(name, args):
             return await _execute_tool(db, name, args, user)
 
-        _ptxt = await _pipeline_answer(ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px,
-                                       trace=runtime.trace if runtime else None)
-        if _ptxt:
-            yield ("done" if stream else "text"), _ptxt
-            return
+        _trace = runtime.trace if runtime else None
+        if stream:
+            _hit = False
+            async for _k, _v in _pipeline_answer_stream(
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace
+            ):
+                _hit = True
+                yield _k, _v
+            if _hit:
+                return
+        else:
+            _ptxt = await _pipeline_answer(
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace
+            )
+            if _ptxt:
+                yield "text", _ptxt
+                return
     _note = correction_note(_utext)
     if _note:
         messages_for_ai.insert(0, {"role": "system", "content": _note})
