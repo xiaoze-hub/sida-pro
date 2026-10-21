@@ -377,6 +377,25 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"妖股因子增量管线注册失败: {e}")
 
+        # 会话定时任务(P0, 2026-10-21): 每分钟扫一次 copilot_schedules, 到点即执行。
+        # 不动态注册 job —— 重启不丢任务、删任务也没有竞态。
+        try:
+            from src.core.copilot_schedule import run_due as _copilot_sched_tick
+
+            rt.scheduler.scheduler.add_job(
+                _copilot_sched_tick,
+                "interval",
+                seconds=60,
+                id="copilot-schedule-tick",
+                name="参谋定时任务扫描",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("参谋定时任务扫描已注册(60s)")
+        except Exception as e:
+            logger.error(f"参谋定时任务扫描注册失败: {e}")
+
         # 龙虎榜金额「次日 TQ 回填」(2026-10-20 用户要求): 交易日 08:30 回填上一个交易日。
         # 当日榜单只有东财能枚举, 而 TQ 的 GP02 金额与东财分文不差且晚一天 —— 次日用 TQ 覆写,
         # 历史数据就不再依赖"东财网关那天有没有挂"。

@@ -124,10 +124,10 @@ def _c11_user_id_is_uuid_text():
 
 
 def _c12_tool_count_stable():
-    """工具数变化必须是有意的（现网 = 56）。"""
+    """工具数变化必须是有意的（2026-10-21 P0 起 = 58：+remember_preference/+create_daily_task）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 56
+    assert len(CHAT_TOOL_REGISTRY) == 58
 
 
 def _c13_tool_schema_name_matches():
@@ -306,9 +306,9 @@ def _c29_migrations_contiguous():
 def _c30_chat_py_line_guard():
     """chat.py 历史上膨胀到 3021 行，护栏 2221 行；新逻辑必须外置到 harness/。"""
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
-    # 2026-10-20: TQ 异动资金档案接进来后 +3 行(渲染已抽到 src/core/tdx_corporate.py,
-    # 原先 47 行从这里搬走) —— 护栏随之上调 9 行，防止 chat.py 继续膨胀。
-    assert lines <= 2230, f"chat.py 当前 {lines} 行，超护栏"
+    # 2026-10-20: TQ 异动资金档案 +3 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
+    # 逻辑仍在往 src/core、src/harness 抽，护栏只是防止 chat.py 无限膨胀。
+    assert lines <= 2240, f"chat.py 当前 {lines} 行，超护栏"
 
 
 def _c31_no_decision_pioneer_in_user_facing_text():

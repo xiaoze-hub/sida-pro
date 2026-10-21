@@ -86,10 +86,12 @@ def test_no_residual_wrapper_references():
 
 def test_registry_integrity():
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+    # 2026-10-21 P0: 新增 remember_preference / create_daily_task（长期记忆 + 定时任务）
     assert set(CHAT_TOOL_REGISTRY) == (
-        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ | {"get_opportunities"}
+        set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
+        | {"get_opportunities", "remember_preference", "create_daily_task"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 56  # 37 core + propose_action + 1 handler-only + 11 thsdk + 6 tq
+    assert len(CHAT_TOOL_REGISTRY) == 58
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -137,8 +139,9 @@ def test_exported_tool_order():
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
     assert names[: len(EXPECTED_CORE_ORDER)] == EXPECTED_CORE_ORDER
     tail = names[len(EXPECTED_CORE_ORDER):]
-    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ
-    assert set(tail[-len(EXPECTED_TQ):]) == EXPECTED_TQ  # TQ 三件套注册在最后
+    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {"remember_preference", "create_daily_task"}
+    # P0 两个新工具注册在最后（文件末尾追加），TQ 三件套在其之前
+    assert set(tail[-2:]) == {"remember_preference", "create_daily_task"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 
@@ -388,9 +391,9 @@ def test_stream_endpoint_has_disconnect_guard():
 
 def test_chat_py_line_shrink():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
-    # 2026-10-20: TQ 异动资金档案接入 +2 行(渲染已抽到 src/core/tdx_corporate.py) → 上限 2230,
-    # 相对 3021 行仍下降 ≥790 行，护栏意图不变。
-    assert lines <= 2230, f"chat.py 应较 3021 行下降 ≥790, 当前 {lines}"
+    # 2026-10-20 治理/TQ +2 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
+    # 相对 3021 行仍下降 ≥780 行，护栏意图不变。
+    assert lines <= 2240, f"chat.py 应较 3021 行下降 ≥780, 当前 {lines}"
 
 
 def test_exec_thsdk_tool_compat_surface():

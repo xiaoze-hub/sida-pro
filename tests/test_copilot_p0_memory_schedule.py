@@ -1,0 +1,150 @@
+"""P0：长期记忆 + 会话定时任务（2026-10-21）。
+
+铁律：
+- 记忆只记用户**明确说**的（"记住/以后都/别再"），不从闲聊里推断偏好；
+- 定时任务只在交易日出内容，同一天不重复跑；
+- 所有副作用失败都不能把问答/调度搞挂。
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime, timedelta
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from src.core import copilot_memory as mem
+from src.core import copilot_schedule as sched
+from src.db.models import Base, ChatConversation, ChatMessage, CopilotMemory, CopilotSchedule
+
+
+@pytest.fixture()
+def db(tmp_path):
+    eng = create_engine(f"sqlite:///{tmp_path/'m.db'}")
+    Base.metadata.create_all(bind=eng, tables=[
+        CopilotMemory.__table__, CopilotSchedule.__table__,
+        ChatConversation.__table__, ChatMessage.__table__,
+    ])
+    Sess = sessionmaker(bind=eng)
+    s = Sess()
+    yield s
+    s.close()
+
+
+@pytest.fixture()
+def uid():
+    return str(uuid.uuid4())
+
+
+# ── 记忆 ────────────────────────────────────────────────────────────────
+
+def test_extract_only_explicit_instructions():
+    assert mem.extract_candidates("今天大盘怎么样") == []
+    got = mem.extract_candidates("记住：我只做主板，不碰北交所")
+    assert got and got[0][0] == "preference"
+    assert "只做主板" in got[0][1]
+    got2 = mem.extract_candidates("以后资金流别用东财方向位回答方向")
+    assert got2 and got2[0][0] == "rule"
+    # 只是问"以后会怎样"不是指令 —— 不能记
+    assert mem.extract_candidates("以后行情会怎么走") == []
+
+
+def test_remember_dedupes(db, uid):
+    a = mem.remember(db, uid, content="我只做主板")
+    b = mem.remember(db, uid, content="我只做主板")
+    assert a["id"] == b["id"]
+    assert db.query(CopilotMemory).count() == 1
+
+
+def test_recall_puts_pinned_first(db, uid):
+    mem.remember(db, uid, content="普通偏好A", weight=3)
+    pinned = mem.remember(db, uid, content="钉住的规则", kind="rule", weight=10)
+    rows = mem.recall(db, uid, limit=2)
+    assert rows[0]["id"] == pinned["id"], "weight>=9 必须排在前面"
+
+
+def test_disabled_memory_not_injected(db, uid):
+    row = mem.remember(db, uid, content="这条要停用")
+    mem.set_enabled(db, uid, row["id"], False)
+    assert mem.recall(db, uid) == []
+
+
+def test_memory_block_captures_then_injects(db, uid):
+    block = mem.memory_block(db, uid, "记住：以后问资金流都用逐笔口径")
+    assert "长期偏好" in block
+    assert "逐笔口径" in block
+    # 第二次没触发词，但仍应召回已有记忆
+    block2 = mem.memory_block(db, uid, "600111 怎么样")
+    assert "逐笔口径" in block2
+
+
+def test_memory_block_never_raises(monkeypatch):
+    class _Bad:
+        def query(self, *a, **k):
+            raise RuntimeError("db down")
+
+    assert mem.memory_block(_Bad(), "u1", "记住：x") == ""
+
+
+# ── 定时任务 ────────────────────────────────────────────────────────────
+
+def test_create_validates_time(db, uid):
+    with pytest.raises(ValueError):
+        sched.create(db, uid, kind="auction_digest", at_hhmm="9点25")
+    with pytest.raises(ValueError):
+        sched.create(db, uid, kind="nonsense", at_hhmm="09:25")
+    row = sched.create(db, uid, kind="auction_digest", at_hhmm="9:5")
+    assert row["at_hhmm"] == "09:05"
+
+
+def test_run_due_respects_time_and_dedupes(db, uid, monkeypatch):
+    row = sched.create(db, uid, kind="auction_digest", at_hhmm="09:25")
+
+    calls = {"n": 0}
+
+    def fake_text(_row):
+        calls["n"] += 1
+        return "【竞价摘要】测试内容"
+
+    monkeypatch.setattr(sched, "_build_text", fake_text)
+    monkeypatch.setattr(sched, "_match_weekday", lambda spec, d: True)
+
+    from src.db import session as dbs
+
+    monkeypatch.setattr(dbs, "SessionLocal", lambda: db)
+
+    # 时间不匹配 → 不跑
+    assert sched.run_due(datetime(2026, 10, 21, 9, 24))["ran"] == 0
+    # 命中 → 跑一次并写消息
+    out = sched.run_due(datetime(2026, 10, 21, 9, 25))
+    assert out["ran"] == 1 and calls["n"] == 1
+    msgs = db.query(ChatMessage).all()
+    assert len(msgs) == 1 and msgs[0].role == "assistant"
+    assert "竞价摘要" in msgs[0].content
+    assert db.query(ChatConversation).count() == 1
+    # 同一天再跑 → 跳过
+    assert sched.run_due(datetime(2026, 10, 21, 9, 25))["ran"] == 0
+    assert db.query(ChatMessage).count() == 1
+    assert db.query(CopilotSchedule).one().id == row["id"]
+
+
+def test_run_due_skips_when_no_content(db, uid, monkeypatch):
+    sched.create(db, uid, kind="auction_digest", at_hhmm="09:25")
+    monkeypatch.setattr(sched, "_build_text", lambda _r: None)
+    monkeypatch.setattr(sched, "_match_weekday", lambda spec, d: True)
+    from src.db import session as dbs
+
+    monkeypatch.setattr(dbs, "SessionLocal", lambda: db)
+    out = sched.run_due(datetime(2026, 10, 21, 9, 25))
+    assert out["ran"] == 0 and out["skipped"] >= 1
+    # 没内容时不标记已跑，下次还有机会
+    assert db.query(CopilotSchedule).one().last_run_date is None
+
+
+def test_weekday_matching():
+    mon = date(2026, 10, 19)
+    sat = date(2026, 10, 24)
+    assert sched._match_weekday("mon-fri", mon) is True
+    assert sched._match_weekday("mon-fri", sat) is False
+    assert sched._match_weekday("daily", sat) is True
