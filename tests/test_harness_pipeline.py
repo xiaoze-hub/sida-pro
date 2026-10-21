@@ -121,5 +121,8 @@ def test_answer_stream_yields_deltas_then_done():
             events.append((k, v))
 
     asyncio.run(go())
-    assert [k for k, _ in events] == ["delta", "delta", "done"]
+    # v0.33.4: 取数阶段会先发 stage（每工具一条），正文事件顺序不变
+    kinds = [k for k, _ in events if k != "stage"]
+    assert kinds == ["delta", "delta", "done"]
+    assert events[0][0] == "stage" and "正在取数" in events[0][1]
     assert events[-1][1].startswith("【结论】偏多")
