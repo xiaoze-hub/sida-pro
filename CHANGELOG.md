@@ -1,3 +1,9 @@
+## fix: 数据域 market.breadth 自建会话 + status 列注释（2026-10-22，未发版）
+
+- `_breadth_payload(db=None)` 时自建 `SessionLocal`（脚本/测试路径），不再是 `NoneType.execute` 崩栈后返回半截文本；
+  生产路径永远带 db，行为不变。
+- `CopilotRun.status` 列注释补 `degraded`（v0.39.0 起会出现该值）。
+
 ## release: v0.39.0（库优先 + 数据域扩到 14/26 + 治理可见 + 重型方法才串行）（2026-10-22）
 
 **1) 智能体「库优先」：6 个直连 TQ 的工具改口径**

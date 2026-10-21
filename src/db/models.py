@@ -2300,7 +2300,7 @@ class CopilotRun(Base):
     user_id = Column(String(36), nullable=True)                # users.id 是 UUID 字符串
     recipe = Column(String(48), nullable=True)                 # 配方 id(内置 6 个)
     question = Column(Text, nullable=True)                     # 用户本轮问题(截断 500)
-    status = Column(String(16), nullable=False, default="running")  # running/ok/error
+    status = Column(String(16), nullable=False, default="running")  # running/ok/degraded/error
     error = Column(Text, nullable=True)
     tool_calls = Column(Integer, nullable=False, default=0)
     elapsed_ms = Column(Integer, nullable=True)

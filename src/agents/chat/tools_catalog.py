@@ -1325,7 +1325,12 @@ def _breadth_payload(db: Any) -> dict[str, Any]:
     try:
         from src.collectors.market_breadth_series import latest_with_percentile, render_text
 
-        summary = latest_with_percentile(db)
+        _db = db
+        if _db is None:  # 工具被无会话调用时自建（测试/脚本路径），生产上永远拿得到 db
+            from src.db.session import SessionLocal
+
+            _db = SessionLocal()
+        summary = latest_with_percentile(_db)
         if summary.get("ok"):
             series_text = render_text(summary) or ""
             series_date = str(summary.get("trade_date") or "")[:10]
