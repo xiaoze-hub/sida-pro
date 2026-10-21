@@ -71,7 +71,10 @@ def test_missing_domain_name_rejected():
     assert "请提供数据域" in out and "list_data_domains" in out
 
 
-@pytest.mark.parametrize("domain", ["stock.chip", "stock.flow", "stock.intraday", "stock.factor"])
+@pytest.mark.parametrize(
+    "domain",
+    ["stock.chip", "stock.flow", "stock.intraday", "stock.factor", "stock.quote", "stock.fundamental"],
+)
 def test_missing_symbol_rejected(domain):
     out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": "{}"}))
     assert "缺少必填参数" in out and "symbol" in out
@@ -85,12 +88,25 @@ def test_bad_params_json_rejected():
 
 
 def test_p1_domain_is_honest():
-    out = _run(tc.query_data_domain(None, {"domain": "market.index"}))
+    out = _run(tc.query_data_domain(None, {"domain": "market.mainline"}))
     assert "尚未接入实现" in out or "P1 待接" in out
 
 
-def test_all_eight_p0_domains_are_wired(monkeypatch):
-    """P0 八个域（yaml 里 source 非空）必须都有实现，不能漏一个去报「未接入」。"""
+def test_remaining_p1_domains_count_and_message():
+    """P1 未接的 12 个域仍必须明确说未接入（不猜表、不编数字）。"""
+    import yaml
+
+    raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
+    p1 = [str(d["id"]) for d in raw["domains"] if not str(d.get("source") or "").strip()]
+    assert len(p1) == 12
+    for domain in p1:
+        out = _run(tc.query_data_domain(None, {"domain": domain}))
+        assert "尚未接入实现" in out, f"{domain} 应报未接入"
+        assert "SELECT" not in out.upper()
+
+
+def test_all_fourteen_implemented_domains_are_wired(monkeypatch):
+    """source 非空的 14 个域都必须有实现，不能漏一个去报「未接入」。"""
     import yaml
 
     _canned_reads(monkeypatch, {})   # 不碰真库：全部当空表处理
@@ -100,11 +116,12 @@ def test_all_eight_p0_domains_are_wired(monkeypatch):
 
     monkeypatch.setattr(tc, "_delegate", _fake)
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
-    p0 = {str(d["id"]) for d in raw["domains"] if str(d.get("source") or "").strip()}
-    assert len(p0) == 8
-    for domain in sorted(p0):
+    done = {str(d["id"]) for d in raw["domains"] if str(d.get("source") or "").strip()}
+    assert len(done) == 14
+    for domain in sorted(done):
         out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": '{"symbol": "002361"}'}))
         assert "尚未接入实现" not in out, f"{domain} 未接线"
+        assert len(out) <= tc.MAX_DOMAIN_CHARS
 
 
 # ──────────────────────────── 4. 空结果不补 0 ────────────────────────────
@@ -389,3 +406,325 @@ def test_sql_failure_degrades_to_missing(monkeypatch):
     out = _run(tc.query_data_domain(None, {"domain": "limit.pool"}))
     assert "未取到" in out and "RuntimeError" in out
     assert "触板" not in out
+
+
+# ──────────────────────────── 10. P1 六域（2026-10-22）：market.index / market.breadth /
+#                                  board.daily / stock.fundamental / auction.flow / stock.quote
+
+P1_SIX = ("market.index", "market.breadth", "board.daily", "stock.fundamental", "auction.flow", "stock.quote")
+
+
+@pytest.mark.parametrize("domain", P1_SIX)
+def test_p1_six_domains_recognised_and_header(monkeypatch, domain):
+    """六个新域都能被识别、渲染非空文案，且首行带「时点 / 来源」。"""
+    _canned_reads(monkeypatch, {})          # 空库
+
+    async def _empty(name, db, args, user):
+        return ""
+
+    monkeypatch.setattr(tc, "_delegate", _empty)
+    out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": '{"symbol": "002361"}'}))
+    assert domain in out
+    assert "时点" in out and "来源" in out
+    assert "尚未接入实现" not in out and "未知数据域" not in out
+    assert "未取到" in out                  # 空库 + 空转发 → 必须说未取到，不能编数
+    assert len(out) <= tc.MAX_DOMAIN_CHARS
+
+
+@pytest.mark.parametrize("domain", P1_SIX)
+def test_p1_six_empty_render_has_no_fake_zero(monkeypatch, domain):
+    """空结果里不能出现冒充数值的 0（「未取到」而不是 0）。"""
+    _canned_reads(monkeypatch, {})
+
+    async def _empty(name, db, args, user):
+        return ""
+
+    monkeypatch.setattr(tc, "_delegate", _empty)
+    out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": '{"symbol": "002361"}'}))
+    assert re.search(r"(?<![\d.])0(?![\d.])", out) is None, out
+
+
+def test_market_index_renders_points_and_turnover(monkeypatch):
+    _canned_reads(
+        monkeypatch,
+        {
+            "idx_snapshot_ts": [{"d": "20261020", "ts": "2026-10-20 09:35:00"}],
+            "idx_snapshot": [
+                {"symbol": "sh000001", "name": "上证指数", "last": 3123.45, "prev_close": 3096.5,
+                 "change_pct": 0.87, "turnover": 4.52e11, "source": "tencent"},
+                {"symbol": "sz399001", "name": "深证成指", "last": 9876.5, "prev_close": 9800.0,
+                 "change_pct": 0.78, "turnover": 5.31e11, "source": "tencent"},
+                {"symbol": "sz399006", "name": "创业板指", "last": 1980.2, "prev_close": 2005.0,
+                 "change_pct": -1.24, "turnover": 2.1e11, "source": "tencent"},
+            ],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "market.index"}))
+    assert "时点 20261020 09:35:00" in out
+    assert "上证指数（000001）" in out and "3123.45" in out and "+0.87%" in out
+    assert "创业板指（399006）" in out and "-1.24%" in out
+    assert "两市成交额 9830.00亿" in out       # 4.52e11 + 5.31e11 = 9.83e11
+    assert "未取到" not in out
+
+
+def test_market_index_falls_back_to_daily(monkeypatch):
+    _canned_reads(
+        monkeypatch,
+        {
+            "idx_snapshot_ts": [],
+            "idx_daily_date": [{"d": "2026-10-20"}],
+            "idx_daily": [
+                {"code": "000001", "name": "上证指数", "close": 3100.0, "prev_close": 3070.0,
+                 "amount": 4.0e11, "source": "marketdata"},
+            ],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "market.index"}))
+    assert "时点 20261020" in out
+    assert "来源 index_daily" in out
+    assert "+0.98%" in out                    # 由 close/prev_close 反算
+    assert "两市成交额：缺上证或深证成指成交额" in out     # 只有沪市 → 不补 0
+
+
+def test_market_breadth_renders_series_dist_and_regime(monkeypatch):
+    import src.collectors.market_breadth_series as mbs
+
+    monkeypatch.setattr(
+        mbs, "latest_with_percentile", lambda db, days=260: {"ok": True, "trade_date": "2026-10-20"}
+    )
+    monkeypatch.setattr(
+        mbs, "render_text", lambda s: "· 涨跌家数：上涨 3200 / 下跌 1800 / 平盘 200（共 5200 只）"
+    )
+    _canned_reads(
+        monkeypatch,
+        {
+            "breadth_dist": [{
+                "trade_date": "2026-10-20", "total": 5200, "valid": 5200, "source": "sina",
+                "items": json.dumps([
+                    {"bucket": "跌停", "count": 3}, {"bucket": "<-5%", "count": 41},
+                    {"bucket": "涨停", "count": 62},
+                ]),
+            }],
+            "regime": [{
+                "snapshot_date": "2026-10-20", "market": "CN", "regime": "bullish",
+                "regime_score": 0.42, "confidence": 0.71, "breadth_up_pct": 61.5,
+                "avg_change_pct": 0.83, "volatility_pct": 1.9, "active_ratio": 0.77,
+                "sample_size": 5200,
+            }],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "market.breadth"}))
+    assert "时点 2026-10-20" in out and "来源" in out
+    assert "上涨 3200 / 下跌 1800" in out
+    assert "跌停 3" in out and "涨停 62" in out
+    assert "状态 偏多" in out and "+0.42" in out and "样本 5200" in out
+    assert "未取到" not in out
+
+
+def test_market_breadth_zero_valid_is_missing_not_zero(monkeypatch):
+    import src.collectors.market_breadth_series as mbs
+
+    monkeypatch.setattr(mbs, "latest_with_percentile", lambda db, days=260: {"ok": False, "reason": "no_data"})
+    monkeypatch.setattr(mbs, "render_text", lambda s: "")
+    _canned_reads(
+        monkeypatch,
+        {
+            "breadth_dist": [{"trade_date": "2026-10-20", "total": 0, "valid": 0,
+                              "items": json.dumps([{"bucket": "涨停", "count": 0}]), "source": "sina"}],
+            "regime": [],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "market.breadth"}))
+    assert "未取到" in out
+    assert "有效样本为 0" in out              # 如实说源不可用
+    assert "涨停 0" not in out                # 不把 0 当读数展示
+
+
+def test_board_daily_renders_rank_and_intraday_snapshot(monkeypatch):
+    _canned_reads(
+        monkeypatch,
+        {
+            "board_date": [{"d": "2026-10-20"}],
+            "board_inflow": [
+                {"block_code": "880001", "name": "半导体", "board_type": "industry",
+                 "change_pct": 2.31, "fund_net": 1.23e9, "volume": 8.8e10},
+                {"block_code": "880002", "name": "稀土永磁", "board_type": "concept",
+                 "change_pct": 3.12, "fund_net": 6.6e8, "volume": None},
+            ],
+            "board_outflow": [
+                {"block_code": "880003", "name": "白酒", "board_type": "industry",
+                 "change_pct": -1.8, "fund_net": -9.1e8, "volume": 3.2e10},
+            ],
+            "board_flow": [{
+                "ts": "2026-10-20 10:31:00", "board_type": "industry", "item_count": 2,
+                "payload": json.dumps([
+                    {"board_name": "半导体", "change_pct": 2.5, "net_inflow": 12.3,
+                     "leader_name": "北方华创", "leader_change_pct": 5.6},
+                ]),
+            }],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "board.daily"}))
+    assert "时点 20261020" in out
+    assert "半导体（行业）" in out and "净流入 +12.30亿" in out
+    assert "白酒（行业）" in out and "净流入 -9.10亿" in out
+    assert "盘中板块资金快照（2026-10-20 10:31:00" in out and "龙头 北方华创" in out
+    assert "未取到" not in out
+
+
+def test_stock_fundamental_forwards_existing_handler(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake(name, db, args, user):
+        calls.append((name, dict(args)))
+        return "龙虎榜：002361 闽东电力 净买 +1.23亿；两融余额 12.3亿；分红 10派1.5元"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.fundamental", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == [("get_fundamentals_detail", {"symbol": "002361", "market": "CN"})]
+    assert "get_fundamentals_detail" in out and "两融余额" in out
+    assert "未取到" not in out
+
+
+def test_auction_flow_symbol_reads_snapshot_and_ticks(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "竞价池占位"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _canned_reads(
+        monkeypatch,
+        {
+            "auction_snapshot": [{
+                "trade_date": "2026-10-20", "source": "tq", "auction_price": 14.62,
+                "open_price": 14.62, "open_pct": 9.98, "open_amount": 2.31e8,
+                "open_limit_buy": 1.2e7, "direction": "一字", "withdraw_rate_pre0920": 0.082,
+            }],
+            "auction_ticks": [{
+                "tick_ts": "09:25:00", "ref_price": 14.62, "match_vol": 158000,
+                "unmatched_vol": 420000, "withdraw_rate": 0.082, "verdict": "强",
+            }],
+        },
+    )
+    out = _run(tc.query_data_domain(
+        None, {"domain": "auction.flow", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert "时点 2026-10-20" in out
+    assert "竞价价 14.62" in out and "开盘涨幅 +9.98%" in out
+    assert "一字买量 12000000" in out and "方向 一字" in out
+    assert "09:25:00 虚拟价 14.62" in out and "→ 强" in out
+    assert calls == []                        # 库内有快照 → 不外呼
+    assert "未取到" not in out
+
+
+def test_auction_flow_market_reads_anomaly_pool(monkeypatch):
+    _canned_reads(
+        monkeypatch,
+        {
+            "auction_anomalies": [
+                {"symbol": "002361", "name": "闽东电力", "gap_pct": 9.98, "withdraw_rate": 0.05,
+                 "volume_ratio": 3.2, "note": "涨停抢筹", "created_at": "2026-10-20 09:25:03"},
+                {"symbol": "600111", "name": "北方稀土", "gap_pct": -4.2, "withdraw_rate": 0.41,
+                 "volume_ratio": 2.1, "note": "撤单砸盘", "created_at": "2026-10-20 09:25:01"},
+            ],
+        },
+    )
+    out = _run(tc.query_data_domain(None, {"domain": "auction.flow"}))
+    assert "时点 2026-10-20 09:25" in out
+    assert "竞价异动池（2 条）" in out
+    assert "闽东电力" in out and "高开 +9.98%" in out and "北方稀土" in out
+    assert "未取到" not in out
+
+
+def test_auction_flow_symbol_falls_back_to_tool(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "002361 竞价：开盘 +9.98%，竞价成交额 2.31亿"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _canned_reads(monkeypatch, {"auction_snapshot": []})
+    out = _run(tc.query_data_domain(
+        None, {"domain": "auction.flow", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == ["get_auction_data"]
+    assert "竞价成交额 2.31亿" in out
+    assert "未取到" not in out
+
+
+def test_stock_quote_prefers_fresh_db_row(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "实时占位"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    ts = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    _canned_reads(
+        monkeypatch,
+        {"quote_latest": [{
+            "symbol": "002361", "name": "闽东电力", "ts": ts, "last": 14.62, "change_pct": 9.98,
+            "open": 14.0, "high": 14.62, "low": 13.9, "prev_close": 13.29, "volume": 1.2e6,
+            "turnover": 1.75e8, "turnover_rate": 12.3, "volume_ratio": 2.4,
+        }]},
+    )
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.quote", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert "时点 " in out and "来源 quote_snapshots" in out
+    assert "最新 14.62" in out and "+9.98%" in out and "换手 +12.30%" in out
+    assert "行龄 ≤60s" in out
+    assert calls == []                        # 库内够新 → 不转实时工具
+    assert "未取到" not in out
+
+
+def test_stock_quote_stale_row_forwards_tool(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "002361 实时：14.70 (+10.02%)"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _canned_reads(
+        monkeypatch,
+        {"quote_latest": [{
+            "symbol": "002361", "name": "闽东电力", "ts": "2026-10-20 09:31:00",
+            "last": 14.0, "change_pct": 5.0, "turnover": 1e8,
+        }]},
+    )
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.quote", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == ["get_stock_quote"]
+    assert "14.70 (+10.02%)" in out
+    assert "超过 60s" in out and "转实时报价" in out
+    assert "未取到" not in out
+
+
+def test_stock_quote_stale_and_tool_dead_marks_expired(monkeypatch):
+    async def _empty(name, db, args, user):
+        return ""
+
+    monkeypatch.setattr(tc, "_delegate", _empty)
+    _canned_reads(
+        monkeypatch,
+        {"quote_latest": [{
+            "symbol": "002361", "name": "闽东电力", "ts": "2026-10-20 09:31:00",
+            "last": 14.0, "change_pct": 5.0,
+        }]},
+    )
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.quote", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert "过期快照" in out and "未取到" in out
+    assert "14.00" in out                     # 过期值仍展示，但明确标注不可当实时

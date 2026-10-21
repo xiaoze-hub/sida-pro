@@ -13,8 +13,9 @@ left_diagnosis 12 个工具，单工具 1~2.5s，一轮 15~30s，占 41s p50 的
 
 两条例外：
 1. **标的一间仍串行**——多标的 × 多工具全打出去会成倍放大下游压力，收益也远不如单标的内部并发。
-2. **TQ / 客户端类工具单独走串行 lane**（见 `_TQ_PREFIXES`）：TQ 是单线程进程，行情要走 17709 端口，
-   连打会把它打崩（`TdxW.exe` 挂掉后整轮全是超时），所以这类工具先进先出、一次一个。
+2. **只有"重型工具"走串行 lane**（见 `_HEAVY_MARKERS`）：全市场扫描 / 刷新类方法会压垮客户端
+   （历史事故：连打 30 次 `TdxW.exe` 消失）。轻量读 RPC 不必串行 —— `tdx-gateway` 自身有并发闸门=1
+   + single-flight + 缓存，实测并发 6 个 `pricevol` 合计 0.02s 全 ok、6 个 `relation` 0.21s 全 ok。
 
 失败语义：所有工具都失败 → 返回 ok=0，调用方回落到原来的多轮 tool loop（不至于因为管线挂了就没答案）。
 """
@@ -35,9 +36,11 @@ PER_TOOL_TIMEOUT = 60.0
 # env 可覆盖（`PIPELINE_CONCURRENCY=1` 即退回串行，出事时当总开关用）。
 PIPELINE_CONCURRENCY = 3
 
-# 必须串行的工具前缀。TQ 客户端是单线程进程、行情走 17709 端口，突发并发会打崩 TdxW.exe。
-# 竞价类（get_auction_data / scan_auction_anomaly）同样读 TQ 快照，一并串行。
-_TQ_PREFIXES = ("get_thsdk_", "tdx_", "get_auction_data", "scan_auction_anomaly")
+# 只有重型工具才串行：全市场扫描 / 批量刷新 / 大范围检索。
+# 轻量读 RPC（get_thsdk_* 的单票读、get_auction_data 快照）可以并发 —— 网关已做并发闸门 + 缓存，
+# 2026-10-22 实测：6 并发 pricevol 合计 0.02s、6 并发 relation 合计 0.21s，客户端存活。
+_HEAVY_MARKERS = ("scan_", "bulk_", "refresh_", "all_market", "formula_scan",
+                  "get_market_anomalies", "get_wencai_enhanced")
 # 证据裁剪：6 个工具原文能到 2 万字，喂给模型只会让它更慢（实测某次 141s 里工具只占 8.6s，
 # 其余全在生成）。保留数字与结论行，砍掉长列表尾部。
 PER_TOOL_CHARS = 2500
@@ -113,8 +116,10 @@ def _concurrency() -> int:
         return max(1, int(PIPELINE_CONCURRENCY))
 
 
-def _is_tq_tool(name) -> bool:
-    return str(name or "").startswith(_TQ_PREFIXES)
+def _is_heavy_tool(name) -> bool:
+    """重型工具判定：命中 `_HEAVY_MARKERS` 才串行，其余（含轻量 TQ 读）正常并发。"""
+    n = str(name or "")
+    return any(m in n for m in _HEAVY_MARKERS)
 
 
 async def _call_tool(tool: str, sym: str, executor, market: str) -> tuple[bool, str | None, str | None, int]:
@@ -161,8 +166,8 @@ async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_st
 
     async def _one(idx: int, tool: str) -> None:
         try:
-            if _is_tq_tool(tool):
-                async with tq_lock:      # TQ 单线程：一次只放一个进去
+            if _is_heavy_tool(tool):
+                async with tq_lock:      # 重型方法（全市场扫描/刷新）：一次只放一个进去
                     async with sem:      # 再占并发槽，保证总峰值不超 PIPELINE_CONCURRENCY
                         await _go(idx, tool)
             else:

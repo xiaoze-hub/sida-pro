@@ -404,6 +404,314 @@ def _fmt_lhb_row(r: dict[str, Any]) -> str:
 
 
 
+# ──────────────────────────── P1 六域的渲染（同样：缺数据写「未取到」，禁补 0） ────────────────────────────
+
+#: 指数显示名（库内 symbol 是腾讯原始符号 sh000001；index_daily 用裸码 000001）
+_IDX_LABELS: dict[str, str] = {
+    "000001": "上证指数",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "000300": "沪深300",
+    "000905": "中证500",
+    "000688": "科创50",
+}
+
+_REGIME_LABELS = {"bullish": "偏多", "neutral": "中性", "bearish": "偏空"}
+
+
+def _f(v: Any) -> float | None:
+    """松散转 float；None/空/非数 → None（调用方据此说「未披露」，不补 0）。"""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_of(price: Any, prev: Any) -> float | None:
+    """由 (现价, 昨收) 反算涨跌幅（%）；缺任一侧或昨收为 0 → None。"""
+    p, q = _f(price), _f(prev)
+    if p is None or q is None or q == 0:
+        return None
+    return (p - q) / q * 100.0
+
+
+def _json_list(raw: Any) -> list[Any]:
+    """JSON 文本/已是 list → list；解析失败 → []（不猜）。"""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            obj = json.loads(raw or "[]")
+        except (TypeError, ValueError):
+            return []
+        return obj if isinstance(obj, list) else []
+    return []
+
+
+def render_market_index(
+    *,
+    as_of: str,
+    quotes: list[dict[str, Any]] | None = None,
+    source: str = "quote_snapshots（market=IDX）/ index_daily",
+    missing: list[str] | None = None,
+) -> str:
+    """大盘指数与量能：指数点位/涨跌幅 + 两市成交额。空结果 → 「未取到」。"""
+    items = [q for q in (quotes or []) if isinstance(q, dict)]
+    miss = list(missing or [])
+    sections: list[str] = []
+    if items:
+        parts: list[str] = []
+        amounts: dict[str, float] = {}
+        for q in items[:8]:
+            code = str(q.get("code") or "")
+            label = str(q.get("name") or _IDX_LABELS.get(code) or code or "?")
+            bits = [_num(q.get("price"), 2), _pct(q.get("pct"))]
+            amt = _f(q.get("amount"))
+            if amt is None:
+                bits.append("成交额 未披露")
+            else:
+                amounts[code] = amt
+                bits.append(f"成交额 {_amt_plain(amt)}")
+            parts.append(" ".join([f"{label}（{code}）"] + bits))
+        sections.append("- " + "；".join(parts))
+        sh, sz = amounts.get("000001"), amounts.get("399001")
+        if sh is not None and sz is not None:
+            sections.append(
+                f"- 两市成交额 {_amt_plain(sh + sz)}（沪 {_amt_plain(sh)} + 深 {_amt_plain(sz)}；"
+                f"口径=上证指数与深证成指成交额字段相加）"
+            )
+        else:
+            miss.append("两市成交额：缺上证或深证成指成交额（不补 0）")
+    return render_domain_sections(
+        "market.index", as_of=as_of, source=source, sections=sections, missing=miss
+    )
+
+
+def render_market_breadth(
+    *,
+    as_of: str,
+    series_text: str = "",
+    dist: dict[str, Any] | None = None,
+    regime: dict[str, Any] | None = None,
+    source: str = "market_breadth_daily（复用 market_breadth_series）/ breadth_distribution_snapshot / market_regime_snapshots",
+    missing: list[str] | None = None,
+) -> str:
+    """市场广度：涨跌家数与 ADL 分位 + 涨跌幅九档分布 + 市场状态。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    if series_text.strip():
+        sections.append(series_text.strip())
+
+    d = dist or {}
+    valid, total = _f(d.get("valid")), _f(d.get("total"))
+    buckets = [
+        b for b in _json_list(d.get("items")) if isinstance(b, dict) and b.get("bucket") is not None
+    ]
+    if buckets and (valid or 0) > 0:
+        parts = [f"{b.get('bucket')} {int(_f(b.get('count')) or 0)}" for b in buckets]
+        sections.append(
+            f"- 涨跌幅九档分布（有效 {int(valid or 0)} / 样本 {int(total or 0)}，"
+            f"采集 {d.get('trade_date') or '未标注'}，源 {d.get('source') or '未标注'}）："
+            + "｜".join(parts)
+        )
+    elif d:
+        miss.append(
+            f"breadth_distribution_snapshot 最近一行有效样本为 {int(valid or 0)}"
+            f"（源不可用，不补 0）"
+        )
+
+    r = regime or {}
+    if r:
+        score, conf = _f(r.get("regime_score")), _f(r.get("confidence"))
+        bits = [
+            f"状态 {_REGIME_LABELS.get(str(r.get('regime') or ''), r.get('regime') or '未标注')}",
+            f"打分 {_num(score, 2, signed=True)}",
+            f"置信 {_num(conf, 2)}",
+        ]
+        for key, label in (
+            ("breadth_up_pct", "上涨占比"),
+            ("avg_change_pct", "平均涨幅"),
+            ("volatility_pct", "波动率"),
+        ):
+            v = _f(r.get(key))
+            bits.append(f"{label} {_pct(v) if v is not None else '未披露'}")
+        active = _f(r.get("active_ratio"))
+        bits.append(f"活跃度 {_num(active, 2)}")
+        sample = _f(r.get("sample_size"))
+        bits.append(f"样本 {int(sample) if sample is not None else '未披露'}")
+        sections.append(f"- 市场状态（{r.get('snapshot_date') or '未标注'}）：" + "｜".join(bits))
+    return render_domain_sections(
+        "market.breadth", as_of=as_of, source=source, sections=sections, missing=miss
+    )
+
+
+def _fmt_board_row(r: dict[str, Any]) -> str:
+    name = str(r.get("name") or r.get("block_code") or "?")
+    btype = str(r.get("board_type") or "")
+    tag = {"industry": "行业", "concept": "概念"}.get(btype, btype or "未分类")
+    bits = [f"{name}（{tag}）", _pct(r.get("change_pct")), f"净流入 {_amt(r.get('fund_net'))}"]
+    vol = _f(r.get("volume"))
+    if vol is not None:
+        bits.append(f"成交额 {_amt_plain(vol)}")
+    return " ".join(bits)
+
+
+def render_board_daily(
+    *,
+    as_of: str,
+    inflow: list[dict[str, Any]] | None = None,
+    outflow: list[dict[str, Any]] | None = None,
+    flow: dict[str, Any] | None = None,
+    top_n: int = 6,
+    missing: list[str] | None = None,
+) -> str:
+    """板块行情与资金：净流入/净流出排行 + 盘中板块资金快照。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    ins = [r for r in (inflow or []) if isinstance(r, dict)]
+    outs = [r for r in (outflow or []) if isinstance(r, dict)]
+    if ins:
+        sections.append(f"- 资金净流入前列（{as_of}）：" + "；".join(_fmt_board_row(r) for r in ins[:top_n]))
+    if outs:
+        sections.append(
+            f"- 资金净流出前列（仅列净流出）："
+            + "；".join(_fmt_board_row(r) for r in [x for x in outs if (_f(x.get("fund_net")) or 0) < 0][:top_n])
+        )
+    f = flow or {}
+    f_items = [i for i in _json_list(f.get("payload")) if isinstance(i, dict)]
+    if f_items:
+        ranked = sorted(
+            f_items, key=lambda i: (_f(i.get("net_inflow")) is None, -(_f(i.get("net_inflow")) or 0))
+        )[:3]
+        parts = []
+        for i in ranked:
+            leader = str(i.get("leader_name") or "").strip()
+            parts.append(
+                f"{i.get('board_name') or '?'} {_pct(i.get('change_pct'))} 净流入 "
+                f"{_amt((_f(i.get('net_inflow')) or 0) * 1e8 if _f(i.get('net_inflow')) is not None else None)}"
+                + (f" 龙头 {leader} {_pct(i.get('leader_change_pct'))}" if leader else "")
+            )
+        sections.append(
+            f"- 盘中板块资金快照（{f.get('ts') or '未标注'}，{f.get('item_count') or len(f_items)} 个板块）："
+            + "；".join(parts)
+        )
+    elif flow:
+        miss.append("board_flow_snapshots 有行但 payload 为空/解析失败")
+    return render_domain_sections(
+        "board.daily",
+        as_of=as_of,
+        source="board_daily + boards / board_flow_snapshots",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_auction_flow(
+    *,
+    as_of: str,
+    snapshot: dict[str, Any] | None = None,
+    ticks: list[dict[str, Any]] | None = None,
+    anomalies: list[dict[str, Any]] | None = None,
+    extra: list[str] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """集合竞价：9:25 快照 + 逐帧撮合 + 全市场竞价异动池。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = [s for s in (extra or []) if str(s).strip()]
+    s = snapshot or {}
+    if s:
+        bits = [f"竞价价 {_num(s.get('auction_price'), 2)}", f"开盘 {_num(s.get('open_price'), 2)}"]
+        gap = _f(s.get("open_pct"))
+        if gap is None:
+            gap = _f(s.get("gap_pct"))
+        bits.append(f"开盘涨幅 {_pct(gap)}")
+        amt = _f(s.get("open_amount"))
+        bits.append(f"竞价成交额 {_amt_plain(amt) if amt is not None else '未披露'}")
+        limit_buy = _f(s.get("open_limit_buy"))
+        bits.append(f"一字买量 {_num(limit_buy, 0) if limit_buy is not None else '未披露'}")
+        wr = _f(s.get("withdraw_rate_pre0920"))
+        bits.append(f"9:20 前撤单率 {_pct(wr * 100 if wr is not None and abs(wr) <= 1 else wr) if wr is not None else '未披露'}")
+        direction = str(s.get("direction") or "").strip()
+        if direction:
+            bits.append(f"方向 {direction}")
+        sections.append(
+            f"- 9:25 竞价快照（{s.get('trade_date') or '未标注'}，源 {s.get('source') or '未标注'}）："
+            + "｜".join(bits)
+        )
+    tick_rows = [t for t in (ticks or []) if isinstance(t, dict)]
+    if tick_rows:
+        parts = []
+        for t in tick_rows[:3]:
+            v = str(t.get("verdict") or "未判定")
+            parts.append(
+                f"{t.get('tick_ts') or '?'} 虚拟价 {_num(t.get('ref_price'), 2)} "
+                f"匹配 {_num(t.get('match_vol'), 0)} 手 未匹配 {_num(t.get('unmatched_vol'), 0)} 手 "
+                f"撤单率 {_num(t.get('withdraw_rate'), 3)} → {v}"
+            )
+        sections.append("- 竞价逐帧（最近 " + str(len(tick_rows[:3])) + " 帧）：" + "；".join(parts))
+    anom = [a for a in (anomalies or []) if isinstance(a, dict)]
+    if anom:
+        parts = []
+        for a in anom[:8]:
+            bits = [f"{a.get('symbol') or '?'} {a.get('name') or ''}".strip(), f"高开 {_pct(a.get('gap_pct'))}"]
+            wr = _f(a.get("withdraw_rate"))
+            bits.append(f"撤单率 {_num(wr, 3)}")
+            bits.append(f"量比 {_num(a.get('volume_ratio'))}")
+            note = str(a.get("note") or "").strip()
+            if note:
+                bits.append(note[:20])
+            parts.append(bits[0] + "（" + "，".join(bits[1:]) + "）")
+        sections.append(f"- 竞价异动池（{len(anom)} 条）：" + "；".join(parts))
+    return render_domain_sections(
+        "auction.flow",
+        as_of=as_of,
+        source="auction_snapshots / auction_tick_snapshots / auction_anomaly_records（可选转发 get_auction_data）",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_stock_quote(
+    *,
+    as_of: str,
+    quote: dict[str, Any] | None = None,
+    age_sec: float | None = None,
+    extra: list[str] | None = None,
+    source: str = "quote_snapshots（1 分钟桶，market=CN）",
+    missing: list[str] | None = None,
+) -> str:
+    """实时报价：库内最新一行（附行龄）或转发实时报价工具后的文本。空 → 「未取到」。"""
+    sections: list[str] = [s for s in (extra or []) if str(s).strip()]
+    q = quote or {}
+    if q:
+        bits = [
+            f"{q.get('symbol') or '?'} {q.get('name') or ''}".strip(),
+            f"最新 {_num(q.get('last'), 2)}",
+            _pct(q.get("change_pct")),
+        ]
+        for key, label in (("open", "开"), ("high", "高"), ("low", "低"), ("prev_close", "昨收")):
+            v = _f(q.get(key))
+            if v is not None:
+                bits.append(f"{label} {v:.2f}")
+        vol = _f(q.get("volume"))
+        if vol is not None:
+            bits.append(f"量 {vol / 1e4:.0f}万手")
+        amt = _f(q.get("turnover"))
+        bits.append(f"额 {_amt_plain(amt) if amt is not None else '未披露'}")
+        tr = _f(q.get("turnover_rate"))
+        bits.append(f"换手 {_pct(tr) if tr is not None else '未披露'}")
+        vr = _f(q.get("volume_ratio"))
+        bits.append(f"量比 {_num(vr) if vr is not None else '未披露'}")
+        if age_sec is not None:
+            bits.append(f"数据时点 {q.get('ts') or '未标注'}（{age_sec:.0f}s 前）")
+        sections.append("- " + "｜".join(bits))
+    return render_domain_sections(
+        "stock.quote", as_of=as_of, source=source, sections=sections, missing=missing
+    )
+
+
 # ──────────────────────────── 只读取数底座（SELECT + LIMIT + 绑定参数） ────────────────────────────
 
 #: 全部只读语句集中在此（测试静态校验「必须有 LIMIT」）。命名参数一律 `:name`，双方言通用。
@@ -462,6 +770,68 @@ _SQL: dict[str, str] = {
     "lhb_seats_top": (
         "SELECT side, symbol, name, operate_dept_name, close, change_pct, accum_amount, accum_volume "
         "FROM lhb_seat_details WHERE trade_date = :d ORDER BY symbol LIMIT :n"
+    ),
+    # —— market.index（quote_snapshots 的指数桶 market='IDX'，日线表兜底）——
+    "idx_snapshot_ts": (
+        "SELECT trade_date AS d, ts FROM quote_snapshots WHERE market = :m "
+        "ORDER BY trade_date DESC, ts DESC LIMIT 1"
+    ),
+    "idx_snapshot": (
+        "SELECT symbol, name, last, prev_close, change_pct, volume, turnover, source "
+        "FROM quote_snapshots WHERE market = :m AND trade_date = :d AND ts = :ts "
+        "ORDER BY symbol LIMIT :n"
+    ),
+    "idx_daily_date": "SELECT MAX(trade_date) AS d FROM index_daily WHERE market = :m LIMIT 1",
+    "idx_daily": (
+        "SELECT code, name, close, prev_close, volume, amount, source FROM index_daily "
+        "WHERE trade_date = :d AND market = :m ORDER BY code LIMIT :n"
+    ),
+    # —— market.breadth ——
+    "breadth_dist": (
+        "SELECT trade_date, captured_at, total, valid, items, source FROM breadth_distribution_snapshot "
+        "ORDER BY trade_date DESC, captured_at DESC LIMIT 1"
+    ),
+    "regime": (
+        "SELECT snapshot_date, market, regime, regime_score, confidence, breadth_up_pct, "
+        "avg_change_pct, volatility_pct, active_ratio, sample_size FROM market_regime_snapshots "
+        "WHERE market = :m ORDER BY snapshot_date DESC LIMIT 1"
+    ),
+    # —— board.daily ——
+    "board_date": "SELECT MAX(date) AS d FROM board_daily LIMIT 1",
+    "board_inflow": (
+        "SELECT d.block_code, d.change_pct, d.fund_net, d.volume, b.name, b.board_type "
+        "FROM board_daily d LEFT JOIN boards b ON b.block_code = d.block_code "
+        "WHERE d.date = :d AND d.fund_net IS NOT NULL ORDER BY d.fund_net DESC LIMIT :n"
+    ),
+    "board_outflow": (
+        "SELECT d.block_code, d.change_pct, d.fund_net, d.volume, b.name, b.board_type "
+        "FROM board_daily d LEFT JOIN boards b ON b.block_code = d.block_code "
+        "WHERE d.date = :d AND d.fund_net IS NOT NULL ORDER BY d.fund_net ASC LIMIT :n"
+    ),
+    "board_flow": (
+        "SELECT ts, board_type, item_count, payload FROM board_flow_snapshots "
+        "WHERE board_type = :bt ORDER BY ts DESC LIMIT 1"
+    ),
+    # —— auction.flow ——
+    "auction_snapshot": (
+        "SELECT trade_date, symbol, market, source, auction_price, open_price, open_pct, open_amount, "
+        "open_limit_buy, direction, gap_pct, auction_high, auction_low, withdraw_rate_pre0920 "
+        "FROM auction_snapshots WHERE symbol = :s AND market = :m ORDER BY trade_date DESC LIMIT :n"
+    ),
+    "auction_ticks": (
+        "SELECT trade_date, tick_ts, ref_price, match_vol, unmatched_vol, bid1_price, ask1_price, "
+        "open_amount, open_pct, cancel_cum, withdraw_rate, verdict FROM auction_tick_snapshots "
+        "WHERE symbol = :s AND trade_date = :d ORDER BY tick_ts DESC LIMIT :n"
+    ),
+    "auction_anomalies": (
+        "SELECT symbol, name, gap_pct, withdraw_rate, volume_ratio, note, created_at "
+        "FROM auction_anomaly_records ORDER BY created_at DESC LIMIT :n"
+    ),
+    # —— stock.quote（库优先，过旧才转发实时工具）——
+    "quote_latest": (
+        "SELECT trade_date, ts, symbol, market, name, last, open, high, low, prev_close, change_pct, "
+        "volume, turnover, turnover_rate, volume_ratio, source FROM quote_snapshots "
+        "WHERE symbol = :s AND market = :m ORDER BY trade_date DESC, ts DESC LIMIT 1"
     ),
 }
 
@@ -610,6 +980,159 @@ async def _query_stock_factor(db: Any, params: dict[str, Any], user: Any) -> str
     )
 
 
+def _query_market_index(db: Any, params: dict[str, Any], user: Any) -> str:
+    """market.index 渲染（纯只读库，无外呼）。"""
+    p = _index_payload(db)
+    return render_market_index(
+        as_of=p.get("as_of") or "未知",
+        quotes=p.get("quotes"),
+        source=p.get("source") or "quote_snapshots / index_daily",
+        missing=p.get("missing"),
+    )
+
+
+def _query_market_breadth(db: Any, params: dict[str, Any], user: Any) -> str:
+    """market.breadth 渲染（ADL 序列复用 market_breadth_series，与情绪工具同口径）。"""
+    p = _breadth_payload(db)
+    return render_market_breadth(
+        as_of=p.get("as_of") or "未知",
+        series_text=p.get("series_text") or "",
+        dist=p.get("dist"),
+        regime=p.get("regime"),
+        missing=p.get("missing"),
+    )
+
+
+def _query_board_daily(db: Any, params: dict[str, Any], user: Any) -> str:
+    """board.daily 渲染（board_daily × boards + board_flow_snapshots 盘中快照）。"""
+    try:
+        top_n = min(max(int(params.get("top_n") or 6), 1), 15)
+    except (TypeError, ValueError):
+        top_n = 6
+    p = _board_payload(db, top_n)
+    return render_board_daily(
+        as_of=p.get("as_of") or "未知",
+        inflow=p.get("inflow"),
+        outflow=p.get("outflow"),
+        flow=p.get("flow"),
+        top_n=top_n,
+        missing=p.get("missing"),
+    )
+
+
+async def _query_stock_fundamental(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.fundamental：转发 get_fundamentals_detail（与页面同一 handler，不重写）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    market = str(params.get("market") or "CN").strip().upper() or "CN"
+    out = await _delegate("get_fundamentals_detail", db, {"symbol": symbol, "market": market}, user)
+    sections = [out] if out.strip() else []
+    return render_domain_sections(
+        "stock.fundamental",
+        as_of=_now_cn(),
+        source="复用 get_fundamentals_detail（dragon_tiger_events + marketdata 基本面 vendor：两融/股东户数/分红/事件）",
+        sections=sections,
+        missing=[] if sections else ["get_fundamentals_detail 未返回内容（两融/分红/股东户数 vendor 不可用？）"],
+    )
+
+
+async def _query_auction_flow(db: Any, params: dict[str, Any], user: Any) -> str:
+    """auction.flow：库内 9:25 快照优先；库空才转发竞价池工具现取（避免无谓外呼）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    try:
+        limit = min(max(int(params.get("limit") or 10), 1), 30)
+    except (TypeError, ValueError):
+        limit = 10
+    missing: list[str] = []
+    extra: list[str] = []
+    snapshot: dict[str, Any] | None = None
+    ticks: list[dict[str, Any]] = []
+    anomalies: list[dict[str, Any]] = []
+    as_of = _now_cn()
+
+    if symbol:
+        rows = _read(db, "auction_snapshot", {"s": symbol, "m": "CN", "n": 3})
+        snapshot = rows[0] if rows else None
+        if snapshot:
+            as_of = str(snapshot.get("trade_date") or "") or as_of
+            ticks = _read(db, "auction_ticks", {"s": symbol, "d": as_of, "n": 5})
+            if not ticks:
+                missing.append(f"auction_tick_snapshots 在 {as_of} 无 {symbol} 逐帧记录")
+        else:
+            out = await _delegate(
+                "get_auction_data", db, {"scene": "symbols", "symbols": [symbol], "limit": 1}, user
+            )
+            if out.strip():
+                extra.append(out)
+            else:
+                missing.append(
+                    f"auction_snapshots 无 {symbol} 记录，get_auction_data 也未返回"
+                    f"（9:25 前当日竞价未生成？）"
+                )
+    else:
+        anomalies = _read(db, "auction_anomalies", {"n": limit})
+        if anomalies:
+            as_of = str(anomalies[0].get("created_at") or "")[:16] or as_of
+        else:
+            out = await _delegate(
+                "scan_auction_anomaly", db, {"level": "buy", "limit": limit}, user
+            )
+            if out.strip():
+                extra.append(out)
+            else:
+                missing.append(
+                    "auction_anomaly_records 无记录，scan_auction_anomaly 也未返回（竞价未开始或源不可用）"
+                )
+    return render_auction_flow(
+        as_of=as_of,
+        snapshot=snapshot,
+        ticks=ticks,
+        anomalies=anomalies,
+        extra=extra,
+        missing=missing,
+    )
+
+
+async def _query_stock_quote(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.quote：库内最新一行 ≤60s 直读；否则转发现有报价工具（过期快照只作标注，不冒充实时）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    row = _read_one(db, "quote_latest", {"s": symbol, "m": "CN"})
+    age = _quote_age_sec(row)
+    if row and age is not None and -5 <= age <= 60:
+        return render_stock_quote(
+            as_of=str(row.get("ts") or _now_cn()),
+            quote=row,
+            age_sec=age,
+            source="quote_snapshots（market=CN，1 分钟桶；行龄 ≤60s，库优先）",
+        )
+
+    out = await _delegate("get_stock_quote", db, {"symbol": symbol, "market": "CN"}, user)
+    if out.strip():
+        return render_stock_quote(
+            as_of=_now_cn(),
+            extra=[out],
+            source="复用 get_stock_quote（库内最新行 "
+            + (f"距今 {age:.0f}s，超过 60s" if age is not None else "缺失/时点不可解析")
+            + "，转实时报价）",
+        )
+    if row:
+        return render_stock_quote(
+            as_of=str(row.get("ts") or "未知"),
+            quote=row,
+            age_sec=age,
+            source="quote_snapshots（过期快照，实时工具无返回）",
+            missing=[
+                f"quote_snapshots 最新行距今 {age:.0f}s（>60s 视为不新鲜），get_stock_quote 也未返回内容"
+            ]
+            if age is not None
+            else ["quote_snapshots 行时点无法解析，get_stock_quote 也未返回内容"],
+        )
+    return render_stock_quote(
+        as_of="未知",
+        source="quote_snapshots / 转发 get_stock_quote",
+        missing=[f"quote_snapshots 无 {symbol} 行，get_stock_quote 也未返回内容"],
+    )
+
+
 def _ladder_from_snapshot(db: Any, date: str) -> tuple[list[dict[str, Any]], str]:
     """兜底：从页面预渲染的 ladder_daily_snapshot 取某日梯队（与题材情绪页同源）。
 
@@ -733,6 +1256,153 @@ def _lhb_payload(db: Any, date: str, symbol: str) -> dict[str, Any]:
     return {"as_of": d, "events": events, "seats": seats, "missing": missing}
 
 
+def _index_payload(db: Any) -> dict[str, Any]:
+    """market.index 取数：quote_snapshots 指数桶（同 ts 全量）优先，index_daily 日线兜底。"""
+    snap = _read_one(db, "idx_snapshot_ts", {"m": "IDX"})
+    if snap and snap.get("d") and snap.get("ts"):
+        rows = _read(db, "idx_snapshot", {"m": "IDX", "d": snap["d"], "ts": snap["ts"], "n": 12})
+        quotes: list[dict[str, Any]] = []
+        for r in rows:
+            sym = str(r.get("symbol") or "")
+            code = sym[-6:] if sym.lower().startswith(("sh", "sz")) else sym
+            pct = _f(r.get("change_pct"))
+            if pct is None:
+                pct = _pct_of(r.get("last"), r.get("prev_close"))
+            quotes.append(
+                {
+                    "code": code,
+                    "name": r.get("name") or _IDX_LABELS.get(code),
+                    "price": r.get("last"),
+                    "pct": pct,
+                    "amount": r.get("turnover"),
+                }
+            )
+        if quotes:
+            ts = str(snap.get("ts") or "")
+            return {
+                "as_of": f"{_ymd(snap.get('d'))} {ts[-8:]}".strip(),
+                "quotes": quotes,
+                "missing": [],
+                "source": "quote_snapshots（market=IDX，1 分钟桶）",
+            }
+
+    d = _ymd((_read_one(db, "idx_daily_date", {"m": "CN"}) or {}).get("d"))
+    if d:
+        rows = _read(db, "idx_daily", {"d": d, "m": "CN", "n": 12})
+        quotes = []
+        for r in rows:
+            code = str(r.get("code") or "")
+            pct = _pct_of(r.get("close"), r.get("prev_close"))
+            quotes.append(
+                {
+                    "code": code,
+                    "name": r.get("name") or _IDX_LABELS.get(code),
+                    "price": r.get("close"),
+                    "pct": pct,
+                    "amount": r.get("amount"),
+                }
+            )
+        if quotes:
+            return {
+                "as_of": d,
+                "quotes": quotes,
+                "missing": ["盘中量能读不到：quote_snapshots 无 IDX 行，以下为 index_daily 日线收盘值"],
+                "source": "index_daily（日线兜底，非盘中快照）",
+            }
+    return {
+        "as_of": "未知",
+        "quotes": [],
+        "missing": ["quote_snapshots 无 market=IDX 行，index_daily 也无指数日线（采集未跑？）"],
+        "source": "quote_snapshots / index_daily",
+    }
+
+
+def _breadth_payload(db: Any) -> dict[str, Any]:
+    """market.breadth 取数：ADL 序列（复用 market_breadth_series）+ 九档分布 + 市场状态。"""
+    missing: list[str] = []
+    series_text = ""
+    series_date = ""
+    try:
+        from src.collectors.market_breadth_series import latest_with_percentile, render_text
+
+        summary = latest_with_percentile(db)
+        if summary.get("ok"):
+            series_text = render_text(summary) or ""
+            series_date = str(summary.get("trade_date") or "")[:10]
+        else:
+            missing.append(
+                f"market_breadth_daily 无可用序列（{summary.get('reason') or 'no_data'}，"
+                f"需先跑 sync_breadth_series）"
+            )
+    except Exception as exc:  # noqa: BLE001 — 广度序列是主块，但缺了不影响另外两块
+        logger.warning("广度序列读取失败: %s", exc)
+        missing.append(f"广度序列读取失败（{type(exc).__name__}）")
+
+    dist = _read_one(db, "breadth_dist") or {}
+    if not dist:
+        missing.append("breadth_distribution_snapshot 无快照行（九档分布未采集）")
+    regime = _read_one(db, "regime", {"m": "CN"}) or {}
+    if not regime:
+        missing.append("market_regime_snapshots 无 CN 行（市场状态未生成）")
+
+    as_of = (
+        str(dist.get("trade_date") or "")[:10]
+        or series_date
+        or str(regime.get("snapshot_date") or "")[:10]
+    )
+    return {"as_of": as_of or "未知", "series_text": series_text, "dist": dist, "regime": regime,
+            "missing": missing}
+
+
+def _board_payload(db: Any, top_n: int) -> dict[str, Any]:
+    """board.daily 取数：board_daily × boards 净流入/净流出 + board_flow_snapshots 盘中快照。"""
+    d = _ymd((_read_one(db, "board_date") or {}).get("d"))
+    if not d:
+        return {
+            "as_of": "未知", "inflow": [], "outflow": [], "flow": {},
+            "missing": ["board_daily 为空（板块日行情尚未落库）"],
+        }
+    iso = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    missing: list[str] = []
+    inflow = _read(db, "board_inflow", {"d": iso, "n": top_n})
+    outflow = _read(db, "board_outflow", {"d": iso, "n": top_n})
+    if not inflow and not outflow:
+        missing.append(f"board_daily 在 {iso} 无带资金额的板块行")
+    if inflow and not any(str(r.get("name") or "").strip() for r in inflow):
+        missing.append("boards 未同步（板块名缺失，只能用 block_code）")
+
+    flow_row = _read_one(db, "board_flow", {"bt": "industry"}) or {}
+    flow: dict[str, Any] = {}
+    if flow_row:
+        items = _json_list(flow_row.get("payload"))
+        flow = {
+            "ts": flow_row.get("ts"),
+            "board_type": flow_row.get("board_type"),
+            "item_count": flow_row.get("item_count"),
+            "payload": items,
+        }
+        if not items:
+            missing.append("board_flow_snapshots 最近一行 payload 解析为空")
+    else:
+        missing.append("board_flow_snapshots 无 industry 快照（盘中板块资金采样未跑）")
+    return {"as_of": d, "inflow": inflow, "outflow": outflow, "flow": flow, "missing": missing}
+
+
+def _quote_age_sec(row: dict[str, Any] | None) -> float | None:
+    """quote_snapshots.ts（CST 墙钟）距现在的秒数；解析失败 → None（当作不新鲜）。"""
+    ts = str((row or {}).get("ts") or "").strip()
+    if not ts:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(ts, fmt).replace(tzinfo=_CST)
+        except ValueError:
+            continue
+        return (datetime.now(_CST) - dt).total_seconds()
+    return None
+
+
+
 # ──────────────────────────── 统一入口 ────────────────────────────
 
 
@@ -783,6 +1453,12 @@ async def query_data_domain(
 
     handlers = {
         "market.sentiment": _query_market_sentiment,
+        "market.index": _query_market_index,
+        "market.breadth": _query_market_breadth,
+        "board.daily": _query_board_daily,
+        "stock.fundamental": _query_stock_fundamental,
+        "auction.flow": _query_auction_flow,
+        "stock.quote": _query_stock_quote,
         "limit.pool": None,  # 见下（自带只读 SQL）
         "lhb.daily": None,   # 见下（自带只读 SQL）
         "theme.mood": None,  # 见下（自带只读 SQL）
@@ -834,7 +1510,11 @@ async def query_data_domain(
                 top_n=top_n,
                 missing=payload.get("missing"),
             )
-        return await handlers[domain](db, params, user)  # type: ignore[misc]
+        fn = handlers[domain]
+        result = fn(db, params, user)  # type: ignore[misc]
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
     except Exception as exc:  # noqa: BLE001 — 单域故障不能炸掉整轮对话
         logger.warning("数据域 %s 取数失败: %s", domain, exc)
         return render_domain_sections(
@@ -870,6 +1550,10 @@ _QUERY_SCHEMA = {
             "末尾缺数据会写「未取到（原因）」）。"
             "已接入的域：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date=YYYYMMDD、min_streak）、"
             "lhb.daily（龙虎榜/席位，可选 symbol、date）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
+            "market.index（大盘指数点位/涨跌幅/两市成交额）、market.breadth（涨跌家数+ADL/ADR/ARMS 分位+九档分布+市场状态）、"
+            "board.daily（板块涨跌与资金净流入排行，可选 top_n）、stock.fundamental（财务/股东/两融/分红，必填 symbol）、"
+            "auction.flow（集合竞价 9:25 快照/逐帧/异动池，可选 symbol、limit）、"
+            "stock.quote（实时报价，必填 symbol，库内行超过 60s 转实时取数）、"
             "stock.chip（筹码/集中度，必填 symbol）、"
             "stock.flow（主力意图+撤单，必填 symbol）、stock.intraday（分时结构/盘口，必填 symbol）、"
             "stock.factor（因子分位，必填 symbol，可选 with_ic=true 追因子 IC）。"
@@ -930,9 +1614,14 @@ __all__ = [
     "load_domains",
     "query_data_domain",
     "register_catalog_tools",
+    "render_auction_flow",
+    "render_board_daily",
     "render_domain_catalog",
     "render_domain_sections",
     "render_limit_pool",
     "render_lhb",
+    "render_market_breadth",
+    "render_market_index",
+    "render_stock_quote",
     "required_params",
 ]

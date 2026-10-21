@@ -21,8 +21,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -1294,6 +1297,154 @@ async def _tool_get_factor_ic_report(db: Session, args: dict, user: User | None 
         return f"因子 IC 计算失败: {str(e)[:100]}"
 
 
+# ──────────── 库优先 + 口径/时点标注(2026-10-22) ────────────
+# 为什么改: 同一数字在页面(读落库快照, = 某时点)与对话(直连 TQ 客户端, = 此刻)不一样,
+# 用户会看到两个"现价"却不知道哪个是几点。规则:
+#   1) **能库优先的库优先**: `pricevol` 实时报价先查 `quote_snapshots` 该标的最近一行,
+#      行龄 ≤ QUOTE_FRESH_SEC 直接用它(**不调 RPC**);
+#   2) 库无表/无行/过期 → 回落实时 RPC, 末行同时标出库内时点与 RPC 时点
+#      —— 过期快照**不许**充作实时;
+#   3) 库无对应表的(板块归属/转债条款/申购日历/跟踪ETF)保持 RPC, 末行标「实时 RPC HH:MM:SS」;
+#   4) 取不到就如实写「取不到(库无最新快照 / RPC 不可用)」, 不猜数、不拿其它源顶。
+# 纪律: 只读 SQL(`text()` + 绑定参数 + LIMIT), 不新增表。
+
+_CST = ZoneInfo("Asia/Shanghai")
+#: 库内报价可用阈值(秒): 超过即视为过期 → 回落 RPC(1 分钟桶, 60s = 最多差一桶)。
+QUOTE_FRESH_SEC = 60.0
+
+#: `quote_snapshots` 最近一行(列名与迁移 157 一致; symbol 存裸码 + market 区分市场)。
+_QUOTE_SNAPSHOT_SQL = (
+    "SELECT trade_date, ts, symbol, market, name, last, open, high, low, prev_close, "
+    "change_pct, volume, turnover, source FROM quote_snapshots "
+    "WHERE symbol = :s AND market = :m ORDER BY trade_date DESC, ts DESC LIMIT 1"
+)
+
+
+def _now_cn() -> datetime:
+    return datetime.now(_CST)
+
+
+def _hms(when: datetime | None = None) -> str:
+    """HH:MM:SS —— 实时 RPC 的取数时点。"""
+    return (when or _now_cn()).strftime("%H:%M:%S")
+
+
+def _minute_ts(ts: Any) -> str:
+    """库内时点统一到分钟(库本身就是 1 分钟桶, 秒位无意义)。"""
+    s = str(ts or "").strip()
+    return s[:16] if len(s) >= 16 else (s or "时点未知")
+
+
+def _caliber_db(ts: Any, table: str = "quote_snapshots", note: str = "") -> str:
+    """库路径末行: 「口径：库内快照 2026-10-21 15:00（quote_snapshots）」"""
+    extra = f"，{note}" if note else ""
+    return f"口径：库内快照 {_minute_ts(ts)}（{table}{extra}）"
+
+
+def _caliber_rpc(when: datetime | None = None) -> str:
+    """RPC 路径末行: 「口径：实时 RPC 21:33:12（tdx-gateway）」"""
+    return f"口径：实时 RPC {_hms(when)}（tdx-gateway）"
+
+
+def _caliber_db_then_rpc(ts: Any, note: str, *, table: str = "quote_snapshots",
+                         when: datetime | None = None) -> str:
+    """库过期/缺行后回落 RPC —— 两个时点都写清, 让"哪个是几点"可追。"""
+    return (f"口径：库内快照 {_minute_ts(ts)}（{table}，{note}）"
+            f"／实时 RPC {_hms(when)}（tdx-gateway）")
+
+
+def _caliber_missing(reason: str) -> str:
+    return f"口径：取不到（{reason}）"
+
+
+def _snapshot_symbol(code: str) -> tuple[str, str]:
+    """产品/TQ 代码 → quote_snapshots 的 (symbol, market)。该表存裸码 + 市场列。"""
+    c = str(code or "").strip().upper()
+    if not c:
+        return "", "CN"
+    if "." in c:
+        sym, suffix = c.rsplit(".", 1)
+        return sym, {"HK": "HK", "US": "US", "IDX": "IDX", "OF": "OF"}.get(suffix, "CN")
+    return c, "CN"
+
+
+def _db_quote_snapshot(db: Any, code: str) -> dict[str, Any] | None:
+    """该标的 `quote_snapshots` 最近一行(只读)。
+
+    表缺失/无行/库异常一律 None(**绝不抛**), 由调用方回落 RPC —— 旧库没跑迁移也不能让对话炸。
+    """
+    sym, mkt = _snapshot_symbol(code)
+    if not sym or db is None:
+        return None
+    try:
+        from sqlalchemy import text
+
+        row = db.execute(text(_QUOTE_SNAPSHOT_SQL), {"s": sym, "m": mkt}).mappings().first()
+        return dict(row) if row else None
+    except Exception as exc:  # noqa: BLE001 — 无表/只读库/连接异常都按"库无快照"处理
+        logger.debug("quote_snapshots 读取失败(按库无快照处理) %s.%s: %r", sym, mkt, exc)
+        # PG 下语句报错会把事务置为 aborted, 同请求后续读会全挂 —— 本函数只读, 回滚安全。
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def _quote_age_sec(row: dict[str, Any] | None) -> float | None:
+    """`quote_snapshots.ts`(CST 墙钟)距现在的秒数; 解析失败 → None(当作不新鲜)。"""
+    ts = str((row or {}).get("ts") or "").strip()
+    if not ts:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(ts, fmt).replace(tzinfo=_CST)
+        except ValueError:
+            continue
+        return (_now_cn() - dt).total_seconds()
+    return None
+
+
+def _pricevol_rpc(codes: list[str]) -> tuple[bool, Any]:
+    """实时报价 RPC 单点(独立函数 = 测试可 monkeypatch; 异常转 (False, err) 与全站降级口径一致)。"""
+    return _tq_vendor_call("pricevol", codes)
+
+
+def _db_first_price(db: Any, code: str) -> tuple[dict[str, Any] | None, str]:
+    """报价**库优先**: 返回 (quote{close,trade_date}, 末行口径文案)。
+
+    - 库内最近一行行龄 ≤ QUOTE_FRESH_SEC → 直接用库(**不调 RPC**);
+    - 无行/过期/无表 → 回落 pricevol RPC, 口径同时标库内时点(若有)与 RPC 时点;
+    - 库与 RPC 都取不到 → (None, 「取不到（…）」)。
+    """
+    row = _db_quote_snapshot(db, code)
+    age = _quote_age_sec(row)
+    if row is not None and age is not None and -5.0 <= age <= QUOTE_FRESH_SEC:
+        close = row.get("last")
+        if close is not None:
+            quote = {"close": close, "trade_date": str(row.get("trade_date") or "")}
+            return quote, _caliber_db(row.get("ts"))
+
+    called_at = _now_cn()
+    ok, payload = _pricevol_rpc([code])
+    item: dict[str, Any] = {}
+    if ok and isinstance(payload, dict):
+        got = payload.get(code) or payload.get(str(code).rsplit(".", 1)[0])
+        item = got if isinstance(got, dict) else {}
+    if item.get("Now") is not None:
+        quote = {"close": item.get("Now"), "trade_date": ""}
+        if row is None:
+            return quote, f"口径：取不到（库无最新快照）／实时 RPC {_hms(called_at)}（tdx-gateway）"
+        note = (f"已过期 {age:.0f}s，不作实时" if age is not None
+                else "行时点不可解析，不作实时")
+        return quote, _caliber_db_then_rpc(row.get("ts"), note, when=called_at)
+
+    if row is None:
+        return None, _caliber_missing("库无最新快照 / RPC 不可用")
+    note = f"库内快照已过期 {age:.0f}s" if age is not None else "库内快照时点不可解析"
+    return None, _caliber_missing(f"{note} / RPC 不可用")
+
+
 @register_chat_tool(
     "get_stock_chips",
     schema={
@@ -1326,15 +1477,13 @@ async def _tool_get_stock_chips(db: Session, args: dict, user: User | None = Non
     if not code:
         return "请提供股票代码(symbol)，如 002361 或 002361.SZ。"
     count = int(args.get("count") or 250)
-    quote = None
-    ok_q, q = _tq_vendor_call("pricevol", [code])
-    if ok_q and isinstance(q, dict):
-        item = q.get(code) or {}
-        quote = {"close": item.get("Now"), "trade_date": ""}
+    # 2026-10-22 库优先: 现价先读 quote_snapshots(行龄 ≤60s 直接用), 过期/无行才回落 pricevol;
+    # 末行标口径+时点, 避免"页面用落库价、对话用此刻价"两个现价。
+    quote, caliber = _db_first_price(db, code)
     payload = build_chips(code, count=count, quote=quote)
     if not payload.get("ok"):
-        return _tq_unavailable(str(payload.get("detail") or "公式引擎不可用"))
-    return render_text(payload)
+        return f"{_tq_unavailable(str(payload.get('detail') or '公式引擎不可用'))}\n{caliber}"
+    return f"{render_text(payload)}\n{caliber}"
 
 
 @register_chat_tool(
@@ -1616,13 +1765,15 @@ async def _tool_get_ipo_calendar(db: Session, args: dict, user: User | None = No
     ipo_type = {"new": 0, "bond": 1, "all": 2}.get(kind, 0)
     only_today = bool(args.get("only_today"))
     ipo_date = 0 if only_today else 1
+    called_at = _now_cn()
     ok, data = _tq_vendor_call("ipo_info", ipo_type, ipo_date)
     if not ok:
-        return _tq_unavailable(str(data))
+        return f"{_tq_unavailable(str(data))}\n{_caliber_missing('库无申购日历表 / RPC 不可用')}"
     scope = "今天" if only_today else "今天及以后"
     what = {0: "新股", 1: "新债", 2: "新股/新债"}[ipo_type]
     if not isinstance(data, list) or not data:
-        return f"通达信申购日历({scope})里没有{what}。(数据源: 通达信客户端 get_ipo_info)"
+        return (f"通达信申购日历({scope})里没有{what}。(数据源: 通达信客户端 get_ipo_info)\n"
+                f"{_caliber_rpc(called_at)}")
     lines = [f"📅 {what}申购日历(通达信, {scope}, 共 {len(data)} 条):"]
     for r in data:
         lines.append(
@@ -1634,6 +1785,7 @@ async def _tool_get_ipo_calendar(db: Session, args: dict, user: User | None = No
             f" | 发行市盈率 {_fmt_num(r.get('pe_issue'), ' 倍')}"
         )
     lines.append("注: 显示『待定/未披露』= 客户端当下确实没给该字段(不是 0); 数据源=通达信 TQ。")
+    lines.append(_caliber_rpc(called_at))
     return "\n".join(lines)
 
 
@@ -1666,6 +1818,7 @@ async def _tool_get_kzz_terms(db: Session, args: dict, user: User | None = None)
         return "请提供可转债代码(code), 如 128136 或 128136.SZ。"
     # 裸码在客户端会报 codestr error → 依次试 SZ/SH 两种后缀(自愈, 不猜死)
     cands = [raw] if "." in raw else [raw, f"{raw}.SZ", f"{raw}.SH"]
+    called_at = _now_cn()
     last_err = ""
     for c in cands:
         ok, d = _tq_vendor_call("kzz_info", c, _quiet=True)  # 中间尝试不打 WARNING(可能自愈成功)
@@ -1683,12 +1836,14 @@ async def _tool_get_kzz_terms(db: Session, args: dict, user: User | None = None)
                 ("纯债价值", d.get("RealValue")), ("评级", d.get("HSScore")),
             ]
             body = " | ".join(f"{k} {v}" for k, v in pairs if v not in (None, "", "0.000", "0.00"))
-            return f"🔗 可转债条款(通达信, {c}): {body or '(客户端未返回字段)'}"
+            return (f"🔗 可转债条款(通达信, {c}): {body or '(客户端未返回字段)'}\n"
+                    f"{_caliber_rpc(called_at)}")
     if last_err:
         # 全部候选都失败才是真失败 —— 只在这里打一条, 日志与最终结论一致。
         logger.warning("chat TQ 工具 kzz_info 全部候选失败(%s): %s", "/".join(cands), last_err)
-        return _tq_unavailable(last_err)
-    return f"通达信里查不到可转债 {raw}(试过 {'/'.join(cands)}) —— 代码是否正确或已退市?"
+        return f"{_tq_unavailable(last_err)}\n{_caliber_missing('库无转债条款表 / RPC 不可用')}"
+    return (f"通达信里查不到可转债 {raw}(试过 {'/'.join(cands)}) —— 代码是否正确或已退市?\n"
+            f"{_caliber_rpc(called_at)}")
 
 
 @register_chat_tool(
@@ -1728,14 +1883,15 @@ async def _tool_get_stock_sectors(db: Session, args: dict, user: User | None = N
             code = to_tq_code(c) or code
         except Exception:  # noqa: BLE001 — 转换失败就按原样试
             code = raw
+    called_at = _now_cn()
     ok, v = _tq_vendor_call("relation", code)
     if not ok:
-        return _tq_unavailable(str(v))
+        return f"{_tq_unavailable(str(v))}\n{_caliber_missing('库无板块归属表 / RPC 不可用')}"
     if not isinstance(v, list):
-        return f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。"
+        return (f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。\n{_caliber_rpc(called_at)}")
     rows = [r for r in v if isinstance(r, dict)]
     if not rows:
-        return f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。"
+        return (f"通达信没给出 {code} 的板块归属(可能非 A 股代码)。\n{_caliber_rpc(called_at)}")
     by_type: dict[str, list[str]] = {}
     for r in rows:
         name = str(r.get("BlockName") or "").strip()
@@ -1748,6 +1904,8 @@ async def _tool_get_stock_sectors(db: Session, args: dict, user: User | None = N
         names = by_type.get(t)
         if names:
             lines.append(f"· {t}: " + "、".join(names))
+    # 库无板块归属表(通达信自编概念只在客户端) → 保持 RPC, 末行标时点。
+    lines.append(_caliber_rpc(called_at))
     return "\n".join(lines)
 
 
@@ -1764,6 +1922,103 @@ _TQ_SUFFIX_CN = {
 
 def _tq_market_cn(code: str) -> str:
     return _TQ_SUFFIX_CN.get(code.rsplit(".", 1)[-1].upper(), "") if "." in code else ""
+
+
+# ── 本地全市场名称缓存(库优先的"库") ──
+# 为什么用它: 「把名字换成代码」这件事落库数据里就有(全市场代码-名称)，不必每次打 TQ 客户端;
+# 客户端只在缓存没命中时才问(转债/场外基金/指数等缓存没有的品种仍靠它)。
+
+def _local_stock_rows() -> list[dict]:
+    """读本地全市场名称缓存(`stock_list.get_stock_list()`)。
+
+    缓存文件不存在时**不**触发 `refresh_stock_list()` 的全量刷新 —— 聊天路径不许为一次
+    检索去打外部源并阻塞数秒; 无缓存就当"库无"回落 RPC, 与全站"取不到就回落"一致。
+    """
+    from src.collectors import stock_list as _sl
+
+    try:
+        path = _sl._cache_file() if hasattr(_sl, "_cache_file") else getattr(_sl, "CACHE_FILE", "")
+        if not path or not os.path.exists(path):
+            return []
+        return _sl.get_stock_list() or []
+    except Exception as exc:  # noqa: BLE001 — 缓存读坏了不是用户的问题, 回落 RPC
+        logger.debug("本地名称缓存不可用(回落 RPC): %r", exc)
+        return []
+
+
+def _cache_stamp() -> str:
+    """缓存落盘时点(库路径的时点标注); 取不到 → 空串, 由调用方写「时点未知」。"""
+    from src.collectors import stock_list as _sl
+
+    try:
+        path = _sl._cache_file() if hasattr(_sl, "_cache_file") else getattr(_sl, "CACHE_FILE", "")
+        return datetime.fromtimestamp(os.stat(path).st_mtime, _CST).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _code_for_display(symbol: str, market: str) -> str:
+    """缓存里的裸码 + 市场 → 带后缀代码(与 TQ 检索结果同形, 免得两个入口两种写法)。"""
+    sym = str(symbol or "").strip().upper()
+    mkt = str(market or "CN").strip().upper()
+    if not sym:
+        return ""
+    if mkt in ("HK", "US", "OF", "CSI", "CFF"):
+        return f"{sym}.{mkt}"
+    try:
+        from marketdata.symbol import Market, Symbol
+        from marketdata.vendors.tq import to_tq_code
+
+        return to_tq_code(Symbol(code=sym, market=Market.CN)) or sym
+    except Exception:  # noqa: BLE001 — 包不可用就按代码段兜底(6/9/5→SH, 4/8/92→BJ, 其余 SZ)
+        if sym.startswith(("92", "4", "8")):
+            return f"{sym}.BJ"
+        if sym.startswith(("6", "9", "5")):
+            return f"{sym}.SH"
+        return f"{sym}.SZ"
+
+
+def _local_match(keyword: str, limit: int = 15) -> list[dict]:
+    """精确(代码/名称) → 代码前缀 → 名称包含 的顺序匹配, 去重后取前 limit 条。"""
+    q = str(keyword or "").strip().upper()
+    stocks = _local_stock_rows()
+    if not q or not stocks:
+        return []
+    bare = q.rsplit(".", 1)[0] if "." in q else q
+    exact_code: list[dict] = []
+    exact_name: list[dict] = []
+    prefix: list[dict] = []
+    contains: list[dict] = []
+    for s in stocks:
+        if not isinstance(s, dict):
+            continue
+        sym = str(s.get("symbol") or "").strip().upper()
+        name = str(s.get("name") or "").strip().upper()
+        if not sym or not name:
+            continue
+        if sym == bare:
+            exact_code.append(s)
+        elif name == q:
+            exact_name.append(s)
+        elif sym.startswith(bare):
+            prefix.append(s)
+        elif q in name:
+            contains.append(s)
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for bucket in (exact_code, exact_name, prefix, contains):
+        for s in bucket:
+            key = (s.get("market"), s.get("symbol"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "code": _code_for_display(str(s.get("symbol")), str(s.get("market") or "CN")),
+                "name": s.get("name"),
+            })
+            if len(out) >= limit:
+                return out
+    return out
 
 
 @register_chat_tool(
@@ -1796,12 +2051,35 @@ async def _tool_search_symbols(db: Session, args: dict, user: User | None = None
     kw = str(args.get("keyword") or "").strip()
     if not kw:
         return "请提供检索关键词(keyword), 如 宁德时代 / 002361 / 立讯转债。"
+    # 2026-10-22 库优先: 全市场代码-名称本地缓存先做精确+模糊匹配, 命中就不打 TQ;
+    # 缓存无命中(或没有缓存)才回落 match_stkinfo(客户端口径, 覆盖转债/场外基金/指数)。
+    try:
+        hits = await asyncio.to_thread(_local_match, kw)
+    except Exception as exc:  # noqa: BLE001 — 匹配失败只影响"能不能少打一次 RPC"
+        logger.debug("本地名称缓存匹配失败(回落 RPC): %r", exc)
+        hits = []
+    if hits:
+        lines = [f"🔍 本地名称缓存检索「{kw}」(共 {len(hits)} 条):"]
+        for r in hits:
+            code = str(r.get("code") or "")
+            mkt = _tq_market_cn(code)
+            lines.append(f"· {r.get('name') or '?'} {code}" + (f"({mkt})" if mkt else ""))
+        stamp = _cache_stamp()
+        lines.append(
+            _caliber_db(stamp, "本地名称缓存 stock_list_cache.json", "全市场代码-名称")
+            if stamp else "口径：库内快照 时点未知（本地名称缓存 stock_list_cache.json）"
+        )
+        return "\n".join(lines)
+
+    called_at = _now_cn()
     ok, v = _tq_vendor_call("match_stkinfo", kw)
     if not ok:
-        return _tq_unavailable(str(v))
+        return (f"{_tq_unavailable(str(v))}\n"
+                f"{_caliber_missing('本地名称缓存无命中 / RPC 不可用')}")
     rows = [r for r in (v or []) if isinstance(r, dict) and r.get("Code")]
     if not rows:
-        return f"通达信里没有匹配「{kw}」的证券(名称/代码是否正确?)。"
+        return (f"通达信里没有匹配「{kw}」的证券(名称/代码是否正确?)。\n"
+                f"{_caliber_rpc(called_at)}")
     lines = [f"🔍 通达信检索「{kw}」(共 {len(rows)} 条):"]
     for r in rows[:15]:
         code = str(r.get("Code") or "")
@@ -1809,6 +2087,7 @@ async def _tool_search_symbols(db: Session, args: dict, user: User | None = None
         lines.append(f"· {r.get('Name') or '?'} {code}" + (f"({mkt})" if mkt else ""))
     if len(rows) > 15:
         lines.append(f"(仅显示前 15 条, 共 {len(rows)} 条)")
+    lines.append(_caliber_rpc(called_at))
     return "\n".join(lines)
 
 
@@ -1843,6 +2122,7 @@ async def _tool_get_index_etfs(db: Session, args: dict, user: User | None = None
         return "请提供指数代码(index_code), 如 000300.SH / 399006.SZ / 950162.CSI。"
     # 裸码不知市场 → 依次试后缀(自愈; 中间失败不打 WARNING, 逻辑同 get_kzz_terms)
     cands = [raw] if "." in raw else [f"{raw}.SH", f"{raw}.SZ", f"{raw}.CSI", raw]
+    called_at = _now_cn()
     rows: list[dict] = []
     used = ""
     for c in cands:
@@ -1854,7 +2134,7 @@ async def _tool_get_index_etfs(db: Session, args: dict, user: User | None = None
                 break
     if not rows:
         return (f"通达信里没有指数「{raw}」的跟踪 ETF(试过 {'/'.join(cands)}) —— "
-                f"指数代码或后缀是否正确?")
+                f"指数代码或后缀是否正确?\n{_caliber_rpc(called_at)}")
 
     def _f(x):
         try:
@@ -1883,6 +2163,7 @@ async def _tool_get_index_etfs(db: Session, args: dict, user: User | None = None
         lines.append("· " + " | ".join(parts))
     if len(rows) > 20:
         lines.append(f"(仅显示前 20 只, 共 {len(rows)} 只)")
+    lines.append(_caliber_rpc(called_at))
     return "\n".join(lines)
 
 
