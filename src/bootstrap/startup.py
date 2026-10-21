@@ -396,6 +396,25 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"参谋定时任务扫描注册失败: {e}")
 
+        # 撤单率时序采样(2026-10-21): 撤单率本体是"当日会话累计", 只有当前值没有曲线。
+        # 交易日每 30s 采一批自选, 按分钟幂等落库, 给"买撤 60%→85%"这种拐点提供数据。
+        try:
+            from src.collectors.cancel_rate_sampler import run_scheduled as _cancel_sample
+
+            rt.scheduler.scheduler.add_job(
+                _cancel_sample,
+                "interval",
+                seconds=30,
+                id="cancel-rate-sampler",
+                name="撤单率时序采样",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("撤单率时序采样已注册(30s, 仅交易时段)")
+        except Exception as e:
+            logger.error(f"撤单率采样注册失败: {e}")
+
         # 龙虎榜金额「次日 TQ 回填」(2026-10-20 用户要求): 交易日 08:30 回填上一个交易日。
         # 当日榜单只有东财能枚举, 而 TQ 的 GP02 金额与东财分文不差且晚一天 —— 次日用 TQ 覆写,
         # 历史数据就不再依赖"东财网关那天有没有挂"。

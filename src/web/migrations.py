@@ -5775,6 +5775,17 @@ def _m210_copilot_actions_annotations(conn: Connection) -> None:
     KlineAnnotation.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m214_cancel_rate_snapshots(conn: Connection) -> None:
+    """撤单率时序（2026-10-21）。
+
+    撤单率本体是"当日会话累计"，只能回答当前值；要回答"这半小时撤单是不是突变"
+    必须自己按分钟落点。unique(symbol, trade_date, hhmm) 让重复采样幂等。
+    """
+    from src.db.models import CancelRateSnapshot
+
+    CancelRateSnapshot.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -5981,6 +5992,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(211, "flow_snapshot_source", _m211_flow_snapshot_source),
     Migration(212, "copilot_governance", _m212_copilot_governance),
     Migration(213, "copilot_memory_schedules", _m213_copilot_memory_schedules),
+    Migration(214, "cancel_rate_snapshots", _m214_cancel_rate_snapshots),
 )
 
 
