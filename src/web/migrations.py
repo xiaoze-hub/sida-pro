@@ -5735,6 +5735,18 @@ def _m209_copilot_user_id_text(conn: Connection) -> None:
         # SQLite 是动态类型, 无需变更
 
 
+def _m213_copilot_memory_schedules(conn: Connection) -> None:
+    """长期记忆 + 会话定时任务（2026-10-21, P0）。
+
+    记忆解决"换会话就忘了你的偏好"，定时任务解决"每天 9:25 帮我看竞价"——
+    两者都不需要改 chat.py 逻辑，只是新增两张表和注入点。
+    """
+    from src.db.models import CopilotMemory, CopilotSchedule
+
+    CopilotMemory.__table__.create(bind=conn, checkfirst=True)
+    CopilotSchedule.__table__.create(bind=conn, checkfirst=True)
+
+
 def _m212_copilot_governance(conn: Connection) -> None:
     """P3 治理：llm_usage 归因(用户/轨迹) + 多用户配额表(2026-10-20)。
 
@@ -5968,6 +5980,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(210, "copilot_actions_annotations", _m210_copilot_actions_annotations),
     Migration(211, "flow_snapshot_source", _m211_flow_snapshot_source),
     Migration(212, "copilot_governance", _m212_copilot_governance),
+    Migration(213, "copilot_memory_schedules", _m213_copilot_memory_schedules),
 )
 
 

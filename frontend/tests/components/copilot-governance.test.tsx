@@ -12,6 +12,14 @@ const api = vi.hoisted(() => ({
   getCopilotCost: vi.fn(),
   getCopilotQuotas: vi.fn(),
   putCopilotQuota: vi.fn(),
+  getMemories: vi.fn(),
+  postMemory: vi.fn(),
+  patchMemory: vi.fn(),
+  deleteMemory: vi.fn(),
+  getSchedules: vi.fn(),
+  postSchedule: vi.fn(),
+  patchSchedule: vi.fn(),
+  deleteSchedule: vi.fn(),
 }))
 
 vi.mock('@/lib/copilot/api', async () => ({
@@ -76,6 +84,12 @@ describe('copilot governance', () => {
         },
       ],
     })
+    api.getMemories.mockResolvedValue([
+      { id: 1, kind: 'rule', content: '以后资金流别用东财方向位回答方向', weight: 10, source: 'user', enabled: true, hits: 3, created_at: '' },
+    ])
+    api.getSchedules.mockResolvedValue([
+      { id: 1, kind: 'auction_digest', at_hhmm: '09:25', weekdays: 'mon-fri', conversation_id: null, enabled: true, last_run_date: null, created_at: '' },
+    ])
     api.putCopilotQuota.mockResolvedValue({
       user_id: 'u1',
       daily_runs: 20,
@@ -113,3 +127,12 @@ describe('copilot governance', () => {
     expect(api.putCopilotQuota.mock.calls[0][0]).toBe('u1')
   })
 })
+
+  it('shows memories and schedules tabs', async () => {
+    render(<CopilotGovernancePage />)
+    fireEvent.click(screen.getByRole('button', { name: '记忆' }))
+    expect(await screen.findByText(/别用东财方向位/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '定时' }))
+    expect(await screen.findByText('09:25')).toBeTruthy()
+  })

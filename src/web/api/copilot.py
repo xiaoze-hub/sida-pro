@@ -547,3 +547,124 @@ def _llm_prices() -> dict:
         "kimi": 1.0,
         "gpt-4o-mini": 1.0,
     }
+
+
+@router.get("/memory")
+def get_memory(
+    include_disabled: int = Query(default=0),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """长期记忆列表（本人）。带 kind/weight/hits，可逐条停用或删除。"""
+    from src.core.copilot_memory import list_all
+
+    return list_all(db, getattr(user, "id", None), include_disabled=bool(include_disabled))
+
+
+@router.post("/memory")
+def post_memory(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """手工写一条记忆。body: {content, kind?, weight?}。"""
+    from src.core.copilot_memory import remember
+
+    content = str(body.get("content") or "").strip()
+    if len(content) < 2:
+        raise HTTPException(status_code=400, detail="内容太短")
+    kind = str(body.get("kind") or "preference")
+    weight = int(body.get("weight") or 5)
+    row = remember(db, getattr(user, "id", None), kind=kind, content=content,
+                   source="user", weight=weight)
+    if row is None:
+        raise HTTPException(status_code=500, detail="写入失败")
+    return row
+
+
+@router.patch("/memory/{memory_id}")
+def patch_memory(
+    memory_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    from src.core.copilot_memory import set_enabled
+
+    ok = set_enabled(db, getattr(user, "id", None), memory_id, bool(body.get("enabled", True)))
+    if not ok:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"ok": True}
+
+
+@router.delete("/memory/{memory_id}")
+def del_memory(
+    memory_id: int,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    from src.core.copilot_memory import delete as _delete
+
+    if not _delete(db, getattr(user, "id", None), memory_id):
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"ok": True}
+
+
+@router.get("/schedules")
+def get_schedules(
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """会话定时任务列表（本人）。"""
+    from src.core.copilot_schedule import list_all as _list
+
+    return _list(db, getattr(user, "id", None))
+
+
+@router.post("/schedules")
+def post_schedule(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """直接建一个定时任务（面板手工建；AI 侧走 propose→apply 的 schedule 动作）。"""
+    from src.core.copilot_schedule import create as _create
+
+    try:
+        return _create(
+            db, getattr(user, "id", None),
+            kind=str(body.get("kind") or "auction_digest"),
+            at_hhmm=str(body.get("at_hhmm") or "09:25"),
+            weekdays=str(body.get("weekdays") or "mon-fri"),
+            conversation_id=body.get("conversation_id"),
+            payload=body.get("payload") or {},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/schedules/{sched_id}")
+def patch_schedule(
+    sched_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    from src.core.copilot_schedule import set_enabled
+
+    if not set_enabled(db, getattr(user, "id", None), sched_id, bool(body.get("enabled", True))):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"ok": True}
+
+
+@router.delete("/schedules/{sched_id}")
+def del_schedule(
+    sched_id: int,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    from src.core.copilot_schedule import delete as _delete
+
+    if not _delete(db, getattr(user, "id", None), sched_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"ok": True}

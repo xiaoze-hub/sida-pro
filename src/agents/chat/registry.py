@@ -1962,3 +1962,87 @@ async def _tool_download_client_data(db: Session, args: dict, user: User | None 
         "注意: 文件下载在**通达信客户端本地**(.\\PYPlugins\\data), 本服务读不到内容; "
         "这是给客户端喂数据的前置动作, 不是取数结果。",
     ])
+
+@register_chat_tool(
+    "remember_preference",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "remember_preference",
+            "description": (
+                "当用户明确表达长期偏好或规则时（如「记住我只做主板」「以后资金流别用东财方向位」），"
+                "把这句话存为长期记忆，下次会话会自动带上。只存用户明确说的，禁止自行推断偏好。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "要记住的偏好/规则原文（≤500字）"},
+                    "kind": {"type": "string", "enum": ["preference", "rule", "fact", "skill"],
+                             "description": "preference=偏好 / rule=规则 / fact=事实 / skill=流程"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    caliber="长期记忆(用户本人确认, 存 copilot_memories)",
+)
+async def _tool_remember_preference(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.copilot_memory import remember
+
+    content = str(args.get("content") or "").strip()
+    if len(content) < 2:
+        return "没有可记的内容（content 为空）。"
+    kind = str(args.get("kind") or "preference")
+    row = remember(db, getattr(user, "id", None), kind=kind, content=content,
+                   source="ai", weight=7)
+    if row is None:
+        return "记忆写入失败（不影响本次回答），可以稍后再试。"
+    return f"已记住（#{row['id']}）：{row['content']}"
+
+
+@register_chat_tool(
+    "create_daily_task",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "create_daily_task",
+            "description": (
+                "当用户要求「每天/每个交易日某时点」自动推送内容时使用，例如"
+                "「每天9:25帮我看竞价」「收盘后给我小结」。"
+                "会生成一条待确认动作，用户确认后才真正生效（不会立刻下单或改持仓）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["auction_digest", "daily_brief"],
+                             "description": "auction_digest=竞价摘要 / daily_brief=收盘小结"},
+                    "at_hhmm": {"type": "string", "description": "执行时间 HH:MM，如 09:25"},
+                    "symbols": {"type": "array", "items": {"type": "string"},
+                                "description": "指定标的；不传则用用户自选"},
+                },
+                "required": ["kind", "at_hhmm"],
+            },
+        },
+    },
+    caliber="会话定时任务(propose→确认→落库 copilot_schedules)",
+)
+async def _tool_create_daily_task(db: Session, args: dict, user: User | None = None) -> str:
+    from src.harness.actions import ActionError, propose
+
+    kind = str(args.get("kind") or "").strip()
+    at = str(args.get("at_hhmm") or "").strip()
+    if kind not in ("auction_digest", "daily_brief"):
+        return "kind 只能是 auction_digest（竞价摘要）或 daily_brief（收盘小结）。"
+    if not at:
+        return "请给出执行时间 at_hhmm，例如 09:25。"
+    try:
+        row = propose(
+            db, user_id=getattr(user, "id", None), kind="schedule",
+            payload={"kind": kind, "at_hhmm": at,
+                     "symbols": [str(x) for x in (args.get("symbols") or [])]},
+        )
+    except ActionError as e:
+        return f"无法创建定时任务：{e}"
+    label = "竞价摘要" if kind == "auction_digest" else "收盘小结"
+    return (f"已生成待确认动作 #{row['id']}：{label} 每天 {at} 推送。"
+            f"请在面板「待确认动作」里点确认后才会生效。")

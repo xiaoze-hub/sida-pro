@@ -189,3 +189,68 @@ export const putCopilotQuota = (
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+
+
+/** 长期记忆（P0）：用户明确表达的偏好/规则，换会话也记得。 */
+export interface CopilotMemoryRow {
+  id: number
+  kind: 'preference' | 'rule' | 'fact' | 'skill'
+  content: string
+  weight: number
+  source: string
+  enabled: boolean
+  hits: number
+  created_at: string
+}
+
+export const getMemories = (signal?: AbortSignal) =>
+  fetchAPI<CopilotMemoryRow[]>('/copilot/memory', { signal })
+
+export const postMemory = (content: string, kind = 'preference', weight = 5) =>
+  fetchAPI<CopilotMemoryRow>('/copilot/memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, kind, weight }),
+  })
+
+export const patchMemory = (id: number, enabled: boolean) =>
+  fetchAPI<{ ok: boolean }>(`/copilot/memory/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+
+export const deleteMemory = (id: number) =>
+  fetchAPI<{ ok: boolean }>(`/copilot/memory/${id}`, { method: 'DELETE' })
+
+/** 会话定时任务（P0）：到点把内容写回会话。 */
+export interface CopilotScheduleRow {
+  id: number
+  kind: 'auction_digest' | 'daily_brief'
+  at_hhmm: string
+  weekdays: string
+  conversation_id: number | null
+  enabled: boolean
+  last_run_date: string | null
+  created_at: string
+}
+
+export const getSchedules = (signal?: AbortSignal) =>
+  fetchAPI<CopilotScheduleRow[]>('/copilot/schedules', { signal })
+
+export const postSchedule = (kind: string, at_hhmm: string, weekdays = 'mon-fri') =>
+  fetchAPI<CopilotScheduleRow>('/copilot/schedules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, at_hhmm, weekdays }),
+  })
+
+export const patchSchedule = (id: number, enabled: boolean) =>
+  fetchAPI<{ ok: boolean }>(`/copilot/schedules/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+
+export const deleteSchedule = (id: number) =>
+  fetchAPI<{ ok: boolean }>(`/copilot/schedules/${id}`, { method: 'DELETE' })

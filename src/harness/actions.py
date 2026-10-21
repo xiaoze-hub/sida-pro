@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-ALLOWED_KINDS = ("annotation", "watchlist", "alert")
+ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule")
 
 
 class ActionError(Exception):
@@ -74,6 +74,7 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
         "watchlist": _apply_watchlist,
         "annotation": _apply_annotation,
         "alert": _apply_alert,
+        "schedule": _apply_schedule,
     }.get(row.kind)
     if handler is None:
         raise ActionError(f"{row.kind} 动作暂未开放执行")
@@ -219,3 +220,26 @@ def _to_dict(row: Any) -> dict:
         "created_at": str(row.created_at or ""),
         "applied_at": str(row.applied_at or ""),
     }
+
+
+def _apply_schedule(db: Session, *, user_id: Any, payload: dict) -> str:
+    """建一个会话定时任务（2026-10-21, P0）。
+
+    与 alert 的区别：alert 盯价格，schedule 按时间点产出内容（竞价摘要/收盘小结）。
+    仍然遵守 propose → 用户确认 → 才落库。
+    """
+    from src.core.copilot_schedule import create as _create
+
+    kind = str(payload.get("kind") or "auction_digest")
+    at = str(payload.get("at_hhmm") or "09:25")
+    try:
+        row = _create(
+            db, user_id, kind=kind, at_hhmm=at,
+            weekdays=str(payload.get("weekdays") or "mon-fri"),
+            conversation_id=payload.get("conversation_id"),
+            payload={"symbols": payload.get("symbols") or []},
+        )
+    except ValueError as e:
+        raise ActionError(str(e)) from e
+    label = "竞价摘要" if kind == "auction_digest" else "收盘小结"
+    return f"已创建定时任务 #{row['id']}：{label} 每{row['weekdays']} {row['at_hhmm']} 推送到会话"

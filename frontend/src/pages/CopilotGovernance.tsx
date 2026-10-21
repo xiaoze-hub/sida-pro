@@ -15,23 +15,35 @@ import { safeFixed } from '@/lib/format'
 import { Loader2, Plus, RefreshCw } from 'lucide-react'
 import { authApi } from '@panwatch/api'
 import {
+  deleteMemory,
+  deleteSchedule,
   getCopilotCost,
   getCopilotQuotas,
+  getMemories,
+  getSchedules,
+  patchMemory,
+  patchSchedule,
+  postMemory,
+  postSchedule,
   getCopilotRunDetail,
   getCopilotRuns,
   putCopilotQuota,
   type CopilotCost,
+  type CopilotMemoryRow,
   type CopilotQuotaRow,
+  type CopilotScheduleRow,
   type CopilotRunDetail,
   type CopilotRunRow,
 } from '@/lib/copilot/api'
 
-type Tab = 'traces' | 'cost' | 'quota'
+type Tab = 'traces' | 'cost' | 'quota' | 'memory' | 'schedule'
 
 const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: 'traces', label: '轨迹回放', hint: '每轮问答用了哪些工具、花了多久' },
   { id: 'cost', label: '成本', hint: 'token 与估算费用（未配单价显示 --）' },
   { id: 'quota', label: '配额', hint: '按人限额；没有记录=不限' },
+  { id: 'memory', label: '记忆', hint: '它记住的偏好/规则（来自你明确说过的）' },
+  { id: 'schedule', label: '定时', hint: '到点把内容推回会话' },
 ]
 
 function ms(v: number | null | undefined) {
@@ -72,6 +84,8 @@ export default function CopilotGovernancePage() {
       {tab === 'traces' ? <TracesTab /> : null}
       {tab === 'cost' ? <CostTab /> : null}
       {tab === 'quota' ? <QuotaTab /> : null}
+      {tab === 'memory' ? <MemoryTab /> : null}
+      {tab === 'schedule' ? <ScheduleTab /> : null}
     </div>
   )
 }
@@ -539,5 +553,239 @@ function QuotaRow({
         </button>
       </td>
     </tr>
+  )
+}
+
+const KIND_LABEL: Record<string, string> = {
+  preference: '偏好',
+  rule: '规则',
+  fact: '事实',
+  skill: '流程',
+}
+
+function MemoryTab() {
+  const [rows, setRows] = useState<CopilotMemoryRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [text, setText] = useState('')
+  const [kind, setKind] = useState('preference')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setRows(await getMemories())
+    } catch {
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const add = useCallback(async () => {
+    const content = text.trim()
+    if (content.length < 2) return
+    setBusy(true)
+    setError(null)
+    try {
+      const row = await postMemory(content, kind, 7)
+      setRows((prev) => [row, ...prev])
+      setText('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }, [text, kind])
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted-foreground">
+        只记你**明确说过**的（「记住…」「以后都…」「我的口径是…」）。删掉就不再注入；权重 ≥9 的每条都会带上。
+      </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
+        <select
+          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          value={kind}
+          onChange={(e) => setKind(e.target.value)}
+        >
+          {Object.entries(KIND_LABEL).map(([k, v]) => (
+            <option key={k} value={k}>{v}</option>
+          ))}
+        </select>
+        <input
+          className="min-w-[240px] flex-1 rounded border border-border/60 bg-transparent px-2 py-0.5 text-[11px]"
+          placeholder="例如：我只做主板，不碰北交所"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button
+          type="button"
+          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={busy || text.trim().length < 2}
+          onClick={() => void add()}
+        >
+          {busy ? '保存中…' : '记住'}
+        </button>
+      </div>
+      {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {loading ? (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground">还没有记忆。下次直接说「记住…」就会自动记下。</div>
+      ) : (
+        <ul className="space-y-1">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-start gap-2 rounded-md border border-border/50 px-2 py-1.5">
+              <span className="mt-0.5 rounded bg-s2 px-1 text-[10px] text-muted-foreground">
+                {KIND_LABEL[r.kind] || r.kind}
+              </span>
+              <span className="min-w-0 flex-1 text-[11px]">{r.content}</span>
+              <span className="font-mono text-[10px] text-muted-foreground">w{r.weight} · 用{r.hits}次</span>
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+                onClick={() => void patchMemory(r.id, false).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
+              >
+                停用
+              </button>
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground hover:text-role-risk"
+                onClick={() => void deleteMemory(r.id).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
+              >
+                删
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function ScheduleTab() {
+  const [rows, setRows] = useState<CopilotScheduleRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [kind, setKind] = useState('auction_digest')
+  const [at, setAt] = useState('09:25')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setRows(await getSchedules())
+    } catch {
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const add = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const row = await postSchedule(kind, at, 'mon-fri')
+      setRows((prev) => [row, ...prev])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '创建失败')
+    } finally {
+      setBusy(false)
+    }
+  }, [kind, at])
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] text-muted-foreground">
+        只在交易日执行；结果写成一条消息进会话。到点时若取不到数据，不写空内容、也不标记为已跑。
+      </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/50 px-2 py-1.5">
+        <select
+          className="rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          value={kind}
+          onChange={(e) => setKind(e.target.value)}
+        >
+          <option value="auction_digest">竞价摘要</option>
+          <option value="daily_brief">收盘小结</option>
+        </select>
+        <input
+          className="w-20 rounded border border-border/60 bg-transparent px-1 py-0.5 text-[11px]"
+          value={at}
+          onChange={(e) => setAt(e.target.value)}
+          placeholder="09:25"
+        />
+        <span className="text-[10px] text-muted-foreground">周一至周五</span>
+        <button
+          type="button"
+          className="rounded border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          disabled={busy}
+          onClick={() => void add()}
+        >
+          {busy ? '创建中…' : '新建'}
+        </button>
+      </div>
+      {error ? <div className="text-[11px] text-role-risk">{error}</div> : null}
+      {loading ? (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground">还没有定时任务。也可以在对话里说「每天 9:25 帮我看竞价」。</div>
+      ) : (
+        <table className="w-full text-[11px]">
+          <thead className="text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1.5 text-left font-normal">类型</th>
+              <th className="px-2 py-1.5 text-left font-normal">时间</th>
+              <th className="px-2 py-1.5 text-left font-normal">星期</th>
+              <th className="px-2 py-1.5 text-left font-normal">上次</th>
+              <th className="px-2 py-1.5 text-right font-normal">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t border-border/30">
+                <td className="px-2 py-1.5">{r.kind === 'auction_digest' ? '竞价摘要' : '收盘小结'}</td>
+                <td className="px-2 py-1.5 font-mono">{r.at_hhmm}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{r.weekdays}</td>
+                <td className="px-2 py-1.5 font-mono text-muted-foreground">{r.last_run_date || '--'}</td>
+                <td className="px-2 py-1.5 text-right">
+                  <button
+                    type="button"
+                    className="mr-2 text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() =>
+                      void patchSchedule(r.id, !r.enabled).then(() =>
+                        setRows((p) => p.map((x) => (x.id === r.id ? { ...x, enabled: !x.enabled } : x))),
+                      )
+                    }
+                  >
+                    {r.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-[10px] text-muted-foreground hover:text-role-risk"
+                    onClick={() => void deleteSchedule(r.id).then(() => setRows((p) => p.filter((x) => x.id !== r.id)))}
+                  >
+                    删
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   )
 }

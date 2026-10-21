@@ -1423,6 +1423,57 @@ class LLMUsage(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class CopilotMemory(Base):
+    """数智参谋的长期记忆（2026-10-21, P0）。
+
+    为什么要它：会话上下文只有 20 条 + 滚动摘要，换个会话就忘了"只做主板"、
+    忘了"资金流别用东财方向位"。人是要记事的，助手也一样。
+
+    克制的三条：
+    - 只记**用户明确表达**的偏好/规则（"记住"/"以后都"/"我的口径是"），不做心理画像；
+    - 内容截断 500 字，不存原始对话；
+    - 可删、可停用（UI 里一条一条管）。
+    """
+
+    __tablename__ = "copilot_memories"
+    __table_args__ = (Index("ix_copilot_memories_user", "user_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(16), nullable=False, default="preference")  # preference/rule/fact/skill
+    content = Column(Text, nullable=False)
+    weight = Column(Integer, nullable=False, default=5)   # >=9 视为钉住(每次注入)
+    source = Column(String(16), nullable=False, default="user")  # user/ai/auto
+    run_id = Column(String(36), nullable=True)
+    hits = Column(Integer, nullable=False, default=0)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+class CopilotSchedule(Base):
+    """会话里创建的定时任务（2026-10-21, P0）。
+
+    目前只支持两类低风险任务：`auction_digest`（竞价摘要）与 `daily_brief`（收盘小结）。
+    执行器每分钟扫一次表，命中就生成一条 assistant 消息写进会话 —— 不走 APScheduler
+    动态注册，避免重启丢任务、也避免和用户删任务时的竞态。
+    """
+
+    __tablename__ = "copilot_schedules"
+    __table_args__ = (Index("ix_copilot_schedules_user", "user_id", "enabled"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    kind = Column(String(24), nullable=False)        # auction_digest / daily_brief
+    at_hhmm = Column(String(5), nullable=False)      # "09:25"
+    weekdays = Column(String(24), nullable=False, default="mon-fri")
+    conversation_id = Column(Integer, nullable=True)  # 结果发到哪个会话(None=新建)
+    payload = Column(JSON, default=dict)              # {symbols:[...], limit:10}
+    enabled = Column(Boolean, nullable=False, default=True)
+    last_run_date = Column(String(8), nullable=True)  # YYYYMMDD, 防同一天重复
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class CopilotQuota(Base):
     """多用户 AI 配额（2026-10-20, P3）。
 

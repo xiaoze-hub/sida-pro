@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
 from src.harness.runtime import AgentRuntime
+from src.core.copilot_memory import memory_block
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
 from src.config import Settings
@@ -1056,6 +1057,10 @@ async def _build_ai_messages(
 
     # 注入基础上下文（持仓 + 绑定股票的行情/建议）— S5: 按当前用户过滤
     context_parts: list[str] = []
+    # 长期记忆(P0): 自动捕获"记住/以后都…" + 注入历史偏好; 内部吞异常, 失败等于没有
+    _mem = memory_block(db, getattr(user, "id", None), (history[-1].content if history else ""))
+    if _mem:
+        context_parts.append(_mem)
 
     # 用户持仓
     portfolio_ctx = _build_portfolio_context(db, user=user)
