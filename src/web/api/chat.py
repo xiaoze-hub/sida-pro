@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
+from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
 from src.core.copilot_memory import memory_block
 from src.harness.viewstate import append_view_state_block
 from src.harness.trace import bind_llm_context, finish_copilot_run, start_copilot_run
@@ -1180,6 +1181,11 @@ async def _run_tool_loop_inner(
                 no_calls = not response_msg.tool_calls
             if no_calls:
                 text = "".join(acc) if stream else (response_msg.content or "")
+                # 数字对账: 回答里的硬数字逐个回查工具原文(查不到就标出来, 不改正文)
+                _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
+                                 if m.get("role") == "tool")
+                if text and _ev:
+                    text = _audit_annotate(text, _audit_numbers(text, _ev, _utext))
                 if _round == 0 and _stock_q:
                     # 2026-10-21 幻觉事故：问两只票却零工具作答、还编出别的股票 → 一律不给结论
                     logger.warning("零工具作答已拦截(问的是具体标的): %s", _utext[:40])
@@ -1218,6 +1224,10 @@ async def _run_tool_loop_inner(
         else:
             # 轮次用尽(2026-10-21): 先用已取到的证据补一次无工具总结, 实在没有才给建议文案
             _sum = await summarize_on_budget(ai_client, messages_for_ai)
+            _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
+                             if m.get("role") == "tool")
+            if _sum and _ev:
+                _sum = _audit_annotate(_sum, _audit_numbers(_sum, _ev, _utext))
             yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())
     except Exception as e:
         logger.error(f"AI {'流式' if stream else ''}对话失败: {e}")

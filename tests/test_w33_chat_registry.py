@@ -434,3 +434,23 @@ def test_zero_tool_answer_allowed_for_chitchat():
     msgs = [{"role": "user", "content": "你好"}]
     evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
     assert evs == [("text", "你好，我是数智参谋")]
+
+
+def test_number_audit_annotates_fabricated_price(monkeypatch):
+    """工具给 33.62–44.52，回答写 83.12–91.88 → 末尾必须挂对账警告（正文不改）。"""
+    from src.web.api import chat as chat_api
+
+    async def fake_exec(db, name, args, user=None):
+        return "[自算CYQ] 002050 现价 32.91 | 70% 筹码带：33.62 – 44.52 元 ｜ 获利盘：9.9%"
+
+    monkeypatch.setattr(chat_api, "_execute_tool", fake_exec)
+    monkeypatch.setattr(chat_api, "correction_note", lambda t: None)
+    client = _Client([
+        _Msg(content=None, tool_calls=[_ToolCall("t1", "get_chip_accumulation")]),
+        _Msg(content="002050 现价 32.91，成本带 83.12–91.88，获利盘 39%"),
+    ])
+    msgs = [{"role": "user", "content": "002050 筹码怎么样"}]
+    evs = asyncio.run(_collect(chat_api._run_tool_loop(client, msgs, db=None)))
+    text = evs[-1][1]
+    assert "002050 现价 32.91" in text, "正文不许改写"
+    assert "数字对账" in text and "83.12" in text
