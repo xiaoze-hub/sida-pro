@@ -3,15 +3,14 @@ label: 全景诊断
 icon: "🔭"
 desc: 单只股票全景穿透：走势、筹码、主力、撤单、盘口、形态，固定六段输出。
 when: [全景, 深度诊断, 全面诊断, 全景数智]
+pipeline: true
 tools:
   - get_stock_dossier
   - get_technical_analysis
   - get_chip_accumulation
   - get_main_intent
   - get_decision_pioneer
-  - get_wyckoff_structure
   - get_cancel_order_intent
-  - get_intraday_profile
 output_sections: [结论, 走势与形态, 筹码结构, 主力与资金, 盘口与撤单, 关键位与预案, 口径]
 priority: 5
 budget: {max_tool_calls: 8}

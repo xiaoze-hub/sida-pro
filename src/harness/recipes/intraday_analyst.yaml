@@ -4,12 +4,11 @@ icon: "📈"
 desc: 分时走势 + 内外盘 + 分时量 + 挂撤单：今天这波是进攻还是出货。
 when: [分时, 分时图, 尾盘, 外盘, 内盘, 盘口, 挂单, 撤单, 放量, 均价线]
 skills: [intraday]
+pipeline: true
 tools:
   - get_intraday_profile
-  - get_main_intent
   - get_cancel_order_intent
-  - get_stock_quote
-  - get_stock_dossier
+  - get_main_intent
 output_sections: [结论, 分时结构, 内外盘, 挂撤单, 关键位, 口径]
 budget: {max_tool_calls: 6}
 prompt_fragment: |
