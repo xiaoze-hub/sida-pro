@@ -14,9 +14,10 @@ import re
 # 只抓"硬数字"：带小数点的（价格/百分比）或带量纲的（万/亿/倍/手/元）。
 # 纯整数无单位（3 板 / 5 日 / 17 次）不查，否则满屏误报。
 _NUM_RE = re.compile(
-    r"(?<![\d.])(-?\d{1,3}(?:,\d{3})*(?:\.\d{1,4})?)(?:\s*(万元|亿元|%|万|亿|倍|手|元))?"
+    r"(?<![\d.])(-?\d+(?:,\d{3})*(?:\.\d{1,4})?)(?:\s*(万元|亿元|%|万|亿|倍|手|元))?"
 )
 _UNITS = ("万元", "亿元", "%", "万", "亿", "倍", "手", "元")
+_SCALE = {"万": 1e4, "万元": 1e4, "亿": 1e8, "亿元": 1e8}
 
 _CODE_LIKE = re.compile(r"(?<!\d)\d{6}(?!\d)")
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}:\d{2}")
@@ -85,6 +86,7 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
     if not claims:
         return {"checked": 0, "unverified": [], "ratio": 0.0, "severe": False}
     known, pool = _evidence_pool(evidence or "")
+    pool_all = pool
     q_vals = {v for v in (_norm(t) for t in extract_claims(question or "")) if v is not None}
     derived = _derived(pool)
     unverified: list[str] = []
@@ -99,6 +101,11 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         if abs(v) in {abs(x) for x in known}:  # 方向符号写法差异
             continue
         if any(abs(v - d) <= 0.02 for d in derived):
+            continue
+        # 带万/亿的量：允许四舍五入折算（115,000 手写成 11.5 万手不是编造），容差 1.5%
+        unit = next((u for u in _UNITS if token.endswith(u)), "")
+        scale = _SCALE.get(unit)
+        if scale and any(abs(v * scale - x) <= abs(x) * 0.015 for x in pool_all if x):
             continue
         unverified.append(token)
     ratio = len(unverified) / checked if checked else 0.0

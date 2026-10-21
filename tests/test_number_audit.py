@@ -46,3 +46,17 @@ def test_annotate_keeps_body_and_appends_warning():
 def test_empty_answer_is_safe():
     assert audit("", EV)["checked"] == 0
     assert annotate("", audit("", EV)) == ""
+
+
+def test_unit_rounding_is_allowed():
+    """115 万手 是 1,150,000 的合理四舍五入，不算编造。"""
+    ev = "外盘 1150000 手"
+    r = audit("外盘 115 万手", ev)
+    assert "115万" not in r["unverified"]
+
+
+def test_unit_misstatement_still_caught():
+    """109,167 写成 11.6 万（实际 10.9 万）—— 这不是四舍五入，是编。"""
+    ev = "外盘 109167 手"
+    r = audit("外盘 11.6 万手", ev)
+    assert "11.6万" in r["unverified"]
