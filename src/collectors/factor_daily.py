@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-FACTORS = ("momentum_20", "momentum_60", "vol_20", "volume_z20", "position_120")
+FACTORS = ("momentum_20", "momentum_60", "vol_20", "volume_z20", "position_120",
+           "concentration")
 
 
 def compute_factors(bars: list[dict]) -> dict[str, float | None]:
@@ -51,6 +52,20 @@ def compute_factors(bars: list[dict]) -> dict[str, float | None]:
         hi, lo = max(highs[-120:]), min(lows[-120:])
         if hi > lo:
             out["position_120"] = round((closes[-1] - lo) / (hi - lo) * 100, 1)
+
+    # 第 6 个因子：CYQ 集中度 + 筹码峰（用同一段日线现算，口径与 get_chip_accumulation 一致）
+    out["peak_price"] = None
+    if len(bars) >= 60:
+        try:
+            from src.core.chip_distribution import compute_chips
+
+            cyq = compute_chips(bars[-120:]) or {}
+            if cyq.get("concentration") is not None:
+                out["concentration"] = round(float(cyq["concentration"]), 4)
+            if cyq.get("peak_price") is not None:
+                out["peak_price"] = round(float(cyq["peak_price"]), 2)
+        except Exception:  # noqa: BLE001 - 筹码算不出不影响其它因子
+            out["concentration"] = None
     return out
 
 
@@ -66,7 +81,9 @@ def _pct_rank(values: list[float]) -> list[float]:
     return ranks
 
 
-def collect_once(db: Session, limit: int | None = None, trade_date: str | None = None) -> dict:
+def collect_once(db: Session, limit: int | None = None, trade_date: str | None = None,
+                 asof: str | None = None) -> dict:
+    """asof='YYYYMMDD' 时按该日截断日线重算（历史回填用）。"""
     """跑一轮全市场因子快照。返回统计（写入行数/跳过数）。"""
     from src.db.klines_repo import load_qfq_bars
     from src.db.models import StockFactorDaily
@@ -95,7 +112,13 @@ def collect_once(db: Session, limit: int | None = None, trade_date: str | None =
         except Exception:  # noqa: BLE001
             skipped += 1
             continue
-        f = compute_factors(bars)
+        use_bars = bars
+        if asof:
+            use_bars = [b for b in bars if str(b.get("date", "")).replace("-", "") <= asof]
+            if not use_bars:
+                skipped += 1
+                continue
+        f = compute_factors(use_bars)
         if f["momentum_20"] is None:  # 样本不足整行不写，避免半截数据
             skipped += 1
             continue

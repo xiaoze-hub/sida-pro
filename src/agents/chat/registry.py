@@ -1282,25 +1282,16 @@ async def _tool_get_factor_ic_report(db: Session, args: dict, user: User | None 
     market = args.get("market", "CN")
     if market != "CN":
         return "因子 IC 归因报告仅支持 A 股(CN)。"
+    # 2026-10-21: 原实现走 LLM 归因且要 OpenAI key（实测 Missing credentials → 静默降级成
+    # "样本不足"，等于废掉）。改成纯本地 Spearman IC：因子表 × 日线未来收益，零外部依赖。
     try:
-        from src.core.factor_ic_report import generate_factor_ic_report
+        from src.core.factor_ic import compute as _compute_ic, render as _render_ic
 
-        result = await asyncio.to_thread(generate_factor_ic_report, market, None)
-        if not result:
-            return f"[数据源: 因子IC/IR评估] {market} 因子样本不足或 AI 归因失败(静默降级), 无法生成报告。"
-        lines = [
-            f"[数据源: 因子IC/IR评估 + AI归因] {market} 因子有效性归因:",
-            f"  总评: {result.get('summary')}",
-        ]
-        for fa in result.get("factor_assessment") or []:
-            lines.append(f"  - {fa.get('factor_code')}: {fa.get('assessment')} — {fa.get('note')}")
-        if result.get("adjustment_suggestion"):
-            lines.append(f"  调权建议: {result['adjustment_suggestion']}")
-        lines.append(f"  置信度: {result.get('confidence')}")
-        return "\n".join(lines)
+        m = await asyncio.to_thread(_compute_ic, db)
+        return _render_ic(m)
     except Exception as e:
         logger.warning(f"get_factor_ic_report 工具失败 [{market}]: {e}")
-        return f"因子 IC 归因报告失败: {str(e)[:100]}"
+        return f"因子 IC 计算失败: {str(e)[:100]}"
 
 
 @register_chat_tool(
