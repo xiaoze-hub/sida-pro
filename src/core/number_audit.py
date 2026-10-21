@@ -106,7 +106,8 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
         "checked": checked,
         "unverified": unverified,
         "ratio": round(ratio, 3),
-        "severe": len(unverified) >= 3 or ratio >= 0.2,
+        # 小样本别急着下"未通过"结论：2 个数里错 1 个只是可疑，5 个数里错 3 个才是严重
+        "severe": len(unverified) >= 3 or (checked >= 6 and ratio >= 0.34),
     }
 
 

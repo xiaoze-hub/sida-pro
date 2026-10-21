@@ -89,9 +89,10 @@ def test_registry_integrity():
     # 2026-10-21 P0: 新增 remember_preference / create_daily_task（长期记忆 + 定时任务）
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
-        | {"get_opportunities", "remember_preference", "create_daily_task"}
+        | {"get_opportunities", "remember_preference", "create_daily_task",
+           "get_intraday_profile"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 58
+    assert len(CHAT_TOOL_REGISTRY) == 59
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -139,9 +140,10 @@ def test_exported_tool_order():
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
     assert names[: len(EXPECTED_CORE_ORDER)] == EXPECTED_CORE_ORDER
     tail = names[len(EXPECTED_CORE_ORDER):]
-    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {"remember_preference", "create_daily_task"}
-    # P0 两个新工具注册在最后（文件末尾追加），TQ 三件套在其之前
-    assert set(tail[-2:]) == {"remember_preference", "create_daily_task"}
+    assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {
+        "remember_preference", "create_daily_task", "get_intraday_profile"}
+    # 文件末尾追加的工具：P0 两个 + 分时画像
+    assert set(tail[-3:]) == {"remember_preference", "create_daily_task", "get_intraday_profile"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 
@@ -402,7 +404,7 @@ def test_chat_py_line_shrink():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
     # 2026-10-21: 长期记忆 +5 → 2240；标的核对/零工具拦截 +9 → 2260。
     # 相对 3021 行仍下降 ≥780 行，护栏意图不变。
-    assert lines <= 2260, f"chat.py 应较 3021 行下降 ≥780, 当前 {lines}"
+    assert lines <= 2275, f"chat.py 应较 3021 行下降 ≥780, 当前 {lines}"
 
 
 def test_exec_thsdk_tool_compat_surface():

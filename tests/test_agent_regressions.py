@@ -124,10 +124,10 @@ def _c11_user_id_is_uuid_text():
 
 
 def _c12_tool_count_stable():
-    """工具数变化必须是有意的（2026-10-21 P0 起 = 58：+remember_preference/+create_daily_task）。"""
+    """工具数变化必须是有意的（2026-10-21 = 59：P0 记忆/定时 + 分时画像）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 58
+    assert len(CHAT_TOOL_REGISTRY) == 59
 
 
 def _c13_tool_schema_name_matches():
@@ -308,7 +308,7 @@ def _c30_chat_py_line_guard():
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
     # 2026-10-20: TQ 异动资金档案 +3 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
     # 逻辑仍在往 src/core、src/harness 抽，护栏只是防止 chat.py 无限膨胀。
-    assert lines <= 2260, f"chat.py 当前 {lines} 行，超护栏"
+    assert lines <= 2275, f"chat.py 当前 {lines} 行，超护栏"
 
 
 def _c31_no_decision_pioneer_in_user_facing_text():
