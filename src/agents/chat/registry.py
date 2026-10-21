@@ -2151,3 +2151,40 @@ async def _tool_get_stock_factors(db: Session, args: dict, user: User | None = N
     if not symbol:
         return "请提供股票代码(symbol)，如 002050。"
     return _build_factors(db, symbol, "CN")
+
+
+@register_chat_tool(
+    "get_scenario_matrix",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_scenario_matrix",
+            "description": (
+                "情景规则矩阵：按均线/筹码带/区间高低算出关键位，给三档情景（走强/震荡/走弱），"
+                "每档含触发条件、目标位、应对与失效条件。回答「后面怎么应对 / 关键位在哪 / 破了怎么办」"
+                "时用它，它只给条件-反应，不预测方向。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002050"},
+                    "market": {"type": "string", "enum": ["CN"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="均线+筹码带+区间高低 → 关键位 · 三档情景 · 不预测方向",
+)
+async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.scenario_engine import build as _build_scenarios
+
+    symbol = str(args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002050。"
+    import asyncio as _asyncio
+
+    try:
+        return await _asyncio.to_thread(_build_scenarios, db, symbol, "CN")
+    except Exception as exc:  # noqa: BLE001
+        return f"[情景矩阵] 取数失败：{type(exc).__name__}——不硬编情景。"
