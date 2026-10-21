@@ -2088,3 +2088,42 @@ async def _tool_get_intraday_profile(db: Session, args: dict, user: User | None 
         return await _asyncio.to_thread(_build_intraday, symbol, market, db)
     except Exception as exc:  # noqa: BLE001 - 源故障要说清，不许编分时
         return f"[分时画像] 取数失败：{type(exc).__name__}: {exc}——不做推断。"
+
+
+@register_chat_tool(
+    "get_trend_profile",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_trend_profile",
+            "description": (
+                "多周期走势画像：5/20/60/120 日涨跌幅、阶段高低区间与当前位置、MA5/10/20/60 数值与斜率、"
+                "量能节奏（20 日均量/今日量比/放量天数）、相对沪深300 的 20 日强弱。"
+                "回答「这票前期怎么走的 / 现在在什么位置 / 趋势有没有转」时先调它，"
+                "不要只凭一句「空头排列」下结论。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002050"},
+                    "market": {"type": "string", "enum": ["CN", "HK", "US"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="PG 前复权日线 · 收盘价口径 · 样本不足写「样本不足」不硬算",
+)
+async def _tool_get_trend_profile(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.trend_profile import build as _build_trend
+
+    symbol = str(args.get("symbol") or "").strip().upper()
+    market = str(args.get("market") or "CN").strip().upper() or "CN"
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002050。"
+    import asyncio as _asyncio
+
+    try:
+        return await _asyncio.to_thread(_build_trend, symbol, market)
+    except Exception as exc:  # noqa: BLE001
+        return f"[多周期走势] 取数失败：{type(exc).__name__}——不做推断。"

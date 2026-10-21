@@ -36,25 +36,32 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT ts, open, high, low, close, volume "
+                    # 2026-10-21: 原来写死 source='tencent' —— TQ 采集的票（用户铁律优先源）
+                    # 一行都查不到，多周期走势直接空白。改为同时接受 tq/tencent，
+                    # 同一交易日优先取 tq，Python 侧按日期去重。
+                    "SELECT ts, open, high, low, close, volume, coalesce(source,'') AS src "
                     "FROM klines "
-                    "WHERE symbol=:s AND market=:m AND period='1d' "
-                    "  AND source='tencent' AND adjust='qfq' AND ts >= :c "
-                    "ORDER BY ts ASC"
+                    "WHERE symbol=:s AND market=:m AND period='1d' AND adjust='qfq' "
+                    "  AND ts >= :c AND coalesce(source,'') IN ('tq','tencent') "
+                    "ORDER BY ts ASC, CASE WHEN coalesce(source,'')='tq' THEN 0 ELSE 1 END"
                 ),
                 {"s": symbol, "m": mc_str, "c": cutoff},
             ).fetchall()
-        return [
-            {
-                "date": str(r[0])[:10],
+        out, seen = [], set()
+        for r in rows:
+            day = str(r[0])[:10]
+            if day in seen:      # 同一天 tq 已取过，跳过 tencent 副本
+                continue
+            seen.add(day)
+            out.append({
+                "date": day,
                 "open": float(r[1]),
                 "high": float(r[2]),
                 "low": float(r[3]),
                 "close": float(r[4]),
                 "volume": float(r[5] or 0),
-            }
-            for r in rows
-        ]
+            })
+        return out
     except Exception as e:
         logger.warning(f"[klines_repo] 查 PG klines 失败 {symbol}: {e}")
         return []
