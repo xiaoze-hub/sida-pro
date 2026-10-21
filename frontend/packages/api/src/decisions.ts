@@ -39,6 +39,11 @@ export interface DecisionStatsResponse {
 export interface DecisionLogItem {
   signal_kind: string
   symbol: string
+  /**
+   * 标的名称(2026-10-21 后端新增; **老数据/老后端没有该字段**)。
+   * 展示层用 `<StockLabel name={...}>`: 空则回退成只显示代码, 不写占位符。
+   */
+  name?: string | null
   trade_date: string
   /** 信号产生时的价格(元); **null = 当时没取到价, 不是 0** */
   price_at_signal: number | null

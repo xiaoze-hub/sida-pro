@@ -179,6 +179,37 @@ def search(q: str = Query("", min_length=1), market: str = Query("")):
     return search_stocks(q, market)
 
 
+#: 批量取名字的单词上限 —— 账本一页 500 行也就 500 个符号, 200 足够页面用, 且防滥用。
+STOCK_NAMES_MAX_SYMBOLS = 200
+
+
+@router.get("/names")
+def get_stock_names(
+    symbols: str = Query("", description="逗号分隔代码, 最多 200 个(可带 sz/002050.SZ 等前缀后缀)"),
+    market: str = Query("CN", description="市场: CN(默认)/HK/US"),
+    _: User = Depends(get_current_user),
+):
+    """代码 → 中文名批量解析(2026-10-21)。
+
+    页面只拿到代码时用它一次补齐名字, 免得每个页面前端各自维护一份代码表。
+    **缺失语义**: 取不到的名字不出现在 `names` 里、改为列在 `missing`(前端显示 `--`);
+    绝不拿代码冒充名字, 也不返回空串 —— 空串会被当成"名字是空字符串", 而"名字未知"是缺键。
+    """
+    from src.core.stock_names import names_for
+
+    raw = [s.strip() for s in (symbols or "").split(",") if s.strip()]
+    uniq = list(dict.fromkeys(raw))  # 去重保序, 不改变调用方语义
+    if len(uniq) > STOCK_NAMES_MAX_SYMBOLS:
+        # 显式 400: 静默截断会让 `missing` 骗人(被丢掉的符号既不在 names 也不在 missing)
+        raise HTTPException(
+            status_code=400,
+            detail=f"symbols 最多 {STOCK_NAMES_MAX_SYMBOLS} 个, 收到 {len(uniq)} 个",
+        )
+    mk = (market or "CN").strip().upper() or "CN"
+    names = names_for(uniq, market=mk)
+    return {"names": names, "missing": [s for s in uniq if s not in names]}
+
+
 @router.get("/{symbol}/l2")
 def get_stock_l2(symbol: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """单股 L2 字段: 通达信 snapshot + more_info。

@@ -1,0 +1,195 @@
+version: 1
+note: 数智参谋数据域目录：domains 是封闭集合，禁止 raw SQL；新增域必须在此登记。
+domains:
+- id: market.sentiment
+  label: 市场情绪周期
+  level: L0
+  scope: market
+  params: {}
+  source: market_sentiment_daily / market/phase
+  desc: 涨停/跌停/炸板/连板高度/情绪阶段
+- id: limit.pool
+  label: 涨停池与连板梯队
+  level: L0
+  scope: market
+  params:
+    date: 可选 YYYYMMDD
+    min_streak: 可选 最低连板数
+  source: limit_up_events / ladder_daily_snapshot / limit_strength_shadow
+  desc: 涨停家数、连板梯队、封板强度、炸板
+- id: lhb.daily
+  label: 龙虎榜与席位
+  level: L0
+  scope: symbol_or_market
+  params:
+    symbol: 可选 6 位代码
+    date: 可选
+  source: dragon_tiger_events / lhb_seat_details
+  desc: 净买额、买卖席位、游资/机构/量化标签
+- id: theme.mood
+  label: 题材情绪与生命周期
+  level: L0
+  scope: market
+  params:
+    top_n: 可选 默认 20
+  source: theme_mood_daily / board_daily
+  desc: 题材五维评分、生命周期阶段、板块资金
+- id: stock.chip
+  label: 筹码结构与集中度
+  level: L0
+  scope: symbol
+  params:
+    symbol: 必填
+  source: chip_daily / stock_factor_daily
+  desc: 成本分布、获利盘、集中度变化、筹码峰
+- id: stock.flow
+  label: 资金与主力意图
+  level: L0
+  scope: symbol
+  params:
+    symbol: 必填
+    window: 可选 分钟窗口
+  source: dde_minute_flow / cancel_rate_snapshots / l2_fund_snapshots
+  desc: 主动买卖、大单净额、撤单率、DDE
+- id: stock.intraday
+  label: 分时结构与盘口
+  level: L0
+  scope: symbol
+  params:
+    symbol: 必填
+  source: quote_snapshots / orderbook_snapshots
+  desc: 日内位置、VWAP、分时段量能、内外盘、五档
+- id: stock.factor
+  label: 因子分位与有效性
+  level: L0
+  scope: symbol
+  params:
+    symbol: 必填
+  source: stock_factor_daily / factor_ic_snapshots
+  desc: 六因子分位、IC/IR、同组中位
+- id: market.index
+  label: 大盘指数与量能
+  level: L0
+  scope: market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: market.breadth
+  label: 市场广度
+  level: L0
+  scope: market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: market.mainline
+  label: 主线榜
+  level: L0
+  scope: market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: board.daily
+  label: 板块行情与资金
+  level: L0
+  scope: market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.quote
+  label: 实时报价
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.kline
+  label: K 线与周期
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.tech
+  label: 技术面与形态
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.dossier
+  label: 研报公告新闻
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.fundamental
+  label: 财务股东两融分红
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: stock.scenario
+  label: 情景与关键位
+  level: L0
+  scope: symbol
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: auction.flow
+  label: 集合竞价
+  level: L0
+  scope: symbol_or_market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: portfolio.risk
+  label: 持仓与风控
+  level: L0
+  scope: user
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: watchlist
+  label: 自选股
+  level: L0
+  scope: user
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: paper.trading
+  label: 模拟盘
+  level: L0
+  scope: user
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: backtest
+  label: 回测
+  level: L1
+  scope: user
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: strategy.signal
+  label: 策略信号
+  level: L0
+  scope: market
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: notify.task
+  label: 定时任务与通知
+  level: L1
+  scope: user
+  params: {}
+  source: ''
+  desc: P1 待接
+- id: ops.config
+  label: 平台设置与数据源
+  level: L2
+  scope: admin
+  params: {}
+  source: ''
+  desc: P1 待接

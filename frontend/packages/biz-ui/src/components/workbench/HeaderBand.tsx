@@ -373,6 +373,12 @@ export interface HeaderBandProps {
    * 不把未知说成未持仓。
    */
   positionUnknown?: boolean
+  /**
+   * 标的名称兜底(2026-10-21): 行情快照还没回来 / 快照无 name 时用它顶上,
+   * 避免顶行只剩一串代码。仍为空 ⇒ 保持原样只显示代码(不写占位符)。
+   * 注: 指数/板块分支**刻意不消费** —— 同代码的个股名称是别的标的。
+   */
+  nameHint?: string
   onTypeChange?: (t: WorkbenchType) => void
   onGotoTab?: (tab: WorkbenchTab) => void
   /**
@@ -393,6 +399,7 @@ export default function HeaderBand({
   type = 'stock',
   hasPosition = false,
   positionUnknown = false,
+  nameHint,
   onTypeChange,
   onGotoTab,
   onRefresh,
@@ -543,7 +550,7 @@ export default function HeaderBand({
         {isStock ? (
           // 个股: 顶行(名称 + 代码 + 现价 + 涨跌色)逐字节不变
           <>
-            <span className="text-[16px] font-semibold">{quote?.name || symbol}</span>
+            <span className="text-[16px] font-semibold">{quote?.name || nameHint || symbol}</span>
             <span className="font-mono text-[11px] text-muted-foreground">{symbol}</span>
             <span className={cn('font-mono text-[16px] font-semibold', toneClass)}>
               {safePrice(quote?.current_price, 2)}

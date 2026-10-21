@@ -90,9 +90,11 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
         | {"get_opportunities", "remember_preference", "create_daily_task",
-           "get_intraday_profile", "get_trend_profile", "get_stock_factors", "get_scenario_matrix"}
+           "get_intraday_profile", "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+           # 2026-10-21 数据域架构 P0: 目录 + 统一取数入口
+           "list_data_domains", "query_data_domain"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 62
+    assert len(CHAT_TOOL_REGISTRY) == 64
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -142,11 +144,13 @@ def test_exported_tool_order():
     tail = names[len(EXPECTED_CORE_ORDER):]
     assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {
         "remember_preference", "create_daily_task", "get_intraday_profile",
-        "get_trend_profile", "get_stock_factors", "get_scenario_matrix"}
-    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子
-    assert set(tail[-6:]) == {"remember_preference", "create_daily_task",
+        "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+        "list_data_domains", "query_data_domain"}
+    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 数据域两个
+    assert set(tail[-8:]) == {"remember_preference", "create_daily_task",
                               "get_intraday_profile", "get_trend_profile",
-                              "get_stock_factors", "get_scenario_matrix"}
+                              "get_stock_factors", "get_scenario_matrix",
+                              "list_data_domains", "query_data_domain"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 
