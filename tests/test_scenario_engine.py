@@ -3,6 +3,7 @@ from src.core.scenario_engine import build_scenarios, render
 
 TREND = {
     "available": True,
+    "last": 33.0,
     "mas": {5: 31.7, 10: 32.7, 20: 33.9, 60: 35.9},
     "high": 40.0, "low": 30.0, "position": 30.0,
     "vol_ratio": 1.35, "rs20": -3.1,
@@ -22,8 +23,9 @@ def test_levels_derived_not_invented():
     lv = m["levels"]
     # 阻力取 MA20(33.9)/筹码带上沿(44.5)/区间高(40) 的最近值 → 33.9
     assert lv["resist"] == 33.9
-    # 支撑取 MA60(35.9)/带下沿(32.5)/区间低(30) 的最近值 → 35.9
-    assert lv["support"] == 35.9
+    # 支撑必须在现价之下 → MA60(35.9) 在上方不算支撑，取筹码带下沿 32.5
+    assert lv["support"] == 32.5
+    assert lv["support"] < 33.0 < lv["resist"], "支撑/阻力不能倒置"
 
 
 def test_missing_levels_refuses():
