@@ -65,3 +65,35 @@ def test_compose_prompt_flags_empty_symbol():
     pr = PipelineRun(symbol="002050")
     _, user = compose_prompt(FakeRecipe(), [pr], "002050")
     assert "数据未取到" in user
+
+
+def test_names_fallback_when_no_code(monkeypatch):
+    """只写名字（"全景诊断 三花智控"）也要能进管线，否则会退回 loop 并触发零工具拒绝。"""
+    import src.harness.pipeline as pl
+
+    monkeypatch.setattr(pl, "_names_to_codes", lambda t: ["002050"])
+    assert pl.symbols_of("全景数智深度诊断 三花智控", None, allow_names=True) == ["002050"]
+    assert pl.symbols_of("全景数智深度诊断 三花智控", None) == [], "默认不查名，避免无谓 TQ 调用"
+
+
+def test_pipeline_records_steps_into_trace(monkeypatch):
+    """管线里的工具调用必须进轨迹，否则治理页看不到、Jaccard 量不出来。"""
+    import asyncio
+
+    class Trace:
+        def __init__(self):
+            self.steps = []
+
+        def step(self, tool, args=None, *, ok=True, error=None, result=None, elapsed_ms=None):
+            self.steps.append((tool, ok, error))
+
+    tr = Trace()
+
+    async def ex(name, args):
+        if name == "b":
+            raise RuntimeError("x")
+        return "data"
+
+    asyncio.run(run(FakeRecipe(), ["002050"], ex, trace=tr))
+    assert [s[0] for s in tr.steps] == ["a", "b", "c"]
+    assert tr.steps[1][1] is False and tr.steps[0][1] is True

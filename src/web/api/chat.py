@@ -1154,7 +1154,8 @@ async def _run_tool_loop_inner(
         async def _px(name, args):
             return await _execute_tool(db, name, args, user)
 
-        _ptxt = await _pipeline_answer(ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px)
+        _ptxt = await _pipeline_answer(ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px,
+                                       trace=runtime.trace if runtime else None)
         if _ptxt:
             yield ("done" if stream else "text"), _ptxt
             return
