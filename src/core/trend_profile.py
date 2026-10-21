@@ -25,7 +25,8 @@ def _ma(closes: list[float], n: int) -> float | None:
     return round(sum(closes[-n:]) / n, 2)
 
 
-def compute(bars: list[dict], index_bars: list[dict] | None = None) -> dict[str, Any]:
+def compute(bars: list[dict], index_bars: list[dict] | None = None,
+            index_label: str = "沪深300") -> dict[str, Any]:
     """bars: [{date, open, high, low, close, volume}] 升序。"""
     bars = [b for b in bars or [] if b.get("close")]
     if len(bars) < 21:
@@ -84,6 +85,7 @@ def compute(bars: list[dict], index_bars: list[dict] | None = None) -> dict[str,
         "vol_ratio": vol_ratio,
         "big_vol_days": big_days,
         "rs20": rs20,
+        "index_label": index_label,
     }
 
 
@@ -109,7 +111,8 @@ def render(m: dict) -> str:
             for n in (5, 20, 60)) + "）",
         f"量能：近 20 日均量 {m['avg20_vol'] or '--'}｜今日量比(对 20 日) {m['vol_ratio'] or '--'}"
         f"｜近 20 日放量日 {m['big_vol_days']} 天",
-        "相对强弱：20 日 " + ("--（指数数据未取到）" if m["rs20"] is None else f"{m['rs20']:+.2f}pp（vs 沪深300）"),
+        "相对强弱：20 日 " + ("--（指数数据未取到）" if m["rs20"] is None
+                          else "{:+.2f}pp（vs {}）".format(m["rs20"], m.get("index_label") or "指数")),
     ]
     return "\n".join(parts)
 
@@ -122,9 +125,14 @@ def build(symbol: str, market: str = "CN", days: int = 250) -> str:
         bars = load_qfq_bars(symbol, market, days=days)
     except Exception as exc:  # noqa: BLE001
         return f"[多周期走势] 读日线失败：{type(exc).__name__}——不做推断。"
-    index_bars = None
-    try:
-        index_bars = load_qfq_bars("000300", "CN", days=days)
-    except Exception:  # noqa: BLE001 - 指数缺失只是没有 RS
-        index_bars = None
-    return render(compute(bars, index_bars))
+    # 指数兜底链：沪深300 → 上证指数（库里通常只有 000001，别因为缺 300 就丢掉 RS）
+    index_bars, index_label = None, "沪深300"
+    for code, label in (("000300", "沪深300"), ("000001", "上证指数")):
+        try:
+            got = load_qfq_bars(code, "CN", days=days)
+        except Exception:  # noqa: BLE001
+            got = []
+        if len(got) > 20:
+            index_bars, index_label = got, label
+            break
+    return render(compute(bars, index_bars, index_label))

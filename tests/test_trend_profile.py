@@ -42,3 +42,11 @@ def test_rs_computed_when_index_given():
             for i in range(130)]
     m = compute(stock, flat)
     assert m["rs20"] is not None and m["rs20"] > 0
+
+
+def test_rs_label_reports_which_index():
+    stock = _bars(130, step=0.2)
+    flat = [{"date": f"i{i}", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1}
+            for i in range(130)]
+    m = compute(stock, flat, index_label="上证指数")
+    assert "vs 上证指数" in render(m), "兜底到上证指数时必须写明用的哪个指数"
