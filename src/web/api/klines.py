@@ -15,6 +15,24 @@ from src.core.trading_calendar import is_trading_day
 
 _APP_TZ = "Asia/Shanghai"
 
+# ── K 线主数据缓存 + 单飞（2026-10-21）──────────────────────────────────
+# 事故：某用户的图表页把 GET /api/klines/600111 打到 **1264 次/分钟**（≈21 次/秒），
+# 触发限流中间件 300/min → 图表上出现「错误: HTTP 429」并空白。
+# 日线在盘中不会按秒变化，但每次请求都会重新走一遍取数/回退链；这里加 60s 进程内缓存 +
+# 同 key 单飞（并发相同请求只算一次），把风暴的代价从"每次重算"降到"一次"。
+_KL_TTL_S = 60.0
+_kl_cache: dict[str, tuple[float, object]] = {}
+_kl_locks: dict[str, threading.Lock] = {}
+_kl_guard = threading.Lock()
+
+
+def _kl_lock(key: str) -> threading.Lock:
+    with _kl_guard:
+        lock = _kl_locks.get(key)
+        if lock is None:
+            lock = _kl_locks[key] = threading.Lock()
+        return lock
+
 # L4 事件里 wencai 查询的硬超时秒数(两条查询串行, 行情服务不通时不拖垮 summary)
 WENCAI_TIMEOUT_S = 10.0
 
@@ -532,6 +550,22 @@ def _finalize_daily_bars(
 
 @router.get("/{symbol}")
 def get_klines(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
+    """K 线主数据（60s 缓存 + 同 key 单飞，防图表轮询风暴打爆取数链）。"""
+    key = f"{market}:{symbol}:{interval}:{days}"
+    now = _time.time()
+    hit = _kl_cache.get(key)
+    if hit and now - hit[0] < _KL_TTL_S:
+        return hit[1]
+    with _kl_lock(key):
+        hit = _kl_cache.get(key)          # 双重检查：等锁期间别人可能已算完
+        if hit and _time.time() - hit[0] < _KL_TTL_S:
+            return hit[1]
+        data = _get_klines_uncached(symbol, market, days, interval)
+        _kl_cache[key] = (_time.time(), data)
+        return data
+
+
+def _get_klines_uncached(symbol: str, market: str = "CN", days: int = 60, interval: str = "1d"):
     """获取单只股票/指数K线数据(指数代码自动识别,走指数K线源)"""
     market_code = _parse_market(market)
     # 指数识别: 已知指数代码 → 走指数K线(支持大盘详情页复用 InteractiveKline)
