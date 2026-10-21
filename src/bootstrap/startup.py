@@ -412,6 +412,8 @@ async def lifespan(app):
                 coalesce=True,
             )
             logger.info("撤单率时序采样已注册(30s, 仅交易时段)")
+        except Exception as e:
+            logger.error(f"撤单率采样注册失败: {e}")
 
         # 个股因子日快照(2026-10-21): 收盘后算一次, 给全景诊断的「位置与因子」提供横截面分位。
         try:
@@ -437,8 +439,6 @@ async def lifespan(app):
             logger.info("个股因子日快照已注册(交易日 15:35)")
         except Exception as e:
             logger.error(f"因子快照注册失败: {e}")
-        except Exception as e:
-            logger.error(f"撤单率采样注册失败: {e}")
 
         # 龙虎榜金额「次日 TQ 回填」(2026-10-20 用户要求): 交易日 08:30 回填上一个交易日。
         # 当日榜单只有东财能枚举, 而 TQ 的 GP02 金额与东财分文不差且晚一天 —— 次日用 TQ 覆写,
