@@ -104,6 +104,40 @@ def extract_code(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# 诊断类意图词：只有"要我判断"这类问题才值得按画像锁配方。
+# 单纯问价（"北方稀土 35.03 元，-0.57%"、"600111 多少钱"）不该触发 12 个工具的管线。
+_DIAGNOSIS_WORDS = (
+    "怎么样", "诊断", "分析", "看看", "看一下", "研判", "点评", "如何", "能不能",
+    "值不值", "值得", "风险", "机会", "预期", "后续", "怎么办", "还能", "该不该",
+)
+
+
+def is_diagnosis_intent(text: str) -> bool:
+    """是否属于"要我给判断"的问题（决定要不要按标的画像锁配方）。"""
+    t = text or ""
+    return any(w in t for w in _DIAGNOSIS_WORDS)
+
+
+def route_with_persona(db, text: str, bound: str | None, stock_q: bool,
+                      all_schemas: list[dict], forced=None):
+    """路由 + 标的画像合一，返回 (Route, 画像文本)。
+
+    画像只在「没有命中具体配方 + 是诊断类问题」时接管：单纯问价不该触发 12 工具管线。
+    逻辑放这里而不是 chat.py —— chat.py 有 2300 行护栏。
+    """
+    from src.harness.routing import route_for_request
+
+    route = route_for_request(text, all_schemas, forced)
+    if stock_q and route.recipe is None:
+        p, txt = detect_persona(db, text, bound)
+        # 只有"尺子会量错"的三类才接管：妖股/左侧/题材龙头。
+        # 趋势/常规交回模型自选 —— 否则每只正常票都会被塞进 10 工具管线，慢且没必要。
+        if p is not None and getattr(p, "kind", "") in ("demon", "left", "leader"):
+            route = route_for_request(text, all_schemas, forced, persona_recipe=p.recipe)
+            return route, txt
+    return route, ""
+
+
 def detect_persona(db, text: str, bound: str | None):
     """标的画像旁路（2026-10-21）。
 
@@ -113,6 +147,8 @@ def detect_persona(db, text: str, bound: str | None):
 
     放在 context.py 而不是 chat.py：chat.py 有行数护栏，画像逻辑属于上下文层。
     """
+    if not is_diagnosis_intent(text or ""):
+        return None, ""
     try:
         from src.core.stock_persona import detect, render
 
