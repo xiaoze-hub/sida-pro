@@ -235,12 +235,29 @@ def fetch_minute(symbol: str, market: str = "CN") -> tuple[list[dict] | None, fl
         return None, None, f"分时源(腾讯)暂不可用: {type(exc).__name__}"
 
 
-def build(symbol: str, market: str = "CN") -> str:
-    """工具入口：抓一次分时 + 一次快照，算完给文本。"""
+def build(symbol: str, market: str = "CN", db=None) -> str:
+    """工具入口：分时 + 快照 + 分钟资金 + 撤单趋势，一次给全。
+
+    db 传入时才读撤单采样（工具层有会话）；缺表/缺采样都只是少一段，不抛。
+    """
     points, prev_close, note = fetch_minute(symbol, market)
     if points is None:
         return f"[分时画像] 分时源暂不可用：{note or '腾讯分时异常'}——不做推断。"
     qt = fetch_qt(symbol, market)
     if prev_close and not qt.get("prev_close"):
         qt["prev_close"] = prev_close
-    return render(compute(points, qt))
+    blocks = [render(compute(points, qt))]
+    try:  # 分钟资金（逐笔聚合）——分时里"这一刻是谁在买"的答案
+        from src.core.tick_minute_flow import build as _flow
+
+        blocks.append(_flow(symbol, market))
+    except Exception as exc:  # noqa: BLE001
+        blocks.append(f"[分钟资金] 取数异常：{type(exc).__name__}")
+    if db is not None:
+        try:  # 撤单趋势（自采样，非会话累计值）
+            from src.collectors.cancel_rate_sampler import cancel_trend
+
+            blocks.append(cancel_trend(db, symbol))
+        except Exception as exc:  # noqa: BLE001
+            blocks.append(f"[撤单趋势] 读取异常：{type(exc).__name__}")
+    return "\n\n".join(blocks)

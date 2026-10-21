@@ -2056,7 +2056,8 @@ async def _tool_create_daily_task(db: Session, args: dict, user: User | None = N
             "name": "get_intraday_profile",
             "description": (
                 "分时走势画像：日内位置、均价线(VWAP)上下关系、分时段量能分布、"
-                "最大放量时点、尾盘量价、外盘/内盘(主动买卖)、五档买卖压比、量比。"
+                "最大放量时点、尾盘量价、外盘/内盘(主动买卖)、五档买卖压比、量比；"
+                "并附「分钟资金」（逐笔聚合的每分钟主动买卖/大单净额）与「撤单趋势」（自采样时序）。"
                 "问「分时怎么样/是不是放量上攻/尾盘有没有资金/盘口压不压」时先调这个，"
                 "它给的是可复算的事实，不要凭K线图猜分时。"
             ),
@@ -2084,6 +2085,6 @@ async def _tool_get_intraday_profile(db: Session, args: dict, user: User | None 
     import asyncio as _asyncio
 
     try:
-        return await _asyncio.to_thread(_build_intraday, symbol, market)
+        return await _asyncio.to_thread(_build_intraday, symbol, market, db)
     except Exception as exc:  # noqa: BLE001 - 源故障要说清，不许编分时
         return f"[分时画像] 取数失败：{type(exc).__name__}: {exc}——不做推断。"

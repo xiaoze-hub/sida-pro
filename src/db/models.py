@@ -2389,3 +2389,30 @@ class KlineAnnotation(Base):
     color = Column(String(16), nullable=False, default="up")
     source = Column(String(16), nullable=False, default="ai")   # ai / user
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CancelRateSnapshot(Base):
+    """撤单率时序采样（2026-10-21）。
+
+    为什么要有这张表：`md_more_info` 给的撤单率是**当日会话累计值**，
+    只能回答"现在多少"，回答不了"10:30 那波撤单是不是突然拉起来"。
+    每 30s 采一行，才能看出"买撤 60%→85%"这种变化——那才是试盘/撤单诱多的证据。
+
+    unique(symbol, trade_date, hhmm) 让同一分钟重复采样幂等（多副本/重启不产生重复行）。
+    """
+
+    __tablename__ = "cancel_rate_snapshots"
+    __table_args__ = (
+        Index("ix_cancel_rate_sym_date", "symbol", "trade_date", "hhmm", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False)
+    trade_date = Column(String(8), nullable=False)      # 20261021
+    hhmm = Column(String(4), nullable=False)            # 1030（分钟粒度）
+    captured_at = Column(DateTime, nullable=False)
+    buy_cancel_rate = Column(Float, nullable=True)      # %
+    sell_cancel_rate = Column(Float, nullable=True)     # %
+    cancel_bias = Column(Float, nullable=True)
+    intent = Column(String(24), nullable=True)
+    source = Column(String(32), nullable=True)
