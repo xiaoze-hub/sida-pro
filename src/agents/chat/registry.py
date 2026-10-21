@@ -157,12 +157,26 @@ async def _tool_get_portfolio(db: Session, args: dict, user: User | None = None)
     caliber="多源实时行情聚合",
 )
 async def _tool_get_stock_quote(db: Session, args: dict, user: User | None = None) -> str:
+    # 库优先(2026-10-22): 60s 内的库内快照直接用, 过期才走实时源 —— 与 stock.quote 域同一口径,
+    # 避免「对话说 32.9 / 页面说 33.0」这种同数不同源。
     from src.web.api.chat import _fetch_realtime_context
 
     symbol = args.get("symbol", "")
     market = args.get("market", "CN")
+    if market == "CN":
+        row = _db_quote_snapshot(db, symbol)
+        age = _quote_age_sec(row) if row else None
+        if row is not None and row.get("last") is not None and age is not None and -5.0 <= age <= QUOTE_FRESH_SEC:
+            name = row.get("name") or symbol
+            return (
+                f"行情（库内快照 {_hms(row.get('ts'))}）：{name}（CN:{symbol}）价格 {row.get('last')}，"
+                f"涨跌幅 {row.get('change_pct')}%，成交量 {row.get('volume')}\n"
+                f"{_caliber_db(row.get('ts'))}"
+            )
     result = await _fetch_realtime_context(symbol, market)
-    return result or f"未能获取 {market}:{symbol} 的行情数据。"
+    if result:
+        return f"{result}\n口径：实时 RPC {_hms(_now_cn())}（marketdata）"
+    return f"未能获取 {market}:{symbol} 的行情数据。\n{_caliber_missing('库无新鲜快照 / 实时源不可用')}"
 
 
 @register_chat_tool(

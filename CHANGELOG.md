@@ -1,3 +1,10 @@
+## fix: get_stock_quote 也走库优先（2026-10-22，未发版）
+
+v0.39.0 只把「筹码工具里的现价」和 `stock.quote` 域改成库优先，`get_stock_quote` 本身仍直接调
+`_fetch_realtime_context`（走 marketdata 实时源）。同一只票可能对话说 32.9、页面说 33.0。
+现在：CN 市场先查 `quote_snapshots` 最近一行，60s 内直接用（不调实时源）；过期/无行才回落，
+回落时补「口径：实时 RPC HH:MM:SS（marketdata）」，两路都失败给「取不到」不猜数。
+
 ## fix: 数据域 market.breadth 自建会话 + status 列注释（2026-10-22，未发版）
 
 - `_breadth_payload(db=None)` 时自建 `SessionLocal`（脚本/测试路径），不再是 `NoneType.execute` 崩栈后返回半截文本；
