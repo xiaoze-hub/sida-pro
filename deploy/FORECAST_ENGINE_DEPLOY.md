@@ -46,6 +46,36 @@
 依赖是**懒加载**的: torch/xgboost/chronos/timesfm 缺失时引擎降级(起得来、`/health` 与
 `/referee/stats` 可用), 仅 `/predict` 会因缺模型失败。故依赖安装失败**不阻塞**引擎拉起。
 
+### 2.1 Kronos 主模型(脚本 ③b 步, 2026-10-21 补)
+
+`forecast_lib/forecast_models.py` 用 **`~/Kronos` 作源码根**、`import model` 取
+`KronosPredictor`。旧脚本完全不装 Kronos, 于是生产出现「部署全绿但 `kronos_ready:false`」的
+**静默降级**: 5 票模型里主模型缺席, 只用 Chronos-Bolt / XGBoost / 线性回归 / TimesFM 投票。
+
+现在脚本幂等处理这一步:
+
+| 步骤 | 行为 |
+|---|---|
+| 源码 | `kronos_src/model/`(vendored 在仓库, ~60KB py) → `$KRONOS_HOME/model/`(`/root/Kronos`, `FORECAST_KRONOS_HOME` 可覆盖) |
+| 权重 | venv python 内 `huggingface_hub.snapshot_download` 预拉 `NeoQuasar/Kronos-small` + `NeoQuasar/Kronos-Tokenizer-base`(幂等命中缓存; 失败不阻断, 首次推理会在线拉) |
+| 校验 | `python3 -c "import model"`(显式把 `$KRONOS_HOME` 塞 sys.path) |
+| 跳过 | `FORECAST_SKIP_KRONOS=1`(仅在明知要缺主模型时用) |
+
+源码为什么随仓库走而不现 clone: `kronos_src/` 是上游 `shiyu-coder/Kronos` 的快照,
+部署机不需要 git / 外网 GitHub, 且版本与 `forecast_models.py` 的调用契约钉死。
+
+### 2.2 健康门禁: `kronos_ready` 不通 = 部署失败
+
+`/health` 是**永不 500** 的探针(模型缺失只在 body 里报 `kronos_ready=false` + `kronos_error`),
+所以"HTTP 200"不能当部署成功。脚本 ⑦ 步逐次解析 body:
+
+- `kronos_ready:true` → `FORECAST_DEPLOY_OK`, exit 0;
+- 引擎通了但 `kronos_ready:false`(等满 30 次探测) → **exit 1**, 并打印修复指引;
+- 引擎完全不通 → exit 1(打印日志尾)。
+
+这一门禁两侧都实测过: 把 `KRONOS_ROOT` 指到不存在目录 → 脚本拒绝通过并 exit 非 0;
+恢复正常后 → `FORECAST_DEPLOY_OK`。
+
 ## 3. 在目标主机上拉起(生产实操)
 
 ```bash
@@ -95,9 +125,20 @@ FORECAST_HOST=0.0.0.0 FORECAST_DB_PATH=$HOME/.panwatch_forecast.db \
 
 ```bash
 # 主机侧
-curl -s http://127.0.0.1:8010/health            # {"status":"ok","kronos_ready":...}
-# 生产侧(经主服务代理)
-curl -s "https://www.sida.hengsheng-elec.com/api/forecast/referee-stats?symbol=002361"
+curl -s http://127.0.0.1:8010/health            # {"status":"ok","kronos_ready":true,...}
+#   ⚠️ kronos_ready:true 才算主模型在位; false 时 body 带 kronos_error 说明原因(不是引擎故障)
+# 生产侧(经主服务代理, 需登录 token)
+curl -s -H "Authorization: Bearer <token>" https://SIDA.hengsheng-elec.com/api/forecast/health
+#   → 原样透传引擎 /health 载荷; 引擎不通时返回 {"status":"unreachable",...}(HTTP 200, 不 500)
+curl -s -H "Authorization: Bearer <token>" \
+  "https://SIDA.hengsheng-elec.com/api/forecast/predict?symbol=002361&days=5&force=true"
+#   → data.recommendation.models.kronos 非空 = 主模型真参与了投票(带 median/p5/p95/n_samples)
+#   409 = 该股票已有未到期预测(节流, 非故障), 加 force=true 可强制重算
+curl -s "https://SIDA.hengsheng-elec.com/api/forecast/referee-stats?symbol=002361"
 #   引擎未起: {"total":0,...,"message":"预测引擎不可用(需在主机运行 forecast_server.py), ..."}
 #   引擎已起但无裁判样本: {"total":0,"symbol":"002361","message":"暂无裁判记录(...)"}  ← 显式态
 ```
+
+> 生产实测(2026-10-21): `/api/forecast/health` → `kronos_ready:true`,
+> `POST :8010/predict {002361, days:5, force:true}` → 200 / ~35s,
+> `models.kronos` 有 5 日 median + P5/P95 + n_samples=30。
