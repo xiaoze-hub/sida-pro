@@ -118,6 +118,49 @@ async def run(recipe, symbols: list[str], executor, db=None, user=None,
     return results, errors
 
 
+async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
+                     trace=None):
+    """流式版取数：边跑边报进度（模型首字要 20s+，中间不能一片空白）。
+
+    产出 ("stage", 文案) 若干，最后 ("runs", (results, errors))。
+    """
+    results: list[PipelineRun] = []
+    errors: list[str] = []
+    total = len(symbols) * len(recipe.tools)
+    done = 0
+    for sym in symbols:
+        pr = PipelineRun(symbol=sym)
+        for tool in recipe.tools:
+            done += 1
+            yield "stage", f"正在取数 {done}/{total}：{tool}"
+            _t0 = _time.perf_counter()
+            try:
+                out = await asyncio.wait_for(
+                    executor(tool, {"symbol": sym, "market": market}),
+                    timeout=PER_TOOL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                pr.failed += 1
+                errors.append(f"{tool}:timeout")
+                _record(trace, tool, sym, ok=False, error="timeout", ms=_ms(_t0))
+                continue
+            except Exception as exc:  # noqa: BLE001
+                pr.failed += 1
+                errors.append(f"{tool}:{type(exc).__name__}")
+                _record(trace, tool, sym, ok=False, error=type(exc).__name__, ms=_ms(_t0))
+                continue
+            text = str(out or "").strip()
+            if not text:
+                pr.failed += 1
+                _record(trace, tool, sym, ok=False, error="empty", ms=_ms(_t0))
+                continue
+            pr.outputs.append((tool, text))
+            pr.ok += 1
+            _record(trace, tool, sym, ok=True, ms=_ms(_t0), result=text)
+        results.append(pr)
+    yield "runs", (results, errors)
+
+
 def compose_prompt(recipe, runs: list[PipelineRun], question: str) -> tuple[str, str]:
     """把管线结果拼成 (system, user)。system 说明格式，user 放证据。"""
     sections = " / ".join(recipe.output_sections) if recipe.output_sections else ""
@@ -184,7 +227,13 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
     syms = symbols_of(question, bound, allow_names=True)
     if not syms:
         return
-    runs, errors = await run(recipe, syms, executor, market=market, trace=trace)
+    runs: list[PipelineRun] = []
+    errors: list[str] = []
+    async for kind, payload in run_stream(recipe, syms, executor, market=market, trace=trace):
+        if kind == "stage":
+            yield "stage", payload
+        else:
+            runs, errors = payload
     if not any(r.usable for r in runs):
         logger.warning("管线全部失败，回落 tool loop：%s", errors[:3])
         return
