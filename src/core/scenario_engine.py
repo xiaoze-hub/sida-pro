@@ -52,6 +52,9 @@ def build_scenarios(trend: dict, chips: dict, factors: dict | None = None,
     rs = trend.get("rs20")
     mom20 = (factors or {}).get("values", {}).get("momentum_20")
 
+    # 走弱目标不能等于触发位（"跌破支撑、目标就是支撑"是循环表述）
+    below = [v for v in (chips.get("band70_lo"), trend.get("low")) if v and lv["support"] and v < lv["support"]]
+    weak_target = max(below) if below else None
     strong_trigger = f"收盘站上 {lv['resist']} 且当日量能 ≥1.2×20 日均量"
     weak_trigger = f"收盘跌破 {lv['support']} 且放量（量能 ≥1.2× 均量）"
     range_trigger = f"在 {lv['support']} ~ {lv['resist']} 之间震荡且量能中性"
@@ -78,7 +81,7 @@ def build_scenarios(trend: dict, chips: dict, factors: dict | None = None,
             {
                 "name": "走弱",
                 "trigger": weak_trigger,
-                "target": lv["band_lo"] or lv["low"] if lv.get("low") else lv["band_lo"],
+                "target": weak_target if weak_target is not None else "下方无明确支撑（需重新评估）",
                 "response": "跌破后反抽不过 " + str(lv["support"]) + " 视为破位确认；按纪律减仓",
                 "invalid": "跌破后次日快速收回 " + str(lv["support"]) + " → 视为挖坑",
             },
