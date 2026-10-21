@@ -90,9 +90,9 @@ def test_registry_integrity():
     assert set(CHAT_TOOL_REGISTRY) == (
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
         | {"get_opportunities", "remember_preference", "create_daily_task",
-           "get_intraday_profile"}
+           "get_intraday_profile", "get_trend_profile"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 59
+    assert len(CHAT_TOOL_REGISTRY) == 60
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -141,9 +141,11 @@ def test_exported_tool_order():
     assert names[: len(EXPECTED_CORE_ORDER)] == EXPECTED_CORE_ORDER
     tail = names[len(EXPECTED_CORE_ORDER):]
     assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {
-        "remember_preference", "create_daily_task", "get_intraday_profile"}
+        "remember_preference", "create_daily_task", "get_intraday_profile",
+        "get_trend_profile"}
     # 文件末尾追加的工具：P0 两个 + 分时画像
-    assert set(tail[-3:]) == {"remember_preference", "create_daily_task", "get_intraday_profile"}
+    assert set(tail[-4:]) == {"remember_preference", "create_daily_task",
+                              "get_intraday_profile", "get_trend_profile"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 
