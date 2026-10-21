@@ -1,3 +1,21 @@
+## fix: 预测引擎 8010 /predict 全线 502 — baostock socket 超时补丁跨版本签名兼容（2026-10-21）
+
+> 现象: 生产 `GET /api/forecast/predict?symbol=002361&days=5` → 502, 引擎直连报
+> `数据获取失败: patch_baostock_timeout.<locals>._connect_with_timeout() takes 1 positional argument but 2 were given`。
+
+- **根因** — `forecast_lib/forecast_history.py::patch_baostock_timeout` 把 `SocketUtil.connect`
+  打成 `(self)`, 而生产 venv 的 baostock 0.9.40 原签名是 `connect(self, api_key)`,
+  `login.loginout` 传 `apiKey` → TypeError → `bs.login` 失败 → `/predict` 整条链路 502。
+  本机 0.9.30 签名 `(self)` 正常, 版本漂移只在生产爆。
+- **修复** — 补丁改 `_connect_with_timeout(self, api_key="")`: 同时兼容 0.9.40 `(self, api_key)`
+  与 0.9.30 `(self)`; 按 `api_key.startswith("bs-")` 走 `BAOSTOCK_VIP_SERVER_IP` / 普通服务器
+  (保留原版分流); 失败时关闭半开 socket; 保留 15s 超时(补丁原始目的); 幂等性不变。
+- **依赖钉死** — `forecast_requirements.txt`: `baostock>=0.8.8` → `baostock==0.9.40`(生产实测版本),
+  避免再漂移。
+- **回归测试** — `tests/test_forecast_baostock_connect_compat.py`(5 条, 全离线假 baostock):
+  0.9.40 带参不 TypeError / `bs-` 走 VIP / 旧版无参仍可用 / 两条路径都设超时 / patch 幂等。
+  已做变异验证: 把补丁回退成 `(self)` 后 4 条转红。
+
 ## fix: P0 可信度硬修 — 计划合法性/量比量纲/梯队涨跌幅/暗盘与基本面排版（2026-10-18，未发版）
 
 > 依据：`docs/research/SIDA_PRO全界面UI合理性与字段排版审计重构规划.md` §9 P0（审计 30 条 active 信号 /

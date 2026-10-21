@@ -23,5 +23,8 @@ transformers>=4.45,<4.58    # Chronos-Bolt 兼容版本(4.57.6 实测可用, 4.5
 requests>=2.30
 
 # K 线数据源
-baostock>=0.8.8          # 预测引擎 fetch_kline 拉日 K(不复权)
+baostock==0.9.40          # 预测引擎 fetch_kline 拉日 K(不复权)
+# 钉死版本: 0.9.40 的 SocketUtil.connect 签名是 (self, api_key), 与
+# forecast_lib/forecast_history.py 的超时补丁契约绑定(补丁已兼容 (self) 旧签名,
+# 但浮动版本曾导致生产 502 —— 见 2026-10-21 修复); 升级须同步核对补丁。
 timesfm>=1.0          # Google TimesFM 时序基础模型(替代Lag-Llama,最轻量)
