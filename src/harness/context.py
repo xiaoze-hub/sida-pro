@@ -138,6 +138,21 @@ def route_with_persona(db, text: str, bound: str | None, stock_q: bool,
     return route, ""
 
 
+def bind_recipe_trace(runtime, recipe) -> None:
+    """把本轮命中的配方写进轨迹。
+
+    2026-10-21 实测：165 次运行里 164 次 `copilot_runs.recipe` 为 NULL —— 轨迹在路由之前创建，
+    配方之后才确定却从没回写，治理页因此看不到「哪个画像/配方被用了」。
+    """
+    trace = getattr(runtime, "trace", None)
+    if trace is None or recipe is None:
+        return
+    try:
+        trace.set_recipe(getattr(recipe, "id", None) or str(recipe))
+    except Exception:  # noqa: BLE001  埋点失败不该影响作答
+        pass
+
+
 def detect_persona(db, text: str, bound: str | None):
     """标的画像旁路（2026-10-21）。
 

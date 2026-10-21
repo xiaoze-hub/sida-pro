@@ -1,3 +1,32 @@
+## release: v0.39.0（库优先 + 数据域扩到 14/26 + 治理可见 + 重型方法才串行）（2026-10-22）
+
+**1) 智能体「库优先」：6 个直连 TQ 的工具改口径**
+实测 chat 里仍有 6 处请求时直连 TQ 客户端（网关 `tdx-gateway`），与「数据都已落库」的认知不一致，
+后果是同一数字在页面与对话里口径不同（RPC = 此刻，落库 = 某时点）：
+- 实时报价：**库优先**读 `quote_snapshots` 最近一行，60 秒内直接用，过期才回落 RPC；
+- `search_symbols` / 标的核对：**优先用本地全市场名称缓存**（`collectors.stock_list`），无命中才回落 RPC；
+- `get_stock_sectors` / `get_kzz_terms` / `get_ipo_calendar` / `get_index_etfs`：库里**没有**对应表，
+  保持 RPC，但返回末行统一加「口径：库内快照 …（表名）／实时 RPC HH:MM:SS（tdx-gateway）」。
+
+**2) 数据域 8/26 → 14/26（53.8%）**
+新接 6 个环境域：`market.index`（大盘指数与量能）、`market.breadth`（广度/涨跌家数）、
+`board.daily`（板块行情与资金）、`stock.fundamental`（复用 `get_fundamentals_detail`）、
+`auction.flow`（集合竞价快照）、`stock.quote`（库优先报价）。
+`data_catalog.yaml` 里 3 处「模块名当表名」已修，`scripts/gen_data_catalog.py --check` rc=0。
+覆盖率指标：路由 491 / 表 132 / 域 26 / 已实现 14 / 未覆盖表 108。
+
+**3) 治理可见：`copilot_runs.recipe` 不再是 NULL**
+实测 165 次运行里 164 次配方为空 —— 轨迹在路由**之前**创建，配方之后才确定却从没回写，
+治理页因此看不到「哪个画像/配方被用了」。新增 `trace.set_recipe()` + `context.bind_recipe_trace()`，
+命中配方时写回；同时 `finish_copilot_run` 按步骤结果分类 `ok / degraded / error`
+（全败 error、部分失败 degraded、调用方显式状态优先），失败工具数与首个错误写入 `error`。
+
+**4) 管线并发：只对重型方法串行**
+实测纠正：「17709 严禁突发」的真实适用范围是**直连 + 重型方法**。走网关时 6 并发 `pricevol` 合计 0.02s、
+6 并发 `relation` 合计 0.21s 全 ok、客户端存活（网关自带并发闸门=1 + single-flight + 缓存）。
+因此 `pipeline.py` 由「TQ 前缀一律串行」改为「命中 `_HEAVY_MARKERS`（scan_/bulk_/refresh_/全市场/公式扫描/
+异动/问小达）才串行」，轻量 TQ 读与普通工具一样受总并发 3 约束；`PIPELINE_CONCURRENCY=1` 仍可整体回退。
+
 ## release: v0.38.2（数据域目录 + 管线并行 + 代码补名称）（2026-10-22）
 
 **1) 数据域目录（原生融合第一步）**

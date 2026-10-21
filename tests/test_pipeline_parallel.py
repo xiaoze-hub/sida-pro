@@ -65,9 +65,13 @@ def test_parallel_speed_order_and_peak(monkeypatch):
     assert peak.max >= 2, "必须真的并行（只有 1 说明退化成串行）"
 
 
-def test_tq_tools_run_one_at_a_time():
-    """TQ 类（get_thsdk_*）必须先进先出、一次一个：峰值只能是 1。"""
-    tq_tools = ["get_thsdk_quote", "get_thsdk_kline", "get_thsdk_chip", "get_thsdk_flow"]
+def test_heavy_tools_run_one_at_a_time():
+    """重型方法（全市场扫描/刷新）必须一次一个：峰值只能是 1。
+
+    2026-10-22 口径：TQ 的**轻量读**（get_thsdk_* 单票读）不必串行 —— 网关自身有并发闸门；
+    真正会打崩客户端的是 scan_/refresh_/全市场这类重型方法。
+    """
+    heavy_tools = ["scan_auction_anomaly", "bulk_refresh_kline", "formula_scan_market"]
     peak = Counter()
 
     async def ex(name, args):
@@ -76,25 +80,45 @@ def test_tq_tools_run_one_at_a_time():
         return f"{name}:ok"
 
     t0 = time.perf_counter()
-    runs, _ = asyncio.run(run(Recipe(tq_tools), ["002050"], ex))
+    runs, _ = asyncio.run(run(Recipe(heavy_tools), ["002050"], ex))
     elapsed = time.perf_counter() - t0
 
-    assert peak.max == 1, f"TQ 类工具并发峰值 {peak.max}，必须为 1（单线程进程会被打崩）"
-    assert elapsed >= 0.4, "TQ 类是串行的，4×0.1s 不可能更快"
-    assert [t for t, _ in runs[0].outputs] == tq_tools, "TQ 串行也得保持配方顺序"
+    assert peak.max == 1, f"重型工具并发峰值 {peak.max}，必须为 1（会打崩客户端）"
+    assert elapsed >= 0.3, "重型是串行的，3×0.1s 不可能更快"
+    assert [t for t, _ in runs[0].outputs] == heavy_tools, "重型串行也得保持配方顺序"
+    assert runs[0].ok == 3
+
+
+def test_light_tq_reads_are_not_serialized():
+    """轻量 TQ 读（get_thsdk_*）不再被串行锁住，应与普通工具一样受总并发约束。"""
+    tools = ["get_thsdk_quote", "get_thsdk_kline", "get_thsdk_chip", "get_auction_data"]
+    peak = Counter()
+
+    async def ex(name, args):
+        with peak:
+            await asyncio.sleep(0.1)
+        return f"{name}:ok"
+
+    t0 = time.perf_counter()
+    runs, _ = asyncio.run(run(Recipe(tools), ["002050"], ex))
+    elapsed = time.perf_counter() - t0
+
+    assert peak.max >= 2, f"轻量 TQ 读被串行化了（峰值 {peak.max}），网关已有闸门，不该再加锁"
+    assert elapsed < 0.4, f"4 个 0.1s 的轻量读串行会是 0.4s，实测 {elapsed:.3f}s"
+    assert [t for t, _ in runs[0].outputs] == tools
     assert runs[0].ok == 4
 
 
-def test_tq_lane_does_not_break_global_bound():
-    """混跑：TQ lane 不能让总并发超过上限（TQ 也只是占一个槽）。"""
+def test_heavy_lane_does_not_break_global_bound():
+    """混跑：重型 lane 不能让总并发超过上限（重型也只是占一个槽）。"""
     tools = ["tool_a", "get_thsdk_q1", "tool_b", "scan_auction_anomaly", "tool_c", "get_auction_data"]
     total = Counter()
-    tq = Counter(match=pl._is_tq_tool)
+    heavy = Counter(match=pl._is_heavy_tool)
 
     async def ex(name, args):
         with total:
-            if pl._is_tq_tool(name):
-                with tq:
+            if pl._is_heavy_tool(name):
+                with heavy:
                     await asyncio.sleep(0.05)
             else:
                 await asyncio.sleep(0.2)
@@ -103,7 +127,7 @@ def test_tq_lane_does_not_break_global_bound():
     runs, errs = asyncio.run(run(Recipe(tools), ["002050"], ex))
     assert errs == []
     assert total.max <= pl.PIPELINE_CONCURRENCY, f"总峰值 {total.max} 超限"
-    assert tq.max == 1, f"TQ lane 峰值 {tq.max}，必须为 1"
+    assert heavy.max == 1, f"重型 lane 峰值 {heavy.max}，必须为 1"
     assert [t for t, _ in runs[0].outputs] == tools
 
 

@@ -749,6 +749,7 @@ from src.harness.context import (  # noqa: E402
     REQ_TEXT as _REQ_TEXT,
     REQ_TOOLS as _REQ_TOOLS,
     route_with_persona as _route_with_persona,
+    bind_recipe_trace as _bind_recipe_trace,
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
@@ -1146,6 +1147,7 @@ async def _run_tool_loop_inner(
     _route, _ptxt = _route_with_persona(db, _utext, _REQ_BOUND.get(), _stock_q, CHAT_TOOLS, _REQ_TOOLS.get())
     if _ptxt: messages_for_ai.insert(0, {"role": "system", "content": _ptxt})
     if _route.recipe is not None:
+        _bind_recipe_trace(runtime, _route.recipe)   # 轨迹回写配方 id（治理页看命中率）
         _REQ_TOOLS.set(frozenset(_route.recipe.tools))
         _REQ_RECIPE_LABEL.set(_route.recipe.label)
         _REQ_BUDGET.set({"max": _route.recipe.max_tool_calls, "used": 0})

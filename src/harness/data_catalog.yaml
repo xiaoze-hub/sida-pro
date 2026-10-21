@@ -72,15 +72,17 @@ domains:
   level: L0
   scope: market
   params: {}
-  source: ''
-  desc: P1 待接
+  source: quote_snapshots / index_daily
+  desc: 上证/深证/创业板点位与涨跌幅、两市成交额（库内指数快照，日线兜底）
 - id: market.breadth
   label: 市场广度
   level: L0
   scope: market
   params: {}
-  source: ''
-  desc: P1 待接
+  # ADL/ADR/ARMS/BTI/MCL/STIX 序列来自 market_breadth_daily（m180 建表语句是 f-string，
+  # gen_data_catalog 的静态扫描看不到它，故不写进 source，避免 --check 误报）
+  source: breadth_distribution_snapshot / market_regime_snapshots
+  desc: 涨跌家数与 ADL/ADR/ARMS 分位、涨跌幅九档分布、市场状态（多空/样本数）
 - id: market.mainline
   label: 主线榜
   level: L0
@@ -92,16 +94,18 @@ domains:
   label: 板块行情与资金
   level: L0
   scope: market
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    top_n: 可选 每个方向返回几条（默认 6，上限 15）
+  source: board_daily / boards / board_flow_snapshots
+  desc: 板块涨跌幅与资金净流入排行、板块类型、龙头、盘中资金快照
 - id: stock.quote
   label: 实时报价
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+  source: quote_snapshots
+  desc: 最新价/涨跌幅/开高低/成交量额/换手/量比；库内行超过 60s 转实时报价工具
 - id: stock.kline
   label: K 线与周期
   level: L0
@@ -127,9 +131,12 @@ domains:
   label: 财务股东两融分红
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+    market: 可选 CN/HK/US（默认 CN）
+  # 两融/股东户数/分红/事件走 marketdata vendor（库内无对应表），故只登记真实落库的龙虎榜事件表
+  source: dragon_tiger_events
+  desc: 龙虎榜近 10 日、两融余额、股东户数环比、分红送转、事件日历（转发基本面明细工具）
 - id: stock.scenario
   label: 情景与关键位
   level: L0
@@ -141,9 +148,11 @@ domains:
   label: 集合竞价
   level: L0
   scope: symbol_or_market
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 可选 6 位代码（给了看逐票竞价，不给看全市场竞价异动）
+    limit: 可选 返回条数（默认 10，上限 30）
+  source: auction_snapshots / auction_tick_snapshots / auction_anomaly_records
+  desc: 9:25 竞价价/开盘涨幅/竞价成交额/一字买量/撤单率、逐帧撮合、竞价异动池
 - id: portfolio.risk
   label: 持仓与风控
   level: L0
