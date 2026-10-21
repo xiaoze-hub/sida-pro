@@ -29,6 +29,8 @@ class Recipe:
     output_sections: tuple[str, ...] = ()
     max_tool_calls: int = 10
     prompt_fragment: str = field(default="")
+    # 关键词打平时的优先级：风控/全景这类"更该赢"的意图显式抬高，不靠文件名顺序
+    priority: int = 0
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -56,6 +58,7 @@ def _parse(path: Path) -> Recipe:
         when=tuple(str(x) for x in (raw.get("when") or ())),
         tools=tuple(str(x) for x in (raw.get("tools") or ())),
         skills=tuple(str(x) for x in (raw.get("skills") or ())),
+        priority=int(raw.get("priority") or 0),
         output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),
@@ -85,3 +88,39 @@ def get_recipe(recipe_id: str | None) -> Recipe | None:
 
 def list_recipes() -> list[Recipe]:
     return sorted(load_recipes().values(), key=lambda r: r.id)
+
+
+def match_recipe(text: str) -> Recipe | None:
+    """按 when 关键词把问题**确定性地**路由到一份配方（2026-10-21）。
+
+    为什么要确定性路由：实测同一问题重跑三次，工具集合 Jaccard 只有 0.52，
+        「全景深度诊断002050」三次分别调 4 / 0 / 3 个工具 —— 让模型自由选工具
+        就是最大的方差源。命中关键词就固定工具清单，模型只能在清单内挑。
+
+    打分：命中关键词的**字符总长度**（越长越具体，避免"盘口"这种短词抢走"撤单趋势"）。
+    """
+    if not text:
+        return None
+    best: tuple[int, int, int, Recipe] | None = None
+    for r in list_recipes():
+        hits = [k for k in r.when if k and k in text]
+        if not hits:
+            continue
+        # 长关键词的权重按平方放大：'深度诊断'(4) 应当压过 '盘口'(2) 这类泛词
+        score = sum(len(k) ** 2 for k in hits)
+        key = (score, max(len(k) for k in hits), r.priority, r)
+        if best is None or (key[0], key[1], key[2]) > (best[0], best[1], best[2]):
+            best = key
+    return best[3] if best else None
+
+
+def filter_schemas(schemas: list[dict], allowed: frozenset[str] | set[str] | None) -> list[dict]:
+    """把全量工具 schema 过滤成配方白名单（None = 不过滤）。"""
+    if not allowed:
+        return schemas
+    out = []
+    for sc in schemas:
+        name = ((sc or {}).get("function") or {}).get("name")
+        if name in allowed:
+            out.append(sc)
+    return out or schemas  # 白名单写错时不至于一个工具都没有
