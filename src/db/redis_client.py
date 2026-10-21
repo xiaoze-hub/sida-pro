@@ -148,8 +148,17 @@ class RedisClient:
             return None
         try:
             count = await self._client.incr(key)
-            if ttl_seconds and int(count) == 1:
-                await self._client.expire(key, ttl_seconds)
+            if ttl_seconds:
+                if int(count) == 1:
+                    await self._client.expire(key, ttl_seconds)
+                else:
+                    # 2026-10-21 线上事故：历史 key 可能没有 TTL（旧版本创建 / expire 失败），
+                    # 而"只在 count==1 设 TTL"永远补不回来 → 计数无限累加 → 该 IP 对这条路径
+                    # **永久 429**。图表页因此空白，Redis 里 rl:* 的 TTL 实测是 -1。
+                    # 这里自愈：发现无过期就补上。
+                    ttl = await self._client.ttl(key)
+                    if ttl is not None and int(ttl) < 0:
+                        await self._client.expire(key, ttl_seconds)
             return int(count)
         except Exception as e:
             logger.warning(f"[Redis] incr({key}) failed: {e}")

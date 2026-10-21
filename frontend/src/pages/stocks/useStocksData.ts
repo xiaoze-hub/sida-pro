@@ -348,10 +348,12 @@ const onQuoteTicks = useCallback((data: QuoteTickMap) => {
 useQuoteStream(onQuoteTicks)
 
 // 刷新 K 线摘要（并发受限的单个请求，避免批量接口慢）；并防止重入
-const refreshKlines = useCallback(async () => {
+const refreshKlines = useCallback(async (only?: Array<{ symbol: string; market?: string }>) => {
   if (klineRefreshInFlight.current) return klineRefreshInFlight.current
   const run = (async () => {
-    const items = buildQuoteItems()
+    // 2026-10-21: 允许只刷指定的几只。原来"补齐缺失"时会全量刷新，只要有一只票持续失败，
+    // 就会每轮把所有标的重新打一遍（线上把单只端点打到 1264 次/分钟，触发 429 图表空白）。
+    const items = only && only.length ? only : buildQuoteItems()
     if (items.length === 0) return
     const limit = 5
     const map: Record<string, KlineSummary> = {}
@@ -363,7 +365,7 @@ const refreshKlines = useCallback(async () => {
         try {
           // v0.4.8.1: summary 冷启动(主力意图逐笔翻页)可到 20-30s, 默认 20s 超时会导致
           // 首轮大面积 abort → 技术徽章全部回落"观望"; 显式放宽到 45s
-          const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market)}`, { cacheMode: 'reload', timeoutMs: 45000 })
+          const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market || 'CN')}`, { cacheMode: 'reload', timeoutMs: 45000 })
           if (res && (res as any).summary) {
             map[`${it.market}:${it.symbol}`] = (res as any).summary as KlineSummary
           }
@@ -572,7 +574,8 @@ useEffect(() => {
     const key = `${s.market || 'CN'}:${s.symbol}`
     klineMissingRetryRef.current[key] = now
   }
-  refreshKlines()
+  // 只补缺失的那几只（不再全量重刷），并限制同时最多 8 只，避免又变成风暴
+  void refreshKlines(missing.slice(0, 8))
 }, [stocks, klineSummaries, refreshKlines])
 
 // Agent 配置弹窗：预览未来触发时间（用于自检工作日/周末语义）
