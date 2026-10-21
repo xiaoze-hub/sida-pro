@@ -19,6 +19,7 @@ import { safePrice } from '@/lib/format'
 import { useBackTarget } from '@/lib/nav-back'
 // v2.1 §12: 事件图标的数据源健康裁决(不可用 → K线上灰显, 悬停标"数据源不可用")
 import { useSourceHealth } from '@/hooks/useSourceHealth'
+import { useStockNames } from '@/hooks/useStockNames'
 import { stripInternalPrefix } from '@/lib/symbol'
 import L2Tab from '@/pages/workbench/tabs/L2Tab'
 import SuggestTab from '@/pages/workbench/tabs/SuggestTab'
@@ -306,6 +307,13 @@ export default function StockWorkbench() {
   const position = usePositionContext(symbol, MARKET, type === 'stock')
   const hasPosition = position.has
   /**
+   * 标的名兜底(2026-10-21, 用户反馈「只给代码看不出是哪只票」): 带1 顶行原本是 `quote?.name || symbol`,
+   * 行情快照在途/取不到 name 时就退化成裸代码。这里批量补一次名字传给 `HeaderBand.nameHint`。
+   * **只对个股取**: 指数/板块代码(000001/880xxx)与个股同号, 拿个股名字贴上去就是错名称。
+   */
+  const stockNames = useStockNames(type === 'stock' ? [symbol] : [])
+  const nameHint = stockNames[symbol]
+  /**
    * 持仓成本线(P1-2): 有成本价才画到 K 线上(水平线, 跟随该股成本价)。**无持仓 / 取不到成本价 ⇒ 不传**
    * (`undefined`), `KlineChart` 据此**一条不画**, 也**不报错** —— 禁猜、禁默认值(铁律: 数据缺失不编造)。
    * title 只作轴标签用 `safePrice` 格式化(避免裸 toFixed 撞 R6 门禁)。
@@ -404,6 +412,7 @@ export default function StockWorkbench() {
         symbol={symbol}
         market={MARKET}
         type={type}
+        nameHint={type === 'stock' ? nameHint : undefined}
         hasPosition={hasPosition === true}
         positionUnknown={hasPosition === undefined}
         onTypeChange={handleTypeChange}

@@ -5,6 +5,7 @@ import { activeOverrides, displayValue, parseParamInput } from '@/lib/strategy-p
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@panwatch/base-ui/components/ui/dialog'
+import { StockLabel } from '@/components/StockLabel'
 
 const CATEGORY_LABELS: Record<string, string> = {
   value: '价值',
@@ -337,7 +338,9 @@ export default function StrategyLibraryDialog({
                                   {applyResult.passed ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
                                   {applyResult.passed ? '通过' : '未通过'}
                                 </div>
-                                <div className="text-xs text-muted-foreground">{applyResult.symbol} @ {applyResult.market}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  <StockLabel symbol={applyResult.symbol} name={applyResult.name} market={applyResult.market} /> @ {applyResult.market}
+                                </div>
                               </div>
                             </div>
                             <div className={`px-3 py-1.5 rounded-lg border text-[13px] font-semibold ${scoreBg(applyResult.score)} ${scoreColor(applyResult.score)}`}>

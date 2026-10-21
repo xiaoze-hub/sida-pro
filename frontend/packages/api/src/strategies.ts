@@ -50,6 +50,8 @@ export interface ScoreFactor {
 export interface ApplyResult {
   strategy_id: string
   symbol: string
+  /** 标的名称(后端新字段; 没有就用 `<StockLabel>` 走批量补名, 再没有只显示代码) */
+  name?: string | null
   market: string
   passed: boolean
   score: number

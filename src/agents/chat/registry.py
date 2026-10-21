@@ -2188,3 +2188,13 @@ async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None =
         return await _asyncio.to_thread(_build_scenarios, db, symbol, "CN")
     except Exception as exc:  # noqa: BLE001
         return f"[情景矩阵] 取数失败：{type(exc).__name__}——不硬编情景。"
+
+
+# ──────────────── 数据域目录工具(2026-10-21, 数据域架构 P0) ────────────────
+# 位置: 追加在导出清单**最末**。core 工具是连续前缀(EXPECTED_CORE_ORDER index 断言),
+# 新增域工具不得插到 core 段中间; 排在尾部既不打乱既有顺序, 也便于比对工具总数。
+# 实现收口在 tools_catalog.py(注册顺序 = 本模块 register_catalog_tools 内的顺序)。
+from src.agents.chat import tools_catalog as _tools_catalog  # noqa: E402  (仅 stdlib 级依赖)
+
+_tools_catalog.register_catalog_tools()
+

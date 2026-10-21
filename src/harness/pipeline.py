@@ -3,8 +3,18 @@
 问题：配方的 `tools` 原来只是"允许用哪些"，**用哪几个、按什么顺序**仍由模型决定。
 实测同一问题三次：全景诊断 5/7/5 个工具、撤单 2/3/0 个 —— Jaccard 0.57。
 
-做法：`pipeline: true` 的配方命中后，harness 自己按 `tools` 顺序逐个调用（限时、失败可跳），
+做法：`pipeline: true` 的配方命中后，harness 自己按 `tools` 顺序调用（限时、失败可跳），
 把结果拼成证据块，再让模型**一次**写成固定段落。模型不碰工具选择，Jaccard 必为 1.0。
+
+并发（2026-10-21 第二批）：原来 `for tool in recipe.tools` 完全串行，deep_diagnosis 10 个工具、
+left_diagnosis 12 个工具，单工具 1~2.5s，一轮 15~30s，占 41s p50 的大头。现在改成**单标的内有界并发**
+（`PIPELINE_CONCURRENCY`，默认 3）：输出顺序、失败语义、trace 记录与串行时完全一致，只是墙钟时间落到
+"ceil(M/P) × 单工具耗时"。
+
+两条例外：
+1. **标的一间仍串行**——多标的 × 多工具全打出去会成倍放大下游压力，收益也远不如单标的内部并发。
+2. **TQ / 客户端类工具单独走串行 lane**（见 `_TQ_PREFIXES`）：TQ 是单线程进程，行情要走 17709 端口，
+   连打会把它打崩（`TdxW.exe` 挂掉后整轮全是超时），所以这类工具先进先出、一次一个。
 
 失败语义：所有工具都失败 → 返回 ok=0，调用方回落到原来的多轮 tool loop（不至于因为管线挂了就没答案）。
 """
@@ -12,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time as _time
 from dataclasses import dataclass, field
@@ -19,6 +30,14 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 PER_TOOL_TIMEOUT = 60.0
+
+# 单标的内部工具并发度。3 是实测折中：再高对腾讯/本地缓存的边际收益很小，反而拉高尾延迟。
+# env 可覆盖（`PIPELINE_CONCURRENCY=1` 即退回串行，出事时当总开关用）。
+PIPELINE_CONCURRENCY = 3
+
+# 必须串行的工具前缀。TQ 客户端是单线程进程、行情走 17709 端口，突发并发会打崩 TdxW.exe。
+# 竞价类（get_auction_data / scan_auction_anomaly）同样读 TQ 快照，一并串行。
+_TQ_PREFIXES = ("get_thsdk_", "tdx_", "get_auction_data", "scan_auction_anomaly")
 # 证据裁剪：6 个工具原文能到 2 万字，喂给模型只会让它更慢（实测某次 141s 里工具只占 8.6s，
 # 其余全在生成）。保留数字与结论行，砍掉长列表尾部。
 PER_TOOL_CHARS = 2500
@@ -82,39 +101,108 @@ def symbols_of(text: str, bound: str | None = None, *, allow_names: bool = False
     return []
 
 
+def _concurrency() -> int:
+    """当前并发度：env 优先（运维可热调），非法值退回常量，最小 1（=串行）。"""
+    raw = os.getenv("PIPELINE_CONCURRENCY")
+    if raw is None or str(raw).strip() == "":
+        return max(1, int(PIPELINE_CONCURRENCY))
+    try:
+        return max(1, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        logger.warning("PIPELINE_CONCURRENCY=%r 非法，退回 %s", raw, PIPELINE_CONCURRENCY)
+        return max(1, int(PIPELINE_CONCURRENCY))
+
+
+def _is_tq_tool(name) -> bool:
+    return str(name or "").startswith(_TQ_PREFIXES)
+
+
+async def _call_tool(tool: str, sym: str, executor, market: str) -> tuple[bool, str | None, str | None, int]:
+    """跑一个工具，**绝不抛**：返回 (ok, text, error, 耗时ms)。
+
+    失败三态与串行版逐字一致：超时 / 异常 / 空文本。任何单个工具炸了都不能影响别的工具，
+    所以异常在这里就地吃掉，由调用方按顺序记成 failed。
+    """
+    t0 = _time.perf_counter()
+    try:
+        out = await asyncio.wait_for(
+            executor(tool, {"symbol": sym, "market": market}),
+            timeout=PER_TOOL_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        return False, None, "timeout", _ms(t0)
+    except Exception as exc:  # noqa: BLE001 - 单个工具炸了不该毁整条管线
+        return False, None, type(exc).__name__, _ms(t0)
+    text = str(out or "").strip()
+    if not text:
+        return False, None, "empty", _ms(t0)
+    return True, text, None, _ms(t0)
+
+
+async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_start=None):
+    """单个标的：内部有界并发取数，返回 (PipelineRun, errors)。
+
+    - 普通工具占 `PIPELINE_CONCURRENCY` 个信号量槽；
+    - TQ 类工具先拿串行锁再拿槽（锁在外层：只有一个 TQ 在跑，不会占满槽位干等）；
+    - 结果按 `recipe.tools` 下标回填，**输出顺序 == 配方顺序**，与谁先跑完无关。
+    """
+    tools = list(recipe.tools)
+    slots: list[tuple[bool, str | None, str | None, int] | None] = [None] * len(tools)
+    sem = asyncio.Semaphore(_concurrency())
+    tq_lock = asyncio.Lock()
+
+    async def _go(idx: int, tool: str) -> None:
+        if on_start is not None:
+            try:
+                on_start(tool)  # 进度旁路，报不出去也不影响取数
+            except Exception:  # noqa: BLE001
+                pass
+        slots[idx] = await _call_tool(tool, sym, executor, market)
+
+    async def _one(idx: int, tool: str) -> None:
+        try:
+            if _is_tq_tool(tool):
+                async with tq_lock:      # TQ 单线程：一次只放一个进去
+                    async with sem:      # 再占并发槽，保证总峰值不超 PIPELINE_CONCURRENCY
+                        await _go(idx, tool)
+            else:
+                async with sem:
+                    await _go(idx, tool)
+        except Exception as exc:  # noqa: BLE001 - 兜底：调度层出问题也只算这一个失败
+            slots[idx] = (False, None, type(exc).__name__, 0)
+
+    # return_exceptions=True：一个任务炸了不影响 gather 里的其它任务
+    await asyncio.gather(*(_one(i, t) for i, t in enumerate(tools)), return_exceptions=True)
+
+    pr = PipelineRun(symbol=sym)
+    errors: list[str] = []
+    # 统一在这里按配方顺序结算 + 记轨迹：账目（ok/failed/errors/trace）与串行版逐项一致
+    for idx, tool in enumerate(tools):
+        ok, text, err, ms = slots[idx] or (False, None, "unknown", 0)
+        if ok and text is not None:
+            pr.outputs.append((tool, text))
+            pr.ok += 1
+            _record(trace, tool, sym, ok=True, ms=ms, result=text)
+            continue
+        pr.failed += 1
+        if err != "empty":  # 空文本照串行版：算失败但不进 errors 明细
+            errors.append(f"{tool}:{err}")
+        _record(trace, tool, sym, ok=False, error=err, ms=ms)
+    return pr, errors
+
+
 async def run(recipe, symbols: list[str], executor, db=None, user=None,
               market: str = "CN", trace=None) -> tuple[list[PipelineRun], list[str]]:
-    """按配方顺序跑工具。executor(name, args) -> str（由 chat 层注入，避免反向依赖）。"""
+    """按配方跑工具。executor(name, args) -> str（由 chat 层注入，避免反向依赖）。
+
+    单标的内并发（PIPELINE_CONCURRENCY），标的之间仍串行。
+    """
     results: list[PipelineRun] = []
     errors: list[str] = []
     for sym in symbols:
-        pr = PipelineRun(symbol=sym)
-        for tool in recipe.tools:
-            _t0 = _time.perf_counter()
-            try:
-                out = await asyncio.wait_for(
-                    executor(tool, {"symbol": sym, "market": market}),
-                    timeout=PER_TOOL_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                pr.failed += 1
-                errors.append(f"{tool}:timeout")
-                _record(trace, tool, sym, ok=False, error="timeout", ms=_ms(_t0))
-                continue
-            except Exception as exc:  # noqa: BLE001 - 单个工具炸了不该毁整条管线
-                pr.failed += 1
-                errors.append(f"{tool}:{type(exc).__name__}")
-                _record(trace, tool, sym, ok=False, error=type(exc).__name__, ms=_ms(_t0))
-                continue
-            text = str(out or "").strip()
-            if not text:
-                pr.failed += 1
-                _record(trace, tool, sym, ok=False, error="empty", ms=_ms(_t0))
-                continue
-            pr.outputs.append((tool, text))
-            pr.ok += 1
-            _record(trace, tool, sym, ok=True, ms=_ms(_t0), result=text)
+        pr, errs = await _run_symbol(recipe, sym, executor, market, trace=trace)
         results.append(pr)
+        errors.extend(errs)
     return results, errors
 
 
@@ -123,41 +211,32 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
     """流式版取数：边跑边报进度（模型首字要 20s+，中间不能一片空白）。
 
     产出 ("stage", 文案) 若干，最后 ("runs", (results, errors))。
+    取数本身复用 `_run_symbol`（同一套并发/串行语义），进度用队列旁路：工具真开跑时投一条，
+    主协程边等边 yield，不会因为并发而漏报或乱报数量。
     """
     results: list[PipelineRun] = []
     errors: list[str] = []
     total = len(symbols) * len(recipe.tools)
     done = 0
     for sym in symbols:
-        pr = PipelineRun(symbol=sym)
-        for tool in recipe.tools:
-            done += 1
-            yield "stage", f"正在取数 {done}/{total}：{tool}"
-            _t0 = _time.perf_counter()
-            try:
-                out = await asyncio.wait_for(
-                    executor(tool, {"symbol": sym, "market": market}),
-                    timeout=PER_TOOL_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                pr.failed += 1
-                errors.append(f"{tool}:timeout")
-                _record(trace, tool, sym, ok=False, error="timeout", ms=_ms(_t0))
-                continue
-            except Exception as exc:  # noqa: BLE001
-                pr.failed += 1
-                errors.append(f"{tool}:{type(exc).__name__}")
-                _record(trace, tool, sym, ok=False, error=type(exc).__name__, ms=_ms(_t0))
-                continue
-            text = str(out or "").strip()
-            if not text:
-                pr.failed += 1
-                _record(trace, tool, sym, ok=False, error="empty", ms=_ms(_t0))
-                continue
-            pr.outputs.append((tool, text))
-            pr.ok += 1
-            _record(trace, tool, sym, ok=True, ms=_ms(_t0), result=text)
+        q: asyncio.Queue = asyncio.Queue()
+        task = asyncio.create_task(
+            _run_symbol(recipe, sym, executor, market, trace=trace, on_start=q.put_nowait)
+        )
+        task.add_done_callback(lambda _t, _q=q: _q.put_nowait(None))  # 结束哨兵
+        try:
+            while True:
+                tool = await q.get()
+                if tool is None:
+                    break
+                done += 1
+                yield "stage", f"正在取数 {done}/{total}：{tool}"
+        finally:
+            if not task.done():  # 调用方提前关闭生成器：别把后台取数漏在运行里
+                task.cancel()
+        pr, errs = task.result()
         results.append(pr)
+        errors.extend(errs)
     yield "runs", (results, errors)
 
 

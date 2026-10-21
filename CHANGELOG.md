@@ -1,3 +1,32 @@
+## release: v0.38.2（数据域目录 + 管线并行 + 代码补名称）（2026-10-22）
+
+**1) 数据域目录（原生融合第一步）**
+- 新增 `src/harness/data_catalog.yaml`：26 个数据域（8 个 P0 已接、18 个 P1 占位），
+  每域声明 level(L0/L1/L2) / scope / params / source 表 / 说明。域是**封闭集合，禁止 raw SQL**。
+- 新增 `scripts/gen_data_catalog.py` + `docs/data-catalog-coverage.md`：
+  实测 **490 条路由 / 132 张表 / 26 域 / 已实现 8（30.8%）/ 未覆盖表 116**；
+  `--check` 模式校验「域引用的表是否真实存在」，可进 CI。
+- 新增两个通用工具（工具总数 62 → **64**）：`list_data_domains`（26 域一行一条，1113 字）、
+  `query_data_domain(domain, params_json)`（8 个 P0 域；未知域/缺参显式拒绝；每域 ≤1200 字）。
+  实现优先**转发到已有工具 handler**（同一口径，不产生第二套数字），只有 limit.pool / lhb.daily /
+  theme.mood 三个域自写只读 SQL（全部带 LIMIT、绑定参数、无 src.web 依赖）。
+- 修正目录里 3 处「模块名当表名」的错误（chip_distribution→chip_daily 等），`--check` 现为 0 错误。
+
+**2) 管线并行（延迟）**
+`src/harness/pipeline.py` 由串行改为**有界并发 3**（`PIPELINE_CONCURRENCY` 可覆盖，=1 退回串行），
+TQ/客户端类工具（`get_thsdk_*` / `tdx_*` / 竞价扫描）走单独串行 lane（17709 单线程，严禁突发）。
+实测（假 executor，每次 1.5s）：deep_diagnosis 10 工具 15.0s→**6.0s**；left_diagnosis 12 工具 18.0s→**6.0s**；
+含 2 个 TQ 工具的 auction_hunter 10.3s→**3.8s**。输出顺序、失败/超时语义、trace 条目均与串行版一致。
+
+**3) 只显示代码不显示名称**
+- 后端新增 `src/core/stock_names.py::names_for()`：复用 `collectors.stock_list` 的全市场名称缓存，
+  剥前缀后缀归一化，进程内缓存 10 分钟；**取不到就不出现在结果里**（不编造、不返回空串）。
+- `GET /api/decisions/log` 每行补 `name`（一次批量解析，无 N+1；取不到为 `None`）。
+- 新增 `GET /api/stocks/names?symbols=...`（≤200 个）供前端批量补名。
+- 前端新增 `StockLabel` 组件 + `useStockNames` + 24h localStorage 名称缓存：
+  **有名字→名称为主、代码为辅；没名字→只显示代码**（不显示“未知”占位）。
+  已改：决策账本 / AI 裁判 / 策略库弹窗 / 个股工作台 / 涨停炸板池表格。
+
 ## release: v0.38.1（画像只接管三类 + 左侧配方补齐三层滤网工具）（2026-10-21）
 
 v0.38.0 的 CI 红在两处，都是画像接管的**范围**问题，不是画像本身：

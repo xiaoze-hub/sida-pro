@@ -1,5 +1,6 @@
 import { AlertTriangle, Gavel, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { safeNum } from '@/lib/format'
+import { StockLabel } from '@/components/StockLabel'
 
 /**
  * AI 裁判消费组件(P0-2: 全链路审计 —— 裁判结论此前零消费)。
@@ -191,8 +192,14 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
       <div className="flex items-center gap-2">
         <span className="text-[13px] font-medium">裁判战绩</span>
         <span className="text-[11px] text-muted-foreground">
-          {stats.symbol && stats.symbol !== 'all' ? `标的 ${stats.symbol} · ` : '全市场聚合 · '}
-          样本 {total} 条
+          {stats.symbol && stats.symbol !== 'all' ? (
+            <span className="inline-flex items-baseline gap-1">
+              标的 <StockLabel symbol={stats.symbol} />
+            </span>
+          ) : (
+            '全市场聚合'
+          )}
+          {' · '}样本 {total} 条
         </span>
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12px]">

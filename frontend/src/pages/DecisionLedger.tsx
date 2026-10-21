@@ -14,6 +14,7 @@ import {
 } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import ErrorState from '@/components/ErrorState'
+import { StockLabel } from '@/components/StockLabel'
 import {
   contextSummary,
   hitRateText,
@@ -560,7 +561,10 @@ export default function DecisionLedger() {
                 <tr key={`${it.signal_kind}-${it.symbol}-${it.trade_date}-${i}`} className={isFilled(it) ? '' : 'text-muted-foreground'}>
                   <td className="px-2 py-1 font-mono">{it.trade_date}</td>
                   <td className="px-2 py-1">{kindLabel(it.signal_kind)}</td>
-                  <td className="px-2 py-1 font-mono">{it.symbol}</td>
+                  {/* 标的: 后端新响应带 `name`(决策账本老数据可能没有) ⇒ 没有名字时组件自己回退成只显示代码 */}
+                  <td className="px-2 py-1">
+                    <StockLabel symbol={it.symbol} name={it.name} className="max-w-[9rem]" />
+                  </td>
                   <td className="px-2 py-1 text-right font-mono">{priceText(it.price_at_signal)}</td>
                   <td className="px-2 py-1 text-muted-foreground" title={it.context}>
                     {contextSummary(it.context) || '—'}

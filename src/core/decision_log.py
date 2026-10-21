@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from src.core.jobs import jobs
+from src.core.stock_names import names_for
 
 logger = logging.getLogger(__name__)
 
@@ -851,6 +852,17 @@ def query_log(
         }
         for r in rows
     ]
+    # 代码 → 名字(2026-10-21): 一次批量取(不逐行查), 前端才有中文名可显示。
+    # 取不到 → name=None(前端显示 --); **绝不拿 symbol 冒充名字、也不回空串** ——
+    # 空串会被前端当成「名字是空字符串」, 而 None 才是「名字未知」。
+    if items:
+        try:
+            _names = names_for([str(it["symbol"]) for it in items])
+        except Exception as e:  # noqa: BLE001 —— 名字只是展示增强, 取不到不能连累账本查询
+            logger.warning("账本明细名称补全失败(不影响明细查询): %s", e)
+            _names = {}
+        for it in items:
+            it["name"] = _names.get(str(it["symbol"]))
     return {
         "count": len(items),
         "total": total,

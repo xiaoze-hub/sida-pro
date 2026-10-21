@@ -3,6 +3,7 @@ import { Loader2, ScanSearch } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { Input } from '@panwatch/base-ui/components/ui/input'
+import { StockLabel } from '@/components/StockLabel'
 
 /**
  * 聚宝盆选股(数智决策 规格 §4.2, 2026-10-10)。
@@ -26,6 +27,8 @@ interface JbpCondition {
 
 interface JbpRow {
   symbol: string
+  /** 标的名称(后端新字段; 缺省时 `<StockLabel>` 走批量补名, 仍没有就只显示代码) */
+  name?: string | null
   in_pool: boolean
   conditions: JbpCondition[]
   dark_net: number | null
@@ -206,7 +209,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
               <table className="w-full text-[12px] border-collapse">
                 <thead>
                   <tr className="text-left text-[11px] text-muted-foreground border-b border-border/50">
-                    <th className="py-1.5 pr-2 font-medium">代码</th>
+                    <th className="py-1.5 pr-2 font-medium">标的</th>
                     <th className="py-1.5 pr-2 font-medium">暗盘资金流入</th>
                     <th className="py-1.5 pr-2 font-medium">AI活跃度&gt;6</th>
                     <th className="py-1.5 pr-2 font-medium">GS(G区+G信号)</th>
@@ -221,9 +224,9 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                       className="border-b border-border/30 align-top"
                       data-testid={`jbp-row-${r.symbol}`}
                     >
-                      <td className="py-1.5 pr-2 font-mono">
-                        <span className="inline-flex items-center gap-1">
-                          {r.symbol}
+                      <td className="py-1.5 pr-2 align-top">
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <StockLabel symbol={r.symbol} name={r.name} className="max-w-[8rem]" />
                           {r.strength_label ? (
                             <span
                               title={`强度 ${r.strength_label}（首封×封成比 · 影子运行·仅统计参考${r.strength_date ? ` · ${r.strength_date}` : ''}）`}
@@ -239,7 +242,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                             </span>
                           ) : null}
                         </span>
-                        <div className="text-[10px] text-muted-foreground/80" data-testid={`jbp-level-${r.symbol}`}>
+                        <div className="font-mono text-[10px] text-muted-foreground/80" data-testid={`jbp-level-${r.symbol}`}>
                           {r.activity != null ? fmtNum(r.activity, 2) : '--'}
                           {r.activity_level ? `(${r.activity_level})` : ''}
                           {r.better ? ' 更佳' : ''}
