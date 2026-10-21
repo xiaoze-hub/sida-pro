@@ -60,3 +60,15 @@ def test_unit_misstatement_still_caught():
     ev = "外盘 109167 手"
     r = audit("外盘 11.6 万手", ev)
     assert "11.6万" in r["unverified"]
+
+
+def test_six_digit_quantity_is_not_treated_as_code():
+    """125,628 手 是数量，不是股票代码 —— 抹掉它会让证据池缺数、把真数判成编造。"""
+    ev = "外盘 125628 手 / 内盘 111261 手"
+    r = audit("外盘 125,628 手 / 内盘 111,261 手", ev)
+    assert r["unverified"] == []
+
+
+def test_market_tagged_code_is_stripped():
+    claims = extract_claims("002050.SZ 现价 32.91，CN:002050 涨 1.2%")
+    assert "002050" not in claims and "32.91" in claims
