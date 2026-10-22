@@ -1,3 +1,62 @@
+## feat: RSI 受控自进化的证据层 —— 关键位兑现（F3）与离线复盘（S0），全程只读（2026-10-23，未发版）
+
+**问题**：通用 RSI 靠编译/单测拿 0-1 真值，A 股没有即时真值（今天涨不代表判断对），
+于是要么不能进化，要么让 LLM 自评「回答得好不好」——那是自我感觉良好。这一层补的是
+**延迟到账的客观真值**：它自己写下的关键位，市场在 T+1/T+3 到底有没有碰到。同时把
+`copilot_runs`/`copilot_steps` 里躺着的数据翻成「该改哪份配方的哪条规则」的**候选清单**。
+两条线都不写配置：冻结环（symbol_guard / number_audit / caliber / 交易 403 / TQ 优先链 /
+SYSTEM_PROMPT 约束段）碰都不碰，可变环也只出提案、交人审。
+
+**A. `src/core/fitness_keypoints.py`（F3，延迟真值）**
+- `extract_levels(text)`：只认「阻力/支撑」标签后的数字（NFKC 归一，容忍全角标点、
+  `：`/`:`、括号注释、digest 截断到 500 字只剩一半）。矩阵文本里裸数字遍地（均线/量比/分位），
+  **没有标签一律 None**，绝不拿裸数字当关键位。
+- `score_run(db, run_id, horizon_td=3)`：找回该轮 `get_scenario_matrix` 那一步 → 从 `args` 取
+  symbol（JSON 被 2KB 截断时退回正则）→ `load_qfq_bars_cached` 取**严格晚于该轮当天**的日 K
+  （盘中写的位不能拿当天那根自证）→ 出 `hit_resist/hit_support/first_touch/error_bp/
+  direction_after_touch`。`error_bp` = |窗口极值 − 关键位| / 关键位 × 1e4（1 位小数，可手算复现）。
+- 三种 `available=False` 都是**常态而非错误**：没有情景矩阵读数 / 关键位不全或没有 symbol /
+  **行情尚未走完（需要 T+N）**。最后一种最关键 —— 数据没到不能算成「未命中」，否则
+  T+3 之前的所有轮次都会被计入分母，命中率天然偏低。
+- `aggregate(db, days=30, min_samples=20)`：**n < min_samples 直接拒绝出率**
+  （返回 `{available:False, n, reason:"样本不足"}`，响应里连 `*_rate` 键都不出现），
+  4 个账号、日均几十轮的体量下，「0% 命中」与「不知道」必须能区分。
+- 明确不评「建议好不好」：那需要用户意图真值（当时想干什么、有没有照做），我们没有就不装。
+
+**B. `src/core/harness_replay.py`（S0，离线复盘，只提议）**
+- `collect_signals(days=14, limit=200)`：6 类信号，每条带证据（run_id + 具体数字）——
+  个股提问零工具（路由没命中）、按配方的降级率/失败率、慢工具 p50/p90（仅 n≥5）、
+  同工具窗口内失败 ≥3 次（带错误原文）、「未取到/empty」标记（回答正文不落库，
+  只能从 error 侧统计，如实说明）。
+- `propose()`：翻成 `{id, kind, target, evidence, suggested_change}`，`kind ∈ recipe_when /
+  recipe_tools / skill_text / metric_only`。**不 import yaml/recipes/skills，不 open 任何配置文件**
+  —— `target` 只是拼出来的路径字符串（按 DB 里的 `run.recipe` 归因，不读 YAML 反查）。
+  证据门槛写死：零工具 n≥2、配方率 n≥5、同工具失败 n≥3；一条都不到就出 `metric_only`
+  「不改任何东西，样本不足」。
+- `render()`：Markdown，逐条带证据与 n，并原样打印冻结环清单与「只读」横幅。
+
+**C. `scripts/rsi_offline_review.py`（CLI）**
+- `--days/--limit/--out/--json`；`SessionLocal()` 只发 SELECT，无 add/commit/DDL，无网络无 LLM。
+- 默认写 `docs/research/rsi-offline-review-<YYYYMMDD>.md`；退出码 0 = 报告已写出
+  （**样本不足也是 0**，那是正常状态），2 = 写不出来。最后一行固定
+  `只读：未修改任何配方/提示词/配置`。
+- 表不存在/库不可达不崩：报告照实写「轨迹表不可读 + 样本不足」，不补 0 冒充「没问题」。
+
+**测试**：`tests/test_fitness_keypoints.py`（20，含 extract_levels 收拒表 10 条、
+first_touch 双向、`2 行 fixture` 的 error_bp 手算 111.7、T+3 未走完、n<min 时 `*_rate` 键**不存在**）、
+`tests/test_harness_replay.py`（9，含每条证据必含 run_id+数字、把 `open/read_text/write_text`
+全改成抛异常后 `propose` 仍跑通且 recipes/skills 的 sha256 与 mtime 字节级不变、CLI 子进程 smoke）。
+`tests/_support_fake_db.py` 是两者共用的最小 SQLAlchemy 查询面（按 `BinaryExpression.operator`
+求值，不是把查询逻辑挖掉）。
+
+验收：`pytest tests/test_fitness_keypoints.py tests/test_harness_replay.py
+tests/test_w41_core_web_dependency.py -q` → 29 passed；`scripts/trace_specs.py` 19/19 100%；
+`scripts/rsi_offline_review.py --days 0 --out /tmp/...` → RC=0 且报告写「样本不足」。
+真实 sqlite 端到端另验：8 轮轨迹 → 4 条建议（零工具 2 轮 / 降级 50% / get_orderbook 失败 3 次 /
+p90 19s）；klines 铺 4 根后 `score_run` 出 `first_touch=resist, error_bp=83.8`（手算一致）。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## feat: 参谋 UI 证据齐套度条 + 回答内价格锚定（2026-10-23，未发版）
 
 纯前端两件 UX，后端零改动（stage 事件与 SSE 契约原样复用）。
