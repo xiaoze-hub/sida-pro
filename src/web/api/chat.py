@@ -1223,8 +1223,11 @@ async def _run_tool_loop_inner(
             if no_calls:
                 text = "".join(acc) if stream else (response_msg.content or "")
                 # 数字对账: 回答里的硬数字逐个回查工具原文(查不到就标出来, 不改正文)
+                # 证据池 = 工具返回 + 注入的 system 上下文。
+                # 2026-10-22：只算工具返回会把「持仓成本 36.522」这类**来自上下文**的真实数字
+                # 判成"编的"，问价回答末尾就挂了一条误报的对账警告。上下文里的数字也是出处。
                 _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
-                                 if m.get("role") == "tool")
+                                 if m.get("role") in ("tool", "system"))
                 if text and _ev:
                     text = _audit_annotate(text, _audit_numbers(text, _ev, _utext))
                 if _round == 0 and _stock_q:
@@ -1266,7 +1269,7 @@ async def _run_tool_loop_inner(
             # 轮次用尽(2026-10-21): 先用已取到的证据补一次无工具总结, 实在没有才给建议文案
             _sum = await summarize_on_budget(ai_client, messages_for_ai)
             _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
-                             if m.get("role") == "tool")
+                             if m.get("role") in ("tool", "system"))
             if _sum and _ev:
                 _sum = _audit_annotate(_sum, _audit_numbers(_sum, _ev, _utext))
             yield ("done" if stream else "text"), (_sum or budget_exhausted_hint())

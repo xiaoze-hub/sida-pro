@@ -295,7 +295,7 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
     try:
         from src.core.number_audit import annotate as _ann, audit as _audit
 
-        evidence = "\n".join(t for r in runs for _, t in r.outputs)
+        evidence = "\n".join(t for r in runs for _, t in r.outputs) + "\n" + system
         text = _ann(text, _audit(text, evidence, question))
     except Exception:  # noqa: BLE001
         pass
@@ -340,7 +340,7 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
     try:
         from src.core.number_audit import annotate as _ann, audit as _audit
 
-        evidence = "\n".join(t for r in runs for _, t in r.outputs)
+        evidence = "\n".join(t for r in runs for _, t in r.outputs) + "\n" + system
         audited = _ann(text, _audit(text, evidence, question))
         if len(audited) > len(text):  # 对账附言作为增量补发，不重复正文
             yield "delta", audited[len(text):]
