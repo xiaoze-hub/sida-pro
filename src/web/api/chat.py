@@ -1113,7 +1113,6 @@ async def _build_ai_messages(
     return messages_for_ai
 
 
-
 async def _tool_executor(name: str, args: dict, *, db: Session, user: User | None = None) -> str:
     """运行时与 `_execute_tool` 之间的适配器。
 
@@ -1143,6 +1142,15 @@ async def _run_tool_loop_inner(
     _utext = next((m.get("content") for m in reversed(messages_for_ai)
                    if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
     _stock_q = is_stock_question(_utext)  # 问具体标的时才缓冲首轮(防幻觉)，闲聊照常流式
+
+    # 问价快答: 纯读数问题直接排版工具结果，不走模型（实测 70s → ~3s）
+    if _stock_q:
+        from src.harness.quick_answer import answer as _quick
+        if _qa := await _quick(db, _utext, _REQ_BOUND.get(), user, runtime):
+            yield ("delta" if stream else "text"), _qa
+            if stream:
+                yield ("done", _qa)
+            return
     # 确定性路由(2026-10-21): 命中配方关键词 → 工具白名单收紧 + 温度降到 0.2。
     # 实测同一问题工具集合 Jaccard 仅 0.52，方差主要来自"模型自选工具"，不是模型能力。
     _route, _ptxt = _route_with_persona(db, _utext, _REQ_BOUND.get(), _stock_q, CHAT_TOOLS, _REQ_TOOLS.get())
@@ -1223,9 +1231,8 @@ async def _run_tool_loop_inner(
             if no_calls:
                 text = "".join(acc) if stream else (response_msg.content or "")
                 # 数字对账: 回答里的硬数字逐个回查工具原文(查不到就标出来, 不改正文)
-                # 证据池 = 工具返回 + 注入的 system 上下文。
-                # 2026-10-22：只算工具返回会把「持仓成本 36.522」这类**来自上下文**的真实数字
-                # 判成"编的"，问价回答末尾就挂了一条误报的对账警告。上下文里的数字也是出处。
+                # 证据池 = 工具返回 + 注入的 system 上下文（上下文里的数也是出处，
+                # 否则「持仓成本 36.522」会被误判成编造 —— 2026-10-22 实测）
                 _ev = "\n".join(str(m.get("content") or "") for m in messages_for_ai
                                  if m.get("role") in ("tool", "system"))
                 if text and _ev:
@@ -2089,7 +2096,7 @@ async def send_message(
             if not allow(user.id):
                 raise HTTPException(429, "演示账号每日对话次数已用完(10次/天)。请自行部署体验完整功能: https://github.com/xiaoze-hub/Stock-Intelligent-Data-Analytics")
 
-        # 多模态: 图片先由 agnes 视觉代理转成文字描述(在保存前处理, 保证 DB 历史连贯)
+        # 多模态: 图片先由视觉代理转文字(保存前处理, 保 DB 历史连贯)
         if body.image_data:
             desc = await _describe_image(body.image_data, user=user)
             if desc:
