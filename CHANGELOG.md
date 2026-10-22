@@ -1,3 +1,20 @@
+## release: v0.39.2（stock.kline 域查询 7s → 0.02s：hypertable 要带时间下界）（2026-10-22）
+
+生产实测 `query_data_domain("stock.kline")` 首次 **6.9s**、二次 **2.1s**，一次域调用就能吃掉整轮预算。
+逐条对比后定位到两个原因（同一张 `klines` hyperpertable，60 行结果）：
+
+| 写法 | 耗时 |
+|---|---|
+| 原写法 `coalesce(source,'') IN (...)` + 无时间界 | 6.1s |
+| 去掉 `coalesce` | 2.0s |
+| 再去掉 + 加 `ts >= now() - interval '500 days'` | **0.02s** |
+
+根因：`klines` 是 TimescaleDB hypertable，**没有 `ts` 下界就不做分区裁剪**，要扫全部 chunk；
+`coalesce(source,'')` 又让索引失效。改成 `source IN ('tq','tencent')` + 500 天下界后快 100 倍。
+
+**同时修好发版脚本的一个真 bug**：`ci_locate_run` 只查一次就 die —— tag 推上去到 GitHub 建 run
+有几十秒延迟，v0.38.1/v0.38.2 都被误判成"找不到 CI 运行"。现改为最多重试 6×30s。
+
 ## release: v0.39.1（数据域 26/26 全覆盖 + 目录进 CI 门禁）（2026-10-22）
 
 **数据域接满 26 个（14/26 → 26/26 = 100%）**
