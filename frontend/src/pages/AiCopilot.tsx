@@ -954,8 +954,15 @@ export default function AiCopilotPage() {
                 composingRef.current = true
                 setMentionHit(null)
               }}
-              onCompositionEnd={() => {
+              onCompositionEnd={(e) => {
                 composingRef.current = false
+                // 组合结束必须补一次检测：中文输入法里 `@`/`@北方` 是当作组合输入提交的，
+                // 组合期我们刻意不弹面板，若这里不再检测，就只能等用户再敲一个字符才出现
+                // —— 表现就是「只有英文 @ 才会带出面板」。
+                const el = e.target as HTMLTextAreaElement
+                const hit = detectMention(el.value, el.selectionStart ?? el.value.length)
+                setMentionHit(hit)
+                if (hit) setMentionIdx(0)
               }}
               onPaste={(e) => {
                 // 直接粘贴截图（截图工具 → Ctrl+V）是最常见的用法，不能只支持点选文件
