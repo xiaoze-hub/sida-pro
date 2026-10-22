@@ -42,6 +42,10 @@ class ChatTool:
     handler: Callable[..., Any]
     caliber: str
     requires: str = ""
+    # 是否允许进「无配方命中 → 全量工具」兜底路径。
+    # False 的工具只在明确挂了它的配方里可见 —— 兜底路径同时服务闲聊/问价，
+    # 把采集类工具放进去等于让模型在闲聊里自由写库（见 note_new_dimension 的注释）。
+    fallback: bool = True
 
 
 CHAT_TOOL_REGISTRY: dict[str, ChatTool] = {}
@@ -53,6 +57,7 @@ def register_chat_tool(
     schema: dict | None = None,
     caliber: str,
     requires: str = "",
+    fallback: bool = True,
 ):
     """注册对话工具(schema/handler/caliber/requires 同处一处), 重复注册报错。"""
 
@@ -61,6 +66,7 @@ def register_chat_tool(
             raise ValueError(f"chat 工具重复注册: {name}")
         CHAT_TOOL_REGISTRY[name] = ChatTool(
             name=name, schema=schema, handler=fn, caliber=caliber, requires=requires,
+            fallback=fallback,
         )
         return fn
 
@@ -70,6 +76,25 @@ def register_chat_tool(
 def chat_tool_schemas() -> list[dict]:
     """按注册顺序导出全部 function schema(handler-only 工具不导出)。"""
     return [t.schema for t in CHAT_TOOL_REGISTRY.values() if t.schema is not None]
+
+
+def schema_tool_name(schema: dict) -> str:
+    """从 function schema 取工具名（兼容两种写法，取不到返回空串）。"""
+    if not isinstance(schema, dict):
+        return ""
+    fn = schema.get("function")
+    if isinstance(fn, dict) and fn.get("name"):
+        return str(fn.get("name"))
+    return str(schema.get("name") or "")
+
+
+def no_fallback_tool_names() -> frozenset[str]:
+    """不允许进「无配方全量兜底」的工具名（registration 时 fallback=False 的那些）。
+
+    routing 的两条兜底分支（stock_question / default 闲聊）据此剔除：
+    采集类工具只在明确挂了它的配方里可见。
+    """
+    return frozenset(t.name for t in CHAT_TOOL_REGISTRY.values() if not t.fallback)
 
 
 def _filter_tool_args(handler: Callable, args: dict) -> dict:
@@ -2548,24 +2573,55 @@ _tools_catalog.register_catalog_tools()
 
 
 # ──────────────── 新分析维度提案(2026-10-22, P0 采集层) ────────────────
-# 位置: 注册表最末(导出清单里看不到它 —— 见下)。
+# 位置: 注册表最末。
 #
-# **schema=None(handler-only), 刻意不让 LLM 看见这个工具**:
-#   "让模型自己随手记"会把表塞满垃圾维度(模型觉得缺什么就记什么, 用户从没提过)。
-#   只记录 = 只有**确定性的采集管线**才该调它(它要自己判断"这个维度配方真的没覆盖")。
-#   这也是"只记录、不生效"最硬的一层保证: 采集层碰不到任何一次作答的行为。
+# **两段式暴露(2026-10-22 晚更新)**:
+#   ① `fallback=False` —— **绝不进「无配方命中 → 全量工具」兜底路径**。那条路径同时服务
+#      闲聊/问价, 把采集工具放进去等于让模型在闲聊里自由写库(原先 schema=None 挡的正是这个)。
+#   ② schema 就位 + 只挂进 `deep_diagnosis` —— 只在高信息密度的深度诊断里可见, 那里才有
+#      「用户要的维度确实取不到」的真实场景。配方白名单本身就是意图门控。
+#   所以「模型随手记」的风险由**路由**关掉, 不由「模型看不见」关掉 —— 后者代价是采集链路
+#   永远没有入口(工具存在但永远不会被调用, 提案表恒空)。
 #
 # 为什么还注册成工具(而不是只留一个 core 函数):
-#   1. 工具名进注册表 → 有统一的 schema/caliber/权限契约, 未来采集管线按名字调;
+#   1. 工具名进注册表 → 有统一的 schema/caliber/权限契约;
 #   2. chat.py 的 _execute_tool 按名字分发, 不用改 chat.py(它有 2300 行护栏);
 #   3. 口径标签(caliber)随注册走, 治理页/轨迹里能看出"这次调用只是记录, 没取数"。
-#
-# 配方 YAML 一个字都不改 —— 它不在任何配方的工具白名单里(11 份 recipes/*.yaml 未改)。
 @register_chat_tool(
     "note_new_dimension",
-    schema=None,
+    schema={
+        "type": "function",
+        "function": {
+            "name": "note_new_dimension",
+            "description": (
+                "记录用户明确提出、但现有工具与数据确实拿不到的分析维度，供人工审核后决定是否补能力。"
+                "仅在本轮已确认无法通过其他工具回答该维度时调用，且同一轮最多一次。"
+                "不要为已有工具能取到的维度调用；闲聊、问价、寒暄时不要调用。"
+                "该工具只记录，不取数、不返回任何分析内容。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dimension": {
+                        "type": "string",
+                        "description": "维度名，2~40 字，名词短语，如「股东户数变化」「龙虎榜席位风格」",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "为什么需要它：用户要的是什么，现有哪块数据/工具覆盖不到",
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "可选，本轮讨论的标的代码，如 600111",
+                    },
+                },
+                "required": ["dimension", "reason"],
+            },
+        },
+    },
     caliber="只记录不生效: 写入 harness_proposals(用户提出的新分析维度), 不取数、不影响作答",
     requires="self",
+    fallback=False,
 )
 async def _tool_note_new_dimension(db: Session, args: dict, user: User | None = None) -> str:
     """记一条"用户想要但配方里没有"的分析维度。

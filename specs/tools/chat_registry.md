@@ -8,10 +8,14 @@
 | 名字 | 含义 | 数量 |
 |---|---|---|
 | **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **66** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **64** |
-| **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **2** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **65** |
+| **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
+| **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **1** |
 
-handler-only 的两个：`get_opportunities`、`note_new_dimension`。
+handler-only 的一个：`get_opportunities`。
+
+`note_new_dimension` 自 2026-10-22 起**不再 handler-only**：schema 就位（否则采集链路没有入口、
+提案表恒空），但 `fallback=False` 且只挂 `deep_diagnosis` —— 闲聊/问价的服务兜底路径里没有它。
 
 ## 验收标准
 

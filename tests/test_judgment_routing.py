@@ -82,13 +82,17 @@ def test_judgment_question_routes_to_deep_diagnosis(text):
 
 @pytest.mark.parametrize("text", ["600111 多少钱", "600111 现价多少", "北方稀土现价"])
 def test_price_only_question_is_not_forced_into_pipeline(text):
-    """单纯问价不许触发 10 工具管线（这条是 2026-10 的既有教训）。"""
-    from src.agents.chat.registry import chat_tool_schemas
+    """单纯问价不许触发 10 工具管线（这条是 2026-10 的既有教训）。
+
+    2026-10-22: 兜底工具集剔除了 fallback=False 的采集类工具（note_new_dimension），
+    所以这里比的是「全量 − 不进兜底的那些」，不是全量本身。
+    """
+    from src.agents.chat.registry import chat_tool_schemas, no_fallback_tool_names
 
     schemas = chat_tool_schemas()
     route, _ = route_with_persona(None, text, "600111", True, schemas)
     assert route.recipe is None
-    assert len(route.tools) == len(schemas)
+    assert len(route.tools) == len(schemas) - len(no_fallback_tool_names())
 
 
 def test_judgment_words():

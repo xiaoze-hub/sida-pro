@@ -271,24 +271,30 @@ def test_stats_empty_for_unknown_user(db):
 
 # ── 工具层: note_new_dimension ────────────────────────────────────────────
 
-def test_tool_registered_but_hidden_from_llm():
-    """工具进注册表(有口径/可调度), 但**不给 LLM 看**(schema=None)。"""
-    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+def test_tool_visible_but_excluded_from_fallback():
+    """工具进注册表且模型可见, 但**不进无配方兜底**(2026-10-22 改口径, 见 specs RECIPE-006)。
+
+    原先是 schema=None(模型彻底看不见) —— 代价是采集链路永远没有入口、提案表恒空。
+    现在改成「可见 + 只挂分析配方 + fallback=False」: 由**路由**挡住闲聊路径, 而不是靠隐藏工具。
+    """
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY, no_fallback_tool_names
     from src.web.api import chat as chat_api
 
     tool = CHAT_TOOL_REGISTRY["note_new_dimension"]
-    assert tool.schema is None, "采集工具不该让模型自己随手用"
+    assert tool.schema is not None, "采集工具必须对模型可见, 否则提案表恒空"
     assert tool.caliber and tool.caliber.strip()
+    assert tool.fallback is False, "采集工具不许进闲聊/问价的服务兜底路径"
+    assert "note_new_dimension" in no_fallback_tool_names()
     names = [t["function"]["name"] for t in chat_api.CHAT_TOOLS]
-    assert "note_new_dimension" not in names
+    assert "note_new_dimension" in names
 
 
-def test_tool_not_in_any_recipe():
-    """只记录不生效：任何配方都不许引用它。"""
+def test_tool_mounted_only_in_analysis_recipe():
+    """只挂一份分析配方(deep_diagnosis) —— 既不是死管道, 也不到处撒。"""
     from src.harness.recipes import list_recipes
 
-    for r in list_recipes():
-        assert "note_new_dimension" not in r.tools, f"{r.id} 不该引用采集层工具"
+    mounted = [r.id for r in list_recipes() if "note_new_dimension" in r.tools]
+    assert mounted == ["deep_diagnosis"], f"采集工具只该挂在 deep_diagnosis, 实际: {mounted}"
 
 
 def test_tool_not_exposed_as_public_skill():

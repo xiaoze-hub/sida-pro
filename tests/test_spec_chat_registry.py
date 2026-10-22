@@ -20,7 +20,7 @@ CHAT_TOOLS = list(CHAT_TOOL_REGISTRY.values())
 SCHEMAS = chat_tool_schemas()
 
 # handler-only 工具: 有 handler 但 schema is None, 不暴露给模型。
-HANDLER_ONLY = {"get_opportunities", "note_new_dimension"}
+HANDLER_ONLY = {"get_opportunities"}
 
 
 def _spec_field(label: str) -> int:

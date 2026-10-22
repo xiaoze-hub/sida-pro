@@ -31,6 +31,7 @@
 - **RECIPELD-001** `left_diagnosis` 必须同时挂载 `get_sentiment_cycle` 与 `get_event_catalyst` —— 三层滤网的前两层就靠这两个工具，缺了就只能写「未授权」
 - **RECIPEDD-001** `deep_diagnosis` 必须覆盖六层时间轴所需工具：`get_trend_profile`（前期走势）、`get_stock_dossier`（消息面）、`get_scenario_matrix`（情景研判）
 - **RECIPEDM-001** `demon_diagnosis` 必须挂载 `get_demon_factor`（妖股因子）—— 用趋势票的尺子量妖股，输出必然是废话
+- **RECIPE-006** 采集类工具（`fallback=False`，如 `note_new_dimension`）**不得进「无配方命中 → 全量工具」兜底路径**，且必须挂在一份分析配方里 —— 兜底路径同时服务闲聊/问价，采集工具混进去等于让模型在闲聊里自由写库；而完全不挂载则采集链路永远没有入口，提案表恒空。两头都是失效，一个是脏数据、一个是死管道
 
 ## 维护方式
 

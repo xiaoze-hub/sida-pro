@@ -51,7 +51,26 @@ def route_for_request(text: str, all_schemas: list[dict],
                      tools=filter_schemas(all_schemas, frozenset(recipe.tools)),
                      temperature=0.2,
                      reason=f"recipe:{recipe.id}")
+    # 兜底路径服务的是「没有配方管这个」的任意输入（含闲聊/问价）——
+    # 采集类工具（fallback=False）一律不放进去，否则模型会在闲聊里自由写库。
+    fallback_tools = _fallback_tools(all_schemas)
     if is_stock_question(text or ""):
-        return Route(recipe=None, tools=list(all_schemas), temperature=0.2,
+        return Route(recipe=None, tools=fallback_tools, temperature=0.2,
                      reason="stock_question")
-    return Route(recipe=None, tools=list(all_schemas), temperature=0.5, reason="default")
+    return Route(recipe=None, tools=fallback_tools, temperature=0.5, reason="default")
+
+
+def _fallback_tools(all_schemas: list[dict]) -> list[dict]:
+    """全量兜底用的工具集：剔除 `fallback=False` 的采集类工具。
+
+    注册表不可用时退回原样（宁可按旧行为跑，也不能因为一个过滤器把工具集清空）。
+    """
+    try:
+        from src.agents.chat.registry import no_fallback_tool_names, schema_tool_name
+
+        excluded = no_fallback_tool_names()
+    except Exception:  # noqa: BLE001 - 路由不许因为注册表导入失败而炸
+        return list(all_schemas)
+    if not excluded:
+        return list(all_schemas)
+    return [s for s in all_schemas if schema_tool_name(s) not in excluded]
