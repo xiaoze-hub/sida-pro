@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,13 +66,17 @@ def route_for_request(text: str, all_schemas: list[dict],
 def _fallback_tools(all_schemas: list[dict]) -> list[dict]:
     """全量兜底用的工具集：剔除 `fallback=False` 的采集类工具。
 
-    注册表不可用时退回原样（宁可按旧行为跑，也不能因为一个过滤器把工具集清空）。
+    注册表不可用时退回原样（宁可按旧行为跑，也不能因为一个过滤器把工具集清空）——
+    但这条 fail-open 必须留痕：它意味着写库类工具可能会被放回闲聊兜底集。
     """
     try:
         from src.agents.chat.registry import no_fallback_tool_names, schema_tool_name
 
         excluded = no_fallback_tool_names()
-    except Exception:  # noqa: BLE001 - 路由不许因为注册表导入失败而炸
+    except Exception as exc:  # noqa: BLE001 - 路由不许因为注册表导入失败而炸
+        logger.warning(
+            "兜底工具集过滤失效，本轮按全量下发（含 fallback=False 的写库工具）: %s", exc
+        )
         return list(all_schemas)
     if not excluded:
         return list(all_schemas)
