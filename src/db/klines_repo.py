@@ -65,3 +65,22 @@ def load_qfq_bars(symbol: str, market, days: int = 250) -> list[dict]:
     except Exception as e:
         logger.warning(f"[klines_repo] 查 PG klines 失败 {symbol}: {e}")
         return []
+
+
+def load_qfq_bars_cached(symbol: str, market, days: int = 250) -> list[dict]:
+    """`load_qfq_bars` 的"本轮可复用"版本（2026-10-23，单轮取数缓存）。
+
+    **只在管线作用域内命中缓存**（`src.harness.bar_cache.begin_bar_scope()` 已开）：
+    同一轮里 `get_trend_profile` / `get_chip_accumulation` / `get_scenario_matrix` /
+    `get_stock_dossier` 取同一只票的日线，从 4 次 PG 查询降到 1 次。
+
+    没有作用域时与直接调 `load_qfq_bars` 完全等价（直通 loader）—— 回填 / 因子 /
+    回测 / 定时任务这些要**新鲜**数据的调用方请继续用 `load_qfq_bars`，不要换成这个。
+    缓存模块不可用时同样退回 `load_qfq_bars`：少一层优化可以，少一份报价不行。
+    """
+    try:
+        from src.harness.bar_cache import cached_load_bars
+    except Exception as exc:  # noqa: BLE001 - 缓存模块缺失不该让取数失败
+        logger.debug(f"[klines_repo] bar_cache 不可用，直接读库: {exc}")
+        return load_qfq_bars(symbol, market, days)
+    return cached_load_bars(symbol, market, days, loader=load_qfq_bars)

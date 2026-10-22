@@ -1,3 +1,38 @@
+## feat: 单轮取数缓存 —— 同一轮 (symbol, market, days) 只查一次 PG（2026-10-23，未发版）
+
+**问题（实测）**：一轮 `deep_diagnosis` 里 `get_trend_profile` / `get_chip_accumulation` /
+`get_scenario_matrix` / `get_stock_dossier` 四个工具各自调
+`src.db/klines_repo.load_qfq_bars(symbol, market, days=250)` —— 同一条 SQL 打 4 次 PG，
+再各自对同一份 bars 跑 `compute_chips(bars[-120:])`。日线在一轮问句内不可能变，其中 3 次是纯浪费。
+
+**做法**（新增 `src/harness/bar_cache.py`）
+- `contextvars.ContextVar` 承载"本轮"作用域：`begin_bar_scope()` / `end_bar_scope(token)` /
+  `cached_load_bars(...)`（同步）/ `cached_load_bars_async(...)`（异步）。
+- 键 `(symbol, market, days)`，market 归一（枚举 `.value` / 字符串大写，`'cn'` 与 `'CN'` 同一条）；
+  返回浅拷贝，调用方就地排序污染不到缓存；**空结果不入缓存**（`load_qfq_bars` 查库失败返回 `[]`，
+  缓存它会把"第一次失败、第二次能成"变成"整轮全空"）。
+- TTL 默认 30s（`HARNESS_BAR_CACHE_TTL`），容量默认 64 条（`HARNESS_BAR_CACHE_MAX_ENTRIES`），
+  按插入序 FIFO 淘汰，长轮次不会无界增长。
+- **没有作用域就是直通**：`cached_load_bars` 直接调 loader，回填 / 因子 / 回测 / 定时任务
+  永远碰不到缓存。缓存簿记自身出错（键归一化 / TTL / 淘汰 / 取锁）一律降级成直连 ——
+  缓存的失效模式只能是"慢一点"，不能是"没有报价"。
+- 并发 single-flight：`pipeline._run_symbol` 用 `asyncio.gather` 并发跑工具，同 key 并发进来
+  用 per-key `asyncio.Lock` 罩住整个 await 段，只放一个人查库（3 并发实测 1 次查询）。
+
+**接线（全部加法式，零语义改动）**
+- `src/db/klines_repo.py`：`load_qfq_bars` 一字未改（回填/因子/回测仍要新鲜数据），新增
+  `load_qfq_bars_cached(symbol, market, days=250)` —— 作用域内吃缓存，作用域外与直接调用等价，
+  缓存模块不可用时退回 `load_qfq_bars`。
+- `src/harness/pipeline.py`：`run()` 与 `run_stream()` 用 `try/finally` 各开/关一次作用域
+  （覆盖整轮，包括流式生成）；输出顺序、失败语义、trace 记录一律不动。
+- 工具侧（`src/agents/chat/*`，另一条线）把 `load_qfq_bars` 换成 `load_qfq_bars_cached` 即可吃到，
+  同步工具不必改 async；模块 docstring 里写清了迁移方式与"为什么不能直接改 `load_qfq_bars`"。
+
+验收：`tests/test_bar_cache.py` 21 passed（直通 / 命中 / 键区分 / TTL / 容量淘汰 / single-flight /
+异常不缓存 + 不泄漏 / `load_qfq_bars` 未被包裹 / 管线开合作用域），
+`test_harness_pipeline` + `test_p1_fusion_annotations_and_range` + `test_w41_core_web_dependency` +
+`test_agent_regressions` 合计 88 passed，规格门禁 19/19 (32 用例)。
+
 ## feat: P0/P1/P2/P3 四线合并 —— 管线上下文、结论上图、提案工具匹配、治理配方拆解（2026-10-22，未发版）
 
 三个并行分支（各自独立 worktree、文件不相交）合入后的整块说明。

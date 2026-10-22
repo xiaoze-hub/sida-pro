@@ -372,13 +372,22 @@ async def run(recipe, symbols: list[str], executor, db=None, user=None,
     """按配方跑工具。executor(name, args) -> str（由 chat 层注入，避免反向依赖）。
 
     单标的内并发（PIPELINE_CONCURRENCY），标的之间仍串行。
+
+    整个 run 期间开一个取数缓存作用域（2026-10-23）：同一轮里多个工具取同一只票的日线
+    只查一次 PG。作用域只覆盖本轮，`finally` 必关 —— 下一轮必须看到新 K 线。
     """
+    from src.harness.bar_cache import begin_bar_scope, end_bar_scope
+
     results: list[PipelineRun] = []
     errors: list[str] = []
-    for sym in symbols:
-        pr, errs = await _run_symbol(recipe, sym, executor, market, trace=trace)
-        results.append(pr)
-        errors.extend(errs)
+    token = begin_bar_scope()
+    try:
+        for sym in symbols:
+            pr, errs = await _run_symbol(recipe, sym, executor, market, trace=trace)
+            results.append(pr)
+            errors.extend(errs)
+    finally:
+        end_bar_scope(token)
     return results, errors
 
 
@@ -389,43 +398,52 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
     产出 ("stage", 文案) 若干，最后 ("runs", (results, errors))。
     取数本身复用 `_run_symbol`（同一套并发/串行语义），进度用队列旁路：工具真开跑时投一条，
     主协程边等边 yield，不会因为并发而漏报或乱报数量。
+
+    取数缓存作用域覆盖整个生成器生命周期（2026-10-23）：`begin` 在首次 resume、
+    `end` 在 `finally`。调用方提前 `aclose()` 时也会复位，不会把作用域漏给下一轮。
     """
-    results: list[PipelineRun] = []
-    errors: list[str] = []
-    total = len(symbols) * len(_split_pipeline_tools(recipe.tools)[0])
-    done = 0
-    for sym in symbols:
-        q: asyncio.Queue = asyncio.Queue()
-        task = asyncio.create_task(
-            _run_symbol(recipe, sym, executor, market, trace=trace, on_start=q.put_nowait)
-        )
-        task.add_done_callback(lambda _t, _q=q: _q.put_nowait(None))  # 结束哨兵
-        try:
-            while True:
-                tool = await q.get()
-                if tool is None:
-                    break
-                done += 1
-                yield "stage", f"正在取数 {done}/{total}：{tool}"
-        finally:
-            if not task.done():  # 调用方提前关闭生成器：别把后台取数漏在运行里
-                task.cancel()
-                # ⚠️ cancel() 只是"请求取消", 不 await 的话任务可能悬挂,
-                #    紧接着的 task.result() 会抛 CancelledError。
-                #    必须 await 让取消真正完成。
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    # 取消导致的异常是预期内的, 吞掉;
-                    # 但 task.result() 之后仍要能安全取到(可能抛 CancelledError)。
-                    pass
-        if task.cancelled():
-            # 生成器被调用方提前关闭 → 这一轮取数作废, 不再结算。
-            return
-        pr, errs = task.result()
-        results.append(pr)
-        errors.extend(errs)
-    yield "runs", (results, errors)
+    from src.harness.bar_cache import begin_bar_scope, end_bar_scope
+
+    token = begin_bar_scope()
+    try:
+        results: list[PipelineRun] = []
+        errors: list[str] = []
+        total = len(symbols) * len(_split_pipeline_tools(recipe.tools)[0])
+        done = 0
+        for sym in symbols:
+            q: asyncio.Queue = asyncio.Queue()
+            task = asyncio.create_task(
+                _run_symbol(recipe, sym, executor, market, trace=trace, on_start=q.put_nowait)
+            )
+            task.add_done_callback(lambda _t, _q=q: _q.put_nowait(None))  # 结束哨兵
+            try:
+                while True:
+                    tool = await q.get()
+                    if tool is None:
+                        break
+                    done += 1
+                    yield "stage", f"正在取数 {done}/{total}：{tool}"
+            finally:
+                if not task.done():  # 调用方提前关闭生成器：别把后台取数漏在运行里
+                    task.cancel()
+                    # ⚠️ cancel() 只是"请求取消", 不 await 的话任务可能悬挂,
+                    #    紧接着的 task.result() 会抛 CancelledError。
+                    #    必须 await 让取消真正完成。
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        # 取消导致的异常是预期内的, 吞掉;
+                        # 但 task.result() 之后仍要能安全取到(可能抛 CancelledError)。
+                        pass
+            if task.cancelled():
+                # 生成器被调用方提前关闭 → 这一轮取数作废, 不再结算。
+                return
+            pr, errs = task.result()
+            results.append(pr)
+            errors.extend(errs)
+        yield "runs", (results, errors)
+    finally:
+        end_bar_scope(token)
 
 
 def compose_prompt(recipe, runs: list[PipelineRun], question: str,
