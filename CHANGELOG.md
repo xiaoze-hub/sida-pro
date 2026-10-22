@@ -1,3 +1,34 @@
+## feat: P0 管线架构修复 —— 记录类工具不盲调 + 会话上下文不丢（2026-10-22，未发版）
+
+`deep_diagnosis` 开 `pipeline: true` 之后有两处结构性冲突，v0.43.x 三次真机验收都没绕过去：
+
+**① 取数阶段盲调记录类工具 → 假失败 + 假轨迹。**
+`pipeline._run_symbol` 无脑遍历 `recipe.tools`，一律用 `{"symbol": sym, "market": ...}` 调。
+`note_new_dimension` 要的是 `dimension`/`reason`，于是每次全景诊断都会多一次必然失败的调用，
+把本来正常的 `copilot_runs` 污染成 `degraded`；治理页第 11 步那条
+`note_new_dimension({"symbol":"600111"})` 就是管线留下的，不是模型调的（模型那时还没拿到工具）。
+
+**② 写结论时 `tools=[]` → 采集链路永远没有入口。**
+管线把结论交给模型时明确不给工具，所以「用户要的维度取不到」那一刻，模型连记录工具都点不了。
+v0.43.2/v0.43.3 的提示词修法（给字面示例）只能修参数格式，修不了「没权限调」这一层。
+
+**③ 会话上下文被整段丢掉。** 管线自己拼 `[system, user_block]`，`_build_ai_messages` 里
+长期记忆、持仓成本、交易画像、页面视图全部不进结论轮 —— 问「我这只还能拿吗」，模型看不到成本价。
+
+改法（全部落在 `src/harness/pipeline.py`，chat.py 只加 1 行取值）：
+
+- `_split_pipeline_tools()` 把配方工具分两段：`data_tools`（取数 lane，按序并发跑）/
+  `post_tools`（`fallback=False` 的记录类工具，写结论时才给模型）。取数阶段只跑 `data_tools`。
+- `post_tools` 的 schema 在结论轮挂给模型；模型真调了就执行并记轨迹
+  （`_run_post_calls` 只认 `post_tools` 里的名字，取数工具再点一次无效）；只调工具没写正文 →
+  补一次无工具生成，不交白卷。
+- `session_context(messages, base_prompt)` 从 chat 层拼好的 system 里剥出上下文
+  （剥掉人设原文与配方块；对不上就返回空串，宁缺不脏），以 `context=` 传入
+  `compose_prompt/answer/answer_stream`。
+- 没挂记录类工具的配方行为完全不变（`tools=[]`，「没有调用工具的能力」原文保留）。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## release: v0.43.4（采集改道：不再让模型调工具，改确定性后置解析）（2026-10-22）
 
 v0.43.3 上线后第三次真机复验：工具**又被调用**（trace 第 11 步），参数**还只是** `{"symbol":"600111"}`，

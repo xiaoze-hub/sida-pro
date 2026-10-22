@@ -758,6 +758,7 @@ from src.harness.context import (  # noqa: E402
 )
 from src.harness.routing import route_for_request as _route_for_request
 from src.harness.pipeline import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
+from src.harness.pipeline import session_context as _pipeline_ctx
 
 
 async def _execute_tool(
@@ -1165,10 +1166,11 @@ async def _run_tool_loop_inner(
             return await _execute_tool(db, name, args, user)
 
         _trace = runtime.trace if runtime else None
+        _pctx = _pipeline_ctx(messages_for_ai, SYSTEM_PROMPT)  # 记忆/持仓/画像/视图，管线不许丢
         if stream:
             _hit = False
             async for _k, _v in _pipeline_answer_stream(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx
             ):
                 _hit = True
                 yield _k, _v
@@ -1176,7 +1178,7 @@ async def _run_tool_loop_inner(
                 return
         else:
             _ptxt = await _pipeline_answer(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx
             )
             if _ptxt:
                 yield "text", _ptxt
