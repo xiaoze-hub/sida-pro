@@ -2424,9 +2424,9 @@ async def _tool_get_trend_profile(db: Session, args: dict, user: User | None = N
             "description": (
                 "个股量化因子：20/60 日动量、20 日年化波动、量能 z、120 日区间位置，"
                 "每项带**同日全市场横截面分位**与 20 日变化（历史够时）。"
-                "回答「这票强弱在什么水平 / 波动大不大 / 是不是放量」时用它，",
-            )
-            ,
+                "回答「这票强弱在什么水平 / 波动大不大 / 是不是放量」时用它，"
+                "别用涨跌幅代替因子分位。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

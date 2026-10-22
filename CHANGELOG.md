@@ -1,3 +1,36 @@
+## release: v0.41.4（普通提问全体 500：一个多余的逗号把工具描述变成了数组）（2026-10-22）
+
+部署 v0.41.3 后复验时发现：**问价这类最普通的问题直接报「AI 服务暂时不可用」**。
+深层原因极其隐蔽，值得整段记下来。
+
+**症状**：`600111 现价多少` → 4~6s 返回「AI 服务暂时不可用：LLM 降级(other): 网络/服务不可用: InternalServerError」，
+连试 3 次全中；但同一时间「北方稀土还能持有吗」的管线回答（148s、12 工具）完全正常。
+
+**根因**：`get_stock_factors` 的 schema 里，description 多写了一个逗号：
+
+```python
+"description": (
+    "个股量化因子：…",   # ← 尾逗号，整个括号变成 tuple
+)
+```
+
+tuple 序列化成 **JSON 数组**，agnes 网关直接 500：
+
+```
+json: cannot unmarshal array into Go struct field ...description of type string
+```
+
+**为什么只坏了一部分问题**：配方路径只挂 10~12 个工具，恰好不含 `get_stock_factors`，所以正常；
+而「没命中配方 → 给模型全量 64 个工具」的兜底路径必然带上它 → 必然 500。于是表现为
+「只有问价/闲聊这类不触发管线的问题全挂」，非常容易误判成模型服务商故障（我第一轮就先去查了 provider）。
+
+**修法**（两层）：
+1. 把 description 改回字符串；
+2. `ai_client._sanitize_tools()` 在**发送前**把所有 `description` 归一成字符串（非流式 + 流式两条路径都接），
+   不再依赖每个 schema 作者都不手滑。另把空 `tools` 从请求里去掉（部分网关对空数组报 400）。
+3. 新增 `tests/test_tool_schema_contract.py`：所有 description 必须是 str、序列化后不得出现
+   `"description": [`、sanitizer 能把 tuple 归一 —— 这三条进 CI 后这类事故不可能再上线。
+
 ## release: v0.41.3（问名字不认账：只写「北方稀土」时零工具拒答）（2026-10-22）
 
 用户截图：问「北方稀土今日冲高回落跌一个多点，大盘环境也不好，还能持有吗，是黎明前的借势洗盘，还是真出货」，
