@@ -6,15 +6,15 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| API 路由（`src/web/api/*.py` 装饰器） | **497** |
-| 平台表（models ∪ migrations） | **132** |
-| 　其中 `models.py` `__tablename__` | 89 |
+| API 路由（`src/web/api/*.py` 装饰器） | **500** |
+| 平台表（models ∪ migrations） | **133** |
+| 　其中 `models.py` `__tablename__` | 90 |
 | 　仅 `migrations.py` 声明（含 hypertable） | 43 |
 | 目录域总数（`src/harness/data_catalog.yaml`） | **26** |
 | **有实现的域** | **26 / 26 = 100.0%** |
 | source 非空但零命中表的域 | 0 |
-| 域已触达的表 | 44 / 132 = 33.3% |
-| 未被任何域覆盖的表 | 88 |
+| 域已触达的表 | 44 / 133 = 33.1% |
+| 未被任何域覆盖的表 | 89 |
 | 域引用了不存在的表（目录写错） | 0 个域 / 0 处 |
 
 ## ① 域覆盖率：26 / 26（100.0%）
@@ -58,7 +58,7 @@
 
 口径：「已实现」= source 里至少解析出一张**真实存在**的表；source 为空或只写了模块名/路径都算待接。
 
-## ② 未被任何域覆盖的表：88 张
+## ② 未被任何域覆盖的表：89 张
 
 候选域为按表名前缀/关键词的启发式建议，仅作归类参考。
 
@@ -131,27 +131,28 @@
 | 65 | `entry_candidate_feedback` | models/migrations | （待归类） | — |
 | 66 | `entry_candidate_outcomes` | models/migrations | （待归类） | — |
 | 67 | `entry_candidates` | models/migrations | （待归类） | — |
-| 68 | `high_value_api_logs` | models/migrations | （待归类） | — |
-| 69 | `manual_query_candidates` | models | （待归类） | — |
-| 70 | `market_phase_daily` | models | （待归类） | — |
-| 71 | `market_scan_ranks` | models | （待归类） | — |
-| 72 | `market_scan_snapshots` | models/migrations | （待归类） | — |
-| 73 | `price_alert_hits` | models | （待归类） | — |
-| 74 | `price_alert_rules` | models | （待归类） | — |
-| 75 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 76 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 77 | `skill_api_keys` | models/migrations | （待归类） | — |
-| 78 | `skill_usage` | models/migrations | （待归类） | — |
-| 79 | `stock_agents` | models | （待归类） | — |
-| 80 | `stock_context_snapshots` | models | （待归类） | — |
-| 81 | `stock_suggestions` | models | （待归类） | — |
-| 82 | `stock_universe_snapshots` | models | （待归类） | — |
-| 83 | `suggestion_feedback` | models/migrations | （待归类） | — |
-| 84 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 85 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
-| 86 | `trading_halts` | models | （待归类） | — |
-| 87 | `war_report_daily` | models | （待归类） | — |
-| 88 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 68 | `harness_proposals` | models | （待归类） | — |
+| 69 | `high_value_api_logs` | models/migrations | （待归类） | — |
+| 70 | `manual_query_candidates` | models | （待归类） | — |
+| 71 | `market_phase_daily` | models | （待归类） | — |
+| 72 | `market_scan_ranks` | models | （待归类） | — |
+| 73 | `market_scan_snapshots` | models/migrations | （待归类） | — |
+| 74 | `price_alert_hits` | models | （待归类） | — |
+| 75 | `price_alert_rules` | models | （待归类） | — |
+| 76 | `resonance_ai_verdicts` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 77 | `resonance_scan` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 78 | `skill_api_keys` | models/migrations | （待归类） | — |
+| 79 | `skill_usage` | models/migrations | （待归类） | — |
+| 80 | `stock_agents` | models | （待归类） | — |
+| 81 | `stock_context_snapshots` | models | （待归类） | — |
+| 82 | `stock_suggestions` | models | （待归类） | — |
+| 83 | `stock_universe_snapshots` | models | （待归类） | — |
+| 84 | `suggestion_feedback` | models/migrations | （待归类） | — |
+| 85 | `summary_cache` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 86 | `tq_formula_signal_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
+| 87 | `trading_halts` | models | （待归类） | — |
+| 88 | `war_report_daily` | models | （待归类） | — |
+| 89 | `workbench_layer_daily` | migrations | （待归类） | 仅 migrations 声明（ORM 未建模） |
 
 ## ③ 域引用了不存在的表：0 个域
 
@@ -180,5 +181,5 @@
 | `stock.chip` | 1 | GET /chip-daily |
 | `limit.pool` | 1 | GET /ladder |
 
-可粗映射到域的路由：106 / 497 = 21.3%；其余属认证/运维/未归类。
+可粗映射到域的路由：106 / 500 = 21.2%；其余属认证/运维/未归类。
 

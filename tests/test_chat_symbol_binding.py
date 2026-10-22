@@ -41,10 +41,27 @@ def test_market_inference_covers_sz_and_bj():
         assert conv.stock_market == market, code
 
 
-def test_existing_binding_is_never_overwritten():
+def test_existing_binding_follows_page_switch():
+    """2026-10-22 事故修订：旧实现"对话已绑定就不改"，页面锚点永远追不上。
+
+    症状：用户在 002548 页面聊过天，再到 002114 页面提问，参谋仍按 002548 作答
+    （系统提示与取数上下文全串在旧票上）。修复后页面锚点合法且与旧绑定不同 →
+    绑定跟随更新；同页（锚点 == 旧绑定）才是"不变"。
+
+    口径：文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定。
+    """
     conv, db = _conv("600111", "SH"), _DB()
     _bind_conv_symbol(db, conv, SendMessageBody(content="x", stock_symbol="002361"))
-    assert conv.stock_symbol == "600111"
+    assert conv.stock_symbol == "002361"
+    assert conv.stock_market == "SZ"
+    assert db.commits == 1
+
+
+def test_existing_binding_unchanged_when_page_is_the_same():
+    """同一页面继续问 → 绑定不变（正常行为不退化）。"""
+    conv, db = _conv("600111", "SH"), _DB()
+    _bind_conv_symbol(db, conv, SendMessageBody(content="x", stock_symbol="600111"))
+    assert (conv.stock_symbol, conv.stock_market) == ("600111", "SH")
     assert db.commits == 0
 
 

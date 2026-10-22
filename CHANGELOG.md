@@ -1,3 +1,92 @@
+## release: v0.41.0（数智参谋：懂你的交易模式 + 学会攒需求 + 上下文不再串票）（2026-10-22）
+
+这一版解决三件「参谋不够懂你」的事，外加一条研究结论：
+
+| 线 | 结果 |
+|---|---|
+| **交易模式画像** | 每轮对话前自动注入「你的长项/短板 + 样本量」，来源是 457 回合真实交割单 |
+| **新维度采集层** | 对话里冒出的新分析维度进提案表，**只记录不生效**，按出现次数排序等你拍板 |
+| **页面上下文串入** | 换页面提问不再按上一只票回答（旧实现只绑一次、永不更新） |
+| **订阅推送（研究）** | 结论：只能进程内接，17709 走不通 —— 补上了原生层证据 |
+
+### 一、交易模式画像（`src/core/trader_playbook.py`）
+
+`ai_client.build_system_prompt` 每轮自动追加一段 ≤600 字的证据块：
+
+```
+主人交易模式（证据 2026-10-22）：胜率 54.5%（457 回合，盈亏比未知）｜持仓中位 5 天（P75 21 天）。
+长项：回合胜率 54.5%（249/457 笔平仓回合盈利）……（n=457）｜持仓节奏偏短……（n=457）。
+短板：画像规则缺区分力（覆盖 99.6% 的盈利回合，缺负样本对照）（n=248）；持仓节奏分化（n=457）。
+样本不足未结论：本人逐笔成交未落库，盈亏比/加仓行为/止损纪律无法计算
+```
+
+**口径铁律**（这版最容易出错的地方）：`decision_log` 那 8013 行是**系统生成的信号台账**，
+不是本人成交（实测 T+1 胜率 30.1%、T+5 均值 -4.4%）。它被物理隔离在 `signal_ledger` 段，
+**不进长项/短板、不进正文** —— 否则画像会拿系统成绩冒充用户业绩。本人胜率只引用 457 回合的 54.5%。
+样本 n<8 一律不出结论、n<30 标 low；读库失败熔断返回空串，绝不拖垮对话。
+
+新增 chat 工具 `get_trader_playbook`（工具数 65→**66**，与下面的采集层各 +1）。
+
+### 二、页面上下文串入
+
+根因是一行 `if not sym or conv.stock_symbol: return` —— 对话一旦绑过标的就**永不更新**，
+切到 002114 页面提问仍按 002548 取数与作答。改为 `harness/context.resolve_bound_symbol()`：
+
+> 文字里的代码 > `@提及` > 页面锚点 > 旧绑定
+
+顺带补了一个裂缝：`apply_mentions` 原本无条件覆盖绑定，而文字代码只在工具锁定层生效 →
+**系统提示指向 A 票、工具取数取 B 票**。现在两处同口径。`chat.py` 净减 10 行（2300 → 2290）。
+
+### 三、新维度采集层（P0：只记录，不生效）
+
+
+数智参谋的「分析配方」是手写 YAML（`src/harness/recipes/*.yaml`，11 份）。用户在对里
+常提出配方没覆盖的新维度（「股东户数变化」「龙虎榜席位风格」）—— 这些需求以前**无处落点**：
+助手只能拿现有工具凑合答，用户每次都要重新解释一遍，而且没人知道哪条最该补。
+
+本次只做 **P0 采集层：只记录，不生效**。
+
+| 交付 | 位置 |
+|---|---|
+| 提案表 `harness_proposals` | 迁移 **218**（`_m218_harness_proposals`，幂等） |
+| 核心模块 `propose/list_proposals/decide/stats` | `src/core/harness_proposals.py` |
+| ORM 模型 `HarnessProposal` | `src/db/models.py` |
+| 3 个 API（列表/审核/统计） | `src/web/api/copilot.py` → `/api/copilot/proposals*` |
+| chat 工具 `note_new_dimension` | `src/agents/chat/registry.py`（工具数 64 → **66**） |
+
+**「只记录」的硬保证**（三条，都有回归用例钉住）：
+1. 配方 YAML **一个字都没改**；`note_new_dimension` 不在任何配方的工具白名单里；
+2. 该工具 `schema=None`（handler-only）—— **不给 LLM 看**，模型不会自己随手记一堆垃圾维度；
+3. skill 网关把它列进 `BLOCKED_SKILLS` —— 写本人数据，不对外放。
+
+**去重键**：`normalized_dimension`（去所有空白 + 大小写折叠）。同一用户同一维度反复提 →
+**不插新行**，只 `seen_count += 1` 并刷新 `last_seen_at`，返回既有行并带 `created=False`
+（区分"新建"与"又一次"）。于是"哪些维度反复出现"= `stats()` 的排序 = **最该补的能力**。
+
+**唯一约束故意带 status**：`uq(user_id, normalized_dimension, status)` —— 同一维度被拒之后
+再次出现可以**重新提**（pending 位是空的），不被历史行永久压住。
+
+**人工审核**：accept / reject / snooze 三选一，写 `status` + `decided_at`。
+越权（不是本人的提案）→ core 层返回 `None`，API 层转 **404**（不泄露别人的提案是否存在）。
+
+**用户隔离**：list/decide/stats 全部严格按 `user_id` 过滤 —— 别人的提案一条都看不到、也改不了。
+
+`src/web/api/chat.py`（2300 行护栏）、`frontend/`、11 份 `recipes/*.yaml` 全部未碰。
+
+### 四、订阅推送：接不了（研究结论，含证据）
+
+`Register_DataTransferFunc` / `SubscribeGPData` 是 `TPythClient.dll` 的**原生导出**，
+回调是**进程内 C 函数指针**（按进程内 run_id 注册，同步执行），跨进程不可达。
+决定性证据：17709 由原生 `HandleMcpJsonRpc` 服务（`python.exe` 进程数为 0 时仍正常返回行情）、
+DLL 里 `callback` 子串 0 命中、`subscribe_quote` 不在白名单、实测被拒
+`MCP不支持该tqcenter方法名`。结论与最小验证方案见 `docs/research/tdx_local_contract/subscription_push.md`，
+只读探针 `scripts/probe_tdx_push.py`。
+
+### 运维（不随镜像发布，但同日落地）
+
+小主机 `PortProxyWatch` 重写：8000 改指 `127.0.0.1:8000`（WSL localhost forwarding，与客户机 IP 解耦，
+重启后永远有效）、任务改 SYSTEM + 最高权限、17709 只清失效规则不新建。实测删规则后 70s 内自愈。
+
 ## release: v0.40.1（记忆行内编辑真落库：PATCH 曾静默丢 content/weight）（2026-10-22）
 
 子代理在交付记忆面板时发现一个静默丢数据的坑：面板的「行内编辑内容/权重」会发

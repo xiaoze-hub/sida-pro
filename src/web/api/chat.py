@@ -753,6 +753,7 @@ from src.harness.context import (  # noqa: E402
     enter_request_ctx as _enter_request_ctx,
     exit_request_ctx as _exit_request_ctx,
     inject_recipe as _inject_recipe,
+    sync_conv_symbol as _sync_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
 from src.harness.pipeline import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
@@ -2036,25 +2037,14 @@ def delete_conversation(
 
 
 def _bind_conv_symbol(db, conv, body: "SendMessageBody") -> None:
-    """把前端"正在看的标的"绑到对话上（只在对话还没绑定时写）。
+    """把前端"正在看的标的"绑到对话上(页面切换时跟随更新)。
 
-    为什么必须绑：不绑时模型只能从持仓/画像里猜 —— 实测把正在看的 600111 分析成了
-    用户主仓 002361（神剑股份）。绑上后 `_build_conv_system_prompt` 会注入
-    「当前对话关联股票」，同时实时/技术上下文也按这只票取数。
+    判定口径在 src/harness/context.py::resolve_bound_symbol:
+        文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定
+    2026-10-22 事故: 旧实现"对话已绑定就不改" → 002548 页面聊完再问 002114,
+    参谋仍按 002548 作答(系统提示与取数上下文全串在旧票上)。
     """
-    sym = (body.stock_symbol or "").strip()
-    if not sym or conv.stock_symbol:
-        return
-    if not (len(sym) == 6 and sym.isdigit()):
-        return
-    conv.stock_symbol = sym
-    conv.stock_market = (body.stock_market or "").strip() or (
-        "SH" if sym[0] == "6" else ("BJ" if sym[0] in "489" else "SZ")
-    )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
+    _sync_conv_symbol(db, conv, body)
 
 
 @router.post("/conversations/{conversation_id}/messages")

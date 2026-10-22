@@ -38,6 +38,94 @@ def _market_of(code: str) -> str:
     return "SH" if code[0] == "6" else ("BJ" if code[0] in "489" else "SZ")
 
 
+# ── 标的绑定判定（2026-10-22「页面上下文串入」事故）────────────────────────────
+# 事故: 用户在 002548 页面聊完, 再到 002114 页面提问, 参谋仍按 002548 作答 ——
+# 旧实现"对话已绑定就不改", 页面锚点永远追不上, 系统提示与取数上下文全串在旧票上。
+# 判定口径(与前端 AiCopilot 的解析顺序一致):
+#     文字里的 6 位代码 > @提及 > 页面锚点(body.stock_symbol) > 会话旧绑定
+
+
+def _is_code(value: str | None) -> bool:
+    """是否合法的 6 位 A 股代码。"""
+    v = (value or "").strip()
+    return len(v) == 6 and v.isdigit()
+
+
+def mention_stock(body) -> str | None:
+    """取 @ 提及里的股票代码(没有/非法则 None)。"""
+    for m in (getattr(body, "mentions", None) or []):
+        if (getattr(m, "type", "") or "").lower() != "stock":
+            continue
+        v = (getattr(m, "value", "") or "").strip()
+        if _is_code(v):
+            return v
+    return None
+
+
+def resolve_market(symbol: str, anchor: str | None = None, market: str | None = None) -> str:
+    """标的的市场。
+
+    页面锚点就是这只票(或没有锚点)时用前端带来的市场; 其余按代码前缀推断,
+    与前端 marketOf 同口径(6→SH / 0,3→SZ / 4,8,9→BJ)。
+    """
+    m = (market or "").strip()
+    a = (anchor or "").strip()
+    if m and (not a or a == symbol):
+        return m
+    return _market_of(symbol)
+
+
+def resolve_bound_symbol(conv_symbol: str | None, body_symbol: str | None,
+                         text: str = "", mention: str | None = None) -> str | None:
+    """本轮对话该锁定哪只票(返回 None = 不锁定)。判定, 不落库。
+
+    优先级: 文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定。
+    - 文字里写了代码 → 用它(用户明说的永远优先; 与既有行为一致)
+    - @提及 → 用它(显式动作, 优先于页面)
+    - 页面锚点: 合法 6 位码且与旧绑定不同 → 用它(页面切换, 跟随更新)
+    - 否则保留旧绑定(没有就都不锁)
+    """
+    conv_symbol = (conv_symbol or "").strip()
+    body_symbol = (body_symbol or "").strip()
+    code = extract_code(text or "")
+    if code:
+        return code
+    mention = (mention or "").strip()
+    if mention:
+        return mention
+    if _is_code(body_symbol) and body_symbol != conv_symbol:
+        return body_symbol
+    return conv_symbol or None
+
+
+def bind_symbol(db, conv, symbol: str, market: str | None = None) -> None:
+    """把标的写回会话(落库失败只回滚, 不抛 —— 上下文不该把对话搞挂)。"""
+    conv.stock_symbol = symbol
+    conv.stock_market = market or _market_of(symbol)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def sync_conv_symbol(db, conv, body) -> None:
+    """把本轮该聊的标的绑到对话上(页面切换时跟随更新)。
+
+    判定见 resolve_bound_symbol; 只在真的变了时才落库, 避免每条消息多一次 commit。
+    """
+    target = resolve_bound_symbol(
+        getattr(conv, "stock_symbol", None),
+        getattr(body, "stock_symbol", None),
+        getattr(body, "content", "") or "",
+        mention=mention_stock(body),
+    )
+    if not target or target == (getattr(conv, "stock_symbol", None) or "").strip():
+        return
+    anchor = (getattr(body, "stock_symbol", None) or "").strip()
+    market = resolve_market(target, anchor, getattr(body, "stock_market", None))
+    bind_symbol(db, conv, target, market)
+
+
 def apply_mentions(db, conv, body):
     """解析 @ 提及：股票 → 绑标的；智能体 → 载入配方。返回 (recipe|None, note|None)。"""
     from src.harness.recipes import get_recipe
@@ -52,12 +140,14 @@ def apply_mentions(db, conv, body):
         code = stocks[0]
         if len(stocks) > 1:
             note = f"（本轮最多支持 1 只标的，已使用 {code}）"
-        conv.stock_symbol = code
-        conv.stock_market = getattr(body, "stock_market", None) or _market_of(code)
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
+        # 文字里写了 6 位代码时以文字为准(与 resolve_bound_symbol 同口径):
+        # 否则系统提示(按文字)与工具锁定(按 @提及)会指向不同的票。
+        if extract_code(getattr(body, "content", "") or "") is None:
+            anchor = (getattr(body, "stock_symbol", None) or "").strip()
+            market = resolve_market(code, anchor, getattr(body, "stock_market", None))
+            if ((getattr(conv, "stock_symbol", None) or "") != code
+                    or (getattr(conv, "stock_market", None) or "") != market):
+                bind_symbol(db, conv, code, market)
 
     recipe = None
     for r in agents:
