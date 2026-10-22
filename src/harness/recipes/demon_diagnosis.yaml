@@ -52,3 +52,8 @@ prompt_fragment: |
   「口径」段必须写清：情绪框架声明、各数字的来源工具（demon_factor=历史涨停统计、
   quote=腾讯实时、main_intent=逐笔主力、hot_stocks=同花顺人气榜、sentiment_cycle=涨停池情绪模型），
   以及哪些维度未取到。
+
+# 验收标准（人写的事实源，specs/harness/recipes.md 逐条对照；仅静态声明，不影响运行）
+acceptance:
+  - 必须给出连板高度与情绪周期定位，不得只做趋势/估值分析
+  - 妖股必须调用妖股因子工具，不得用趋势票的尺子评价

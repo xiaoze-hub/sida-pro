@@ -239,6 +239,18 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
         finally:
             if not task.done():  # 调用方提前关闭生成器：别把后台取数漏在运行里
                 task.cancel()
+                # ⚠️ cancel() 只是"请求取消", 不 await 的话任务可能悬挂,
+                #    紧接着的 task.result() 会抛 CancelledError。
+                #    必须 await 让取消真正完成。
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    # 取消导致的异常是预期内的, 吞掉;
+                    # 但 task.result() 之后仍要能安全取到(可能抛 CancelledError)。
+                    pass
+        if task.cancelled():
+            # 生成器被调用方提前关闭 → 这一轮取数作废, 不再结算。
+            return
         pr, errs = task.result()
         results.append(pr)
         errors.extend(errs)

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import logging
 
@@ -206,7 +206,7 @@ class CopilotTrace:
                     row.error = _clip(error, 500)
                     row.tool_calls = self.tool_calls
                     row.elapsed_ms = elapsed_ms
-                    row.finished_at = datetime.utcnow()
+                    row.finished_at =            datetime.now(timezone.utc)
                 db.commit()
             finally:
                 db.close()

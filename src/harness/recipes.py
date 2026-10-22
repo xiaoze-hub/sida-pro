@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import functools
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 RECIPE_DIR = Path(__file__).resolve().parent / "recipes"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,7 +82,10 @@ def load_recipes() -> dict[str, Recipe]:
     for p in sorted(RECIPE_DIR.glob("*.yaml")):
         try:
             r = _parse(p)
-        except Exception:
+        except Exception as exc:
+            # ⚠️ 静默 continue 会把"YAML 写错"变成"配方凭空消失",
+            #    排障时完全看不出哪份文件坏了。留一行日志。
+            logger.warning("配方解析失败, 已跳过: %s (%s)", p.name, exc)
             continue
         out[r.id] = r
     return out
