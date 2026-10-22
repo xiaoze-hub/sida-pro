@@ -1472,7 +1472,11 @@ _SQL: dict[str, str] = {
     "kline_daily_bars": (
         "SELECT ts, open, high, low, close, volume, source FROM klines "
         "WHERE symbol = :s AND market = :m AND period = '1d' AND adjust = 'qfq' "
-        "AND coalesce(source,'') IN ('tq','tencent') ORDER BY ts DESC LIMIT :n"
+        "AND source IN ('tq','tencent') "
+        # 2026-10-22 实测: klines 是 TimescaleDB hypertable, **没有 ts 下界就不做分区裁剪** ——
+        # 实测同一条 SQL 加 `ts >= now()-'500 days'` 后 2.0s → 0.02s（100 倍）；
+        # coalesce(source,'') 还会让索引失效（6.1s → 2.0s 就是去掉它的效果）。
+        "AND ts >= now() - interval '500 days' ORDER BY ts DESC LIMIT :n"
     ),
     # —— 用户域（严格按 user_id 过滤，不含 user_id IS NULL 的全局行）——
     "portfolio_positions": (
