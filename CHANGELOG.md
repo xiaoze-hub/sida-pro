@@ -1,3 +1,43 @@
+## feat: 参谋 UI 证据齐套度条 + 回答内价格锚定（2026-10-23，未发版）
+
+纯前端两件 UX，后端零改动（stage 事件与 SSE 契约原样复用）。
+
+**A. 证据齐套度条（`EvidenceReadinessStrip`）**
+- 流式取数原来只有一条单调的「正在取数 3/10：get_technical_analysis」，答完即消失，依据里的
+  数字不可追溯。现在把同一条 stage 流折成**按维度**的 pill：`已取 3/10 · 行情 ✓ · 技术面 ✓ ·
+  逐笔 ⏳ · 撤单 未取到`，流中实时推进，定稿后固化在回答顶部（可回看这一轮取到了哪几路证据）。
+- `lib/copilot/evidence-readiness.ts`（纯函数）：stage 标签解析（容忍任意前缀/半全角冒号/无空格，
+  认不出工具返回 null）、工具→人话+维度映射（未知工具**原样显示工具名**、分组落「其他」，
+  不猜中文名）、事件折叠 reducer（`error` / `ok:false` / 失败文案 三种形状都算 failed，
+  failed 粘性）、`settleReadiness()` 定稿结算。
+- **诚实口径**：分母只来自标签里的 `/N`，没有就 `total:null`，UI 只说「已取 N 项」，绝不编总数；
+  空列表不渲染（空 ≠ 0/0）；认不出的散文 stage 仍走原来的单行 spinner，不污染齐套度。
+- 版式：单行 hairline 条（上下 `border-border/40`），10px、tabular-nums、无阴影无卡片背景；
+  失败 pill 用 `role-risk` 并读「未取到」，成功走 muted（不用喜庆绿）。
+
+**B. 回答内价格锚定（`onAnchoredPrice`）**
+- `lib/copilot/price-anchors.ts`（纯函数）：`extractPriceAnchors()` 认 `35.80` / `35.80元` /
+  `站上 35.8` / `支撑 32.80` / `阻力 36.5` / `止损位 33.20`；**拒**百分比（`-1.9%` → `kind:'pct'`，
+  不可点）、6 位代码、日期、数量词（`552 万` / `3 条` / `20 日`）、量纲外数字（`12345`）。
+  `anchorKindLabel()` 按**离数字最近**的价位词判 支撑/阻力/止损/目标/价位，判不出给 `--`
+  —— 绝不默认「支撑」（把阻力标成支撑比不标更危险）。
+  `splitByAnchors()` 切片段拼回去与原文逐字相等。
+- `AnswerCard`：裁决句与每条依据里的价位渲染成 10px 行内 chip（hairline 边框，
+  `data-testid="answer-price-anchor"`），点击回调 `onAnchoredPrice({value,kind,context})`；
+  **不传该 prop 时逐字渲染原文、零 testid**（老调用点行为不变）。K 线画线仍由别的模块拥有，
+  本卡只出事件，不画图。
+- `AiCopilot`：chip 点击 → 顶部一条「K线锚点 32.80 支撑 · 600111 工作台 ↗」回执（可清除），
+  不假装图已经动了。
+
+**测试**：`evidence-readiness.test.ts`（21）、`price-anchors.test.ts`（22，含 `-1.9%` / `600111` /
+`2026-10-22` / `35.80元` / `支撑 32.80` 等收拒表）、`evidence-strip-and-anchors.test.tsx`（9）、
+`tests/components/copilot-evidence-stream.test.tsx`（3，验证 stage → pill → 定稿固化、chip 点击回执）。
+
+验收：`npx tsc --noEmit` 0 错；vitest 该 3 个新用例 + proposal-panel/proposals 共 90 passed；
+UI-RULES OK；`pnpm build` 成功。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## feat: 全市场/多标的确定性管线 —— 盘前/盘后/竞价/盘中从多轮 loop 转确定性取数（2026-10-23，未发版）
 
 **问题**：11 份配方里只有 5 份单标的诊断走确定性管线（`pipeline: true`，harness 自己按序调工具，
