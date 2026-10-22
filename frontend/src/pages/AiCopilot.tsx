@@ -25,6 +25,7 @@ import { MessageActions } from '@/components/copilot/MessageActions'
 import { ToolTimeline } from '@/components/copilot/ToolTimeline'
 import { MemoryPanel } from '@/components/copilot/MemoryPanel'
 import { SchedulePanel } from '@/components/copilot/SchedulePanel'
+import { ProposalPanel } from '@/components/copilot/ProposalPanel'
 import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { useConversations } from '@/hooks/useConversations'
@@ -56,6 +57,26 @@ import type { CopilotPreset } from '@/lib/copilot/types'
 
 /** 与服务端 /api/chat/upload 上限保持一致（20MB）。 */
 const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
+
+/** 右侧面板 tab（顺序即 tab bar 顺序；'proposals' = 参谋能力缺口清单）。 */
+const PANEL_TABS = ['runs', 'memory', 'schedule', 'proposals'] as const
+type PanelTab = (typeof PANEL_TABS)[number]
+
+/** tab bar 上的短名（列表口径）。 */
+const PANEL_TAB_LABEL: Record<PanelTab, string> = {
+  runs: '过程',
+  memory: '记忆',
+  schedule: '定时',
+  proposals: '提案',
+}
+
+/** aside 标题（比 tab 短名多一层语义，用户一眼知道这一栏是什么）。 */
+const PANEL_TAB_TITLE: Record<PanelTab, string> = {
+  runs: '本轮过程',
+  memory: '长期记忆',
+  schedule: '定时任务',
+  proposals: '能力提案',
+}
 
 /** 待发送附件：解析文本 + 可选图片 data URL（图片走多模态，文本模型走解析结果）。 */
 interface PendingAttachment {
@@ -145,9 +166,10 @@ export default function AiCopilotPage() {
   // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
   // 刷新即丢上下文。这里补抽屉：列出/打开/删除历史，并把 conversation_id 续上。
   const [historyOpen, setHistoryOpen] = useState(false)
-  // 2026-10-22 工作台对齐 Codex/Hermes：右侧面板（过程 / 记忆 / 定时）+ 会话管理。
-  // 过程=每轮工具时间线（治理页是全局视角，这里只看当前会话）。
-  const [panelTab, setPanelTab] = useState<'runs' | 'memory' | 'schedule' | null>(null)
+  // 2026-10-22 工作台对齐 Codex/Hermes：右侧面板（过程 / 记忆 / 定时 / 提案）+ 会话管理。
+  // 过程=每轮工具时间线（治理页是全局视角，这里只看当前会话）；
+  // 提案=参谋缺的分析维度（配方没覆盖的）→ 人裁决，采纳不等于生效（见 ProposalPanel 头注）。
+  const [panelTab, setPanelTab] = useState<'runs' | 'memory' | 'schedule' | 'proposals' | null>(null)
   const [convQuery, setConvQuery] = useState('')
   const convMgr = useConversations()
   const runsState = useCopilotRuns({ conversationId: convId, enabled: panelTab === 'runs' })
@@ -628,7 +650,7 @@ export default function AiCopilotPage() {
               新对话
             </button>
           ) : null}
-          {(['runs', 'memory', 'schedule'] as const).map((tab) => (
+          {PANEL_TABS.map((tab) => (
             <button
               key={tab}
               type="button"
@@ -640,7 +662,7 @@ export default function AiCopilotPage() {
               }`}
               onClick={() => setPanelTab((v) => (v === tab ? null : tab))}
             >
-              {tab === 'runs' ? '过程' : tab === 'memory' ? '记忆' : '定时'}
+              {PANEL_TAB_LABEL[tab]}
             </button>
           ))}
           <a
@@ -1029,9 +1051,7 @@ export default function AiCopilotPage() {
           data-testid="copilot-side-panel"
         >
           <div className="flex items-center justify-between py-2 pl-3 pr-1">
-            <span className="text-[12px] font-medium">
-              {panelTab === 'runs' ? '本轮过程' : panelTab === 'memory' ? '长期记忆' : '定时任务'}
-            </span>
+            <span className="text-[12px] font-medium">{PANEL_TAB_TITLE[panelTab]}</span>
             <button type="button" aria-label="关闭" onClick={() => setPanelTab(null)}>
               <X className="h-3.5 w-3.5 text-muted-foreground" />
             </button>
@@ -1045,8 +1065,10 @@ export default function AiCopilotPage() {
               />
             ) : panelTab === 'memory' ? (
               <MemoryPanel />
-            ) : (
+            ) : panelTab === 'schedule' ? (
               <SchedulePanel />
+            ) : (
+              <ProposalPanel />
             )}
           </div>
         </aside>
