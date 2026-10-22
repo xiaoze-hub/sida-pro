@@ -1,3 +1,78 @@
+## release: v0.44.0（数智参谋：接线 + 提速 + 原生看图 + 受控自进化地基）（2026-10-23）
+
+> 基线：v0.43.4（`03b0f6b`）→ 本版含 P0~P3 + P5~P9 全部落地
+
+## 一、一句话
+
+这一版把「参谋能跑」推到「**参谋可度量、可提速、结论能落到图上、且改进有证据**」：
+6 份配方从模型自选工具改成确定性管线，单轮取数从 4 次 PG 降到 1 次，
+回答里的关键位自动变成待确认画线，圈选一段 K 线就能问因果，
+并首次具备「关键位兑现」这条**延迟真值**——受控自我改进的判据从此不靠模型自评。
+
+## 二、明细
+
+### P0 管线架构修复（`650c8f9`）
+- 配方工具分「取数 lane / post_tools」：取数阶段不再盲调只吃 `symbol` 的记录类工具
+  （那会必然失败并把正常 run 污染成 `degraded`，治理页那条假 `note_new_dimension` 轨迹即由此而来）。
+- 记录类工具 schema 只在**结论轮**挂给模型，真调了就执行并记轨迹；只调不写正文会补一次无工具生成。
+- `session_context()` 把长期记忆 / 持仓成本 / 交易画像 / 页面视图送进管线，管线模式不再失忆。
+
+### P1 原生融合：结论上图 + 圈选实算（`c42f0d5`）
+- `actions.propose_scenario_annotations()`：情景矩阵算出的支撑/阻力 → **待确认** K 线标注，
+  按 `(user_id, symbol, label)` 去重，价格变了原地更新。
+- 管线收尾 `pipeline.propose_levels()` 自动扣扳机（G4 不再需要人工点）。
+- `trend_profile.compute_range_summary()` + `viewstate`：K 线框选一段 → 区间涨跌 / 高低点 /
+  最大回撤 / 量比自动进上下文，「这段为什么跌」不用再手打日期。
+
+### P2 提案 → 现有工具匹配（`21fb499`）
+用户提的缺口维度自动对齐 66 个已注册工具，面板直显「可挂载现有工具」，而不是一律当归档。
+
+### P3 治理看板配方质量（`21fb499`）
+`/copilot/metrics` 按配方拆 `ok_rate / degraded_runs / error_runs / zero_tool_runs / avg_elapsed_ms`，
+轨迹表补「配方 / 状态」两列——哪份配方在拉胯一眼可见。
+
+### P5 单轮取数缓存（`46a1cf4`）
+- `src/harness/bar_cache.py`：contextvar 作用域 + per-key 单飞 + TTL 30s + 条目上限 64；
+  **无作用域完全穿透**（回填/因子/回测不受影响）。
+- 实测：作用域内两次 `trend_profile.build` = 3 次查询（改前 6 次），情景矩阵两次调用 = 1 次。
+
+### P6 全市场确定性管线（`62f159f`）+ 接线（`a2c8aeb`）
+- `pipeline_market.py` + `Recipe.scope`；4 份配方（竞价猎手 / 盘前策略官 / 盘后复盘官 / 盘中盯盘官）
+  改 `scope: market, pipeline: true`。
+- `risk_judge` / `theme_leader` **明确不接**（5/7 个工具要 symbol，硬接会丢掉「每只持仓读数」这一输出段落）。
+- 真机探针：空参工具以 `{}` 跑；需 symbol 的按自选展开（上限 8 只），无自选记 `no_symbol_scope`
+  并让结论写「未取到」；handler-only 工具记 `no_schema` 不复活；`search_symbols` 缺 `keyword`
+  记 `unsatisfiable_args` 直接跳过——**四类失败都留痕，没有一个被静默吞掉**。
+- `pipeline_router.py` 按 `recipe.scope` 分派，`chat.py` 只改 import 一行（护栏 2307/2310 不变）。
+
+### P7 UI：证据齐套度条 + 价格锚定（`c360c16`）
+- 流式那行 `正在取数 3/10` 变成常驻胶囊条：`走势 ✓ · 筹码 ✓ · 逐笔 ✓ · 撤单 ⏳ · 消息面 ○`，
+  失败标「未取到」；分母未知时不虚构分母。
+- 回答里的价位变可点 chip，回调给 K 线画水平尺；百分比 / 代码 / 日期不会被误判为价位。
+
+### P8 历史相似分形 + 持仓成本锚定（第二轮）
+- `analog_finder`：同形态历史频次与 T+1/T+5 赔率，`n<10` 只报「样本不足」不给赔率。
+- `scenario_cost_anchor`：把本人成本线 / 纪律止损叠进情景矩阵，输出解套位 / 保本位 / 破位区。
+
+### P9 RSI 证据层（第二轮，只读）
+- `fitness_keypoints`：把每轮产出的支撑/阻力拿去和 T+1/T+3 真实走势对账（触及与否、方向、误差 bp）。
+- `harness_replay` + `scripts/rsi_offline_review.py`：离线复盘**只产出建议清单**，
+  绝不写配方/提示词/配置。
+
+## 三、验证
+
+- 后端：272 passed（接线后），规格门禁 19/19（32 用例）
+- 前端：`tsc --noEmit` 0 错、`vitest` 90 passed、`UI-RULES OK`、`pnpm build` 通过
+- 真机：全市场管线 probe 四类失败语义逐条留痕（见 P6）
+- 未做：K 线渲染层改造、卡片化重排、向量记忆/RAG、任何自动改 Frozen Ring
+
+## 四、升级注意
+
+- `Recipe` 新增 `scope` 字段（默认 `symbol` = 旧行为），旧 YAML 不需要改。
+- `load_qfq_bars` 语义未变；只在 `trend_profile` / `scenario_engine` / `decision_pioneer` /
+  `stock_persona` 四个**单轮热路径**改用 `load_qfq_bars_cached`，回填/因子/回测仍读新鲜数据。
+- 依 28号 接管部署链路，本版只做仓库侧发版（tag + CI 镜像），生产部署由其推进。
+
 ## feat: RSI 受控自进化的证据层 —— 关键位兑现（F3）与离线复盘（S0），全程只读（2026-10-23，未发版）
 
 **问题**：通用 RSI 靠编译/单测拿 0-1 真值，A 股没有即时真值（今天涨不代表判断对），

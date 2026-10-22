@@ -2532,7 +2532,7 @@ async def _tool_get_stock_factors(db: Session, args: dict, user: User | None = N
     caliber="均线+筹码带+区间高低 → 关键位 · 三档情景 · 不预测方向",
 )
 async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None = None) -> str:
-    from src.core.scenario_engine import build as _build_scenarios
+    from src.core.scenario_compose import build_for_tool as _build_scenarios
 
     symbol = str(args.get("symbol") or "").strip().upper()
     if not symbol:
@@ -2540,7 +2540,7 @@ async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None =
     import asyncio as _asyncio
 
     try:
-        return await _asyncio.to_thread(_build_scenarios, db, symbol, "CN")
+        return await _asyncio.to_thread(_build_scenarios, db, symbol, "CN", user=user)
     except Exception as exc:  # noqa: BLE001
         return f"[情景矩阵] 取数失败：{type(exc).__name__}——不硬编情景。"
 
