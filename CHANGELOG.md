@@ -1,3 +1,42 @@
+## release: v0.43.2（代码审查四条修复 + v0.43.1 的预算口径修复）（2026-10-22）
+
+> v0.43.1 的 CI 卡在 GitHub runner 的 `Install system libs for WeasyPrint`（apt 挂住 23 分钟，
+> cancel 请求也无效），不是代码问题。不再等它，把它的改动并入本版一起发。
+
+用 `open-code-review` 对 v0.43.0 跑了增量 diff 审查 + 核心文件全扫，核实后 4 条真问题，全部修掉：
+
+### High — 裁决重入锁用错了 state
+`useCopilotProposals.decide()` 原来靠 `decidingId !== null` 当锁。那是 **React state**，
+要下一次渲染才可见：同一事件循环里连点两次「采纳」，第二次读到的还是 `null` → 守卫被穿透 →
+**两条 POST 都发出去**，后端连记两次裁决、统计减两次。
+
+改成同步 `useRef` 互斥，`finally` 里无条件释放（卸载后也要放）；`decidingId` 保留但只做展示，
+从 `useCallback` 依赖里移除。**变异验证**：把实现还原成 state 版，3 条用例立刻红。
+
+### Medium — `_MISSED_COUNTS` 跨线程裸读写
+`error_tracker.py` 里 `_last_jsonl_write` / `_recent_occurrences` 都在 `_lock` 下，
+唯独新增的 `_MISSED_COUNTS` 三处（清空 / 读取 / APScheduler 监听回调递增）裸操作。
+read-modify-write 非原子 → 高并发丢计数（8×2000 实测丢 5965 / 12078 次）。
+
+三处统一进 `_lock`；因 `missed_counts()` 可能在已持锁路径下被调，锁改 `RLock`
+（严格超集，未嵌套路径行为不变）。这是**实测出来的判断**：只加锁不改 RLock 时，
+新写的死锁用例当场自锁失败。
+
+### Medium — 竞价归档读取没用会话上下文管理器
+`auction_pool._load_latest_archived()` 手写 `SessionLocal()` + `finally: close()`，
+外加一个未使用的 `cn_now` 导入。改成 `with SessionLocal() as db:`（对齐仓内
+`limit_ladder_live` 等 11 处写法），降级语义与返回契约一字未改。
+
+**顺带揪出一个真的测试隔离 bug**：`test_auction_pool.py` 的 `in_mem_db` 只 monkeypatch
+`src.web.database.SessionLocal`（re-export），而 core 侧是 `from src.db.session import SessionLocal`
+→ 测试写入落到 conftest 临时库 → 后续文件把残留行当成「归档」→ **origin/main 上按该顺序跑就是
+7 failed**（已用干净 worktree 复现）。CI 分片把它掩盖了（顺序依赖）。fixture 补打
+`src.db.session` 的三个符号，既有断言一字未改。
+
+### Low — 兜底工具集 fail-open 要留痕
+`_fallback_tools()` 在注册表不可用时返回全量（会把 `fallback=False` 的写库工具放回闲聊兜底）。
+取舍成立（清空工具集更糟），但静默不可接受 → 补 `logger.warning`。
+
 ## release: v0.43.1（v0.43.0 的真机验收发现：记录类工具吃了取数预算）（2026-10-22）
 
 v0.43.0 上线后立刻做真机验收：对生产发一条全景诊断，明确要求「股东户数变化」「龙虎榜席位风格」
