@@ -167,7 +167,7 @@ def _load_bars(db, symbol: str, n: int = BARS_WINDOW, market: str = "CN") -> lis
     "近 250 日最高价"会算短。故按 n×1.55 折算自然日再取最后 n 根。
     """
     try:
-        from src.db.klines_repo import load_qfq_bars
+        from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
         window_days = int(n * 1.55) + 10
         bars = load_qfq_bars(symbol, market, days=window_days)

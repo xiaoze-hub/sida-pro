@@ -1,3 +1,32 @@
+## feat: 接线 —— 全市场管线进 chat 路由 + 单轮缓存落到 4 个读库入口（2026-10-23，未发版）
+
+P5/P6 两个模块单测全绿但**不接线等于没装**（缓存命中率 0、6 份配方行为不变）。这一步补接线。
+
+**① `src/harness/pipeline_router.py`（新，约 110 行）**
+`chat.py` 有行数护栏（2307 / 上限 2310），只够改 **import 一行**。所以路由分歧外置：
+- `is_market_scope(recipe)`：`recipe.scope == "market"` → 全市场管线，否则符号管线。
+- `resolve_watchlist(db, user)`：读本人 + 全局自选，去重、**上限 8 只**；读不到返回空表（空表是
+  有意义信号 —— 下游会记 `no_symbol_scope` 并让结论写「未取到」，绝不拿持仓顶替）。
+- `answer()` / `answer_stream()`：与 `pipeline.answer*` 签名完全一致，chat.py 只把 import
+  从 `pipeline` 换成 `pipeline_router`，**调用点零改动、行数不变**。
+
+**② 缓存落到真正的读库入口**
+`load_qfq_bars_cached` 之前只有测试在调，业务代码仍全走 `load_qfq_bars`（命中率 0）。改 4 个
+在一轮里被反复调用的入口（import 别名一行替换，不动调用点）：
+`trend_profile`(2 处，走势 + 圈选区间) / `scenario_engine`(2 处，情景矩阵) /
+`decision_pioneer`(1 处) / `stock_persona`(1 处，画像判定)。
+**刻意不改**：`collectors/*`、`core/factor_ic.py`、`core/backtest/data_adapter.py` —— 回填/因子/回测
+必须读新鲜数据；无作用域时 `cached` 入口本身也是逐次直查，双保险。
+
+**验证**（新增 `tests/test_pipeline_router.py` 8 例）
+- 假 engine 数 `connect()`：作用域内两次 `trend_profile.build` = **3 次查询**（改前 6 次）；
+  出作用域仍 6 次；情景矩阵两次调用 = **1 次查询**。
+- 路由分派：`scope=market` 走全市场管线并拿到 watchlist；`scope=symbol` 走原管线；
+  全市场管线全失败时**不产出 done**（调用方回落多轮 loop）。
+- 接线后总门禁 272 passed + 规格 19/19（32 用例），chat.py 仍 2307 行。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## feat: 参谋 UI 证据齐套度条 + 回答内价格锚定（2026-10-23，未发版）
 
 纯前端两件 UX，后端零改动（stage 事件与 SSE 契约原样复用）。

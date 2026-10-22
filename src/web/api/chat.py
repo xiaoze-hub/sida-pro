@@ -757,7 +757,7 @@ from src.harness.context import (  # noqa: E402
     sync_conv_symbol as _sync_conv_symbol,
 )
 from src.harness.routing import route_for_request as _route_for_request
-from src.harness.pipeline import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
+from src.harness.pipeline_router import answer as _pipeline_answer, answer_stream as _pipeline_answer_stream
 from src.harness.pipeline import session_context as _pipeline_ctx
 
 

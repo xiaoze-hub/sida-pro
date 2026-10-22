@@ -379,7 +379,7 @@ def _pg_daily_bars(symbol: str, market: str, days: int) -> list[dict]:
     if (market or "CN").upper() != "CN":
         return []
     try:
-        from src.db.klines_repo import load_qfq_bars
+        from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
     except Exception as e:  # noqa: BLE001 仓储层不可用 → 无从读库
         logger.debug("fetch_bars 读库不可用(仓储层导入失败): %s", e)
         return []

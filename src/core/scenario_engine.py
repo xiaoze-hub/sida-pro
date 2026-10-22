@@ -119,7 +119,7 @@ def build_matrix(db, symbol: str, market: str = "CN") -> dict[str, Any]:
     try:
         from src.core.stock_factors import load as load_factors
         from src.core.trend_profile import compute as compute_trend
-        from src.db.klines_repo import load_qfq_bars
+        from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
         bars = load_qfq_bars(symbol, market, days=250)
         trend = compute_trend(bars, None)
@@ -154,7 +154,7 @@ def build(db, symbol: str, market: str = "CN") -> str:
     try:
         from src.core.stock_factors import load as load_factors
         from src.core.trend_profile import compute as compute_trend
-        from src.db.klines_repo import load_qfq_bars
+        from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
         bars = load_qfq_bars(symbol, market, days=250)
         trend = compute_trend(bars, None)

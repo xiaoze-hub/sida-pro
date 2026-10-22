@@ -119,7 +119,7 @@ def render(m: dict) -> str:
 
 def build(symbol: str, market: str = "CN", days: int = 250) -> str:
     """工具入口：读库算指标渲染。"""
-    from src.db.klines_repo import load_qfq_bars
+    from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
     try:
         bars = load_qfq_bars(symbol, market, days=days)
@@ -247,7 +247,7 @@ def render_range_summary(m: dict) -> str:
 
 def build_range_summary(symbol: str, start_date: str, end_date: str, market: str = "CN") -> str:
     """读库 + 实算 + 渲染。区间可能早于 250 日窗口，故按 800 天取（库里就有 800 天）。"""
-    from src.db.klines_repo import load_qfq_bars
+    from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
     sym = str(symbol or "").strip()
     if not sym:
