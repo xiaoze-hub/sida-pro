@@ -266,3 +266,34 @@ def test_session_context_strips_base_prompt_and_recipe_block():
     assert base not in ctx and "配方正文" not in ctx
     assert session_context([], base) == ""
     assert session_context(msgs, "别的人设") == "", "人设对不上时宁可没有上下文"
+
+
+def test_propose_levels_only_fires_when_scenario_matrix_present(monkeypatch):
+    """G4 结论上图：情景矩阵跑过才提议画线；没有矩阵/没有 db 时静默不动。
+
+    P1 的 `actions.propose_scenario_annotations` 需要 db/user，只有 chat 层有 ——
+    这里验证管线收尾这一枪打得准，且未命中时一次都不调。
+    """
+    from types import SimpleNamespace
+
+    import src.harness.actions as actions
+    import src.harness.pipeline as pl
+
+    called = []
+    monkeypatch.setattr(
+        actions, "propose_scenario_annotations",
+        lambda db, **kw: called.append(kw) or [],
+    )
+    user = SimpleNamespace(id=7)
+    runs = [PipelineRun(symbol="002050", outputs=[("get_scenario_matrix", "阻力 35.8")], ok=1)]
+
+    pl.propose_levels(FakeRecipe(), runs, db=object(), user=user)
+    assert called and called[0]["symbol"] == "002050" and called[0]["user_id"] == 7
+
+    called.clear()
+    pl.propose_levels(FakeRecipe(), [PipelineRun(symbol="002050", outputs=[("a", "x")], ok=1)],
+                      db=object(), user=user)
+    assert called == [], "没有情景矩阵不该提议"
+
+    pl.propose_levels(FakeRecipe(), runs, db=None, user=None)
+    assert called == [], "没有 db/user 必须静默跳过"

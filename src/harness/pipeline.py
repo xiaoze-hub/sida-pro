@@ -199,6 +199,36 @@ def session_context(messages, base_prompt: str = "") -> str:
             return text[:MAX_CONTEXT_CHARS]
     return ""
 
+def propose_levels(recipe, runs, db, user, market: str = "CN", trace=None) -> None:
+    """把情景矩阵算出的关键位提议成**待确认**的 K 线标注(2026-10-22, G4 结论上图)。
+
+    为什么放在这里：情景矩阵已经把支撑/阻力算得很准，但结论只活在聊天里 —— 用户看到
+    「阻力 35.8」还得自己回图上画。P1 的 `actions.propose_scenario_annotations` 是那条线的
+    落点，但需要 db/user，只有 chat 层有；管线收尾时补这一次调用，调用方不用多写代码。
+
+    三条纪律：只提议（不落 KlineAnnotation，用户点确认才画）；无 db/user 静默跳过；
+    任何异常只记日志 —— 提议是旁路，绝不能因为它把已经生成的回答搞挂。
+    """
+    if db is None or user is None:
+        return
+    try:
+        from src.harness.actions import propose_scenario_annotations
+    except Exception:  # noqa: BLE001 - 没有动作模块就当没有这项增强
+        return
+    run_id = getattr(trace, "run_id", None) if trace is not None else None
+    for pr in runs or ():
+        names = [t for t, _ in (pr.outputs or ())]
+        if "get_scenario_matrix" not in names:
+            continue
+        try:
+            propose_scenario_annotations(
+                db, user_id=getattr(user, "id", None), symbol=pr.symbol,
+                market=market, run_id=run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - 提议失败不影响作答
+            logger.info("关键位提议失败(忽略): %s", type(exc).__name__)
+
+
 _CODE_RE = re.compile(r"(?<!\d)((?:00|30|60|68|83|87|43)\d{4})(?!\d)")
 
 
@@ -444,7 +474,8 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
 
 
 async def answer(ai_client, recipe, question: str, bound: str | None, executor,
-                 market: str = "CN", trace=None, context: str = "") -> str | None:
+                 market: str = "CN", trace=None, context: str = "",
+                 db=None, user=None) -> str | None:
     """完整跑一条管线并写结论。返回 None = 管线没跑成，调用方回落到多轮 loop。"""
     syms = symbols_of(question, bound, allow_names=True)
     if not syms:
@@ -489,11 +520,13 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
         text = _ann(text, _audit(text, evidence, question))
     except Exception:  # noqa: BLE001
         pass
+    propose_levels(recipe, runs, db, user, market, trace)   # G4: 关键位 → 待确认标注
     return text
 
 
 async def answer_stream(ai_client, recipe, question: str, bound: str | None, executor,
-                        market: str = "CN", trace=None, context: str = ""):
+                        market: str = "CN", trace=None, context: str = "",
+                        db=None, user=None):
     """流式版：边生成边下发。取数 ~5s，生成 25~135s —— 不流式的话用户只能干等。
 
     产出 ("delta", 文本) 若干 → 最后 ("done", 全文)。管线没跑成时直接 return（调用方回落 loop）。
@@ -563,4 +596,5 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
             text = audited
     except Exception:  # noqa: BLE001
         pass
+    propose_levels(recipe, runs, db, user, market, trace)   # G4: 关键位 → 待确认标注
     yield "done", text

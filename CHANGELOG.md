@@ -1,3 +1,34 @@
+## feat: P0/P1/P2/P3 四线合并 —— 管线上下文、结论上图、提案工具匹配、治理配方拆解（2026-10-22，未发版）
+
+三个并行分支（各自独立 worktree、文件不相交）合入后的整块说明。
+
+**P0 管线架构修复（`src/harness/pipeline.py`）**
+- `_split_pipeline_tools()` 把配方工具分 `data_tools`（取数 lane）/ `post_tools`（`fallback=False`
+  的记录类工具）：取数阶段不再盲调只吃 `symbol` 的记录类工具（那会必然失败并把正常的 run 污染成
+  `degraded`，v0.43.x 治理页第 11 步那条假轨迹就是这么来的）。
+- 记录类工具的 schema 只在**结论轮**挂给模型（当前 `note_new_dimension` 已按 v0.43.4 从配方摘除，
+  这条通道留给后续同类工具）；模型真调了就执行 + 记轨迹，只调工具没写正文会补一次无工具生成。
+- `session_context()` 把 chat 层拼好的会话上下文（长期记忆 / 持仓 / 交易画像 / 页面视图）剥出后
+  以 `context=` 传进 `compose_prompt`：管线模式不再「拿着同一份证据却不知道面对谁、持什么仓」。
+  人设与配方块先剥掉（「优先调用 dossier」那类要求与管线模式直接冲突），对不上宁可返回空串。
+
+**P1 原生融合（G4 结论上图 + 圈选区间实算）**
+- `actions.propose_scenario_annotations()`：情景矩阵算出的支撑/阻力 → **待确认** K 线标注，
+  按 `(user_id, symbol, label)` 去重（价格变了原地更新，不堆 pending）。
+- `pipeline.propose_levels()` 在管线收尾时触发它（`db`/`user` 由 chat 层同一行传入，chat.py 零新增行）。
+- `trend_profile.compute_range_summary()` + `viewstate.extract_selection_range()`：K 线框选一段后，
+  区间涨跌 / 高低点 / 最大回撤 / 量比自动进上下文（「这段为什么跌」不再靠猜日期）。
+
+**P2 提案 → 现有工具匹配**：`harness_proposals.match_candidate_tools()` 在提案面板直接提示
+「可挂载现有工具：get_fundamentals_detail」—— 66 个已注册工具里早就有，只是没挂进配方。
+
+**P3 治理看板配方质量**：`/copilot/metrics` 按配方拆 `ok_rate / degraded_runs / error_runs /
+zero_tool_runs / avg_elapsed_ms`；轨迹表补 `配方` 与 `状态` 两列，能一眼看出哪份配方在拉胯。
+
+验收：后端 191 passed + 规格门禁 19/19 (32 用例)、前端 tsc 0 错 / vitest 38 passed / UI-RULES OK。
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## feat: 提案候选工具匹配(P2) + 治理看板配方质量拆解(P3)（2026-10-22，未发版）
 
 ### P2 —— 「提案」不等于「能力不存在」

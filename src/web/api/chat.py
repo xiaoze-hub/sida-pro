@@ -1170,7 +1170,7 @@ async def _run_tool_loop_inner(
         if stream:
             _hit = False
             async for _k, _v in _pipeline_answer_stream(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
             ):
                 _hit = True
                 yield _k, _v
@@ -1178,7 +1178,7 @@ async def _run_tool_loop_inner(
                 return
         else:
             _ptxt = await _pipeline_answer(
-                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx
+                ai_client, _route.recipe, _utext, _REQ_BOUND.get(), _px, trace=_trace, context=_pctx, db=db, user=user
             )
             if _ptxt:
                 yield "text", _ptxt
