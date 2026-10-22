@@ -1,3 +1,19 @@
+## release: v0.42.4（v0.42.2/v0.42.3 都没发出去：改了契约却没改引用它的测试）（2026-10-22）
+
+**当前生产仍是 v0.42.1** —— v0.42.2 与 v0.42.3 的 CI 全红，两次都没部署。
+
+原因是我改契约时漏改了一个旧用例：`tests/test_syslog.py::test_scheduler_missed_job_reported`
+断言「missed job 应落盘」，而 v0.42.2 的改动正是把 missed 从错误表里拿掉。
+我只跑了 `test_error_tracker.py`，没反查还有谁在断言这条契约 → CI 红。
+
+已修：该用例改名为 `test_scheduler_missed_job_is_metric_not_error`，断言新契约
+（`recent_errors` 不含 missed / `missed_counts()` 计数 / `/logs/errors.scheduler_missed` 可见）。
+
+**教训**：改契约前先 `grep -rn "<契约关键词>" tests/`。这次的关键词就是
+`scheduler job missed` —— 一条 grep 能省两轮 CI。
+
+本版内容 = v0.42.2（调度噪声）+ v0.42.3（竞价回放）+ 这个测试修复。
+
 ## release: v0.42.3（竞价页盘后报废：库里有 254 条归档却只回"无数据"）（2026-10-22）
 
 外部方案里"非竞价时段只显示 0 只"这条**核实为真**，但它给的后端文件不存在，改按现有结构实现。
