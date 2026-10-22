@@ -142,6 +142,39 @@ def _is_retryable_error(e: Exception) -> bool:
     return any(x in err_name for x in ("timeout", "connection", "internalserver"))
 
 
+def _sanitize_tools(tools):
+    """把工具 schema 里所有 `description` 归一成**字符串**。
+
+    2026-10-22 线上事故：`get_stock_factors` 的 description 因为多写了一个逗号变成 tuple，
+    json 序列化后是**数组**，agnes 网关直接 500：
+        json: cannot unmarshal array into Go struct field ...description of type string
+    而且它只在**全量工具集**的兜底路径上发作（配方路径的工具子集恰好不含它），
+    表现成「问价这种最普通的问题直接报 AI 服务不可用」。多家 OpenAI 兼容网关都有这条约束，
+    所以在**发送前**统一归一，不依赖每个 schema 的作者都不手滑。
+    """
+    if not tools:
+        return tools
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k == "description" and not isinstance(v, str):
+                    if isinstance(v, (list, tuple)):
+                        node[k] = "".join(str(x) for x in v)
+                    elif v is None:
+                        node[k] = ""
+                    else:
+                        node[k] = str(v)
+                else:
+                    _walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                _walk(v)
+
+    _walk(tools)
+    return tools
+
+
 class AIClient:
     """OpenAI 协议兼容的 AI 客户端"""
 
@@ -437,7 +470,7 @@ class AIClient:
         }
         # 空 tools 有些 OpenAI 兼容服务会 400；轮次用尽时的"无工具总结"就走这条分支
         if tools:
-            create_kwargs["tools"] = tools
+            create_kwargs["tools"] = _sanitize_tools(tools)
 
         try:
             response, _latency_ms = await self._call_with_retry(
@@ -476,10 +509,11 @@ class AIClient:
         create_kwargs = {
             "model": self.model,
             "messages": messages,
-            "tools": tools,
             "temperature": temperature,
             "stream": True,
         }
+        if tools:
+            create_kwargs["tools"] = _sanitize_tools(tools)
         try:
             stream = await self.client.chat.completions.create(**create_kwargs)
         except TypeError:
