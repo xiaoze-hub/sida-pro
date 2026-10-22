@@ -4,6 +4,10 @@ icon: "🔥"
 desc: 09:15–09:25 集合竞价：爆量抢筹、撤单真伪、开盘方向。
 when: [竞价, "9:25", 抢筹, 高开]   # 2026-10-21: 去掉「撤单」—— 它会抢走盘中的撤单问题, 撤单归 intraday_analyst
 skills: [auction]
+# 2026-10-23 全市场确定性管线：竞价问题的核心事实（异动榜/竞价快照/人气）都不需要代码,
+# 用 {} 直接跑; 要 symbol 的三个（撤单意图/行情/主力）按自选展开, 没有自选就如实写「未取到」。
+scope: market
+pipeline: true
 tools:
   - scan_auction_anomaly
   - get_auction_data

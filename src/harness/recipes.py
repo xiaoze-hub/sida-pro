@@ -38,6 +38,12 @@ class Recipe:
     # 实测同一问题工具集合 Jaccard 只有 0.57，让模型"选哪几个"就是方差源；
     # 管线化把这一步拿走，Jaccard 天然 = 1.0。
     pipeline: bool = False
+    # 配方的天然口径（2026-10-23）：
+    #   "symbol" = 问题是"某只票怎么样"，管线需要能解析出代码（symbols_of）；
+    #   "market" = 问题是"今天市场怎么样"，没有标的 —— 交给 pipeline_market 跑全市场取数，
+    #              要 symbol 的工具按用户自选/持仓展开，展不开就如实写「未取到」。
+    # 只是**声明**，不改变路由；真正决定走哪条管线的仍是 `pipeline` + 这个字段的组合。
+    scope: str = "symbol"
 
     def public(self) -> dict:
         """给前端 /api/copilot/agents 的元信息（不含提示词正文，避免泄露与大包体）。"""
@@ -50,6 +56,19 @@ class Recipe:
             "tool_count": len(self.tools),
             "output_sections": list(self.output_sections),
         }
+
+
+def _parse_scope(raw) -> str:
+    """`scope` 只认 symbol / market；写错就当默认（symbol = 旧行为），并留一行日志。
+
+    宁可退回旧行为，也不许把一份单标的配方误判成全市场配方 —— 后者会在
+    没有自选时静默少跑一半工具，用户只看到一堆「未取到」。
+    """
+    val = str(raw or "symbol").strip().lower()
+    if val in ("symbol", "market"):
+        return val
+    logger.warning("配方 scope=%r 非法，按 symbol 处理", raw)
+    return "symbol"
 
 
 def _parse(path: Path) -> Recipe:
@@ -67,6 +86,7 @@ def _parse(path: Path) -> Recipe:
         skills=tuple(str(x) for x in (raw.get("skills") or ())),
         priority=int(raw.get("priority") or 0),
         pipeline=bool(raw.get("pipeline") or False),
+        scope=_parse_scope(raw.get("scope")),
         output_sections=tuple(str(x) for x in (raw.get("output_sections") or ())),
         max_tool_calls=int(budget.get("max_tool_calls") or 10),
         prompt_fragment=str(raw.get("prompt_fragment") or "").strip(),

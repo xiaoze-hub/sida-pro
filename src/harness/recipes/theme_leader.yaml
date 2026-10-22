@@ -5,6 +5,10 @@ desc: 同题材内定位龙头/中军/跟风：涨幅排名、成交额排名、
 # 与 premarket_strategist 的「题材主线」不重叠：那条问的是今天炒什么，这条问的是题材里谁说了算。
 when: [题材龙头, 板块地位, 谁是龙头, 跟风, 中军, 板块内, 概念热度]
 # 不设 pipeline：这类问题常只给板块名不给代码，交给模型在工具白名单内选更稳。
+# 2026-10-23 复核：7 个工具里 5 个 required 含 symbol（sectors/main_intent/decision_pioneer/
+# technical/catalyst），市场级只剩 hot_stocks + sentiment_cycle —— 展不开标的时跑管线
+# 会退化成"两个工具硬答板块地位"，比多轮 loop 更差。故 scope 保持默认 symbol、
+# pipeline 保持关闭；等有板块→成分股解析（板块名 → 代码）再谈。
 tools:
   - get_stock_sectors
   - get_hot_stocks

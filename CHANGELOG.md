@@ -1,3 +1,57 @@
+## feat: 全市场/多标的确定性管线 —— 盘前/盘后/竞价/盘中从多轮 loop 转确定性取数（2026-10-23，未发版）
+
+**问题**：11 份配方里只有 5 份单标的诊断走确定性管线（`pipeline: true`，harness 自己按序调工具，
+模型只写结论）。其余 6 份（竞价猎手 / 盘前策略官 / 盘后复盘官 / 盘中盯盘官 / 风控裁判 / 题材龙头定位）
+仍在多轮 tool loop 里让模型自选工具：2~4 个 LLM round-trip、p50 45~90s、工具集合 Jaccard 0.57。
+它们被留下的真正原因不是「工具要代码」，而是 `pipeline.symbols_of()` 对**全市场问题**返回 `[]`
+（"今天怎么看" 里没有 6 位代码），管线连门都进不去。
+
+**新模块 `src/harness/pipeline_market.py`（纯增量，未接线）**
+- `run_market_pipeline(recipe, executor, *, market, trace, watchlist)`：按工具 schema 的 `required`
+  三段处置 ——
+  ① `required` 为空 → 用 **`{}`** 直接跑（hot_stocks / sentiment_cycle / market_news /
+     strategy_signals / scan_auction_anomaly / get_auction_data / get_portfolio /
+     get_market_anomalies / notifications …），这些才是全市场结论的主体；
+  ② `required` 含 `symbol` → 有自选/持仓时按 **最多 8 只 × 每只最多 3 个**这类工具展开
+     （`MAX_WATCHLIST_SYMBOLS` / `MAX_SYMBOL_TOOLS`），`market` 只在 schema 声明时才传；
+     没有自选就**不跑**，但留一条 `ok=False, error="no_symbol_scope"` 轨迹 ——
+     结论因此可以诚实写「未取到」，而不是让模型编；
+  ③ 参数填不上（`search_symbols` 要 keyword）记 `unsatisfiable_args:<names>`；注册表里查不到记
+     `unknown_tool`；`schema=None` 的 handler-only 工具记 `no_schema`（当前只有 `get_opportunities`，
+     它是故意不给模型看的荐股口径工具，管线不越权复活它）。三种都不盲调。
+- 纪律与 `pipeline.py` 逐字对齐：复用 `_concurrency()` / `PER_TOOL_TIMEOUT` /
+  `_is_heavy_tool` 串行锁 / `PER_TOOL_CHARS=2500` / `TOTAL_EVIDENCE_CHARS=12000` /
+  轨迹 `trace.step`；另加**墙钟预算** `PIPELINE_BUDGET=90s`（展开后最坏 24 次调用 × 60s 超时
+  ÷ 并发 3 = 8 分钟，用户早走了）：到点没发的工具记 `budget_exhausted`。
+- **全部维度都没取到 → 返回 `None`**，调用方回落原多轮 loop（管线挂了不许变成没答案）。
+- `answer_market` / `answer_market_stream`：结论提示词沿用 `compose_prompt` 的规则文本
+  （每个数字要能在证据里找到原文、缺维度写「暂无」、不许推测），并额外要求把本轮**没跑**的维度
+  写成「未取到（原因）」。流式版产出 `("stage", 进度)` → `("delta", 增量)` → `("done", 全文)`；
+  全失败时**不产出 done**（那就是回落的信号）。结论轮 `tools=[]`、`temperature=0.2`，
+  与单标的管线一致；数字对账 `number_audit` 照旧。
+
+**配方元数据 `src/harness/recipes.py`**
+- `Recipe.scope: str = "symbol"`，`_parse` 从 YAML 读 `scope`（大小写不敏感，非法值退回
+  `symbol` 并 warn —— 宁可退回旧行为，也不许把单标的配方误判成全市场）。
+
+**改了的配方（4 份接上，2 份明确不接，理由写进 YAML 注释）**
+- `scope: market` + `pipeline: true`：`auction_hunter`、`premarket_strategist`、
+  `postmarket_reviewer`、`intraday_watcher`（核心事实全靠符号级无关的工具，标的级只是增强）。
+- `risk_judge`：不接 —— 6 个工具里 5 个要 symbol，而 symbol 只能来自 `get_portfolio` 的**返回**
+  （持仓代码），取数阶段拿不到「工具输出里的代码」；硬接的结果是"只有组合汇总、没有每只持仓读数"，
+  而后者正是它的输出段落。要接需先做"持仓代码 → watchlist"预取。
+- `theme_leader`：不接 —— 7 个工具里 5 个要 symbol，市场级只剩 hot_stocks + sentiment_cycle；
+  问题给的是板块名不是代码，展不开标的时跑管线比多轮 loop 更差。
+- 5 份单标的管线配方一字未改（`scope` 默认 `symbol`）。
+
+**未做（留给集成方）**：`src/web/api/chat.py` 的接线（`recipe.pipeline and recipe.scope == "market"`
+→ 这两个入口，并把用户持仓/自选代码作为 `watchlist` 传入）本次**故意不做** —— 该文件由别的任务持有。
+接线前这 4 份配方的行为与今天完全一致（多轮 loop）。
+
+验收：`tests/test_market_pipeline.py` 18 用例 +
+`test_spec_harness_recipes / test_harness_mentions / test_harness_routing / test_w41_core_web_dependency`
+合计 55 passed；规格门禁 19/19 (32 用例) 100%。
+
 ## feat: 单轮取数缓存 —— 同一轮 (symbol, market, days) 只查一次 PG（2026-10-23，未发版）
 
 **问题（实测）**：一轮 `deep_diagnosis` 里 `get_trend_profile` / `get_chip_accumulation` /
