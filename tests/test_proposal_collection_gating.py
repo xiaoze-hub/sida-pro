@@ -81,6 +81,24 @@ def test_deep_diagnosis_budget_covers_mounted_tools():
     assert budget >= len(tools), f"deep_diagnosis 预算 {budget} < 挂载工具数 {len(tools)}"
 
 
+def test_deep_diagnosis_prompt_shows_literal_call_example():
+    """@spec RECIPE-006 — 提示词必须给**字面调用示例**，不能只说「两个参数都必须给」。
+
+    2026-10-22 生产实测：agnes-3.0-flash 在长指令语境下会把工具参数结构搞混 ——
+    同一段提示词里只说「必须给 dimension 与 reason」，它吐的是
+    `{"queries": "...", "symbols": "..."}`（别的工具的字段）或只吐 `{"symbol": "600111"}`，
+    两次生产实测都没入库。换成带一行 `note_new_dimension(dimension="…", reason="…")` 示例后，
+    同样的提问稳定吐出正确参数。
+
+    这条守卫就是钉住那行示例：删掉它，采集会**静默归零**（工具照样被调用、永远失败）。
+    """
+    frag = str(_recipe("deep_diagnosis").get("prompt_fragment") or "")
+    assert "note_new_dimension(dimension=" in frag, (
+        "deep_diagnosis 提示词里缺字面调用示例 —— 模型会吐错参数结构，提案表会静默归零"
+    )
+    assert "reason=" in frag
+
+
 def test_collection_tool_declares_no_fallback():
     """@spec RECIPE-006 — 兜底路径服务闲聊/问价，采集工具绝不能进。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY, no_fallback_tool_names
