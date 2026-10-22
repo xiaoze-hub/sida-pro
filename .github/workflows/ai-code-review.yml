@@ -1,0 +1,74 @@
+# AI 代码审查门禁 —— 用 alibaba/open-code-review 审 PR diff
+#
+# 定位: 审「这次改动引入了什么缺陷」(bug/安全/性能)。
+#       与 spec-gate.yml 互补:
+#         spec-gate  → 审「承诺有没有测试守着」(缺失类问题)
+#         本 workflow → 审「代码里有没有具体缺陷」(存在类问题)
+#
+# 走 PR diff 而不是全仓 scan: 全仓一次 18 万 token 起步, CI 里不现实。
+#
+name: ai-code-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0   # 需要 base 分支做 merge-base 比对
+
+      - name: Setup Node
+        uses: actions/setup-node@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          node-version: '24'
+
+      - name: Install open-code-review
+        run: npm install -g @alibaba-group/open-code-review
+
+      # 自定义网关配置(gemini-sub / codebuddy 走 OpenAI 兼容协议)
+      # ⚠️ 网关只认自定义头 x-gemini-sub-local-key, Authorization: Bearer 会被 401
+      - name: Configure provider
+        env:
+          OCR_API_KEY: ${{ secrets.OCR_API_KEY }}
+          OCR_LOCAL_KEY: ${{ secrets.OCR_LOCAL_KEY }}
+        run: |
+          ocr config set provider ls-gemini
+          ocr config set custom_providers.ls-gemini.url "${{ vars.OCR_GATEWAY_URL }}"
+          ocr config set custom_providers.ls-gemini.protocol openai
+          ocr config set custom_providers.ls-gemini.model "${{ vars.OCR_MODEL }}"
+          ocr config set custom_providers.ls-gemini.api_key "$OCR_API_KEY"
+          if [ -n "$OCR_LOCAL_KEY" ]; then
+            ocr config set custom_providers.ls-gemini.extra_headers "x-gemini-sub-local-key=$OCR_LOCAL_KEY"
+          fi
+
+      - name: AI review (SARIF)
+        id: review
+        continue-on-error: true   # 审查失败不该挡合并 —— 先看结果再定策略
+        run: |
+          ocr review --from origin/main --to origin/${{ github.head_ref }} \
+            --format sarif --output ocr.sarif || echo "review failed, continuing"
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ocr-sarif
+          path: ocr.sarif
+          if-no-files-found: ignore
+
+      # 接 GitHub Code Scanning(需要 security-events: write)
+      - name: Upload to Code Scanning
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@b611e93910a8f0b3ceb315d10c1249f18bca82e4e # v3
+        with:
+          sarif_file: ocr.sarif
+          category: ai-code-review

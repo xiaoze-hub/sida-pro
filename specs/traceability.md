@@ -6,7 +6,7 @@
 
 | 规格 ID | 摘要 | 规格位置 | 守卫测试 |
 |---|---|---|---|
-| `DATA-001` | `get_capital_flow` 的 `caliber` 必须显式包含「禁止据此判定主力意图」类红线 —— 它是按单金额四档归类，不是逐笔方向 | `specs/data/caliber.md:15` | `tests/test_spec_caliber.py:12` `test_capital_flow_caliber_warns_against_intent_use`<br>`tests/test_spec_data_caliber.py:25` `test_capital_flow_caliber_has_redline` |
+| `DATA-001` | `get_capital_flow` 的 `caliber` 必须显式包含「禁止据此判定主力意图」类红线 —— 它是按单金额四档归类，不是逐笔方向 | `specs/data/caliber.md:15` | `tests/test_spec_data_caliber.py:25` `test_capital_flow_caliber_has_redline` |
 | `DATA-002` | 方向性判定只能走逐笔口径：`require_directional()` 对四档口径必须抛 `CaliberViolationError`，而 `get_main_intent` 的 caliber 必须是逐笔 | `specs/data/caliber.md:16` | `tests/test_spec_caliber.py:21` `test_directional_use_requires_tick_caliber`<br>`tests/test_spec_data_caliber.py:37` `test_directional_requires_tick_caliber` |
 | `DATA-003` | K 线读数必须带时点标注 `as_of`（盘中合成的今日 bar 另标 `partial`）—— 缺了它，昨日数据会被当成今日行情 | `specs/data/caliber.md:17` | `tests/test_spec_caliber.py:34` `test_kline_payload_keeps_asof_marker`<br>`tests/test_spec_data_caliber.py:55` `test_kline_reads_carry_as_of` |
 | `RECIPE-001` | 每份 recipe 必须声明 `acceptance`（≥1 条）—— 没有验收标准的配方等于没有承诺，改坏了没人能发现 | `specs/harness/recipes.md:26` | `tests/test_spec_harness_recipes.py:26` `test_every_recipe_declares_acceptance` |

@@ -370,3 +370,43 @@ P3         trace 回放视图
 | 界面=f(事件日志) | 让"配方改好改坏"从人工抽检 18 次变成可回放对比 |
 
 **不借的**：客户端外壳、TS 栈、浏览器沙箱、帧协议 —— 这些是它的场景约束，不是它的优点。
+
+---
+
+## 附: 采纳 alibaba/open-code-review(2026-10-22 实测)
+
+除规格追溯门外, 另接了阿里开源的 `alibaba/open-code-review`(v1.13.3, Apache-2.0, Go)
+作为**代码缺陷审查**门禁。两者互补, 缺一不可:
+
+| 工具 | 查什么 | 类型 |
+|---|---|---|
+| `scripts/trace_specs.py`(本方案) | 承诺↔测试的**缺失** | 存在性问题 |
+| `ocr scan/review` | 代码里的**具体缺陷** | 缺失性问题 |
+
+**实测配置**(接本地 gemini-sub 网关):
+```bash
+ocr config set provider ls-gemini
+ocr config set custom_providers.ls-gemini.url http://127.0.0.1:8790/v1
+ocr config set custom_providers.ls-gemini.protocol openai
+ocr config set custom_providers.ls-gemini.model gemini-3.8-flash-medium
+ocr config set custom_providers.ls-gemini.api_key "$KEY"
+ocr config set custom_providers.ls-gemini.extra_headers "x-gemini-sub-local-key=$KEY"
+```
+⚠️ 两个坑: model 要设在 **provider 下**(不是 llm.model);
+网关只认自定义头 `x-gemini-sub-local-key`, `Authorization: Bearer` 会 401。
+
+**实测产出**(SIDA-Pro src/harness 22 文件):
+- 5 条评论 → 逐条核实 → **3 条真问题**(已修)
+  1. `[high/bug]` run_stream: cancel 后不 await → 任务悬挂 + CancelledError
+  2. `[medium]` load_recipes: `except Exception: continue` 静默吞 YAML 解析错误
+  3. `[low]` trace.py: `datetime.utcnow()` 自 3.12 废弃
+- **2 条误报**,核实后不改(gather return_exceptions / 裸 raise)
+
+**关键发现**: `ocr` 只报"看得见"的问题 —— 审 `trace_specs.py`(已知有弱点)时 **0 条评论**,
+查不出"规格文件没被门禁覆盖"这类缺失。所以**不能替代规格追溯门禁**。
+
+**项目级规则** `.opencodereview/rule.json`: 按目录给审查焦点(harness/chat/web-api/core/db),
+带规则后同一文件的问题从泛泛的 "security" 变成精确指认 `out or schemas`。
+
+**CI**: `.github/workflows/ai-code-review.yml` 审 PR diff(不审全仓 —— 全仓一次 18 万 token),
+输出 SARIF 2.1.0 接 GitHub Code Scanning。
