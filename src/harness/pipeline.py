@@ -22,6 +22,7 @@ left_diagnosis 12 个工具，单工具 1~2.5s，一轮 15~30s，占 41s p50 的
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -47,20 +48,157 @@ PER_TOOL_CHARS = 2500
 TOTAL_EVIDENCE_CHARS = 12000
 MAX_SYMBOLS = 2
 
+# 会话上下文字符上限：画像/记忆/持仓/视图全塞进结论 prompt 会挤掉证据本身。
+MAX_CONTEXT_CHARS = 8000
+
+# 记录类工具（`fallback=False`，当前只有 note_new_dimension）：只写库、不取数、不返回证据。
+# 它们出现在配方 `tools` 里只表示"允许模型在写结论时调用"，**绝不能在取数阶段盲调** ——
+# 取数阶段只给 `{"symbol": sym}`，而这类工具要 dimension/reason，于是必然参数校验失败；
+# 更糟的是 trace 里会多出一条假的工具调用（v0.43.2 真机第 11 步 `note_new_dimension({"symbol": "600111"})`
+# 就是管线留下的，不是模型调的，模型那时连工具都没拿到）。注册表不可用时用它兜底。
+_POST_TOOL_FALLBACK = frozenset({"note_new_dimension"})
+
+# 记录类工具已经调用、但模型还没写正文时，补一次"无工具"生成用的追问。
+_RECORDED_MSG = {
+    "role": "user",
+    "content": "（记录类工具已执行完毕，不要再调用任何工具，请现在直接按段落输出结论正文。）",
+}
+
+# chat 层 inject_recipe 拼进 system 的片段起点：管线自带 prompt_fragment，不要重复喂。
+_RECIPE_BLOCK_MARK = "--- 本轮由用户指定的内置智能体"
+
 
 def _ms(t0: float) -> int:
     return int((_time.perf_counter() - t0) * 1000)
 
 
 def _record(trace, tool: str, symbol: str, *, ok: bool, ms: int,
-            error: str | None = None, result: str | None = None) -> None:
+            error: str | None = None, result: str | None = None,
+            args: dict | None = None) -> None:
     """管线里的工具调用也要进轨迹：否则治理页看不到，Jaccard 也没法从库里量。"""
     if trace is None:
         return
     try:
-        trace.step(tool, {"symbol": symbol}, ok=ok, error=error, result=result, elapsed_ms=ms)
+        trace.step(tool, {"symbol": symbol, **(args or {})}, ok=ok, error=error,
+                   result=result, elapsed_ms=ms)
     except Exception:  # noqa: BLE001 - 轨迹是旁路
         pass
+
+
+def post_tool_names() -> frozenset[str]:
+    """记录类工具名（`fallback=False`）：只写库、不取数，不能进取数 lane。
+
+    从注册表实时取，避免这里和 registry 各写一份名单漂移；注册表不可用（单测隔离、
+    循环导入早期）时退回已知名单，宁可少跑一个取数工具，也不许盲调记录类工具。
+    """
+    try:
+        from src.agents.chat.registry import no_fallback_tool_names
+
+        return frozenset(no_fallback_tool_names())
+    except Exception:  # noqa: BLE001 - 注册表拿不到就用兜底名单
+        logger.warning("注册表不可用，记录类工具按兜底名单处理: %s", sorted(_POST_TOOL_FALLBACK))
+        return _POST_TOOL_FALLBACK
+
+
+def _split_pipeline_tools(tools) -> tuple[list[str], list[str]]:
+    """把配方工具分两段：`data_tools`（取数，按序跑）/ `post_tools`（记录，写结论时才给模型）。
+
+    配方里的 `tools` 一直是"允许用哪些"，不是"全都由系统跑"。取数阶段只能跑取数工具：
+    记录类工具的参数是 dimension/reason，用 `{"symbol": sym}` 调必然失败并污染轨迹。
+    """
+    post_names = post_tool_names()
+    data_tools: list[str] = []
+    post_tools: list[str] = []
+    for tool in tools or ():
+        name = str(tool)
+        (post_tools if name in post_names else data_tools).append(name)
+    return data_tools, post_tools
+
+
+def _post_schemas(post_tools) -> list[dict]:
+    """记录类工具的 schema（写结论时挂给模型），拿不到就当没有 —— 不许因此炸掉作答。"""
+    if not post_tools:
+        return []
+    try:
+        from src.agents.chat.registry import chat_tool_schemas
+        from src.harness.recipes import filter_schemas
+
+        return filter_schemas(chat_tool_schemas(), frozenset(post_tools))
+    except Exception:  # noqa: BLE001 - schema 是增强, 缺了只能按无工具写结论
+        logger.warning("记录类工具 schema 不可用，本轮按无工具写结论: %s", sorted(post_tools))
+        return []
+
+
+def _tc_parts(tc) -> tuple[str, dict]:
+    """从 tool_call（对象或 dict）里取 (name, args)；字段缺失一律当空，绝不抛。"""
+    fn = getattr(tc, "function", None)
+    if fn is None and isinstance(tc, dict):
+        fn = tc.get("function")
+    name = getattr(fn, "name", None)
+    if name is None and isinstance(fn, dict):
+        name = fn.get("name")
+    raw = getattr(fn, "arguments", None)
+    if raw is None and isinstance(fn, dict):
+        raw = fn.get("arguments")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except (TypeError, ValueError):
+            raw = {}
+    return str(name or ""), dict(raw or {}) if isinstance(raw, dict) else {}
+
+
+async def _run_post_calls(final, post_tools, executor, trace=None, symbol: str = "") -> bool:
+    """执行结论轮里模型对记录类工具的调用，返回"是否真的调过"。
+
+    只执行 `post_tools` 里的名字：取数工具在管线模式已由 `_run_symbol` 跑过，
+    模型再点一次没有意义（那边没有证据可加，还可能是幻觉出来的工具名）。
+    这类工具只写库不返回证据，所以放在结论生成之后执行不会影响正文。
+    """
+    called = False
+    for tc in list(getattr(final, "tool_calls", None) or []):
+        name, args = _tc_parts(tc)
+        if name not in post_tools:
+            continue
+        called = True
+        t0 = _time.perf_counter()
+        try:
+            out = await executor(name, args)
+        except Exception as exc:  # noqa: BLE001 - 记录是旁路, 失败不许影响作答
+            _record(trace, name, symbol, ok=False, error=type(exc).__name__, ms=_ms(t0), args=args)
+            continue
+        _record(trace, name, symbol, ok=True, ms=_ms(t0), result=str(out or ""), args=args)
+    return called
+
+
+def session_context(messages, base_prompt: str = "") -> str:
+    """从 chat 层构建的 messages 里抽出"会话上下文"（画像/记忆/持仓/视图）。
+
+    chat 层把这些块都拼在 `SYSTEM_PROMPT` 之后（`--- 当前数据 ---`、`--- 用户页面快照 ---`、
+    `【当前视图】` …）。管线模式原来整段丢掉，模型于是拿着同一份证据、却不知道面对的是谁、
+    在哪个页面、持什么仓 —— 结论口吻与实际持仓脱节。
+    `base_prompt` 传人设原文时先把它剥掉：人设是通用指令，"必须优先调用 get_stock_dossier"
+    这类要求与管线模式（工具由系统调）直接冲突。传了却一条都对不上 → 返回空串，
+    宁可没有上下文，也不要把人设当上下文喂回去。
+    """
+    if not isinstance(messages, (list, tuple)):
+        return ""
+    base = (base_prompt or "").strip()
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "system":
+            continue
+        text = m.get("content")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if base:
+            if base not in text:
+                continue  # 不是那条拼了人设的 system（例如另一段人设笔记），跳过
+            text = text.split(base, 1)[1]
+        text = text.split(_RECIPE_BLOCK_MARK, 1)[0].strip()
+        if text:
+            return text[:MAX_CONTEXT_CHARS]
+    return ""
+
 _CODE_RE = re.compile(r"(?<!\d)((?:00|30|60|68|83|87|43)\d{4})(?!\d)")
 
 
@@ -149,9 +287,12 @@ async def _run_symbol(recipe, sym: str, executor, market: str, trace=None, on_st
 
     - 普通工具占 `PIPELINE_CONCURRENCY` 个信号量槽；
     - TQ 类工具先拿串行锁再拿槽（锁在外层：只有一个 TQ 在跑，不会占满槽位干等）；
-    - 结果按 `recipe.tools` 下标回填，**输出顺序 == 配方顺序**，与谁先跑完无关。
+    - 结果按 `recipe.tools` 下标回填，**输出顺序 == 配方顺序**，与谁先跑完无关；
+    - 记录类工具（`fallback=False`）**不进取数 lane**：它们的参数是 dimension/reason，
+      用 `{"symbol": sym}` 调必然失败，还会在轨迹里留一条假的工具调用；
+    - `extra` 给同族工具补充入参（如事实源工具要的 `days`），取数工具默认只要 symbol/market。
     """
-    tools = list(recipe.tools)
+    tools = _split_pipeline_tools(recipe.tools)[0]
     slots: list[tuple[bool, str | None, str | None, int] | None] = [None] * len(tools)
     sem = asyncio.Semaphore(_concurrency())
     tq_lock = asyncio.Lock()
@@ -221,7 +362,7 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
     """
     results: list[PipelineRun] = []
     errors: list[str] = []
-    total = len(symbols) * len(recipe.tools)
+    total = len(symbols) * len(_split_pipeline_tools(recipe.tools)[0])
     done = 0
     for sym in symbols:
         q: asyncio.Queue = asyncio.Queue()
@@ -257,16 +398,35 @@ async def run_stream(recipe, symbols: list[str], executor, market: str = "CN",
     yield "runs", (results, errors)
 
 
-def compose_prompt(recipe, runs: list[PipelineRun], question: str) -> tuple[str, str]:
-    """把管线结果拼成 (system, user)。system 说明格式，user 放证据。"""
+def compose_prompt(recipe, runs: list[PipelineRun], question: str,
+                   context: str = "", post_tools=()) -> tuple[str, str]:
+    """把管线结果拼成 (system, user)。system 说明格式，user 放证据。
+
+    `context` 是 chat 层构建的会话上下文（长期记忆/持仓/交易画像/页面视图）。
+    管线原来把它整段丢掉：同一份证据，不知道面对谁、在哪个页面、持什么仓 ——
+    结论口吻与实际持仓脱节（问"我这只还能拿吗"却不知道成本价）。这里补回。
+
+    `post_tools` 非空表示本轮允许模型在写结论时调用**记录类工具**（只写库、不取数），
+    提示词里要给它这个许可，否则模型只能干看着缺口不说。
+    """
     sections = " / ".join(recipe.output_sections) if recipe.output_sections else ""
-    system = (
-        (recipe.prompt_fragment or "")
-        + "\n\n以下是本轮**已经取到**的全部数据（由系统按固定顺序调用，你没有调用工具的能力）。"
-        "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
-        "不要补充任何未列出的数据，也不要推测。"
-        + (f"\n输出段落：{sections}" if sections else "")
-    )
+    if post_tools:
+        rule = (
+            "\n\n以下是本轮**已经取到**的全部数据（由系统按固定顺序调用，你不能再调取数工具）。"
+            "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
+            "不要补充任何未列出的数据，也不要推测。"
+            f"\n唯一例外：若用户明确要的某个维度本轮证据里**确实没有**，可以调用一次该记录工具"
+            f"（{', '.join(post_tools)}）记下缺口；它只记录、不返回数据，也不会让本轮多出这个维度。"
+        )
+    else:
+        rule = (
+            "\n\n以下是本轮**已经取到**的全部数据（由系统按固定顺序调用，你没有调用工具的能力）。"
+            "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
+            "不要补充任何未列出的数据，也不要推测。"
+        )
+    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "")
+    if context:
+        system += "\n\n--- 会话上下文（用户本人 / 当前页面 / 持仓与偏好）---\n" + context
     blocks = [f"【用户问题】{question}"]
     used = 0
     for pr in runs:
@@ -284,7 +444,7 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str) -> tuple[str,
 
 
 async def answer(ai_client, recipe, question: str, bound: str | None, executor,
-                 market: str = "CN", trace=None) -> str | None:
+                 market: str = "CN", trace=None, context: str = "") -> str | None:
     """完整跑一条管线并写结论。返回 None = 管线没跑成，调用方回落到多轮 loop。"""
     syms = symbols_of(question, bound, allow_names=True)
     if not syms:
@@ -294,9 +454,27 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
     if not any(r.usable for r in runs):
         logger.warning("管线全部失败，回落 tool loop：%s", errors[:3])
         return None
-    system, user_block = compose_prompt(recipe, runs, question)
+    post_tools = _split_pipeline_tools(recipe.tools)[1]
+    post_schemas = _post_schemas(post_tools)
+    system, user_block = compose_prompt(
+        recipe, runs, question, context, post_tools if post_schemas else ()
+    )
     try:
-        text = await ai_client.chat(system, user_block, temperature=0.2)
+        if post_schemas and hasattr(ai_client, "chat_with_tools"):
+            # 记录类工具只在结论轮可见：先让它写正文，顺带把缺口记下来。
+            msgs = [{"role": "system", "content": system},
+                    {"role": "user", "content": user_block}]
+            final = await ai_client.chat_with_tools(msgs, tools=post_schemas, temperature=0.2)
+            await _run_post_calls(final, post_tools, executor, trace=trace, symbol=syms[0])
+            text = (getattr(final, "content", "") or "").strip()
+            if not text:
+                # 模型只调了记录工具、还没写正文 → 补一次无工具生成（不许交白卷）
+                final2 = await ai_client.chat_with_tools(
+                    msgs + [_RECORDED_MSG], tools=[], temperature=0.2
+                )
+                text = (getattr(final2, "content", "") or "").strip()
+        else:
+            text = await ai_client.chat(system, user_block, temperature=0.2)
     except Exception as exc:  # noqa: BLE001 - 写结论失败就当没加成，回落 loop
         logger.warning("管线写结论失败，回落 tool loop：%s", type(exc).__name__)
         return None
@@ -315,7 +493,7 @@ async def answer(ai_client, recipe, question: str, bound: str | None, executor,
 
 
 async def answer_stream(ai_client, recipe, question: str, bound: str | None, executor,
-                        market: str = "CN", trace=None):
+                        market: str = "CN", trace=None, context: str = ""):
     """流式版：边生成边下发。取数 ~5s，生成 25~135s —— 不流式的话用户只能干等。
 
     产出 ("delta", 文本) 若干 → 最后 ("done", 全文)。管线没跑成时直接 return（调用方回落 loop）。
@@ -333,12 +511,18 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
     if not any(r.usable for r in runs):
         logger.warning("管线全部失败，回落 tool loop：%s", errors[:3])
         return
-    system, user_block = compose_prompt(recipe, runs, question)
+    post_tools = _split_pipeline_tools(recipe.tools)[1]
+    post_schemas = _post_schemas(post_tools)
+    system, user_block = compose_prompt(
+        recipe, runs, question, context, post_tools if post_schemas else ()
+    )
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user_block}]
     acc: list[str] = []
     final = None
     try:
-        async for kind, payload in ai_client.chat_with_tools_stream(msgs, tools=[], temperature=0.2):
+        async for kind, payload in ai_client.chat_with_tools_stream(
+            msgs, tools=post_schemas, temperature=0.2
+        ):
             if kind == "delta":
                 acc.append(payload)
                 yield "delta", payload
@@ -346,7 +530,27 @@ async def answer_stream(ai_client, recipe, question: str, bound: str | None, exe
                 final = payload
     except Exception as exc:  # noqa: BLE001 - 流断了就用已收到的部分
         logger.warning("管线流式写结论中断：%s", type(exc).__name__)
+    # 记录类工具在结论轮被调用 → 现在执行（只写库，不影响已下发正文）
+    if post_tools and final is not None:
+        try:
+            await _run_post_calls(final, post_tools, executor, trace=trace, symbol=syms[0])
+        except Exception:  # noqa: BLE001 - 记录是旁路
+            pass
     text = "".join(acc).strip() or (getattr(final, "content", "") or "").strip()
+    if not text and post_tools:
+        # 模型只调了记录工具、还没写正文 → 补一次无工具生成（不许交白卷）
+        try:
+            async for kind, payload in ai_client.chat_with_tools_stream(
+                msgs + [_RECORDED_MSG], tools=[], temperature=0.2
+            ):
+                if kind == "delta":
+                    acc.append(payload)
+                    yield "delta", payload
+                else:
+                    final = payload
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("管线补写结论中断：%s", type(exc).__name__)
+        text = "".join(acc).strip() or (getattr(final, "content", "") or "").strip()
     if not text:
         return
     try:
