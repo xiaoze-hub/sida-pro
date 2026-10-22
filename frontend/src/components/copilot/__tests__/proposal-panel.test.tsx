@@ -77,6 +77,10 @@ beforeEach(() => {
       seen_count: 5,
       first_seen_at: '2026-10-20 09:00:00',
       last_seen_at: '2026-10-21 09:00:00',
+      // P2: 注册表里早就有工具覆盖这个维度（只是没进配方）
+      candidate_tools: [
+        { name: 'get_fundamentals_detail', caliber: '龙虎榜/两融/股东户数/分红/事件(公开数据聚合)' },
+      ],
     },
     {
       id: 3,
@@ -158,6 +162,18 @@ describe('ProposalPanel', () => {
     expect(seen).toEqual(['×5', '×1'])
     const badges = screen.getAllByTestId('proposal-status').map((el) => el.textContent)
     expect(badges).toEqual(['待审', '待审'])
+  })
+
+  it('已有工具覆盖时显示「可挂载现有工具」；没有候选的行不显示这一句', async () => {
+    render(<ProposalPanel />)
+    await waitFor(() => expect(screen.getAllByTestId('proposal-row')).toHaveLength(2))
+
+    // 只有 id=2（股东户数变化）带 candidate_tools → 只出现一行提示
+    const lines = screen.getAllByTestId('proposal-candidate-tools')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].textContent).toBe('可挂载现有工具：get_fundamentals_detail')
+    // 后端给的顺序原样显示，不在前端重排/猜测口径
+    expect(lines[0].getAttribute('title')).toBe('可挂载现有工具：get_fundamentals_detail')
   })
 
   it('待审列表按 seen_count 降序（后端给的是时间序）', async () => {

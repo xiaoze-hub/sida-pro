@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ACTION_LABEL,
   PROPOSAL_TABS,
+  buildCandidateToolsLine,
   buildMetaLine,
   buildSummaryItems,
   buildTopLine,
@@ -198,6 +199,7 @@ export function ProposalPanel({ className = '' }: { className?: string }) {
         <ul className="flex flex-col" data-refreshing={refreshing ? '1' : '0'}>
           {sorted.map((row) => {
             const meta = buildMetaLine(row)
+            const candidatesLine = buildCandidateToolsLine(row)
             const evidence = clipEvidence(row.evidence)
             const expanded = expandedId === row.id
             const pending = decidingId === row.id
@@ -249,6 +251,17 @@ export function ProposalPanel({ className = '' }: { className?: string }) {
                     {meta ? (
                       <p data-testid="proposal-meta" className="mt-1 truncate text-[10px] text-muted-foreground">
                         {meta}
+                      </p>
+                    ) : null}
+                    {/* P2: 已有工具覆盖这个维度 → 先挂工具，而不是排期补数据源。
+                        只做提示（审核人决定），不在这里改配方。 */}
+                    {candidatesLine ? (
+                      <p
+                        data-testid="proposal-candidate-tools"
+                        title={candidatesLine}
+                        className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
+                      >
+                        {candidatesLine}
                       </p>
                     ) : null}
                   </button>

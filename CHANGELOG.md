@@ -1,3 +1,36 @@
+## feat: 提案候选工具匹配(P2) + 治理看板配方质量拆解(P3)（2026-10-22，未发版）
+
+### P2 —— 「提案」不等于「能力不存在」
+
+注册表里有 **66 个工具**，`deep_diagnosis` 只挂 **11 个**。用户提的「股东户数变化」
+其实 `get_fundamentals_detail` 早就能答，只是没进配方 —— 审核人看到一条待审提案时
+无从判断该「挂工具」还是「补数据源」，容易把已有能力当新需求排期。
+
+- `src/core/harness_proposals.py` 新增 `match_candidate_tools(dimension, reason, limit=3)`：
+  在 `CHAT_TOOL_REGISTRY` 上做**纯词面匹配**（中文二字词 + 拉丁词，去掉「数据/分析/变化」
+  这类通用词），**维度侧命中 ≥2 个词才算**（单个「交易」「股东」太廉价），理由只参与排序。
+  采集/记忆/提议类工具（`note_new_dimension` / `remember_preference` / `propose_*`）排除。
+  无匹配 → `[]`，不为了「有东西显示」硬凑。
+- `_row_dict()` 带 `candidate_tools: [{name, caliber}]`，整体 `try/except` 兜底：
+  匹配挂掉也必须能看提案（附注失败不该让整行 500）。
+- 面板每行多一行 muted 提示：`可挂载现有工具：get_fundamentals_detail`（10px、等宽、截断）。
+- **不改任何 YAML 配方**：这里只是给审核人一个事实依据。
+
+### P3 —— 治理看板看不出「哪份配方在坏」
+
+`/copilot/metrics` 的 `by_recipe` 原来只有 `{recipe, runs}`：一份配方跑 10 次全 degraded
+和跑 10 次全 ok，在旧口径里长得一模一样。
+
+- `by_recipe` 每行补 `ok_rate` / `degraded_runs` / `error_runs` / `zero_tool_runs` /
+  `avg_elapsed_ms`（旧字段保留，老调用方不受影响；没测到耗时 → `null`，不写 0ms）。
+- 顶层补 `degraded_rate`（无记录 → `null`，不写 0%）与 `zero_tool_runs`。
+- 治理页 `轨迹` tab：新增「按配方质量 · 近 7 天」小表（运行/ok/降级/错误/零工具/均耗时，
+  非零的降级与错误才上色），轨迹表补 `配方` 与 `状态`（ok/degraded/error 三色）两列 ——
+  原来连用了哪份配方都看不到。
+
+验证：`tests/test_harness_proposals.py`(+9)、`tests/test_copilot_metrics_breakdown.py`(6)、
+`proposal-panel.test.tsx`(+1)、`proposals.test.ts`(+1)。
+
 ## feat: P1 原生融合 —— 情景矩阵关键位自动提议标注 + K 线圈选区间实算（2026-10-22，未发版）
 
 Agent Kernel 的 G4 写的是「结论落在图上（点"标注到图"能在 K 线看到）」。这两件事此前都断在最后一米：

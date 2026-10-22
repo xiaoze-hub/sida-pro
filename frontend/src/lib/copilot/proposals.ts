@@ -42,6 +42,22 @@ export interface ProposalRow {
   first_seen_at?: string | null
   last_seen_at?: string | null
   decided_at?: string | null
+  /**
+   * 可挂载的**已有**工具（P2）。提案 ≠ 能力不存在：注册表里常有工具覆盖这个维度，
+   * 只是没进配方。缺失/为空 → 不显示这一行（不写「无」，那会被读成「平台没有」）。
+   */
+  candidate_tools?: { name: string; caliber?: string | null }[] | null
+}
+
+/**
+ * 候选工具提示文案：「可挂载现有工具：a、b」；没有候选 → 空串（调用方据此不渲染）。
+ * 纯函数放在这里，是为了让 0 个候选与「字段缺失」走同一条路径 —— 两种情况都不显示。
+ */
+export function buildCandidateToolsLine(row: ProposalRow): string {
+  const names = (row.candidate_tools ?? [])
+    .map((t) => String(t?.name ?? '').trim())
+    .filter((n) => n.length > 0)
+  return names.length > 0 ? `可挂载现有工具：${names.join('、')}` : ''
 }
 
 /** stats 端点按维度聚合后的一行（`rows` = 合并了几条原始记录）。 */

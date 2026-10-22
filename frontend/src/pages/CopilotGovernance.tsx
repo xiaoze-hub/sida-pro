@@ -18,6 +18,7 @@ import {
   deleteMemory,
   deleteSchedule,
   getCopilotCost,
+  getCopilotMetrics,
   getCopilotQuotas,
   getMemories,
   getSchedules,
@@ -30,6 +31,7 @@ import {
   putCopilotQuota,
   type CopilotCost,
   type CopilotMemoryRow,
+  type CopilotMetrics,
   type CopilotQuotaRow,
   type CopilotScheduleRow,
   type CopilotRunDetail,
@@ -52,6 +54,25 @@ function ms(v: number | null | undefined) {
 
 function num(v: number | null | undefined) {
   return v == null ? '--' : v.toLocaleString('zh-CN')
+}
+
+/** 0~1 的比率 → 百分比；null（分母不存在）→ `--`，不写 0%。 */
+function rate(v: number | null | undefined) {
+  return v == null ? '--' : `${safeFixed(v * 100, 0)}%`
+}
+
+/** 状态 → 颜色：只有 ok/degraded/error 三种有语义，其它（running）保持中性。 */
+function statusClass(status: string | null | undefined) {
+  switch (String(status || '').toLowerCase()) {
+    case 'ok':
+      return 'text-role-up'
+    case 'degraded':
+      return 'text-role-watch'
+    case 'error':
+      return 'text-role-risk'
+    default:
+      return 'text-muted-foreground'
+  }
 }
 
 export default function CopilotGovernancePage() {
@@ -92,6 +113,7 @@ export default function CopilotGovernancePage() {
 
 function TracesTab() {
   const [rows, setRows] = useState<CopilotRunRow[]>([])
+  const [metrics, setMetrics] = useState<CopilotMetrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<CopilotRunDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -104,6 +126,12 @@ function TracesTab() {
       setRows([])
     } finally {
       setLoading(false)
+    }
+    // 质量拆解单独一段取：它挂了不该把轨迹列表一起抹掉（两件事的可用性互不绑定）。
+    try {
+      setMetrics(await getCopilotMetrics(7))
+    } catch {
+      setMetrics(null)
     }
   }, [])
 
@@ -123,99 +151,179 @@ function TracesTab() {
   }, [])
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-      <section className="rounded-xl border border-border/60 bg-s1">
-        <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-          <span className="text-[12px]">最近 50 轮</span>
-          <button type="button" className="flex items-center gap-1 text-[11px] text-muted-foreground" onClick={() => void load()}>
-            <RefreshCw className="h-3 w-3" /> 刷新
-          </button>
-        </div>
-        {loading ? (
-          <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+    <div className="space-y-3">
+      {/* P3：按配方质量拆解。没有这层，就只能看到「总 ok 率」，看不出是哪份配方在坏。 */}
+      {metrics && metrics.by_recipe.length > 0 ? (
+        <section className="rounded-xl border border-border/60 bg-s1" data-testid="recipe-health">
+          <div className="flex items-baseline justify-between gap-2 border-b border-border/40 px-3 py-2">
+            <span className="text-[12px]">按配方质量 · 近 7 天</span>
+            <span className="text-[10px] text-muted-foreground">
+              总计 <span className="font-mono tabular-nums text-foreground">{num(metrics.runs)}</span> 轮 · 降级率{' '}
+              <span className="font-mono tabular-nums text-foreground">{rate(metrics.degraded_rate)}</span> · 零工具{' '}
+              <span className="font-mono tabular-nums text-foreground">{num(metrics.zero_tool_runs)}</span> 轮
+            </span>
           </div>
-        ) : rows.length === 0 ? (
-          <div className="px-3 py-6 text-[11px] text-muted-foreground">还没有轨迹（提问一次就会产生）</div>
-        ) : (
-          <div className="max-h-[62vh] overflow-y-auto">
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-s1 text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1.5 text-left font-normal">时间</th>
-                  <th className="px-2 py-1.5 text-left font-normal">问题</th>
-                  <th className="px-2 py-1.5 text-right font-normal">工具</th>
-                  <th className="px-2 py-1.5 text-right font-normal">耗时</th>
-                  <th className="px-2 py-1.5 text-right font-normal">token</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr
-                    key={r.run_id}
-                    className="cursor-pointer border-t border-border/30 hover:bg-s2"
-                    onClick={() => void open(r.run_id)}
+          <table className="w-full text-[11px]">
+            <thead className="text-muted-foreground">
+              <tr>
+                <th className="px-2 py-1.5 text-left font-normal">配方</th>
+                <th className="px-2 py-1.5 text-right font-normal">运行</th>
+                <th className="px-2 py-1.5 text-right font-normal">ok</th>
+                <th className="px-2 py-1.5 text-right font-normal">降级</th>
+                <th className="px-2 py-1.5 text-right font-normal">错误</th>
+                <th className="px-2 py-1.5 text-right font-normal">零工具</th>
+                <th className="px-2 py-1.5 text-right font-normal">均耗时</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.by_recipe.map((r) => (
+                <tr key={r.recipe} className="border-t border-border/30" data-testid="recipe-health-row">
+                  <td
+                    className="max-w-[200px] truncate px-2 py-1.5 font-mono text-foreground"
+                    title={r.recipe}
                   >
-                    <td className="whitespace-nowrap px-2 py-1.5 font-mono text-muted-foreground">
-                      {String(r.created_at || '').slice(5, 16)}
-                    </td>
-                    <td className="max-w-[240px] truncate px-2 py-1.5">{r.question || '—'}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{r.tool_calls ?? '--'}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{ms(r.elapsed_ms)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{num(r.tokens)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                    {r.recipe}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums">{num(r.runs)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums">{rate(r.ok_rate)}</td>
+                  <td
+                    className={`px-2 py-1.5 text-right font-mono tabular-nums ${
+                      r.degraded_runs > 0 ? 'text-role-watch' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {num(r.degraded_runs)}
+                  </td>
+                  <td
+                    className={`px-2 py-1.5 text-right font-mono tabular-nums ${
+                      r.error_runs > 0 ? 'text-role-risk' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {num(r.error_runs)}
+                  </td>
+                  <td
+                    className={`px-2 py-1.5 text-right font-mono tabular-nums ${
+                      r.zero_tool_runs > 0 ? 'text-role-watch' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {num(r.zero_tool_runs)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+                    {ms(r.avg_elapsed_ms)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
 
-      <section className="rounded-xl border border-border/60 bg-s1">
-        <div className="border-b border-border/40 px-3 py-2 text-[12px]">回放</div>
-        {detailLoading ? (
-          <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+      <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+          <section className="rounded-xl border border-border/60 bg-s1">
+            <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
+              <span className="text-[12px]">最近 50 轮</span>
+              <button
+                type="button"
+                className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                onClick={() => void load()}
+              >
+                <RefreshCw className="h-3 w-3" /> 刷新
+              </button>
           </div>
-        ) : !detail ? (
-          <div className="px-3 py-6 text-[11px] text-muted-foreground">点左侧任意一行看这轮怎么跑的</div>
-        ) : (
-          <div className="max-h-[62vh] space-y-2 overflow-y-auto px-3 py-2">
-            <div className="space-y-0.5 text-[11px]">
-              <div className="text-muted-foreground">
-                {detail.run.created_at} · 状态 {detail.run.status} · {detail.run.tool_calls} 个工具 · {ms(detail.run.elapsed_ms)}
-              </div>
-              <div className="text-foreground">{detail.run.question || '（无问题文本）'}</div>
+          {loading ? (
+            <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
             </div>
-            {detail.steps.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground">这轮没有工具调用（纯文本回答）</div>
-            ) : (
-              <ol className="space-y-1.5">
-                {detail.steps.map((s) => (
-                  <li key={s.seq} className="rounded-md border border-border/50 px-2 py-1.5">
-                    <div className="flex items-center gap-1.5 text-[11px]">
-                      <span className="font-mono text-muted-foreground">#{s.seq}</span>
-                      <span className="font-medium">{s.tool}</span>
-                      <span className={s.ok ? 'text-role-up' : 'text-role-risk'}>{s.ok ? 'ok' : '失败'}</span>
-                      <span className="ml-auto font-mono text-muted-foreground">{ms(s.elapsed_ms)}</span>
-                    </div>
-                    {s.args ? (
-                      <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={s.args}>
-                        args: {s.args}
+          ) : rows.length === 0 ? (
+            <div className="px-3 py-6 text-[11px] text-muted-foreground">还没有轨迹（提问一次就会产生）</div>
+          ) : (
+            <div className="max-h-[62vh] overflow-y-auto">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-s1 text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-1.5 text-left font-normal">时间</th>
+                    <th className="px-2 py-1.5 text-left font-normal">配方</th>
+                    <th className="px-2 py-1.5 text-left font-normal">状态</th>
+                    <th className="px-2 py-1.5 text-left font-normal">问题</th>
+                    <th className="px-2 py-1.5 text-right font-normal">工具</th>
+                    <th className="px-2 py-1.5 text-right font-normal">耗时</th>
+                    <th className="px-2 py-1.5 text-right font-normal">token</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr
+                      key={r.run_id}
+                      className="cursor-pointer border-t border-border/30 hover:bg-s2"
+                      onClick={() => void open(r.run_id)}
+                    >
+                      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-muted-foreground">
+                        {String(r.created_at || '').slice(5, 16)}
+                      </td>
+                      <td
+                        className="max-w-[110px] truncate px-2 py-1.5 font-mono text-muted-foreground"
+                        title={r.recipe || '(默认)'}
+                      >
+                        {r.recipe || '(默认)'}
+                      </td>
+                      <td className={`px-2 py-1.5 font-mono ${statusClass(r.status)}`}>{r.status || '--'}</td>
+                      <td className="max-w-[240px] truncate px-2 py-1.5">{r.question || '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{r.tool_calls ?? '--'}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{ms(r.elapsed_ms)}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{num(r.tokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-xl border border-border/60 bg-s1">
+          <div className="border-b border-border/40 px-3 py-2 text-[12px]">回放</div>
+          {detailLoading ? (
+            <div className="flex items-center gap-2 px-3 py-6 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
+            </div>
+          ) : !detail ? (
+            <div className="px-3 py-6 text-[11px] text-muted-foreground">点左侧任意一行看这轮怎么跑的</div>
+          ) : (
+            <div className="max-h-[62vh] space-y-2 overflow-y-auto px-3 py-2">
+              <div className="space-y-0.5 text-[11px]">
+                <div className="text-muted-foreground">
+                  {detail.run.created_at} · 状态 {detail.run.status} · {detail.run.tool_calls} 个工具 · {ms(detail.run.elapsed_ms)}
+                </div>
+                <div className="text-foreground">{detail.run.question || '（无问题文本）'}</div>
+              </div>
+              {detail.steps.length === 0 ? (
+                <div className="text-[11px] text-muted-foreground">这轮没有工具调用（纯文本回答）</div>
+              ) : (
+                <ol className="space-y-1.5">
+                  {detail.steps.map((s) => (
+                    <li key={s.seq} className="rounded-md border border-border/50 px-2 py-1.5">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="font-mono text-muted-foreground">#{s.seq}</span>
+                        <span className="font-medium">{s.tool}</span>
+                        <span className={s.ok ? 'text-role-up' : 'text-role-risk'}>{s.ok ? 'ok' : '失败'}</span>
+                        <span className="ml-auto font-mono text-muted-foreground">{ms(s.elapsed_ms)}</span>
                       </div>
-                    ) : null}
-                    {s.result_digest ? (
-                      <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-muted-foreground/90">
-                        {s.result_digest}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </div>
-        )}
-      </section>
+                      {s.args ? (
+                        <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={s.args}>
+                          args: {s.args}
+                        </div>
+                      ) : null}
+                      {s.result_digest ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-muted-foreground/90">
+                          {s.result_digest}
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   )
 }
