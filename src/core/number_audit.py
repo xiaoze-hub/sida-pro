@@ -61,7 +61,21 @@ def _evidence_pool(evidence: str) -> tuple[set[float], list[float]]:
         v = _norm(token)
         if v is not None:
             vals.append(v)
-    return set(vals), vals[:150]
+    # 证据池上限 150 → 400: system 上下文里还有持仓成本/画像, 池子太小会把真数挤出窗口
+    return set(vals), vals[:400]
+
+
+def _diff_set(pool: list[float]) -> set[float]:
+    """两两价差（2 位小数）集合 —— 用来反查「金额 = 价差 × 股数」。
+
+    2026-10-22：模型写「-0.75 元/股 × 4600 股 ≈ -3,450 元」，4600 与 0.752 都在证据里，
+    但 0.752 本身是**算出来的**，不在池子里；于是乘积查不到就被判成编造。
+    """
+    out: set[float] = set()
+    for i, a in enumerate(pool):
+        for b in pool[i + 1:]:
+            out.add(round(abs(a - b), 2))
+    return out
 
 
 def _derived(pool: list[float]) -> set[float]:
@@ -81,7 +95,26 @@ def _derived(pool: list[float]) -> set[float]:
             if a:
                 out.add(round(b / a * 100, 2))
             out.add(round(abs(a - b), 2))
+            # 金额 = 价差 × 股数（「浮亏 -3,450 元」就是这么算的），
+            # 只收量级合理的一对，避免小数相乘产生一堆垃圾候选
+            if abs(a) < 1e6 and abs(b) < 1e6:
+                out.add(round(a * b, 2))
+                out.add(round(abs(a * b), 2))
     return out
+
+
+def _close(v: float, x: float, dp: int = 2) -> bool:
+    """读数与回答里的数是否"同一个数"。
+
+    按**回答里那个数字的小数位**做四舍五入比较，而不是拍一个百分比容差：
+    - 证据 -0.3066 / 回答 0.31  → round(0.3066, 2) == 0.31 ✓
+    - 证据 88.07  / 回答 87.5   → round(88.07, 1) == 88.1 ≠ 87.5 ✗（跨标的串位照样抓住）
+    - 金额类（|x| >= 1000）允许 1%，因为模型常写「≈ -3,450 元」
+    """
+    a, b = abs(v), abs(x)
+    if b >= 1000:
+        return abs(a - b) <= b * 0.01
+    return abs(round(b, dp) - a) <= (10 ** -dp) / 2 + 1e-9
 
 
 def audit(answer: str, evidence: str, question: str = "") -> dict:
@@ -104,7 +137,28 @@ def audit(answer: str, evidence: str, question: str = "") -> dict:
             continue
         if abs(v) in {abs(x) for x in known}:  # 方向符号写法差异
             continue
-        if any(abs(v - d) <= 0.02 for d in derived):
+        dot = token.find(".")
+        dp = 0
+        if dot >= 0:
+            tail = re.match(r"\.(\d+)", token[dot:])
+            dp = len(tail.group(1)) if tail else 0
+        if any(_close(v, d, dp) for d in derived):
+            continue
+        # 金额 = 价差 × 股数（-3,450 元 = 0.752 × 4600）
+        if token.endswith(("元", "万元", "亿元")):
+            _hit = False
+            # 股数/手数不在 extract_claims 的硬数字口径里（纯整数无单位不抓），单独抽出来当乘数
+            _shares = [float(m.group(1)) for m in
+                       re.finditer(r"(?<![\d.])(\d{3,9})\s*(?:股|手)", evidence or "")]
+            for c in _shares + [x for x in pool if abs(x) >= 100]:
+                    _t = abs(v) / abs(c)
+                    if any(abs(round(_t, 2) - d) <= 0.011 for d in _diff_set(pool)):
+                        _hit = True
+                        break
+            if _hit:
+                continue
+        # 四舍五入/精度差异（-0.3066% 写成 0.31%）
+        if any(_close(v, x, dp) for x in known):
             continue
         # 带万/亿的量：允许四舍五入折算（115,000 手写成 11.5 万手不是编造），容差 1.5%
         unit = next((u for u in _UNITS if token.endswith(u)), "")
