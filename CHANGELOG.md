@@ -1,3 +1,25 @@
+## release: v0.42.2（scheduler missed 淹掉错误表：725 条/24h 假异常）（2026-10-22）
+
+按外部改进方案逐条核实后修的第一条（该方案其余主张的核实结论见汇报）。
+
+**症状（已核实）**：`data/error_events.jsonl` 尾部 200KB 里 **725 条**
+`RuntimeError: scheduler job missed: klines-minute-1min / seal-quality-sampler / orderbook-snapshot-sampler`。
+
+**根因（与方案给的根因不同）**：不是调度器抛异常，是**我们自己把它当异常记了** ——
+`error_tracker.install_scheduler_error_tracking` 把 `EVENT_JOB_MISSED` 和 `EVENT_JOB_ERROR`
+一起 `capture_exception`。而 `misfire_grace_time` 用的是 APScheduler 默认 **1 秒**：
+事件循环被一次慢查询/GC 占住 1 秒以上，60 秒级采样任务就被判"错过" → 写一条错误。
+`coalesce` / `max_instances=1` 本来就都配了（方案说"缺这两项"是错的）。
+
+**修法**：
+1. `EVENT_JOB_MISSED` 不再进错误表，改为按任务计数（`missed_counts()`）+ debug 日志；
+   真正的 `EVENT_JOB_ERROR` 照旧捕获。**淹掉监控比没有监控更危险。**
+2. 4 个高频采样器（封单成色 / 十档盘口 / 1 分钟 K 线 / 暗盘逐笔）显式 `misfire_grace_time=30`。
+3. `GET /api/logs/errors` 增加 `scheduler_missed` 字段 —— missed 不是错误，但也不能看不见。
+
+**顺带**：部署脚本补 `-e TDX_QUANT_URL=http://172.27.16.1:5100/`（容器里原本为空，
+每次冷启动都要扫一遍候选网段，日志还报「未配置 TDX_QUANT_URL」）。
+
 ## release: v0.42.1（快答的读数太生：`成交量 421023.0`、只有代码没有名字）（2026-10-22）
 
 v0.42.0 上线后实测：问价 0.6s（原 70s），但**输出是工具原文**，于是露了三个毛刺：

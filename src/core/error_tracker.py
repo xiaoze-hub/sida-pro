@@ -250,6 +250,17 @@ def _clear_state() -> None:
         _last_jsonl_write.clear()
         _recent_occurrences.clear()
         _last_notify.clear()
+    _MISSED_COUNTS.clear()
+
+
+# EVENT_JOB_MISSED 的按任务计数(进程内)。missed 不是错误, 但完全看不见也不对 ——
+# 它说明"采样频率跟不上/事件循环被堵", 应该作为指标暴露给 /system 页, 而不是当异常记。
+_MISSED_COUNTS: dict[str, int] = {}
+
+
+def missed_counts() -> dict[str, int]:
+    """各任务错过执行的累计次数(进程内, 重启归零)。"""
+    return dict(_MISSED_COUNTS)
 
 
 def install_scheduler_error_tracking(scheduler) -> bool:
@@ -275,10 +286,12 @@ def install_scheduler_error_tracking(scheduler) -> bool:
                     exc = RuntimeError(f"scheduler job failed: {exc}")
                 capture_exception(exc, {"source": "scheduler", "job_id": str(job_id)})
             else:
-                capture_exception(
-                    RuntimeError(f"scheduler job missed: {job_id}"),
-                    {"source": "scheduler", "job_id": str(job_id)},
-                )
+                # EVENT_JOB_MISSED 是**调度事件**, 不是异常: 事件循环被占满/机器卡顿时,
+                # 60s 级采样任务的 misfire_grace_time(默认 1s) 一过就会收到这个事件。
+                # 2026-10-22 实测: 24h 内 725 条 "scheduler job missed" 灌满错误表,
+                # 把真正的故障淹了 —— 淹掉监控比没有监控更危险。降级为计数 + debug 日志。
+                _MISSED_COUNTS[str(job_id)] = _MISSED_COUNTS.get(str(job_id), 0) + 1
+                logger.debug("scheduler job missed: %s (累计 %d)", job_id, _MISSED_COUNTS[str(job_id)])
         except Exception:
             pass
 

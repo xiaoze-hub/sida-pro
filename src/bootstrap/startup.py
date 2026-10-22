@@ -349,6 +349,7 @@ async def lifespan(app):
                 id="seal-quality-sampler",
                 name="封单成色采样",
                 replace_existing=True,
+                misfire_grace_time=30,  # 默认 1s 太紧: 事件循环一卡就判 missed
                 max_instances=1,
                 coalesce=True,
             )
@@ -988,6 +989,7 @@ async def lifespan(app):
                 id="darkflow-tick-sampler",
                 name="暗盘逐笔增量采集",
                 replace_existing=True,
+                misfire_grace_time=30,  # 默认 1s 太紧: 事件循环一卡就判 missed
                 max_instances=1,
                 coalesce=True,
             )
@@ -1233,6 +1235,7 @@ async def lifespan(app):
                 id="orderbook-snapshot-sampler",
                 name="十档盘口快照采集",
                 replace_existing=True,
+                misfire_grace_time=30,  # 默认 1s 太紧: 事件循环一卡就判 missed
                 max_instances=1,
                 coalesce=True,
             )
@@ -1254,6 +1257,7 @@ async def lifespan(app):
                 id="klines-minute-1min",
                 name="分钟K线1m滚动入库",
                 replace_existing=True,
+                misfire_grace_time=30,  # 默认 1s 太紧: 事件循环一卡就判 missed
                 max_instances=1,
                 coalesce=True,
             )
