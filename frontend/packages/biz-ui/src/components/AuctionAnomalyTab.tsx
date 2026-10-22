@@ -74,6 +74,8 @@ export interface AuctionAnomalyResp {
   /** 空池原因码: source_unavailable / non_trading_day / non_auction_session / no_anomaly */
   reason?: string | null
   reason_text?: string
+  /** live / replay(盘前盘后回放归档) / snapshot(今日已定型) / empty */
+  mode?: 'live' | 'replay' | 'snapshot' | 'empty'
   source?: string
 }
 
@@ -205,7 +207,11 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
             <span>
               竞价池 · 数据日 <span className="font-mono text-foreground">{dataDate}</span>
               <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px]">
-                {data?.is_today ? `${phaseLabel}(已定型)` : `${phaseLabel}快照`}
+                {data?.mode === 'replay'
+                  ? '盘后回放'
+                  : data?.is_today
+                    ? `${phaseLabel}(已定型)`
+                    : `${phaseLabel}快照`}
               </span>
             </span>
           )}

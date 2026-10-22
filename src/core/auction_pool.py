@@ -474,6 +474,60 @@ def _source_clock(records: list[dict]) -> str | None:
     return None
 
 
+def _load_latest_archived(limit: int = 500) -> tuple[str | None, list[dict]]:
+    """取最近一次落库的竞价异动池（回放用）。
+
+    2026-10-22：盘后/数据源断链时 `/api/auction/anomaly` 只回一句"无当日竞价快照"，
+    而库里明明存着上一个交易日的 200+ 条。竞价页盘后打开等于报废 —— 这是可修的浪费。
+    """
+    try:
+        from src.core.trade_phase import cn_now
+        from src.db.models import AuctionAnomalyRecord
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            last = (
+                db.query(AuctionAnomalyRecord)
+                .order_by(AuctionAnomalyRecord.created_at.desc())
+                .first()
+            )
+            if last is None or last.created_at is None:
+                return None, []
+            from datetime import datetime as _dt, timedelta as _td
+
+            day = last.created_at.date()
+            start = _dt.combine(day, _dt.min.time())
+            end = start + _td(days=1)
+            rows = (
+                db.query(AuctionAnomalyRecord)
+                .filter(
+                    AuctionAnomalyRecord.created_at >= start,
+                    AuctionAnomalyRecord.created_at < end,
+                )
+                .order_by(AuctionAnomalyRecord.gap_pct.desc())
+                .limit(limit)
+                .all()
+            )
+            out = [
+                {
+                    "symbol": r.symbol,
+                    "name": r.name,
+                    "gap_pct": r.gap_pct,
+                    "withdraw_rate": r.withdraw_rate,
+                    "volume_ratio": r.volume_ratio,
+                    "note": r.note,
+                }
+                for r in rows
+            ]
+            return day.isoformat(), out
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 - 旁路，读不到就当没有归档
+        logger.info("竞价归档读取失败: %s", exc)
+        return None, []
+
+
 def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
     """竞价池**带数据日期/交易阶段**的响应体(2026-10-18 审计 A-03 P0 修复)。
 
@@ -500,6 +554,10 @@ def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
     )
 
     records = fetch_auction_anomaly(market)
+    replay_date: str | None = None
+    if not records:
+        # 实时源没数据（盘后 / 数据源断链）→ 回放最近一次归档，而不是给一张空表
+        replay_date, records = _load_latest_archived()
     meta = phase_meta(now)
     phase = meta["trade_phase"]
     today = cn_now(now).date()
@@ -517,6 +575,10 @@ def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
         from src.core.trade_phase import parse_date  # noqa: PLC0415 - 源时钟解析
 
         data_date = parse_date(clock)
+    if replay_date:
+        from src.core.trade_phase import parse_date  # noqa: PLC0415
+
+        data_date = parse_date(replay_date) or data_date
     if data_date is None:
         # 有行 → 归属最近交易日; 无行 → 只认"库里最后一次落库日", 两者都没有就诚实地给 None
         # (绝不在"没有任何数据"时编一个数据日出来)
@@ -524,7 +586,14 @@ def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
 
     live = bool(records) and phase == PHASE_AUCTION and data_date == today
 
-    if records:
+    mode = "live" if live else ("replay" if replay_date else ("empty" if not records else "snapshot"))
+    if records and replay_date:
+        reason = None
+        reason_text = (
+            f"盘后回放：展示最近交易日 {replay_date} 的集合竞价异动池"
+            f"（{len(records)} 条，非实时）"
+        )
+    elif records:
         if live:
             reason = None
             reason_text = f"实时竞价池（{meta['phase_label']}）"
@@ -571,6 +640,8 @@ def fetch_auction_payload(market: str = "CN", *, now=None) -> dict:
         "as_of": as_of_iso(now),
         "data_clock": clock,
         "data_synced_at": sync_at.isoformat() if sync_at is not None else None,
+        "mode": mode,
+        "replay_date": replay_date,
         "reason": reason,
         "reason_text": reason_text,
         "source": "thsdk 集合竞价异动池 + 通达信 TQ 逐票增强",

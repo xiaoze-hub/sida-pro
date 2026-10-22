@@ -1,3 +1,21 @@
+## release: v0.42.3（竞价页盘后报废：库里有 254 条归档却只回"无数据"）（2026-10-22）
+
+外部方案里"非竞价时段只显示 0 只"这条**核实为真**，但它给的后端文件不存在，改按现有结构实现。
+
+**核实**：`auction_anomaly_records` 表里 2026-10-20 有 **254 条**、10-19 有 398 条
+（`sync_auction_to_db` 一直在落库），但 `/api/auction/anomaly` 在实时源没数据时只回一句
+「非竞价时段，无当日竞价快照」—— 盘后打开竞价页等于报废，数据明明在库里。
+
+**改法**：
+1. `_load_latest_archived()`：实时为空时读最近一个落库日的全部记录（按本币日区间过滤，
+   不依赖方言日期函数，SQLite/PG 都能跑）。
+2. `fetch_auction_payload` 新增 `mode` = `live / replay / snapshot / empty` 与 `replay_date`；
+   回放时 `is_live=False`、`reason_text` 明写「盘后回放：展示最近交易日 X 的异动池（N 条，非实时）」。
+3. 前端 `AuctionAnomalyTab` 顶栏徽章区分「盘后回放」，不再把归档当今日。
+
+**诚实边界**：回放绝不冒充实时 —— `is_live` 恒 False，`as_of` 仍是服务端当前时刻，
+数据日单独给出。用例 3 条：有归档→replay、无归档→empty、实时有数据→不读归档。
+
 ## release: v0.42.2（scheduler missed 淹掉错误表：725 条/24h 假异常）（2026-10-22）
 
 按外部改进方案逐条核实后修的第一条（该方案其余主张的核实结论见汇报）。
