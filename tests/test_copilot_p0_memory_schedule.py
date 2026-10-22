@@ -237,3 +237,38 @@ def test_zero_tool_refusal_has_no_numbers():
     t = zero_tool_refusal()
     assert "没有取到任何行情数据" in t
     assert "代码" in t
+
+
+def test_update_persists_content_and_weight(db, uid):
+    """回归：面板「行内编辑」曾只落 enabled，content/weight 静默丢失（刷新回滚）。
+
+    这条用例钉住 update() 真的把内容与权重写进库，而不只是"接口返回 ok"。
+    """
+    from src.core.copilot_memory import list_all, remember, update
+
+    row = remember(db, uid, kind="preference", content="我只做主板", source="user", weight=5)
+    assert row and row.get("id")
+
+    out = update(db, uid, row["id"], content="我只做主板和创业板", weight=9)
+    assert out is not None
+    assert out["content"] == "我只做主板和创业板"
+    assert int(out["weight"]) == 9
+
+    again = {r["id"]: r for r in list_all(db, uid, include_disabled=True)}[row["id"]]
+    assert again["content"] == "我只做主板和创业板", "内容必须真的落库"
+    assert int(again["weight"]) == 9, "权重必须真的落库"
+
+
+def test_update_rejects_empty_content_and_clamps_weight(db, uid):
+    from src.core.copilot_memory import remember, update
+
+    row = remember(db, uid, kind="rule", content="资金流别用东财方向位", source="user", weight=7)
+    try:
+        update(db, uid, row["id"], content="   ")
+    except ValueError:
+        pass
+    else:  # pragma: no cover - 空内容必须被拒
+        raise AssertionError("空内容应抛 ValueError")
+
+    out = update(db, uid, row["id"], weight=99)
+    assert out is not None and int(out["weight"]) == 10, "权重应夹到 1~10"
