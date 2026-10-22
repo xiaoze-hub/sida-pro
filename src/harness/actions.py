@@ -105,6 +105,132 @@ def reject_action(db: Session, *, user_id: Any, action_id: int) -> dict:
     return _to_dict(row)
 
 
+# -- 情景矩阵 → 图上标注(2026-10-22, P1 原生融合) ------------------------------
+
+#: 情景矩阵能落到图上的关键位：只有这两条是**数据算出**的，不许临时加别的线。
+_SCENARIO_LEVELS: tuple[tuple[str, str, str, str], ...] = (
+    ("support", "支撑位", "up", "情景矩阵支撑位（MA60/筹码带下沿/区间低）"),
+    ("resist", "阻力位", "down", "情景矩阵阻力位（MA20/筹码带上沿/区间高）"),
+)
+
+
+def _as_price(v: Any) -> float | None:
+    """关键位必须是正的有限数；字符串数字容忍，bool/None/NaN/inf/<=0 一律不画。"""
+    import math
+
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        p = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p) or p <= 0:
+        return None
+    return round(p, 2)
+
+
+def _pending_annotations(db: Session, user_id: Any, symbol: str) -> list[tuple[Any, dict]]:
+    """该用户在这只票上**仍待确认**的标注提议 [(row, payload)]。
+
+    去重必须在 payload 里比 symbol/label，而 payload 是 Text(JSON)：跨 sqlite/PG 都
+    不能依赖 JSON 函数，所以拉 pending 行到 Python 侧过滤（单用户 pending 量级很小）。
+    """
+    from src.db.models import CopilotAction
+
+    rows = (
+        db.query(CopilotAction)
+        .filter(
+            CopilotAction.user_id == str(user_id),
+            CopilotAction.kind == "annotation",
+            CopilotAction.status == "pending",
+        )
+        .order_by(CopilotAction.id.asc())
+        .all()
+    )
+    out: list[tuple[Any, dict]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and str(payload.get("symbol") or "").strip() == symbol:
+            out.append((row, payload))
+    return out
+
+
+def propose_scenario_annotations(
+    db: Session,
+    *,
+    user_id: Any,
+    symbol: str,
+    market: str = "CN",
+    matrix: dict | None = None,
+    run_id: str | None = None,
+) -> list[dict]:
+    """把情景矩阵算出的关键位提议成**待确认**的 K 线标注(2026-10-22, P1)。
+
+    为什么要有它：情景矩阵已经把支撑/阻力算得很准，但结论只活在聊天里——用户看到
+    「阻力 35.8」还得自己回图上画。G4 要求「结论落在图上」，这一层就是那条线。
+
+    三条纪律：
+      1. 只提议，不落 KlineAnnotation（用户点确认才画）；
+      2. 关键位只来自 `matrix["levels"]`，缺失/非法就不画（不猜、不补均价）；
+      3. **按 (user_id, symbol, label) 去重**：同一档位只留一条 pending，价格变了就
+         原地更新 payload，而不是每问一次就在待确认列表里堆一条。
+
+    返回提议出的动作 dict（含 `dedup` 标记复用/新建）。
+    """
+    sym = str(symbol or "").strip()
+    if not sym:
+        return []
+    if matrix is None:
+        try:
+            from src.core.scenario_engine import build_matrix
+
+            matrix = build_matrix(db, sym, market)
+        except Exception:  # noqa: BLE001
+            return []
+    if not isinstance(matrix, dict) or not matrix.get("available"):
+        return []
+    levels = matrix.get("levels")
+    if not isinstance(levels, dict):
+        return []
+
+    existing = _pending_annotations(db, user_id, sym)
+    proposed: list[dict] = []
+    for key, label, color, note in _SCENARIO_LEVELS:
+        price = _as_price(levels.get(key))
+        if price is None:
+            continue
+        payload = {
+            "symbol": sym,
+            "market": str(market or "CN"),
+            "label": label,
+            "price": price,
+            "color": color,
+            "note": note,
+            "source": "scenario_matrix",
+        }
+        hit = next((row for row, p in existing if str(p.get("label") or "").strip() == label), None)
+        if hit is None:
+            proposed.append({**propose(db, user_id=user_id, kind="annotation",
+                                      payload=payload, run_id=run_id), "dedup": False})
+            continue
+        try:
+            old = json.loads(hit.payload or "{}")
+        except (TypeError, ValueError):
+            old = {}
+        if not isinstance(old, dict):
+            old = {}
+        # 价格/文案/颜色任一漂移才写库——重复调用不产生写事务，方便在每次诊断里调用。
+        if {k: old.get(k) for k in ("price", "note", "color")} != {k: payload[k] for k in ("price", "note", "color")}:
+            hit.payload = json.dumps({**old, **payload}, ensure_ascii=False)
+            db.commit()
+            db.refresh(hit)
+        proposed.append({**_to_dict(hit), "dedup": True})
+    return proposed
+
+
 # -- handlers ---------------------------------------------------------------
 
 def _apply_watchlist(db: Session, *, user_id: Any, payload: dict) -> str:

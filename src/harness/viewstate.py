@@ -99,16 +99,56 @@ def render_view_state_block(state: dict | None) -> str:
     return text[:300]
 
 
+def extract_selection_range(state: dict | None) -> tuple[str, str] | None:
+    """从视图状态里取出圈选区间 (start_date, end_date)。
+
+    前端可能推 `{from,to}` 也可能推 `{start,end}`（两版图表组件都用过），
+    日期可能是 `2026-09-15` 或带时间的 ISO 串。任一缺失/认不出就返回 None ——
+    圈选只补空，缺一半的区间不猜另一半。
+    """
+    if not isinstance(state, dict):
+        return None
+    sel = state.get("selection")
+    if not isinstance(sel, dict):
+        return None
+    from src.core.trend_profile import normalize_day
+
+    a = normalize_day(sel.get("from") or sel.get("start"))
+    b = normalize_day(sel.get("to") or sel.get("end"))
+    if not a or not b:
+        return None
+    if a > b:                        # 反向拖拽（从右往左圈）
+        a, b = b, a
+    return (a, b)
+
+
 def append_view_state_block(messages: list[dict], user_id: Any, conversation_id: int | None) -> None:
     """把视图块拼到 system 消息末尾。任何异常静默降级(上下文是增强, 不是必需)。"""
     if not messages:
         return
+    state: dict | None = None
     try:
-        block = render_view_state_block(load_view_state(user_id, conversation_id))
+        state = load_view_state(user_id, conversation_id)
+        block = render_view_state_block(state)
     except Exception:
         return
     if not block:
         return
+    # 圈选区间实算注入: 用户圈了一段问"这段为什么跌", 涨跌/高低/回撤/量比必须自己算好,
+    # 不能让模型反问"哪一段"或凭印象编。读库失败一律静默(增强项, 不能拖垮对话)。
+    try:
+        sym = str((state or {}).get("symbol") or "").strip()
+        rng = extract_selection_range(state)
+        if sym and rng:
+            from src.core.trend_profile import build_range_summary
+
+            summary = build_range_summary(
+                sym, rng[0], rng[1], str((state or {}).get("market") or "CN"),
+            )
+            if summary:
+                block = block + "\n" + summary
+    except Exception:
+        pass
     first = messages[0]
     if first.get("role") == "system":
         first["content"] = (first.get("content") or "") + "\n\n" + block

@@ -1,3 +1,49 @@
+## feat: P1 原生融合 —— 情景矩阵关键位自动提议标注 + K 线圈选区间实算（2026-10-22，未发版）
+
+Agent Kernel 的 G4 写的是「结论落在图上（点"标注到图"能在 K 线看到）」。这两件事此前都断在最后一米：
+
+### 1. 情景矩阵算了关键位，却到不了图上
+`scenario_engine.build_matrix()` 一直在算支撑/阻力（MA60/筹码带下沿/区间低、MA20/筹码带上沿/区间高），
+但只输出到聊天。用户看到「阻力 35.8」还得自己回图上画一条线。
+
+新增 `harness/actions.propose_scenario_annotations(db, user_id, symbol, market="CN", matrix=None, run_id=None)`：
+- `matrix` 缺省时自己调 `build_matrix`（诊断流程不用重复取数）；
+- `matrix.available` 为假、或 `levels` 缺该档位 / 价格非有限正数 → 该条**不画**（不猜、不补均价）；
+- 支撑 → `label="支撑位"` / `color="up"`，阻力 → `label="阻力位"` / `color="down"`，note 写明候选口径；
+- 仍然只 `propose()` 落 **pending**，绝不直接写 `KlineAnnotation`——图上那条线必须用户点确认才出现。
+
+**去重按 (user_id, symbol, label)**：同一档位已有 pending 就**复用同一行**，价格变了原地更新 payload。
+没有这条，用户每问一次诊断，「待确认」列表就多两条重复建议——那不是能力，是垃圾。
+（payload 是 Text(JSON)，跨 sqlite/PG 不能靠 JSON 函数，故拉 pending 行到 Python 侧过滤，单用户量级很小。）
+
+### 2. 圈选一段区间，AI 不知道"这段"是哪段
+`viewstate.py` 只渲染「用户圈选 2026-09-15~2026-10-15」这行字，而 `trend_profile.compute()` 只会算固定的
+5/20/60/120 日窗口——用户问「这段为什么跌了多少」，模型只能反问或凭印象编。
+
+`trend_profile` 新增：
+- `compute_range_summary(bars, start_date, end_date)`：只取落在 `[start,end]` 的日线，实算
+  `bar_count / start_close / end_close / change_pct / high(+high_date) / low(+low_date) /
+  max_drawdown_pct / avg_volume / vol_ratio`。回撤按**收盘口径**峰谷（只允许先见峰再见谷，不拿未来价回头比）；
+- `normalize_day()`：`2026-09-15` / `2026/09/15` / 带时分秒的 ISO 串统一成 `YYYY-MM-DD`，反着拖（从右往左圈）
+  自动换序；认不出就返回空串；
+- 区间内 **< 2 根**日线 → `{"available": False, "reason": "圈选区间有效日线不足 2 根"}`，
+  渲染成 `[圈选区间] 有效日线不足 2 根——不做推断。`——不给 `change_pct=None` 让下游当 0 用；
+- `build_range_summary()` 读库（800 天窗口，覆盖早于 250 日的旧区间）并渲染**两行**证据串，带
+  `[数据源: PG 前复权日线 · 圈选区间实算]`。
+
+`viewstate.py` 新增 `extract_selection_range(state)`（同时认 `{from,to}` 和 `{start,end}`，缺一半就返回 None，
+不猜另一半），并在 `append_view_state_block` 里：有 `symbol` + 有效区间就调 `build_range_summary` 把实算结果
+追加在视图块之后。整段 `try/except` 兜住——读库失败只是少一段增强，绝不拖垮对话（有用例钉住）。
+
+### 验证
+`tests/test_p1_fusion_annotations_and_range.py`（15 例）：支撑/阻力提议落 pending 且不落图、重复调用不新增行
+（id 不变）、关键位漂移原地刷新、非法位不画、`matrix` 缺省自取；区间涨跌 `-4.00%`、高 `112.0`（09-16）、
+低 `87.0`（09-18）、最大回撤 `-20.00%`、量比 `1.19` 逐项对齐手算；1 根日线写「不足」且不给涨跌幅；
+`append_view_state_block` 在有圈选时注入区间实算、无圈选时根本不读库、读库炸了仍注入视图锚点。
+
+> 未接线说明：本分支只提供 `propose_scenario_annotations` 这个确定性能力，**没有**改 `chat.py` / `pipeline.py` /
+> `registry.py`——把「情景研判后自动提议标注」挂到哪一步属于 P1 编排层的活，避免与并行任务撞同一批文件。
+
 ## release: v0.43.3（提案采集真机复验第二次失败：模型把工具参数结构搞混了）（2026-10-22）
 
 v0.43.2 上线后再跑同一条全景诊断（明确要求「股东户数变化」「龙虎榜席位风格」）：
