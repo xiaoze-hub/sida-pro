@@ -225,7 +225,25 @@ def route_with_persona(db, text: str, bound: str | None, stock_q: bool,
         if p is not None and getattr(p, "kind", "") in ("demon", "left", "leader"):
             route = route_for_request(text, all_schemas, forced, persona_recipe=p.recipe)
             return route, txt
+        # 判断类问题（能不能拿/洗盘还是出货/该不该卖）必须有证据才能答。
+        # 关键词表里没有这些词时，旧行为是「给模型全量工具让它自己选」——实测它会一个都不调，
+        # 最后触发零工具拒答。这里确定性兜底到全景诊断（10 个工具、六段输出）。
+        if _is_judgment_question(text):
+            route = route_for_request(text, all_schemas, forced, persona_recipe="deep_diagnosis")
+            return route, txt
     return route, ""
+
+
+# 判断类问题：用户在要一个"该不该/是洗盘还是出货"的结论，而不是问价格。
+_JUDGMENT_WORDS = (
+    "还能拿", "还能持有", "持有吗", "还能买", "该不该", "要不要卖", "要不要买",
+    "止盈", "止损", "洗盘", "出货", "吸筹", "派发", "见顶", "见底", "割肉", "加仓", "减仓",
+)
+
+
+def _is_judgment_question(text: str) -> bool:
+    t = text or ""
+    return any(w in t for w in _JUDGMENT_WORDS)
 
 
 def bind_recipe_trace(runtime, recipe) -> None:
@@ -270,7 +288,20 @@ def enter_request_ctx(db, conv, body, messages: list[dict]):
     """装配本轮上下文，返回需要回滚的 token 列表。"""
     recipe, note = apply_mentions(db, conv, body)
     inject_recipe(messages, recipe, note)
-    bound = getattr(conv, "stock_symbol", None) or extract_code(getattr(body, "content", "") or "")
+    _body_text = getattr(body, "content", "") or ""
+    bound = getattr(conv, "stock_symbol", None) or extract_code(_body_text)
+    if not bound:
+        # 正文只写名字（「北方稀土还能持有吗」）→ 先把名字解析成代码,
+        # 否则 bound 为空会让画像判定与配方路由统统落空（实测导致零工具拒答）。
+        try:
+            from src.core.symbol_guard import first_code_from_names, is_stock_question
+
+            # 只有像在问个股才去查名字 —— 否则「今天大盘怎么样」也会白打一次 TQ
+            # (17709 是单线程, 每轮对话都多打一次不可接受)。
+            if is_stock_question(_body_text):
+                bound = first_code_from_names(_body_text)
+        except Exception:  # noqa: BLE001  旁路, 解析不出就当没有
+            bound = None
     return [
         (REQ_BOUND, REQ_BOUND.set(bound)),
         (REQ_TEXT, REQ_TEXT.set(getattr(body, "content", "") or "")),
