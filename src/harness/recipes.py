@@ -126,12 +126,33 @@ def match_recipe(text: str) -> Recipe | None:
 
 
 def filter_schemas(schemas: list[dict], allowed: frozenset[str] | set[str] | None) -> list[dict]:
-    """把全量工具 schema 过滤成配方白名单（None = 不过滤）。"""
+    """把全量工具 schema 过滤成配方白名单（None = 不过滤）。
+
+    ⚠️ 白名单必须**fail-closed**（失效即收紧, 不失效即全放开）：
+    早先的实现是 `return out or schemas` —— 白名单里一个工具都对不上时
+    回落到全量, 也就是「配方写错了 → 把 66 个工具全交给模型」。
+    这正是白名单机制要防的事, 语义完全反了。
+
+    现在: 白名单非空但一个都没命中 → 返回空列表(该配方无工具可用),
+    并记 warning 指名是哪些工具名没对上。宁可少给, 不可乱给。
+    """
     if not allowed:
+        # allowed 为空/None = 显式不过滤(非配方路径, 如 forced 模式)
         return schemas
     out = []
+    missing = []
+    known = set()
     for sc in schemas:
         name = ((sc or {}).get("function") or {}).get("name")
+        if not name:
+            continue
+        known.add(name)
         if name in allowed:
             out.append(sc)
-    return out or schemas  # 白名单写错时不至于一个工具都没有
+    if not out:
+        unknown = sorted(set(allowed) - known)
+        logger.warning(
+            "配方白名单一个工具都没命中, 已收紧为 0 工具(不再回退全量): 未知工具名=%s",
+            unknown or "(白名单为空)",
+        )
+    return out

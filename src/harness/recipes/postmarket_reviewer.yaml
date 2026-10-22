@@ -2,7 +2,7 @@ id: postmarket_reviewer
 label: 盘后复盘官
 icon: "📊"
 desc: 收盘复盘：涨停梯队、炸板率、题材主线、情绪温度，只复盘不荐股。
-when: [复盘, 收盘, 涨停梯队, 情绪, 连板]
+when: [复盘, 收盘, 涨停梯队, 连板梯队, 情绪]
 tools:
   - get_sentiment_cycle
   - get_hot_stocks

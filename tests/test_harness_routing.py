@@ -55,9 +55,21 @@ def test_forced_whitelist_wins():
     assert rt.reason == "mention" and {s["function"]["name"] for s in rt.tools} == {"a"}
 
 
-def test_filter_schemas_never_returns_empty():
+def test_filter_schemas_fails_closed_on_whitelist_miss():
+    """白名单一个都没命中时必须收紧到 0 工具, 不能回退全量。
+
+    2026-10-22 修正: 旧实现是 `return out or schemas`, 白名单写错(工具名不存在)
+    时反而把**全量工具**交给模型 —— 与白名单机制的目的正好相反。
+    旧测试名 `test_filter_schemas_never_returns_empty` 断言的也是这个反直觉行为,
+    名字里的意图("白名单写错不该让模型裸奔")与断言内容自相矛盾, 一并改正。
+
+    @spec RECIPE-010
+    """
     schemas = [{"type": "function", "function": {"name": "a"}}]
-    assert filter_schemas(schemas, frozenset({"nonexistent"})) == schemas, "白名单写错不该让模型裸奔"
+    assert filter_schemas(schemas, frozenset({"nonexistent"})) == [], (
+        "白名单一个都没命中时必须返回 0 工具(fail-closed), "
+        "不能回退到全量让模型裸奔"
+    )
 
 
 def test_persona_recipe_locks_recipe_and_narrows_tools():
