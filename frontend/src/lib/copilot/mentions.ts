@@ -12,13 +12,22 @@ export interface MentionHit {
   query: string
 }
 
-const BOUNDARY = /[\s，。；：、？！,.;:?!()（）[\]【】"'“”]/
+const BOUNDARY = /[\s\u3000，。；：、？！,.;:?!()（）[\]【】"'“”]/
+
+/** 半角 `@` 与全角 `＠`(U+FF20) 都算触发符。
+ *  中文输入法下打 `@` 经常落到全角，只认半角会导致「只有英文@才弹面板」。 */
+const AT_HALF = '@'
+const AT_FULL = '\uFF20'
+
+function lastAtIndex(head: string): number {
+  return Math.max(head.lastIndexOf(AT_HALF), head.lastIndexOf(AT_FULL))
+}
 
 export function detectMention(text: string, caret: number): MentionHit | null {
   if (!text) return null
   const pos = Math.max(0, Math.min(caret, text.length))
   const head = text.slice(0, pos)
-  const at = head.lastIndexOf('@')
+  const at = lastAtIndex(head)
   if (at < 0) return null
   if (at > 0 && !BOUNDARY.test(head[at - 1])) return null
   const query = head.slice(at + 1)

@@ -125,6 +125,29 @@ describe('@ 提及', () => {
     ])
   })
 
+  it('全角 ＠（中文输入法默认产出）也能弹面板', async () => {
+    render(<AiCopilotPage />)
+    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    typeIn(ta, '\uFF20')
+
+    expect(await screen.findByTestId('copilot-mention-panel')).toBeTruthy()
+    expect(await screen.findByText('北方稀土')).toBeTruthy()
+  })
+
+  it('输入法组合结束补检测：不再需要多敲一个字符', async () => {
+    render(<AiCopilotPage />)
+    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+
+    fireEvent.compositionStart(ta)
+    typeIn(ta, '@北方')
+    await new Promise((r) => setTimeout(r, 120))
+    expect(screen.queryByTestId('copilot-mention-panel')).toBeNull()
+
+    // 关键：compositionEnd 之后**不再有任何输入事件**
+    fireEvent.compositionEnd(ta)
+    await waitFor(() => expect(screen.getByTestId('copilot-mention-panel')).toBeTruthy())
+  })
+
   it('中文输入法组合期间不弹面板', async () => {
     render(<AiCopilotPage />)
     const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
