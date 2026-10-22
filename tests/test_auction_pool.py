@@ -161,6 +161,17 @@ def in_mem_db(monkeypatch):
     models.Base.metadata.create_all(engine)
     monkeypatch.setattr(_db, "engine", engine)
     monkeypatch.setattr(_db, "SessionLocal", sessionmaker(bind=engine))
+    # 2026-10-22: 只打 src.web.database 不够 —— core 侧(sync_auction_to_db /
+    # _load_latest_archived / get_anomaly_history)是 `from src.db.session import
+    # SessionLocal`, 拿的是 src.db.session 的模块属性(web 那边只是 re-export)。
+    # 不一起打, 写入会落到 conftest 的临时库, 后续文件跑 _load_latest_archived
+    # 就读到"归档" → test_auction_payload_phase 的 5 条断言全部变红(顺序依赖)。
+    import src.db.session as _dbs
+
+    _mem_maker = sessionmaker(bind=engine)
+    for _attr in ("SessionLocal", "WriteSessionLocal", "ReadSessionLocal"):
+        if hasattr(_dbs, _attr):
+            monkeypatch.setattr(_dbs, _attr, _mem_maker)
     import src.db.dialect as _dialect
 
     monkeypatch.setattr(_dialect, "is_postgres", lambda: False)

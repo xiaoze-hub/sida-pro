@@ -481,12 +481,11 @@ def _load_latest_archived(limit: int = 500) -> tuple[str | None, list[dict]]:
     而库里明明存着上一个交易日的 200+ 条。竞价页盘后打开等于报废 —— 这是可修的浪费。
     """
     try:
-        from src.core.trade_phase import cn_now
         from src.db.models import AuctionAnomalyRecord
         from src.db.session import SessionLocal
 
-        db = SessionLocal()
-        try:
+        # 只读旁路: 用上下文管理器, 会话必定关闭(含异常路径); 只读不 commit。
+        with SessionLocal() as db:
             last = (
                 db.query(AuctionAnomalyRecord)
                 .order_by(AuctionAnomalyRecord.created_at.desc())
@@ -521,8 +520,6 @@ def _load_latest_archived(limit: int = 500) -> tuple[str | None, list[dict]]:
                 for r in rows
             ]
             return day.isoformat(), out
-        finally:
-            db.close()
     except Exception as exc:  # noqa: BLE001 - 旁路，读不到就当没有归档
         logger.info("竞价归档读取失败: %s", exc)
         return None, []
