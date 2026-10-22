@@ -107,7 +107,10 @@ jobs:
   backend-pytest:
     name: Backend pytest shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # 40 → 60（2026-10-23 实测）：shard 2 在 40 分钟上限被砍，但 pytest 只跑了约 50 秒就
+    # 到 47% —— 39 分钟全耗在「装 WeasyPrint 系统库 + 依赖」上。作业时限被依赖安装吃掉，
+    # 测试本身并不慢。放宽到 60 分钟，避免 apt/pip 慢一次就误杀整个门禁。
+    timeout-minutes: 60
     strategy:
       # 一片红也要看全 4 片的红(别让 fail-fast 吃掉其它片的诊断信息)
       fail-fast: false
