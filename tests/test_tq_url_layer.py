@@ -134,24 +134,34 @@ def test_connect_fail_streak_invalidates_ok_cache(monkeypatch):
 
 
 def test_probe_budget_capped(monkeypatch):
+    """预算耗尽必须提前 break —— 用假时钟驱动, 不依赖 wall clock 与 time.sleep。
+
+    2026-10-22 重写: 原实现用 `time.sleep(0.4)` 制造耗时, 断言 `elapsed < 1.2` + `len<=3`。
+    CI 上出现 4 次探测却 elapsed<1.2 的自相矛盾结果 —— 说明同分片里别的用例污染了
+    `time.sleep`(全局 patch 泄漏), 这种测试会在别人的改动上随机变红。改成注入假
+    `monotonic`: 每次探测把时钟推进 0.4s, 预算 0.5s ⇒ 必然第 2 次后 `remaining<0.05`
+    而 break, 与真实耗时完全解耦。
+    """
     _reset(monkeypatch)
     monkeypatch.setattr(tqmod, "_PROBE_BUDGET_S", 0.5)
     monkeypatch.setattr(tqmod, "_PROBE_SINGLE_TIMEOUT_S", 0.05)
     calls: list[str] = []
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["t"])
 
     def slow_probe(url, timeout=1.5):
         calls.append(url)
-        time.sleep(0.4)
+        clock["t"] += 0.4
         return False
 
     monkeypatch.setattr(tqmod, "_probe_tq", slow_probe)
-    t0 = time.monotonic()
     out = tqmod._resolve_tq_url()
-    elapsed = time.monotonic() - t0
 
     assert out is None
-    assert elapsed < 1.2, f"探测总耗时 {elapsed:.2f}s 应受预算约束(≤~0.5s+一次探测)"
-    assert 0 < len(calls) <= 3, f"不应扫完全部候选({len(calls)} 次)"
+    total = tqmod._TQ_LAST_PROBE["total"]
+    assert len(calls) == 2, f"预算 0.5s / 每次 0.4s 应只探 2 次, 实际 {len(calls)} 次"
+    assert len(calls) < total, f"预算耗尽却扫完了全部 {total} 个候选"
+    assert tqmod._TQ_LAST_PROBE["budget_exhausted"] is True, "预算耗尽未标记"
 
 
 # ---------------------------------------------------------------------------
