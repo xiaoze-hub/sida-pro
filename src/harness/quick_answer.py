@@ -29,6 +29,41 @@ _ANALYSIS_WORDS = (
 _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 
+def _fmt_shares(v: float) -> str:
+    """成交量按股给，人读要换算（421023.0 股 → 42.10 万股）。"""
+    if v >= 1e8:
+        return f"{v / 1e8:.2f} 亿股"
+    if v >= 1e4:
+        return f"{v / 1e4:.2f} 万股"
+    return f"{v:.0f} 股"
+
+
+def polish(text: str, symbol: str | None = None) -> str:
+    """把工具原文润成"人能读"的样子。
+
+    快答是把工具原文直接给用户看的，所以那些模型通常会顺手修掉的毛刺
+    （`成交量 421023.0`、`涨跌幅 -0.3066%`、只有代码没有名字）必须自己收拾。
+    """
+    out = re.sub(r"成交量\s*([\d.]+)", lambda m: f"成交量 {_fmt_shares(float(m.group(1)))}", text or "")
+    out = re.sub(r"涨跌幅\s*(-?\d+\.\d{3,})%", lambda m: f"涨跌幅 {float(m.group(1)):.2f}%", out)
+    if symbol:
+        name = _name_of(symbol)
+        if name and f"（CN:{symbol}）" in out:
+            out = out.replace(f"（CN:{symbol}）", f"{name}（CN:{symbol}）", 1)
+    return out
+
+
+def _name_of(symbol: str) -> str | None:
+    """名称只是锦上添花：索引没热起来就返回 None，绝不为它去拉全市场。"""
+    try:
+        from src.core.stock_names import names_for
+
+        got = names_for([symbol]) or {}
+        return got.get(symbol) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def is_pure_quote(text: str) -> bool:
     """是不是「只问读数」的问题。"""
     t = (text or "").strip()
@@ -90,7 +125,7 @@ async def answer(db, text: str, bound: str | None, user, runtime=None) -> str | 
             pass
 
     return (
-        f"【快答】{raw.strip()}\n\n"
+        f"【快答】{polish(raw.strip(), symbol)}\n\n"
         "（本条为行情读数直出，未经模型改写）\n"
         "以上为数据读数，不构成投资建议。"
     )

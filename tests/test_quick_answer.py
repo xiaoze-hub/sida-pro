@@ -118,3 +118,20 @@ async def test_answer_records_trace_step(monkeypatch):
     out = await qa.answer(None, "600111 现价多少", None, None, _Runtime())
     assert out and "35.77" in out
     assert steps and steps[0][0] == "get_stock_quote"
+
+
+def test_polish_makes_raw_numbers_readable():
+    """快答是原文给用户看的，成交量/涨跌幅的毛刺必须自己收拾。"""
+    out = qa.polish("实时行情：（CN:600111）价格 35.77，涨跌幅 -0.3066%，成交量 421023.0", None)
+    assert "42.10 万股" in out
+    assert "涨跌幅 -0.31%" in out
+    assert "421023.0" not in out
+
+
+def test_polish_large_volume_uses_yi():
+    assert "1.23 亿股" in qa.polish("成交量 123456789.0", None)
+
+
+def test_polish_never_crashes_without_name(monkeypatch):
+    monkeypatch.setattr(qa, "_name_of", lambda s: None)
+    assert "35.77" in qa.polish("价格 35.77", "600111")
