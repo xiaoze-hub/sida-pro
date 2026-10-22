@@ -2,7 +2,7 @@
 
 - 验收标准: **19** 条
 - 已覆盖: **19** 条 (100.0%)
-- 测试用例: **27** 个
+- 测试用例: **28** 个
 
 | 规格 ID | 摘要 | 规格位置 | 守卫测试 |
 |---|---|---|---|
@@ -14,7 +14,7 @@
 | `RECIPE-003` | `budget.max_tool_calls` 必须 ≥ 该配方挂载的工具数 —— 否则排在后面的工具永远轮不到，等于白挂 | `specs/harness/recipes.md:28` | `tests/test_proposal_collection_gating.py:76` `test_deep_diagnosis_budget_covers_mounted_tools`<br>`tests/test_spec_harness_recipes.py:43` `test_budget_covers_tool_count` |
 | `RECIPE-004` | 配方声明的每个工具名必须存在于 `CHAT_TOOL_REGISTRY` —— 拼错一个名字只会静默少一个维度，不报错 | `specs/harness/recipes.md:29` | `tests/test_spec_harness_recipes.py:54` `test_recipe_tools_exist_in_registry` |
 | `RECIPE-005` | 任意两份配方的 `when` 关键词不得重复 —— 同一个词被两个配方认领，路由结果就取决于列表顺序（不确定） | `specs/harness/recipes.md:30` | `tests/test_spec_harness_recipes.py:67` `test_when_keywords_are_unique_across_recipes` |
-| `RECIPE-006` | 采集类工具（`fallback=False`，如 `note_new_dimension`）**不得进「无配方命中 → 全量工具」兜底路径**，且必须挂在一份分析配方里 —— 兜底路径同时服务闲聊/问价，采集工具混进去等于让模型在闲聊里自由写库；而完全不挂载则采集链路永远没有入口，提案表恒空。两头都是失效，一个是脏数据、一个是死管道 | `specs/harness/recipes.md:34` | `tests/test_proposal_collection_gating.py:29` `test_collection_tool_is_visible_to_model`<br>`tests/test_proposal_collection_gating.py:44` `test_collection_tool_schema_is_well_formed`<br>`tests/test_proposal_collection_gating.py:70` `test_collection_tool_is_mounted_in_deep_diagnosis`<br>`tests/test_proposal_collection_gating.py:84` `test_collection_tool_declares_no_fallback`<br>`tests/test_proposal_collection_gating.py:93` `test_casual_chat_fallback_excludes_collection_tool`<br>`tests/test_proposal_collection_gating.py:103` `test_stock_question_fallback_excludes_collection_tool`<br>`tests/test_proposal_collection_gating.py:116` `test_fallback_is_not_emptied_by_the_filter` |
+| `RECIPE-006` | 采集类工具（`fallback=False`，如 `note_new_dimension`）**不得进「无配方命中 → 全量工具」兜底路径**，且必须挂在一份分析配方里 —— 兜底路径同时服务闲聊/问价，采集工具混进去等于让模型在闲聊里自由写库；而完全不挂载则采集链路永远没有入口，提案表恒空。两头都是失效，一个是脏数据、一个是死管道 | `specs/harness/recipes.md:34` | `tests/test_proposal_collection_gating.py:29` `test_collection_tool_is_visible_to_model`<br>`tests/test_proposal_collection_gating.py:44` `test_collection_tool_schema_is_well_formed`<br>`tests/test_proposal_collection_gating.py:70` `test_collection_tool_is_mounted_in_deep_diagnosis`<br>`tests/test_proposal_collection_gating.py:84` `test_collection_tool_declares_no_fallback`<br>`tests/test_proposal_collection_gating.py:92` `test_collection_tool_does_not_charge_tool_budget`<br>`tests/test_proposal_collection_gating.py:108` `test_casual_chat_fallback_excludes_collection_tool`<br>`tests/test_proposal_collection_gating.py:118` `test_stock_question_fallback_excludes_collection_tool`<br>`tests/test_proposal_collection_gating.py:131` `test_fallback_is_not_emptied_by_the_filter` |
 | `RECIPE-010` | 白名单一个工具都没命中时必须**收紧到 0 工具**(fail-closed), | `specs/harness/recipe_whitelist.md:13` | `tests/test_harness_routing.py:58` `test_filter_schemas_fails_closed_on_whitelist_miss`<br>`tests/test_spec_recipe_whitelist.py:18` `test_whitelist_miss_fails_closed` |
 | `RECIPE-011` | 白名单为 None / 空集时**不过滤**(返回全量) —— 这是显式的「不用配方」路径, | `specs/harness/recipe_whitelist.md:15` | `tests/test_spec_recipe_whitelist.py:26` `test_empty_whitelist_means_no_filter` |
 | `RECIPE-012` | 白名单一个都没命中时必须记 warning 并列出没对上的工具名 —— 排障时要能看出是哪份配方坏了 | `specs/harness/recipe_whitelist.md:17` | `tests/test_spec_recipe_whitelist.py:37` `test_whitelist_miss_logs_unknown_names` |

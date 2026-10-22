@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas
+from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
@@ -779,12 +779,8 @@ async def _execute_tool(
         return (f"{label} 本轮不使用工具 `{name}`。可用工具：{', '.join(sorted(allow))}。"
                 f"请用已有工具回答，或直接说明数据不足。")
 
-    budget = _REQ_BUDGET.get()
-    if budget is not None:
-        if budget["used"] >= budget["max"]:
-            label = _REQ_RECIPE_LABEL.get() or "当前智能体"
-            return f"{label} 的工具预算（{budget['max']} 次）已用尽。请基于已取到的证据作答，缺失处标「暂无」。"
-        budget["used"] += 1
+    if (deny := charge_tool_budget(_REQ_BUDGET.get(), name, _REQ_RECIPE_LABEL.get() or "当前智能体")):
+        return deny
 
     tool = CHAT_TOOL_REGISTRY.get(name)
     if tool is None:

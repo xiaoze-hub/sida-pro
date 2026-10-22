@@ -42,6 +42,11 @@ class ChatTool:
     handler: Callable[..., Any]
     caliber: str
     requires: str = ""
+    # 是否计入本轮工具预算。取数工具=True；**只记录的工具=False**。
+    # 为什么单列：记录类工具不取数、不产出证据，让它吃预算会把分析维度挤掉；
+    # 更糟的是它常是最后一次调用，参数写错后预算已尽、模型无法重试（2026-10-22 生产实测：
+    # 第 11 次调用传了 symbol 却没传 dimension/reason，被参数校验拦下 → 提案没入库）。
+    charges_budget: bool = True
     # 是否允许进「无配方命中 → 全量工具」兜底路径。
     # False 的工具只在明确挂了它的配方里可见 —— 兜底路径同时服务闲聊/问价，
     # 把采集类工具放进去等于让模型在闲聊里自由写库（见 note_new_dimension 的注释）。
@@ -58,6 +63,7 @@ def register_chat_tool(
     caliber: str,
     requires: str = "",
     fallback: bool = True,
+    charges_budget: bool = True,
 ):
     """注册对话工具(schema/handler/caliber/requires 同处一处), 重复注册报错。"""
 
@@ -66,7 +72,7 @@ def register_chat_tool(
             raise ValueError(f"chat 工具重复注册: {name}")
         CHAT_TOOL_REGISTRY[name] = ChatTool(
             name=name, schema=schema, handler=fn, caliber=caliber, requires=requires,
-            fallback=fallback,
+            fallback=fallback, charges_budget=charges_budget,
         )
         return fn
 
@@ -95,6 +101,24 @@ def no_fallback_tool_names() -> frozenset[str]:
     采集类工具只在明确挂了它的配方里可见。
     """
     return frozenset(t.name for t in CHAT_TOOL_REGISTRY.values() if not t.fallback)
+
+
+def charge_tool_budget(budget: dict | None, tool_name: str, label: str) -> str | None:
+    """记一次工具预算；放行返回 None，超出则返回拒绝文案。
+
+    **只记录类工具（charges_budget=False）不计费**：它们不产出证据，吃预算会挤掉取数维度；
+    而且它们常是本轮最后一次调用，参数写错后必须留出余量重试
+    （2026-10-22 生产实测：第 11 次调用参数不全被拒，预算已尽 → 提案没入库）。
+    """
+    if budget is None:
+        return None
+    tool = CHAT_TOOL_REGISTRY.get(tool_name)
+    if tool is not None and not tool.charges_budget:
+        return None
+    if budget["used"] >= budget["max"]:
+        return f"{label} 的工具预算（{budget['max']} 次）已用尽。请基于已取到的证据作答，缺失处标「暂无」。"
+    budget["used"] += 1
+    return None
 
 
 def _filter_tool_args(handler: Callable, args: dict) -> dict:
@@ -2622,6 +2646,7 @@ _tools_catalog.register_catalog_tools()
     caliber="只记录不生效: 写入 harness_proposals(用户提出的新分析维度), 不取数、不影响作答",
     requires="self",
     fallback=False,
+    charges_budget=False,
 )
 async def _tool_note_new_dimension(db: Session, args: dict, user: User | None = None) -> str:
     """记一条"用户想要但配方里没有"的分析维度。

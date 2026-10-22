@@ -89,6 +89,39 @@ def test_collection_tool_declares_no_fallback():
     assert TOOL in no_fallback_tool_names()
 
 
+def test_collection_tool_does_not_charge_tool_budget():
+    """@spec RECIPE-006 — 记录类工具不吃取数预算。
+
+    2026-10-22 生产实测：它是第 11 次调用（预算恰好 11），模型只传了 symbol、没传
+    dimension/reason，被参数校验拦下；此时预算已尽，无法重试 → 提案没入库。
+    只记录的工具不产出证据，不该和取数维度抢预算。
+    """
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+
+    assert CHAT_TOOL_REGISTRY[TOOL].charges_budget is False
+    # 取数工具仍然要计费（口径不能被这次改动带歪）
+    assert CHAT_TOOL_REGISTRY["get_stock_quote"].charges_budget is True
+    assert CHAT_TOOL_REGISTRY["get_trend_profile"].charges_budget is True
+
+
+def test_budget_helper_lets_collector_through_when_exhausted():
+    """@spec RECIPE-006 — 预算是满的时候，记录类工具仍然放行（且不吃计数）。"""
+    from src.agents.chat.registry import charge_tool_budget
+
+    budget = {"used": 11, "max": 11}
+    assert charge_tool_budget(budget, TOOL, "深度诊断") is None
+    assert budget["used"] == 11, "记录类工具不该动 budget.used"
+
+    # 同一份已满预算下，取数工具必须被拒（口径没被放宽）
+    denied = charge_tool_budget(budget, "get_stock_quote", "深度诊断")
+    assert denied and "预算" in denied
+
+    # 未满时取数工具正常计费
+    budget2 = {"used": 3, "max": 11}
+    assert charge_tool_budget(budget2, "get_stock_quote", "深度诊断") is None
+    assert budget2["used"] == 4
+
+
 @pytest.mark.parametrize("text", ["你好", "今天天气不错", "谢谢"])
 def test_casual_chat_fallback_excludes_collection_tool(text):
     """@spec RECIPE-006 — 闲聊走 default 兜底，采集工具必须不在其中。"""
