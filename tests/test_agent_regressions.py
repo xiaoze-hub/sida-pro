@@ -307,8 +307,9 @@ def _c30_chat_py_line_guard():
     """chat.py 历史上膨胀到 3021 行，护栏 2221 行；新逻辑必须外置到 harness/。"""
     lines = (ROOT / "src" / "web" / "api" / "chat.py").read_text(encoding="utf-8").count("\n")
     # 2026-10-20: TQ 异动资金档案 +3 行 → 2230；2026-10-21 长期记忆注入 +5 行 → 2240。
+    # 2026-10-22: 维度缺口采集接线（后台 spawn，逻辑全在 src/core/gap_collector.py）+5 → 2305。
     # 逻辑仍在往 src/core、src/harness 抽，护栏只是防止 chat.py 无限膨胀。
-    assert lines <= 2300, f"chat.py 当前 {lines} 行，超护栏"
+    assert lines <= 2310, f"chat.py 当前 {lines} 行，超护栏"
 
 
 def _c31_no_decision_pioneer_in_user_facing_text():

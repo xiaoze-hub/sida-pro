@@ -15,7 +15,6 @@ tools:
   - get_stock_factors
   - get_scenario_matrix
   - get_cancel_order_intent
-  - note_new_dimension
 output_sections: [结论, 前期走势, 当日盘面, 筹码与资金, 位置与因子, 消息面, 情景与关键位, 口径]
 priority: 5
 budget: {max_tool_calls: 11}
@@ -32,11 +31,6 @@ prompt_fragment: |
   【情景与关键位】直接用 get_scenario_matrix 给出的三档情景与关键位（那是算出来的，不是编的），
   每档写：触发条件 → 关键价位 → 应对；
   明确一句「不预测方向，只给条件-反应」。
-  【维度缺口】只有当用户明确要的某个维度本轮所有工具都取不到时，才调用一次 note_new_dimension。
-  正文里照实写「未取到」。调用格式（必须照这个写，只传 symbol 或别的字段都会被拒）：
-    note_new_dimension(dimension="股东户数变化", reason="平台只有十大股东名单，没有户数变化趋势")
-  dimension 是 2~40 字的名词短语，reason 说明现有哪块数据覆盖不到。
-  已有工具能取到的维度绝不许调用它；它只记录、不返回分析内容，也不会让本轮多出这个维度。
   【格式】严格使用这些段落名做标题（原文照抄，不要自创编号，不要 markdown # 标题）：
   结论 / 前期走势 / 当日盘面 / 筹码与资金 / 位置与因子 / 消息面 / 情景与关键位 / 口径
 

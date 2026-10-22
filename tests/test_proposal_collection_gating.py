@@ -67,36 +67,54 @@ def test_collection_tool_schema_is_well_formed():
     assert sorted(params.get("required") or []) == ["dimension", "reason"]
 
 
-def test_collection_tool_is_mounted_in_deep_diagnosis():
-    """@spec RECIPE-006 — 不挂任何配方 = 死管道（工具在但永远不会被调用）。"""
-    tools = _recipe("deep_diagnosis").get("tools") or []
-    assert TOOL in tools, f"deep_diagnosis 没挂 {TOOL}，采集链路没有入口"
+def test_collection_tool_is_not_mounted_in_any_recipe():
+    """@spec RECIPE-006 — 采集工具不挂任何配方（2026-10-22 改道后的契约）。
+
+    挂着它 = 每轮一次**必然失败**的调用：`agnes-3.0-flash` 在连续 10 个只吃 `symbol`
+    的工具之后，会对第 11 个工具无视 schema 直接照抄 `{"symbol": …}`（9 次实验 6 次；
+    把 symbol 从 schema 里删掉也照吐）。采集改由 `src/core/gap_collector.py` 承担。
+    """
+    mounted = []
+    for p in sorted(RECIPE_DIR.glob("*.yaml")):
+        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        if TOOL in (d.get("tools") or []):
+            mounted.append(p.stem)
+    assert mounted == [], f"采集工具不该挂任何配方（模型调不对参数），实际挂在: {mounted}"
+
+
+def test_deep_diagnosis_prompt_does_not_ask_for_tool_call():
+    """@spec RECIPE-006 — 提示词里不许再要求模型调这个工具（那条路已被证伪）。"""
+    frag = str(_recipe("deep_diagnosis").get("prompt_fragment") or "")
+    assert TOOL not in frag, "deep_diagnosis 提示词不该再要求调用采集工具"
+
+
+def test_deep_diagnosis_keeps_the_miss_marker():
+    """@spec RECIPE-006 — 采集靠「未取到/暂无」触发，提示词必须保留这条要求。
+
+    删掉这句 → 回答里不再有标记 → gap_collector 永不触发 → 提案表静默归零。
+    """
+    frag = str(_recipe("deep_diagnosis").get("prompt_fragment") or "")
+    assert ("暂无" in frag) or ("未取到" in frag), (
+        "deep_diagnosis 提示词必须要求「取不到就写暂无/未取到」—— 那是缺口采集的触发信号"
+    )
+
+
+def test_gap_collector_is_the_collection_path():
+    """@spec RECIPE-006 — 采集入口必须存在（被删掉就静默归零）。"""
+    from src.core import gap_collector
+
+    for attr in ("should_check", "collect", "spawn", "parse_gaps"):
+        assert hasattr(gap_collector, attr), f"gap_collector 缺 {attr}"
+    assert "deep_diagnosis" in gap_collector.WATCH_RECIPES
+
 
 
 def test_deep_diagnosis_budget_covers_mounted_tools():
-    """@spec RECIPE-003 / RECIPE-006 — 挂了但预算不够，排在后面的工具永远轮不到。"""
+    """@spec RECIPE-003 — 挂了但预算不够，排在后面的工具永远轮不到。"""
     d = _recipe("deep_diagnosis")
     tools = d.get("tools") or []
     budget = int((d.get("budget") or {}).get("max_tool_calls") or 0)
     assert budget >= len(tools), f"deep_diagnosis 预算 {budget} < 挂载工具数 {len(tools)}"
-
-
-def test_deep_diagnosis_prompt_shows_literal_call_example():
-    """@spec RECIPE-006 — 提示词必须给**字面调用示例**，不能只说「两个参数都必须给」。
-
-    2026-10-22 生产实测：agnes-3.0-flash 在长指令语境下会把工具参数结构搞混 ——
-    同一段提示词里只说「必须给 dimension 与 reason」，它吐的是
-    `{"queries": "...", "symbols": "..."}`（别的工具的字段）或只吐 `{"symbol": "600111"}`，
-    两次生产实测都没入库。换成带一行 `note_new_dimension(dimension="…", reason="…")` 示例后，
-    同样的提问稳定吐出正确参数。
-
-    这条守卫就是钉住那行示例：删掉它，采集会**静默归零**（工具照样被调用、永远失败）。
-    """
-    frag = str(_recipe("deep_diagnosis").get("prompt_fragment") or "")
-    assert "note_new_dimension(dimension=" in frag, (
-        "deep_diagnosis 提示词里缺字面调用示例 —— 模型会吐错参数结构，提案表会静默归零"
-    )
-    assert "reason=" in frag
 
 
 def test_collection_tool_declares_no_fallback():

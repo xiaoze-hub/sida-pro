@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY, chat_tool_schemas, charge_tool_budget
 from src.harness.runtime import AgentRuntime, budget_exhausted_hint, summarize_on_budget
 from src.core.symbol_guard import correction_note, is_stock_question, zero_tool_refusal
+from src.core import gap_collector
 from src.core.number_audit import annotate as _audit_annotate, audit as _audit_numbers
 from src.core.copilot_memory import memory_block
 from src.harness.viewstate import append_view_state_block
@@ -863,7 +864,7 @@ _REPEAT_QUESTION_INTENT_ALIASES = {
 
 
 def _extract_repeat_stock_code(text: str) -> str | None:
-    """从用户消息中提取 A 股 6 位股票代码(仅用于重复检测, 不校验存在性)。
+    r"""从用户消息中提取 A 股 6 位股票代码(仅用于重复检测, 不校验存在性)。
 
     只认 0/3/4/6/8/9 开头的 6 位数字(沪深主板/创业板/科创板/北交所);
     前后不接数字, 排除日期(2026xxxx)、金额等常见误报;
@@ -1307,16 +1308,24 @@ async def _run_tool_loop(
 
     runtime = AgentRuntime(trace=trace)
     status, error = "ok", None
+    answer = ""
     try:
         async for kind, payload in _run_tool_loop_inner(
             ai_client, messages_for_ai, db, user, stream=stream, runtime=runtime,
         ):
+            if kind in ("text", "done"):
+                answer += str(payload or "")
             yield kind, payload
     except Exception as exc:  # noqa: BLE001 - 记录后原样抛出, 不改既有降级语义
         status, error = "error", f"{type(exc).__name__}: {exc}"
         raise
     finally:
         finish_copilot_run(trace, status=status, error=error)
+        # 维度缺口采集: 后台跑, 不占响应时间; 只在深度诊断 + 回答里有「未取到」时触发
+        gap_collector.spawn(
+            ai_client, question=question, answer=answer, user_id=getattr(user, "id", None),
+            conversation_id=conversation_id, symbol=_REQ_BOUND.get(), recipe=recipe,
+        )
 
 
 def _sse_event(event: str, data: dict) -> str:

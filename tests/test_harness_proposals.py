@@ -289,12 +289,15 @@ def test_tool_visible_but_excluded_from_fallback():
     assert "note_new_dimension" in names
 
 
-def test_tool_mounted_only_in_analysis_recipe():
-    """只挂一份分析配方(deep_diagnosis) —— 既不是死管道, 也不到处撒。"""
+def test_tool_mounted_in_no_recipe():
+    """采集工具**不挂任何配方**（2026-10-22 改道：模型调不对参数，挂着等于每轮一次必然失败的调用）。
+
+    采集改由 `src/core/gap_collector.py` 承担：回答后不带工具的独立判定 + 严格校验。
+    """
     from src.harness.recipes import list_recipes
 
     mounted = [r.id for r in list_recipes() if "note_new_dimension" in r.tools]
-    assert mounted == ["deep_diagnosis"], f"采集工具只该挂在 deep_diagnosis, 实际: {mounted}"
+    assert mounted == [], f"采集工具不该挂任何配方, 实际: {mounted}"
 
 
 def test_tool_not_exposed_as_public_skill():
