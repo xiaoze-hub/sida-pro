@@ -1,3 +1,44 @@
+## feat: 历史相似分形对标 + 持仓成本锚定情景（2026-10-23，未发版）
+
+两条**确定性**精度升级，都不引入新数据源、不调 LLM：一条把「这位置危险吗」从复述指标
+变成历史频率，一条把同一组关键位换成**持仓人视角**。纯新增两个 core 模块 + 两个测试文件，
+零改动现有业务逻辑（未接 tools/registry，未碰 chat.py / pipeline / recipes / 前端）。
+
+**A. 历史相似分形对标（`src/core/analog_finder.py`）**
+- `find_analogs(bars, *, lookback_days=250, k=5, min_samples=10, max_distance=1.0)`（纯函数）：
+  给最后一根 bar 建 6 维特征（5/20 日涨跌、20 日量比、120 日区间位置、MA20 偏离、当日阴阳），
+  与参照窗口内每根历史 bar 比**按候选集标准差归一**的 L1 距离（不归一则量比独占权重）。
+  对最近邻算 T+1 / T+5 实际收益、上涨率、前 5 日路径最大回撤，以及是否跌穿该样本自身
+  **前 10 日低点**（破位标记）。
+- 诚实口径（硬）：同形样本 `n < min_samples` → `available=False` + `样本不足（n=X，至少 10）`，
+  **不输出任何 up_rate / t1 / t5**；同形还要求距离 ≤ `max_distance`（默认 1.0σ·均值），
+  不设门槛的「最近 5 根」是假统计；不足 k 个就用实际有的并报真实 n；特征缺失点名叫缺哪个
+  （如「20日量比」），不插值不外推；末 21 根整段排除，保证邻样本的 T+5 永远压不到当前 bar。
+  百分比 2 位小数、日期 `YYYY-MM-DD`，同输入同输出（距离相同按日期定序）。
+- `render()` ≤15 行证据串，末行固定
+  `[数据源: PG 前复权日线 · 相似形态分形统计 · 窗口 X 天 · 样本 n]`，并明写「这是历史频率，
+  不是预测」。`build()` 走 `load_qfq_bars_cached(days=400)`（多留前瞻空间），异常 → 取数失败不推断。
+
+**B. 持仓成本锚定情景（`src/core/scenario_cost_anchor.py`）**
+- `enrich_with_cost(matrix, *, cost_price, stop_price=None)`（纯函数，`deepcopy` 返回**新 dict**，
+  入参零改动）：把本人成本与纪律止损叠进 `build_matrix` 的矩阵，加 `cost_anchor` 块：区域
+  （`破位区` > `套牢区` > `安全垫区` > `成本区间` 的优先级）、距支撑/距成本（=本人浮盈亏）、
+  保本价，以及 `levels_for_owner` —— 支撑/阻力/纪律止损/成本各自的**持仓语义**
+  （「跌破 32.80 → 你的浮亏扩大到 -4.2%」），已破位写「已跌破」而非待触发条件。
+- 无成本（`None`/`<=0`）→ `无持仓成本（未上传交割单或无该股持仓）`；无纪律位就**不出现**纪律位，
+  绝不默认 -5%；关键位缺失同样拒绝锚定。所有数字原样取自矩阵，不重新取整、不新造。
+- `render_cost_anchor()` 3~6 行纯文本，末句「以上为关键位换算（非买卖建议）」。
+
+**测试**：`tests/test_analog_finder.py`（10）植入同形形态 → 命中植入日期；仅 2 个样本 → 不可用且
+整份结果无 `up_rate`；邻样本一律 ≤ 末 22 根；T+1/T+5 均值、上涨率、最差回撤、破位标记用原始收盘价
+复算；缺量 → 点名「20日量比」；空序列 / 短历史 / 取数异常各自出路。
+`tests/test_scenario_cost_anchor.py`（12）四区各一例 + 破位优先于套牢；无成本时入参字典逐键不变；
+无纪律位不出现纪律位且不出现 `-5%`；`levels_for_owner` 价位与矩阵值完全相等。
+
+验收：`pytest tests/test_analog_finder.py tests/test_scenario_cost_anchor.py tests/test_trend_profile.py
+tests/test_p1_fusion_annotations_and_range.py tests/test_w41_core_web_dependency.py -q` → 44 passed；
+`python scripts/trace_specs.py` → 19/19（100%）；`ruff check` 全过。
+
 ## feat: 接线 —— 全市场管线进 chat 路由 + 单轮缓存落到 4 个读库入口（2026-10-23，未发版）
 
 P5/P6 两个模块单测全绿但**不接线等于没装**（缓存命中率 0、6 份配方行为不变）。这一步补接线。
