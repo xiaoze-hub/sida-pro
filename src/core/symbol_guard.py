@@ -72,6 +72,12 @@ def mention_candidates(text: str) -> list[str]:
     return out
 
 
+# 名称检索结果缓存: 路由/绑定阶段每轮都要把「北方稀土」解析成 600111,
+# 不能每句都打一次 TQ(单线程 17709)。10 分钟过期, 失败不写缓存(下次重试)。
+_TQ_MATCH_CACHE: dict[str, tuple[float, list[tuple[str, str]]]] = {}
+_TQ_MATCH_TTL_S = 600.0
+
+
 def _tq_match(word: str) -> list[tuple[str, str]]:
     """TQ 名称检索 → [(code, name)]；失败返回空（护栏是旁路，绝不抛）。"""
     try:
@@ -95,6 +101,23 @@ def _tq_match(word: str) -> list[tuple[str, str]]:
     return out
 
 
+def _match_cached(word: str) -> list[tuple[str, str]]:
+    """带 10 分钟缓存的名称检索。
+
+    为什么不在 `_tq_match` 里缓存：那是纯检索函数, 缓存放外层才既省 TQ 调用
+    又能被单测替换掉网络层（patch `_tq_match` 时缓存仍然有效）。
+    """
+    import time as _time
+
+    hit = _TQ_MATCH_CACHE.get(word)
+    if hit and (_time.time() - hit[0]) < _TQ_MATCH_TTL_S:
+        return hit[1]
+    out = _tq_match(word)
+    if out:
+        _TQ_MATCH_CACHE[word] = (_time.time(), out)
+    return out
+
+
 def _suggest(word: str) -> tuple[str, str] | None:
     """查不到时给最像的一只（用首字扩大召回 + 字面相似度）。
 
@@ -103,9 +126,9 @@ def _suggest(word: str) -> tuple[str, str] | None:
     """
     import difflib
 
-    cands = _tq_match(word)
+    cands = _match_cached(word)
     if not cands and word:
-        cands = _tq_match(word[0])
+        cands = _match_cached(word[0])
     best, best_score = None, 0.0
     for code, name in cands:
         if not name.endswith(("转债", "ETF", "指")):
@@ -124,7 +147,7 @@ def resolve_mentions(text: str) -> dict:
     if not text or _CODE_RE.search(text):
         return empty
     for word in mention_candidates(text):
-        hits = _tq_match(word)
+        hits = _match_cached(word)
         if hits:
             code, name = hits[0]
             empty["resolved"].append((word, code, name))
@@ -135,6 +158,25 @@ def resolve_mentions(text: str) -> dict:
         else:
             empty["unknown"].append(word)
     return empty
+
+
+def first_code_from_names(text: str) -> str | None:
+    """问句里只写了股票名（「北方稀土还能拿吗」）→ 解析出第一只的 6 位代码。
+
+    2026-10-22 实测事故：用户问「北方稀土…还能持有吗」，因为正文没有 6 位代码，
+        `enter_request_ctx` 的 bound 为空 → 画像不判定 → 关键词也没命中配方 →
+        模型拿到全量 64 个工具却一个都没调 → 触发零工具拒绝，答「没取到数据」。
+        名字解析本来就是好的（resolve_mentions 命中 600111.SH），只是**没在这条路上用**。
+    """
+    if not text or _CODE_RE.search(text):
+        return None
+    try:
+        info = resolve_mentions(text)
+    except Exception:  # noqa: BLE001
+        return None
+    for _, code, _ in (info.get("resolved") or [])[:1]:
+        return str(code).split(".")[0] or None
+    return None
 
 
 def correction_note(text: str) -> str | None:
