@@ -12,6 +12,15 @@ import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles,
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
+import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
+import {
+  emptyReadiness,
+  foldStageEvent,
+  parseStageLabel,
+  settleReadiness,
+  type ReadinessState,
+} from '@/lib/copilot/evidence-readiness'
+import { anchorKindLabel, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
 import { parseAnswer } from '@/lib/copilot/answer-blocks'
 import { SESSION_LABEL, orderPresetsForSession, sessionOf } from '@/lib/copilot/presets-order'
@@ -139,6 +148,8 @@ type Msg = {
   content: string
   /** 用户消息附带的文件名（气泡里显示小 chip，正文不重复文件名太长）。 */
   attachment?: { name: string; isImage: boolean }
+  /** 助手消息定稿时固化的证据齐套度（流中长在页面上，答完留在回答顶部可回看）。 */
+  readiness?: ReadinessState
 }
 
 /** 6 位 A 股代码（含北交所 4/8 开头）才允许查参谋卡，避免把日期/金额当代码。 */
@@ -161,6 +172,19 @@ export default function AiCopilotPage() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [stage, setStage] = useState('')
+  /**
+   * 证据齐套度（2026-10-23）：把 stage 流折成按维度的 ✓/⏳/未取到。
+   * ref 与 state 双份 —— 流结束的 finally 里要拿**最新值**固化到消息上，state 那一刻还没刷新。
+   */
+  const [readiness, setReadiness] = useState<ReadinessState>(emptyReadiness)
+  const readinessRef = useRef<ReadinessState>(emptyReadiness())
+  /** 回答里点中的价位锚（K 线画线由别的模块拥有，这里只做可见回执）。 */
+  const [priceAnchor, setPriceAnchor] = useState<{
+    value: number
+    kind: PriceAnchorKind
+    context: string
+    symbol?: string
+  } | null>(null)
   const [streaming, setStreaming] = useState(false)
   const [convId, setConvId] = useState<number | null>(null)
   // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
@@ -390,6 +414,10 @@ export default function AiCopilotPage() {
       setMentionHit(null)
       setStreaming(true)
       setStage('正在准备上下文…')
+      // 新一轮：齐套度清零（上一轮的痕已经固化在它自己的消息上了）
+      readinessRef.current = emptyReadiness()
+      setReadiness(readinessRef.current)
+      setPriceAnchor(null)
       let assistant = ''
       try {
         // 标的解析优先级：@ 指定 > 本条文字里的代码 > 页面锚点（正在看 XXX）
@@ -418,7 +446,16 @@ export default function AiCopilotPage() {
           id,
           content,
           {
-            onStage: (s) => setStage(s),
+            onStage: (s) => {
+              setStage(s)
+              // stage 里能认出工具（`正在取数 3/10：get_xxx`）才进齐套度；
+              // 散文提示（「正在准备上下文…」）仍走下面那条单行 spinner，语义不混。
+              const next = foldStageEvent(readinessRef.current, s)
+              if (next !== readinessRef.current) {
+                readinessRef.current = next
+                setReadiness(next)
+              }
+            },
             onDelta: (d) => {
               assistant += d
               setStage('')
@@ -446,6 +483,18 @@ export default function AiCopilotPage() {
       } finally {
         setStreaming(false)
         setStage('')
+        // 定稿：pending → ok（流结束了，取数阶段已经过去），然后把这条痕固化到助手消息上。
+        // 没有助手消息（首字都没出来就失败）时不铺空条 —— 空 ≠ 0/0。
+        const settled = settleReadiness(readinessRef.current)
+        readinessRef.current = emptyReadiness()
+        setReadiness(emptyReadiness())
+        if (settled.items.length) {
+          setMsgs((prev) => {
+            const last = prev[prev.length - 1]
+            if (!last || last.role !== 'assistant') return prev
+            return [...prev.slice(0, -1), { ...last, readiness: settled }]
+          })
+        }
       }
     },
     [attach, convId, anchorSymbol, mentions, streaming, uploading],
@@ -492,6 +541,12 @@ export default function AiCopilotPage() {
     },
     [loadPending],
   )
+
+  /**
+   * 流式中的助手气泡是否已经落屏：决定了齐套度条挂在哪 ——
+   * 气泡已出现就贴在气泡顶部（定稿时原地不动），还没首字就先挂在对话流尾部。
+   */
+  const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
 
   return (
     <div className="relative flex h-[calc(100vh-9rem)] gap-3" data-testid="ai-copilot-page">
@@ -731,6 +786,36 @@ export default function AiCopilotPage() {
           </div>
         ) : null}
 
+        {priceAnchor ? (
+          <div
+            data-testid="copilot-price-anchor"
+            className="flex flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1"
+          >
+            <span className="text-[10px] text-muted-foreground">K线锚点</span>
+            <span className="font-mono text-[11px] tabular-nums text-role-watch">
+              {safeFixed(priceAnchor.value, 2)}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {anchorKindLabel(priceAnchor.kind, priceAnchor.context)}
+            </span>
+            {priceAnchor.symbol ? (
+              <a
+                href={`/stocks/${priceAnchor.symbol}`}
+                className="rounded border border-role-watch/40 px-1 text-[10px] text-role-watch hover:bg-role-watch/10"
+              >
+                {priceAnchor.symbol} 工作台 ↗
+              </a>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setPriceAnchor(null)}
+              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground"
+            >
+              清除
+            </button>
+          </div>
+        ) : null}
+
         <div
           ref={scroller}
           onDragOver={(e) => {
@@ -786,10 +871,34 @@ export default function AiCopilotPage() {
                   (() => {
                     const parsed = parseAnswer(m.content)
                     const symbolInMsg = extractSymbolChips(m.content)[0] || anchorSymbol
-                    return parsed.structured ? (
-                      <AnswerCard parsed={parsed} symbol={symbolInMsg} onFollowUp={(q) => void send(q)} />
-                    ) : (
-                      <SafeMarkdown>{m.content}</SafeMarkdown>
+                    // 定稿消息带自己的痕；流式中的最后一条用实时态（定稿瞬间原地换成固化值）
+                    const strip =
+                      m.readiness ?? (streamingAssistant && i === msgs.length - 1 ? readiness : null)
+                    return (
+                      <>
+                        {strip && strip.items.length ? (
+                          <div className="mb-1.5">
+                            <EvidenceReadinessStrip
+                              items={strip.items}
+                              done={strip.done}
+                              total={strip.total}
+                              failed={strip.failed}
+                            />
+                          </div>
+                        ) : null}
+                        {parsed.structured ? (
+                          <AnswerCard
+                            parsed={parsed}
+                            symbol={symbolInMsg}
+                            onFollowUp={(q) => void send(q)}
+                            onAnchoredPrice={(a) =>
+                              setPriceAnchor({ ...a, symbol: symbolInMsg || undefined })
+                            }
+                          />
+                        ) : (
+                          <SafeMarkdown>{m.content}</SafeMarkdown>
+                        )}
+                      </>
                     )
                   })()
                 )}
@@ -824,7 +933,17 @@ export default function AiCopilotPage() {
             </div>
           ))}
 
-          {stage ? (
+          {/* 首字未到、但已经在取数：齐套度条先挂在流尾（气泡一出现就挪进气泡顶部）。
+              能认出工具的 stage 不进这条 spinner —— 它已经被上面的 pill 取代。 */}
+          {readiness.items.length && !streamingAssistant ? (
+            <EvidenceReadinessStrip
+              items={readiness.items}
+              done={readiness.done}
+              total={readiness.total}
+              failed={readiness.failed}
+            />
+          ) : null}
+          {stage && !parseStageLabel(stage) ? (
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               {stage}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Check, ChevronDown, Copy, Sparkles } from 'lucide-react'
 import type { ParsedAnswer } from '@/lib/copilot/answer-blocks'
+import { anchorKindLabel, splitByAnchors, type PriceAnchorKind } from '@/lib/copilot/price-anchors'
 import {
   ANSWER_ACTION_COPIED,
   ANSWER_ACTION_COPY,
@@ -20,6 +21,56 @@ import {
 /** 首屏只露 3 条依据：结论 + 关键证据一屏读完，其余折叠（信息量不变，首屏变短）。 */
 const EVIDENCE_PREVIEW = 3
 
+/** 价格锚点：点 chip 时回传给上层（K 线画线由另一个模块拥有，这里只出事件）。 */
+export interface AnchoredPrice {
+  value: number
+  kind: PriceAnchorKind
+  context: string
+}
+
+/**
+ * 行内价位 chip（2026-10-23）。
+ *
+ * 只有传了 `onAnchor` 才渲染成按钮；没传时**逐字渲染原文**（老调用点行为不变,
+ * 也不会有任何 testid 冒出来）。百分比不是价位，永远不会变成按钮。
+ */
+function AnchoredText({
+  text,
+  onAnchor,
+}: {
+  text: string
+  onAnchor?: (a: AnchoredPrice) => void
+}) {
+  if (!onAnchor) return <>{text}</>
+  const segs = splitByAnchors(text)
+  if (!segs.some((s) => s.anchor)) return <>{text}</>
+  return (
+    <>
+      {segs.map((seg, i) => {
+        const a = seg.anchor
+        if (!a) return <span key={i}>{seg.text}</span>
+        const label = anchorKindLabel(a.kind, a.context)
+        return (
+          <button
+            key={`${i}-${a.start}`}
+            type="button"
+            data-testid="answer-price-anchor"
+            data-kind={a.kind}
+            title={`${label === '--' ? '价位' : label} ${a.value} · 点到 K 线`}
+            onClick={() => onAnchor({ value: a.value, kind: a.kind, context: a.context })}
+            className="mx-[1px] inline-flex items-baseline gap-0.5 rounded border border-border/60 px-1 align-baseline font-mono text-[10px] tabular-nums text-foreground/90 hover:border-role-watch/60 hover:text-role-watch"
+          >
+            <span>{seg.text}</span>
+            {label !== '--' ? (
+              <span className="text-[10px] text-muted-foreground">{label}</span>
+            ) : null}
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
 /**
  * 参谋回答卡片（2026-10-19, P1 排版）。
  *
@@ -31,15 +82,19 @@ const EVIDENCE_PREVIEW = 3
  *
  * 不做的事：不解析数字做 tile（模型散文里的数字位置不稳定，硬解析会张冠李戴），
  * 数字仍以依据原文为准。
+ * 例外（2026-10-23）：**价位**可以做成行内 chip —— 只在调用方传了 `onAnchoredPrice`
+ * 时生效，且 chip 上显示的就是原文片段（不改写、不重排），点击只回传数值。
  */
 export function AnswerCard({
   parsed,
   symbol,
   onFollowUp,
+  onAnchoredPrice,
 }: {
   parsed: ParsedAnswer
   symbol?: string
   onFollowUp?: (question: string) => void
+  onAnchoredPrice?: (a: AnchoredPrice) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -77,7 +132,9 @@ export function AnswerCard({
               </span>
             ) : null}
           </div>
-          <div className="mt-1 text-[13px] leading-relaxed text-foreground">{parsed.verdict}</div>
+          <div className="mt-1 text-[13px] leading-relaxed text-foreground">
+            <AnchoredText text={parsed.verdict} onAnchor={onAnchoredPrice} />
+          </div>
         </div>
       ) : null}
 
@@ -92,7 +149,9 @@ export function AnswerCard({
             {shownEvidence.map((e, i) => (
               <li key={`${i}-${e.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
                 <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-role-watch/70" />
-                <span className="min-w-0 text-foreground/90">{e}</span>
+                <span className="min-w-0 text-foreground/90">
+                  <AnchoredText text={e} onAnchor={onAnchoredPrice} />
+                </span>
               </li>
             ))}
           </ul>
