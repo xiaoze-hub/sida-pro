@@ -3,6 +3,10 @@ label: 盘后复盘官
 icon: "📊"
 desc: 收盘复盘：涨停梯队、炸板率、题材主线、情绪温度，只复盘不荐股。
 when: [复盘, 收盘, 涨停梯队, 连板梯队, 情绪]
+# 2026-10-23 全市场确定性管线：复盘要的六个维度里五个无需代码（情绪周期/涨停梯队/新闻/
+# 策略信号/机会），只有 get_stock_sectors 要 symbol —— 有自选就展开, 没有就写「未取到」。
+scope: market
+pipeline: true
 tools:
   - get_sentiment_cycle
   - get_hot_stocks

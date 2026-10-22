@@ -4,6 +4,11 @@ icon: "🌅"
 desc: 开盘前把隔夜事件、题材主线、自选股摆在一张桌上，给出今日观察清单（不给买卖指令）。
 when: [盘前, 今天怎么看, 隔夜消息, 事件驱动, 题材主线]
 skills: [premarket]
+# 2026-10-23 全市场确定性管线：隔夜消息/热点/情绪周期/机会/自选全部无需代码（{} 直跑）,
+# get_event_catalyst + get_stock_dossier 按自选展开; search_symbols 要 keyword, 市场级无从填参,
+# 管线会记 unsatisfiable_args 并让结论写「未取到」（不是盲调）。
+scope: market
+pipeline: true
 tools:
   - get_event_catalyst
   - get_market_news
