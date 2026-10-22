@@ -1,3 +1,14 @@
+## release: v0.41.9（spec-gate 只装了 pytest，读 YAML 的守卫直接 import 失败）（2026-10-22）
+
+`.github/workflows/spec-gate.yml` 的 "Spec guard tests" 步骤只 `pip install pytest`，
+而配方守卫要读 `src/harness/recipes/*.yaml` → `ModuleNotFoundError: No module named 'yaml'`
+→ pytest 以 **exit 2（收集错误）**结束，看起来像"测试失败"，其实是一条都没跑。
+
+修：门禁步骤补装 `pyyaml`（并在工作流里写明原因，防止以后有人"精简依赖"又删掉）。
+
+这也顺带解释了 v0.41.7/v0.41.8 的 main CI 为什么连红两次：第一次是规格文件被 `.gitignore` 吞掉，
+第二次是门禁环境缺 yaml —— 两个都是**门禁自己的环境问题**，不是规格写错。
+
 ## release: v0.41.8（规格文件被 .gitignore 吞掉：门禁本地绿、CI 红）（2026-10-22）
 
 v0.41.7 的 main CI 红了，报「测试引用了不存在的规格 ID DATA-001/002/003」，但本地 `trace_specs.py`

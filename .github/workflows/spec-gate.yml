@@ -38,7 +38,9 @@ jobs:
       - name: Spec guard tests
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          # pyyaml: 配方规格守卫要读 src/harness/recipes/*.yaml（只装 pytest 会因为
+          # ModuleNotFoundError: No module named 'yaml' 让整个门禁以 exit 2 挂掉）
+          python -m pip install pytest pyyaml
           python -m pytest tests/test_spec_*.py -q
 
       - name: Upload traceability report
