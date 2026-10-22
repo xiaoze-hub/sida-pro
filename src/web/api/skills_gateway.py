@@ -138,6 +138,8 @@ OPEN_SKILLS: dict[str, dict[str, Any]] = {
 BLOCKED_SKILLS = {
     "get_portfolio", "get_watchlist", "get_notifications", "get_stock_suggestions",
     "get_web_content", "tdx_wenda", "get_irm_qa",
+    # 2026-10-22 采集层: 写本人提案行(个人数据), 且它只对内网登录态有意义 → 不外放
+    "note_new_dimension",
 }
 
 # 档位默认日限/突发/匀速 —— 硬编码兜底; 生产以 tier_configs 表为准(任务3.2)。

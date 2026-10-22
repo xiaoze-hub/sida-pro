@@ -91,10 +91,14 @@ def test_registry_integrity():
         set(EXPECTED_CORE_ORDER) | EXPECTED_THSDK | EXPECTED_TQ
         | {"get_opportunities", "remember_preference", "create_daily_task",
            "get_intraday_profile", "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+           # 2026-10-22 交易模式画像(本人交割单画像 + 系统信号台账, 两者口径隔离)
+           "get_trader_playbook",
            # 2026-10-21 数据域架构 P0: 目录 + 统一取数入口
-           "list_data_domains", "query_data_domain"}
+           "list_data_domains", "query_data_domain",
+           # 2026-10-22 P0 采集层: 新分析维度提案(handler-only, 不进任何配方)
+           "note_new_dimension"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 64
+    assert len(CHAT_TOOL_REGISTRY) == 66
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -117,6 +121,10 @@ def test_self_requires_scoping():
     assert self_tools == {
         "get_portfolio", "get_stock_suggestions", "get_watchlist", "get_notifications",
         "propose_action",
+        # 2026-10-22 交易模式画像: 读本人交割单画像 → 只能读本人
+        "get_trader_playbook",
+        # 2026-10-22 采集层: 写的是**本人**的提案行 → 同样按 self 口径
+        "note_new_dimension",
     }
 
 
@@ -145,11 +153,13 @@ def test_exported_tool_order():
     assert set(tail) == EXPECTED_THSDK | EXPECTED_TQ | {
         "remember_preference", "create_daily_task", "get_intraday_profile",
         "get_trend_profile", "get_stock_factors", "get_scenario_matrix",
+        "get_trader_playbook",
         "list_data_domains", "query_data_domain"}
-    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 数据域两个
-    assert set(tail[-8:]) == {"remember_preference", "create_daily_task",
+    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个
+    assert set(tail[-9:]) == {"remember_preference", "create_daily_task",
                               "get_intraday_profile", "get_trend_profile",
                               "get_stock_factors", "get_scenario_matrix",
+                              "get_trader_playbook",
                               "list_data_domains", "query_data_domain"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema

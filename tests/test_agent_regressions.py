@@ -124,10 +124,10 @@ def _c11_user_id_is_uuid_text():
 
 
 def _c12_tool_count_stable():
-    """工具数变化必须是有意的（2026-10-21 = 64：数据域目录 + 统一取数入口）。"""
+    """工具数变化必须是有意的（2026-10-22 = 66：get_trader_playbook + note_new_dimension 采集层工具）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 64
+    assert len(CHAT_TOOL_REGISTRY) == 66
 
 
 def _c13_tool_schema_name_matches():
@@ -364,6 +364,44 @@ def _c33_tq_flow_snapshot_must_be_source_filtered():
     assert "timedelta(hours=8)" in src_text
 
 
+def _c34_page_anchor_rebinds_conversation():
+    """2026-10-22 事故「页面上下文串入」: 用户在 002548 页面聊过天, 再到
+    002114 页面提问, 参谋仍按 002548 作答 —— 系统提示与取数上下文全串在旧票上。
+
+    根因: `_bind_conv_symbol` 旧实现是"对话已绑定就直接返回", 前端后来发来的
+    `stock_symbol` 被忽略。修复后页面锚点合法且与旧绑定不同 → 绑定跟随更新。
+
+    口径(不可退化): 文字里的 6 位代码 > @提及 > 页面锚点 > 会话旧绑定。
+    """
+    from types import SimpleNamespace
+
+    from src.harness.context import resolve_bound_symbol
+    from src.web.api.chat import SendMessageBody, _bind_conv_symbol
+
+    class _DB:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    # 页面切换 → 绑定跟着换
+    conv = SimpleNamespace(stock_symbol="002548", stock_market="SZ")
+    db = _DB()
+    _bind_conv_symbol(db, conv, SendMessageBody(content="这只怎么样", stock_symbol="002114"))
+    assert conv.stock_symbol == "002114", "页面切换后绑定没更新 —— 页面上下文串入"
+
+    # 文字里的代码优先于页面锚点
+    assert resolve_bound_symbol("002548", "002114", "600111 怎么看") == "600111"
+    # 同页 → 不变
+    assert resolve_bound_symbol("002548", "002548", "这只怎么样") == "002548"
+    # 锚点为空/非法 → 保留旧绑定
+    assert resolve_bound_symbol("002548", None, "这只怎么样") == "002548"
+    assert resolve_bound_symbol("002548", "北方稀土", "这只怎么样") == "002548"
+
 
 CASES = [
     ("c01_竞价别名", _c01_auction_not_aliased),
@@ -399,6 +437,7 @@ CASES = [
     ("c31_对外文案口径", _c31_no_decision_pioneer_in_user_facing_text),
     ("c32_竞价涨幅口径", _c32_auction_gap_is_open_vs_prev_close),
     ("c33_TQ快照来源过滤", _c33_tq_flow_snapshot_must_be_source_filtered),
+    ("c34_页面锚点重绑", _c34_page_anchor_rebinds_conversation),
 ]
 
 

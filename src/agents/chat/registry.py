@@ -2496,6 +2496,48 @@ async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None =
         return f"[情景矩阵] 取数失败：{type(exc).__name__}——不硬编情景。"
 
 
+# ──────────────── 交易模式画像(2026-10-22) ────────────────
+# 位置: core 段末尾(数据域目录工具之前)。core 工具是连续前缀(EXPECTED_CORE_ORDER
+# index 断言), 新增工具不得插到 core 段中间。
+#
+# 口径(**关键**): 本工具的 "本人胜率" 只来自 users.shadow_profile_json(交割单聚合画像),
+# decision_log 是**系统生成的信号台账**, 衡量信号池质量, 不是本人战绩 —— 两者在本工具里
+# 物理隔离(strengths/weaknesses 只用前者, 后者单独在 signal_ledger 段)。
+@register_chat_tool(
+    "get_trader_playbook",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_trader_playbook",
+            "description": (
+                "用户交易模式画像：基于本人交割单聚合画像(回合数、回合胜率、持仓中位/P75 周期、"
+                "市场范围、行为短板)给出**带样本量与置信度**的长项/短板，附系统信号台账的"
+                "信号池质量分桶(标注为系统信号，非本人成交)。"
+                "回答「我的交易风格如何」「我擅长什么/有什么短板」「胜率多少」「一般拿多久」时用它。"
+                "证据不足时只说「样本不足」，不含买卖建议。"
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    caliber="本人交割单聚合画像(胜率/持仓周期/规则)+ 系统信号台账分桶(信号池质量, 非本人成交)",
+    requires="self",
+)
+async def _tool_get_trader_playbook(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.trader_playbook import build as _build_playbook, to_json as _to_json
+
+    if user is None:
+        return "该工具需要登录用户（读取本人交割单画像），当前会话没有用户身份。"
+    uid = getattr(user, "id", None)
+    if not uid:
+        return "未取到用户身份，无法读取本人交易画像。"
+    try:
+        playbook = await asyncio.to_thread(_build_playbook, db, uid)
+    except Exception as exc:  # noqa: BLE001 —— 熔断: 不拖垮对话
+        logger.warning(f"get_trader_playbook 工具失败: {exc}")
+        return f"[交易模式画像] 取数失败：{type(exc).__name__}——不编画像。"
+    return _to_json(playbook)
+
+
 # ──────────────── 数据域目录工具(2026-10-21, 数据域架构 P0) ────────────────
 # 位置: 追加在导出清单**最末**。core 工具是连续前缀(EXPECTED_CORE_ORDER index 断言),
 # 新增域工具不得插到 core 段中间; 排在尾部既不打乱既有顺序, 也便于比对工具总数。
@@ -2503,4 +2545,83 @@ async def _tool_get_scenario_matrix(db: Session, args: dict, user: User | None =
 from src.agents.chat import tools_catalog as _tools_catalog  # noqa: E402  (仅 stdlib 级依赖)
 
 _tools_catalog.register_catalog_tools()
+
+
+# ──────────────── 新分析维度提案(2026-10-22, P0 采集层) ────────────────
+# 位置: 注册表最末(导出清单里看不到它 —— 见下)。
+#
+# **schema=None(handler-only), 刻意不让 LLM 看见这个工具**:
+#   "让模型自己随手记"会把表塞满垃圾维度(模型觉得缺什么就记什么, 用户从没提过)。
+#   只记录 = 只有**确定性的采集管线**才该调它(它要自己判断"这个维度配方真的没覆盖")。
+#   这也是"只记录、不生效"最硬的一层保证: 采集层碰不到任何一次作答的行为。
+#
+# 为什么还注册成工具(而不是只留一个 core 函数):
+#   1. 工具名进注册表 → 有统一的 schema/caliber/权限契约, 未来采集管线按名字调;
+#   2. chat.py 的 _execute_tool 按名字分发, 不用改 chat.py(它有 2300 行护栏);
+#   3. 口径标签(caliber)随注册走, 治理页/轨迹里能看出"这次调用只是记录, 没取数"。
+#
+# 配方 YAML 一个字都不改 —— 它不在任何配方的工具白名单里(11 份 recipes/*.yaml 未改)。
+@register_chat_tool(
+    "note_new_dimension",
+    schema=None,
+    caliber="只记录不生效: 写入 harness_proposals(用户提出的新分析维度), 不取数、不影响作答",
+    requires="self",
+)
+async def _tool_note_new_dimension(db: Session, args: dict, user: User | None = None) -> str:
+    """记一条"用户想要但配方里没有"的分析维度。
+
+    入参: dimension(必填) / reason(必填) / symbol?(可选) / conversation_id?(可选)。
+    返回: created / dimension / seen_count / status 四项(记录结果, 不改任何分析)。
+
+    重复提同一维度 → 不插新行, 只把 seen_count 加一(返回 created=false)。
+    """
+    from src.core.harness_proposals import propose
+    from src.harness.context import REQ_RECIPE_LABEL
+
+    dimension = str((args or {}).get("dimension") or "").strip()
+    reason = str((args or {}).get("reason") or "").strip()
+    if not dimension or not reason:
+        return "缺少参数：dimension（维度名）与 reason（为什么需要它）都必须给。"
+
+    symbol = str((args or {}).get("symbol") or "").strip() or None
+    conv_id = (args or {}).get("conversation_id")
+    try:
+        conv_id = int(conv_id) if conv_id not in (None, "") else None
+    except (TypeError, ValueError):
+        conv_id = None
+
+    try:
+        row = propose(
+            db,
+            getattr(user, "id", None),
+            dimension=dimension,
+            reason=reason,
+            symbol=symbol,
+            conversation_id=conv_id,
+            recipe=(REQ_RECIPE_LABEL.get() or None),  # 当时命中了哪份配方(标签, 非 id)
+        )
+    except ValueError as exc:
+        return f"提案未记录：{exc}"
+    except Exception as exc:  # noqa: BLE001 - 采集是旁路, 失败不许影响本次作答
+        logger.warning("[harness-proposals] 记录失败(忽略): %s", exc)
+        return "提案记录失败（不影响本次回答）。"
+
+    # 返回四项结果(机器可读): created/dimension/seen_count/status
+    return _result_json(row)
+
+
+def _result_json(row: dict) -> str:
+    """四项结果(created/dimension/seen_count/status) —— 机器可读的 JSON 串。
+
+    注意: 这个工具只**记录**, 不返回任何分析内容 —— 收到它不代表这次作答多了维度。
+    """
+    import json
+
+    payload = {
+        "created": bool(row.get("created")),
+        "dimension": row.get("dimension"),
+        "seen_count": int(row.get("seen_count") or 0),
+        "status": row.get("status"),
+    }
+    return json.dumps(payload, ensure_ascii=False)
 

@@ -1497,6 +1497,49 @@ class CopilotQuota(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class HarnessProposal(Base):
+    """新分析维度提案（2026-10-22, P0 采集层）：**只记录，不生效**。
+
+    为什么要有它：分析维度写死在手写 YAML 配方里（`src/harness/recipes/*.yaml`）。
+    用户在对话里提出配方没覆盖的维度（"股东户数变化""龙虎榜席位风格"）时无处落点，
+    反复提也没人知道该补哪个能力 —— 这张表就是那份"需求账本"。
+
+    几条刻意的设计：
+    - **不生效**：这张表不被任何问答路径读，不改任何配方；人工审核后才可能进配方；
+    - **去重**：`normalized_dimension`（去空白+大小写折叠）是去重键，同一人同一维度
+      反复提只加 `seen_count`，不插重复行 —— 出现次数就是"该补"的优先级；
+    - **唯一约束带 status**：`uq(user_id, normalized_dimension, status)` —— 同一维度被
+      拒掉之后再次出现可以**重新提**（pending 位是空的），不被历史行永久压住。
+
+    seen_count 默认 1 且 not null：新行天然就是"出现过 1 次"。
+    """
+
+    __tablename__ = "harness_proposals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "normalized_dimension", "status",
+            name="uq_harness_proposals_user_norm_status",
+        ),
+        Index("ix_harness_proposals_user_status", "user_id", "status"),
+        Index("ix_harness_proposals_user_seen", "user_id", "seen_count"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False)
+    dimension = Column(String(40), nullable=False)          # 用户原话（去首尾空白）
+    normalized_dimension = Column(String(40), nullable=False)  # 去重键
+    reason = Column(Text, default="")                      # 为什么需要这个维度
+    evidence = Column(Text, default="")                    # 当时的对话/数据证据
+    conversation_id = Column(Integer, nullable=True)        # 哪个会话提的
+    symbol = Column(String(16), nullable=True)             # 当时的标的（可空）
+    recipe = Column(String(64), nullable=True)             # 当时的配方 id（可空）
+    status = Column(String(16), nullable=False, default="pending")  # pending/accept/reject/snooze
+    seen_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    decided_at = Column(DateTime, nullable=True)
+
+
 class Board(Base):
     """thsdk 板块/概念注册表(阶段2.1, v0.3.0)。
 

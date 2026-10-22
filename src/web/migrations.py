@@ -5816,6 +5816,22 @@ def _m217_chat_conversation_pinned(conn: Connection) -> None:
     )
 
 
+def _m218_harness_proposals(conn: Connection) -> None:
+    """新分析维度提案表（2026-10-22, P0 采集层）：只记录，不生效。
+
+    为什么建这张表：分析维度写死在手写 YAML 配方里，用户在对话里提出配方没覆盖的
+    维度（"股东户数变化""龙虎榜席位风格"）时无处落点。这张表是那份"需求账本"。
+
+    幂等：`__table__.create(checkfirst=True)` —— 表已存在就跳过（PG/SQLite 都安全）。
+
+    唯一约束 `(user_id, normalized_dimension, status)` 里**故意带 status**：
+    同一维度被拒之后再次出现可以重新提（pending 位是空的），不被历史行永久压住。
+    """
+    from src.db.models import HarnessProposal
+
+    HarnessProposal.__table__.create(bind=conn, checkfirst=True)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6026,6 +6042,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(215, "stock_factor_daily", _m215_stock_factor_daily),
     Migration(216, "factor_concentration", _m216_factor_concentration),
     Migration(217, "chat_conversation_pinned", _m217_chat_conversation_pinned),
+    Migration(218, "harness_proposals", _m218_harness_proposals),
 )
 
 

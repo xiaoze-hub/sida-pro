@@ -713,3 +713,69 @@ def del_schedule(
     if not _delete(db, getattr(user, "id", None), sched_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"ok": True}
+
+
+# ──────────────── P0 采集层: 新分析维度提案(只记录, 不生效) ────────────────
+# 分析维度写死在手写 YAML 配方里; 用户在对话里提出配方没覆盖的维度时无处落点。
+# 这里只做**采集**: 提案落库 + 人工审核状态流转, 绝不改配方、绝不影响任何一次作答。
+
+
+@router.get("/proposals")
+def get_proposals(
+    status: str | None = Query(default="pending", description="pending/accept/reject/snooze; 不传=全部"),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> list[dict]:
+    """列出本人提出的新维度提案。严格按 user_id 过滤(别人的一条都看不到)。"""
+    from src.core.harness_proposals import list_proposals
+
+    if status is not None:
+        status = status.strip()
+        if not status:
+            status = None
+    return list_proposals(db, getattr(user, "id", None), status=status, limit=limit)
+
+
+@router.post("/proposals/{proposal_id}/decide")
+def decide_proposal(
+    proposal_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """人工审核一条提案: body {action: accept|reject|snooze}。
+
+    不属于本人 / 不存在 → 404(不泄露别人的提案是否存在)。
+    非法 action → 400。
+    """
+    from src.core.harness_proposals import decide as _decide
+
+    action = str((body or {}).get("action") or "").strip().lower()
+    try:
+        row = _decide(db, getattr(user, "id", None), proposal_id, action=action)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if row is None:
+        raise HTTPException(status_code=404, detail="提案不存在")
+    return {"ok": True, "proposal": row}
+
+
+@router.get("/proposals/stats")
+def get_proposals_stats(
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """「哪些维度反复出现」= 最该补的能力(按 seen_count 降序取前 10)。
+
+    只统计本人的; 附带按状态的数量汇总。
+    """
+    from src.core.harness_proposals import stats as _stats
+    from src.core.harness_proposals import summary as _summary
+
+    items = list(_stats(db, getattr(user, "id", None)))
+    return {
+        "items": items,
+        "top": items[0] if items else None,
+        "summary": _summary(db, getattr(user, "id", None)),
+    }

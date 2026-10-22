@@ -836,8 +836,24 @@ def build_system_prompt(db, scene: str, base_prompt: str, user) -> str:
         return base_prompt
 
     block = _build_shadow_profile_block(profile_json)
-    if not block:
-        return base_prompt
 
-    logger.debug(f"场景 {scene}: 已注入用户交易风格画像")
-    return base_prompt + "\n\n--- 用户交易风格画像 ---\n" + block
+    out = base_prompt
+    if block:
+        logger.debug(f"场景 {scene}: 已注入用户交易风格画像")
+        out = out + "\n\n--- 用户交易风格画像 ---\n" + block
+
+    # 2026-10-22 交易模式画像: 从真实回合数推导「长项/短板 + 样本量」, 与上面的交割单统计互补。
+    # 只在用户传过交割单时注入(没有数据时注入一句"样本不足"只是噪声)。
+    # block() 自带熔断: 读库失败返回空串, 绝不拖垮对话。
+    if user is not None:
+        try:
+            from src.core.trader_playbook import block as _tp_block
+
+            _tp = _tp_block(db, getattr(user, "id", None))
+        except Exception:  # noqa: BLE001 —— 旁路增强, 失败即跳过
+            logger.debug("交易模式画像注入失败(已忽略)", exc_info=True)
+            _tp = ""
+        if _tp:
+            out = out + "\n\n--- 交易模式画像（证据） ---\n" + _tp
+
+    return out
