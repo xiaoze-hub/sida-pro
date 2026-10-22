@@ -15,6 +15,12 @@ P0 只做**采集**：
 去重键用 `normalized_dimension`（去空白 + 大小写折叠），唯一约束
 `(user_id, normalized_dimension, status)` 里**故意带 status**：同一维度被拒之后
 再次出现，可以重新提（pending 的位置是空的），而不是被历史行永久压住。
+
+P2（2026-10-22）补一件事：**提案不等于「能力不存在」**。注册表里有 66 个工具，
+而 deep_diagnosis 只挂 11 个 —— 用户提的「股东户数变化」很可能已有工具
+（`get_fundamentals_detail`）覆盖，只是没进配方。`match_candidate_tools()` 只做
+一次纯文本匹配给出「可挂载现有工具」提示，**不改配方、不改任何一次作答**；
+审核人据此判「挂工具」还是「补数据源」，避免把已有能力当新需求排期。
 """
 from __future__ import annotations
 
@@ -39,6 +45,123 @@ STATUS_PENDING = "pending"
 ACTIONS = ("accept", "reject", "snooze")
 
 _WS = re.compile(r"\s+")
+
+# ── P2: 提案 → 现有工具匹配（纯文本，只读注册表） ─────────────────────────
+
+#: 候选工具最多给几个（面板一行只放得下三个名字）。
+CANDIDATE_TOOLS = 3
+#: 中文没有空格 → 用二字词做最小匹配单位（「股东户数」→ 股东/东户/户数）。
+_CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+#: 英文/数字/下划线词（工具名与参数名都是这套写法）。
+_LATIN_WORD = re.compile(r"[a-z0-9][a-z0-9_.\-]{1,}")
+#: 几乎每份工具说明里都有的二字词：命中它们**不证明**这个维度已有工具，
+#: 留着只会让面板出现「可挂载：get_stock_quote」这类噪声，直接把分数打假。
+_GENERIC_BIGRAMS = frozenset({
+    "数据", "分析", "查询", "获取", "指标", "情况", "口径", "最新", "历史", "变化",
+    "信息", "相关", "问题", "个股", "股票", "市场", "支持", "是否", "可以", "需要",
+    "用户", "本人", "库内", "以及", "用于", "回答", "包含", "明细", "提供", "一下",
+})
+#: 采集/记忆类工具不是「可挂载的分析能力」，不该出现在候选里。
+_EXCLUDED_TOOL_PREFIXES = ("propose_",)
+_EXCLUDED_TOOLS = frozenset({"note_new_dimension", "remember_preference"})
+#: 维度侧至少要命中几个词：单个二字词命中太廉价（「交易」「股东」几乎每份说明都有），
+#: 要求 2 个才认；维度本身只有 1 个词（如「筹码」）时按 1 个算。
+_MIN_DIM_HITS = 2
+
+#: 工具文本 → 词集 的缓存（注册表 import 后静态；50 行提案 × 66 工具不必重算）。
+_TOOL_TOKENS: dict[str, tuple[str, set[str]]] = {}
+
+
+def _tool_description(tool) -> str:
+    """取工具的自然语言说明（schema 是 `{type: function, function: {...}}` 两层）。"""
+    schema = tool.schema or {}
+    fn = schema.get("function") if isinstance(schema, dict) else None
+    if isinstance(fn, dict) and fn.get("description"):
+        return str(fn["description"])
+    if isinstance(schema, dict):
+        return str(schema.get("description") or "")
+    return ""
+
+
+def _tokens(text: str) -> set[str]:
+    """中文二字词 + 拉丁词 → 词集（不做分词，避免引入 jieba 这类重依赖）。"""
+    s = (text or "").casefold()
+    out = set(_LATIN_WORD.findall(s))
+    for run in _CJK_RUN.findall(s):
+        if len(run) == 1:
+            out.add(run)
+            continue
+        for i in range(len(run) - 1):
+            bigram = run[i:i + 2]
+            if bigram not in _GENERIC_BIGRAMS:
+                out.add(bigram)
+    return out
+
+
+def _tool_corpus() -> dict[str, tuple[str, set[str]]]:
+    """注册表里可挂载工具的 (原文, 词集)。**函数内 import**：core 不许依赖 web。"""
+    if _TOOL_TOKENS:
+        return _TOOL_TOKENS
+    try:
+        from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+    except Exception:  # pragma: no cover - 注册表不可用时宁可没有提示
+        logger.debug("读取 CHAT_TOOL_REGISTRY 失败，跳过候选工具匹配", exc_info=True)
+        return {}
+    for name, tool in CHAT_TOOL_REGISTRY.items():
+        if name in _EXCLUDED_TOOLS or name.startswith(_EXCLUDED_TOOL_PREFIXES):
+            continue
+        text = f"{name} {_tool_description(tool)} {tool.caliber or ''}"
+        _TOOL_TOKENS[name] = (text.casefold(), _tokens(text))
+    return _TOOL_TOKENS
+
+
+def match_candidate_tools(dimension: str, reason: str = "", limit: int = CANDIDATE_TOOLS) -> list[dict]:
+    """「这个维度是不是已经有工具了？」→ 最多 `limit` 个候选工具。
+
+    只做词面重合，不调模型、不查库、不改配方。**维度侧的词是硬门槛**
+    （至少命中 `_MIN_DIM_HITS` 个词），理由只参与排序 —— 理由里提的能力不能
+    把维度本身没提的工具推到面板上。
+
+    返回 `[{"name": ..., "caliber": ...}]`；没有匹配（或注册表读不到）→ `[]`，
+    绝不为了「有东西可显示」硬凑一个。
+    """
+    dim = (dimension or "").strip()
+    if not dim:
+        return []
+    try:
+        n = max(1, min(10, int(limit)))
+    except (TypeError, ValueError):
+        n = CANDIDATE_TOOLS
+    corpus = _tool_corpus()
+    if not corpus:
+        return []
+
+    dim_tokens = _tokens(dim)
+    reason_tokens = _tokens(reason or "") - dim_tokens
+    if not dim_tokens:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    required = _MIN_DIM_HITS if len(dim_tokens) >= _MIN_DIM_HITS else 1
+    dim_norm = dim.casefold()
+    for name, (text, tokens) in corpus.items():
+        dim_hits = len(dim_tokens & tokens)
+        if dim_hits < required:
+            continue
+        # 维度名整体出现在工具说明里 → 几乎可以断定就是它，排最前。
+        exact = 6 if dim_norm and dim_norm in text else 0
+        score = 2 * dim_hits + len(reason_tokens & tokens) + exact
+        scored.append((score, name))
+    # 同分按工具名排 → 结果稳定（面板不该每次刷新顺序都变）。
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+
+    return [
+        {"name": name, "caliber": CHAT_TOOL_REGISTRY[name].caliber or ""}
+        for _, name in scored[:n]
+    ]
+
 
 
 def normalize_dimension(dimension: str) -> str:
@@ -305,6 +428,13 @@ def summary(db, user_id) -> dict:
 
 
 def _row_dict(r) -> dict:
+    # 候选工具只是提示（面板一行 muted 文案），匹配挂了也必须能把提案本身显示出来
+    # —— 采集层的价值是「提案可审」，不能因为附注失败整行 500。
+    try:
+        candidates = match_candidate_tools(r.dimension or "", r.reason or "")
+    except Exception:
+        logger.debug("候选工具匹配失败：dimension=%r", getattr(r, "dimension", ""), exc_info=True)
+        candidates = []
     return {
         "id": r.id,
         "user_id": r.user_id,
@@ -320,4 +450,5 @@ def _row_dict(r) -> dict:
         "first_seen_at": str(r.first_seen_at or ""),
         "last_seen_at": str(r.last_seen_at or ""),
         "decided_at": str(r.decided_at or ""),
+        "candidate_tools": candidates,
     }

@@ -102,13 +102,30 @@ export const getCopilotRuns = (limit = 20, signal?: AbortSignal) =>
   fetchAPI<CopilotRunRow[]>(`/copilot/runs?limit=${limit}`, { signal })
 
 
+/** 单份配方的质量拆解（P3）：条数之外还要能看出「谁在坏」。 */
+export interface CopilotRecipeMetrics {
+  recipe: string
+  runs: number
+  /** 该配方 status='ok' 的占比；0 次运行不会出现在这里（分母存在才有值） */
+  ok_rate: number | null
+  degraded_runs: number
+  error_runs: number
+  /** 一轮工具都没调的运行数 —— 通常是配方挂载失效或模型空转 */
+  zero_tool_runs: number
+  /** 没测到耗时的运行不计入；全都没测到 → null（不是 0ms） */
+  avg_elapsed_ms: number | null
+}
+
 export interface CopilotMetrics {
   days: number
   runs: number
   ok_rate: number | null
   avg_tools: number | null
   p95_elapsed_ms: number | null
-  by_recipe: { recipe: string; runs: number }[]
+  /** 全局 degraded 占比；没有运行记录 → null（不写 0） */
+  degraded_rate: number | null
+  zero_tool_runs: number
+  by_recipe: CopilotRecipeMetrics[]
 }
 
 export const getCopilotMetrics = (days = 7, signal?: AbortSignal) =>

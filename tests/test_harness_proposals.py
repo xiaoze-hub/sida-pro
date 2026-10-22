@@ -415,3 +415,80 @@ def test_api_requires_login(db):
     app.include_router(copilot_api.router, prefix="/api")
     with TestClient(app) as c:
         assert c.get("/api/copilot/proposals").status_code == 401
+
+
+# ── P2: 提案 → 现有工具匹配 ────────────────────────────────────────────────
+#
+# 「用户提了新维度」不等于「平台没有这个能力」: 注册表 66 个工具、deep_diagnosis 只挂 11 个。
+# 匹配只做提示（面板一行 muted 文案），不挂工具、不改配方、不影响任何一次作答。
+
+def test_candidate_tools_finds_registered_tool_for_shareholder_dimension():
+    """股东户数变化 → get_fundamentals_detail（注册表里早就有，只是没进配方）。"""
+    hits = hp.match_candidate_tools("股东户数变化", "配方只覆盖十大股东，看不到户数变化趋势")
+    assert hits, "股东户数变化必须能匹配到已有工具, 否则审核人会把已有能力当新需求排期"
+    assert hits[0]["name"] == "get_fundamentals_detail"
+    assert hits[0]["caliber"], "候选必须带口径 —— 同一个指标不同口径不可混算"
+
+
+def test_candidate_tools_returns_name_and_caliber_shape():
+    hits = hp.match_candidate_tools("筹码集中度")
+    assert hits and set(hits[0]) == {"name", "caliber"}
+    assert all(isinstance(h["name"], str) and h["name"] for h in hits)
+
+
+def test_candidate_tools_respects_limit():
+    assert len(hp.match_candidate_tools("筹码", limit=1)) == 1
+    assert len(hp.match_candidate_tools("股东户数变化", limit=10)) <= 3
+
+
+def test_candidate_tools_empty_for_uncovered_dimension():
+    """没覆盖的维度 → []；不许为了「有东西显示」硬凑一个工具。"""
+    assert hp.match_candidate_tools("限售解禁") == []
+    assert hp.match_candidate_tools("机构调研") == []
+
+
+def test_candidate_tools_empty_dimension_or_no_registry(monkeypatch):
+    assert hp.match_candidate_tools("") == []
+    assert hp.match_candidate_tools("   ") == []
+    # 注册表不可用（import 挂了）→ 空结果，不抛异常
+    monkeypatch.setattr(hp, "_TOOL_TOKENS", {})
+    monkeypatch.setitem(__import__("sys").modules, "src.agents.chat.registry", None)
+    assert hp.match_candidate_tools("股东户数变化") == []
+
+
+def test_candidate_tools_excludes_collection_and_proposal_tools():
+    """采集/记忆/提议类工具不是「可挂载的分析能力」, 不许出现在候选里。"""
+    banned = {"note_new_dimension", "remember_preference"}
+    probes = ["股东户数变化", "新维度提案", "记住我的偏好", "筹码集中度", "龙虎榜席位风格"]
+    for dim in probes:
+        names = {h["name"] for h in hp.match_candidate_tools(dim, dim)}
+        assert not (names & banned), f"{dim} 候选里混进了非取数工具: {names & banned}"
+        assert not any(n.startswith("propose_") for n in names)
+
+
+def test_row_dict_includes_candidate_tools(db, uid):
+    hp.propose(db, uid, dimension="股东户数变化", reason="想看户数变化趋势")
+    row = hp.list_proposals(db, uid)[0]
+    assert row["candidate_tools"]
+    assert row["candidate_tools"][0]["name"] == "get_fundamentals_detail"
+
+
+def test_row_dict_survives_matcher_failure(db, uid, monkeypatch):
+    """匹配挂了也必须能看提案（附注失败不该让整行 500 / 消失）。"""
+    hp.propose(db, uid, dimension="股东户数变化", reason="a")
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("registry down")
+
+    monkeypatch.setattr(hp, "match_candidate_tools", _boom)
+    rows = hp.list_proposals(db, uid)
+    assert len(rows) == 1
+    assert rows[0]["candidate_tools"] == []
+    assert rows[0]["dimension"] == "股东户数变化"
+
+
+def test_api_list_exposes_candidate_tools(db, uid):
+    hp.propose(db, uid, dimension="股东户数变化", reason="a")
+    with _make_client(db, _FakeUser(uid)) as c:
+        items = c.get("/api/copilot/proposals").json()
+    assert items[0]["candidate_tools"][0]["name"] == "get_fundamentals_detail"

@@ -387,7 +387,13 @@ def get_copilot_metrics(
     db: Session = Depends(get_db),
     user: Any = Depends(get_current_user),
 ) -> dict:
-    """成本/质量看板数据：运行数、成功率、平均工具数、P95 耗时、按配方分组。"""
+    """成本/质量看板数据：运行数、成功率、平均工具数、P95 耗时、按配方分组。
+
+    P3（2026-10-22）补：原来 `by_recipe` 只给条数，看不出**哪份配方在坏** ——
+    同一份配方跑 10 次全 degraded 与跑 10 次全 ok 在旧口径里长得一模一样。
+    现在每行带 ok_rate / degraded_runs / error_runs / zero_tool_runs / avg_elapsed_ms
+    （旧字段 recipe/runs 保留，前端老代码不受影响；算不出的均值写 null，不写 0）。
+    """
     from datetime import timedelta
 
     from sqlalchemy import func
@@ -402,19 +408,57 @@ def get_copilot_metrics(
     )
     if not rows:
         return {"days": days, "runs": 0, "ok_rate": None, "avg_tools": None,
-                "p95_elapsed_ms": None, "by_recipe": []}
+                "p95_elapsed_ms": None, "by_recipe": [],
+                "degraded_rate": None, "zero_tool_runs": 0}
     elapsed = sorted([r.elapsed_ms for r in rows if r.elapsed_ms])
     p95 = elapsed[int(len(elapsed) * 0.95) - 1] if elapsed else None
-    by_recipe: dict[str, int] = {}
+
+    # 按配方聚合：计数与耗时同一次遍历算完，避免再查一遍库。
+    agg: dict[str, dict] = {}
     for r in rows:
-        by_recipe[r.recipe or "(默认)"] = by_recipe.get(r.recipe or "(默认)", 0) + 1
+        key = r.recipe or "(默认)"
+        item = agg.get(key)
+        if item is None:
+            item = agg[key] = {
+                "runs": 0, "ok": 0, "degraded": 0, "error": 0, "zero_tool": 0, "elapsed": [],
+            }
+        item["runs"] += 1
+        st = (r.status or "").lower()
+        if st == "ok":
+            item["ok"] += 1
+        elif st == "degraded":
+            item["degraded"] += 1
+        elif st == "error":
+            item["error"] += 1
+        if (r.tool_calls or 0) == 0:
+            item["zero_tool"] += 1
+        if r.elapsed_ms:
+            item["elapsed"].append(int(r.elapsed_ms))
+
+    by_recipe = []
+    for key, item in agg.items():
+        n = item["runs"]
+        avg_ms = sum(item["elapsed"]) / len(item["elapsed"]) if item["elapsed"] else None
+        by_recipe.append({
+            "recipe": key,
+            "runs": n,
+            "ok_rate": round(item["ok"] / n, 3),
+            "degraded_runs": item["degraded"],
+            "error_runs": item["error"],
+            "zero_tool_runs": item["zero_tool"],
+            "avg_elapsed_ms": int(avg_ms) if avg_ms is not None else None,
+        })
+    by_recipe.sort(key=lambda x: (-x["runs"], x["recipe"]))
+
     return {
         "days": days,
         "runs": len(rows),
         "ok_rate": round(sum(1 for r in rows if r.status == "ok") / len(rows), 3),
         "avg_tools": round(sum(r.tool_calls or 0 for r in rows) / len(rows), 1),
         "p95_elapsed_ms": p95,
-        "by_recipe": [{"recipe": k, "runs": v} for k, v in sorted(by_recipe.items(), key=lambda x: -x[1])],
+        "degraded_rate": round(sum(1 for r in rows if r.status == "degraded") / len(rows), 3),
+        "zero_tool_runs": sum(1 for r in rows if (r.tool_calls or 0) == 0),
+        "by_recipe": by_recipe,
     }
 
 

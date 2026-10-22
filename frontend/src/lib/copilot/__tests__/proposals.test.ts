@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ACTION_LABEL,
   PROPOSAL_TABS,
+  buildCandidateToolsLine,
   buildMetaLine,
   buildSummaryItems,
   buildTopLine,
@@ -225,5 +226,22 @@ describe('汇总带', () => {
     expect(isEmptyOverall({ items: [], top: null, summary })).toBe(false)
     // stats 拿不到 = 不知道，不能断言「没有提案」
     expect(isEmptyOverall(null)).toBe(false)
+  })
+
+  it('buildCandidateToolsLine：有候选列名字，没候选/字段缺失一律不显示', () => {
+    expect(
+      buildCandidateToolsLine(
+        row({
+          id: 1,
+          candidate_tools: [{ name: 'get_fundamentals_detail' }, { name: 'get_northbound', caliber: 'x' }],
+        }),
+      ),
+    ).toBe('可挂载现有工具：get_fundamentals_detail、get_northbound')
+    // 0 个候选 / null / 字段缺失 → 空串（不写「无」，那会被读成「平台没有」）
+    expect(buildCandidateToolsLine(row({ id: 2, candidate_tools: [] }))).toBe('')
+    expect(buildCandidateToolsLine(row({ id: 3, candidate_tools: null }))).toBe('')
+    expect(buildCandidateToolsLine(row({ id: 4 }))).toBe('')
+    // 空名字不算候选
+    expect(buildCandidateToolsLine(row({ id: 5, candidate_tools: [{ name: '  ' }] }))).toBe('')
   })
 })
