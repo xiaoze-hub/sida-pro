@@ -80,6 +80,35 @@ def get_copilot_brief(
         return res
 
 
+@router.get("/persona/{symbol}")
+def get_persona(symbol: str, market: str = "CN",
+                user: Any = Depends(get_current_user)) -> dict:
+    """标的画像（妖股 / 左侧 / 题材龙头 / 趋势 / 常规），供工作台打徽标。
+
+    与参谋回答里用的是同一套判定（`src/core/stock_persona.py`），
+    数据不足时返回 `kind="normal"` 且在 reasons 里说明 —— 不猜。
+    """
+    from src.core.stock_persona import detect as _detect
+    from src.db.session import SessionLocal
+
+    _db = SessionLocal()
+    try:
+        p = _detect(_db, symbol.split(".")[0].strip(), market)
+    except Exception as exc:  # noqa: BLE001  画像失败不该让页面白屏
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"[:120]}
+    finally:
+        _db.close()
+    return {
+        "available": True,
+        "kind": p.kind,
+        "label": p.label,
+        "score": p.score,
+        "grade": p.grade,
+        "reasons": list(p.reasons),
+        "recipe": p.recipe,
+    }
+
+
 @router.get("/presets")
 def get_copilot_presets(
     user: Any = Depends(get_current_user),

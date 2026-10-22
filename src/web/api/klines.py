@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 import concurrent.futures
@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 from src.collectors.kline_collector import KlineCollector
 from src.models.market import MarketCode
 from src.core.trading_calendar import is_trading_day
+from src.web.api.auth import get_current_user
+from src.db.models import User
 
 _APP_TZ = "Asia/Shanghai"
 
@@ -546,6 +548,23 @@ def _finalize_daily_bars(
         return bars, "missing"
     bars.append(live)
     return bars, "live"
+
+
+@router.get("/{symbol}/scenario")
+def get_scenario_matrix(symbol: str, market: str = "CN", _: User = Depends(get_current_user)):
+    """情景矩阵（结构化）：关键位 + 三档情景，供 K 线图上画线。
+
+    与 chat 工具 `get_scenario_matrix` 同一套计算（`scenario_engine.build_matrix`），
+    不预测方向，只给条件-反应；关键位不足时返回 available=False 并说明原因（不硬编）。
+    """
+    from src.core.scenario_engine import build_matrix
+    from src.web.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return build_matrix(db, symbol, market)
+    finally:
+        db.close()
 
 
 @router.get("/{symbol}")

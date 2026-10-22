@@ -13,7 +13,7 @@
  *   - 缺失数据: KlineItem 为空数组时显示"无数据"占位 (业务硬约束: 禁止编造数字).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
 import {
   createChart,
@@ -21,13 +21,14 @@ import {
   HistogramSeries,
   LineSeries,
   createSeriesMarkers,
+  LineStyle,
   type IChartApi,
   type ISeriesApi,
   type Time,
   type SeriesMarker,
 } from 'lightweight-charts'
 
-import { fetchAPI } from '@panwatch/api'
+import { fetchAPI, fetchScenario, type ScenarioMatrixResponse } from '@panwatch/api'
 import MinutePane from './MinutePane'
 import {
   intentLabelFor,
@@ -39,7 +40,7 @@ import {
 import type { MainIntentStructured } from '../lib/main-intent-types'
 import { safeFixed, toAmount } from '@/lib/format'
 
-import { readStockColors, readChartTheme, maShade, readGsColors, gsColorFor, directionColorFor, activityLevelColor, thresholdLine, readAccentPrimary } from '../lib/stock-colors'
+import { readStockColors, readChartTheme, maShade, readGsColors, gsColorFor, directionColorFor, activityLevelColor, thresholdLine, readAccentPrimary, readScenarioColors } from '../lib/stock-colors'
 import { dayKey, filterMarkersInBarsRange } from '../lib/chart-markers'
 // L3 资金柱的**唯一**净额/分色/时间口径(与 InteractiveKline 共用, 见 lib/fund-bar.ts)
 import { fundBarPoint, fundBarTime, DAY_BUCKETS, type FundFlowBar, type KlineInterval } from '../lib/fund-bar'
@@ -81,6 +82,15 @@ import {
   noteForMarker,
   type ChartNote,
 } from '../lib/chart-notes'
+
+// 情景关键位图层(2026-10-22): 后端情景矩阵 → 主图水平线(纯逻辑, 可独立单测)。
+// 数据源 `/klines/{symbol}/scenario` —— 与 chat 工具 `get_scenario_matrix` 同一套计算,
+// 前端只画后端算好的关键位, 不重算方向(不预测方向, 只给条件-反应)。
+import {
+  buildScenarioLines,
+  type ScenarioLine,
+  type ScenarioLineTone,
+} from '../lib/scenario-lines'
 
 // 决策先锋辅助指标(P3 UI 集成, 2026-10-10): 趋势操盘线/牛熊线的三线序列 + 买卖点 marker 纯逻辑。
 // 数据源 `/api/indicators/*`; 与形态标注同策略(父传优先 + 自取, 错峰, 显式降级), 但**职责不同**:
@@ -242,6 +252,22 @@ const EMPTY_ACTIVITY: ActivityPoint[] = []
 const EMPTY_PATTERNS: PatternMark[] = []
 const EMPTY_NOTES: ChartNote[] = []
 const EMPTY_DARKPOOL: DarkPoolPoint[] = []
+const EMPTY_SCENARIO_LINES: ScenarioLine[] = []
+
+/**
+ * 情景关键位图层(2026-10-22)的语义色 → 实际颜色(canvas 不认 Tailwind 类, 读 CSS 变量)。
+ * 买红卖绿(A股口径): 阻力/走强目标=红系(涨), 支撑/走弱目标=绿系(跌)。
+ * 走 --scenario-up/down 令牌(与涨跌色分开, 语义各自可演进), 主题切换自动跟随。
+ */
+function scenarioLineColor(tone: ScenarioLineTone): string {
+  const sc = readScenarioColors()
+  return tone === 'rose' ? sc.up : sc.down
+}
+
+/** 图例文字用的语义色 class(与画布同语义: 红=涨位, 绿=跌位)。 */
+function scenarioLineToneClass(tone: ScenarioLineTone): string {
+  return tone === 'rose' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+}
 
 /** GS 区间色带主图独立隐藏轴(顶部窄带) + 暗盘资金副图独立隐藏轴。 */
 const GSZONE_SCALE = 'gszone'
@@ -345,6 +371,12 @@ export default function KlineChart(props: {
    */
   wyckoff?: PatternMark[]
   /**
+   * 情景关键位(2026-10-22): 后端情景矩阵的关键位(阻力/支撑/走强目标/走弱目标), 画成主图水平线。
+   * 父不传时组件自取 `GET /klines/{symbol}/scenario`(受 `layersVisible.scenario` / 图层开关门控)。
+   * 与 chat 工具 `get_scenario_matrix` 同一套计算 —— 前端只画, 不重算方向。
+   */
+  scenario?: ScenarioMatrixResponse | null
+  /**
    * 趋势操盘线(2026-10-10): 红/黄/绿三线 + 买卖点(证据非建议)。
    * 父不传且 `layersVisible.trendLine !== false` 时, 组件自取 `GET /indicators/trend-line/{symbol}`。
    */
@@ -389,7 +421,7 @@ export default function KlineChart(props: {
    * 用户可单独关整层; 整层关时该层所有 marker/柱/价位线全部隐藏。
    * 不传 = 默认全开。L4 内部仍受 `kindsVisible` 控制每种事件图标的显隐(per-kind)。
    */
-  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** AI/用户标注 */ aiNote?: boolean }
+  layersVisible?: { trend?: boolean; signal?: boolean; capital?: boolean; event?: boolean; pattern?: boolean; wyckoff?: boolean; trendLine?: boolean; niuxiong?: boolean; explain?: boolean; /** AI/用户标注 */ aiNote?: boolean; /** 情景关键位(2026-10-22) —— **默认关**(需显式 true 才开, 不干扰原有视图) */ scenario?: boolean }
   /** 阶段三: 支撑/压力位显隐过滤 */
   priceLinesVisible?: { support?: boolean; pressure?: boolean }
   /** v2.1 §10.2: 选段时间回调 (拖拽选段 → 反查资金面板/事件标注) */
@@ -444,6 +476,8 @@ export default function KlineChart(props: {
   const priceLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   // 持仓成本线 (Phase 0: 与支撑压力线独立管理, 同一切换开关重建逻辑)
   const costLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
+  // 情景关键位水平线(2026-10-22): 独立管理 —— 切标的/关图层时整组清掉, 不残留在新标的上
+  const scenarioLinesRef = useRef<ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]>([])
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   // 2026-09-04 P0-3: L3 资金柱独立序列('fund' 轴, 单位元; 成交量是股, 不再共轴)
   const fundSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
@@ -902,9 +936,11 @@ export default function KlineChart(props: {
       if (seriesRef.current) {
         for (const line of priceLinesRef.current) seriesRef.current.removePriceLine(line)
         for (const line of costLinesRef.current) seriesRef.current.removePriceLine(line)
+        for (const line of scenarioLinesRef.current) seriesRef.current.removePriceLine(line)
       }
       priceLinesRef.current = []
       costLinesRef.current = []
+      scenarioLinesRef.current = []
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
@@ -1085,6 +1121,42 @@ export default function KlineChart(props: {
     }
   }, [props.symbol, props.market, ownWyckoff, showWyckoffLayer])
 
+  // ── 情景关键位自取(2026-10-22) ───────────────────────────────────────────────
+  // 数据源: GET /klines/{symbol}/scenario(后端情景矩阵, 与 chat 工具同一套计算)。
+  // 与其它图层同策略: 父传了 props.scenario 就不取; 取不到 = 本次不画(空数组, 不编造)。
+  // 受 `layersVisible.scenario` 门控 —— **默认关**(必须显式 true 才开), 不干扰原有视图。
+  // 后端 available=false(关键位不足)时静默不画, 不弹错。
+  //
+  // 开关口径(与图例区按钮配套): 父传 `layersVisible.scenario` = 父接管(传 true 开/传 false 关);
+  // 父不传 = 组件自持本地开关(**默认关**), 由图例区的按钮切换。
+  const ownScenario = props.scenario === undefined
+  const [scenarioLocalOn, setScenarioLocalOn] = useState(false)
+  const showScenarioLayer =
+    props.layersVisible?.scenario === true
+      ? true
+      : props.layersVisible?.scenario === false
+        ? false
+        : scenarioLocalOn
+  const [scenarioData, setScenarioData] = useState<ScenarioMatrixResponse | null>(null)
+  useEffect(() => {
+    if (!ownScenario || !showScenarioLayer || !props.symbol) {
+      setScenarioData(null)
+      return
+    }
+    let cancelled = false
+    // 错峰(与 patterns/wyckoff 同因): 情景层不抢主图 /klines/{symbol} 的带宽/队列。
+    const timer = window.setTimeout(() => {
+      fetchScenario(props.symbol, props.market)
+        .then((res) => {
+          if (!cancelled) setScenarioData(res)
+        })
+    }, SUMMARY_SLOW_LANE_DELAY_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [props.symbol, props.market, ownScenario, showScenarioLayer])
+
   // ── 图表说明自取(2026-10-14 看图决策产品件): 逐标记「为什么在那」 ─────────────
   // 数据源: GET /klines/{symbol}/chart-notes(后端与图层标记**单一事实源**)。
   // 与其它图层同策略: 父传了 props.chartNotes 就不取; 取不到 = 本次不展示说明(空, 不编造)。
@@ -1219,6 +1291,12 @@ export default function KlineChart(props: {
   const effPatterns = props.patterns ?? patternMarks ?? EMPTY_PATTERNS
   // 威科夫量价结构(本土三层滤网 P1): 父传优先 → 自取 → 稳定空数组(与 patterns 同策略)
   const effWyckoff = props.wyckoff ?? wyckoffMarks ?? EMPTY_PATTERNS
+  // 情景关键位(2026-10-22): 父传优先 → 自取 → 稳定空数组; 清洗/去重/排序全在 lib/scenario-lines(纯函数)
+  const effScenarioMatrix = props.scenario ?? scenarioData
+  const effScenarioLines = useMemo(
+    () => (effScenarioMatrix ? buildScenarioLines(effScenarioMatrix) : EMPTY_SCENARIO_LINES),
+    [effScenarioMatrix],
+  )
   // 决策先锋辅助指标: 父传优先 → 自取(可能为 null = 无数据/降级, 图层据此不画)
   const effTrendLine = props.trendLine ?? trendLineData
   const effNiuxiong = props.niuxiong ?? niuxiongData
@@ -1553,6 +1631,29 @@ export default function KlineChart(props: {
       }
     }
 
+    // 2c) 情景关键位水平线(2026-10-22): 阻力/支撑/走强目标/走弱目标。
+    //     受情景图层开关门控(**默认关**); 先清后建 ⇒ 切标的/关图层都不残留。
+    //     买红卖绿: 阻力+走强目标=红系(涨), 支撑+走弱目标=绿系(跌)。
+    for (const line of scenarioLinesRef.current) {
+      try { series.removePriceLine(line) } catch { /* noop */ }
+    }
+    scenarioLinesRef.current = []
+    if (showScenarioLayer) {
+      for (const l of effScenarioLines) {
+        if (!Number.isFinite(l.price)) continue
+        scenarioLinesRef.current.push(
+          series.createPriceLine({
+            price: l.price,
+            color: scenarioLineColor(l.color),
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: l.label,
+          }),
+        )
+      }
+    }
+
     // 3) 资金柱 (L3 资金柱, showCapital 开关): 红涨绿跌 + 主净分色叠加在 K 线下方。
     //    关掉时 setData([]) 清空 — 否则上一轮的柱会残留。
     //    09-03: subchart==='activity' 时 volumeSeries 改画活跃度三色柱 (与资金柱互斥, 同 pane)。
@@ -1635,7 +1736,7 @@ export default function KlineChart(props: {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, interval, props.sourceReady, props.tradeMarkers, intent, aiNotes])
+  }, [effEvents, effPriceLines, props.costLines, effFundFlow, effActivitySeries, subchart, props.kindsVisible, props.priceLinesVisible, props.layersVisible, effGsSignals, effPatterns, effWyckoff, effTrendLine, effNiuxiong, effDarkPool, effScenarioLines, showScenarioLayer, interval, props.sourceReady, props.tradeMarkers, intent, aiNotes])
 
   // ── L1 趋势均线 (MA5/10/20/60 + 牛马线) + L5 副图 (摆子: 缩放/十字光标/选段 已由上层 effect 生效) ──
   // 设计稿 §5: L1 均线灰阶 + 牛蓝/马橙, 受 layers.trend 开关; L5 副图受 subchart 切换。
@@ -2002,6 +2103,46 @@ export default function KlineChart(props: {
             )
           })}
           <span className="text-[10px]">客观标注 · 非投资建议</span>
+        </div>
+      )}
+
+      {/* 情景关键位图例(2026-10-22): 与形态/威科夫图例**同位置同风格**(一行式小字, 非卡片)。
+          图上元素 = 水平线(阻力/支撑/走强目标/走弱目标), 这里只做"颜色=语义"映射 + 图层开关。
+          开关默认**关**(不干扰原有视图), 父传 `layersVisible.scenario` 时以父为准。
+          诚实口径: 关键位由均线/筹码带/区间高低算出, 非主观画线, 也不预测方向。 */}
+      {showScenarioLayer && effScenarioLines.length > 0 && (
+        <div
+          data-testid="scenario-legend"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground/80">情景关键位</span>
+          {effScenarioLines.map((l) => (
+            <span key={`${l.kind}-${l.price}`} className="flex items-center gap-x-1">
+              <span
+                aria-hidden="true"
+                className={`inline-block h-px w-3 border-t border-dashed ${scenarioLineToneClass(l.color)}`}
+              />
+              <span className={scenarioLineToneClass(l.color)}>{l.label}</span>
+              <span className="font-mono">{safeFixed(l.price, 2)}</span>
+            </span>
+          ))}
+          <span className="text-[10px]">条件-反应 · 非方向预测</span>
+        </div>
+      )}
+      {!showScenarioLayer && props.layersVisible?.scenario === undefined && (
+        <div
+          data-testid="scenario-layer-toggle"
+          className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+        >
+          <button
+            type="button"
+            onClick={() => setScenarioLocalOn((v) => !v)}
+            className="px-2 py-1 text-xs rounded bg-secondary text-secondary-foreground hover:bg-secondary/80"
+            title="显示/隐藏情景关键位(阻力/支撑/走强目标/走弱目标)—— 后端情景矩阵算出的关键位, 不预测方向"
+          >
+            显示情景关键位
+          </button>
+          <span className="text-[10px]">阻力/支撑/目标位 · 条件-反应 · 非投资建议</span>
         </div>
       )}
 

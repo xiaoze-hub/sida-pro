@@ -5800,6 +5800,22 @@ def _m216_factor_concentration(conn: Connection) -> None:
             conn.execute(text(f"ALTER TABLE stock_factor_daily ADD COLUMN {col} {dtype}"))
 
 
+def _m217_chat_conversation_pinned(conn: Connection) -> None:
+    """chat_conversations 加 pinned 列（2026-10-22）：会话置顶。
+
+    置顶与会话管理面板配套：置顶的会话在列表/搜索结果里排最前。
+    BOOLEAN NOT NULL DEFAULT FALSE —— 存量行默认不置顶；SQLite 动态类型下
+    `FALSE` 落库为 0, ORM 侧用 Boolean 读回布尔，语义一致。
+    幂等可重跑（列已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "chat_conversations",
+        "pinned",
+        "ALTER TABLE chat_conversations ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6009,6 +6025,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(214, "cancel_rate_snapshots", _m214_cancel_rate_snapshots),
     Migration(215, "stock_factor_daily", _m215_stock_factor_daily),
     Migration(216, "factor_concentration", _m216_factor_concentration),
+    Migration(217, "chat_conversation_pinned", _m217_chat_conversation_pinned),
 )
 
 

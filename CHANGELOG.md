@@ -1,3 +1,31 @@
+## release: v0.40.0（数智参谋工作台对齐 Codex/Hermes：会话管理 · 过程回放 · 记忆/定时面板）（2026-10-22）
+
+**工作台不再只有"提问框 + 历史列表"**，按 Agent 平台的标准补齐六块：
+
+| 能力 | 落地 |
+|---|---|
+| 会话管理 | 搜索（标题+消息正文）、改名（双击）、置顶、删除；迁移 **217** 给 `chat_conversations` 加 `pinned` |
+| 消息操作 | 复制 / 重新生成 / 编辑重发 / 删除（二次确认）；编辑只改输入框不自动发 |
+| 过程回放 | 右侧「过程」面板：每轮 配方·工具数·耗时·状态（ok/degraded/error），展开看每步工具与失败原因 |
+| 长期记忆 | 「记忆」面板：列表/类型/权重/命中次数/启停/新增/行内编辑/删除 |
+| 定时任务 | 「定时」面板：竞价摘要/收盘小结，时间+工作日+启停；只回显真实 `last_run_date`，不虚构下次时间 |
+| 用量 | 头部窄条：近 N 天调用数/成功率/P95；空值显示 `--` 不补 0 |
+
+后端新增 `src/web/api/chat_admin.py`：`PATCH /chat/conversations/{id}`（改名/置顶）、
+`GET /chat/conversations?q=`（搜索）、`DELETE .../messages/{mid}`、`GET .../runs`，
+全部按 `conversation.user_id` 校验归属（越权 404）。
+
+**因子 IC 进诊断**：`get_stock_factors` 现在默认附带「因子有效性（IC/IR 近一日快照）」，
+读日更表（17:25 落库）毫秒级返回；快照为空时如实说明、不现算不编造。
+之前因子只给"分位 82%"，没有"这个因子现在是否还有效"，等于半个证据。
+
+**情景关键位画上 K 线**：新增 `GET /api/klines/{symbol}/scenario`（结构化，与 chat 工具同一套
+`scenario_engine.build_matrix`）+ K 图层 `scenario`（默认关，开启后画阻力/支撑/走强目标/走弱目标
+虚线，价位去重与脏值过滤，切标的自动清理）。买红卖绿沿用国内习惯。
+
+**标的画像上页面**：`GET /api/copilot/persona/{symbol}` + `PersonaBadge`（画像名 + 等级点，
+hover 看判定依据；普通个股不显示徽标）。
+
 ## release: v0.39.2（stock.kline 域查询 7s → 0.02s：hypertable 要带时间下界）（2026-10-22）
 
 生产实测 `query_data_domain("stock.kline")` 首次 **6.9s**、二次 **2.1s**，一次域调用就能吃掉整轮预算。

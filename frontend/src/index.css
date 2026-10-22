@@ -112,6 +112,10 @@
        原版同花顺 G绿S红; SIDA 按A股惯例 G红S绿, 功能等价, 验收以信号位置为准不以颜色为准。 */
     --gs-go: var(--stock-up);
     --gs-stop: var(--stock-down);
+    /* 情景关键位语义色(2026-10-22): 阻力/走强目标=rose(涨红), 支撑/走弱目标=emerald(跌绿)。
+       与 --stock-up/down 分开: 涨跌色=价格方向, 关键位色=位性质, 语义不同各自可演进。 */
+    --scenario-up: #e11d48;
+    --scenario-down: #059669;
     /* 活跃度三色(研究报告§4.3): 大牛紫/强势红/生命绿; 弱档走 --flat-color(灰, 不编造第四色) */
     --activity-bull: #8B5CF6;
     --activity-strong: #EF4444;
@@ -185,6 +189,9 @@
     /* GS/活跃度三色暗色值: 绿系提亮保暗底可读(weak #22C55E→#4ADE80 等) */
     --gs-go: var(--stock-up);
     --gs-stop: var(--stock-down);
+    /* 情景关键位语义色暗色档(2026-10-22): 暗底提亮保可读(rose/emerald 提亮一档) */
+    --scenario-up: #fb7185;
+    --scenario-down: #34d399;
     --activity-bull: #A78BFA;
     --activity-strong: #F87171;
     --activity-weak: #4ADE80;

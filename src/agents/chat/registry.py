@@ -2445,7 +2445,18 @@ async def _tool_get_stock_factors(db: Session, args: dict, user: User | None = N
     symbol = str(args.get("symbol") or "").strip().upper()
     if not symbol:
         return "请提供股票代码(symbol)，如 002050。"
-    return _build_factors(db, symbol, "CN")
+    out = _build_factors(db, symbol, "CN")
+    # 2026-10-22: 因子的「分位」单独没信息量，必须配「这个因子现在还管不管用」。
+    # 快照读库（毫秒级），没有就如实不说 —— 不现算、不编。
+    try:
+        from src.core.factor_ic_history import render_latest as _render_ic
+
+        _ic_txt = _render_ic(db)
+        if _ic_txt:
+            out = f"{out}\n\n{_ic_txt}"
+    except Exception:  # noqa: BLE001  IC 是增强项，失败不影响因子分位本身
+        pass
+    return out
 
 
 @register_chat_tool(

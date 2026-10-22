@@ -1728,18 +1728,36 @@ async def _query_stock_factor(db: Any, params: dict[str, Any], user: Any) -> str
     missing: list[str] = []
     if not sections:
         missing.append("个股因子（stock_factor_daily）未返回内容")
-    # IC/IR 是全市场 × 60 日的重算（load_qfq_bars 逐票），默认不跑；显式要了才跑。
-    if params.get("with_ic"):
-        try:
+    # 因子有效性：默认读**已落库的 IC 快照**（毫秒级，日更 17:25），
+    # 只有显式 `with_ic: refresh` 才全市场重算（load_qfq_bars 逐票，慢）。
+    _ic_mode = str(params.get("with_ic") or "").strip().lower()
+    try:
+        if _ic_mode in ("refresh", "true", "1"):
             from src.core import factor_ic as _factor_ic
 
             metrics = await asyncio.to_thread(_factor_ic.compute, db)
             sections.append(_factor_ic.render(metrics))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("因子 IC 计算失败: %s", exc)
-            missing.append(f"因子有效性 IC/IR 计算失败（{type(exc).__name__}）")
-    else:
-        sections.append("（因子有效性 IC/IR 需 params_json 里加 \"with_ic\": true，全市场重算较慢，默认不跑）")
+        else:
+            from src.core.factor_ic_history import history as _ic_history
+
+            rows = await asyncio.to_thread(_ic_history, market="CN", horizon=5, days=1, db=db)
+            if rows:
+                _lines = ["因子有效性（IC / IR，近一日快照，horizon=5 日）"]
+                for r in sorted(rows, key=lambda x: x.get("trade_date") or ""):
+                    ic = r.get("ic")
+                    ir = r.get("ir")
+                    _fmt = lambda v: "--" if v is None else f"{float(v):+.4f}"  # noqa: E731
+                    _lines.append(
+                        f"- {r.get('factor_code')}：IC {_fmt(ic)}　IR {_fmt(ir)}　样本 {r.get('sample_size') or '--'}"
+                    )
+                _lines.append("（IC 为负=该因子高分组后续偏弱；仅代表统计关系，不构成买卖指令）")
+                sections.append("\n".join(_lines))
+            else:
+                # IC 是增强项，不是本域必答数据：如实说明「快照暂空」，但不把整域标成缺数据
+                sections.append("（因子有效性：IC 快照暂空，日更任务 17:25 尚未落库；可加 \"with_ic\": \"refresh\" 现算）")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("因子有效性读取失败: %s", exc)
+        missing.append(f"因子有效性读取失败（{type(exc).__name__}）")
     return render_domain_sections(
         "stock.factor",
         as_of=_now_cn(),
