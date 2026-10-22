@@ -1,3 +1,24 @@
+## release: v0.41.8（规格文件被 .gitignore 吞掉：门禁本地绿、CI 红）（2026-10-22）
+
+v0.41.7 的 main CI 红了，报「测试引用了不存在的规格 ID DATA-001/002/003」，但本地 `trace_specs.py`
+明明 18/18 通过。原因不是逻辑，是**文件没上传**：
+
+```
+.gitignore:16  data/          ← 无前导斜杠，匹配任意层级
+→ specs/data/caliber.md 被静默忽略，git status 里根本看不到它
+```
+
+于是本地门禁读得到这份规格（在磁盘上），CI 读不到（不在仓库里）——**门禁骗人**，
+正是任务书 §6 警告的那类事故，只是换了个入口。
+
+修法：
+1. 规格迁移到 `specs/caliber/data_caliber.md`（避开 `data/` 规则），并 `git check-ignore` 验证不再被忽略
+2. 删掉我自己那份重复的 `tests/test_spec_caliber.py`，保留同事那份更完整的 `test_spec_data_caliber.py`
+   （同一条规格被两个文件守着只会漂移，规格数量不是 KPI）
+3. 门禁复验：**18 条标准 / 18 条覆盖 / 19 个测试绑定**
+
+教训写进规格文件头部：**新增 specs 后必须确认 `git status` 里能看到它**。
+
 ## release: v0.41.7（规格追溯：11 份配方 + 数据口径纳入硬门禁）（2026-10-22）
 
 承接 `cc025fd`（借鉴 self-hosting-agent 的规格追溯门禁 P0），按任务书补 P1 与 P2。

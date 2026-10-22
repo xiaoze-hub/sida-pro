@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """数据口径契约的规格守卫。
 
-对应 specs/data/caliber.md。
+对应 specs/caliber/data_caliber.md（放在 specs/caliber/ 而不是 specs/data/：
+`.gitignore` 的 `data/` 规则会把 specs/data/ 整个吞掉，规格不上传 = 门禁只在本地绿）。
 这三条都是出过事才写的: 把东财四档净流入当成"主力在买", 方向位与逐笔相反。
 """
 
