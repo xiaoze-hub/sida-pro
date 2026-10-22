@@ -85,6 +85,8 @@ jobs:
           python3 scripts/check_lock_covers_reqs.py
           python3 scripts/check_scoped_queries.py
           python3 scripts/check_is_pg_scope.py
+          # 2026-10-22: 数据域目录门禁 —— 域引用了不存在的表就红（防止目录与代码漂移）
+          python3 scripts/gen_data_catalog.py --check
       - name: Frontend gates (tsc + eslint + vitest + ui-rules)
         run: |
           cd frontend

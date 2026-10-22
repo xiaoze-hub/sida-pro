@@ -123,9 +123,10 @@ def render_domain_catalog() -> str:
             "本次不提供域列表，也不要凭印象猜表名。"
         )
     head = (
-        f"平台可查数据域（共 {len(DOMAINS)} 个）。先在这里选域，再用 "
+        f"平台可查数据域（共 {len(DOMAINS)} 个，已全部接入）。先在这里选域，再用 "
         f"query_data_domain(domain, params_json) 取数；参数列写「必填」的必须给。"
-        f"标注「P1 待接」的域尚未接入实现，调了会明确说未接入。"
+        f"用户私域（portfolio.risk/watchlist/paper.trading/notify.task）需登录态，"
+        f"未登录会明确说需要登录。"
     )
     lines = [head]
     for d in DOMAINS:
@@ -149,18 +150,39 @@ def render_domain_sections(
 
     首行固定「域 / 时点 / 来源表」；`sections` 全空 → 明确写「未取到」，
     **不写 0、不写「持平/正常」这类看起来有值的措辞**。
+
+    截断策略：**先截正文、保首行与末尾的「未取到」行** —— 否则长正文会把
+    「未取到（原因）」整行挤掉，模型就看不到「这块没取到」这个事实。
     """
     label = (_DOMAIN_BY_ID.get(domain) or {}).get("label") or ""
     title = f"**{domain}{(' · ' + label) if label else ''}** ｜ 时点 {as_of or '未知'}"
     title += f" ｜ 来源 {source or '未标注'}"
     body = [s for s in (sections or []) if s and str(s).strip()]
-    miss = [str(m) for m in (missing or []) if str(m).strip()]
+    # 去重但保序：同一原因被多个来源重复报出来时只留一条
+    miss: list[str] = []
+    for m in (missing or []):
+        text = str(m).strip()
+        if text and text not in miss:
+            miss.append(text)
     if not body:
         miss = miss or ["该域本次没有取到任何记录（数据源无行或尚未采集）"]
-    out = [title, *body]
-    if miss:
-        out.append(f"{MISSING_TAG}：" + "；".join(miss))
-    return _cap("\n".join(out), MAX_DOMAIN_CHARS)
+    miss_line = f"{MISSING_TAG}：" + "；".join(miss) if miss else ""
+
+    # 正文预算 = 上限 - 首行 - 缺数据行 - 分隔空行（保证「未取到」行永不被截掉）
+    fixed = len(title) + (len(miss_line) + 1 if miss_line else 0) + 1
+    budget = max(MAX_DOMAIN_CHARS - fixed, 200)
+    body_text = "\n".join(body)
+    if len(body_text) > budget:
+        body_text = (
+            body_text[: max(budget - 24, 0)].rstrip()
+            + f"\n…（已截断，原文 {len(body_text)} 字）"
+        )
+    out = [title]
+    if body_text:
+        out.append(body_text)
+    if miss_line:
+        out.append(miss_line)
+    return "\n".join(out)[:MAX_DOMAIN_CHARS]
 
 
 def _num(v: Any, digits: int = 2, signed: bool = False) -> str:
@@ -203,6 +225,21 @@ def _ymd(v: Any) -> str:
     """日期归一为紧凑 YYYYMMDD（事件表 trade_date 口径）；取不到 → 空串。"""
     digits = "".join(ch for ch in str(v or "") if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else ""
+
+
+def _iso_date(v: Any) -> str:
+    """日期归一为 ISO YYYY-MM-DD（signal_snapshots 存 YYYYMMDD，其余存 YYYY-MM-DD）。
+
+    展示口径统一成 ISO（与 market.breadth 域一致）；**过滤时一律用原值**，
+    不做格式转换 —— 压格式会让 WHERE 永远匹配不上。
+    """
+    raw = str(v or "").strip()
+    if not raw:
+        return ""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return raw[:10]
 
 
 def render_limit_pool(
@@ -309,6 +346,25 @@ def _amt_plain(v: Any) -> str:
     """金额（元）→ 亿/万，**不带符号**（买/卖额是量级，不是方向）；None → 「未披露」。"""
     txt = _amt(v)
     return txt[1:] if txt.startswith("+") else txt
+
+
+def _money(v: Any) -> str:
+    """金额（元）→ 亿/万，**保留 2 位小数**（模拟盘资金/盈亏要精确到元）。
+
+    与 `_amt` 的区别：`_amt` 的「万」档取整（龙虎榜量级用），本函数用于
+    账户资金类需要看清数字的场景。None → 「未披露」。
+    """
+    if v is None:
+        return "未披露"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "未披露"
+    if abs(f) >= 1e8:
+        return f"{f / 1e8:+.2f}亿"
+    if abs(f) >= 1e4:
+        return f"{f / 1e4:+.2f}万"
+    return f"{f:+.2f}元"
 
 
 def _core_stocks(raw: Any) -> list[str]:
@@ -712,6 +768,561 @@ def render_stock_quote(
     )
 
 
+# ──────────────────────────── P2 十二域的渲染（2026-10-22） ────────────────────────────
+# 口径不变：首行「域 / 时点 / 来源」，正文分条，缺数据写「未取到（原因）」，**禁补 0**。
+# 用户域（portfolio.risk / watchlist / paper.trading / notify.task）**必须带登录态**：
+# user=None 直接回「需要登录」，绝不返回他人或全局数据。
+
+
+def _user_id(user: Any) -> str:
+    """当前登录用户 id（None/无 id → 空串，调用方据此拒绝）。"""
+    return str(getattr(user, "id", None) or "").strip()
+
+
+def _need_login(domain: str, source: str) -> str:
+    """用户域的登录守卫：无登录态时如实说「需要登录」，不返回任何数据。"""
+    return render_domain_sections(
+        domain,
+        as_of=_now_cn(),
+        source=source,
+        sections=[],
+        missing=["需要登录：该域是用户私有数据（按 user_id 隔离），未登录时不返回任何内容"],
+    )
+
+
+def _fmt_rank(v: Any) -> str:
+    """排名（int）→ 「第 3 名」；缺失 → 「未标注」（不补 0）。"""
+    n = _f(v)
+    if n is None:
+        return "未标注"
+    try:
+        return f"第 {int(n)} 名"
+    except (TypeError, ValueError):
+        return "未标注"
+
+
+def render_mainline(
+    *,
+    as_of: str,
+    rows: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
+    top_n: int = 10,
+    missing: list[str] | None = None,
+) -> str:
+    """主线榜：mainline_rank_daily 排名 + mainline_daily_snapshot 成分股。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    items = [r for r in (rows or []) if isinstance(r, dict)]
+    if items:
+        parts = []
+        for r in items[:top_n]:
+            score = _f(r.get("score"))
+            bits = [
+                _fmt_rank(r.get("rank")),
+                str(r.get("name") or "未命名主线"),
+                f"主线分 {_num(score, 2)}" if score is not None else "主线分 未披露",
+            ]
+            parts.append(" ".join(bits))
+        day = str(items[0].get("date") or as_of or "未标注")
+        sections.append(
+            f"- 主线榜（{day}，共 {len(items)} 条主线，取前 {min(top_n, len(items))}）："
+            + "；".join(parts)
+        )
+    elif not any("mainline_rank_daily" in m for m in miss):
+        miss.append("mainline_rank_daily 无排名行（主线榜尚未计算/未落库）")
+
+    gitems = [g for g in (groups or []) if isinstance(g, dict)]
+    if gitems:
+        parts = []
+        for g in gitems[:5]:
+            leader = g.get("leader") or {}
+            bits = [str(g.get("name") or "未命名主线")]
+            sc = _f(g.get("score"))
+            bits.append(f"主线分 {_num(sc, 2)}" if sc is not None else "主线分 未披露")
+            lu = _f(g.get("limit_up_count"))
+            mb = _f(g.get("max_boards"))
+            bits.append(f"涨停 {int(lu) if lu is not None else '未披露'} 家")
+            bits.append(f"最高 {int(mb) if mb is not None else '未披露'} 板")
+            lname = str(leader.get("name") or "")
+            if lname:
+                ldays = _f(leader.get("days"))
+                bits.append(
+                    f"龙头 {leader.get('code') or ''} {lname}"
+                    + (f"（{int(ldays)}板）" if ldays is not None else "")
+                )
+            parts.append(" ".join(bits))
+        sections.append("- 主线成分（主线日快照）：" + "；".join(parts))
+    elif groups:
+        miss.append("mainline_daily_snapshot payload 解析不到 ranked_groups")
+    return render_domain_sections(
+        "market.mainline",
+        as_of=as_of,
+        source="mainline_rank_daily / mainline_daily_snapshot",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_strategy_signal(
+    *,
+    as_of: str,
+    factor_rows: list[dict[str, Any]] | None = None,
+    factor_date: str = "",
+    emit_rows: list[dict[str, Any]] | None = None,
+    emit_date: str = "",
+    top_n: int = 10,
+    missing: list[str] | None = None,
+) -> str:
+    """策略信号：因子快照（选中票的因子分）+ 信号发出版（T+1/T+5 事后收益）。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    frows = [r for r in (factor_rows or []) if isinstance(r, dict)]
+    if frows:
+        parts = []
+        for r in frows[:top_n]:
+            fs = _f(r.get("final_score"))
+            bits = [
+                f"{r.get('stock_symbol') or '?'} {r.get('stock_market') or ''}".strip(),
+                f"策略 {r.get('strategy_code') or '未标注'}",
+                f"总分 {_num(fs, 2)}" if fs is not None else "总分 未披露",
+            ]
+            alpha = _f(r.get("alpha_score"))
+            qual = _f(r.get("quality_score"))
+            risk = _f(r.get("risk_penalty"))
+            crowd = _f(r.get("crowd_penalty"))
+            bits.append(f"alpha {_num(alpha, 1)}" if alpha is not None else "alpha 未披露")
+            bits.append(f"quality {_num(qual, 1)}" if qual is not None else "quality 未披露")
+            bits.append(f"risk {_num(risk, 1, signed=True)}" if risk is not None else "risk 未披露")
+            bits.append(f"crowd {_num(crowd, 1, signed=True)}" if crowd is not None else "crowd 未披露")
+            parts.append(" ".join(bits))
+        sections.append(
+            f"- 策略因子快照（{factor_date or '未标注'}，入选 {len(frows)} 只，取前 "
+            f"{min(top_n, len(frows))}）：" + "；".join(parts)
+        )
+    elif not any("strategy_factor_snapshots" in m for m in miss):
+        miss.append("strategy_factor_snapshots 无当日因子快照（策略未跑或未落库）")
+
+    erows = [r for r in (emit_rows or []) if isinstance(r, dict)]
+    if erows:
+        parts = []
+        for r in erows[:top_n]:
+            ts = str(r.get("emit_ts") or "")[:16] or "未标注"
+            strength = _f(r.get("strength"))
+            bits = [
+                ts,
+                f"{r.get('symbol') or '?'}",
+                str(r.get("signal_type") or "未标注类型"),
+                str(r.get("direction") or "未标注方向"),
+            ]
+            if strength is not None:
+                bits.append(f"强度 {_num(strength, 2)}")
+            for label, key in (("T+1", "outcome_t1"), ("T+5", "outcome_t5")):
+                val = _f(r.get(key))
+                if val is None:
+                    bits.append(f"{label} 未回填")
+                else:
+                    bits.append(f"{label} {val:+.2f}%")
+            parts.append(" ".join(bits))
+        sections.append(
+            f"- 信号发出（{emit_date or '未标注'}，共 {len(erows)} 条，取前 "
+            f"{min(top_n, len(erows))}）：" + "；".join(parts)
+        )
+    elif not any("signal_snapshots" in m for m in miss):
+        miss.append("signal_snapshots 无当日信号发出记录（信号未 emit 或未落库）")
+    return render_domain_sections(
+        "strategy.signal",
+        as_of=as_of,
+        source="strategy_factor_snapshots / signal_snapshots",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_kline(
+    *,
+    as_of: str,
+    bars: list[dict[str, Any]] | None = None,
+    symbol: str = "",
+    days: int = 120,
+    missing: list[str] | None = None,
+) -> str:
+    """K 线与周期：日 K 序列 + 均线 + 区间高低。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    rows = [b for b in (bars or []) if isinstance(b, dict)]
+    rows = sorted(rows, key=lambda b: str(b.get("date") or b.get("ts") or ""))
+    if rows:
+        closes = [_f(b.get("close")) for b in rows]
+        closes = [c for c in closes if c is not None]
+        last = rows[-1]
+        bits = [
+            f"最近交易日 {last.get('date') or last.get('ts') or '未标注'}",
+            f"开 {_num(last.get('open'), 2)}",
+            f"高 {_num(last.get('high'), 2)}",
+            f"低 {_num(last.get('low'), 2)}",
+            f"收 {_num(last.get('close'), 2)}",
+        ]
+        vol = _f(last.get("volume"))
+        if vol is not None:
+            bits.append(f"量 {vol / 1e4:.0f}万手")
+        src = str(last.get("source") or "").strip()
+        if src:
+            bits.append(f"来源 {src}")
+        sections.append(f"- {symbol} 日K（复权 qfq，共 {len(rows)} 根）：" + "｜".join(bits))
+
+        if len(closes) >= 2:
+            first, lastc = closes[0], closes[-1]
+            highs = [_f(b.get("high")) for b in rows]
+            lows = [_f(b.get("low")) for b in rows]
+            highs = [h for h in highs if h is not None]
+            lows = [l for l in lows if l is not None]
+            span = []
+            if first and lastc:
+                span.append(f"区间涨跌 {(lastc - first) / first * 100:+.2f}%")
+            if highs:
+                span.append(f"区间最高 {_num(max(highs), 2)}")
+            if lows:
+                span.append(f"区间最低 {_num(min(lows), 2)}")
+            for w in (5, 20, 60):
+                if len(closes) >= w:
+                    ma = sum(closes[-w:]) / w
+                    span.append(f"MA{w} {_num(ma, 2)}")
+            if span:
+                sections.append(f"- 近 {len(rows)} 根统计：" + "｜".join(span))
+        recent = rows[-5:]
+        if len(recent) > 1:
+            parts = [
+                f"{b.get('date') or '?'} 收 {_num(b.get('close'), 2)}"
+                f" 量 {_num(_f(b.get('volume')), 0)}手"
+                for b in recent
+            ]
+            sections.append("- 最近 5 根：" + "；".join(parts))
+    elif not any("klines" in m for m in miss):
+        miss.append(
+            f"klines 无 {symbol} 日K（PG hypertable 未采到该票；"
+            "板块内标的通常需要先跑采集器）"
+        )
+    return render_domain_sections(
+        "stock.kline",
+        as_of=as_of,
+        source="klines（TimescaleDB hypertable，period=1d / adjust=qfq，复用 src.db.klines_repo 读取）",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_paper_trading(
+    *,
+    as_of: str,
+    account: dict[str, Any] | None = None,
+    positions: list[dict[str, Any]] | None = None,
+    trades: list[dict[str, Any]] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """模拟盘：账户摘要 + 持仓 + 已平仓记录（全部按 user_id 过滤）。空 → 「未取到」。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    acc = account or {}
+    if acc:
+        bits = [
+            f"初始资金 {_money(acc.get('initial_capital'))}",
+            f"当前资金 {_money(acc.get('current_capital'))}",
+            f"累计盈亏 {_money(acc.get('total_pnl'))}",
+        ]
+        trades_n = _f(acc.get("total_trades"))
+        win = _f(acc.get("winning_trades"))
+        if trades_n is not None:
+            bits.append(f"累计交易 {int(trades_n)} 笔")
+        if win is not None:
+            bits.append(f"盈利 {int(win)} 笔")
+        dd = _f(acc.get("max_drawdown_pct"))
+        if dd is not None:
+            bits.append(f"最大回撤 {_num(dd, 2)}%")
+        bits.append("已启用" if acc.get("enabled") else "已停用")
+        sections.append("- 模拟盘账户：" + "｜".join(bits))
+    elif not any("paper_trading_account" in m for m in miss):
+        miss.append("paper_trading_account 无该用户账户行（未开模拟盘或归属不是本人）")
+
+    pos = [p for p in (positions or []) if isinstance(p, dict)]
+    if pos:
+        parts = []
+        for p in pos[:10]:
+            pnl = _f(p.get("unrealized_pnl"))
+            parts.append(
+                f"{p.get('stock_symbol') or '?'} {p.get('stock_name') or ''}".strip()
+                + f" {p.get('quantity')}股 成本 {_num(p.get('entry_price'), 2)}"
+                + f" 现价 {_num(p.get('current_price'), 2)}"
+                + (f" 浮盈 {_money(pnl)}" if pnl is not None else " 浮盈 未披露")
+            )
+        sections.append(f"- 模拟持仓（{len(pos)} 只）：" + "；".join(parts))
+    elif not any("paper_trading_positions" in m for m in miss):
+        miss.append("paper_trading_positions 无该用户的 open 持仓")
+
+    tr = [t for t in (trades or []) if isinstance(t, dict)]
+    if tr:
+        parts = []
+        for t in tr[:8]:
+            pnl_pct = _f(t.get("pnl_pct"))
+            parts.append(
+                f"{t.get('stock_symbol') or '?'} {t.get('stock_name') or ''}".strip()
+                + f" {_num(t.get('entry_price'), 2)}→{_num(t.get('exit_price'), 2)}"
+                + (f" {pnl_pct:+.2f}%" if pnl_pct is not None else " 收益 未披露")
+                + f"（{t.get('exit_reason') or '未标注'}）"
+            )
+        sections.append(f"- 已平仓（最近 {len(tr)} 笔）：" + "；".join(parts))
+    elif not any("paper_trading_trades" in m for m in miss):
+        miss.append("paper_trading_trades 无该用户已平仓记录")
+    return render_domain_sections(
+        "paper.trading",
+        as_of=as_of,
+        source="paper_trading_account / paper_trading_positions / paper_trading_trades（按 user_id 过滤）",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_backtest(
+    *,
+    as_of: str,
+    stats: list[dict[str, Any]] | None = None,
+    rows: list[dict[str, Any]] | None = None,
+    factor_days: list[dict[str, Any]] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """回测：平台回测引擎结果**不落库**，故只给可回溯的「策略信号事后收益」。
+
+    无已结算样本 → 如实写「尚未接入/无结果」，不编收益数字。
+    """
+    miss = list(missing or [])
+    sections: list[str] = []
+    sections.append(
+        "- 口径：平台回测引擎（src/core/backtest）**运行结果不落库**，"
+        "本域只给可回溯的「策略信号事后收益」（strategy_outcomes）；要现算请走回测页/API。"
+    )
+    st = [s for s in (stats or []) if isinstance(s, dict)]
+    if st:
+        parts = []
+        for s in st:
+            n = _f(s.get("n"))
+            avg = _f(s.get("avg_ret"))
+            hit_t = _f(s.get("hit_t"))
+            hit_s = _f(s.get("hit_s"))
+            hz = _f(s.get("horizon_days"))
+            bits = [
+                f"持有 {int(hz)} 日" if hz is not None else "持有 未知",
+                f"样本 {int(n)}" if n is not None else "样本 未披露",
+            ]
+            if avg is not None:
+                bits.append(f"平均 {avg:+.2f}%")
+            if hit_t is not None:
+                bits.append(f"触达目标 {int(hit_t)}")
+            if hit_s is not None:
+                bits.append(f"触达止损 {int(hit_s)}")
+            parts.append("｜".join(bits))
+        sections.append("- 事后收益汇总：" + "；".join(parts))
+    elif not any("strategy_outcomes" in m for m in miss):
+        miss.append(
+            "strategy_outcomes 无已结算样本（回测运行结果本身不落库，"
+            "需先跑策略复盘/回测才有可回溯的事后收益）"
+        )
+
+    rws = [r for r in (rows or []) if isinstance(r, dict)]
+    if rws:
+        parts = []
+        for r in rws[:8]:
+            ret = _f(r.get("outcome_return_pct"))
+            hz = _f(r.get("horizon_days"))
+            parts.append(
+                f"{r.get('snapshot_date') or '未标注'} {r.get('stock_symbol') or '?'}"
+                f" 策略 {r.get('strategy_code') or '未标注'}"
+                + (f" 持有 {int(hz)} 日" if hz is not None else "")
+                + (f" 收益 {ret:+.2f}%" if ret is not None else " 收益 未披露")
+                + f"（{r.get('outcome_status') or '未标注'}）"
+            )
+        sections.append("- 最近样本：" + "；".join(parts))
+
+    fd = [f for f in (factor_days or []) if isinstance(f, dict)]
+    if fd:
+        parts = []
+        for f in fd[:5]:
+            n = _f(f.get("n"))
+            avg = _f(f.get("avg_score"))
+            parts.append(
+                f"{f.get('snapshot_date') or '未标注'}"
+                + (f" {int(n)} 只" if n is not None else " 数量 未披露")
+                + (f" 均分 {_num(avg, 2)}" if avg is not None else " 均分 未披露")
+            )
+        sections.append("- 可回溯的信号面（strategy_factor_snapshots 每日入选数）：" + "；".join(parts))
+    return render_domain_sections(
+        "backtest",
+        as_of=as_of,
+        source="strategy_outcomes / strategy_factor_snapshots（回测运行结果不落库）",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def render_notify_task(
+    *,
+    as_of: str,
+    schedules: list[dict[str, Any]] | None = None,
+    channels: list[dict[str, Any]] | None = None,
+    notifications: str = "",
+    missing: list[str] | None = None,
+) -> str:
+    """定时任务与通知：copilot_schedules（本人）+ 推送渠道 + 站内通知。只读，不创建任务。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    sch = [s for s in (schedules or []) if isinstance(s, dict)]
+    if sch:
+        parts = []
+        for s in sch[:10]:
+            kind = {"auction_digest": "竞价摘要", "daily_brief": "收盘小结"}.get(
+                str(s.get("kind") or ""), str(s.get("kind") or "未标注")
+            )
+            bits = [
+                kind,
+                f"每天 {s.get('at_hhmm') or '未标注'}",
+                f"周 {s.get('weekdays') or '未标注'}",
+                "已启用" if s.get("enabled") else "已停用",
+            ]
+            last = str(s.get("last_run_date") or "")
+            bits.append(f"上次运行 {last}" if last else "上次运行 未记录")
+            parts.append("｜".join(bits))
+        sections.append(f"- 定时任务（{len(sch)} 条，L1 只读）：" + "；".join(parts))
+    elif not any("copilot_schedules" in m for m in miss):
+        miss.append("copilot_schedules 无该用户的定时任务")
+
+    ch = [c for c in (channels or []) if isinstance(c, dict)]
+    if ch:
+        parts = []
+        for c in ch[:8]:
+            parts.append(
+                f"{c.get('name') or '未命名'}（{c.get('type') or '未标注'}）"
+                + ("已启用" if c.get("enabled") else "已停用")
+                + ("｜默认" if c.get("is_default") else "")
+            )
+        sections.append("- 推送渠道：" + "；".join(parts))
+    elif not any("notify_channels" in m for m in miss):
+        miss.append("notify_channels 无该用户/全局的推送渠道")
+
+    if notifications and notifications.strip():
+        sections.append("- 站内通知：" + notifications.strip())
+    else:
+        miss.append("get_notifications 未返回内容（站内消息不可用）")
+    return render_domain_sections(
+        "notify.task",
+        as_of=as_of,
+        source="copilot_schedules / notify_channels / notifications（按 user_id 过滤；只读不创建）",
+        sections=sections,
+        missing=miss,
+    )
+
+
+def _vendor_trust_score(success_rate: Any, p50_latency_ms: Any) -> int | None:
+    """数据源信任分（与 /api/datasources/trust 同公式：100×成功率 - 延迟档）。"""
+    sr = _f(success_rate)
+    if sr is None:
+        return None
+    p50 = _f(p50_latency_ms)
+    if p50 is None:
+        grade = 15
+    elif p50 <= 800:
+        grade = 0
+    elif p50 <= 2000:
+        grade = 10
+    elif p50 <= 5000:
+        grade = 25
+    else:
+        grade = 45
+    return max(0, round(sr * 100 - grade))
+
+
+def render_ops_config(
+    *,
+    as_of: str,
+    datasources: list[dict[str, Any]] | None = None,
+    settings: list[dict[str, Any]] | None = None,
+    failures: list[dict[str, Any]] | None = None,
+    trust: list[dict[str, Any]] | None = None,
+    missing: list[str] | None = None,
+) -> str:
+    """平台设置与数据源：数据源配置/优先级 + 信任分 + 设置项 + 失败记录（L2 只读）。"""
+    miss = list(missing or [])
+    sections: list[str] = []
+    ds = [d for d in (datasources or []) if isinstance(d, dict)]
+    if ds:
+        parts = []
+        for d in ds[:12]:
+            bits = [
+                f"{d.get('name') or '未命名'}（{d.get('type') or '未标注'}/"
+                f"{d.get('provider') or '未标注'}）",
+                f"优先级 {_f(d.get('priority')) if _f(d.get('priority')) is not None else '未标注'}",
+                "已启用" if d.get("enabled") else "已停用",
+            ]
+            sc = _f(d.get("success_count"))
+            ec = _f(d.get("error_count"))
+            if sc is not None or ec is not None:
+                bits.append(f"成功 {int(sc) if sc is not None else '未披露'}"
+                            f"/失败 {int(ec) if ec is not None else '未披露'}")
+            st = str(d.get("last_status") or "")
+            if st:
+                bits.append(f"最近状态 {st}")
+            parts.append("｜".join(bits))
+        sections.append(f"- 数据源配置（{len(ds)} 条，按类型+优先级排序）：" + "；".join(parts))
+    elif not any("data_sources" in m for m in miss):
+        miss.append("data_sources 无配置行（数据源目录为空）")
+
+    tr = [t for t in (trust or []) if isinstance(t, dict)]
+    if tr:
+        parts = []
+        for t in tr[:10]:
+            score = _f(t.get("score"))
+            sr = _f(t.get("success_rate"))
+            p50 = _f(t.get("p50_latency_ms"))
+            n = _f(t.get("samples"))
+            bits = [str(t.get("vendor") or "未标注")]
+            bits.append(f"信任分 {_num(score, 0)}" if score is not None else "信任分 未披露")
+            bits.append(f"成功率 {_num(sr * 100, 1)}%" if sr is not None else "成功率 未披露")
+            bits.append(f"p50 {_num(p50, 0)}ms" if p50 is not None else "p50 未披露")
+            bits.append(f"样本 {int(n)}" if n is not None else "样本 未披露")
+            parts.append("｜".join(bits))
+        sections.append("- 数据源信任分（marketdata 健康快照，与 /api/datasources/trust 同口径）：" + "；".join(parts))
+    elif not any("marketdata 健康快照" in m for m in miss):
+        miss.append("marketdata 健康快照为空（尚未调用过任何 vendor，无法给信任分）")
+
+    st_rows = [s for s in (settings or []) if isinstance(s, dict)]
+    if st_rows:
+        keys = [str(s.get("key") or "") for s in st_rows if s.get("key")]
+        shown = "、".join(keys[:12])
+        more = f" 等 {len(keys)} 项" if len(keys) > 12 else ""
+        sections.append(f"- 平台设置项（app_settings，只列 key 不含值）：{shown}{more}")
+    elif not any("app_settings" in m for m in miss):
+        miss.append("app_settings 无设置项")
+
+    fl = [f for f in (failures or []) if isinstance(f, dict)]
+    if fl:
+        parts = []
+        for f in fl[:6]:
+            detail = str(f.get("detail") or "")[:40]
+            parts.append(
+                f"{str(f.get('created_at') or '')[:16] or '未标注'} "
+                f"{f.get('provider') or '未标注'}/{f.get('kind') or '未标注'}"
+                + (f" {f.get('symbol') or ''}" if f.get("symbol") else "")
+                + (f" {detail}" if detail else "")
+            )
+        sections.append("- 数据源失败记录（最近）：" + "；".join(parts))
+    elif not any("datasource_failures" in m for m in miss):
+        miss.append("datasource_failures 无失败记录")
+    return render_domain_sections(
+        "ops.config",
+        as_of=as_of,
+        source="data_sources / app_settings / datasource_failures（+ marketdata 健康快照）",
+        sections=sections,
+        missing=miss,
+    )
+
+
 # ──────────────────────────── 只读取数底座（SELECT + LIMIT + 绑定参数） ────────────────────────────
 
 #: 全部只读语句集中在此（测试静态校验「必须有 LIMIT」）。命名参数一律 `:name`，双方言通用。
@@ -833,6 +1444,107 @@ _SQL: dict[str, str] = {
         "volume, turnover, turnover_rate, volume_ratio, source FROM quote_snapshots "
         "WHERE symbol = :s AND market = :m ORDER BY trade_date DESC, ts DESC LIMIT 1"
     ),
+    # —— market.mainline（主线日榜快照 + 排名表）——
+    "mainline_rank_date": "SELECT MAX(date) AS d FROM mainline_rank_daily LIMIT 1",
+    "mainline_rank_rows": (
+        "SELECT date, name, rank, score FROM mainline_rank_daily "
+        "WHERE date = :d ORDER BY rank LIMIT :n"
+    ),
+    "mainline_snapshot": (
+        "SELECT date, payload, computed_ts FROM mainline_daily_snapshot "
+        "ORDER BY date DESC LIMIT 1"
+    ),
+    # —— strategy.signal（因子快照 + 信号发出版）——
+    "signal_factor_date": "SELECT MAX(snapshot_date) AS d FROM strategy_factor_snapshots LIMIT 1",
+    "signal_factor_rows": (
+        "SELECT snapshot_date, stock_symbol, stock_market, strategy_code, alpha_score, "
+        "catalyst_score, quality_score, risk_penalty, crowd_penalty, final_score "
+        "FROM strategy_factor_snapshots WHERE snapshot_date = :d "
+        "ORDER BY final_score DESC, stock_symbol LIMIT :n"
+    ),
+    "signal_emit_date": "SELECT MAX(emit_date) AS d FROM signal_snapshots LIMIT 1",
+    "signal_emit_rows": (
+        "SELECT emit_ts, emit_date, signal_type, symbol, market, direction, strength, "
+        "outcome_t1, outcome_t5, checked_t1, checked_t5 FROM signal_snapshots "
+        "WHERE emit_date = :d ORDER BY emit_ts DESC, symbol LIMIT :n"
+    ),
+    # —— stock.kline（PG hypertable：时间列 ts，无 trade_date）——
+    "kline_daily_bars": (
+        "SELECT ts, open, high, low, close, volume, source FROM klines "
+        "WHERE symbol = :s AND market = :m AND period = '1d' AND adjust = 'qfq' "
+        "AND coalesce(source,'') IN ('tq','tencent') ORDER BY ts DESC LIMIT :n"
+    ),
+    # —— 用户域（严格按 user_id 过滤，不含 user_id IS NULL 的全局行）——
+    "portfolio_positions": (
+        "SELECT s.symbol, s.name, s.market, p.quantity, p.cost_price, p.trading_style "
+        "FROM positions p JOIN stocks s ON s.id = p.stock_id "
+        "WHERE p.user_id = :uid ORDER BY s.symbol LIMIT :n"
+    ),
+    "portfolio_risk_snapshot": (
+        "SELECT snapshot_date, market, total_signals, active_signals, held_signals, "
+        "high_risk_ratio, concentration_top5, avg_rank_score, risk_level "
+        "FROM portfolio_risk_snapshots ORDER BY snapshot_date DESC, market LIMIT :n"
+    ),
+    "watchlist_rows": (
+        "SELECT symbol, name, market, sort_order, updated_at FROM stocks "
+        "WHERE user_id = :uid ORDER BY sort_order, symbol LIMIT :n"
+    ),
+    "paper_account": (
+        "SELECT id, initial_capital, current_capital, total_pnl, total_trades, winning_trades, "
+        "max_drawdown_pct, peak_capital, enabled, updated_at FROM paper_trading_account "
+        "WHERE user_id = :uid ORDER BY id LIMIT 1"
+    ),
+    "paper_positions": (
+        "SELECT stock_symbol, stock_market, stock_name, quantity, entry_price, current_price, "
+        "unrealized_pnl, status FROM paper_trading_positions "
+        "WHERE user_id = :uid AND status = 'open' ORDER BY stock_symbol LIMIT :n"
+    ),
+    "paper_trades": (
+        "SELECT stock_symbol, stock_market, stock_name, quantity, entry_price, exit_price, pnl, "
+        "pnl_pct, exit_reason, closed_at FROM paper_trading_trades "
+        "WHERE user_id = :uid ORDER BY closed_at DESC, id DESC LIMIT :n"
+    ),
+    "copilot_schedules": (
+        "SELECT id, kind, at_hhmm, weekdays, enabled, last_run_date, created_at "
+        "FROM copilot_schedules WHERE user_id = :uid ORDER BY id LIMIT :n"
+    ),
+    "notify_rows": (
+        "SELECT title, category, level, created_at, read_at FROM notifications "
+        "WHERE user_id = :uid OR user_id IS NULL ORDER BY created_at DESC LIMIT :n"
+    ),
+    "notify_channel_rows": (
+        "SELECT name, type, enabled, is_default FROM notify_channels "
+        "WHERE user_id = :uid OR user_id IS NULL ORDER BY id LIMIT :n"
+    ),
+    # —— backtest（策略信号事后收益口径；回测运行结果本身不落库）——
+    "backtest_outcome_rows": (
+        "SELECT snapshot_date, strategy_code, stock_symbol, horizon_days, base_price, "
+        "outcome_price, outcome_return_pct, hit_target, hit_stop, outcome_status "
+        "FROM strategy_outcomes ORDER BY snapshot_date DESC, id DESC LIMIT :n"
+    ),
+    "backtest_outcome_stats": (
+        "SELECT horizon_days, COUNT(*) AS n, AVG(outcome_return_pct) AS avg_ret, "
+        "SUM(CASE WHEN hit_target THEN 1 ELSE 0 END) AS hit_t, "
+        "SUM(CASE WHEN hit_stop THEN 1 ELSE 0 END) AS hit_s "
+        "FROM strategy_outcomes WHERE outcome_status <> 'pending' "
+        "GROUP BY horizon_days ORDER BY horizon_days LIMIT :n"
+    ),
+    "backtest_factor_days": (
+        "SELECT snapshot_date, COUNT(*) AS n, AVG(final_score) AS avg_score "
+        "FROM strategy_factor_snapshots GROUP BY snapshot_date "
+        "ORDER BY snapshot_date DESC LIMIT :n"
+    ),
+    # —— ops.config（平台设置 / 数据源配置 / 数据源失败记录）——
+    "ops_datasources": (
+        "SELECT id, name, type, provider, enabled, priority, supports_batch, last_status, "
+        "success_count, error_count, last_used_at, last_error_at FROM data_sources "
+        "ORDER BY type, priority, id LIMIT :n"
+    ),
+    "ops_settings": "SELECT key, description FROM app_settings ORDER BY key LIMIT :n",
+    "ops_ds_failures": (
+        "SELECT provider, kind, symbol, detail, latency_ms, created_at FROM datasource_failures "
+        "ORDER BY created_at DESC, id DESC LIMIT :n"
+    ),
 }
 
 #: 客户端传入 db 为 None 时自开/自关会话（测试与定时任务路径）。
@@ -866,6 +1578,59 @@ def _read(db: Any, key: str, params: dict[str, Any] | None = None) -> list[dict[
 def _read_one(db: Any, key: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
     rows = _read(db, key, params)
     return rows[0] if rows else None
+
+
+def _read_safe(
+    db: Any,
+    key: str,
+    params: dict[str, Any] | None,
+    missing: list[str],
+    *,
+    label: str = "",
+) -> list[dict[str, Any]]:
+    """容错只读：单条语句失败（表未迁移/列不存在/库未初始化）不炸掉整个域。
+
+    失败时把「<标签>：<原因>」写进 `missing` 并返回空列表 —— 上层据此写
+    「未取到（原因）」，**不补 0、不编数**。
+    """
+    try:
+        return _read(db, key, params)
+    except Exception as exc:  # noqa: BLE001 — 单表不可读不该让整域失败
+        reason = _clean_reason(exc)
+        missing.append(f"{label or key} 读取失败（{reason}）")
+        logger.warning("只读语句 %s 失败: %s", key, reason)
+        return []
+
+
+def _read_one_safe(
+    db: Any,
+    key: str,
+    params: dict[str, Any] | None,
+    missing: list[str],
+    *,
+    label: str = "",
+) -> dict[str, Any] | None:
+    """同 `_read_one`，但失败不抛（写进 missing）。"""
+    try:
+        return _read_one(db, key, params)
+    except Exception as exc:  # noqa: BLE001 — 单表不可读不该让整域失败
+        reason = _clean_reason(exc)
+        missing.append(f"{label or key} 读取失败（{reason}）")
+        logger.warning("只读语句 %s 失败: %s", key, reason)
+        return None
+
+
+def _clean_reason(exc: Exception) -> str:
+    """异常 → 短原因（去掉 SQL 正文/换行，避免把 SQL 泄进用户可见文案）。"""
+    raw = str(exc)
+    head = raw.split("[SQL:", 1)[0].strip()
+    head = head.replace("\n", " ").strip()
+    name = type(exc).__name__
+    if not head:
+        head = name
+    elif name not in head:
+        head = f"{name}: {head}"
+    return head[:120]
 
 
 # ──────────────────────────── 各域取数 ────────────────────────────
@@ -1407,6 +2172,519 @@ def _quote_age_sec(row: dict[str, Any] | None) -> float | None:
     return None
 
 
+# ──────────────────────────── P2 十二域的取数 ────────────────────────────
+
+
+def _mainline_payload(db: Any, top_n: int) -> dict[str, Any]:
+    """market.mainline 取数：mainline_rank_daily 排名 + mainline_daily_snapshot 成分。"""
+    missing: list[str] = []
+    rows: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    as_of = ""
+
+    # 注意：mainline_rank_daily.date 是 DATE/ISO 文本（YYYY-MM-DD），**原样**拿去
+    # WHERE 过滤（不能压成 YYYYMMDD，否则永远匹配不上）；展示时才转紧凑格式。
+    raw_d = str(
+        (_read_one_safe(db, "mainline_rank_date", {}, missing, label="mainline_rank_daily") or {}).get("d")
+        or ""
+    )
+    if raw_d:
+        rows = _read_safe(
+            db, "mainline_rank_rows", {"d": raw_d, "n": top_n}, missing, label="mainline_rank_daily"
+        )
+        as_of = _iso_date(raw_d)
+    elif not any("mainline_rank_daily" in m for m in missing):
+        missing.append("mainline_rank_daily 无日期（主线榜尚未计算）")
+
+    snap = _read_one_safe(db, "mainline_snapshot", {}, missing, label="mainline_daily_snapshot") or {}
+    payload = snap.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload or "{}")
+        except (TypeError, ValueError):
+            payload = None
+    if isinstance(payload, dict):
+        groups = [g for g in (payload.get("ranked_groups") or []) if isinstance(g, dict)]
+        if not groups:
+            missing.append("mainline_daily_snapshot payload 里没有 ranked_groups")
+        if not as_of:
+            as_of = _ymd(snap.get("date"))
+    elif snap:
+        missing.append("mainline_daily_snapshot payload 解析失败")
+
+    return {"as_of": as_of or "未知", "rows": rows, "groups": groups, "missing": missing}
+
+
+def _strategy_signal_payload(db: Any, top_n: int) -> dict[str, Any]:
+    """strategy.signal 取数：因子快照（选中票）+ 信号发出版。"""
+    missing: list[str] = []
+    # snapshot_date 是 YYYY-MM-DD，emit_date 是 YYYYMMDD —— 两种口径都**原样**过滤，
+    # 展示时再统一压成 YYYYMMDD（_ymd）。
+    raw_factor = str(
+        (
+            _read_one_safe(
+                db, "signal_factor_date", {}, missing, label="strategy_factor_snapshots"
+            )
+            or {}
+        ).get("d")
+        or ""
+    )
+    factor_rows = (
+        _read_safe(
+            db,
+            "signal_factor_rows",
+            {"d": raw_factor, "n": top_n},
+            missing,
+            label="strategy_factor_snapshots",
+        )
+        if raw_factor
+        else []
+    )
+    raw_emit = str(
+        (_read_one_safe(db, "signal_emit_date", {}, missing, label="signal_snapshots") or {}).get("d")
+        or ""
+    )
+    emit_rows = (
+        _read_safe(
+            db, "signal_emit_rows", {"d": raw_emit, "n": top_n}, missing, label="signal_snapshots"
+        )
+        if raw_emit
+        else []
+    )
+    factor_date = _iso_date(raw_factor)
+    emit_date = _iso_date(raw_emit)
+    as_of = factor_date or emit_date or "未知"
+    return {
+        "as_of": as_of,
+        "factor_date": factor_date,
+        "factor_rows": factor_rows,
+        "emit_date": emit_date,
+        "emit_rows": emit_rows,
+        "missing": missing,
+    }
+
+
+def _kline_payload(db: Any, symbol: str, market: str, days: int) -> dict[str, Any]:
+    """stock.kline 取数：PG klines hypertable（ts 时间列，无 trade_date）。
+
+    与 src.db.klines_repo.load_qfq_bars 同口径（qfq + tq/tencent 双源去重），
+    但这里直接读库、每条带 LIMIT，不触发网络回源。
+    """
+    missing: list[str] = []
+    bars: list[dict[str, Any]] = []
+    raw = _read_safe(db, "kline_daily_bars", {"s": symbol, "m": market, "n": days}, missing, label="klines")
+    seen: set[str] = set()
+    for r in raw:
+        day = str(r.get("ts") or "")[:10]
+        if not day or day in seen:
+            continue
+        seen.add(day)
+        bars.append(
+            {
+                "date": day,
+                "open": r.get("open"),
+                "high": r.get("high"),
+                "low": r.get("low"),
+                "close": r.get("close"),
+                "volume": r.get("volume"),
+                "source": r.get("source"),
+            }
+        )
+    bars.sort(key=lambda b: b["date"])
+    if not bars and not any("klines" in m for m in missing):
+        missing.append(f"klines 无 {symbol} 日K（PG hypertable 未采到该票）")
+    return {"as_of": bars[-1]["date"] if bars else "未知", "bars": bars, "missing": missing}
+
+
+def _paper_payload(db: Any, uid: str) -> dict[str, Any]:
+    """paper.trading 取数：账户 / 持仓 / 已平仓（全部按 user_id 严格过滤）。"""
+    missing: list[str] = []
+    account = _read_one_safe(db, "paper_account", {"uid": uid}, missing, label="paper_trading_account") or {}
+    positions = _read_safe(
+        db, "paper_positions", {"uid": uid, "n": 20}, missing, label="paper_trading_positions"
+    )
+    trades = _read_safe(db, "paper_trades", {"uid": uid, "n": 20}, missing, label="paper_trading_trades")
+    if not account and not any("paper_trading_account" in m for m in missing):
+        missing.append("paper_trading_account 无该用户账户行")
+    if not positions and not any("paper_trading_positions" in m for m in missing):
+        missing.append("paper_trading_positions 无该用户的 open 持仓")
+    if not trades and not any("paper_trading_trades" in m for m in missing):
+        missing.append("paper_trading_trades 无该用户已平仓记录")
+    return {
+        "as_of": str(account.get("updated_at") or "")[:16] or "未知",
+        "account": account,
+        "positions": positions,
+        "trades": trades,
+        "missing": missing,
+    }
+
+
+def _backtest_payload(db: Any, top_n: int) -> dict[str, Any]:
+    """backtest 取数：回测引擎结果不落库 → 只给 strategy_outcomes 事后收益 + 每日入选数。"""
+    missing: list[str] = []
+    stats = _read_safe(db, "backtest_outcome_stats", {"n": 10}, missing, label="strategy_outcomes")
+    rows = _read_safe(db, "backtest_outcome_rows", {"n": top_n}, missing, label="strategy_outcomes")
+    factor_days = _read_safe(
+        db, "backtest_factor_days", {"n": 10}, missing, label="strategy_factor_snapshots"
+    )
+    as_of = str(rows[0].get("snapshot_date") or "") if rows else ""
+    if not stats:
+        missing.append(
+            "strategy_outcomes 无已结算样本（回测运行结果不落库，需先跑策略复盘/回测）"
+        )
+    return {
+        "as_of": as_of or "未知",
+        "stats": stats,
+        "rows": rows,
+        "factor_days": factor_days,
+        "missing": missing,
+    }
+
+
+def _notify_payload(db: Any, uid: str) -> dict[str, Any]:
+    """notify.task 取数：本人定时任务 + 推送渠道 + 站内通知（转发 get_notifications）。"""
+    missing: list[str] = []
+    schedules = _read_safe(
+        db, "copilot_schedules", {"uid": uid, "n": 20}, missing, label="copilot_schedules"
+    )
+    channels = _read_safe(
+        db, "notify_channel_rows", {"uid": uid, "n": 20}, missing, label="notify_channels"
+    )
+    if not schedules and not any("copilot_schedules" in m for m in missing):
+        missing.append("copilot_schedules 无该用户的定时任务")
+    if not channels and not any("notify_channels" in m for m in missing):
+        missing.append("notify_channels 无该用户/全局的推送渠道")
+    return {
+        "as_of": "未知",
+        "schedules": schedules,
+        "channels": channels,
+        "notifications": "",
+        "missing": missing,
+    }
+
+
+def _ops_payload(db: Any, top_n: int) -> dict[str, Any]:
+    """ops.config 取数：数据源配置 + 平台设置 + 失败记录 + vendor 信任分（只读）。"""
+    missing: list[str] = []
+    datasources = _read_safe(db, "ops_datasources", {"n": top_n}, missing, label="data_sources")
+    settings = _read_safe(db, "ops_settings", {"n": 50}, missing, label="app_settings")
+    failures = _read_safe(db, "ops_ds_failures", {"n": 10}, missing, label="datasource_failures")
+    trust: list[dict[str, Any]] = []
+    try:
+        from src.core.marketdata_client import get_market_data
+
+        health = get_market_data().health() or {}
+        for vendor, s in health.items():
+            if not isinstance(s, dict):
+                continue
+            trust.append(
+                {
+                    "vendor": vendor,
+                    "score": _vendor_trust_score(s.get("success_rate"), s.get("p50_latency_ms")),
+                    "success_rate": s.get("success_rate"),
+                    "p50_latency_ms": s.get("p50_latency_ms"),
+                    "samples": s.get("count"),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 — 信任分是附加块，缺了不影响配置展示
+        logger.warning("marketdata 健康快照读取失败: %s", exc)
+        missing.append(f"marketdata 健康快照读取失败（{type(exc).__name__}）")
+    if not trust:
+        missing.append("marketdata 健康快照为空（尚未调用过任何 vendor，无法给信任分）")
+    if not datasources and not any("data_sources" in m for m in missing):
+        missing.append("data_sources 无配置行")
+    return {
+        "as_of": "未知",
+        "datasources": datasources,
+        "settings": settings,
+        "failures": failures,
+        "trust": trust,
+        "missing": missing,
+    }
+
+
+async def _query_market_mainline(db: Any, params: dict[str, Any], user: Any) -> str:
+    """market.mainline：主线日榜（mainline_rank_daily + mainline_daily_snapshot）。"""
+    try:
+        top_n = min(max(int(params.get("top_n") or 10), 1), 20)
+    except (TypeError, ValueError):
+        top_n = 10
+    p = _mainline_payload(db, top_n)
+    return render_mainline(
+        as_of=p.get("as_of") or "未知",
+        rows=p.get("rows"),
+        groups=p.get("groups"),
+        top_n=top_n,
+        missing=p.get("missing"),
+    )
+
+
+async def _query_strategy_signal(db: Any, params: dict[str, Any], user: Any) -> str:
+    """strategy.signal：因子快照 + 信号发出版。"""
+    try:
+        top_n = min(max(int(params.get("top_n") or 10), 1), 20)
+    except (TypeError, ValueError):
+        top_n = 10
+    p = _strategy_signal_payload(db, top_n)
+    return render_strategy_signal(
+        as_of=p.get("as_of") or "未知",
+        factor_rows=p.get("factor_rows"),
+        factor_date=p.get("factor_date") or "",
+        emit_rows=p.get("emit_rows"),
+        emit_date=p.get("emit_date") or "",
+        top_n=top_n,
+        missing=p.get("missing"),
+    )
+
+
+async def _query_stock_kline(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.kline：日 K 序列（PG hypertable，复用 klines 口径，不外呼）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    market = str(params.get("market") or "CN").strip().upper() or "CN"
+    try:
+        days = min(max(int(params.get("days") or 120), 20), 500)
+    except (TypeError, ValueError):
+        days = 120
+    p = _kline_payload(db, symbol, market, days)
+    return render_kline(
+        as_of=p.get("as_of") or "未知",
+        bars=p.get("bars"),
+        symbol=symbol,
+        days=days,
+        missing=p.get("missing"),
+    )
+
+
+async def _query_stock_tech(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.tech：转发 get_technical_analysis / get_wyckoff_structure / get_kline_patterns。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    market = str(params.get("market") or "CN").strip().upper() or "CN"
+    args = {"symbol": symbol, "market": market}
+    tech = await _delegate("get_technical_analysis", db, args, user)
+    wyckoff = await _delegate("get_wyckoff_structure", db, args, user)
+    patterns = await _delegate("get_kline_patterns", db, args, user)
+    sections = [s for s in (tech, wyckoff, patterns) if s and s.strip()]
+    missing: list[str] = []
+    if not (tech and tech.strip()):
+        missing.append("get_technical_analysis 未返回内容（技术面源不可用？）")
+    if not (wyckoff and wyckoff.strip()):
+        missing.append("get_wyckoff_structure 未返回内容（日K 量价结构不可用？）")
+    if not (patterns and patterns.strip()):
+        missing.append("get_kline_patterns 未返回内容（K 线形态源不可用？）")
+    return render_domain_sections(
+        "stock.tech",
+        as_of=_now_cn(),
+        source="复用 get_technical_analysis / get_wyckoff_structure / get_kline_patterns（同一口径）",
+        sections=sections,
+        missing=missing,
+    )
+
+
+async def _query_stock_dossier(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.dossier：转发 get_stock_dossier（9 维全景档案：研报/公告/新闻）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    market = str(params.get("market") or "CN").strip().upper() or "CN"
+    out = await _delegate("get_stock_dossier", db, {"symbol": symbol, "market": market}, user)
+    sections = [out] if out.strip() else []
+    return render_domain_sections(
+        "stock.dossier",
+        as_of=_now_cn(),
+        source="复用 get_stock_dossier（量价+技术面+形态+主力+筹码+决策色带+研报+公告+消息）",
+        sections=sections,
+        missing=[] if sections else ["get_stock_dossier 未返回内容（档案聚合失败或数据源不可用）"],
+    )
+
+
+async def _query_stock_scenario(db: Any, params: dict[str, Any], user: Any) -> str:
+    """stock.scenario：转发 get_scenario_matrix（关键位 + 三档情景）。"""
+    symbol = str(params.get("symbol") or "").strip().upper()
+    out = await _delegate("get_scenario_matrix", db, {"symbol": symbol, "market": "CN"}, user)
+    sections = [out] if out.strip() else []
+    return render_domain_sections(
+        "stock.scenario",
+        as_of=_now_cn(),
+        source="复用 get_scenario_matrix（均线+筹码带+区间高低 → 关键位与三档情景）",
+        sections=sections,
+        missing=[] if sections else ["get_scenario_matrix 未返回内容（日线不足或源不可用）"],
+    )
+
+
+async def _query_portfolio_risk(db: Any, params: dict[str, Any], user: Any) -> str:
+    """portfolio.risk：转发 get_portfolio（持仓）+ portfolio_risk_snapshots（组合风险画像）。
+
+    **用户隔离**：get_portfolio 是 requires="self" 的工具；无登录态（user=None）时
+    直接拒绝，不返回任何持仓。
+    """
+    uid = _user_id(user)
+    if not uid:
+        return _need_login(
+            "portfolio.risk", "复用 get_portfolio（positions/stocks）+ portfolio_risk_snapshots"
+        )
+    out = await _delegate("get_portfolio", db, {}, user)
+    sections = [out] if out.strip() else []
+    missing: list[str] = []
+    if not sections:
+        missing.append("get_portfolio 未返回内容（无持仓或持仓表不可读）")
+    # 逐笔持仓明细：严格按 user_id 等值过滤（不含 user_id IS NULL 的全局行）
+    positions = _read_safe(
+        db, "portfolio_positions", {"uid": uid, "n": 30}, missing, label="positions"
+    )
+    if positions:
+        parts = []
+        for p in positions[:10]:
+            parts.append(
+                f"{p.get('symbol') or '?'} {p.get('name') or ''}".strip()
+                + f"（{p.get('market') or '未标注'}）"
+                + f" {p.get('quantity')}股 成本 {_num(p.get('cost_price'), 2)}"
+                + f" 风格 {p.get('trading_style') or '未标注'}"
+            )
+        sections.append(
+            f"- 本人持仓明细（positions × stocks，按 user_id 严格过滤，共 {len(positions)} 条）："
+            + "；".join(parts)
+        )
+    elif not any("positions" in m for m in missing):
+        missing.append("positions 无该用户归属的持仓行")
+    risk = _read_safe(db, "portfolio_risk_snapshot", {"n": 5}, missing, label="portfolio_risk_snapshots")
+    if risk:
+        r = risk[0]
+        bits = [
+            f"快照日 {r.get('snapshot_date') or '未标注'}",
+            f"市场 {r.get('market') or '未标注'}",
+        ]
+        for key, label in (
+            ("total_signals", "信号数"),
+            ("active_signals", "活跃信号"),
+            ("held_signals", "已持仓信号"),
+        ):
+            v = _f(r.get(key))
+            bits.append(f"{label} {int(v) if v is not None else '未披露'}")
+        rr = _f(r.get("high_risk_ratio"))
+        # high_risk_ratio / concentration_top5 都是 0~1 的比例（strategy_engine 写入口径）
+        bits.append(f"高风险占比 {_pct(rr * 100) if rr is not None else '未披露'}")
+        cc = _f(r.get("concentration_top5"))
+        bits.append(f"前 5 集中度 {_pct(cc * 100) if cc is not None else '未披露'}")
+        rl = str(r.get("risk_level") or "")
+        bits.append(f"风险档 {rl}" if rl else "风险档 未标注")
+        sections.append("- 组合风险画像（portfolio_risk_snapshots）：" + "｜".join(bits))
+    else:
+        missing.append("portfolio_risk_snapshots 无风险画像行（组合诊断未跑）")
+    return render_domain_sections(
+        "portfolio.risk",
+        as_of=_now_cn(),
+        source="复用 get_portfolio（positions/stocks，按 user_id 过滤）+ portfolio_risk_snapshots",
+        sections=sections,
+        missing=missing,
+    )
+
+
+async def _query_watchlist(db: Any, params: dict[str, Any], user: Any) -> str:
+    """watchlist：转发 get_watchlist（自选股）+ stocks 表（按 user_id 过滤）。
+
+    **用户隔离**：get_watchlist 是 requires="self" 的工具；无登录态直接拒绝。
+    """
+    uid = _user_id(user)
+    if not uid:
+        return _need_login("watchlist", "复用 get_watchlist（stocks，按 user_id 过滤）")
+    out = await _delegate("get_watchlist", db, {}, user)
+    sections = [out] if out.strip() else []
+    missing: list[str] = []
+    if not sections:
+        missing.append("get_watchlist 未返回内容（无自选或表不可读）")
+    rows = _read_safe(db, "watchlist_rows", {"uid": uid, "n": 30}, missing, label="stocks")
+    if rows:
+        parts = [
+            f"{r.get('symbol') or '?'} {r.get('name') or ''}".strip() + f"（{r.get('market') or '未标注'}）"
+            for r in rows[:15]
+        ]
+        more = f" 等 {len(rows)} 只" if len(rows) > 15 else ""
+        sections.append(f"- 自选明细（stocks，按 user_id 过滤，共 {len(rows)} 只）：" + "；".join(parts) + more)
+    else:
+        missing.append("stocks 无该用户归属的自选行")
+    return render_domain_sections(
+        "watchlist",
+        as_of=_now_cn(),
+        source="复用 get_watchlist（stocks，按 user_id 过滤）",
+        sections=sections,
+        missing=missing,
+    )
+
+
+async def _query_paper_trading(db: Any, params: dict[str, Any], user: Any) -> str:
+    """paper.trading：模拟盘账户/持仓/已平仓（全部按 user_id 严格过滤）。
+
+    **用户隔离**：无登录态直接拒绝，不返回任何人的模拟盘数据。
+    """
+    uid = _user_id(user)
+    if not uid:
+        return _need_login(
+            "paper.trading",
+            "paper_trading_account / paper_trading_positions / paper_trading_trades（按 user_id 过滤）",
+        )
+    p = _paper_payload(db, uid)
+    return render_paper_trading(
+        as_of=p.get("as_of") or "未知",
+        account=p.get("account"),
+        positions=p.get("positions"),
+        trades=p.get("trades"),
+        missing=p.get("missing"),
+    )
+
+
+async def _query_notify_task(db: Any, params: dict[str, Any], user: Any) -> str:
+    """notify.task：本人定时任务 + 推送渠道 + 站内通知（L1 只读，不执行创建）。"""
+    uid = _user_id(user)
+    if not uid:
+        return _need_login(
+            "notify.task",
+            "copilot_schedules / notify_channels / notifications（按 user_id 过滤）",
+        )
+    p = _notify_payload(db, uid)
+    notifications = await _delegate("get_notifications", db, {"limit": 10}, user)
+    missing = list(p.get("missing") or [])
+    if not (notifications and notifications.strip()):
+        missing.append("get_notifications 未返回内容（站内消息不可用）")
+    return render_notify_task(
+        as_of=_now_cn(),
+        schedules=p.get("schedules"),
+        channels=p.get("channels"),
+        notifications=notifications or "",
+        missing=missing,
+    )
+
+
+async def _query_backtest(db: Any, params: dict[str, Any], user: Any) -> str:
+    """backtest：回测运行结果不落库 → 只给可回溯的事后收益；无结果如实说无结果。"""
+    try:
+        top_n = min(max(int(params.get("top_n") or 8), 1), 20)
+    except (TypeError, ValueError):
+        top_n = 8
+    p = _backtest_payload(db, top_n)
+    return render_backtest(
+        as_of=p.get("as_of") or "未知",
+        stats=p.get("stats"),
+        rows=p.get("rows"),
+        factor_days=p.get("factor_days"),
+        missing=p.get("missing"),
+    )
+
+
+async def _query_ops_config(db: Any, params: dict[str, Any], user: Any) -> str:
+    """ops.config：平台设置 + 数据源配置/信任分（L2 只读，不写入）。"""
+    try:
+        top_n = min(max(int(params.get("top_n") or 12), 1), 40)
+    except (TypeError, ValueError):
+        top_n = 12
+    p = _ops_payload(db, top_n)
+    return render_ops_config(
+        as_of=p.get("as_of") or "未知",
+        datasources=p.get("datasources"),
+        settings=p.get("settings"),
+        failures=p.get("failures"),
+        trust=p.get("trust"),
+        missing=p.get("missing"),
+    )
+
+
 
 # ──────────────────────────── 统一入口 ────────────────────────────
 
@@ -1460,10 +2738,22 @@ async def query_data_domain(
         "market.sentiment": _query_market_sentiment,
         "market.index": _query_market_index,
         "market.breadth": _query_market_breadth,
+        "market.mainline": _query_market_mainline,
         "board.daily": _query_board_daily,
         "stock.fundamental": _query_stock_fundamental,
         "auction.flow": _query_auction_flow,
         "stock.quote": _query_stock_quote,
+        "stock.kline": _query_stock_kline,
+        "stock.tech": _query_stock_tech,
+        "stock.dossier": _query_stock_dossier,
+        "stock.scenario": _query_stock_scenario,
+        "strategy.signal": _query_strategy_signal,
+        "portfolio.risk": _query_portfolio_risk,
+        "watchlist": _query_watchlist,
+        "paper.trading": _query_paper_trading,
+        "notify.task": _query_notify_task,
+        "backtest": _query_backtest,
+        "ops.config": _query_ops_config,
         "limit.pool": None,  # 见下（自带只读 SQL）
         "lhb.daily": None,   # 见下（自带只读 SQL）
         "theme.mood": None,  # 见下（自带只读 SQL）
@@ -1527,7 +2817,7 @@ async def query_data_domain(
             as_of="未知",
             source=(_DOMAIN_BY_ID.get(domain) or {}).get("source") or "未标注",
             sections=[],
-            missing=[f"取数异常（{type(exc).__name__}: {str(exc)[:80]}）"],
+            missing=[f"取数异常（{_clean_reason(exc)}）"],
         )
 
 
@@ -1552,17 +2842,24 @@ _QUERY_SCHEMA = {
         "name": "query_data_domain",
         "description": (
             "**数据域统一取数入口**：传域 id + 参数，返回人话 Markdown（首行「域 / 时点 / 来源表」，"
-            "末尾缺数据会写「未取到（原因）」）。"
-            "已接入的域：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date=YYYYMMDD、min_streak）、"
+            "末尾缺数据会写「未取到（原因）」）。26 个域全部已接入。"
+            "市场/个股类：market.sentiment（情绪周期）、limit.pool（涨停池/连板梯队/封板强度，可选 date、min_streak）、"
             "lhb.daily（龙虎榜/席位，可选 symbol、date）、theme.mood（题材五维评分+板块资金，可选 top_n、date）、"
-            "market.index（大盘指数点位/涨跌幅/两市成交额）、market.breadth（涨跌家数+ADL/ADR/ARMS 分位+九档分布+市场状态）、"
-            "board.daily（板块涨跌与资金净流入排行，可选 top_n）、stock.fundamental（财务/股东/两融/分红，必填 symbol）、"
+            "market.index（大盘指数/两市成交额）、market.breadth（涨跌家数+ADL/ARMS 分位+九档分布+市场状态）、"
+            "market.mainline（主线榜排名/主线分/龙头，可选 top_n）、board.daily（板块涨跌与资金排行，可选 top_n）、"
+            "strategy.signal（策略因子分+信号发出/T+1T+5 事后收益，可选 top_n）、"
             "auction.flow（集合竞价 9:25 快照/逐帧/异动池，可选 symbol、limit）、"
-            "stock.quote（实时报价，必填 symbol，库内行超过 60s 转实时取数）、"
-            "stock.chip（筹码/集中度，必填 symbol）、"
-            "stock.flow（主力意图+撤单，必填 symbol）、stock.intraday（分时结构/盘口，必填 symbol）、"
-            "stock.factor（因子分位，必填 symbol，可选 with_ic=true 追因子 IC）。"
-            "其余域为 P1 待接，调用会明确提示未接入。域 id 一律先用 list_data_domains 查。"
+            "stock.quote（实时报价，必填 symbol，库内行超 60s 转实时取数）、"
+            "stock.kline（日K序列/均线/区间高低，必填 symbol，可选 days）、"
+            "stock.tech（技术面+威科夫结构+K线形态，必填 symbol）、"
+            "stock.dossier（研报/公告/消息全景档案，必填 symbol）、"
+            "stock.fundamental（财务/股东/两融/分红，必填 symbol）、"
+            "stock.scenario（关键位+三档情景，必填 symbol）。"
+            "用户私域（portfolio.risk 持仓风控、watchlist 自选、paper.trading 模拟盘、notify.task 定时任务与通知）："
+            "**需登录态**，无登录会明确说需要登录；只读，不会创建任务或改持仓。"
+            "平台类：backtest（策略信号事后收益；回测引擎运行结果不落库，无样本会如实说无结果）、"
+            "ops.config（数据源配置/信任分/平台设置，只读）。"
+            "域 id 一律先用 list_data_domains 查。"
             "返回的是客观读数与口径，不含买卖建议。"
         ),
         "parameters": {
@@ -1620,13 +2917,20 @@ __all__ = [
     "query_data_domain",
     "register_catalog_tools",
     "render_auction_flow",
+    "render_backtest",
     "render_board_daily",
     "render_domain_catalog",
     "render_domain_sections",
-    "render_limit_pool",
+    "render_kline",
     "render_lhb",
+    "render_limit_pool",
+    "render_mainline",
     "render_market_breadth",
     "render_market_index",
+    "render_notify_task",
+    "render_ops_config",
+    "render_paper_trading",
     "render_stock_quote",
+    "render_strategy_signal",
     "required_params",
 ]
