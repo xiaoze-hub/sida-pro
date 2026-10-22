@@ -1,3 +1,24 @@
+## release: v0.39.1（数据域 26/26 全覆盖 + 目录进 CI 门禁）（2026-10-22）
+
+**数据域接满 26 个（14/26 → 26/26 = 100%）**
+新增 12 个：`market.mainline`（主线榜）、`strategy.signal`（策略信号）、`stock.kline`（K线/hypertable）、
+`stock.tech`（技术面+威科夫+形态）、`stock.dossier`（研报公告）、`stock.scenario`（情景关键位）、
+`portfolio.risk`（持仓+组合风险）、`watchlist`、`paper.trading`、`notify.task`、`backtest`、`ops.config`。
+
+- **用户类域强制隔离**：`portfolio.risk` / `watchlist` / `paper.trading` / `notify.task` 在 `user=None`
+  时直接返回「需要登录」，并按 `user_id` 等值过滤（不含全局 NULL 行），不返回任何他人数据。
+- **能转发就转发**：`stock.tech`/`stock.dossier`/`stock.scenario`/`portfolio.risk` 等复用已有 chat 工具 handler，
+  保证与页面同口径；只有无现成工具时才自写只读 SQL（`text()` + 绑定参数 + 每条 LIMIT）。
+- **无数据如实说**：`backtest` 等无持久化结果的域返回「尚未接入/无结果」，不编数；每域均带「时点/来源」。
+
+**目录进 CI 门禁**
+`gates` 作业新增 `python3 scripts/gen_data_catalog.py --check`：域引用了不存在的表就红，
+防止目录（26 域 × 132 表 × 491 路由）与代码漂移。当前 491 路由 / 132 表 / 26 域 / 0 处目录错误。
+
+**一并发出的两个小修**
+- `market.breadth` 在无会话调用时自建 `SessionLocal`，不再 `NoneType.execute` 崩栈后返回半截文本；
+- `get_stock_quote` 改库优先（`quote_snapshots` 60s 内直接用），过期才回落实时源，并在末行标口径。
+
 ## fix: get_stock_quote 也走库优先（2026-10-22，未发版）
 
 v0.39.0 只把「筹码工具里的现价」和 `stock.quote` 域改成库优先，`get_stock_quote` 本身仍直接调

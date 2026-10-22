@@ -87,26 +87,23 @@ def test_bad_params_json_rejected():
     assert "params_json" in out and "不是合法 JSON" in out
 
 
-def test_p1_domain_is_honest():
-    out = _run(tc.query_data_domain(None, {"domain": "market.mainline"}))
-    assert "尚未接入实现" in out or "P1 待接" in out
-
-
-def test_remaining_p1_domains_count_and_message():
-    """P1 未接的 12 个域仍必须明确说未接入（不猜表、不编数字）。"""
+def test_no_domain_is_left_unimplemented():
+    """26 个域全部接线：没有域再报「尚未接入实现 / P1 待接」。"""
     import yaml
 
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
-    p1 = [str(d["id"]) for d in raw["domains"] if not str(d.get("source") or "").strip()]
-    assert len(p1) == 12
-    for domain in p1:
-        out = _run(tc.query_data_domain(None, {"domain": domain}))
-        assert "尚未接入实现" in out, f"{domain} 应报未接入"
-        assert "SELECT" not in out.upper()
+    assert len(raw["domains"]) == 26
+    for d in raw["domains"]:
+        domain = str(d["id"])
+        assert str(d.get("source") or "").strip(), f"{domain} 的 source 不能为空"
+        assert "P1" not in str(d.get("desc") or ""), f"{domain} 的 desc 还写着 P1"
+    out = _run(tc.query_data_domain(None, {"domain": "market.mainline"}))
+    assert "尚未接入实现" not in out
+    assert "P1 待接" not in out
 
 
-def test_all_fourteen_implemented_domains_are_wired(monkeypatch):
-    """source 非空的 14 个域都必须有实现，不能漏一个去报「未接入」。"""
+def test_all_twenty_six_domains_are_wired(monkeypatch):
+    """全部 26 个域都能路由到实现（转发层给占位，读库层全当空表）。"""
     import yaml
 
     _canned_reads(monkeypatch, {})   # 不碰真库：全部当空表处理
@@ -116,11 +113,12 @@ def test_all_fourteen_implemented_domains_are_wired(monkeypatch):
 
     monkeypatch.setattr(tc, "_delegate", _fake)
     raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
-    done = {str(d["id"]) for d in raw["domains"] if str(d.get("source") or "").strip()}
-    assert len(done) == 14
-    for domain in sorted(done):
+    domains = [str(d["id"]) for d in raw["domains"]]
+    assert len(domains) == 26
+    for domain in sorted(domains):
         out = _run(tc.query_data_domain(None, {"domain": domain, "params_json": '{"symbol": "002361"}'}))
         assert "尚未接入实现" not in out, f"{domain} 未接线"
+        assert "未知数据域" not in out, f"{domain} 未识别"
         assert len(out) <= tc.MAX_DOMAIN_CHARS
 
 
@@ -728,3 +726,608 @@ def test_stock_quote_stale_and_tool_dead_marks_expired(monkeypatch):
     ))
     assert "过期快照" in out and "未取到" in out
     assert "14.00" in out                     # 过期值仍展示，但明确标注不可当实时
+
+
+# ──────────────────────────── 11. P2 十二域（2026-10-22） ────────────────────────────
+# 覆盖：26 域全部路由到实现 / 用户域 user=None 拒绝 / 空结果写「未取到」不补 0 /
+#       每域输出含「时点」「来源」/ 用户域按 user_id 过滤 / 只读 SQL 全带 LIMIT。
+
+#: 2026-10-22 新接的 12 个域。
+P2_TWELVE = (
+    "market.mainline",
+    "strategy.signal",
+    "stock.kline",
+    "stock.tech",
+    "stock.dossier",
+    "stock.scenario",
+    "portfolio.risk",
+    "watchlist",
+    "paper.trading",
+    "notify.task",
+    "backtest",
+    "ops.config",
+)
+
+#: 用户私域（必须按 user_id 隔离；无登录态直接拒绝）。
+USER_DOMAINS = ("portfolio.risk", "watchlist", "paper.trading", "notify.task")
+
+
+class _FakeUser:
+    """最小 user 替身（只带 id，够 _user_id 用）。"""
+
+    def __init__(self, uid: str = "user-a"):
+        self.id = uid
+
+
+def _no_delegate(monkeypatch):
+    """转发层全部返回空（不碰网络、不碰真库）。"""
+
+    async def _empty(name, db, args, user):
+        return ""
+
+    monkeypatch.setattr(tc, "_delegate", _empty)
+
+
+def _stub_reads(monkeypatch, table: dict[str, list[dict]]):
+    """读库层喂假数据（同时覆盖 _read / _read_one / _read_safe / _read_one_safe）。"""
+
+    def _read(db, key, params=None):
+        return list(table.get(key, []))
+
+    def _read_one(db, key, params=None):
+        return (list(table.get(key, [])) or [None])[0]
+
+    monkeypatch.setattr(tc, "_read", _read)
+    monkeypatch.setattr(tc, "_read_one", _read_one)
+    monkeypatch.setattr(tc, "_read_safe", lambda db, key, params=None, missing=None, label="": _read(db, key, params))
+    monkeypatch.setattr(tc, "_read_one_safe", lambda db, key, params=None, missing=None, label="": _read_one(db, key, params))
+
+
+# ── 11.1 全部 26 域都能路由到实现（不允许「P1 待接」） ────────────────────────────
+
+def test_all_26_domains_route_to_an_implementation(monkeypatch):
+    """目录里 26 个域每一个都能路由到实现 —— 没有域再报「尚未接入」。"""
+    import yaml
+
+    raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
+    domains = [str(d["id"]) for d in raw["domains"]]
+    assert len(domains) == 26
+    _stub_reads(monkeypatch, {})
+    _no_delegate(monkeypatch)
+    for domain in sorted(domains):
+        out = _run(tc.query_data_domain(
+            None,
+            {"domain": domain, "params_json": '{"symbol": "002361"}'},
+            _FakeUser(),
+        ))
+        assert "尚未接入实现" not in out, f"{domain} 报未接入"
+        assert "P1 待接" not in out, f"{domain} 报 P1"
+        assert "未知数据域" not in out, f"{domain} 未识别"
+        assert out.strip(), f"{domain} 渲染为空"
+        assert len(out) <= tc.MAX_DOMAIN_CHARS, f"{domain} 超 1200 字"
+
+
+def test_every_domain_output_has_asof_and_source(monkeypatch):
+    """每个域的首行都必须带「时点」与「来源」—— 缺了就不知道数据多旧、从哪来。"""
+    import yaml
+
+    raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
+    _stub_reads(monkeypatch, {})
+    _no_delegate(monkeypatch)
+    for d in raw["domains"]:
+        domain = str(d["id"])
+        out = _run(tc.query_data_domain(
+            None,
+            {"domain": domain, "params_json": '{"symbol": "002361"}'},
+            _FakeUser(),
+        ))
+        head = out.splitlines()[0]
+        assert domain in head, f"{domain} 首行没写域 id"
+        assert "时点" in head, f"{domain} 首行缺时点"
+        assert "来源" in head, f"{domain} 首行缺来源"
+
+
+def test_p2_twelve_all_present_in_catalog():
+    """这 12 个域必须在目录里且 source 非空（source 非空 = --check 能解析出真实表）。"""
+    import yaml
+
+    raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
+    by_id = {str(d["id"]): d for d in raw["domains"]}
+    for domain in P2_TWELVE:
+        assert domain in by_id, f"{domain} 不在目录里"
+        assert str(by_id[domain].get("source") or "").strip(), f"{domain} 的 source 为空"
+        assert "P1" not in str(by_id[domain].get("desc") or "")
+
+
+# ── 11.2 用户私域：user=None 一律拒绝 ────────────────────────────
+
+@pytest.mark.parametrize("domain", USER_DOMAINS)
+def test_user_domains_reject_without_login(monkeypatch, domain):
+    """无登录态（user=None）必须说「需要登录」，绝不返回任何数据。"""
+    _stub_reads(monkeypatch, {
+        "portfolio_positions": [{"symbol": "002361", "name": "闽东电力", "market": "CN",
+                                 "quantity": 100, "cost_price": 14.0, "trading_style": "swing"}],
+        "watchlist_rows": [{"symbol": "002361", "name": "闽东电力", "market": "CN",
+                            "sort_order": 0, "updated_at": None}],
+        "paper_account": [{"id": 1, "initial_capital": 1000000.0, "current_capital": 1000000.0,
+                           "total_pnl": 0.0, "total_trades": 0, "winning_trades": 0,
+                           "max_drawdown_pct": 0.0, "peak_capital": 1000000.0,
+                           "enabled": True, "updated_at": None}],
+        "paper_positions": [{"stock_symbol": "002361", "stock_market": "CN", "stock_name": "闽东电力",
+                             "quantity": 100, "entry_price": 14.0, "current_price": 15.0,
+                             "unrealized_pnl": 100.0, "status": "open"}],
+        "copilot_schedules": [{"id": 1, "kind": "daily_brief", "at_hhmm": "15:30",
+                               "weekdays": "mon-fri", "enabled": True, "last_run_date": "20261021",
+                               "created_at": None}],
+        "notify_rows": [{"title": "策略刷新完成", "category": "strategy", "level": "info",
+                         "created_at": None, "read_at": None}],
+    })
+    _no_delegate(monkeypatch)
+    out = _run(tc.query_data_domain(None, {"domain": domain}))
+    assert "需要登录" in out, f"{domain} 未拒绝无登录态"
+    assert "未取到" in out
+    # 关键：不能泄露任何一条用户数据
+    assert "闽东电力" not in out
+    assert "002361" not in out
+    assert "1000000" not in out and "1000000.00" not in out
+    assert "daily_brief" not in out and "收盘小结" not in out
+
+
+@pytest.mark.parametrize("domain", USER_DOMAINS)
+def test_user_domains_only_query_own_user_id(monkeypatch, domain):
+    """用户域的每条只读 SQL 都必须带 user_id 绑定参数（:uid），不能漏成全表。"""
+    calls: list[tuple[str, dict]] = []
+
+    def _read(db, key, params=None):
+        calls.append((key, dict(params or {})))
+        return []
+
+    monkeypatch.setattr(tc, "_read", _read)
+    monkeypatch.setattr(tc, "_read_one", lambda db, key, params=None: None)
+    monkeypatch.setattr(tc, "_read_safe",
+                        lambda db, key, params=None, missing=None, label="": _read(db, key, params))
+    monkeypatch.setattr(tc, "_read_one_safe",
+                        lambda db, key, params=None, missing=None, label="": None)
+
+    async def _empty(name, db, args, user):
+        return ""
+
+    monkeypatch.setattr(tc, "_delegate", _empty)
+    _run(tc.query_data_domain(None, {"domain": domain}, _FakeUser("uid-42")))
+
+    user_scoped = [k for k in ("portfolio_positions", "watchlist_rows", "paper_account",
+                               "paper_positions", "paper_trades", "copilot_schedules",
+                               "notify_rows", "notify_channel_rows")]
+    checked = [k for k, _ in calls if k in user_scoped]
+    assert checked, f"{domain} 没读到任何用户表"
+    for key, params in calls:
+        if key in user_scoped:
+            assert params.get("uid") == "uid-42", f"{key} 没按 user_id 过滤: {params}"
+
+
+def test_paper_trading_and_watchlist_do_not_leak_other_users(monkeypatch):
+    """模拟盘/自选的 SQL 里必须是 `user_id = :uid`（严格等值），不是全局行。"""
+    sql = tc._SQL
+    for key in ("paper_account", "paper_positions", "paper_trades", "watchlist_rows",
+                "portfolio_positions", "copilot_schedules"):
+        text = sql[key].upper()
+        assert "USER_ID = :UID" in text, f"{key} 未按 user_id 严格过滤"
+        assert "USER_ID IS NULL" not in text, f"{key} 不得混入全局行"
+
+
+# ── 11.3 各域渲染：空结果写「未取到」，不补 0 ────────────────────────────
+
+@pytest.mark.parametrize("domain", P2_TWELVE)
+def test_p2_domains_empty_result_says_missing_not_zero(monkeypatch, domain):
+    """空库 + 空转发 → 必须写「未取到」，且不得出现冒充数值的 0。"""
+    _stub_reads(monkeypatch, {})
+    _no_delegate(monkeypatch)
+    out = _run(tc.query_data_domain(
+        None, {"domain": domain, "params_json": '{"symbol": "002361"}'}, _FakeUser()
+    ))
+    assert "未取到" in out, f"{domain} 空结果没写未取到"
+    # 数字 0 只能出现在「第 0 名」这类结构性表述里，不能是读数
+    assert re.search(r"(?<![.\d])0(?![.\d%])", out) is None, out
+
+
+@pytest.mark.parametrize("domain", P2_TWELVE)
+def test_p2_domains_missing_value_is_not_zero(monkeypatch, domain):
+    """字段缺值必须写「未披露」，不能拿 0 冒充（backtest 的口径行不算读数）。"""
+    _stub_reads(monkeypatch, {})
+    _no_delegate(monkeypatch)
+    out = _run(tc.query_data_domain(
+        None, {"domain": domain, "params_json": '{"symbol": "002361"}'}, _FakeUser()
+    ))
+    assert "未披露" in out or "未取到" in out, out
+
+
+# ── 11.4 各域有数据时的渲染 ────────────────────────────
+
+def test_mainline_renders_rank_and_constituents(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "mainline_rank_date": [{"d": "2026-10-20"}],
+        "mainline_rank_rows": [
+            {"date": "2026-10-20", "name": "半导体", "rank": 1, "score": 82.5},
+            {"date": "2026-10-20", "name": "稀土永磁", "rank": 2, "score": 71.2},
+        ],
+        "mainline_snapshot": [{
+            "date": "2026-10-20", "computed_ts": 1.0,
+            "payload": json.dumps({"ranked_groups": [{
+                "name": "半导体", "score": 82.5, "limit_up_count": 12, "max_boards": 4,
+                "leader": {"code": "600111", "name": "北方稀土", "days": 3},
+                "constituents": [{"code": "600111", "name": "北方稀土"}],
+            }]}),
+        }],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "market.mainline"}))
+    assert "时点 2026-10-20" in out and "来源" in out
+    assert "第 1 名" in out and "半导体" in out and "主线分 82.50" in out
+    assert "稀土永磁" in out and "主线分 71.20" in out
+    assert "龙头 600111 北方稀土（3板）" in out
+    assert "涨停 12 家" in out and "最高 4 板" in out
+    assert "未取到" not in out
+
+
+def test_strategy_signal_renders_factor_and_emit(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "signal_factor_date": [{"d": "2026-10-20"}],
+        "signal_factor_rows": [{
+            "snapshot_date": "2026-10-20", "stock_symbol": "002361", "stock_market": "CN",
+            "strategy_code": "demon", "alpha_score": 82.0, "catalyst_score": 70.0,
+            "quality_score": 60.0, "risk_penalty": 5.0, "crowd_penalty": 3.0,
+            "final_score": 71.4,
+        }],
+        "signal_emit_date": [{"d": "2026-10-20"}],
+        "signal_emit_rows": [{
+            "emit_ts": "2026-10-20T09:35:00", "emit_date": "2026-10-20", "signal_type": "resonance",
+            "symbol": "002361", "market": "CN", "direction": "long", "strength": 0.82,
+            "outcome_t1": 3.2, "outcome_t5": -1.1, "checked_t1": 1, "checked_t5": 1,
+        }],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "strategy.signal"}))
+    assert "时点 2026-10-20" in out
+    assert "002361" in out and "策略 demon" in out and "总分 71.40" in out
+    assert "alpha 82.0" in out and "quality 60.0" in out
+    assert "risk +5.0" in out and "crowd +3.0" in out
+    assert "resonance" in out and "long" in out and "强度 0.82" in out
+    assert "T+1 +3.20%" in out and "T+5 -1.10%" in out
+    assert "未取到" not in out
+
+
+def test_strategy_signal_missing_outcome_not_zero(monkeypatch):
+    """T+1/T+5 没回填 → 写「未回填」，不写 0.00%。"""
+    _stub_reads(monkeypatch, {
+        "signal_factor_date": [{"d": "2026-10-20"}],
+        "signal_factor_rows": [],
+        "signal_emit_date": [{"d": "2026-10-20"}],
+        "signal_emit_rows": [{
+            "emit_ts": "2026-10-20T09:35:00", "emit_date": "2026-10-20", "signal_type": "resonance",
+            "symbol": "002361", "market": "CN", "direction": "long", "strength": None,
+            "outcome_t1": None, "outcome_t5": None, "checked_t1": 0, "checked_t5": 0,
+        }],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "strategy.signal"}))
+    assert "T+1 未回填" in out and "T+5 未回填" in out
+    assert "+0.00%" not in out
+
+
+def test_kline_renders_bars_and_moving_averages(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "kline_daily_bars": [
+            {"ts": "2026-10-19 15:00:00+00:00", "open": 9.8, "high": 10.2, "low": 9.7,
+             "close": 10.1, "volume": 1.2e6, "source": "tq"},
+            {"ts": "2026-10-20 15:00:00+00:00", "open": 10.1, "high": 10.6, "low": 10.0,
+             "close": 10.5, "volume": 1.5e6, "source": "tq"},
+        ],
+    })
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.kline", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert "时点 2026-10-20" in out and "来源 klines" in out
+    assert "收 10.50" in out and "高 10.60" in out
+    assert "区间涨跌" in out
+    assert "未取到" not in out
+
+
+def test_kline_empty_says_missing(monkeypatch):
+    _stub_reads(monkeypatch, {"kline_daily_bars": []})
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.kline", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert "未取到" in out
+    assert "0 根" not in out
+
+
+def test_stock_tech_forwards_three_handlers(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return f"[{name}] 占位读数"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.tech", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == ["get_technical_analysis", "get_wyckoff_structure", "get_kline_patterns"]
+    assert "get_technical_analysis" in out and "get_wyckoff_structure" in out
+    assert "get_kline_patterns" in out
+    assert "未取到" not in out
+
+
+def test_stock_dossier_forwards_handler(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake(name, db, args, user):
+        calls.append((name, dict(args)))
+        return "研报：某某证券 买入｜公告：近15日 2 条"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.dossier", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == [("get_stock_dossier", {"symbol": "002361", "market": "CN"})]
+    assert "研报" in out and "公告" in out
+    assert "未取到" not in out
+
+
+def test_stock_scenario_forwards_handler(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake(name, db, args, user):
+        calls.append((name, dict(args)))
+        return "【走强】触发：站上 MA20｜目标：12.00"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    out = _run(tc.query_data_domain(
+        None, {"domain": "stock.scenario", "params_json": '{"symbol": "002361"}'}
+    ))
+    assert calls == [("get_scenario_matrix", {"symbol": "002361", "market": "CN"})]
+    assert "走强" in out
+    assert "未取到" not in out
+
+
+def test_portfolio_risk_forwards_and_shows_snapshot(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "实盘持仓：002361 闽东电力 100股 成本14.0"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _stub_reads(monkeypatch, {
+        "portfolio_positions": [{
+            "symbol": "002361", "name": "闽东电力", "market": "CN",
+            "quantity": 100, "cost_price": 14.0, "trading_style": "swing",
+        }],
+        "portfolio_risk_snapshot": [{
+            "snapshot_date": "2026-10-20", "market": "CN", "total_signals": 12,
+            "active_signals": 8, "held_signals": 3, "high_risk_ratio": 0.25,
+            "concentration_top5": 0.62, "avg_rank_score": 71.5, "risk_level": "medium",
+        }],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "portfolio.risk"}, _FakeUser()))
+    assert calls == ["get_portfolio"]
+    assert "闽东电力" in out
+    assert "组合风险画像" in out and "高风险占比 +25.00%" in out
+    assert "前 5 集中度 +62.00%" in out and "风险档 medium" in out
+    assert "未取到" not in out
+
+
+def test_watchlist_forwards_and_lists_rows(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "自选股列表：\n- 闽东电力(CN:002361)"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _stub_reads(monkeypatch, {
+        "watchlist_rows": [{"symbol": "002361", "name": "闽东电力", "market": "CN",
+                            "sort_order": 0, "updated_at": None}],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "watchlist"}, _FakeUser()))
+    assert calls == ["get_watchlist"]
+    assert "自选明细" in out and "002361" in out
+    assert "未取到" not in out
+
+
+def test_paper_trading_renders_account_positions_trades(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "paper_account": [{
+            "id": 1, "initial_capital": 1000000.0, "current_capital": 1012000.0,
+            "total_pnl": 12000.0, "total_trades": 5, "winning_trades": 3,
+            "max_drawdown_pct": 4.2, "peak_capital": 1050000.0, "enabled": True,
+            "updated_at": "2026-10-20 15:30:00",
+        }],
+        "paper_positions": [{
+            "stock_symbol": "002361", "stock_market": "CN", "stock_name": "闽东电力",
+            "quantity": 100, "entry_price": 14.0, "current_price": 15.0,
+            "unrealized_pnl": 100.0, "status": "open",
+        }],
+        "paper_trades": [{
+            "stock_symbol": "600111", "stock_market": "CN", "stock_name": "北方稀土",
+            "quantity": 200, "entry_price": 20.0, "exit_price": 21.5, "pnl": 300.0,
+            "pnl_pct": 7.5, "exit_reason": "target_price", "closed_at": "2026-10-20 14:00:00",
+        }],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "paper.trading"}, _FakeUser()))
+    assert "模拟盘账户" in out and "初始资金 +100.00万" in out
+    assert "当前资金 +101.20万" in out
+    assert "累计盈亏 +1.20万" in out
+    assert "模拟持仓" in out and "002361" in out and "浮盈 +100.00元" in out
+    assert "已平仓" in out and "600111" in out and "+7.50%" in out
+    assert "未取到" not in out
+
+
+def test_notify_task_renders_schedules_channels_notifications(monkeypatch):
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "【系统通知】最近1条: - [2026-10-20 15:30] 策略刷新完成"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _stub_reads(monkeypatch, {
+        "copilot_schedules": [{
+            "id": 1, "kind": "daily_brief", "at_hhmm": "15:30", "weekdays": "mon-fri",
+            "enabled": True, "last_run_date": "20261021", "created_at": None,
+        }],
+        "notify_channel_rows": [{"name": "企业微信", "type": "wecom", "enabled": True, "is_default": True}],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "notify.task"}, _FakeUser()))
+    assert calls == ["get_notifications"]
+    assert "收盘小结" in out and "每天 15:30" in out and "已启用" in out
+    assert "推送渠道" in out and "企业微信（wecom）" in out
+    assert "站内通知" in out and "策略刷新完成" in out
+    assert "未取到" not in out
+
+
+def test_notify_task_is_read_only(monkeypatch):
+    """notify.task 只读：绝不能调用 create_daily_task 这类写动作。"""
+    calls: list[str] = []
+
+    async def _fake(name, db, args, user):
+        calls.append(name)
+        return "通知占位"
+
+    monkeypatch.setattr(tc, "_delegate", _fake)
+    _stub_reads(monkeypatch, {})
+    _run(tc.query_data_domain(None, {"domain": "notify.task"}, _FakeUser()))
+    assert "create_daily_task" not in calls
+    assert calls == ["get_notifications"]
+
+
+def test_backtest_without_results_says_no_result(monkeypatch):
+    """回测引擎结果不落库 → 无样本时如实说「无结果」，不编收益数字。"""
+    _stub_reads(monkeypatch, {
+        "backtest_outcome_stats": [],
+        "backtest_outcome_rows": [],
+        "backtest_factor_days": [],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "backtest"}, _FakeUser()))
+    assert "未取到" in out
+    assert "不落库" in out
+    assert "无已结算样本" in out
+    assert re.search(r"(?<![.\d])0(?![.\d%])", out) is None, out
+
+
+def test_backtest_renders_outcome_stats(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "backtest_outcome_stats": [{"horizon_days": 5, "n": 12, "avg_ret": 2.35,
+                                    "hit_t": 4, "hit_s": 2}],
+        "backtest_outcome_rows": [{
+            "snapshot_date": "2026-10-20", "strategy_code": "demon", "stock_symbol": "002361",
+            "horizon_days": 5, "base_price": 14.0, "outcome_price": 14.33,
+            "outcome_return_pct": 2.35, "hit_target": False, "hit_stop": False,
+            "outcome_status": "evaluated",
+        }],
+        "backtest_factor_days": [{"snapshot_date": "2026-10-20", "n": 8, "avg_score": 71.2}],
+    })
+    out = _run(tc.query_data_domain(None, {"domain": "backtest"}, _FakeUser()))
+    assert "事后收益汇总" in out and "持有 5 日" in out and "样本 12" in out
+    assert "平均 +2.35%" in out
+    assert "最近样本" in out and "002361" in out
+    assert "未取到" not in out
+
+
+def test_ops_config_renders_datasources_and_trust(monkeypatch):
+    _stub_reads(monkeypatch, {
+        "ops_datasources": [{
+            "id": 1, "name": "雪球资讯", "type": "news", "provider": "xueqiu",
+            "enabled": True, "priority": 1, "supports_batch": True, "last_status": "ok",
+            "success_count": 100, "error_count": 2, "last_used_at": None, "last_error_at": None,
+        }],
+        "ops_settings": [{"key": "llm_price_per_mtoken", "description": "价格"}],
+        "ops_ds_failures": [{"provider": "eastmoney", "kind": "timeout", "symbol": "002361",
+                             "detail": "读超时", "latency_ms": 5000, "created_at": "2026-10-20 10:00:00"}],
+    })
+    # 信任分来自 marketdata 健康快照（非库表），这里替身喂一份
+    import src.core.marketdata_client as mdc
+
+    class _MD:
+        def health(self):
+            return {"eastmoney": {"success_rate": 0.95, "p50_latency_ms": 500, "count": 200}}
+
+    orig = mdc.get_market_data
+    mdc.get_market_data = lambda: _MD()
+    try:
+        out = _run(tc.query_data_domain(None, {"domain": "ops.config"}, _FakeUser()))
+    finally:
+        mdc.get_market_data = orig
+    assert "数据源配置" in out and "雪球资讯（news/xueqiu）" in out
+    assert "优先级 1" in out and "已启用" in out
+    assert "数据源信任分" in out and "信任分 95" in out
+    assert "平台设置项" in out and "llm_price_per_mtoken" in out
+    assert "数据源失败记录" in out
+    assert "未取到" not in out
+
+
+def test_ops_config_is_read_only(monkeypatch):
+    """ops.config L2 只读：不写入任何表（没有 INSERT/UPDATE/DELETE 语句）。"""
+    for key, sql in tc._SQL.items():
+        up = sql.upper()
+        assert not any(w in up for w in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ")), key
+
+
+# ── 11.5 目录/工具契约 ────────────────────────────
+
+def test_catalog_source_tables_are_real_tables():
+    """P2 十二域 source 里写的表必须都真实存在（models ∪ migrations）。"""
+    import importlib.util
+    import sys as _sys
+
+    spec = importlib.util.spec_from_file_location(
+        "gen_data_catalog", ROOT / "scripts" / "gen_data_catalog.py"
+    )
+    assert spec is not None and spec.loader is not None
+    gen = importlib.util.module_from_spec(spec)
+    # 必须先注册到 sys.modules：生成器里的 dataclass 装饰器要拿模块 __dict__
+    _sys.modules["gen_data_catalog"] = gen
+    try:
+        spec.loader.exec_module(gen)
+        tables = set(
+            gen.parse_tables(ROOT / "src" / "db" / "models.py", ROOT / "src" / "web" / "migrations.py")
+        )
+
+        import yaml
+
+        raw = yaml.safe_load(_CATALOG_YAML.read_text(encoding="utf-8"))
+        by_id = {str(d["id"]): d for d in raw["domains"]}
+        for domain in P2_TWELVE:
+            src = str(by_id[domain].get("source") or "")
+            assert src.strip(), f"{domain} source 为空"
+            tokens = gen.parse_source_tokens(src)
+            assert tokens, f"{domain} source 解析不出 token"
+            for tok in tokens:
+                if "/" in tok:
+                    continue  # 路由提示
+                assert tok.lower() in {t.lower() for t in tables}, (
+                    f"{domain} 引用了不存在的表 {tok}"
+                )
+    finally:
+        _sys.modules.pop("gen_data_catalog", None)
+
+
+def test_new_sql_statements_have_limit_and_bindings():
+    """新增只读语句：必须是 SELECT + LIMIT + 绑定参数（禁 f-string 拼 SQL）。"""
+    for key in ("mainline_rank_rows", "signal_factor_rows", "signal_emit_rows",
+                "kline_daily_bars", "portfolio_positions", "watchlist_rows",
+                "paper_account", "paper_positions", "paper_trades",
+                "copilot_schedules", "notify_rows", "backtest_outcome_rows",
+                "ops_datasources", "ops_settings", "ops_ds_failures"):
+        sql = tc._SQL[key]
+        up = sql.upper()
+        assert up.lstrip().startswith("SELECT"), key
+        assert "LIMIT" in up, f"{key} 缺 LIMIT"
+        assert ";" not in sql, key
+        if key in ("portfolio_positions", "watchlist_rows", "paper_account", "paper_positions",
+                   "paper_trades", "copilot_schedules", "notify_rows"):
+            assert ":UID" in sql.upper(), f"{key} 缺 user_id 绑定参数"
+
+
+def test_tool_count_still_64():
+    """工具总数仍是 64（新增域不新增工具，只扩展既有 query_data_domain）。"""
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+
+    assert len(CHAT_TOOL_REGISTRY) == 64

@@ -87,9 +87,10 @@ domains:
   label: 主线榜
   level: L0
   scope: market
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    top_n: 可选 取前几条（默认 10，上限 20）
+  source: mainline_rank_daily / mainline_daily_snapshot
+  desc: 主线排名与主线分、涨停家数、最高连板、龙头与成分股（日榜快照）
 - id: board.daily
   label: 板块行情与资金
   level: L0
@@ -110,23 +111,30 @@ domains:
   label: K 线与周期
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+    market: 可选 CN/HK/US（默认 CN）
+    days: 可选 取多少根日K（默认 120，上限 500）
+  source: klines
+  desc: 前复权日K序列、开高低收量、均线 MA5/20/60、区间高低与区间涨跌（PG hypertable 只读）
 - id: stock.tech
   label: 技术面与形态
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+    market: 可选 CN/HK/US（默认 CN）
+  source: stock_factor_daily / klines
+  desc: 趋势/MACD/RSI/支撑压力位、日K量价威科夫结构、29 种 K 线组合形态（转发技术面工具）
 - id: stock.dossier
   label: 研报公告新闻
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+    market: 可选 CN/HK/US（默认 CN）
+  source: more_info_daily / news_cache
+  desc: 券商研报评级、公司公告、利好/利空消息面（转发全景档案工具，9 维证据）
 - id: stock.fundamental
   label: 财务股东两融分红
   level: L0
@@ -141,9 +149,10 @@ domains:
   label: 情景与关键位
   level: L0
   scope: symbol
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    symbol: 必填 6 位代码
+  source: klines / stock_factor_daily
+  desc: 支撑压力关键位与走强/震荡/走弱三档情景（转发情景矩阵工具，只给条件-反应）
 - id: auction.flow
   label: 集合竞价
   level: L0
@@ -158,47 +167,50 @@ domains:
   level: L0
   scope: user
   params: {}
-  source: ''
-  desc: P1 待接
+  source: positions / portfolio_risk_snapshots
+  desc: 本人实盘+模拟盘持仓摘要、组合风险画像（信号数/高风险占比/前5集中度）；需登录态
 - id: watchlist
   label: 自选股
   level: L0
   scope: user
   params: {}
-  source: ''
-  desc: P1 待接
+  source: stocks
+  desc: 本人自选股列表（按 user_id 隔离，未登录只说需要登录）
 - id: paper.trading
   label: 模拟盘
   level: L0
   scope: user
   params: {}
-  source: ''
-  desc: P1 待接
+  source: paper_trading_account / paper_trading_positions / paper_trading_trades
+  desc: 模拟盘账户资金/盈亏/回撤、当前持仓、最近已平仓交易（按 user_id 隔离）
 - id: backtest
   label: 回测
   level: L1
   scope: user
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    top_n: 可选 取最近几条样本（默认 8，上限 20）
+  source: strategy_outcomes / strategy_factor_snapshots
+  desc: 策略信号事后收益（持有 N 日的平均收益/触达目标/止损）；回测引擎运行结果不落库，无样本即如实说无结果
 - id: strategy.signal
   label: 策略信号
   level: L0
   scope: market
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    top_n: 可选 取前几条（默认 10，上限 20）
+  source: strategy_factor_snapshots / signal_snapshots
+  desc: 策略选中票的因子分（alpha/quality/risk/crowd/总分）与信号发出版本（方向/强度/T+1/T+5 事后收益）
 - id: notify.task
   label: 定时任务与通知
   level: L1
   scope: user
   params: {}
-  source: ''
-  desc: P1 待接
+  source: copilot_schedules / notify_channels / notifications
+  desc: 本人定时任务（时点/周别/启用状态）、推送渠道、站内通知；只读展示，不创建任务
 - id: ops.config
   label: 平台设置与数据源
   level: L2
   scope: admin
-  params: {}
-  source: ''
-  desc: P1 待接
+  params:
+    top_n: 可选 列几条数据源（默认 12，上限 40）
+  source: data_sources / app_settings / datasource_failures
+  desc: 数据源配置与优先级、vendor 信任分（成功率/延迟）、平台设置项 key、最近失败记录；只读不写入
