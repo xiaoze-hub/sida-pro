@@ -1,3 +1,45 @@
+## release: v0.41.7（规格追溯：11 份配方 + 数据口径纳入硬门禁）（2026-10-22）
+
+承接 `cc025fd`（借鉴 self-hosting-agent 的规格追溯门禁 P0），按任务书补 P1 与 P2。
+门禁本身是旁路，不进生产链路；它守的是「配方/口径的**行为承诺**没有被悄悄改掉」。
+
+### P1 · 11 份 harness 配方的验收标准
+
+- 每份 recipe 新增 `acceptance:` 字段（2~3 条，人写的事实源；加载器忽略未知字段，运行零影响）
+- `specs/harness/recipes.md`：**8 条标准**，全是「删了会漏哪种 bug」那一类
+  - `RECIPE-001` 每份配方必须有 acceptance
+  - `RECIPE-002` `prompt_fragment` 必须原文包含每个 `output_sections` 段落名
+  - `RECIPE-003` `budget.max_tool_calls` ≥ 工具数（否则后面的工具永远轮不到）
+  - `RECIPE-004` 配方里的工具必须真实存在于注册表（拼错只会静默少一个维度）
+  - `RECIPE-005` 跨配方关键词不得重复
+  - `RECIPELD-001` 左侧配方必须挂前两层滤网工具（就是 v0.38.1 修过的那个事故）
+  - `RECIPEDD-001` 全景诊断必须覆盖六层时间轴所需工具
+  - `RECIPEDM-001` 妖股配方必须带妖股因子
+
+### P2 · 数据口径
+
+`specs/data/caliber.md`：`DATA-001`（四档口径必须带"禁止判定主力意图"红线）、
+`DATA-002`（方向性判定只准走逐笔，四档必须抛 `CaliberViolationError`）、
+`DATA-003`（K 线必须带 `as_of`/`partial` 时点标注）。
+
+### 门禁当场抓到的真问题
+
+`RECIPE-005` 第一次跑就红：**「连板」被 `demon_diagnosis` 与 `postmarket_reviewer` 同时认领**，
+于是「今天连板梯队怎么样」被路由到**妖股**配方（复盘意图走错门）。
+修法不是放宽标准，是改关键词：复盘那份改成「连板梯队」（长词权重 16 > 4，确定性胜出）。
+复验：`今天连板梯队怎么样 → postmarket_reviewer`、`这票几连板了 → demon_diagnosis`。
+
+### 两个破坏实验（证明门禁不是摆设）
+
+```
+A) 从 left_diagnosis 摘掉 get_event_catalyst
+   → AssertionError: 三层滤网缺工具 get_event_catalyst
+B) 把 @spec DATA-001 改成 DATA-999
+   → ✗ 门禁未通过: 测试引用了不存在的规格 ID DATA-999（exit=1）
+```
+
+现状：**18 条标准 / 18 条已覆盖（100%）/ 22 个测试绑定**。
+
 ## release: v0.41.6（对账只认"精确相等"，把算出来的数全判成编造）（2026-10-22）
 
 v0.41.5 把证据池扩到注入上下文后，误报还剩三个数：
