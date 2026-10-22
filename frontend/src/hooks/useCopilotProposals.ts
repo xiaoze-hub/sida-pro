@@ -28,7 +28,7 @@ export interface UseCopilotProposalsResult {
   error: string | null
   /** 裁决失败（列表还在，只在列表上方补一行提示） */
   decideError: string | null
-  /** 正在裁决的提案 id（行内禁用三个按钮） */
+  /** 正在裁决的提案 id（行内禁用三个按钮）—— **只做展示**，重入守卫是 ref（见 decidingRef） */
   decidingId: number | null
   decide: (id: number, action: ProposalAction) => Promise<boolean>
   reload: () => void
@@ -53,6 +53,14 @@ export function useCopilotProposals(tab: ProposalTab = 'pending'): UseCopilotPro
   const aliveRef = useRef(true)
   /** 在途请求：切 tab / 重试时取消上一轮，避免旧响应把新 tab 覆盖掉。 */
   const abortRef = useRef<AbortController | null>(null)
+  /**
+   * 裁决同步互斥（2026-10-22 审查 High）。
+   *
+   * 原来用 `decidingId !== null` 当重入锁 —— 那是 **React state**，要下一次渲染才可见：
+   * 同一个事件循环里连点两次「采纳」，第二次调用闭包里读到的还是 `null` → 守卫被穿透 →
+   * 两条 POST 都发出去，后端连记两次裁决、stats 减两次。锁必须是同步的 ref，state 只负责展示。
+   */
+  const decidingRef = useRef(false)
 
   useEffect(() => {
     aliveRef.current = true
@@ -116,7 +124,9 @@ export function useCopilotProposals(tab: ProposalTab = 'pending'): UseCopilotPro
    */
   const decide = useCallback(
     async (id: number, action: ProposalAction): Promise<boolean> => {
-      if (decidingId !== null) return false
+      // 同步守卫：ref 立即生效，不等渲染（state 版本在这里会被双击穿透）
+      if (decidingRef.current) return false
+      decidingRef.current = true
       setDecidingId(id)
       setDecideError(null)
       try {
@@ -153,10 +163,13 @@ export function useCopilotProposals(tab: ProposalTab = 'pending'): UseCopilotPro
         setDecideError('操作失败，这条提案没有被改动')
         return false
       } finally {
+        // 锁无条件同步释放（卸载后也必须放 —— 释放时机不该取决于渲染/挂载状态）；
+        // 只有「清展示态」才受 aliveRef 约束，避免卸载后 setState。
+        decidingRef.current = false
         if (aliveRef.current) setDecidingId(null)
       }
     },
-    [decidingId, load],
+    [load],
   )
 
   return {
