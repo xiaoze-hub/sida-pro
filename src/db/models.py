@@ -1342,6 +1342,9 @@ class ChatConversation(Base):
     stock_market = Column(String, nullable=True)
     ai_model_id = Column(Integer, nullable=True)
     initial_context = Column(Text, nullable=True)
+    # 置顶(2026-10-22): 会话管理面板; 列表/搜索排序 pinned desc 优先。
+    # server_default: 新鲜 create_all 建库即带 DB 级默认值(与 v217 迁移一致)。
+    pinned = Column(Boolean, nullable=False, default=False, server_default=text("0"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

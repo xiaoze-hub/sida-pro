@@ -6,7 +6,7 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| API 路由（`src/web/api/*.py` 装饰器） | **491** |
+| API 路由（`src/web/api/*.py` 装饰器） | **497** |
 | 平台表（models ∪ migrations） | **132** |
 | 　其中 `models.py` `__tablename__` | 89 |
 | 　仅 `migrations.py` 声明（含 hypertable） | 43 |
@@ -180,5 +180,5 @@
 | `stock.chip` | 1 | GET /chip-daily |
 | `limit.pool` | 1 | GET /ladder |
 
-可粗映射到域的路由：106 / 491 = 21.6%；其余属认证/运维/未归类。
+可粗映射到域的路由：106 / 497 = 21.3%；其余属认证/运维/未归类。
 

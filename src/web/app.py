@@ -58,6 +58,7 @@ from src.web.api import (
     gap_study,
     market_phase,
     chat_upload,
+    chat_admin,
     my_ai_services,
     users,
     llm_usage,
@@ -578,6 +579,16 @@ app.include_router(
     paper_trading.router,
     prefix="/api/paper-trading",
     tags=["paper-trading"],
+    dependencies=protected,
+)
+# 会话管理端点(2026-10-22: 重命名/置顶/搜索/删单条消息/会话轨迹)。
+# 会话管理（改名/置顶/删单条消息/会话轨迹/搜索）。搜索走独立路径
+# `/conversations/search`，不与 chat.py 的 GET /conversations 同路径 —— 同路径靠注册顺序
+# 决定 winner，实测 openapi 与实际路由会对不上，坑太深。
+app.include_router(
+    chat_admin.router,
+    prefix="/api/chat",
+    tags=["chat-admin"],
     dependencies=protected,
 )
 app.include_router(

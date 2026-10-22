@@ -99,6 +99,30 @@ def snapshot_ic(
             db.close()
 
 
+def render_latest(db=None, *, market: str = "CN", horizon: int = 5) -> str:
+    """把最近一日的各因子 IC/IR 渲染成几行（供 chat 工具与数据域共用，保证同一口径）。
+
+    读的是日更任务（17:25）落的 `factor_ic_snapshots`，毫秒级；没有快照就返回空串，
+    由调用方自己决定怎么说（缺数据不许编）。
+    """
+    rows = history(market=market, horizon=horizon, days=1, db=db)
+    if not rows:
+        return ""
+    latest_day = max(str(r.get("trade_date") or "") for r in rows)
+    lines = [f"因子有效性（IC / IR，快照 {latest_day}，horizon={horizon} 日）"]
+    def _f(v):
+        return "--" if v is None else f"{float(v):+.4f}"
+    for r in sorted(rows, key=lambda x: str(x.get("factor_code") or "")):
+        if str(r.get("trade_date") or "") != latest_day:
+            continue
+        lines.append(
+            f"- {r.get('factor_code')}：IC {_f(r.get('ic'))}　IR {_f(r.get('ir'))}　"
+            f"样本 {r.get('sample_size') if r.get('sample_size') is not None else '--'}"
+        )
+    lines.append("（IC 为负=该因子高分组后续偏弱；仅为统计关系，不构成买卖指令）")
+    return "\n".join(lines)
+
+
 def history(
     *,
     market: str = "CN",

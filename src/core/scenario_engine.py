@@ -111,6 +111,44 @@ def render(m: dict) -> str:
     return "\n".join(lines)
 
 
+def build_matrix(db, symbol: str, market: str = "CN") -> dict[str, Any]:
+    """结构化入口（给 HTTP 端点/前端画线用）：返回 {available, levels, scenarios, ...}。
+
+    与 `build()` 同一套计算，只是一个返回 dict、一个返回人话文本 —— 不许出现第二套口径。
+    """
+    try:
+        from src.core.stock_factors import load as load_factors
+        from src.core.trend_profile import compute as compute_trend
+        from src.db.klines_repo import load_qfq_bars
+
+        bars = load_qfq_bars(symbol, market, days=250)
+        trend = compute_trend(bars, None)
+        if not trend.get("available"):
+            return {"available": False, "reason": trend.get("reason") or "日线不足"}
+
+        chips: dict[str, Any] = {}
+        try:
+            from src.core.chip_distribution import compute_chips
+
+            cyq = compute_chips(bars[-120:]) or {}
+            chips = {
+                "band70_lo": cyq.get("cost_10"),
+                "band70_hi": cyq.get("cost_90"),
+                "peak_price": cyq.get("peak_price"),
+            }
+        except Exception:  # noqa: BLE001
+            chips = {}
+
+        factors = load_factors(db, symbol, market)
+        matrix = build_scenarios(trend, chips, factors)
+        if matrix.get("available"):
+            matrix["price"] = trend.get("price")
+            matrix["as_of"] = trend.get("as_of")
+        return matrix
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"[:120]}
+
+
 def build(db, symbol: str, market: str = "CN") -> str:
     """工具入口：从现有模块取数后算情景。缺哪块就少哪块，不编。"""
     try:
@@ -137,6 +175,6 @@ def build(db, symbol: str, market: str = "CN") -> str:
             chips = {}
 
         factors = load_factors(db, symbol, market)
-        return render(build_scenarios(trend, chips, factors))
+        return render(build_matrix(db, symbol, market))
     except Exception as exc:  # noqa: BLE001
         return f"[情景矩阵] 计算失败：{type(exc).__name__}——不硬编情景。"

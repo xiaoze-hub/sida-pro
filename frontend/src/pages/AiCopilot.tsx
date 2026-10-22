@@ -8,7 +8,7 @@ import {
   type CopilotMetrics,
   type PendingAction,
 } from '@/lib/copilot/api'
-import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles, X } from 'lucide-react'
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
@@ -20,6 +20,15 @@ import { extractSymbolChips, marketOf } from '@/lib/copilot/symbolChips'
 import { applyMention, detectMention, filterMentions, mentionKey, type MentionHit } from '@/lib/copilot/mentions'
 import { getCopilotMentions, type MentionAgent, type MentionStock } from '@/lib/copilot/api'
 import { MentionPicker, type MentionTab } from '@/components/copilot/MentionPicker'
+import { ConversationSidebar } from '@/components/copilot/ConversationSidebar'
+import { MessageActions } from '@/components/copilot/MessageActions'
+import { ToolTimeline } from '@/components/copilot/ToolTimeline'
+import { MemoryPanel } from '@/components/copilot/MemoryPanel'
+import { SchedulePanel } from '@/components/copilot/SchedulePanel'
+import { UsageBar } from '@/components/copilot/UsageBar'
+import { PersonaBadge } from '@/components/copilot/PersonaBadge'
+import { useConversations } from '@/hooks/useConversations'
+import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
   ATTACH_CHIP_LABEL,
   ATTACH_EMPTY,
@@ -136,6 +145,12 @@ export default function AiCopilotPage() {
   // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
   // 刷新即丢上下文。这里补抽屉：列出/打开/删除历史，并把 conversation_id 续上。
   const [historyOpen, setHistoryOpen] = useState(false)
+  // 2026-10-22 工作台对齐 Codex/Hermes：右侧面板（过程 / 记忆 / 定时）+ 会话管理。
+  // 过程=每轮工具时间线（治理页是全局视角，这里只看当前会话）。
+  const [panelTab, setPanelTab] = useState<'runs' | 'memory' | 'schedule' | null>(null)
+  const [convQuery, setConvQuery] = useState('')
+  const convMgr = useConversations()
+  const runsState = useCopilotRuns({ conversationId: convId, enabled: panelTab === 'runs' })
   const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -325,18 +340,6 @@ export default function AiCopilotPage() {
     setError(null)
   }, [])
 
-  const removeConversation = useCallback(
-    async (id: number) => {
-      try {
-        await chatApi.deleteConversation(id)
-        setConvs((prev) => prev.filter((c) => c.id !== id))
-        if (convId === id) startNewConversation()
-      } catch {
-        /* 删除失败不打断，列表保留 */
-      }
-    },
-    [convId, startNewConversation],
-  )
 
   useEffect(() => {
     if (historyOpen) void loadHistory()
@@ -560,46 +563,30 @@ export default function AiCopilotPage() {
       </aside>
 
         {historyOpen ? (
-          <div className="absolute inset-y-0 left-72 z-20 w-72 rounded-xl border border-border/60 bg-s1/95 shadow-float backdrop-blur" data-testid="copilot-history-drawer">
-            <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-              <span className="text-[12px] font-medium">历史对话</span>
+          <div
+            className="absolute inset-y-0 left-72 z-20 w-72 overflow-y-auto border-r border-border/40 bg-s1/95 backdrop-blur"
+            data-testid="copilot-history-drawer"
+          >
+            <div className="flex items-center justify-between py-2 pl-3 pr-1">
+              <span className="text-[12px] font-medium">对话</span>
               <button type="button" aria-label="关闭" onClick={() => setHistoryOpen(false)}>
                 <X className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
             </div>
-            <div className="max-h-[70vh] overflow-y-auto px-2 py-2">
-              {historyLoading ? (
-                <div className="flex items-center gap-2 px-2 py-3 text-[11px] text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" /> 读取中…
-                </div>
-              ) : convs.length === 0 ? (
-                <div className="px-2 py-3 text-[11px] text-muted-foreground">还没有历史对话</div>
-              ) : (
-                convs.map((c) => (
-                  <div
-                    key={c.id}
-                    className={`group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-s2 ${convId === c.id ? 'bg-s2' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left"
-                      onClick={() => void openConversation(c.id)}
-                    >
-                      <div className="truncate text-[12px]">{c.title}</div>
-                      <div className="truncate text-[10px] text-muted-foreground">{String(c.created_at || '').slice(0, 16)}</div>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="删除"
-                      className="opacity-0 transition group-hover:opacity-100"
-                      onClick={() => void removeConversation(c.id)}
-                    >
-                      <Trash2 className="h-3 w-3 text-muted-foreground hover:text-role-risk" />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
+            <ConversationSidebar
+              conversations={convMgr.conversations.length ? convMgr.conversations : convs}
+              activeId={convId}
+              query={convQuery}
+              onQueryChange={(q) => {
+                setConvQuery(q)
+                void convMgr.list(q)
+              }}
+              onSelect={(id) => void openConversation(id)}
+              onCreate={startNewConversation}
+              onRename={(id, title) => void convMgr.rename(id, title)}
+              onPin={(id, pinned) => void convMgr.pin(id, pinned)}
+              onDelete={(id) => void convMgr.remove(id)}
+            />
           </div>
         ) : null}
 
@@ -628,7 +615,7 @@ export default function AiCopilotPage() {
             onClick={() => setHistoryOpen((v) => !v)}
             data-testid="copilot-history-toggle"
           >
-            <History className="h-3 w-3" />
+            {historyLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <History className="h-3 w-3" />}
             历史
             {convs.length > 0 ? <span className="font-mono text-[10px]">{convs.length}</span> : null}
           </button>
@@ -641,6 +628,21 @@ export default function AiCopilotPage() {
               新对话
             </button>
           ) : null}
+          {(['runs', 'memory', 'schedule'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              data-testid={`copilot-panel-${tab}`}
+              className={`rounded-md border px-2 py-0.5 text-[11px] transition ${
+                panelTab === tab
+                  ? 'border-role-watch/60 text-role-watch'
+                  : 'border-border/60 text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setPanelTab((v) => (v === tab ? null : tab))}
+            >
+              {tab === 'runs' ? '过程' : tab === 'memory' ? '记忆' : '定时'}
+            </button>
+          ))}
           <a
             href="/copilot-governance"
             className="rounded-md border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
@@ -648,8 +650,20 @@ export default function AiCopilotPage() {
           >
             治理
           </a>
+          <div className="ml-auto flex items-center gap-2">
+            {metrics ? (
+              <UsageBar
+                tokens={null}
+                cost={null}
+                calls={metrics.runs}
+                label={`近 ${metrics.days} 天`}
+                className="hidden xl:flex"
+              />
+            ) : null}
+            {anchorSymbol ? <PersonaBadge symbol={anchorSymbol} /> : null}
+          </div>
           <form
-            className="ml-auto flex items-center gap-1"
+            className="ml-1 flex items-center gap-1"
             onSubmit={(e) => {
               e.preventDefault()
               const code = symbol.trim()
@@ -773,6 +787,17 @@ export default function AiCopilotPage() {
                       </a>
                     ))
                   : null}
+                <MessageActions
+                  role={m.role}
+                  copyText={m.content}
+                  canRegenerate={m.role === 'assistant' && i === msgs.length - 1 && !streaming}
+                  onEdit={m.role === 'user' ? () => setInput(m.content) : undefined}
+                  onCopy={() => {}}
+                  onRegenerate={() => {
+                    const last = [...msgs].reverse().find((x) => x.role === 'user')
+                    if (last) void send(last.content)
+                  }}
+                />
               </div>
             </div>
           ))}
@@ -990,6 +1015,35 @@ export default function AiCopilotPage() {
           </div>
         </div>
       </section>
+
+      {panelTab ? (
+        <aside
+          className="absolute inset-y-0 right-0 z-20 flex w-[320px] flex-col border-l border-border/40 bg-s1/95 backdrop-blur"
+          data-testid="copilot-side-panel"
+        >
+          <div className="flex items-center justify-between py-2 pl-3 pr-1">
+            <span className="text-[12px] font-medium">
+              {panelTab === 'runs' ? '本轮过程' : panelTab === 'memory' ? '长期记忆' : '定时任务'}
+            </span>
+            <button type="button" aria-label="关闭" onClick={() => setPanelTab(null)}>
+              <X className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {panelTab === 'runs' ? (
+              <ToolTimeline
+                runs={runsState.runs}
+                details={runsState.details}
+                onLoadDetail={(rid) => void runsState.loadDetail(rid)}
+              />
+            ) : panelTab === 'memory' ? (
+              <MemoryPanel />
+            ) : (
+              <SchedulePanel />
+            )}
+          </div>
+        </aside>
+      ) : null}
     </div>
   )
 }
