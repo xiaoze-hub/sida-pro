@@ -1,3 +1,16 @@
+## release: v0.40.1（记忆行内编辑真落库：PATCH 曾静默丢 content/weight）（2026-10-22）
+
+子代理在交付记忆面板时发现一个静默丢数据的坑：面板的「行内编辑内容/权重」会发
+`PATCH /copilot/memory/{id}`，而**后端只落 `enabled`**，`content`/`weight` 被忽略 ——
+前端乐观更新看着成功，刷新即回滚。用户会以为改好了。
+
+- `src/core/copilot_memory.py` 新增 `update()`：内容去空白且有上限（`_clip`，空内容抛 `ValueError`）、
+  权重夹到 1~10、启停可选；返回更新后的行。
+- `PATCH /copilot/memory/{id}` 改为按传入字段更新，支持 `content` / `weight` / `enabled` 任意组合；
+  无可更新字段 400、权重非整数 400、越权/不存在 404。
+- 回归用例 `test_update_persists_content_and_weight` + `test_update_rejects_empty_content_and_clamps_weight`
+  —— 断言的是**库里真的变了**，不是接口返回 ok。
+
 ## release: v0.40.0（数智参谋工作台对齐 Codex/Hermes：会话管理 · 过程回放 · 记忆/定时面板）（2026-10-22）
 
 **工作台不再只有"提问框 + 历史列表"**，按 Agent 平台的标准补齐六块：

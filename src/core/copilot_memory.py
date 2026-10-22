@@ -209,6 +209,37 @@ def set_enabled(db, user_id, memory_id: int, enabled: bool) -> bool:
     return True
 
 
+def update(db, user_id, memory_id: int, *, content: str | None = None,
+           weight: int | None = None, enabled: bool | None = None) -> dict | None:
+    """改一条记忆（内容/权重/启停，任选其一或多项）。
+
+    2026-10-22 修：面板支持「行内编辑内容/权重」，但后端原先只有 `set_enabled`，
+    于是编辑看起来很成功（前端乐观更新）却**从没落库**，刷新就回滚 —— 静默丢数据。
+    返回更新后的行（dict），不存在/不属于本人 → None。
+    """
+    from src.db.models import CopilotMemory
+
+    row = (
+        db.query(CopilotMemory)
+        .filter(CopilotMemory.id == memory_id, CopilotMemory.user_id == str(user_id))
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    if content is not None:
+        cleaned = _clip(content)
+        if not cleaned:
+            raise ValueError("内容不能为空")
+        row.content = cleaned
+    if weight is not None:
+        row.weight = max(1, min(10, int(weight)))
+    if enabled is not None:
+        row.enabled = bool(enabled)
+    db.commit()
+    db.refresh(row)
+    return _row_dict(row)
+
+
 def delete(db, user_id, memory_id: int) -> bool:
     from src.db.models import CopilotMemory
 

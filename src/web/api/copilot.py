@@ -618,12 +618,28 @@ def patch_memory(
     db: Session = Depends(get_db),
     user: Any = Depends(get_current_user),
 ) -> dict:
-    from src.core.copilot_memory import set_enabled
+    from src.core.copilot_memory import update as _update
 
-    ok = set_enabled(db, getattr(user, "id", None), memory_id, bool(body.get("enabled", True)))
-    if not ok:
+    _uid = getattr(user, "id", None)
+    _kw: dict = {}
+    if "enabled" in body:
+        _kw["enabled"] = bool(body.get("enabled"))
+    if body.get("content") is not None:
+        _kw["content"] = str(body.get("content") or "")
+    if body.get("weight") is not None:
+        try:
+            _kw["weight"] = int(body.get("weight"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="weight 必须是 1~10 的整数") from None
+    if not _kw:
+        raise HTTPException(status_code=400, detail="没有可更新的字段（content/weight/enabled）")
+    try:
+        row = _update(db, _uid, memory_id, **_kw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if row is None:
         raise HTTPException(status_code=404, detail="记忆不存在")
-    return {"ok": True}
+    return {"ok": True, "memory": row}
 
 
 @router.delete("/memory/{memory_id}")
