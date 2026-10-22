@@ -43,7 +43,11 @@ TRACEBACK_LIMIT = 2000        # traceback 截断长度
 SAMPLE_TRACEBACK_LIMIT = 300  # 告警 body 里样例 traceback 长度
 MAX_JSONL_LINES = 2000        # JSONL 上限: 超了丢最老一半(无界增长会吃光 DATA_DIR)
 
-_lock = threading.Lock()
+# 用 RLock 而非 Lock: _MISSED_COUNTS 的读(copy)/清/增三处统一进这把锁后,
+# 任何"已持 _lock 的路径再调 missed_counts()"都会变成同线程重入 —— 不可重入的 Lock
+# 会当场自锁。RLock 是 Lock 的严格超集: 现有未嵌套的 `with _lock:` 行为完全不变,
+# 嵌套时不再死锁。全程只有这一把锁(未新增第二把)。
+_lock = threading.RLock()
 # fp -> 最近一次 JSONL 落盘 time.monotonic() (去重用)
 _last_jsonl_write: dict[tuple[str, str], float] = {}
 # fp -> 窗口内出现时间戳列表 time.monotonic() (聚合计数用)
@@ -244,23 +248,26 @@ def install_error_tracker(app) -> None:
     return app
 
 
+# EVENT_JOB_MISSED 的按任务计数(进程内)。missed 不是错误, 但完全看不见也不对 ——
+# 它说明"采样频率跟不上/事件循环被堵", 应该作为指标暴露给 /system 页, 而不是当异常记。
+# 定义位置在 _clear_state() 之前: 它由本模块所有读写点共用, 放在状态清理函数前
+# 避免依赖"运行时才生效"的前向引用。
+_MISSED_COUNTS: dict[str, int] = {}
+
+
 def _clear_state() -> None:
-    """清空进程内去重/聚合/防轰炸状态(测试隔离用)。"""
+    """清空进程内去重/聚合/防轰炸/计数状态(测试隔离用)。"""
     with _lock:
         _last_jsonl_write.clear()
         _recent_occurrences.clear()
         _last_notify.clear()
-    _MISSED_COUNTS.clear()
-
-
-# EVENT_JOB_MISSED 的按任务计数(进程内)。missed 不是错误, 但完全看不见也不对 ——
-# 它说明"采样频率跟不上/事件循环被堵", 应该作为指标暴露给 /system 页, 而不是当异常记。
-_MISSED_COUNTS: dict[str, int] = {}
+        _MISSED_COUNTS.clear()
 
 
 def missed_counts() -> dict[str, int]:
     """各任务错过执行的累计次数(进程内, 重启归零)。"""
-    return dict(_MISSED_COUNTS)
+    with _lock:
+        return dict(_MISSED_COUNTS)
 
 
 def install_scheduler_error_tracking(scheduler) -> bool:
@@ -290,8 +297,13 @@ def install_scheduler_error_tracking(scheduler) -> bool:
                 # 60s 级采样任务的 misfire_grace_time(默认 1s) 一过就会收到这个事件。
                 # 2026-10-22 实测: 24h 内 725 条 "scheduler job missed" 灌满错误表,
                 # 把真正的故障淹了 —— 淹掉监控比没有监控更危险。降级为计数 + debug 日志。
-                _MISSED_COUNTS[str(job_id)] = _MISSED_COUNTS.get(str(job_id), 0) + 1
-                logger.debug("scheduler job missed: %s (累计 %d)", job_id, _MISSED_COUNTS[str(job_id)])
+                job_key = str(job_id)
+                # 计数与日志共用一次持锁: read-modify-write 必须原子, 否则高并发丢计数;
+                # 只在锁内取一次新值, 不在锁外重新读(那样会读到别人加过的数)。
+                with _lock:
+                    missed_n = _MISSED_COUNTS.get(job_key, 0) + 1
+                    _MISSED_COUNTS[job_key] = missed_n
+                    logger.debug("scheduler job missed: %s (累计 %d)", job_id, missed_n)
         except Exception:
             pass
 
