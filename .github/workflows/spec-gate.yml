@@ -38,9 +38,11 @@ jobs:
       - name: Spec guard tests
         run: |
           python -m pip install --upgrade pip
-          # pyyaml: 配方规格守卫要读 src/harness/recipes/*.yaml（只装 pytest 会因为
-          # ModuleNotFoundError: No module named 'yaml' 让整个门禁以 exit 2 挂掉）
-          python -m pip install pytest pyyaml
+          # 守卫测试会 import 真实模块（注册表 / 口径 / 配方），所以门禁不能只装 pytest：
+          #   pyyaml   —— 读 src/harness/recipes/*.yaml
+          #   sqlalchemy / pydantic / pydantic-settings —— src.db.* 与服务配置（工具口径守卫的 setup 会走到）
+          # 缺任何一个都会以 exit 2（收集错误）整条挂掉，看起来像"测试失败"，其实一条都没跑。
+          python -m pip install pytest pyyaml sqlalchemy pydantic pydantic-settings
           python -m pytest tests/test_spec_*.py -q
 
       - name: Upload traceability report
