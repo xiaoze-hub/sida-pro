@@ -122,6 +122,8 @@ class PositionCreate(BaseModel):
     quantity: int
     invested_amount: float | None = None
     trading_style: str | None = None  # short: 短线, swing: 波段, long: 长线
+    # 防守线(绝对价): 建仓时若用户已经想好纪律位可一并带上, 省略即"未设置"。
+    defense_price: float | None = None
 
 
 class PositionUpdate(BaseModel):
@@ -129,6 +131,16 @@ class PositionUpdate(BaseModel):
     quantity: int | None = None
     invested_amount: float | None = None
     trading_style: str | None = None
+
+
+class DefenseLineUpdate(BaseModel):
+    """防守线设置载荷(方案 B)。
+
+    `null` 即**清除** —— 本端点只做"设置/清除"一件事, 故不区分"字段未传"与"传 null"。
+    比例式(-8%)由前端按成本价折算成绝对价再提交, 后端只存用户拍下的那个价。
+    """
+
+    defense_price: float | None = None
 
 
 class PositionResponse(BaseModel):
@@ -140,6 +152,8 @@ class PositionResponse(BaseModel):
     invested_amount: float | None
     sort_order: int
     trading_style: str | None
+    # 用户自设防守线(绝对价); None = 未设置, 前端据此只提示不告警。
+    defense_price: float | None = None
     # 关联信息
     account_name: str | None = None
     stock_symbol: str | None = None
@@ -238,6 +252,28 @@ def delete_account(
 
 # ========== Position Endpoints ==========
 
+def _position_payload(pos: Position) -> dict:
+    """持仓响应体(四处端点共用一份口径)。
+
+    为什么收敛成一处: `defense_price` 若只加在部分端点, 前端在"刚设完再拉列表"和
+    "建仓返回"两条路径上会拿到互斥的字段集, 一侧永远看不到用户自己设的防线。
+    """
+    return {
+        "id": pos.id,
+        "account_id": pos.account_id,
+        "stock_id": pos.stock_id,
+        "cost_price": pos.cost_price,
+        "quantity": pos.quantity,
+        "invested_amount": pos.invested_amount,
+        "sort_order": pos.sort_order or 0,
+        "trading_style": pos.trading_style,
+        "defense_price": getattr(pos, "defense_price", None),
+        "account_name": pos.account.name if pos.account else None,
+        "stock_symbol": pos.stock.symbol if pos.stock else None,
+        "stock_name": pos.stock.name if pos.stock else None,
+    }
+
+
 @router.get("/positions", response_model=list[PositionResponse])
 def list_positions(
     account_id: int | None = None,
@@ -255,22 +291,7 @@ def list_positions(
         query = query.filter(Position.stock_id == stock_id)
 
     positions = query.order_by(Position.account_id.asc(), Position.sort_order.asc(), Position.id.asc()).all()
-    result = []
-    for pos in positions:
-        result.append({
-            "id": pos.id,
-            "account_id": pos.account_id,
-            "stock_id": pos.stock_id,
-            "cost_price": pos.cost_price,
-            "quantity": pos.quantity,
-            "invested_amount": pos.invested_amount,
-            "sort_order": pos.sort_order or 0,
-            "trading_style": pos.trading_style,
-            "account_name": pos.account.name if pos.account else None,
-            "stock_symbol": pos.stock.symbol if pos.stock else None,
-            "stock_name": pos.stock.name if pos.stock else None,
-        })
-    return result
+    return [_position_payload(pos) for pos in positions]
 
 
 @router.post("/positions", response_model=PositionResponse)
@@ -309,25 +330,14 @@ def create_position(data: PositionCreate, db: Session = Depends(get_db), user: U
         sort_order=int(max_order) + 1,
         trading_style=data.trading_style,
         user_id=user.id,
+        defense_price=data.defense_price if (data.defense_price or 0) > 0 else None,
     )
     db.add(position)
     db.commit()
     db.refresh(position)
 
     logger.info(f"创建持仓: {account.name} - {stock.name}")
-    return {
-        "id": position.id,
-        "account_id": position.account_id,
-        "stock_id": position.stock_id,
-        "cost_price": position.cost_price,
-        "quantity": position.quantity,
-        "invested_amount": position.invested_amount,
-        "sort_order": position.sort_order or 0,
-        "trading_style": position.trading_style,
-        "account_name": account.name,
-        "stock_symbol": stock.symbol,
-        "stock_name": stock.name,
-    }
+    return _position_payload(position)
 
 
 @router.put("/positions/{position_id}", response_model=PositionResponse)
@@ -354,19 +364,47 @@ def update_position(position_id: int, data: PositionUpdate, db: Session = Depend
     db.refresh(position)
 
     logger.info(f"更新持仓: {position.account.name} - {position.stock.name}")
-    return {
-        "id": position.id,
-        "account_id": position.account_id,
-        "stock_id": position.stock_id,
-        "cost_price": position.cost_price,
-        "quantity": position.quantity,
-        "invested_amount": position.invested_amount,
-        "sort_order": position.sort_order or 0,
-        "trading_style": position.trading_style,
-        "account_name": position.account.name,
-        "stock_symbol": position.stock.symbol,
-        "stock_name": position.stock.name,
-    }
+    return _position_payload(position)
+
+
+@router.put("/positions/{position_id}/defense", response_model=PositionResponse)
+def set_position_defense_line(
+    position_id: int,
+    data: DefenseLineUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """设置/清空用户自设防守线(方案 B)。
+
+    `defense_price=null` 即清除。清除后该持仓**不再有**告警基准 —— 系统不会退回
+    默认 -8%, 因为默认 -8% 已按产品裁决降级为"仅作参考展示"。
+    user_id 隔离与其它持仓端点同口径: 只能改自己的(或历史遗留 NULL 全局)持仓。
+    """
+    position = db.query(Position).filter(
+        Position.id == position_id,
+        or_(Position.user_id == user.id, Position.user_id.is_(None)),
+    ).first()
+    if not position:
+        raise HTTPException(404, "持仓不存在")
+
+    value = data.defense_price
+    if value is not None:
+        # 0/负数不是价格, 也不是"清除"的写法 —— 直接拒, 免得存下一个永远触发的防线。
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise HTTPException(400, "防守线必须是正数价格")
+        position.defense_price = float(value)
+    else:
+        position.defense_price = None
+
+    db.commit()
+    db.refresh(position)
+    logger.info(
+        "更新防守线: %s - %s -> %s",
+        position.account.name if position.account else position.account_id,
+        position.stock.name if position.stock else position.stock_id,
+        position.defense_price,
+    )
+    return _position_payload(position)
 
 
 @router.delete("/positions/{position_id}")
@@ -550,6 +588,8 @@ def get_portfolio_summary(
                 "invested_amount": pos.invested_amount,
                 "sort_order": pos.sort_order or 0,
                 "trading_style": pos.trading_style,
+                # 用户自设防守线(绝对价, 原币种): 前端据此判定"有没有纪律位", None 即未设置。
+                "defense_price": getattr(pos, "defense_price", None),
                 "current_price": current_price,
                 "current_price_cny": round(current_price * rate, 2) if current_price else None,
                 "change_pct": change_pct,

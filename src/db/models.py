@@ -245,6 +245,9 @@ class Position(Base):
         Integer, ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False
     )
     cost_price = Column(Float, nullable=False)  # 成本价
+    # 用户自设防守线(2026-10-23 方案 B): **绝对价**, 基准=成本价。
+    # NULL = 用户未设置 —— 系统不得替用户编一条 -8% 防线展示。
+    defense_price = Column(Float, nullable=True)
     quantity = Column(Integer, nullable=False)  # 持仓数量
     invested_amount = Column(Float, nullable=True)  # 投入资金（用于盘中监控）
     sort_order = Column(Integer, default=0)
