@@ -12,6 +12,7 @@ import { safeFixed, safeInt, safeNum, safePrice, toAmount } from '@/lib/format'
 import MissingFields from '@/components/MissingFields'
 import CancelProfilePanel, { type CancelProfile } from '@/components/CancelProfilePanel'
 import PriceDistributionPanel, { type PriceDistribution } from '@/components/PriceDistributionPanel'
+import FundStructurePanel, { type FundStructureResp } from '@/components/FundStructurePanel'
 
 /**
  * 工作台标签「盘口资金」(工作台 v2 三合一, Task 11)。
@@ -801,6 +802,78 @@ function PriceDistributionSection({ symbol, market }: { symbol: string; market: 
 }
 
 /* ------------------------------------------------------------------ *
+ * ②.7 四档资金结构(exday_daily · tdx_exday4 口径, 2026-10-24 消费 MVP)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 四档资金结构轮询: 日频数据(每交易日 15:45 落库, 后端 300s 缓存),
+ * 前端 5min 节奏足够 —— 不是盘中实时量, 30s 轮询纯属打后端缓存。
+ *
+ * - 换股: 先清旧值 + 请求序号守卫(不把上一只票的结构画到新标的上);
+ * - 失败: **保留上次成功值**并置 failed(stale-on-error, 与本文件其余端点同规则)。
+ */
+const FUND_STRUCTURE_POLL_MS = 300_000
+
+function useFundStructure(symbol: string, market: string) {
+  const [data, setData] = useState<FundStructureResp | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [lastOkAt, setLastOkAt] = useState('')
+  const [loading, setLoading] = useState(false)
+  const seqRef = useRef(0)
+
+  const load = useCallback(async () => {
+    if (!symbol) return
+    const seq = ++seqRef.current
+    setLoading(true)
+    const qs = new URLSearchParams({ market: market || 'CN' })
+    try {
+      const res = await fetchAPI<FundStructureResp>(
+        `/market/fund-structure/${encodeURIComponent(symbol)}?${qs.toString()}`,
+        { cacheMode: 'reload' },
+      )
+      if (seq !== seqRef.current) return
+      setData(res)
+      setFailed(false)
+      setLastOkAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    } catch {
+      if (seq !== seqRef.current) return
+      setFailed(true)
+    } finally {
+      if (seq === seqRef.current) setLoading(false)
+    }
+  }, [symbol, market])
+
+  // 换股/首挂先清旧值(声明顺序即执行顺序, 先于下面的首拉)
+  useEffect(() => {
+    setData(null)
+    setFailed(false)
+    setLastOkAt('')
+  }, [load])
+
+  usePausedInterval(() => void load(), FUND_STRUCTURE_POLL_MS, { deps: [load] })
+
+  return { data, loading, failed, lastOkAt }
+}
+
+function FundStructureSection({ symbol, market }: { symbol: string; market: string }) {
+  const { data, loading, failed, lastOkAt } = useFundStructure(symbol, market)
+  return (
+    <Section
+      id="fund-structure"
+      title="四档资金结构"
+      hint="通达信 TQ exday · 按单笔成交金额分四档 · 每交易日 15:45 落库累积"
+      extra={
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+          {data?.available && data.count ? `${data.count} 个交易日` : ''}
+        </span>
+      }
+    >
+      <FundStructurePanel data={data} loading={loading} failed={failed} lastOkAt={lastOkAt} />
+    </Section>
+  )
+}
+
+/* ------------------------------------------------------------------ *
  * ③ 盘口演变事件 + 幽灵单占比
  * ------------------------------------------------------------------ */
 
@@ -1415,6 +1488,7 @@ function L2TabBody({ symbol, market }: { symbol: string; market: string }) {
           <EvolutionSection feed={ob} loading={loading} />
           <IntentSealSection symbol={symbol} mainIntent={mainIntent} seal={seal} sealLoading={loading} />
           <DarkFlowTqSection data={darkFlowTq} />
+          <FundStructureSection symbol={symbol} market={market} />
           <ChipsSection mainIntent={mainIntent} chipsModel={mainAccumulationChips} />
         </div>
       </div>
