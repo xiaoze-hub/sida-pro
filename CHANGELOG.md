@@ -21,6 +21,23 @@
   路由确定性用例 +2（test_harness_routing）；配方数钉子 11→12（test_market_pipeline）。
   规格追溯 **28/28（46 用例）100%**。
 
+### feat-工作台建议页呼叫空头司令(压力测试入口与结果展示, 创新 6 前端)
+
+- **新增 `frontend/src/components/copilot/DevilAdvocatePanel.tsx`**：工作台「建议」页
+  （SuggestTab，三层滤网之下）新增醒目**警示红按钮**「呼叫空头司令挑刺（压力测试）」——
+  用 `--destructive` 语义色板（危险操作警示，与买红卖绿行情色板无关）。
+- **走现有参谋触发路径，零新增端点**：`chatApi.createConversation({stock_symbol, stock_market})`
+  → `chatApi.sendMessageStream(conv.id, "空头司令挑刺（压力测试）{symbol}", …)`，问句含配方
+  关键词（确定性路由 devil_advocate）与 6 位代码（管线解析标的），流式 stage/delta 实时呈现，
+  onDone 以落库全文经 SafeMarkdown 渲染（GFM 表格 + tabular-nums），组件不二次加工 AI 正文。
+- **如实陈述副作用与失败**：tooltip 披露会新建参谋会话（AI 参谋页可见）；失败展示后端 error
+  原文、不推断原因；流静默结束按失败处理不装成功；固定声明「本次未发生任何交易委托」。
+- **排版铁律**：hairline 分隔（无卡片底、无 shadow-float）、字号 10/11/12、免责行注明
+  「无数据=本轮证据缺失 / 无数据源=平台暂无该维度工具」。
+- **测试**：`frontend/tests/components/devil-advocate-panel.test.tsx` 6 用例（警示红与
+  hairline/挂载不触发/现有 API 路径与 busy 态/结果真渲染/onError 如实/静默结束不装成功/
+  SuggestTab 集成锚点）；既有 suggest-tab 9 用例回归通过；`tsc --noEmit` 通过。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。

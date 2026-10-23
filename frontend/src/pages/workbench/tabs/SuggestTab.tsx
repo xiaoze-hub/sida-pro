@@ -5,6 +5,7 @@ import { SuggestionsTab } from '@panwatch/biz-ui/components/insight/SuggestionsT
 import InsightProvider from '@/pages/workbench/InsightProvider'
 import { ThreeTierVerdictRow } from '@/components/ThreeTierVerdictRow'
 import { CopilotBriefCard } from '@/components/copilot/CopilotBriefCard'
+import { DevilAdvocatePanel } from '@/components/copilot/DevilAdvocatePanel'
 
 /**
  * 工作台标签「建议」(工作台 v2 三合一, Task 12)。
@@ -160,6 +161,11 @@ function SuggestTabBody({
 
       {/* 本土三层滤网决策行 (情绪层 / 催化层 / 威科夫量价结构) */}
       <ThreeTierVerdictRow symbol={symbol} market={market} />
+
+      {/* 空头司令挑刺（红蓝对抗压力测试，2026-10-24 创新 6）：对当前标的强制逆向风控研判。
+          走现有参谋对话 API（建会话 → 流式消息），后端按关键词确定性路由到 devil_advocate
+          配方（确定性管线取数，全现有工具）；只出报告、不下单。结果 hairline 分隔展示。 */}
+      <DevilAdvocatePanel symbol={symbol} market={market} />
 
       {/* 建议列表(含「包含过期」开关 + 空态回退技术指标基础建议) —— 全部复用恢复组件 */}
       <SuggestionsTab />
