@@ -23,6 +23,7 @@
 ### 门禁与实盘验证
 
 - 新增规格 `REPLAY-001..003`（`specs/harness/recipes.md`），规格追溯 **22/22（40 用例）100%**；
+- 同步 `tests/test_market_pipeline.py::test_market_recipe_plans_are_symbol_safe`：复盘首步由 `get_sentiment_cycle` 改为 `get_market_replay`（首版 CI shard 2 因该结构钉子未同步而红）；本地 4 分片全量复跑 **5346 passed**；
 - `tests/test_market_replay.py` 10 用例 + 关联回归 **276 passed**；5 个 `check_*.py` 全 OK；`chat.py` **2307/2310** 行；
 - 生产容器实盘重刷 `signal_summary_daily` 与 `market_replay_daily`（2026-10-23：涨停 82/+49、炸板 12/12.77%/-28.30pp、跌停 6/-43、最高 6 板/+1、晋级率 36.36%、情绪周期「修复」）。
 

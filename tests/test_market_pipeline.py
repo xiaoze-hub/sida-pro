@@ -365,7 +365,10 @@ def test_market_recipe_plans_are_symbol_safe():
     """真实配方的取数计划：市场级工具全在，标的级工具按上限展开，绝不空 symbol。"""
     recipes = load_recipes()
     steps = build_steps(recipes["postmarket_reviewer"], ["600111", "002050"], "CN")
-    assert [s.label for s in steps if not s.skip][0] == "get_sentiment_cycle"
+    # 2026-10-23: 复盘必须从三池同源证据开始（涨停/炸板/跌停/晋级率），见 specs REPLAY-001。
+    # 原先首步是 get_sentiment_cycle —— 那条路径里根本没有涨停池，导致复盘写「0家涨停」。
+    first = [s.label for s in steps if not s.skip][0]
+    assert first == "get_market_replay"
     assert all(s.args.get("symbol") != "" for s in steps if s.symbol)
     no_wl = build_steps(recipes["auction_hunter"], None, "CN")
     assert {s.tool for s in no_wl if not s.skip} == {
