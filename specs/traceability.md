@@ -1,8 +1,8 @@
 # 规格追溯表 (自动生成, 请勿手工修改)
 
-- 验收标准: **39** 条
-- 已覆盖: **39** 条 (100.0%)
-- 测试用例: **68** 个
+- 验收标准: **47** 条
+- 已覆盖: **47** 条 (100.0%)
+- 测试用例: **78** 个
 
 | 规格 ID | 摘要 | 规格位置 | 守卫测试 |
 |---|---|---|---|
@@ -20,6 +20,14 @@
 | `EXDAY-003` | 响应必须带 `data_since`（全表累积起点）与 `count`（该股实际行数），供前端显式标注「数据自 2026-10-23 起累积，N 个交易日」 | `specs\api\fund_structure.md:20` | `tests\test_fund_structure_api.py:98` `test_series_data_since_is_table_origin` |
 | `EXDAY-004` | 无数据（未落库/缺表/查询失败/db 为 None）必须显式 `available=false` + 原因，禁止以 0 或空数组冒充有数；best-effort 吞异常前必须先 `safe_rollback(db)` | `specs\api\fund_structure.md:21` | `tests\test_fund_structure_api.py:123` `test_series_missing_table_degrades_with_safe_rollback`<br>`tests\test_fund_structure_api.py:135` `test_series_db_none_degrades`<br>`tests\test_fund_structure_api.py:142` `test_series_blank_symbol_degrades`<br>`tests\test_fund_structure_api.py:195` `test_endpoint_failure_not_cached`<br>`tests\test_fund_structure_api.py:207` `test_endpoint_blank_symbol_degrades` |
 | `EXDAY-005` | 前端：`count==1` 只展示当日结构不画趋势序列，`count>=2` 才画每日序列；金额走 toAmount（元→亿/万）、数字 tabular-nums、买入/净流入红卖出/净流出绿，同屏其他口径资金数据各带口径标签，无数据显式「无数据」 | `specs\api\fund_structure.md:22` | `tests\test_fund_structure_api.py:214` `test_endpoint_supports_sparse_ui_contract` |
+| `FIC-001` | 去极值（MAD 法）必须把偏离中位数超过 `n_mad×1.4826×MAD` 的横截面极值截到边界，正常值原样返回，缺值（None/NaN/inf）位置显式保持 None 且不参与中位数/MAD 统计；MAD=0 退化截面回退分位截断并在 `method` 显式标注 —— 脏尾巴不截会把下游回归系数拉歪，缺值静默归零会把「没数据」伪装成「中性」 | `specs\core\factor_ic_extended.md:12` | `tests\test_factor_ic_extended.py:13` `test_winsorize_clips_extremes_keeps_normal_and_passes_missing_through`<br>`tests\test_factor_ic_extended.py:33` `test_winsorize_low_side_clipped_and_mad_zero_fallback_marked` |
+| `FIC-002` | 去极值有效样本 < min_valid（默认 5）时必须 `available=False` 显式报样本不足 —— 3 个点算出来的中位差是伪统计 | `specs\core\factor_ic_extended.md:13` | `tests\test_factor_ic_extended.py:52` `test_winsorize_insufficient_sample_is_explicit` |
+| `FIC-003` | 截面正交化必须满足数学性质：残差与每个对照因子及截距的内积 ≈ 0，r_squared 为对照因子对目标横截面方差的解释比例；缺值整行剔除（listwise）且残差同位置显式为 None —— 残差不正交等于没消干净，等于假装正交过 | `specs\core\factor_ic_extended.md:14` | `tests\test_factor_ic_extended.py:83` `test_orthogonalize_residuals_are_orthogonal_to_controls`<br>`tests\test_factor_ic_extended.py:118` `test_orthogonalize_drops_missing_rows_explicitly` |
+| `FIC-004` | 正交化在有效行 < max(10, 2×(对照数+1)) 或对照因子完全共线（正规方程奇异）时必须 `available=False` 带原因返回，禁止硬算出垃圾残差 | `specs\core\factor_ic_extended.md:15` | `tests\test_factor_ic_extended.py:135` `test_orthogonalize_insufficient_and_collinear_are_explicit` |
+| `FIC-005` | 分层回测单调性 sanity：因子值与未来收益严格正相关时，Top 层平均收益必须高于 Bottom 层且多空价差（Top−Bottom）> 0、胜率同向 —— 分层分不出强弱的分层实现是错的 | `specs\core\factor_ic_extended.md:16` | `tests\test_factor_ic_extended.py:192` `test_quantile_backtest_top_beats_bottom_for_strong_factor` |
+| `FIC-006` | 分层回测输出必须带三件套：各层 T+1/T+3/T+5 胜率/均值/中位数 + **同池无条件基准**（同池同期全样本）+ **是否剔除 T+1 一字涨停的显式标注**；无法判定一字涨停（untradable=None）时必须标「口径缺口：未剔除」，禁止装作已剔除 | `specs\core\factor_ic_extended.md:17` | `tests\test_factor_ic_extended.py:220` `test_quantile_backtest_reports_baseline_and_exclusion_marks` |
+| `FIC-007` | 分层回测延续 factor_ic 既有门槛：有效交易日 < 5 或单日横截面有效样本 < 20 时 `available=False` 显式报不足，不硬算 | `specs\core\factor_ic_extended.md:18` | `tests\test_factor_ic_extended.py:244` `test_quantile_backtest_insufficient_reported_explicitly` |
+| `FIC-008` | T+1 一字涨停判定必须与 `backtest_lab._is_untradable_next_bar` 同口径（open==high==low 且较前收涨幅 ≥ 4.8%），门槛常量与 `backtest_lab.MIN_SAMPLE` 同值；被剔样本计入 `untradable_skipped` 且不进任何分层与基准的分子分母 | `specs\core\factor_ic_extended.md:19` | `tests\test_factor_ic_extended.py:258` `test_quantile_backtest_excludes_one_word_limit_up_samples` |
 | `RECIPE-001` | 每份 recipe 必须声明 `acceptance`（≥1 条）—— 没有验收标准的配方等于没有承诺，改坏了没人能发现 | `specs\harness\recipes.md:27` | `tests\test_spec_harness_recipes.py:26` `test_every_recipe_declares_acceptance` |
 | `RECIPE-002` | `prompt_fragment` 必须原文出现 `output_sections` 的每一个段落名 —— 段落名是输出契约，提示词里缺一段，模型就不写那一段 | `specs\harness\recipes.md:28` | `tests\test_spec_harness_recipes.py:32` `test_prompt_fragment_covers_output_sections` |
 | `RECIPE-003` | `budget.max_tool_calls` 必须 ≥ 该配方挂载的工具数 —— 否则排在后面的工具永远轮不到，等于白挂 | `specs\harness\recipes.md:29` | `tests\test_proposal_collection_gating.py:112` `test_deep_diagnosis_budget_covers_mounted_tools`<br>`tests\test_spec_harness_recipes.py:43` `test_budget_covers_tool_count` |
