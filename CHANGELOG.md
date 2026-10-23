@@ -1,3 +1,53 @@
+## release: v0.49.0（设计走查 8 条 P0 落地：硬防线改用户设定 · 口径错标 · 密钥安全 · 闪烁失效）
+
+来源：`docs/design/20261023_0*.md`（8 份全站走查，2538 行）。本版只做**已被复核证实**的缺陷，共 8 条。
+
+### ⚠️ 行为变更（请重点看）
+
+**`-8%` 不再是默认硬防线。** 产品裁决走方案 B：纪律位只能来自用户自己设置的绝对价。
+
+- 新增 `Position.defense_price`（nullable，绝对价，基准=成本价；Migration **223**）
+- 用户没设 → **不告警**，只渲染一行「未设置防守线｜成本 12.34，参考 -8% = 11.35」+ 设置弹窗（支持手填或 -5%/-8%/-10% 按成本折算、可清除）
+- 盘中监控 `intraday_monitor` 不再用 `loss_ratio <= -0.08` 硬判，改读用户防线；未设则跳过
+- 纸上交易 `DEFAULT_STOP_LOSS_PCT = 0.92` **数值未改**（避免行为突变），但标注 `stop_basis="system_default"`，明确「系统执行兜底，非用户纪律位，不得对外展示为防守线」
+- 取价失败不再 `return null` 静默消失，改为显式「防守线无法计算（缺现价）」
+
+> 老用户会感知到「以前持仓条有 -8% 警报，现在没有」——这是预期的，需自行设置防线。
+
+### 一、口径与安全（红线级）
+
+| 缺陷 | 位置 | 修复 |
+|---|---|---|
+| **资金口径错标**：数据源是 `thsdk_dde`，徽章却标 `eastmoney4` | `DarkFundTop.tsx:170`、`WarReport.tsx:189` | 改 `caliber="ths"`；`caliberOf()` 增加 `thsdk*`/`ths_*` 前缀识别，从根上堵住 |
+| **掩码校验可绕过**：精确相等判断，多一个空格就能把 `********` 写进 DB 覆盖真 token | `settings.py:253` | 新增 `is_mask_placeholder()`：strip 后长度 ≥6 且只含掩码字符即拒写；敏感键写空值须显式 `clear=true` |
+| **密钥明文出站**：`GET /datasources` 原样返回 `config`（含 tushare.token / 雪球 cookies）；`PUT /settings` 回吐 ORM 对象 | `datasources.py` / `settings.py` | `_mask_config()` 逐项掩码 + `has_*` 标记；PUT 敏感键只回 `{key, updated, masked}` |
+| **（顺带堵住的）反面漏洞**：GET 掩码后前端把 `********` 原样提交回来，等于「顺手保存」覆盖真 token | `PUT /datasources/{id}` | `_merge_secret_config()`：掩码/空值/缺失按「未修改」沿用旧值 |
+
+### 二、指标与展示真错
+
+| 缺陷 | 位置 | 修复 |
+|---|---|---|
+| **涨跌闪烁动画从未生效**：`hsl(var(--stock-up) / 0.22)`，而 `--stock-up` 是 Hex → 非法 CSS 被丢弃 | `index.css:341/345` | 新增 `--stock-up-hsl`/`--stock-down-hsl`（精确换算，往返误差 <0.5/255）+ `--flash-alpha`；Chromium 实渲验证：修复前 `rgba(0,0,0,0)`，修复后 `rgba(229,57,53,0.22)` |
+| **`no_data` 被画成 `✗` 未命中** | `Forecast.tsx:563` | 新增 `resolveOutcome` 五态（hit/miss/pending/no_data/none）+ 统一 `OutcomeBadge`；分母只算 hit+miss，无判定样本返回 `null` 而非 0% |
+| **权重硬编码兜底假精确**：接口失败时仍显示 `0.4414/0.3379/0.1103/0.1103` 合计 100% | `Forecast.tsx:847` | 删除硬编码，只渲染后端真实返回值；不可用时显式「权重不可用（接口未就绪）」 |
+| **`warning` 态滥用绿色**：「警告」渲染成绿 = 读到「安全」 | `ThreeTierVerdictRow.tsx:213` | 改 `text-amber-500`；注：`opportunity=红` **保留**（买红卖绿，机会=红是正确的） |
+| **K 线被双层卡片包裹**：两层边框+底色+阴影吃 40px | `StockWorkbench.tsx:446+448` | 外层改 `border-t` hairline、内层只留 `min-w-0 flex-1`；K 线占屏 1280→87.2%、1440→88.6%、1920→91.5% |
+
+### 三、明确「不做」的项（走查数字是误报）
+
+第 3 波原定「`shadow-float` 14→1、`bg-white` 39→0」，复核后**判定为误报，一条未改**：
+
+- `shadow-float` 18 处**全部是真实浮层**（下拉/菜单/CommandPalette/模态/悬浮球/tooltip），清零会让浮层与背景糊在一起；铁律本意是禁止「用阴影做卡片装饰性浮起」，不是禁止浮层有阴影
+- `bg-white` 42 处：27 处是 `dark:bg-white/[0.0x]` 暗色玻璃叠加（刻意设计）、8 处是开关滑块/进度条白芯、1 处是**二维码底色**（必须白才能扫），均非违规
+- 唯一残留：3 处行情区 `.card`（`BoardBody` 警告条 / `KpiBand` / `AuctionAnomalyTab` 容器）需配合截图目检，留待下个迭代
+
+### 门禁
+
+- 后端定向 `65 passed`；前端 `tsc --noEmit` 0 错、9 个测试文件 **88 passed**
+- 5 个 `check_*.py` 全 OK；规格追溯 **22/22（40 用例）**；迁移 **123 个（v101–v223）**
+- 新增测试：`test_defense_line.py`(22) / `test_settings_mask.py`(20) / `caliber-of.test.ts` / `three-tier-resonance-color.test.tsx` / `stock-flash-token.test.ts`(6) / `forecast-page-contracts.test.tsx`(21) / `forecast-history-outcome.test.tsx`(2)
+- Frozen Ring 零触碰
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。

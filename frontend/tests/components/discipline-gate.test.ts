@@ -38,11 +38,19 @@ describe('反人性纪律闸门契约', () => {
     expect(fileCoolDown).toMatch(/冷静期警示/)
   })
 
-  it('DefenseLineBanner 包含预设硬防线逻辑与纪律止损警报', () => {
+  it('DefenseLineBanner 只认用户自设防线，不再默认 -8%（裁决 B）', () => {
     expect(fileDefense).toMatch(/\/quotes\//)
-    expect(fileDefense).toMatch(/cost \* 0\.92/) // -8% 硬防线
-    expect(fileDefense).toMatch(/触发硬防线警报 · 立即执行纪律/)
-    expect(fileDefense).toMatch(/纪律高于预测/)
+    // 2026-10-24 裁决 B: 纪律位只能来自用户自设 Position.defense_price。
+    // 旧契约 `cost * 0.92` 已删除 —— 系统不再替用户假设 -8%，未设置就不告警。
+    expect(fileDefense).not.toMatch(/cost \* 0\.92/)
+    expect(fileDefense).toMatch(/defense_price/)
+    expect(fileDefense).toMatch(/未设置防守线/)
+    // 取价失败必须显式降级，禁止 return null 让告警静默消失
+    expect(fileDefense).toMatch(/防守线无法计算/)
+    // 纪律口吻保留，但主语换成「你」—— 旧文案「纪律高于预测」已被方案 B 的
+    // 「防守线是**你**定的绝对价，跌到即提示执行纪律；不设则不告警」取代
+    expect(fileDefense).toMatch(/防守线是\*\*你\*\*定的绝对价/)
+    expect(fileDefense).toMatch(/不设则不告警/)
   })
 
   it('ThreeTierVerdictRow 嵌入三层滤网行动禁令约束', () => {
