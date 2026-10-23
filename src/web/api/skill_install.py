@@ -22,16 +22,17 @@ from src.web.database import get_db
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["skill-install"])
 
-# 生产对外域名(前端「智能体安装」区块展示用; 与落地页一致)
+# 生产对外域名: 仅作**最后兜底**(无 Host 头时); 实际一律按请求推导,
+# 避免多部署环境(预发/内网/自定义域)拿到写死域名导致 curl 验证失败。
 PUBLIC_BASE_URL = "https://www.sida.hengsheng-elec.com"
 
 _INSTALL_SH = r'''#!/usr/bin/env bash
 # SIDA Skill Gateway 智能体一键安装
-# 用法: curl -sL https://www.sida.hengsheng-elec.com/api/skills/install.sh | bash -s -- YOUR_API_KEY
+# 用法: curl -sL __SIDA_BASE_URL__/api/skills/install.sh | bash -s -- YOUR_API_KEY
 set -euo pipefail
 
 API_KEY="${1:-${SIDA_API_KEY:-}}"
-BASE_URL="${SIDA_BASE_URL:-https://www.sida.hengsheng-elec.com}"
+BASE_URL="${SIDA_BASE_URL:-__SIDA_BASE_URL__}"
 
 if [ -z "$API_KEY" ]; then
   echo "错误: 缺少 API Key" >&2
@@ -116,11 +117,35 @@ EOF
 '''
 
 
+def _resolve_base_url(request: Request) -> str:
+    """按请求推导对外 base_url(无尾斜杠)。
+
+    优先反向代理头(X-Forwarded-Proto / X-Forwarded-Host, 取第一个值),
+    退回 ASGI 直连的 scheme + Host; 都没有才用常量兜底。
+    """
+    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = fwd_host or request.headers.get("host") or request.url.netloc or ""
+    if not host:
+        return PUBLIC_BASE_URL
+    scheme = fwd_proto or request.url.scheme or "https"
+    if host.startswith("http://"):
+        return host.rstrip("/")
+    if host.startswith("https://"):
+        return host.rstrip("/")
+    return f"{scheme}://{host}".rstrip("/")
+
+
 @router.get("/skills/install.sh")
-def install_sh() -> Response:
-    """返回安装脚本(text/plain)。中间件对非 JSON 响应原样透传, 可直接 pipe 给 bash。"""
+def install_sh(request: Request) -> Response:
+    """返回安装脚本(text/plain)。中间件对非 JSON 响应原样透传, 可直接 pipe 给 bash。
+
+    脚本内域名按本次请求注入, 复制后无需再改 BASE_URL。
+    """
+    base_url = _resolve_base_url(request)
+    script = _INSTALL_SH.replace("__SIDA_BASE_URL__", base_url)
     return Response(
-        content=_INSTALL_SH,
+        content=script,
         media_type="text/plain; charset=utf-8",
         headers={
             "Content-Disposition": 'inline; filename="sida-skill-install.sh"',
@@ -170,17 +195,18 @@ def skills_config(
         if TIER_RANK.get(tier, 0) >= TIER_RANK.get(meta.get("tier_min", "free"), 0)
     )
 
+    base_url = _resolve_base_url(request)
     return {
-        "base_url": PUBLIC_BASE_URL,
+        "base_url": base_url,
         "api_key_prefix": best.key_prefix if best is not None else None,
         "api_key": None,  # 绝不回明文
         "tier": tier,
         "daily_limit": daily_limit,
         "skills": skills,
-        "endpoint": f"{PUBLIC_BASE_URL}/api/skills/{{name}}/run",
-        "usage_endpoint": f"{PUBLIC_BASE_URL}/api/usage",
+        "endpoint": f"{base_url}/api/skills/{{name}}/run",
+        "usage_endpoint": f"{base_url}/api/usage",
         "install_command": (
-            f"curl -sL {PUBLIC_BASE_URL}/api/skills/install.sh | bash -s -- YOUR_API_KEY"
+            f"curl -sL {base_url}/api/skills/install.sh | bash -s -- YOUR_API_KEY"
         ),
-        "docs_url": f"{PUBLIC_BASE_URL}/developers",
+        "docs_url": f"{base_url}/developers",
     }

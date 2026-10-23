@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
@@ -953,8 +953,23 @@ class KeyRegisterRequest(BaseModel):
 
 
 class SkillRunRequest(BaseModel):
+    """Skill 执行请求体。正式契约: {"args": {...}, "format": "json"}。"""
+
+    # 兼容垫片(2026-10-23): 早期文档/调试台把参数裸放顶层({"symbol": "..."}),
+    # 那时 args 恒为 {} → 所有需要参数的 skill 必败且静默丢参。
+    # 这里放开 extra 并在 args 为空时把顶层键折叠进 args; 显式 args 永远优先。
+    # 新客户端请一律走 args, 顶层裸参仅为向后兼容。
+    model_config = ConfigDict(extra="allow")
+
     args: dict[str, Any] = Field(default_factory=dict)
     format: str = Field(default="html", description="输出格式: html(默认, 内嵌 JSON) / json")
+
+    @model_validator(mode="after")
+    def _fold_legacy_top_level_args(self) -> "SkillRunRequest":
+        extra = {k: v for k, v in (self.model_extra or {}).items() if k != "format"}
+        if extra and not self.args:
+            self.args = dict(extra)
+        return self
 
 
 class SkillRunResponse(BaseModel):
@@ -1387,10 +1402,17 @@ def create_my_key(
     refresh_tier_configs(db)
     _require_stable_salt()  # 盐不固定就拒绝签发(否则 key 出生即间歇性 401)
     raw = _gen_key()
-    tier = "trial" if body.trial else "free"
+    # 档位以用户身份优先: Pro/Owner 在控制台自助建 Key 必须拿到 pro 档,
+    # 之前只看 body.trial → pro 用户建出来是 free(100 次/天)。
+    role = (getattr(user, "role", "") or "").strip().lower()
     expires = None
-    if tier == "trial":
+    if role in ("pro", "owner"):
+        tier = "pro"
+    elif body.trial:
+        tier = "trial"
         expires = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
+    else:
+        tier = "free"
     row = SkillApiKey(
         key_hash=_hash_key(raw),
         key_prefix=raw[:11],
@@ -1461,14 +1483,21 @@ def delete_my_key(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """删除自己的 Key(硬删)。用量流水(skill_usage)保留, 仅解除关联。"""
+    """删除自己的 Key(软删: status=disabled, 行保留供用量审计)。
+
+    与 `/api/keys/{id}` 语义一致; 早期这里是硬删, 导致控制台与
+    「已禁用 Key」统计/文档说法自相矛盾。
+    """
     user = _require_jwt_user(request, db)
     row = _get_owned_key(db, user, key_id)
     prefix = row.key_prefix
-    db.delete(row)
+    if row.status == "disabled":
+        return {"deleted": True, "id": key_id, "status": row.status, "message": "Key 已是删除状态"}
+    row.status = "disabled"
+    row.frozen_reason = row.frozen_reason or "用户删除"
     db.commit()
-    logger.info("user %s deleted skill key id=%s prefix=%s", user.username, key_id, prefix)
-    return {"deleted": True, "id": key_id}
+    logger.info("user %s disabled skill key id=%s prefix=%s", user.username, key_id, prefix)
+    return {"deleted": True, "id": key_id, "status": row.status, "message": "Key 已删除"}
 
 
 @router.get("/keys/my/{key_id}/usage")

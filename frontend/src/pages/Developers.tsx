@@ -93,9 +93,9 @@ const API_GROUPS = [
     title: 'API Key 管理',
     apis: [
       { method: 'GET', path: '/api/keys/my', auth: '登录', desc: '列出我的 API Key' },
-      { method: 'POST', path: '/api/keys/my', auth: '登录', desc: '创建新 Key' },
+      { method: 'POST', path: '/api/keys/my', auth: '登录', desc: '创建新 Key; 可选 body {owner_label, trial}, owner_label 为备注名(留空默认用户名); Pro/Owner 建出的 Key 直接是 pro 档' },
       { method: 'POST', path: '/api/keys/my/{id}/reset', auth: '登录', desc: '重置 Key(旧 Key 立即失效)' },
-      { method: 'DELETE', path: '/api/keys/my/{id}', auth: '登录', desc: '删除 Key(软删)' },
+      { method: 'DELETE', path: '/api/keys/my/{id}', auth: '登录', desc: '删除 Key(软删: status=disabled, 立即失效; 行与用量流水保留供审计)' },
       { method: 'GET', path: '/api/keys/my/{id}/usage', auth: '登录', desc: '查看单 Key 用量' },
     ],
   },
@@ -147,7 +147,7 @@ const API_GROUPS = [
       { method: 'GET', path: '/api/skills/catalog', auth: '公开', desc: 'Skill 目录(含限流配置)' },
       { method: 'GET', path: '/api/skills/install.sh', auth: '公开', desc: '智能体安装脚本' },
       { method: 'GET', path: '/api/skills/config', auth: '登录', desc: '我的 Skill 配置 JSON' },
-      { method: 'POST', path: '/api/skills/{name}/run', auth: 'Key/JWT/游客', desc: '调用 Skill' },
+      { method: 'POST', path: '/api/skills/{name}/run', auth: 'Key/JWT/游客', desc: '调用 Skill; 请求体 {"args": {参数...}, "format": "json"} —— 参数必须放在 args 内' },
     ],
   },
 ]
@@ -239,7 +239,8 @@ export default function DevelopersPage() {
       const resp = await fetch(`${window.location.origin}/api/skills/${selectedSkill}/run`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(params),
+        // 后端契约固定为 {"args": {...}, "format": "json"}; 裸传参数会被当成未知顶层字段
+        body: JSON.stringify({ args: params, format: 'json' }),
       })
       const data = await resp.json()
       setRunResult(JSON.stringify(data, null, 2))
@@ -293,9 +294,10 @@ export default function DevelopersPage() {
               code={`curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "X-API-Key: sk_YOUR_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"symbol": "000001"}'`}
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`}
               language="bash"
             />
+            <p className="mt-2 text-[12px] text-muted-foreground">请求体固定为 <code className="font-mono">{'{ "args": {...}, "format": "json" }'}</code>: skill 参数一律放在 args 里。旧版表单式请求体已向后兼容, 但新接入请按此契约传参。</p>
           </InfoCard>
         </div>
       </Section>
@@ -307,13 +309,19 @@ export default function DevelopersPage() {
             {
               title: 'API Key（推荐）',
               desc: '服务端调用首选，通过 X-API-Key 请求头传递',
-              code: `curl -H "X-API-Key: sk_YOUR_KEY" "${base}/api/skills/get_stock_quote/run"`,
+              code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "X-API-Key: sk_YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '推荐',
             },
             {
               title: 'JWT Token',
               desc: '网页端登录后自动携带，与 API Key 共享配额',
-              code: `curl -H "Authorization: Bearer YOUR_JWT" "${base}/api/skills/get_stock_quote/run"`,
+              code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
+  -H "Authorization: Bearer YOUR_JWT" \\
+  -H "Content-Type: application/json" \\
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '网页',
             },
             {
@@ -321,7 +329,7 @@ export default function DevelopersPage() {
               desc: '无需认证，仅限 free 级 Skill，每 IP 每天 10 次',
               code: `curl -X POST "${base}/api/skills/get_stock_quote/run" \\
   -H "Content-Type: application/json" \\
-  -d '{"symbol": "000001"}'`,
+  -d '{"args": {"symbol": "000001"}, "format": "json"}'`,
               badge: '受限',
             },
           ].map((a, i) => (
