@@ -1,3 +1,11 @@
+## 2026-10-24
+
+### feat-因子引擎MAD去极值与截面正交化（创新5前置·一）
+
+- `src/core/factor_ic.py` 新增 `winsorize_cross_section`（横截面去极值，MAD 绝对中位差法：以中位数为锚对厚尾偏斜分布稳健，`median ± n_mad×1.4826×MAD`；MAD=0 退化截面回退 1%/99% 分位截断并在 `method` 显式标注）与 `orthogonalize_cross_section`（截面正交化：目标因子对对照因子做横截面 OLS 取残差，纯 Python 高斯消元，不引 numpy/scipy）。
+- 缺值显式：None/NaN/inf 位置不参与统计、输出逐位保持 None（正交化走 listwise 整行剔除并记 `n_dropped`）；样本不足（去极值 <5 个有效值 / 正交化 <max(10, 2×(对照数+1)) 个有效行）与对照因子完全共线一律 `available=False` 直说不硬算，延续 factor_ic「样本不足就直说、不编数字」哲学。
+- 新增规格 `FIC-001..004`（`specs/core/factor_ic_extended.md`）与守卫测试 `tests/test_factor_ic_extended.py`；规格追溯保持 100%。创新 5「IC 联合选股」后端前置第一步，纯函数、不落库、不动迁移钉子 223 与工具钉子 71。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。
