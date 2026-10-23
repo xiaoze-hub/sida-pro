@@ -270,9 +270,15 @@ def test_norm_down_time_always_string_yyyymmdd():
 
 
 def test_tool_search_symbols_labels_cross_market(monkeypatch):
-    """同名跨市场必须标出市场 —— 否则 03750.HK 会被当成 A 股用。"""
+    """同名跨市场必须标出市场 —— 否则 03750.HK 会被当成 A 股用。
+
+    2026-10-23: 工具是**库优先**(本地代码-名称缓存命中就不打 TQ)。本用例测的是
+    TQ 路径的市场标注，必须先把本地缓存打成空 —— 否则 CI 里别的用例顺手暖了
+    `stock_list_cache.json`，这里就会拿到"本地缓存检索"文案而红（shard 组合一变就复现）。
+    """
     import asyncio
 
+    monkeypatch.setattr(registry, "_local_match", lambda kw: [])
     monkeypatch.setattr(tqmod, "match_stkinfo", lambda kw: [
         {"Code": "300750.SZ", "Name": "宁德时代"},
         {"Code": "03750.HK", "Name": "宁德时代"},
@@ -284,9 +290,13 @@ def test_tool_search_symbols_labels_cross_market(monkeypatch):
 
 
 def test_tool_search_symbols_empty_and_unavailable(monkeypatch):
-    """查不到返回 None(不是 []) → 如实说没有, 不说成"没数据"。"""
+    """查不到返回 None(不是 []) → 如实说没有, 不说成"没数据"。
+
+    同样先清空本地缓存（见上一个用例的说明），保证断言的是 TQ 分支文案。
+    """
     import asyncio
 
+    monkeypatch.setattr(registry, "_local_match", lambda kw: [])
     monkeypatch.setattr(tqmod, "match_stkinfo", lambda kw: None)
     assert "没有匹配「xxxxxx」" in asyncio.run(
         registry._tool_search_symbols(None, {"keyword": "xxxxxx"}, None))
