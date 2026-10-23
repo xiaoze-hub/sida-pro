@@ -127,7 +127,7 @@ def _c12_tool_count_stable():
     """工具数变化必须是有意的（2026-10-23 = 69：+get_premarket_brief +get_fund_structure +get_order_granularity）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 69
+    assert len(CHAT_TOOL_REGISTRY) == 70
 
 
 def _c13_tool_schema_name_matches():

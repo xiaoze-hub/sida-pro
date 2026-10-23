@@ -506,6 +506,28 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"四档资金结构采集注册失败: {e}")
 
+        # 量化因子多维胜率与超额收益回测日快照(2026-10-23 用户要求「所有数据都要落库 + 统计胜率」):
+        # 每日 16:15 重算 GS 区间/信号(原始 vs 次日确认)、AI 机构活跃度、GS×活跃度共振、
+        # 威科夫四标、涨停封板质量的 T+1/T+3/T+5 实测胜率与相对同池基准的超额收益，落 factor_winrate_daily。
+        try:
+            from src.core.backtest_lab import run_scheduled as _winrate_lab_job
+
+            rt.scheduler.scheduler.add_job(
+                _winrate_lab_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=16,
+                minute=15,
+                id="factor-winrate-daily",
+                name="量化因子胜率回测日快照",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("量化因子胜率回测日快照已注册(交易日 16:15)")
+        except Exception as e:
+            logger.error(f"量化因子胜率回测注册失败: {e}")
+
         # 连板梯队数据自检 + 自愈(2026-10-11 P1 断档修复): 每日 16:05(含周末)
         # limit_up_events 是 /ladder 收盘态真值源; TQ 断链期 15:35 管线静默失败 →
         # 表停更几天无人发现。本作业比对最新交易日 vs 期望交易日, 缺则 TQ 直连补数;

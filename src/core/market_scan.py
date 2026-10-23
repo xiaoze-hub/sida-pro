@@ -39,11 +39,77 @@ DEFAULT_BARS_DAYS = 60
 def _valid_symbols(raw: Sequence[str]) -> list[str]:
     """6 位数字 A 股代码, 去重保序。"""
     out: list[str] = []
-    for s in raw:
-        code = (s or "").strip()
-        if code.isdigit() and len(code) == 6 and code not in out:
+    seen: set[str] = set()
+    for s in raw or []:
+        code = str(s or "").strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if code.isdigit() and len(code) == 6 and code not in seen:
+            seen.add(code)
             out.append(code)
     return out
+
+
+def _default_cn_universe() -> list[str]:
+    """全市场 CN 股票池（修复 2026-10-23 `universe=0` 事故）。
+
+    根因：`get_stock_list()` 返回的字典键是 `"symbol"`（`{"symbol": "000001", "market": "CN"}`），
+    旧实现写的是 `s.get("code")` → 全员 None → `universe=0`，导致盘后三榜扫描与
+    `decision_log(signal_kind=gs_cross)` 从上线起一直 0 条。
+    此处兼容 `symbol` / `code` / `Code` 三种键名，且只取 CN 市场；若 `get_stock_list()`
+    仍为空，依次回退 TQ `get_stock_list("5",1)` 与 PG `klines` 活跃标的池。
+    """
+    raw: list[str] = []
+    try:
+        from src.collectors.stock_list import get_stock_list
+
+        for s in get_stock_list() or []:
+            if isinstance(s, dict):
+                mkt = str(s.get("market") or "CN").upper()
+                if mkt != "CN":
+                    continue
+                val = s.get("symbol") or s.get("code") or s.get("Code")
+                if val:
+                    raw.append(str(val))
+            elif isinstance(s, str):
+                raw.append(s)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market_scan get_stock_list 失败: %s", e)
+
+    syms = _valid_symbols(raw)
+    if syms:
+        return syms
+
+    try:
+        from marketdata.vendors.tq import tq_rpc
+
+        rows = tq_rpc("get_stock_list", {"market": "5", "list_type": 1}, timeout=15.0) or []
+        raw_tq = [
+            (r.get("Code") or r.get("code") or r.get("symbol") if isinstance(r, dict) else str(r))
+            for r in rows
+        ]
+        syms = _valid_symbols([str(x) for x in raw_tq if x])
+        if syms:
+            return syms
+    except Exception as e:  # noqa: BLE001
+        logger.debug("market_scan TQ 码表兜底未命中: %s", e)
+
+    try:
+        from sqlalchemy import text
+        from src.db.session import engine
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT DISTINCT symbol FROM klines "
+                    "WHERE period='1d' AND market='CN' AND ts >= now() - interval '120 days' "
+                    "ORDER BY symbol"
+                )
+            ).fetchall()
+        return _valid_symbols([str(r[0]) for r in rows if r and r[0]])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market_scan PG 码表兜底失败: %s", e)
+        return []
 
 
 def _per_stock_metrics(symbol: str, bars_days: int, dark_days: int = 1) -> Optional[dict]:
@@ -252,10 +318,7 @@ def resonance_pick(
     from src.core import ai_activity, gs_state, resonance
 
     if symbols is None:
-        from src.collectors.stock_list import get_stock_list
-
-        raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
-        symbols = _valid_symbols(raw)
+        symbols = _default_cn_universe()
     else:
         symbols = _valid_symbols(symbols)
 
@@ -389,10 +452,7 @@ def scan(
         }
     """
     if symbols is None:
-        from src.collectors.stock_list import get_stock_list
-
-        raw = [s.get("code") for s in get_stock_list() if isinstance(s, dict)]
-        symbols = _valid_symbols(raw)
+        symbols = _default_cn_universe()
     else:
         symbols = _valid_symbols(symbols)
 

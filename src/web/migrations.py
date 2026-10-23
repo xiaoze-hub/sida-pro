@@ -5924,6 +5924,69 @@ CREATE TABLE IF NOT EXISTS exday_daily (
         logger.warning("exday_daily 索引创建失败(表已建): %s", exc)
 
 
+def _m221_factor_winrate_daily(conn: Connection) -> None:
+    """量化因子多维分桶胜率与超额收益日快照表(2026-10-23)。
+
+    存 GS 区间/信号(原始 vs 次日确认)、AI 机构活跃度四档、GS×活跃度共振、
+    威科夫量价四标、涨停封板质量 的 T+1/T+3/T+5 实测胜率、3%达标率、盈亏比及
+    相对同池无条件基准的超额胜率/超额收益。
+    """
+    if _has_table(conn, "factor_winrate_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS factor_winrate_daily (
+    id {id_col},
+    as_of_date VARCHAR(10) NOT NULL,
+    factor_family VARCHAR(40) NOT NULL,
+    bucket_key VARCHAR(48) NOT NULL,
+    bucket_label VARCHAR(64) NOT NULL,
+    horizon INTEGER NOT NULL DEFAULT 5,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    win_count INTEGER NOT NULL DEFAULT 0,
+    untradable_skipped INTEGER NOT NULL DEFAULT 0,
+    win_rate_pct FLOAT,
+    hit3_rate_pct FLOAT,
+    avg_return_pct FLOAT,
+    median_return_pct FLOAT,
+    profit_loss_ratio FLOAT,
+    baseline_win_rate_pct FLOAT,
+    baseline_avg_return_pct FLOAT,
+    excess_win_rate_pp FLOAT,
+    excess_return_pct FLOAT,
+    universe_size INTEGER,
+    lookback_bars INTEGER,
+    source VARCHAR(32),
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_factor_winrate_daily "
+                "ON factor_winrate_daily (as_of_date, factor_family, bucket_key, horizon)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_factor_winrate_family_date "
+                "ON factor_winrate_daily (factor_family, as_of_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_factor_winrate_date "
+                "ON factor_winrate_daily (as_of_date)"
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("factor_winrate_daily 索引创建失败(表已建): %s", exc)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6138,6 +6201,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     # 见函数 docstring: 缺这条表 = 每个鉴权请求 500(2026-10-23 生产事故)
     Migration(219, "auth_session_revocations", _m219_auth_session_revocations),
     Migration(220, "exday_daily", _m220_exday_daily),
+    Migration(221, "factor_winrate_daily", _m221_factor_winrate_daily),
 )
 
 

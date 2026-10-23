@@ -2920,3 +2920,63 @@ def _exday_history_pct(db: Session | None, symbol: str, field: str, days: int = 
     below = sum(1 for v in vals if v < cur)
     return {"available": True, "value": round(cur, 2),
             "pct": round(below / max(len(vals) - 1, 1) * 100, 0), "days": len(vals)}
+
+
+@register_chat_tool(
+    "get_factor_winrate",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_factor_winrate",
+            "description": (
+                "读取【量化因子多维胜率与超额收益回测表】（factor_winrate_daily）："
+                "包含数智决策 GS 状态与信号（G区/S区/G信号原始 vs 次日确认）、AI 机构活跃度四档、"
+                "GS×活跃度共振、威科夫量价四标、涨停封板质量 的 T+1/T+3/T+5 实测胜率、"
+                "3%达标率、盈亏比，以及相对同池无条件基准的超额胜率(pp)与超额收益(%)。"
+                "回答「GS买卖区间胜率多少」「哪个因子胜率高」「三指标共振实测有效吗」"
+                "「放量突破/弹簧试探/首板二板历史胜率」等问题时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "factor_family": {
+                        "type": "string",
+                        "enum": [
+                            "all",
+                            "gs_state",
+                            "ai_activity",
+                            "gs_x_activity",
+                            "wyckoff",
+                            "limit_up_quality",
+                        ],
+                        "description": "因子族（默认 all 返回全部五大因子族 + 同池基准）",
+                        "default": "all",
+                    },
+                    "horizon": {
+                        "type": "integer",
+                        "enum": [1, 3, 5],
+                        "description": "持有期交易日（1/3/5，不传则同时返回 T+1/T+3/T+5）",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="factor_winrate_daily 实测回测快照(前复权日线 · 剔除T+1一字涨停不可买 · 附同池无条件基准超额)",
+)
+async def _tool_get_factor_winrate(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core import backtest_lab
+
+    fam = str((args or {}).get("factor_family") or "all").strip().lower()
+    raw_h = (args or {}).get("horizon")
+    horizon = int(raw_h) if raw_h in (1, 3, 5, "1", "3", "5") else None
+    try:
+        data = backtest_lab.load_winrates(db, factor_family=fam, horizon=horizon)
+        if not data.get("available") and db is not None:
+            # 首次调用表为空时触发轻量回测并写穿落库
+            backtest_lab.run_and_persist(db, limit_symbols=120, lookback_days=300)
+            data = backtest_lab.load_winrates(db, factor_family=fam, horizon=horizon)
+        return backtest_lab.render(data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_factor_winrate 失败: %s", exc)
+        return f"[因子胜率回测库] 读取异常：{type(exc).__name__}——不做推断。"

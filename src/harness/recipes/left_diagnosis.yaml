@@ -18,11 +18,12 @@ tools:
   - get_fundamentals_detail
   - get_stock_factors
   - get_factor_ic_report
+  - get_factor_winrate
   - get_northbound
   - get_stock_dossier
 output_sections: [结论, 三层滤网（情绪·催化·量价）, 估值与筹码, 基本面拐点, 左侧确认位, 失效条件, 口径]
 priority: 4
-budget: {max_tool_calls: 12}
+budget: {max_tool_calls: 13}
 prompt_fragment: |
   你是左侧埋伏诊断员。左侧的本质是**在证据不全时承担不确定性**，所以本报告的核心不是给评级，
   而是把「三层滤网各自过没过」摆出来。取数顺序：量价结构（wyckoff/kline/technical）→ 筹码

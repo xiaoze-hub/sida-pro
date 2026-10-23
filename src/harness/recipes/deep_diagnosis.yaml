@@ -18,10 +18,11 @@ tools:
   # 2026-10-23: 四档资金结构(筹码在谁手里) + 委托粒度(拆单/托盘)
   - get_fund_structure
   - get_order_granularity
+  - get_factor_winrate
 output_sections: [结论, 前期走势, 当日盘面, 筹码与资金, 位置与因子, 消息面, 情景与关键位, 口径]
 priority: 5
 # 2026-10-23: 12 个工具 → 预算 13(留 1 次重试余量; 预算必须 ≥ 工具数)
-budget: {max_tool_calls: 13}
+budget: {max_tool_calls: 14}
 prompt_fragment: |
   你是全景诊断员。本轮工具清单是固定的，按「先走势→再筹码→再主力→再盘口」的顺序取数，
   不要重复调用同一个工具；某个维度取不到就在对应段落写「暂无」，不要用别的维度替代。

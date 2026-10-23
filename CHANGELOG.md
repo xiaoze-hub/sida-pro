@@ -1,4 +1,4 @@
-## release: v0.47.0（通达信四档资金结构落库 + 8 个指标算法漏洞修复）
+## release: v0.47.0（通达信四档资金结构落库 + 10 处指标算法漏洞修复 + universe=0 修复与量化因子胜率回测引擎）
 
 ### 一、四档资金结构（`get_exday_data` 从"只读两个标量"到"全量落库"）
 
@@ -13,13 +13,13 @@
   （买≠卖 或 与日线成交额偏差>5% → `suspect`）。
 - `exday_daily` 表 + **migration 220**；`src/collectors/exday_daily.py` 交易日 **15:45**
   全市场落库（PG 股票池 → TQ，分片 200、幂等 upsert，单票失败只计数、全失败判 failed）。
-- 工具 `get_fund_structure` / `get_order_granularity`（工具数 **67→69**，规格与 4 处钉子同步），
+- 工具 `get_fund_structure` / `get_order_granularity`（工具数 **67→70** 含回测工具，规格与 4 处钉子同步），
   挂 `chip_analyst` / `deep_diagnosis` / `intraday_analyst`；盘前证据层新增第 7 块
   `fund_structure`（自选+持仓最多 15 只）。
 - **口径红线**：`tdx_exday4`（按单笔成交金额分档）与东财四档、腾讯逐笔**不可换算**；
   档位阈值官方未公开，为推断值（特大>100万/大20~100万/中5~20万/小<5万）。
 
-### 二、指标/因子算法审计：8 处真算错（不是风格问题）
+### 二、指标/因子算法审计：10 处真算错（不是风格问题）
 
 | # | 位置 | 旧行为（错在哪） | 修复 |
 |---|---|---|---|
@@ -34,13 +34,22 @@
 | 9 | `kline_collector` | "近 5 日上涨天数"永远 ≤4；量比分母含当日 | 取 6 根比较；分母用前 5 日均量 |
 | 10 | `chip_distribution` | 一字板 `k_high<=k_low` 直接 continue → **连板股筹码停滞在启动前** | 允许 high==low，按最近价位整笔计入并照常衰减 |
 
+### 三、`market_scan` `universe=0` 根治 + `backtest_lab` 五大因子族多维胜率回测落库
+
+1. **`market_scan` / `stock_list` `universe=0` 根治**：
+   - 根因定位：`get_stock_list()` 返回 `{"symbol": "000001", "market": "CN"}`，而 `market_scan.scan()` 与 `resonance_pick()` 写的是 `s.get("code")` → 全员 `None` → 每日 15:30 盘后三榜扫描 `universe=0`，导致 `market_scan_ranks` 与 `decision_log(gs_cross)` 一直 0 行；
+   - 修复：`market_scan._default_cn_universe()` 兼容 `symbol/code/Code` 并过滤非 CN，空时依次回退 TQ `get_stock_list("5", 1)` 与 PG `klines`；`stock_list.refresh_stock_list()` 改为 TQ 优先（0.15s 拿 5580 只 A 股）→ 东财 → akshare → PG 兜底。
+2. **量化因子多维胜率与超额收益回测实验室（`src/core/backtest_lab.py` + `factor_winrate_daily` Migration 221 + `get_factor_winrate` 工具）**：
+   - 覆盖五大因子族（`gs_state` 含原始 vs 次日收盘确认、`ai_activity` 四档、`gs_x_activity` 共振、`wyckoff` 四标、`limit_up_quality` 连板身位与封板质量）在 `T+1 / T+3 / T+5` 的实测胜率、3% 达标率（同花顺官方口径）、盈亏比；
+   - **强制同池无条件基准对照**（输出 `excess_win_rate_pp` 与 `excess_return_pct`）+ **剔除 `T+1` 一字涨停不可买入样本**（`untradable_skipped`）+ **零未来函数**（次日确认信号以确认日收盘价为锚点）；
+   - 注册交易日 **16:15** 定时任务自动落库 `factor_winrate_daily`，并暴露参谋工具 `get_factor_winrate`（挂载 `deep_diagnosis` / `left_diagnosis` / `demon_diagnosis`）。
+
 ### 门禁
 
-- 定向回归 **354+** passed（新增 `test_exday_structure.py` 17 / `test_exday_collector.py` 8 /
-  `test_indicator_audit_fixes.py` 18）；5 个 `check_*.py` 全 OK；规格 **19/19（32 用例）**；
+- 定向回归 **360+** passed（新增 `test_exday_structure.py` 17 / `test_exday_collector.py` 8 /
+  `test_indicator_audit_fixes.py` 18 / `test_factor_winrate_lab.py` 7）；5 个 `check_*.py` 全 OK；规格 **19/19（32 用例）**；
   `chat.py` 保持 **2307/2310** 行。
-- 真网关复验：002361 / 600519 / 601318 三只四档与委托粒度全部与标定值一致；
-  北交所 830799 无 exday 数据 → 如实返回"无数据"（不猜）。
+- 生产实盘复验：002361 / 600519 / 601318 四档与委托粒度与标定值一致；`factor_winrate_daily` 已落库 75 行（800 只 × 450 根前复权日线 = 321,810 样本）；`market_scan_ranks` 与 `decision_log(gs_cross)` 已恢复非空入账。
 
 ## release: v0.46.0（盘前报告 → 盘前分析 Agent：证据合流 + 入口扶正）
 

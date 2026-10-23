@@ -10,6 +10,7 @@ skills: [demon]
 pipeline: true
 tools:
   - get_demon_factor
+  - get_factor_winrate
   - get_stock_quote
   - get_intraday_profile
   - get_cancel_order_intent
@@ -20,7 +21,7 @@ tools:
   - get_event_catalyst
 output_sections: [结论, 梯队与身位, 封板与情绪, 题材与催化, 资金与筹码, 风险与失效条件, 口径]
 priority: 4
-budget: {max_tool_calls: 9}
+budget: {max_tool_calls: 10}
 prompt_fragment: |
   你是妖股身位分析师。取数顺序固定：先画像（demon_factor）→ 再看当日封板（quote/intraday/撤单）
   → 再看资金（main_intent）→ 再看题材与情绪（sectors/hot/sentiment_cycle/catalyst）。

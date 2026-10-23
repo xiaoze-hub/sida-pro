@@ -2564,3 +2564,49 @@ class ExdayDaily(Base):
     reason = Column(String(255), nullable=True)
     source = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FactorWinrateDaily(Base):
+    """量化因子多维分桶胜率与超额收益日快照表（2026-10-23）。
+
+    解决问题：
+    1. 回答「GS 买卖区间、AI 机构活跃度、GS×活跃度共振、威科夫量价结构、涨停封板质量
+       在真实历史样本里的 T+1/T+3/T+5 胜率、3% 达标率、盈亏比到底是多少」；
+    2. 强制同时存储**同股票池同时间窗的无条件基准**（`baseline_win_rate_pct` /
+       `baseline_avg_return_pct`）与**超额项**（`excess_win_rate_pp` / `excess_return_pct`），
+       杜绝脱离市场基准单独吹嘘绝对胜率；
+    3. 强制剔除 T+1 一字涨停不可买入样本（记入 `untradable_skipped`）。
+    """
+
+    __tablename__ = "factor_winrate_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "as_of_date", "factor_family", "bucket_key", "horizon",
+            name="uq_factor_winrate_daily",
+        ),
+        Index("ix_factor_winrate_family_date", "factor_family", "as_of_date"),
+        Index("ix_factor_winrate_date", "as_of_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of_date = Column(String(10), nullable=False)
+    factor_family = Column(String(40), nullable=False)
+    bucket_key = Column(String(48), nullable=False)
+    bucket_label = Column(String(64), nullable=False)
+    horizon = Column(Integer, nullable=False, default=5)
+    sample_count = Column(Integer, nullable=False, default=0)
+    win_count = Column(Integer, nullable=False, default=0)
+    untradable_skipped = Column(Integer, nullable=False, default=0)
+    win_rate_pct = Column(Float, nullable=True)            # 收盘收益 > 0 占比(%)
+    hit3_rate_pct = Column(Float, nullable=True)           # 期内最高涨幅 >= 3% 占比(%, 官方口径)
+    avg_return_pct = Column(Float, nullable=True)          # 均值收益(%)
+    median_return_pct = Column(Float, nullable=True)       # 中位收益(%)
+    profit_loss_ratio = Column(Float, nullable=True)       # 盈亏比 = 平均盈利 / 平均亏损
+    baseline_win_rate_pct = Column(Float, nullable=True)   # 同池无条件基准胜率(%)
+    baseline_avg_return_pct = Column(Float, nullable=True) # 同池无条件基准均值(%)
+    excess_win_rate_pp = Column(Float, nullable=True)      # 超额胜率(百分点 pp)
+    excess_return_pct = Column(Float, nullable=True)       # 超额均值收益(%)
+    universe_size = Column(Integer, nullable=True)
+    lookback_bars = Column(Integer, nullable=True)
+    source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
