@@ -71,7 +71,7 @@ const zhCN = {
     caliberCompare: '口径对照',
     decisionLedger: '决策账本',
     warReport: '主力战报',
-    reports: '报告',
+    reports: '分析',
     history: '历史',
     portfolio: '持仓',
     shadow: '影子账户',
