@@ -82,7 +82,7 @@ def _mk_member(client, token: str, username: str = "devfix_member") -> dict:  # 
     r = client.post(
         "/api/auth/users",
         headers={"Authorization": f"Bearer {token}"},
-        json={"username": username, "password": "devfix12345678", "role": "member"},
+        json={"username": username, "password": "passpass", "role": "member"},
     )
     assert r.status_code == 200, r.text
     return r.json()["data"]["user"]
@@ -186,7 +186,7 @@ def test_owner_create_key_gets_pro_tier(client):  # noqa: ANN001
 def test_member_create_key_stays_free(client):  # noqa: ANN001
     owner_token = _login(client, ADMIN_USER, ADMIN_PW)
     _mk_member(client, owner_token, username="devfix_member_free")
-    member_token = _login(client, "devfix_member_free", "devfix12345678")
+    member_token = _login(client, "devfix_member_free", "passpass")
 
     r = client.post("/api/keys/my", headers={"Authorization": f"Bearer {member_token}"}, json={})
     assert r.status_code == 200, r.text
