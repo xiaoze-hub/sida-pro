@@ -71,7 +71,15 @@ def test_no_residual_wrapper_references():
     hits = []
     for p in ROOT.rglob("*.py"):
         s = set(p.parts)
-        if "__pycache__" in s or ".git" in s or p.name == Path(__file__).name:
+        # .venv/venv 排除: 仓库根建 venv 时 site-packages 第三方代码会误命中
+        # (2026-10-24 实测 google-genai 自带测试文件含 _NEEDLE 字样)
+        if (
+            "__pycache__" in s
+            or ".git" in s
+            or ".venv" in s
+            or "venv" in s
+            or p.name == Path(__file__).name
+        ):
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")

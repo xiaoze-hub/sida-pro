@@ -89,6 +89,11 @@
 - 取数复用 `compute()` 既有路径（`stock_factor_daily` × `load_qfq_bars` 前复权日线），不新增网络请求模式；样本不足显式报不足（延续 <20 只票 / <5 个交易日门槛）；纯本地、不落库、不建表（迁移钉子 223 不动）、不加 chat 工具（钉子 71 不动）、不改前端。
 - 新增规格 `FIC-005..008`（`specs/core/factor_ic_extended.md`）与守卫测试；规格追溯保持 100%。
 
+### test-死代码扫描排除 venv 误命中
+
+- `tests/test_w33_chat_registry.py::test_no_residual_wrapper_references` 的全仓 `rglob("*.py")` 扫描只排除 `__pycache__`/`.git`，仓库根建 venv 时（本机 `C:\...\sida-pro\.venv`，2026-10-24 建）site-packages 第三方代码会误命中——实测 `google-genai` 自带测试文件含 needle 字样，单跑即红。
+- 修复：扫描排除 `.venv`/`venv` 目录（测试意图是"本项目代码不得引用死代码包装模块"，第三方依赖文本属噪音）。`test_w33_chat_registry.py` 26 passed；不改注册表计数断言。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。
