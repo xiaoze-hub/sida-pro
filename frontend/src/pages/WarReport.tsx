@@ -184,7 +184,9 @@ export default function WarReportPage() {
               {' · '}{t('warReport.computed')} <span className="font-mono">{data.computed ?? '-'}</span>
               {' · '}{t('common.source')} <span className="font-mono">thsdk_dde</span>({t('warReport.sourceNote')})
               {' · '}
-              <CaliberBadge caliber="eastmoney4" label={t('warReport.caliberTag')} title={t('warReport.caliberHint')} />
+              {/* P0 修复(2026-10-24): 本页数据源同上 = thsdk_dde(DDE 主力净流入) / TQ SUPAMO(行业子块),
+                  徽章曾错标东财四档(按单金额分档) —— 口径不可换算, 现改 ths(同花顺口径)。 */}
+              <CaliberBadge caliber="ths" label={t('warReport.caliberTag')} title={t('warReport.caliberHint')} />
               {' · '}{t('common.updatedAt')} <span className="font-mono">{data.updated_at ?? '-'}</span>
             </p>
           </div>

@@ -49,7 +49,12 @@ export default function CaliberBadge({
 
 /** 后端返回的字段值 → 徽章口径(拿不到标签一律 unknown, 不猜)。 */
 export function caliberOf(raw: string | null | undefined): Caliber {
-  const v = (raw ?? '').toLowerCase()
+  const v = (raw ?? '').trim().toLowerCase()
   if (v === 'tick' || v === 'eastmoney4' || v === 'ths') return v
+  // 同花顺家族: 上游 source 常写具体通道名(`thsdk_dde` / `thsdk_alert` / `thsdk_tick` …),
+  // 不是裸 `ths`。它们**都是同花顺口径**, 精确匹配会把它们全判成 unknown, 调用方随后容易
+  // 「凑一个」eastmoney4 顶上 —— 这正是 DarkFundTop/WarReport 口径错标的根因。
+  // 因此这里收敛前缀 → ths(只做口径归类, 不改任何数值, 四口径仍不可换算)。
+  if (v.startsWith('thsdk') || v.startsWith('ths_')) return 'ths'
   return 'unknown'
 }

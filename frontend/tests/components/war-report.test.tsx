@@ -83,4 +83,18 @@ describe('WarReport 主力资金战报', () => {
     expect(screen.queryByRole('table')).toBeNull()
     expect(screen.getByText(/立即生成/)).toBeTruthy()
   })
+
+  // P0(2026-10-24 设计走查): 同 DarkFundTop —— 数据源是 thsdk_dde(DDE) / TQ SUPAMO,
+  // 徽章曾错标 eastmoney4(东财四档)。口径不可换算, 必须标 ths。
+  it('口径徽章 = ths, 不得出现 eastmoney4; 原始 source 文本保留', async () => {
+    mocks.daily.mockResolvedValue(snapshot())
+    const { container } = render(<WarReportPage />)
+    await screen.findAllByText('贵州茅台')
+
+    const badges = Array.from(container.querySelectorAll('[data-caliber]'))
+    expect(badges.length).toBeGreaterThan(0)
+    for (const b of badges) expect(b.getAttribute('data-caliber')).not.toBe('eastmoney4')
+    expect(container.querySelector('[data-caliber="ths"]')).not.toBeNull()
+    expect(screen.getAllByText('thsdk_dde').length).toBeGreaterThan(0)
+  })
 })
