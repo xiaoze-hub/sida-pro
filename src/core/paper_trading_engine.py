@@ -47,8 +47,39 @@ TRAILING_STOP_PCT = 0.10
 DEFAULT_TIME_STOP_DAYS = 20
 # P1(audit-20260915): 默认止损/止盈比例(信号未提供或不合理时的开仓兜底)
 # 止损 -8% / 止盈 +15% — 与历史行为 entry*0.92 / entry*1.15 完全一致
+#
+# 2026-10-23 语义澄清(产品裁决: 硬防线方案 B): 这里的 0.92 是**系统执行兜底**,
+# **不是用户的纪律位**, 不得对外展示为"防守线"。用户的纪律位只存在于
+# positions.defense_price(用户自己设的绝对价)。数值保持 0.92 不动 —— 改它等于
+# 给存量模拟盘换一套出场规则, 会凭空制造行为突变。前端/报表拿 `stop_basis`
+# 区分两者(见 STOP_BASIS_*)。
 DEFAULT_STOP_LOSS_PCT = 0.92
 DEFAULT_TAKE_PROFIT_PCT = 1.15
+
+# 止损价来源标记: 供前端区分"信号给的纪律位"与"系统兜底"(后者不可展示为防守线)。
+STOP_BASIS_SIGNAL = "signal"
+STOP_BASIS_SYSTEM_DEFAULT = "system_default"
+
+
+def _stop_basis(pos: PaperTradingPosition) -> str:
+    """判定该持仓的止损价来自信号还是系统兜底。
+
+    为什么靠等值判定而不是独立列: 存来源需要新列+迁移, 而本轮只加
+    positions.defense_price; 判定式与**写入路径**(`entry_price * DEFAULT_STOP_LOSS_PCT`
+    再 round(...,4)) 同口径, 误差方向保守 —— 万一某信号的显式止损恰好等于
+    entry*0.92, 会被标成 system_default, 结果是前端更少把它当用户纪律位, 不会反过来
+    把系统兜底吹成用户的纪律。
+    """
+    try:
+        entry = float(pos.entry_price or 0)
+        stop = float(pos.stop_loss or 0)
+    except (TypeError, ValueError):
+        return STOP_BASIS_SYSTEM_DEFAULT
+    if entry <= 0 or stop <= 0:
+        return STOP_BASIS_SYSTEM_DEFAULT
+    if abs(stop - round(entry * DEFAULT_STOP_LOSS_PCT, 4)) <= 1e-6:
+        return STOP_BASIS_SYSTEM_DEFAULT
+    return STOP_BASIS_SIGNAL
 
 
 def _position_weight(rank_score: float) -> float:
@@ -244,6 +275,8 @@ def _serialize_position(pos: PaperTradingPosition) -> dict:
         "quantity": pos.quantity,
         "entry_price": pos.entry_price,
         "stop_loss": pos.stop_loss,
+        # 止损来源: signal=信号自带, system_default=系统兜底 -8%(非用户纪律位, 不可展示为防守线)
+        "stop_basis": _stop_basis(pos),
         "target_price": pos.target_price,
         "current_price": pos.current_price,
         "unrealized_pnl": pos.unrealized_pnl,
@@ -495,6 +528,13 @@ class PaperTradingEngine:
             if not target_price or target_price <= 0 or target_price <= entry_price:
                 target_price = round(entry_price * DEFAULT_TAKE_PROFIT_PCT, 4)
 
+            # 止损来源(方案 B): 兜底那条 -8% 只是执行安全网, 不是用户纪律位。
+            stop_basis = (
+                STOP_BASIS_SYSTEM_DEFAULT
+                if abs(float(stop_loss) - round(entry_price * DEFAULT_STOP_LOSS_PCT, 4)) <= 1e-6
+                else STOP_BASIS_SIGNAL
+            )
+
             pos = PaperTradingPosition(
                 stock_symbol=sig.stock_symbol,
                 stock_market=sig.stock_market,
@@ -523,12 +563,13 @@ class PaperTradingEngine:
             exposure_value += new_value
             pos_count += 1
             logger.info(
-                "[模拟盘] 建仓: %s %s @ %.2f x%d, 止损=%.2f, 止盈=%s, 买入费=%.2f, 策略=%s",
+                "[模拟盘] 建仓: %s %s @ %.2f x%d, 止损=%.2f(%s), 止盈=%s, 买入费=%.2f, 策略=%s",
                 sig.stock_name or sig.stock_symbol,
                 sig.stock_market,
                 entry_price,
                 quantity,
                 stop_loss or 0,
+                stop_basis,
                 target_price or "无",
                 buy_fill.explicit_fees + buy_fill.slippage_cost,
                 sig.strategy_code,

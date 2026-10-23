@@ -6042,6 +6042,26 @@ CREATE TABLE IF NOT EXISTS market_replay_daily (
         logger.warning("market_replay_daily 索引创建失败(表已建): %s", exc)
 
 
+def _m223_position_defense_price(conn: Connection) -> None:
+    """positions 加 defense_price 列(2026-10-23, 产品裁决: 硬防线方案 B)。
+
+    为什么是绝对价而不是比例: 用户在不同标的上的纪律位来源不同(有人按成本价 -8%,
+    有人按关键支撑位), 存比例就得反推价格、还会随成本价变动漂移; 存绝对价即"用户
+    拍下的那个价"。
+
+    为什么 nullable 且不填默认值: NULL 明确表达"用户未设置"。方案 B 下系统不再默认
+    -8% 告警, 若这里回填 *0.92 就等于把系统臆造的纪律位写进了用户账本。
+
+    幂等可重跑(列已存在则跳过)。
+    """
+    _add_column_if_missing(
+        conn,
+        "positions",
+        "defense_price",
+        "ALTER TABLE positions ADD COLUMN defense_price FLOAT",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6258,6 +6278,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(220, "exday_daily", _m220_exday_daily),
     Migration(221, "factor_winrate_daily", _m221_factor_winrate_daily),
     Migration(222, "market_replay_daily", _m222_market_replay_daily),
+    Migration(223, "position_defense_price", _m223_position_defense_price),
 )
 
 

@@ -829,6 +829,89 @@ def build_ma_critical_warnings(current_price: float | None, ma_values: dict[str,
     return warnings
 
 
+def evaluate_defense_breach(
+    *,
+    defense_price: float | None,
+    current_price: float | None,
+    cost_price: float | None = None,
+) -> dict | None:
+    """判定"用户自设防守线"是否被击穿(方案 B, 2026-10-23)。
+
+    为什么不是 `loss_ratio <= -0.08`: 那条 -8% 是系统替用户定的假设, 用户从没认过、
+    也没法改。产品裁决下纪律位只能来自用户自己设的绝对价(positions.defense_price)。
+
+    Returns:
+        None —— 用户未设防线(不告警) **或** 缺现价(无法判断, 不猜)。
+        否则返回 {"defense_price", "current_price", "cost_price", "loss_pct", "breached"}。
+    """
+    try:
+        d = float(defense_price) if defense_price is not None else None
+    except (TypeError, ValueError):
+        d = None
+    # 未设置 / 非法值一律视为"没有纪律位": 静默跳过, 不退回 -8%。
+    if d is None or d <= 0:
+        return None
+    try:
+        cur = float(current_price) if current_price is not None else None
+    except (TypeError, ValueError):
+        cur = None
+    if cur is None or cur <= 0:
+        return None
+
+    loss_pct: float | None = None
+    try:
+        c = float(cost_price) if cost_price is not None else 0.0
+        if c > 0:
+            loss_pct = (cur - c) / c * 100
+    except (TypeError, ValueError):
+        loss_pct = None
+    return {
+        "defense_price": d,
+        "current_price": cur,
+        "cost_price": float(cost_price) if cost_price else None,
+        "loss_pct": loss_pct,
+        "breached": cur <= d,
+    }
+
+
+def load_defense_lines(symbol: str, user_id: str | None = None) -> list[dict]:
+    """读某标的的**用户自设**防守线(positions.defense_price 非 NULL 的那些)。
+
+    为什么直接查库而不是走 `context.portfolio`: 组合上下文里的 PositionInfo 不携带
+    用户的纪律位(那是风控口径而非持仓口径字段), 且这里必须能区分"没设"与"设了但
+    等于某个默认值" —— 只有原始列能表达。
+
+    user_id 隔离与其它持仓口径一致: 传了 user_id 就取"自己的 + 历史遗留全局(NULL)"。
+    """
+    from sqlalchemy import or_
+
+    from src.db.models import Position, Stock
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        q = (
+            db.query(Position)
+            .join(Stock, Stock.id == Position.stock_id)
+            .filter(Stock.symbol == symbol, Position.defense_price.isnot(None))
+        )
+        if user_id:
+            q = q.filter(or_(Position.user_id == user_id, Position.user_id.is_(None)))
+        else:
+            q = q.filter(Position.user_id.is_(None))
+        return [
+            {
+                "position_id": p.id,
+                "cost_price": p.cost_price,
+                "defense_price": p.defense_price,
+                "user_id": p.user_id,
+            }
+            for p in q.all()
+        ]
+    finally:
+        db.close()
+
+
 # 标准化操作建议
 SUGGESTION_TYPES = {
     "建仓": "buy",  # 新开仓位
@@ -1877,35 +1960,49 @@ class IntradayMonitorAgent(BaseAgent):
                     lines.append(f"威科夫结构：{wyck.get('phase_desc', wyck.get('phase'))}（{sig_str}）")
         except Exception:
             pass
-        # 持仓 -8% 硬防线预警
+        # 用户自设防守线击穿预警(方案 B 2026-10-23)
+        # 口径: 只认 positions.defense_price(用户自己设的绝对价)。未设置 → 跳过,
+        # 不再默认 -8% —— 系统臆造的纪律位不该替用户报警。
         pos_info = data.get("position") or {}
-        cost = pos_info.get("cost") or pos_info.get("cost_price")
-        if cost and getattr(stock, "current_price", None):
-            try:
-                c_val = float(cost)
-                cur_val = float(stock.current_price)
-                if c_val > 0:
-                    loss_ratio = (cur_val - c_val) / c_val
-                    if loss_ratio <= -0.08:
-                        alert_line = f"🚨【触发硬防线警报】：成本 {c_val:.2f}，现价 {cur_val:.2f}，浮亏 {loss_ratio * 100:.2f}%，已触及 -8% 硬止损防线，请坚决执行风控纪律！"
-                        lines.append(alert_line)
-                        # 2026-10-16: 硬防线击穿直接触发微信/钉钉等外部高优先级通道外发
-                        try:
-                            from src.core.notify_center import push_notification
-                            user_id = data.get("user_id") or (data.get("position") or {}).get("user_id")
-                            push_notification(
-                                title=f"🚨【硬防线击穿警报】{stock.name}（{stock.symbol}）",
-                                body=alert_line,
-                                category="risk_warning",
-                                level="critical",
-                                source="intraday_monitor",
-                                also_push=True,
-                                user_id=user_id,
-                            )
-                        except Exception as n_err:
-                            logger.warning(f"硬防线微信外发异常: {n_err}")
-            except Exception:
-                pass
+        try:
+            _uid = data.get("user_id") or pos_info.get("user_id")
+            cur_price = getattr(stock, "current_price", None)
+            for line in load_defense_lines(stock.symbol, user_id=_uid):
+                verdict = evaluate_defense_breach(
+                    defense_price=line.get("defense_price"),
+                    current_price=cur_price,
+                    cost_price=line.get("cost_price"),
+                )
+                if not verdict or not verdict.get("breached"):
+                    continue
+                loss_txt = (
+                    f"浮亏 {verdict['loss_pct']:.2f}%，" if verdict.get("loss_pct") is not None else ""
+                )
+                alert_line = (
+                    f"🚨【触发防守线警报】：成本 {float(line.get('cost_price') or 0):.2f}，"
+                    f"现价 {verdict['current_price']:.2f}，{loss_txt}"
+                    f"已跌破用户设定防守线 {verdict['defense_price']:.2f}，"
+                    f"请执行你自己定下的纪律，别临场改口！"
+                )
+                lines.append(alert_line)
+                # 2026-10-16: 击穿直接触发微信/钉钉等外部高优先级通道外发
+                try:
+                    from src.core.notify_center import push_notification
+                    push_notification(
+                        title=f"🚨【防守线击穿】{stock.name}（{stock.symbol}）",
+                        body=alert_line,
+                        category="risk_warning",
+                        level="critical",
+                        source="intraday_monitor",
+                        also_push=True,
+                        user_id=_uid,
+                    )
+                except Exception as n_err:
+                    logger.warning(f"防守线微信外发异常: {n_err}")
+                # 同一标的多账户同设防线时, 一次告警足够, 不重复外发。
+                break
+        except Exception as dps_err:  # noqa: BLE001
+            logger.warning(f"防守线预警计算失败: {dps_err}")
         # 数智决策三指标(2026-08-30): 精简一行(GS+机构活跃度+L2)
         try:
             from src.core.decision_pioneer import decision_pioneer_text
