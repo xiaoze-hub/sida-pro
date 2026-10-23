@@ -12,6 +12,8 @@ import { formatDateTime } from '@/lib/utils'
 import { submitChangePassword } from '@/lib/change-password'
 import { useApiQuery } from '@/hooks/useApiQuery'
 import NotifyChannelsSection from '@/components/profile/NotifyChannelsSection'
+import SessionDevicesSection from '@/components/profile/SessionDevicesSection'
+import DataPrivacySection from '@/components/profile/DataPrivacySection'
 import SectionHeader from '@panwatch/biz-ui/components/SectionHeader'
 import { useI18n } from '@/hooks/useI18n'
 
@@ -367,6 +369,9 @@ export function Profile() {
               {changingPwd ? t('accountMenu.submitting') : t('profile.changePassword')}
             </Button>
           </div>
+
+          {/* 在线设备(2026-10-23): 设备限制真正生效后的可运维面 */}
+          <SessionDevicesSection />
         </section>
 
         {/* ③ 我的 API Key(2026-09-16 控制台) */}
@@ -488,6 +493,11 @@ export function Profile() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* ④½ 数据与隐私(2026-10-23): 导出/注销此前有后端无前端 */}
+        <section className="border-t border-border/40 pt-4 md:pt-5 lg:col-span-12">
+          <DataPrivacySection username={profile?.username} />
         </section>
 
         {/* ⑤ Pro 升级(B.1) */}
