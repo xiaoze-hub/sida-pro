@@ -284,10 +284,90 @@ def detect_persona(db, text: str, bound: str | None):
         return None, ""
 
 
+def _load_user_of_conv(db, conv):
+    """取会话归属用户(盘前底稿注入用)。取不到返回 None —— 旁路, 不影响作答。"""
+    uid = getattr(conv, "user_id", None)
+    if not uid:
+        return None
+    try:
+        from src.db.models import User
+
+        return db.query(User).filter(User.id == uid).first()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _append_system_note(messages: list[dict], note: str) -> None:
+    """把旁路说明并入第一个 system 消息; 没有 system 就置顶插一条。"""
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "system":
+            base = m.get("content") or ""
+            m["content"] = f"{base}\n\n{note}" if base else note
+            return
+    messages.insert(0, {"role": "system", "content": note})
+
+
+def inject_premarket_brief(messages: list[dict], db, user, recipe=None) -> bool:
+    """把该用户最新盘前分析底稿注入 system 消息(盘前策略官配方自动调用, 单测可直接调)。
+
+    - 无记录 / 无用户 / 正文空 / 异常 → 不注入(返回 False), 旁路绝不影响主流程;
+    - 当日(analysis_date == 今日) → 注入「【今日盘前分析底稿（{date}）】」;
+    - 历史日期 → 显式标注「【历史盘前分析底稿（基准日 {date}，非今日，仅供对照）】」,
+      绝不许把昨日记录冒充今日。
+    """
+    if not messages or db is None or user is None:
+        return False
+    try:
+        from sqlalchemy import or_
+
+        from src.core.timezone import beijing_now
+        from src.db.models import AnalysisHistory
+
+        today = beijing_now().strftime("%Y-%m-%d")
+        uid = str(getattr(user, "id", "") or "")
+        q = db.query(AnalysisHistory).filter(
+            AnalysisHistory.agent_name == "premarket_outlook",
+            AnalysisHistory.status == "success",
+        )
+        if uid:
+            q = q.filter(or_(AnalysisHistory.user_id == uid, AnalysisHistory.user_id.is_(None)))
+        rec = (
+            q.order_by(
+                AnalysisHistory.analysis_date.desc(),
+                AnalysisHistory.created_at.desc(),
+                AnalysisHistory.id.desc(),
+            )
+            .first()
+        )
+        if rec is None:
+            return False
+        content = (rec.content or "").strip()
+        if not content:
+            return False
+        d = str(rec.analysis_date)
+        if d == today:
+            brief = f"【今日盘前分析底稿（{d}）】\n{content}"
+        else:
+            brief = (
+                f"【历史盘前分析底稿（基准日 {d}，非今日，仅供对照）】\n{content}\n"
+                f"（注: 该底稿基准日为 {d}，非今日，只作历史对照，勿当作今日盘前结论。）"
+            )
+        _append_system_note(messages, brief)
+        return True
+    except Exception:  # noqa: BLE001  注入是旁路, 任何异常都不该影响作答
+        return False
+
+
 def enter_request_ctx(db, conv, body, messages: list[dict]):
     """装配本轮上下文，返回需要回滚的 token 列表。"""
     recipe, note = apply_mentions(db, conv, body)
     inject_recipe(messages, recipe, note)
+    # 盘前策略官配方(2026-10-23 B 支线): 注入该用户最新盘前底稿;
+    # 历史记录会被显式标注「非今日」, 绝不许把昨日底稿冒充今日。
+    if recipe is not None and getattr(recipe, "id", "") == "premarket_strategist":
+        _user = _load_user_of_conv(db, conv)
+        if _user is not None:
+            inject_premarket_brief(messages, db, _user, recipe)
     _body_text = getattr(body, "content", "") or ""
     bound = getattr(conv, "stock_symbol", None) or extract_code(_body_text)
     if not bound:

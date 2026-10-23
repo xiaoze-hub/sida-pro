@@ -124,10 +124,10 @@ def _c11_user_id_is_uuid_text():
 
 
 def _c12_tool_count_stable():
-    """工具数变化必须是有意的（2026-10-22 = 66：get_trader_playbook + note_new_dimension 采集层工具）。"""
+    """工具数变化必须是有意的（2026-10-23 = 67：get_trader_playbook + note_new_dimension + get_premarket_brief）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 66
+    assert len(CHAT_TOOL_REGISTRY) == 67
 
 
 def _c13_tool_schema_name_matches():
