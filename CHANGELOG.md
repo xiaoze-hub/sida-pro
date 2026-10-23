@@ -1,3 +1,26 @@
+## 2026-10-24
+
+### feat-空头司令挑刺配方(devil_advocate 红蓝对抗压力测试, 创新 6 后端)
+
+- **新增 harness 配方 `src/harness/recipes/devil_advocate.yaml`（空头司令，12 = 11 + 1）**：
+  创新 6（P1，纯 prompt 编排）—— 对指定标的强制逆向风控研判：**假设这笔交易已亏 15%，
+  站空头立场给最可能的 3 个死因**，每条死因必须带证据链（大单流出/上方套牢筹码峰/消息面利空/
+  题材退潮信号等）与**可证伪的反驳条件**（若…则该死因不成立）；凑不满 3 条有证据的死因时
+  缺位写「证据不足，不做臆测」，不许硬凑。
+- **确定性管线**：`pipeline: true` + `scope: symbol`，按固定顺序调用 **10 个现有工具**
+  （三口径资金 `get_main_intent`/`get_capital_flow`/`get_decision_pioneer` + 筹码
+  `get_chip_accumulation`/`get_fund_structure` + 消息面 `get_stock_dossier`/
+  `get_fundamentals_detail` + 走势/催化/情景 `get_trend_profile`/`get_event_catalyst`/
+  `get_scenario_matrix`），预算 11。**工具数钉子 71 不动、不新增表、chat.py 保持 2307 行**。
+- **口径红线进提示词**：主力意图只认逐笔（get_main_intent）；get_capital_flow（eastmoney4）
+  方向位与逐笔相反、禁做主力意图方向判定；L2 主力净流入标 TQ。证据缺失显式写「无数据」，
+  **无现成工具的维度（商誉、解禁日历等）写「无数据源」**——本轮盘点确认这两类暂无专用工具。
+- 只出逆向风险情报：提示词明令禁止买卖指令、禁止大盘方向预测（交易 403 守卫 Frozen Ring 不碰）。
+- **规格与测试**：`specs/harness/recipes.md` 新增 `DEVIL-001..006`（配方结构/证据链工具/
+  可证伪死因/禁编造/口径红线/输出契约），`tests/test_spec_harness_recipes.py` 加 6 条 @spec 守卫；
+  路由确定性用例 +2（test_harness_routing）；配方数钉子 11→12（test_market_pipeline）。
+  规格追溯 **28/28（46 用例）100%**。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。

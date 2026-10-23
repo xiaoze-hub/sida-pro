@@ -310,7 +310,8 @@ async def test_answer_market_non_stream_and_fallback():
 
 def test_recipes_still_parse_and_scope_defaults_to_symbol():
     recipes = load_recipes()
-    assert len(recipes) == 11
+    # 2026-10-24: 创新 6 新增 devil_advocate（12 = 11 + 1），纯 prompt 编排不加工具
+    assert len(recipes) == 12
     assert {r.scope for r in recipes.values()} <= {"symbol", "market"}
     # 5 份单标的管线配方不写 scope → 默认 symbol（旧行为，一个字都不许变）
     for rid in ("chip_analyst", "deep_diagnosis", "demon_diagnosis",
@@ -322,6 +323,9 @@ def test_recipes_still_parse_and_scope_defaults_to_symbol():
                 "postmarket_reviewer", "intraday_watcher"):
         assert recipes[rid].scope == "market", rid
         assert recipes[rid].pipeline is True, rid
+    # 2026-10-24 空头司令（创新 6）：单标的确定性管线配方，与 deep_diagnosis 同族
+    assert recipes["devil_advocate"].scope == "symbol"
+    assert recipes["devil_advocate"].pipeline is True
     # 风控裁判要的是"每只持仓读数"，取数阶段拿不到持仓代码 → 明确不接（不许假装接上）
     assert recipes["risk_judge"].pipeline is False
     assert recipes["risk_judge"].scope == "symbol"
@@ -358,6 +362,7 @@ def test_routing_unchanged_for_market_recipes():
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
+        "devil_advocate",
     }
 
 
