@@ -177,14 +177,29 @@ export const emptyChannelForm: ChannelForm = { name: '', type: 'telegram', confi
 // 模型功能标签徽标(缺失/未知标签按空处理,兼容后端未部署 capabilities)
 
 // 敏感设置 key:值不回显(后端已掩码为 ********),输入框用密码态,掩码值不参与编辑
-export const SECRET_SETTING_KEYS = new Set(['wudao_mcp_token', 'zhitu_token', 'tdx_api_key', 'ths_sdk_password'])
+// P0(走查 2026-10-23 W-2): 集合**以 `src/web/api/settings.py:SECRET_SETTING_KEYS` 为准**,
+// 前端不再自维护。此前只有 4 项 → `ths_password` / `ths_username` 在后端被掩码、在前端
+// 却是明文可编辑; 而 `http_proxy` 后端掩码、前端当普通键, 用户看到 `********` 存不进去。
+// `http_proxy` 已从后端敏感集合移除(代理地址不是凭证), 这里也不列。
+export const SECRET_SETTING_KEYS = new Set([
+  'wudao_mcp_token',
+  'zhitu_token',
+  'tdx_api_key',
+  'ths_sdk_password',
+  'ths_password',
+  'ths_username',
+])
 export const SECRET_MASK = '********'
 
 // 数据源接口 Key 元信息(与后端 SETTING_DESCRIPTIONS 对齐)
+// 走查 W-1: 后端有 ths_* 键、报错文案也让用户来设置页填, 但这里没有入口 ——
+// 补齐两行, 否则这两个键被 SECRET_SETTING_KEYS 过滤出"系统设置"区后彻底无处可改。
 export const DATA_SOURCE_KEYS: Array<{ key: string; name: string; desc: string }> = [
   { key: 'wudao_mcp_token', name: '悟道', desc: '竞价 / 题材数据源' },
   { key: 'zhitu_token', name: '智兔', desc: '分红 / 股东数据源 · 200次/天' },
   { key: 'tdx_api_key', name: '通达信', desc: '问小达 MCP · 自然语言投研 / 选股' },
+  { key: 'ths_username', name: '同花顺SDK账号', desc: '正式账户 · 留空则读 env THS_USERNAME' },
+  { key: 'ths_sdk_password', name: '同花顺SDK密码', desc: '留空则读 env THS_PASSWORD' },
 ]
 
 export const STOCK_LINK_OPTIONS: Record<string, string> = { xueqiu: '雪球' }

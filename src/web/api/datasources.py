@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
+from src.web.api.settings import SECRET_MASK, is_mask_placeholder
 from src.web.database import get_db
 from src.web.models import DataSource
 
@@ -104,8 +105,101 @@ def _is_orphan(type_: str, provider: str) -> bool:
     return provider not in legal
 
 
+# 2026-10-23 P0(走查 3.7): config 里的凭证类子键, 出站一律脱敏。
+# 覆盖 tushare.token / xueqiu.cookies 以及多 Key 池(api_keys)。
+SECRET_CONFIG_KEYS = frozenset({
+    "token",
+    "api_key",
+    "apikey",
+    "api_keys",
+    "access_token",
+    "refresh_token",
+    "app_token",
+    "user_key",
+    "secret",
+    "secret_key",
+    "cookies",
+    "cookie",
+    "password",
+    "passwd",
+})
+
+
+def _has_secret_value(value) -> bool:
+    """该凭证字段是否真的配了值(dict/list 递归看是否任一非空)。"""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(_has_secret_value(v) for v in value)
+    if isinstance(value, dict):
+        return any(_has_secret_value(v) for v in value.values())
+    return bool(value)
+
+
+def _mask_secret_value(value):
+    """把凭证值替换为 SECRET_MASK, 尽量保留原容器形状(列表条数/dict 键)。"""
+    if isinstance(value, list):
+        return [SECRET_MASK if _has_secret_value(v) else v for v in value]
+    if isinstance(value, dict):
+        return {k: (SECRET_MASK if _has_secret_value(v) else v) for k, v in value.items()}
+    return SECRET_MASK
+
+
+def _mask_config(config: dict | None) -> tuple[dict, dict]:
+    """返回 (脱敏后的 config, {"has_<key>": bool})。
+
+    - 凭证子键: 非空 → SECRET_MASK(列表逐项掩码, 条数不变, key_count 仍准确)
+    - 其余字段原样保留(前端要用 base_url / timeout 等回填表单)
+    - has_<key>: 前端据此显示"已配置", 不必解析被掩码的值
+    """
+    cfg = dict(config or {})
+    flags: dict[str, bool] = {}
+    for key in list(cfg.keys()):
+        if key not in SECRET_CONFIG_KEYS:
+            continue
+        configured = _has_secret_value(cfg[key])
+        flags[f"has_{key}"] = configured
+        if configured:
+            cfg[key] = _mask_secret_value(cfg[key])
+    return cfg, flags
+
+
+def _is_unchanged_secret(value) -> bool:
+    """PUT 传回的凭证值是否只是"未修改"(空 / 掩码占位 / 全是掩码的列表)。"""
+    if isinstance(value, str):
+        return not value.strip() or is_mask_placeholder(value)
+    if isinstance(value, (list, tuple)):
+        items = [v for v in value if isinstance(v, str)]
+        return bool(items) and all((not v.strip()) or is_mask_placeholder(v) for v in items)
+    return value in (None, "", [], {})
+
+
+def _merge_secret_config(old: dict | None, new: dict | None) -> dict:
+    """PUT config 的掩码回填守卫。
+
+    GET 已把凭证掩码成 ********, 前端表单(DOM 里的 input value)会把它原样提交回来;
+    若不拦截, "只改个优先级顺手保存"就会用字面星号覆盖真 token —— 与设置页
+    W-3 同一类事故。规则:
+      - 凭证子键收到掩码占位/空值  → 视为未修改, 沿用旧值
+      - 凭证子键在新 config 中整体缺失 → 也沿用旧值(前端没渲染该字段时不能连带清掉)
+      - 非凭证子键 → 按提交值整体替换(保持原有语义)
+    """
+    old_cfg = old or {}
+    merged = dict(new or {})
+    for key in SECRET_CONFIG_KEYS & set(old_cfg):
+        if key not in merged or _is_unchanged_secret(merged[key]):
+            merged[key] = old_cfg[key]
+    return merged
+
+
 def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
-    """转换为响应格式。health_map: {provider: 指标快照};缺失则 health=None。"""
+    """转换为响应格式。health_map: {provider: 指标快照};缺失则 health=None。
+
+    P0(走查 2026-10-23 3.7): config 里的凭证子键**出站前脱敏**。原实现
+    ``"config": source.config or {}`` 把 tushare token / 雪球 cookies 明文送进
+    浏览器(DOM value + DevTools 可读), 与设置页的掩码策略是两套标准。
+    同时给出 ``has_<key>`` 布尔, 前端用它显示"已配置", 不必读被掩码的值。
+    """
     health = (health_map or {}).get(source.provider)
     raw_keys = (source.config or {}).get("api_keys", [])
     if isinstance(raw_keys, str):
@@ -114,6 +208,7 @@ def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
         key_count = sum(1 for key in raw_keys if isinstance(key, str) and key.strip())
     else:
         key_count = 0
+    masked_config, secret_flags = _mask_config(source.config)
     return {
         "id": source.id,
         "name": source.name,
@@ -121,7 +216,7 @@ def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
         "type_label": TYPE_LABELS.get(source.type, source.type),
         "provider": source.provider,
         "key_count": key_count,
-        "config": source.config or {},
+        "config": masked_config,
         "enabled": source.enabled,
         "priority": source.priority,
         "supports_batch": source.supports_batch or False,
@@ -129,6 +224,7 @@ def _to_response(source: DataSource, health_map: dict | None = None) -> dict:
         "engine_attached": source.type in _ENGINE_ATTACHED_TYPES,
         "health": health,
         "is_orphan": _is_orphan(source.type, source.provider),
+        **secret_flags,
     }
 
 
@@ -355,7 +451,11 @@ def update_datasource(
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
 
-    for key, value in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    # P0(走查 3.7): config 里的凭证子键收到掩码回填时按"未修改"处理, 防星号覆盖真 token
+    if payload.get("config") is not None:
+        payload["config"] = _merge_secret_config(source.config, payload["config"])
+    for key, value in payload.items():
         setattr(source, key, value)
 
     db.commit()
