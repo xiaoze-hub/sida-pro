@@ -1,5 +1,12 @@
 ## 2026-10-24
 
+### feat-连板晋级树页面(创新 1 前端消费)
+
+- **改了什么**：新建页面 `frontend/src/pages/ReplayTree.tsx`（`/replay-tree`）与组件 `frontend/src/components/ReplayPromotionTree.tsx`（首板→最高板横向梯队列 + 成员明细），API 客户端 `frontend/packages/api/src/marketReplay.ts`（导出于 `packages/api/src/index.ts`）；路由/导航接入 `frontend/src/App.tsx`（navItems + 「机会」组 + PermGuard `view_quotes`）、`frontend/src/components/WorkspaceTabs.tsx`、`frontend/src/lib/tab-shell.ts`；i18n 双语同步 `frontend/src/locales/zh-CN.ts` / `en-US.ts`。
+- **为什么**：`market_replay_daily` 已由本次新增的 `/api/market/replay/*` 端点暴露，但此前全站没有页面消费盘后三池与梯队数据——这是交接备注 §10 的 P0 首要任务「创新 1 连板梯队晋级树」的可视化落点。挂载位置按走查设计稿 07 号文档的复盘域范式（独立页 + WarReport 式页头/hairline 语言）落在「机会」组。
+- **口径守线**：去卡片化（hairline 分隔、无 Card、无新增 shadow）；晋级率三件套（样本 n + 同池基准「表内未存(口径缺口)」+ 未剔除一字板）随数显示；东财三池 `eastmoney_zt` 与 TQ `tq_pool` 交叉校验各自带标签并写明差值=北交所；封单额/流通市值比、分层晋级率显式「无数据/口径缺口」不现算；缺落库日渲染「未落库 + --」绝不补 0；买红卖绿（涨停/晋级红、炸板/跌停绿）、情绪周期用中性阶段色不占红绿；字号 10/11/12/13/16、数字 tabular-nums、金额走 `toAmountFromWanUnsigned`；新文件全 LF、Surface 阶梯 `bg-s2` 不增 accent_alpha。
+- **测了什么**：`frontend/tests/components/replay-tree.test.tsx` 12 用例（梯队列升序与成员明细/三件套/双口径/截断标注/缺日不补 0/点行切日期/无快照降级/payload 缺失显式无数据/组件乱序自排序）；`npx tsc --noEmit` 通过；`node scripts/check_ui_rules.mjs` 相对基线零新增违规（基线预存 2 处 Forecast.tsx 违规属第 2 波在改文件，未触碰）；导航钉子 `tests/lib/nav-ia.test.ts` + `tests/lib/tab-shell.test.ts` 48 用例全绿。
+
 ### feat-盘后复盘三池序列与晋级树只读端点
 
 - **改了什么**：新建 `src/web/api/market_replay.py`（`GET /api/market/replay/series` 近 N 交易日/`from`-`to` 区间三池标量序列 + `GET /api/market/replay/tree` 单日连板梯队晋级树），在 `src/web/app.py` 以 `data_read` 双轨（用户 JWT / 服务 token，行情类纯读数据口径，同 `/api/quotes`）挂载于 `/api/market/replay` 前缀。
