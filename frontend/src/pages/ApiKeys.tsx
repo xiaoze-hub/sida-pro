@@ -80,6 +80,8 @@ export default function ApiKeysPage() {
   const [creating, setCreating] = useState(false)
   const [resettingId, setResettingId] = useState<number | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  // 备注名: 多 Key 场景靠它区分用途(本地 Hermes / 量化脚本 / 回测…), 留空由后端默认用户名
+  const [ownerLabel, setOwnerLabel] = useState('')
 
   const { data: keys, isLoading: keysLoading, isError: keysError, refetch } = useApiQuery<MyApiKey[]>(['my-api-keys'], '/keys/my')
   const keyList = useMemo((): MyApiKey[] => {
@@ -97,8 +99,12 @@ export default function ApiKeysPage() {
   const createKey = async () => {
     setCreating(true)
     try {
-      const r = await fetchAPI<CreateKeyResp>('/keys/my', { method: 'POST', body: JSON.stringify({}) })
+      const r = await fetchAPI<CreateKeyResp>('/keys/my', {
+        method: 'POST',
+        body: JSON.stringify({ owner_label: ownerLabel.trim() }),
+      })
       setPlaintext(r.api_key)
+      setOwnerLabel('')
       toast('Key 已创建，请立即复制保存', 'success')
       void refetch()
     } catch (e: any) {
@@ -124,7 +130,7 @@ export default function ApiKeysPage() {
   }
 
   const deleteKey = async (id: number) => {
-    if (!confirm('删除后该 Key 立即失效，确定删除？')) return
+    if (!confirm('删除后该 Key 立即失效，用量记录保留。确定删除？')) return
     setDeletingId(id)
     try {
       await fetchAPI(`/keys/my/${id}`, { method: 'DELETE' })
@@ -200,6 +206,20 @@ export default function ApiKeysPage() {
         description="每个 Key 独立计量，可随时重置或删除"
         icon={<KeyRound className="h-4 w-4" />}
       >
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            value={ownerLabel}
+            onChange={e => setOwnerLabel(e.target.value)}
+            maxLength={64}
+            aria-label="备注名"
+            placeholder="备注名（如：本地 Hermes / 量化脚本）"
+            className="h-8 w-full min-w-0 rounded-lg border border-border/60 bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none sm:max-w-xs"
+          />
+          <Button size="sm" className="h-8 shrink-0" onClick={createKey} disabled={creating}>
+            {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} 创建 Key
+          </Button>
+          <span className="text-[11px] text-muted-foreground dark:text-slate-500">留空则使用用户名作为备注名</span>
+        </div>
         {keysLoading ? (
           <SkeletonTable rows={3} />
         ) : keysError ? (
@@ -229,6 +249,9 @@ export default function ApiKeysPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <code className="font-mono text-[13px] text-primary dark:text-cyan-300">{k.key_prefix}...</code>
+                      {k.owner_label && (
+                        <span className="max-w-[180px] truncate text-[12px] text-foreground dark:text-slate-200" title={k.owner_label}>{k.owner_label}</span>
+                      )}
                       <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TIER_COLOR[k.tier] || TIER_COLOR.free}`}>
                         {TIER_LABEL[k.tier] || k.tier}
                       </span>
