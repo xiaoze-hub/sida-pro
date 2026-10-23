@@ -1,3 +1,18 @@
+## 2026-10-24
+
+### feat-四档资金结构消费后端(exday_daily 日序列 API)（2026-10-24）
+
+**背景**: 交接备注 §7 点名的「最容易出成果」任务 —— `exday_daily` 表(Migration 220, v0.47.0 落库)此前**全仓无任何 API/页面消费**。表存通达信 TQ `get_exday_data` 四档结构(口径 tdx_exday4, 按单笔成交金额分档), 每交易日 15:45 落库累积, **2026-10-23 起才有数据且历史无法回填**(接口只返当日 1 行)。
+
+**改动(分支 `feat/exday-fund-structure-20261024`, 独立 worktree)**
+- **`src/core/exday_structure.py` 新增 `query_series()`**(src/core 层, 不 import src/web): 读 `exday_daily` 该标的日期序列, 字段按表结构原样出; 缺日期**不补 0**(items 只含实际落库行); start/end(YYYYMMDD/YYYY-MM-DD 均收)闭区间过滤 + limit 截最近 N 行反转升序; 附 `data_since`(全表累积起点)、`direction_semantics`、`tier_thresholds_hint`。表未建/库断 → `available=false` 显式降级, **吞异常前先 `safe_rollback(db)`**(PG aborted 事务防线)。
+- **`src/web/api/fund_structure.py`(新)**: `GET /api/market/fund-structure/{symbol}?market=&start=&end=&limit=30&refresh=0`。响应强制携带 `caliber: "tdx_exday4"` + `direction_semantics`(AGENTS.md 口径红线: 与逐笔/东财四档不可换算, 禁用于主力意图判定); 缓存走 biz_cache(L1+L2, key 前缀 `biz:`, TTL 300s), **只缓存成功结果**(失败不缓存, 恢复后下一请求立即可见), `refresh=1` 绕过。
+- **`src/web/app.py`**: 挂载于 `/api/market` 前缀, `dependencies=protected`(跟随 price_distribution/cancel_profile 同类行情端点鉴权)。
+- **`specs/api/fund_structure.md`(新)**: EXDAY-001~005 验收标准(口径标签/缺日期不补 0/稀疏标注/显式无数据/前端单日不画趋势), `trace_specs.py` 100%(27 条标准 51 用例)。
+- **`tests/test_fund_structure_api.py`(新)**: 13 用例(临时 SQLite, 不打 TQ 网关), 全部 @spec 标注。
+
+**验证**: `pytest tests/test_fund_structure_api.py tests/test_exday_structure.py -q` → 31 passed; `scripts/trace_specs.py` → 27/27 100%。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。
