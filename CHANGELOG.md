@@ -1,3 +1,12 @@
+## 2026-10-24
+
+### feat-盘后复盘三池序列与晋级树只读端点
+
+- **改了什么**：新建 `src/web/api/market_replay.py`（`GET /api/market/replay/series` 近 N 交易日/`from`-`to` 区间三池标量序列 + `GET /api/market/replay/tree` 单日连板梯队晋级树），在 `src/web/app.py` 以 `data_read` 双轨（用户 JWT / 服务 token，行情类纯读数据口径，同 `/api/quotes`）挂载于 `/api/market/replay` 前缀。
+- **为什么**：`market_replay_daily`（Migration 222，交易日 15:50 东财三池落库）自 v0.48 起只有参谋工具 `get_market_replay` 消费，没有任何 REST 端点与页面——创新 1「连板梯队晋级树」（交接备注 §10 P0）的数据底座已就绪但不可达。端点只读已落库快照，不在请求路径重抓东财。
+- **口径守线**：缺数据交易日显式 `available=false`（数值全 null，绝不补 0）；晋级率三件套（样本数=昨涨停池家数 / 同池无条件基准表内未存→显式口径缺口 / 未剔除 T+1 一字涨停→显式标注）；东财三池 `eastmoney_zt` 与 TQ `tq_pool` 同屏各自带标签禁止混算；封单额/流通市值比与分层晋级率表内未存→显式 null + 口径缺口说明，禁止现算编造。
+- **测了什么**：`tests/test_market_replay_api.py` 13 用例（缺日占位不补 0 / 相邻交易日才差分 / 晋级率三件套 / 双口径标签 / Top40 截断标注 / payload 缺失不反推 / 无快照 available=false+latest_date）；规格新增 `REPTREE-001..006`（`specs/harness/replay_tree.md`）；`python scripts/trace_specs.py` 28/28 = 100%（51 用例）。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。
