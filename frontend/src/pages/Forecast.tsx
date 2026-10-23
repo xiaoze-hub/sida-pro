@@ -244,13 +244,13 @@ export function WeightTransparency({
         <span key={r.key} className="flex items-center gap-x-1.5">
           {i > 0 && <span>·</span>}
           <span className="font-num font-medium tabular-nums text-foreground/80">
-            {r.label} {r.pct.toFixed(1)}%
+            {r.label} {safeFixed(r.pct, 1)}%
           </span>
         </span>
       ))}
       <span className="opacity-70">
         (已返回 {weightRows.length} 支 · 合计{' '}
-        <span className="font-num tabular-nums">{weightSum.toFixed(1)}%</span> · {sourceText})
+        <span className="font-num tabular-nums">{safeFixed(weightSum, 1)}%</span> · {sourceText})
       </span>
     </div>
   )
@@ -779,7 +779,7 @@ export default function ForecastPage({ initialSymbol }: { initialSymbol?: string
   const outcomeSummaryTitle =
     outcomeSummary.judged > 0
       ? `已判定 ${outcomeSummary.judged} 条: 命中 ${outcomeSummary.hit} / 未命中 ${outcomeSummary.miss}` +
-        `（${outcomeSummary.hitRatePct!.toFixed(0)}%）; 无数据 ${outcomeSummary.noData} 条、待验证 ` +
+        `（${safeFixed(outcomeSummary.hitRatePct, 0)}%）; 无数据 ${outcomeSummary.noData} 条、待验证 ` +
         `${outcomeSummary.pending} 条不计入分母`
       : `暂无已判定记录; 无数据 ${outcomeSummary.noData} 条、待验证 ${outcomeSummary.pending} 条不计入分母`
   const renderOutcome = (h: ForecastHistoryItem) => <OutcomeBadge item={h} />

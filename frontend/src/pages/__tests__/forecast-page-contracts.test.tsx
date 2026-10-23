@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { safeFixed } from '@/lib/format'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -115,7 +116,7 @@ describe('buildWeightRows: 只认真实返回值, 无硬编码兜底', () => {
     })
     expect(rows.map(r => r.label)).toEqual(['Kronos', 'Chronos', 'XGB', '线性回归', 'TimesFM'])
     // 0.1103 → 11.03% → toFixed(1) = '11.0'(Math.round 会得到 11)
-    expect(rows.find(r => r.key === 'linreg')!.pct.toFixed(1)).toBe('11.0')
+    expect(safeFixed(rows.find(r => r.key === 'linreg')!.pct, 1)).toBe('11.0')
     const sum = rows.reduce((a, r) => a + r.pct, 0)
     expect(sum).toBeCloseTo(100, 6)
   })
