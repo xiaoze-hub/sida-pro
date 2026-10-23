@@ -96,21 +96,66 @@ def get_verification_secrets() -> list[str]:
     return secrets_list
 
 
-def create_token(user: User, expires_hours: int = JWT_EXPIRE_HOURS) -> tuple[str, datetime]:
-    """创建 JWT token, 含 user_id + role + ver(踢人用)。始终用当前 secret 签发。"""
+class TokenResult(tuple):
+    """`(token, expires_at)` 二元组, 额外携带 `jti` / `payload`。
+
+    2026-10-23 P0(设备限制失效): 会话表此前用 `token[:32]` 当 session_id ——
+    JWT 头部恒为 `{"alg":"HS256","typ":"JWT"}`, 前 32 字符全平台完全相同,
+    所有用户所有设备覆写同一行, `enforce_device_limit` 永远看不到多行。
+    现以 payload 的 `jti`(每次签发唯一)作 session_id。
+
+    继承 tuple 是为保持既有 `token, expires_at = create_token(user)` 调用不破
+    (仓库大量测试/调用点这么解包), 同时允许 `create_token(user).jti` 取值。
+    """
+
+    # 不声明 __slots__: tuple 子类因此获得 __dict__, 才能挂 jti/token 属性。
+    token: str
+    expires_at: datetime
+    jti: str
+    payload: dict
+
+    def __new__(cls, token: str, expires_at: datetime, jti: str, payload: dict) -> "TokenResult":
+        obj = super().__new__(cls, (token, expires_at))
+        obj.token = token
+        obj.expires_at = expires_at
+        obj.jti = jti
+        obj.payload = payload
+        return obj
+
+
+def create_token(user: User, expires_hours: int = JWT_EXPIRE_HOURS) -> TokenResult:
+    """创建 JWT token, 含 user_id + role + ver(踢人用)。始终用当前 secret 签发。
+
+    返回 `TokenResult`: 可解包为 `(token, expires_at)`, 也可直接取 `.jti` /
+    `.payload`(设备会话表用 jti 作唯一 session_id)。
+    """
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=expires_hours)
+    jti = secrets.token_hex(16)
     payload = {
         "exp": expires_at,
         "iat": now,
         "sub": user.id,
         "username": user.username,
         "role": user.role,
-        "jti": secrets.token_hex(16),
+        "jti": jti,
         "ver": user.token_version,
     }
     token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
-    return token, expires_at
+    return TokenResult(token, expires_at, jti, payload)
+
+
+def session_id_from_payload(payload: dict | None) -> str | None:
+    """从 JWT payload 取会话 id(jti)。缺失/空 → None(老 token 无 jti)。
+
+    调用方必须把 None 当「无法判定」处理(fail-open), 不得因此拒绝请求。
+    """
+    if not payload:
+        return None
+    jti = payload.get("jti")
+    if not jti:
+        return None
+    return str(jti)
 
 
 def decode_token(token: str) -> dict | None:

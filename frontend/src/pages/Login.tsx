@@ -11,7 +11,7 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 // 邮箱注册(2026-09-16): 前端格式校验(与后端 EMAIL_RE 同口径)
 const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/
 
-type AuthMode = 'password' | 'register' | 'email-code'
+type AuthMode = 'password' | 'register' | 'email-code' | 'reset'
 
 const CODE_RE = /^\d{6}$/
 
@@ -41,6 +41,8 @@ export default function LoginPage() {
   const [registerMode, setRegisterMode] = useState<'invite' | 'open' | 'closed'>('invite')
   const [inviteCode, setInviteCode] = useState('')
   const [emailReady, setEmailReady] = useState(true)
+  // 注册自动签发的 API Key 明文(仅此一次): 后端建 key 失败时为 null, 静默不弹
+  const [issuedApiKey, setIssuedApiKey] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -102,8 +104,12 @@ export default function LoginPage() {
     if (countdown > 0 || sending) return
     setSending(true)
     try {
-      const purpose = mode === 'register' ? 'register' : 'login'
-      await authApi.sendCode(em, purpose)
+      const purpose = mode === 'register' ? 'register' : mode === 'reset' ? 'reset' : 'login'
+      // purpose 含 reset(公共包 authApi.sendCode 的类型尚未扩展, 这里走底层 fetchAPI)
+      await fetchAPI<{ sent: boolean }>('/auth/send-code', {
+        method: 'POST',
+        body: JSON.stringify({ email: em, purpose }),
+      })
       startCountdown()
       toast('验证码已发送, 请注意查收', 'success')
     } catch (e) {
@@ -134,6 +140,47 @@ export default function LoginPage() {
         navigate('/')
       } catch (err) {
         toast(err instanceof Error ? err.message : '登录失败', 'error')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    if (mode === 'reset') {
+      // 忘记密码(2026-10-23): 邮箱验证码重置。成功后不自动登录, 切回密码登录。
+      const em = email.trim()
+      if (!EMAIL_RE.test(em)) {
+        toast('请输入有效的邮箱地址', 'error')
+        return
+      }
+      if (!CODE_RE.test(code.trim())) {
+        toast('请输入 6 位数字验证码', 'error')
+        return
+      }
+      if (password.length < 8) {
+        toast('新密码长度至少 8 位', 'error')
+        return
+      }
+      if (password !== confirmPassword) {
+        toast('两次密码不一致', 'error')
+        return
+      }
+      setLoading(true)
+      try {
+        // 未登录用户没有 csrf_token Cookie(只在登录/注册后下发) → 先引导取一枚,
+        // 否则双提交中间件会把本请求 403「CSRF token 缺失」。
+        const { csrf_token } = await fetchAPI<{ csrf_token: string }>('/auth/csrf')
+        await fetchAPI<{ message: string }>('/auth/reset-password-by-email', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': csrf_token },
+          body: JSON.stringify({ email: em, code: code.trim(), new_password: password }),
+        })
+        toast('密码已重置, 请用新密码登录', 'success')
+        setPassword('')
+        setConfirmPassword('')
+        switchMode('password')
+      } catch (err) {
+        toast(err instanceof Error ? err.message : '重置失败', 'error')
       } finally {
         setLoading(false)
       }
@@ -196,7 +243,14 @@ export default function LoginPage() {
         // 注册(member 账号); 失败时 fetchAPI 抛出后端 message
         // username 可选: 不传则后端用邮箱前缀生成
         const uname = username.trim()
-        const reg = await fetchAPI<{ message?: string; api_key?: string | null; username?: string }>('/auth/register', {
+        const reg = await fetchAPI<{
+          message?: string
+          api_key?: string | null
+          username?: string
+          token?: string
+          expires_at?: string
+          user?: AuthTokenPayload['user']
+        }>('/auth/register', {
           method: 'POST',
           body: JSON.stringify({
             email: email.trim(),
@@ -207,9 +261,21 @@ export default function LoginPage() {
             ...(uname ? { username: uname } : {}),
           }),
         })
-        // 注册成功后自动登录并跳转首页(用后端回传的实际用户名, 兼容自动生成场景)
-        const loginName = reg.username || uname || email.trim()
-        await doLogin(loginName, password)
+        // 2026-10-23: 注册响应本身就带 token/expires_at(后端已签发并下发 Cookie),
+        // 旧代码丢弃它再调 doLogin → 第二次 scrypt 校验(~120ms) + 第二条 login 审计。
+        // 直接用注册返回的凭证落本地, 不再重复登录。
+        if (!reg.token || !reg.expires_at) {
+          throw new Error('注册成功但未返回登录凭证, 请用密码登录')
+        }
+        saveToken({ token: reg.token, expires_at: reg.expires_at, user: reg.user })
+
+        if (reg.api_key) {
+          // 自动签发的 API Key 明文只回这一次 —— 弹一次性提示层, 用户确认后再跳转
+          setIssuedApiKey(reg.api_key)
+          toast('注册成功', 'success')
+          return
+        }
+        // 后端建 key 失败时 api_key 为 null: 静默, 不阻断注册
         toast('注册成功, 已自动登录', 'success')
         navigate('/')
         return
@@ -223,6 +289,21 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const copyIssuedKey = async () => {
+    if (!issuedApiKey) return
+    try {
+      await navigator.clipboard.writeText(issuedApiKey)
+      toast('已复制到剪贴板', 'success')
+    } catch {
+      toast('复制失败, 请手动选中复制', 'error')
+    }
+  }
+
+  const dismissIssuedKey = () => {
+    setIssuedApiKey(null)
+    navigate('/')
   }
 
   const switchMode = (next: AuthMode) => {
@@ -245,12 +326,14 @@ export default function LoginPage() {
 
   const isRegister = mode === 'register'
   const isEmailCode = mode === 'email-code'
+  const isReset = mode === 'reset'
   // 注册关闭(closed)时不给"注册"入口 —— 点了也只会被 403, 不如不显示
   const showModeTabs = !isSetup
   const modeTabs = [
     { key: 'password' as AuthMode, label: '密码登录' },
     ...(registerMode === 'closed' ? [] : [{ key: 'register' as AuthMode, label: '注册' }]),
     { key: 'email-code' as AuthMode, label: '验证码登录' },
+    { key: 'reset' as AuthMode, label: '忘记密码' },
   ]
 
   return (
@@ -270,7 +353,7 @@ export default function LoginPage() {
           <div className="flex items-center gap-2 mb-4">
             <Lock className="w-5 h-5 text-primary" />
             <h2 className="text-[16px] font-semibold">
-              {isRegister ? '注册账号' : isEmailCode ? '验证码登录' : isSetup ? '设置访问密码' : '登录'}
+              {isRegister ? '注册账号' : isEmailCode ? '验证码登录' : isReset ? '重置密码' : isSetup ? '设置访问密码' : '登录'}
             </h2>
           </div>
 
@@ -323,7 +406,7 @@ export default function LoginPage() {
                 </p>
               </div>
             )}
-            {(isRegister || isEmailCode) && (
+            {(isRegister || isEmailCode || isReset) && (
               <div>
                 <Label>邮箱</Label>
                 <div className="relative">
@@ -342,14 +425,14 @@ export default function LoginPage() {
             )}
 
             {/* 邮件服务未配置: 这条路径发不出验证码 —— 直说, 别让用户白填一遍 */}
-            {!emailReady && (isRegister || isEmailCode) && (
+            {!emailReady && (isRegister || isEmailCode || isReset) && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px] leading-relaxed">
                 邮件服务暂未开通，验证码发不出去。请把邮箱发给管理员手工开通账号，
                 或改用「密码登录」。
               </div>
             )}
 
-            {(isRegister || isEmailCode) && (
+            {(isRegister || isEmailCode || isReset) && (
               <div>
                 <Label>验证码</Label>
                 <div className="flex gap-2">
@@ -384,7 +467,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            {!isEmailCode && (
+            {!isEmailCode && !isReset && (
               <div>
                 <Label>
                   {isRegister ? '用户名(可选)' : '用户名'}
@@ -406,16 +489,16 @@ export default function LoginPage() {
 
             {!isEmailCode && (
               <div>
-                <Label>密码</Label>
+                <Label>{isReset ? '新密码' : '密码'}</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    placeholder={isRegister || isSetup ? '至少 8 位' : '请输入密码'}
+                    placeholder={isRegister || isSetup || isReset ? '至少 8 位' : '请输入密码'}
                     className="pl-10 pr-10"
-                    autoComplete={isRegister || isSetup ? 'new-password' : 'current-password'}
+                    autoComplete={isRegister || isSetup || isReset ? 'new-password' : 'current-password'}
                   />
                   <Button
                     type="button"
@@ -430,7 +513,20 @@ export default function LoginPage() {
               </div>
             )}
 
-            {(isRegister || isSetup) && !isEmailCode && (
+            {/* 忘记密码入口(2026-10-23): 密码登录表单下方一行文字链接 */}
+            {!isRegister && !isEmailCode && !isReset && !isSetup && (
+              <div className="-mt-1 text-right">
+                <button
+                  type="button"
+                  className="text-[11px] text-primary transition-colors hover:underline"
+                  onClick={() => switchMode('reset')}
+                >
+                  忘记密码？
+                </button>
+              </div>
+            )}
+
+            {(isRegister || isSetup || isReset) && !isEmailCode && (
               <div>
                 <Label>确认密码</Label>
                 <Input
@@ -480,6 +576,8 @@ export default function LoginPage() {
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : isRegister ? (
                 '注册'
+              ) : isReset ? (
+                '重置密码'
               ) : isEmailCode ? (
                 '验证码登录'
               ) : isSetup ? (
@@ -502,6 +600,17 @@ export default function LoginPage() {
                     onClick={() => switchMode('password')}
                   >
                     去登录
+                  </button>
+                </span>
+              ) : isReset ? (
+                <span className="text-muted-foreground">
+                  想起密码了？{' '}
+                  <button
+                    type="button"
+                    className="text-primary hover:underline font-medium"
+                    onClick={() => switchMode('password')}
+                  >
+                    返回密码登录
                   </button>
                 </span>
               ) : isEmailCode ? (
@@ -534,6 +643,48 @@ export default function LoginPage() {
         <p className="text-center text-xs text-muted-foreground mt-6">
           AI 驱动的股票数据分析助手 · 分析结果仅供参考，不构成投资建议
         </p>
+
+        {/* 注册自动签发的 API Key: 明文仅此一次, 关掉就再也看不到 */}
+        {issuedApiKey && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="issued-key-title"
+          >
+            <div className="w-full max-w-md rounded-lg border border-border/60 bg-background p-5 shadow-float">
+              <h2 id="issued-key-title" className="text-[16px] font-semibold text-foreground">
+                你的 API Key，仅显示这一次
+              </h2>
+              <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+                关闭后无法再次查看明文。请立即复制并妥善保存。
+              </p>
+              <pre className="mt-3 max-h-32 overflow-auto rounded-md border border-border/40 bg-muted/40 p-3 font-mono text-[12px] text-foreground whitespace-pre-wrap break-all">
+                {issuedApiKey}
+              </pre>
+              <div className="mt-3 flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 flex-1 text-[12px]"
+                  onClick={() => void copyIssuedKey()}
+                >
+                  复制
+                </Button>
+                <Button type="button" className="h-8 flex-1 text-[12px]" onClick={dismissIssuedKey}>
+                  我已保存
+                </Button>
+              </div>
+              <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+                之后可在
+                <Link to="/api-keys" className="mx-0.5 text-primary hover:underline">
+                  我的 API Key
+                </Link>
+                页面查看前缀或重新生成。
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

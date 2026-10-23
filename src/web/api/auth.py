@@ -32,6 +32,7 @@ from src.core.auth_tokens import (  # noqa: F401  (KI-039 第二阶段: 原语�
     decode_token,
     get_jwt_secret,
     principal_from_payload,
+    session_id_from_payload,
 )
 
 router = APIRouter()
@@ -474,6 +475,29 @@ async def get_current_user(
     if user.token_version != int(payload.get("ver", 0)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录已失效, 请重新登录")
 
+    # P0(2026-10-23 设备限制失效): 会话存活校验。此前鉴权完全不查 UserSession,
+    # 即使会话行被删, 旧 JWT 仍能在剩余有效期(12h)内调所有接口 —— 「踢设备」
+    # 只是个写库动作。此处按 jti 精确判定被踢的会话。
+    #
+    # 必须 fail-open: 会话表缺失/查询抛异常/老 token 无 jti 一律放行,
+    # 绝不因为会话表故障导致全站 401(见 session_is_active 的 docstring 与
+    # tests/test_auth_session_devices.py::test_current_user_fail_open_on_db_error)。
+    try:
+        sid = session_id_from_payload(payload)
+        if sid:
+            from src.core.permissions import session_is_active
+
+            if not session_is_active(db, sid, user.id):
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED,
+                    "该设备已下线, 请重新登录",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - fail-open 硬约束
+        logger.warning("[auth] 会话存活校验异常, 放行(fail-open): %r", e)
+
     return user
 
 
@@ -500,6 +524,17 @@ def verify_ws_token_payload(db: Session, payload: dict | None) -> str | None:
             return None
     except (TypeError, ValueError):
         return None
+    # P0(2026-10-23): WS 与 HTTP 同口径 —— 被踢设备的会话不得再连 WS 收通知。
+    # 同样 fail-open(异常/无 jti 放行)。
+    try:
+        sid = session_id_from_payload(payload)
+        if sid:
+            from src.core.permissions import session_is_active
+
+            if not session_is_active(db, sid, user.id):
+                return None
+    except Exception as e:  # noqa: BLE001 - fail-open 硬约束
+        logger.warning("[auth] WS 会话校验异常, 放行(fail-open): %r", e)
     return user.id
 
 
@@ -627,6 +662,21 @@ async def auth_status(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/csrf")
+async def csrf_bootstrap(response: Response):
+    """登录前获取 CSRF 双提交 token(2026-10-23)。
+
+    背景: 双提交 CSRF 中间件要求写请求带 `X-CSRF-Token` 且与 HttpOnly
+    `csrf_token` Cookie 一致, 但 cookie 只在登录/注册成功后才下发 ——
+    于是「忘记密码」这类**无凭证**写操作对真实用户恒 403。此处提供引导端点:
+    GET 属安全方法, 只下发随机 token(+ 同名 Cookie), 无任何状态变更。
+    """
+    from src.web.middleware import issue_csrf_token
+
+    csrf_token = issue_csrf_token(response, max_age_seconds=JWT_EXPIRE_HOURS * 3600)
+    return {"csrf_token": csrf_token}
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """登录(多用户)。带暴力破解限速: 同 IP+用户名 5 次失败锁 10 分钟。
@@ -663,11 +713,17 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
         logger.warning("[auth] 透明哈希升级失败 (不阻断登录): %s", e)
 
     success(ip, data.username.strip())
-    token, expires_at = create_token(user)
+    tok = create_token(user)
+    token, expires_at = tok
 
-    # 设备限制(2026-09-15): 同账号同时在线 ≤2, 超了踢最早
+    # 设备限制(2026-09-15, P0 修复 2026-10-23): 同账号同时在线 ≤2, 超了踢最早。
+    # session_id 用 JWT 的 jti —— 旧代码用 token[:32], 而 JWT 头部恒定
+    # ({"alg":"HS256","typ":"JWT"} 的 Base64), 全平台同值, 会话表永远只有一行。
     from src.core.permissions import record_session
-    record_session(db, user, session_id=token[:32], expires_at=expires_at)
+    record_session(
+        db, user, session_id=tok.jti, expires_at=expires_at,
+        ip=ip, user_agent=request.headers.get("user-agent", ""),
+    )
 
     # 操作审计: 登录成功
     # 修复 2026-08-21: audit.py 已用独立 session + best-effort,不再需要这里吞错
@@ -834,7 +890,11 @@ async def register(data: RegisterRequest, request: Request, response: Response, 
     token, expires_at = create_token(user)
     try:
         from src.core.permissions import record_session
-        record_session(db, user, session_id=token[:32], expires_at=expires_at)
+        record_session(
+            db, user, session_id=token.jti, expires_at=expires_at,
+            ip=(request.client.host if request.client else ""),
+            user_agent=request.headers.get("user-agent", ""),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("[auth] 注册后 record_session 失败(不阻断): %s", e)
     set_auth_cookie(response, request, token)
@@ -886,6 +946,167 @@ async def logout(
     except Exception:  # noqa: BLE001
         pass
     return {"message": "已登出"}
+
+
+# ── 在线设备管理(2026-10-23) ──────────────────────────────────────────
+# 设备上限的「可运维面」: 用户在「安全中心」看到自己在哪些设备上登录,
+# 并可单台下线 / 一键下线其它设备。踢出生效依赖鉴权侧 session_is_active。
+
+_DEVICE_BROWSERS = (
+    ("MicroMessenger", "微信"),
+    ("Edg/", "Edge"),
+    ("OPR/", "Opera"),
+    ("Firefox/", "Firefox"),
+    ("Chrome/", "Chrome"),
+    ("Safari/", "Safari"),
+)
+
+
+def _parse_device_label(user_agent: str | None) -> str:
+    """User-Agent → 「浏览器 · 系统」。解析不出时给「未知设备」, 不显式回 '--'。"""
+    ua = (user_agent or "").strip()
+    if not ua:
+        return "未知设备"
+
+    browser = "未知浏览器"
+    if "curl/" in ua:
+        browser = "curl"
+    elif "python-requests" in ua or "httpx/" in ua:
+        browser = "脚本客户端"
+    else:
+        for needle, label in _DEVICE_BROWSERS:
+            if needle in ua:
+                browser = label
+                break
+
+    if "Windows NT" in ua:
+        os_label = "Windows"
+    elif "iPhone" in ua or "iPad" in ua:
+        os_label = "iOS"
+    elif "Android" in ua:
+        os_label = "Android"
+    elif "Mac OS X" in ua:
+        os_label = "macOS"
+    elif "Linux" in ua:
+        os_label = "Linux"
+    else:
+        os_label = "未知系统"
+
+    return f"{browser} · {os_label}"
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """SQLite 读回的 DateTime 是 naive, 统一按 UTC 解释后返回 aware。"""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _current_session_id(request: Request) -> str | None:
+    """从请求里的 JWT 取当前会话 jti。取不到返回 None(不影响列表, 只是无「当前」标记)。"""
+    try:
+        raw = extract_token_from_request(request, None)
+        if not raw:
+            return None
+        return session_id_from_payload(decode_token(raw))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.get("/sessions")
+async def list_sessions(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """列出当前用户仍有效的在线会话。"""
+    from src.db.models import UserSession
+    from src.core.permissions import effective_max_sessions
+
+    current_sid = _current_session_id(request)
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user.id, UserSession.expires_at > now)
+        .order_by(UserSession.last_seen.desc())
+        .all()
+    )
+
+    sessions = []
+    for row in rows:
+        label = _parse_device_label(row.user_agent)
+        sessions.append({
+            "id": row.session_id,
+            "id_prefix": row.session_id[:8],
+            "device": label,
+            "ip": row.ip or "",
+            "last_seen": (_as_utc(row.last_seen) or now).isoformat(),
+            "expires_at": (_as_utc(row.expires_at) or now).isoformat(),
+            "created_at": (_as_utc(row.created_at) or now).isoformat(),
+            "is_current": bool(current_sid and row.session_id == current_sid),
+        })
+
+    return {"sessions": sessions, "limit": effective_max_sessions(db)}
+
+
+@router.delete("/sessions/{session_id}")
+async def kick_session(
+    session_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """踢掉指定会话(仅限本人)。别人的会话/不存在的会话统一 404, 不泄露存在性。"""
+    from src.db.models import UserSession
+    from src.core.permissions import revoke_session
+
+    row = (
+        db.query(UserSession)
+        .filter(UserSession.session_id == session_id, UserSession.user_id == user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "会话不存在")
+
+    is_current = bool(_current_session_id(request) == session_id)
+    if not revoke_session(db, session_id):
+        raise HTTPException(404, "会话不存在")
+
+    try:
+        from src.web.api.audit import log_audit
+
+        log_audit(db, user, "kick_session", detail=f"下线设备 {session_id[:8]}", ip="")
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "success": True,
+        "message": "该设备已下线",
+        # current=True 表示用户踢的是自己这台, 前端应清本地 token 并回登录页
+        "current": is_current,
+    }
+
+
+@router.post("/sessions/kick-others")
+async def kick_other_sessions(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """下线除当前设备外的所有会话。"""
+    from src.core.permissions import revoke_other_sessions
+
+    current_sid = _current_session_id(request)
+    kicked = revoke_other_sessions(db, user.id, current_sid)
+
+    try:
+        from src.web.api.audit import log_audit
+
+        log_audit(db, user, "kick_other_sessions", detail=f"下线其它设备 {kicked} 台", ip="")
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"success": True, "kicked": kicked, "message": f"已下线 {kicked} 台设备"}
 
 
 @router.post("/change-password")
