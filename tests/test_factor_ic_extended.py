@@ -156,3 +156,176 @@ def test_orthogonalize_insufficient_and_collinear_are_explicit():
         orthogonalize_cross_section([1.0, 2.0], [[1.0, 2.0, 3.0]])
     with pytest.raises(ValueError):
         orthogonalize_cross_section([1.0, 2.0], [])
+
+
+# ──────────────────── Quantile 分层回测（quantile_backtest_core / quantile_backtest） ────────────────────
+
+
+def _strong_factor_samples(
+    dates: int = 6,
+    symbols: int = 30,
+    *,
+    one_word_at: tuple[int, int] | None = None,
+) -> list[dict]:
+    """构造已知强因子横截面：因子值 i 越大，未来收益越高（各 horizon 同向，单位 %）。
+
+    one_word_at=(symbol_idx, date_idx)：把该样本的 T+1 设为一字涨停（untradable=True，
+    前瞻收益 +50% —— 若没被剔除，会显著污染 Top 层均值）。
+    """
+    out: list[dict] = []
+    for d in range(dates):
+        day = f"2026101{d + 1}"
+        for i in range(symbols):
+            is_untradable = one_word_at is not None and (i, d) == one_word_at
+            fwd = (
+                {h: 50.0 for h in (1, 3, 5)}
+                if is_untradable
+                else {h: (i - 15) * 0.2 + 0.5 * h for h in (1, 3, 5)}
+            )
+            out.append({
+                "date": day, "symbol": f"{i:06d}", "value": float(i),
+                "fwd": fwd, "untradable": is_untradable,
+            })
+    return out
+
+
+def test_quantile_backtest_top_beats_bottom_for_strong_factor():
+    """@spec FIC-005 已知强因子：Top 层均值 > Bottom 层均值，多空价差 > 0，胜率同向，基准居中。"""
+    from src.core.factor_ic import quantile_backtest_core
+
+    m = quantile_backtest_core(_strong_factor_samples())
+    assert m["available"] is True
+    assert m["n_dates"] == 6 and m["samples_used"] == 6 * 30
+    for h in (1, 3, 5):
+        blk = m["by_horizon"][h]
+        top, bottom = blk["buckets"][-1], blk["buckets"][0]
+        # 因子值与收益严格正相关 → Top 必须赢 Bottom（分层分不出强弱 = 实现错）
+        assert top["avg_return_pct"] > bottom["avg_return_pct"]
+        assert blk["top_minus_bottom"]["avg_spread_pct"] > 0
+        assert blk["top_minus_bottom"]["median_spread_pct"] > 0
+        assert top["win_rate_pct"] == 100.0
+        assert blk["top_minus_bottom"]["win_rate_diff_pp"] > 0
+        # 同池无条件基准落在两层之间
+        assert bottom["avg_return_pct"] < blk["baseline"]["avg_return_pct"] < top["avg_return_pct"]
+    # 胜率梯度钉死：T+1 时 Bottom 全负；T+5 时 +0.5h 项让 Bottom 恰好一半转正
+    assert m["by_horizon"][1]["buckets"][0]["win_rate_pct"] == 0.0
+    assert m["by_horizon"][5]["buckets"][0]["win_rate_pct"] == 50.0
+    # 数值钉死（h=1）：Bottom=-2.0 / 基准=0.4 / Top=2.8
+    b1 = m["by_horizon"][1]
+    assert abs(b1["buckets"][0]["avg_return_pct"] - (-2.0)) < 1e-6
+    assert abs(b1["baseline"]["avg_return_pct"] - 0.4) < 1e-6
+    assert abs(b1["buckets"][-1]["avg_return_pct"] - 2.8) < 1e-6
+
+
+def test_quantile_backtest_reports_baseline_and_exclusion_marks():
+    """@spec FIC-006 三件套：各层统计 + 同池无条件基准 + 是否剔除一字涨停显式标注（含口径缺口）。"""
+    from src.core.factor_ic import quantile_backtest_core, render_quantile_backtest
+
+    m = quantile_backtest_core(_strong_factor_samples())
+    for h in (1, 3, 5):
+        base = m["by_horizon"][h]["baseline"]
+        assert set(base) >= {"sample_count", "win_rate_pct", "avg_return_pct", "median_return_pct"}
+        assert base["sample_count"] == 6 * 30
+    assert m["exclude_limit_up"] is True
+    assert "一字" in m["exclusion_note"] and "backtest_lab" in m["exclusion_note"]
+
+    text = render_quantile_backtest(m)
+    assert "同池无条件基准" in text and "多空价差" in text and "一字" in text
+
+    # 口径缺口路径：untradable=None → 显式「未剔除」，禁止装作已剔除
+    samples = _strong_factor_samples()
+    for s in samples:
+        s["untradable"] = None
+    m2 = quantile_backtest_core(samples)
+    assert m2["exclude_limit_up"] is False
+    assert "口径缺口" in m2["exclusion_note"] and "未剔除" in m2["exclusion_note"]
+
+
+def test_quantile_backtest_insufficient_reported_explicitly():
+    """@spec FIC-007 交易日 <5 或单日横截面 <20 只 → available=False 直说（延续既有门槛）。"""
+    from src.core.factor_ic import quantile_backtest_core
+
+    m3 = quantile_backtest_core(_strong_factor_samples(dates=3))
+    assert m3["available"] is False
+    assert "交易日" in m3["reason"] and m3["by_horizon"] is None
+
+    # 每天只有 10 只票（< 20）→ 全部日期被剔 → 有效交易日 0
+    m10 = quantile_backtest_core(_strong_factor_samples(dates=6, symbols=10))
+    assert m10["available"] is False
+    assert "交易日" in m10["reason"] and "横截面" in m10["reason"]
+
+
+def test_quantile_backtest_excludes_one_word_limit_up_samples():
+    """@spec FIC-008 T+1 一字涨停样本：计入 untradable_skipped，不进任何分层与基准的分子分母。"""
+    from src.core.backtest_lab import MIN_SAMPLE
+    from src.core.factor_ic import MIN_BUCKET_SAMPLE, quantile_backtest_core
+
+    # 钉住与 backtest_lab 同一套纪律：门槛常量同值
+    assert MIN_BUCKET_SAMPLE == MIN_SAMPLE
+
+    samples = _strong_factor_samples(one_word_at=(29, 0))  # symbol 29 在第 1 天 T+1 一字
+    m = quantile_backtest_core(samples)
+    assert m["untradable_skipped"] == 1
+    assert m["samples_used"] == 6 * 30 - 1
+    top = m["by_horizon"][1]["buckets"][-1]
+    assert top["sample_count"] == 6 * 6 - 1
+    # 该样本前瞻收益 +50%，若混入 Top 层均值会到 (100.8+50)/36 ≈ 4.19；
+    # 剔除后应为 (6×16.8 − 3.3)/35 = 97.5/35 ≈ 2.7857（输出按 backtest_lab 惯例保留 4 位小数）
+    assert top["avg_return_pct"] == round(97.5 / 35, 4)
+    assert top["avg_return_pct"] < 3.0
+    base = m["by_horizon"][1]["baseline"]
+    assert base["sample_count"] == 6 * 30 - 1
+
+
+def test_quantile_backtest_db_path_reuses_factor_table(monkeypatch):
+    """DB 入口复用 compute() 的取数路径（stock_factor_daily × load_qfq_bars），一字剔除同口径生效。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.core.factor_ic import quantile_backtest, render_quantile_backtest
+    from src.db.models import Base, StockFactorDaily
+
+    eng = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(eng, tables=[StockFactorDaily.__table__])
+    db = sessionmaker(bind=eng)()
+
+    factor_days = [f"2026101{d}" for d in range(2, 8)]  # 6 个因子日
+    all_days = factor_days + [f"2026101{d}" for d in range(8, 10)] + ["20261020", "20261021", "20261022"]
+    iso = lambda d: f"{d[:4]}-{d[4:6]}-{d[6:]}"  # noqa: E731
+
+    for d in factor_days:
+        for i in range(25):
+            db.add(StockFactorDaily(symbol=f"{i:06d}", trade_date=d, momentum_20=float(i)))
+    db.commit()
+
+    def fake_bars(sym, market, days=250):
+        i = int(sym)
+        out = []
+        for k, d in enumerate(all_days):
+            c = 10.0 + (i - 12) * 0.05 * (k + 1)
+            if i == 24 and k == 4:  # (symbol 24, 因子日 k=3=20261015) 的 T+1（k=4）→ 一字涨停
+                c = (10.0 + (i - 12) * 0.05 * 4) * 1.06
+                out.append({"date": iso(d), "open": c, "high": c, "low": c, "close": c})
+            else:
+                out.append({
+                    "date": iso(d), "open": c * 1.001, "high": c * 1.005,
+                    "low": c * 0.995, "close": c,
+                })
+        return out
+
+    monkeypatch.setattr("src.db.klines_repo.load_qfq_bars", fake_bars)
+
+    m = quantile_backtest(db, "momentum_20")
+    assert m["available"] is True
+    assert m["n_dates"] == 6 and m["exclude_limit_up"] is True
+    assert m["untradable_skipped"] == 1
+    assert m["samples_used"] == 25 * 6 - 1
+    assert "未使用任何外部调仓数据" in m["data_source"]
+    b1 = m["by_horizon"][1]
+    assert b1["buckets"][-1]["avg_return_pct"] > 0 > b1["buckets"][0]["avg_return_pct"]
+    text = render_quantile_backtest(m)
+    assert "同池无条件基准" in text and "已剔除 T+1 一字涨停" in text
+
+    # 未知因子显式拒绝
+    bad = quantile_backtest(db, "no_such_factor")
+    assert bad["available"] is False and "未知因子" in bad["reason"]

@@ -6,6 +6,13 @@
 - 缺值显式：None/NaN/inf 位置不参与统计、输出逐位保持 None（正交化走 listwise 整行剔除并记 `n_dropped`）；样本不足（去极值 <5 个有效值 / 正交化 <max(10, 2×(对照数+1)) 个有效行）与对照因子完全共线一律 `available=False` 直说不硬算，延续 factor_ic「样本不足就直说、不编数字」哲学。
 - 新增规格 `FIC-001..004`（`specs/core/factor_ic_extended.md`）与守卫测试 `tests/test_factor_ic_extended.py`；规格追溯保持 100%。创新 5「IC 联合选股」后端前置第一步，纯函数、不落库、不动迁移钉子 223 与工具钉子 71。
 
+### feat-Quantile分层回测T+1/3/5同池基准与一字剔除（创新5前置·二）
+
+- `src/core/factor_ic.py` 新增 `quantile_backtest`（DB 入口）+ `quantile_backtest_core`（纯函数核心）+ `render_quantile_backtest`（参谋可读渲染）：横截面按因子值分 N 层（默认 5 层，秩分层对离群不敏感，同分按 symbol 破并列保证确定性），输出各层 T+1/T+3/T+5 前瞻收益均值/中位数/胜率、多空价差（Top−Bottom）与同池无条件基准，延续产品铁律「统计胜率必须同时给三件套」。
+- 口径与 `backtest_lab`（factor_winrate_daily, Mig 221）同源不发明第二套：未来收益=前复权收盘对收盘（%）；一字涨停剔除直接复用 `backtest_lab._is_untradable_next_bar`（open==high==low 且涨幅≥4.8%），门槛常量 `MIN_BUCKET_SAMPLE == backtest_lab.MIN_SAMPLE`（测试钉住）；无法判定一字涨停时输出显式标「口径缺口：未剔除」，禁止编造。
+- 取数复用 `compute()` 既有路径（`stock_factor_daily` × `load_qfq_bars` 前复权日线），不新增网络请求模式；样本不足显式报不足（延续 <20 只票 / <5 个交易日门槛）；纯本地、不落库、不建表（迁移钉子 223 不动）、不加 chat 工具（钉子 71 不动）、不改前端。
+- 新增规格 `FIC-005..008`（`specs/core/factor_ic_extended.md`）与守卫测试；规格追溯保持 100%。
+
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
 **性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。

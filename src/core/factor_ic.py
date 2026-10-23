@@ -13,6 +13,8 @@
 
     - winsorize_cross_section      横截面去极值（MAD 绝对中位差法）
     - orthogonalize_cross_section  截面正交化（OLS 残差，纯 Python 高斯消元）
+    - quantile_backtest(_core)     Quantile 分层回测（T+1/3/5 + 同池无条件基准
+                                   + 剔除 T+1 一字涨停，口径与 backtest_lab 同源）
 
 延续同一设计哲学：**不依赖外部数据、样本不足就直说、不编数字**——
 不引 numpy/scipy，回归与排序全部纯 Python 手写（同 `_ranks` 的风格）。
@@ -414,3 +416,342 @@ def orthogonalize_cross_section(
         "coefficients": {"intercept": beta[0], **{nm: beta[j + 1] for j, nm in enumerate(names)}},
         "r_squared": 1.0 - ss_res / ss_tot,
     }
+
+
+# ═══════════════════ Quantile 分层回测（2026-10-24） ═══════════════════
+
+# 延续 factor_ic.compute 既有门槛：单日横截面 <20 只票 或 有效交易日 <5 个 → 显式报不足。
+MIN_XSEC = 20
+MIN_DATES = 5
+# 分层胜率/均值的最小样本，与 backtest_lab.MIN_SAMPLE 同口径（<20 不给胜率，测试钉住同值）。
+MIN_BUCKET_SAMPLE = 20
+
+
+def _agg_rets(rets: list[float], min_sample: int) -> dict:
+    """聚合一批前瞻收益（%）：与 backtest_lab 同纪律——样本 < min_sample 一律 None，不给伪统计。
+
+    胜率口径与 backtest_lab 完全一致：收盘对收盘收益 > 0 占比。
+    """
+    n = len(rets)
+    if n < min_sample:
+        return {
+            "sample_count": n,
+            "win_rate_pct": None, "avg_return_pct": None, "median_return_pct": None,
+        }
+    wins = sum(1 for r in rets if r > 0)
+    return {
+        "sample_count": n,
+        "win_rate_pct": round(wins / n * 100.0, 2),
+        "avg_return_pct": round(sum(rets) / n, 4),
+        "median_return_pct": round(float(statistics.median(rets)), 4),
+    }
+
+
+def _finite(v: object) -> bool:
+    """显式的有限数值判定：None / 非数值 / NaN / inf 都算缺值，绝不补 0。"""
+    if v is None:
+        return False
+    try:
+        f = float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f)
+
+
+def quantile_backtest_core(
+    samples: Sequence[Mapping[str, object]],
+    *,
+    quantiles: int = 5,
+    horizons: Sequence[int] = (1, 3, 5),
+    min_xsec: int = MIN_XSEC,
+    min_dates: int = MIN_DATES,
+    min_sample: int = MIN_BUCKET_SAMPLE,
+) -> dict:
+    """Quantile 分层回测核心（纯函数，不碰 DB，可脱离数据库单测）。
+
+    Args:
+        samples: 每项 `{"date": str, "symbol": str, "value": float,
+            "fwd": {horizon: 前瞻收益%}, "untradable": bool | None}`。
+            - value 缺值（None/NaN/inf）或 fwd 缺该 horizon 的样本**不进任何分母**
+              （数据缺失显式少算，不补 0、不冒充）；
+            - untradable=True（T+1 一字涨停）的样本按 backtest_lab 口径整体剔除并计数；
+            - untradable=None 表示调用方数据不足以判定一字涨停 → 输出显式标注
+              「口径缺口：未剔除」，绝不装作已剔除。
+        quantiles: 分层数 N（2~10，默认 5）。
+        horizons: 前瞻期（交易日），默认 T+1/T+3/T+5。
+        min_xsec / min_dates / min_sample: 样本门槛（延续 factor_ic 既有口径）。
+
+    Returns:
+        dict：available / reason / quantiles / horizons / dates / n_dates /
+        samples_used / untradable_skipped / exclude_limit_up / exclusion_note /
+        by_horizon[h] = {buckets: [{q, sample_count, win_rate_pct, avg_return_pct,
+        median_return_pct}...], baseline: {...}, top_minus_bottom: {...}}。
+        Q1=Bottom（因子值最低），QN=Top（因子值最高）；方向解读交给读数的人
+        （vol_20 低好、momentum 高好，本函数不做方向裁判）。
+
+    分层规则：每个交易日截面按 (value, symbol) 升序排位，第 i 名进第 i×N//n 层。
+    同分并列按 symbol 破并列保证确定性——这是**秩分层**，对因子值离群不敏感，
+    因此不需要也不应该再叠出去极值。样本不足（有效交易日 < min_dates 或
+    单日截面有效样本 < min_xsec）→ available=False 直说不硬算。
+    """
+    q = int(quantiles)
+    if not (2 <= q <= 10):
+        raise ValueError("quantiles 须在 2..10")
+    hs = sorted({int(h) for h in horizons if int(h) >= 1})
+    if not hs:
+        raise ValueError("horizons 不能为空")
+
+    by_date: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+    for s in samples or []:
+        by_date[str(s["date"])].append(s)
+
+    usable: dict[str, list[Mapping[str, object]]] = {}
+    short_dates = 0
+    for d in sorted(by_date):
+        ok = [s for s in by_date[d] if _finite(s.get("value"))]
+        if len(ok) >= min_xsec:
+            usable[d] = ok
+        else:
+            short_dates += 1
+
+    if len(usable) < min_dates:
+        return {
+            "available": False,
+            "reason": (
+                f"样本不足：有效交易日 {len(usable)} 天 < {min_dates}"
+                f"（另有 {short_dates} 天横截面有效样本 < {min_xsec} 只被剔除），不硬算"
+            ),
+            "quantiles": q, "horizons": hs, "dates": None,
+            "n_dates": len(usable), "short_dates": short_dates,
+            "samples_used": 0, "untradable_skipped": 0,
+            "exclude_limit_up": None, "exclusion_note": None,
+            "min_sample": min_sample, "by_horizon": None,
+        }
+
+    untradable_unknown = False
+    untradable_skipped = 0
+    samples_used = 0
+    bucket_rets: dict[tuple[int, int], list[float]] = defaultdict(list)
+    base_rets: dict[int, list[float]] = defaultdict(list)
+
+    for d in sorted(usable):
+        day = sorted(usable[d], key=lambda s: (float(s["value"]), str(s["symbol"])))
+        n_day = len(day)
+        for i, s in enumerate(day):
+            qidx = i * q // n_day
+            untrad = s.get("untradable")
+            if untrad is None:
+                untradable_unknown = True
+            if untrad:
+                untradable_skipped += 1
+                continue
+            samples_used += 1
+            fwd = s.get("fwd") or {}
+            for h in hs:
+                r = fwd.get(h)
+                if not _finite(r):
+                    continue
+                rf = float(r)  # type: ignore[arg-type]
+                bucket_rets[(qidx, h)].append(rf)
+                base_rets[h].append(rf)
+
+    by_horizon: dict[int, dict] = {}
+    for h in hs:
+        buckets = [{"q": qi + 1, **_agg_rets(bucket_rets.get((qi, h), []), min_sample)} for qi in range(q)]
+        top, bottom = buckets[-1], buckets[0]
+
+        def _diff(a: float | None, b: float | None) -> float | None:
+            return round(a - b, 4) if (a is not None and b is not None) else None
+
+        spread = {
+            "avg_spread_pct": _diff(top["avg_return_pct"], bottom["avg_return_pct"]),
+            "median_spread_pct": _diff(top["median_return_pct"], bottom["median_return_pct"]),
+            "win_rate_diff_pp": _diff(top["win_rate_pct"], bottom["win_rate_pct"]),
+        }
+        by_horizon[h] = {
+            "buckets": buckets,
+            "baseline": _agg_rets(base_rets.get(h, []), min_sample),
+            "top_minus_bottom": spread,
+        }
+
+    if untradable_unknown:
+        exclude_flag = False
+        note = (
+            "口径缺口：部分样本无法判定 T+1 一字涨停（untradable=None），未剔除——"
+            "结果可能高估可买收益，禁止据此宣称已剔除一字板"
+        )
+    else:
+        exclude_flag = True
+        note = (
+            "已剔除 T+1 一字涨停（open==high==low 且较前收涨幅≥4.8%，与 backtest_lab 同口径），"
+            f"共剔除 {untradable_skipped} 个样本"
+        )
+
+    return {
+        "available": True,
+        "reason": None,
+        "quantiles": q, "horizons": hs,
+        "dates": [min(usable), max(usable)], "n_dates": len(usable),
+        "short_dates": short_dates,
+        "samples_used": samples_used,
+        "untradable_skipped": untradable_skipped,
+        "exclude_limit_up": exclude_flag,
+        "exclusion_note": note,
+        "min_sample": min_sample,
+        "by_horizon": by_horizon,
+    }
+
+
+def quantile_backtest(
+    db: Session,
+    factor: str,
+    *,
+    quantiles: int = 5,
+    horizons: Sequence[int] = (1, 3, 5),
+    max_dates: int = 60,
+    min_xsec: int = MIN_XSEC,
+    min_dates: int = MIN_DATES,
+    min_sample: int = MIN_BUCKET_SAMPLE,
+) -> dict:
+    """Quantile 分层回测（DB 入口）：复用 compute() 的取数路径，不新增网络请求模式。
+
+    数据路径与 `compute()` 完全一致：`stock_factor_daily` 横截面 ×
+    `load_qfq_bars` 前复权日线（未来收益 = close(T+h)/close(T) − 1，
+    收盘对收盘，单位 %，与 backtest_lab 同口径）。
+
+    一字涨停判定**直接复用** `backtest_lab._is_untradable_next_bar`
+    （open==high==low 且较前收涨幅 ≥ 4.8%）——同一套纪律，不发明第二套口径。
+    非正价格的无效 bar 剔除（同 backtest_lab._norm_bar 的精神）。
+
+    Args:
+        db: SQLAlchemy 会话。
+        factor: 因子列名，必须是 `FACTOR_LABELS` 之一。
+        其余参数同 `quantile_backtest_core`。
+
+    Returns:
+        `quantile_backtest_core` 的输出，另附 factor / label / data_source。
+    """
+    out_fail = {"available": False, "reason": "", "factor": factor,
+                "label": FACTOR_LABELS.get(factor), "data_source": None}
+    if factor not in FACTOR_LABELS:
+        out_fail["reason"] = f"未知因子 {factor}，可用：{'、'.join(FACTOR_LABELS)}"
+        return out_fail
+
+    from src.core.backtest_lab import _is_untradable_next_bar
+    from src.db.klines_repo import load_qfq_bars
+    from src.db.models import StockFactorDaily
+
+    rows = (
+        db.query(StockFactorDaily)
+        .order_by(StockFactorDaily.trade_date.desc())
+        .limit(60000)
+        .all()
+    )
+    if not rows:
+        out_fail["reason"] = "因子表为空（先跑回填或等待每日采集）"
+        return out_fail
+
+    by_date: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_date[r.trade_date].append(r)
+    dates = sorted(by_date)[-max_dates:]
+
+    # 每只票的前复权日线（含 OHLC，供一字涨停判定）；只取因子表里出现过的票
+    symbols = {r.symbol for r in rows}
+    bars_map: dict[str, list[dict[str, float]]] = {}
+    for sym in symbols:
+        try:
+            bars = load_qfq_bars(sym, "CN", days=260)
+        except Exception:  # noqa: BLE001
+            continue
+        norm: list[dict[str, float]] = []
+        for b in bars or []:
+            try:
+                o, h, l, c = float(b["open"]), float(b["high"]), float(b["low"]), float(b["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if o <= 0 or h <= 0 or l <= 0 or c <= 0:
+                continue  # 无效 bar 剔除（同 backtest_lab._norm_bar 精神）
+            norm.append({"date": str(b["date"]).replace("-", ""), "open": o, "high": h, "low": l, "close": c})
+        if norm:
+            bars_map[sym] = norm
+
+    samples: list[dict[str, object]] = []
+    for day in dates:
+        for r in by_date[day]:
+            v = getattr(r, factor, None)
+            if not _finite(v):
+                continue
+            series = bars_map.get(r.symbol)
+            if not series:
+                continue
+            idx = next((i for i, b in enumerate(series) if b["date"] == str(day)), None)
+            if idx is None or idx + 1 >= len(series):
+                continue  # 没有 T+1 就既没有未来收益也没有一字判定，显式少算
+            c0 = series[idx]["close"]
+            fwd: dict[int, float] = {}
+            for h in horizons:
+                ih = int(h)
+                if ih < 1 or idx + ih >= len(series):
+                    continue
+                c_end = series[idx + ih]["close"]
+                if c0 > 0 and c_end > 0:
+                    fwd[ih] = (c_end / c0 - 1.0) * 100.0
+            samples.append({
+                "date": str(day),
+                "symbol": r.symbol,
+                "value": float(v),  # type: ignore[arg-type]
+                "fwd": fwd,
+                "untradable": _is_untradable_next_bar(c0, series[idx + 1]),
+            })
+
+    out = quantile_backtest_core(
+        samples, quantiles=quantiles, horizons=horizons,
+        min_xsec=min_xsec, min_dates=min_dates, min_sample=min_sample,
+    )
+    out["factor"] = factor
+    out["label"] = FACTOR_LABELS[factor]
+    out["data_source"] = "stock_factor_daily × 前复权日线（同 compute，本地自算，未使用任何外部调仓数据）"
+    return out
+
+
+def render_quantile_backtest(m: dict) -> str:
+    """把 `quantile_backtest` 输出渲染成参谋可读文本（三件套齐全，缺失显式标注）。"""
+    if not m.get("available"):
+        return f"[因子分层回测] {m.get('reason', '无数据')}——不做推断。"
+    hs = m["horizons"]
+    lines = [
+        f"[数据源: {m.get('data_source', '本地计算')}] {m.get('label', m.get('factor'))}"
+        f"｜{m['quantiles']} 层分层（Q1=Bottom，Q{m['quantiles']}=Top）"
+        f"｜预测期 T+{'/T+'.join(str(h) for h in hs)}"
+        f"｜样本区间 {m['dates'][0]}~{m['dates'][1]}（{m['n_dates']} 个交易日）",
+        m["exclusion_note"],
+    ]
+    for h in hs:
+        blk = m["by_horizon"][h]
+        base = blk["baseline"]
+        if base["win_rate_pct"] is not None:
+            lines.append(
+                f"【T+{h}】同池无条件基准：胜率 {base['win_rate_pct']:.2f}%｜"
+                f"均值 {base['avg_return_pct']:+.3f}%（n={base['sample_count']}）"
+            )
+        else:
+            lines.append(f"【T+{h}】同池无条件基准：样本不足（n={base['sample_count']} < {m['min_sample']}，不给胜率）")
+        for b in blk["buckets"]:
+            if b["avg_return_pct"] is None:
+                lines.append(f"- Q{b['q']}：样本不足（n={b['sample_count']} < {m['min_sample']}，不给胜率/均值）")
+                continue
+            lines.append(
+                f"- Q{b['q']}：均值 {b['avg_return_pct']:+.3f}%（中位 {b['median_return_pct']:+.3f}%）"
+                f"｜胜率 {b['win_rate_pct']:.2f}%（n={b['sample_count']}）"
+            )
+        sp = blk["top_minus_bottom"]
+        if sp["avg_spread_pct"] is not None:
+            lines.append(
+                f"- 多空价差(Top−Bottom)：均值 {sp['avg_spread_pct']:+.3f}%"
+                f"（中位 {sp['median_spread_pct']:+.3f}%）｜胜率差 {sp['win_rate_diff_pp']:+.2f}pp"
+            )
+        else:
+            lines.append("- 多空价差(Top−Bottom)：Top/Bottom 层样本不足，不给价差")
+    lines.append("口径：收盘对收盘收益（%）；历史分层统计不代表未来，仅作条件化证据。")
+    return "\n".join(lines)
