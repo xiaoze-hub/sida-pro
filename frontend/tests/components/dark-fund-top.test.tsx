@@ -145,4 +145,20 @@ describe('DarkFundTop 暗盘资金 TOP 榜', () => {
 
     expect(within(tbl()).getByText('4321.00')).toBeTruthy()
   })
+
+  // P0(2026-10-24 设计走查): 口径错标 —— 本页数据源写死 `thsdk_dde`(同花顺 DDE 主力净流入),
+  // 徽章却声明 eastmoney4(东财四档)。两口径不可换算, 属口径红线违反。
+  it('服务端口径徽章 = ths(同花顺), 不得再出现 eastmoney4; 原始 source 文本保留', async () => {
+    mocks.darkFundTop.mockResolvedValue(snapshot([row()]))
+    const { container } = render(<DarkFundTopPage />)
+    await screen.findAllByText('贵州茅台')
+
+    const badges = Array.from(container.querySelectorAll('[data-caliber]'))
+    expect(badges.length).toBeGreaterThan(0)
+    for (const b of badges) expect(b.getAttribute('data-caliber')).not.toBe('eastmoney4')
+    // 同花顺口径(与 thsdk_dde 一致)
+    expect(container.querySelector('[data-caliber="ths"]')).not.toBeNull()
+    // 修口径不等于删来源: 页面仍如实显示 thsdk_dde
+    expect(screen.getAllByText('thsdk_dde').length).toBeGreaterThan(0)
+  })
 })

@@ -164,8 +164,10 @@ export default function DarkFundTopPage() {
                 {' · '}{t('common.source')} <span className="font-mono">thsdk_dde</span>({t('darkFundTop.sourceNote')})
                 {' · '}
                 {/* 口径统一徽章(2026-09-22): 10px 等宽 + tooltip, 中性色 —— 口径是"数据出处",
-                    不是行情方向, 所以不随涨跌上色(AGENTS 硬约束: 资金面必须可见口径标签)。 */}
-                <CaliberBadge caliber="eastmoney4" label={t('darkFundTop.caliberTag')} title={t('darkFundTop.caliberHint')} />
+                    不是行情方向, 所以不随涨跌上色(AGENTS 硬约束: 资金面必须可见口径标签)。
+                    P0 修复(2026-10-24): 本页数据源是 `thsdk_dde`(同花顺 DDE 主力净流入, 见上一行),
+                    徽章曾标成东财四档(按单金额分档), 属口径红线违反 —— 两种口径不可换算, 现改 ths。 */}
+                <CaliberBadge caliber="ths" label={t('darkFundTop.caliberTag')} title={t('darkFundTop.caliberHint')} />
                 {' · '}{t('common.updatedAt')} <span className="font-mono">{data.updated_at ?? '-'}</span>
               </p>
             </div>

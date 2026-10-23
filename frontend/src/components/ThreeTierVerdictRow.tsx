@@ -210,7 +210,10 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
               resonanceState.warning === 'opportunity'
                 ? 'text-red-500 animate-pulse'
                 : resonanceState.warning === 'warning'
-                ? 'text-green-500'
+                ? // P0 修复(2026-10-24): warning 曾渲染成 text-green-500 —— 「警告」被读成「安全/上涨」,
+                  // 语义反置。改为 amber(告警色), 与 caution 的 yellow 区分(更偏橙红、不带"注意"的温和感)。
+                  // opportunity=text-red-500 保留: 按 A 股买红卖绿, 机会=红是**正确**的, 不是缺陷。
+                  'text-amber-500'
                 : resonanceState.warning === 'caution'
                 ? 'text-yellow-500'
                 : resonanceState.warning === 'unknown'
