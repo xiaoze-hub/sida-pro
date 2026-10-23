@@ -77,6 +77,95 @@ def _app_to_dict(a: ProApplication) -> dict[str, Any]:
     }
 
 
+def _notify_owners(db: Session, applicant: User, app_row: ProApplication) -> int:
+    """给全部 active owner 发站内通知(申请入口必须通知到审核人)。返回通知条数。"""
+    from src.db.models import Notification
+
+    n = 0
+    try:
+        owners = (
+            db.query(User)
+            .filter(User.role == "owner", User.is_active.is_(True))
+            .all()
+        )
+        for own in owners:
+            if str(own.id) == str(applicant.id):
+                continue
+            db.add(Notification(
+                user_id=str(own.id),
+                category="system",
+                level="info",
+                title="Pro 升级申请",
+                body=f"用户 {applicant.username} 申请升级 Pro。理由: {(app_row.reason or '无')[:100]}",
+                link="/admin",
+            ))
+            n += 1
+        db.commit()
+    except Exception as e:  # noqa: BLE001 — 通知失败不影响申请已落库
+        logger.warning("Pro 申请通知 owner 失败: %r", e)
+        db.rollback()
+    return n
+
+
+def submit_application(
+    db: Session,
+    user: User,
+    reason: str = "",
+    contact: str = "",
+) -> ProApplication:
+    """**唯一的 Pro 申请落库入口**(申请→审核闭环)。
+
+    两个 HTTP 入口(`POST /api/pro/apply` 与 `POST /api/profile/pro-apply`)都调这里,
+    保证行为完全等价: 都落 `pro_applications` 表、都给 owner 发站内通知、都拒重复 pending。
+    历史问题: profile 入口只写 AuditLog + Notification 不落库, 后台列表永远空。
+
+    异常: 已是 pro/owner 或已有 pending → HTTPException(400); 成功返回已落库的行。
+    """
+    role = (user.role or "").strip().lower()
+    if role == "owner":
+        raise HTTPException(400, "owner 无需申请 Pro")
+    if role == "pro":
+        raise HTTPException(400, "当前账号已是 Pro")
+
+    existing = (
+        db.query(ProApplication)
+        .filter(
+            ProApplication.user_id == str(user.id),
+            ProApplication.status == "pending",
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(400, "已有待审核的 Pro 申请, 请耐心等待")
+
+    text_reason = (reason or "").strip()
+    contact = (contact or "").strip()
+    if contact:
+        text_reason = (
+            f"{text_reason}\n[contact] {contact}" if text_reason else f"[contact] {contact}"
+        )
+
+    row = ProApplication(
+        user_id=str(user.id),
+        username=user.username or "",
+        reason=text_reason[:2000],
+        status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    logger.info("Pro 申请提交 user=%s id=%s", user.username, row.id)
+
+    try:
+        from src.web.api.audit import log_audit
+
+        log_audit(db, user, "pro_apply", detail=f"提交 Pro 申请 id={row.id}")
+    except Exception:  # noqa: BLE001
+        pass
+    _notify_owners(db, user, row)
+    return row
+
+
 def _upgrade_user_keys_to_pro(db: Session, user_id: str) -> int:
     """把该用户名下全部 active key 升为 pro 档(日限取 tier_configs)。返回处理数量。"""
     refresh_tier_configs(db)
@@ -100,7 +189,47 @@ def _upgrade_user_keys_to_pro(db: Session, user_id: str) -> int:
     return n
 
 
-# ── 公开档位对比(P2-4, 2026-09-18) ────────────────────────────────────
+def downgrade_user_keys_to_free(db: Session, user_id: str, reason: str = "") -> int:
+    """把该用户名下 active key 降回 free 档, 并写 TierDowngradeLog。返回被降档的 key 数。
+
+    与 `_upgrade_user_keys_to_pro` 对称; 供 admin 改角色(pro→member/guest)复用,
+    保证"手工改角色"与"审核降级"走同一套 key 档位口径。
+    """
+    refresh_tier_configs(db)
+    free_limit = int(TIER_DAILY_LIMIT["free"])
+    keys = (
+        db.query(SkillApiKey)
+        .filter(
+            SkillApiKey.user_id == str(user_id),
+            SkillApiKey.status == "active",
+        )
+        .all()
+    )
+    n = 0
+    for k in keys:
+        from_tier = (k.tier or "free").strip().lower()
+        if from_tier == "free":
+            # 已是 free: 只把日限校正到当前档位配置, 不产生降级日志(避免噪音)
+            k.daily_limit = free_limit
+            continue
+        db.add(TierDowngradeLog(
+            api_key_id=k.id,
+            key_prefix=k.key_prefix or "",
+            user_id=str(user_id),
+            from_tier=from_tier,
+            to_tier="free",
+            from_daily_limit=int(k.daily_limit or 0),
+            to_daily_limit=free_limit,
+            reason=(reason or "admin 手工降档")[:255],
+        ))
+        k.tier = "free"
+        k.daily_limit = free_limit
+        n += 1
+    db.commit()
+    return n
+
+
+
 
 #: 档位展示顺序与中文名(goest→owner; 权限点来自 permissions.ROLE_PERMISSIONS, 不在这里重复定义)
 #: **只列用户可选档位** —— guest(体验账号)权限集是空的(`ROLE_PERMISSIONS[guest]=frozenset()`),
@@ -165,43 +294,11 @@ def apply_pro(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """提交 Pro 申请。同一用户仅允许一条 pending。"""
-    if user.role == "owner":
-        raise HTTPException(400, "owner 无需申请 Pro")
-    if user.role == "pro":
-        raise HTTPException(400, "当前账号已是 Pro")
+    """提交 Pro 申请。同一用户仅允许一条 pending。
 
-    existing = (
-        db.query(ProApplication)
-        .filter(
-            ProApplication.user_id == str(user.id),
-            ProApplication.status == "pending",
-        )
-        .first()
-    )
-    if existing:
-        raise HTTPException(400, "已有待审核的 Pro 申请, 请耐心等待")
-
-    reason = (body.reason or "").strip()
-    if body.contact:
-        reason = f"{reason}\n[contact] {body.contact.strip()}" if reason else f"[contact] {body.contact.strip()}"
-
-    row = ProApplication(
-        user_id=str(user.id),
-        username=user.username or "",
-        reason=reason[:2000],
-        status="pending",
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    logger.info("Pro 申请提交 user=%s id=%s", user.username, row.id)
-    try:
-        from src.web.api.audit import log_audit
-
-        log_audit(db, user, "pro_apply", detail=f"提交 Pro 申请 id={row.id}")
-    except Exception:  # noqa: BLE001
-        pass
+    实现委托给 `submit_application`(与 `/api/profile/pro-apply` 共用, 行为完全等价)。
+    """
+    row = submit_application(db, user, reason=body.reason, contact=body.contact)
     return {
         "status": "pending",
         "application": _app_to_dict(row),
@@ -349,6 +446,28 @@ def admin_reject(
         "status": "rejected",
         "application": _app_to_dict(app_row),
     }
+
+
+class RegisterModeRequest(BaseModel):
+    """注册模式切换请求(invite/open/closed)。与 users.RegisterModeRequest 同构。"""
+    mode: str = Field(..., description="invite/open/closed")
+
+
+@router.put("/admin/register-mode")
+def admin_set_register_mode(
+    body: RegisterModeRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+) -> dict:
+    """切换注册模式(仅 owner):
+
+    路径为 `PUT /api/admin/register-mode`(本 router 挂 /api), 实现委给
+    `users.set_register_mode` —— 两条路径(/api/admin/... 与 /api/users/admin/...)
+    共用同一实现与同一份 app_settings 写入。
+    """
+    from src.web.api.users import set_register_mode
+
+    return set_register_mode(db, owner, body.mode)
 
 
 @router.get("/pro/admin/expired")

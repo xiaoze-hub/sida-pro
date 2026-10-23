@@ -11,6 +11,8 @@ import {
   UserPlus,
   Activity,
   Ticket,
+  Plus,
+  RotateCcw,
 } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -40,6 +42,9 @@ interface AdminUser {
   email: string | null
   role: string
   is_active: boolean
+  /** 软删除(注销宽限期内): 可恢复 */
+  is_deleted?: boolean
+  deleted_at?: string | null
   created_at: string | null
   last_login: string | null
 }
@@ -173,6 +178,16 @@ const APP_STATUS_BADGE: Record<string, string> = {
   rejected: 'bg-red-500/15 text-red-400 border-red-500/20',
 }
 
+/** 注销宽限期截止日(注销时间 + 30 天, 与后端 purge 口径一致), 返回 YYYY-MM-DD。 */
+function graceDeadline(deletedAt: string): string {
+  const t = new Date(deletedAt).getTime()
+  if (!Number.isFinite(t)) return '—'
+  const d = new Date(t + 30 * 24 * 60 * 60 * 1000)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
 function TableLoading({ label = '加载中…' }: { label?: string }) {
   return (
     <div className="flex items-center justify-center gap-2 rounded-xl border border-border/50 dark:border-white/5 bg-muted/20 dark:bg-white/[0.01] py-10 text-[12px] text-muted-foreground">
@@ -206,6 +221,14 @@ export default function AdminPage() {
   const [keyActionId, setKeyActionId] = useState<number | null>(null)
   const [userActionId, setUserActionId] = useState<string | null>(null)
   const [appActionId, setAppActionId] = useState<number | null>(null)
+  // 新建用户(2026-10-23: 后台补齐建号能力, 与设置页 UserManagement 对齐)
+  const [showCreate, setShowCreate] = useState(false)
+  const [newUser, setNewUser] = useState({ username: '', password: '', role: 'member', email: '' })
+  const [creating, setCreating] = useState(false)
+  // 重置密码 / Pro 审核备注
+  const [resetTarget, setResetTarget] = useState<AdminUser | null>(null)
+  const [resetPwd, setResetPwd] = useState('')
+  const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({})
 
   const {
     data: userList,
@@ -289,15 +312,89 @@ export default function AdminPage() {
     }
   }
 
+  // ── 新建用户 / 重置密码 / 恢复账号(2026-10-23 补齐后台能力) ──
+  const createUser = async () => {
+    const username = newUser.username.trim()
+    if (username.length < 2) return toast('用户名至少 2 位', 'error')
+    if (newUser.password.length < 8) return toast('密码至少 8 位', 'error')
+    setCreating(true)
+    try {
+      await fetchAPI('/users/admin/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          username,
+          password: newUser.password,
+          role: newUser.role,
+          email: newUser.email.trim() || null,
+        }),
+      })
+      toast(`已创建用户 ${username}`, 'success')
+      setShowCreate(false)
+      setNewUser({ username: '', password: '', role: 'member', email: '' })
+      void refetchUsers()
+      void refetchStats()
+    } catch (e: any) {
+      toast(e?.message || '创建失败', 'error')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const submitResetPassword = async () => {
+    if (!resetTarget) return
+    if (resetPwd.length < 8) return toast('密码至少 8 位', 'error')
+    if (!confirm(`确定重置 ${resetTarget.username} 的密码？该用户当前的登录会话会立即失效。`)) return
+    setUserActionId(resetTarget.id)
+    try {
+      await fetchAPI(`/users/admin/${resetTarget.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ new_password: resetPwd }),
+      })
+      toast(`${resetTarget.username} 密码已重置`, 'success')
+      setResetTarget(null)
+      setResetPwd('')
+    } catch (e: any) {
+      toast(e?.message || '重置失败', 'error')
+    } finally {
+      setUserActionId(null)
+    }
+  }
+
+  const restoreUser = async (u: AdminUser) => {
+    const until = u.deleted_at ? formatDateTime(u.deleted_at) : ''
+    if (!confirm(`确定恢复已注销账号 ${u.username}？${until ? `（注销于 ${until}，仍在 30 天宽限期）` : ''}`)) return
+    setUserActionId(u.id)
+    try {
+      await fetchAPI(`/users/admin/${u.id}/restore`, { method: 'POST' })
+      toast(`已恢复 ${u.username}`, 'success')
+      void refetchUsers()
+      void refetchStats()
+    } catch (e: any) {
+      toast(e?.message || '恢复失败', 'error')
+    } finally {
+      setUserActionId(null)
+    }
+  }
+
   // ── Key 操作 ──
-  const keyAction = async (key: AdminKey, action: 'freeze' | 'unfreeze' | 'disable') => {
-    const label = action === 'freeze' ? '冻结' : action === 'unfreeze' ? '解冻' : '禁用'
+  const keyAction = async (
+    key: AdminKey,
+    action: 'freeze' | 'unfreeze' | 'disable' | 'set_tier' | 'set_limit',
+    extra: { tier?: string; daily_limit?: number } = {},
+  ) => {
+    const label =
+      action === 'freeze' ? '冻结'
+        : action === 'unfreeze' ? '解冻'
+          : action === 'disable' ? '禁用'
+            : action === 'set_tier' ? '调档' : '改日限'
     if (action === 'disable' && !confirm(`确定禁用 Key ${key.key_prefix}...？禁用后不可恢复为 active，需新建 Key。`)) return
+    if (action === 'set_tier' && !confirm(`确定把 Key ${key.key_prefix}... 调到 ${TIER_LABEL[extra.tier || ''] || extra.tier} 档？日限会同步改为该档默认值。`)) return
+    if (action === 'set_limit' && !confirm(`确定把 Key ${key.key_prefix}... 的日限改为 ${extra.daily_limit} 次/天？`)) return
     setKeyActionId(key.id)
     try {
       await fetchAPI('/admin/skills/keys/action', {
         method: 'POST',
-        body: JSON.stringify({ key_id: key.id, action }),
+        body: JSON.stringify({ key_id: key.id, action, ...extra }),
       })
       toast(`Key ${key.key_prefix}... 已${label}`, 'success')
       void refetchKeys()
@@ -308,6 +405,14 @@ export default function AdminPage() {
     }
   }
 
+  const promptKeyLimit = (k: AdminKey) => {
+    const raw = prompt(`Key ${k.key_prefix}... 的新日限（1-100000）`, String(k.daily_limit))
+    if (raw === null) return
+    const n = Number(raw.trim())
+    if (!Number.isInteger(n) || n < 1 || n > 100000) return toast('日限需为 1-100000 的整数', 'error')
+    void keyAction(k, 'set_limit', { daily_limit: n })
+  }
+
   // ── Pro 审核 ──
   const reviewApp = async (app: ProApplication, action: 'approve' | 'reject') => {
     const label = action === 'approve' ? '批准' : '拒绝'
@@ -316,9 +421,14 @@ export default function AdminPage() {
     try {
       await fetchAPI(`/pro/admin/${action}`, {
         method: 'POST',
-        body: JSON.stringify({ application_id: app.id, note: '' }),
+        body: JSON.stringify({ application_id: app.id, note: (reviewNotes[app.id] || '').trim() }),
       })
       toast(`已${label} ${app.username} 的 Pro 申请`, 'success')
+      setReviewNotes(prev => {
+        const next = { ...prev }
+        delete next[app.id]
+        return next
+      })
       void refetchPro()
       void refetchUsers()
       void refetchStats()
@@ -363,9 +473,68 @@ export default function AdminPage() {
       <Section
         id="sec-users"
         title="用户管理"
-        description="查看全部账号，启用/禁用、修改角色"
+        description="查看全部账号，启用/禁用、改角色、重置密码、新建用户；已注销账号可在 30 天宽限期内恢复"
         icon={<Users className="h-4 w-4" />}
+        action={
+          <Button size="sm" variant="outline" className="h-8" onClick={() => setShowCreate(v => !v)}>
+            <Plus className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">新建用户</span>
+          </Button>
+        }
       >
+        {showCreate && (
+          <div className="mb-4 space-y-2 rounded-xl border border-border/50 dark:border-white/10 bg-s1 p-3">
+            <div className="grid gap-2 sm:grid-cols-4">
+              <input
+                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                placeholder="用户名（2-20 位字母/数字）"
+                value={newUser.username}
+                onChange={e => setNewUser(v => ({ ...v, username: e.target.value }))}
+              />
+              <input
+                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                placeholder="密码（至少 8 位）"
+                type="password"
+                value={newUser.password}
+                onChange={e => setNewUser(v => ({ ...v, password: e.target.value }))}
+              />
+              <input
+                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                placeholder="邮箱（可空）"
+                value={newUser.email}
+                onChange={e => setNewUser(v => ({ ...v, email: e.target.value }))}
+              />
+              <select
+                className="h-8 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                value={newUser.role}
+                onChange={e => setNewUser(v => ({ ...v, role: e.target.value }))}
+              >
+                <option value="guest">访客</option>
+                <option value="member">成员</option>
+                <option value="pro">Pro</option>
+                <option value="owner">管理员</option>
+              </select>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-[11px]"
+                onClick={() => {
+                  setShowCreate(false)
+                  setNewUser({ username: '', password: '', role: 'member', email: '' })
+                }}
+              >
+                取消
+              </Button>
+              <Button size="sm" className="h-7 text-[11px]" disabled={creating} onClick={() => void createUser()}>
+                {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                创建
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* 统计卡片 */}
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <InfoCard>
@@ -435,13 +604,23 @@ export default function AdminPage() {
                         disabled={userActionId === u.id}
                         onChange={e => void changeRole(u, e.target.value)}
                       >
+                        <option value="guest">访客</option>
                         <option value="member">成员</option>
                         <option value="pro">Pro</option>
                         <option value="owner">管理员</option>
                       </select>
                     </Td>
                     <Td>
-                      {u.is_active ? (
+                      {u.is_deleted ? (
+                        <span className="inline-flex flex-col gap-0.5">
+                          <span className="inline-flex w-fit items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-400">
+                            已注销
+                          </span>
+                          {u.deleted_at && (
+                            <span className="text-[10px] text-slate-600">宽限期至 {graceDeadline(u.deleted_at)}</span>
+                          )}
+                        </span>
+                      ) : u.is_active ? (
                         <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
                           启用
                         </span>
@@ -454,27 +633,79 @@ export default function AdminPage() {
                     <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(u.created_at) || '—'}</Td>
                     <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(u.last_login) || '从未'}</Td>
                     <Td className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className={`h-7 px-2 text-[11px] ${u.is_active ? 'hover:border-red-500/30 hover:text-red-400' : 'hover:border-emerald-500/30 hover:text-emerald-400'}`}
-                        disabled={userActionId === u.id}
-                        onClick={() => void toggleActive(u)}
-                      >
-                        {userActionId === u.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : u.is_active ? (
-                          <Ban className="h-3 w-3" />
+                      <div className="flex items-center justify-end gap-1">
+                        {u.is_deleted ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[11px] hover:border-emerald-500/30 hover:text-emerald-400"
+                            disabled={userActionId === u.id}
+                            onClick={() => void restoreUser(u)}
+                          >
+                            {userActionId === u.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                            恢复
+                          </Button>
                         ) : (
-                          <CheckCircle2 className="h-3 w-3" />
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              disabled={userActionId === u.id}
+                              onClick={() => {
+                                setResetTarget(u)
+                                setResetPwd('')
+                              }}
+                            >
+                              <KeyRound className="h-3 w-3" />
+                              重置密码
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className={`h-7 px-2 text-[11px] ${u.is_active ? 'hover:border-red-500/30 hover:text-red-400' : 'hover:border-emerald-500/30 hover:text-emerald-400'}`}
+                              disabled={userActionId === u.id}
+                              onClick={() => void toggleActive(u)}
+                            >
+                              {userActionId === u.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : u.is_active ? (
+                                <Ban className="h-3 w-3" />
+                              ) : (
+                                <CheckCircle2 className="h-3 w-3" />
+                              )}
+                              {u.is_active ? '禁用' : '启用'}
+                            </Button>
+                          </>
                         )}
-                        {u.is_active ? '禁用' : '启用'}
-                      </Button>
+                      </div>
                     </Td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {resetTarget && (
+          <div className="mt-3 space-y-2 rounded-xl border border-border/50 dark:border-white/10 bg-s1 p-3">
+            <div className="text-[12px] font-medium text-foreground">重置 {resetTarget.username} 的密码</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="h-8 min-w-[220px] flex-1 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[12px] outline-none focus:border-primary/40"
+                placeholder="新密码（至少 8 位）"
+                type="password"
+                value={resetPwd}
+                onChange={e => setResetPwd(e.target.value)}
+              />
+              <Button size="sm" className="h-8 text-[11px]" disabled={userActionId === resetTarget.id} onClick={() => void submitResetPassword()}>
+                确定重置
+              </Button>
+              <Button size="sm" variant="ghost" className="h-8 text-[11px]" onClick={() => { setResetTarget(null); setResetPwd('') }}>
+                取消
+              </Button>
+            </div>
+            <div className="text-[10px] text-slate-600">重置后该用户旧登录会话立即失效，需用新密码重新登录。</div>
           </div>
         )}
 
@@ -584,6 +815,26 @@ export default function AdminPage() {
                     <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(k.last_used_at) || '从未'}</Td>
                     <Td>
                       <div className="flex items-center justify-end gap-1">
+                        <select
+                          className="h-7 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-1.5 text-[11px] text-foreground dark:text-slate-200 outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                          value={k.tier}
+                          title="调整档位（日限同步为该档默认值）"
+                          disabled={keyActionId === k.id}
+                          onChange={e => void keyAction(k, 'set_tier', { tier: e.target.value })}
+                        >
+                          <option value="free">免费</option>
+                          <option value="trial">试用</option>
+                          <option value="pro">Pro</option>
+                        </select>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-[11px]"
+                          disabled={keyActionId === k.id}
+                          onClick={() => promptKeyLimit(k)}
+                        >
+                          改日限
+                        </Button>
                         {k.status === 'active' ? (
                           <Button
                             size="sm"
@@ -858,7 +1109,15 @@ export default function AdminPage() {
                     <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(a.created_at) || '—'}</Td>
                     <Td className="text-right">
                       {a.status === 'pending' ? (
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex flex-col items-end gap-1">
+                          <input
+                            className="h-7 w-[160px] rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[11px] text-foreground dark:text-slate-200 outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                            placeholder="审核备注（可选）"
+                            maxLength={255}
+                            value={reviewNotes[a.id] || ''}
+                            onChange={e => setReviewNotes(prev => ({ ...prev, [a.id]: e.target.value }))}
+                          />
+                          <div className="flex items-center justify-end gap-1">
                           <Button
                             size="sm"
                             variant="outline"
@@ -882,6 +1141,7 @@ export default function AdminPage() {
                           >
                             拒绝
                           </Button>
+                          </div>
                         </div>
                       ) : (
                         <span className="text-[11px] text-slate-600">

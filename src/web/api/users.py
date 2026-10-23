@@ -14,6 +14,7 @@
 """
 import json
 import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,12 +22,17 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.web.database import get_db
+from src.web.api.audit import log_audit
 from src.web.api.auth import (
+    create_user,
     get_current_user,
+    get_user_by_email,
     get_user_by_id,
+    get_user_by_username,
+    normalize_email,
     require_owner,
 )
-from src.web.models import AIModel, AIService, User
+from src.web.models import AIModel, AIService, AppSettings, User
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -173,6 +179,10 @@ def update_user_model_access(
 
     _set_model_access(target, data.mode, model_ids)
     db.commit()
+    _audit_admin(
+        db, owner, "model_access",
+        f"用户 {target.username}({target.id}) model_access={data.mode} ids={model_ids}",
+    )
     logger.info(f"更新用户 {target.username}({target.id}) 模型授权: {data.mode} {model_ids}")
     return {"mode": data.mode, "model_ids": model_ids}
 
@@ -279,7 +289,6 @@ def update_user_permissions(
     db: Session = Depends(get_db),
 ):
     """写入用户的模块权限白名单(仅 owner)。保留 model_access 等其他键。"""
-    del owner
     target = get_user_by_id(db, uid)
     if not target:
         raise HTTPException(404, "用户不存在")
@@ -300,17 +309,29 @@ def update_user_permissions(
     merged["permissions"] = list(dict.fromkeys(body.permissions))  # 去重保序
     target.permissions = merged
     db.commit()
+    _audit_admin(
+        db, owner, "permissions",
+        f"用户 {target.username}({target.id}) permissions={merged['permissions']}",
+    )
     logger.info(f"更新用户 {target.username}({target.id}) 模块权限: {merged['permissions']}")
     return {"permissions": merged["permissions"]}
 
 
 # ── Admin 管理后台(2026-09-16): 用户列表/启停/改角色/注册统计 ────────
 
-ROLE_CHOICES = ("member", "pro", "owner")
+ROLE_CHOICES = ("guest", "member", "pro", "owner")
+
+
+def _audit_admin(db: Session, actor: User, action: str, detail: str) -> None:
+    """管理端写操作统一审计(审计页可见)。失败不阻塞业务。"""
+    try:
+        log_audit(db, actor, "manage_user", detail=f"{action}: {detail}"[:255])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("admin 审计写入失败 action=%s: %r", action, e)
 
 
 def _admin_user_row(db: Session, u: User) -> dict:
-    """用户列表行: 基础字段 + last_login(audit login 最近一条)。"""
+    """用户列表行: 基础字段 + last_login(audit login 最近一条) + 注销态。"""
     last_login = None
     try:
         from src.web.models import AuditLog
@@ -331,6 +352,10 @@ def _admin_user_row(db: Session, u: User) -> dict:
         "email": getattr(u, "email", None),
         "role": u.role or "member",
         "is_active": bool(u.is_active),
+        "is_deleted": bool(getattr(u, "is_deleted", False)),
+        "deleted_at": (
+            u.deleted_at.isoformat() if getattr(u, "deleted_at", None) else None
+        ),
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login": last_login,
     }
@@ -341,7 +366,10 @@ def admin_list_users(
     _owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    """列出全部用户(仅 owner)。按创建时间倒序。"""
+    """列出全部用户(仅 owner)。按创建时间倒序。
+
+    含 30 天宽限期内的软删除账号(is_deleted=True), 由前端打「已注销」徽标并提供恢复。
+    """
     rows = db.query(User).order_by(User.created_at.desc()).all()
     return {"users": [_admin_user_row(db, u) for u in rows]}
 
@@ -352,6 +380,100 @@ class AdminToggleActiveRequest(BaseModel):
 
 class AdminChangeRoleRequest(BaseModel):
     role: str
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "member"
+    email: Optional[str] = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str
+
+
+@router.post("/admin/create")
+def admin_create_user(
+    body: AdminCreateUserRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """新建用户(仅 owner): 用户名/密码/角色/邮箱。
+
+    与「设置 → 用户管理」的建号能力对齐(此前后台只能看不能建)。
+    """
+    username = (body.username or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9]{2,20}", username):
+        raise HTTPException(400, "用户名需为 2-20 位字母或数字")
+    if get_user_by_username(db, username):
+        raise HTTPException(400, "用户名已存在")
+    if len(body.password or "") < 8:
+        raise HTTPException(400, "密码长度至少 8 位")
+    role = (body.role or "member").strip().lower()
+    if role not in ROLE_CHOICES:
+        raise HTTPException(400, f"role 必须是 {', '.join(ROLE_CHOICES)} 之一")
+    email = normalize_email(body.email) if body.email else None
+    if email:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise HTTPException(400, "邮箱格式不正确")
+        if get_user_by_email(db, email):
+            raise HTTPException(400, "该邮箱已注册")
+
+    target = create_user(db, username, body.password, role=role, email=email)
+    _audit_admin(db, owner, "create", f"新建用户 {username}({target.id}) role={role}")
+    logger.info("admin create user=%s role=%s by=%s", username, role, owner.username)
+    return _admin_user_row(db, target)
+
+
+@router.post("/admin/{uid}/reset-password")
+def admin_reset_password(
+    uid: str,
+    body: AdminResetPasswordRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """重置某用户密码(仅 owner)。写审计并踢掉该用户旧 token。"""
+    target = get_user_by_id(db, uid)
+    if not target:
+        raise HTTPException(404, "用户不存在")
+    pwd = body.new_password or ""
+    if len(pwd) < 8:
+        raise HTTPException(400, "密码长度至少 8 位")
+    from src.web.api.auth import hash_password
+
+    target.password_hash = hash_password(pwd)
+    target.token_version = (target.token_version or 1) + 1
+    db.commit()
+    _audit_admin(db, owner, "reset_password", f"重置用户 {target.username}({target.id}) 密码")
+    logger.info("admin reset-password user=%s by=%s", target.username, owner.username)
+    return {"id": str(target.id), "username": target.username, "reset": True}
+
+
+@router.post("/admin/{uid}/restore")
+def admin_restore_user(
+    uid: str,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """恢复 30 天宽限期内的注销账号(仅 owner)。
+
+    注销是软删(users.is_deleted + deleted_at), 30 天后由 purge 物理清除;
+    宽限期内 owner 可在这里撤销: 清标记 + 激活 + token_version+1。
+    """
+    target = get_user_by_id(db, uid)
+    if not target:
+        raise HTTPException(404, "用户不存在")
+    if not getattr(target, "is_deleted", False) and not getattr(target, "deleted_at", None):
+        raise HTTPException(400, "该账号未处于注销状态, 无需恢复")
+    target.is_deleted = False
+    target.deleted_at = None
+    target.is_active = True
+    target.token_version = (target.token_version or 1) + 1
+    db.commit()
+    _audit_admin(db, owner, "restore", f"恢复注销账号 {target.username}({target.id})")
+    logger.info("admin restore user=%s by=%s", target.username, owner.username)
+    return _admin_user_row(db, target)
 
 
 @router.post("/admin/{uid}/toggle-active")
@@ -374,6 +496,9 @@ def admin_toggle_active(
     if not target.is_active:
         target.token_version = (target.token_version or 1) + 1  # 踢掉旧 token
     db.commit()
+    _audit_admin(
+        db, owner, "toggle_active", f"用户 {target.username}({target.id}) active={target.is_active}"
+    )
     logger.info(f"admin toggle-active user={target.username}({target.id}) active={target.is_active}")
     return {"id": str(target.id), "is_active": bool(target.is_active)}
 
@@ -385,7 +510,12 @@ def admin_change_role(
     owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    """修改用户角色 member/pro/owner(仅 owner)。不能取消自己的 owner。"""
+    """修改用户角色 guest/member/pro/owner(仅 owner)。不能取消自己的 owner。
+
+    改角色会同步 API Key 档位(此前只改 users.role, 手工设 pro 后 Key 仍是 free):
+    - 升级为 pro → 该用户 active key 全部升 pro 档(与审核通过同一函数)
+    - 从 pro 降为其它 → active key 降回 free 并写 TierDowngradeLog
+    """
     target = get_user_by_id(db, uid)
     if not target:
         raise HTTPException(404, "用户不存在")
@@ -394,10 +524,82 @@ def admin_change_role(
         raise HTTPException(400, f"role 必须是 {', '.join(ROLE_CHOICES)} 之一")
     if str(target.id) == str(owner.id) and role != "owner":
         raise HTTPException(400, "不能取消自己的 owner 角色")
+
+    prev_role = (target.role or "member").strip().lower()
     target.role = role
+    # 权限随角色变: 让旧 token 失效, 强制重新登录取新角色
+    if role != prev_role:
+        target.token_version = (target.token_version or 1) + 1
     db.commit()
+
+    keys_changed = 0
+    try:
+        from src.web.api.pro_billing import (
+            _upgrade_user_keys_to_pro,
+            downgrade_user_keys_to_free,
+        )
+
+        if role == "pro" and prev_role != "pro":
+            keys_changed = _upgrade_user_keys_to_pro(db, str(target.id))
+        elif prev_role == "pro" and role != "pro":
+            keys_changed = downgrade_user_keys_to_free(
+                db, str(target.id), reason=f"admin 改角色 {prev_role}→{role}"
+            )
+    except Exception as e:  # noqa: BLE001 — 档位同步失败不回滚角色(role 已落库), 但要留痕
+        logger.error("admin change-role 同步 key 档位失败 user=%s: %r", target.username, e)
+
+    _audit_admin(
+        db,
+        owner,
+        "change_role",
+        f"用户 {target.username}({target.id}) {prev_role}→{role} keys={keys_changed}",
+    )
     logger.info(f"admin change-role user={target.username}({target.id}) role={role}")
-    return {"id": str(target.id), "role": target.role}
+    return {"id": str(target.id), "role": target.role, "keys_changed": keys_changed}
+
+
+# ── 注册模式(2026-10-23): 后台三态切换 ───────────────────────────────
+
+class RegisterModeRequest(BaseModel):
+    mode: str = ""  # invite / open / closed
+
+
+def set_register_mode(db: Session, actor: User, mode: str) -> dict:
+    """写入 app_settings.register_mode 并立即生效(owner only 由调用方保证)。
+
+    `core.invite_codes.get_register_mode` 每次现读 DB(无缓存), 所以本函数 return 时
+    注册流程已经按新模式判定 —— 不需要重启或清缓存。
+    """
+    from src.core.invite_codes import VALID_MODES, get_register_mode
+
+    prev = get_register_mode(db)
+    m = (mode or "").strip().lower()
+    if m not in VALID_MODES:
+        raise HTTPException(400, f"mode 必须是 {'/'.join(VALID_MODES)} 之一")
+    row = db.query(AppSettings).filter(AppSettings.key == "register_mode").first()
+    if row:
+        row.value = m
+    else:
+        db.add(AppSettings(
+            key="register_mode",
+            value=m,
+            description="注册模式: invite(邀请制)/open(开放注册)/closed(关闭注册)",
+        ))
+    db.commit()
+    current = get_register_mode(db)
+    _audit_admin(db, actor, "register_mode", f"注册模式 {prev}→{current}")
+    logger.info("admin register-mode %s→%s by=%s", prev, current, actor.username)
+    return {"mode": current, "previous": prev}
+
+
+@router.put("/admin/register-mode")
+def admin_put_register_mode(
+    body: RegisterModeRequest,
+    owner: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """切换注册模式(仅 owner)。等价路径: `/api/admin/register-mode`(pro_billing 转发)。"""
+    return set_register_mode(db, owner, body.mode)
 
 
 @router.get("/admin/stats")
@@ -405,12 +607,16 @@ def admin_registration_stats(
     _owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    """注册统计(仅 owner): 总量/活跃/新增/按角色/最近注册。"""
-    from datetime import datetime, timedelta
+    """注册统计(仅 owner): 总量/活跃/新增/按角色/最近注册。
+
+    时区: users.created_at 存 naive UTC(server_default=func.now()), 故比较基准必须
+    是 UTC —— 原实现用 `datetime.now()`(本地 CST)导致每天 00:00–08:00 的统计偏 8h。
+    """
+    from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import func
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     d7 = now - timedelta(days=7)
     d30 = now - timedelta(days=30)
@@ -421,7 +627,7 @@ def admin_registration_stats(
     new_7d = db.query(func.count(User.id)).filter(User.created_at >= d7).scalar() or 0
     new_30d = db.query(func.count(User.id)).filter(User.created_at >= d30).scalar() or 0
 
-    by_role: dict[str, int] = {"member": 0, "pro": 0, "owner": 0}
+    by_role: dict[str, int] = {"guest": 0, "member": 0, "pro": 0, "owner": 0}
     for role, n in db.query(User.role, func.count(User.id)).group_by(User.role).all():
         key = (role or "member").strip().lower()
         if key == "admin":
