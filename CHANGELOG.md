@@ -50,6 +50,32 @@
 - **测试**：`frontend/tests/components/devil-advocate-panel.test.tsx` 6 用例（警示红与
   hairline/挂载不触发/现有 API 路径与 busy 态/结果真渲染/onError 如实/静默结束不装成功/
   SuggestTab 集成锚点）；既有 suggest-tab 9 用例回归通过；`tsc --noEmit` 通过。
+### feat-四档资金结构消费后端(exday_daily 日序列 API)（2026-10-24）
+
+**背景**: 交接备注 §7 点名的「最容易出成果」任务 —— `exday_daily` 表(Migration 220, v0.47.0 落库)此前**全仓无任何 API/页面消费**。表存通达信 TQ `get_exday_data` 四档结构(口径 tdx_exday4, 按单笔成交金额分档), 每交易日 15:45 落库累积, **2026-10-23 起才有数据且历史无法回填**(接口只返当日 1 行)。
+
+**改动(分支 `feat/exday-fund-structure-20261024`, 独立 worktree)**
+- **`src/core/exday_structure.py` 新增 `query_series()`**(src/core 层, 不 import src/web): 读 `exday_daily` 该标的日期序列, 字段按表结构原样出; 缺日期**不补 0**(items 只含实际落库行); start/end(YYYYMMDD/YYYY-MM-DD 均收)闭区间过滤 + limit 截最近 N 行反转升序; 附 `data_since`(全表累积起点)、`direction_semantics`、`tier_thresholds_hint`。表未建/库断 → `available=false` 显式降级, **吞异常前先 `safe_rollback(db)`**(PG aborted 事务防线)。
+- **`src/web/api/fund_structure.py`(新)**: `GET /api/market/fund-structure/{symbol}?market=&start=&end=&limit=30&refresh=0`。响应强制携带 `caliber: "tdx_exday4"` + `direction_semantics`(AGENTS.md 口径红线: 与逐笔/东财四档不可换算, 禁用于主力意图判定); 缓存走 biz_cache(L1+L2, key 前缀 `biz:`, TTL 300s), **只缓存成功结果**(失败不缓存, 恢复后下一请求立即可见), `refresh=1` 绕过。
+- **`src/web/app.py`**: 挂载于 `/api/market` 前缀, `dependencies=protected`(跟随 price_distribution/cancel_profile 同类行情端点鉴权)。
+- **`specs/api/fund_structure.md`(新)**: EXDAY-001~005 验收标准(口径标签/缺日期不补 0/稀疏标注/显式无数据/前端单日不画趋势), `trace_specs.py` 100%(27 条标准 51 用例)。
+- **`tests/test_fund_structure_api.py`(新)**: 13 用例(临时 SQLite, 不打 TQ 网关), 全部 @spec 标注。
+
+**验证**: `pytest tests/test_fund_structure_api.py tests/test_exday_structure.py -q` → 31 passed; `scripts/trace_specs.py` → 27/27 100%。
+
+### feat-四档资金结构消费前端(工作台盘口资金标签)（2026-10-24）
+
+**背景**: 消费 MVP 的前端半边(后端见上条)。挂载于工作台「盘口资金」标签(L2Tab 右栏, 暗盘资金 TQ 之后): 两者同为盘后落库数据, 与盘中实时段分离。
+
+**改动**
+- **`frontend/src/components/FundStructurePanel.tsx`(新, 纯展示)**: ①四档(特大/大/中/小)买卖金额对比条(同档内买红/卖绿) + 主动净额; ②当日主动买占比/主力(特大+大)主动净流入占比/散户化率/筹码迁移/成交额因子格; ③≥2 个交易日渲染「主动买占比」柱带与「主力净流入占比」红绿双向柱带(缺值 2px 灰点, 不按 0 计)。
+- **稀疏数据契约(spec EXDAY-003/005)**: 头部恒显「数据自 2026-10-23 起累积 · N 个交易日」; `count==1` 只展示当日结构**不画趋势**(显式说明行); `count==0`/`available=false` 显式「无数据」+ 后端 reason 原文, 绝不补 0/编造; quality≠ok 显式「数据待核」。
+- **口径标签**: `tdx_exday4` 徽章(CaliberBadge 同款样式, 自实现 —— 该文件在第 2 波冲突清单禁改且其 Caliber 类型不含 tdx_exday4), tooltip 携带完整 direction_semantics + 推断阈值提示; 与同屏逐笔/明盘/暗盘 TQ 各带各的标签, 互不混算。
+- **`L2Tab.tsx`**: `useFundStructure` hook(300s 轮询 + 换股清值 + 请求序号守卫 + stale-on-error, 与同文件其余端点同规则), `FundStructureSection` 挂右栏。
+- **铁律**: 去卡片化(hairline 分节无卡片)、字号 10/11/12/13、数字 font-num(tabular-nums)、买红卖绿、金额走 toAmount 体系(元→亿/万, 规模量不带 '+')。
+- **`fund-structure-panel.test.tsx`(新)**: 10 用例钉渲染侧稀疏契约。
+
+**验证**: `npx tsc --noEmit` 0 错; `node scripts/check_ui_rules.mjs` 本文件零违规(存量 3 条 Forecast/price_bg 违规系第 2 波合入遗留, 基线已存在); `pnpm vitest run fund-structure-panel` → 10 passed。
 
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 

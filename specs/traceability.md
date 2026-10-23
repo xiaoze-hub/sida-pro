@@ -1,8 +1,8 @@
 # 规格追溯表 (自动生成, 请勿手工修改)
 
-- 验收标准: **34** 条
-- 已覆盖: **34** 条 (100.0%)
-- 测试用例: **57** 个
+- 验收标准: **39** 条
+- 已覆盖: **39** 条 (100.0%)
+- 测试用例: **68** 个
 
 | 规格 ID | 摘要 | 规格位置 | 守卫测试 |
 |---|---|---|---|
@@ -15,6 +15,11 @@
 | `DEVIL-004` | `devil_advocate` 的 `prompt_fragment` 必须要求证据缺失显式写「无数据」、无现成工具的维度（商誉/解禁等）写「无数据源」，并声明禁止编造数字、禁止用 0 冒充缺失 —— 空头证据恰恰最容易被模型"脑补"，这是压力测试的生命线 | `specs\harness\recipes.md:42` | `tests\test_spec_harness_recipes.py:142` `test_devil_advocate_prompt_forbids_fabrication` |
 | `DEVIL-005` | `devil_advocate` 的 `prompt_fragment` 必须原文声明三口径红线：主力意图只认逐笔 `get_main_intent`、`get_capital_flow` 禁做主力意图方向判定、L2 主力净流入标 TQ（`get_decision_pioneer`）—— 看空结论引用资金方向若用错口径，等于造谣 | `specs\harness\recipes.md:43` | `tests\test_spec_harness_recipes.py:150` `test_devil_advocate_prompt_declares_caliber_redlines` |
 | `DEVIL-006` | `devil_advocate` 的 `output_sections` 首段必须是「一句话结论」，且必须包含「口径与缺口」收尾段 —— 与全站参谋输出契约一致（结论前置 + 缺口显式），无数据源的维度要有固定落点而不是散落在死因里 | `specs\harness\recipes.md:44` | `tests\test_spec_harness_recipes.py:158` `test_devil_advocate_output_contract` |
+| `EXDAY-001` | 四档资金结构 API 响应必须携带 `caliber: "tdx_exday4"` 与 `direction_semantics`（按单笔成交金额分四档，与腾讯逐笔/东财四档不可换算，禁止用于主力意图判定） | `specs\api\fund_structure.md:18` | `tests\test_fund_structure_api.py:64` `test_series_carries_caliber_and_direction_semantics`<br>`tests\test_fund_structure_api.py:159` `test_endpoint_returns_series_and_caches` |
+| `EXDAY-002` | 日期序列只返回库中实际落库行（字段按表结构原样出），缺日期不得补 0 / 补平成连续交易日轴 | `specs\api\fund_structure.md:19` | `tests\test_fund_structure_api.py:76` `test_series_returns_rows_only_no_padding`<br>`tests\test_fund_structure_api.py:88` `test_series_symbol_without_data_is_available_with_zero_rows` |
+| `EXDAY-003` | 响应必须带 `data_since`（全表累积起点）与 `count`（该股实际行数），供前端显式标注「数据自 2026-10-23 起累积，N 个交易日」 | `specs\api\fund_structure.md:20` | `tests\test_fund_structure_api.py:98` `test_series_data_since_is_table_origin` |
+| `EXDAY-004` | 无数据（未落库/缺表/查询失败/db 为 None）必须显式 `available=false` + 原因，禁止以 0 或空数组冒充有数；best-effort 吞异常前必须先 `safe_rollback(db)` | `specs\api\fund_structure.md:21` | `tests\test_fund_structure_api.py:123` `test_series_missing_table_degrades_with_safe_rollback`<br>`tests\test_fund_structure_api.py:135` `test_series_db_none_degrades`<br>`tests\test_fund_structure_api.py:142` `test_series_blank_symbol_degrades`<br>`tests\test_fund_structure_api.py:195` `test_endpoint_failure_not_cached`<br>`tests\test_fund_structure_api.py:207` `test_endpoint_blank_symbol_degrades` |
+| `EXDAY-005` | 前端：`count==1` 只展示当日结构不画趋势序列，`count>=2` 才画每日序列；金额走 toAmount（元→亿/万）、数字 tabular-nums、买入/净流入红卖出/净流出绿，同屏其他口径资金数据各带口径标签，无数据显式「无数据」 | `specs\api\fund_structure.md:22` | `tests\test_fund_structure_api.py:214` `test_endpoint_supports_sparse_ui_contract` |
 | `RECIPE-001` | 每份 recipe 必须声明 `acceptance`（≥1 条）—— 没有验收标准的配方等于没有承诺，改坏了没人能发现 | `specs\harness\recipes.md:27` | `tests\test_spec_harness_recipes.py:26` `test_every_recipe_declares_acceptance` |
 | `RECIPE-002` | `prompt_fragment` 必须原文出现 `output_sections` 的每一个段落名 —— 段落名是输出契约，提示词里缺一段，模型就不写那一段 | `specs\harness\recipes.md:28` | `tests\test_spec_harness_recipes.py:32` `test_prompt_fragment_covers_output_sections` |
 | `RECIPE-003` | `budget.max_tool_calls` 必须 ≥ 该配方挂载的工具数 —— 否则排在后面的工具永远轮不到，等于白挂 | `specs\harness\recipes.md:29` | `tests\test_proposal_collection_gating.py:112` `test_deep_diagnosis_budget_covers_mounted_tools`<br>`tests\test_spec_harness_recipes.py:43` `test_budget_covers_tool_count` |
