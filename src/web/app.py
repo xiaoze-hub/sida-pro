@@ -68,6 +68,7 @@ from src.web.api import (
     audit,
     market_mainline,
     sentiment_series,
+    market_replay,
     market_scan,
     seal_quality,
     demon_pool,
@@ -376,6 +377,14 @@ app.include_router(
     prefix="/api/market/sentiment",
     tags=["market-sentiment"],
     dependencies=protected,
+)
+# 盘后复盘三池序列 + 连板晋级树(创新 1, 2026-10-24): market_replay_daily 只读快照。
+# 行情类纯读数据(不含用户数据) → data_read 双轨(用户 JWT / 服务 token), 同 /api/quotes。
+app.include_router(
+    market_replay.router,
+    prefix="/api/market/replay",
+    tags=["market-replay"],
+    dependencies=data_read,
 )
 app.include_router(
     stocks.router, prefix="/api/stocks", tags=["stocks"], dependencies=protected
