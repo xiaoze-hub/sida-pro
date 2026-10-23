@@ -100,9 +100,11 @@ def test_registry_integrity():
            # 2026-10-23 盘前 Agent B 支线: 当日盘前底稿(self, fallback=False)
            "get_premarket_brief",
            # 2026-10-23 exday 产品化: 四档资金结构 + 委托粒度(客户端 tdx_exday4 口径)
-           "get_fund_structure", "get_order_granularity", "get_factor_winrate", "get_factor_winrate"}
+           "get_fund_structure", "get_order_granularity", "get_factor_winrate",
+           # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
+           "get_market_replay"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 70
+    assert len(CHAT_TOOL_REGISTRY) == 71
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -166,16 +168,18 @@ def test_exported_tool_order():
         # 盘前底稿(2026-10-23 B 支线): self 口径, fallback=False 由路由挡闲聊
         "get_premarket_brief",
         # 四档资金结构 + 委托粒度(2026-10-23): 客户端口径, 单票 25ms 可进请求路径
-        "get_fund_structure", "get_order_granularity", "get_factor_winrate", "get_factor_winrate"}
+        "get_fund_structure", "get_order_granularity", "get_factor_winrate",
+           # 2026-10-23 盘后复盘: 涨停/炸板/跌停三池同源同日 + 晋级率 + 情绪周期
+           "get_market_replay"}
     # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个 + 提案采集 + 盘前底稿
-    assert set(tail[-14:]) == {"remember_preference", "create_daily_task",
+    assert set(tail[-15:]) == {"remember_preference", "create_daily_task",
                                "get_intraday_profile", "get_trend_profile",
                                "get_stock_factors", "get_scenario_matrix",
                                "get_fund_structure", "get_order_granularity", "get_factor_winrate",
                                "get_trader_playbook",
                                "list_data_domains", "query_data_domain",
                                "note_new_dimension",
-                               "get_premarket_brief"}
+                               "get_premarket_brief", "get_market_replay"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 

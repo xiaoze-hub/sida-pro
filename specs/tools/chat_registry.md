@@ -7,8 +7,8 @@
 
 | 名字 | 含义 | 数量 |
 |---|---|---|
-| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **70** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **69** |
+| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **71** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **70** |
 | **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
 | **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **2** |
 

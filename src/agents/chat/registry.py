@@ -2980,3 +2980,58 @@ async def _tool_get_factor_winrate(db: Session, args: dict, user: User | None = 
     except Exception as exc:  # noqa: BLE001
         logger.warning("get_factor_winrate 失败: %s", exc)
         return f"[因子胜率回测库] 读取异常：{type(exc).__name__}——不做推断。"
+
+
+@register_chat_tool(
+    "get_market_replay",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_market_replay",
+            "description": (
+                "读取【盘后复盘全景证据】：涨停家数与连板梯队（首板/2板+/3板+/一字板）、"
+                "炸板家数与炸板率、封板率、跌停家数与最长连续跌停、晋级率（昨日涨停今日续板比例）、"
+                "涨停行业分布与龙头、情绪周期 6 阶段（冰点/启动/主升/高潮/退潮/修复）、"
+                "以及东财与通达信两口径交叉校验差值。"
+                "回答「今天涨停几家/连板梯队怎样/炸板率多少/跌停几只/晋级率多高/情绪周期在哪"
+                "/主线是什么」等盘后复盘类问题时**优先调用本工具**，"
+                "不要再从 get_strategy_signals 里找涨停数据。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "交易日 YYYYMMDD 或 YYYY-MM-DD；不传=最近一个已落库快照",
+                    },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": "true=强制重新抓取外部池（盘中/盘后刚收盘时用），默认读库",
+                        "default": False,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="东财三池同源同日(ZTPool/ZBPool/DTPool) + TQ池交叉校验; 炸板率=炸板/(涨停+炸板)",
+)
+async def _tool_get_market_replay(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core import market_replay
+
+    date_arg = str((args or {}).get("date") or "").replace("-", "").strip() or None
+    refresh = bool((args or {}).get("refresh") or False)
+    try:
+        replay = None
+        if not refresh:
+            replay = market_replay.read_latest(db, date_arg)
+        if replay is None:
+            replay = await asyncio.to_thread(market_replay.build_replay, date_arg)
+            if replay:
+                await asyncio.to_thread(market_replay.persist, db, replay)
+        if not replay:
+            return "[盘后复盘] 取数失败：涨停池与跌停池均未返回数据——本维度如实标注无数据，不做推测。"
+        return market_replay.render(replay)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_market_replay 失败: %s", exc)
+        return f"[盘后复盘] 读取异常：{type(exc).__name__}——本维度如实标注无数据。"

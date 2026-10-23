@@ -392,7 +392,7 @@ def compose_market_prompt(recipe, run: MarketRun, question: str,
             "它们必须在结论里写成「未取到（原因：无标的可查 / 参数不适用）」，"
             "不许用常识或印象补齐，也不许据此断言「没有」。"
         )
-    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "")
+    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "") + '\n\n【通用排版铁律 —— 禁止教科书式长段落】\n1) 第一段必须先给一句话结论（≤45 字，带方向/状态 + 两个关键数字）。\n2) 每个段落下的内容一律写「- 」要点列表或 GFM 表格；每条要点独立成行、≤50 字、以数字或标的开头。\n3) 任何地方禁止出现超过 3 行的连续散文段落；禁止使用「从盘面看/整体而言/值得注意的是/综上所述」等套话。\n4) 段落标题单独成行（用【段落名】包起来），不许用 markdown `#` 标题。'
     if context:
         system += "\n\n--- 会话上下文（用户本人 / 当前页面 / 持仓与偏好）---\n" + context
 

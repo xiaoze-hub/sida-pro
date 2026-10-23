@@ -472,7 +472,7 @@ def compose_prompt(recipe, runs: list[PipelineRun], question: str,
             "请只依据这些数据写结论：每个数字必须能在下面的证据里找到原文，缺失的维度写「暂无」，"
             "不要补充任何未列出的数据，也不要推测。"
         )
-    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "")
+    system = (recipe.prompt_fragment or "") + rule + (f"\n输出段落：{sections}" if sections else "") + '\n\n【通用排版铁律 —— 禁止教科书式长段落】\n1) 第一段必须先给一句话结论（≤45 字，带方向/状态 + 两个关键数字）。\n2) 每个段落下的内容一律写「- 」要点列表或 GFM 表格；每条要点独立成行、≤50 字、以数字或标的开头。\n3) 任何地方禁止出现超过 3 行的连续散文段落；禁止使用「从盘面看/整体而言/值得注意的是/综上所述」等套话。\n4) 段落标题单独成行（用【段落名】包起来），不许用 markdown `#` 标题。'
     if context:
         system += "\n\n--- 会话上下文（用户本人 / 当前页面 / 持仓与偏好）---\n" + context
     blocks = [f"【用户问题】{question}"]

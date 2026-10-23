@@ -5987,6 +5987,61 @@ CREATE TABLE IF NOT EXISTS factor_winrate_daily (
         logger.warning("factor_winrate_daily 索引创建失败(表已建): %s", exc)
 
 
+def _m222_market_replay_daily(conn: Connection) -> None:
+    """盘后复盘日快照: 涨停/炸板/跌停/晋级率/情绪周期一站落库(2026-10-23)。
+
+    口径红线: 本表 limit_up/炸板 全部来自东财三池**同源同日**
+    (getTopicZTPool / getTopicZBPool / getTopicDTPool), 与 market_sentiment_daily 的
+    TQ 自算口径(tdx_selfcalc)并存不混算; payload 存完整证据 JSON。
+    """
+    if _has_table(conn, "market_replay_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS market_replay_daily (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    market VARCHAR(8) NOT NULL DEFAULT 'CN',
+    limit_up_count INTEGER NOT NULL DEFAULT 0,
+    limit_up_max_streak INTEGER NOT NULL DEFAULT 0,
+    first_board_count INTEGER NOT NULL DEFAULT 0,
+    ge2_count INTEGER NOT NULL DEFAULT 0,
+    ge3_count INTEGER NOT NULL DEFAULT 0,
+    one_word_count INTEGER NOT NULL DEFAULT 0,
+    broken_count INTEGER NOT NULL DEFAULT 0,
+    break_rate_pct FLOAT,
+    seal_rate_pct FLOAT,
+    limit_down_count INTEGER NOT NULL DEFAULT 0,
+    limit_down_max_days INTEGER NOT NULL DEFAULT 0,
+    promo_rate_pct FLOAT,
+    phase VARCHAR(16),
+    phase_label VARCHAR(16),
+    mainline JSON,
+    quality VARCHAR(12),
+    missing_dims JSON,
+    source VARCHAR(32),
+    payload JSON,
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_market_replay_daily "
+                "ON market_replay_daily (trade_date, market)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_market_replay_date ON market_replay_daily (trade_date)")
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market_replay_daily 索引创建失败(表已建): %s", exc)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6202,6 +6257,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(219, "auth_session_revocations", _m219_auth_session_revocations),
     Migration(220, "exday_daily", _m220_exday_daily),
     Migration(221, "factor_winrate_daily", _m221_factor_winrate_daily),
+    Migration(222, "market_replay_daily", _m222_market_replay_daily),
 )
 
 

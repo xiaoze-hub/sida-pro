@@ -2610,3 +2610,44 @@ class FactorWinrateDaily(Base):
     lookback_bars = Column(Integer, nullable=True)
     source = Column(String(32), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MarketReplayDaily(Base):
+    """盘后复盘日快照：涨停/炸板/跌停/晋级率/情绪周期一站落库（2026-10-23）。
+
+    为什么单建表而不是塞 `market_sentiment_daily`：
+    - 后者是 TQ 自算口径（`source=tdx_selfcalc`），本表是**东财三池同源同日**口径，
+      炸板率/封板率的分母必须同源才能算，混写会把两种口径搅在一起；
+    - `payload` 存完整 JSON（含全部涨停/炸板/跌停明细行），供复盘页与参谋工具直接读，
+      标量列供 SQL 聚合与胜率回测联动。
+    """
+
+    __tablename__ = "market_replay_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "market", name="uq_market_replay_daily"),
+        Index("ix_market_replay_date", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(8), nullable=False)          # YYYYMMDD
+    market = Column(String(8), nullable=False, default="CN")
+    limit_up_count = Column(Integer, nullable=False, default=0)
+    limit_up_max_streak = Column(Integer, nullable=False, default=0)
+    first_board_count = Column(Integer, nullable=False, default=0)
+    ge2_count = Column(Integer, nullable=False, default=0)   # 2板及以上
+    ge3_count = Column(Integer, nullable=False, default=0)   # 3板及以上
+    one_word_count = Column(Integer, nullable=False, default=0)
+    broken_count = Column(Integer, nullable=False, default=0)
+    break_rate_pct = Column(Float, nullable=True)            # 炸板率(%)
+    seal_rate_pct = Column(Float, nullable=True)             # 封板率(%)
+    limit_down_count = Column(Integer, nullable=False, default=0)
+    limit_down_max_days = Column(Integer, nullable=False, default=0)
+    promo_rate_pct = Column(Float, nullable=True)            # 晋级率(%)
+    phase = Column(String(16), nullable=True)                # 冰点/启动/主升/高潮/退潮/修复
+    phase_label = Column(String(16), nullable=True)
+    mainline = Column(JSON, default=dict)                    # 行业分布+龙头
+    quality = Column(String(12), nullable=True)              # ok|partial|missing
+    missing_dims = Column(JSON, default=list)
+    source = Column(String(32), nullable=True)
+    payload = Column(JSON, default=dict)                     # 完整复盘证据
+    created_at = Column(DateTime, default=datetime.utcnow)

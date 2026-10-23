@@ -528,6 +528,27 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"量化因子胜率回测注册失败: {e}")
 
+        # 盘后复盘三池落库(2026-10-23): 涨停/炸板/跌停三池同源同日抓取 → market_replay_daily。
+        # 修复「涨停家数长期 0、跌停从未采集、炸板率永远暂无」三类数据断裂。
+        try:
+            from src.core.market_replay import run_scheduled as _replay_job
+
+            rt.scheduler.scheduler.add_job(
+                _replay_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=50,
+                id="market-replay-daily",
+                name="盘后复盘三池快照",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("盘后复盘三池快照已注册(交易日 15:50)")
+        except Exception as e:
+            logger.error(f"盘后复盘三池快照注册失败: {e}")
+
         # 连板梯队数据自检 + 自愈(2026-10-11 P1 断档修复): 每日 16:05(含周末)
         # limit_up_events 是 /ladder 收盘态真值源; TQ 断链期 15:35 管线静默失败 →
         # 表停更几天无人发现。本作业比对最新交易日 vs 期望交易日, 缺则 TQ 直连补数;
