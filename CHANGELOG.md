@@ -1,3 +1,45 @@
+## release: v0.46.0（盘前报告 → 盘前分析 Agent：证据合流 + 入口扶正）
+
+**产品裁决**：用户实测反馈「盘前报告不如盘前分析实用」。核查发现系统里并存两个盘前产物：
+08:30 的模板报告 `premarket-daily`（全站同一份）与 09:05 的 LLM Agent `premarket_outlook`
+（按 user_id）。本次不删报告，而是把它**降级为证据供给层**，让分析 Agent 用同一份事实做研判。
+
+### 1. 证据层（新增 `src/core/premarket_evidence.py`）
+
+- 六块结构化证据：`overnight` / `ladder` / `news` / `sentiment` / `watchlist` / `portfolio`，
+  每块带 `quality`（`ok|suspect|missing`）、`reason`、`source`、`as_of`。
+- **失真判定写在取数层**，不交给 LLM：涨停家数超全市场上限、连板高度与梯队矛盾、
+  快讯时间戳全部重复 → `suspect` + 原因。此前 Agent 会输出「涨停 5580 家（数据异常）」
+  这种脏结论，现在由代码标注，模型只能照抄。
+- `src/core/report_generator.py` 改为调用证据层，`quality == ok` 时**输出与旧版逐字节一致**
+  （推送与历史兼容），仅对失真块追加 `⚠️ 数据待核` 角标。
+- 单块失败一律降级为 `missing` + 原因，**绝不抛**。
+
+### 2. 接线（新增 `/api/premarket`）
+
+- `GET  /api/premarket/today` — 当日最新盘前分析（含 `structured` 门禁/主线/逐票预案、
+  `key_levels`、`is_stale`）；无记录返回 `empty: true` 而非 404。
+- `POST /api/premarket/run` — 异步触发分析，每用户 5 分钟限流（429 带剩余秒数）。
+- `GET  /api/premarket/evidence` — 证据快照，`missing`/`suspect` 块原样透传。
+- 数智参谋命中 `premarket_strategist` 时自动注入当日盘前底稿（`inject_premarket_brief`）；
+  **无当日记录不注入**，历史记录注入时显式标注「基准日 X（非今日）」，不许昨天冒充今天。
+- 新增对话工具 `get_premarket_brief`（工具总数 66 → 67，钉子测试同步）。
+
+### 3. 前端入口扶正
+
+- `/reports` 默认 Tab 改为「分析」（盘前/盘后/盘中），静态报告降为「底稿归档」；
+  顶部新增 **「▶ 立即分析」**（入队后 30s 轮询今日结果，429/报错显式内联展示）
+  与 **「问参谋」**（带 `agent` + 编码后 `q` 跳转）。
+- 首页「最新报告」卡改为 **「盘前 / 盘后分析」**：展示环境门禁、仓位上限、主线、前 3 条逐票预案；
+  空态、失败态、`is_stale` 基准日标注三态齐全，**首屏不阻塞**（既有 5 条 perf 断言全绿）。
+- 分析历史新增「在参谋中继续」；数智参谋支持 `?agent=` / `?q=` / `?date=` 预填（不自动发送）。
+
+### 门禁
+
+- 后端定向 **122 passed**（证据层 12 + API 10 + 报告/推送/回归/注册表/purity）。
+- 5 个 `check_*.py` 全 OK；规格追溯 **19/19（32 用例）**；`chat.py` 保持 **2307 / 2310** 行。
+- 前端 `tsc --noEmit` **0 错**；定向 vitest 6 文件 / 32 用例全绿；`vite build` 28.11s。
+
 ## release: v0.45.1（线上 500 事故修复：事务中止放大 + 墓碑表迁移）
 
 **事故**：v0.45.0 上线后，管理后台、设置、通知、系统等**成片 500**，用户看到的是
