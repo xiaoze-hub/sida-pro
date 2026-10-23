@@ -1,6 +1,6 @@
 # 数智参谋 · Harness 配方验收契约
 
-规格事实源。对应实现：`src/harness/recipes/*.yaml`（11 份）、`src/harness/recipes.py`（加载与路由）、
+规格事实源。对应实现：`src/harness/recipes/*.yaml`（12 份）、`src/harness/recipes.py`（加载与路由）、
 `src/harness/pipeline.py`（确定性管线）。
 
 **基准日**：2026-10-22（commit `4faae6c` 起）
@@ -19,6 +19,7 @@
 | `left_diagnosis` 只做了第三层滤网，前两层工具没挂，模型只能写「本轮未授权」 | RECIPELD-001 |
 | 配方里写了不存在的工具名，模型静默少调一个维度 | RECIPE-004 |
 | 两套配方抢同一个关键词，路由结果取决于字典序 | RECIPE-005 |
+| 空头类结论最容易被模型"脑补"证据（编一个上方套牢峰、把四档资金方向当主力意图） | DEVIL-003/004/005 |
 | 预算写 9 却挂 12 个工具，后 3 个永远轮不到 | RECIPE-003 |
 
 ## 验收标准
@@ -35,6 +36,12 @@
 - **REPLAY-002** 盘后复盘的涨停家数、炸板率、跌停家数、晋级率四项**不得用 0 冒充缺失** —— 取数失败必须显式写「未取到/暂无」，因为 0 是一个有效观测值，会被模型当成事实写进结论
 - **REPLAY-003** `postmarket_reviewer` 的 `prompt_fragment` 必须包含「结论前置 + 核心数字表格 + 每条要点独立成行 ≤50 字 + 禁止连续 3 行以上段落」四条排版约束，且 `output_sections` 首段必须是「一句话结论」
 - **RECIPE-006** 新分析维度的采集**必须走确定性后置解析**（`src/core/gap_collector.py`：深度诊断 + 回答里有「未取到」类标记 → 一次**不带工具**的独立判定 → 严格校验后入 `harness_proposals`），**不得依赖模型调用采集工具** —— 2026-10-22 三次真机验收实测：`agnes-3.0-flash` 在连续 10 个只吃 `symbol` 的工具之后，对第 11 个工具会无视 schema 直接照抄 `{"symbol":…}`（9 次实验 6 次，删掉 `symbol` 字段也照吐），工具被调用但提案表恒空；`note_new_dimension` 因此**不挂任何配方、不进兜底路径**，只留 handler 供人工/API 使用
+- **DEVIL-001** `devil_advocate`（空头司令）必须 `pipeline: true` + `scope: symbol` —— 压力测试是证据链对抗，模型自由选工具就会挑软柿子捏；取数必须由确定性管线按固定顺序完成，模型只写结论（2026-10-24 创新 6，纯 prompt 编排：不加工具、不加表、不碰 chat.py）
+- **DEVIL-002** `devil_advocate` 必须同时挂载三口径工具 `get_main_intent`（逐笔主力意图）、`get_capital_flow`（eastmoney4 四档资金）、`get_decision_pioneer`（TQ L2）与筹码证据工具 `get_chip_accumulation` —— 「大单流出」与「上方套牢峰」两类死因证据就靠这四个，缺了哪个模型就只能写空话
+- **DEVIL-003** `devil_advocate` 的 `prompt_fragment` 必须包含「亏 15%」情景假设、「死因一/死因二/死因三」三段死因结构，且要求**每条死因都给可证伪的反驳条件**（若…则该死因不成立）—— 不可证伪的看空只是情绪，不是压力测试
+- **DEVIL-004** `devil_advocate` 的 `prompt_fragment` 必须要求证据缺失显式写「无数据」、无现成工具的维度（商誉/解禁等）写「无数据源」，并声明禁止编造数字、禁止用 0 冒充缺失 —— 空头证据恰恰最容易被模型"脑补"，这是压力测试的生命线
+- **DEVIL-005** `devil_advocate` 的 `prompt_fragment` 必须原文声明三口径红线：主力意图只认逐笔 `get_main_intent`、`get_capital_flow` 禁做主力意图方向判定、L2 主力净流入标 TQ（`get_decision_pioneer`）—— 看空结论引用资金方向若用错口径，等于造谣
+- **DEVIL-006** `devil_advocate` 的 `output_sections` 首段必须是「一句话结论」，且必须包含「口径与缺口」收尾段 —— 与全站参谋输出契约一致（结论前置 + 缺口显式），无数据源的维度要有固定落点而不是散落在死因里
 
 ## 维护方式
 

@@ -13,6 +13,43 @@
 - **为什么**：`market_replay_daily`（Migration 222，交易日 15:50 东财三池落库）自 v0.48 起只有参谋工具 `get_market_replay` 消费，没有任何 REST 端点与页面——创新 1「连板梯队晋级树」（交接备注 §10 P0）的数据底座已就绪但不可达。端点只读已落库快照，不在请求路径重抓东财。
 - **口径守线**：缺数据交易日显式 `available=false`（数值全 null，绝不补 0）；晋级率三件套（样本数=昨涨停池家数 / 同池无条件基准表内未存→显式口径缺口 / 未剔除 T+1 一字涨停→显式标注）；东财三池 `eastmoney_zt` 与 TQ `tq_pool` 同屏各自带标签禁止混算；封单额/流通市值比与分层晋级率表内未存→显式 null + 口径缺口说明，禁止现算编造。
 - **测了什么**：`tests/test_market_replay_api.py` 13 用例（缺日占位不补 0 / 相邻交易日才差分 / 晋级率三件套 / 双口径标签 / Top40 截断标注 / payload 缺失不反推 / 无快照 available=false+latest_date）；规格新增 `REPTREE-001..006`（`specs/harness/replay_tree.md`）；`python scripts/trace_specs.py` 28/28 = 100%（51 用例）。
+### feat-空头司令挑刺配方(devil_advocate 红蓝对抗压力测试, 创新 6 后端)
+
+- **新增 harness 配方 `src/harness/recipes/devil_advocate.yaml`（空头司令，12 = 11 + 1）**：
+  创新 6（P1，纯 prompt 编排）—— 对指定标的强制逆向风控研判：**假设这笔交易已亏 15%，
+  站空头立场给最可能的 3 个死因**，每条死因必须带证据链（大单流出/上方套牢筹码峰/消息面利空/
+  题材退潮信号等）与**可证伪的反驳条件**（若…则该死因不成立）；凑不满 3 条有证据的死因时
+  缺位写「证据不足，不做臆测」，不许硬凑。
+- **确定性管线**：`pipeline: true` + `scope: symbol`，按固定顺序调用 **10 个现有工具**
+  （三口径资金 `get_main_intent`/`get_capital_flow`/`get_decision_pioneer` + 筹码
+  `get_chip_accumulation`/`get_fund_structure` + 消息面 `get_stock_dossier`/
+  `get_fundamentals_detail` + 走势/催化/情景 `get_trend_profile`/`get_event_catalyst`/
+  `get_scenario_matrix`），预算 11。**工具数钉子 71 不动、不新增表、chat.py 保持 2307 行**。
+- **口径红线进提示词**：主力意图只认逐笔（get_main_intent）；get_capital_flow（eastmoney4）
+  方向位与逐笔相反、禁做主力意图方向判定；L2 主力净流入标 TQ。证据缺失显式写「无数据」，
+  **无现成工具的维度（商誉、解禁日历等）写「无数据源」**——本轮盘点确认这两类暂无专用工具。
+- 只出逆向风险情报：提示词明令禁止买卖指令、禁止大盘方向预测（交易 403 守卫 Frozen Ring 不碰）。
+- **规格与测试**：`specs/harness/recipes.md` 新增 `DEVIL-001..006`（配方结构/证据链工具/
+  可证伪死因/禁编造/口径红线/输出契约），`tests/test_spec_harness_recipes.py` 加 6 条 @spec 守卫；
+  路由确定性用例 +2（test_harness_routing）；配方数钉子 11→12（test_market_pipeline）。
+  规格追溯 **28/28（46 用例）100%**。
+
+### feat-工作台建议页呼叫空头司令(压力测试入口与结果展示, 创新 6 前端)
+
+- **新增 `frontend/src/components/copilot/DevilAdvocatePanel.tsx`**：工作台「建议」页
+  （SuggestTab，三层滤网之下）新增醒目**警示红按钮**「呼叫空头司令挑刺（压力测试）」——
+  用 `--destructive` 语义色板（危险操作警示，与买红卖绿行情色板无关）。
+- **走现有参谋触发路径，零新增端点**：`chatApi.createConversation({stock_symbol, stock_market})`
+  → `chatApi.sendMessageStream(conv.id, "空头司令挑刺（压力测试）{symbol}", …)`，问句含配方
+  关键词（确定性路由 devil_advocate）与 6 位代码（管线解析标的），流式 stage/delta 实时呈现，
+  onDone 以落库全文经 SafeMarkdown 渲染（GFM 表格 + tabular-nums），组件不二次加工 AI 正文。
+- **如实陈述副作用与失败**：tooltip 披露会新建参谋会话（AI 参谋页可见）；失败展示后端 error
+  原文、不推断原因；流静默结束按失败处理不装成功；固定声明「本次未发生任何交易委托」。
+- **排版铁律**：hairline 分隔（无卡片底、无 shadow-float）、字号 10/11/12、免责行注明
+  「无数据=本轮证据缺失 / 无数据源=平台暂无该维度工具」。
+- **测试**：`frontend/tests/components/devil-advocate-panel.test.tsx` 6 用例（警示红与
+  hairline/挂载不触发/现有 API 路径与 busy 态/结果真渲染/onError 如实/静默结束不装成功/
+  SuggestTab 集成锚点）；既有 suggest-tab 9 用例回归通过；`tsc --noEmit` 通过。
 
 ## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
 
