@@ -483,6 +483,29 @@ async def lifespan(app):
         except Exception as e:
             logger.error(f"TQ 全市场资金汇总任务注册失败: {e}")
 
+        # 四档资金结构日表(2026-10-23 用户要求「所有数据都要落库」):
+        # `get_exday_data` 只返当日 1 行, 历史分位/IC 只能靠每天落一次库累积。
+        # 全市场 5,580 只 × ~25ms ≈ 150s ⇒ 只能进采集器; 15:45 在 more_info(15:10)
+        # 与因子快照(15:35)之后, 且仍在 TQ 会话有效窗口内。
+        try:
+            from src.collectors.exday_daily import run_scheduled as _exday_job
+
+            rt.scheduler.scheduler.add_job(
+                _exday_job,
+                "cron",
+                day_of_week="mon-fri",
+                hour=15,
+                minute=45,
+                id="exday-daily",
+                name="TQ四档资金结构全市场落库",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("四档资金结构日表采集已注册(交易日 15:45)")
+        except Exception as e:
+            logger.error(f"四档资金结构采集注册失败: {e}")
+
         # 连板梯队数据自检 + 自愈(2026-10-11 P1 断档修复): 每日 16:05(含周末)
         # limit_up_events 是 /ladder 收盘态真值源; TQ 断链期 15:35 管线静默失败 →
         # 表停更几天无人发现。本作业比对最新交易日 vs 期望交易日, 缺则 TQ 直连补数;

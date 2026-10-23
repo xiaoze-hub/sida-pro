@@ -904,12 +904,16 @@ class KlineCollector:
             boll_upper, boll_mid, boll_lower, boll_width = boll_result
 
         # 量能分析
+        # 2026-10-23 审计修复：量比分母改用**前 5 日均量**（不含当日）。原实现
+        # `volumes[-1] / volume_ma5` 把当日量算进 ma5，放量时分母自我抬高 →
+        # 2 倍量显示成 1.67，「放量」判定被系统性压低（1.5 阈值实际要求 1.8 倍）。
         volume_ma5 = _calculate_ma(volumes, 5) if volumes else None
         volume_ma10 = _calculate_ma(volumes, 10) if volumes else None
         volume_ratio = None
         volume_trend = None
-        if volumes and volume_ma5 and volume_ma5 > 0:
-            volume_ratio = volumes[-1] / volume_ma5
+        prev5 = _calculate_ma(volumes[:-1], 5) if len(volumes) >= 6 else None
+        if volumes and prev5 and prev5 > 0:
+            volume_ratio = volumes[-1] / prev5
             if volume_ratio > 1.5:
                 volume_trend = "放量"
             elif volume_ratio < 0.7:
@@ -1021,11 +1025,14 @@ class KlineCollector:
         indicators = self.get_technical_indicators(klines=klines)
 
         # 最近5日表现
-        recent_5 = klines[-5:] if len(klines) >= 5 else klines
+        # 2026-10-23 审计修复：原来取 klines[-5:] 再 `if i > 0` 比较，等于只比了
+        # 4 次（第 1 根没有前收），"近 5 日上涨天数" 永远 ≤4 —— 5 连阳会报 4。
+        # 现在多取 1 根作前收基准，正好 5 次比较。
+        recent_5 = klines[-6:] if len(klines) >= 6 else klines
         up_days = sum(
             1
-            for i, k in enumerate(recent_5)
-            if i > 0 and k.close > recent_5[i - 1].close
+            for i in range(1, len(recent_5))
+            if recent_5[i].close > recent_5[i - 1].close
         )
 
         # 趋势判断

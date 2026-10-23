@@ -2754,3 +2754,169 @@ async def _tool_get_premarket_brief(db: Session, args: dict, user: User | None =
         logger.warning("get_premarket_brief 工具失败: %s", exc)
         return f"盘前分析底稿获取失败: {str(exc)[:80]}"
 
+
+
+# ──────────────── 四档资金结构 / 委托粒度(2026-10-23, exday 能力产品化) ────────────────
+# 位置: 追加在注册表**最末**(同 get_premarket_brief 的理由: core 工具是导出清单的连续
+# 前缀, 新工具只能排尾部)。
+#
+# 口径关键: `tdx_exday4` = 通达信客户端 `get_exday_data` 的**按单笔成交金额分四档**口径,
+# 与 `get_capital_flow`(东财 eastmoney4)、`get_main_intent`(腾讯逐笔 tick) **互不可换算**,
+# 三者同屏必须各带标签。档位阈值官方未公开, 为推断值(见 exday_structure.TIER_THRESHOLDS_HINT)。
+@register_chat_tool(
+    "get_fund_structure",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_fund_structure",
+            "description": (
+                "获取个股**四档资金结构**（通达信客户端口径）：特大/大/中/小 四档的买入额与"
+                "主动买卖净额、主动买占比、散户化率、特大单占比、主力(特大+大)主动净额、"
+                "筹码迁移(大单净−小单净)。回答「资金结构怎么样」「大单还是小单在买」"
+                "「筹码是往大资金集中还是派发」「散户多不多」这类问题时用它。"
+                "与东财四档(get_capital_flow)、腾讯逐笔(get_main_intent)口径不同，不可混用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002361"},
+                    "market": {"type": "string", "enum": ["CN"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="通达信客户端四档口径(tdx_exday4)：按单笔成交金额分档，与东财四档/腾讯逐笔不可换算",
+)
+async def _tool_get_fund_structure(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core import exday_structure as ex
+
+    symbol = str((args or {}).get("symbol") or "").strip().upper()
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002361。"
+    market = str((args or {}).get("market") or "CN").upper()
+    if market != "CN":
+        return "四档资金结构仅支持 A 股(CN)。"
+    try:
+        # 单票 RPC 实测 24~26ms, 可直接进请求路径; 顺带写穿 exday_daily(历史只能靠落库累积)
+        m = await asyncio.to_thread(ex.fetch, symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_fund_structure 失败 [%s]: %s", symbol, exc)
+        return f"四档资金结构获取失败: {str(exc)[:100]}"
+    if not m.get("available"):
+        return f"[四档资金结构] {m.get('reason', '无数据')}——不做推断。"
+    if db is not None:
+        try:
+            from src.collectors.exday_daily import upsert_rows
+            from src.collectors.exday_daily import _today as _ex_today
+
+            row = ex.to_row(m, symbol=symbol.split(".")[0],
+                            trade_date=m.get("trade_date") or _ex_today())
+            await asyncio.to_thread(upsert_rows, db, [row])
+        except Exception as exc:  # noqa: BLE001 - 写穿失败不影响返回
+            logger.debug("exday 写穿失败 %s: %s", symbol, exc)
+    # 历史分位（有 20 个交易日样本才给，否则明说还需几天）
+    hist = _exday_history_pct(db, symbol, "retail_ratio")
+    text = ex.render(m, title=symbol)
+    if hist.get("available"):
+        text += (f"\n历史分位：散户化率 {hist['value']}% 位于近 {hist['days']} 个交易日第 "
+                 f"{hist['pct']} 分位")
+    elif hist.get("reason"):
+        text += f"\n历史分位：{hist['reason']}"
+    return text
+
+
+@register_chat_tool(
+    "get_order_granularity",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_order_granularity",
+            "description": (
+                "获取个股**委托粒度与拆单结构**（通达信客户端口径）：笔均委托(手)、笔均成交(手)、"
+                "委托/成交粒度比(拆单隐匿度)、委托-成交笔数比(一笔委托被拆成几笔成交)、"
+                "买/卖撤单率与撤单不对称。回答「有没有拆单」「是不是被动挂单被吃」"
+                "「撤单是不是假挂单」「托盘还是压盘」这类微观结构问题时用它。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "6 位代码，如 002361"},
+                    "market": {"type": "string", "enum": ["CN"], "description": "默认 CN"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    caliber="通达信客户端委托/成交笔数口径(tdx_exday4)：拆单为统计代理，非逐笔委托号还原",
+)
+async def _tool_get_order_granularity(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core import exday_structure as ex
+
+    symbol = str((args or {}).get("symbol") or "").strip().upper()
+    if not symbol:
+        return "请提供股票代码(symbol)，如 002361。"
+    market = str((args or {}).get("market") or "CN").upper()
+    if market != "CN":
+        return "委托粒度仅支持 A 股(CN)。"
+    try:
+        m = await asyncio.to_thread(ex.fetch, symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("get_order_granularity 失败 [%s]: %s", symbol, exc)
+        return f"委托粒度获取失败: {str(exc)[:100]}"
+    if not m.get("available"):
+        return f"[委托粒度] {m.get('reason', '无数据')}——不做推断。"
+    g = m.get("granularity") or {}
+    if not g.get("available"):
+        return (f"[委托粒度] {symbol} 缺委托量/笔数（TQ 未返回 BOrder/TotalBOrder 等）"
+                "——不推断拆单结构。")
+    lines = [
+        f"[数据源: 通达信 TQ get_exday_data · 委托/成交笔数口径 · {m.get('trade_date') or '当日'}] {symbol}",
+        f"四档阈值：{m.get('tier_thresholds_hint')}",
+    ]
+    if m.get("quality") != "ok":
+        lines.append(f"⚠️ 数据待核：{m.get('reason')}")
+    lines += [
+        f"笔均委托 {g['avg_order_lots']} 手/笔｜笔均成交 {g.get('avg_trade_lots')} 手/笔"
+        f"｜**拆单隐匿度 {g.get('gran_hiding')}×**",
+        f"委托/成交笔数比 {g.get('order_fill_ratio')}"
+        f"（<1 = 一笔委托被拆成多笔成交；越小被动拆单越重）",
+        f"买撤单率 {g.get('cancel_buy_rate')}%｜卖撤单率 {g.get('cancel_sell_rate')}%"
+        f"｜撤单不对称 {g.get('cancel_skew')}pp（>0 卖撤更凶=压盘恐吓，<0 买撤更凶=虚假托盘）",
+    ]
+    tags = [t for t in (m.get("tags") or [])
+            if t["code"] in {"passive_split", "granularity_wide", "fake_bid", "fake_ask"}]
+    for t in tags:
+        lines.append(f"  ▸ {t['label']}：{t['basis']}")
+    if not tags:
+        lines.append("  未命中拆单/托盘/压盘判据（阈值内）——不硬凑结论。")
+    lines.append("⚠️ 口径：拆单结论是**日频笔数比**的统计代理，不等于逐笔委托号还原"
+                 "（`.tck` 逆向已证伪被动 maker 委托号落盘）。")
+    return "\n".join(lines)
+
+
+def _exday_history_pct(db: Session | None, symbol: str, field: str, days: int = 20) -> dict:
+    """读 exday_daily 算某字段的当日历史分位（样本 <days 就明说还差几天）。"""
+    if db is None:
+        return {"available": False, "reason": "无 DB 会话，跳过历史分位"}
+    try:
+        from src.db.models import ExdayDaily
+
+        rows = (
+            db.query(ExdayDaily)
+            .filter(ExdayDaily.symbol == str(symbol).split(".")[0])
+            .order_by(ExdayDaily.trade_date.desc())
+            .limit(days)
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001 - 表未建/查询失败都只是少一段
+        return {"available": False, "reason": f"历史分位不可用（{type(exc).__name__}）"}
+    vals = [getattr(r, field, None) for r in rows]
+    vals = [float(v) for v in vals if v is not None]
+    if len(vals) < 10:
+        return {"available": False,
+                "reason": f"样本不足（exday_daily 仅 {len(vals)} 个交易日，至少 10 天）"}
+    cur = vals[0]
+    below = sum(1 for v in vals if v < cur)
+    return {"available": True, "value": round(cur, 2),
+            "pct": round(below / max(len(vals) - 1, 1) * 100, 0), "days": len(vals)}

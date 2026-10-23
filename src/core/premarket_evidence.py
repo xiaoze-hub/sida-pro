@@ -59,6 +59,7 @@ class PremarketEvidence(TypedDict):
     sentiment: EvidenceBlock
     watchlist: EvidenceBlock
     portfolio: EvidenceBlock
+    fund_structure: EvidenceBlock
 
 
 def _now_iso() -> str:
@@ -677,6 +678,112 @@ def _collect_portfolio_block(
     )
 
 
+# ──────────────────────────── 四档资金结构（第 7 块，2026-10-23） ────────────────────────────
+
+#: 单轮最多取几只（TQ 单票 24~26ms，15 只 ≈ 0.4s，可接受；不要拖慢盘前 08:30 生成）
+_FUND_STRUCTURE_MAX_SYMBOLS = 15
+
+
+def _collect_fund_structure_block(
+    db: Any, user_id: str | None, as_of: str
+) -> EvidenceBlock:
+    """采集自选 + 持仓的四档资金结构（客户端 `get_exday_data` 口径 tdx_exday4）。
+
+    为什么单独一块：其余六块讲"发生了什么"，这一块讲**钱是哪一档在动**
+    （散户化率、特大单占比、主力主动净额、拆单隐匿度），是盘前判断"这票有没有
+    大资金在场"最直接的结构证据，而原来的六块完全没有这个维度。
+
+    取数纪律：单票失败 → 跳过并计数，不伪造；全部失败 → `missing`；
+    任一条 quality != ok → 整块标 `suspect`（数字仍透传，但带原因）。
+    """
+    if db is None:
+        return _make_block([], "missing", reason="数据库会话未提供",
+                           source="exday_daily/get_exday_data", as_of=as_of)
+    # 自选 = `stocks.user_id`（与 copilot_schedule._watchlist_symbols 同口径，Stock 表
+    # 没有 is_deleted 列，别照抄别处的过滤条件）；持仓 = positions join stocks。
+    # 两段各自 try：自选表结构变了不该连带持仓也取不到。
+    symbols: list[str] = []
+    try:
+        from src.db.models import Stock
+
+        q = db.query(Stock.symbol)
+        if user_id:
+            q = q.filter(Stock.user_id == str(user_id))
+        for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
+            if sym:
+                symbols.append(str(sym).strip())
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[证据层] 四档结构取自选失败: %s", e)
+    try:
+        from src.db.models import Position, Stock
+
+        q = db.query(Stock.symbol).join(Position, Position.stock_id == Stock.id).filter(
+            Position.quantity > 0
+        )
+        if user_id:
+            q = q.filter(Position.user_id == user_id)
+        for (sym,) in q.limit(_FUND_STRUCTURE_MAX_SYMBOLS).all():
+            if sym:
+                symbols.append(str(sym).strip())
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[证据层] 四档结构取持仓失败: %s", e)
+
+    symbols = list(dict.fromkeys(symbols))[:_FUND_STRUCTURE_MAX_SYMBOLS]
+    if not symbols:
+        return _make_block([], "missing", reason="无自选/持仓，四档结构无标的可算",
+                           source="exday_daily/get_exday_data", as_of=as_of)
+
+    items: list[dict[str, Any]] = []
+    failed = 0
+    suspect_reasons: list[str] = []
+    try:
+        from src.core import exday_structure as ex
+    except Exception as e:  # noqa: BLE001
+        return _make_block([], "missing", reason=f"exday_structure 不可用: {e}",
+                           source="exday_daily/get_exday_data", as_of=as_of)
+
+    for sym in symbols:
+        try:
+            m = ex.fetch(sym)
+        except Exception:  # noqa: BLE001 - 单票失败只记数
+            failed += 1
+            continue
+        if not m.get("available"):
+            failed += 1
+            continue
+        f = m.get("factors") or {}
+        g = m.get("granularity") or {}
+        items.append({
+            "symbol": str(sym),
+            "amount": m.get("amount"),
+            "active_ratio": m.get("active_ratio"),
+            "retail_ratio": f.get("retail_ratio"),
+            "xl_share": f.get("xl_share"),
+            "main_active_net": f.get("main_active_net"),
+            "chip_migration": f.get("chip_migration"),
+            "gran_hiding": g.get("gran_hiding"),
+            "order_fill_ratio": g.get("order_fill_ratio"),
+            "cancel_skew": g.get("cancel_skew"),
+            "quality": m.get("quality"),
+            "tags": [t.get("label") for t in (m.get("tags") or [])],
+        })
+        if m.get("quality") != "ok" and m.get("reason"):
+            suspect_reasons.append(f"{sym}: {m.get('reason')}")
+
+    if not items:
+        return _make_block([], "missing",
+                           reason=f"{len(symbols)} 只标的全部取数失败（TQ 未开/非交易日）",
+                           source="exday_daily/get_exday_data", as_of=as_of)
+
+    if suspect_reasons:
+        return _make_block(items, "suspect",
+                           reason="；".join(suspect_reasons)[:300],
+                           source="exday_daily/get_exday_data", as_of=as_of)
+    reason = f"{failed} 只取数失败（其余 {len(items)} 只正常）" if failed else ""
+    return _make_block(items, "ok", reason=reason,
+                       source="exday_daily/get_exday_data", as_of=as_of)
+
+
 # ──────────────────────────── 统一入口 ────────────────────────────
 
 
@@ -710,6 +817,7 @@ def collect(
         sentiment = _collect_sentiment_block(as_of)
         watchlist = _collect_watchlist_block(db, user_id, as_of)
         portfolio = _collect_portfolio_block(db, user_id, as_of)
+        fund_structure = _collect_fund_structure_block(db, user_id, as_of)
     finally:
         if own_db and db is not None:
             try:
@@ -727,4 +835,5 @@ def collect(
         "sentiment": sentiment,
         "watchlist": watchlist,
         "portfolio": portfolio,
+        "fund_structure": fund_structure,
     }

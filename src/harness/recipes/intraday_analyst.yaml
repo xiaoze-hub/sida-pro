@@ -9,6 +9,8 @@ tools:
   - get_intraday_profile
   - get_cancel_order_intent
   - get_main_intent
+  # 2026-10-23: 分时内外盘是腾讯口径, 四档结构补"大单还是小单"的结构证据
+  - get_fund_structure
 output_sections: [结论, 分时结构, 内外盘, 挂撤单, 关键位, 口径]
 budget: {max_tool_calls: 6}
 prompt_fragment: |

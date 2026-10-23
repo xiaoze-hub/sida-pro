@@ -9,6 +9,9 @@ tools:
   - get_stock_chips
   - get_chip_accumulation
   - get_main_intent
+  # 2026-10-23: 四档结构与委托粒度 —— 回答"谁在拿货"的两个结构性证据(客户端口径)
+  - get_fund_structure
+  - get_order_granularity
 output_sections: [结论, 筹码结构, 主力逐笔, 盘口结构, 实战预案, 口径]
 budget: {max_tool_calls: 8}
 prompt_fragment: |

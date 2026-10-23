@@ -23,9 +23,15 @@ FACTORS = ("momentum_20", "momentum_60", "vol_20", "volume_z20", "position_120",
 
 
 def compute_factors(bars: list[dict]) -> dict[str, float | None]:
-    """bars 升序。样本不足的因子返回 None（不写 0 冒充）。"""
+    """bars 升序。样本不足的因子返回 None（不写 0 冒充）。
+
+    ⚠️ 量能类因子只吃**有量**的柱（2026-10-23 审计修复）：原实现
+    `float(b.get("volume") or 0)` 把缺失量当 0 —— 停牌/新股/源缺口那几天会把 60 日
+    均值拉低、标准差抬高，`volume_z20` 系统性虚高（文档写着「宁可缺不许编」，
+    这里正好在编 0）。现在缺量的柱**进不了量能样本**，有效样本不足则留 None。
+    """
     closes = [float(b["close"]) for b in bars if b.get("close")]
-    vols = [float(b.get("volume") or 0) for b in bars]
+    vols = [float(b["volume"]) for b in bars if b.get("volume") not in (None, "")]
     highs = [float(b["high"]) for b in bars if b.get("high")]
     lows = [float(b["low"]) for b in bars if b.get("low")]
     out: dict[str, float | None] = {k: None for k in FACTORS}
@@ -49,7 +55,9 @@ def compute_factors(bars: list[dict]) -> dict[str, float | None]:
             out["volume_z20"] = round((vols[-1] - mu) / sd, 2)
 
     if highs and lows and len(highs) >= 60:
-        hi, lo = max(highs[-120:]), min(lows[-120:])
+        # 区间高点/低点与收盘取**同一段**（末 120 根有效柱），避免高低温与收盘错位
+        n = min(120, len(highs), len(lows), len(closes))
+        hi, lo = max(highs[-n:]), min(lows[-n:])
         if hi > lo:
             out["position_120"] = round((closes[-1] - lo) / (hi - lo) * 100, 1)
 
@@ -70,14 +78,27 @@ def compute_factors(bars: list[dict]) -> dict[str, float | None]:
 
 
 def _pct_rank(values: list[float]) -> list[float]:
-    """横截面分位（0~100）。"""
+    """横截面分位（0~100），**并列取平均秩**。
+
+    原实现按 `sorted` 的位置直接给名次，同一因子值（极端常见：`volume_z20` 在
+    长期无量票上同值、`position_120` 在区间边界上同值 0/100）会被摊成 0 与 100
+    两个极端分位 —— 名次由输入顺序决定，同一批数据两次跑结果不同。
+    与 `src/core/factor_ic.py::_ranks` 同口径（并列取平均位），横截面对齐。
+    """
     if not values:
         return []
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    ranks = [0.0] * len(values)
     n = len(values)
-    for pos, idx in enumerate(order):
-        ranks[idx] = round(pos / max(n - 1, 1) * 100, 1)
+    order = sorted(range(n), key=lambda i: values[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg_pos = (i + j) / 2
+        for k in range(i, j + 1):
+            ranks[order[k]] = round(avg_pos / max(n - 1, 1) * 100, 1)
+        i = j + 1
     return ranks
 
 

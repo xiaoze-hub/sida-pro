@@ -5869,6 +5869,61 @@ CREATE TABLE IF NOT EXISTS auth_session_revocations (
         pass
 
 
+def _m220_exday_daily(conn: Connection) -> None:
+    """TQ `get_exday_data` 四档资金结构日表(2026-10-23)。
+
+    `get_exday_data` 只返**当日 1 行**(count/start_time/date 参数实测全无效), 所以
+    四档结构的历史分位无法回填, 只能每天落库累积 —— 本表就是那个累积点。
+    金额=元、量=手; 口径 tdx_exday4(按单笔成交金额分档), 与东财四档/腾讯逐笔不可换算。
+    """
+    if _has_table(conn, "exday_daily"):
+        return
+    id_col = "SERIAL PRIMARY KEY" if _dialect_is_pg(conn) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    conn.execute(
+        text(
+            f"""
+CREATE TABLE IF NOT EXISTS exday_daily (
+    id {id_col},
+    trade_date VARCHAR(8) NOT NULL,
+    symbol VARCHAR(16) NOT NULL,
+    market VARCHAR(8) NOT NULL DEFAULT 'CN',
+    amount FLOAT,
+    volume_lots FLOAT,
+    active_buy_amt FLOAT,
+    active_sell_amt FLOAT,
+    active_ratio FLOAT,
+    xl_buy_amt FLOAT, lg_buy_amt FLOAT, md_buy_amt FLOAT, sm_buy_amt FLOAT,
+    xl_sell_amt FLOAT, lg_sell_amt FLOAT, md_sell_amt FLOAT, sm_sell_amt FLOAT,
+    xl_active_net FLOAT, lg_active_net FLOAT, md_active_net FLOAT, sm_active_net FLOAT,
+    retail_ratio FLOAT, xl_share FLOAT, main_active_net FLOAT, main_active_net_pct FLOAT,
+    chip_migration FLOAT,
+    b_order FLOAT, s_order FLOAT, total_b_order FLOAT, total_s_order FLOAT,
+    b_cancel FLOAT, s_cancel FLOAT, cjbs FLOAT,
+    avg_order_lots FLOAT, avg_trade_lots FLOAT, gran_hiding FLOAT, order_fill_ratio FLOAT,
+    cancel_buy_rate FLOAT, cancel_sell_rate FLOAT, cancel_skew FLOAT,
+    quality VARCHAR(16), reason VARCHAR(255), source VARCHAR(32),
+    created_at TIMESTAMP
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_exday_daily "
+                "ON exday_daily (trade_date, symbol, market)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_exday_sym_day ON exday_daily (symbol, trade_date)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_exday_day ON exday_daily (trade_date)")
+        )
+    except Exception as exc:  # noqa: BLE001 - 索引失败不该阻断建表(schema 已就位)
+        logger.warning("exday_daily 索引创建失败(表已建): %s", exc)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6082,6 +6137,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(218, "harness_proposals", _m218_harness_proposals),
     # 见函数 docstring: 缺这条表 = 每个鉴权请求 500(2026-10-23 生产事故)
     Migration(219, "auth_session_revocations", _m219_auth_session_revocations),
+    Migration(220, "exday_daily", _m220_exday_daily),
 )
 
 

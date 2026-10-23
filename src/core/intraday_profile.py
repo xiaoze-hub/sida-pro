@@ -11,13 +11,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _QT_URL = "https://qt.gtimg.cn/q={code}"
 _MIN_URL = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}"
 
-# 分钟 → 时段
+#: 分时成交段。**半开区间 `[lo, hi)` 会丢掉收尾那一分钟**（11:30 与 15:00 的柱
+#: 各自是"上午收盘/全天收盘"那一笔，落在字典外变成「其他」）—— 2026-10-23 审计修复：
+#: 判定改为 `lo <= t` 且 `t <= hi`（闭区间），相邻段在 lo 侧不重叠，收尾柱归入本段。
 _BUCKETS = (
     ("开盘 30 分钟", "0930", "1000"),
     ("上午其余", "1000", "1130"),
@@ -63,8 +68,12 @@ def parse_qt(raw: str) -> dict[str, Any]:
 
 
 def _bucket_of(t: str) -> str:
+    """时段归属：起始闭、**结束也闭**（收尾柱归本段，见 _BUCKETS 注释）。
+
+    先匹配区间内，再退回「其他」；`1130` 与 `1500` 不再被漏成其他。
+    """
     for name, lo, hi in _BUCKETS:
-        if lo <= t < hi:
+        if lo <= t <= hi:
             return name
     return "其他"
 
@@ -81,6 +90,14 @@ def compute(points: list[dict], qt: dict) -> dict[str, Any]:
     prices = [p["price"] for p in pts]
     day_high, day_low = max(prices), min(prices)
     vwap = pts[-1].get("avg") or 0
+    # 均价线量纲守卫：腾讯"累计量"在不同代码上给过 手/股 两种口径，除错 100 倍时
+    # avg 会离当日价格一个数量级。落在这个带外一律判为口径异常 → 按"未取到"处理，
+    # 绝不拿一个错 100 倍的均价线去算"站上均价线占比"。
+    if vwap and (day_low > 0 and day_high > 0):
+        if not (day_low * 0.5 <= vwap <= day_high * 1.5):
+            logger.debug("[分时] vwap 量纲异常 %s (vwap=%s, 区间 %s~%s)，按未取到处理",
+                         qt.get("name"), vwap, day_low, day_high)
+            vwap = 0
     total_vol = sum(p["volume"] for p in pts) or 0
 
     buckets: dict[str, float] = {}
@@ -99,10 +116,22 @@ def compute(points: list[dict], qt: dict) -> dict[str, Any]:
     position = ((last - day_low) / rng * 100) if rng else None  # 0=最低 100=最高
 
     outer, inner = qt.get("outer"), qt.get("inner")
-    active_buy = (outer / (outer + inner) * 100) if (outer and inner) else None
+    # 一字板/封死板会出现 inner==0（全天只成交买盘）→ 原实现 `if (outer and inner)`
+    # 把这个**最有信息量的盘口**判成 None（"未取到"）。改成"两侧都有值即可算"，
+    # 只有两侧全缺（或全 0）才 None。
+    active_buy = None
+    if outer is not None and inner is not None and (outer + inner) > 0:
+        active_buy = outer / (outer + inner) * 100
     bid5 = sum(q or 0 for _, q in qt.get("bids") or [])
     ask5 = sum(q or 0 for _, q in qt.get("asks") or [])
-    press = (bid5 / ask5) if ask5 else None
+    # 封板（卖/买一侧全空）时 press_ratio 天然无穷/为零，不能输出成"抛压极大/买压极大"，
+    # 单独用 seal_state 表达，press_ratio 留 None。
+    seal_state = None
+    if ask5 == 0 and bid5 > 0:
+        seal_state = "封涨停(无卖盘)"
+    elif bid5 == 0 and ask5 > 0:
+        seal_state = "封跌停(无买盘)"
+    press = (bid5 / ask5) if (ask5 and bid5) else None
 
     return {
         "available": True,
@@ -129,6 +158,7 @@ def compute(points: list[dict], qt: dict) -> dict[str, Any]:
         "bid5": bid5,
         "ask5": ask5,
         "press_ratio": round(press, 2) if press is not None else None,
+        "seal_state": seal_state,
         "vol_ratio": qt.get("vol_ratio"),
         "points": len(pts),
     }
@@ -148,9 +178,9 @@ def render(m: dict) -> str:
         f"｜高 {n(m['high'])} 低 {n(m['low'])}｜日内位置 {n(m['position'], '%', 1)}（0=最低 100=最高）"
     )
     parts.append(
-        f"均价线(VWAP) {n(m['vwap'])}｜现价{'在均价上方' if m['last'] >= m['vwap'] else '在均价下方'}"
+        f"均价线(VWAP) {n(m['vwap'])}｜现价{'在均价上方' if (m.get('vwap') and m['last'] >= m['vwap']) else '在均价下方'}"
         f"｜全天站在均价线上方时间占比 {n(m['above_vwap_pct'], '%', 1)}"
-    )
+    ) if m.get("vwap") else parts.append("均价线(VWAP)：未取到（量纲异常/源缺失，不推断）")
     if m.get("buckets"):
         parts.append("分时段成交量占比：" + "｜".join(f"{k} {v}%" for k, v in m["buckets"].items()))
     _tail = ("尾盘 30 分钟：量占比 " + n(m["tail"]["vol_pct"], "%", 1) +
@@ -166,6 +196,11 @@ def render(m: dict) -> str:
         parts.append(
             f"五档买量 {m['bid5']:.0f} 手 / 卖量 {m['ask5']:.0f} 手｜买卖压比 {m['press_ratio']}"
             f"（>1 买压大，<1 抛压大）｜量比 {n(m['vol_ratio'])}"
+        )
+    elif m.get("seal_state"):
+        parts.append(
+            f"五档买量 {m['bid5']:.0f} 手 / 卖量 {m['ask5']:.0f} 手｜{m['seal_state']}"
+            f"（压比不可用，不输出）｜量比 {n(m['vol_ratio'])}"
         )
     else:
         parts.append(f"五档：未取到（不推断）｜量比 {n(m['vol_ratio'])}")

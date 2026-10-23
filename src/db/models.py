@@ -2493,3 +2493,74 @@ class StockFactorDaily(Base):
     rank_volume_z20 = Column(Float, nullable=True)
     rank_position_120 = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExdayDaily(Base):
+    """TQ `get_exday_data` 四档资金结构日表（2026-10-23）。
+
+    为什么单独建表：`get_exday_data` **只返当日 1 行**（count/start_time/date 参数
+    实测全部无效），所以「四档结构的历史分位」只能靠自己每天落库累积。
+    写入者：`src/collectors/exday_daily.py`（交易日 15:45 全市场）+ 任何调用
+    `get_fund_structure` / `get_order_granularity` 的路径顺带写穿。
+
+    口径：金额=元，量=手；`caliber = tdx_exday4`（按单笔成交金额分四档的客户端口径），
+    与东财四档(eastmoney4)、腾讯逐笔(tick) **不可换算**。
+    """
+
+    __tablename__ = "exday_daily"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", "market", name="uq_exday_daily"),
+        Index("ix_exday_sym_day", "symbol", "trade_date"),
+        Index("ix_exday_day", "trade_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_date = Column(String(8), nullable=False)
+    symbol = Column(String(16), nullable=False)
+    market = Column(String(8), nullable=False, default="CN")
+    # 合计
+    amount = Column(Float, nullable=True)              # 成交额(元)
+    volume_lots = Column(Float, nullable=True)         # 成交量(手)
+    active_buy_amt = Column(Float, nullable=True)      # 主动买额(元)
+    active_sell_amt = Column(Float, nullable=True)
+    active_ratio = Column(Float, nullable=True)        # 主动买占比%
+    # 四档买入额 / 主动净额
+    xl_buy_amt = Column(Float, nullable=True)          # 特大单买入额
+    lg_buy_amt = Column(Float, nullable=True)          # 大单
+    md_buy_amt = Column(Float, nullable=True)          # 中单
+    sm_buy_amt = Column(Float, nullable=True)          # 小单
+    xl_sell_amt = Column(Float, nullable=True)
+    lg_sell_amt = Column(Float, nullable=True)
+    md_sell_amt = Column(Float, nullable=True)
+    sm_sell_amt = Column(Float, nullable=True)
+    xl_active_net = Column(Float, nullable=True)       # 该档主动买−主动卖(元)
+    lg_active_net = Column(Float, nullable=True)
+    md_active_net = Column(Float, nullable=True)
+    sm_active_net = Column(Float, nullable=True)
+    # 派生因子
+    retail_ratio = Column(Float, nullable=True)        # 小单买入占比%
+    xl_share = Column(Float, nullable=True)            # 特大单占比%
+    main_active_net = Column(Float, nullable=True)     # 特大+大 主动净额(元)
+    main_active_net_pct = Column(Float, nullable=True) # 占成交额%
+    chip_migration = Column(Float, nullable=True)      # 大单净 − 小单净
+    # 委托/撤单
+    b_order = Column(Float, nullable=True)             # 买委托量(手)
+    s_order = Column(Float, nullable=True)
+    total_b_order = Column(Float, nullable=True)       # 买委托笔数
+    total_s_order = Column(Float, nullable=True)
+    b_cancel = Column(Float, nullable=True)            # 买撤单量(手)
+    s_cancel = Column(Float, nullable=True)
+    cjbs = Column(Float, nullable=True)                # 成交笔数
+    # 委托粒度
+    avg_order_lots = Column(Float, nullable=True)      # 笔均委托(手)
+    avg_trade_lots = Column(Float, nullable=True)      # 笔均成交(手)
+    gran_hiding = Column(Float, nullable=True)         # 委托/成交粒度比
+    order_fill_ratio = Column(Float, nullable=True)    # 委托/成交笔数比
+    cancel_buy_rate = Column(Float, nullable=True)     # 买撤单率%
+    cancel_sell_rate = Column(Float, nullable=True)    # 卖撤单率%
+    cancel_skew = Column(Float, nullable=True)         # 卖撤−买撤(pp)
+    # 质量
+    quality = Column(String(16), nullable=True)        # ok / suspect
+    reason = Column(String(255), nullable=True)
+    source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

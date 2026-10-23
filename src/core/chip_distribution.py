@@ -374,8 +374,12 @@ def compute_chips(klines: list, float_shares: float | None = None,
         k_high = _k_get(k, "high")
         k_low = _k_get(k, "low")
         k_close = _k_get(k, "close")
-        if vol <= 0 or k_high <= k_low:
+        if vol <= 0 or k_high < k_low:
             continue
+        # 2026-10-23 审计修复：一字板(k_high == k_low) 原来是 `k_high <= k_low` 直接
+        # continue —— 涨停/跌停一字板当天**既不衰减旧筹码、也不计入新筹码**，
+        # 连板妖股的筹码分布会整段停滞在启动前（用户看的"底仓成本"是错的）。
+        # 现价网格落不下时按最近价位整笔计入（下面 i_lo==i_hi 分支已支持）。
         turnover = vol / float_shares  # 换手率
         turnover = min(max(turnover, 0.001), 1.0)
         # 衰减: 旧筹码按 (1 - turnover×DECAY) 保留

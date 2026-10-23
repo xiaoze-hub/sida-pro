@@ -98,9 +98,11 @@ def test_registry_integrity():
            # 2026-10-22 P0 采集层: 新分析维度提案(handler-only, 不进任何配方)
            "note_new_dimension",
            # 2026-10-23 盘前 Agent B 支线: 当日盘前底稿(self, fallback=False)
-           "get_premarket_brief"}
+           "get_premarket_brief",
+           # 2026-10-23 exday 产品化: 四档资金结构 + 委托粒度(客户端 tdx_exday4 口径)
+           "get_fund_structure", "get_order_granularity"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 67
+    assert len(CHAT_TOOL_REGISTRY) == 69
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -162,11 +164,14 @@ def test_exported_tool_order():
         # 提案采集(2026-10-22 晚间): schema 就位以打通采集链路, fallback=False 由路由挡闲聊
         "note_new_dimension",
         # 盘前底稿(2026-10-23 B 支线): self 口径, fallback=False 由路由挡闲聊
-        "get_premarket_brief"}
+        "get_premarket_brief",
+        # 四档资金结构 + 委托粒度(2026-10-23): 客户端口径, 单票 25ms 可进请求路径
+        "get_fund_structure", "get_order_granularity"}
     # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个 + 提案采集 + 盘前底稿
-    assert set(tail[-11:]) == {"remember_preference", "create_daily_task",
+    assert set(tail[-13:]) == {"remember_preference", "create_daily_task",
                                "get_intraday_profile", "get_trend_profile",
                                "get_stock_factors", "get_scenario_matrix",
+                               "get_fund_structure", "get_order_granularity",
                                "get_trader_playbook",
                                "list_data_domains", "query_data_domain",
                                "note_new_dimension",

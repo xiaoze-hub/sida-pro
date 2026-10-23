@@ -16,22 +16,30 @@ from typing import Any
 def _levels(trend: dict, chips: dict, intraday: dict | None = None) -> dict[str, Any]:
     """阻力必须**在现价之上**、支撑必须**在现价之下**。
 
-    第一版直接对候选取 min/max，结果 MA60(35.8) 被当成支撑、却比现价(33)还高 ——
-    "支撑在阻力上方"是逻辑错误，不是数据问题。这里按现价过滤后再取最近。
+    2026-10-23 审计修复两处：
+    1. 原实现 `up = [v for v in up if v > price] or up` —— 现价创区间新高时 up 全被
+       过滤掉，`or up` 又把**低于现价**的值放回去，于是"阻力 32.5 < 现价 34"，
+       走强的触发条件变成"站上 32.5"（其实早已在下方），整档情景失真。
+       现在无上方位就 `resist=None` + `resist_state="new_high"`，按事实说话。
+    2. MA60/MA20 只在各自固定的一侧候选里：股价跌破 MA60 时 MA60 本是**最近阻力**，
+       却被丢进 support 候选再被 `v < price` 过滤掉，白白丢失。
+       现在统一入池，按现价统一分上下。
     """
     mas = trend.get("mas") or {}
     price = trend.get("last") or (intraday or {}).get("last")
     band_hi = chips.get("band70_hi")
     band_lo = chips.get("band70_lo")
-    up = [v for v in (mas.get(20), band_hi, trend.get("high")) if v]
-    down = [v for v in (mas.get(60), band_lo, trend.get("low")) if v]
-    if price:
-        up = [v for v in up if v > price] or up
-        down = [v for v in down if v < price] or down
+    pool = [v for v in (mas.get(20), mas.get(60), band_hi, band_lo,
+                        trend.get("high"), trend.get("low")) if v]
+    above = [v for v in pool if price and v > price]
+    below = [v for v in pool if price and v < price]
+    resist = round(min(above), 2) if above else None
+    support = round(max(below), 2) if below else None
     return {
         "price": price,
-        "resist": round(min(up), 2) if up else None,
-        "support": round(max(down), 2) if down else None,
+        "resist": resist,
+        "support": support,
+        "resist_state": "new_high" if (price and not resist) else "normal",
         "ma20": mas.get(20),
         "ma60": mas.get(60),
         "band_hi": band_hi,
@@ -44,7 +52,9 @@ def build_scenarios(trend: dict, chips: dict, factors: dict | None = None,
                     intraday: dict | None = None) -> dict[str, Any]:
     """纯计算：输入各维指标，输出三档情景。"""
     lv = _levels(trend, chips, intraday)
-    if not lv["resist"] or not lv["support"]:
+    # 现价创新高时没有"上方位"（resist=None），这是事实而不是缺数据 ——
+    # 只要还有支撑位就照样给三档（走强的触发改为"不破支撑 + 量能确认"）。
+    if lv["resist"] is None and lv["support"] is None:
         return {"available": False, "reason": "关键位不足（缺均线/筹码带/区间高低）"}
 
     vol_ratio = (intraday or {}).get("vol_ratio") or trend.get("vol_ratio")
@@ -52,12 +62,25 @@ def build_scenarios(trend: dict, chips: dict, factors: dict | None = None,
     rs = trend.get("rs20")
     mom20 = (factors or {}).get("values", {}).get("momentum_20")
 
+    new_high = lv["resist"] is None
+    resist_ref = lv["resist"] if not new_high else (lv["band_hi"] or trend.get("high"))
     # 走弱目标不能等于触发位（"跌破支撑、目标就是支撑"是循环表述）
     below = [v for v in (chips.get("band70_lo"), trend.get("low")) if v and lv["support"] and v < lv["support"]]
     weak_target = max(below) if below else None
-    strong_trigger = f"收盘站上 {lv['resist']} 且当日量能 ≥1.2×20 日均量"
-    weak_trigger = f"收盘跌破 {lv['support']} 且放量（量能 ≥1.2× 均量）"
-    range_trigger = f"在 {lv['support']} ~ {lv['resist']} 之间震荡且量能中性"
+
+    if new_high:
+        strong_trigger = (f"已站上全部已识别阻力（前高 {resist_ref}，区间新高）："
+                          f"收盘不破支撑 {lv['support']} 且当日量能 ≥1.2×20 日均量")
+        strong_target = "上方无已计算阻力（新高区，逐日重算）"
+        range_trigger = f"在 {lv['support']} ~ 前高 {resist_ref} 之间震荡且量能中性"
+        range_target = f"{lv['support']} ~ {resist_ref}"
+        weak_trigger = f"收盘跌破 {lv['support']} 且放量（量能 ≥1.2× 均量）"
+    else:
+        strong_trigger = f"收盘站上 {lv['resist']} 且当日量能 ≥1.2×20 日均量"
+        strong_target = lv["band_hi"] or lv["resist"]
+        range_trigger = f"在 {lv['support']} ~ {lv['resist']} 之间震荡且量能中性"
+        range_target = f"{lv['support']} ~ {lv['resist']}"
+        weak_trigger = f"收盘跌破 {lv['support']} 且放量（量能 ≥1.2× 均量）"
 
     return {
         "available": True,
@@ -67,16 +90,19 @@ def build_scenarios(trend: dict, chips: dict, factors: dict | None = None,
             {
                 "name": "走强",
                 "trigger": strong_trigger,
-                "target": lv["band_hi"] or lv["resist"],
-                "response": "放量突破后回踩不破 " + str(lv["resist"]) + " 可视为有效；追高需量能确认",
-                "invalid": "突破当日即回落至 " + str(lv["resist"]) + " 下方且缩量 → 视为假突破",
+                "target": strong_target,
+                "response": ("已在新高区：不追高，等回踩不破 "
+                             + str(resist_ref) + " 再视强弱") if new_high else
+                            ("放量突破后回踩不破 " + str(lv["resist"]) + " 可视为有效；追高需量能确认"),
+                "invalid": ("回落至 " + str(resist_ref) + " 下方且缩量 → 视为假突破") if new_high else
+                           ("突破当日即回落至 " + str(lv["resist"]) + " 下方且缩量 → 视为假突破"),
             },
             {
                 "name": "震荡",
                 "trigger": range_trigger,
-                "target": f"{lv['support']} ~ {lv['resist']}",
+                "target": range_target,
                 "response": "区间内以均价线/VWAP 为多空分界，靠近上沿减、靠近下沿观察承接",
-                "invalid": f"任一端被有效突破（收盘价 + 量能确认）→ 切换走强/走弱",
+                "invalid": "任一端被有效突破（收盘价 + 量能确认）→ 切换走强/走弱",
             },
             {
                 "name": "走弱",
@@ -94,10 +120,13 @@ def render(m: dict) -> str:
     if not m.get("available"):
         return f"[情景矩阵] {m.get('reason', '关键位不足')}——不硬编情景。"
     lv, ctx = m["levels"], m["context"]
+    _r = lv.get("resist")
+    _s = lv.get("support")
     lines = [
         "[数据源: 均线 + CYQ 筹码带 + 区间高低 + 量能/因子]",
-        "关键位：阻力 {r}（MA20/筹码带上沿/区间高取最近）｜支撑 {s}（MA60/筹码带下沿/区间低取最近）".format(
-            r=lv["resist"], s=lv["support"]),
+        "关键位：阻力 {}（上方候选取最近；现价创新高时无上方位）｜支撑 {}（下方候选取最近）".format(
+            (_r if _r is not None else "无（区间新高）"),
+            (_s if _s is not None else "无（区间新低）")),
         "位置参考：日内区间位置 {p}%｜20 日相对强弱 {rs}｜20 日动量 {m20}｜量比 {vr}".format(
             p=ctx.get("position"), rs=("--" if ctx.get("rs20") is None else f"{ctx['rs20']:+.2f}pp"),
             m20=("--" if ctx.get("momentum_20") is None else f"{ctx['momentum_20']:+.2f}%"),

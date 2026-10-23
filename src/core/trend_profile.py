@@ -50,7 +50,11 @@ def compute(bars: list[dict], index_bars: list[dict] | None = None,
         cur, prev = _ma(closes, n), _ma(closes[:-5], n) if len(closes) > n + 5 else None
         ma_slope[n] = (round(cur - prev, 2) if (cur is not None and prev is not None) else None)
 
-    avg20 = round(sum(vols[-20:]) / 20, 0) if len(vols) >= 20 else None
+    # 量比：**分母不含当日**（2026-10-23 审计修复）。
+    # 原实现 `vols[-1] / mean(vols[-20:])` 把当日量也算进分母 —— 当日放量时分母被
+    # 自己抬高，2 倍量只显示成 1.9，"温和放量/巨量"分档系统性偏小；缩量时反向失真。
+    # 通行口径是「今日量 ÷ 前 N 日均量」。
+    avg20 = round(sum(vols[-21:-1]) / 20, 0) if len(vols) >= 21 else None
     vol_ratio = round(vols[-1] / avg20, 2) if (avg20 and vols[-1]) else None
     # 放量日：当天量 > 前 5 日均量 ×1.5（只看最近 20 个交易日）
     big_days = 0
@@ -61,13 +65,9 @@ def compute(bars: list[dict], index_bars: list[dict] | None = None,
             big_days += 1
 
     rs20 = None
-    if index_bars and len(index_bars) > 20 and len(closes) > 20:
-        ic = [float(b["close"]) for b in index_bars if b.get("close")]
-        if len(ic) > 20:
-            stock_r = _pct(last, closes[-21])
-            idx_r = _pct(ic[-1], ic[-21])
-            if stock_r is not None and idx_r is not None:
-                rs20 = round(stock_r - idx_r, 2)
+    rs20_basis = None
+    if index_bars:
+        rs20, rs20_basis = _rs20_aligned(bars, index_bars)
 
     return {
         "available": True,
@@ -85,8 +85,44 @@ def compute(bars: list[dict], index_bars: list[dict] | None = None,
         "vol_ratio": vol_ratio,
         "big_vol_days": big_days,
         "rs20": rs20,
+        "rs20_basis": rs20_basis,
         "index_label": index_label,
     }
+
+
+def _rs20_aligned(bars: list[dict], index_bars: list[dict]) -> tuple[float | None, str]:
+    """20 日相对强弱（个股涨幅 − 指数涨幅）+ 对齐口径。
+
+    2026-10-23 审计修复：原实现各取各的最后 21 根。个股停牌/指数源缺当日，会让
+    两边的"21 根"落在不同区间上（指数 20 天涨 5%、个股那 20 天是停牌前的 20 天），
+    差值就成了假相对强弱。
+
+    返回 (值, 口径)：
+    - `date_aligned`：只在**两边都有收盘价**的共同交易日上比（真实数据的正常路径）；
+    - `positional`：两边日期无交集（合成/无日期序列），退回按位置比 —— 口径显式
+      标注出来，消费方知道这不是日期对齐的结果；
+    - `None`：任一侧样本不足。
+    """
+    smap = {str(b.get("date") or "")[:10]: float(b["close"]) for b in bars or [] if b.get("close")}
+    imap = {str(b.get("date") or "")[:10]: float(b["close"]) for b in index_bars or [] if b.get("close")}
+    common = sorted(d for d in (set(smap) & set(imap)) if d)
+
+    if len(common) >= 21:
+        d_base, d_last = common[-21], common[-1]
+        s0, s1 = smap[d_base], smap[d_last]
+        i0, i1 = imap[d_base], imap[d_last]
+        if not (s0 and i0):
+            return None, "date_aligned"
+        return round((s1 / s0 - 1) * 100 - (i1 / i0 - 1) * 100, 2), "date_aligned"
+
+    # 无共同日期（合成序列/某一侧没带日期）→ 位置口径，并如实标注
+    sc = [float(b["close"]) for b in bars or [] if b.get("close")]
+    ic = [float(b["close"]) for b in index_bars or [] if b.get("close")]
+    if len(sc) > 20 and len(ic) > 20:
+        s0, s1, i0, i1 = sc[-21], sc[-1], ic[-21], ic[-1]
+        if s0 and i0:
+            return round((s1 / s0 - 1) * 100 - (i1 / i0 - 1) * 100, 2), "positional"
+    return None, "positional"
 
 
 def _fmt(v, unit="%", nd=2):
@@ -109,7 +145,7 @@ def render(m: dict) -> str:
         + "（5 日斜率：" + "｜".join(
             "MA{} {}".format(n, "--" if m["ma_slope"][n] is None else "{:+.2f}".format(m["ma_slope"][n]))
             for n in (5, 20, 60)) + "）",
-        f"量能：近 20 日均量 {m['avg20_vol'] or '--'}｜今日量比(对 20 日) {m['vol_ratio'] or '--'}"
+        f"量能：前 20 日均量 {m['avg20_vol'] or '--'}｜今日量比(对前 20 日均量, 不含当日) {m['vol_ratio'] or '--'}"
         f"｜近 20 日放量日 {m['big_vol_days']} 天",
         "相对强弱：20 日 " + ("--（指数数据未取到）" if m["rs20"] is None
                           else "{:+.2f}pp（vs {}）".format(m["rs20"], m.get("index_label") or "指数")),

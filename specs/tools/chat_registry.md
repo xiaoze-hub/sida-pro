@@ -7,8 +7,8 @@
 
 | 名字 | 含义 | 数量 |
 |---|---|---|
-| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **67** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **66** |
+| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **69** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **68** |
 | **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
 | **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **2** |
 
@@ -27,3 +27,9 @@ handler-only 的一个：`get_opportunities`。
 `fallback=False` 的两个：`note_new_dimension`（采集，只挂 `deep_diagnosis`）与
 `get_premarket_brief`（2026-10-23，盘前底稿，只挂 `premarket_strategist`）—— 两者都不许进
 「无配方兜底」，否则闲聊里模型会去写库 / 去抓当日盘前分析。
+
+2026-10-23 新增两个取数工具（客户端 `get_exday_data` 口径 `tdx_exday4`）：
+`get_fund_structure`（四档资金结构 + 散户化率/筹码迁移）与 `get_order_granularity`
+（委托粒度 / 拆单隐匿度 / 撤单不对称）。两者都 `fallback=True`（属通用取数，闲聊问到也
+应当能取），但只在挂了它们的配方里优先使用。**与东财四档、腾讯逐笔不可换算**，
+同屏必须各带 caliber 标签。
