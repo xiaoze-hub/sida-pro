@@ -239,6 +239,22 @@ export default function AiCopilotPage() {
     }
     const q = (sp.get('q') || '').trim()
     if (q) setInput(q)
+    // 入口扶正 2026-10-23: ?agent= 预填 @ 参谋 mention chip(只预填不自动发送, 等用户点发送);
+    // ?date= 为所续分析的基准日(后续推演上下文预留, 本页当前无副作用)
+    const agentParam = (sp.get('agent') || '').trim()
+    if (agentParam) {
+      const chip: MentionAgent = {
+        type: 'agent',
+        id: agentParam,
+        label: agentParam === 'premarket_strategist' ? '盘前策略官' : agentParam,
+        icon: '',
+        desc: '',
+        when: [],
+        tool_count: 0,
+      }
+      setMentions((m) => (m.some((x) => mentionKey(x) === mentionKey(chip)) ? m : [...m, chip]))
+    }
+    void sp.get('date')
   }, [])
 
   useEffect(() => {

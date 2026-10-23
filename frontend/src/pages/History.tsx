@@ -307,6 +307,22 @@ export default function HistoryPage() {
                     >
                       查看详情
                     </Button>
+                    {/* 入口扶正 2026-10-23: 从记录续进参谋 — 盘前记录找盘前策略官, 其余找盘后复盘官 */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      data-testid="history-continue-copilot"
+                      onClick={() => {
+                        const r = selectedRecord
+                        const agent = r.agent_name === 'premarket_outlook' ? 'premarket_strategist' : 'postmarket_reviewer'
+                        const q = `基于 ${r.analysis_date} 的${AGENT_LABELS[r.agent_name] || '分析'}，继续推演我的持仓与自选应对预案`
+                        navigate(
+                          `/ai-copilot?agent=${agent}&date=${encodeURIComponent(r.analysis_date)}&q=${encodeURIComponent(q)}`,
+                        )
+                      }}
+                    >
+                      在参谋中继续
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

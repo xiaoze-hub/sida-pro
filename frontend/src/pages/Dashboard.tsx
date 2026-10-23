@@ -2,14 +2,14 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import SafeMarkdown from '@/components/SafeMarkdown'
 // 反AI模板 P2:精简图标导入 — 段落头去"每节一图标"惯性, 只保留要紧事/体检两个扫描区的图标
-import { RefreshCw, AlertTriangle, ShieldAlert, Share2, FileText, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { RefreshCw, AlertTriangle, ShieldAlert, Share2, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import {
   dashboardApi,
   portfolioApi,
   recommendationsApi,
   homeApi,
   stocksApi,
-  reportsApi,
+  premarketApi,
   type DashboardMarketIndex,
   type DashboardMarketCapitalFlow,
   type DashboardMarketStatus,
@@ -20,7 +20,7 @@ import {
   type StrategySignalItem,
   type AlertHitToday,
   type PortfolioTodo,
-  type ReportItem,
+  type PremarketTodayResponse,
   type CurateCandidate,
   type CuratedItem,
   type AttributionItem,
@@ -65,7 +65,6 @@ import BenchmarkShareCard from '@/components/BenchmarkShareCard'
 import DiagnosticsShareCard from '@/components/DiagnosticsShareCard'
 import DigestShareCard from '@/components/DigestShareCard'
 import StockContextMenu, { type StockContextMenuState, type StockContextTarget } from '@/components/StockContextMenu'
-import { parseServerTime } from '@/lib/utils'
 import { useI18n } from '@/hooks/useI18n'
 import Stat from '@panwatch/biz-ui/components/Stat'
 import { navBackState } from '@/lib/nav-back'
@@ -127,24 +126,19 @@ function formatHeaderTime(d: Date): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   return `${y}-${m}-${day} 周${WEEKDAY_LABEL[d.getDay()]} · ${hh}:${mm} 已刷新`
 }
-/** 报告相对时间:1分钟内→"刚刚";1小时内→"N分钟前";当天→"今天 HH:MM";昨天→"昨天 HH:MM";更早→"M月D日 HH:MM" */
-function formatReportTime(iso: string): string {
-  if (!iso) return ''
-  const d = parseServerTime(iso)
-  if (isNaN(d.getTime())) return iso.replace('T', ' ').slice(0, 16)
-  const now = new Date()
-  const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000)
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin}分钟前`
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const startDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  if (startDay === startToday) return `今天 ${hm}`
-  if (startDay === startToday - 86_400_000) return `昨天 ${hm}`
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+/** 盘前分析逐票预案动作码 → 展示文案(action 是后端枚举码, 未知码原样透出, 不吞) */
+const PLAN_ACTION_LABEL: Record<string, string> = {
+  watch: '关注',
+  hold: '持有',
+  alert: '预警',
+  avoid: '回避',
 }
+
+/** 盘前分析是否有可展示内容(空态判定: 无标题/摘要/主线/预案才算「尚未生成」) */
+function hasPremarketContent(d: PremarketTodayResponse): boolean {
+  return !!(d.title || d.summary || d.structured?.mainlines?.length || d.structured?.plans?.length)
+}
+
 const ALERT_LABEL: Record<string, string> = {
   surge: 'alerts.surge',
   plunge: 'alerts.plunge',
@@ -208,9 +202,12 @@ export default function DashboardPage() {
   const [watchSymbols, setWatchSymbols] = useState<Set<string>>(new Set())
   void watchSymbols // v0.4.7: 简报移除后暂无读值场景, setter 仍用于快捷加自选
   const [marketStatus, setMarketStatus] = useState<DashboardMarketStatus[]>([])
-  // 最新报告(Hermes cron):首页速览取最近 4 条,30s 随首页自动刷新
-  const [reports, setReports] = useState<ReportItem[]>([])
-  const [reportsLoading, setReportsLoading] = useState(true)
+  // 盘前/盘后分析(入口扶正 2026-10-23): 首页速览改挂今日分析, 底稿归档留在 /reports
+  // 独立非阻塞加载: 首屏(loading 翻 false)之后才取数, 绝不与首帧请求抢连接/队列
+  const [premarket, setPremarket] = useState<PremarketTodayResponse | null>(null)
+  const [premarketState, setPremarketState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  // 空态「立即分析」触发中(防连点; run 成功后立即重取今日记录)
+  const [premarketRunning, setPremarketRunning] = useState(false)
   // 大盘资金流(同花顺源,东财 502 替代)
   const [marketFlow, setMarketFlow] = useState<DashboardMarketCapitalFlow | null>(null)
   // 异动池(东财) / 热榜(同花顺):独立加载,任一失败静默,不影响首页其他内容
@@ -301,17 +298,6 @@ export default function DashboardPage() {
     dashboardApi.indices().then((v) => { if (!stale()) setIndices(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load) })
     // 大盘资金流(同花顺源):独立加载,失败聚合到全局横幅
     dashboardApi.marketCapitalFlow().then((v) => { if (!stale()) setMarketFlow(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load) })
-    // 最新报告(Hermes cron):独立加载,失败静默;cacheMode reload 保证 30s 轮询必拿新数据
-    setReportsLoading(true)
-    reportsApi
-      .list({ limit: 8, cacheMode: 'reload' })
-      .then((r) => { if (!stale()) setReports((r.items || []).slice(0, 4)) })
-      .catch((err) => {
-        if (stale()) return
-        setReports([])
-        pushError(t('dashboard.errorSources.reports'), err?.message || t('common.serviceUnavailable'), load)
-      })
-      .finally(() => { if (!stale()) setReportsLoading(false) })
     // 异动池(东财):独立加载,失败静默(端点未就绪时优雅降级为空态)
     setAnomaliesLoading(true)
     dashboardApi
@@ -398,6 +384,42 @@ export default function DashboardPage() {
     // 仅在用户主动点击"新手引导"按钮时打开
     // 历史兼容: 已看过的用户(localStorage 标志存在)依然不会被打扰
   }, [load])
+
+  // 盘前/盘后分析(入口扶正 2026-10-23): 首屏 settle(loading 翻 false)之后**独立**取一次,
+  // 与快车道/慢车道解耦 —— 失败只显式落本卡错误态, 不进全局错误横幅, 不阻塞首帧。
+  const premarketFiredRef = useRef(false)
+  const loadPremarket = useCallback(() => {
+    setPremarketState('loading')
+    premarketApi
+      .getToday({ cacheMode: 'reload' })
+      .then((d) => {
+        setPremarket(d)
+        setPremarketState('ready')
+      })
+      .catch(() => {
+        setPremarket(null)
+        setPremarketState('error') // 显式「加载失败」, 不伪造空态
+      })
+  }, [])
+  useEffect(() => {
+    if (loading || premarketFiredRef.current) return
+    premarketFiredRef.current = true
+    loadPremarket()
+  }, [loading, loadPremarket])
+  // 空态「立即分析」: 入队成功后立即重取今日记录(生成是异步的, 重取仍为空就留空态+生成中)
+  const runPremarketNow = useCallback(async () => {
+    if (premarketRunning) return
+    setPremarketRunning(true)
+    try {
+      await premarketApi.run()
+      premarketFiredRef.current = true
+      await loadPremarket()
+    } catch {
+      // 入队失败: 保持空态可重试(按钮不禁用), 不回滚已展示内容
+    } finally {
+      setPremarketRunning(false)
+    }
+  }, [premarketRunning, loadPremarket])
 
   const autoRefreshBusy = useRef(false)
   const autoRefreshTick = useCallback(() => {
@@ -1194,16 +1216,25 @@ export default function DashboardPage() {
         </div>
         )}
 
-{/* 最新报告(v0.4.6 降级): 右栏紧凑列表, 完整存档在报告页 */}
+{/* 盘前/盘后分析(入口扶正 2026-10-23, 替代「最新报告」): 今日分析速览, 底稿归档在 /reports。
+    独立非阻塞取数(首屏 settle 后), 失败显式错误态, 过期数据显式标注基准日 —— 不静默、不伪造空态 */}
         {shown('reports') && (
         <div style={{ order: orderIndex(layout, 'reports') }} className="border-t border-border/60 pt-3 lg:col-span-5 xl:col-span-3">
           <SectionHeader
-            title="最新报告"
+            title="盘前 / 盘后分析"
             action={
               <>
-                <span className="text-[10px] text-muted-foreground">盘前/盘后</span>
                 <button
                   type="button"
+                  data-testid="dashboard-premarket-copilot"
+                  onClick={() => navigate('/ai-copilot?agent=premarket_strategist')}
+                  className="mr-2 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                >
+                  问参谋
+                </button>
+                <button
+                  type="button"
+                  data-testid="dashboard-premarket-all"
                   onClick={() => navigate('/reports')}
                   className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
                 >
@@ -1212,28 +1243,86 @@ export default function DashboardPage() {
               </>
             }
           />
-          {reportsLoading && reports.length === 0 ? (
+          {premarketState === 'idle' || premarketState === 'loading' ? (
             <SkeletonRows rows={3} />
-          ) : reports.length === 0 ? (
-            <div className="py-4 text-center text-[12px] text-muted-foreground">
-              报告生成后自动出现
+          ) : premarketState === 'error' ? (
+            <div data-testid="premarket-card-error" className="py-4 text-center text-[12px] text-destructive">
+              盘前分析加载失败
+            </div>
+          ) : premarket && !premarket.empty && hasPremarketContent(premarket) ? (
+            <div className="divide-y divide-border/40">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-medium" title={premarket.title || '今日盘前分析'}>
+                    {premarket.title || '今日盘前分析'}
+                  </span>
+                  {premarket.is_stale && (
+                    <span
+                      data-testid="premarket-stale-badge"
+                      className="shrink-0 rounded bg-accent px-1.5 text-[10px] tabular-nums text-muted-foreground"
+                    >
+                      基准日 {premarket.date}（非今日）
+                    </span>
+                  )}
+                </div>
+                {premarket.structured?.gate?.score || premarket.structured?.gate?.position_cap ? (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {premarket.structured?.gate?.score ? (
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                        环境门禁 {premarket.structured.gate.score}
+                      </span>
+                    ) : null}
+                    {premarket.structured?.gate?.position_cap ? (
+                      <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                        仓位上限 {premarket.structured.gate.position_cap}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {premarket.structured?.mainlines && premarket.structured.mainlines.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {premarket.structured.mainlines.slice(0, 4).map((ml, i) => (
+                      <span key={ml.name || `mainline-${i}`} className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {ml.name}
+                        {ml.strength ? <span className="tabular-nums"> · {ml.strength}</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {premarket.structured?.plans && premarket.structured.plans.length > 0 ? (
+                <div>
+                  {premarket.structured.plans.slice(0, 3).map((p, i) => (
+                    <div key={p.symbol || `plan-${i}`} className="flex items-center gap-2 py-1.5">
+                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{p.symbol}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px]" title={p.name || p.symbol}>
+                        {p.name || p.symbol}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-primary">{PLAN_ACTION_LABEL[p.action || ''] || p.action}</span>
+                      {p.trigger || p.stop ? (
+                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                          {p.trigger ? `触发 ${p.trigger}` : ''}
+                          {p.trigger && p.stop ? ' / ' : ''}
+                          {p.stop ? `止损 ${p.stop}` : ''}
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <div className="divide-y divide-border/40">
-              {reports.slice(0, 4).map((r) => (
-                <button
-                  key={`${r.job_id}:${r.file}`}
-                  type="button"
-                  onClick={() => navigate('/reports')}
-                  className="flex w-full items-center gap-2 py-1.5 text-left transition-colors hover:bg-accent/30"
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium" title={r.title_preview || r.file}>{r.title_preview || r.file}</div>
-                    <div className="truncate text-[10px] text-muted-foreground" title={formatReportTime(r.mtime_iso)}>{formatReportTime(r.mtime_iso)}</div>
-                  </div>
-                </button>
-              ))}
+            <div className="py-4 text-center">
+              <div className="text-[12px] text-muted-foreground">今日盘前分析尚未生成</div>
+              <button
+                type="button"
+                data-testid="premarket-run-now"
+                disabled={premarketRunning}
+                onClick={() => void runPremarketNow()}
+                className="mt-2 rounded border border-border/60 px-3 py-1 text-[11px] text-primary transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {premarketRunning ? '生成中…' : '▶ 立即分析'}
+              </button>
             </div>
           )}
         </div>

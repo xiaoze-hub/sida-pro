@@ -235,7 +235,11 @@ vi.mock('@panwatch/api', () => ({
   recommendationsApi: { listStrategySignals: () => Promise.resolve({ items: [] }) },
   homeApi: { alertHitsToday: () => H.defer('alerts'), todos: () => H.defer('todos') },
   stocksApi: { list: () => H.defer('stocks'), create: () => Promise.resolve({}) },
-  reportsApi: { list: () => H.defer('reports') },
+  premarketApi: {
+    getToday: () => Promise.resolve({ date: '2026-10-23', empty: true }),
+    run: () => Promise.resolve({ queued: true }),
+    getEvidence: () => Promise.resolve({ available: false, blocks: [] }),
+  },
 }))
 
 import DashboardPage from '../../src/pages/Dashboard'
