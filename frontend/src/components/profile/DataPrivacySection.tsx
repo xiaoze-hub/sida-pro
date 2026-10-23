@@ -158,7 +158,7 @@ export default function DataPrivacySection({ username }: { username?: string }) 
             onClick={() => void loadStatus()}
             className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary transition-colors hover:bg-s2"
           >
-            重试
+            重新查询状态
           </button>
         </div>
       )}

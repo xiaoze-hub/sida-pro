@@ -4,7 +4,7 @@
 // 已登录用户的 username/role/created_at 恒存在 ⇒ 这三行没有合法空态;
 // 拉取失败必须给出可见故障态 + 重试, 且失败文案用后端/传输层原文。
 // 本文件的作用: 把"失败静默成 --"钉死(去掉故障态分支 ⇒ 第 1 例必红)。
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,30 +53,41 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
+/**
+ * 2026-10-23: 个人中心新增「在线设备」「数据隐私」两个区块, 它们失败时也带 role="alert" /
+ * 「重试」按钮 —— 直接 screen 全局查会命中多个。本组用例只针对「当前账号」这一块,
+ * 故把查询收窄到该卡片内(断言强度不变, 只是不再被同页其它区块干扰)。
+ */
+function accountCardEl() {
+  return screen.findByTestId('profile-account-card')
+}
+
 describe('个人中心 当前账号 (走查 B)', () => {
   it('拉取失败: 显式故障态 + 重试, 不铺一排 --', async () => {
     api.fail = '查询失败: 后端 500'
     mount()
-    const alert = await screen.findByRole('alert')
+    const card = await accountCardEl()
+    const alert = await within(card).findByRole('alert')
     expect(alert.textContent).toContain('账号信息加载失败')
     expect(alert.textContent).toContain('查询失败: 后端 500') // 原文透传
     // 关键: 三个字段标签都不许出现(否则就是"没拉到"被渲染成"本来就是空")
     expect(screen.queryByText('账号')).toBeNull()
     expect(screen.queryByText('角色')).toBeNull()
     expect(screen.queryByText('注册时间')).toBeNull()
-    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+    expect(within(card).getByRole('button', { name: '重试' })).toBeTruthy()
   })
 
   it('拉取失败后点重试成功 → 真实值上屏(不再停留在故障态)', async () => {
     api.fail = '服务不可用'
     mount()
-    await screen.findByRole('alert')
+    const card = await accountCardEl()
+    await within(card).findByRole('alert')
     api.fail = null
     api.resp = PROFILE
-    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    fireEvent.click(within(card).getByRole('button', { name: '重试' }))
     expect(await screen.findByText('tianxiang')).toBeTruthy()
     expect(screen.getByText('管理员')).toBeTruthy()
-    expect(screen.queryByRole('alert')).toBeNull()
+    expect(within(await accountCardEl()).queryByRole('alert')).toBeNull()
   })
 
   it('拉取成功: 账号 / 角色 / 注册时间 三行都是真值(不出现 --)', async () => {

@@ -313,7 +313,10 @@ export function Profile() {
           <SectionHeader title={t('profile.security')} className="mb-4" />
           
           {/* 当前账号 */}
-          <div className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2">
+          <div
+            className="mb-5 rounded-md border border-border/40 bg-accent/20 p-3.5 space-y-2"
+            data-testid="profile-account-card"
+          >
             {/*
               2026-09-14 走查 B: 账号/角色/注册时间此前无论加载失败还是真缺值都渲染 '--' —— 用户
               分不清"没拉到"和"本来就是空的"。已登录用户的 username/role/created_at 恒存在,

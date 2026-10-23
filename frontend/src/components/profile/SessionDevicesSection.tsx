@@ -138,14 +138,14 @@ export default function SessionDevicesSection() {
             onClick={() => void load()}
             className="rounded border border-border/60 px-2.5 py-1 text-[11px] text-primary transition-colors hover:bg-s2"
           >
-            重试
+            重新加载设备
           </button>
         </div>
       )}
 
       {!loading && !error && sessions.length === 0 && (
         <div className="rounded-md border border-border/40 bg-s1 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
-          暂未记录到在线设备。若刚刚登录, 会话记录可能尚未写入, 可点上方重试;
+          暂未记录到在线设备。若刚刚登录, 会话记录可能尚未写入, 可点上方「重新加载设备」;
           这里为空不影响正常使用。
         </div>
       )}

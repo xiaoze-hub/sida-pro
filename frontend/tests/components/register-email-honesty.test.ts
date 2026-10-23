@@ -34,6 +34,8 @@ describe('注册页: 邮件服务不可用时的诚实提示', () => {
   })
 
   it('提示只出现在邮箱相关模式, 不污染密码登录', () => {
-    expect(src).toMatch(/!emailReady && \(isRegister \|\| isEmailCode\)/)
+    // 2026-10-23: 新增「忘记密码」模式(reset)同样靠邮箱验证码 → 也该提示;
+    // 这条断言的本意是「提示只挂在邮箱相关模式上」, 因此 reset 一并纳入。
+    expect(src).toMatch(/!emailReady && \(isRegister \|\| isEmailCode(?: \|\| isReset)?\)/)
   })
 })
