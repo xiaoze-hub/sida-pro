@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.core.db_safe import safe_rollback
+
 logger = logging.getLogger(__name__)
 
 #: 去掉易混字符（0/O、1/I/L），避免用户手抄错
@@ -277,7 +279,9 @@ def get_register_mode(db: Session) -> str:
             text("SELECT value FROM app_settings WHERE key = :k"), {"k": "register_mode"}
         ).first()
         raw = str(row[0]).strip().lower() if row and row[0] is not None else ""
-    except Exception:  # 表缺失/字段异常都不该让注册流程 500
+    except Exception:  # noqa: BLE001 - 表缺失/字段异常都不该让注册流程 500
+        # 只给默认值不回滚 = 把「设置表读不到」放大成「注册接口后续全 500」(PG 事务中止)
+        safe_rollback(db)
         raw = ""
     if not raw:
         raw = (os.getenv("REGISTER_MODE") or "").strip().lower()

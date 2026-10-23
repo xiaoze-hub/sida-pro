@@ -1,3 +1,33 @@
+## release: v0.45.1（线上 500 事故修复：事务中止放大 + 墓碑表迁移）
+
+**事故**：v0.45.0 上线后，管理后台、设置、通知、系统等**成片 500**，用户看到的是
+「数据都没了」。根因不是数据丢失，是一条 SQL 失败把整个 PostgreSQL 事务打成了
+`aborted` 状态：
+
+1. v0.45.0 的「踢设备」需要 `auth_session_revocations` 墓碑表，但建表 DDL **只写在
+   写入路径** `mark_session_revoked()` 里（懒建），生产从未踢过设备 → 表不存在；
+2. `is_session_revoked()` 在**每个鉴权请求**的第一条 SQL 就要 SELECT 它 →
+   `UndefinedTable`；
+3. 兜底 `except` 只 `return False`（fail-open）**不回滚**，PG 事务保持 aborted →
+   该请求后续所有查询 `InFailedSqlTransaction` → 列表/设置/通知/用量接口全 500；
+4. SQLite 不会中止事务，所以单测 1447 条全绿，事故只在 PG 生产出现。
+
+**修复**
+
+- `src/web/migrations.py`：新增 `Migration(219, "auth_session_revocations")`，
+  表由启动期迁移创建（`CREATE TABLE IF NOT EXISTS` + `expires_at` 索引），
+  不再依赖「有人踢过设备」这个偶然前提。
+- 新增 `src/core/db_safe.py::safe_rollback()`，并接到**所有 fail-open 的 DB 探测**
+  收尾处（会话存活/墓碑、注册模式、管理员列表 `last_login`、登录透明哈希升级与
+  API key 前缀、技能用量落库、到期降级、试用审计）：吞异常前必须先回滚，
+  否则局部故障会被放大成整站故障。
+- `tests/test_session_revocation_hardening.py`（5 例）：钉住「建表必须走迁移且幂等」
+  与「探测失败后必须回滚、回滚后同一会话仍可查询」两条不变量。
+
+**线上止损**：事故期间已在生产 PG 手工建表恢复（表结构与迁移 219 一致），
+本次发版由迁移正式接管；`/api/settings`、`/api/notifications`、
+`/api/users/admin/list`、`/api/auth/sessions`、`/api/admin/skills/usage` 复测 200。
+
 ## release: v0.45.0（账号与权限收口：设备限制/Pro 闭环/开发者中心）（2026-10-23）
 
 ## 一句话

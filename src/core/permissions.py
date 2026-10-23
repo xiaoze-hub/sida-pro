@@ -23,6 +23,8 @@ from typing import Callable
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from src.core.db_safe import safe_rollback
+
 logger = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════════════
@@ -331,6 +333,7 @@ def _trial_incr(db: Session, user_id: str, feature: str) -> None:
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.debug("trial audit 落库失败: %r", e)
 
 
@@ -385,6 +388,28 @@ def check_alert_quota(db: Session, user) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
+# 事务自愈(2026-10-23 线上事故)
+# ════════════════════════════════════════════════════════════════════
+def _safe_rollback(db: Session) -> None:
+    """把**已中止的事务**清理掉, 再按 fail-open 返回。
+
+    为什么必须有这一步: PostgreSQL 里任何一条 SQL 报错后, 整个事务进入 aborted
+    状态, 后续语句一律 `InFailedSqlTransaction: current transaction is aborted`。
+    下面这些函数都是「探测失败就放行」的兜底逻辑, 一旦只 `except: pass` 不回滚,
+    一条**本可以忽略**的查询失败就会被放大成「这个请求后面所有查询全部 500」。
+
+    2026-10-23 事故形态: `auth_session_revocations` 表只在「踢设备」写路径懒建,
+    生产从未写过 → 每个鉴权请求的第一条 SELECT 抛 UndefinedTable → 事务中止 →
+    `/api/settings`、`/api/notifications`、`/api/users/admin/list` 等全部 500,
+    表现为「后台/设置/通知的数据都没了」(SQLite 不会中止事务, 所以单测全绿)。
+
+    只吞异常不回滚 = 把局部故障升级成全局故障。任何 fail-open 的 DB 探测都必须
+    走这里。
+    """
+    safe_rollback(db)
+
+
+# ════════════════════════════════════════════════════════════════════
 # 设备限制(同账号同时在线 ≤2)
 # ════════════════════════════════════════════════════════════════════
 def enforce_device_limit(db: Session, user, session_id: str) -> None:
@@ -423,6 +448,7 @@ def enforce_device_limit(db: Session, user, session_id: str) -> None:
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
         logger.debug("设备限制检查失败: %r", e)
 
 
@@ -464,6 +490,7 @@ def record_session(
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
         logger.debug("记录会话失败: %r", e)
 
 
@@ -506,6 +533,7 @@ def session_is_active(db: Session, session_id: str | None, user_id: str | None =
     except ImportError:
         return True
     except Exception as e:  # noqa: BLE001 - fail-open 是硬约束
+        _safe_rollback(db)
         logger.warning("[auth] 会话存活校验异常, 按放行处理(fail-open): %r", e)
         return True
 
@@ -537,6 +565,9 @@ def is_session_revoked(db: Session, session_id: str | None) -> bool:
         ).first()
         return row is not None
     except Exception as e:  # noqa: BLE001 - 墓碑不可用不得阻断鉴权
+        # 关键: 表缺失/PG 事务中止时只 return False 会把事务留给下一个查询,
+        # 于是「一张可选表没建」变成「整站 500」。必须先回滚再放行。
+        _safe_rollback(db)
         logger.debug("[auth] 读取会话墓碑失败(按未吊销处理): %r", e)
         return False
 
@@ -570,6 +601,7 @@ def mark_session_revoked(db: Session, session_id: str, expires_at: datetime) -> 
             {"sid": session_id, "exp": exp, "now": now},
         )
     except Exception as e:  # noqa: BLE001
+        _safe_rollback(db)
         logger.warning("[auth] 登记会话墓碑失败(该设备踢出可能延迟生效): %r", e)
 
 

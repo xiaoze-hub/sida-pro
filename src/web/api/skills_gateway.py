@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+from src.core.db_safe import safe_rollback
 from src.web.api._scope import allow_cross_user  # C3(2026-09-18): 见各豁免点理由
 from src.web.database import get_db
 from src.web.models import SkillApiKey, SkillUsage
@@ -696,6 +697,8 @@ def downgrade_expired_keys(db: Session | None = None) -> int:
             logger.info("到期降级任务完成: %s 个 key 降为 free", n)
         return n
     except Exception as e:  # noqa: BLE001
+        if own is None:  # 自建 session 由 finally 关闭(等价回滚), 只清理调用方的事务
+            safe_rollback(db)
         logger.warning("downgrade_expired_keys 失败: %r", e)
         return 0
     finally:
@@ -1172,6 +1175,7 @@ def _log_usage(
         ))
         db.commit()
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.warning("skill_usage 落库失败: %r", e)
 
 

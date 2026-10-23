@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import jwt
 
+from src.core.db_safe import safe_rollback
 from src.web.database import get_db, SessionLocal
 from src.web.models import AppSettings, User
 from src.core.auth_tokens import (  # noqa: F401  (KI-039 第二阶段: 原语下沉 core)
@@ -710,6 +711,7 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
                 user.username, old_prefix, SCRYPT_N_NEW,
             )
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.warning("[auth] 透明哈希升级失败 (不阻断登录): %s", e)
 
     success(ip, data.username.strip())
@@ -743,6 +745,7 @@ async def login(data: LoginRequest, request: Request, response: Response, db: Se
         if key_row:
             api_key_prefix = key_row.key_prefix
     except Exception as e:  # noqa: BLE001
+        safe_rollback(db)
         logger.warning("[auth] 查询用户 API key 前缀失败(不阻断登录): %s", e)
 
     # CSRF (tier2 2026-09-18): 下发 HttpOnly csrf_token Cookie + 响应体明文

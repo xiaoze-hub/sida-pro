@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.core.db_safe import safe_rollback
 from src.web.database import get_db
 from src.web.api.audit import log_audit
 from src.web.api.auth import (
@@ -345,6 +346,8 @@ def _admin_user_row(db: Session, u: User) -> dict:
         if row and row[0]:
             last_login = row[0].isoformat()
     except Exception:  # noqa: BLE001
+        # 不回滚会把审计表查询失败传染给整个列表接口(生产表现为「后台数据没了」)
+        safe_rollback(db)
         last_login = None
     return {
         "id": str(u.id),

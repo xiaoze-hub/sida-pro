@@ -5832,6 +5832,43 @@ def _m218_harness_proposals(conn: Connection) -> None:
     HarnessProposal.__table__.create(bind=conn, checkfirst=True)
 
 
+def _m219_auth_session_revocations(conn: Connection) -> None:
+    """会话吊销墓碑表(2026-10-23 线上事故补偿)。
+
+    背景: v0.45.0 把「踢设备」做成「删会话行 + 写墓碑」, 但墓碑表只在**写入路径**
+    (`permissions.mark_session_revoked` 的懒 DDL)`才建 —— 生产从未踢过人, 表就没建。
+    而 `is_session_revoked()` 在**每个鉴权请求**都会 SELECT 它 → PostgreSQL 抛
+    `UndefinedTable` 并**中止整个事务** → 该请求后续所有查询 `InFailedSqlTransaction`
+    → `/api/settings`、`/api/notifications`、`/api/users/admin/list` 等成片 500。
+
+    两条修复缺一不可:
+      1. 本迁移 —— 建表交给启动期迁移, 不再依赖「有人踢过设备」这个偶然前提;
+      2. `permissions._safe_rollback` —— 任何 fail-open 探测失败后回滚,
+         避免「可选表缺失」升级成「整站 500」。
+    SQLite 不中止事务, 单测永远是绿的, 所以这两条只能靠**显式迁移 + 回滚**保证。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS auth_session_revocations (
+    session_id VARCHAR(64) PRIMARY KEY,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NOT NULL
+)
+"""
+        )
+    )
+    try:
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_auth_session_revocations_expires_at "
+                "ON auth_session_revocations (expires_at)"
+            )
+        )
+    except Exception:  # noqa: BLE001 - 索引建不出来不影响正确性(仅清理效率)
+        pass
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6043,6 +6080,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(216, "factor_concentration", _m216_factor_concentration),
     Migration(217, "chat_conversation_pinned", _m217_chat_conversation_pinned),
     Migration(218, "harness_proposals", _m218_harness_proposals),
+    # 见函数 docstring: 缺这条表 = 每个鉴权请求 500(2026-10-23 生产事故)
+    Migration(219, "auth_session_revocations", _m219_auth_session_revocations),
 )
 
 
