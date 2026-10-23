@@ -1,3 +1,37 @@
+## docs: 全站设计走查与创新方向设计文档集（8 份，2026-10-23）
+
+**性质**：纯文档，不改任何代码、不改口径、不动 Frozen Ring。基线 `v0.48.0 / 5427af0`。
+交付 8 份 `docs/design/20261023_0*.md`（合计 6,500+ 行 / 285 KB），每份按「现状(文件:行) / 问题 / 改法(class·hex·按钮文案) / 验收线」四段式，头部均含 AGENTS.md 要求的三要素（基线 / 审计路径 / 未审范围）。
+
+| # | 文档 | 覆盖域 |
+|---|---|---|
+| 01 | `20261023_01_design_tokens.md` | 全站 Design Tokens、语义徽标、实时体验（95 个真实 Hex） |
+| 02 | `20261023_02_pages_core_workbench.md` | Dashboard / StockWorkbench / Stocks |
+| 03 | `20261023_03_pages_radar_fund.md` | Auction / DarkFundTop / Opportunities |
+| 04 | `20261023_04_pages_forecast_agent.md` | Forecast / FactorIC / Agents / AiCopilot |
+| 05 | `20261023_05_pages_risk_ledger.md` | DecisionLedger / ShadowHub / PaperTrading / WarReport / PriceAlerts |
+| 06 | `20261023_06_pages_settings.md` | DataSources / ApiKeys / SettingsHub |
+| 07 | `20261023_07_innovation_core.md` | 6 个单域纵深创新 |
+| 08 | `20261023_08_innovation_cross.md` | 5 个跨模块联动创新 + 依赖排期 |
+
+### 走查查实的 P0（均已在文档中定位到 `文件:行`）
+
+- **涨跌闪烁动画静默失效**：`index.css:341/345` 用 `hsl(var(--stock-up) / 0.22)`，而 `--stock-up` 是 Hex `#E53935` → 非法 CSS 被丢弃，关键帧从未生效。
+- **资金口径错标**：`DarkFundTop.tsx:168` 数据源是 `thsdk_dde`，`CaliberBadge` 却标 `eastmoney4`（违反口径红线）。
+- **`-8%` 硬防线口径冲突**：`DefenseLineBanner.tsx:65` / `intraday_monitor.py:1889` / `paper_trading_engine.py:50` 三处默认 -8%，而 `scenario_cost_anchor.py:11` 明令「绝不默认 -5%/-8%」→ 待产品裁决。
+- **告警无声消失**：`DefenseLineBanner.tsx:60-62` 取价失败直接 `return null`，用户读作「安全」。
+- **掩码校验可绕过**：`settings.py:253` 精确相等判断，多一个空格即可把 `********` 写进 DB 覆盖真 token。
+- **预测缺失被判为未命中**：`Forecast.tsx:563-583` `no_data` 落入 `!hit` 分支画 `✗`。
+- **权重硬编码兜底**：`Forecast.tsx:847-853` 接口失败时四行仍合计 100%，是假精确。
+- **K 线双层卡片包裹**：`StockWorkbench.tsx:446 + :448`，同时违反「去卡片化」与「K 线 ≥80% 屏宽」。
+- **铁律存量偏离**：`bg-white/*` 39 处、`shadow-float` 14 处（铁律只准 1 处）。
+
+### 同时纠正了三处「提示词假设 ≠ 代码事实」
+
+- 威科夫只有 4 类 mark（`effort_divergence/spring_probe/dry_up/markup_break`），**无 LPS 标记**（LPS 仅存在于规则文案）→ 禁止做 LPS 开关假按钮。
+- **PushDeer 全仓 0 命中**，真实推送是 `notify_center.push_notification`（站内 + WS）+ `notifier.py` apprise 六类。
+- 暗盘四档与 09:05 双轨事件雷达**均无数据源**，文档标注「需先补采集」而非假设已有。
+
 ## release: v0.48.0（盘后复盘三池落库 + 告别「0家涨停」+ 对话结论前置要点化）
 
 **问题（用户截图反馈）**：
