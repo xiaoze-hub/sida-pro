@@ -26,6 +26,16 @@
     /* P0-1: 涨跌色 CSS 变量 — 供 ECharts 主题双态引用 */
     --stock-up: #E53935;
     --stock-down: #43A047;
+    /* 同色 HSL 三元组: Hex **不能**塞进 hsl() —— hsl(#E53935 / .22) 是非法声明, 浏览器整条丢弃
+       (涨跌闪 341/345 行曾因此静默失效)。凡需要「涨跌色 + alpha」一律走这两个三元组:
+         background-color: hsl(var(--stock-up-hsl) / .22)
+       值由 #E53935 / #43A047 精确换算(1.364/77.193%/55.294% 与 122.581/40.969%/44.510%),
+       往返误差 < 0.5/255; 与上面 Hex 同色不同写法, Hex 才是唯一颜色事实源, 二者由
+       tests/components/stock-flash-token.test.ts 锁死一致。 */
+    --stock-up-hsl: 1.364 77.193% 55.294%;
+    --stock-down-hsl: 122.581 40.969% 44.510%;
+    /* 闪烁底色强度(魔法数收进 token, 亮暗同值) */
+    --flash-alpha: 0.22;
     /* ECharts 主题 token */
     --echarts-text: #18181b;
     --echarts-axis-label: #52525b;
@@ -140,6 +150,9 @@
     /* P0-1: 暗色涨跌色 — 同色保持, 暗背景上更醒目 */
     --stock-up: #E53935;
     --stock-down: #43A047;
+    /* 暗色同一组 HSL 三元组(见 :root 注释): 暗色不改涨跌色相, 只由上下文决定底色浓度 */
+    --stock-up-hsl: 1.364 77.193% 55.294%;
+    --stock-down-hsl: 122.581 40.969% 44.510%;
     /* ECharts 暗色 token */
     --echarts-text: #c4c4cb;
     --echarts-axis-label: #8e8e96;
@@ -338,11 +351,11 @@
 
 /* v0.5.0 UI 全量改造 Wave1: 涨跌闪 + 页面进场 */
 @keyframes sida-flash-up {
-  0% { background-color: hsl(var(--stock-up) / 0.22); }
+  0% { background-color: hsl(var(--stock-up-hsl) / var(--flash-alpha)); }
   100% { background-color: transparent; }
 }
 @keyframes sida-flash-down {
-  0% { background-color: hsl(var(--stock-down) / 0.22); }
+  0% { background-color: hsl(var(--stock-down-hsl) / var(--flash-alpha)); }
   100% { background-color: transparent; }
 }
 .sida-flash {
