@@ -502,6 +502,12 @@ CSRF_EXEMPT_PREFIXES = (
     # 表现就是"点了发送验证码没反应/报错", 邮箱注册整条流程走不通。
     # 安全性: 该端点自带发送冷却(check_send_cooldown)+ 全局限流, 与 login 同级对待。
     "/api/auth/send-code",
+    # 2026-10-23 修: 「忘记密码」是**未登录**流程的第一步 —— 用户正是登不进来才要走它,
+    # 浏览器没有 csrf_token cookie, 不放行 ⇒ 永远 403「CSRF token 缺失」,
+    # 忘记密码整条链路不可用(实测生产: POST 该端点恒 403)。
+    # 安全性: 必须持有该邮箱的有效验证码(purpose=reset)才能改密, 且成功即踢全部旧 token;
+    # 与 login/register 同级对待。
+    "/api/auth/reset-password-by-email",
     "/api/webhooks/",
     # 2026-09-24 修: POST /api/keys 是「领 AppKey」的注册端点, 与 /api/auth/register 同理,
     # 是**无任何凭证前**就要调用的第一个端点(此时既无 JWT 也无 sk_ key 也无 csrf cookie)。
