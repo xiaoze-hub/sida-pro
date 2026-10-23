@@ -442,10 +442,17 @@ export default function StockWorkbench() {
            `refreshToken` 这类入参(各自"挂载即取数"), 重挂载是它们唯一的整棵重取数手段;
            给它们逐个加 token 属跨组件改造, 不在本批范围(见 tranche-4 报告 concern)。 */
         <div key={refreshKey} className="space-y-3">
-          {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ──────────────────────── */}
-          <section className="mt-3 rounded-lg border border-border/80 bg-card/40 p-2.5 shadow-sm">
+          {/* ── 【舱 2：主力博弈主战场 Kline Arena】 ────────────────────────
+              W1(2026-10-23 走查 P0): K 线**不许卡片包裹**。原先 `section`(圆角+边框+`bg-card/40`
+              +`shadow-sm`+`p-2.5`) 与内层 `div`(边框+`bg-background/50`+`p-2`)**双层**包着图表,
+              横向吃掉 40px(外 10+10+边框 1+1、内 8+8+边框 1+1), 纵向同样 40px —— 直接违反
+              「去卡片化 + K 线 ≥80% 屏宽」。现改为**单层顶部 hairline** 作区域划分(只 `border-t`,
+              不占横向宽度、不加卡片底与阴影; `shadow-float` 全站仅限框选即问浮条)。
+              内层保留 `min-w-0 flex-1`(承重: 没有 `min-w-0`, 图表 canvas 会撑破与右栏并排的 flex 行),
+              但去掉边框/底色/内边距 ⇒ 图表直接占满列宽。右栏挤压逻辑(`w-[320px]`/`w-12` + `gap-3`)不变。 */}
+          <section className="mt-3 border-t border-border/60 pt-2">
             <div className="flex items-stretch gap-3">
-              <div className="min-w-0 flex-1 rounded border border-border/60 bg-background/50 p-2">
+              <div className="min-w-0 flex-1">
                 <MemoKlineChart
                   symbol={symbol}
                   market={MARKET}

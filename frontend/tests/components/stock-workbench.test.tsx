@@ -337,14 +337,22 @@ describe('StockWorkbench 三带骨架', () => {
     // P0-1: 右栏**默认折叠** —— 默认看不到速览内容, 只有一个展开入口(把宽度还给 K 线)
     expect(screen.queryByTestId('rail')).toBeNull()
     const railToggle = screen.getByTestId('rail-toggle')
-    // 主图面板外壳: `min-w-0` 是**承重**类 —— 没有它, echarts canvas 会撑破与固定
-    // `w-[320px]` 右栏并排的 flex 行(overflow);`flex-1` 让它吃掉剩余宽度。
+    // W1(2026-10-23 走查 P0): K 线容器**只剩一层 hairline**, 不再有任何卡片外衣。
+    // `min-w-0` 是**承重**类 —— 没有它, 图表 canvas 会撑破与 `w-[320px]` 右栏并排的 flex 行;
+    // `flex-1` 让它吃掉剩余宽度。但圆角/边框/卡片底/内边距**全删**:
+    // 原先两层 padding(10+8) + 两层边框(1+1) 共 40px 横向被吃掉, 现在全部还给图表。
     const klineBox = screen.getByTestId('kline').parentElement as HTMLElement
     expect(klineBox.className).toContain('min-w-0')
     expect(klineBox.className).toContain('flex-1')
-    expect(klineBox.className).toContain('rounded')
-    expect(klineBox.className).toContain('border-border/60')
-    expect(klineBox.className).toContain('p-2')
+    for (const cardChrome of ['rounded', 'border', 'bg-background', 'bg-card', 'p-2', 'shadow']) {
+      expect(klineBox.className, `K 线裸容器不得再带卡片外衣「${cardChrome}」`).not.toContain(cardChrome)
+    }
+    // 外层区域只用**顶部 hairline** 划分(与 Dashboard 同语言): 只允许 `border-t`, 不许整框/卡片底/阴影。
+    const klineArena = klineBox.closest('section') as HTMLElement
+    expect(klineArena.className).toContain('border-t border-border/60')
+    for (const cardChrome of ['rounded', 'shadow', 'bg-card', 'bg-background', 'p-2.5']) {
+      expect(klineArena.className, `K 线区域外壳不得带卡片外衣「${cardChrome}」`).not.toContain(cardChrome)
+    }
     // 右栏列固定 320px。
     // 2026-09-18: 右栏列里多了 §10.2④ 的「区间统计」卡位, rail 的**直系父**改为滚动容器,
     // 固定宽落在它上一层的**列容器**上 —— 用 closest('[class*=…]') 定位该列, 不写死层数,
