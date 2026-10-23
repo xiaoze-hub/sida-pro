@@ -7,10 +7,10 @@
 
 | 名字 | 含义 | 数量 |
 |---|---|---|
-| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **66** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **65** |
+| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **67** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **66** |
 | **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
-| **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **1** |
+| **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **2** |
 
 handler-only 的一个：`get_opportunities`。
 
@@ -23,3 +23,7 @@ handler-only 的一个：`get_opportunities`。
 - **TOOL-002** `get_capital_flow` 的 caliber 必须包含「禁止据此判定主力意图」红线 —— 该工具是东财四档口径，方向位与逐笔相反，不能当主力意图用
 - **TOOL-003** 注册表工具总数必须与本规格声明的一致 —— 新增工具漏改规格会在此失败
 - **TOOL-004** 对模型可见的工具数 = 注册表数 − handler-only 数 —— 两者对不上说明 schema 漏配或多配
+
+`fallback=False` 的两个：`note_new_dimension`（采集，只挂 `deep_diagnosis`）与
+`get_premarket_brief`（2026-10-23，盘前底稿，只挂 `premarket_strategist`）—— 两者都不许进
+「无配方兜底」，否则闲聊里模型会去写库 / 去抓当日盘前分析。
