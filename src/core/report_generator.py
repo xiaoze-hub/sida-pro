@@ -384,20 +384,38 @@ async def _collect_strategy_signals(db, limit: int = 10) -> list[dict]:
 
 async def _collect_data(report_type: str, db) -> dict:
     """按报告类型采集全部数据(每段独立降级, 不互相拖累)。"""
-    today = beijing_now().strftime("%Y%m%d")
+    now = beijing_now()
+    today = now.strftime("%Y%m%d")
+    market_date = now.strftime("%Y-%m-%d")
     data: dict = {
-        "generated_at": beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
-        "market_date": beijing_now().strftime("%Y-%m-%d"),
+        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "market_date": market_date,
         "sources": {},
     }
 
     if report_type == "premarket":
-        summary = await _collect_limit_up_summary()
-        data["yesterday_limit_up"] = summary if summary.get("limit_up_count") is not None else {"error": "数据获取失败"}
-        data["news"] = await _collect_flash_news(15)
-        data["candidates"] = await _collect_entry_candidates(db)
-        data["positions"] = await _collect_positions(db, with_quotes=True)
-        data["sources"]["涨停池"] = "wudao/东财" if not data["yesterday_limit_up"].get("error") else "数据获取失败"
+        from src.core import premarket_evidence
+
+        ev = premarket_evidence.collect(date=market_date, db=db)
+        data["evidence"] = ev
+        data["qualities"] = {
+            k: ev[k]["quality"]
+            for k in ("overnight", "ladder", "news", "sentiment", "watchlist", "portfolio")
+            if k in ev and isinstance(ev[k], dict)
+        }
+        ladder_items = (ev.get("ladder") or {}).get("items") or []
+        summary = ladder_items[0] if ladder_items and isinstance(ladder_items[0], dict) else {}
+        data["yesterday_limit_up"] = (
+            summary
+            if summary.get("limit_up_count") is not None
+            else {"error": "数据获取失败"}
+        )
+        data["news"] = list((ev.get("news") or {}).get("items") or [])
+        data["candidates"] = list((ev.get("watchlist") or {}).get("items") or [])
+        data["positions"] = list((ev.get("portfolio") or {}).get("items") or [])
+        data["sources"]["涨停池"] = (
+            "wudao/东财" if not data["yesterday_limit_up"].get("error") else "数据获取失败"
+        )
         data["sources"]["快讯"] = "cls/ths" if data["news"] else "数据获取失败"
         data["sources"]["候选/持仓"] = "本地库"
     else:
@@ -501,6 +519,35 @@ def _fmt_flow(v) -> str:
     return f"{v:+.1f}亿" if isinstance(v, (int, float)) else str(v)
 
 
+def _get_block_quality(data: dict, block_name: str) -> str:
+    """从 data.evidence / data.qualities 或内联数据审计获取块质量状态。"""
+    ev = data.get("evidence")
+    if isinstance(ev, dict):
+        blk = ev.get(block_name)
+        if isinstance(blk, dict) and blk.get("quality"):
+            return str(blk["quality"])
+    quals = data.get("qualities")
+    if isinstance(quals, dict) and quals.get(block_name):
+        return str(quals[block_name])
+
+    from src.core.premarket_evidence import audit_ladder_summary, audit_news_items
+
+    if block_name == "ladder":
+        ylu = data.get("yesterday_limit_up")
+        if isinstance(ylu, dict):
+            if ylu.get("quality"):
+                return str(ylu["quality"])
+            if ylu and not ylu.get("error"):
+                q, _ = audit_ladder_summary(ylu)
+                return q
+    elif block_name == "news":
+        news = data.get("news")
+        if isinstance(news, list) and news:
+            q, _ = audit_news_items(news)
+            return q
+    return "ok"
+
+
 def _build_template_report(report_type: str, data: dict) -> str:
     """LLM 不可用时的纯数据报告: 只罗列真实采集到的数据。"""
     lines = [f"# {REPORT_TITLES[report_type]} {data.get('market_date', '')}", ""]
@@ -509,12 +556,16 @@ def _build_template_report(report_type: str, data: dict) -> str:
     lines.append("")
 
     if report_type == "premarket":
+        ladder_q = _get_block_quality(data, "ladder")
+        ladder_badge = " ⚠️ 数据待核" if ladder_q != "ok" else ""
         lines.append("## 一、昨日市场回顾(涨停复盘)")
         ylu = data.get("yesterday_limit_up") or {}
         if ylu.get("error"):
-            lines.append(f"- 涨停家数: {ylu.get('error')}")
+            lines.append(f"- 涨停家数: {ylu.get('error')}{ladder_badge}")
         else:
-            lines.append(f"- 涨停家数: {ylu.get('limit_up_count')} 家, 最高连板: {ylu.get('max_streak')} 板")
+            lines.append(
+                f"- 涨停家数: {ylu.get('limit_up_count')} 家, 最高连板: {ylu.get('max_streak')} 板{ladder_badge}"
+            )
             ladder = ylu.get("ladder") or {}
             if ladder:
                 lines.append("- 连板梯队: " + ", ".join(f"{k}板×{v}" for k, v in sorted(ladder.items(), reverse=True)))
@@ -524,7 +575,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
                 lines.append("- 涨停集中板块: " + ", ".join(f"{s['name']}×{s['count']}" for s in ylu["top_sectors"]))
         lines.append("")
 
-        lines.append("## 二、隔夜重要消息")
+        news_q = _get_block_quality(data, "news")
+        news_badge = " ⚠️ 数据待核" if news_q != "ok" else ""
+        lines.append(f"## 二、隔夜重要消息{news_badge}")
         news = data.get("news") or []
         if not news:
             lines.append("- 数据获取失败(或暂无快讯)")
@@ -534,7 +587,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
                 lines.append(f"- [{n.get('time', '')}] {star}{n.get('title', '')}({n.get('source', '')})")
         lines.append("")
 
-        lines.append("## 三、今日关注候选")
+        watch_q = _get_block_quality(data, "watchlist")
+        watch_badge = " ⚠️ 数据待核" if watch_q != "ok" else ""
+        lines.append(f"## 三、今日关注候选{watch_badge}")
         cands = data.get("candidates") or []
         if not cands:
             lines.append("- 暂无候选(entry_candidates 表为空)")
@@ -550,7 +605,9 @@ def _build_template_report(report_type: str, data: dict) -> str:
                 )
         lines.append("")
 
-        lines.append("## 四、当前持仓(参考前收盘)")
+        port_q = _get_block_quality(data, "portfolio")
+        port_badge = " ⚠️ 数据待核" if port_q != "ok" else ""
+        lines.append(f"## 四、当前持仓(参考前收盘){port_badge}")
         pos = data.get("positions") or []
         if not pos:
             lines.append("- 暂无持仓数据")
