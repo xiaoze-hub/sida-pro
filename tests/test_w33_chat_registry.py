@@ -96,9 +96,11 @@ def test_registry_integrity():
            # 2026-10-21 数据域架构 P0: 目录 + 统一取数入口
            "list_data_domains", "query_data_domain",
            # 2026-10-22 P0 采集层: 新分析维度提案(handler-only, 不进任何配方)
-           "note_new_dimension"}
+           "note_new_dimension",
+           # 2026-10-23 盘前 Agent B 支线: 当日盘前底稿(self, fallback=False)
+           "get_premarket_brief"}
     )
-    assert len(CHAT_TOOL_REGISTRY) == 66
+    assert len(CHAT_TOOL_REGISTRY) == 67
     for name, tool in CHAT_TOOL_REGISTRY.items():
         assert tool.caliber and tool.caliber.strip(), f"{name} 缺口径标签 caliber"
         assert callable(tool.handler), f"{name} handler 不可调用"
@@ -125,6 +127,8 @@ def test_self_requires_scoping():
         "get_trader_playbook",
         # 2026-10-22 采集层: 写的是**本人**的提案行 → 同样按 self 口径
         "note_new_dimension",
+        # 2026-10-23 盘前 Agent B 支线: 读的是**本人**的盘前底稿(含全局共享)
+        "get_premarket_brief",
     }
 
 
@@ -156,14 +160,17 @@ def test_exported_tool_order():
         "get_trader_playbook",
         "list_data_domains", "query_data_domain",
         # 提案采集(2026-10-22 晚间): schema 就位以打通采集链路, fallback=False 由路由挡闲聊
-        "note_new_dimension"}
-    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个 + 提案采集
-    assert set(tail[-10:]) == {"remember_preference", "create_daily_task",
+        "note_new_dimension",
+        # 盘前底稿(2026-10-23 B 支线): self 口径, fallback=False 由路由挡闲聊
+        "get_premarket_brief"}
+    # 文件末尾追加的工具：P0 两个 + 分时画像 + 多周期走势 + 因子 + 交易模式画像 + 数据域两个 + 提案采集 + 盘前底稿
+    assert set(tail[-11:]) == {"remember_preference", "create_daily_task",
                                "get_intraday_profile", "get_trend_profile",
                                "get_stock_factors", "get_scenario_matrix",
                                "get_trader_playbook",
                                "list_data_domains", "query_data_domain",
-                               "note_new_dimension"}
+                               "note_new_dimension",
+                               "get_premarket_brief"}
     with_schema = {n for n, t in CHAT_TOOL_REGISTRY.items() if t.schema is not None}
     assert set(names) == with_schema
 

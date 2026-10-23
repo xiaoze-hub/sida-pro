@@ -2706,3 +2706,51 @@ def _result_json(row: dict) -> str:
     }
     return json.dumps(payload, ensure_ascii=False)
 
+
+# ──────────────── 盘前分析底稿(2026-10-23, B 支线: 盘前 Agent 接线) ────────────────
+# 位置: 追加在注册表**最末** —— core 工具是导出清单的连续前缀(EXPECTED_CORE_ORDER index
+# 断言), 新工具不得插到 core/thsdk 段中间, 只能排尾部。
+# fallback=False: 盘前底稿只在盘前策略官配方/明确的盘前场景有意义, 不进「无配方命中 →
+# 全量工具」兜底路径(那条路径服务闲聊/问价, 取数类工具混进去会污染对话)。
+@register_chat_tool(
+    "get_premarket_brief",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_premarket_brief",
+            "description": (
+                "获取用户最新的盘前分析底稿（当日底稿；指定 date 参数取该日底稿）："
+                "闸门得分与仓位上限、题材主线强度、观察计划（触发/止损位）、关键价位。"
+                "回答「今天盘前分析」「今日观察什么」「闸门多少分」等盘前相关问题时调用。"
+                "历史记录会显式标注「非今日」，引用时注意基准日。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "底稿日期 YYYY-MM-DD，可选；不填取最新一条",
+                        "default": "",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="盘前分析·当日底稿",
+    requires="self",
+    fallback=False,
+)
+async def _tool_get_premarket_brief(db: Session, args: dict, user: User | None = None) -> str:
+    from src.web.api import premarket as _premarket
+
+    if user is None:
+        return "该工具需要登录用户（读取本人盘前分析底稿），当前会话没有用户身份。"
+    date = str((args or {}).get("date") or "").strip() or None
+    try:
+        # 同步 DB 读取放线程池, 不阻塞事件循环(与全站 to_thread 口径一致)
+        return await asyncio.to_thread(_premarket.render_brief, db, user, date)
+    except Exception as exc:  # noqa: BLE001 — 读取失败不拖垮对话
+        logger.warning("get_premarket_brief 工具失败: %s", exc)
+        return f"盘前分析底稿获取失败: {str(exc)[:80]}"
+

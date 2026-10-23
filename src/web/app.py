@@ -407,6 +407,15 @@ app.include_router(
     tags=["catalyst"],
     dependencies=protected,
 )
+# 盘前分析 Agent (2026-10-23): 底稿读取 + 手动触发 + 结构化证据层; 需登录
+from src.web.api import premarket as premarket_api
+
+app.include_router(
+    premarket_api.router,
+    prefix="/api/premarket",
+    tags=["premarket"],
+    dependencies=protected,
+)
 app.include_router(
     thsdk_ext_router.router,
     prefix="/api/thsdk/ext",
