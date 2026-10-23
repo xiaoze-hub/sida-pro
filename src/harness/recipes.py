@@ -150,7 +150,7 @@ def filter_schemas(schemas: list[dict], allowed: frozenset[str] | set[str] | Non
 
     ⚠️ 白名单必须**fail-closed**（失效即收紧, 不失效即全放开）：
     早先的实现是 `return out or schemas` —— 白名单里一个工具都对不上时
-    回落到全量, 也就是「配方写错了 → 把 66 个工具全交给模型」。
+    回落到全量, 也就是「配方写错了 → 把全部工具交给模型」。
     这正是白名单机制要防的事, 语义完全反了。
 
     现在: 白名单非空但一个都没命中 → 返回空列表(该配方无工具可用),
