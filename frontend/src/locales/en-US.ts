@@ -102,6 +102,10 @@ const enUS: Messages = {
     board: 'Board',
     analysis: 'Analysis',
     close: 'Close {name} tab',
+    menu: 'Tab menu',
+    closeSelf: 'Close',
+    closeOthers: 'Close others',
+    closeRight: 'Close to the right',
     limitToast: 'At most {max} tabs; closed the oldest “{name}”',
   },
 

@@ -8,8 +8,11 @@ import WorkspaceTabs from './WorkspaceTabs'
 import { useI18n } from '@/hooks/useI18n'
 import {
   MAX_TABS,
+  closeOtherTabs,
   closeTab,
+  closeTabsToRight,
   loadTabs,
+  pickEvictionTarget,
   routeTab,
   saveTabs,
   tabLabel,
@@ -33,7 +36,7 @@ import {
  *     隐藏页签内的导航不动地址栏。跨页签导航一律交给外层路由(开新页签或切到已有页签)。
  *   · 关闭: `closeTab` 给出"相邻页签"落点 —— 只关这一个功能页, 首页('/')常驻, 永不"全关掉"。
  *     关当前页签用 `replace` 导航: 浏览器后退**不会把刚关掉的页签复活**。
- *   · **上限 12**: 超限挤掉最早的**非首页**页签, 并**明确提示**(不静默丢用户的页), 防内存跑飞。
+ *   · **上限 8(LRU)**: 超限挤掉最久未访问的**非首页**页签, 并**明确提示**(不静默丢用户的页), 防内存跑飞。
  *   · 持久化: 任何一次开/切/关都写 localStorage, 刷新后原样恢复(标题由路由现算, 不存文案)。
  *   · 非页签路由(公开文档面/老别名/未知)**不占页签**: 在页签面板之外单独渲染(整页)。
  *
@@ -61,6 +64,9 @@ export default function WorkspaceTabShell({
   tRef.current = t
   const toastRef = useRef(toast)
   toastRef.current = toast
+  // LRU 访问顺序(最旧在前): 与页签数组顺序解耦 —— 数组顺序=打开顺序(视觉稳定),
+  // 淘汰按「最久没被访问」, 避免用户在 A/B 之间反复切时 A 被当成"最早的"挤掉。
+  const touchRef = useRef<string[]>([])
 
   const spec = routeTab(location.pathname, location.search)
   const specKey = spec?.key ?? null
@@ -72,7 +78,13 @@ export default function WorkspaceTabShell({
   useEffect(() => {
     if (!specKey || !specPath) return
     const prev = tabsRef.current
-    const next = upsertTab(prev, { key: specKey, path: specPath })
+    const touch = touchRef.current.filter((key) => key !== specKey)
+    // 只在"真要新开一个且已到上限"时才算淘汰目标(切换已有页签不该触发淘汰)
+    const isNewTab = !prev.some((tab) => tab.key === specKey)
+    const evictKey =
+      isNewTab && prev.length >= MAX_TABS ? pickEvictionTarget(prev, touch, specKey) : undefined
+    const next = upsertTab(prev, { key: specKey, path: specPath }, MAX_TABS, evictKey)
+    touchRef.current = [...touch, specKey]
     if (next === prev) return
     saveTabs(next)
     setTabs(next)
@@ -108,6 +120,33 @@ export default function WorkspaceTabShell({
     [tabs, specKey, navigate],
   )
 
+  // 右键菜单: 关闭其他 / 关闭右侧。落点规则与 onClose 同源 —— 当前页签被关掉才导航。
+  const settleAfterBulk = useCallback(
+    (nextTabs: WorkspaceTab[], preferred?: string) => {
+      setTabs(nextTabs)
+      saveTabs(nextTabs)
+      if (!specKey || nextTabs.some((tb) => tb.key === specKey)) return
+      const target =
+        nextTabs.find((tb) => tb.key === preferred) ?? nextTabs[nextTabs.length - 1] ?? nextTabs[0]
+      if (target) navigate(target.path, { replace: true })
+    },
+    [specKey, navigate],
+  )
+
+  const onCloseOthers = useCallback(
+    (tab: WorkspaceTab) => {
+      settleAfterBulk(closeOtherTabs(tabs, tab.key), tab.key)
+    },
+    [tabs, settleAfterBulk],
+  )
+
+  const onCloseRight = useCallback(
+    (tab: WorkspaceTab) => {
+      settleAfterBulk(closeTabsToRight(tabs, tab.key), tab.key)
+    },
+    [tabs, settleAfterBulk],
+  )
+
   const onInnerNavigate = useCallback(
     (path: string) => {
       if (path === outerPath) return // 与外层已一致: 不产生多余历史/重渲染
@@ -123,7 +162,14 @@ export default function WorkspaceTabShell({
   // 页签栏继续在(不闪), 已开的页签仍可见可切; 内容区走"页签之外"的整页渲染。
   return (
     <>
-      <WorkspaceTabs tabs={tabs} activeKey={specKey} onActivate={onActivate} onClose={onClose} />
+      <WorkspaceTabs
+        tabs={tabs}
+        activeKey={specKey}
+        onActivate={onActivate}
+        onClose={onClose}
+        onCloseOthers={onCloseOthers}
+        onCloseRight={onCloseRight}
+      />
       {header}
       {tabs.map((tab) => (
         <TabPane

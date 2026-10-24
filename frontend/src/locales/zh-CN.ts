@@ -101,6 +101,10 @@ const zhCN = {
     board: '板块',
     analysis: '分析',
     close: '关闭 {name} 页签',
+    menu: '右键菜单',
+    closeSelf: '关闭',
+    closeOthers: '关闭其他',
+    closeRight: '关闭右侧',
     limitToast: '页签最多 {max} 个, 已关闭最早的「{name}」',
   },
 

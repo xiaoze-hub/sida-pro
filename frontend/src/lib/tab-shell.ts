@@ -23,8 +23,9 @@ import { normalizeType, type WorkbenchType } from './workbench-tabs'
 export const HOME_TAB_KEY = '/'
 /** 持久化 key(带版本号: 结构变更时换新 key, 旧数据自然失效, 不做迁移猜测) */
 export const TABS_STORAGE_KEY = 'sida_workspace_tabs_v1'
-/** 页签上限: 超出丢最早的**非首页**页签(首页与新开的不丢), 防止页签栏无限增长 */
-export const MAX_TABS = 12
+/** 页签上限: 8 个(L2-E)。超出按 **LRU** 淘汰最久未访问的非首页页签 —— 见 pickEvictionTarget。
+ *  为什么不是 FIFO: 用户会在两三个页签之间反复切, 早打开但一直在用的页签被挤掉会让人莫名其妙。 */
+export const MAX_TABS = 8
 /**
  * 整页路由(不页签化)。
  * (a) 公开文档面: 用户协议 / 档位对比 / 登录 —— 不在功能菜单里, 打开即整页;
@@ -195,10 +196,36 @@ export function normalizeTabs(tabs: readonly WorkspaceTab[], max = MAX_TABS): Wo
  * · 超过上限 → 丢最早的**非首页**页签(正在开的这个不丢)。
  * · 内容无变化 → **返回原引用**(调用方据此跳过持久化与重渲染)。
  */
+/**
+ * LRU 淘汰目标: 最久未「touch」的非首页页签。
+ *
+ * `touchOrder` 是壳层维护的访问顺序(最旧在前), **不参与 tabs 数组顺序** —— 页签栏的视觉顺序
+ * 必须保持「打开顺序」, 否则关闭后的相邻落点和成片顺序断言全乱(见 tab-shell.test.ts)。
+ * 找不到可用候选时退回 tabs 顺序里第一个非首页非 incoming, 保证不会因为 LRU 记录缺失而不淘汰。
+ */
+export function pickEvictionTarget(
+  tabs: readonly WorkspaceTab[],
+  touchOrder: readonly string[],
+  incomingKey: string,
+): string | undefined {
+  const alive = new Set(tabs.map((tab) => tab.key))
+  for (const key of touchOrder) {
+    if (key === HOME_TAB_KEY || key === incomingKey) continue
+    if (alive.has(key)) return key
+  }
+  for (const tab of tabs) {
+    if (tab.key === HOME_TAB_KEY || tab.key === incomingKey) continue
+    return tab.key
+  }
+  return undefined
+}
+
 export function upsertTab(
   tabs: WorkspaceTab[],
   spec: RouteTabSpec,
   max = MAX_TABS,
+  /** 超限时要淘汰的 key(壳层按 LRU 算好传入); 不传则退回「最早的」非首页页签 */
+  evictKey?: string,
 ): WorkspaceTab[] {
   const base = normalizeTabs(tabs, max)
   const idx = base.findIndex((tab) => tab.key === spec.key)
@@ -213,7 +240,8 @@ export function upsertTab(
     { key: spec.key, path: spec.path, closable: spec.key !== HOME_TAB_KEY },
   ]
   while (next.length > max) {
-    const victim = next.findIndex((tab, i) => i > 0 && tab.key !== spec.key)
+    const lru = evictKey ? next.findIndex((tab) => tab.key === evictKey) : -1
+    const victim = lru > 0 ? lru : next.findIndex((tab, i) => i > 0 && tab.key !== spec.key)
     if (victim < 0) break
     next.splice(victim, 1)
   }
@@ -316,4 +344,19 @@ export function saveTabs(tabs: readonly WorkspaceTab[], store: TabStore | null =
   } catch {
     /* 配额满/隐私模式: 忽略 */
   }
+}
+
+/** 关闭其他: 只留首页 + 锚点页签(首页常驻不可关) */
+export function closeOtherTabs(tabs: readonly WorkspaceTab[], keepKey: string): WorkspaceTab[] {
+  const base = normalizeTabs(tabs)
+  if (!base.some((tab) => tab.key === keepKey)) return base
+  return base.filter((tab) => tab.key === HOME_TAB_KEY || tab.key === keepKey)
+}
+
+/** 关闭右侧: 保留锚点及其左侧全部页签(锚点不存在时原样返回) */
+export function closeTabsToRight(tabs: readonly WorkspaceTab[], anchorKey: string): WorkspaceTab[] {
+  const base = normalizeTabs(tabs)
+  const idx = base.findIndex((tab) => tab.key === anchorKey)
+  if (idx < 0) return base
+  return base.slice(0, idx + 1)
 }
