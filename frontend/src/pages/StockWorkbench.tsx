@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { dashboardApi } from '@panwatch/api'
+import { dashboardApi, fetchAPI } from '@panwatch/api'
 import { usePausedInterval } from '@panwatch/base-ui'
 import KlineChart, { type KlineInterval, type KlineRangeStats } from '@panwatch/biz-ui/components/KlineChart'
 import HeaderBand from '@panwatch/biz-ui/components/workbench/HeaderBand'
 import { CopilotCapsule } from '@/components/copilot/CopilotCapsule'
 import { DisciplineCoolDownBanner } from '@/components/DisciplineCoolDownBanner'
 import { DefenseLineBanner } from '@/components/DefenseLineBanner'
+import Fund4Strip, { type Fund4Day } from '@panwatch/biz-ui/components/Fund4Strip'
 import QuickRail from '@panwatch/biz-ui/components/workbench/QuickRail'
 import BoardBody from '@panwatch/biz-ui/components/workbench/BoardBody'
 import IndexBody from '@/pages/workbench/IndexBody'
@@ -299,6 +300,34 @@ export default function StockWorkbench() {
    */
   const [refreshKey, setRefreshKey] = useState(0)
   /**
+   * 四档资金结构（2026-10-24 新增；数据源 `exday_daily`，口径 `tdx_exday4`）。
+   * 只个股取、只在 `refreshKey` 变化时重取 —— 四档是**日频**数据，盘中不会变，
+   * 不该跟着行情推送高频刷新。`fund4 === null` 表示在途（组件据此显示加载态，
+   * 而不是先画一个「无数据」再翻转，避免误读成真的没有）。
+   */
+  const [fund4, setFund4] = useState<{ days: Fund4Day[]; hint?: string } | null>(null)
+  useEffect(() => {
+    if (type !== 'stock' || !symbol) {
+      setFund4(null)
+      return
+    }
+    let cancelled = false
+    setFund4(null)
+    fetchAPI<{ items?: Fund4Day[]; hint?: string }>(
+      `/market-data/fund-structure/${encodeURIComponent(symbol)}?days=20`,
+    )
+      .then((r) => {
+        if (cancelled) return
+        setFund4({ days: Array.isArray(r?.items) ? r.items : [], hint: r?.hint })
+      })
+      .catch(() => {
+        if (!cancelled) setFund4({ days: [], hint: '四档资金结构取数失败（后端异常），非「无数据」' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [type, symbol, refreshKey])
+  /**
    * 持仓上下文(T19 真源; P1-2 起兼带成本价): `has===undefined` = 未知(在途/失败), 见 `usePositionContext`。
    * 未持仓只是**不渲染**持仓专属块, **不编造**数据; 未知时由带1/标签处显式标注(不猜 `false`)。
    * **闸门(Finding 3)**: 只有个股视图才取 —— 指数/板块(`type !== 'stock'`)不消费, 不该白发一次
@@ -520,6 +549,14 @@ export default function StockWorkbench() {
               )}
             </div>
           </section>
+
+          {/* 四档资金结构（exday_daily / tdx_exday4）：单日四档看不清趋势，
+              20 日条带才看得到「特大单连续几天在跑」。不包卡片，只一条 hairline。 */}
+          {fund4 ? (
+            <Fund4Strip days={fund4.days} hint={fund4.hint} />
+          ) : (
+            <Fund4Strip days={[]} loading />
+          )}
 
           {/* ── 【舱 3：微观盘口与决策支持 Deep Deck】 ────────────────────── */}
           <section className="rounded-lg border border-border/80 bg-card/40 p-3 shadow-sm">

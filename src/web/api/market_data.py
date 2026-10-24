@@ -2323,3 +2323,123 @@ async def market_breadth_history(
         "caliber": "PG klines 自算（非实时）：涨跌家数 + 六指标 + 情绪温度 0-100；"
                    "与客户端全市场快照口径同向（2026-09-25 交叉验证：涨跌比 0.28 vs 0.26）",
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 四档资金结构多日序列（2026-10-24 新增）
+#
+# 为什么需要这个端点：`fundamentals-detail` 里的 `exday` 字段是 TQ **当日实时 RPC**
+# 的标量（`exday_latest`, count=1），只能回答「今天四档什么结构」，回答不了
+# 「特大单净额连续 5 日在流出吗」这类分位/趋势问题。历史序列只能读 `exday_daily`
+# 表（`src/collectors/exday_daily.py` 每交易日 15:45 全市场落库）。
+#
+# 口径红线：本端点输出 `caliber="tdx_exday4"`（通达信按**单笔成交额**四档的客户端口径），
+# 与东财 push2 四档(`eastmoney4`)、同花顺 DDE(`ths`)、腾讯逐笔(`tick`) **不可换算**。
+# 四档的金额阈值是**推断值**（TQ 不返回阈值），同屏必须带标签，禁止拿它做方向判定。
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXDAY4_THRESHOLDS_HINT = (
+    "特大单 >100万 / 大单 20~100万 / 中单 5~20万 / 小单 <5万（推断值，TQ 未返回阈值）"
+)
+EXDAY4_CALIBER_NOTE = (
+    "四档=按单笔成交金额分档（通达信客户端口径 tdx_exday4）；"
+    "与东财四档(eastmoney4)、同花顺 DDE(ths)、腾讯逐笔(tick) 不可换算，禁止跨口径相加或比较绝对值"
+)
+
+
+@router.get("/fund-structure/{symbol}")
+async def fund_structure_series(
+    symbol: str,
+    days: int = Query(20, ge=1, le=120, description="回溯交易日数（按 trade_date 倒序取）"),
+    market: str = Query("CN", description="市场"),
+):
+    """四档资金结构多日序列（读 `exday_daily`，口径 `tdx_exday4`）。
+
+    数据来源与限制：
+      - TQ `get_exday_data` **只返当日 1 行**（count/start_time/date 参数实测无效），
+        历史只能靠每日 15:45 落库累积 → 本端点能回溯的长度 = 落库开始至今。
+      - 表空时返回 `ok=true / days=0` 并给 `hint`，**不编造**。
+    """
+    sym = str(symbol or "").split(".")[0].strip()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol 不能为空")
+    mkt = (market or "CN").upper()
+
+    items: list[dict] = []
+    try:
+        from sqlalchemy import text as _sql
+
+        from src.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            rows = db.execute(
+                _sql(
+                    "SELECT trade_date, amount, volume_lots, active_buy_amt, active_sell_amt,"
+                    " active_ratio, xl_buy_amt, lg_buy_amt, md_buy_amt, sm_buy_amt,"
+                    " xl_sell_amt, lg_sell_amt, md_sell_amt, sm_sell_amt,"
+                    " xl_active_net, lg_active_net, md_active_net, sm_active_net"
+                    " FROM exday_daily WHERE symbol = :s AND market = :m"
+                    " ORDER BY trade_date DESC LIMIT :n"
+                ),
+                {"s": sym, "m": mkt, "n": int(days)},
+            ).fetchall()
+        finally:
+            db.close()
+        for r in reversed(rows):  # 时间正序返回，前端直接画
+            items.append(
+                {
+                    "trade_date": str(r[0]),
+                    "amount": r[1],
+                    "volume_lots": r[2],
+                    "active_buy_amt": r[3],
+                    "active_sell_amt": r[4],
+                    "active_ratio": r[5],
+                    "tiers": {
+                        "xl": {"buy": r[6], "sell": r[10], "net": r[14]},
+                        "lg": {"buy": r[7], "sell": r[11], "net": r[15]},
+                        "md": {"buy": r[8], "sell": r[12], "net": r[16]},
+                        "sm": {"buy": r[9], "sell": r[13], "net": r[17]},
+                    },
+                }
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"四档资金结构[{sym}]查询失败: {e}")
+        return {
+            "ok": False,
+            "symbol": sym,
+            "market": mkt,
+            "days": 0,
+            "items": [],
+            "caliber": "tdx_exday4",
+            "thresholds_hint": EXDAY4_THRESHOLDS_HINT,
+            "note": EXDAY4_CALIBER_NOTE,
+            "hint": f"查询异常: {type(e).__name__}",
+        }
+
+    latest = items[-1] if items else None
+    if latest:
+        t = latest["tiers"]
+        latest = {
+            **latest,
+            "main_net": (t["xl"]["net"] or 0) + (t["lg"]["net"] or 0),
+        }
+
+    hint = ""
+    if not items:
+        hint = ("exday_daily 无该标的记录：该表 2026-10-23 起由每交易日 15:45 全市场采集，"
+                "历史不可回补（TQ 只返当日 1 行）")
+
+    return {
+        "ok": True,
+        "symbol": sym,
+        "market": mkt,
+        "days": len(items),
+        "items": items,
+        "latest": latest,
+        "caliber": "tdx_exday4",
+        "tier_thresholds_inferred": True,
+        "thresholds_hint": EXDAY4_THRESHOLDS_HINT,
+        "note": EXDAY4_CALIBER_NOTE,
+        "hint": hint,
+    }

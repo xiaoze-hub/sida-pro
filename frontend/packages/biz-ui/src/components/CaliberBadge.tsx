@@ -8,11 +8,16 @@
  */
 import { cn } from '@panwatch/base-ui'
 
-export type Caliber = 'tick' | 'eastmoney4' | 'ths' | 'unknown'
+export type Caliber = 'tick' | 'eastmoney4' | 'tdx_exday4' | 'ths' | 'unknown'
 
 const CALIBER_TEXT: Record<Caliber, { short: string; full: string }> = {
   tick: { short: '逐笔', full: '逐笔成交口径(腾讯 tick): 按主动买/主动卖方向统计, 可用于方向性判定' },
   eastmoney4: { short: '四档', full: '按单金额四档归类(东财): 超大/大/中/小单, 方向与逐笔口径可能不一致' },
+  tdx_exday4: {
+    short: '通达信四档',
+    full: '通达信客户端按单笔成交金额分四档(tdx_exday4): 特大/大/中/小单。'
+      + '档位阈值是推断值(TQ 未返回), 与东财四档(eastmoney4)、逐笔(tick) 不可换算',
+  },
   ths: { short: '同花顺', full: '同花顺口径: 与逐笔口径的拆单识别不同, 不可与 tick 混用做方向判定' },
   unknown: { short: '口径未标', full: '该数值未携带口径标签, 按 unknown 处理 —— 不得用于方向性判定' },
 }
@@ -56,5 +61,10 @@ export function caliberOf(raw: string | null | undefined): Caliber {
   // 「凑一个」eastmoney4 顶上 —— 这正是 DarkFundTop/WarReport 口径错标的根因。
   // 因此这里收敛前缀 → ths(只做口径归类, 不改任何数值, 四口径仍不可换算)。
   if (v.startsWith('thsdk') || v.startsWith('ths_')) return 'ths'
+  // 通达信客户端四档(exday): 上游 source 写 `tdx_exday4` / `tdx_tq_exday`。
+  // 与东财四档是**不同口径**(按单笔成交额 vs 按单金额归类), 不可归一成 eastmoney4。
+  // 后端 `exday_structure.SOURCE` 实际写的是 `tdx_tq_exday`（不是 `tdx_exday4`），
+  // 所以按「tdx_ 前缀 + 含 exday」判定，避免只认一种拼写。
+  if (v === 'exday4' || (v.startsWith('tdx_') && v.includes('exday'))) return 'tdx_exday4'
   return 'unknown'
 }

@@ -1,3 +1,77 @@
+## release: v0.50.0（四档资金结构首次可用：补 5214 只历史 + 新口径 + 20日条带副图）
+
+### 一、先说一个必须记录的事实：`exday_daily` 一直是 0 行
+
+v0.47.0 建了 `exday_daily` 表（Migration 220）并注册了每交易日 **15:45** 全市场采集，
+但**从未成功跑过一次**：
+
+- v0.47.0 是 10-23 **晚上**部署的，当天 15:45 早已过去；
+- 10-24 是周六，`is_market_day()` 为 False，调度直接跳过。
+
+所以「四档资金结构每日落库」这句只在代码里成立，数据层是空的。凡引用过
+「`exday_daily` 已有数据」的判断都是错的（含本仓 CHANGELOG v0.47.0 的描述）。
+
+**已回补**：TQ `get_exday_data` 在非交易日仍返回**上一交易日**数据，因此可以补最近一天。
+生产实测全市场采集：
+
+```
+scanned=5502  written=5214  failed=288  elapsed=93.9s  trade_date=20261023
+```
+288 只失败（5.2%）为停牌/无成交标的，属预期。**更早的历史补不了** ——
+TQ 该接口只返当日 1 行（`count`/`start_time`/`date` 参数实测全部无效），
+历史序列只能靠此后每个交易日 15:45 落库累积。
+
+### 二、四档口径补一个成员：`tdx_exday4`
+
+`CaliberBadge` 原本只有 `tick | eastmoney4 | ths | unknown`。四档结构的真实口径是
+**通达信客户端按单笔成交金额分档**，与东财 `eastmoney4`（按单金额归类）不可换算 ——
+直接判 unknown 或凑成 `eastmoney4` 都是错的。
+
+- `Caliber` 新增 `'tdx_exday4'`，短标签「通达信四档」，tooltip 写明阈值是**推断值**
+- `caliberOf()` 按 `exday4` / `tdx_*exday*` 前缀识别（后端 `exday_structure.SOURCE`
+  实际写的是 `tdx_tq_exday`，只认清一两种拼写会漏）
+- 档位阈值（特大>100万 / 大20~100万 / 中5~20万 / 小<5万）**标注为推断值**，TQ 不返回阈值
+
+### 三、新端点 `GET /api/market-data/fund-structure/{symbol}?days=N`
+
+读 `exday_daily` 出多日序列（默认 20 日，时间正序），返回每日四档 `buy/sell/net` +
+`active_ratio`，并回 `caliber` / `thresholds_hint` / `tier_thresholds_inferred`。
+
+- **表空时如实返回** `days=0` + `hint`（说明历史不可回补），不编数据、不静默 0
+- **不读 TQ 当日 RPC**：`exday_latest` 只有 1 行，回答不了「特大单连续 5 日流出吗」
+- 与 `fundamentals-detail` 的 `exday` 字段分工：那边是当日实时标量，这边是历史趋势
+
+### 四、前端：`Fund4Strip` 四档条带副图
+
+挂在个股工作台 K 线舱之后（`StockWorkbench`），20 日 × 4 档柱：
+
+- **自绘 SVG 而非 lightweight-charts**：四档是「同日四个并列量」，histogram 一个 series
+  只能一组柱，四组挂同一价格轴会互相遮挡
+- 买红卖绿（净额 >0 红 / <0 绿）；不包卡片，只有一条 `border-t` hairline
+- 悬停给单档精确「买/卖/净额 + 主动买占比」，柱高按窗口内峰值归一
+- 日频数据：只在 `refreshKey` 变化时重取，**不跟行情推送高频刷新**
+- 空态区分「加载中」/「确实无数据」，后者带后端 hint
+
+### 五、测试
+
+- `tests/test_fund_structure_contract.py`（7 条）：口径必须是 `tdx_exday4` 且**不得**
+  退化成 `eastmoney4`/`ths`、阈值必须标推断值、表空必须给 hint、必须读表不读 RPC、
+  必须写明禁止跨口径相加、采集器股票池必须来自全市场日线
+- `frontend/tests/lib/caliber-exday4.test.ts`（4 条）：`tdx_exday4`/`tdx_tq_exday` 归一自身
+  且不等于 `eastmoney4`、大小写空白不影响、未知口径仍 unknown
+- `frontend/tests/components/fund4-strip.test.tsx`（4 条）：正柱标 `up`/负柱标 `down`（买红卖绿）、
+  口径徽章与「推断值」标注在、无数据必须给原因不渲染空图、**加载中与无数据是两个态不能混**
+
+### 六、两个棘轮规则把这版拦了两次（记录用）
+
+- `check_ui_rules.mjs` 的 **R6**：条带图里写了 4 处裸 `toFixed` → 改复用
+  `packages/biz-ui/src/lib/ladder-format.ts` 的 `fmtSignedAmount`（该文件本就是「不用 toFixed」的共用实现）
+- `design-system-tokens.test.ts`：用了 `text-[9px]` → 终端字阶只允许 6 档
+  （10/11/12/13/16/20），9px 会破坏字阶收敛，改回 10px
+
+两次都是**本地定向测试全绿、全量门禁才红** —— 与 v0.49.0 的 R6 同一个教训：
+本地必须跑齐前端四件套（tsc + eslint + vitest + `check_ui_rules.mjs`）再发版。
+
 ## release: v0.49.0（设计走查 8 条 P0 落地：硬防线改用户设定 · 口径错标 · 密钥安全 · 闪烁失效）
 
 来源：`docs/design/20261023_0*.md`（8 份全站走查，2538 行）。本版只做**已被复核证实**的缺陷，共 8 条。
