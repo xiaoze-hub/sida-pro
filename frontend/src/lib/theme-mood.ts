@@ -12,13 +12,27 @@ export function fmtScore(v: number | null | undefined): string {
   return safeFixed(v, 1)
 }
 
+/**
+ * 情绪分 → 底色（2026-10-24 L3-A：6 色收敛为 3 语义 + 灰）
+ *
+ * 原来 6 档（muted/40、muted/60、up/15、up/30、up/45）肉眼看不出 40% 与 60% 的差别，
+ * 读者无法把颜色翻译成结论。现收敛为四种可命名状态：
+ *   走弱(<50) 绿 / 震荡(50-70) 中性 / 走强(≥70) 红 / 无数据 灰
+ * 语义沿用 A 股口径：红=走强、绿=走弱，不引入第四种色相。
+ */
 export function cellColorClass(score: number | null | undefined): string {
   if (score == null || !Number.isFinite(score)) return 'bg-muted/30'
-  if (score < 50) return 'bg-muted/40'
-  if (score < 60) return 'bg-muted/60'
-  if (score < 70) return 'bg-stock-up/15'
-  if (score < 82) return 'bg-stock-up/30'
-  return 'bg-stock-up/45'
+  if (score < 50) return 'bg-stock-down/20'
+  if (score < 70) return 'bg-muted/60'
+  return 'bg-stock-up/30'
+}
+
+/** 与 cellColorClass 一一对应的人话标签（图例/悬停共用，避免两处文案漂移） */
+export function cellColorLabel(score: number | null | undefined): string {
+  if (score == null || !Number.isFinite(score)) return '无数据'
+  if (score < 50) return '走弱'
+  if (score < 70) return '震荡'
+  return '走强'
 }
 
 export function cellTextClass(score: number | null | undefined): string {

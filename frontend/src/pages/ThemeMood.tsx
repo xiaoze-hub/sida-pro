@@ -546,12 +546,10 @@ export default function ThemeMoodPage() {
                 {/* 2026-10-24 L3-A: 图例与 lib/theme-mood.ts 的 cellColorClass 对齐 ——
                     此前少一档 null(无数据, bg-muted/30), 读者会以为"灰=最低分"。 */}
                 {[
+                  ['走弱 <50', 'bg-stock-down/20'],
+                  ['震荡 50-70', 'bg-muted/60'],
+                  ['走强 ≥70', 'bg-stock-up/30'],
                   ['无数据', 'bg-muted/30'],
-                  ['<50', 'bg-muted/40'],
-                  ['50-60', 'bg-muted/60'],
-                  ['60-70', 'bg-stock-up/15'],
-                  ['70-82', 'bg-stock-up/30'],
-                  ['≥82', 'bg-stock-up/45'],
                 ].map(([label, cls]) => (
                   <span key={label} className="flex items-center gap-0.5">
                     <span className={`inline-block h-2.5 w-3.5 rounded-sm ${cls}`} />
