@@ -66,4 +66,34 @@ describe('ResonancePanel 三指标共振', () => {
     render(<ResonancePanel />)
     expect(await screen.findByText(/今日无三指标共振标的/)).toBeTruthy()
   })
+
+  // ── 入口可发现性(2026-10-24 小白可用性): 段头曾是纯文字标题, 行像静态列表 ──
+  it('段头冠名「数智决策」并带帮助 tooltip(三个指标小白可读)', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ResonancePanel />)
+    expect(await screen.findByText('数智决策·三指标共振')).toBeTruthy()
+    const help = screen.getByLabelText('什么是数智决策·三指标共振')
+    const tip = help.parentElement?.getAttribute('title') ?? ''
+    expect(tip).toContain('GS趋势')
+    expect(tip).toContain('AI机构活跃度')
+    expect(tip).toContain('L2主力净流入')
+  })
+
+  it('段头「全部 ›」入口跳机会页共振页签(深层链接)', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ResonancePanel />)
+    const all = await screen.findByRole('button', { name: /全部/ })
+    fireEvent.click(all)
+    expect(mocks.navigate).toHaveBeenCalledWith('/opportunities?tab=resonance')
+  })
+
+  it('行尾有箭头暗示可点, 且行 title 说明点击去向', async () => {
+    mocks.fetchAPI.mockResolvedValue(RESP)
+    render(<ResonancePanel />)
+    const name = await screen.findByText('神剑股份')
+    const row = name.closest('button') as HTMLElement
+    expect(row.getAttribute('title')).toContain('个股工作台')
+    // ChevronRight 为 svg, 无文本 —— 用 querySelector 验证存在
+    expect(row.querySelector('svg.lucide-chevron-right')).not.toBeNull()
+  })
 })

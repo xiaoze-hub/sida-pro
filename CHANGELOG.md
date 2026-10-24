@@ -1,3 +1,15 @@
+## 2026-10-24
+
+### feat-入口可发现性: 数智决策/数智参谋小白可用性改造
+
+- **问题(用户实测反馈)**: 同一个功能全站四个名字(首页「三指标共振」/机会页「选股铁三角共振」/工作台「铁三角共振」/设置页「数智决策三指标」), 且入口零可点击暗示 —— 侧栏「数智参谋」高亮卡长得像横幅, 首页共振段头像标题, 小白不知道能点。
+- `frontend/src/App.tsx` — 侧栏 AI 高亮卡加 ChevronRight 箭头暗示 + 副标题从行话「筹码·共振·撤单·竞价」改为动作语言「AI 帮你分析股票 · 点击进入」(行话保留在 title tooltip)。
+- `frontend/packages/biz-ui/src/components/dashboard/ResonancePanel.tsx` — 段头冠名「数智决策·三指标共振」+ 帮助 tooltip(GS趋势/机构活跃度/L2净流入三指标白话解释); 新增「全部 ›」入口直达机会页共振页签; 行尾加箭头 + 行 title 说明点击去向(个股工作台)。
+- `frontend/src/components/ThreeTierVerdictRow.tsx` — 「铁三角共振:」改「数智决策·铁三角:」+ 帮助 tooltip; 共振结论包成可点按钮(保留三态配色与 title), 点击进 `/opportunities?tab=resonance`。
+- `frontend/src/pages/Opportunities.tsx` — resonance 页签改名「数智决策·铁三角共振」; 新增 `?tab=` 深层链接(挂载时消费一次, 手动切页签照旧走 localStorage, 白名单校验拒绝非法值)。
+- 新增 `frontend/src/lib/url-tabs.ts`(纯函数 tabFromSearch)。
+- **测试**: 新增 three-tier-affordance(3)/url-tabs(3), 扩展 resonance-panel(+3)与 three-tier-resonance-color(MemoryRouter 包裹); 6 文件 65 用例全绿; `npx tsc --noEmit` 通过; `check_ui_rules` OK; 未碰第 3 波冲突清单文件。
+
 ## release: v0.50.2（竞价页首屏不再谎报「共 0 只」）
 
 ### 缺陷（生产实测，非静态推断）
