@@ -1,3 +1,12 @@
+## feat-ui-rules: 新增 R10b 10px 棘轮（G1 字号收敛第 1 步）
+
+按 `docs/design/20261024_UI改进全批任务书_第2-3批.md` L2-G 落地，**不改任何视觉**。
+
+- `scripts/check_ui_rules.mjs` 新增 **R10b-FONT-10-RATCHET**：按**文件**统计 `text-[10px]`，与 `scripts/ui-rules-font10-baseline.json` 比对，**只减不增**；文件降到 0 时提示可从基线删除。与既有 R10-FONT-SCALE 职责分离（R10 管非法档位，R10b 管 10px 是否变多）。
+- 基线由 `node scripts/check_ui_rules.mjs --write-font10-baseline` 生成，**不许手敲**：实测 129 个文件 / **730 处**，与勘误 §7.1 的统计一致。
+- 变异验证：给 `src/App.tsx` 加 1 处 `text-[10px]` → 报 `7 处 > baseline 6` 并 exit 1；撤销 → `UI-RULES OK`。
+- 明确不做：本 lane 不收敛任何页面字号（第 2 步随各页 lane 捎带），不动 `FONT_ALLOWED`（第 3 步，全仓归零后才把 10 移除）。
+
 ## fix-alerts: 进提醒页不再自动弹窗 + 路由切换关闭遗留弹层（2026-10-24）
 
 按 `docs/design/20261024_UI全模块审计_勘误与P0任务书.md` §8 Lane B 落地（P0 功能性 bug）。
