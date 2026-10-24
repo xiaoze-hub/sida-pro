@@ -42,10 +42,12 @@ def _rows():
              "totalMarginShortBalance": 1.1824e12},
             {"tradeDate": "20261023", "exchangeId": "BSE", "marginBalance": 7.813e9,
              "totalMarginShortBalance": 7.813e9},
-            {"tradeDate": "20261020", "exchangeId": "SSE", "marginBalance": 1.20e12,
-             "totalMarginShortBalance": 1.22e12},
-            {"tradeDate": "20261020", "exchangeId": "SZSE", "marginBalance": 1.15e12,
-             "totalMarginShortBalance": 1.16e12},
+            {"tradeDate": "20261020", "exchangeId": "SSE", "marginBalance": 1.18e12,
+             "totalMarginShortBalance": 1.20e12},
+            {"tradeDate": "20261020", "exchangeId": "SZSE", "marginBalance": 1.13e12,
+             "totalMarginShortBalance": 1.14e12},
+            {"tradeDate": "20261020", "exchangeId": "BSE", "marginBalance": 7.5e9,
+             "totalMarginShortBalance": 7.5e9},
         ]
     }
 
@@ -72,9 +74,9 @@ def test_同日多交易所合并_不能只取一行(monkeypatch):
 
 def test_区间变化用首尾两日算(monkeypatch):
     out, _ = _run({"startDate": "2026-10-20", "endDate": "2026-10-23"}, _rows(), monkeypatch)
-    # 融资 2.35e12 → 2.4175e12 = +2.87%
+    # 融资 (1.18+1.13+0.0075)=2.3175e12 → 23175亿；23175 → 24175 = +4.32%
     assert "区间变化" in out
-    assert "+2.87%" in out, out
+    assert "+4.32%" in out, out
 
 
 def test_源异常要说明是数据源不可用(monkeypatch):
@@ -103,3 +105,37 @@ def test_工具已在注册表末尾且带口径(monkeypatch):
     assert reg.CHAT_TOOL_REGISTRY["get_margin_trading"].caliber.strip()
     desc = reg.CHAT_TOOL_REGISTRY["get_margin_trading"].schema["function"]["description"]
     assert "杠杆" in desc
+
+
+def test_最新日缺交易所时不算假暴跌(monkeypatch):
+    """生产实测：20261023 只回 SSE 一家(12374亿)，前一日三家齐全(24269亿)。
+    直接比较会得出 -49% 的假腰斩 —— 必须识别"缺所日不可比"，
+    区间只用两个完整日算，并在输出里显式警告。"""
+    payload = {"rows": [
+        {"tradeDate": "20261023", "exchangeId": "SSE", "marginBalance": 1.2374e12,
+         "totalMarginShortBalance": 1.2559e12},
+        {"tradeDate": "20261022", "exchangeId": "SSE", "marginBalance": 1.2469e12,
+         "totalMarginShortBalance": 1.2654e12},
+        {"tradeDate": "20261022", "exchangeId": "SZSE", "marginBalance": 1.1722e12,
+         "totalMarginShortBalance": 1.1824e12},
+        {"tradeDate": "20261022", "exchangeId": "BSE", "marginBalance": 7.8e9,
+         "totalMarginShortBalance": 7.8e9},
+        {"tradeDate": "20261021", "exchangeId": "SSE", "marginBalance": 1.2400e12,
+         "totalMarginShortBalance": 1.2600e12},
+        {"tradeDate": "20261021", "exchangeId": "SZSE", "marginBalance": 1.1600e12,
+         "totalMarginShortBalance": 1.1700e12},
+        {"tradeDate": "20261021", "exchangeId": "BSE", "marginBalance": 7.7e9,
+         "totalMarginShortBalance": 7.7e9},
+    ]}
+    out, _ = _run({"startDate": "2026-10-21", "endDate": "2026-10-23"}, payload, monkeypatch)
+    # 必须警告缺所
+    assert "仅 1/3 家" in out, out
+    assert "不可与前一日直接比较" in out
+    # 区间用两个完整日：20261021 → 20261022
+    assert "20261021→20261022" in out
+    # 绝不允许出现腰斩级跌幅（假暴跌的判据：任何 >=10% 的跌幅都不该出现）
+    import re as _re
+    pcts = [float(x) for x in _re.findall(r"([+-]\d+\.\d+)%", out)]
+    assert all(abs(v) < 10 for v in pcts), f"出现可疑大幅涨跌: {pcts}\n{out}"
+    # 缺所日要标星
+    assert "20261023" in out and "*" in out

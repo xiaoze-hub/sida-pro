@@ -3303,26 +3303,49 @@ async def _tool_get_margin_trading(db: Session, args: dict, user: User | None = 
             slot["total"] += t
         slot["ex"][str(row.get("exchangeId") or "?")] = (m, t)
     dates = sorted(by_date)
-    latest, first = dates[-1], dates[0]
+    # ⚠️ 2026-10-25 生产实测的坑：20261023 只返回了 SSE 一家（SZSE 当日未披露），
+    # 合并后 12374亿 vs 前一日三家 24269亿 → 区间显示 **-50.94% 的假腰斩**。
+    # 交易所披露时点不同步（T+1 各家有先后），**不能把"只到一家"的日子和"三家齐全"的日子
+    # 放进同一条序列比较**。修法：按覆盖家数判定"完整日"，区间只取最近两个完整日；
+    # 最新日若缺所，单独标注"不可比"，绝不参与涨跌计算。
+    cov = {d: len(by_date[d]["ex"]) for d in dates}
+    max_cov = max(cov.values())
+    complete = [d for d in dates if cov[d] == max_cov]
+    latest = dates[-1]
     lm, lt = by_date[latest]["margin"], by_date[latest]["total"]
-    fm, ft = by_date[first]["margin"], by_date[first]["total"]
 
-    lines = [f"【两融（A股杠杆）】{first} ~ {latest}，共 {len(dates)} 个交易日"]
+    lines = [f"【两融（A股杠杆）】{dates[0]} ~ {latest}，共 {len(dates)} 个交易日"]
     per_ex = "；".join(
         f"{k} 融资 {yi(v[0])}" for k, v in sorted(by_date[latest]["ex"].items())
     )
     lines.append(f"- 最新 {latest}：融资余额 {yi(lm)}｜两融余额 {yi(lt)}（{per_ex}）")
-    if len(dates) > 1 and fm and ft:
-        d_m = (lm - fm) / fm * 100
-        d_t = (lt - ft) / ft * 100
-        arrow = "增" if lm >= fm else "减"
+    if cov[latest] < max_cov:
         lines.append(
-            f"- 区间变化：融资余额 {yi(fm)} → {yi(lm)}（{d_m:+.2f}%，{arrow}）｜"
-            f"两融余额 {yi(ft)} → {yi(lt)}（{d_t:+.2f}%）"
+            f"  ⚠️ 该日仅 {cov[latest]}/{max_cov} 家交易所披露（"
+            f"{'/'.join(sorted(by_date[latest]['ex']))}），其余当日未出 —— "
+            f"**不可与前一日直接比较**，下面区间用最近两个完整交易日计算。"
         )
-        # 只给最近 5 个交易日的日序列，避免把整段塞进上下文
-        seq = "；".join(f"{d} {yi(by_date[d]['margin'])}" for d in dates[-5:])
-        lines.append(f"- 近 5 日融资余额：{seq}")
+    if len(complete) >= 2:
+        c_last, c_first = complete[-1], complete[0]
+        lm_, lt_ = by_date[c_last]["margin"], by_date[c_last]["total"]
+        fm, ft = by_date[c_first]["margin"], by_date[c_first]["total"]
+        if fm and ft:
+            d_m = (lm_ - fm) / fm * 100
+            d_t = (lt_ - ft) / ft * 100
+            arrow = "增" if lm_ >= fm else "减"
+            lines.append(
+                f"- 区间变化（{c_first}→{c_last}，均为 {max_cov} 家齐全日）："
+                f"融资余额 {yi(fm)} → {yi(lm_)}（{d_m:+.2f}%，{arrow}）｜"
+                f"两融余额 {yi(ft)} → {yi(lt_)}（{d_t:+.2f}%）"
+            )
+    elif len(dates) > 1:
+        lines.append("- 区间变化：**无两个完整交易日**，不做涨跌计算（缺所数据不可比）。")
+    # 只给最近 5 个交易日的日序列，缺所的日子标 *，避免把不完整的数当完整数看
+    seq = "；".join(
+        f"{d} {yi(by_date[d]['margin'])}" + ("*" if cov[d] < max_cov else "")
+        for d in dates[-5:]
+    )
+    lines.append(f"- 近 5 日融资余额：{seq}（* = 当日缺所披露，不可比）")
     lines.append(
         "口径：融资余额/两融余额均取交易所披露值，单位元已换算为亿；"
         "个股明细请传 code。T+1 更新，不含当日盘中。"
