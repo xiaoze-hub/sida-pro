@@ -1,3 +1,11 @@
+/* G5 收尾(2026-10-24): 键盘可达统一焦点环。
+   原实现只有 outline:auto(1px), 暗色底上几乎看不见; 统一为 2px 品牌色外环。
+   不做全局最小点击高度, 避免把图表工具栏挤爆。 */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
