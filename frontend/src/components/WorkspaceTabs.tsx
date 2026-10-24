@@ -187,7 +187,7 @@ export default function WorkspaceTabs({
               role="menu"
               aria-label={t('tabs.menu')}
               style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }}
-              className="fixed z-50 min-w-[150px] rounded-lg border border-border-strong bg-popover p-1 shadow-lg"
+              className="fixed z-50 min-w-[150px] rounded-lg border border-border-strong bg-popover p-1 shadow-float"
             >
               <button
                 type="button"

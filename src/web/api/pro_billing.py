@@ -332,18 +332,21 @@ def apply_status(
 def admin_list_applications(
     status: str = Query(default="", description="pending/approved/rejected, 空=全部"),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     _owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ) -> dict:
-    """申请列表(owner)。默认按创建时间倒序。"""
+    """申请列表(owner)。默认按创建时间倒序。支持 offset 分页。"""
     q = db.query(ProApplication)
     s = (status or "").strip().lower()
     if s:
         if s not in ("pending", "approved", "rejected"):
             raise HTTPException(400, "status 必须是 pending/approved/rejected")
         q = q.filter(ProApplication.status == s)
+    total_apps = q.count()
     rows = (
         q.order_by(ProApplication.created_at.desc(), ProApplication.id.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -351,6 +354,9 @@ def admin_list_applications(
     return {
         "applications": [_app_to_dict(r) for r in rows],
         "pending_count": pending_n,
+        "total": total_apps,
+        "limit": limit,
+        "offset": offset,
     }
 
 

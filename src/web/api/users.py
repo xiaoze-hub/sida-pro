@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -366,15 +366,30 @@ def _admin_user_row(db: Session, u: User) -> dict:
 
 @router.get("/admin/list")
 def admin_list_users(
+    limit: int = Query(default=0, ge=0, le=1000, description="0=全部(兼容旧调用)"),
+    offset: int = Query(default=0, ge=0),
     _owner: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    """列出全部用户(仅 owner)。按创建时间倒序。
+    """列出用户(仅 owner)。按创建时间倒序。支持 limit/offset 分页。
 
     含 30 天宽限期内的软删除账号(is_deleted=True), 由前端打「已注销」徽标并提供恢复。
+
+    **total 与 items 分两次查**: 分页后前端要显示「共 N 人」, 拿 items 长度冒充总数
+    在翻到第 2 页时会立刻穿帮(20 vs 137)。limit=0 时保持旧行为返回全部。
     """
-    rows = db.query(User).order_by(User.created_at.desc()).all()
-    return {"users": [_admin_user_row(db, u) for u in rows]}
+    q = db.query(User).order_by(User.created_at.desc())
+    total = q.count()
+    if limit:
+        rows = q.offset(offset).limit(limit).all()
+    else:
+        rows = q.offset(offset).all()
+    return {
+        "users": [_admin_user_row(db, u) for u in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 class AdminToggleActiveRequest(BaseModel):

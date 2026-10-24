@@ -177,7 +177,7 @@ export function InviteCodesSection() {
             className="h-9"
             value={note}
             onChange={e => setNote(e.target.value)}
-            placeholder="如：给黄磊"
+            placeholder="如：给运营同学"
           />
         </div>
         <div>

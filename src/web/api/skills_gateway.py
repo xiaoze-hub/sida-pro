@@ -1552,13 +1552,22 @@ async def _require_owner_admin(user: _User = _Dep(_get_current_user)) -> _User:
 
 @router.get("/admin/skills/keys")
 def admin_list_keys(
+    limit: int = Query(default=200, ge=1, le=1000, description="每页条数"),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: _User = Depends(_require_owner_admin),
 ) -> dict:
-    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。含今日用量与关联用户名。"""
+    """Key 列表(不含明文, 只有 prefix/hash 前 8 位)。含今日用量与关联用户名。支持分页。"""
     from sqlalchemy import func as _func
 
-    rows = db.query(SkillApiKey).order_by(SkillApiKey.created_at.desc()).limit(200).all()
+    total_keys = db.query(SkillApiKey).count()
+    rows = (
+        db.query(SkillApiKey)
+        .order_by(SkillApiKey.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     # 今日用量聚合(skill_usage.created_at 与 server_default 同源)
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1592,7 +1601,10 @@ def admin_list_keys(
                 "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
             }
             for r in rows
-        ]
+        ],
+        "total": total_keys,
+        "limit": limit,
+        "offset": offset,
     }
 
 

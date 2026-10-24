@@ -15,6 +15,7 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { fetchAPI } from '@panwatch/api'
+import Pager from '@/components/Pager'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { formatDateTime } from '@/lib/utils'
@@ -238,6 +239,15 @@ export default function AdminPage() {
   const users = useMemo(() => userList?.users ?? [], [userList])
 
   const { data: stats, refetch: refetchStats } = useApiQuery<AdminStats>(['admin-stats'], '/users/admin/stats')
+
+  // 后台三类长列表分页(2026-10-24): /admin 页高 20598px、2958 个文本节点, 一屏根本读不完。
+  // 全量数据仍一次取回(后端已支持 limit/offset, 数据量涨了再切服务端分页), 这里按 20 条/页切。
+  const PAGE_SIZE = 20
+  const [usersPage, setUsersPage] = useState(1)
+  const [keysPage, setKeysPage] = useState(1)
+  const [proPage, setProPage] = useState(1)
+  const paged = <T,>(rows: T[], page: number): T[] =>
+    rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const {
     data: keysResp,
@@ -579,9 +589,9 @@ export default function AdminPage() {
         ) : users.length === 0 ? (
           <EmptyState icon={<Users className="h-8 w-8" />} title="暂无用户" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="max-h-[70vh] overflow-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[720px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>用户名</Th>
                   <Th>邮箱</Th>
@@ -593,7 +603,7 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.map(u => (
+                {paged(users, usersPage).map(u => (
                   <tr key={u.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
                     <Td className="font-medium text-foreground">{u.username}</Td>
                     <Td className="text-muted-foreground dark:text-slate-500">{u.email || '—'}</Td>
@@ -684,6 +694,7 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+            <Pager total={users.length} page={usersPage} pageSize={PAGE_SIZE} onPage={setUsersPage} unit="人" />
           </div>
         )}
 
@@ -767,7 +778,7 @@ export default function AdminPage() {
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[860px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>Key 前缀</Th>
                   <Th>用户</Th>
@@ -780,7 +791,7 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {keys.map(k => (
+                {paged(keys, keysPage).map(k => (
                   <tr key={k.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
                     <Td>
                       <code className="font-mono text-[12px] text-cyan-300">{k.key_prefix}…</code>
@@ -875,6 +886,7 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+            <Pager total={keys.length} page={keysPage} pageSize={PAGE_SIZE} onPage={setKeysPage} unit="个" />
           </div>
         )}
       </Section>
@@ -895,7 +907,7 @@ export default function AdminPage() {
         ) : (
           <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[640px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>Key 前缀</Th>
                   <Th>Tier</Th>
@@ -937,7 +949,7 @@ export default function AdminPage() {
           <div className="mb-6 space-y-4">
             <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
               <table className="w-full min-w-[560px]">
-                <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+                <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                   <tr>
                     <Th>Skill</Th>
                     <Th>调用</Th>
@@ -968,7 +980,7 @@ export default function AdminPage() {
             </div>
             <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
               <table className="w-full min-w-[420px]">
-                <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+                <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                   <tr>
                     <Th>日期</Th>
                     <Th>调用</Th>
@@ -1004,7 +1016,7 @@ export default function AdminPage() {
         ) : (
           <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[640px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>用户</Th>
                   <Th>接口</Th>
@@ -1037,7 +1049,7 @@ export default function AdminPage() {
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[480px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>日期</Th>
                   <Th>接口</Th>
@@ -1081,7 +1093,7 @@ export default function AdminPage() {
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
             <table className="w-full min-w-[720px]">
-              <thead className="border-b border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+              <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
                   <Th>用户名</Th>
                   <Th>理由</Th>
@@ -1091,7 +1103,7 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {proApps.applications.map(a => (
+                {paged(proApps.applications, proPage).map(a => (
                   <tr key={a.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
                     <Td className="font-medium text-foreground">{a.username}</Td>
                     <Td className="max-w-[280px]">
@@ -1154,6 +1166,7 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+            <Pager total={proApps.applications.length} page={proPage} pageSize={PAGE_SIZE} onPage={setProPage} unit="条" />
           </div>
         )}
       </Section>
