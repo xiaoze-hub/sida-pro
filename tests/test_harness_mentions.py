@@ -38,11 +38,14 @@ def test_six_recipes_loaded_and_valid():
     """配方数量是显式契约：新增/删除配方必须同步这里。
     2026-10-21: 增 intraday_analyst(8) → 按标的画像增 demon/left/theme_leader(11)。"""
     recipes = list_recipes()
-    assert len(recipes) == 11
+    # 2026-10-24: devil_advocate(空头司令) 为第 12 个配方 —— 新加配方必须同步本钉子,
+    # 本文件不叫 harness_routing/test_market_pipeline, 所以定向跑永远扫不到(踩过两次)。
+    assert len(recipes) == 12
     assert {r.id for r in recipes} == {
         "premarket_strategist", "auction_hunter", "intraday_watcher",
         "postmarket_reviewer", "risk_judge", "chip_analyst", "intraday_analyst",
         "deep_diagnosis", "demon_diagnosis", "left_diagnosis", "theme_leader",
+        "devil_advocate",
     }
     for r in recipes:
         assert r.label and r.prompt_fragment
