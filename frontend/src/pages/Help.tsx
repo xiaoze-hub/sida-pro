@@ -78,7 +78,7 @@ export default function HelpPage() {
           <div>
             <h1 className="text-[20px] md:text-[20px] font-bold text-foreground tracking-tight">帮助中心</h1>
             <p className="text-[12px] text-muted-foreground mt-1">
-              PanWatch 功能速览与操作提示，数据导出与快捷键一览
+              数智分析 SIDA 功能速览与操作提示，数据导出与快捷键一览
             </p>
           </div>
         </div>
