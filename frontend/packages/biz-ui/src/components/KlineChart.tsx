@@ -1570,11 +1570,14 @@ export default function KlineChart(props: {
       if (showSignal && interval === '1d' && effGsSignals.length > 0) {
         const zonePts = gsZonePoints(effGsSignals, rangeBarsRef.current.map((b) => b.date))
         zoneSeries.setData(
-          zonePts.map((z) => ({
-            time: toChartTime(z.date, interval),
-            value: 1,
-            color: GS_ZONE_COLOR[z.zone],
-          })) as never,
+          ascendSeries(
+            zonePts.map((z) => ({
+              time: toChartTime(z.date, interval),
+              value: 1,
+              color: GS_ZONE_COLOR[z.zone],
+            })),
+            'gsZone',
+          ) as never,
         )
       } else {
         zoneSeries.setData([])
@@ -1716,11 +1719,14 @@ export default function KlineChart(props: {
         // 此前缺失: subchart==='vol' + L3 关 = 空白 pane; L3 开 = 资金柱冒充成交量。
         const kl = rawKlinesRef.current
         volSeries.setData(
-          kl.map((k, i) => ({
-            time: k.time,
-            value: k.volume || 0,
-            color: (i === 0 ? true : k.close >= kl[i - 1].close) ? sc.up : sc.down,
-          })),
+          ascendSeries(
+            kl.map((k, i) => ({
+              time: k.time,
+              value: k.volume || 0,
+              color: (i === 0 ? true : k.close >= kl[i - 1].close) ? sc.up : sc.down,
+            })),
+            'volume-default',
+          ),
         )
       }
       // 2026-09-04 P0-3: L3 资金柱走独立 fund 轴(单位元), 与成交量(股)同显但轴独立。
@@ -1806,7 +1812,7 @@ export default function KlineChart(props: {
         const pts = rawKlinesRef.current
           .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
           .filter((p): p is { time: Time; value: number } => p != null)
-        line.setData(pts as never)
+        line.setData(ascendSeries(pts, 'line') as never)
         maSeriesRef.current.push(line)
       }
     }
@@ -1834,7 +1840,7 @@ export default function KlineChart(props: {
         const pts = rawKlinesRef.current
           .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
           .filter((p): p is { time: Time; value: number } => p != null)
-        line.setData(pts as never)
+        line.setData(ascendSeries(pts, 'line') as never)
         macdSeriesRef.current.push(line)
       }
     }
@@ -1860,7 +1866,7 @@ export default function KlineChart(props: {
       const pts = kl
         .map((k, i) => (v[i] == null ? null : { time: k.time, value: v[i] as number }))
         .filter((p): p is { time: Time; value: number } => p != null)
-      line.setData(pts as never)
+      line.setData(ascendSeries(pts, 'line') as never)
       target.push(line)
     }
     const gcol = readGsColors()
