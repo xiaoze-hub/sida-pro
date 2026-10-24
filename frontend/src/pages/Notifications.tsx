@@ -500,7 +500,7 @@ export default function NotificationsPage() {
                         <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">正在查看</span>
                       )}
                     </span>
-                    <span title={item.body || '无正文'} className="mt-1 block line-clamp-2 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
+                    <span title={item.body || '无正文'} className="mt-1 block line-clamp-1 text-[11px] leading-5 text-muted-foreground">{item.body || '无正文'}</span>
                     <span className="mt-1.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground/70">
                       <span className="shrink-0">{formatDateTime(item.created_at)}</span>
                       {item.push_status && <span title={channelSummary(item, t)} className={`min-w-0 truncate ${item.push_status === 'failed' ? 'text-rose-600 dark:text-rose-600' : item.push_status === 'sent' ? 'text-emerald-700 dark:text-emerald-700' : ''}`}>{channelSummary(item, t)}</span>}
