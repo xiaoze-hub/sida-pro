@@ -788,7 +788,7 @@ export default function DashboardPage() {
       {shown('fundflow') && marketFlow && (
         <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5 border-t border-border/60 pt-3">
           <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-semibold">{t('dashboard.fundflow')}</span>
+            <h2 className="text-[13px] font-semibold">{t('dashboard.fundflow')}</h2>
             <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
             {/* B3/3.4 口径标签: 后端 caliber_label 缺失时回退静态文案 */}
             <span
@@ -1513,7 +1513,7 @@ function PhaseGaugeCardInner() {
   return (
     <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
-        <span className="text-[13px] font-semibold">市场温度</span>
+        <h2 className="text-[13px] font-semibold">市场温度</h2>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
       {state.kind === 'ready' ? (
