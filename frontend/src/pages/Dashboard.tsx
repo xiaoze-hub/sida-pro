@@ -785,7 +785,7 @@ export default function DashboardPage() {
                   <span className="ml-1 text-[11px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
                 ) : null}
               </span>
-              <span className="text-[10px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
+              <span className="text-[11px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
             </div>
           }
         >

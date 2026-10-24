@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // A1 看板定制对话框 (2026-09-10): 11 模块 × 3 分区, 显隐开关 + 上下移 + 重置。
@@ -63,7 +63,9 @@ describe('DashboardCustomizer', () => {
     const row = document.querySelector('[data-module="kpi"]') as HTMLElement
     expect(row.textContent).toContain('市场 KPI 带')
     expect(row.querySelector('.line-through')).toBeTruthy()
-    expect(screen.getAllByRole('switch')[1].getAttribute('data-state')).toBe('unchecked')
+    // 按「行」定位开关: 模块在列表里的下标会随默认顺序调整而变（2026-10-24 KPI 带挪到 main 组末位）
+    const sw = within(row).getByRole('switch')
+    expect(sw.getAttribute('data-state')).toBe('unchecked')
   })
 
   it('重置按钮回调 onReset', () => {
