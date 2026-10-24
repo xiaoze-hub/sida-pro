@@ -253,6 +253,18 @@ export default function DashboardPage() {
   // 修复 2026-08-21: 默认关闭 Onboarding(原默认 true → 换浏览器/清缓存后用户被强制挡整页无法点击)
   // 改由头部"新手引导"按钮主动触发, localStorage 标志仍用于标记"已看过"以避免重复打扰
   const [showOnboarding, setShowOnboarding] = useState(false)
+  // L2-A 第2步(2026-10-24): 细节层默认折叠, 状态记 localStorage —— 首屏只留结论层 + 指数卡,
+  // KPI 带(与结论层 6 个数字重复)与情绪/主线/温度三卡收进「展开更多数据」。
+  const [showMore, setShowMore] = useState(() => {
+    try { return localStorage.getItem('sida_dashboard_more') === '1' } catch { return false }
+  })
+  const toggleMore = useCallback(() => {
+    setShowMore((v) => {
+      const next = !v
+      try { localStorage.setItem('sida_dashboard_more', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const openOnboarding = useCallback(() => setShowOnboarding(true), [])
 
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
@@ -727,8 +739,25 @@ export default function DashboardPage() {
       </div>
       )}
 
-      {/* v0.4.6 KPI 带(借鉴 TSP): 数字优先 6 格, 一眼看全市场状态 */}
-      {shown('kpi') && (
+      {/* L2-A 第2步: 细节层开关(状态记 localStorage) */}
+      <div className="mb-3 flex items-center justify-between gap-2 border-y border-border/40 py-1.5">
+        <span className="text-[11px] text-muted-foreground">
+          {showMore ? '已展开：KPI 带 / 情绪周期 / 主线 / 市场温度' : '首屏只显示结论与指数，其余数据已收起'}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 px-2 text-[12px] min-h-[32px]"
+          onClick={toggleMore}
+          aria-expanded={showMore}
+        >
+          {showMore ? '收起更多数据 ▴' : '展开更多数据 ▾'}
+        </Button>
+      </div>
+
+      {/* L2-A 第2步: KPI 带与结论层 6 个数字完全重复(涨跌/净流入/成交/情绪/主线/涨停跌停),
+          默认收起, 展开才显示 —— 保留模块, 不删数据。 */}
+      {showMore && shown('kpi') && (
       <div style={{ order: orderIndex(layout, 'kpi') }}>
       <KpiBandMemo
         upCount={marketFlow?.up_count ?? null}
@@ -745,7 +774,7 @@ export default function DashboardPage() {
 
       {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
       {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
-      {shown('overview') && (
+      {showMore && shown('overview') && (
       <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
         <MarketPhaseCardMemo />
         <MarketMainlineCardMemo />
