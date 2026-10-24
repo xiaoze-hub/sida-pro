@@ -605,171 +605,6 @@ async def _tool_get_market_news(db: Session, args: dict, user: User | None = Non
         logger.error(f"get_market_news 工具失败: {e}")
         return f"资讯获取失败: {e}"
 
-# ──────────────── 新闻历史检索 + 联网兜底（2026-10-24）────────────────
-# 背景（生产实测）：
-#  · news_cache 表存在但 **0 行** —— 快讯只拉不存，参谋答不了"上周政策"这类跨时间问题；
-#  · 用户明确要求"加实时联网搜索，但只在系统数据源取不到时才启用"。
-# 两者互补：search_news 查本地沉淀（免费、可审计），web_search_fallback 才是最后的对外出口。
-
-
-@register_chat_tool(
-    "search_news",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "search_news",
-            "description": (
-                "在【本机已沉淀的新闻库】里按时间窗口+关键词检索历史新闻与政策，"
-                "用于回答「上周有哪些政策」「最近三天关于半导体的消息」「这个月证监会说了什么」"
-                "这类需要跨时间回溯的问题。"
-                "注意：这是查本地历史库（自部署起积累），不是实时抓取；当前快讯请用 get_market_news。"
-                "查不到会说清楚覆盖区间，不要据此断言'没有发生'。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {"type": "string", "description": "关键词（标题/正文模糊匹配），如「半导体」「降准」；不填则在窗口内按时间倒序返回", "default": ""},
-                    "days": {"type": "integer", "description": "回溯天数，默认 7，上限 120", "default": 7},
-                    "policy_only": {"type": "boolean", "description": "只返回政策/监管类（工信部/发改委/证监会/央行/国常会/补贴/关税等关键词命中）", "default": False},
-                    "limit": {"type": "integer", "description": "返回条数，默认 30，上限 100", "default": 30},
-                },
-                "required": [],
-            },
-        },
-    },
-    caliber="本地沉淀(news_cache, 自部署起积累)",
-)
-async def _tool_search_news(db: Session, args: dict, user: User | None = None) -> str:
-    from src.core.news_store import coverage, search_news
-
-    keyword = (args.get("keyword") or "").strip()
-    days = int(args.get("days") or 7)
-    policy_only = bool(args.get("policy_only"))
-    limit = int(args.get("limit") or 30)
-    try:
-        rows = await asyncio.to_thread(search_news, db, keyword, days, policy_only, limit)
-        cov = coverage(db)
-    except Exception as e:  # noqa: BLE001 — 失败如实说，不装成"没有新闻"
-        logger.error("search_news 失败: %s", e)
-        return f"新闻历史库查询失败：{str(e)[:120]}"
-
-    head = (
-        f"【本地新闻库】近 {days} 天"
-        f"{'·政策类' if policy_only else ''}"
-        f"{'·关键词「' + keyword + '」' if keyword else ''}"
-        f"，命中 {len(rows)} 条"
-    )
-    tail = (
-        f"\n库覆盖区间：{cov['from'] or '—'} ~ {cov['to'] or '—'}（共 {cov['rows']} 条，自部署起积累）"
-    )
-    if not rows:
-        return (
-            head
-            + "\n（本地库该区间无记录 —— 可能是区间早于部署日，或该主题确实没有入库；"
-            "不要据此断言事件没发生。需要当下消息请用 get_market_news。）"
-            + tail
-        )
-    lines = [head]
-    for r in rows:
-        mark = "🏛 " if r.get("policy") else ""
-        lines.append(f"- [{r['publish_time']}] {mark}{r['title']} ({r['source']})")
-    return "\n".join(lines) + tail
-
-
-def _tavily_key(db: Session | None) -> str:
-    """联网搜索密钥：env 优先，其次 app_settings（便于在设置页配置，不必改容器环境）。"""
-    key = (os.environ.get("TAVILY_API_KEY") or "").strip()
-    if key or db is None:
-        return key
-    try:
-        from sqlalchemy import text as _text
-
-        row = db.execute(
-            _text("SELECT value FROM app_settings WHERE key = 'tavily_api_key' LIMIT 1")
-        ).first()
-        return (row[0] or "").strip() if row else ""
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _tavily_search(key: str, query: str, max_results: int = 5) -> list[dict]:
-    import json as _json
-    import urllib.request
-
-    payload = _json.dumps({
-        "api_key": key,
-        "query": query,
-        "max_results": max_results,
-        "search_depth": "basic",
-        "include_answer": False,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.tavily.com/search",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        body = _json.loads(resp.read().decode())
-    return body.get("results") or []
-
-
-@register_chat_tool(
-    "web_search_fallback",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "web_search_fallback",
-            "description": (
-                "【兜底专用 · 不要主动调用】实时联网搜索（外部引擎）。"
-                "**使用条件（必须同时满足）**：① 已经调用过对应的系统数据源工具；"
-                "② 该工具返回空、明确不可用（'取不到/数据源不可用'）或明显缺料（如无政策时间线）。"
-                "系统数据源有数据时**必须**用系统数据源，不得为了'更全面'而联网。"
-                "调用后必须在回答里标注「以下内容来自实时联网搜索，非系统数据源」。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "搜索词，尽量具体（含公司名/政策名/时间）"},
-                    "max_results": {"type": "integer", "description": "返回条数，默认 5，上限 10", "default": 5},
-                    "reason": {"type": "string", "description": "为什么必须联网：写清哪个系统工具返回了什么空/失败结果。会记入审计日志。", "default": ""},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    caliber="外部联网搜索(Tavily) — 非系统数据源, 仅兜底",
-)
-async def _tool_web_search_fallback(db: Session, args: dict, user: User | None = None) -> str:
-    query = (args.get("query") or "").strip()
-    if not query:
-        return "请提供搜索关键词（query）。"
-    n = max(1, min(int(args.get("max_results") or 5), 10))
-    reason = (args.get("reason") or "").strip()
-    key = _tavily_key(db)
-    if not key:
-        return (
-            "联网搜索未启用：未配置搜索密钥。"
-            "请在设置中填写 tavily_api_key（或给容器加 TAVILY_API_KEY 环境变量）。"
-            "—— 本条是配置缺失，不代表'搜不到'，请如实告知用户。"
-        )
-    try:
-        rows = await asyncio.to_thread(_tavily_search, key, query, n)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("联网搜索失败: %s", e)
-        return f"联网搜索失败：{str(e)[:120]}（外部引擎不可用，请如实告知用户，不要用其它来源猜测）"
-    logger.info("web_search_fallback 触发 query=%r reason=%r", query[:80], reason[:120])
-    if not rows:
-        return f"联网搜索无结果（query=「{query}」）。"
-    lines = [f"【实时联网搜索 · 非系统数据源】query=「{query}」 命中 {len(rows)} 条"]
-    if reason:
-        lines.append(f"（触发原因：{reason}）")
-    for r in rows:
-        title = (r.get("title") or "").strip()
-        url = (r.get("url") or "").strip()
-        content = (r.get("content") or "").strip().replace("\n", " ")[:180]
-        lines.append(f"- {title}\n  {url}\n  {content}")
-    return "\n".join(lines)
-
 
 @register_chat_tool(
     "get_kline_patterns",
@@ -3212,3 +3047,169 @@ async def _tool_get_market_replay(db: Session, args: dict, user: User | None = N
     except Exception as exc:  # noqa: BLE001
         logger.warning("get_market_replay 失败: %s", exc)
         return f"[盘后复盘] 读取异常：{type(exc).__name__}——本维度如实标注无数据。"
+
+# ──────────────── 新闻历史检索 + 联网兜底（2026-10-24）────────────────
+# 背景（生产实测）：
+#  · news_cache 表存在但 **0 行** —— 快讯只拉不存，参谋答不了"上周政策"这类跨时间问题；
+#  · 用户明确要求"加实时联网搜索，但只在系统数据源取不到时才启用"。
+# 两者互补：search_news 查本地沉淀（免费、可审计），web_search_fallback 才是最后的对外出口。
+
+
+@register_chat_tool(
+    "search_news",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": (
+                "在【本机已沉淀的新闻库】里按时间窗口+关键词检索历史新闻与政策，"
+                "用于回答「上周有哪些政策」「最近三天关于半导体的消息」「这个月证监会说了什么」"
+                "这类需要跨时间回溯的问题。"
+                "注意：这是查本地历史库（自部署起积累），不是实时抓取；当前快讯请用 get_market_news。"
+                "查不到会说清楚覆盖区间，不要据此断言'没有发生'。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "关键词（标题/正文模糊匹配），如「半导体」「降准」；不填则在窗口内按时间倒序返回", "default": ""},
+                    "days": {"type": "integer", "description": "回溯天数，默认 7，上限 120", "default": 7},
+                    "policy_only": {"type": "boolean", "description": "只返回政策/监管类（工信部/发改委/证监会/央行/国常会/补贴/关税等关键词命中）", "default": False},
+                    "limit": {"type": "integer", "description": "返回条数，默认 30，上限 100", "default": 30},
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="本地沉淀(news_cache, 自部署起积累)",
+)
+async def _tool_search_news(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.news_store import coverage, search_news
+
+    keyword = (args.get("keyword") or "").strip()
+    days = int(args.get("days") or 7)
+    policy_only = bool(args.get("policy_only"))
+    limit = int(args.get("limit") or 30)
+    try:
+        rows = await asyncio.to_thread(search_news, db, keyword, days, policy_only, limit)
+        cov = coverage(db)
+    except Exception as e:  # noqa: BLE001 — 失败如实说，不装成"没有新闻"
+        logger.error("search_news 失败: %s", e)
+        return f"新闻历史库查询失败：{str(e)[:120]}"
+
+    head = (
+        f"【本地新闻库】近 {days} 天"
+        f"{'·政策类' if policy_only else ''}"
+        f"{'·关键词「' + keyword + '」' if keyword else ''}"
+        f"，命中 {len(rows)} 条"
+    )
+    tail = (
+        f"\n库覆盖区间：{cov['from'] or '—'} ~ {cov['to'] or '—'}（共 {cov['rows']} 条，自部署起积累）"
+    )
+    if not rows:
+        return (
+            head
+            + "\n（本地库该区间无记录 —— 可能是区间早于部署日，或该主题确实没有入库；"
+            "不要据此断言事件没发生。需要当下消息请用 get_market_news。）"
+            + tail
+        )
+    lines = [head]
+    for r in rows:
+        mark = "🏛 " if r.get("policy") else ""
+        lines.append(f"- [{r['publish_time']}] {mark}{r['title']} ({r['source']})")
+    return "\n".join(lines) + tail
+
+
+def _tavily_key(db: Session | None) -> str:
+    """联网搜索密钥：env 优先，其次 app_settings（便于在设置页配置，不必改容器环境）。"""
+    key = (os.environ.get("TAVILY_API_KEY") or "").strip()
+    if key or db is None:
+        return key
+    try:
+        from sqlalchemy import text as _text
+
+        row = db.execute(
+            _text("SELECT value FROM app_settings WHERE key = 'tavily_api_key' LIMIT 1")
+        ).first()
+        return (row[0] or "").strip() if row else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _tavily_search(key: str, query: str, max_results: int = 5) -> list[dict]:
+    import json as _json
+    import urllib.request
+
+    payload = _json.dumps({
+        "api_key": key,
+        "query": query,
+        "max_results": max_results,
+        "search_depth": "basic",
+        "include_answer": False,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = _json.loads(resp.read().decode())
+    return body.get("results") or []
+
+
+@register_chat_tool(
+    "web_search_fallback",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "web_search_fallback",
+            "description": (
+                "【兜底专用 · 不要主动调用】实时联网搜索（外部引擎）。"
+                "**使用条件（必须同时满足）**：① 已经调用过对应的系统数据源工具；"
+                "② 该工具返回空、明确不可用（'取不到/数据源不可用'）或明显缺料（如无政策时间线）。"
+                "系统数据源有数据时**必须**用系统数据源，不得为了'更全面'而联网。"
+                "调用后必须在回答里标注「以下内容来自实时联网搜索，非系统数据源」。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索词，尽量具体（含公司名/政策名/时间）"},
+                    "max_results": {"type": "integer", "description": "返回条数，默认 5，上限 10", "default": 5},
+                    "reason": {"type": "string", "description": "为什么必须联网：写清哪个系统工具返回了什么空/失败结果。会记入审计日志。", "default": ""},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    caliber="外部联网搜索(Tavily) — 非系统数据源, 仅兜底",
+)
+async def _tool_web_search_fallback(db: Session, args: dict, user: User | None = None) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return "请提供搜索关键词（query）。"
+    n = max(1, min(int(args.get("max_results") or 5), 10))
+    reason = (args.get("reason") or "").strip()
+    key = _tavily_key(db)
+    if not key:
+        return (
+            "联网搜索未启用：未配置搜索密钥。"
+            "请在设置中填写 tavily_api_key（或给容器加 TAVILY_API_KEY 环境变量）。"
+            "—— 本条是配置缺失，不代表'搜不到'，请如实告知用户。"
+        )
+    try:
+        rows = await asyncio.to_thread(_tavily_search, key, query, n)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("联网搜索失败: %s", e)
+        return f"联网搜索失败：{str(e)[:120]}（外部引擎不可用，请如实告知用户，不要用其它来源猜测）"
+    logger.info("web_search_fallback 触发 query=%r reason=%r", query[:80], reason[:120])
+    if not rows:
+        return f"联网搜索无结果（query=「{query}」）。"
+    lines = [f"【实时联网搜索 · 非系统数据源】query=「{query}」 命中 {len(rows)} 条"]
+    if reason:
+        lines.append(f"（触发原因：{reason}）")
+    for r in rows:
+        title = (r.get("title") or "").strip()
+        url = (r.get("url") or "").strip()
+        content = (r.get("content") or "").strip().replace("\n", " ")[:180]
+        lines.append(f"- {title}\n  {url}\n  {content}")
+    return "\n".join(lines)
+
