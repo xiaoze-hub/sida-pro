@@ -1,3 +1,12 @@
+## feat-ui: 新增 Term 术语组件（G11）+ EmptyState 回归钉子（G13）
+
+按第 2-3 批任务书 L2-F 落地，两项都是第 3 批各页 lane 的前置依赖。
+
+- 新增 `frontend/src/components/Term.tsx`：虚线原词 + `?`，hover/focus 出 1 句人话，`Esc` 关闭，`aria-expanded`/`aria-describedby` 同步；**不用 portal**（工作台多标签页保活下 portal 弹层会被带走，见 Lane B 的坑），页面切走即随组件消失。
+- **不新建 `EmptyState`**：`frontend/src/components/EmptyState.tsx` 已存在且已含「原因(title) + 何时有数据(description) + 动作(action) + 口径(caliber)」四件套、`min-h` 收敛与 `data-empty-state` 断言钩子。新建第二套会违反任务书「不许自造第三套」，故本 lane 只补回归钉子。
+- 新增 `frontend/tests/components/term-empty-state.test.tsx`：9 条（Term 5 条含键盘可达/Esc/href 条件渲染；EmptyState 4 条含「无 action 不渲染按钮容器」）。
+- 明确不做：不改任何页面的术语文案（第 3 批各页接入时按 `src/core/caliber.py` 口径写解释）。
+
 ## feat-ui-rules: 新增 R10b 10px 棘轮（G1 字号收敛第 1 步）
 
 按 `docs/design/20261024_UI改进全批任务书_第2-3批.md` L2-G 落地，**不改任何视觉**。
