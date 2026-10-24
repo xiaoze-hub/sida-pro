@@ -435,7 +435,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </select>
         </label>
         {/* L3-A: 色阶图例 —— 此前整页没有任何图例, 读者不知道「红多深=涨多少」「灰=平盘」 */}
-        <span className="hidden items-center gap-1 text-[10px] text-muted-foreground md:flex" aria-label="色阶图例">
+        <span className="hidden items-center gap-1 text-[11px] text-muted-foreground md:flex" aria-label="色阶图例">
           {[-3, -1.5, 1.5, 3].map((v) => (
             <span
               key={v}
