@@ -3,6 +3,16 @@ import { Upload, FileText, Download, TrendingUp, Activity, Target, Shield, Alert
 import { fetchAPI } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
 import { formatDateTime } from '@/lib/utils'
+
+/**
+ * 市场枚举 → 中文（2026-10-24 L3-D）
+ * 后端返回 CN/HK/US，直接 join 出来是 "china_a, HK"，中文页面里读着像没做完。
+ */
+const MARKET_CN: Record<string, string> = { CN: 'A股', HK: '港股', US: '美股', CHINA_A: 'A股' }
+function marketCn(list?: string[] | null): string {
+  const names = (list || []).map((m) => MARKET_CN[String(m).toUpperCase()] || m)
+  return names.join('、') || '--'
+}
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
 
 /** §6.2: /api/shadow/trades 的成交明细(落库版, 上限见后端 MAX_STORED_TRADES) */
@@ -357,7 +367,7 @@ iframe{width:100%;height:100%;border:0}
               <StatCard
                 icon={TrendingUp}
                 label="偏好市场"
-                value={(myProfile.preferred_markets || []).join(', ') || '--'}
+                value={marketCn(myProfile.preferred_markets)}
                 color="text-amber-500"
                 hint="按回合数量占比最高的市场(CN/HK/US)"
               />
@@ -439,7 +449,7 @@ iframe{width:100%;height:100%;border:0}
                   return `胜率 ${((win / total) * 100).toFixed(0)}%`
                 })()} color="text-emerald-700 dark:text-emerald-500" />
                 <StatCard icon={Activity} label="平均持有时长" value={fmt(result.profile.typical_holding_days, '天')} color="text-violet-500" />
-                <StatCard icon={Target} label="偏好市场" value={(result.profile.preferred_markets || []).join(', ') || '--'} color="text-amber-500" />
+                <StatCard icon={Target} label="偏好市场" value={marketCn(result.profile.preferred_markets)} color="text-amber-500" />
               </div>
               {result.profile.rules && result.profile.rules.length > 0 && (
                 <div className="flex flex-wrap gap-2">
