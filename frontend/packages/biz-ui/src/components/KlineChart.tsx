@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
 import { ascendSeries } from '../lib/series-time'
+import { latestMarkers } from '../lib/marker-limit'
 import {
   createChart,
   CandlestickSeries,
@@ -1480,11 +1481,14 @@ export default function KlineChart(props: {
     if (props.layersVisible?.pattern !== false) {
       const pc = readStockColors()
       markers.push(
-        ...(buildPatternMarkers(effPatterns, (d) => toChartTime(d, interval), {
-          up: pc.up,
-          down: pc.down,
-          neutral: readChartTheme().neutral,
-        }) as never[]),
+        ...(latestMarkers(
+          buildPatternMarkers(effPatterns, (d) => toChartTime(d, interval), {
+            up: pc.up,
+            down: pc.down,
+            neutral: readChartTheme().neutral,
+          }) as never[],
+          3,
+        ) as never[]),
       )
     }
     // 威科夫量价结构标注(本土三层滤网 P1): 严格规则结构 → 记号(与形态同配色语义,
@@ -1493,11 +1497,14 @@ export default function KlineChart(props: {
     if (props.layersVisible?.wyckoff !== false) {
       const pc = readStockColors()
       markers.push(
-        ...(buildPatternMarkers(effWyckoff, (d) => toChartTime(d, interval), {
-          up: pc.up,
-          down: pc.down,
-          neutral: readChartTheme().neutral,
-        }) as never[]),
+        ...(latestMarkers(
+          buildPatternMarkers(effWyckoff, (d) => toChartTime(d, interval), {
+            up: pc.up,
+            down: pc.down,
+            neutral: readChartTheme().neutral,
+          }) as never[],
+          3,
+        ) as never[]),
       )
     }
     // 决策先锋辅助指标买卖点(2026-10-10): 趋势操盘线买/卖点 + 牛熊线金叉/死叉 B/S(买红卖绿)。
