@@ -1,3 +1,39 @@
+## release: v0.52.0（剩余 4 项收尾 + 集成分支并入 + 暗色阶梯自洽）
+
+并入 `integration/ui-batch-20261024`（27 个改动包）并完成交接文档 `20261024_剩余4项交接_Hermes.md` 的 4 项。冲突只有 `index.css` 一处：采用对方双档 `--border 14%` / `--border-strong 27.5%`（卡片走 strong），保留卡片化翻案的 `--card 13.5%` / `--popover 21%` / `--secondary·muted 17%` / `--accent 20%`。
+
+### 暗色阶梯自洽（并入时补的连带修复）
+- `--s1` 仍是 10.2%（比卡片 13.5% 暗 → `.s-panel` 看着像没底）→ 对齐 13.5%；`--s2 17%` / `--s3 20%` / `--s4 21%`。
+- `.dark .card-hover:hover` 背景写死 13.5%，**等于卡片色 → hover 无任何变化**；其 `box-shadow: none` 还把卡片顶部内高光抹掉了。改为 `hsl(var(--s2))`（17%，ΔL +3.5）+ 保留 inset 高光。
+- 实测：页底 5% vs 卡片 13.5% = **ΔL 8.5 个点**；卡片 vs 边框 **1.53:1**。
+
+### 1）Admin 后台分页
+- 后端加 `limit/offset` 与真实 `total`（不传参保持旧行为）：`/users/admin/list`、`/admin/skills/keys`、`/pro/admin/applications`。
+- 新增 `frontend/src/components/Pager.tsx`（28px 按钮；**报全量总数，不拿本页条数冒充**）。
+- 用户/Key/Pro 三表 20 条/页 + `max-h-70vh` + `thead sticky` 实底；邀请码备注 placeholder「如：给黄磊」→「如：给运营同学」。
+
+### 2）失败报告「重试」出口
+- 新增幂等 `POST /history/{id}/retry` → 接 `trigger_agent`（同 agent+标的+日期 走 upsert 覆盖）。
+- 守卫：他人记录 403 / 系统行仅 owner / 已成功 409 / 不存在 404 / agent 停用 400。
+- 前端：失败行内「重试」+ 原因原文内联 + 详情「重新生成」+ 全部/成功/失败筛选；提交后只提示"已提交"，3 秒后拉列表让状态自己追上（前端不自己改状态）。
+
+### 3）持仓 KPI 读数不再被截断
+- 真凶是 `Stat` 的**数值行也在 `truncate`**（数字被切成 `+2.1…`），不只是副标签换行。
+- 数值改 `whitespace-nowrap`（永不截断）；副标签 `上一交易日 10-23` → `上日 10-23`（保留日期、长度减 1/3）；账户行 4 处副标签 + 11 处表头 `th` 加 nowrap。
+
+### 4）页签上限 12→8 且改 LRU
+- 新增 `pickEvictionTarget`：**只算淘汰目标，不动数组顺序**（视觉仍是打开顺序，成片顺序断言得以保留）。
+- `upsertTab` 加可选 `evictKey`，不传保持旧行为（丢最早打开的非首页）。
+- 右键菜单「关闭 / 关闭其他 / 关闭右侧」，用 `createPortal` 挂 body：不受页签栏 overflow 裁切，也不污染 tablist 文本。
+
+### 顺带修掉集成分支带进来的 1 处真回归 + 8 条红测试
+- **真回归**：`FactorIC.tsx` 新加的表前结论用 `best.ic ?? 0` 排序 —— IC 为 `null`（期数不足）被当成 0 参与排名，会把"没数据"说成"最弱因子"。改为 IC 全空时如实不排名。
+- **真回归**：`AuctionAnomalyTab` 重写空态时漏掉 v0.50.2 的「请点右上『刷新』重试」指引。
+- 其余 7 条为行为已按设计变更、测试未跟：`tab-keepalive`（上限）、`truncated-text-title`（Stat 数值不截断）、`theme-mood`（6 色带→四态）、`premarket-entry`（Tab 改名 + `kpi-band` → `market-conclusion`）、`war-report`（同屏两处数字、净额列已删）、`zero-vs-missing`（结论句补「市场情绪」）、`ui-walkthrough-p0`（免责条改文档流页脚，新契约=源码级禁止 `fixed`）、`dashboard-first-screen`（`kpi-band`/`market-phase-card`/`sentiment-gauge` 已折叠）。
+
+### 新增测试 35 例
+`tab-shell-lru` 14 / `workspace-tab-menu` 7 / `position-kpi-readout` 6 / `pager` 4 / 后端 `test_history_retry` 7。`MAX_TABS` 8→12 变异验证会立刻红。
+
 ## fix-paper: 修模拟盘 Y 轴刻度退化 + 0 收益不再涂红（Lane C）
 
 按勘误任务书 §8 Lane C 落地（P0 真 bug）。
