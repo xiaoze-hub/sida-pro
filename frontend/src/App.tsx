@@ -264,6 +264,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 
+  // L2-D(2026-10-24): 首次进入落 /ai-copilot(小白先看到"能问什么"), 老用户仍落首页。
+  // 先写标记再跳转: /ai-copilot 有 PermGuard(view_quotes), 无权限用户会被弹回 `/`,
+  // 此时标记已写 → 不会来回弹致死循环。隐私模式写不进去 → 视为老用户, 不跳。
+  if (location.pathname === '/') {
+    let firstRun = false
+    try { firstRun = localStorage.getItem('sida_first_run_landed') === null } catch { /* 隐私模式 */ }
+    if (firstRun) {
+      try { localStorage.setItem('sida_first_run_landed', '1') } catch { /* 忽略 */ }
+      return <Navigate to="/ai-copilot" replace />
+    }
+  }
+
   return <>{children}</>
 }
 
@@ -356,6 +368,9 @@ function App() {
       if (saved === '1' || saved === '0') return saved === '1'   // 用户显式选择永远优先
       // P0-1(2026-09-18): **没表过态的**用户在行情终端页(个股/指数/板块工作台)默认折叠侧栏 ——
       // 铁律是"K 线是绝对主角(≥80% 屏宽)", 第一屏就该把宽度让给它; 展开一次即被记住。
+      // L2-E/G8(2026-10-24): 窄屏(<1180)默认折叠侧栏 —— 此前没有宽度规则,
+      // 1280 下"只剩图标"其实是 /stocks/ 那条规则命中(审计 G8 的 1280 描述已按源码更正)。
+      if (window.innerWidth < 1180) return true
       return /^\/stocks\//.test(window.location.pathname)
     } catch { return false }
   })
