@@ -81,3 +81,16 @@ def test_days_ago_iso_是自然日():
     s = tc._days_ago_iso(30)
     d = datetime.strptime(s, "%Y-%m-%d").date()
     assert (date.today() - d).days >= 30  # 取窗口要覆盖 >= days 个自然日
+
+
+def test_成交量单位不再把股当手():
+    """用户红线: 库内 volume 一律是股。原实现 `vol/1e4 万手` 让上证 4.37e10 股
+    显示成「4376920万手」(实际 437.7 亿股), 量级错 6 个数量级。"""
+    from src.agents.chat.tools_catalog import _vol_text
+
+    assert _vol_text(4.37e10).endswith("亿股")
+    assert _vol_text(4.3769e10) == "437.69亿股"
+    assert _vol_text(5.2e8) == "5.20亿股"
+    assert _vol_text(3.5e4) == "4万股"      # 万元档
+    assert _vol_text(800) == "800股"
+    assert "手" not in _vol_text(4.37e10)   # 指数没有"手"的概念

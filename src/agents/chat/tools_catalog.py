@@ -753,7 +753,7 @@ def render_stock_quote(
                 bits.append(f"{label} {v:.2f}")
         vol = _f(q.get("volume"))
         if vol is not None:
-            bits.append(f"量 {vol / 1e4:.0f}万手")
+            bits.append(f"量 {_vol_text(vol)}")
         amt = _f(q.get("turnover"))
         bits.append(f"额 {_amt_plain(amt) if amt is not None else '未披露'}")
         tr = _f(q.get("turnover_rate"))
@@ -938,6 +938,20 @@ def render_strategy_signal(
     )
 
 
+def _vol_text(vol: float, *, is_index: bool = False) -> str:
+    """成交量展示。口径: 库内 volume 一律是**股**(klines/index_daily 同口径)。
+
+    ⚠️ 2026-10-25 修: 原写 `vol/1e4 万手` —— 把"股"当"手"(1 手=100 股)又除了万,
+    上证 4.37e10 股被显示成 "4376920万手"(实际 437.7 亿股), 量级错 6 个数量级。
+    指数只报股/亿股(指数无"手"概念)。
+    """
+    if vol >= 1e8:
+        return f"{vol / 1e8:.2f}亿股"
+    if vol >= 1e4:
+        return f"{vol / 1e4:.0f}万股"
+    return f"{vol:.0f}股"
+
+
 def render_kline(
     *,
     as_of: str,
@@ -945,8 +959,13 @@ def render_kline(
     symbol: str = "",
     days: int = 120,
     missing: list[str] | None = None,
+    source: str = "",
 ) -> str:
-    """K 线与周期：日 K 序列 + 均线 + 区间高低。空 → 「未取到」。"""
+    """K 线与周期：日 K 序列 + 均线 + 区间高低。空 → 「未取到」。
+
+    `source` 由调用方给：指数走 index_daily、个股走 klines hypertable，
+    表头必须如实写是哪一条，否则会出现"表头说 klines、明细说 index_daily"的自相矛盾。
+    """
     miss = list(missing or [])
     sections: list[str] = []
     rows = [b for b in (bars or []) if isinstance(b, dict)]
@@ -964,7 +983,7 @@ def render_kline(
         ]
         vol = _f(last.get("volume"))
         if vol is not None:
-            bits.append(f"量 {vol / 1e4:.0f}万手")
+            bits.append(f"量 {_vol_text(vol, is_index=str(last.get('source') or '').startswith('index'))}")
         src = str(last.get("source") or "").strip()
         if src:
             bits.append(f"来源 {src}")
@@ -993,7 +1012,7 @@ def render_kline(
         if len(recent) > 1:
             parts = [
                 f"{b.get('date') or '?'} 收 {_num(b.get('close'), 2)}"
-                f" 量 {_num(_f(b.get('volume')), 0)}手"
+                f" 量 {_vol_text(_f(b.get('volume')) or 0)}"
                 for b in recent
             ]
             sections.append("- 最近 5 根：" + "；".join(parts))
@@ -1005,7 +1024,8 @@ def render_kline(
     return render_domain_sections(
         "stock.kline",
         as_of=as_of,
-        source="klines（TimescaleDB hypertable，period=1d / adjust=qfq，复用 src.db.klines_repo 读取）",
+        source=source
+        or "klines（TimescaleDB hypertable，period=1d / adjust=qfq，复用 src.db.klines_repo 读取）",
         sections=sections,
         missing=miss,
     )
@@ -2536,12 +2556,18 @@ async def _query_stock_kline(db: Any, params: dict[str, Any], user: Any) -> str:
     except (TypeError, ValueError):
         days = 120
     p = _kline_payload(db, symbol, market, days)
+    is_index = p.get("kind") == "index"
     return render_kline(
         as_of=p.get("as_of") or "未知",
         bars=p.get("bars"),
         symbol=symbol,
         days=days,
         missing=p.get("missing"),
+        source=(
+            f"index_daily（指数日线；{p.get('name') or ''} {symbol}，非个股 klines）"
+            if is_index
+            else ""
+        ),
     )
 
 
