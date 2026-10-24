@@ -68,6 +68,9 @@ def test_tencent_minute_exception_returns_none_with_note(monkeypatch):
 
     import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen", boom)
-    points, prev, note = quotes_mod._tencent_minute("600519", "CN")
+    res = quotes_mod._tencent_minute("600519", "CN")
+    points, prev, note = res[0], res[1], res[2]
     assert points is None
     assert note == "分时源(腾讯)暂不可用"
+    # 2026-10-24: 第4项 trade_date(源故障时无日期)
+    assert len(res) == 4 and res[3] is None

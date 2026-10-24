@@ -378,11 +378,14 @@ _MINUTE_CACHE: dict = {}  # {symbol_market: (ts, points)}
 _MINUTE_TTL = 60.0
 
 
-def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float | None, str | None]:
+def _tencent_minute(symbol: str, market: str) -> tuple:
+    # 2026-10-24: 增返第4项 trade_date(腾讯 payload 自带 date=YYYYMMDD)。
+    # ⚠️ 契约变更: 直接 `a,b,c = _tencent_minute(...)` 会 ValueError, 必须用下标解包。
+    #    (调用方唯一一处已改为 _res[0..2], 测试同步改)
     """腾讯分时接口。
 
     Returns:
-        (points, prev_close, error_note)
+        (points, prev_close, error_note[, trade_date])
         - points is None  → **源故障**(网络/超时/解析), error_note 有值; **不是**"无分时"
         - points == []    → 接口成功但当日真无分时(非交易日/停牌等)
         - prev_close      → 昨收(±分界线用)
@@ -404,10 +407,14 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
         with urllib.request.urlopen(req, timeout=10) as resp:
             import json as _json
             d = _json.load(resp)
-        data = (d.get("data") or {}).get(code, {}).get("data", {}).get("data")
+        _blk = (d.get("data") or {}).get(code, {})
+        data = (_blk.get("data") or {}).get("data")
+        # 腾讯 payload: data.<code>.data.date = "20261023"(该分时所属交易日)
+        raw_date = (_blk.get("data") or {}).get("date") or ""
+        trade_date = raw_date if (isinstance(raw_date, str) and len(raw_date) == 8 and raw_date.isdigit()) else None
         if not data:
             # 接口 200 且解析成功、但无分时行 —— 真空态(非交易日/停牌), **不是**源故障
-            return [], None, None
+            return [], None, None, trade_date
         # 昨收: qt list[4](指数与个股通用: [3]=现价 [4]=昨收 [5]=今开)
         prev_close = None
         try:
@@ -444,11 +451,11 @@ def _tencent_minute(symbol: str, market: str) -> tuple[list[dict] | None, float 
             bar_vol = max(cum_vol - prev_cum_vol, 0.0)  # 本分钟增量成交量(手)
             prev_cum_vol = cum_vol
             points.append({"t": t, "price": price, "avg": round(avg, 2), "volume": int(bar_vol)})
-        return points, prev_close, None
+        return points, prev_close, None, trade_date
     except Exception as e:
         # KI-042: 源故障必须与"真空态"可分 —— 返回 None + note, 不再伪装成 points=[]
         logger.debug(f"腾讯分时失败 {symbol}: {e}")
-        return None, None, "分时源(腾讯)暂不可用"
+        return None, None, "分时源(腾讯)暂不可用", None
 
 
 @router.get("/minute/{symbol}")
@@ -472,12 +479,15 @@ async def get_minute(symbol: str, market: str = "CN"):
         # 兼容旧缓存: 3元组=无 swings/note; 4元组=有 swings 无 note; 5元组=全量
         swings_old = cached[3] if len(cached) > 3 else None
         note_old = cached[4] if len(cached) > 4 else None
+        date_old = cached[5] if len(cached) > 5 else None
         return {"symbol": symbol, "market": market, "points": cached[1],
                 "prev_close": cached[2], "is_index": is_index, "swings": swings_old or None,
-                "degraded": bool(note_old), "note": note_old}
+                "degraded": bool(note_old), "note": note_old, "trade_date": date_old}
     # P0(2026-09-18): _tencent_minute 内是同步 urllib, 直接在 async def 调会阻塞事件循环,
     # 包 asyncio.to_thread 交给线程池; 返回三元组语义不变。
-    points, prev_close, src_note = await asyncio.to_thread(_tencent_minute, symbol, market)
+    _res = await asyncio.to_thread(_tencent_minute, symbol, market)
+    points, prev_close, src_note = _res[0], _res[1], _res[2]
+    trade_date = _res[3] if len(_res) > 3 else None
     degraded = points is None
     if points is None:
         points = []
@@ -490,10 +500,10 @@ async def get_minute(symbol: str, market: str = "CN"):
         except Exception as e:
             logger.warning(f"minute swings 计算失败 {symbol}: {e}", exc_info=True)
             swings = None
-    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings, src_note)
+    _MINUTE_CACHE[cache_key] = (_time.time(), points, prev_close, swings, src_note, trade_date)
     return {"symbol": symbol, "market": market, "points": points,
             "prev_close": prev_close, "is_index": is_index, "swings": swings,
-            "degraded": degraded, "note": src_note}
+            "degraded": degraded, "note": src_note, "trade_date": trade_date}
 
 
 # 2026-08-18: 根路径 GET (前端默认请求, 返回自选股票列表)

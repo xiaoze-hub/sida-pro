@@ -50,6 +50,7 @@ import ErrorBanner from '@/components/ErrorBanner'
 import MarketStatusPills from '@/components/MarketStatusPills'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
+import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
 import {
   isHidden,
   loadLayout,
@@ -640,6 +641,11 @@ export default function DashboardPage() {
         data-testid="market-conclusion"
         className="mb-3 rounded-lg border border-border-strong px-3 py-2.5"
       >
+        {/* 2026-10-24: 右侧曾整片留白(14% 屏高只放 6 个数字) → 挂大盘分时走势带。
+            左列宽度自适应, 右列 280–380; 窄屏(<lg)堆叠, 走势带落到数字下方。
+            分时数据独立请求, 不阻塞结论句渲染(首页冷启动结论可见已 2.7s, 不能再压)。 */}
+        <div className="grid gap-3 lg:grid-cols-[1fr_minmax(280px,380px)] lg:items-start">
+        <div className="min-w-0">
         {/* 结论句(2026-10-24 L2-A): 首屏先给一句非数字结论 —— 此前 8 个数字并排, 读完说不出结论。
             只用本页已有 state, 缺数如实写「未知/尚未识别」, 不用 0 顶。 */}
         <p className="text-[16px] font-medium leading-snug text-foreground">
@@ -681,6 +687,9 @@ export default function DashboardPage() {
           <span className="ml-auto">
             <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
           </span>
+        </div>
+        </div>
+        <IndexTrendBand />
         </div>
       </div>
 
