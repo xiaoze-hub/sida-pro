@@ -217,7 +217,16 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
           )}
           <span className="opacity-40">|</span>
           <span>
-            共 <span className="font-mono text-foreground">{total}</span> 只
+            {/* 2026-10-24: 首屏冷查询实测 31s（/api/auction/anomaly 冷缓存），
+                期间 data=null、total=0 —— 旧实现如实渲染成「共 0 只」，
+                用户读作「今天没有异动」，与「还在加载」是两件事。 */}
+            {loading && !data ? (
+              <>加载中<span className="font-mono text-foreground">…</span></>
+            ) : (
+              <>
+                共 <span className="font-mono text-foreground">{total}</span> 只
+              </>
+            )}
           </span>
           <CaliberBadge caliber="ths" label="thsdk 竞价" className="text-[10px]" />
         </div>
@@ -362,7 +371,9 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
               <tr>
                 <td colSpan={9} className="py-8 text-center text-[11px] text-muted-foreground">
                   {/* A-03/A-13: 三种原因三种文案, 不再三义合一 */}
-                  {data?.reason_text ||
+                  {!data
+                    ? '未取到竞价数据（请求未返回或超时），请点右上「刷新」重试'
+                    : data.reason_text ||
                     (data?.reason === 'source_unavailable'
                       ? '数据源不可用(thsdk 竞价异动拉取失败)，非「今日无异常」'
                       : data?.reason === 'non_trading_day'
