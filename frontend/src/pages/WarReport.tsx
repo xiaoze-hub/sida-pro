@@ -62,19 +62,14 @@ function RowTable({ rows, onPick }: { rows: WarReportRow[]; onPick: (s: string) 
             <th className="px-3 py-2 font-medium">{t('warReport.code')}</th>
             <th className="px-3 py-2 font-medium">{t('warReport.name')}</th>
             <th className="px-3 py-2 text-right font-medium">{t('warReport.mainNet')}</th>
-            <th className="px-3 py-2 text-right font-medium" title={t('warReport.netChangeHint')}>
-              {t('warReport.netChange')}
-            </th>
-            <th className="px-3 py-2 text-right font-medium" title={t('warReport.samplesHint')}>
-              {t('warReport.samples')}
-            </th>
+            {/* 2026-10-24 1-D: 删「净额变化 / 采样数」两列 —— 后端从未产出这两个字段,
+                20 行恒为 -- / 0(勘误 §7.7 已核实: 无数据源、无替代)。 */}
             <th className="px-3 py-2 font-medium">{t('common.source')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/40">
           {rows.map((r, i) => {
             const main = r.main_net_wan
-            const chg = r.net_change_wan
             return (
               <tr
                 key={`${r.symbol}-${i}`}
@@ -88,11 +83,7 @@ function RowTable({ rows, onPick }: { rows: WarReportRow[]; onPick: (s: string) 
                 <td className={`px-3 py-2 text-right font-mono ${main > 0 ? 'text-stock-up' : main < 0 ? 'text-stock-down' : ''}`}>
                   {toAmountFromWan(main)}
                 </td>
-                <td className={`px-3 py-2 text-right font-mono ${chg != null && chg > 0 ? 'text-stock-up' : chg != null && chg < 0 ? 'text-stock-down' : 'text-muted-foreground'}`}>
-                  {toAmountFromWan(chg)}
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-muted-foreground">{r.samples ?? '--'}</td>
-                <td className="px-3 py-2 font-mono text-[10px] text-muted-foreground">{r.source ?? '--'}</td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{r.source ?? '--'}</td>
               </tr>
             )
           })}
@@ -169,6 +160,21 @@ export default function WarReportPage() {
   const industry = data.industry
   const split = data.split_wash
 
+  // 结论层口径（2026-10-24 1-D）：只用接口**已返回**的 TOP/BOTTOM 榜与行业列表排序取前 3，
+  // 不做全市场推算（接口没有全市场净额字段，推算即编造）。
+  const inflow = data.top_inflow || []
+  const outflow = data.top_outflow || []
+  const sumWan = (rows: WarReportRow[]) => rows.reduce((s, r) => s + (r.main_net_wan ?? 0), 0)
+  const inflowWan = sumWan(inflow)
+  const outflowWan = sumWan(outflow)
+  const netWan = inflowWan + outflowWan
+  const topIndustries = [...(industry?.top || [])]
+    .sort((a, b) => Math.abs(b.fund_net_yi) - Math.abs(a.fund_net_yi))
+    .slice(0, 3)
+  const topStocks = [...inflow]
+    .sort((a, b) => (b.main_net_wan ?? 0) - (a.main_net_wan ?? 0))
+    .slice(0, 3)
+
   return (
     <div className="sida-page-enter space-y-4" data-testid="war-report">
       <div className="border-b border-border/40 pb-3">
@@ -196,6 +202,66 @@ export default function WarReportPage() {
           </Button>
         </div>
       </div>
+
+      {/* 结论层（2026-10-24 1-D）：首屏先给三句结论，榜单降到第二屏。
+          与暗盘资金页的差异化定位：暗盘=榜单，战报=叙事。 */}
+      <section className="grid gap-3 md:grid-cols-3" data-testid="war-report-conclusion">
+        <div className="rounded-xl border border-border/60 p-3">
+          <div className="text-[11px] text-muted-foreground">{t('warReport.directionLabel')}</div>
+          {inflow.length > 0 || outflow.length > 0 ? (
+            <div className={`mt-1 text-[20px] font-semibold tabular-nums ${netWan > 0 ? 'text-stock-up' : netWan < 0 ? 'text-stock-down' : 'text-muted-foreground'}`}>
+              {netWan > 0 ? '+' : ''}{toAmountFromWan(netWan)}
+            </div>
+          ) : (
+            <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
+          )}
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {t('warReport.directionInflow')} {toAmountFromWan(inflowWan)} · {t('warReport.directionOutflow')} {toAmountFromWan(outflowWan)}
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.directionHint')}</div>
+        </div>
+        <div className="rounded-xl border border-border/60 p-3">
+          <div className="text-[11px] text-muted-foreground">{t('warReport.topIndustry')}</div>
+          {topIndustries.length > 0 ? (
+            <ul className="mt-1 space-y-0.5">
+              {topIndustries.map((row) => (
+                <li key={row.code} className="flex items-center justify-between gap-2 text-[12px]">
+                  <span className="truncate text-foreground">{row.name}</span>
+                  <span className={`shrink-0 font-mono tabular-nums ${row.fund_net_yi > 0 ? 'text-stock-up' : row.fund_net_yi < 0 ? 'text-stock-down' : 'text-muted-foreground'}`}>
+                    {row.fund_net_yi > 0 ? '+' : ''}{row.fund_net_yi}亿
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
+          )}
+          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.topIndustryHint')}</div>
+        </div>
+        <div className="rounded-xl border border-border/60 p-3">
+          <div className="text-[11px] text-muted-foreground">{t('warReport.topStock')}</div>
+          {topStocks.length > 0 ? (
+            <ul className="mt-1 space-y-0.5">
+              {topStocks.map((row) => (
+                <li key={row.symbol} className="flex items-center justify-between gap-2 text-[12px]">
+                  <button
+                    type="button"
+                    className="min-w-0 truncate text-left text-foreground hover:text-primary"
+                    onClick={() => pick(row.symbol)}
+                    title={row.symbol}
+                  >
+                    {row.name || row.symbol}
+                  </button>
+                  <span className="shrink-0 font-mono tabular-nums text-stock-up">{toAmountFromWan(row.main_net_wan)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mt-1 text-[12px] text-muted-foreground">{t('warReport.conclusionEmpty')}</div>
+          )}
+          <div className="mt-1 text-[11px] text-muted-foreground">{t('warReport.topStockHint')}</div>
+        </div>
+      </section>
 
       {/* 大单净流入 TOP */}
       <section className="overflow-hidden rounded-xl border border-border/60 bg-card">
