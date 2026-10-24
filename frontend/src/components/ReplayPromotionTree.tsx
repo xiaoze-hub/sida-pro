@@ -9,6 +9,7 @@
  *  - 分层晋级率表内未存 → 不渲染任何"每层晋级率"(口径缺口在页面说明区统一标注);
  *  - payload 未落库时整体显式「无数据」, 不用标量反推编造。
  */
+import PromotionFunnel from './PromotionFunnel'
 import { ChevronRight } from 'lucide-react'
 import type { ReplayTreeLevel } from '@panwatch/api'
 import { toAmountFromWanUnsigned } from '@/lib/format'
@@ -83,6 +84,8 @@ export default function ReplayPromotionTree({
   const asc = [...levels].sort((a, b) => a.board - b.board)
   return (
     <div className="border-t border-border/60" data-testid="replay-tree-root">
+      {/* 家数断崖图（2026-10-24 补）：四列文字 rhythms 里看不出「70→9」那一刀有多深 */}
+      <PromotionFunnel levels={asc} />
       {detailNote && (
         <div className="py-1.5 text-[10px] text-muted-foreground" data-testid="replay-tree-detail-note">
           {detailNote}
