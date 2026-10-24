@@ -118,4 +118,30 @@ describe('AuctionAnomalyTab 数据日标注(A-03)', () => {
     render(<AuctionAnomalyTab market="CN" />)
     expect(await screen.findByText(/非交易日/)).toBeTruthy()
   })
+
+  /**
+   * 2026-10-24: 首屏冷查询实测 **31 秒**（`/api/auction/anomaly` 冷缓存，
+   * 实测 31477ms → 7280ms → 145ms）。期间 `data=null`、`total=0`，
+   * 旧实现把它渲染成「共 0 只」，用户读作「今天没有异动」。
+   * 锁死两条：
+   *  ① 未拿到数据且加载中 ⇒ 必须显示「加载中」，**不得**出现「共 0 只」；
+   *  ② 请求根本没回来（data=null）⇒ 空态文案必须指向「重试」，不得说「暂无竞价异动数据」。
+   */
+  it('首屏未返回时不得谎报「共 0 只」，空态文案要指向重试', async () => {
+    // 永不 resolve：模拟冷查询挂住（实测 31s）
+    mocks.fetchAPI.mockImplementation(() => new Promise(() => {}))
+    render(<AuctionAnomalyTab market="CN" />)
+    expect(await screen.findByText(/加载中/)).toBeTruthy()
+    expect(screen.queryByText(/共\s*0\s*只/)).toBeNull()
+  })
+
+  it('请求失败且无数据时给出重试指引，而不是「暂无竞价异动数据」', async () => {
+    mocks.fetchAPI.mockRejectedValue(new Error('请求超时'))
+    render(<AuctionAnomalyTab market="CN" />)
+    expect(await screen.findByText(/请求超时/)).toBeTruthy()
+    expect(
+      screen.getByText(/未取到竞价数据（请求未返回或超时），请点右上「刷新」重试/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/暂无竞价异动数据/)).toBeNull()
+  })
 })
