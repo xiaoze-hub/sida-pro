@@ -1944,6 +1944,8 @@ export default function KlineChart(props: {
         {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
         {/* 2026-09-04 去重: 父组件受控(props.subchart)时隐藏本行, 以父为准
             (此前两套副图控件互不同步, Quote 还没传 onSubchartChange)。 */}
+        {/* L2-B: 分组分隔线 —— 左=周期, 右=叠加/工具, 不再是 15 个平铺按钮 */}
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         {props.subchart === undefined &&
           SUBCHART_OPTS.map(([k, label]) => {
           const active = subchart === k
@@ -1978,6 +1980,7 @@ export default function KlineChart(props: {
             分时
           </button>
         )}
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         <button
           type="button"
           onClick={() => {
