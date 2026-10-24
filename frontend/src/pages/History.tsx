@@ -51,6 +51,10 @@ export default function HistoryPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [mobileView, setMobileView] = useState<'list' | 'reader'>('list')
   const [detailRecord, setDetailRecord] = useState<HistoryRecord | null>(null)
+  /** 目录筛选: 失败项必须能一键捞出来 —— 5 条里 3 条失败时, 长列表里靠肉眼找等于没有 */
+  const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
+  /** 正在提交重试的记录 id(防连点: 一次重试就是一次 LLM 调用) */
+  const [retryingId, setRetryingId] = useState<number | null>(null)
 
   const displayTime = (record: HistoryRecord) => record.updated_at || record.created_at
   const formatDateTime = (iso?: string) => {
@@ -151,6 +155,34 @@ export default function HistoryPage() {
       ? CAPABILITY_AGENT_KEYS
       : [...WORKFLOW_AGENT_KEYS, ...CAPABILITY_AGENT_KEYS]
 
+  const isFailed = (r: HistoryRecord) => Boolean(r.status && r.status !== 'success')
+
+  /**
+   * 重试一条失败的报告。
+   *
+   * 后端 POST /history/{id}/retry 会按该用户重跑对应 agent(同 agent+标的+日期 走 upsert 覆盖),
+   * 所以这里**不假装立刻成功**: 只提示"已提交", 3 秒后拉一次列表让状态自己追上 ——
+   * 前端不允许自己把「未生成」改成「已生成」。
+   */
+  const retryRecord = useCallback(
+    async (record: HistoryRecord) => {
+      if (retryingId === record.id) return
+      setRetryingId(record.id)
+      try {
+        await fetchAPI(`/history/${record.id}/retry`, { method: 'POST' })
+        toast('已提交重试，完成后会在通知里告诉你', 'success')
+        window.setTimeout(() => {
+          void load()
+        }, 3000)
+      } catch (e) {
+        toast(e instanceof Error ? e.message : '重试提交失败', 'error')
+      } finally {
+        setRetryingId(null)
+      }
+    },
+    [retryingId, toast, load],
+  )
+
   const selectRecord = (id: number) => {
     setSelectedId(id)
     // On mobile, jump to reader view for a smoother experience
@@ -235,11 +267,43 @@ export default function HistoryPage() {
 
           {/* List */}
           <div className={`md:col-span-5 overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
-            <div className="px-4 py-3 border-b border-border/50 text-[12px] text-muted-foreground">
-              目录（点击查看）
+            <div className="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
+              <span className="text-[12px] text-muted-foreground">目录（点击查看）</span>
+              <div className="flex items-center gap-1" role="group" aria-label="按生成状态筛选">
+                {(
+                  [
+                    ['all', '全部'],
+                    ['success', '成功'],
+                    ['failed', '失败'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    data-testid={`history-filter-${value}`}
+                    aria-pressed={statusFilter === value}
+                    onClick={() => setStatusFilter(value)}
+                    className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                      statusFilter === value
+                        ? 'bg-primary/15 font-medium text-primary'
+                        : 'text-muted-foreground hover:bg-accent/30'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="max-h-[70vh] md:max-h-[70vh] overflow-y-auto scrollbar divide-y divide-border/50">
-              {records.map(r => {
+              {records
+                .filter(r =>
+                  statusFilter === 'all'
+                    ? true
+                    : statusFilter === 'failed'
+                      ? isFailed(r)
+                      : !isFailed(r),
+                )
+                .map(r => {
                 const active = selectedId === r.id
                 return (
                   <button
@@ -255,10 +319,36 @@ export default function HistoryPage() {
                         className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}
                         title={r.title || '分析报告'}
                       >{r.title || '分析报告'}</span>
-                      {r.status && r.status !== 'success' && (
-                        <Badge variant="destructive" className="text-[10px] flex-shrink-0">未生成</Badge>
+                      {isFailed(r) && (
+                        <>
+                          <Badge variant="destructive" className="text-[10px] flex-shrink-0">未生成</Badge>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            data-testid="history-retry-inline"
+                            onClick={e => {
+                              e.stopPropagation()
+                              void retryRecord(r)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                void retryRecord(r)
+                              }
+                            }}
+                            className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10"
+                          >
+                            {retryingId === r.id ? '提交中…' : '重试'}
+                          </span>
+                        </>
                       )}
                     </div>
+                    {isFailed(r) && r.error && (
+                      <div className="mt-1 truncate text-[11px] text-destructive/80" title={r.error}>
+                        {r.error}
+                      </div>
+                    )}
                     <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="font-mono">{r.analysis_date}</span>
                       <span>{formatTimeShort(displayTime(r))}</span>
@@ -341,6 +431,19 @@ export default function HistoryPage() {
                     {selectedRecord.error && (
                       <div className="mt-1 text-[12px] text-muted-foreground break-words">{selectedRecord.error}</div>
                     )}
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        data-testid="history-retry-detail"
+                        disabled={retryingId === selectedRecord.id}
+                        onClick={() => void retryRecord(selectedRecord)}
+                      >
+                        {retryingId === selectedRecord.id ? '提交中…' : '重新生成'}
+                      </Button>
+                      <span className="text-[11px] text-muted-foreground">
+                        会按你当前的自选/持仓重跑一次，覆盖这条记录
+                      </span>
+                    </div>
                   </div>
                 ) : (
                   <div className="mt-4 p-4 bg-accent/20 rounded-md prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">

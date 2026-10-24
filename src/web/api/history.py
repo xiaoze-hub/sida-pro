@@ -4,13 +4,13 @@ import logging
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from src.web.database import get_db
-from src.web.models import AnalysisHistory, User
+from src.web.models import AgentConfig, AnalysisHistory, User
 from src.web.api.auth import get_current_user
 from src.config import Settings
 from src.core.agent_catalog import (
@@ -237,3 +237,65 @@ def delete_history(
     db.delete(record)
     db.commit()
     return {"ok": True}
+
+class RetryResponse(BaseModel):
+    ok: bool
+    queued: bool
+    agent_name: str
+    message: str
+
+
+@router.post("/{history_id}/retry", response_model=RetryResponse)
+def retry_history(
+    history_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """重试一条**生成失败**的报告（幂等：同 agent+标的+日期 走 upsert 覆盖，不会堆重复行）。
+
+    为什么不直接在前端放个按钮：失败态没有下一步就是死路。用户看到「限流」只能等着，
+    没有任何补救动作。这里把它接到 `trigger_agent` —— 它会按该用户的自选/持仓重跑，
+    失败的记录被同键覆盖成新结果（`save_analysis` 是 upsert）。
+
+    守卫：
+      · 不属于当前用户的行 → 403（系统行 `user_id is None` 只有 owner 能重试）
+      · 已经是 success → 409（不需要重试，避免白烧一次 LLM）
+      · agent 不存在 / 工作流 agent 被禁用 → 404 / 400（先让用户去开启，别静默失败）
+    """
+    record = db.query(AnalysisHistory).filter(AnalysisHistory.id == history_id).first()
+    if not record:
+        raise HTTPException(404, "报告记录不存在")
+
+    is_owner = (getattr(user, "role", None) or "") == "owner"
+    if record.user_id != user.id and not is_owner:
+        raise HTTPException(403, "无权重试该报告")
+
+    if (record.status or "success") == "success":
+        raise HTTPException(409, "该报告已成功生成，无需重试")
+
+    agent = db.query(AgentConfig).filter(AgentConfig.name == record.agent_name).first()
+    if not agent:
+        raise HTTPException(404, f"Agent {record.agent_name} 不存在")
+
+    agent_kind = (agent.kind or "").strip() or infer_agent_kind(agent.name)
+    if agent_kind == AGENT_KIND_WORKFLOW and not agent.enabled:
+        raise HTTPException(400, f"Agent {record.agent_name} 未启用，请先在设置里开启")
+
+    # 延迟导入: 避免 history ↔ agents/runtime 在模块加载期形成环
+    from src.bootstrap.runtime import trigger_agent
+    from src.web.api.agents import _spawn_async_run
+
+    _spawn_async_run(
+        trigger_agent,
+        record.agent_name,
+        user.id,
+        name=f"retry_history:{history_id}",
+        notify_label=(agent.display_name or record.agent_name),
+    )
+    logger.info(f"重试报告: id={history_id} agent={record.agent_name} user={user.id}")
+    return RetryResponse(
+        ok=True,
+        queued=True,
+        agent_name=record.agent_name,
+        message="已提交后台重试，完成后会在通知里告诉你",
+    )
