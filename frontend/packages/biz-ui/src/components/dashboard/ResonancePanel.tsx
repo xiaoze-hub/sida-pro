@@ -115,6 +115,17 @@ export default function ResonancePanel({ className, actions }: { className?: str
         </div>
       ) : (
         <div className="mt-1.5 divide-y divide-border/40">
+          {/* 表头(2026-10-24): 此前只有裸数据行, 用户看到 32.43 / +0.55亿 只能猜列义。
+              列宽必须与行完全一致, 否则数值列对不齐 —— 改行宽时两处一起改。 */}
+          <div className="flex w-full items-center gap-2 pb-1 text-[10px] text-muted-foreground">
+            <span className="w-[70px] shrink-0">名称</span>
+            <span className="w-[58px] shrink-0">代码</span>
+            <span className="w-[46px] shrink-0 text-right">涨幅</span>
+            <span className="w-[64px] shrink-0 text-right" title="活跃度(≥3 视为强度达标)">活跃度</span>
+            <span className="w-[72px] shrink-0 text-right">资金净额</span>
+            <span className="ml-auto shrink-0">三指标</span>
+            <span className="w-[52px] shrink-0 text-right" title="盘后 LLM 复核结论">AI</span>
+          </div>
           {visible.map((it) => (
             <button
               key={it.symbol}

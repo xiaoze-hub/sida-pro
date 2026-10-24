@@ -718,11 +718,15 @@ export default function DashboardPage() {
               <FlashValue value={ix.change_pct}>
                 {/* L2-A 第3步: 证据层每卡只留 1 个数字(点位) + 方向箭头。
                     涨跌幅数值移入 title, 不再和点位并排抢首屏注意力。 */}
+                {/* 2026-10-24: 只有箭头时「涨了多少」要悬停才知道 —— 恢复数值。
+                    箭头留作方向（色盲友好），百分比给量级。 */}
                 <span
                   className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[12px] ${pctChipCls(ix.change_pct)}`}
-                  title={ix.change_pct != null ? pct(ix.change_pct) : '无数据'}
+                  title={ix.change_pct != null ? `${pct(ix.change_pct)}（值在同名指数页）` : '无数据'}
                 >
-                  {ix.change_pct == null ? '—' : ix.change_pct > 0 ? '▲' : ix.change_pct < 0 ? '▼' : '→'}
+                  {ix.change_pct == null
+                    ? '—'
+                    : `${ix.change_pct > 0 ? '▲' : ix.change_pct < 0 ? '▼' : '→'} ${pct(ix.change_pct)}`}
                 </span>
               </FlashValue>
             </div>
