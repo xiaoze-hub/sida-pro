@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { safeFixed, safeNum, safeThousand } from '@/lib/format'
+import { computeEquityAxis } from '@/lib/equity-axis'
 import { ChartEmpty } from '@/components/ChartEmpty'
 import { DrawdownChart, RealizedPnlChart } from '@/components/PnlCharts'
 import KlineChart from '@panwatch/biz-ui/components/KlineChart'
@@ -66,31 +67,33 @@ function EquityChart({ data }: { data: EquityCurvePoint[] }) {
   const h = height - pad.top - pad.bottom
 
   const values = data.map(d => d.equity)
-  const minV = Math.min(...values)
-  const maxV = Math.max(...values)
-  const range = maxV - minV || 1
+  // Y 轴定义域（2026-10-24 Lane C）：0 收益时 min==max 会把 5 个刻度压成同一串「100.0万」，
+  // 改由 computeEquityAxis 对称撑开并保证 ≥2 个不同刻度（见 src/lib/equity-axis.ts）。
+  const axis = computeEquityAxis(values, 4)
+  const range = axis.max - axis.min || 1
 
   const points = data.map((d, i) => {
     const x = pad.left + (i / (data.length - 1)) * w
-    const y = pad.top + h - ((d.equity - minV) / range) * h
+    const y = pad.top + h - ((d.equity - axis.min) / range) * h
     return { x, y, ...d }
   })
 
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
   const areaD = pathD + ` L${points[points.length - 1].x},${pad.top + h} L${points[0].x},${pad.top + h} Z`
 
-  const isPositive = values[values.length - 1] >= values[0]
+  // 0 收益（首尾相等）是「没赚没亏」，不是「上涨」 —— 不许画成红色（Lane C 要求）
+  const delta = values[values.length - 1] - values[0]
+  const isFlat = Math.abs(delta) < 1e-9
   // 涨跌色统一取 --stock-up/--stock-down 令牌 (红涨绿跌, A股口径)
   const sc = readStockColors()
-  const strokeColor = isPositive ? sc.up : sc.down
-  const fillColor = isPositive ? withAlpha(sc.up, 0.1) : withAlpha(sc.down, 0.1)
+  const strokeColor = isFlat ? 'hsl(var(--flat-color))' : (delta > 0 ? sc.up : sc.down)
+  const fillColor = isFlat
+    ? 'hsl(var(--flat-color) / 0.10)'
+    : withAlpha(delta > 0 ? sc.up : sc.down, 0.1)
 
-  // Y axis ticks
+  // Y axis ticks：label 由 computeEquityAxis 统一格式化，组件不再自己 toFixed
   const yTicks = 4
-  const yLabels = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const v = minV + (range / yTicks) * i
-    return { v, y: pad.top + h - (i / yTicks) * h }
-  })
+  const yLabels = axis.ticks.map((t, i) => ({ v: t.value, label: t.label, y: pad.top + h - (i / yTicks) * h }))
 
   // X axis labels (show first, middle, last)
   const xIndices = [0, Math.floor(data.length / 2), data.length - 1]
@@ -103,7 +106,7 @@ function EquityChart({ data }: { data: EquityCurvePoint[] }) {
         <g key={i}>
           <line x1={pad.left} x2={width - pad.right} y1={t.y} y2={t.y} stroke="hsl(var(--border))" strokeWidth={0.5} />
           <text x={pad.left - 6} y={t.y + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={10}>
-            {safeNum(t?.v) !== null ? `${(Number(t.v) / 10000).toFixed(1)}万` : '--'}
+            {t.label}
           </text>
         </g>
       ))}

@@ -1,3 +1,32 @@
+## fix-paper: 修模拟盘 Y 轴刻度退化 + 0 收益不再涂红（Lane C）
+
+按勘误任务书 §8 Lane C 落地（P0 真 bug）。
+
+- **轴刻度退化**：`EquityChart` 原用 `range = maxV - minV || 1`，0 收益时 5 个刻度按 0.25 递增、再除以 10000 保留 1 位后**全部显示 `100.0万`**。抽出 `frontend/src/lib/equity-axis.ts`：定义域按 `值 ± max(|值|×1%, 1000)` 对称撑开；刻度格式化后去重，不足 2 个不同值继续按 10 倍撑（≤6 次）。组件不再自己格式化，改由 `ticks[].label` 统一出口。
+- **0 收益着色**：首尾相等原本走 `>=` 被判为「上涨」涂红；改为 `|Δ| < 1e-9` 判平，用中性 `--flat-color`（红绿只表达涨跌）。
+- **回撤曲线**：复核后确认已是独立 hairline 分节（`PaperTrading.tsx:480-487`），无裁切，本 lane 未改动。
+- 新增 `frontend/tests/components/paper-trading-axis.test.tsx` 7 条：0 收益 fixture / 对称撑开 / 幅度不过大 / 10 亿级 / 单点 / 空数组 / 负数。
+- 顺带修正审计原文对「止损颜色」的描述（源码复核：`止损` 合法时是跌绿，**计划无效时才被涂成 `text-red-500`**，两处桌面/移动同源）。
+- 明确不做：不动收益计算逻辑；不动回撤算法。
+
+## feat-ui: 新增 Term 术语组件（G11）+ EmptyState 回归钉子（G13）
+
+按第 2-3 批任务书 L2-F 落地，两项都是第 3 批各页 lane 的前置依赖。
+
+- 新增 `frontend/src/components/Term.tsx`：虚线原词 + `?`，hover/focus 出 1 句人话，`Esc` 关闭，`aria-expanded`/`aria-describedby` 同步；**不用 portal**（工作台多标签页保活下 portal 弹层会被带走，见 Lane B 的坑），页面切走即随组件消失。
+- **不新建 `EmptyState`**：`frontend/src/components/EmptyState.tsx` 已存在且已含「原因(title) + 何时有数据(description) + 动作(action) + 口径(caliber)」四件套、`min-h` 收敛与 `data-empty-state` 断言钩子。新建第二套会违反任务书「不许自造第三套」，故本 lane 只补回归钉子。
+- 新增 `frontend/tests/components/term-empty-state.test.tsx`：9 条（Term 5 条含键盘可达/Esc/href 条件渲染；EmptyState 4 条含「无 action 不渲染按钮容器」）。
+- 明确不做：不改任何页面的术语文案（第 3 批各页接入时按 `src/core/caliber.py` 口径写解释）。
+
+## feat-ui-rules: 新增 R10b 10px 棘轮（G1 字号收敛第 1 步）
+
+按 `docs/design/20261024_UI改进全批任务书_第2-3批.md` L2-G 落地，**不改任何视觉**。
+
+- `scripts/check_ui_rules.mjs` 新增 **R10b-FONT-10-RATCHET**：按**文件**统计 `text-[10px]`，与 `scripts/ui-rules-font10-baseline.json` 比对，**只减不增**；文件降到 0 时提示可从基线删除。与既有 R10-FONT-SCALE 职责分离（R10 管非法档位，R10b 管 10px 是否变多）。
+- 基线由 `node scripts/check_ui_rules.mjs --write-font10-baseline` 生成，**不许手敲**：实测 129 个文件 / **730 处**，与勘误 §7.1 的统计一致。
+- 变异验证：给 `src/App.tsx` 加 1 处 `text-[10px]` → 报 `7 处 > baseline 6` 并 exit 1；撤销 → `UI-RULES OK`。
+- 明确不做：本 lane 不收敛任何页面字号（第 2 步随各页 lane 捎带），不动 `FONT_ALLOWED`（第 3 步，全仓归零后才把 10 移除）。
+
 ## fix-alerts: 进提醒页不再自动弹窗 + 路由切换关闭遗留弹层（2026-10-24）
 
 按 `docs/design/20261024_UI全模块审计_勘误与P0任务书.md` §8 Lane B 落地（P0 功能性 bug）。
