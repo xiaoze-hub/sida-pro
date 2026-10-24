@@ -1998,7 +1998,13 @@ export default function KlineChart(props: {
         </button>
       </div>
       {/* 图表容器与右侧筹码分布图 */}
-      <div className="relative w-full">
+      {/* L2-B 第2步(2026-10-24): 筹码面板展开时**挤压**画布而不是盖住它。
+          做法: 给画布容器留出右侧 152px 槽位, 图表自带 ResizeObserver(见 applyOptions width)
+          会自动缩窄; 面板放进这条槽位里, 不再 absolute 压在 K 线上。K 线是主角, 不许被盖。 */}
+      <div
+        className="relative w-full"
+        style={{ paddingRight: chipProfileOpen && mode === 'kline' ? 152 : 0 }}
+      >
         <div
           ref={containerRef}
           className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
@@ -2008,7 +2014,7 @@ export default function KlineChart(props: {
         {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
           <div
             data-testid="chip-profile-histogram"
-            className="absolute top-4 right-16 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"
+            className="absolute top-4 right-2 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"
             title={`120日主力筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
           >
             {(() => {
