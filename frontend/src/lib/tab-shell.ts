@@ -72,6 +72,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/ai-copilot': 'nav.aiCopilot',
   '/dark-fund-top': 'nav.darkFundTop',
   '/war-report': 'nav.warReport',
+  '/replay-tree': 'nav.replayTree',
   '/caliber-compare': 'nav.caliberCompare',
   '/decision-ledger': 'nav.decisionLedger',
   '/factor-ic': 'nav.factorIC',

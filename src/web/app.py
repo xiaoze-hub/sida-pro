@@ -68,9 +68,11 @@ from src.web.api import (
     audit,
     market_mainline,
     sentiment_series,
+    market_replay,
     market_scan,
     seal_quality,
     demon_pool,
+    fund_structure,
     signals_review,
     market_archive,
 )
@@ -376,6 +378,14 @@ app.include_router(
     prefix="/api/market/sentiment",
     tags=["market-sentiment"],
     dependencies=protected,
+)
+# 盘后复盘三池序列 + 连板晋级树(创新 1, 2026-10-24): market_replay_daily 只读快照。
+# 行情类纯读数据(不含用户数据) → data_read 双轨(用户 JWT / 服务 token), 同 /api/quotes。
+app.include_router(
+    market_replay.router,
+    prefix="/api/market/replay",
+    tags=["market-replay"],
+    dependencies=data_read,
 )
 app.include_router(
     stocks.router, prefix="/api/stocks", tags=["stocks"], dependencies=protected
@@ -859,6 +869,14 @@ app.include_router(
     price_distribution.router,
     prefix="/api/market",
     tags=["market-price-distribution"],
+    dependencies=protected,
+)
+# 四档资金结构日序列(2026-10-24): exday_daily 消费 MVP。口径 tdx_exday4(按单笔成交金额
+# 分档, 与逐笔/东财四档不可换算); 表 2026-10-23 起累积, 缺日期不补 0, 单日不画趋势。
+app.include_router(
+    fund_structure.router,
+    prefix="/api/market",
+    tags=["market-fund-structure"],
     dependencies=protected,
 )
 # 全市场三榜扫描(2026-09-01, §6.1): 读快照 + 手动触发

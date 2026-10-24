@@ -385,6 +385,106 @@ def to_row(m: dict[str, Any], *, symbol: str, trade_date: str, market: str = "CN
     return row
 
 
+# ── 表取数：exday_daily 日序列（消费 MVP, 2026-10-24）────────────────────────
+
+#: tdx_exday4 的方向语义。AGENTS.md 要求资金类返回值必须带 caliber + direction_semantics;
+#: `src/core/caliber.py` 的 Caliber Literal 不含 tdx_exday4（Frozen Ring 不动）——
+#: 本口径沿用本模块既有的独立常量做法（compute() 返回的 caliber 也是裸字符串）。
+DIRECTION_SEMANTICS = (
+    "size_bucket_net(按单笔成交金额分四档的客户端口径, 非逐笔方向; "
+    "与腾讯逐笔(tick)/东财四档(eastmoney4)均不可换算, 禁止用于主力意图判定, 仅作资金面参考)"
+)
+
+#: 本表数据起点：`get_exday_data` 只返当日 1 行, 2026-10-23 起每日 15:45 落库累积,
+#: 历史无法回填 —— 消费方必须把这个起点亮出来, 不许把"只有 2 天"画成"长期趋势"。
+DATA_SINCE = "20261023"
+
+
+def _norm_day(v: Any) -> str:
+    """YYYY-MM-DD / YYYYMMDD → YYYYMMDD; 无效返回空串(表示不过滤该端)。"""
+    s = str(v or "").strip().replace("-", "")
+    return s if len(s) == 8 and s.isdigit() else ""
+
+
+def _row_to_dict(r: Any) -> dict[str, Any]:
+    """ORM 行 → dict（列按表结构原样出, 缺值保持 None, **不补 0**）。"""
+    out: dict[str, Any] = {}
+    for c in r.__table__.columns:
+        out[c.key] = getattr(r, c.key)
+    return out
+
+
+def query_series(
+    db: Any,
+    symbol: str,
+    *,
+    market: str = "CN",
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """读 `exday_daily` 该标的的日期序列（升序, 字段按表结构原样出）。
+
+    - 缺日期**不补 0**：库里没有的交易日就是没有 —— 本表 2026-10-23 才开始累积,
+      历史无法回填, items 是"实际落库行"而不是"补平的交易日轴"。
+    - start/end 接受 YYYYMMDD 或 YYYY-MM-DD, 归一化后闭区间过滤。
+    - limit 截**最近** N 行再反转成升序（表只在交易日落库, 最近 N 行 == 近 N 个交易日）。
+    - db 为 None / 表未建(迁移没跑) / 查询失败 → available=False;
+      吞异常前**必须 safe_rollback**（PG aborted 事务会把局部故障放大成全局 500）。
+    """
+    from src.db.models import ExdayDaily
+
+    sym = str(symbol or "").strip().split(".")[0]
+    if not sym:
+        return {"available": False, "caliber": CALIBER, "reason": "缺少标的代码"}
+    mkt = (str(market or "CN").strip().upper() or "CN")[:8]
+    try:
+        lim = max(1, min(int(limit), 250))
+    except (TypeError, ValueError):
+        lim = 30
+    d0, d1 = _norm_day(start), _norm_day(end)
+    if db is None:
+        return {"available": False, "caliber": CALIBER, "reason": "无数据库会话"}
+
+    try:
+        from sqlalchemy import func
+
+        q = db.query(ExdayDaily).filter(ExdayDaily.symbol == sym, ExdayDaily.market == mkt)
+        if d0:
+            q = q.filter(ExdayDaily.trade_date >= d0)
+        if d1:
+            q = q.filter(ExdayDaily.trade_date <= d1)
+        rows = q.order_by(ExdayDaily.trade_date.desc()).limit(lim).all()
+        # 全表累积起点(与个股无关): 该股没数据 ≠ 表没数据, 前端标注要用表起点
+        data_since = db.query(func.min(ExdayDaily.trade_date)).scalar()
+    except Exception as exc:  # noqa: BLE001 - 表未建/库断 → 显式无数据, 不炸接口
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        return {
+            "available": False, "caliber": CALIBER,
+            "reason": f"exday_daily 读取失败: {type(exc).__name__}",
+        }
+
+    rows.reverse()  # 落库查询倒序取最近 N 行 → 给前端升序
+    items = [_row_to_dict(r) for r in rows]
+    return {
+        "available": True,
+        "symbol": sym,
+        "market": mkt,
+        "caliber": CALIBER,
+        "source": SOURCE,
+        "direction_semantics": DIRECTION_SEMANTICS,
+        "tier_thresholds_hint": TIER_THRESHOLDS_HINT,
+        "data_since": str(data_since) if data_since else None,
+        "count": len(items),
+        "start": d0 or None,
+        "end": d1 or None,
+        "limit": lim,
+        "items": items,
+    }
+
+
 def render(m: dict[str, Any], *, title: str = "") -> str:
     """人话渲染（工具层用）。缺项写「--」，口径与阈值提示必须带出来。"""
     if not m.get("available"):

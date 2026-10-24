@@ -1,3 +1,103 @@
+## release: v0.51.0（创新 1 连板晋级树 / 创新 5 因子引擎 / 创新 6 空头司令 / 四档资金结构消费）
+
+合并自 `feat/agent-batch-20261024`（13 commits / 35 文件 / +4811 行）。
+四条主线互不重叠，逐条明细如下（原文保留，未改写）。
+
+
+### feat-连板晋级树页面(创新 1 前端消费)
+
+- **改了什么**：新建页面 `frontend/src/pages/ReplayTree.tsx`（`/replay-tree`）与组件 `frontend/src/components/ReplayPromotionTree.tsx`（首板→最高板横向梯队列 + 成员明细），API 客户端 `frontend/packages/api/src/marketReplay.ts`（导出于 `packages/api/src/index.ts`）；路由/导航接入 `frontend/src/App.tsx`（navItems + 「机会」组 + PermGuard `view_quotes`）、`frontend/src/components/WorkspaceTabs.tsx`、`frontend/src/lib/tab-shell.ts`；i18n 双语同步 `frontend/src/locales/zh-CN.ts` / `en-US.ts`。
+- **为什么**：`market_replay_daily` 已由本次新增的 `/api/market/replay/*` 端点暴露，但此前全站没有页面消费盘后三池与梯队数据——这是交接备注 §10 的 P0 首要任务「创新 1 连板梯队晋级树」的可视化落点。挂载位置按走查设计稿 07 号文档的复盘域范式（独立页 + WarReport 式页头/hairline 语言）落在「机会」组。
+- **口径守线**：去卡片化（hairline 分隔、无 Card、无新增 shadow）；晋级率三件套（样本 n + 同池基准「表内未存(口径缺口)」+ 未剔除一字板）随数显示；东财三池 `eastmoney_zt` 与 TQ `tq_pool` 交叉校验各自带标签并写明差值=北交所；封单额/流通市值比、分层晋级率显式「无数据/口径缺口」不现算；缺落库日渲染「未落库 + --」绝不补 0；买红卖绿（涨停/晋级红、炸板/跌停绿）、情绪周期用中性阶段色不占红绿；字号 10/11/12/13/16、数字 tabular-nums、金额走 `toAmountFromWanUnsigned`；新文件全 LF、Surface 阶梯 `bg-s2` 不增 accent_alpha。
+- **测了什么**：`frontend/tests/components/replay-tree.test.tsx` 12 用例（梯队列升序与成员明细/三件套/双口径/截断标注/缺日不补 0/点行切日期/无快照降级/payload 缺失显式无数据/组件乱序自排序）；`npx tsc --noEmit` 通过；`node scripts/check_ui_rules.mjs` 相对基线零新增违规（基线预存 2 处 Forecast.tsx 违规属第 2 波在改文件，未触碰）；导航钉子 `tests/lib/nav-ia.test.ts` + `tests/lib/tab-shell.test.ts` 48 用例全绿。
+
+### feat-盘后复盘三池序列与晋级树只读端点
+
+- **改了什么**：新建 `src/web/api/market_replay.py`（`GET /api/market/replay/series` 近 N 交易日/`from`-`to` 区间三池标量序列 + `GET /api/market/replay/tree` 单日连板梯队晋级树），在 `src/web/app.py` 以 `data_read` 双轨（用户 JWT / 服务 token，行情类纯读数据口径，同 `/api/quotes`）挂载于 `/api/market/replay` 前缀。
+- **为什么**：`market_replay_daily`（Migration 222，交易日 15:50 东财三池落库）自 v0.48 起只有参谋工具 `get_market_replay` 消费，没有任何 REST 端点与页面——创新 1「连板梯队晋级树」（交接备注 §10 P0）的数据底座已就绪但不可达。端点只读已落库快照，不在请求路径重抓东财。
+- **口径守线**：缺数据交易日显式 `available=false`（数值全 null，绝不补 0）；晋级率三件套（样本数=昨涨停池家数 / 同池无条件基准表内未存→显式口径缺口 / 未剔除 T+1 一字涨停→显式标注）；东财三池 `eastmoney_zt` 与 TQ `tq_pool` 同屏各自带标签禁止混算；封单额/流通市值比与分层晋级率表内未存→显式 null + 口径缺口说明，禁止现算编造。
+- **测了什么**：`tests/test_market_replay_api.py` 13 用例（缺日占位不补 0 / 相邻交易日才差分 / 晋级率三件套 / 双口径标签 / Top40 截断标注 / payload 缺失不反推 / 无快照 available=false+latest_date）；规格新增 `REPTREE-001..006`（`specs/harness/replay_tree.md`）；`python scripts/trace_specs.py` 28/28 = 100%（51 用例）。
+### feat-空头司令挑刺配方(devil_advocate 红蓝对抗压力测试, 创新 6 后端)
+
+- **新增 harness 配方 `src/harness/recipes/devil_advocate.yaml`（空头司令，12 = 11 + 1）**：
+  创新 6（P1，纯 prompt 编排）—— 对指定标的强制逆向风控研判：**假设这笔交易已亏 15%，
+  站空头立场给最可能的 3 个死因**，每条死因必须带证据链（大单流出/上方套牢筹码峰/消息面利空/
+  题材退潮信号等）与**可证伪的反驳条件**（若…则该死因不成立）；凑不满 3 条有证据的死因时
+  缺位写「证据不足，不做臆测」，不许硬凑。
+- **确定性管线**：`pipeline: true` + `scope: symbol`，按固定顺序调用 **10 个现有工具**
+  （三口径资金 `get_main_intent`/`get_capital_flow`/`get_decision_pioneer` + 筹码
+  `get_chip_accumulation`/`get_fund_structure` + 消息面 `get_stock_dossier`/
+  `get_fundamentals_detail` + 走势/催化/情景 `get_trend_profile`/`get_event_catalyst`/
+  `get_scenario_matrix`），预算 11。**工具数钉子 71 不动、不新增表、chat.py 保持 2307 行**。
+- **口径红线进提示词**：主力意图只认逐笔（get_main_intent）；get_capital_flow（eastmoney4）
+  方向位与逐笔相反、禁做主力意图方向判定；L2 主力净流入标 TQ。证据缺失显式写「无数据」，
+  **无现成工具的维度（商誉、解禁日历等）写「无数据源」**——本轮盘点确认这两类暂无专用工具。
+- 只出逆向风险情报：提示词明令禁止买卖指令、禁止大盘方向预测（交易 403 守卫 Frozen Ring 不碰）。
+- **规格与测试**：`specs/harness/recipes.md` 新增 `DEVIL-001..006`（配方结构/证据链工具/
+  可证伪死因/禁编造/口径红线/输出契约），`tests/test_spec_harness_recipes.py` 加 6 条 @spec 守卫；
+  路由确定性用例 +2（test_harness_routing）；配方数钉子 11→12（test_market_pipeline）。
+  规格追溯 **28/28（46 用例）100%**。
+
+### feat-工作台建议页呼叫空头司令(压力测试入口与结果展示, 创新 6 前端)
+
+- **新增 `frontend/src/components/copilot/DevilAdvocatePanel.tsx`**：工作台「建议」页
+  （SuggestTab，三层滤网之下）新增醒目**警示红按钮**「呼叫空头司令挑刺（压力测试）」——
+  用 `--destructive` 语义色板（危险操作警示，与买红卖绿行情色板无关）。
+- **走现有参谋触发路径，零新增端点**：`chatApi.createConversation({stock_symbol, stock_market})`
+  → `chatApi.sendMessageStream(conv.id, "空头司令挑刺（压力测试）{symbol}", …)`，问句含配方
+  关键词（确定性路由 devil_advocate）与 6 位代码（管线解析标的），流式 stage/delta 实时呈现，
+  onDone 以落库全文经 SafeMarkdown 渲染（GFM 表格 + tabular-nums），组件不二次加工 AI 正文。
+- **如实陈述副作用与失败**：tooltip 披露会新建参谋会话（AI 参谋页可见）；失败展示后端 error
+  原文、不推断原因；流静默结束按失败处理不装成功；固定声明「本次未发生任何交易委托」。
+- **排版铁律**：hairline 分隔（无卡片底、无 shadow-float）、字号 10/11/12、免责行注明
+  「无数据=本轮证据缺失 / 无数据源=平台暂无该维度工具」。
+- **测试**：`frontend/tests/components/devil-advocate-panel.test.tsx` 6 用例（警示红与
+  hairline/挂载不触发/现有 API 路径与 busy 态/结果真渲染/onError 如实/静默结束不装成功/
+  SuggestTab 集成锚点）；既有 suggest-tab 9 用例回归通过；`tsc --noEmit` 通过。
+### feat-四档资金结构消费后端(exday_daily 日序列 API)（2026-10-24）
+
+**背景**: 交接备注 §7 点名的「最容易出成果」任务 —— `exday_daily` 表(Migration 220, v0.47.0 落库)此前**全仓无任何 API/页面消费**。表存通达信 TQ `get_exday_data` 四档结构(口径 tdx_exday4, 按单笔成交金额分档), 每交易日 15:45 落库累积, **2026-10-23 起才有数据且历史无法回填**(接口只返当日 1 行)。
+
+**改动(分支 `feat/exday-fund-structure-20261024`, 独立 worktree)**
+- **`src/core/exday_structure.py` 新增 `query_series()`**(src/core 层, 不 import src/web): 读 `exday_daily` 该标的日期序列, 字段按表结构原样出; 缺日期**不补 0**(items 只含实际落库行); start/end(YYYYMMDD/YYYY-MM-DD 均收)闭区间过滤 + limit 截最近 N 行反转升序; 附 `data_since`(全表累积起点)、`direction_semantics`、`tier_thresholds_hint`。表未建/库断 → `available=false` 显式降级, **吞异常前先 `safe_rollback(db)`**(PG aborted 事务防线)。
+- **`src/web/api/fund_structure.py`(新)**: `GET /api/market/fund-structure/{symbol}?market=&start=&end=&limit=30&refresh=0`。响应强制携带 `caliber: "tdx_exday4"` + `direction_semantics`(AGENTS.md 口径红线: 与逐笔/东财四档不可换算, 禁用于主力意图判定); 缓存走 biz_cache(L1+L2, key 前缀 `biz:`, TTL 300s), **只缓存成功结果**(失败不缓存, 恢复后下一请求立即可见), `refresh=1` 绕过。
+- **`src/web/app.py`**: 挂载于 `/api/market` 前缀, `dependencies=protected`(跟随 price_distribution/cancel_profile 同类行情端点鉴权)。
+- **`specs/api/fund_structure.md`(新)**: EXDAY-001~005 验收标准(口径标签/缺日期不补 0/稀疏标注/显式无数据/前端单日不画趋势), `trace_specs.py` 100%(27 条标准 51 用例)。
+- **`tests/test_fund_structure_api.py`(新)**: 13 用例(临时 SQLite, 不打 TQ 网关), 全部 @spec 标注。
+
+**验证**: `pytest tests/test_fund_structure_api.py tests/test_exday_structure.py -q` → 31 passed; `scripts/trace_specs.py` → 27/27 100%。
+
+### feat-四档资金结构消费前端(工作台盘口资金标签)（2026-10-24）
+
+**背景**: 消费 MVP 的前端半边(后端见上条)。挂载于工作台「盘口资金」标签(L2Tab 右栏, 暗盘资金 TQ 之后): 两者同为盘后落库数据, 与盘中实时段分离。
+
+**改动**
+- **`frontend/src/components/FundStructurePanel.tsx`(新, 纯展示)**: ①四档(特大/大/中/小)买卖金额对比条(同档内买红/卖绿) + 主动净额; ②当日主动买占比/主力(特大+大)主动净流入占比/散户化率/筹码迁移/成交额因子格; ③≥2 个交易日渲染「主动买占比」柱带与「主力净流入占比」红绿双向柱带(缺值 2px 灰点, 不按 0 计)。
+- **稀疏数据契约(spec EXDAY-003/005)**: 头部恒显「数据自 2026-10-23 起累积 · N 个交易日」; `count==1` 只展示当日结构**不画趋势**(显式说明行); `count==0`/`available=false` 显式「无数据」+ 后端 reason 原文, 绝不补 0/编造; quality≠ok 显式「数据待核」。
+- **口径标签**: `tdx_exday4` 徽章(CaliberBadge 同款样式, 自实现 —— 该文件在第 2 波冲突清单禁改且其 Caliber 类型不含 tdx_exday4), tooltip 携带完整 direction_semantics + 推断阈值提示; 与同屏逐笔/明盘/暗盘 TQ 各带各的标签, 互不混算。
+- **`L2Tab.tsx`**: `useFundStructure` hook(300s 轮询 + 换股清值 + 请求序号守卫 + stale-on-error, 与同文件其余端点同规则), `FundStructureSection` 挂右栏。
+- **铁律**: 去卡片化(hairline 分节无卡片)、字号 10/11/12/13、数字 font-num(tabular-nums)、买红卖绿、金额走 toAmount 体系(元→亿/万, 规模量不带 '+')。
+- **`fund-structure-panel.test.tsx`(新)**: 10 用例钉渲染侧稀疏契约。
+
+**验证**: `npx tsc --noEmit` 0 错; `node scripts/check_ui_rules.mjs` 本文件零违规(存量 3 条 Forecast/price_bg 违规系第 2 波合入遗留, 基线已存在); `pnpm vitest run fund-structure-panel` → 10 passed。
+### feat-因子引擎MAD去极值与截面正交化（创新5前置·一）
+
+- `src/core/factor_ic.py` 新增 `winsorize_cross_section`（横截面去极值，MAD 绝对中位差法：以中位数为锚对厚尾偏斜分布稳健，`median ± n_mad×1.4826×MAD`；MAD=0 退化截面回退 1%/99% 分位截断并在 `method` 显式标注）与 `orthogonalize_cross_section`（截面正交化：目标因子对对照因子做横截面 OLS 取残差，纯 Python 高斯消元，不引 numpy/scipy）。
+- 缺值显式：None/NaN/inf 位置不参与统计、输出逐位保持 None（正交化走 listwise 整行剔除并记 `n_dropped`）；样本不足（去极值 <5 个有效值 / 正交化 <max(10, 2×(对照数+1)) 个有效行）与对照因子完全共线一律 `available=False` 直说不硬算，延续 factor_ic「样本不足就直说、不编数字」哲学。
+- 新增规格 `FIC-001..004`（`specs/core/factor_ic_extended.md`）与守卫测试 `tests/test_factor_ic_extended.py`；规格追溯保持 100%。创新 5「IC 联合选股」后端前置第一步，纯函数、不落库、不动迁移钉子 223 与工具钉子 71。
+
+### feat-Quantile分层回测T+1/3/5同池基准与一字剔除（创新5前置·二）
+
+- `src/core/factor_ic.py` 新增 `quantile_backtest`（DB 入口）+ `quantile_backtest_core`（纯函数核心）+ `render_quantile_backtest`（参谋可读渲染）：横截面按因子值分 N 层（默认 5 层，秩分层对离群不敏感，同分按 symbol 破并列保证确定性），输出各层 T+1/T+3/T+5 前瞻收益均值/中位数/胜率、多空价差（Top−Bottom）与同池无条件基准，延续产品铁律「统计胜率必须同时给三件套」。
+- 口径与 `backtest_lab`（factor_winrate_daily, Mig 221）同源不发明第二套：未来收益=前复权收盘对收盘（%）；一字涨停剔除直接复用 `backtest_lab._is_untradable_next_bar`（open==high==low 且涨幅≥4.8%），门槛常量 `MIN_BUCKET_SAMPLE == backtest_lab.MIN_SAMPLE`（测试钉住）；无法判定一字涨停时输出显式标「口径缺口：未剔除」，禁止编造。
+- 取数复用 `compute()` 既有路径（`stock_factor_daily` × `load_qfq_bars` 前复权日线），不新增网络请求模式；样本不足显式报不足（延续 <20 只票 / <5 个交易日门槛）；纯本地、不落库、不建表（迁移钉子 223 不动）、不加 chat 工具（钉子 71 不动）、不改前端。
+- 新增规格 `FIC-005..008`（`specs/core/factor_ic_extended.md`）与守卫测试；规格追溯保持 100%。
+
+### test-死代码扫描排除 venv 误命中
+
+- `tests/test_w33_chat_registry.py::test_no_residual_wrapper_references` 的全仓 `rglob("*.py")` 扫描只排除 `__pycache__`/`.git`，仓库根建 venv 时（本机 `C:\...\sida-pro\.venv`，2026-10-24 建）site-packages 第三方代码会误命中——实测 `google-genai` 自带测试文件含 needle 字样，单跑即红。
+- 修复：扫描排除 `.venv`/`venv` 目录（测试意图是"本项目代码不得引用死代码包装模块"，第三方依赖文本属噪音）。`test_w33_chat_registry.py` 26 passed；不改注册表计数断言。
+
 ## release: v0.50.2（竞价页首屏不再谎报「共 0 只」）
 
 ### 缺陷（生产实测，非静态推断）
