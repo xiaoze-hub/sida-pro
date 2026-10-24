@@ -973,6 +973,19 @@ export default function KlineChart(props: {
             Number.isFinite(it.low) &&
             Number.isFinite(it.close),
         )
+        // 2026-10-24 P0: lightweight-charts 对 setData 的**时间升序**是硬断言,
+        // 乱序直接抛 `data must be asc ordered by time` 把整页打进 ErrorBoundary
+        // (实测 /stocks/600519: index=120, time=1792368000 < prev 1792627200)。
+        // 接口返回顺序不可信(补数/回填/当日合成 bar 都可能插到中间), 这里统一
+        // 按日期升序 + 同日去重; 真发生重排时 warn 一次, 便于回头查数据源而不是靠图表崩。
+        const sortedKl = [...valid].sort((a: KlineItem, b: KlineItem) => String(a.date).localeCompare(String(b.date)))
+        const dedupedKl = sortedKl.filter(
+          (it: KlineItem, i: number) => i === 0 || String(it.date).slice(0, 10) !== String(sortedKl[i - 1].date).slice(0, 10),
+        )
+        if (dedupedKl.length !== kl.length) {
+          console.warn('[KlineChart] klines 非升序/含重复日, 已排序去重', { raw: kl.length, kept: dedupedKl.length })
+        }
+        valid.splice(0, valid.length, ...dedupedKl)
         const data = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
           open: it.open,
@@ -980,7 +993,7 @@ export default function KlineChart(props: {
           low: it.low,
           close: it.close,
         }))
-        seriesRef.current?.setData(data)
+        seriesRef.current?.setData(ascendSeries(data, 'candles'))
         // L1 均线 / L5 副图 计算源
         rawKlinesRef.current = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
@@ -1677,7 +1690,7 @@ export default function KlineChart(props: {
             // 档位后端已判, 前端只配色: 大牛紫/强势红/生命绿/弱灰
             color: activityLevelColor(p.level),
           }))
-        volSeries.setData(histData)
+        volSeries.setData(ascendSeries(histData, 'volume'))
         // 阈值线 生命1.56/强势3/大牛6 (后端 ai_activity 同值, 前端只画线不重判)
         const thColor = thresholdLine(0.5)
         for (const [price, title] of [[1.56, '生命1.56'], [3, '强势3'], [6, '大牛6']] as const) {
@@ -1718,7 +1731,19 @@ export default function KlineChart(props: {
         if (showCapital && subchart === 'vol' && effFundFlow.length > 0) {
           // 净额与分色由纯函数算(T19 抽出以便单测: 明盘字段名 `ming_net` 曾误读 `open_net`)。
           const theme = readChartTheme()
-          fs.setData(effFundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
+          // 2026-10-24 P0: 资金柱数据来自 props(可能含回填/多源拼接), 同样不保证升序 ——
+          // lightweight-charts 遇乱序直接抛断言并把整页打进 ErrorBoundary(实测 index=120)。
+          const fundPts = effFundFlow
+            .map((bar) => fundBarPoint(bar, interval, sc, theme.nodata))
+            .filter((p) => {
+              const t = Number(p.time as unknown as number)
+              return Number.isFinite(t) && t > 0
+            })
+            .sort((a, b) => Number(a.time as unknown as number) - Number(b.time as unknown as number))
+          if (fundPts.length !== effFundFlow.length) {
+            console.warn('[KlineChart] fundFlow 含非法/重复时间点, 已过滤排序', { raw: effFundFlow.length, kept: fundPts.length })
+          }
+          fs.setData(fundPts)
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
           fs.setData([])
@@ -1733,6 +1758,12 @@ export default function KlineChart(props: {
           const pts = effDarkPool
             .map((p) => darkPoolBarPoint(p, interval, sc))
             .filter((x): x is { time: Time; value: number; color: string } => x !== null)
+            // 2026-10-24 P0: 同 fundFlow —— 时间必须为正且升序, 否则 lightweight-charts 断言抛错
+            .filter((p) => {
+              const t = Number(p.time as unknown as number)
+              return Number.isFinite(t) && t > 0
+            })
+            .sort((a, b) => Number(a.time as unknown as number) - Number(b.time as unknown as number))
           dpr.setData(pts as never)
         } else {
           dpr.setData([])
@@ -1861,6 +1892,26 @@ export default function KlineChart(props: {
   // 解析逻辑, 避免"同口径两处各写一份"的漂移(本次 Finding 2 收敛)。
   function toChartTime(date: string, intv: KlineInterval): Time {
     return fundBarTime(date, intv) as Time
+  }
+
+  /**
+   * lightweight-charts 对 setData 的硬约束：时间必须为正、升序、无重复，违反即抛断言
+   * 并把整页打进 ErrorBoundary（2026-10-24 P0：/stocks/600519 实测 index=117 重复时间）。
+   * 各 series 的数据来自不同源（K 线接口 / props 资金流 / 暗盘 / 形态），顺序都不可信，
+   * 统一在这里收敛，避免逐个 setData 漏掉。
+   */
+  function ascendSeries<T extends { time: Time }>(pts: T[], tag: string): T[] {
+    const timeOf = (p: T) => Number(p.time as unknown as number)
+    const clean = pts.filter((p) => {
+      const t = timeOf(p)
+      return Number.isFinite(t) && t > 0
+    })
+    clean.sort((a, b) => timeOf(a) - timeOf(b))
+    const dedup = clean.filter((p, i) => i === 0 || timeOf(p) !== timeOf(clean[i - 1]))
+    if (dedup.length !== pts.length) {
+      console.warn(`[KlineChart] ${tag} 时间乱序/重复/非法, 已收敛`, { raw: pts.length, kept: dedup.length })
+    }
+    return dedup
   }
 
   // G/S(含交割单买卖方向)的颜色规则验收钩子: K 线 marker 画在 canvas 上, DOM 里查不到 ——
