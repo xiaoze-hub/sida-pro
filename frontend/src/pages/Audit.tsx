@@ -46,6 +46,12 @@ export default function AuditPage() {
   )
   const logs = data?.logs || []
   const users = data?.users || []
+  // L3-E(2026-10-24): 筛选器默认藏掉测试账号(a1verify / p4test / p3a_tmp 等)。
+  // 线上审计页把内部联调用账号暴露给所有用户, 属于数据卫生问题; 真实日志不删, 仅过滤下拉选项。
+  const [showTestUsers, setShowTestUsers] = useState(false)
+  const TEST_USER_RE = /verify|test|_tmp$/i
+  const testUserCount = users.filter((u) => TEST_USER_RE.test(u)).length
+  const visibleUsers = showTestUsers ? users : users.filter((u) => !TEST_USER_RE.test(u))
   const error = queryError instanceof Error ? queryError.message : queryError ? '加载失败' : ''
 
   useEffect(() => setDismissed(false), [filterUser])
@@ -75,10 +81,20 @@ export default function AuditPage() {
             title="按用户筛选"
           >
             <option value="">全部用户</option>
-            {users.map(u => (
+            {visibleUsers.map(u => (
               <option key={u} value={u}>{u}</option>
             ))}
           </select>
+          {testUserCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowTestUsers(v => !v)}
+              className="text-[11px] text-muted-foreground hover:text-foreground underline decoration-dotted"
+              title="内部联调用账号, 默认不出现在筛选器里"
+            >
+              {showTestUsers ? '隐藏测试账号' : `含测试账号(${testUserCount})`}
+            </button>
+          )}
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={loading} className="w-fit">
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
             刷新
