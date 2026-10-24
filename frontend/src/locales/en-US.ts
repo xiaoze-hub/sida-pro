@@ -106,7 +106,7 @@ const enUS: Messages = {
     closeSelf: 'Close',
     closeOthers: 'Close others',
     closeRight: 'Close to the right',
-    limitToast: 'At most {max} tabs; closed the oldest “{name}”',
+    limitToast: 'At most {max} tabs; closed the least recently used “{name}”',
   },
 
   dashboard: {

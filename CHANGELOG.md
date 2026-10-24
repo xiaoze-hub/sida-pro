@@ -1,3 +1,8 @@
+## release: v0.52.1（页签淘汰提示措辞修正）
+
+- 淘汰策略已改 LRU，但 toast 仍写「已关闭**最早的**」——与实现不符（LRU 淘汰的是最久未访问的，不一定是打开最早的）。
+  改为「已关闭**最久未用的**」/ en: `least recently used`。仅文案，无逻辑改动。
+
 ## release: v0.52.0（剩余 4 项收尾 + 集成分支并入 + 暗色阶梯自洽）
 
 并入 `integration/ui-batch-20261024`（27 个改动包）并完成交接文档 `20261024_剩余4项交接_Hermes.md` 的 4 项。冲突只有 `index.css` 一处：采用对方双档 `--border 14%` / `--border-strong 27.5%`（卡片走 strong），保留卡片化翻案的 `--card 13.5%` / `--popover 21%` / `--secondary·muted 17%` / `--accent 20%`。

@@ -105,7 +105,7 @@ const zhCN = {
     closeSelf: '关闭',
     closeOthers: '关闭其他',
     closeRight: '关闭右侧',
-    limitToast: '页签最多 {max} 个, 已关闭最早的「{name}」',
+    limitToast: '页签最多 {max} 个, 已关闭最久未用的「{name}」',
   },
 
   dashboard: {
