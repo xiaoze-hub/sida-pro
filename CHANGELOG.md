@@ -1,3 +1,12 @@
+## fix-alerts: 进提醒页不再自动弹窗 + 路由切换关闭遗留弹层（2026-10-24）
+
+按 `docs/design/20261024_UI全模块审计_勘误与P0任务书.md` §8 Lane B 落地（P0 功能性 bug）。
+
+- **自动弹窗（根因）**：`PriceAlerts` 原来用「`location.search` 非空」判定预填意图，于是进入 `/notifications?tab=alerts` 就弹出「新建提醒规则」并预选第一只自选股（实测中粮糖业）。抽出纯函数 `parseAlertPrefill()`，只把 `symbol` / `stock_id` 当个股意图，`?tab=` 等筛选参数一律不触发；同一 search 用 `useRef` 去重，只消费一次。
+- **弹层跨路由残留**：工作台是多标签页保活，页面切走不卸载，弹窗挂在 body portal 上 ⇒ 切到 `/admin` 仍以遮罩覆盖整页。新增 `closeOpenDialogs()`，在 `App` 路由变化时（pathname/search）统一派发一次 Escape（Radix DismissableLayer 监听 document Escape）。根因（portal 未挂到路由子树）留待 base-ui 统一改造。
+- **渠道枚举中文化**：表单「通知渠道」此前原样显示后端枚举 `push`，改为「系统推送」，并补 telegram / 企业微信 / 飞书 / 钉钉 / 邮件 / Webhook 映射。
+- **验证**：`npx tsc --noEmit` = 0；`eslint`（5 个改动文件）= 0；`node scripts/check_ui_rules.mjs` = UI-RULES OK；`npx vitest run tests/components/price-alert-dialog-route.test.tsx` = 9/9 通过。
+
 ## docs: 补审 v0.51.0 四处新模块（审计 34 → 38 模块）
 
 - 新增 4 条模块评审：**B5** 盘口资金·20 日四档条带、**B6** 盘口资金·十档买卖盘与微观价量、**B7** 建议·空头司令（`DevilAdvocatePanel`）、**C5** 连板晋级树（`/replay-tree`）；正文基线与覆盖范围同步改为 `v0.51.0 / 38 模块`。

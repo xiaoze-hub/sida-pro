@@ -88,6 +88,7 @@ import WorkspaceTabShell from '@/components/WorkspaceTabShell'
 import CaliberComparePage from '@/pages/CaliberCompare'
 import DecisionLedgerPage from '@/pages/DecisionLedger'
 import { reportFrontendError } from '@/lib/error-report'
+import { closeOpenDialogs } from '@/lib/dialog-route-guard'
 import Disclaimer from '@/components/Disclaimer'
 import { onApiFailure } from '@panwatch/api'
 
@@ -432,6 +433,12 @@ function App() {
     { sequence: ['g', 's'], sequenceTimeout: 1500, handler: runOnDesktop(() => navigate('/shadow')) },    // 我的 shadow account
     { combo: '?', preventDefault: true, handler: runOnDesktop(() => setHotkeysOpen(true)) },
   ])
+
+  // 路由切换统一关掉遗留弹层（2026-10-24, Lane B）：多标签页保活下页面不卸载，
+  // 弹窗留在 body portal 里会遮住新页面（实例：提醒规则弹窗 → 切 /admin 仍覆盖整页）。
+  useEffect(() => {
+    closeOpenDialogs()
+  }, [location.pathname, location.search])
 
   // 登录页面不显示导航
   if (location.pathname === '/login') {
