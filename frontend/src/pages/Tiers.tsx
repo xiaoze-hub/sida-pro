@@ -118,6 +118,10 @@ export default function Tiers() {
                     <div className="text-[20px] font-bold">{t.label}</div>
                     <div className="text-[12px] text-muted-foreground">{t.count} 项能力</div>
                   </div>
+                  {/* L3-F: 每档补一句「适合谁」—— 能力勾列表读者看不出该选哪档；字号保持原样(该页是正例) */}
+                  <div className="mt-1 text-[12px] text-muted-foreground">
+                    {i === 0 ? '适合：先看懂今天市场、只想看盘与复盘的人' : '适合：要主力意图、暗盘逐笔、预测与多模型证据的人'}
+                  </div>
                   {/* 内测期不收费: 后端不返回价格字段 → 这里只说明, 不写 ￥0 */}
                   <div className="mt-1 text-[12px] text-muted-foreground">
                     {data.billing_enabled ? '' : '内测期不收费'}
