@@ -133,6 +133,7 @@ const zhCN = {
     resonance: '三指标共振',
     resonanceScan: '全市场三指标共振扫描(后台执行, 分钟级)',
     anomalies: '异动池',
+    kpiBand: '更多指标（与结论重复）',
     anomaliesSource: '东财异动',
     noAnomalies: '暂无异动数据',
     breadth: '涨跌分布',

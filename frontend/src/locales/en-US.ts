@@ -134,6 +134,7 @@ const enUS: Messages = {
     resonance: 'Resonance',
     resonanceScan: 'Full-market 3-indicator resonance scan (background, minutes)',
     anomalies: 'Anomalies',
+    kpiBand: 'More metrics (duplicates the summary)',
     anomaliesSource: 'Eastmoney anomalies',
     noAnomalies: 'No anomalies',
     breadth: 'Breadth',

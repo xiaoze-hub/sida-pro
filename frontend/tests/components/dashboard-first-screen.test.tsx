@@ -366,6 +366,29 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
     expect(screen.getByTestId('error-banner').textContent).not.toContain('dashboard.errorSources.indices')
   })
 
+  it('证据层默认收起：表头在、正文不挂载；展开后正文才进 DOM（2026-10-24 首屏重排）', async () => {
+    renderPage()
+    await flush()
+
+    // 「数字堆」默认收起，但表头必须在（折叠≠藏）
+    for (const id of ['kpi', 'anomalies']) {
+      const block = screen.getByTestId(`evidence-${id}`)
+      expect(block.getAttribute('data-collapsed')).toBe('true')
+      expect(screen.getByTestId(`evidence-toggle-${id}`)).toBeTruthy()
+    }
+    // 资金流块只在拿到 marketFlow 时渲染（本用例未挂资金流接口），出现则同样默认收起
+    const flow = screen.queryByTestId('evidence-fundflow')
+    if (flow) expect(flow.getAttribute('data-collapsed')).toBe('true')
+    // 结论的支撑必须常显：情绪/主线/温度不包在 evidence-* 里
+    expect(screen.queryByTestId('evidence-overview')).toBeNull()
+
+    // KPI 带收起时不挂载 —— 不为看不见的东西渲染
+    expect(screen.queryByTestId('kpi-band')).toBeNull()
+    fireEvent.click(screen.getByTestId('evidence-toggle-kpi'))
+    expect(screen.getByTestId('kpi-band')).toBeTruthy()
+    expect(localStorage.getItem('sida_dash_collapse:kpi')).toBe('0')
+  })
+
   it('无关状态变更(打开看板定制)不重渲染自带画布/取数的重区块', async () => {
     renderPage()
     await flush()
