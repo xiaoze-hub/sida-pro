@@ -766,15 +766,36 @@ export default function DashboardPage() {
       </div>
       )}
 
-      {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
-      {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
-      {/* 情绪阶段 + 主线 = 结论的「为什么」, 必须与结论同屏; 不折叠 */}
+      {/* 市场全景: 情绪周期 6 阶段 / 主线识别 / 市场温度。
+          三张卡本身是**直方图 + 刻度**(实测 13 个数字), 属于「证据」不是「结论」;
+          但它们的结论(哪个阶段、主线是谁)必须常显 —— 所以放进表头, 卡体折叠。 */}
       {shown('overview') && (
-      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
-        <MarketPhaseCardMemo />
-        <MarketMainlineCardMemo />
-        {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
-        <PhaseGaugeCard />
+      <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5">
+        <CollapsibleSection
+          id="overview"
+          header={
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <h2 className="text-[13px] font-semibold">市场全景</h2>
+              <span className="text-[12px] text-foreground">
+                情绪 <b className="font-medium">{phaseKpi.label ?? (phaseKpi.loading ? '识别中' : '未知')}</b>
+              </span>
+              <span className="text-[12px] text-foreground">
+                主线 <b className="font-medium">{mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}</b>
+                {mainlineKpi.top?.leader_name ? (
+                  <span className="ml-1 text-[11px] text-muted-foreground">龙头 {mainlineKpi.top.leader_name}</span>
+                ) : null}
+              </span>
+              <span className="text-[10px] text-muted-foreground">展开看阶段分布 / 强度对比 / 温度刻度</span>
+            </div>
+          }
+        >
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
+            <MarketPhaseCardMemo />
+            <MarketMainlineCardMemo />
+            {/* v0.4.7: 市场温度仪表盘(数据复用 phase 接口) */}
+            <PhaseGaugeCard />
+          </div>
+        </CollapsibleSection>
       </div>
       )}
 

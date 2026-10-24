@@ -379,8 +379,11 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
     // 资金流块只在拿到 marketFlow 时渲染（本用例未挂资金流接口），出现则同样默认收起
     const flow = screen.queryByTestId('evidence-fundflow')
     if (flow) expect(flow.getAttribute('data-collapsed')).toBe('true')
-    // 结论的支撑必须常显：情绪/主线/温度不包在 evidence-* 里
-    expect(screen.queryByTestId('evidence-overview')).toBeNull()
+    // 情绪/主线：卡体是直方图（证据）→ 折叠；但结论（阶段名/主线名）必须在表头常显
+    const overview = screen.getByTestId('evidence-overview')
+    expect(overview.getAttribute('data-collapsed')).toBe('true')
+    expect(within(overview).getByText(/主线/)).toBeTruthy()
+    expect(within(overview).getByText(/情绪/)).toBeTruthy()
 
     // KPI 带收起时不挂载 —— 不为看不见的东西渲染
     expect(screen.queryByTestId('kpi-band')).toBeNull()
