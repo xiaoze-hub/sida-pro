@@ -187,8 +187,24 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
     return [...set].sort((a, b) => b - a)
   }, [cols])
   const shown = onlyBoard != null ? boards.filter((b) => b === onlyBoard) : boards
+  // L3-A(2026-10-24): 空档显式化。板高是「有数据的档位」集合, 4板/5板没人时列会直接消失,
+  // 视觉上从 3板 跳到 6板 —— 读者会以为数据缺了。这里把缺的档位点名写出来(不是 0 家)。
+  const gaps = useMemo(() => {
+    if (boards.length === 0) return [] as number[]
+    const present = new Set(boards)
+    const max = Math.max(...boards)
+    const out: number[] = []
+    for (let b = max; b >= 1; b--) if (!present.has(b)) out.push(b)
+    return out
+  }, [boards])
   return (
     <div className="scrollbar overflow-x-auto pb-1">
+      {gaps.length > 0 && (
+        <div className="mb-1 text-[11px] text-muted-foreground" data-testid="ladder-gaps">
+          空档：{gaps.slice(0, 6).map((b) => `${b}板`).join('、')}
+          {gaps.length > 6 ? ` 等 ${gaps.length} 档` : ''} 无个股（不是 0 家涨跌停）
+        </div>
+      )}
       <div className="flex w-max gap-1">
         {/* 走查 2026-09-18: 板数列必须 sticky —— 横向滑到右边后仍要看到「几板」 */}
         <div className="sticky left-0 z-10 w-[64px] shrink-0 bg-background">

@@ -22,6 +22,15 @@ const HEALTH_DOT: Record<string, string> = {
   unknown: 'bg-gray-400',
 }
 
+// 英文状态词 → 中文（2026-10-24 L3-E）：圆点旁边的状态原来直接写 "(degraded)/(down)/(connected)"，
+// 给中文用户看的状态要说中文；接口枚举值本身不改。
+const HEALTH_LABEL: Record<string, string> = {
+  connected: '已连接',
+  degraded: '降级',
+  down: '中断',
+  unknown: '未知',
+}
+
 interface TestLogItem {
   timestamp: string
   source_name: string
@@ -414,7 +423,7 @@ export default function DataSourcesPage() {
               <span key={s.id} className="flex items-center gap-1.5" title={s.detail || s.status}>
                 <span className={`w-1.5 h-1.5 rounded-full ${HEALTH_DOT[s.status] || HEALTH_DOT.unknown}`} />
                 {s.name || s.id}
-                <span className="text-[11px]">({s.status})</span>
+                <span className="text-[11px]">({HEALTH_LABEL[s.status] || s.status})</span>
               </span>
             ))}
           </div>

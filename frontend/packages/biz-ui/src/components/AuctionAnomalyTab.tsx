@@ -191,6 +191,20 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
   const liveClock = data?.data_clock || (data?.as_of ? data.as_of.slice(11, 19) : '--')
   const dataDate = data?.data_date || '--'
   const phaseLabel = data?.phase_label || '阶段未知'
+  // 空态原因（2026-10-24 L2-C）：三种原因三种文案，且空态必须给「何时有数据」+ 一个动作出口，
+  // 不许只留一块空表让用户以为「今天没有异动」。
+  const emptyReason = !data
+    ? '未取到竞价数据（请求未返回或超时）'
+    : data.reason_text ||
+      (data.reason === 'source_unavailable'
+        ? '数据源不可用(thsdk 竞价异动拉取失败)，非「今日无异常」'
+        : data.reason === 'non_trading_day'
+          ? '非交易日，竞价池无当日数据'
+          : data.reason === 'non_auction_session'
+            ? `非竞价时段（当前${phaseLabel}），无当日竞价快照`
+            : data.reason === 'no_anomaly'
+              ? '今日集合竞价无异动标的'
+              : '暂无竞价异动数据')
 
   return (
     <div className="card p-3 md:p-4">
@@ -238,19 +252,32 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
       {error && <div className="text-[11px] text-amber-600 dark:text-amber-500 mb-2">{error}</div>}
       {data && !data.available && <div className="text-[11px] text-muted-foreground mb-2">{data.note || '竞价异动数据暂不可用'}</div>}
 
+      {records.length === 0 && !loading ? (
+        <div className="rounded-xl border border-dashed border-border/70 px-4 py-5 text-center" data-auction-empty="1">
+          <div className="text-[13px] font-medium text-foreground">{emptyReason}</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            竞价池每天 09:15 开始刷新、09:25 撮合定型；非交易日展示最近一个交易日的快照。
+          </div>
+          <div className="mt-3">
+            <Button variant="outline" size="sm" className="h-8 text-[12px]" onClick={() => { setLoading(true); void load() }} disabled={loading}>
+              <RefreshCw className="w-3.5 h-3.5" /> 重新查询
+            </Button>
+          </div>
+        </div>
+      ) : (
       <div className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
             <tr className="text-[11px] text-muted-foreground border-b border-border/60">
               <th className="text-left py-1.5 pr-2 w-9">#</th>
-              <th className="text-left py-1.5 pr-2">代码</th>
-              <th className="text-left py-1.5 pr-2">名称</th>
-              <th className="text-right py-1.5 pr-2">竞价涨幅</th>
-              <th className="text-right py-1.5 pr-2">竞价成交额</th>
-              <th className="text-right py-1.5 pr-2">竞价量比</th>
-              <th className="text-right py-1.5 pr-2">撤单率</th>
-              <th className="text-left py-1.5 px-2">9:25 盘口意图判定</th>
-              <th className="text-right py-1.5">操作</th>
+              <th className="text-left py-1.5 pr-2" title="证券代码；点击可查看详情">代码</th>
+              <th className="text-left py-1.5 pr-2" title="证券简称；带「极妖」徽标表示妖股评分 ≥75">名称</th>
+              <th className="text-right py-1.5 pr-2" title="竞价涨幅 = 开盘价相对昨收；与「异动幅度」不是同一口径">竞价涨幅</th>
+              <th className="text-right py-1.5 pr-2" title="9:25 竞价撮合成交额（自动按 亿/万/元 取档）">竞价成交额</th>
+              <th className="text-right py-1.5 pr-2" title="竞价量比 = 竞价成交量 ÷ 过去 5 日同时段均量；仅 TQ 逐票增强成功时有值，否则「—」">竞价量比</th>
+              <th className="text-right py-1.5 pr-2" title="撤单率 = BCancel ÷ (总买量 + BCancel)，仅涨跌停撤单类型有值">撤单率</th>
+              <th className="text-left py-1.5 px-2" title="9:25 定型后的盘口判读：强买 / 买入 / 警示 / 风险；「常态观察」= 无异动特征">9:25 盘口意图判定</th>
+              <th className="text-right py-1.5" title="加入自选（写入你的自选池，不改变竞价数据）">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -367,28 +394,10 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                 </tr>
               )
             })}
-            {records.length === 0 && !loading && (
-              <tr>
-                <td colSpan={9} className="py-8 text-center text-[11px] text-muted-foreground">
-                  {/* A-03/A-13: 三种原因三种文案, 不再三义合一 */}
-                  {!data
-                    ? '未取到竞价数据（请求未返回或超时），请点右上「刷新」重试'
-                    : data.reason_text ||
-                    (data?.reason === 'source_unavailable'
-                      ? '数据源不可用(thsdk 竞价异动拉取失败)，非「今日无异常」'
-                      : data?.reason === 'non_trading_day'
-                        ? '非交易日，竞价池无当日数据'
-                        : data?.reason === 'non_auction_session'
-                          ? `非竞价时段（当前${phaseLabel}），无当日竞价快照`
-                          : data?.reason === 'no_anomaly'
-                            ? '今日集合竞价无异动标的'
-                            : '暂无竞价异动数据')}
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
+      )}
       {loading && records.length === 0 && (
         <div className="mt-3 h-[120px] rounded-xl border border-border/50 animate-pulse bg-accent/20" />
       )}

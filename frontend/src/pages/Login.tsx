@@ -345,7 +345,7 @@ export default function LoginPage() {
             <BrandMark className="w-9 h-9 text-white" />
           </div>
           <h1 className="text-[20px] font-bold text-foreground">数智分析 SIDA</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">A股智能分析 · AI 全链路打通</p>
+          <p className="text-[13px] text-muted-foreground mt-1">行情 · 资金 · 情报 · 决策，一个工作台看完</p>
         </div>
 
         {/* Form(P2 轻量化: card 底 → hairline, 零逻辑改动) */}

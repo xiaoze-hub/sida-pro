@@ -30,14 +30,10 @@ export default function Disclaimer() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  // 2026-09-18(UI 走查 P0-1): 告诉外层"底部被占了多少" —— App 主内容区据此加 padding-bottom,
-  // 否则这个 fixed 条会压住页面最后一行(走查 9 页复现)。
-  useEffect(() => {
-    const root = document.documentElement
-    if (visible) root.classList.add('has-disclaimer')
-    else root.classList.remove('has-disclaimer')
-    return () => root.classList.remove('has-disclaimer')
-  }, [visible])
+  // L3-G(2026-10-24): 从 fixed 底栏改为**文档流页脚**。
+  // 原实现 fixed inset-x-0 bottom-*, 会压住页面最后一行(走查 9 页 + analysis 详情页均复现:
+  // 「主力意图…获利94%」被压一半)。改为随内容滚动的页脚后, 不再需要 --disclaimer-h 补偿,
+  // 也不再给 html 加 has-disclaimer 类(留着会白留一截底部 padding)。
 
   if (!visible) return null
 
@@ -53,7 +49,7 @@ export default function Disclaimer() {
   return (
     <div
       role="status"
-      className="pointer-events-none fixed inset-x-0 bottom-14 z-40 md:bottom-0"
+      className="pointer-events-none relative"
     >
       <div data-shell-disclaimer className="pointer-events-auto mx-auto flex max-w-5xl items-center gap-2 border-t border-amber-600/25 dark:border-amber-500/20 bg-card/95 px-3 py-2 backdrop-blur md:px-4 md:py-2.5">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-500" />

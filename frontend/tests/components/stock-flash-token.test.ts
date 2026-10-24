@@ -104,7 +104,7 @@ function hslToRgb8(h: number, s: number, l: number): [number, number, number] {
 
 describe('涨跌色: Hex 事实源 + HSL 三元组派生', () => {
   it('--stock-up / --stock-down 的 Hex 值保持原样(组件/ECharts/--gs-go 依赖)', () => {
-    expect(DECLS.get('--stock-up')).toEqual(['#E53935', '#E53935'])
+    expect(DECLS.get('--stock-up')).toEqual(['#ff5252', '#ff5252'])
     expect(DECLS.get('--stock-down')).toEqual(['#43A047', '#43A047'])
   })
 

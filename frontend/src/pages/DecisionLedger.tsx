@@ -173,21 +173,28 @@ export default function DecisionLedger() {
 
       {/* 当前生效阈值(数智决策 P1-3 只读): 运行时改阈值需权限设计, 本轮只做可配+可见, 无写回 */}
       <section className="mt-3" data-testid="thresholds">
-        <p
-          className="text-[11px] text-muted-foreground"
-          title={
-            thresholds && thresholds.length > 0
-              ? thresholds.map((t) => `${t.label}: ${t.value} (${t.source === 'env' ? t.env : '内置默认 ' + t.default})`).join('\n')
-              : undefined
-          }
-        >
-          当前阈值(只读)
-          {thresholds && thresholds.length > 0
-            ? `：${thresholds
-                .map((t) => `${t.label} ${t.value}${t.source === 'env' ? '(env)' : ''}`)
-                .join(' · ')}`
-            : '：—'}
-        </p>
+        {/* L3-C(2026-10-24): 阈值参数默认为折叠。原实现把 20+ 个阈值一行 11px 灰字全铺在
+            首屏, 读起来像"配置文件泄露"; 结论（命中率表）反而在它下面。内容一个字没删。 */}
+        <details>
+          <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+            计算口径（{thresholds?.length ?? 0} 个阈值，点击展开）
+          </summary>
+          <p
+            className="mt-1 text-[11px] text-muted-foreground"
+            title={
+              thresholds && thresholds.length > 0
+                ? thresholds.map((t) => `${t.label}: ${t.value} (${t.source === 'env' ? t.env : '内置默认 ' + t.default})`).join('\n')
+                : undefined
+            }
+          >
+            当前阈值(只读)
+            {thresholds && thresholds.length > 0
+              ? `：${thresholds
+                  .map((t) => `${t.label} ${t.value}${t.source === 'env' ? '(env)' : ''}`)
+                  .join(' · ')}`
+              : '：—'}
+          </p>
+        </details>
       </section>
 
       {/* ① 命中率 */}

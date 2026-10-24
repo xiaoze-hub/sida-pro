@@ -253,6 +253,18 @@ export default function DashboardPage() {
   // 修复 2026-08-21: 默认关闭 Onboarding(原默认 true → 换浏览器/清缓存后用户被强制挡整页无法点击)
   // 改由头部"新手引导"按钮主动触发, localStorage 标志仍用于标记"已看过"以避免重复打扰
   const [showOnboarding, setShowOnboarding] = useState(false)
+  // L2-A 第2步(2026-10-24): 细节层默认折叠, 状态记 localStorage —— 首屏只留结论层 + 指数卡,
+  // KPI 带(与结论层 6 个数字重复)与情绪/主线/温度三卡收进「展开更多数据」。
+  const [showMore, setShowMore] = useState(() => {
+    try { return localStorage.getItem('sida_dashboard_more') === '1' } catch { return false }
+  })
+  const toggleMore = useCallback(() => {
+    setShowMore((v) => {
+      const next = !v
+      try { localStorage.setItem('sida_dashboard_more', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const openOnboarding = useCallback(() => setShowOnboarding(true), [])
 
   // 慢车道:基准/归因(拉全持仓 K 线,分钟级);独立可重试,失败/为空各有明确状态
@@ -633,23 +645,50 @@ export default function DashboardPage() {
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
-        className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground"
+        className="mb-3 rounded-lg border border-border-strong px-3 py-2.5"
       >
-        <span className="font-medium text-foreground">市场情绪</span>
-        <b className="font-mono text-foreground">{phaseKpi.label ?? (phaseKpi.loading ? '加载中' : '--')}</b>
-        {phaseKpi.unavailableNote ? <span className="text-muted-foreground/80">({phaseKpi.unavailableNote})</span> : null}
-        <span className="text-border">|</span>
-        <span>涨停 <b className="font-mono text-stock-up">{phaseKpi.limitUp ?? '--'}</b></span>
-        <span>封板率 <b className="font-mono">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
-        <span className="text-border">|</span>
-        <span>涨 <b className="font-mono text-stock-up">{marketFlow?.up_count ?? '--'}</b>
-          <span className="mx-0.5">/</span>跌 <b className="font-mono text-stock-down">{marketFlow?.down_count ?? '--'}</b></span>
-        <span>成交 <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
-        <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
-        {/* 口径统一徽章(2026-09-22): 有原始口径值就给徽章, 只有中文标签就如实显示标签 */}
-        <span className="ml-auto">
-          <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
-        </span>
+        {/* 结论句(2026-10-24 L2-A): 首屏先给一句非数字结论 —— 此前 8 个数字并排, 读完说不出结论。
+            只用本页已有 state, 缺数如实写「未知/尚未识别」, 不用 0 顶。 */}
+        <p className="text-[16px] font-medium leading-snug text-foreground">
+          {phaseKpi.loading && !phaseKpi.label
+            ? '正在取市场状态…'
+            : `${phaseKpi.label ?? '市场状态未知'}，${
+                marketFlow?.up_count != null && marketFlow?.down_count != null
+                  ? (marketFlow.up_count >= marketFlow.down_count ? '红盘占优' : '绿盘占优')
+                  : '涨跌家数未取到'
+              }，主线在${mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}`}
+          {phaseKpi.unavailableNote ? <span className="ml-1 text-[12px] text-muted-foreground">（{phaseKpi.unavailableNote}）</span> : null}
+        </p>
+        {/* 3 个结论数字: 涨停 / 涨跌 / 主线强度(无强度则主线名) */}
+        <div className="mt-2 grid grid-cols-3 gap-3">
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨停</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums text-stock-up">{phaseKpi.limitUp ?? '--'}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨 / 跌</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums">
+              <span className="text-stock-up">{marketFlow?.up_count ?? '--'}</span>
+              <span className="mx-1 text-muted-foreground">/</span>
+              <span className="text-stock-down">{marketFlow?.down_count ?? '--'}</span>
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] text-muted-foreground">主线 Top1</div>
+            <div className="truncate font-num text-[20px] font-semibold tabular-nums text-foreground">
+              {mainlineKpi.top?.name ?? (mainlineKpi.loading ? '…' : '--')}
+            </div>
+          </div>
+        </div>
+        {/* 细项降为第二行小字: 封板率 / 成交 / 主力净流入 / 口径 */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 pt-2 text-[11px] text-muted-foreground">
+          <span>封板率 <b className="font-mono text-foreground">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
+          <span>成交 <b className="font-mono text-foreground">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
+          <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
+          <span className="ml-auto">
+            <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
+          </span>
+        </div>
       </div>
 
       {/* 核心接口失败横幅:失败≠空态,给出重试入口 */}
@@ -684,8 +723,13 @@ export default function DashboardPage() {
                 />
               </div>
               <FlashValue value={ix.change_pct}>
-                <span className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[10px] ${pctChipCls(ix.change_pct)}`}>
-                  {ix.change_pct != null ? pct(ix.change_pct) : '--'}
+                {/* L2-A 第3步: 证据层每卡只留 1 个数字(点位) + 方向箭头。
+                    涨跌幅数值移入 title, 不再和点位并排抢首屏注意力。 */}
+                <span
+                  className={`shrink-0 rounded px-1 py-0.5 font-num tabular-nums text-[12px] ${pctChipCls(ix.change_pct)}`}
+                  title={ix.change_pct != null ? pct(ix.change_pct) : '无数据'}
+                >
+                  {ix.change_pct == null ? '—' : ix.change_pct > 0 ? '▲' : ix.change_pct < 0 ? '▼' : '→'}
                 </span>
               </FlashValue>
             </div>
@@ -700,8 +744,25 @@ export default function DashboardPage() {
       </div>
       )}
 
-      {/* v0.4.6 KPI 带(借鉴 TSP): 数字优先 6 格, 一眼看全市场状态 */}
-      {shown('kpi') && (
+      {/* L2-A 第2步: 细节层开关(状态记 localStorage) */}
+      <div className="mb-3 flex items-center justify-between gap-2 border-y border-border/40 py-1.5">
+        <span className="text-[11px] text-muted-foreground">
+          {showMore ? '已展开：KPI 带 / 情绪周期 / 主线 / 市场温度' : '首屏只显示结论与指数，其余数据已收起'}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 px-2 text-[12px] min-h-[32px]"
+          onClick={toggleMore}
+          aria-expanded={showMore}
+        >
+          {showMore ? '收起更多数据 ▴' : '展开更多数据 ▾'}
+        </Button>
+      </div>
+
+      {/* L2-A 第2步: KPI 带与结论层 6 个数字完全重复(涨跌/净流入/成交/情绪/主线/涨停跌停),
+          默认收起, 展开才显示 —— 保留模块, 不删数据。 */}
+      {showMore && shown('kpi') && (
       <div style={{ order: orderIndex(layout, 'kpi') }}>
       <KpiBandMemo
         upCount={marketFlow?.up_count ?? null}
@@ -718,7 +779,7 @@ export default function DashboardPage() {
 
       {/* 市场全景(P1-6 首屏重排: 先市场后个人 — 情绪/主线/资金/分布前置, 个人工作台后置) */}
       {/* 情绪周期6阶段 + 主线识别(TSP 口径): C 位主区 */}
-      {shown('overview') && (
+      {showMore && shown('overview') && (
       <div id="market-phase-anchor" style={{ order: orderIndex(layout, 'overview') }} className="mt-5 grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-3">
         <MarketPhaseCardMemo />
         <MarketMainlineCardMemo />
@@ -732,7 +793,7 @@ export default function DashboardPage() {
       {shown('fundflow') && marketFlow && (
         <div style={{ order: orderIndex(layout, 'fundflow') }} className="mt-5 border-t border-border/60 pt-3">
           <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-semibold">{t('dashboard.fundflow')}</span>
+            <h2 className="text-[13px] font-semibold">{t('dashboard.fundflow')}</h2>
             <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
             {/* B3/3.4 口径标签: 后端 caliber_label 缺失时回退静态文案 */}
             <span
@@ -1457,7 +1518,7 @@ function PhaseGaugeCardInner() {
   return (
     <div className="border-t border-border/60 pt-2.5">
       <div className="mb-1 flex items-baseline gap-2">
-        <span className="text-[13px] font-semibold">市场温度</span>
+        <h2 className="text-[13px] font-semibold">市场温度</h2>
         <span className="text-[10px] text-muted-foreground">高度×15 + 晋级率×40 + 封板率×45(缺项按0)</span>
       </div>
       {state.kind === 'ready' ? (

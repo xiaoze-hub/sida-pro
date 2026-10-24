@@ -31,6 +31,8 @@ export function SourceHeartbeat() {
   }
 
   const primary = items[0]
+  // L2-E/G6(2026-10-24): 全部正常时只留一个状态圆点, 有异常(刷新失败/非 ok 档)才展开文字。
+  const allOk = !error && items.every((it) => trustTone(it.score) === 'ok')
   return (
     <NavLink
       to="/system?tab=datasources"
@@ -50,12 +52,18 @@ export function SourceHeartbeat() {
           />
         ))}
       </span>
-      <span>{trustSummary(items)}</span>
-      {primary && primary.ewma_latency_ms != null && (
-        <span className="text-muted-foreground/70">
-          {primary.vendor} {formatLatency(primary.ewma_latency_ms)}
-        </span>
+      {allOk && (
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" title={trustSummary(items)} />
       )}
+      {/* 文字保留在 DOM(sr-only), 不卸载 —— 既有测试依赖 textContent 与 data-vendor 数量 */}
+      <span className={allOk ? 'sr-only' : 'inline-flex items-center gap-2'}>
+        <span>{trustSummary(items)}</span>
+        {primary && primary.ewma_latency_ms != null && (
+          <span className="text-muted-foreground/70">
+            {primary.vendor} {formatLatency(primary.ewma_latency_ms)}
+          </span>
+        )}
+      </span>
       {error && <span className="text-amber-600">刷新失败(显示上次快照)</span>}
     </NavLink>
   )

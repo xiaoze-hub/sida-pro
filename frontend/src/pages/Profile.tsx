@@ -2,7 +2,7 @@ import { fetchAPI } from '@panwatch/api'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, Check, AlertTriangle, Crown } from 'lucide-react'
+import { Target, Star, Briefcase, UserRound, Upload, X, KeyRound, AlertTriangle, Crown } from 'lucide-react'
 import { Input } from '@panwatch/base-ui/components/ui/input'
 import { Label } from '@panwatch/base-ui/components/ui/label'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -117,8 +117,6 @@ export function Profile() {
   const [avatarDraft, setAvatarDraft] = useState('') // '' = 未设置; 由头像是否改动区分
   const [avatarChanged, setAvatarChanged] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
-  const [pasteOpen, setPasteOpen] = useState(false)
-  const [pasteValue, setPasteValue] = useState('')
 
   // ── 安全中心(修改密码) ──
   const [oldPwd, setOldPwd] = useState('')
@@ -152,22 +150,6 @@ export function Profile() {
     }
   }
 
-  const onPasteAvatar = () => {
-    const v = (pasteValue || '').trim()
-    if (!v) return
-    if (!v.startsWith('data:image/')) {
-      toast('请粘贴图片 data URL(data:image/... 开头)', 'error')
-      return
-    }
-    if (v.length > 100_000) {
-      toast('图片过大, 请压缩到 75KB 以内', 'error')
-      return
-    }
-    setAvatarDraft(v)
-    setAvatarChanged(true)
-    setPasteValue('')
-    setPasteOpen(false)
-  }
 
   const saveProfile = async () => {
     const nickname = nicknameDraft.trim()
@@ -248,16 +230,13 @@ export function Profile() {
           <SectionHeader title={t('profile.personalInfo')} className="mb-4" />
 
           <div className="flex items-start gap-4">
-            {/* 头像: 默认用户名首字母色块; 可上传或粘贴 data URL */}
+            {/* 头像: 默认用户名首字母色块; 可上传 */}
             <div className="flex flex-col items-center gap-2 shrink-0">
               <AvatarCircle name={displayName} avatar={avatarDraft} />
               <div className="flex flex-col items-center gap-1">
                 <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
                 <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => fileRef.current?.click()}>
                   <Upload className="w-3 h-3" /> 上传
-                </Button>
-                <Button variant="ghost" size="sm" className="h-6 text-[11px]" onClick={() => setPasteOpen(v => !v)}>
-                  粘贴 data URL
                 </Button>
                 {avatarChanged && avatarDraft === '' && (
                   <span className="text-[10px] text-muted-foreground">头像将清空</span>
@@ -266,22 +245,6 @@ export function Profile() {
             </div>
 
             <div className="flex-1 min-w-0 space-y-4">
-              {pasteOpen && (
-                <div className="rounded-md border border-border/40 bg-accent/20 p-3 space-y-2">
-                  <Label className="text-[11px]">粘贴图片 data URL(200KB 以内)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={pasteValue}
-                      onChange={e => setPasteValue(e.target.value)}
-                      placeholder="data:image/png;base64,..."
-                      className="h-8 text-[11px] font-mono"
-                    />
-                    <Button size="sm" className="h-8 shrink-0" onClick={onPasteAvatar}>
-                      <Check className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              )}
 
               <div>
                 <Label className="text-[11px]">昵称(1-32 字)</Label>

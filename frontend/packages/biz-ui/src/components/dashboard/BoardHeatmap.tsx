@@ -8,6 +8,7 @@ import {
   formatHeatPct,
   hasDrawableArea,
   hasUsableVolume,
+  heatCellColor,
   labelTierFor,
   pickLabelColor,
   toTreemapCells,
@@ -419,20 +420,32 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           </button>
         ))}
         <span className="mx-1 h-4 w-px bg-border/60" />
-        {(['volume', 'equal'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => setAreaMetric(m)}
-            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
-              areaMetric === m
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-accent/50 text-muted-foreground hover:bg-accent'
-            }`}
+        {/* L3-A(2026-10-24): 面积口径是**排序/权重**维度, 不是分类, 不该和「行业/概念」同款按钮并排。
+            改成明确的下拉, 分类仍是左侧 segmented。 */}
+        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          面积
+          <select
+            aria-label="色块面积口径"
+            value={areaMetric}
+            onChange={(e) => setAreaMetric(e.target.value as HeatAreaMetric)}
+            className="h-7 rounded border border-border/60 bg-background px-1.5 text-[11px] text-foreground"
           >
-            {m === 'volume' ? '面积:量能' : '面积:等权'}
-          </button>
-        ))}
+            <option value="volume">按量能</option>
+            <option value="equal">等权</option>
+          </select>
+        </label>
+        {/* L3-A: 色阶图例 —— 此前整页没有任何图例, 读者不知道「红多深=涨多少」「灰=平盘」 */}
+        <span className="hidden items-center gap-1 text-[11px] text-muted-foreground md:flex" aria-label="色阶图例">
+          {[-3, -1.5, 1.5, 3].map((v) => (
+            <span
+              key={v}
+              className="h-2.5 w-4 rounded-sm"
+              style={{ backgroundColor: heatCellColor(v, buildPalette(), 3) }}
+              title={`${v > 0 ? '+' : ''}${v}%`}
+            />
+          ))}
+          <span className="ml-1 whitespace-nowrap">-3% → +3%，灰=平盘</span>
+        </span>
         <div className="ml-auto flex items-center gap-2">
           {fresh && data.source ? (
             <span className="rounded bg-accent/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
