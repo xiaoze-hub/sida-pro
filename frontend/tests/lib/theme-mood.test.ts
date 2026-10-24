@@ -20,12 +20,12 @@ describe('fmtScore', () => {
 })
 
 describe('cellColorClass', () => {
-  it('低分灰/中性淡/高分渐强', () => {
+  it('四态可命名: 走弱(绿)/震荡(中性)/走强(红)/无数据(灰)', () => {
     expect(cellColorClass(null)).toBe('bg-muted/30')
-    expect(cellColorClass(45)).toBe('bg-muted/40')
-    expect(cellColorClass(62)).toBe('bg-stock-up/15')
-    expect(cellColorClass(78)).toBe('bg-stock-up/30')
-    expect(cellColorClass(90)).toBe('bg-stock-up/45')
+    expect(cellColorClass(45)).toBe('bg-stock-down/20') // 走弱 <50
+    expect(cellColorClass(62)).toBe('bg-muted/60') // 震荡 50-70
+    expect(cellColorClass(78)).toBe('bg-stock-up/30') // 走强 ≥70
+    expect(cellColorClass(90)).toBe('bg-stock-up/30') // 走强不再分 3 档(6 色带已收敛)
   })
 })
 

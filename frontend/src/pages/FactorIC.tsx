@@ -216,8 +216,15 @@ export default function FactorIC() {
             {(() => {
               const usable = rows.filter((r) => r.ic_periods >= MIN_PERIODS && typeof r.ic === 'number')
               if (usable.length === 0) return '暂无可评估因子（样本期数不足）；IC=预测力，越接近 0 越弱。'
-              const best = [...usable].sort((a, b) => Math.abs(b.ic ?? 0) - Math.abs(a.ic ?? 0))[0]
-              return `可评估 ${usable.length} 个因子，最强 ${best.code}（IC ${num(best.ic ?? 0, 3)}）。IC 越接近 0 预测力越弱；样本外列用于看是否过拟合，非买卖指令。`
+              // IC 为 null = 期数不足, **不能当 0 参与排名**(会把"没数据"说成"最弱"),
+              // 也不能显示成 IC 0。全窗口都空时如实说不排名。
+              const scored = usable.filter((r) => r.ic != null)
+              const best = scored.length
+                ? [...scored].sort((a, b) => Math.abs(b.ic as number) - Math.abs(a.ic as number))[0]
+                : null
+              return best
+                ? `可评估 ${usable.length} 个因子，最强 ${best.code}（IC ${num(best.ic, 3)}）。IC 越接近 0 预测力越弱；样本外列用于看是否过拟合，非买卖指令。`
+                : `可评估 ${usable.length} 个因子，但本窗口 IC 全部为空（期数不足），暂不排名。样本外列用于看是否过拟合，非买卖指令。`
             })()}
           </p>
 

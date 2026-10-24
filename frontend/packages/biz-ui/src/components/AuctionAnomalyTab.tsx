@@ -194,7 +194,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
   // 空态原因（2026-10-24 L2-C）：三种原因三种文案，且空态必须给「何时有数据」+ 一个动作出口，
   // 不许只留一块空表让用户以为「今天没有异动」。
   const emptyReason = !data
-    ? '未取到竞价数据（请求未返回或超时）'
+    ? '未取到竞价数据（请求未返回或超时），请点右上「刷新」重试'
     : data.reason_text ||
       (data.reason === 'source_unavailable'
         ? '数据源不可用(thsdk 竞价异动拉取失败)，非「今日无异常」'

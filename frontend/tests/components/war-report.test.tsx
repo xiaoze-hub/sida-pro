@@ -56,13 +56,14 @@ describe('WarReport 主力资金战报', () => {
   afterEach(() => cleanup())
   beforeEach(() => mocks.daily.mockReset())
 
-  it('有快照 → 渲染 TOP/BOTTOM 行 + 万元口径(带符号) + 净额变化', async () => {
+  it('有快照 → 渲染 TOP/BOTTOM 行 + 万元口径(带符号)', async () => {
     mocks.daily.mockResolvedValue(snapshot())
     render(<WarReportPage />)
     await screen.findAllByText('贵州茅台')
 
-    expect(screen.getByText('+8.80亿')).toBeTruthy() // 88000 万 → 8.80 亿
-    expect(screen.getByText('+80.00万')).toBeTruthy() // 净额变化
+    // 结论层与明细表都会渲染这个数字(L2 结论层收敛后同屏两处), 断言「至少出现一次」
+    expect(screen.getAllByText('+8.80亿').length).toBeGreaterThan(0) // 88000 万 → 8.80 亿
+    // 「净额变化」列已在 L3 死列治理中删除(长期全 null, 占列宽不产生信息), 不再断言
     expect(screen.getByTestId('war-report')).toBeTruthy()
   })
 

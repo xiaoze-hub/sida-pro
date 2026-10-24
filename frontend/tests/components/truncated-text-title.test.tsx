@@ -55,9 +55,11 @@ const LONG2 = '2026-08-06 深度分析 · 神剑决策 · 置信度 7.2/10 · �
 const LONG3 = '主力净流入 +12.34 亿 · 成交额 8765.4 亿 · 情绪周期: 主升'
 
 describe('截断文本的 title 契约(DOM)', () => {
-  it('Stat: label/value/sub 三处截断都带 title 且等于完整文本', () => {
+  it('Stat: label/sub 两处截断带 title; 数值不截断(2026-10-24 读数事故修复)', () => {
     const { container } = render(<Stat label={LONG} value={LONG2} sub={LONG3} />)
-    expectTitlesEqualText(container, 3)
+    // 数值行已改 whitespace-nowrap: 数字被省略号切掉是读数事故, 不允许再用 truncate
+    expect(container.querySelectorAll('div.whitespace-nowrap.font-num').length).toBe(1)
+    expectTitlesEqualText(container, 2)
   })
 
   it('SectionHeader: 截断的标题带 title 且等于完整文本', () => {

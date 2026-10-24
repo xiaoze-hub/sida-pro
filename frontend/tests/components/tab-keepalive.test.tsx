@@ -9,7 +9,7 @@
  *   ③ 隐藏页签里的组件读到 `useTabActive() === false`, 活动页签读到 `true`(数据层据此停表);
  *   ④ 地址栏 = **活动页签**的地址: 活动页签内导航同步地址栏; 隐藏页签内导航不动地址栏;
  *   ⑤ 跨页签导航交给外层路由(开/切对应页签), **不会**把别的功能页塞进当前页签;
- *   ⑥ 上限 12: 挤掉最早的非首页页签并**明确提示**(不静默丢页)。
+ *   ⑥ 页签上限: 挤掉最久未访问的非首页页签并**明确提示**(不静默丢页)。
  */
 import { useEffect, useState } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -251,8 +251,8 @@ describe('⑤ 跨页签导航交给外层(不把别的功能页塞进当前页�
   })
 })
 
-describe('⑥ 上限 12: 挤掉最早的非首页页签并提示', () => {
-  it('开满 12 后继续开 → 最早的非首页页签被挤掉, 并弹出提示', () => {
+describe('⑥ 页签上限: 挤掉最久未访问的非首页页签并提示(L2-E: 12→8 且 FIFO→LRU)', () => {
+  it('开满上限后继续开 → 最久未访问的非首页页签被挤掉, 并弹出提示', () => {
     renderShell('/')
     const extras = [
       '/heatmap',
@@ -274,7 +274,7 @@ describe('⑥ 上限 12: 挤掉最早的非首页页签并提示', () => {
     expect(tabLabels()[0]).toBe('首页')
     expect(tabLabels()).not.toContain('板块热力') // 最早的非首页页签被挤掉
     expect(tabLabels()).toContain('个人中心') // 刚开的还在
-    const toasts = screen.getAllByText(/页签最多 12 个/)
+    const toasts = screen.getAllByText(new RegExp(`页签最多 ${MAX_TABS} 个`))
     expect(toasts.length).toBeGreaterThan(0)
     expect(toasts[0].textContent).toContain('板块热力')
     // 被挤掉的页签面板也不在 DOM 里了(它的状态随之释放)

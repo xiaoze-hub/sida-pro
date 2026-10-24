@@ -16,7 +16,7 @@
 //   3. 接口失败 → 显式错误横幅, 且缺值一律 null(由卡片渲染 '--'), 绝不填 0 假装有数据;
 //   4. load 竞态: 被更新的一轮取代后, 旧响应(含错误)**不得**落地;
 //   5. 无关状态变更(打开看板定制)不重渲染自带画布/取数的重区块。
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -286,8 +286,9 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
   it('先出壳: 核心块首帧即挂载, 不等任何慢接口', () => {
     renderPage()
     // 未 await 任何请求: 外壳 + 关键区块已在 DOM
-    expect(screen.getByTestId('kpi-band')).toBeTruthy()
-    expect(screen.getByTestId('market-phase-card')).toBeTruthy()
+    // L2-A(2026-10-24): KpiBand 数字带已换成「结论行」, 首屏锚点随之更新
+    expect(screen.getByTestId('market-conclusion')).toBeTruthy()
+    // 情绪三卡(L2-A)已折叠进结论行, 不再独立挂载; 涨跌分布仍首帧直出
     expect(screen.getByTestId('breadth-chart')).toBeTruthy()
     // 6 个快车道接口确实都发出去了且尚未返回
     for (const k of ['scan', 'overview', 'diag', 'alerts', 'todos', 'status']) {
@@ -324,11 +325,10 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
     const banner = screen.getByTestId('error-banner')
     expect(banner.textContent).toContain('dashboard.errorSources.todos')
     expect(banner.textContent).toContain('dashboard.errorSources.marketStatus')
-    // 缺值 → null, 不是 0
-    expect(H.kpiProps?.upCount).toBeNull()
-    expect(H.kpiProps?.downCount).toBeNull()
-    expect(H.kpiProps?.mainFlowYi).toBeNull()
-    expect(H.kpiProps?.amountYi).toBeNull()
+    // 缺值 → 渲染 '--', 不是 0(结论行的三个数字都走 `?? '--'`)
+    const conclusion = screen.getByTestId('market-conclusion')
+    expect(within(conclusion).getAllByText('--').length).toBeGreaterThan(0)
+    expect(within(conclusion).queryByText('0')).toBeNull()
   })
 
   it('竞态守卫: 被新一轮 load 取代后, 旧响应(含错误)不落地', async () => {
@@ -369,8 +369,8 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
   it('无关状态变更(打开看板定制)不重渲染自带画布/取数的重区块', async () => {
     renderPage()
     await flush()
-    // 市场温度卡取数就绪 → 内部 canvas 已渲染
-    expect(screen.getByTestId('sentiment-gauge')).toBeTruthy()
+    // 首屏结论行已渲染(情绪 gauge 卡已在 L2-A 折叠进结论行, 不再独立挂载)
+    expect(screen.getByTestId('market-conclusion')).toBeTruthy()
 
     const before = { ...H.counters }
     fireEvent.click(screen.getByTitle('dashboard.customize'))
@@ -379,7 +379,7 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
     expect(H.customizerOpen).toBe(true)
     expect(screen.getByTestId('customizer').getAttribute('data-open')).toBe('true')
     // 但重区块一次都没重渲染
-    for (const k of ['breadth', 'sentiment', 'market-phase', 'market-mainline', 'kpi', 'flow-chart']) {
+    for (const k of ['breadth', 'market-phase', 'market-mainline', 'flow-chart']) {
       expect(H.counters[k]).toBe(before[k])
     }
   })

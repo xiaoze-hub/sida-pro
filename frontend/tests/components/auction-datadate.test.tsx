@@ -116,7 +116,8 @@ describe('AuctionAnomalyTab 数据日标注(A-03)', () => {
       reason_text: '非交易日，竞价池无当日数据',
     })
     render(<AuctionAnomalyTab market="CN" />)
-    expect(await screen.findByText(/非交易日/)).toBeTruthy()
+    // 数据日区与空态区都会出现「非交易日」(L2-C 空态三件套), 只断言出现过
+    expect((await screen.findAllByText(/非交易日/)).length).toBeGreaterThan(0)
   })
 
   /**

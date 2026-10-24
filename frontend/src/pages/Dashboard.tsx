@@ -652,7 +652,7 @@ export default function DashboardPage() {
         <p className="text-[16px] font-medium leading-snug text-foreground">
           {phaseKpi.loading && !phaseKpi.label
             ? '正在取市场状态…'
-            : `${phaseKpi.label ?? '市场状态未知'}，${
+            : `市场情绪 ${phaseKpi.label ?? '未知'}，${
                 marketFlow?.up_count != null && marketFlow?.down_count != null
                   ? (marketFlow.up_count >= marketFlow.down_count ? '红盘占优' : '绿盘占优')
                   : '涨跌家数未取到'

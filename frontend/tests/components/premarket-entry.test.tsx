@@ -239,12 +239,12 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('ReportsHub 盘前入口(入口扶正 2026-10-23)', () => {
-  it('默认打开「分析」Tab(原 history 内容),「底稿归档」排第二位', async () => {
+  it('默认打开「报告中心」Tab(原 history 内容, L3-D 改名),「底稿归档」排第二位', async () => {
     renderHub()
     // 默认 Tab = 分析: history 页空态落地(不要求 URL 带 ?tab=)
     await screen.findByText('暂无分析记录')
-    // 两个 Tab 都在: 「分析」默认选中,「底稿归档」在第二位未选中
-    const analysisTab = screen.getByRole('tab', { name: '分析' })
+    // 两个 Tab 都在: 「报告中心」默认选中,「底稿归档」在第二位未选中
+    const analysisTab = screen.getByRole('tab', { name: '报告中心' })
     expect(analysisTab.getAttribute('aria-selected')).toBe('true')
     const archiveTab = screen.getByRole('tab', { name: '底稿归档' })
     expect(archiveTab.getAttribute('aria-selected')).toBe('false')
@@ -301,7 +301,8 @@ describe('Dashboard「盘前 / 盘后分析」卡', () => {
     P.getTodayDefault = { date: '2026-10-23', empty: true }
     renderDashboard()
     // 首屏未 settle 前: 卡处于骨架态, 且首帧请求不受影响
-    expect(screen.getByTestId('kpi-band')).toBeTruthy()
+    // L2-A(2026-10-24): KpiBand 已从 Dashboard 移除(数字并排→结论行), 首屏锚点换成结论行
+    expect(screen.getByTestId('market-conclusion')).toBeTruthy()
 
     await settleFirstScreen()
     await screen.findByText('今日盘前分析尚未生成')
