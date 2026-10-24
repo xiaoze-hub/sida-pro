@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { parseAlertPrefill } from '@/lib/price-alert-prefill'
 import { Plus, RefreshCw, Play, Trash2, BarChart3, BellRing } from 'lucide-react'
 import { fetchAPI, stocksApi, type NotifyChannel } from '@panwatch/api'
 import { Button } from '@panwatch/base-ui/components/ui/button'
@@ -82,6 +83,26 @@ function conditionText(item: AlertConditionItem): string {
   return `${TYPE_LABEL[item.type] || item.type} ${item.op} ${Array.isArray(item.value) ? item.value.join('~') : item.value}`
 }
 
+// 渠道名此前直连后端枚举（push / telegram …），界面上直接显示 "push"（2026-10-24 Lane B 修）
+const CHANNEL_LABEL: Record<string, string> = {
+  push: '系统推送',
+  telegram: 'Telegram',
+  wecom: '企业微信',
+  work_wechat: '企业微信',
+  feishu: '飞书',
+  dingtalk: '钉钉',
+  email: '邮件',
+  smtp: '邮件',
+  webhook: 'Webhook',
+  serverchan: 'Server酱',
+}
+
+function channelLabel(c: { name?: string; type?: string }): string {
+  const byType = CHANNEL_LABEL[String(c.type || '').toLowerCase()]
+  const byName = CHANNEL_LABEL[String(c.name || '').toLowerCase()]
+  return byType || byName || c.name || c.type || '未知渠道'
+}
+
 export default function PriceAlertsPage() {
   const { toast } = useToast()
   const location = useLocation()
@@ -97,9 +118,16 @@ export default function PriceAlertsPage() {
   const [hitRule, setHitRule] = useState<AlertRule | null>(null)
   const [hits, setHits] = useState<AlertHit[]>([])
   const [scanRunning, setScanRunning] = useState(false)
-  const [prefillDone, setPrefillDone] = useState(false)
+  // 已消费的预填 key（按 search 去重）：同一地址只预填一次，且只有个股意图才会预填
+  const prefillKeyRef = useRef('')
 
   const stockOptions = useMemo(() => stocks, [stocks])
+
+  // 渠道名转中文后再下发给表单弹窗（后端 name 可能是 "push" 这类枚举值）
+  const channelOptions = useMemo(
+    () => channels.map(c => ({ id: c.id, name: channelLabel(c), enabled: c.enabled, is_default: c.is_default })),
+    [channels],
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -124,23 +152,20 @@ export default function PriceAlertsPage() {
   }, [load])
 
   useEffect(() => {
-    if (prefillDone) return
     if (loading) return
-    const params = new URLSearchParams(location.search || '')
-    if (!params.toString()) {
-      setPrefillDone(true)
-      return
-    }
-    const qStockId = Number(params.get('stock_id') || 0)
-    const qSymbol = String(params.get('symbol') || '').trim().toUpperCase()
-    const qMarket = String(params.get('market') || '').trim().toUpperCase() || 'CN'
-    const qName = String(params.get('name') || '').trim()
+    // 只有携带个股意图（symbol / stock_id）才允许自动预填并弹窗（2026-10-24 Lane B）。
+    // 此前用「search 非空」判断 ⇒ 进入 /notifications?tab=alerts 就自动弹「新建提醒规则」，
+    // 并预选第一只自选股；切走路由后弹窗留在 portal 里遮住整页（见 dialog-route-guard.ts）。
+    const intent = parseAlertPrefill(location.search)
+    if (!intent) return
+    if (prefillKeyRef.current === location.search) return
+    prefillKeyRef.current = location.search
 
     const openWithStock = async () => {
-      let target = stocks.find(s => qStockId > 0 ? s.id === qStockId : (s.symbol === qSymbol && s.market === qMarket))
-      if (!target && qSymbol) {
+      let target = stocks.find(s => intent.stockId > 0 ? s.id === intent.stockId : (s.symbol === intent.symbol && s.market === intent.market))
+      if (!target && intent.symbol) {
         try {
-          target = await stocksApi.create({ symbol: qSymbol, market: qMarket, name: qName || qSymbol })
+          target = await stocksApi.create({ symbol: intent.symbol, market: intent.market, name: intent.name || intent.symbol })
           if (target) setStocks(prev => prev.some(s => s.id === target!.id) ? prev : [target!, ...prev])
         } catch {
           // ignore and fallback to manual select
@@ -150,13 +175,12 @@ export default function PriceAlertsPage() {
       setForm({
         ...DEFAULT_FORM,
         stock_id: target?.id || stockOptions[0]?.id || 0,
-        name: target ? `${target.name} 价格提醒` : (qName ? `${qName} 价格提醒` : ''),
+        name: target ? `${target.name} 价格提醒` : (intent.name ? `${intent.name} 价格提醒` : ''),
       })
       setFormOpen(true)
-      setPrefillDone(true)
     }
     openWithStock()
-  }, [loading, location.search, prefillDone, stockOptions, stocks])
+  }, [loading, location.search, stockOptions, stocks])
 
   const openCreate = () => {
     setEditingId(null)
@@ -352,7 +376,7 @@ export default function PriceAlertsPage() {
         title={editingId ? '编辑提醒规则' : '新建提醒规则'}
         description="支持价格、涨跌幅、成交额、量比条件，支持 AND / OR 组合"
         stocks={stockOptions}
-        channels={channels}
+        channels={channelOptions}
         initial={form}
         submitting={saving}
         submitLabel="保存规则"
