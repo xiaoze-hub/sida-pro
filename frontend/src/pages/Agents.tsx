@@ -634,7 +634,13 @@ export default function AgentsPage() {
                       </div>
                     ) : null}
 
-                    <div className="mt-4 ml-[22px] space-y-3">
+                    {/* L3-F: 模型/推送渠道是次级配置, 默认折叠成「高级设置」——
+                        原实现与「未来 3 次」同权铺在卡上, 读者分不清主次。 */}
+                    <details className="mt-4 ml-[22px]">
+                      <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+                        高级设置（模型 / 推送渠道）
+                      </summary>
+                      <div className="mt-2 space-y-3">
                       {/* AI Model select */}
                       <div className="flex items-center gap-2">
                         <Cpu className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -686,7 +692,8 @@ export default function AgentsPage() {
                           )}
                         </div>
                       )}
-                    </div>
+                      </div>
+                    </details>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 ml-[22px] sm:ml-0">
                     <Button
