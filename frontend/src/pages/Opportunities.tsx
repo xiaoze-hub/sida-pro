@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@panwatch/base-ui/comp
 import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import { useLocalStorage } from '@/lib/utils'
 import { normSymbol } from '@/lib/symbol'
+import { tabFromSearch } from '@/lib/url-tabs'
 import { useNavigate } from 'react-router-dom'
 import StockHoverPreview, { type HoverPreviewData } from '@panwatch/biz-ui/components/StockHoverPreview'
 import FactorWeightsPanel from '@/components/FactorWeightsPanel'
@@ -48,6 +49,7 @@ type HoldingFilter = 'all' | 'held' | 'unheld'
 type RiskFilter = 'all' | 'low' | 'medium' | 'high'
 // 2026-10-18 I-4: 新增"转债雷达"Tab(可转债-正股联动套利)
 type ToolTab = 'resonance' | 'strategy' | 'tdx' | 'wencai' | 'stockpool' | 'jbp' | 'cb'
+const TOOL_TAB_VALUES: readonly ToolTab[] = ['resonance', 'strategy', 'tdx', 'wencai', 'stockpool', 'jbp', 'cb']
 
 type StockPoolRow = {
   symbol: string
@@ -395,6 +397,14 @@ export default function OpportunitiesPage() {
   const [draft, setDraft] = useState<OpportunityFilters>({ market, source, holding, strategy, risk, minScore, sector })
   // 选股工具 tab: 共振查询(默认)/ 策略选股 / 问小达 / 问财
   const [toolTab, setToolTab] = useLocalStorage<ToolTab>('panwatch_opportunities_tool_tab_v1', 'resonance')
+
+  // ?tab= 深层链接(2026-10-24 小白可用性): 首页共振面板「全部 ›」/ 工作台铁三角结论
+  // 等页外入口直接带到目标页签, 只在挂载时消费一次 —— 之后用户手动切页签照旧走 localStorage。
+  useEffect(() => {
+    const fromUrl = tabFromSearch(window.location.search, TOOL_TAB_VALUES)
+    if (fromUrl) setToolTab(fromUrl as ToolTab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 个股 AI 评分分享卡:当前分享的信号
   const [shareSignal, setShareSignal] = useState<StrategySignalItem | null>(null)
@@ -1401,7 +1411,7 @@ export default function OpportunitiesPage() {
           <TabsList className="bg-muted/60 p-1">
             <TabsTrigger value="resonance" className="gap-1.5 font-medium">
               <Sparkles className="w-3.5 h-3.5 text-primary" />
-              选股铁三角共振
+              数智决策·铁三角共振
             </TabsTrigger>
             <TabsTrigger value="stockpool">数智选股池</TabsTrigger>
             <TabsTrigger value="jbp">聚宝盆选股</TabsTrigger>

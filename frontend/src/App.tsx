@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, ChevronRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -527,7 +527,7 @@ function App() {
             return (
               <NavLink
                 to={ai.to}
-                title={label}
+                title="数智参谋: AI 个股研判工作台(筹码·共振·撤单·竞价), 点击进入"
                 data-testid="nav-ai-copilot"
                 className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
@@ -539,12 +539,17 @@ function App() {
               >
                 <Icon className="h-4 w-4 shrink-0 text-role-watch" />
                 {!sidebarCollapsed && (
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-medium">{label}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
-                      筹码·共振·撤单·竞价
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12px] font-medium">{label}</span>
+                      <span className="block truncate text-[10px] text-muted-foreground">
+                        AI 帮你分析股票 · 点击进入
+                      </span>
                     </span>
-                  </span>
+                    {/* 可点击暗示(2026-10-24 小白可用性): 侧栏高亮卡曾像静态标签/横幅,
+                        用户不知道能点进去 —— 加箭头 + 动作化副标题(原「筹码·共振·撤单·竞价」是行话)。 */}
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-role-watch/70" aria-hidden />
+                  </>
                 )}
               </NavLink>
             )

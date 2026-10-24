@@ -4,6 +4,7 @@
 //   opportunity 的 `text-red-500` **保留**: 按 A 股买红卖绿, 机会=红是正确的, 不是缺陷。
 // 断言到 className 级别, 不看文案, 防止以后换词不换色又把语义翻回去。
 import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({ fetchAPI: vi.fn() }))
@@ -49,7 +50,7 @@ describe('ThreeTierVerdictRow 共振三态配色', () => {
 
   it('warning 态 = 告警色, 不得为绿色(语义反置修复)', async () => {
     route('warning')
-    render(<ThreeTierVerdictRow symbol="600519" market="cn" />)
+    render(<MemoryRouter><ThreeTierVerdictRow symbol="600519" market="cn" /></MemoryRouter>)
 
     await screen.findByText('共振态')
     const cls = resonanceSpan().className
@@ -60,13 +61,13 @@ describe('ThreeTierVerdictRow 共振三态配色', () => {
 
   it('warning 与 caution 不同色(否则两态不可区分)', async () => {
     route('warning')
-    render(<ThreeTierVerdictRow symbol="600519" market="cn" />)
+    render(<MemoryRouter><ThreeTierVerdictRow symbol="600519" market="cn" /></MemoryRouter>)
     await screen.findByText('共振态')
     const warnCls = resonanceSpan().className
     cleanup()
 
     route('caution')
-    render(<ThreeTierVerdictRow symbol="600519" market="cn" />)
+    render(<MemoryRouter><ThreeTierVerdictRow symbol="600519" market="cn" /></MemoryRouter>)
     await screen.findByText('共振态')
     const cautionCls = resonanceSpan().className
 
@@ -76,7 +77,7 @@ describe('ThreeTierVerdictRow 共振三态配色', () => {
 
   it('opportunity 态仍为 text-red-500(A 股买红: 机会=红是正确语义, 不得改动)', async () => {
     route('opportunity')
-    render(<ThreeTierVerdictRow symbol="600519" market="cn" />)
+    render(<MemoryRouter><ThreeTierVerdictRow symbol="600519" market="cn" /></MemoryRouter>)
 
     await screen.findByText('共振态')
     expect(resonanceSpan().className).toMatch(/text-red-500/)
@@ -84,7 +85,7 @@ describe('ThreeTierVerdictRow 共振三态配色', () => {
 
   it('unknown 态灰显, 不给方向色', async () => {
     route('unknown')
-    render(<ThreeTierVerdictRow symbol="600519" market="cn" />)
+    render(<MemoryRouter><ThreeTierVerdictRow symbol="600519" market="cn" /></MemoryRouter>)
 
     await screen.findByText('共振态')
     const cls = resonanceSpan().className

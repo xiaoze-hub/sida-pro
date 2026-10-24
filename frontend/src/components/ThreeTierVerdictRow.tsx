@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
-import { Activity, Flame, ShieldAlert, Sparkles } from 'lucide-react'
+import { Activity, ChevronRight, Flame, HelpCircle, ShieldAlert, Sparkles } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { PHASE_LABEL, type PhaseKey } from '@/lib/market-phase'
 import { safeFixed } from '@/lib/format'
 
@@ -62,6 +63,7 @@ interface DecisionPioneerResp {
 }
 
 export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market: string }) {
+  const navigate = useNavigate()
   const [phaseData, setPhaseData] = useState<string | null>(null)
   const [catalystCount, setCatalystCount] = useState<number | null>(null)
   const [wyckoffStage, setWyckoffStage] = useState<string | null>(null)
@@ -201,29 +203,45 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </div>
       ) : null}
 
-      {/* 选股铁三角: 数智决策三指标共振状态机 */}
+      {/* 选股铁三角: 数智决策三指标共振状态机。
+          小白可用性(2026-10-24): 原文案「铁三角共振」像静态标签 —— 统一冠名「数智决策」
+          (与首页面板/机会页同源), 加帮助 tooltip + 点击进全市场共振页的箭头暗示。 */}
       {resonanceState ? (
         <div className="flex items-center gap-1">
-          <span className="text-muted-foreground">铁三角共振:</span>
+          <span className="text-muted-foreground">数智决策·铁三角:</span>
           <span
-            className={`font-semibold ${
-              resonanceState.warning === 'opportunity'
-                ? 'text-red-500 animate-pulse'
-                : resonanceState.warning === 'warning'
-                ? // P0 修复(2026-10-24): warning 曾渲染成 text-green-500 —— 「警告」被读成「安全/上涨」,
-                  // 语义反置。改为 amber(告警色), 与 caution 的 yellow 区分(更偏橙红、不带"注意"的温和感)。
-                  // opportunity=text-red-500 保留: 按 A 股买红卖绿, 机会=红是**正确**的, 不是缺陷。
-                  'text-amber-500'
-                : resonanceState.warning === 'caution'
-                ? 'text-yellow-500'
-                : resonanceState.warning === 'unknown'
-                ? 'text-muted-foreground'  // A-01: 证据不足态灰显, 不给方向色
-                : 'text-foreground'
-            }`}
-            title={resonanceState.action}
+            className="cursor-help"
+            title="数智决策·铁三角 = GS趋势(筹码色带 G 区) + AI机构活跃度(≥3) + L2主力净流入(>0)。三项全满足=强共振。点击右侧结论可看全市场共振名单。"
           >
-            {resonanceState.state}
+            <HelpCircle className="h-3 w-3 text-muted-foreground/70" aria-label="什么是数智决策·铁三角" />
           </span>
+          <button
+            type="button"
+            onClick={() => navigate('/opportunities?tab=resonance')}
+            title="查看全市场数智决策·铁三角共振名单(机会页)"
+            className="flex items-center gap-0.5 rounded transition-colors hover:underline"
+          >
+            <span
+              className={`font-semibold ${
+                resonanceState.warning === 'opportunity'
+                  ? 'text-red-500 animate-pulse'
+                  : resonanceState.warning === 'warning'
+                  ? // P0 修复(2026-10-24): warning 曾渲染成 text-green-500 —— 「警告」被读成「安全/上涨」,
+                    // 语义反置。改为 amber(告警色), 与 caution 的 yellow 区分(更偏橙红、不带"注意"的温和感)。
+                    // opportunity=text-red-500 保留: 按 A 股买红卖绿, 机会=红是**正确**的, 不是缺陷。
+                    'text-amber-500'
+                  : resonanceState.warning === 'caution'
+                  ? 'text-yellow-500'
+                  : resonanceState.warning === 'unknown'
+                  ? 'text-muted-foreground'  // A-01: 证据不足态灰显, 不给方向色
+                  : 'text-foreground'
+              }`}
+              title={resonanceState.action}
+            >
+              {resonanceState.state}
+            </span>
+            <ChevronRight className="h-3 w-3 text-muted-foreground/70" aria-hidden />
+          </button>
         </div>
       ) : null}
 
