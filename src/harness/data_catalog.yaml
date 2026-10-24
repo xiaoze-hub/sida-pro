@@ -73,7 +73,7 @@ domains:
   scope: market
   params: {}
   source: quote_snapshots / index_daily
-  desc: 上证/深证/创业板点位与涨跌幅、两市成交额（库内指数快照，日线兜底）
+  desc: 上证/深证/创业板点位与涨跌幅、两市成交额（库内指数快照）。注意：本域只有当日/最近快照，没有历史序列；要指数历史K线请用 stock.kline（传指数代码即可）。
 - id: market.breadth
   label: 市场广度
   level: L0
@@ -116,7 +116,7 @@ domains:
     market: 可选 CN/HK/US（默认 CN）
     days: 可选 取多少根日K（默认 120，上限 500）
   source: klines
-  desc: 前复权日K序列、开高低收量、均线 MA5/20/60、区间高低与区间涨跌（PG hypertable 只读）
+  desc: 前复权日K序列、开高低收量、均线 MA5/20/60、区间高低与区间涨跌（PG hypertable 只读）。支持指数：000001(上证)/399001(深成)/399006(创业板)/000300/000016/000905/000852/000688，传 symbol 自动走 index_daily 指数日线（口径标 index_daily，与个股 klines 区分）。问「某段指数怎么走/跌了多少」用本域，market.index 只有当日快照。
 - id: stock.tech
   label: 技术面与形态
   level: L0

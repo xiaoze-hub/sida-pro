@@ -1478,6 +1478,13 @@ _SQL: dict[str, str] = {
         # coalesce(source,'') 还会让索引失效（6.1s → 2.0s 就是去掉它的效果）。
         "AND ts >= now() - interval '500 days' ORDER BY ts DESC LIMIT :n"
     ),
+    # —— 指数日线序列（2026-10-25: 参谋无法取指数历史K线，实测库里有 1201 行却无路径）——
+    # trade_date 是 varchar 'YYYY-MM-DD'，字符串比较即可（同格式，字典序=时间序）。
+    # 不按 market 过滤: 指数代码在 index_daily 里唯一(000001=上证, 不会与个股 000001 混)。
+    "index_daily_bars": (
+        "SELECT trade_date, open, high, low, close, volume, amount, name FROM index_daily "
+        "WHERE code = :s AND trade_date >= :since ORDER BY trade_date DESC LIMIT :n"
+    ),
     # —— 用户域（严格按 user_id 过滤，不含 user_id IS NULL 的全局行）——
     "portfolio_positions": (
         "SELECT s.symbol, s.name, s.market, p.quantity, p.cost_price, p.trading_style "
@@ -2286,12 +2293,73 @@ def _strategy_signal_payload(db: Any, top_n: int) -> dict[str, Any]:
     }
 
 
+# A 股主要指数（与 src/web/api/market.py::MARKET_INDICES、quotes.py::is_index 同源）。
+# ⚠️ 000001 双关: 既是上证指数, 也是平安银行(深市)。这里**默认按指数解析** ——
+#    因为在「大盘/上证/指数」语境下那才是高频意图; 若要个股请显式传 kind=stock,
+#    且输出里必须写清"已按上证指数解析", 让模型和用户都能看出歧义已被裁决。
+_INDEX_CODES = {
+    "000001": "上证指数",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "000300": "沪深300",
+    "000016": "上证50",
+    "000905": "中证500",
+    "000852": "中证1000",
+    "000688": "科创50",
+}
+
+
+def _index_kline_payload(db: Any, symbol: str, days: int, since: str) -> dict[str, Any]:
+    """指数日线序列（index_daily）。返回结构与 _kline_payload 一致，另带 kind/name。"""
+    missing: list[str] = []
+    raw = _read_safe(
+        db, "index_daily_bars", {"s": symbol, "since": since, "n": days}, missing, label="index_daily"
+    )
+    bars: list[dict[str, Any]] = []
+    name = _INDEX_CODES.get(symbol, "")
+    for r in sorted(raw, key=lambda x: str(x.get("trade_date") or "")):
+        name = str(r.get("name") or name or symbol)
+        bars.append({
+            "date": str(r.get("trade_date") or "")[:10],
+            "open": r.get("open"),
+            "high": r.get("high"),
+            "low": r.get("low"),
+            "close": r.get("close"),
+            "volume": r.get("volume"),
+            "amount": r.get("amount"),
+            # 口径显式写进 source: 下游渲染会显示, 不会与个股 klines 混淆
+            "source": "index_daily(指数日线)",
+        })
+    if not bars and not any("index_daily" in m for m in missing):
+        missing.append(f"index_daily 无 {symbol} 自 {since} 的日线（该指数未回填到这段）")
+    return {
+        "as_of": bars[-1]["date"] if bars else "未知",
+        "bars": bars,
+        "missing": missing,
+        "kind": "index",
+        "name": name,
+    }
+
+
+def _days_ago_iso(days: int) -> str:
+    """N 个自然日前的 YYYY-MM-DD（指数日线按 trade_date>= 过滤用）。"""
+    from datetime import date, timedelta
+
+    return (date.today() - timedelta(days=max(int(days), 1) * 2)).isoformat()
+
+
 def _kline_payload(db: Any, symbol: str, market: str, days: int) -> dict[str, Any]:
     """stock.kline 取数：PG klines hypertable（ts 时间列，无 trade_date）。
 
     与 src.db.klines_repo.load_qfq_bars 同口径（qfq + tq/tencent 双源去重），
     但这里直接读库、每条带 LIMIT，不触发网络回源。
     """
+    # 2026-10-25: 指数代码必须走 index_daily —— 此前传 000001 会命中 klines 里
+    # **平安银行**(同代码), 参谋据此得出"上证没有趋势下跌"的错误结论(实测 7月4112→10月3658)。
+    if market == "CN" and symbol in _INDEX_CODES:
+        since_date = "1970-01-01" if days >= 500 else _days_ago_iso(days)
+        return _index_kline_payload(db, symbol, days, since_date)
+
     missing: list[str] = []
     bars: list[dict[str, Any]] = []
     raw = _read_safe(db, "kline_daily_bars", {"s": symbol, "m": market, "n": days}, missing, label="klines")
