@@ -63,8 +63,8 @@ export const PHASE_TEXT: Record<PhaseKey, string> = {
   rally: 'text-red-600 dark:text-red-400',
   climax: 'text-red-800 dark:text-red-300',
   ebb: 'text-orange-600 dark:text-orange-400',
-  repair: 'text-gray-600 dark:text-gray-400',
-  accumulating: 'text-slate-600 dark:text-slate-400',
+  repair: 'text-muted-foreground',
+  accumulating: 'text-muted-foreground',
 }
 
 export function phaseBandClass(phase: string | undefined | null): string {

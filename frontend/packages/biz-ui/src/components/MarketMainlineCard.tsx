@@ -79,7 +79,7 @@ function scoreTone(score: number | null | undefined): { bar: string; text: strin
   }
   if (score >= 75) return { bar: 'bg-rose-500/80', text: 'text-rose-500', tag: '强主线' }
   if (score >= 50) return { bar: 'bg-cyan-500/80', text: 'text-cyan-500', tag: '次主线' }
-  return { bar: 'bg-slate-500/60', text: 'text-slate-400', tag: '弱主线' }
+  return { bar: 'bg-slate-500/60', text: 'text-muted-foreground', tag: '弱主线' }
 }
 
 /** 单主线行 */

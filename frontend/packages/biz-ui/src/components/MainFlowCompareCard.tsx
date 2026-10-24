@@ -63,7 +63,7 @@ function upColor(v: number | null | undefined): string {
 /** 一致性分段配色: >90 绿 / 60-90 蓝 / <60 黄 */
 function consistencyColor(consistency: number | null | undefined): { stroke: string; text: string; ring: string } {
   if (consistency == null || !Number.isFinite(consistency)) {
-    return { stroke: '#64748b', text: 'text-slate-400', ring: 'border-slate-500/40' }
+    return { stroke: '#64748b', text: 'text-muted-foreground', ring: 'border-slate-500/40' }
   }
   if (consistency > 90) return { stroke: '#10b981', text: 'text-emerald-500', ring: 'border-emerald-500/50' }
   if (consistency >= 60) return { stroke: '#22d3ee', text: 'text-cyan-500', ring: 'border-cyan-500/50' }

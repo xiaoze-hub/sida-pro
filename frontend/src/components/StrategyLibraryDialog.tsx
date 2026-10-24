@@ -22,7 +22,7 @@ const BADGE_COLORS: Record<string, string> = {
   突破: 'bg-red-500/15 text-red-600 border-red-500/30',
   反弹: 'bg-purple-500/15 text-purple-500 border-purple-500/30',
   动量: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-500 border-emerald-500/30',
-  防御: 'bg-slate-500/15 text-slate-500 border-slate-500/30',
+  防御: 'bg-slate-500/15 text-muted-foreground border-slate-500/30',
   多因子: 'bg-amber-500/15 text-amber-700 dark:text-amber-500 border-amber-500/30',
   蓝筹: 'bg-cyan-500/15 text-cyan-500 border-cyan-500/30',
 }

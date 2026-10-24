@@ -93,14 +93,14 @@ const PHASE_STYLE: Record<
   },
   repair: {
     bg: 'bg-gray-500/10',
-    text: 'text-gray-700 dark:text-gray-400',
+    text: 'text-muted-foreground',
     border: 'border-gray-500/40',
     dot: 'bg-gray-500',
     desc: '不满足任何正向规则, 修复兜底',
   },
   accumulating: {
     bg: 'bg-slate-500/10',
-    text: 'text-slate-700 dark:text-slate-400',
+    text: 'text-muted-foreground',
     border: 'border-slate-500/40',
     dot: 'bg-slate-500',
     desc: '历史不足 5 天, 信号不可信',

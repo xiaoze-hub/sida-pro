@@ -134,7 +134,7 @@ const STYLE: Record<AbnormalStatus, StatusStyle> = {
   },
   unknown: {
     badgeBg: 'bg-slate-500/10 border-slate-500/30',
-    badgeText: 'text-slate-600 dark:text-slate-400',
+    badgeText: 'text-muted-foreground',
     barBg: 'bg-slate-400',
     rowHover: 'bg-slate-500/[0.04]',
   },

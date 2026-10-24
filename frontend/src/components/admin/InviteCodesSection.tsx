@@ -150,7 +150,7 @@ export function InviteCodesSection() {
       <div className="mb-4 rounded-xl border border-border/50 dark:border-white/10 bg-s1 px-3 py-2.5">
         <div className="mb-2 text-[11px] text-muted-foreground">
           注册模式：<span className="text-foreground">{MODE_LABEL[mode] ?? mode}</span>
-          <span className="ml-2 text-[10px] text-slate-600">切换后立即生效（新注册请求按新模式判定）</span>
+          <span className="ml-2 text-[10px] text-muted-foreground">切换后立即生效（新注册请求按新模式判定）</span>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {MODE_OPTIONS.map(opt => (

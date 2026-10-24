@@ -167,7 +167,7 @@ const ROLE_BADGE: Record<string, string> = {
 }
 const TIER_LABEL: Record<string, string> = { free: '免费', trial: '试用', pro: 'Pro' }
 const TIER_BADGE: Record<string, string> = {
-  free: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+  free: 'bg-slate-500/10 text-muted-foreground border-slate-500/20',
   trial: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
   pro: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
 }
@@ -209,7 +209,7 @@ function Th({ children, className = '' }: { children: React.ReactNode; className
 function Td({ children, className = '', title }: { children: React.ReactNode; className?: string; title?: string }) {
   // title 用于把"为什么是 --"(例如没有已记录耗时的样本)挂在单元格上, 不靠猜
   return (
-    <td className={`px-3 py-2 text-[12px] text-foreground dark:text-slate-300 ${className}`} title={title}>
+    <td className={`px-3 py-2 text-[12px] text-foreground ${className}`} title={title}>
       {children}
     </td>
   )
@@ -548,19 +548,19 @@ export default function AdminPage() {
         {/* 统计卡片 */}
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <InfoCard>
-            <div className="text-[10px] text-slate-600">总用户</div>
+            <div className="text-[10px] text-muted-foreground">总用户</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{stats?.total_users ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">活跃用户</div>
+            <div className="text-[10px] text-muted-foreground">活跃用户</div>
             <div className="font-mono text-[20px] font-semibold text-cyan-400">{stats?.active_users ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">今日新增</div>
+            <div className="text-[10px] text-muted-foreground">今日新增</div>
             <div className="font-mono text-[20px] font-semibold text-emerald-400">{stats?.new_today ?? '—'}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">7 日新增</div>
+            <div className="text-[10px] text-muted-foreground">7 日新增</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{stats?.new_7d ?? '—'}</div>
           </InfoCard>
         </div>
@@ -577,7 +577,7 @@ export default function AdminPage() {
               </span>
             ))}
             {stats.new_30d != null && (
-              <span className="inline-flex items-center rounded-full border border-border/50 dark:border-white/10 bg-muted/40 dark:bg-white/[0.03] px-2 py-0.5 text-[10px] text-muted-foreground dark:text-slate-400">
+              <span className="inline-flex items-center rounded-full border border-border/50 dark:border-white/10 bg-muted/40 dark:bg-white/[0.03] px-2 py-0.5 text-[10px] text-muted-foreground">
                 30 日新增 <span className="ml-1 font-mono">{stats.new_30d}</span>
               </span>
             )}
@@ -606,10 +606,10 @@ export default function AdminPage() {
                 {paged(users, usersPage).map(u => (
                   <tr key={u.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
                     <Td className="font-medium text-foreground">{u.username}</Td>
-                    <Td className="text-muted-foreground dark:text-slate-500">{u.email || '—'}</Td>
+                    <Td className="text-muted-foreground">{u.email || '—'}</Td>
                     <Td>
                       <select
-                        className="rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 py-1 text-[11px] text-foreground dark:text-slate-200 outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                        className="rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 py-1 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                         value={u.role}
                         disabled={userActionId === u.id}
                         onChange={e => void changeRole(u, e.target.value)}
@@ -627,7 +627,7 @@ export default function AdminPage() {
                             已注销
                           </span>
                           {u.deleted_at && (
-                            <span className="text-[10px] text-slate-600">宽限期至 {graceDeadline(u.deleted_at)}</span>
+                            <span className="text-[10px] text-muted-foreground">宽限期至 {graceDeadline(u.deleted_at)}</span>
                           )}
                         </span>
                       ) : u.is_active ? (
@@ -640,8 +640,8 @@ export default function AdminPage() {
                         </span>
                       )}
                     </Td>
-                    <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(u.created_at) || '—'}</Td>
-                    <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(u.last_login) || '从未'}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(u.created_at) || '—'}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(u.last_login) || '从未'}</Td>
                     <Td className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         {u.is_deleted ? (
@@ -716,14 +716,14 @@ export default function AdminPage() {
                 取消
               </Button>
             </div>
-            <div className="text-[10px] text-slate-600">重置后该用户旧登录会话立即失效，需用新密码重新登录。</div>
+            <div className="text-[10px] text-muted-foreground">重置后该用户旧登录会话立即失效，需用新密码重新登录。</div>
           </div>
         )}
 
         {/* 最近注册 */}
         {stats && stats.recent_registrations.length > 0 && (
           <div className="mt-4">
-            <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-slate-400">
+            <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-muted-foreground">
               <UserPlus className="h-3.5 w-3.5" />
               最近注册
             </div>
@@ -735,9 +735,9 @@ export default function AdminPage() {
                 >
                   <div className="min-w-0">
                     <span className="text-[12px] font-medium text-foreground">{r.username}</span>
-                    {r.email && <span className="ml-2 text-[11px] text-muted-foreground dark:text-slate-500">{r.email}</span>}
+                    {r.email && <span className="ml-2 text-[11px] text-muted-foreground">{r.email}</span>}
                   </div>
-                  <span className="shrink-0 text-[11px] text-slate-600">{formatDateTime(r.created_at)}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTime(r.created_at)}</span>
                 </div>
               ))}
             </div>
@@ -754,19 +754,19 @@ export default function AdminPage() {
       >
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <InfoCard>
-            <div className="text-[10px] text-slate-600">总 Key</div>
+            <div className="text-[10px] text-muted-foreground">总 Key</div>
             <div className="font-mono text-[20px] font-semibold text-foreground">{keyStats.total}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">活跃</div>
+            <div className="text-[10px] text-muted-foreground">活跃</div>
             <div className="font-mono text-[20px] font-semibold text-emerald-400">{keyStats.active}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">已冻结</div>
+            <div className="text-[10px] text-muted-foreground">已冻结</div>
             <div className="font-mono text-[20px] font-semibold text-amber-400">{keyStats.frozen}</div>
           </InfoCard>
           <InfoCard>
-            <div className="text-[10px] text-slate-600">今日调用量</div>
+            <div className="text-[10px] text-muted-foreground">今日调用量</div>
             <div className="font-mono text-[20px] font-semibold text-cyan-400">{keyStats.totalCalls}</div>
           </InfoCard>
         </div>
@@ -796,7 +796,7 @@ export default function AdminPage() {
                     <Td>
                       <code className="font-mono text-[12px] text-cyan-300">{k.key_prefix}…</code>
                     </Td>
-                    <Td className="text-slate-400">{k.username || k.owner_label || '—'}</Td>
+                    <Td className="text-muted-foreground">{k.username || k.owner_label || '—'}</Td>
                     <Td>
                       <span
                         className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TIER_BADGE[k.tier] || TIER_BADGE.free}`}
@@ -823,11 +823,11 @@ export default function AdminPage() {
                     </Td>
                     <Td className="font-mono">{k.daily_limit}</Td>
                     <Td className="font-mono">{k.used_today ?? '—'}</Td>
-                    <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(k.last_used_at) || '从未'}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(k.last_used_at) || '从未'}</Td>
                     <Td>
                       <div className="flex items-center justify-end gap-1">
                         <select
-                          className="h-7 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-1.5 text-[11px] text-foreground dark:text-slate-200 outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                          className="h-7 rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-1.5 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                           value={k.tier}
                           title="调整档位（日限同步为该档默认值）"
                           disabled={keyActionId === k.id}
@@ -899,7 +899,7 @@ export default function AdminPage() {
         icon={<BarChart3 className="h-4 w-4" />}
       >
         {/* 按 Key */}
-        <div className="mb-2 text-[12px] font-medium text-slate-400">按 API Key</div>
+        <div className="mb-2 text-[12px] font-medium text-muted-foreground">按 API Key</div>
         {skillUsageLoading ? (
           <TableLoading label="加载用量…" />
         ) : !skillUsage?.report?.length ? (
@@ -928,8 +928,8 @@ export default function AdminPage() {
                       </span>
                     </Td>
                     <Td className="font-mono text-foreground">{r.total}</Td>
-                    <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground dark:text-slate-500'}`}>{r.errors}</Td>
-                    <Td className="text-[11px] text-muted-foreground dark:text-slate-500">
+                    <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
+                    <Td className="text-[11px] text-muted-foreground">
                       {(r.top_skills || []).map(([name, n]) => `${name}(${n})`).join('、') || '—'}
                     </Td>
                   </tr>
@@ -940,7 +940,7 @@ export default function AdminPage() {
         )}
 
         {/* 按 skill / 按天 · 耗时(B7 2026-09-19) —— 与上面两张表的分工: 那两张数次数, 这张回答"慢不慢" */}
-        <div className="mb-2 mt-6 text-[12px] font-medium text-slate-400">按 Skill / 按天 · 耗时</div>
+        <div className="mb-2 mt-6 text-[12px] font-medium text-muted-foreground">按 Skill / 按天 · 耗时</div>
         {latencyLoading ? (
           <TableLoading label="加载耗时…" />
         ) : !usageLatency?.by_skill?.length ? (
@@ -964,15 +964,15 @@ export default function AdminPage() {
                     <tr key={r.skill} className="border-b border-border/40 dark:border-white/5 last:border-0">
                       <Td><code className="font-mono text-cyan-300">{r.skill}</code></Td>
                       <Td className="font-mono text-foreground">{r.calls}{typeof r.users === 'number' ? ` · ${r.users}人` : ''}</Td>
-                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground dark:text-slate-500'}`}>{r.errors}</Td>
+                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
                       {/* null = 没样本可算(不是 0ms): 显示 -- 并把原因放进 title */}
-                      <Td className="font-mono text-muted-foreground dark:text-slate-400" title={r.p50_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
+                      <Td className="font-mono text-muted-foreground" title={r.p50_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
                         {r.p50_ms === null ? '--' : `${r.p50_ms} ms`}
                       </Td>
-                      <Td className="font-mono text-muted-foreground dark:text-slate-400" title={r.p95_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
+                      <Td className="font-mono text-muted-foreground" title={r.p95_ms === null ? '没有已记录耗时的调用, 无法计算' : ''}>
                         {r.p95_ms === null ? '--' : `${r.p95_ms} ms`}
                       </Td>
-                      <Td className="font-mono text-[11px] text-muted-foreground dark:text-slate-500">{r.latency_samples}</Td>
+                      <Td className="font-mono text-[11px] text-muted-foreground">{r.latency_samples}</Td>
                     </tr>
                   ))}
                 </tbody>
@@ -994,21 +994,21 @@ export default function AdminPage() {
                     <tr key={r.day} className="border-b border-border/40 dark:border-white/5 last:border-0">
                       <Td className="font-mono text-foreground">{r.day}</Td>
                       <Td className="font-mono text-foreground">{r.calls}</Td>
-                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground dark:text-slate-500'}`}>{r.errors}</Td>
-                      <Td className="font-mono text-muted-foreground dark:text-slate-400">{r.p50_ms === null ? '--' : `${r.p50_ms} ms`}</Td>
-                      <Td className="font-mono text-muted-foreground dark:text-slate-400">{r.p95_ms === null ? '--' : `${r.p95_ms} ms`}</Td>
+                      <Td className={`font-mono ${r.errors > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>{r.errors}</Td>
+                      <Td className="font-mono text-muted-foreground">{r.p50_ms === null ? '--' : `${r.p50_ms} ms`}</Td>
+                      <Td className="font-mono text-muted-foreground">{r.p95_ms === null ? '--' : `${r.p95_ms} ms`}</Td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             {/* 口径说明由后端给("未记录 ≠ 0ms"), 页面不自己措辞 */}
-            <div className="text-[11px] text-muted-foreground dark:text-slate-500">{usageLatency.latency_note}</div>
+            <div className="text-[11px] text-muted-foreground">{usageLatency.latency_note}</div>
           </div>
         )}
 
         {/* 按用户+接口 */}
-        <div className="mb-2 text-[12px] font-medium text-slate-400">按用户 / 接口（高价值接口）</div>
+        <div className="mb-2 text-[12px] font-medium text-muted-foreground">按用户 / 接口（高价值接口）</div>
         {hvUsageLoading ? (
           <TableLoading label="加载用量…" />
         ) : !hvUsage?.by_user_api?.length ? (
@@ -1032,7 +1032,7 @@ export default function AdminPage() {
                       <code className="font-mono text-[11px] text-cyan-300">{r.api_name}</code>
                     </Td>
                     <Td className="font-mono text-foreground">{r.calls}</Td>
-                    <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(r.last_at) || '—'}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(r.last_at) || '—'}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -1041,7 +1041,7 @@ export default function AdminPage() {
         )}
 
         {/* 按天 */}
-        <div className="mb-2 text-[12px] font-medium text-slate-400">按天</div>
+        <div className="mb-2 text-[12px] font-medium text-muted-foreground">按天</div>
         {hvUsageLoading ? (
           <TableLoading label="加载用量…" />
         ) : !hvUsage?.by_day?.length ? (
@@ -1059,7 +1059,7 @@ export default function AdminPage() {
               <tbody>
                 {hvUsage.by_day.map((r, i) => (
                   <tr key={`${r.day}-${r.api_name}-${i}`} className="border-b border-border/40 dark:border-white/5 last:border-0">
-                    <Td className="whitespace-nowrap text-slate-400">{r.day}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{r.day}</Td>
                     <Td>
                       <code className="font-mono text-[11px] text-cyan-300">{r.api_name}</code>
                     </Td>
@@ -1107,7 +1107,7 @@ export default function AdminPage() {
                   <tr key={a.id} className="border-b border-border/40 dark:border-white/5 last:border-0 hover:bg-accent/30 dark:hover:bg-white/[0.02]">
                     <Td className="font-medium text-foreground">{a.username}</Td>
                     <Td className="max-w-[280px]">
-                      <span className="line-clamp-2 text-[11px] text-slate-400" title={a.reason}>
+                      <span className="line-clamp-2 text-[11px] text-muted-foreground" title={a.reason}>
                         {a.reason || '—'}
                       </span>
                     </Td>
@@ -1118,12 +1118,12 @@ export default function AdminPage() {
                         {APP_STATUS_LABEL[a.status] || a.status}
                       </span>
                     </Td>
-                    <Td className="whitespace-nowrap text-muted-foreground dark:text-slate-500">{formatDateTime(a.created_at) || '—'}</Td>
+                    <Td className="whitespace-nowrap text-muted-foreground">{formatDateTime(a.created_at) || '—'}</Td>
                     <Td className="text-right">
                       {a.status === 'pending' ? (
                         <div className="flex flex-col items-end gap-1">
                           <input
-                            className="h-7 w-[160px] rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[11px] text-foreground dark:text-slate-200 outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
+                            className="h-7 w-[160px] rounded-md border border-border/60 dark:border-white/10 bg-background dark:bg-[#0d0d18] px-2 text-[11px] text-foreground outline-none focus:border-primary/40 dark:focus:border-cyan-500/40"
                             placeholder="审核备注（可选）"
                             maxLength={255}
                             value={reviewNotes[a.id] || ''}
@@ -1156,7 +1156,7 @@ export default function AdminPage() {
                           </div>
                         </div>
                       ) : (
-                        <span className="text-[11px] text-slate-600">
+                        <span className="text-[11px] text-muted-foreground">
                           {a.reviewed_by ? `${a.reviewed_by} · ` : ''}
                           {formatDateTime(a.reviewed_at)}
                         </span>

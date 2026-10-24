@@ -315,5 +315,21 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
   }
 }
 
+// ── R15: 文字色禁止直接用 Tailwind 调色板(2026-10-24)──────────────────────
+// 依据: 全站 119 处 text-slate/gray/zinc/neutral/stone-NN。这些色绕过设计令牌,
+// 在暗色下必然偏灰 —— `/admin` 的「总用户/活跃用户/今日新增」实测 **2.60:1**（AA 需 4.5），
+// 正是 43 处 text-slate-600 造成的。文字色只允许: text-foreground / text-muted-foreground /
+// 语义色(stock-up|stock-down|amber|primary|destructive) / 白字(在有色底上)。
+{
+  const PAL = /\btext-(?:slate|gray|zinc|neutral|stone)-(?:[1-9][0-9]?|[1-9]00)\b/g
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(PAL) || [])
+    if (hits.length) {
+      bad('R15-PALETTE-TEXT', rel(f), hits.length, `${hits[0]} —— 文字色只用语义令牌(实测 2.60:1, AA 需 4.5)`)
+    }
+  }
+}
+
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)
