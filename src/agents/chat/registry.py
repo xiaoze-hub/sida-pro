@@ -3213,3 +3213,194 @@ async def _tool_web_search_fallback(db: Session, args: dict, user: User | None =
         lines.append(f"- {title}\n  {url}\n  {content}")
     return "\n".join(lines)
 
+
+# ──────────────── 两融（A股杠杆）────────────────────────────────────────────
+# 归因维度「A股杠杆」此前无工具：参谋被问「杠杆资金撤了没」只能绕道猜。
+# 数据源悟道 MCP margin_trading（已订阅，SSE/SZSE/BSE 分区，日频，可查区间）。
+# 口径：marginBalance=融资余额、totalMarginShortBalance=两融余额，单位**元**（渲染转亿）。
+
+
+@register_chat_tool(
+    "get_margin_trading",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_margin_trading",
+            "description": (
+                "查询 A 股融资融券（杠杆资金）余额与变化：交易所汇总(沪/深/北)或单只个股明细。"
+                "用于回答「杠杆资金在加还是在撤」「融资余额多少」「两融拥挤度」「去杠杆」等问题。"
+                "数据源悟道（日频，T+1 更新）。个股明细传 code。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "可选，6 位股票代码；不传则返回交易所汇总", "default": ""},
+                    "startDate": {"type": "string", "description": "区间开始，YYYY-MM-DD 或 YYYYMMDD；不传默认近 20 个交易日", "default": ""},
+                    "endDate": {"type": "string", "description": "区间结束，默认今天", "default": ""},
+                    "limit": {"type": "integer", "description": "返回条数，默认 40，上限 200", "default": 40},
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="悟道 margin_trading（交易所披露口径，融资余额/两融余额单位=元）",
+)
+async def _tool_get_margin_trading(db: Session, args: dict, user: User | None = None) -> str:
+    from datetime import datetime, timedelta
+
+    code = (args.get("code") or "").strip()
+    end = (args.get("endDate") or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    start = (args.get("startDate") or "").strip()
+    if not start:
+        start = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=35)).strftime("%Y-%m-%d") if "-" in end else (
+            datetime.strptime(end, "%Y%m%d") - timedelta(days=35)
+        ).strftime("%Y%m%d")
+    try:
+        limit = max(1, min(int(args.get("limit") or 40), 200))
+    except (TypeError, ValueError):
+        limit = 40
+
+    payload: dict = {"startDate": start, "endDate": end, "limit": limit,
+                     "format": "json", "detailLevel": "raw"}
+    if code:
+        payload["code"] = code
+    try:
+        from src.collectors.wudao_mcp_client import WudaoMCPClient
+
+        r = await asyncio.to_thread(lambda: WudaoMCPClient().call_tool("margin_trading", payload))
+    except Exception as e:  # noqa: BLE001 — 取不到要如实说，不许编余额
+        logger.warning("两融取数失败: %s", e)
+        return f"两融数据取数失败：{str(e)[:120]}（不是'没有两融数据'，是数据源不可用）"
+
+    # wudao 返回 {"text": ...} 或直接结构化 dict；两种都要吃得下
+    data = r.get("data") if isinstance(r, dict) and isinstance(r.get("data"), dict) else r
+    if not isinstance(data, dict):
+        txt = (r or {}).get("text") if isinstance(r, dict) else None
+        return f"【两融】{txt}" if txt else "两融返回结构无法解析（源返回了非预期格式）。"
+    rows = data.get("rows") or []
+    if not rows:
+        head = (r.get("text") if isinstance(r, dict) else "") or ""
+        return f"两融无数据（{start}~{end}）。{('源摘要：' + head) if head else '可能非交易日或数据源未就绪。'}"
+
+    def yi(v):
+        try:
+            return f"{float(v) / 1e8:.0f}亿"
+        except (TypeError, ValueError):
+            return "未披露"
+
+    # 按交易日聚合：同一天 SSE/SZSE/BSE 各自一行
+    by_date: dict[str, dict] = {}
+    for row in rows:
+        d = str(row.get("tradeDate") or "")
+        if not d:
+            continue
+        slot = by_date.setdefault(d, {"margin": 0.0, "total": 0.0, "ex": {}})
+        m = row.get("marginBalance")
+        t = row.get("totalMarginShortBalance")
+        if isinstance(m, (int, float)):
+            slot["margin"] += m
+        if isinstance(t, (int, float)):
+            slot["total"] += t
+        slot["ex"][str(row.get("exchangeId") or "?")] = (m, t)
+    dates = sorted(by_date)
+    latest, first = dates[-1], dates[0]
+    lm, lt = by_date[latest]["margin"], by_date[latest]["total"]
+    fm, ft = by_date[first]["margin"], by_date[first]["total"]
+
+    lines = [f"【两融（A股杠杆）】{first} ~ {latest}，共 {len(dates)} 个交易日"]
+    per_ex = "；".join(
+        f"{k} 融资 {yi(v[0])}" for k, v in sorted(by_date[latest]["ex"].items())
+    )
+    lines.append(f"- 最新 {latest}：融资余额 {yi(lm)}｜两融余额 {yi(lt)}（{per_ex}）")
+    if len(dates) > 1 and fm and ft:
+        d_m = (lm - fm) / fm * 100
+        d_t = (lt - ft) / ft * 100
+        arrow = "增" if lm >= fm else "减"
+        lines.append(
+            f"- 区间变化：融资余额 {yi(fm)} → {yi(lm)}（{d_m:+.2f}%，{arrow}）｜"
+            f"两融余额 {yi(ft)} → {yi(lt)}（{d_t:+.2f}%）"
+        )
+        # 只给最近 5 个交易日的日序列，避免把整段塞进上下文
+        seq = "；".join(f"{d} {yi(by_date[d]['margin'])}" for d in dates[-5:])
+        lines.append(f"- 近 5 日融资余额：{seq}")
+    lines.append(
+        "口径：融资余额/两融余额均取交易所披露值，单位元已换算为亿；"
+        "个股明细请传 code。T+1 更新，不含当日盘中。"
+    )
+    return "\n".join(lines)
+
+
+# ──────────────── 宏观序列（外部环境）──────────────────────────────────────
+# 归因维度「美债/油价/美元/风险偏好」此前完全没有数据来源，参谋只能编。
+# 后端无 iFinD 客户端（容器内只有 THS_*），故走 Yahoo chart API：免 key、日频、有历史。
+# 口径：^TNX 自适应归一（>20 视为 ×10 旧格式）；缺失的指标如实列 reason，不插值不补 0。
+
+
+@register_chat_tool(
+    "get_macro_series",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_macro_series",
+            "description": (
+                "查外部宏观/风险偏好指标的历史序列与区间涨跌：美债10Y收益率、布伦特/WTI原油、"
+                "美元指数、VIX、标普500、COMEX黄金。用于回答「美债升了没」「油价对A股的影响」"
+                "「外部环境紧不紧」等归因问题。数据源 Yahoo（日频，免 key，非交易所官方口径）。"
+                "注意：这是**外部市场口径**，不是国内宏观（GDP/CPI/社融没有），GDP类请如实说没有。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "指标列表：us10y/brent/wti/dxy/vix/spx/gold/us2y；不传默认 美债+油价+美元指数",
+                    },
+                    "range": {"type": "string", "description": "回溯区间：1mo/3mo/6mo/1y/2y，默认 3mo", "default": "3mo"},
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="Yahoo Finance（外部市场口径，日频；非国内宏观、非交易所官方）",
+)
+async def _tool_get_macro_series(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.macro_free_sources import SERIES, summarize
+
+    keys = args.get("keys") or ["us10y", "brent", "dxy"]
+    if isinstance(keys, str):
+        keys = [k.strip() for k in keys.split(",") if k.strip()]
+    range_ = str(args.get("range") or "3mo").strip()
+    if range_ not in ("1mo", "3mo", "6mo", "1y", "2y"):
+        range_ = "3mo"
+
+    def _work():
+        return [summarize(k, range_) for k in keys]
+
+    try:
+        rows = await asyncio.to_thread(_work)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("宏观序列取数失败: %s", e)
+        return f"宏观序列取数失败：{str(e)[:100]}（外部源不可用，不是'没有数据'）"
+
+    ok = [r for r in rows if r.get("points")]
+    bad = [r for r in rows if not r.get("points")]
+    lines = [f"【外部宏观（{range_}）】口径=Yahoo 日频，非国内宏观数据"]
+    for r in ok:
+        lines.append(
+            f"- {r['name']}：{r['first_date']} {r['first']}{r['unit']} → "
+            f"{r['last_date']} {r['last']}{r['unit']}（{r['change_pct']:+.2f}%，"
+            f"区间高 {r['high']}{r['unit']} / 低 {r['low']}{r['unit']}）"
+        )
+    for r in bad:
+        lines.append(f"- {r.get('key')}：未取到（{r.get('reason') or '源无返回'}）")
+    if len(ok) == 1:
+        lines.append(
+            "⚠️ 只有一个指标有数据，不能据此推出'大盘为什么跌'——因果需要多指标同向 + 国内资金面配合。"
+        )
+    lines.append(
+        "用法纪律：宏观指标只能说明'外部环境是否支持下跌'，**不能单独当因果**；"
+        "要和两融/资金流/涨跌家数同向才构成证据链。"
+    )
+    return "\n".join(lines)
+
