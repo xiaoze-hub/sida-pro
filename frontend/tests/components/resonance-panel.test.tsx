@@ -67,3 +67,28 @@ describe('ResonancePanel 三指标共振', () => {
     expect(await screen.findByText(/今日无三指标共振标的/)).toBeTruthy()
   })
 })
+
+describe('ResonancePanel 表头（2026-10-24）', () => {
+  afterEach(() => cleanup())
+  beforeEach(() => {
+    mocks.fetchAPI.mockReset()
+    mocks.fetchAPI.mockResolvedValue(RESP)
+  })
+
+  it('补上列头：此前只有裸数据行，用户看到 32.43 / +0.55亿 只能猜列义', async () => {
+    render(<ResonancePanel />)
+    await screen.findByText('神剑股份')
+    for (const h of ['名称', '代码', '涨幅', '活跃度', '资金净额', '三指标', 'AI']) {
+      expect(screen.getByText(h)).toBeTruthy()
+    }
+  })
+
+  it('数值列头右对齐（与行内数值同向，否则列会错位）', async () => {
+    render(<ResonancePanel />)
+    await screen.findByText('神剑股份')
+    for (const h of ['涨幅', '活跃度', '资金净额', 'AI']) {
+      expect(screen.getByText(h).className).toContain('text-right')
+    }
+    expect(screen.getByText('名称').className).not.toContain('text-right')
+  })
+})
