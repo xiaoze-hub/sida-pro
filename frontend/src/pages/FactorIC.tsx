@@ -71,6 +71,34 @@ function icCell(v: number | null, periods: number, minPeriods: number) {
   }
 }
 
+/**
+ * IC 发散条（2026-10-24 L3-C）：IC 原来只是一个数字 + 颜色, 读者看不出「-0.04 是弱负相关还是有效」。
+ * 改成以 0 为中轴的发散条：右侧红=正相关(A股红=好), 左侧绿=负相关, 长度按 |IC|/0.1 归一。
+ * 只新增可视化, 不改任何 IC 计算与阈值。
+ */
+function IcBar({ value }: { value: number | null | undefined }) {
+  if (value == null || !Number.isFinite(value)) return <span className="text-muted-foreground">--</span>
+  const clamped = Math.max(-0.1, Math.min(0.1, value))
+  const pct = (Math.abs(clamped) / 0.1) * 50
+  return (
+    <span
+      className="ml-2 inline-flex items-center align-middle"
+      role="img"
+      aria-label={`IC 发散条: ${value}（中轴为 0，右正左负）`}
+      title={`IC=${value}；中轴为 0，右侧红=正相关，左侧绿=负相关`}
+    >
+      <span className="relative inline-block h-1.5 w-16 rounded bg-accent/40">
+        {value >= 0 ? (
+          <span className="absolute left-1/2 top-0 h-1.5 rounded-r bg-stock-up" style={{ width: `${pct}%` }} />
+        ) : (
+          <span className="absolute right-1/2 top-0 h-1.5 rounded-l bg-stock-down" style={{ width: `${pct}%` }} />
+        )}
+        <span className="absolute left-1/2 top-[-2px] h-2.5 w-px bg-border" />
+      </span>
+    </span>
+  )
+}
+
 export default function FactorIC() {
   const [days, setDays] = useState(90)
   const [horizon, setHorizon] = useState(5)
@@ -182,6 +210,17 @@ export default function FactorIC() {
 
       {data && rows.length > 0 && (
         <>
+          {/* L3-C(2026-10-24): 一句话人话结论放在表前, 不让读者自己从 4 列指标里猜。
+              只用已返回的 IC 与期数, 不算新指标、不编基准。 */}
+          <p className="mb-2 text-[12px] text-muted-foreground">
+            {(() => {
+              const usable = rows.filter((r) => r.ic_periods >= MIN_PERIODS && typeof r.ic === 'number')
+              if (usable.length === 0) return '暂无可评估因子（样本期数不足）；IC=预测力，越接近 0 越弱。'
+              const best = [...usable].sort((a, b) => Math.abs(b.ic ?? 0) - Math.abs(a.ic ?? 0))[0]
+              return `可评估 ${usable.length} 个因子，最强 ${best.code}（IC ${num(best.ic ?? 0, 3)}）。IC 越接近 0 预测力越弱；样本外列用于看是否过拟合，非买卖指令。`
+            })()}
+          </p>
+
           <div className="overflow-x-auto rounded border border-border/60">
             <table className="w-full min-w-[860px]">
               <thead className="border-b border-border/60 bg-accent/20">
@@ -204,7 +243,10 @@ export default function FactorIC() {
                   return (
                     <tr key={r.code} className="border-b border-border/40 last:border-0 text-[12px]">
                       <td className="px-2 py-1.5 font-mono">{r.code}</td>
-                      <td className={`px-2 py-1.5 text-right font-mono ${ic.cls}`} title={ic.title}>{ic.text}</td>
+                      <td className={`px-2 py-1.5 text-right font-mono ${ic.cls}`} title={ic.title}>
+                        {ic.text}
+                        <IcBar value={r.ic_periods >= MIN_PERIODS && typeof r.ic === 'number' ? r.ic : null} />
+                      </td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground" title="|t| ≥ 2 才谈得上显著">
                         {num(r.ic_t, 2)}
                       </td>
