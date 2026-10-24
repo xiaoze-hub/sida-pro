@@ -267,7 +267,8 @@ export const dailyPnlDisplayLabel = (meta: DailyPnlMeta, compact = false): strin
   const date = meta.daily_pnl_date ? meta.daily_pnl_date.slice(5) : ''
   if (compact) {
     if (meta.daily_pnl_period === 'today') return '今日'
-    if (meta.daily_pnl_period === 'previous_trading_day') return date ? `上一交易日 ${date}` : '上一交易日'
+    // 紧凑档给 KPI 副标签用: 「上一交易日 10-23」在 6 栏网格里会换行/被截断, 缩成「上日 10-23」
+    if (meta.daily_pnl_period === 'previous_trading_day') return date ? `上日 ${date}` : '上日盈亏'
     if (meta.daily_pnl_period === 'mixed') return '最近交易日'
     return '当日'
   }

@@ -86,7 +86,8 @@ export function PortfolioSummarySection() {
       return (
         <Card variant="plain" className="border-l border-l-border/40 p-3">
           <Stat
-            label={dailyPnlDisplayLabel(portfolio.total)}
+            // 6 栏网格里全称会换行/截断成 3 行；紧凑档「上日 10-23」单行可读，全称仍在 hover 语义里
+            label={dailyPnlDisplayLabel(portfolio.total, true)}
             value={
               <>
                 {formatMoney(dayPnl)}
