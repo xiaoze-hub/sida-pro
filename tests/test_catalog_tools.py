@@ -1326,8 +1326,8 @@ def test_new_sql_statements_have_limit_and_bindings():
             assert ":UID" in sql.upper(), f"{key} 缺 user_id 绑定参数"
 
 
-def test_tool_count_still_71():
-    """工具总数 = 69（2026-10-23 新增 get_fund_structure / get_order_granularity）。"""
+def test_tool_count_still_73():
+    """工具总数 = 73（2026-10-24 新增 search_news / web_search_fallback）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 71
+    assert len(CHAT_TOOL_REGISTRY) == 73

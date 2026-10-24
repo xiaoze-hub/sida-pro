@@ -51,6 +51,7 @@ import MarketStatusPills from '@/components/MarketStatusPills'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
 import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
+import { readCollapsed } from '@/lib/dashboard-collapse'
 import {
   isHidden,
   loadLayout,
@@ -215,6 +216,8 @@ export default function DashboardPage() {
   // 异动池(东财) / 热榜(同花顺):独立加载,任一失败静默,不影响首页其他内容
   const [anomalies, setAnomalies] = useState<MarketAnomalyItem[]>([])
   const [anomaliesLoading, setAnomaliesLoading] = useState(true)
+  /** 异动池是否已取过（展开才取数；取过之后刷新才会跟着更新） */
+  const anomaliesLoadedRef = useRef(false)
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null)
   // 2026-08-17: 数据源失败显式标识 — 收集 {source, message},横幅展示具体哪个源挂了
   const [sourceErrors, setSourceErrors] = useState<Array<{ id: number; source: string; message: string; retry?: () => void }>>([])
@@ -278,6 +281,26 @@ export default function DashboardPage() {
       }
     }
   }, [])
+  /** 展开异动池时才取数（首屏不为折叠块付 3.5s 的并发代价） */
+  const loadAnomalies = useCallback(() => {
+    if (anomaliesLoadedRef.current) return
+    anomaliesLoadedRef.current = true
+    setAnomaliesLoading(true)
+    dashboardApi
+      .anomalies({ limit: 10 })
+      .then((r) => setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)))
+      .catch((err) => {
+        setAnomalies([])
+        pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), loadAnomalies)
+      })
+      .finally(() => setAnomaliesLoading(false))
+  }, [t])
+
+  // 用户把这块持久化成"展开"了 → 挂载后补一次（不能因为默认折叠就永远不取）
+  useEffect(() => {
+    if (!readCollapsed('anomalies', true)) loadAnomalies()
+  }, [loadAnomalies])
+
   const loadBench = useCallback(() => {
     setBenchState('loading')
     Promise.allSettled([portfolioApi.benchmark({ days: 60 }), portfolioApi.attribution(60)]).then(([bn, at]) => {
@@ -304,17 +327,22 @@ export default function DashboardPage() {
     dashboardApi.indices().then((v) => { if (!stale()) setIndices(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.indices'), err?.message || t('common.serviceUnavailable'), load) })
     // 大盘资金流(同花顺源):独立加载,失败聚合到全局横幅
     dashboardApi.marketCapitalFlow().then((v) => { if (!stale()) setMarketFlow(v) }).catch((err) => { if (!stale()) pushError(t('dashboard.errorSources.fundflow'), err?.message || t('common.serviceUnavailable'), load) })
-    // 异动池(东财):独立加载,失败静默(端点未就绪时优雅降级为空态)
-    setAnomaliesLoading(true)
-    dashboardApi
-      .anomalies({ limit: 10 })
-      .then((r) => { if (!stale()) setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)) })
-      .catch((err) => {
-        if (stale()) return
-        setAnomalies([])
-        pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), load)
-      })
-      .finally(() => { if (!stale()) setAnomaliesLoading(false) })
+    // 异动池(东财):**默认折叠, 展开才取数**(2026-10-24 性能实测)。
+    // 实测该接口冷启动 3545ms, 是首页 32 个并发请求里最慢的三个之一;
+    // 而它默认是收起的 —— 为看不见的列表付 3.5s 的并发与主线程代价毫无道理。
+    // 已经取过一次之后, 刷新仍会更新(不要变成"刷新不生效")。
+    if (anomaliesLoadedRef.current) {
+      setAnomaliesLoading(true)
+      dashboardApi
+        .anomalies({ limit: 10 })
+        .then((r) => { if (!stale()) setAnomalies(pickList<MarketAnomalyItem>(r, 'items').slice(0, 10)) })
+        .catch((err) => {
+          if (stale()) return
+          setAnomalies([])
+          pushError(t('dashboard.errorSources.anomalies'), err?.message || t('common.serviceUnavailable'), load)
+        })
+        .finally(() => { if (!stale()) setAnomaliesLoading(false) })
+    }
     // 快车道:DB/轻量查询,先让首屏(要紧事/体检分布)尽快出来
     const [sc, ov, dg, ht, td, ms] = await Promise.allSettled([
       dashboardApi.intradayScan(),
@@ -919,6 +947,7 @@ export default function DashboardPage() {
         <div style={{ order: orderIndex(layout, 'anomalies') }}>
           <CollapsibleSection
             id="anomalies"
+            onExpand={loadAnomalies}
             header={
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <h2 className="text-[13px] font-semibold">{t('dashboard.anomalies')}</h2>

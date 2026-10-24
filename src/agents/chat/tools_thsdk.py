@@ -191,17 +191,89 @@ def get_thsdk_market_data_cn_extended(symbol: str) -> Dict[str, Any]:
     return _safe_call(_l2().get_market_data_cn_extended, _to_ths_code(symbol))
 
 
+# ── 指数行情腾讯兜底(2026-10-24)────────────────────────────────────────────
+# 背景: 生产实测 get_thsdk_market_data_index 连续返回
+#   「thsdk 返回空数据(游客账户受限…)」, 而 app_settings 里 ths_username / ths_sdk_password
+#   **长度为 0**(未配正式账户) —— 于是参谋问「上证指数多少点」只能答"取不到"。
+# 但首页指数条走的就是腾讯 index_quotes(零 key, 实测可用), 参谋却没这条路。
+# 修法: thsdk 空 → 回落腾讯 → 仍空才如实说取不到。口径必须标注(腾讯 ≠ thsdk)。
+_INDEX_TENCENT = {
+    "000001": ("sh000001", "上证指数"),
+    "399001": ("sz399001", "深证成指"),
+    "399006": ("sz399006", "创业板指"),
+    "000300": ("sh000300", "沪深300"),
+    "000016": ("sh000016", "上证50"),
+    "000905": ("sh000905", "中证500"),
+    "000852": ("sh000852", "中证1000"),
+    "000688": ("sh000688", "科创50"),
+}
+
+
+def _tencent_index_fallback(symbol: str) -> List[Dict[str, Any]]:
+    """腾讯指数行情兜底(与首页 /api/market/indices 同源)。失败返回 [](不抛)。"""
+    s = str(symbol or "").strip()
+    pairs = [_INDEX_TENCENT[s]] if s in _INDEX_TENCENT else []
+    if not pairs:
+        if len(s) != 6 or not s.isdigit():
+            return []
+        # 未登记的 6 位指数: 000/880/899 → 沪, 399 → 深(与 _resolve_index_code 同规则)
+        tcode = f"sh{s}" if s.startswith(("000", "880", "899")) else f"sz{s}"
+        pairs = [(tcode, s)]
+    try:
+        from src.core.marketdata_client import get_market_data
+
+        quotes = get_market_data().index_quotes([p[0] for p in pairs]) or []
+    except Exception as e:  # noqa: BLE001 — 兜底失败不掩盖主错误
+        logger.warning("腾讯指数兜底失败 %s: %s", symbol, e)
+        return []
+    out: List[Dict[str, Any]] = []
+    for q in quotes:
+        out.append({
+            "symbol": s,
+            "name": _INDEX_TENCENT.get(s, (None, s))[1],
+            "price": q.get("current_price"),
+            "change_pct": q.get("change_pct"),
+            "change": q.get("change_amount"),
+            "prev_close": q.get("prev_close"),
+            "source": "腾讯",
+        })
+    return out
+
+
 def get_thsdk_market_data_index(symbol: str = "000001") -> Dict[str, Any]:
     """指数实时行情(上证/深证/创业板/科创50 等)。
 
     args:
         symbol: 指数代码,如 "000001"(上证) / "399001"(深证) / "399006"(创业板)。
                 仅数字时自动按沪深指数前缀解析。
+
+    数据源: thsdk 优先; thsdk 空(游客账户受限/未配正式账户)时自动降级腾讯指数行情,
+    并在 note 里写明口径, 不冒充 thsdk。
+
     返回:
-        {"available": bool, "data": [指数行情...], "note": str}
+        {"available": bool, "data": [指数行情...], "note": str, "source": "thsdk"|"腾讯"}
     """
     code = _resolve_index_code(symbol or "000001")
-    return _safe_call(_l2().get_market_data_index, code)
+    try:
+        # ⚠️ _l2() 必须在 try 内: thsdk 未安装时它在 _safe_call 之外抛 ImportError
+        #    (既有隐患, 本函数一并修掉), 否则"降级友好"从第一步就失效。
+        res = _safe_call(_l2().get_market_data_index, code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("thsdk 指数接口不可用 %s: %s", code, e)
+        res = _degraded(f"thsdk 不可用: {str(e)[:80]}")
+    if res.get("data"):
+        res.setdefault("source", "thsdk")
+        return res
+    fb = _tencent_index_fallback(str(symbol or "000001"))
+    if fb:
+        return {
+            "available": True,
+            "data": fb,
+            "source": "腾讯",
+            "note": f"thsdk 无数据（{res.get('note') or '空'}），已降级腾讯指数行情；"
+                    f"口径=腾讯实时（与首页指数条同源，非 thsdk）",
+        }
+    return {**res, "source": "thsdk", "note": (res.get("note") or "") + "；腾讯兜底亦无数据。"}
 
 
 def _resolve_index_code(symbol: str) -> str:

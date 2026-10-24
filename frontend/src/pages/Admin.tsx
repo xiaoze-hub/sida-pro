@@ -589,7 +589,7 @@ export default function AdminPage() {
         ) : users.length === 0 ? (
           <EmptyState icon={<Users className="h-8 w-8" />} title="暂无用户" />
         ) : (
-          <div className="max-h-[70vh] overflow-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="max-h-[70vh] overflow-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[720px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
@@ -776,7 +776,7 @@ export default function AdminPage() {
         ) : keys.length === 0 ? (
           <EmptyState icon={<KeyRound className="h-8 w-8" />} title="暂无 API Key" desc="用户创建 Key 后会出现在这里" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[860px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
@@ -905,7 +905,7 @@ export default function AdminPage() {
         ) : !skillUsage?.report?.length ? (
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无调用" />
         ) : (
-          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[640px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
@@ -947,7 +947,7 @@ export default function AdminPage() {
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无调用" />
         ) : (
           <div className="mb-6 space-y-4">
-            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
               <table className="w-full min-w-[560px]">
                 <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                   <tr>
@@ -978,7 +978,7 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+            <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
               <table className="w-full min-w-[420px]">
                 <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                   <tr>
@@ -1014,7 +1014,7 @@ export default function AdminPage() {
         ) : !hvUsage?.by_user_api?.length ? (
           <EmptyState icon={<Activity className="h-8 w-8" />} title="近 7 天暂无高价值接口调用" />
         ) : (
-          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="mb-6 overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[640px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
@@ -1047,7 +1047,7 @@ export default function AdminPage() {
         ) : !hvUsage?.by_day?.length ? (
           <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="近 7 天暂无按天数据" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[480px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>
@@ -1091,7 +1091,7 @@ export default function AdminPage() {
         ) : !proApps?.applications?.length ? (
           <EmptyState icon={<BadgeCheck className="h-8 w-8" />} title="暂无 Pro 申请" desc="用户提交申请后会出现在这里" />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02]">
+          <div className="overflow-x-auto rounded-xl border border-border/50 dark:border-white/5 bg-card/60 dark:bg-white/[0.02] [content-visibility:auto] [contain-intrinsic-size:auto_520px]">
             <table className="w-full min-w-[720px]">
               <thead className="sticky top-0 z-10 border-b border-border/50 dark:border-white/5 bg-card">
                 <tr>

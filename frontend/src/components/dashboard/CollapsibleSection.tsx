@@ -20,6 +20,7 @@ export default function CollapsibleSection({
   className = '',
   bodyClassName = '',
   defaultCollapsed = true,
+  onExpand,
 }: {
   /** localStorage 键后缀（也是 data-testid 后缀），块内唯一即可 */
   id: string
@@ -29,15 +30,18 @@ export default function CollapsibleSection({
   className?: string
   bodyClassName?: string
   defaultCollapsed?: boolean
+  /** 首次展开时回调（用于"展开才取数"：首屏不该为看不见的块发请求） */
+  onExpand?: () => void
 }) {
   const [collapsed, setCollapsed] = useState(() => readCollapsed(id, defaultCollapsed))
   const toggle = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev
       writeCollapsed(id, next)
+      if (!next) onExpand?.()
       return next
     })
-  }, [id])
+  }, [id, onExpand])
 
   return (
     <section

@@ -392,6 +392,24 @@ describe('Dashboard 首屏加载链(perf 回归)', () => {
     expect(localStorage.getItem('sida_dash_collapse:kpi')).toBe('0')
   })
 
+  it('异动池折叠时不发请求；展开才取数（2026-10-24 性能：该接口冷启 3545ms）', async () => {
+    renderPage()
+    await flush()
+
+    // 默认折叠 → 一个异动池请求都不该发（首屏不为看不见的列表付 3.5s 并发代价）
+    expect(H.pendingCount('anomalies')).toBe(0)
+
+    fireEvent.click(screen.getByTestId('evidence-toggle-anomalies'))
+    await flush()
+    expect(H.pendingCount('anomalies')).toBe(1)
+
+    // 收起再展开不重复请求（ref 记住已取过）
+    fireEvent.click(screen.getByTestId('evidence-toggle-anomalies'))
+    fireEvent.click(screen.getByTestId('evidence-toggle-anomalies'))
+    await flush()
+    expect(H.pendingCount('anomalies')).toBe(1)
+  })
+
   it('无关状态变更(打开看板定制)不重渲染自带画布/取数的重区块', async () => {
     renderPage()
     await flush()

@@ -1,3 +1,62 @@
+## release: v0.57.0（参谋取数三修 + 首页性能：折叠块不再为首屏付费）
+
+### 一、先纠正我自己的错误判断：echarts **不能删**
+上一版我说"echarts 是死依赖、可以删"，是**错的** —— 我只 grep 了 `from 'echarts'` 精确匹配。
+实测 **27 处引用**：`lib/echarts-core.ts`（按需注册 Bar/Gauge/Line/Candlestick/Heatmap/Treemap + Grid/Tooltip/MarkLine/Legend/DataZoom/VisualMap/Title + Canvas，~400KB）、
+`hooks/useECharts.ts`、`BreadthDistributionChart` / `SentimentGauge` / `FlowHistoryChart` / `BoardHeatmap` / `ActivitySparkline` / `ForecastConeChart`。
+**结论：不删。** 真要省体积只能进一步裁组件，但每裁一项都可能让某个图表白屏，收益/风险不划算。
+
+### 二、参谋「取不到大盘数据」——根因不是没工具
+`copilot_steps` 生产实测：
+```
+get_thsdk_market_data_index  ok=True  3003ms  digest=thsdk 返回空数据(游客账户受限…)
+app_settings: ths_username len=0 / ths_sdk_password len=0   ← 正式账户凭据根本没配
+```
+工具层 `ok=True`（HTTP 成功），但拿到空数组 → LLM 只能说"取不到"。而首页指数条走的是腾讯 `index_quotes`（零 key，实测可用），参谋却没有这条路。
+
+**修法：thsdk → 腾讯 → 如实报空**（口径必须标注，腾讯 ≠ thsdk）
+- 新增 `_tencent_index_fallback()`，与首页指数条同源
+- `note` 写明「口径=腾讯实时（与首页指数条同源，非 thsdk）」
+- 顺手修一个既有隐患：`_l2()` 在 `_safe_call` **之外**求值，thsdk 未安装时直接抛 ImportError（"降级友好"从第一步就失效），已移入 try
+- 实测：上证 3690.48 +0.89% / 创业板 2684.10 +4.16%（与首页一致）
+
+### 三、新闻/政策时间线——表在、数据没有
+`news_cache` 建好了（`uq_news_source_external` 唯一约束）但**生产 0 行** —— 快讯只在 `get_market_news` 时实时拉一次就丢。
+**不是缺工具，是缺历史。**
+
+- 新增 `src/core/news_store.py`：`save_flash_news`（幂等 upsert）/ `search_news` / `coverage` / `is_policy`
+- `get_market_news` 取到快讯时顺手落库（旁路，失败不影响取数）
+- 新工具 **`search_news`**：按时间窗口 + 关键词 + `policy_only` 检索本地历史，**返回覆盖区间**（不说"没有"而说"库从哪天开始"）
+- 政策分类只做关键词归类（工信部/发改委/证监会/央行/国常会/降准/补贴…），**不判断利好利空**
+
+### 四、联网搜索（按你的约束：只做兜底）
+新工具 **`web_search_fallback`**，约束写进 schema（模型可见才有约束力）：
+> 必须同时满足 ① 已调用过对应系统数据源工具 ② 该工具返回空/明确不可用/明显缺料。系统数据源有数据时**必须**用系统数据源。调用后必须在回答里标注「来自实时联网搜索，非系统数据源」。
+
+- 后端 Tavily；密钥走 `TAVILY_API_KEY` env 或 `app_settings.tavily_api_key`
+- **未配置时明确说"未启用"，不说"搜不到"**（配置缺失 ≠ 无结果）
+- `reason` 参数强制模型交代"哪个系统工具返回了什么空"，记入日志可审计
+
+工具数 71 → **73**（注册表 73 / 对模型可见 72），spec + 2 处钉子已同步。
+
+### 五、性能：折叠块不再为首屏付费
+生产实测首页 **32 个并发请求**，最慢三个：
+```
+/api/portfolio/benchmark   3852ms
+/api/portfolio/attribution 3719ms
+/api/market-data/anomalies 3545ms   ← 而这块默认是收起的
+```
+- 异动池改为 **展开才取数**（`CollapsibleSection` 新增 `onExpand`；用户持久化成展开则挂载即取；取过一次后刷新仍会更新）
+- `/admin` 8 个表格容器加 `content-visibility: auto` + `contain-intrinsic-size`（LCP 2564ms 是被后出现的大表格拖的，结论 609ms 就有了）
+- 结论行本身不慢（实测 505–861ms）—— 上一版记录的 2752ms 是首次部署后 CDN 冷态，**结论不慢、慢在并发**，口径已更正
+
+### 六、未做（说清楚）
+`/stocks` 热态 10 个长任务 520ms —— 需要 profile 才能定位具体重算点，本轮未动。不做猜测式改动。
+
+### 门禁
+前端 `tsc 0 / ui-rules OK / eslint 0 / vitest 218 文件 1674 用例`（+1 异动池延迟取数）
+后端 `191 passed`（catalog/regressions/ai_layer/market_replay/harness_mentions + 新增 9 例）
+
 ## release: v0.56.0（首页结论卡加"大盘实时走势带"——填充 14% 屏高的留白）
 
 ### 背景（用户提出，证据核实后同意）
