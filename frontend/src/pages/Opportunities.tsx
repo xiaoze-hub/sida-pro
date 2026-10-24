@@ -1177,19 +1177,14 @@ export default function OpportunitiesPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {/* 首屏 KPI 4 → 3（2026-10-24 L2-E）：市场池占比降级进「更多指标」，
+          把结果表从 y≈520 抬到首屏内。 */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
         <Card className="border-l-2 border-l-primary pl-3 py-1 p-3">
           <Stat
             label={t('opportunities.currentCandidates')}
             value={globalCoverage?.total_signals ?? '--'}
             sub={`${t('opportunities.executable')}: ${globalCoverage?.active_signals ?? '--'}，${t('opportunities.watch')}: ${(globalCoverage?.total_signals != null && globalCoverage?.active_signals != null) ? Math.max(0, globalCoverage.total_signals - globalCoverage.active_signals) : '--'}`}
-          />
-        </Card>
-        <Card variant="plain" className="pl-3 py-1 p-3">
-          <Stat
-            label={t('opportunities.marketShare')}
-            value={globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}
-            sub={`${t('opportunities.marketPool')}: ${globalCoverage?.market_scan_signals ?? '--'}，${t('opportunities.watchPool')}: ${globalCoverage?.watchlist_signals ?? '--'}，${t('opportunities.mixed')}: ${globalCoverage?.mixed_signals ?? '--'}`}
           />
         </Card>
         <Card variant="plain" className="pl-3 py-1 p-3">
@@ -1398,18 +1393,40 @@ export default function OpportunitiesPage() {
       {/* ── 选股工具: 共振查询 / 策略选股 / 问小达 / 问财, 主动查询, 结果并入下方候选池 ── */}
       <div className="border-y border-border/60 py-3 mb-4">
         <Tabs value={toolTab} onValueChange={(v) => setToolTab(v as ToolTab)}>
-          <TabsList className="bg-muted/60 p-1">
-            <TabsTrigger value="resonance" className="gap-1.5 font-medium">
-              <Sparkles className="w-3.5 h-3.5 text-primary" />
-              选股铁三角共振
-            </TabsTrigger>
-            <TabsTrigger value="stockpool">数智选股池</TabsTrigger>
-            <TabsTrigger value="jbp">聚宝盆选股</TabsTrigger>
-            <TabsTrigger value="strategy">量化策略库</TabsTrigger>
-            <TabsTrigger value="tdx">问小达</TabsTrigger>
-            <TabsTrigger value="wencai">同花顺问财</TabsTrigger>
-            <TabsTrigger value="cb">转债雷达</TabsTrigger>
-          </TabsList>
+          <div className="flex items-center gap-2 flex-wrap">
+            <TabsList className="bg-muted/60 p-1">
+              <TabsTrigger value="resonance" className="gap-1.5 font-medium">
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                选股铁三角共振
+              </TabsTrigger>
+              <TabsTrigger value="stockpool">数智选股池</TabsTrigger>
+              <TabsTrigger value="jbp">聚宝盆选股</TabsTrigger>
+              <TabsTrigger value="strategy">量化策略库</TabsTrigger>
+            </TabsList>
+            {/* 7 → 4 + 更多（2026-10-24 L2-E）：后 3 个工具收进原生 details，
+                页签行不再横向挤爆；切换仍走同一个 toolTab 状态。 */}
+            <details className="relative">
+              <summary className="cursor-pointer list-none rounded-md px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-s3 hover:text-foreground">
+                更多工具 ▾
+              </summary>
+              <div className="absolute left-0 z-50 mt-1 w-36 rounded-lg border border-border bg-s4 p-1 shadow-float">
+                {([
+                  ['tdx', '问小达'],
+                  ['wencai', '同花顺问财'],
+                  ['cb', '转债雷达'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setToolTab(value)}
+                    className={`block w-full rounded px-2 py-1.5 text-left text-[12px] hover:bg-accent ${toolTab === value ? 'text-primary' : 'text-muted-foreground'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </details>
+          </div>
           {/* 共振查询(2026-08-22): 一句输入 → 问小达+问财并发 → 策略库精筛 → 共振排序 */}
           <TabsContent value="resonance">
             <div className="flex items-center gap-2 flex-wrap">
@@ -1950,33 +1967,47 @@ export default function OpportunitiesPage() {
         </Tabs>
       </div>
 
-      {(factorStats || constraintStats) && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="border-l border-border/40 pl-3 py-1">
-            <div className="text-[11px] text-muted-foreground">平均Alpha因子</div>
-            <div className="text-[16px] font-bold mt-1">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
-            <div className="text-[10px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
-          </div>
-          <div className="border-l border-border/40 pl-3 py-1">
-            <div className="text-[11px] text-muted-foreground">平均事件催化</div>
-            <div className="text-[16px] font-bold mt-1">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
-            <div className="text-[10px] text-muted-foreground mt-1">
-              拥挤惩罚 {factorStats ? factorStats.avg_crowd_penalty.toFixed(1) : '--'}
+      {/* 更多指标（2026-10-24 L2-E）：首屏只留 3 张结论 KPI，市场池占比 + 4 张因子/约束卡
+          收进原生 details —— 不新增组件、不动数据口径、默认折叠。 */}
+      {(globalCoverage || factorStats || constraintStats) && (
+        <details className="mb-4 border-y border-border/60 py-2">
+          <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
+            更多指标（市场池占比 · 因子与约束 5 项）
+          </summary>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
+            <div className="border-l border-border/40 pl-3 py-1">
+              <div className="text-[11px] text-muted-foreground">{t('opportunities.marketShare')}</div>
+              <div className="text-[16px] font-bold mt-1 tabular-nums">{globalCoverage?.market_scan_share_pct != null ? `${globalCoverage.market_scan_share_pct.toFixed(1)}%` : '--'}</div>
+              <div className="text-[11px] text-muted-foreground mt-1">
+                {t('opportunities.marketPool')}: {globalCoverage?.market_scan_signals ?? '--'}，{t('opportunities.watchPool')}: {globalCoverage?.watchlist_signals ?? '--'}，{t('opportunities.mixed')}: {globalCoverage?.mixed_signals ?? '--'}
+              </div>
+            </div>
+            <div className="border-l border-border/40 pl-3 py-1">
+              <div className="text-[11px] text-muted-foreground">平均Alpha因子</div>
+              <div className="text-[16px] font-bold mt-1 tabular-nums">{factorStats ? factorStats.avg_alpha_score.toFixed(1) : '--'}</div>
+              <div className="text-[11px] text-muted-foreground mt-1">样本 {factorStats?.sample_size ?? '--'}</div>
+            </div>
+            <div className="border-l border-border/40 pl-3 py-1">
+              <div className="text-[11px] text-muted-foreground">平均事件催化</div>
+              <div className="text-[16px] font-bold mt-1 tabular-nums">{factorStats ? factorStats.avg_catalyst_score.toFixed(1) : '--'}</div>
+              <div className="text-[11px] text-muted-foreground mt-1">
+                拥挤惩罚 {factorStats ? factorStats.avg_crowd_penalty.toFixed(1) : '--'}
+              </div>
+            </div>
+            <div className="border-l border-border/40 pl-3 py-1">
+              <div className="text-[11px] text-muted-foreground">平均质量/风险</div>
+              <div className="text-[16px] font-bold mt-1 tabular-nums">
+                {factorStats ? `${factorStats.avg_quality_score.toFixed(1)} / ${factorStats.avg_risk_penalty.toFixed(1)}` : '--'}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-1">质量分越高越好</div>
+            </div>
+            <div className="border-l border-border/40 pl-3 py-1">
+              <div className="text-[11px] text-muted-foreground">组合约束降级</div>
+              <div className="text-[16px] font-bold mt-1 tabular-nums">{constraintStats?.constrained_top20 ?? 0}</div>
+              <div className="text-[11px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
             </div>
           </div>
-          <div className="border-l border-border/40 pl-3 py-1">
-            <div className="text-[11px] text-muted-foreground">平均质量/风险</div>
-            <div className="text-[16px] font-bold mt-1">
-              {factorStats ? `${factorStats.avg_quality_score.toFixed(1)} / ${factorStats.avg_risk_penalty.toFixed(1)}` : '--'}
-            </div>
-            <div className="text-[10px] text-muted-foreground mt-1">质量分越高越好</div>
-          </div>
-          <div className="border-l border-border/40 pl-3 py-1">
-            <div className="text-[11px] text-muted-foreground">组合约束降级</div>
-            <div className="text-[16px] font-bold mt-1">{constraintStats?.constrained_top20 ?? 0}</div>
-            <div className="text-[10px] text-muted-foreground mt-1">Top20 被风控降级数量</div>
-          </div>
-        </div>
+        </details>
       )}
 
       {(regimeSummary.length > 0 || riskSummary.length > 0) && (
@@ -2136,7 +2167,7 @@ export default function OpportunitiesPage() {
                 <div className="hidden md:block text-[12px] font-mono font-semibold truncate" title={formatEntryDisplay(item.action, entryLow, entryHigh)}>{formatEntryDisplay(item.action, entryLow, entryHigh)}</div>
                 <div
                   className={`hidden md:block text-[12px] font-mono truncate ${
-                    planValid ? 'text-stock-down' : 'text-red-500 font-semibold'
+                    planValid ? 'text-muted-foreground' : 'text-amber-500 font-semibold'
                   }`}
                   title={planValid ? formatPlanPrice(stopLoss) : `${formatPlanPrice(stopLoss)} · ${planInvalidReason}`}
                 >{formatPlanPrice(stopLoss)}</div>
@@ -2165,7 +2196,7 @@ export default function OpportunitiesPage() {
                   {/* 移动端: 扫读行隐藏的三要素在这里补齐 */}
                   <div className="md:hidden flex flex-wrap items-center gap-x-4 gap-y-0.5 text-[12px] font-semibold">
                     <span className="text-foreground">入场 {formatEntryDisplay(item.action, entryLow, entryHigh)}</span>
-                    <span className="text-stock-down">止损 {formatPlanPrice(stopLoss)}</span>
+                    <span className="text-muted-foreground">止损 {formatPlanPrice(stopLoss)}</span>
                     <span className="text-stock-up">目标 {formatPlanPrice(targetPrice)}</span>
                   </div>
                   {!planValid && (
