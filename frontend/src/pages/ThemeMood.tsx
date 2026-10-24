@@ -543,7 +543,10 @@ export default function ThemeMoodPage() {
               <span className="text-[10px]">曲线=当日前 20 均值</span>
               <span className="ml-auto flex items-center gap-1 text-[10px]">
                 色阶
+                {/* 2026-10-24 L3-A: 图例与 lib/theme-mood.ts 的 cellColorClass 对齐 ——
+                    此前少一档 null(无数据, bg-muted/30), 读者会以为"灰=最低分"。 */}
                 {[
+                  ['无数据', 'bg-muted/30'],
                   ['<50', 'bg-muted/40'],
                   ['50-60', 'bg-muted/60'],
                   ['60-70', 'bg-stock-up/15'],

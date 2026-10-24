@@ -134,7 +134,8 @@ export function MarketPhasePanel() {
                     title={`${it.label} 当前值在近 ${stats?.total_days ?? 0} 天历史中的百分位`}
                     className="rounded bg-accent/40 px-1.5 py-0.5 text-[11px] text-foreground"
                   >
-                    {it.label} <span className="font-mono">p{v == null ? '--' : v}</span>
+                    {/* 2026-10-24 L3-A: 缺项不再渲染 `p--`(读作"分位是负无穷"), 显式写样本不足 */}
+                    {it.label} <span className="font-mono">{v == null ? '样本不足' : `p${v}`}</span>
                   </span>
                 )
               })}
