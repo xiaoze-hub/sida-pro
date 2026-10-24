@@ -302,7 +302,7 @@ export default function AnalysisDetailPage() {
               {Icon && <Icon className="w-[18px] h-[18px] text-primary/70 shrink-0" />}
               {s.title}
             </h2>
-            <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground/90 prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
+            <div className="prose prose-base dark:prose-invert max-w-none leading-relaxed prose-headings:mt-6 prose-headings:mb-2 prose-h2:text-[16px] prose-h3:text-[16px] prose-h4:text-[13px] prose-h2:font-semibold prose-h3:font-semibold prose-p:my-3 prose-p:text-foreground prose-li:my-1 prose-table:my-4 prose-th:px-3 prose-th:py-2 prose-td:px-3 prose-td:py-2 prose-strong:text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={headingComponents(s.id)}>
                 {s.markdown}
               </ReactMarkdown>
@@ -316,7 +316,7 @@ export default function AnalysisDetailPage() {
   // 目录头(标题 + 二级目录开关),桌面右栏 / 移动下拉共用
   const tocHeader = (
     <div className="flex items-center justify-between gap-2 mb-2 px-2">
-      <span className="text-[11px] font-medium text-muted-foreground/70">目录</span>
+      <span className="text-[11px] font-medium text-muted-foreground">目录</span>
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <span className="cursor-pointer select-none" onClick={() => setShowSub((v) => !v)}>
           二级目录
@@ -523,7 +523,7 @@ export default function AnalysisDetailPage() {
           </section>
 
           {/* 免责 */}
-          <div className="text-[11px] text-muted-foreground/70 italic border-t border-border/30 pt-4">
+          <div className="text-[11px] text-muted-foreground italic border-t border-border/30 pt-4">
             本分析由 AI 多 Agent 框架生成,仅供学习研究参考,不构成任何投资建议。投资有风险,决策需自主判断。
           </div>
             </>

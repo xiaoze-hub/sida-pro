@@ -224,7 +224,7 @@ export function SuggestionBadge({
               ) : null}
 
               {(suggestion.agent_label || timeStr) && (
-                <div className="mt-1 text-[10px] text-muted-foreground/70">
+                <div className="mt-1 text-[10px] text-muted-foreground">
                   来源: {suggestion.agent_label || (isAI ? 'AI' : '未知')}
                   {timeStr && ` · ${timeStr}`}
                   {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
@@ -232,7 +232,7 @@ export function SuggestionBadge({
               )}
 
               {klineMetaStr && (
-                <div className="mt-1 text-[10px] text-muted-foreground/70">
+                <div className="mt-1 text-[10px] text-muted-foreground">
                   {klineMetaStr}
                 </div>
               )}
@@ -265,7 +265,7 @@ export function SuggestionBadge({
               </DialogTitle>
               {/* 来源信息 */}
               {(suggestion.agent_label || suggestion.created_at) && (
-                <div className="text-[11px] text-muted-foreground/70 mt-1">
+                <div className="text-[11px] text-muted-foreground mt-1">
                   来源: {suggestion.agent_label || '未知'}
                   {suggestion.created_at && ` · ${formatSuggestionDateTime(suggestion.created_at)}`}
                   {suggestion.is_expired && <span className="ml-2 text-amber-500">(已过期)</span>}
@@ -443,7 +443,7 @@ export function SuggestionBadge({
         </div>
         {/* 来源和时间（显示在徽章下方，仅 AI 建议以增强区分）*/}
         {isAI && (
-          <div className="mt-1 text-[10px] text-muted-foreground/70">
+          <div className="mt-1 text-[10px] text-muted-foreground">
             来源: {suggestion.agent_label || 'AI'}{timeStr && ` · ${timeStr}`}
             {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
           </div>
@@ -474,7 +474,7 @@ export function SuggestionBadge({
             </DialogTitle>
             {/* 来源信息 */}
             {(suggestion.agent_label || suggestion.created_at) && (
-              <div className="text-[11px] text-muted-foreground/70 mt-1">
+              <div className="text-[11px] text-muted-foreground mt-1">
                 来源: {suggestion.agent_label || '未知'}
                 {suggestion.created_at && ` · ${formatSuggestionDateTime(suggestion.created_at)}`}
                 {suggestion.is_expired && <span className="ml-2 text-amber-500">(已过期)</span>}

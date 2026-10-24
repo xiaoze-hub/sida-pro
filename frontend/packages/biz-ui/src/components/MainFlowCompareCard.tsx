@@ -107,7 +107,7 @@ function SourceCol({ label, tag, net }: { label: string; tag: string; net: numbe
     <div className="rounded-lg bg-accent/20 px-2.5 py-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] text-muted-foreground">{label}</span>
-        <span className="text-[10px] text-muted-foreground/70 border border-border/50 rounded px-1 py-px">{tag}</span>
+        <span className="text-[10px] text-muted-foreground border border-border/50 rounded px-1 py-px">{tag}</span>
       </div>
       <div className={`font-mono tabular-nums text-[13px] font-semibold mt-0.5 ${upColor(net)}`}>{fmtYi(net)}</div>
     </div>

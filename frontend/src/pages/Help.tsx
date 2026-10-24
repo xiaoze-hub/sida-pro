@@ -99,7 +99,7 @@ export default function HelpPage() {
               </div>
               <h3 className="text-[13px] font-semibold text-foreground">{f.title}</h3>
             </div>
-            <p className="text-[12px] text-foreground/80 leading-relaxed">{f.desc}</p>
+            <p className="text-[12px] text-foreground leading-relaxed">{f.desc}</p>
             <ul className="mt-3 space-y-1.5">
               {f.tips.map((tip, i) => (
                 <li key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
@@ -126,7 +126,7 @@ export default function HelpPage() {
             </div>
             <h3 className="text-[13px] font-semibold text-foreground">数据导出</h3>
           </div>
-          <p className="text-[12px] text-foreground/80 leading-relaxed">持仓、预测记录与机会候选均可一键导出 CSV。</p>
+          <p className="text-[12px] text-foreground leading-relaxed">持仓、预测记录与机会候选均可一键导出 CSV。</p>
           <ul className="mt-3 space-y-1.5">
             <li className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-relaxed">
               <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-border" />

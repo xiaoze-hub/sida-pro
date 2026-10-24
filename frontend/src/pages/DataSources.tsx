@@ -395,19 +395,19 @@ export default function DataSourcesPage() {
           <section className="border-b border-border/40 pb-3">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-[13px] font-semibold text-muted-foreground">行情源质量</span>
-              <span className="text-[11px] text-muted-foreground/70">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
+              <span className="text-[11px] text-muted-foreground">滚动最近 100 次 · {trustSummary(vendorTrust)}</span>
             </div>
             <div className="grid gap-1.5 md:grid-cols-2">
               {vendorTrust.map(it => (
                 <div key={it.vendor} className="flex items-center gap-2 rounded-md border border-border/40 px-2.5 py-1.5 text-[12px]">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TRUST_TONE_CLASS[trustTone(it.score)]}`} />
-                  <span className="font-medium text-foreground/90">{it.vendor}</span>
+                  <span className="font-medium text-foreground">{it.vendor}</span>
                   <span className="text-muted-foreground">
                     {it.success_rate != null ? `成功率 ${Math.round(it.success_rate * 100)}%` : '成功率 —'}
                   </span>
                   <span className="text-muted-foreground">EWMA {formatLatency(it.ewma_latency_ms)}</span>
                   <span className="text-muted-foreground">p50 {formatLatency(it.p50_latency_ms)}</span>
-                  <span className="text-muted-foreground/70">n={it.samples ?? 0}</span>
+                  <span className="text-muted-foreground">n={it.samples ?? 0}</span>
                   {it.last_error && (
                     <span className="truncate text-amber-600" title={it.last_error}>· {it.last_error}</span>
                   )}
@@ -442,7 +442,7 @@ export default function DataSourcesPage() {
                 <span className="text-[13px] font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
                   {category.label}
                 </span>
-                <span className="text-[11px] text-muted-foreground/70">{categoryCount} 个源</span>
+                <span className="text-[11px] text-muted-foreground">{categoryCount} 个源</span>
                 <div className="flex-1 h-px bg-border ml-2" />
               </button>
               {isOpen && (
@@ -643,7 +643,7 @@ export default function DataSourcesPage() {
                     const ev = item as { title?: string; time?: string; event_type?: string }
                     return (
                       <div key={i} className="flex items-start gap-2 p-2 rounded-md bg-accent/30">
-                        <span className="text-[11px] font-mono text-muted-foreground/80 flex-shrink-0">{ev.event_type || 'notice'}</span>
+                        <span className="text-[11px] font-mono text-muted-foreground flex-shrink-0">{ev.event_type || 'notice'}</span>
                         <span className="text-[12px] text-foreground flex-1">{ev.title}</span>
                         <span className="text-[11px] text-muted-foreground flex-shrink-0">{ev.time}</span>
                       </div>

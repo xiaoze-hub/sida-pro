@@ -70,7 +70,7 @@ export default function AuditPage() {
             <p className="text-[12px] md:text-[13px] text-muted-foreground">关键写操作记录(最近 200 条, 倒序)</p>
           </div>
           <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-            共 <span className="font-mono text-foreground/90">{logs.length}</span> 条
+            共 <span className="font-mono text-foreground">{logs.length}</span> 条
           </div>
         </div>
         <div className="flex items-center gap-2">

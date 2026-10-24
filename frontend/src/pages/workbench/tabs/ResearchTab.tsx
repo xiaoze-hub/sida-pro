@@ -195,7 +195,7 @@ function BrokerResearchSection({ symbol }: { symbol: string }) {
                 <td className="py-1.5 pl-2.5 max-w-[280px] truncate text-foreground font-medium" title={r.title}>
                   {r.title}
                 </td>
-                <td className="py-1.5 px-2 text-foreground/80">{r.org_name || '--'}</td>
+                <td className="py-1.5 px-2 text-foreground">{r.org_name || '--'}</td>
                 <td className="py-1.5 px-2">
                   <span className={`inline-block rounded px-1.5 py-0.2 text-[10px] font-medium ${
                     r.rating.includes('买入') || r.rating.includes('强推')
@@ -207,7 +207,7 @@ function BrokerResearchSection({ symbol }: { symbol: string }) {
                     {r.rating}
                   </span>
                 </td>
-                <td className="py-1.5 px-2 font-mono text-foreground/90">
+                <td className="py-1.5 px-2 font-mono text-foreground">
                   {typeof r.target_price === 'number' ? `${safeFixed(r.target_price, 2)}元` : '--'}
                 </td>
                 <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[80px]" title={r.author}>
@@ -295,7 +295,7 @@ function ResearchTabBody({ symbol, market }: { symbol: string; market: string })
         {reports.length === 0 ? (
           <div
             data-testid="research-reports-caveat"
-            className="mt-2 text-[10px] text-muted-foreground/70"
+            className="mt-2 text-[10px] text-muted-foreground"
           >
             报告列表为空时「该标的三个 agent 均无已存报告 / 取数失败 / 首拉在途」在此不可区分
           </div>
@@ -304,7 +304,7 @@ function ResearchTabBody({ symbol, market }: { symbol: string; market: string })
         {reports.length > 0 && !activeReport ? (
           <div
             data-testid="research-reports-agent-missing"
-            className="mt-2 text-[10px] text-muted-foreground/70"
+            className="mt-2 text-[10px] text-muted-foreground"
           >
             已取到 {reports.length} 份报告, 但当前子页签对应的 agent 不在其中 —— 换个子页签, 或等该 agent 产出
           </div>
@@ -320,7 +320,7 @@ function ResearchTabBody({ symbol, market }: { symbol: string; market: string })
         <DeepTab />
         {/* 已加载且无结果: 「确无分析 / 取数失败」不可区分(hook 无失败位) —— 如实说明, 不猜原因 */}
         {deepLoaded && !deepResult ? (
-          <div data-testid="research-deep-caveat" className="mt-2 text-[10px] text-muted-foreground/70">
+          <div data-testid="research-deep-caveat" className="mt-2 text-[10px] text-muted-foreground">
             未取到最近一次深度分析结果{historyCount > 0 ? `(历史决策对比已取到 ${historyCount} 条)` : ''}
             —— 「该标的尚无深度分析 / 取数失败」在此不可区分
           </div>

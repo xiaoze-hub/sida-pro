@@ -56,12 +56,12 @@ export function FundamentalsPanel(props: {
         <div className="card p-4" data-testid="dragon-tiger-section">
           <div className="text-[11px] text-muted-foreground mb-2">
             龙虎榜
-            <span className="ml-2 text-[10px] text-muted-foreground/70">
+            <span className="ml-2 text-[10px] text-muted-foreground">
               共 {dtList.length} 条{dtList.length > DRAGON_TIGER_DEFAULT_ROWS && !dtExpanded
                 ? ` · 显示最近 ${DRAGON_TIGER_DEFAULT_ROWS} 条` : ''}
             </span>
             {!dtHasReason && (
-              <span className="ml-2 text-[10px] text-muted-foreground/60" data-testid="dragon-tiger-reason-missing">
+              <span className="ml-2 text-[10px] text-muted-foreground" data-testid="dragon-tiger-reason-missing">
                 · 上榜原因源未提供(该列已隐藏)
               </span>
             )}
@@ -89,7 +89,7 @@ export function FundamentalsPanel(props: {
                       </td>
                     )}
                     {dtHasReason && (
-                      <td className="px-1 py-1 text-foreground/80">{item.reason || '--'}</td>
+                      <td className="px-1 py-1 text-foreground">{item.reason || '--'}</td>
                     )}
                   </tr>
                 ))}
@@ -162,10 +162,10 @@ export function FundamentalsPanel(props: {
                     <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.report_date || '--'}</td>
                     <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{money(item.holder_num)}</td>
                     {/* 户数减少=筹码集中, 按 A 股习惯红涨绿跌配色 */}
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_num == null ? 'text-foreground/80' : item.change_num < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_num == null ? 'text-foreground' : item.change_num < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {signedMoney(item.change_num)}
                     </td>
-                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_ratio == null ? 'text-foreground/80' : item.change_ratio < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
+                    <td className={`px-1 py-1 text-right font-mono whitespace-nowrap ${item.change_ratio == null ? 'text-foreground' : item.change_ratio < 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                       {signedPct(item.change_ratio)}
                     </td>
                   </tr>
@@ -199,7 +199,7 @@ export function FundamentalsPanel(props: {
                   if (item.bonus_ratio != null) parts.push(`10送${item.bonus_ratio}`)
                   return (
                     <tr key={`div-${item.ex_date || i}-${i}`} className="border-b border-border/20 hover:bg-accent/10">
-                      <td className="px-1 py-1 text-foreground/90 whitespace-nowrap">{parts.length > 0 ? parts.join(' ') : '--'}</td>
+                      <td className="px-1 py-1 text-foreground whitespace-nowrap">{parts.length > 0 ? parts.join(' ') : '--'}</td>
                       <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.ex_date || '--'}</td>
                       <td className="px-1 py-1 text-right font-mono whitespace-nowrap">{item.dividend_per_share != null ? `${item.dividend_per_share.toFixed(2)}元` : '--'}</td>
                       <td className="px-1 py-1 text-muted-foreground whitespace-nowrap">{item.progress || '--'}</td>
@@ -224,14 +224,14 @@ export function FundamentalsPanel(props: {
                 <div key={`ev-${item.external_id || item.publish_time || i}-${i}`} className="flex items-start gap-2 rounded bg-accent/15 px-2 py-1.5">
                   <span className="text-[11px] text-muted-foreground whitespace-nowrap mt-px">{evDate || '--'}</span>
                   {item.event_type && (
-                    <span className="shrink-0 rounded-full bg-accent/60 px-1.5 py-0.5 text-[10px] text-foreground/80">{item.event_type}</span>
+                    <span className="shrink-0 rounded-full bg-accent/60 px-1.5 py-0.5 text-[10px] text-foreground">{item.event_type}</span>
                   )}
                   {item.url ? (
-                    <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-foreground/90 leading-snug hover:text-primary hover:underline line-clamp-2" title={title}>
+                    <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-foreground leading-snug hover:text-primary hover:underline line-clamp-2" title={title}>
                       {title}
                     </a>
                   ) : (
-                    <span className="text-[12px] text-foreground/90 leading-snug line-clamp-2" title={title}>{title}</span>
+                    <span className="text-[12px] text-foreground leading-snug line-clamp-2" title={title}>{title}</span>
                   )}
                 </div>
               )

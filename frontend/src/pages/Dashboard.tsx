@@ -831,7 +831,7 @@ export default function DashboardPage() {
                 </span>
                 <span className="text-[10px] text-muted-foreground">{t('dashboard.fundflowSource')}</span>
                 <span
-                  className="cursor-help text-[10px] text-muted-foreground/80 underline decoration-dotted underline-offset-2"
+                  className="cursor-help text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2"
                   title={marketFlow.caliber_label || t('dashboard.caliberHint')}
                 >
                   {t('dashboard.caliberLabel')}

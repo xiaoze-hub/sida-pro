@@ -356,7 +356,7 @@ export function CopilotCapsule({
           aria-hidden="true"
           title={CAPSULE_DRAG_HINT}
           data-capsule-drag-handle="true"
-          className="flex w-6 cursor-grab active:cursor-grabbing items-center justify-center text-muted-foreground/60 hover:text-foreground md:flex"
+          className="flex w-6 cursor-grab active:cursor-grabbing items-center justify-center text-muted-foreground hover:text-foreground md:flex"
         >
           <GripVertical className="h-4 w-4" />
         </span>

@@ -31,11 +31,11 @@ interface ScanItem {
 
 function aiTag(it: ScanItem): { text: string; cls: string; tip: string } {
   if (!it.ai_verdict) {
-    return { text: '--', cls: 'text-muted-foreground/50', tip: 'AI 判定待生成(盘后 15:50 自动批量)' }
+    return { text: '--', cls: 'text-muted-foreground', tip: 'AI 判定待生成(盘后 15:50 自动批量)' }
   }
   const conf = it.ai_confidence == null ? '' : ` · 置信 ${Math.round(it.ai_confidence * 100)}%`
   const cls =
-    it.ai_verdict === '强共振' ? 'text-stock-up' : it.ai_verdict === '弱共振' ? 'text-amber-500' : 'text-muted-foreground/70'
+    it.ai_verdict === '强共振' ? 'text-stock-up' : it.ai_verdict === '弱共振' ? 'text-amber-500' : 'text-muted-foreground'
   return { text: it.ai_verdict, cls, tip: `AI ${it.ai_verdict}${conf}${it.ai_summary ? `\n${it.ai_summary}` : ''}` }
 }
 

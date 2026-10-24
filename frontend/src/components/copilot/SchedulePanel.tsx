@@ -428,7 +428,7 @@ export function SchedulePanel({ className = '' }: { className?: string }) {
                       上次 {formatLastRun(row.last_run_date)}
                     </span>
                     <span data-testid="schedule-next-run">下次 {nextRun || '--'}</span>
-                    {pending ? <span className="text-muted-foreground/80">处理中…</span> : null}
+                    {pending ? <span className="text-muted-foreground">处理中…</span> : null}
                   </div>
                 </div>
 

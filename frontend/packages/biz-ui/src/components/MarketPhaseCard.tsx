@@ -312,7 +312,7 @@ export default function MarketPhaseCard() {
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[10px] text-muted-foreground">近 {recent.length} 个交易日阶段色带</span>
           {note ? (
-            <span className="text-[10px] text-muted-foreground/70 truncate max-w-[60%]" title={note}>
+            <span className="text-[10px] text-muted-foreground truncate max-w-[60%]" title={note}>
               {note}
             </span>
           ) : null}

@@ -77,7 +77,7 @@ export function CopilotBriefCard({
           </button>
         </div>
         <div className="mt-1 text-[11px] text-muted-foreground">{error || DEGRADED_HINT(null)}</div>
-        <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground/80">
+        <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground">
           {DISCLAIMER}
         </div>
       </div>
@@ -154,7 +154,7 @@ function BriefBody({
                 ? 'border-border/60 text-muted-foreground'
                 : st === 'gated'
                   ? 'border-role-watch/40 text-role-watch'
-                  : 'border-border/40 text-muted-foreground/60 line-through'
+                  : 'border-border/40 text-muted-foreground line-through'
             const txt = st === 'gated' ? `${EVIDENCE_NAME[k]}·升级解锁` : EVIDENCE_NAME[k]
             return (
               <span key={k} className={`rounded border px-1 ${cls}`} data-evidence={k} data-state={st}>
@@ -187,18 +187,18 @@ function BriefBody({
         {/* 口径 + 缺失原因 + 合规尾注 */}
         <div className="space-y-0.5 border-t border-border/40 pt-1.5">
           {v.caliber_notes?.length ? (
-            <div className="text-[10px] text-muted-foreground/80">
+            <div className="text-[10px] text-muted-foreground">
               口径：{v.caliber_notes.slice(0, 4).join(' · ')}
             </div>
           ) : null}
           {missing.length ? (
-            <div className="text-[10px] text-muted-foreground/80">
+            <div className="text-[10px] text-muted-foreground">
               {missing
                 .map((k) => `${EVIDENCE_NAME[k]} ${DEGRADED_HINT(data.evidence[k].degraded_reason)}`)
                 .join(' ｜ ')}
             </div>
           ) : null}
-          <div className="text-[10px] text-muted-foreground/70">
+          <div className="text-[10px] text-muted-foreground">
             {v.disclaimer || DISCLAIMER}
             {v.rule_id ? <span className="ml-1 font-mono">[{v.rule_id}]</span> : null}
           </div>

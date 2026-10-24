@@ -265,7 +265,7 @@ export default function DarkFundTopPage() {
                               {toAmountFromWan(r.tck_dark_net_wan)}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground/50">--</span>
+                            <span className="text-muted-foreground">--</span>
                           )}
                         </td>
                       ) : null}

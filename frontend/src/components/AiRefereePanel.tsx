@@ -143,7 +143,7 @@ export function AiRefereePanel({ referee }: { referee?: AiRefereeInfo | null }) 
       )}
 
       <div className="text-[12px] text-muted-foreground">
-        <span className="text-foreground/80">裁判理由：</span>
+        <span className="text-foreground">裁判理由：</span>
         <span className="whitespace-pre-wrap break-words">{reason || '（裁判未给出理由）'}</span>
       </div>
     </div>
@@ -169,7 +169,7 @@ export function RefereeStatsCard({ stats, loading }: { stats?: RefereeStats | nu
         data-empty="true"
         className="rounded-md border border-border/60 px-3 py-2 text-[12px] text-muted-foreground space-y-1"
       >
-        <div className="text-[13px] font-medium text-foreground/80">裁判战绩</div>
+        <div className="text-[13px] font-medium text-foreground">裁判战绩</div>
         <div>{stats?.message || '暂无裁判记录（裁判层尚未介入过预测）。'}</div>
         <div>样本不足，暂不展示命中率。</div>
       </div>

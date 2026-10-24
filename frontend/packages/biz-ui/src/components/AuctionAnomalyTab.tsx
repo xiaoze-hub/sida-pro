@@ -324,7 +324,7 @@ export default function AuctionAnomalyTab({ market = 'CN', onOpenDetail }: Aucti
                       const ratio = (r as { anomaly_ratio?: number | null }).anomaly_ratio
                       if (ratio == null || gap == null || Math.abs(ratio - gap) < 0.05) return null
                       return (
-                        <span className="mt-0.5 block text-[10px] font-sans text-muted-foreground/80"
+                        <span className="mt-0.5 block text-[10px] font-sans text-muted-foreground"
                               title="异动幅度：9:25 那一瞬的涨速，不等于相对昨收的竞价涨幅">
                           异动 {ratio > 0 ? '+' : ''}{safeFixed(ratio, 2)}%
                         </span>

@@ -28,7 +28,7 @@ function GroupList({ row, otherItems }: { row: TierRow; otherItems: Set<string> 
               const only = !otherItems.has(it)
               return (
                 <li key={it} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
-                  <Check className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${only ? 'text-primary' : 'text-muted-foreground/50'}`} />
+                  <Check className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${only ? 'text-primary' : 'text-muted-foreground'}`} />
                   <span className={only ? 'font-medium text-foreground' : 'text-muted-foreground'}>{it}</span>
                   {only && <span className="ml-1 shrink-0 rounded bg-primary/10 px-1 text-[12px] text-primary">更高档位独有</span>}
                 </li>
@@ -141,7 +141,7 @@ export default function Tiers() {
                   <li>价格预警：{data.member_limits.alert_max} 条</li>
                   <li>试用类功能：每日 {data.member_limits.trial_daily_limit} 次</li>
                 </ul>
-                <div className="mt-2 text-[12px] text-muted-foreground/80">{data.limits_note}</div>
+                <div className="mt-2 text-[12px] text-muted-foreground">{data.limits_note}</div>
               </div>
             )}
             {!data.member_limits && (
@@ -150,7 +150,7 @@ export default function Tiers() {
               </div>
             )}
 
-            <div className="mt-6 text-[12px] text-muted-foreground/80">{data.demo_note}</div>
+            <div className="mt-6 text-[12px] text-muted-foreground">{data.demo_note}</div>
 
             {/* 转化 ≤2 步: 未登录 → 注册(1 步) → 申请(2 步); 已登录 → 直接申请 */}
             <div className="mt-10 flex flex-wrap items-center gap-3">

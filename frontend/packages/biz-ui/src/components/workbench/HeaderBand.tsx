@@ -653,7 +653,7 @@ export default function HeaderBand({
             <span
               data-testid="position-unknown"
               title="持仓态未知: 持仓判定源在途或取数失败, 评分暂按未持仓口径"
-              className="shrink-0 text-[10px] text-muted-foreground/80"
+              className="shrink-0 text-[10px] text-muted-foreground"
             >
               持仓态未知
             </span>

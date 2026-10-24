@@ -322,7 +322,7 @@ function BlocksCard({ symbol, market }: { symbol: string; market: string }) {
         {blocks.slice(0, BLOCKS_MAX).map((b, i) => (
           <span
             key={`${b.code}-${i}`}
-            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground/80"
+            className="rounded bg-accent/50 px-1 py-0.5 text-[10px] text-foreground"
           >
             {b.name}
             <span className="ml-0.5 text-[10px] text-muted-foreground">{b.type}</span>

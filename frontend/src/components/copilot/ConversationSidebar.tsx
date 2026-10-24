@@ -194,7 +194,7 @@ export function ConversationSidebar({
       {/* 列表 */}
       {conversations.length === 0 ? (
         <div className="px-3 py-4" data-testid="copilot-conv-empty">
-          <div className="text-[12px] text-foreground/80">还没有对话</div>
+          <div className="text-[12px] text-foreground">还没有对话</div>
           <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             在右侧提问会自动开一个新对话，之后可以在这里随时翻回。
           </div>
@@ -386,7 +386,7 @@ export function ConversationSidebar({
       )}
 
       {/* 提示条：键盘操作说明（不是卡片，是一行 hairline 分隔的脚注） */}
-      <div className="border-t border-border/40 px-2.5 py-1.5 text-[10px] text-muted-foreground/70">
+      <div className="border-t border-border/40 px-2.5 py-1.5 text-[10px] text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <Check aria-hidden="true" className="h-2.5 w-2.5" />
           双击标题改名 · ↑↓ 切换 · Enter 选中

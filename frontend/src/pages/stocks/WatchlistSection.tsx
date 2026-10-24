@@ -96,7 +96,7 @@ export function WatchlistSection() {
       loadError ? null : (
         <div className="py-12 text-center">
           <div className="text-[13px] text-muted-foreground">还没有添加关注股票</div>
-          <div className="mt-2 text-[11px] text-muted-foreground/70">点击右上角“添加股票”开始</div>
+          <div className="mt-2 text-[11px] text-muted-foreground">点击右上角“添加股票”开始</div>
         </div>
       )
     ) : (
@@ -200,7 +200,7 @@ export function WatchlistSection() {
                     hasPosition={false}
                   />
                 ) : (
-                  <div className="text-[11px] text-muted-foreground/70 py-2">暂无技术面/AI 分析</div>
+                  <div className="text-[11px] text-muted-foreground py-2">暂无技术面/AI 分析</div>
                 )}
               </div>
 
@@ -209,7 +209,7 @@ export function WatchlistSection() {
                   {stock.agents && stock.agents.length > 0 ? (
                     <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
                   ) : (
-                    <span className="text-[10px] text-muted-foreground/60">未配置 Agent</span>
+                    <span className="text-[10px] text-muted-foreground">未配置 Agent</span>
                   )}
                   {runningAgents[stock.id] && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">

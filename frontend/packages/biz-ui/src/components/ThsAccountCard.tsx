@@ -88,7 +88,7 @@ export default function ThsAccountCard() {
                   {c.ok ? (
                     <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-500" />
                   ) : (
-                    <XCircle className="h-3 w-3 text-muted-foreground/50" />
+                    <XCircle className="h-3 w-3 text-muted-foreground" />
                   )}
                   {c.label}
                 </span>

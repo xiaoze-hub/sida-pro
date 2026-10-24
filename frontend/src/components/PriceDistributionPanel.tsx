@@ -301,7 +301,7 @@ export default function PriceDistributionPanel({
           {data.reason || '分价矩阵不可用（不冒充 0）'}
         </div>
         {data.caliber ? (
-          <div className="text-[10px] text-muted-foreground/70">{data.caliber}</div>
+          <div className="text-[10px] text-muted-foreground">{data.caliber}</div>
         ) : null}
       </div>
     )
@@ -375,7 +375,7 @@ export default function PriceDistributionPanel({
       </div>
 
       {/* 口径与体检（不藏起来: 回测/复盘时要能复现） */}
-      <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground/70">
+      <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
         <span>档位 {quality?.bins ?? bins.length}</span>
         {quality?.identity_ok_ratio != null ? (
           <span>· 恒等式 {pctText(quality.identity_ok_ratio, 1)}</span>

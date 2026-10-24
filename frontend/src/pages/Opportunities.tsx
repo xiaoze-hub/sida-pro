@@ -1575,22 +1575,22 @@ export default function OpportunitiesPage() {
                           <td className="py-1.5 pr-2 font-mono text-muted-foreground">{r.symbol}</td>
                           <td className="py-1.5 pr-2 font-medium text-foreground">{r.name}</td>
                           <td className="py-1.5 pr-2 text-center">
-                            {r.fromTdx ? <span className="text-emerald-600 dark:text-emerald-400">✓{r.tdxRank ? `#${r.tdxRank}` : ''}</span> : <span className="text-muted-foreground/40">—</span>}
+                            {r.fromTdx ? <span className="text-emerald-600 dark:text-emerald-400">✓{r.tdxRank ? `#${r.tdxRank}` : ''}</span> : <span className="text-muted-foreground">—</span>}
                           </td>
                           <td className="py-1.5 pr-2 text-center">
-                            {r.fromWencai ? <span className="text-emerald-600 dark:text-emerald-400">✓{r.wencaiRank ? `#${r.wencaiRank}` : ''}</span> : <span className="text-muted-foreground/40">—</span>}
+                            {r.fromWencai ? <span className="text-emerald-600 dark:text-emerald-400">✓{r.wencaiRank ? `#${r.wencaiRank}` : ''}</span> : <span className="text-muted-foreground">—</span>}
                           </td>
                           <td className="py-1.5 pr-2 text-center">
                             {r.strategyPassed == null
-                              ? <span className="text-muted-foreground/40">—</span>
+                              ? <span className="text-muted-foreground">—</span>
                               : r.strategyPassed
                                 ? <span className="text-primary font-semibold">✓ {r.strategyScore?.toFixed(0)}</span>
-                                : <span className="text-muted-foreground/50">✗</span>}
+                                : <span className="text-muted-foreground">✗</span>}
                           </td>
                           <td className="py-1.5 text-center">
                             {cnt >= 2
                               ? <span className="font-semibold text-orange-600 dark:text-orange-400">🔥×{cnt}</span>
-                              : <span className="text-muted-foreground/50">×{cnt}</span>}
+                              : <span className="text-muted-foreground">×{cnt}</span>}
                           </td>
                         </tr>
                       )
@@ -1693,7 +1693,7 @@ export default function OpportunitiesPage() {
             {scanResult && scanResult.items.length === 0 && (
               <div className="mt-3 text-[12px] text-muted-foreground">
                 没有股票通过该策略的硬过滤条件
-                <span className="block mt-1 text-[11px] text-muted-foreground/70">
+                <span className="block mt-1 text-[11px] text-muted-foreground">
                   {new Date().getHours() < 9 || new Date().getHours() >= 15
                     ? '💡 当前为非交易时段, 腾讯行情中涨跌幅/量比/换手为 0, 依赖量能条件的策略(资金热度/放量突破)会筛不出票。建议交易时段使用, 或改选估值类策略(双低/低波质量)。'
                     : '可尝试放宽条件或切换为「自选+种子池」范围'}
@@ -2221,7 +2221,7 @@ export default function OpportunitiesPage() {
                   </span>
                   <span>{sourcePoolLabel} · {sourceAgentHead}{sourceAgentTailCount > 0 ? ` +${sourceAgentTailCount}` : ''} · {item.risk_level_label || item.risk_level || '--'} · {marketRegime.regime_label || marketRegime.regime || '--'} · {item.is_holding_snapshot ? '持仓中' : '未持仓'}</span>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] leading-4 text-muted-foreground/80">
+                <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] leading-4 text-muted-foreground">
                   {item.ai_score != null && <span>AI 评分 <span className="font-semibold text-foreground">{item.ai_score}</span></span>}
                   <span>α {formatMetric(breakdown.alpha_score)}</span>
                   <span>催化 {formatMetric(breakdown.catalyst_score)}</span>

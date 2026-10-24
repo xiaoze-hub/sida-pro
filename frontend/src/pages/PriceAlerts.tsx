@@ -343,7 +343,7 @@ export default function PriceAlertsPage() {
                   <div className="mt-2 text-[12px] text-muted-foreground">
                     {(r.condition_group?.items || []).map(conditionText).join(r.condition_group?.op === 'or' ? ' 或 ' : ' 且 ')}
                   </div>
-                  <div className="mt-1 text-[12px] text-muted-foreground/80">
+                  <div className="mt-1 text-[12px] text-muted-foreground">
                     冷却 {r.cooldown_minutes} 分钟 · 日上限 {r.max_triggers_per_day} 次 · 最近触发 {fmt(r.last_trigger_at)}
                   </div>
                 </div>

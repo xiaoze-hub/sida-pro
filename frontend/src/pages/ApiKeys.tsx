@@ -213,7 +213,7 @@ export default function ApiKeysPage() {
             maxLength={64}
             aria-label="备注名"
             placeholder="备注名（如：本地 Hermes / 量化脚本）"
-            className="h-8 w-full min-w-0 rounded-lg border border-border/60 bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none sm:max-w-xs"
+            className="h-8 w-full min-w-0 rounded-lg border border-border/60 bg-transparent px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none sm:max-w-xs"
           />
           <Button size="sm" className="h-8 shrink-0" onClick={createKey} disabled={creating}>
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} 创建 Key

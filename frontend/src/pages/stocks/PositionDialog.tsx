@@ -98,7 +98,7 @@ export function PositionDialog() {
             </div>
           </div>
           <div className="relative" ref={positionDropdownRef}>
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               value={positionSearchQuery}
               onChange={e => handlePositionSearchInput(e.target.value)}
@@ -172,7 +172,7 @@ export function PositionDialog() {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label>投入资金 <span className="text-muted-foreground/60 text-[11px]">(选填)</span></Label>
+          <Label>投入资金 <span className="text-muted-foreground text-[11px]">(选填)</span></Label>
           <Input
             value={positionForm.invested_amount}
             onChange={e => setPositionForm({ ...positionForm, invested_amount: e.target.value })}

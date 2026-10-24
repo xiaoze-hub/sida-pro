@@ -332,7 +332,7 @@ function TracesTab() {
                         </div>
                       ) : null}
                       {s.result_digest ? (
-                        <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-muted-foreground/90">
+                        <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-muted-foreground">
                           {s.result_digest}
                         </div>
                       ) : null}

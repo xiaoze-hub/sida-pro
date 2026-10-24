@@ -95,7 +95,7 @@ export function GeneralSettingsSection() {
            aria-label={t('settings.searchPlaceholder')}/>
           {health?.timezone ? (
             <div className="hidden md:flex px-2.5 h-9 items-center rounded-md border border-border/50 bg-accent/20 text-[11px] text-muted-foreground">
-              TZ <span className="ml-1 font-mono text-foreground/90">{health.timezone}</span>
+              TZ <span className="ml-1 font-mono text-foreground">{health.timezone}</span>
             </div>
           ) : null}
         </div>

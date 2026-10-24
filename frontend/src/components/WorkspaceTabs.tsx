@@ -170,7 +170,7 @@ export default function WorkspaceTabs({
                     e.stopPropagation()
                     onClose(tab)
                   }}
-                  className="my-1 mr-1 flex w-5 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-s3 hover:text-foreground"
+                  className="my-1 mr-1 flex w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-s3 hover:text-foreground"
                 >
                   <X className="h-3 w-3" />
                 </button>

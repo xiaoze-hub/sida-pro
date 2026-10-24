@@ -404,7 +404,7 @@ export default function ThemeMoodPage() {
       {mood?.ok ? (
         <div className="mb-3 border-b border-border/40 pb-2">
           <div className="mb-1 flex items-baseline gap-2">
-            <span className="text-[11px] text-foreground/60">全市场情绪温度</span>
+            <span className="text-[11px] text-foreground">全市场情绪温度</span>
             <span className="font-mono text-[12px] font-medium text-primary">{mood.latest?.temperature ?? '—'}</span>
             <span className="text-[10px] text-muted-foreground">
               近 {mood.items?.length ?? 0} 日分位 {typeof mood.temperature_percentile === 'number' ? `${mood.temperature_percentile}%` : '—'}
@@ -567,7 +567,7 @@ export default function ThemeMoodPage() {
                   {bands.map((b) => (
                     <span
                       key={b.key}
-                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground/60"
+                      className="border-b border-border/70 pb-0.5 text-center text-[11px] font-medium leading-4 text-foreground"
                       style={{ width: b.count * AXIS_PITCH - (AXIS_PITCH - AXIS_CELL_W) }}
                     >
                       {b.label}
@@ -576,7 +576,7 @@ export default function ThemeMoodPage() {
                 </div>
               </div>
               <div className="mb-1 flex w-max min-w-full items-center gap-1">
-                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground/60">
+                <span className="sticky left-0 z-10 w-[76px] shrink-0 bg-background text-[11px] leading-4 text-foreground">
                   日期
                 </span>
                 <div className="flex gap-0.5">
@@ -585,7 +585,7 @@ export default function ThemeMoodPage() {
                       key={d}
                       title={`${d}${i === axis.length - 1 ? ' · 最新收盘' : ''}`}
                       className={`w-[38px] shrink-0 text-center text-[12px] leading-4 ${
-                        i === axis.length - 1 ? 'font-semibold text-primary' : 'text-foreground/80'
+                        i === axis.length - 1 ? 'font-semibold text-primary' : 'text-foreground'
                       }`}
                     >
                       {labels[i]}
@@ -616,7 +616,7 @@ export default function ThemeMoodPage() {
                         title={r
                           ? `${d} 新进 Top${resp?.rotation_top_k ?? 10}: ${r.new_codes.join('、') || '无'}\n退榜: ${r.exit_codes.join('、') || '无'}`
                           : d}
-                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground/60"
+                        className="w-[38px] shrink-0 text-center text-[11px] leading-4 text-foreground"
                       >
                         {entered || exited ? (
                           <>
@@ -643,7 +643,7 @@ export default function ThemeMoodPage() {
                     hint={(d) => `${axis[d.i]} · 前20均值 ${fmtScore(d.score)}`}
                     label={
                       <>
-                        <span className="text-[11px] text-foreground/60">情绪走势</span>
+                        <span className="text-[11px] text-foreground">情绪走势</span>
                         <span className="font-mono text-[12px] font-medium text-primary">{fmtScore(newestMarketScore)}</span>
                       </>
                     }
@@ -731,7 +731,7 @@ export default function ThemeMoodPage() {
               {detailTrend ? (
                 <div className="mt-3">
                   <div className="mb-1 flex items-baseline gap-2 text-[11px]">
-                    <span className="text-foreground/70">情绪走势(近 {axis.length} 个交易日)</span>
+                    <span className="text-foreground">情绪走势(近 {axis.length} 个交易日)</span>
                     <span className="ml-auto text-muted-foreground">
                       最高 {fmtScore(detailTrend.hi)} · 最低 {fmtScore(detailTrend.lo)} · 最新{' '}
                       <span className="font-mono text-foreground">{fmtScore(newestDetailScore)}</span>

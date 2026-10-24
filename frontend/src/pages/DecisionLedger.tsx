@@ -248,7 +248,7 @@ export default function DecisionLedger() {
             目前全部信号都处在「样本不足」阶段(需要等未来的 K 线才算得出来)—— 这是账本刚启用的正常状态, 不是没数据。
           </p>
         )}
-        {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{stats.note}</p>}
+        {stats?.note && <p className="mt-1 text-[10px] text-muted-foreground">{stats.note}</p>}
       </section>
 
       {/* ①b 我的自选池信号质量(2026-10-11 胜率证据层 ②): 按 user_id 隔离的账本聚合, 只读/零预测。
@@ -330,7 +330,7 @@ export default function DecisionLedger() {
             ))}
           </div>
         )}
-        {wl?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{wl.note}</p>}
+        {wl?.note && <p className="mt-1 text-[10px] text-muted-foreground">{wl.note}</p>}
       </section>
 
       {/* ② 信号对账(批次D hit-rate) */}
@@ -434,7 +434,7 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-        {outcomes?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{outcomes.note}</p>}
+        {outcomes?.note && <p className="mt-1 text-[10px] text-muted-foreground">{outcomes.note}</p>}
       </section>
 
       {/* ④ 共振回测 */}
@@ -504,7 +504,7 @@ export default function DecisionLedger() {
                 </tbody>
               </table>
             </div>
-            {bt.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{bt.note}</p>}
+            {bt.note && <p className="mt-1 text-[10px] text-muted-foreground">{bt.note}</p>}
           </div>
         )}
       </section>
@@ -589,7 +589,7 @@ export default function DecisionLedger() {
             </tbody>
           </table>
         </div>
-        {log?.note && <p className="mt-1 text-[10px] text-muted-foreground/80">{log.note}</p>}
+        {log?.note && <p className="mt-1 text-[10px] text-muted-foreground">{log.note}</p>}
       </section>
         </>
       )}

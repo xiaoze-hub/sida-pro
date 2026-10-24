@@ -316,7 +316,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
       {!err && series.length === 0 && !loading && (
         <div data-drift-empty className="rounded-md border border-dashed border-border/60 bg-muted/10 px-3 py-4">
           <div className="text-[12px] text-muted-foreground">暂无留痕（近 {days} 天）</div>
-          <div className="text-[11px] text-muted-foreground/80 mt-1">
+          <div className="text-[11px] text-muted-foreground mt-1">
             交易日 15:55 自动采集三源口径；采集后次日即可在此对比。留痕缺失时这里不会用 0 或推算值填补。
           </div>
         </div>
@@ -331,7 +331,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
                 {sources.map((k) => (
                   <th key={k} className="text-right font-normal py-1 px-3">
                     {SOURCE_SHORT[k] ?? k}
-                    <span className="block text-[10px] text-muted-foreground/70">
+                    <span className="block text-[10px] text-muted-foreground">
                       {data?.field_by_source?.[k]}
                     </span>
                   </th>
@@ -395,7 +395,7 @@ const DriftSection = memo(function DriftSection({ symbol }: { symbol: string }) 
               ) : (
                 <span className="text-muted-foreground">· 样本不足，暂不给差异统计</span>
               )}
-              <span className="text-muted-foreground/70 w-full">{c.note}</span>
+              <span className="text-muted-foreground w-full">{c.note}</span>
             </div>
           ))}
         </div>

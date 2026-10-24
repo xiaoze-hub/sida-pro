@@ -196,7 +196,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
               <div className="text-muted-foreground mt-0.5">
                 连强{act.streak_days}日{act.ma5 != null ? ` · 5日均${act.ma5.toFixed(2)}` : ''}
               </div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground mt-0.5">
                 生命1.56/强势3/大牛6
               </div>
             </>
@@ -215,7 +215,7 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
               <div className="font-mono text-[16px] font-semibold text-foreground">
                 {gs.state ?? gs.label ?? '无数据'}
                 {gs.pending ? (
-                  <span className="text-[10px] ml-1 text-muted-foreground/80">待确认</span>
+                  <span className="text-[10px] ml-1 text-muted-foreground">待确认</span>
                 ) : null}
               </div>
               <div className="text-muted-foreground mt-0.5">
@@ -223,13 +223,13 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 快线{gs.a0 != null ? gs.a0.toFixed(2) : '--'} / 慢线
                 {gs.bb0 != null ? gs.bb0.toFixed(2) : '--'}
               </div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground mt-0.5">
                 {gs.pending
                   ? gs.pending_label ?? `○${gs.pending_side ?? ''} 待确认(盘中价, 收盘才定死)`
                   : `G=${GS_SIGNAL.g.meaning} · S=${GS_SIGNAL.s.meaning}`}
               </div>
               {gs.signal_date ? (
-                <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+                <div className="text-[10px] text-muted-foreground mt-0.5">
                   最近已确认 {gs.signal}（{gs.signal_date}）
                 </div>
               ) : null}
@@ -250,12 +250,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
                 {fmtWan(l2.zjl_hb)}
               </div>
               <div className="text-muted-foreground mt-0.5">{l2.direction ?? '平衡'}</div>
-              <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+              <div className="text-[10px] text-muted-foreground mt-0.5">
                 逐笔{l2.l2_tick_num ?? 0}笔 · 委托{l2.l2_order_num ?? 0}笔
               </div>
               {/* 非交易时段回退收盘快照时显式标注(0 不冒充真实值); live 不标注 */}
               {l2.source && l2.source !== 'live' && (
-                <div className="text-[10px] text-muted-foreground/70 mt-0.5">
+                <div className="text-[10px] text-muted-foreground mt-0.5">
                   {l2.as_of ? `${l2.as_of} 收盘` : '非实时'}
                 </div>
               )}
@@ -277,12 +277,12 @@ export default function DecisionPioneerCard({ symbol, market, bare = false }: De
       {bare ? (
         <div className="mt-2 flex items-center justify-end gap-2">
           {data?.data_time ? (
-            <span className="font-mono text-[10px] text-muted-foreground/60">更新于 {data.data_time}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">更新于 {data.data_time}</span>
           ) : null}
           {refreshButton}
         </div>
       ) : data?.data_time ? (
-        <div className="text-[10px] text-muted-foreground/60 mt-2 text-right font-mono">
+        <div className="text-[10px] text-muted-foreground mt-2 text-right font-mono">
           更新于 {data.data_time}
         </div>
       ) : null}

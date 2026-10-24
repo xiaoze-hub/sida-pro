@@ -570,7 +570,7 @@ export default function AiCopilotPage() {
       <aside className="hidden w-[248px] shrink-0 flex-col gap-2 lg:flex">
         <div className="flex items-center justify-between">
           <span className="text-[12px] font-medium text-muted-foreground">{PRESET_PRIMARY_LABEL}</span>
-          <span className="text-[10px] text-muted-foreground/70">{SESSION_LABEL[session]}</span>
+          <span className="text-[10px] text-muted-foreground">{SESSION_LABEL[session]}</span>
         </div>
         <div className="space-y-1.5">
           {primaryPresets.map((p) => (
@@ -615,7 +615,7 @@ export default function AiCopilotPage() {
                     <span className="mr-1">{p.icon}</span>
                     {p.label}
                     {p.group ? (
-                      <span className="ml-1 text-[10px] text-muted-foreground/70">
+                      <span className="ml-1 text-[10px] text-muted-foreground">
                         {PRESET_GROUP_LABEL[p.group] || ''}
                       </span>
                     ) : null}
@@ -650,7 +650,7 @@ export default function AiCopilotPage() {
           </div>
         ) : null}
 
-        <div className={`${metrics && metrics.runs > 0 ? 'mt-2' : 'mt-auto'} text-[10px] leading-relaxed text-muted-foreground/80`}>
+        <div className={`${metrics && metrics.runs > 0 ? 'mt-2' : 'mt-auto'} text-[10px] leading-relaxed text-muted-foreground`}>
           {DISCLAIMER}
         </div>
       </aside>
@@ -862,7 +862,7 @@ export default function AiCopilotPage() {
                     onClick={() => void send(x)}
                     disabled={streaming}
                     data-testid="copilot-empty-example"
-                    className="group flex w-full items-center gap-2 rounded-lg border border-role-watch/30 bg-s2 px-2.5 py-1.5 text-left text-[12px] text-foreground/90 transition-colors hover:border-role-watch/60 hover:bg-s3 disabled:opacity-60"
+                    className="group flex w-full items-center gap-2 rounded-lg border border-role-watch/30 bg-s2 px-2.5 py-1.5 text-left text-[12px] text-foreground transition-colors hover:border-role-watch/60 hover:bg-s3 disabled:opacity-60"
                   >
                     <span className="min-w-0 flex-1">{x}</span>
                     <ChevronRight className="h-3 w-3 shrink-0 text-role-watch/70" />

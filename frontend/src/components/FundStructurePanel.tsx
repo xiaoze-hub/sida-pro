@@ -223,7 +223,7 @@ export default function FundStructurePanel({
     return (
       <div className="text-[12px] text-muted-foreground" data-testid="fund-structure-no-data">
         {noteText(loading, hasResp, failed, lastOkAt, data?.available === false ? data?.reason : '该股暂无落库记录')}
-        <div className="mt-0.5 text-[10px] text-muted-foreground/70">
+        <div className="mt-0.5 text-[10px] text-muted-foreground">
           {data?.data_since ? `数据自 ${fmtDay(data.data_since)} 起累积` : '数据自 2026-10-23 起累积'}（每交易日 15:45 落库）
         </div>
       </div>
@@ -248,7 +248,7 @@ export default function FundStructurePanel({
           />
         </span>
         <span>按单笔成交金额分档 · 与逐笔/东财四档不可换算</span>
-        <span data-testid="fund-structure-since" className="text-foreground/70">
+        <span data-testid="fund-structure-since" className="text-foreground">
           数据自 {fmtDay(data?.data_since)} 起累积 · {count} 个交易日
         </span>
       </div>
@@ -331,7 +331,7 @@ export default function FundStructurePanel({
           </div>
         </div>
       ) : (
-        <div className="border-t border-border/30 pt-1.5 text-[10px] text-muted-foreground/70" data-testid="fund-structure-single-day">
+        <div className="border-t border-border/30 pt-1.5 text-[10px] text-muted-foreground" data-testid="fund-structure-single-day">
           仅 {count} 个交易日 —— 展示当日结构, 不画趋势（本表 2026-10-23 起累积, 历史无法回填）
         </div>
       )}

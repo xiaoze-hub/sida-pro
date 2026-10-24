@@ -116,7 +116,7 @@ export function UsageBar({
         </span>
         {quotaNum === null ? null : (
           <span
-            className="font-mono text-muted-foreground/70"
+            className="font-mono text-muted-foreground"
             data-testid="copilot-usage-quota-limit"
           >
             / {safeInt(quotaNum)}

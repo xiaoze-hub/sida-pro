@@ -221,7 +221,7 @@ export function WeightTransparency({
           </span>
         </div>
         {state !== 'loading' && (
-          <div className="mt-0.5 text-[11px] text-muted-foreground/80">
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
             历史参考快照仅用于回测，不代表当前权重
           </div>
         )}
@@ -243,7 +243,7 @@ export function WeightTransparency({
       {weightRows.map((r, i) => (
         <span key={r.key} className="flex items-center gap-x-1.5">
           {i > 0 && <span>·</span>}
-          <span className="font-num font-medium tabular-nums text-foreground/80">
+          <span className="font-num font-medium tabular-nums text-foreground">
             {r.label} {safeFixed(r.pct, 1)}%
           </span>
         </span>
@@ -284,7 +284,7 @@ export function OutcomeBadge({ item }: { item: OutcomeInput & { expected_pct?: n
         <span className="rounded border border-dashed border-border/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
           无数据
         </span>
-        <span className="font-num tabular-nums text-[10px] text-muted-foreground/80">
+        <span className="font-num tabular-nums text-[10px] text-muted-foreground">
           {predText}
           {pctText && <> vs 实际{pctText}</>}
         </span>
@@ -374,7 +374,7 @@ function ModelDivergenceChart({ result }: { result: PredictResult }) {
             <span className="w-28 shrink-0 truncate text-right font-mono text-[11px]">
               {safeFixed(r.start)} → {safeFixed(r.end)}
               {r.band && (
-                <span className="block text-[10px] text-muted-foreground/80">
+                <span className="block text-[10px] text-muted-foreground">
                   P5 {safeFixed(r.band.lo)} ~ P95 {safeFixed(r.band.hi)}
                 </span>
               )}

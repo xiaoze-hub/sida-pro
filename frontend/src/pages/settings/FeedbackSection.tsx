@@ -29,13 +29,13 @@ export function FeedbackSection() {
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
           <span>近 {fbStats.range_days} 天</span>
           <span className="opacity-50">|</span>
-          <span>反馈: <span className="font-mono text-foreground/90">{fbStats.total}</span></span>
+          <span>反馈: <span className="font-mono text-foreground">{fbStats.total}</span></span>
           <span className="opacity-50">|</span>
           <span>有用: <span className="font-mono text-emerald-600">{fbStats.useful}</span></span>
           <span className="opacity-50">|</span>
           <span>没用: <span className="font-mono text-rose-600">{fbStats.useless}</span></span>
           <span className="opacity-50">|</span>
-          <span>有用率: <span className="font-mono text-foreground/90">{Math.round(fbStats.useful_rate * 100)}%</span></span>
+          <span>有用率: <span className="font-mono text-foreground">{Math.round(fbStats.useful_rate * 100)}%</span></span>
         </div>
 
         {fbStats.by_agent?.length ? (

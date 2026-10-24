@@ -361,14 +361,14 @@ export default function PriceAlertFormDialog(props: {
                   onChange={e => updateExpirePart(expireDatePart, e.target.value)}
                 />
               </div>
-              <div className="mt-1 text-[10px] text-muted-foreground/70">留空表示永不过期</div>
+              <div className="mt-1 text-[10px] text-muted-foreground">留空表示永不过期</div>
             </div>
           </div>
 
           <div className="rounded-lg border border-border/40 p-3">
             <div className="text-[12px] text-muted-foreground mb-2">通知渠道（不选=系统默认）</div>
             {enabledChannels.length === 0 ? (
-              <div className="text-[12px] text-muted-foreground/70">暂无可用渠道</div>
+              <div className="text-[12px] text-muted-foreground">暂无可用渠道</div>
             ) : (
               <div className="flex items-center gap-2 flex-wrap">
                 {enabledChannels.map(ch => {

@@ -78,7 +78,7 @@ export function StocksHeader() {
         {lastRefreshTime && (
           <>
             <div className="w-px h-4 bg-border" />
-            <span className="text-[10px] text-muted-foreground/60">
+            <span className="text-[10px] text-muted-foreground">
               {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </span>
           </>
@@ -140,7 +140,7 @@ export function StocksHeader() {
         >
           <span className={`w-1.5 h-1.5 rounded-full ${statusColors[m.status] || 'bg-slate-400'}`} />
           <span className="text-[11px] text-muted-foreground">{m.name}</span>
-          <span className={`text-[10px] ${m.is_trading ? 'text-emerald-600' : 'text-muted-foreground/60'} hidden sm:inline`}>
+          <span className={`text-[10px] ${m.is_trading ? 'text-emerald-600' : 'text-muted-foreground'} hidden sm:inline`}>
             {m.status_text}
           </span>
         </div>
@@ -169,7 +169,7 @@ export function StocksHeader() {
       )}
     </div>
     {lastRefreshTime && (
-      <span className="md:hidden shrink-0 text-[10px] text-muted-foreground/60 font-mono ml-1">
+      <span className="md:hidden shrink-0 text-[10px] text-muted-foreground font-mono ml-1">
         {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
       </span>
     )}

@@ -95,7 +95,7 @@ export function PersonaBadge({
     >
       <span className={`h-1.5 w-1.5 rounded-full ${DOT[resp.kind] || DOT.normal}`} aria-hidden />
       <span>{label}</span>
-      {grade && <span className="font-mono text-[10px] text-muted-foreground/80">{grade.trim()}</span>}
+      {grade && <span className="font-mono text-[10px] text-muted-foreground">{grade.trim()}</span>}
     </span>
   )
 }

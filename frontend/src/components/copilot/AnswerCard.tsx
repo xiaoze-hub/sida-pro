@@ -58,7 +58,7 @@ function AnchoredText({
             data-kind={a.kind}
             title={`${label === '--' ? '价位' : label} ${a.value} · 点到 K 线`}
             onClick={() => onAnchor({ value: a.value, kind: a.kind, context: a.context })}
-            className="mx-[1px] inline-flex items-baseline gap-0.5 rounded border border-border/60 px-1 align-baseline font-mono text-[10px] tabular-nums text-foreground/90 hover:border-role-watch/60 hover:text-role-watch"
+            className="mx-[1px] inline-flex items-baseline gap-0.5 rounded border border-border/60 px-1 align-baseline font-mono text-[10px] tabular-nums text-foreground hover:border-role-watch/60 hover:text-role-watch"
           >
             <span>{seg.text}</span>
             {label !== '--' ? (
@@ -143,13 +143,13 @@ export function AnswerCard({
         <div className="rounded-lg border border-border/50 bg-s1 px-2.5 py-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium text-muted-foreground">{ANSWER_EVIDENCE_LABEL}</span>
-            <span className="text-[10px] text-muted-foreground/70">{parsed.evidence.length} 条</span>
+            <span className="text-[10px] text-muted-foreground">{parsed.evidence.length} 条</span>
           </div>
           <ul className="mt-1 space-y-1">
             {shownEvidence.map((e, i) => (
               <li key={`${i}-${e.slice(0, 12)}`} className="flex gap-1.5 text-[12px] leading-relaxed">
                 <span className="mt-[2px] h-1 w-1 shrink-0 rounded-full bg-role-watch/70" />
-                <span className="min-w-0 text-foreground/90">
+                <span className="min-w-0 text-foreground">
                   <AnchoredText text={e} onAnchor={onAnchoredPrice} />
                 </span>
               </li>
@@ -175,7 +175,7 @@ export function AnswerCard({
       {parsed.plan ? (
         <div className="rounded-lg border border-border/50 bg-s1 px-2.5 py-2">
           <div className="text-[10px] font-medium text-muted-foreground">{ANSWER_PLAN_LABEL}</div>
-          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/90">
+          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-foreground">
             {parsed.plan}
           </div>
         </div>
@@ -209,7 +209,7 @@ export function AnswerCard({
       {/* 5. 追问：答完不知道问什么是最常见的断点 */}
       {onFollowUp ? (
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          <span className="text-[10px] text-muted-foreground/70">{ANSWER_FOLLOWUP_LABEL}</span>
+          <span className="text-[10px] text-muted-foreground">{ANSWER_FOLLOWUP_LABEL}</span>
           {FOLLOW_UP_QUESTIONS.map((q) => (
             <button
               key={q}
@@ -223,7 +223,7 @@ export function AnswerCard({
         </div>
       ) : null}
 
-      <div className="text-[10px] leading-relaxed text-muted-foreground/70">{parsed.disclaimer}</div>
+      <div className="text-[10px] leading-relaxed text-muted-foreground">{parsed.disclaimer}</div>
     </div>
   )
 }

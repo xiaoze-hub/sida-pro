@@ -82,7 +82,7 @@ function ItemRow({ item }: { item: CheckRow }) {
       {item.status === 'fail' && (
         <div className="mt-1.5 space-y-1">
           {item.error && (
-            <p className="truncate text-[11px] text-muted-foreground/70" title={item.error}>
+            <p className="truncate text-[11px] text-muted-foreground" title={item.error}>
               {item.error}
             </p>
           )}
@@ -90,7 +90,7 @@ function ItemRow({ item }: { item: CheckRow }) {
         </div>
       )}
       {item.status !== 'fail' && item.status !== 'checking' && item.note && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground/70">{item.note}</p>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">{item.note}</p>
       )}
     </div>
   )

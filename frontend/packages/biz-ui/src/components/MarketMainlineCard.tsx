@@ -151,7 +151,7 @@ function MainlineRow({
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-muted-foreground">
             <Layers className="w-3 h-3" />
             <span>成分股 {g.constituents.length} 只</span>
-            <span className="text-muted-foreground/60">·</span>
+            <span className="text-muted-foreground">·</span>
             <span>成交额 {fmtYi(g.constituents.reduce((s, c) => s + (c.amount || 0), 0))}</span>
           </div>
           <div className="flex flex-wrap gap-1">
@@ -163,7 +163,7 @@ function MainlineRow({
                   className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors ${
                     isLeader
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                      : 'border-border/50 bg-card text-foreground/90 hover:border-primary/40'
+                      : 'border-border/50 bg-card text-foreground hover:border-primary/40'
                   }`}
                   title={`${c.name}(${c.code}) ${c.days}板 成交${fmtYi(c.amount)}`}
                 >
@@ -290,7 +290,7 @@ export default function MarketMainlineCard() {
               Top {top.length}
               {rest.length > 0 ? ` / ${ranked.length}` : ''}
               {stats ? (
-                <span className="ml-1.5 text-muted-foreground/70">
+                <span className="ml-1.5 text-muted-foreground">
                   (过滤 {stats.broad_filtered} 宽基 / 未入榜 {stats.below_min} / 共 {totalGroups} 题材)
                 </span>
               ) : null}
@@ -376,7 +376,7 @@ export default function MarketMainlineCard() {
               >
                 <span>{g.name}</span>
                 <span className="text-stock-up font-mono">{g.limit_up_count}家</span>
-                <span className="text-muted-foreground/60">/</span>
+                <span className="text-muted-foreground">/</span>
                 <span className="text-amber-600 dark:text-amber-400 font-mono">{g.max_boards}B</span>
               </span>
             ))}

@@ -259,7 +259,7 @@ export default function FactorIC() {
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{num(r.ir, 2)}</td>
                       <td className={`px-2 py-1.5 text-right font-mono ${ho.cls}`} title={ho.title}>{ho.text}</td>
-                      <td className="px-2 py-1.5 text-right font-mono text-muted-foreground/70">{num(r.ic_pooled)}</td>
+                      <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{num(r.ic_pooled)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{r.sample_size}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
                         {r.ic_periods} / {r.holdout_periods}

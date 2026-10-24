@@ -129,7 +129,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
     return (
       <div data-testid="decision-error" className="text-[11px] text-muted-foreground">
         决策合成取数失败 — 暂无法给出「动手 / 看看 / 别碰」
-        {state.message ? <span className="text-muted-foreground/70">({state.message})</span> : null}
+        {state.message ? <span className="text-muted-foreground">({state.message})</span> : null}
       </div>
     )
   }
@@ -173,7 +173,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
       </div>
       {/* P2-7: 非 CN 资金维无源 —— 显式标注, 不冒充三信号 */}
       {twoDimension ? (
-        <span data-testid="decision-fund-missing" className="mt-0.5 block text-[10px] text-muted-foreground/70">
+        <span data-testid="decision-fund-missing" className="mt-0.5 block text-[10px] text-muted-foreground">
           {fundNote} — 仅趋势 × 活跃度双维判定
         </span>
       ) : null}
@@ -185,7 +185,7 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
       ) : null}
       {/* P1-2: 持仓参考行(不改 verdict 语义) */}
       {positionNote ? (
-        <span data-testid="decision-position" className="mt-0.5 block text-[10px] text-muted-foreground/80">
+        <span data-testid="decision-position" className="mt-0.5 block text-[10px] text-muted-foreground">
           {positionNote}
         </span>
       ) : null}
@@ -195,17 +195,17 @@ export default function DecisionVerdictCard({ symbol, market }: { symbol: string
           data-testid="decision-evidence"
           className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
         >
-          <div className="text-foreground/70" data-testid="decision-evidence-triggers">
+          <div className="text-foreground" data-testid="decision-evidence-triggers">
             触发条件: {evidence.triggers.join('；')}
           </div>
-          <div className="text-muted-foreground/70" data-testid="decision-evidence-asof">
+          <div className="text-muted-foreground" data-testid="decision-evidence-asof">
             {evidence.as_of_note}
           </div>
           <div className="text-amber-600 dark:text-amber-500" data-testid="decision-evidence-invalidation">
             失效条件: {evidence.invalidation.join('；')}
           </div>
           {similar?.sentence ? (
-            <div className="text-muted-foreground/70" data-testid="decision-evidence-similar">
+            <div className="text-muted-foreground" data-testid="decision-evidence-similar">
               {similar.sentence}
             </div>
           ) : null}

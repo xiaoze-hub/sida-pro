@@ -29,11 +29,11 @@ export function MarketStatusPills({
             className={`h-1.5 w-1.5 rounded-full ${m.is_trading ? 'bg-amber-500' : 'bg-muted-foreground/40'}`}
           />
           <span className="text-muted-foreground">{m.name}</span>
-          <span className={m.is_trading ? 'font-medium text-amber-600' : 'text-muted-foreground/70'}>
+          <span className={m.is_trading ? 'font-medium text-amber-600' : 'text-muted-foreground'}>
             {m.status_text}
           </span>
           {m.sessions.length > 0 && (
-            <span className="hidden font-mono text-[10px] text-muted-foreground/60 lg:inline">
+            <span className="hidden font-mono text-[10px] text-muted-foreground lg:inline">
               {m.sessions.join('/')}
             </span>
           )}

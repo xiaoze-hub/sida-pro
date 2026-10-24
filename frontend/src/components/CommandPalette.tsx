@@ -295,7 +295,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="搜索股票(代码/名称) 或 功能…"
-            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60"
+            className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
             data-search-input
           />
           <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>
@@ -332,7 +332,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                 <>
                   <Zap className="h-4 w-4 shrink-0 text-[hsl(var(--role-opp))]" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground" title={it.label}>{it.label}</span>
-                  {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground/70">{it.hint}</span>}
+                  {it.hint && <span className="shrink-0 text-[10px] text-muted-foreground">{it.hint}</span>}
                   <span className="shrink-0 text-[11px] text-muted-foreground">{it.group}</span>
                 </>
               ) : (

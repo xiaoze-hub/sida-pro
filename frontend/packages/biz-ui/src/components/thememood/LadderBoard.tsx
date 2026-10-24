@@ -83,7 +83,7 @@ function StockChip({ s, basis = 'qfq' }: { s: LadderStock; basis?: 'qfq' | 'raw'
       className="flex w-[52px] flex-col items-center gap-0.5 rounded border border-border/30 px-0.5 py-0.5"
     >
       <DayCandle candle={s.candle} basis={basis} />
-      <span className="w-full truncate text-center text-[10px] text-foreground/80" title={s.name || s.symbol}>{s.name || s.symbol}</span>
+      <span className="w-full truncate text-center text-[10px] text-foreground" title={s.name || s.symbol}>{s.name || s.symbol}</span>
       {/* P0(2026-10-18 审计 F06): 无 pct 时不渲染 `--` —— 单页 820 处占位把格子塞满噪音。
           保留等高占位块(高度不变、不塌格), 缺多少就是"这格只有名称+板数"。 */}
       {s.pct != null ? (
@@ -139,7 +139,7 @@ function DayColumn({ day, basis, liveAsOf }: { day: LadderDay; basis: 'qfq' | 'r
   return (
     <div className="w-[170px] shrink-0 rounded border border-border/40 p-1.5">
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[11px] font-medium text-foreground/85">{fmtISODate(day.date)}</span>
+        <span className="text-[11px] font-medium text-foreground">{fmtISODate(day.date)}</span>
         <span className="text-[10px] text-muted-foreground">封 {sealed}</span>
       </div>
       {/* 盘中列诚实标注: 未定型 + 数据截至时刻(小字徽章, 不卡片化); 定型后此列不再出现 ⇒ 徽章消失。 */}
@@ -215,7 +215,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
                 type="button"
                 onClick={() => onOnlyBoard(onlyBoard === b ? null : b)}
                 className={`rounded px-1 text-[10px] font-medium ${
-                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-foreground/80'
+                  onlyBoard === b ? 'bg-primary text-primary-foreground' : 'bg-accent/50 text-foreground'
                 }`}
                 title={onlyBoard === b ? '取消只看本板' : '只看本板'}
               >
@@ -233,7 +233,7 @@ function MatrixView({ cols, collapsed, onlyBoard, onToggleRow, onOnlyBoard, live
         </div>
         {cols.map((d) => (
           <div key={d.date} className="w-[170px] shrink-0">
-            <div className="mb-1 truncate text-[10px] font-medium text-foreground/85" title={fmtISODate(d.date)}>
+            <div className="mb-1 truncate text-[10px] font-medium text-foreground" title={fmtISODate(d.date)}>
               {fmtISODate(d.date)}
               {d.provisional ? <span className="ml-1 text-primary">盘中{liveAsOf ? ` · 截至 ${liveAsOf}` : ''}</span> : null}
             </div>

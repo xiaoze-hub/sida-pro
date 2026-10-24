@@ -279,7 +279,7 @@ export function ProposalPanel({ className = '' }: { className?: string }) {
                 ) : null}
 
                 <div className="flex items-center justify-end gap-1 py-2">
-                  {pending ? <span className="text-[10px] text-muted-foreground/80">处理中…</span> : null}
+                  {pending ? <span className="text-[10px] text-muted-foreground">处理中…</span> : null}
                   {ACTIONS.map((action) => {
                     const current = row.status === action
                     return (
@@ -291,7 +291,7 @@ export function ProposalPanel({ className = '' }: { className?: string }) {
                         disabled={current || pending || decidingId !== null}
                         onClick={() => void onDecide(row, action)}
                         className={`px-1 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
-                          current ? 'text-muted-foreground/60' : 'text-muted-foreground hover:text-foreground'
+                          current ? 'text-muted-foreground' : 'text-muted-foreground hover:text-foreground'
                         }`}
                       >
                         {ACTION_LABEL[action]}

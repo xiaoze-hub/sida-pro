@@ -548,7 +548,7 @@ export default function BoardHeatmap({ onOpenBoard, className }: BoardHeatmapPro
           style={{ minHeight: `${CHART_EMPTY_HEIGHT}px` }}
         >
           <span className="text-[12px] text-muted-foreground">暂无板块数据（等待每日同步）</span>
-          <span className="text-[11px] text-muted-foreground/80">
+          <span className="text-[11px] text-muted-foreground">
             每日 15:30 后同步板块行情；若长期为空，请在「数据源」页检查东财板块源
           </span>
         </div>

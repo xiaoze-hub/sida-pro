@@ -194,7 +194,7 @@ export function NotificationBell({ size = 'md' }: { size?: 'sm' | 'md' }) {
                     {n.body && (
                       <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2" title={n.body}>{n.body}</span>
                     )}
-                    <span className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground/70">
+                    <span className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
                       <span>{timeAgo(n.created_at)}</span>
                       {n.source && <span>· {n.source}</span>}
                       {n.push_status && (

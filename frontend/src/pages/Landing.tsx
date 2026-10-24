@@ -170,7 +170,7 @@ export default function LandingPage() {
           一切皆<span className="bg-gradient-to-r from-primary to-blue-600 dark:from-cyan-300 dark:to-blue-500 bg-clip-text text-transparent">接口</span>
         </h1>
         {/* 首屏必须回答"给谁用 · 解决什么"(设计稿 v3.0 §三): 原文只有"面向开发者开放", 没说给谁。 */}
-        <p className="mx-auto mt-4 max-w-xl text-[16px] font-medium text-foreground/90 dark:text-white/90">
+        <p className="mx-auto mt-4 max-w-xl text-[16px] font-medium text-foreground dark:text-white/90">
           给盯 A 股的开发者与操盘手：<span className="text-primary dark:text-cyan-300">一次注册</span>就能用
           行情、资金、情报、决策四类能力，接口直接调、也能在终端里看。
         </p>
@@ -270,7 +270,7 @@ export default function LandingPage() {
               <span className="text-muted-foreground dark:text-slate-300"> \</span>{'\n'}
               <span className="text-muted-foreground dark:text-slate-300">  -d </span>
               <span className="text-emerald-700 dark:text-emerald-400">'&#123;"symbol": "000001"&#125;'</span>{'\n\n'}
-              <span className="text-muted-foreground/70 dark:text-cyan-500/40"># → &#123;"code": 0, "data": &#123;"price": 11.82, ...&#125;&#125;</span>
+              <span className="text-muted-foreground dark:text-cyan-500/40"># → &#123;"code": 0, "data": &#123;"price": 11.82, ...&#125;&#125;</span>
             </code>
           </pre>
         </div>
@@ -289,9 +289,9 @@ export default function LandingPage() {
           <Link to="/developers" className="rounded-lg border border-primary/20 dark:border-cyan-400/20 bg-card/40 dark:bg-white/[0.03] px-5 py-2 text-[13px] font-medium text-primary dark:text-cyan-300 hover:border-primary/40 dark:hover:border-cyan-400/40 hover:bg-primary/10 dark:hover:bg-cyan-500/10 transition-all">阅读文档</Link>
         </div>
         <div className="mt-6 flex justify-center gap-4 font-mono text-[12px]">
-          <Link to="/developers" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">开发者文档</Link>
-          <Link to="/api-keys" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
-          <Link to="/login" className="text-muted-foreground/70 dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">登录</Link>
+          <Link to="/developers" className="text-muted-foreground dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">开发者文档</Link>
+          <Link to="/api-keys" className="text-muted-foreground dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">API Key</Link>
+          <Link to="/login" className="text-muted-foreground dark:text-slate-700 hover:text-primary dark:hover:text-cyan-400 transition-colors">登录</Link>
         </div>
       </section>
 
@@ -308,7 +308,7 @@ export default function LandingPage() {
             <Link to="/login?mode=register" className="hover:text-primary dark:hover:text-cyan-400 transition-colors">register</Link>
           </div>
         </div>
-        <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground/60 dark:text-slate-800">
+        <p className="mt-4 text-center font-mono text-[12px] text-muted-foreground dark:text-slate-800">
           本平台不构成投资建议 · market involves risk · invest with caution
         </p>
       </footer>

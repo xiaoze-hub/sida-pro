@@ -597,23 +597,23 @@ function OrderbookSection({
 
       {/* 两口径同屏的**可见**披露(复审 Minor 3): 格子=委托量口径, 下面双向条=十档额口径, 不必相等 */}
       {bidPctMix ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-bidpct-mix">
+        <div className="mt-1.5 text-[10px] text-muted-foreground" data-testid="l2-bidpct-mix">
           「买盘占比」为委托量口径, 上方买/卖双向条按十档额口径绘制 —— 两者口径不同, 数值不必相等
         </div>
       ) : null}
       {/* 回退口径**可见**披露: 形态来自 OB 序列 label 而非 summary.orderbook.shape(两套口径不同, 不冒充) */}
       {shapeFromFallback ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70" data-testid="l2-shape-fallback">
+        <div className="mt-1.5 text-[10px] text-muted-foreground" data-testid="l2-shape-fallback">
           盘口形态取 OB 序列 label 回退口径(/klines/summary 的 orderbook 未下发形态)
         </div>
       ) : null}
       {/* 后端显式说"盘口快照不可用"时原样转述其 note(不本地编理由); note 缺失则不说话 */}
       {sumOb && sumOb.available !== true && sumOb.note ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">盘口快照源: {sumOb.note}</div>
+        <div className="mt-1.5 text-[10px] text-muted-foreground">盘口快照源: {sumOb.note}</div>
       ) : null}
 
       {available && ob?.note ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">{ob.note}</div>
+        <div className="mt-1.5 text-[10px] text-muted-foreground">{ob.note}</div>
       ) : null}
     </Section>
   )
@@ -1004,7 +1004,7 @@ function IntentExplainBlock({ symbol }: { symbol: string }) {
         >
           {state === 'loading' ? '解读中…' : state === 'done' ? '重新解读' : 'AI 解读'}
         </button>
-        <span className="text-[10px] text-muted-foreground/70">规则给结论, AI 只补『为什么』(不自动跑)</span>
+        <span className="text-[10px] text-muted-foreground">规则给结论, AI 只补『为什么』(不自动跑)</span>
       </div>
 
       {state === 'idle' ? null : error ? (
@@ -1030,22 +1030,22 @@ function IntentExplainBlock({ symbol }: { symbol: string }) {
                 className="mt-1 space-y-0.5 border-t border-border/30 pt-1 text-[10px]"
                 data-testid="l2-intent-ai-evidence"
               >
-                <div className="text-foreground/70" data-testid="l2-intent-ai-evidence-triggers">
+                <div className="text-foreground" data-testid="l2-intent-ai-evidence-triggers">
                   触发条件: {resp.evidence.triggers.join('；')}
                 </div>
-                <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-asof">
+                <div className="text-muted-foreground" data-testid="l2-intent-ai-evidence-asof">
                   {resp.evidence.as_of_note}
                 </div>
                 <div className="text-amber-600 dark:text-amber-500" data-testid="l2-intent-ai-evidence-invalidation">
                   失效条件: {resp.evidence.invalidation.join('；')}
                 </div>
                 {resp.confidence_calibration?.note ? (
-                  <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-calibration">
+                  <div className="text-muted-foreground" data-testid="l2-intent-ai-evidence-calibration">
                     置信度校准: {resp.confidence_calibration.note}
                   </div>
                 ) : null}
                 {resp.similar?.sentence ? (
-                  <div className="text-muted-foreground/70" data-testid="l2-intent-ai-evidence-similar">
+                  <div className="text-muted-foreground" data-testid="l2-intent-ai-evidence-similar">
                     {resp.similar.sentence}
                   </div>
                 ) : null}
@@ -1101,7 +1101,7 @@ function IntentSealSection({
             title="主力意图 · 逐笔口径说明"
             content={
               <div className="space-y-1.5">
-                <p className="text-foreground/90">
+                <p className="text-foreground">
                   当前主力意图采用腾讯高频逐笔口径（通达信未开放逐笔单号），保证方向绝对准确。
                 </p>
                 <p>
@@ -1172,7 +1172,7 @@ function IntentSealSection({
           />
         </div>
         {!sealAvailable || seal.failed ? (
-          <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+          <div className="mt-1.5 text-[10px] text-muted-foreground">
             {feedNote(sealLoading, seal.data != null, seal.failed, seal.lastOkAt, m?.reason || '非涨停或未触发封板采样')}
           </div>
         ) : null}
@@ -1301,7 +1301,7 @@ function DarkFlowTqSection({ data }: { data: DarkFlowTqResponse | null }) {
         </div>
       )}
       {!complete ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+        <div className="mt-1.5 text-[10px] text-muted-foreground">
           暗盘数据状态 {data?.data_status ?? '不可用'}(盘后采集, 当日无样本时全部 `--`)
         </div>
       ) : null}
@@ -1384,7 +1384,7 @@ function ChipsSection({
             </div>
             <span className="text-[10px] text-muted-foreground">{acc.profit_state}</span>
           </div>
-          <div className="text-foreground/90 font-medium">
+          <div className="text-foreground font-medium">
             💡 决策参考: {acc.action_advice}
           </div>
           {/* 横向筹码分布微观梯队柱状表 */}
@@ -1438,7 +1438,7 @@ function ChipsSection({
           )}
         </div>
       ) : !mainIntent ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground/70">
+        <div className="mt-1.5 text-[10px] text-muted-foreground">
           暂无筹码数据(klineSummary 未下发或数据源不可用)
         </div>
       ) : null}

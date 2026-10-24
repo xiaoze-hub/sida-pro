@@ -50,7 +50,7 @@ const PHASE_LABEL: Record<BoardPhase, string> = {
 const PHASE_CLASS: Record<BoardPhase, string> = {
   pre: 'bg-muted/50 text-muted-foreground',
   live: 'bg-primary/15 text-primary',
-  closed_pending: 'bg-primary/10 text-foreground/70',
+  closed_pending: 'bg-primary/10 text-foreground',
   final: 'bg-primary/15 text-primary',
   unknown: 'bg-muted/50 text-muted-foreground',
 }

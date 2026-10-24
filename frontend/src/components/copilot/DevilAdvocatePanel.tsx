@@ -154,7 +154,7 @@ export function DevilAdvocatePanel({ symbol, market }: { symbol: string; market:
           <div className="text-[12px] leading-relaxed [&_table]:tabular-nums">
             <SafeMarkdown>{result}</SafeMarkdown>
           </div>
-          <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground/80">
+          <div className="mt-2 border-t border-border/40 pt-1.5 text-[10px] text-muted-foreground">
             逆向风险情报备料，非买卖指令；压力情景为假设性研判；「无数据」= 本轮证据缺失，「无数据源」= 平台暂无该维度工具。
           </div>
         </div>

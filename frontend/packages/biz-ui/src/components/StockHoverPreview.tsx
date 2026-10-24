@@ -75,7 +75,7 @@ export default function StockHoverPreview({
       {blocks.length > 0 ? (
         <div className="mt-1 flex flex-wrap gap-0.5">
           {blocks.slice(0, 4).map((b) => (
-            <span key={b.name} className="rounded bg-accent/50 px-0.5 text-[10px] text-foreground/80">{b.name}</span>
+            <span key={b.name} className="rounded bg-accent/50 px-0.5 text-[10px] text-foreground">{b.name}</span>
           ))}
         </div>
       ) : null}

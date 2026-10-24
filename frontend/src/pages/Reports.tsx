@@ -188,10 +188,10 @@ export default function ReportsPage() {
                           <span className="shrink-0">{formatDate(it.mtime_iso)}</span>
                           <span className="shrink-0">·</span>
                           <span className="shrink-0">{formatBytes(it.size)}</span>
-                          <span className="text-muted-foreground/60 truncate min-w-0" title={it.file}>{it.file}</span>
+                          <span className="text-muted-foreground truncate min-w-0" title={it.file}>{it.file}</span>
                         </div>
                       </div>
-                      <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
+                      <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                     </button>
                   ))}
                   {files.length > 20 && (

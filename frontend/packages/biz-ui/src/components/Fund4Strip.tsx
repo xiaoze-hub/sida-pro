@@ -136,7 +136,7 @@ export default function Fund4Strip({
         <>
           <div className="flex items-stretch gap-1.5">
             {/* 档位图例：纵向对齐柱区 */}
-            <div className="flex flex-col justify-between py-0 text-[10px] leading-none text-muted-foreground/70">
+            <div className="flex flex-col justify-between py-0 text-[10px] leading-none text-muted-foreground">
               {TIERS.map((t) => (
                 <span key={t.key} title={t.hint}>
                   {t.label}
@@ -169,7 +169,7 @@ export default function Fund4Strip({
               </svg>
             </div>
           </div>
-          <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground/60">
+          <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
             <span title="档位阈值 TQ 未返回，界面上标注为推断值">
               档位阈值：特大&gt;100万 · 大20~100万 · 中5~20万 · 小&lt;5万（推断值）
             </span>

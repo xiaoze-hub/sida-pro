@@ -156,7 +156,7 @@ export default function PioneerIndicatorsSection({
       </div>
 
       {/* ③ 校准标注(逆向近似待校准) + 客观标注免责 */}
-      <div className="mt-1 text-[10px] text-muted-foreground/70" data-testid="pioneer-calibration">
+      <div className="mt-1 text-[10px] text-muted-foreground" data-testid="pioneer-calibration">
         {failed ? '辅助指标取数失败 · 暂不出读数' : calibration || '逆向近似待校准'} · {PIONEER_NOT_ADVICE_TEXT}
       </div>
     </div>

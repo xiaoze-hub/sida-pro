@@ -96,7 +96,7 @@ export default function ReplayPromotionTree({
           <div key={lv.board} className="flex items-start">
             {i > 0 && (
               <div
-                className="flex flex-col items-center justify-center px-1 pt-4 text-muted-foreground/60"
+                className="flex flex-col items-center justify-center px-1 pt-4 text-muted-foreground"
                 aria-hidden
                 title="晋级方向(分层晋级率表内未存)"
               >

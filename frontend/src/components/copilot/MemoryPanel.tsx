@@ -369,7 +369,7 @@ export function MemoryPanel({ className = '' }: { className?: string }) {
                     <span data-testid="memory-weight">权重 {safeInt(row.weight, '--')}</span>
                     <span data-testid="memory-hits">命中 {safeInt(row.hits, '--')} 次</span>
                     {row.source ? <span className="truncate">来源 {row.source}</span> : null}
-                    {pending ? <span className="text-muted-foreground/80">处理中…</span> : null}
+                    {pending ? <span className="text-muted-foreground">处理中…</span> : null}
                   </div>
                 </div>
 

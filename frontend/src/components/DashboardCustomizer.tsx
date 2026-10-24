@@ -75,7 +75,7 @@ export function DashboardCustomizer({
                         />
                         <span
                           className={`flex-1 text-[12px] ${
-                            hidden ? 'text-muted-foreground/60 line-through' : 'text-foreground/90'
+                            hidden ? 'text-muted-foreground line-through' : 'text-foreground'
                           }`}
                         >
                           {m.label}

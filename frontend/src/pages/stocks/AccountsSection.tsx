@@ -175,7 +175,7 @@ export function AccountsSection() {
             {account.positions.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-10 px-4">
                 <p className="text-[13px] text-muted-foreground">该账户暂无持仓</p>
-                <p className="text-[12px] text-muted-foreground/70">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
+                <p className="text-[12px] text-muted-foreground">点右上角「+」录入股票与成本，或到「关注」页把自选一键导入</p>
               </div>
             ) : (
               <>
@@ -304,7 +304,7 @@ export function AccountsSection() {
                                   {isForeign ? (
                                     <>
                                       <span>{safeMoneyUnsigned(pos.market_value)} {pos.market === 'HK' ? 'HKD' : 'USD'}</span>
-                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground/60">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
+                                      {pos.market_value_cny && <span className="text-[10px] text-muted-foreground">≈{safeMoneyUnsigned(pos.market_value_cny)}</span>}
                                     </>
                                   ) : <span>{safeMoneyUnsigned(pos.market_value)}</span>}
                                 </div>
@@ -335,7 +335,7 @@ export function AccountsSection() {
                                   {pos.trading_style === 'short' ? '短线' : pos.trading_style === 'long' ? '长线' : '波段'}
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-muted-foreground/50">-</span>
+                                <span className="text-[10px] text-muted-foreground">-</span>
                               )}
                             </td>
                             <td className="hidden lg:table-cell px-4 py-2.5">
@@ -360,7 +360,7 @@ export function AccountsSection() {
                                       })}
                                     </div>
                                   ) : (
-                                    <span className="text-[11px] text-muted-foreground/50 flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
+                                    <span className="text-[11px] text-muted-foreground flex items-center gap-1"><Bot className="w-3 h-3" /> 未配置</span>
                                   )}
                                 </button>
                               )}
@@ -535,7 +535,7 @@ export function AccountsSection() {
                                 })}
                               </button>
                             ) : (
-                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+                              <button onClick={() => stock && setAgentDialogStock(stock)} className="text-[10px] text-muted-foreground flex items-center gap-1">
                                 <Bot className="w-3 h-3" /> Agent
                               </button>
                             )}

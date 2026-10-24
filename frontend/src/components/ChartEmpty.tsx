@@ -44,7 +44,7 @@ export function ChartEmpty({
     >
       <p className="text-[12px] text-muted-foreground">{title}</p>
       {description && (
-        <p className="max-w-md text-[11px] leading-relaxed text-muted-foreground/80">{description}</p>
+        <p className="max-w-md text-[11px] leading-relaxed text-muted-foreground">{description}</p>
       )}
       {action && <div className="mt-1.5">{action}</div>}
     </div>

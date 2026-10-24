@@ -206,7 +206,7 @@ export default function HistoryPage() {
             <p className="text-[12px] md:text-[13px] text-muted-foreground">报告式阅读：目录 + 正文</p>
           </div>
           <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
-            共 <span className="font-mono text-foreground/90">{records.length}</span> 条
+            共 <span className="font-mono text-foreground">{records.length}</span> 条
           </div>
         </div>
 
@@ -241,7 +241,7 @@ export default function HistoryPage() {
         </div>
       ) : records.length === 0 ? (
         <div className="p-12 text-center">
-          <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
+          <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
           <p className="text-muted-foreground">暂无分析记录</p>
         </div>
       ) : (
@@ -316,7 +316,7 @@ export default function HistoryPage() {
                         {AGENT_LABELS[r.agent_name] || r.agent_name}
                       </Badge>
                       <span
-                        className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}
+                        className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground'}`}
                         title={r.title || '分析报告'}
                       >{r.title || '分析报告'}</span>
                       {isFailed(r) && (

@@ -523,7 +523,7 @@ function App() {
             {!sidebarCollapsed && (
               <>
                 <span className="text-[16px] font-bold text-foreground truncate">数智分析</span>
-                {version && <span className="text-[11px] text-muted-foreground/60 font-normal shrink-0">v{version}</span>}
+                {version && <span className="text-[11px] text-muted-foreground font-normal shrink-0">v{version}</span>}
                 {isDemoUser() && (
                   <span className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600" title="演示账号为只读浏览模式">演示</span>
                 )}
@@ -582,7 +582,7 @@ function App() {
             if (items.length === 0) return null
             return (
               <div key={group.key} className="mb-3 last:mb-0">
-                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground/50">{t(group.labelKey)}</div>}
+                {!sidebarCollapsed && <div className="px-2 pb-1 text-[10px] font-medium text-muted-foreground">{t(group.labelKey)}</div>}
                 <div className="space-y-0.5">
                   {items.map(({ to, icon: Icon, labelKey }) => {
                     const isActive = isNavItemActive(to, location.pathname)
@@ -652,7 +652,7 @@ function App() {
                 <BrandMark className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="text-[13px] font-bold text-foreground">数智分析</span>
-              {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
+              {version && <span className="text-[10px] text-muted-foreground font-normal">v{version}</span>}
             </NavLink>
             <div className="flex items-center gap-2">
               {/* 会话态(2026-09-20): 只允许顶栏极轻指示, 禁止整页染色 */}

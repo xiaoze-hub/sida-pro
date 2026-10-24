@@ -156,7 +156,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
       {/* 数据源未接入: 置灰说明 */}
       {dataSourceDown && (
         <div className="mt-3 rounded-lg border border-border/40 bg-accent/20 p-3 text-[12px] text-muted-foreground opacity-70">
-          <div className="font-medium text-foreground/80">L2 问财数据源未接入</div>
+          <div className="font-medium text-foreground">L2 问财数据源未接入</div>
           <div className="mt-1 text-[11px]">{note || '服务端未启用同花顺 L2 问财能力, 面板暂不可用'}</div>
         </div>
       )}
@@ -216,7 +216,7 @@ export default function WencaiPanel({ embedded = false }: { embedded?: boolean }
               共命中 {rows.length} 只, 仅展示前 {MAX_DISPLAY_ROWS} 只
             </div>
           )}
-          <div className="mt-1 text-[11px] text-muted-foreground/80">{note}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{note}</div>
         </div>
       )}
     </div>

@@ -57,7 +57,7 @@ export default function SessionPhaseChip({ info, className }: { info: SessionInf
       data-session-phase={info.phase}
       title={`当前时段: ${info.label}(按北京时间判定)`}
     >
-      <span className={cn('session-dot', info.ticking ? 'text-emerald-500' : 'text-muted-foreground/60')} />
+      <span className={cn('session-dot', info.ticking ? 'text-emerald-500' : 'text-muted-foreground')} />
       {info.label}
     </span>
   )

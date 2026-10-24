@@ -40,7 +40,7 @@ export function SourceHeartbeat() {
       title="数据源质量(滚动最近 100 次) — 点击进入数据源页"
       data-testid="source-heartbeat"
     >
-      <span className="shrink-0 text-muted-foreground/70">源心跳</span>
+      <span className="shrink-0 text-muted-foreground">源心跳</span>
       <span className="flex items-center gap-[3px]" role="img" aria-label={trustSummary(items)}>
         {items.map((it) => (
           <span
@@ -59,7 +59,7 @@ export function SourceHeartbeat() {
       <span className={allOk ? 'sr-only' : 'inline-flex items-center gap-2'}>
         <span>{trustSummary(items)}</span>
         {primary && primary.ewma_latency_ms != null && (
-          <span className="text-muted-foreground/70">
+          <span className="text-muted-foreground">
             {primary.vendor} {formatLatency(primary.ewma_latency_ms)}
           </span>
         )}

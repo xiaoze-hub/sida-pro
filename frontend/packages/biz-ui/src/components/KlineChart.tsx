@@ -2053,7 +2053,7 @@ export default function KlineChart(props: {
                       const isPeak = Math.abs(p - (effAccumulationChips.main_cost || 0)) <= 0.25
                       return (
                         <div key={p} className="flex items-center justify-end h-1.5 gap-1" title={`¥${safeFixed(p, 2)}: 占比 ${widthPct}%`}>
-                          <span className="font-mono text-[10px] text-muted-foreground/60 w-8 text-right select-none leading-none">
+                          <span className="font-mono text-[10px] text-muted-foreground w-8 text-right select-none leading-none">
                             {safeFixed(p, 1)}
                           </span>
                           {isPeak && <span className="text-[10px] text-amber-500 font-bold leading-none select-none">◀峰</span>}
@@ -2113,7 +2113,7 @@ export default function KlineChart(props: {
           data-testid="gs-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">GS 买卖点</span>
+          <span className="font-medium text-foreground">GS 买卖点</span>
           <span>
             <span className="font-mono text-[hsl(var(--gs-go))]">G</span> 买入
           </span>
@@ -2142,7 +2142,7 @@ export default function KlineChart(props: {
           data-testid="pattern-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">K线形态</span>
+          <span className="font-medium text-foreground">K线形态</span>
           {effPatterns.map((m, i) => {
             // 图表说明(2026-10-14): 图例项挂「为什么」(触发/时点/失效) —— 与图上标的同源
             const why = noteForMarker(effChartNotes, 'pattern', m.date, m.name)
@@ -2173,7 +2173,7 @@ export default function KlineChart(props: {
           data-testid="scenario-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">情景关键位</span>
+          <span className="font-medium text-foreground">情景关键位</span>
           {effScenarioLines.map((l) => (
             <span key={`${l.kind}-${l.price}`} className="flex items-center gap-x-1">
               <span
@@ -2211,7 +2211,7 @@ export default function KlineChart(props: {
           data-testid="trend-line-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">操盘线</span>
+          <span className="font-medium text-foreground">操盘线</span>
           <span>
             <span className="text-[hsl(var(--gs-go))]">红</span> 快线
           </span>
@@ -2232,7 +2232,7 @@ export default function KlineChart(props: {
           data-testid="niuxiong-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">牛熊线</span>
+          <span className="font-medium text-foreground">牛熊线</span>
           <span>
             <span className="text-[#3b82f6]">牛</span> 加权线
           </span>
@@ -2264,7 +2264,7 @@ export default function KlineChart(props: {
           data-testid="gs-zone-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">GS 区间</span>
+          <span className="font-medium text-foreground">GS 区间</span>
           <span>
             <span style={{ color: 'rgb(168, 85, 247)' }}>G区</span> 上方紫柱(趋势偏多)
           </span>
@@ -2282,7 +2282,7 @@ export default function KlineChart(props: {
           data-testid="dark-pool-legend"
           className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
         >
-          <span className="font-medium text-foreground/80">暗盘资金</span>
+          <span className="font-medium text-foreground">暗盘资金</span>
           <span>
             <span className="text-[hsl(var(--gs-go))]">红柱</span> 流入
           </span>
@@ -2306,7 +2306,7 @@ export default function KlineChart(props: {
               : 'text-muted-foreground'
           }`}
         >
-          <span className="font-medium text-foreground/80">分时突破</span>
+          <span className="font-medium text-foreground">分时突破</span>
           {minuteBreakthrough.available && minuteBreakthrough.signalType ? (
             <>
               <span
@@ -2353,7 +2353,7 @@ export default function KlineChart(props: {
       {intentRenderable(intent) && intentLegend && (
         <div
           data-testid="main-intent-legend"
-          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[11px] text-foreground/80"
+          className="mt-3 rounded-lg border border-rose-500/15 bg-rose-500/5 px-2.5 py-2 text-[11px] text-foreground"
         >
           <span className="mr-2 font-medium text-rose-700 dark:text-rose-400">主力意图</span>
           <span className={intentLegend.cls}>{intentLegend.text}</span>
@@ -2400,7 +2400,7 @@ export default function KlineChart(props: {
           className="mt-1 text-[11px] text-muted-foreground"
           title={effChartNotes.map((n) => markerWhy(n)).join('\n')}
         >
-          <span className="font-medium text-foreground/80">图表说明</span>
+          <span className="font-medium text-foreground">图表说明</span>
           <span className="ml-2">
             {effChartNotes.length} 个标记 · {notesBarText(effChartNotes, 3)}
           </span>

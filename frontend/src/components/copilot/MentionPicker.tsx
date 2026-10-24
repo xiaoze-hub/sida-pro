@@ -90,7 +90,7 @@ export function MentionPicker({
         })}
       </div>
 
-      <div className="border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground/70">
+      <div className="border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground">
         ↑↓ 选择 · Enter 确认 · Esc 关闭
       </div>
     </div>

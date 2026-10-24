@@ -179,7 +179,7 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
         </button>
         <div className="min-w-0 flex-1 text-[11px]">
           {ai == null ? (
-            <span className="text-muted-foreground/70">
+            <span className="text-muted-foreground">
               点「AI 分析」→ 给出是否共振 + 依据/风险(仅参考, 不构成投资建议)
             </span>
           ) : !ai.available || !ai.ai ? (
@@ -195,11 +195,11 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
                     置信 {safeFixed(ai.ai.confidence, 2)}
                   </span>
                 ) : null}
-                {ai.ai.summary ? <span className="text-foreground/90">{ai.ai.summary}</span> : null}
+                {ai.ai.summary ? <span className="text-foreground">{ai.ai.summary}</span> : null}
               </div>
               {ai.ai.reasons.length > 0 ? (
                 <div className="text-muted-foreground">
-                  <span className="text-foreground/70">依据:</span> {ai.ai.reasons.join('；')}
+                  <span className="text-foreground">依据:</span> {ai.ai.reasons.join('；')}
                 </div>
               ) : null}
               {ai.ai.risks.length > 0 ? (
@@ -209,11 +209,11 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
               ) : null}
               {ai.ai.watch.length > 0 ? (
                 <div className="text-muted-foreground">
-                  <span className="text-foreground/70">关注:</span> {ai.ai.watch.join('；')}
+                  <span className="text-foreground">关注:</span> {ai.ai.watch.join('；')}
                 </div>
               ) : null}
               {ai.ai.missing.length > 0 ? (
-                <div className="text-muted-foreground/70">缺项: {ai.ai.missing.join('、')}</div>
+                <div className="text-muted-foreground">缺项: {ai.ai.missing.join('、')}</div>
               ) : null}
               {/* 证据化(2026-10-10): 证据链/失效条件/校准/相似情形 —— 仅追加, 不改既有布局 */}
               {ai.evidence ? (
@@ -221,22 +221,22 @@ export default function ResonanceVerdictPanel({ symbol, bare = false }: Resonanc
                   data-testid="resonance-evidence"
                   className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px]"
                 >
-                  <div className="text-foreground/70" data-testid="resonance-evidence-triggers">
+                  <div className="text-foreground" data-testid="resonance-evidence-triggers">
                     触发条件: {ai.evidence.triggers.join('；')}
                   </div>
-                  <div className="text-muted-foreground/70" data-testid="resonance-evidence-asof">
+                  <div className="text-muted-foreground" data-testid="resonance-evidence-asof">
                     {ai.evidence.as_of_note}
                   </div>
                   <div className="text-amber-600 dark:text-amber-500" data-testid="resonance-evidence-invalidation">
                     失效条件: {ai.evidence.invalidation.join('；')}
                   </div>
                   {ai.confidence_calibration?.note ? (
-                    <div className="text-muted-foreground/70" data-testid="resonance-evidence-calibration">
+                    <div className="text-muted-foreground" data-testid="resonance-evidence-calibration">
                       置信度校准: {ai.confidence_calibration.note}
                     </div>
                   ) : null}
                   {ai.similar?.sentence ? (
-                    <div className="text-muted-foreground/70" data-testid="resonance-evidence-similar">
+                    <div className="text-muted-foreground" data-testid="resonance-evidence-similar">
                       {ai.similar.sentence}
                     </div>
                   ) : null}

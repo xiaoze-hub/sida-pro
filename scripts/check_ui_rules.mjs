@@ -295,5 +295,25 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
   }
 }
 
+// ── R14: 文字禁止用透明度做层级(2026-10-24)──────────────────────────────
+// 依据: 全站 313 处 text-*\/NN（text-muted-foreground/70 就有 130 处）。暗色次级色本身
+// 是 4.92:1（刚过 AA），叠 70% alpha 后实测掉到 **2.22:1** —— 侧栏分组标题「行情/机会/决策」
+// 就是这么变灰的，而它在肉眼上只像"稍微淡一点"，不会有人报 bug。
+// 层级用**字号/字重**表达；有色底（primary/white/destructive）上的 alpha 不在此列。
+{
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(/\btext-(?:muted-)?foreground\/(?:[1-9][0-9]?)\b/g) || [])
+    if (hits.length) {
+      bad(
+        'R14-TEXT-ALPHA',
+        rel(f),
+        hits.length,
+        `${hits[0]} —— 文字不要用透明度降级(实测 2.22:1, AA 需 4.5); 更弱的层级用字号/字重`,
+      )
+    }
+  }
+}
+
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)

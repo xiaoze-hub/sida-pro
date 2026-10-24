@@ -78,7 +78,7 @@ export function EmptyState({
       <p className="text-[13px] font-medium text-foreground">{title}</p>
       {body && <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-muted-foreground">{body}</p>}
       {action && <div className="mt-3">{action}</div>}
-      {caliber && <div className="mt-2 text-[10px] text-muted-foreground/70">{caliber}</div>}
+      {caliber && <div className="mt-2 text-[10px] text-muted-foreground">{caliber}</div>}
     </div>
   )
 }

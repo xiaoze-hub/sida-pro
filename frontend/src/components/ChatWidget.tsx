@@ -598,7 +598,7 @@ export default function ChatWidget() {
         title="拖动标题栏移动窗口"
       >
         <div className="flex items-center gap-2">
-          <GripHorizontal className="hidden h-4 w-4 shrink-0 text-muted-foreground/50 md:block" aria-hidden="true" />
+          <GripHorizontal className="hidden h-4 w-4 shrink-0 text-muted-foreground md:block" aria-hidden="true" />
           {view === 'chat' && (
             <button
               onClick={() => { setView('list'); setStockContext(null); setSuggestedQuestions([]); loadConversations() }}
@@ -706,7 +706,7 @@ export default function ChatWidget() {
             </span>
             <button
               onClick={() => setNewsDismissed(true)}
-              className="text-[10px] text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+              className="text-[10px] text-muted-foreground transition-colors hover:text-muted-foreground"
               title="收起今日要闻"
             >
               收起
@@ -762,7 +762,7 @@ export default function ChatWidget() {
                 </div>
                 <button
                   onClick={(e) => deleteConversation(conv.id, e)}
-                  className="p-1 rounded text-muted-foreground/50 hover:text-rose-700 dark:hover:text-rose-400 transition-colors shrink-0"
+                  className="p-1 rounded text-muted-foreground hover:text-rose-700 dark:hover:text-rose-400 transition-colors shrink-0"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>

@@ -48,7 +48,7 @@ export function EvidenceReadinessStrip({
           未取到 {failedCount}
         </span>
       ) : null}
-      <span aria-hidden className="shrink-0 text-[10px] text-muted-foreground/40">
+      <span aria-hidden className="shrink-0 text-[10px] text-muted-foreground">
         ·
       </span>
       {items.map((it) => {
@@ -58,7 +58,7 @@ export function EvidenceReadinessStrip({
             ? 'border-role-risk/40 text-role-risk'
             : it.status === 'ok'
               ? 'border-border/40 text-muted-foreground'
-              : 'border-border/60 text-foreground/80'
+              : 'border-border/60 text-foreground'
         return (
           <span
             key={it.key}

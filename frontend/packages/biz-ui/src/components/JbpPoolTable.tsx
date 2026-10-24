@@ -75,7 +75,7 @@ const STATUS_META: Record<CondStatus, { label: string; cls: string }> = {
   pass: { label: '✓ 通过', cls: 'text-emerald-600 dark:text-emerald-500' },
   fail: { label: '✗ 未过', cls: 'text-muted-foreground' },
   degraded: { label: '⚠ 降级', cls: 'text-amber-600 dark:text-amber-500' },
-  na: { label: '— 未启用', cls: 'text-muted-foreground/70' },
+  na: { label: '— 未启用', cls: 'text-muted-foreground' },
 }
 
 function condCell(row: JbpRow, key: string) {
@@ -87,7 +87,7 @@ function condCell(row: JbpRow, key: string) {
       <span className={`text-[12px] ${meta.cls}`} data-testid={`jbp-cond-${row.symbol}-${key}`}>
         {meta.label}
       </span>
-      <div className="text-[10px] text-muted-foreground/80 max-w-[220px] truncate" title={c.detail}>
+      <div className="text-[10px] text-muted-foreground max-w-[220px] truncate" title={c.detail}>
         {c.detail}
       </div>
     </div>
@@ -242,7 +242,7 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                             </span>
                           ) : null}
                         </span>
-                        <div className="font-mono text-[10px] text-muted-foreground/80" data-testid={`jbp-level-${r.symbol}`}>
+                        <div className="font-mono text-[10px] text-muted-foreground" data-testid={`jbp-level-${r.symbol}`}>
                           {r.activity != null ? fmtNum(r.activity, 2) : '--'}
                           {r.activity_level ? `(${r.activity_level})` : ''}
                           {r.better ? ' 更佳' : ''}
@@ -259,13 +259,13 @@ export default function JbpPoolTable({ embedded = false }: { embedded?: boolean 
                         >
                           {r.in_pool ? '入选' : '未入选'}
                         </span>
-                        <div className="text-[10px] text-muted-foreground/80">暗盘 {fmtWan(r.dark_net)}</div>
+                        <div className="text-[10px] text-muted-foreground">暗盘 {fmtWan(r.dark_net)}</div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="mt-1 text-[10px] text-muted-foreground/80">
+              <div className="mt-1 text-[10px] text-muted-foreground">
                 口径: 暗盘净额&gt;0 · 活跃度&gt;6(更佳&gt;12) · GS在G区且G信号 · 问财命中(传入关键词时必过)。
               </div>
             </div>

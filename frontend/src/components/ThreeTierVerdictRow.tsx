@@ -252,7 +252,7 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </span>
       </div>
 
-      <span className="ml-auto text-[10px] text-muted-foreground/70">
+      <span className="ml-auto text-[10px] text-muted-foreground">
         客观证据 · 不构成买卖指令
       </span>
     </div>

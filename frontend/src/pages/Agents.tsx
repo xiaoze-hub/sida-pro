@@ -527,11 +527,11 @@ export default function AgentsPage() {
         </div>
         {health ? (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
-            <span>时区: <span className="font-mono text-foreground/90">{health.timezone}</span></span>
+            <span>时区: <span className="font-mono text-foreground">{health.timezone}</span></span>
             <span className="opacity-50">|</span>
-            <span>未来 24h 将触发: <span className="font-mono text-foreground/90">{health.summary.next_24h_count}</span></span>
+            <span>未来 24h 将触发: <span className="font-mono text-foreground">{health.summary.next_24h_count}</span></span>
             <span className="opacity-50">|</span>
-            <span>最近失败: <span className={`font-mono ${health.summary.recent_failed_count > 0 ? 'text-rose-600' : 'text-foreground/90'}`}>{health.summary.recent_failed_count}</span></span>
+            <span>最近失败: <span className={`font-mono ${health.summary.recent_failed_count > 0 ? 'text-rose-600' : 'text-foreground'}`}>{health.summary.recent_failed_count}</span></span>
           </div>
         ) : (
           <div className="mt-2 text-[12px] text-muted-foreground">—</div>
@@ -597,7 +597,7 @@ export default function AgentsPage() {
                       >
                         <Clock className="w-3.5 h-3.5 text-muted-foreground" />
                         <span className="text-[12px] text-foreground">{formatSchedule(agent.schedule)}</span>
-                        <Settings2 className="w-3 h-3 text-muted-foreground/50" />
+                        <Settings2 className="w-3 h-3 text-muted-foreground" />
                       </button>
                       {agent.name === 'tradingagents' && (
                         <button
@@ -763,7 +763,7 @@ export default function AgentsPage() {
                                   <div className="mt-0.5 text-[11px] text-rose-600 break-words">{r.error}</div>
                                 ) : null}
                               </div>
-                              <div className="text-[10px] text-muted-foreground/70 font-mono">{r.status}</div>
+                              <div className="text-[10px] text-muted-foreground font-mono">{r.status}</div>
                             </div>
                           ))}
                         </div>
@@ -883,7 +883,7 @@ export default function AgentsPage() {
               ) : (
                 <div className="mt-2 text-[11px] text-muted-foreground">—</div>
               )}
-              <div className="mt-2 text-[11px] text-muted-foreground/70 font-mono">
+              <div className="mt-2 text-[11px] text-muted-foreground font-mono">
                 schedule: {configToCron(scheduleConfig)}
               </div>
             </div>
@@ -1007,7 +1007,7 @@ export default function AgentsPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <Label className="text-[12px]">
-                        深度思考模型 <span className="text-muted-foreground/70 font-normal">(辩论/风控/PM)</span>
+                        深度思考模型 <span className="text-muted-foreground font-normal">(辩论/风控/PM)</span>
                       </Label>
                       <Select
                         value={(taConfigForm.deep_model as string) || '__default__'}
@@ -1028,7 +1028,7 @@ export default function AgentsPage() {
                     </div>
                     <div>
                       <Label className="text-[12px]">
-                        快速思考模型 <span className="text-muted-foreground/70 font-normal">(分析师/工具)</span>
+                        快速思考模型 <span className="text-muted-foreground font-normal">(分析师/工具)</span>
                       </Label>
                       <Select
                         value={(taConfigForm.quick_model as string) || '__default__'}
