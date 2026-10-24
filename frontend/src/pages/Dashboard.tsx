@@ -633,23 +633,50 @@ export default function DashboardPage() {
           数据**全部取自本页已有 state**(phaseKpi / marketFlow), 不新增请求; 缺数一律 `--`, 不用 0 顶。 */}
       <div
         data-testid="market-conclusion"
-        className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/60 px-2 py-1.5 text-[12px] text-muted-foreground"
+        className="mb-3 rounded-lg border border-border-strong px-3 py-2.5"
       >
-        <span className="font-medium text-foreground">市场情绪</span>
-        <b className="font-mono text-foreground">{phaseKpi.label ?? (phaseKpi.loading ? '加载中' : '--')}</b>
-        {phaseKpi.unavailableNote ? <span className="text-muted-foreground/80">({phaseKpi.unavailableNote})</span> : null}
-        <span className="text-border">|</span>
-        <span>涨停 <b className="font-mono text-stock-up">{phaseKpi.limitUp ?? '--'}</b></span>
-        <span>封板率 <b className="font-mono">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
-        <span className="text-border">|</span>
-        <span>涨 <b className="font-mono text-stock-up">{marketFlow?.up_count ?? '--'}</b>
-          <span className="mx-0.5">/</span>跌 <b className="font-mono text-stock-down">{marketFlow?.down_count ?? '--'}</b></span>
-        <span>成交 <b className="font-mono">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
-        <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
-        {/* 口径统一徽章(2026-09-22): 有原始口径值就给徽章, 只有中文标签就如实显示标签 */}
-        <span className="ml-auto">
-          <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
-        </span>
+        {/* 结论句(2026-10-24 L2-A): 首屏先给一句非数字结论 —— 此前 8 个数字并排, 读完说不出结论。
+            只用本页已有 state, 缺数如实写「未知/尚未识别」, 不用 0 顶。 */}
+        <p className="text-[16px] font-medium leading-snug text-foreground">
+          {phaseKpi.loading && !phaseKpi.label
+            ? '正在取市场状态…'
+            : `${phaseKpi.label ?? '市场状态未知'}，${
+                marketFlow?.up_count != null && marketFlow?.down_count != null
+                  ? (marketFlow.up_count >= marketFlow.down_count ? '红盘占优' : '绿盘占优')
+                  : '涨跌家数未取到'
+              }，主线在${mainlineKpi.top?.name ?? (mainlineKpi.loading ? '识别中' : '尚未识别')}`}
+          {phaseKpi.unavailableNote ? <span className="ml-1 text-[12px] text-muted-foreground">（{phaseKpi.unavailableNote}）</span> : null}
+        </p>
+        {/* 3 个结论数字: 涨停 / 涨跌 / 主线强度(无强度则主线名) */}
+        <div className="mt-2 grid grid-cols-3 gap-3">
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨停</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums text-stock-up">{phaseKpi.limitUp ?? '--'}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-muted-foreground">涨 / 跌</div>
+            <div className="font-num text-[20px] font-semibold tabular-nums">
+              <span className="text-stock-up">{marketFlow?.up_count ?? '--'}</span>
+              <span className="mx-1 text-muted-foreground">/</span>
+              <span className="text-stock-down">{marketFlow?.down_count ?? '--'}</span>
+            </div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] text-muted-foreground">主线 Top1</div>
+            <div className="truncate font-num text-[20px] font-semibold tabular-nums text-foreground">
+              {mainlineKpi.top?.name ?? (mainlineKpi.loading ? '…' : '--')}
+            </div>
+          </div>
+        </div>
+        {/* 细项降为第二行小字: 封板率 / 成交 / 主力净流入 / 口径 */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 pt-2 text-[11px] text-muted-foreground">
+          <span>封板率 <b className="font-mono text-foreground">{phaseKpi.sealRate == null ? '--' : `${safeFixed(phaseKpi.sealRate, 0)}%`}</b></span>
+          <span>成交 <b className="font-mono text-foreground">{marketFlow?.total_amount == null ? '--' : `${safeFixed(marketFlow?.total_amount, 0)}亿`}</b></span>
+          <span>主力净流入 <b className={`font-mono ${marketFlow?.total_main_flow == null ? 'text-muted-foreground' : marketFlow?.total_main_flow >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>{safeFlow(marketFlow?.total_main_flow)}</b></span>
+          <span className="ml-auto">
+            <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
+          </span>
+        </div>
       </div>
 
       {/* 核心接口失败横幅:失败≠空态,给出重试入口 */}
