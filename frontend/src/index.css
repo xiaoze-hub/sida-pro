@@ -179,17 +179,17 @@
 
     --background: 240 20% 5%;
     --foreground: 240 15% 90%;
-    --card: 240 20% 10%;
+    --card: 240 18% 13.5%; /* 2026-10-24 卡片化翻案: 原 10% 与页底 5% 只差 5 个点 → 看着没底 */
     --card-foreground: 240 15% 90%;
-    --popover: 240 20% 10%;
+    --popover: 240 16% 21%; /* 浮层必须明显高于卡片(13.5%), 否则下拉/弹层贴在一起 */
     --popover-foreground: 240 15% 90%;
     --primary: 240 70% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 15% 15%;
+    --secondary: 240 15% 17%;
     --secondary-foreground: 240 15% 70%;
-    --muted: 240 15% 15%;
+    --muted: 240 15% 17%;
     --muted-foreground: 240 10% 58%; /* make-interfaces: 暗色次级文字对比度(≈5.6:1) */
-    --accent: 240 15% 18%;
+    --accent: 240 15% 20%;
     --accent-foreground: 240 15% 90%;
     /* 研究报告 §4.3: K 线图背景暗色值(接近黑 hsl(222,47%,6%)) */
     --bg-kline: var(--chart-canvas);
@@ -214,7 +214,7 @@
     --success-foreground: 0 0% 100%;
     /* 边框降档 16%→14%: 原 16%(oklch 26.0)高于 muted 填充、比 card 亮 6.2,全局 150 处 border-border
        全浓度描边过亮显脏;降至 14%(oklch≈24.5)落在 card(19.8)与 hover(23.1)之间,结构清晰不抢眼。 */
-    --border: 240 15% 14%;
+    --border: 240 15% 27%; /* 对卡片 13.5% = 1.54:1, 可见 hairline(原 14% 只有 1.02:1) */
     /* 输入框描边 18%→15%: 原与 accent 同亮(27.9)层级越位;降至 15%,略亮于 --border 保持输入可交互性。 */
     --input: 240 15% 15%;
     --ring: 240 70% 60%; /* 跟随锚点色 */
@@ -273,6 +273,14 @@
     background-color: hsl(240 20% 13.5%); /* 暗色: 表面亮度抬升(比 --card 的 10% 亮一档) */
     border-color: hsl(240 15% 20%);       /* hover 边框提亮: 原 24% 按旧 --border 16% 校准,现随 14% 基准下调,保持相对提亮梯度 */
     box-shadow: none;                     /* 暗色层级靠亮度,不用阴影 */
+  }
+  /* 2026-10-24 卡片化翻案: 暗色下阴影不可见, 用 1px 顶部内高光表达"浮起一档"。
+     只加在暗色, 亮色已有纸面阴影。 */
+  .dark .card {
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.045);
+  }
+  .dark .card-hover:hover {
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
   }
   .card-subtle {
     @apply rounded-xl border border-border/40 bg-accent/20;
