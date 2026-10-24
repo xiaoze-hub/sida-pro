@@ -33,7 +33,20 @@ const TIERS: Array<{ key: 'xl' | 'lg' | 'md' | 'sm'; label: string; hint: string
   { key: 'sm', label: '小', hint: '小单（推断 <5万/笔）' },
 ]
 
-const DAY_W = 22 // 每天占宽(px)，含 4 根柱 + 间隔
+/**
+ * 每天占宽(px)，含 4 根柱 + 间隔。
+ *
+ * 为什么要自适应：数据是**逐日落库累积**的，上线初期只有 1~2 天。固定 22px 时
+ * 1 天只画 22px，右边 1400px 全是空白（2026-10-24 生产实测：1472px 区块里只占 22px）。
+ * 按天数放大，数据攒够了再自然收窄到密集形态。
+ */
+function dayWidth(n: number): number {
+  if (n <= 3) return 110
+  if (n <= 6) return 72
+  if (n <= 10) return 46
+  return 22
+}
+
 const BAR_W = 4
 const GAP = 1
 const H = 92 // 柱区高度
@@ -70,8 +83,9 @@ export default function Fund4Strip({
     }
     // 全 0 / 全空时不缩放，避免除 0
     const scale = mx > 0 ? mx : 1
+    const DAY_W = dayWidth(days.length)
     const zero = PAD_TOP + H / 2
-    const out: Array<{ x: number; y: number; h: number; up: boolean; key: string; day: Fund4Day; tier: typeof TIERS[number] }> = []
+    const out: Array<{ x: number; y: number; w: number; h: number; up: boolean; key: string; day: Fund4Day; tier: typeof TIERS[number] }> = []
     days.forEach((d, i) => {
       const gx = i * DAY_W
       TIERS.forEach((t, j) => {
@@ -79,8 +93,10 @@ export default function Fund4Strip({
         if (typeof v !== 'number' || !Number.isFinite(v) || v === 0) return
         const h = Math.max(1, (Math.abs(v) / scale) * (H / 2 - PAD_TOP))
         const up = v > 0
+        const barW = Math.max(BAR_W, Math.floor((DAY_W - GAP * 4) / 4))
         out.push({
-          x: gx + j * (BAR_W + GAP),
+          x: gx + j * (barW + GAP),
+          w: barW,
           y: up ? zero - h : zero,
           h,
           up,
@@ -93,7 +109,7 @@ export default function Fund4Strip({
     return { maxAbs: mx, bars: out, zeroY: zero }
   }, [days])
 
-  const w = Math.max(days.length * DAY_W, 120)
+  const w = Math.max(days.length * dayWidth(days.length), 120)
 
   return (
     <section className={cn('border-t border-border/60 pt-2', className)}>
@@ -136,7 +152,7 @@ export default function Fund4Strip({
                     key={b.key}
                     x={b.x}
                     y={b.y}
-                    width={BAR_W}
+                    width={b.w}
                     height={b.h}
                     style={{ fill: b.up ? 'var(--stock-up)' : 'var(--stock-down)', opacity: 0.85 }}
                     // 用 inline style 而不是 Tailwind 任意值：`fill-[var(...)]` 依赖 JIT 扫到该类,
