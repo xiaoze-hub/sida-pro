@@ -500,7 +500,11 @@ export default function KlineChart(props: {
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
-  const [chipProfileOpen, setChipProfileOpen] = useState(true)
+  // L2-B(2026-10-24): 筹码分布默认收起 —— 原默认 true 时 w-36 的浮层常驻压在 K 线右侧 1/3 上,
+  // K 线是主角(铁律), 首屏不该被盖住。状态记 localStorage, 用户开过就保持。
+  const [chipProfileOpen, setChipProfileOpen] = useState(() => {
+    try { return localStorage.getItem('sida_chip_profile') === '1' } catch { return false }
+  })
   const [accumulationChipsFetched, setAccumulationChipsFetched] = useState<any>(null)
   useEffect(() => {
     if (props.mainIntent) {
@@ -1887,7 +1891,7 @@ export default function KlineChart(props: {
               // §10.2①: 父组件把周期写进 URL(?period=), 刷新/分享不丢状态
               props.onIntervalChange?.(opt.key)
             }}
-            className={`px-2 py-1 text-xs rounded ${
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded ${
               interval === opt.key
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
@@ -1920,7 +1924,7 @@ export default function KlineChart(props: {
                 props.onSubchartChange?.(k)
               }}
               title={disabled ? '副图数据待接入(需实时行情)' : undefined}
-              className={`px-2 py-1 text-xs rounded disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`min-h-[28px] px-2.5 py-1 text-xs rounded disabled:opacity-40 disabled:cursor-not-allowed ${
                 active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
               }`}
             >
@@ -1933,7 +1937,7 @@ export default function KlineChart(props: {
             type="button"
             data-testid="minute-toggle"
             onClick={() => setMode((m) => (m === 'minute' ? 'kline' : 'minute'))}
-            className={`px-2 py-1 text-xs rounded ${
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded ${
               mode === 'minute'
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
@@ -1944,10 +1948,16 @@ export default function KlineChart(props: {
         )}
         <button
           type="button"
-          onClick={() => setChipProfileOpen((v) => !v)}
-          className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+          onClick={() => {
+            setChipProfileOpen((v) => {
+              const next = !v
+              try { localStorage.setItem('sida_chip_profile', next ? '1' : '0') } catch { /* ignore */ }
+              return next
+            })
+          }}
+          className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors ${
             chipProfileOpen
-              ? 'bg-amber-500/20 text-amber-500 border border-amber-500/40'
+              ? 'bg-primary text-primary-foreground'
               : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
           }`}
           title="在K线右侧展示/隐藏 120日主力波段筹码分布峰(CYQ)"
