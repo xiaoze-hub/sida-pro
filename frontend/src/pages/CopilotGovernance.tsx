@@ -75,6 +75,26 @@ function statusClass(status: string | null | undefined) {
   }
 }
 
+/**
+ * 配方名 → 中文（2026-10-24 L3-F）
+ * 之前列表直接显示 left_diagnosis / postmarket_reviewer 这类工程名，非研发读不懂。
+ * 英文原名保留在 title 与括号副标题里，排障时仍能一一对应。
+ */
+const RECIPE_CN: Record<string, string> = {
+  left_diagnosis: '左侧诊断',
+  deep_diagnosis: '深度诊断',
+  chip_analyst: '筹码分析',
+  postmarket_reviewer: '盘后复盘',
+  demon_diagnosis: '妖股诊断',
+  intraday_watcher: '盘中监测',
+}
+
+function recipeLabel(name: string | null | undefined): string {
+  if (!name) return '默认配方'
+  const cn = RECIPE_CN[name]
+  return cn ? `${cn}（${name}）` : name
+}
+
 export default function CopilotGovernancePage() {
   const [tab, setTab] = useState<Tab>('traces')
 
@@ -182,7 +202,7 @@ function TracesTab() {
                     className="max-w-[200px] truncate px-2 py-1.5 font-mono text-foreground"
                     title={r.recipe}
                   >
-                    {r.recipe}
+                    {recipeLabel(r.recipe)}
                   </td>
                   <td className="px-2 py-1.5 text-right font-mono tabular-nums">{num(r.runs)}</td>
                   <td className="px-2 py-1.5 text-right font-mono tabular-nums">{rate(r.ok_rate)}</td>
@@ -263,7 +283,7 @@ function TracesTab() {
                         className="max-w-[110px] truncate px-2 py-1.5 font-mono text-muted-foreground"
                         title={r.recipe || '(默认)'}
                       >
-                        {r.recipe || '(默认)'}
+                        {recipeLabel(r.recipe)}
                       </td>
                       <td className={`px-2 py-1.5 font-mono ${statusClass(r.status)}`}>{r.status || '--'}</td>
                       <td className="max-w-[240px] truncate px-2 py-1.5">{r.question || '—'}</td>
