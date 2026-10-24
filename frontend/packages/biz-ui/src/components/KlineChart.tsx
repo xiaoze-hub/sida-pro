@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
+import { ascendSeries } from '../lib/series-time'
 import {
   createChart,
   CandlestickSeries,
@@ -500,7 +501,11 @@ export default function KlineChart(props: {
 
   // ── 主力意图(P2 补搬): prop 优先, 没给且是 A 股就自取(失败静默, 不编数据) ──
   const [intentFetched, setIntentFetched] = useState<MainIntentStructured | null>(null)
-  const [chipProfileOpen, setChipProfileOpen] = useState(true)
+  // L2-B(2026-10-24): 筹码分布默认收起 —— 原默认 true 时 w-36 的浮层常驻压在 K 线右侧 1/3 上,
+  // K 线是主角(铁律), 首屏不该被盖住。状态记 localStorage, 用户开过就保持。
+  const [chipProfileOpen, setChipProfileOpen] = useState(() => {
+    try { return localStorage.getItem('sida_chip_profile') === '1' } catch { return false }
+  })
   const [accumulationChipsFetched, setAccumulationChipsFetched] = useState<any>(null)
   useEffect(() => {
     if (props.mainIntent) {
@@ -969,6 +974,19 @@ export default function KlineChart(props: {
             Number.isFinite(it.low) &&
             Number.isFinite(it.close),
         )
+        // 2026-10-24 P0: lightweight-charts 对 setData 的**时间升序**是硬断言,
+        // 乱序直接抛 `data must be asc ordered by time` 把整页打进 ErrorBoundary
+        // (实测 /stocks/600519: index=120, time=1792368000 < prev 1792627200)。
+        // 接口返回顺序不可信(补数/回填/当日合成 bar 都可能插到中间), 这里统一
+        // 按日期升序 + 同日去重; 真发生重排时 warn 一次, 便于回头查数据源而不是靠图表崩。
+        const sortedKl = [...valid].sort((a: KlineItem, b: KlineItem) => String(a.date).localeCompare(String(b.date)))
+        const dedupedKl = sortedKl.filter(
+          (it: KlineItem, i: number) => i === 0 || String(it.date).slice(0, 10) !== String(sortedKl[i - 1].date).slice(0, 10),
+        )
+        if (dedupedKl.length !== kl.length) {
+          console.warn('[KlineChart] klines 非升序/含重复日, 已排序去重', { raw: kl.length, kept: dedupedKl.length })
+        }
+        valid.splice(0, valid.length, ...dedupedKl)
         const data = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
           open: it.open,
@@ -976,7 +994,7 @@ export default function KlineChart(props: {
           low: it.low,
           close: it.close,
         }))
-        seriesRef.current?.setData(data)
+        seriesRef.current?.setData(ascendSeries(data, 'candles'))
         // L1 均线 / L5 副图 计算源
         rawKlinesRef.current = valid.map((it: KlineItem) => ({
           time: toChartTime(it.date, interval),
@@ -1553,11 +1571,14 @@ export default function KlineChart(props: {
       if (showSignal && interval === '1d' && effGsSignals.length > 0) {
         const zonePts = gsZonePoints(effGsSignals, rangeBarsRef.current.map((b) => b.date))
         zoneSeries.setData(
-          zonePts.map((z) => ({
-            time: toChartTime(z.date, interval),
-            value: 1,
-            color: GS_ZONE_COLOR[z.zone],
-          })) as never,
+          ascendSeries(
+            zonePts.map((z) => ({
+              time: toChartTime(z.date, interval),
+              value: 1,
+              color: GS_ZONE_COLOR[z.zone],
+            })),
+            'gsZone',
+          ) as never,
         )
       } else {
         zoneSeries.setData([])
@@ -1673,7 +1694,7 @@ export default function KlineChart(props: {
             // 档位后端已判, 前端只配色: 大牛紫/强势红/生命绿/弱灰
             color: activityLevelColor(p.level),
           }))
-        volSeries.setData(histData)
+        volSeries.setData(ascendSeries(histData, 'volume'))
         // 阈值线 生命1.56/强势3/大牛6 (后端 ai_activity 同值, 前端只画线不重判)
         const thColor = thresholdLine(0.5)
         for (const [price, title] of [[1.56, '生命1.56'], [3, '强势3'], [6, '大牛6']] as const) {
@@ -1699,11 +1720,14 @@ export default function KlineChart(props: {
         // 此前缺失: subchart==='vol' + L3 关 = 空白 pane; L3 开 = 资金柱冒充成交量。
         const kl = rawKlinesRef.current
         volSeries.setData(
-          kl.map((k, i) => ({
-            time: k.time,
-            value: k.volume || 0,
-            color: (i === 0 ? true : k.close >= kl[i - 1].close) ? sc.up : sc.down,
-          })),
+          ascendSeries(
+            kl.map((k, i) => ({
+              time: k.time,
+              value: k.volume || 0,
+              color: (i === 0 ? true : k.close >= kl[i - 1].close) ? sc.up : sc.down,
+            })),
+            'volume-default',
+          ),
         )
       }
       // 2026-09-04 P0-3: L3 资金柱走独立 fund 轴(单位元), 与成交量(股)同显但轴独立。
@@ -1714,7 +1738,16 @@ export default function KlineChart(props: {
         if (showCapital && subchart === 'vol' && effFundFlow.length > 0) {
           // 净额与分色由纯函数算(T19 抽出以便单测: 明盘字段名 `ming_net` 曾误读 `open_net`)。
           const theme = readChartTheme()
-          fs.setData(effFundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)))
+          // 2026-10-24 P0: 资金柱数据来自 props(可能含回填/多源拼接), 同样不保证升序 ——
+          // lightweight-charts 遇乱序直接抛断言并把整页打进 ErrorBoundary(实测 index=120)。
+          // 关键: 这里必须走 ascendSeries(含**按时间去重**)。此前只 filter+sort,
+          // 而后端 fund_flow 是 bars 1:1 生成、可能含同日重复行 → 同 time 相邻 →
+          // LWC 断言 `data must be asc ordered by time` 精确复现 index=117 两次同值。
+          const fundPts = ascendSeries(
+            effFundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)),
+            'fundFlow',
+          )
+          fs.setData(fundPts)
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
           fs.setData([])
@@ -1726,9 +1759,12 @@ export default function KlineChart(props: {
       const dpr = darkPoolSeriesRef.current
       if (dpr) {
         if (subchart === 'dark_pool' && effDarkPool.length > 0) {
-          const pts = effDarkPool
-            .map((p) => darkPoolBarPoint(p, interval, sc))
-            .filter((x): x is { time: Time; value: number; color: string } => x !== null)
+          const pts = ascendSeries(
+            effDarkPool
+              .map((p) => darkPoolBarPoint(p, interval, sc))
+              .filter((x): x is { time: Time; value: number; color: string } => x !== null),
+            'darkPool',
+          )
           dpr.setData(pts as never)
         } else {
           dpr.setData([])
@@ -1771,7 +1807,7 @@ export default function KlineChart(props: {
         const pts = rawKlinesRef.current
           .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
           .filter((p): p is { time: Time; value: number } => p != null)
-        line.setData(pts as never)
+        line.setData(ascendSeries(pts, 'line') as never)
         maSeriesRef.current.push(line)
       }
     }
@@ -1799,7 +1835,7 @@ export default function KlineChart(props: {
         const pts = rawKlinesRef.current
           .map((k, i) => (d.v[i] == null ? null : { time: k.time, value: d.v[i] as number }))
           .filter((p): p is { time: Time; value: number } => p != null)
-        line.setData(pts as never)
+        line.setData(ascendSeries(pts, 'line') as never)
         macdSeriesRef.current.push(line)
       }
     }
@@ -1825,7 +1861,7 @@ export default function KlineChart(props: {
       const pts = kl
         .map((k, i) => (v[i] == null ? null : { time: k.time, value: v[i] as number }))
         .filter((p): p is { time: Time; value: number } => p != null)
-      line.setData(pts as never)
+      line.setData(ascendSeries(pts, 'line') as never)
       target.push(line)
     }
     const gcol = readGsColors()
@@ -1887,7 +1923,7 @@ export default function KlineChart(props: {
               // §10.2①: 父组件把周期写进 URL(?period=), 刷新/分享不丢状态
               props.onIntervalChange?.(opt.key)
             }}
-            className={`px-2 py-1 text-xs rounded ${
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded ${
               interval === opt.key
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
@@ -1908,6 +1944,8 @@ export default function KlineChart(props: {
         {/* L5 副图切换 (设计稿 §5.1): 成交量/MACD/主动买卖比/情绪周期/活跃度 */}
         {/* 2026-09-04 去重: 父组件受控(props.subchart)时隐藏本行, 以父为准
             (此前两套副图控件互不同步, Quote 还没传 onSubchartChange)。 */}
+        {/* L2-B: 分组分隔线 —— 左=周期, 右=叠加/工具, 不再是 15 个平铺按钮 */}
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         {props.subchart === undefined &&
           SUBCHART_OPTS.map(([k, label]) => {
           const active = subchart === k
@@ -1920,7 +1958,7 @@ export default function KlineChart(props: {
                 props.onSubchartChange?.(k)
               }}
               title={disabled ? '副图数据待接入(需实时行情)' : undefined}
-              className={`px-2 py-1 text-xs rounded disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`min-h-[28px] px-2.5 py-1 text-xs rounded disabled:opacity-40 disabled:cursor-not-allowed ${
                 active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
               }`}
             >
@@ -1933,7 +1971,7 @@ export default function KlineChart(props: {
             type="button"
             data-testid="minute-toggle"
             onClick={() => setMode((m) => (m === 'minute' ? 'kline' : 'minute'))}
-            className={`px-2 py-1 text-xs rounded ${
+            className={`min-h-[28px] px-2.5 py-1 text-xs rounded ${
               mode === 'minute'
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
@@ -1942,12 +1980,19 @@ export default function KlineChart(props: {
             分时
           </button>
         )}
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         <button
           type="button"
-          onClick={() => setChipProfileOpen((v) => !v)}
-          className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+          onClick={() => {
+            setChipProfileOpen((v) => {
+              const next = !v
+              try { localStorage.setItem('sida_chip_profile', next ? '1' : '0') } catch { /* ignore */ }
+              return next
+            })
+          }}
+          className={`min-h-[28px] px-2.5 py-1 text-xs rounded font-medium transition-colors ${
             chipProfileOpen
-              ? 'bg-amber-500/20 text-amber-500 border border-amber-500/40'
+              ? 'bg-primary text-primary-foreground'
               : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
           }`}
           title="在K线右侧展示/隐藏 120日主力波段筹码分布峰(CYQ)"
@@ -1956,7 +2001,13 @@ export default function KlineChart(props: {
         </button>
       </div>
       {/* 图表容器与右侧筹码分布图 */}
-      <div className="relative w-full">
+      {/* L2-B 第2步(2026-10-24): 筹码面板展开时**挤压**画布而不是盖住它。
+          做法: 给画布容器留出右侧 152px 槽位, 图表自带 ResizeObserver(见 applyOptions width)
+          会自动缩窄; 面板放进这条槽位里, 不再 absolute 压在 K 线上。K 线是主角, 不许被盖。 */}
+      <div
+        className="relative w-full"
+        style={{ paddingRight: chipProfileOpen && mode === 'kline' ? 152 : 0 }}
+      >
         <div
           ref={containerRef}
           className={mode === 'minute' && props.enableMinute ? 'hidden' : 'w-full'}
@@ -1966,7 +2017,7 @@ export default function KlineChart(props: {
         {chipProfileOpen && mode === 'kline' && effAccumulationChips && effAccumulationChips.prices && effAccumulationChips.prices.length > 0 && (
           <div
             data-testid="chip-profile-histogram"
-            className="absolute top-4 right-16 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"
+            className="absolute top-4 right-2 bottom-28 w-36 pointer-events-none flex flex-col justify-between z-20"
             title={`120日主力筹码沉淀分布 · 主峰: ${effAccumulationChips.main_cost} 元`}
           >
             {(() => {
