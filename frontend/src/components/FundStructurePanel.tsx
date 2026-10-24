@@ -1,3 +1,4 @@
+import CaliberBadge from '@panwatch/biz-ui/components/CaliberBadge'
 import { safeFixed, safeNum, toAmount } from '@/lib/format'
 
 /**
@@ -233,15 +234,18 @@ export default function FundStructurePanel({
     <div className="space-y-2" data-testid="fund-structure-panel">
       {/* 口径行: 徽章 + 阈值提示 + 稀疏标注(spec EXDAY-003/005) */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
-        <span
-          data-testid="fund-structure-caliber"
-          className="inline-flex items-center rounded border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground"
-          title={[
+        {/* 2026-10-24 合并去重: 上游 CaliberBadge 已支持 tdx_exday4(main 的 08e39c1),
+            不再自实现第二套徽章 —— 否则同一口径在全站会有两种样式。
+            data-testid 留在外层, 既有用例继续有效。 */}
+        <span data-testid="fund-structure-caliber">
+          <CaliberBadge
+            caliber="tdx_exday4"
+            className="text-[10px]"
+            title={[
             `口径 ${data?.caliber ?? 'tdx_exday4'}(通达信 TQ get_exday_data): ${data?.direction_semantics ?? '按单笔成交金额分四档, 与逐笔/东财四档不可换算'}`,
             data?.tier_thresholds_hint ? `档位阈值(推断): ${data.tier_thresholds_hint}` : '',
-          ].filter(Boolean).join('\n')}
-        >
-          {data?.caliber ?? 'tdx_exday4'}
+            ].filter(Boolean).join('\n')}
+          />
         </span>
         <span>按单笔成交金额分档 · 与逐笔/东财四档不可换算</span>
         <span data-testid="fund-structure-since" className="text-foreground/70">

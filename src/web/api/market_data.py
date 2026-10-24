@@ -2367,39 +2367,34 @@ async def fund_structure_series(
 
     items: list[dict] = []
     try:
-        from sqlalchemy import text as _sql
-
+        # 2026-10-24 合并去重: 原实现对 exday_daily 自写 SQL, 与
+        # src/core/exday_structure.query_series() 形成**两份取数口径**
+        # (缺日处理/NULL 语义/上限裁剪各自演化 → 同一张表两个答案)。
+        # 统一走 core 层单点, 本端点只做**响应形状适配**(Fund4Strip 用 tiers 结构)。
+        from src.core.exday_structure import query_series as _exday_series
         from src.db.session import SessionLocal
 
         db = SessionLocal()
         try:
-            rows = db.execute(
-                _sql(
-                    "SELECT trade_date, amount, volume_lots, active_buy_amt, active_sell_amt,"
-                    " active_ratio, xl_buy_amt, lg_buy_amt, md_buy_amt, sm_buy_amt,"
-                    " xl_sell_amt, lg_sell_amt, md_sell_amt, sm_sell_amt,"
-                    " xl_active_net, lg_active_net, md_active_net, sm_active_net"
-                    " FROM exday_daily WHERE symbol = :s AND market = :m"
-                    " ORDER BY trade_date DESC LIMIT :n"
-                ),
-                {"s": sym, "m": mkt, "n": int(days)},
-            ).fetchall()
+            _res = _exday_series(db, sym, market=mkt, limit=int(days))
         finally:
             db.close()
-        for r in reversed(rows):  # 时间正序返回，前端直接画
+        if not _res.get("available"):
+            raise RuntimeError(str(_res.get("reason") or "exday_daily 不可用"))
+        for it in _res.get("items") or []:
             items.append(
                 {
-                    "trade_date": str(r[0]),
-                    "amount": r[1],
-                    "volume_lots": r[2],
-                    "active_buy_amt": r[3],
-                    "active_sell_amt": r[4],
-                    "active_ratio": r[5],
+                    "trade_date": str(it.get("trade_date") or ""),
+                    "amount": it.get("amount"),
+                    "volume_lots": it.get("volume_lots"),
+                    "active_buy_amt": it.get("active_buy_amt"),
+                    "active_sell_amt": it.get("active_sell_amt"),
+                    "active_ratio": it.get("active_ratio"),
                     "tiers": {
-                        "xl": {"buy": r[6], "sell": r[10], "net": r[14]},
-                        "lg": {"buy": r[7], "sell": r[11], "net": r[15]},
-                        "md": {"buy": r[8], "sell": r[12], "net": r[16]},
-                        "sm": {"buy": r[9], "sell": r[13], "net": r[17]},
+                        "xl": {"buy": it.get("xl_buy_amt"), "sell": it.get("xl_sell_amt"), "net": it.get("xl_active_net")},
+                        "lg": {"buy": it.get("lg_buy_amt"), "sell": it.get("lg_sell_amt"), "net": it.get("lg_active_net")},
+                        "md": {"buy": it.get("md_buy_amt"), "sell": it.get("md_sell_amt"), "net": it.get("md_active_net")},
+                        "sm": {"buy": it.get("sm_buy_amt"), "sell": it.get("sm_sell_amt"), "net": it.get("sm_active_net")},
                     },
                 }
             )
@@ -2414,7 +2409,7 @@ async def fund_structure_series(
             "caliber": "tdx_exday4",
             "thresholds_hint": EXDAY4_THRESHOLDS_HINT,
             "note": EXDAY4_CALIBER_NOTE,
-            "hint": f"查询异常: {type(e).__name__}",
+            "hint": f"查询异常: {type(e).__name__}: {e}",
         }
 
     latest = items[-1] if items else None

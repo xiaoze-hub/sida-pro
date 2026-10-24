@@ -47,10 +47,18 @@ def test_honest_when_table_empty():
 
 
 def test_reads_table_not_live_rpc():
-    """必须读 exday_daily 表（历史序列），不能退回 TQ 当日实时 RPC（那只有 1 行）。"""
+    """必须读 exday_daily 表（历史序列），不能退回 TQ 当日实时 RPC（那只有 1 行）。
+
+    2026-10-24 合并去重后：本端点不再自写 SQL，改为委托 core 层
+    `src.core.exday_structure.query_series()`（同样读 exday_daily，且缺日不补 0、
+    吞异常前 safe_rollback）。**表的读取点收敛为一处**，避免两份取数口径各自演化。
+    因此断言从「字面 FROM exday_daily」改为「必须走 core 单点 + 仍不碰当日 RPC」。
+    """
     b = _block()
-    assert "FROM exday_daily" in b
+    assert "query_series" in b, "必须走 src.core.exday_structure.query_series 单点取数"
     assert "exday_latest" not in b, "当日 RPC 只有 1 行，回答不了趋势问题"
+    # 兜底：实现里不许再出现第二条自写 SQL（否则口径又会分叉）
+    assert "FROM exday_daily WHERE symbol" not in b
 
 
 def test_refuses_cross_caliber_math():

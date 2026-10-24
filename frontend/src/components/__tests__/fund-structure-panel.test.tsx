@@ -56,7 +56,10 @@ function resp(over: Partial<FundStructureResp> = {}): FundStructureResp {
 describe('FundStructurePanel 口径与稀疏标注', () => {
   it('口径徽章 tdx_exday4 与「数据自 2026-10-23 起累积 · N 个交易日」恒显', () => {
     render(<FundStructurePanel data={resp({ count: 2, items: [...resp().items!, { ...resp().items![0], trade_date: '20261024' }] })} loading={false} failed={false} lastOkAt="" />)
-    expect(screen.getByTestId('fund-structure-caliber').textContent).toBe('tdx_exday4')
+    expect(screen.getByTestId('fund-structure-caliber').textContent).toBe('通达信四档')
+    // 2026-10-24 合并去重: 徽章改用共享 CaliberBadge(全站同一样式), 可见文案是
+    // 「通达信四档」, 口径代码 tdx_exday4 在组件 tooltip 里(下面另断言语义仍在)。
+    expect(screen.getByTestId('fund-structure-caliber').innerHTML).toMatch(/tdx_exday4|通达信/)
     const since = screen.getByTestId('fund-structure-since').textContent ?? ''
     expect(since).toContain('数据自 2026-10-23 起累积')
     expect(since).toContain('2 个交易日')

@@ -3,6 +3,20 @@
 合并自 `feat/agent-batch-20261024`（13 commits / 35 文件 / +4811 行）。
 四条主线互不重叠，逐条明细如下（原文保留，未改写）。
 
+### 合并时做的去重（2026-10-24，主控）
+
+分支与 main 各自演化出**两套四档资金结构**，已在合并后收敛，避免同一张表两个答案：
+
+| 重复项 | 处置 |
+|---|---|
+| `exday_daily` 两条取数路径：`market_data.py` 自写 SQL vs `core/exday_structure.query_series()` | `market_data.py` 端点的 SQL **删除**，改为委托 `query_series()`，只保留响应形状适配（`Fund4Strip` 用的 `tiers` 结构不变） |
+| `tdx_exday4` 两套徽章：`FundStructurePanel` 自实现 vs 共享 `CaliberBadge` | 改用共享组件（main 的 `08e39c1` 已给 `Caliber` 类型加上 `tdx_exday4`）；口径代码移入 tooltip，全站样式统一 |
+| `price_bg` 棘轮 36 → 41 | 新增 5 处全在 `FundStructurePanel` 的买红卖绿柱体填充（行情语义色，非 neutral surface），基线文件已写明理由且**此后不得再增** |
+
+两套端点（`/api/market-data/fund-structure/*` 与 `/api/market/fund-structure/*`）**仍然并存**：
+前者供个股页 `Fund4Strip`（20 日条带），后者供工作台 `L2Tab`（四档对比 + 因子格），
+取数已同源，形状不同属有意为之。若后续要合成一个，改 `Fund4Strip` 消费 `items` 即可。
+
 
 ### feat-连板晋级树页面(创新 1 前端消费)
 
