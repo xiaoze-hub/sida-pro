@@ -1,6 +1,6 @@
 {
   "_note": "2026-10-24 建立(G1 第 1 步)。规则: 每文件 text-[10px] 只减不增; 收敛到 0 的文件从本表删除。 全仓归零后才允许把 FONT_ALLOWED 的 10 移除。本文件由 node scripts/check_ui_rules.mjs --write-font10-baseline 生成, 不许手改数字。",
-  "_total": 730,
+  "_total": 726,
   "src/App.tsx": 6,
   "src/components/admin/InviteCodesSection.tsx": 1,
   "src/components/CancelProfilePanel.tsx": 2,
@@ -57,7 +57,7 @@
   "src/pages/Help.tsx": 1,
   "src/pages/History.tsx": 3,
   "src/pages/Notifications.tsx": 14,
-  "src/pages/Opportunities.tsx": 25,
+  "src/pages/Opportunities.tsx": 21,
   "src/pages/Profile.tsx": 5,
   "src/pages/ReplayTree.tsx": 5,
   "src/pages/settings/AiDialogs.tsx": 1,
