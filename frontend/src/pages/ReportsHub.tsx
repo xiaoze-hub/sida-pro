@@ -25,7 +25,7 @@ const HistoryPage = lazyWithRetry(() => import('@/pages/History'), 'history-page
 const REPORTS_TABS: TabDef[] = [
   {
     key: 'history',
-    label: '分析',
+    label: '报告中心',
     icon: Clock,
     render: () => (
       <Suspense fallback={<TabLoading />}>

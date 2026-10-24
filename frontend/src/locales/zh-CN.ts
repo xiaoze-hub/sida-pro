@@ -72,7 +72,7 @@ const zhCN = {
     decisionLedger: '决策账本',
     warReport: '主力战报',
     replayTree: '连板晋级树',
-    reports: '分析',
+    reports: '报告中心',
     history: '历史',
     portfolio: '持仓',
     shadow: '影子账户',
