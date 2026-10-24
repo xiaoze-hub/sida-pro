@@ -133,7 +133,7 @@ export function AccountsSection() {
                 <div className="text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums">{safeMoneyUnsigned(account.total_market_value)}</div>
               </div>
               <div className="text-left md:text-right">
-                <div className="text-[10px] md:text-[11px] text-muted-foreground">盈亏</div>
+                <div className="text-[10px] md:text-[11px] text-muted-foreground">总盈亏</div>
                 <div className={`text-[12px] md:text-[13px] font-mono font-medium whitespace-nowrap tabular-nums ${account.total_pnl >= 0 ? 'text-stock-up' : 'text-stock-down'}`}>
                   {formatMoney(account.total_pnl)}
                   <span className="text-[10px] md:text-[11px] ml-1 hidden md:inline">({safeNum(account.total_pnl_pct) === null ? '--' : `${account.total_pnl_pct >= 0 ? '+' : ''}${safeFixed(account.total_pnl_pct)}%`})</span>
@@ -190,7 +190,7 @@ export function AccountsSection() {
                         <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">成本</th>
                         <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓</th>
                         <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">市值</th>
-                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">盈亏</th>
+                        <th className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground">持仓盈亏</th>
                         <th
                           className="text-right px-4 py-2 text-[11px] font-semibold text-muted-foreground"
                           title={dailyPnlDisplayLabel(account)}
