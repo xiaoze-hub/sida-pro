@@ -389,11 +389,11 @@ function UsageOverview({ keys }: { keys: MyApiKey[] }) {
       </InfoCard>
       <InfoCard>
         <div className="text-[10px] text-slate-600">总日限</div>
-        <div className="font-mono text-[20px] font-semibold text-cyan-400">{totalLimit}</div>
+        <div className="font-mono text-[20px] font-semibold text-white">{totalLimit}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[10px] text-slate-600">已冻结</div>
-        <div className="font-mono text-[20px] font-semibold text-amber-400">{keys.filter(k => k.status === 'frozen').length}</div>
+        <div className="font-mono text-[20px] font-semibold text-white">{keys.filter(k => k.status === 'frozen').length}</div>
       </InfoCard>
       <InfoCard>
         <div className="text-[10px] text-slate-600">已禁用</div>
