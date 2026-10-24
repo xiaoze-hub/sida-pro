@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { broadcastCrosshair, registerCrosshair } from '../lib/crosshair-sync'
+import { ascendSeries } from '../lib/series-time'
 import {
   createChart,
   CandlestickSeries,
@@ -1739,16 +1740,13 @@ export default function KlineChart(props: {
           const theme = readChartTheme()
           // 2026-10-24 P0: 资金柱数据来自 props(可能含回填/多源拼接), 同样不保证升序 ——
           // lightweight-charts 遇乱序直接抛断言并把整页打进 ErrorBoundary(实测 index=120)。
-          const fundPts = effFundFlow
-            .map((bar) => fundBarPoint(bar, interval, sc, theme.nodata))
-            .filter((p) => {
-              const t = Number(p.time as unknown as number)
-              return Number.isFinite(t) && t > 0
-            })
-            .sort((a, b) => Number(a.time as unknown as number) - Number(b.time as unknown as number))
-          if (fundPts.length !== effFundFlow.length) {
-            console.warn('[KlineChart] fundFlow 含非法/重复时间点, 已过滤排序', { raw: effFundFlow.length, kept: fundPts.length })
-          }
+          // 关键: 这里必须走 ascendSeries(含**按时间去重**)。此前只 filter+sort,
+          // 而后端 fund_flow 是 bars 1:1 生成、可能含同日重复行 → 同 time 相邻 →
+          // LWC 断言 `data must be asc ordered by time` 精确复现 index=117 两次同值。
+          const fundPts = ascendSeries(
+            effFundFlow.map((bar) => fundBarPoint(bar, interval, sc, theme.nodata)),
+            'fundFlow',
+          )
           fs.setData(fundPts)
           fs.priceScale().applyOptions({ visible: true } as never)
         } else {
@@ -1761,15 +1759,12 @@ export default function KlineChart(props: {
       const dpr = darkPoolSeriesRef.current
       if (dpr) {
         if (subchart === 'dark_pool' && effDarkPool.length > 0) {
-          const pts = effDarkPool
-            .map((p) => darkPoolBarPoint(p, interval, sc))
-            .filter((x): x is { time: Time; value: number; color: string } => x !== null)
-            // 2026-10-24 P0: 同 fundFlow —— 时间必须为正且升序, 否则 lightweight-charts 断言抛错
-            .filter((p) => {
-              const t = Number(p.time as unknown as number)
-              return Number.isFinite(t) && t > 0
-            })
-            .sort((a, b) => Number(a.time as unknown as number) - Number(b.time as unknown as number))
+          const pts = ascendSeries(
+            effDarkPool
+              .map((p) => darkPoolBarPoint(p, interval, sc))
+              .filter((x): x is { time: Time; value: number; color: string } => x !== null),
+            'darkPool',
+          )
           dpr.setData(pts as never)
         } else {
           dpr.setData([])
@@ -1898,26 +1893,6 @@ export default function KlineChart(props: {
   // 解析逻辑, 避免"同口径两处各写一份"的漂移(本次 Finding 2 收敛)。
   function toChartTime(date: string, intv: KlineInterval): Time {
     return fundBarTime(date, intv) as Time
-  }
-
-  /**
-   * lightweight-charts 对 setData 的硬约束：时间必须为正、升序、无重复，违反即抛断言
-   * 并把整页打进 ErrorBoundary（2026-10-24 P0：/stocks/600519 实测 index=117 重复时间）。
-   * 各 series 的数据来自不同源（K 线接口 / props 资金流 / 暗盘 / 形态），顺序都不可信，
-   * 统一在这里收敛，避免逐个 setData 漏掉。
-   */
-  function ascendSeries<T extends { time: Time }>(pts: T[], tag: string): T[] {
-    const timeOf = (p: T) => Number(p.time as unknown as number)
-    const clean = pts.filter((p) => {
-      const t = timeOf(p)
-      return Number.isFinite(t) && t > 0
-    })
-    clean.sort((a, b) => timeOf(a) - timeOf(b))
-    const dedup = clean.filter((p, i) => i === 0 || timeOf(p) !== timeOf(clean[i - 1]))
-    if (dedup.length !== pts.length) {
-      console.warn(`[KlineChart] ${tag} 时间乱序/重复/非法, 已收敛`, { raw: pts.length, kept: dedup.length })
-    }
-    return dedup
   }
 
   // G/S(含交割单买卖方向)的颜色规则验收钩子: K 线 marker 画在 canvas 上, DOM 里查不到 ——
