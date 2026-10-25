@@ -1,3 +1,36 @@
+## release: v0.70.0（证据卡接线 + 参谋「后台执行」开关）
+
+### 一、单轮证据页 `/copilot/runs/:runId`
+- 新页 `RunDetailPage.tsx`：`useParams` 取 runId → `getCopilotRunDetail` → `<EvidenceCard>`；
+  返回入口「← 任务列表」+ 刷新
+- **动态路由要按前缀放行**：`isTabbable()` 原本只认精确表，`/copilot/runs/:id` 查不到会被判"不可开页签"
+  → 加 `/copilot/runs/` 前缀规则；`tabLabel` 给「参谋任务 <8位id>」而不是裸路径
+- RunsPage 展开区底部加「打开证据卡 ↗」（`e.stopPropagation()`，不误触发行展开）
+- 404 与网络错误分开说：前者「没找到这一轮运行」，后者「证据读取失败」
+
+### 二、参谋「后台」开关（0.2 前端）
+长问题的痛点：一次深问 20~130s，关页面/断网/代理超时整轮白烧。现在输入框左侧有「后台」开关：
+
+```
+点「后台」→ 提交即返回 run_id → 消息里显示进度 → 2s 轮询 → 终态后重拉会话拿正文
+```
+
+**不假装进度**：只有 `排队 / 后台执行中 · N 步 / 已完成 · N 步 · 8.2s / 执行失败：<服务端原文>`，
+**没有任何百分比**（没有分母，编一个就是假数据）。`tool_calls=null` 写「后台执行中…」而不是「0 步」——
+"还没开始"和"跑了但没调工具"是两件事，测试里各有一例钉住。
+
+轮询上限 10 分钟，超时明确写「已停止跟踪（去任务页看最终状态）」，不假装还在跑。
+附件消息仍走流式（附件要先过视觉转写）。
+
+### 三、修自己的两处回归
+1. 给 RunsPage 加 `useNavigate` 后，它的测试裸渲染组件 → `useNavigate` 抛错，7 例全红。
+   修法：测试包一层 `MemoryRouter`（更贴近真实运行环境）。
+2. `jobs.ts` 用了裸 `toFixed` 被 R6 棘轮拦；`AiCopilot` 的 `useCallback` 缺 `bgMode`/`runInBackground`
+   依赖被 eslint 拦。都按规则改，没绕过。
+
+### 门禁
+前端 `tsc 0 / ui-rules OK / eslint 0 / vitest 225 文件 1746 用例`（+12 jobs 用例）。
+
 ## release: v0.69.1（路由登记漏了页签表：新页面进不去）
 
 v0.69.0 上线后实测 `/copilot/runs` —— **渲染的是首页**（`h1=市场全景 · 组合工作台`），无 console 报错。

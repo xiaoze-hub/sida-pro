@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 const api = vi.hoisted(() => ({
   getCopilotRuns: vi.fn(),
@@ -78,7 +79,7 @@ beforeEach(() => {
 
 describe('copilot runs page', () => {
   it('有数据：渲染行与汇总（成功率/平均工具数）', async () => {
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
 
     const row1 = await screen.findByTestId('run-row-r1')
     expect(row1.textContent).toContain('问题 r1')
@@ -95,7 +96,7 @@ describe('copilot runs page', () => {
   })
 
   it('点击行展开工具步骤；再次展开命中缓存，不重复请求', async () => {
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
     const row = await screen.findByTestId('run-row-r1')
 
     fireEvent.click(row)
@@ -117,7 +118,7 @@ describe('copilot runs page', () => {
 
   it('无数据：显示「暂无运行记录」而不是报错', async () => {
     api.getCopilotRuns.mockResolvedValue([])
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
 
     const empty = await screen.findByTestId('runs-empty')
     expect(empty.textContent).toContain('暂无运行记录')
@@ -130,7 +131,7 @@ describe('copilot runs page', () => {
 
   it('读取失败：显示「读取失败（可点刷新重试）」并可刷新重试', async () => {
     api.getCopilotRuns.mockRejectedValueOnce(new Error('HTTP 500'))
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
 
     const err = await screen.findByTestId('runs-error')
     expect(err.textContent).toContain('读取失败（可点刷新重试）')
@@ -147,7 +148,7 @@ describe('copilot runs page', () => {
     api.getCopilotRuns.mockResolvedValue([
       makeRow('rN', { tool_calls: null, elapsed_ms: null, recipe: null, question: null, created_at: '' }),
     ])
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
 
     const row = await screen.findByTestId('run-row-rN')
     const cells = Array.from(row.querySelectorAll('td')).map((td) => td.textContent || '')
@@ -164,7 +165,7 @@ describe('copilot runs page', () => {
 
   it('分页：首页上一页禁用；满页下一页可用；不足一页则下一页禁用', async () => {
     api.getCopilotRuns.mockResolvedValue(makeRows(20))
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
     await screen.findByTestId('run-row-r1')
 
     const prev = screen.getByTestId('runs-prev') as HTMLButtonElement
@@ -189,7 +190,7 @@ describe('copilot runs page', () => {
     api.getCopilotRuns.mockImplementation(
       () => new Promise<RunRow[]>((res) => { resolveLoad = res }),
     )
-    render(<CopilotRunsPage />)
+    render(<MemoryRouter><CopilotRunsPage /></MemoryRouter>)
 
     expect(screen.getByTestId('runs-loading')).toBeTruthy()
     expect(screen.queryByTestId('runs-empty')).toBeNull()

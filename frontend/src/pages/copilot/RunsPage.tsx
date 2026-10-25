@@ -11,6 +11,7 @@
  *  - 层级靠 hairline 边框与字号，不做卡片堆砌、不加阴影；
  *  - 展开即拉详情，同一行**只拉一次**（Map 缓存已加载的回放）。
  */
+import { useNavigate } from 'react-router-dom'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { safeFixed, safeInt, safeNum } from '@/lib/format'
@@ -85,6 +86,7 @@ export default function CopilotRunsPage() {
   const [rows, setRows] = useState<CopilotRunRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const navigate = useNavigate()
   const [expanded, setExpanded] = useState<string | null>(null)
   /** run_id → 单轮回放。同一行再次展开直接命中缓存，不再发请求。 */
   const [details, setDetails] = useState<Map<string, CopilotRunDetail>>(() => new Map())
@@ -332,6 +334,20 @@ export default function CopilotRunsPage() {
                                 <Skeleton shape="text" className="h-2 w-1/2" />
                               </div>
                             ) : null}
+                            {/* 2026-10-25: 展开只是速览; 要分享/细看走独立证据页 */}
+                            <div className="mt-1 border-t border-border/40 pt-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  navigate(`/copilot/runs/${encodeURIComponent(row.run_id)}`)
+                                }}
+                                className="text-[11px] text-muted-foreground hover:text-foreground"
+                                data-testid={`run-open-detail-${row.run_id}`}
+                              >
+                                打开证据卡 ↗
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ) : null}

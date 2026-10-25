@@ -123,6 +123,8 @@ export function isTabbable(pathname: string): boolean {
   if (pathname === HOME_TAB_KEY) return true
   if (pathname.startsWith('/stocks/')) return true
   if (pathname.startsWith('/analysis/')) return true
+  // 2026-10-25: 参谋证据详情是动态路由, 精确查表查不到, 必须按前缀放行
+  if (pathname.startsWith('/copilot/runs/')) return true
   return !!ROUTE_LABEL_KEYS[pathname]
 }
 
@@ -157,6 +159,10 @@ export function tabLabel(path: string, t: (key: string) => string): string {
     const symbol = decodeURIComponent(pathname.slice('/stocks/'.length))
     const type = normalizeType(new URLSearchParams(search).get('type'))
     return `${symbol} ${t(stockSuffixKey(type))}`
+  }
+  if (pathname.startsWith('/copilot/runs/')) {
+    const rid = decodeURIComponent(pathname.slice('/copilot/runs/'.length))
+    return rid ? `${t('nav.copilotRuns')} ${rid.slice(0, 8)}` : t('nav.copilotRuns')
   }
   if (pathname.startsWith('/analysis/')) {
     const symbol = decodeURIComponent(pathname.slice('/analysis/'.length).split('/')[0] ?? '')

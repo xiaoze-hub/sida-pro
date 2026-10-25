@@ -42,6 +42,12 @@ import { PersonaBadge } from '@/components/copilot/PersonaBadge'
 import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
+  getCopilotRunStatus,
+  isTerminalStatus,
+  progressText,
+  submitCopilotRun,
+} from '@/lib/copilot/jobs'
+import {
   ATTACH_CHIP_LABEL,
   ATTACH_EMPTY,
   ATTACH_FAILED,
@@ -188,6 +194,8 @@ export default function AiCopilotPage() {
     symbol?: string
   } | null>(null)
   const [streaming, setStreaming] = useState(false)
+  // 2026-10-25: 后台执行开关(长问题用: 提交即返回, 可离开页面)
+  const [bgMode, setBgMode] = useState(false)
   const [convId, setConvId] = useState<number | null>(null)
   // 历史对话（2026-10-20）：后端的 conversations 接口早就有了，但面板一直没有入口，
   // 刷新即丢上下文。这里补抽屉：列出/打开/删除历史，并把 conversation_id 续上。
@@ -411,6 +419,68 @@ export default function AiCopilotPage() {
     if (historyOpen) void loadHistory()
   }, [historyOpen, loadHistory])
 
+  /**
+   * 后台执行（2026-10-25，P0-0.2 前端）。
+   *
+   * 为什么不是默认：逐字流式的体验用户已经在用；这条路解决的是**长问题**——
+   * 一次深问 20~130s，关页面/断网/代理超时整轮白烧。开着它提交即返回，人可以先走。
+   *
+   * 诚实纪律：进度只说状态与步数（不编百分比）；失败把服务端 error 原文透出来；
+   * 轮询有上限（10 分钟），超时不再假装还在跑。
+   */
+  const runInBackground = useCallback(
+    async (question: string, attachment?: { name: string; isImage: boolean }) => {
+      setMsgs((m) => [...m, { role: 'user', content: question, attachment }])
+      setInput('')
+      setAttach(null)
+      setMentions([])
+      setMentionHit(null)
+      setError(null)
+      const placeholder = `⏳ ${progressText(null)}`
+      setMsgs((m) => [...m, { role: 'assistant', content: placeholder }])
+      const patch = (content: string) =>
+        setMsgs((m) => {
+          const last = m[m.length - 1]
+          if (!last || last.role !== 'assistant') return m
+          return [...m.slice(0, -1), { ...last, content }]
+        })
+
+      try {
+        const submitted = await submitCopilotRun(question, convId)
+        const deadline = Date.now() + 10 * 60 * 1000
+        let last = null as Awaited<ReturnType<typeof getCopilotRunStatus>> | null
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 2000))
+          last = await getCopilotRunStatus(submitted.run_id)
+          patch(`⏳ ${progressText(last)}`)
+          if (isTerminalStatus(last.status)) break
+        }
+        if (!last || !isTerminalStatus(last.status)) {
+          patch('⚠️ 后台任务超过 10 分钟仍未结束，已停止跟踪（可在「参谋任务」页查看最终状态）')
+          return
+        }
+        if (last.status === 'ok' || last.status === 'degraded' || last.status === 'succeeded') {
+          const cid = last.conversation_id ?? convId
+          if (cid) {
+            // 正文已由服务端落库，重新拉一次会话即可（不在前端拼答案）
+            if (cid !== convId) setConvId(cid)
+            await openConversation(cid)
+            if (last.status === 'degraded') {
+              setError('本轮部分工具失败，结论可能不完整（展开「过程」可看是哪一步）')
+            }
+          } else {
+            patch('✅ 已完成，但没拿到会话 id（可在「参谋任务」页查看）')
+          }
+        } else {
+          patch(`❌ ${progressText(last)}`)
+        }
+      } catch (e) {
+        patch(`❌ 提交失败：${e instanceof Error ? e.message : String(e)}`)
+      }
+    },
+    [convId, openConversation],
+  )
+
   const send = useCallback(
     async (text: string) => {
       const words = text.trim()
@@ -426,6 +496,11 @@ export default function AiCopilotPage() {
       const content = [words, attachPart].filter(Boolean).join('\n\n')
       const sentAttachment = attach ? { name: attach.name, isImage: attach.isImage } : undefined
       const imageData = attach?.imageData
+      // 后台模式：附件暂不支持（附件要先过视觉转写，走原流式路径）
+      if (bgMode && !attach) {
+        await runInBackground(content, sentAttachment)
+        return
+      }
       setError(null)
       setMsgs((m) => [...m, { role: 'user', content, attachment: sentAttachment }])
       setInput('')
@@ -522,7 +597,7 @@ export default function AiCopilotPage() {
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState],
+    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState, bgMode, runInBackground],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。
@@ -1193,6 +1268,20 @@ export default function AiCopilotPage() {
               className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
             />
             </div>
+            <button
+              type="button"
+              onClick={() => setBgMode((v) => !v)}
+              aria-pressed={bgMode}
+              data-testid="copilot-bg-toggle"
+              title="后台执行：提交后即可离开页面，回来在会话里看结果"
+              className={`flex h-9 shrink-0 items-center rounded-lg px-2 text-[11px] transition-colors ${
+                bgMode
+                  ? 'bg-role-watch/20 text-role-watch'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {bgMode ? '后台中' : '后台'}
+            </button>
             <button
               type="button"
               onClick={() => void send(input)}
