@@ -6082,6 +6082,37 @@ def _m224_copilot_run_heartbeat(conn: Connection) -> None:
     )
 
 
+def _m229_webhook_subscriptions(conn: Connection) -> None:
+    """外部回调订阅表（2026-10-25, P2-2.2）。
+
+    为什么落库而不是内存: 回调在 run 终态时才发, 进程可能在中间重启 ——
+    存内存等于"重启就丢", 而用户以为会收到。落库后可以补发/查失败原因。
+
+    幂等（CREATE TABLE IF NOT EXISTS）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+    id SERIAL PRIMARY KEY,
+    run_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36),
+    url VARCHAR(512) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    status_snapshot VARCHAR(16),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_webhook_run ON webhook_subscriptions (run_id, status)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m229 建索引失败(不阻断): %s", exc)
+
+
 def _m228_recipe_versions(conn: Connection) -> None:
     """配方版本表 recipe_versions（2026-10-25, P2-2.1）。
 
@@ -6412,6 +6443,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(226, "copilot_parent_run", _m226_copilot_parent_run),
     Migration(227, "copilot_action_diff", _m227_copilot_action_diff),
     Migration(228, "recipe_versions", _m228_recipe_versions),
+    Migration(229, "webhook_subscriptions", _m229_webhook_subscriptions),
 )
 
 

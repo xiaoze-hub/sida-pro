@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -1734,3 +1734,71 @@ def admin_usage_report(
             for kid, rec in sorted(by_key.items(), key=lambda x: -x[1]["total"])
         ],
     }
+
+# ──────────────── 外部任务提交 + Webhook 回调（P2-2.2, 2026-10-25）─────────
+# 第三方系统把追问交给参谋，结果通过 callback_url 回来。
+# 执行体**复用** `copilot_jobs` 已有的异步 run（不改 chat.py、不复制 LLM 管线）。
+
+
+@router.post("/copilot/tasks")
+async def submit_copilot_task(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    user: Any = Depends(_get_current_user),
+) -> dict:
+    """提交一次参谋任务，立即返回 run_id；可选 callback_url 收终态回调。"""
+    from src.core import webhook_delivery as wh
+    from src.db.models import WebhookSubscription
+    from src.web.api import copilot_jobs as jobs
+
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question 不能为空")
+    if len(question) > 2000:
+        raise HTTPException(status_code=400, detail="question 过长（上限 2000 字）")
+
+    callback = str(payload.get("callback_url") or "").strip()
+    if callback:
+        try:
+            callback = wh.validate_callback_url(callback)
+        except wh.WebhookRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 直接建 queued run 并起 _execute（`/runs` 那个路由函数带 FastAPI 依赖，不能当普通函数调）
+    import asyncio
+    import uuid as _uuid
+
+    from src.core import copilot_quota as quota
+    from src.db.models import CopilotRun
+
+    run_id = str(_uuid.uuid4())
+    try:
+        quota.enforce_run_concurrency(db, user)   # 超限: 内部已写审计并抛 429
+        db.add(CopilotRun(
+            run_id=run_id,
+            conversation_id=payload.get("conversation_id"),
+            user_id=str(user.id),
+            recipe=payload.get("recipe"),
+            question=question[:500],
+            status="queued",
+            tool_calls=0,
+        ))
+        db.commit()
+    except Exception:
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        raise
+
+    task = asyncio.create_task(jobs._execute(
+        run_id, user_id=str(user.id),
+        conversation_id=payload.get("conversation_id"), question=question,
+    ))
+    jobs._TASKS[run_id] = task
+    if callback:
+        db.add(WebhookSubscription(
+            run_id=run_id, user_id=str(user.id), url=callback, status="pending",
+        ))
+        db.commit()
+    return {"run_id": run_id, "status": "queued", "callback_registered": bool(callback)}
+

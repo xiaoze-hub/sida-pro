@@ -297,6 +297,19 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
         stop.set()
         hb.cancel()
         _TASKS.pop(run_id, None)
+        # P2-2.2: run 进终态后投递外部回调（best-effort：投递失败不能影响 run 结果，
+        # 也不能让异常冒到 asyncio 的 task 里变成"未取回异常"）
+        try:
+            from src.core import webhook_delivery as _wh
+            from src.db.session import SessionLocal as _SL
+
+            _wdb = _SL()
+            try:
+                _wh.deliver_for_run(_wdb, run_id)
+            finally:
+                _wdb.close()
+        except Exception as _wexc:  # noqa: BLE001
+            logger.warning("[copilot_jobs] webhook 投递异常(不影响 run): %s", _wexc)
 
 
 # ── 接口 ─────────────────────────────────────────────────────────────────

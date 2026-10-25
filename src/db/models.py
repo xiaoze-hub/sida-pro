@@ -2392,6 +2392,27 @@ class HarnessExperiment(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class WebhookSubscription(Base):
+    """外部回调订阅（P2-2.2, 2026-10-25）。
+
+    一个 run 可以带多个回调（同一任务同时推给两个系统）。`status` 三态：
+    pending（等 run 终态）/ delivered / failed（重试完仍失败，`last_error` 写明原因）。
+    """
+
+    __tablename__ = "webhook_subscriptions"
+    __table_args__ = (Index("ix_webhook_run", "run_id", "status"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)
+    user_id = Column(String(36), nullable=True)
+    url = Column(String(512), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    status_snapshot = Column(String(16), nullable=True)   # 触发时的 run 状态
+    attempts = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class RecipeVersion(Base):
     """配方内容版本（P2-2.1, 2026-10-25）。
 
