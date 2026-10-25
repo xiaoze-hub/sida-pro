@@ -26,7 +26,7 @@ const MAX_LIMIT = 100
 /** 状态徽标：中文文案 + 语义色（灰=正常 / 橙=降级 / 绿=失败，与全站「涨红跌绿」不冲突：这里不是价格）。 */
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   ok: { label: '成功', cls: 'text-muted-foreground' },
-  degraded: { label: '降级', cls: 'text-amber' },
+  degraded: { label: '降级', cls: 'text-amber-500' },
   error: { label: '失败', cls: 'text-stock-down' },
   running: { label: '运行中', cls: 'text-muted-foreground' },
 }

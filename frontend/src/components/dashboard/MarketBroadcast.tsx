@@ -173,7 +173,7 @@ export default function MarketBroadcast() {
           <span className="rounded bg-s1 px-1.5 py-0.5 text-[11px] text-foreground">{data.phase_label}</span>
         )}
         {data.quality && data.quality !== 'ok' && (
-          <span className="text-[11px] text-amber">数据{data.quality === 'partial' ? '不全' : '缺失'}</span>
+          <span className="text-[11px] text-amber-500">数据{data.quality === 'partial' ? '不全' : '缺失'}</span>
         )}
       </div>
 

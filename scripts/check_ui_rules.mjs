@@ -331,5 +331,21 @@ for (const k of Object.keys(fontBaseline)) if (!fontSeen.has(k)) console.log(`[R
   }
 }
 
+// ── R16: 禁止裸 `text-amber`（2026-10-25）────────────────────────────────
+// 依据: tailwind.config.js 的 colors 里没有裸 `amber` 键（只有 amber-50..950），
+// 所以 `text-amber` **不产生任何颜色** —— 降级徽标会和「成功」同色，而且没有任何报错。
+// 实测三处中招: InlineSteps / MarketBroadcast / RunsPage。这类"静默失效的 class"
+// 比写错颜色更危险：它看起来对，编译也过，只是不生效。
+{
+  const BARE = /\btext-amber(?![\w-])/g
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8')
+    const hits = (src.match(BARE) || [])
+    if (hits.length) {
+      bad('R16-BARE-AMBER', rel(f), hits.length, 'text-amber 无此令牌(不生效), 用 text-amber-500')
+    }
+  }
+}
+
 console.log(fails === 0 ? 'UI-RULES OK' : `UI-RULES FAIL: ${fails} violation(s)`)
 process.exit(fails === 0 ? 0 : 1)

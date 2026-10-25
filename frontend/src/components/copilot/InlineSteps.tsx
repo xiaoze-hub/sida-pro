@@ -33,7 +33,7 @@ export interface InlineStepsProps {
 
 const STATUS_CLS: Record<string, string> = {
   ok: 'text-muted-foreground',
-  degraded: 'text-amber',
+  degraded: 'text-amber-500',
   error: 'text-stock-down',
   running: 'text-muted-foreground',
 }
