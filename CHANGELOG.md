@@ -1,3 +1,46 @@
+## release: v0.66.0（数智参谋平台化 P0 第一周：运行时 / 对照执行器 / 实验记录）
+
+按《数智参谋平台化开发计划》§10 开工。基线校正：文档写 `v0.63.0` / 71 工具，
+实际是 **v0.65.2 / 76 工具**（多出 `search_news`、`web_search_fallback`、`get_range_summary` 等），
+任务口径不变，只是计数基准更新。
+
+### 0.1 Durable Run 运行时（`src/core/copilot_runtime.py`）
+**要解决的是真事故**：`copilot_runs` 只有 `status` 没有心跳，进程重启/容器发布后库里
+留下永久 `running` 的"幽灵运行" —— 用户看到"正在分析"卡死，既不失败也不重试，也没人收尸。
+
+- **状态机**：`queued → running → (paused) → 终态`，终态不可回退（`ok → running` 必须被拒）。
+- **词汇兼容**：历史数据写的是 `ok/degraded/error`，计划书写 `succeeded/failed` ——
+  **两种都认**，不迁移存量（改名会让历史轨迹全部变成未知状态，收益为零）。
+- **接管判据**：`heartbeat_at` 超 120s 未更新（心跳 30s，容忍丢 4 次）。
+  按 run 级心跳而不是"进程还活着"判断 —— 多 worker 下后者不成立。
+- **老数据无心跳 = 超时**：说明写它的进程早就不在了，正是要收的尸；
+  `queued` 反而不能被误杀（它本来就没开始跑）。
+- **不自动重跑**：只标 `failed` 并写"可点「重试」"。重跑会烧额度，用户可能已看到半截答案。
+- 迁移 **224**（`heartbeat_at`，幂等可重跑），启动时自动接管上次遗留的中断 run，失败不阻断启动。
+
+### 0.3 + 0.4 对照执行器与客观判据（`scripts/harness_d3_probe.py`）
+新增 `--compare <agent>`：同批问题跑「默认配方 vs 候选」，输出
+`pass_rate / cost / structure` 与 `keep|rollback` 结论，落盘 `compare-*.json`。
+
+- **cost 代理 = `tool_calls + chars/1000`**：探针拿不到 usage 时不编 token 数
+  （编一个"看起来像"的成本比不做对照更糟）。
+- **失败 case 不计入合规率分母**：否则一次超时就把分数拉低成假退化。
+- **三类退化任一即 rollback**：失败数增加 / 合规率下降 / 成本涨幅超 20%（可配）。
+  「合规提升但成本暴涨」也判回滚 —— 两个维度要同时成立。
+
+### 0.5 实验记录表（`src/core/harness_experiments.py`）
+迁移 **225**。与 `copilot_memories` **分表**：那边是用户偏好，这边是配方实验，
+混表会让偏好检索被实验噪音污染。只存事实（改动摘要 + 前后指标 + verdict + 逐条原因），
+`verdict` 非法直接抛；`compare` 结果缺 `decision` 时按 **rollback** 记录，不装作保留。
+
+### 门禁
+后端定向 **236 passed**（新增 14 + 13 + 10 = 37 例）；迁移断言 224→225；
+工具数未变（76，本阶段不新增工具）。
+
+### 未做（按计划顺序）
+0.2 LLM 长任务异步化（`POST /copilot/runs` + SSE 事件）—— 是 P0 里最大的一块，
+需要新接口与前端配合，单独一轮做。
+
 ## release: v0.65.2（步骤条匹配容错：@前缀/空白/截断）
 
 生产实测暴露：`/api/copilot/runs?conversation_id=318` 明明返回

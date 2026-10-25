@@ -1,0 +1,145 @@
+"""P0-0.3 对照执行器：把「改一句提示词有没有用」变成可比数据。
+
+铁律（计划书 §1.3）：任何"优化"都必须有对照 —— 同任务/同模型/同环境，
+pass_rate 与成本同时给出；**无收益即回滚**，且不看 LLM 评审（主观分不可复核）。
+
+这里测的是判定逻辑本身，不联网：
+- summarize 的 cost 代理是 `tool_calls + chars/1000`（拿不到 usage 时不编 token 数）；
+- decide 对"合规率下降 / 失败增加 / 成本涨幅超限"三种退化都要判 rollback。
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture(scope="module")
+def d3():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "harness_d3_probe.py"
+    spec = importlib.util.spec_from_file_location("harness_d3_probe", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _row(structured=True, tools=3, chars=600, secs=10.0, err=None):
+    if err:
+        return {"agent": "x", "question": "q", "error": err}
+    return {"agent": "x", "question": "q", "structured": structured,
+            "tool_calls": tools, "chars": chars, "seconds": secs}
+
+
+# ── summarize ─────────────────────────────────────────────────────────────
+def test_汇总四项指标(d3):
+    s = d3.summarize([_row(), _row(structured=False, tools=5, chars=400)])
+    assert s["n"] == 2
+    assert s["structure_n"] == 1
+    assert s["pass_rate"] == 0.5
+    assert s["tool_calls"] == 8
+    assert s["avg_tool_calls"] == 4.0
+    assert s["chars"] == 1000
+    # cost 代理：8 次调用 + 1000 字 / 1000
+    assert s["cost"] == 9.0
+
+
+def test_失败的_case_不计入合规率但有单独计数(d3):
+    s = d3.summarize([_row(), _row(err="timeout")])
+    assert s["n"] == 1
+    assert s["errors"] == 1
+    assert s["pass_rate"] == 1.0, "失败的不能算分母，否则一次超时就把分数拉低成假退化"
+
+
+def test_空批次不炸也不编数(d3):
+    s = d3.summarize([])
+    assert s["n"] == 0 and s["pass_rate"] == 0.0 and s["cost"] == 0.0 and s["errors"] == 0
+
+
+# ── decide ────────────────────────────────────────────────────────────────
+def _sum(**kw):
+    base = {"n": 3, "errors": 0, "pass_rate": 0.67, "structure_n": 2,
+            "tool_calls": 9, "avg_tool_calls": 3.0, "chars": 1500, "cost": 10.5, "seconds": 30.0}
+    base.update(kw)
+    return base
+
+
+def test_持平或无退化即保留(d3):
+    r = d3.decide(_sum(), _sum(pass_rate=0.67, cost=10.5))
+    assert r["verdict"] == "keep"
+    assert r["reasons"] == []
+
+
+def test_合规率下降立刻回滚(d3):
+    r = d3.decide(_sum(), _sum(pass_rate=0.33, cost=9.0))
+    assert r["verdict"] == "rollback"
+    assert any("结构合规率下降" in x for x in r["reasons"])
+    assert r["delta_pass_rate"] == pytest.approx(-0.34)
+
+
+def test_失败数增加立刻回滚(d3):
+    r = d3.decide(_sum(), _sum(errors=1))
+    assert r["verdict"] == "rollback"
+    assert any("失败数增加" in x for x in r["reasons"])
+
+
+def test_成本涨幅超上限回滚(d3):
+    r = d3.decide(_sum(cost=10.0), _sum(cost=13.0))  # +30% > 20%
+    assert r["verdict"] == "rollback"
+    assert any("成本上升" in x for x in r["reasons"])
+
+
+def test_成本涨幅在上限内保留(d3):
+    r = d3.decide(_sum(cost=10.0), _sum(cost=11.5))  # +15% <= 20%
+    assert r["verdict"] == "keep"
+
+
+def test_合规提升但成本暴涨_仍回滚(d3):
+    """两件事要同时成立，不能"效果变好就不算成本"。"""
+    r = d3.decide(_sum(pass_rate=0.33, cost=10.0), _sum(pass_rate=1.0, cost=40.0))
+    assert r["verdict"] == "rollback"
+    assert any("成本上升" in x for x in r["reasons"])
+
+
+def test_基线成本为0而候选有成本_视为退化(d3):
+    r = d3.decide(_sum(cost=0.0), _sum(cost=2.0))
+    assert r["verdict"] == "rollback"
+
+
+def test_多个退化原因全部列出_不只报第一条(d3):
+    r = d3.decide(_sum(cost=10.0), _sum(pass_rate=0.0, cost=30.0, errors=2))
+    assert len(r["reasons"]) == 3
+
+
+# ── compare（网络层打桩）──────────────────────────────────────────────────
+def test_compare_同时跑对照与候选并给结论(d3, monkeypatch):
+    calls: list[str | None] = []
+
+    def fake_run_case(base, token, agent, q, sym):
+        calls.append(agent)
+        # 候选配方工具调用更少、合规一致
+        return _row(structured=True, tools=2 if agent else 4, chars=600)
+
+    monkeypatch.setattr(d3, "run_case", fake_run_case)
+    res = d3.compare("http://x", "t", [("q1", None), ("q2", None)], "postmarket_reviewer", None)
+
+    assert res["baseline_agent"] == "default"
+    assert res["candidate_agent"] == "postmarket_reviewer"
+    assert res["baseline"]["tool_calls"] == 8
+    assert res["candidate"]["tool_calls"] == 4
+    assert res["decision"]["verdict"] == "keep"
+    # 基线先跑、候选后跑，各两问
+    assert calls == [None, None, "postmarket_reviewer", "postmarket_reviewer"]
+
+
+def test_compare_某个_case抛异常不拖垮整批(d3, monkeypatch):
+    def flaky(base, token, agent, q, sym):
+        if agent and q == "q2":
+            raise TimeoutError("boom")
+        return _row()
+
+    monkeypatch.setattr(d3, "run_case", flaky)
+    res = d3.compare("http://x", "t", [("q1", None), ("q2", None)], "cand")
+    assert res["candidate"]["errors"] == 1
+    assert res["decision"]["verdict"] == "rollback", "候选失败必须判回滚"

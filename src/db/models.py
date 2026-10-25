@@ -2360,6 +2360,34 @@ class CopilotRun(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class HarnessExperiment(Base):
+    """配方改动 → 指标变化的对照记录（P0-0.5, 2026-10-25）。
+
+    与 `copilot_memories` **不混用**：那边是"用户偏好"（喜欢什么口径、常看哪些票），
+    这边是"我改了什么、指标怎么变的"。混在一起会让偏好检索被实验噪音污染。
+
+    只记事实：改动摘要 + 前后两组指标 + verdict。**不写'感觉更好'这种话**。
+    """
+
+    __tablename__ = "harness_experiments"
+    __table_args__ = (
+        Index("ix_harness_exp_created", "created_at"),
+        Index("ix_harness_exp_recipe", "recipe_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=True)          # 谁发起的（多账号隔离）
+    recipe_id = Column(String(64), nullable=False)       # 被改的配方 / 智能体
+    change_summary = Column(Text, nullable=False)        # 改了什么（一句话，可复核）
+    baseline = Column(JSON, default=dict)                # summarize() 的结果
+    candidate = Column(JSON, default=dict)               # summarize() 的结果
+    verdict = Column(String(16), nullable=False)         # keep / rollback
+    reasons = Column(JSON, default=list)                 # rollback 的原因（逐条）
+    evidence_path = Column(String(256), nullable=True)   # compare-*.json 落盘位置
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class CopilotStep(Base):
     """参谋单步工具调用(2026-10-20)。
 

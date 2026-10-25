@@ -150,12 +150,30 @@ def main() -> int:
     ap.add_argument("--base", default="https://SIDA.hengsheng-elec.com")
     ap.add_argument("--out", default="docs/research/harness_d3")
     ap.add_argument("--only", default="")
+    ap.add_argument("--compare", default="", help="候选智能体 id：同批问题跑 默认配方 vs 它，出对照结论")
+    ap.add_argument("--compare-base", default="", help="对照组智能体 id（默认空 = 默认配方）")
+    ap.add_argument("--max-cost-increase", type=float, default=0.20, help="成本涨幅上限")
     args = ap.parse_args()
     base = args.base.rstrip("/")
     pw = os.environ.get("SIDA_ADMIN_PW", "")
 
     with _post(f"{base}/api/auth/login", {"username": "admin", "password": pw}, "") as r:
         token = json.loads(r.read())["data"]["token"]
+
+    # P0-0.3 对照模式：跑完直接给 keep/rollback，不写常规报告
+    if args.compare:
+        cand_agent = args.compare
+        cases = CASES.get(cand_agent) or BASELINE
+        result = compare(base, token, cases, cand_agent, args.compare_base or None)
+        result["decision"] = decide(result["baseline"], result["candidate"],
+                                    max_cost_increase=args.max_cost_increase)
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        fp = out / f"compare-{cand_agent.replace('/', '_')}.json"
+        fp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print("saved ->", fp)
+        return 0 if result["decision"]["verdict"] == "keep" else 2
 
     rows: list[dict] = []
     only = {x for x in args.only.split(",") if x}
@@ -200,3 +218,90 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# ── P0-0.3 对照执行器（2026-10-25）────────────────────────────────────────
+# 目的：把「改一句提示词有没有用」变成可比的数据，而不是靠感觉。
+# 纪律：**同 3 问、同模型、同环境**；原配方必须一起跑（不跑就没有对照，数据不可用）；
+#      任一维度退化即判 rollback；不看 LLM 评审（主观分无法复核）。
+
+
+def summarize(rows: list[dict]) -> dict:
+    """把一批 case 结果压成可对比的四项指标。
+
+    cost 用 `tool_calls + chars/1000` 而不是 token：探针拿不到 usage 时，
+    拿工具调用次数与输出长度做代理是**可复核**的；缺 usage 就编一个 token 数才是假数据。
+    """
+    ok = [r for r in rows if not r.get("error")]
+    err = len(rows) - len(ok)
+    n = len(ok)
+    structured = sum(1 for r in ok if r.get("structured"))
+    tool_calls = sum(int(r.get("tool_calls") or 0) for r in ok)
+    chars = sum(int(r.get("chars") or 0) for r in ok)
+    seconds = round(sum(float(r.get("seconds") or 0) for r in ok), 1)
+    return {
+        "n": n,
+        "errors": err,
+        "pass_rate": round(structured / n, 4) if n else 0.0,
+        "structure_n": structured,
+        "tool_calls": tool_calls,
+        "avg_tool_calls": round(tool_calls / n, 2) if n else 0.0,
+        "chars": chars,
+        "cost": round(tool_calls + chars / 1000.0, 2),
+        "seconds": seconds,
+    }
+
+
+def decide(base: dict, cand: dict, *, max_cost_increase: float = 0.20) -> dict:
+    """保留还是回滚。**任何一维退化都不接受**，成本涨幅另有上限。"""
+    reasons: list[str] = []
+
+    if cand["errors"] > base["errors"]:
+        reasons.append(f"失败数增加 {base['errors']}→{cand['errors']}")
+
+    if cand["pass_rate"] < base["pass_rate"]:
+        reasons.append(
+            f"结构合规率下降 {base['pass_rate']:.0%}→{cand['pass_rate']:.0%}"
+        )
+
+    if base["cost"] > 0:
+        rise = (cand["cost"] - base["cost"]) / base["cost"]
+        if rise > max_cost_increase:
+            reasons.append(f"成本上升 {rise:.0%}（上限 {max_cost_increase:.0%}）")
+    elif cand["cost"] > 0:
+        reasons.append(f"基线成本为 0 而候选为 {cand['cost']}")
+
+    return {
+        "verdict": "rollback" if reasons else "keep",
+        "reasons": reasons,
+        "delta_pass_rate": round(cand["pass_rate"] - base["pass_rate"], 4),
+        "delta_cost": round(cand["cost"] - base["cost"], 2),
+    }
+
+
+def compare(base_url: str, token: str, cases: list[tuple[str, str | None]],
+            candidate_agent: str | None, base_agent: str | None = None) -> dict:
+    """同批问题跑「原配方 vs 候选」，返回可直接入库的对照结果。"""
+    def _run(agent: str | None) -> list[dict]:
+        out = []
+        for q, sym in cases:
+            try:
+                row = run_case(base_url, token, agent, q, sym)
+            except Exception as e:  # noqa: BLE001
+                row = {"agent": agent or "default", "question": q,
+                       "error": f"{type(e).__name__}: {e}"[:120]}
+            out.append(row)
+        return out
+
+    base_rows = _run(base_agent)
+    cand_rows = _run(candidate_agent)
+    base = summarize(base_rows)
+    cand = summarize(cand_rows)
+    return {
+        "baseline_agent": base_agent or "default",
+        "candidate_agent": candidate_agent or "default",
+        "questions": [q for q, _ in cases],
+        "baseline": base,
+        "candidate": cand,
+        "decision": decide(base, cand),
+    }

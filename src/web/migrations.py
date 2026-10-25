@@ -6082,6 +6082,38 @@ def _m224_copilot_run_heartbeat(conn: Connection) -> None:
     )
 
 
+def _m225_harness_experiments(conn: Connection) -> None:
+    """实验记录表 harness_experiments（2026-10-25, P0-0.5）。
+
+    为什么单开表: `copilot_memories` 存的是用户偏好, 混进"我改了配方、指标涨了几个点"
+    会让偏好检索被实验噪音污染。两类事实不同生命周期, 必须分表。
+
+    为什么 baseline/candidate 存 JSON 而不是拆列: 指标集会继续长(以后加 token/延迟),
+    拆列每加一项就要迁移; 存 JSON 让旧记录仍可读, 且对照结论可原样回放。
+    """
+    conn.execute(
+        text(
+            """
+CREATE TABLE IF NOT EXISTS harness_experiments (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(36),
+    recipe_id VARCHAR(64) NOT NULL,
+    change_summary TEXT NOT NULL,
+    baseline JSON,
+    candidate JSON,
+    verdict VARCHAR(16) NOT NULL,
+    reasons JSON,
+    evidence_path VARCHAR(256),
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_harness_exp_created ON harness_experiments(created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_harness_exp_recipe ON harness_experiments(recipe_id)"))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6300,6 +6332,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(222, "market_replay_daily", _m222_market_replay_daily),
     Migration(223, "position_defense_price", _m223_position_defense_price),
     Migration(224, "copilot_run_heartbeat", _m224_copilot_run_heartbeat),
+    Migration(225, "harness_experiments", _m225_harness_experiments),
 )
 
 
