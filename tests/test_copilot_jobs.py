@@ -159,6 +159,43 @@ def test_终态不再被改写(Session, monkeypatch):
     assert _row(Session, "r-done").status == "ok"
 
 
+def test_调用期间_user_必须仍绑定_session(Session, monkeypatch):
+    """生产事故回归（2026-10-25）：把脱离 session 的 User 传给 send_message 会
+    DetachedInstanceError，run 直接 failed。这里钉住"调用时 user 仍 attached"。"""
+    from sqlalchemy import inspect as sa_inspect
+
+    from src.db.models import ChatConversation, User
+    from src.web.api import chat as chat_api
+
+    eng = Session.kw["bind"]
+    for t in (User.__table__, ChatConversation.__table__):
+        try:
+            t.create(eng, checkfirst=True)
+        except Exception as e:  # 某些 PG 专属列在 sqlite 建不出来就跳过本用例
+            pytest.skip(f"sqlite 建表失败: {e}")
+
+    db = Session()
+    try:
+        db.add(User(id="u-reg", username="reg", password_hash="x"))
+        db.commit()
+    finally:
+        db.close()
+
+    seen = {}
+
+    async def fake_send(*, conversation_id, body, user):
+        seen["attached"] = sa_inspect(user).session is not None
+        seen["cid"] = conversation_id
+        return None
+
+    monkeypatch.setattr(chat_api, "send_message", fake_send)
+    cid = asyncio.run(copilot_jobs.run_copilot_question(
+        user_id="u-reg", conversation_id=None, question="问一句"))
+
+    assert seen["attached"] is True, "user 必须在 send_message 期间仍绑定 session"
+    assert cid == seen["cid"]
+
+
 # ── 取消 / 越权 ───────────────────────────────────────────────────────────
 def test_取消不在本进程的_run_按中断处理(client, Session):
     _mk_run(Session, "r-orphan", status="running")

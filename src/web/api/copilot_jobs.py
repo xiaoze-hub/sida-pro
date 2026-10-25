@@ -54,6 +54,18 @@ SSE_MAX_S = 900
 #: 进程内任务表（仅用于 cancel；重启后为空，靠心跳接管兜底）
 _TASKS: dict[str, asyncio.Task] = {}
 
+#: 并发上限：执行体在调 LLM 期间必须持有 DB 连接（见 run_copilot_question 的说明），
+#: 所以这里必须限流，否则几个人同时深问就能把连接池吃干。
+MAX_CONCURRENT = 3
+_SLOTS: asyncio.Semaphore | None = None
+
+
+def _slots() -> asyncio.Semaphore:
+    global _SLOTS
+    if _SLOTS is None:
+        _SLOTS = asyncio.Semaphore(MAX_CONCURRENT)
+    return _SLOTS
+
 
 class SubmitRunBody(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
@@ -75,6 +87,9 @@ async def run_copilot_question(*, user_id: str, conversation_id: int | None, que
     from src.db.models import ChatConversation, User
     from src.db.session import SessionLocal
 
+    # ⚠️ 2026-10-25 生产事故：一开始这里在调用前就 db.close()，把**脱离 session 的 User**
+    # 传给了 send_message，它一碰懒加载属性就 DetachedInstanceError（run 直接 failed）。
+    # 只能把会话保持到调用结束 —— 代价是占用一个连接，所以外层有限流 MAX_CONCURRENT。
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == user_id).first()
@@ -88,12 +103,12 @@ async def run_copilot_question(*, user_id: str, conversation_id: int | None, que
             cid = conv.id
         else:
             cid = conversation_id
+
+        body = chat_api.SendMessageBody(content=question)
+        await chat_api.send_message(conversation_id=cid, body=body, user=user)
+        return cid
     finally:
         db.close()
-
-    body = chat_api.SendMessageBody(content=question)
-    await chat_api.send_message(conversation_id=cid, body=body, user=user)
-    return cid
 
 
 @allow_cross_user  # 后台执行体按 run_id 写状态, 没有请求上下文; run 归属已在提交/查询时校验
@@ -154,10 +169,13 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     t0 = datetime.utcnow()
     _mark(run_id, status="running")
     try:
-        cid = await asyncio.wait_for(
-            run_copilot_question(user_id=user_id, conversation_id=conversation_id, question=question),
-            timeout=RUN_TIMEOUT_S,
-        )
+        async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
+            cid = await asyncio.wait_for(
+                run_copilot_question(
+                    user_id=user_id, conversation_id=conversation_id, question=question
+                ),
+                timeout=RUN_TIMEOUT_S,
+            )
         elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
         _mark(run_id, status="ok", elapsed_ms=elapsed, conversation_id=cid)
     except asyncio.TimeoutError:
