@@ -142,8 +142,16 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
         # 轨迹(trace)已经写过终态时不要覆盖它的真实数字（tool_calls/elapsed 是管线自己测的，
         # 我这里测的是整个 job 的墙钟时间，混着用会让统计口径不一致）
         if rt.is_terminal(row.status) and row.status == status:
+            # 数字不覆盖，但**关联要补**：轨迹不知道前端会话 id，只有执行体知道。
+            # 少了它，证据卡拿不到"这条 run 属于哪次对话"（2026-10-25 实测 conv=None）。
+            changed = False
             if row.finished_at is None:
                 row.finished_at = datetime.utcnow()
+                changed = True
+            if conversation_id is not None and row.conversation_id is None:
+                row.conversation_id = conversation_id
+                changed = True
+            if changed:
                 db.commit()
             return
         row.status = status

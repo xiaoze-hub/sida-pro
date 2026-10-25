@@ -163,6 +163,21 @@ def test_超时标_failed_而不是挂起(Session, monkeypatch):
     assert "超时" in (row.error or "")
 
 
+def test_轨迹已写终态时仍要补上_conversation_id(Session, monkeypatch):
+    """轨迹不知道前端会话 id，只有执行体知道；终态提前返回不能把它一起跳过。"""
+    async def ok(**_kw):
+        return 99
+
+    monkeypatch.setattr(copilot_jobs, "run_copilot_question", ok)
+    _mk_run(Session, "r-ok2", status="ok")   # 模拟轨迹已写完终态
+
+    asyncio.run(copilot_jobs._execute("r-ok2", user_id="u1", conversation_id=None, question="q"))
+
+    row = _row(Session, "r-ok2")
+    assert row.conversation_id == 99
+    assert row.status == "ok"
+
+
 def test_终态不再被改写(Session, monkeypatch):
     """已经 ok 的 run 不许被后续一次执行写成 failed（状态机护栏）。"""
     async def boom(**_kw):
