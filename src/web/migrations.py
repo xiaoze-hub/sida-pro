@@ -6082,6 +6082,33 @@ def _m224_copilot_run_heartbeat(conn: Connection) -> None:
     )
 
 
+def _m228_recipe_versions(conn: Connection) -> None:
+    """配方版本表 recipe_versions（2026-10-25, P2-2.1）。
+
+    为什么落库而不是算出来: 指纹能算"当前版本", 但算不出"上一版是什么" ——
+    而排障时真正想知道的就是"昨天那版工具清单/提示词长什么样"。
+
+    幂等（CREATE TABLE IF NOT EXISTS）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS recipe_versions (
+    id SERIAL PRIMARY KEY,
+    recipe_id VARCHAR(64) NOT NULL,
+    fingerprint VARCHAR(16) NOT NULL,
+    snapshot TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_recipe_versions_rid ON recipe_versions (recipe_id, created_at)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m228 建索引失败(不阻断): %s", exc)
+
+
 def _m227_copilot_action_diff(conn: Connection) -> None:
     """copilot_actions 加 diff_json / before_snapshot（2026-10-25, P1-1.3）。
 
@@ -6384,6 +6411,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(225, "harness_experiments", _m225_harness_experiments),
     Migration(226, "copilot_parent_run", _m226_copilot_parent_run),
     Migration(227, "copilot_action_diff", _m227_copilot_action_diff),
+    Migration(228, "recipe_versions", _m228_recipe_versions),
 )
 
 

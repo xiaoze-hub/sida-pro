@@ -2392,6 +2392,23 @@ class HarnessExperiment(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class RecipeVersion(Base):
+    """配方内容版本（P2-2.1, 2026-10-25）。
+
+    配方是 YAML 文件、不走应用写路径，所以版本靠"读到新指纹就记一条"的惰性观察。
+    `snapshot` 存那一次的 `Recipe.public()`，用于回答"上一版工具清单是什么"。
+    """
+
+    __tablename__ = "recipe_versions"
+    __table_args__ = (Index("ix_recipe_versions_rid", "recipe_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    recipe_id = Column(String(64), nullable=False)
+    fingerprint = Column(String(16), nullable=False)      # YAML 内容 sha256 前 8 位
+    snapshot = Column(Text, nullable=True)                # 当次 Recipe.public() 的 JSON
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class CopilotStep(Base):
     """参谋单步工具调用(2026-10-20)。
 

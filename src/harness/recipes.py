@@ -54,7 +54,14 @@ class Recipe:
             "desc": self.desc,
             "when": list(self.when),
             "tool_count": len(self.tools),
+            "tools": list(self.tools),
             "output_sections": list(self.output_sections),
+            "scope": self.scope,
+            "pipeline": self.pipeline,
+            # 2026-10-25 (P2-2.1): 内容指纹 = 版本。改一行 YAML 指纹就变，
+            # 不靠人工维护 version 号（人工编号必然忘记改）。
+            "version": recipe_fingerprint(self.id),
+            "updated_at": recipe_updated_at(self.id),
         }
 
 
@@ -109,6 +116,48 @@ def load_recipes() -> dict[str, Recipe]:
             continue
         out[r.id] = r
     return out
+
+
+# ── 配方版本（P2-2.1, 2026-10-25）──────────────────────────────────────────
+# 为什么用内容指纹当版本号：手写 `version: 3` 必然忘记改，而且改了也会和实际内容不同步。
+# 指纹 = 文件内容 sha256 前 8 位，改一个字就变，可复核（拿文件自己算得出同一个值）。
+
+
+def _recipe_path(recipe_id: str) -> Path | None:
+    p = RECIPE_DIR / f"{recipe_id}.yaml"
+    return p if p.is_file() else None
+
+
+def recipe_fingerprint(recipe_id: str) -> str | None:
+    """配方内容指纹（sha256 前 8 位）。文件不存在返回 None，不编造。"""
+    import hashlib
+
+    p = _recipe_path(recipe_id)
+    if p is None:
+        return None
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:8]
+    except OSError:
+        return None
+
+
+def recipe_updated_at(recipe_id: str) -> str | None:
+    """配方文件最后修改时间（ISO，本地时区）。取不到返回 None。"""
+    import datetime as _dt
+
+    p = _recipe_path(recipe_id)
+    if p is None:
+        return None
+    try:
+        ts = p.stat().st_mtime
+        return _dt.datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
+def catalog() -> list[dict]:
+    """全部配方的目录（给 `/copilot/agents`）。含版本指纹与工具明细。"""
+    return [r.public() for r in list_recipes()]
 
 
 def get_recipe(recipe_id: str | None) -> Recipe | None:

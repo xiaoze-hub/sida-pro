@@ -75,6 +75,7 @@ export const ROUTE_LABEL_KEYS: Record<string, string> = {
   '/copilot/runs': 'nav.copilotRuns',
   // 2026-10-25: 经验库（只加 Route 不加这里 -> 被判"不可开页签"并回落首屏）
   '/copilot/experiments': 'nav.copilotExperiments',
+  '/copilot/agents': 'nav.copilotAgents',
   '/dark-fund-top': 'nav.darkFundTop',
   '/war-report': 'nav.warReport',
   '/replay-tree': 'nav.replayTree',

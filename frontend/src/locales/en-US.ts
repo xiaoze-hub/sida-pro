@@ -70,6 +70,7 @@ const enUS: Messages = {
     aiCopilot: 'AI Copilot',
     copilotRuns: 'Copilot Runs',
     copilotExperiments: 'Experiments',
+    copilotAgents: 'Agents',
     darkFundTop: 'Dark Flow TOP',
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',

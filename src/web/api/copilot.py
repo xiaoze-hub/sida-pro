@@ -941,3 +941,59 @@ def _experiment_row(r) -> dict:
         "created_at": str(r.created_at or ""),
     }
 
+# ──────────────── Agent 目录 / 配方版本（P2-2.1）─────────────────────────
+# 只读。配方来自 YAML 文件，版本用内容指纹（不是手写版本号），历史惰性落库。
+
+
+@router.get("/agents")
+def list_agents(db: Session = Depends(get_db), user: Any = Depends(get_current_user)) -> dict:
+    """全部配方的目录：能干什么、挂哪些工具、当前版本指纹。
+
+    顺带同步版本历史（读到新指纹就记一条，幂等）。
+    """
+    import asyncio as _asyncio
+
+    from src.core import recipe_versions as rv
+    from src.harness import recipes as R
+
+    changed: list[dict] = []
+    try:
+        changed = rv.sync_versions(db)
+    except Exception as exc:  # noqa: BLE001
+        # 版本记录失败不该让目录打不开：目录本身是文件系统事实
+        logger.warning("配方版本同步失败(不阻断目录): %s", exc)
+
+    items = R.catalog()
+    return {
+        "available": bool(items),
+        "reason": "" if items else "配方目录为空（检查 src/harness/recipes/*.yaml）",
+        "items": items,
+        "count": len(items),
+        "versions_recorded": changed,
+    }
+
+
+@router.get("/agents/{recipe_id}")
+def get_agent(
+    recipe_id: str,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """单个配方详情 + 版本历史（新→旧）。history 为空说明只观察过一次，不是错误。"""
+    from src.core import recipe_versions as rv
+    from src.harness import recipes as R
+
+    rec = R.get_recipe(recipe_id)
+    if rec is None:
+        return {"available": False, "reason": f"没有这个配方：{recipe_id}", "item": None, "history": []}
+    try:
+        rv.sync_versions(db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("配方版本同步失败(不阻断详情): %s", exc)
+    return {
+        "available": True,
+        "reason": "",
+        "item": rec.public(),
+        "history": rv.history(db, recipe_id),
+    }
+
