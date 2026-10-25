@@ -453,7 +453,15 @@ export default function AiCopilotPage() {
           await new Promise((r) => setTimeout(r, 2000))
           last = await getCopilotRunStatus(submitted.run_id)
           patch(`⏳ ${progressText(last)}`)
-          if (isTerminalStatus(last.status)) break
+          if (isTerminalStatus(last.status)) {
+            // 竞态（2026-10-25 生产实测）：轨迹先写终态，执行体随后才补 conversation_id，
+            // 前端一看到终态就断开会读到 null。补拉几次，拿到会话 id 为止（最多 ~2s）。
+            for (let k = 0; k < 4 && !last.conversation_id; k += 1) {
+              await new Promise((r) => setTimeout(r, 500))
+              last = await getCopilotRunStatus(submitted.run_id)
+            }
+            break
+          }
         }
         if (!last || !isTerminalStatus(last.status)) {
           patch('⚠️ 后台任务超过 10 分钟仍未结束，已停止跟踪（可在「参谋任务」页查看最终状态）')
