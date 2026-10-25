@@ -28,6 +28,25 @@ export function matchRunForMessage(
   }
   if (!question) return null
 
-  const hit = runs.find((r) => (r.question || '').trim() === question)
-  return hit ?? null
+  const norm = (t: string) =>
+    (t || '')
+      .replace(/\s+/g, ' ')
+      // 输入框支持 @ 提及，实际发出去的问题可能带 "@某某 " 前缀；后端存的 question 不一定带
+      .replace(/^(@\S+\s+)+/, '')
+      .trim()
+
+  const q = norm(question)
+  if (!q) return null
+
+  // ① 精确（归一化后）→ ② 前缀 24 字（防止一端被截断/多了标点）
+  const exact = runs.find((r) => norm(r.question || '') === q)
+  if (exact) return exact
+
+  const head = q.slice(0, 24)
+  if (head.length < 8) return null
+  const loose = runs.find((r) => {
+    const rq = norm(r.question || '')
+    return rq.startsWith(head) || q.startsWith(rq.slice(0, 24))
+  })
+  return loose ?? null
 }

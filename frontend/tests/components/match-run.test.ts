@@ -63,6 +63,42 @@ describe('matchRunForMessage（答案 ↔ 工具轮次对齐）', () => {
     expect(matchRunForMessage(msgs, runs, 3)?.run_id).toBe('newest')
   })
 
+  it('用户消息带 @ 提及前缀也能匹配（输入框支持 @参谋）', () => {
+    const m = [
+      { role: 'user', content: '@参谋 上证指数自七月到十月趋势下跌的原因' },
+      { role: 'assistant', content: '答' },
+    ]
+    const runs = [run('r1', '上证指数自七月到十月趋势下跌的原因')]
+    expect(matchRunForMessage(m, runs, 1)?.run_id).toBe('r1')
+  })
+
+  it('多余空白/换行不影响（历史消息会重排空白）', () => {
+    const m = [
+      { role: 'user', content: '两融余额   现在\n多少' },
+      { role: 'assistant', content: '答' },
+    ]
+    const runs = [run('r1', '两融余额 现在 多少')]
+    expect(matchRunForMessage(m, runs, 1)?.run_id).toBe('r1')
+  })
+
+  it('一端被截断时用前缀兜底（后端 question 可能截到 N 字）', () => {
+    const m = [
+      { role: 'user', content: '上证指数自七月到十月趋势下跌的原因是什么，帮我从宏观和资金面拆解' },
+      { role: 'assistant', content: '答' },
+    ]
+    const runs = [run('r1', '上证指数自七月到十月趋势下跌的原因')]
+    expect(matchRunForMessage(m, runs, 1)?.run_id).toBe('r1')
+  })
+
+  it('问题太短(不足8字)时不做前缀兜底，避免误挂', () => {
+    const m = [
+      { role: 'user', content: '涨了吗' },
+      { role: 'assistant', content: '答' },
+    ]
+    const runs = [run('r1', '涨了')]
+    expect(matchRunForMessage(m, runs, 1)).toBeNull()
+  })
+
   it('中间夹着别的助手消息也不错位（找最近的那条 user）', () => {
     const odd = [
       { role: 'user', content: 'A' },
