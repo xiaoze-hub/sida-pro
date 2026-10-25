@@ -12,6 +12,7 @@ import { ChevronDown, ChevronRight, History, Loader2, Paperclip, Send, Sparkles,
 import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
+import InlineSteps from '@/components/copilot/InlineSteps'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
 import {
   emptyReadiness,
@@ -196,7 +197,9 @@ export default function AiCopilotPage() {
   const [panelTab, setPanelTab] = useState<'runs' | 'memory' | 'schedule' | 'proposals' | null>(null)
   const [convQuery, setConvQuery] = useState('')
   const convMgr = useConversations()
-  const runsState = useCopilotRuns({ conversationId: convId, enabled: panelTab === 'runs' })
+  // 2026-10-25: 内联步骤条要用 runs，所以不再只在 panelTab==='runs' 时拉取。
+  // 代价是打开会话多一个轻请求（limit 20），换来「答案下面直接能看到调过什么」。
+  const runsState = useCopilotRuns({ conversationId: convId, enabled: true })
   const [convs, setConvs] = useState<{ id: number; title: string; created_at: string }[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -562,6 +565,20 @@ export default function AiCopilotPage() {
    * 流式中的助手气泡是否已经落屏：决定了齐套度条挂在哪 ——
    * 气泡已出现就贴在气泡顶部（定稿时原地不动），还没首字就先挂在对话流尾部。
    */
+
+  /** 把助手消息对到它那一轮 run：用前面那条用户提问的文本匹配（一轮=一个问题）。
+   *  匹配不到就返回 null —— 宁可不显示，也不张冠李戴把别人的工具链挂上去。 */
+  const runForMessage = (i: number) => {
+    const m = msgs[i]
+    if (!m || m.role !== 'assistant') return null
+    let q = ''
+    for (let k = i - 1; k >= 0; k -= 1) {
+      if (msgs[k].role === 'user') { q = (msgs[k].content || '').trim(); break }
+    }
+    if (!q) return null
+    const hit = runsState.runs.filter((r) => (r.question || '').trim() === q)
+    return hit.length ? hit[0] : null
+  }
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
 
   return (
@@ -914,6 +931,20 @@ export default function AiCopilotPage() {
                         ) : (
                           <SafeMarkdown>{m.content}</SafeMarkdown>
                         )}
+                        {(() => {
+                          const r = runForMessage(i)
+                          if (!r) return null
+                          const det = runsState.details[r.run_id]
+                          return (
+                            <InlineSteps
+                              run={r}
+                              steps={det?.steps as never}
+                              loading={runsState.detailLoading}
+                              failed={Boolean(runsState.error) && !det}
+                              onLoad={() => void runsState.loadDetail(r.run_id)}
+                            />
+                          )
+                        })()}
                       </>
                     )
                   })()

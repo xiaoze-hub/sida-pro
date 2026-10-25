@@ -45,20 +45,25 @@ const FULL = {
 describe('computeBroadcast（纯函数）', () => {
   it('梯队与质量拆成两句，数字都来自接口', () => {
     const f = computeBroadcast(FULL)
-    expect(f.ladder).toContain('涨停 82')
+    // 梯队不再重复「涨停 82」(上方 KPI 已有)，只补结构
     expect(f.ladder).toContain('首板 70')
-    expect(f.ladder).toContain('2板+ 12')
+    expect(f.ladder).toContain('2板 12')
+    expect(f.ladder).toContain('3板+ 3')
     expect(f.ladder).toContain('最高 6 板')
-    expect(f.ladder).toContain('跌停 6')
-    expect(f.quality).toContain('封板率 87.23%')
-    expect(f.quality).toContain('炸板率 12.77%')
-    expect(f.quality).toContain('晋级率 36.36%')
+    expect(f.ladder).not.toContain('涨停 82')
+    // 质量格：比率为主，跌停放这里
+    expect(f.quality).toContain('封板 87.2%')
+    expect(f.quality).toContain('炸板 12')
+    expect(f.quality).toContain('炸板率 12.8%')
+    expect(f.quality).toContain('晋级 36.4%')
+    expect(f.quality).toContain('跌停 6')
   })
 
-  it('板块最多 6 个（不铺满整行）', () => {
+  it('板块最多 4 个（横向窄格，多了会换行撑高卡片）', () => {
     const f = computeBroadcast(FULL)
-    expect(f.sectors.split(' · ').length).toBe(6)
+    expect(f.sectors.split(' · ').length).toBe(4)
     expect(f.sectors).toContain('专用设备 8')
+    expect(f.sectors).not.toContain('自动化设')
     expect(f.sectors).not.toContain('第七个')
   })
 
@@ -82,10 +87,10 @@ describe('computeBroadcast（纯函数）', () => {
     expect(computeBroadcast({ available: false }).sectors).toBe('')
   })
 
-  it('缺字段不造 0：没有 promo_rate_pct 就不出现"晋级率"', () => {
+  it('缺字段不造 0：没有 promo_rate_pct 就不出现"晋级"', () => {
     const f = computeBroadcast({ available: true, limit_up_count: 50 })
-    expect(f.quality).not.toContain('晋级率')
-    expect(f.ladder).toContain('涨停 50')
+    expect(f.quality).not.toContain('晋级')
+    expect(f.ladder).toBe('')  // 只有涨停家数时梯队格为空，不编结构
   })
 })
 
@@ -94,9 +99,10 @@ describe('MarketBroadcast 四态', () => {
     fetchAPI.mockResolvedValueOnce(FULL)
     render(<MarketBroadcast />)
     await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
-    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('涨停 82')
+    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板 70')
     expect(screen.getByTestId('broadcast-sectors').textContent).toContain('专用设备 8')
-    expect(screen.getByTestId('broadcast-caliber').textContent).toContain('非板块涨跌幅榜')
+    // 口径并入「涨停潮」标题，不再单独占一行（省卡片高度）
+    expect(screen.getByTestId('broadcast-caliber').textContent).toContain('非涨幅榜')
     expect(screen.getByTestId('broadcast').textContent).toContain('基准日 2026-10-23')
   })
 
@@ -123,9 +129,30 @@ describe('MarketBroadcast 四态', () => {
   })
 
   it('缺 top_sectors 字段不白屏', async () => {
-    fetchAPI.mockResolvedValueOnce({ available: true, limit_up_count: 30 })
+    fetchAPI.mockResolvedValueOnce({ available: true, limit_up_count: 30, first_board_count: 20 })
     render(<MarketBroadcast />)
     await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
     expect(screen.queryByTestId('broadcast-sectors')).toBeNull()
+    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板 20')
+  })
+
+  it('横向四格：容器是 grid，不是竖排堆叠', async () => {
+    fetchAPI.mockResolvedValueOnce(FULL)
+    render(<MarketBroadcast />)
+    await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
+    const grid = screen.getByTestId('broadcast-ladder').parentElement?.parentElement
+    expect(grid?.className).toContain('grid')
+    expect(grid?.className).toContain('grid-cols-4')
+  })
+
+  it('每个格子标题都是 semibold（用户要求标题形态突出）', async () => {
+    fetchAPI.mockResolvedValueOnce(FULL)
+    render(<MarketBroadcast />)
+    await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
+    const titles = ['涨停梯队', '封板质量', '涨停潮', '龙头']
+    for (const t of titles) {
+      const el = screen.getByText(t)
+      expect(el.className).toContain('font-semibold')
+    }
   })
 })

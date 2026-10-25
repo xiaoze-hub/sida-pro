@@ -53,33 +53,38 @@ export type BroadcastFacts = {
 export function computeBroadcast(d: Replay | null): BroadcastFacts {
   if (!d || !d.available) return { ladder: '', quality: '', sectors: '', leaders: '' }
 
-  const n = (v?: number) => (typeof v === 'number' ? v : null)
-  const pct = (v?: number) => (typeof v === 'number' ? `${safeFixed(v, 2)}%` : null)
+  const num = (v?: number) => (typeof v === 'number' ? v : null)
+  const pct = (v?: number) => (typeof v === 'number' ? `${safeFixed(v, 1)}%` : null)
+  const join = (xs: (string | null | undefined)[]) => xs.filter(Boolean).join(' · ')
 
-  const parts: string[] = []
-  if (n(d.limit_up_count) !== null) parts.push(`涨停 ${d.limit_up_count}`)
-  if (n(d.first_board_count) !== null) parts.push(`首板 ${d.first_board_count}`)
-  if (n(d.ge2_count) !== null) parts.push(`2板+ ${d.ge2_count}`)
-  if (n(d.ge3_count) !== null && (d.ge3_count ?? 0) > 0) parts.push(`3板+ ${d.ge3_count}`)
-  if (n(d.limit_up_max_streak) !== null && (d.limit_up_max_streak ?? 0) > 0) {
-    parts.push(`最高 ${d.limit_up_max_streak} 板`)
-  }
-  if (n(d.limit_down_count) !== null) parts.push(`跌停 ${d.limit_down_count}`)
+  // ① 梯队：上方 KPI 已有「涨停 82」，这里只补结构（不重复主数字）
+  const ladder = join([
+    num(d.first_board_count) !== null ? `首板 ${d.first_board_count}` : null,
+    num(d.ge2_count) !== null && (d.ge2_count ?? 0) > 0 ? `2板 ${d.ge2_count}` : null,
+    num(d.ge3_count) !== null && (d.ge3_count ?? 0) > 0 ? `3板+ ${d.ge3_count}` : null,
+    num(d.limit_up_max_streak) !== null && (d.limit_up_max_streak ?? 0) > 1
+      ? `最高 ${d.limit_up_max_streak} 板`
+      : null,
+  ])
 
-  const qualityParts: string[] = []
-  if (pct(d.seal_rate_pct)) qualityParts.push(`封板率 ${pct(d.seal_rate_pct)}`)
-  if (n(d.broken_count) !== null) qualityParts.push(`炸板 ${d.broken_count}`)
-  if (pct(d.break_rate_pct)) qualityParts.push(`炸板率 ${pct(d.break_rate_pct)}`)
-  if (pct(d.promo_rate_pct)) qualityParts.push(`晋级率 ${pct(d.promo_rate_pct)}`)
-  if (n(d.one_word_count) !== null && (d.one_word_count ?? 0) > 0) {
-    qualityParts.push(`一字 ${d.one_word_count}`)
-  }
+  // ② 质量：封板率 / 炸板 / 晋级率 / 跌停 —— 全是比率，比家数更能说明承接强弱
+  const quality = join([
+    pct(d.seal_rate_pct) ? `封板 ${pct(d.seal_rate_pct)}` : null,
+    num(d.broken_count) !== null ? `炸板 ${d.broken_count}` : null,
+    pct(d.break_rate_pct) ? `炸板率 ${pct(d.break_rate_pct)}` : null,
+    pct(d.promo_rate_pct) ? `晋级 ${pct(d.promo_rate_pct)}` : null,
+    num(d.limit_down_count) !== null && (d.limit_down_count ?? 0) > 0
+      ? `跌停 ${d.limit_down_count}`
+      : null,
+  ])
 
+  // ③ 涨停潮：窄格只放 4 个，全写会换行挤爆卡片高度
   const sectors = (d.top_sectors ?? [])
-    .slice(0, 6)
-    .map((s) => `${s.name} ${s.count}`)
+    .slice(0, 4)
+    .map((x) => `${x.name} ${x.count}`)
     .join(' · ')
 
+  // ④ 龙头：连板数 + 首封时间（1 板不写"1板"，那是噪音）
   const leaders = (d.leaders ?? [])
     .slice(0, 3)
     .map((l) => {
@@ -90,12 +95,7 @@ export function computeBroadcast(d: Replay | null): BroadcastFacts {
     })
     .join(' · ')
 
-  return {
-    ladder: parts.join(' ｜ '),
-    quality: qualityParts.join(' ｜ '),
-    sectors,
-    leaders,
-  }
+  return { ladder, quality, sectors, leaders }
 }
 
 export default function MarketBroadcast() {
@@ -156,16 +156,19 @@ export default function MarketBroadcast() {
   }
 
   const f = computeBroadcast(data)
-  const isStale = Boolean(data.trade_date && data.trade_date.length === 8)
-  const dateText = isStale
-    ? `${data.trade_date!.slice(0, 4)}-${data.trade_date!.slice(4, 6)}-${data.trade_date!.slice(6, 8)}`
-    : ''
+  const dateText =
+    data.trade_date && data.trade_date.length === 8
+      ? `${data.trade_date.slice(0, 4)}-${data.trade_date.slice(4, 6)}-${data.trade_date.slice(6, 8)}`
+      : ''
 
   return (
-    <div className="space-y-1" data-testid="broadcast">
+    <div data-testid="broadcast">
+      {/* 横向 4 格：标题加重、值一行内截断 —— 原来是 5 行竖排，把卡片撑高、中间留空 */}
       <div className="flex items-baseline gap-2">
-        <span className="text-[11px] font-medium text-foreground">今日盘面</span>
-        {dateText && <span className="text-[11px] text-muted-foreground tabular-nums">基准日 {dateText}</span>}
+        <span className="text-[11px] font-semibold text-foreground">今日盘面</span>
+        {dateText && (
+          <span className="text-[11px] text-muted-foreground tabular-nums">基准日 {dateText}</span>
+        )}
         {data.phase_label && (
           <span className="rounded bg-s1 px-1.5 py-0.5 text-[11px] text-foreground">{data.phase_label}</span>
         )}
@@ -174,29 +177,51 @@ export default function MarketBroadcast() {
         )}
       </div>
 
-      {f.ladder && (
-        <div className="text-[11px] text-foreground tabular-nums" data-testid="broadcast-ladder">
-          {f.ladder}
-        </div>
-      )}
-      {f.quality && (
-        <div className="text-[11px] text-muted-foreground tabular-nums" data-testid="broadcast-quality">
-          {f.quality}
-        </div>
-      )}
-      {f.sectors && (
-        <div className="text-[11px] text-foreground" data-testid="broadcast-sectors">
-          <span className="text-muted-foreground">涨停潮 </span>
-          <span className="tabular-nums">{f.sectors}</span>
-        </div>
-      )}
-      {f.leaders && (
-        <div className="text-[11px] text-muted-foreground tabular-nums" data-testid="broadcast-leaders">
-          龙头 {f.leaders}
-        </div>
-      )}
-      <div className="text-[11px] text-muted-foreground" data-testid="broadcast-caliber">
-        {data.sector_caliber || '板块为涨停家数聚合（非涨跌幅榜）'}
+      <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5 lg:grid-cols-4">
+        <Cell title="涨停梯队" testId="broadcast-ladder" value={f.ladder} />
+        <Cell title="封板质量" testId="broadcast-quality" value={f.quality} />
+        <Cell
+          title="涨停潮"
+          hint="按涨停家数，非涨幅榜"
+          testId="broadcast-sectors"
+          caliberId="broadcast-caliber"
+          value={f.sectors}
+        />
+        <Cell title="龙头" testId="broadcast-leaders" value={f.leaders} />
+      </div>
+    </div>
+  )
+}
+
+function Cell({
+  title,
+  hint,
+  value,
+  testId,
+  caliberId,
+}: {
+  title: string
+  hint?: string
+  value?: string
+  testId: string
+  caliberId?: string
+}) {
+  if (!value) return null
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline gap-1">
+        <span className="text-[11px] font-semibold text-foreground">{title}</span>
+        {hint && (
+          <span className="text-[11px] text-muted-foreground" data-testid={caliberId}>
+            （{hint}）
+          </span>
+        )}
+      </div>
+      <div
+        className="mt-0.5 text-[11px] leading-snug text-muted-foreground tabular-nums line-clamp-2"
+        data-testid={testId}
+      >
+        {value}
       </div>
     </div>
   )
