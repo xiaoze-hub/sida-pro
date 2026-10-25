@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.web.api._scope import allow_cross_user
 from src.web.api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ async def run_copilot_question(*, user_id: str, conversation_id: int | None, que
     return cid
 
 
+@allow_cross_user  # 后台执行体按 run_id 写状态, 没有请求上下文; run 归属已在提交/查询时校验
 def _mark(run_id: str, *, status: str, error: str | None = None,
           elapsed_ms: int | None = None, tool_calls: int | None = None,
           conversation_id: int | None = None) -> None:
