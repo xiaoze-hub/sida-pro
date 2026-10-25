@@ -67,6 +67,7 @@ const zhCN = {
     opportunities: '机会',
     auction: '集合竞价',
     aiCopilot: '数智参谋',
+    copilotRuns: '参谋任务',
     darkFundTop: '暗盘资金',
     caliberCompare: '口径对照',
     decisionLedger: '决策账本',

@@ -1,3 +1,17 @@
+## release: v0.69.1（路由登记漏了页签表：新页面进不去）
+
+v0.69.0 上线后实测 `/copilot/runs` —— **渲染的是首页**（`h1=市场全景 · 组合工作台`），无 console 报错。
+
+根因不在路由本身：`Route path="/copilot/runs"` 加对了，但本仓是 **workspace 页签式**应用，
+`frontend/src/lib/tab-shell.ts` 的 `ROUTE_LABEL_KEYS` 才是「哪些路径能开页签」的白名单。
+未登记 → `isTabbable()` 判否 → 回落到首屏。**只加 Route 不够，必须同时登记页签标题。**
+
+- `ROUTE_LABEL_KEYS` 加 `'/copilot/runs': 'nav.copilotRuns'`
+- `zh-CN`: `参谋任务` / `en-US`: `Copilot Runs`
+
+**这条是门禁抓不到的**：`tsc`/`eslint`/`ui-rules`/单测全绿（单测直接挂载组件，不走路由壳），
+只有真机访问才暴露。教训：**新增页面必须真机 Open 一次**，不能以门禁绿为准。
+
 ## release: v0.69.0（参谋任务列表页 + 证据卡 + 修掉"静默失效的 class"）
 
 按计划 §10-5 推进：前端只读面。两个 lane 由子智能体并行做完（各自 worktree、文件不相交），
