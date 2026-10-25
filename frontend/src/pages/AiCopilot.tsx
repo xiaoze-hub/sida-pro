@@ -502,6 +502,11 @@ export default function AiCopilotPage() {
         setError(e instanceof Error ? e.message : '对话失败')
       } finally {
         setStreaming(false)
+        // 2026-10-25: 答完刷新 run 列表 —— 否则内联步骤条摘要用的是打开会话那一刻的快照
+        // （实测新回答显示 "0 步 · -- · running"，因为 run 行在发问前就抓好了）
+        runsState.reload()
+        // 后端 run 行的最终状态可能比 SSE 收尾晚一拍，再补一次
+        window.setTimeout(() => runsState.reload(), 1600)
         setStage('')
         // 定稿：pending → ok（流结束了，取数阶段已经过去），然后把这条痕固化到助手消息上。
         // 没有助手消息（首字都没出来就失败）时不铺空条 —— 空 ≠ 0/0。
@@ -517,7 +522,7 @@ export default function AiCopilotPage() {
         }
       }
     },
-    [attach, convId, anchorSymbol, mentions, streaming, uploading],
+    [attach, convId, anchorSymbol, mentions, streaming, uploading, runsState],
   )
 
   // 动作回写(P1): AI 只能提议, 用户点确认才落库 —— 融合的硬指标是"能改页面"。

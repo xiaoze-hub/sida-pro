@@ -68,7 +68,7 @@ export default function InlineSteps({ run, steps, loading, onLoad, failed }: Inl
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span>过程</span>
         <span className="tabular-nums">
-          · {toolCalls === null ? '--' : `${toolCalls} 步`} · {formatElapsed(run.elapsed_ms)}
+          · {toolCalls === null ? '-- 步' : `${toolCalls} 步`} · {formatElapsed(run.elapsed_ms)}
         </span>
         {run.status !== 'ok' && <span className={statusCls}>· {run.status}</span>}
       </button>
