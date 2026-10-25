@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-24T12:00:00+08:00",
+  "title": "Design System: SIDA Pro（数智分析 Pro）",
+  "extensions": {
+    "colorMeta": {
+      "stock-up": { "role": "semantic", "displayName": "涨红", "canonical": "#ff5252", "tonalRamp": ["#7f2929", "#a13333", "#c23d3d", "#e04646", "#ff5252", "#ff7676", "#ff9c9c", "#ffc2c2"] },
+      "stock-down": { "role": "semantic", "displayName": "跌绿", "canonical": "#43a047", "tonalRamp": ["#215024", "#2b652f", "#357a39", "#3c8b40", "#43a047", "#6cb96f", "#95cc97", "#bee0bf"] },
+      "primary": { "role": "primary", "displayName": "锚点钢蓝（暗色提亮至 hsl(240 70% 60%)）", "canonical": "hsl(240 70% 45%)", "tonalRamp": ["#141a52", "#1c256e", "#26328c", "#3140ad", "#3f51cf", "hsl(240 70% 45%)", "#7c89e8", "#aab3f2"] },
+      "background": { "role": "neutral", "displayName": "工作区页底 s0", "canonical": "hsl(240 20% 95.5%)", "tonalRamp": ["hsl(240 20% 88%)", "hsl(240 20% 91%)", "hsl(240 20% 93.5%)", "hsl(240 20% 95.5%)", "hsl(240 20% 96%)", "hsl(240 25% 99%)", "hsl(240 25% 99.5%)", "hsl(240 25% 100%)"] },
+      "panel": { "role": "neutral", "displayName": "纸面白面板 s1", "canonical": "hsl(240 25% 99%)", "tonalRamp": ["hsl(240 18% 90%)", "hsl(240 18% 93%)", "hsl(240 20% 96%)", "hsl(240 25% 99%)", "hsl(240 25% 99.5%)", "#ffffff", "#ffffff", "#ffffff"] },
+      "accent-primary": { "role": "tertiary", "displayName": "Bloomberg 强调橙", "canonical": "hsl(38 92% 50%)", "tonalRamp": ["#7a4a09", "#9c5f0b", "#bf750d", "#e08b10", "hsl(38 92% 50%)", "#f5b04a", "#f9c876", "#fcdca3"] },
+      "role-watch": { "role": "tertiary", "displayName": "自选紫（角色条）", "canonical": "hsl(245 65% 62%)" },
+      "role-opp": { "role": "tertiary", "displayName": "机会琥珀（角色条）", "canonical": "hsl(42 95% 55%)" },
+      "role-risk": { "role": "tertiary", "displayName": "风险橙（角色条）", "canonical": "hsl(25 85% 50%)" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "终端数字 Display", "purpose": "指数点位/大额资金/温度读数——DIN 风格数字 + tabular-nums，只给一眼必须看到的大数字。" },
+      "micro": { "displayName": "口径 Micro", "purpose": "口径标签/来源/时间戳——所有资金数据必须随附的诚实层。" }
+    },
+    "shadows": [
+      { "name": "float", "value": "0 8px 24px hsl(var(--foreground) / 0.10), 0 2px 6px hsl(var(--foreground) / 0.06)", "purpose": "全站唯一阴影档，只给真浮层（弹窗/菜单/命令面板）。" },
+      { "name": "card-static", "value": "0 1px 2px hsl(240 15% 40% / 0.05), 0 1px 0 hsl(var(--border) / 0.35)；暗色 inset 0 1px 0 hsl(0 0% 100% / 0.045)", "purpose": "卡片静态微影/暗色顶部内高光。" },
+      { "name": "card-hover", "value": "亮色 0 4px 14px -6px hsl(240 15% 40% / 0.16)；暗色表面亮度抬升一档 + 内高光 0.06", "purpose": "hover 层级 = 亮度抬升，无彩色阴影。" }
+    ],
+    "motion": [
+      { "name": "dur-instant", "value": "80ms", "purpose": "即时态反馈。" },
+      { "name": "dur-fast", "value": "150ms", "purpose": "hover/焦点/数字入场。" },
+      { "name": "dur-normal", "value": "250ms", "purpose": "面板/展开收起。" },
+      { "name": "dur-flash", "value": "420ms（上限 700ms，强度按 |Δ| 走 --flash-dur）", "purpose": "涨跌闪。" },
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 0.84, 0.44, 1)", "purpose": "默认出场缓动。注意：prefers-reduced-motion 在 token 层全局归零。" }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "768px（移动端免责条/底部导航档）" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "锚点钢蓝主操作按钮，active 轻压。用于页面级确认动作。",
+      "html": "<button class=\"ds-btn-primary\">扫描共振</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; background: hsl(240 70% 45%); color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; font-family: Inter, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color 150ms cubic-bezier(0.16,0.84,0.44,1), transform 150ms cubic-bezier(0.16,0.84,0.44,1); } .ds-btn-primary:hover { background: hsl(240 70% 40.5%); } .ds-btn-primary:active { transform: scale(0.96); } .ds-btn-primary:focus-visible { outline: 2px solid hsl(240 70% 45%); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "浮层灰底 + hairline 边框的次级按钮。",
+      "html": "<button class=\"ds-btn-secondary\">填入主线龙头</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; background: hsl(240 15% 92%); color: hsl(240 20% 10%); border: 1px solid hsl(240 15% 90%); border-radius: 6px; font-size: 13px; font-weight: 500; font-family: Inter, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background-color 150ms cubic-bezier(0.16,0.84,0.44,1), transform 150ms cubic-bezier(0.16,0.84,0.44,1); } .ds-btn-secondary:hover { background: hsl(240 15% 88%); } .ds-btn-secondary:active { transform: scale(0.96); } .ds-btn-secondary:focus-visible { outline: 2px solid hsl(240 70% 45%); outline-offset: 2px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "纸面白结论容器：8px 圆角 + 强边框 + 静态微影（暗色为顶部内高光）。",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">市场温度</div><div class=\"ds-card-num\">100</div></div>",
+      "css": ".ds-card { background: hsl(240 25% 99%); border: 1px solid hsl(240 17% 27.5%); border-radius: 8px; box-shadow: 0 1px 2px hsl(240 15% 40% / 0.05), inset 0 1px 0 hsl(0 0% 100% / 0.4); padding: 12px 16px; font-family: Inter, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-card-title { font-size: 11px; font-weight: 500; color: hsl(240 10% 48%); } .ds-card-num { font-family: 'DIN Alternate', Bahnschrift, 'SF Mono', monospace; font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 700; color: hsl(240 20% 10%); }"
+    },
+    {
+      "name": "Quote Row",
+      "kind": "custom",
+      "refersTo": "row",
+      "description": "行情列表行：32px 命中区 + hover 亮度抬升 + 左侧角色条；红涨绿跌同色异向。",
+      "html": "<div class=\"ds-row ds-row--watch\"><span class=\"ds-row-name\">神剑股份</span><span class=\"ds-row-code\">002361</span><span class=\"ds-row-chg ds-up\">+3.21%</span></div>",
+      "css": ".ds-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; position: relative; font-size: 12px; font-family: Inter, system-ui, 'PingFang SC', sans-serif; cursor: pointer; } .ds-row::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: 2px; background: hsl(245 65% 62%); } .ds-row:hover { background: hsl(240 20% 96%); } .ds-row-name { font-weight: 500; color: hsl(240 20% 10%); } .ds-row-code { font-family: 'SF Mono', monospace; font-size: 11px; color: hsl(240 10% 48%); } .ds-row-chg { margin-left: auto; font-family: 'DIN Alternate', Bahnschrift, monospace; font-variant-numeric: tabular-nums; font-weight: 600; } .ds-up { color: #ff5252; } .ds-down { color: #43a047; }"
+    },
+    {
+      "name": "Caliber Badge",
+      "kind": "chip",
+      "refersTo": "chip-caliber",
+      "description": "口径徽章：全站资金数据的诚实层，10px 字号，随数据出现。",
+      "html": "<span class=\"ds-caliber\" title=\"通达信按单笔成交金额四档归类口径\">tdx_exday4</span>",
+      "css": ".ds-caliber { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 9999px; background: hsl(240 15% 92%); color: hsl(240 10% 48%); font-size: 10px; font-family: 'SF Mono', monospace; line-height: 16px; cursor: help; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "标准输入框：hairline 边框，focus 转 primary + 轻环。",
+      "html": "<input class=\"ds-input\" placeholder=\"输入6位股票代码, 逗号分隔\" />",
+      "css": ".ds-input { width: 100%; height: 40px; padding: 0 12px; border: 1px solid hsl(240 15% 90%); border-radius: 6px; background: hsl(240 20% 95.5%); color: hsl(240 20% 10%); font-size: 13px; font-family: Inter, system-ui, sans-serif; transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: hsl(240 10% 48%); } .ds-input:focus { outline: none; border-color: hsl(240 70% 45%); box-shadow: 0 0 0 2px hsl(240 70% 45% / 0.2); }"
+    },
+    {
+      "name": "Nav Item (sidebar)",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "侧栏导航项：可点击暗示（箭头/高亮卡）是硬要求。",
+      "html": "<a class=\"ds-nav\" href=\"#\"><span class=\"ds-nav-icon\">✦</span><span class=\"ds-nav-text\"><span class=\"ds-nav-label\">数智参谋</span><span class=\"ds-nav-sub\">AI 帮你分析股票 · 点击进入</span></span><span class=\"ds-nav-arrow\">›</span></a>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid hsl(245 65% 62% / 0.4); background: hsl(240 25% 99%); border-radius: 12px; text-decoration: none; color: hsl(240 20% 10%); font-family: Inter, system-ui, 'PingFang SC', sans-serif; transition: background-color 150ms; } .ds-nav:hover { background: hsl(240 15% 92%); } .ds-nav-icon { font-size: 14px; color: hsl(245 65% 62%); } .ds-nav-text { flex: 1; min-width: 0; } .ds-nav-label { display: block; font-size: 12px; font-weight: 500; } .ds-nav-sub { display: block; font-size: 10px; color: hsl(240 10% 48%); } .ds-nav-arrow { color: hsl(245 65% 62% / 0.7); font-size: 12px; }"
+    },
+    {
+      "name": "Heat Cell",
+      "kind": "custom",
+      "refersTo": "heat",
+      "description": "OKLCH 均匀发散强度阶的单元格，红绿双向 + 文字保证色盲可读。",
+      "html": "<span class=\"ds-heat ds-heat-p4\">+5.2%</span><span class=\"ds-heat ds-heat-n3\">-1.8%</span>",
+      "css": ".ds-heat { display: inline-block; padding: 2px 6px; border-radius: 2px; font-family: 'DIN Alternate', Bahnschrift, monospace; font-variant-numeric: tabular-nums; font-size: 11px; color: hsl(240 20% 10%); } .ds-heat-p4 { background: oklch(0.75 0.16 25); } .ds-heat-n3 { background: oklch(0.80 0.13 155); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "操盘手的驾驶舱（The Operator's Cockpit）",
+    "overview": "一台在高压力、高节奏交易时段里快速决策的行情终端。结论先行、口径诚实：每屏先回答『现在怎么办』再铺证据，每个数字可追溯口径。中性色收敛在 240 蓝紫锚点相（反 AI 模板），卡片是纸面白而非纯白——密度高但层级清楚。2026-10-24 起去卡片化解禁：hairline 仍是默认语言，卡片/阴影按收益自由使用。",
+    "keyCharacteristics": ["红涨绿跌是全站最强的两种颜色，其他颜色不得竞争", "Surface 阶梯 s0-s4 表达空间层级", "字号六档制 + 全数字 tabular-nums", "微圆角终端语言，暗色靠明度差不靠阴影", "图表画布永远比外壳更空一档"],
+    "rules": [
+      { "name": "红绿即秩序 Rule", "body": "涨跌语义色是屏幕上最强对比，primary/角色色/强调橙任何情况下不得比红绿更抢眼。同屏多口径资金数据必须各带 caliber 标签，禁止跨源混算。", "section": "colors" },
+      { "name": "无数据即无数据 Rule", "body": "缺数据显式标注「无数据/口径缺口」，禁止用 0、-- 编造或 LLM 推测填充。", "section": "colors" },
+      { "name": "六档铁律 Rule", "body": "字号只允许 10/11/12/13/16/20；一切数字 tabular-nums；金额量自动亿/万缩放。", "section": "typography" },
+      { "name": "单浮层阴影 Rule", "body": "shadow-lg/xl/2xl 禁用；非浮层信息用 hairline 表达；多档阴影混用表达伪层级是禁手。", "section": "elevation" }
+    ],
+    "dos": ["用 Surface 阶梯表达空间层级", "给每个可交互元素可点击暗示", "涨跌场景同时给颜色+符号/文字/位置", "同屏多口径各带 caliber 徽章，结论放表头", "列表行走 hairline，结论块用 card 按收益判断"],
+    "donts": ["非语义色比红绿更抢眼；彩色阴影/光晕", "0 冒充缺失、跨源换算、无基准胜率", "混用「数智参谋」与「数智决策」功能名", "六档之外字号；手写金额换算", "绕过 motion token 的动画"]
+  }
+}

@@ -43,6 +43,14 @@ v0.70.0 实测：后台任务完成，界面却写「✅ 已完成，但没拿�
 
 ### 门禁
 前端 `tsc 0 / ui-rules OK / eslint 0 / vitest 225 文件 1746 用例`（+12 jobs 用例）。
+## 2026-10-25
+
+### docs-impeccable 产品上下文与设计系统固化(PRODUCT.md/DESIGN.md/sidecar)
+
+- **为什么**: 用户调用 `/impeccable` 全量设计流水线; 项目此前无该格式的设计宪法文件, AI 协作与设计工具各自理解口径。
+- **PRODUCT.md**: 平台/用户(2026-10-24 用户裁定「专家为主小白可用」)/定位/运行语境/能力与约束(**去卡片化降级为偏好, UI 收益优先**)/品牌承诺(「数智参谋」≠「数智决策」)/证据/五条产品原则/无障碍底线。
+- **DESIGN.md**: YAML 前 Matter 固化 token 事实源(index.css: 涨跌色 #ff5252/#43a047、锚点钢蓝 240 70% 45%、Surface 阶梯 s0-s4、DIN 数字字体栈、密度 4px、圆角 6px 派生、motion token); 八段正文 + 命名规则(红绿即秩序/无数据即无数据/六档铁律/单浮层阴影); `.impeccable/design.json` sidecar(8 组件自包含 HTML/CSS + tonal ramp + narrative)。
+- **测了**: 纯文档无代码改动; 值全部取自 frontend/src/index.css 与 docs/design/20261023_01_design_tokens.md 实测, 非转抄。
 
 ## release: v0.69.1（路由登记漏了页签表：新页面进不去）
 
