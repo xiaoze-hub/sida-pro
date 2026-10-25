@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_KINDS = ("annotation", "watchlist", "alert", "schedule")
 
@@ -32,12 +35,13 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
         raise ActionError("动作内容为空")
     # P1-1.3: 提议时就把"会改什么"算出来给用户看。diff 算失败不能拦住提议
     # （有些动作类型没有 diff），但要在结果里如实为空，不能编。
+    # ⚠️ 2026-10-25 CI 拦下：这里**不能**把 ActionError 抛出去。
+    # 既有约定是"提议阶段允许参数不全、apply 阶段才校验"（test_agent_p1 /
+    # test_agent_regressions 都钉着这条）。diff 只是给用户看的预演，算不出来就留空。
     try:
         diff = preview_diff(db, user_id=user_id, kind=kind, payload=payload)
-    except ActionError:
-        raise
     except Exception as exc:  # noqa: BLE001
-        logger.warning("propose 计算 diff 失败(不阻断): %s", exc)
+        logger.info("propose 计算 diff 失败(不阻断, 参数不全由 apply 校验): %s", exc)
         diff = []
     row = CopilotAction(
         run_id=run_id,
