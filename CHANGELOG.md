@@ -1,3 +1,77 @@
+## release: v0.73.0（P0-0.4 + P1-1.1/1.2/1.3 + P2-2.1/2.2/2.4 收口）
+
+这一批把计划书里剩下的里程碑一次做完。**全部由主线实现**（7 路子代理里 6 路被
+provider 的 HTTP 429 限流打掉，详见文末教训）。
+
+### P0-0.4 客观判据三条（此前欠账）
+`scripts/harness_d3_probe.py` 之前只算 pass_rate + cost，接入三条机检判据：
+- **acceptance**：配方 `output_sections` 全齐 + 报出缺哪段（不是一个光秃秃的比例）
+- **fitness**：复用 `fitness_keypoints.score_run` 做关键位真值对账；无库/行情没走完
+  → `available=False` + 覆盖率，**不计入分母**
+- **cost**：`tool_calls + chars/1000` 代理（拿不到 usage 就不编 token）
+
+`decide3()` = 任一维度退化即 rollback；**两侧都不可用的维度不参与比较**
+（否则"T+3 还没到"会被误判成退化）。新增 `--with-fitness`。
+
+### P1-1.1 委派子 run
+`src/core/delegate.py`：`delegate / delegate_many / aggregate / children_of`。
+- 子 run 带 `parent_run_id`，走**同一条管线、同一套口径**
+- **预算独立**：子 run 的工具调用不并进父 run（否则一次委派吃穿父预算）
+- **失败不自动重跑**，落 `failed` 并在汇总里列为缺口
+- 没有执行体 → `failed`，不假装成功
+- 串行委派（并发会撞上游限流，且共用同一个 DB session）
+- 迁移 **226**
+
+### P1-1.2 并发上限 + 单 run 预算硬限制
+（子代理产出，已合并）`MAX_ACTIVE_RUNS_PER_USER=2` 超限 429 带数字并写审计；
+`MAX_TOOL_CALLS_PER_RUN=60` 超限中止执行体并落 failed，不截断后继续作答。
+
+### P1-1.3 动作 dry-run diff + 回滚
+- `preview_diff`：自选/提醒/定时三类字段级 diff（before/after/change），**propose 时就算**
+- **apply 前拍快照**（propose→confirm 之间状态会变，快照必须在 apply 前）
+- `POST /copilot/actions/{id}/rollback`：按快照撤销，只删"这次新建的"，不碰用户其它数据
+- 回滚本身写审计（否则审计里只看得到 apply）
+- 迁移 **227**
+
+### P2-2.1 Agent 目录 + 配方版本
+- 版本 = **YAML 内容指纹**（sha256 前 8 位），不是手写版本号 —— 手写的必然忘记改
+- `recipe_versions` 表惰性记录（读到新指纹才记一条，幂等）；迁移 **228**
+- `GET /copilot/agents` + `/agents/{id}`；前端 `AgentCatalog.tsx` + 路由 `/copilot/agents`
+
+### P2-2.2 外部任务 + Webhook
+- `POST /copilot/tasks`：提交即返回 run_id，可选 `callback_url`
+- **SSRF 防护**：只允许 http/https；内网/回环/链路本地地址拒绝，且**域名解析后再判一次**
+  （`evil.com` 可以解析到 127.0.0.1）
+- 有限重试 3 次；失败留原因，不静默丢失
+- 载荷只给 run_id/状态/问题长度/耗时，**不含问题原文与任何密钥**
+- run 终态在 `_execute` 的 finally 里 best-effort 投递（投递失败不影响 run）
+- 迁移 **229**
+
+### P2-2.4 经验库（实验台）
+`GET /copilot/experiments` + `/{id}`；前端 `Experiments.tsx` + 路由 `/copilot/experiments`。
+四态分开、缺值 `--` 不补 0、证据文件缺失显式标注。
+
+### 未做（明确记录）
+**P2-2.3 受控执行环境**不做：计划书原文是"仅当确需跑脚本时"，当前没有这个需求，
+自建沙箱是纯负债。
+
+### 教训：7 路并行子代理被限流打死
+派了 7 个子代理并行开发，6 个在 130~150s 内失败，回执写「无回复：工具结果待处理时停止」——
+看起来像模型能力问题。翻 `partial output` 才看到真因：
+
+```
+HTTP 429: You've reached the API rate limit for free users.
+```
+
+规则已写进 `multi-agent-dev-workflow` skill：**free tier 下 fan-out ≤2~3 路**；
+派前按耗时排序、最长的单独先派；改状态机/迁数据库这类大任务不要委派。
+
+### 门禁
+后端定向：delegate 8 例 / actions 12 例 / recipe_versions 7 例 / webhook 17 例 /
+probe 20 例 / experiments 7 例 / quota 9 例 全绿；`check_scoped_queries` OK。
+前端：`tsc 0 / ui-rules OK / eslint 0`；新增页面用例 7+7 例。
+迁移链：224 → 229（226 parent_run_id / 227 action diff / 228 recipe_versions / 229 webhooks）。
+
 ## release: v0.72.0（市场级排行：`get_market_ranking`，腾讯免配额源）
 
 ### 为什么现在做
