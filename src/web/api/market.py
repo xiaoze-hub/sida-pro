@@ -250,3 +250,68 @@ async def get_index_detail(symbol: str):
         "amount_trend": amount_trend,
         "note": "大盘资金流:东财源在云服务器不可用(502),以成交额趋势替代",
     }
+
+@router.get("/replay-summary")
+async def replay_summary(market: str = "CN") -> dict:
+    """今日盘面播报底料（首页「今日市场播报」用）。
+
+    **口径说明（必须随数字一起展示，不可省）**：
+      · 涨停/炸板/封板率/晋级率来自 `market_replay_daily`（当日盘后复盘快照）；
+      · `top_sectors` 是**涨停家数按行业聚合**，不是板块涨跌幅排名 ——
+        东财板块榜接口在云服务器持续断连（push2 / push2delay 均 RemoteDisconnected），
+        所以这里用「板块涨停潮」口径替代，且必须在 UI 上写明，否则用户会误读成涨幅榜。
+      · 无数据时返回 available=False + 原因，**不返回 0 冒充有数据**。
+    """
+    from src.db.session import SessionLocal
+    from src.db.models import MarketReplayDaily
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(MarketReplayDaily)
+            .filter(MarketReplayDaily.market == market)
+            .order_by(MarketReplayDaily.trade_date.desc())
+            .first()
+        )
+        if row is None:
+            return {"available": False, "reason": "暂无盘后复盘数据（当日尚未生成）", "market": market}
+
+        ml = row.mainline or {}
+        if isinstance(ml, str):
+            import json as _json
+            try:
+                ml = _json.loads(ml)
+            except Exception:
+                ml = {}
+
+        return {
+            "available": True,
+            "market": market,
+            "trade_date": row.trade_date,
+            "quality": row.quality,
+            "phase_label": row.phase_label or row.phase,
+            "limit_up_count": row.limit_up_count,
+            "first_board_count": row.first_board_count,
+            "ge2_count": row.ge2_count,
+            "ge3_count": row.ge3_count,
+            "limit_up_max_streak": row.limit_up_max_streak,
+            "one_word_count": row.one_word_count,
+            "broken_count": row.broken_count,
+            "break_rate_pct": row.break_rate_pct,
+            "seal_rate_pct": row.seal_rate_pct,
+            "promo_rate_pct": row.promo_rate_pct,
+            "limit_down_count": row.limit_down_count,
+            "top_sectors": (ml.get("top_sectors") or [])[:6],
+            "leaders": (ml.get("leaders") or [])[:5],
+            "sector_caliber": "涨停家数按行业聚合（非板块涨跌幅榜）",
+        }
+    except Exception as e:  # noqa: BLE001 —— 播报是次要信息，绝不拖垮首页
+        logger.warning("[replay-summary] 读取失败: %s", e)
+        try:
+            from src.core.db_safe import safe_rollback
+            safe_rollback(db)
+        except Exception:
+            pass
+        return {"available": False, "reason": "盘面数据读取失败", "market": market}
+    finally:
+        db.close()

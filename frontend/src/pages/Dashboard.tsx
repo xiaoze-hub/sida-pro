@@ -51,6 +51,7 @@ import MarketStatusPills from '@/components/MarketStatusPills'
 import DashboardCustomizer from '@/components/DashboardCustomizer'
 import CollapsibleSection from '@/components/dashboard/CollapsibleSection'
 import IndexTrendBand from '@/components/dashboard/IndexTrendBand'
+import MarketBroadcast from '@/components/dashboard/MarketBroadcast'
 import { readCollapsed } from '@/lib/dashboard-collapse'
 import {
   isHidden,
@@ -715,6 +716,9 @@ export default function DashboardPage() {
           <span className="ml-auto">
             <CaliberBadge caliber={caliberOf(marketFlow?.caliber)} label={marketFlow?.caliber_label || undefined} />
           </span>
+        </div>
+        <div className="mt-2 border-t border-border/40 pt-2">
+          <MarketBroadcast />
         </div>
         </div>
         <IndexTrendBand />
