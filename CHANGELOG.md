@@ -45,6 +45,18 @@ v0.70.0 实测：后台任务完成，界面却写「✅ 已完成，但没拿�
 前端 `tsc 0 / ui-rules OK / eslint 0 / vitest 225 文件 1746 用例`（+12 jobs 用例）。
 ## 2026-10-25
 
+### feat-首页可用性修复批(impeccable critique P0/P1/P2)
+
+- **来源**: /impeccable 全量流水线 —— 双代理 critique(23/40)+audit(14/20) 的优先问题, 用户裁定「专家为主小白可用」+「去卡片化解禁, UI 收益优先」。
+- **[P0] 可交互元素长成标签**(用户实测反馈的直接命中): 侧栏 AI 高亮卡加 ChevronRight 箭头 + 副标题「筹码·共振·撤单·竞价」→「AI 帮你分析股票 · 点击进入」(黑话保留在 title); 共振面板冠名「数智决策·三指标共振」+ 帮助 tooltip(三指标白话) + 「全部›」入口(深层链接 /opportunities?tab=resonance) + 行尾箭头 + 行 title; Dashboard 4 处 11px 灰字假按钮(分享图/进入机会页/问参谋/全部)升 text-primary+hover 下划线+箭头; ScanJobButton busy 转 primary+「扫描中…」原地可见。
+- **[P0] 核心列表键盘可达**: 今日要紧事/待办/机会精选的 div+onClick 全部改真 button(disabled=无标的行, 右键守卫语义等价), Tab 可达 + text-left 对齐。
+- **[P1] 双名统一**: 面板冠名(同上); 表头「三指标」列加白话解释(趋=GS趋势进G区/强=活跃度≥3/资=L2净流入>0)。
+- **[P2] 等待安抚**: 基准对比 loading 挂已耗时计数(benchElapsed, 离开 loading 停表); AI 体检按钮加「约 20-60 秒」预期。
+- **次要**: 「✓ 未见明显风险」text-stock-up(涨红, 读作警报)→ text-success 语义色。
+- **测试**: tsc 0 错; vitest 10 文件 57 用例全绿(dashboard 全套+resonance+scan+nav-ia 回归); check_ui_rules OK(修掉自引入的 R14 文字透明度违规); detect.mjs 对 4 个改动文件 0 发现; 改动文件全 LF。
+- **未做(需产品决策/后续)**: 12 模块三区重构(与 v0.53 看板定制器模型耦合, 待作者拍板); ResonancePanel 整组件 i18n(存量硬编码, 只翻新串会不一致); AI 体检可取消(需 API 层 abort 接线); Landing 渐变文字 2 处(营销页孤立装饰, 留观)。
+
+
 ### docs-impeccable 产品上下文与设计系统固化(PRODUCT.md/DESIGN.md/sidecar)
 
 - **为什么**: 用户调用 `/impeccable` 全量设计流水线; 项目此前无该格式的设计宪法文件, AI 协作与设计工具各自理解口径。

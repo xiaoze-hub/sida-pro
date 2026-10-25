@@ -195,6 +195,18 @@ export default function DashboardPage() {
   const [diag, setDiag] = useState<PortfolioDiagnostics | null>(null)
   const [bench, setBench] = useState<PortfolioBenchmark | null>(null)
   const [benchState, setBenchState] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading')
+  // 等待安抚(2026-10-25 critique P2): 基准对比约 1 分钟, 原来只有一个静态文案的空盒 ——
+  // 挂已耗时计数, 让"还在干活"可见; benchState 离开 loading 即停表归零。
+  const [benchElapsed, setBenchElapsed] = useState(0)
+  useEffect(() => {
+    if (benchState !== 'loading') {
+      setBenchElapsed(0)
+      return
+    }
+    const t0 = Date.now()
+    const id = window.setInterval(() => setBenchElapsed(Math.round((Date.now() - t0) / 1000)), 1000)
+    return () => window.clearInterval(id)
+  }, [benchState])
   const [oppFallback, setOppFallback] = useState<StrategySignalItem[]>([])
   const [alertHits, setAlertHits] = useState<AlertHitToday[]>([])
   const [todos, setTodos] = useState<PortfolioTodo[]>([])
@@ -1041,7 +1053,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => setShareDigest(true)}
-                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                    className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 transition-colors hover:underline"
                     title="生成今日盯盘分享图"
                   >
                     <Share2 className="h-3.5 w-3.5" />
@@ -1059,20 +1071,22 @@ export default function DashboardPage() {
               <div className="space-y-1.5 py-1">
                 <div className="text-[11px] text-muted-foreground">今日暂无异动/触发 ✓ · 待办:</div>
                 {todos.map((t, i) => (
-                  <div
+                  <button
                     key={i}
-                    className={`flex items-center gap-2 py-1 text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
+                    type="button"
+                    disabled={!t.symbol}
                     onClick={() => t.symbol && openStock(t.symbol, t.market || 'CN', '')}
                     onContextMenu={(e) => {
                       if (!t.symbol) return
                       openStockContextMenu(e, { symbol: t.symbol, name: t.symbol, market: t.market || 'CN', hasPosition: false })
                     }}
+                    className={`flex w-full items-center gap-2 py-1 text-left text-[12px] ${t.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
                   >
                     <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] text-amber-500">
                       {t.type === 'no_alert' ? '加提醒' : '将到期'}
                     </span>
                     <span className="truncate" title={t.message}>{t.message}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (
@@ -1082,11 +1096,17 @@ export default function DashboardPage() {
             <div className="divide-y divide-border/40">
               {feed.map((it, i) => {
                 const badge = FEED_BADGE[it.type] || { labelKey: '', cls: 'bg-accent text-muted-foreground' }
+                // 键盘可达(2026-10-25 audit P0): 原为 div+onClick, 核心动线 Tab 不到。
+                // 无标的行 disabled: onClick/右键原本就被 it.symbol 守卫跳过, 语义等价。
                 return (
-                  <div
+                  <button
                     key={i}
-                    className={`flex items-center gap-3 py-2 min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
-                    onClick={() => it.symbol && openStock(it.symbol, it.market || 'CN', it.name || '')}
+                    type="button"
+                    disabled={!it.symbol}
+                    onClick={() => {
+                      if (!it.symbol) return
+                      openStock(it.symbol, it.market || 'CN', it.name || '')
+                    }}
                     onContextMenu={(e) => {
                       if (!it.symbol) return
                       openStockContextMenu(e, {
@@ -1096,6 +1116,7 @@ export default function DashboardPage() {
                         hasPosition: it.type === 'holding',
                       })
                     }}
+                    className={`flex w-full items-center gap-3 py-2 text-left min-h-[44px] ${it.symbol ? 'cursor-pointer hover:bg-accent/30' : ''}`}
                   >
                     <span className={`shrink-0 rounded px-1 text-[10px] ${badge.cls}`}>{badge.labelKey ? t(badge.labelKey) : it.type}</span>
                     <div className="min-w-0 flex-1">
@@ -1105,7 +1126,7 @@ export default function DashboardPage() {
                     <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] ${pctChipCls(it.change_pct)}`}>
                       {it.change_pct != null ? pct(it.change_pct) : '--'}
                     </span>
-                  </div>
+                  </button>
                 )
               })}
             </div>
@@ -1189,7 +1210,7 @@ export default function DashboardPage() {
                 <BenchChart curve={bench.curve} />
               ) : (
                 <div className="flex h-[150px] flex-col items-center justify-center gap-2 border border-dashed border-border/50 text-[11px] text-muted-foreground">
-                  {benchState === 'loading' && <span>基准对比计算中…(需拉全部持仓 K 线,约 1 分钟)</span>}
+                  {benchState === 'loading' && <span>基准对比计算中… 已 {benchElapsed}s（需拉全部持仓 K 线, 约 1 分钟）</span>}
                   {benchState === 'empty' && <span>{bench?.reason || '数据不足,暂无法计算基准对比'}</span>}
                   {benchState === 'error' && (
                     <>
@@ -1270,7 +1291,7 @@ export default function DashboardPage() {
                   ))}
                 </div>
               ) : (
-                <div className="pt-1 text-[11px] text-stock-up">✓ 集中度/分布未见明显风险</div>
+                <div className="pt-1 text-[11px] text-success">✓ 集中度/分布未见明显风险</div>
               )}
               <button
                 type="button"
@@ -1278,7 +1299,7 @@ export default function DashboardPage() {
                 disabled={aiReviewLoading}
                 className="mt-1 w-full rounded border border-border/60 py-1 text-[11px] text-primary hover:bg-accent/30 disabled:opacity-60"
               >
-                {aiReviewLoading ? 'AI 体检中…' : 'AI 体检报告'}
+                {aiReviewLoading ? 'AI 体检中…(LLM 生成, 约 20–60 秒)' : 'AI 体检报告'}
               </button>
               {aiReview?.content && (
                 <div className="prose prose-sm dark:prose-invert mt-1 max-w-none break-words text-[12px] [&_p]:my-1 [&_ul]:my-1">
@@ -1299,10 +1320,11 @@ export default function DashboardPage() {
             action={
               <button
                 type="button"
-                className="text-[11px] text-muted-foreground hover:text-foreground"
+                className="inline-flex items-center gap-0.5 text-[11px] text-primary underline-offset-2 hover:underline"
                 onClick={() => navigate('/opportunities')}
               >
                 进入机会页
+                <ChevronRight className="h-3 w-3" aria-hidden />
               </button>
             }
           />
@@ -1312,9 +1334,10 @@ export default function DashboardPage() {
             <div className="divide-y divide-border/40">
               {opportunities.slice(0, 3).map((o) => {
                 return (
-                  <div
+                  <button
                     key={`${o.stock_market}:${o.stock_symbol}`}
-                    className="flex cursor-pointer items-center gap-2 py-2 hover:bg-accent/30"
+                    type="button"
+                    className="flex w-full cursor-pointer items-center gap-2 py-2 text-left hover:bg-accent/30"
                     onClick={() => openStock(o.stock_symbol, o.stock_market, o.stock_name || o.stock_symbol)}
                     onContextMenu={(e) =>
                       openStockContextMenu(e, {
@@ -1333,7 +1356,7 @@ export default function DashboardPage() {
                       {(o.signal || o.reason) && <div className="truncate text-[11px] text-muted-foreground" title={o.signal || o.reason}>{o.signal || o.reason}</div>}
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </div>
+                  </button>
                 )
               })}
             </div>
@@ -1353,17 +1376,19 @@ export default function DashboardPage() {
                   type="button"
                   data-testid="dashboard-premarket-copilot"
                   onClick={() => navigate('/ai-copilot?agent=premarket_strategist')}
-                  className="mr-2 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  className="mr-2 inline-flex items-center gap-0.5 text-[11px] text-primary underline-offset-2 transition-colors hover:underline"
                 >
                   问参谋
+                  <ChevronRight className="h-3 w-3" aria-hidden />
                 </button>
                 <button
                   type="button"
                   data-testid="dashboard-premarket-all"
                   onClick={() => navigate('/reports')}
-                  className="shrink-0 text-[11px] text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-primary underline-offset-2 transition-colors hover:underline"
                 >
-                  全部 →
+                  全部
+                  <ChevronRight className="h-3 w-3" aria-hidden />
                 </button>
               </>
             }

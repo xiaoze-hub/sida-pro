@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { usePausedInterval } from '@panwatch/base-ui'
 import { fetchAPI } from '@panwatch/api'
 import { useNavigate } from 'react-router-dom'
+import { ChevronRight, HelpCircle } from 'lucide-react'
 import { safeFixed } from '@/lib/format'
 
 /**
@@ -90,11 +91,28 @@ export default function ResonancePanel({ className, actions }: { className?: str
   return (
     <div className={className}>
       <div className="flex items-center gap-2">
-        <span className="text-[13px] font-semibold">三指标共振</span>
+        {/* 双名纪律(2026-10-25 critique P1): 产品官方名是「数智决策」, 首页面板此前只叫
+            「三指标共振」—— 用户在别处听说的名字在首页搜不到, 是「不知道能点」的根因之一。 */}
+        <span className="text-[13px] font-semibold">数智决策·三指标共振</span>
+        <span
+          className="cursor-help"
+          title="数智决策 = 三个指标同时核对: GS趋势(筹码色带 G 区) + AI机构活跃度(≥3) + L2主力净流入(>0)。三项全满足=强共振, 两项=接近共振。每日盘后 15:50 全市场扫描落库。"
+        >
+          <HelpCircle className="h-3 w-3 text-muted-foreground" aria-label="什么是数智决策·三指标共振" />
+        </span>
         <span className="text-[10px] text-muted-foreground">趋势 × 活跃度 × 资金</span>
         {resp?.trade_date ? <span className="text-[10px] text-muted-foreground">· {resp.trade_date}</span> : null}
         <div className="ml-auto flex items-center gap-1">
           {actions}
+          <button
+            type="button"
+            onClick={() => navigate('/opportunities?tab=resonance')}
+            title="打开机会页的数智决策·铁三角共振完整扫描(可筛选/看全部标的)"
+            className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] text-primary underline-offset-2 transition-colors hover:underline"
+          >
+            全部
+            <ChevronRight className="h-3 w-3" aria-hidden />
+          </button>
           {(['resonance', 'near'] as const).map((k) => (
             <button
               key={k}
@@ -123,7 +141,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
             <span className="w-[46px] shrink-0 text-right">涨幅</span>
             <span className="w-[64px] shrink-0 text-right" title="活跃度(≥3 视为强度达标)">活跃度</span>
             <span className="w-[72px] shrink-0 text-right">资金净额</span>
-            <span className="ml-auto shrink-0">三指标</span>
+            <span className="ml-auto shrink-0" title="三指标逐项达标: 趋=GS趋势进G区 · 强=AI机构活跃度≥3 · 资=L2主力净流入>0">三指标</span>
             <span className="w-[52px] shrink-0 text-right" title="盘后 LLM 复核结论">AI</span>
           </div>
           {visible.map((it) => (
@@ -131,7 +149,8 @@ export default function ResonancePanel({ className, actions }: { className?: str
               key={it.symbol}
               type="button"
               onClick={() => navigate(`/quote/${it.symbol}`)}
-              className="flex w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
+              title={`点击查看 ${it.name || it.symbol} 个股工作台(K线/L2/主力意图)`}
+              className="flex min-h-[32px] w-full items-center gap-2 py-1 text-left text-[12px] hover:bg-accent/40"
             >
               <span className="w-[70px] shrink-0 truncate font-medium" title={it.name || it.symbol}>{it.name || it.symbol}</span>
               <span className="w-[58px] shrink-0 font-mono text-[11px] text-muted-foreground">{it.symbol}</span>
@@ -150,6 +169,7 @@ export default function ResonancePanel({ className, actions }: { className?: str
               <span className={`w-[52px] shrink-0 text-right text-[10px] ${aiTag(it).cls}`} title={aiTag(it).tip}>
                 {aiTag(it).text}
               </span>
+              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
             </button>
           ))}
           {items.length > PREVIEW_N && (

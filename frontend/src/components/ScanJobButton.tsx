@@ -73,11 +73,13 @@ export default function ScanJobButton({
       disabled={busy}
       size="sm"
       variant="ghost"
-      className="h-7 px-2 text-[11px] text-muted-foreground"
+      /* 状态可见(2026-10-25 critique): busy 时文字转 primary —— 原来灰色 ghost 转圈,
+         用户不知道系统在干活, 只能去「系统 → 任务」找。 */
+      className={`h-7 px-2 text-[11px] ${busy ? 'text-primary' : 'text-muted-foreground'}`}
       title={title ?? `${label}(后台执行, 可在「系统 → 任务」看进度或取消)`}
     >
-      <RefreshCw className={`h-3.5 w-3.5 mr-1 ${busy ? 'animate-spin' : ''}`} />
-      {label}
+      <RefreshCw className={`h-3.5 w-3.5 mr-1 ${busy ? 'animate-spin' : ''} ${busy ? 'text-primary' : ''}`} />
+      {busy ? '扫描中…' : label}
     </Button>
   )
 }

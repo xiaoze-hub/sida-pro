@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { Routes, Route, NavLink, useLocation, useNavigate, useParams, Navigate } from 'react-router-dom'
-import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch } from 'lucide-react'
+import { TrendingUp, ScrollText, Settings, List, Clock, LayoutDashboard, Github, BellRing, Sparkles, Activity, LineChart, FileText, Shield, User, Bell, PanelLeftClose, PanelLeftOpen, ServerCog, LayoutGrid, Code2, KeyRound, ShieldCheck, ClipboardList, FlaskConical, Flame, GitBranch, ChevronRight } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { useHotkeys } from '@/hooks/use-hotkeys'
@@ -557,7 +557,7 @@ function App() {
             return (
               <NavLink
                 to={ai.to}
-                title={label}
+                title="数智参谋: AI 个股研判工作台(筹码·共振·撤单·竞价), 点击进入"
                 data-testid="nav-ai-copilot"
                 className={`mb-2 flex items-center gap-2 rounded-xl border px-2.5 py-2 transition-colors ${
                   sidebarCollapsed ? 'justify-center px-0' : ''
@@ -569,12 +569,17 @@ function App() {
               >
                 <Icon className="h-4 w-4 shrink-0 text-role-watch" />
                 {!sidebarCollapsed && (
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-medium">{label}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">
-                      筹码·共振·撤单·竞价
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12px] font-medium">{label}</span>
+                      {/* 小白可用性(2026-10-25 critique P0): 副标题原是「筹码·共振·撤单·竞价」四词黑话,
+                          无动词无指向, 用户以为是公告条 —— 换动作语言, 行话保留在 title tooltip。 */}
+                      <span className="block truncate text-[10px] text-muted-foreground">
+                        AI 帮你分析股票 · 点击进入
+                      </span>
                     </span>
-                  </span>
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-role-watch" aria-hidden />
+                  </>
                 )}
               </NavLink>
             )
