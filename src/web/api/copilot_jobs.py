@@ -51,6 +51,10 @@ POLL_S = 1.0
 #: SSE 最长存活（超过就断开，前端可重连轮询）
 SSE_MAX_S = 900
 
+#: 预算巡检间隔（秒）。1s 对「跑 60 次工具调用」这种分钟级任务足够细，
+#: 又不会把 DB 压出无谓的查询；测试里可改成 0 做确定性断言。
+BUDGET_POLL_S = 1.0
+
 #: 进程内任务表（仅用于 cancel；重启后为空，靠心跳接管兜底）
 _TASKS: dict[str, asyncio.Task] = {}
 
@@ -189,6 +193,59 @@ async def _heartbeat_loop(run_id: str, stop: asyncio.Event) -> None:
             db.close()
 
 
+def _audit_budget_breach(run_id: str, user_id: str, used: int, limit: int) -> None:
+    """预算中止写审计（用独立 session —— 后台任务不能借用别人的会话）。"""
+    from src.core import copilot_quota as quota
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        quota.audit_limit_hit(
+            db, user_id=user_id, action=quota.AUDIT_TOOL_BUDGET,
+            detail=f"run={run_id} used={used} limit={limit}",
+        )
+    finally:
+        db.close()
+
+
+async def _budget_watch(run_id: str, user_id: str, target: asyncio.Task):
+    """盯着本 run 的工具调用数：超硬预算就 cancel 执行体，返回 `(原因, 已用, 上限)`。
+
+    **为什么不在工具层拦**：`agents/chat/registry.charge_tool_budget` 的软预算只是"拒绝
+    继续取数"，模型照样拿半截证据作答 —— 那正是「悄悄截断后继续」。硬预算必须在执行体
+    外层才停得住整轮，所以这里读 `copilot_steps`（trace 每次调用落一行）并中止。
+    正常结束返回 None；巡检本身出错也返回 None（fail-open，限流不该把任务打成失败）。
+    """
+    from src.core import copilot_quota as quota
+    from src.db.session import SessionLocal
+
+    while not target.done():
+        db = SessionLocal()
+        try:
+            ok, used, limit = quota.check_run_budget(db, run_id)
+        except Exception as e:  # noqa: BLE001 —— 见 docstring（fail-open）
+            from src.core.db_safe import safe_rollback
+
+            safe_rollback(db)
+            logger.warning("[copilot_jobs] 预算巡检失败，本轮不拦 %s: %r", run_id, e)
+            return None
+        finally:
+            db.close()
+        if not ok:
+            target.cancel()
+            reason = (
+                f"工具调用预算超限：已用 {used} 次 > 上限 {limit} 次，已中止本轮"
+                f"（不截断后继续作答）"
+            )
+            logger.warning("[copilot_jobs] run %s 超预算中止: %s", run_id, reason)
+            _audit_budget_breach(run_id, user_id, used, limit)
+            return reason, used, limit
+        done, _ = await asyncio.wait({target}, timeout=BUDGET_POLL_S)
+        if target in done:
+            return None
+    return None
+
+
 async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, question: str) -> None:
     stop = asyncio.Event()
     hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
@@ -196,19 +253,39 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
     _mark(run_id, status="running")
     try:
         async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
-            cid = await asyncio.wait_for(
+            inner = asyncio.create_task(asyncio.wait_for(
                 run_copilot_question(
                     user_id=user_id, conversation_id=conversation_id,
                     question=question, run_id=run_id,
                 ),
                 timeout=RUN_TIMEOUT_S,
-            )
+            ))
+            watch = asyncio.create_task(_budget_watch(run_id, user_id, inner))
+            try:
+                inner_res, watch_res = await asyncio.gather(inner, watch, return_exceptions=True)
+            finally:
+                for t in (inner, watch):
+                    if not t.done():
+                        t.cancel()
         elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
-        _mark(run_id, status="ok", elapsed_ms=elapsed, conversation_id=cid)
-    except asyncio.TimeoutError:
-        elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
-        _mark(run_id, status="failed", elapsed_ms=elapsed,
-              error=f"超时：超过 {RUN_TIMEOUT_S}s 未完成，已转后台失败（可重试）")
+        if isinstance(watch_res, tuple):
+            # 预算中止：审计已写，run 必须落 failed —— 不能因为"有半截答案"就写 ok
+            reason, used, _limit = watch_res
+            _mark(run_id, status="failed", elapsed_ms=elapsed, tool_calls=used, error=reason)
+            return
+        if isinstance(inner_res, asyncio.TimeoutError):
+            _mark(run_id, status="failed", elapsed_ms=elapsed,
+                  error=f"超时：超过 {RUN_TIMEOUT_S}s 未完成，已转后台失败（可重试）")
+            return
+        if isinstance(inner_res, asyncio.CancelledError):
+            _mark(run_id, status="cancelled", error="用户取消")
+            return
+        if isinstance(inner_res, BaseException):
+            logger.warning("[copilot_jobs] run %s 失败: %s", run_id, inner_res, exc_info=inner_res)
+            _mark(run_id, status="failed", elapsed_ms=elapsed,
+                  error=f"{type(inner_res).__name__}: {inner_res}")
+            return
+        _mark(run_id, status="ok", elapsed_ms=elapsed, conversation_id=inner_res)
     except asyncio.CancelledError:
         _mark(run_id, status="cancelled", error="用户取消")
         raise
@@ -225,13 +302,19 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
 # ── 接口 ─────────────────────────────────────────────────────────────────
 @router.post("/runs")
 async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
-    """提交即返回 run_id —— 真正的异步，不在这里等 LLM。"""
+    """提交即返回 run_id —— 真正的异步，不在这里等 LLM。
+
+    提交前先过**单用户并发上限**（P1-1.2）：超了 429 并写审计，不排队、不静默降级 ——
+    排队会让用户以为在跑，实际等到超时更糟。
+    """
+    from src.core import copilot_quota as quota
     from src.db.models import CopilotRun
     from src.db.session import SessionLocal
 
     run_id = str(uuid.uuid4())
     db = SessionLocal()
     try:
+        quota.enforce_run_concurrency(db, user)   # 超限: 内部已写审计并抛 429
         db.add(CopilotRun(
             run_id=run_id,
             conversation_id=body.conversation_id,
