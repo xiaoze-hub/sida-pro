@@ -153,19 +153,34 @@ def render(m: dict) -> str:
     return "\n".join(parts)
 
 
-def build(symbol: str, market: str = "CN", days: int = 250) -> str:
-    """工具入口：读库算指标渲染。"""
+def _load_bars(symbol: str, market: str, days: int):
+    """日线序列统一入口：**指数代码走 index_daily，个股走 klines**。
+
+    2026-10-25 事故：`get_trend_profile("000001")` 命中 klines 里的**平安银行**（现价 11.3），
+    参谋把「60日 +5.31%」当成上证指数报给用户，得出「上证没有趋势下跌」的错误结论
+    （实测上证 2026-07 的 4112 → 10-22 的 3658，跌 12%）。
+    """
+    from src.core.index_codes import is_index_code
     from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
 
+    if is_index_code(symbol, market):
+        from src.core.index_daily import load_bars as load_index_bars
+
+        return load_index_bars(symbol, days)
+    return load_qfq_bars(symbol, market, days=days)
+
+
+def build(symbol: str, market: str = "CN", days: int = 250) -> str:
+    """工具入口：读库算指标渲染。"""
     try:
-        bars = load_qfq_bars(symbol, market, days=days)
+        bars = _load_bars(symbol, market, days)
     except Exception as exc:  # noqa: BLE001
         return f"[多周期走势] 读日线失败：{type(exc).__name__}——不做推断。"
     # 指数兜底链：沪深300 → 上证指数（库里通常只有 000001，别因为缺 300 就丢掉 RS）
     index_bars, index_label = None, "沪深300"
     for code, label in (("000300", "沪深300"), ("000001", "上证指数")):
         try:
-            got = load_qfq_bars(code, "CN", days=days)
+            got = _load_bars(code, "CN", days)
         except Exception:  # noqa: BLE001
             got = []
         if len(got) > 20:
@@ -283,13 +298,11 @@ def render_range_summary(m: dict) -> str:
 
 def build_range_summary(symbol: str, start_date: str, end_date: str, market: str = "CN") -> str:
     """读库 + 实算 + 渲染。区间可能早于 250 日窗口，故按 800 天取（库里就有 800 天）。"""
-    from src.db.klines_repo import load_qfq_bars_cached as load_qfq_bars
-
     sym = str(symbol or "").strip()
     if not sym:
         return "[圈选区间] 缺少标的——不做推断。"
     try:
-        bars = load_qfq_bars(sym, market, days=800)
+        bars = _load_bars(sym, market, 800)
     except Exception as exc:  # noqa: BLE001
         return f"[圈选区间] 读日线失败：{type(exc).__name__}——不做推断。"
     return render_range_summary(compute_range_summary(bars, start_date, end_date))

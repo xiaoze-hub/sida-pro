@@ -3427,3 +3427,50 @@ async def _tool_get_macro_series(db: Session, args: dict, user: User | None = No
     )
     return "\n".join(lines)
 
+
+# ──────────────── 任意区间走势（区间问答的唯一正解）──────────────────────────
+# 2026-10-25：用户问「上证 7月到10月为什么跌」，模型只能用 get_trend_profile 的
+# 固定窗口（5/20/60/120 日），于是答成「60日 +5.31%，没有趋势下跌」——
+# 而实测 7 月 4112 → 10 月 3658 是 -12%。固定窗口回答不了任意区间，必须给专用工具。
+
+
+@register_chat_tool(
+    "get_range_summary",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_range_summary",
+            "description": (
+                "【任意区间走势】给定起止日期，算某个标的在这段区间的真实涨跌、最高最低、"
+                "成交量变化、期间最大回撤。**支持指数**（000001/399001/399006/000300 等），"
+                "指数读 index_daily，个股读 klines 前复权。"
+                "凡是问题里带具体时间段（「7月到10月」「上个月」「今年以来」）就必须用它，"
+                "不要用 get_trend_profile 的固定窗口（那只有 5/20/60/120 日）代替。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "代码：指数如 000001，个股如 600111"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
+                    "market": {"type": "string", "description": "CN/HK/US，默认 CN", "default": "CN"},
+                },
+                "required": ["symbol", "start_date", "end_date"],
+            },
+        },
+    },
+    caliber="指数=index_daily / 个股=klines 前复权（区间口径，非年化）",
+)
+async def _tool_get_range_summary(db: Session, args: dict, user: User | None = None) -> str:
+    from src.core.trend_profile import build_range_summary
+
+    symbol = str(args.get("symbol") or "").strip().upper()
+    start = str(args.get("start_date") or "").strip()
+    end = str(args.get("end_date") or "").strip()
+    market = str(args.get("market") or "CN").strip().upper() or "CN"
+    if not symbol or not start or not end:
+        return "需要 symbol + start_date + end_date 三个参数（日期格式 YYYY-MM-DD）。"
+    try:
+        return await asyncio.to_thread(build_range_summary, symbol, start, end, market)
+    except Exception as exc:  # noqa: BLE001
+        return f"[区间走势] 取数失败：{type(exc).__name__}——不做推断。"

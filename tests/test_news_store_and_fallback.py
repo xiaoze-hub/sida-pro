@@ -145,4 +145,4 @@ def test_新增两个工具都已进规格表():
 
     names = {s["function"]["name"] for s in chat_tool_schemas()}
     assert {"search_news", "web_search_fallback"} <= names
-    assert len(CHAT_TOOL_REGISTRY) == 75
+    assert len(CHAT_TOOL_REGISTRY) == 76
