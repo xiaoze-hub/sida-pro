@@ -2353,6 +2353,9 @@ class CopilotRun(Base):
     error = Column(Text, nullable=True)
     tool_calls = Column(Integer, nullable=False, default=0)
     elapsed_ms = Column(Integer, nullable=True)
+    # 2026-10-25: Durable Run 心跳。进程重启/worker 崩溃后靠它判"这个 run 还有人管吗"，
+    # 避免库里留下永久 running 的幽灵运行。见 src/core/copilot_runtime.py
+    heartbeat_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
 

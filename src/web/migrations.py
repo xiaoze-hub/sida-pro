@@ -6062,6 +6062,26 @@ def _m223_position_defense_price(conn: Connection) -> None:
     )
 
 
+def _m224_copilot_run_heartbeat(conn: Connection) -> None:
+    """copilot_runs 加 heartbeat_at 列（2026-10-25, P0-0.1 Durable Run）。
+
+    为什么需要: 此前 run 只有 status, 进程重启/容器发布后库里会留下永久 running 的
+    "幽灵运行" —— 用户看到"正在分析"卡住, 既不会失败也不会重试, 也没人收尸。
+    有心跳才能按 run 级事实判断"还有没有人管它"(多 worker 下"进程活着"不等于"run 在跑")。
+
+    为什么 nullable 且不回填: NULL 恰好表达"这条老记录从没写过心跳"; 接管逻辑把
+    NULL 视为超时(写入它的那次进程早就不在了), 回填 now() 反而会把尸体伪装成活的。
+
+    幂等可重跑(列已存在则跳过)。
+    """
+    _add_column_if_missing(
+        conn,
+        "copilot_runs",
+        "heartbeat_at",
+        "ALTER TABLE copilot_runs ADD COLUMN heartbeat_at TIMESTAMP",
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6279,6 +6299,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(221, "factor_winrate_daily", _m221_factor_winrate_daily),
     Migration(222, "market_replay_daily", _m222_market_replay_daily),
     Migration(223, "position_defense_price", _m223_position_defense_price),
+    Migration(224, "copilot_run_heartbeat", _m224_copilot_run_heartbeat),
 )
 
 

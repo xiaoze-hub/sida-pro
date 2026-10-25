@@ -53,6 +53,22 @@ async def lifespan(app):
     except Exception:
         pass
     init_db()
+    # 2026-10-25 P0-0.1: 接管上个进程遗留的中断 run（心跳超时的活跃态）。
+    # 不自动重跑 —— 只改状态为 failed 并写明"可重试"，重试由用户点（重跑会烧额度，
+    # 且用户可能已经看到半截答案）。失败不阻断启动：这是收尸，不是启动前提。
+    try:
+        from src.core.copilot_runtime import reap_stale_runs
+        from src.db.session import SessionLocal
+
+        _reap_db = SessionLocal()
+        try:
+            _reaped = reap_stale_runs(_reap_db)
+            if _reaped:
+                logger.warning("[启动] 接管 %d 个中断的参谋 run: %s", len(_reaped), _reaped[:5])
+        finally:
+            _reap_db.close()
+    except Exception:
+        logger.warning("[启动] 接管中断 run 失败(跳过, 不阻断启动)", exc_info=True)
     # 2026-09-01 审计修复: 确保 report_scheduler 局部变量始终绑定(默认 None),
     # 否则当 _leader_ok 为 False 或 ReportScheduler 构造抛异常(被 except 吞)时,
     # 下方 shutdown 的 `if report_scheduler:` 会触发 UnboundLocalError, 且报告
