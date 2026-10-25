@@ -8,8 +8,11 @@ when: [题材龙头, 板块地位, 谁是龙头, 跟风, 中军, 板块内, 概�
 # 2026-10-23 复核：7 个工具里 5 个 required 含 symbol（sectors/main_intent/decision_pioneer/
 # technical/catalyst），市场级只剩 hot_stocks + sentiment_cycle —— 展不开标的时跑管线
 # 会退化成"两个工具硬答板块地位"，比多轮 loop 更差。故 scope 保持默认 symbol、
-# pipeline 保持关闭；等有板块→成分股解析（板块名 → 代码）再谈。
+# pipeline 保持关闭。
+# 2026-10-25：`get_market_ranking` 接入后，只有板块名没代码时也能先定位板块
+# （板块涨跌幅/主力净流入/涨跌家数/领涨股），"板块地位"不再只能靠两个工具硬答。
 tools:
+  - get_market_ranking
   - get_stock_sectors
   - get_hot_stocks
   - get_sentiment_cycle

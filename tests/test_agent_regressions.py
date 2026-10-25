@@ -127,7 +127,7 @@ def _c12_tool_count_stable():
     """工具数变化必须是有意的（2026-10-24 = 73：+search_news +web_search_fallback）。"""
     from src.agents.chat.registry import CHAT_TOOL_REGISTRY
 
-    assert len(CHAT_TOOL_REGISTRY) == 76
+    assert len(CHAT_TOOL_REGISTRY) == 77
 
 
 def _c13_tool_schema_name_matches():

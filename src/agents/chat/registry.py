@@ -3532,3 +3532,90 @@ async def _tool_get_range_summary(db: Session, args: dict, user: User | None = N
         return await asyncio.to_thread(build_range_summary, symbol, start, end, market)
     except Exception as exc:  # noqa: BLE001
         return f"[区间走势] 取数失败：{type(exc).__name__}——不做推断。"
+
+# ──────────────── 市场级排行（腾讯免配额源）─────────────────────────────
+# 2026-10-25：通达信问小达配额用尽（MCP error -32603），「今日主力净流入前10」
+# 「今日涨幅前10的概念板块」这类市场级排行开始答不出来。腾讯排行 API 免费、实时、
+# 个股+行业+概念+地区全覆盖，字段含涨跌幅/换手/量比/主力净流入/板块涨跌家数/领涨股。
+
+
+@register_chat_tool(
+    "get_market_ranking",
+    schema={
+        "type": "function",
+        "function": {
+            "name": "get_market_ranking",
+            "description": (
+                "【市场级排行】按维度取实时榜单，覆盖个股/行业板块/概念板块/地区板块。"
+                "metric 可选：change(涨跌幅) / amount(成交额) / speed(涨速) / main_inflow(主力净流入)。"
+                "典型问法：「今日主力净流入前10的A股」「今日涨幅前10的概念板块」「哪个行业最强」。"
+                "板块结果里的涨跌家数是**上涨/下跌家数**，不是涨停家数——问涨停家数要另用涨停池。"
+                "数据为腾讯排行实时快照、非复权。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["stock", "industry", "concept", "region"],
+                        "description": "个股 / 行业板块 / 概念板块 / 地区板块，默认 stock",
+                    },
+                    "metric": {
+                        "type": "string",
+                        "enum": ["change", "amount", "speed", "main_inflow"],
+                        "description": "排序指标，默认 change",
+                    },
+                    "limit": {"type": "integer", "description": "返回条数 1-50，默认 10"},
+                },
+                "required": [],
+            },
+        },
+    },
+    caliber="腾讯排行 · 实时快照 · 非复权；板块涨跌家数≠涨停家数",
+)
+async def _tool_get_market_ranking(db: Session, args: dict, user: User | None = None) -> str:
+    from marketdata.vendors.tencent_rank import METRIC_LABEL, SCOPE_LABEL, fetch_board_rank
+
+    scope = str(args.get("scope") or "stock").strip().lower()
+    metric = str(args.get("metric") or "change").strip().lower()
+    try:
+        limit = int(args.get("limit") or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 50))  # 边界防御：不把模型给的 999 原样传给上游
+
+    res = await asyncio.to_thread(fetch_board_rank, scope, metric, limit)
+    if not res.get("available"):
+        return f"[市场排行] 取不到数据：{res.get('reason') or '未知原因'}——不做推断，也不当作“今天没有”。"
+
+    rows = res["rows"]
+    head = (
+        f"[{SCOPE_LABEL.get(scope, scope)} · {METRIC_LABEL.get(metric, metric)}榜] "
+        f"共 {len(rows)} 条 | 口径：{res['caliber']}"
+    )
+    lines = [head]
+    for i, r in enumerate(rows, 1):
+        chg = r.get("change_pct")
+        chg_s = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else "—"
+        if scope == "stock":
+            mi = r.get("main_inflow")
+            mi_s = f"{mi / 10000:+.2f}亿" if isinstance(mi, (int, float)) else "—"
+            lines.append(
+                f"{i}. {r.get('name')}({r.get('code')}) 现价 {r.get('price')} 涨跌 {chg_s} "
+                f"换手 {r.get('turnover_rate')}% 量比 {r.get('volume_ratio')} 主力净流入 {mi_s}"
+            )
+        else:
+            mi = r.get("main_inflow")
+            mi_s = f"{mi / 10000:+.2f}亿" if isinstance(mi, (int, float)) else "—"
+            leader = r.get("leader") or {}
+            ld = leader.get("name") or "—"
+            ldp = leader.get("change_pct")
+            ld_s = f"{ldp:+.2f}%" if isinstance(ldp, (int, float)) else "—"
+            lines.append(
+                f"{i}. {r.get('name')}({r.get('code')}) 涨跌 {chg_s} 主力净流入 {mi_s} "
+                f"涨/跌家数 {r.get('up_down') or '—'} 领涨 {ld} {ld_s} 换手 {r.get('turnover_rate')}%"
+            )
+    if scope != "stock":
+        lines.append("注：涨/跌家数是板块内上涨与下跌家数，不是涨停家数。")
+    return "\n".join(lines)
+

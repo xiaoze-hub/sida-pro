@@ -65,6 +65,11 @@ def test_兜底自身异常不抛_不能把工具搞挂(monkeypatch):
     assert reg._wenda_index_fallback("上证指数现在多少点") == ""
 
 
-def test_工具数不变():
-    """兜底是内部逻辑，不许新增工具（注册表 76 是钉子）。"""
-    assert len(reg.CHAT_TOOL_REGISTRY) == 76
+def test_兜底没有新增工具():
+    """兜底是内部逻辑，不许为它新增工具。
+
+    数量本身是别人维护的钉子（2026-10-25 因 get_market_ranking 由 76 → 77），
+    所以这里不重复钉总数，改为钉"兜底挂在 tdx_wenda 上、没有变成独立工具"。
+    """
+    assert "tdx_wenda" in reg.CHAT_TOOL_REGISTRY
+    assert "tdx_wenda_index_fallback" not in reg.CHAT_TOOL_REGISTRY

@@ -7,8 +7,8 @@
 
 | 名字 | 含义 | 数量 |
 |---|---|---|
-| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **76** |
-| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **75** |
+| **注册表** | `CHAT_TOOL_REGISTRY`，name → `ChatTool` | **77** |
+| **对模型可见** | `chat_tool_schemas()` 导出，有 schema 的那些 | **76** |
 | **handler-only** | 有 handler 但 `schema is None`，不暴露给模型 | **1** |
 | **不进兜底** | `fallback=False`，只在挂了它的配方里可见（见 RECIPE-006） | **2** |
 
@@ -33,3 +33,9 @@ handler-only 的一个：`get_opportunities`。
 （委托粒度 / 拆单隐匿度 / 撤单不对称）。两者都 `fallback=True`（属通用取数，闲聊问到也
 应当能取），但只在挂了它们的配方里优先使用。**与东财四档、腾讯逐笔不可换算**，
 同屏必须各带 caliber 标签。
+
+2026-10-25 新增 `get_market_ranking`（市场级排行，追加在注册表**末尾**）：
+个股 / 行业板块 / 概念板块 / 地区板块 × 涨跌幅 / 成交额 / 涨速 / 主力净流入。
+数据源是腾讯排行（`proxy.finance.qq.com/cgi/cgi-bin/rank/...`），**免配额零 key**；
+之所以不用通达信问小达，是因为它的配额已经用尽（`MCP error -32603`）。
+口径：`腾讯排行 · 实时快照 · 非复权`；**板块的涨/跌家数不是涨停家数**，两者不可混用。
