@@ -18,6 +18,7 @@ from sqlalchemy import or_
 from src.core.copilot_brief import build_copilot_brief
 from src.core.trade_phase import phase_meta
 from src.web.api.auth import get_current_user
+from src.web.database import get_db as _get_db
 
 logger = logging.getLogger(__name__)
 
@@ -826,3 +827,103 @@ def get_proposals_stats(
         "top": items[0] if items else None,
         "summary": _summary(db, getattr(user, "id", None)),
     }
+
+# ──────────────── 经验库（实验台，P2-2.4）────────────────────────────────
+# 只读：把 `harness_experiments` 里的事实原样展示出来。
+# **不在这里做判断**——verdict 是写入时定的（keep/rollback），这里只读不改。
+# 也不能"补 0"：baseline/candidate 缺就是缺，前端显示 —。
+
+
+@router.get("/experiments")
+def list_experiments(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    verdict: str | None = Query(None),
+    recipe_id: str | None = Query(None),
+    db=Depends(_get_db),
+    user=Depends(get_current_user),
+):
+    """分页列出配方实验（改动 → 指标变化 → 保留/回滚）。"""
+    from src.core.harness_experiments import VERDICTS, verdict_stats
+    from src.db.models import HarnessExperiment
+
+    if verdict and verdict not in VERDICTS:
+        return {"available": False,
+                "reason": f"verdict 只能是 {'/'.join(VERDICTS)}，收到 {verdict}",
+                "items": [], "total": 0, "stats": {}}
+
+    q = _scope_experiments(db, user)
+    if verdict:
+        q = q.filter(HarnessExperiment.verdict == verdict)
+    if recipe_id:
+        q = q.filter(HarnessExperiment.recipe_id == recipe_id)
+
+    total = q.count()
+    rows = (
+        q.order_by(HarnessExperiment.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "available": True,
+        "reason": "",
+        "items": [_experiment_row(r) for r in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "stats": verdict_stats(db, user_id=user.id),
+    }
+
+
+@router.get("/experiments/{exp_id}")
+def get_experiment(
+    exp_id: int,
+    db=Depends(_get_db),
+    user=Depends(get_current_user),
+):
+    """单条实验详情：基线/候选指标对照 + 回滚原因 + 证据文件是否存在。"""
+    from pathlib import Path
+
+    from src.db.models import HarnessExperiment
+
+    row = _scope_experiments(db, user).filter(HarnessExperiment.id == exp_id).first()
+    if row is None:
+        return {"available": False, "reason": "没找到这条实验记录", "item": None}
+
+    item = _experiment_row(row)
+    item["baseline"] = row.baseline or {}
+    item["candidate"] = row.candidate or {}
+    item["reasons"] = list(row.reasons or [])
+    item["note"] = row.note
+    # 证据文件是落盘路径：**文件不在就说不存在**，不要让前端以为能下载
+    ep = (row.evidence_path or "").strip()
+    item["evidence_path"] = ep or None
+    item["evidence_exists"] = bool(ep) and Path(ep).is_file()
+    return {"available": True, "reason": "", "item": item}
+
+
+def _scope_experiments(db, user):
+    """按 user_id 隔离；admin 可看全部（平台级实验事实）。
+
+    `harness_experiments.user_id` 是"谁发起的"，但实验结论是平台知识，
+    所以管理员看全量、普通账号只看自己发起的。两边都是**显式**过滤条件。
+    """
+    from src.db.models import HarnessExperiment
+
+    q = db.query(HarnessExperiment)
+    if getattr(user, "is_admin", False) or getattr(user, "role", "") == "admin":
+        return q
+    return q.filter(HarnessExperiment.user_id == user.id)
+
+
+def _experiment_row(r) -> dict:
+    return {
+        "id": r.id,
+        "recipe_id": r.recipe_id,
+        "change_summary": r.change_summary,
+        "verdict": r.verdict,
+        "user_id": r.user_id,
+        "created_at": str(r.created_at or ""),
+    }
+

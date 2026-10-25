@@ -69,6 +69,7 @@ const enUS: Messages = {
     auction: 'Auction',
     aiCopilot: 'AI Copilot',
     copilotRuns: 'Copilot Runs',
+    copilotExperiments: 'Experiments',
     darkFundTop: 'Dark Flow TOP',
     caliberCompare: 'Caliber Compare',
     decisionLedger: 'Decision Ledger',

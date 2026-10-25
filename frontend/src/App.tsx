@@ -18,6 +18,8 @@ const AiCopilotPage = lazyWithRetry(() => import('@/pages/AiCopilot'), 'ai-copil
 const CopilotGovernancePage = lazyWithRetry(() => import('@/pages/CopilotGovernance'), 'copilot-governance-page')
 // 参谋任务列表(2026-10-25): 只读回放每轮问答 —— 状态/问题/配方/工具数/耗时/时间, 点行展开工具步骤
 const CopilotRunsPage = lazyWithRetry(() => import('@/pages/copilot/RunsPage'), 'copilot-runs-page')
+// 2026-10-25 P2-2.4: 经验库/实验台（只读）
+const ExperimentsPage = lazyWithRetry(() => import('@/pages/Experiments'), 'experiments-page')
 const CopilotRunDetailPage = lazyWithRetry(() => import('@/pages/copilot/RunDetailPage'), 'copilot-run-detail')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
@@ -748,6 +750,7 @@ function App() {
               <Route path="/copilot-governance" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotGovernancePage /></PermGuard>} />
               {/* 参谋任务列表(2026-10-25): 只读, 与治理看板同档权限(view_quotes) */}
               <Route path="/copilot/runs" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunsPage /></PermGuard>} />
+              <Route path="/copilot/experiments" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ExperimentsPage /></PermGuard>} />
               {/* 单轮证据卡(2026-10-25): 详情页, 同档权限 */}
               <Route path="/copilot/runs/:runId" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunDetailPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}

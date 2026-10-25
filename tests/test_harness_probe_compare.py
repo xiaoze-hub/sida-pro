@@ -143,3 +143,86 @@ def test_compare_某个_case抛异常不拖垮整批(d3, monkeypatch):
     res = d3.compare("http://x", "t", [("q1", None), ("q2", None)], "cand")
     assert res["candidate"]["errors"] == 1
     assert res["decision"]["verdict"] == "rollback", "候选失败必须判回滚"
+
+
+# ── P0-0.4：三条客观判据（2026-10-25）────────────────────────────────────
+# 为什么单独测：`decide()` 只看 pass_rate + cost，会让"结构没退化但关键位变差"的改动静默通过。
+# 这里钉死「任一维度退化即 rollback」，以及「不可用维度不参与比较」。
+
+
+def _rows(texts, agent=None):
+    return [{"question": "q", "text": t, "structured": True, "tool_calls": 3, "chars": 300,
+             "seconds": 1.0, "run_id": f"r{i}", "error": None}
+            for i, t in enumerate(texts)]
+
+
+def test_acceptance_缺段能说出缺哪段(d3):
+    m = d3.acceptance_metrics(_rows(["【结论】只有结论"]), "deep_diagnosis")
+    assert m["available"] is True
+    assert m["acceptance_rate"] == 0.0
+    assert m["missing_top"], "必须报出缺了哪几段，不能只给一个 0"
+
+
+def test_acceptance_段落全齐为满(d3):
+    want = d3._expected_section_list("deep_diagnosis")
+    text = "".join(f"【{w}】内容" for w in want)
+    m = d3.acceptance_metrics(_rows([text]), "deep_diagnosis")
+    assert m["acceptance_rate"] == 1.0
+
+
+def test_fitness_无库必须明说不可用_不冒充(d3):
+    m = d3.fitness_metrics(["r1", "r2"], db=None)
+    assert m["available"] is False
+    assert "未接本地库" in m["reason"]
+    assert m["hit_rate"] is None, "没对账过就不能给命中率"
+
+
+def test_fitness_行情没走完不计入分母但报覆盖率(d3, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_score_run(db, rid, horizon_td=3):
+        calls["n"] += 1
+        if rid == "r1":
+            return {"available": True, "hit_resist": True, "hit_support": False}
+        return {"available": False, "reason": "行情尚未走完"}
+
+    import src.core.fitness_keypoints as fk
+    monkeypatch.setattr(fk, "score_run", fake_score_run)
+    m = d3.fitness_metrics(["r1", "r2"], db=object())
+    assert m["scored"] == 1 and m["n"] == 2
+    assert m["coverage"] == 0.5
+    assert m["hit_rate"] == 0.5, "1 命中 / (1 样本 × 支撑阻力 2 次)"
+
+
+def test_结构没退化但关键位变差也要回滚(d3):
+    base = {"errors": 0, "cost": 100.0,
+            "acceptance": {"available": True, "acceptance_rate": 1.0},
+            "fitness": {"available": True, "hit_rate": 0.8, "coverage": 1.0}}
+    cand = {"errors": 0, "cost": 100.0,
+            "acceptance": {"available": True, "acceptance_rate": 1.0},
+            "fitness": {"available": True, "hit_rate": 0.4, "coverage": 1.0}}
+    d = d3.decide3(base, cand)
+    assert d["verdict"] == "rollback"
+    assert any("关键位命中率" in r for r in d["reasons"])
+
+
+def test_两侧fitness都不可用时不比该维度(d3):
+    base = {"errors": 0, "cost": 10.0,
+            "acceptance": {"available": True, "acceptance_rate": 1.0},
+            "fitness": {"available": False, "hit_rate": None}}
+    cand = {"errors": 0, "cost": 10.0,
+            "acceptance": {"available": True, "acceptance_rate": 1.0},
+            "fitness": {"available": False, "hit_rate": None}}
+    assert d3.decide3(base, cand)["verdict"] == "keep", "不可用维度不能判退化"
+
+
+def test_三维新工具全提升则保留(d3):
+    base = {"errors": 0, "cost": 100.0,
+            "acceptance": {"available": True, "acceptance_rate": 0.5},
+            "fitness": {"available": True, "hit_rate": 0.3}}
+    cand = {"errors": 0, "cost": 110.0,
+            "acceptance": {"available": True, "acceptance_rate": 0.9},
+            "fitness": {"available": True, "hit_rate": 0.6}}
+    d = d3.decide3(base, cand)
+    assert d["verdict"] == "keep"
+    assert d["criteria"]["fitness"]["cand"] == 0.6
