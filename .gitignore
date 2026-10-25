@@ -47,3 +47,7 @@ htmlcov/
 .workbuddy/.DS_Store
 .DS_Store
 docs/PROJECT_KB.md
+
+# 本地部署运行日志(2026-10-25)
+backend.log
+backend.err

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAPI } from '@panwatch/api'
-import { Activity, Flame, ShieldAlert, Sparkles } from 'lucide-react'
+import { Activity, ChevronRight, Flame, HelpCircle, ShieldAlert, Sparkles } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { PHASE_LABEL, type PhaseKey } from '@/lib/market-phase'
 import { safeFixed } from '@/lib/format'
 
@@ -62,6 +63,7 @@ interface DecisionPioneerResp {
 }
 
 export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market: string }) {
+  const navigate = useNavigate()
   const [phaseData, setPhaseData] = useState<string | null>(null)
   const [catalystCount, setCatalystCount] = useState<number | null>(null)
   const [wyckoffStage, setWyckoffStage] = useState<string | null>(null)
@@ -201,10 +203,24 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
         </div>
       ) : null}
 
-      {/* 选股铁三角: 数智决策三指标共振状态机 */}
+      {/* 选股铁三角: 数智决策三指标共振状态机。
+          小白可用性(2026-10-25): 冠名「数智决策」与全站统一, 加帮助 tooltip,
+          结论包成可点按钮(进全市场共振页深层链接)。三态配色与 title 原样保留。 */}
       {resonanceState ? (
         <div className="flex items-center gap-1">
-          <span className="text-muted-foreground">铁三角共振:</span>
+          <span className="text-muted-foreground">数智决策·铁三角:</span>
+          <span
+            className="cursor-help"
+            title="数智决策·铁三角 = GS趋势(筹码色带 G 区) + AI机构活跃度(≥3) + L2主力净流入(>0)。三项全满足=强共振。点击右侧结论可看全市场共振名单。"
+          >
+            <HelpCircle className="h-3 w-3 text-muted-foreground" aria-label="什么是数智决策·铁三角" />
+          </span>
+          <button
+            type="button"
+            onClick={() => navigate('/opportunities?tab=resonance')}
+            title="查看全市场数智决策·铁三角共振名单(机会页)"
+            className="flex items-center gap-0.5 rounded transition-colors hover:underline"
+          >
           <span
             className={`font-semibold ${
               resonanceState.warning === 'opportunity'
@@ -223,7 +239,9 @@ export function ThreeTierVerdictRow({ symbol, market }: { symbol: string; market
             title={resonanceState.action}
           >
             {resonanceState.state}
-          </span>
+            </span>
+            <ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden />
+          </button>
         </div>
       ) : null}
 

@@ -45,6 +45,14 @@ v0.70.0 实测：后台任务完成，界面却写「✅ 已完成，但没拿�
 前端 `tsc 0 / ui-rules OK / eslint 0 / vitest 225 文件 1746 用例`（+12 jobs 用例）。
 ## 2026-10-25
 
+### feat-数智决策入口补全(机会页深层链接 + 工作台铁三角可点)
+
+- **背景**: 本地部署走查发现修复批漏了 PR#14 的两块(机会页签改名+?tab= 解析、工作台铁三角结论可点) —— 首页「全部›」虽能到机会页但落的是默认页签。
+- `frontend/src/lib/url-tabs.ts`(新) + `src/pages/Opportunities.tsx`: `?tab=` 挂载时消费一次(白名单校验), resonance 页签改名「数智决策·铁三角共振」。
+- `src/components/ThreeTierVerdictRow.tsx`: 「铁三角共振:」→「数智决策·铁三角:」+ 帮助 tooltip + 结论包成可点按钮(进 /opportunities?tab=resonance), 三态配色与 title 原样保留。
+- `tests/lib/url-tabs.test.ts`(新 3 用例) + three-tier-resonance-color 测试补 MemoryRouter(组件新增 useNavigate)。
+- **测了**: tsc 0 错; vitest 3 文件 14 用例全绿; check_ui_rules OK。
+
 ### feat-首页可用性修复批(impeccable critique P0/P1/P2)
 
 - **来源**: /impeccable 全量流水线 —— 双代理 critique(23/40)+audit(14/20) 的优先问题, 用户裁定「专家为主小白可用」+「去卡片化解禁, UI 收益优先」。
