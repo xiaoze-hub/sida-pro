@@ -444,13 +444,69 @@ async def _tool_get_capital_flow(db: Session, args: dict, user: User | None = No
     return f"[数据源: 东财四档·资金流向口径]\n{result}" if result else f"未能获取 {market}:{symbol} 的资金流向数据。"
 
 
+def _wenda_index_fallback(question: str) -> str:
+    """问小达没数据时，若问的是**指数点位**就用腾讯实时兜底（2026-10-25）。
+
+    生产事故：用户问「上证指数现在多少点」，模型这次选了 `tdx_wenda`（而非
+    `get_thsdk_market_data_index`），问小达返回空 → 直接答「查不到上证点位」。
+    同一时刻首页指数条是好的 —— **不是没数据，是选错入口且这条入口没兜底**。
+
+    只在问题里出现指数名/代码时才兜底：市场级排行问题（今日主力净流入前10）
+    不该被指数行情顶掉，宁可如实说"问小达无结果"。
+    """
+    try:
+        from src.agents.chat.tools_thsdk import _tencent_index_fallback
+        from src.core.index_codes import INDEX_CODES
+
+        q = question or ""
+        code = ""
+        # 先按代码精确命中（000001 / 399001 …）
+        for c in INDEX_CODES:
+            if c in q:
+                code = c
+                break
+        if not code:
+            # 再按名称：全称优先，其次短名（"上证"→上证指数、"创业板"→创业板指）
+            for c, name in INDEX_CODES.items():
+                if name and name in q:
+                    code = c
+                    break
+            if not code:
+                for c, name in INDEX_CODES.items():
+                    short = name.replace("指数", "")
+                    if short and short in q:
+                        code = c
+                        break
+        if not code:
+            return ""
+        rows = _tencent_index_fallback(code)
+        if not rows:
+            return ""
+        r0 = rows[0] if isinstance(rows[0], dict) else {}
+        price = r0.get("price")
+        pct = r0.get("change_pct")
+        name = r0.get("name") or INDEX_CODES.get(code, "")
+        parts = [f"{name} 现价 {price}"]
+        if pct is not None:
+            try:
+                parts.append(f"{float(pct):+.2f}%")
+            except Exception:
+                pass
+        return (
+            "[指数实时行情 · 问小达无结果，已用腾讯实时兜底（与首页指数条同源）]\n"
+            + "  ".join(parts)
+        )
+    except Exception:
+        return ""
+
+
 @register_chat_tool(
     "tdx_wenda",
     schema={
         "type": "function",
         "function": {
             "name": "tdx_wenda",
-            "description": "通达信问小达：自然语言投研查询。用于回答市场级的选股/排行/资金流向问题，如“今日主力净流入前10的A股”“今日涨幅前10的概念板块”“近3日主力净流入前10的半导体”“今日涨停家数最多的概念板块”“今日龙虎榜机构净买入前10”。适合不指定个股、而是看板块/全市场维度的问题。",
+            "description": "通达信问小达：自然语言投研查询。**只用于市场级排行/选股/资金流向**，如“今日主力净流入前10的A股”“今日涨幅前10的概念板块”“今日涨停家数最多的概念板块”“今日龙虎榜机构净买入前10”。取**指数点位**（上证/深证/创业板/沪深300 现在多少点）不要用它，用 get_thsdk_market_data_index（那边有腾讯兜底）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -472,10 +528,12 @@ async def _tool_tdx_wenda(db: Session, args: dict, user: User | None = None) -> 
         # 热修 2026-08-14: 同步网络调用包 to_thread, 防阻塞事件循环
         res = await asyncio.to_thread(ask_wenda, question)
         if not res or not isinstance(res, dict):
-            return f"通达信问小达未返回数据: {question}"
+            fb = _wenda_index_fallback(question)
+            return fb or f"通达信问小达未返回数据: {question}"
         rows = res.get("data") or []
         if not rows:
-            return f"通达信问小达无结果: {question}"
+            fb = _wenda_index_fallback(question)
+            return fb or f"通达信问小达无结果: {question}"
         lines = [f"通达信问小达查询结果「{question}」(共{len(rows)}条):"]
         for r in rows[:15]:
             if not isinstance(r, dict):
