@@ -13,6 +13,7 @@ import { chatApi } from '@panwatch/api'
 import SafeMarkdown from '@/components/SafeMarkdown'
 import { AnswerCard } from '@/components/copilot/AnswerCard'
 import InlineSteps from '@/components/copilot/InlineSteps'
+import { matchRunForMessage } from '@/lib/copilot/match-run'
 import { EvidenceReadinessStrip } from '@/components/copilot/EvidenceReadinessStrip'
 import {
   emptyReadiness,
@@ -566,19 +567,8 @@ export default function AiCopilotPage() {
    * 气泡已出现就贴在气泡顶部（定稿时原地不动），还没首字就先挂在对话流尾部。
    */
 
-  /** 把助手消息对到它那一轮 run：用前面那条用户提问的文本匹配（一轮=一个问题）。
-   *  匹配不到就返回 null —— 宁可不显示，也不张冠李戴把别人的工具链挂上去。 */
-  const runForMessage = (i: number) => {
-    const m = msgs[i]
-    if (!m || m.role !== 'assistant') return null
-    let q = ''
-    for (let k = i - 1; k >= 0; k -= 1) {
-      if (msgs[k].role === 'user') { q = (msgs[k].content || '').trim(); break }
-    }
-    if (!q) return null
-    const hit = runsState.runs.filter((r) => (r.question || '').trim() === q)
-    return hit.length ? hit[0] : null
-  }
+  const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
+
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
 
   return (

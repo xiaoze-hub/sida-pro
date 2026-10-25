@@ -46,23 +46,23 @@ describe('computeBroadcast（纯函数）', () => {
   it('梯队与质量拆成两句，数字都来自接口', () => {
     const f = computeBroadcast(FULL)
     // 梯队不再重复「涨停 82」(上方 KPI 已有)，只补结构
-    expect(f.ladder).toContain('首板 70')
-    expect(f.ladder).toContain('2板 12')
-    expect(f.ladder).toContain('3板+ 3')
-    expect(f.ladder).toContain('最高 6 板')
+    expect(f.ladder).toContain('首板70')
+    expect(f.ladder).toContain('2板12')
+    expect(f.ladder).toContain('3板+3')
+    expect(f.ladder).toContain('最高6板')
     expect(f.ladder).not.toContain('涨停 82')
     // 质量格：比率为主，跌停放这里
-    expect(f.quality).toContain('封板 87.2%')
-    expect(f.quality).toContain('炸板 12')
-    expect(f.quality).toContain('炸板率 12.8%')
-    expect(f.quality).toContain('晋级 36.4%')
-    expect(f.quality).toContain('跌停 6')
+    expect(f.quality).toContain('封板87.2%')
+    expect(f.quality).toContain('炸12')
+    expect(f.quality).toContain('炸板率12.8%')
+    expect(f.quality).toContain('晋级36.4%')
+    expect(f.quality).toContain('跌停6')
   })
 
   it('板块最多 4 个（横向窄格，多了会换行撑高卡片）', () => {
     const f = computeBroadcast(FULL)
-    expect(f.sectors.split(' · ').length).toBe(4)
-    expect(f.sectors).toContain('专用设备 8')
+    expect(f.sectors.split('·').length).toBe(4)
+    expect(f.sectors).toContain('专用设备8')
     expect(f.sectors).not.toContain('自动化设')
     expect(f.sectors).not.toContain('第七个')
   })
@@ -99,10 +99,10 @@ describe('MarketBroadcast 四态', () => {
     fetchAPI.mockResolvedValueOnce(FULL)
     render(<MarketBroadcast />)
     await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
-    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板 70')
-    expect(screen.getByTestId('broadcast-sectors').textContent).toContain('专用设备 8')
+    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板70')
+    expect(screen.getByTestId('broadcast-sectors').textContent).toContain('专用设备8')
     // 口径并入「涨停潮」标题，不再单独占一行（省卡片高度）
-    expect(screen.getByTestId('broadcast-caliber').textContent).toContain('非涨幅榜')
+    expect(screen.getByTestId('broadcast-caliber').textContent).toContain('按涨停家数')
     expect(screen.getByTestId('broadcast').textContent).toContain('基准日 2026-10-23')
   })
 
@@ -111,7 +111,7 @@ describe('MarketBroadcast 四态', () => {
     render(<MarketBroadcast />)
     await waitFor(() => expect(screen.getByTestId('broadcast-empty')).toBeTruthy())
     expect(screen.getByTestId('broadcast-empty').textContent).toContain('尚未生成')
-    expect(document.body.textContent).not.toContain('涨停 0')
+    expect(document.body.textContent).not.toContain('涨停0')
   })
 
   it('读取失败：显式报错 + 重试提示，不伪装空态', async () => {
@@ -133,7 +133,7 @@ describe('MarketBroadcast 四态', () => {
     render(<MarketBroadcast />)
     await waitFor(() => expect(screen.getByTestId('broadcast')).toBeTruthy())
     expect(screen.queryByTestId('broadcast-sectors')).toBeNull()
-    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板 20')
+    expect(screen.getByTestId('broadcast-ladder').textContent).toContain('首板20')
   })
 
   it('横向四格：容器是 grid，不是竖排堆叠', async () => {
