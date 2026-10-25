@@ -1,3 +1,10 @@
+
+### v0.60.0 附：一处测试对齐
+`tests/test_pipeline_router.py::test_trend_profile_build_uses_scope_cache` 原断言「作用域内两次 build 打 3 次库」——
+其中 2 次是基准指数兜底链查 klines 的 000300/000001。指数改走 index_daily 后，这条链**不再碰 klines**，
+计数变成 1 次（个股被 scope 缓存）。断言改为 1 / 出作用域 2，并在 docstring 写清行为变更原因
+（000001 在 klines 里是平安银行，拿它当基准算相对强弱本身就是错的）。
+
 ## release: v0.60.0（参谋答错根因：get_trend_profile 把上证当平安银行）
 
 ### 用户截图里的错误结论，根因在工具层

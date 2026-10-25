@@ -190,8 +190,14 @@ def test_answer_stream_market_all_fail_yields_nothing(monkeypatch):
 def test_trend_profile_build_uses_scope_cache(monkeypatch):
     """`trend_profile.build` 一轮内被多次调用（走势 + 情景 + 区间）→ 同 key 只查一次。
 
-    假 engine 对任何 symbol 都返回同一份 2 行数据，所以 build 的兜底链会依次试
-    000300 / 000001（各 1 次）；两次 build 共 3 次查询，而不是 6 次。
+    ⚠️ 2026-10-25 行为变更：build 的基准指数兜底链（000300/000001）**不再查 klines** ——
+    000001 在 klines 里是平安银行，拿它当基准算相对强弱是错的（v0.60.0 修）。
+    指数改走 `index_daily.load_bars`，那是**另一张表、另一条读路径**，不计入本用例的
+    klines 假 engine 计数。
+
+    所以作用域内两次 build("600111") 只剩 1 次 klines 查询（个股被 scope 缓存），
+    出作用域后回到逐次直查 = 2 次。指数读的缓存策略（index_daily 目前不进 bar scope）
+    是独立议题，见 tests/test_trend_profile_index_routing.py。
     """
     from src.core import trend_profile
 
@@ -204,13 +210,13 @@ def test_trend_profile_build_uses_scope_cache(monkeypatch):
         trend_profile.build("600111", "CN")
     finally:
         bc.end_bar_scope(token)
-    assert fake.queries == 3, f"作用域内两次 build 打了 {fake.queries} 次库（期望 3）"
+    assert fake.queries == 1, f"作用域内两次 build 打了 {fake.queries} 次 klines（期望 1，指数不再走 klines）"
 
     fake2 = _FakeEngine()
     monkeypatch.setattr("src.db.session.engine", fake2)
     trend_profile.build("600111", "CN")
     trend_profile.build("600111", "CN")
-    assert fake2.queries == 6, "出了作用域必须退回逐次直查（回填/回测不能吃缓存）"
+    assert fake2.queries == 2, "出了作用域必须退回逐次直查（回填/回测不能吃缓存）"
 
 
 def test_scenario_engine_uses_scope_cache(monkeypatch):
