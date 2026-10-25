@@ -1,3 +1,41 @@
+## release: v0.67.0（P0-0.2 参谋任务异步化：提交即返 run_id）
+
+### 要解决的事故
+`POST /conversations/{id}/messages` 是**同步**的 —— 一次深问要等 LLM 跑完才返回，
+实测 P95 已经到 **133.5s**。代理超时、用户切页、浏览器断网，整轮白烧；
+库里还会留下一个永远 `running` 的 run（正是 P0-0.1 要收的尸）。
+
+### 新增接口（`src/web/api/copilot_jobs.py`，挂在 `/api/copilot`）
+```
+POST /copilot/runs             → 建 queued run，立刻返回 run_id（不等 LLM）
+GET  /copilot/runs/{id}/events → SSE：status / steps / done，终态自动关闭
+POST /copilot/runs/{id}/cancel → 取消（running→cancelled）
+```
+（`GET /copilot/runs` 与 `/runs/{id}` 已有，复用。）
+
+### 三个设计决定
+1. **执行体直接调 `chat_api.send_message`** —— 它是普通协程，后台 task 里传 user 就能跑。
+   这样 **不动 chat.py**（2309 行，护栏 2310），也不复制第二份 LLM 管线
+   （复制出来的必然与主路径漂移，那种 bug 最难查）。
+2. **超时进 failed 而不是挂起**：600s 硬上限。挂着比失败更糟 —— 用户会以为还在跑。
+3. **心跳独立协程每 30s 刷新**：进程死掉心跳就停，下次启动由 `reap_stale_runs` 标 failed
+   并写「可点重试」。**不自动重跑**。进程内 `_TASKS` 只用于 cancel，
+   重启后为空也没关系 —— 有心跳兜底。
+
+### 安全与隔离
+- 提交/事件/取消都走 `get_current_user`；别人的 run 一律 **404**（不暴露存在性，防账号探测）。
+- 已完成（`ok/degraded`）不可取消 → 409。
+
+### 门禁
+新增 **10 例**：提交<0.25s 真异步 / 正常跑完回填 elapsed+conversation_id /
+异常落 failed 带原因 / 超时落 failed / 取消 running / 已完成拒取消 /
+越权 404 / SSE 推 status+done / SSE 404 / 空问题 422。
+定向 **246 passed**。
+
+### 未做（下一步）
+前端从「同步等流式」切到「提交 + 轮询/SSE 进度」。这是 UX 变更（英文 token 流式会变成
+分阶段进度），要和 §5.3-A 的工作台规格一起做，不跟后端混在一个版本里。
+
 ## release: v0.66.0（数智参谋平台化 P0 第一周：运行时 / 对照执行器 / 实验记录）
 
 按《数智参谋平台化开发计划》§10 开工。基线校正：文档写 `v0.63.0` / 71 工具，

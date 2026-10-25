@@ -76,6 +76,7 @@ from src.web.api import (
     signals_review,
     market_archive,
 )
+from src.web.api import copilot_jobs
 from src.web.api import factors
 from src.web.api import jobs as jobs_api
 from src.web.api import notifications
@@ -747,6 +748,14 @@ app.include_router(
     copilot.router,
     prefix="/api",
     tags=["copilot"],
+    dependencies=protected,
+)
+# 参谋任务异步化(P0-0.2, 2026-10-25): 提交即返 run_id + SSE 事件 + 取消。
+# 与上面的 copilot 分开成独立模块: 那边是只读视图, 这里是写入型运行时。
+app.include_router(
+    copilot_jobs.router,
+    prefix="/api",
+    tags=["copilot-jobs"],
     dependencies=protected,
 )
 # 三指标共振(2026-09-11 数智决策升级): 全市场盘后扫描结果 + 活跃度序列

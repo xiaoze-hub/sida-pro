@@ -1,0 +1,307 @@
+"""参谋长任务异步化（P0-0.2，2026-10-25）。
+
+**要解决的事故**：`POST /conversations/{id}/messages` 是**同步**的 —— 一次深问要等
+LLM 跑完才返回，P95 已经到 133.5s。代理超时、用户切页、浏览器断网，整轮就白烧了，
+而且库里会留下一个永远 `running` 的 run（这正是 P0-0.1 要收的尸）。
+
+**这一层做的事**：
+```
+POST /copilot/runs            → 建 queued run，立刻返回 run_id（不等 LLM）
+GET  /copilot/runs/{id}       → 轮询状态
+GET  /copilot/runs/{id}/events → SSE：状态迁移 + 工具步骤，终态自动关闭
+POST /copilot/runs/{id}/cancel → 取消（running→cancelled）
+```
+
+**为什么执行体直接调 `chat_api.send_message`**：它是普通协程（不依赖 FastAPI 注入），
+在后台 task 里传 user 对象就能跑。这样**不动 chat.py**（该文件有 2310 行硬护栏），
+也不复制一份 LLM 管线 —— 复制出来的第二份必然与主路径漂移。
+
+**重启怎么办**：心跳由独立协程每 30s 刷新；进程死掉后心跳停，下次启动
+`copilot_runtime.reap_stale_runs()` 把它标 failed 并写"可点重试"。**不自动重跑**。
+
+**不做假异步**：提交立即返回是真的（不 sleep、不排队等结果）；SSE 里每条状态都来自
+DB 真实迁移，不按时间假装进度。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import uuid
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from src.web.api.auth import get_current_user
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/copilot", tags=["copilot-jobs"])
+
+#: 单轮硬超时（秒）。超时标 failed 而不是挂起 —— 挂着比失败更糟：用户以为还在跑。
+RUN_TIMEOUT_S = 600
+#: 心跳间隔（与 copilot_runtime 保持一致）
+HEARTBEAT_S = 30
+#: SSE 轮询间隔
+POLL_S = 1.0
+#: SSE 最长存活（超过就断开，前端可重连轮询）
+SSE_MAX_S = 900
+
+#: 进程内任务表（仅用于 cancel；重启后为空，靠心跳接管兜底）
+_TASKS: dict[str, asyncio.Task] = {}
+
+
+class SubmitRunBody(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: int | None = None
+    recipe: str | None = Field(default=None, max_length=48)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ── 执行体（可被测试替换）────────────────────────────────────────────────
+async def run_copilot_question(*, user_id: str, conversation_id: int | None, question: str) -> int:
+    """真正干活：建/复用会话并发问。返回 conversation_id。
+
+    **单独成函数是为了可测**：单测替换它就不需要真 LLM，也不会污染配额。
+    """
+    from src.web.api import chat as chat_api
+    from src.db.models import ChatConversation, User
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise RuntimeError("用户不存在（可能是账号被删除）")
+        if conversation_id is None:
+            conv = ChatConversation(user_id=user.id, title=question[:20])
+            db.add(conv)
+            db.commit()
+            db.refresh(conv)
+            cid = conv.id
+        else:
+            cid = conversation_id
+    finally:
+        db.close()
+
+    body = chat_api.SendMessageBody(content=question)
+    await chat_api.send_message(conversation_id=cid, body=body, user=user)
+    return cid
+
+
+def _mark(run_id: str, *, status: str, error: str | None = None,
+          elapsed_ms: int | None = None, tool_calls: int | None = None,
+          conversation_id: int | None = None) -> None:
+    """状态迁移（每次用新 session —— 后台任务不能跨 await 复用一个 session）。"""
+    from src.core import copilot_runtime as rt
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        if row is None:
+            return
+        if not rt.can_transition(row.status, status):
+            logger.warning("[copilot_jobs] 非法迁移 %s: %s → %s", run_id, row.status, status)
+            return
+        row.status = status
+        if error:
+            row.error = error[:2000]
+        if elapsed_ms is not None:
+            row.elapsed_ms = elapsed_ms
+        if tool_calls is not None:
+            row.tool_calls = tool_calls
+        if conversation_id is not None:
+            row.conversation_id = conversation_id
+        if rt.is_terminal(status):
+            row.finished_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+
+async def _heartbeat_loop(run_id: str, stop: asyncio.Event) -> None:
+    from src.core import copilot_runtime as rt
+    from src.db.session import SessionLocal
+
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=HEARTBEAT_S)
+            return
+        except asyncio.TimeoutError:
+            pass
+        db = SessionLocal()
+        try:
+            rt.heartbeat(db, run_id)
+        except Exception:
+            logger.debug("[copilot_jobs] 心跳失败 %s", run_id, exc_info=True)
+        finally:
+            db.close()
+
+
+async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, question: str) -> None:
+    stop = asyncio.Event()
+    hb = asyncio.create_task(_heartbeat_loop(run_id, stop))
+    t0 = datetime.utcnow()
+    _mark(run_id, status="running")
+    try:
+        cid = await asyncio.wait_for(
+            run_copilot_question(user_id=user_id, conversation_id=conversation_id, question=question),
+            timeout=RUN_TIMEOUT_S,
+        )
+        elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
+        _mark(run_id, status="ok", elapsed_ms=elapsed, conversation_id=cid)
+    except asyncio.TimeoutError:
+        elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
+        _mark(run_id, status="failed", elapsed_ms=elapsed,
+              error=f"超时：超过 {RUN_TIMEOUT_S}s 未完成，已转后台失败（可重试）")
+    except asyncio.CancelledError:
+        _mark(run_id, status="cancelled", error="用户取消")
+        raise
+    except Exception as e:  # noqa: BLE001 —— 任何执行失败都要落到 run 上，不能只写日志
+        elapsed = int((datetime.utcnow() - t0).total_seconds() * 1000)
+        logger.warning("[copilot_jobs] run %s 失败: %s", run_id, e, exc_info=True)
+        _mark(run_id, status="failed", elapsed_ms=elapsed, error=f"{type(e).__name__}: {e}")
+    finally:
+        stop.set()
+        hb.cancel()
+        _TASKS.pop(run_id, None)
+
+
+# ── 接口 ─────────────────────────────────────────────────────────────────
+@router.post("/runs")
+async def submit_run(body: SubmitRunBody, user=Depends(get_current_user)):
+    """提交即返回 run_id —— 真正的异步，不在这里等 LLM。"""
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    run_id = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        db.add(CopilotRun(
+            run_id=run_id,
+            conversation_id=body.conversation_id,
+            user_id=user.id,
+            recipe=body.recipe,
+            question=body.question[:500],
+            status="queued",
+            tool_calls=0,
+        ))
+        db.commit()
+    except Exception:
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        raise
+    finally:
+        db.close()
+
+    task = asyncio.create_task(_execute(
+        run_id, user_id=user.id, conversation_id=body.conversation_id, question=body.question,
+    ))
+    _TASKS[run_id] = task
+    return {"run_id": run_id, "status": "queued", "events": f"/api/copilot/runs/{run_id}/events"}
+
+
+@router.get("/runs/{run_id}/events")
+async def run_events(run_id: str, user=Depends(get_current_user)):
+    """SSE：状态迁移 + 工具步骤。终态自动关闭，不空转到超时。"""
+    from src.core import copilot_runtime as rt
+    from src.db.models import CopilotRun, CopilotStep
+    from src.db.session import SessionLocal
+
+    def _load():
+        db = SessionLocal()
+        try:
+            row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+            if row is None:
+                return None, []
+            if row.user_id and row.user_id != user.id:
+                return "forbidden", []
+            steps = (
+                db.query(CopilotStep)
+                .filter(CopilotStep.run_id == run_id)
+                .order_by(CopilotStep.seq.asc())
+                .all()
+            )
+            return row, steps
+        finally:
+            db.close()
+
+    row, _ = _load()
+    if row is None:
+        raise HTTPException(404, "run 不存在")
+    if row == "forbidden":
+        raise HTTPException(404, "run 不存在")  # 不暴露他人 run 的存在性
+
+    async def gen():
+        seen_steps = -1
+        last_status = None
+        elapsed = 0.0
+        while elapsed < SSE_MAX_S:
+            row, steps = _load()
+            if row is None:
+                yield _sse("error", {"message": "run 不存在"})
+                return
+            if row.status != last_status:
+                last_status = row.status
+                yield _sse("status", {
+                    "status": row.status,
+                    "elapsed_ms": row.elapsed_ms,
+                    "error": row.error,
+                    "tool_calls": row.tool_calls,
+                    "conversation_id": row.conversation_id,
+                })
+            if len(steps) != seen_steps:
+                seen_steps = len(steps)
+                yield _sse("steps", {
+                    "count": len(steps),
+                    "items": [
+                        {"seq": s.seq, "tool": s.tool, "ok": bool(s.ok),
+                         "elapsed_ms": s.elapsed_ms}
+                        for s in steps[:20]
+                    ],
+                })
+            if rt.is_terminal(row.status):
+                yield _sse("done", {"status": row.status, "error": row.error})
+                return
+            await asyncio.sleep(POLL_S)
+            elapsed += POLL_S
+        # 超时不断言失败 —— 只是停止推送，真实状态由心跳接管判定
+        yield _sse("error", {"message": "事件流超时，请改用状态接口轮询"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, user=Depends(get_current_user)):
+    from src.db.models import CopilotRun
+    from src.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.query(CopilotRun).filter(CopilotRun.run_id == run_id).first()
+        if row is None or (row.user_id and row.user_id != user.id):
+            raise HTTPException(404, "run 不存在")
+        if row.status in ("ok", "degraded", "succeeded"):
+            raise HTTPException(409, "该 run 已完成，无法取消")
+    finally:
+        db.close()
+
+    task = _TASKS.get(run_id)
+    if task and not task.done():
+        task.cancel()          # _execute 里会写 cancelled
+    else:
+        _mark(run_id, status="cancelled", error="用户取消（任务已不在本进程，按中断处理）")
+    return {"run_id": run_id, "status": "cancelled"}
