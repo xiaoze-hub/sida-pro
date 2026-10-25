@@ -14,9 +14,54 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func
 
-from src.db.models import CopilotQuota, CopilotRun, LLMUsage
+from src.db.models import AuditLog, CopilotQuota, CopilotRun, CopilotStep, LLMUsage
 
 logger = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 委派/并发硬限制（P1-1.2，2026-10-25）
+#
+# 与上面「按天的配额」不是一回事：那边管「一天能用多少」，这边管「同一时刻能并行
+# 几个、单个 run 能烧多少次工具调用」。两者都不靠提示词，都是 429 + 审计。
+#
+# 并发数怎么定：`copilot_jobs.MAX_CONCURRENT` 的全局信号量是 3，而执行体在调 LLM
+# 期间必须持有 DB 连接（见 run_copilot_question 的注释）。单用户取 2 —— 留 1 个槽给
+# 别人，否则一个人连提 3 个深问就把全站队列占满（2026-10-25 生产就是这种形态）。
+#
+# 工具预算怎么定：工具层软预算 `harness.runtime.DEFAULT_MAX_TOOL_CALLS=40`（现网实测
+# 每轮 2~6 次），配方的 max_tool_calls 会在工具层拒绝继续取数但**仍让模型作答**。
+# 这一层是硬兜底：60 = 1.5× 软预算，只用来拦「软预算被绕过/配方把上限调大」的失控，
+# 触发即中止 run，不允许截断后继续编答案。
+# ══════════════════════════════════════════════════════════════════════════
+
+#: 计入「并发占用」的状态（与 copilot_runtime 的活跃态对齐到真正占连接的两个）
+ACTIVE_RUN_STATUSES: tuple[str, ...] = ("queued", "running")
+
+#: 审计 action（写进 `audit_logs`，用现有 `AuditLog` 模型，不新造表）
+AUDIT_CONCURRENCY = "copilot_concurrency_exceeded"
+AUDIT_TOOL_BUDGET = "copilot_tool_budget_exceeded"
+
+
+def _env_int(name: str, default: int) -> int:
+    """读整数常量；环境变量非法就回落默认值（不让一个手滑的配置把接口打挂）。"""
+    import os
+
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        val = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("[copilot-quota] 环境变量 %s=%r 不是整数，用默认值 %s", name, raw, default)
+        return default
+    return val if val > 0 else default
+
+
+#: 单用户同时排队/执行中的 run 上限
+MAX_ACTIVE_RUNS_PER_USER = _env_int("COPILOT_MAX_ACTIVE_RUNS_PER_USER", 2)
+#: 单个 run 的工具调用硬预算（超了就中止，不截断继续）
+MAX_TOOL_CALLS_PER_RUN = _env_int("COPILOT_MAX_TOOL_CALLS_PER_RUN", 60)
 
 
 def _day_start() -> datetime:
@@ -111,6 +156,120 @@ def enforce(db, user) -> None:
             status_code=429,
             detail={"code": "copilot_quota_exceeded", "message": reason, "usage": usage},
         )
+
+
+def audit_limit_hit(db, *, user_id, action: str, detail: str) -> bool:
+    """写一条「因限流被拒」的审计（复用现有 `audit_logs` 表 + `AuditLog` 模型）。
+
+    与 `src/core/permissions.py` / `src/core/hv_api_log.py` 的写法一致：`db.add` + `commit`，
+    失败先 `safe_rollback` 再吞（审计是 best-effort，不能因为它把 429 变成 500）。
+    返回是否写成功，调用方不必依赖。
+    """
+    from src.core.db_safe import safe_rollback
+
+    uid = str(user_id or "")
+    try:
+        db.add(AuditLog(
+            user_id=uid or None,
+            username="",
+            action=action,
+            detail=(detail or "")[:255],   # 列宽 255，超长会因 PG 报错丢整条
+        ))
+        db.commit()
+        return True
+    except Exception as e:  # noqa: BLE001 —— 见 docstring
+        safe_rollback(db)
+        logger.warning("[copilot-quota] 审计写入失败 action=%s user=%s: %r", action, uid, e)
+        return False
+
+
+def active_run_count(db, user_id) -> int:
+    """该用户当前处于 queued/running 的 run 数（并发占用的唯一判据）。
+
+    ⚠️ 僵尸 run（进程死了没改状态）也会被算进去，靠
+    `copilot_runtime.reap_stale_runs()` 收尸；这里不做心跳过滤 —— 判据越简单越不会被
+    「顺手改一下」改错，且把僵尸当成占用比让用户无限并行安全。
+    """
+    uid = str(user_id or "")
+    if not uid:
+        return 0
+    return int(
+        db.query(func.count(CopilotRun.id))
+        .filter(CopilotRun.user_id == uid, CopilotRun.status.in_(ACTIVE_RUN_STATUSES))
+        .scalar()
+        or 0
+    )
+
+
+def enforce_run_concurrency(db, user) -> None:
+    """超并发直接 429（错误体带现有数量与上限），并写审计。
+
+    统计失败放行（fail-open）：限流本身不该把提交打成 500 —— 真出问题时宁可多跑一个。
+    """
+    from fastapi import HTTPException
+
+    uid = str(getattr(user, "id", "") or "")
+    limit = MAX_ACTIVE_RUNS_PER_USER
+    if not uid or limit <= 0:
+        return
+    try:
+        active = active_run_count(db, uid)
+    except Exception as e:  # noqa: BLE001
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)
+        logger.warning("[copilot-quota] 并发统计失败，放行: %r", e)
+        return
+    if active < limit:
+        return
+    try:
+        audit_limit_hit(
+            db, user_id=uid, action=AUDIT_CONCURRENCY,
+            detail=f"active={active} limit={limit}",
+        )
+    except Exception as e:  # noqa: BLE001 —— 审计 best-effort：写不进去也必须照常 429
+        from src.core.db_safe import safe_rollback
+
+        safe_rollback(db)   # 审计失败会把事务打成 aborted，返回前必须清掉
+        logger.warning("[copilot-quota] 并发超限审计写入失败: %r", e)
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "code": AUDIT_CONCURRENCY,
+            "message": (
+                f"同时进行的委派任务已达上限（当前 {active} 个排队/执行中，"
+                f"上限 {limit} 个）。请等其中一个完成或取消后再提交。"
+            ),
+            "active": active,
+            "limit": limit,
+        },
+    )
+
+
+def run_tool_calls(db, run_id) -> int:
+    """该 run 已经落库的工具调用次数。
+
+    口径：`copilot_steps` 行数（每次真实工具调用一行，见 `CopilotTrace.step`），
+    与 `copilot_runs.tool_calls` 取大者 —— 后者只有轨迹收尾才写，跑的过程中一直是 0。
+    """
+    if not run_id:
+        return 0
+    steps = int(
+        db.query(func.count(CopilotStep.id)).filter(CopilotStep.run_id == str(run_id)).scalar() or 0
+    )
+    row_calls = int(
+        db.query(CopilotRun.tool_calls).filter(CopilotRun.run_id == str(run_id)).scalar() or 0
+    )
+    return max(steps, row_calls)
+
+
+def check_run_budget(db, run_id) -> tuple[bool, int, int]:
+    """(是否还在预算内, 已用次数, 上限)。超预算时调用方必须**中止** run，不许截断继续。"""
+    used = run_tool_calls(db, run_id)
+    limit = MAX_TOOL_CALLS_PER_RUN
+    if limit <= 0:
+        return True, used, limit
+    return used <= limit, used, limit
 
 
 def list_all(db) -> list[dict]:
