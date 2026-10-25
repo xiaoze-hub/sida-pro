@@ -190,7 +190,8 @@ async def _execute(run_id: str, *, user_id: str, conversation_id: int | None, qu
         async with _slots():  # 限流：同时最多 MAX_CONCURRENT 轮在跑
             cid = await asyncio.wait_for(
                 run_copilot_question(
-                    user_id=user_id, conversation_id=conversation_id, question=question
+                    user_id=user_id, conversation_id=conversation_id,
+                    question=question, run_id=run_id,
                 ),
                 timeout=RUN_TIMEOUT_S,
             )

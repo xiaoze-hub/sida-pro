@@ -99,6 +99,23 @@ def test_空问题被拒(client):
     assert client.post("/api/copilot/runs", json={"question": ""}).status_code == 422
 
 
+def test_执行体必须把_run_id_传给执行函数(Session, monkeypatch):
+    """2026-10-25 生产实测：签名加了 run_id、**调用点忘了传** → 依然重复建轨迹。
+    这条用例专门拦"改了签名没改调用"。"""
+    seen = {}
+
+    async def spy(**kw):
+        seen.update(kw)
+        return 1
+
+    monkeypatch.setattr(copilot_jobs, "run_copilot_question", spy)
+    _mk_run(Session, "r-fwd")
+
+    asyncio.run(copilot_jobs._execute("r-fwd", user_id="u1", conversation_id=None, question="q"))
+
+    assert seen.get("run_id") == "r-fwd", f"run_id 没传给执行函数，kwargs={list(seen)}"
+
+
 # ── 状态机（直接驱动执行体，不等调度）──────────────────────────────────────
 def test_执行完成写_ok_并回填会话与耗时(Session, monkeypatch):
     async def ok(**_kw):
