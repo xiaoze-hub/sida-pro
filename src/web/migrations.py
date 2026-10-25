@@ -6082,6 +6082,34 @@ def _m224_copilot_run_heartbeat(conn: Connection) -> None:
     )
 
 
+def _m226_copilot_parent_run(conn: Connection) -> None:
+    """copilot_runs 加 parent_run_id 列（2026-10-25, P1-1.1 委派子 run）。
+
+    为什么需要: 委派（delegate）要能回答"这次结论里哪几条是子任务查出来的"。
+    没有 parent_run_id，子 run 只是一堆互不相干的轨迹，父 run 无法汇总，
+    也无法在子 run 失败时判断"哪一块证据缺失"。
+
+    为什么不加外键: copilot_runs 会按保留期清理，硬外键会让删父 run 失败或者
+    级联删掉子 run 的审计痕迹。这里只是弱引用（子 run 可以比父活得久）。
+
+    nullable 且不回填: NULL = 非委派的普通 run（绝大多数），回填没有意义。
+
+    幂等可重跑（列/索引已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn,
+        "copilot_runs",
+        "parent_run_id",
+        "ALTER TABLE copilot_runs ADD COLUMN parent_run_id VARCHAR(36)",
+    )
+    try:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_copilot_runs_parent ON copilot_runs (parent_run_id)"
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("m226 建索引失败(不阻断): %s", exc)
+
+
 def _m225_harness_experiments(conn: Connection) -> None:
     """实验记录表 harness_experiments（2026-10-25, P0-0.5）。
 
@@ -6333,6 +6361,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(223, "position_defense_price", _m223_position_defense_price),
     Migration(224, "copilot_run_heartbeat", _m224_copilot_run_heartbeat),
     Migration(225, "harness_experiments", _m225_harness_experiments),
+    Migration(226, "copilot_parent_run", _m226_copilot_parent_run),
 )
 
 

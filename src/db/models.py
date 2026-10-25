@@ -2341,6 +2341,7 @@ class CopilotRun(Base):
     __table_args__ = (
         Index("ix_copilot_runs_conv", "conversation_id", "created_at"),
         Index("ix_copilot_runs_user", "user_id", "created_at"),
+        Index("ix_copilot_runs_parent", "parent_run_id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -2356,6 +2357,9 @@ class CopilotRun(Base):
     # 2026-10-25: Durable Run 心跳。进程重启/worker 崩溃后靠它判"这个 run 还有人管吗"，
     # 避免库里留下永久 running 的幽灵运行。见 src/core/copilot_runtime.py
     heartbeat_at = Column(DateTime, nullable=True)
+    # 2026-10-25 (P1-1.1): 委派子 run。父 run 只汇总证据与缺口，子 run 有**独立预算**，
+    # `tool_calls` 各算各的 —— 否则一个 delegate 就能把父的预算吃穿。
+    parent_run_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
 
