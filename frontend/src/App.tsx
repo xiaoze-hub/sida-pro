@@ -22,6 +22,8 @@ const CopilotRunsPage = lazyWithRetry(() => import('@/pages/copilot/RunsPage'), 
 const ExperimentsPage = lazyWithRetry(() => import('@/pages/Experiments'), 'experiments-page')
 // 2026-10-25 P2-2.1: Agent 目录（只读）
 const AgentCatalogPage = lazyWithRetry(() => import('@/pages/AgentCatalog'), 'agent-catalog-page')
+const ToolCatalogPage = lazyWithRetry(() => import('@/pages/copilot/ToolCatalog'), 'tool-catalog-page')
+const ProposalsPage = lazyWithRetry(() => import('@/pages/copilot/ProposalsPage'), 'proposals-page')
 const CopilotRunDetailPage = lazyWithRetry(() => import('@/pages/copilot/RunDetailPage'), 'copilot-run-detail')
 // v0.4.50 后端接入 → v0.4.52 前端补齐(P1-B): 暗盘资金 TOP 榜页面
 const DarkFundTopPage = lazyWithRetry(() => import('@/pages/DarkFundTop'), 'dark-fund-top-page')
@@ -754,6 +756,8 @@ function App() {
               <Route path="/copilot/runs" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunsPage /></PermGuard>} />
               <Route path="/copilot/experiments" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ExperimentsPage /></PermGuard>} />
               <Route path="/copilot/agents" element={<PermGuard perm="view_quotes" myPerms={myPerms}><AgentCatalogPage /></PermGuard>} />
+              <Route path="/copilot/tools" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ToolCatalogPage /></PermGuard>} />
+              <Route path="/copilot/proposals" element={<PermGuard perm="view_quotes" myPerms={myPerms}><ProposalsPage /></PermGuard>} />
               {/* 单轮证据卡(2026-10-25): 详情页, 同档权限 */}
               <Route path="/copilot/runs/:runId" element={<PermGuard perm="view_quotes" myPerms={myPerms}><CopilotRunDetailPage /></PermGuard>} />
               {/* v0.4.52 P1-B: 暗盘资金 TOP 榜(thsdk DDE 真实主力资金流; view_dark 权限) */}

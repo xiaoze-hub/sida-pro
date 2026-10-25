@@ -70,6 +70,8 @@ const zhCN = {
     copilotRuns: '参谋任务',
     copilotExperiments: '经验库',
     copilotAgents: 'Agent 目录',
+    copilotTools: '工具目录',
+    copilotProposals: '能力提案',
     darkFundTop: '暗盘资金',
     caliberCompare: '口径对照',
     decisionLedger: '决策账本',

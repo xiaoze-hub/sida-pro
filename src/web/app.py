@@ -76,7 +76,7 @@ from src.web.api import (
     signals_review,
     market_archive,
 )
-from src.web.api import copilot_jobs
+from src.web.api import copilot_jobs, copilot_workbench
 from src.web.api import factors
 from src.web.api import jobs as jobs_api
 from src.web.api import notifications
@@ -748,6 +748,14 @@ app.include_router(
     copilot.router,
     prefix="/api",
     tags=["copilot"],
+    dependencies=protected,
+)
+
+# 工作台写入型接口(2026-10-25): 模型选择等按用户落库的能力。与只读 copilot 分开。
+app.include_router(
+    copilot_workbench.router,
+    prefix="/api",
+    tags=["copilot-workbench"],
     dependencies=protected,
 )
 # 参谋任务异步化(P0-0.2, 2026-10-25): 提交即返 run_id + SSE 事件 + 取消。

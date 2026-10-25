@@ -128,6 +128,29 @@ class UserAIService(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class UserAiPref(Base):
+    """用户在某 AI 场景显式选中的模型(2026-10-25)。
+
+    为什么不是改 ai_scene_bindings: 那里是**全局**绑定(一改全员变), 用户级
+    "这轮我想用便宜模型"没有落点。本表只记 (user_id, scene) -> model_id,
+    解析器(ai_client.get_model_for_scene)在**授权范围内**优先用它。
+
+    红线:
+      - 不存凭证(key/base_url 不进这张表);
+      - model_id 缺失 = 跟随场景绑定(不用 0 之类哨兵值);
+      - 写入口与解析器两处都校验授权, 防越权写入 / 历史脏数据越权生效。
+    """
+
+    __tablename__ = "user_ai_prefs"
+    __table_args__ = (UniqueConstraint("user_id", "scene", name="uq_user_ai_prefs_user_scene"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    scene = Column(String(32), nullable=False)
+    model_id = Column(Integer, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AIModel(Base):
     """AI 模型（属于某个服务商）"""
 

@@ -677,6 +677,14 @@ def get_model_for_scene(db, scene: str, user=None):
         if username == "demo" or role == "guest":
             return None
 
+    # 用户显式选择(2026-10-25): 只能落在**已授权**范围内, 与下面 granted 分支同一口径。
+    # 放在 deny_all 之后、BYOK 之前 —— 用户当面选了模型, 就该按他选的来;
+    # 但选不了自己没权限的模型(校验见 _resolve_user_pref)。
+    if user is not None:
+        pref = _resolve_user_pref(db, user, scene)
+        if pref is not None:
+            return pref
+
     # ① 用户 BYOK(自有服务优先于平台模型)
     if user is not None:
         byok = _resolve_user_byok(db, user, scene)
@@ -891,3 +899,94 @@ def build_system_prompt(db, scene: str, base_prompt: str, user) -> str:
             out = out + "\n\n--- 交易模式画像（证据） ---\n" + _tp
 
     return out
+
+def _resolve_user_pref(db, user, scene: str):
+    """用户的场景显式选择(user_ai_prefs) → AIModel | None。
+
+    两道关:
+      1. 该模型行必须存在(可能已被删);
+      2. 必须在该用户**已授权**范围内 —— deny_all 一律 None; granted 只认 model_ids;
+         inherit 视为全池可用(与全局解析一致)。
+    任何异常都回落 None(偏好读不出来 = 跟随场景绑定), 绝不让整轮对话挂掉。
+    """
+    from src.db.models import AIModel
+    from src.core.copilot_model_prefs import get_pref
+
+    access = _get_model_access(user) or {}
+    mode = str(access.get("mode") or "inherit")
+    if mode == "deny_all":
+        return None
+
+    try:
+        model_id = get_pref(db, getattr(user, "id", None), scene)
+    except Exception:  # noqa: BLE001
+        logger.debug("解析用户模型偏好失败: scene=%s", scene, exc_info=True)
+        return None
+    if model_id is None:
+        return None
+
+    model = db.query(AIModel).filter(AIModel.id == model_id).first()
+    if model is None:
+        logger.warning("用户偏好的模型 id=%s 已不存在, 回落场景绑定", model_id)
+        return None
+
+    if mode == "granted":
+        granted = {int(i) for i in (access.get("model_ids") or []) if str(i).isdigit()}
+        if model.id not in granted:
+            logger.warning(
+                "用户偏好模型 id=%s 不在授权列表内, 已忽略(防越权)", model.id
+            )
+            return None
+    return model
+
+
+def resolve_scene_model_with_source(db, scene: str, user=None) -> dict | None:
+    """带**来源**的场景模型解析(模型选择器用)。
+
+    返回 {"source": "pref|byok|scene|none", "model_id", "model", "service"}。
+    `source` 必须如实: 前端显示"跟随场景绑定"时, 实际生效的就不能是偏好模型。
+    解析不出来返回 None(由调用方决定如何降级显示)。
+    """
+    from src.db.models import AIModel, AIService
+
+    username = getattr(user, "username", None) if user is not None else None
+    role = getattr(user, "role", None) if user is not None else None
+    if user is not None and (username == "demo" or role == "guest"):
+        return {"source": "none", "model_id": None, "model": None, "service": None}
+
+    def _wrap(model, source: str) -> dict:
+        svc = None
+        if getattr(model, "service_id", None):
+            row = db.query(AIService).filter(AIService.id == model.service_id).first()
+            svc = getattr(row, "name", None) if row is not None else None
+        return {
+            "source": source,
+            "model_id": getattr(model, "id", None),
+            "model": getattr(model, "model", None),
+            "service": svc,
+        }
+
+    if user is not None:
+        pref = _resolve_user_pref(db, user, scene)
+        if pref is not None:
+            return _wrap(pref, "pref")
+        byok = _resolve_user_byok(db, user, scene)
+        if isinstance(byok, dict) and byok.get("model"):
+            return {
+                "source": "byok",
+                "model_id": None,
+                "model": byok.get("model"),
+                "service": byok.get("name"),
+            }
+
+    model = get_model_for_scene(db, scene, user=user)
+    if model is None:
+        return {"source": "none", "model_id": None, "model": None, "service": None}
+    if isinstance(model, dict):
+        return {
+            "source": "byok",
+            "model_id": None,
+            "model": model.get("model"),
+            "service": model.get("name"),
+        }
+    return _wrap(model, "scene")

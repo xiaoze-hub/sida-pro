@@ -560,4 +560,4 @@ class TestPinnedMigration:
         assert versions == sorted(versions)
         for prev, cur in zip(versions, versions[1:]):
             assert cur == prev + 1, f"迁移版本不连续: {prev} -> {cur}"
-        assert versions[-1] == 229
+        assert versions[-1] == 230

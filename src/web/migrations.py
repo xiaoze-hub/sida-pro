@@ -6221,6 +6221,31 @@ CREATE TABLE IF NOT EXISTS harness_experiments (
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_harness_exp_recipe ON harness_experiments(recipe_id)"))
 
 
+def _m230_user_ai_prefs(conn: Connection) -> None:
+    """用户级场景模型选择表（2026-10-25, 工作台·模型选择器）。
+
+    为什么不用 ai_scene_bindings: 那张表是**全局**绑定, 用户选模型会改到所有人。
+    本表只存 (user_id, scene) -> model_id, 解析器在授权范围内优先用它;
+    不存任何凭证。SQLite/PG 双兼容（沿用既有条件建表写法）。
+    幂等（CREATE TABLE IF NOT EXISTS + 唯一索引）。
+    """
+    conn.execute(text(
+        """
+CREATE TABLE IF NOT EXISTS user_ai_prefs (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    scene VARCHAR(32) NOT NULL,
+    model_id INTEGER NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_ai_prefs_user_scene"
+        " ON user_ai_prefs (user_id, scene)"
+    ))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(101, "agent_config_kind_and_visibility", _m101_agent_config_kind),
     Migration(102, "backfill_agent_kind_data", _m102_backfill_agent_kind),
@@ -6444,6 +6469,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(227, "copilot_action_diff", _m227_copilot_action_diff),
     Migration(228, "recipe_versions", _m228_recipe_versions),
     Migration(229, "webhook_subscriptions", _m229_webhook_subscriptions),
+    Migration(230, "user_ai_prefs", _m230_user_ai_prefs),
 )
 
 

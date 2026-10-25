@@ -997,3 +997,44 @@ def get_agent(
         "history": rv.history(db, recipe_id),
     }
 
+# ──────────────── 工具目录(只读反射, 插件面板数据源) ────────────────
+# 注册表 77 个工具对外没有任何目录入口, 用户看不到"平台到底有哪些能力、各自什么口径、
+# 挂在哪些配方里"。这里只做**只读反射**: 不改注册表、不新增/删除工具(77 是门禁钉子)。
+
+
+@router.get("/tools")
+def get_tools_catalog(user: Any = Depends(get_current_user)) -> dict:
+    """工具目录: 名称/说明/口径/挂载配方/是否计预算/是否有降级。
+
+    口径必须随每个工具逐条返回 —— 五个数据源口径不可换算, 汇总或省略会误导判断。
+    """
+    from src.agents.chat.registry import CHAT_TOOL_REGISTRY
+    from src.harness.recipes import list_recipes
+
+    # 反向索引: 工具名 -> 挂载它的配方 id 列表
+    mounted: dict[str, list[str]] = {}
+    for recipe in list_recipes():
+        for tool_name in recipe.tools or []:
+            mounted.setdefault(tool_name, []).append(recipe.id)
+
+    items = []
+    for name, tool in CHAT_TOOL_REGISTRY.items():
+        fn = ((tool.schema or {}).get("function") or {})
+        desc = str(fn.get("description") or "").strip().split("\n")[0][:120]
+        items.append(
+            {
+                "name": name,
+                "description": desc,
+                "caliber": tool.caliber or "",
+                "requires": tool.requires or "",
+                "charges_budget": bool(tool.charges_budget),
+                "has_fallback": bool(tool.fallback),
+                # 未挂任何配方的工具返回空数组(前端要能看见"这个工具没人用")
+                "recipes": sorted(mounted.get(name, [])),
+            }
+        )
+    return {
+        "total": len(items),
+        "mounted": sum(1 for i in items if i["recipes"]),
+        "tools": items,
+    }

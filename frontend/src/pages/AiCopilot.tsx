@@ -39,6 +39,7 @@ import { SchedulePanel } from '@/components/copilot/SchedulePanel'
 import { ProposalPanel } from '@/components/copilot/ProposalPanel'
 import { UsageBar } from '@/components/copilot/UsageBar'
 import { PersonaBadge } from '@/components/copilot/PersonaBadge'
+import { ModelPicker } from '@/components/copilot/ModelPicker'
 import { useConversations } from '@/hooks/useConversations'
 import { useCopilotRuns } from '@/hooks/useCopilotRuns'
 import {
@@ -849,6 +850,7 @@ export default function AiCopilotPage() {
               />
             ) : null}
             {anchorSymbol ? <PersonaBadge symbol={anchorSymbol} /> : null}
+            <ModelPicker className="hidden md:block" />
           </div>
           <form
             className="ml-1 flex items-center gap-1"
