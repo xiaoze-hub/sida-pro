@@ -1,3 +1,22 @@
+## release: v0.70.2（详情接口漏了 conversation_id：后台执行永远"拿不到会话"）
+
+v0.70.1 加了前端补拉，实测**仍然**提示「✅ 已完成，但没拿到会话 id」。查下来不是竞态，
+是接口契约缺字段：
+
+```
+GET /api/copilot/runs/{id}  →  {run:{run_id,status,recipe,question,tool_calls,elapsed_ms,created_at}}
+                                                                        ↑ 没有 conversation_id
+```
+
+前端要靠这个字段去重拉会话读正文，拿不到就只能提示。DB 里该 run 的 `conversation_id`
+明明是 326 —— 数据在，接口没给。
+
+修：详情响应补 `conversation_id`。新增契约用例钉住：
+`test_详情回_conversation_id` + `test_详情仍带原有字段与步骤`（防以后又把字段删掉）。
+
+**教训**：上一版我把它当竞态修（加补拉），是**猜**的。真正该做的是先打印接口原始 payload
+再下判断——这次一查 runKeys 就看见缺列，比补拉逻辑省一个版本。
+
 ## release: v0.70.1（后台执行的终态竞态：拿到 ok 但还没拿到会话 id）
 
 v0.70.0 实测：后台任务完成，界面却写「✅ 已完成，但没拿到会话 id」。

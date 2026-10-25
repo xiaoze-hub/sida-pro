@@ -372,6 +372,9 @@ def get_copilot_run_detail(
         "run": {
             "run_id": run.run_id, "status": run.status, "recipe": run.recipe,
             "question": run.question, "tool_calls": run.tool_calls,
+            # 2026-10-25: 后台执行完成后前端要据此重拉会话拿正文; 之前没这个字段,
+            # 前端只能拿到 null 并提示"没拿到会话 id"（生产实测）
+            "conversation_id": run.conversation_id,
             "elapsed_ms": run.elapsed_ms, "created_at": str(run.created_at or ""),
         },
         "steps": [{
