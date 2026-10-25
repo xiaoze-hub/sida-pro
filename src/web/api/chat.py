@@ -48,6 +48,8 @@ from src.web.models import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+from src.agents.chat.capability_notes import CAPABILITY_NOTES
+
 SYSTEM_PROMPT = """你是数智分析BOT,是 SIDA(Stock-Intelligent-Data-Analytics 数智分析)的 AI 投资助手。
 
 你可以使用工具获取用户的投资数据。当用户的问题涉及具体数据时，主动调用工具获取，不要让用户自己提供。
@@ -1005,7 +1007,7 @@ async def _build_ai_messages(
 
     send_message(非流式)与 send_message_stream(流式)共用, 保证两条链路逻辑一致。
     """
-    system_content = SYSTEM_PROMPT
+    system_content = SYSTEM_PROMPT + CAPABILITY_NOTES
 
     # 绑定股票提示
     if conv.stock_symbol and conv.stock_market:
