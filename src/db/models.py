@@ -2445,8 +2445,12 @@ class CopilotAction(Base):
     user_id = Column(String(36), nullable=False)
     kind = Column(String(24), nullable=False)        # annotation / watchlist / alert
     payload = Column(Text, nullable=False, default="{}")   # JSON
-    status = Column(String(16), nullable=False, default="pending")  # pending/applied/rejected
+    status = Column(String(16), nullable=False, default="pending")  # pending/applied/rejected/rolled_back
     result = Column(Text, nullable=True)
+    # 2026-10-25 (P1-1.3): 字段级 diff（propose 时算）与 apply 前快照（回滚用）。
+    # 存 JSON 而不是拆列：不同动作类型的字段不同，拆列会每加一类动作就要迁移。
+    diff_json = Column(Text, nullable=True)
+    before_snapshot = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     applied_at = Column(DateTime, nullable=True)
 

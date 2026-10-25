@@ -6082,6 +6082,27 @@ def _m224_copilot_run_heartbeat(conn: Connection) -> None:
     )
 
 
+def _m227_copilot_action_diff(conn: Connection) -> None:
+    """copilot_actions 加 diff_json / before_snapshot（2026-10-25, P1-1.3）。
+
+    为什么需要: propose 只写"我要加自选 600111", 用户点确认前看不到会改什么 ——
+    让人确认一件描述不清的事等于没确认。apply 后又要能撤回, 所以还要 apply 前快照。
+
+    为什么存 JSON 不拆列: 不同动作类型（自选/提醒/定时）的字段完全不同,
+    拆列每加一类动作就要迁移一次; 存 JSON 让旧记录仍可读。
+
+    幂等可重跑（列已存在则跳过）。
+    """
+    _add_column_if_missing(
+        conn, "copilot_actions", "diff_json",
+        "ALTER TABLE copilot_actions ADD COLUMN diff_json TEXT",
+    )
+    _add_column_if_missing(
+        conn, "copilot_actions", "before_snapshot",
+        "ALTER TABLE copilot_actions ADD COLUMN before_snapshot TEXT",
+    )
+
+
 def _m226_copilot_parent_run(conn: Connection) -> None:
     """copilot_runs 加 parent_run_id 列（2026-10-25, P1-1.1 委派子 run）。
 
@@ -6362,6 +6383,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(224, "copilot_run_heartbeat", _m224_copilot_run_heartbeat),
     Migration(225, "harness_experiments", _m225_harness_experiments),
     Migration(226, "copilot_parent_run", _m226_copilot_parent_run),
+    Migration(227, "copilot_action_diff", _m227_copilot_action_diff),
 )
 
 

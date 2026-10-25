@@ -312,6 +312,20 @@ def reject_copilot_action(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/actions/{action_id}/rollback")
+def rollback_copilot_action(
+    action_id: int,
+    reason: str = Query(default=""),
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """把一次已 apply 的动作退回（P1-1.3）。回滚本身也写审计。"""
+    try:
+        return actions_mod.rollback_action(db, user_id=user.id, action_id=action_id, reason=reason)
+    except actions_mod.ActionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/runs")
 def get_copilot_runs(
     limit: int = Query(default=20, le=100),

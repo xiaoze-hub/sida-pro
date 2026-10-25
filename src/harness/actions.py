@@ -30,12 +30,22 @@ def propose(db: Session, *, user_id: Any, kind: str, payload: dict, run_id: str 
         raise ActionError(f"不支持的动作类型：{kind}")
     if not payload:
         raise ActionError("动作内容为空")
+    # P1-1.3: 提议时就把"会改什么"算出来给用户看。diff 算失败不能拦住提议
+    # （有些动作类型没有 diff），但要在结果里如实为空，不能编。
+    try:
+        diff = preview_diff(db, user_id=user_id, kind=kind, payload=payload)
+    except ActionError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("propose 计算 diff 失败(不阻断): %s", exc)
+        diff = []
     row = CopilotAction(
         run_id=run_id,
         user_id=str(user_id),
         kind=kind,
         payload=json.dumps(payload, ensure_ascii=False),
         status="pending",
+        diff_json=json.dumps(diff, ensure_ascii=False) if diff else None,
     )
     db.add(row)
     db.commit()
@@ -78,6 +88,15 @@ def apply_action(db: Session, *, user_id: Any, action_id: int) -> dict:
     }.get(row.kind)
     if handler is None:
         raise ActionError(f"{row.kind} 动作暂未开放执行")
+
+    # P1-1.3: apply 前拍快照（propose→confirm 之间状态可能已变，快照必须在 apply 前）
+    try:
+        row.before_snapshot = json.dumps(
+            _snapshot(db, user_id=user_id, kind=row.kind, payload=payload), ensure_ascii=False
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("apply 前拍快照失败(不阻断执行, 但该动作将无法回滚): %s", exc)
+        row.before_snapshot = None
 
     result = handler(db, user_id=user_id, payload=payload)
     row.status = "applied"
@@ -343,6 +362,9 @@ def _to_dict(row: Any) -> dict:
         "payload": json.loads(row.payload or "{}"),
         "status": row.status,
         "result": row.result,
+        # P1-1.3: diff 给前端展示"会改什么"；snapshot 不给前端（内部回滚用）
+        "diff": json.loads(row.diff_json) if getattr(row, "diff_json", None) else [],
+        "can_rollback": bool(getattr(row, "before_snapshot", None)) and row.status == "applied",
         "created_at": str(row.created_at or ""),
         "applied_at": str(row.applied_at or ""),
     }
@@ -369,3 +391,227 @@ def _apply_schedule(db: Session, *, user_id: Any, payload: dict) -> str:
         raise ActionError(str(e)) from e
     label = "竞价摘要" if kind == "auction_digest" else "收盘小结"
     return f"已创建定时任务 #{row['id']}：{label} 每{row['weekdays']} {row['at_hhmm']} 推送到会话"
+
+# ── P1-1.3 dry-run diff + 回滚（2026-10-25）───────────────────────────────
+# 为什么要有 diff：propose 只写"我要加自选 600111"，用户点确认前**看不到会改什么**。
+# 这不是 UI 问题，是授权问题 —— 让人确认一件描述不清的事，等于没确认。
+#
+# 为什么要有回滚：apply 之后发现选错了标的/价位，只能手工再改一次，
+# 而且两次操作在审计里是两件互不相关的事。回滚才是"这次动作"的闭合。
+
+# 支持 diff 的动作类型（annotation 是画图批注，没有"改前值"，不做 diff）
+DIFF_KINDS = ("watchlist", "alert", "schedule")
+
+
+def preview_diff(db: Session, *, user_id: Any, kind: str, payload: dict) -> list[dict]:
+    """propose 阶段算字段级 diff（before/after）。**只读，不落库。**
+
+    返回 [{field, before, after, change}]，change ∈ add / update / noop。
+    缺值一律 `None`，**不写成 0**（"没有设置"和"设置为 0"是两件事）。
+    """
+    if kind not in DIFF_KINDS:
+        return []
+    if kind == "watchlist":
+        return _diff_watchlist(db, user_id=user_id, payload=payload)
+    if kind == "alert":
+        return _diff_alert(db, user_id=user_id, payload=payload)
+    return _diff_schedule(db, user_id=user_id, payload=payload)
+
+
+def _diff_watchlist(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
+    from src.db.models import Stock
+
+    symbol = str(payload.get("symbol") or "").strip()
+    if not symbol:
+        raise ActionError("缺少 symbol")
+    row = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+    return [{
+        "field": "自选",
+        "before": "已在自选" if row else None,
+        "after": "加入自选",
+        "change": "noop" if row else "add",
+    }]
+
+
+def _diff_alert(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
+    from src.db.models import PriceAlertRule, Stock
+
+    symbol = str(payload.get("symbol") or "").strip()
+    price = payload.get("price")
+    direction = str(payload.get("direction") or "above")
+    if not symbol or price is None:
+        raise ActionError("盯盘提醒需要 symbol 与 price")
+    op = ">=" if direction == "above" else "<="
+    stock = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+    existing = None
+    if stock is not None:
+        existing = (
+            db.query(PriceAlertRule)
+            .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
+            .first()
+        )
+    before_rule = None
+    if existing is not None:
+        items = (existing.condition_group or {}).get("items") or []
+        before_rule = f"{items[0].get('op')} {items[0].get('value')}" if items else None
+    after_rule = f"{op} {price}"
+    return [{
+        "field": f"{symbol} 触发条件",
+        "before": before_rule,
+        "after": after_rule,
+        "change": "noop" if before_rule == after_rule else ("update" if before_rule else "add"),
+    }]
+
+
+def _diff_schedule(db: Session, *, user_id: Any, payload: dict) -> list[dict]:
+    from src.core.copilot_schedule import list_for_user
+
+    kind = str(payload.get("kind") or "auction_digest")
+    at = str(payload.get("at_hhmm") or "09:25")
+    try:
+        rows = list_for_user(db, user_id=user_id) or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    existing = next((r for r in rows if str(r.get("kind")) == kind), None)
+    before = (existing or {}).get("at_hhmm")
+    return [{
+        "field": f"{kind} 时间",
+        "before": before,
+        "after": at,
+        "change": "noop" if before == at else ("update" if before else "add"),
+    }]
+
+
+def _snapshot(db: Session, *, user_id: Any, kind: str, payload: dict) -> dict:
+    """apply 前拍快照（回滚要用）。只存回滚必需的键，不存整行。"""
+    from src.db.models import PriceAlertRule, Stock
+
+    if kind == "watchlist":
+        symbol = str(payload.get("symbol") or "").strip()
+        row = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+        return {"stock_id": row.id if row else None, "existed": row is not None}
+    if kind == "alert":
+        symbol = str(payload.get("symbol") or "").strip()
+        stock = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == symbol).first()
+        rule = None
+        if stock is not None:
+            rule = (
+                db.query(PriceAlertRule)
+                .filter(PriceAlertRule.user_id == str(user_id), PriceAlertRule.stock_id == stock.id)
+                .order_by(PriceAlertRule.id.desc())
+                .first()
+            )
+        return {
+            "stock_existed": stock is not None,
+            "stock_id": stock.id if stock else None,
+            "rule_id": rule.id if rule else None,
+            "rule_condition": (rule.condition_group if rule else None),
+        }
+    if kind == "schedule":
+        from src.core.copilot_schedule import list_for_user
+
+        kind_s = str(payload.get("kind") or "auction_digest")
+        try:
+            rows = list_for_user(db, user_id=user_id) or []
+        except Exception:  # noqa: BLE001
+            rows = []
+        existing = next((r for r in rows if str(r.get("kind")) == kind_s), None)
+        return {"schedule_id": (existing or {}).get("id"), "at_hhmm": (existing or {}).get("at_hhmm")}
+    return {}
+
+
+def rollback_action(db: Session, *, user_id: Any, action_id: int, reason: str = "") -> dict:
+    """把一次已 apply 的动作退回到 apply 之前的状态，并写审计。
+
+    只支持**能安全撤销**的三类：加自选 / 建提醒 / 建定时任务。
+    撤销只删"这次动作新建的东西"或写回快照值，**不碰用户其它数据**。
+    """
+    from src.db.models import CopilotAction, PriceAlertRule, Stock
+
+    row = (
+        db.query(CopilotAction)
+        .filter(CopilotAction.id == action_id, CopilotAction.user_id == str(user_id))
+        .one_or_none()
+    )
+    if row is None:
+        raise ActionError("动作不存在")
+    if row.status != "applied":
+        raise ActionError(f"只有 applied 的动作能回滚，当前是 {row.status}")
+    snapshot = json.loads(row.before_snapshot or "{}")
+    if not snapshot:
+        raise ActionError("这条动作没有快照，无法回滚（早于 v0.73 的记录）")
+
+    payload = json.loads(row.payload or "{}")
+    undone: list[str] = []
+    try:
+        if row.kind == "watchlist":
+            if not snapshot.get("existed"):
+                sym = str(payload.get("symbol") or "")
+                obj = db.query(Stock).filter(Stock.user_id == str(user_id), Stock.symbol == sym).first()
+                if obj is not None:
+                    db.delete(obj)
+                    undone.append(f"已移出自选：{sym}")
+        elif row.kind == "alert":
+            rid = snapshot.get("rule_id")
+            if rid is None:
+                # 这次新建了规则 → 删掉它
+                created = (
+                    db.query(PriceAlertRule)
+                    .filter(PriceAlertRule.user_id == str(user_id))
+                    .order_by(PriceAlertRule.id.desc())
+                    .first()
+                )
+                if created is not None:
+                    db.delete(created)
+                    undone.append("已删除本次新建的盯盘提醒")
+            elif snapshot.get("rule_condition"):
+                target = db.query(PriceAlertRule).filter(PriceAlertRule.id == rid).first()
+                if target is not None:
+                    target.condition_group = snapshot["rule_condition"]
+                    undone.append("已恢复提醒触发条件")
+        elif row.kind == "schedule":
+            from src.core.copilot_schedule import delete as _delete
+
+            sid = snapshot.get("schedule_id")
+            if sid is None:
+                _delete(db, user_id=user_id, schedule_id=(payload.get("id") or 0))
+                undone.append("已删除本次新建的定时任务")
+            else:
+                undone.append("定时任务早于本次动作，未改动")
+        else:
+            raise ActionError(f"{row.kind} 动作不支持回滚")
+
+        row.status = "rolled_back"
+        row.result = "；".join(undone) or "无变化"
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        from src.core.db_safe import safe_rollback
+        safe_rollback(db)
+        raise ActionError(f"回滚失败：{type(exc).__name__}: {exc}") from exc
+
+    _audit_rollback(db, user_id=user_id, action_id=action_id, kind=row.kind,
+                    undone=undone, reason=reason)
+    db.refresh(row)
+    return _to_dict(row)
+
+
+def _audit_rollback(db: Session, *, user_id: Any, action_id: int, kind: str,
+                    undone: list[str], reason: str) -> None:
+    """回滚本身也要留痕 —— 否则审计里只看到 apply，看不到撤销。"""
+    try:
+        from src.db.models import AuditLog
+
+        db.add(AuditLog(
+            user_id=str(user_id),
+            action="copilot_action_rollback",
+            detail=json.dumps({
+                "action_id": action_id, "kind": kind,
+                "undone": undone, "reason": (reason or "")[:200],
+            }, ensure_ascii=False),
+        ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        from src.core.db_safe import safe_rollback
+        safe_rollback(db)
+        logger.warning("动作回滚审计写入失败(不阻断): %s", exc)
+
