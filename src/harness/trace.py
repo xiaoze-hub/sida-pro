@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 import logging
@@ -36,6 +37,14 @@ def _clip(text: str | None, limit: int) -> str | None:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+#: 外部（异步执行体 copilot_jobs）已经先建好 run 行时，用它把 run_id 传进来复用。
+#: 2026-10-25 生产实测事故：异步提交建了一条 run，`send_message` 里的 _run_tool_loop
+#: 又开了一条 —— 同一问题两条记录（一条 0 步的空壳 + 一条有轨迹的），
+#: ok_rate / tool_calls / 成本统计全部重复计数。自改造(RST)的度量基础就是轨迹，
+#: 重复计数会让任何对照结论失真，所以必须一条执行一条轨迹。
+EXTERNAL_RUN_ID: ContextVar[str | None] = ContextVar("copilot_external_run_id", default=None)
+
+
 class CopilotTrace:
     """一次问答的轨迹句柄；写库失败不影响主链路。"""
 
@@ -46,8 +55,11 @@ class CopilotTrace:
         user_id: int | None = None,
         recipe: str | None = None,
         question: str | None = None,
+        reuse_run_id: str | None = None,
     ) -> None:
-        self.run_id = str(uuid.uuid4())
+        self.run_id = reuse_run_id or str(uuid.uuid4())
+        #: 复用外部已建的 run 行时不再 INSERT（否则主键冲突 / 重复计数）
+        self._reuse = bool(reuse_run_id)
         self.conversation_id = conversation_id
         self.user_id = user_id
         self.recipe = recipe
@@ -61,12 +73,25 @@ class CopilotTrace:
 
     # -- 写入 ---------------------------------------------------------------
     def open(self) -> None:
-        """落 running 行。失败不抛。"""
+        """落 running 行。失败不抛。
+
+        复用外部 run 行时**不插入**，只把那条 queued 行标成 running ——
+        一次执行只能有一条轨迹。
+        """
         try:
             from src.db.models import CopilotRun
 
             db = SessionLocal()
             try:
+                if self._reuse:
+                    row = db.query(CopilotRun).filter(CopilotRun.run_id == self.run_id).one_or_none()
+                    if row is not None:
+                        row.status = "running"
+                        row.error = None
+                        row.recipe = self.recipe or row.recipe
+                        db.commit()
+                        return
+                    # 行不在了（被清库/回滚）→ 退回正常插入，别把执行搞挂
                 db.add(CopilotRun(
                     run_id=self.run_id,
                     conversation_id=self.conversation_id,
@@ -206,7 +231,8 @@ class CopilotTrace:
                     row.error = _clip(error, 500)
                     row.tool_calls = self.tool_calls
                     row.elapsed_ms = elapsed_ms
-                    row.finished_at =            datetime.now(timezone.utc)
+                    # 与 INSERT 分支保持一致：列是 naive，写 aware 会被 PG 按会话时区换算
+                    row.finished_at = datetime.utcnow()
                 db.commit()
             finally:
                 db.close()
@@ -228,6 +254,7 @@ def start_copilot_run(
             user_id=user_id,
             recipe=recipe,
             question=question,
+            reuse_run_id=EXTERNAL_RUN_ID.get(),
         )
         trace.open()
         return trace

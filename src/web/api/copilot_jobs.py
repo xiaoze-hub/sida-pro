@@ -78,11 +78,14 @@ def _sse(event: str, data: dict) -> str:
 
 
 # ── 执行体（可被测试替换）────────────────────────────────────────────────
-async def run_copilot_question(*, user_id: str, conversation_id: int | None, question: str) -> int:
+async def run_copilot_question(
+    *, user_id: str, conversation_id: int | None, question: str, run_id: str | None = None
+) -> int:
     """真正干活：建/复用会话并发问。返回 conversation_id。
 
     **单独成函数是为了可测**：单测替换它就不需要真 LLM，也不会污染配额。
     """
+    from src.harness.trace import EXTERNAL_RUN_ID
     from src.web.api import chat as chat_api
     from src.db.models import ChatConversation, User
     from src.db.session import SessionLocal
@@ -105,7 +108,15 @@ async def run_copilot_question(*, user_id: str, conversation_id: int | None, que
             cid = conversation_id
 
         body = chat_api.SendMessageBody(content=question)
-        await chat_api.send_message(conversation_id=cid, body=body, user=user)
+        # ⚠️ 必须把已有 run_id 传进去复用：`_run_tool_loop` 自己会 start_copilot_run，
+        # 不复用就会变成"一次执行两条轨迹"（一条空壳 + 一条真轨迹），
+        # 指标全部重复计数（2026-10-25 生产实测）。
+        token = EXTERNAL_RUN_ID.set(run_id) if run_id else None
+        try:
+            await chat_api.send_message(conversation_id=cid, body=body, user=user)
+        finally:
+            if token is not None:
+                EXTERNAL_RUN_ID.reset(token)
         return cid
     finally:
         db.close()
@@ -127,6 +138,13 @@ def _mark(run_id: str, *, status: str, error: str | None = None,
             return
         if not rt.can_transition(row.status, status):
             logger.warning("[copilot_jobs] 非法迁移 %s: %s → %s", run_id, row.status, status)
+            return
+        # 轨迹(trace)已经写过终态时不要覆盖它的真实数字（tool_calls/elapsed 是管线自己测的，
+        # 我这里测的是整个 job 的墙钟时间，混着用会让统计口径不一致）
+        if rt.is_terminal(row.status) and row.status == status:
+            if row.finished_at is None:
+                row.finished_at = datetime.utcnow()
+                db.commit()
             return
         row.status = status
         if error:

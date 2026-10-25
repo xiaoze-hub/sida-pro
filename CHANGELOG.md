@@ -1,3 +1,41 @@
+## release: v0.68.0（一次执行一条轨迹：修异步路径重复计数）
+
+### 生产实测发现的重复计数
+`POST /copilot/runs` 提交一个问题后，库里出现**两条**记录：
+```
+5651652c  ok  tools=0  steps=0  conv=321  07:51:29.438   ← 提交时建的（空壳）
+0999d6f2  ok  tools=1  steps=1  conv=321  07:51:29.598   ← _run_tool_loop 又开一条
+```
+`_run_tool_loop`（`chat.py:1293`）自己会 `start_copilot_run`。异步路径不知道这件事，
+于是同一问题两条轨迹 —— **`ok_rate` / `tool_calls` / 成本统计全部重复计数**。
+
+这对自改造是致命的：轨迹是度量基础，重复计数会让任何"改配方→看指标"的对照失真。
+
+### 修法：contextvar 复用 run_id（不动 chat.py）
+- `trace.py` 新增 `EXTERNAL_RUN_ID`（ContextVar）；`start_copilot_run` 读到就复用该 run 行，
+  `CopilotTrace.open()` 在复用模式下**不 INSERT**，只把已存在的 queued 行标 running。
+- 执行体在调 `send_message` 前 `EXTERNAL_RUN_ID.set(run_id)`，`finally` 里 reset。
+- **chat.py 零改动**（它 2309 行 / 护栏 2310，加一行都会顶破）。
+
+为什么不用"给 send_message 加参数"：那要改 chat.py 加行；为什么不做重构（把 150 行
+monolith 抽出去）：那是**可测试性**需求，不是轨迹正确性需求——先拿到干净基线，再做重构
+才有对照。
+
+### 顺手修一个潜在 bug
+`trace.finish()` 的 UPDATE 分支写 `datetime.now(timezone.utc)`（aware）进 **naive**
+`finished_at` 列 —— PG 下会按会话时区换算，`finished_at` 可能与 `created_at` 差 8 小时。
+改成 `datetime.utcnow()`，与 INSERT 分支一致。
+
+### `_mark` 不再覆盖轨迹的真实数字
+轨迹已写终态时，`_mark` 只补 `finished_at`，不覆盖 `tool_calls` / `elapsed_ms` ——
+那两个是管线自己测的，`_mark` 测的是整个 job 的墙钟时间，混用会让口径不一致。
+
+### 门禁
+新增 **5 例**（复用不新建 / 无外部 id 行为不变 / run 行被清掉时退回插入不搞挂执行 /
+复用不覆盖 conversation_id / contextvar 默认空）；连同既有共 **31 passed**，
+其中一处踩坑记录进用例注释：`trace.py` 是模块级 `from ... import SessionLocal`，
+patch 源模块无效，必须 patch 它自己那份绑定。
+
 ## release: v0.67.0（P0-0.2 参谋任务异步化：提交即返 run_id）
 
 ### 要解决的事故
