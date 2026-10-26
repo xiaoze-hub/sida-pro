@@ -1,3 +1,21 @@
+## release: v0.82.1（pdf-gate 并行 + .deb 显式缓存 + 缺库不再假绿）
+
+v0.82.0 把 PDF 系统库拆成独立作业是对的，但**实现错了三次里的第二次**：用了
+`cache-apt-pkgs-action` 自动缓存 + `needs: gates` 串行，实测缓存未命中，pdf-gate 跑到
+**20 分钟仍未完成**（比拆之前更糟），我主动取消。这一版是定案：
+
+1. **并行**：去掉 `needs: gates`，pdf-gate 与 4 个分片同时起跑，省掉 3 分钟串行等待。
+2. **自己管 .deb 缓存**：`actions/cache@v4.3.0` 固定键 `apt-pdf-libs-v2-<os>` 缓存
+   `runner.temp/apt-debs`；命中则 `dpkg -i` 离线安装，未命中才联网 `apt-get download`。
+   不再依赖第三方 action 的内部键算法（上一版就是栽在这里）。
+3. **硬超时 900s + ForceIPv4**：宁可红在 15 分钟，也不能无声挂 6 小时。
+4. **缺库不再假绿**：`tests/test_pdf_export.py` 新增 `test_weasyprint_really_available_when_required`。
+   查清一个长期事实 —— 该文件所有"中文进文本层"断言都写在 `if not _WEASY: return` 之后，
+   **没有 WeasyPrint 时整组测试静默通过**，CI 一直"绿着但没测"。现在 pdf-gate 设
+   `SIDA_REQUIRE_WEASYPRINT=1`，缺 pango/cairo/中文字体直接红；本机默认跑仍 5 passed 1 skipped。
+
+门禁：`tests/test_pdf_export.py` 默认 5 passed + 1 skipped；强制模式 6 passed。
+
 ## release: v0.82.0（发版提速 + 助手悬浮球自由拖拽 / 全屏 / 改名数智参谋）
 
 ### 1. CI：把 PDF 系统库彻底移出分片（用户裁定「改 2」）

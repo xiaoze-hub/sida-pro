@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import os
 from unittest.mock import MagicMock
+
+import pytest
 
 
 def _weasyprint_renders() -> bool:
@@ -18,6 +21,22 @@ def _weasyprint_renders() -> bool:
 
 
 _WEASY = _weasyprint_renders()
+
+
+def test_weasyprint_really_available_when_required():
+    """CI 强制项：缺 pango/cairo/中文字体必须**红**。
+
+    历史坑（2026-10-26 查清）：本文件里所有"中文进文本层"的断言都写在
+    `if not _WEASY: return` 之后 —— 也就是说**没有 WeasyPrint 时整组测试静默通过**，
+    CI 一直是"绿着但没测"。现在 pdf-gate 设 SIDA_REQUIRE_WEASYPRINT=1，
+    把"缺库"从静默跳过变成显式失败。
+    """
+    if os.environ.get('SIDA_REQUIRE_WEASYPRINT') != '1':
+        pytest.skip('非 CI 强制环境：允许 xhtml2pdf 回退，不校验 WeasyPrint')
+    assert _WEASY, (
+        'WeasyPrint 无法渲染：pango/cairo/中文字体缺失。'
+        'CI 必须装齐系统库，否则 PDF 导出的中文文本层等于没测。'
+    )
 
 
 def test_render_pdf_returns_valid_bytes_with_chinese():

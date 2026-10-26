@@ -187,19 +187,21 @@ jobs:
   # 不能让棘轮静默失效: 缺 `[run] source = src` 时, 从未被任何用例导入的 src 文件不会进报告,
   # 覆盖率会被算高(棘轮变松)。这里显式给同口径配置, 并已在本地实证 combine 结果与
   # 单次全量跑的报告**逐文件一致**。
-  # 2026-10-26: PDF 导出测试独立作业。
-  # 动因: 它是全仓**唯一**需要 pango/cairo + fonts-noto-cjk 的文件, 而装这些库实测 700~1130s
-  # (apt 走公网, 慢且随机)。以前 4 个分片各自装一遍 → 发版门禁被这一项拖到 15~20 分钟。
-  # 现在: 分片彻底不装(见分片选择里的 continue), 只在本文档装一次, 且 .deb 走 Actions 缓存,
-  # 二次发版起命中缓存的恢复是秒级。四片 + 本作业的覆盖率数据由 coverage-ratchet 合并判棘轮。
+  # 2026-10-26 三次迭代后的定案（每次都留痕，避免后人重走弯路）：
+  #  ① 原方案：4 个分片各自 apt-get install 系统库 —— 每片付 700~1130s（apt 走 IPv6 会卡），
+  #     这是发版"越来越慢"的**唯一异常项**，业务代码一直是绿的；
+  #  ② 我第一版改成 cache-apt-pkgs-action 自动缓存 —— 缓存键没命中，该作业跑到 20 分钟仍未完成；
+  #  ③ 现在（定案）：**与 gates 并行**（不再 needs，省掉 3 分钟串行等待）+ **自己管 .deb 缓存**
+  #     （actions/cache 显式固定键）+ **硬超时 900s**。宁可红在 15 分钟，也不能无声挂 6 小时。
+  #  另：装完必须**真渲染一次**才算装好 —— 这个测试以前在缺库时会静默降级通过（假绿），
+  #     所以这里用 SIDA_REQUIRE_WEASYPRINT=1 让"缺库"变成真红，不再靠自觉。
   pdf-gate:
     name: Backend pytest (PDF 导出 · 独立)
-    needs: gates
     runs-on: ubuntu-latest
     env:
-      # 与分片同机制: pytest-cov 写哪个文件由 COVERAGE_FILE 决定,
-      # 不设它会写成 .coverage, coverage-ratchet 的 `coverage.combined.*` 就少一片。
       COVERAGE_FILE: coverage.combined.pdf
+      # 缺 WeasyPrint/pango/中文字体时让测试**失败**而不是静默跳过
+      SIDA_REQUIRE_WEASYPRINT: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -207,11 +209,31 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - name: Install system libs for WeasyPrint
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9  # v1.6.3
+      - name: Restore apt .deb cache
+        id: aptcache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          packages: libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk
-          version: 1.0
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-pdf-libs-v2-${{ runner.os }}
+      - name: Install system libs for WeasyPrint
+        run: |
+          set -euo pipefail
+          PKGS="libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fonts-noto-cjk"
+          CACHE="${{ runner.temp }}/apt-debs"
+          if [ "${{ steps.aptcache.outputs.cache-hit }}" = "true" ] && ls "$CACHE" >/dev/null 2>&1; then
+            echo "缓存命中: 离线安装 $(ls "$CACHE"/*.deb 2>/dev/null | wc -l) 个 .deb"
+            sudo dpkg -i "$CACHE"/*.deb || sudo apt-get -f install -y -o Acquire::ForceIPv4=true
+          else
+            echo "缓存未命中: 下载 .deb 入库并安装"
+            mkdir -p "$CACHE"
+            sudo timeout 900 apt-get update -qq -o Acquire::ForceIPv4=true \
+              -o Acquire::http::Timeout=60 -o Acquire::Retries=3 || true
+            ( cd "$CACHE" && sudo timeout 900 apt-get download -o Acquire::ForceIPv4=true $PKGS ) || true
+            sudo timeout 900 apt-get install -y --no-install-recommends \
+              -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=60 -o Acquire::Retries=3 $PKGS
+          fi
+          # 装完立刻真渲染一次（库缺失在这里就红，不等到 pytest 才发现是静默跳过）
+          python3 -c "import weasyprint; weasyprint.HTML(string='<p>中文渲染检查</p>').write_pdf('/tmp/_probe.pdf'); print('WeasyPrint 渲染 OK')"
       - name: Install backend deps (与分片同口径)
         run: |
           set -euo pipefail
@@ -220,8 +242,7 @@ jobs:
       - name: Backend pytest (PDF 导出)
         run: |
           set -o pipefail
-          python3 -m pytest tests/test_pdf_export.py -q \
-            --cov=src --cov-report=term
+          python3 -m pytest tests/test_pdf_export.py -q --cov=src --cov-report=term
       - name: Upload pdf coverage data
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
