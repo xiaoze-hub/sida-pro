@@ -1,3 +1,10 @@
+## 2026-10-26
+
+### fix-修复全新 PostgreSQL 数据库的布尔默认值
+
+- `users.is_deleted` 与 `chat_conversations.pinned` 使用 SQLAlchemy 布尔默认值，避免 PostgreSQL 首次建表报整数与布尔类型不匹配；既有版本化迁移已使用 `DEFAULT FALSE`，无需修改已有库结构。
+- 增加 PostgreSQL DDL 编译及 SQLite 原生 INSERT 默认值回归验证。
+
 ## release: v0.80.0（剩余三项体验项：清数据 / 填空态 / 收底部）
 
 ### A. 会话去重（清测试数据）
