@@ -607,6 +607,9 @@ export default function AiCopilotPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [input, send, streaming, startNewConversation, setPanelTab])
 
+  /** 空态第四格用：最近一次运行（真实数据；没有就是 null，界面显示"还没有运行记录"） */
+  const lastRun = runsState.runs.length > 0 ? runsState.runs[0] : null
+
   const runForMessage = (i: number) => matchRunForMessage(msgs, runsState.runs, i)
 
   const streamingAssistant = streaming && msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant'
@@ -845,7 +848,10 @@ export default function AiCopilotPage() {
               <div className="text-[12px] text-muted-foreground">{PAGE_EMPTY_HINT}</div>
               {/* w-full + items-stretch: 之前是 items-start, 按钮 w-full 在居中容器里宽度塌成 0,
                   结果只剩右侧 › 可见(视觉复核发现的"空描边横条") */}
-              <div className="flex w-full max-w-[420px] flex-col items-stretch gap-1.5">
+              {/* 2026-10-26: 三条竖条撑不住 67% 宽的主区(视觉复核: "空房间")。
+                  改成 2 列卡片网格；第四格给**真实的**最近一次运行(没有就是"暂无记录"，
+                  不编示例冒充)。 */}
+              <div className="grid w-full max-w-[560px] grid-cols-1 gap-2 sm:grid-cols-2">
                 {PAGE_EMPTY_EXAMPLES.map((x) => (
                   <button
                     key={x}
@@ -853,12 +859,31 @@ export default function AiCopilotPage() {
                     onClick={() => void send(x)}
                     disabled={streaming}
                     data-testid="copilot-empty-example"
-                    className="group flex w-full items-center gap-2 rounded-lg border border-role-watch/30 bg-s2 px-2.5 py-1.5 text-left text-[12px] text-foreground transition-colors hover:border-role-watch/60 hover:bg-s3 disabled:opacity-60"
+                    className="group flex min-h-[64px] items-start gap-2 rounded-xl border border-border bg-card p-3 text-left text-[12px] leading-relaxed text-foreground transition-colors hover:border-role-watch/60 hover:bg-muted disabled:opacity-60"
                   >
                     <span className="min-w-0 flex-1">{x}</span>
-                    <ChevronRight className="h-3 w-3 shrink-0 text-role-watch/70" />
+                    <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground group-hover:text-role-watch" />
                   </button>
                 ))}
+                <a
+                  href={lastRun ? `/copilot/runs/${lastRun.run_id}` : undefined}
+                  data-testid="copilot-empty-last-run"
+                  className={`flex min-h-[64px] flex-col justify-between rounded-xl border border-border p-3 text-left text-[12px] ${
+                    lastRun ? 'bg-card text-foreground hover:bg-muted' : 'bg-card text-muted-foreground'
+                  }`}
+                >
+                  <span className="text-[11px] text-muted-foreground">最近一次</span>
+                  {lastRun ? (
+                    <span className="mt-1 min-w-0">
+                      <span className="block truncate">{lastRun.question || '未命名问题'}</span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {lastRun.status} · {lastRun.tool_calls ?? '--'} 次工具
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="mt-1">还没有运行记录</span>
+                  )}
+                </a>
               </div>
             </div>
           ) : null}
@@ -1153,7 +1178,7 @@ export default function AiCopilotPage() {
               }}
               rows={2}
               placeholder={
-                attach ? '补充说明（可直接发送，或继续写你的问题）' : '问筹码、共振、量价、撤单、竞价、妖股因子…（Enter 发送 / Shift+Enter 换行）'
+                attach ? '补充说明…' : '问点什么…（Enter 发送 / Shift+Enter 换行）'
               }
               className="scrollbar min-h-[44px] w-full resize-none rounded-lg border border-border/60 bg-s0 px-2 py-1.5 text-[12px] outline-none focus:border-role-watch/60"
             />

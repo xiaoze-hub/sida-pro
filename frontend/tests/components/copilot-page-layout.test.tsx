@@ -107,7 +107,7 @@ describe('数智参谋 P0/P1', () => {
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(screen.getByTestId('copilot-answer-card')).toBeTruthy())
@@ -133,7 +133,7 @@ describe('数智参谋 P0/P1', () => {
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '今天市场怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '今天市场怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(screen.getByTestId('md-fallback')).toBeTruthy())
@@ -149,7 +149,7 @@ describe('标的锁定（2026-10-19 修复：看 600111 却分析成 002361）',
     render(<AiCopilotPage />)
 
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '全面分析' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '全面分析' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())
@@ -167,7 +167,7 @@ describe('标的锁定（2026-10-19 修复：看 600111 却分析成 002361）',
     render(<AiCopilotPage />)
 
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '002361 怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '002361 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalled())

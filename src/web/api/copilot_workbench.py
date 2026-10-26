@@ -495,3 +495,96 @@ def list_interceptions(
         for r in rows
     ]
     return {"count": len(items), "items": items}
+
+
+# ──────────────── 会话去重（清理测试数据） ────────────────
+# 背景：反复测试留下大量同名会话（"上证指数现在多少点" ×7），左栏像调试日志。
+# 设计原则：
+#   1. **默认 dry-run**：不传 apply 只回报"会删哪些"，绝不静默删数据；
+#   2. **按标题分组，每组保留最新 keep 条**（keep>=1，不允许把整组删空）；
+#   3. 只动本人会话；删除时连 ChatMessage 一起删（该表没有 FK 级联）；
+#   4. 单次上限 MAX_DEDUPE_DELETE，防止一次误删太多 —— 超了就分批来。
+
+
+class DedupeBody(BaseModel):
+    apply: bool = False          # False = 只试运行
+    keep: int = 1                # 每个同名组保留最新几条
+    min_group: int = 2           # 至少几条才算"重复组"
+    max_delete: int = 200        # 本次最多删多少条
+
+
+@router.post("/conversations/dedupe")
+def dedupe_conversations(
+    body: DedupeBody,
+    db: Session = Depends(get_db),
+    user: Any = Depends(get_current_user),
+) -> dict:
+    """把同名会话去重（保留每组最新的 keep 条）。
+
+    默认 `apply=False` 只出报告。真正删除时返回被删 id 列表，便于事后核对。
+    """
+    from src.db.models import ChatConversation, ChatMessage
+
+    uid = getattr(user, "id", None)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    keep = max(1, int(body.keep))
+    min_group = max(2, int(body.min_group))
+    max_delete = max(1, min(1000, int(body.max_delete)))
+
+    rows = (
+        db.query(ChatConversation)
+        .filter(ChatConversation.user_id == uid)
+        .order_by(ChatConversation.updated_at.desc(), ChatConversation.id.desc())
+        .all()
+    )
+
+    groups: dict[str, list] = {}
+    for r in rows:
+        title = (r.title or "").strip()
+        if not title:
+            continue  # 无标题会话不参与（可能是刚建还没命名）
+        groups.setdefault(title, []).append(r)
+
+    plan: list[dict] = []
+    doomed: list[int] = []
+    for title, items in groups.items():
+        if len(items) < min_group:
+            continue
+        # items 已按 updated_at 降序 → 前 keep 条是"最新"，其余删
+        removals = items[keep:]
+        if not removals:
+            continue
+        plan.append({"title": title[:60], "total": len(items), "remove": len(removals)})
+        doomed.extend([r.id for r in removals])
+
+    plan.sort(key=lambda x: -x["remove"])
+    truncated = len(doomed) > max_delete
+    doomed = doomed[:max_delete]
+
+    if not body.apply:
+        return {
+            "apply": False,
+            "groups": plan,
+            "would_delete": len(doomed),
+            "truncated": truncated,
+            "note": "试运行：未删除任何数据。确认后传 apply=true 再执行一次",
+        }
+
+    if doomed:
+        db.query(ChatMessage).filter(ChatMessage.conversation_id.in_(doomed)).delete(
+            synchronize_session=False
+        )
+        db.query(ChatConversation).filter(ChatConversation.id.in_(doomed)).delete(
+            synchronize_session=False
+        )
+        db.commit()
+
+    return {
+        "apply": True,
+        "groups": plan,
+        "deleted": len(doomed),
+        "deleted_ids": doomed,
+        "truncated": truncated,
+    }

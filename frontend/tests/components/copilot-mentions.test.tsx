@@ -75,7 +75,7 @@ afterEach(cleanup)
 describe('@ 提及', () => {
   it('打 @ 弹出面板，默认股票 tab', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
     typeIn(ta, '@')
 
     const panel = await screen.findByTestId('copilot-mention-panel')
@@ -86,7 +86,7 @@ describe('@ 提及', () => {
 
   it('拼音首字母能搜到（bfxt → 北方稀土）', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
     typeIn(ta, '@bfxt')
 
     await waitFor(() => expect(screen.getByText('北方稀土')).toBeTruthy())
@@ -95,7 +95,7 @@ describe('@ 提及', () => {
 
   it('键盘 ↓ Enter 选中股票 → chip 出现，发送时进请求体', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
     typeIn(ta, '@bfxt')
     await screen.findByText('北方稀土')
 
@@ -111,7 +111,7 @@ describe('@ 提及', () => {
 
   it('切到智能体 tab 并选中 → 请求体带 agent recipe', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
     typeIn(ta, '@')
     await screen.findByTestId('copilot-mention-panel')
 
@@ -127,7 +127,7 @@ describe('@ 提及', () => {
 
   it('全角 ＠（中文输入法默认产出）也能弹面板', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
     typeIn(ta, '\uFF20')
 
     expect(await screen.findByTestId('copilot-mention-panel')).toBeTruthy()
@@ -136,7 +136,7 @@ describe('@ 提及', () => {
 
   it('输入法组合结束补检测：不再需要多敲一个字符', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
 
     fireEvent.compositionStart(ta)
     typeIn(ta, '@北方')
@@ -150,7 +150,7 @@ describe('@ 提及', () => {
 
   it('中文输入法组合期间不弹面板', async () => {
     render(<AiCopilotPage />)
-    const ta = screen.getByPlaceholderText(/问筹码/) as HTMLTextAreaElement
+    const ta = screen.getByPlaceholderText(/问点什么/) as HTMLTextAreaElement
 
     fireEvent.compositionStart(ta)
     typeIn(ta, '@bf')

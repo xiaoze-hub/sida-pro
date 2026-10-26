@@ -96,7 +96,7 @@ describe('数智参谋附件上传', () => {
     fireEvent.click(screen.getByTestId('copilot-attach-remove'))
     await waitFor(() => expect(screen.queryByTestId('copilot-attach-remove')).toBeNull())
 
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '这份报表怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '这份报表怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(apiMock.sendMessageStream).toHaveBeenCalledTimes(1))

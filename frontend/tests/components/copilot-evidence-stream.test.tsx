@@ -94,7 +94,7 @@ describe('证据齐套度条接线', () => {
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
 
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     // 流中：三个 pill，前两条已到手，最后一条在跑
@@ -129,7 +129,7 @@ describe('证据齐套度条接线', () => {
 
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '看看' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '看看' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(screen.getByText('正在准备上下文…')).toBeTruthy())
@@ -146,7 +146,7 @@ describe('回答内价格锚定接线', () => {
 
     render(<AiCopilotPage />)
     await waitFor(() => expect(screen.getByLabelText('发送')).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText(/问筹码|补充说明/), { target: { value: '600111 怎么样' } })
+    fireEvent.change(screen.getByPlaceholderText(/问点什么|补充说明/), { target: { value: '600111 怎么样' } })
     fireEvent.click(screen.getByLabelText('发送'))
 
     await waitFor(() => expect(screen.getByTestId('copilot-answer-card')).toBeTruthy())
